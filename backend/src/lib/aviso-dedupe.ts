@@ -65,3 +65,26 @@ export async function marcarAviso(
     logger.warn({ err: String(err), unitId, leadId: String(leadId), ruleKey }, 'aviso-dedupe: falha ao marcar');
   }
 }
+
+/** As marcas do cartão cuja chave começa por `prefixo` (ex.: `recusou_remarcar:` — a chave leva a consulta). Falha de banco = []. */
+export async function marcasComPrefixo(
+  unitId: string,
+  leadId: number | string,
+  prefixo: string,
+): Promise<Array<{ ruleKey: string; createdAt: Date }>> {
+  try {
+    return await prisma.cardAlert.findMany({
+      where: { unitId, leadId: String(leadId), ruleKey: { startsWith: prefixo } },
+      select: { ruleKey: true, createdAt: true },
+    });
+  } catch (err) {
+    logger.warn({ err: String(err), unitId, leadId: String(leadId), prefixo }, 'aviso-dedupe: falha ao ler as marcas do prefixo');
+    return [];
+  }
+}
+
+/** A marca mais recente do prefixo, ou null. */
+export async function marcadoEmPrefixo(unitId: string, leadId: number | string, prefixo: string): Promise<Date | null> {
+  const todas = await marcasComPrefixo(unitId, leadId, prefixo);
+  return todas.reduce<Date | null>((a, m) => (!a || m.createdAt > a ? m.createdAt : a), null);
+}

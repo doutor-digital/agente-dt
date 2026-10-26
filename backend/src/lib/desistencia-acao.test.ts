@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { agirNaDesistencia, textoTarefaCancelarNaFranquia, textoTarefaConferir, MARCA_OFERTA, MARCA_RECUSOU, chaveDaMarca, type DepsDaAcao, type KommoDaAcao } from './desistencia-acao.js';
+import { agirNaDesistencia, chaveDaTarefa, marcaDaConsulta, mesmaConsulta, textoTarefaCancelarNaFranquia, textoTarefaConferir, MARCA_OFERTA, MARCA_RECUSOU, chaveDaMarca, type DepsDaAcao, type KommoDaAcao } from './desistencia-acao.js';
 import type { Estado } from './automacoes-estado.js';
-import { deveAvisarOJoao, marcaVenceuSemResposta, MAX_TENTATIVAS } from './desistencia-sem-resposta-worker.js';
+import { devoTentarAgora, deveAvisarOJoao, marcaVenceuSemResposta, MAX_TENTATIVAS } from './desistencia-sem-resposta-worker.js';
 import { voltouAtrasDeVerdade } from './vespera-segura.js';
 
 const AGORA = new Date('2026-10-22T17:03:00Z');
@@ -23,6 +23,7 @@ function montar(o: { lead?: object | null; vinculo?: string | null; ja?: Set<str
     marcarAviso: async (_u, _l, chave) => {
       marcas.push(chave);
     },
+    marcadoEmPrefixo: async () => null,
     consultaDoVinculo: async () => o.vinculo ?? null,
     estado: () => o.estado ?? 'ligado',
     simular: (_u, _a, sim) => {
@@ -64,7 +65,7 @@ test('RECUSOU: a marca de parar a véspera grava ANTES da tarefa — Kommo fora 
   const r = await agirNaDesistencia({ unit: m.unit, leadId: 1, acao: 'recusou', trecho: 'desisti', kommo: () => m.kommo }, m.deps);
   assert.equal(r, 'falhou');
   assert.ok(m.marcas.includes(RECUSA));
-  assert.ok(!m.marcas.includes('desistencia_tarefa:cancelar'), 'a tarefa não foi criada: tenta de novo no próximo turno');
+  assert.ok(!m.marcas.includes(chaveDaTarefa('cancelar', ISO)), 'a tarefa não foi criada: tenta de novo no próximo turno');
   assert.equal(m.tags.length, 0);
 });
 
@@ -113,7 +114,7 @@ test('REFAZENDO (worker): não regrava a marca de recusa — a data dela é a da
   const m = montar();
   assert.equal(await agirNaDesistencia({ unit: m.unit, leadId: 1, acao: 'recusou', trecho: 'desisti', kommo: () => m.kommo, refazendo: true }, m.deps), 'tarefa_aberta');
   assert.ok(!m.marcas.includes(MARCA_RECUSOU));
-  assert.ok(m.marcas.includes('desistencia_tarefa:cancelar'));
+  assert.ok(m.marcas.includes(chaveDaTarefa('cancelar', ISO)));
   assert.match(m.tarefas[0].text, /etiqueta NO_FOLLOW_UP foi posta \(tire-a se ele voltar atrás\)/);
 });
 
@@ -128,7 +129,7 @@ test('DÚVIDA: tarefa "conferir com o paciente" SEM parar a véspera (nenhuma ma
 });
 
 test('a mesma tarefa não abre duas vezes em 24 h', async () => {
-  const m = montar({ ja: new Set(['desistencia_tarefa:cancelar']) });
+  const m = montar({ ja: new Set([chaveDaTarefa('cancelar', ISO)]) });
   assert.equal(await agirNaDesistencia({ unit: m.unit, leadId: 1, acao: 'recusou', trecho: 'x', kommo: () => m.kommo }, m.deps), 'ja_avisada');
   assert.equal(m.tarefas.length, 0);
   assert.ok(m.marcas.includes(RECUSA), 'mas a véspera continua parada');
@@ -228,7 +229,7 @@ test('a marca de recusa de OUTRA consulta não é a desta (remarcou → chave di
 // ── refazer a tarefa de cancelar (bloqueante 2) ──────────────────────────────────────────────────────────────────
 
 test('refazer: "ok, obrigada" e "tá bom" NÃO desfazem a recusa; só voltar atrás de verdade', () => {
-  for (const t of ['ok, obrigada', 'tá bom', 'obrigado!', 'bom dia', 'ok']) assert.equal(voltouAtrasDeVerdade([t]), false, t);
+  for (const t of ['ok, obrigada', 'tá bom', 'obrigado!', 'bom dia', 'ok', 'ok, vou aguardar o contato da equipe', 'vou procurar outro lugar', 'vou avisar meu marido', 'Pode cancelar, eu vou ter que faltar', 'não consegui folga, pode cancelar', 'resolvi cancelar', 'não deu certo, pode desmarcar']) assert.equal(voltouAtrasDeVerdade([t]), false, t);
   for (const t of ['consegui, vou sim', 'confirmo', 'quero manter', 'deu certo, eu vou', 'vou sim']) assert.equal(voltouAtrasDeVerdade([t]), true, t);
   assert.equal(voltouAtrasDeVerdade(['não vou lá não, pode cancelar']), false, '"não vou lá" é o contrário de confirmar');
   assert.equal(voltouAtrasDeVerdade([]), false);
@@ -239,4 +240,61 @@ test('depois de 12 falhas seguidas, avisa o João (uma vez)', () => {
   assert.equal(deveAvisarOJoao(11), false);
   assert.equal(deveAvisarOJoao(12), true);
   assert.equal(deveAvisarOJoao(13), false);
+});
+
+test('as marcas levam a consulta: 5 min de tolerância entre o horário do cartão e o da franquia; remarcou = outra marca', () => {
+  assert.equal(mesmaConsulta('2026-10-23T14:00', '2026-10-23T14:05'), true);
+  assert.equal(mesmaConsulta('2026-10-23T14:00', '2026-10-23T14:06'), false);
+  assert.equal(mesmaConsulta('2026-10-23T14:00', '2026-10-30T14:00'), false);
+  assert.equal(mesmaConsulta('?', '2026-10-23T14:00'), false);
+  const marcas = [
+    { ruleKey: `${MARCA_RECUSOU}:2026-10-23T14:00`, createdAt: new Date('2026-10-22T17:00:00Z') },
+    { ruleKey: `${MARCA_RECUSOU}:?`, createdAt: new Date('2026-10-22T18:00:00Z') },
+    { ruleKey: 'outra:2026-10-23T14:00', createdAt: new Date('2026-10-22T19:00:00Z') },
+  ];
+  assert.deepEqual(marcaDaConsulta(marcas, MARCA_RECUSOU, '2026-10-23T14:03'), new Date('2026-10-22T17:00:00Z'));
+  assert.equal(marcaDaConsulta(marcas, MARCA_RECUSOU, '2026-10-30T10:00'), null, 'remarcada para outra data: a marca não vale');
+});
+
+test('REFAZENDO: se a consulta de hoje é OUTRA que a da marca, ele remarcou — não abre CANCELAR para a consulta nova', async () => {
+  const m = montar();
+  assert.equal(await agirNaDesistencia({ unit: m.unit, leadId: 1, acao: 'recusou', trecho: 'x', kommo: () => m.kommo, refazendo: true, consultaDaMarca: '2026-10-01T10:00' }, m.deps), 'remarcou');
+  assert.equal(m.tarefas.length, 0);
+});
+
+test('REFAZENDO a marca que ficou com "?" (cartão ilegível na hora): regrava com a consulta certa e a hora ORIGINAL da recusa', async () => {
+  const m = montar();
+  const original = new Date('2026-10-22T16:50:00Z');
+  const gravadas: Array<{ chave: string; em: Date | undefined }> = [];
+  m.deps.marcarAviso = async (_u, _l, chave, em) => {
+    gravadas.push({ chave, em });
+  };
+  assert.equal(await agirNaDesistencia({ unit: m.unit, leadId: 1, acao: 'recusou', trecho: 'desisti', kommo: () => m.kommo, refazendo: true, consultaDaMarca: '?', marcaEm: original }, m.deps), 'tarefa_aberta');
+  const marca = gravadas.find((g) => g.chave === RECUSA);
+  assert.ok(marca, 'a marca com a consulta certa existe');
+  assert.deepEqual(marca?.em, original);
+});
+
+test('uma tarefa aberta nas últimas 24 h (IA calada / dúvida) nem lê o cartão', async () => {
+  const m = montar();
+  m.deps.marcadoEmPrefixo = async () => new Date(AGORA.getTime() - 3600_000);
+  for (const acao of ['ia_calada', 'duvida'] as const) {
+    assert.equal(await agirNaDesistencia({ unit: m.unit, leadId: 1, acao, trecho: 'Cancelei.', kommo: () => { throw new Error('não devia nem criar o cliente'); } }, m.deps), 'ja_avisada');
+  }
+});
+
+test('sem_resposta pelo worker (confiavel): o texto não precisa parecer desistência (a marca já prova)', async () => {
+  const m = montar();
+  assert.equal(await agirNaDesistencia({ unit: m.unit, leadId: 1, acao: 'sem_resposta', trecho: 'não vou poder', kommo: () => m.kommo, confiavel: true }, m.deps), 'tarefa_aberta');
+  const n = montar();
+  assert.equal(await agirNaDesistencia({ unit: n.unit, leadId: 1, acao: 'sem_resposta', trecho: 'qualquer coisa', kommo: () => n.kommo, confiavel: true }, n.deps), 'tarefa_aberta');
+  const o = montar();
+  assert.equal(await agirNaDesistencia({ unit: o.unit, leadId: 1, acao: 'sem_resposta', trecho: 'qualquer coisa', kommo: () => o.kommo }, o.deps), 'nao_e');
+});
+
+test('depois de 12 falhas o worker passa ao backoff de 2 h, não desiste para sempre', () => {
+  assert.equal(devoTentarAgora(undefined, 1000), true);
+  assert.equal(devoTentarAgora(0, 1000), true);
+  assert.equal(devoTentarAgora(5000, 1000), false);
+  assert.equal(devoTentarAgora(5000, 5000), true);
 });

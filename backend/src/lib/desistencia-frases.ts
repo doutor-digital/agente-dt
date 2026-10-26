@@ -134,9 +134,16 @@ export function pareceDesistenciaDaConsulta(texto: string | null | undefined): b
 /** Hesitação: "acho que não vou conseguir", "vou ver", "depois eu aviso" não é recusa — ainda dá para remarcar. */
 export const HESITA = /\b(acho|talvez|quem sabe|vou ver|vou pensar|depois eu|ainda nao sei|nao sei|se der|vamos ver)\b/;
 
+/** "não quero/vou/preciso remarcar": diz que NÃO quer remarcar. */
+const NEGOU_REMARCAR = /\bn(ao|) (quero|vou|preciso|precisa|vamos) (mais )?(remarcar|reagendar|marcar|(de )?outro (dia|horario))/;
+
+export function negouRemarcar(texto: string | null | undefined): boolean {
+  return NEGOU_REMARCAR.test(normalizar(texto ?? ''));
+}
+
 const RECUSA_EXPLICITA: RegExp[] = [
   // "não quero remarcar", "não vou remarcar", "não preciso de outro dia"
-  /\bn(ao|) (quero|vou|preciso|precisa|vamos) (mais )?(remarcar|reagendar|marcar|(de )?outro (dia|horario))/,
+  NEGOU_REMARCAR,
   /\bn(ao|) (quero|vou|irei|iremos|preciso) mais\b/,
   // "pode cancelar (mesmo)", "cancela", "cancele", "desmarca", "quero cancelar"
   /\b(pode|podem|quero|queria|gostaria de|vou querer) (cancelar|desmarcar)\b/,
@@ -150,7 +157,20 @@ const RECUSA_EXPLICITA: RegExp[] = [
  * "não quero remarcar, consegui folga" e "não vou remarcar, vou na de amanhã mesmo" são dúvida/manter, nunca recusa. O "vou"
  * NEGADO ("não vou remarcar", "não vou mais") não conta, nem "vou ter que faltar".
  */
-const SINAL_DE_QUE_VAI = /(?<!\bn(?:ao)? )\bvou\b(?! (?:ter|precisar|faltar|viajar|trabalhar|me mudar|operar|cancelar|desmarcar|desistir))|\bvamos (?:sim|la|ai)\b|\bconsegui\b|\bconseguimos\b|\bresolvi\b|\bresolvemos\b|\bdeu certo\b|\bda certo\b|\bdou um jeito\b|\bdar um jeito\b|\bfolga\b|\beu vou\b/;
+/** Antes de "consegui/resolvi/deu certo/folga/dou um jeito" não pode vir "não" ("não consegui folga", "não deu certo"). */
+const SEM_NEGACAO = '(?<!\\bn(?:ao)? (?:\\w+ ){0,2})';
+const VOU = '(?<!\\bn(?:ao)? )\\bvou\\b(?! (?:ter|precisar|faltar|viajar|trabalhar|me mudar|operar|cancelar|desmarcar|desistir|aguardar|esperar|procurar|avisar|ver com))';
+/** Sinal FORTE de que ele vai: o que DESFAZ uma recusa já feita ("consegui, vou sim"). Não basta um "vou" qualquer ("vou aguardar a equipe"). */
+const SINAL_FORTE = new RegExp(
+  `${VOU.replace('\\bvou\\b(?!', '\\bvou sim\\b(?!')}|\\bvamos sim\\b|\\beu vou[ .!]*$|${SEM_NEGACAO}\\b(?:consegui|conseguimos|resolvi(?! cancelar)|resolvemos|deu certo|da certo|dou um jeito|dar um jeito)\\b`,
+);
+/** Qualquer sinal de que ele vai — inclui os fortes e o "vou" solto ("vou na de amanhã mesmo") e "folga". */
+const SINAL_DE_QUE_VAI = new RegExp(`${VOU}|${SINAL_FORTE.source}|${SEM_NEGACAO}\\bfolga\\b`);
+
+/** Sinal FORTE: desfaz a recusa. */
+export function sinalForteDeQueVai(texto: string | null | undefined): boolean {
+  return SINAL_FORTE.test(normalizar(texto ?? ''));
+}
 
 export function sinalDeQueVai(texto: string | null | undefined): boolean {
   return SINAL_DE_QUE_VAI.test(normalizar(texto ?? ''));

@@ -14,6 +14,7 @@ import { enviosDeRetomadaRecentes, limiteDoDiaAtingido, LIMITE_COBRANCAS_POR_DIA
 import { fusoDaUnidade } from './fuso.js';
 import { motivoDeBloqueio } from './mensagem-bloqueada.js';
 import { MARCA_RECUSOU } from './desistencia-acao.js';
+import { voltouAtrasDeVerdade } from './vespera-segura.js';
 import { pareceDesistenciaDaConsulta } from './desistencia-frases.js';
 
 const SWEEP_MS = 60_000;
@@ -341,7 +342,7 @@ async function varrer(): Promise<void> {
       if (candidatas.length > 0) {
         const marcas = await prisma.cardAlert
           .findMany({
-            where: { unitId: unit.id, ruleKey: { startsWith: `${MARCA_RECUSOU}:` }, leadId: { in: candidatas.map((c) => c.leadId) } },
+            where: { unitId: unit.id, ruleKey: { startsWith: `${MARCA_RECUSOU}:` }, createdAt: { gte: new Date(Date.now() - 3 * 24 * 3600_000) }, leadId: { in: candidatas.map((c) => c.leadId) } },
             select: { leadId: true, createdAt: true },
           })
           .catch(() => []);
@@ -364,7 +365,9 @@ async function varrer(): Promise<void> {
         // A Sofia se despediu da recusa de remarcar e a equipe vai cancelar: a NOSSA régua para neste cartão enquanto ele não
         // escrever de novo (desistencia-acao.ts). Só marca; nada gravado em `followUpStoppedReason`.
         const recusouEm = recusas.get(conv.leadId);
-        const aindaRecusando = !!recusouEm && !(conv.messages[0]?.createdAt && conv.messages[0].createdAt > recusouEm);
+        // só libera se ele VOLTOU ATRÁS de verdade depois da recusa ("consegui, vou sim"); "ok, obrigada" não desfaz nada
+        const escreveuDepois = !!conv.messages[0]?.createdAt && !!recusouEm && conv.messages[0].createdAt > recusouEm;
+        const aindaRecusando = !!recusouEm && !(escreveuDepois && voltouAtrasDeVerdade([conv.messages[0]?.content ?? '']));
         const naoCobrar = aindaRecusando ? 'o paciente recusou remarcar e a equipe vai cancelar' : motivoParaNaoCobrar(estado.bloqueio, conv.messages[0]?.content);
         if (naoCobrar) {
           logger.debug({ unit: unit.slug, leadId: conv.leadId, motivo: naoCobrar }, 'follow-up: régua não sai para este cartão');

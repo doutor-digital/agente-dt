@@ -11,7 +11,7 @@
  * e cortaria o lembrete de quem só foi atendido pela equipe.
  */
 import type { MensagemOficial } from '../services/kommo-talks-normalizar.js';
-import { falouDeOutraConsulta, pareceDesistenciaDaConsulta, quisManter, sinalDeQueVai } from './desistencia-frases.js';
+import { falouDeOutraConsulta, pareceDesistenciaDaConsulta, quisManter, sinalForteDeQueVai } from './desistencia-frases.js';
 import { semAcento as normalizar } from './sem-acento.js';
 
 /**
@@ -51,7 +51,7 @@ export function pareceDesistencia(texto: string): boolean {
  * deixa de valer) e pelo worker que refaz a tarefa de cancelar.
  */
 export function voltouAtrasDeVerdade(falasDepois: string[]): boolean {
-  return falasDepois.some((t) => quisManter(t) || sinalDeQueVai(t) || pareceConfirmacao(t));
+  return falasDepois.some((t) => quisManter(t) || sinalForteDeQueVai(t) || pareceConfirmacao(t));
 }
 
 export function pareceConfirmacao(texto: string): boolean {

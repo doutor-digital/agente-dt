@@ -44,8 +44,8 @@ import {
 // de qual consulta ele está falando). Reexportada aqui para quem já importava deste módulo.
 export { chaveDaConfirmacao, prefixoDoToque, type Toque };
 import { emPausa } from './pausa-unidade.js';
-import { avisoRecente, marcadoEm, marcarAviso } from './aviso-dedupe.js';
-import { chaveDaMarca, MARCA_RECUSOU } from './desistencia-acao.js';
+import { avisoRecente, marcadoEm, marcadoEmPrefixo, marcarAviso, marcasComPrefixo } from './aviso-dedupe.js';
+import { marcaDaConsulta, MARCA_RECUSOU } from './desistencia-acao.js';
 import { PAUSA_POR } from '../agent/teto-mensal.js';
 import type { Unit } from '@prisma/client';
 import { automacaoLigada } from './automacoes-estado.js';
@@ -341,8 +341,8 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
       // neste cartão. A marca é DESTA consulta (leva o horário na chave): se ela foi remarcada, a chave é outra e a marca não vale —
       // sem depender do `updatedAt` do vínculo, que anda a cada escrita. E não vale mais se ele voltou atrás depois ("consegui,
       // vou sim", "confirmo").
-      const chaveRecusa = chaveDaMarca(MARCA_RECUSOU, consulta.quando.slice(0, 16));
-      const recusouEm = await marcadoEm(unit.id, link.kommoLeadId, chaveRecusa);
+      // (a hora do cartão e a da franquia podem diferir por minutos: a comparação tem 5 min de tolerância)
+      const recusouEm = marcaDaConsulta(await marcasComPrefixo(unit.id, link.kommoLeadId, MARCA_RECUSOU + ':'), MARCA_RECUSOU, consulta.quando.slice(0, 16));
       const voltouAtras = !!recusouEm && !!oficiais && voltouAtrasDeVerdade(oficiais.filter((m) => m.direcao === 'entrada' && m.autor === 'paciente' && m.em > recusouEm).map((m) => m.texto));
       if (recusouEm && !voltouAtras) {
         conta.recusou++;
@@ -354,12 +354,16 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
         conta.desistiu++;
         const chaveTarefa = `vespera_desistencia:${consulta.quando}`;
         // O webhook (IA calada) e a régua (sem resposta) já abrem tarefa quando o paciente escreve que não vem — não duplica.
+        const recente = async (tipo: string): Promise<boolean> => {
+          const t = await marcadoEmPrefixo(unit.id, link.kommoLeadId, `desistencia_tarefa:${tipo}:`);
+          return !!t && Date.now() - t.getTime() < 2 * 24 * 3600_000;
+        };
         const jaAvisada =
           (await avisoRecente(unit.id, link.kommoLeadId, chaveTarefa, POR_CONSULTA_MS)) ||
-          (await avisoRecente(unit.id, link.kommoLeadId, 'desistencia_tarefa:ia_calada', 2 * 24 * 3600_000)) ||
-          (await avisoRecente(unit.id, link.kommoLeadId, 'desistencia_tarefa:sem_resposta', 2 * 24 * 3600_000)) ||
-          (await avisoRecente(unit.id, link.kommoLeadId, 'desistencia_tarefa:cancelar', 2 * 24 * 3600_000)) ||
-          (await avisoRecente(unit.id, link.kommoLeadId, 'desistencia_tarefa:conferir', 2 * 24 * 3600_000));
+          (await recente('ia_calada')) ||
+          (await recente('sem_resposta')) ||
+          (await recente('cancelar')) ||
+          (await recente('conferir'));
         if (!jaAvisada) {
           try {
             await kommo.createTask({

@@ -17,6 +17,7 @@ import {
   citouHorario,
   hesitou,
   negouAOferta,
+  negouRemarcar,
   sinalDeQueVai,
   oferecuHorario,
   pareceDesistenciaDaConsulta,
@@ -91,10 +92,6 @@ export function pacienteDesistiu(falas: Fala[]): DesistenciaDoTurno | null {
   return null;
 }
 
-/** "não quero/vou/preciso remarcar": diz que NÃO quer remarcar. */
-const NEGOU_REMARCAR = /\bn(ao|) (quero|vou|preciso|precisa|vamos) (mais )?(remarcar|reagendar|marcar|(de )?outro (dia|horario))/;
-const normalizarSimples = (t: string | undefined): string => (t ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-
 export type AcaoDaDesistencia = 'nada' | 'oferta' | 'recusou' | 'duvida';
 
 /**
@@ -111,7 +108,7 @@ export function acaoDaDesistencia(d: DesistenciaDoTurno | null): AcaoDaDesistenc
   if (d.recusaExplicita) return 'recusou';
   // escolheu horário ("pode ser quinta, se der", "sexta, vou sim"): a Sofia remarca, não é dúvida
   // escolheu horário ("pode ser quinta, se der", "sexta, vou sim"): a Sofia remarca, não é dúvida — a menos que diga que NÃO quer remarcar
-  if (d.momento === 'respondeu_a_oferta' && citouHorario(d.resposta) && !NEGOU_REMARCAR.test(normalizarSimples(d.resposta))) return 'nada';
+  if (d.momento === 'respondeu_a_oferta' && citouHorario(d.resposta) && !negouRemarcar(d.resposta)) return 'nada';
   if (d.momento === 'insistiu' || d.querManter || d.hesitou || d.vai || d.negou) return 'duvida';
   return 'nada';
 }

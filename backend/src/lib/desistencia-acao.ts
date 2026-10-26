@@ -13,7 +13,7 @@
 import type { Unit } from '@prisma/client';
 import type { KommoLead } from '../services/kommo.service.js';
 import { logger } from './logger.js';
-import { avisoRecente, marcarAviso, JANELA_24H_MS } from './aviso-dedupe.js';
+import { avisoRecente, marcadoEmPrefixo, marcarAviso, JANELA_24H_MS } from './aviso-dedupe.js';
 import { consultaDoVinculoPadrao, estadoDaDesistencia, ID_AUTOMACAO, quandoDaConsultaPorVir, textoTarefaDesistenciaSemIA } from './desistencia-da-consulta.js';
 import { citouHorario, pareceDesistenciaDaConsulta } from './desistencia-frases.js';
 import { primeiroNomeDoPaciente } from './ponte-respostas.js';
@@ -26,6 +26,31 @@ export { ID_AUTOMACAO, estadoDaDesistencia };
 export const MARCA_OFERTA = 'desistencia_oferta';
 export const MARCA_RECUSOU = 'recusou_remarcar';
 export const chaveDaMarca = (prefixo: string, iso: string): string => `${prefixo}:${iso}`;
+
+/** O horário do cartão e o da franquia podem diferir por minutos (resposta-ao-lembrete: até 5 min é a mesma consulta). */
+const TOLERANCIA_MS = 5 * 60_000;
+
+/** As duas "AAAA-MM-DDTHH:mm" são a mesma consulta? ("?" = não sei: nunca é.) */
+export function mesmaConsulta(a: string, b: string): boolean {
+  if (a === '?' || b === '?') return false;
+  const ta = Date.parse(`${a.slice(0, 16)}:00Z`);
+  const tb = Date.parse(`${b.slice(0, 16)}:00Z`);
+  return Number.isFinite(ta) && Number.isFinite(tb) && Math.abs(ta - tb) <= TOLERANCIA_MS;
+}
+
+/** De todas as marcas `<prefixo>:<consulta>`, a desta consulta (a mais recente), ou null. */
+export function marcaDaConsulta(marcas: Array<{ ruleKey: string; createdAt: Date }>, prefixo: string, iso: string): Date | null {
+  let melhor: Date | null = null;
+  for (const m of marcas) {
+    if (!m.ruleKey.startsWith(`${prefixo}:`)) continue;
+    if (!mesmaConsulta(m.ruleKey.slice(prefixo.length + 1), iso)) continue;
+    if (!melhor || m.createdAt > melhor) melhor = m.createdAt;
+  }
+  return melhor;
+}
+
+/** A chave de dedupe da tarefa: por tipo E por consulta (uma recusa de outra consulta, dentro de 24 h, também precisa da sua tarefa). */
+export const chaveDaTarefa = (tipo: string, iso: string): string => `desistencia_tarefa:${tipo}:${iso}`;
 export const ETIQUETA_SEM_FOLLOW_UP = 'NO_FOLLOW_UP';
 
 export function textoTarefaCancelarNaFranquia(a: { slug: string; nome: string | null; quando: string; trecho: string }): string {
@@ -73,6 +98,7 @@ export interface DepsDaAcao {
   agora: () => Date;
   avisoRecente: typeof avisoRecente;
   marcarAviso: typeof marcarAviso;
+  marcadoEmPrefixo: typeof marcadoEmPrefixo;
   /** "AAAA-MM-DDTHH:mm" local da consulta ainda por vir no vínculo da franquia, ou null. */
   consultaDoVinculo: (unitId: string, leadId: number, agora: Date) => Promise<string | null>;
   estado: (slug: string) => Estado;
@@ -83,6 +109,7 @@ const DEPS_PADRAO: DepsDaAcao = {
   agora: () => new Date(),
   avisoRecente,
   marcarAviso,
+  marcadoEmPrefixo,
   consultaDoVinculo: (u, l) => consultaDoVinculoPadrao(u, l),
   estado: (slug) => estadoDaDesistencia(slug),
   simular: registrarSimulacao,
@@ -100,8 +127,12 @@ export interface ArgsDaAcao {
   nome?: string | null;
   /** Vindo do worker que refaz a tarefa que falhou: não regrava a marca (a data dela é a da recusa). */
   refazendo?: boolean;
-  /** Só `sem_resposta`: a consulta da marca — se hoje é outra, ele remarcou e não há o que avisar. */
+  /** Do worker (`sem_resposta` ou `refazendo`): a consulta da marca — se hoje é outra, ele remarcou e não há o que avisar/cancelar. */
   consultaDaMarca?: string;
+  /** Do worker: a marca existe porque o detector já viu a desistência no turno — não reconfere o texto. */
+  confiavel?: boolean;
+  /** Do worker `refazendo` com cartão que agora responde: a hora ORIGINAL da recusa, para regravar a marca com a consulta certa. */
+  marcaEm?: Date;
 }
 
 /**
@@ -111,7 +142,7 @@ export interface ArgsDaAcao {
 export async function agirNaDesistencia(args: ArgsDaAcao, deps: DepsDaAcao = DEPS_PADRAO): Promise<ResultadoDaAcao> {
   const { unit, leadId, acao } = args;
   const dos2 = acao === 'ia_calada' || acao === 'sem_resposta';
-  if (dos2 && !pareceDesistenciaDaConsulta(args.trecho)) return 'nao_e';
+  if (dos2 && !args.confiavel && !pareceDesistenciaDaConsulta(args.trecho)) return 'nao_e';
   const trava = `${unit.id}:${leadId}:${acao}`;
   if (emAndamento.has(trava)) return 'ja_avisada';
   emAndamento.add(trava);
@@ -123,6 +154,12 @@ export async function agirNaDesistencia(args: ArgsDaAcao, deps: DepsDaAcao = DEP
     // ele já ESCOLHEU horário neste turno ("não vou poder ir amanhã, pode ser sexta às 10h?"): a Sofia remarca, não há o que aguardar
     if (acao === 'oferta' && citouHorario(args.trecho)) return 'nada';
 
+    // ia_calada/sem_resposta/duvida já abertas nas últimas 24 h: nem lê o cartão (cada mensagem de paciente com a IA calada chega aqui)
+    if (acao !== 'oferta' && acao !== 'recusou') {
+      const tipo = acao === 'duvida' ? 'conferir' : acao;
+      const ultima = await deps.marcadoEmPrefixo(unit.id, leadId, `desistencia_tarefa:${tipo}:`);
+      if (ultima && agora.getTime() - ultima.getTime() < JANELA_24H_MS) return 'ja_avisada';
+    }
     const kommo = args.kommo();
     const lead = await kommo.getLead(leadId).catch(() => null);
     let consulta = await quandoDaConsultaPorVir({ unit, leadId, lead, agora, consultaDoVinculo: (u, l) => deps.consultaDoVinculo(u, l, agora) });
@@ -141,8 +178,8 @@ export async function agirNaDesistencia(args: ArgsDaAcao, deps: DepsDaAcao = DEP
       efetiva = 'duvida';
       consulta = { label: 'sem data no cartão nem na franquia', iso: '?' };
     }
-    // sem_resposta: se hoje a consulta é OUTRA, ele remarcou (a Sofia ou a equipe) — nada a avisar
-    if (acao === 'sem_resposta' && args.consultaDaMarca && args.consultaDaMarca !== '?' && consulta.iso !== args.consultaDaMarca) return 'remarcou';
+    // sem_resposta / refazendo: se hoje a consulta é OUTRA que a da marca, ele remarcou (a Sofia ou a equipe) — nada a avisar nem a cancelar
+    if ((acao === 'sem_resposta' || args.refazendo) && args.consultaDaMarca && args.consultaDaMarca !== '?' && consulta.iso !== '?' && !mesmaConsulta(consulta.iso, args.consultaDaMarca)) return 'remarcou';
 
     const nome = primeiroNomeDoPaciente(lead?.name, args.nome ?? null);
     const info = { slug: unit.slug, nome, quando: consulta.label, trecho: args.trecho };
@@ -174,9 +211,10 @@ export async function agirNaDesistencia(args: ArgsDaAcao, deps: DepsDaAcao = DEP
       return 'marcada';
     }
     // a NOSSA véspera e a NOSSA régua param JÁ, antes de qualquer chamada que possa falhar
-    if (efetiva === 'recusou' && !args.refazendo) await deps.marcarAviso(unit.id, leadId, chaveDaMarca(MARCA_RECUSOU, consulta.iso), agora);
+    // (refazendo: só regrava, com a hora ORIGINAL da recusa, a marca que ficou sem a consulta — chave "?" — para a véspera achá-la)
+    if (efetiva === 'recusou' && (!args.refazendo || args.consultaDaMarca === '?')) await deps.marcarAviso(unit.id, leadId, chaveDaMarca(MARCA_RECUSOU, consulta.iso), args.marcaEm ?? agora);
 
-    const chave = efetiva === 'recusou' ? 'desistencia_tarefa:cancelar' : `desistencia_tarefa:${efetiva === 'duvida' ? 'conferir' : efetiva}`;
+    const chave = chaveDaTarefa(efetiva === 'recusou' ? 'cancelar' : efetiva === 'duvida' ? 'conferir' : efetiva, consulta.iso);
     if (await deps.avisoRecente(unit.id, leadId, chave, JANELA_24H_MS, agora)) return 'ja_avisada';
     const criada = await kommo.createTask({
       leadId,
@@ -202,8 +240,8 @@ export async function agirNaDesistencia(args: ArgsDaAcao, deps: DepsDaAcao = DEP
 
 /** Atalho das tarefas de "IA calada" (webhook) e "sem resposta" (worker): mesma função, outra ação. */
 export function abrirTarefaDaDesistencia(
-  a: { unit: ArgsDaAcao['unit']; leadId: number; texto: string; motivo: 'ia_calada' | 'sem_resposta'; nome?: string | null; kommo: () => KommoDaAcao; consultaDaMarca?: string },
+  a: { unit: ArgsDaAcao['unit']; leadId: number; texto: string; motivo: 'ia_calada' | 'sem_resposta'; nome?: string | null; kommo: () => KommoDaAcao; consultaDaMarca?: string; confiavel?: boolean },
   deps?: DepsDaAcao,
 ): Promise<ResultadoDaAcao> {
-  return agirNaDesistencia({ unit: a.unit, leadId: a.leadId, acao: a.motivo, trecho: a.texto, kommo: a.kommo, nome: a.nome, consultaDaMarca: a.consultaDaMarca }, deps);
+  return agirNaDesistencia({ unit: a.unit, leadId: a.leadId, acao: a.motivo, trecho: a.texto, kommo: a.kommo, nome: a.nome, consultaDaMarca: a.consultaDaMarca, confiavel: a.confiavel }, deps);
 }

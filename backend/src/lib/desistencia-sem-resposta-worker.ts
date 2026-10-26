@@ -16,7 +16,7 @@ import { createKommoClient } from '../services/kommo.service.js';
 import { abrirTarefaDaDesistencia, agirNaDesistencia, estadoDaDesistencia, MARCA_OFERTA, MARCA_RECUSOU } from './desistencia-acao.js';
 import { pareceDesistenciaDaConsulta } from './desistencia-frases.js';
 import { voltouAtrasDeVerdade } from './vespera-segura.js';
-import { marcadoEm } from './aviso-dedupe.js';
+import { marcadoEmPrefixo } from './aviso-dedupe.js';
 import { enviarTelegram } from './telegram.js';
 
 const SWEEP_MS = 10 * 60_000;
@@ -30,7 +30,9 @@ let timer: NodeJS.Timeout | null = null;
 let rodando = false;
 /** Marcas já olhadas (unidade:lead:hora da marca): uma marca que não vira tarefa (sem consulta) não relê o cartão a cada 10 min. */
 const olhadas = new Set<string>();
-const tentativas = new Map<string, number>();
+/** Falhas por marca. Depois de MAX_TENTATIVAS tenta só de 2 em 2 h (Kommo fora por horas não esgota nada para sempre). */
+const tentativas = new Map<string, { n: number; proxima: number }>();
+const BACKOFF_MS = 2 * 3600_000;
 
 /** Pura: esta marca já pode virar "não respondeu"? Velha o bastante, nova o bastante, e ele não escreveu depois dela. */
 export function marcaVenceuSemResposta(marca: Date, agora: Date, mensagensDoPacienteDepois: number): boolean {
@@ -43,23 +45,26 @@ export function deveAvisarOJoao(falhasSeguidas: number): boolean {
   return falhasSeguidas === MAX_TENTATIVAS;
 }
 
+/** Pura: já é hora de tentar de novo esta marca? As primeiras MAX_TENTATIVAS a cada varredura; depois, a cada BACKOFF_MS. */
+export function devoTentarAgora(proxima: number | undefined, agora: number): boolean {
+  return proxima === undefined || agora >= proxima;
+}
+
 async function registrarFalha(id: string, descricao: string): Promise<void> {
-  const n = (tentativas.get(id) ?? 0) + 1;
-  tentativas.set(id, n);
+  const antes = tentativas.get(id)?.n ?? 0;
+  const n = antes + 1;
+  tentativas.set(id, { n, proxima: n >= MAX_TENTATIVAS ? Date.now() + BACKOFF_MS : 0 });
   if (tentativas.size > 5000) tentativas.clear();
-  if (n >= MAX_TENTATIVAS) {
-    olhadas.add(id);
-    if (deveAvisarOJoao(n)) {
-      logger.error({ id }, `desistência: ${descricao} — desisti depois de ${MAX_TENTATIVAS} tentativas`);
-      await enviarTelegram(`⚠️ Desistência da consulta: ${descricao}. Tentei ${MAX_TENTATIVAS} vezes e o Kommo não aceitou. A Sofia JÁ disse ao paciente que a equipe cancela — alguém precisa abrir a tarefa à mão. (${id})`).catch(() => false);
-    }
+  if (deveAvisarOJoao(n)) {
+    logger.error({ id }, `desistência: ${descricao} — ${MAX_TENTATIVAS} tentativas seguidas; passo a tentar só de 2 em 2 h`);
+    await enviarTelegram(`⚠️ Desistência da consulta: ${descricao}. Tentei ${MAX_TENTATIVAS} vezes e o Kommo não aceitou. A Sofia JÁ disse ao paciente que a equipe cancela — se continuar falhando, alguém precisa abrir a tarefa à mão. (${id})`).catch(() => false);
   }
 }
 
-/** A desistência que causou a marca: a mais recente, até a hora dela, que o detector reconhece (o paciente pode ter escrito mais de uma mensagem). */
-async function falaDeDesistencia(conversationId: string, ate: Date): Promise<string> {
-  const falas = await prisma.message.findMany({ where: { conversationId, role: 'user', createdAt: { lte: ate } }, orderBy: { createdAt: 'desc' }, take: 6, select: { content: true } });
-  return falas.find((f) => pareceDesistenciaDaConsulta(f.content))?.content ?? '';
+/** A fala do paciente que causou a marca: a mais recente até a hora dela (a recusa é a última; na oferta, a desistência — qualquer uma serve ao texto). */
+async function falaAte(conversationId: string, ate: Date): Promise<string> {
+  const f = await prisma.message.findFirst({ where: { conversationId, role: 'user', createdAt: { lte: ate } }, orderBy: { createdAt: 'desc' }, select: { content: true } });
+  return f?.content ?? '';
 }
 
 /** Todas as marcas do tipo na janela, em páginas (as mais antigas travadas não escondem as novas). */
@@ -85,11 +90,12 @@ async function refazerTarefasQueFalharam(agora: Date): Promise<void> {
   const marcas = await marcasDaJanela(MARCA_RECUSOU, new Date(agora.getTime() - VALIDADE_DA_MARCA_MS), new Date(agora.getTime() - 10 * 60_000));
   for (const m of marcas) {
     const id = `recusa:${m.unitId}:${m.leadId}:${m.createdAt.getTime()}`;
-    if (olhadas.has(id)) continue;
+    if (olhadas.has(id) || !devoTentarAgora(tentativas.get(id)?.proxima, agora.getTime())) continue;
     try {
+      // já saiu uma tarefa (cancelar ou conferir, de qualquer consulta) DEPOIS da recusa?
       const [c, q] = await Promise.all([
-        marcadoEm(m.unitId, m.leadId, 'desistencia_tarefa:cancelar'),
-        marcadoEm(m.unitId, m.leadId, 'desistencia_tarefa:conferir'),
+        marcadoEmPrefixo(m.unitId, m.leadId, 'desistencia_tarefa:cancelar:'),
+        marcadoEmPrefixo(m.unitId, m.leadId, 'desistencia_tarefa:conferir:'),
       ]);
       if ((c && c >= m.createdAt) || (q && q >= m.createdAt)) { olhadas.add(id); continue; }
       const [unit, conv] = await Promise.all([
@@ -101,7 +107,16 @@ async function refazerTarefasQueFalharam(agora: Date): Promise<void> {
       // Só volta atrás de verdade desfaz a recusa. Qualquer outra fala ("ok, obrigada") não: a Sofia prometeu e a véspera está calada.
       const depois = await prisma.message.findMany({ where: { conversationId: conv.id, role: 'user', createdAt: { gt: m.createdAt } }, select: { content: true }, take: 20 });
       if (voltouAtrasDeVerdade(depois.map((d) => d.content))) { olhadas.add(id); continue; }
-      const r = await agirNaDesistencia({ unit, leadId: Number(m.leadId), acao: 'recusou', trecho: await falaDeDesistencia(conv.id, m.createdAt), kommo: () => createKommoClient(unit), refazendo: true });
+      const r = await agirNaDesistencia({
+        unit,
+        leadId: Number(m.leadId),
+        acao: 'recusou',
+        trecho: await falaAte(conv.id, m.createdAt),
+        kommo: () => createKommoClient(unit),
+        refazendo: true,
+        consultaDaMarca: consultaDaChave(m.ruleKey),
+        marcaEm: m.createdAt,
+      });
       if (r === 'falhou') await registrarFalha(id, `refazer a tarefa de CANCELAR NA FRANQUIA (unidade ${unit.slug}, cartão ${m.leadId})`);
       else olhadas.add(id);
     } catch (err) {
@@ -114,7 +129,7 @@ async function avisarOfertasSemResposta(agora: Date): Promise<void> {
   const marcas = await marcasDaJanela(MARCA_OFERTA, new Date(agora.getTime() - VALIDADE_DA_MARCA_MS), new Date(agora.getTime() - ESPERA_DA_OFERTA_MS));
   for (const m of marcas) {
     const id = `${m.unitId}:${m.leadId}:${m.createdAt.getTime()}`;
-    if (olhadas.has(id)) continue;
+    if (olhadas.has(id) || !devoTentarAgora(tentativas.get(id)?.proxima, agora.getTime())) continue;
     try {
       const conv = await prisma.conversation.findUnique({ where: { unitId_leadId: { unitId: m.unitId, leadId: m.leadId } }, select: { id: true } });
       if (!conv) { olhadas.add(id); continue; }
@@ -125,13 +140,14 @@ async function avisarOfertasSemResposta(agora: Date): Promise<void> {
       // só a automação LIGADA abre tarefa (em seco nem existe marca; se a chave voltou ao papel, espera)
       if (estadoDaDesistencia(unit.slug) !== 'ligado') continue;
       // já fiz a tarefa PARA ESTA oferta (a marca de dedupe é do banco: sobrevive a deploy e a reinício)
-      const feita = await marcadoEm(m.unitId, m.leadId, 'desistencia_tarefa:sem_resposta');
+      const feita = await marcadoEmPrefixo(m.unitId, m.leadId, 'desistencia_tarefa:sem_resposta:');
       if (feita && feita >= m.createdAt) { olhadas.add(id); continue; }
       const r = await abrirTarefaDaDesistencia({
         unit,
         leadId: Number(m.leadId),
-        texto: await falaDeDesistencia(conv.id, m.createdAt),
+        texto: await falaAte(conv.id, m.createdAt),
         motivo: 'sem_resposta',
+        confiavel: true,
         nome: null,
         kommo: () => createKommoClient(unit),
         consultaDaMarca: consultaDaChave(m.ruleKey),

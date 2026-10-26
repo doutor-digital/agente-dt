@@ -141,6 +141,7 @@ function montar(opts: { lead?: object | null; avisado?: boolean; criaFalha?: boo
     marcarAviso: async (_u, _l, chave) => {
       marcas.push(chave);
     },
+    marcadoEmPrefixo: async () => null,
     consultaDoVinculo: async () => null,
     estado: () => opts.estado ?? 'ligado',
     simular: (_u, _a, sim) => {
@@ -172,7 +173,7 @@ test('Araguaína #28861610: "Cancelei." com a IA pausada e consulta no cartão �
   assert.doesNotMatch(m.tarefas[0].text, /Liliane/, 'o nome é o do paciente (título do cartão), não o da esposa que escreveu');
   assert.match(m.tarefas[0].text, /23\/10 às 14:00/);
   assert.equal(m.marcas.length, 1);
-  assert.equal(m.marcas[0], 'desistencia_tarefa:ia_calada');
+  assert.equal(m.marcas[0], 'desistencia_tarefa:ia_calada:2026-10-23T14:00');
 });
 
 test('mensagem repetida em 24 h: não abre outra tarefa', async () => {
@@ -206,7 +207,7 @@ test('"não respondeu à oferta de novo horário": a tarefa diz isso, e a marca 
   const r = await abrirTarefaDaDesistencia({ unit: m.unit, leadId: 1, texto: 'Cancelei.', motivo: 'sem_resposta', kommo: () => m.kommo }, m.deps);
   assert.equal(r, 'tarefa_aberta');
   assert.match(m.tarefas[0].text, /A Sofia ofereceu outro horário e ele não respondeu/);
-  assert.equal(m.marcas[0], 'desistencia_tarefa:sem_resposta');
+  assert.equal(m.marcas[0], 'desistencia_tarefa:sem_resposta:2026-10-23T14:00');
 });
 
 test('unidade sem credencial do Kommo: a fábrica lança e NADA derruba o webhook', async () => {
