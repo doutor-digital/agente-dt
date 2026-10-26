@@ -478,7 +478,7 @@ test('prometeEquipe: promessa em qualquer tempo verbal; oferta não', () => {
     'A equipe já te responde sobre o horário.',
     RECADO_DESMARCADA,
   ]) assert.equal(prometeEquipe(f), true, f);
-  for (const f of ['Nossa equipe tem horário quinta, às 9h. Fica bom pra você?', 'Tenho quinta às 9h ou sexta às 14h.', 'Tudo certo, Maria! Quer que eu veja um novo horário?'])
+  for (const f of ['A equipe não confirma pagamentos.', 'A equipe já confirmou ontem.', 'Nossa equipe tem horário quinta, às 9h. Fica bom pra você?', 'Tenho quinta às 9h ou sexta às 14h.', 'Tudo certo, Maria! Quer que eu veja um novo horário?'])
     assert.equal(prometeEquipe(f), false, f);
 });
 

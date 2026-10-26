@@ -362,9 +362,12 @@ export function travarAgendamentoPorComprovante(
 export function prometeEquipe(texto: string | null | undefined): boolean {
   const n = normalizar(String(texto ?? ''));
   if (!/\b(?:equipe|recepcao|time)\b/.test(n)) return false;
-  // oferta/descrição ("nossa equipe tem horário quinta", "a equipe atende de segunda a sexta"): não é promessa de agir
-  const oferta = /\b(?:equipe|recepcao|time)\s+(?:tem|atende|funciona|abre|fica|esta|e formad[ao])\b|\b(?:tenho|temos)\b/;
-  return !oferta.test(n);
+  // linguagem de AÇÃO (confirmar, conferir, retornar, chamar, entrar em contato...) e nenhuma negação, passado ou oferta:
+  // "A equipe não confirma pagamentos", "A equipe já confirmou ontem" e "nossa equipe tem horário quinta" não são promessa.
+  const acao = /\b(?:confirm|confer|retorn|cham|lig|avis|respond|verific|cheg|cuid)\w*|\bcontato\b|\bver\b|\bfalar\b/;
+  const naoPromete =
+    /\bnao\b|\b(?:confirmou|conferiu|retornou|chamou|ligou|avisou|respondeu|verificou)\b|\b(?:equipe|recepcao|time)\s+(?:tem|atende|funciona|abre|fica|esta|e formad[ao])\b|\b(?:tenho|temos)\b/;
+  return acao.test(n) && !naoPromete.test(n);
 }
 
 /** Rajada de PDFs do mesmo comprovante (Bebedouro mandou 5 em 1 minuto) = uma tarefa; outro comprovante, mais tarde, outra. */
