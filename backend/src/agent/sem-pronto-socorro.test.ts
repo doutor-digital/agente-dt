@@ -234,3 +234,9 @@ test('6. "preciso de pronto socorro?" e "…hoje piorou, volto lá?" abrem a exc
   // e continua sem abrir para visita passada com "preciso de" outra coisa
   assert.equal(semProntoSocorro('Procure o pronto-socorro.', ['Fui ao PS ontem e disseram que preciso de ressonância']).texto, '');
 });
+
+test('visita passada E intenção de agora na mesma frase: a intenção abre a exceção (achado do Codex)', () => {
+  const sugestao = 'Se você sente que não dá para esperar, pode ir.';
+  assert.equal(semProntoSocorro(sugestao, ['ontem fui ao hospital, hoje vou ao hospital porque a dor piorou']).texto, sugestao);
+  assert.equal(semProntoSocorro('Procure o pronto-socorro.', ['ontem fui ao hospital, hoje estou em casa']).texto, '');
+});

@@ -65,7 +65,10 @@ export function pacienteFalouDePs(falas: string[]): boolean {
   return falas.some((f) => {
     const frases = frasesSemAbreviacao(f ?? '').filter(({ frase }) => PACIENTE_FALOU_DE_PS.test(frase));
     // "Fui ao PS ontem. Hoje piorou, volto lá?": a visita passada e a pergunta se volta podem estar em frases diferentes.
-    return frases.some(({ frase }) => (PASSADO.test(frase) ? VOLTAR.test(f) : INTENCAO_AGORA.test(frase)));
+    // Por oração: "ontem fui ao hospital, hoje vou ao hospital porque a dor piorou" tem uma visita passada E uma intenção de agora.
+    return frases.some(({ frase }) =>
+      frase.split(/[,;]|\s+mas\s+/).some((oracao) => PACIENTE_FALOU_DE_PS.test(oracao) && (PASSADO.test(oracao) ? VOLTAR.test(f) : INTENCAO_AGORA.test(oracao))),
+    );
   });
 }
 
