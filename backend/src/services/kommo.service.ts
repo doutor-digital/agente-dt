@@ -700,6 +700,15 @@ function wrapAxiosError(err: unknown, context: string): never {
   throw err;
 }
 
+/** Nota do cartão como a API v4 devolve. `created_by` 0 = integração/robô. */
+export interface NotaKommo {
+  id: number;
+  note_type: string;
+  created_by: number;
+  created_at: number;
+  params?: { text?: string; service?: string; phone?: string; duration?: number; original_name?: string } | null;
+}
+
 const USUARIOS_VALIDADE_MS = 6 * 60 * 60_000;
 /** Conta cujo token não lista usuários (403 em Parauapebas/Imperatriz): não tenta de novo a cada tarefa. */
 const USUARIOS_FALHA_MS = 60 * 60_000;
@@ -2170,6 +2179,37 @@ export class KommoClient {
     }
     await this.updateLeadName(leadId, desired);
     return { previous, desired, changed: true, contatoId };
+  }
+
+  /**
+   * Notas do cartão, das mais recentes para as mais antigas (o conector `kommo_notas` lê por aqui). Sem nota o Kommo
+   * devolve 204 sem corpo. `periodo` em epoch (s), pelo `created_at` da nota.
+   */
+  async listarNotasDoLead(
+    leadId: number,
+    limite: number,
+    periodo: { desde?: number; ate?: number } = {},
+  ): Promise<{ notas: NotaKommo[]; truncado: boolean }> {
+    const notas: NotaKommo[] = [];
+    for (let page = 1; page <= 4; page++) {
+      let lote: NotaKommo[];
+      try {
+        const { data } = await this.http.get<{ _embedded?: { notes?: NotaKommo[] } } | ''>(`/leads/${leadId}/notes`, {
+          params: { page, limit: 250, 'order[id]': 'desc' },
+        });
+        lote = (data || undefined)?._embedded?.notes ?? [];
+      } catch (err) {
+        wrapAxiosError(err, `listarNotasDoLead(${leadId})`);
+      }
+      for (const n of lote) {
+        if (periodo.ate !== undefined && n.created_at > periodo.ate) continue;
+        if (periodo.desde !== undefined && n.created_at < periodo.desde) return { notas, truncado: false };
+        notas.push(n);
+        if (notas.length >= limite) return { notas, truncado: true };
+      }
+      if (lote.length < 250) return { notas, truncado: false };
+    }
+    return { notas, truncado: true };
   }
 
   async addLeadNote(leadId: number, text: string): Promise<{ id?: number } | null> {
