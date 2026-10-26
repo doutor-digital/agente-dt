@@ -11,6 +11,7 @@
 #   vigia-ler-producao.sh inspect <servico>       quando o container subiu e qual sha da imagem
 #   vigia-ler-producao.sh automacoes <slug>       estado das chaves da unidade (tela × .env)
 #   vigia-ler-producao.sh medir <slug> <rotulo>   roda o medidor do vigia de novo, agora
+#   vigia-ler-producao.sh env <CHAVE>            valor de uma chave de comportamento (nunca credencial)
 set -uo pipefail
 VPS="${VIGIA_VPS:-root@89.116.214.130}"
 RAIZ="${VIGIA_RAIZ_VPS:-/root/vigia-petropolis}"
@@ -45,6 +46,16 @@ case "$verbo" in
     slug="${1:-doutor-hernia-petropolis}"
     [[ "$slug" =~ ^[a-z0-9-]+$ ]] || recusa "slug inválido"
     "${SSH[@]}" "CID=\$(docker ps --filter name=ddagentdb_db --format '{{.ID}}'|head -1); docker exec -i \"\$CID\" psql -U agente -d agente_dt -A -F'|' -c \"select a.automacao, a.estado, a.atualizado_em from unit_automacoes a join units u on u.id=a.unit_id where u.slug='$slug' order by 1\""
+    ;;
+  env)
+    # O auditor precisa ver PORTÃO de configuração (ex.: FRANQUIA_REVISAO_SECO) — sem isso ele
+    # conclui por eliminação e erra, o que já aconteceu na primeira prova (26/10). Só chaves de
+    # comportamento: qualquer nome que cheire a credencial é recusado, e nada de `env` inteiro.
+    chave="${1:-}"
+    [[ "$chave" =~ ^[A-Z][A-Z0-9_]{2,40}$ ]] || recusa "nome de chave inválido"
+    printf '%s' "$chave" | grep -qiE 'TOKEN|SECRET|KEY|PASS|SENHA|CRED|DSN|URL|WEBHOOK|DATABASE' && recusa "essa chave pode ser credencial — não passa por aqui"
+    printf '%s' "$chave" | grep -qE '_(SECO|SLUGS|LIGADO_SLUGS|MODO|LIMITE|TETO|ENABLED|OFF|ON)$|^(NODE_ENV|LOG_LEVEL|TZ)$' || recusa "só chaves de comportamento (*_SECO, *_SLUGS, *_TETO, NODE_ENV, LOG_LEVEL, TZ)"
+    "${SSH[@]}" "CID=\$(docker ps --filter name=ddagent_agent --format '{{.ID}}'|head -1); docker exec -i \"\$CID\" printenv $chave || echo '(não definida)'"
     ;;
   medir)
     slug="${1:-doutor-hernia-petropolis}"; rotulo="${2:-Petrópolis}"

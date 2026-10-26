@@ -24,8 +24,12 @@ WT="${VIGIA_WORKTREE:-$HOME/wt-vigia}"
 PROMPT="${VIGIA_PROMPT:-$WT/ops/vigia/auditor.md}"
 PORTA="${VIGIA_PORTA:-$WT/ops/vigia/vigia-ler-producao.sh}"
 TETO_DIA="${VIGIA_TETO_AUDITORIAS:-3}"
-TETO_CUSTO="${VIGIA_TETO_CUSTO_DIA:-5.00}"
+# Medido na primeira investigação de verdade (26/10, contador 7): US$ 2,07 e 9 min com sonnet em
+# esforço médio. O teto de dinheiro existe porque o teto de quantidade sozinho não protege: três
+# investigações grandes num dia ruim passam de US$ 6.
+TETO_CUSTO="${VIGIA_TETO_CUSTO_DIA:-6.00}"
 MODELO="${VIGIA_MODELO:-sonnet}"
+ESFORCO="${VIGIA_ESFORCO:-medium}"
 CLAUDE="${VIGIA_CLAUDE:-$HOME/.local/bin/claude}"
 
 mkdir -p "$LOCAL/fichas" "$LOCAL/feitas"
@@ -87,6 +91,7 @@ O worktree para a ficha e o PR é: $WT (branch própria, nunca main)$extra"
   saida="$LOCAL/fichas/${nome%.json}.resposta.json"
   ( cd "$WT" && "$CLAUDE" -p "$pergunta" \
       --model "$MODELO" \
+      --effort "$ESFORCO" \
       --output-format json \
       --permission-prompts none \
       --mcp-config '{"mcpServers":{}}' --strict-mcp-config \

@@ -261,13 +261,19 @@ try {
       _count: { _all: true },
       _max: { ultimaEm: true },
     });
+    // Quando alguém acabou de mexer na tela, a varredura seguinte ainda não rodou: simulação
+    // gravada ANTES da última mexida é história, não defeito. Sem esta trava, toda mudança de
+    // chave vira alarme falso na hora seguinte (medido em 26/10: o `franquia-sync` passou a
+    // ligado às 11:52 e as simulações das 11:31 ficaram penduradas na revisão).
+    const ultimaMexidaNaTela = linhas.reduce((max, l) => (l.atualizadoEm > max ? l.atualizadoEm : max), new Date(0));
     const mentirosas = [];
     for (const s of simuladas) {
       if (!ligadas.has(s.automacao)) continue; // em "Só no papel" a tela já diz a verdade
       const desde = ligadaDesde.get(s.automacao);
       const ultima = s._max.ultimaEm;
-      // Simulação ANTES de a chave ser ligada é história, não defeito.
+      // Simulação ANTES de a chave ser ligada (ou antes da última mexida na tela) é história.
       if (desde && ultima && ultima <= desde) continue;
+      if (ultima && ultima <= ultimaMexidaNaTela) continue;
       mentirosas.push({
         automacao: s.automacao,
         nome: ligadas.get(s.automacao),
@@ -286,6 +292,13 @@ try {
         automacoes: mentirosas,
         portoesGlobais: portoes,
         ligadasNaTela: ligadas.size,
+        ultimaMexidaNaTela: ultimaMexidaNaTela.toISOString(),
+        // Pista para o auditor não se perder: em seco, o sincronizador registra as gravações de
+        // campo da pessoa COMO SE fossem da revisão (franquia-sync-worker.ts:1061 e 1111). Então
+        // "revisão simulando" pode ser o pai, e não ela.
+        avisoDeAtribuicao: mentirosas.some((m) => m.automacao === 'franquia-revisao')
+          ? 'em seco o franquia-sync grava "gravaria" na conta da franquia-revisao — confira o pai antes de culpar a revisão'
+          : null,
         base: 'o franquia-sync ficou 12 dias assim sem ninguém ver',
       });
   } catch (err) {

@@ -182,7 +182,7 @@ def montar_alerta(unidade, novidades, medida):
             linhas.append(f"  cartões: {', '.join(str(c) for c in n['cartoes'][:5])}")
     linhas += [
         "",
-        "O auditor já foi acordado: ele investiga, escreve a ficha e prepara a correção."
+        "A ficha já foi para o auditor: ele investiga, escreve e prepara a correção."
         " Você só responde ✅ ou ❌.",
         "",
         "Este vigia olha o sistema, não as pessoas: nenhum nome e nenhum número individual sai daqui.",
