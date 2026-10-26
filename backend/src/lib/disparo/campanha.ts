@@ -6,12 +6,9 @@ import { z } from 'zod';
 import { Prisma, type DisparoCampanha } from '@prisma/client';
 import { prisma } from '../prisma.js';
 import { falha, type ResultadoDeAcao } from './onda.js';
-import { problemaNoModelo } from './regras.js';
+import { OFERTA_MAX, problemaNoModelo } from './regras.js';
 
 const cabecalho = z.object({ tipo: z.enum(['image', 'video', 'document']), link: z.string().url().startsWith('https://'), nomeArquivo: z.string().max(120).optional() });
-
-/** O texto de oferta que a Sofia lê: preço, prazo, condições. Curto de propósito — vira bloco do prompt em toda resposta de quem recebeu. */
-export const OFERTA_MAX = 1200;
 
 export const campanhaSchema = z.object({
   nome: z.string().min(2).max(120),
