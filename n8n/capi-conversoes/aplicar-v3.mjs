@@ -59,6 +59,14 @@ let antes = js.slice(0, fim);
 if (!/,\s*$/.test(antes) && !/\{\s*$/.test(antes)) antes = antes.replace(/\s*$/, ',');   // última propriedade sem vírgula
 js = antes + bloco + js.slice(fim);
 try { new Function('$input', js); } catch (e) { falha(`o Config ficaria com erro de sintaxe (${e.message}) — nada foi gravado`); }
+{
+  // o `};` achado fecha mesmo o objeto cfg? Avalia o Config com stub e confere as chaves (compilar não prova isso)
+  let cfgAvaliado;
+  try { cfgAvaliado = new Function('$input', '$env', js)({ all: () => [{ json: {} }] }, {})[0].json.cfg; } catch (e) { falha(`o Config novo não executa (${e.message}) — nada foi gravado`); }
+  if (!cfgAvaliado || cfgAvaliado.pediuHorario?.modo !== pediu.modo || cfgAvaliado.status?.modo !== status.modo) falha('depois da troca o cfg não expõe pediuHorario/status (o "};" achado não fecha o cfg?) — nada foi gravado');
+  const cfgAntigo = new Function('$input', '$env', antigo)({ all: () => [{ json: {} }] }, {})[0].json.cfg;
+  for (const k of ['cadeia', 'preAgendado', 'pipelineId', 'janelaDias']) if (JSON.stringify(cfgAntigo[k]) !== JSON.stringify(cfgAvaliado[k])) falha(`o cfg perdeu/alterou "${k}" — nada foi gravado`);
+}
 cfgNode.parameters.jsCode = js;
 
 // ── nós de código e SQL ───────────────────────────────────────────────────────────────────────────────────
@@ -84,13 +92,17 @@ no('Reservar envio').parameters.query = ler('reservar-envio.v3.sql');
 const reenvio = no('Cliques e reenvios');
 const ancora = "AND v.event_id ~ '^(msg|quente|agendado|compareceu|ganho)-'";
 let q = reenvio.parameters.query;
-if (!q.includes('AND v.ctwa_clid IS NOT NULL')) {
+const MARCA = '/* v3:';
+if (!q.includes(MARCA)) {
   if (!q.includes(ancora)) falha('o SQL de reenvio mudou: não achei a linha do event_id para acrescentar "ctwa_clid IS NOT NULL"');
-  q = q.replace(ancora, `${ancora}\n  AND v.ctwa_clid IS NOT NULL   -- v3: evento de Status (sem clid) volta pelo webhook, não pelo relógio`);
+  // ANTES da âncora e em comentário de bloco: nada que venha depois dela na mesma linha pode ser comentado por engano
+  q = q.replace(ancora, `AND v.ctwa_clid IS NOT NULL /* v3: evento de Status (sem clid) volta pelo webhook, não pelo relógio */\n  ${ancora}`);
   reenvio.parameters.query = q;
 }
 
 // O modo seco do caminho NOVO: o IF "Modo teste" passa a olhar também o _seco do item (o dryRun global continua valendo).
+const rehidratar = no('Rehidratar evento').parameters.jsCode || '';
+if (!/\$\('Montar evento'\)\.all\(\)/.test(rehidratar) || !/json:\s*evento\b/.test(rehidratar)) falha('"Rehidratar evento" não devolve o item inteiro do "Montar evento": o _seco poderia se perder e o seco chamaria a Meta');
 const ifTeste = no('Modo teste (nao chama a Meta)?');
 const ligadoDireto = (wf.connections?.['Rehidratar evento']?.main?.[0] ?? []).some((c) => c.node === 'Modo teste (nao chama a Meta)?');
 if (!ligadoDireto) falha('"Rehidratar evento" não liga direto no IF "Modo teste": o _seco poderia se perder no caminho e o seco chamaria a Meta');

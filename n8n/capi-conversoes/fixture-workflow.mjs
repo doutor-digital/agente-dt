@@ -2,6 +2,7 @@
 export const CONFIG_V2 = `const cfg = {
   testEventCode: '',
   pipelineId: '13843399',
+  janelaDias: 7,
   unidade: 'balsas',
   statusQualificacao: '106820287',
   // v2: cadeia de eventos por etapa (backfill) e etapas pré-agendamento onde Quente = Lead — gerado em 2026-09-08
@@ -9,7 +10,7 @@ export const CONFIG_V2 = `const cfg = {
   preAgendado: ["106820083","106820287"],
 
 };
-return $input.all();`;
+return $input.all().map((item) => ({ json: { ...item.json, cfg, origem: 'relogio' } }));`;
 
 const SQL_REENVIO = `SELECT 1 FROM capi_envios v
 WHERE v.status = 'falhou'
@@ -23,6 +24,7 @@ export function workflow(extra = {}) {
     'Classificar etapa': { jsCode: '// v2' },
     'Montar evento': { jsCode: '// v2' },
     'Buscar telefone e nome': { operation: 'executeQuery', query: 'SELECT 1', options: { queryReplacement: '={{ [1] }}' } },
+    'Rehidratar evento': { jsCode: "const porId = new Map($('Montar evento').all().map((i) => [i.json.event_id, i.json]));\nconst saida = [];\nfor (const item of $input.all()) {\n  const evento = porId.get(item.json.event_id);\n  if (evento) saida.push({ json: evento });\n}\nreturn saida;" },
     'Reservar envio': { operation: 'executeQuery', query: 'INSERT ...' },
     'Cliques e reenvios': { operation: 'executeQuery', query: SQL_REENVIO },
     'Modo teste (nao chama a Meta)?': { conditions: { conditions: [{ leftValue: "={{ $('Config').first().json.cfg.dryRun }}" }] } },

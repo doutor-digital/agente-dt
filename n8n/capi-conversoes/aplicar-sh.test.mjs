@@ -91,3 +91,22 @@ test('sh: unidade sem workflow ativo para no começo', () => {
   assert.notEqual(r.status, 0);
   assert.match(r.stdout, /nenhum workflow ativo/);
 });
+
+test('sh: --desfazer com o export de OUTRA unidade é recusado (não joga o dataset de uma na outra)', () => {
+  const sb = sandbox();
+  const outro = JSON.parse(fs.readFileSync(path.join(sb.d, 'wf-prod.json'), 'utf8'));
+  outro.id = 'WID-OUTRA'; outro.name = 'DD · CTWA → Meta CAPI · Conversões (Marabá)';
+  const arq = path.join(sb.d, 'outra.json');
+  fs.writeFileSync(arq, JSON.stringify(outro));
+  const r = rodar(sb, ['--unidade', 'Balsas', '--desfazer', arq]);
+  assert.notEqual(r.status, 0);
+  assert.match(r.stdout, /não é o export deste workflow/);
+  assert.equal(fs.existsSync(path.join(sb.d, 'put-recebido.json')), false);
+});
+
+test('sh: --desfazer --seco não grava', () => {
+  const sb = sandbox();
+  const r = rodar(sb, ['--unidade', 'Balsas', '--desfazer', path.join(sb.d, 'wf-prod.json'), '--seco']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(fs.existsSync(path.join(sb.d, 'put-recebido.json')), false);
+});

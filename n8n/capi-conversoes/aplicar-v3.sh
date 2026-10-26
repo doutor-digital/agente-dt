@@ -40,15 +40,19 @@ IFS='|' read -r wid wname <<< "$LINHAS"
 echo "== $wname ($wid)  backup em $BK"
 
 if [ -n "$DESFAZER" ]; then
-  # volta ao export guardado antes (o GET de backup), com o mesmo filtro de settings do PUT normal
-  python3 - "$DESFAZER" "$BK/put.json" <<'PY'
+  # o arquivo tem de ser o export DESTE workflow: o PUT leva nome, nós e ligações do arquivo, e um backup de outra
+  # unidade jogaria as conversões de uma no dataset da outra
+  python3 - "$DESFAZER" "$wid" "$wname" "$BK/put.json" <<'PY' || { echo "   recusado: $DESFAZER não é o export deste workflow"; exit 1; }
 import json,sys
-wf=json.load(open(sys.argv[1]))
+arq,wid,wname,dest=sys.argv[1:5]
+wf=json.load(open(arq))
+if wf.get('id')!=wid or wf.get('name')!=wname: raise SystemExit(1)
 OK={'saveExecutionProgress','saveManualExecutions','saveDataErrorExecution','saveDataSuccessExecution','executionTimeout','errorWorkflow','timezone','executionOrder'}
 body={'name':wf['name'],'nodes':wf['nodes'],'connections':wf['connections'],'settings':{k:v for k,v in (wf.get('settings') or {}).items() if k in OK}}
 if wf.get('staticData') is not None: body['staticData']=wf['staticData']
-json.dump(body,open(sys.argv[2],'w'),ensure_ascii=False)
+json.dump(body,open(dest,'w'),ensure_ascii=False)
 PY
+  [ "$SECO" = 1 ] && { echo "   --seco: o desfazer de $DESFAZER seria aceito; nada foi gravado"; exit 0; }
   code=$(api -o "$BK/resp-desfazer.json" -w '%{http_code}' -X PUT --data-binary @"$BK/put.json" "$N8N_API_URL/workflows/$wid")
   echo "   desfeito com $DESFAZER -> HTTP $code"; [ "$code" = 200 ] || { echo "   ERRO: o n8n não aceitou o desfazer — o workflow NÃO voltou"; exit 1; }; exit 0
 fi
@@ -82,7 +86,7 @@ if wf.get('staticData') is not None: body['staticData']=wf['staticData']
 json.dump(body,open(sys.argv[3],'w'),ensure_ascii=False)
 PY
 code=$(api -o "$BK/resp.json" -w '%{http_code}' -X PUT --data-binary @"$BK/put.json" "$N8N_API_URL/workflows/$wid")
-ok=$(python3 -c "import json; j=json.load(open('$BK/resp.json')); c=next((n['parameters']['jsCode'] for n in j.get('nodes',[]) if n['name']=='Classificar etapa'),''); print('v3 gravado' if 'v3, cadeia com backfill' in c else 'v3 NAO encontrado: '+str(j)[:200])")
+ok=$(python3 -c "import json; j=json.load(open('$BK/resp.json')); c=next((n['parameters']['jsCode'] for n in j.get('nodes',[]) if n['name']=='Classificar etapa'),''); print('v3 gravado' if 'v3, cadeia com backfill' in c else 'v3 NAO encontrado: '+str(j)[:200])" 2>/dev/null || echo "resposta do n8n ilegível (HTTP $code)")
 echo "   PUT -> HTTP $code · $ok"
 [ "$code" = 200 ] && [ "$ok" = "v3 gravado" ] || { echo "   ERRO: a v3 NÃO foi aplicada (workflow segue como estava). Backup: $BK/$wid.json"; exit 1; }
 echo "   desfazer: $0 --unidade \"$UNID\" --desfazer $BK/$wid.json"

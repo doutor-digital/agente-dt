@@ -34,7 +34,7 @@ Regras do n8n:
 
 ### 2. Status
 
-Caminho oficial da Meta para mensagens sem clique: `page_id` + `whatsapp_business_account_id` + ≥ 1 dado de cliente em hash. **Sem `page_id` a Meta rejeita.** Só sai se (todas): a unidade tem `cfg.status.pageId`; o cartão tem clique amarrado em `ctwa_eventos` (prova que veio de anúncio e dá telefone e hora); o evento é de até 7 dias depois do clique. Fora disso o descarte continua `sem_ctwa_clid`, como na v2 (as contagens não mudam). Motivos novos em `capi_descartes`: `status_fora_7d_do_clique`, `status_sem_telefone`, `pediu_fora_7d_do_clique`, `pediu_sem_hora_do_clique`.
+Caminho oficial da Meta para mensagens sem clique: `page_id` + `whatsapp_business_account_id` + ≥ 1 dado de cliente em hash. **Sem `page_id` a Meta rejeita.** Só sai se (todas): a unidade tem `cfg.status.pageId`; o cartão tem clique amarrado em `ctwa_eventos` (prova que veio de anúncio e dá telefone e hora); o evento é de até 7 dias depois do clique. Fora disso o descarte continua `sem_ctwa_clid`, como na v2 (as contagens não mudam). Motivos novos em `capi_descartes`: `status_fora_7d_do_clique`, `status_sem_telefone`, `pediu_fora_7d_do_clique`, `pediu_sem_hora_do_clique`, `clique_no_futuro`.
 
 Não documentado pela Meta (parte 1 do estudo): se o Brasil está no subconjunto de países do caminho sem clique. Por isso o Status nasce **desligado**, passa por **seco** e só então **ligado em uma unidade**, olhando `capi_envios.http_status/resposta`.
 
@@ -84,7 +84,7 @@ E no Gerenciador de Eventos do dataset da unidade: o `LeadSubmitted` aparece, e 
 ## Testes
 
 ```bash
-node --test n8n/capi-conversoes/*.test.mjs        # Node >= 20: 47 testes — nós de código (29), montador (12), aplicar-v3.sh com docker/curl de mentira (6)
+node --test n8n/capi-conversoes/*.test.mjs        # Node >= 20: 54 testes — nós de código (31), montador (15), aplicar-v3.sh com docker/curl de mentira (8)
 n8n/capi-conversoes/teste-reservar-envio.sh       # Postgres descartável no docker: 1 Lead por clique (15 casos)
 python3 n8n/capi-conversoes/previa-pediu-horario.py --dias 30 --unidade balsas   # NA VPS, só leitura
 ```

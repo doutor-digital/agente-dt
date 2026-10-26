@@ -61,8 +61,9 @@ for (const item of $input.all()) {
   const telefone = limpaTelefone(d.telefone);
   let eventTime = Number(d.event_time);
 
-  // Clique "no futuro" é dado quebrado (relógio, importação): não serve de prova de anúncio nem de janela.
-  if (cliqueEm != null && cliqueEm > agora + 300) {
+  // Clique "no futuro" é dado quebrado (relógio, importação): não serve de prova de anúncio nem de janela. Só importa onde o
+  // clique é usado (Status e "pediu horário"); o caminho com ctwa_clid segue como na v2 — o clique ali nem é consultado.
+  if (cliqueEm != null && cliqueEm > agora + 300 && (semClid || d.via === 'pediu_horario')) {
     saida.push({ json: { ...d, _aprovado: false, motivo: 'clique_no_futuro' } });
     continue;
   }
@@ -116,8 +117,9 @@ for (const item of $input.all()) {
     // external_id liga ViewContent/LeadSubmitted/Purchase da MESMA pessoa; no caminho sem clique a Meta diz que
     // ele "não é usado para casar" — vai igual, não atrapalha.
     user_data.external_id = sha(telefone);
-    user_data.country = sha('br');
-    sinais.push('ph', 'external_id', 'country');
+    sinais.push('ph', 'external_id');
+    // `country` é o país da pessoa: só para número brasileiro (55). Número de fora com country=br seria um conjunto contraditório.
+    if (telefone.startsWith('55')) { user_data.country = sha('br'); sinais.push('country'); }
   }
 
   const nome = limpaNome(d.nome);

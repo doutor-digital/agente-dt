@@ -10,7 +10,7 @@
 -- Duas fontes para achar o clique, nesta ordem:
 --  1) o ctwa_clid que o cartão carrega (o caminho de sempre);
 --  2) só se o cartão NÃO tem clid: o clique que o fluxo de Rastreio já amarrou a ESTE cartão
---     (ctwa_logs.kommo_lead_id, gravado quando o Rastreio escreveu nele — não é busca por telefone, não adivinha
+--     (ctwa_logs.kommo_lead_id, gravado quando o Rastreio escreveu nele ou o reconheceu — não é busca por telefone, não adivinha
 --     de quem é). Cobre dois buracos medidos em 8 semanas: o anúncio de Status (clique sem clid) e o cartão que
 --     não recebeu o clid que existe (37 Lead perdidos).
 --     Se o cartão teve mais de um clique, vale o MAIS RECENTE com clid; sem nenhum com clid, o mais recente.
@@ -28,7 +28,8 @@ WITH direto AS (
      AND NULLIF($5, '') IS NOT NULL
      AND l.kommo_lead_id = NULLIF($5, '')::bigint
      AND l.unidade = $8
-     AND l.etapa = 'kommo' AND l.status = 'sucesso'
+     AND l.etapa = 'kommo' AND l.status IN ('sucesso', 'preservado', 'criado')   -- 'preservado': o cartão já tinha atribuição (8 em 3 meses); 'criado': previsto no schema, ainda 0
+
    ORDER BY (e.ctwa_clid IS NOT NULL) DESC, e.primeiro_contato_em DESC
    LIMIT 1
 ), clique AS (

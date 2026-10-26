@@ -238,3 +238,16 @@ test('montar: clique poucos segundos "no futuro" (relógios diferentes) nunca ge
   const [b] = montar(CFG, [ev({ via: 'pediu_horario', event_time: AGORA - 5, clique_em: AGORA + 120 })]);
   assert.ok(b.corpo.data[0].event_time <= AGORA + 1);
 });
+
+test('montar: country=br só para número brasileiro; número de fora leva ph sem country', () => {
+  const [br] = montar(CFG, [ev({ telefone: '559984553221' })]);
+  assert.equal(br.corpo.data[0].user_data.country, sha('br'));
+  const [fora] = montar(CFG, [ev({ telefone: '351912345678' })]);
+  assert.equal(fora.corpo.data[0].user_data.country, undefined);
+  assert.equal(fora.corpo.data[0].user_data.ph, sha('351912345678'));
+});
+
+test('montar: clique no futuro NÃO barra o caminho com ctwa_clid (v2 não olhava o clique ali)', () => {
+  const [o] = montar(CFG, [ev({ via: 'quente', clique_em: AGORA + 3 * DIA })]);
+  assert.equal(o._aprovado, true);
+});

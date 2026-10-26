@@ -127,3 +127,30 @@ test('aplicar: sem a ligação direta Rehidratar -> IF "Modo teste" recusa (o _s
   assert.equal(r.status, 2);
   assert.match(r.stderr, /Rehidratar/);
 });
+
+test('aplicar: "Rehidratar evento" que não devolve o item inteiro do Montar recusa (o _seco se perderia)', () => {
+  const wf = workflow();
+  wf.nodes.find((n) => n.name === 'Rehidratar evento').parameters.jsCode = "return $input.all().map((i) => ({ json: { event_id: i.json.event_id } }));";
+  const r = aplicar(wf);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /Rehidratar/);
+});
+
+test('aplicar: se o "};" final não fecha o cfg (helper depois do cfg), recusa em vez de gravar um v3 mudo', () => {
+  const wf = workflow();
+  const cfg = wf.nodes.find((n) => n.name === 'Config');
+  cfg.parameters.jsCode = cfg.parameters.jsCode.replace('return $input.all()', 'const helper = () => {\n  return 1;\n};\nreturn $input.all()');
+  const r = aplicar(wf, { PEDIU_MODO: 'seco' });
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /não expõe pediuHorario|erro de sintaxe|não executa/);
+});
+
+test('aplicar: texto que vem DEPOIS da âncora na mesma linha do SQL de reenvio não é comentado', () => {
+  const wf = workflow();
+  const n = wf.nodes.find((x) => x.name === 'Cliques e reenvios');
+  n.parameters.query = n.parameters.query.replace("ganho)-'\n", "ganho)-' AND v.reservado_em > now() - interval '24 hours'\n");
+  const r = aplicar(wf);
+  assert.equal(r.status, 0, r.stderr);
+  const q = no(r.nodes, 'Cliques e reenvios').query;
+  assert.match(q, /AND v\.ctwa_clid IS NOT NULL \/\* v3:[^*]*\*\/\n\s+AND v\.event_id ~ .*AND v\.reservado_em > now\(\) - interval '24 hours'/);
+});
