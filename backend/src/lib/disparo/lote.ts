@@ -6,6 +6,7 @@
  * É essa única porta que o teste do modo seco tranca: com o modo `seco`, `enviar` e `espelhar` NUNCA rodam.
  */
 import { falhasSeguidasDemais, dentroDaJanela, passouDoLimiteDeSair, vagas, type Freios } from './freios.js';
+import { alertaLimiteDeTaxa, alertaNumeroRestrito } from './alerta.js';
 import { textoFinal, valoresDasVariaveis, type SituacaoNaFranquia } from './regras.js';
 import type { Definicao } from './modelo.js';
 import type { ResultadoDoTemplate } from '../whatsapp-meta.js';
@@ -85,6 +86,8 @@ export interface Porto {
   dormir(ms: number): Promise<void>;
   /** Registra se a rodada terminou em limite de taxa da Meta e devolve quantas rodadas SEGUIDAS já foram assim; `houve: false` (um envio passou) zera. */
   limiteDeTaxa(unitId: string, houve: boolean): Promise<number>;
+  /** Avisa o João (Telegram). Não lança: aviso que falha não derruba a rodada. */
+  avisar(texto: string): Promise<void>;
   log(nivel: 'info' | 'warn' | 'error', dados: Record<string, unknown>, msg: string): void;
 }
 
@@ -325,6 +328,8 @@ export async function rodarUnidade(porto: Porto, f: Freios, u: UnidadeNoLote, on
         const motivo = 'a Meta RESTRINGIU o número por spam/qualidade (código 131048): a unidade foi pausada; resolva com a Meta e monte a onda de novo';
         await porto.pausarOndas(u.id, null, motivo, 'meta');
         porto.log('error', { unit: u.slug }, 'disparo: número RESTRITO pela Meta (131048) — unidade PAUSADA, não tento de novo');
+        // Uma mensagem só: a pausa tira as ondas de "aprovada", e na rodada seguinte não sobra onda para repetir o aviso.
+        await porto.avisar(alertaNumeroRestrito({ unidade: u.slug, ondas: ondas.map((o) => o.id) })).catch(() => undefined);
         return { ...r, parou: 'número restrito pela Meta (131048): unidade pausada' };
       }
       if (res === 'limite') {
@@ -332,6 +337,7 @@ export async function rodarUnidade(porto: Porto, f: Freios, u: UnidadeNoLote, on
         if (seguidas >= f.limiteDeTaxaSeguidos) {
           await porto.pausarOndas(u.id, null, `a Meta pediu para esperar em ${seguidas} rodadas seguidas (limite de taxa): a unidade foi pausada; confira a qualidade do número e monte a onda de novo`, 'meta');
           porto.log('error', { unit: u.slug, rodadas: seguidas }, 'disparo: limite de taxa da Meta por rodadas demais — unidade PAUSADA');
+          await porto.avisar(alertaLimiteDeTaxa({ unidade: u.slug, ondas: ondas.map((o) => o.id), rodadas: seguidas })).catch(() => undefined);
           return { ...r, parou: `limite de taxa da Meta por ${seguidas} rodadas seguidas: unidade pausada` };
         }
         return { ...r, parou: 'a Meta pediu para esperar (limite de taxa): tento de novo na próxima rodada' };

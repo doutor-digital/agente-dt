@@ -14,6 +14,8 @@ import { avisosDoAmbiente, freiosDoAmbiente } from './disparo/freios.js';
 import { rodarUnidade, rodadasSemAndar, type OndaNoLote } from './disparo/lote.js';
 import { filtroDeMontagemMorta } from './disparo/montagem.js';
 import { avisosDaListaDeTeste, portoReal } from './disparo/porto.js';
+import { alertaSemAndar } from './disparo/alerta.js';
+import { enviarTelegram } from './telegram.js';
 import { definicaoDaOnda } from './disparo/onda.js';
 import { leadsQuePediramSair } from './disparo/publico.js';
 
@@ -82,6 +84,27 @@ export async function cancelarMontagensPresas(agora = Date.now()): Promise<numbe
   return r.count;
 }
 
+/**
+ * O que acontece depois de uma rodada de uma unidade: conta as rodadas SEM ANDAR e, quando passa de 5, avisa o João UMA vez por
+ * episódio (no log continua a cada 5). O episódio acaba quando alguém anda; aí o próximo pode avisar de novo.
+ */
+export async function depoisDaRodada(
+  unit: { id: string; slug: string },
+  r: Parameters<typeof rodadasSemAndar>[1],
+  ctx: { avisar: (texto: string) => Promise<unknown>; contagem: Map<string, number> },
+): Promise<void> {
+  const parada = rodadasSemAndar(ctx.contagem.get(unit.id) ?? 0, r);
+  ctx.contagem.set(unit.id, parada);
+  if (parada >= SEM_ANDAR_PARA_ALERTAR && parada % SEM_ANDAR_PARA_ALERTAR === 0) {
+    logger.error({ unit: unit.slug, rodadas: parada, adiados: r.adiados }, 'disparo: a onda está SEM ANDAR — rodadas seguidas só com pessoas adiadas (franquia fora do ar? banco instável?)');
+  }
+  if (parada === SEM_ANDAR_PARA_ALERTAR) {
+    await ctx.avisar(alertaSemAndar({ unidade: unit.slug, rodadas: parada, adiados: r.adiados })).catch((err) => logger.warn({ err: String(err) }, 'disparo: não consegui avisar o João no Telegram'));
+  }
+}
+
+const avisarJoao = (texto: string) => enviarTelegram(texto);
+
 export async function rodadaDoDisparo(): Promise<void> {
   const presos = await fecharEnviosPresos();
   if (presos > 0) logger.warn({ presos }, 'disparo: envios que ficaram no meio (processo caiu) foram marcados como INCERTOS');
@@ -110,11 +133,7 @@ export async function rodadaDoDisparo(): Promise<void> {
     try {
       const noLote: OndaNoLote[] = vivas.map((o) => ({ id: o.id, campanhaId: o.campanhaId, aprovadaEm: o.aprovadaEm, aprovadaModo: o.aprovadaModo, sairAceitos: o.sairAceitos, ...definicaoDaOnda(o) }));
       const r = await rodarUnidade(porto, f, { id: unit.id, slug: unit.slug, nome: unit.name, fuso: fusoDaUnidade(unit) }, noLote);
-      const parada = rodadasSemAndar(semAndar.get(unit.id) ?? 0, r);
-      semAndar.set(unit.id, parada);
-      if (parada >= SEM_ANDAR_PARA_ALERTAR && parada % SEM_ANDAR_PARA_ALERTAR === 0) {
-        logger.error({ unit: unit.slug, rodadas: parada, adiados: r.adiados }, 'disparo: a onda está SEM ANDAR — rodadas seguidas só com pessoas adiadas (franquia fora do ar? banco instável?)');
-      }
+      await depoisDaRodada(unit, r, { avisar: avisarJoao, contagem: semAndar });
       if (r.processados > 0 || (r.parou && r.parou !== 'automação desligada nesta unidade')) logger.info({ unit: unit.slug, ...r }, 'disparo: rodada');
     } catch (err) {
       logger.error({ err: String(err), unit: unit.slug }, 'disparo: a rodada da unidade falhou');

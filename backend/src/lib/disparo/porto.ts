@@ -5,6 +5,7 @@
 import type { Prisma, Unit } from '@prisma/client';
 import { prisma } from '../prisma.js';
 import { logger } from '../logger.js';
+import { enviarTelegram } from '../telegram.js';
 import { createKommoClient } from '../../services/kommo.service.js';
 import { credenciaisDaUnidade, enviarTemplate } from '../whatsapp-meta.js';
 import { conferenciaDaFranquia } from './franquia.js';
@@ -53,7 +54,7 @@ const paraDestino = (d: { id: string; ondaId: string; campanhaId: string; unitId
   id: d.id, ondaId: d.ondaId, campanhaId: d.campanhaId, unitId: d.unitId, telefone: d.telefone, chave: d.chave, nome: d.nome, nomeCompleto: d.nomeCompleto ?? d.nome, kommoLeadId: d.kommoLeadId,
 });
 
-export function portoReal(unidades: ReadonlyMap<string, Unit>): Porto {
+export function portoReal(unidades: ReadonlyMap<string, Unit>, avisarJoao: (texto: string) => Promise<unknown> = (t) => enviarTelegram(t)): Porto {
   const franquias = new Map<string, ReturnType<typeof conferenciaDaFranquia>>();
   const mesmoNumero = new Map<string, Promise<string[]>>();
   const unidadesDoMesmoNumero = (unitId: string): Promise<string[]> => {
@@ -202,6 +203,11 @@ export function portoReal(unidades: ReadonlyMap<string, Unit>): Porto {
       }
       const linha = await prisma.disparoLimite.upsert({ where: { unitId }, create: { unitId, seguidas: 1 }, update: { seguidas: { increment: 1 } } });
       return linha.seguidas;
+    },
+
+    // O Telegram do João (o mesmo canal do sinal de alerta). `enviarTelegram` nunca lança; o catch é só cinto e suspensório.
+    avisar: async (texto) => {
+      await avisarJoao(texto).catch((err) => logger.warn({ err: String(err) }, 'disparo: não consegui avisar o João no Telegram'));
     },
 
     dormir: (ms) => new Promise((r) => setTimeout(r, ms)),

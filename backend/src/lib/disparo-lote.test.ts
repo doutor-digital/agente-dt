@@ -27,7 +27,7 @@ function montar(opcoes: { modo: Modo; quantos?: number; agora?: Date; franquia?:
   let relogio = 0;
   const desdeDasFalhas: Date[] = [];
   let limitesSeguidos = 0;
-  const chamadas = { desdeDasFalhas, enviar: [] as string[], espelhar: [] as string[], pausas: [] as string[], causas: [] as Array<string | undefined>, devolvidas: [] as string[], concluidas: [] as string[], logs: [] as string[] };
+  const chamadas = { desdeDasFalhas, enviar: [] as string[], espelhar: [] as string[], pausas: [] as string[], causas: [] as Array<string | undefined>, devolvidas: [] as string[], concluidas: [] as string[], logs: [] as string[], avisos: [] as string[] };
   const porto: Porto = {
     agora: () => opcoes.agora ?? AGORA,
     modoDaUnidade: () => opcoes.modo,
@@ -63,6 +63,7 @@ function montar(opcoes: { modo: Modo; quantos?: number; agora?: Date; franquia?:
       return opcoes.envio ? opcoes.envio(d) : { ok: true, wamid: `wamid.${d.id}`, detalhe: {}, incerto: false };
     },
     espelhar: async (d, texto) => void chamadas.espelhar.push(`${d.kommoLeadId}|${texto}`),
+    avisar: async (texto) => void chamadas.avisos.push(texto),
     limiteDeTaxa: async (_u, houve) => (limitesSeguidos = houve ? limitesSeguidos + 1 : 0),
     dormir: async () => undefined,
     log: (n, _d, msg) => void chamadas.logs.push(n === 'error' ? `ERRO ${msg}` : msg),
@@ -547,4 +548,33 @@ test('o wamid vai para o log ANTES de qualquer gravação; se o banco falhar dep
   assert.equal(r.falhou, 1);
   assert.match(String(t2.estados.get('d1')!.motivo), /INCERTO: erro interno DEPOIS de a Meta aceitar \(wamid wamid\.d1\)/);
   assert.ok(t2.estados.get('d1')!.enviadoEm, 'conta no teto e nunca é reenviado');
+});
+
+test('TELEGRAM: 131048 avisa o João UMA vez, com unidade, onda, motivo e o que fazer; aviso que falha não desfaz a pausa', async () => {
+  const t = montar({ modo: 'ligado', quantos: 5, teste: null, envio: () => restrito });
+  await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA]);
+  assert.equal(t.chamadas.avisos.length, 1);
+  const msg = t.chamadas.avisos[0]!;
+  for (const trecho of ['doutor-hernia-canaa', 'o1', '131048', 'O que fazer']) assert.ok(msg.includes(trecho), trecho);
+
+  const quebrado = montar({ modo: 'ligado', quantos: 5, teste: null, envio: () => restrito });
+  quebrado.porto.avisar = async () => { throw new Error('telegram fora'); };
+  const r = await rodarUnidade(quebrado.porto, sem_pausa, UNIDADE, [ONDA]);
+  assert.equal(quebrado.chamadas.pausas.length, 1, 'a unidade pausou mesmo assim');
+  assert.match(r.parou ?? '', /número restrito/);
+});
+
+test('TELEGRAM: limite de taxa avisa só na rodada que PAUSA (a 10ª), não nas 9 de espera', async () => {
+  const t = montar({ modo: 'ligado', quantos: 5, teste: null, envio: () => devagar });
+  for (let i = 1; i <= 9; i++) await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA]);
+  assert.deepEqual(t.chamadas.avisos, []);
+  await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA]);
+  assert.equal(t.chamadas.avisos.length, 1);
+  assert.match(t.chamadas.avisos[0]!, /doutor-hernia-canaa[\s\S]*o1[\s\S]*10 rodadas seguidas[\s\S]*O que fazer/);
+});
+
+test('TELEGRAM: nada de aviso nas pausas que não pedem o João agora nem em rodada normal', async () => {
+  const t = montar({ modo: 'ligado', quantos: 3, teste: null });
+  await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA]);
+  assert.deepEqual(t.chamadas.avisos, []);
 });
