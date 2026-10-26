@@ -4,12 +4,13 @@ import { DynamicStructuredTool } from '@langchain/core/tools';
 import { z } from 'zod';
 import {
   RECADO_COMPROVANTE,
+  RECADO_DESMARCADA,
   RECUSA_AGUARDANDO_EQUIPE,
   RECUSA_SEM_COMPROVANTE_DA_TAXA,
   decidirTrava,
   detalheDoValor,
   marcarRecebimento,
-  prometeEquipe,
+  citaEquipe,
   taxaConfere,
   valorEmReais,
   abrirTarefaParaEquipe,
@@ -425,14 +426,6 @@ test('"pagamento confirmado" em Boa Vista depois de marcar: pega as formas que e
   ]) assert.equal(respostaDoComprovante(f, t, true), null, f);
 });
 
-test('desmarcada: a tarefa só abre quando a resposta PROMETE a equipe', () => {
-  assert.equal(prometeEquipe('Vou conferir com a recepção e já te retorno.'), true);
-  assert.equal(prometeEquipe('A equipe confirma em até 1 hora, aqui na conversa.'), true);
-  assert.equal(prometeEquipe('Deixa eu conferir direitinho o seu horário com a equipe — ela te confirma aqui mesmo.'), true);
-  assert.equal(prometeEquipe('Nossa equipe tem horário na quinta, às 9h. Fica bom pra você?'), false);
-  assert.equal(prometeEquipe('Tenho quinta às 9h ou sexta às 14h. Qual prefere?'), false);
-});
-
 test('a tarefa de Boa Vista leva o valor lido e o esperado', async () => {
   const tarefas: Array<Record<string, unknown>> = [];
   const kommo = { getLead: async () => ({ name: 'Joana' }), createTask: async (a: Record<string, unknown>) => (tarefas.push(a), { id: 9 }) };
@@ -442,4 +435,103 @@ test('a tarefa de Boa Vista leva o valor lido e o esperado', async () => {
     detalhe: detalheDoValor(T([comprovanteDe('50,00')]), 100),
   });
   assert.match(String(tarefas[0].text), /valor lido: R\$ 50,00; esperado \(taxa de reserva\): R\$ 100,00/);
+});
+
+// --- buracos achados pelo sênior depois do #127 (ao vivo): uma frase, um teste ---------------------------------------------
+test('"o Pix garante sua vaga" não livra "sua consulta está confirmada" (turno do comprovante e espera)', () => {
+  const noTurno = T([COMPROVANTE]);
+  const espera = T([COMPROVANTE, 'e o endereço?']);
+  for (const f of [
+    'Sua consulta está confirmada para terça às 10h e o Pix garante sua vaga',
+    'Prontinho! Consulta confirmada, o comprovante garante seu horário.',
+  ]) {
+    assert.equal(respostaDoComprovante(f, noTurno, false), RECADO_COMPROVANTE, `turno: ${f}`);
+    assert.equal(respostaDoComprovante(f, espera, false), RECADO_COMPROVANTE, `espera: ${f}`);
+  }
+  assert.equal(afirmaPagamentoConferido('Seu pagamento foi confirmado e garante sua vaga'), true);
+  // a explicação continua explicação
+  assert.equal(respostaDoComprovante('O pagamento antecipado confirmado garante sua vaga.', noTurno, false), null);
+});
+
+test('na espera, frase solta COM dia/hora vale; sem dia/hora fica', () => {
+  const espera = T([COMPROVANTE, 'e o endereço?']);
+  for (const f of ['Tudo certo pra terça às 10h! Te espero lá 😊', 'Combinado, terça às 10h então! 😊', 'Te espero terça, 27/10, às 10h.'])
+    assert.equal(respostaDoComprovante(f, espera, false), RECADO_COMPROVANTE, f);
+  for (const f of ['Fica na Rua X, 120. Te espero lá!', 'Perfeito, combinado!', 'Por nada, Maria! Tudo certo 😊']) assert.equal(respostaDoComprovante(f, espera, false), null, f);
+});
+
+test('valor do comprovante: "Saldo R$ 100,00. Valor transferido: R$ 50,00" é 50 e NÃO marca', () => {
+  const t = T([marcarRecebimento('[imagem do cliente]: COMPROVANTE: Saldo R$ 100,00. Valor transferido: R$ 50,00.', new Date(AGORA))]);
+  assert.deepEqual(t.valores, [50]);
+  assert.equal(decidirTrava(t, BV).libera, false);
+  assert.deepEqual(T([marcarRecebimento('[imagem do cliente]: COMPROVANTE: Pix. Valor total pago via Pix: R$ 100,00.', new Date(AGORA))]).valores, [100]);
+});
+
+test('data carimbada no FUTURO não vale (relógio errado ou carimbo forjado)', () => {
+  assert.equal(T([comprovanteDe('100,00', -2), 'quero marcar']).pendente, false);
+  assert.equal(decidirTrava(T([comprovanteDe('100,00', -2), 'quero marcar']), BV).libera, false);
+});
+
+test('comprovante "sendo conferido"/"confirmado pela equipe": o endereço não some; o fato consumado ainda troca', () => {
+  const espera = T([COMPROVANTE, 'e o endereço?']);
+  assert.equal(respostaDoComprovante('Seu comprovante está sendo conferido pela equipe. Fica na Rua X, 120.', espera, false), null);
+  assert.equal(respostaDoComprovante('O pagamento ainda vai ser conferido pela equipe.', espera, false), null);
+  assert.equal(respostaDoComprovante('Seu Pix foi recebido e confirmado pela equipe ✅', espera, true), RECADO_COMPROVANTE);
+});
+
+// --- 3ª revisão do sênior (#135) -------------------------------------------------------------------------------------------
+test('no turno do comprovante: "agendada e confirmada pela equipe" e "aprovado e conferido pela equipe" são fato consumado', () => {
+  const noTurno = T([COMPROVANTE]);
+  assert.equal(respostaDoComprovante('Sua consulta está agendada e confirmada pela equipe para terça às 10h', noTurno, false), RECADO_COMPROVANTE);
+  assert.equal(respostaDoComprovante('Seu pagamento foi aprovado e conferido pela equipe ✅', noTurno, false), RECADO_COMPROVANTE);
+  // a explicação no presente continua explicação
+  assert.equal(respostaDoComprovante('O pagamento é confirmado pela equipe da clínica.', noTurno, false), null);
+});
+
+test('na espera: horário de funcionamento e "Pix confirmado garante" não viram recado', () => {
+  const espera = T([COMPROVANTE, 'e aí?']);
+  assert.equal(respostaDoComprovante('Te esperamos aqui na clínica a partir das 8h', espera, false), null);
+  assert.equal(respostaDoComprovante('Com o Pix confirmado garante sua vaga', espera, false), null);
+  assert.equal(respostaDoComprovante('Combinado, vou ver os horários de amanhã', espera, false), null);
+  assert.equal(respostaDoComprovante('Perfeito, já deixei agendado pra quinta 10h!', espera, false), RECADO_COMPROVANTE);
+  // com DIA continua valendo
+  assert.equal(respostaDoComprovante('Te esperamos terça às 8h', espera, false), RECADO_COMPROVANTE);
+  // e o condicional separado em duas frases ainda é afirmação
+  assert.equal(respostaDoComprovante('Pagamento confirmado! Isso garante sua vaga na terça.', T([COMPROVANTE]), true), RECADO_COMPROVANTE);
+});
+
+test('consulta desmarcada: a tarefa abre sempre que a resposta cita equipe, recepção ou clínica (sem adivinhar promessa)', () => {
+  for (const f of [
+    'Pode deixar que a equipe vai te confirmar.',
+    'A equipe, em até 1 hora, vai te confirmar.',
+    'Nossa equipe, que já está com seu caso, vai te ligar.',
+    'Não precisa se preocupar: a equipe vai te ligar.',
+    'A equipe vai te ligar pra ver se pode ser terça.',
+    'Não se preocupe! A equipe vai te confirmar em até 1 hora.',
+    'A recepção vai retornar pra você.',
+    'A clínica vai entrar em contato com você em até 1 hora.',
+    RECADO_DESMARCADA,
+  ]) assert.equal(citaEquipe(f), true, f);
+  for (const f of ['Temos quinta às 10h. Fica bom pra você?', 'Tenho quinta às 9h ou sexta às 14h.', 'Tudo certo, Maria! Quer que eu veja um novo horário?'])
+    assert.equal(citaEquipe(f), false, f);
+});
+
+test('valor do comprovante: saldo/limite/tarifa não são o valor pago', () => {
+  const v = (d: string) => T([marcarRecebimento(`[imagem do cliente]: COMPROVANTE: ${d}`, new Date(AGORA))]).valores;
+  assert.deepEqual(v('Saldo R$ 100,00. Transferência de R$ 50,00.'), [50]);
+  assert.deepEqual(v('Tarifa R$ 0,00. Total pago R$ 100,00.'), [100]);
+  assert.deepEqual(v('Pix de R$ 100,00 para a Clínica. Saldo R$ 3.000,00.'), [100]);
+});
+
+test('achados do Codex no commit final: "foi confirmado e isso garante" troca; "Pix confirmado, garante" e "ainda vou confirmar ... quinta" ficam', () => {
+  const t = T([COMPROVANTE]);
+  assert.equal(respostaDoComprovante('O pagamento foi confirmado e isso garante sua vaga', t, true), RECADO_COMPROVANTE);
+  assert.equal(respostaDoComprovante('Com o Pix confirmado, garante sua vaga.', t, true), null);
+  assert.equal(respostaDoComprovante('Combinado, ainda vou confirmar se temos horário na quinta', T([COMPROVANTE, 'e aí?']), false), null);
+});
+
+test('"Combinado" só é barrado pela ação/oferta da PRÓPRIA oração: "Combinado, terça às 10h; vou confirmar com a equipe" é horário combinado', () => {
+  const espera = T([COMPROVANTE, 'e aí?']);
+  assert.equal(respostaDoComprovante('Combinado, terça às 10h; vou confirmar com a equipe.', espera, false), RECADO_COMPROVANTE);
+  assert.equal(respostaDoComprovante('Combinado, vou ver os horários de amanhã; a equipe te avisa.', espera, false), null);
 });
