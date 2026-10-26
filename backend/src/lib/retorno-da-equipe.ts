@@ -122,7 +122,12 @@ export function retornoDaEquipe(unit: Unit, agora: Date = new Date()): RetornoDa
  * prompt próprio, e não custa nada no prompt fixo (que fica uma hora em cache e não pode depender da hora).
  */
 export function orientacaoAoTransferir(r: RetornoDaEquipe, urgente = false): string {
-  const semPrazo = 'NÃO prometa prazo: nada de "em instantes", "já já", "um instante", "logo te chamam".';
+  const prazo = 'NÃO prometa prazo: nada de "em instantes", "já já", "um instante", "logo te chamam".';
+  // Sinal de alerta (decisão de 26/10): nunca sugerir pronto-socorro; se o próprio paciente perguntou ou disse que
+  // vai, não desaconselhar.
+  const semPrazo = urgente
+    ? `${prazo} NÃO sugira pronto-socorro, UPA nem hospital. Só se o PRÓPRIO paciente perguntou se deve ir ou disse que vai: não desaconselhe — diga que, se ele sente que não dá para esperar, pode ir.`
+    : prazo;
   if (r.tipo === 'aberta') {
     return (
       'Responda em UMA frase avisando o paciente que ' +
@@ -132,14 +137,9 @@ export function orientacaoAoTransferir(r: RetornoDaEquipe, urgente = false): str
     );
   }
   if (r.tipo === 'fechada') {
-    const pronto = r.hoje
-      ? ''
-      : urgente
-        ? ' A clínica não atende mais hoje: só oriente pronto-socorro se o paciente disse que a dor está insuportável.'
-        : '';
     return (
       `A equipe está fora do horário agora e volta ${r.quando}. Responda em UMA frase avisando o paciente que ` +
-      `a equipe continua o atendimento por aqui ${r.quando} — diga esse dia e essa hora. ${semPrazo}${pronto}`
+      `a equipe continua o atendimento por aqui ${r.quando} — diga esse dia e essa hora. ${semPrazo}`
     );
   }
   return (

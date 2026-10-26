@@ -1113,8 +1113,13 @@ export async function buildAgentGraph(
         });
       }
 
+      // As últimas falas do paciente: se ELE falou em pronto-socorro, a resposta pode tratar disso (sem-pronto-socorro.ts).
+      const mensagensDoPaciente = nonSystemMessages
+        .filter((m) => m.getType() === 'human')
+        .slice(-3)
+        .map((m) => aiTextFromContent(m.content));
       const cta = avaliarChamadaFinal(textoFinal, { pacienteEncerrou: !!encerrou });
-      if (cta.precisaRefazer && !detectarVazamento(textoFinal) && aplicarGuardrail(textoFinal, unit).triggered.length === 0) {
+      if (cta.precisaRefazer && !detectarVazamento(textoFinal) && aplicarGuardrail(textoFinal, unit, { mensagensDoPaciente }).triggered.length === 0) {
         const t1 = performance.now();
         try {
           const refeita = (await withTimeout(
@@ -1268,7 +1273,7 @@ export async function buildAgentGraph(
         textoFinal = semDra;
         response.content = textoFinal;
       }
-      const guardBruto = aplicarGuardrail(semIntimidade(semDiminutivo(textoFinal)), unit);
+      const guardBruto = aplicarGuardrail(semIntimidade(semDiminutivo(textoFinal)), unit, { mensagensDoPaciente });
       // O que o guardrail devolve (correção ou texto de reserva) passa pela mesma trava do nome.
       const guard = { ...guardBruto, text: semDraSofiaNaDH(guardBruto.text, unit, rede) };
       if (guard.rewritten) {

@@ -119,9 +119,9 @@ test('recusar diagnóstico por WhatsApp não é desistir', () => {
 });
 
 test('contemAlgum aceita qualquer uma das formulações', () => {
-  const espera = { contemAlgum: ['pronto-atendimento', 'emergência', 'hospital'] };
-  assert.deepEqual(conferir(resposta('procure um pronto-atendimento hoje'), espera, { unit: unidade() }), []);
-  assert.deepEqual(conferir(resposta('vá ao hospital ainda hoje'), espera, { unit: unidade() }), []);
+  const espera = { contemAlgum: ['endereço', 'telefone', 'whatsapp'] };
+  assert.deepEqual(conferir(resposta('te passo o endereço agora'), espera, { unit: unidade() }), []);
+  assert.deepEqual(conferir(resposta('me chama no whatsapp ainda hoje'), espera, { unit: unidade() }), []);
   const falhou = conferir(resposta('vamos marcar sua consulta'), espera, { unit: unidade() });
   assert.equal(falhou.length, 1);
   assert.equal(falhou[0].regra, 'faltou_dizer');
@@ -255,6 +255,15 @@ test('ferramenta proibida reprova — cadastrar paciente antes de agendar', () =
     { unit: unidade() },
   );
   assert.ok(falhas.some((f) => f.regra === 'ferramenta_proibida'));
+});
+
+test('pronto-socorro ou opinião sobre cirurgia reprova, mesmo que o guardrail corte (26/10)', () => {
+  for (const texto of ['Sinto muito 🙏 Procure o pronto-socorro mais próximo.', 'Esse caso costuma seguir o caminho cirúrgico.']) {
+    const falhas = conferir(resposta(texto), { naoTransfere: false, naoDesiste: false }, { unit: unidade() });
+    assert.ok(falhas.some((f) => f.regra === 'pronto_socorro_ou_cirurgia'), texto);
+  }
+  const limpa = conferir(resposta('Sinto muito 🙏 A nossa equipe já foi avisada.'), { naoTransfere: false, naoDesiste: false }, { unit: unidade() });
+  assert.ok(!limpa.some((f) => f.regra === 'pronto_socorro_ou_cirurgia'));
 });
 
 test('dado de outra unidade reprova', () => {
