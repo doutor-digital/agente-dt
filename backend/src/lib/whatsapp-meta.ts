@@ -254,14 +254,21 @@ export interface ResultadoDoTemplate {
 const CODIGOS_DE_LIMITE_DE_TAXA = new Set([4, 80007, 80008, 130429, 131048, 131056]);
 
 /** O código 131048 (spam rate limit): o número foi restringido pela Meta. */
+/** O código do erro da Graph API, número ou texto numérico ('131048'); `null` se não houver. */
+function codigoDoErro(detalhe: unknown): number | null {
+  const c = (detalhe as { error?: { code?: unknown } } | null)?.error?.code;
+  const n = typeof c === 'number' ? c : typeof c === 'string' && /^\d+$/.test(c.trim()) ? Number(c) : NaN;
+  return Number.isFinite(n) ? n : null;
+}
+
 export function ehNumeroRestrito(detalhe: unknown): boolean {
-  return (detalhe as { error?: { code?: unknown } } | null)?.error?.code === 131048;
+  return codigoDoErro(detalhe) === 131048;
 }
 
 /** A resposta pede para esperar? Status 429 ou um dos códigos de limite de taxa da Meta. */
 export function ehLimiteDeTaxa(status: number, detalhe: unknown): boolean {
-  const codigo = (detalhe as { error?: { code?: unknown } } | null)?.error?.code;
-  return status === 429 || (typeof codigo === 'number' && CODIGOS_DE_LIMITE_DE_TAXA.has(codigo));
+  const codigo = codigoDoErro(detalhe);
+  return status === 429 || (codigo !== null && CODIGOS_DE_LIMITE_DE_TAXA.has(codigo));
 }
 
 const TIMEOUT_DO_TEMPLATE_MS = 20_000;

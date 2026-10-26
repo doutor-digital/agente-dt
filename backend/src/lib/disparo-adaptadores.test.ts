@@ -11,7 +11,7 @@ import { prisma } from './prisma.js';
 import { portoReal, listaDeTesteDoAmbiente, _zerarLimites } from './disparo/porto.js';
 import { SpineService, type SpineUnit } from '../services/spine.service.js';
 import { conferenciaDaFranquia, type FranquiaPorta } from './disparo/franquia.js';
-import { rodadaDoDisparo } from './disparo-worker.js';
+import { rodadaDoDisparo, varrerSaidas, _zerarVarreduraDeSair } from './disparo-worker.js';
 
 /** O cliente do Prisma não deixa `mock.method` nos modelos: troca o modelo inteiro por um falso e devolve no fim do teste. */
 const originais = new Map<string, PropertyDescriptor | undefined>();
@@ -157,9 +157,28 @@ test('lista de teste: "slug=*,telefone" NÃO solta a unidade inteira (só vale o
 // ── o worker varre SAIR mesmo sem onda aprovada ─────────────────────────────────────────────────────────────────
 
 test('worker: sem nenhuma onda aprovada a varredura de SAIR roda assim mesmo (onda parada por SAIR e oferta de onda concluída dependem dela)', async () => {
+  _zerarVarreduraDeSair();
   let varreu = 0;
   falso('disparoDestinatario', { updateMany: async () => ({ count: 0 }), findMany: async () => (varreu++, []) });
   falso('disparoOnda', { updateMany: async () => ({ count: 0 }), findMany: async () => [] });
   await rodadaDoDisparo();
   assert.equal(varreu, 1, 'a varredura leu os envios mesmo com 0 ondas aprovadas');
+});
+
+test('worker: se a varredura de SAIR FALHA, o relógio de 10 minutos não anda e a rodada seguinte tenta de novo', async () => {
+  _zerarVarreduraDeSair();
+  let tentativas = 0;
+  falso('disparoDestinatario', {
+    findMany: async () => {
+      tentativas++;
+      if (tentativas === 1) throw new Error('banco caiu');
+      return [];
+    },
+  });
+  const agora = Date.UTC(2026, 9, 26, 15);
+  await assert.rejects(() => varrerSaidas(new Map(), agora), /banco caiu/);
+  assert.equal(await varrerSaidas(new Map(), agora + 60_000), 0, 'um minuto depois já tenta de novo (e agora passa)');
+  assert.equal(tentativas, 2);
+  assert.equal(await varrerSaidas(new Map(), agora + 120_000), 0);
+  assert.equal(tentativas, 2, 'passou: agora sim espera os 10 minutos');
 });

@@ -127,3 +127,11 @@ test('enviarTemplate: 131048 vem marcado como RESTRITO (a unidade pausa), e só 
   for (const code of [130429, 131056, 80007, 4, 131026]) assert.equal(ehNumeroRestrito({ error: { code } }), false, String(code));
   assert.equal(ehNumeroRestrito(null), false);
 });
+
+test('o código do erro como texto numérico ("131048") também é reconhecido; texto qualquer não', () => {
+  assert.equal(ehNumeroRestrito({ error: { code: '131048' } }), true);
+  assert.equal(ehNumeroRestrito({ error: { code: ' 131048 ' } }), true);
+  assert.equal(ehNumeroRestrito({ error: { code: '131048x' } }), false);
+  assert.equal(ehLimiteDeTaxa(400, { error: { code: '130429' } }), true);
+  assert.equal(ehLimiteDeTaxa(400, { error: { code: 'abc' } }), false);
+});

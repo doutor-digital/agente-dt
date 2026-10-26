@@ -35,7 +35,6 @@ const VARRER_SAIR_A_CADA_MS = Number(process.env.DISPARO_SAIR_A_CADA_MS) > 0 ? N
 /** Quem recebeu e DEPOIS escreveu SAIR vira `saiu` — é isso que alimenta o freio por SAIR. */
 export async function varrerSaidas(unidades: ReadonlyMap<string, Unit>, agora = Date.now()): Promise<number> {
   if (agora - ultimaVarreduraDeSair < VARRER_SAIR_A_CADA_MS) return 0;
-  ultimaVarreduraDeSair = agora;
   const enviados = await prisma.disparoDestinatario.findMany({
     // 'falhou' COM enviadoEm é o envio incerto (timeout, processo que caiu): se a pessoa respondeu SAIR depois, a mensagem chegou.
     where: { estado: { in: ['enviado', 'falhou'] }, kommoLeadId: { not: null }, enviadoEm: { gte: new Date(agora - HORAS_OLHANDO_SAIR * 3_600_000) } },
@@ -55,7 +54,13 @@ export async function varrerSaidas(unidades: ReadonlyMap<string, Unit>, agora = 
     const r = await prisma.disparoDestinatario.updateMany({ where: { id: { in: ids }, estado: { in: ['enviado', 'falhou'] } }, data: { estado: 'saiu', motivo: 'respondeu SAIR depois do envio' } });
     marcados += r.count;
   }
+  // O relógio só anda quando a varredura TERMINOU: uma falha (banco, Kommo) tenta de novo na rodada seguinte, em vez de calar os SAIR por 10 minutos.
+  ultimaVarreduraDeSair = agora;
   return marcados;
+}
+
+export function _zerarVarreduraDeSair(): void {
+  ultimaVarreduraDeSair = 0;
 }
 
 /** Um `enviando` que passou disto morreu com o processo. Não dá para saber se saiu: fica registrado como INCERTO (conta no teto, nunca é reenviado). */
