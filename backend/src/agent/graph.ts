@@ -18,8 +18,8 @@ import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.
 import { createChatModel, invokeChatModel } from '../services/openai.service.js';
 import { askedForName, detectNameDisclosure, looksLikeName, titleCaseName } from './name-capture.js';
 import { aplicarGuardrail } from './guardrail.js';
-import { chamadasDoTurno, ehClinicaParaSinalDeAlerta, falasDoTurno, fraseDoPasse, pausaDoTurno, sinalNaFala } from './sinal-de-alerta.js';
-import { pacienteFalouDePs } from './sem-pronto-socorro.js';
+import { falasDoTurno } from './sinal-de-alerta.js';
+import { passarPorSinalNoTurno } from './passe-por-sinal.js';
 import { retornoDaEquipe } from '../lib/retorno-da-equipe.js';
 import { semDiminutivo } from '../lib/sem-diminutivo.js';
 import { semIntimidade } from '../lib/sem-intimidade.js';
@@ -1121,52 +1121,19 @@ export async function buildAgentGraph(
       // Olímpia/Mossoró/Balsas/Rio Verde ficaram sem etiqueta, sem tarefa e sem aviso. Aqui o código passa pela mesma
       // ferramenta pausar_ia (etiqueta 🔴 PRIORIDADE + tarefa LIGAR AGORA + Telegram do João). Só frase sem ambiguidade
       // (sinal-de-alerta.ts); a fala vaga fica com o modelo, que pergunta UM sinal.
-      let passouPorSinal = false;
-      if (ehClinicaParaSinalDeAlerta(unit) && state.leadId) {
-        const { pausou, urgente } = pausaDoTurno(chamadasDoTurno(nonSystemMessages));
-        const sinal = urgente
-          ? null
-          : sinalNaFala(mensagensDoPaciente);
-        const pausar = tools.find((t) => t.name === 'pausar_ia');
-        if (sinal && pausar) {
-          let resultadoPausa: string;
-          try {
-            resultadoPausa = String(
-              await pausar.invoke({ leadId: Number(state.leadId), motivo: `sinal de alerta: ${sinal}`.slice(0, 200), sinalDeAlerta: true }),
-            );
-          } catch (err) {
-            resultadoPausa = `falhou: ${err instanceof Error ? err.message : String(err)}`;
-          }
-          const pegou = resultadoPausa.startsWith('OK');
-          // O modelo já tinha pausado, só sem a flag: ele escreveu a resposta sabendo disso, e ela fica. Se não tinha, a
-          // resposta dele ignorou o sinal: sai a frase do passe. Se a pausa não pegou, dizer "a equipe continua" com a IA
-          // ainda ligada seria prometer o que não aconteceu — fica a resposta do modelo.
-          const trocaATexto = pegou && !pausou;
-          await recorder.step({
-            kind: pegou ? 'THINKING' : 'ERROR',
-            title: pegou
-              ? `🚑 Sinal de alerta na fala do paciente (${sinal}) e o modelo ${pausou ? 'pausou sem avisar a equipe' : 'não parou'} — aviso feito pelo código`
-              : `🚑 Sinal de alerta na fala do paciente (${sinal}) e o modelo não avisou; o aviso pelo código não pegou — saiu a resposta do modelo`,
-            payload: { original: textoFinal, pausa: resultadoPausa },
-          });
-          if (pegou) passouPorSinal = true;
-          if (trocaATexto) {
-            textoFinal = fraseDoPasse(retornoDaEquipe(unit), pacienteFalouDePs(mensagensDoPaciente));
-            response.content = textoFinal;
-            // O resumo para quem vai ligar: depois da pausa e do aviso, que são o que não pode esperar.
-            const resumir = tools.find((t) => t.name === 'resumir_lead_para_sdr');
-            if (resumir) {
-              try {
-                await withTimeout(
-                  resumir.invoke({ leadId: Number(state.leadId), focusHint: `SINAL DE ALERTA: ${sinal}. Queixa, sinais e há quanto tempo.` }),
-                  AGENT_NODE_TIMEOUT_MS,
-                );
-              } catch (err) {
-                logger.warn({ err: String(err), unit: unit.slug }, 'sinal de alerta: resumo pelo código falhou');
-              }
-            }
-          }
-        }
+      const passe = await passarPorSinalNoTurno({
+        unit,
+        leadId: state.leadId,
+        mensagens: nonSystemMessages,
+        falasDoPaciente: mensagensDoPaciente,
+        tools,
+        recorder,
+        textoFinal,
+      });
+      const passouPorSinal = passe.avisou;
+      if (passe.texto !== textoFinal) {
+        textoFinal = passe.texto;
+        response.content = textoFinal;
       }
 
       const cta = avaliarChamadaFinal(textoFinal, { pacienteEncerrou: !!encerrou });
