@@ -111,6 +111,16 @@ test('"hospital" que o paciente citou de passagem não libera a sugestão de pro
   }
 });
 
+test('visita passada ao pronto-socorro não abre a exceção; pergunta de agora abre (achado do Codex)', () => {
+  const sugestao = 'Procure o pronto-socorro.';
+  for (const fala of ['fui ao pronto-socorro semana passada', 'estive na UPA ontem', 'já fui no pronto socorro e não resolveu']) {
+    assert.equal(semProntoSocorro(sugestao, [fala]).texto, '', fala);
+  }
+  for (const fala of ['já fui no pronto socorro e mandaram pra casa, devo voltar?', 'devo ir ao pronto-socorro?', 'vou na UPA agora', 'é caso de pronto socorro?']) {
+    assert.equal(semProntoSocorro(sugestao, [fala]).texto, sugestao, fala);
+  }
+});
+
 test('dizer que a dúvida sobre cirurgia é do especialista não é opinar', () => {
   for (const t of [
     'A consulta serve para avaliar se você vai precisar de cirurgia.',

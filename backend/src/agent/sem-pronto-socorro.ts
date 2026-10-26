@@ -49,8 +49,19 @@ const PACIENTE_FALOU_DE_PS = new RegExp(
   'i',
 );
 
+/** "fui ao pronto-socorro semana passada": visita passada, sem intenção de ir agora. */
+const PASSADO = /\b(?:fui|fomos|estive|estivemos|passei|passamos|j[aá]\s+fui|semana\s+passada|m[eê]s\s+passado|ontem|anteontem|h[aá]\s+\w+\s+(?:dias|semanas|meses|anos))\b/i;
+/** Pergunta se deve ir, ou diz que vai: a intenção de agora. */
+const INTENCAO = /\b(?:devo|deveria|vou|vamos|preciso|precisa|posso|voltar|volto|ir|irei|chamo|chamar|corro|levar|vale\s+a\s+pena|melhor\s+ir|[eé]\s+caso)\b/i;
+
+/**
+ * O paciente perguntou se deve ir, ou disse que vai? Menção a uma visita passada ("fui ao pronto-socorro semana
+ * passada") não abre a exceção — só a intenção de agora.
+ */
 export function pacienteFalouDePs(falas: string[]): boolean {
-  return falas.some((f) => PACIENTE_FALOU_DE_PS.test(f ?? ''));
+  return falas.some((f) =>
+    quebrarEmFrases(f ?? '').some(({ frase }) => PACIENTE_FALOU_DE_PS.test(frase) && (!PASSADO.test(frase) || INTENCAO.test(frase))),
+  );
 }
 
 /** Frase que aconselha procurar médico, ou opina sobre cirurgia. Sai sempre. */
