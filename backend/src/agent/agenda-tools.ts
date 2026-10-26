@@ -28,7 +28,7 @@ import { PARA_SEMPRE_MS } from '../lib/conflito-paciente.js';
 import { carimbarQuenteAoAgendar, decidirPagamentoAntecipado, valorDoCampo } from './carimbos-do-agendamento.js';
 import { carimboDaConsulta } from './horario-oferecido.js';
 import { agoraLocalISO } from './consulta-que-passou.js';
-import { motivoDeNaoCancelar } from './cancelavel.js';
+import { motivoDeNaoCancelar, perguntadoEmOutroTurno, PREFIXO_DA_PERGUNTA } from './cancelavel.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
 import { apagarDoCache, medidorDoCache } from '../lib/cache-agenda.js';
 import {
@@ -962,16 +962,37 @@ export function buildCancelarConsulta({ unit, recorder }: Contexto) {
       if (naoCancela) {
         return (
           `NÃO CANCELEI: ${naoCancela}. NÃO diga que cancelou e NÃO cite dia nem hora como se ainda valesse. ` +
-          'Diga que a equipe confere com ele, e abra uma tarefa ALERTA para a equipe se a ferramenta criar_tarefa existir.'
+          'Diga que a equipe confere com ele e, se a ferramenta criar_tarefa existir, abra uma tarefa começando exatamente por ' +
+          `"ALERTA · ${fresca.slug} · [Contato: primeiro nome] Pediu para cancelar a consulta, mas ${naoCancela}: conferir".`
         );
       }
 
       if (!args.confirmado) {
+        // a pergunta deixa a marca que o confirmado=true de um turno POSTERIOR exige (cancelavel.ts)
+        await prisma.cardAlert
+          .upsert({
+            where: { unitId_leadId_ruleKey: { unitId: fresca.id, leadId: String(args.leadId), ruleKey: `${PREFIXO_DA_PERGUNTA}${recorder.traceId}` } },
+            create: { unitId: fresca.id, leadId: String(args.leadId), ruleKey: `${PREFIXO_DA_PERGUNTA}${recorder.traceId}` },
+            update: { createdAt: new Date() },
+          })
+          .catch((err) => logger.warn({ err: String(err), leadId: args.leadId }, 'cancelar_consulta: não gravei a marca da pergunta'));
         return (
           'AINDA NÃO CANCELEI. Pergunte ao paciente, com estas palavras e nomeando a consulta: ' +
           `"Confirmo o cancelamento da sua consulta de ${porExtenso(atual.quando)}?" ` +
           'Só chame de novo com confirmado=true na PRÓXIMA mensagem, e só se ele responder "sim" a ESSA pergunta ' +
           '(não vale um "pode cancelar" dito antes dela). Se ele quiser outro dia ou horário, use remarcar_consulta em vez de cancelar.'
+        );
+      }
+
+      // confirmado=true só vale se a pergunta nomeada foi feita em OUTRO turno (cancelavel.ts)
+      const marcas = await prisma.cardAlert
+        .findMany({ where: { unitId: fresca.id, leadId: String(args.leadId), ruleKey: { startsWith: PREFIXO_DA_PERGUNTA } }, select: { ruleKey: true, createdAt: true } })
+        .catch(() => null);
+      if (!marcas || !perguntadoEmOutroTurno(marcas, recorder.traceId)) {
+        return (
+          'AINDA NÃO CANCELEI: a pergunta de confirmação com a consulta nomeada não foi feita antes. Chame cancelar_consulta SEM ' +
+          'confirmado, pergunte ao paciente "Confirmo o cancelamento da sua consulta de <dia, hora>?" e só chame com confirmado=true ' +
+          'na mensagem seguinte, depois do "sim" dele.'
         );
       }
 

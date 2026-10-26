@@ -19,6 +19,8 @@ const DESISTE_DA_CONSULTA: RegExp[] = [
   /\bdesist(i|ir|o|imos|indo)\b/,
   // "não vou poder ir", "n vou conseguir comparecer", "não poderei ir", "não irei" + verbo de ir
   new RegExp(`\\bn(ao|) ${PODER}( mais)?( (poder|conseguir))? ${VERBO_DE_IR}\\b`),
+  // "não vou conseguir manter a consulta"
+  /\bn(ao|) (vou|vamos|posso|podemos|consigo|conseguimos|poderei) (conseguir |poder )?manter\b/,
   /\bn(ao|) (vou|vamos|irei|iremos) mais\b(?! (me )?(faltar|atrasar|esquecer|demorar|perder|deixar|falhar))/,
   // "Nao irei." / "Infelizmente não vou." — a frase inteira, sem complemento (com complemento é outra coisa: "não irei pagar")
   /\bn(ao|) (irei|iremos|vou|vamos)[ .!]*$/,
@@ -62,9 +64,10 @@ const NAO_E_DESISTENCIA: RegExp[] = [
  */
 const QUER_MANTER: RegExp[] = [
   /\b(quero|vou|prefiro|vamos|queremos|preferimos) (manter|ficar com|continuar com)\b/,
-  /\bmantem(os)?\b|\bmanter\b|\bmantenha\b/,
+  // "manter" sem negação antes ("não vou conseguir manter a consulta" é o contrário)
+  /(?<!\bnao (?:\w+ ){0,3})(?:\bmantem(?:os)?\b|\bmanter\b|\bmantenha\b)/,
   // sem "vou lá"/"vou comparecer"/"dá pra ir": "não vou lá" e "não dá pra ir" são o contrário
-  /\bvou sim\b|\bvamos sim\b|\beu vou\b(?! (cancelar|desmarcar|desistir|ter que|precisar))/,
+  /\bvou sim\b|\bvamos sim\b|(?<!\bnao )\beu vou[ .!]*$|(?<!\bnao )\beu vou (?:sim|la|ai|comparecer|estar|ir)\b/,
   /\bconsegui me organizar\b/,
   /\bnao vou mais (me )?(faltar|atrasar|esquecer|demorar|perder|deixar|falhar)\b/,
   /\b(cancel|desmarc|desmarqu)\w* (nao|n)\b|\bnao (cancel|desmarc)\w*/,
@@ -87,9 +90,12 @@ const OUTRA_CONSULTA: RegExp[] = [
   /\b(cancel|desmarc|desmarqu)\w* (a|o) (de|do|da) /,
 ];
 
+/** Só é pedido de cancelar OUTRA consulta se há verbo de cancelar/não ir: "quero marcar a consulta da minha esposa" não é. */
+const VERBO_DE_CANCELAR = /\b(cancel|desmarc|desmarqu|desist)\w*|\bnao (vou|posso|consigo|vai dar|tenho como)\b/;
+
 export function falouDeOutraConsulta(texto: string | null | undefined): boolean {
   const s = normalizar(texto ?? '');
-  return !!s && OUTRA_CONSULTA.some((r) => r.test(s));
+  return !!s && VERBO_DE_CANCELAR.test(s) && OUTRA_CONSULTA.some((r) => r.test(s));
 }
 
 /** Passado asseverado: com "?" ainda é desistência. */
@@ -176,20 +182,21 @@ export const oferecuHorario = (fala: string): boolean => {
  * 29/10, às 14h?". Sênior no #132: o cancelamento SEMPRE passa por ela — a Sofia só chama `cancelar_consulta(confirmado=true)`
  * depois de um "sim" a ESSA pergunta, e o paciente vê qual consulta cai.
  */
-export const perguntouConfirmarCancelamento = (fala: string): boolean => /confirmo o cancelamento da sua consulta/i.test(fala);
+export const perguntouConfirmarCancelamento = (fala: string): boolean => /\bconfirm\w* (o )?cancelamento (da|de) (sua|tua) consulta/.test(normalizar(fala));
 
 const ASSENTE = new Set(['sim', 'isso', 'pode', 'confirmo', 'confirmado', 'confirma', 'ok', 'certo', 'claro', 'quero', 'positivo']);
 const PALAVRAS_DO_SIM = new Set(['com', 'certeza', 'mesmo', 'cancelar', 'cancela', 'cancele', 'o', 'cancelamento', 'por', 'favor', 'pfv', 'obrigado', 'obrigada', 'de', 'nada']);
 
 /** A resposta à pergunta de confirmação: "sim" só quando é um sim limpo; "não"/"manter" mantém; o resto não cancela. */
 export function respostaDaConfirmacao(texto: string | null | undefined): 'sim' | 'nao' | 'outra' {
-  const s = normalizar(texto ?? '').replace(/[!.,]+/g, ' ').replace(/\s+/g, ' ').trim();
-  if (!s) return 'outra';
-  if (/\b(nao|n|manter|mantem|mantenha|deixa|espera|calma|pera)\b/.test(s)) return 'nao';
-  if (s.includes('?')) return 'outra';
-  // um "sim" LIMPO: abre com palavra de assentimento e só tem palavras de assentimento ("sim, pode cancelar", "pode sim",
-  // "confirmo"). "pode ser outro dia?" e "sim, mas quanto custa" não são.
-  const tokens = s.split(' ');
-  if ((ASSENTE.has(tokens[0]) || tokens.slice(0, 2).join(' ') === 'com certeza') && tokens.every((t) => ASSENTE.has(t) || PALAVRAS_DO_SIM.has(t))) return 'sim';
+  const todo = normalizar(texto ?? '');
+  if (!todo) return 'outra';
+  // negativa: abre com "não", ou pede para manter/esperar, ou diz "não cancela"
+  if (/^(nao|n)\b/.test(todo) || /\b(manter|mantem|mantenha|espera|calma|pera)\b|\bnao (cancel|desmarc|quero cancelar|precisa cancelar)/.test(todo)) return 'nao';
+  if (todo.includes('?') || /\bmas\b/.test(todo)) return 'outra';
+  // um "sim" LIMPO na primeira oração ("sim, pode cancelar, não vou poder ir"): só palavras de assentimento antes da vírgula
+  const primeira = todo.split(/[,.;!]/)[0].trim();
+  const tokens = primeira.split(/\s+/).filter(Boolean);
+  if (tokens.length > 0 && (ASSENTE.has(tokens[0]) || tokens.slice(0, 2).join(' ') === 'com certeza') && tokens.every((t) => ASSENTE.has(t) || PALAVRAS_DO_SIM.has(t))) return 'sim';
   return 'outra';
 }

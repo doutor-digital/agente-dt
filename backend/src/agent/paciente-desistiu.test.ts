@@ -9,7 +9,7 @@ import type { Unit } from '@prisma/client';
 import { composeSystemPrompt } from './prompt-composer.js';
 import type { Fala } from './repeticao.js';
 import { pacienteDesistiu, renderPacienteDesistiu } from './paciente-desistiu.js';
-import { oferecuHorario, pareceDesistenciaDaConsulta, recusouRemarcarExplicitamente } from '../lib/desistencia-frases.js';
+import { oferecuHorario, pareceDesistenciaDaConsulta, perguntouConfirmarCancelamento, quisManter, recusouRemarcarExplicitamente } from '../lib/desistencia-frases.js';
 
 const p = (texto: string): Fala => ({ papel: 'paciente', texto });
 const ia = (texto: string): Fala => ({ papel: 'ia', texto });
@@ -123,7 +123,7 @@ test('CAMINHO 1 — recusa explícita: NÃO cancela ainda; manda perguntar "Conf
 
 test('CAMINHO 1b — depois da pergunta nomeada, SÓ um "sim" a ela chama cancelar_consulta(confirmado=true)', () => {
   const pergunta = ia('Confirmo o cancelamento da sua consulta de quinta-feira, 29/10 às 14h?');
-  for (const sim of ['sim', 'Sim, pode', 'confirmo', 'pode cancelar', 'sim, pode cancelar', 'pode sim', 'Sim, confirmo o cancelamento', 'isso mesmo', 'com certeza, pode cancelar por favor']) {
+  for (const sim of ['sim', 'Sim, pode', 'confirmo', 'pode cancelar', 'sim, pode cancelar', 'pode sim', 'Sim, pode cancelar, não vou poder ir', 'Isso, não preciso mais', 'sim, deixa cancelar', 'Sim, confirmo o cancelamento', 'isso mesmo', 'com certeza, pode cancelar por favor']) {
     const d = pacienteDesistiu([p('Cancelei.'), ia(OFERTA), p('não quero remarcar'), pergunta, p(sim)]);
     assert.equal(d?.momento, 'confirmando', sim);
     assert.equal(d?.resposta, 'sim', sim);
@@ -219,3 +219,19 @@ for (const frase of ['não vou mais atrasar, prometo', 'Não vou mais esquecer',
     assert.equal(pareceDesistenciaDaConsulta(frase), false);
   });
 }
+
+test('achados da 5ª revisão: outra consulta exige verbo de cancelar; "manter"/"eu vou" não valem quando dizem o contrário', () => {
+  // nada de alerta falso para quem só cita a consulta de um familiar
+  for (const t of ['quero marcar a consulta da minha esposa também', 'a consulta do meu pai é amanhã']) {
+    assert.equal(pacienteDesistiu([ia('Posso ajudar?'), p(t)]), null, t);
+  }
+  // quem diz o contrário de manter continua sendo desistência
+  for (const t of ['Não vou conseguir manter a consulta de amanhã', 'Eu vou viajar, não vou poder ir']) {
+    assert.equal(quisManter(t), false, t);
+    assert.equal(pareceDesistenciaDaConsulta(t), true, t);
+  }
+  // a pergunta reescrita pelo modelo ainda é a pergunta de confirmação
+  for (const q of ['Posso confirmar o cancelamento da sua consulta de quinta, às 14h?', 'Confirmo o cancelamento da sua consulta de quinta?', 'confirmo o cancelamento da sua  consulta']) {
+    assert.equal(perguntouConfirmarCancelamento(q), true, q);
+  }
+});

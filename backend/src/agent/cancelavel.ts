@@ -24,3 +24,22 @@ export function motivoDeNaoCancelar(
   if (c.quando.slice(0, 16) <= agoraLocal.slice(0, 16)) return 'a consulta já passou ou está acontecendo agora';
   return null;
 }
+
+/**
+ * A pergunta "Confirmo o cancelamento da sua consulta de…?" tem de ter sido feita em OUTRO turno antes de o cancelamento valer.
+ * A ferramenta não vê a conversa, então a pergunta deixa uma marca (`cancelar_pergunta:<traceId do turno>` no `card_alert`) e
+ * `confirmado=true` só passa se houver marca de um turno DIFERENTE do atual e recente. Isso fecha "o modelo chama sem e depois
+ * com confirmado=true no mesmo turno" e "confirmado=true direto por causa de um 'pode cancelar' dito antes da pergunta" — o
+ * 'sim' a ESSA pergunta continua sendo instrução do bloco, e esta é a trava que não depende do modelo.
+ */
+export const PREFIXO_DA_PERGUNTA = 'cancelar_pergunta:';
+const JANELA_DA_PERGUNTA_MS = 48 * 3600_000;
+
+export function perguntadoEmOutroTurno(
+  marcas: Array<{ ruleKey: string; createdAt: Date }>,
+  traceIdAtual: string | null | undefined,
+  agora: Date = new Date(),
+): boolean {
+  const atual = `${PREFIXO_DA_PERGUNTA}${traceIdAtual ?? ''}`;
+  return marcas.some((m) => m.ruleKey.startsWith(PREFIXO_DA_PERGUNTA) && m.ruleKey !== atual && agora.getTime() - m.createdAt.getTime() < JANELA_DA_PERGUNTA_MS);
+}

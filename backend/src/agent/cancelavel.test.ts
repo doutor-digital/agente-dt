@@ -27,3 +27,15 @@ test('ATENDIDA aparece como "confirmada" no reconciliador — a ferramenta não 
 test('sem data não há como provar que é futura: não cancela', () => {
   assert.match(motivoDeNaoCancelar({ quando: null, idStatus: 37 }, AGORA) ?? '', /não sei o dia/);
 });
+
+import { perguntadoEmOutroTurno } from './cancelavel.js';
+
+test('confirmado=true só passa se a pergunta nomeada foi feita em OUTRO turno, e há pouco', () => {
+  const agora = new Date('2026-10-26T15:00:00Z');
+  const marca = (trace: string, h: number) => ({ ruleKey: `cancelar_pergunta:${trace}`, createdAt: new Date(agora.getTime() - h * 3600_000) });
+  assert.equal(perguntadoEmOutroTurno([], 't2', agora), false, 'nunca perguntou');
+  assert.equal(perguntadoEmOutroTurno([marca('t2', 0)], 't2', agora), false, 'perguntou NESTE turno: "pode cancelar" dito antes não vale');
+  assert.equal(perguntadoEmOutroTurno([marca('t1', 0.1)], 't2', agora), true, 'perguntou no turno anterior');
+  assert.equal(perguntadoEmOutroTurno([marca('t1', 72)], 't2', agora), false, 'pergunta velha demais');
+  assert.equal(perguntadoEmOutroTurno([{ ruleKey: 'outra_regra:t1', createdAt: agora }], 't2', agora), false, 'outra marca do cartão não conta');
+});
