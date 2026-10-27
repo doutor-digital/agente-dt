@@ -68,8 +68,8 @@ test('dia normal: 4 linhas, sem alerta, e diz quantas ficaram fora da nota e por
   assert.match(linhas[0], /26\/10 \(seg\).*tudo igual/);
   assert.match(linhas[1], /230 avaliadas/);
   assert.match(linhas[1], /nota 6,4 só das 100 avaliáveis/);
-  assert.match(linhas[1], /85 sem fala da Sofia, 45 em que o paciente sumiu/);
-  assert.match(linhas[2], /Sofia sem falar: 7%/);
+  assert.match(linhas[1], /85 avaliações de conversas em que a Sofia nem chegou a falar, 45 em que o paciente sumiu/);
+  assert.match(linhas[2], /Conversas do dia em que o paciente escreveu e a Sofia não falou no dia: 7%/);
   assert.match(linhas[2], /vazias: 14%/);
   assert.match(linhas[2], /sinais de erro: 12/);
   assert.match(linhas[3], /Serra 5,1 \(9\) · Mossoró 5,3 \(7\) · Canaã 5,5 \(6\)/);
@@ -106,7 +106,7 @@ test('nota boa não é alerta: melhora some com o ⚠️', () => {
 
 test('Sofia sem falar e mensagens vazias: alerta só com alta de 5 pontos ou mais', () => {
   const a = avaliarDia(normal({ ontemMsg: { conversasSemSofia: 80, mensagensPacienteVazias: 600 } })).alertas;
-  assert.ok(a.some((x) => /Sofia sem falar subiu para 20%/.test(x)), a.join('|'));
+  assert.ok(a.some((x) => /Sofia sem falar no dia subiu para 20%/.test(x)), a.join('|'));
   assert.ok(a.some((x) => /vazias subiram para 30%/.test(x)));
   assert.deepEqual(avaliarDia(normal({ ontemMsg: { conversasSemSofia: 36 } })).alertas, []); // 9% contra 7%
   // base pequena: não conclui nada
@@ -198,7 +198,7 @@ test('semanal: nota só das avaliáveis, faixas com conversão, sinais, compara�
   assert.match(texto, /semana de 24\/10 \(sáb\) a 30\/10 \(sex\)/);
   assert.match(texto, /Juiz: 1\.610 avaliadas \(semana anterior 1\.540\)/);
   assert.match(texto, /Só 700 \(43%\) medem a Sofia/);
-  assert.match(texto, /595 sem fala dela e 315 em que o paciente sumiu/);
+  assert.match(texto, /595 avaliações de conversas em que ela nem chegou a falar e 315 em que o paciente sumiu/);
   assert.match(texto, /Nota média \(só avaliáveis\): 6,4 — semana anterior 6,0/);
   assert.match(texto, /nota baixa \(menos de 5\): 120 conversas, 5% viraram ganho, 10% com consulta marcada/);
   assert.match(texto, /nota alta \(7 ou mais\): 180 conversas, 20% viraram ganho, 40% com consulta marcada/);

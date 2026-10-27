@@ -78,9 +78,16 @@ export type DesfechoDoDia =
 
 type Tipo = 'diario' | 'semanal';
 
-/** O log guarda os números, não a fala do paciente: as linhas do trecho da pior conversa ficam só no Telegram. */
+/** Começo do bloco da pior conversa no texto (`texto.ts`): daqui até o fim é dado de paciente. */
+export const INICIO_DA_PIOR_CONVERSA = 'Pior conversa avaliável:';
+
+/**
+ * O log não guarda NENHUM dado de paciente: nem fala, nem 1º nome, nem final de telefone, nem número do cartão.
+ * O bloco da pior conversa (que é o último do texto) sai inteiro; o resto são só números e nomes de unidade.
+ */
 export function paraLog(texto: string): string {
-  return texto.replace(/^ {2}(Paciente|Sofia): .*$/gm, '  [trecho omitido no log]');
+  const i = texto.indexOf(INICIO_DA_PIOR_CONVERSA);
+  return i < 0 ? texto : `${texto.slice(0, i)}[pior conversa omitida no log: tem dado de paciente]`;
 }
 
 /**
@@ -116,6 +123,7 @@ export async function resolverODia(
     if (modo === 'ligado') {
       const r = await dep.reivindicar(lease, TTL_DO_LEASE_MS);
       if (r === 'de-outro') {
+        dep.registrar('warn', { hoje, tipo }, 'resumo-diario-ia: o lease do dia é de outro processo — não envio por aqui (se nada chegar no Telegram, o dono do lease morreu antes de enviar)');
         jaEnviados.add(tipo);
         deOutro += 1;
         continue;

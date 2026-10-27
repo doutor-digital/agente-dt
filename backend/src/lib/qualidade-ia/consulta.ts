@@ -3,39 +3,61 @@
  * `messages` e `conversations`, que o sistema já grava. São 3 consultas por resumo (avaliações, mensagens,
  * contato da pior conversa); as contas em cima delas estão em `agregar.ts` e `texto.ts`.
  *
- * O que é "Sofia falou" (fragmento `E_SOFIA`): mensagem `assistant` que a IA escreveu na conversa. Ficam de
- * fora o que também é gravado como `assistant` mas não é ela conversando: fala da equipe lida da conversa
- * oficial (`origem = kommo_talks`), degraus da régua (`followUp`), reativação, lembrete de consulta.
+ * O que é "Sofia falou" (fragmento `E_SOFIA`): mensagem `assistant` que a IA escreveu CONVERSANDO. A lista do que
+ * fica de fora (fala da equipe, importação do Kommo, confirmação, cartão de chegada, nota interna, régua,
+ * reativação, lembrete) mora em `lib/mensagem-da-ia.ts` e é a MESMA que o alerta "prometeu sem marcar" usa em
+ * JavaScript; o teste de SQL confere que as duas respondem igual.
  *
- * O que é "avaliável": a Sofia falou ≥ 1 vez E o paciente escreveu depois da 1ª fala dela. O resto é nota
- * que não mede a Sofia (medido em 27/10/2026: ~7% das conversas sem nenhuma fala dela, ~24% em que o
- * paciente sumiu depois da 1ª fala).
+ * O que é "avaliável": a Sofia falou ≥ 1 vez E o paciente escreveu depois da 1ª fala dela — OLHANDO SÓ O QUE
+ * EXISTIA QUANDO O JUIZ DEU A NOTA (`created_at <= avaliação`). Sem esse corte, o paciente que sumiu, tirou nota 2
+ * e voltou dias depois passaria a contar como avaliável e devolveria à média exatamente as notas "paciente
+ * sumiu" que o resumo existe para tirar.
  *
- * Datas: `messages.created_at` e `conversation_evaluations.created_at` são `timestamp` SEM fuso, em UTC
- * (padrão do Prisma). O dia de São Paulo sai de `(col AT TIME ZONE 'UTC') AT TIME ZONE 'America/Sao_Paulo'`;
- * `col AT TIME ZONE 'America/Sao_Paulo'` direto leria o UTC como se fosse horário de Brasília.
+ * Datas: `messages.created_at` e `conversation_evaluations.created_at` são `timestamp` SEM fuso, em UTC (padrão
+ * do Prisma). O dia de São Paulo sai de `(col AT TIME ZONE 'UTC') AT TIME ZONE 'America/Sao_Paulo'`. Os limites
+ * da janela entram como `timestamptz` explícito convertido para UTC (`utc()`): a consulta não depende do
+ * `timezone` da sessão do Postgres (se o banco estiver em America/Sao_Paulo, a janela não anda 3 h).
  */
 import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma.js';
+import { MARCA_AUDIO_NAO_OUVIDO } from '../../agent/repeticao.js';
+import {
+  AUTOR_DA_EQUIPE,
+  CHAVES_DE_RETOMADA,
+  ORIGENS_AUTOMATICAS,
+  ORIGENS_QUE_NAO_SAO_DA_IA,
+  PREFIXO_ORIGEM_QUE_NAO_E_DA_IA,
+  VIAS_QUE_NAO_SAO_DA_IA,
+} from '../mensagem-da-ia.js';
 import { inicioDoDia, somarDias } from './dias.js';
 import { final4, limparTrecho, primeiroNome } from './privacidade.js';
-import { MIN_CARACTERES_REPETIDA, REGEX_FALHA, REGEX_VAZAMENTO } from './sinais.js';
+import { MIN_CARACTERES_REPETIDA, REGEX_CLINICO, REGEX_FALHA_TECNICA, REGEX_NAO_ENTENDI, REGEX_VAZAMENTO } from './sinais.js';
 import type { Dia, DiaMensagens, LinhaDeAvaliacao, PiorConversa } from './tipos.js';
 
-/** Mensagem do paciente que não chegou como texto: vazia, ou o marcador de áudio que não deu para ouvir. */
-const AUDIO_NAO_OUVIDO = '[áudio do cliente — não deu pra ouvir]';
+/** `meta ->> chave` sem NULL: ausente = ''. */
+const meta = (chave: string) => Prisma.sql`coalesce(m.meta->>(${chave}::text), '')`;
 
-const E_SOFIA = Prisma.sql`(
+/**
+ * "A Sofia conversando", em SQL, a partir das MESMAS listas de `mensagem-da-ia.ts`
+ * (`mensagemDaSofiaConversando`). A tabela `m` é `messages`.
+ */
+export const E_SOFIA = Prisma.sql`(
   m.role = 'assistant'
-  AND coalesce(m.meta->>'origem', '') <> 'kommo_talks'
-  AND coalesce(m.meta->>'origem', '') <> 'lembrete_kommo'
-  AND coalesce(m.meta->>'origem', '') NOT LIKE 'confirmacao%'
-  AND m.meta->'followUp' IS NULL
-  AND m.meta->'reactivation' IS NULL
+  AND ${meta('origem')} NOT IN (${Prisma.join([...ORIGENS_QUE_NAO_SAO_DA_IA, ...ORIGENS_AUTOMATICAS])})
+  AND ${meta('origem')} NOT LIKE ${PREFIXO_ORIGEM_QUE_NAO_E_DA_IA + '%'}
+  AND ${meta('autor')} <> ${AUTOR_DA_EQUIPE}
+  AND ${meta('via')} NOT IN (${Prisma.join([...VIAS_QUE_NAO_SAO_DA_IA])})
+  AND ${Prisma.join(
+    CHAVES_DE_RETOMADA.map((k) => Prisma.sql`coalesce(m.meta->(${k}::text), 'null'::jsonb) = 'null'::jsonb`),
+    ' AND ',
+  )}
 )`;
 
 /** Dia de São Paulo (date) de uma coluna `timestamp` em UTC. */
 const diaSP = (col: Prisma.Sql) => Prisma.sql`((${col} AT TIME ZONE 'UTC') AT TIME ZONE 'America/Sao_Paulo')::date`;
+
+/** Instante → `timestamp` em UTC, igual ao das colunas, sem depender do fuso da sessão. */
+const utc = (d: Date) => Prisma.sql`(${d.toISOString()}::timestamptz AT TIME ZONE 'UTC')`;
 
 /** Intervalo [ini, fim) em UTC que cobre os dias de `de` a `ate` (inclusive). */
 export function janela(de: Dia, ate: Dia): { ini: Date; fim: Date } {
@@ -66,7 +88,8 @@ export async function avaliacoesDoPeriodo(de: Dia, ate: Dia): Promise<LinhaDeAva
            (s.primeira_sofia IS NOT NULL) AS "sofiaFalou",
            (s.primeira_sofia IS NOT NULL AND EXISTS (
               SELECT 1 FROM messages p
-              WHERE p.conversation_id = e.conversation_id AND p.role = 'user' AND p.created_at > s.primeira_sofia
+              WHERE p.conversation_id = e.conversation_id AND p.role = 'user'
+                AND p.created_at > s.primeira_sofia AND p.created_at <= e.created_at
            )) AS "pacienteRespondeu",
            (c.converted_at IS NOT NULL) AS ganhou,
            EXISTS (
@@ -79,9 +102,9 @@ export async function avaliacoesDoPeriodo(de: Dia, ate: Dia): Promise<LinhaDeAva
     LEFT JOIN LATERAL (
       SELECT min(m.created_at) AS primeira_sofia
       FROM messages m
-      WHERE m.conversation_id = e.conversation_id AND ${E_SOFIA}
+      WHERE m.conversation_id = e.conversation_id AND m.created_at <= e.created_at AND ${E_SOFIA}
     ) s ON true
-    WHERE e.created_at >= ${ini} AND e.created_at < ${fim}
+    WHERE e.created_at >= ${utc(ini)} AND e.created_at < ${utc(fim)}
     ORDER BY e.created_at DESC`;
   return rows.map((r) => ({ ...r, nota: Number(r.nota) }));
 }
@@ -90,6 +113,10 @@ export async function avaliacoesDoPeriodo(de: Dia, ate: Dia): Promise<LinhaDeAva
 export async function mensagensPorDia(de: Dia, ate: Dia): Promise<DiaMensagens[]> {
   const { ini, fim } = janela(de, ate);
 
+  // Início e fim do dia de São Paulo (de cada linha `pac.dia`), como `timestamp` em UTC.
+  const inicioDoDiaSP = Prisma.sql`(((pac.dia)::timestamp AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'UTC')`;
+  const fimDoDiaSP = Prisma.sql`(((pac.dia + 1)::timestamp AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'UTC')`;
+
   const pacientes = await prisma.$queryRaw<
     Array<{ dia: string; conversasComPaciente: number; conversasSemSofia: number; mensagensPaciente: number; mensagensPacienteVazias: number }>
   >`
@@ -97,9 +124,9 @@ export async function mensagensPorDia(de: Dia, ate: Dia): Promise<DiaMensagens[]
       SELECT ${diaSP(Prisma.sql`m.created_at`)} AS dia,
              m.conversation_id,
              count(*) AS msgs,
-             count(*) FILTER (WHERE btrim(m.content) = '' OR m.content LIKE ${AUDIO_NAO_OUVIDO + '%'}) AS vazias
+             count(*) FILTER (WHERE btrim(m.content) = '' OR m.content LIKE ${MARCA_AUDIO_NAO_OUVIDO + '%'}) AS vazias
       FROM messages m
-      WHERE m.role = 'user' AND m.created_at >= ${ini} AND m.created_at < ${fim}
+      WHERE m.role = 'user' AND m.created_at >= ${utc(ini)} AND m.created_at < ${utc(fim)}
       GROUP BY 1, 2
     )
     SELECT to_char(pac.dia, 'YYYY-MM-DD') AS dia,
@@ -107,7 +134,7 @@ export async function mensagensPorDia(de: Dia, ate: Dia): Promise<DiaMensagens[]
            count(*) FILTER (WHERE NOT EXISTS (
              SELECT 1 FROM messages m
              WHERE m.conversation_id = pac.conversation_id AND ${E_SOFIA}
-               AND m.created_at < (((pac.dia + 1)::timestamp AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'UTC')
+               AND m.created_at >= ${inicioDoDiaSP} AND m.created_at < ${fimDoDiaSP}
            ))::int AS "conversasSemSofia",
            sum(pac.msgs)::int AS "mensagensPaciente",
            sum(pac.vazias)::int AS "mensagensPacienteVazias"
@@ -122,7 +149,7 @@ export async function mensagensPorDia(de: Dia, ate: Dia): Promise<DiaMensagens[]
       SELECT m.conversation_id, m.content, m.created_at,
              lag(m.content) OVER (PARTITION BY m.conversation_id ORDER BY m.created_at, m.id) AS anterior
       FROM messages m
-      WHERE ${E_SOFIA} AND m.created_at >= ${antes} AND m.created_at < ${fim}
+      WHERE ${E_SOFIA} AND m.created_at >= ${utc(antes)} AND m.created_at < ${utc(fim)}
     )
     SELECT to_char(${diaSP(Prisma.sql`s.created_at`)}, 'YYYY-MM-DD') AS dia,
            count(*)::int AS mensagens,
@@ -130,9 +157,10 @@ export async function mensagensPorDia(de: Dia, ate: Dia): Promise<DiaMensagens[]
                               AND length(btrim(s.content)) >= ${MIN_CARACTERES_REPETIDA}
                               AND btrim(s.content) = btrim(s.anterior))::int AS repetidas,
            count(*) FILTER (WHERE s.content ~* ${REGEX_VAZAMENTO})::int AS vazamento,
-           count(*) FILTER (WHERE s.content ~* ${REGEX_FALHA})::int AS falha
+           count(*) FILTER (WHERE s.content ~* ${REGEX_FALHA_TECNICA}
+                              OR (s.content ~* ${REGEX_NAO_ENTENDI} AND s.content !~* ${REGEX_CLINICO}))::int AS falha
     FROM s
-    WHERE s.created_at >= ${ini}
+    WHERE s.created_at >= ${utc(ini)}
     GROUP BY 1
     ORDER BY 1`;
 

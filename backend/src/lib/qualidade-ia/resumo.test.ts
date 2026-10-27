@@ -8,13 +8,18 @@ import type { DadosDiarios, DadosSemanais } from './tipos.js';
 const SEGUNDA = '2026-10-26';
 const SABADO = '2026-10-31';
 
-const diario = (hoje: string): DadosDiarios => ({
-  dia: somarDias(hoje, -1),
-  avaliacoes: [{ dia: somarDias(hoje, -1), total: 10, semSofia: 3, sumiu: 2, avaliaveis: 5, mediaAvaliaveis: 6 }],
-  mensagens: [],
-  piores: [],
-  pior: null,
-});
+/** Com alerta (juiz quase parado) e pior conversa, para provar o que NÃO pode ir para o log. */
+const diario = (hoje: string): DadosDiarios => {
+  const ontem = somarDias(hoje, -1);
+  const dias = Array.from({ length: 8 }, (_, i) => somarDias(ontem, i - 7));
+  return {
+    dia: ontem,
+    avaliacoes: dias.map((dia) => ({ dia, total: dia === ontem ? 20 : 230, semSofia: 0, sumiu: 0, avaliaveis: dia === ontem ? 20 : 100, mediaAvaliaveis: 6 })),
+    mensagens: [],
+    piores: [],
+    pior: { nota: 2, unidade: 'Serra', primeiroNome: 'Maria', final4: '8888', leadId: '123456', trecho: ['Paciente: oi', 'Sofia: Vou acolher'] },
+  };
+};
 const semanal = (hoje: string): DadosSemanais => ({ fim: somarDias(hoje, -1), avaliacoes: [], mensagens: [], faixas: [], piores: [] });
 
 function fabrica(o: { lease?: ResultadoDoLease; telegram?: boolean; configurado?: boolean; coletaFalha?: boolean } = {}) {
@@ -86,11 +91,18 @@ test('valor desconhecido da variável é reconhecido como tal (cai em seco e o w
   assert.equal(modoDoResumo('ligada'), 'seco');
 });
 
-test('o log não guarda a fala do paciente: o trecho da pior conversa sai do texto do seco', () => {
-  const texto = 'Pior conversa avaliável: nota 2,4, Serra (Maria, final 8888, cartão 1)\n  Paciente: meu e-mail é a@b.com\n  Sofia: Vou acolher';
+test('o log não guarda NENHUM dado de paciente: nem fala, nem 1º nome, nem final do telefone, nem cartão', () => {
+  const texto = [
+    'Sofia, resumo de 26/10 (seg): piorou',
+    'Juiz: 60 avaliadas',
+    'Pior conversa avaliável: nota 2,4, Serra (Maria, final 8888, cartão 123456)',
+    '  Paciente: meu e-mail é a@b.com',
+    '  Sofia: Vou acolher',
+  ].join('\n');
   const log = paraLog(texto);
-  assert.doesNotMatch(log, /e-mail|Vou acolher/);
-  assert.match(log, /Maria, final 8888/);
+  assert.doesNotMatch(log, /Maria|8888|123456|e-mail|Vou acolher|Paciente:/);
+  assert.match(log, /Juiz: 60 avaliadas/, 'os números continuam no log');
+  assert.equal(paraLog('Sofia, resumo\nJuiz: 1'), 'Sofia, resumo\nJuiz: 1', 'sem pior conversa, nada a tirar');
 });
 
 test('ligado, segunda: manda 1 mensagem (diário) e pega o lease do dia', async () => {
@@ -118,6 +130,7 @@ test('SECO não envia nada: só registra o texto que mandaria (o portão cobre o
   assert.equal(secos.length, 2);
   assert.deepEqual(f.leases, [], 'seco não grava lease: trancaria o 1º dia depois de ligar');
   assert.match(String(secos[0].dados.texto), /Sofia, resumo de 30\/10/);
+  for (const l of f.logs) assert.doesNotMatch(JSON.stringify(l), /Maria|8888|123456/, 'nenhum registro do seco leva dado de paciente');
   assert.match(String(secos[1].dados.texto), /semana de 24\/10/);
 });
 
@@ -128,9 +141,10 @@ test('desligado não consulta o banco nem pega lease', async () => {
   assert.deepEqual(f.leases, []);
 });
 
-test('lease de outro processo: não monta nem envia (duas réplicas = uma mensagem)', async () => {
+test('lease de outro processo: não monta nem envia (duas réplicas = uma mensagem) e avisa em warn', async () => {
   const f = fabrica({ lease: 'de-outro' });
   assert.equal(await resolverODia(SEGUNDA, 'ligado', f.dep), 'de-outro-processo');
+  assert.ok(f.logs.some((l) => l.nivel === 'warn' && /lease do dia é de outro processo/.test(l.mensagem)));
   assert.equal(f.coletas(), 0);
   assert.deepEqual(f.enviados, []);
 });

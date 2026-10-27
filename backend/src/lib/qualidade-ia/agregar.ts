@@ -2,6 +2,7 @@
  * As contas sobre as avaliações do juiz, em código puro (a consulta só traz uma linha por avaliação).
  * "Avaliável" = a Sofia falou ≥ 1 vez E o paciente respondeu depois da 1ª fala dela.
  */
+import { mensagemDaSofiaConversando } from '../mensagem-da-ia.js';
 import type { Dia, DiaAvaliado, FaixaDeNota, LinhaDeAvaliacao, UnidadeNota } from './tipos.js';
 
 /** Nota abaixo disto = faixa baixa; de FAIXA_ALTA_DE para cima = alta; o meio é a média. */
@@ -77,3 +78,19 @@ export function piorAvaliacao(linhas: readonly LinhaDeAvaliacao[]): LinhaDeAvali
 
 export const noPeriodo = (linhas: readonly LinhaDeAvaliacao[], de: Dia, ate: Dia): LinhaDeAvaliacao[] =>
   linhas.filter((l) => l.dia >= de && l.dia <= ate);
+
+/**
+ * A definição de "avaliável" em código puro, sobre as mensagens de UMA conversa: só vale o que existia quando o
+ * juiz deu a nota (`createdAt <= avaliadaEm`). O SQL (`consulta.ts`) tem de dar a mesma resposta — o teste de SQL
+ * confere caso a caso.
+ */
+export function situacaoNaAvaliacao(
+  mensagens: ReadonlyArray<{ role: string; createdAt: Date; meta?: unknown }>,
+  avaliadaEm: Date,
+): { sofiaFalou: boolean; pacienteRespondeu: boolean } {
+  const ate = mensagens.filter((m) => m.createdAt.getTime() <= avaliadaEm.getTime());
+  const falas = ate.filter((m) => m.role === 'assistant' && mensagemDaSofiaConversando(m.meta)).map((m) => m.createdAt.getTime());
+  if (falas.length === 0) return { sofiaFalou: false, pacienteRespondeu: false };
+  const primeira = Math.min(...falas);
+  return { sofiaFalou: true, pacienteRespondeu: ate.some((m) => m.role === 'user' && m.createdAt.getTime() > primeira) };
+}

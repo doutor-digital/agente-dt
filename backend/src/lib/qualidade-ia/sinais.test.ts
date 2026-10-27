@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { PADROES_FALHA, PADROES_VAZAMENTO, classificarMensagem, totalDeSinais } from './sinais.js';
+import { PADROES_CLINICOS, PADROES_FALHA_TECNICA, PADROES_NAO_ENTENDI, PADROES_VAZAMENTO, classificarMensagem, totalDeSinais } from './sinais.js';
 import { final4, limparTrecho, primeiroNome } from './privacidade.js';
 
 test('vazamento de raciocínio: pega as frases do João, ignora conversa normal', () => {
@@ -22,19 +22,42 @@ test('vazamento de raciocínio: pega as frases do João, ignora conversa normal'
   }
 });
 
-test('falha admitida: "não consegui abrir", "instabilidade", "não entendi"', () => {
-  for (const frase of ['Não consegui abrir o seu áudio.', 'Estamos com uma instabilidade no sistema.', 'Desculpe, não entendi.']) {
+test('falha admitida: "não consegui abrir", "tivemos uma instabilidade", "não entendi" no começo da resposta', () => {
+  for (const frase of [
+    'Não consegui abrir o seu áudio.',
+    'Tivemos uma instabilidade aqui, pode repetir por favor?',
+    'Estamos com instabilidade no sistema, um instante.',
+    'Houve uma instabilidade na conexão.',
+    'Desculpe, não entendi. Pode repetir?',
+    'Não entendi, pode escrever de outro jeito?',
+    'Poxa, não entendi o que você quis dizer.',
+  ]) {
     assert.equal(classificarMensagem(frase).falha, true, frase);
   }
-  assert.equal(classificarMensagem('Perfeito, te espero amanhã às 14h.').falha, false);
 });
 
-test('todo padrão da lista pega o próprio texto e compila igual no JavaScript e no Postgres (só a parte comum)', () => {
-  for (const p of [...PADROES_VAZAMENTO, ...PADROES_FALHA]) {
+test('frases clínicas reais NÃO são falha: instabilidade de coluna e pergunta legítima', () => {
+  for (const frase of [
+    'A instabilidade da coluna lombar pode causar essa dor.',
+    'Se você sente instabilidade ao caminhar, é um sinal importante de avaliar.',
+    'Pacientes com instabilidade vertebral costumam relatar dor ao levantar.',
+    'Não entendi qual região da coluna dói, é a lombar ou a cervical?',
+    'Não entendi bem: a dor desce pela perna?',
+    'Desculpe, não entendi se você já fez ressonância.',
+    'Entendo a sua dor, só não entendi o horário que você prefere.', // no meio da frase
+    'Perfeito, te espero amanhã às 14h.',
+  ]) {
+    assert.equal(classificarMensagem(frase).falha, false, frase);
+  }
+  // falha técnica continua valendo mesmo com assunto clínico na mesma mensagem
+  assert.equal(classificarMensagem('Não consegui abrir o seu exame, pode mandar de novo?').falha, true);
+});
+
+test('todo padrão compila e só usa sintaxe comum ao JavaScript e ao Postgres', () => {
+  for (const p of [...PADROES_VAZAMENTO, ...PADROES_FALHA_TECNICA, ...PADROES_NAO_ENTENDI, ...PADROES_CLINICOS]) {
     // Construções que o Postgres não lê igual: lookaround, \m, (?i), referência nomeada.
     assert.doesNotMatch(p, /\(\?|\\m|\\M|\\y/, `padrão com sintaxe só de JS: ${p}`);
-    const exemplo = p.replace(/\(([^)|]+)\|([^)]+)\)/g, '$1').replace(/\(/g, '').replace(/\)/g, '');
-    assert.ok(new RegExp(p, 'i').test(exemplo), `o padrão "${p}" não pega nem o próprio exemplo "${exemplo}"`);
+    assert.doesNotThrow(() => new RegExp(p, 'i'), p);
   }
 });
 

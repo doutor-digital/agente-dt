@@ -149,7 +149,7 @@ export function avaliarDia(d: DadosDiarios): Veredito {
   const semFala = taxa(m.semSofia, m.conversas);
   const semFala7 = taxa(m7.semSofia, m7.conversas);
   if (semFala !== null && semFala7 !== null && m.conversas >= MIN_CONVERSAS_PARA_TAXA && semFala >= semFala7 + ALTA_DE_PONTOS) {
-    alertas.push(`Sofia sem falar subiu para ${pct(m.semSofia, m.conversas)} das conversas (7 dias: ${pct(m7.semSofia, m7.conversas)}) — pausa ou etapa?`);
+    alertas.push(`Sofia sem falar no dia subiu para ${pct(m.semSofia, m.conversas)} das conversas (7 dias: ${pct(m7.semSofia, m7.conversas)}) — pausa ou etapa?`);
   }
 
   const vazias = taxa(m.vazias, m.mensagens);
@@ -195,14 +195,14 @@ export function montarDiario(d: DadosDiarios): string {
       : `nota ${num1(av.media)} só das ${inteiro(av.avaliaveis)} avaliáveis${comparacoes.length ? ` (${comparacoes.join('; ')})` : ''}`;
   const fora =
     av.total > 0
-      ? ` Ficaram fora da nota: ${inteiro(av.semSofia)} sem fala da Sofia, ${inteiro(av.sumiu)} em que o paciente sumiu depois da 1ª fala.`
+      ? ` Ficaram fora da nota: ${inteiro(av.semSofia)} avaliações de conversas em que a Sofia nem chegou a falar, ${inteiro(av.sumiu)} em que o paciente sumiu depois da 1ª fala dela.`
       : '';
   const linhaJuiz = `Juiz: ${inteiro(av.total)} avaliadas (média dos 7 dias: ${inteiro(av7.total / 7)}); ${nota}.${fora}`;
 
   const s = m.sinais;
   const sinaisTotal = totalDeSinais(s);
   const linhaTaxas =
-    `Sofia sem falar: ${pct(m.semSofia, m.conversas)} das conversas · mensagens de paciente vazias: ${pct(m.vazias, m.mensagens)} · ` +
+    `Conversas do dia em que o paciente escreveu e a Sofia não falou no dia: ${pct(m.semSofia, m.conversas)} · mensagens de paciente vazias: ${pct(m.vazias, m.mensagens)} · ` +
     `sinais de erro: ${sinaisTotal} (${detalheDosSinais(s)}; média dos 7 dias ${num1(totalDeSinais(m7.sinais) / 7)}).`;
 
   const linhas = [cabecalho, ...alertas.map((a) => `• ${a}`), linhaJuiz, linhaTaxas, linhaDePiores(d.piores, 'Piores unidades do dia')];
@@ -238,7 +238,7 @@ export function montarSemanal(d: DadosSemanais): string {
 
   linhas.push(
     `Juiz: ${inteiro(av.total)} avaliadas (semana anterior ${inteiro(avAnt.total)}). Só ${inteiro(av.avaliaveis)} (${pct(av.avaliaveis, av.total)}) medem a Sofia; ` +
-      `ficaram fora ${inteiro(av.semSofia)} sem fala dela e ${inteiro(av.sumiu)} em que o paciente sumiu.`,
+      `ficaram fora ${inteiro(av.semSofia)} avaliações de conversas em que ela nem chegou a falar e ${inteiro(av.sumiu)} em que o paciente sumiu.`,
   );
   linhas.push(
     av.media === null
@@ -253,7 +253,7 @@ export function montarSemanal(d: DadosSemanais): string {
   linhas.push('  (conversa recente ainda pode converter; leia a diferença entre faixas, não o valor absoluto)');
 
   linhas.push(
-    `Sofia sem falar: ${pct(m.semSofia, m.conversas)} das conversas (semana anterior ${pct(mAnt.semSofia, mAnt.conversas)}) · ` +
+    `Conversas da semana em que o paciente escreveu e a Sofia não falou no dia: ${pct(m.semSofia, m.conversas)} (semana anterior ${pct(mAnt.semSofia, mAnt.conversas)}) · ` +
       `mensagens de paciente vazias: ${pct(m.vazias, m.mensagens)} (semana anterior ${pct(mAnt.vazias, mAnt.mensagens)}).`,
   );
   linhas.push(`Sinais de erro: ${totalDeSinais(m.sinais)} (${detalheDosSinais(m.sinais)}); semana anterior ${totalDeSinais(mAnt.sinais)}.`);
