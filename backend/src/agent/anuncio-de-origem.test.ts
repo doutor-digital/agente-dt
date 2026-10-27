@@ -6,6 +6,7 @@ import {
   renderAnuncioDeOrigem,
   resumoDaOrigem,
   tituloUtil,
+  veioDeAnuncio,
   type AnuncioDeOrigem,
 } from './anuncio-de-origem.js';
 
@@ -172,4 +173,20 @@ test('sem Status: a exceção do "vídeo que vi" vale, mas sem a regra de envio'
   const b = renderAnuncioDeOrigem({ titulo: null, anuncio: null, campanha: 'ENG | WPP', plataforma: 'instagram', origem: null });
   assert.match(b, /EXCEÇÃO: se ELE mesmo falar do vídeo/);
   assert.doesNotMatch(b, /criar_tarefa/);
+});
+
+test('veioDeAnuncio: só prova dura conta — Meta-* ou campanha; Reel orgânico, título e Status sozinhos não', () => {
+  const base: AnuncioDeOrigem = { titulo: null, anuncio: null, campanha: null, plataforma: null, origem: null };
+  assert.equal(veioDeAnuncio(null), false);
+  assert.equal(veioDeAnuncio(base), false);
+  assert.equal(veioDeAnuncio({ ...base, origem: 'Meta-Instagram' }), true);
+  assert.equal(veioDeAnuncio({ ...base, origem: ' meta-facebook ' }), true);
+  assert.equal(veioDeAnuncio({ ...base, campanha: 'DH Mossoró · Coluna' }), true);
+  // Reel/post orgânico não é anúncio, nem que o cartão tenha o id do post e a plataforma
+  assert.equal(veioDeAnuncio({ ...base, origem: 'Org-Instagram', anuncio: 'post-1', plataforma: 'Instagram' }), false);
+  assert.equal(veioDeAnuncio({ ...base, origem: 'Org-Instagram', campanha: 'x' }), false, 'na dúvida, orgânico');
+  // sinais que também existem em post orgânico: não bastam
+  assert.equal(veioDeAnuncio({ ...base, titulo: 'Dor ciática há anos?', anuncio: 'AN04', plataforma: 'Instagram' }), false);
+  assert.equal(veioDeAnuncio({ ...base, noStatus: true }), false);
+  assert.equal(veioDeAnuncio({ ...base, campanha: '   ' }), false);
 });

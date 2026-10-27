@@ -4,6 +4,7 @@
  */
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import type { AnuncioDeOrigem } from '../agent/anuncio-de-origem.js';
 import { _semearParaTeste } from './automacoes-estado.js';
 import { prisma } from './prisma.js';
 import { AUTOMACOES, automacaoPorId, verificarCatalogo } from './automacoes.js';
@@ -36,6 +37,9 @@ beforeEach(() => {
   process.env.NUMEROS_INTERNOS = INTERNOS;
 });
 
+/** Os testes desta parte (travas, estados, gancho) são de lead que veio de ANÚNCIO; a leitura da IA tem o arquivo dela (cadastro-todo-lead-ia.test.ts). */
+const DE_ANUNCIO: AnuncioDeOrigem = { titulo: null, anuncio: null, campanha: 'DH Serra · Coluna', plataforma: 'Instagram', origem: 'Meta-Instagram' };
+
 function deps(o: Partial<{ situacao: SituacaoNaFranquia; telefone: string | null; unidades: string[] | Error; casamento: boolean }>): DepsDoCadastro & { chamadas: string[] } {
   const chamadas: string[] = [];
   return {
@@ -53,6 +57,18 @@ function deps(o: Partial<{ situacao: SituacaoNaFranquia; telefone: string | null
       chamadas.push('unidades');
       if (o.unidades instanceof Error) throw o.unidades;
       return o.unidades ?? [SERRA.slug];
+    },
+    async anuncioDoLead() {
+      chamadas.push('anuncio');
+      return DE_ANUNCIO;
+    },
+    async falasDoPaciente() {
+      chamadas.push('falas');
+      throw new Error('lead de anúncio não precisa da leitura da IA');
+    },
+    async avaliarPelaIa() {
+      chamadas.push('ia');
+      throw new Error('lead de anúncio não precisa da leitura da IA');
     },
   };
 }
