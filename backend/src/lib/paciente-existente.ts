@@ -39,7 +39,7 @@ export type Achado =
 const POR_PAGINA = 100;
 
 /** Últimos 8 dígitos: imune ao +55, ao DDD escrito de outro jeito e ao nono dígito. */
-function fim8(fone: string | null | undefined): string | null {
+export function fim8(fone: string | null | undefined): string | null {
   const d = (fone ?? '').replace(/\D/g, '');
   return d.length >= 8 ? d.slice(-8) : null;
 }
