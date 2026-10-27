@@ -172,6 +172,42 @@ test('falaReal: marca de mídia que não abriu não é fala; texto junto com a m
   assert.equal(falaReal('[áudio do cliente]: tô com dor na coluna'), '[áudio do cliente]: tô com dor na coluna');
 });
 
+test('falaReal com o formato REAL que o webhook grava ("[<tipo> do cliente]: <leitura>")', () => {
+  // imagem / arquivo (PDF) que a visão não leu: vision.service devolve `[${tipo} sem conteúdo legível]`
+  assert.equal(falaReal('[imagem do cliente]: [imagem sem conteúdo legível]'), '');
+  assert.equal(falaReal('[arquivo do cliente]: [arquivo sem conteúdo legível]'), '');
+  // duas imagens ilegíveis na mesma mensagem
+  assert.equal(falaReal('[imagem do cliente]: [imagem sem conteúdo legível]\n\n[imagem do cliente]: [imagem sem conteúdo legível]'), '');
+  // áudio sem fala
+  assert.equal(falaReal('[áudio do cliente]: [áudio sem fala detectada]'), '');
+  // texto + mídia ilegível: o texto continua sendo fala
+  assert.equal(falaReal('oi\n\n[áudio do cliente]: [áudio sem fala detectada]'), 'oi');
+  assert.equal(falaReal('Já paguei\n\n[arquivo do cliente]: [arquivo sem conteúdo legível]'), 'Já paguei');
+  // uma imagem lida + uma ilegível: a lida basta
+  assert.equal(
+    falaReal('[imagem do cliente]: Radiografia de coluna lombar\n\n[imagem do cliente]: [imagem sem conteúdo legível]'),
+    '[imagem do cliente]: Radiografia de coluna lombar',
+  );
+  // marca de "nada abriu" no fim, com o rótulo já tirado
+  assert.equal(falaReal('[cliente mandou uma imagem ou um arquivo, mas não foi possível ler]'), '');
+});
+
+test('conversa só com mídia ilegível NO FORMATO DO WEBHOOK não é avaliável (sem_fala_real_do_paciente)', () => {
+  const r = avaliabilidadeDaConversa([
+    u('[imagem do cliente]: [imagem sem conteúdo legível]'),
+    a('Pode me contar por escrito?'),
+    u('[arquivo do cliente]: [arquivo sem conteúdo legível]'),
+    a('Me conta o que foi?'),
+    u('[áudio do cliente]: [áudio sem fala detectada]'),
+    a('Oi?'),
+  ]);
+  assert.equal(!r.avaliavel && r.motivo, 'sem_fala_real_do_paciente');
+  // "oi" + áudio sem fala conta como UMA fala real; com mais uma, a conversa é avaliável
+  const oi = avaliabilidadeDaConversa([u('oi\n\n[áudio do cliente]: [áudio sem fala detectada]'), a('Oi! Tudo bem?'), u('quero marcar'), a('Claro!')]);
+  assert.equal(oi.avaliavel, true);
+  assert.equal(oi.falasReais, 2);
+});
+
 test('conversa normal é avaliável', () => {
   const r = avaliabilidadeDaConversa([u('Oi, queria saber o preço'), a('Oi! Claro…'), u('Moro em Imperatriz'), a('Perfeito, temos horário…')]);
   assert.deepEqual(r, { avaliavel: true, falasReais: 2, falasDaIa: 2, falasDaEquipe: 0 });

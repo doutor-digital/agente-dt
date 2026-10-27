@@ -100,14 +100,20 @@ export type Avaliabilidade = ({ avaliavel: true } & Contagem) | ({ avaliavel: fa
 const MARCA_ILEGIVEL = /não foi possível ler|não deu pra ouvir|sem fala detectada|sem conteúdo legível|não conseguiu abrir/i;
 
 /**
- * O que sobra de uma mensagem do paciente depois de tirar as marcas de "não abriu". Texto com mídia ilegível
- * junto ("Já paguei" + PDF que não abriu) continua sendo fala real; só a marca sozinha não é.
+ * O que sobra de uma mensagem do paciente depois de tirar as marcas de "não abriu" E o rótulo da mídia que ficou
+ * sem conteúdo (`[imagem do cliente]: [imagem sem conteúdo legível]` -> ""). Texto junto da mídia ilegível
+ * ("Já paguei" + PDF que não abriu; "oi" + `[áudio do cliente]: [áudio sem fala detectada]`) continua sendo
+ * fala real; só a marca/rótulo sozinhos não são.
  */
 export function falaReal(conteudo: string | null | undefined): string {
   let t = String(conteudo ?? '').trim();
   if (!t) return '';
   if (ehAvisoDeMensagemNaoRenderizada(t) || t.includes(AVISO_PARA_IA)) return '';
   t = t.replace(/\[[^\]]*\]/g, (trecho) => (MARCA_ILEGIVEL.test(trecho) ? '' : trecho));
+  // O webhook grava a mídia como "[<tipo> do cliente]: <o que leu>" (webhook.controller, `[${d.tipo} do cliente]: …`).
+  // Tirada a marca de "não abriu", sobra o rótulo sozinho na linha — "[imagem do cliente]:" — que não é fala.
+  // Rótulo seguido de conteúdo na mesma linha ("[áudio do cliente]: tô com dor") continua sendo fala real.
+  t = t.replace(/\[[^\]\n]*\bdo cliente\]:?[ \t]*(?=\n|$)/gi, '');
   return t.replace(/\s+/g, ' ').trim();
 }
 
