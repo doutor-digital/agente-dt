@@ -67,3 +67,24 @@ test('follow-up: registra o modelo que realmente respondeu, não o nome do opena
     'gemini-2.5-flash',
   );
 });
+
+test('follow-up: unidade com taxa de agendamento obrigatória (Boa Vista) NÃO descreve o antecipado como desconto', () => {
+  const boaVista = {
+    ...COM_PIX,
+    spineBookingRequiresPayment: true,
+    sourceProdutos: 'A CONSULTA: R$ 350 no total — R$ 100 antecipados para garantir o horário e R$ 250 no dia. Os R$ 100 abatem do valor.',
+  } as unknown as Unit;
+  const p = composeFollowUpSystemPrompt(boaVista);
+  assert.ok(p.includes('R$ 350 no total'), 'diz o total');
+  assert.ok(p.includes('TAXA DE AGENDAMENTO'), 'chama de taxa de agendamento');
+  assert.ok(p.includes('R$ 100') && p.includes('R$ 250'), 'tem a taxa e o valor do dia');
+  assert.ok(!/R\$ 100 antecipado \(pago antes\) ou/.test(p), 'não usa a frase de desconto "antecipado ou no dia"');
+  // a proibição de "promocional" é instrução ao modelo, não vocabulário permitido
+  assert.ok(/NUNCA "promoção"/.test(p), 'proíbe chamar de promoção');
+});
+
+test('follow-up: unidade SEM taxa obrigatória segue com "antecipado ou no dia"', () => {
+  const p = composeFollowUpSystemPrompt(COM_PIX);
+  assert.ok(p.includes('R$ 250 antecipado (pago antes) ou R$ 350 no dia'));
+  assert.ok(!p.includes('TAXA DE AGENDAMENTO'));
+});
