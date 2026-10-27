@@ -211,7 +211,7 @@ export function somarDias(yyyymmdd: string, dias: number): string {
 export async function searchSchedules(
   unit: SpineUnit,
   params: { initialDate: string; endDate: string; rowsPerPage?: number },
-): Promise<SpineResult<{ schedules: SpineSchedule[]; pages: number; total: number }>> {
+): Promise<SpineResult<{ schedules: SpineSchedule[]; pages: number; total: number; /** a franquia tinha mais páginas que o teto: a lista está INCOMPLETA */ truncada?: boolean }>> {
   const http = client(unit);
   if (!http) return { ok: false, error: 'unidade sem token da API Spine' };
 
@@ -251,7 +251,7 @@ export async function searchSchedules(
 
     return {
       ok: true,
-      data: { schedules: dentro, pages: Math.min(totalPages, MAX_PAGES), total: dentro.length },
+      data: { schedules: dentro, pages: Math.min(totalPages, MAX_PAGES), total: dentro.length, truncada: totalPages > MAX_PAGES },
     };
   } catch (err) {
     const d = describe(err);
@@ -896,7 +896,7 @@ export const TRATAMENTOS_MESES_PADRAO = 12;
 export async function searchTreatments(
   unit: SpineUnit,
   opts: { meses?: number; de?: string; ate?: string } = {},
-): Promise<SpineResult<{ treatments: SpineTreatment[] }>> {
+): Promise<SpineResult<{ treatments: SpineTreatment[]; /** a franquia tinha mais páginas que o teto: a lista está INCOMPLETA */ truncada?: boolean }>> {
   const http = client(unit);
   if (!http) return { ok: false, error: 'unidade sem token da API Spine' };
   const meses = Math.max(1, opts.meses ?? TRATAMENTOS_MESES_PADRAO);
@@ -944,7 +944,7 @@ export async function searchTreatments(
       totalPages = Math.max(1, Number(corpo?.totalPages) || 1);
       page++;
     } while (page <= totalPages && page <= MAX_PAGES);
-    return { ok: true, data: { treatments: todos } };
+    return { ok: true, data: { treatments: todos, truncada: totalPages > MAX_PAGES } };
   } catch (err) {
     const d = describe(err);
     logger.warn({ erro: d.error, requestId: d.requestId }, 'spine: falha ao buscar tratamentos');

@@ -18,6 +18,7 @@ import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.
 import { createChatModel, invokeChatModel } from '../services/openai.service.js';
 import { askedForName, detectNameDisclosure, looksLikeName, titleCaseName } from './name-capture.js';
 import { aplicarGuardrail } from './guardrail.js';
+import type { OfertaVigente } from './oferta-da-campanha.js';
 import { falasDoTurno, fraseDoPasse } from './sinal-de-alerta.js';
 import { pacienteFalouDePs } from './sem-pronto-socorro.js';
 import { passarPorSinalNoTurno } from './passe-por-sinal.js';
@@ -669,6 +670,10 @@ export async function buildAgentGraph(
       void maybeAddEntryDateTag({ recorder, kommo: kommoClient, leadId: state.leadId, tz: fusoDaUnidade(unit) });
     }
 
+    // A oferta do disparo de campanha que este paciente recebeu: o prompt a ensina à Sofia e o guardrail de preço a aceita.
+    // O prompt a carrega (junto com o resto, em paralelo) e a deixa aqui, para o guardrail ler a MESMA coisa sem consultar de novo.
+    const ofertaDoTurno: { valor?: OfertaVigente | null } = {};
+
     let systemMessage: SystemMessage;
     // O prompt deste turno em texto: a guarda do nome do profissional (lá embaixo) só deixa sair
     // nome que esteja aqui ou no que as ferramentas devolveram agora.
@@ -681,6 +686,7 @@ export async function buildAgentGraph(
         isFirstTurn,
         leadId: state.leadId,
         historico: falas,
+        ofertaSaida: ofertaDoTurno,
       });
       promptDoTurno = `${cacheable}\n${dynamic ?? ''}`;
       systemMessage = new SystemMessage({
@@ -697,10 +703,12 @@ export async function buildAgentGraph(
         isFirstTurn,
         leadId: state.leadId,
         historico: falas,
+        ofertaSaida: ofertaDoTurno,
       });
       promptDoTurno = dynamicPrompt;
       systemMessage = new SystemMessage(dynamicPrompt);
     }
+    const extrasDoGuardrail = { ofertaDaCampanha: ofertaDoTurno.valor?.oferta ?? null };
     // Comprovante (foto/PDF) neste turno, ou nas últimas falas do paciente: a ferramenta de agendar recusa e a resposta que
     // afirma confirmação vira o recado (confirmacao-so-com-crm.ts). Com a consulta já no CRM (a equipe criou) a espera acabou.
     Object.assign(
@@ -1270,7 +1278,7 @@ export async function buildAgentGraph(
       }
 
       const cta = avaliarChamadaFinal(textoFinal, { pacienteEncerrou: !!encerrou });
-      if (cta.precisaRefazer && !passouPorSinal && !respostaFixa && !detectarVazamento(textoFinal) && aplicarGuardrail(textoFinal, unit, { mensagensDoPaciente }).triggered.length === 0) {
+      if (cta.precisaRefazer && !passouPorSinal && !respostaFixa && !detectarVazamento(textoFinal) && aplicarGuardrail(textoFinal, unit, { mensagensDoPaciente, ...extrasDoGuardrail }).triggered.length === 0) {
         const t1 = performance.now();
         try {
           const refeita = (await withTimeout(
@@ -1427,6 +1435,7 @@ export async function buildAgentGraph(
       }
       // Turno de aviso urgente: se o corte do pronto-socorro levar a resposta inteira, sai a frase do passe (não a de reserva).
       const guardBruto = aplicarGuardrail(semIntimidade(semDiminutivo(textoFinal)), unit, {
+        ...extrasDoGuardrail,
         mensagensDoPaciente,
         fraseDeReserva: passouPorSinal ? fraseDoPasse(retornoDaEquipe(unit), pacienteFalouDePs(mensagensDoPaciente)) : undefined,
       });

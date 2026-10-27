@@ -25,6 +25,11 @@ import { logger } from './logger.js';
 const GRAPH = process.env.META_GRAPH_URL || 'https://graph.facebook.com';
 const VERSAO = process.env.META_GRAPH_VERSION || 'v23.0';
 
+/** Endereço de um caminho da Graph API na versão que a casa usa (quem lê modelos/qualidade fala o mesmo endereço). */
+export function urlDaGraph(caminho: string): string {
+  return `${GRAPH}/${VERSAO}/${caminho.replace(/^\//, '')}`;
+}
+
 export interface CredenciaisMeta {
   phoneNumberId: string;
   token: string;
@@ -58,14 +63,17 @@ export function devoAvisarQueEstouDigitando(args: {
 async function chamar(
   cred: CredenciaisMeta,
   corpo: Record<string, unknown>,
-): Promise<{ ok: boolean; detalhe: unknown }> {
+  opcoes: { timeoutMs?: number } = {},
+): Promise<{ ok: boolean; detalhe: unknown; status: number }> {
   const r = await fetch(`${GRAPH}/${VERSAO}/${cred.phoneNumberId}/messages`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${cred.token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ messaging_product: 'whatsapp', ...corpo }),
+    // Sem teto, uma Meta que não responde trava quem espera (Nygard). Opt-in: quem já chamava continua igual.
+    ...(opcoes.timeoutMs ? { signal: AbortSignal.timeout(opcoes.timeoutMs) } : {}),
   });
   const detalhe = await r.json().catch(() => null);
-  return { ok: r.ok, detalhe };
+  return { ok: r.ok, detalhe, status: r.status };
 }
 
 /**
@@ -168,6 +176,130 @@ export async function enviarLocalizacao(
       address: args.endereco,
     },
   });
+}
+
+export interface CabecalhoDeMidia {
+  tipo: 'image' | 'video' | 'document';
+  /** Endereço público da mídia. A Meta baixa dele na hora do envio. */
+  link: string;
+  /** Só para `document`. */
+  nomeArquivo?: string;
+}
+
+export interface TemplateParaEnviar {
+  /** Telefone só com dígitos e DDI (5563999999999). */
+  para: string;
+  /** Nome do modelo APROVADO na Meta, exatamente como está lá. */
+  nome: string;
+  /** pt_BR… */
+  idioma: string;
+  /** Valores de {{1}}, {{2}}… na ordem. */
+  corpo?: string[];
+  /** Obrigatório quando o modelo foi aprovado com cabeçalho de mídia — a Meta recusa sem ele (14/10: Araguaína 22/22). */
+  cabecalho?: CabecalhoDeMidia;
+}
+
+/**
+ * A Meta recusa quebra de linha, tab e mais de 4 espaços seguidos DENTRO de uma variável, e vazio.
+ * Limpamos aqui para o erro não aparecer só no envio.
+ */
+export function variavelLimpa(v: string): string {
+  return v.replace(/[\r\n\t]+/g, ' ').replace(/ {2,}/g, ' ').trim().slice(0, 1024);
+}
+
+/** O corpo exato do POST de um modelo. Separado do envio para o teste ver o que sairia sem tocar a rede. */
+export function montarCorpoDoTemplate(t: TemplateParaEnviar): Record<string, unknown> {
+  const components: Array<Record<string, unknown>> = [];
+  if (t.cabecalho) {
+    const { tipo, link, nomeArquivo } = t.cabecalho;
+    components.push({
+      type: 'header',
+      parameters: [{ type: tipo, [tipo]: { link, ...(tipo === 'document' && nomeArquivo ? { filename: nomeArquivo } : {}) } }],
+    });
+  }
+  if (t.corpo?.length) {
+    components.push({ type: 'body', parameters: t.corpo.map((v) => ({ type: 'text', text: variavelLimpa(v) })) });
+  }
+  return {
+    recipient_type: 'individual',
+    to: t.para,
+    type: 'template',
+    template: { name: t.nome, language: { code: t.idioma }, ...(components.length ? { components } : {}) },
+  };
+}
+
+export interface ResultadoDoTemplate {
+  ok: boolean;
+  /** id da mensagem na Meta (wamid…): é com ele que o status entregue/lida/falhou é casado depois. */
+  wamid: string | null;
+  detalhe: unknown;
+  /**
+   * `true` quando NÃO sabemos se a Meta aceitou (timeout, queda de rede, 5xx). Quem chama nunca reenvia
+   * sozinho: reenviar um envio incerto é mandar duas vezes para o paciente.
+   */
+  incerto: boolean;
+  /**
+   * `true` quando a Meta (ou o proxy) pediu para ESPERAR: limite de taxa. Não é recusa da pessoa nem do modelo e a mensagem
+   * não entrou: quem chama deixa a pessoa na fila e tenta de novo depois, sem contar como falha.
+   */
+  limiteDeTaxa?: boolean;
+  /**
+   * `true` no código 131048 (spam rate limit): a Meta RESTRINGIU o número por qualidade/spam. Não passa com o tempo de um minuto:
+   * quem chama pausa a unidade e alerta, em vez de tentar de novo para sempre.
+   */
+  restrito?: boolean;
+}
+
+/** Códigos de erro da Graph API que são "devagar": throughput (130429), par/spam (131048, 131056), limites da API (4, 80007, 80008). */
+const CODIGOS_DE_LIMITE_DE_TAXA = new Set([4, 80007, 80008, 130429, 131048, 131056]);
+
+/** O código 131048 (spam rate limit): o número foi restringido pela Meta. */
+/** O código do erro da Graph API, número ou texto numérico ('131048'); `null` se não houver. */
+function codigoDoErro(detalhe: unknown): number | null {
+  const c = (detalhe as { error?: { code?: unknown } } | null)?.error?.code;
+  const n = typeof c === 'number' ? c : typeof c === 'string' && /^\d+$/.test(c.trim()) ? Number(c) : NaN;
+  return Number.isFinite(n) ? n : null;
+}
+
+export function ehNumeroRestrito(detalhe: unknown): boolean {
+  return codigoDoErro(detalhe) === 131048;
+}
+
+/** A resposta pede para esperar? Status 429 ou um dos códigos de limite de taxa da Meta. */
+export function ehLimiteDeTaxa(status: number, detalhe: unknown): boolean {
+  const codigo = codigoDoErro(detalhe);
+  return status === 429 || (codigo !== null && CODIGOS_DE_LIMITE_DE_TAXA.has(codigo));
+}
+
+const TIMEOUT_DO_TEMPLATE_MS = 20_000;
+
+/**
+ * Manda um modelo (template) aprovado — o único tipo de mensagem que a Meta deixa abrir uma conversa fora
+ * da janela de 24 h. Mesma credencial e mesmo caminho dos envios acima.
+ *
+ * ⚠️ Como `enviarLista`, isto NÃO aparece no Kommo. Quem chama em produção tem de espelhar uma nota no cartão
+ * (ver `disparo/enviar.ts`), senão a resposta do paciente chega sem a pergunta.
+ */
+export async function enviarTemplate(
+  cred: CredenciaisMeta,
+  t: TemplateParaEnviar,
+  opcoes: { timeoutMs?: number } = {},
+): Promise<ResultadoDoTemplate> {
+  if (!/^\d{10,15}$/.test(t.para)) return { ok: false, wamid: null, detalhe: 'telefone fora do formato (só dígitos com DDI)', incerto: false };
+  if (!t.nome.trim() || !t.idioma.trim()) return { ok: false, wamid: null, detalhe: 'modelo sem nome ou idioma', incerto: false };
+  try {
+    const { ok, detalhe, status } = await chamar(cred, montarCorpoDoTemplate(t), { timeoutMs: opcoes.timeoutMs ?? TIMEOUT_DO_TEMPLATE_MS });
+    const wamid = (detalhe as { messages?: Array<{ id?: string }> } | null)?.messages?.[0]?.id ?? null;
+    if (ok && !wamid) return { ok: false, wamid: null, detalhe, incerto: true };
+    // Limite de taxa: a mensagem NÃO entrou (a Meta ou o proxy recusou antes). Esperar e tentar de novo, não recusar.
+    if (!ok && ehLimiteDeTaxa(status, detalhe)) return { ok: false, wamid: null, detalhe, incerto: false, limiteDeTaxa: true, ...(ehNumeroRestrito(detalhe) ? { restrito: true } : {}) };
+    // Definitiva só a recusa que a PRÓPRIA Meta assina (corpo com `error.code`) e que não é 5xx. Gateway, proxy, HTML,
+    // 408/502…: não dá para saber se a mensagem entrou, e incerto nunca é reenviado.
+    const recusaDaMeta = typeof (detalhe as { error?: { code?: unknown } } | null)?.error?.code === 'number';
+    return { ok, wamid, detalhe, incerto: !ok && (status >= 500 || !recusaDaMeta) };
+  } catch (err) {
+    return { ok: false, wamid: null, detalhe: String(err), incerto: true };
+  }
 }
 
 /**

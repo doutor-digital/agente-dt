@@ -40,6 +40,7 @@ import { startParadosWorker, stopParadosWorker } from './lib/parados-worker.js';
 import { startMotivoNoCabecalhoWorker, stopMotivoNoCabecalhoWorker } from './lib/motivo-no-cabecalho-worker.js';
 import { startNaoLidasWorker, stopNaoLidasWorker } from './lib/nao-lidas-worker.js';
 import { startCampanhaWorker, stopCampanhaWorker } from './lib/campanha-worker.js';
+import { startDisparoWorker, stopDisparoWorker } from './lib/disparo-worker.js';
 import { startPreencheCamposWorker, stopPreencheCamposWorker } from './lib/preenche-campos-worker.js';
 import { startBlingRenovacaoWorker, stopBlingRenovacaoWorker } from './lib/bling-renovacao-worker.js';
 import { startFranquiaSyncWorker, stopFranquiaSyncWorker } from './lib/franquia-sync-worker.js';
@@ -214,6 +215,7 @@ async function main(): Promise<void> {
       startLigacaoWhatsappWorker();
       startNaoLidasWorker();
       startCampanhaWorker();
+      startDisparoWorker();
       startPreencheCamposWorker();
       startBlingRenovacaoWorker();
       iniciarVigiaDeQualidade();
@@ -228,6 +230,7 @@ async function main(): Promise<void> {
       stopLigacaoWhatsappWorker();
       stopNaoLidasWorker();
       stopCampanhaWorker();
+      stopDisparoWorker();
       stopPreencheCamposWorker();
       stopBlingRenovacaoWorker();
       stopFranquiaSyncWorker();

@@ -5,7 +5,9 @@ import { createChatModel, invokeChatModel, resolveModelName } from '../services/
 import { composeFollowUpSystemPrompt } from './prompt-composer.js';
 import { carregarRede, semDraSofiaNaDH, type UnidadeDaRede } from './rede-doutor-hernia.js';
 import { extrairBotoes } from '../lib/botoes.js';
+import type { Unit } from '@prisma/client';
 import { aplicarGuardrail } from './guardrail.js';
+import { ofertaDoLead } from '../lib/disparo/oferta.js';
 import { detectarVazamento, explicarVazamento } from '../services/vazamento.js';
 import { semDiminutivo } from '../lib/sem-diminutivo.js';
 import { semIntimidade } from '../lib/sem-intimidade.js';
@@ -106,6 +108,12 @@ async function historico(conversationId: string, limite = 12): Promise<{ texto: 
     // A régua também pedia o nome ("Posso saber seu nome pra te ajudar?") a quem já tinha ignorado o pedido.
     pedidosDeNome: msgs.filter((m) => m.role === 'assistant' && pedeNome(m.content)).length,
   };
+}
+
+/** O guardrail da régua: com a oferta do disparo que o paciente recebeu (se houver), e se ele RECUSA o degrau (preço, lacuna, clínico). */
+export function guardrailDaRegua(tratado: string, unit: Unit, ofertaDaCampanha: string | null) {
+  const guard = aplicarGuardrail(tratado, unit, { ofertaDaCampanha });
+  return { guard, recusou: guard.triggered.some((t) => /^(lacuna|preco|clinico):/.test(t)) };
 }
 
 export async function runAgentFollowUp(args: FollowUpArgs): Promise<string | null> {
@@ -238,8 +246,12 @@ ${conversa}`.trim();
       );
       return null;
     }
-    const guard = aplicarGuardrail(tratado, unit);
-    const recusou = guard.triggered.some((t) => /^(lacuna|preco|clinico):/.test(t));
+    // A régua também fala com quem recebeu o disparo de campanha: o R$ da oferta dele não pode virar o da ficha (o bug do R$ 150).
+    const oferta = await ofertaDoLead(unit.id, args.leadId).catch((err) => {
+      logger.warn({ err: String(err), unit: unit.slug, leadId: args.leadId }, 'follow-up: ofertaDoLead falhou — guardrail segue só com a ficha');
+      return null;
+    });
+    const { guard, recusou } = guardrailDaRegua(tratado, unit, oferta?.oferta ?? null);
     if (recusou) {
       logger.warn(
         { unit: unit.slug, leadId: args.leadId, motivos: guard.triggered, texto: tratado },

@@ -26,6 +26,8 @@ import { criarContextoBling, registrarFerramentasBling, type ContaBling } from '
 import { registrarIntegracoes } from './integracoes.js';
 import { registrarMetaEventos, type FonteRastreio } from './meta-eventos.js';
 import { Pendentes, registrarEscritaKommo, type FonteEscrita } from './kommo-escrita.js';
+import { registrarDisparo } from './disparo.js';
+import { fonteDeDisparo } from './disparo-producao.js';
 import type { KommoClient } from '../services/kommo.service.js';
 import { PrismaClient } from '@prisma/client';
 import { criarContextoAsaas, registrarFerramentasAsaas, type ContaAsaas } from './asaas.js';
@@ -439,7 +441,11 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
       registrarFerramentasConvenia(server, convenia, auditar);
       registrarFerramentasTiquetaque(server, tiquetaque, auditar);
       registrarMetaEventos(server, () => rastreio, auditar);
-      if (escritores.has(quem.userId)) registrarEscritaKommo(server, kommo, fonteDeEscrita, pendentes, quem.userId, auditar);
+      if (escritores.has(quem.userId)) {
+        registrarEscritaKommo(server, kommo, fonteDeEscrita, pendentes, quem.userId, auditar);
+        // Disparo de campanha: preparar e mostrar. Aprovar e retomar NÃO existem aqui (são do João, no painel do console).
+        registrarDisparo(server, fonteDeDisparo, `conector:${quem.userId}`, auditar);
+      }
       if (leitoresWhatsapp.has(quem.userId)) registrarFerramentasEvolution(server, whatsapp, quem.userId, auditar);
       registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas, convenia: convenia.contas, tiquetaque: tiquetaque.contas }), auditar);
       registrarCerebro(server, slugs, cacheCerebro, auditar);
