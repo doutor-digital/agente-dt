@@ -1,7 +1,7 @@
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { julgarConversa } from '../services/conversation-judge.service.js';
-import { Descartes, DESCARTE_ERRO_MS, DESCARTE_NAO_AVALIAVEL_MS } from './juiz-da-ia.js';
+import { Descartes, DESCARTE_NAO_AVALIAVEL_MS } from './juiz-da-ia.js';
 
 const SWEEP_MS = Number(process.env.JUDGE_SWEEP_MS) || 10 * 60_000;
 const MIN_MENSAGENS = Number(process.env.JUDGE_MIN_MSGS) || 4;
@@ -72,7 +72,15 @@ async function varrer(): Promise<void> {
         } else if (r.status === 'erro') {
           erros++;
           // 1 h de espera em vez de 10 min, senão 15 conversas que sempre falham ocupam toda varredura.
-          if (juizNovoLigado()) descartes.lembrar(conv.id, Date.now() + DESCARTE_ERRO_MS);
+          if (juizNovoLigado()) {
+            const f = descartes.falhou(conv.id);
+            if (f.esgotada) {
+              logger.warn(
+                { conversationId: conv.id, tentativas: f.tentativas },
+                'judge-worker: o juiz falhou de novo nesta conversa — desistindo dela por 7 dias (ou até o próximo deploy)',
+              );
+            }
+          }
         }
       } catch (err) {
         logger.warn({ err, conversationId: conv.id }, 'judge-worker: falhou nesta conversa');

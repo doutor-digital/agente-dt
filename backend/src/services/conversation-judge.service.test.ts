@@ -2,7 +2,7 @@ import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Unit } from '@prisma/client';
 
-import { julgarConversa, judgeConversation, parseJudgeOutput, type DependenciasDoJuiz, type RespostaDoModelo } from './conversation-judge.service.js';
+import { argumentosDoUpsert, julgarConversa, judgeConversation, parseJudgeOutput, type DependenciasDoJuiz, type RespostaDoModelo } from './conversation-judge.service.js';
 
 const unit = { id: 'u1', slug: 'teste', systemPrompt: 'prompt', anthropicApiKey: 'sk-ant-x' } as unknown as Unit;
 
@@ -165,6 +165,23 @@ test('reavaliar: com avaliação existente, julga mesmo assim e manda SUBSTITUIR
   assert.equal(ruim.gravadas.length, 0);
 });
 
+test('reavaliar: o upsert renova o createdAt (senão a reavaliação sai da janela de 90 d do painel) e não troca a conversa', () => {
+  const dado = {
+    conversationId: 'c1', unitId: 'u1', promptHash: 'h', promptSnapshot: 'p', model: 'm',
+    scores: {}, overallScore: 7, verdict: 'v', latencyMs: 1,
+  } as unknown as Parameters<typeof argumentosDoUpsert>[0];
+  const agora = new Date('2026-10-27T15:00:00Z');
+  const a = argumentosDoUpsert(dado, agora);
+  assert.deepEqual(a.where, { conversationId: 'c1' });
+  assert.equal((a.update as { createdAt: Date }).createdAt, agora);
+  assert.ok(!('conversationId' in (a.update as object)));
+  assert.equal((a.update as { overallScore: number }).overallScore, 7);
+  assert.equal(a.create, dado);
+  // sem a data de teste, vale "agora" de verdade
+  const antes = Date.now();
+  assert.ok((argumentosDoUpsert(dado).update as { createdAt: Date }).createdAt.getTime() >= antes);
+});
+
 // ── pré-filtro ───────────────────────────────────────────────────────────────────────────────────
 
 test('JUDGE_SO_AVALIAVEIS=1: conversa sem fala do paciente não chama o modelo e não grava nada', async () => {
@@ -176,6 +193,21 @@ test('JUDGE_SO_AVALIAVEIS=1: conversa sem fala do paciente não chama o modelo e
   assert.equal(e.gravadas.length, 0);
   assert.equal(e.registros.length, 0);
   assert.equal(await judgeConversation({ conversationId: 'c1', unit }, e.deps), null);
+});
+
+test('JUDGE_SO_AVALIAVEIS=1: a fala da equipe (assistant com meta.autor=equipe) não vira "a IA falou"', async () => {
+  process.env.JUDGE_SO_AVALIAVEIS = '1';
+  const equipe = (content: string) => ({ role: 'assistant', content, meta: { origem: 'kommo_talks', autor: 'equipe' } });
+  const e = falso({
+    mensagens: [
+      { role: 'user', content: 'Oi, quero marcar' },
+      equipe('Aqui é a Ana, vamos marcar'),
+      { role: 'user', content: 'Quinta serve?' },
+      equipe('Serve'),
+    ],
+  });
+  assert.deepEqual(await julgarConversa({ conversationId: 'c1', unit }, e.deps), { status: 'nao_avaliavel', motivo: 'equipe_assumiu' });
+  assert.equal(e.chamadas.length, 0);
 });
 
 test('JUDGE_SO_AVALIAVEIS=1: conversa boa é julgada normalmente; JUDGE_MIN_PATIENT_MSGS ajusta o mínimo', async () => {

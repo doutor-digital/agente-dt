@@ -3,8 +3,12 @@ import assert from 'node:assert/strict';
 import { ChatAnthropic } from '@langchain/anthropic';
 
 import {
+  autorDaFala,
   avaliabilidadeDaConversa,
   custoComFallback,
+  DESCARTE_ESGOTADO_MS,
+  DESCARTE_ERRO_MS,
+  MAX_TENTATIVAS_ERRO,
   Descartes,
   escolherJuiz,
   esforcoDoJuiz,
@@ -55,6 +59,13 @@ test('anthropic sem chave nenhuma cai para openai e diz por quê', () => {
   assert.equal(e.provedor, 'openai');
   assert.equal(e.modelo, 'gpt-4o-mini');
   assert.match(e.motivoDoFallback ?? '', /anthropicApiKey/);
+});
+
+test('plano B: anthropic sem chave com JUDGE_MODEL=claude-… volta ao modelo padrão da OpenAI, não manda claude para a OpenAI', () => {
+  const e = escolherJuiz({ JUDGE_PROVIDER: 'anthropic', JUDGE_MODEL: 'claude-haiku-5-5' }, { anthropicApiKey: null });
+  assert.equal(e.provedor, 'openai');
+  assert.equal(e.modelo, 'gpt-4o-mini');
+  assert.equal(escolherJuiz({ JUDGE_PROVIDER: 'anthropic', JUDGE_MODEL: 'gpt-5-mini' }, null).modelo, 'gpt-5-mini'); // gpt-… configurado é mantido
 });
 
 test('esforço: low por padrão, off desliga o parâmetro, lixo vira low', () => {
@@ -163,12 +174,12 @@ test('falaReal: marca de mídia que não abriu não é fala; texto junto com a m
 
 test('conversa normal é avaliável', () => {
   const r = avaliabilidadeDaConversa([u('Oi, queria saber o preço'), a('Oi! Claro…'), u('Moro em Imperatriz'), a('Perfeito, temos horário…')]);
-  assert.deepEqual(r, { avaliavel: true, falasReais: 2, falasDaIa: 2 });
+  assert.deepEqual(r, { avaliavel: true, falasReais: 2, falasDaIa: 2, falasDaEquipe: 0 });
 });
 
 test('IA não falou (pausa): não avaliável, não é falha da Sofia', () => {
   const r = avaliabilidadeDaConversa([u('Oi'), u('Alguém aí?'), u('Quero marcar'), u('Por favor')]);
-  assert.deepEqual(r, { avaliavel: false, motivo: 'ia_nao_falou', falasReais: 4, falasDaIa: 0 });
+  assert.deepEqual(r, { avaliavel: false, motivo: 'ia_nao_falou', falasReais: 4, falasDaIa: 0, falasDaEquipe: 0 });
 });
 
 test('paciente só mandou mídia que não abriu: sem fala real', () => {
@@ -195,18 +206,76 @@ test('lista vazia: não avaliável', () => {
   assert.equal(avaliabilidadeDaConversa([]).avaliavel, false);
 });
 
+// ── quem falou (equipe e automação gravadas como assistant) ──────────────────────────────────────
+
+const equipe = (content: string) => ({ role: 'assistant', content, meta: { origem: 'kommo_talks', kommoMessageId: 'x', autor: 'equipe', nome: 'Ana' } });
+const lembrete = (content: string) => ({ role: 'assistant', content, meta: { origem: 'confirmacao_d1', via: 'meta' } });
+const lembreteKommo = (content: string) => ({ role: 'assistant', content, meta: { origem: 'lembrete_kommo' } });
+const sofia = (content: string) => ({ role: 'assistant', content, meta: { via: 'salesbot', botoes: [] } });
+
+test('autorDaFala: autor=equipe e origem kommo_talks são a equipe; confirmacao_* e lembrete_kommo são automação; o resto é a IA', () => {
+  assert.equal(autorDaFala(equipe('oi')), 'equipe');
+  assert.equal(autorDaFala({ role: 'assistant', content: 'x', meta: { origem: 'kommo_talks' } }), 'equipe');
+  assert.equal(autorDaFala(lembrete('x')), 'automacao');
+  assert.equal(autorDaFala(lembreteKommo('x')), 'automacao');
+  assert.equal(autorDaFala(sofia('x')), 'ia');
+  assert.equal(autorDaFala({ role: 'assistant', content: 'x' }), 'ia'); // sem meta (mensagens antigas)
+  assert.equal(autorDaFala({ role: 'assistant', content: 'x', meta: [] }), 'ia');
+});
+
+test('só a equipe e as automações falaram: a Sofia não falou (era contado como fala da IA)', () => {
+  const r = avaliabilidadeDaConversa([u('Oi, quero marcar'), equipe('Oi! Aqui é a Ana'), u('Quinta serve?'), equipe('Serve sim'), lembrete('Lembrete da consulta')]);
+  assert.deepEqual(r, { avaliavel: false, motivo: 'equipe_assumiu', falasReais: 2, falasDaIa: 0, falasDaEquipe: 2 });
+  const so = avaliabilidadeDaConversa([u('Oi'), u('Tem horário?'), lembrete('Confirmação'), lembreteKommo('Lembrete')]);
+  assert.equal(!so.avaliavel && so.motivo, 'ia_nao_falou'); // automação não conta nem como IA nem como equipe
+});
+
+test('a equipe assumiu no meio: falou tanto quanto ou mais que a Sofia -> não avaliável; a Sofia à frente -> avaliável', () => {
+  const assumiu = avaliabilidadeDaConversa([u('Oi'), sofia('Oi! Tudo bem?'), u('Quanto custa?'), equipe('Aqui é a Ana, é R$ 250'), u('Ok'), equipe('Marcamos?')]);
+  assert.equal(!assumiu.avaliavel && assumiu.motivo, 'equipe_assumiu');
+  const empate = avaliabilidadeDaConversa([u('Oi'), sofia('Oi!'), u('Preço?'), equipe('R$ 250')]);
+  assert.equal(!empate.avaliavel && empate.motivo, 'equipe_assumiu');
+  const sofiaNaFrente = avaliabilidadeDaConversa([u('Oi'), sofia('Oi!'), u('Preço?'), sofia('R$ 250'), equipe('Qualquer dúvida, é a Ana')]);
+  assert.equal(sofiaNaFrente.avaliavel, true);
+});
+
+test('lembrete de véspera não faz uma conversa sem Sofia virar avaliável', () => {
+  const r = avaliabilidadeDaConversa([u('Oi'), u('Alguém?'), lembrete('Lembrete'), lembrete('Lembrete 2'), lembreteKommo('Lembrete 3')]);
+  assert.equal(r.avaliavel, false);
+});
+
 // ── fila de descartes ────────────────────────────────────────────────────────────────────────────
 
-test('Descartes: lembra até a hora marcada e esquece sozinho; o teto tira o mais antigo', () => {
-  const d = new Descartes(2);
-  d.lembrar('a', 1_000);
-  d.lembrar('b', 5_000);
+test('Descartes: lembra até a hora marcada e esquece sozinho', () => {
+  const d = new Descartes(10);
+  d.lembrar('a', 1_000, 0);
+  d.lembrar('b', 5_000, 0);
   assert.deepEqual(d.vigentes(500), ['a', 'b']);
   assert.deepEqual(d.vigentes(1_000), ['b']); // 'a' expirou
-  d.lembrar('c', 9_000);
-  d.lembrar('d', 9_000); // passou do teto de 2: sai 'b', o mais antigo
-  assert.deepEqual(d.vigentes(0), ['c', 'd']);
-  d.lembrar('c', 20_000); // lembrar de novo renova e vai para o fim
-  d.lembrar('e', 20_000);
-  assert.deepEqual(d.vigentes(0), ['c', 'e']);
+});
+
+test('Descartes: acima do teto saem primeiro os VENCIDOS; só depois o que vence antes — nunca um válido por mais tempo', () => {
+  const d = new Descartes(3);
+  d.lembrar('vence-cedo', 2_000, 0);
+  d.lembrar('vencido', 100, 0);
+  d.lembrar('longo', 90_000, 0);
+  d.lembrar('novo', 50_000, 1_000); // passou do teto; 'vencido' (100 <= 1000) sai, ninguém mais precisa sair
+  assert.deepEqual(d.vigentes(1_000).sort(), ['longo', 'novo', 'vence-cedo']);
+  d.lembrar('outro', 60_000, 1_000); // agora todos valem: sai o que vence antes ('vence-cedo'), não o mais antigo inserido
+  assert.deepEqual(d.vigentes(1_000).sort(), ['longo', 'novo', 'outro']);
+});
+
+test('Descartes.falhou: espera 1 h nas primeiras e desiste por 7 dias na última tentativa', () => {
+  const d = new Descartes();
+  const t0 = 1_000_000;
+  for (let i = 1; i < MAX_TENTATIVAS_ERRO; i++) {
+    assert.deepEqual(d.falhou('c1', t0), { tentativas: i, esgotada: false });
+    assert.deepEqual(d.vigentes(t0 + DESCARTE_ERRO_MS - 1), ['c1']);
+    assert.deepEqual(d.vigentes(t0 + DESCARTE_ERRO_MS), []);
+  }
+  assert.deepEqual(d.falhou('c1', t0), { tentativas: MAX_TENTATIVAS_ERRO, esgotada: true });
+  assert.deepEqual(d.vigentes(t0 + DESCARTE_ESGOTADO_MS - 1), ['c1']);
+  assert.deepEqual(d.vigentes(t0 + DESCARTE_ESGOTADO_MS), []);
+  // outra conversa começa do zero
+  assert.deepEqual(d.falhou('c2', t0), { tentativas: 1, esgotada: false });
 });

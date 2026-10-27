@@ -106,7 +106,8 @@ export interface RespostaDoModelo {
  */
 export interface DependenciasDoJuiz {
   avaliacaoExiste(conversationId: string): Promise<boolean>;
-  carregarMensagens(conversationId: string): Promise<Array<{ role: string; content: string }> | null>;
+  /** Com o `meta`: é ele que diz se um `assistant` foi a Sofia, a equipe ou uma automação. */
+  carregarMensagens(conversationId: string): Promise<Array<{ role: string; content: string; meta?: unknown }> | null>;
   chamarModelo(escolha: EscolhaDoJuiz, system: string, user: string, unit: Unit): Promise<RespostaDoModelo>;
   /** `substituir`: troca a avaliação que já existe (botão "reavaliar") em vez de criar uma. */
   gravarAvaliacao(data: Prisma.ConversationEvaluationUncheckedCreateInput, substituir?: boolean): Promise<void>;
@@ -174,6 +175,20 @@ async function chamarAnthropic(escolha: EscolhaDoJuiz, system: string, user: str
   };
 }
 
+/**
+ * Argumentos do `upsert` do "reavaliar". O `update` leva `createdAt` NOVO: sozinho ele não é tocado, e uma
+ * reavaliação que ficasse com a data da avaliação velha sairia da janela do painel de prompts (90 d,
+ * `prompts.controller`) e da contagem de 24 h do diagnóstico (`diagnostics.service`). Vale também com as
+ * chaves do juiz novo desligadas.
+ */
+export function argumentosDoUpsert(
+  data: Prisma.ConversationEvaluationUncheckedCreateInput,
+  agora: Date = new Date(),
+): Prisma.ConversationEvaluationUpsertArgs {
+  const { conversationId, ...resto } = data;
+  return { where: { conversationId }, create: data, update: { ...resto, createdAt: agora } };
+}
+
 const dependenciasPadrao: DependenciasDoJuiz = {
   async avaliacaoExiste(conversationId) {
     const existing = await prisma.conversationEvaluation.findUnique({ where: { conversationId }, select: { id: true } });
@@ -185,14 +200,13 @@ const dependenciasPadrao: DependenciasDoJuiz = {
       include: { messages: { orderBy: { createdAt: 'asc' } } },
     });
     if (!conv) return null;
-    return conv.messages.map((m) => ({ role: m.role, content: m.content }));
+    return conv.messages.map((m) => ({ role: m.role, content: m.content, meta: m.meta }));
   },
   chamarModelo: (escolha, system, user, unit) =>
     escolha.provedor === 'anthropic' ? chamarAnthropic(escolha, system, user) : chamarOpenAI(escolha, system, user, unit),
   async gravarAvaliacao(data, substituir) {
     if (substituir) {
-      const { conversationId: _mesmaConversa, ...resto } = data;
-      await prisma.conversationEvaluation.upsert({ where: { conversationId: data.conversationId }, create: data, update: resto });
+      await prisma.conversationEvaluation.upsert(argumentosDoUpsert(data));
       return;
     }
     await prisma.conversationEvaluation.create({ data });
@@ -243,7 +257,7 @@ export async function julgarConversa(
     const a = avaliabilidadeDaConversa(transcript, { minFalasReais: Number(process.env.JUDGE_MIN_PATIENT_MSGS) || 2 });
     if (!a.avaliavel) {
       logger.info(
-        { conversationId, motivo: a.motivo, falasReais: a.falasReais, falasDaIa: a.falasDaIa },
+        { conversationId, motivo: a.motivo, falasReais: a.falasReais, falasDaIa: a.falasDaIa, falasDaEquipe: a.falasDaEquipe },
         'judge: conversa não avaliável, sem nota',
       );
       return { status: 'nao_avaliavel', motivo: a.motivo };
