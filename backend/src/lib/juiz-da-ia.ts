@@ -161,8 +161,13 @@ export function autorDaFala(m: MensagemDoJuiz): 'ia' | 'equipe' | 'automacao' {
   const meta = m.meta && typeof m.meta === 'object' && !Array.isArray(m.meta) ? (m.meta as Record<string, unknown>) : {};
   const origem = typeof meta.origem === 'string' ? meta.origem : '';
   if (meta.autor === 'equipe') return 'equipe';
-  if (origem === 'kommo_talks') return 'equipe'; // só entra por este caminho o que NÃO é da Sofia (ela é pulada na gravação)
-  if (origem.startsWith('confirmacao_') || origem === 'lembrete_kommo') return 'automacao';
+  // 'kommo_talks' e 'backfill-kommo': só entra por esses caminhos o que NÃO é da Sofia (ela é pulada na gravação).
+  if (origem === 'kommo_talks' || origem === 'backfill-kommo') return 'equipe';
+  // Mesmos casos de `mensagemDaIA` (lib/prometeu-sem-marcar.ts), que também deixa de fora o cartão de chegada
+  // (`via: 'chat_cartao'`) e a nota interna (`via: 'lead_note'`) — o paciente não os leu como fala da Sofia.
+  if (origem.startsWith('confirmacao') || origem === 'lembrete_kommo' || meta.via === 'chat_cartao' || meta.via === 'lead_note') {
+    return 'automacao';
+  }
   return 'ia';
 }
 
@@ -338,7 +343,13 @@ export class Descartes {
 
   /** Os ids ainda de fora; já tira da memória os que expiraram. */
   vigentes(agoraMs: number): string[] {
-    for (const [id, ate] of this.ate) if (ate <= agoraMs) this.ate.delete(id);
+    for (const [id, ate] of this.ate) {
+      if (ate > agoraMs) continue;
+      this.ate.delete(id);
+      // Terminou a desistência de 7 dias: a conversa ganha 3 tentativas novas, em vez de ser esgotada de novo
+      // na primeira falha seguinte.
+      if ((this.falhas.get(id) ?? 0) >= MAX_TENTATIVAS_ERRO) this.falhas.delete(id);
+    }
     return [...this.ate.keys()];
   }
 }

@@ -254,6 +254,9 @@ test('autorDaFala: autor=equipe e origem kommo_talks são a equipe; confirmacao_
   assert.equal(autorDaFala({ role: 'assistant', content: 'x', meta: { origem: 'kommo_talks' } }), 'equipe');
   assert.equal(autorDaFala(lembrete('x')), 'automacao');
   assert.equal(autorDaFala(lembreteKommo('x')), 'automacao');
+  assert.equal(autorDaFala({ role: 'assistant', content: 'x', meta: { origem: 'backfill-kommo' } }), 'equipe');
+  assert.equal(autorDaFala({ role: 'assistant', content: 'x', meta: { via: 'chat_cartao' } }), 'automacao'); // cartão de chegada
+  assert.equal(autorDaFala({ role: 'assistant', content: 'x', meta: { via: 'lead_note' } }), 'automacao'); // nota interna
   assert.equal(autorDaFala(sofia('x')), 'ia');
   assert.equal(autorDaFala({ role: 'assistant', content: 'x' }), 'ia'); // sem meta (mensagens antigas)
   assert.equal(autorDaFala({ role: 'assistant', content: 'x', meta: [] }), 'ia');
@@ -314,4 +317,7 @@ test('Descartes.falhou: espera 1 h nas primeiras e desiste por 7 dias na última
   assert.deepEqual(d.vigentes(t0 + DESCARTE_ESGOTADO_MS), []);
   // outra conversa começa do zero
   assert.deepEqual(d.falhou('c2', t0), { tentativas: 1, esgotada: false });
+  // vencida a desistência de 7 dias, a conversa ganha tentativas novas (não é esgotada na 1ª falha seguinte)
+  assert.deepEqual(d.vigentes(t0 + DESCARTE_ESGOTADO_MS), []);
+  assert.deepEqual(d.falhou('c1', t0 + DESCARTE_ESGOTADO_MS), { tentativas: 1, esgotada: false });
 });

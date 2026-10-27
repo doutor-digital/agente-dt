@@ -1,7 +1,7 @@
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { julgarConversa } from '../services/conversation-judge.service.js';
-import { Descartes, DESCARTE_NAO_AVALIAVEL_MS } from './juiz-da-ia.js';
+import { Descartes, DESCARTE_ERRO_MS, DESCARTE_NAO_AVALIAVEL_MS } from './juiz-da-ia.js';
 
 const SWEEP_MS = Number(process.env.JUDGE_SWEEP_MS) || 10 * 60_000;
 const MIN_MENSAGENS = Number(process.env.JUDGE_MIN_MSGS) || 4;
@@ -72,7 +72,11 @@ async function varrer(): Promise<void> {
         } else if (r.status === 'erro') {
           erros++;
           // 1 h de espera em vez de 10 min, senão 15 conversas que sempre falham ocupam toda varredura.
-          if (juizNovoLigado() && r.motivo !== 'falha_ao_gravar') {
+          // Queda do provedor (5xx, 429, sem saldo, chave) é de todas as conversas ao mesmo tempo: espera 1 h mas NÃO
+          // gasta tentativa — senão 3 h de Anthropic fora do ar mandariam tudo para a desistência de 7 dias.
+          if (juizNovoLigado() && r.motivo === 'falha_na_chamada') {
+            descartes.lembrar(conv.id, Date.now() + DESCARTE_ERRO_MS);
+          } else if (juizNovoLigado() && r.motivo === 'resposta_invalida') {
             const f = descartes.falhou(conv.id);
             if (f.esgotada) {
               logger.warn(
