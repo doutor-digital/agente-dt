@@ -80,6 +80,8 @@ export interface Triagem {
   origem?: 'anuncio' | 'ia';
   /** Quando a decisão é da IA: quantas leituras este lead já teve, e se esta foi feita agora ou é a anterior reaproveitada. */
   leituras?: { feitas: number; maximo: number; nova: boolean };
+  /** A IA não pôde ler (sem chave, fora do ar, resposta ilegível): é dúvida, mas quem opera precisa ver como alerta. */
+  falhou?: boolean;
 }
 
 /** Os últimos 4 dígitos, para o log dizer de quem se trata sem gravar o telefone inteiro. */
@@ -209,7 +211,10 @@ export const depsPadrao: DepsDoCadastro = {
   async anuncioDoLead(unit, leadId) {
     // O webhook passa a `Unit` inteira; sem ela (`kommoSubdomain`) não há como ler o cartão. `estadoEtapaDoLead` tem cache
     // de 90 s e o prompt do mesmo turno acabou de ler este cartão: normalmente é um acerto de cache, sem ida ao Kommo.
-    if (!('kommoSubdomain' in unit)) return null;
+    if (!('kommoSubdomain' in unit)) {
+      logger.warn({ leadId, unit: unit.slug }, 'cadastro-todo-lead: recebi a unidade sem os dados do Kommo — não dá para ver o anúncio, trato como orgânico');
+      return null;
+    }
     const estado = await estadoEtapaDoLead(unit as unknown as Unit, leadId);
     return estado?.anuncio ?? null;
   },
@@ -240,13 +245,14 @@ const leiturasEmCurso = new Map<string, Promise<Triagem>>();
 
 function triagemDaLeitura(l: Leitura, nova: boolean): Triagem {
   const marca = { feitas: l.feitas, maximo: MAX_LEITURAS_DA_IA, nova };
+  const falhou = l.veredito.falhou || undefined;
   switch (l.veredito.decisao) {
     case 'lead':
       return { acao: 'cadastrar', origem: 'ia', motivo: `a IA leu a conversa e viu interesse real — ${l.veredito.motivo}`, leituras: marca };
     case 'nao_lead':
       return { acao: 'nao-lead', motivo: l.veredito.motivo, leituras: marca };
     default:
-      return { acao: 'duvida', motivo: l.veredito.motivo, leituras: marca };
+      return { acao: 'duvida', motivo: l.veredito.motivo, leituras: marca, falhou };
   }
 }
 
@@ -278,8 +284,13 @@ async function lerAConversa(unit: UnidadeMinima, leadId: number, deps: DepsDoCad
     veredito = { decisao: 'duvida', motivo: 'a IA não conseguiu avaliar', falhou: true };
     logger.warn({ err: String(err), leadId, unit: unit.slug }, 'cadastro-todo-lead: leitura da IA falhou — dúvida');
   }
-  // A leitura que falhou também gasta uma das 3: um problema na API não pode virar uma chamada por mensagem.
-  const nova: Leitura = { feitas: (antes?.feitas ?? 0) + 1, em: Date.now(), visto, veredito };
+  // A leitura que FALHOU não gasta uma das 3 (uma queda da API não pode esgotar o lead para sempre), mas respeita o
+  // intervalo e só tenta de novo com fala nova — então não vira uma chamada por mensagem. Se já havia um veredito
+  // de verdade (ex.: nao_lead), a falha não o apaga.
+  const falhou = veredito.falhou === true;
+  const nova: Leitura = falhou
+    ? { feitas: antes?.feitas ?? 0, em: Date.now(), visto, veredito: antes && !antes.veredito.falhou ? antes.veredito : veredito }
+    : { feitas: (antes?.feitas ?? 0) + 1, em: Date.now(), visto, veredito };
   if (leituras.size > 20_000) leituras.clear();
   leituras.set(chave, nova);
   return triagemDaLeitura(nova, true);
@@ -364,7 +375,8 @@ function registrarDecisao(unit: UnidadeMinima, leadId: number, estado: Estado, t
     const texto = ehNaoLead
       ? `${seco ? 'barraria' : 'barrou'} pela IA: ${t.motivo}${quando}${seco ? ' (seco: nada foi barrado de verdade)' : ''}`
       : `dúvida — ${t.motivo}${quando}; ${seco ? 'não cadastraria agora' : 'não cadastra agora'} e reavalia numa mensagem futura`;
-    logger.info({ ...base, decisao, leituras: t.leituras }, `cadastro-todo-lead${rotulo}: ${texto}`);
+    // IA que não conseguiu ler é alarme (leads reais ficam retidos): warn, não rotina.
+    (t.falhou ? logger.warn : logger.info).call(logger, { ...base, decisao, leituras: t.leituras, iaFalhou: t.falhou }, `cadastro-todo-lead${rotulo}: ${texto}`);
     registrarSimulacao(unit, ID_AUTOMACAO, { leadId, acao: 'pularia', alvo: 'cadastro do lead na franquia', valor: ehNaoLead ? 'nao-lead-pela-ia' : 'duvida-da-ia', motivo: t.motivo });
     return;
   }
@@ -432,6 +444,9 @@ export async function decidirCadastroDoLead(
         motivo: MOTIVO_SEM_CASAMENTO,
       };
     }
+    // O casamento cartão × paciente é pré-requisito de QUALQUER "só lead", inclusive o de anúncio: quem clica no anúncio
+    // também pode já ser paciente, e sem o casamento o lead novo duplica o cadastro dele. Por isso vem ANTES da origem
+    // (e poupa a leitura da IA de quem não seria criado de qualquer jeito).
     // Passou nas travas e só conversou (não agendou): anúncio é lead; o resto a IA lê (`triarOrigem`, nunca lança).
     // Quem agendou já deixou de ser dúvida: segue como segue hoje, sem gastar a leitura.
     if (triagem.acao === 'cadastrar' && !legado.criar) triagem = await triarOrigem(unit, leadId, deps);

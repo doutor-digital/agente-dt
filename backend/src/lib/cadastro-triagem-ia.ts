@@ -25,7 +25,8 @@ import { logger } from './logger.js';
 export const MODELO_TRIAGEM_IA = 'claude-haiku-5-5';
 /** A resposta é um JSON de uma linha. */
 export const MAX_TOKENS_TRIAGEM_IA = 200;
-export const TIMEOUT_TRIAGEM_IA_MS = 15_000;
+/** Roda no fim do turno, depois da resposta ao paciente; Haiku responde em ~1 s, então 8 s já é falha. */
+export const TIMEOUT_TRIAGEM_IA_MS = 8_000;
 /** Quantas falas do paciente a IA lê, e o teto de cada uma (colar um textão não pode encher a conta). */
 export const FALAS_LIDAS = 10;
 export const MAX_CHARS_POR_FALA = 300;
@@ -39,8 +40,12 @@ export interface DecisaoDaIa {
   falhou?: boolean;
 }
 
+/** "NAO_LEAD", "Não lead", "nao-lead" → nao_lead: o prompt escreve os nomes em maiúsculas e o modelo imita. */
+const normalizarDecisao = (v: unknown): unknown =>
+  typeof v === 'string' ? v.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase().replace(/[\s-]+/g, '_') : v;
+
 const RespostaDaIa = z.object({
-  decisao: z.enum(['lead', 'nao_lead', 'duvida']),
+  decisao: z.preprocess(normalizarDecisao, z.enum(['lead', 'nao_lead', 'duvida'])),
   motivo: z.string().trim().min(1),
 });
 
@@ -63,7 +68,8 @@ const curto = (s: string, max: number): string => {
 
 /** O que vai ao modelo: as últimas falas, numeradas, cada uma com teto. */
 export function montarFalasParaIa(falas: readonly string[]): string {
-  const lidas = falas.map((f) => curto(f, MAX_CHARS_POR_FALA)).filter(Boolean).slice(-FALAS_LIDAS);
+  // `<` e `>` saem: o paciente não pode fechar a tag e escrever instruções "fora" do bloco de dados.
+  const lidas = falas.map((f) => curto(f.replace(/[<>]/g, ' '), MAX_CHARS_POR_FALA)).filter(Boolean).slice(-FALAS_LIDAS);
   return ['<falas_do_paciente>', ...lidas.map((f, i) => `${i + 1}. ${f}`), '</falas_do_paciente>'].join('\n');
 }
 
@@ -142,6 +148,7 @@ export async function avaliarPelaIa(
       errorMessage: data.error ? JSON.stringify(data.error).slice(0, 300) : undefined,
     });
     if (!resp.ok || data.error) {
+      logger.warn({ unit: unit.slug, status: resp.status, erro: JSON.stringify(data.error ?? '').slice(0, 200) }, 'cadastro-todo-lead: a Anthropic recusou a leitura — dúvida');
       return { decisao: 'duvida', motivo: `a IA não respondeu (HTTP ${resp.status})`, falhou: true };
     }
     return interpretarDecisaoDaIa((data.content ?? []).filter((b) => b.type === 'text').map((b) => b.text ?? '').join('\n'));

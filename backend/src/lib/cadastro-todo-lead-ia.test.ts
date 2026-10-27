@@ -40,6 +40,7 @@ const DUVIDA: DecisaoDaIa = { decisao: 'duvida', motivo: 'só disse oi' };
 type Opcoes = Partial<{
   telefone: string | null;
   unidades: string[];
+  casamento: boolean;
   anuncio: AnuncioDeOrigem | null | Error;
   falas: string[] | (() => string[]) | Error;
   ia: DecisaoDaIa | Error | (() => Promise<DecisaoDaIa>);
@@ -58,7 +59,7 @@ function deps(o: Opcoes = {}): DepsDoCadastro & { chamadas: string[]; leituras: 
     async telefoneDaConversa() {
       return o.telefone === undefined ? PACIENTE : o.telefone;
     },
-    casamentoLigado: () => true,
+    casamentoLigado: () => o.casamento ?? true,
     async unidadesDoTelefone() {
       chamadas.push('unidades');
       return o.unidades ?? [SERRA.slug];
@@ -139,6 +140,15 @@ test('anúncio cadastra como LEAD, sem gastar a leitura da IA — mesmo que a co
   assert.match(r.motivo, /anúncio/);
   assert.equal(vezesQue(d, 'falas'), 0);
   assert.equal(vezesQue(d, 'ia'), 0);
+});
+
+test('anúncio sem o casamento cartão × paciente ligado: NÃO cria (duplicaria quem já é paciente) e nem gasta a leitura', async () => {
+  ligar('ligado');
+  const d = deps({ anuncio: DE_ANUNCIO, casamento: false, ia: LEAD });
+  const r = await decidirCadastroDoLead({ unit: SERRA, leadId: 1004, legado: SEM_AGENDAR }, d);
+  assert.equal(r.criar, false);
+  assert.match(r.motivo, /sem-casamento/);
+  assert.equal(vezesQue(d, 'anuncio') + vezesQue(d, 'ia'), 0);
 });
 
 test('só Meta-* ou campanha preenchida é anúncio: Reel orgânico (Org-*) e cartão sem rastreio passam pela IA', async () => {
@@ -391,4 +401,40 @@ test('padrão: lê SÓ as falas do paciente (role user), as 10 últimas, da mais
 
 test('padrão: sem a Unit inteira (sem kommoSubdomain) não há como ler o cartão — null, ou seja, orgânico', async () => {
   assert.equal(await depsPadrao.anuncioDoLead(SERRA, 1130), null);
+});
+
+test('leitura que FALHOU não gasta das 3 (queda da API não esgota o lead), mas respeita o intervalo e a fala nova', async () => {
+  ligar('ligado');
+  let agora = Date.UTC(2026, 9, 27, 15, 0, 0);
+  mock.method(Date, 'now', () => agora);
+  let falas = ['oi'];
+  const respostas: Array<DecisaoDaIa | Error> = [new Error('529'), new Error('529'), new Error('529'), LEAD];
+  const d = deps({ falas: () => falas, ia: async () => { const r = respostas.shift()!; if (r instanceof Error) throw r; return r; } });
+  const decidir = () => decidirCadastroDoLead({ unit: SERRA, leadId: 1140, legado: SEM_AGENDAR }, d);
+  for (let i = 0; i < 3; i++) {
+    const r = await decidir();
+    assert.equal(r.criar, false, `falha ${i + 1}`);
+    agora += ESPERA_ENTRE_LEITURAS_MS + 1;
+    falas = [...falas, `mensagem ${i}`];
+  }
+  assert.equal(vezesQue(d, 'ia'), 3);
+  // a 4ª tentativa ainda é permitida (as falhas não contaram) e agora a IA vê interesse
+  const r = await decidir();
+  assert.equal(vezesQue(d, 'ia'), 4);
+  assert.equal(r.criar, true);
+  assert.ok(linhas.some((l) => l.nivel === 'warn' && /dúvida/.test(l.msg)), 'a IA que não conseguiu ler aparece como alerta, não como rotina');
+});
+
+test('uma falha da IA não apaga um nao_lead que ela já tinha dado', async () => {
+  ligar('ligado');
+  let agora = Date.UTC(2026, 9, 27, 16, 0, 0);
+  mock.method(Date, 'now', () => agora);
+  let falas = ['vendemos camisetas'];
+  const respostas: Array<DecisaoDaIa | Error> = [NAO_LEAD, new Error('timeout')];
+  const d = deps({ falas: () => falas, ia: async () => { const r = respostas.shift()!; if (r instanceof Error) throw r; return r; } });
+  const decidir = () => decidirCadastroDoLead({ unit: SERRA, leadId: 1141, legado: SEM_AGENDAR }, d);
+  assert.match((await decidir()).motivo, /nao-lead/);
+  agora += ESPERA_ENTRE_LEITURAS_MS + 1;
+  falas = [...falas, 'tem catálogo'];
+  assert.match((await decidir()).motivo, /nao-lead/);
 });
