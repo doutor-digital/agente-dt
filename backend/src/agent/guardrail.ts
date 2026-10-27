@@ -7,6 +7,7 @@ import { corrigirLinkDeMapa } from './link-de-mapa.js';
 import { precosDaConsulta } from './prompt-composer.js';
 import { semProntoSocorro } from './sem-pronto-socorro.js';
 import { ehClinicaParaSinalDeAlerta } from './sinal-de-alerta.js';
+import { sobrouVenda } from './venda-em-alerta.js';
 
 /** O que a trava de saída precisa saber além da resposta. */
 export interface ContextoDoGuardrail {
@@ -14,6 +15,8 @@ export interface ContextoDoGuardrail {
   mensagensDoPaciente?: string[];
   /** Turno de aviso urgente (sinal de alerta): se a resposta inteira for cortada, sai ESTA frase, não a de reserva. */
   fraseDeReserva?: string;
+  /** O modelo marcou, remarcou, cancelou ou confirmou presença neste turno (a ferramenta deu certo): a resposta traz o dia, a hora, o R$ e o endereço que o paciente precisa e NÃO é trocada pela frase do passe. */
+  consultaMarcada?: boolean;
   /**
    * O texto da oferta do disparo que ESTE paciente recebeu (preço, prazo, condição). Os valores dele são aprovados
    * junto com os da ficha: sem isto o R$ 150 da campanha seria cortado como "fora do catálogo" e trocado pelo R$ 280.
@@ -178,6 +181,7 @@ export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoG
   const triggered: string[] = [];
   let texto = text;
   let reescreveu = false;
+  let cortouPsEmAlerta = false;
 
   if (unit.category?.trim() === 'saude') {
     for (const regra of REGRAS_CLINICAS) {
@@ -195,6 +199,8 @@ export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoG
     if (semPs.removidas.length > 0) {
       triggered.push('pronto_socorro_ou_cirurgia:' + semPs.removidas.length);
       if (!semPs.texto.trim()) return { text: contexto.fraseDeReserva ?? FALLBACK_SEM_PRONTO_SOCORRO, triggered, rewritten: true };
+      // Turno de aviso urgente: depois do preenchimento das lacunas (abaixo) se confere se sobrou venda.
+      cortouPsEmAlerta = !!contexto.fraseDeReserva && !contexto.consultaMarcada;
       texto = semPs.texto;
       reescreveu = true;
     }
@@ -228,6 +234,14 @@ export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoG
     triggered.push('lacuna_preenchida:' + lac.trocas.join('/'));
     texto = lac.texto;
     reescreveu = true;
+  }
+  // Turno de aviso urgente em que o corte do PS deixou a resposta de pé: o corte tirou só a frase do pronto-socorro e pode
+  // ter ficado venda ("Pela campanha fica R$ 150. Quer ver um horário?") SEM a frase do passe. Confere DEPOIS das lacunas
+  // ("[valor antecipado]" já virou "R$ 280"). Quem está em alerta recebe só a frase do passe — menos quando o turno
+  // marcou consulta: a confirmação é a única que o paciente recebe.
+  if (cortouPsEmAlerta && contexto.fraseDeReserva && (sobrouVenda(texto) || lac.restantes.length > 0)) {
+    triggered.push('alerta_com_venda');
+    return { text: contexto.fraseDeReserva, triggered, rewritten: true };
   }
   if (lac.restantes.length > 0) {
     triggered.push('lacuna:' + lac.restantes.join('/'));
