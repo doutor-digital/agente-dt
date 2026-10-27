@@ -140,6 +140,15 @@ test('anthropic + erro de rede/API: não grava, registra erro', async () => {
   assert.equal(e.registros[0].provider, 'anthropic');
 });
 
+test('falha ao GRAVAR (banco, ou corrida webhook × varredura) é distinta da falha do modelo', async () => {
+  process.env.JUDGE_PROVIDER = 'anthropic';
+  const e = falso({});
+  e.deps.gravarAvaliacao = async () => { throw new Error('Unique constraint failed'); };
+  assert.deepEqual(await julgarConversa({ conversationId: 'c1', unit }, e.deps), { status: 'erro', motivo: 'falha_ao_gravar' });
+  const m = falso({ resposta: new Error('529 overloaded') });
+  assert.deepEqual(await julgarConversa({ conversationId: 'c1', unit }, m.deps), { status: 'erro', motivo: 'falha_na_chamada' });
+});
+
 test('judgeConversation (assinatura antiga) devolve null no erro e o resultado no sucesso', async () => {
   process.env.JUDGE_PROVIDER = 'anthropic';
   const ruim = falso({ resposta: { text: 'x', promptTokens: 0, completionTokens: 0, raw: {} } });

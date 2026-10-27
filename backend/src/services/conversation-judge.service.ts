@@ -222,7 +222,7 @@ export type DesfechoDoJuiz =
   /** Pré-filtro (`JUDGE_SO_AVALIAVEIS=1`): não chamou o modelo e NÃO gravou linha. */
   | { status: 'nao_avaliavel'; motivo: MotivoNaoAvaliavel }
   /** `resposta_invalida` só ocorre no provedor anthropic (leitura estrita): sem linha, a próxima varredura repete. */
-  | { status: 'erro'; motivo: 'resposta_invalida' | 'falha_na_chamada' };
+  | { status: 'erro'; motivo: 'resposta_invalida' | 'falha_na_chamada' | 'falha_ao_gravar' };
 
 /**
  * Julga uma conversa e diz o que aconteceu. `judgeConversation` (abaixo) é o mesmo caminho devolvendo só o
@@ -277,6 +277,7 @@ export async function julgarConversa(
   // Só o provedor novo se identifica no llm_calls; o antigo segue sem o campo (o padrão da tabela é 'openai').
   const marcaDoProvedor = provedor === 'anthropic' ? { provider: provedor } : {};
   const t0 = performance.now();
+  let gravando = false;
 
   try {
     const resposta = await deps.chamarModelo(escolha, system, user, unit);
@@ -341,6 +342,7 @@ export async function julgarConversa(
       responseBody: resposta.raw,
     });
 
+    gravando = true;
     await deps.gravarAvaliacao({
       conversationId,
       unitId: unit.id,
@@ -372,7 +374,9 @@ export async function julgarConversa(
       errorMessage: msg,
       requestBody: { judge: true, conversationId, promptHash },
     });
-    return { status: 'erro', motivo: 'falha_na_chamada' };
+    // Falha do banco (ou a corrida webhook × varredura no `create`) não é falha do modelo: o worker não conta
+    // tentativa nem põe a conversa de molho — na próxima varredura ela já aparece avaliada, ou tenta de novo.
+    return { status: 'erro', motivo: gravando ? 'falha_ao_gravar' : 'falha_na_chamada' };
   }
 }
 

@@ -72,7 +72,7 @@ async function varrer(): Promise<void> {
         } else if (r.status === 'erro') {
           erros++;
           // 1 h de espera em vez de 10 min, senão 15 conversas que sempre falham ocupam toda varredura.
-          if (juizNovoLigado()) {
+          if (juizNovoLigado() && r.motivo !== 'falha_ao_gravar') {
             const f = descartes.falhou(conv.id);
             if (f.esgotada) {
               logger.warn(
