@@ -235,6 +235,8 @@ export async function decidirCadastroDoLead(
   try {
     const situacao = await deps.situacaoNaFranquia(unit.id, leadId);
     // Já está lá: nada a criar. Devolver "não" poupa a leitura do Kommo que o sincronizador faria a cada mensagem.
+    // (Não perde o paciente de quem agenda depois: com o vínculo pronto, `syncLeadToSpine` já devolvia "ja-enviado" antes
+    // de qualquer criação de paciente. Paciente nasce em `cadastrar_paciente`/`syncPatientToSpine`, que não mudam.)
     if (situacao === 'na-franquia') return estado === 'ligado' ? { criar: false, motivo: 'já está na franquia' } : legado;
     // Quem acabou de agendar não espera: o sobrenome pode ter vindo agora.
     if (situacao === 'tentou-ha-pouco' && !legado.criar) {
