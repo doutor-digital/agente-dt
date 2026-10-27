@@ -52,6 +52,8 @@ test('telefone de 12 dígitos: DDD inválido e tamanhos estranhos seguem recusad
   assert.equal(telefoneWhatsapp('550891039464'), null, 'DDD 08');
   assert.equal(telefoneWhatsapp('551091039464'), null, 'DDD 10');
   assert.equal(telefoneWhatsapp('552091039464'), null, 'DDD 20 (não existe)');
+  assert.equal(telefoneWhatsapp('552391039464'), null, 'DDD 23 não existe: o 9 não é acrescentado a número de DDD inventado');
+  assert.equal(telefoneWhatsapp('552591039464'), null, 'DDD 25 não existe');
   assert.equal(telefoneWhatsapp('446391039464'), null, '12 dígitos sem o 55 na frente');
   assert.equal(telefoneWhatsapp('55639910394640'), null, '14 dígitos');
   assert.equal(telefoneWhatsapp('5563910394'), null, '10 dígitos com 55');

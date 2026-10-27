@@ -7,6 +7,7 @@
  * recupera; uma a mais custa o número verde da unidade.
  */
 import { finalDoTelefone, pediuParaSair } from '../campanha/metricas.js';
+import { DDDS_DO_BRASIL } from '../ddds.js';
 
 export { pediuParaSair };
 
@@ -60,8 +61,11 @@ export const ROTULO_DA_EXCLUSAO: Record<MotivoDeExclusao, string> = {
  *    faixa: só se acrescenta o 9 quando o 1º dígito depois do DDD é 6, 7, 8 ou 9 (a faixa em que um celular legado
  *    começava). Começou com 2, 3, 4 ou 5 é telefone FIXO e continua recusado — fixo não tem WhatsApp, e acrescentar o
  *    9 a ele cairia no número de outra pessoa.
- *  - Só 12 dígitos COM 55 na frente entram por esse caminho. 10 dígitos (DDD + 8, sem 55) e qualquer outro tamanho
- *    seguem recusados: sem o 55 a leitura "DDD + 8" não se distingue de lixo.
+ *  - Só 12 dígitos COM 55 na frente entram por esse caminho, e só com um DDD que existe (`DDDS_DO_BRASIL`: acrescentar o 9
+ *    a um número de DDD inventado é fabricar telefone). 10 dígitos (DDD + 8, sem 55) e qualquer outro tamanho seguem
+ *    recusados: sem o 55 a leitura "DDD + 8" não se distingue de lixo.
+ *  - Risco que a faixa NÃO elimina: um número de 13 dígitos truncado (faltou o último) tem 12 e pode começar com 9; ele
+ *    ganharia um 9 e viraria outro telefone válido. É o preço da decisão do João; a faixa só barra o fixo.
  *
  * O número devolvido é SEMPRE o de 13 dígitos: é o que vai para a Graph API, o que fica gravado no destinatário
  * (`DisparoDestinatario.telefone`, usado pela lista de teste e pelo log) e a base da chave. A chave (DDD + 8 últimos)
@@ -72,7 +76,7 @@ export function telefoneWhatsapp(bruto: string | null | undefined): string | nul
   let completo: string;
   if (d.length === 11) completo = `55${d}`;
   else if (d.length === 13 && d.startsWith('55')) completo = d;
-  else if (d.length === 12 && d.startsWith('55') && /^[6-9]$/.test(d[4] ?? '')) completo = `55${d.slice(2, 4)}9${d.slice(4)}`;
+  else if (d.length === 12 && d.startsWith('55') && /[6-9]/.test(d[4]) && DDDS_DO_BRASIL.has(d.slice(2, 4))) completo = `55${d.slice(2, 4)}9${d.slice(4)}`;
   else return null;
   const ddd = Number(completo.slice(2, 4));
   if (ddd < 11 || ddd > 99 || ddd % 10 === 0) return null;
