@@ -79,7 +79,7 @@ async function lerRedeDaAgenda(unit: Unit, agora: Date, f: FranquiaPorta): Promi
   // Em janelas de até 100 dias (ver DIAS_POR_JANELA), uma depois da outra: a franquia não leva 2 chamadas pesadas ao mesmo tempo.
   // Qualquer janela que falhe ou venha cortada no teto de páginas invalida a leitura TODA e as seguintes nem são pedidas.
   // 100 por página (o máximo): com 50 o teto de 40 páginas corta em 2.000 agendamentos e a leitura parece completa.
-  const agendamentos = new Map<string, Pick<SpineSchedule, 'clientName' | 'dateAttendanceUtc' | 'idStatus'>>();
+  const agendamentos: Array<Pick<SpineSchedule, 'clientName' | 'dateAttendanceUtc' | 'idStatus'>> = [];
   for (const [inicio, fim] of janelasDaAgenda(hoje)) {
     const ag = await f.searchSchedules(unit, { initialDate: inicio, endDate: fim, rowsPerPage: 100 });
     if (!ag.ok || !ag.data) {
@@ -92,8 +92,9 @@ async function lerRedeDaAgenda(unit: Unit, agora: Date, f: FranquiaPorta): Promi
       logger.warn({ unit: unit.slug, janela: `${inicio}..${fim}` }, 'disparo: a leitura da agenda da franquia foi cortada no teto de páginas — tratada como indisponível');
       return null;
     }
-    // Sem repetir agendamento na junção (a mesma consulta na beira de duas janelas): por idSchedule; sem id, vale como veio.
-    for (const s of ag.data.schedules) agendamentos.set(s.idSchedule != null ? String(s.idSchedule) : `${inicio}#${agendamentos.size}`, s);
+    // Sem repetição na junção: as janelas não se sobrepõem e `searchSchedules` já filtra pelo DIA LOCAL dentro de cada uma,
+    // então a consulta da beira cai numa só; e o que se guarda são nomes num Set, onde repetir seria inofensivo de qualquer jeito.
+    agendamentos.push(...ag.data.schedules);
   }
   const tr = await f.searchTreatments(unit, {});
   if (!tr.ok || !tr.data) {
@@ -106,7 +107,7 @@ async function lerRedeDaAgenda(unit: Unit, agora: Date, f: FranquiaPorta): Promi
   }
   const epoch = Math.floor(agora.getTime() / 1000);
   const comConsulta = new Set<string>();
-  for (const s of agendamentos.values()) if (s.clientName && temAgendamentoFuturo([s], epoch)) comConsulta.add(normalizar(s.clientName));
+  for (const s of agendamentos) if (s.clientName && temAgendamentoFuturo([s], epoch)) comConsulta.add(normalizar(s.clientName));
   const comTratamento = new Set<string>();
   for (const t of tr.data.treatments) if (t.clientName && tratamentoAberto({ idStatus: null, statusName: t.statusName })) comTratamento.add(normalizar(t.clientName));
   return { comConsulta, comTratamento };

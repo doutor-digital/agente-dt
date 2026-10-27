@@ -176,7 +176,7 @@ test('as duas janelas somam: consulta marcada em QUALQUER uma delas barra', asyn
   assert.equal(await confere(UNIT, franquia({ agendaPorJanela: [[], []] })), 'livre');
 });
 
-test('a mesma consulta nas duas janelas não duplica (e continua barrando)', async () => {
+test('a mesma consulta devolvida nas duas janelas (a franquia repetiu na beira) continua barrando uma pessoa só', async () => {
   const mesma = { clientName: 'Joana Souza', dateAttendanceUtc: '2027-01-24T22:00:00Z', idStatus: SPINE_STATUS.AGENDADO, idSchedule: 5 } as Sch;
   assert.equal(await confere(UNIT, franquia({ agendaPorJanela: [[mesma], [mesma]] }), { ...PESSOA, nomeCompleto: 'Joana Souza' }), 'consulta-futura');
 });
