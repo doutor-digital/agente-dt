@@ -2,7 +2,7 @@ import type { Request, Response } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { rawAdminCall } from '../services/openai-platform.service.js';
 import {
-  judgeConversation,
+  julgarConversa,
   JUDGE_CRITERIA,
   type CriterionScores,
 } from '../services/conversation-judge.service.js';
@@ -183,13 +183,19 @@ export async function reEvaluateConversationHandler(req: Request, res: Response)
     res.status(404).json({ error: 'unit_not_found' });
     return;
   }
-  await prisma.conversationEvaluation.deleteMany({ where: { conversationId } });
-  const result = await judgeConversation({ conversationId, unit });
-  if (!result) {
-    res.status(500).json({ error: 'judge_failed' });
+  // Não apaga antes: se o juiz não der nota (conversa não avaliável, resposta inválida, falha na chamada), a
+  // avaliação que já existia continua valendo. Só é trocada quando há uma nova.
+  const desfecho = await julgarConversa({ conversationId, unit, substituir: true });
+  if (desfecho.status === 'avaliada') {
+    res.json({ ok: true, result: desfecho.resultado });
     return;
   }
-  res.json({ ok: true, result });
+  if (desfecho.status === 'nao_avaliavel') {
+    // Não é 200: o front só lê o status, e "sucesso" sem nota nova esconderia que a antiga continua.
+    res.status(422).json({ error: 'nao_avaliavel', motivo: desfecho.motivo });
+    return;
+  }
+  res.status(500).json({ error: 'judge_failed' });
 }
 
 export async function openaiDebugHandler(req: Request, res: Response): Promise<void> {
