@@ -9,6 +9,7 @@ import { AUTOMACOES, automacaoPorId, verificarCatalogo } from './automacoes.js';
 import { deveCriarNaFranquia } from './cadastro-na-franquia.js';
 import {
   _limparCacheParaTeste,
+  criaPacienteJuntoComOLead,
   decidirCadastroDoLead,
   estadoCadastroTodoLead,
   triar,
@@ -16,6 +17,7 @@ import {
   unidadeBase,
   unidadesDistintas,
   type DepsDoCadastro,
+  type SituacaoNaFranquia,
 } from './cadastro-todo-lead.js';
 
 const SERRA = { id: 'u-serra', slug: 'doutor-hernia-serra' };
@@ -32,13 +34,13 @@ beforeEach(() => {
   process.env.NUMEROS_INTERNOS = INTERNOS;
 });
 
-function deps(o: Partial<{ ja: boolean; telefone: string | null; unidades: string[] | Error }>): DepsDoCadastro & { chamadas: string[] } {
+function deps(o: Partial<{ situacao: SituacaoNaFranquia; telefone: string | null; unidades: string[] | Error }>): DepsDoCadastro & { chamadas: string[] } {
   const chamadas: string[] = [];
   return {
     chamadas,
-    async jaNaFranquia() {
-      chamadas.push('ja');
-      return o.ja ?? false;
+    async situacaoNaFranquia() {
+      chamadas.push('situacao');
+      return o.situacao ?? 'nova';
     },
     async telefoneDaConversa() {
       chamadas.push('telefone');
@@ -91,9 +93,9 @@ test('SECO não cadastra nada a mais: a regra de 26/09 continua decidindo, mesmo
 
 test('SECO: lead que já está na franquia não é reavaliado', async () => {
   ligar('seco');
-  const d = deps({ ja: true });
+  const d = deps({ situacao: 'na-franquia' });
   assert.deepEqual(await decidirCadastroDoLead({ unit: SERRA, leadId: 6, legado: AGENDOU }, d), AGENDOU);
-  assert.deepEqual(d.chamadas, ['ja']);
+  assert.deepEqual(d.chamadas, ['situacao']);
 });
 
 test('LIGADA: quem entra em contato é cadastrado já na primeira mensagem, sem agendar', async () => {
@@ -101,6 +103,11 @@ test('LIGADA: quem entra em contato é cadastrado já na primeira mensagem, sem 
   const r = await decidirCadastroDoLead({ unit: SERRA, leadId: 10, legado: SEM_AGENDAR }, deps({}));
   assert.equal(r.criar, true);
   assert.match(r.motivo, /lead novo/);
+  assert.equal(r.soLead, true, 'quem só conversou vira LEAD — nunca paciente, mesmo com spine_sync_patients ligado');
+  // quem agendou segue como segue hoje (o sincronizador decide pelo paciente)
+  const ag = await decidirCadastroDoLead({ unit: SERRA, leadId: 10, legado: AGENDOU }, deps({}));
+  assert.equal(ag.criar, true);
+  assert.equal(ag.soLead, false);
 });
 
 test('LIGADA: número interno nunca é cadastrado — nem quando agendou', async () => {
@@ -139,32 +146,51 @@ test('LIGADA: X e X-resgate são a MESMA unidade, e hm-tecnologia não conta', a
   assert.equal((await decidirCadastroDoLead({ unit: SERRA, leadId: 17, legado: SEM_AGENDAR }, tres)).criar, false);
 });
 
-test('LIGADA: sem telefone na conversa não cadastra (não dá para saber se é interno)', async () => {
+test('LIGADA: quem só conversou e não tem telefone na conversa NÃO é cadastrado (não dá para saber se é interno)', async () => {
   ligar('ligado');
   for (const telefone of [null, '', '123']) {
-    const r = await decidirCadastroDoLead({ unit: SERRA, leadId: 18, legado: AGENDOU }, deps({ telefone }));
+    const r = await decidirCadastroDoLead({ unit: SERRA, leadId: 18, legado: SEM_AGENDAR }, deps({ telefone }));
     assert.equal(r.criar, false, String(telefone));
     assert.match(r.motivo, /sem-telefone/);
   }
 });
 
-test('LIGADA: na dúvida (banco fora) não cadastra — lead barrado volta na próxima mensagem, interno criado não tem volta', async () => {
+test('LIGADA: na dúvida (banco fora) quem só conversou fica de fora — barrado volta na próxima mensagem, interno criado não tem volta', async () => {
   ligar('ligado');
-  const r = await decidirCadastroDoLead({ unit: SERRA, leadId: 19, legado: AGENDOU }, deps({ unidades: new Error('banco fora') }));
+  const r = await decidirCadastroDoLead({ unit: SERRA, leadId: 19, legado: SEM_AGENDAR }, deps({ unidades: new Error('banco fora') }));
   assert.equal(r.criar, false);
   const r2 = await decidirCadastroDoLead(
-    { unit: SERRA, leadId: 20, legado: AGENDOU },
+    { unit: SERRA, leadId: 20, legado: SEM_AGENDAR },
     { ...deps({}), telefoneDaConversa: async () => { throw new Error('banco fora'); } },
   );
   assert.equal(r2.criar, false);
 });
 
-test('LIGADA: lead que já está na franquia segue (o sincronizador devolve "já existia", não duplica)', async () => {
+test('LIGADA: na dúvida, quem AGENDOU segue como segue hoje — a regra nova não tira cadastro de quem já entrava', async () => {
   ligar('ligado');
-  const d = deps({ ja: true });
-  const r = await decidirCadastroDoLead({ unit: SERRA, leadId: 21, legado: SEM_AGENDAR }, d);
-  assert.equal(r.criar, true);
-  assert.deepEqual(d.chamadas, ['ja']);
+  assert.deepEqual(await decidirCadastroDoLead({ unit: SERRA, leadId: 23, legado: AGENDOU }, deps({ telefone: null })), AGENDOU, 'sem telefone');
+  assert.deepEqual(await decidirCadastroDoLead({ unit: SERRA, leadId: 24, legado: AGENDOU }, deps({ unidades: new Error('banco fora') })), AGENDOU, 'consulta falhou');
+  const quebra = { ...deps({}), telefoneDaConversa: async () => { throw new Error('banco fora'); } };
+  assert.deepEqual(await decidirCadastroDoLead({ unit: SERRA, leadId: 25, legado: AGENDOU }, quebra), AGENDOU, 'banco fora');
+});
+
+test('LIGADA: lead que já está na franquia não volta ao sincronizador a cada mensagem', async () => {
+  ligar('ligado');
+  const d = deps({ situacao: 'na-franquia' });
+  const r = await decidirCadastroDoLead({ unit: SERRA, leadId: 21, legado: AGENDOU }, d);
+  assert.equal(r.criar, false);
+  assert.match(r.motivo, /já está na franquia/);
+  assert.deepEqual(d.chamadas, ['situacao'], 'nem conversa nem unidades são consultadas');
+});
+
+test('LIGADA: quem não passou (só o primeiro nome) é tentado de novo só depois de alguns minutos — mas quem acabou de agendar não espera', async () => {
+  ligar('ligado');
+  const d = deps({ situacao: 'tentou-ha-pouco' });
+  const espera = await decidirCadastroDoLead({ unit: SERRA, leadId: 26, legado: SEM_AGENDAR }, d);
+  assert.equal(espera.criar, false);
+  assert.deepEqual(d.chamadas, ['situacao']);
+  const agendou = await decidirCadastroDoLead({ unit: SERRA, leadId: 26, legado: AGENDOU }, deps({ situacao: 'tentou-ha-pouco' }));
+  assert.equal(agendou.criar, true);
 });
 
 test('a chave é por unidade: ligada numa, as outras seguem a regra de 26/09', async () => {
@@ -207,4 +233,12 @@ test('um cadastro por vez por lead: a rajada de mensagens não cria duas vezes n
   // e leads diferentes não se atrapalham
   await Promise.all([umCadastroPorVez('u', 2, async () => { criados++; }), umCadastroPorVez('u', 3, async () => { criados++; })]);
   assert.equal(criados, 4);
+});
+
+test('lead cadastrado por ter entrado em contato nunca vira paciente, mesmo com spine_sync_patients ligado', () => {
+  assert.equal(criaPacienteJuntoComOLead(true, true), false, 'soLead: só o lead');
+  assert.equal(criaPacienteJuntoComOLead(true, false), true, 'agendou: como sempre');
+  assert.equal(criaPacienteJuntoComOLead(true, undefined), true, 'chamada antiga (console): como sempre');
+  assert.equal(criaPacienteJuntoComOLead(false, false), false, 'unidade sem a chave: nunca');
+  assert.equal(criaPacienteJuntoComOLead(false, true), false);
 });

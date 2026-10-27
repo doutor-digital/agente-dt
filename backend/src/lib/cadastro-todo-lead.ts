@@ -107,9 +107,18 @@ export function triar(
 
 // ── o que toca o banco (injetável para teste) ────────────────────────────────────────────────
 
+export type SituacaoNaFranquia =
+  /** já tem lead criado lá — não há o que decidir */
+  | 'na-franquia'
+  /** tentamos há pouco e não deu (sem sobrenome, Kommo fora): tentar a cada mensagem seria uma leitura do Kommo por mensagem */
+  | 'tentou-ha-pouco'
+  | 'nova';
+
+/** Quanto esperar para tentar de novo um lead que não passou (ex.: só tem o primeiro nome). */
+export const ESPERA_ENTRE_TENTATIVAS_MS = 10 * 60_000;
+
 export interface DepsDoCadastro {
-  /** O lead já tem lead criado na franquia? Então não há o que decidir. */
-  jaNaFranquia(unitId: string, leadId: number): Promise<boolean>;
+  situacaoNaFranquia(unitId: string, leadId: number): Promise<SituacaoNaFranquia>;
   telefoneDaConversa(unitId: string, leadId: number): Promise<string | null>;
   /** Slugs das conversas com este telefone nos últimos 30 dias. Lança se o banco falhar. */
   unidadesDoTelefone(chave8: string): Promise<string[]>;
@@ -119,12 +128,16 @@ const VALIDADE_DA_CONSULTA_MS = 10 * 60_000;
 const consultas = new Map<string, { em: number; slugs: string[] }>();
 
 export const depsPadrao: DepsDoCadastro = {
-  async jaNaFranquia(unitId, leadId) {
+  async situacaoNaFranquia(unitId, leadId) {
     const l = await prisma.spineLeadLink.findUnique({
       where: { unitId_kommoLeadId: { unitId, kommoLeadId: leadId } },
-      select: { spineIdLead: true },
+      select: { spineIdLead: true, status: true, updatedAt: true },
     });
-    return !!l?.spineIdLead;
+    if (l?.spineIdLead) return 'na-franquia';
+    if (l && (l.status === 'ignorado' || l.status === 'falhou') && Date.now() - l.updatedAt.getTime() < ESPERA_ENTRE_TENTATIVAS_MS) {
+      return 'tentou-ha-pouco';
+    }
+    return 'nova';
   },
   async telefoneDaConversa(unitId, leadId) {
     const c = await prisma.conversation.findUnique({
@@ -200,22 +213,32 @@ function registrarDecisao(unit: UnidadeMinima, leadId: number, estado: Estado, t
   registrarSimulacao(unit, ID_AUTOMACAO, { leadId, acao: 'pularia', alvo: 'cadastro do lead na franquia', valor: decisao, motivo: t.motivo });
 }
 
+/** O que o webhook faz: `soLead` = cria o LEAD e não o paciente (paciente continua só ao agendar). */
+export interface DecisaoDoLead extends DecisaoDeCadastro {
+  soLead?: boolean;
+}
+
 /**
  * Decide se este lead é criado na franquia. `legado` é o que a regra de 26/09 disse.
  *
- * Nunca lança: erro aqui cai em "como estava" quando o estado não é ligado, e em "não cria" quando é.
+ * Nunca lança: erro aqui cai em "como estava" quando o estado não é ligado, e em "como estava" também
+ * quando é ligado mas a dúvida é sobre quem JÁ ia ser cadastrado (agendou) — quem só conversou, na dúvida, fica de fora.
  */
 export async function decidirCadastroDoLead(
   entrada: { unit: UnidadeMinima; leadId: number; legado: DecisaoDeCadastro },
   deps: DepsDoCadastro = depsPadrao,
-): Promise<DecisaoDeCadastro> {
+): Promise<DecisaoDoLead> {
   const { unit, leadId, legado } = entrada;
   const estado = estadoCadastroTodoLead(unit.slug);
   if (estado === 'desligado') return legado;
 
   try {
-    if (await deps.jaNaFranquia(unit.id, leadId)) {
-      return estado === 'ligado' ? { criar: true, motivo: 'já está na franquia' } : legado;
+    const situacao = await deps.situacaoNaFranquia(unit.id, leadId);
+    // Já está lá: nada a criar. Devolver "não" poupa a leitura do Kommo que o sincronizador faria a cada mensagem.
+    if (situacao === 'na-franquia') return estado === 'ligado' ? { criar: false, motivo: 'já está na franquia' } : legado;
+    // Quem acabou de agendar não espera: o sobrenome pode ter vindo agora.
+    if (situacao === 'tentou-ha-pouco' && !legado.criar) {
+      return estado === 'ligado' ? { criar: false, motivo: 'tentei há pouco e faltou dado (sobrenome) — tento de novo em alguns minutos' } : legado;
     }
 
     const telefone = await deps.telefoneDaConversa(unit.id, leadId);
@@ -231,11 +254,23 @@ export async function decidirCadastroDoLead(
     registrarDecisao(unit, leadId, estado, triagem, telefone, legado);
 
     if (estado === 'seco') return legado;
-    return triagem.acao === 'cadastrar' ? { criar: true, motivo: triagem.motivo } : { criar: false, motivo: `${triagem.acao}: ${triagem.motivo}` };
+    if (triagem.acao === 'cadastrar') return { criar: true, motivo: triagem.motivo, soLead: !legado.criar };
+    // Não deu para conferir (sem telefone, banco fora): quem já ia entrar pela regra de 26/09 (agendou) entra como entrava;
+    // quem só conversou fica de fora e é reavaliado na próxima mensagem.
+    if ((triagem.acao === 'sem-telefone' || triagem.acao === 'erro') && legado.criar) return legado;
+    return { criar: false, motivo: `${triagem.acao}: ${triagem.motivo}` };
   } catch (err) {
     logger.warn({ err: String(err), leadId, unit: unit.slug, estado }, 'cadastro-todo-lead: falha ao decidir');
-    return estado === 'ligado' ? { criar: false, motivo: 'erro: não consegui conferir — tenta na próxima mensagem' } : legado;
+    return estado === 'ligado' && !legado.criar ? { criar: false, motivo: 'erro: não consegui conferir — tenta na próxima mensagem' } : legado;
   }
+}
+
+/**
+ * Depois de criar o lead, o sincronizador cria também o PACIENTE quando a unidade tem `spine_sync_patients`.
+ * Lead cadastrado só porque entrou em contato (`soLead`) nunca vira paciente: paciente continua só ao agendar.
+ */
+export function criaPacienteJuntoComOLead(spineSyncPatients: boolean, soLead: boolean | undefined): boolean {
+  return spineSyncPatients && !soLead;
 }
 
 // ── um cadastro por vez, por lead ────────────────────────────────────────────────────────────
@@ -248,7 +283,12 @@ const emAndamento = new Set<string>();
  */
 export async function umCadastroPorVez<T>(unitId: string, leadId: number, fn: () => Promise<T>): Promise<T | undefined> {
   const chave = `${unitId}|${leadId}`;
-  if (emAndamento.has(chave)) return undefined;
+  if (emAndamento.has(chave)) {
+    // Sem retentativa de propósito: o cadastro do lead acontece uma vez e o que faltar (nome, telefone) a próxima
+    // mensagem reavalia — nada aqui é "atualização" que a segunda mensagem perderia.
+    logger.info({ leadId, unitId }, 'cadastro-todo-lead: já há um cadastro deste lead em andamento — pulei esta chamada');
+    return undefined;
+  }
   emAndamento.add(chave);
   try {
     return await fn();

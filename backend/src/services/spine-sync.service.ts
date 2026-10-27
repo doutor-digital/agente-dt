@@ -7,6 +7,7 @@ import { esquemaDaUnidade } from '../lib/kommo-schema.js';
 import { travaDaUnidadeDeAtendimento } from '../lib/trava-unidade-atendimento.js';
 import { CAMPO_ID_CLIENT, ID_AUTOMACAO as AUTOMACAO_1610, estadoCasamentoJornada } from '../lib/casamento-jornada.js';
 import { registrarSimulacao } from '../lib/so-no-papel.js';
+import { criaPacienteJuntoComOLead } from '../lib/cadastro-todo-lead.js';
 import { decidirCadastro, pacienteQueJaExiste } from './paciente-existente.js';
 
 /**
@@ -464,7 +465,12 @@ export async function syncPatientToSpine(
   return { ok: true, spineIdClient: r.data.idClient };
 }
 
-export async function syncLeadToSpine(unit: Unit, kommoLeadId: number): Promise<ResultadoSync> {
+export async function syncLeadToSpine(
+  unit: Unit,
+  kommoLeadId: number,
+  /** `soLead`: cria o LEAD e nunca o paciente, mesmo com `spine_sync_patients` ligado (cadastro de todo lead, 27/10). */
+  opcoes: { soLead?: boolean } = {},
+): Promise<ResultadoSync> {
   if (!unit.spineToken) {
     return { ok: false, motivo: 'franquia não conectada nesta unidade' };
   }
@@ -540,7 +546,7 @@ export async function syncLeadToSpine(unit: Unit, kommoLeadId: number): Promise<
 
   await registrar(unit.id, kommoLeadId, 'ok', null, r.data.idLead, preparo.payload.name);
 
-  if (unit.spineSyncPatients) {
+  if (criaPacienteJuntoComOLead(unit.spineSyncPatients, opcoes.soLead)) {
     const partes = preparo.payload.name.trim().split(/\s+/).filter((x) => x.length >= 2);
     if (partes.length < 2) {
       logger.info(

@@ -1639,7 +1639,7 @@ export async function processAgent(args: {
         }),
       });
       if (decisao.criar) {
-        void umCadastroPorVez(unit.id, leadId, () => SpineSyncService.syncLeadToSpine(unit, leadId)).catch((err) => {
+        void umCadastroPorVez(unit.id, leadId, () => SpineSyncService.syncLeadToSpine(unit, leadId, { soLead: decisao.soLead })).catch((err) => {
           logger.warn({ err: String(err), leadId, unit: unit.slug }, 'spine-sync: erro inesperado');
         });
       } else {
