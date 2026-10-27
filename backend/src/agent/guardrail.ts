@@ -15,7 +15,7 @@ export interface ContextoDoGuardrail {
   mensagensDoPaciente?: string[];
   /** Turno de aviso urgente (sinal de alerta): se a resposta inteira for cortada, sai ESTA frase, não a de reserva. */
   fraseDeReserva?: string;
-  /** O modelo marcou consulta neste turno: a confirmação (dia, hora, R$, endereço) é a única que o paciente recebe e NÃO é trocada pela frase do passe. */
+  /** O modelo marcou, remarcou, cancelou ou confirmou presença neste turno (a ferramenta deu certo): a resposta traz o dia, a hora, o R$ e o endereço que o paciente precisa e NÃO é trocada pela frase do passe. */
   consultaMarcada?: boolean;
   /**
    * O texto da oferta do disparo que ESTE paciente recebeu (preço, prazo, condição). Os valores dele são aprovados

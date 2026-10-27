@@ -32,7 +32,7 @@ const VALOR = new RegExp(
 const VENDA = new RegExp(
   `${INI}(?:` +
     [
-      String.raw`(?:re)?(?:marc|agend|reserv|encaix)(?:ar|á-\w+|ar[eéi]\w*|amos|ad[oa]s?|ue|e|o|ou|ei)`,
+      String.raw`(?:re)?(?:marc|agend|reserv|encaix)(?:ar|á-\w+|ar[eéi]\w*|amos|ad[oa]s?|ue|e|ou|ei)`, // sem "o": "Marco" é nome de paciente
       String.raw`(?:re)?marqu(?:e|ei|emos)`,
       String.raw`agenda|agendamentos?|reservas?`,
       String.raw`garant(?:ir|i-\w+|o|imos|id[oa]s?)`,

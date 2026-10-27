@@ -349,6 +349,7 @@ test('(b3) triagem clínica NÃO é venda: horas, datas e "marca" da pergunta cl
     'Hoje às 15h a dor aumentou?',
     'Hoje as 2 pernas doem?',
     'Em qual horário a dor fica pior?',
+    'Entendi, Marco. Me conta há quanto tempo sente essa dor?',
     'Você está disponível para a equipe te ligar agora?',
     'Posso ver com a equipe se ela te liga ainda hoje?',
     'Quer que eu peça pra equipe te ligar?',
