@@ -63,6 +63,8 @@ function normalizarResposta(s: string): string {
   return s.replace(/\s+/g, ' ').trim().toLowerCase();
 }
 import { podarHistorico } from './history-window.js';
+import { sanearHistorico, TEXTO_FERRAMENTA_INTERROMPIDA } from './historico-orfao.js';
+import { toolsParaOpenAI } from './tools-openai.js';
 import { respostasSeguradas } from './entrega-falha.js';
 import {
   circuitoAberto,
@@ -710,7 +712,26 @@ export async function buildAgentGraph(
         promptTemConsulta(promptDoTurno),
       ),
     );
-    const janela = podarHistorico(nonSystemMessages);
+    // Chamada de ferramenta sem resultado (turno cortado no meio) deixaria o lead preso pra sempre no 400 do modelo:
+    // o histórico vive no checkpoint. Sanea-se o histórico INTEIRO antes da janela (a poda não pode separar a chamada
+    // do resultado e fazer o saneamento inventar "interrompida" para uma ação que deu certo) e só o que VAI ao modelo
+    // é alterado. O rastro registra, pra poder contar em produção.
+    const saneado = sanearHistorico(nonSystemMessages);
+    const janela = podarHistorico(saneado.messages);
+    const sinteticosNaJanela = janela.filter(
+      (m) => m.getType() === 'tool' && m.content === TEXTO_FERRAMENTA_INTERROMPIDA,
+    ).length;
+    if (sinteticosNaJanela > 0 || saneado.removidos > 0) {
+      logger.warn(
+        { unit: unit.slug, leadId: leadIdDaConversa, completados: saneado.completados, removidos: saneado.removidos },
+        'histórico com chamada de ferramenta sem resultado — saneado antes de ir ao modelo',
+      );
+      await recorder.step({
+        kind: 'THINKING',
+        title: `🩹 Histórico com ${saneado.completados.length} chamada(s) de ferramenta sem resultado e ${saneado.removidos} resultado(s) sem chamada — saneado antes de ir ao modelo`,
+        payload: { completados: saneado.completados, removidos: saneado.removidos },
+      });
+    }
     const finalMessages: BaseMessage[] = [systemMessage, ...janela];
 
     // Conferido ANTES de gastar de novo, e FORA do try: se caísse no catch, o
@@ -839,7 +860,11 @@ export async function buildAgentGraph(
           const modeloBComTools = (
             tools.length > 0
               ? (modeloB as unknown as { bindTools: (t: unknown[]) => unknown }).bindTools(
-                  planoB.provider === 'google' ? toolsParaGemini(tools) : tools,
+                  planoB.provider === 'google'
+                    ? toolsParaGemini(tools)
+                    : planoB.provider === 'openai'
+                      ? toolsParaOpenAI(tools)
+                      : tools,
                 )
               : modeloB
           ) as unknown as Parameters<typeof invokeChatModel>[0]['model'];
