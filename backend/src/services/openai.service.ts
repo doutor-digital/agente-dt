@@ -67,14 +67,21 @@ export function providerOfModel(model: string): 'anthropic' | 'openai' | 'google
 }
 
 /**
- * Preço de um modelo `claude-*` fora da tabela: o do Anthropic mais caro que conhecemos. O teto de gasto
- * (por conversa e o mensal da clínica) soma isto — devolver 0 o desligaria em silêncio; superestimar só
- * o faz cortar um pouco antes. Calculado uma vez, com a tabela como está.
+ * Preço de um modelo `claude-*` fora da tabela: o MAIOR preço de entrada e o MAIOR de saída entre os modelos Anthropic
+ * da tabela (só os `claude-*`: um modelo de outro provedor mais caro não entra). O teto de gasto (por conversa e o
+ * mensal da clínica) soma isto — devolver 0 o desligaria em silêncio; superestimar só o faz cortar um pouco antes.
+ * Leitura de cache no padrão Anthropic (0,1×, o maior entre os conhecidos); sem faixa de contexto longo.
  */
 const PRECO_ANTHROPIC_MAIS_CARO: ModelPrice = Object.entries(MODEL_PRICES)
   .filter(([nome]) => nome.startsWith('claude'))
   .map(([, p]) => p)
-  .reduce((a, b) => (b.inputPer1M + b.outputPer1M > a.inputPer1M + a.outputPer1M ? b : a));
+  .reduce<ModelPrice>(
+    (a, b) => ({
+      inputPer1M: Math.max(a.inputPer1M, b.inputPer1M),
+      outputPer1M: Math.max(a.outputPer1M, b.outputPer1M),
+    }),
+    { inputPer1M: 0, outputPer1M: 0 },
+  );
 
 const modelosSemPrecoAvisados = new Set<string>();
 
@@ -82,12 +89,10 @@ function precoDoModelo(model: string): ModelPrice | null {
   const price = MODEL_PRICES[model];
   if (price) return price;
   if (!model.startsWith('claude')) return null;
-  // Id com sufixo (data, `-latest`): vale o preço da entrada mais específica que o prefixa — senão
-  // `claude-haiku-5-5-latest` seria estimado como Opus 4.8 (50× o real) e o teto cortaria à toa.
-  const prefixo = Object.keys(MODEL_PRICES)
-    .filter((k) => k.startsWith('claude') && model.startsWith(`${k}-`))
-    .sort((a, b) => b.length - a.length)[0];
-  if (prefixo) return MODEL_PRICES[prefixo]!;
+  // Só sufixo de data (`-AAAAMMDD`) ou `-latest` é o MESMO modelo com outro apelido. Outro número de versão
+  // (`claude-sonnet-5-6`, `claude-opus-5-6`) é modelo novo, com preço próprio: não herda o do `-5` — cai no aviso.
+  const base = /^(claude-.+?)-(?:\d{8}|latest)$/.exec(model)?.[1];
+  if (base && MODEL_PRICES[base]) return MODEL_PRICES[base]!;
   if (!modelosSemPrecoAvisados.has(model)) {
     modelosSemPrecoAvisados.add(model);
     logger.warn(
@@ -222,6 +227,19 @@ export function configurarRaciocinioAnthropic(modelo: string, effort: EffortAnth
   return { thinking: { type: 'disabled' }, ...outputConfig(effort) };
 }
 
+/**
+ * Opus 5.5 pensa sempre e o raciocínio conta DENTRO de `max_tokens`. Os limites de hoje (1024 do atendimento, 600
+ * da memória, 400 da reescrita, 300 do follow-up, 1 do keepalive) foram dimensionados para modelo sem pensar:
+ * com eles a resposta voltaria cortada ou sem texto. Piso só para a Opus 5.5 — os outros modelos seguem com o
+ * valor pedido, byte a byte. O keepalive (1 token, só para manter o cache quente) também sobe: o piso é por modelo,
+ * não por chamada, e a documentação não garante que `max_tokens: 1` seja aceito com raciocínio sempre ligado.
+ */
+export const PISO_MAX_TOKENS_OPUS_5_5 = 4096;
+
+export function maxTokensComFolga(modelo: string, maxTokens: number): number {
+  return /^claude-opus-5-5(?![0-9])/.test(modelo) ? Math.max(maxTokens, PISO_MAX_TOKENS_OPUS_5_5) : maxTokens;
+}
+
 export function resolveModelName(unit: Unit | null, override?: string | null): string {
   if (override) return override;
   if (unit?.llmProvider === 'anthropic' && unit.anthropicApiKey) {
@@ -243,7 +261,7 @@ export function createChatModel(
     return new ChatAnthropic({
       apiKey: unit.anthropicApiKey,
       model: modelo,
-      maxTokens: overrides.maxTokens ?? unit.openaiMaxTokens ?? 1024,
+      maxTokens: maxTokensComFolga(modelo, overrides.maxTokens ?? unit.openaiMaxTokens ?? 1024),
       maxRetries: OPENAI_MAX_RETRIES,
       // Sem timeout aqui, o withTimeout do grafo corta a ESPERA mas a requisição
       // HTTP continua viva em segundo plano, segurando conexão e podendo cobrar.
@@ -441,6 +459,7 @@ export async function invokeChatModel(args: InvokeChatModelArgs): Promise<unknow
     }
 
     const recusa = detectarRecusa(response);
+    const erroRecusa = recusa ? new LlmRecusaError(recusa.categoria) : null;
 
     const finalUsage: TokenUsage = usage ?? {};
     let { promptTokens, completionTokens, totalTokens } = finalUsage;
@@ -492,8 +511,8 @@ export async function invokeChatModel(args: InvokeChatModelArgs): Promise<unknow
       cacheWrite1hTokens,
       latencyMs,
       // Recusa gasta token (o custo fica gravado) mas conta como erro: aparece no painel e no alarme de taxa de erro.
-      status: recusa ? 'error' : 'success',
-      errorMessage: recusa ? new LlmRecusaError(recusa.categoria).message : undefined,
+      status: erroRecusa ? 'error' : 'success',
+      errorMessage: erroRecusa?.message,
       // A conversa fica guardada porque é o que permite investigar depois — mas
       // mascarada: telefone, CPF, CNPJ e e-mail saem, a queixa e o nome ficam.
       // Sem a queixa o registro não serve pra nada; com o telefone, vira base de
@@ -510,12 +529,12 @@ export async function invokeChatModel(args: InvokeChatModelArgs): Promise<unknow
     });
 
     // Depois de gravar o gasto (a recusa também consome token): resposta recusada não segue para o paciente.
-    if (recusa) {
+    if (recusa && erroRecusa) {
       logger.warn(
         { unitId: args.unitId, model: args.modelName, traceId: args.traceId, categoria: recusa.categoria },
         'modelo recusou responder (stop_reason=refusal) — tratando como falha do principal',
       );
-      throw new LlmRecusaError(recusa.categoria);
+      throw erroRecusa;
     }
 
     return response;

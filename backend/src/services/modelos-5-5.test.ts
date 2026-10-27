@@ -14,7 +14,16 @@ const llmCallGravadas: Array<Record<string, unknown>> = [];
   },
 };
 
-const { calculateCost, configurarRaciocinioAnthropic, createChatModel, detectarRecusa, invokeChatModel, LlmRecusaError } =
+const {
+  calculateCost,
+  configurarRaciocinioAnthropic,
+  createChatModel,
+  detectarRecusa,
+  invokeChatModel,
+  LlmRecusaError,
+  maxTokensComFolga,
+  PISO_MAX_TOKENS_OPUS_5_5,
+} =
   await import('./openai.service.js');
 const { ehFalhaDeInfra } = await import('../agent/circuito.js');
 const { ehFalhaDeChave } = await import('../agent/chave-reserva.js');
@@ -80,6 +89,34 @@ test('payload final por família (invocationParams do LangChain)', () => {
   }
 });
 
+// ---------------------------------------------------------------- max_tokens
+
+test('piso de max_tokens só na Opus 5.5; os outros modelos ficam com o valor pedido', () => {
+  assert.equal(PISO_MAX_TOKENS_OPUS_5_5, 4096);
+  assert.equal(maxTokensComFolga('claude-opus-5-5', 1), 4096); // keepalive
+  assert.equal(maxTokensComFolga('claude-opus-5-5', 300), 4096); // follow-up
+  assert.equal(maxTokensComFolga('claude-opus-5-5', 1024), 4096);
+  assert.equal(maxTokensComFolga('claude-opus-5-5', 8000), 8000); // nunca reduz
+  assert.equal(maxTokensComFolga('claude-opus-5-5-latest', 400), 4096);
+  for (const m of ['claude-opus-4-8', 'claude-opus-5', 'claude-sonnet-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-haiku-4-5']) {
+    assert.equal(maxTokensComFolga(m, 1), 1, m);
+    assert.equal(maxTokensComFolga(m, 300), 300, m);
+  }
+});
+
+test('createChatModel: max_tokens do payload sobe na Opus 5.5 e fica idêntico nos modelos de hoje', () => {
+  const max = (modelo: string, pedido?: number) =>
+    (createChatModel(unidadeAnthropic(modelo, null), pedido === undefined ? {} : { maxTokens: pedido }) as ChatAnthropic).invocationParams(
+      {},
+    ).max_tokens;
+  assert.equal(max('claude-opus-5-5', 1), 4096);
+  assert.equal(max('claude-opus-5-5'), 4096);
+  assert.equal(max('claude-opus-4-8', 1), 1);
+  assert.equal(max('claude-opus-4-8', 300), 300);
+  assert.equal(max('claude-opus-4-8'), 1024);
+  assert.equal(max('claude-sonnet-5-5', 400), 400);
+});
+
 // ---------------------------------------------------------------- preço
 
 test('família 5.5 está na tabela: sonnet 2/10, opus 4/20, haiku 0,10/0,50', () => {
@@ -109,11 +146,27 @@ test('claude-* desconhecido: avisa UMA vez e estima pelo Anthropic mais caro (n�
   assert.equal(aviso.mock.callCount(), 2);
 });
 
-test('id com sufixo (data, -latest) usa o preço da entrada que o prefixa, sem aviso nem estimativa cara', (t) => {
+test('id com sufixo de data ou -latest usa o preço do mesmo modelo, sem aviso nem estimativa cara', (t) => {
   const aviso = t.mock.method(logger, 'warn', () => undefined);
   assert.equal(calculateCost('claude-haiku-5-5-latest', 100_000, 100_000), 0.06);
   assert.equal(calculateCost('claude-sonnet-5-5-20261001', 1_000_000, 0), 2);
+  assert.equal(calculateCost('claude-haiku-4-5-20251001', 1_000_000, 0), 1);
   assert.equal(aviso.mock.callCount(), 0);
+});
+
+test('outro número de versão NÃO herda o preço do anterior: sonnet-5-6 e opus-5-6 caem no fallback com aviso', (t) => {
+  const aviso = t.mock.method(logger, 'warn', () => undefined);
+  // fallback = maior entrada (5) + maior saída (25) entre os Anthropic da tabela
+  assert.equal(calculateCost('claude-sonnet-5-6', 1_000_000, 1_000_000), 30);
+  assert.equal(calculateCost('claude-opus-5-6', 1_000_000, 1_000_000), 30);
+  assert.equal(aviso.mock.callCount(), 2);
+});
+
+test('o fallback é o maior preço entre os claude-* — um modelo mais caro de outro provedor não entra', (t) => {
+  t.mock.method(logger, 'warn', () => undefined);
+  // gpt-4 custa 30/60 na tabela e gpt-5 5/15: nenhum deles pode puxar o fallback do claude
+  assert.equal(calculateCost('claude-qualquer-novo', 1_000_000, 0), 5);
+  assert.equal(calculateCost('claude-qualquer-novo', 0, 1_000_000), 25);
 });
 
 test('modelo não-Anthropic desconhecido segue custando zero', () => {

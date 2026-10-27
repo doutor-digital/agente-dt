@@ -65,6 +65,7 @@ function normalizarResposta(s: string): string {
   return s.replace(/\s+/g, ' ').trim().toLowerCase();
 }
 import { podarHistorico } from './history-window.js';
+import { semRaciocinioParaPlanoB } from './raciocinio-plano-b.js';
 import { sanearHistorico, TEXTO_FERRAMENTA_INTERROMPIDA } from './historico-orfao.js';
 import { toolsParaOpenAI } from './tools-openai.js';
 import { respostasSeguradas } from './entrega-falha.js';
@@ -890,7 +891,8 @@ export async function buildAgentGraph(
           response = (await withTimeout(
             invokeChatModel({
               model: modeloBComTools,
-              messages: finalMessages,
+              // Os blocos de raciocínio da Anthropic só valem no modelo que os gerou: o plano B de outro provedor não os recebe.
+              messages: planoB.provider === 'anthropic' ? finalMessages : semRaciocinioParaPlanoB(finalMessages),
               unitId: unit.id,
               traceId: recorder.traceId,
               modelName: planoB.modelName,
@@ -922,10 +924,13 @@ export async function buildAgentGraph(
           return respostaIndisponivel();
         }
       } else {
+        const foiRecusa = err instanceof LlmRecusaError;
         await recorder.step({
           kind: 'ERROR',
-          title: '⏱️ IA indisponível — sem plano B configurado, fallback enviado',
-          payload: { erroPrincipal, timeoutMs: AGENT_NODE_TIMEOUT_MS },
+          title: foiRecusa
+            ? '🚫 O modelo recusou responder e não há plano B configurado — fallback enviado'
+            : '⏱️ IA indisponível — sem plano B configurado, fallback enviado',
+          payload: foiRecusa ? { erroPrincipal } : { erroPrincipal, timeoutMs: AGENT_NODE_TIMEOUT_MS },
           latencyMs: Math.round(performance.now() - t0),
         });
         return respostaIndisponivel();
