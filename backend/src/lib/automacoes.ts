@@ -435,6 +435,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/cadastro-pelo-widget.ts',
   },
   {
+    id: 'cadastro-todo-lead',
+    chave: 'CADASTRO_TODO_LEAD_SLUGS',
+    nome: 'Cadastrar TODO lead na franquia (como lead)',
+    oQueFaz:
+      'A IA cadastra na franquia, como LEAD e já na primeira mensagem, toda pessoa que entra em contato — não só quem agenda (a regra de 26/09 deixa de valer para o lead). Paciente continua sendo criado só ao agendar. Número interno da rede e telefone que fala com 3 ou mais unidades em 30 dias nunca são cadastrados.',
+    pegadinha:
+      'Nasce DESLIGADA: a regra de 26/09 segue intacta. Em "Só no papel" a regra de 26/09 continua decidindo e a nova só registra no log e nesta lista: "gravaria" (cadastraria), "pularia" com o motivo (barrou interno, barrou 3+ unidades, sem telefone). Só vale onde "espelhar leads" está ligado na unidade e a franquia está conectada. Número interno: variável NUMEROS_INTERNOS (csv com o telefone COMPLETO, comparado pelos últimos 8 dígitos; item com menos de 8 dígitos é ignorado) — trocar e reiniciar o contêiner basta, sem deploy. A franquia exige "Nome Completo": quem só tem o primeiro nome fica de fora e é tentado de novo a cada mensagem até dar o sobrenome. Conversa sem telefone não é cadastrada. Dúvida na conferência (banco fora do ar) também não cadastra.',
+    risco: 'escreve-campo',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/cadastro-todo-lead.ts',
+  },
+  {
     id: 'carimbo-etapa',
     chave: 'CARIMBO_ETAPA_SLUGS',
     nome: 'Carimbo de início e fim do tratamento',

@@ -4,6 +4,7 @@ import type { BaseMessage } from '@langchain/core/messages';
 import type { Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { deveCriarNaFranquia, ferramentasChamadas } from '../lib/cadastro-na-franquia.js';
+import { decidirCadastroDoLead, umCadastroPorVez } from '../lib/cadastro-todo-lead.js';
 import { logger } from '../lib/logger.js';
 import { buildAgentGraph, buildThreadId } from '../agent/graph.js';
 import { comTurnoEmAndamento } from '../lib/turnos-em-andamento.js';
@@ -1625,14 +1626,20 @@ export async function processAgent(args: {
     // A pessoa só vira lead na franquia se agendar consulta (regra do João, 26/09/2026).
     // Antes disto rodava em toda mensagem: 4.270 leads criados em 30 dias, 96% deles gente
     // que mandou uma mensagem e sumiu.
+    // 27/10/2026: a franquia mudou a regra — toda pessoa que entra em contato vira LEAD (menos número
+    // interno). Atrás da chave `cadastro-todo-lead`, que nasce desligada: desligada, nada abaixo muda.
     if (unit.spineSyncLeads && leadId > 0) {
       // Só o sinal da ferramenta aqui: a etapa do cartão vive noutro escopo, e cartão que
       // já está em AGENDADO é coberto pelo sincronizador da franquia, não por este caminho.
-      const decisao = deveCriarNaFranquia({
-        ferramentas: ferramentasChamadas((result as { messages?: unknown })?.messages),
+      const decisao = await decidirCadastroDoLead({
+        unit,
+        leadId,
+        legado: deveCriarNaFranquia({
+          ferramentas: ferramentasChamadas((result as { messages?: unknown })?.messages),
+        }),
       });
       if (decisao.criar) {
-        void SpineSyncService.syncLeadToSpine(unit, leadId).catch((err) => {
+        void umCadastroPorVez(unit.id, leadId, () => SpineSyncService.syncLeadToSpine(unit, leadId)).catch((err) => {
           logger.warn({ err: String(err), leadId, unit: unit.slug }, 'spine-sync: erro inesperado');
         });
       } else {
