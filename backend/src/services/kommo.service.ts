@@ -1,4 +1,5 @@
 import axios, { AxiosError, type AxiosAdapter, type AxiosInstance, type AxiosRequestConfig } from 'axios';
+import { responsavelDaTarefa, type UsuarioKommo } from '../lib/responsavel-da-tarefa.js';
 import type { Unit } from '@prisma/client';
 import { env } from '../lib/env.js';
 import { logger } from '../lib/logger.js';
@@ -11,6 +12,8 @@ declare module 'axios' {
     _quedasDeRede?: number;
     /** nunca repetir sozinho, mesmo com a conexão caindo — a fala da IA */
     semRepetirNaRede?: boolean;
+    /** 403/429 desta leitura não aciona o freio global (`kommoBackoff`): ela é acessória e tem cache próprio */
+    semFreio?: boolean;
   }
 }
 import { semCoracao } from '../lib/sem-coracao.js';
@@ -671,7 +674,7 @@ export function buildHttp(
         await esperar(ESPERAS_REDE_MS[feitas]);
         return http.request(cfg);
       }
-      if (status === 429 || status === 403) {
+      if ((status === 429 || status === 403) && !cfg?.semFreio) {
         const ra = Number((error.response?.data as { retry_after?: number } | undefined)?.retry_after);
         kommoBackoff(Number.isFinite(ra) ? ra : status === 403 ? 30 : undefined);
       }
@@ -696,6 +699,20 @@ function wrapAxiosError(err: unknown, context: string): never {
   }
   throw err;
 }
+
+/** Nota do cartão como a API v4 devolve. `created_by` 0 = integração/robô. */
+export interface NotaKommo {
+  id: number;
+  note_type: string;
+  created_by: number;
+  created_at: number;
+  params?: { text?: string; service?: string; phone?: string; duration?: number; original_name?: string } | null;
+}
+
+const USUARIOS_VALIDADE_MS = 6 * 60 * 60_000;
+/** Conta cujo token não lista usuários (403 em Parauapebas/Imperatriz): não tenta de novo a cada tarefa. */
+const USUARIOS_FALHA_MS = 60 * 60_000;
+const usuariosPorConta = new Map<string, { usuarios: Promise<UsuarioKommo[] | null>; ate: number }>();
 
 export class KommoClient {
   constructor(private readonly creds: KommoCreds, private readonly http: AxiosInstance) {}
@@ -1497,6 +1514,16 @@ export class KommoClient {
     }
   }
 
+  /** Os nomes das etiquetas que o cartão tem AGORA (o que o Kommo guardou, não o que mandamos). */
+  async tagsDoLead(leadId: number): Promise<string[]> {
+    try {
+      const { data } = await this.http.get<KommoLead>(`/leads/${leadId}`, { params: { with: 'tags' } });
+      return (data._embedded?.tags ?? []).map((t) => t.name);
+    } catch (err) {
+      wrapAxiosError(err, `tagsDoLead(${leadId})`);
+    }
+  }
+
   async addTag({ leadId, tag, tags }: AddTagParams): Promise<void> {
     const all = [
       ...(tag ? [tag] : []),
@@ -1688,33 +1715,79 @@ export class KommoClient {
     completeAt: number;
     responsibleUserId?: number;
     taskTypeId?: number;
+    /** quem pediu escolheu o responsável (o João no conector, a ação configurada no console): não troca */
+    manterResponsavel?: boolean;
   }): Promise<{ id?: number } | null> {
-    const body = [
-      {
-        entity_id: args.leadId,
-        entity_type: 'leads',
-        text: downgradeEmoji(args.text),
-        complete_till: args.completeAt,
-        ...(args.responsibleUserId ? { responsible_user_id: args.responsibleUserId } : {}),
-        ...(args.taskTypeId ? { task_type_id: args.taskTypeId } : {}),
-      },
-    ];
-    try {
-      const { data } = await this.http.post<{ _embedded?: { tasks?: Array<{ id: number }> } }>(
-        '/tasks',
-        body,
-      );
+    const pedido = args.responsibleUserId;
+    const responsavel = args.manterResponsavel ? pedido : await this.responsavelDaTarefa(pedido);
+    const postar = async (quem: number | undefined) => {
+      const body = [
+        {
+          entity_id: args.leadId,
+          entity_type: 'leads',
+          text: downgradeEmoji(args.text),
+          complete_till: args.completeAt,
+          ...(quem ? { responsible_user_id: quem } : {}),
+          ...(args.taskTypeId ? { task_type_id: args.taskTypeId } : {}),
+        },
+      ];
+      const { data } = await this.http.post<{ _embedded?: { tasks?: Array<{ id: number }> } }>('/tasks', body);
       const id = data?._embedded?.tasks?.[0]?.id;
       return id ? { id } : null;
+    };
+    try {
+      return await postar(responsavel);
     } catch (err) {
-      wrapAxiosError(err, `createTask(${args.leadId})`);
+      // Só recusa de verdade (400/404/422): num timeout a tarefa pode já ter nascido, e repetir a duplicaria.
+      const recusou = axios.isAxiosError(err) && [400, 404, 422].includes(err.response?.status ?? 0);
+      if (responsavel === pedido || !recusou) wrapAxiosError(err, `createTask(${args.leadId})`);
+      // o usuário da clínica pode ter sido desativado depois do cache: a tarefa (LIGAR AGORA…) não pode se perder
+      logger.warn({ err: String(err), leadId: args.leadId, trocado: responsavel, pedido }, 'tarefa: o Kommo recusou o usuário da clínica — repito com o responsável do lead');
+      try {
+        return await postar(pedido);
+      } catch (err2) {
+        wrapAxiosError(err2, `createTask(${args.leadId})`);
+      }
     }
   }
 
-  async listUsers(): Promise<Array<{ id: number; name: string; email?: string }>> {
+  /** Tarefa do "Doutor Digital" (ou sem dono) vai para o usuário da clínica — ver lib/responsavel-da-tarefa.ts. */
+  private async responsavelDaTarefa(pedido?: number): Promise<number | undefined> {
+    const chave = this.creds.subdomain;
+    const agora = Date.now();
+    let cache = usuariosPorConta.get(chave);
+    if (!cache || cache.ate < agora) {
+      // a promessa vai para o cache na hora: várias tarefas juntas fazem uma leitura só
+      const usuarios = this.http
+        .get<{ _embedded?: { users?: UsuarioKommo[] } }>('/users', { params: { page: 1, limit: 250 }, semFreio: true })
+        .then(({ data }) => data?._embedded?.users ?? [])
+        .catch((err: unknown) => {
+          logger.warn({ err: String(err), subdominio: chave }, 'tarefa: sem a lista de usuários — fica o responsável pedido por 1 h');
+          const c = usuariosPorConta.get(chave);
+          if (c) c.ate = Date.now() + USUARIOS_FALHA_MS;
+          return null;
+        });
+      cache = { usuarios, ate: agora + USUARIOS_VALIDADE_MS };
+      usuariosPorConta.set(chave, cache);
+    }
+    const lista = await cache.usuarios;
+    if (!lista) return pedido;
+    const escolhido = responsavelDaTarefa(lista, pedido);
+    if (escolhido !== pedido) {
+      logger.info({ subdominio: chave, pedido: pedido ?? null, escolhido }, 'tarefa: responsável trocado do Doutor Digital para o usuário da clínica');
+    }
+    return escolhido;
+  }
+
+  /** Só para teste. */
+  static _limparUsuariosDasContas(): void {
+    usuariosPorConta.clear();
+  }
+
+  async listUsers(): Promise<Array<{ id: number; name: string; email?: string; rights?: { is_active?: boolean } }>> {
     try {
       const { data } = await this.http.get<{
-        _embedded?: { users?: Array<{ id: number; name: string; email?: string }> };
+        _embedded?: { users?: Array<{ id: number; name: string; email?: string; rights?: { is_active?: boolean } }> };
       }>('/users', { params: { page: 1, limit: 250 } });
       return data?._embedded?.users ?? [];
     } catch (err) {
@@ -2106,6 +2179,37 @@ export class KommoClient {
     }
     await this.updateLeadName(leadId, desired);
     return { previous, desired, changed: true, contatoId };
+  }
+
+  /**
+   * Notas do cartão, das mais recentes para as mais antigas (o conector `kommo_notas` lê por aqui). Sem nota o Kommo
+   * devolve 204 sem corpo. `periodo` em epoch (s), pelo `created_at` da nota.
+   */
+  async listarNotasDoLead(
+    leadId: number,
+    limite: number,
+    periodo: { desde?: number; ate?: number } = {},
+  ): Promise<{ notas: NotaKommo[]; truncado: boolean }> {
+    const notas: NotaKommo[] = [];
+    for (let page = 1; page <= 4; page++) {
+      let lote: NotaKommo[];
+      try {
+        const { data } = await this.http.get<{ _embedded?: { notes?: NotaKommo[] } } | ''>(`/leads/${leadId}/notes`, {
+          params: { page, limit: 250, 'order[id]': 'desc' },
+        });
+        lote = (data || undefined)?._embedded?.notes ?? [];
+      } catch (err) {
+        wrapAxiosError(err, `listarNotasDoLead(${leadId})`);
+      }
+      for (const n of lote) {
+        if (periodo.ate !== undefined && n.created_at > periodo.ate) continue;
+        if (periodo.desde !== undefined && n.created_at < periodo.desde) return { notas, truncado: false };
+        notas.push(n);
+        if (notas.length >= limite) return { notas, truncado: true };
+      }
+      if (lote.length < 250) return { notas, truncado: false };
+    }
+    return { notas, truncado: true };
   }
 
   async addLeadNote(leadId: number, text: string): Promise<{ id?: number } | null> {

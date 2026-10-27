@@ -291,7 +291,7 @@ test('item 1b: o bloco <sinal_de_alerta> manda ler a rajada inteira e traz os ex
   for (const ex of ['me faltou/faltaram as pernas', String.raw`mim\s+falou as pernas`, 'as pernas falharam', 'quase não andei', 'quer não andei', 'não consigo andar', 'travei']) {
     assert.match(b, new RegExp(ex), `exemplo: ${ex}`);
   }
-  assert.match(b, /UM sinal\s+por vez/);
-  // continua antes das regras de sinal grave, que dizem o que fazer com a resposta
-  assert.ok(b.indexOf('LINGUAGEM DO DIA A DIA') < b.indexOf('SINAIS GRAVES DA COLUNA'));
+  assert.match(b, /pergunta de UM sinal/);
+  // 26/10: a fala vaga pergunta UM sinal; a fala clara (e o sinal confirmado) manda parar — ver o bloco inteiro
+  assert.ok(b.indexOf('CONFIRMADO O SINAL') < b.indexOf('LINGUAGEM DO DIA A DIA'));
 });

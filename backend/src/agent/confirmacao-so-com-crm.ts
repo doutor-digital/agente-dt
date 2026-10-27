@@ -59,6 +59,7 @@ const AFIRMA_FORTE = new RegExp(
     `\\b${ASSUNTO}\\s+(?:\\S+\\s+){0,5}?${PARTICIPIO}\\b`,
     `\\b${PARTICIPIO}\\s+(?:\\S+\\s+){0,2}?(?:consulta|vaga|horario|presenca)\\b`,
     String.raw`\b(?:confirmei|agendei|marquei|reservei|garanti)\b`,
+    String.raw`\bdeixei\s+(?:\S+\s+){0,2}?(?:agendad|marcad|reservad|garantid|confirmad)[oa]s?\b`,
   ].join('|'),
 );
 /** Frases soltas, que só valem como afirmação de consulta se o trecho cita dia/hora: "já está tudo certo", "Recebido, confirmado!". */
@@ -70,18 +71,22 @@ const AFIRMA_FRACA = new RegExp(
 );
 /** Explicação de como funciona ("só é reservada depois do pagamento"), não afirmação de que ESTÁ confirmado. */
 const EXPLICATIVA =
-  /\b(?:so (?:e|sera|fica|ficam|sao)|somente|garant(?:e|em)|depois d[oae]s? (?:pagamento|comprovante|confirmacao))\b|\b(?:e|sao|sera|serao) (?:confirmad|reservad|agendad|marcad|conferid)[oa]s? pel[ao]s? (?:equipe|clinica|recepcao)\b/;
-/** "Te espero terça", "nos vemos": só vale com dia/hora no trecho (no modo estrito). */
+  /\b(?:so (?:e|sera|fica|ficam|sao)|somente|depois d[oae]s? (?:pagamento|comprovante|confirmacao))\b|(?<!\b(?:recebid|agendad|marcad|reservad|aprovad|conferid|confirmad|validad)[oa]s? )\b(?:e|sao|sera|serao) (?:confirmad|reservad|agendad|marcad|conferid)[oa]s? pel[ao]s? (?:equipe|clinica|recepcao)\b/;
+/** "Combinado, terça às 10h então": só vale com dia/hora no trecho. */
+const AFIRMA_COMBINADO = /\bcombinad[oa]s?\b/;
+/** "Te espero terça", "nos vemos": só vale com dia/hora no trecho quando a regra é estrita ou só-forte. */
 const AFIRMA_TE_ESPERO = /\b(?:te|lhe) (?:espero|esperamos|aguardo|aguardamos)\b|\bnos vemos\b/;
 /** Negação/condição na ORAÇÃO da afirmação: "ainda não está confirmada", "se estiver confirmada", "para ser confirmada". */
 const NAO_AFIRMA =
-  /\b(?:nao|nem|nenhum|nenhuma|caso|quando|apos|depois que|assim que|aguarde|aguardando|para ser|pra ser|ate eu)\b|\bse (?:voce|vc|ele|ela|estiver|for|der)\b/;
+  /\b(?:nao|nem|nenhum|nenhuma|caso|quando|apos|depois que|assim que|aguarde|aguardando|para ser|pra ser|ate eu|sendo|vai ser|ira ser)\b|\bse (?:voce|vc|ele|ela|estiver|for|der)\b/;
 /**
  * Modo estrito (consulta desmarcada): ali a IA ainda pode explicar preço e oferecer novo horário ("esse valor
  * já garante seu horário reservado"), então fica de fora a explicação de pagamento, e "te espero" só vale com
  * dia/hora.
  */
 const EXPLICA_PAGAMENTO = /\b(?:pagando|pagamento antecipado|antecipado|antecipando|valor|pix|r\$)\b/;
+/** Dia concreto (não só hora): "terça", "29/10", "amanhã", "hoje". "A partir das 8h" é horário de funcionamento. */
+const QUANDO_DIA = /\b(?:segunda|terca|quarta|quinta|sexta|sabado|domingo)\b|\b\d{1,2}\/\d{1,2}\b|\b(?:amanha|hoje)\b/;
 const QUANDO = /\b(?:segunda|terca|quarta|quinta|sexta|sabado|domingo)\b|\b\d{1,2}\/\d{1,2}\b|\b(?:amanha|hoje)\b|\b\d{1,2}(?::\d{2}|h\d{0,2})\b/;
 
 /** A oração em que a afirmação aparece: do último separador (vírgula, ponto e vírgula, dois-pontos) até o fim dela. */
@@ -100,8 +105,18 @@ export function afirmaConfirmacao(texto: string | null | undefined, opcoes: { es
     // veja um novo horário?" não é consulta de pé.
     // `soForte`: na espera da equipe (depois do turno do comprovante) a conversa segue comum — "Fica na Rua X, 120. Te espero
     // lá!" e "Tudo certo 😊" não são consulta confirmada; só valem as frases que dizem O QUE está confirmado.
-    const solta = !opcoes.soForte && (!opcoes.estrito || quando);
-    const m = AFIRMA_FORTE.exec(n) ?? (solta ? AFIRMA_FRACA.exec(n) : null) ?? (solta ? AFIRMA_TE_ESPERO.exec(n) : null);
+    // Frase solta COM dia/hora ("Tudo certo pra terça às 10h! Te espero lá", "Combinado, terça às 10h então") vale sempre:
+    // ali a IA está tratando um horário como combinado.
+    const solta = (!opcoes.soForte && !opcoes.estrito) || (opcoes.soForte ? QUANDO_DIA.test(n) : quando);
+    const m =
+      AFIRMA_FORTE.exec(n) ??
+      (solta ? AFIRMA_FRACA.exec(n) : null) ??
+      (solta ? AFIRMA_TE_ESPERO.exec(n) : null) ??
+      // "Combinado, vou ver os horários de amanhã" / "Combinado! Quer que eu veja...": é a IA agindo ou oferecendo, não um horário combinado
+      (quando && !/\b(?:vou|vamos|posso|quer|deixa eu)\b/.test(n.split(';').find((c) => /\bcombinad/.test(c)) ?? n) ? AFIRMA_COMBINADO.exec(n) : null);
+    // "O pagamento antecipado confirmado garante sua vaga" é explicação; "Sua consulta está confirmada e o Pix garante
+    // sua vaga" NÃO é: o `garante` só livra quando o que está "confirmado" é o próprio pagamento/Pix.
+    if (m && /^(?:pagamento|pix)\b/.test(m[0]) && /\bgarant(?:e|em)\b/.test(n)) continue;
     if (m && !NAO_AFIRMA.test(oracaoDe(n, m.index + m[0].length))) return { trecho: t, forma: 'confirmacao', quando: null };
   }
   return null;
@@ -157,8 +172,13 @@ export function valorEmReais(s: string): number | null {
 }
 
 function valorDoComprovante(segmento: string): number | null {
-  const m = /valor[^R\d]{0,20}R\$\s*([\d.,]+)/i.exec(segmento) ?? /R\$\s*([\d.,]+)/i.exec(segmento);
-  return m ? valorEmReais(m[1]) : null;
+  const m = /valor[^$\d]{0,40}R\$\s*([\d.,]+)/i.exec(segmento);
+  if (m) return valorEmReais(m[1]);
+  // sem a palavra "valor": o primeiro R$ que não é saldo, limite ou tarifa ("Saldo R$ 100,00. Transferência de R$ 50,00" = 50)
+  for (const x of segmento.matchAll(/R\$\s*([\d.,]+)/gi)) {
+    if (!/(?:saldo|limite|tarifa)[^$]{0,20}$/i.test(segmento.slice(Math.max(0, (x.index ?? 0) - 25), x.index))) return valorEmReais(x[1]);
+  }
+  return null;
 }
 
 /** Cada "[imagem|arquivo do cliente]: COMPROVANTE…" da fala, com o valor lido e o carimbo. */
@@ -188,7 +208,7 @@ export function turnoDoComprovante(
   const anteriores = falasDoPaciente
     .slice(0, -1)
     .flatMap(comprovantesDoTexto)
-    .filter((c) => c.recebidoEm !== null && agora - c.recebidoEm <= PRAZO_DA_ESPERA_MS);
+    .filter((c) => c.recebidoEm !== null && agora - c.recebidoEm >= 0 && agora - c.recebidoEm <= PRAZO_DA_ESPERA_MS); // data no futuro (relógio/forjada) não vale
   const naEspera = [...(consultaNoCrm ? [] : anteriores), ...doTurno];
   return { noTurno, pendente: naEspera.length > 0, valores: naEspera.map((c) => c.valor) };
 }
@@ -202,7 +222,7 @@ export function turnoDoComprovante(
 const PART_PAGAMENTO = '(?:confirmad|aprovad|conferid|validad|compensad|identificad)[oa]s?';
 const AFIRMA_PAGAMENTO = new RegExp(
   [
-    `\\b(?:pagamento|pix|comprovante)\\s+(?:(?:ja|foi|esta|ficou)\\s+)+(?:\\S+\\s+)?${PART_PAGAMENTO}\\b`,
+    `\\b(?:pagamento|pix|comprovante)\\s+(?:(?:ja|foi|esta|ficou)\\s+)+(?:\\S+\\s+){0,3}?${PART_PAGAMENTO}\\b`,
     `\\b(?:pagamento|pix|comprovante)\\s+(?:ja\\s+)?(?:recebid[oa]s?\\s+e\\s+)?${PART_PAGAMENTO}\\b`,
     String.raw`\b(?:pix|pagamento|dinheiro|valor)\s+(?:ja\s+)?caiu\b`,
   ].join('|'),
@@ -212,6 +232,8 @@ export function afirmaPagamentoConferido(texto: string | null | undefined): bool
   return trechos(String(texto ?? '')).some((t) => {
     const n = normalizar(t);
     if (/\?\s*\S{0,3}$/.test(n) || EXPLICATIVA.test(n)) return false;
+    // "Com o Pix confirmado garante sua vaga": o confirmado é a condição do que vem depois — explicação
+    if (/\b(?:confirmad|aprovad|conferid|validad)[oa]s?,?\s+garant(?:e|em)\b/.test(n)) return false;
     const m = AFIRMA_PAGAMENTO.exec(n);
     return !!m && !NAO_AFIRMA.test(oracaoDe(n, m.index + m[0].length));
   });
@@ -345,15 +367,12 @@ export function travarAgendamentoPorComprovante(
 }
 
 /**
- * A resposta final PROMETE que a equipe vai agir ("a equipe confirma", "vou conferir com a recepção")? Só então a
- * tarefa se justifica. "Nossa equipe tem horário quinta" é oferta, não promessa.
+ * A resposta final CITA a equipe, a recepção ou a clínica? Na consulta desmarcada isso basta para abrir a tarefa: adivinhar
+ * "promessa" pelo texto (negação, modal, oração) falhou em frases comuns ("Pode deixar que a equipe vai te confirmar", "A
+ * equipe, em até 1 hora, vai te confirmar"). Tarefa a mais custa 1 minuto; a menos deixa o paciente esperando uma ligação.
  */
-export function prometeEquipe(texto: string | null | undefined): boolean {
-  const n = normalizar(String(texto ?? ''));
-  return (
-    /\b(?:equipe|recepcao|clinica|time)\b[^.!?]{0,40}\b(?:confirma|confirmara|retorna|retornara|te chama|chamara|entra em contato|vai (?:conferir|confirmar|verificar|ver|te)|avisa|responde)\b/.test(n) ||
-    /\b(?:vou|vamos|deixa eu|deixe eu) (?:conferir|confirmar|verificar|checar|ver)\b[^.!?]{0,30}\b(?:equipe|recepcao|clinica)\b/.test(n)
-  );
+export function citaEquipe(texto: string | null | undefined): boolean {
+  return /\b(?:equipe|recepcao|clinica|time)\b/.test(normalizar(String(texto ?? '')));
 }
 
 /** Rajada de PDFs do mesmo comprovante (Bebedouro mandou 5 em 1 minuto) = uma tarefa; outro comprovante, mais tarde, outra. */

@@ -203,11 +203,12 @@ export async function rodarCaso(
     const resposta = await comTools.invoke(mensagens);
 
     const bruto = textoDaResposta(resposta.content);
-    const g = aplicarGuardrail(bruto, unit);
+    const falasDoPaciente = caso.historico.filter((t) => t.de === 'paciente').map((t) => t.texto);
+    const g = aplicarGuardrail(bruto, unit, { mensagensDoPaciente: falasDoPaciente.slice(-3) });
     // O eval não executa ferramentas, então a trava do grafo (confirmacao-so-com-crm.ts: comprovante só a equipe confirma;
     // unidade com taxa de reserva só marca com comprovante do valor exato) é aplicada aqui à chamada planejada: o que o
     // grafo recusaria não conta como "chamou agendar_consulta".
-    const turnoDaTrava = turnoDoComprovante(caso.historico.filter((t) => t.de === 'paciente').map((t) => t.texto));
+    const turnoDaTrava = turnoDoComprovante(falasDoPaciente);
     const decisaoDaTrava = decidirTrava(turnoDaTrava, {
       exigePagamento: Boolean(unit.spineBookingRequiresPayment),
       taxaEsperada: precosDaConsulta(unit)?.antecipado ?? null,
@@ -218,9 +219,9 @@ export async function rodarCaso(
     }));
 
     const falhas = conferir(
-      { texto: g.text, ferramentas },
+      { texto: g.text, ferramentas, gatilhosDoGuardrail: g.triggered },
       caso.espera,
-      { unit, outrasUnidades: ctx.outrasUnidades },
+      { unit, outrasUnidades: ctx.outrasUnidades, falasDoPaciente: falasDoPaciente.slice(-3) },
     );
 
     return {

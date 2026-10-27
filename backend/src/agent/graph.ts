@@ -12,14 +12,17 @@ import { buildTools } from './tools.js';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { TraceRecorder } from './trace-recorder.js';
 import { getActiveConfig } from './config.js';
-import { composeSystemPromptForUnit, composeSystemPromptPartsForUnit } from './prompt-composer.js';
-import { precosDaConsulta } from './prompt-composer.js';
+import { composeSystemPromptForUnit, composeSystemPromptPartsForUnit, precosDaConsulta } from './prompt-composer.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.js';
 import { createChatModel, invokeChatModel } from '../services/openai.service.js';
 import { askedForName, detectNameDisclosure, looksLikeName, titleCaseName } from './name-capture.js';
 import { aplicarGuardrail } from './guardrail.js';
 import type { OfertaVigente } from './oferta-da-campanha.js';
+import { falasDoTurno, fraseDoPasse } from './sinal-de-alerta.js';
+import { pacienteFalouDePs } from './sem-pronto-socorro.js';
+import { passarPorSinalNoTurno } from './passe-por-sinal.js';
+import { retornoDaEquipe } from '../lib/retorno-da-equipe.js';
 import { semDiminutivo } from '../lib/sem-diminutivo.js';
 import { semIntimidade } from '../lib/sem-intimidade.js';
 import { carregarRede, semDraSofiaNaDH, type UnidadeDaRede } from './rede-doutor-hernia.js';
@@ -79,7 +82,7 @@ import {
   abrirTarefaParaEquipe,
   afirmaConfirmacao,
   detalheDoValor,
-  prometeEquipe,
+  citaEquipe,
   afirmouComConsultaDesmarcada,
   blocoDizDesmarcada,
   respostaDoComprovante,
@@ -96,7 +99,6 @@ import {
   LlmTimeoutError,
   textoDoTeto,
 } from './llm-policy.js';
-import { retornoDaEquipe } from '../lib/retorno-da-equipe.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
 import {
   agendamentoDoVinculo,
@@ -613,6 +615,9 @@ export async function buildAgentGraph(
     });
 
     const nonSystemMessages = state.messages.filter((m) => m.getType() !== 'system');
+    // O que o PACIENTE disse neste turno (sem as linhas da equipe do <conversa_oficial>): de onde saem a rede de
+    // segurança do sinal de alerta e a exceção do pronto-socorro.
+    const mensagensDoPaciente = falasDoTurno(nonSystemMessages.map((m) => ({ tipo: m.getType(), texto: aiTextFromContent(m.content) })));
     const lastHuman = [...nonSystemMessages].reverse().find((m) => m.getType() === 'human');
     // O HumanMessage carrega o bloco <conversa_oficial> pregado na frente (webhook e salesbot).
     // Tudo que decide sobre O QUE O PACIENTE ESCREVEU — só um cumprimento, busca no RAG, nome —
@@ -728,7 +733,9 @@ export async function buildAgentGraph(
             title: `💸 Conversa passou do teto de gasto (US$ ${teto.usd.toFixed(2)} em ${teto.turnos} turnos) — humano assume`,
             payload: { usd: teto.usd, turnos: teto.turnos, teto: teto.teto },
           });
-          registrarPausaPropria(unit, leadIdDaConversa); // o FALLBACK_TETO avisa o paciente: a trava não o descarta
+          // o FALLBACK_TETO avisa o paciente: a trava não o descarta. Sem o campo de pausa nada é pausado, e a
+          // marca soltaria a resposta atropelada com o próximo turno respondendo de novo.
+          if (unit?.kommoPausedFieldId) registrarPausaPropria(unit, leadIdDaConversa);
           void entregarAoHumano(unit, kommoClient, leadIdDaConversa, teto, recorder);
         }
         // O paciente NÃO fica no vácuo. Conversa cara é quase sempre conversa
@@ -743,6 +750,26 @@ export async function buildAgentGraph(
 
     const t0 = performance.now();
     let response: AIMessage;
+    // O modelo caiu (principal e plano B): o paciente recebe o texto de "IA indisponível", MAS se ele disse um sinal de
+    // alerta a equipe é avisada do mesmo jeito (pausar_ia com a flag) e a frase do passe sai no lugar.
+    const respostaIndisponivel = async (): Promise<Partial<AgentStateType>> => {
+      let texto = FALLBACK_INDISPONIVEL;
+      try {
+        const passe = await passarPorSinalNoTurno({
+          unit,
+          leadId: state.leadId,
+          mensagens: nonSystemMessages,
+          falasDoPaciente: mensagensDoPaciente,
+          tools,
+          recorder,
+          textoFinal: FALLBACK_INDISPONIVEL,
+        });
+        texto = passe.texto;
+      } catch (err) {
+        logger.warn({ err: String(err), unit: unit.slug }, 'sinal de alerta: a rede de segurança falhou com o modelo fora do ar');
+      }
+      return { messages: [new AIMessage(texto)], decision: texto };
+    };
     // Quem respondeu este turno. Muda só quando a chave reserva assume — aí a reescrita da
     // pergunta final (mais abaixo) também sai pela reserva, em vez de bater de novo na chave morta.
     let modeloAtivo = model;
@@ -857,10 +884,7 @@ export async function buildAgentGraph(
             },
             latencyMs: Math.round(performance.now() - t0),
           });
-          return {
-            messages: [new AIMessage(FALLBACK_INDISPONIVEL)],
-            decision: FALLBACK_INDISPONIVEL,
-          } satisfies Partial<AgentStateType>;
+          return respostaIndisponivel();
         }
       } else {
         await recorder.step({
@@ -869,10 +893,7 @@ export async function buildAgentGraph(
           payload: { erroPrincipal, timeoutMs: AGENT_NODE_TIMEOUT_MS },
           latencyMs: Math.round(performance.now() - t0),
         });
-        return {
-          messages: [new AIMessage(FALLBACK_INDISPONIVEL)],
-          decision: FALLBACK_INDISPONIVEL,
-        } satisfies Partial<AgentStateType>;
+        return respostaIndisponivel();
       }
     }
     const latency = Math.round(performance.now() - t0);
@@ -1186,9 +1207,8 @@ export async function buildAgentGraph(
           respostaFixa = true;
         }
         response.content = textoFinal;
-        // Tarefa só quando a resposta final promete a equipe (recado fixo, ou a refeita diz "equipe"): refeita limpa, que
-        // só pergunta ou oferece horário novo, não vira tarefa falsa.
-        if (desmarcada && (saida === 'neutra' || prometeEquipe(textoFinal)) && kommoClient && state.leadId) {
+        // Tarefa quando a resposta final cita a equipe/recepção/clínica (o recado fixo cita): sem adivinhar "promessa" pelo texto.
+        if (desmarcada && (saida === 'neutra' || citaEquipe(textoFinal)) && kommoClient && state.leadId) {
           await abrirTarefaParaEquipe({
             slug: unit.slug,
             unitId: unit.id,
@@ -1211,8 +1231,29 @@ export async function buildAgentGraph(
         });
       }
 
+      // Sinal de alerta dito com todas as letras e o modelo NÃO avisou (26/10/2026): a regra de 21/10 estava no prompt e
+      // Olímpia/Mossoró/Balsas/Rio Verde ficaram sem etiqueta, sem tarefa e sem aviso. Aqui o código passa pela mesma
+      // ferramenta pausar_ia (etiqueta 🔴 PRIORIDADE + tarefa LIGAR AGORA + Telegram do João). Só frase sem ambiguidade
+      // (sinal-de-alerta.ts); a fala vaga fica com o modelo, que pergunta UM sinal.
+      const passe = await passarPorSinalNoTurno({
+        unit,
+        leadId: state.leadId,
+        mensagens: nonSystemMessages,
+        falasDoPaciente: mensagensDoPaciente,
+        tools,
+        recorder,
+        textoFinal,
+      });
+      // A rede trocou o texto (mesmo com a pausa falha): a refeita da "pergunta final" não pode virar a frase do passe em
+      // pergunta de venda com a IA ligada.
+      const passouPorSinal = passe.avisou || passe.texto !== textoFinal;
+      if (passe.texto !== textoFinal) {
+        textoFinal = passe.texto;
+        response.content = textoFinal;
+      }
+
       const cta = avaliarChamadaFinal(textoFinal, { pacienteEncerrou: !!encerrou });
-      if (cta.precisaRefazer && !respostaFixa && !detectarVazamento(textoFinal) && aplicarGuardrail(textoFinal, unit, extrasDoGuardrail).triggered.length === 0) {
+      if (cta.precisaRefazer && !passouPorSinal && !respostaFixa && !detectarVazamento(textoFinal) && aplicarGuardrail(textoFinal, unit, { mensagensDoPaciente, ...extrasDoGuardrail }).triggered.length === 0) {
         const t1 = performance.now();
         try {
           const refeita = (await withTimeout(
@@ -1255,7 +1296,8 @@ export async function buildAgentGraph(
       // Se a resposta desobedeceu: conversa travada / 2º áudio não ouvido sem transferir → passa aqui, em código, pela
       // mesma ferramenta pausar_ia; pediu o nome pela 3ª vez → refaz UMA vez sem o pedido (se a refeita não servir,
       // fica a original — um 3º pedido é ruim, mas mensagem quebrada é pior).
-      const trava = travaDaResposta(repeticao, textoFinal, ferramentasDoTurno(nonSystemMessages));
+      // Já passou por sinal de alerta neste turno: a trava da repetição não pausa de novo nem troca a frase do passe.
+      const trava = passouPorSinal ? null : travaDaResposta(repeticao, textoFinal, ferramentasDoTurno(nonSystemMessages));
       if (trava?.acao === 'passar_para_equipe') {
         const pausar = tools.find((t) => t.name === 'pausar_ia');
         let resultadoPausa: string | null = null;
@@ -1366,7 +1408,12 @@ export async function buildAgentGraph(
         textoFinal = semDra;
         response.content = textoFinal;
       }
-      const guardBruto = aplicarGuardrail(semIntimidade(semDiminutivo(textoFinal)), unit, extrasDoGuardrail);
+      // Turno de aviso urgente: se o corte do pronto-socorro levar a resposta inteira, sai a frase do passe (não a de reserva).
+      const guardBruto = aplicarGuardrail(semIntimidade(semDiminutivo(textoFinal)), unit, {
+        ...extrasDoGuardrail,
+        mensagensDoPaciente,
+        fraseDeReserva: passouPorSinal ? fraseDoPasse(retornoDaEquipe(unit), pacienteFalouDePs(mensagensDoPaciente)) : undefined,
+      });
       // O que o guardrail devolve (correção ou texto de reserva) passa pela mesma trava do nome.
       const guard = { ...guardBruto, text: semDraSofiaNaDH(guardBruto.text, unit, rede) };
       if (guard.rewritten) {

@@ -202,7 +202,7 @@ function normalize(raw: SpineRawSchedule, tz: string): SpineSchedule {
   };
 }
 
-function somarDias(yyyymmdd: string, dias: number): string {
+export function somarDias(yyyymmdd: string, dias: number): string {
   const t = Date.parse(`${yyyymmdd}T00:00:00Z`);
   if (Number.isNaN(t)) return yyyymmdd;
   return new Date(t + dias * 86_400_000).toISOString().slice(0, 10);

@@ -18,7 +18,6 @@ const FERRAMENTAS_REAIS = new Set([
   'mover_etapa',
   'mover_funil',
   'pausar_ia',
-  'avisar_sinal_de_alerta',
   'atualizar_titulo_lead',
   'resumir_lead_para_sdr',
   'criar_tarefa',

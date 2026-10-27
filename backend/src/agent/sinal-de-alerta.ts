@@ -1,39 +1,72 @@
 import type { Unit } from '@prisma/client';
+import type { BaseMessage } from '@langchain/core/messages';
+import { quandoAEquipeResponde, type RetornoDaEquipe } from '../lib/retorno-da-equipe.js';
 
 /**
- * Sinal de alerta clínico: acolher, marcar e passar NA HORA para a equipe — e quase nunca pronto-socorro.
+ * Sinal de alerta clínico: acolher em UMA frase, PARAR a IA e passar NA HORA para a equipe ligar.
  *
- * Item 1 das prioridades da IA (21/10/2026): de 01 a 20/10 a Sofia mandou paciente ao pronto-socorro em 44
- * conversas, ~13 delas sem sinal de alerta de verdade — inclusive gente com consulta paga e horário livre.
- * Duas causas no que a IA lê:
- *  - a regra da rede dizia só "sinal de alerta clínico → PARE a condução comercial e transfira", sem dizer
- *    o que é sinal de alerta nem quando cabe falar em pronto-socorro;
- *  - a regra "sinal de alerta" cadastrada em 26 unidades faz UMA pergunta com vários sinais juntos, e o
- *    "sim" do paciente (a qualquer um deles, ou só concordando) virava confirmação e pronto-socorro.
- *
- * Regra decidida (João, 21/10): acolher, marcar o sinal de alerta e passar NA HORA para humano.
- * Pronto-socorro só se não houver horário HOJE **e** o paciente disser que a dor está insuportável.
- *
- * Ajuste do João (21/10, à tarde) para os SINAIS GRAVES DA COLUNA (perder o controle do xixi ou das fezes,
- * dormência na virilha/"região da sela", perna fraca de repente): a Sofia não manda ao pronto-socorro nem
- * transfere de cara — ela TENTA AGENDAR o horário mais próximo (hoje/amanhã) e avisa a equipe na hora
- * (`avisar_sinal_de_alerta`, que não pausa). Só transfere se ele recusar, não houver horário até amanhã ou a
- * conversa travar. Os outros sinais (queda/pancada, febre com dor) seguem a regra da manhã.
+ * Decisão do João em 26/10/2026 (itens 1 e 2 da conferência da Suzanne), que SUBSTITUI as de 21/10:
+ *  - sinal de alerta (perder força na perna, não segurar xixi/fezes, dormência entre as pernas, dor que piorou
+ *    de repente, febre com dor, queda/pancada recente) → a IA para na hora. Acabou o "tentar agendar antes"
+ *    dos sinais graves da coluna: a regra de 21/10 estava no ar e os casos aconteceram (Olímpia, Mossoró,
+ *    Balsas, Rio Verde: nenhuma etiqueta 🔴 PRIORIDADE nas 21 contas, ninguém da equipe avisado);
+ *  - o aviso é a etiqueta 🔴 PRIORIDADE no cartão + a tarefa "LIGAR AGORA" no Kommo + o Telegram do João.
+ *    WhatsApp não: o número de alertas foi banido (06/10);
+ *  - a Sofia NUNCA sugere pronto-socorro/UPA/hospital/emergência por conta própria e NUNCA opina sobre médico
+ *    ou cirurgia. Se o PRÓPRIO paciente perguntar se deve ir, ou disser que vai, ela não desaconselha: diz que,
+ *    se ele sente que não dá para esperar, pode ir, e que a equipe já foi avisada. Some a exceção de 21/10
+ *    ("sem horário hoje + dor insuportável").
  */
 
-/** Motivo de `pausar_ia` que é sinal de alerta — rede de segurança para quando o modelo esquece a flag. */
-export const MOTIVO_SINAL_DE_ALERTA =
-  /sinal(is)? de alerta|red ?flag|bandeira vermelha|emerg[eê]ncia|perda de for[cç]a|perdendo (a )?for[cç]a|incontin[eê]ncia|(controle|segurar) (d[oa]s? |[oa]s? )?(xixi|urina|fezes|intestino|bexiga)|anestesia em sela/i;
+/** Etiqueta que o cartão ganha quando a IA para por sinal de alerta (nome exato pedido pela Suzanne, 25/10). */
+export const ETIQUETA_PRIORIDADE = '🔴 PRIORIDADE';
+/** Plano B se o Kommo recusar o emoji (nunca provado: ver `avisarSinalDeAlerta`). */
+export const ETIQUETA_PRIORIDADE_SEM_EMOJI = 'PRIORIDADE';
 
+/** Motivo de `pausar_ia` que é sinal de alerta — rede de segurança para quando o modelo esquece a flag. */
+export const MOTIVO_SINAL_DE_ALERTA = new RegExp(
+  [
+    String.raw`sina(?:l|is) de alerta`,
+    String.raw`red ?flag`,
+    String.raw`bandeira vermelha`,
+    String.raw`emerg[eê]ncia`,
+    String.raw`perda de for[cç]a`,
+    String.raw`perdendo (?:a )?for[cç]a`,
+    String.raw`incontin[eê]ncia`,
+    String.raw`(?:controle|segur\w*) (?:d[oa]s? |[oa]s? )?(?:xixi|urina|fezes|intestino|bexiga)`,
+    String.raw`anestesia em sela`,
+    // dormência/febre/AVC sem âncora tornavam urgentes "nega dormência" e "teve AVC em 2019" (revisão de 26/10)
+    String.raw`dorm[eê]ncia (?:na|no|em|entre) (?:a |o )?(?:virilha|regi[aã]o [ií]ntima|sela|per[ií]neo|as pernas)`,
+    String.raw`piorou de repente|piora repentina`,
+    String.raw`febre (?:e|com|junto)(?: a| de)? dor`,
+    String.raw`pergunta de seguran[cç]a`,
+    String.raw`for[cç]a (?:n[ao]s? )?perna`,
+    String.raw`xixi\/intestino`,
+    String.raw`sinal neurol[oó]gico|boca torta|fala enrolada|suspeita de (?:AVC|derrame)|(?:AVC|derrame) (?:agora|atual|em andamento)`,
+  ].join('|'),
+  'gi',
+);
+
+/** O motivo da pausa é sinal de alerta — e não vem negado ("nega dormência na virilha", "sem sinal de alerta")? */
 export function ehHandoffPorSinalDeAlerta(motivo: string | null | undefined, flag?: boolean): boolean {
-  return flag === true || MOTIVO_SINAL_DE_ALERTA.test(motivo ?? '');
+  if (flag === true) return true;
+  const texto = motivo ?? '';
+  for (const m of texto.matchAll(MOTIVO_SINAL_DE_ALERTA)) {
+    // "não está segurando o xixi": a negação é o próprio sinal, não nega nada
+    // "sem controle da urina", "não tem controle do xixi", "sem força na perna": a negação também é o próprio sinal
+    if (/^(?:segur|controle|for[cç]a)/i.test(m[0]) || !negadoAntes(texto, m.index ?? 0)) return true;
+  }
+  return false;
 }
 
 /** Tarefa criada pela regra da unidade que já é o aviso urgente — evita dois avisos no mesmo turno. */
-export const TAREFA_URGENTE = /sinal(is)? de alerta|bandeira vermelha|emerg[eê]ncia/i;
+export const TAREFA_URGENTE = /sina(?:l|is) de alerta|bandeira vermelha|emerg[eê]ncia/i;
+const LIGAR_AGORA = /ligar agora/i;
+/** Tarefa que a regra da unidade escreveu por sinal de alerta (sem "emergência": "contato de emergência" é outra coisa). */
+const TAREFA_DE_SINAL = /(?<!\b(?:sem|nenhum|nem)\s)(?:sina(?:l|is) de alerta|bandeira vermelha|red ?flag)/i;
 
 /** Orientação ou mensagem cadastrada na unidade que manda o paciente ao pronto-socorro. */
-const CITA_PRONTO_SOCORRO = /pronto[\s-]*(socorro|atendimento)|\bUPA\b|\bemerg[eê]ncia\b/i;
+const CITA_PRONTO_SOCORRO = /pronto[\s-]*(socorro|atendimento)|\bUPA\b|\bSAMU\b|\bemerg[eê]ncia\b/i;
 
 export function citaProntoSocorro(texto: string | null | undefined): boolean {
   return CITA_PRONTO_SOCORRO.test(texto ?? '');
@@ -41,19 +74,39 @@ export function citaProntoSocorro(texto: string | null | undefined): boolean {
 
 /**
  * Colada na regra da unidade que cita pronto-socorro. O cadastro é dado de produção e não muda por aqui;
- * a trava muda o que a IA LÊ, para a orientação antiga não ganhar da regra da rede.
+ * a trava muda o que a IA LÊ, para a orientação antiga não ganhar da regra da rede. Sem exceção: a Sofia não
+ * sugere pronto-socorro (decisão de 26/10). A saída também é varrida por `sem-pronto-socorro.ts`.
  */
 export function travaDoProntoSocorro(texto: string | null | undefined): string {
   if (!citaProntoSocorro(texto)) return '';
   return (
-    ' [REGRA DA REDE, vale mais que o texto acima: pronto-socorro SÓ quando não houver horário HOJE na ' +
-    'clínica E o paciente disser que a dor está insuportável. Fora disso, não cite pronto-socorro (se for ' +
-    'mensagem pronta, mande sem essa parte) e siga <sinal_de_alerta>.]'
+    ' [REGRA DA REDE, vale mais que o texto acima: NUNCA sugira pronto-socorro, UPA, hospital ou emergência ' +
+    'por conta própria — mande esta parte sem essa menção. Se o próprio paciente perguntar se deve ir ou disser ' +
+    'que vai, não desaconselhe: diga que, se ele sente que não dá para esperar, pode ir, e que a equipe já foi ' +
+    'avisada. Siga <sinal_de_alerta>.]'
   );
 }
 
+/**
+ * Texto livre da unidade (fontes oficiais, manual, base de conhecimento, aprendizados) que cita pronto-socorro: cada
+ * LINHA que cita ganha a ressalva da rede. Medido em 26/10: `source_papel` de 8 unidades de resgate diz "febre com dor
+ * -> pronto-atendimento com urgencia", o manual (`system_prompt`) de 27 diz o mesmo e a base de conhecimento de 9
+ * unidades manda "procure um pronto-atendimento". O cadastro é dado de produção e não muda por aqui.
+ */
+export function travarProntoSocorroPorLinha(texto: string | null | undefined): string {
+  if (!texto || !citaProntoSocorro(texto)) return texto ?? '';
+  return texto
+    .split('\n')
+    .map((linha) =>
+      citaProntoSocorro(linha)
+        ? `${linha} [REGRA DA REDE: não sugira pronto-socorro; sinal confirmado = pare (ver sinal_de_alerta)]`
+        : linha,
+    )
+    .join('\n');
+}
+
 /** Regra da unidade cuja CONDIÇÃO é sinal de alerta — costuma mandar transferir de cara. */
-const CONDICAO_SINAL_DE_ALERTA = /sinal(is)? de alerta|red ?flag|bandeira vermelha|emerg[eê]ncia|perda de for[cç]a|xixi|urina|fezes|esf[ií]ncter|\bsela\b/i;
+const CONDICAO_SINAL_DE_ALERTA = /sina(?:l|is) de alerta|red ?flag|bandeira vermelha|emerg[eê]ncia|perda de for[cç]a|xixi|urina|fezes|esf[ií]ncter|\bsela\b|dorm[eê]ncia|febre|virilha|de repente/i;
 
 /**
  * Regra de SINAL DE ALERTA disparada por queda, pancada ou acidente sem dizer de quando (a "trauma/febre" cadastrada
@@ -78,95 +131,117 @@ const TRAVA_TRAUMA_ANTIGO =
   'ou cirurgia de meses ou anos atrás não é sinal de alerta: responda e siga o atendimento normal.]';
 
 /**
- * Colada na regra da unidade disparada por sinal de alerta: nos sinais graves da coluna, a transferência
- * imediata que o cadastro manda vira "tente agendar antes" (ajuste do João, 21/10).
+ * Colada na regra da unidade disparada por sinal de alerta: o cadastro costuma mandar "transferir" sem dizer
+ * como. Aqui a ordem fica igual à da rede (26/10): acolher em UMA frase, resumir e pausar com `sinalDeAlerta`.
  */
 export function travaDaRegraDeSinalDeAlerta(condicao: string | null | undefined): string {
   if (!CONDICAO_SINAL_DE_ALERTA.test(condicao ?? '')) return '';
   const trauma = regraDeTraumaSemPrazo(condicao ?? '') ? TRAVA_TRAUMA_ANTIGO : '';
   return (
-    ' [REGRA DA REDE, vale mais que esta regra: nos SINAIS GRAVES DA COLUNA não transfira nem pause antes de ' +
-    'tentar agendar — ofereça o horário mais próximo, chame avisar_sinal_de_alerta e só transfira se ele ' +
-    'recusar, não houver horário até amanhã ou a conversa travar. Ver <sinal_de_alerta>.]' +
+    ' [REGRA DA REDE, vale mais que esta regra: confirmado o sinal, PARE na hora — nada de tentar agendar nem ' +
+    'de oferecer horário antes. Acolha em UMA frase, chame resumir_lead_para_sdr e depois pausar_ia com ' +
+    'sinalDeAlerta: true (isso etiqueta 🔴 PRIORIDADE e cria a tarefa LIGAR AGORA). Não cite pronto-socorro. ' +
+    'Ver <sinal_de_alerta>.]' +
     trauma
   );
 }
 
-/** O bloco do prompt. Só para clínica (`category = 'saude'`), como o resto da trava clínica. */
+/**
+ * Clínica para efeito do sinal de alerta: `saude` OU categoria vazia. Em produção 12 unidades Doutor Hérnia ativas têm
+ * a categoria em branco (Capivari, Caxias, Cerquilho, Petrópolis, Salto, Tatuí…) e ficavam sem o bloco, sem a trava
+ * do pronto-socorro e sem a rede de segurança. Jurídico, energia solar etc. continuam de fora.
+ */
+export function ehClinicaParaSinalDeAlerta(unit: Pick<Unit, 'category'>): boolean {
+  const c = unit.category?.trim();
+  return !c || c === 'saude';
+}
+
+/** O bloco do prompt. Só para clínica (ver `ehClinicaParaSinalDeAlerta`). */
 export function renderSinalDeAlerta(unit: Pick<Unit, 'category'>): string {
-  if (unit.category?.trim() !== 'saude') return '';
+  if (!ehClinicaParaSinalDeAlerta(unit)) return '';
   return `<sinal_de_alerta>
-(ALTA PRIORIDADE — vale mais que qualquer orientação das <acoes> que mande ao pronto-socorro ou
-mande transferir antes de tentar agendar)
-- COMO PERGUNTAR: um sinal por pergunta. Um "sim" solto a uma pergunta com vários sinais não
-  confirma nada — pergunte qual deles a pessoa sente antes de tratar como sinal de alerta.
-- VÁRIAS MENSAGENS SEGUIDAS: leia todas antes de responder. Se QUALQUER uma traz dor, limitação ou
-  sinal clínico, acolha ISSO primeiro — nunca responda só ao "tudo bem" ou ao "boa noite" do fim.
-- LINGUAGEM DO DIA A DIA (e erro de digitação) conta igual: "me faltou/faltaram as pernas" ("mim
-  falou as pernas"), "as pernas falharam", "a perna bambeou", "quase não andei" ("quer não andei"),
-  "não consigo andar", "travei". Acolha em UMA frase e faça a pergunta de sinais de alerta, UM sinal
-  por vez — comece pela força da perna ("a perna ficou fraca, sem força?") — e siga o que vem abaixo
-  conforme a resposta.
-- DOR QUE VAI PARA A VIRILHA, OS TESTÍCULOS, A REGIÃO ÍNTIMA OU A BARRIGA ("irradia pra virilha",
-  "chega nos testículos", "dói o saco", "vai pra barriga"): não pule para sono e trabalho. Acolha em UMA
-  frase e faça a pergunta de sinais de alerta, UM sinal por vez — comece pela dormência ("a virilha ou a
-  região íntima fica dormente, adormecida?") e depois o controle do xixi e das fezes. Sem diagnosticar
-  (nada de "pode ser rim", "pode ser hérnia"). Se ele não tiver nenhum dos sinais, siga o atendimento normal.
-- NÃO É sinal de alerta: dor forte, dor que piorou, dor que desce para a perna ou formigamento,
-  sozinhos. Siga o atendimento normal.
-- SINAIS GRAVES DA COLUNA: perder o controle do xixi ou das fezes, dormência na virilha / região
-  íntima ("região da sela"), perna que ficou fraca de repente ou está piorando. Aqui a ordem é:
-  (1) acolha em UMA frase, sem assustar e sem diagnosticar;
-  (2) TENTE AGENDAR: consulte a agenda e ofereça o horário mais próximo, priorizando hoje e amanhã,
-      e marque se ele aceitar (o caminho normal de cadastro e agendamento);
-  (3) no MESMO turno em que confirmar o sinal, chame avisar_sinal_de_alerta — avisa a equipe na hora,
-      com urgência, e NÃO pausa a IA. Não chame pausar_ia antes de tentar agendar.
-  Só transfira (resumir_lead_para_sdr e depois pausar_ia com sinalDeAlerta: true) se ele recusar o
-  horário, se não houver horário até amanhã, ou se a conversa travar.
-- OUTROS SINAIS DE ALERTA (dor depois de queda ou pancada forte RECENTE — acidente também, de dias ou
-  poucas semanas —, febre junto com a dor): acolha em UMA frase e transfira NA HORA, sem pedir licença:
-  resumir_lead_para_sdr e depois pausar_ia com sinalDeAlerta: true. O resultado de pausar_ia diz o que
-  falar sobre quando a equipe responde.
+(ALTA PRIORIDADE — decisão do João, 26/10. Vale mais que qualquer orientação das <acoes>, do cadastro
+da unidade e dos modelos de mensagem)
+- SINAL DE ALERTA é quando o paciente diz que: (a) perdeu força na perna, ou a perna está fraca, bamba,
+  falhando; (b) não consegue segurar o xixi ou as fezes (escape, "se molhou", "não senti"); (c) sente
+  dormência ou adormecimento na virilha, entre as pernas ou na região íntima; (d) a dor PIOROU DE REPENTE
+  (de uma hora para outra, não aos poucos); (e) está com febre junto com a dor; (f) sente dor depois de
+  queda, pancada ou acidente RECENTE (dias ou poucas semanas); (g) diz que teve AVC ou derrame agora, ou
+  está com a boca torta, a fala enrolada ou um braço ou perna que treme ou não mexe de repente (isso não é
+  da coluna: não explique nada, pare como abaixo).
+- CONFIRMADO O SINAL, A IA PARA NA HORA. Nada de oferecer horário, de "tentar agendar antes", de perguntar
+  de sono ou de trabalho, de seguir a conversa comercial. No MESMO turno, nesta ordem:
+  (1) resumir_lead_para_sdr; (2) pausar_ia com sinalDeAlerta: true — isso já coloca a etiqueta
+  🔴 PRIORIDADE no cartão, cria a tarefa LIGAR AGORA e avisa o João; (3) responda UMA frase que acolhe,
+  sem assustar e sem diagnosticar, e diz o que o resultado de pausar_ia mandar sobre a equipe.
+  Não chame consultar_horarios nem agendar_consulta depois de um sinal confirmado.
+- QUANDO A FALA É CLARA ("não estou segurando o xixi", "minha perna está perdendo força"), é sinal
+  confirmado: não pergunte de novo, pare.
+- QUANDO A FALA É VAGA, acolha em UMA frase e faça UMA pergunta com UM sinal só (um "sim" solto a uma
+  pergunta com vários sinais não confirma nada): "a perna ficou fraca, sem força?". Se ele confirmar, pare
+  como acima; se negar, siga o atendimento normal. Resposta parcial a esse UM sinal ("às vezes", "um pouco",
+  "de vez em quando", "mais ou menos", "já aconteceu") CONFIRMA: pare. Nunca repita a pergunta de segurança
+  uma segunda vez — quem não respondeu direito vai para a equipe.
+- VÁRIAS MENSAGENS SEGUIDAS: leia todas antes de responder. Se QUALQUER uma traz dor, limitação ou sinal
+  clínico, acolha ISSO primeiro — nunca responda só ao "tudo bem" ou ao "boa noite" do fim.
+- LINGUAGEM DO DIA A DIA (e erro de digitação) conta igual: "me faltou/faltaram as pernas"
+  ("mim falou as pernas"), "as pernas falharam", "a perna bambeou", "quase não andei" ("quer não andei"),
+  "não consigo andar", "travei". É fala vaga: faça a pergunta de UM sinal, como acima.
+- DOR QUE VAI PARA A VIRILHA, OS TESTÍCULOS, A REGIÃO ÍNTIMA OU A BARRIGA ("irradia pra virilha", "chega
+  nos testículos", "dói o saco", "vai pra barriga"): não pule para sono e trabalho. Acolha em UMA frase e
+  pergunte UM sinal — comece pela dormência ("a virilha ou a região íntima fica dormente, adormecida?") e
+  depois o controle do xixi e das fezes. Sem diagnosticar (nada de "pode ser rim", "pode ser hérnia"). Se
+  ele não tiver nenhum dos sinais, siga o atendimento normal.
+- NÃO É sinal de alerta: dor forte, dor que piorou aos poucos ou há dias, dor que desce para a perna ou
+  formigamento, sozinhos. Siga o atendimento normal.
 - ACIDENTE, FRATURA OU CIRURGIA ANTIGA (meses ou anos atrás), com dor que veio depois: NÃO é sinal de
   alerta. Responda o que ele perguntou ("pode ter relação, sim — é isso que o especialista examina na
   consulta") e siga o atendimento normal.
-- PRONTO-SOCORRO: o sinal, sozinho, NÃO é motivo de pronto-socorro. Só cite pronto-socorro quando as
-  DUAS coisas forem verdade — (a) não há horário HOJE na clínica (consultar_horarios não achou nada
-  hoje, ou a clínica já fechou hoje) E (b) o paciente disse que a dor está insuportável. Nunca "por
-  precaução" — muito menos para quem já tem consulta marcada ou paga.
-- Se o próprio paciente disser que vai ao pronto-socorro, ou perguntar se deve ir, NUNCA desaconselhe:
-  diga que, se ele sente que não dá para esperar, pode ir, e que a equipe já foi avisada.
+- PRONTO-SOCORRO: você NUNCA sugere pronto-socorro, UPA, hospital, SAMU ou emergência por conta própria —
+  nem "por precaução", nem sem horário hoje, nem com dor insuportável. Não há exceção sua.
+- Se o PRÓPRIO paciente perguntar se deve ir ao pronto-socorro, ou disser que vai: NUNCA desaconselhe (e
+  não mande ir). Trate como sinal de alerta — resumir_lead_para_sdr e pausar_ia com sinalDeAlerta: true,
+  se ainda não fez — e diga que, se ele sente que não dá para esperar, pode ir, e que a equipe já foi avisada.
+- MÉDICO E CIRURGIA: você NUNCA opina sobre médico (qual procurar, se outro especialista serve melhor, se
+  este ou aquele é bom) nem sobre cirurgia (se precisa, se não precisa, "caminho cirúrgico", "indicação
+  cirúrgica"). Isso é do especialista, na consulta.
 - NUNCA prometa prazo da equipe ("em instantes", "já já", "logo te chamam").
 </sinal_de_alerta>`;
 }
 
 /**
- * Em que pé está a conversa quando a equipe é avisada:
- *  - `agendando`: sinal grave da coluna, a IA segue tentando marcar o horário mais próximo (não pausou);
- *  - `transferiu`: a IA parou e passou o atendimento.
+ * Em que pé está a conversa quando a equipe é avisada. Desde 26/10 só existe `transferiu`: a IA para e a equipe
+ * liga. (`agendando` era o "tentar agendar antes" de 21/10, abandonado.)
  */
-export type SituacaoDoAviso = 'agendando' | 'transferiu';
+export type SituacaoDoAviso = 'transferiu';
 
 /** Uma tarefa por situação por cartão a cada 24 h (`card_alert`, a mesma regra dos outros avisos). */
 export const CHAVE_DO_AVISO: Record<SituacaoDoAviso, string> = {
-  agendando: 'sinal-de-alerta-agendando',
   transferiu: 'sinal-de-alerta-transferiu',
 };
 
-/** Texto da tarefa urgente no Kommo. `ALERTA · <slug> · [Contato: nome]` é o formato que o roteador de alertas lê. */
-export function textoDoAvisoUrgente(a: {
-  slug: string;
-  nome: string | null;
-  motivo: string;
-  situacao?: SituacaoDoAviso;
-}): string {
+/**
+ * Texto da tarefa urgente no Kommo. `ALERTA · <slug> · [Contato: nome]` é o formato que o roteador de alertas
+ * lê — o prefixo fica como está; o "LIGAR AGORA" vem logo depois, onde a recepção lê primeiro.
+ */
+export function textoDoAvisoUrgente(a: { slug: string; nome: string | null; motivo: string }): string {
   const contato = a.nome?.trim() ? `[Contato: ${a.nome.trim()}] ` : '';
   const motivo = a.motivo.trim().replace(/\s+/g, ' ').slice(0, 200);
-  const situacao =
-    a.situacao === 'agendando'
-      ? 'A IA está oferecendo o horário mais próximo para agendar — acompanhar a conversa e falar com o paciente.'
-      : 'A IA parou e passou o atendimento para a equipe — falar com o paciente agora.';
-  return `ALERTA · ${a.slug} · ${contato}URGENTE: paciente com sinal de alerta clínico (${motivo}). ${situacao}`;
+  return (
+    `ALERTA · ${a.slug} · ${contato}LIGAR AGORA — URGENTE: paciente com sinal de alerta clínico (${motivo}). ` +
+    'A IA parou e passou o atendimento para a equipe — ligar para o paciente agora.'
+  );
+}
+
+/** A tarefa já é o aviso urgente (a da regra da unidade): `pausar_ia` não cria uma segunda. */
+export function ehTarefaDeSinal(texto: string): boolean {
+  return TAREFA_URGENTE.test(texto) || TAREFA_DE_SINAL.test(texto);
+}
+
+/** Tarefa de sinal de alerta escrita pela regra da unidade: ganha o "LIGAR AGORA" no fim se não tiver. */
+export function comLigarAgora(texto: string): string {
+  if (!TAREFA_DE_SINAL.test(texto) || LIGAR_AGORA.test(texto)) return texto;
+  return `${texto.trimEnd()} — LIGAR AGORA`;
 }
 
 /** Aviso no Telegram do João — o canal que sobrou depois do banimento do WhatsApp dos alertas. */
@@ -176,10 +251,224 @@ export function textoTelegramSinalDeAlerta(a: {
   leadId: number;
   nome: string | null;
   motivo: string;
-  situacao?: SituacaoDoAviso;
 }): string {
   const quem = a.nome?.trim() || `lead ${a.leadId}`;
   const link = a.subdominio ? `https://${a.subdominio}.kommo.com/leads/detail/${a.leadId}` : `lead ${a.leadId}`;
-  const pe = a.situacao === 'agendando' ? 'A IA está tentando agendar o horário mais próximo.' : 'A IA passou para a equipe.';
-  return [`🚑 Sinal de alerta · ${a.unidade}`, `${quem} — ${a.motivo.trim().slice(0, 200)}. ${pe}`, link].join('\n');
+  return [
+    `🚑 Sinal de alerta · ${a.unidade} · LIGAR AGORA`,
+    `${quem} — ${a.motivo.trim().slice(0, 200)}. A IA parou e passou para a equipe.`,
+    link,
+  ].join('\n');
+}
+
+// ── A rede de segurança em código ───────────────────────────────────────────────────────────────────────
+//
+// A regra de 21/10 estava no prompt e o paciente de Olímpia disse "escape de urina" sem ninguém da equipe ser
+// avisado (nem etiqueta, nem tarefa). Prompt sozinho não segura. Aqui o código lê a FALA do paciente neste turno
+// e, se ela traz um sinal CLARO e o modelo não parou, a IA para pelo mesmo `pausar_ia` (ver graph.ts). Só frases
+// sem ambiguidade — a fala vaga ("me faltou a perna") fica com o modelo, que pergunta UM sinal.
+
+
+/** Conjunção que corta a negação: "não aguento mais E perdi a força" não nega a perda de força. */
+const CONJUNCAO = /^(?:e|mas|por[eé]m|aí|ai|depois|tamb[eé]m|porque|que)$/iu;
+const PALAVRA_DE_NEGACAO = /^(?:n[aã]o|nem|nunca|sem|nenhum[a]?|nada|negativo|nega|negou|negando)$/iu;
+
+/**
+ * O trecho vem negado? Olha as 4 palavras antes dele, na mesma oração, parando numa conjunção:
+ * "sem dormência", "não tenho perda de força", "não estou com febre" negam; "não aguento mais e perdi a força", não.
+ */
+function negadoAntes(texto: string, indice: number): boolean {
+  const oracao = texto.slice(Math.max(0, indice - 60), indice).split(/[.,;:!?\n]/).pop() ?? '';
+  const palavras = oracao.split(/\s+/).filter(Boolean).slice(-4);
+  for (let i = palavras.length - 1; i >= 0; i--) {
+    if (CONJUNCAO.test(palavras[i])) return false;
+    if (PALAVRA_DE_NEGACAO.test(palavras[i])) {
+      // A negação só vale se o que está entre ela e o sintoma é "enchimento" ("não ESTOU COM febre"): "não AGUENTO
+      // mais a perna fraca" não nega a perna fraca.
+      return palavras.slice(i + 1).every((p) => ENCHIMENTO.test(p));
+    }
+  }
+  return false;
+}
+
+const ENCHIMENTO = /^(?:tenho|tive|tem|teve|tinha|estou|estava|est[aá]|to|t[oô]|tou|com|uma?|as?|os?|de|d[ao]s?|nada|nenhum[a]?|mais|[eé]|foi|h[aá]|sinto|senti|sentir|ter|muito|muita|essa|esse|nenhuma|na|no|nas|nos)$/iu;
+
+/** Cada padrão diz: o trecho conta como sinal só se NÃO vier negado (`negavel`), ou a negação faz parte dele. */
+const SINAIS_NA_FALA: Array<{ sinal: string; re: RegExp; negavel: boolean }> = [
+  {
+    // "não estou segurando o xixi", "não segurei o xixi", "não consigo segurar a urina": a negação é o sinal
+    sinal: 'não segura o xixi ou as fezes',
+    re: /\bn[aã]o\s+(?:(?:est\p{L}+|to|t[oô]|tou)\s+)?(?:consigo\s+|conseguindo\s+)?segur(?:o|ei|ando|ar|a|ou)\s+(?:o\s+|a\s+|as\s+|os\s+)?(?:xixi|urina|fezes|coc[oô]|mijo|bexiga)/iu,
+    negavel: false,
+  },
+  {
+    sinal: 'perdeu o controle do xixi ou das fezes',
+    re: /\bperd\w+\s+o\s+controle\s+(?:d[oa]s?\s+)?(?:xixi|urina|fezes|bexiga|intestino|esf[ií]ncter)/iu,
+    negavel: true,
+  },
+  {
+    sinal: 'escape de xixi ou de fezes',
+    re: /\bescap\w+\s+(?:de\s+|o\s+|a\s+)?(?:xixi|urina|fezes)|\bfiz\s+(?:xixi|coc[oô])\s+(?:nas?\s+)?(?:cal[cç]a|roupa)|\bincontin[eê]ncia/iu,
+    negavel: true,
+  },
+  {
+    sinal: 'perda de força na perna',
+    // Exige a parte do corpo: "perdi a força pra trabalhar" e "perdi a força de vontade" não são o sinal da coluna.
+    // "perna fraca/bamba" não vale quando é cansaço ("fraca de tanto andar", "bamba quando subo escada").
+    re: /\bperd\p{L}+\s+(?:a\s+)?for[cç]a\s+(?:n[ao]s?|d[ao]s?)\s+(?:perna|pernas|p[eé]s?|coxas?|joelhos?)\b|\b(?:perna|pernas|p[eé]s?)\s+(?:esquerd[ao]\s+|direit[ao]\s+)?(?:est\p{L}+\s+|ficou\s+|ficaram\s+|ficando\s+|t[aá]\s+(?:ficando\s+)?)?(?:perd(?:endo|eu|i)\s+(?:a\s+)?for[cç]a|sem\s+for[cç]a|fraca|fracas|bamba|bambas)\b(?!\s+(?:de\s+tanto|quando|ao\s|depois\s+d[eo]|por\s+causa|de\s+cansa))|\bperda\s+de\s+for[cç]a\s+(?:n[ao]s?|d[ao]s?)\s+(?:perna|pernas|p[eé]s?|coxas?)\b/iu,
+    negavel: true,
+  },
+  {
+    sinal: 'dormência na região íntima',
+    // "nas pernas", sozinho, é formigamento comum e NÃO é sinal — só virilha, região íntima ou entre as pernas
+    re: /\b(?:dorm[eê]ncia|adormecimento|dormente|adormecid\w+)\s+(?:(?:na|no|em)\s+(?:a\s+|o\s+)?(?:virilha|regi[aã]o\s+[ií]ntima|[ií]ntim\w+|genit\w+|per[ií]neo)|entre\s+as\s+pernas)/iu,
+    negavel: true,
+  },
+  {
+    // Só os sinais de agora. "AVC"/"derrame" sozinhos ficam com o modelo: "minha mãe teve AVC", "tive AVC em 2019" e
+    // "derrame no joelho" são história ou outra coisa (revisão de 26/10); o caso real de ITZ (#28642041) tem o braço e a boca.
+    sinal: 'sinal neurológico (boca, fala ou braço)',
+    re: /\bboca\s+(?:est\p{L}+\s+|ficou\s+)?(?:torta|entortou|caiu|ca[ií]da|tremendo|treme\w*)(?!\s+d[eo]\s+(?:raiva|rir|frio|medo|nervoso|[óo]dio|vergonha|fome))|\bfala\s+(?:est\p{L}+\s+|ficou\s+)?(?:enrolada|arrastada|mole|embolada)|\bbra[cç]o\s+(?:est\p{L}+\s+|ficou\s+)?(?:tremendo|treme\w*|mole|n[aã]o\s+mexe)(?!\s+d[eo]\s+(?:raiva|rir|frio|medo|nervoso|[óo]dio|vergonha|fome))|\bn[aã]o\s+consigo\s+mexer\s+(?:o|a)\s+(?:bra[cç]o|perna|rosto)/iu,
+    negavel: true,
+  },
+  {
+    sinal: 'dor que piorou de repente',
+    re: /\bpiorou\s+(?:muito\s+)?de\s+repente|\bpiora\s+repentina/iu,
+    negavel: true,
+  },
+];
+
+/** Brincadeira ("kkk", "haha", "rsrs"): "a boca torta de raiva kkk" não é sinal neurológico. */
+const HUMOR = /k{3,}|\bha(?:ha)+|\brs(?:rs)+/i;
+
+/** A frase (até . ! ? ou quebra de linha) que contém a posição `i` do texto. */
+function fraseEm(texto: string, i: number): string {
+  const ini = Math.max(texto.lastIndexOf('.', i), texto.lastIndexOf('!', i), texto.lastIndexOf('?', i), texto.lastIndexOf('\n', i)) + 1;
+  const fim = texto.slice(i).search(/[.!?\n]/);
+  return texto.slice(ini, fim < 0 ? texto.length : i + fim);
+}
+
+/**
+ * O sinal de alerta que o paciente disse com todas as letras nas falas deste turno, ou `null`. Devolve o motivo no
+ * formato de `pausar_ia`. Febre só conta junto de dor no mesmo turno.
+ */
+export function sinalNaFala(falas: string[]): string | null {
+  const texto = falas.join('\n');
+  for (const { sinal, re, negavel } of SINAIS_NA_FALA) {
+    // Todas as ocorrências: "não tenho dormência na virilha" numa mensagem não cala "agora tenho" na seguinte.
+    const todas = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`);
+    for (const m of texto.matchAll(todas)) {
+      const i = m.index ?? 0;
+      // Brincadeira só na MESMA frase do sinal: um "kkkk to com medo" depois não desliga "a fala enrolada e a boca torta".
+      if (sinal.startsWith('sinal neurológico') && HUMOR.test(fraseEm(texto, i))) continue;
+      if (negavel && negadoAntes(texto, i)) continue;
+      // Queixa de anos ("não consigo segurar o xixi desde a gravidez faz 10 anos") não é o sinal de agora — só na MESMA
+      // oração: "não estou segurando o xixi desde ontem, tenho hérnia há 3 anos" é o sinal.
+      const resto = texto.slice(i, i + 120).split(/[.!?\n,;]|\se\s/)[0] ?? '';
+      if (/\b(?:h[aá]|faz|desde)\b[^.!?\n]{0,30}\b(?:anos?|meses)\b/i.test(resto)) continue;
+      return `${sinal} (paciente disse: "${m[0].trim().slice(0, 80)}")`;
+    }
+  }
+  // Febre só junto com dor, e não a de outra pessoa ("meu filho está com febre").
+  // (dor de garganta, de cabeça, de dente não são o sinal da coluna: exige o sítio)
+  if (/\b(?:coluna|costas|lombar|cervical|ci[aá]tic\w*|perna|pernas|quadril|h[eé]rnia|lombalgia)\b/iu.test(texto)) {
+    for (const f of texto.matchAll(/\bfebre\b/giu)) {
+      const antes = texto.slice(Math.max(0, f.index - 60), f.index).split(/[.;!?\n]/).pop() ?? '';
+      if (!negadoAntes(texto, f.index) && !/\b(?:meu|minha)\s+(?:filh|neto|espos|marid|m[ãa]e|pai|av[óo])/iu.test(antes)) {
+        return 'febre junto com a dor';
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Só o que o PACIENTE disse num texto de entrada. O bloco `<conversa_oficial>` traz também as linhas da EQUIPE: "sentiu
+ * perda de força?" da recepção, seguido de "não" do paciente, virava sinal de alerta; e a recepção citar pronto-socorro
+ * abria a exceção da Sofia (revisão de 26/10). Do bloco ficam só as linhas "· Paciente: …".
+ */
+export function soFalaDoPaciente(texto: string): string {
+  const doBloco: string[] = [];
+  const fora = (texto ?? '').replace(/<conversa_oficial>[\s\S]*?<\/conversa_oficial>/gi, (bloco) => {
+    // A fala pode ter quebra de linha dentro das aspas: vai até a aspa que fecha antes da próxima linha "- …" ou das regras.
+    for (const m of bloco.matchAll(/^-[^\n]*?·\s*Paciente:\s*(?:\[áudio transcrito\]\s*)?"([\s\S]*?)"\s*(?=\n- |\nA EQUIPE|\nConsidere|\n<\/conversa_oficial>|$)/gimu)) doBloco.push(m[1]);
+    return '\n';
+  });
+  return [...doBloco, fora.trim()].filter(Boolean).join('\n');
+}
+
+/** As falas do paciente que ainda não tiveram resposta: a sequência de mensagens humanas no fim da conversa. */
+export function falasDoTurno(mensagens: Array<{ tipo: string; texto: string }>): string[] {
+  const falas: string[] = [];
+  let i = mensagens.length - 1;
+  while (i >= 0 && mensagens[i].tipo !== 'human') i--; // pula as ferramentas e a IA deste turno
+  // Instrução interna do próprio agente ("[instrução interna, não é fala do paciente]…") não é fala do paciente.
+  for (; i >= 0 && mensagens[i].tipo === 'human'; i--) {
+    if (/^\s*\[instru[cç][aã]o interna/i.test(mensagens[i].texto)) continue;
+    const fala = soFalaDoPaciente(mensagens[i].texto);
+    if (fala) falas.unshift(fala);
+  }
+  return falas;
+}
+
+/** Marca no resultado de `pausar_ia`: a IA parou, mas nem a tarefa nem o Telegram saíram — ninguém foi avisado. */
+export const SEM_AVISO_NA_PAUSA = '[SEM AVISO À EQUIPE]';
+
+/**
+ * O que sai para o paciente quando o código passou o atendimento por ele. Sem prazo, sem diagnóstico e sem sugerir
+ * pronto-socorro; se o PRÓPRIO paciente falou nele, a frase não desaconselha (decisão de 26/10). `avisada: false` =
+ * a tarefa e o Telegram falharam: a frase NÃO diz que a equipe foi avisada.
+ */
+export function fraseDoPasse(r: RetornoDaEquipe, pacienteFalouDePs: boolean, avisada = true): string {
+  const ir = 'Se você sentir que não dá para esperar, pode ir, tá?';
+  if (!avisada) {
+    return `Sinto muito que você esteja passando por isso 🙏 O seu atendimento segue com a nossa equipe.${pacienteFalouDePs ? ` ${ir}` : ''}`;
+  }
+  const quando = quandoAEquipeResponde(r);
+  return (
+    `Sinto muito que você esteja passando por isso 🙏 Já avisei a nossa equipe, com prioridade, e ela ${quando}.` +
+    (pacienteFalouDePs ? ` ${ir} A equipe já está avisada.` : '')
+  );
+}
+
+/** Uma chamada de ferramenta do turno, com o que a ferramenta respondeu (se já respondeu). */
+export interface ChamadaDoTurno {
+  name?: string;
+  args?: Record<string, unknown>;
+  resultado?: string;
+}
+
+/** As chamadas de ferramenta que o modelo fez neste turno (das mais antigas às mais novas), com o resultado de cada uma. */
+export function chamadasDoTurno(mensagens: BaseMessage[]): ChamadaDoTurno[] {
+  const resultados = new Map<string, string>();
+  const out: Array<ChamadaDoTurno & { id?: string }> = [];
+  for (let i = mensagens.length - 1; i >= 0; i--) {
+    const m = mensagens[i];
+    const tipo = m.getType();
+    if (tipo === 'human') break;
+    if (tipo === 'tool') {
+      const id = (m as unknown as { tool_call_id?: string }).tool_call_id;
+      if (id) resultados.set(id, typeof m.content === 'string' ? m.content : JSON.stringify(m.content));
+    } else if (tipo === 'ai') {
+      const chamadas = (m as unknown as { tool_calls?: Array<{ id?: string; name?: string; args?: Record<string, unknown> }> }).tool_calls ?? [];
+      out.unshift(...chamadas.map((c) => ({ id: c.id, name: c.name, args: c.args })));
+    }
+  }
+  return out.map(({ id, ...c }) => ({ ...c, resultado: id ? resultados.get(id) : undefined }));
+}
+
+/**
+ * O modelo já passou o atendimento (`pausar_ia` que respondeu OK — "PAUSA NÃO APLICADA" e "ERRO…" não contam)? E já
+ * avisou como sinal de alerta (flag ou motivo; o aviso sai antes da pausa, então vale mesmo se a pausa falhou)?
+ */
+export function pausaDoTurno(chamadas: ChamadaDoTurno[]): { pausou: boolean; urgente: boolean; semAviso: boolean } {
+  const pausas = chamadas.filter((c) => c.name === 'pausar_ia');
+  return {
+    pausou: pausas.some((c) => /^OK/.test(c.resultado ?? '')),
+    // a pausa pegou mas a tarefa e o Telegram falharam: a resposta do modelo pode dizer "avisei" sem ser verdade
+    semAviso: pausas.some((c) => /^OK/.test(c.resultado ?? '') && (c.resultado ?? '').includes(SEM_AVISO_NA_PAUSA)),
+    urgente: pausas.some(
+      (c) => ehHandoffPorSinalDeAlerta(String(c.args?.motivo ?? ''), c.args?.sinalDeAlerta === true) && !/^PAUSA NÃO APLICADA/.test(c.resultado ?? ''),
+    ),
+  };
 }

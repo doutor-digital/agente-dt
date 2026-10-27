@@ -25,8 +25,8 @@ import { planejarCamposSdr, type CampoAtual } from './campos-sdr.js';
 import { fichaDoPaciente, type SpineFicha } from '../services/spine.service.js';
 import { logger } from './logger.js';
 import { createKommoClient, resolveEnumId, type KommoClient, type KommoLead, type KommoLeadCustomField } from '../services/kommo.service.js';
-import { SPINE_STATUS, SpineService, instanteNoFuso, type SpineSchedule, type SpineTreatment } from '../services/spine.service.js';
-import { CAMPOS_SYNC, chaveTelefone, ehCabecalhoDeGrupo, ehConsulta, escolherConsulta, melhorTratamento, nomeDaFranquia, nomeParaBusca, normalizar, planejarEscritas, type CampoSync } from './franquia-sync.js';
+import { SPINE_STATUS, SpineService, instanteNoFuso, somarDias, type SpineSchedule, type SpineTreatment } from '../services/spine.service.js';
+import { CAMPOS_SYNC, chaveTelefone, ehCabecalhoDeGrupo, ehConsulta, escolherConsulta, escolherConsultaDaJanela, melhorTratamento, nomeDaFranquia, nomeParaBusca, normalizar, planejarEscritas, type CampoSync } from './franquia-sync.js';
 import {
   ETAPA, JORNADA, MOTIVO_PERDA, horasAteNegociacao, estadoDoMove, planejarMovimento, precisaHistoricoDoExPaciente, sessaoEsquecidaComTratamentoFinalizado,
   tratamentoAberto, tratamentoFinalizado, type EntradaMovimento, type EtapaAtual, type Funil, type Movimento, type TratamentoParaEtapa,
@@ -549,8 +549,8 @@ const TRAVA_REVE_A_CADA_MS = 60 * 60_000;
 const travadoAte = new Map<string, number>();
 
 /** No papel: o movimento é um PERDIDO que a trava da perda automática (consulta futura / pagou / Quente / Morno) seguraria? */
-function perdaTravada(unit: Unit, cartao: KommoLead, para: string, deEtapa: string, automacao: string, agoraEpoch: number): boolean {
-  return normalizarNome(para) === normalizarNome(ETAPA.PERDIDO) && seguradoPelaTrava(unit, cartao.id, cartao, deEtapa, true, automacao, agoraEpoch);
+async function perdaTravada(unit: Unit, cartao: KommoLead, para: string, deEtapa: string, automacao: string, agoraEpoch: number, funis?: Funis): Promise<boolean> {
+  return normalizarNome(para) === normalizarNome(ETAPA.PERDIDO) && (await seguradoPelaTrava(unit, cartao.id, cartao, { deEtapa, seco: true, automacao, agoraEpoch, noPortao: true, funis }));
 }
 
 /**
@@ -567,7 +567,7 @@ export async function aplicarMovimento(unit: Unit, kommo: KommoClient, funis: Fu
   // passagem das 48 h e revisão do histórico —, então nenhum caminho novo escapa dele.
   if (estadoDoMove(unit.slug) === 'seco') {
     // trava da perda automática (26/10): o papel não pode prometer um PERDIDO que o ligado não faria
-    if (cartao && perdaTravada(unit, cartao, mov.para, deEtapa, 'franquia-move', Math.floor(Date.now() / 1000))) return;
+    if (cartao && (await perdaTravada(unit, cartao, mov.para, deEtapa, 'franquia-move', Math.floor(Date.now() / 1000), funis))) return;
     contarSimulado(resumo, deEtapa, mov.para);
     logger.info({ unit: unit.slug, leadId, de: deEtapa, para: mov.para, funil: mov.funil, motivo: mov.motivo, motivoPerda: mov.motivoPerda, semRegua: mov.semRegua }, 'franquia-move [seco]: moveria');
     registrarSimulacao(unit, 'franquia-move', { leadId, acao: 'moveria', alvo: mov.para, deEtapa, valor: mov.motivoPerda, motivo: mov.motivo });
@@ -1867,6 +1867,12 @@ async function franquiaMandaUmaVez(ctx: CtxSync, leadId: number, lead: KommoLead
   );
 }
 
+/** A janela que a varredura pede à agenda (dias da clínica). A revisão usa a MESMA para escolher a consulta — ver `escolherConsultaDaJanela`. */
+function janelaDaAgenda(tz: string, agora: Date = new Date()): { de: string; ate: string } {
+  const hoje = instanteNoFuso(agora, tz).slice(0, 10);
+  return { de: somarDias(hoje, -DIAS_ATRAS), ate: somarDias(hoje, DIAS_FRENTE) };
+}
+
 /**
  * Um cartão: fase 1 (campos espelhando a franquia) e fase 2 (etapa pela máquina de `planejarMovimento`).
  * `historico` = detalhe do paciente já em mãos (a revisão dos antigos traz; a varredura normal só busca
@@ -1875,7 +1881,12 @@ async function franquiaMandaUmaVez(ctx: CtxSync, leadId: number, lead: KommoLead
 async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p: PacienteDoCartao, historico: Historico | null = null): Promise<void> {
   const { unit, kommo, funis, mapa, ops, agoraEpoch, resumo, seco } = ctx;
   ctx.tocados?.add(leadId);
-  const consulta = escolherConsulta(p.consultas);
+  // A revisão entrega as consultas da FICHA inteira (`consultas` é o próprio `historico.schedules`); a varredura, a janela
+  // da agenda. As duas escolhem a MESMA consulta — ver `escolherConsultaDaJanela`. A decisão é pela origem das consultas,
+  // não por `historico` existir: quem passar o histórico por outro motivo não muda a regra sem querer.
+  const vemDaFicha = historico !== null && p.consultas === historico.schedules;
+  const janela = vemDaFicha ? janelaDaAgenda(unit.spineTimezone || 'America/Sao_Paulo', new Date(agoraEpoch * 1000)) : null;
+  const consulta = janela ? escolherConsultaDaJanela(p.consultas, janela.de, janela.ate) : escolherConsulta(p.consultas);
   const consultaEpoch = consulta?.dateAttendanceUtc ? Math.floor(Date.parse(consulta.dateAttendanceUtc) / 1000) : null;
   const feitoPelaIa = consulta?.idSchedule
     ? !!(await prisma.spineLeadLink.findFirst({ where: { unitId: unit.id, kommoLeadId: leadId, spineIdSchedule: consulta.idSchedule } }))
@@ -1978,7 +1989,7 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
   // 16/10 em "só no papel": o robô move pela regra antiga e a tela mostra onde a regra nova levaria o cartão
   if (ctx.jornada === 'seco') {
     const novo = planejarMovimento({ ...entrada1610, regras1610: true });
-    if (((novo?.para ?? null) !== (mov?.para ?? null) || (novo?.funil ?? null) !== (mov?.funil ?? null)) && !(novo && perdaTravada(unit, lead, novo.para, atual.status, AUTOMACAO_1610, agoraEpoch))) {
+    if (((novo?.para ?? null) !== (mov?.para ?? null) || (novo?.funil ?? null) !== (mov?.funil ?? null)) && !(novo && (await perdaTravada(unit, lead, novo.para, atual.status, AUTOMACAO_1610, agoraEpoch, funis)))) {
       registrarSimulacao(unit, AUTOMACAO_1610, { leadId, acao: 'moveria', alvo: novo ? novo.para : '(fica onde está)', deEtapa: atual.status, valor: novo?.semRegua ? 'sem régua' : undefined, motivo: novo?.motivo ?? `regras de 16/10: não move (a regra antiga leva pra ${mov?.para})` });
     }
   }
@@ -1993,7 +2004,7 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
   if (!mov) return;
   if (franquiaRespeitaEspera(unit, lead, atual, mov.para, agoraEpoch)) return; // EM ESPERA com ◷ Retomar em (auditoria 16/10, item 10)
   if (seco) {
-    if (perdaTravada(unit, lead, mov.para, atual.status, ctx.automacaoDoSeco ?? 'franquia-revisao', agoraEpoch)) return;
+    if (await perdaTravada(unit, lead, mov.para, atual.status, ctx.automacaoDoSeco ?? 'franquia-revisao', agoraEpoch, funis)) return;
     contarSimulado(resumo, atual.status, mov.para);
     logger.info({ unit: unit.slug, leadId, nome: lead.name, de: atual.status, para: mov.para, funil: mov.funil, motivo: mov.motivo, motivoPerda: mov.motivoPerda, semRegua: mov.semRegua }, 'franquia-move [seco]: moveria');
     registrarSimulacao(unit, ctx.automacaoDoSeco ?? 'franquia-revisao', { leadId, acao: 'moveria', alvo: mov.para, deEtapa: atual.status, valor: mov.motivoPerda, motivo: mov.motivo });
@@ -2112,7 +2123,7 @@ async function revisarPeloHistorico(ctxBase: CtxSync): Promise<void> {
               if (parado > JORNADA.CONFERIR_MAX_DIAS) {
                 const mov: Movimento = { funil: 'COMERCIAL', para: ETAPA.PERDIDO, motivo: `${Math.floor(parado)} d em ${ETAPA.CONFERIR} sem acerto do cadastro`, motivoPerda: MOTIVO_PERDA.SEM_CADASTRO, semRegua: true, dias: Math.floor(parado) };
                 if (seco) {
-                  if (perdaTravada(unit, lead, mov.para, etapa, 'franquia-revisao', agoraEpoch)) continue;
+                  if (await perdaTravada(unit, lead, mov.para, etapa, 'franquia-revisao', agoraEpoch, funis)) continue;
                   contarSimulado(resumo, etapa, mov.para);
                   logger.info({ unit: unit.slug, leadId: lead.id, nome: lead.name, de: etapa, para: mov.para, motivo: mov.motivo }, 'franquia-move [seco]: moveria');
                   registrarSimulacao(unit, 'franquia-revisao', { leadId: lead.id, acao: 'moveria', alvo: mov.para, deEtapa: etapa, valor: mov.motivoPerda, motivo: mov.motivo });
@@ -2193,11 +2204,10 @@ async function sincronizarUnidade(unit: Unit, deps: { kommo?: KommoClient } = {}
   const funis = mover ? await carregarFunis(kommo) : null;
   if (mover && !funis) logger.warn({ unit: unit.slug }, 'franquia-move: conta sem funil principal — só campos');
   const tz = unit.spineTimezone || 'America/Sao_Paulo';
-  const hoje = instanteNoFuso(new Date(), tz).slice(0, 10);
-  const somar = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
+  const { de, ate } = janelaDaAgenda(tz);
 
   const [ag, tr] = await Promise.all([
-    SpineService.searchSchedules(unit, { initialDate: somar(hoje, -DIAS_ATRAS), endDate: somar(hoje, DIAS_FRENTE), rowsPerPage: 100 }),
+    SpineService.searchSchedules(unit, { initialDate: de, endDate: ate, rowsPerPage: 100 }),
     SpineService.searchTreatments(unit),
   ]);
   const agendamentos: SpineSchedule[] = ag.ok ? (ag.data?.schedules ?? []) : [];

@@ -100,6 +100,7 @@ async function contasKommoDoBanco(): Promise<Map<string, UnidadeKommo>> {
         leadsPorTelefone: (tel) => cliente.listLeadsPorTelefone(tel, 50),
         usuarios: () => cliente.listUsers(),
         conversa: (leadId, limite, periodo) => historicoOficial(cliente, leadId, limite, periodo),
+        notas: (leadId, limite, periodo) => cliente.listarNotasDoLead(leadId, limite, periodo),
       },
     });
   }

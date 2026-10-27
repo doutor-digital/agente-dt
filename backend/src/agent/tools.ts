@@ -17,21 +17,25 @@ import { capturaUnificada, coergirValor, descricaoRegistrarCampo } from './captu
 import { ehRegraDeQualificacao } from './carimbos-do-agendamento.js';
 import { classificarMotivoHandoff } from '../lib/motivo-handoff.js';
 import { CAMPOS_DIGITAL, carimbarHumanoAssumiu, gravarCampoDigital } from '../services/lead-metrics.service.js';
-import { registrarPausaPropria } from '../lib/pausa-propria.js';
+import { esquecerPausaPropria, registrarPausaPropria } from '../lib/pausa-propria.js';
 import { ehCampoQueixa, ehCampoRegiao } from '../lib/regiao-dor.js';
 import { deduzirRegiaoDaQueixa, espelharEtiquetaRegiao } from '../services/regiao-dor.service.js';
 import { gravarNomeConfirmadoNoContato } from '../lib/nome-no-contato.js';
 import { recusaDoFunilTratamento, type DestinoDaSofia } from '../lib/guarda-funil-tratamento.js';
-import { recusaDaPerdaDaSofia } from '../lib/trava-perda.js';
+import { decidirFechamentoDaSofia } from '../lib/trava-perda.js';
+import { RETOMAR_EM_DIAS, etiquetarNaoContatar, falasDoUltimoTurno, levarParaEsperaComRetomada } from '../lib/sofia-fecha-quente-morno.js';
 import { orientacaoAoTransferir, retornoDaEquipe, type RetornoDaEquipe } from '../lib/retorno-da-equipe.js';
 import { enviarTelegram } from '../lib/telegram.js';
 import {
   CHAVE_DO_AVISO,
+  comLigarAgora,
   ehHandoffPorSinalDeAlerta,
-  TAREFA_URGENTE,
+  ETIQUETA_PRIORIDADE,
+  ETIQUETA_PRIORIDADE_SEM_EMOJI,
+  ehTarefaDeSinal,
+  SEM_AVISO_NA_PAUSA,
   textoDoAvisoUrgente,
   textoTelegramSinalDeAlerta,
-  type SituacaoDoAviso,
 } from './sinal-de-alerta.js';
 import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
 
@@ -55,13 +59,9 @@ export const DEFAULT_TOOL_DESCRIPTIONS: Record<string, string> = {
     'Pausa o atendimento por IA neste lead, marcando a flag "IA Pausada" no ' +
     'Kommo. Use APENAS quando: (a) o paciente pedir explicitamente pra falar ' +
     'com um humano; (b) a situação é clínica/sensível e exige atendente real; ' +
-    '(c) o paciente está agitado/insatisfeito. Após pausar, responda UMA frase ' +
-    'avisando que um humano vai assumir.',
-  avisar_sinal_de_alerta:
-    'Avisa a equipe NA HORA, com urgência (tarefa no Kommo), que o paciente confirmou um SINAL GRAVE DA ' +
-    'COLUNA (perder o controle do xixi ou das fezes, dormência na virilha/região íntima, perna fraca de ' +
-    'repente). NÃO pausa a IA: use junto com a oferta do horário mais próximo, no mesmo turno em que o ' +
-    'sinal for confirmado. Não envia nada ao paciente.',
+    '(c) o paciente está agitado/insatisfeito; (d) SINAL DE ALERTA clínico confirmado ' +
+    '(use sinalDeAlerta: true — etiqueta 🔴 PRIORIDADE, tarefa LIGAR AGORA e aviso ao João). ' +
+    'Após pausar, responda UMA frase avisando que um humano vai assumir.',
   atualizar_titulo_lead:
     'Atualiza o título do card do lead no Kommo com o nome do paciente. ' +
     'Use IMEDIATAMENTE quando o paciente disser o próprio nome. O sistema ' +
@@ -171,26 +171,69 @@ export function buildTools({
 
   /**
    * Sinal de alerta: a equipe fica sabendo NA HORA, sem esperar o alerta de SLA (que é opcional por
-   * unidade e só sai depois de 5–15 min). Tarefa "ALERTA · … URGENTE" no cartão, com prazo agora e no
-   * nome do responsável pelo cartão (sem isso a tarefa cai no usuário da integração e o aviso do Kommo
-   * não chega a quem atende) + Telegram do João. Nunca lança: o aviso não pode impedir a pausa.
+   * unidade e só sai depois de 5–15 min). Etiqueta 🔴 PRIORIDADE no cartão + tarefa "ALERTA · … LIGAR AGORA",
+   * com prazo agora e no nome do responsável pelo cartão (sem isso a tarefa cai no usuário da integração e o
+   * aviso do Kommo não chega a quem atende) + Telegram do João. Nunca lança: o aviso não pode impedir a pausa.
    */
   const avisarSinalDeAlerta = async (
     leadId: number,
     motivo: string,
-    situacao: SituacaoDoAviso,
-  ): Promise<'criada' | 'repetida' | 'falhou'> => {
-    if (!unit) return 'falhou';
-    const chave = CHAVE_DO_AVISO[situacao];
-    // Uma tarefa por situação por cartão a cada 24 h: a IA que segue agendando pode chamar de novo no
-    // turno seguinte, e a reativação pode transferir de novo — a equipe já sabe.
+  ): Promise<{ tarefa: 'criada' | 'repetida' | 'falhou'; telegram: Promise<boolean> }> => {
+    if (!unit) return { tarefa: 'falhou', telegram: Promise.resolve(false) };
+    const chave = CHAVE_DO_AVISO.transferiu;
+    // A etiqueta vai SEMPRE, antes da trava de 24 h: é idempotente e é o que a recepção filtra no Kommo — se
+    // alguém a tirou ou a primeira tentativa falhou, o segundo alerta tem de recolocar. Nunca lança.
+    try {
+      await kommo.addTag({ leadId, tag: ETIQUETA_PRIORIDADE });
+      await recorder.step({
+        kind: 'KOMMO_ACTION',
+        title: `Etiqueta "${ETIQUETA_PRIORIDADE}" aplicada no lead ${leadId} (sinal de alerta)`,
+        payload: { leadId, tag: ETIQUETA_PRIORIDADE },
+      });
+      // O emoji na etiqueta nunca foi provado pela API (nenhuma das 6.424 etiquetas das 18 contas tem um assim): confere
+      // o que o Kommo GUARDOU. Se ele tirou ou mudou o emoji, a etiqueta fica como ele devolveu e o rastro registra.
+      try {
+        const guardadas = await kommo.tagsDoLead(leadId);
+        if (!guardadas.includes(ETIQUETA_PRIORIDADE)) {
+          await recorder.step({
+            kind: 'ERROR',
+            title: `Kommo guardou a etiqueta diferente de "${ETIQUETA_PRIORIDADE}" no lead ${leadId}: ${guardadas.join(' | ') || '(nenhuma)'}`,
+            payload: { leadId, pedida: ETIQUETA_PRIORIDADE, guardadas },
+          });
+        }
+      } catch (err) {
+        logger.warn({ err: String(err), leadId }, 'sinal de alerta: não consegui conferir a etiqueta guardada');
+      }
+    } catch (err) {
+      await recorder.step({
+        kind: 'ERROR',
+        title: `Falha ao aplicar a etiqueta "${ETIQUETA_PRIORIDADE}" no lead ${leadId}: ${err instanceof Error ? err.message : String(err)}`,
+        payload: { leadId, motivo },
+      });
+      // O Kommo pode recusar o emoji: tenta o nome sem ele, para o cartão sair marcado do mesmo jeito.
+      try {
+        await kommo.addTag({ leadId, tag: ETIQUETA_PRIORIDADE_SEM_EMOJI });
+        await recorder.step({
+          kind: 'KOMMO_ACTION',
+          title: `Etiqueta "${ETIQUETA_PRIORIDADE_SEM_EMOJI}" aplicada no lead ${leadId} (a com emoji falhou)`,
+          payload: { leadId, tag: ETIQUETA_PRIORIDADE_SEM_EMOJI },
+        });
+      } catch (err2) {
+        await recorder.step({
+          kind: 'ERROR',
+          title: `A etiqueta sem emoji também falhou no lead ${leadId}: ${err2 instanceof Error ? err2.message : String(err2)}`,
+          payload: { leadId },
+        });
+      }
+    }
+    // Uma tarefa por cartão a cada 24 h: a reativação pode transferir de novo — a equipe já sabe.
     if (await avisoRecente(unit.id, leadId, chave)) {
       await recorder.step({
         kind: 'THINKING',
-        title: `Sinal de alerta: a equipe já foi avisada deste cartão nas últimas 24 h (${situacao}) — não repito`,
-        payload: { leadId, motivo, situacao },
+        title: 'Sinal de alerta: a equipe já foi avisada deste cartão nas últimas 24 h — não repito a tarefa',
+        payload: { leadId, motivo },
       });
-      return 'repetida';
+      return { tarefa: 'repetida', telegram: Promise.resolve(true) };
     }
     // Nome para o "[Contato: nome]": primeiro a conversa (é o nome que o paciente deu), depois o cartão.
     let nome: string | null = null;
@@ -214,30 +257,34 @@ export function buildTools({
     }
     // Em paralelo e sem segurar a pausa (o Telegram pode levar até 10 s para desistir), mas com o
     // resultado no rastro: se não chegou, quem olhar o trace sabe que o João não foi avisado.
-    void enviarTelegram(
-      textoTelegramSinalDeAlerta({ unidade: unit.name, subdominio: unit.kommoSubdomain, leadId, nome, motivo, situacao }),
+    // `pausar_ia` espera este resultado DEPOIS da pausa: se a tarefa e o Telegram falharem, ninguém foi avisado e o
+    // paciente não pode ouvir "avisei a equipe".
+    const telegram = enviarTelegram(
+      textoTelegramSinalDeAlerta({ unidade: unit.name, subdominio: unit.kommoSubdomain, leadId, nome, motivo }),
     )
       .catch(() => false)
-      .then((chegou) =>
-        recorder.step({
-          kind: chegou ? 'TOOL_RESULT' : 'ERROR',
-          title: chegou
-            ? `Sinal de alerta avisado no Telegram do João (lead ${leadId})`
-            : `Sinal de alerta NÃO chegou ao Telegram do João (sem token ou falha) — lead ${leadId}`,
-          payload: { leadId },
-        }),
-      )
-      .catch(() => undefined);
+      .then(async (chegou) => {
+        await recorder
+          .step({
+            kind: chegou ? 'TOOL_RESULT' : 'ERROR',
+            title: chegou
+              ? `Sinal de alerta avisado no Telegram do João (lead ${leadId})`
+              : `Sinal de alerta NÃO chegou ao Telegram do João (sem token ou falha) — lead ${leadId}`,
+            payload: { leadId },
+          })
+          .catch(() => undefined);
+        return chegou;
+      });
     if (avisoUrgenteNoTurno) {
       await recorder.step({
         kind: 'THINKING',
         title: `Sinal de alerta: a tarefa urgente já foi criada neste turno — não repito`,
-        payload: { leadId, motivo, situacao },
+        payload: { leadId, motivo },
       });
       await marcarAviso(unit.id, leadId, chave);
-      return 'repetida';
+      return { tarefa: 'repetida', telegram };
     }
-    const text = textoDoAvisoUrgente({ slug: unit.slug, nome, motivo, situacao });
+    const text = textoDoAvisoUrgente({ slug: unit.slug, nome, motivo });
     try {
       const res = await kommo.createTask({
         leadId,
@@ -250,57 +297,19 @@ export function buildTools({
       await marcarAviso(unit.id, leadId, chave);
       await recorder.step({
         kind: 'KOMMO_ACTION',
-        title: `🚑 Aviso urgente para a equipe (sinal de alerta, ${situacao}) no lead ${leadId} (tarefa ${res?.id ?? '?'})`,
+        title: `🚑 Aviso urgente para a equipe (sinal de alerta, LIGAR AGORA) no lead ${leadId} (tarefa ${res?.id ?? '?'})`,
         payload: { leadId, taskId: res?.id ?? null, responsibleUserId: responsavel ?? null, text },
       });
-      return 'criada';
+      return { tarefa: 'criada', telegram };
     } catch (err) {
       await recorder.step({
         kind: 'ERROR',
         title: `Falha ao criar o aviso urgente de sinal de alerta: ${err instanceof Error ? err.message : String(err)}`,
-        payload: { leadId, motivo, situacao },
-      });
-      return 'falhou';
-    }
-  };
-
-  const avisarSinalSchema = z.object({
-    leadId: z.number().int().positive().describe('ID numérico do lead no Kommo.'),
-    motivo: z
-      .string()
-      .min(1)
-      .max(200)
-      .describe('Qual sinal grave o paciente confirmou, com as palavras dele (ex.: "não segura o xixi desde ontem").'),
-  });
-
-  /**
-   * Sinal grave da coluna (ajuste do João, 21/10): a Sofia tenta agendar o horário mais próximo e a equipe
-   * fica sabendo na hora — sem pausar a IA, que ainda está marcando a consulta.
-   */
-  const avisar_sinal_de_alerta = new DynamicStructuredTool({
-    name: 'avisar_sinal_de_alerta',
-    description: desc('avisar_sinal_de_alerta'),
-    schema: avisarSinalSchema,
-    func: async ({ leadId, motivo }) => {
-      await recorder.step({
-        kind: 'TOOL_CALL',
-        title: `Decisão: avisar a equipe do sinal de alerta no lead ${leadId} (${motivo}) — IA segue agendando`,
         payload: { leadId, motivo },
       });
-      const r = await avisarSinalDeAlerta(leadId, motivo, 'agendando');
-      if (r === 'falhou') {
-        return (
-          'ERRO: não consegui avisar a equipe agora. Siga oferecendo o horário mais próximo; se ele recusar, ' +
-          'não houver horário até amanhã ou a conversa travar, transfira com pausar_ia (sinalDeAlerta: true).'
-        );
-      }
-      return (
-        `OK — equipe avisada com urgência${r === 'repetida' ? ' (já tinha sido avisada)' : ''}. A IA continua ` +
-        'ativa: siga oferecendo o horário mais próximo (hoje ou amanhã) e agende se ele aceitar. Não fale de ' +
-        'tarefa nem de sistema; se fizer sentido, diga só que a equipe já está sabendo. Não prometa prazo.'
-      );
-    },
-  });
+      return { tarefa: 'falhou', telegram };
+    }
+  };
 
   const aplicarTagSchema = z.object({
     leadId: z.number().int().positive().describe('ID numérico do lead no Kommo.'),
@@ -400,42 +409,72 @@ export function buildTools({
   };
 
   /**
-   * Recusa (texto pra IA) quando o pedido levaria a PERDIDO um lead com consulta futura ou pagamento — ver `trava-perda.ts`.
-   * A consulta do cartão é conferida na FRANQUIA (o `cancelar_consulta` cancela lá e não atualiza o cartão). Quando segura,
-   * deixa UMA tarefa por dia para a equipe: o paciente quis fechar e ninguém ia saber.
+   * O fechamento como PERDIDO pedido pela Sofia (`fechar_lead` lost, `mover_funil` para o 143), decidido no CÓDIGO — ver
+   * `trava-perda.ts` e `sofia-fecha-quente-morno.ts`. Devolve `null` quando pode fechar (e, se o paciente pediu para parar de
+   * receber, já pôs a etiqueta de não contatar da conta), ou o texto da recusa para a IA:
+   *  - consulta futura (conferida na franquia pelo vínculo) ou pagamento: segura e deixa UMA tarefa por dia para a equipe;
+   *  - Quente/Morno sem recusa explícita: não fecha, leva para EM ESPERA com «Retomar em» +30 d (só diz o que de fato fez);
+   *  - falecimento: não fecha, tarefa para a equipe.
    */
   const recusarPerdaTravada = async (leadId: number, pipelineDestino?: number): Promise<string | null> => {
-    const travada = await recusaDaPerdaDaSofia(kommo, leadId, {
+    const decisao = await decidirFechamentoDaSofia(kommo, leadId, {
       pipelineDestino,
       consultaNaFranquia: unit
-        ? async (nome) => {
-            const { franquiaDoPaciente } = await import('../lib/parados-worker.js'); // import tardio: evita ciclo agent ↔ workers
-            return franquiaDoPaciente(unit, leadId, nome, Math.floor(Date.now() / 1000));
+        ? async () => {
+            // só pelo vínculo gravado (spineLeadLink): achar por telefone/nome pode cair no familiar e soltar a trava pela consulta dele
+            const { franquiaDoVinculo } = await import('../lib/parados-worker.js'); // import tardio: evita ciclo agent ↔ workers
+            return franquiaDoVinculo(unit, leadId, Math.floor(Date.now() / 1000));
           }
         : undefined,
+      ultimasFalas: unit ? async () => falasDoUltimoTurno(await getRecentMessagesByLead(unit.id, String(leadId), 20)) : undefined,
     });
-    if (!travada) return null;
+    if (decisao.tipo === 'segue') {
+      if (decisao.naoContatar && unit) await etiquetarNaoContatar(unit, kommo, leadId); // ANTES de fechar: os gatilhos de PERDIDO leem a etiqueta no evento
+      return null;
+    }
+    const travada = decisao.recusa;
     await recorder.step({
       kind: 'TOOL_RESULT',
-      title: `Recusado: fechar como perdido um lead com «${travada.motivo}»`,
+      title: `Recusado: fechar como perdido — «${travada.motivo}»`,
       payload: { leadId, motivo: travada.motivo },
     });
+    let depois = '';
+    if (travada.levarParaEspera && unit) {
+      try {
+        const { carregarFunis } = await import('../lib/franquia-sync-worker.js'); // import tardio: evita ciclo agent ↔ workers
+        const [funis, esquema, cartao] = await Promise.all([carregarFunis(kommo), esquemaDaUnidade(unit, kommo), kommo.getLead(leadId)]);
+        const r = funis ? await levarParaEsperaComRetomada({ unit, kommo, funis, esquema, cartao, agoraEpoch: Math.floor(Date.now() / 1000) }) : null;
+        depois = r?.naEspera
+          ? r.retomada
+            ? ` O cartão foi levado para EM ESPERA com «Retomar em» daqui a ${RETOMAR_EM_DIAS} dias; a régua para.`
+            : ' O cartão foi levado para EM ESPERA (esta conta não tem «Retomar em»); a régua para.'
+          : ' Não consegui levar o cartão para EM ESPERA: deixe-o onde está.';
+      } catch (err) {
+        logger.warn({ err: String(err), unit: unit.slug, leadId }, 'sofia-fecha: não consegui levar o cartão para EM ESPERA');
+        depois = ' Não consegui levar o cartão para EM ESPERA: deixe-o onde está.';
+      }
+    }
+    let tarefaAberta = false;
     if (travada.avisarEquipe && unit) {
       const chave = 'sofia-perda-recusada';
       try {
-        if (!(await avisoRecente(unit.id, leadId, chave, 24 * 3600_000))) {
+        if (await avisoRecente(unit.id, leadId, chave, 24 * 3600_000)) {
+          tarefaAberta = true; // já há tarefa de hoje
+        } else {
           await kommo.createTask({
             leadId,
-            text: `A Sofia tentou fechar este lead como PERDIDO, mas o cartão está com «${travada.motivo}». Confira com o paciente: se ele desistiu, registre (cancele a consulta na franquia, se houver) e feche o cartão.`,
+            text: travada.textoDaTarefa ?? `A Sofia tentou fechar este lead como PERDIDO, mas o cartão está com «${travada.motivo}». Confira com o paciente: se ele desistiu, registre (cancele a consulta na franquia, se houver) e feche o cartão.`,
             completeAt: Math.floor(Date.now() / 1000) + 3600,
+            responsibleUserId: travada.responsavelId,
           });
           await marcarAviso(unit.id, leadId, chave);
+          tarefaAberta = true;
         }
       } catch (err) {
         logger.warn({ err: String(err), unit: unit.slug, leadId }, 'trava-perda: não consegui abrir a tarefa para a equipe');
       }
     }
-    return `RECUSADO: ${travada.texto}`;
+    return `RECUSADO: ${travada.texto}${depois}${tarefaAberta ? ' A equipe foi avisada por tarefa.' : ''}`;
   };
 
   const mover_etapa = new DynamicStructuredTool({
@@ -589,7 +628,7 @@ export function buildTools({
       }
 
       // Antes da pausa de propósito: se a pausa falhar, a equipe precisa saber do mesmo jeito.
-      if (urgente) await avisarSinalDeAlerta(leadId, motivo, 'transferiu');
+      const aviso = urgente ? await avisarSinalDeAlerta(leadId, motivo) : null;
 
       if (!pausedFieldId) {
         const msg = 'Unit não tem kommoPausedFieldId configurado — pausa não pode ser persistida.';
@@ -599,6 +638,7 @@ export function buildTools({
           payload: { leadId, motivo },
           latencyMs: Math.round(performance.now() - t0),
         });
+        // O aviso (tarefa e Telegram) já saiu acima; só a pausa não pôde ser gravada.
         return `ERRO: ${msg} Avise a equipe e prossiga sem pausar.`;
       }
 
@@ -661,8 +701,29 @@ export function buildTools({
         // O que dizer sobre QUANDO a equipe responde sai daqui, com a hora certa da unidade: o prompt
         // fixo fica uma hora em cache e não sabe se a clínica está aberta agora.
         const retorno: RetornoDaEquipe = unit ? retornoDaEquipe(unit) : { tipo: 'desconhecido' };
-        return `OK — IA pausada no lead ${leadId} (${latency}ms). ${orientacaoAoTransferir(retorno, urgente)}`;
+        // Sinal de alerta: se a tarefa E o Telegram falharam, ninguém foi avisado — o paciente não pode ouvir "avisei".
+        const avisada = aviso ? aviso.tarefa !== 'falhou' || (await aviso.telegram) : true;
+        if (!avisada) {
+          await recorder.step({
+            kind: 'ERROR',
+            title: `🚨 ALERTA: sinal de alerta SEM aviso à equipe — a tarefa e o Telegram falharam (lead ${leadId}). Olhar o cartão agora.`,
+            payload: { leadId, motivo },
+          });
+        }
+        return (
+          `OK — IA pausada no lead ${leadId} (${latency}ms). ${avisada ? '' : `${SEM_AVISO_NA_PAUSA} `}` +
+          orientacaoAoTransferir(retorno, urgente, avisada)
+        );
       } catch (err) {
+        // Erro não prova que a pausa falhou (timeout depois de gravar; 2ª chamada no turno). Só esquece a marca se
+        // a caixinha está mesmo desmarcada; na dúvida a marca fica e a resposta sai — silêncio é o pior caso.
+        let pausou = true;
+        try {
+          pausou = await kommo.isLeadFieldChecked(leadId, pausedFieldId);
+        } catch {
+          // leitura falhou: a marca fica
+        }
+        if (!pausou) esquecerPausaPropria(unit, leadId); // o cartão não ficou pausado: o próximo turno vai responder
         const latency = Math.round(performance.now() - t0);
         const msg = err instanceof Error ? err.message : String(err);
         await recorder.step({
@@ -846,15 +907,16 @@ export function buildTools({
       } catch (err) {
         logger.warn({ err: String(err), leadId }, 'criar_tarefa: sem nome do contato — tarefa sai sem [Contato]');
       }
-      const text = prefixarContato(textoPedido, nomeContato);
+      const text = comLigarAgora(prefixarContato(textoPedido, nomeContato));
       await recorder.step({
         kind: 'TOOL_CALL',
         title: `Decisão: criar tarefa pro lead ${leadId} ("${text.slice(0, 50)}")`,
         payload: { leadId, text, deadlineMinutes, responsibleUserId: responsibleUserId ?? null, completeAt },
       });
       try {
-        const result = await kommo.createTask({ leadId, text, completeAt, responsibleUserId });
-        if (TAREFA_URGENTE.test(text)) avisoUrgenteNoTurno = true;
+        // id explícito = escolha (ação configurada no console): não troca para o usuário da clínica
+        const result = await kommo.createTask({ leadId, text, completeAt, responsibleUserId, manterResponsavel: responsibleUserId !== undefined });
+        if (ehTarefaDeSinal(text)) avisoUrgenteNoTurno = true;
         const latency = Math.round(performance.now() - t0);
         await recorder.step({
           kind: 'KOMMO_ACTION',
@@ -1336,7 +1398,6 @@ export function buildTools({
     aplicar_tag,
     mover_etapa,
     pausar_ia,
-    avisar_sinal_de_alerta,
     atualizar_titulo_lead,
     criar_tarefa,
     atribuir_responsavel,

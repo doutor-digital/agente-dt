@@ -122,12 +122,12 @@ test('o que a IA recebe ao transferir nunca manda prometer prazo', () => {
   assert.match(casos[4], /não invente/);
 });
 
-test('sinal de alerta fora do horário: pronto-socorro só se a dor estiver insuportável', () => {
+test('sinal de alerta nunca manda ao pronto-socorro, nem fora do horário (decisão de 26/10)', () => {
   const amanha = orientacaoAoTransferir({ tipo: 'fechada', quando: 'amanhã (quinta-feira) às 8h', hoje: false }, true);
-  assert.match(amanha, /não atende mais hoje/);
-  assert.match(amanha, /insuportável/);
-  // Abre hoje ainda: pode haver horário hoje, então a ressalva do pronto-socorro não entra.
-  assert.doesNotMatch(orientacaoAoTransferir({ tipo: 'fechada', quando: 'hoje às 8h', hoje: true }, true), /pronto-socorro/);
+  assert.doesNotMatch(amanha, /insuportável/);
+  assert.match(amanha, /NÃO sugira pronto-socorro/);
+  assert.match(amanha, /PRÓPRIO paciente perguntou/);
+  assert.match(amanha, /pode ir/);
   // Transferência comum nunca fala de pronto-socorro.
   assert.doesNotMatch(orientacaoAoTransferir({ tipo: 'fechada', quando: 'amanhã (quinta-feira) às 8h', hoje: false }), /pronto-socorro/);
 });
