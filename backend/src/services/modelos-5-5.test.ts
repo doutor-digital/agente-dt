@@ -109,6 +109,13 @@ test('claude-* desconhecido: avisa UMA vez e estima pelo Anthropic mais caro (n�
   assert.equal(aviso.mock.callCount(), 2);
 });
 
+test('id com sufixo (data, -latest) usa o preço da entrada que o prefixa, sem aviso nem estimativa cara', (t) => {
+  const aviso = t.mock.method(logger, 'warn', () => undefined);
+  assert.equal(calculateCost('claude-haiku-5-5-latest', 100_000, 100_000), 0.06);
+  assert.equal(calculateCost('claude-sonnet-5-5-20261001', 1_000_000, 0), 2);
+  assert.equal(aviso.mock.callCount(), 0);
+});
+
 test('modelo não-Anthropic desconhecido segue custando zero', () => {
   assert.equal(calculateCost('modelo-inexistente', 1000, 1000), 0);
 });
@@ -136,7 +143,7 @@ test('LlmRecusaError não é falha de infra nem de chave (não abre circuito nem
   assert.equal(ehFalhaDeChave(e), null);
 });
 
-test('invokeChatModel: refusal vira LlmRecusaError, grava o gasto UMA vez como sucesso e nunca devolve a resposta', async (t) => {
+test('invokeChatModel: refusal vira LlmRecusaError, grava o gasto UMA vez (como erro, para aparecer no painel) e nunca devolve a resposta', async (t) => {
   llmCallGravadas.length = 0;
   t.mock.method(logger, 'warn', () => undefined);
   const resposta = new AIMessage({
@@ -159,7 +166,9 @@ test('invokeChatModel: refusal vira LlmRecusaError, grava o gasto UMA vez como s
   );
   await new Promise((r) => setImmediate(r));
   assert.equal(llmCallGravadas.length, 1);
-  assert.equal(llmCallGravadas[0]!.status, 'success');
+  assert.equal(llmCallGravadas[0]!.status, 'error');
+  assert.match(String(llmCallGravadas[0]!.errorMessage), /refusal.*cyber/);
+  assert.equal(Number(llmCallGravadas[0]!.promptTokens), 1_000_000);
   assert.equal(gastoDaConversa(conversaId).usd, 2); // a recusa consumiu token e entra no teto
 });
 

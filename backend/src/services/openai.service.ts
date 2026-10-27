@@ -82,6 +82,12 @@ function precoDoModelo(model: string): ModelPrice | null {
   const price = MODEL_PRICES[model];
   if (price) return price;
   if (!model.startsWith('claude')) return null;
+  // Id com sufixo (data, `-latest`): vale o preço da entrada mais específica que o prefixa — senão
+  // `claude-haiku-5-5-latest` seria estimado como Opus 4.8 (50× o real) e o teto cortaria à toa.
+  const prefixo = Object.keys(MODEL_PRICES)
+    .filter((k) => k.startsWith('claude') && model.startsWith(`${k}-`))
+    .sort((a, b) => b.length - a.length)[0];
+  if (prefixo) return MODEL_PRICES[prefixo]!;
   if (!modelosSemPrecoAvisados.has(model)) {
     modelosSemPrecoAvisados.add(model);
     logger.warn(
@@ -434,6 +440,8 @@ export async function invokeChatModel(args: InvokeChatModelArgs): Promise<unknow
       );
     }
 
+    const recusa = detectarRecusa(response);
+
     const finalUsage: TokenUsage = usage ?? {};
     let { promptTokens, completionTokens, totalTokens } = finalUsage;
     let cacheReadTokens = 0;
@@ -483,7 +491,9 @@ export async function invokeChatModel(args: InvokeChatModelArgs): Promise<unknow
       cacheWrite5mTokens,
       cacheWrite1hTokens,
       latencyMs,
-      status: 'success',
+      // Recusa gasta token (o custo fica gravado) mas conta como erro: aparece no painel e no alarme de taxa de erro.
+      status: recusa ? 'error' : 'success',
+      errorMessage: recusa ? new LlmRecusaError(recusa.categoria).message : undefined,
       // A conversa fica guardada porque é o que permite investigar depois — mas
       // mascarada: telefone, CPF, CNPJ e e-mail saem, a queixa e o nome ficam.
       // Sem a queixa o registro não serve pra nada; com o telefone, vira base de
@@ -500,7 +510,6 @@ export async function invokeChatModel(args: InvokeChatModelArgs): Promise<unknow
     });
 
     // Depois de gravar o gasto (a recusa também consome token): resposta recusada não segue para o paciente.
-    const recusa = detectarRecusa(response);
     if (recusa) {
       logger.warn(
         { unitId: args.unitId, model: args.modelName, traceId: args.traceId, categoria: recusa.categoria },
@@ -511,7 +520,7 @@ export async function invokeChatModel(args: InvokeChatModelArgs): Promise<unknow
 
     return response;
   } catch (err) {
-    // Já gravada como sucesso (com o gasto) acima — não regrava como erro nem dispara o alerta de saldo.
+    // Já gravada acima (com o gasto) — não regrava nem dispara o alerta de saldo.
     if (err instanceof LlmRecusaError) throw err;
     const latencyMs = Math.round(performance.now() - t0);
     const msg = err instanceof Error ? err.message : String(err);
