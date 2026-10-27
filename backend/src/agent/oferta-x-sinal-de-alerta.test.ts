@@ -169,6 +169,81 @@ test('(b) fora de turno de alerta o corte total cai na frase de reserva padrão 
   assert.doesNotMatch(r.text, /R\$/);
 });
 
+// ── (b2) o corte do PS deixa venda para trás num turno de alerta: sai SÓ a frase do passe ──
+
+test('(b2) alerta + modelo já avisou: "Procure o PS. Pela campanha fica R$ 150. Quer ver um horário?" sai SÓ a frase do passe', async () => {
+  const r = await fimDoTurno({
+    falas: ['minha perna está perdendo força'],
+    mensagens: modeloJaAvisou('minha perna está perdendo força'),
+    textoDoModelo: 'Procure o pronto-socorro mais próximo. Pela campanha a avaliação fica R$ 150 antecipado. Quer ver um horário?',
+  });
+  assert.equal(r.passouPorSinal, true);
+  assert.equal(r.guard.text, fraseDoPasse(retornoDaEquipe(unit), false));
+  assert.doesNotMatch(r.guard.text, /R\$|150|quer ver|pronto/i);
+  assert.ok(r.guard.triggered.includes('alerta_com_venda'));
+  assert.ok(r.guard.triggered.some((t) => t.startsWith('pronto_socorro_ou_cirurgia')));
+  assert.equal(r.guard.rewritten, true);
+});
+
+test('(b2) alerta + corte do PS: horário solto ou só a pergunta de agendamento também levam a frase do passe', async () => {
+  for (const texto of [
+    'Procure o pronto-socorro. Tenho quarta às 9h livre.',
+    'Procure o pronto-socorro. Posso agendar a sua consulta?',
+    'Procure o pronto-socorro. Quer que eu veja a vaga de amanhã?',
+    'Procure o pronto-socorro. Tenho vaga às 9h30.',
+    'Procure o pronto-socorro. Temos vaga amanhã, é só me falar.',
+    'Procure o pronto-socorro. A avaliação sai por 150 reais.',
+  ]) {
+    const r = await fimDoTurno({
+      falas: ['não consigo segurar o xixi'],
+      mensagens: modeloJaAvisou('não consigo segurar o xixi'),
+      textoDoModelo: texto,
+    });
+    assert.equal(r.guard.text, fraseDoPasse(retornoDaEquipe(unit), false), texto);
+  }
+});
+
+test('(b2) fora de turno de alerta nada muda: o PS é cortado e o R$ da oferta e a pergunta ficam', () => {
+  const r = aplicarGuardrail(
+    'Procure o pronto-socorro mais próximo. Pela campanha a avaliação fica R$ 150 antecipado. Quer ver um horário?',
+    unit,
+    { ofertaDaCampanha: OFERTA, mensagensDoPaciente: ['quanto custa a consulta?'] },
+  );
+  assert.equal(r.text, 'Pela campanha a avaliação fica R$ 150 antecipado. Quer ver um horário?');
+  assert.ok(!r.triggered.includes('alerta_com_venda'));
+});
+
+test('(b2) turno de alerta em que o corte do PS deixa só o aviso limpo: o aviso atravessa intacto', async () => {
+  const r = await fimDoTurno({
+    falas: ['minha perna está perdendo força'],
+    mensagens: modeloJaAvisou('minha perna está perdendo força'),
+    textoDoModelo: 'Sinto muito 🙏 Já avisei a nossa equipe, com prioridade. Procure o pronto-socorro mais próximo.',
+  });
+  assert.equal(r.guard.text, 'Sinto muito 🙏 Já avisei a nossa equipe, com prioridade.');
+  assert.ok(!r.guard.triggered.includes('alerta_com_venda'));
+});
+
+test('(b2) pergunta clínica do aviso ("desde quarta?", "mais de 2 horas?") não é venda: o aviso fica, só o PS sai', async () => {
+  const r = await fimDoTurno({
+    falas: ['minha perna está perdendo força'],
+    mensagens: modeloJaAvisou('minha perna está perdendo força'),
+    textoDoModelo: 'Já avisei a nossa equipe 🙏 Isso começou desde quarta? Faz mais de 2 horas que você não sente a perna? Procure o pronto-socorro.',
+  });
+  assert.equal(r.guard.text, 'Já avisei a nossa equipe 🙏 Isso começou desde quarta? Faz mais de 2 horas que você não sente a perna?');
+  assert.ok(!r.guard.triggered.includes('alerta_com_venda'));
+});
+
+test('(b2) turno de alerta SEM nada a cortar: a resposta do modelo (aviso limpo) atravessa intacta', async () => {
+  const texto = 'Sinto muito 🙏 Já avisei a nossa equipe, com prioridade, e ela te chama em instantes.';
+  const r = await fimDoTurno({
+    falas: ['minha perna está perdendo força'],
+    mensagens: modeloJaAvisou('minha perna está perdendo força'),
+    textoDoModelo: texto,
+  });
+  assert.equal(r.guard.text, texto);
+  assert.deepEqual(r.guard.triggered, []);
+});
+
 // ── (c) as duas ao mesmo tempo: o aviso urgente prevalece ──
 
 test('(c) pergunta o preço E diz o sinal de alerta: sai o aviso urgente, o preço da oferta fica para depois', async () => {
@@ -231,6 +306,11 @@ test('graph.ts: as DUAS chamadas do guardrail do fim do turno levam oferta + fal
   assert.ok(cta, 'chamada da pergunta final não encontrada');
   assert.match(cta[1], /mensagensDoPaciente/);
   assert.match(cta[1], /\.\.\.extrasDoGuardrail/);
+  // Linhas inteiras (não só o começo): cada uma fecha uma mutação que antes sobrevivia.
+  assert.match(src, /const extrasDoGuardrail = \{ ofertaDaCampanha: ofertaDoTurno\.valor\?\.oferta \?\? null \};/);
+  assert.match(src, /fraseDeReserva: passouPorSinal \? fraseDoPasse\(retornoDaEquipe\(unit\), pacienteFalouDePs\(mensagensDoPaciente\)\) : undefined,/);
+  assert.match(src, /if \(cta\.precisaRefazer && !passouPorSinal && !respostaFixa && /);
+  assert.match(src, /const passouPorSinal = passe\.avisou \|\| passe\.texto !== textoFinal;/);
   // nenhuma chamada do guardrail no graph pode ficar sem o contexto da oferta
   for (const m of src.matchAll(/aplicarGuardrail\(/g)) {
     const trecho = src.slice(m.index, m.index + 260);

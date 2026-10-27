@@ -173,6 +173,20 @@ function violaRegra(regra: { key: string; re: RegExp }, text: string): boolean {
  */
 const FALLBACK_SEM_PRONTO_SOCORRO = 'Entendi, obrigada por me contar 🙏 Me conta um pouquinho mais do que você está sentindo?';
 
+/**
+ * Sobrou venda: R$, horário/dia da semana, ou pergunta de venda/agendamento. Num turno de aviso urgente, quem recebeu o
+ * aviso não pode ler isto: se o corte do pronto-socorro deixou algum desses, a resposta inteira vira a frase do passe.
+ */
+// Valor: "R$ 150" ou "150 reais". Horário: "9h", "9h30", "14:30", "às 14 horas", "12/11", "horário(s)". Dia da semana e
+// "2 horas" soltos NÃO contam ("começou desde quarta?", "faz mais de 2 horas?" são perguntas clínicas do aviso).
+const TEM_VALOR = /R\$|\b\d+\s*reais\b/i;
+const TEM_HORARIO = /\b\d{1,2}\s*h(?:\d{2})?\b|\b\d{1,2}:\d{2}\b|\b[àa]s\s+\d{1,2}\s*horas?\b|\b\d{1,2}\/\d{1,2}\b|\bhor[aá]rios?\b/i;
+const VERBO_DE_VENDA = /\b(?:marc\w+|agend\w+|reserv\w+|encaix\w+|vagas?|quer\s+(?:ver|que|garantir)|posso\s+(?:ver|te\s+(?:mostrar|passar))|gostaria\s+de\s+(?:ver|marcar|agendar))\b/i;
+
+function sobrouVenda(texto: string): boolean {
+  return TEM_VALOR.test(texto) || TEM_HORARIO.test(texto) || VERBO_DE_VENDA.test(texto);
+}
+
 export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoGuardrail = {}): GuardrailResult {
   if (!text || !text.trim()) return { text, triggered: [], rewritten: false };
   const triggered: string[] = [];
@@ -195,6 +209,12 @@ export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoG
     if (semPs.removidas.length > 0) {
       triggered.push('pronto_socorro_ou_cirurgia:' + semPs.removidas.length);
       if (!semPs.texto.trim()) return { text: contexto.fraseDeReserva ?? FALLBACK_SEM_PRONTO_SOCORRO, triggered, rewritten: true };
+      // Turno de aviso urgente: o corte tirou só a frase do pronto-socorro e ficou venda ("Pela campanha fica R$ 150. Quer
+      // ver um horário?") SEM a frase do passe. Quem está em alerta recebe só a frase do passe.
+      if (contexto.fraseDeReserva && sobrouVenda(semPs.texto)) {
+        triggered.push('alerta_com_venda');
+        return { text: contexto.fraseDeReserva, triggered, rewritten: true };
+      }
       texto = semPs.texto;
       reescreveu = true;
     }
