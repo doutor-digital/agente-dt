@@ -191,7 +191,8 @@ export async function reEvaluateConversationHandler(req: Request, res: Response)
     return;
   }
   if (desfecho.status === 'nao_avaliavel') {
-    res.json({ ok: false, naoAvaliavel: true, motivo: desfecho.motivo });
+    // Não é 200: o front só lê o status, e "sucesso" sem nota nova esconderia que a antiga continua.
+    res.status(422).json({ error: 'nao_avaliavel', motivo: desfecho.motivo });
     return;
   }
   res.status(500).json({ error: 'judge_failed' });
