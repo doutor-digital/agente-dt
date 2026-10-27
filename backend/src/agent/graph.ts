@@ -15,7 +15,7 @@ import { getActiveConfig } from './config.js';
 import { composeSystemPromptForUnit, composeSystemPromptPartsForUnit, precosDaConsulta } from './prompt-composer.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.js';
-import { createChatModel, invokeChatModel } from '../services/openai.service.js';
+import { createChatModel, invokeChatModel, LlmRecusaError } from '../services/openai.service.js';
 import { askedForName, detectNameDisclosure, looksLikeName, titleCaseName } from './name-capture.js';
 import { aplicarGuardrail } from './guardrail.js';
 import type { OfertaVigente } from './oferta-da-campanha.js';
@@ -848,6 +848,15 @@ export async function buildAgentGraph(
       registrarSucesso(provider as Provedor);
     } catch (err) {
       const erroPrincipal = err instanceof Error ? err.message : String(err);
+      // Recusa do modelo: o provedor está de pé — não conta para o circuito (ehFalhaDeInfra é false). Fica no rastro.
+      if (err instanceof LlmRecusaError) {
+        await recorder.step({
+          kind: 'ERROR',
+          title: `🚫 ${provider} recusou responder (stop_reason=refusal${err.categoria ? `, categoria ${err.categoria}` : ''}) — resposta descartada`,
+          payload: { provider, modelo: modelName, stopReason: 'refusal', categoria: err.categoria },
+          latencyMs: Math.round(performance.now() - t0),
+        });
+      }
       if (ehFalhaDeInfra(err) && registrarFalha(provider as Provedor)) {
         logger.error(
           { provider, unit: unit.slug, erro: erroPrincipal },
