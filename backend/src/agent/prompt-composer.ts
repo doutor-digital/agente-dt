@@ -2645,7 +2645,15 @@ export function renderFatosDaUnidade(unit: Unit): string {
     linhas.push(`- Chave Pix: ${chave}${titular ? ` (titular: ${titular})` : ''}`);
   }
   const p = precosDaConsulta(unit);
-  if (p) {
+  if (p && unit.spineBookingRequiresPayment) {
+    // Boa Vista, 27/10/2026: com "R$ 100 antecipado ou R$ 250 no dia" o follow-up chamou a taxa de "valor
+    // promocional" e inventou que depois de 03/11 a consulta passava a custar R$ 250. A taxa abate, não é desconto.
+    linhas.push(
+      `- Consulta: R$ ${fmtBRL(p.antecipado + p.noDia)} no total = R$ ${fmtBRL(p.antecipado)} de TAXA DE AGENDAMENTO ` +
+        `(paga antes por Pix, garante o horário e abate do total) + R$ ${fmtBRL(p.noDia)} na clínica no dia. ` +
+        'Diga sempre "taxa de agendamento" — NUNCA "promoção", "desconto" ou "valor promocional", e não invente prazo nem valor diferente depois de uma data.',
+    );
+  } else if (p) {
     linhas.push(`- Consulta: R$ ${fmtBRL(p.antecipado)} antecipado (pago antes) ou R$ ${fmtBRL(p.noDia)} no dia`);
   }
   const onde = unit.clinicAddress?.trim();
