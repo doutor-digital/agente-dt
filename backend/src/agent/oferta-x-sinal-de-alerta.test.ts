@@ -14,7 +14,8 @@ import type { Unit } from '@prisma/client';
 
 import { aplicarGuardrail } from './guardrail.js';
 import { passarPorSinalNoTurno } from './passe-por-sinal.js';
-import { chamadasDoTurno, falasDoTurno, fraseDoPasse } from './sinal-de-alerta.js';
+import { falasDoTurno, fraseDoPasse } from './sinal-de-alerta.js';
+import { confirmouConsultaNoTurno } from './venda-em-alerta.js';
 import { pacienteFalouDePs } from './sem-pronto-socorro.js';
 import { marcouNesteTurno } from './reserva-sem-marcar.js';
 import { retornoDaEquipe } from '../lib/retorno-da-equipe.js';
@@ -68,12 +69,17 @@ async function fimDoTurno(o: {
     textoFinal: o.textoDoModelo,
   });
   const passouPorSinal = passe.avisou || passe.texto !== o.textoDoModelo;
+  // os resultados das ferramentas do turno, como o graph.ts os junta (de trás para a frente até a fala do paciente)
+  const doTurno: string[] = [];
+  for (let i = mensagens.length - 1; i >= 0 && mensagens[i].getType() !== 'human'; i--) {
+    if (mensagens[i].getType() === 'tool') doTurno.push(String(mensagens[i].content));
+  }
   const extrasDoGuardrail = { ofertaDaCampanha: o.oferta === undefined ? OFERTA : o.oferta };
   const guard = aplicarGuardrail(semIntimidade(semDiminutivo(passe.texto)), unit, {
     ...extrasDoGuardrail,
     mensagensDoPaciente,
     fraseDeReserva: passouPorSinal ? fraseDoPasse(retornoDaEquipe(unit), pacienteFalouDePs(mensagensDoPaciente)) : undefined,
-    consultaMarcada: passouPorSinal && marcouNesteTurno(chamadasDoTurno(mensagens).filter((c) => c.name === 'agendar_consulta').map((c) => c.resultado ?? '')),
+    consultaMarcada: passouPorSinal && (marcouNesteTurno(doTurno) || confirmouConsultaNoTurno(doTurno)),
   });
   return { passe, passouPorSinal, guard, chamadas, mensagensDoPaciente };
 }
@@ -295,6 +301,23 @@ test('(b3) venda que escapava (às 9, marcá-la, agendá-lo, reservá-la, 150,00
     'Já deixei sua reserva, é só confirmar o agendamento.',
     'De acordo, podemos iniciar quarta às 9h.',
     'Marquei para quinta.',
+    'Quer que eu veja um horário?',
+    'Quer que eu veja um horário pra você?',
+    'Quer que eu veja os horários de quinta pra você? 😊',
+    'Quer que eu veja as opções pra você?',
+    'Fica 150 à vista.',
+    'Você pode vir às 9 da manhã?',
+    'Tenho qua. às 9h.',
+    'Posso remarcar a sua consulta para quinta?',
+    'Quarta às 9h a doutora avalia a sua dor.',
+    'Quarta às 9h a nossa equipe te atende.',
+    'Posso te passar os valores?',
+    'Amanhã cedo tem espaço com a doutora, te interessa?',
+    'A condição da campanha vale só até sexta, aproveita!',
+    'Consigo te atender quarta de manhã.',
+    'Quarta de manhã fica bom pra você?',
+    'Mando o link de pagamento?',
+    'Deixo separado o das 9h pra você?',
   ]) {
     const r = await fimDoTurno({
       falas: ['não consigo segurar o xixi'],
@@ -325,6 +348,14 @@ test('(b3) triagem clínica NÃO é venda: horas, datas e "marca" da pergunta cl
     'Ela te responde amanhã (quinta) às 8h.',
     'Hoje às 15h a dor aumentou?',
     'Hoje as 2 pernas doem?',
+    'Em qual horário a dor fica pior?',
+    'Você está disponível para a equipe te ligar agora?',
+    'Posso ver com a equipe se ela te liga ainda hoje?',
+    'Quer que eu peça pra equipe te ligar?',
+    'Você prefere que a equipe ligue hoje ou amanhã?',
+    'Na segunda às 10h a perna já estava fraca?',
+    'Hoje às 6h você conseguiu urinar normalmente?',
+    'Você tomou algum remédio hoje às 8h?',
   ]) {
     const r = await fimDoTurno({
       falas: ['minha perna está perdendo força'],
@@ -350,6 +381,46 @@ test('(b3) o agendar_consulta FALHOU e o modelo oferece outro horário em turno 
   });
   assert.equal(r.guard.text, fraseDoPasse(retornoDaEquipe(unit), false));
   assert.ok(r.guard.triggered.includes('alerta_com_venda'));
+});
+
+test('(b3) remarcar / confirmar presença / cancelar que deram certo + frase de PS: o dia novo chega ao paciente (modelo pausou sozinho)', async () => {
+  const fala = 'minha perna está perdendo força';
+  const turno = (ferramenta: string, resultado: string): BaseMessage[] => [
+    new HumanMessage(fala),
+    new AIMessage({ content: '', tool_calls: [
+      { id: 'p', name: 'pausar_ia', args: { motivo: 'x', sinalDeAlerta: true } },
+      { id: 'f', name: ferramenta, args: {} },
+    ] }),
+    new ToolMessage({ content: 'OK — IA pausada', tool_call_id: 'p' }),
+    new ToolMessage({ content: resultado, tool_call_id: 'f' }),
+  ];
+  const PS = ' Se piorar, procure o pronto-socorro.';
+  for (const [ferramenta, resultado, texto] of [
+    ['remarcar_consulta', 'Remarcada de terça, 11/11 às 14:00 para quarta, 12/11 às 09:00.', 'Pronto, remarquei para quarta, 12/11, às 9h.'],
+    ['confirmar_presenca', 'Presença confirmada para quarta, 12/11 às 09:00. Agradeça.', 'Presença confirmada para quarta, 12/11, às 9h 🙏'],
+    ['cancelar_consulta', 'Consulta de quarta, 12/11 às 09:00 cancelada. Confirme ao paciente e pergunte se ele quer remarcar.', 'Cancelei a sua consulta de quarta, 12/11, às 9h. Quer remarcar para outro dia?'],
+    ['agendar_consulta', 'RECUSADO: este paciente já tem consulta marcada na clínica em quarta, 12/11 às 09:00. Confirme esse dia e hora.', 'Você já tem consulta marcada na quarta, 12/11, às 9h.'],
+  ] as const) {
+    const r = await fimDoTurno({ falas: [fala], mensagens: turno(ferramenta, resultado), textoDoModelo: texto + PS });
+    assert.equal(r.guard.text, texto, ferramenta);
+    assert.ok(!r.guard.triggered.includes('alerta_com_venda'), ferramenta);
+  }
+});
+
+test('(b3) a ferramenta NÃO deu certo (cancelar sem confirmar, agendar sem vaga): sem confirmação a proteger, venda + PS vira a frase do passe', async () => {
+  const fala = 'minha perna está perdendo força';
+  for (const [ferramenta, resultado] of [
+    ['cancelar_consulta', 'Antes de cancelar, confirme com o paciente.'],
+    ['agendar_consulta', '09:00 não está mais disponível (ocupado). A consulta NÃO foi marcada.'],
+  ] as const) {
+    const mensagens: BaseMessage[] = [
+      new HumanMessage(fala),
+      new AIMessage({ content: '', tool_calls: [{ id: 'f', name: ferramenta, args: {} }] }),
+      new ToolMessage({ content: resultado, tool_call_id: 'f' }),
+    ];
+    const r = await fimDoTurno({ falas: [fala], mensagens, textoDoModelo: 'Quer ver outro horário? Se piorar, procure o pronto-socorro.' });
+    assert.equal(r.guard.text, fraseDoPasse(retornoDaEquipe(unit), false), ferramenta);
+  }
 });
 
 // ── (c) as duas ao mesmo tempo: o aviso urgente prevalece ──
@@ -423,7 +494,8 @@ test('graph.ts: as DUAS chamadas do guardrail do fim do turno levam oferta + fal
     'fraseDeReserva: passouPorSinal ? fraseDoPasse(retornoDaEquipe(unit), pacienteFalouDePs(mensagensDoPaciente)) : undefined,',
     'if (cta.precisaRefazer && !passouPorSinal && !respostaFixa && ',
     'const passouPorSinal = passe.avisou || passe.texto !== textoFinal;',
-    "marcouNesteTurno(chamadasDoTurno(nonSystemMessages).filter((c) => c.name === 'agendar_consulta').map((c) => c.resultado ?? '')),",
+    'const marcouAgora = marcouNesteTurno(doTurno);',
+    'consultaMarcada: passouPorSinal && (marcouAgora || confirmouConsultaNoTurno(doTurno)),',
   ]) {
     assert.ok(srcCompacto.includes(semEspaco(linha)), `graph.ts perdeu a linha: ${linha}`);
   }

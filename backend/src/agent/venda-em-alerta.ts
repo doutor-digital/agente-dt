@@ -32,32 +32,48 @@ const VALOR = new RegExp(
 const VENDA = new RegExp(
   `${INI}(?:` +
     [
-      String.raw`(?:marc|agend|reserv|encaix)(?:ar|á-\w+|ar[eéi]\w*|amos|ad[oa]s?|ue|e|o|ou|ei)`,
-      String.raw`marqu(?:e|ei|emos)`,
+      String.raw`(?:re)?(?:marc|agend|reserv|encaix)(?:ar|á-\w+|ar[eéi]\w*|amos|ad[oa]s?|ue|e|o|ou|ei)`,
+      String.raw`(?:re)?marqu(?:e|ei|emos)`,
       String.raw`agenda|agendamentos?|reservas?`,
       String.raw`garant(?:ir|i-\w+|o|imos|id[oa]s?)`,
       String.raw`vagas?`,
       String.raw`disponibilidade`,
-      String.raw`dispon[ií]ve(?:l|is)`,
       String.raw`pix`,
+      // preço sem "R$": "fica 150", "à vista", "parcelado", "desconto", "o valor"
+      String.raw`(?:fica|sai|custa|vale)\s+(?:por\s+)?\d{2,4}(?!\d|\s*(?:min|hora|h\b|dia|seman|m[eê]s|ano|vez|cm|kg|graus|%|:))`,
+      String.raw`[àa]\s+vista|parcel\w+|desconto|pre[cç]os?|valor(?:es)?`,
+      // convite: "quer vir", "pode vir", "quer ver um horário", "quer que eu veja os horários/as opções"
+      String.raw`(?:quer|pode|consegue|gostaria\s+de|prefere)\s+vir`,
       String.raw`quer\s+(?:ver|garantir|marcar|agendar)`,
-      String.raw`posso\s+(?:ver|garantir|te\s+(?:mostrar|passar|mandar|enviar|encaixar))`,
+      String.raw`quer\s+que\s+eu\s+(?:veja|confira|consulte|procure|encontre|te\s+(?:mostre|passe|envie|mande))\s+(?:\p{L}+\s+){0,2}(?:hor[aá]rios?|op[cç][oõ]es|vagas?|dias?|datas?|valores?)`,
+      String.raw`posso\s+ver\s+(?:um|o|os|as|algum|alguns)\s+(?:\p{L}+\s+)?(?:hor[aá]rios?|op[cç][oõ]es|vagas?)`,
+      String.raw`posso\s+(?:garantir|te\s+(?:mostrar|passar|mandar|enviar|encaixar))`,
+      // outros convites de fechamento: "te interessa?", "tem espaço", "consigo te atender", "deixo separado", "link de pagamento"
+      String.raw`te\s+interessa|tem\s+espa[cç]o|consigo\s+te\s+atender|deixo\s+(?:separad|reservad|garantid)\w*|pagamento|primeiro\s+passo|fica\s+bom\s+(?:pra|para)\s+voc[eê]`,
+      String.raw`campanha|promo[cç][aã]o|aproveit\w+`,
     ].join('|') +
     `)${FIM}`,
   'iu',
 );
 
-/** Dia/data/"horário" na frase: com um convite ("tenho", "fica melhor", "que tal") vira oferta de horário. */
+/** Dia ou data na frase: com um convite ("tenho", "fica melhor", "que tal") vira oferta de horário. "qua." chega aqui sem o ponto. */
 const DIA_OU_DATA = new RegExp(
-  `${INI}(?:amanh[ãa]|hoje|segunda|ter[çc]a|quarta|quinta|sexta|s[áa]bado|domingo|hor[áa]rios?)${FIM}|${INI}\\d{1,2}/\\d{1,2}${FIM}`,
+  `${INI}(?:amanh[ãa]|hoje|segunda|ter[çc]a|quarta|quinta|sexta|s[áa]bado|domingo|seg|ter|qua|qui|sex|s[áa]b|dom)${FIM}|${INI}\\d{1,2}/\\d{1,2}${FIM}`,
   'iu',
 );
+const PALAVRA_HORARIO = new RegExp(`${INI}hor[áa]rios?${FIM}`, 'iu');
+/** A frase é pergunta de triagem sobre o sintoma: "Em qual horário a dor fica pior?" não oferece horário. */
+const TRIAGEM_DO_SINTOMA = /\b(?:d[oó]i|dor|piora\w*|pior|sente\w*|sintomas?|formig\w+)\b/i;
+/** Aviso de que a equipe vai ligar/responder: "ela te responde amanhã às 8h", "prefere que a equipe ligue hoje ou amanhã?" */
+const AVISO_DA_EQUIPE = /\b(?:liga|ligar|ligue|ligamos|ligo|ligamo|responde|respondem|chama|chamar|retorna|retornar|retorne|contato|procura)\b/i;
+
 /**
- * Triagem ou aviso, não agenda: o paciente contando quando começou ("desde quarta às 7h"), a dor, ou o aviso de quando a equipe
- * responde ("ela te responde amanhã às 8h" — é o que o pausar_ia manda o modelo escrever). Com convite escrito ("tenho", "vaga"),
- * a frase continua sendo venda pelos outros caminhos.
+ * O paciente (ou a pergunta) contando quando começou ou o que fez: "desde quarta às 7h", "a dor aumentou hoje às 15h",
+ * "ontem às 22h a perna estava fraca". Só vale para dia+hora SEM convite escrito; "dor"/"equipe" soltos NÃO isentam
+ * ("quarta às 9h a doutora avalia a sua dor" é venda).
  */
-const RELATO_DE_INICIO = /\b(?:desde|come[cç]ou|inici(?:ou|ei)|piorou|aumentou|acord(?:ou|ei)|sentiu|apareceu|dor|doer|doem|equipe|respond\w+|retorn\w+|te\s+(?:chama|liga|procura)|entra\w*\s+em\s+contato)\b/i;
+const RELATO_DE_INICIO =
+  /\b(?:desde|come[cç]ou|inici(?:ou|ei)|piorou|aumentou|acord(?:ou|ei)|sentiu|sentia|apareceu|estava|estavam|ficou|tomou|conseguiu|ontem)\b/i;
 
 // "às 9" (com crase) é hora; "as 2 pernas" não: sem a crase só vale com h, : ou "horas".
 const AS_N = new RegExp(`${INI}(?:às\\s+(\\d{1,2})(?::(\\d{2})|h(\\d{2})?|\\s*horas?)?|as\\s+(\\d{1,2})(?::(\\d{2})|h(\\d{2})?|\\s+horas?))${FIM}`, 'giu');
@@ -81,13 +97,27 @@ function horasDeRelogio(frase: string): number {
 }
 
 export function sobrouVenda(texto: string): boolean {
-  if (VALOR.test(texto) || VENDA.test(texto)) return true;
-  for (const { frase } of quebrarEmFrases(texto)) {
+  // "Tenho qua. às 9h": o ponto da abreviatura não encerra a frase
+  const t = texto.replace(/(?<![\p{L}])(seg|ter|qua|qui|sex|s[áa]b|dom)\./giu, '$1');
+  if (VALOR.test(t) || VENDA.test(t)) return true;
+  for (const { frase } of quebrarEmFrases(t)) {
+    const relogio = horasDeRelogio(frase) > 0;
     const temDia = DIA_OU_DATA.test(frase);
+    if (AVISO_DA_EQUIPE.test(frase)) continue;
     // "Tenho quarta às 9h", "pode ser amanhã?", "que tal esse horário?"
-    if (OFERTA_DE_HORARIO.test(frase) && (temDia || horasDeRelogio(frase) > 0)) return true;
-    // "quarta às 9h", "dia 12/11 às 9" sem convite escrito, a menos que seja o paciente contando o começo da dor
-    if (temDia && horasDeRelogio(frase) > 0 && !RELATO_DE_INICIO.test(frase)) return true;
+    if (OFERTA_DE_HORARIO.test(frase) && (temDia || relogio || (PALAVRA_HORARIO.test(frase) && !TRIAGEM_DO_SINTOMA.test(frase)))) return true;
+    // "quarta às 9h", "dia 12/11 às 9" sem convite escrito, a menos que seja o relato do paciente
+    if (temDia && relogio && !RELATO_DE_INICIO.test(frase)) return true;
   }
   return false;
+}
+
+/**
+ * A resposta do modelo CONFIRMA ao paciente algo que a ferramenta fez neste turno e que ele não pode deixar de ler: presença
+ * confirmada, consulta cancelada, ou "já tem consulta marcada" (a equipe marcou). Juntamente com `marcouNesteTurno` (marcada /
+ * remarcada), isenta a resposta de virar a frase do passe.
+ */
+const CONFIRMA_AO_PACIENTE = /^(?:Presença confirmada para|Consulta de [^\n]{1,80}? cancelada\.|RECUSADO: este paciente já tem consulta)/;
+export function confirmouConsultaNoTurno(resultadosDasFerramentas: ReadonlyArray<string>): boolean {
+  return resultadosDasFerramentas.some((r) => CONFIRMA_AO_PACIENTE.test(String(r ?? '').trim()));
 }
