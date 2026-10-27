@@ -5,16 +5,18 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { _semearParaTeste } from './automacoes-estado.js';
+import { prisma } from './prisma.js';
 import { AUTOMACOES, automacaoPorId, verificarCatalogo } from './automacoes.js';
 import { deveCriarNaFranquia } from './cadastro-na-franquia.js';
 import {
   _limparCacheParaTeste,
+  cadastrarLeadDoTurno,
+  depsPadrao,
   criaPacienteJuntoComOLead,
   decidirCadastroDoLead,
   estadoCadastroTodoLead,
   triar,
   umCadastroPorVez,
-  unidadeBase,
   unidadesDistintas,
   type DepsDoCadastro,
   type SituacaoNaFranquia,
@@ -34,7 +36,7 @@ beforeEach(() => {
   process.env.NUMEROS_INTERNOS = INTERNOS;
 });
 
-function deps(o: Partial<{ situacao: SituacaoNaFranquia; telefone: string | null; unidades: string[] | Error }>): DepsDoCadastro & { chamadas: string[] } {
+function deps(o: Partial<{ situacao: SituacaoNaFranquia; telefone: string | null; unidades: string[] | Error; casamento: boolean }>): DepsDoCadastro & { chamadas: string[] } {
   const chamadas: string[] = [];
   return {
     chamadas,
@@ -46,6 +48,7 @@ function deps(o: Partial<{ situacao: SituacaoNaFranquia; telefone: string | null
       chamadas.push('telefone');
       return o.telefone === undefined ? PACIENTE : o.telefone;
     },
+    casamentoLigado: () => o.casamento ?? true,
     async unidadesDoTelefone() {
       chamadas.push('unidades');
       if (o.unidades instanceof Error) throw o.unidades;
@@ -136,13 +139,16 @@ test('LIGADA: duas unidades ainda é gente (mudou de cidade, procurou duas clín
   assert.equal(r.criar, true);
 });
 
-test('LIGADA: X e X-resgate são a MESMA unidade, e hm-tecnologia não conta', async () => {
+test('LIGADA: X-resgate e doutor-hernia-X são a MESMA clínica (nomes reais), e hm-tecnologia não conta', async () => {
   ligar('ligado');
-  const mesma = deps({ unidades: [SERRA.slug, 'doutor-hernia-serra-resgate', 'doutor-hernia-canaa', 'doutor-hernia-canaa-resgate'] });
-  assert.equal((await decidirCadastroDoLead({ unit: SERRA, leadId: 15, legado: SEM_AGENDAR }, mesma)).criar, true, '4 slugs, 2 unidades');
+  // a Açailândia conta UMA vez, não duas: serra + açailândia + imperatriz = 3 clínicas → barra
+  const tresClinicas = deps({ unidades: [SERRA.slug, 'acailandia-resgate', 'doutor-hernia-acailandia', 'imperatriz-financeiro'] });
+  assert.equal((await decidirCadastroDoLead({ unit: SERRA, leadId: 15, legado: SEM_AGENDAR }, tresClinicas)).criar, false);
+  const dois = deps({ unidades: [SERRA.slug, 'acailandia-resgate', 'doutor-hernia-acailandia', 'doutor-hernia-acailandia-tratamento'] });
+  assert.equal((await decidirCadastroDoLead({ unit: SERRA, leadId: 15, legado: SEM_AGENDAR }, dois)).criar, true, 'serra + açailândia (3 contas) = 2 clínicas');
   const hm = deps({ unidades: [SERRA.slug, 'doutor-hernia-canaa', 'hm-tecnologia'] });
   assert.equal((await decidirCadastroDoLead({ unit: SERRA, leadId: 16, legado: SEM_AGENDAR }, hm)).criar, true, 'a HM é teste, não é a terceira unidade');
-  const tres = deps({ unidades: [SERRA.slug, 'doutor-hernia-canaa-resgate', 'doutor-hernia-marabá', 'hm-tecnologia'] });
+  const tres = deps({ unidades: [SERRA.slug, 'canaa-resgate', 'doutor-hernia-marabá', 'hm-tecnologia'] });
   assert.equal((await decidirCadastroDoLead({ unit: SERRA, leadId: 17, legado: SEM_AGENDAR }, tres)).criar, false);
 });
 
@@ -211,9 +217,13 @@ test('triar: ordem das travas e unidades', () => {
   assert.match(t.motivo, /…7777/);
 });
 
-test('unidadesDistintas / unidadeBase', () => {
-  assert.equal(unidadeBase('Doutor-Hernia-Serra-Resgate'), 'doutor-hernia-serra');
-  assert.deepEqual(unidadesDistintas(['x', 'x-resgate', 'y', 'hm-tecnologia']), ['x', 'y']);
+test('unidadesDistintas: a dona da conta é a clínica (acailandia-resgate = doutor-hernia-acailandia)', () => {
+  assert.deepEqual(unidadesDistintas(['acailandia-resgate', 'doutor-hernia-acailandia']), ['doutor-hernia-acailandia'], 'a mesma clínica conta 1');
+  assert.deepEqual(
+    unidadesDistintas(['doutor-hernia-serra', 'imperatriz-resgate', 'doutor-hernia-imperatriz', 'taubate-financeiro', 'taubate-tratamento', 'hm-tecnologia']),
+    ['doutor-hernia-imperatriz', 'doutor-hernia-serra', 'doutor-hernia-taubate'],
+  );
+  assert.deepEqual(unidadesDistintas(['Doutor-Hernia-Serra']), ['doutor-hernia-serra'], 'caixa não separa');
   assert.deepEqual(unidadesDistintas([]), []);
 });
 
@@ -241,4 +251,126 @@ test('lead cadastrado por ter entrado em contato nunca vira paciente, mesmo com 
   assert.equal(criaPacienteJuntoComOLead(true, undefined), true, 'chamada antiga (console): como sempre');
   assert.equal(criaPacienteJuntoComOLead(false, false), false, 'unidade sem a chave: nunca');
   assert.equal(criaPacienteJuntoComOLead(false, true), false);
+});
+
+// ── vínculo que já existe: o que é "já na franquia" ──────────────────────────────────────────
+
+function vinculo(l: { spineIdLead?: number | null; spineIdClient?: number | null; status?: string; updatedAt?: Date } | null) {
+  Object.defineProperty(prisma, 'spineLeadLink', {
+    value: { findUnique: async () => (l ? { spineIdLead: null, spineIdClient: null, status: 'ok', updatedAt: new Date(), ...l } : null) },
+    configurable: true,
+  });
+}
+
+test('vínculo só com spineIdClient (carga, widget, Sofia) é gente que JÁ está na franquia — não se cria lead por cima', async () => {
+  vinculo({ spineIdLead: null, spineIdClient: 4321 });
+  assert.equal(await depsPadrao.situacaoNaFranquia('u-serra', 30), 'na-franquia');
+  ligar('ligado');
+  const r = await decidirCadastroDoLead({ unit: SERRA, leadId: 30, legado: SEM_AGENDAR }, { ...deps({}), situacaoNaFranquia: depsPadrao.situacaoNaFranquia });
+  assert.equal(r.criar, false);
+  assert.match(r.motivo, /já está na franquia/);
+  // e o de sempre
+  vinculo({ spineIdLead: 99 });
+  assert.equal(await depsPadrao.situacaoNaFranquia('u-serra', 31), 'na-franquia');
+  vinculo(null);
+  assert.equal(await depsPadrao.situacaoNaFranquia('u-serra', 32), 'nova');
+});
+
+test('vínculo "ignorado"/"falhou" há pouco espera; velho tenta de novo', async () => {
+  vinculo({ status: 'ignorado', updatedAt: new Date() });
+  assert.equal(await depsPadrao.situacaoNaFranquia('u-serra', 33), 'tentou-ha-pouco');
+  vinculo({ status: 'ignorado', updatedAt: new Date(Date.now() - 11 * 60_000) });
+  assert.equal(await depsPadrao.situacaoNaFranquia('u-serra', 34), 'nova');
+});
+
+test('a espera respeita QUALQUER resultado do sincronizador, inclusive o que não grava vínculo (trava Petrópolis×Caxias, dois pacientes)', async () => {
+  vinculo(null);
+  _limparCacheParaTeste();
+  assert.equal(await depsPadrao.situacaoNaFranquia('u-petro', 40), 'nova');
+  await umCadastroPorVez('u-petro', 40, async () => ({ ok: false, motivo: 'unidade de outra cidade' }));
+  assert.equal(await depsPadrao.situacaoNaFranquia('u-petro', 40), 'tentou-ha-pouco');
+  assert.equal(await depsPadrao.situacaoNaFranquia('u-petro', 41), 'nova', 'outro lead não espera');
+  // erro lançado também conta
+  await umCadastroPorVez('u-petro', 42, async () => { throw new Error('kommo fora'); }).catch(() => undefined);
+  assert.equal(await depsPadrao.situacaoNaFranquia('u-petro', 42), 'tentou-ha-pouco');
+  // quem acabou de agendar não espera (o decidir ignora a espera quando a regra de 26/09 já diz que cria)
+  ligar('ligado');
+  const r = await decidirCadastroDoLead({ unit: SERRA, leadId: 43, legado: AGENDOU }, { ...deps({ situacao: 'tentou-ha-pouco' }) });
+  assert.equal(r.criar, true);
+});
+
+// ── casamento-jornada: sem ele não há "só lead" ──────────────────────────────────────────────
+
+test('LIGADA sem o casamento-jornada ligado: quem só conversou NÃO vira lead (duplicaria quem já é paciente)', async () => {
+  ligar('ligado');
+  const r = await decidirCadastroDoLead({ unit: SERRA, leadId: 50, legado: SEM_AGENDAR }, deps({ casamento: false }));
+  assert.equal(r.criar, false);
+  assert.match(r.motivo, /sem-casamento/);
+  // quem agendou segue como segue hoje (a regra de 26/09 já o cadastrava)
+  const ag = await decidirCadastroDoLead({ unit: SERRA, leadId: 51, legado: AGENDOU }, deps({ casamento: false }));
+  assert.equal(ag.criar, true);
+});
+
+test('SECO sem o casamento-jornada ligado: segue devolvendo a regra de 26/09', async () => {
+  ligar('seco');
+  const r = await decidirCadastroDoLead({ unit: SERRA, leadId: 52, legado: SEM_AGENDAR }, deps({ casamento: false }));
+  assert.deepEqual(r, SEM_AGENDAR, 'seco devolve sempre a regra de 26/09');
+});
+
+// ── o gancho do webhook, no caminho que roda de verdade ──────────────────────────────────────
+
+test('gancho: quem só conversou é cadastrado SÓ COMO LEAD — o sincronizador recebe soLead:true', async () => {
+  ligar('ligado');
+  const recebidas: Array<{ soLead?: boolean }> = [];
+  const { decisao, execucao } = await cadastrarLeadDoTurno(
+    { unit: SERRA, leadId: 60, ferramentas: ['registrar_campo'] },
+    async (_u, _l, o) => { recebidas.push(o); },
+    deps({}),
+  );
+  await execucao;
+  assert.equal(decisao.criar, true);
+  assert.deepEqual(recebidas, [{ soLead: true }]);
+});
+
+test('gancho: quem agendou NÃO recebe soLead (o sincronizador decide pelo paciente como sempre)', async () => {
+  ligar('ligado');
+  const recebidas: Array<{ soLead?: boolean }> = [];
+  const { execucao } = await cadastrarLeadDoTurno({ unit: SERRA, leadId: 61, ferramentas: ['agendar_consulta'] }, async (_u, _l, o) => { recebidas.push(o); }, deps({}));
+  await execucao;
+  assert.equal(recebidas.length, 1);
+  assert.ok(!recebidas[0]!.soLead);
+});
+
+test('gancho DESLIGADO: é a regra de 26/09 — quem só conversou não dispara nada; quem agendou dispara sem soLead', async () => {
+  const d = deps({});
+  let chamadas = 0;
+  const sem = await cadastrarLeadDoTurno({ unit: SERRA, leadId: 62, ferramentas: [] }, async () => { chamadas++; }, d);
+  assert.equal(sem.execucao, null);
+  const ag = await cadastrarLeadDoTurno({ unit: SERRA, leadId: 63, ferramentas: ['agendar_consulta'] }, async (_u, _l, o) => { chamadas++; assert.ok(!o.soLead); }, d);
+  await ag.execucao;
+  assert.equal(chamadas, 1);
+  assert.deepEqual(d.chamadas, [], 'e nenhuma consulta nova ao banco');
+});
+
+test('gancho: a rajada de mensagens do mesmo lead dispara UM cadastro só', async () => {
+  ligar('ligado');
+  let chamadas = 0;
+  let solta!: () => void;
+  const trava = new Promise<void>((r) => { solta = r; });
+  const sincronizar = async () => { chamadas++; await trava; };
+  const a = await cadastrarLeadDoTurno({ unit: SERRA, leadId: 64, ferramentas: [] }, sincronizar, deps({}));
+  const b = await cadastrarLeadDoTurno({ unit: SERRA, leadId: 64, ferramentas: [] }, sincronizar, deps({}));
+  solta();
+  await Promise.all([a.execucao, b.execucao]);
+  assert.equal(chamadas, 1, 'a segunda mensagem chegou com o primeiro cadastro em andamento');
+  // outro lead não é afetado
+  const c = await cadastrarLeadDoTurno({ unit: SERRA, leadId: 65, ferramentas: [] }, async () => { chamadas++; }, deps({}));
+  await c.execucao;
+  assert.equal(chamadas, 2);
+});
+
+test('gancho: erro do sincronizador não derruba o turno (e conta como tentativa)', async () => {
+  ligar('ligado');
+  const { execucao } = await cadastrarLeadDoTurno({ unit: SERRA, leadId: 66, ferramentas: [] }, async () => { throw new Error('franquia fora'); }, deps({}));
+  await assert.doesNotReject(execucao!);
 });

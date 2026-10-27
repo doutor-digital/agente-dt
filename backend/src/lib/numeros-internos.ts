@@ -19,6 +19,7 @@
  * completos moram no `.env` da VPS, não aqui.
  */
 import { logger } from './logger.js';
+import { fim8 } from './paciente-existente.js';
 
 /** Quantos dígitos finais identificam um telefone. */
 export const DIGITOS_DA_CHAVE = 8;
@@ -36,12 +37,10 @@ export const SEMENTE_CONHECIDA: ReadonlyArray<{ quem: string; final: string }> =
   { quem: 'Scroows Marketing Digital', final: '6240' },
 ];
 
-/** Os últimos 8 dígitos do telefone, ou `null` se não há 8 dígitos para comparar. */
+/** Os últimos 8 dígitos do telefone, ou `null` se não há 8 dígitos para comparar (a mesma conta do casamento com o paciente). */
 export function ultimos8(telefone: unknown): string | null {
   if (telefone === null || telefone === undefined) return null;
-  const digitos = String(telefone).replace(/\D/g, '');
-  if (digitos.length < DIGITOS_DA_CHAVE) return null;
-  return digitos.slice(-DIGITOS_DA_CHAVE);
+  return fim8(String(telefone));
 }
 
 export interface ListaDeInternos {

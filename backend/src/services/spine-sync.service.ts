@@ -477,6 +477,11 @@ export async function syncLeadToSpine(
   if (!unit.spineSyncLeads) {
     return { ok: false, motivo: 'espelhamento de leads desligado nesta unidade' };
   }
+  // "Só lead" (cadastro de quem apenas entrou em contato) sem o casamento cartão × paciente criaria lead em cima de quem
+  // já é paciente da franquia: a busca por idClient → telefone → nome mora no casamento. Sem ele, não cria.
+  if (opcoes.soLead && estadoCasamentoJornada(unit.slug) !== 'ligado') {
+    return { ok: false, motivo: 'casamento-jornada não está ligado nesta unidade: lead novo poderia duplicar paciente que já existe' };
+  }
   // Conta com duas cidades e o token de uma só (Petrópolis × Caxias): cartão de outra cidade ou sem cidade não entra.
   const trava = await travaDaUnidadeDeAtendimento(unit, kommoLeadId);
   if (trava) return { ok: false, motivo: trava.motivo };

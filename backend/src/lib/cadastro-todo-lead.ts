@@ -28,7 +28,9 @@ import { logger } from './logger.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import { registrarSimulacao } from './so-no-papel.js';
 import { ehNumeroInterno, ultimos8 } from './numeros-internos.js';
-import type { DecisaoDeCadastro } from './cadastro-na-franquia.js';
+import { deveCriarNaFranquia, type DecisaoDeCadastro } from './cadastro-na-franquia.js';
+import { estadoCasamentoJornada } from './casamento-jornada.js';
+import { unidadeDona } from '../agent/rede-doutor-hernia.js';
 
 export const ID_AUTOMACAO = 'cadastro-todo-lead';
 
@@ -39,29 +41,25 @@ export const DIAS_DA_TRAVA = 30;
 
 /** Empresa do grupo, não clínica: o telefone dela aparece em conversas de teste, não conta como unidade. */
 const UNIDADES_IGNORADAS = new Set(['hm-tecnologia']);
-/** `acailandia-resgate`, `imperatriz-financeiro`: dividem a conta da unidade dona, não são outra clínica. */
-const CONTA_COMPARTILHADA = /-(resgate|tratamento|financeiro)$/;
 
 export function estadoCadastroTodoLead(slug: string, raw: string | undefined = process.env.CADASTRO_TODO_LEAD_SLUGS): Estado {
   return estadoDaAutomacao(slug, ID_AUTOMACAO, raw);
 }
 
-/** `X-resgate` → `X`. */
-export function unidadeBase(slug: string): string {
-  return slug.trim().toLowerCase().replace(CONTA_COMPARTILHADA, '');
-}
-
-/** As unidades distintas da lista, juntando `X` e `X-resgate` e sem as empresas do grupo. */
+/**
+ * As clínicas distintas da lista: `acailandia-resgate` e `doutor-hernia-acailandia` são a MESMA (a dona da conta,
+ * ver `unidadeDona`), e as empresas do grupo não contam.
+ */
 export function unidadesDistintas(slugs: readonly string[]): string[] {
   const out = new Set<string>();
   for (const s of slugs) {
-    const base = unidadeBase(s);
-    if (base && !UNIDADES_IGNORADAS.has(base)) out.add(base);
+    const dona = unidadeDona(s);
+    if (dona && !UNIDADES_IGNORADAS.has(dona)) out.add(dona);
   }
   return [...out].sort();
 }
 
-export type AcaoDaTriagem = 'cadastrar' | 'interno' | 'varias-unidades' | 'sem-telefone' | 'erro';
+export type AcaoDaTriagem = 'cadastrar' | 'interno' | 'varias-unidades' | 'sem-telefone' | 'erro' | 'sem-casamento';
 
 export interface Triagem {
   acao: AcaoDaTriagem;
@@ -110,7 +108,10 @@ export function triar(
 export type SituacaoNaFranquia =
   /** já tem lead criado lá — não há o que decidir */
   | 'na-franquia'
-  /** tentamos há pouco e não deu (sem sobrenome, Kommo fora): tentar a cada mensagem seria uma leitura do Kommo por mensagem */
+  /**
+   * tentamos há pouco e não deu — sem sobrenome, trava de unidade, dois pacientes no telefone, Kommo fora, ou casou com
+   * paciente que já existe: tentar a cada mensagem seria uma leitura do Kommo (e uma busca na franquia) por mensagem
+   */
   | 'tentou-ha-pouco'
   | 'nova';
 
@@ -120,6 +121,8 @@ export const ESPERA_ENTRE_TENTATIVAS_MS = 10 * 60_000;
 export interface DepsDoCadastro {
   situacaoNaFranquia(unitId: string, leadId: number): Promise<SituacaoNaFranquia>;
   telefoneDaConversa(unitId: string, leadId: number): Promise<string | null>;
+  /** O casamento cartão × paciente (regra de 16/10) está LIGADO nesta unidade? Sem ele, lead novo duplica paciente que já existe. */
+  casamentoLigado(slug: string): boolean;
   /** Slugs das conversas com este telefone nos últimos 30 dias. Lança se o banco falhar. */
   unidadesDoTelefone(chave8: string): Promise<string[]>;
 }
@@ -131,14 +134,19 @@ export const depsPadrao: DepsDoCadastro = {
   async situacaoNaFranquia(unitId, leadId) {
     const l = await prisma.spineLeadLink.findUnique({
       where: { unitId_kommoLeadId: { unitId, kommoLeadId: leadId } },
-      select: { spineIdLead: true, status: true, updatedAt: true },
+      select: { spineIdLead: true, spineIdClient: true, status: true, updatedAt: true },
     });
-    if (l?.spineIdLead) return 'na-franquia';
+    // Vínculo só com `spineIdClient` (carga de implantação, widget "só cadastrar", Sofia ao cadastrar paciente) é gente que
+    // JÁ está na franquia como paciente: criar um lead por cima duplica.
+    if (l?.spineIdLead || l?.spineIdClient) return 'na-franquia';
     if (l && (l.status === 'ignorado' || l.status === 'falhou') && Date.now() - l.updatedAt.getTime() < ESPERA_ENTRE_TENTATIVAS_MS) {
       return 'tentou-ha-pouco';
     }
+    // A espera também vale para o que o sincronizador não grava no banco (trava de unidade, dois pacientes no telefone).
+    if (tentouHaPouco(unitId, leadId)) return 'tentou-ha-pouco';
     return 'nova';
   },
+  casamentoLigado: (slug) => estadoCasamentoJornada(slug) === 'ligado',
   async telefoneDaConversa(unitId, leadId) {
     const c = await prisma.conversation.findUnique({
       where: { unitId_leadId: { unitId, leadId: String(leadId) } },
@@ -171,6 +179,7 @@ export function _limparCacheParaTeste(): void {
   consultas.clear();
   logsVistos.clear();
   emAndamento.clear();
+  ultimasTentativas.clear();
 }
 
 // ── o log: uma linha por decisão, não por mensagem ───────────────────────────────────────────
@@ -194,17 +203,22 @@ function registrarDecisao(unit: UnidadeMinima, leadId: number, estado: Estado, t
   const base = { leadId, unit: unit.slug, estado, telefone: finalDoTelefone(telefone) };
 
   if (t.acao === 'cadastrar') {
-    // Em seco, o que importa é o que a regra de 26/09 NÃO cadastraria; quem ela já cadastra não é novidade.
-    if (!seco || legado.criar || jaLogado(`${unit.id}|${leadId}|cadastraria`)) return;
-    logger.info({ ...base, decisao: 'cadastraria' }, `cadastro-todo-lead${rotulo}: cadastraria — ${t.motivo}`);
-    registrarSimulacao(unit, ID_AUTOMACAO, { leadId, acao: 'gravaria', alvo: 'cadastro do lead na franquia', valor: 'lead novo', motivo: t.motivo });
+    // Só o seco registra o "cadastraria" (ligado, quem cadastra já aparece no log do sincronizador). Uma linha por lead
+    // avaliado, também para quem a regra de 26/09 já cadastraria: é o que deixa contar a cobertura (leads novos por dia
+    // × leads avaliados aqui) — ver "Limitação" na descrição da automação.
+    if (!seco || jaLogado(`${unit.id}|${leadId}|cadastraria`)) return;
+    logger.info({ ...base, decisao: 'cadastraria', jaCadastrariaPela26_09: legado.criar }, `cadastro-todo-lead${rotulo}: cadastraria — ${t.motivo}`);
+    if (!legado.criar) {
+      registrarSimulacao(unit, ID_AUTOMACAO, { leadId, acao: 'gravaria', alvo: 'cadastro do lead na franquia', valor: 'lead novo', motivo: t.motivo });
+    }
     return;
   }
 
-  const decisao = t.acao === 'interno' ? 'barrou-interno' : t.acao === 'varias-unidades' ? 'barrou-3-unidades' : t.acao === 'sem-telefone' ? 'sem-telefone' : 'erro-na-consulta';
+  const decisao =
+    t.acao === 'interno' ? 'barrou-interno' : t.acao === 'varias-unidades' ? 'barrou-3-unidades' : t.acao === 'sem-telefone' ? 'sem-telefone' : t.acao === 'sem-casamento' ? 'sem-casamento-jornada' : 'erro-na-consulta';
   if (jaLogado(`${unit.id}|${leadId}|${decisao}`)) return;
   const texto =
-    t.acao === 'interno' ? 'barrou interno' : t.acao === 'varias-unidades' ? 'barrou 3+ unidades' : t.acao === 'sem-telefone' ? 'sem telefone' : 'consulta falhou';
+    t.acao === 'interno' ? 'barrou interno' : t.acao === 'varias-unidades' ? 'barrou 3+ unidades' : t.acao === 'sem-telefone' ? 'sem telefone' : t.acao === 'sem-casamento' ? 'não cadastra (casamento-jornada desligado)' : 'consulta falhou';
   const aviso = { ...base, decisao, unidades: t.unidades, criariaMesmoAssim: seco ? legado.criar : undefined };
   const msg = `cadastro-todo-lead${rotulo}: ${texto} — ${t.motivo}${seco ? ' (seco: nada foi barrado de verdade)' : ''}`;
   // 3+ unidades é o que pede olho humano; o resto é rotina.
@@ -252,7 +266,15 @@ export async function decidirCadastroDoLead(
         return null;
       });
     }
-    const triagem = triar(telefone, unidades);
+    let triagem = triar(telefone, unidades);
+    // "Só lead" sem o casamento cartão × paciente cria lead em cima de quem já é paciente da franquia (a busca por
+    // idClient → telefone → nome é do casamento). Quem já ia entrar pela regra de 26/09 (agendou) segue como segue hoje.
+    if (triagem.acao === 'cadastrar' && !legado.criar && !deps.casamentoLigado(unit.slug)) {
+      triagem = {
+        acao: 'sem-casamento',
+        motivo: 'o casamento cartão × paciente (casamento-jornada) não está LIGADO nesta unidade — lead novo poderia duplicar quem já é paciente',
+      };
+    }
     registrarDecisao(unit, leadId, estado, triagem, telefone, legado);
 
     if (estado === 'seco') return legado;
@@ -275,13 +297,24 @@ export function criaPacienteJuntoComOLead(spineSyncPatients: boolean, soLead: bo
   return spineSyncPatients && !soLead;
 }
 
-// ── um cadastro por vez, por lead ────────────────────────────────────────────────────────────
+// ── um cadastro por vez, por lead — e espera entre tentativas ───────────────────────────────
 
 const emAndamento = new Set<string>();
+/** Quando cada lead foi tentado pela última vez (qualquer resultado). Memória do processo: reiniciar só custa uma leitura a mais. */
+const ultimasTentativas = new Map<string, number>();
+
+function tentouHaPouco(unitId: string, leadId: number): boolean {
+  const t = ultimasTentativas.get(`${unitId}|${leadId}`);
+  return t !== undefined && Date.now() - t < ESPERA_ENTRE_TENTATIVAS_MS;
+}
 
 /**
  * Duas mensagens seguidas do mesmo lead não podem criar duas vezes na franquia. Com a regra de 26/09
  * isto quase não acontecia (só depois de agendar); com "toda primeira mensagem" a rajada é o normal.
+ * Vale também com a automação DESLIGADA (é o mesmo caminho de sempre, só sem a sobreposição).
+ *
+ * Marca a tentativa ao terminar, seja qual for o resultado: o sincronizador sai sem gravar nada em vários caminhos
+ * (trava Petrópolis × Caxias, dois pacientes no telefone, nome incompleto) e a espera de 10 minutos precisa respeitar todos.
  */
 export async function umCadastroPorVez<T>(unitId: string, leadId: number, fn: () => Promise<T>): Promise<T | undefined> {
   const chave = `${unitId}|${leadId}`;
@@ -296,5 +329,31 @@ export async function umCadastroPorVez<T>(unitId: string, leadId: number, fn: ()
     return await fn();
   } finally {
     emAndamento.delete(chave);
+    if (ultimasTentativas.size > 20_000) ultimasTentativas.clear();
+    ultimasTentativas.set(chave, Date.now());
   }
+}
+
+// ── o gancho do webhook ──────────────────────────────────────────────────────────────────────
+
+/** A assinatura de `syncLeadToSpine`: o webhook passa a própria função, sem um lambda no meio que possa esquecer de repassar `soLead`. */
+export type SincronizarLead<U> = (unit: U, leadId: number, opcoes: { soLead?: boolean }) => Promise<unknown>;
+
+/**
+ * O que o fim do turno da IA faz com o lead: decide e, se for o caso, dispara o cadastro (sem esperar por ele).
+ * Fica aqui, e não no webhook, para o "só lead" e a trava de concorrência terem teste no caminho que roda de verdade.
+ * `execucao` é a promessa do cadastro disparado (`null` se não houve) — o webhook a ignora, o teste a espera.
+ */
+export async function cadastrarLeadDoTurno<U extends UnidadeMinima>(
+  entrada: { unit: U; leadId: number; ferramentas: string[] },
+  sincronizar: SincronizarLead<U>,
+  deps: DepsDoCadastro = depsPadrao,
+): Promise<{ decisao: DecisaoDoLead; execucao: Promise<unknown> | null }> {
+  const { unit, leadId } = entrada;
+  const decisao = await decidirCadastroDoLead({ unit, leadId, legado: deveCriarNaFranquia({ ferramentas: entrada.ferramentas }) }, deps);
+  if (!decisao.criar) return { decisao, execucao: null };
+  const execucao = umCadastroPorVez(unit.id, leadId, () => sincronizar(unit, leadId, { soLead: decisao.soLead })).catch((err) => {
+    logger.warn({ err: String(err), leadId, unit: unit.slug }, 'spine-sync: erro inesperado');
+  });
+  return { decisao, execucao };
 }
