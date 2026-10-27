@@ -1638,7 +1638,7 @@ export async function processAgent(args: {
         { unit, leadId, ferramentas: ferramentasChamadas((result as { messages?: unknown })?.messages) },
         SpineSyncService.syncLeadToSpine,
       );
-      if (!decisao.criar) {
+      if (!decisao.criar && !decisao.silenciosa) {
         logger.info({ leadId, unit: unit.slug, motivo: decisao.motivo }, 'spine-sync: não criei na franquia');
       }
     }

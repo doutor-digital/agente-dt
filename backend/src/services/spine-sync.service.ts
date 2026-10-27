@@ -7,7 +7,7 @@ import { esquemaDaUnidade } from '../lib/kommo-schema.js';
 import { travaDaUnidadeDeAtendimento } from '../lib/trava-unidade-atendimento.js';
 import { CAMPO_ID_CLIENT, ID_AUTOMACAO as AUTOMACAO_1610, estadoCasamentoJornada } from '../lib/casamento-jornada.js';
 import { registrarSimulacao } from '../lib/so-no-papel.js';
-import { criaPacienteJuntoComOLead } from '../lib/cadastro-todo-lead.js';
+import { MOTIVO_SEM_CASAMENTO, criaPacienteJuntoComOLead } from '../lib/cadastro-todo-lead.js';
 import { decidirCadastro, pacienteQueJaExiste } from './paciente-existente.js';
 
 /**
@@ -480,7 +480,7 @@ export async function syncLeadToSpine(
   // "Só lead" (cadastro de quem apenas entrou em contato) sem o casamento cartão × paciente criaria lead em cima de quem
   // já é paciente da franquia: a busca por idClient → telefone → nome mora no casamento. Sem ele, não cria.
   if (opcoes.soLead && estadoCasamentoJornada(unit.slug) !== 'ligado') {
-    return { ok: false, motivo: 'casamento-jornada não está ligado nesta unidade: lead novo poderia duplicar paciente que já existe' };
+    return { ok: false, motivo: MOTIVO_SEM_CASAMENTO };
   }
   // Conta com duas cidades e o token de uma só (Petrópolis × Caxias): cartão de outra cidade ou sem cidade não entra.
   const trava = await travaDaUnidadeDeAtendimento(unit, kommoLeadId);

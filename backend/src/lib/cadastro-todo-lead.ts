@@ -27,7 +27,7 @@ import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import { registrarSimulacao } from './so-no-papel.js';
-import { ehNumeroInterno, ultimos8 } from './numeros-internos.js';
+import { ehNumeroInterno, lerNumerosInternos, ultimos8 } from './numeros-internos.js';
 import { deveCriarNaFranquia, type DecisaoDeCadastro } from './cadastro-na-franquia.js';
 import { estadoCasamentoJornada } from './casamento-jornada.js';
 import { unidadeDona } from '../agent/rede-doutor-hernia.js';
@@ -59,7 +59,7 @@ export function unidadesDistintas(slugs: readonly string[]): string[] {
   return [...out].sort();
 }
 
-export type AcaoDaTriagem = 'cadastrar' | 'interno' | 'varias-unidades' | 'sem-telefone' | 'erro' | 'sem-casamento';
+export type AcaoDaTriagem = 'cadastrar' | 'interno' | 'varias-unidades' | 'sem-telefone' | 'erro' | 'sem-casamento' | 'sem-lista';
 
 export interface Triagem {
   acao: AcaoDaTriagem;
@@ -68,6 +68,10 @@ export interface Triagem {
 }
 
 /** Os últimos 4 dígitos, para o log dizer de quem se trata sem gravar o telefone inteiro. */
+/** O motivo de não cadastrar "só lead" sem o casamento — um texto só, para a decisão e o sincronizador dizerem a mesma coisa. */
+export const MOTIVO_SEM_CASAMENTO =
+  'o casamento cartão × paciente (casamento-jornada) não está LIGADO nesta unidade — lead novo poderia duplicar quem já é paciente';
+
 export const finalDoTelefone = (t: unknown): string => {
   const d = String(t ?? '').replace(/\D/g, '');
   return d ? `…${d.slice(-4)}` : '(sem telefone)';
@@ -85,6 +89,10 @@ export function triar(
 ): Triagem {
   if (!ultimos8(telefone)) {
     return { acao: 'sem-telefone', motivo: 'a conversa não tem telefone com 8 dígitos — não dá para conferir se é número interno' };
+  }
+  // Lista de internos vazia = não configurada, não "ninguém é interno": ligar sem ela cadastraria a equipe e os números de teste.
+  if (lerNumerosInternos(internosRaw).chaves.size === 0) {
+    return { acao: 'sem-lista', motivo: 'NUMEROS_INTERNOS está vazia ou ausente — sem a lista de números internos não dá para cadastrar com segurança' };
   }
   if (ehNumeroInterno(telefone, internosRaw)) {
     return { acao: 'interno', motivo: `número interno da rede (${finalDoTelefone(telefone)}, NUMEROS_INTERNOS)` };
@@ -215,14 +223,14 @@ function registrarDecisao(unit: UnidadeMinima, leadId: number, estado: Estado, t
   }
 
   const decisao =
-    t.acao === 'interno' ? 'barrou-interno' : t.acao === 'varias-unidades' ? 'barrou-3-unidades' : t.acao === 'sem-telefone' ? 'sem-telefone' : t.acao === 'sem-casamento' ? 'sem-casamento-jornada' : 'erro-na-consulta';
+    t.acao === 'interno' ? 'barrou-interno' : t.acao === 'varias-unidades' ? 'barrou-3-unidades' : t.acao === 'sem-telefone' ? 'sem-telefone' : t.acao === 'sem-casamento' ? 'sem-casamento-jornada' : t.acao === 'sem-lista' ? 'sem-lista-de-internos' : 'erro-na-consulta';
   if (jaLogado(`${unit.id}|${leadId}|${decisao}`)) return;
   const texto =
-    t.acao === 'interno' ? 'barrou interno' : t.acao === 'varias-unidades' ? 'barrou 3+ unidades' : t.acao === 'sem-telefone' ? 'sem telefone' : t.acao === 'sem-casamento' ? 'não cadastra (casamento-jornada desligado)' : 'consulta falhou';
+    t.acao === 'interno' ? 'barrou interno' : t.acao === 'varias-unidades' ? 'barrou 3+ unidades' : t.acao === 'sem-telefone' ? 'sem telefone' : t.acao === 'sem-casamento' ? 'não cadastra (casamento-jornada desligado)' : t.acao === 'sem-lista' ? 'não cadastra (NUMEROS_INTERNOS vazia)' : 'consulta falhou';
   const aviso = { ...base, decisao, unidades: t.unidades, criariaMesmoAssim: seco ? legado.criar : undefined };
   const msg = `cadastro-todo-lead${rotulo}: ${texto} — ${t.motivo}${seco ? ' (seco: nada foi barrado de verdade)' : ''}`;
   // 3+ unidades é o que pede olho humano; o resto é rotina.
-  if (t.acao === 'varias-unidades' || t.acao === 'erro') logger.warn(aviso, msg);
+  if (t.acao === 'varias-unidades' || t.acao === 'erro' || t.acao === 'sem-lista') logger.warn(aviso, msg);
   else logger.info(aviso, msg);
   registrarSimulacao(unit, ID_AUTOMACAO, { leadId, acao: 'pularia', alvo: 'cadastro do lead na franquia', valor: decisao, motivo: t.motivo });
 }
@@ -230,6 +238,8 @@ function registrarDecisao(unit: UnidadeMinima, leadId: number, estado: Estado, t
 /** O que o webhook faz: `soLead` = cria o LEAD e não o paciente (paciente continua só ao agendar). */
 export interface DecisaoDoLead extends DecisaoDeCadastro {
   soLead?: boolean;
+  /** Decisão de rotina (já está lá, esperando a próxima tentativa): o webhook não precisa de uma linha de log por mensagem. */
+  silenciosa?: boolean;
 }
 
 /**
@@ -251,10 +261,10 @@ export async function decidirCadastroDoLead(
     // Já está lá: nada a criar. Devolver "não" poupa a leitura do Kommo que o sincronizador faria a cada mensagem.
     // (Não perde o paciente de quem agenda depois: com o vínculo pronto, `syncLeadToSpine` já devolvia "ja-enviado" antes
     // de qualquer criação de paciente. Paciente nasce em `cadastrar_paciente`/`syncPatientToSpine`, que não mudam.)
-    if (situacao === 'na-franquia') return estado === 'ligado' ? { criar: false, motivo: 'já está na franquia' } : legado;
+    if (situacao === 'na-franquia') return estado === 'ligado' ? { criar: false, motivo: 'já está na franquia', silenciosa: true } : legado;
     // Quem acabou de agendar não espera: o sobrenome pode ter vindo agora.
     if (situacao === 'tentou-ha-pouco' && !legado.criar) {
-      return estado === 'ligado' ? { criar: false, motivo: 'tentei há pouco e faltou dado (sobrenome) — tento de novo em alguns minutos' } : legado;
+      return estado === 'ligado' ? { criar: false, motivo: 'tentei há pouco e faltou dado (sobrenome) — tento de novo em alguns minutos', silenciosa: true } : legado;
     }
 
     const telefone = await deps.telefoneDaConversa(unit.id, leadId);
@@ -272,7 +282,7 @@ export async function decidirCadastroDoLead(
     if (triagem.acao === 'cadastrar' && !legado.criar && !deps.casamentoLigado(unit.slug)) {
       triagem = {
         acao: 'sem-casamento',
-        motivo: 'o casamento cartão × paciente (casamento-jornada) não está LIGADO nesta unidade — lead novo poderia duplicar quem já é paciente',
+        motivo: MOTIVO_SEM_CASAMENTO,
       };
     }
     registrarDecisao(unit, leadId, estado, triagem, telefone, legado);
@@ -281,7 +291,7 @@ export async function decidirCadastroDoLead(
     if (triagem.acao === 'cadastrar') return { criar: true, motivo: triagem.motivo, soLead: !legado.criar };
     // Não deu para conferir (sem telefone, banco fora): quem já ia entrar pela regra de 26/09 (agendou) entra como entrava;
     // quem só conversou fica de fora e é reavaliado na próxima mensagem.
-    if ((triagem.acao === 'sem-telefone' || triagem.acao === 'erro') && legado.criar) return legado;
+    if ((triagem.acao === 'sem-telefone' || triagem.acao === 'erro' || triagem.acao === 'sem-lista') && legado.criar) return legado;
     return { criar: false, motivo: `${triagem.acao}: ${triagem.motivo}` };
   } catch (err) {
     logger.warn({ err: String(err), leadId, unit: unit.slug, estado }, 'cadastro-todo-lead: falha ao decidir');
@@ -319,8 +329,9 @@ function tentouHaPouco(unitId: string, leadId: number): boolean {
 export async function umCadastroPorVez<T>(unitId: string, leadId: number, fn: () => Promise<T>): Promise<T | undefined> {
   const chave = `${unitId}|${leadId}`;
   if (emAndamento.has(chave)) {
-    // Sem retentativa de propósito: o cadastro do lead acontece uma vez e o que faltar (nome, telefone) a próxima
-    // mensagem reavalia — nada aqui é "atualização" que a segunda mensagem perderia.
+    // Sem retentativa de propósito: o que faltar (nome, telefone) a próxima mensagem reavalia. Limite conhecido: se esta
+    // chamada era a do agendamento e a em andamento é a de "só lead", o paciente que `spine_sync_patients` criaria junto
+    // com o lead não nasce por aqui — a chave está desligada em todas as unidades, e o paciente vem do `cadastrar_paciente`.
     logger.info({ leadId, unitId }, 'cadastro-todo-lead: já há um cadastro deste lead em andamento — pulei esta chamada');
     return undefined;
   }

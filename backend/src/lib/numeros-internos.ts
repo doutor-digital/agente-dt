@@ -5,8 +5,9 @@
  * prospecção de marketing também escrevem para a Sofia. Com a regra "toda pessoa que entra em
  * contato vira lead na franquia" (27/10/2026), cada uma delas apareceria na base da franqueadora.
  *
- * COMO SE EDITA: variável de ambiente `NUMEROS_INTERNOS`, csv. Trocar o valor e reiniciar o
- * contêiner basta — não há deploy de código nem migração. Cada item é um telefone em qualquer
+ * COMO SE EDITA: variável de ambiente `NUMEROS_INTERNOS`, csv. Trocar o valor no `.env` e RECRIAR
+ * o contêiner (`up`, não só `restart`: o restart não relê o arquivo) basta — não há deploy de código nem migração.
+ * Lista vazia ou ausente NÃO significa "ninguém é interno": a triagem se recusa a cadastrar sem ela. Cada item é um telefone em qualquer
  * formato ("+55 (98) 99999-9464", "98999999464"), opcionalmente com um rótulo antes dos dois-pontos
  * ("joao:98999999464"): o rótulo é só para quem lê o `.env`.
  *

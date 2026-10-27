@@ -374,3 +374,26 @@ test('gancho: erro do sincronizador não derruba o turno (e conta como tentativa
   const { execucao } = await cadastrarLeadDoTurno({ unit: SERRA, leadId: 66, ferramentas: [] }, async () => { throw new Error('franquia fora'); }, deps({}));
   await assert.doesNotReject(execucao!);
 });
+
+// ── lista de internos vazia não é "ninguém é interno" ────────────────────────────────────────
+
+test('LIGADA com NUMEROS_INTERNOS vazia ou ausente: ninguém é cadastrado "só por conversar" — falha fechado', async () => {
+  ligar('ligado');
+  for (const valor of [undefined, '', ' , ', '9464']) {
+    if (valor === undefined) delete process.env.NUMEROS_INTERNOS;
+    else process.env.NUMEROS_INTERNOS = valor;
+    const r = await decidirCadastroDoLead({ unit: SERRA, leadId: 70, legado: SEM_AGENDAR }, deps({ telefone: INTERNO }));
+    assert.equal(r.criar, false, String(valor));
+    assert.match(r.motivo, /sem-lista/, String(valor));
+    // quem agendou segue como segue hoje (não piora)
+    assert.deepEqual(await decidirCadastroDoLead({ unit: SERRA, leadId: 71, legado: AGENDOU }, deps({ telefone: INTERNO })), AGENDOU, String(valor));
+  }
+  assert.equal(triar(PACIENTE, [], undefined).acao, 'sem-lista');
+});
+
+test('decisão de rotina é silenciosa no webhook (já está na franquia, esperando a próxima tentativa); a que barra, não', async () => {
+  ligar('ligado');
+  assert.equal((await decidirCadastroDoLead({ unit: SERRA, leadId: 72, legado: SEM_AGENDAR }, deps({ situacao: 'na-franquia' }))).silenciosa, true);
+  assert.equal((await decidirCadastroDoLead({ unit: SERRA, leadId: 73, legado: SEM_AGENDAR }, deps({ situacao: 'tentou-ha-pouco' }))).silenciosa, true);
+  assert.notEqual((await decidirCadastroDoLead({ unit: SERRA, leadId: 74, legado: SEM_AGENDAR }, deps({ telefone: INTERNO }))).silenciosa, true, 'barrou interno aparece no log');
+});
