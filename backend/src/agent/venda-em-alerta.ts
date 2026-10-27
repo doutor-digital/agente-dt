@@ -17,7 +17,8 @@ const FIM = String.raw`(?![\p{L}\p{N}])`;
 const VALOR = new RegExp(
   [
     String.raw`R\$`,
-    String.raw`${INI}\d+(?:[.,]\d{2})?\s*reais${FIM}`,
+    // qualquer "reais" é dinheiro: "150 reais", "mil reais", "duzentos e cinquenta reais"
+    String.raw`${INI}reais${FIM}`,
     String.raw`${INI}\d{2,4},\d{2}${FIM}`,
     String.raw`${INI}(?:pilas?|cento|duzent[oa]s?|trezent[oa]s?|quatrocent[oa]s?|quinhent[oa]s?)${FIM}`,
   ].join('|'),

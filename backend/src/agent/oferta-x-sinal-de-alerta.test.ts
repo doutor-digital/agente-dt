@@ -285,6 +285,8 @@ test('(b3) venda que escapava (às 9, marcá-la, agendá-lo, reservá-la, 150,00
     'Vou reservá-la agora.',
     'A avaliação sai por 150,00.',
     'A avaliação sai por cento e cinquenta.',
+    'A avaliação sai por duzentos e cinquenta reais.',
+    'Fica mil reais.',
     'Posso garantir o seu lugar.',
     'Te mando o Pix.',
     'Tenho disponibilidade amanhã.',
