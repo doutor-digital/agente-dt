@@ -73,13 +73,20 @@ export type DesfechoDoDia =
   | 'enviado'
   | 'seco'
   | 'desligado'
-  | 'de-outro-processo'
   | 'sem-telegram'
-  /** Não deu para pegar o lease (banco): tenta no próximo passo, sem gastar uma das tentativas. */
+  /** Não deu para pegar o lease (banco fora): tenta no próximo passo, sem gastar uma das tentativas. */
   | 'sem-lease'
+  /**
+   * O lease do dia é de OUTRO processo e ainda vale: ou ele já enviou (lease de 36 h) ou está enviando agora (10 min
+   * — se morrer, vence e este processo assume). Não conta como feito nem gasta tentativa: tenta de novo até as 12h.
+   */
+  | 'aguardando-lease'
   /** Falhou, mas ainda há tentativa: o worker tenta de novo no próximo passo. */
   | 'tentar-de-novo'
   | 'desistiu';
+
+/** Desfechos em que o dia NÃO está resolvido e a tentativa não é gasta. */
+export const SEM_GASTAR_TENTATIVA: readonly DesfechoDoDia[] = ['sem-lease', 'aguardando-lease'];
 
 type Tipo = 'diario' | 'semanal';
 
@@ -119,18 +126,20 @@ export async function resolverODia(
   // Sábado: além do diário, o semanal (o cron antigo de sábado 14h mandava pelo WhatsApp banido).
   const todos: Tipo[] = diaDaSemana(hoje) === 6 ? ['diario', 'semanal'] : ['diario'];
   const tipos = todos.filter((t) => !jaEnviados.has(t));
-  let falhou = false;
+  const falhaDeColeta: Tipo[] = [];
+  const falhaDeEnvio: Tipo[] = [];
   let semLease = false;
-  let deOutro = 0;
+  let leaseDeOutro = false;
 
   for (const tipo of tipos) {
     const lease = `${PREFIXO_DO_LEASE}${hoje}:${tipo}`;
     if (modo === 'ligado') {
       const r = await dep.reivindicar(lease, TTL_DO_LEASE_EM_ENVIO_MS);
       if (r === 'de-outro') {
-        dep.registrar('warn', { hoje, tipo }, 'resumo-diario-ia: o lease do dia é de outro processo — não envio por aqui (se nada chegar no Telegram, o dono do lease morreu antes de enviar)');
-        jaEnviados.add(tipo);
-        deOutro += 1;
+        // NÃO é "resolvido": se o dono morreu antes de enviar, o lease de 10 min vence e a próxima passada assume.
+        // Se ele já enviou, o lease de 36 h segue barrando aqui, e a passada seguinte só repete este aviso.
+        leaseDeOutro = true;
+        dep.registrar('warn', { hoje, tipo }, 'resumo-diario-ia: o lease do dia é de outro processo — não envio por aqui; tento de novo até as 12h');
         continue;
       }
       if (r === 'erro') {
@@ -145,7 +154,7 @@ export async function resolverODia(
       texto = tipo === 'diario' ? montarDiario(await dep.coletarDiario(hoje)) : montarSemanal(await dep.coletarSemanal(hoje));
     } catch (err) {
       dep.registrar('error', { hoje, tipo, tentativa, err: String(err) }, 'resumo-diario-ia: falhou ao montar o resumo');
-      falhou = true;
+      falhaDeColeta.push(tipo);
       if (modo === 'ligado') await dep.liberar(lease);
       continue;
     }
@@ -156,28 +165,71 @@ export async function resolverODia(
       jaEnviados.add(tipo);
     } else if (await dep.enviar(texto)) {
       jaEnviados.add(tipo);
-      await dep.reivindicar(lease, TTL_DO_LEASE_MS); // enviado: o lease passa a durar o dia todo
       dep.registrar('info', { hoje, tipo, caracteres: texto.length }, 'resumo-diario-ia: enviado no Telegram');
+      await renovarParaODiaTodo(lease, dep, hoje, tipo);
     } else {
-      falhou = true;
+      falhaDeEnvio.push(tipo);
       await dep.liberar(lease);
     }
   }
 
-  if (falhou) {
+  if (falhaDeColeta.length > 0 || falhaDeEnvio.length > 0) {
     if (tentativa >= TENTATIVAS_POR_DIA) {
       dep.registrar('error', { hoje }, 'resumo-diario-ia: desisti por hoje depois das tentativas');
-      // Silêncio parece dia calmo: avisa que o resumo NÃO saiu (se o Telegram estiver de pé; sem dado nenhum).
-      if (modo === 'ligado') {
-        await dep.enviar('Resumo diário da Sofia: não consegui montar o de hoje (erro nas consultas). Veja o log "resumo-diario-ia" no servidor.');
-      }
+      // Silêncio parece dia calmo: avisa que o resumo NÃO saiu e por quê (se o Telegram estiver de pé; sem dado nenhum).
+      if (modo === 'ligado') await dep.enviar(textoDoAvisoDeFalha(falhaDeColeta, falhaDeEnvio));
       return 'desistiu';
     }
     return 'tentar-de-novo';
   }
   if (semLease) return 'sem-lease';
-  if (tipos.length > 0 && deOutro === tipos.length) return 'de-outro-processo';
+  if (leaseDeOutro) return 'aguardando-lease';
   return modo === 'seco' ? 'seco' : 'enviado';
+}
+
+const NOME_DO_TIPO: Record<Tipo, string> = { diario: 'o diário', semanal: 'o semanal' };
+
+/** O que vai no Telegram quando o resumo não saiu: diz QUAL e POR QUÊ (consulta ou Telegram), sem dado de paciente. */
+export function textoDoAvisoDeFalha(falhaDeColeta: readonly Tipo[], falhaDeEnvio: readonly Tipo[]): string {
+  const partes = [
+    ...falhaDeColeta.map((t) => `${NOME_DO_TIPO[t]} (erro nas consultas ao banco)`),
+    ...falhaDeEnvio.map((t) => `${NOME_DO_TIPO[t]} (o Telegram não aceitou a mensagem)`),
+  ];
+  return `Resumo da Sofia de hoje: não saiu ${partes.join(' e ')}. Veja o log "resumo-diario-ia" no servidor.`;
+}
+
+/** Texto do aviso quando a janela acabou (12h) e o banco/lease nunca deixou o resumo sair. */
+export const AVISO_JANELA_ACABOU =
+  'Resumo da Sofia de hoje: não saiu até as 12h (o banco não respondeu ao lease). Veja o log "resumo-diario-ia" no servidor.';
+
+/**
+ * Depois que o Telegram aceitou, o lease passa a durar o dia todo (barra um segundo envio de outro processo).
+ * Confere o resultado: se não renovou (banco), tenta mais uma vez e, falhando, avisa em warn — o lease de 10 min vence
+ * e um líder novo poderia reenviar (duplicata do mesmo texto: inofensiva, mas visível no log).
+ */
+async function renovarParaODiaTodo(lease: string, dep: Dependencias, hoje: Dia, tipo: Tipo): Promise<void> {
+  for (let i = 0; i < 2; i++) {
+    if ((await dep.reivindicar(lease, TTL_DO_LEASE_MS)) === 'minha') return;
+  }
+  dep.registrar('warn', { hoje, tipo }, 'resumo-diario-ia: enviado, mas não consegui renovar o lease para o dia todo — outro processo pode reenviar em 10 min');
+}
+
+/**
+ * Janela acabou e o dia nunca foi resolvido por falta de lease (banco fora a manhã inteira): é hora de avisar, uma vez.
+ * `aguardando-lease` NÃO avisa: lá o dono do lease provavelmente enviou.
+ */
+export function deveAvisarQueNaoSaiu(
+  agora: Date,
+  estado: { diaResolvido: Dia | null; diaEmTentativa: Dia | null; ultimoDesfecho: DesfechoDoDia | null; avisadoEm: Dia | null },
+): boolean {
+  const hoje = diaLocal(agora);
+  return (
+    relogioLocal(agora).hora >= HORA_LIMITE &&
+    estado.diaEmTentativa === hoje &&
+    estado.diaResolvido !== hoje &&
+    estado.avisadoEm !== hoje &&
+    estado.ultimoDesfecho === 'sem-lease'
+  );
 }
 
 /** O dia que o texto cobre (ontem), exposto para o teste e para o log. */

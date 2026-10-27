@@ -13,6 +13,9 @@
  * e voltou dias depois passaria a contar como avaliável e devolveria à média exatamente as notas "paciente
  * sumiu" que o resumo existe para tirar.
  *
+ * Fora de tudo, contada à parte (`quebrada`): avaliação em que a resposta do juiz veio quebrada
+ * (`verdict = VEREDITO_AUSENTE`, as cinco notas viram 0). Não é nota 0 de verdade.
+ *
  * Datas: `messages.created_at` e `conversation_evaluations.created_at` são `timestamp` SEM fuso, em UTC (padrão
  * do Prisma). O dia de São Paulo sai de `(col AT TIME ZONE 'UTC') AT TIME ZONE 'America/Sao_Paulo'`. Os limites
  * da janela entram como `timestamptz` explícito convertido para UTC (`utc()`): a consulta não depende do
@@ -20,6 +23,7 @@
  */
 import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma.js';
+import { VEREDITO_AUSENTE } from '../veredito-ausente.js';
 import { MARCA_AUDIO_NAO_OUVIDO } from '../../agent/repeticao.js';
 import {
   AUTOR_DA_EQUIPE,
@@ -69,6 +73,7 @@ export async function avaliacoesDoPeriodo(de: Dia, ate: Dia): Promise<LinhaDeAva
   const { ini, fim } = janela(de, ate);
   const rows = await prisma.$queryRaw<
     Array<{
+      quebrada: boolean;
       conversationId: string;
       unitId: string;
       unidade: string;
@@ -80,7 +85,8 @@ export async function avaliacoesDoPeriodo(de: Dia, ate: Dia): Promise<LinhaDeAva
       comConsulta: boolean;
     }>
   >`
-    SELECT e.conversation_id AS "conversationId",
+    SELECT (e.verdict = ${VEREDITO_AUSENTE}) AS quebrada,
+           e.conversation_id AS "conversationId",
            e.unit_id AS "unitId",
            u.name AS unidade,
            to_char(${diaSP(Prisma.sql`e.created_at`)}, 'YYYY-MM-DD') AS dia,
@@ -95,7 +101,7 @@ export async function avaliacoesDoPeriodo(de: Dia, ate: Dia): Promise<LinhaDeAva
            EXISTS (
              SELECT 1 FROM spine_lead_links l
              WHERE l.unit_id = c.unit_id AND l.spine_id_schedule IS NOT NULL
-               AND l.kommo_lead_id = (CASE WHEN c.lead_id ~ '^[0-9]{1,9}$' THEN c.lead_id::int END)
+               AND l.kommo_lead_id = (CASE WHEN c.lead_id ~ '^[0-9]{1,10}$' THEN (CASE WHEN c.lead_id::bigint <= 2147483647 THEN c.lead_id::bigint END) END)
            ) AS "comConsulta"
     FROM conversation_evaluations e
     JOIN conversations c ON c.id = e.conversation_id

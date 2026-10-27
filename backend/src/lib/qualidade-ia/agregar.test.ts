@@ -14,6 +14,7 @@ import type { LinhaDeAvaliacao } from './tipos.js';
 
 let seq = 0;
 const linha = (o: Partial<LinhaDeAvaliacao> = {}): LinhaDeAvaliacao => ({
+  quebrada: false,
   conversationId: `c${seq++}`,
   unitId: 'u1',
   unidade: 'Serra',
@@ -46,6 +47,22 @@ test('por dia: a média é só das avaliáveis — nota de conversa sem Sofia n�
   assert.deepEqual({ total: d.total, semSofia: d.semSofia, sumiu: d.sumiu, avaliaveis: d.avaliaveis }, { total: 4, semSofia: 1, sumiu: 1, avaliaveis: 2 });
   assert.equal(d.mediaAvaliaveis, 6, 'média ingênua das 4 notas seria 3,75');
   assert.equal(avaliacoesPorDia([linha({ sofiaFalou: false })])[0].mediaAvaliaveis, null);
+});
+
+test('avaliação quebrada (nota 0 de artefato) não entra na média, no ranking, nas faixas nem na pior conversa', () => {
+  const l = [
+    linha({ nota: 8 }),
+    linha({ nota: 6 }),
+    linha({ nota: 0, quebrada: true }),
+    linha({ nota: 0, quebrada: true, unitId: 'b', unidade: 'B' }),
+  ];
+  const d = avaliacoesPorDia(l)[0];
+  assert.deepEqual({ total: d.total, quebradas: d.quebradas, avaliaveis: d.avaliaveis, semSofia: d.semSofia, sumiu: d.sumiu }, { total: 4, quebradas: 2, avaliaveis: 2, semSofia: 0, sumiu: 0 });
+  assert.equal(d.mediaAvaliaveis, 7, 'com as duas quebradas a média seria 3,5');
+  assert.deepEqual(unidadesPiores(l, 1).map((u) => u.nome), ['Serra'], 'a unidade B só tem avaliação quebrada');
+  assert.equal(piorAvaliacao(l)?.nota, 6, 'a pior conversa não é uma nota 0 quebrada');
+  assert.equal(faixasDeNota(l).find((f) => f.faixa === 'baixa')?.conversas, 0);
+  assert.equal(destinoDaAvaliacao({ sofiaFalou: false, pacienteRespondeu: false, quebrada: true }), 'quebrada', 'quebrada vence as outras');
 });
 
 test('unidades piores: mínimo de avaliáveis, ordem crescente, máximo de 3', () => {

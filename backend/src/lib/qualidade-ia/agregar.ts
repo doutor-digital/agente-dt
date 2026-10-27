@@ -9,9 +9,10 @@ import type { Dia, DiaAvaliado, FaixaDeNota, LinhaDeAvaliacao, UnidadeNota } fro
 export const FAIXA_BAIXA_ATE = 5;
 export const FAIXA_ALTA_DE = 7;
 
-export type Destino = 'sem-sofia' | 'sumiu' | 'avaliavel';
+export type Destino = 'quebrada' | 'sem-sofia' | 'sumiu' | 'avaliavel';
 
-export function destinoDaAvaliacao(l: Pick<LinhaDeAvaliacao, 'sofiaFalou' | 'pacienteRespondeu'>): Destino {
+export function destinoDaAvaliacao(l: Pick<LinhaDeAvaliacao, 'sofiaFalou' | 'pacienteRespondeu'> & { quebrada?: boolean }): Destino {
+  if (l.quebrada) return 'quebrada';
   if (!l.sofiaFalou) return 'sem-sofia';
   return l.pacienteRespondeu ? 'avaliavel' : 'sumiu';
 }
@@ -21,10 +22,11 @@ export const ehAvaliavel = (l: LinhaDeAvaliacao): boolean => destinoDaAvaliacao(
 export function avaliacoesPorDia(linhas: readonly LinhaDeAvaliacao[]): DiaAvaliado[] {
   const mapa = new Map<Dia, DiaAvaliado & { soma: number }>();
   for (const l of linhas) {
-    const d = mapa.get(l.dia) ?? { dia: l.dia, total: 0, semSofia: 0, sumiu: 0, avaliaveis: 0, mediaAvaliaveis: null, soma: 0 };
+    const d = mapa.get(l.dia) ?? { dia: l.dia, total: 0, quebradas: 0, semSofia: 0, sumiu: 0, avaliaveis: 0, mediaAvaliaveis: null, soma: 0 };
     d.total += 1;
     const destino = destinoDaAvaliacao(l);
-    if (destino === 'sem-sofia') d.semSofia += 1;
+    if (destino === 'quebrada') d.quebradas += 1;
+    else if (destino === 'sem-sofia') d.semSofia += 1;
     else if (destino === 'sumiu') d.sumiu += 1;
     else {
       d.avaliaveis += 1;

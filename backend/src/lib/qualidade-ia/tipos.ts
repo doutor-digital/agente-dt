@@ -8,6 +8,8 @@ export interface DiaAvaliado {
   dia: Dia;
   /** Avaliações gravadas no dia. */
   total: number;
+  /** O juiz devolveu resposta quebrada (veredito ausente, notas 0): não é nota de verdade e fica fora de tudo abaixo. */
+  quebradas: number;
   /** A Sofia não falou nenhuma vez na conversa (pausa, etapa não permitida): nota sem sentido. */
   semSofia: number;
   /** A Sofia falou, mas o paciente não escreveu mais nada depois da 1ª fala dela. */
@@ -20,6 +22,8 @@ export interface DiaAvaliado {
 
 /** Uma avaliação do juiz com os fatos que dizem se ela mede a Sofia. A agregação é código puro (`agregar.ts`). */
 export interface LinhaDeAvaliacao {
+  /** `verdict = VEREDITO_AUSENTE`: a resposta do juiz veio quebrada e a nota 0 é artefato. */
+  quebrada: boolean;
   conversationId: string;
   unitId: string;
   unidade: string;

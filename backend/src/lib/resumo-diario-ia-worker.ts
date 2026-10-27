@@ -17,7 +17,17 @@ import { somarDias } from './qualidade-ia/dias.js';
 import { avaliarDia } from './qualidade-ia/texto.js';
 import { avaliacoesPorDia, faixasDeNota, noPeriodo, piorAvaliacao, unidadesPiores } from './qualidade-ia/agregar.js';
 import { avaliacoesDoPeriodo, detalheDaConversa, mensagensPorDia } from './qualidade-ia/consulta.js';
-import { estaNaHora, modoDoResumo, resolverODia, valorReconhecido, type Dependencias } from './qualidade-ia/resumo.js';
+import {
+  AVISO_JANELA_ACABOU,
+  SEM_GASTAR_TENTATIVA,
+  deveAvisarQueNaoSaiu,
+  estaNaHora,
+  modoDoResumo,
+  resolverODia,
+  valorReconhecido,
+  type DesfechoDoDia,
+  type Dependencias,
+} from './qualidade-ia/resumo.js';
 import type { DadosDiarios, DadosSemanais, Dia } from './qualidade-ia/tipos.js';
 
 const PASSO_MS = 5 * 60_000;
@@ -76,13 +86,24 @@ let diaResolvido: Dia | null = null;
 let diaEmTentativa: Dia | null = null;
 let tentativa = 0;
 let jaEnviados = new Set<'diario' | 'semanal'>();
+let ultimoDesfecho: DesfechoDoDia | null = null;
+let avisadoEm: Dia | null = null;
 
 async function talvezResumir(): Promise<void> {
   if (rodando) return;
   const modo = modoDoResumo(process.env.RESUMO_DIARIO_IA);
   if (modo === 'desligado') return;
-  const { rodar, hoje } = estaNaHora(new Date(), diaResolvido);
-  if (!rodar) return;
+  const agora = new Date();
+  const { rodar, hoje } = estaNaHora(agora, diaResolvido);
+  if (!rodar) {
+    // A janela acabou (12h) e o banco/lease nunca deixou o resumo sair: avisa uma vez, em vez de calar.
+    if (modo === 'ligado' && deveAvisarQueNaoSaiu(agora, { diaResolvido, diaEmTentativa, ultimoDesfecho, avisadoEm })) {
+      avisadoEm = hoje;
+      logger.error({ hoje }, 'resumo-diario-ia: a janela acabou sem o resumo sair (banco fora?)');
+      await dependenciasReais.enviar(AVISO_JANELA_ACABOU);
+    }
+    return;
+  }
 
   rodando = true;
   try {
@@ -93,9 +114,10 @@ async function talvezResumir(): Promise<void> {
     }
     tentativa += 1;
     const desfecho = await resolverODia(hoje, modo, dependenciasReais, tentativa, jaEnviados);
-    // Falta de lease (banco) não gasta tentativa: a janela até as 12h é o limite.
-    if (desfecho === 'sem-lease') tentativa -= 1;
-    if (desfecho !== 'tentar-de-novo' && desfecho !== 'sem-lease') diaResolvido = hoje;
+    ultimoDesfecho = desfecho;
+    // Falta de lease (banco fora ou lease vivo de outro processo) não gasta tentativa: a janela até as 12h é o limite.
+    if (SEM_GASTAR_TENTATIVA.includes(desfecho)) tentativa -= 1;
+    if (desfecho !== 'tentar-de-novo' && !SEM_GASTAR_TENTATIVA.includes(desfecho)) diaResolvido = hoje;
     logger.info({ hoje, modo, desfecho, tentativa }, 'resumo-diario-ia: passo concluído');
   } catch (err) {
     logger.error({ err: String(err) }, 'resumo-diario-ia: passo falhou');

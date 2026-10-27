@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { estaNaHora, modoDoResumo, paraLog, resolverODia, valorReconhecido, TENTATIVAS_POR_DIA, TTL_DO_LEASE_EM_ENVIO_MS, TTL_DO_LEASE_MS, type Dependencias, type ResultadoDoLease } from './resumo.js';
+import { estaNaHora, modoDoResumo, paraLog, resolverODia, valorReconhecido, TENTATIVAS_POR_DIA, TTL_DO_LEASE_EM_ENVIO_MS, TTL_DO_LEASE_MS, SEM_GASTAR_TENTATIVA, AVISO_JANELA_ACABOU, deveAvisarQueNaoSaiu, textoDoAvisoDeFalha, type Dependencias, type ResultadoDoLease } from './resumo.js';
 import { diaDaSemana, inicioDoDia, relogioLocal, rotuloDoDia, somarDias } from './dias.js';
 import type { DadosDiarios, DadosSemanais } from './tipos.js';
 
@@ -14,7 +14,7 @@ const diario = (hoje: string): DadosDiarios => {
   const dias = Array.from({ length: 8 }, (_, i) => somarDias(ontem, i - 7));
   return {
     dia: ontem,
-    avaliacoes: dias.map((dia) => ({ dia, total: dia === ontem ? 20 : 230, semSofia: 0, sumiu: 0, avaliaveis: dia === ontem ? 20 : 100, mediaAvaliaveis: 6 })),
+    avaliacoes: dias.map((dia) => ({ dia, total: dia === ontem ? 20 : 230, quebradas: 0, semSofia: 0, sumiu: 0, avaliaveis: dia === ontem ? 20 : 100, mediaAvaliaveis: 6 })),
     mensagens: [],
     piores: [],
     pior: { nota: 2, unidade: 'Serra', primeiroNome: 'Maria', final4: '8888', leadId: '123456', trecho: ['Paciente: oi', 'Sofia: Vou acolher'] },
@@ -22,7 +22,7 @@ const diario = (hoje: string): DadosDiarios => {
 };
 const semanal = (hoje: string): DadosSemanais => ({ fim: somarDias(hoje, -1), avaliacoes: [], mensagens: [], faixas: [], piores: [] });
 
-function fabrica(o: { lease?: ResultadoDoLease; telegram?: boolean; configurado?: boolean; coletaFalha?: boolean } = {}) {
+function fabrica(o: { lease?: ResultadoDoLease | (() => ResultadoDoLease); telegram?: boolean; configurado?: boolean; coletaFalha?: boolean } = {}) {
   const enviados: string[] = [];
   const logs: Array<{ nivel: string; mensagem: string; dados: Record<string, unknown> }> = [];
   const leases: string[] = [];
@@ -44,7 +44,7 @@ function fabrica(o: { lease?: ResultadoDoLease; telegram?: boolean; configurado?
     reivindicar: async (nome, ttl) => {
       leases.push(nome);
       ttls.push(ttl);
-      return o.lease ?? 'minha';
+      return typeof o.lease === 'function' ? o.lease() : (o.lease ?? 'minha');
     },
     liberar: async (nome) => void liberados.push(nome),
     registrar: (nivel, dados, mensagem) => void logs.push({ nivel, mensagem, dados }),
@@ -145,7 +145,7 @@ test('desligado não consulta o banco nem pega lease', async () => {
 
 test('lease de outro processo: não monta nem envia (duas réplicas = uma mensagem) e avisa em warn', async () => {
   const f = fabrica({ lease: 'de-outro' });
-  assert.equal(await resolverODia(SEGUNDA, 'ligado', f.dep), 'de-outro-processo');
+  assert.equal(await resolverODia(SEGUNDA, 'ligado', f.dep), 'aguardando-lease');
   assert.ok(f.logs.some((l) => l.nivel === 'warn' && /lease do dia é de outro processo/.test(l.mensagem)));
   assert.equal(f.coletas(), 0);
   assert.deepEqual(f.enviados, []);
@@ -214,9 +214,71 @@ test('depois de desistir, avisa no Telegram que o resumo NÃO saiu (silêncio pa
   const f = fabrica({ coletaFalha: true });
   assert.equal(await resolverODia(SEGUNDA, 'ligado', f.dep, TENTATIVAS_POR_DIA), 'desistiu');
   assert.equal(f.enviados.length, 1);
-  assert.match(f.enviados[0], /não consegui montar o de hoje/);
+  assert.match(f.enviados[0], /não saiu o diário \(erro nas consultas ao banco\)/);
   // em seco não manda nada
   const s = fabrica({ coletaFalha: true });
   assert.equal(await resolverODia(SEGUNDA, 'seco', s.dep, TENTATIVAS_POR_DIA), 'desistiu');
   assert.deepEqual(s.enviados, []);
+});
+
+test('deploy às 07:31: o lease de 10 min do processo antigo vence e o líder novo ENVIA às 07:45 (não dá o dia por resolvido)', async () => {
+  // o processo antigo pegou o lease às 07:31 (vale até 07:41) e morreu antes de enviar
+  const minutos = { agora: 35 }; // 07:35
+  const f = fabrica({ lease: () => (minutos.agora < 41 ? 'de-outro' : 'minha') });
+  const passos: string[] = [];
+  let tentativa = 1;
+  for (const m of [35, 40, 45]) {
+    minutos.agora = m;
+    const r = await resolverODia(SEGUNDA, 'ligado', f.dep, tentativa);
+    passos.push(`07:${m}=${r}`);
+    if (SEM_GASTAR_TENTATIVA.includes(r)) continue; // o worker não gasta tentativa
+    tentativa += 1;
+    break;
+  }
+  assert.deepEqual(passos, ['07:35=aguardando-lease', '07:40=aguardando-lease', '07:45=enviado']);
+  assert.equal(f.enviados.length, 1, 'enviou exatamente uma vez');
+  assert.equal(tentativa, 2, 'só a passada que enviou gastou tentativa');
+});
+
+test('se o dono do lease JÁ enviou (lease de 36 h), este processo não envia a segunda — só aguarda e avisa em warn', async () => {
+  const f = fabrica({ lease: 'de-outro' });
+  for (let i = 0; i < 3; i++) assert.equal(await resolverODia(SEGUNDA, 'ligado', f.dep), 'aguardando-lease');
+  assert.deepEqual(f.enviados, []);
+  assert.equal(f.coletas(), 0);
+});
+
+test('depois de enviar, confere a renovação do lease: tenta de novo e, se não renovar, avisa em warn', async () => {
+  let n = 0;
+  const f = fabrica({ lease: () => (++n === 1 ? 'minha' : 'erro') }); // pega o curto, mas a renovação falha
+  assert.equal(await resolverODia(SEGUNDA, 'ligado', f.dep), 'enviado');
+  assert.deepEqual(f.ttls, [TTL_DO_LEASE_EM_ENVIO_MS, TTL_DO_LEASE_MS, TTL_DO_LEASE_MS], 'duas tentativas de renovar');
+  assert.ok(f.logs.some((l) => l.nivel === 'warn' && /não consegui renovar o lease/.test(l.mensagem)));
+});
+
+test('o aviso de falha diz QUAL resumo e POR QUÊ — consulta ou Telegram', async () => {
+  assert.match(textoDoAvisoDeFalha(['diario'], []), /o diário \(erro nas consultas ao banco\)/);
+  assert.match(textoDoAvisoDeFalha([], ['semanal']), /o semanal \(o Telegram não aceitou a mensagem\)/);
+  assert.match(textoDoAvisoDeFalha(['diario'], ['semanal']), /o diário .* e o semanal/);
+  // sábado: o diário saiu e só o semanal falhou na coleta -> o aviso fala só do semanal
+  const f = fabrica();
+  f.dep.coletarSemanal = async () => {
+    throw new Error('banco fora');
+  };
+  const ja = new Set<'diario' | 'semanal'>(['diario']);
+  assert.equal(await resolverODia(SABADO, 'ligado', f.dep, TENTATIVAS_POR_DIA, ja), 'desistiu');
+  assert.equal(f.enviados.length, 1);
+  assert.match(f.enviados[0], /o semanal \(erro nas consultas ao banco\)/);
+  assert.doesNotMatch(f.enviados[0], /o diário/);
+});
+
+test('banco fora a manhã inteira: ao fim da janela (12h) avisa uma vez que o resumo não saiu', () => {
+  const sp = (hhmm: string) => new Date(`${SEGUNDA}T${hhmm}:00-03:00`);
+  const base = { diaResolvido: null, diaEmTentativa: SEGUNDA, ultimoDesfecho: 'sem-lease' as const, avisadoEm: null };
+  assert.equal(deveAvisarQueNaoSaiu(sp('11:59'), base), false, 'ainda dentro da janela');
+  assert.equal(deveAvisarQueNaoSaiu(sp('12:00'), base), true);
+  assert.equal(deveAvisarQueNaoSaiu(sp('12:05'), { ...base, avisadoEm: SEGUNDA }), false, 'já avisou');
+  assert.equal(deveAvisarQueNaoSaiu(sp('12:05'), { ...base, diaResolvido: SEGUNDA }), false, 'o dia foi resolvido');
+  assert.equal(deveAvisarQueNaoSaiu(sp('12:05'), { ...base, ultimoDesfecho: 'aguardando-lease' }), false, 'lease de outro: ele provavelmente enviou');
+  assert.equal(deveAvisarQueNaoSaiu(sp('12:05'), { ...base, diaEmTentativa: null }), false, 'nunca tentou hoje (ex.: worker sem passar)');
+  assert.match(AVISO_JANELA_ACABOU, /não saiu até as 12h/);
 });

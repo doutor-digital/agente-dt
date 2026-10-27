@@ -132,6 +132,28 @@ describe('SQL do resumo de qualidade (Postgres de teste)', { skip: habilitado ? 
     }
   });
 
+  test('avaliação com veredito ausente (JSON do juiz quebrado) vem marcada como quebrada', async () => {
+    const c = await conversa([['assistant', 'Olá, tudo bem?', '2026-10-25T12:01:00Z', { via: 'salesbot' }], ['user', 'tudo', '2026-10-25T12:02:00Z']], '2026-10-25T20:00:00Z', 0);
+    await prisma.conversationEvaluation.update({ where: { conversationId: c.id }, data: { verdict: '(sem veredito)' } });
+    const l = await linha(c.id, '2026-10-25', '2026-10-25');
+    assert.equal((l as unknown as { quebrada: boolean }).quebrada, true);
+    const normal = await conversa([['assistant', 'Olá, tudo bem?', '2026-10-25T12:01:00Z', { via: 'salesbot' }], ['user', 'tudo', '2026-10-25T12:02:00Z']], '2026-10-25T20:00:00Z', 0);
+    assert.equal(((await linha(normal.id, '2026-10-25', '2026-10-25')) as unknown as { quebrada: boolean }).quebrada, false, 'nota 0 com veredito de verdade não é quebrada');
+  });
+
+  test('"consulta marcada" acha o cartão com id de 10 dígitos (até o teto do inteiro) e ignora lead_id que não é número', async () => {
+    const c = await conversa([['assistant', 'Olá, tudo bem?', '2026-10-25T12:01:00Z', { via: 'salesbot' }], ['user', 'tudo', '2026-10-25T12:02:00Z']], '2026-10-25T20:00:00Z');
+    await prisma.conversation.update({ where: { id: c.id }, data: { leadId: '2100000000' } });
+    await prisma.spineLeadLink.create({ data: { unitId, kommoLeadId: 2100000000, spineIdSchedule: 88 } });
+    assert.equal((await linha(c.id, '2026-10-25', '2026-10-25')).comConsulta, true);
+    // lead_id fora do formato ou acima do teto do inteiro: sem erro de cast, sem consulta
+    for (const leadId of ['abc', '99999999999', '']) {
+      const x = await conversa([['assistant', 'Olá, tudo bem?', '2026-10-25T12:01:00Z', { via: 'salesbot' }], ['user', 'tudo', '2026-10-25T12:02:00Z']], '2026-10-25T20:00:00Z');
+      await prisma.conversation.update({ where: { id: x.id }, data: { leadId } });
+      assert.equal((await linha(x.id, '2026-10-25', '2026-10-25')).comConsulta, false, `leadId ${JSON.stringify(leadId)}`);
+    }
+  });
+
   test('ganho e consulta marcada vêm de converted_at e spine_lead_links', async () => {
     const c = await conversa([['assistant', 'Olá, tudo bem?', '2026-10-25T12:01:00Z', { via: 'salesbot' }], ['user', 'tudo', '2026-10-25T12:02:00Z']], '2026-10-25T20:00:00Z');
     await prisma.spineLeadLink.create({ data: { unitId, kommoLeadId: Number(c.leadId), spineIdSchedule: 77 } });

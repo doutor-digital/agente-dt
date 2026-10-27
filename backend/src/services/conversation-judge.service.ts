@@ -5,6 +5,7 @@ import { Prisma } from '@prisma/client';
 import type { Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
+import { VEREDITO_AUSENTE } from '../lib/veredito-ausente.js';
 import { calculateCost, resolveOpenAIApiKey, recordLlmCall } from './openai.service.js';
 
 const JUDGE_MODEL = process.env.JUDGE_MODEL ?? 'gpt-4o-mini';
@@ -234,7 +235,7 @@ function parseJudgeOutput(raw: string): { scores: CriterionScores; verdict: stri
       cta: clamp(s.cta),
       tom: clamp(s.tom),
     },
-    verdict: typeof obj.verdict === 'string' ? obj.verdict.slice(0, 4000) : '(sem veredito)',
+    verdict: typeof obj.verdict === 'string' ? obj.verdict.slice(0, 4000) : VEREDITO_AUSENTE,
   };
 }
 

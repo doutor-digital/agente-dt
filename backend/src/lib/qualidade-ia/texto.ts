@@ -29,6 +29,9 @@ export const MIN_MENSAGENS_PARA_TAXA = 50;
 export const FATOR_SINAIS = 1.5;
 export const SALTO_MINIMO_SINAIS = 5;
 export const MIN_MENSAGENS_SOFIA_PARA_TAXA = 50;
+/** Avaliações quebradas do juiz: alerta com pelo menos 5 e pelo menos 20% do dia. */
+export const QUEBRADAS_MINIMAS = 5;
+export const FRACAO_QUEBRADAS = 0.2;
 
 // ── formatação ─────────────────────────────────────────────────────────────────────────────────────
 export function num1(n: number): string {
@@ -47,6 +50,8 @@ function taxa(parte: number, todo: number): number | null {
 // ── agregação ──────────────────────────────────────────────────────────────────────────────────────
 export interface TotaisDeAvaliacao {
   total: number;
+  /** Respostas do juiz que vieram quebradas (nota 0 de artefato): fora da média e do ranking. */
+  quebradas: number;
   semSofia: number;
   sumiu: number;
   avaliaveis: number;
@@ -56,9 +61,10 @@ export interface TotaisDeAvaliacao {
 
 export function somarAvaliacoes(dias: readonly DiaAvaliado[]): TotaisDeAvaliacao {
   let soma = 0;
-  const t = { total: 0, semSofia: 0, sumiu: 0, avaliaveis: 0 };
+  const t = { total: 0, quebradas: 0, semSofia: 0, sumiu: 0, avaliaveis: 0 };
   for (const d of dias) {
     t.total += d.total;
+    t.quebradas += d.quebradas;
     t.semSofia += d.semSofia;
     t.sumiu += d.sumiu;
     t.avaliaveis += d.avaliaveis;
@@ -146,6 +152,11 @@ export function avaliarDia(d: DadosDiarios): Veredito {
   const m = somarMensagens(doDia(d.mensagens, ontem));
   const m7 = somarMensagens(entre(d.mensagens, base.de, base.ate));
 
+  // Resposta quebrada do juiz em quantidade: ele está rodando, mas devolvendo lixo.
+  if (av.quebradas >= QUEBRADAS_MINIMAS && av.quebradas >= av.total * FRACAO_QUEBRADAS) {
+    alertas.push(`${inteiro(av.quebradas)} de ${inteiro(av.total)} avaliações do juiz vieram quebradas (sem nota) — o juiz está devolvendo resposta inválida`);
+  }
+
   // Juiz parado há mais de uma semana: a média dos 7 dias já é 0, então o alerta acima (que compara com a média)
   // calaria. Havendo conversa e nenhuma avaliação em 8 dias, é parada, não dia calmo.
   if (av.total === 0 && av7.total === 0 && m.conversas + m7.conversas > 0) {
@@ -199,9 +210,10 @@ export function montarDiario(d: DadosDiarios): string {
     av.media === null
       ? 'sem nota: nenhuma conversa avaliável'
       : `nota ${num1(av.media)} só das ${inteiro(av.avaliaveis)} avaliáveis${comparacoes.length ? ` (${comparacoes.join('; ')})` : ''}`;
+  const quebradas = av.quebradas > 0 ? `, e ${inteiro(av.quebradas)} avaliações do juiz vieram quebradas (sem nota)` : '';
   const fora =
     av.total > 0
-      ? ` Ficaram fora da nota: ${inteiro(av.semSofia)} avaliações de conversas em que a Sofia nem chegou a falar, ${inteiro(av.sumiu)} em que o paciente sumiu depois da 1ª fala dela.`
+      ? ` Ficaram fora da nota: ${inteiro(av.semSofia)} avaliações de conversas em que a Sofia nem chegou a falar, ${inteiro(av.sumiu)} em que o paciente sumiu depois da 1ª fala dela${quebradas}.`
       : '';
   const linhaJuiz = `Juiz: ${inteiro(av.total)} avaliadas (média dos 7 dias: ${inteiro(av7.total / 7)}); ${nota}.${fora}`;
 
@@ -244,7 +256,8 @@ export function montarSemanal(d: DadosSemanais): string {
 
   linhas.push(
     `Juiz: ${inteiro(av.total)} avaliadas (semana anterior ${inteiro(avAnt.total)}). Só ${inteiro(av.avaliaveis)} (${pct(av.avaliaveis, av.total)}) medem a Sofia; ` +
-      `ficaram fora ${inteiro(av.semSofia)} avaliações de conversas em que ela nem chegou a falar e ${inteiro(av.sumiu)} em que o paciente sumiu.`,
+      `ficaram fora ${inteiro(av.semSofia)} avaliações de conversas em que ela nem chegou a falar e ${inteiro(av.sumiu)} em que o paciente sumiu` +
+      `${av.quebradas > 0 ? `, e ${inteiro(av.quebradas)} avaliações do juiz vieram quebradas (sem nota)` : ''}.`,
   );
   linhas.push(
     av.media === null

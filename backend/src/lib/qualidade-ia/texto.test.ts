@@ -9,7 +9,7 @@ const ONTEM = '2026-10-26'; // segunda
 
 /** Um dia "normal": 230 avaliadas, 100 avaliáveis, nota 6,4. */
 function diaAv(dia: string, o: Partial<DiaAvaliado> = {}): DiaAvaliado {
-  return { dia, total: 230, semSofia: 85, sumiu: 45, avaliaveis: 100, mediaAvaliaveis: 6.4, ...o };
+  return { dia, total: 230, quebradas: 0, semSofia: 85, sumiu: 45, avaliaveis: 100, mediaAvaliaveis: 6.4, ...o };
 }
 function diaMsg(dia: string, o: Partial<DiaMensagens> = {}): DiaMensagens {
   return {
@@ -176,6 +176,22 @@ test('juiz parado há mais de uma semana não vira "tudo igual" (a média dos 7 
   const texto = montarDiario(parado);
   assert.match(texto.split('\n')[0], /^⚠️/);
   assert.match(texto, /nenhuma conversa nos últimos 8 dias — está parado/);
+});
+
+test('avaliações quebradas do juiz ficam FORA da média e são contadas à parte (só aparece quando N > 0)', () => {
+  const sem = montarDiario(normal());
+  assert.doesNotMatch(sem, /quebradas/);
+  // 100 avaliáveis, 20 quebradas (nota 0 de artefato) já fora da média: a nota continua 6,4 e o texto avisa
+  const d = normal({ ontemAv: { quebradas: 20 } });
+  const texto = montarDiario(d);
+  assert.match(texto, /nota 6,4 só das 100 avaliáveis/);
+  assert.match(texto, /20 avaliações do juiz vieram quebradas \(sem nota\)/);
+  assert.deepEqual(avaliarDia(d).alertas.filter((a) => /quebradas/.test(a)), [], '20 de 230 (9%) ainda não é alerta');
+  // quebradas em massa viram alerta
+  const muitas = normal({ ontemAv: { total: 230, quebradas: 60 } });
+  assert.ok(avaliarDia(muitas).alertas.some((a) => /60 de 230 avaliações do juiz vieram quebradas/.test(a)));
+  // poucas quebradas, mesmo que sejam proporção alta, não alertam (ruído)
+  assert.deepEqual(avaliarDia(normal({ ontemAv: { total: 10, quebradas: 3, avaliaveis: 7 } })).alertas.filter((a) => /quebradas/.test(a)), []);
 });
 
 test('sem os 7 dias anteriores o cabeçalho não diz "tudo igual" (não há com o que comparar)', () => {
