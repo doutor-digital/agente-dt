@@ -18,6 +18,7 @@ function diaMsg(dia: string, o: Partial<DiaMensagens> = {}): DiaMensagens {
     conversasSemSofia: 28,
     mensagensPaciente: 2000,
     mensagensPacienteVazias: 280,
+    mensagensSofia: 3000,
     sinais: { repetidas: 3, vazamento: 2, falha: 7 },
     ...o,
   };
@@ -114,12 +115,31 @@ test('Sofia sem falar e mensagens vazias: alerta só com alta de 5 pontos ou mai
 
 test('sinais de erro: alerta quando passa de 1,5× a média E de +5; dia calmo não', () => {
   const a = avaliarDia(normal({ ontemMsg: { sinais: { repetidas: 10, vazamento: 8, falha: 9 } } })).alertas;
-  assert.ok(a.some((x) => /sinais de erro da Sofia: 27 ontem contra 12,0 por dia/.test(x)), a.join('|'));
+  assert.ok(a.some((x) => /sinais de erro da Sofia: 27 ontem, o esperado para o movimento do dia era 12,0/.test(x)), a.join('|'));
   assert.deepEqual(avaliarDia(normal({ ontemMsg: { sinais: { repetidas: 5, vazamento: 4, falha: 8 } } })).alertas, []); // 17 < 1,5×12
   assert.deepEqual(
     avaliarDia({ ...normal(), mensagens: normal().mensagens.map((m) => diaMsg(m.dia, { sinais: { repetidas: 0, vazamento: 0, falha: 0 } })) }).alertas,
     [],
   );
+});
+
+test('sinais de erro seguem o MOVIMENTO: dia com o dobro de mensagens e o dobro de sinais não é dia pior', () => {
+  const movimentado = normal({ ontemMsg: { mensagensSofia: 6000, mensagensPaciente: 4000, sinais: { repetidas: 6, vazamento: 4, falha: 14 } } });
+  assert.deepEqual(avaliarDia(movimentado).alertas, []);
+  // o mesmo número de sinais num dia de pouco movimento já é ruim
+  const calmo = normal({ ontemMsg: { mensagensSofia: 1000, sinais: { repetidas: 6, vazamento: 4, falha: 14 } } });
+  assert.ok(avaliarDia(calmo).alertas.some((x) => /sinais de erro/.test(x)));
+});
+
+test('juiz parou: domingo/segunda baixos não disparam se o mesmo dia da semana passada também era baixo', () => {
+  const d = normal({ ontemAv: { total: 100 } }); // 100 < metade de 230
+  assert.ok(avaliarDia(d).alertas.some((a) => /pode ter parado/.test(a)), 'sem o histórico do dia, alerta');
+  // semana passada, mesmo dia (19/10): 160 → 100 não é menos da metade de 160
+  const segundaFraca = { ...d, avaliacoes: d.avaliacoes.map((x) => (x.dia === '2026-10-19' ? { ...x, total: 160 } : x)) };
+  assert.deepEqual(avaliarDia(segundaFraca).alertas.filter((a) => /juiz/.test(a)), []);
+  // mas 40 é menos da metade dos dois
+  const parou = { ...segundaFraca, avaliacoes: segundaFraca.avaliacoes.map((x) => (x.dia === ONTEM ? { ...x, total: 40 } : x)) };
+  assert.ok(avaliarDia(parou).alertas.some((a) => /pode ter parado/.test(a)));
 });
 
 test('quando piorou: ⚠️ no topo, a pior conversa entra com 1º nome e 4 dígitos — nunca o telefone', () => {
@@ -145,6 +165,12 @@ test('sem unidade com avaliáveis suficientes e sem nota: o texto diz, não inve
   const texto = montarDiario(d);
   assert.match(texto, /sem nota: nenhuma conversa avaliável/);
   assert.match(texto, /nenhuma unidade com conversas avaliáveis suficientes/);
+});
+
+test('sem os 7 dias anteriores o cabeçalho não diz "tudo igual" (não há com o que comparar)', () => {
+  const d = normal();
+  const so = { ...d, avaliacoes: d.avaliacoes.filter((x) => x.dia === ONTEM), mensagens: d.mensagens.filter((x) => x.dia === ONTEM) };
+  assert.match(montarDiario(so).split('\n')[0], /sem os 7 dias anteriores para comparar/);
 });
 
 test('soma de mensagens junta os sinais por categoria', () => {

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { estaNaHora, modoDoResumo, resolverODia, TENTATIVAS_POR_DIA, type Dependencias, type ResultadoDoLease } from './resumo.js';
+import { estaNaHora, modoDoResumo, paraLog, resolverODia, valorReconhecido, TENTATIVAS_POR_DIA, type Dependencias, type ResultadoDoLease } from './resumo.js';
 import { diaDaSemana, inicioDoDia, relogioLocal, rotuloDoDia, somarDias } from './dias.js';
 import type { DadosDiarios, DadosSemanais } from './tipos.js';
 
@@ -77,13 +77,29 @@ test('datas: dia da semana, rótulo, fuso fixo −03:00 e meia-noite sem "24"', 
   assert.deepEqual(relogioLocal(new Date('2026-10-26T03:00:00Z')), { hora: 0, minuto: 0, diaDaSemana: 1 });
 });
 
+test('valor desconhecido da variável é reconhecido como tal (cai em seco e o worker avisa)', () => {
+  assert.equal(valorReconhecido(undefined), true);
+  assert.equal(valorReconhecido('ligado'), true);
+  assert.equal(valorReconhecido('"seco"'), true);
+  assert.equal(valorReconhecido('ligada'), false);
+  assert.equal(valorReconhecido('on'), false);
+  assert.equal(modoDoResumo('ligada'), 'seco');
+});
+
+test('o log não guarda a fala do paciente: o trecho da pior conversa sai do texto do seco', () => {
+  const texto = 'Pior conversa avaliável: nota 2,4, Serra (Maria, final 8888, cartão 1)\n  Paciente: meu e-mail é a@b.com\n  Sofia: Vou acolher';
+  const log = paraLog(texto);
+  assert.doesNotMatch(log, /e-mail|Vou acolher/);
+  assert.match(log, /Maria, final 8888/);
+});
+
 test('ligado, segunda: manda 1 mensagem (diário) e pega o lease do dia', async () => {
   const f = fabrica();
   const r = await resolverODia(SEGUNDA, 'ligado', f.dep);
   assert.equal(r, 'enviado');
   assert.equal(f.enviados.length, 1);
   assert.match(f.enviados[0], /Sofia, resumo de 25\/10 \(dom\)/);
-  assert.deepEqual(f.leases, [`resumo-diario-ia:${SEGUNDA}`]);
+  assert.deepEqual(f.leases, [`resumo-diario-ia:${SEGUNDA}:diario`]);
 });
 
 test('ligado, sábado: o diário E o semanal', async () => {
@@ -100,6 +116,7 @@ test('SECO não envia nada: só registra o texto que mandaria (o portão cobre o
   assert.deepEqual(f.enviados, []);
   const secos = f.logs.filter((l) => /\[seco\]/.test(l.mensagem));
   assert.equal(secos.length, 2);
+  assert.deepEqual(f.leases, [], 'seco não grava lease: trancaria o 1º dia depois de ligar');
   assert.match(String(secos[0].dados.texto), /Sofia, resumo de 30\/10/);
   assert.match(String(secos[1].dados.texto), /semana de 24\/10/);
 });
@@ -120,7 +137,7 @@ test('lease de outro processo: não monta nem envia (duas réplicas = uma mensag
 
 test('banco do lease com erro: não envia sem lease, tenta no próximo passo', async () => {
   const f = fabrica({ lease: 'erro' });
-  assert.equal(await resolverODia(SEGUNDA, 'ligado', f.dep), 'tentar-de-novo');
+  assert.equal(await resolverODia(SEGUNDA, 'ligado', f.dep), 'sem-lease');
   assert.deepEqual(f.enviados, []);
 });
 
@@ -128,6 +145,7 @@ test('ligado sem token do Telegram: avisa no log como erro e não tenta enviar',
   const f = fabrica({ configurado: false });
   assert.equal(await resolverODia(SEGUNDA, 'ligado', f.dep), 'sem-telegram');
   assert.deepEqual(f.enviados, []);
+  assert.deepEqual(f.leases, [], 'sem token não pega lease: corrigir o token e reiniciar no mesmo dia ainda envia');
   assert.ok(f.logs.some((l) => l.nivel === 'error' && /TELEGRAM_BOT_TOKEN/.test(l.mensagem)));
 });
 
@@ -135,7 +153,7 @@ test('Telegram recusa: solta o lease e tenta de novo; depois das tentativas desi
   const f = fabrica({ telegram: false });
   const enviados = new Set<'diario' | 'semanal'>();
   assert.equal(await resolverODia(SEGUNDA, 'ligado', f.dep, 1, enviados), 'tentar-de-novo');
-  assert.deepEqual(f.liberados, [`resumo-diario-ia:${SEGUNDA}`]);
+  assert.deepEqual(f.liberados, [`resumo-diario-ia:${SEGUNDA}:diario`]);
   assert.equal(await resolverODia(SEGUNDA, 'ligado', f.dep, TENTATIVAS_POR_DIA, enviados), 'desistiu');
 });
 
@@ -144,6 +162,7 @@ test('consulta falha: nunca lança, solta o lease para a próxima tentativa', as
   assert.equal(await resolverODia(SEGUNDA, 'ligado', f.dep), 'tentar-de-novo');
   assert.deepEqual(f.enviados, []);
   assert.equal(f.liberados.length, 1);
+  assert.equal(await resolverODia(SEGUNDA, 'seco', fabrica({ coletaFalha: true }).dep), 'tentar-de-novo', 'seco também não lança');
   assert.ok(f.logs.some((l) => l.nivel === 'error' && /falhou ao montar/.test(l.mensagem)));
 });
 
@@ -158,7 +177,7 @@ test('sábado: se o diário saiu e o semanal falhou, a nova tentativa não repet
   const ja = new Set<'diario' | 'semanal'>();
   assert.equal(await resolverODia(SABADO, 'ligado', f.dep, 1, ja), 'tentar-de-novo');
   assert.deepEqual([...ja], ['diario']);
-  assert.deepEqual(f.liberados, [], 'já saiu uma mensagem: o lease fica, outro processo não repete o diário');
+  assert.deepEqual(f.liberados, [`resumo-diario-ia:${SABADO}:semanal`], 'só o lease do semanal (que falhou) é solto; o do diário fica');
   assert.equal(await resolverODia(SABADO, 'ligado', f.dep, 2, ja), 'enviado');
   assert.equal(f.enviados.length, 3);
   assert.match(f.enviados[2], /semana de/);

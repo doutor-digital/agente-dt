@@ -18,6 +18,23 @@ export interface DiaAvaliado {
   mediaAvaliaveis: number | null;
 }
 
+/** Uma avaliação do juiz com os fatos que dizem se ela mede a Sofia. A agregação é código puro (`agregar.ts`). */
+export interface LinhaDeAvaliacao {
+  conversationId: string;
+  unitId: string;
+  unidade: string;
+  dia: Dia;
+  nota: number;
+  /** A Sofia falou ≥ 1 vez na conversa. */
+  sofiaFalou: boolean;
+  /** O paciente escreveu depois da 1ª fala da Sofia. */
+  pacienteRespondeu: boolean;
+  /** `converted_at` preenchido (entrou em etapa de Ganho). */
+  ganhou: boolean;
+  /** Consulta marcada na franquia (`spine_lead_links.spine_id_schedule`). */
+  comConsulta: boolean;
+}
+
 /** O que chegou de mensagem num dia (pelo dia da mensagem). */
 export interface DiaMensagens {
   dia: Dia;
@@ -28,6 +45,8 @@ export interface DiaMensagens {
   mensagensPaciente: number;
   /** Mensagens do paciente gravadas vazias (áudio/imagem sem texto) ou "não deu pra ouvir". */
   mensagensPacienteVazias: number;
+  /** Mensagens da Sofia no dia (denominador dos sinais de erro: sem ele, dia de muito movimento parece dia ruim). */
+  mensagensSofia: number;
   sinais: Sinais;
 }
 

@@ -1,19 +1,19 @@
 import type { Dia } from './tipos.js';
 
-export const FUSO = 'America/Sao_Paulo';
+import { FUSO_PADRAO, partesNoFuso } from '../fuso.js';
+
+export const FUSO = FUSO_PADRAO;
 
 /** Dia de calendário (AAAA-MM-DD) de um instante, no fuso de São Paulo. */
 export function diaLocal(d: Date): Dia {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: FUSO, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+  const p = partesNoFuso(d, FUSO);
+  return `${String(p.ano).padStart(4, '0')}-${String(p.mes).padStart(2, '0')}-${String(p.dia).padStart(2, '0')}`;
 }
 
 /** Hora, minuto e dia da semana (0 = domingo) de um instante, no fuso de São Paulo. */
 export function relogioLocal(d: Date): { hora: number; minuto: number; diaDaSemana: number } {
-  const p = new Intl.DateTimeFormat('en-US', { timeZone: FUSO, hour: '2-digit', minute: '2-digit', weekday: 'short', hour12: false }).formatToParts(d);
-  const pega = (t: string) => p.find((x) => x.type === t)?.value ?? '';
-  const semana = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(pega('weekday'));
-  // Algumas versões do ICU devolvem "24" à meia-noite com hour12:false.
-  return { hora: Number(pega('hour')) % 24, minuto: Number(pega('minute')), diaDaSemana: semana };
+  const p = partesNoFuso(d, FUSO);
+  return { hora: p.hora, minuto: p.min, diaDaSemana: new Date(Date.UTC(p.ano, p.mes - 1, p.dia)).getUTCDay() };
 }
 
 export function somarDias(dia: Dia, n: number): Dia {

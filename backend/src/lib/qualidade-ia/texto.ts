@@ -22,9 +22,13 @@ export const ALTA_DE_PONTOS = 5;
 /** Só compara taxa com pelo menos isto de conversas / mensagens no denominador. */
 export const MIN_CONVERSAS_PARA_TAXA = 20;
 export const MIN_MENSAGENS_PARA_TAXA = 50;
-/** Sinais de erro: piorou se ontem ≥ 1,5× a média diária E pelo menos 5 acima dela. */
+/**
+ * Sinais de erro: piorou se ontem ≥ 1,5× o ESPERADO para o movimento do dia (taxa dos 7 dias × mensagens da Sofia
+ * ontem) E pelo menos 5 acima dele. Pela taxa, e não pela contagem, para que dia de muito movimento não pareça dia ruim.
+ */
 export const FATOR_SINAIS = 1.5;
 export const SALTO_MINIMO_SINAIS = 5;
+export const MIN_MENSAGENS_SOFIA_PARA_TAXA = 50;
 
 // ── formatação ─────────────────────────────────────────────────────────────────────────────────────
 export function num1(n: number): string {
@@ -68,16 +72,18 @@ export interface TotaisDeMensagens {
   semSofia: number;
   mensagens: number;
   vazias: number;
+  mensagensSofia: number;
   sinais: Sinais;
 }
 
 export function somarMensagens(dias: readonly DiaMensagens[]): TotaisDeMensagens {
-  const t: TotaisDeMensagens = { conversas: 0, semSofia: 0, mensagens: 0, vazias: 0, sinais: { ...SINAIS_ZERADOS } };
+  const t: TotaisDeMensagens = { conversas: 0, semSofia: 0, mensagens: 0, vazias: 0, mensagensSofia: 0, sinais: { ...SINAIS_ZERADOS } };
   for (const d of dias) {
     t.conversas += d.conversasComPaciente;
     t.semSofia += d.conversasSemSofia;
     t.mensagens += d.mensagensPaciente;
     t.vazias += d.mensagensPacienteVazias;
+    t.mensagensSofia += d.mensagensSofia;
     t.sinais.repetidas += d.sinais.repetidas;
     t.sinais.vazamento += d.sinais.vazamento;
     t.sinais.falha += d.sinais.falha;
@@ -115,8 +121,12 @@ export function avaliarDia(d: DadosDiarios): Veredito {
   const avVespera = somarAvaliacoes(doDia(d.avaliacoes, vespera));
   const av7 = somarAvaliacoes(entre(d.avaliacoes, base.de, base.ate));
   const mediaDiaria = av7.total / 7;
+  // Domingo e segunda têm menos conversas que quinta: só vira "parou" se também ficou abaixo da metade do mesmo
+  // dia da semana passada (quando houve avaliação nele).
+  const mesmoDiaSemanaPassada = somarAvaliacoes(doDia(d.avaliacoes, somarDias(ontem, -7))).total;
+  const abaixoDoMesmoDia = mesmoDiaSemanaPassada <= 0 || av.total < mesmoDiaSemanaPassada * FRACAO_JUIZ_PAROU;
 
-  if (mediaDiaria > 0 && av.total < mediaDiaria * FRACAO_JUIZ_PAROU) {
+  if (mediaDiaria > 0 && av.total < mediaDiaria * FRACAO_JUIZ_PAROU && abaixoDoMesmoDia) {
     alertas.push(
       av.total === 0
         ? `o juiz não avaliou nada ontem (média de ${inteiro(mediaDiaria)} por dia) — pode ter parado`
@@ -149,9 +159,11 @@ export function avaliarDia(d: DadosDiarios): Veredito {
   }
 
   const sinais = totalDeSinais(m.sinais);
-  const sinaisMedia = totalDeSinais(m7.sinais) / 7;
-  if (sinais >= sinaisMedia * FATOR_SINAIS && sinais - sinaisMedia >= SALTO_MINIMO_SINAIS) {
-    alertas.push(`sinais de erro da Sofia: ${sinais} ontem contra ${num1(sinaisMedia)} por dia`);
+  if (m7.mensagensSofia > 0 && m.mensagensSofia >= MIN_MENSAGENS_SOFIA_PARA_TAXA) {
+    const esperado = (totalDeSinais(m7.sinais) / m7.mensagensSofia) * m.mensagensSofia;
+    if (sinais >= esperado * FATOR_SINAIS && sinais - esperado >= SALTO_MINIMO_SINAIS) {
+      alertas.push(`sinais de erro da Sofia: ${sinais} ontem, o esperado para o movimento do dia era ${num1(esperado)}`);
+    }
   }
 
   return { alertas };
@@ -169,9 +181,10 @@ export function montarDiario(d: DadosDiarios): string {
   const m = somarMensagens(doDia(d.mensagens, ontem));
   const m7 = somarMensagens(entre(d.mensagens, base.de, base.ate));
 
+  const semHistorico = av7.total === 0 && m7.conversas === 0;
   const cabecalho = alertas.length
     ? `⚠️ Sofia, resumo de ${rotuloDoDia(ontem)}: piorou`
-    : `Sofia, resumo de ${rotuloDoDia(ontem)}: tudo igual ao normal`;
+    : `Sofia, resumo de ${rotuloDoDia(ontem)}: ${semHistorico ? 'sem os 7 dias anteriores para comparar' : 'tudo igual ao normal'}`;
 
   const comparacoes: string[] = [];
   if (avVespera.media !== null) comparacoes.push(`véspera ${num1(avVespera.media)}`);

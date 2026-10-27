@@ -23,12 +23,21 @@ export const TENTATIVAS_POR_DIA = 3;
 export const TTL_DO_LEASE_MS = 36 * 60 * 60_000;
 export const PREFIXO_DO_LEASE = 'resumo-diario-ia:';
 
+function normalizar(raw: string | undefined): string {
+  return (raw ?? '').trim().replace(/^['"]|['"]$/g, '').toLowerCase();
+}
+
 /** Vazio = seco: o texto aparece no log sem mandar nada, e ligar é uma troca de uma palavra. */
 export function modoDoResumo(raw: string | undefined): ModoResumo {
-  const v = (raw ?? '').trim().replace(/^['"]|['"]$/g, '').toLowerCase();
+  const v = normalizar(raw);
   if (v === 'ligado') return 'ligado';
   if (v === 'desligado' || v === 'off' || v === '0') return 'desligado';
   return 'seco';
+}
+
+/** A variável tem um valor que o worker entende? (Valor estranho cai em seco; o worker avisa em vez de calar.) */
+export function valorReconhecido(raw: string | undefined): boolean {
+  return ['', 'seco', 'ligado', 'desligado', 'off', '0'].includes(normalizar(raw));
 }
 
 /** Já é hora (07:30–12:00 em São Paulo) e o dia ainda não foi resolvido? */
@@ -58,72 +67,96 @@ export type DesfechoDoDia =
   | 'desligado'
   | 'de-outro-processo'
   | 'sem-telegram'
+  /** Não deu para pegar o lease (banco): tenta no próximo passo, sem gastar uma das tentativas. */
+  | 'sem-lease'
   /** Falhou, mas ainda há tentativa: o worker tenta de novo no próximo passo. */
   | 'tentar-de-novo'
   | 'desistiu';
 
+type Tipo = 'diario' | 'semanal';
+
+/** O log guarda os números, não a fala do paciente: as linhas do trecho da pior conversa ficam só no Telegram. */
+export function paraLog(texto: string): string {
+  return texto.replace(/^ {2}(Paciente|Sofia): .*$/gm, '  [trecho omitido no log]');
+}
+
 /**
  * Resolve o resumo de `hoje` (o texto fala de ontem). Nunca lança. `tentativa` começa em 1.
- * `jaEnviados` guarda o que já saiu hoje (diário, semanal), para uma nova tentativa não repetir mensagem.
+ *
+ * Cada mensagem (diário, semanal) tem o SEU lease do dia, só no modo ligado: o seco só escreve no log, e
+ * um lease gravado em seco trancaria o primeiro dia depois de ligar (o processo novo teria outro dono).
+ * O lease de uma mensagem que falhou é solto, para a próxima tentativa — aqui ou em outro processo.
+ * `jaEnviados` guarda o que já saiu neste processo (o lease sozinho não protege: o mesmo dono o reivindica de novo).
  */
 export async function resolverODia(
   hoje: Dia,
   modo: ModoResumo,
   dep: Dependencias,
   tentativa = 1,
-  jaEnviados: Set<'diario' | 'semanal'> = new Set(),
+  jaEnviados: Set<Tipo> = new Set(),
 ): Promise<DesfechoDoDia> {
   if (modo === 'desligado') return 'desligado';
-  const lease = `${PREFIXO_DO_LEASE}${hoje}`;
-
-  // Reivindica a cada tentativa: depois de uma falha o lease foi solto, e o mesmo dono o pega de volta.
-  const r = await dep.reivindicar(lease, TTL_DO_LEASE_MS);
-  if (r === 'de-outro') return 'de-outro-processo';
-  if (r === 'erro') {
-    dep.registrar('warn', { hoje }, 'resumo-diario-ia: sem lease (banco?) — não rodo sem ele, tento no próximo passo');
-    return 'tentar-de-novo';
-  }
-
   if (modo === 'ligado' && !dep.telegramConfigurado()) {
     dep.registrar('error', { hoje }, 'resumo-diario-ia: ligado, mas TELEGRAM_BOT_TOKEN não está configurado — nada enviado');
     return 'sem-telegram';
   }
 
-  try {
-    const mensagens: Array<{ tipo: 'diario' | 'semanal'; texto: string }> = [];
-    if (!jaEnviados.has('diario')) mensagens.push({ tipo: 'diario', texto: montarDiario(await dep.coletarDiario(hoje)) });
-    // Sábado: além do diário, o semanal (o cron antigo de sábado 14h mandava pelo WhatsApp banido).
-    if (diaDaSemana(hoje) === 6 && !jaEnviados.has('semanal')) {
-      mensagens.push({ tipo: 'semanal', texto: montarSemanal(await dep.coletarSemanal(hoje)) });
-    }
+  // Sábado: além do diário, o semanal (o cron antigo de sábado 14h mandava pelo WhatsApp banido).
+  const todos: Tipo[] = diaDaSemana(hoje) === 6 ? ['diario', 'semanal'] : ['diario'];
+  const tipos = todos.filter((t) => !jaEnviados.has(t));
+  let falhou = false;
+  let semLease = false;
+  let deOutro = 0;
 
-    let falhou = false;
-    for (const m of mensagens) {
-      if (modo === 'seco') {
-        // O texto no log é o que a tela de automações chamaria "só no papel": prova o conteúdo sem mandar nada.
-        dep.registrar('info', { hoje, tipo: m.tipo, texto: m.texto }, `resumo-diario-ia [seco]: mandaria no Telegram (${m.tipo})`);
-        jaEnviados.add(m.tipo);
+  for (const tipo of tipos) {
+    const lease = `${PREFIXO_DO_LEASE}${hoje}:${tipo}`;
+    if (modo === 'ligado') {
+      const r = await dep.reivindicar(lease, TTL_DO_LEASE_MS);
+      if (r === 'de-outro') {
+        jaEnviados.add(tipo);
+        deOutro += 1;
         continue;
       }
-      if (await dep.enviar(m.texto)) {
-        jaEnviados.add(m.tipo);
-        dep.registrar('info', { hoje, tipo: m.tipo, caracteres: m.texto.length }, 'resumo-diario-ia: enviado no Telegram');
-      } else {
-        falhou = true;
+      if (r === 'erro') {
+        semLease = true;
+        dep.registrar('warn', { hoje, tipo }, 'resumo-diario-ia: sem lease (banco?) — não envio sem ele, tento no próximo passo');
+        continue;
       }
     }
-    if (!falhou) return modo === 'seco' ? 'seco' : 'enviado';
-  } catch (err) {
-    dep.registrar('error', { hoje, tentativa, err: String(err) }, 'resumo-diario-ia: falhou ao montar o resumo');
+
+    let texto: string;
+    try {
+      texto = tipo === 'diario' ? montarDiario(await dep.coletarDiario(hoje)) : montarSemanal(await dep.coletarSemanal(hoje));
+    } catch (err) {
+      dep.registrar('error', { hoje, tipo, tentativa, err: String(err) }, 'resumo-diario-ia: falhou ao montar o resumo');
+      falhou = true;
+      if (modo === 'ligado') await dep.liberar(lease);
+      continue;
+    }
+
+    if (modo === 'seco') {
+      // O "só no papel" desta automação: prova o conteúdo no log sem mandar nada.
+      dep.registrar('info', { hoje, tipo, texto: paraLog(texto) }, `resumo-diario-ia [seco]: mandaria no Telegram (${tipo})`);
+      jaEnviados.add(tipo);
+    } else if (await dep.enviar(texto)) {
+      jaEnviados.add(tipo);
+      dep.registrar('info', { hoje, tipo, caracteres: texto.length }, 'resumo-diario-ia: enviado no Telegram');
+    } else {
+      falhou = true;
+      await dep.liberar(lease);
+    }
   }
 
-  if (tentativa >= TENTATIVAS_POR_DIA) {
-    dep.registrar('error', { hoje }, 'resumo-diario-ia: desisti por hoje depois das tentativas');
-    return 'desistiu';
+  if (falhou) {
+    if (tentativa >= TENTATIVAS_POR_DIA) {
+      dep.registrar('error', { hoje }, 'resumo-diario-ia: desisti por hoje depois das tentativas');
+      return 'desistiu';
+    }
+    return 'tentar-de-novo';
   }
-  // Nada saiu: solta o lease para o próximo passo (neste ou em outro processo) poder tentar de novo.
-  if (jaEnviados.size === 0) await dep.liberar(lease);
-  return 'tentar-de-novo';
+  if (semLease) return 'sem-lease';
+  if (tipos.length > 0 && deOutro === tipos.length) return 'de-outro-processo';
+  return modo === 'seco' ? 'seco' : 'enviado';
 }
 
 /** O dia que o texto cobre (ontem), exposto para o teste e para o log. */
