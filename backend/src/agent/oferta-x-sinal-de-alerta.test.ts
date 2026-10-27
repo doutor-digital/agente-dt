@@ -16,6 +16,7 @@ import { aplicarGuardrail } from './guardrail.js';
 import { passarPorSinalNoTurno } from './passe-por-sinal.js';
 import { chamadasDoTurno, falasDoTurno, fraseDoPasse } from './sinal-de-alerta.js';
 import { pacienteFalouDePs } from './sem-pronto-socorro.js';
+import { marcouNesteTurno } from './reserva-sem-marcar.js';
 import { retornoDaEquipe } from '../lib/retorno-da-equipe.js';
 import { semDiminutivo } from '../lib/sem-diminutivo.js';
 import { semIntimidade } from '../lib/sem-intimidade.js';
@@ -72,7 +73,7 @@ async function fimDoTurno(o: {
     ...extrasDoGuardrail,
     mensagensDoPaciente,
     fraseDeReserva: passouPorSinal ? fraseDoPasse(retornoDaEquipe(unit), pacienteFalouDePs(mensagensDoPaciente)) : undefined,
-    consultaMarcada: chamadasDoTurno(mensagens).some((c) => c.name === 'agendar_consulta'),
+    consultaMarcada: passouPorSinal && marcouNesteTurno(chamadasDoTurno(mensagens).filter((c) => c.name === 'agendar_consulta').map((c) => c.resultado ?? '')),
   });
   return { passe, passouPorSinal, guard, chamadas, mensagensDoPaciente };
 }
@@ -288,6 +289,10 @@ test('(b3) venda que escapava (às 9, marcá-la, agendá-lo, reservá-la, 150,00
     'Te mando o Pix.',
     'Tenho disponibilidade amanhã.',
     'Quarta às 14 horas fica bom.',
+    'Posso abrir sua agenda ainda hoje?',
+    'Já deixei sua reserva, é só confirmar o agendamento.',
+    'De acordo, podemos iniciar quarta às 9h.',
+    'Marquei para quinta.',
   ]) {
     const r = await fimDoTurno({
       falas: ['não consigo segurar o xixi'],
@@ -315,6 +320,9 @@ test('(b3) triagem clínica NÃO é venda: horas, datas e "marca" da pergunta cl
     'Faz mais de 2 horas que você não sente a perna?',
     'Você consegue andar?',
     'Sente formigamento?',
+    'Ela te responde amanhã (quinta) às 8h.',
+    'Hoje às 15h a dor aumentou?',
+    'Hoje as 2 pernas doem?',
   ]) {
     const r = await fimDoTurno({
       falas: ['minha perna está perdendo força'],
@@ -324,6 +332,22 @@ test('(b3) triagem clínica NÃO é venda: horas, datas e "marca" da pergunta cl
     assert.equal(r.guard.text, `Já avisei a nossa equipe 🙏 ${pergunta}`, pergunta);
     assert.ok(!r.guard.triggered.includes('alerta_com_venda'), pergunta);
   }
+});
+
+test('(b3) o agendar_consulta FALHOU e o modelo oferece outro horário em turno de alerta: sem confirmação para proteger, sai a frase do passe', async () => {
+  const fala = 'minha perna está perdendo força, pode marcar pela campanha?';
+  const mensagens: BaseMessage[] = [
+    new HumanMessage(fala),
+    new AIMessage({ content: '', tool_calls: [{ id: 'g', name: 'agendar_consulta', args: { hora: '09:00' } }] }),
+    new ToolMessage({ content: 'RECUSADO: horário indisponível.', tool_call_id: 'g' }),
+  ];
+  const r = await fimDoTurno({
+    falas: [fala],
+    mensagens,
+    textoDoModelo: 'Esse horário caiu. Tenho quinta às 9h por R$ 150, serve? Se piorar, procure o pronto-socorro.',
+  });
+  assert.equal(r.guard.text, fraseDoPasse(retornoDaEquipe(unit), false));
+  assert.ok(r.guard.triggered.includes('alerta_com_venda'));
 });
 
 // ── (c) as duas ao mesmo tempo: o aviso urgente prevalece ──
@@ -397,7 +421,7 @@ test('graph.ts: as DUAS chamadas do guardrail do fim do turno levam oferta + fal
     'fraseDeReserva: passouPorSinal ? fraseDoPasse(retornoDaEquipe(unit), pacienteFalouDePs(mensagensDoPaciente)) : undefined,',
     'if (cta.precisaRefazer && !passouPorSinal && !respostaFixa && ',
     'const passouPorSinal = passe.avisou || passe.texto !== textoFinal;',
-    "consultaMarcada: chamadasDoTurno(nonSystemMessages).some((c) => c.name === 'agendar_consulta'),",
+    "marcouNesteTurno(chamadasDoTurno(nonSystemMessages).filter((c) => c.name === 'agendar_consulta').map((c) => c.resultado ?? '')),",
   ]) {
     assert.ok(srcCompacto.includes(semEspaco(linha)), `graph.ts perdeu a linha: ${linha}`);
   }

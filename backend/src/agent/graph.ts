@@ -1439,7 +1439,9 @@ export async function buildAgentGraph(
         mensagensDoPaciente,
         fraseDeReserva: passouPorSinal ? fraseDoPasse(retornoDaEquipe(unit), pacienteFalouDePs(mensagensDoPaciente)) : undefined,
         // A confirmação do agendamento é a única que o paciente recebe: o guardrail não a troca pela frase do passe.
-        consultaMarcada: chamadasDoTurno(nonSystemMessages).some((c) => c.name === 'agendar_consulta'),
+        consultaMarcada:
+          passouPorSinal &&
+          marcouNesteTurno(chamadasDoTurno(nonSystemMessages).filter((c) => c.name === 'agendar_consulta').map((c) => c.resultado ?? '')),
       });
       // O que o guardrail devolve (correção ou texto de reserva) passa pela mesma trava do nome.
       const guard = { ...guardBruto, text: semDraSofiaNaDH(guardBruto.text, unit, rede) };

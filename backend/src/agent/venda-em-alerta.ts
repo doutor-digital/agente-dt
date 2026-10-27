@@ -19,7 +19,7 @@ const VALOR = new RegExp(
     String.raw`R\$`,
     String.raw`${INI}\d+(?:[.,]\d{2})?\s*reais${FIM}`,
     String.raw`${INI}\d{2,4},\d{2}${FIM}`,
-    String.raw`${INI}(?:cento|duzent[oa]s?|trezent[oa]s?|quatrocent[oa]s?|quinhent[oa]s?)${FIM}`,
+    String.raw`${INI}(?:pilas?|cento|duzent[oa]s?|trezent[oa]s?|quatrocent[oa]s?|quinhent[oa]s?)${FIM}`,
   ].join('|'),
   'iu',
 );
@@ -31,7 +31,9 @@ const VALOR = new RegExp(
 const VENDA = new RegExp(
   `${INI}(?:` +
     [
-      String.raw`(?:marc|agend|reserv|encaix)(?:ar|á-\w+|ar[eéi]\w*|amos|ad[oa]s?|ue|e|o)`,
+      String.raw`(?:marc|agend|reserv|encaix)(?:ar|á-\w+|ar[eéi]\w*|amos|ad[oa]s?|ue|e|o|ou|ei)`,
+      String.raw`marqu(?:e|ei|emos)`,
+      String.raw`agenda|agendamentos?|reservas?`,
       String.raw`garant(?:ir|i-\w+|o|imos|id[oa]s?)`,
       String.raw`vagas?`,
       String.raw`disponibilidade`,
@@ -49,10 +51,15 @@ const DIA_OU_DATA = new RegExp(
   `${INI}(?:amanh[ãa]|hoje|segunda|ter[çc]a|quarta|quinta|sexta|s[áa]bado|domingo|hor[áa]rios?)${FIM}|${INI}\\d{1,2}/\\d{1,2}${FIM}`,
   'iu',
 );
-/** O paciente contando quando começou: "desde quarta às 7h" é triagem, não agenda. */
-const RELATO_DE_INICIO = /\b(?:desde|come[cç]ou|inici\w+|piorou|acord\w+|sentiu|apareceu)\b/i;
+/**
+ * Triagem ou aviso, não agenda: o paciente contando quando começou ("desde quarta às 7h"), a dor, ou o aviso de quando a equipe
+ * responde ("ela te responde amanhã às 8h" — é o que o pausar_ia manda o modelo escrever). Com convite escrito ("tenho", "vaga"),
+ * a frase continua sendo venda pelos outros caminhos.
+ */
+const RELATO_DE_INICIO = /\b(?:desde|come[cç]ou|inici(?:ou|ei)|piorou|aumentou|acord(?:ou|ei)|sentiu|apareceu|dor|doer|doem|equipe|respond\w+|retorn\w+|te\s+(?:chama|liga|procura)|entra\w*\s+em\s+contato)\b/i;
 
-const AS_N = new RegExp(`${INI}[àa]s\\s+(\\d{1,2})(?::(\\d{2})|h(\\d{2})?|\\s*horas?)?${FIM}`, 'giu');
+// "às 9" (com crase) é hora; "as 2 pernas" não: sem a crase só vale com h, : ou "horas".
+const AS_N = new RegExp(`${INI}(?:às\\s+(\\d{1,2})(?::(\\d{2})|h(\\d{2})?|\\s*horas?)?|as\\s+(\\d{1,2})(?::(\\d{2})|h(\\d{2})?|\\s+horas?))${FIM}`, 'giu');
 
 /** Horas de relógio na frase (0-23h, 0-59min); "há 3h", "48h", "últimas 24h" são duração e não entram. */
 function horasDeRelogio(frase: string): number {
@@ -61,12 +68,12 @@ function horasDeRelogio(frase: string): number {
     const antes = frase.slice(0, m.index ?? 0);
     const hora = Number(m[1]);
     const min = Number(m[2] ?? m[3] ?? 0);
-    if (hora > 23 || min > 59 || ANTES_DE_DURACAO.test(antes)) continue;
+    if (hora > 23 || min > 59 || ANTES_DE_DURACAO.test(antes.slice(-20))) continue;
     n++;
   }
   for (const m of frase.matchAll(AS_N)) {
-    const hora = Number(m[1]);
-    const min = Number(m[2] ?? m[3] ?? 0);
+    const hora = Number(m[1] ?? m[4]);
+    const min = Number(m[2] ?? m[3] ?? m[5] ?? m[6] ?? 0);
     if (hora <= 23 && min <= 59) n++;
   }
   return n;
