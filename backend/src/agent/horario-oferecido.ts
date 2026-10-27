@@ -190,14 +190,14 @@ const DIA_POR_EXTENSO = /\b(segunda|ter[çc]a|quarta|quinta|sexta|s[áa]bado|dom
 // fronteira por \p{L}: com \b, "Ter" casava dentro de "Terça" (o "ç" não é letra para o \b) e o dia contava duas vezes
 const DIA_ABREVIADO = /(?<![\p{L}])(seg|ter|qua|qui|sex|s[áa]b|dom)(?![\p{L}])\.?/giu;
 const DATA_DD_MM = /(?<![\d/])(\d{1,2})\/(\d{1,2})(?:\/(\d{4}|\d{2}))?(?![\d/])/g;
-const HORA = /(?<![\d/:.$])(\d{1,2})(?:h(\d{2})?|:(\d{2}))(?!\d)/gi;
+export const HORA = /(?<![\d/:.$])(\d{1,2})(?:h(\d{2})?|:(\d{2}))(?!\d)/gi;
 const HORA_DO_PERIODO = /\b[àa]s\s+(\d{1,2})\s+(?:horas?\s+)?d[ae]\s+(manh[ãa]|tarde|noite)\b/gi;
 /** "das 8h às 18h", "entre 8h e 12h": é o expediente, não horário oferecido. */
 const FAIXA = /\b(?:d[ae]s?|entre)\s+\d{1,2}(?:h\d{0,2}|:\d{2})\s+(?:[àa]s?|at[ée](?:\s+[àa]s)?|e)\s+\d{1,2}(?:h\d{0,2}|:\d{2})/gi;
 /** Duração, não horário: "dura 1h", "cerca de 2h". */
-const ANTES_DE_DURACAO = /(?:^|[\s,(])(?:dura|durar|leva|levar|cerca\s+de|aproximadamente|uns|umas|por|durante|h[áa]|faz|mais\s+de|menos\s+de|em\s+at[ée])\s*$/i;
+export const ANTES_DE_DURACAO = /(?:^|[\s,(])(?:dura|durar|leva|levar|cerca\s+de|aproximadamente|uns|umas|por|durante|h[áa]|faz|mais\s+de|menos\s+de|em\s+at[ée])\s*$/i;
 
-const OFERTA =
+export const OFERTA_DE_HORARIO =
   /\b(?:tenho|temos|tem\s+(?:vaga|hor[áa]rio)|dispon[íi]ve|vagas?\b|livres?\b|fica\s+melhor|prefere|qual\s+(?:desses|dessas|deles|delas|dos|das|hor[áa]rio|fica|voc[êe]\s+prefere|seria|[ée]\s+melhor)|posso\s+(?:te\s+)?(?:encaixar|reservar|marcar|agendar|deixar|garantir|separar|segurar)|consigo\s+(?:te\s+)?(?:encaixar|marcar|agendar)|garantir\s+(?:a\s+)?sua\s+vaga|encaix|que\s+tal|serve\b|pode\s+ser|daria\s+(?:pra|para)|consegue\s+vir|quer\s+(?:o|a|[àa]s|na|no)\b)/i;
 /** Consulta que ele JÁ TEM (confirmação, lembrete): não é oferta. */
 const CONSULTA_QUE_JA_TEM =
@@ -298,7 +298,7 @@ function ehOferta(frase: string, horas: number): boolean {
   // duas horas ou mais com "ou" no meio é escolha, sempre
   if (horas >= 2 && /\bou\b/i.test(frase)) return true;
   if (CONSULTA_QUE_JA_TEM.test(frase)) return false;
-  return OFERTA.test(frase);
+  return OFERTA_DE_HORARIO.test(frase);
 }
 
 /**

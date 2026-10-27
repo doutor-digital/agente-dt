@@ -40,6 +40,18 @@ export const NOME_DA_CONSULTA = 'consulta com o nosso especialista';
 const PREFIXO_DH = 'doutor-hernia-';
 /** `acailandia-resgate`, `imperatriz-financeiro`…: dividem a conta da unidade dona, não são outra clínica. */
 const CONTA_COMPARTILHADA = /-(resgate|tratamento|financeiro)$/;
+
+/**
+ * A unidade dona da conta: `acailandia-resgate` → `doutor-hernia-acailandia`; a unidade que não divide conta volta igual.
+ * Quem precisa contar clínicas (e não contas) usa esta, não um regex próprio.
+ */
+export function unidadeDona(slug: string): string {
+  const s = String(slug ?? '').trim().toLowerCase();
+  if (!CONTA_COMPARTILHADA.test(s)) return s;
+  const base = s.replace(CONTA_COMPARTILHADA, '');
+  return base.startsWith(PREFIXO_DH) ? base : PREFIXO_DH + base;
+}
+
 const DH_NO_NOME = /doutor\s*h[eé]rnia/i;
 const DH_NO_KOMMO = /doutorhernia/i;
 

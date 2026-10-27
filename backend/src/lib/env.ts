@@ -89,6 +89,10 @@ const schema = z.object({
   FRANQUIA_REVISAO_SLUGS: z.string().optional(),
   /** `1` = a revisão pelo histórico só registra o que faria (rodada de prova em produção). */
   FRANQUIA_REVISAO_SECO: z.string().optional(),
+  /** Cadastrar TODO lead na franquia, como lead e na 1ª mensagem (27/10/2026) — nasce desligada; a tela manda (csv; `*` = todas). */
+  CADASTRO_TODO_LEAD_SLUGS: z.string().optional(),
+  /** Telefones da rede (csv, número completo; compara pelos últimos 8 dígitos) que a IA nunca cadastra na franquia. */
+  NUMEROS_INTERNOS: z.string().optional(),
   /** Regras de 16/10/2026 do casamento cartão × paciente e da jornada (csv; `*` = todas; vazio = desligado — a tela manda). */
   CASAMENTO_JORNADA_SLUGS: z.string().optional(),
   /** Unidades que saem do modo seco do worker de parados mesmo com PARADOS_SECO=1 (csv; `*` = todas). */

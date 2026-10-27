@@ -3,7 +3,8 @@ import { HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
-import { deveCriarNaFranquia, ferramentasChamadas } from '../lib/cadastro-na-franquia.js';
+import { ferramentasChamadas } from '../lib/cadastro-na-franquia.js';
+import { cadastrarLeadDoTurno } from '../lib/cadastro-todo-lead.js';
 import { logger } from '../lib/logger.js';
 import { buildAgentGraph, buildThreadId } from '../agent/graph.js';
 import { comTurnoEmAndamento } from '../lib/turnos-em-andamento.js';
@@ -1625,17 +1626,19 @@ export async function processAgent(args: {
     // A pessoa só vira lead na franquia se agendar consulta (regra do João, 26/09/2026).
     // Antes disto rodava em toda mensagem: 4.270 leads criados em 30 dias, 96% deles gente
     // que mandou uma mensagem e sumiu.
+    // 27/10/2026: a franquia mudou a regra — toda pessoa que entra em contato vira LEAD (menos número
+    // interno). Atrás da chave `cadastro-todo-lead`, que nasce desligada: desligada, a decisão é a de 26/09 (acima) e só
+    // a trava de concorrência (um cadastro por vez por lead) vale a mais.
+    // LIMITAÇÃO conhecida: este ponto é o fim do turno da IA. Lead atendido só pela SDR (IA pulada: fora do horário, em
+    // pausa, equipe falou) nunca chega aqui e não é cadastrado por esta regra.
     if (unit.spineSyncLeads && leadId > 0) {
       // Só o sinal da ferramenta aqui: a etapa do cartão vive noutro escopo, e cartão que
       // já está em AGENDADO é coberto pelo sincronizador da franquia, não por este caminho.
-      const decisao = deveCriarNaFranquia({
-        ferramentas: ferramentasChamadas((result as { messages?: unknown })?.messages),
-      });
-      if (decisao.criar) {
-        void SpineSyncService.syncLeadToSpine(unit, leadId).catch((err) => {
-          logger.warn({ err: String(err), leadId, unit: unit.slug }, 'spine-sync: erro inesperado');
-        });
-      } else {
+      const { decisao } = await cadastrarLeadDoTurno(
+        { unit, leadId, ferramentas: ferramentasChamadas((result as { messages?: unknown })?.messages) },
+        SpineSyncService.syncLeadToSpine,
+      );
+      if (!decisao.criar && !decisao.silenciosa) {
         logger.info({ leadId, unit: unit.slug, motivo: decisao.motivo }, 'spine-sync: não criei na franquia');
       }
     }

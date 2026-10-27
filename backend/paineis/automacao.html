@@ -12,142 +12,355 @@
 
   Sem build e sem bundler de propósito: é uma tela de operação, tem que dar para mudar uma linha e
   subir junto com o backend.
+
+  Redesenho visual de 27/10/2026 (pedido do João: "tem como deixar esse front mais bonito?"): só a
+  apresentação mudou — resumo no topo, linhas mais legíveis, busca de unidade, avisos de salvar,
+  estados de carregando/erro/vazio e celular. As chamadas à API, os campos enviados e as regras
+  (seco só onde existe, confirmação antes de uma automação mover cartão) são as mesmas de antes.
+  Continua sem framework, sem CDN e sem fonte baixada: tudo inline.
 -->
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0b0d0f">
 <title>Automações por unidade</title>
 <style>
   :root {
     color-scheme: dark;
     --fundo: #0b0d0f;
-    --carta: #14181c;
+    --carta: #13171b;
+    --carta-2: #181d22;
     --borda: #232a31;
+    --borda-2: #2c353d;
     --texto: #e7ecf1;
-    --fraco: #8b97a3;
-    --apagado: #5b6672;
+    --fraco: #9aa5b1;
+    --apagado: #7f8b98;      /* 4,9:1 sobre a carta — o antigo #5b6672 não passava de 3:1 */
     --on: #35c88f;
+    --on-fundo: #0f2a21;
+    --on-borda: #1d5741;
     --seco: #e0a94a;
+    --seco-fundo: #2a2110;
+    --seco-borda: #5a4519;
     --ruim: #e0685f;
-    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+    --ruim-fundo: #1d1413;
+    --foco: #7fb4ff;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --raio: 12px;
   }
   * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
   body {
     margin: 0; background: var(--fundo); color: var(--texto);
     font: 15px/1.55 var(--sans);
-    padding: max(20px, env(safe-area-inset-top)) 16px calc(48px + env(safe-area-inset-bottom));
+    padding: 0 max(16px, env(safe-area-inset-right)) calc(72px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+    overflow-wrap: anywhere;
   }
-  .folha { max-width: 860px; margin: 0 auto; }
+  .folha { max-width: 920px; margin: 0 auto; }
+  [hidden] { display: none !important; }
+  h1, h2, h3, p { margin: 0; }
+  button { font-family: var(--sans); }
+  :focus-visible { outline: 2px solid var(--foco); outline-offset: 2px; border-radius: 6px; }
+  .so-leitor { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
-  header { display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: center; }
-  h1 { font-size: 1.35rem; font-weight: 600; margin: 0; letter-spacing: -.01em; }
-  select {
-    font: 500 .9rem var(--sans); color: var(--texto); background: var(--carta);
-    border: 1px solid var(--borda); border-radius: 8px; padding: 8px 11px; margin-left: auto;
-    max-width: 100%;
+  /* ───────── barra do topo: sempre diz onde você está ───────── */
+  .topo {
+    position: sticky; top: 0; z-index: 20;
+    display: flex; align-items: center; gap: 12px; justify-content: space-between;
+    margin: 0 -16px; padding: max(10px, env(safe-area-inset-top)) 16px 10px;
+    background: var(--fundo);   /* sem backdrop-filter: ele prenderia a folha do seletor (position: fixed) dentro da barra */
+    border-bottom: 1px solid var(--borda);
   }
-  .sub { color: var(--fraco); font-size: .9rem; margin: 10px 0 24px; max-width: 64ch; }
-  .sub b { color: var(--texto); font-weight: 600; }
+  .marca { font-size: 1rem; font-weight: 650; letter-spacing: -.01em; white-space: nowrap; }
+  .marca small { display: block; font: 500 .68rem/1.2 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--apagado); }
 
+  /* ───────── seletor de unidade com busca ───────── */
+  .seletor { position: relative; min-width: 0; }
+  .gatilho {
+    display: flex; align-items: center; gap: 10px; min-height: 44px; max-width: 100%;
+    padding: 6px 12px 6px 14px; cursor: pointer; text-align: left;
+    color: var(--texto); background: var(--carta-2); border: 1px solid var(--borda-2); border-radius: 10px;
+  }
+  .gatilho:hover { border-color: #3b4651; }
+  .gatilho .rot { display: block; font: 500 .62rem/1.2 var(--mono); letter-spacing: .09em; text-transform: uppercase; color: var(--apagado); }
+  .gatilho .val { display: block; font-weight: 600; font-size: .95rem; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 15rem; }
+  .gatilho svg { flex: none; width: 16px; height: 16px; color: var(--fraco); transition: transform .15s; }
+  .gatilho[aria-expanded="true"] svg { transform: rotate(180deg); }
+  .fundo-sheet { position: fixed; inset: 0; z-index: 30; background: rgba(0, 0, 0, .55); }
+  .painel-un {
+    position: absolute; right: 0; top: calc(100% + 8px); z-index: 40; width: min(22rem, calc(100vw - 32px));
+    background: var(--carta-2); border: 1px solid var(--borda-2); border-radius: 14px;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, .6); overflow: hidden;
+  }
+  .painel-un .busca { padding: 10px; border-bottom: 1px solid var(--borda); }
+  .painel-un input {
+    width: 100%; min-height: 44px; padding: 8px 12px; font: 16px var(--sans); color: var(--texto);
+    background: var(--fundo); border: 1px solid var(--borda-2); border-radius: 9px;
+  }
+  .painel-un ul { list-style: none; margin: 0; padding: 6px; max-height: min(22rem, 60dvh); overflow-y: auto; overscroll-behavior: contain; }
+  .painel-un li {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    min-height: 44px; padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: .93rem;
+  }
+  .painel-un li[aria-selected="true"] { color: var(--on); font-weight: 600; }
+  .painel-un li[aria-selected="true"]::after { content: "✓"; }
+  .painel-un li.ativo { background: #232b33; }
+  .painel-un .nada { padding: 18px 14px; color: var(--fraco); font-size: .9rem; }
+
+  /* ───────── abertura e resumo ───────── */
+  .intro { color: var(--fraco); font-size: .92rem; max-width: 62ch; margin: 22px 0 18px; }
+  .intro b { color: var(--texto); font-weight: 600; }
+
+  .resumo {
+    background: var(--carta); border: 1px solid var(--borda); border-radius: 16px;
+    padding: 20px 20px 16px; margin-bottom: 30px;
+  }
+  .resumo-topo { display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: baseline; justify-content: space-between; }
+  .resumo h2 { font-size: clamp(1.5rem, 5vw, 2.1rem); line-height: 1.1; font-weight: 700; letter-spacing: -.025em; }
+  .resumo .total { font: 500 .8rem var(--mono); color: var(--fraco); letter-spacing: .03em; }
+  .barra { display: flex; height: 10px; gap: 3px; margin: 18px 0 16px; border-radius: 6px; overflow: hidden; background: var(--fundo); }
+  .barra i { display: block; min-width: 0; transition: flex-grow .35s ease; }
+  .barra .b-ligado { background: var(--on); }
+  .barra .b-seco { background: var(--seco); }
+  .barra .b-desligado { background: #3a444e; }
+  .placar { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .placar div { min-width: 0; padding-left: 12px; border-left: 3px solid var(--borda-2); }
+  .placar .p-ligado { border-color: var(--on); }
+  .placar .p-seco { border-color: var(--seco); }
+  .placar .p-desligado { border-color: #46515c; }
+  .placar b { display: block; font: 700 clamp(1.7rem, 7vw, 2.4rem)/1 var(--mono); font-variant-numeric: tabular-nums; letter-spacing: -.03em; }
+  .placar .p-ligado b { color: var(--on); }
+  .placar .p-seco b { color: var(--seco); }
+  .placar span { display: block; margin-top: 4px; font-size: .8rem; color: var(--fraco); line-height: 1.3; }
+  .resumo .rodape-resumo { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--borda); font-size: .82rem; color: var(--fraco); display: flex; flex-wrap: wrap; gap: 4px 18px; }
+  .resumo .rodape-resumo b { color: var(--texto); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .resumo .mudou b { color: var(--on); }
+
+  /* ───────── aviso de erro ───────── */
   .aviso {
-    border: 1px solid var(--borda); border-left: 3px solid var(--ruim);
-    background: #1d1413; color: #f3c9c5; border-radius: 0 8px 8px 0;
-    padding: 12px 14px; margin-bottom: 18px; font-size: .88rem;
+    position: sticky; top: 74px; z-index: 15;
+    border: 1px solid #5a2a26; border-left: 4px solid var(--ruim);
+    background: var(--ruim-fundo); color: #f6d3cf; border-radius: 10px;
+    padding: 12px 14px; margin: 0 0 18px; font-size: .9rem; box-shadow: 0 8px 24px rgba(0, 0, 0, .45);
   }
+  .aviso strong { display: block; margin-bottom: 2px; color: #fff; }
 
-  section { margin-bottom: 26px; }
-  .grupo { display: flex; gap: 9px; align-items: baseline; margin: 0 2px 8px; }
-  .grupo h2 {
-    font: 600 .72rem/1 var(--sans); text-transform: uppercase; letter-spacing: .1em;
-    color: var(--fraco); margin: 0;
+  /* ───────── grupos e linhas ───────── */
+  section.grupo { margin-bottom: 34px; }
+  .grupo-cab { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin: 0 2px 10px; }
+  .grupo-cab h2 { font: 650 1.02rem/1.3 var(--sans); letter-spacing: -.005em; }
+  .grupo-cab .quanto { font: 500 .74rem var(--mono); color: var(--apagado); font-variant-numeric: tabular-nums; }
+  .grupo-cab p { flex: 1 1 100%; font-size: .85rem; color: var(--fraco); }
+  .pede {
+    display: inline-flex; align-items: center; gap: 6px; font: 600 .68rem/1 var(--sans); letter-spacing: .02em;
+    color: #f1c9c5; background: var(--ruim-fundo); border: 1px solid #4b2623; border-radius: 99px; padding: 4px 9px 4px 7px;
   }
-  .grupo p { margin: 0; font-size: .78rem; color: var(--apagado); }
+  .pede::before { content: ""; width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-bottom: 7px solid var(--ruim); }
 
-  .caixa { border: 1px solid var(--borda); border-radius: 12px; background: var(--carta); overflow: hidden; }
-  .linha { display: flex; flex-wrap: wrap; gap: 12px; padding: 14px; border-bottom: 1px solid #1b2127; }
+  .caixa { border: 1px solid var(--borda); border-radius: var(--raio); background: var(--carta); overflow: hidden; }
+  .linha {
+    position: relative; display: flex; flex-wrap: wrap; align-items: flex-start; gap: 14px 18px;
+    padding: 16px 16px 16px 20px; border-bottom: 1px solid var(--borda);
+  }
   .linha:last-child { border-bottom: 0; }
-  .txt { flex: 1 1 15rem; min-width: 0; }
-  .nome { font-weight: 500; }
-  .faz { color: var(--fraco); font-size: .86rem; margin: 3px 0 0; }
-  .env {
-    display: inline-block; margin-left: 7px; vertical-align: 1px;
-    font: 600 .62rem/1 var(--sans); text-transform: uppercase; letter-spacing: .08em;
-    color: var(--apagado); border: 1px solid var(--borda); border-radius: 4px; padding: 3px 5px;
-  }
-  .mais {
-    background: none; border: 0; padding: 4px 0 0; cursor: pointer;
-    color: var(--apagado); font: .78rem var(--sans); text-decoration: underline; text-underline-offset: 3px;
-  }
-  .conta {
-    margin: 8px 0 0; padding: 9px 12px; border-left: 2px solid var(--borda);
-    background: #10141880; border-radius: 0 6px 6px 0; font-size: .81rem; color: var(--fraco);
-  }
-  .conta code { font: .9em var(--mono); color: var(--apagado); display: block; margin-top: 6px; }
+  .linha::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: #2b333a; transition: background .2s; }
+  .linha[data-estado="ligado"]::before { background: var(--on); }
+  .linha[data-estado="seco"]::before { background: var(--seco); }
+  .linha.salvando { opacity: .72; }
+  .linha.salvou { animation: piscar 1.4s ease-out; }
+  @keyframes piscar { from { background: #17302a; } to { background: transparent; } }
 
-  .botoes { display: flex; gap: 3px; align-self: flex-start; background: #10141a; border: 1px solid var(--borda); border-radius: 9px; padding: 3px; }
-  .botoes button {
-    font: 500 .78rem/1 var(--sans); color: var(--apagado); background: none;
-    border: 0; border-radius: 6px; padding: 7px 10px; cursor: pointer; white-space: nowrap;
+  .txt { flex: 1 1 22rem; min-width: 0; }
+  .titulo { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+  .nome { font-size: 1rem; font-weight: 600; line-height: 1.35; letter-spacing: -.005em; }
+  .env {
+    font: 600 .62rem/1 var(--mono); text-transform: uppercase; letter-spacing: .07em;
+    color: var(--fraco); border: 1px dashed #46515c; border-radius: 4px; padding: 3px 5px;
   }
-  .botoes button:hover:not(:disabled):not(.sel) { color: var(--texto); background: #1b2127; }
-  .botoes button.sel { color: var(--texto); background: #232a31; }
-  .botoes button.sel[data-e="ligado"] { color: var(--on); box-shadow: inset 0 0 0 1px #1d5741; }
-  .botoes button.sel[data-e="seco"] { color: var(--seco); box-shadow: inset 0 0 0 1px #4d3c18; }
-  .botoes button:disabled { opacity: .45; cursor: default; }
-  .devolver { background: none; border: 0; color: var(--apagado); cursor: pointer; font-size: 1rem; padding: 0 4px; align-self: flex-start; }
-  .devolver:hover { color: var(--texto); }
+  .estado-leitura { display: none; margin-left: auto; align-items: center; gap: 6px; font: 600 .78rem/1 var(--sans); }
+  .estado-leitura.e-ligado { color: var(--on); }
+  .estado-leitura.e-seco { color: var(--seco); }
+  .estado-leitura.e-desligado { color: var(--fraco); }
+  .faz { margin-top: 5px; color: var(--fraco); font-size: .89rem; line-height: 1.5; max-width: 70ch; }
+  .faz.corta { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+  .mais {
+    display: inline-flex; align-items: center; gap: 6px; min-height: 32px; margin: 4px 0 0 -4px; padding: 4px 4px;
+    background: none; border: 0; cursor: pointer; color: var(--fraco); font-size: .8rem; font-weight: 500;
+  }
+  .mais:hover { color: var(--texto); }
+  .mais::after { content: "▾"; font-size: .7rem; transition: transform .15s; }
+  .mais[aria-expanded="true"]::after { transform: rotate(180deg); }
+  .conta {
+    margin: 10px 0 0; padding: 11px 14px; border-left: 3px solid var(--seco-borda);
+    background: #0f1317; border-radius: 0 8px 8px 0; font-size: .85rem; color: #c3ccd5; line-height: 1.55; max-width: 70ch;
+  }
+  .conta strong { display: block; font: 600 .66rem/1 var(--mono); letter-spacing: .09em; text-transform: uppercase; color: var(--seco); margin-bottom: 6px; }
+  .conta code { display: block; margin-top: 8px; font: .76rem/1.4 var(--mono); color: var(--apagado); }
+
+  .comando { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+  .botoes { display: flex; gap: 3px; background: #0d1114; border: 1px solid var(--borda-2); border-radius: 11px; padding: 3px; }
+  .botoes button {
+    display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+    min-height: 40px; min-width: 5.4rem; padding: 0 12px; cursor: pointer; white-space: nowrap;
+    font: 550 .83rem/1 var(--sans); color: var(--fraco); background: none; border: 1px solid transparent; border-radius: 8px;
+    transition: background .12s, color .12s;
+  }
+  .botoes button:hover:not(:disabled):not(.sel) { color: var(--texto); background: #1c232a; }
+  .botoes button.sel { color: var(--texto); background: #272f37; border-color: #3a444e; }
+  .botoes button.sel[data-e="ligado"] { color: var(--on); background: var(--on-fundo); border-color: var(--on-borda); }
+  .botoes button.sel[data-e="seco"] { color: var(--seco); background: var(--seco-fundo); border-color: var(--seco-borda); }
+  .botoes button:disabled { cursor: progress; }
+  .lampada { flex: none; width: 10px; height: 10px; border-radius: 50%; border: 2px solid currentColor; }
+  .lampada.l-ligado { background: currentColor; box-shadow: 0 0 8px currentColor; }
+  .lampada.l-seco { background: linear-gradient(90deg, currentColor 50%, transparent 50%); }
+  .botoes button:not(.sel) .lampada { background: none; box-shadow: none; }  /* só o estado ATUAL acende */
+  .estado-leitura .lampada { width: 9px; height: 9px; }
+  .devolver {
+    display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; flex: none;
+    background: none; border: 1px solid var(--borda-2); border-radius: 10px; color: var(--fraco); cursor: pointer; font-size: 1.1rem; line-height: 1;
+  }
+  .devolver:hover:not(:disabled) { color: var(--texto); background: #1c232a; }
+  .devolver:disabled { cursor: progress; opacity: .5; }
 
   .confirma {
-    flex: 1 1 100%; display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
-    border: 1px solid #4d3c18; background: #1a1611; color: #f0dcb8;
-    border-radius: 9px; padding: 11px 13px; font-size: .84rem;
+    flex: 1 1 100%; display: flex; flex-wrap: wrap; gap: 12px 14px; align-items: center;
+    border: 1px solid var(--seco-borda); background: #1a1611; color: #f0dcb8;
+    border-radius: 10px; padding: 13px 14px; font-size: .88rem; scroll-margin: 84px 0 24px;
   }
-  .confirma p { margin: 0; flex: 1 1 16rem; }
-  .confirma button { font: 500 .8rem var(--sans); border-radius: 6px; padding: 7px 11px; cursor: pointer; border: 1px solid transparent; }
-  .confirma .sim { background: #3a2d10; color: #f0dcb8; border-color: #4d3c18; }
-  .confirma .nao { background: none; color: var(--fraco); }
+  .confirma p { flex: 1 1 18rem; }
+  .confirma .acoes { display: flex; flex-wrap: wrap; gap: 8px; flex: 0 0 auto; }
+  .confirma button { min-height: 44px; font: 600 .86rem var(--sans); border-radius: 9px; padding: 0 16px; cursor: pointer; border: 1px solid transparent; }
+  .confirma .sim { background: var(--seco); color: #1a1205; }
+  .confirma .nao { background: none; color: var(--texto); border-color: #5b4a28; }
 
-  form.entrar { max-width: 320px; margin: 60px auto; display: grid; gap: 10px; }
-  form.entrar input {
-    font: 15px var(--sans); color: var(--texto); background: var(--carta);
-    border: 1px solid var(--borda); border-radius: 8px; padding: 10px 12px; width: 100%;
+  /* ───────── carregando, vazio, erro ───────── */
+  .esqueleto .linha { pointer-events: none; }
+  .esqueleto .fio { height: 12px; border-radius: 6px; background: linear-gradient(90deg, #1b2127 25%, #232b33 50%, #1b2127 75%); background-size: 200% 100%; animation: brilho 1.4s linear infinite; }
+  .esqueleto .fio.t { width: 40%; height: 15px; margin-bottom: 10px; }
+  .esqueleto .fio.l { width: 85%; margin-top: 7px; }
+  .esqueleto .fio.s { width: 60%; }
+  .esqueleto .pilula { width: 17rem; max-width: 100%; height: 46px; border-radius: 11px; background: #1b2127; }
+  .esqueleto .cab { width: 12rem; height: 16px; margin-bottom: 12px; }
+  @keyframes brilho { to { background-position: -200% 0; } }
+  .estado-vazio {
+    text-align: center; padding: 44px 20px; border: 1px dashed var(--borda-2); border-radius: 16px; color: var(--fraco);
   }
-  form.entrar button { font: 500 .9rem var(--sans); color: var(--texto); background: #1b2127; border: 1px solid var(--borda); border-radius: 8px; padding: 10px; cursor: pointer; }
-  .rodape { color: var(--apagado); font-size: .8rem; line-height: 1.65; margin-top: 6px; }
-  [hidden] { display: none !important; }
+  .estado-vazio h2 { font-size: 1.1rem; color: var(--texto); margin-bottom: 6px; }
+  .estado-vazio p { max-width: 44ch; margin: 0 auto; font-size: .92rem; }
+  .estado-vazio.erro { border: 1px solid #5a2a26; background: var(--ruim-fundo); }
+  .estado-vazio button { margin-top: 16px; min-height: 44px; padding: 0 20px; font: 600 .9rem var(--sans); color: var(--texto); background: #272f37; border: 1px solid #3a444e; border-radius: 10px; cursor: pointer; }
+
+  /* ───────── feedback ao salvar ───────── */
+  .toast {
+    position: fixed; z-index: 60; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom)); transform: translate(-50%, 24px);
+    width: max-content; max-width: calc(100vw - 32px); padding: 12px 16px; border-radius: 12px;
+    background: #12281f; color: #d9f5e9; border: 1px solid var(--on-borda); font-size: .9rem; font-weight: 500;
+    box-shadow: 0 12px 34px rgba(0, 0, 0, .55); opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s;
+  }
+  .toast.ve { opacity: 1; transform: translate(-50%, 0); }
+  .toast b { color: #fff; }
+
+  .rodape { color: var(--apagado); font-size: .82rem; line-height: 1.65; margin-top: 8px; padding-top: 18px; border-top: 1px solid var(--borda); max-width: 70ch; }
+  .rodape b { color: var(--fraco); font-weight: 600; }
+
+  /* ───────── entrar ───────── */
+  form.entrar { max-width: 360px; margin: 12vh auto 0; display: grid; gap: 14px; }
+  form.entrar h1 { font-size: 1.7rem; letter-spacing: -.025em; }
+  form.entrar .intro { margin: 0 0 4px; }
+  form.entrar label { display: grid; gap: 6px; font-size: .85rem; font-weight: 500; color: var(--fraco); }
+  form.entrar input {
+    font: 16px var(--sans); color: var(--texto); background: var(--carta);
+    border: 1px solid var(--borda-2); border-radius: 10px; padding: 0 14px; min-height: 48px; width: 100%;
+  }
+  form.entrar button { min-height: 48px; font: 650 .95rem var(--sans); color: #04140d; background: var(--on); border: 0; border-radius: 10px; cursor: pointer; }
+  form.entrar button:disabled { opacity: .6; cursor: progress; }
+  form.entrar .aviso { position: static; box-shadow: none; margin: 0; }
+  .inicio { padding: 30vh 0 0; text-align: center; color: var(--apagado); font-size: .9rem; }
+
+  /* ───────── celular ───────── */
+  @media (max-width: 560px) {
+    .topo { gap: 8px; }
+    .marca small { display: none; }
+    .gatilho .val { max-width: 11rem; }
+    .resumo { padding: 16px 16px 14px; border-radius: 14px; }
+    .placar div { padding-left: 9px; }
+    .linha { padding: 14px 14px 14px 18px; }
+    .estado-leitura { display: inline-flex; }
+    .comando { flex: 1 1 100%; }
+    .botoes { flex: 1 1 auto; }
+    .botoes button { flex: 1 1 0; min-width: 0; min-height: 46px; padding: 0 6px; }
+    .botoes .lampada { display: none; }
+    .devolver { width: 46px; height: 46px; }
+    .confirma .acoes { flex: 1 1 100%; }
+    .confirma button { flex: 1 1 0; }
+    .aviso { top: 66px; }
+    /* o seletor vira uma folha de baixo: dá para usar com o polegar e com o teclado aberto */
+    .painel-un {
+      position: fixed; left: 0; right: 0; bottom: 0; top: auto; width: auto; border-radius: 18px 18px 0 0;
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+    .painel-un ul { max-height: 52dvh; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
 </style>
 </head>
 <body>
 <div class="folha">
+  <p class="inicio" id="inicio" role="status">Abrindo…</p>
+
   <form class="entrar" id="entrar" hidden>
     <h1>Automações</h1>
-    <p class="sub" style="margin:0">Entre com a mesma conta do console.</p>
-    <input id="email" type="email" placeholder="e-mail" autocomplete="username" required>
-    <input id="senha" type="password" placeholder="senha" autocomplete="current-password" required>
-    <button type="submit">Entrar</button>
-    <p class="aviso" id="erroLogin" hidden></p>
+    <p class="intro">Entre com a mesma conta do console.</p>
+    <label>E-mail
+      <input id="email" type="email" autocomplete="username" required>
+    </label>
+    <label>Senha
+      <input id="senha" type="password" autocomplete="current-password" required>
+    </label>
+    <button type="submit" id="botaoEntrar">Entrar</button>
+    <p class="aviso" id="erroLogin" role="alert" hidden></p>
   </form>
 
   <main id="painel" hidden>
-    <header>
-      <h1>Automações</h1>
-      <select id="unidade"></select>
+    <header class="topo">
+      <div class="marca"><small>Doutor Digital</small>Automações</div>
+      <div class="seletor" id="seletor">
+        <button type="button" class="gatilho" id="unidade" aria-haspopup="dialog" aria-expanded="false" aria-controls="painelUn">
+          <span><span class="rot">Unidade</span><span class="val" id="unidadeNome">…</span></span>
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6l5 5 5-5"/></svg>
+        </button>
+        <div class="fundo-sheet" id="fundoSheet" hidden></div>
+        <div class="painel-un" id="painelUn" role="dialog" aria-label="Escolher unidade" hidden>
+          <div class="busca">
+            <label class="so-leitor" for="busca">Buscar unidade</label>
+            <input id="busca" type="search" placeholder="Buscar unidade…" autocomplete="off" role="combobox" aria-expanded="true" aria-controls="listaUn" aria-autocomplete="list" enterkeyhint="go">
+          </div>
+          <ul id="listaUn" role="listbox" aria-label="Unidades"></ul>
+        </div>
+      </div>
     </header>
-    <p class="sub">
+
+    <p class="intro">
       O que roda sozinho nesta unidade, sem ninguém clicar. Estão aqui <b id="quantas">todas</b>,
       ligadas e desligadas — o problema nunca foi o interruptor, foi não saber que a coisa existia.
     </p>
-    <div class="aviso" id="aviso" hidden></div>
-    <div id="grupos"></div>
+
+    <div class="aviso" id="aviso" role="alert" hidden></div>
+    <div id="resumo" hidden></div>
+    <div id="grupos" aria-live="polite" aria-busy="true"></div>
+
     <p class="rodape">
       Mudança aqui vale em segundos, sem deploy. O que está marcado <b>vem do .env</b> nunca foi
       tocado por esta tela e segue a configuração antiga do servidor — mexer uma vez traz a decisão
-      pra cá, e a setinha devolve.
+      pra cá, e o botão <b>↺</b> devolve.
     </p>
   </main>
 </div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -164,6 +377,10 @@ let unidades = [];
 let atual = null;
 let lista = [];
 let abertas = new Set();
+let carregando = false;
+let falhaDeLeitura = null;
+let mudancas = []; // o que foi mexido nesta visita, nesta unidade: só leitura, nada vai pro servidor
+let piscar = null;
 
 async function api(caminho, opcoes = {}) {
   const r = await fetch(`/api${caminho}`, {
@@ -176,24 +393,35 @@ async function api(caminho, opcoes = {}) {
   return r.json();
 }
 
+function mostrarPainel() {
+  $('inicio').hidden = true;
+  $('entrar').hidden = true;
+  $('painel').hidden = false;
+}
+
 function mostrarLogin(erro) {
+  $('inicio').hidden = true;
   $('painel').hidden = true;
   $('entrar').hidden = false;
   $('erroLogin').hidden = !erro;
   $('erroLogin').textContent = erro ?? '';
+  if (!erro) $('email').focus({ preventScroll: true });
 }
 
 $('entrar').addEventListener('submit', async (e) => {
   e.preventDefault();
+  $('botaoEntrar').disabled = true;
+  $('botaoEntrar').textContent = 'Entrando…';
   const r = await fetch('/api/auth/login', {
     method: 'POST',
     credentials: 'include',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ email: $('email').value, password: $('senha').value }),
   }).catch(() => null);
+  $('botaoEntrar').disabled = false;
+  $('botaoEntrar').textContent = 'Entrar';
   if (!r || !r.ok) return mostrarLogin(r ? await motivoDoErro(r) : 'não consegui falar com o servidor');
-  $('entrar').hidden = true;
-  $('painel').hidden = false;
+  mostrarPainel();
   comecar();
 });
 
@@ -217,60 +445,167 @@ function avisar(texto) {
   $('aviso').textContent = texto ?? '';
 }
 
-const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-
-function desenhar() {
-  $('quantas').textContent = `as ${lista.length}`;
-  $('grupos').innerHTML = GRUPOS.map(([risco, titulo, explica]) => {
-    const doGrupo = lista.filter((a) => a.risco === risco);
-    if (!doGrupo.length) return '';
-    return `<section>
-      <div class="grupo"><h2>${titulo}</h2><p>${explica}</p></div>
-      <div class="caixa">${doGrupo.map(linha).join('')}</div>
-    </section>`;
-  }).join('');
-  ligarEventos();
+let relogioToast;
+function toast(html) {
+  const t = $('toast');
+  t.innerHTML = html;
+  t.classList.add('ve');
+  clearTimeout(relogioToast);
+  relogioToast = setTimeout(() => t.classList.remove('ve'), 3800);
 }
 
-function linha(a) {
-  const estados = a.temSeco ? ['desligado', 'seco', 'ligado'] : ['desligado', 'ligado'];
-  const aberta = abertas.has(a.id);
-  return `<div class="linha" data-id="${a.id}">
-    <div class="txt">
-      <span class="nome">${esc(a.nome)}</span>${a.vemDoAmbiente ? '<span class="env">vem do .env</span>' : ''}
-      <p class="faz">${esc(a.oQueFaz)}</p>
-      ${a.pegadinha ? `<button class="mais" data-mais="${a.id}">${aberta ? 'menos' : 'o que ninguém te conta'}</button>` : ''}
-      ${aberta && a.pegadinha ? `<p class="conta">${esc(a.pegadinha)}<code>${esc(a.chave)} · ${esc(a.arquivo)}</code></p>` : ''}
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+/** O servidor responde {"erro":"..."}; quem lê não precisa ver as chaves do JSON. */
+function legivel(msg) {
+  try { const d = JSON.parse(msg); return d?.erro ?? d?.error ?? d?.message ?? msg; } catch { return msg; }
+}
+const plural = (n, um, varios) => `${n} ${n === 1 ? um : varios}`;
+const nomeDaUnidade = () => unidades.find((u) => u.id === atual)?.name ?? '';
+
+/* ───────── resumo no topo ───────── */
+
+function desenharResumo() {
+  const el = $('resumo');
+  if (carregando || falhaDeLeitura || !lista.length) { el.hidden = true; el.innerHTML = ''; return; }
+  const n = { ligado: 0, seco: 0, desligado: 0 };
+  let doEnv = 0;
+  for (const a of lista) { n[a.estado] = (n[a.estado] ?? 0) + 1; if (a.vemDoAmbiente) doEnv += 1; }
+  const ultima = mudancas[mudancas.length - 1];
+  el.hidden = false;
+  el.innerHTML = `<div class="resumo">
+    <div class="resumo-topo"><h2>${esc(nomeDaUnidade())}</h2><span class="total">${plural(lista.length, 'automação', 'automações')}</span></div>
+    <div class="barra" role="img" aria-label="${n.ligado} ligadas, ${n.seco} só no papel, ${n.desligado} desligadas">
+      <i class="b-ligado" style="flex-grow:${n.ligado}"></i><i class="b-seco" style="flex-grow:${n.seco}"></i><i class="b-desligado" style="flex-grow:${n.desligado}"></i>
     </div>
-    ${a.vemDoAmbiente ? '' : `<button class="devolver" data-devolver="${a.id}" title="Devolver a decisão ao .env — não é o mesmo que desligar">↺</button>`}
-    <div class="botoes">
-      ${estados
-        .map(
-          (e) =>
-            `<button data-e="${e}" data-set="${a.id}" class="${a.estado === e ? 'sel' : ''}"${
-              e === 'seco' ? ' title="Decide e registra no log, mas não toca no Kommo"' : ''
-            }>${ROTULO[e]}</button>`,
-        )
-        .join('')}
+    <div class="placar">
+      <div class="p-ligado"><b>${n.ligado}</b><span>${n.ligado === 1 ? 'ligada' : 'ligadas'}</span></div>
+      <div class="p-seco"><b>${n.seco}</b><span>só no papel</span></div>
+      <div class="p-desligado"><b>${n.desligado}</b><span>${n.desligado === 1 ? 'desligada' : 'desligadas'}</span></div>
+    </div>
+    <div class="rodape-resumo">
+      <span><b>${doEnv}</b> ${doEnv === 1 ? 'segue' : 'seguem'} o .env (ninguém decidiu por esta tela)</span>
+      ${ultima
+        ? `<span class="mudou">Você mudou <b>${mudancas.length}</b> nesta visita — a última: <b>${esc(ultima)}</b></span>`
+        : '<span>Nada foi mudado nesta visita.</span>'}
     </div>
   </div>`;
 }
 
-function ligarEventos() {
+/* ───────── lista ───────── */
+
+function esqueleto() {
+  const linha = `<div class="linha"><div class="txt"><div class="fio t"></div><div class="fio l"></div><div class="fio l s"></div></div><div class="pilula"></div></div>`;
+  return [3, 4, 3].map((q) => `<section class="grupo esqueleto"><div class="fio cab"></div><div class="caixa">${linha.repeat(q)}</div></section>`).join('');
+}
+
+function desenhar() {
+  const g = $('grupos');
+  g.setAttribute('aria-busy', carregando ? 'true' : 'false');
+  $('quantas').textContent = lista.length ? `as ${lista.length}` : 'todas';
+  desenharResumo();
+
+  if (carregando) { g.innerHTML = esqueleto(); return; }
+  if (falhaDeLeitura) {
+    g.innerHTML = `<div class="estado-vazio erro"><h2>Não deu para ler as automações</h2>
+      <p>${esc(legivel(falhaDeLeitura))}</p><p style="margin-top:6px">Nada foi alterado. Confira a conexão e tente de novo.</p>
+      <button type="button" data-tentar>Tentar de novo</button></div>`;
+    return;
+  }
+  if (!unidades.length) {
+    g.innerHTML = `<div class="estado-vazio"><h2>Nenhuma unidade ativa</h2><p>Não há unidade para mostrar. Cadastre ou reative uma unidade no console.</p></div>`;
+    return;
+  }
+  if (!lista.length) {
+    g.innerHTML = `<div class="estado-vazio"><h2>Nenhuma automação nesta unidade</h2><p>O catálogo veio vazio para <b>${esc(nomeDaUnidade())}</b>. Se isso não era esperado, avise quem cuida do servidor.</p></div>`;
+    return;
+  }
+
+  g.innerHTML = GRUPOS.map(([risco, titulo, explica]) => {
+    const doGrupo = lista.filter((a) => a.risco === risco);
+    if (!doGrupo.length) return '';
+    const ligadas = doGrupo.filter((a) => a.estado === 'ligado').length;
+    const secas = doGrupo.filter((a) => a.estado === 'seco').length;
+    return `<section class="grupo">
+      <div class="grupo-cab">
+        <h2>${titulo}</h2>
+        <span class="quanto">${doGrupo.length} · ${ligadas} ${ligadas === 1 ? 'ligada' : 'ligadas'}${secas ? ` · ${secas} só no papel` : ''}</span>
+        ${risco === 'move-cartao' ? '<span class="pede">Pede confirmação antes de ligar</span>' : ''}
+        <p>${explica}</p>
+      </div>
+      <div class="caixa">${doGrupo.map(linha).join('')}</div>
+    </section>`;
+  }).join('');
+  piscar = null;
+  medir();
+}
+
+function lampada(e) { return `<span class="lampada l-${e}" aria-hidden="true"></span>`; }
+
+function linha(a) {
+  const estados = a.temSeco ? ['desligado', 'seco', 'ligado'] : ['desligado', 'ligado'];
+  const aberta = abertas.has(a.id);
+  return `<div class="linha${piscar === a.id ? ' salvou' : ''}" data-id="${esc(a.id)}" data-estado="${a.estado}">
+    <div class="txt">
+      <div class="titulo">
+        <h3 class="nome">${esc(a.nome)}</h3>${a.vemDoAmbiente ? '<span class="env" title="Ninguém decidiu por esta tela: vale a configuração antiga do servidor">vem do .env</span>' : ''}
+        <span class="estado-leitura e-${a.estado}">${lampada(a.estado)}${ROTULO[a.estado]}</span>
+      </div>
+      <p class="faz${aberta ? '' : ' corta'}" id="faz-${esc(a.id)}">${esc(a.oQueFaz)}</p>
+      <button type="button" class="mais" data-mais="${esc(a.id)}" data-pegadinha="${a.pegadinha ? 1 : 0}" aria-expanded="${aberta}" aria-controls="faz-${esc(a.id)}" hidden>${aberta ? 'Recolher' : 'Ver detalhes'}</button>
+      ${a.pegadinha ? `<div class="conta" ${aberta ? '' : 'hidden'}><strong>O que ninguém te conta</strong>${esc(a.pegadinha)}<code>${esc(a.chave)} · ${esc(a.arquivo)}</code></div>` : ''}
+    </div>
+    <div class="comando">
+      ${a.vemDoAmbiente ? '' : `<button type="button" class="devolver" data-devolver="${esc(a.id)}" title="Devolver a decisão ao .env — não é o mesmo que desligar" aria-label="Devolver a decisão de ${esc(a.nome)} ao .env — não é o mesmo que desligar">↺</button>`}
+      <div class="botoes" role="group" aria-label="Estado de ${esc(a.nome)}">
+        ${estados
+          .map(
+            (e) =>
+              `<button type="button" data-e="${e}" data-set="${esc(a.id)}" class="${a.estado === e ? 'sel' : ''}" aria-pressed="${a.estado === e}"${
+                e === 'seco' ? ' title="Decide e registra no log, mas não toca no Kommo"' : ''
+              }>${lampada(e)}${ROTULO[e]}</button>`,
+          )
+          .join('')}
+      </div>
+    </div>
+  </div>`;
+}
+
+/** O botão "Ver detalhes" só aparece quando há o que ver: texto cortado ou "o que ninguém te conta". */
+function medir() {
   for (const b of document.querySelectorAll('[data-mais]')) {
-    b.onclick = () => {
-      const id = b.dataset.mais;
-      abertas.has(id) ? abertas.delete(id) : abertas.add(id);
-      desenhar();
-    };
-  }
-  for (const b of document.querySelectorAll('[data-set]')) {
-    b.onclick = () => pedir(b.dataset.set, b.dataset.e);
-  }
-  for (const b of document.querySelectorAll('[data-devolver]')) {
-    b.onclick = () => gravar(b.dataset.devolver, null);
+    const faz = $(`faz-${b.dataset.mais}`);
+    const aberta = b.getAttribute('aria-expanded') === 'true';
+    const cortado = faz && faz.classList.contains('corta') && faz.scrollHeight > faz.clientHeight + 1;
+    const longo = faz && !faz.classList.contains('corta') && faz.textContent.length > 120;
+    b.hidden = !(aberta || cortado || longo || b.dataset.pegadinha === '1');
   }
 }
+let medirEm;
+addEventListener('resize', () => { clearTimeout(medirEm); medirEm = setTimeout(medir, 120); });
+
+/** Um único ouvinte para a lista inteira: a tela é redesenhada a cada gravação. */
+$('grupos').addEventListener('click', (ev) => {
+  const alvo = ev.target.closest('button');
+  if (!alvo) return;
+  if (alvo.dataset.mais) {
+    const id = alvo.dataset.mais;
+    const abrir = !abertas.has(id);
+    abrir ? abertas.add(id) : abertas.delete(id);
+    const linhaEl = alvo.closest('.linha');
+    linhaEl.querySelector('.faz').classList.toggle('corta', !abrir);
+    const conta = linhaEl.querySelector('.conta');
+    if (conta) conta.hidden = !abrir;
+    alvo.setAttribute('aria-expanded', String(abrir));
+    alvo.textContent = abrir ? 'Recolher' : 'Ver detalhes';
+    medir();
+  } else if (alvo.dataset.set) {
+    pedir(alvo.dataset.set, alvo.dataset.e);
+  } else if (alvo.dataset.devolver) {
+    gravar(alvo.dataset.devolver, null);
+  } else if ('tentar' in alvo.dataset) {
+    carregar();
+  }
+});
 
 /** Desligar nunca confirma: parar de mexer no CRM é sempre o lado seguro. */
 function pedir(id, estado) {
@@ -282,23 +617,29 @@ function pedir(id, estado) {
   caixa.querySelector('.confirma')?.remove();
   const el = document.createElement('div');
   el.className = 'confirma';
+  el.setAttribute('role', 'group');
+  el.setAttribute('aria-label', 'Confirmar mudança');
   el.innerHTML = `<p>${
     estado === 'seco'
       ? `Em <b>só no papel</b>, <b>${esc(a.nome)}</b> decide e registra no log, mas não toca em cartão nenhum.`
       : `<b>${esc(a.nome)}</b> passa a mover cartão de etapa sozinha nesta unidade, a partir de agora. O Kommo não tem desfazer.`
   }</p>
-  <button class="nao">Cancelar</button>
-  <button class="sim">${estado === 'seco' ? 'Pôr em só no papel' : 'Ligar mesmo assim'}</button>`;
-  el.querySelector('.nao').onclick = () => el.remove();
+  <div class="acoes"><button type="button" class="nao">Cancelar</button>
+  <button type="button" class="sim">${estado === 'seco' ? 'Pôr em só no papel' : 'Ligar mesmo assim'}</button></div>`;
+  el.querySelector('.nao').onclick = () => { el.remove(); caixa.querySelector(`[data-e="${estado}"]`)?.focus(); };
   el.querySelector('.sim').onclick = () => { el.remove(); gravar(id, estado); };
   caixa.appendChild(el);
+  el.querySelector('.nao').focus({ preventScroll: false });
 }
 
 async function gravar(id, estado) {
   // A unidade é fixada AQUI, não lida depois do await: trocar de unidade no select enquanto a
   // gravação está em voo faria o PUT cair na unidade errada, e ninguém perceberia.
   const unidade = atual;
+  const nome = lista.find((x) => x.id === id)?.nome ?? id;
   avisar(null);
+  const linhaEl = document.querySelector(`.linha[data-id="${id}"]`);
+  linhaEl?.classList.add('salvando');
   for (const b of document.querySelectorAll(`.linha[data-id="${id}"] button`)) b.disabled = true;
   try {
     const r = estado
@@ -307,25 +648,46 @@ async function gravar(id, estado) {
     // E a resposta só pinta a tela se ela ainda estiver mostrando essa unidade.
     if (unidade !== atual) return;
     lista = r.automacoes;
+    const dito = estado ? ROTULO[estado] : 'segue o .env';
+    mudancas.push(`${nome} → ${dito}`);
+    piscar = id;
     desenhar();
+    // o redesenho troca os botões; devolve o foco para quem usa teclado
+    document.querySelector(`.linha[data-id="${id}"] ${estado ? `[data-e="${estado}"]` : '.botoes button'}`)?.focus({ preventScroll: true });
+    toast(estado
+      ? `Salvo. <b>${esc(nome)}</b> agora está <b>${dito}</b>.`
+      : `Salvo. <b>${esc(nome)}</b> voltou a seguir o .env.`);
   } catch (e) {
     if (e.message !== 'sem sessão') {
-      avisar(`Não consegui salvar: ${e.message}. Nada foi alterado.`);
-      await carregar();
+      avisar(`Não consegui salvar ${nome}: ${legivel(e.message)}. Nada foi alterado.`);
+      await carregar(false);
     }
   }
 }
 
-async function carregar() {
+async function carregar(comEsqueleto = true) {
   if (!atual) return;
   const unidade = atual;
+  if (comEsqueleto) {
+    carregando = true;
+    falhaDeLeitura = null;
+    lista = [];
+    desenhar();
+  }
   try {
     const r = await api(`/units/${unidade}/automacoes`);
     if (unidade !== atual) return; // trocou de unidade enquanto isto voltava
     lista = r.automacoes;
+    carregando = false;
     desenhar();
   } catch (e) {
-    if (e.message !== 'sem sessão') avisar(`Não consegui ler as automações: ${e.message}`);
+    if (unidade !== atual) return;
+    carregando = false;
+    if (e.message !== 'sem sessão') {
+      if (comEsqueleto) falhaDeLeitura = e.message;
+      else avisar(`Não consegui ler as automações: ${legivel(e.message)}`);
+    }
+    desenhar();
   }
 }
 
@@ -334,26 +696,105 @@ async function comecar() {
     const r = await api('/units');
     unidades = (Array.isArray(r) ? r : r.units ?? []).filter((u) => u.isActive !== false);
     unidades.sort((a, b) => String(a.name).localeCompare(String(b.name), 'pt-BR'));
-    $('unidade').innerHTML = unidades.map((u) => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('');
     const guardada = localStorage.getItem('unidade');
     atual = unidades.some((u) => u.id === guardada) ? guardada : unidades[0]?.id;
-    $('unidade').value = atual ?? '';
+    $('unidadeNome').textContent = nomeDaUnidade() || 'nenhuma';
+    if (!atual) { carregando = false; desenhar(); return; }
     await carregar();
   } catch (e) {
-    if (e.message !== 'sem sessão') avisar(`Não consegui listar as unidades: ${e.message}`);
+    if (e.message !== 'sem sessão') {
+      avisar(`Não consegui listar as unidades: ${legivel(e.message)}`);
+      carregando = false;
+      falhaDeLeitura = `Não consegui listar as unidades: ${legivel(e.message)}`;
+      desenhar();
+    }
   }
 }
 
-$('unidade').onchange = () => {
-  atual = $('unidade').value;
+/* ───────── seletor de unidade com busca ───────── */
+
+const semAcento = (s) => String(s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+let ativoUn = 0;
+let filtradas = [];
+
+function abrirSeletor() {
+  $('painelUn').hidden = false;
+  $('fundoSheet').hidden = false;
+  $('unidade').setAttribute('aria-expanded', 'true');
+  $('busca').value = '';
+  filtrarUnidades();
+  const i = filtradas.findIndex((u) => u.id === atual);
+  ativoUn = Math.max(0, i);
+  pintarUnidades();
+  $('busca').focus();
+}
+function fecharSeletor(devolverFoco = true) {
+  $('painelUn').hidden = true;
+  $('fundoSheet').hidden = true;
+  $('unidade').setAttribute('aria-expanded', 'false');
+  if (devolverFoco) $('unidade').focus();
+}
+function filtrarUnidades() {
+  const q = semAcento($('busca').value.trim());
+  filtradas = unidades.filter((u) => semAcento(u.name).includes(q));
+  ativoUn = 0;
+  pintarUnidades();
+}
+function pintarUnidades() {
+  $('listaUn').innerHTML = filtradas.length
+    ? filtradas.map((u, i) => `<li role="option" id="un-${i}" data-i="${i}" aria-selected="${u.id === atual}" class="${i === ativoUn ? 'ativo' : ''}">${esc(u.name)}</li>`).join('')
+    : '<li class="nada" role="presentation" style="cursor:default">Nenhuma unidade com esse nome.</li>';
+  const el = $(`un-${ativoUn}`);
+  if (el) { $('busca').setAttribute('aria-activedescendant', el.id); el.scrollIntoView({ block: 'nearest' }); }
+  else $('busca').removeAttribute('aria-activedescendant');
+}
+function escolherUnidade(i) {
+  const u = filtradas[i];
+  if (!u) return;
+  fecharSeletor();
+  if (u.id === atual) return;
+  trocarUnidade(u.id);
+}
+
+$('unidade').addEventListener('click', () => ($('painelUn').hidden ? abrirSeletor() : fecharSeletor()));
+$('fundoSheet').addEventListener('click', () => fecharSeletor());
+$('busca').addEventListener('input', filtrarUnidades);
+$('busca').addEventListener('keydown', (ev) => {
+  if (ev.key === 'ArrowDown') { ev.preventDefault(); ativoUn = Math.min(filtradas.length - 1, ativoUn + 1); pintarUnidades(); }
+  else if (ev.key === 'ArrowUp') { ev.preventDefault(); ativoUn = Math.max(0, ativoUn - 1); pintarUnidades(); }
+  else if (ev.key === 'Enter') { ev.preventDefault(); escolherUnidade(ativoUn); }
+  else if (ev.key === 'Escape') { ev.preventDefault(); fecharSeletor(); }
+  else if (ev.key === 'Tab') fecharSeletor(false);
+});
+$('listaUn').addEventListener('click', (ev) => {
+  const li = ev.target.closest('li[data-i]');
+  if (li) escolherUnidade(Number(li.dataset.i));
+});
+document.addEventListener('click', (ev) => {
+  if (!$('painelUn').hidden && !$('seletor').contains(ev.target)) fecharSeletor(false);
+});
+
+function trocarUnidade(id) {
+  atual = id;
   abertas = new Set();
+  mudancas = [];
+  avisar(null);
+  $('unidadeNome').textContent = nomeDaUnidade();
   try { localStorage.setItem('unidade', atual); } catch {}
   void carregar();
-};
+}
 
+carregando = true;
+desenhar();
 api('/auth/me')
-  .then(() => { $('painel').hidden = false; comecar(); })
-  .catch(() => {});
+  .then(() => { mostrarPainel(); comecar(); })
+  .catch((e) => {
+    // 401 já abriu o login; qualquer outra falha precisa dizer que a tela não abriu
+    if (e.message !== 'sem sessão') {
+      $('inicio').hidden = true;
+      mostrarLogin(`não consegui falar com o servidor (${e.message})`);
+    }
+  });
 </script>
 </body>
 </html>
