@@ -17,8 +17,11 @@ export type ModoResumo = 'ligado' | 'seco' | 'desligado';
 /** Hora local (SP) a partir da qual o resumo sai, e a hora em que desiste (resumo velho de manhã não serve à tarde). */
 export const HORA_DO_RESUMO = { hora: 7, minuto: 30 } as const;
 export const HORA_LIMITE = 12;
-/** Tentativas por dia quando a consulta ou o envio falham. */
-export const TENTATIVAS_POR_DIA = 3;
+/**
+ * Tentativas por dia quando a consulta ou o envio falham. O worker passa a cada 5 min, então 12 tentativas
+ * cobrem ~1 h de banco ou Telegram instável sem martelar; a janela inteira (07:30–12:00) ainda é o teto.
+ */
+export const TENTATIVAS_POR_DIA = 12;
 /** Vence depois do dia seguinte; a chave já carrega a data, então a próxima manhã é outro lease. */
 export const TTL_DO_LEASE_MS = 36 * 60 * 60_000;
 export const PREFIXO_DO_LEASE = 'resumo-diario-ia:';
