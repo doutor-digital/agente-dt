@@ -13,6 +13,11 @@
  * COMO O ESTADO É RESOLVIDO (ver `flags.ts`): o banco manda; sem linha no banco, vale a variável de
  * ambiente de sempre. Então enquanto ninguém mexer na tela, o comportamento é byte a byte o de
  * hoje — a migração não liga nem desliga nada sozinha.
+ *
+ * FORA DESTE CATÁLOGO, DE PROPÓSITO: o que é da rede inteira e não de uma unidade. Cada entrada aqui vira uma
+ * linha por unidade na tela (lista de slugs), então "ligar o resumo de qualidade na Serra" não faria sentido.
+ * Hoje há uma: `RESUMO_DIARIO_IA=seco|ligado|desligado` (resumo diário da Sofia no Telegram do João,
+ * `resumo-diario-ia-worker.ts`; vazio = seco, que só registra o texto no log).
  */
 
 /** O que a automação faz de pior, quando erra. É isso que decide se a tela pede confirmação. */
