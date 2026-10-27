@@ -19,7 +19,7 @@ import { createChatModel, invokeChatModel } from '../services/openai.service.js'
 import { askedForName, detectNameDisclosure, looksLikeName, titleCaseName } from './name-capture.js';
 import { aplicarGuardrail } from './guardrail.js';
 import type { OfertaVigente } from './oferta-da-campanha.js';
-import { falasDoTurno, fraseDoPasse } from './sinal-de-alerta.js';
+import { chamadasDoTurno, falasDoTurno, fraseDoPasse } from './sinal-de-alerta.js';
 import { pacienteFalouDePs } from './sem-pronto-socorro.js';
 import { passarPorSinalNoTurno } from './passe-por-sinal.js';
 import { retornoDaEquipe } from '../lib/retorno-da-equipe.js';
@@ -1438,6 +1438,8 @@ export async function buildAgentGraph(
         ...extrasDoGuardrail,
         mensagensDoPaciente,
         fraseDeReserva: passouPorSinal ? fraseDoPasse(retornoDaEquipe(unit), pacienteFalouDePs(mensagensDoPaciente)) : undefined,
+        // A confirmação do agendamento é a única que o paciente recebe: o guardrail não a troca pela frase do passe.
+        consultaMarcada: chamadasDoTurno(nonSystemMessages).some((c) => c.name === 'agendar_consulta'),
       });
       // O que o guardrail devolve (correção ou texto de reserva) passa pela mesma trava do nome.
       const guard = { ...guardBruto, text: semDraSofiaNaDH(guardBruto.text, unit, rede) };

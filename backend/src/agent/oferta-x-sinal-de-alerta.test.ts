@@ -14,7 +14,7 @@ import type { Unit } from '@prisma/client';
 
 import { aplicarGuardrail } from './guardrail.js';
 import { passarPorSinalNoTurno } from './passe-por-sinal.js';
-import { falasDoTurno, fraseDoPasse } from './sinal-de-alerta.js';
+import { chamadasDoTurno, falasDoTurno, fraseDoPasse } from './sinal-de-alerta.js';
 import { pacienteFalouDePs } from './sem-pronto-socorro.js';
 import { retornoDaEquipe } from '../lib/retorno-da-equipe.js';
 import { semDiminutivo } from '../lib/sem-diminutivo.js';
@@ -72,6 +72,7 @@ async function fimDoTurno(o: {
     ...extrasDoGuardrail,
     mensagensDoPaciente,
     fraseDeReserva: passouPorSinal ? fraseDoPasse(retornoDaEquipe(unit), pacienteFalouDePs(mensagensDoPaciente)) : undefined,
+    consultaMarcada: chamadasDoTurno(mensagens).some((c) => c.name === 'agendar_consulta'),
   });
   return { passe, passouPorSinal, guard, chamadas, mensagensDoPaciente };
 }
@@ -244,6 +245,87 @@ test('(b2) turno de alerta SEM nada a cortar: a resposta do modelo (aviso limpo)
   assert.deepEqual(r.guard.triggered, []);
 });
 
+// ── (b3) rodada do sênior no #143 ──
+
+test('(b3) BLOQUEANTE: o modelo marcou consulta e a confirmação traz a frase de PS: só o PS sai, dia, hora, R$ e endereço chegam', async () => {
+  const fala = 'minha perna está perdendo força, pode marcar pela campanha?';
+  const mensagens: BaseMessage[] = [
+    new HumanMessage(fala),
+    new AIMessage({ content: '', tool_calls: [{ id: 'g', name: 'agendar_consulta', args: { hora: '09:00' } }] }),
+    new ToolMessage({ content: 'Consulta marcada para quarta às 09:00.', tool_call_id: 'g' }),
+  ];
+  const r = await fimDoTurno({
+    falas: [fala],
+    mensagens,
+    textoDoModelo: 'Marcado pela campanha: quarta às 9h, R$ 150 antecipado 🙏 Se piorar, procure o pronto-socorro mais próximo.',
+  });
+  assert.equal(r.passouPorSinal, true);
+  assert.equal(r.guard.text, 'Marcado pela campanha: quarta às 9h, R$ 150 antecipado 🙏');
+  assert.ok(r.guard.triggered.some((t) => t.startsWith('pronto_socorro_ou_cirurgia')));
+  assert.ok(!r.guard.triggered.includes('alerta_com_venda'));
+});
+
+test('(b3) lacuna: "[valor antecipado]" só vira R$ depois do preenchimento; a venda é pega mesmo assim', async () => {
+  const r = await fimDoTurno({
+    falas: ['não consigo segurar o xixi'],
+    mensagens: modeloJaAvisou('não consigo segurar o xixi'),
+    textoDoModelo: 'Procure o pronto-socorro. A avaliação sai por [valor antecipado].',
+  });
+  assert.equal(r.guard.text, fraseDoPasse(retornoDaEquipe(unit), false));
+  assert.ok(r.guard.triggered.includes('alerta_com_venda'));
+  assert.ok(r.guard.triggered.some((t) => t.startsWith('lacuna_preenchida')));
+});
+
+test('(b3) venda que escapava (às 9, marcá-la, agendá-lo, reservá-la, 150,00, cento e cinquenta, posso garantir, Pix, disponibilidade): vira a frase do passe', async () => {
+  for (const venda of [
+    'Amanhã às 9 está bom.',
+    'Quer que eu tente marcá-la para amanhã?',
+    'Posso agendá-lo para quarta.',
+    'Vou reservá-la agora.',
+    'A avaliação sai por 150,00.',
+    'A avaliação sai por cento e cinquenta.',
+    'Posso garantir o seu lugar.',
+    'Te mando o Pix.',
+    'Tenho disponibilidade amanhã.',
+    'Quarta às 14 horas fica bom.',
+  ]) {
+    const r = await fimDoTurno({
+      falas: ['não consigo segurar o xixi'],
+      mensagens: modeloJaAvisou('não consigo segurar o xixi'),
+      textoDoModelo: `Procure o pronto-socorro. ${venda}`,
+    });
+    assert.equal(r.guard.text, fraseDoPasse(retornoDaEquipe(unit), false), venda);
+  }
+});
+
+test('(b3) triagem clínica NÃO é venda: horas, datas e "marca" da pergunta clínica atravessam; só o PS sai', async () => {
+  for (const pergunta of [
+    'Isso piorou nas últimas 24h?',
+    'A dor começou há 3h?',
+    'Faz 48h sem urinar?',
+    'A dor começou às 7h?',
+    'Tem algum horário do dia em que piora?',
+    'Começou desde as 14:30?',
+    'Isso começou desde 20/10?',
+    'De 0 a 10, a dor está 8/10?',
+    'Quer que eu peça pra equipe ligar?',
+    'Tem marca roxa na região?',
+    'Tem dificuldade na marcha?',
+    'Isso começou desde quarta?',
+    'Faz mais de 2 horas que você não sente a perna?',
+    'Você consegue andar?',
+    'Sente formigamento?',
+  ]) {
+    const r = await fimDoTurno({
+      falas: ['minha perna está perdendo força'],
+      mensagens: modeloJaAvisou('minha perna está perdendo força'),
+      textoDoModelo: `Já avisei a nossa equipe 🙏 ${pergunta} Procure o pronto-socorro.`,
+    });
+    assert.equal(r.guard.text, `Já avisei a nossa equipe 🙏 ${pergunta}`, pergunta);
+    assert.ok(!r.guard.triggered.includes('alerta_com_venda'), pergunta);
+  }
+});
+
 // ── (c) as duas ao mesmo tempo: o aviso urgente prevalece ──
 
 test('(c) pergunta o preço E diz o sinal de alerta: sai o aviso urgente, o preço da oferta fica para depois', async () => {
@@ -306,11 +388,19 @@ test('graph.ts: as DUAS chamadas do guardrail do fim do turno levam oferta + fal
   assert.ok(cta, 'chamada da pergunta final não encontrada');
   assert.match(cta[1], /mensagensDoPaciente/);
   assert.match(cta[1], /\.\.\.extrasDoGuardrail/);
-  // Linhas inteiras (não só o começo): cada uma fecha uma mutação que antes sobrevivia.
-  assert.match(src, /const extrasDoGuardrail = \{ ofertaDaCampanha: ofertaDoTurno\.valor\?\.oferta \?\? null \};/);
-  assert.match(src, /fraseDeReserva: passouPorSinal \? fraseDoPasse\(retornoDaEquipe\(unit\), pacienteFalouDePs\(mensagensDoPaciente\)\) : undefined,/);
-  assert.match(src, /if \(cta\.precisaRefazer && !passouPorSinal && !respostaFixa && /);
-  assert.match(src, /const passouPorSinal = passe\.avisou \|\| passe\.texto !== textoFinal;/);
+  // Linhas inteiras (não só o começo): cada uma fecha uma mutação que antes sobrevivia. Comparação sem espaços nem
+  // quebras de linha: reformatar o graph.ts não quebra o teste, mudar o código quebra.
+  const semEspaco = (t: string) => t.replace(/\s+/g, '');
+  const srcCompacto = semEspaco(src);
+  for (const linha of [
+    'const extrasDoGuardrail = { ofertaDaCampanha: ofertaDoTurno.valor?.oferta ?? null };',
+    'fraseDeReserva: passouPorSinal ? fraseDoPasse(retornoDaEquipe(unit), pacienteFalouDePs(mensagensDoPaciente)) : undefined,',
+    'if (cta.precisaRefazer && !passouPorSinal && !respostaFixa && ',
+    'const passouPorSinal = passe.avisou || passe.texto !== textoFinal;',
+    "consultaMarcada: chamadasDoTurno(nonSystemMessages).some((c) => c.name === 'agendar_consulta'),",
+  ]) {
+    assert.ok(srcCompacto.includes(semEspaco(linha)), `graph.ts perdeu a linha: ${linha}`);
+  }
   // nenhuma chamada do guardrail no graph pode ficar sem o contexto da oferta
   for (const m of src.matchAll(/aplicarGuardrail\(/g)) {
     const trecho = src.slice(m.index, m.index + 260);

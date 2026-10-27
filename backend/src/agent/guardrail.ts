@@ -7,6 +7,7 @@ import { corrigirLinkDeMapa } from './link-de-mapa.js';
 import { precosDaConsulta } from './prompt-composer.js';
 import { semProntoSocorro } from './sem-pronto-socorro.js';
 import { ehClinicaParaSinalDeAlerta } from './sinal-de-alerta.js';
+import { sobrouVenda } from './venda-em-alerta.js';
 
 /** O que a trava de saída precisa saber além da resposta. */
 export interface ContextoDoGuardrail {
@@ -14,6 +15,8 @@ export interface ContextoDoGuardrail {
   mensagensDoPaciente?: string[];
   /** Turno de aviso urgente (sinal de alerta): se a resposta inteira for cortada, sai ESTA frase, não a de reserva. */
   fraseDeReserva?: string;
+  /** O modelo marcou consulta neste turno: a confirmação (dia, hora, R$, endereço) é a única que o paciente recebe e NÃO é trocada pela frase do passe. */
+  consultaMarcada?: boolean;
   /**
    * O texto da oferta do disparo que ESTE paciente recebeu (preço, prazo, condição). Os valores dele são aprovados
    * junto com os da ficha: sem isto o R$ 150 da campanha seria cortado como "fora do catálogo" e trocado pelo R$ 280.
@@ -173,25 +176,12 @@ function violaRegra(regra: { key: string; re: RegExp }, text: string): boolean {
  */
 const FALLBACK_SEM_PRONTO_SOCORRO = 'Entendi, obrigada por me contar 🙏 Me conta um pouquinho mais do que você está sentindo?';
 
-/**
- * Sobrou venda: R$, horário/dia da semana, ou pergunta de venda/agendamento. Num turno de aviso urgente, quem recebeu o
- * aviso não pode ler isto: se o corte do pronto-socorro deixou algum desses, a resposta inteira vira a frase do passe.
- */
-// Valor: "R$ 150" ou "150 reais". Horário: "9h", "9h30", "14:30", "às 14 horas", "12/11", "horário(s)". Dia da semana e
-// "2 horas" soltos NÃO contam ("começou desde quarta?", "faz mais de 2 horas?" são perguntas clínicas do aviso).
-const TEM_VALOR = /R\$|\b\d+\s*reais\b/i;
-const TEM_HORARIO = /\b\d{1,2}\s*h(?:\d{2})?\b|\b\d{1,2}:\d{2}\b|\b[àa]s\s+\d{1,2}\s*horas?\b|\b\d{1,2}\/\d{1,2}\b|\bhor[aá]rios?\b/i;
-const VERBO_DE_VENDA = /\b(?:marc\w+|agend\w+|reserv\w+|encaix\w+|vagas?|quer\s+(?:ver|que|garantir)|posso\s+(?:ver|te\s+(?:mostrar|passar))|gostaria\s+de\s+(?:ver|marcar|agendar))\b/i;
-
-function sobrouVenda(texto: string): boolean {
-  return TEM_VALOR.test(texto) || TEM_HORARIO.test(texto) || VERBO_DE_VENDA.test(texto);
-}
-
 export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoGuardrail = {}): GuardrailResult {
   if (!text || !text.trim()) return { text, triggered: [], rewritten: false };
   const triggered: string[] = [];
   let texto = text;
   let reescreveu = false;
+  let cortouPsEmAlerta = false;
 
   if (unit.category?.trim() === 'saude') {
     for (const regra of REGRAS_CLINICAS) {
@@ -209,12 +199,8 @@ export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoG
     if (semPs.removidas.length > 0) {
       triggered.push('pronto_socorro_ou_cirurgia:' + semPs.removidas.length);
       if (!semPs.texto.trim()) return { text: contexto.fraseDeReserva ?? FALLBACK_SEM_PRONTO_SOCORRO, triggered, rewritten: true };
-      // Turno de aviso urgente: o corte tirou só a frase do pronto-socorro e ficou venda ("Pela campanha fica R$ 150. Quer
-      // ver um horário?") SEM a frase do passe. Quem está em alerta recebe só a frase do passe.
-      if (contexto.fraseDeReserva && sobrouVenda(semPs.texto)) {
-        triggered.push('alerta_com_venda');
-        return { text: contexto.fraseDeReserva, triggered, rewritten: true };
-      }
+      // Turno de aviso urgente: depois do preenchimento das lacunas (abaixo) se confere se sobrou venda.
+      cortouPsEmAlerta = !!contexto.fraseDeReserva && !contexto.consultaMarcada;
       texto = semPs.texto;
       reescreveu = true;
     }
@@ -248,6 +234,14 @@ export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoG
     triggered.push('lacuna_preenchida:' + lac.trocas.join('/'));
     texto = lac.texto;
     reescreveu = true;
+  }
+  // Turno de aviso urgente em que o corte do PS deixou a resposta de pé: o corte tirou só a frase do pronto-socorro e pode
+  // ter ficado venda ("Pela campanha fica R$ 150. Quer ver um horário?") SEM a frase do passe. Confere DEPOIS das lacunas
+  // ("[valor antecipado]" já virou "R$ 280"). Quem está em alerta recebe só a frase do passe — menos quando o turno
+  // marcou consulta: a confirmação é a única que o paciente recebe.
+  if (cortouPsEmAlerta && contexto.fraseDeReserva && (sobrouVenda(texto) || lac.restantes.length > 0)) {
+    triggered.push('alerta_com_venda');
+    return { text: contexto.fraseDeReserva, triggered, rewritten: true };
   }
   if (lac.restantes.length > 0) {
     triggered.push('lacuna:' + lac.restantes.join('/'));
