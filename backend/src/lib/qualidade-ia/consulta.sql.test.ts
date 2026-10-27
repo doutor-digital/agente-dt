@@ -189,6 +189,23 @@ describe('SQL do resumo de qualidade (Postgres de teste)', { skip: habilitado ? 
     assert.equal(d29.mensagensSofia, 9);
   });
 
+  test('"repetida" só sem o paciente escrever no meio: perguntou de novo e a Sofia respondeu igual é resposta certa', async () => {
+    const end = 'O endereço da clínica é Rua das Flores, 120, centro, sala 3.';
+    const S = (em: string): Msg => ['assistant', end, em, { via: 'salesbot' }];
+    await conversa(
+      [['user', 'qual o endereço?', '2026-11-10T12:00:00Z'], S('2026-11-10T12:01:00Z'), ['user', 'qual o endereço mesmo?', '2026-11-10T12:05:00Z'], S('2026-11-10T12:06:00Z')],
+      '2026-11-11T20:00:00Z',
+    );
+    let dias = await q.mensagensPorDia('2026-11-10', '2026-11-10');
+    assert.equal(dias[0].sinais.repetidas, 0, 'com a pergunta do paciente no meio, não é repetida');
+    assert.equal(dias[0].mensagensSofia, 2);
+    // sem o paciente no meio (envio em dobro), é
+    await conversa([['user', 'qual o endereço?', '2026-11-10T13:00:00Z'], S('2026-11-10T13:01:00Z'), S('2026-11-10T13:01:05Z')], '2026-11-11T20:00:00Z');
+    dias = await q.mensagensPorDia('2026-11-10', '2026-11-10');
+    assert.equal(dias[0].sinais.repetidas, 1);
+    assert.equal(dias[0].mensagensSofia, 4);
+  });
+
   test('independente do fuso da sessão do Postgres (o script roda este arquivo também com timezone = America/Sao_Paulo)', async () => {
     const [{ tz: timezone }] = (await prisma.$queryRawUnsafe("SELECT current_setting('timezone') AS tz")) as Array<{ tz: string }>;
     const esperado = process.env.TESTE_POSTGRES_FUSO;

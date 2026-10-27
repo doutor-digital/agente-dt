@@ -14,6 +14,7 @@ import { logger } from './logger.js';
 import { reivindicarLease, liberarLease } from './worker-lease.js';
 import { enviarTelegram, telegramConfigurado } from './telegram.js';
 import { somarDias } from './qualidade-ia/dias.js';
+import { avaliarDia } from './qualidade-ia/texto.js';
 import { avaliacoesPorDia, faixasDeNota, noPeriodo, piorAvaliacao, unidadesPiores } from './qualidade-ia/agregar.js';
 import { avaliacoesDoPeriodo, detalheDaConversa, mensagensPorDia } from './qualidade-ia/consulta.js';
 import { estaNaHora, modoDoResumo, resolverODia, valorReconhecido, type Dependencias } from './qualidade-ia/resumo.js';
@@ -29,14 +30,17 @@ export async function coletarDiario(hoje: Dia): Promise<DadosDiarios> {
   const de = somarDias(ontem, -7);
   const [linhas, mensagens] = await Promise.all([avaliacoesDoPeriodo(de, ontem), mensagensPorDia(de, ontem)]);
   const doDia = noPeriodo(linhas, ontem, ontem);
-  const pior = piorAvaliacao(doDia);
-  return {
+  const dados: DadosDiarios = {
     dia: ontem,
     avaliacoes: avaliacoesPorDia(linhas),
     mensagens,
     piores: unidadesPiores(doDia, MIN_AVALIAVEIS_DIA),
-    pior: pior ? await detalheDaConversa(pior.conversationId, pior.nota, pior.unidade) : null,
+    pior: null,
   };
+  // A pior conversa só aparece no texto quando algo piorou: no dia normal não gasta as 2 consultas extras.
+  const pior = avaliarDia(dados).alertas.length > 0 ? piorAvaliacao(doDia) : null;
+  if (pior) dados.pior = await detalheDaConversa(pior.conversationId, pior.nota, pior.unidade);
+  return dados;
 }
 
 export async function coletarSemanal(hoje: Dia): Promise<DadosSemanais> {

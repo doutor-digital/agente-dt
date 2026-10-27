@@ -146,6 +146,12 @@ export function avaliarDia(d: DadosDiarios): Veredito {
   const m = somarMensagens(doDia(d.mensagens, ontem));
   const m7 = somarMensagens(entre(d.mensagens, base.de, base.ate));
 
+  // Juiz parado há mais de uma semana: a média dos 7 dias já é 0, então o alerta acima (que compara com a média)
+  // calaria. Havendo conversa e nenhuma avaliação em 8 dias, é parada, não dia calmo.
+  if (av.total === 0 && av7.total === 0 && m.conversas + m7.conversas > 0) {
+    alertas.push('o juiz não avaliou nenhuma conversa nos últimos 8 dias — está parado');
+  }
+
   const semFala = taxa(m.semSofia, m.conversas);
   const semFala7 = taxa(m7.semSofia, m7.conversas);
   if (semFala !== null && semFala7 !== null && m.conversas >= MIN_CONVERSAS_PARA_TAXA && semFala >= semFala7 + ALTA_DE_PONTOS) {

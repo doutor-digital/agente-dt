@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { estaNaHora, modoDoResumo, paraLog, resolverODia, valorReconhecido, TENTATIVAS_POR_DIA, type Dependencias, type ResultadoDoLease } from './resumo.js';
+import { estaNaHora, modoDoResumo, paraLog, resolverODia, valorReconhecido, TENTATIVAS_POR_DIA, TTL_DO_LEASE_EM_ENVIO_MS, TTL_DO_LEASE_MS, type Dependencias, type ResultadoDoLease } from './resumo.js';
 import { diaDaSemana, inicioDoDia, relogioLocal, rotuloDoDia, somarDias } from './dias.js';
 import type { DadosDiarios, DadosSemanais } from './tipos.js';
 
@@ -26,6 +26,7 @@ function fabrica(o: { lease?: ResultadoDoLease; telegram?: boolean; configurado?
   const enviados: string[] = [];
   const logs: Array<{ nivel: string; mensagem: string; dados: Record<string, unknown> }> = [];
   const leases: string[] = [];
+  const ttls: number[] = [];
   const liberados: string[] = [];
   let coletas = 0;
   const dep: Dependencias = {
@@ -40,14 +41,15 @@ function fabrica(o: { lease?: ResultadoDoLease; telegram?: boolean; configurado?
       return o.telegram ?? true;
     },
     telegramConfigurado: () => o.configurado ?? true,
-    reivindicar: async (nome) => {
+    reivindicar: async (nome, ttl) => {
       leases.push(nome);
+      ttls.push(ttl);
       return o.lease ?? 'minha';
     },
     liberar: async (nome) => void liberados.push(nome),
     registrar: (nivel, dados, mensagem) => void logs.push({ nivel, mensagem, dados }),
   };
-  return { dep, enviados, logs, leases, liberados, coletas: () => coletas };
+  return { dep, enviados, logs, leases, ttls, liberados, coletas: () => coletas };
 }
 
 test('modo: vazio = seco (nasce no papel); só "ligado" envia; "desligado" para tudo', () => {
@@ -111,7 +113,7 @@ test('ligado, segunda: manda 1 mensagem (diário) e pega o lease do dia', async 
   assert.equal(r, 'enviado');
   assert.equal(f.enviados.length, 1);
   assert.match(f.enviados[0], /Sofia, resumo de 25\/10 \(dom\)/);
-  assert.deepEqual(f.leases, [`resumo-diario-ia:${SEGUNDA}:diario`]);
+  assert.deepEqual([...new Set(f.leases)], [`resumo-diario-ia:${SEGUNDA}:diario`]);
 });
 
 test('ligado, sábado: o diário E o semanal', async () => {
@@ -195,4 +197,26 @@ test('sábado: se o diário saiu e o semanal falhou, a nova tentativa não repet
   assert.equal(await resolverODia(SABADO, 'ligado', f.dep, 2, ja), 'enviado');
   assert.equal(f.enviados.length, 3);
   assert.match(f.enviados[2], /semana de/);
+});
+
+test('o lease nasce curto e só vira "o dia todo" depois que o Telegram aceitou (morrer no meio do envio não tranca o dia)', async () => {
+  const f = fabrica();
+  await resolverODia(SEGUNDA, 'ligado', f.dep);
+  assert.deepEqual(f.ttls, [TTL_DO_LEASE_EM_ENVIO_MS, TTL_DO_LEASE_MS]);
+  assert.ok(TTL_DO_LEASE_EM_ENVIO_MS < 60 * 60_000);
+  // Telegram recusou: o lease não é estendido (e é solto)
+  const g = fabrica({ telegram: false });
+  await resolverODia(SEGUNDA, 'ligado', g.dep);
+  assert.deepEqual(g.ttls, [TTL_DO_LEASE_EM_ENVIO_MS]);
+});
+
+test('depois de desistir, avisa no Telegram que o resumo NÃO saiu (silêncio pareceria dia calmo)', async () => {
+  const f = fabrica({ coletaFalha: true });
+  assert.equal(await resolverODia(SEGUNDA, 'ligado', f.dep, TENTATIVAS_POR_DIA), 'desistiu');
+  assert.equal(f.enviados.length, 1);
+  assert.match(f.enviados[0], /não consegui montar o de hoje/);
+  // em seco não manda nada
+  const s = fabrica({ coletaFalha: true });
+  assert.equal(await resolverODia(SEGUNDA, 'seco', s.dep, TENTATIVAS_POR_DIA), 'desistiu');
+  assert.deepEqual(s.enviados, []);
 });

@@ -22,8 +22,13 @@ export const HORA_LIMITE = 12;
  * cobrem ~1 h de banco ou Telegram instável sem martelar; a janela inteira (07:30–12:00) ainda é o teto.
  */
 export const TENTATIVAS_POR_DIA = 12;
-/** Vence depois do dia seguinte; a chave já carrega a data, então a próxima manhã é outro lease. */
+/**
+ * O lease nasce CURTO (a mensagem está sendo montada/enviada) e, depois que o Telegram aceita, é renovado para 36 h
+ * (a chave já carrega a data; a próxima manhã é outro lease). Assim, processo que morre no meio do envio não tranca o
+ * dia: em 10 min o lease vence e o próximo líder envia. E quem já enviou continua barrando um segundo envio.
+ */
 export const TTL_DO_LEASE_MS = 36 * 60 * 60_000;
+export const TTL_DO_LEASE_EM_ENVIO_MS = 10 * 60_000;
 export const PREFIXO_DO_LEASE = 'resumo-diario-ia:';
 
 function normalizar(raw: string | undefined): string {
@@ -121,7 +126,7 @@ export async function resolverODia(
   for (const tipo of tipos) {
     const lease = `${PREFIXO_DO_LEASE}${hoje}:${tipo}`;
     if (modo === 'ligado') {
-      const r = await dep.reivindicar(lease, TTL_DO_LEASE_MS);
+      const r = await dep.reivindicar(lease, TTL_DO_LEASE_EM_ENVIO_MS);
       if (r === 'de-outro') {
         dep.registrar('warn', { hoje, tipo }, 'resumo-diario-ia: o lease do dia é de outro processo — não envio por aqui (se nada chegar no Telegram, o dono do lease morreu antes de enviar)');
         jaEnviados.add(tipo);
@@ -151,6 +156,7 @@ export async function resolverODia(
       jaEnviados.add(tipo);
     } else if (await dep.enviar(texto)) {
       jaEnviados.add(tipo);
+      await dep.reivindicar(lease, TTL_DO_LEASE_MS); // enviado: o lease passa a durar o dia todo
       dep.registrar('info', { hoje, tipo, caracteres: texto.length }, 'resumo-diario-ia: enviado no Telegram');
     } else {
       falhou = true;
@@ -161,6 +167,10 @@ export async function resolverODia(
   if (falhou) {
     if (tentativa >= TENTATIVAS_POR_DIA) {
       dep.registrar('error', { hoje }, 'resumo-diario-ia: desisti por hoje depois das tentativas');
+      // Silêncio parece dia calmo: avisa que o resumo NÃO saiu (se o Telegram estiver de pé; sem dado nenhum).
+      if (modo === 'ligado') {
+        await dep.enviar('Resumo diário da Sofia: não consegui montar o de hoje (erro nas consultas). Veja o log "resumo-diario-ia" no servidor.');
+      }
       return 'desistiu';
     }
     return 'tentar-de-novo';

@@ -16,6 +16,7 @@
  */
 import { prisma } from './prisma.js';
 import { dataLocalISO } from './feriados.js';
+import { CHAVES_DE_RETOMADA } from './mensagem-da-ia.js';
 
 export const LIMITE_COBRANCAS_POR_DIA = 2;
 
@@ -31,8 +32,9 @@ export function marcaDoDegrau(numero: number): { followUp: number } {
 /** A mensagem gravada é um envio automático de retomada (degrau da régua ou reativação)? */
 export function ehEnvioDeRetomada(meta: unknown): boolean {
   if (!meta || typeof meta !== 'object') return false;
-  const m = meta as { followUp?: unknown; reactivation?: unknown };
-  return m.followUp != null || m.reactivation != null;
+  // As chaves moram em `mensagem-da-ia.ts`, junto da regra do que é "a IA conversando".
+  const m = meta as Record<string, unknown>;
+  return CHAVES_DE_RETOMADA.some((k) => m[k] != null);
 }
 
 /** PURA. Quantos envios caem no mesmo dia de calendário de `agora`, no fuso `tz`. */

@@ -40,7 +40,7 @@ export interface DiaMensagens {
   dia: Dia;
   /** Conversas em que o paciente escreveu no dia. */
   conversasComPaciente: number;
-  /** Dessas, as que não têm nenhuma fala da Sofia até o fim do dia. */
+  /** Dessas, as em que a Sofia não falou NO DIA (resposta depois da meia-noite conta para o dia seguinte). */
   conversasSemSofia: number;
   mensagensPaciente: number;
   /** Mensagens do paciente gravadas vazias (áudio/imagem sem texto) ou "não deu pra ouvir". */

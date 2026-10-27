@@ -16,8 +16,13 @@ export function final4(telefone: string | null | undefined): string | null {
   return d.length >= 4 ? d.slice(-4) : null;
 }
 
-/** Tira número de telefone/CPF de dentro do texto e corta no tamanho de uma linha de Telegram. */
+/**
+ * Tira e-mail e número de telefone/CPF de dentro do texto e corta no tamanho de uma linha de Telegram. NÃO tira nome
+ * nem endereço escritos por extenso: o trecho é fala do paciente e vai só para o Telegram do João (nunca para o log).
+ */
 export function limparTrecho(texto: string, max = 140): string {
-  const semNumero = texto.replace(/\+?\d[\d\s().-]{6,}\d/g, '[número]').replace(/\s+/g, ' ').trim();
+  const semNumero = texto
+    .replace(/\S+@\S+/g, '[e-mail]')
+    .replace(/\+?\d[\d\s().-]{6,}\d/g, '[número]').replace(/\s+/g, ' ').trim();
   return semNumero.length > max ? `${semNumero.slice(0, max - 1)}…` : semNumero;
 }

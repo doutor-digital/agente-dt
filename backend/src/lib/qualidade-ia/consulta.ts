@@ -94,7 +94,8 @@ export async function avaliacoesDoPeriodo(de: Dia, ate: Dia): Promise<LinhaDeAva
            (c.converted_at IS NOT NULL) AS ganhou,
            EXISTS (
              SELECT 1 FROM spine_lead_links l
-             WHERE l.unit_id = c.unit_id AND l.kommo_lead_id::text = c.lead_id AND l.spine_id_schedule IS NOT NULL
+             WHERE l.unit_id = c.unit_id AND l.spine_id_schedule IS NOT NULL
+               AND l.kommo_lead_id = (CASE WHEN c.lead_id ~ '^[0-9]{1,9}$' THEN c.lead_id::int END)
            ) AS "comConsulta"
     FROM conversation_evaluations e
     JOIN conversations c ON c.id = e.conversation_id
@@ -144,23 +145,28 @@ export async function mensagensPorDia(de: Dia, ate: Dia): Promise<DiaMensagens[]
 
   // A véspera da janela entra só para a "repetida" do 1º dia ter com o que comparar.
   const antes = new Date(ini.getTime() - 86_400_000);
+  // "Repetida" = a Sofia manda o mesmo texto duas vezes SEM o paciente escrever no meio (envio em dobro / laço).
+  // Se ele perguntou de novo e ela respondeu igual, é resposta certa. Por isso a janela anda sobre as falas do
+  // paciente e da Sofia juntas; só as linhas da Sofia entram nas contagens.
   const sofia = await prisma.$queryRaw<Array<{ dia: string; mensagens: number; repetidas: number; vazamento: number; falha: number }>>`
     WITH s AS (
-      SELECT m.conversation_id, m.content, m.created_at,
-             lag(m.content) OVER (PARTITION BY m.conversation_id ORDER BY m.created_at, m.id) AS anterior
+      SELECT m.conversation_id, m.content, m.created_at, m.role,
+             lag(m.content) OVER w AS anterior,
+             lag(m.role) OVER w AS role_anterior
       FROM messages m
-      WHERE ${E_SOFIA} AND m.created_at >= ${utc(antes)} AND m.created_at < ${utc(fim)}
+      WHERE (m.role = 'user' OR ${E_SOFIA}) AND m.created_at >= ${utc(antes)} AND m.created_at < ${utc(fim)}
+      WINDOW w AS (PARTITION BY m.conversation_id ORDER BY m.created_at, m.id)
     )
     SELECT to_char(${diaSP(Prisma.sql`s.created_at`)}, 'YYYY-MM-DD') AS dia,
            count(*)::int AS mensagens,
-           count(*) FILTER (WHERE s.anterior IS NOT NULL
+           count(*) FILTER (WHERE s.role_anterior = 'assistant'
                               AND length(btrim(s.content)) >= ${MIN_CARACTERES_REPETIDA}
                               AND btrim(s.content) = btrim(s.anterior))::int AS repetidas,
            count(*) FILTER (WHERE s.content ~* ${REGEX_VAZAMENTO})::int AS vazamento,
            count(*) FILTER (WHERE s.content ~* ${REGEX_FALHA_TECNICA}
                               OR (s.content ~* ${REGEX_NAO_ENTENDI} AND s.content !~* ${REGEX_CLINICO}))::int AS falha
     FROM s
-    WHERE s.created_at >= ${utc(ini)}
+    WHERE s.role = 'assistant' AND s.created_at >= ${utc(ini)}
     GROUP BY 1
     ORDER BY 1`;
 
@@ -181,7 +187,7 @@ export async function mensagensPorDia(de: Dia, ate: Dia): Promise<DiaMensagens[]
   });
 }
 
-/** Identificação mínima + 2 linhas do fim de uma conversa. Nunca devolve telefone inteiro nem sobrenome. */
+/** Identificação mínima + 2 linhas do fim de uma conversa. Nunca devolve telefone inteiro; do nome, só o 1º. */
 export async function detalheDaConversa(
   conversationId: string,
   nota: number,

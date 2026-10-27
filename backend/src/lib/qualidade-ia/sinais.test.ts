@@ -79,6 +79,7 @@ test('privacidade: 1º nome, 4 últimos dígitos, trecho sem número', () => {
   const t = limparTrecho('Meu zap é 11 99999-8888 e o outro +5511988887777, ok?');
   assert.doesNotMatch(t, /\d{4}/);
   assert.match(t, /\[número\]/);
+  assert.equal(limparTrecho('escreve pra maria.souza@gmail.com por favor'), 'escreve pra [e-mail] por favor');
   assert.equal(limparTrecho('R$ 250,00 no Pix'), 'R$ 250,00 no Pix', 'preço não é telefone');
   assert.ok(limparTrecho('a'.repeat(300)).length <= 140);
 });

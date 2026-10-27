@@ -167,6 +167,17 @@ test('sem unidade com avaliáveis suficientes e sem nota: o texto diz, não inve
   assert.match(texto, /nenhuma unidade com conversas avaliáveis suficientes/);
 });
 
+test('juiz parado há mais de uma semana não vira "tudo igual" (a média dos 7 dias já é zero)', () => {
+  const d = normal();
+  const parado = {
+    ...d,
+    avaliacoes: d.avaliacoes.map((x) => ({ ...x, total: 0, semSofia: 0, sumiu: 0, avaliaveis: 0, mediaAvaliaveis: null })),
+  };
+  const texto = montarDiario(parado);
+  assert.match(texto.split('\n')[0], /^⚠️/);
+  assert.match(texto, /nenhuma conversa nos últimos 8 dias — está parado/);
+});
+
 test('sem os 7 dias anteriores o cabeçalho não diz "tudo igual" (não há com o que comparar)', () => {
   const d = normal();
   const so = { ...d, avaliacoes: d.avaliacoes.filter((x) => x.dia === ONTEM), mensagens: d.mensagens.filter((x) => x.dia === ONTEM) };
