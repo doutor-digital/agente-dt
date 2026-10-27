@@ -15,7 +15,7 @@ import { getActiveConfig } from './config.js';
 import { composeSystemPromptForUnit, composeSystemPromptPartsForUnit, precosDaConsulta } from './prompt-composer.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.js';
-import { createChatModel, invokeChatModel } from '../services/openai.service.js';
+import { createChatModel, invokeChatModel, LlmRecusaError } from '../services/openai.service.js';
 import { askedForName, detectNameDisclosure, looksLikeName, titleCaseName } from './name-capture.js';
 import { aplicarGuardrail } from './guardrail.js';
 import type { OfertaVigente } from './oferta-da-campanha.js';
@@ -65,6 +65,7 @@ function normalizarResposta(s: string): string {
   return s.replace(/\s+/g, ' ').trim().toLowerCase();
 }
 import { podarHistorico } from './history-window.js';
+import { semRaciocinioParaPlanoB } from './raciocinio-plano-b.js';
 import { sanearHistorico, TEXTO_FERRAMENTA_INTERROMPIDA } from './historico-orfao.js';
 import { toolsParaOpenAI } from './tools-openai.js';
 import { respostasSeguradas } from './entrega-falha.js';
@@ -848,6 +849,15 @@ export async function buildAgentGraph(
       registrarSucesso(provider as Provedor);
     } catch (err) {
       const erroPrincipal = err instanceof Error ? err.message : String(err);
+      // Recusa do modelo: o provedor está de pé — não conta para o circuito (ehFalhaDeInfra é false). Fica no rastro.
+      if (err instanceof LlmRecusaError) {
+        await recorder.step({
+          kind: 'ERROR',
+          title: `🚫 ${provider} recusou responder (stop_reason=refusal${err.categoria ? `, categoria ${err.categoria}` : ''}) — resposta descartada`,
+          payload: { provider, modelo: modelName, stopReason: 'refusal', categoria: err.categoria },
+          latencyMs: Math.round(performance.now() - t0),
+        });
+      }
       if (ehFalhaDeInfra(err) && registrarFalha(provider as Provedor)) {
         logger.error(
           { provider, unit: unit.slug, erro: erroPrincipal },
@@ -881,7 +891,8 @@ export async function buildAgentGraph(
           response = (await withTimeout(
             invokeChatModel({
               model: modeloBComTools,
-              messages: finalMessages,
+              // Os blocos de raciocínio da Anthropic só valem no modelo que os gerou: o plano B de outro provedor não os recebe.
+              messages: planoB.provider === 'anthropic' ? finalMessages : semRaciocinioParaPlanoB(finalMessages),
               unitId: unit.id,
               traceId: recorder.traceId,
               modelName: planoB.modelName,
@@ -913,10 +924,13 @@ export async function buildAgentGraph(
           return respostaIndisponivel();
         }
       } else {
+        const foiRecusa = err instanceof LlmRecusaError;
         await recorder.step({
           kind: 'ERROR',
-          title: '⏱️ IA indisponível — sem plano B configurado, fallback enviado',
-          payload: { erroPrincipal, timeoutMs: AGENT_NODE_TIMEOUT_MS },
+          title: foiRecusa
+            ? '🚫 O modelo recusou responder e não há plano B configurado — fallback enviado'
+            : '⏱️ IA indisponível — sem plano B configurado, fallback enviado',
+          payload: foiRecusa ? { erroPrincipal } : { erroPrincipal, timeoutMs: AGENT_NODE_TIMEOUT_MS },
           latencyMs: Math.round(performance.now() - t0),
         });
         return respostaIndisponivel();
