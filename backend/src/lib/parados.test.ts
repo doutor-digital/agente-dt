@@ -69,6 +69,39 @@ test('parados: EM ESPERA quieta há 30 dias cai em PERDIDO sem régua; EM NEGOCI
   assert.equal(n?.campo?.nome, CAMPO.MOTIVO_NAO_FECHAMENTO);
 });
 
+test('parados: EM ESPERA — pouco interesse perde em 30 dias, motivo concreto em 60, sem motivo segue 30', () => {
+  const comPrazoConcreto = { ...prazos, esperaConcretoDias: 60 };
+  const pouco = ['Não interagiu', 'Não deu continuidade', 'NAO INTERAGIU', ' não deu continuidade '];
+  const concretos = ['Achou caro', 'Queria convênio', 'Horário não encaixa', 'Mora longe / outra cidade', 'Vai falar com a família', 'Exames', 'Vai decidir', 'Financeiro agora não', 'Viajando', 'Outro'];
+
+  for (const m of pouco) {
+    assert.equal(decidirParado('EM ESPERA', { ...quieto, motivoEspera: m, retomarEmEpoch: dias(31) }, AGORA, comPrazoConcreto)?.para, 'PERDIDO', `${m}: 31 dias já perde`);
+    assert.equal(decidirParado('EM ESPERA', { ...quieto, motivoEspera: m, retomarEmEpoch: dias(29) }, AGORA, comPrazoConcreto), null, `${m}: 29 dias ainda não`);
+  }
+  for (const m of concretos) {
+    assert.equal(decidirParado('EM ESPERA', { ...quieto, motivoEspera: m, retomarEmEpoch: dias(31) }, AGORA, comPrazoConcreto), null, `${m}: 31 dias NÃO perde (concreto)`);
+    assert.equal(decidirParado('EM ESPERA', { ...quieto, motivoEspera: m, retomarEmEpoch: dias(59) }, AGORA, comPrazoConcreto), null, `${m}: 59 dias ainda não`);
+    const d = decidirParado('EM ESPERA', { ...quieto, motivoEspera: m, retomarEmEpoch: dias(61) }, AGORA, comPrazoConcreto);
+    assert.equal(d?.para, 'PERDIDO', `${m}: 61 dias perde`);
+    assert.equal(d?.dias, 60, `${m}: o prazo registrado é o de 60`);
+  }
+
+  // sem motivo (ou motivo vazio): nada muda pra quem não preenche — continua 30
+  for (const m of [undefined, null, '', '   ']) {
+    assert.equal(decidirParado('EM ESPERA', { ...quieto, motivoEspera: m, retomarEmEpoch: dias(31) }, AGORA, comPrazoConcreto)?.para, 'PERDIDO', `sem motivo (${JSON.stringify(m)}): 31 dias perde`);
+  }
+
+  // prazos antigos (sem esperaConcretoDias) continuam valendo 30 pra todos: compatível com quem chama sem o campo novo
+  assert.equal(decidirParado('EM ESPERA', { ...quieto, motivoEspera: 'Achou caro', retomarEmEpoch: dias(31) }, AGORA, prazos)?.para, 'PERDIDO');
+
+  // o filtro barato do worker usa o mesmo prazo: concreto com retomada há 40 dias NÃO é candidato; pouco interesse é
+  assert.equal(candidatoPeloCartao('EM ESPERA', { retomarEmEpoch: dias(40), criadoEpoch: null, motivoEspera: 'Achou caro' }, AGORA, comPrazoConcreto), false);
+  assert.equal(candidatoPeloCartao('EM ESPERA', { retomarEmEpoch: dias(40), criadoEpoch: null, motivoEspera: 'Não interagiu' }, AGORA, comPrazoConcreto), true);
+
+  // EM NEGOCIAÇÃO não é afetada pelo motivo da espera
+  assert.equal(decidirParado('EM NEGOCIAÇÃO', { ...quieto, motivoEspera: 'Achou caro' }, AGORA, comPrazoConcreto)?.dias, 45);
+});
+
 test('parados: qualquer sinal de vida na janela segura o cartão', () => {
   assert.equal(decidirParado('EM ESPERA', { ...quieto, escreveuNaJanela: true }, AGORA, prazos), null, 'paciente escreveu');
   assert.equal(decidirParado('EM NEGOCIAÇÃO', { ...quieto, mudouEtapaNaJanela: true }, AGORA, prazos), null, 'acabou de entrar na etapa');

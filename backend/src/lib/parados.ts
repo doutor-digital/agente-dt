@@ -30,6 +30,8 @@ import { MOTIVO_ESCADA_CONCLUIDA } from './follow-up-presets.js';
 
 export const PRAZOS = {
   esperaDias: Number(process.env.PARADOS_ESPERA_DIAS) || 30,
+  /** EM ESPERA com motivo concreto (caro, família, exames…): o paciente quer, só não agora — espera mais. */
+  esperaConcretoDias: Number(process.env.PARADOS_ESPERA_CONCRETO_DIAS) || 60,
   negociacaoDias: Number(process.env.PARADOS_NEGOCIACAO_DIAS) || 45,
   faltaDias: Number(process.env.PARADOS_FALTA_DIAS) || 7,
   /** horas depois do último toque da régua em que o paciente ainda pode responder */
@@ -192,6 +194,8 @@ export interface Janela {
   retomarEmEpoch: number | null;
   /** criação do cartão (epoch s) */
   criadoEpoch: number | null;
+  /** "⊘ Motivo da espera" do cartão: define o prazo em EM ESPERA (pouco interesse × motivo concreto) */
+  motivoEspera?: string | null;
 }
 
 export interface DecisaoParado {
@@ -211,22 +215,35 @@ export interface DecisaoParado {
   combinada?: string;
 }
 
-export function prazoDaEtapa(etapa: string, prazos: PrazosDeEtapa = PRAZOS): number | null {
-  if (ehEspera(etapa)) return prazos.esperaDias;
+/**
+ * Motivos de espera de pouco interesse: o paciente nunca engajou ou sumiu no meio da conversa. Perdem no
+ * prazo curto (`esperaDias`). Qualquer outro motivo preenchido é concreto e usa `esperaConcretoDias`;
+ * sem motivo o prazo continua o de sempre (`esperaDias`) — nada muda pra quem não preenche.
+ */
+const MOTIVOS_ESPERA_POUCO_INTERESSE = ['Não interagiu', 'Não deu continuidade'].map(normalizarNome);
+
+export function prazoDaEspera(prazos: PrazosDeEtapa, motivoEspera?: string | null): number {
+  const motivo = normalizarNome(motivoEspera ?? '');
+  if (!motivo || MOTIVOS_ESPERA_POUCO_INTERESSE.includes(motivo)) return prazos.esperaDias;
+  return prazos.esperaConcretoDias ?? prazos.esperaDias;
+}
+
+export function prazoDaEtapa(etapa: string, prazos: PrazosDeEtapa = PRAZOS, motivoEspera?: string | null): number | null {
+  if (ehEspera(etapa)) return prazoDaEspera(prazos, motivoEspera);
   if (ehNegociacao(etapa)) return prazos.negociacaoDias;
   return null;
 }
 
 /** Só com os dados do próprio cartão: ainda pode estar parado? (barato — decide se vale consultar Kommo/franquia) */
-type PrazosDeEtapa = { esperaDias: number; negociacaoDias: number };
+type PrazosDeEtapa = { esperaDias: number; esperaConcretoDias?: number; negociacaoDias: number };
 
 export function candidatoPeloCartao(
   etapa: string,
-  cartao: Pick<Janela, 'retomarEmEpoch' | 'criadoEpoch'>,
+  cartao: Pick<Janela, 'retomarEmEpoch' | 'criadoEpoch' | 'motivoEspera'>,
   agoraEpoch: number,
   prazos: PrazosDeEtapa = PRAZOS,
 ): boolean {
-  const prazo = prazoDaEtapa(etapa, prazos);
+  const prazo = prazoDaEtapa(etapa, prazos, cartao.motivoEspera);
   if (prazo === null) return false;
   const desde = agoraEpoch - prazo * DIA_S;
   if (cartao.retomarEmEpoch !== null && cartao.retomarEmEpoch > desde) return false;
@@ -236,7 +253,7 @@ export function candidatoPeloCartao(
 
 /** EM ESPERA / EM NEGOCIAÇÃO: venceu o prazo sem nenhum sinal de vida? */
 export function decidirParado(etapa: string, j: Janela, agoraEpoch: number, prazos: PrazosDeEtapa = PRAZOS): DecisaoParado | null {
-  const prazo = prazoDaEtapa(etapa, prazos);
+  const prazo = prazoDaEtapa(etapa, prazos, j.motivoEspera);
   if (prazo === null) return null;
   if (!candidatoPeloCartao(etapa, j, agoraEpoch, prazos)) return null;
   if (j.escreveuNaJanela || j.mudouEtapaNaJanela) return null;

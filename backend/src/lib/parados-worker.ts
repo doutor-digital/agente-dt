@@ -540,10 +540,12 @@ async function varrerConta(unit: Unit, unidadesDaConta: Unit[], dividida?: { kom
     const prazo = prazoDaEtapa(etapa);
     if (!alvo || prazo === null) continue;
     const cota = cotaNova(seco);
-    const desde = agora - prazo * DIA_S;
     for (const lead of await leadsDaEtapa(kommo, alvo.pipelineId, alvo.statusId)) {
-      const cartao = { retomarEmEpoch: epochDoCampoData(lead, CAMPO.RETOMAR_EM), criadoEpoch: lead.created_at ?? null };
+      // EM ESPERA: o prazo depende do "⊘ Motivo da espera" (pouco interesse × motivo concreto) — por cartão
+      const motivoEspera = etapa === ETAPA.ESPERA ? String(valorDoCampo(lead, CAMPO.MOTIVO_ESPERA) ?? '') : null;
+      const cartao = { retomarEmEpoch: epochDoCampoData(lead, CAMPO.RETOMAR_EM), criadoEpoch: lead.created_at ?? null, motivoEspera };
       if (!candidatoPeloCartao(etapa, cartao, agora)) continue; // barato: sem chamada nenhuma
+      const desde = agora - (prazoDaEtapa(etapa, undefined, motivoEspera) ?? prazo) * DIA_S;
       if (pularCartao(grupo, unit.id, lead, resumo)) continue; // Kommo dividido: só os cartões desta unidade
       // trava da perda automática: só pra quem a regra fecharia (a decisão pura, sem chamada) e ANTES da cota — quem fica
       // pra sempre não gasta avaliação. Escrever na janela ou a franquia segurar ainda é avaliado depois, como antes.
