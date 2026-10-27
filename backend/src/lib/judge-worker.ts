@@ -1,6 +1,6 @@
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
-import { judgeConversation } from '../services/conversation-judge.service.js';
+import { julgarConversa } from '../services/conversation-judge.service.js';
 
 const SWEEP_MS = Number(process.env.JUDGE_SWEEP_MS) || 10 * 60_000;
 const MIN_MENSAGENS = Number(process.env.JUDGE_MIN_MSGS) || 4;
@@ -12,9 +12,30 @@ const HABILITADO = (process.env.JUDGE_WORKER_ENABLED ?? '1') !== '0';
 let timer: ReturnType<typeof setInterval> | null = null;
 let rodando = false;
 
+/**
+ * Conversas que o pré-filtro (`JUDGE_SO_AVALIAVEIS=1`) recusou. Não vira linha no banco (qualquer linha entra
+ * na média do painel, do relatório de sábado e do resumo diário), então a lembrança é do processo: sem ela as
+ * mesmas 15 recusadas voltariam a cada varredura e a fila nunca andaria. Esvazia a cada 24 h — conversa que
+ * ganhou fala nova merece outra olhada — e a um deploy; o custo disso é só refazer a checagem pura, sem modelo.
+ */
+const recusadas = new Set<string>();
+let recusadasDesde = Date.now();
+const VALIDADE_RECUSADAS_MS = 24 * 3_600_000;
+const TETO_RECUSADAS = 5_000;
+
+function lembrarRecusada(id: string): void {
+  if (Date.now() - recusadasDesde > VALIDADE_RECUSADAS_MS || recusadas.size >= TETO_RECUSADAS) {
+    recusadas.clear();
+    recusadasDesde = Date.now();
+  }
+  recusadas.add(id);
+}
+
 async function candidatas(limite: number): Promise<Array<{ id: string; unitId: string }>> {
   const idleAntes = new Date(Date.now() - IDLE_HORAS * 3_600_000);
   const desde = new Date(Date.now() - JANELA_DIAS * 86_400_000);
+  // Lista vazia no `NOT IN` seria SQL inválido: o sentinela '' nunca é id de conversa (cuid).
+  const fora = recusadas.size ? [...recusadas] : [''];
 
   return prisma.$queryRaw<Array<{ id: string; unitId: string }>>`
     SELECT c.id, c.unit_id AS "unitId"
@@ -25,6 +46,7 @@ async function candidatas(limite: number): Promise<Array<{ id: string; unitId: s
         SELECT 1 FROM conversation_evaluations e WHERE e.conversation_id = c.id
       )
       AND (SELECT count(*) FROM messages m WHERE m.conversation_id = c.id) >= ${MIN_MENSAGENS}
+      AND c.id <> ALL(${fora}::text[])
     ORDER BY c.last_message_at DESC
     LIMIT ${limite}
   `;
@@ -39,6 +61,8 @@ async function varrer(): Promise<void> {
 
     const unidades = new Map<string, Awaited<ReturnType<typeof prisma.unit.findUnique>>>();
     let avaliadas = 0;
+    let naoAvaliaveis = 0;
+    let erros = 0;
 
     for (const conv of elegiveis) {
       try {
@@ -48,14 +72,18 @@ async function varrer(): Promise<void> {
         const unit = unidades.get(conv.unitId);
         if (!unit) continue;
 
-        const r = await judgeConversation({ conversationId: conv.id, unit });
-        if (r) avaliadas++;
+        const r = await julgarConversa({ conversationId: conv.id, unit });
+        if (r.status === 'avaliada') avaliadas++;
+        else if (r.status === 'nao_avaliavel') {
+          naoAvaliaveis++;
+          lembrarRecusada(conv.id);
+        } else if (r.status === 'erro') erros++;
       } catch (err) {
         logger.warn({ err, conversationId: conv.id }, 'judge-worker: falhou nesta conversa');
       }
     }
 
-    logger.info({ avaliadas, candidatas: elegiveis.length }, 'judge-worker: varredura concluída');
+    logger.info({ avaliadas, naoAvaliaveis, erros, candidatas: elegiveis.length }, 'judge-worker: varredura concluída');
   } catch (err) {
     logger.error({ err }, 'judge-worker: varredura falhou');
   } finally {
