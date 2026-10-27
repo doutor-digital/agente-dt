@@ -5,6 +5,7 @@ import { ChatAnthropic } from '@langchain/anthropic';
 import {
   avaliabilidadeDaConversa,
   custoComFallback,
+  Descartes,
   escolherJuiz,
   esforcoDoJuiz,
   falaReal,
@@ -192,4 +193,20 @@ test('paciente sumiu depois da 1ª fala: não avaliável; com minFalasReais=1 pa
 
 test('lista vazia: não avaliável', () => {
   assert.equal(avaliabilidadeDaConversa([]).avaliavel, false);
+});
+
+// ── fila de descartes ────────────────────────────────────────────────────────────────────────────
+
+test('Descartes: lembra até a hora marcada e esquece sozinho; o teto tira o mais antigo', () => {
+  const d = new Descartes(2);
+  d.lembrar('a', 1_000);
+  d.lembrar('b', 5_000);
+  assert.deepEqual(d.vigentes(500), ['a', 'b']);
+  assert.deepEqual(d.vigentes(1_000), ['b']); // 'a' expirou
+  d.lembrar('c', 9_000);
+  d.lembrar('d', 9_000); // passou do teto de 2: sai 'b', o mais antigo
+  assert.deepEqual(d.vigentes(0), ['c', 'd']);
+  d.lembrar('c', 20_000); // lembrar de novo renova e vai para o fim
+  d.lembrar('e', 20_000);
+  assert.deepEqual(d.vigentes(0), ['c', 'e']);
 });

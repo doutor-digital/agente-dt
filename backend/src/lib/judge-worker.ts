@@ -1,6 +1,7 @@
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { julgarConversa } from '../services/conversation-judge.service.js';
+import { Descartes, DESCARTE_ERRO_MS, DESCARTE_NAO_AVALIAVEL_MS } from './juiz-da-ia.js';
 
 const SWEEP_MS = Number(process.env.JUDGE_SWEEP_MS) || 10 * 60_000;
 const MIN_MENSAGENS = Number(process.env.JUDGE_MIN_MSGS) || 4;
@@ -13,29 +14,20 @@ let timer: ReturnType<typeof setInterval> | null = null;
 let rodando = false;
 
 /**
- * Conversas que o pré-filtro (`JUDGE_SO_AVALIAVEIS=1`) recusou. Não vira linha no banco (qualquer linha entra
- * na média do painel, do relatório de sábado e do resumo diário), então a lembrança é do processo: sem ela as
- * mesmas 15 recusadas voltariam a cada varredura e a fila nunca andaria. Esvazia a cada 24 h — conversa que
- * ganhou fala nova merece outra olhada — e a um deploy; o custo disso é só refazer a checagem pura, sem modelo.
+ * Conversas recusadas pelo pré-filtro e conversas em que o juiz novo falhou. Nada disso vira linha no banco
+ * (qualquer linha entra na média do painel, do relatório de sábado e do resumo diário), então a lembrança é do
+ * processo — ver `Descartes`. Com as chaves do juiz novo DESLIGADAS (padrão) nada é lembrado: a varredura é a de
+ * antes, que tenta de novo a cada rodada.
  */
-const recusadas = new Set<string>();
-let recusadasDesde = Date.now();
-const VALIDADE_RECUSADAS_MS = 24 * 3_600_000;
-const TETO_RECUSADAS = 5_000;
-
-function lembrarRecusada(id: string): void {
-  if (Date.now() - recusadasDesde > VALIDADE_RECUSADAS_MS || recusadas.size >= TETO_RECUSADAS) {
-    recusadas.clear();
-    recusadasDesde = Date.now();
-  }
-  recusadas.add(id);
-}
+const descartes = new Descartes();
+const juizNovoLigado = (): boolean => process.env.JUDGE_SO_AVALIAVEIS === '1' || process.env.JUDGE_PROVIDER?.trim().toLowerCase() === 'anthropic';
 
 async function candidatas(limite: number): Promise<Array<{ id: string; unitId: string }>> {
   const idleAntes = new Date(Date.now() - IDLE_HORAS * 3_600_000);
   const desde = new Date(Date.now() - JANELA_DIAS * 86_400_000);
-  // Lista vazia no `NOT IN` seria SQL inválido: o sentinela '' nunca é id de conversa (cuid).
-  const fora = recusadas.size ? [...recusadas] : [''];
+  // O sentinela '' (nunca é id: são cuid) evita depender de como o driver tipa um array vazio.
+  const vigentes = descartes.vigentes(Date.now());
+  const fora = vigentes.length ? vigentes : [''];
 
   return prisma.$queryRaw<Array<{ id: string; unitId: string }>>`
     SELECT c.id, c.unit_id AS "unitId"
@@ -76,8 +68,12 @@ async function varrer(): Promise<void> {
         if (r.status === 'avaliada') avaliadas++;
         else if (r.status === 'nao_avaliavel') {
           naoAvaliaveis++;
-          lembrarRecusada(conv.id);
-        } else if (r.status === 'erro') erros++;
+          descartes.lembrar(conv.id, Date.now() + DESCARTE_NAO_AVALIAVEL_MS);
+        } else if (r.status === 'erro') {
+          erros++;
+          // 1 h de espera em vez de 10 min, senão 15 conversas que sempre falham ocupam toda varredura.
+          if (juizNovoLigado()) descartes.lembrar(conv.id, Date.now() + DESCARTE_ERRO_MS);
+        }
       } catch (err) {
         logger.warn({ err, conversationId: conv.id }, 'judge-worker: falhou nesta conversa');
       }

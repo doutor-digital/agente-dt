@@ -249,3 +249,40 @@ export function custoComFallback(modelo: string, custoCalculado: number, promptT
   if (!p) return custoCalculado;
   return Math.round(((promptTokens / 1e6) * p.entrada + (completionTokens / 1e6) * p.saida) * 1e6) / 1e6;
 }
+
+// ── fila: o que a varredura não deve repetir agora ────────────────────────────────────────────────
+
+/**
+ * Conversas que a varredura deve deixar de fora por um tempo, SEM gravar linha em `conversation_evaluations`
+ * (qualquer linha ali entra na média do painel, no relatório de sábado e no resumo diário). Sem esta lista as
+ * mesmas conversas ocupariam as 15 vagas de toda varredura — recusadas pelo pré-filtro, ou falhando de novo
+ * (JSON inválido, recusa, chave ruim) e sendo pagas de novo — e a fila nunca andaria.
+ *
+ * É memória do processo: um deploy a zera, o que só custa refazer a checagem pura (e uma chamada, no caso do
+ * erro). Cada item expira sozinho; passando do teto sai o mais antigo.
+ */
+export class Descartes {
+  private readonly ate = new Map<string, number>();
+  constructor(private readonly teto = 5_000) {}
+
+  lembrar(id: string, ateMs: number): void {
+    this.ate.delete(id); // reinsere no fim: a ordem de inserção é a de "mais antigo primeiro"
+    this.ate.set(id, ateMs);
+    while (this.ate.size > this.teto) {
+      const maisAntigo = this.ate.keys().next().value;
+      if (maisAntigo === undefined) break;
+      this.ate.delete(maisAntigo);
+    }
+  }
+
+  /** Os ids ainda de fora; já tira da memória os que expiraram. */
+  vigentes(agoraMs: number): string[] {
+    for (const [id, ate] of this.ate) if (ate <= agoraMs) this.ate.delete(id);
+    return [...this.ate.keys()];
+  }
+}
+
+/** Conversa recusada pelo pré-filtro: confere de novo em 24 h (pode ter ganhado fala). */
+export const DESCARTE_NAO_AVALIAVEL_MS = 24 * 3_600_000;
+/** Conversa em que o juiz falhou: tenta de novo em 1 h, não a cada varredura de 10 min. */
+export const DESCARTE_ERRO_MS = 3_600_000;

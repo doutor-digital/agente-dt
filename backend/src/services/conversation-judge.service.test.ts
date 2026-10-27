@@ -149,6 +149,22 @@ test('judgeConversation (assinatura antiga) devolve null no erro e o resultado n
   assert.equal(r?.overallScore, 7.6);
 });
 
+// ── reavaliar (botão do painel) ──────────────────────────────────────────────────────────────────
+
+test('reavaliar: com avaliação existente, julga mesmo assim e manda SUBSTITUIR; sem nota nova, nada é gravado', async () => {
+  process.env.JUDGE_PROVIDER = 'anthropic';
+  const trocas: Array<boolean | undefined> = [];
+  const boa = falso({ existe: true });
+  const gravar = boa.deps.gravarAvaliacao;
+  boa.deps.gravarAvaliacao = async (d, s) => { trocas.push(s); await gravar(d, s); };
+  assert.equal((await julgarConversa({ conversationId: 'c1', unit, substituir: true }, boa.deps)).status, 'avaliada');
+  assert.deepEqual(trocas, [true]);
+
+  const ruim = falso({ existe: true, resposta: { text: 'quebrado', promptTokens: 1, completionTokens: 1, raw: {} } });
+  assert.equal((await julgarConversa({ conversationId: 'c1', unit, substituir: true }, ruim.deps)).status, 'erro');
+  assert.equal(ruim.gravadas.length, 0);
+});
+
 // ── pré-filtro ───────────────────────────────────────────────────────────────────────────────────
 
 test('JUDGE_SO_AVALIAVEIS=1: conversa sem fala do paciente não chama o modelo e não grava nada', async () => {

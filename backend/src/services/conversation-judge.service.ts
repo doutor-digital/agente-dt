@@ -108,7 +108,8 @@ export interface DependenciasDoJuiz {
   avaliacaoExiste(conversationId: string): Promise<boolean>;
   carregarMensagens(conversationId: string): Promise<Array<{ role: string; content: string }> | null>;
   chamarModelo(escolha: EscolhaDoJuiz, system: string, user: string, unit: Unit): Promise<RespostaDoModelo>;
-  gravarAvaliacao(data: Prisma.ConversationEvaluationUncheckedCreateInput): Promise<void>;
+  /** `substituir`: troca a avaliação que já existe (botão "reavaliar") em vez de criar uma. */
+  gravarAvaliacao(data: Prisma.ConversationEvaluationUncheckedCreateInput, substituir?: boolean): Promise<void>;
   registrarChamada(p: Parameters<typeof recordLlmCall>[0]): void;
 }
 
@@ -188,7 +189,12 @@ const dependenciasPadrao: DependenciasDoJuiz = {
   },
   chamarModelo: (escolha, system, user, unit) =>
     escolha.provedor === 'anthropic' ? chamarAnthropic(escolha, system, user) : chamarOpenAI(escolha, system, user, unit),
-  async gravarAvaliacao(data) {
+  async gravarAvaliacao(data, substituir) {
+    if (substituir) {
+      const { conversationId: _mesmaConversa, ...resto } = data;
+      await prisma.conversationEvaluation.upsert({ where: { conversationId: data.conversationId }, create: data, update: resto });
+      return;
+    }
     await prisma.conversationEvaluation.create({ data });
   },
   registrarChamada: (p) => void recordLlmCall(p),
@@ -213,12 +219,12 @@ export type DesfechoDoJuiz =
  *   JUDGE_SO_AVALIAVEIS=1             pula conversa que não dá para avaliar (padrão desligado)
  */
 export async function julgarConversa(
-  params: { conversationId: string; unit: Unit },
+  params: { conversationId: string; unit: Unit; substituir?: boolean },
   deps: DependenciasDoJuiz = dependenciasPadrao,
 ): Promise<DesfechoDoJuiz> {
-  const { conversationId, unit } = params;
+  const { conversationId, unit, substituir = false } = params;
 
-  if (await deps.avaliacaoExiste(conversationId)) {
+  if (!substituir && (await deps.avaliacaoExiste(conversationId))) {
     logger.info({ conversationId }, 'judge: avaliação já existe, pulando');
     return { status: 'ja_existe' };
   }
@@ -332,7 +338,7 @@ export async function julgarConversa(
       verdict: parsed.verdict,
       costUsd: new Prisma.Decimal(costUsd),
       latencyMs,
-    });
+    }, substituir);
 
     logger.info({ conversationId, promptHash, overall, costUsd, provedor, modelo }, 'judge: avaliação criada');
 
