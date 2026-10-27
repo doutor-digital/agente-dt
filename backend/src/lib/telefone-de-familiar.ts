@@ -23,6 +23,7 @@ import type { KommoClient } from '../services/kommo.service.js';
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { chaveTelefone } from './franquia-sync.js';
+import { DDDS_DO_BRASIL } from './ddds.js';
 import { mesmoTelefoneCompleto } from './ponte-duplicados.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import { registrarSimulacao } from './so-no-papel.js';
@@ -41,11 +42,7 @@ export const FALAS_OLHADAS = 3;
 /** Só as falas recentes: um número de semana passada não é "o número dele" de hoje. */
 export const JANELA_FALAS_MIN = 15;
 
-const DDDS = new Set(
-  '11 12 13 14 15 16 17 18 19 21 22 24 27 28 31 32 33 34 35 37 38 41 42 43 44 45 46 47 48 49 51 53 54 55 61 62 63 64 65 66 67 68 69 71 73 74 75 77 79 81 82 83 84 85 86 87 88 89 91 92 93 94 95 96 97 98 99'.split(
-    ' ',
-  ),
-);
+const DDDS = DDDS_DO_BRASIL;
 
 /** Número escrito com ou sem +55, parênteses, espaço, ponto ou traço. */
 const NUMERO = /(?<![\d])(?:\+?\s*55[\s.-]*)?\(?\s*\d{2}\s*\)?[\s.-]*9?\s*\d{4}[\s.-]*\d{4}(?![\d])/g;

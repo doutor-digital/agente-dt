@@ -2,11 +2,12 @@
  * As regras de PÚBLICO e de TEXTO do disparo — puras, sem rede nem banco, para o teste provar cada uma.
  *
  * Tudo aqui nasceu do Outubro Rosa (13–16/10/2026): lista que pegou quem já estava na agenda, saudação com
- * "dona José" e data no nome, quem respondeu SAIR e ficou na lista, telefone sem o nono dígito (22 inválidos).
+ * "dona José" e data no nome, quem respondeu SAIR e ficou na lista, telefone sem o nono dígito (22 inválidos; a regra de hoje está em `telefoneWhatsapp`).
  * O lado seguro do erro é SEMPRE o de não mandar: uma mensagem a menos custa uma consulta que a recepção
  * recupera; uma a mais custa o número verde da unidade.
  */
 import { finalDoTelefone, pediuParaSair } from '../campanha/metricas.js';
+import { DDDS_DO_BRASIL } from '../ddds.js';
 
 export { pediuParaSair };
 
@@ -49,14 +50,33 @@ export const ROTULO_DA_EXCLUSAO: Record<MotivoDeExclusao, string> = {
 };
 
 /**
- * Celular brasileiro com DDD → só dígitos com DDI (5563999999999). Qualquer outra coisa → null.
- * Sem o 9 (12 dígitos) NÃO é corrigido: adivinhar o dígito é mandar para o número de outra pessoa.
+ * Celular brasileiro com DDD → só dígitos com DDI e o nono dígito (5563999999999). Qualquer outra coisa → null.
+ *
+ * O nono dígito — a razão antiga e a nova:
+ *  - ANTES (Outubro Rosa, 22 inválidos): número sem o 9 era recusado, porque adivinhar o dígito é mandar para o número de
+ *    outra pessoa. Valia para um número QUALQUER, que podia ser fixo ou de outra operadora.
+ *  - AGORA (decisão do João, 27/10/2026): as contas antigas do Kommo (Canaã) guardam o WhatsApp com 12 dígitos
+ *    (55 + DDD + 8) e a onda de 50 leads ficou com 0 pessoas. Desde 2016 todo celular do Brasil tem o 9 na frente dos
+ *    MESMOS 8 dígitos, então para quem era celular o mapeamento é determinístico. O que impede de errar de pessoa é a
+ *    faixa: só se acrescenta o 9 quando o 1º dígito depois do DDD é 6, 7, 8 ou 9 (a faixa em que um celular legado
+ *    começava). Começou com 2, 3, 4 ou 5 é telefone FIXO e continua recusado — fixo não tem WhatsApp, e acrescentar o
+ *    9 a ele cairia no número de outra pessoa.
+ *  - Só 12 dígitos COM 55 na frente entram por esse caminho, e só com um DDD que existe (`DDDS_DO_BRASIL`: acrescentar o 9
+ *    a um número de DDD inventado é fabricar telefone). 10 dígitos (DDD + 8, sem 55) e qualquer outro tamanho seguem
+ *    recusados: sem o 55 a leitura "DDD + 8" não se distingue de lixo.
+ *  - Risco que a faixa NÃO elimina: um número de 13 dígitos truncado (faltou o último) tem 12 e pode começar com 9; ele
+ *    ganharia um 9 e viraria outro telefone válido. É o preço da decisão do João; a faixa só barra o fixo.
+ *
+ * O número devolvido é SEMPRE o de 13 dígitos: é o que vai para a Graph API, o que fica gravado no destinatário
+ * (`DisparoDestinatario.telefone`, usado pela lista de teste e pelo log) e a base da chave. A chave (DDD + 8 últimos)
+ * não depende do 9, então a mesma pessoa em 12 e em 13 dígitos cai na MESMA chave.
  */
 export function telefoneWhatsapp(bruto: string | null | undefined): string | null {
   const d = (bruto ?? '').replace(/\D/g, '');
   let completo: string;
   if (d.length === 11) completo = `55${d}`;
   else if (d.length === 13 && d.startsWith('55')) completo = d;
+  else if (d.length === 12 && d.startsWith('55') && /[6-9]/.test(d[4]) && DDDS_DO_BRASIL.has(d.slice(2, 4))) completo = `55${d.slice(2, 4)}9${d.slice(4)}`;
   else return null;
   const ddd = Number(completo.slice(2, 4));
   if (ddd < 11 || ddd > 99 || ddd % 10 === 0) return null;
