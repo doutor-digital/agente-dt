@@ -51,10 +51,10 @@ export interface OpcoesConector {
 }
 
 const INSTRUCOES = [
-  'Dados da Doutor Digital, só leitura. Comece por listar_integracoes: ela diz o que cada clínica e cada empresa do grupo (ex. HM Tecnologia) tem ligado.',
+  'Dados da Doutor Digital, só leitura (as exceções, para quem tem permissão, são as de dois passos descritas abaixo). Comece por listar_integracoes: ela diz o que cada clínica e cada empresa do grupo (ex. HM Tecnologia) tem ligado.',
   'Fontes: o CRM da franquia Doutor Hérnia (ferramentas sem prefixo: pacientes, agenda, tratamentos, BI),',
   'o CRM comercial Kommo (kommo_*), o ERP Bling das empresas que usam (bling_*: pedidos, contas a receber, notas, clientes),',
-  'o Asaas das clínicas (asaas_*: cobranças, extrato do que entrou de verdade, saldo, clientes),',
+  'o Asaas das clínicas (asaas_*: cobranças, extrato do que entrou de verdade, saldo, clientes; para quem tem permissão, também cadastrar cliente e gerar BOLETO em dois passos, numa clínica só — asaas_preparar_cliente/asaas_preparar_cobranca → mostrar o resumo, com a conta e se o cliente será avisado → asaas_confirmar_cliente/asaas_confirmar_cobranca só se a pessoa aprovar; não cancela, não estorna, não edita e não faz Pix, cartão, parcelamento nem transferência),',
   'o RH das empresas que usam o Convênia (convenia_*: colaboradores, admissões e desligamentos, férias, afastamentos — ficha completa, com dado pessoal sensível: CPF, salário, dados bancários, endereço, nascimento e dados de saúde; nas listagens use completo: true para a ficha inteira),',
   'o ponto eletrônico Tiquetaque (tiquetaque_*: batidas do dia e quem está trabalhando agora, atrasos e faltas, horas e banco de horas, afastamentos; uma conta cobre várias clínicas e empresas, filtre por local — registro completo, com dado pessoal sensível: CPF, PIS, foto/selfie e GPS da batida, anexo de atestado e justificativa escrita; em tiquetaque_colaboradores e tiquetaque_horas use completo: true para a ficha e o espelho inteiros),',
   'os eventos de conversão mandados para a Meta pelo rastreio de anúncios (meta_eventos, meta_eventos_lead),',

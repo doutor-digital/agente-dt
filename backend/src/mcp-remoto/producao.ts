@@ -32,6 +32,9 @@ import type { KommoClient } from '../services/kommo.service.js';
 import { PrismaClient } from '@prisma/client';
 import { criarContextoAsaas, registrarFerramentasAsaas, type ContaAsaas } from './asaas.js';
 import { asaasGet } from '../lib/integracoes/asaas.js';
+import { asaasPost } from '../lib/integracoes/asaas-escrita.js';
+import { finalDaChave } from '../lib/integracoes/cofre.js';
+import { criarEscritaAsaas, EVENTO_COBRANCA, registrarEscritaAsaas, type RegistroDeCobranca } from './asaas-escrita.js';
 import { criarContextoConvenia, registrarFerramentasConvenia, type ContaConvenia } from './convenia.js';
 import { conveniaGet } from '../lib/integracoes/convenia.js';
 import { criarContextoTiquetaque, registrarFerramentasTiquetaque, type ContaTiquetaque } from './tiquetaque.js';
@@ -176,7 +179,13 @@ async function contasBlingDoBanco(): Promise<Map<string, ContaBling>> {
 async function contasAsaasDoBanco(): Promise<Map<string, ContaAsaas>> {
   const contas = new Map<string, ContaAsaas>();
   for (const c of await contasComChave('asaas')) {
-    contas.set(c.slug, { slug: c.slug, nome: c.nome, fonte: { get: (caminho, query) => asaasGet(c.unitId, c.chave, caminho, query ?? {}) } });
+    contas.set(c.slug, {
+      slug: c.slug,
+      nome: c.nome,
+      fonte: { get: (caminho, query) => asaasGet(c.unitId, c.chave, caminho, query ?? {}) },
+      // a porta de escrita (cadastrar cliente e gerar boleto) só é usada por quem está em MCP_ESCRITA_EMAILS
+      escrita: { post: (caminho, corpo) => asaasPost(c.unitId, c.chave, caminho, corpo), chaveFinal: finalDaChave(c.chave), contaSalva: c.conta },
+    });
   }
   logger.info({ contas: contas.size }, 'mcp-remoto: contas do Asaas carregadas');
   return contas;
@@ -233,6 +242,21 @@ async function leitoresDoWhatsapp(): Promise<Set<string>> {
   if (!emails.length) return new Set();
   const us = await prisma.user.findMany({ where: { email: { in: emails }, isActive: true }, select: { id: true } });
   return new Set(us.map((u) => u.id));
+}
+
+/** Boletos gerados na última hora (auditoria do conector): o teto por hora e a duplicata sobrevivem a um reinício. */
+async function cobrancasRecentes(conta: string): Promise<RegistroDeCobranca[]> {
+  const linhas = await prisma.mcpAuditoria.findMany({
+    where: { ferramenta: EVENTO_COBRANCA, createdAt: { gte: new Date(Date.now() - 3_600_000) } },
+    select: { createdAt: true, ok: true, argumentos: true },
+  });
+  const out: RegistroDeCobranca[] = [];
+  for (const l of linhas) {
+    const a = (l.argumentos ?? {}) as { conta?: string; chave?: string; cobrancaId?: string; incerto?: boolean };
+    // falha definitiva do Asaas não conta; sucesso e "sem resposta" (pode ter criado) contam
+    if (a.conta === conta && a.chave && (l.ok || a.incerto)) out.push({ conta, chave: a.chave, em: l.createdAt.getTime(), ...(a.cobrancaId ? { cobrancaId: a.cobrancaId } : {}) });
+  }
+  return out;
 }
 
 const normEtiqueta = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
@@ -400,6 +424,7 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   let escritores = new Set<string>();
   manterAtualizado(escritoresDoBanco, (s) => (escritores = s), 'quem pode alterar cartões');
   const pendentes = new Pendentes();
+  const escritaAsaas = criarEscritaAsaas({ historico: cobrancasRecentes });
   manterAtualizado(contasAsaasDoBanco, (contas) => (asaas.contas = contas), 'as contas do Asaas');
   const convenia = criarContextoConvenia(new Map());
   manterAtualizado(contasConveniaDoBanco, (contas) => (convenia.contas = contas), 'as contas do Convênia');
@@ -443,6 +468,8 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
       registrarMetaEventos(server, () => rastreio, auditar);
       if (escritores.has(quem.userId)) {
         registrarEscritaKommo(server, kommo, fonteDeEscrita, pendentes, quem.userId, auditar);
+        // Asaas: cadastrar cliente e gerar boleto, em dois passos. Cancelar, estornar, editar e transferir NÃO existem aqui.
+        registrarEscritaAsaas(server, asaas, escritaAsaas, quem.userId, auditar);
         // Disparo de campanha: preparar e mostrar. Aprovar e retomar NÃO existem aqui (são do João, no painel do console).
         registrarDisparo(server, fonteDeDisparo, `conector:${quem.userId}`, auditar);
       }
