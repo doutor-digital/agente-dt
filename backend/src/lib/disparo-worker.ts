@@ -128,10 +128,10 @@ export async function rodadaDoDisparo(): Promise<void> {
     const deste = ondas.filter((o) => o.unitId === unitId);
     const unit = deste[0]!.unit;
     // As ondas pausadas na varredura acima já saíram da lista na próxima leitura; aqui reconfere o estado.
-    const vivas = await prisma.disparoOnda.findMany({ where: { id: { in: deste.map((o) => o.id) }, estado: 'aprovada' }, orderBy: { criadoEm: 'asc' } });
+    const vivas = await prisma.disparoOnda.findMany({ where: { id: { in: deste.map((o) => o.id) }, estado: 'aprovada' }, orderBy: { criadoEm: 'asc' }, include: { campanha: { select: { nome: true } } } });
     if (vivas.length === 0) continue;
     try {
-      const noLote: OndaNoLote[] = vivas.map((o) => ({ id: o.id, campanhaId: o.campanhaId, aprovadaEm: o.aprovadaEm, aprovadaModo: o.aprovadaModo, sairAceitos: o.sairAceitos, ...definicaoDaOnda(o) }));
+      const noLote: OndaNoLote[] = vivas.map((o) => ({ id: o.id, campanhaId: o.campanhaId, campanhaNome: o.campanha.nome, aprovadaEm: o.aprovadaEm, aprovadaModo: o.aprovadaModo, sairAceitos: o.sairAceitos, ...definicaoDaOnda(o) }));
       const r = await rodarUnidade(porto, f, { id: unit.id, slug: unit.slug, nome: unit.name, fuso: fusoDaUnidade(unit) }, noLote);
       await depoisDaRodada(unit, r, { avisar: avisarJoao, contagem: semAndar });
       if (r.processados > 0 || (r.parou && r.parou !== 'automação desligada nesta unidade')) logger.info({ unit: unit.slug, ...r }, 'disparo: rodada');
