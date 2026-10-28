@@ -13,7 +13,7 @@ import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { abrirOnda, aprovarOnda, cancelarOnda, concluirMontagem, retomarOnda } from '../lib/disparo/onda.js';
-import { montarPainelDaOnda, semTextoDeSair, telefoneMascarado } from '../lib/disparo/painel.js';
+import { montarPainelDaOnda, motivoSemNumero, semTextoDeSair, telefoneMascarado } from '../lib/disparo/painel.js';
 import { dadosDaTela } from '../lib/disparo/tela.js';
 import { campanhaSchema, salvarCampanha, slugDaCampanha } from '../lib/disparo/campanha.js';
 
@@ -65,7 +65,7 @@ export async function disparoOndaJsonHandler(req: Request, res: Response): Promi
   }
   // Sem sessão (chave de serviço) o texto do SAIR não sai: só o João, logado, lê o que o paciente escreveu.
   const dados = req.user ? lida : semTextoDeSair(lida);
-  res.json({ ok: true, ...dados, amostra: dados.amostra.map((a) => ({ nome: a.nome, telefone: telefoneMascarado(a.telefone) })), listaDeTeste: dados.listaDeTeste?.map(telefoneMascarado) ?? null });
+  res.json({ ok: true, ...dados, amostra: dados.amostra.map((a) => ({ nome: a.nome, telefone: telefoneMascarado(a.telefone) })), destinatarios: dados.destinatarios?.map((p) => ({ ...p, telefone: telefoneMascarado(p.telefone), motivo: p.motivo ? motivoSemNumero(p.motivo) : null })), listaDeTeste: dados.listaDeTeste?.map(telefoneMascarado) ?? null });
 }
 
 export async function disparoOndaPainelHandler(req: Request, res: Response): Promise<void> {
