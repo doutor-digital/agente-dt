@@ -94,6 +94,7 @@ import {
   turnoDoComprovante,
   type TurnoDoComprovante,
 } from './confirmacao-so-com-crm.js';
+import { dadosDaTaxa, travaDaTaxaDeReserva } from './taxa-de-reserva.js';
 import {
   withTimeout,
   AGENT_NODE_TIMEOUT_MS,
@@ -1269,6 +1270,28 @@ export async function buildAgentGraph(
           payload: { trecho: promessa.trecho, forma: promessa.forma, refeita: textoRefeito || null, final: textoFinal, erro: erroRefeita },
           latencyMs: Math.round(performance.now() - t1),
         });
+      }
+
+      // Taxa de reserva (Boa Vista, 27–28/10/2026): a chave Pix sai por código, e horário não é dado como garantido sem
+      // consulta no CRM nem comprovante da taxa (taxa-de-reserva.ts). Depois das travas de cima: se elas já trocaram a
+      // resposta, esta confere o que sobrou. Sem chave ou sem valor cadastrado, nada muda. Só unidade com a flag.
+      const trocaDaTaxa = travaDaTaxaDeReserva(textoFinal, dadosDaTaxa(unit), {
+        falasDoPaciente: mensagensDoPaciente,
+        consultaDePe: promptTemConsulta(promptDoTurno) || marcouAgora,
+        comprovanteLido: comprovante.pendente,
+      });
+      if (trocaDaTaxa) {
+        respostaFixa = true;
+        await recorder.step({
+          kind: 'THINKING',
+          title:
+            trocaDaTaxa.motivo === 'horario_sem_comprovante'
+              ? '💳 Taxa de reserva: a resposta dava o horário como garantido sem consulta nem comprovante — trocada pelo recado com a chave'
+              : `💳 Taxa de reserva: ${trocaDaTaxa.motivo === 'chave_pedida' ? 'o paciente pediu o Pix' : 'a resposta mandava a equipe enviar a chave'} — a chave saiu por código`,
+          payload: { motivo: trocaDaTaxa.motivo, original: textoFinal, final: trocaDaTaxa.texto },
+        });
+        textoFinal = trocaDaTaxa.texto;
+        response.content = textoFinal;
       }
 
       // Sinal de alerta dito com todas as letras e o modelo NÃO avisou (26/10/2026): a regra de 21/10 estava no prompt e

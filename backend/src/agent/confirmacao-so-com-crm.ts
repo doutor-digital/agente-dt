@@ -89,6 +89,10 @@ const EXPLICA_PAGAMENTO = /\b(?:pagando|pagamento antecipado|antecipado|antecipa
 const QUANDO_DIA = /\b(?:segunda|terca|quarta|quinta|sexta|sabado|domingo)\b|\b\d{1,2}\/\d{1,2}\b|\b(?:amanha|hoje)\b/;
 const QUANDO = /\b(?:segunda|terca|quarta|quinta|sexta|sabado|domingo)\b|\b\d{1,2}\/\d{1,2}\b|\b(?:amanha|hoje)\b|\b\d{1,2}(?::\d{2}|h\d{0,2})\b/;
 
+/** Para quem estende o detector sem mexer nele (`taxa-de-reserva.ts`). */
+export const NAO_AFIRMA_CONFIRMACAO = NAO_AFIRMA;
+export const QUANDO_HORARIO = QUANDO;
+
 /** A oração em que a afirmação aparece: do último separador (vírgula, ponto e vírgula, dois-pontos) até o fim dela. */
 function oracaoDe(n: string, fim: number): string {
   const antes = n.slice(0, fim);
