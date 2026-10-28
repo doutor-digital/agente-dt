@@ -58,6 +58,9 @@ const AutomacoesPanel = lazy(() => import('./components/AutomacoesPanel'));
 const ResultadosPanel = lazy(() =>
   import('./components/ResultadosPanel').then((m) => ({ default: m.ResultadosPanel })),
 );
+const ResultadoDisparoPanel = lazy(() =>
+  import('./components/ResultadoDisparoPanel').then((m) => ({ default: m.ResultadoDisparoPanel })),
+);
 const ComoFuncionaPanel = lazy(() =>
   import('./components/ComoFuncionaPanel').then((m) => ({ default: m.ComoFuncionaPanel })),
 );
@@ -187,6 +190,7 @@ function Shell({ onBackToHub }: { onBackToHub?: () => void }) {
             {tab === 'automacoes' && <AutomacoesPanel />}
             {tab === 'saude-ia' && <SaudeIaPanel />}
             {tab === 'resultados' && <ResultadosPanel />}
+            {tab === 'disparo' && <ResultadoDisparoPanel />}
             {tab === 'como-funciona' && <ComoFuncionaPanel onNavigate={navigate} />}
             {tab === 'config' && <AgentConfigPanel />}
             {tab === 'units' && <UnitsPanel />}

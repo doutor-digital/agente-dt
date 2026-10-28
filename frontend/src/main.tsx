@@ -17,12 +17,19 @@ window.addEventListener('vite:preloadError', (event) => {
   window.location.reload();
 });
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <ThemeProvider>
-      <ToastProvider>
-        <App />
-      </ToastProvider>
-    </ThemeProvider>
-  </StrictMode>,
-);
+async function montar() {
+  let raiz = <App />;
+  // Prévia com dados de mentira, só no servidor de desenvolvimento (o Vite remove este ramo do build).
+  if (import.meta.env.DEV && window.location.pathname.startsWith('/__previa/disparo')) {
+    const { PreviaDisparo } = await import('./previa/disparo.tsx');
+    raiz = <PreviaDisparo />;
+  }
+  createRoot(document.getElementById('root')!).render(
+    <StrictMode>
+      <ThemeProvider>
+        <ToastProvider>{raiz}</ToastProvider>
+      </ThemeProvider>
+    </StrictMode>,
+  );
+}
+void montar();
