@@ -323,11 +323,22 @@ test('item 2 (revisão): se NADA chegou à equipe o João é avisado; se algo ch
   const nada = ferramentas({ resumir: undefined, abrirTarefa: undefined, alertar: async (t) => void alertas.push(t), slug: 'boa-vista' });
   await aplicarTaxaDeReservaNaSaida('Tudo bem!', DADOS, INSISTE, nada.f);
   assert.equal(alertas.length, 1);
-  assert.match(alertas[0], /boa-vista.*lead 123.*NADA chegou à equipe/);
+  assert.match(alertas[0], /boa-vista.*lead 123.*NADA confirmado chegou à equipe/);
   const ok = ferramentas({ alertar: async (t) => void alertas.push(t) });
   await aplicarTaxaDeReservaNaSaida('Tudo bem!', DADOS, INSISTE, ok.f);
   assert.equal(alertas.length, 1);
   const quebrado = ferramentas({ resumir: undefined, abrirTarefa: undefined, alertar: async () => Promise.reject(new Error('telegram fora')) });
   const r = await aplicarTaxaDeReservaNaSaida('Tudo bem!', DADOS, INSISTE, quebrado.f);
   assert.equal(r.texto, RECADO_INSISTIU_SEM_PROMESSA, 'o alerta que falha não derruba a resposta');
+});
+
+test('item 1 (revisão): a leitura do cartão e a do vínculo têm prazo — um Kommo travado não segura a resposta', { timeout: 5000 }, async () => {
+  const pendurada = () => new Promise<boolean>(() => undefined);
+  const a = ferramentas({ cartaoDizPago: pendurada, prazoDaLeituraMs: 20 });
+  const r = await aplicarTaxaDeReservaNaSaida('A equipe te envia a chave certa', DADOS, com({ falasDoPaciente: ['ok'] }), a.f);
+  assert.equal(r.texto, 'A equipe te envia a chave certa');
+  assert.equal(r.liberadaPor, 'cartao_ilegivel');
+  const b = ferramentas({ consultaGravada: pendurada, prazoDaLeituraMs: 20 });
+  const r2 = await aplicarTaxaDeReservaNaSaida('A equipe te envia a chave certa', DADOS, com({ falasDoPaciente: ['e o pix?'] }), b.f);
+  assert.equal(r2.troca?.motivo, 'equipe_envia_a_chave', 'sem ler o vínculo, a trava segue (como antes)');
 });

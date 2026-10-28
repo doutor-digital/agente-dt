@@ -163,7 +163,10 @@ const EQUIPE_ENVIA = [
 /** O objeto do envio é outra coisa e o Pix só a complementa ("o recibo do Pix")? */
 function enviaOutraCoisaDoPix(m: RegExpExecArray): boolean {
   if (m.groups?.obj !== 'pix') return false;
-  const primeira = (m.groups.ate ?? '').split(/\s+/).find((w) => w && !ENFEITE.has(w));
+  const ate = m.groups.ate ?? '';
+  // "o endereço e o Pix", "o recibo, o Pix": o Pix é um segundo objeto do envio, não complemento do primeiro
+  if (/\be\b|,/.test(ate)) return false;
+  const primeira = ate.split(/\s+/).find((w) => w && !ENFEITE.has(w));
   return !!primeira && OUTRO_OBJETO.has(primeira);
 }
 /** "Não se preocupe, a equipe te envia a chave" tranquiliza: o "não" não nega o envio. */
@@ -178,8 +181,9 @@ export function empurrouAChaveParaEquipe(texto: string | null | undefined): bool
       const m = r.exec(n);
       if (!m || enviaOutraCoisaDoPix(m)) return false;
       // a negação vale na MESMA oração do envio ("a equipe não envia a chave"); a de outra oração não ("Não, ... a equipe te envia")
-      const inicio = Math.max(n.lastIndexOf(',', m.index), n.lastIndexOf(';', m.index), n.lastIndexOf(':', m.index)) + 1;
-      return !/\b(?:nao|nem)\b/.test(n.slice(inicio, m.index + m[0].length));
+      // e a no máximo 30 caracteres antes: "Não tenho acesso à chave aqui mas a equipe te envia a chave" ainda empurra
+      const inicio = Math.max(n.lastIndexOf(',', m.index), n.lastIndexOf(';', m.index), n.lastIndexOf(':', m.index), n.lastIndexOf(' mas ', m.index)) + 1;
+      return !/\b(?:nao|nem)\b/.test(n.slice(Math.max(inicio, m.index - 30), m.index + m[0].length));
     });
   });
 }
@@ -257,7 +261,7 @@ function oracaoNeutra(o: string): boolean {
 }
 
 function afirmaNaOracao(t: string): boolean {
-  const oracoes = t.split(/,\s*/);
+  const oracoes = t.split(/,\s+/); // vírgula de decimal ("R$ 1,50") não separa oração
   if (oracoes.some(oracaoNeutra)) {
     // a oração neutra sai do julgamento; o que sobra do trecho continua valendo ("Sua consulta está confirmada, vou ver…" afirma)
     const resto = oracoes.filter((o) => !oracaoNeutra(o)).join(', ');
@@ -343,6 +347,17 @@ export function jaEncaminhouAInsistencia(texto: string | null | undefined): bool
   return String(texto ?? '').includes(RECADO_INSISTIU_NA_CLINICA);
 }
 
+/** Quantas vezes o recado SEM promessa (nada chegou à equipe) pode repetir o ciclo antes de parar de tentar (resumo + alerta ao João a cada turno). */
+const TENTATIVAS_SEM_EQUIPE = 2;
+
+/**
+ * Todas as respostas anteriores da IA nesta conversa: a insistência já foi tratada? Sim se o encaminhamento saiu (com a promessa) ou
+ * se já houve `TENTATIVAS_SEM_EQUIPE` recados sem promessa — sem teto, uma falha do Kommo viraria resumo e Telegram a cada turno.
+ */
+export function insistenciaJaTratada(respostasDaIA: ReadonlyArray<string>): boolean {
+  return respostasDaIA.some(jaEncaminhouAInsistencia) || respostasDaIA.filter((t) => t.includes(RECADO_INSISTIU_SEM_PROMESSA)).length >= TENTATIVAS_SEM_EQUIPE;
+}
+
 /** Alguma fala do paciente traz comprovante lido (foto/PDF), de QUALQUER data: quem já pagou não paga de novo por ter passado 24 h. */
 export function pacienteJaMandouComprovante(falasDoPaciente: ReadonlyArray<string>): boolean {
   return falasDoPaciente.some((f) => comprovantesDoTexto(String(f ?? '')).length > 0);
@@ -383,7 +398,7 @@ function jaTrazAChaveEPedeComprovante(texto: string, d: DadosDaTaxa): boolean {
 }
 
 /** "Sem isso, o horário pode ser ocupado": pendurado numa frase que saiu, não faz sentido sozinho. */
-const PENDURADO = /^(?:sem|com|por|para|pra) (?:isso|esse|essa|isto)\b/;
+const PENDURADO = /^sem (?:isso|esse|essa|isto)\b/;
 /** A resposta diz que ele pode pagar na clínica: contradiz a taxa, sai junto do bloco. */
 const RESPONDE_PAGAR_NA_CLINICA =
   /\bpag\w*\b[^.?!]{0,40}\b(?:na clinica|no dia|na hora|no local|presencial)\b|\b(?:na clinica|no dia|na hora)\b[^.?!]{0,25}\bpag\w*\b/;

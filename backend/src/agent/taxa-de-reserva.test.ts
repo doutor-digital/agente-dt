@@ -387,7 +387,7 @@ test('o recado nunca traz lacuna nem dado fora do cadastro', () => {
 // --- Correção pós-merge do #158 (reprovação do sênior, 28/10) -------------------------------------------------------------------
 
 import { comprovantesDoTexto, marcarRecebimento, turnoDoComprovante } from './confirmacao-so-com-crm.js';
-import { pacienteJaMandouComprovante, jaEncaminhouAInsistencia, RECADO_INSISTIU_SEM_PROMESSA } from './taxa-de-reserva.js';
+import { pacienteJaMandouComprovante, jaEncaminhouAInsistencia, insistenciaJaTratada, RECADO_INSISTIU_SEM_PROMESSA } from './taxa-de-reserva.js';
 
 const HA_3_DIAS = new Date(Date.now() - 3 * 24 * 3_600_000);
 const COMPROVANTE_ANTIGO = marcarRecebimento('[imagem do cliente]: COMPROVANTE: Pix enviado. Valor: R$ 100,00.', HA_3_DIAS);
@@ -599,4 +599,29 @@ test('9 (revisão): "Então, chegue 10 min antes" fica; só o "sem isso, …" pe
 test('o recado do comprovante e a trava da taxa não se atropelam: sem comprovante pendente, respostaDoComprovante nunca troca (o que o grafo supõe ao tirar o guarda)', () => {
   const textos = ['Pagamento confirmado! Sua consulta está confirmada para quinta às 14h.', 'Tudo certo, seu horário está garantido'];
   for (const t of textos) assert.equal(respostaDoComprovante(t, { noTurno: false, pendente: false }, false), null);
+});
+
+test('2ª revisão: a negação não alcança uma oração longa sem vírgula; o Pix coordenado com outro objeto continua sendo o Pix', () => {
+  assert.equal(empurrouAChaveParaEquipe('Não tenho acesso à chave aqui mas a equipe te envia a chave certinha'), true);
+  assert.equal(empurrouAChaveParaEquipe('A equipe te envia o endereço e o Pix em seguida'), true);
+  assert.equal(empurrouAChaveParaEquipe('A equipe te envia o recibo e o Pix'), true);
+  assert.equal(empurrouAChaveParaEquipe('A equipe te envia o recibo do Pix'), false);
+});
+
+test('2ª revisão: só o "sem isso, …" pendurado sai junto; "Pra isso, basta trazer um documento" é instrução real e fica', () => {
+  const r = travaDaTaxaDeReserva('A consulta é no sábado. Pra isso, basta trazer um documento com foto. Qual a chave?', DADOS, com({ falasDoPaciente: ['qual a chave?'] }));
+  assert.match(r!.texto, /Pra isso, basta trazer um documento com foto\./);
+});
+
+test('2ª revisão: vírgula de decimal não separa oração, e o horário que a oração neutra citava não some do que sobra', () => {
+  assert.equal(afirmaHorarioGarantido('Sua consulta está confirmada para quinta, vou ver o valor de R$ 150,00'), true);
+  assert.equal(afirmaHorarioGarantido('Deixei reservado, quinta às 14h está disponível'), true);
+  assert.equal(afirmaHorarioGarantido('Tudo certo, vou ver o valor de R$ 150,00 pra você'), false);
+});
+
+test('2ª revisão: sem equipe avisada a insistência tenta de novo UMA vez e para (sem resumo e alerta a cada turno)', () => {
+  assert.equal(insistenciaJaTratada([]), false);
+  assert.equal(insistenciaJaTratada([RECADO_INSISTIU_SEM_PROMESSA]), false);
+  assert.equal(insistenciaJaTratada([RECADO_INSISTIU_SEM_PROMESSA, 'Tudo bem!', RECADO_INSISTIU_SEM_PROMESSA]), true);
+  assert.equal(insistenciaJaTratada(['oi', RECADO_INSISTIU_NA_CLINICA]), true);
 });

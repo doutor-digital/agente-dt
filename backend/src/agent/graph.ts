@@ -94,7 +94,7 @@ import {
   turnoDoComprovante,
   type TurnoDoComprovante,
 } from './confirmacao-so-com-crm.js';
-import { dadosDaTaxa, jaEncaminhouAInsistencia, pacienteJaMandouComprovante, promptDizEmTratamento, respostaAnteriorDaIA } from './taxa-de-reserva.js';
+import { dadosDaTaxa, insistenciaJaTratada, pacienteJaMandouComprovante, promptDizEmTratamento, respostaAnteriorDaIA } from './taxa-de-reserva.js';
 import { aplicarTaxaDeReservaNaSaida, decidirATaxa } from './taxa-de-reserva-saida.js';
 import { pagouOAntecipado } from '../lib/follow-up-worker.js';
 import { enviarTelegram } from '../lib/telegram.js';
@@ -1166,9 +1166,9 @@ export async function buildAgentGraph(
             respostaAnterior: respostaAnteriorDaIA(nonSystemMessages.map((m) => ({ tipo: m.getType(), texto: aiTextFromContent(m.content) }))),
             // comprovante lido em QUALQUER data: quem já pagou não paga de novo porque a equipe demorou mais de 24 h para criar a consulta
             jaMandouComprovante: pacienteJaMandouComprovante(
-              nonSystemMessages.filter((m) => m.getType() === 'human').map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content))),
+              nonSystemMessages.filter((m) => m.getType() === 'human').map((m) => aiTextFromContent(m.content)),
             ),
-            insistenciaJaEncaminhada: nonSystemMessages.some((m) => m.getType() === 'ai' && jaEncaminhouAInsistencia(aiTextFromContent(m.content))),
+            insistenciaJaEncaminhada: insistenciaJaTratada(nonSystemMessages.filter((m) => m.getType() === 'ai').map((m) => aiTextFromContent(m.content))),
           }
         : null;
       const contextoDaTaxa = () => ({

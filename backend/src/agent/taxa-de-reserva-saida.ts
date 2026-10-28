@@ -18,6 +18,9 @@ import type { TraceRecorder } from './trace-recorder.js';
 /** O mesmo prazo do resumo do sinal de alerta (passe-por-sinal.ts). */
 export const PRAZO_DO_RESUMO_DA_TAXA_MS = 8_000;
 
+/** Leitura do vínculo e do cartão: sem isso um Kommo travado seguraria a resposta. */
+export const PRAZO_DA_LEITURA_MS = 5_000;
+
 export const FOCO_DO_RESUMO_DA_INSISTENCIA =
   'Unidade com taxa de reserva: o paciente já recebeu a chave Pix e INSISTE em pagar só na clínica. Sem o comprovante da taxa o horário NÃO está garantido. Equipe: falar com ele.';
 
@@ -38,6 +41,8 @@ export interface FerramentasDaTaxa {
   alertar?: (texto: string) => Promise<unknown>;
   slug?: string;
   prazoDoResumoMs?: number;
+  /** prazo das leituras (vínculo, cartão): um Kommo ou banco lento não segura a resposta ao paciente */
+  prazoDaLeituraMs?: number;
 }
 
 export interface SaidaDaTaxa {
@@ -132,16 +137,22 @@ export interface DecisaoDaTaxa {
  * A decisão com as provas que o prompt pode não ter trazido (consulta gravada, cartão pago). SÓ LÊ — sem passo no rastro, sem
  * tarefa, sem resumo —, por isso serve também para conferir a reescrita de outras travas (`reabreAfirmacao` do grafo).
  */
-export async function decidirATaxa(texto: string, dados: DadosDaTaxa | null, ctx: ContextoDaTaxa, f: Pick<FerramentasDaTaxa, 'consultaGravada' | 'cartaoDizPago'>): Promise<DecisaoDaTaxa> {
+export async function decidirATaxa(
+  texto: string,
+  dados: DadosDaTaxa | null,
+  ctx: ContextoDaTaxa,
+  f: Pick<FerramentasDaTaxa, 'consultaGravada' | 'cartaoDizPago' | 'prazoDaLeituraMs'>,
+): Promise<DecisaoDaTaxa> {
+  const prazoMs = f.prazoDaLeituraMs ?? PRAZO_DA_LEITURA_MS;
   const troca = travaDaTaxaDeReserva(texto, dados, ctx);
   if (!troca) return { troca: null };
   // O prompt pode não ter trazido a consulta (a IA marcou antes e o bloco falhou): o vínculo gravado por agendar_consulta decide.
   // Só é lido quando a trava já disparou.
-  if (await f.consultaGravada().catch(() => false)) return { troca: null, liberadaPor: 'consulta_gravada' };
+  if (await comPrazo(Promise.resolve().then(f.consultaGravada), prazoMs).catch(() => false)) return { troca: null, liberadaPor: 'consulta_gravada' };
   // Quem já pagou (campo do cartão) não paga de novo — só o pedido EXPLÍCITO da chave segue atendido (mesma regra do comprovante
   // antigo). Sem ler o cartão não dá para saber: a resposta fica como veio.
   try {
-    if (await f.cartaoDizPago()) {
+    if (await comPrazo(Promise.resolve().then(f.cartaoDizPago), prazoMs)) {
       const soOPedido = travaDaTaxaDeReserva(texto, dados, { ...ctx, jaMandouComprovante: true });
       return soOPedido ? { troca: soOPedido } : { troca: null, liberadaPor: 'cartao_pago' };
     }
@@ -198,7 +209,7 @@ export async function aplicarTaxaDeReservaNaSaida(
     });
     await f
       .alertar?.(
-        `⚠️ ${f.slug ?? 'unidade'} — lead ${f.leadId ?? '?'} recebeu a chave Pix e INSISTE em pagar só na clínica, mas NADA chegou à equipe (tarefa e resumo falharam ou a unidade não os tem). Avisar a equipe à mão.`,
+        `⚠️ ${f.slug ?? 'unidade'} — lead ${f.leadId ?? '?'} recebeu a chave Pix e INSISTE em pagar só na clínica, mas NADA confirmado chegou à equipe (tarefa e resumo falharam, estouraram o prazo ou a unidade não os tem; uma tarefa lenta ainda pode aparecer no Kommo). Avisar a equipe à mão.`,
       )
       .catch(() => undefined);
   }
