@@ -16,7 +16,7 @@ export async function dadosDaTela(ondaId: string, email: string | null | undefin
   const onda = await prisma.disparoOnda.findUnique({ where: { id: ondaId }, include: { unit: true, campanha: { select: { nome: true } } } });
   if (!onda) return null;
   const retomavel = onda.estado === 'pausada' && onda.pausaCausa === 'sair';
-  const colunas = { nome: true, telefone: true, estado: true, motivo: true, enviadoEm: true, simuladoEm: true, kommoLeadId: true, atualizadoEm: true, criadoEm: true } as const;
+  const colunas = { id: true, nome: true, telefone: true, estado: true, motivo: true, enviadoEm: true, simuladoEm: true, kommoLeadId: true, atualizadoEm: true, criadoEm: true } as const;
   const [porEstado, simulados, amostra, saidas, enviados, falhas, pendentes] = await Promise.all([
     prisma.disparoDestinatario.groupBy({ by: ['estado'], where: { ondaId }, _count: true }),
     prisma.disparoDestinatario.count({ where: { ondaId, simuladoEm: { not: null } } }),
@@ -28,9 +28,9 @@ export async function dadosDaTela(ondaId: string, email: string | null | undefin
     // Só leitura, só colunas que já existem; o índice (ondaId, estado) atende os três.
     prisma.disparoDestinatario.findMany({ where: { ondaId, estado: { in: ['enviado', 'enviando'] } }, orderBy: [{ enviadoEm: { sort: 'desc', nulls: 'first' } }, { id: 'asc' }], take: LIMITE_DA_TABELA, select: colunas }),
     prisma.disparoDestinatario.findMany({ where: { ondaId, estado: { notIn: ['enviado', 'enviando', 'pendente'] } }, orderBy: [{ atualizadoEm: 'desc' }, { id: 'asc' }], take: LIMITE_DA_TABELA, select: colunas }),
-    prisma.disparoDestinatario.findMany({ where: { ondaId, estado: 'pendente' }, orderBy: [{ criadoEm: 'asc' }, { id: 'asc' }], take: LIMITE_DA_TABELA, select: colunas }),
+    prisma.disparoDestinatario.findMany({ where: { ondaId, estado: 'pendente' }, orderBy: [{ atualizadoEm: 'asc' }, { id: 'asc' }], take: LIMITE_DA_TABELA, select: colunas }),
   ]);
-  const destinatarios = ordenarDestinatarios([...enviados, ...falhas, ...pendentes]).map(({ atualizadoEm: _a, criadoEm: _c, ...linha }) => linha);
+  const destinatarios = ordenarDestinatarios([...enviados, ...falhas, ...pendentes]).map(({ id: _i, atualizadoEm: _a, criadoEm: _c, ...linha }) => linha);
   // Só pergunta à Meta enquanto ainda dá para aprovar ou retomar: é a prova que destrava (ou trava) o botão.
   const conferenciaMeta = onda.estado === 'montada' || retomavel ? await conferirModeloNaMeta(onda.unit, definicaoDaOnda(onda)) : null;
   const teste = listaDeTesteDoAmbiente(onda.unit.slug);
