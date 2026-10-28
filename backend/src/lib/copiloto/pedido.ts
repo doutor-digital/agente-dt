@@ -1,10 +1,13 @@
 /** Lê o corpo do pedido do widget sem confiar nele. */
+import type { PapelDeQuemUsa } from './mapa-de-campos.js';
 import { MAX_CHARS_DA_PERGUNTA, type TurnoDoHistorico } from './prompt.js';
 
 export interface PedidoDoCopiloto {
   leadId: number;
   pergunta: string;
   historico: TurnoDoHistorico[];
+  /** Quem está usando o widget (padrão: SDR). Decide quais campos são "seus". */
+  papel: PapelDeQuemUsa;
 }
 
 const MAX_TURNOS = 6;
@@ -12,7 +15,7 @@ const MAX_CHARS_DO_TURNO = 800;
 
 export function lerPedido(corpo: unknown): PedidoDoCopiloto | { erro: string } {
   if (!corpo || typeof corpo !== 'object') return { erro: 'pedido inválido' };
-  const { leadId, pergunta, historico } = corpo as Record<string, unknown>;
+  const { leadId, pergunta, historico, papel } = corpo as Record<string, unknown>;
   const id = Number(leadId);
   if (!Number.isInteger(id) || id <= 0 || id > 2 ** 40) return { erro: 'lead inválido' };
   if (typeof pergunta !== 'string' || !pergunta.trim()) return { erro: 'faltou a pergunta' };
@@ -27,5 +30,5 @@ export function lerPedido(corpo: unknown): PedidoDoCopiloto | { erro: string } {
       }
     }
   }
-  return { leadId: id, pergunta: pergunta.trim(), historico: turnos };
+  return { leadId: id, pergunta: pergunta.trim(), historico: turnos, papel: papel === 'recepcao' || papel === 'fisio' ? papel : 'sdr' };
 }

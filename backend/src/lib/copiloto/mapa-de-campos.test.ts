@@ -73,10 +73,17 @@ test('campo de outra etapa é recusado, com a etapa certa no motivo', () => {
   assert.match(r.motivo, /GANHO/);
 });
 
-test('campo da próxima etapa é aceito (a SDR prepara para mover)', () => {
+test('campo da próxima etapa NÃO passa por padrão; só com a opção explícita', () => {
   assert.ok(proximasEtapas('EM QUALIFICAÇÃO').includes('AGENDADO'));
   const r = validarProposta({ campo: '¤ Valor da Consulta', valor: '250' }, { etapa: 'EM QUALIFICAÇÃO', valorAtual: vazio });
-  assert.equal(r.acao, 'propor');
+  assert.equal(r.acao, 'recusar');
+  assert.match(r.motivo, /AGENDADO/);
+  assert.equal(validarProposta({ campo: '¤ Valor da Consulta', valor: '250' }, { etapa: 'EM QUALIFICAÇÃO', valorAtual: vazio, incluirProximas: true }).acao, 'propor');
+});
+
+test('lista sem opções conhecidas: recusa o valor (não dá para conferir)', () => {
+  const r = validarProposta({ campo: '⬢ Tipo de agendamento', valor: 'qualquer coisa' }, { etapa: 'AGENDADO', valorAtual: vazio, opcoes: () => null, ehLista: () => true });
+  assert.equal(r.acao, 'recusar');
 });
 
 test('lista de opções: valor fora da lista é recusado, dentro (sem diferença de maiúscula) passa', () => {

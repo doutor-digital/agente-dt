@@ -13,23 +13,25 @@ import type { Unit } from '@prisma/client';
 import { env } from '../lib/env.js';
 import { logger } from '../lib/logger.js';
 import { unidadeDaPonte } from './widget-franquia.controller.js';
-import { createKommoClient, type KommoClient, type KommoLeadCustomField, type KommoPipeline } from '../services/kommo.service.js';
+import { createKommoClient, type CampoDoCartaoDaConta, type KommoClient, type KommoPipeline } from '../services/kommo.service.js';
+import { contaDoKommo, unidadeParaOCartao } from '../lib/crm-compartilhado.js';
 import { mensagensOficiais } from '../services/kommo-talks.service.js';
 import { recordLlmCall } from '../services/openai.service.js';
-import { anonimizar } from '../lib/copiloto/anonimizar.js';
 import { montarContextoDoCartao } from '../lib/copiloto/contexto.js';
 import { chamarOpenAi } from '../lib/copiloto/openai.js';
 import { lerPedido } from '../lib/copiloto/pedido.js';
 import { responderAoCopiloto } from '../lib/copiloto/responder.js';
 
-const LIMITE = { balde: 'copiloto', max: 30 };
+// 10 perguntas por minuto por unidade: cada pergunta faz de 6 a 8 chamadas ao Kommo, que tem fila única no processo
+const LIMITE = { balde: 'copiloto', max: 10 };
 const CACHE_DO_KOMMO_MS = 10 * 60_000;
-const cacheEstrutura = new Map<string, { em: number; funis: KommoPipeline[]; defs: KommoLeadCustomField[] }>();
+const cacheEstrutura = new Map<string, { em: number; funis: KommoPipeline[]; defs: CampoDoCartaoDaConta[] }>();
 
-async function estruturaDaConta(unit: Unit, kommo: KommoClient) {
+async function estruturaDaConta(unit: Pick<Unit, 'id'>, kommo: KommoClient) {
   const g = cacheEstrutura.get(unit.id);
   if (g && Date.now() - g.em < CACHE_DO_KOMMO_MS) return g;
-  const [funis, defs] = await Promise.all([kommo.listPipelines(), kommo.listLeadCustomFieldsTyped()]);
+  // `listarCamposDoCartao` pagina (contas passam de 250 campos) e traz todos os tipos
+  const [funis, defs] = await Promise.all([kommo.listPipelines(), kommo.listarCamposDoCartao()]);
   const novo = { em: Date.now(), funis, defs };
   cacheEstrutura.set(unit.id, novo);
   return novo;
@@ -46,10 +48,6 @@ export async function copilotoPerguntarHandler(req: Request, res: Response): Pro
     res.status(503).json({ error: 'copiloto sem chave da IA' });
     return;
   }
-  if (!unit.kommoSubdomain || !unit.kommoAccessToken) {
-    res.status(409).json({ error: 'unidade sem Kommo conectado' });
-    return;
-  }
   const pedido = lerPedido(req.body);
   if ('erro' in pedido) {
     res.status(400).json({ error: pedido.erro });
@@ -57,16 +55,31 @@ export async function copilotoPerguntarHandler(req: Request, res: Response): Pro
   }
 
   try {
-    const kommo = createKommoClient(unit);
+    // Kommo dividido (Petrópolis × Caxias): o cartão vive na conta da dona, e só a unidade DONA do cartão pode perguntar
+    const dono = await unidadeParaOCartao(unit, pedido.leadId);
+    if (dono.tipo === 'recusa') {
+      res.status(409).json({ error: dono.motivo });
+      return;
+    }
+    if (dono.tipo === 'unidade' && dono.unit.id !== unit.id) {
+      res.status(403).json({ error: 'este cartão é de outra unidade' });
+      return;
+    }
+    const conta = await contaDoKommo(unit);
+    if (!conta.kommoSubdomain || !conta.kommoAccessToken) {
+      res.status(409).json({ error: 'unidade sem Kommo conectado' });
+      return;
+    }
+    const kommo = createKommoClient(conta);
     const conversaBruta = mensagensOficiais(kommo, pedido.leadId, 40).catch(() => []);
-    const [lead, estrutura] = await Promise.all([kommo.getLead(pedido.leadId), estruturaDaConta(unit, kommo)]);
+    const [lead, estrutura] = await Promise.all([kommo.getLead(pedido.leadId), estruturaDaConta(conta, kommo)]);
     const contatoId = lead._embedded?.contacts?.find((c) => c.is_main)?.id ?? lead._embedded?.contacts?.[0]?.id;
     const contato = contatoId ? await kommo.getContactBasico(contatoId).catch(() => null) : null;
     const nomes = [lead.name, contato?.nome ?? ''].filter(Boolean);
     const conversa = (await conversaBruta)
       .map((m) => ({
         quem: m.direcao === 'entrada' ? ('paciente' as const) : ('clinica' as const),
-        texto: anonimizar(m.texto || (m.anexo ? `[${m.anexo.tipo}]` : ''), nomes),
+        texto: m.texto || (m.anexo ? `[${m.anexo.tipo}]` : ''),
       }))
       .filter((f) => f.texto);
     const ctx = montarContextoDoCartao(lead, estrutura.funis, estrutura.defs);
@@ -81,7 +94,8 @@ export async function copilotoPerguntarHandler(req: Request, res: Response): Pro
           uso = { promptTokens: x.promptTokens, completionTokens: x.completionTokens };
           return x;
         },
-        { ctx, conversa, pergunta: pedido.pergunta, historico: pedido.historico.map((t) => ({ ...t, texto: anonimizar(t.texto, nomes) })) },
+        // nome, telefone, e-mail e CPF saem de TUDO (conversa, pergunta, histórico e valores dos campos) dentro de `responderAoCopiloto`
+        { ctx, conversa, pergunta: pedido.pergunta, historico: pedido.historico, papel: pedido.papel, nomes },
       );
       void recordLlmCall({ unitId: unit.id, traceId: null, provider: 'openai', model: env.COPILOTO_MODELO, promptTokens: uso.promptTokens, completionTokens: uso.completionTokens, latencyMs: Math.round(performance.now() - inicio), status: 'success' });
       // só números no log: nada de conversa nem de pergunta

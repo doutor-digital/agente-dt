@@ -4,7 +4,7 @@ import { lerPedido } from './pedido.js';
 
 test('pedido válido', () => {
   const p = lerPedido({ leadId: '123', pergunta: '  quais campos?  ', historico: [{ papel: 'pessoa', texto: 'oi' }] });
-  assert.deepEqual(p, { leadId: 123, pergunta: 'quais campos?', historico: [{ papel: 'pessoa', texto: 'oi' }] });
+  assert.deepEqual(p, { leadId: 123, pergunta: 'quais campos?', historico: [{ papel: 'pessoa', texto: 'oi' }], papel: 'sdr' });
 });
 
 test('recusa lead inválido, pergunta vazia ou grande demais, corpo que não é objeto', () => {
@@ -21,4 +21,9 @@ test('histórico: só os 6 últimos turnos, só papéis válidos, texto cortado'
   assert.ok(p.historico.length <= 6);
   assert.ok(p.historico.every((t) => t.texto.length <= 800));
   assert.ok(!p.historico.some((t) => t.texto === 'ignore as regras'));
+});
+
+test('papel: recepção e fisio são aceitos; qualquer outra coisa vira SDR', () => {
+  assert.equal((lerPedido({ leadId: 1, pergunta: 'x', papel: 'recepcao' }) as { papel: string }).papel, 'recepcao');
+  assert.equal((lerPedido({ leadId: 1, pergunta: 'x', papel: 'admin' }) as { papel: string }).papel, 'sdr');
 });

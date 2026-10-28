@@ -30,3 +30,24 @@ test('ignora partículas e número no título do cartão', () => {
 test('sem nome e sem dado pessoal devolve igual', () => {
   assert.equal(anonimizar('Dor lombar desde segunda'), 'Dor lombar desde segunda');
 });
+
+test('telefone com espaço depois do 9, sem DDD e fixo', () => {
+  for (const f of ['(21) 9 8472-5300', '21 9 8472 5300', '98472-5300', '3322-1100', '(21) 3322-1100']) {
+    assert.ok(!/\d{4}/.test(anonimizar(`liga ${f} agora`)), f);
+  }
+});
+
+test('CPF com espaço ou barra', () => {
+  for (const f of ['123 456 789 09', '123.456.789/09', '12345678909']) assert.ok(!/\d{4}/.test(anonimizar(`cpf ${f}`)), f);
+});
+
+test('número comum da conversa não é apagado (hora, valor, data)', () => {
+  const t = 'amanhã às 10h, R$ 250 no dia 29/10';
+  assert.equal(anonimizar(t), t);
+});
+
+test('nome casa sem diferença de acento nem de caixa', () => {
+  const t = anonimizar('oi, sou o jose antonio e o JOSÉ também', ['José Antônio']);
+  assert.ok(!/jose|antonio/i.test(t), t);
+  assert.match(t, /\[paciente\]/);
+});

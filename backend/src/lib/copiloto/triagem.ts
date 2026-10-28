@@ -30,7 +30,7 @@ export function triarSugestoes(sugestoes: SugestaoDaIa[], ctx: ContextoDoCartao,
     }
     const d = validarProposta(
       { campo: s.campo, valor: s.valor },
-      { etapa: ctx.etapa ?? '', papel, valorAtual: (c) => ctx.valores[c] ?? null, opcoes: (c) => ctx.opcoes[c] ?? null },
+      { etapa: ctx.etapa ?? '', papel, valorAtual: (c) => ctx.valores[c] ?? null, opcoes: (c) => ctx.opcoes[c] ?? null, ehLista: (c) => !!ctx.ehLista[c] },
     );
     if (d.acao === 'propor') aceitas.push({ campo: canon!, valor: s.valor, porque: s.porque });
     else recusadas.push({ campo: canon ?? s.campo, motivo: d.motivo });

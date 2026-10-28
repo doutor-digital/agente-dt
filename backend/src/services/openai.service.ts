@@ -23,6 +23,8 @@ interface ModelPrice {
 
 const MODEL_PRICES: Record<string, ModelPrice> = {
   'gpt-4o-mini': { inputPer1M: 0.15, outputPer1M: 0.6 },
+  // Copiloto da recepção (28/10/2026)
+  'gpt-4.1-mini': { inputPer1M: 0.4, outputPer1M: 1.6 },
   'gpt-4o': { inputPer1M: 2.5, outputPer1M: 10 },
   'gpt-4o-2024-11-20': { inputPer1M: 2.5, outputPer1M: 10 },
   'gpt-4-turbo': { inputPer1M: 10, outputPer1M: 30 },

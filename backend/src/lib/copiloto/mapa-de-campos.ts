@@ -149,8 +149,12 @@ export interface ContextoDeValidacao {
   papel?: PapelDeQuemUsa;
   /** Valor que o campo já tem no cartão (null/vazio = vazio). */
   valorAtual?: (campo: string) => string | null | undefined;
-  /** Opções válidas quando o campo é uma lista; sem isso, não confere. */
+  /** Opções válidas quando o campo é uma lista. */
   opcoes?: (campo: string) => string[] | null | undefined;
+  /** O campo é uma lista? Sem opções conhecidas de uma lista, o valor é recusado (não dá para conferir). */
+  ehLista?: (campo: string) => boolean;
+  /** Aceita também campos das etapas para onde o lead pode ir (padrão: NÃO — só a etapa atual). */
+  incluirProximas?: boolean;
 }
 
 /** O portão: devolve se a proposta pode seguir ao revisor, com o motivo em português simples. */
@@ -161,7 +165,7 @@ export function validarProposta(p: PropostaDeCampo, ctx: ContextoDeValidacao): D
   const nome = nomeCanonico(p.campo)!;
 
   const daEtapa = (camposDaEtapa(ctx.etapa)).some((c) => c.nome === nome);
-  const dasProximas = proximasEtapas(ctx.etapa).some((e) => camposDaEtapa(e).some((c) => c.nome === nome));
+  const dasProximas = !!ctx.incluirProximas && proximasEtapas(ctx.etapa).some((e) => camposDaEtapa(e).some((c) => c.nome === nome));
   if (!daEtapa && !dasProximas) {
     const onde = etapasQueListamOCampo(nome);
     return { acao: 'recusar', motivo: onde.length ? `Esse campo é da etapa ${onde[0]}, não desta.` : 'Esse campo não é de nenhuma etapa em que a SDR trabalha.' };
@@ -173,8 +177,10 @@ export function validarProposta(p: PropostaDeCampo, ctx: ContextoDeValidacao): D
   }
 
   const lista = ctx.opcoes?.(nome);
-  if (lista && lista.length && !lista.some((o) => norm(o) === norm(p.valor))) {
-    return { acao: 'recusar', motivo: `"${p.valor}" não é uma opção da lista deste campo.` };
+  if (lista && lista.length) {
+    if (!lista.some((o) => norm(o) === norm(p.valor))) return { acao: 'recusar', motivo: `"${p.valor}" não é uma opção da lista deste campo.` };
+  } else if (ctx.ehLista?.(nome)) {
+    return { acao: 'recusar', motivo: 'Esse campo é uma lista e eu não consegui ler as opções dele, então não sugiro valor.' };
   }
   return { acao: 'propor', motivo: 'Pode seguir para a conferência do revisor.' };
 }
