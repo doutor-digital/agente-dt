@@ -20,6 +20,65 @@ export function telefoneMascarado(tel: string): string {
   return `+${tel.slice(0, 2)} ${tel.slice(2, 4)} 9••••-••${tel.slice(-2)}`;
 }
 
+/** Quantas pessoas a tabela por pessoa mostra no máximo; passando disso a página avisa que cortou. */
+export const LIMITE_DA_TABELA = 200;
+
+/** Uma linha da tabela por pessoa. Só o que já está no banco: nada de entregue/lida (isso depende do webhook de status da Meta). */
+export interface LinhaDoDestinatario {
+  nome: string;
+  telefone: string;
+  estado: string;
+  motivo: string | null;
+  enviadoEm: Date | null;
+  /** modo seco: quando o "receberia" foi gravado (não é envio) */
+  simuladoEm: Date | null;
+  kommoLeadId: number | null;
+}
+
+/** O que a ordenação precisa além da linha: quando a pessoa foi atualizada e criada. */
+export type LinhaOrdenavel = Pick<LinhaDoDestinatario, 'estado' | 'enviadoEm'> & { atualizadoEm: Date; criadoEm: Date };
+
+/** 0 = enviados (e enviando), 1 = falhas e descartes, 2 = pendentes (inclui os adiados e o seco). */
+function grupoDoEstado(estado: string): number {
+  if (estado === 'enviado' || estado === 'enviando') return 0;
+  if (estado === 'pendente') return 2;
+  return 1;
+}
+
+/**
+ * Mostra: enviados (o mais recente primeiro), depois falhas/saídas/descartes (o mais recente primeiro) e, por fim, os
+ * pendentes na ordem da fila. Quando passa do `limite`, a PRIORIDADE de quem fica é outra: falhas primeiro (é o que o
+ * João precisa ver e quase nunca são muitas), depois enviados, depois pendentes. Assim 300 enviados não escondem 3 falhas.
+ * Pura: a tela busca um pedaço de cada grupo e esta função decide.
+ */
+export function ordenarDestinatarios<T extends LinhaOrdenavel>(linhas: T[], limite = LIMITE_DA_TABELA): T[] {
+  // Enviado vale a hora do envio; falha/SAIR/descarte valem a última atualização (é quando aconteceu), como na consulta.
+  const quando = (l: T) => (grupoDoEstado(l.estado) === 0 ? (l.enviadoEm ?? l.atualizadoEm) : l.atualizadoEm).getTime();
+  const dentroDoGrupo = (a: T, b: T) => (grupoDoEstado(a.estado) === 2 ? a.criadoEm.getTime() - b.criadoEm.getTime() : quando(b) - quando(a));
+  const porGrupo = [0, 1, 2].map((g) => linhas.filter((l) => grupoDoEstado(l.estado) === g).sort(dentroDoGrupo));
+  let sobra = limite;
+  const fica = new Map<number, T[]>();
+  for (const g of [1, 0, 2]) {
+    const pegou = porGrupo[g]!.slice(0, Math.max(0, sobra));
+    fica.set(g, pegou);
+    sobra -= pegou.length;
+  }
+  return [...fica.get(0)!, ...fica.get(1)!, ...fica.get(2)!];
+}
+
+/** O motivo vem do banco (texto da Meta, erro interno): número comprido de telefone não circula pela página. */
+export function motivoSemNumero(motivo: string | null | undefined): string {
+  return String(motivo ?? '').replace(/\+?\d(?:[\s().-]?\d){9,}/g, '••••');
+}
+
+const horaDeSaoPaulo = (d: Date) => d.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+
+/** Link do cartão no Kommo (mesmo padrão da ponte). Sem subdomínio válido, só o número. */
+export function linkDoCartao(subdominio: string | null | undefined, leadId: number | null): string | null {
+  if (!leadId || !subdominio || !/^[a-z0-9-]+$/i.test(subdominio)) return null;
+  return `https://${subdominio}.kommo.com/leads/detail/${leadId}`;
+}
+
 export interface DadosDoPainel {
   onda: {
     id: string;
@@ -50,6 +109,12 @@ export interface DadosDoPainel {
   /** quantas já têm o "receberia" gravado pelo modo seco */
   simulados: number;
   amostra: Array<{ nome: string; telefone: string }>;
+  /** a tabela por pessoa (já na ordem de `ordenarDestinatarios` e cortada em LIMITE_DA_TABELA) */
+  destinatarios?: LinhaDoDestinatario[];
+  /** quantas pessoas a onda tem no banco, para avisar quando a tabela cortou */
+  destinatariosTotal?: number;
+  /** subdomínio do Kommo da unidade, para montar o link do cartão */
+  kommoSubdominio?: string | null;
   /** quem recebeu a campanha nesta unidade e pediu SAIR (primeiro nome + o que escreveu) */
   saidas?: QuemSaiu[];
   conferenciaMeta: { ok: boolean; motivo?: string } | null;
@@ -77,6 +142,33 @@ function avisoDoModo(d: DadosDoPainel): string {
   }
   const teste = d.listaDeTeste ? ` Há lista de teste: só ${d.listaDeTeste.length} número(s) recebem de verdade (${d.listaDeTeste.map(telefoneMascarado).map(esc).join(', ')}).` : ' Esta unidade está com <code>*</code>: TODOS os aprovados recebem.';
   return `<div class="faixa vivo"><b>UNIDADE LIGADA.</b> Aprovando, as mensagens saem sozinhas dentro da janela e dos tetos abaixo.${teste}</div>`;
+}
+
+const ROTULO_DO_ESTADO: Record<string, { texto: string; classe: string }> = {
+  enviado: { texto: 'enviado', classe: 'bom' },
+  enviando: { texto: 'enviando…', classe: 'mudo' },
+  falhou: { texto: 'FALHOU', classe: 'ruim' },
+  saiu: { texto: 'pediu SAIR', classe: 'ruim' },
+  descartado: { texto: 'descartado', classe: 'ruim' },
+  pendente: { texto: 'pendente', classe: 'mudo' },
+};
+
+function tabelaPorPessoa(d: DadosDoPainel): string {
+  const linhas = d.destinatarios ?? [];
+  if (!linhas.length) return '<p class="mudo">Sem destinatários.</p>';
+  const corpo = linhas
+    .map((p) => {
+      const r = ROTULO_DO_ESTADO[p.estado] ?? { texto: p.estado, classe: 'mudo' };
+      // Seco: a pessoa segue pendente com o "receberia" gravado. Dizer isso, em vez de mostrar uma hora que pareça envio.
+      const hora = p.enviadoEm ? horaDeSaoPaulo(p.enviadoEm) : p.simuladoEm ? `receberia (seco) ${horaDeSaoPaulo(p.simuladoEm)}` : '—';
+      const url = linkDoCartao(d.kommoSubdominio, p.kommoLeadId);
+      const cartao = p.kommoLeadId ? (url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${p.kommoLeadId}</a>` : String(p.kommoLeadId)) : '—';
+      return `<tr><td class="esq">${esc(p.nome)}</td><td class="esq">${esc(telefoneMascarado(p.telefone))}</td><td class="esq ${r.classe}">${esc(r.texto)}</td><td class="esq">${esc(hora)}</td><td class="esq">${p.motivo ? esc(motivoSemNumero(p.motivo)) : '<span class="mudo">—</span>'}</td><td class="esq">${cartao}</td></tr>`;
+    })
+    .join('');
+  const total = d.destinatariosTotal ?? linhas.length;
+  const aviso = total > linhas.length ? `<p class="aviso">Mostrando ${linhas.length} de ${total} pessoas (enviados primeiro, depois falhas, depois pendentes). As outras ${total - linhas.length} não cabem na tabela.</p>` : '';
+  return `${aviso}<div class="rolar"><table><thead><tr><th class="esq">Nome</th><th class="esq">Telefone</th><th class="esq">Estado</th><th class="esq">Hora (São Paulo)</th><th class="esq">Motivo</th><th class="esq">Cartão no Kommo</th></tr></thead><tbody>${corpo}</tbody></table></div>`;
 }
 
 export function montarPainelDaOnda(d: DadosDoPainel): string {
@@ -135,7 +227,7 @@ main{max-width:860px;margin:0 auto;display:flex;flex-direction:column;gap:26px}h
 .fatos{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}.fatos div{background:var(--painel);border-radius:6px;padding:12px 14px;display:flex;flex-direction:column}.fatos b{font-size:1.5rem;font-variant-numeric:tabular-nums}.fatos span{color:var(--mudo);font-size:.88rem}
 .faixa{border-radius:6px;padding:12px 14px;border:2px solid}.faixa.seco{border-color:var(--aviso);background:var(--painel)}.faixa.vivo{border-color:var(--ruim);background:var(--painel)}
 .zap{background:var(--painel);border-left:4px solid var(--rosa);border-radius:6px;padding:14px 16px;white-space:pre-wrap;margin:8px 0}
-table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}th,td{padding:7px 9px;border-bottom:1px solid var(--linha);text-align:right}th{font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:var(--mudo)}.esq{text-align:left}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}th,td{padding:7px 9px;border-bottom:1px solid var(--linha);text-align:right}th{font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:var(--mudo)}.esq{text-align:left}.rolar{overflow-x:auto}.rolar td,.rolar th{font-size:.85rem}.aviso{color:var(--aviso);font-weight:700}a{color:var(--rosa)}
 ul{margin:0;padding-left:1.2em}.acoes{display:flex;flex-wrap:wrap;gap:12px;align-items:center}button{font:inherit;font-weight:700;border:0;border-radius:6px;padding:12px 20px;background:var(--rosa);color:#fff;cursor:pointer}button.sec{background:var(--painel);color:var(--tinta);border:1px solid var(--linha)}button:disabled{opacity:.45;cursor:not-allowed}
 </style></head><body><main>
 <header><div class="olho">Disparo de campanha · aprovação</div><h1>${esc(d.campanhaNome)} · ${esc(d.unidade.nome)}</h1>
@@ -146,6 +238,7 @@ ${pausa}${quem}${retomada}
 <section><h2>O texto que cada pessoa vai ler</h2>${midia}${exemplos.map((t) => `<div class="zap">${esc(t)}</div>`).join('') || '<p class="mudo">Sem destinatários para exemplificar.</p>'}<p class="mudo">Três exemplos, com o primeiro nome de cada uma já no lugar.</p>${meta}</section>
 <section><h2>Quem ficou de fora, e por quê</h2>${tabelaFora}${d.resumo.foraDoKommoDividido ? `<p class="mudo">${d.resumo.foraDoKommoDividido} cartão(ões) são de outra unidade que divide este Kommo.</p>` : ''}</section>
 <section><h2>Amostra de quem vai receber</h2>${amostra}<p class="mudo">${contagem ? `Estado de todos: ${contagem}.` : ''}</p></section>
+<section><h2>Pessoa por pessoa</h2>${tabelaPorPessoa(d)}<p class="mudo">Hora do envio no fuso de São Paulo. “Entregue”, “lida” e “respondeu” não aparecem aqui: dependem do aviso de status da Meta, que esta tela ainda não lê.</p></section>
 ${blocoOferta}
 ${tabelaSaidas}
 <section><h2>Os freios</h2><ul>
