@@ -11,8 +11,11 @@ const CPF = /(?<!\d)\d{3}[.\s]?\d{3}[.\s]?\d{3}[-/\s]?\d{2}(?!\d)/g;
 // (21) 98472-5300 · (21) 9 8472-5300 · 21 9 8472 5300 · +55 21 98472-5300 · 98472-5300 · 3322-1100 (DDD e o 9 são opcionais)
 const TELEFONE = /(?<!\d)(?:\+?55[\s.-]?)?(?:\(?\d{2}\)?[\s.-]?)?9?[\s.-]?\d{4}[\s.-]?\d{4}(?!\d)/g;
 
-/** Uma letra de entrada → uma letra de saída (sem acento, minúscula): o texto dobrado tem o mesmo tamanho do original. */
-const dobra = (s: string) => Array.from(s).map((c) => c.normalize('NFD')[0]!.toLowerCase()).join('');
+/**
+ * Uma unidade UTF-16 de entrada → uma de saída (sem acento, minúscula): o texto dobrado tem SEMPRE o mesmo tamanho do
+ * original, mesmo com emoji (que ocupa duas unidades). Por isso é `split('')` e não `Array.from`.
+ */
+const dobra = (s: string) => s.split('').map((c) => c.normalize('NFD')[0]!.toLowerCase()).join('');
 
 /** Palavras do nome que valem trocar: 3+ letras e fora de partículas comuns. */
 function partesDoNome(nomes: string[]): string[] {

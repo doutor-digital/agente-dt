@@ -51,3 +51,12 @@ test('nome casa sem diferença de acento nem de caixa', () => {
   assert.ok(!/jose|antonio/i.test(t), t);
   assert.match(t, /\[paciente\]/);
 });
+
+test('emoji antes do nome não desalinha a troca (nada do nome vaza)', () => {
+  for (const t of ['🙏🙏 Obrigada, aqui é a Maria Souza', '😍😍😍😍😍 Maria aqui', 'oi 👍🏽 sou a Maria Souza, tudo bem?']) {
+    const r = anonimizar(t, ['Maria Souza']);
+    assert.ok(!/maria|souza|\bi\b.*za|nanda/i.test(r), r);
+    assert.match(r, /\[paciente\]/);
+  }
+  assert.ok(anonimizar('😍😍😍😍😍 Fernanda aqui', ['Fernanda Lima']).includes('[paciente] aqui'));
+});

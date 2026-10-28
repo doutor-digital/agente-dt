@@ -40,7 +40,8 @@ async function estruturaDaConta(unit: Pick<Unit, 'id'>, kommo: KommoClient) {
 export async function copilotoPerguntarHandler(req: Request, res: Response): Promise<void> {
   const unit = await unidadeDaPonte(req, res, LIMITE);
   if (!unit) return;
-  if (!env.COPILOTO_UNIDADES.includes(unit.slug)) {
+  // vazio = desligado em toda a rede (sem nenhuma chamada ao Kommo)
+  if (!env.COPILOTO_UNIDADES.length) {
     res.status(404).json({ error: 'copiloto não liberado para esta unidade' });
     return;
   }
@@ -55,14 +56,13 @@ export async function copilotoPerguntarHandler(req: Request, res: Response): Pro
   }
 
   try {
-    // Kommo dividido (Petrópolis × Caxias): o cartão vive na conta da dona, e só a unidade DONA do cartão pode perguntar
+    // Kommo dividido (Petrópolis × Caxias): o widget chega SEMPRE pela unidade dona da conta, para os cartões das duas.
+    // A unidade EFETIVA é a do cartão (campo ⌂ Unidade de atendimento); é ela que precisa estar liberada. Para quem só LÊ,
+    // cartão sem unidade e unidade sem franquia não impedem: valem a unidade do pedido e o Kommo da conta.
     const dono = await unidadeParaOCartao(unit, pedido.leadId);
-    if (dono.tipo === 'recusa') {
-      res.status(409).json({ error: dono.motivo });
-      return;
-    }
-    if (dono.tipo === 'unidade' && dono.unit.id !== unit.id) {
-      res.status(403).json({ error: 'este cartão é de outra unidade' });
+    const efetiva: Pick<Unit, 'id' | 'slug'> = dono.tipo === 'unidade' ? dono.unit : unit;
+    if (!env.COPILOTO_UNIDADES.includes(efetiva.slug)) {
+      res.status(404).json({ error: 'copiloto não liberado para esta unidade' });
       return;
     }
     const conta = await contaDoKommo(unit);
@@ -97,12 +97,12 @@ export async function copilotoPerguntarHandler(req: Request, res: Response): Pro
         // nome, telefone, e-mail e CPF saem de TUDO (conversa, pergunta, histórico e valores dos campos) dentro de `responderAoCopiloto`
         { ctx, conversa, pergunta: pedido.pergunta, historico: pedido.historico, papel: pedido.papel, nomes },
       );
-      void recordLlmCall({ unitId: unit.id, traceId: null, provider: 'openai', model: env.COPILOTO_MODELO, promptTokens: uso.promptTokens, completionTokens: uso.completionTokens, latencyMs: Math.round(performance.now() - inicio), status: 'success' });
+      void recordLlmCall({ unitId: efetiva.id, traceId: null, provider: 'openai', model: env.COPILOTO_MODELO, promptTokens: uso.promptTokens, completionTokens: uso.completionTokens, latencyMs: Math.round(performance.now() - inicio), status: 'success' });
       // só números no log: nada de conversa nem de pergunta
-      logger.info({ unit: unit.slug, leadId: pedido.leadId, etapa: ctx.etapaNome, sugestoes: r.saida.sugestoes.length, recusadas: r.saida.naoSugeri.length, tokens: uso.promptTokens + uso.completionTokens }, 'copiloto: pergunta respondida');
+      logger.info({ unit: efetiva.slug, leadId: pedido.leadId, etapa: ctx.etapaNome, sugestoes: r.saida.sugestoes.length, recusadas: r.saida.naoSugeri.length, tokens: uso.promptTokens + uso.completionTokens }, 'copiloto: pergunta respondida');
       res.json({ leadId: pedido.leadId, ...r.saida });
     } catch (err) {
-      void recordLlmCall({ unitId: unit.id, traceId: null, provider: 'openai', model: env.COPILOTO_MODELO, latencyMs: Math.round(performance.now() - inicio), status: 'error', errorMessage: String(err).slice(0, 300) });
+      void recordLlmCall({ unitId: efetiva.id, traceId: null, provider: 'openai', model: env.COPILOTO_MODELO, latencyMs: Math.round(performance.now() - inicio), status: 'error', errorMessage: String(err).slice(0, 300) });
       throw err;
     }
   } catch (err) {

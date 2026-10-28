@@ -207,3 +207,22 @@ test('REVISÃO: "falta" não é confundido com o campo Alta (palavra inteira)', 
   const { saida } = await responderAoCopiloto(modelo({ resposta: 'Para mover, falta o valor. Marque quando puder.', sugestoes: [] }), { ctx, conversa, pergunta: 'o que falta?' });
   assert.equal(saida.resposta, 'Para mover, falta o valor. Marque quando puder.');
 });
+
+test('REVISÃO: filtro pega ordens sem o verbo de sempre e deixa frases normais em paz', async () => {
+  const ctx = montarContextoDoCartao(lead(10), funis, defs);
+  const roda = async (resposta: string) => (await responderAoCopiloto(modelo({ resposta, sugestoes: [] }), { ctx, conversa, pergunta: 'x' })).saida.resposta;
+  // proibidas que antes passavam
+  assert.match(await roda('Deixe a Data da Consulta como 29/10 às 10h.'), /^Sobre ◷ Data da Consulta/);
+  assert.match(await roda('Ajuste a Data da Consulta para 29/10.'), /^Sobre ◷ Data da Consulta/);
+  assert.match(await roda('Data da Consulta: 29/10 às 10h.'), /^Sobre ◷ Data da Consulta/);
+  // normais que antes eram trocadas à toa
+  for (const ok of ['Por isso, a chance de ele marcar é alta.', 'Não prometa resultado, por favor.', 'Pergunte por telefone qual é a cidade dele.']) assert.equal(await roda(ok), ok);
+});
+
+test('REVISÃO: explicar o que falta para MOVER de etapa passa; mandar preencher campo de etapa à frente sem falar em mover é trocado', async () => {
+  const ctx = montarContextoDoCartao(lead(10), funis, defs);
+  const roda = async (resposta: string) => (await responderAoCopiloto(modelo({ resposta, sugestoes: [] }), { ctx, conversa, pergunta: 'x' })).saida.resposta;
+  const explica = 'Para mover para AGENDADO, preencha o Valor da Consulta.';
+  assert.equal(await roda(explica), explica);
+  assert.match(await roda('Preencha o Valor da Consulta com 250.'), /etapa mais à frente/);
+});
