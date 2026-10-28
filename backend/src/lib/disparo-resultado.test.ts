@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import {
-  atribuirMeta, contarAgendaram, contarResponderam, custoDaOnda, diasDosEnvios, enviosPorHora, funilDoBanco,
+  atribuirMeta, contarAgendaram, contarResponderam, custoDaOnda, diasDosEnvios, enviosPorHora, funilDoBanco, mensagensPorCartao, umaLinhaPorDia,
   type EnviosDaOnda, type LinhaDeCusto, type LinhaDeTemplate,
 } from './disparo/resultado.js';
 import { CACHE_MS, _limparCache, lerExternos, lerResultado, type Leituras, type PessoaEnviada } from './disparo/resultado-dados.js';
@@ -49,7 +49,7 @@ test('dias dos envios: meia-noite UTC de cada ponta, fim exclusivo no dia seguin
 
 // ── Meta: só atribui quando a conta fecha ───────────────────────────────────────────────────────────────────
 
-const envios = (extra: Partial<EnviosDaOnda> = {}): EnviosDaOnda => ({ confirmados: 100, incertos: 0, deOutrasOndas: 0, ...extra });
+const envios = (extra: Partial<EnviosDaOnda> = {}): EnviosDaOnda => ({ confirmados: 100, incertos: 0, deOutrasOndas: 0, deOutrasOndasDoModelo: 0, ...extra });
 const tpl = (extra: Partial<LinhaDeTemplate> = {}): LinhaDeTemplate => ({ sent: 100, delivered: 92, read: 61, syncedAt: D('2026-10-29T03:00:00Z'), ...extra });
 const cst = (extra: Partial<LinhaDeCusto> = {}): LinhaDeCusto => ({ pricingCategory: 'MARKETING', volume: 92, costUsd: 4.5, syncedAt: D('2026-10-29T03:00:00Z'), ...extra });
 
@@ -87,11 +87,33 @@ test('Meta: o envio incerto cabe no teto (pode ter saído), mas o piso é o conf
   assert.match(atrasado.motivoEntregues!, /ainda não contou todos os envios \(90 de 100\)/);
 });
 
-test('Meta: outra onda da mesma conta nos mesmos dias → nada é atribuído (a Meta soma as duas)', () => {
-  const m = atribuirMeta(envios({ deOutrasOndas: 20 }), [tpl()], [cst()]);
+test('Meta: outra onda com o MESMO modelo nos mesmos dias → nada é atribuído (a Meta soma as duas)', () => {
+  const m = atribuirMeta(envios({ deOutrasOndas: 20, deOutrasOndasDoModelo: 20 }), [tpl()], [cst()]);
   assert.equal(m.entregues, null);
   assert.equal(m.custoUsd, null);
-  assert.match(m.motivoEntregues!, /outra onda da mesma conta[\s\S]*20/);
+  assert.match(m.motivoEntregues!, /outra onda da mesma conta[\s\S]*20[\s\S]*mesmo modelo/);
+});
+
+test('Meta: outra onda com OUTRO modelo não suja o entregue (a Meta separa por modelo), mas suja o custo (é por categoria)', () => {
+  const m = atribuirMeta(envios({ deOutrasOndas: 20, deOutrasOndasDoModelo: 0 }), [tpl()], [cst()]);
+  assert.equal(m.entregues, 92);
+  assert.equal(m.lidas, 61);
+  assert.equal(m.custoUsd, null);
+  assert.match(m.motivoCusto!, /outra onda da mesma conta[\s\S]*20[\s\S]*categoria/);
+});
+
+test('modelo: dia com a linha do idioma E a "não segmentada" vale a do idioma (somar dobraria o sent)', () => {
+  const d1 = D('2026-10-28T00:00:00Z');
+  const d2 = D('2026-10-29T00:00:00Z');
+  const linhas = [
+    tpl({ date: d1, language: '', sent: 60 }), tpl({ date: d1, language: 'pt_BR', sent: 60 }),
+    tpl({ date: d2, language: '', sent: 40 }), // só a vazia neste dia: vale
+    tpl({ date: D('2026-10-30T00:00:00Z'), language: 'en_US', sent: 5 }), // outro idioma: quem consulta já filtra, aqui só não duplica
+  ];
+  const r = umaLinhaPorDia(linhas, 'pt_BR');
+  assert.equal(r.length, 3);
+  assert.equal(r.filter((l) => l.date === d1)[0]!.language, 'pt_BR');
+  assert.equal(r.filter((l) => l.date === d2)[0]!.language, '');
 });
 
 test('Meta: onda sem envio confirmado não tem o que medir', () => {
@@ -143,6 +165,19 @@ test('respondeu: só vale a mensagem DEPOIS do envio dela; quem escreveu antes d
     [99, [t('2026-10-28T13:00:00Z')]], // cartão que não é da onda
   ]);
   assert.equal(contarResponderam(pessoas, entradas), 1);
+});
+
+test('respondeu: dois cartões do mesmo contato recebem ambos as respostas (o mapa não perde um deles)', () => {
+  const eventos = [
+    { leadId: 10, tipo: 'entrada' as const, em: 1000 },
+    { leadId: 10, tipo: 'saida' as const, em: 1001 }, // o que a gente mandou não é resposta
+    { leadId: 20, tipo: 'entrada' as const, em: 2000 },
+  ];
+  const r = mensagensPorCartao(new Map([[10, 777], [11, 777], [20, 888]]), eventos);
+  assert.deepEqual(r.get(10), [1000]);
+  assert.equal(r.has(11), false, 'o cartão 11 não tem evento próprio quando o Kommo devolve o id do cartão');
+  const pelaContato = mensagensPorCartao(new Map([[10, 777], [11, 777]]), [{ leadId: 777, tipo: 'entrada', em: 5 }]);
+  assert.deepEqual([...pelaContato.keys()].sort(), [10, 11], 'se o evento vier com o id do contato, vale para os dois cartões');
 });
 
 // ── franquia: agendou ────────────────────────────────────────────────────────────────────────────────────────
@@ -248,9 +283,10 @@ afterEach(() => {
 });
 
 interface Cenario {
-  template?: Array<{ sent: number; delivered: number; read: number; syncedAt: Date }>;
+  template?: Array<{ date?: Date; language?: string; sent: number; delivered: number; read: number; syncedAt: Date }>;
   custo?: Array<{ pricingCategory: string; volume: number; costUsd: number; syncedAt: Date }>;
   outrasOndas?: number;
+  outrasDoModelo?: number;
 }
 
 function bancoDeMentira(c: Cenario = {}) {
@@ -270,7 +306,7 @@ function bancoDeMentira(c: Cenario = {}) {
     groupBy: async (a: never) => (registrar('disparoDestinatario', 'groupBy', a), [{ estado: 'enviado', _count: 2 }, { estado: 'saiu', _count: 1 }, { estado: 'pendente', _count: 7 }]),
     count: async (a: { where: Record<string, unknown> }) => {
       registrar('disparoDestinatario', 'count', a);
-      if ('ondaId' in a.where && typeof a.where.ondaId === 'object') return c.outrasOndas ?? 0; // ondaId: { not }
+      if ('ondaId' in a.where && typeof a.where.ondaId === 'object') return 'onda' in a.where ? (c.outrasDoModelo ?? 0) : (c.outrasOndas ?? 0); // ondaId: { not }
       if (a.where.estado === 'saiu') return 1;
       if (a.where.estado === 'falhou') return 0;
       return 2; // freios: o que a unidade mandou na janela
@@ -291,7 +327,7 @@ test('resultado: onda que não existe → null (o handler responde 404)', async 
 
 test('resultado: formato do contrato, números do banco/Kommo/Meta e NENHUM telefone na resposta', async () => {
   const { consultas } = bancoDeMentira({
-    template: [{ sent: 3, delivered: 3, read: 2, syncedAt: D('2026-10-29T03:00:00Z') }],
+    template: [{ date: D('2026-10-28T00:00:00Z'), language: 'pt_BR', sent: 3, delivered: 3, read: 2, syncedAt: D('2026-10-29T03:00:00Z') }],
     custo: [{ pricingCategory: 'MARKETING', volume: 3, costUsd: 0.1, syncedAt: D('2026-10-29T03:00:00Z') }],
   });
   const r = (await lerResultado('o1', leituras()))!;
@@ -338,8 +374,8 @@ test('resultado: tabelas da Meta vazias → entregues/lidas/custo null, fonte "i
   assert.equal(r.funil.enviados, 3);
 });
 
-test('resultado: outra onda da mesma conta nos mesmos dias → a Meta não é atribuída', async () => {
-  bancoDeMentira({ outrasOndas: 30, template: [{ sent: 33, delivered: 30, read: 10, syncedAt: D('2026-10-29T03:00:00Z') }], custo: [{ pricingCategory: 'MARKETING', volume: 30, costUsd: 1, syncedAt: D('2026-10-29T03:00:00Z') }] });
+test('resultado: outra onda com o mesmo modelo nos mesmos dias → a Meta não é atribuída', async () => {
+  bancoDeMentira({ outrasOndas: 30, outrasDoModelo: 30, template: [{ sent: 33, delivered: 30, read: 10, syncedAt: D('2026-10-29T03:00:00Z') }], custo: [{ pricingCategory: 'MARKETING', volume: 30, costUsd: 1, syncedAt: D('2026-10-29T03:00:00Z') }] });
   const r = (await lerResultado('o1', leituras()))!;
   assert.equal(r.funil.entregues, null);
   assert.equal(r.custo.usd, null);

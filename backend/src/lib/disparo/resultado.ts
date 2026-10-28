@@ -64,11 +64,16 @@ export interface EnviosDaOnda {
   confirmados: number;
   /** `falhou` COM hora de envio: a Meta pode ter aceitado (o envio incerto) */
   incertos: number;
-  /** envios de OUTRAS ondas das unidades da mesma conta (WABA) dentro dos dias desta */
+  /** envios de OUTRAS ondas das unidades da mesma conta (WABA) dentro dos dias desta, de qualquer modelo (afeta o custo, que é por categoria) */
   deOutrasOndas: number;
+  /** o mesmo, só dos que usaram o MESMO modelo (afeta o `sent` do modelo) */
+  deOutrasOndasDoModelo: number;
 }
 
 export interface LinhaDeTemplate {
+  /** dia (UTC) e idioma da linha: a tabela tem uma por (dia, modelo, idioma) */
+  date?: Date;
+  language?: string;
   sent: number;
   delivered: number;
   read: number;
@@ -93,6 +98,20 @@ export interface MetaDaOnda {
   motivoCusto: string | null;
 }
 
+/**
+ * A tabela guarda uma linha por (dia, modelo, idioma), e o idioma pode vir vazio ("não segmentado"). Se o mesmo dia tem a do
+ * idioma da onda E a vazia, vale a do idioma da onda: somar as duas dobraria o `sent`.
+ */
+export function umaLinhaPorDia<T extends LinhaDeTemplate>(linhas: ReadonlyArray<T>, idioma: string): T[] {
+  const porDia = new Map<number, T>();
+  for (const l of linhas) {
+    const dia = l.date?.getTime() ?? 0;
+    const atual = porDia.get(dia);
+    if (!atual || (atual.language !== idioma && l.language === idioma)) porDia.set(dia, l);
+  }
+  return [...porDia.values()];
+}
+
 const soma = (xs: ReadonlyArray<number>) => xs.reduce((s, v) => s + v, 0);
 const maisAntiga = (ds: ReadonlyArray<Date>): Date | null => (ds.length ? new Date(Math.min(...ds.map((d) => d.getTime()))) : null);
 
@@ -111,8 +130,8 @@ const maisAntiga = (ds: ReadonlyArray<Date>): Date | null => (ds.length ? new Da
 export function atribuirMeta(envios: EnviosDaOnda, template: ReadonlyArray<LinhaDeTemplate>, custo: ReadonlyArray<LinhaDeCusto>, semNada: { template: boolean; custo: boolean } = { template: false, custo: false }): MetaDaOnda {
   const vazio = (motivoEntregues: string, motivoCusto: string = motivoEntregues): MetaDaOnda => ({ entregues: null, lidas: null, entreguesAtualizadoEm: null, custoUsd: null, custoAtualizadoEm: null, motivoEntregues, motivoCusto });
   if (envios.confirmados === 0) return vazio('ninguém recebeu ainda: não há o que medir na Meta');
-  if (envios.deOutrasOndas > 0) {
-    return vazio(`outra onda da mesma conta do WhatsApp mandou ${envios.deOutrasOndas} mensagem(ns) nos mesmos dias: a Meta soma tudo por dia e não dá para separar`);
+  if (envios.deOutrasOndasDoModelo > 0) {
+    return vazio(`outra onda da mesma conta do WhatsApp mandou ${envios.deOutrasOndasDoModelo} mensagem(ns) com este mesmo modelo nos mesmos dias: a Meta soma tudo por dia e por modelo e não dá para separar`);
   }
   const possiveis = envios.confirmados + envios.incertos;
 
@@ -141,7 +160,9 @@ export function atribuirMeta(envios: EnviosDaOnda, template: ReadonlyArray<Linha
   let custoAtualizadoEm: Date | null = null;
   let motivoCusto: string | null = null;
   const marketing = custo.filter((l) => l.pricingCategory.toUpperCase().startsWith('MARKETING'));
-  if (entregues === null) {
+  if (envios.deOutrasOndas > 0) {
+    motivoCusto = `outra onda da mesma conta do WhatsApp mandou ${envios.deOutrasOndas} mensagem(ns) nos mesmos dias: a Meta cobra marketing por categoria e dia, e não dá para separar`;
+  } else if (entregues === null) {
     motivoCusto = 'sem o número de entregues conferido não dá para saber se a cobrança da Meta já fechou: ' + (motivoEntregues ?? '');
   } else if (marketing.length === 0) {
     motivoCusto = semNada.custo
@@ -170,6 +191,26 @@ export function diasDosEnvios(primeiro: Date, ultimo: Date): { de: Date; ate: Da
 }
 
 // ── Kommo: respondeu ───────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Distribui as mensagens recebidas pelos cartões. Um contato pode ter MAIS DE UM cartão da onda: as respostas valem para todos
+ * eles (um mapa invertido contato→cartão perderia todos menos um). `eventosDeChat` devolve o id do cartão (é assim que o placar
+ * do Outubro Rosa o lê); se um dia devolver o do contato, casa do mesmo jeito.
+ */
+export function mensagensPorCartao(
+  contatoDoCartao: ReadonlyMap<number, number>,
+  eventos: ReadonlyArray<{ leadId: number; tipo: 'entrada' | 'saida'; em: number }>,
+): Map<number, number[]> {
+  const cartoesDoContato = new Map<number, number[]>();
+  for (const [cartao, contato] of contatoDoCartao) cartoesDoContato.set(contato, [...(cartoesDoContato.get(contato) ?? []), cartao]);
+  const porCartao = new Map<number, number[]>();
+  for (const e of eventos) {
+    if (e.tipo !== 'entrada') continue;
+    const cartoes = contatoDoCartao.has(e.leadId) ? [e.leadId] : (cartoesDoContato.get(e.leadId) ?? []);
+    for (const c of cartoes) porCartao.set(c, [...(porCartao.get(c) ?? []), e.em]);
+  }
+  return porCartao;
+}
 
 /**
  * Quantas pessoas escreveram DEPOIS de receber. `entradas` = hora (epoch s) de cada mensagem recebida, por cartão. Só conta

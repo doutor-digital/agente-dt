@@ -127,6 +127,7 @@ test('motivo da falha não deixa número de telefone passar', () => {
   assert.equal(motivoSemNumero('recusou (63) 99102-1043 agora'), 'recusou •••• agora', 'telefone com DDD entre parênteses também');
   assert.equal(motivoSemNumero('recusou 63 99102 1043'), 'recusou ••••', 'espaços como separador também');
   assert.equal(motivoSemNumero('Meta 131049 wamid.HBgNNTU2Mzk5MTAyMTA0MxUCABEYEjk3 não entregue'), 'Meta 131049 wamid.•••• não entregue', 'o id da mensagem na Meta carrega o telefone codificado');
+  assert.equal(motivoSemNumero('recusado em 2026-10-28 12:30 por 5563991021043'), 'recusado em 2026-10-28 12:30 por ••••', 'data e hora não são telefone');
   assert.ok(!motivoSemNumero('x WAMID.HBgNNTU2Mzk5MTAyMTA0MxUCABEYEjk3=').includes('HBgN'), 'maiúsculas também');
   const html = montarPainelDaOnda(base({ destinatarios: [linha({ estado: 'falhou', motivo: 'recusou 5563991021043' })] }));
   assert.ok(!html.includes('5563991021043'));

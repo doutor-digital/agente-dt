@@ -74,7 +74,8 @@ export function motivoSemNumero(motivo: string | null | undefined): string {
     // o id da mensagem na Meta (wamid.HBgM…) carrega o telefone do destinatário codificado
     .replace(/wamid\.[A-Za-z0-9+/=_-]+/gi, 'wamid.••••')
     // 10+ dígitos com separadores: +55 63 99102-1043, (63) 99102-1043, 63.99102.1043
-    .replace(/\+?\(?\d(?:[\s().-]{0,2}\d){9,}/g, '••••');
+    // (data e hora "2026-10-28 12:30" têm dígitos demais e não são telefone: ficam)
+    .replace(/\+?\(?\d(?:[\s().-]{0,2}\d){9,}/g, (m) => (/^\(?\d{4}-\d{2}-\d{2}/.test(m) ? m : '••••'));
 }
 
 const horaDeSaoPaulo = (d: Date) => d.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });

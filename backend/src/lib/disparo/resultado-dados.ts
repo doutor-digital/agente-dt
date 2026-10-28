@@ -9,14 +9,14 @@ import type { Unit } from '@prisma/client';
 import { prisma } from '../prisma.js';
 import { logger } from '../logger.js';
 import { createKommoClient } from '../../services/kommo.service.js';
-import { searchSchedules } from '../../services/spine.service.js';
+import { searchSchedules, somarDias } from '../../services/spine.service.js';
 import { cotacaoDoDolar } from '../campanha/coleta.js';
 import { dataLocalISO } from '../feriados.js';
 import { fusoDaUnidade } from '../fuso.js';
 import { freiosDoAmbiente } from './freios.js';
 import { modoDaUnidade } from './modo.js';
 import {
-  atribuirMeta, contarAgendaram, contarResponderam, custoDaOnda, diasDosEnvios, enviosPorHora, funilDoBanco,
+  atribuirMeta, contarAgendaram, contarResponderam, mensagensPorCartao, umaLinhaPorDia, custoDaOnda, diasDosEnvios, enviosPorHora, funilDoBanco,
   type AgendamentoNaFranquia,
 } from './resultado.js';
 
@@ -86,16 +86,8 @@ export const LEITURAS_DE_VERDADE: Leituras = {
       const c = l._embedded?.contacts?.find((x) => x.is_main) ?? l._embedded?.contacts?.[0];
       if (c) contatoDoCartao.set(l.id, c.id);
     }
-    const cartaoDoContato = new Map([...contatoDoCartao].map(([lead, contato]) => [contato, lead]));
-    const eventos = await kommo.eventosDeChat([...contatoDoCartao.values()], desdeEpoch);
-    const porCartao = new Map<number, number[]>();
-    for (const e of eventos) {
-      if (e.tipo !== 'entrada') continue;
-      // O Kommo devolve o id do cartão; se um dia devolver o do contato, casa do mesmo jeito.
-      const lead = contatoDoCartao.has(e.leadId) ? e.leadId : cartaoDoContato.get(e.leadId);
-      if (lead !== undefined) porCartao.set(lead, [...(porCartao.get(lead) ?? []), e.em]);
-    }
-    return porCartao;
+    const contatos = [...new Set(contatoDoCartao.values())];
+    return mensagensPorCartao(contatoDoCartao, await kommo.eventosDeChat(contatos, desdeEpoch));
   },
   agenda: async (unit, de, ate) => {
     const r = await searchSchedules(unit, { initialDate: de, endDate: ate, rowsPerPage: 100 });
@@ -103,8 +95,6 @@ export const LEITURAS_DE_VERDADE: Leituras = {
     return r.data.schedules;
   },
 };
-
-const somarDias = (dia: string, n: number) => new Date(new Date(`${dia}T12:00:00Z`).getTime() + n * 86_400_000).toISOString().slice(0, 10);
 
 /** Kommo, franquia e câmbio. Cada fonte falha sozinha: uma fora do ar não derruba as outras. */
 export async function lerExternos(unit: Unit, pessoas: ReadonlyArray<PessoaEnviada>, l: Leituras): Promise<Externos> {
@@ -140,7 +130,7 @@ export async function lerExternos(unit: Unit, pessoas: ReadonlyArray<PessoaEnvia
       else {
         const { agendaram, semConferir } = contarAgendaram(pessoas, agenda);
         out.agendaram = agendaram;
-        out.notaAgendaram = `limite inferior: casa pelo nome inteiro na agenda de avaliações, até ${DIAS_DE_AGENDA} dias depois do 1º envio${semConferir ? `; ${semConferir} pessoa(s) sem nome e sobrenome ou com nome repetido na onda ficaram sem conferir` : ''}`;
+        out.notaAgendaram = `limite inferior: casa pelo nome inteiro na agenda de avaliações, até ${DIAS_DE_AGENDA} dias depois do 1º envio, e supõe que quem já tinha consulta futura foi barrado no envio${semConferir ? `; ${semConferir} pessoa(s) sem nome e sobrenome ou com nome repetido na onda ficaram sem conferir` : ''}`;
       }
     } catch (err) {
       logger.warn({ err: String(err), unit: unit.slug }, 'disparo/resultado: não consegui ler a agenda da franquia');
@@ -208,19 +198,20 @@ export async function lerResultado(ondaId: string, l: Leituras = LEITURAS_DE_VER
   // Meta: entregue/lida/custo por dia e por modelo, atribuídos só quando a conta fecha (ver `atribuirMeta`).
   const primeiro = recebidos._min.enviadoEm;
   const ultimo = recebidos._max.enviadoEm;
-  let meta = atribuirMeta({ confirmados: 0, incertos: 0, deOutrasOndas: 0 }, [], []);
+  let meta = atribuirMeta({ confirmados: 0, incertos: 0, deOutrasOndas: 0, deOutrasOndasDoModelo: 0 }, [], []);
   if (primeiro && ultimo) {
     const { de, ate, fimExclusivo } = diasDosEnvios(primeiro, ultimo);
     const daConta = unit.metaWabaId
       ? (await prisma.unit.findMany({ where: { metaWabaId: unit.metaWabaId }, select: { id: true } })).map((u) => u.id)
       : [unit.id];
-    const [deOutrasOndas, linhasDoModelo, linhasDeCusto] = await Promise.all([
-      prisma.disparoDestinatario.count({
-        where: { unitId: { in: [...new Set([unit.id, ...daConta])] }, ondaId: { not: ondaId }, enviadoEm: { gte: de, lt: fimExclusivo } },
-      }),
+    const deOutras = { unitId: { in: [...new Set([unit.id, ...daConta])] }, ondaId: { not: ondaId }, enviadoEm: { gte: de, lt: fimExclusivo } };
+    const [deOutrasOndas, doMesmoModelo, linhasDoModelo, linhasDeCusto] = await Promise.all([
+      prisma.disparoDestinatario.count({ where: deOutras }),
+      // Outro modelo não entra no `sent` deste (a Meta separa por modelo), mas entra no custo (que é por categoria).
+      prisma.disparoDestinatario.count({ where: { ...deOutras, onda: { template: onda.template } } }),
       prisma.whatsappTemplateDaily.findMany({
         where: { unitId: unit.id, date: { gte: de, lte: ate }, templateName: onda.template, language: { in: [onda.idioma, ''] } },
-        select: { sent: true, delivered: true, read: true, syncedAt: true },
+        select: { date: true, language: true, sent: true, delivered: true, read: true, syncedAt: true },
       }),
       prisma.whatsappCostDaily.findMany({
         where: { unitId: unit.id, date: { gte: de, lte: ate }, pricingCategory: { startsWith: 'MARKETING', mode: 'insensitive' } },
@@ -233,8 +224,8 @@ export async function lerResultado(ondaId: string, l: Leituras = LEITURAS_DE_VER
       custo: linhasDeCusto.length === 0 ? (await prisma.whatsappCostDaily.count({ where: { unitId: unit.id } })) === 0 : false,
     };
     meta = atribuirMeta(
-      { confirmados: recebidos._count, incertos, deOutrasOndas },
-      linhasDoModelo,
+      { confirmados: recebidos._count, incertos, deOutrasOndas, deOutrasOndasDoModelo: doMesmoModelo },
+      umaLinhaPorDia(linhasDoModelo, onda.idioma),
       linhasDeCusto.map((c) => ({ ...c, costUsd: Number(c.costUsd) })),
       semNada,
     );
