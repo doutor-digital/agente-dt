@@ -46,28 +46,32 @@ function grupoDoEstado(estado: string): number {
 }
 
 /**
- * A ordem da tabela: enviados (o mais recente primeiro), depois falhas/saídas/descartes (o mais recente primeiro) e,
- * por fim, os pendentes na ordem da fila. Corta em `limite`. Pura: a tela busca um pedaço de cada grupo e esta função manda.
+ * Mostra: enviados (o mais recente primeiro), depois falhas/saídas/descartes (o mais recente primeiro) e, por fim, os
+ * pendentes na ordem da fila. Quando passa do `limite`, a PRIORIDADE de quem fica é outra: falhas primeiro (é o que o
+ * João precisa ver e quase nunca são muitas), depois enviados, depois pendentes. Assim 300 enviados não escondem 3 falhas.
+ * Pura: a tela busca um pedaço de cada grupo e esta função decide.
  */
 export function ordenarDestinatarios<T extends LinhaOrdenavel>(linhas: T[], limite = LIMITE_DA_TABELA): T[] {
-  const quando = (l: T) => (l.enviadoEm ?? l.atualizadoEm).getTime();
-  return [...linhas]
-    .sort((a, b) => {
-      const ga = grupoDoEstado(a.estado);
-      const gb = grupoDoEstado(b.estado);
-      if (ga !== gb) return ga - gb;
-      if (ga === 2) return a.criadoEm.getTime() - b.criadoEm.getTime();
-      return quando(b) - quando(a);
-    })
-    .slice(0, limite);
+  // Enviado vale a hora do envio; falha/SAIR/descarte valem a última atualização (é quando aconteceu), como na consulta.
+  const quando = (l: T) => (grupoDoEstado(l.estado) === 0 ? (l.enviadoEm ?? l.atualizadoEm) : l.atualizadoEm).getTime();
+  const dentroDoGrupo = (a: T, b: T) => (grupoDoEstado(a.estado) === 2 ? a.criadoEm.getTime() - b.criadoEm.getTime() : quando(b) - quando(a));
+  const porGrupo = [0, 1, 2].map((g) => linhas.filter((l) => grupoDoEstado(l.estado) === g).sort(dentroDoGrupo));
+  let sobra = limite;
+  const fica = new Map<number, T[]>();
+  for (const g of [1, 0, 2]) {
+    const pegou = porGrupo[g]!.slice(0, Math.max(0, sobra));
+    fica.set(g, pegou);
+    sobra -= pegou.length;
+  }
+  return [...fica.get(0)!, ...fica.get(1)!, ...fica.get(2)!];
 }
 
 /** O motivo vem do banco (texto da Meta, erro interno): número comprido de telefone não circula pela página. */
 export function motivoSemNumero(motivo: string | null | undefined): string {
-  return String(motivo ?? '').replace(/\d{10,}/g, '••••');
+  return String(motivo ?? '').replace(/\+?\d(?:[\s().-]?\d){9,}/g, '••••');
 }
 
-const horaDeSaoPaulo = (d: Date) => d.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
+const horaDeSaoPaulo = (d: Date) => d.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 
 /** Link do cartão no Kommo (mesmo padrão da ponte). Sem subdomínio válido, só o número. */
 export function linkDoCartao(subdominio: string | null | undefined, leadId: number | null): string | null {

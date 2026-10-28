@@ -26,8 +26,8 @@ export async function dadosDaTela(ondaId: string, email: string | null | undefin
     onda.estado === 'montando' || onda.estado === 'cancelada' ? Promise.resolve([]) : quemPediuSair(onda.unit, onda.campanhaId),
     // A tabela por pessoa: um pedaço de cada grupo (cada um já na sua ordem), que `ordenarDestinatarios` junta e corta.
     // Só leitura, só colunas que já existem; o índice (ondaId, estado) atende os três.
-    prisma.disparoDestinatario.findMany({ where: { ondaId, estado: { in: ['enviado', 'enviando'] } }, orderBy: [{ enviadoEm: { sort: 'desc', nulls: 'last' } }, { id: 'asc' }], take: LIMITE_DA_TABELA, select: colunas }),
-    prisma.disparoDestinatario.findMany({ where: { ondaId, estado: { in: ['falhou', 'saiu', 'descartado'] } }, orderBy: [{ atualizadoEm: 'desc' }, { id: 'asc' }], take: LIMITE_DA_TABELA, select: colunas }),
+    prisma.disparoDestinatario.findMany({ where: { ondaId, estado: { in: ['enviado', 'enviando'] } }, orderBy: [{ enviadoEm: { sort: 'desc', nulls: 'first' } }, { id: 'asc' }], take: LIMITE_DA_TABELA, select: colunas }),
+    prisma.disparoDestinatario.findMany({ where: { ondaId, estado: { notIn: ['enviado', 'enviando', 'pendente'] } }, orderBy: [{ atualizadoEm: 'desc' }, { id: 'asc' }], take: LIMITE_DA_TABELA, select: colunas }),
     prisma.disparoDestinatario.findMany({ where: { ondaId, estado: 'pendente' }, orderBy: [{ criadoEm: 'asc' }, { id: 'asc' }], take: LIMITE_DA_TABELA, select: colunas }),
   ]);
   const destinatarios = ordenarDestinatarios([...enviados, ...falhas, ...pendentes]).map(({ atualizadoEm: _a, criadoEm: _c, ...linha }) => linha);

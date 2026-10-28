@@ -121,6 +121,8 @@ test('tabela por pessoa: avisa quando cortou e não avisa quando coube', () => {
 
 test('motivo da falha não deixa número de telefone passar', () => {
   assert.equal(motivoSemNumero('Meta 131026: 5563991021043 não tem WhatsApp'), 'Meta 131026: •••• não tem WhatsApp');
+  assert.equal(motivoSemNumero('recusou +55 63 99102-1043 agora'), 'recusou •••• agora', 'telefone formatado também');
+  assert.equal(motivoSemNumero('Meta 131048: spam em 28/10/2026'), 'Meta 131048: spam em 28/10/2026', 'código e data ficam');
   assert.equal(motivoSemNumero(null), '');
   const html = montarPainelDaOnda(base({ destinatarios: [linha({ estado: 'falhou', motivo: 'recusou 5563991021043' })] }));
   assert.ok(!html.includes('5563991021043'));
@@ -141,6 +143,12 @@ test('ordem: enviados (recente primeiro), depois falhas (recente primeiro), depo
   const muitos = Array.from({ length: LIMITE_DA_TABELA + 50 }, (_, i) => l(`p${i}`, 'pendente', null, '2026-10-28T09:00:00Z'));
   assert.equal(ordenarDestinatarios(muitos).length, LIMITE_DA_TABELA);
   assert.equal(LIMITE_DA_TABELA, 200);
+});
+
+test('passando do limite, as falhas ficam e os enviados é que são cortados (mas a ordem na tela segue enviados > falhas)', () => {
+  const l = (nome: string, estado: string, min: number) => ({ nome, estado, enviadoEm: estado === 'enviado' ? D(`2026-10-28T12:${String(min).padStart(2, '0')}:00Z`) : null, atualizadoEm: D(`2026-10-28T12:${String(min).padStart(2, '0')}:00Z`), criadoEm: D('2026-10-28T08:00:00Z') });
+  const r = ordenarDestinatarios([l('e1', 'enviado', 10), l('e2', 'enviado', 20), l('e3', 'enviado', 30), l('f1', 'falhou', 5), l('s1', 'saiu', 6), l('p1', 'pendente', 0)], 4).map((x) => x.nome);
+  assert.deepEqual(r, ['e3', 'e2', 's1', 'f1'], 'cabem 4: as 2 falhas + os 2 enviados mais novos; o pendente e o enviado velho caem');
 });
 
 test('a chave de serviço continua sem o texto do SAIR, e a tabela por pessoa continua lá', () => {
