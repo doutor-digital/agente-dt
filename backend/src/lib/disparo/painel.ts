@@ -36,7 +36,7 @@ export interface LinhaDoDestinatario {
 }
 
 /** O que a ordenação precisa além da linha: quando a pessoa foi atualizada e criada. */
-export type LinhaOrdenavel = Pick<LinhaDoDestinatario, 'estado' | 'enviadoEm'> & { atualizadoEm: Date; criadoEm: Date };
+export type LinhaOrdenavel = Pick<LinhaDoDestinatario, 'estado' | 'enviadoEm'> & { atualizadoEm: Date; criadoEm: Date; id?: string };
 
 /** 0 = enviados (e enviando), 1 = falhas e descartes, 2 = pendentes (inclui os adiados e o seco). */
 function grupoDoEstado(estado: string): number {
@@ -54,7 +54,9 @@ function grupoDoEstado(estado: string): number {
 export function ordenarDestinatarios<T extends LinhaOrdenavel>(linhas: T[], limite = LIMITE_DA_TABELA): T[] {
   // Enviado vale a hora do envio; falha/SAIR/descarte valem a última atualização (é quando aconteceu), como na consulta.
   const quando = (l: T) => (grupoDoEstado(l.estado) === 0 ? (l.enviadoEm ?? l.atualizadoEm) : l.atualizadoEm).getTime();
-  const dentroDoGrupo = (a: T, b: T) => (grupoDoEstado(a.estado) === 2 ? a.criadoEm.getTime() - b.criadoEm.getTime() : quando(b) - quando(a));
+  // Pendentes na ordem em que o worker os pega (`porto.pendentes`: atualizadoEm, id): quem foi adiado vai para o fim da fila.
+  const filaDoWorker = (a: T, b: T) => a.atualizadoEm.getTime() - b.atualizadoEm.getTime() || (a.id ?? '').localeCompare(b.id ?? '');
+  const dentroDoGrupo = (a: T, b: T) => (grupoDoEstado(a.estado) === 2 ? filaDoWorker(a, b) : quando(b) - quando(a));
   const porGrupo = [0, 1, 2].map((g) => linhas.filter((l) => grupoDoEstado(l.estado) === g).sort(dentroDoGrupo));
   let sobra = limite;
   const fica = new Map<number, T[]>();
@@ -68,7 +70,11 @@ export function ordenarDestinatarios<T extends LinhaOrdenavel>(linhas: T[], limi
 
 /** O motivo vem do banco (texto da Meta, erro interno): número comprido de telefone não circula pela página. */
 export function motivoSemNumero(motivo: string | null | undefined): string {
-  return String(motivo ?? '').replace(/\+?\d(?:[\s().-]?\d){9,}/g, '••••');
+  return String(motivo ?? '')
+    // o id da mensagem na Meta (wamid.HBgM…) carrega o telefone do destinatário codificado
+    .replace(/wamid\.[A-Za-z0-9+/=_-]+/gi, 'wamid.••••')
+    // 10+ dígitos com separadores: +55 63 99102-1043, (63) 99102-1043, 63.99102.1043
+    .replace(/\+?\(?\d(?:[\s().-]{0,2}\d){9,}/g, '••••');
 }
 
 const horaDeSaoPaulo = (d: Date) => d.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });

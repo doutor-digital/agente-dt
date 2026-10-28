@@ -124,6 +124,10 @@ test('motivo da falha não deixa número de telefone passar', () => {
   assert.equal(motivoSemNumero('recusou +55 63 99102-1043 agora'), 'recusou •••• agora', 'telefone formatado também');
   assert.equal(motivoSemNumero('Meta 131048: spam em 28/10/2026'), 'Meta 131048: spam em 28/10/2026', 'código e data ficam');
   assert.equal(motivoSemNumero(null), '');
+  assert.equal(motivoSemNumero('recusou (63) 99102-1043 agora'), 'recusou •••• agora', 'telefone com DDD entre parênteses também');
+  assert.equal(motivoSemNumero('recusou 63 99102 1043'), 'recusou ••••', 'espaços como separador também');
+  assert.equal(motivoSemNumero('Meta 131049 wamid.HBgNNTU2Mzk5MTAyMTA0MxUCABEYEjk3 não entregue'), 'Meta 131049 wamid.•••• não entregue', 'o id da mensagem na Meta carrega o telefone codificado');
+  assert.ok(!motivoSemNumero('x WAMID.HBgNNTU2Mzk5MTAyMTA0MxUCABEYEjk3=').includes('HBgN'), 'maiúsculas também');
   const html = montarPainelDaOnda(base({ destinatarios: [linha({ estado: 'falhou', motivo: 'recusou 5563991021043' })] }));
   assert.ok(!html.includes('5563991021043'));
 });
@@ -131,10 +135,10 @@ test('motivo da falha não deixa número de telefone passar', () => {
 test('ordem: enviados (recente primeiro), depois falhas (recente primeiro), depois pendentes (ordem da fila); corta no limite', () => {
   const l = (nome: string, estado: string, enviadoEm: string | null, atualizadoEm: string, criadoEm = '2026-10-28T08:00:00Z') => ({ nome, estado, enviadoEm: enviadoEm ? D(enviadoEm) : null, atualizadoEm: D(atualizadoEm), criadoEm: D(criadoEm) });
   const ordem = ordenarDestinatarios([
-    l('pend2', 'pendente', null, '2026-10-28T09:00:00Z', '2026-10-28T08:02:00Z'),
+    l('pend2', 'pendente', null, '2026-10-28T09:02:00Z', '2026-10-28T08:02:00Z'),
     l('falha-velha', 'falhou', null, '2026-10-28T10:00:00Z'),
     l('env-velho', 'enviado', '2026-10-28T11:00:00Z', '2026-10-28T11:00:00Z'),
-    l('pend1', 'pendente', null, '2026-10-28T09:00:00Z', '2026-10-28T08:01:00Z'),
+    l('pend1', 'pendente', null, '2026-10-28T09:01:00Z', '2026-10-28T08:01:00Z'),
     l('env-novo', 'enviado', '2026-10-28T12:00:00Z', '2026-10-28T12:00:00Z'),
     l('falha-nova', 'descartado', null, '2026-10-28T13:00:00Z'),
     l('saiu', 'saiu', null, '2026-10-28T12:30:00Z'),
@@ -143,6 +147,16 @@ test('ordem: enviados (recente primeiro), depois falhas (recente primeiro), depo
   const muitos = Array.from({ length: LIMITE_DA_TABELA + 50 }, (_, i) => l(`p${i}`, 'pendente', null, '2026-10-28T09:00:00Z'));
   assert.equal(ordenarDestinatarios(muitos).length, LIMITE_DA_TABELA);
   assert.equal(LIMITE_DA_TABELA, 200);
+});
+
+test('pendentes na ordem em que o worker os pega: quem foi adiado (atualizadoEm novo) vai para o fim, empate pelo id', () => {
+  const p = (id: string, atualizadoEm: string, criadoEm: string) => ({ id, nome: id, estado: 'pendente', enviadoEm: null, atualizadoEm: D(atualizadoEm), criadoEm: D(criadoEm) });
+  const r = ordenarDestinatarios([
+    p('b', '2026-10-28T09:00:00Z', '2026-10-28T08:00:00Z'),
+    p('adiada', '2026-10-28T12:00:00Z', '2026-10-28T07:00:00Z'), // a 1ª a ser criada, mas adiada: vai para o fim
+    p('a', '2026-10-28T09:00:00Z', '2026-10-28T08:00:30Z'),
+  ]).map((x) => x.nome);
+  assert.deepEqual(r, ['a', 'b', 'adiada'], 'empate de atualizadoEm desempata pelo id; adiada por último (criadoEm não manda)');
 });
 
 test('passando do limite, as falhas ficam e os enviados é que são cortados (mas a ordem na tela segue enviados > falhas)', () => {

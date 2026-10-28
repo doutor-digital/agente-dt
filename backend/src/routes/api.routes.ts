@@ -182,6 +182,7 @@ import {
   disparoOndaCriarHandler,
   disparoOndaJsonHandler,
   disparoOndaPainelHandler,
+  disparoOndaResultadoHandler,
   disparoOndaRetomarHandler,
   disparoOndasListarHandler,
 } from '../controllers/disparo.controller.js';
@@ -432,6 +433,7 @@ apiRouter.get('/disparo/ondas', chaveDeServicoOuSessao(requireAuth, requireSuper
 apiRouter.post('/disparo/ondas', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), disparoOndaCriarHandler);
 apiRouter.get('/disparo/ondas/:id', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), disparoOndaJsonHandler);
 apiRouter.get('/disparo/ondas/:id/painel', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), disparoOndaPainelHandler);
+apiRouter.get('/disparo/ondas/:id/resultado', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), disparoOndaResultadoHandler);
 apiRouter.post('/disparo/ondas/:id/aprovar', requireAuth, requireSuperAdmin, disparoOndaAprovarHandler);
 // RETOMAR (onda parada por SAIR) é do João, como aprovar: só sessão de super-admin, nunca a chave de serviço.
 apiRouter.post('/disparo/ondas/:id/retomar', requireAuth, requireSuperAdmin, disparoOndaRetomarHandler);
