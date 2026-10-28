@@ -21,6 +21,20 @@ const schema = z.object({
 
   OPENAI_TRANSCRIPTION_API_KEY: z.string().min(10).optional(),
 
+  // Copiloto da recepção (widget do Kommo): chave PRÓPRIA da OpenAI, com teto de gasto, separada da do agente.
+  // COPILOTO_UNIDADES = slugs (separados por vírgula) onde está liberado; vazio = desligado em toda a rede.
+  COPILOTO_OPENAI_API_KEY: z.string().min(10).optional(),
+  COPILOTO_MODELO: z.string().default('gpt-4.1-mini'),
+  COPILOTO_UNIDADES: z
+    .string()
+    .default('')
+    .transform((v) =>
+      v
+        .split(',')
+        .map((u) => u.trim())
+        .filter(Boolean),
+    ),
+
   FRONTEND_ORIGIN: z
     .string()
     .default('http://localhost:5173')
