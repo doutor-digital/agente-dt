@@ -91,6 +91,12 @@ export function mascararEmail(e: string): string {
   return `${u.slice(0, 1)}***@${dom}`;
 }
 
+/** "Maria da Silva Souza" → "Maria S.": o registro precisa de quem, não do nome inteiro. */
+export function abreviarNome(n: string): string {
+  const p = n.trim().split(/\s+/);
+  return p.length > 1 ? `${p[0]} ${p[p.length - 1]![0]}.` : (p[0] ?? '');
+}
+
 export function mascararTelefone(t: string): string {
   const d = soDigitos(t);
   return d.length >= 8 ? `(${d.slice(0, 2)}) *****-${d.slice(-4)}` : '*****';
@@ -433,7 +439,7 @@ function mostrarDados(d: DadosDoCliente) {
 }
 
 async function referenciaEmUso(c: ContaAsaas, ref: string): Promise<string | null> {
-  const r = await c.fonte.get<{ data?: Array<{ id: string; deleted?: boolean }> }>('/payments', { externalReference: ref, limit: 1 });
+  const r = await c.fonte.get<{ data?: Array<{ id: string; deleted?: boolean }> }>('/payments', { externalReference: ref, limit: 20 });
   return (r?.data ?? []).find((p) => !p.deleted)?.id ?? null;
 }
 
@@ -478,6 +484,12 @@ export async function prepararCliente(
   };
 }
 
+/** O POST pode ter chegado ao Asaas? (sem resposta ou 5xx) — aí NÃO dá para dizer que nada foi criado. */
+const podeTerGravado = (e: unknown) => {
+  const status = (e as { status?: number | null })?.status;
+  return status == null || status >= 500;
+};
+
 type Registrar = (evento: string, argumentos: Record<string, unknown>, ok: boolean, erro?: string) => void;
 
 function enfileirar<T>(esc: EstadoEscritaAsaas, fn: () => Promise<T>): Promise<T> {
@@ -505,7 +517,7 @@ export function confirmarCliente({ asaas, esc }: CtxEscrita, usuario: string, a:
     }
     try {
       const criado = await c.escrita.post<ClienteAsaas>('/customers', corpoDoCliente(p.dados, p.avisar));
-      registrar(EVENTO_CLIENTE, { ...base, jaExistia: false, clienteId: criado.id, nome: p.dados.nome, avisarCliente: p.avisar }, true);
+      registrar(EVENTO_CLIENTE, { ...base, jaExistia: false, clienteId: criado.id, nome: abreviarNome(p.dados.nome), avisarCliente: p.avisar }, true);
       return {
         cadastrado: true,
         cliente: { id: criado.id, nome: p.dados.nome, documento: mascararDoc(p.dados.cpfCnpj) },
@@ -515,8 +527,9 @@ export function confirmarCliente({ asaas, esc }: CtxEscrita, usuario: string, a:
       };
     } catch (e) {
       const s = sanear(e);
-      registrar(EVENTO_CLIENTE, { ...base, jaExistia: false }, false, s.message);
-      throw s;
+      const incerto = podeTerGravado(e);
+      registrar(EVENTO_CLIENTE, { ...base, jaExistia: false, ...(incerto ? { incerto: true } : {}) }, false, s.message);
+      throw incerto ? new Error(`${s.message} — o cadastro PODE ter sido feito: confira com asaas_cliente antes de repetir.`) : s;
     }
   });
 }
@@ -593,7 +606,7 @@ export async function prepararCobranca({ asaas, esc }: CtxEscrita, usuario: stri
     const emUso = await referenciaEmUso(c, externalReference);
     if (emUso) throw new ErroDeEntrada(`a externalReference "${externalReference}" já está na cobrança ${emUso}. Não criei outra.`);
   } else {
-    avisos.push('sem externalReference: informe uma (ex. o número do pedido ou do paciente) para a conferência de duplicata ficar mais forte');
+    avisos.push('sem externalReference: informe um identificador único deste boleto (ex. o número do pedido) para a conferência de duplicata ficar mais forte');
   }
   const chave = chaveDeDuplicata(c.slug, alvo.tipo === 'existente' ? alvo.cliente.id : `novo:${alvo.dados.cpfCnpj}`, valor, vencimento, descricao, externalReference);
   const barrado = await freio(esc, c.slug, chave);
@@ -653,7 +666,7 @@ export function confirmarCobranca({ asaas, esc }: CtxEscrita, usuario: string, a
     const chave = chaveDeDuplicata(c.slug, alvo.tipo === 'existente' ? alvo.cliente.id : `novo:${alvo.dados.cpfCnpj}`, p.valor, p.vencimento, p.descricao, p.externalReference);
     const barrado = await freio(esc, c.slug, chave);
     if (barrado) throw new ErroDeEntrada(`não gerei: ${barrado}`);
-    const base = { conta: c.slug, valor: p.valor, vencimento: p.vencimento, externalReference: p.externalReference ?? null, pediuPor: p.usuario, confirmadoPor: usuario, chave };
+    const base = { conta: c.slug, valor: p.valor, vencimento: p.vencimento, externalReference: p.externalReference ?? null, pediuPor: p.usuario, confirmadoPor: usuario };
 
     let clienteId: string;
     let clienteCriado = false;
@@ -663,16 +676,21 @@ export function confirmarCobranca({ asaas, esc }: CtxEscrita, usuario: string, a
         const criado = await c.escrita.post<ClienteAsaas>('/customers', corpoDoCliente(alvo.dados, p.avisar));
         clienteId = criado.id;
         clienteCriado = true;
-        registrar(EVENTO_CLIENTE, { conta: c.slug, documento: mascararDoc(alvo.dados.cpfCnpj), jaExistia: false, clienteId, nome: alvo.dados.nome, avisarCliente: p.avisar, pediuPor: p.usuario, confirmadoPor: usuario, junto: 'cobranca' }, true);
+        registrar(EVENTO_CLIENTE, { conta: c.slug, documento: mascararDoc(alvo.dados.cpfCnpj), jaExistia: false, clienteId, nome: abreviarNome(alvo.dados.nome), avisarCliente: p.avisar, pediuPor: p.usuario, confirmadoPor: usuario, junto: 'cobranca' }, true);
       } catch (e) {
         const s = sanear(e);
-        registrar(EVENTO_CLIENTE, { conta: c.slug, documento: mascararDoc(alvo.dados.cpfCnpj), jaExistia: false, pediuPor: p.usuario, confirmadoPor: usuario, junto: 'cobranca' }, false, s.message);
-        throw new ErroDeEntrada(`não cadastrei o cliente e portanto não gerei o boleto: ${s.message}`);
+        const incerto = podeTerGravado(e);
+        registrar(EVENTO_CLIENTE, { conta: c.slug, documento: mascararDoc(alvo.dados.cpfCnpj), jaExistia: false, pediuPor: p.usuario, confirmadoPor: usuario, junto: 'cobranca', ...(incerto ? { incerto: true } : {}) }, false, s.message);
+        throw incerto
+          ? new Error(`não gerei o boleto: o cadastro do cliente ficou sem resposta e PODE ter sido feito. Confira com asaas_cliente (CPF/CNPJ) antes de repetir. (${s.message})`)
+          : new ErroDeEntrada(`não cadastrei o cliente e portanto não gerei o boleto: ${s.message}`);
       }
     }
 
     // conta ANTES de chamar: resposta perdida com a cobrança já criada não pode liberar uma 2ª
-    const reserva: RegistroDeCobranca = { conta: c.slug, chave: chaveDeDuplicata(c.slug, clienteId, p.valor, p.vencimento, p.descricao, p.externalReference), em: esc.agora() };
+    // a chave do registro usa o id do cliente (também o recém-criado): é com ela que a duplicata é achada depois de um reinício
+    const chaveFinal = chaveDeDuplicata(c.slug, clienteId, p.valor, p.vencimento, p.descricao, p.externalReference);
+    const reserva: RegistroDeCobranca = { conta: c.slug, chave: chaveFinal, em: esc.agora() };
     esc.cobrancas.push(reserva);
     let pag: PagamentoAsaas;
     try {
@@ -686,12 +704,16 @@ export function confirmarCobranca({ asaas, esc }: CtxEscrita, usuario: string, a
       });
     } catch (e) {
       const s = sanear(e);
-      const status = (e as { status?: number | null })?.status;
-      const incerto = status == null || status >= 500;
+      const incerto = podeTerGravado(e);
       // recusa definitiva do Asaas (4xx): nada foi criado, libera a reserva. Sem resposta ou 5xx: pode ter criado, a reserva fica.
       if (!incerto) esc.cobrancas = esc.cobrancas.filter((r) => r !== reserva);
-      registrar(EVENTO_COBRANCA, { ...base, clienteId, ...(incerto ? { incerto: true } : {}) }, false, s.message);
+      registrar(EVENTO_COBRANCA, { ...base, chave: chaveFinal, clienteId, ...(incerto ? { incerto: true } : {}) }, false, s.message);
       throw new Error(`${clienteCriado ? `O cliente FOI cadastrado (${clienteId}), mas o boleto não saiu: ` : 'O boleto não saiu: '}${s.message}`);
+    }
+    if (!pag?.id) {
+      // 2xx sem a cobrança no corpo: pode ter criado. Fica a reserva e o registro "incerto".
+      registrar(EVENTO_COBRANCA, { ...base, chave: chaveFinal, clienteId, incerto: true }, false, 'o Asaas respondeu sem o id da cobrança');
+      throw new Error(`${clienteCriado ? `O cliente FOI cadastrado (${clienteId}). ` : ''}O Asaas respondeu sem o id da cobrança: o boleto PODE ter sido gerado. Confira com asaas_cobrancas antes de repetir.`);
     }
     reserva.cobrancaId = pag.id;
     let linha = pag.identificationField ?? null;
@@ -703,7 +725,7 @@ export function confirmarCobranca({ asaas, esc }: CtxEscrita, usuario: string, a
         linha = null;
       }
     }
-    registrar(EVENTO_COBRANCA, { ...base, clienteId, clienteCriado, cobrancaId: pag.id, status: pag.status ?? null }, true);
+    registrar(EVENTO_COBRANCA, { ...base, chave: chaveFinal, clienteId, clienteCriado, cobrancaId: pag.id, status: pag.status ?? null }, true);
     return {
       gerado: true,
       conta: c.slug,
@@ -734,14 +756,15 @@ function mascararPedido(a: Record<string, any>): Record<string, unknown> {
   const { cpfCnpj, email, telefone, endereco, novoCliente, descricao, nome, ...resto } = a;
   return {
     ...resto,
-    ...(nome !== undefined ? { nome } : {}),
+    ...(nome !== undefined ? { nome: abreviarNome(String(nome)) } : {}),
     ...(cpfCnpj ? { cpfCnpj: mascararDoc(String(cpfCnpj)) } : {}),
     ...(email ? { email: mascararEmail(String(email)) } : {}),
     ...(telefone ? { telefone: mascararTelefone(String(telefone)) } : {}),
     ...(endereco ? { temEndereco: true } : {}),
-    ...(descricao !== undefined ? { descricao: limparTexto(String(descricao)).slice(0, 500) } : {}),
+    // o texto do boleto pode trazer o motivo do tratamento: o registro guarda só o tamanho (o texto fica no Asaas, pelo id)
+    ...(descricao !== undefined ? { descricaoCaracteres: String(descricao).length } : {}),
     ...(novoCliente
-      ? { novoCliente: { nome: novo?.nome, ...(novo?.email ? { email: mascararEmail(novo.email) } : {}), ...(novo?.telefone ? { telefone: mascararTelefone(novo.telefone) } : {}), ...(novo?.endereco ? { temEndereco: true } : {}) } }
+      ? { novoCliente: { nome: novo?.nome ? abreviarNome(novo.nome) : undefined, ...(novo?.email ? { email: mascararEmail(novo.email) } : {}), ...(novo?.telefone ? { telefone: mascararTelefone(novo.telefone) } : {}), ...(novo?.endereco ? { temEndereco: true } : {}) } }
       : {}),
   };
 }
@@ -812,7 +835,7 @@ export function registrarEscritaAsaas(server: McpServer, asaas: ContextoAsaas, e
         'mostra a conta (nome e final da chave), o cliente, valor, vencimento, descrição e se o cliente será avisado pelo Asaas, e devolve um código. ' +
         'Cliente: clienteId (cus_…) OU cpfCnpj de quem já existe; se o CPF/CNPJ não existe, passe novoCliente para cadastrar junto (no mesmo resumo). ' +
         'Valor > 0 até o teto do conector (padrão R$ 5.000); vencimento de hoje a +60 dias; descrição obrigatória (aparece no boleto). Informe sempre ' +
-        'externalReference (nº do pedido/paciente) para evitar duplicata. Mostre o resumo à pessoa e só chame asaas_confirmar_cobranca se ela aprovar.',
+        'externalReference, um identificador ÚNICO deste boleto (ex. nº do pedido; NÃO reutilize para outro boleto), para evitar duplicata. Mostre o resumo à pessoa e só chame asaas_confirmar_cobranca se ela aprovar.',
       inputSchema: {
         unidade,
         clienteId: z.string().optional(),

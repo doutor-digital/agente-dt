@@ -6,15 +6,13 @@
  * POST não é repetido sozinho: timeout ou 5xx pode ter criado a cobrança, e repetir cobraria o paciente duas
  * vezes. Só o 429 (o Asaas nem processou) volta a tentar.
  */
-import { Ritmo } from '../bling/ritmo.js';
-import { ASAAS_API, ErroAsaas } from './asaas.js';
+import { ASAAS_API, ErroAsaas, ritmoDaConta } from './asaas.js';
 
 const AGENTE = 'DoutorDigital-Conector/1.0';
 /** Os únicos caminhos em que este cliente escreve. */
 export const CAMINHOS_DE_ESCRITA = ['/customers', '/payments'] as const;
 
 type Fetcher = typeof fetch;
-const ritmos = new Map<string, Ritmo>();
 const dormir = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Tira da mensagem o que nunca pode sair: a chave do Asaas, sequências de 11 a 14 dígitos (CPF/CNPJ) e e-mails. */
@@ -34,8 +32,7 @@ export async function asaasPost<T = unknown>(contaId: string, chave: string, cam
   if (!(CAMINHOS_DE_ESCRITA as readonly string[]).includes(caminho)) {
     throw new ErroAsaas(`escrita recusada: o conector só grava em ${CAMINHOS_DE_ESCRITA.join(' e ')}`, null);
   }
-  let ritmo = ritmos.get(contaId);
-  if (!ritmo) ritmos.set(contaId, (ritmo = new Ritmo(500)));
+  const ritmo = ritmoDaConta(contaId);
   for (let tentativa = 0; tentativa < 3; tentativa++) {
     await ritmo.vez();
     let resp: Response;
@@ -50,17 +47,30 @@ export async function asaasPost<T = unknown>(contaId: string, chave: string, cam
       // pode ter chegado: não repete, quem chamou precisa conferir no Asaas antes de tentar de novo
       throw new ErroAsaas(`sem resposta do Asaas em ${caminho}: a gravação pode ter acontecido — confira no painel do Asaas antes de repetir`, null);
     }
-    if (resp.status === 429 && tentativa < 2) {
-      await dormir(1500 * (tentativa + 1));
-      continue;
+    if (resp.status === 429) {
+      // o Asaas nem processou: pode tentar de novo sem risco de cobrar em dobro
+      if (tentativa < 2) {
+        await dormir(1500 * (tentativa + 1));
+        continue;
+      }
+      throw new ErroAsaas(`Asaas limitou as requisições em ${caminho} (429): nada foi gravado, tente em instantes`, 429);
     }
-    const texto = await resp.text();
+    let texto: string;
+    try {
+      texto = await resp.text();
+    } catch {
+      throw new ErroAsaas(`resposta do Asaas em ${caminho} cortada no meio: a gravação pode ter acontecido — confira no painel do Asaas antes de repetir`, null);
+    }
     if (resp.status === 401) throw new ErroAsaas('o Asaas recusou a chave (401): chave errada, revogada ou de outro ambiente (sandbox × produção)', 401);
     if (resp.status === 403) {
       throw new ErroAsaas('o Asaas negou a gravação (403): a chave desta conta é só de leitura ou não tem permissão para cadastrar cliente e gerar cobrança. Gere uma chave com permissão de escrita no painel do Asaas e salve-a no painel de integrações.', 403);
     }
     if (!resp.ok) throw new ErroAsaas(`Asaas ${resp.status} em ${caminho}: ${limparTexto(texto, chave).slice(0, 300)}`, resp.status);
-    return (texto ? JSON.parse(texto) : null) as T;
+    try {
+      return (texto ? JSON.parse(texto) : null) as T;
+    } catch {
+      throw new ErroAsaas(`resposta do Asaas em ${caminho} ilegível: a gravação pode ter acontecido — confira no painel do Asaas antes de repetir`, null);
+    }
   }
-  throw new ErroAsaas(`Asaas limitou as requisições em ${caminho} (429): nada foi gravado, tente em instantes`, 429);
+  throw new ErroAsaas(`Asaas não respondeu em ${caminho}`, null);
 }

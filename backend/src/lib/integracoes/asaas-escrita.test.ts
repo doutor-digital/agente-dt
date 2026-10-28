@@ -69,3 +69,26 @@ test('limparTexto: tira chave, CPF/CNPJ e e-mail, mas deixa ids do Asaas (cus_/p
   assert.equal(limparTexto('mande para maria.silva@exemplo.com já'), 'mande para [e-mail] já');
   assert.equal(limparTexto('a chave inteira', 'chave inteira'), 'a [chave]');
 });
+
+test('asaasPost: 2xx com corpo ilegível ou cortado é "pode ter gravado" (status nulo), nunca erro cru', async () => {
+  const ilegivel = (async () => new Response('<html>proxy</html>', { status: 200 })) as unknown as typeof fetch;
+  const erro = await asaasPost('c2', CHAVE, '/payments', {}, ilegivel).then(() => null, (e: Error & { status?: number | null }) => e);
+  assert.ok(erro);
+  assert.equal(erro.status, null);
+  assert.match(erro.message, /pode ter acontecido/);
+  const cortado = (async () => ({ status: 200, ok: true, text: async () => { throw new Error('socket'); } })) as unknown as typeof fetch;
+  const erro2 = await asaasPost('c2', CHAVE, '/payments', {}, cortado).then(() => null, (e: Error & { status?: number | null }) => e);
+  assert.equal(erro2!.status, null);
+  assert.match(erro2!.message, /cortada no meio/);
+});
+
+test('asaasPost: 429 repete (o Asaas não processou) e, esgotadas as tentativas, diz que nada foi gravado', async () => {
+  const a = falso([{ status: 429 }, { status: 200, corpo: { id: 'ok' } }]);
+  assert.deepEqual(await asaasPost('c3', CHAVE, '/payments', {}, a.fetcher), { id: 'ok' });
+  assert.equal(a.chamadas.length, 2);
+  const b = falso([{ status: 429 }]);
+  const erro = await asaasPost('c4', CHAVE, '/payments', {}, b.fetcher).then(() => null, (e: Error & { status?: number | null }) => e);
+  assert.equal(erro!.status, 429);
+  assert.match(erro!.message, /nada foi gravado/);
+  assert.equal(b.chamadas.length, 3);
+});

@@ -247,7 +247,7 @@ async function leitoresDoWhatsapp(): Promise<Set<string>> {
 /** Boletos gerados na última hora (auditoria do conector): o teto por hora e a duplicata sobrevivem a um reinício. */
 async function cobrancasRecentes(conta: string): Promise<RegistroDeCobranca[]> {
   const linhas = await prisma.mcpAuditoria.findMany({
-    where: { ferramenta: EVENTO_COBRANCA, createdAt: { gte: new Date(Date.now() - 3_600_000) } },
+    where: { ferramenta: EVENTO_COBRANCA, createdAt: { gte: new Date(Date.now() - 3_600_000) }, argumentos: { path: ['conta'], equals: conta } },
     select: { createdAt: true, ok: true, argumentos: true },
   });
   const out: RegistroDeCobranca[] = [];

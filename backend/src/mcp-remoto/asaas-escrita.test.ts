@@ -552,6 +552,7 @@ test('protocolo: só as 4 ferramentas de escrita (nada de cancelar/estornar/tran
   const aud = tudo(registros);
   assert.ok(!aud.includes('11222333000181') && !aud.includes('11.222.333/0001-81') && !aud.includes('joana@exemplo.com') && !aud.includes('981411248'), 'registro com dado por inteiro');
   assert.match(aud, /\*\*\.222\.333\/0001-\*\*/);
+  assert.ok(!aud.includes('Joana Souza') && aud.includes('Joana S.'), 'nome inteiro no registro');
 
   const outro = await conectar(m, 'u-outro', []);
   const negado = await outro.callTool({ name: 'asaas_confirmar_cliente', arguments: { confirmacao: dados.confirmacao } });
@@ -618,4 +619,63 @@ test('boleto: um id de cobrança do Asaas (pay_…) nunca é confundido com docu
   const m = montar({ clientes: [EXISTENTE], falhaNoPagamento: new ErroHttp('Asaas 400: duplicada de pay_12345678901 do cliente cus_000005401844', 400) });
   const p = await prepararCobranca(m.ctx, 'u1', COBRANCA);
   await assert.rejects(() => confirmarCobranca(m.ctx, 'u1', { confirmacao: String(p.confirmacao) }, m.registrar), /pay_12345678901.*cus_000005401844/);
+});
+
+test('cliente novo junto do boleto: a chave de duplicata gravada usa o id criado, então a trava sobrevive a um reinício', async () => {
+  const a = montar();
+  const pedido = { ...COBRANCA, externalReference: undefined, novoCliente: { nome: 'Maria da Silva' } };
+  const p = await prepararCobranca(a.ctx, 'u1', pedido);
+  await confirmarCobranca(a.ctx, 'u1', { confirmacao: String(p.confirmacao) }, a.registrar);
+  const ev = a.eventos.find((e) => e.evento === EVENTO_COBRANCA)!;
+  assert.equal(ev.args.chave, chaveDeDuplicata('doutor-hernia-serra', ev.args.clienteId, 250, VENC, 'Consulta de avaliação'));
+  // "reinício": a auditoria volta como histórico e o cliente (agora existente) é achado pelo CPF
+  const b = montar({ clientes: [{ ...a.f.clientes[0]!, cpfCnpj: CPF_DIGITOS }] }, { historico: async () => [{ conta: 'doutor-hernia-serra', chave: ev.args.chave, em: AGORA - 60_000, cobrancaId: ev.args.cobrancaId }] });
+  await assert.rejects(() => prepararCobranca(b.ctx, 'u1', { ...COBRANCA, externalReference: undefined }), /cobrança igual/);
+});
+
+test('cadastro do cliente sem resposta: NÃO diz que nada foi criado, manda conferir e marca incerto', async () => {
+  const falha = new ErroHttp('sem resposta do Asaas em /customers: a gravação pode ter acontecido', null);
+  const a = montar({ falhaNoCliente: falha });
+  const p = await prepararCliente(a.ctx, 'u1', { unidade: 'serra', nome: 'Maria da Silva', cpfCnpj: CPF });
+  await assert.rejects(() => confirmarCliente(a.ctx, 'u1', { confirmacao: String(p.confirmacao) }, a.registrar), /PODE ter sido feito.*asaas_cliente/);
+  assert.equal(a.eventos.at(-1)!.args.incerto, true);
+  const b = montar({ falhaNoCliente: falha });
+  const pb = await prepararCobranca(b.ctx, 'u1', { ...COBRANCA, novoCliente: { nome: 'Maria da Silva' } });
+  const erro = await confirmarCobranca(b.ctx, 'u1', { confirmacao: String(pb.confirmacao) }, b.registrar).then(() => null, (e: Error) => e);
+  assert.match(erro!.message, /PODE ter sido feito/);
+  assert.doesNotMatch(erro!.message, /não cadastrei/);
+  assert.deepEqual(b.f.posts.map((x) => x[0]), ['/customers']);
+});
+
+test('Asaas responde 2xx sem o id da cobrança: erro claro, registro "incerto" e a reserva fica (nada de TypeError)', async () => {
+  const m = montar({ clientes: [EXISTENTE] });
+  (m.f.conta.escrita as { post: unknown }).post = async (caminho: string) => {
+    m.f.posts.push([caminho, {}]);
+    return null;
+  };
+  const p = await prepararCobranca(m.ctx, 'u1', { ...COBRANCA, externalReference: undefined });
+  await assert.rejects(() => confirmarCobranca(m.ctx, 'u1', { confirmacao: String(p.confirmacao) }, m.registrar), /sem o id da cobrança.*PODE ter sido gerado/);
+  assert.equal(m.eventos.at(-1)!.args.incerto, true);
+  await assert.rejects(() => prepararCobranca(m.ctx, 'u1', { ...COBRANCA, externalReference: undefined }), /cobrança igual/);
+});
+
+test('externalReference: uma cobrança apagada no começo da lista não esconde a viva', async () => {
+  const m = montar({ clientes: [EXISTENTE], pagamentos: [{ id: 'pay_apagada001', externalReference: 'pedido-1' }, { id: 'pay_viva0000001', externalReference: 'pedido-1' }] });
+  const original = m.f.conta.fonte.get.bind(m.f.conta.fonte);
+  (m.f.conta.fonte as { get: unknown }).get = async (caminho: string, query: Record<string, any>) => {
+    const r: any = await original(caminho, query);
+    return caminho === '/payments' ? { data: [{ id: 'pay_apagada001', deleted: true }, ...r.data.slice(1)].slice(0, Number(query.limit ?? 100)) } : r;
+  };
+  await assert.rejects(() => prepararCobranca(m.ctx, 'u1', COBRANCA), /pay_viva0000001/);
+});
+
+test('registro de preparação: nome abreviado e descrição só em tamanho (pode trazer motivo de tratamento)', async () => {
+  const m = montar({ clientes: [EXISTENTE] });
+  const registros: Array<{ ferramenta: string; argumentos: any; ok: boolean; erro?: string }> = [];
+  const joao = await conectar(m, 'u1', registros);
+  await joao.callTool({ name: 'asaas_preparar_cobranca', arguments: { unidade: 'serra', cpfCnpj: CPF, valor: 100, vencimento: VENC, descricao: 'Tratamento de hérnia de disco L5', externalReference: 'r9', novoCliente: { nome: 'Maria da Silva Souza' } } });
+  const aud = tudo(registros);
+  assert.ok(!aud.includes('hérnia de disco') && !aud.includes('Maria da Silva Souza'), aud);
+  assert.match(aud, /"descricaoCaracteres":32/);
+  assert.match(aud, /Maria S\./);
 });
