@@ -6,6 +6,7 @@ import {
   Globe,
   LayoutDashboard,
   ListChecks,
+  Megaphone,
   MessageCircle,
   MessagesSquare,
   Settings2,
@@ -60,6 +61,7 @@ export type AppTab =
   | 'automacoes'
   | 'saude-ia'
   | 'resultados'
+  | 'disparo'
   | 'como-funciona';
 
 export type NavSection = 'operacao' | 'agente' | 'analise' | 'plataforma';
@@ -234,6 +236,15 @@ export const NAV_ITEMS: NavItem[] = [
     icon: FileBarChart,
     section: 'analise',
     keywords: ['export', 'csv', 'periodo'],
+  },
+  {
+    id: 'disparo',
+    label: 'Disparo',
+    hint: 'Resultado de uma campanha de WhatsApp: quantos receberam, responderam, agendaram e quanto custou.',
+    icon: Megaphone,
+    section: 'analise',
+    superOnly: true,
+    keywords: ['campanha', 'onda', 'modelo', 'template', 'envio', 'funil', 'sair', 'outubro rosa', 'ciatico'],
   },
   {
     id: 'whatsapp',
