@@ -94,6 +94,7 @@ import {
   turnoDoComprovante,
   type TurnoDoComprovante,
 } from './confirmacao-so-com-crm.js';
+import { dadosDaTaxa, promptDizEmTratamento, respostaAnteriorDaIA, travaDaTaxaDeReserva } from './taxa-de-reserva.js';
 import {
   withTimeout,
   AGENT_NODE_TIMEOUT_MS,
@@ -510,6 +511,9 @@ export async function montarPrefixoAnthropic(unit: Unit, recorder: TraceRecorder
   } as never);
   return { model, systemMessage, modelName, tools };
 }
+
+/** Unidades que já tiveram o aviso de "taxa de reserva sem chave Pix ou sem valor" neste processo (um aviso por unidade, não por turno). */
+const taxaSemDadosJaAvisada = new Set<string>();
 
 export async function buildAgentGraph(
   recorder: TraceRecorder,
@@ -1146,12 +1150,28 @@ export async function buildAgentGraph(
       }
       const marcouAgora = marcouNesteTurno(doTurno);
       const blocoConsulta = blocoDaConsulta(promptDoTurno);
+      // Taxa de reserva (taxa-de-reserva.ts): o que a trava precisa saber do turno. Lido na hora, porque `comprovante` é preenchido a cada volta.
+      const dadosDaTaxaDaUnidade = dadosDaTaxa(unit);
+      if (unit.spineBookingRequiresPayment && !dadosDaTaxaDaUnidade && !taxaSemDadosJaAvisada.has(unit.slug)) {
+        // flag ligada e a trava desligada por falta de chave Pix ou do valor da taxa: o bug de "a equipe te envia a chave" volta, e sem aviso
+        taxaSemDadosJaAvisada.add(unit.slug);
+        logger.warn({ unit: unit.slug }, 'taxa de reserva: unidade com a flag mas sem chave Pix ou sem o valor da taxa nas fontes — a trava da chave está desligada');
+      }
+      const respostaAnterior = respostaAnteriorDaIA(nonSystemMessages.map((m) => ({ tipo: m.getType(), texto: aiTextFromContent(m.content) })));
+      const contextoDaTaxa = () => ({
+        falasDoPaciente: mensagensDoPaciente,
+        respostaAnterior,
+        consultaDePe: promptTemConsulta(promptDoTurno) || marcouAgora,
+        emTratamento: promptDizEmTratamento(promptDoTurno),
+        comprovanteLido: comprovante.pendente,
+      });
       // Toda reescrita feita depois (pergunta final, "pediu o nome pela 3ª vez") passa pelas travas de confirmação: se ela
       // reabrir a afirmação, fica a resposta anterior.
       const reabreAfirmacao = (t: string) =>
         !!t &&
         (!!respostaDoComprovante(t, comprovante, promptTemConsulta(promptDoTurno) || marcouAgora) ||
-          !!afirmouComConsultaDesmarcada(t, { marcouAgora, bloco: blocoConsulta, promessa: null }));
+          !!afirmouComConsultaDesmarcada(t, { marcouAgora, bloco: blocoConsulta, promessa: null }) ||
+          !!travaDaTaxaDeReserva(t, dadosDaTaxaDaUnidade, contextoDaTaxa()));
       // Comprovante em foto/PDF: só a equipe confirma a consulta (decisão do João, 26/10/2026). A resposta que
       // afirma confirmação vira o recado fixo e a equipe ganha a tarefa — aberta pelo código, não pela IA.
       // `respostaFixa`: o texto é um recado nosso — a "pergunta final" não o reescreve (ele já diz o próximo passo).
@@ -1269,6 +1289,55 @@ export async function buildAgentGraph(
           payload: { trecho: promessa.trecho, forma: promessa.forma, refeita: textoRefeito || null, final: textoFinal, erro: erroRefeita },
           latencyMs: Math.round(performance.now() - t1),
         });
+      }
+
+      // Taxa de reserva (Boa Vista, 27–28/10/2026): a chave Pix sai por código, e horário não é dado como garantido sem
+      // consulta no CRM nem comprovante da taxa (taxa-de-reserva.ts). Depois das travas de cima: se elas já trocaram a
+      // resposta, esta confere o que sobrou. Sem chave ou sem valor cadastrado, nada muda. Só unidade com a flag.
+      let trocaDaTaxa = recadoComprovante
+        ? null
+        : travaDaTaxaDeReserva(textoFinal, dadosDaTaxaDaUnidade, contextoDaTaxa());
+      // O prompt pode não ter trazido a consulta (a IA marcou antes e o bloco falhou): o vínculo gravado por agendar_consulta decide,
+      // como na trava de cima. Só é lido quando a trava já disparou.
+      if (trocaDaTaxa && state.leadId && (await agendamentoDoVinculo(unit.id, Number(state.leadId), fusoDaUnidade(unit)))) trocaDaTaxa = null;
+      if (trocaDaTaxa) {
+        respostaFixa = true;
+        const quemFalou: Record<typeof trocaDaTaxa.motivo, string> = {
+          horario_sem_comprovante: 'a resposta dava o horário como garantido sem consulta nem comprovante — trocada pelo recado com a chave',
+          chave_pedida: 'o paciente pediu o Pix — a chave saiu por código',
+          equipe_envia_a_chave: 'a resposta mandava a equipe enviar a chave — a chave saiu por código',
+          chave_oferecida: 'a resposta só perguntava se ele queria a chave — a chave saiu por código',
+          pagar_na_clinica: 'o paciente quer pagar só na clínica — saiu a taxa em uma frase e a chave, na mesma mensagem',
+          insistiu_na_clinica: 'o paciente insiste em pagar só na clínica depois de receber a chave — fica com a equipe, sem prometer o horário',
+        };
+        await recorder.step({
+          kind: 'THINKING',
+          title: `💳 Taxa de reserva: ${quemFalou[trocaDaTaxa.motivo]}`,
+          payload: { motivo: trocaDaTaxa.motivo, original: textoFinal, final: trocaDaTaxa.texto },
+        });
+        // Insistiu em pagar só na clínica: a equipe precisa ver (nota interna do Kommo). Falha ou demora não seguram a resposta.
+        if (trocaDaTaxa.motivo === 'insistiu_na_clinica' && state.leadId) {
+          const resumir = tools.find((tl) => tl.name === 'resumir_lead_para_sdr');
+          if (resumir) {
+            // o mesmo prazo do resumo do sinal de alerta (passe-por-sinal.ts); o resultado que não é nota criada vira passo de ERRO
+            const resultadoDoResumo = await withTimeout(
+              resumir.invoke({
+                leadId: Number(state.leadId),
+                focusHint: 'Unidade com taxa de reserva: o paciente já recebeu a chave Pix e INSISTE em pagar só na clínica. Sem o comprovante da taxa o horário NÃO está garantido. Equipe: falar com ele.',
+              }),
+              8_000,
+            ).catch((err) => `falhou: ${err instanceof Error ? err.message : String(err)}`);
+            if (/^(?:falhou|ERRO|Sem hist)/i.test(String(resultadoDoResumo))) {
+              await recorder.step({
+                kind: 'ERROR',
+                title: 'Taxa de reserva: o paciente insiste em pagar só na clínica e o resumo para a equipe NÃO saiu',
+                payload: { leadId: state.leadId, resultado: String(resultadoDoResumo).slice(0, 200) },
+              });
+            }
+          }
+        }
+        textoFinal = trocaDaTaxa.texto;
+        response.content = textoFinal;
       }
 
       // Sinal de alerta dito com todas as letras e o modelo NÃO avisou (26/10/2026): a regra de 21/10 estava no prompt e
