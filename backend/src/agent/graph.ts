@@ -94,7 +94,7 @@ import {
   turnoDoComprovante,
   type TurnoDoComprovante,
 } from './confirmacao-so-com-crm.js';
-import { dadosDaTaxa, travaDaTaxaDeReserva } from './taxa-de-reserva.js';
+import { dadosDaTaxa, promptDizEmTratamento, respostaAnteriorDaIA, travaDaTaxaDeReserva } from './taxa-de-reserva.js';
 import {
   withTimeout,
   AGENT_NODE_TIMEOUT_MS,
@@ -1147,12 +1147,23 @@ export async function buildAgentGraph(
       }
       const marcouAgora = marcouNesteTurno(doTurno);
       const blocoConsulta = blocoDaConsulta(promptDoTurno);
+      // Taxa de reserva (taxa-de-reserva.ts): o que a trava precisa saber do turno. Lido na hora, porque `comprovante` é preenchido a cada volta.
+      const dadosDaTaxaDaUnidade = dadosDaTaxa(unit);
+      const respostaAnterior = respostaAnteriorDaIA(nonSystemMessages.map((m) => ({ tipo: m.getType(), texto: aiTextFromContent(m.content) })));
+      const contextoDaTaxa = () => ({
+        falasDoPaciente: mensagensDoPaciente,
+        respostaAnterior,
+        consultaDePe: promptTemConsulta(promptDoTurno) || marcouAgora,
+        emTratamento: promptDizEmTratamento(promptDoTurno),
+        comprovanteLido: comprovante.pendente,
+      });
       // Toda reescrita feita depois (pergunta final, "pediu o nome pela 3ª vez") passa pelas travas de confirmação: se ela
       // reabrir a afirmação, fica a resposta anterior.
       const reabreAfirmacao = (t: string) =>
         !!t &&
         (!!respostaDoComprovante(t, comprovante, promptTemConsulta(promptDoTurno) || marcouAgora) ||
-          !!afirmouComConsultaDesmarcada(t, { marcouAgora, bloco: blocoConsulta, promessa: null }));
+          !!afirmouComConsultaDesmarcada(t, { marcouAgora, bloco: blocoConsulta, promessa: null }) ||
+          !!travaDaTaxaDeReserva(t, dadosDaTaxaDaUnidade, contextoDaTaxa()));
       // Comprovante em foto/PDF: só a equipe confirma a consulta (decisão do João, 26/10/2026). A resposta que
       // afirma confirmação vira o recado fixo e a equipe ganha a tarefa — aberta pelo código, não pela IA.
       // `respostaFixa`: o texto é um recado nosso — a "pergunta final" não o reescreve (ele já diz o próximo passo).
@@ -1277,24 +1288,38 @@ export async function buildAgentGraph(
       // resposta, esta confere o que sobrou. Sem chave ou sem valor cadastrado, nada muda. Só unidade com a flag.
       let trocaDaTaxa = recadoComprovante
         ? null
-        : travaDaTaxaDeReserva(textoFinal, dadosDaTaxa(unit), {
-            falasDoPaciente: mensagensDoPaciente,
-            consultaDePe: promptTemConsulta(promptDoTurno) || marcouAgora,
-            comprovanteLido: comprovante.pendente,
-          });
+        : travaDaTaxaDeReserva(textoFinal, dadosDaTaxaDaUnidade, contextoDaTaxa());
       // O prompt pode não ter trazido a consulta (a IA marcou antes e o bloco falhou): o vínculo gravado por agendar_consulta decide,
       // como na trava de cima. Só é lido quando a trava já disparou.
       if (trocaDaTaxa && state.leadId && (await agendamentoDoVinculo(unit.id, Number(state.leadId), fusoDaUnidade(unit)))) trocaDaTaxa = null;
       if (trocaDaTaxa) {
         respostaFixa = true;
+        const quemFalou: Record<typeof trocaDaTaxa.motivo, string> = {
+          horario_sem_comprovante: 'a resposta dava o horário como garantido sem consulta nem comprovante — trocada pelo recado com a chave',
+          chave_pedida: 'o paciente pediu o Pix — a chave saiu por código',
+          equipe_envia_a_chave: 'a resposta mandava a equipe enviar a chave — a chave saiu por código',
+          chave_oferecida: 'a resposta só perguntava se ele queria a chave — a chave saiu por código',
+          pagar_na_clinica: 'o paciente quer pagar só na clínica — saiu a taxa em uma frase e a chave, na mesma mensagem',
+          insistiu_na_clinica: 'o paciente insiste em pagar só na clínica depois de receber a chave — fica com a equipe, sem prometer o horário',
+        };
         await recorder.step({
           kind: 'THINKING',
-          title:
-            trocaDaTaxa.motivo === 'horario_sem_comprovante'
-              ? '💳 Taxa de reserva: a resposta dava o horário como garantido sem consulta nem comprovante — trocada pelo recado com a chave'
-              : `💳 Taxa de reserva: ${trocaDaTaxa.motivo === 'chave_pedida' ? 'o paciente pediu o Pix' : 'a resposta mandava a equipe enviar a chave'} — a chave saiu por código`,
+          title: `💳 Taxa de reserva: ${quemFalou[trocaDaTaxa.motivo]}`,
           payload: { motivo: trocaDaTaxa.motivo, original: textoFinal, final: trocaDaTaxa.texto },
         });
+        // Insistiu em pagar só na clínica: a equipe precisa ver (nota interna do Kommo). Falha ou demora não seguram a resposta.
+        if (trocaDaTaxa.motivo === 'insistiu_na_clinica' && state.leadId) {
+          const resumir = tools.find((tl) => tl.name === 'resumir_lead_para_sdr');
+          if (resumir) {
+            await withTimeout(
+              resumir.invoke({
+                leadId: Number(state.leadId),
+                focusHint: 'Unidade com taxa de reserva: o paciente já recebeu a chave Pix e INSISTE em pagar só na clínica. Sem o comprovante da taxa o horário NÃO está garantido. Equipe: falar com ele.',
+              }),
+              20_000,
+            ).catch((err) => logger.warn({ err: String(err), unit: unit.slug }, 'taxa de reserva: resumo para a equipe falhou'));
+          }
+        }
         textoFinal = trocaDaTaxa.texto;
         response.content = textoFinal;
       }

@@ -5,8 +5,14 @@ import {
   afirmaHorarioGarantido,
   dadosDaTaxa,
   empurrouAChaveParaEquipe,
+  ofereceuAChaveEmPergunta,
   pacientePediuAChave,
+  pacienteQuerPagarNaClinica,
+  RECADO_INSISTIU_NA_CLINICA,
+  recadoPagarNaClinica,
+  respostaAnteriorDaIA,
   recadoDaChave,
+  promptDizEmTratamento,
   recadoSemComprovante,
   travaDaTaxaDeReserva,
   type ContextoDaTaxa,
@@ -33,7 +39,7 @@ function unidade(over: Partial<Unit> = {}): Unit {
   } as Unit;
 }
 const DADOS = dadosDaTaxa(unidade())!;
-const SEM_PROVA: ContextoDaTaxa = { falasDoPaciente: [], consultaDePe: false, comprovanteLido: false };
+const SEM_PROVA: ContextoDaTaxa = { falasDoPaciente: [], consultaDePe: false, emTratamento: false, respostaAnterior: '', comprovanteLido: false };
 const com = (over: Partial<ContextoDaTaxa>): ContextoDaTaxa => ({ ...SEM_PROVA, ...over });
 
 // --- dados da taxa --------------------------------------------------------------------------------------------------------
@@ -89,7 +95,7 @@ test('A: o paciente escolheu pagar antecipado (resposta do botão) → a chave s
 });
 
 test('A: pedidos de Pix reconhecidos', () => {
-  for (const fala of ['E o pix', 'Mande o pix por gentileza', 'qual a chave?', 'me manda a chave pix', 'pode me passar o pix', 'cadê o pix', 'pix', 'Quero pagar no pix', 'chave pfv', 'me passa a chave pix que eu pago e mando o comprovante', 'manda a chave, não paguei ainda', 'Preciso da chave']) {
+  for (const fala of ['E o pix', 'Mande o pix por gentileza', 'qual a chave?', 'me manda a chave pix', 'pode me passar o pix', 'cadê o pix', 'pix', 'Quero pagar no pix', 'chave pfv', 'me passa a chave pix que eu pago e mando o comprovante', 'manda a chave, não paguei ainda', 'Preciso da chave', 'Oi, e o pix?', 'Não sei qual é a chave, me manda o pix']) {
     assert.equal(pacientePediuAChave([fala]), true, fala);
   }
 });
@@ -106,6 +112,8 @@ test('A: contraexemplos — quem já pagou, não quer, ou mandou o comprovante N
     'quero pagar com cartão ou pix',
     'posso pagar no dia ou preciso do pix?',
     'quero saber o valor do pix',
+    'Aceita débito e pix?',
+    'vocês aceitam cartão e pix?',
     '[imagem do cliente]: COMPROVANTE: Pix enviado. Valor: R$ 100,00.',
     '[arquivo do cliente]: COMPROVANTE: Transferência Pix. Valor: R$ 100,00.',
     '[imagem do cliente]: Foto de um cartaz escrito "chave pix: manda o pix"',
@@ -145,10 +153,100 @@ test('A: unidade SEM a flag não é tocada', () => {
   assert.equal(travaDaTaxaDeReserva(SOFIA_27_10_PIX, dadosDaTaxa(unidade({ spineBookingRequiresPayment: false })), com({ falasDoPaciente: ['E o pix'] })), null);
 });
 
+test('A e B: paciente em tratamento (sessão, saldo) não recebe a taxa de reserva', () => {
+  const ctx = { falasDoPaciente: ['manda o pix'], emTratamento: true };
+  assert.equal(travaDaTaxaDeReserva(SOFIA_27_10_PIX, DADOS, com(ctx)), null);
+  assert.equal(travaDaTaxaDeReserva(SOFIA_28_10[1], DADOS, com({ emTratamento: true })), null);
+  assert.equal(promptDizEmTratamento('- Este paciente JÁ TEM TRATAMENTO na clínica (fechado ou em andamento).'), true);
+  assert.equal(promptDizEmTratamento('- ELE ESTÁ EM TRATAMENTO (funil TRATAMENTO). Sessão'), true);
+  assert.equal(promptDizEmTratamento('<consulta_do_paciente>Próximo agendamento: 29/10</consulta_do_paciente>'), false);
+});
+
 test('A: com consulta de pé no CRM ou com comprovante lido a chave não é refeita', () => {
   const ctx = { falasDoPaciente: ['E o pix'] };
   assert.equal(travaDaTaxaDeReserva(SOFIA_27_10_PIX, DADOS, com({ ...ctx, consultaDePe: true })), null);
   assert.equal(travaDaTaxaDeReserva(SOFIA_27_10_PIX, DADOS, com({ ...ctx, comprovanteLido: true })), null);
+});
+
+// --- D: quer pagar só na clínica / a resposta só PERGUNTA se quer a chave (28/10, segundo caso da Boa Vista) -----------------
+
+// A Sofia, literal (o nome do paciente fica de fora): a frase quebrada e a pergunta no lugar da chave.
+const SOFIA_28_10_PERGUNTOU =
+  'Entendi! sem isso, o horário pode ser ocupado por outra pessoa até lá \n\nQuer que eu te passe a chave Pix pra garantir sua vaga de quinta às 15h30?';
+const PACIENTE_SO_NA_HORA = 'Só pago na hora tudo';
+
+test('D: "Só pago na hora tudo" + a Sofia que só PERGUNTA pela chave → taxa em uma frase e a chave na mesma mensagem', () => {
+  const r = travaDaTaxaDeReserva(SOFIA_28_10_PERGUNTOU, DADOS, com({ falasDoPaciente: [PACIENTE_SO_NA_HORA] }));
+  assert.equal(r?.motivo, 'pagar_na_clinica');
+  assert.equal(r?.texto, recadoPagarNaClinica(DADOS));
+  assert.match(r!.texto, /só fica separado com a taxa de agendamento de R\$ 100/);
+  assert.match(r!.texto, /ocupado por outra pessoa/);
+  assert.match(r!.texto, /Chave Pix: 12\.345\.678\/0001-90/);
+  assert.match(r!.texto, /Titular: Clinica Teste Ltda/);
+  assert.match(r!.texto, /comprovante aqui na conversa \(foto ou PDF\)/);
+  assert.doesNotMatch(r!.texto, /Quer que eu/);
+});
+
+test('D: a resposta que só pergunta "quer que eu te passe a chave?" é trocada pela versão com a chave, mesmo sem o paciente falar de pagamento', () => {
+  const r = travaDaTaxaDeReserva('Quer que eu te passe a chave Pix pra garantir sua vaga de quinta às 15h30?', DADOS, com({ falasDoPaciente: ['Pode ser quinta'] }));
+  assert.equal(r?.motivo, 'chave_oferecida');
+  assert.equal(r?.texto, recadoDaChave(DADOS));
+});
+
+test('D: ofertas da chave em pergunta reconhecidas; escolha entre formas de pagar não é oferta', () => {
+  for (const t of ['Quer que eu te passe a chave Pix?', 'Posso te enviar a chave Pix?', 'Quer a chave Pix?', 'Quer que eu te mande a chave pra garantir a vaga?']) {
+    assert.equal(ofereceuAChaveEmPergunta(t), true, t);
+  }
+  for (const t of ['Prefere pagar o Pix antecipado ou na clínica?', 'Qual horário fica melhor pra você?', 'A chave Pix é 12.345.678/0001-90. Me manda o comprovante, tá?', 'Posso confirmar seu agendamento?']) {
+    assert.equal(ofereceuAChaveEmPergunta(t), false, t);
+  }
+});
+
+test('D: "pagar na clínica" reconhecido; quem pediu a chave, escolheu o antecipado ou fala de outra coisa não', () => {
+  for (const f of [PACIENTE_SO_NA_HORA, 'pago na clínica', 'Na clínica', 'vou pagar no dia', 'prefiro pagar lá', 'só na clínica mesmo', 'Não quero pagar antecipado, pago na consulta']) {
+    assert.equal(pacienteQuerPagarNaClinica([f]), true, f);
+  }
+  for (const f of ['Me manda a chave que pago no dia', 'E o pix', 'Pix antecipado', 'Quero agendar para quinta', 'Qual o endereço da clínica?', 'Quero pagar no pix']) {
+    assert.equal(pacienteQuerPagarNaClinica([f]), false, f);
+  }
+});
+
+test('D: depois de receber a chave, quem INSISTE em pagar só na clínica fica com a equipe, sem promessa de horário', () => {
+  const r = travaDaTaxaDeReserva('Tudo bem! Então seu horário de quinta às 15h30 está reservado, pode vir.', DADOS, com({ falasDoPaciente: ['Mas eu só pago na clínica mesmo'], respostaAnterior: recadoPagarNaClinica(DADOS) }));
+  assert.equal(r?.motivo, 'insistiu_na_clinica');
+  assert.equal(r?.texto, RECADO_INSISTIU_NA_CLINICA);
+  assert.doesNotMatch(r!.texto, /garantid|reservad|confirmad|agendad|marcad|te espero/i);
+  assert.match(r!.texto, /equipe/);
+});
+
+test('D: sem a chave na resposta anterior não é insistência — é a primeira vez, recebe a chave', () => {
+  const r = travaDaTaxaDeReserva('Tudo bem!', DADOS, com({ falasDoPaciente: ['Na clínica'], respostaAnterior: 'Prefere pagar o Pix antecipado ou na clínica?' }));
+  assert.equal(r?.motivo, 'pagar_na_clinica');
+});
+
+test('D: respostaAnteriorDaIA pega a última resposta ANTES das falas deste turno', () => {
+  const m = (tipo: string, texto: string) => ({ tipo, texto });
+  assert.equal(respostaAnteriorDaIA([m('human', 'oi'), m('ai', 'Olá! Pix ou clínica?'), m('human', 'clínica'), m('human', 'só isso')]), 'Olá! Pix ou clínica?');
+  assert.equal(
+    respostaAnteriorDaIA([m('human', 'oi'), m('ai', 'Olá!'), m('human', 'e o pix'), m('ai', ''), m('tool', 'resultado')]),
+    'Olá!',
+  );
+  assert.equal(respostaAnteriorDaIA([m('human', 'oi'), m('ai', 'Olá!'), m('human', 'e o pix'), m('ai', 'Vou conferir a agenda'), m('tool', 'ok')]), 'Olá!');
+  assert.equal(respostaAnteriorDaIA([m('human', 'oi')]), '');
+});
+
+test('D: a resposta que já traz a chave e pede o comprovante não é trocada', () => {
+  const boa = `Entendi! A taxa de R$ 100 separa o horário. Chave Pix: ${DADOS.chave}. Me manda o comprovante, tá?`;
+  assert.equal(travaDaTaxaDeReserva(boa, DADOS, com({ falasDoPaciente: [PACIENTE_SO_NA_HORA] })), null);
+});
+
+test('D: unidade sem a flag, sem chave, com consulta de pé ou com comprovante não é tocada', () => {
+  const ctx = com({ falasDoPaciente: [PACIENTE_SO_NA_HORA] });
+  assert.equal(travaDaTaxaDeReserva(SOFIA_28_10_PERGUNTOU, dadosDaTaxa(unidade({ spineBookingRequiresPayment: false })), ctx), null);
+  assert.equal(travaDaTaxaDeReserva(SOFIA_28_10_PERGUNTOU, dadosDaTaxa(unidade({ pixKey: null })), ctx), null);
+  assert.equal(travaDaTaxaDeReserva(SOFIA_28_10_PERGUNTOU, DADOS, { ...ctx, consultaDePe: true }), null);
+  assert.equal(travaDaTaxaDeReserva(SOFIA_28_10_PERGUNTOU, DADOS, { ...ctx, comprovanteLido: true }), null);
+  assert.equal(travaDaTaxaDeReserva(SOFIA_28_10_PERGUNTOU, DADOS, { ...ctx, emTratamento: true }), null);
 });
 
 // --- B: nenhuma afirmação sem comprovante nem consulta --------------------------------------------------------------------
@@ -183,6 +281,8 @@ test('B: outras formas de dar o horário como garantido', () => {
     'Tudo certo, seu horário está garantido.',
     'Já deixei seu horário anotado com a equipe, às 14h.',
     'Aguardamos você hoje às 14h!',
+    'Já deixei tudo registrado para quarta às 10h, pra garantir é só me mandar o comprovante.',
+    'Sua consulta está confirmada para quarta às 10h, quando você chegar é só avisar na recepção.',
     'Já deixei tudo registrado com a equipe pra te receber direito às 14h, me manda o comprovante?',
   ]) {
     assert.equal(afirmaHorarioGarantido(frase), true, frase);
@@ -205,6 +305,10 @@ test('B: contraexemplos que NÃO podem ser trocados — explicação, pergunta, 
     'Perfeito! Tudo certo, vou precisar do seu nome completo.',
     'Tudo certo! Qual o seu CPF?',
     'Fico no aguardo do comprovante, assim o horário fica reservado.',
+    'Estamos aqui pra te receber bem, qualquer dúvida é só chamar!',
+    'Deixo agendado para quarta às 10h, pode ser?',
+    'Até já às 13h30?',
+    'Depois que você pagar o Pix, a equipe te envia a confirmação.',
     'Para garantir o horário das 14h, preciso do comprovante.',
   ]) {
     assert.equal(travaDaTaxaDeReserva(frase, DADOS, SEM_PROVA), null, frase);
@@ -242,7 +346,7 @@ test('A vem antes de B: pediu o Pix e a resposta também garante o horário → 
 // --- o recado não pode ser desfeito pelas outras travas da saída ----------------------------------------------------------
 
 test('os recados fixos passam limpos pelas travas de confirmação, de reserva e de saída', () => {
-  for (const recado of [recadoDaChave(DADOS), recadoSemComprovante(DADOS)]) {
+  for (const recado of [recadoDaChave(DADOS), recadoSemComprovante(DADOS), recadoPagarNaClinica(DADOS), RECADO_INSISTIU_NA_CLINICA]) {
     assert.equal(afirmaConfirmacao(recado), null, recado);
     assert.equal(afirmaConfirmacao(recado, { estrito: true }), null, recado);
     assert.equal(afirmaHorarioGarantido(recado), false, recado);
@@ -252,6 +356,7 @@ test('os recados fixos passam limpos pelas travas de confirmação, de reserva e
     assert.equal(detectarVazamento(recado), null, recado);
     assert.equal(semDiminutivo(recado), recado);
     assert.equal(semIntimidade(recado), recado);
+    assert.equal(ofereceuAChaveEmPergunta(recado), false, recado);
     const g = aplicarGuardrail(recado, unidade());
     assert.deepEqual(g.triggered, [], recado);
     assert.equal(g.text, recado);
@@ -259,7 +364,7 @@ test('os recados fixos passam limpos pelas travas de confirmação, de reserva e
 });
 
 test('o recado nunca traz lacuna nem dado fora do cadastro', () => {
-  for (const recado of [recadoDaChave(DADOS), recadoSemComprovante(DADOS)]) {
+  for (const recado of [recadoDaChave(DADOS), recadoSemComprovante(DADOS), recadoPagarNaClinica(DADOS)]) {
     assert.doesNotMatch(recado, /\[|\]|XXX/);
     assert.deepEqual([...recado.matchAll(/R\$\s*[\d.,]+/g)].map((m) => m[0]), ['R$ 100']);
   }
