@@ -17,8 +17,9 @@
  */
 import type { Unit } from '@prisma/client';
 import { normalizar, trechos } from '../lib/prometeu-sem-marcar.js';
-import { afirmaConfirmacao, NAO_AFIRMA_CONFIRMACAO, QUANDO_HORARIO } from './confirmacao-so-com-crm.js';
+import { afirmaConfirmacao, comprovantesDoTexto, NAO_AFIRMA_CONFIRMACAO, QUANDO_HORARIO } from './confirmacao-so-com-crm.js';
 import { fmtBRL, precosDaConsulta } from './prompt-composer.js';
+import { semOTrecho } from './reserva-sem-marcar.js';
 
 export interface DadosDaTaxa {
   /** copiada exatamente do cadastro da unidade (só aparam-se as pontas) */
@@ -49,7 +50,8 @@ const LEITURA_DE_ARQUIVO = /\[(?:imagem|arquivo) do cliente\]:[\s\S]*/gi;
  */
 const NAO_E_PEDIDO =
   /\bja (?:fiz|paguei|mandei|enviei|transferi|foi)\b|\bacabei de\b|\bsegue\b|\bnao (?:tenho|quero|uso|vou|consigo|posso|aceito|preciso)\b[^.?!]{0,20}\b(?:pix|chave|antecip)|\b(?:ou|em vez d[eo]|ao inves d[eo])\s+(?:\S+\s+){0,2}?(?:pix|chave)\b|\b(?:pix|chave)\s+(?:\S+\s+){0,2}?ou\b/;
-const PEDE_PIX = [
+/** Pedido EXPLÍCITO da chave: vale sempre, mesmo para quem acabou de recebê-la (não viu, perdeu a mensagem). */
+const PEDE_A_CHAVE = [
   // "e o pix" (o "e" abre a frase: "aceita débito e pix?" não é pedido), "qual a chave", "cadê o pix"
   /(?:^|[.!?,;]\s*)e\s+(?:o|a|esse|essa)?\s*(?:chave|pix)\b/,
   /\b(?:qual|cade|onde)\s+(?:e\s+)?(?:o|a|esse|essa)?\s*(?:chave|pix)\b/,
@@ -58,13 +60,16 @@ const PEDE_PIX = [
   /\b(?:manda|mande|mandar|envia|envie|enviar|passa|passe|passar)\b(?:(?!\b(?:valor|preco|endereco|horario|quanto|desconto|informacoes?|dados)\b)[^.?!,]){0,15}\b(?:pix|chave)\b/,
   // "quero o pix", "preciso da chave" — colado ao verbo: "quero saber o valor do pix" e "quero pagar com cartão ou pix" não são pedido
   /\b(?:quero|preciso|gostaria)\s+(?:d[oa]s?\s+|[oa]s?\s+)?(?:chave|pix)\b/,
-  // "vou pagar no pix", "prefiro pagar com pix"
-  /\b(?:vou|quero|prefiro|pode ser|opto|escolho)\s+(?:pagar\s+)?(?:no|com|via|por|pelo)\s+(?:o\s+)?pix\b/,
   // "pix por favor", "chave pfv"
   /\b(?:pix|chave)\b[^.?!]{0,15}\b(?:por favor|pfv|pf|por gentileza)\b/,
   // só "pix" / "a chave?"
   /^(?:o |a )?(?:chave )?(?:pix|chave)[?!. ]*$/,
 ];
+/**
+ * Anuncia que vai pagar no Pix ("vou pagar no pix", "prefiro pagar com pix"): pede a chave de quem ainda não a tem, mas quem
+ * ACABOU de recebê-la está respondendo ("ok, vou pagar no pix agora") — reenviar o recado inteiro seria repetir a mensagem.
+ */
+const ANUNCIA_O_PIX = /\b(?:vou|quero|prefiro|pode ser|opto|escolho)\s+(?:pagar\s+)?(?:no|com|via|por|pelo)\s+(?:o\s+)?pix\b/;
 /** Escolheu pagar antes: "vou pagar o pix antecipado", "prefiro antecipado", ou só "Pix antecipado" (a resposta do botão). */
 const ESCOLHE_ANTECIPADO = [
   /\b(?:vou|quero|prefiro|pode ser|opto|escolho|fecho)\b[^.?!]{0,20}\b(?:antecipad|pagar (?:agora|antes|ja|hoje))/,
@@ -72,12 +77,17 @@ const ESCOLHE_ANTECIPADO = [
   /^pix antecipad[oa]?\b/,
 ];
 
-/** O paciente pediu a chave Pix, ou escolheu pagar antes, em alguma das falas DESTE turno. */
-export function pacientePediuAChave(falasDoTurno: ReadonlyArray<string>): boolean {
+/**
+ * O paciente pediu a chave Pix, ou escolheu pagar antes, em alguma das falas DESTE turno.
+ * `soPedidoExplicito`: a chave já foi enviada (ou ele já pagou) — aí só vale o pedido explícito ("e o pix?", "qual a chave?"),
+ * não o aviso de que vai pagar ("ok, vou pagar no pix agora", "Pix antecipado").
+ */
+export function pacientePediuAChave(falasDoTurno: ReadonlyArray<string>, opcoes: { soPedidoExplicito?: boolean } = {}): boolean {
   return falasDoTurno.some((fala) => {
     const n = normalizar(String(fala ?? '').replace(LEITURA_DE_ARQUIVO, ' '));
     if (!n || NAO_E_PEDIDO.test(n)) return false;
-    return PEDE_PIX.some((r) => r.test(n)) || ESCOLHE_ANTECIPADO.some((r) => r.test(n));
+    if (PEDE_A_CHAVE.some((r) => r.test(n))) return true;
+    return !opcoes.soPedidoExplicito && (ANUNCIA_O_PIX.test(n) || ESCOLHE_ANTECIPADO.some((r) => r.test(n)));
   });
 }
 
@@ -89,8 +99,9 @@ const PAGA_NA_CLINICA = [
   /\bpag(?:o|ar|arei|aria)\b[^.?!]{0,25}\b(?:na hora|no dia|na clinica|na consulta|no local|presencial)\b/,
   /\bpag(?:o|ar|arei)\s+la\b/,
   /\b(?:na clinica|no dia|na hora)\b[^.?!]{0,15}\b(?:pago|pagar|pagarei|pagamento)\b/,
-  /^(?:so |apenas )?(?:na clinica|no dia|na hora)(?: mesmo)?[ .!]*$/,
 ];
+/** A fala INTEIRA é só o lugar ("Na clínica", "só no dia"): numa frase solta no meio ("Ok. No dia.") é resposta a outra pergunta. */
+const SO_O_LUGAR = /^(?:so |apenas )?(?:na clinica|no dia|na hora)(?: mesmo)?[ .!]*$/;
 
 /** O paciente quer pagar só na clínica. Quem pediu a chave ou escolheu o antecipado NÃO entra (o pedido manda). */
 export function pacienteQuerPagarNaClinica(falasDoTurno: ReadonlyArray<string>): boolean {
@@ -98,8 +109,26 @@ export function pacienteQuerPagarNaClinica(falasDoTurno: ReadonlyArray<string>):
   return falasDoTurno.some((fala) => {
     const n = normalizar(String(fala ?? '').replace(LEITURA_DE_ARQUIVO, ' '));
     // "ok, pago o restante na clínica" concorda com a taxa (o recado diz que o restante é na clínica): não é recusa
-    return !!n && !/\b(?:resto|restante|saldo|diferenca|o que falta|complemento)\b/.test(n) && PAGA_NA_CLINICA.some((r) => r.test(n));
+    if (!n || /\b(?:resto|restante|saldo|diferenca|o que falta|complemento)\b/.test(n)) return false;
+    if (SO_O_LUGAR.test(n)) return true;
+    // cada frase sozinha: "Quanto pago no dia? Só pago na hora tudo" recusa na segunda
+    return n.split(/(?<=[.!?])\s+/).some((frase) => {
+      const achados = PAGA_NA_CLINICA.map((r) => r.exec(frase)).filter((m): m is RegExpExecArray => !!m);
+      return achados.length > 0 && !perguntaDeOutraCoisa(frase, Math.min(...achados.map((m) => m.index)));
+    });
   });
+}
+
+/**
+ * A frase PERGUNTA quanto paga, como remarca ou se aceita cartão no dia: não é recusa da taxa, e trocá-la pelo recado deixa a
+ * pergunta sem resposta ("quanto pago no dia?", "posso pagar no cartão no dia?", "não vou poder ir no dia, posso pagar e
+ * remarcar?"). "Quanto" só exclui se vem ANTES do trecho de pagar ("quero pagar tudo no dia, quanto fica?" segue sendo recusa).
+ */
+function perguntaDeOutraCoisa(frase: string, inicioDoPagar: number): boolean {
+  const quanto = frase.search(/\bquanto\b/);
+  if (quanto >= 0 && quanto < inicioDoPagar) return true;
+  if (!/\?\s*$/.test(frase)) return false;
+  return /\b(?:remarc\w*|reagend\w*|desmarc\w*|cancel\w*|cartao|credito|debito|dinheiro|especie|parcel\w*|dividir)\b/.test(frase);
 }
 
 /**
@@ -118,21 +147,39 @@ export function respostaAnteriorDaIA(mensagens: ReadonlyArray<{ tipo: string; te
 
 const QUEM = '(?:equipe|recepcao|time|atendente|setor|clinica)';
 const ENVIAR = '(?:envia|enviar|enviara|envie|manda|mandar|mandara|passa|passar|passara|encaminha|encaminhar|encaminhara|fornece)';
+/**
+ * O que a equipe envia NÃO é a chave: "a equipe te envia a confirmação depois do Pix", "a equipe encaminha o recibo do Pix".
+ * Vale quando essa palavra é o OBJETO do envio (a primeira depois do verbo) e o Pix só a complementa. "Os dados/informações do Pix"
+ * e "o endereço e a chave Pix" continuam sendo a chave.
+ */
+const OUTRO_OBJETO = new Set(['confirmacao', 'recibo', 'comprovante', 'lembrete', 'orientacao', 'orientacoes', 'resumo', 'aviso', 'valor', 'endereco']);
+const ENFEITE = new Set(['te', 'lhe', 'voce', 'vc', 'a', 'o', 'as', 'os', 'um', 'uma', 'seu', 'sua', 'aqui', 'por', 'tambem', 'depois', 'ja', 'em', 'seguida', 'rapido', 'logo']);
 const EQUIPE_ENVIA = [
   // "a equipe te envia a chave certa", "a equipe já vai te enviar a chave por aqui"
-  new RegExp(`\\b${QUEM}\\b[^.?!]{0,50}\\b${ENVIAR}\\b[^.?!]{0,30}\\b(?:chave(?!\\s+de\\s+(?:acesso|porta|casa|entrada|seguranca))|pix)\\b`),
+  new RegExp(`\\b${QUEM}\\b[^.?!]{0,50}\\b${ENVIAR}\\b(?<ate>[^.?!]{0,30}?)\\b(?<obj>chave(?!\\s+de\\s+(?:acesso|porta|casa|entrada|seguranca))|pix)\\b`),
   // "a chave, a equipe te manda" (só "chave": "depois do Pix, a equipe te envia a confirmação" é explicação)
   new RegExp(`\\bchave\\b[^.?!]{0,30}\\b${QUEM}\\b[^.?!]{0,30}\\b${ENVIAR}\\b`),
 ];
+/** O objeto do envio é outra coisa e o Pix só a complementa ("o recibo do Pix")? */
+function enviaOutraCoisaDoPix(m: RegExpExecArray): boolean {
+  if (m.groups?.obj !== 'pix') return false;
+  const primeira = (m.groups.ate ?? '').split(/\s+/).find((w) => w && !ENFEITE.has(w));
+  return !!primeira && OUTRO_OBJETO.has(primeira);
+}
+/** "Não se preocupe, a equipe te envia a chave" tranquiliza: o "não" não nega o envio. */
+const TRANQUILIZA = /\bnao (?:se )?preocup\w*|\bnao precisa (?:se )?preocupar\b|\bnao (?:tem|ha) (?:problema|duvida)\b/g;
 
 /** A resposta empurra a chave para a equipe ("a equipe te envia a chave"). Pergunta e negação não contam. */
 export function empurrouAChaveParaEquipe(texto: string | null | undefined): boolean {
   return trechos(String(texto ?? '')).some((t) => {
-    const n = normalizar(t);
+    const n = normalizar(t).replace(TRANQUILIZA, ' ');
     if (/\?\s*\S{0,3}$/.test(n)) return false;
     return EQUIPE_ENVIA.some((r) => {
       const m = r.exec(n);
-      return !!m && !/\b(?:nao|nem)\b/.test(n.slice(Math.max(0, m.index - 30), m.index + m[0].length));
+      if (!m || enviaOutraCoisaDoPix(m)) return false;
+      // a negação vale na MESMA oração do envio ("a equipe não envia a chave"); a de outra oração não ("Não, ... a equipe te envia")
+      const inicio = Math.max(n.lastIndexOf(',', m.index), n.lastIndexOf(';', m.index), n.lastIndexOf(':', m.index)) + 1;
+      return !/\b(?:nao|nem)\b/.test(n.slice(inicio, m.index + m[0].length));
     });
   });
 }
@@ -165,6 +212,17 @@ const ATE_JA = /\bate ja\b/;
 const DEIXEI_REGISTRADO =
   /\bdeix(?:ei|ado|ada)\s+(?:\S+\s+){0,3}?(?:registrad|anotad|combinad|certinh|encaminhad|agendad)[oa]s?\b/;
 const PRA_TE_RECEBER = /\b(?:pra|para) te receber\b|\baguardamos (?:voce|vc)\b|\bestarei (?:te )?(?:esperando|aguardando)\b/;
+/**
+ * A Sofia anuncia o que VAI FAZER ("Tudo certo, vou ver os horários de quinta pra você"): não garante horário nenhum.
+ * A oração assim é julgada fora; o que sobra do trecho continua valendo ("Sua consulta está confirmada, vou ver…" afirma).
+ */
+const ANUNCIA_UMA_ACAO =
+  /\b(?:vou|vamos|irei|deixa eu|deixe eu|quer que eu|posso)\s+(?:te\s+|lhe\s+)?(?:\S+\s+){0,1}?(?:ver|verificar|conferir|checar|consultar|procurar|buscar|olhar|mostrar|sugerir|separar os horarios)\b/;
+/** "Tudo certo, quinta às 14h está disponível pra você": informa que há vaga, não que o horário foi guardado. */
+const SO_DISPONIVEL = /\b(?:disponivel|disponiveis|livre|livres|vago|vagos)\b/;
+const AFIRMA_GUARDA = /\b(?:confirmad|agendad|reservad|garantid|marcad|anotad|registrad)[oa]s?\b|\b(?:deixei|deixo|deixar|reservei|reservo|garanti|garanto|agendei|marquei)\b|\btudo cert\w*|\bcertinh\w*/;
+/** "Deixei anotado aqui que o melhor horário é à tarde": a preferência dele foi anotada, não o horário reservado. */
+const ANOTOU_O_QUE_ELE_DISSE = /^\s*(?:aqui\s+|por aqui\s+)?que\b/;
 const E_ASSUNTO_DE_HORARIO = /\b(?:receber|horario|consulta|atendimento|vaga)\b/;
 
 /**
@@ -192,7 +250,19 @@ function afirmaNoTrecho(t: string): boolean {
   return false;
 }
 
+/** Oração que só informa ou anuncia ("vou ver os horários", "quinta às 14h está disponível"): sem verbo de guardar, não garante nada. */
+function oracaoNeutra(o: string): boolean {
+  const n = normalizar(o);
+  return (ANUNCIA_UMA_ACAO.test(n) || SO_DISPONIVEL.test(n)) && !AFIRMA_GUARDA.test(n);
+}
+
 function afirmaNaOracao(t: string): boolean {
+  const oracoes = t.split(/,\s*/);
+  if (oracoes.some(oracaoNeutra)) {
+    // a oração neutra sai do julgamento; o que sobra do trecho continua valendo ("Sua consulta está confirmada, vou ver…" afirma)
+    const resto = oracoes.filter((o) => !oracaoNeutra(o)).join(', ');
+    return !!resto && afirmaNaOracao(resto);
+  }
   const n = normalizar(t);
   const assunto = QUANDO_HORARIO.test(n) || E_ASSUNTO_DE_HORARIO.test(n);
   // "Tudo certo, vou precisar do seu nome" é coleta de dado, não horário: a frase solta só vale com horário/consulta/dia no trecho.
@@ -206,6 +276,8 @@ function afirmaNaOracao(t: string): boolean {
     const m = re.exec(n);
     if (!m || !vale) continue;
     if (CONDICAO_ANTES.test(n.slice(0, m.index)) || NAO_AFIRMA_CONFIRMACAO.test(n.slice(Math.max(0, m.index - 25), m.index + m[0].length))) continue;
+    // "deixei anotado que…" sem dia nem hora depois: é o que ELE disse (preferência, nome), não horário garantido
+    if (re === DEIXEI_REGISTRADO && ANOTOU_O_QUE_ELE_DISSE.test(n.slice(m.index + m[0].length)) && !QUANDO_HORARIO.test(n.slice(m.index + m[0].length))) continue;
     return true;
   }
   return false;
@@ -219,13 +291,18 @@ function blocoDaChave(d: DadosDaTaxa): string {
   return `Chave Pix: ${d.chave}${d.titular ? `\nTitular: ${d.titular}` : ''}`;
 }
 
-/** O paciente pediu o Pix (ou a resposta mandou a equipe enviar): a chave, o titular, o valor e o pedido do comprovante. */
-export function recadoDaChave(d: DadosDaTaxa): string {
+/** O pedido da taxa com a chave: o que se ACRESCENTA ao resto de uma resposta (sem abertura própria). */
+function pedidoDaChave(d: DadosDaTaxa): string {
   return (
-    `Claro! Para garantir o seu horário, é só pagar a taxa de agendamento de ${reais(d.valor)} por Pix:\n\n` +
+    `Para garantir o seu horário, é só pagar a taxa de agendamento de ${reais(d.valor)} por Pix:\n\n` +
     `${blocoDaChave(d)}\n\n` +
     'Assim que pagar, me manda o comprovante aqui na conversa (foto ou PDF). Sem o comprovante, o horário não fica garantido. 🙏'
   );
+}
+
+/** O paciente pediu o Pix (ou a resposta mandou a equipe enviar): a chave, o titular, o valor e o pedido do comprovante. */
+export function recadoDaChave(d: DadosDaTaxa): string {
+  return `Claro! ${pedidoDaChave(d)}`;
 }
 
 /** A resposta dava o horário como garantido sem consulta nem comprovante: o horário só fica garantido depois da taxa. */
@@ -238,19 +315,38 @@ export function recadoSemComprovante(d: DadosDaTaxa): string {
   );
 }
 
-/** O paciente quer pagar na clínica: em uma frase, a taxa é o que separa o horário; e a chave vai na mesma mensagem. */
-export function recadoPagarNaClinica(d: DadosDaTaxa): string {
+/** A taxa em uma frase e a chave: o que se ACRESCENTA ao resto de uma resposta (sem abertura própria). */
+function explicacaoDaClinica(d: DadosDaTaxa): string {
   return (
-    `Entendi! Aqui o horário só fica separado com a taxa de agendamento de ${reais(d.valor)}: sem ela, ele pode ser ocupado por outra pessoa. ` +
+    `Aqui o horário só fica separado com a taxa de agendamento de ${reais(d.valor)}: sem ela, ele pode ser ocupado por outra pessoa. ` +
     'O restante você paga na clínica, no dia da consulta.\n\n' +
     `Se quiser garantir, é só pagar por Pix:\n${blocoDaChave(d)}\n\n` +
     'Me manda o comprovante aqui na conversa (foto ou PDF), tá? 🙏'
   );
 }
 
+/** O paciente quer pagar na clínica: em uma frase, a taxa é o que separa o horário; e a chave vai na mesma mensagem. */
+export function recadoPagarNaClinica(d: DadosDaTaxa): string {
+  return `Entendi! ${explicacaoDaClinica(d)}`;
+}
+
 /** O paciente insiste em pagar só na clínica depois de receber a chave: a equipe cuida, e o horário NÃO é prometido. */
 export const RECADO_INSISTIU_NA_CLINICA =
   'Tudo bem! Anotei que você prefere pagar na clínica e a equipe vai falar com você aqui na conversa para ver como fica. 🙏';
+
+/** O mesmo caso quando NADA chegou à equipe (sem ferramenta, prazo estourado, erro): o recado não promete o que não aconteceu. */
+export const RECADO_INSISTIU_SEM_PROMESSA =
+  'Tudo bem! Entendi que você prefere pagar na clínica. Só que, sem a taxa de agendamento, o horário não fica separado. Se quiser garantir, é só me avisar que eu te passo a chave Pix. 🙏';
+
+/** A conversa já teve o encaminhamento à equipe (com a promessa feita): a insistência é tratada UMA vez por conversa. */
+export function jaEncaminhouAInsistencia(texto: string | null | undefined): boolean {
+  return String(texto ?? '').includes(RECADO_INSISTIU_NA_CLINICA);
+}
+
+/** Alguma fala do paciente traz comprovante lido (foto/PDF), de QUALQUER data: quem já pagou não paga de novo por ter passado 24 h. */
+export function pacienteJaMandouComprovante(falasDoPaciente: ReadonlyArray<string>): boolean {
+  return falasDoPaciente.some((f) => comprovantesDoTexto(String(f ?? '')).length > 0);
+}
 
 export interface ContextoDaTaxa {
   /** o que o PACIENTE disse neste turno (sem as linhas da equipe) */
@@ -263,6 +359,10 @@ export interface ContextoDaTaxa {
   respostaAnterior: string;
   /** há comprovante lido na conversa (neste turno ou nas últimas 24 h): quem trata é a espera da equipe */
   comprovanteLido: boolean;
+  /** há comprovante lido em QUALQUER ponto da conversa, de qualquer data (`pacienteJaMandouComprovante`): ele já pagou */
+  jaMandouComprovante: boolean;
+  /** alguma resposta anterior da IA nesta conversa já encaminhou a insistência à equipe (`jaEncaminhouAInsistencia`) */
+  insistenciaJaEncaminhada: boolean;
 }
 
 /** Os dois textos do prompt (`renderPacienteNaFranquia` e `REGRAS_DO_FUNIL_TRATAMENTO`) que dizem que o paciente está em tratamento. */
@@ -273,6 +373,8 @@ export function promptDizEmTratamento(prompt: string | null | undefined): boolea
 export interface TrocaDaTaxa {
   texto: string;
   motivo: 'chave_pedida' | 'equipe_envia_a_chave' | 'chave_oferecida' | 'pagar_na_clinica' | 'insistiu_na_clinica' | 'horario_sem_comprovante';
+  /** o resto da resposta do modelo foi mantido e o bloco da chave, acrescentado (false = o recado inteiro tomou o lugar) */
+  preservouOResto?: boolean;
 }
 
 /** A resposta já traz a chave EXATA e pede o comprovante: não há o que corrigir. */
@@ -280,23 +382,91 @@ function jaTrazAChaveEPedeComprovante(texto: string, d: DadosDaTaxa): boolean {
   return texto.includes(d.chave) && /comprovante/.test(normalizar(texto)) && !empurrouAChaveParaEquipe(texto);
 }
 
+/** "Sem isso, o horário pode ser ocupado": pendurado numa frase que saiu, não faz sentido sozinho. */
+const PENDURADO = /^(?:sem|com|por|para|pra) (?:isso|esse|essa|isto)\b/;
+/** A resposta diz que ele pode pagar na clínica: contradiz a taxa, sai junto do bloco. */
+const RESPONDE_PAGAR_NA_CLINICA =
+  /\bpag\w*\b[^.?!]{0,40}\b(?:na clinica|no dia|na hora|no local|presencial)\b|\b(?:na clinica|no dia|na hora)\b[^.?!]{0,25}\bpag\w*\b/;
+
+/**
+ * O resto que ficaria ainda parece garantir horário ou empurrar a chave? Na dúvida vale o recado inteiro: o detector largo
+ * (sem exigir dia/hora) e as frases soltas ("já deixei tudo registrado com a equipe") também contam aqui.
+ */
+function restoSuspeito(resto: string): boolean {
+  if (afirmaHorarioGarantido(resto) || empurrouAChaveParaEquipe(resto) || ofereceuAChaveEmPergunta(resto)) return true;
+  return trechos(resto).some((t) => {
+    const n = normalizar(t);
+    if (/\?\s*\S{0,3}$/.test(n)) return false;
+    return !!afirmaConfirmacao(t) || DEIXEI_REGISTRADO.test(n) || ATE_JA.test(n) || PRA_TE_RECEBER.test(n);
+  });
+}
+
+/**
+ * Tira da resposta só o que é problema (`ehProblema`), passa o resto pela MESMA trava e acrescenta o bloco. O recado inteiro fica
+ * como último recurso: sobrou quase nada, o resto ainda é problema, ou o resto já traz a chave mas sem o pedido do comprovante.
+ */
+function conservandoOResto(
+  texto: string,
+  dados: DadosDaTaxa,
+  ehProblema: (trecho: string, normalizado: string) => boolean,
+  bloco: string,
+  inteiro: string,
+): { texto: string; preservouOResto: boolean } {
+  const recadoInteiro = { texto: inteiro, preservouOResto: false };
+  let resto = texto;
+  for (const t of trechos(texto)) {
+    const n = normalizar(t);
+    if (!ehProblema(t, n) && !PENDURADO.test(n)) continue;
+    const sem = semOTrecho(resto, t);
+    if (sem === null) return recadoInteiro;
+    resto = sem;
+  }
+  resto = resto.trim();
+  if (!resto) return recadoInteiro;
+  if (resto.includes(dados.chave)) return jaTrazAChaveEPedeComprovante(resto, dados) ? { texto: resto, preservouOResto: true } : recadoInteiro;
+  if (restoSuspeito(resto)) return recadoInteiro;
+  return { texto: `${resto}\n\n${bloco}`, preservouOResto: true };
+}
+
 /**
  * A decisão: null = a resposta sai como veio. Primeiro a chave (pedida pelo paciente, ou empurrada para a equipe); depois o
- * horário dado como garantido sem prova. Uma troca só por turno.
+ * horário dado como garantido sem prova. Uma troca só por turno. Nas trocas da chave e da clínica o RESTO da resposta
+ * (o endereço que ele também perguntou) fica e o bloco da chave é acrescentado.
  */
 export function travaDaTaxaDeReserva(texto: string, dados: DadosDaTaxa | null, ctx: ContextoDaTaxa): TrocaDaTaxa | null {
   if (!dados || ctx.consultaDePe || ctx.emTratamento || ctx.comprovanteLido) return null;
-  // Quer pagar só na clínica. Já recebeu a chave e insiste: equipe. Senão: a taxa em uma frase e a chave na MESMA mensagem.
-  if (pacienteQuerPagarNaClinica(ctx.falasDoPaciente)) {
-    if (ctx.respostaAnterior.includes(dados.chave) || ctx.respostaAnterior.includes(RECADO_INSISTIU_NA_CLINICA)) return { texto: RECADO_INSISTIU_NA_CLINICA, motivo: 'insistiu_na_clinica' };
-    if (!jaTrazAChaveEPedeComprovante(texto, dados)) return { texto: recadoPagarNaClinica(dados), motivo: 'pagar_na_clinica' };
+  const chaveJaEnviada = ctx.respostaAnterior.includes(dados.chave);
+  // Já mandou comprovante (em qualquer data) ou o cartão diz que pagou: NADA é pedido por conta da Sofia (nem "horário não garantido",
+  // nem a taxa de quem quer pagar na clínica). Só o pedido EXPLÍCITO da chave ("qual o pix?") é atendido — ele pediu, e a resposta
+  // "a equipe te envia a chave" seria a falha que esta trava existe para evitar.
+  if (ctx.jaMandouComprovante) {
+    if (!pacientePediuAChave(ctx.falasDoPaciente, { soPedidoExplicito: true }) || jaTrazAChaveEPedeComprovante(texto, dados)) return null;
+    const r = conservandoOResto(texto, dados, (t) => empurrouAChaveParaEquipe(t) || ofereceuAChaveEmPergunta(t), pedidoDaChave(dados), recadoDaChave(dados));
+    return { ...r, motivo: empurrouAChaveParaEquipe(texto) ? 'equipe_envia_a_chave' : ofereceuAChaveEmPergunta(texto) ? 'chave_oferecida' : 'chave_pedida' };
   }
-  const pediu = pacientePediuAChave(ctx.falasDoPaciente);
+  // Quer pagar só na clínica. Já recebeu a chave e insiste: equipe (UMA vez por conversa; depois a conversa segue como está,
+  // sem novo recado nem novo resumo). Senão: a taxa em uma frase e a chave na MESMA mensagem.
+  const insistenciaTratada = ctx.insistenciaJaEncaminhada || jaEncaminhouAInsistencia(ctx.respostaAnterior);
+  if (!insistenciaTratada && pacienteQuerPagarNaClinica(ctx.falasDoPaciente)) {
+    if (chaveJaEnviada) return { texto: RECADO_INSISTIU_NA_CLINICA, motivo: 'insistiu_na_clinica' };
+    if (!jaTrazAChaveEPedeComprovante(texto, dados)) {
+      const r = conservandoOResto(
+        texto,
+        dados,
+        (t, n) => ofereceuAChaveEmPergunta(t) || empurrouAChaveParaEquipe(t) || RESPONDE_PAGAR_NA_CLINICA.test(n),
+        explicacaoDaClinica(dados),
+        recadoPagarNaClinica(dados),
+      );
+      return { ...r, motivo: 'pagar_na_clinica' };
+    }
+  }
+  const pediu = pacientePediuAChave(ctx.falasDoPaciente, { soPedidoExplicito: chaveJaEnviada });
   const empurrou = empurrouAChaveParaEquipe(texto);
   const ofereceu = ofereceuAChaveEmPergunta(texto);
   if ((pediu || empurrou || ofereceu) && !jaTrazAChaveEPedeComprovante(texto, dados)) {
-    return { texto: recadoDaChave(dados), motivo: empurrou ? 'equipe_envia_a_chave' : ofereceu ? 'chave_oferecida' : 'chave_pedida' };
+    const r = conservandoOResto(texto, dados, (t) => empurrouAChaveParaEquipe(t) || ofereceuAChaveEmPergunta(t), pedidoDaChave(dados), recadoDaChave(dados));
+    return { ...r, motivo: empurrou ? 'equipe_envia_a_chave' : ofereceu ? 'chave_oferecida' : 'chave_pedida' };
   }
-  if (afirmaHorarioGarantido(texto)) return { texto: recadoSemComprovante(dados), motivo: 'horario_sem_comprovante' };
+  if (afirmaHorarioGarantido(texto)) return { texto: recadoSemComprovante(dados), motivo: 'horario_sem_comprovante', preservouOResto: false };
   return null;
 }
