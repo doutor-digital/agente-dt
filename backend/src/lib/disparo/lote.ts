@@ -10,6 +10,7 @@ import { alertaLimiteDeTaxa, alertaNumeroRestrito, alertaPausaPorFalhas, alertaP
 import { textoFinal, valoresDasVariaveis, type SituacaoNaFranquia } from './regras.js';
 import type { Definicao } from './modelo.js';
 import type { ResultadoDoTemplate } from '../whatsapp-meta.js';
+import { FUSO_PADRAO, fusoValido } from '../fuso.js';
 
 export type Modo = 'ligado' | 'seco' | 'desligado';
 
@@ -32,6 +33,8 @@ export interface Destino {
 export interface OndaNoLote extends Definicao {
   id: string;
   campanhaId: string;
+  /** o nome da campanha como o João a cadastrou (vem de `DisparoCampanha.nome`); aparece na nota do cartão */
+  campanhaNome: string;
   aprovadaEm: Date | null;
   /** quantos SAIR o João já tinha visto quando retomou esta onda; o freio por SAIR só conta os que vierem depois */
   sairAceitos?: number;
@@ -121,11 +124,40 @@ export function motivoDaMeta(r: ResultadoDoTemplate): string {
   return `${r.incerto ? 'INCERTO: ' : ''}${typeof r.detalhe === 'string' ? r.detalhe : 'a Meta não devolveu o id da mensagem'}`.slice(0, 300);
 }
 
-export function textoDoEspelho(onda: OndaNoLote, texto: string): string {
-  return (
-    `📲 Disparo de campanha pelo WhatsApp oficial (modelo ${onda.template}):\n${texto}\n\n` +
-    'Esta nota existe porque o Kommo não mostra mensagem enviada por fora dele. O paciente recebeu normalmente.'
-  );
+/**
+ * Teto do texto da nota. O código não tinha teto de nota (o Kommo não documenta um que o corpo de um modelo da Meta, de até 1024
+ * caracteres, alcance); este é folga de segurança: se estourar, encurta a MENSAGEM, nunca o link nem o resto (um link absurdo, maior que o teto sozinho, passa inteiro: cortá-lo o quebraria).
+ */
+export const NOTA_MAX = 4000;
+
+const NOME_DA_MIDIA = { image: 'Imagem enviada junto', video: 'Vídeo enviado junto', document: 'Documento enviado junto' } as const;
+
+/** "28/10 às 14:05" no fuso da unidade (São Paulo se o fuso for inválido). */
+export function quandoEmTexto(quando: Date, fuso: string): string {
+  const partes = new Intl.DateTimeFormat('pt-BR', { timeZone: fusoValido(fuso) ? fuso : FUSO_PADRAO, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(quando);
+  const p = (tipo: string) => partes.find((x) => x.type === tipo)?.value ?? '';
+  return `${p('day')}/${p('month')} às ${p('hour')}:${p('minute')}`;
+}
+
+/**
+ * A nota que fica no cartão depois que a Meta aceitou o envio. Quem lê é a SDR: precisa entender em poucos segundos o que o
+ * paciente recebeu (campanha, quando, o texto, a imagem) e que a resposta dele é a essa mensagem. Sem telefone, sem id da Meta,
+ * sem o nome interno do modelo. A linha da imagem não leva emoji de propósito: o Kommo só aceita emoji simples e o 🖼 seria
+ * apagado, deixando um espaço sobrando no começo da linha.
+ */
+export function textoDoEspelho(onda: OndaNoLote, texto: string, quando: Date, fuso: string): string {
+  // o nome é digitado livremente: uma linha só, para uma quebra de linha no nome não deformar a abertura
+  const campanha = onda.campanhaNome.replace(/\s+/g, ' ').trim();
+  const abertura = `📲 Campanha${campanha ? ` "${campanha}"` : ''} — enviada em ${quandoEmTexto(quando, fuso)} pelo WhatsApp oficial.`;
+  const midia = onda.cabecalho ? `\n\n${NOME_DA_MIDIA[onda.cabecalho.tipo]}: ${onda.cabecalho.link}` : '';
+  const fim = '\n\nSe o paciente responder, é resposta a esta mensagem.';
+  const moldura = (mensagem: string) => `${abertura}\n\nMensagem enviada:\n${mensagem}${midia}${fim}`;
+  const sobra = NOTA_MAX - moldura('').length;
+  if (texto.length <= sobra) return moldura(texto);
+  let corte = Math.max(0, sobra - 1);
+  const ultimo = texto.charCodeAt(corte - 1);
+  if (ultimo >= 0xd800 && ultimo <= 0xdbff) corte -= 1; // não parte um emoji ao meio
+  return moldura(`${texto.slice(0, corte).trimEnd()}…`);
 }
 
 type Veredito =
@@ -207,7 +239,7 @@ async function enviarUm(porto: Porto, onda: OndaNoLote, u: UnidadeNoLote, d: Des
       await porto.gravar(d.id, { estado: 'enviado', wamid: res.wamid, enviadoEm: porto.agora() });
       r.mandou += 1;
       // Mensagem por fora do Kommo não aparece lá: sem a nota, a resposta do paciente chega sem a pergunta.
-      await porto.espelhar(d, textoDoEspelho(onda, textoFinal(onda.textoModelo, valores))).catch((err) =>
+      await porto.espelhar(d, textoDoEspelho(onda, textoFinal(onda.textoModelo, valores), porto.agora(), u.fuso)).catch((err) =>
         porto.log('warn', { unit: u.slug, err: String(err), lead: d.kommoLeadId }, 'disparo: enviei mas não consegui espelhar a nota no cartão'),
       );
       return 'feito';
