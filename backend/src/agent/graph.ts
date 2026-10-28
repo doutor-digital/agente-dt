@@ -1275,11 +1275,16 @@ export async function buildAgentGraph(
       // Taxa de reserva (Boa Vista, 27–28/10/2026): a chave Pix sai por código, e horário não é dado como garantido sem
       // consulta no CRM nem comprovante da taxa (taxa-de-reserva.ts). Depois das travas de cima: se elas já trocaram a
       // resposta, esta confere o que sobrou. Sem chave ou sem valor cadastrado, nada muda. Só unidade com a flag.
-      const trocaDaTaxa = travaDaTaxaDeReserva(textoFinal, dadosDaTaxa(unit), {
-        falasDoPaciente: mensagensDoPaciente,
-        consultaDePe: promptTemConsulta(promptDoTurno) || marcouAgora,
-        comprovanteLido: comprovante.pendente,
-      });
+      let trocaDaTaxa = recadoComprovante
+        ? null
+        : travaDaTaxaDeReserva(textoFinal, dadosDaTaxa(unit), {
+            falasDoPaciente: mensagensDoPaciente,
+            consultaDePe: promptTemConsulta(promptDoTurno) || marcouAgora,
+            comprovanteLido: comprovante.pendente,
+          });
+      // O prompt pode não ter trazido a consulta (a IA marcou antes e o bloco falhou): o vínculo gravado por agendar_consulta decide,
+      // como na trava de cima. Só é lido quando a trava já disparou.
+      if (trocaDaTaxa && state.leadId && (await agendamentoDoVinculo(unit.id, Number(state.leadId), fusoDaUnidade(unit)))) trocaDaTaxa = null;
       if (trocaDaTaxa) {
         respostaFixa = true;
         await recorder.step({

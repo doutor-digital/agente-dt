@@ -43,14 +43,21 @@ export function dadosDaTaxa(
 
 /** A leitura de foto/PDF é do paciente só no nome: "COMPROVANTE: Pix de R$ 100" não é pedido de chave. */
 const LEITURA_DE_ARQUIVO = /\[(?:imagem|arquivo) do cliente\]:[\s\S]*/gi;
-/** Já pagou, não quer, não usa: não é pedido de chave. */
+/**
+ * Já pagou, acabou de mandar, não quer, ou está comparando formas de pagar ("posso pagar no dia ou preciso do pix?"):
+ * não é pedido de chave. "Paguei"/"fiz" soltos NÃO excluem: "me passa a chave que eu pago e mando o comprovante" pede.
+ */
 const NAO_E_PEDIDO =
-  /\bcomprovante\b|\bacabei de\b|\b(?:fiz|fez|fizemos|paguei|pagamos|mandei|enviei|transferi|ja (?:foi|fiz|paguei|mandei|enviei|transferi)|foi (?:feito|pago|enviado))\b|\bnao\b[^.?!]{0,20}\b(?:pix|chave|antecip)/;
+  /\bja (?:fiz|paguei|mandei|enviei|transferi|foi)\b|\bacabei de\b|\bsegue\b|\bnao\b[^.?!]{0,20}\b(?:pix|chave|antecip)|\b(?:ou|em vez d[eo]|ao inves d[eo])\s+(?:\S+\s+){0,2}?(?:pix|chave)\b|\b(?:pix|chave)\s+(?:\S+\s+){0,2}?ou\b/;
 const PEDE_PIX = [
   // "e o pix", "qual a chave", "cadê o pix"
   /\b(?:e|qual|cade|onde)\s+(?:e\s+)?(?:o|a|esse|essa)?\s*(?:chave|pix)\b/,
-  // "manda o pix", "me envia a chave", "pode me passar o pix", "quero o pix", "preciso da chave"
-  /\b(?:manda|mande|mandar|envia|envie|enviar|passa|passe|passar|quero|preciso|gostaria|falta)\b[^.?!]{0,25}\b(?:pix|chave)\b/,
+  // "manda o pix", "me envia a chave", "pode me passar o pix" (o objeto vem logo depois do verbo)
+  /\b(?:manda|mande|mandar|envia|envie|enviar|passa|passe|passar)\b[^.?!]{0,25}\b(?:pix|chave)\b/,
+  // "quero o pix", "preciso da chave" — colado ao verbo: "quero saber o valor do pix" e "quero pagar com cartão ou pix" não são pedido
+  /\b(?:quero|preciso|gostaria)\s+(?:d[oa]s?\s+|[oa]s?\s+)?(?:chave|pix)\b/,
+  // "vou pagar no pix", "prefiro pagar com pix"
+  /\b(?:vou|quero|prefiro|pode ser|opto|escolho)\s+(?:pagar\s+)?(?:no|com|via|por|pelo)\s+(?:o\s+)?pix\b/,
   // "pix por favor", "chave pfv"
   /\b(?:pix|chave)\b[^.?!]{0,15}\b(?:por favor|pfv|pf|por gentileza)\b/,
   // só "pix" / "a chave?"
@@ -100,7 +107,7 @@ const CONDICAO_ANTES =
   /\b(?:assim que|logo que|quando|depois (?:que|de|do|da)|apos|caso|se (?:voce|vc|pagar|o pix|o comprovante|ele|ela|estiver|for|der))\b/;
 /** Condição em qualquer ponto do trecho: "o horário fica reservado assim que o comprovante chegar" explica, não afirma. */
 const CONDICAO_NO_TRECHO =
-  /\b(?:assim que|logo que|quando|depois que|depois d[oa] (?:pagamento|pix|comprovante|taxa|confirmacao)|apos o (?:pagamento|pix|comprovante))\b/;
+  /\b(?:assim que|logo que|quando|depois que|depois d[oa] (?:pagamento|pix|comprovante|taxa|confirmacao)|apos o (?:pagamento|pix|comprovante)|assim (?:o|a|seu|sua|voce|fica)|(?:para|pra) (?:garantir|reservar|confirmar|fechar))\b/;
 /** Frases que o `afirmaConfirmacao` não pega e que, sem consulta nem comprovante, são sempre falsas. */
 const ATE_JA = /\bate ja\b/;
 const DEIXEI_REGISTRADO =
@@ -113,25 +120,32 @@ const E_ASSUNTO_DE_HORARIO = /\b(?:receber|horario|consulta|atendimento|vaga)\b/
  * a Sofia disse em Boa Vista e ele não pegava. Pergunta e explicação ("o horário só é reservado depois do pagamento") não.
  */
 export function afirmaHorarioGarantido(texto: string | null | undefined): boolean {
-  return trechos(String(texto ?? '')).some((t) => {
-    const n = normalizar(t);
-    if (/\?\s*\S{0,3}$/.test(n)) return false;
-    // Condição no próprio trecho ("fica reservado assim que o comprovante chegar"): é explicação do que vem depois.
-    if (CONDICAO_NO_TRECHO.test(n)) return false;
-    if (afirmaConfirmacao(t)) return true;
-    // "Até já" sozinho é despedida; "Até já às 13h30" é horário combinado. As outras duas aceitam o assunto no lugar da hora.
-    for (const [re, vale] of [
-      [ATE_JA, QUANDO_HORARIO.test(n)],
-      [DEIXEI_REGISTRADO, QUANDO_HORARIO.test(n) || E_ASSUNTO_DE_HORARIO.test(n)],
-      [PRA_TE_RECEBER, QUANDO_HORARIO.test(n) || E_ASSUNTO_DE_HORARIO.test(n)],
-    ] as const) {
-      const m = re.exec(n);
-      if (!m || !vale) continue;
-      if (CONDICAO_ANTES.test(n.slice(0, m.index)) || NAO_AFIRMA_CONFIRMACAO.test(n.slice(Math.max(0, m.index - 25), m.index + m[0].length))) continue;
-      return true;
-    }
-    return false;
-  });
+  return trechos(String(texto ?? '')).some((t) => afirmaNoTrecho(t));
+}
+
+function afirmaNoTrecho(t: string): boolean {
+  const n = normalizar(t);
+  if (/\?\s*\S{0,3}$/.test(n)) {
+    // "Já deixei o horário certo com a equipe, me manda o comprovante?": a pergunta vem DEPOIS da afirmação. Sem vírgula ("Posso confirmar?") é só pergunta.
+    const virgula = t.lastIndexOf(',');
+    return virgula > 0 && afirmaNoTrecho(t.slice(0, virgula));
+  }
+  // Condição no próprio trecho ("fica reservado assim que o comprovante chegar"): é explicação do que vem depois.
+  if (CONDICAO_NO_TRECHO.test(n)) return false;
+  const assunto = QUANDO_HORARIO.test(n) || E_ASSUNTO_DE_HORARIO.test(n);
+  // "Tudo certo, vou precisar do seu nome" é coleta de dado, não horário: a frase solta só vale com horário/consulta/dia no trecho.
+  if (afirmaConfirmacao(t, { soForte: true }) || (assunto && afirmaConfirmacao(t))) return true;
+  for (const [re, vale] of [
+    [ATE_JA, QUANDO_HORARIO.test(n)],
+    [DEIXEI_REGISTRADO, assunto],
+    [PRA_TE_RECEBER, assunto],
+  ] as const) {
+    const m = re.exec(n);
+    if (!m || !vale) continue;
+    if (CONDICAO_ANTES.test(n.slice(0, m.index)) || NAO_AFIRMA_CONFIRMACAO.test(n.slice(Math.max(0, m.index - 25), m.index + m[0].length))) continue;
+    return true;
+  }
+  return false;
 }
 
 // --- O recado fixo ------------------------------------------------------------------------------------------------------

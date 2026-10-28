@@ -89,7 +89,7 @@ test('A: o paciente escolheu pagar antecipado (resposta do botão) → a chave s
 });
 
 test('A: pedidos de Pix reconhecidos', () => {
-  for (const fala of ['E o pix', 'Mande o pix por gentileza', 'qual a chave?', 'me manda a chave pix', 'pode me passar o pix', 'cadê o pix', 'pix', 'Quero pagar no pix', 'chave pfv']) {
+  for (const fala of ['E o pix', 'Mande o pix por gentileza', 'qual a chave?', 'me manda a chave pix', 'pode me passar o pix', 'cadê o pix', 'pix', 'Quero pagar no pix', 'chave pfv', 'me passa a chave pix que eu pago e mando o comprovante', 'manda a chave, não paguei ainda', 'Preciso da chave']) {
     assert.equal(pacientePediuAChave([fala]), true, fala);
   }
 });
@@ -103,6 +103,9 @@ test('A: contraexemplos — quem já pagou, não quer, ou mandou o comprovante N
     'não quero pagar no pix',
     'Vou pagar na clínica',
     'Qual o endereço?',
+    'quero pagar com cartão ou pix',
+    'posso pagar no dia ou preciso do pix?',
+    'quero saber o valor do pix',
     '[imagem do cliente]: COMPROVANTE: Pix enviado. Valor: R$ 100,00.',
     '[arquivo do cliente]: COMPROVANTE: Transferência Pix. Valor: R$ 100,00.',
     '[imagem do cliente]: Foto de um cartaz escrito "chave pix: manda o pix"',
@@ -180,6 +183,7 @@ test('B: outras formas de dar o horário como garantido', () => {
     'Tudo certo, seu horário está garantido.',
     'Já deixei seu horário anotado com a equipe, às 14h.',
     'Aguardamos você hoje às 14h!',
+    'Já deixei tudo registrado com a equipe pra te receber direito às 14h, me manda o comprovante?',
   ]) {
     assert.equal(afirmaHorarioGarantido(frase), true, frase);
   }
@@ -198,6 +202,10 @@ test('B: contraexemplos que NÃO podem ser trocados — explicação, pergunta, 
     'Tenho 13h30 e 14h30 hoje. Qual prefere?',
     'Funcionamos das 8h às 17h. Me diz o melhor horário pra você?',
     'Até já! Me diz o seu nome completo?',
+    'Perfeito! Tudo certo, vou precisar do seu nome completo.',
+    'Tudo certo! Qual o seu CPF?',
+    'Fico no aguardo do comprovante, assim o horário fica reservado.',
+    'Para garantir o horário das 14h, preciso do comprovante.',
   ]) {
     assert.equal(travaDaTaxaDeReserva(frase, DADOS, SEM_PROVA), null, frase);
   }
