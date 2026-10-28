@@ -54,7 +54,8 @@ const PEDE_PIX = [
   /(?:^|[.!?,;]\s*)e\s+(?:o|a|esse|essa)?\s*(?:chave|pix)\b/,
   /\b(?:qual|cade|onde)\s+(?:e\s+)?(?:o|a|esse|essa)?\s*(?:chave|pix)\b/,
   // "manda o pix", "me envia a chave", "pode me passar o pix" (o objeto vem logo depois do verbo)
-  /\b(?:manda|mande|mandar|envia|envie|enviar|passa|passe|passar)\b[^.?!]{0,25}\b(?:pix|chave)\b/,
+  // sem vírgula no meio e sem outro assunto entre o verbo e o Pix: "me passa o endereço, aceita pix?" e "pode passar o preço do pix" não pedem a chave
+  /\b(?:manda|mande|mandar|envia|envie|enviar|passa|passe|passar)\b(?:(?!\b(?:valor|preco|endereco|horario|quanto|desconto|informacoes?|dados)\b)[^.?!,]){0,15}\b(?:pix|chave)\b/,
   // "quero o pix", "preciso da chave" — colado ao verbo: "quero saber o valor do pix" e "quero pagar com cartão ou pix" não são pedido
   /\b(?:quero|preciso|gostaria)\s+(?:d[oa]s?\s+|[oa]s?\s+)?(?:chave|pix)\b/,
   // "vou pagar no pix", "prefiro pagar com pix"
@@ -96,7 +97,8 @@ export function pacienteQuerPagarNaClinica(falasDoTurno: ReadonlyArray<string>):
   if (pacientePediuAChave(falasDoTurno)) return false;
   return falasDoTurno.some((fala) => {
     const n = normalizar(String(fala ?? '').replace(LEITURA_DE_ARQUIVO, ' '));
-    return !!n && PAGA_NA_CLINICA.some((r) => r.test(n));
+    // "ok, pago o restante na clínica" concorda com a taxa (o recado diz que o restante é na clínica): não é recusa
+    return !!n && !/\b(?:resto|restante|saldo|diferenca|o que falta|complemento)\b/.test(n) && PAGA_NA_CLINICA.some((r) => r.test(n));
   });
 }
 
@@ -118,7 +120,7 @@ const QUEM = '(?:equipe|recepcao|time|atendente|setor|clinica)';
 const ENVIAR = '(?:envia|enviar|enviara|envie|manda|mandar|mandara|passa|passar|passara|encaminha|encaminhar|encaminhara|fornece)';
 const EQUIPE_ENVIA = [
   // "a equipe te envia a chave certa", "a equipe já vai te enviar a chave por aqui"
-  new RegExp(`\\b${QUEM}\\b[^.?!]{0,50}\\b${ENVIAR}\\b[^.?!]{0,30}\\b(?:chave|pix)\\b`),
+  new RegExp(`\\b${QUEM}\\b[^.?!]{0,50}\\b${ENVIAR}\\b[^.?!]{0,30}\\b(?:chave(?!\\s+de\\s+(?:acesso|porta|casa|entrada|seguranca))|pix)\\b`),
   // "a chave, a equipe te manda" (só "chave": "depois do Pix, a equipe te envia a confirmação" é explicação)
   new RegExp(`\\bchave\\b[^.?!]{0,30}\\b${QUEM}\\b[^.?!]{0,30}\\b${ENVIAR}\\b`),
 ];
@@ -286,7 +288,7 @@ export function travaDaTaxaDeReserva(texto: string, dados: DadosDaTaxa | null, c
   if (!dados || ctx.consultaDePe || ctx.emTratamento || ctx.comprovanteLido) return null;
   // Quer pagar só na clínica. Já recebeu a chave e insiste: equipe. Senão: a taxa em uma frase e a chave na MESMA mensagem.
   if (pacienteQuerPagarNaClinica(ctx.falasDoPaciente)) {
-    if (ctx.respostaAnterior.includes(dados.chave)) return { texto: RECADO_INSISTIU_NA_CLINICA, motivo: 'insistiu_na_clinica' };
+    if (ctx.respostaAnterior.includes(dados.chave) || ctx.respostaAnterior.includes(RECADO_INSISTIU_NA_CLINICA)) return { texto: RECADO_INSISTIU_NA_CLINICA, motivo: 'insistiu_na_clinica' };
     if (!jaTrazAChaveEPedeComprovante(texto, dados)) return { texto: recadoPagarNaClinica(dados), motivo: 'pagar_na_clinica' };
   }
   const pediu = pacientePediuAChave(ctx.falasDoPaciente);

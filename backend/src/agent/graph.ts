@@ -512,6 +512,9 @@ export async function montarPrefixoAnthropic(unit: Unit, recorder: TraceRecorder
   return { model, systemMessage, modelName, tools };
 }
 
+/** Unidades que já tiveram o aviso de "taxa de reserva sem chave Pix ou sem valor" neste processo (um aviso por unidade, não por turno). */
+const taxaSemDadosJaAvisada = new Set<string>();
+
 export async function buildAgentGraph(
   recorder: TraceRecorder,
   unit: Unit,
@@ -1149,6 +1152,11 @@ export async function buildAgentGraph(
       const blocoConsulta = blocoDaConsulta(promptDoTurno);
       // Taxa de reserva (taxa-de-reserva.ts): o que a trava precisa saber do turno. Lido na hora, porque `comprovante` é preenchido a cada volta.
       const dadosDaTaxaDaUnidade = dadosDaTaxa(unit);
+      if (unit.spineBookingRequiresPayment && !dadosDaTaxaDaUnidade && !taxaSemDadosJaAvisada.has(unit.slug)) {
+        // flag ligada e a trava desligada por falta de chave Pix ou do valor da taxa: o bug de "a equipe te envia a chave" volta, e sem aviso
+        taxaSemDadosJaAvisada.add(unit.slug);
+        logger.warn({ unit: unit.slug }, 'taxa de reserva: unidade com a flag mas sem chave Pix ou sem o valor da taxa nas fontes — a trava da chave está desligada');
+      }
       const respostaAnterior = respostaAnteriorDaIA(nonSystemMessages.map((m) => ({ tipo: m.getType(), texto: aiTextFromContent(m.content) })));
       const contextoDaTaxa = () => ({
         falasDoPaciente: mensagensDoPaciente,
@@ -1311,13 +1319,21 @@ export async function buildAgentGraph(
         if (trocaDaTaxa.motivo === 'insistiu_na_clinica' && state.leadId) {
           const resumir = tools.find((tl) => tl.name === 'resumir_lead_para_sdr');
           if (resumir) {
-            await withTimeout(
+            // o mesmo prazo do resumo do sinal de alerta (passe-por-sinal.ts); o resultado que não é nota criada vira passo de ERRO
+            const resultadoDoResumo = await withTimeout(
               resumir.invoke({
                 leadId: Number(state.leadId),
                 focusHint: 'Unidade com taxa de reserva: o paciente já recebeu a chave Pix e INSISTE em pagar só na clínica. Sem o comprovante da taxa o horário NÃO está garantido. Equipe: falar com ele.',
               }),
-              20_000,
-            ).catch((err) => logger.warn({ err: String(err), unit: unit.slug }, 'taxa de reserva: resumo para a equipe falhou'));
+              8_000,
+            ).catch((err) => `falhou: ${err instanceof Error ? err.message : String(err)}`);
+            if (/^(?:falhou|ERRO|Sem hist)/i.test(String(resultadoDoResumo))) {
+              await recorder.step({
+                kind: 'ERROR',
+                title: 'Taxa de reserva: o paciente insiste em pagar só na clínica e o resumo para a equipe NÃO saiu',
+                payload: { leadId: state.leadId, resultado: String(resultadoDoResumo).slice(0, 200) },
+              });
+            }
           }
         }
         textoFinal = trocaDaTaxa.texto;

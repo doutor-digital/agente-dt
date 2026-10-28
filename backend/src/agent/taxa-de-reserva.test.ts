@@ -112,6 +112,9 @@ test('A: contraexemplos — quem já pagou, não quer, ou mandou o comprovante N
     'quero pagar com cartão ou pix',
     'posso pagar no dia ou preciso do pix?',
     'quero saber o valor do pix',
+    'me passa o endereço, aceita pix?',
+    'manda o valor, é por pix?',
+    'pode passar o preço do pix',
     'Aceita débito e pix?',
     'vocês aceitam cartão e pix?',
     '[imagem do cliente]: COMPROVANTE: Pix enviado. Valor: R$ 100,00.',
@@ -138,6 +141,7 @@ test('A: a resposta com a chave exata mas que manda a equipe enviar outra é tro
 });
 
 test('A: "a equipe envia" em pergunta ou negação não conta', () => {
+  assert.equal(empurrouAChaveParaEquipe('A equipe vai te enviar o endereço e a chave de acesso.'), false);
   assert.equal(empurrouAChaveParaEquipe('Quer que a equipe te envie a chave?'), false);
   assert.equal(empurrouAChaveParaEquipe('A equipe não envia a chave por telefone.'), false);
   assert.equal(empurrouAChaveParaEquipe('A equipe confere o Pix e confirma.'), false);
@@ -206,7 +210,7 @@ test('D: "pagar na clínica" reconhecido; quem pediu a chave, escolheu o antecip
   for (const f of [PACIENTE_SO_NA_HORA, 'pago na clínica', 'Na clínica', 'vou pagar no dia', 'prefiro pagar lá', 'só na clínica mesmo', 'Não quero pagar antecipado, pago na consulta']) {
     assert.equal(pacienteQuerPagarNaClinica([f]), true, f);
   }
-  for (const f of ['Me manda a chave que pago no dia', 'E o pix', 'Pix antecipado', 'Quero agendar para quinta', 'Qual o endereço da clínica?', 'Quero pagar no pix']) {
+  for (const f of ['ok, pago o restante na clínica', 'O resto pago na clínica, né?', 'Me manda a chave que pago no dia', 'E o pix', 'Pix antecipado', 'Quero agendar para quinta', 'Qual o endereço da clínica?', 'Quero pagar no pix']) {
     assert.equal(pacienteQuerPagarNaClinica([f]), false, f);
   }
 });
@@ -217,6 +221,11 @@ test('D: depois de receber a chave, quem INSISTE em pagar só na clínica fica c
   assert.equal(r?.texto, RECADO_INSISTIU_NA_CLINICA);
   assert.doesNotMatch(r!.texto, /garantid|reservad|confirmad|agendad|marcad|te espero/i);
   assert.match(r!.texto, /equipe/);
+});
+
+test('D: a insistência não vira ciclo — depois do encaminhamento à equipe, repetir "só na clínica" continua com a equipe', () => {
+  const r = travaDaTaxaDeReserva('Certo!', DADOS, com({ falasDoPaciente: ['só na clínica'], respostaAnterior: RECADO_INSISTIU_NA_CLINICA }));
+  assert.equal(r?.motivo, 'insistiu_na_clinica');
 });
 
 test('D: sem a chave na resposta anterior não é insistência — é a primeira vez, recebe a chave', () => {
