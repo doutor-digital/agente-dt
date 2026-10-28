@@ -13,8 +13,10 @@ import { searchSchedules, somarDias } from '../../services/spine.service.js';
 import { cotacaoDoDolar } from '../campanha/coleta.js';
 import { dataLocalISO } from '../feriados.js';
 import { fusoDaUnidade } from '../fuso.js';
+import { credenciaisDaUnidade, urlDaGraph } from '../whatsapp-meta.js';
 import { freiosDoAmbiente } from './freios.js';
 import { modoDaUnidade } from './modo.js';
+import { motivoSemNumero } from './painel.js';
 import {
   atribuirMeta, contarAgendaram, contarResponderam, mensagensPorCartao, umaLinhaPorDia, custoDaOnda, diasDosEnvios, enviosPorHora, funilDoBanco,
   type AgendamentoNaFranquia,
@@ -40,6 +42,8 @@ export interface Resultado {
     custo: 'meta-pricing-analytics' | 'indisponivel';
     responderam: 'kommo' | 'indisponivel';
     agendaram: 'franquia' | 'indisponivel';
+    /** de onde veio o dólar do `brl`; 'indisponivel' = o custo vem só em US$ */
+    cambio: 'awesomeapi' | 'indisponivel';
     /** quando a Meta atualizou pela última vez as linhas de entregues/lidas (a mais antiga delas); null se indisponível */
     entreguesAtualizadoEm: string | null;
     /** quando o que é caro (Kommo, franquia, câmbio, Meta) foi lido; fica em cache por alguns minutos */
@@ -54,6 +58,8 @@ export interface Externos {
   responderam: number | null;
   agendaram: number | null;
   cambio: number | null;
+  /** categoria do modelo na Meta (MARKETING, UTILITY…); null = não deu para saber */
+  categoriaDoModelo: string | null;
   notaResponderam: string | null;
   notaAgendaram: string | null;
   lidoEm: Date;
@@ -71,6 +77,8 @@ export interface Leituras {
   cambio: () => Promise<number | null>;
   /** hora (epoch s) de cada mensagem RECEBIDA, por cartão, desde `desdeEpoch`. Lança se o Kommo falhar. */
   mensagensRecebidas: (unit: Unit, leadIds: number[], desdeEpoch: number) => Promise<Map<number, number[]>>;
+  /** a categoria do modelo na Meta (uma consulta pequena, filtrada pelo nome); null se não deu para saber */
+  categoriaDoModelo: (unit: Unit, template: string, idioma: string) => Promise<string | null>;
   /** a agenda da franquia no intervalo, ou null se não deu para ler por inteiro (falha ou cortada no teto) */
   agenda: (unit: Unit, de: string, ate: string) => Promise<AgendamentoNaFranquia[] | null>;
 }
@@ -89,6 +97,20 @@ export const LEITURAS_DE_VERDADE: Leituras = {
     const contatos = [...new Set(contatoDoCartao.values())];
     return mensagensPorCartao(contatoDoCartao, await kommo.eventosDeChat(contatos, desdeEpoch));
   },
+  categoriaDoModelo: async (unit, template, idioma) => {
+    const cred = credenciaisDaUnidade(unit);
+    const waba = unit.metaWabaId?.trim();
+    if (!cred || !waba) return null;
+    try {
+      const r = await fetch(urlDaGraph(`${waba}/message_templates?name=${encodeURIComponent(template)}&fields=name,language,category&limit=50`), { headers: { Authorization: `Bearer ${cred.token}` }, signal: AbortSignal.timeout(15_000) });
+      const corpo = (await r.json().catch(() => null)) as { data?: Array<{ name?: string; language?: string; category?: string }> } | null;
+      if (!r.ok || !Array.isArray(corpo?.data)) return null;
+      const c = corpo.data.find((m) => m.name === template && m.language === idioma)?.category;
+      return typeof c === 'string' && c.trim() ? c.trim().toUpperCase() : null;
+    } catch {
+      return null;
+    }
+  },
   agenda: async (unit, de, ate) => {
     const r = await searchSchedules(unit, { initialDate: de, endDate: ate, rowsPerPage: 100 });
     if (!r.ok || !r.data || r.data.truncada) return null;
@@ -97,9 +119,10 @@ export const LEITURAS_DE_VERDADE: Leituras = {
 };
 
 /** Kommo, franquia e câmbio. Cada fonte falha sozinha: uma fora do ar não derruba as outras. */
-export async function lerExternos(unit: Unit, pessoas: ReadonlyArray<PessoaEnviada>, l: Leituras): Promise<Externos> {
-  const out: Externos = { responderam: null, agendaram: null, cambio: null, notaResponderam: null, notaAgendaram: null, lidoEm: l.agora() };
+export async function lerExternos(unit: Unit, pessoas: ReadonlyArray<PessoaEnviada>, l: Leituras, modelo: { template: string; idioma: string }): Promise<Externos> {
+  const out: Externos = { responderam: null, agendaram: null, cambio: null, categoriaDoModelo: null, notaResponderam: null, notaAgendaram: null, lidoEm: l.agora() };
   out.cambio = await l.cambio().catch(() => null);
+  out.categoriaDoModelo = await l.categoriaDoModelo(unit, modelo.template, modelo.idioma).catch(() => null);
   if (pessoas.length === 0) {
     out.notaResponderam = out.notaAgendaram = 'ninguém recebeu ainda';
     return out;
@@ -159,7 +182,7 @@ function externosEmCache(ondaId: string, agora: number, ler: () => Promise<Exter
   // Quem falhou em alguma fonte fica pouco tempo; e a leitura que estoura é descartada (a próxima tenta de novo).
   valor.then(
     (e) => {
-      if (e.responderam === null || e.agendaram === null) entrada.ate = Math.min(entrada.ate, agora + CACHE_DA_FALHA_MS);
+      if (e.responderam === null || e.agendaram === null || e.cambio === null || e.categoriaDoModelo === null) entrada.ate = Math.min(entrada.ate, agora + CACHE_DA_FALHA_MS);
     },
     () => cache.delete(ondaId),
   );
@@ -196,6 +219,15 @@ export async function lerResultado(ondaId: string, l: Leituras = LEITURAS_DE_VER
   const naJanela = (desde: Date) => prisma.disparoDestinatario.count({ where: { unitId: { in: doMesmoNumero }, [campoDaJanela]: { gte: desde } } });
   const [naUltimaHora, nasUltimas24h] = await Promise.all([naJanela(new Date(agora.getTime() - 3_600_000)), naJanela(new Date(agora.getTime() - 86_400_000))]);
 
+  // Kommo, franquia e câmbio: o caro. Em cache por onda.
+  const externos = await externosEmCache(ondaId, agora.getTime(), async () => {
+    const pessoas = await prisma.disparoDestinatario.findMany({
+      where: { ondaId, estado: { in: ESTADOS_QUE_RECEBERAM }, enviadoEm: { not: null } },
+      select: { kommoLeadId: true, nomeCompleto: true, enviadoEm: true },
+    });
+    return lerExternos(unit, pessoas.map((p) => ({ kommoLeadId: p.kommoLeadId, nomeCompleto: p.nomeCompleto, enviadoEm: p.enviadoEm! })), l, { template: onda.template, idioma: onda.idioma });
+  });
+
   // Meta: entregue/lida/custo por dia e por modelo, atribuídos só quando a conta fecha (ver `atribuirMeta`).
   const primeiro = recebidos._min.enviadoEm;
   const ultimo = recebidos._max.enviadoEm;
@@ -228,24 +260,21 @@ export async function lerResultado(ondaId: string, l: Leituras = LEITURAS_DE_VER
       { confirmados: recebidos._count, incertos, deOutrasOndas, deOutrasOndasDoModelo: doMesmoModelo },
       umaLinhaPorDia(linhasDoModelo, onda.idioma),
       linhasDeCusto.map((c) => ({ ...c, costUsd: Number(c.costUsd) })),
-      semNada,
+      { ...semNada, categoriaDoModelo: externos.categoriaDoModelo },
     );
   }
 
-  // Kommo, franquia e câmbio: o caro. Em cache por onda.
-  const externos = await externosEmCache(ondaId, agora.getTime(), async () => {
-    const pessoas = await prisma.disparoDestinatario.findMany({
-      where: { ondaId, estado: { in: ESTADOS_QUE_RECEBERAM }, enviadoEm: { not: null } },
-      select: { kommoLeadId: true, nomeCompleto: true, enviadoEm: true },
-    });
-    return lerExternos(unit, pessoas.map((p) => ({ kommoLeadId: p.kommoLeadId, nomeCompleto: p.nomeCompleto, enviadoEm: p.enviadoEm! })), l);
-  });
-
   const custo = custoDaOnda(meta.custoUsd, externos.cambio, externos.responderam, externos.agendaram);
+  const notaDoCusto = [
+    meta.notaCusto,
+    meta.custoUsd !== null && custo.brl === null ? 'câmbio indisponível agora; custo em US$ apenas' : null,
+    custo.brl !== null && custo.porResposta === null ? 'sem custo por resposta: ' + (externos.responderam === null ? 'as respostas não foram medidas' : 'ninguém respondeu ainda') : null,
+    custo.brl !== null && custo.porAgendamento === null ? 'sem custo por agendamento: ' + (externos.agendaram === null ? 'os agendamentos não foram medidos' : 'nenhum agendamento ainda') : null,
+  ].filter((n): n is string => !!n).join('; ') || null;
   return {
     onda: {
       id: onda.id, estado: onda.estado, unidade: unit.slug, unidadeNome: unit.name, campanha: onda.campanha.slug, campanhaNome: onda.campanha.nome, etiqueta: onda.etiqueta,
-      aprovadaEm: iso(onda.aprovadaEm), aprovadaPor: onda.aprovadaPor, pausaMotivo: onda.pausaMotivo,
+      aprovadaEm: iso(onda.aprovadaEm), aprovadaPor: onda.aprovadaPor, pausaMotivo: onda.pausaMotivo ? motivoSemNumero(onda.pausaMotivo) : null,
     },
     funil: { ...funil, entregues: meta.entregues, lidas: meta.lidas, responderam: externos.responderam, agendaram: externos.agendaram },
     custo: { ...custo, atualizadoEm: iso(meta.custoAtualizadoEm) },
@@ -260,9 +289,10 @@ export async function lerResultado(ondaId: string, l: Leituras = LEITURAS_DE_VER
       custo: meta.custoUsd === null ? 'indisponivel' : 'meta-pricing-analytics',
       responderam: externos.responderam === null ? 'indisponivel' : 'kommo',
       agendaram: externos.agendaram === null ? 'indisponivel' : 'franquia',
+      cambio: custo.brl === null ? 'indisponivel' : 'awesomeapi',
       entreguesAtualizadoEm: iso(meta.entreguesAtualizadoEm),
       atualizadoEm: externos.lidoEm.toISOString(),
-      notas: { entregues: meta.motivoEntregues, custo: meta.motivoCusto, responderam: externos.notaResponderam, agendaram: externos.notaAgendaram },
+      notas: { entregues: meta.notaEntregues, custo: notaDoCusto, responderam: externos.notaResponderam, agendaram: externos.notaAgendaram },
     },
     atualizadoEm: agora.toISOString(),
   };

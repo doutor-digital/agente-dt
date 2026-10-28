@@ -93,9 +93,9 @@ export interface MetaDaOnda {
   entreguesAtualizadoEm: Date | null;
   custoUsd: number | null;
   custoAtualizadoEm: Date | null;
-  /** por que ficou `null` (ou null quando mediu) */
-  motivoEntregues: string | null;
-  motivoCusto: string | null;
+  /** por que ficou `null`; quando mediu, a RESSALVA do número (a Meta atrasa e a faixa não pega envio de fora) */
+  notaEntregues: string | null;
+  notaCusto: string | null;
 }
 
 /**
@@ -112,6 +112,10 @@ export function umaLinhaPorDia<T extends LinhaDeTemplate>(linhas: ReadonlyArray<
   return [...porDia.values()];
 }
 
+/** Vale para todo número da Meta que chegou: o que a conta não consegue enxergar. */
+export const RESSALVA_DA_META =
+  'a Meta atualiza com atraso (até cerca de um dia) e o número é a soma do dia por modelo: um envio de fora com o MESMO modelo que caiba na faixa do que a onda mandou não é detectado';
+
 const soma = (xs: ReadonlyArray<number>) => xs.reduce((s, v) => s + v, 0);
 const maisAntiga = (ds: ReadonlyArray<Date>): Date | null => (ds.length ? new Date(Math.min(...ds.map((d) => d.getTime()))) : null);
 
@@ -123,12 +127,13 @@ const maisAntiga = (ds: ReadonlyArray<Date>): Date | null => (ds.length ? new Da
  *  - ENTREGUES/LIDAS: o `sent` da Meta para o modelo nos dias precisa estar entre o que a onda confirmou e o que mandou
  *    contando os envios incertos. Acima = há envio de outra origem (transmissão do Kommo, outro robô); abaixo = a Meta
  *    ainda não contou tudo (dado atrasado);
- *  - CUSTO: só com o entregue medido, e o volume de MARKETING cobrado nos dias entre o entregue e o que a onda mandou. A
+ *  - CUSTO: só se o modelo da onda for de categoria MARKETING (a Meta cobra por categoria; modelo UTILITY ou categoria
+ *    desconhecida → null), só com o entregue medido, e o volume de MARKETING cobrado nos dias entre o entregue e o que a onda mandou. A
  *    cobrança da Meta é por mensagem entregue: abaixo do entregue ela ainda não fechou (custo parcial), acima há marketing
  *    de outra origem.
  */
-export function atribuirMeta(envios: EnviosDaOnda, template: ReadonlyArray<LinhaDeTemplate>, custo: ReadonlyArray<LinhaDeCusto>, semNada: { template: boolean; custo: boolean } = { template: false, custo: false }): MetaDaOnda {
-  const vazio = (motivoEntregues: string, motivoCusto: string = motivoEntregues): MetaDaOnda => ({ entregues: null, lidas: null, entreguesAtualizadoEm: null, custoUsd: null, custoAtualizadoEm: null, motivoEntregues, motivoCusto });
+export function atribuirMeta(envios: EnviosDaOnda, template: ReadonlyArray<LinhaDeTemplate>, custo: ReadonlyArray<LinhaDeCusto>, ctx: { template: boolean; custo: boolean; categoriaDoModelo: string | null } = { template: false, custo: false, categoriaDoModelo: null }): MetaDaOnda {
+  const vazio = (notaEntregues: string, notaCusto: string = notaEntregues): MetaDaOnda => ({ entregues: null, lidas: null, entreguesAtualizadoEm: null, custoUsd: null, custoAtualizadoEm: null, notaEntregues, notaCusto });
   if (envios.confirmados === 0) return vazio('ninguém recebeu ainda: não há o que medir na Meta');
   if (envios.deOutrasOndasDoModelo > 0) {
     return vazio(`outra onda da mesma conta do WhatsApp mandou ${envios.deOutrasOndasDoModelo} mensagem(ns) com este mesmo modelo nos mesmos dias: a Meta soma tudo por dia e por modelo e não dá para separar`);
@@ -138,18 +143,19 @@ export function atribuirMeta(envios: EnviosDaOnda, template: ReadonlyArray<Linha
   let entregues: number | null = null;
   let lidas: number | null = null;
   let entreguesAtualizadoEm: Date | null = null;
-  let motivoEntregues: string | null = null;
+  let notaEntregues: string | null = null;
   if (template.length === 0) {
-    motivoEntregues = semNada.template
+    notaEntregues = ctx.template
       ? 'a tabela da Meta (template_analytics) não tem nenhuma linha desta unidade: o sync de custo nunca gravou para ela (token sem o escopo whatsapp_business_management, WABA não cadastrada ou o sync parado)'
       : 'a tabela da Meta (template_analytics) não tem linhas deste modelo nos dias da onda: o sync ainda não rodou depois do envio, ou o nome do modelo não bate';
   } else {
     const enviadasNaMeta = soma(template.map((l) => l.sent));
     if (enviadasNaMeta > possiveis) {
-      motivoEntregues = `a Meta registra ${enviadasNaMeta} envios deste modelo nos dias da onda e a onda mandou ${possiveis}: há envio de outra origem (por exemplo transmissão do Kommo)`;
+      notaEntregues = `a Meta registra ${enviadasNaMeta} envios deste modelo nos dias da onda e a onda mandou ${possiveis}: há envio de outra origem (por exemplo transmissão do Kommo)`;
     } else if (enviadasNaMeta < envios.confirmados) {
-      motivoEntregues = `a Meta ainda não contou todos os envios (${enviadasNaMeta} de ${envios.confirmados}): dado atrasado`;
+      notaEntregues = `a Meta ainda não contou todos os envios (${enviadasNaMeta} de ${envios.confirmados}): dado atrasado`;
     } else {
+      notaEntregues = RESSALVA_DA_META;
       entregues = soma(template.map((l) => l.delivered));
       lidas = soma(template.map((l) => l.read));
       entreguesAtualizadoEm = maisAntiga(template.map((l) => l.syncedAt));
@@ -158,28 +164,33 @@ export function atribuirMeta(envios: EnviosDaOnda, template: ReadonlyArray<Linha
 
   let custoUsd: number | null = null;
   let custoAtualizadoEm: Date | null = null;
-  let motivoCusto: string | null = null;
+  let notaCusto: string | null = null;
   const marketing = custo.filter((l) => l.pricingCategory.toUpperCase().startsWith('MARKETING'));
   if (envios.deOutrasOndas > 0) {
-    motivoCusto = `outra onda da mesma conta do WhatsApp mandou ${envios.deOutrasOndas} mensagem(ns) nos mesmos dias: a Meta cobra marketing por categoria e dia, e não dá para separar`;
+    notaCusto = `outra onda da mesma conta do WhatsApp mandou ${envios.deOutrasOndas} mensagem(ns) nos mesmos dias: a Meta cobra marketing por categoria e dia, e não dá para separar`;
+  } else if (ctx.categoriaDoModelo === null) {
+    notaCusto = 'não deu para saber a categoria do modelo na Meta (message_templates): sem ela não dá para dizer que a cobrança de MARKETING é desta onda';
+  } else if (ctx.categoriaDoModelo.toUpperCase() !== 'MARKETING') {
+    notaCusto = `o modelo é de categoria ${ctx.categoriaDoModelo}, não MARKETING: o custo de marketing da conta não é desta onda`;
   } else if (entregues === null) {
-    motivoCusto = 'sem o número de entregues conferido não dá para saber se a cobrança da Meta já fechou: ' + (motivoEntregues ?? '');
+    notaCusto = 'sem o número de entregues conferido não dá para saber se a cobrança da Meta já fechou: ' + (notaEntregues ?? '');
   } else if (marketing.length === 0) {
-    motivoCusto = semNada.custo
+    notaCusto = ctx.custo
       ? 'a tabela de custo (pricing_analytics) não tem nenhuma linha desta unidade: o sync nunca gravou para ela'
       : 'a tabela de custo (pricing_analytics) não tem linhas de MARKETING nos dias da onda';
   } else {
     const cobradas = soma(marketing.map((l) => l.volume));
     if (cobradas > possiveis) {
-      motivoCusto = `a Meta cobrou ${cobradas} mensagens de marketing nos dias da onda e a onda mandou ${possiveis}: há marketing de outra origem`;
+      notaCusto = `a Meta cobrou ${cobradas} mensagens de marketing nos dias da onda e a onda mandou ${possiveis}: há marketing de outra origem`;
     } else if (cobradas < entregues) {
-      motivoCusto = `a cobrança da Meta ainda não fechou (${cobradas} cobradas de ${entregues} entregues)`;
+      notaCusto = `a cobrança da Meta ainda não fechou (${cobradas} cobradas de ${entregues} entregues)`;
     } else {
+      notaCusto = RESSALVA_DA_META;
       custoUsd = soma(marketing.map((l) => l.costUsd));
       custoAtualizadoEm = maisAntiga(marketing.map((l) => l.syncedAt));
     }
   }
-  return { entregues, lidas, entreguesAtualizadoEm, custoUsd, custoAtualizadoEm, motivoEntregues, motivoCusto };
+  return { entregues, lidas, entreguesAtualizadoEm, custoUsd, custoAtualizadoEm, notaEntregues, notaCusto };
 }
 
 /** Dia (UTC) de cada ponta dos envios, como datas à meia-noite UTC: é como o sync grava a coluna `date`. */

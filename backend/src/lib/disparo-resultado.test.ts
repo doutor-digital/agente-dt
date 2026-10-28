@@ -8,12 +8,13 @@ import { readFileSync } from 'node:fs';
 import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import {
-  atribuirMeta, contarAgendaram, contarResponderam, custoDaOnda, diasDosEnvios, enviosPorHora, funilDoBanco, mensagensPorCartao, umaLinhaPorDia,
+  atribuirMeta, contarAgendaram, contarResponderam, custoDaOnda, diasDosEnvios, enviosPorHora, funilDoBanco, mensagensPorCartao, umaLinhaPorDia, RESSALVA_DA_META,
   type EnviosDaOnda, type LinhaDeCusto, type LinhaDeTemplate,
 } from './disparo/resultado.js';
 import { CACHE_MS, _limparCache, lerExternos, lerResultado, type Leituras, type PessoaEnviada } from './disparo/resultado-dados.js';
 
 const D = (iso: string) => new Date(iso);
+const MKT = { template: false, custo: false, categoriaDoModelo: 'MARKETING' };
 
 // ── funil ──────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -54,52 +55,53 @@ const tpl = (extra: Partial<LinhaDeTemplate> = {}): LinhaDeTemplate => ({ sent: 
 const cst = (extra: Partial<LinhaDeCusto> = {}): LinhaDeCusto => ({ pricingCategory: 'MARKETING', volume: 92, costUsd: 4.5, syncedAt: D('2026-10-29T03:00:00Z'), ...extra });
 
 test('Meta: sent bate com o que a onda mandou → entregues, lidas e custo, com a hora da atualização', () => {
-  const m = atribuirMeta(envios(), [tpl({ sent: 60, delivered: 55, read: 30, syncedAt: D('2026-10-29T03:00:00Z') }), tpl({ sent: 40, delivered: 37, read: 31, syncedAt: D('2026-10-28T03:00:00Z') })], [cst({ volume: 45, costUsd: 2.25 }), cst({ volume: 47, costUsd: 2.25 })]);
+  const m = atribuirMeta(envios(), [tpl({ sent: 60, delivered: 55, read: 30, syncedAt: D('2026-10-29T03:00:00Z') }), tpl({ sent: 40, delivered: 37, read: 31, syncedAt: D('2026-10-28T03:00:00Z') })], [cst({ volume: 45, costUsd: 2.25 }), cst({ volume: 47, costUsd: 2.25 })], MKT);
   assert.equal(m.entregues, 92);
   assert.equal(m.lidas, 61);
   assert.equal(m.custoUsd, 4.5);
   assert.equal(m.entreguesAtualizadoEm?.toISOString(), '2026-10-28T03:00:00.000Z', 'vale a linha mais antiga');
-  assert.equal(m.motivoEntregues, null);
-  assert.equal(m.motivoCusto, null);
+  assert.equal(m.notaEntregues, RESSALVA_DA_META, 'o número que chegou leva a ressalva: a Meta atrasa e envio de fora com o mesmo modelo dentro da faixa não aparece');
+  assert.equal(m.notaCusto, RESSALVA_DA_META);
+  assert.match(RESSALVA_DA_META, /atraso[\s\S]*MESMO modelo/);
 });
 
 test('Meta: tabela vazia → null com o motivo (e distingue "nunca gravou" de "falta este modelo/dia")', () => {
-  const sem = atribuirMeta(envios(), [], [], { template: true, custo: true });
+  const sem = atribuirMeta(envios(), [], [], { template: true, custo: true, categoriaDoModelo: 'MARKETING' });
   assert.equal(sem.entregues, null);
   assert.equal(sem.custoUsd, null);
-  assert.match(sem.motivoEntregues!, /nenhuma linha desta unidade[\s\S]*whatsapp_business_management/);
-  const falta = atribuirMeta(envios(), [], [], { template: false, custo: false });
-  assert.match(falta.motivoEntregues!, /não tem linhas deste modelo nos dias/);
+  assert.match(sem.notaEntregues!, /nenhuma linha desta unidade[\s\S]*whatsapp_business_management/);
+  const falta = atribuirMeta(envios(), [], [], { template: false, custo: false, categoriaDoModelo: 'MARKETING' });
+  assert.match(falta.notaEntregues!, /não tem linhas deste modelo nos dias/);
 });
 
 test('Meta: mais envios na Meta do que a onda mandou → há envio de outra origem, não atribui', () => {
-  const m = atribuirMeta(envios(), [tpl({ sent: 130 })], [cst()]);
+  const m = atribuirMeta(envios(), [tpl({ sent: 130 })], [cst()], MKT);
   assert.equal(m.entregues, null);
   assert.equal(m.lidas, null);
-  assert.match(m.motivoEntregues!, /130 envios[\s\S]*a onda mandou 100[\s\S]*outra origem/);
+  assert.match(m.notaEntregues!, /130 envios[\s\S]*a onda mandou 100[\s\S]*outra origem/);
   assert.equal(m.custoUsd, null);
 });
 
 test('Meta: o envio incerto cabe no teto (pode ter saído), mas o piso é o confirmado', () => {
-  assert.equal(atribuirMeta(envios({ incertos: 2 }), [tpl({ sent: 102 })], [cst()]).entregues, 92);
-  const atrasado = atribuirMeta(envios(), [tpl({ sent: 90 })], [cst()]);
+  assert.equal(atribuirMeta(envios({ incertos: 2 }), [tpl({ sent: 102 })], [cst()], MKT).entregues, 92);
+  const atrasado = atribuirMeta(envios(), [tpl({ sent: 90 })], [cst()], MKT);
   assert.equal(atrasado.entregues, null);
-  assert.match(atrasado.motivoEntregues!, /ainda não contou todos os envios \(90 de 100\)/);
+  assert.match(atrasado.notaEntregues!, /ainda não contou todos os envios \(90 de 100\)/);
 });
 
 test('Meta: outra onda com o MESMO modelo nos mesmos dias → nada é atribuído (a Meta soma as duas)', () => {
-  const m = atribuirMeta(envios({ deOutrasOndas: 20, deOutrasOndasDoModelo: 20 }), [tpl()], [cst()]);
+  const m = atribuirMeta(envios({ deOutrasOndas: 20, deOutrasOndasDoModelo: 20 }), [tpl()], [cst()], MKT);
   assert.equal(m.entregues, null);
   assert.equal(m.custoUsd, null);
-  assert.match(m.motivoEntregues!, /outra onda da mesma conta[\s\S]*20[\s\S]*mesmo modelo/);
+  assert.match(m.notaEntregues!, /outra onda da mesma conta[\s\S]*20[\s\S]*mesmo modelo/);
 });
 
 test('Meta: outra onda com OUTRO modelo não suja o entregue (a Meta separa por modelo), mas suja o custo (é por categoria)', () => {
-  const m = atribuirMeta(envios({ deOutrasOndas: 20, deOutrasOndasDoModelo: 0 }), [tpl()], [cst()]);
+  const m = atribuirMeta(envios({ deOutrasOndas: 20, deOutrasOndasDoModelo: 0 }), [tpl()], [cst()], MKT);
   assert.equal(m.entregues, 92);
   assert.equal(m.lidas, 61);
   assert.equal(m.custoUsd, null);
-  assert.match(m.motivoCusto!, /outra onda da mesma conta[\s\S]*20[\s\S]*categoria/);
+  assert.match(m.notaCusto!, /outra onda da mesma conta[\s\S]*20[\s\S]*categoria/);
 });
 
 test('modelo: dia com a linha do idioma E a "não segmentada" vale a do idioma (somar dobraria o sent)', () => {
@@ -117,28 +119,43 @@ test('modelo: dia com a linha do idioma E a "não segmentada" vale a do idioma (
 });
 
 test('Meta: onda sem envio confirmado não tem o que medir', () => {
-  const m = atribuirMeta(envios({ confirmados: 0 }), [tpl()], [cst()]);
+  const m = atribuirMeta(envios({ confirmados: 0 }), [tpl()], [cst()], MKT);
   assert.equal(m.entregues, null);
-  assert.match(m.motivoEntregues!, /ninguém recebeu/);
+  assert.match(m.notaEntregues!, /ninguém recebeu/);
 });
 
 test('custo: só com entregues conferido; marketing de outra origem ou cobrança ainda aberta → null', () => {
-  assert.equal(atribuirMeta(envios(), [tpl({ sent: 130 })], [cst()]).custoUsd, null, 'sem entregues conferido não há custo');
-  const maisCobrado = atribuirMeta(envios(), [tpl()], [cst({ volume: 140 })]);
+  assert.equal(atribuirMeta(envios(), [tpl({ sent: 130 })], [cst()], MKT).custoUsd, null, 'sem entregues conferido não há custo');
+  const maisCobrado = atribuirMeta(envios(), [tpl()], [cst({ volume: 140 })], MKT);
   assert.equal(maisCobrado.entregues, 92, 'o entregue continua valendo');
   assert.equal(maisCobrado.custoUsd, null);
-  assert.match(maisCobrado.motivoCusto!, /140 mensagens de marketing[\s\S]*outra origem/);
-  const aberta = atribuirMeta(envios(), [tpl()], [cst({ volume: 50 })]);
+  assert.match(maisCobrado.notaCusto!, /140 mensagens de marketing[\s\S]*outra origem/);
+  const aberta = atribuirMeta(envios(), [tpl()], [cst({ volume: 50 })], MKT);
   assert.equal(aberta.custoUsd, null);
-  assert.match(aberta.motivoCusto!, /ainda não fechou \(50 cobradas de 92 entregues\)/);
+  assert.match(aberta.notaCusto!, /ainda não fechou \(50 cobradas de 92 entregues\)/);
 });
 
 test('custo: só soma MARKETING (utilidade e autenticação são de outro assunto)', () => {
-  const m = atribuirMeta(envios(), [tpl()], [cst({ costUsd: 4 }), cst({ pricingCategory: 'UTILITY', volume: 500, costUsd: 99 }), cst({ pricingCategory: 'marketing_lite', volume: 0, costUsd: 0.5 })]);
+  const m = atribuirMeta(envios(), [tpl()], [cst({ costUsd: 4 }), cst({ pricingCategory: 'UTILITY', volume: 500, costUsd: 99 }), cst({ pricingCategory: 'marketing_lite', volume: 0, costUsd: 0.5 })], MKT);
   assert.equal(m.custoUsd, 4.5);
-  const semMarketing = atribuirMeta(envios(), [tpl()], [cst({ pricingCategory: 'UTILITY' })]);
+  const semMarketing = atribuirMeta(envios(), [tpl()], [cst({ pricingCategory: 'UTILITY' })], MKT);
   assert.equal(semMarketing.custoUsd, null);
-  assert.match(semMarketing.motivoCusto!, /não tem linhas de MARKETING/);
+  assert.match(semMarketing.notaCusto!, /não tem linhas de MARKETING/);
+});
+
+test('custo: só se o modelo da onda é MARKETING; UTILITY, outra categoria ou categoria desconhecida → null com nota (o entregue continua)', () => {
+  const com = (categoriaDoModelo: string | null) => atribuirMeta(envios(), [tpl()], [cst()], { template: false, custo: false, categoriaDoModelo });
+  assert.equal(com('MARKETING').custoUsd, 4.5);
+  assert.equal(com('marketing').custoUsd, 4.5, 'caixa não importa');
+  for (const categoria of ['UTILITY', 'AUTHENTICATION']) {
+    const m = com(categoria);
+    assert.equal(m.entregues, 92, 'o funil de entrega não depende da categoria');
+    assert.equal(m.custoUsd, null, `${categoria}: a cobrança de marketing da conta não é desta onda`);
+    assert.match(m.notaCusto!, new RegExp(`categoria ${categoria}, não MARKETING`));
+  }
+  const desconhecida = com(null);
+  assert.equal(desconhecida.custoUsd, null);
+  assert.match(desconhecida.notaCusto!, /não deu para saber a categoria do modelo/);
 });
 
 test('custo em reais e por resposta/agendamento: sem câmbio ou sem divisor é null, nunca estimado', () => {
@@ -216,6 +233,7 @@ test('agendou: nome repetido na onda e nome sem sobrenome ficam sem conferir (ho
 // ── lerExternos: cada fonte falha sozinha ─────────────────────────────────────────────────────────────────────
 
 const unidade = { id: 'u1', slug: 'doutor-hernia-canaa', name: 'Doutor Hérnia Canaã', kommoSubdomain: 'drcanaa', kommoAccessToken: 'tok', spineToken: 'sp', spineTimezone: 'America/Sao_Paulo', businessHoursTimezone: null, metaWabaId: 'waba1', metaPhoneNumberId: 'pn1' } as unknown as Unit;
+const MODELO = { template: 'canaa_resgate', idioma: 'pt_BR' };
 const pessoa = (leadId: number | null, nome: string | null): PessoaEnviada => ({ kommoLeadId: leadId, nomeCompleto: nome, enviadoEm: D('2026-10-28T12:00:00Z') });
 
 function leituras(extra: Partial<Leituras> = {}): Leituras & { chamadas: string[] } {
@@ -224,6 +242,7 @@ function leituras(extra: Partial<Leituras> = {}): Leituras & { chamadas: string[
     chamadas,
     agora: () => D('2026-10-29T15:00:00Z'),
     cambio: async () => (chamadas.push('cambio'), 5.5),
+    categoriaDoModelo: async () => (chamadas.push('categoria'), 'MARKETING'),
     mensagensRecebidas: async () => (chamadas.push('kommo'), new Map([[10, [Math.floor(D('2026-10-28T13:00:00Z').getTime() / 1000)]]])),
     agenda: async () => (chamadas.push('agenda'), [aval('Maria da Silva', '2026-11-03')]),
     ...extra,
@@ -231,7 +250,7 @@ function leituras(extra: Partial<Leituras> = {}): Leituras & { chamadas: string[
 }
 
 test('externos: Kommo e franquia respondem → números, com a ressalva de limite inferior', async () => {
-  const e = await lerExternos(unidade, [pessoa(10, 'Maria da Silva'), pessoa(11, 'Ana Souza'), pessoa(null, 'Cleide')], leituras());
+  const e = await lerExternos(unidade, [pessoa(10, 'Maria da Silva'), pessoa(11, 'Ana Souza'), pessoa(null, 'Cleide')], leituras(), MODELO);
   assert.equal(e.responderam, 1);
   assert.equal(e.agendaram, 1);
   assert.equal(e.cambio, 5.5);
@@ -240,7 +259,7 @@ test('externos: Kommo e franquia respondem → números, com a ressalva de limit
 });
 
 test('externos: Kommo fora do ar → responderam null; a franquia e o câmbio continuam', async () => {
-  const e = await lerExternos(unidade, [pessoa(10, 'Maria da Silva')], leituras({ mensagensRecebidas: async () => { throw new Error('503') } }));
+  const e = await lerExternos(unidade, [pessoa(10, 'Maria da Silva')], leituras({ mensagensRecebidas: async () => { throw new Error('503') } }), MODELO);
   assert.equal(e.responderam, null);
   assert.equal(e.notaResponderam, 'o Kommo não respondeu');
   assert.equal(e.agendaram, 1);
@@ -248,22 +267,22 @@ test('externos: Kommo fora do ar → responderam null; a franquia e o câmbio co
 });
 
 test('externos: agenda cortada ou franquia caída → agendaram null (nunca zero); câmbio que falha → null', async () => {
-  const cortada = await lerExternos(unidade, [pessoa(10, 'Maria da Silva')], leituras({ agenda: async () => null, cambio: async () => { throw new Error('rede') } }));
+  const cortada = await lerExternos(unidade, [pessoa(10, 'Maria da Silva')], leituras({ agenda: async () => null, cambio: async () => { throw new Error('rede') } }), MODELO);
   assert.equal(cortada.agendaram, null);
   assert.match(cortada.notaAgendaram!, /não veio por inteiro/);
   assert.equal(cortada.cambio, null);
   assert.equal(cortada.responderam, 1);
-  const caiu = await lerExternos(unidade, [pessoa(10, 'Maria da Silva')], leituras({ agenda: async () => { throw new Error('boom') } }));
+  const caiu = await lerExternos(unidade, [pessoa(10, 'Maria da Silva')], leituras({ agenda: async () => { throw new Error('boom') } }), MODELO);
   assert.equal(caiu.agendaram, null);
   assert.equal(caiu.notaAgendaram, 'a franquia não respondeu');
 });
 
 test('externos: unidade sem Kommo ou sem token da franquia não chama a fonte', async () => {
   const l = leituras();
-  const e = await lerExternos({ ...unidade, kommoAccessToken: null, spineToken: null } as unknown as Unit, [pessoa(10, 'Maria da Silva')], l);
+  const e = await lerExternos({ ...unidade, kommoAccessToken: null, spineToken: null } as unknown as Unit, [pessoa(10, 'Maria da Silva')], l, MODELO);
   assert.equal(e.responderam, null);
   assert.equal(e.agendaram, null);
-  assert.deepEqual(l.chamadas, ['cambio']);
+  assert.deepEqual(l.chamadas, ['cambio', 'categoria']);
 });
 
 // ── a leitura inteira, com o banco de mentira ───────────────────────────────────────────────────────────────
@@ -287,6 +306,7 @@ interface Cenario {
   custo?: Array<{ pricingCategory: string; volume: number; costUsd: number; syncedAt: Date }>;
   outrasOndas?: number;
   outrasDoModelo?: number;
+  pausaMotivo?: string | null;
 }
 
 function bancoDeMentira(c: Cenario = {}) {
@@ -299,7 +319,7 @@ function bancoDeMentira(c: Cenario = {}) {
   ];
   falso('disparoOnda', {
     findUnique: async (a: { where: { id: string } }) => (a.where.id === 'o1'
-      ? { id: 'o1', estado: 'aprovada', etiqueta: 'Outubro Rosa · Dia 2', template: 'canaa_resgate', idioma: 'pt_BR', aprovadaEm: D('2026-10-28T11:00:00Z'), aprovadaPor: 'joao@x.com', pausaMotivo: null, unit: unidade, campanha: { slug: 'outubro-rosa-2026', nome: 'Outubro Rosa' } }
+      ? { id: 'o1', estado: 'aprovada', etiqueta: 'Outubro Rosa · Dia 2', template: 'canaa_resgate', idioma: 'pt_BR', aprovadaEm: D('2026-10-28T11:00:00Z'), aprovadaPor: 'joao@x.com', pausaMotivo: c.pausaMotivo ?? null, unit: unidade, campanha: { slug: 'outubro-rosa-2026', nome: 'Outubro Rosa' } }
       : null),
   });
   falso('disparoDestinatario', {
@@ -380,6 +400,73 @@ test('resultado: outra onda com o mesmo modelo nos mesmos dias → a Meta não �
   assert.equal(r.funil.entregues, null);
   assert.equal(r.custo.usd, null);
   assert.match(r.fontes.notas.entregues!, /outra onda da mesma conta/);
+});
+
+const COM_META = {
+  template: [{ date: D('2026-10-28T00:00:00Z'), language: 'pt_BR', sent: 3, delivered: 3, read: 2, syncedAt: D('2026-10-29T03:00:00Z') }],
+  custo: [{ pricingCategory: 'MARKETING', volume: 3, costUsd: 0.1, syncedAt: D('2026-10-29T03:00:00Z') }],
+};
+
+test('resultado: câmbio fora do ar → custo só em US$, com a nota, e `fontes` diz que o dólar não veio (o custo da Meta continua medido)', async () => {
+  bancoDeMentira(COM_META);
+  const r = (await lerResultado('o1', leituras({ cambio: async () => null })))!;
+  assert.deepEqual(r.custo, { usd: 0.1, brl: null, porResposta: null, porAgendamento: null, atualizadoEm: '2026-10-29T03:00:00.000Z' });
+  assert.equal(r.fontes.custo, 'meta-pricing-analytics', 'o US$ foi medido na Meta');
+  assert.equal(r.fontes.cambio, 'indisponivel');
+  assert.match(r.fontes.notas.custo!, /câmbio indisponível agora; custo em US\$ apenas/);
+  _limparCache();
+  const comCambio = (await lerResultado('o1', leituras({ cambio: async () => 5 })))!;
+  assert.equal(comCambio.fontes.cambio, 'awesomeapi');
+  assert.doesNotMatch(comCambio.fontes.notas.custo ?? '', /câmbio/);
+});
+
+test('resultado: nota do custo explica por que não há custo por resposta/agendamento, e leva a ressalva da Meta', async () => {
+  bancoDeMentira(COM_META);
+  const r = (await lerResultado('o1', leituras({ mensagensRecebidas: async () => new Map(), agenda: async () => [] })))!;
+  assert.equal(r.custo.brl, 0.55);
+  assert.equal(r.custo.porResposta, null);
+  assert.match(r.fontes.notas.custo!, /atraso/);
+  assert.match(r.fontes.notas.custo!, /sem custo por resposta: ninguém respondeu ainda/);
+  assert.match(r.fontes.notas.custo!, /sem custo por agendamento: nenhum agendamento ainda/);
+  assert.match(r.fontes.notas.entregues!, /atraso[\s\S]*MESMO modelo/);
+});
+
+test('resultado: modelo UTILITY (ou categoria que não se sabe) → custo null com nota, entregues continua', async () => {
+  bancoDeMentira(COM_META);
+  const utilidade = (await lerResultado('o1', leituras({ categoriaDoModelo: async () => 'UTILITY' })))!;
+  assert.equal(utilidade.funil.entregues, 3);
+  assert.equal(utilidade.custo.usd, null);
+  assert.equal(utilidade.fontes.custo, 'indisponivel');
+  assert.match(utilidade.fontes.notas.custo!, /categoria UTILITY, não MARKETING/);
+  _limparCache();
+  const semSaber = (await lerResultado('o1', leituras({ categoriaDoModelo: async () => null })))!;
+  assert.equal(semSaber.custo.usd, null);
+  assert.match(semSaber.fontes.notas.custo!, /não deu para saber a categoria/);
+});
+
+test('resultado: pausaMotivo passa pela máscara (telefone e wamid não saem), e vem null quando não há', async () => {
+  bancoDeMentira({ pausaMotivo: 'cancelada (joao@x.com): 5563991021043 pediu e wamid.HBgNNTU2Mzk5MTAyMTA0MxUCABEYEjk3 falhou' });
+  const r = (await lerResultado('o1', leituras()))!;
+  assert.equal(r.onda.pausaMotivo, 'cancelada (joao@x.com): •••• pediu e wamid.•••• falhou');
+  assert.ok(!JSON.stringify(r).includes('5563991021043'));
+  _limparCache();
+  bancoDeMentira({});
+  assert.equal((await lerResultado('o1', leituras()))!.onda.pausaMotivo, null);
+});
+
+test('cache: câmbio que falha também fica só um minuto (como Kommo e franquia), e a categoria do modelo que não veio também', async () => {
+  for (const falha of [{ cambio: async () => null }, { categoriaDoModelo: async () => null }]) {
+    _limparCache();
+    bancoDeMentira();
+    let agora = D('2026-10-29T15:00:00Z');
+    const l = leituras({ agora: () => agora, ...falha });
+    await lerResultado('o1', l);
+    await new Promise((ok) => setImmediate(ok));
+    const lidas = l.chamadas.filter((c) => c === 'kommo').length;
+    agora = new Date(agora.getTime() + 61_000);
+    await lerResultado('o1', l);
+    assert.equal(l.chamadas.filter((c) => c === 'kommo').length, lidas + 1, 'um minuto depois já leu de novo');
+  }
 });
 
 test('cache: duas aberturas seguidas leem Kommo, franquia e câmbio UMA vez; passado o prazo, leem de novo', async () => {
