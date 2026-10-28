@@ -36,12 +36,6 @@ import {
   type NivelDoFreio,
 } from './formato';
 
-/**
- * Referência para dizer se o custo está "acima" ou "abaixo do esperado": tarifa de lista da Meta para mensagem de
- * MARKETING no Brasil, em dólar por mensagem. É uma referência de tabela, não medida; está escrita na tela ao lado da conta.
- */
-export const TARIFA_MARKETING_USD = 0.0625;
-
 export type CarregamentoDePessoas =
   | { estado: 'carregando' }
   | { estado: 'erro'; tentarDeNovo?: () => void }
@@ -405,12 +399,8 @@ function CartaoEnvios({ dados }: { dados: DisparoResultado }) {
 }
 
 function CartaoCusto({ dados, agora }: { dados: DisparoResultado; agora: Date }) {
-  const { custo, funil, fontes } = dados;
+  const { custo, fontes } = dados;
   const temCusto = custo.brl != null || custo.usd != null;
-  const esperadoUsd = funil.enviados * TARIFA_MARKETING_USD;
-  const dif = custo.usd != null && esperadoUsd > 0 ? Math.round(((custo.usd - esperadoUsd) / esperadoUsd) * 100) : null;
-  const acima = dif != null && dif > 0;
-  const cor = dif == null ? 'gray' : acima ? 'red' : 'green';
 
   return (
     <section className="dsp-cartao" aria-labelledby="c-custo">
@@ -429,11 +419,6 @@ function CartaoCusto({ dados, agora }: { dados: DisparoResultado; agora: Date })
               {custo.usd != null && custo.brl != null ? `${dolares(custo.usd)} na cobrança da Meta` : 'Câmbio indisponível: só o valor em dólar'}
               {custo.atualizadoEm && ` · atualizado ${quando(custo.atualizadoEm, agora)}`}
             </p>
-            {esperadoUsd > 0 && (
-              <p className="dsp-mudo">
-                Esperado: {numero(funil.enviados)} mensagens × US$ {TARIFA_MARKETING_USD.toLocaleString('pt-BR')} (tarifa de marketing da Meta no Brasil) = {dolares(esperadoUsd)}
-              </p>
-            )}
             <dl className="dsp-pares">
               <div>
                 <dt>Por resposta</dt>
@@ -455,19 +440,8 @@ function CartaoCusto({ dados, agora }: { dados: DisparoResultado; agora: Date })
           </>
         )}
       </div>
-      <footer className="cor" data-cor={cor}>
-        {dif != null ? (
-          <>
-            <span className="dsp-pilula">
-              <Triangulo sobe={acima} /> {Math.abs(dif)}%
-            </span>
-            <span>
-              {acima ? 'acima' : 'abaixo'} do esperado
-            </span>
-          </>
-        ) : (
-          <span>Sem custo para comparar</span>
-        )}
+      <footer className="cor" data-cor="gray">
+        <span>{temCusto ? 'Custo cobrado pela Meta' : 'Custo indisponível'}</span>
       </footer>
     </section>
   );

@@ -121,7 +121,7 @@ export const MOCK_CHEIO: DisparoResultado = {
   atualizadoEm: '2026-10-28T17:47:00Z',
 };
 
-/** Pausada por SAIR, com custo acima do esperado: confere a faixa de pausa, o rodapé vermelho e os freios no limite. */
+/** Pausada por SAIR: confere a faixa de pausa e os freios no limite. */
 export const MOCK_PAUSADA: DisparoResultado = {
   ...MOCK_CHEIO,
   onda: {
