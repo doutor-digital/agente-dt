@@ -119,7 +119,8 @@ test('CPF e CNPJ: dígitos verificadores conferidos; sequência repetida e taman
   assert.throws(() => validarCpfCnpj('11.222.333/0001-80'), /CNPJ inválido/);
   assert.throws(() => validarCpfCnpj('111.111.111-11'), /CPF inválido/);
   assert.throws(() => validarCpfCnpj('123'), /11 dígitos/);
-  assert.equal(mascararDoc(CPF_DIGITOS), '***.982.247-**');
+  assert.equal(mascararDoc(CPF_DIGITOS), '***.***.247-**');
+  assert.equal(mascararDoc('11222333000181'), '**.***.333/0001-**');
 });
 
 test('limites vêm do ambiente, com padrão 5000 e 20 por hora; valor inválido volta ao padrão', () => {
@@ -551,7 +552,7 @@ test('protocolo: só as 4 ferramentas de escrita (nada de cancelar/estornar/tran
   assert.equal(m.f.posts.length, 0);
   const aud = tudo(registros);
   assert.ok(!aud.includes('11222333000181') && !aud.includes('11.222.333/0001-81') && !aud.includes('joana@exemplo.com') && !aud.includes('981411248'), 'registro com dado por inteiro');
-  assert.match(aud, /\*\*\.222\.333\/0001-\*\*/);
+  assert.match(aud, /\*\*\.\*\*\*\.333\/0001-\*\*/);
   assert.ok(!aud.includes('Joana Souza') && aud.includes('Joana S.'), 'nome inteiro no registro');
 
   const outro = await conectar(m, 'u-outro', []);
@@ -678,4 +679,55 @@ test('registro de preparação: nome abreviado e descrição só em tamanho (pod
   assert.ok(!aud.includes('hérnia de disco') && !aud.includes('Maria da Silva Souza'), aud);
   assert.match(aud, /"descricaoCaracteres":32/);
   assert.match(aud, /Maria S\./);
+});
+
+test('depois de escrever, a leitura em cache (asaas_cobrancas, extrato) da conta é esquecida — e a de outra conta não', async () => {
+  const m = montar({ clientes: [EXISTENTE] });
+  m.asaas.cache.guardar('cob|doutor-hernia-serra|q', { velho: true }, 600_000);
+  m.asaas.cache.guardar('ext|doutor-hernia-serra|a|b', { velho: true }, 600_000);
+  m.asaas.cache.guardar('cob|outra-conta|q', { fica: true }, 600_000);
+  const p = await prepararCobranca(m.ctx, 'u1', COBRANCA);
+  assert.ok(m.asaas.cache.pegar('cob|doutor-hernia-serra|q'), 'a prévia não grava, não limpa');
+  await confirmarCobranca(m.ctx, 'u1', { confirmacao: String(p.confirmacao) }, m.registrar);
+  assert.equal(m.asaas.cache.pegar('cob|doutor-hernia-serra|q'), undefined);
+  assert.equal(m.asaas.cache.pegar('ext|doutor-hernia-serra|a|b'), undefined);
+  assert.ok(m.asaas.cache.pegar('cob|outra-conta|q'));
+});
+
+test('cadastro do cliente: 2xx sem id é "pode ter sido feito", nunca "cliente (undefined)"', async () => {
+  const m = montar();
+  (m.f.conta.escrita as { post: unknown }).post = async (caminho: string) => {
+    m.f.posts.push([caminho, {}]);
+    return null;
+  };
+  const p = await prepararCobranca(m.ctx, 'u1', { ...COBRANCA, novoCliente: { nome: 'Maria da Silva' } });
+  const erro = await confirmarCobranca(m.ctx, 'u1', { confirmacao: String(p.confirmacao) }, m.registrar).then(() => null, (e: Error) => e);
+  assert.match(erro!.message, /PODE ter sido feito/);
+  // corpo sem id (objeto vazio) também não segue para o boleto
+  const m2 = montar();
+  (m2.f.conta.escrita as { post: unknown }).post = async (caminho: string) => {
+    m2.f.posts.push([caminho, {}]);
+    return {};
+  };
+  const p2 = await prepararCobranca(m2.ctx, 'u1', { ...COBRANCA, novoCliente: { nome: 'Maria da Silva' } });
+  await assert.rejects(() => confirmarCobranca(m2.ctx, 'u1', { confirmacao: String(p2.confirmacao) }, m2.registrar), /PODE ter sido feito/);
+  assert.deepEqual(m2.f.posts.map((x) => x[0]), ['/customers']);
+  assert.doesNotMatch(erro!.message, /undefined/);
+  assert.deepEqual(m.f.posts.map((x) => x[0]), ['/customers']);
+  const c = montar();
+  (c.f.conta.escrita as { post: unknown }).post = async () => ({});
+  const pc = await prepararCliente(c.ctx, 'u1', { unidade: 'serra', nome: 'Maria da Silva', cpfCnpj: CPF });
+  await assert.rejects(() => confirmarCliente(c.ctx, 'u1', { confirmacao: String(pc.confirmacao) }, c.registrar), /PODE ter sido feito/);
+});
+
+test('clienteId colado com espaços é aceito; só espaços conta como não informado; externalReference de 11 dígitos aparece inteira na recusa', async () => {
+  const m = montar({ clientes: [EXISTENTE], pagamentos: [{ id: 'pay_5550000000001', externalReference: '20261028123' }] });
+  const p = await prepararCobranca(m.ctx, 'u1', { ...COBRANCA, cpfCnpj: undefined, clienteId: '  cus_000005401844 ' });
+  assert.ok(p.confirmacao);
+  const q = await prepararCobranca(m.ctx, 'u1', { ...COBRANCA, clienteId: '   ', externalReference: 'outra-ref' });
+  assert.ok(q.confirmacao);
+  const joao = await conectar(m, 'u1', []);
+  const r = await joao.callTool({ name: 'asaas_preparar_cobranca', arguments: { unidade: 'serra', cpfCnpj: CPF, valor: 100, vencimento: VENC, descricao: 'x', externalReference: '20261028123' } });
+  assert.equal(r.isError, true);
+  assert.match(texto(r), /"20261028123" já está na cobrança pay_5550000000001/);
 });

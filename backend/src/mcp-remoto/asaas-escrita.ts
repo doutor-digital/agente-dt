@@ -81,8 +81,9 @@ export function validarCpfCnpj(bruto: unknown): string {
 
 export function mascararDoc(d: string): string {
   const x = soDigitos(d);
-  if (x.length === 11) return `***.${x.slice(3, 6)}.${x.slice(6, 9)}-**`;
-  if (x.length === 14) return `**.${x.slice(2, 5)}.${x.slice(5, 8)}/${x.slice(8, 12)}-**`;
+  // só os 3 últimos dígitos-base: dá para conferir com o paciente, não dá para reconstruir o documento
+  if (x.length === 11) return `***.***.${x.slice(6, 9)}-**`;
+  if (x.length === 14) return `**.***.${x.slice(5, 8)}/${x.slice(8, 12)}-**`;
   return '***';
 }
 
@@ -485,6 +486,11 @@ export async function prepararCliente(
 }
 
 /** O POST pode ter chegado ao Asaas? (sem resposta ou 5xx) — aí NÃO dá para dizer que nada foi criado. */
+/** 2xx sem o id no corpo: o Asaas pode ter criado. Entra como "sem resposta" (status nulo). */
+class ErroSemId extends Error {
+  readonly status = null;
+}
+
 const podeTerGravado = (e: unknown) => {
   const status = (e as { status?: number | null })?.status;
   return status == null || status >= 500;
@@ -500,7 +506,7 @@ function enfileirar<T>(esc: EstadoEscritaAsaas, fn: () => Promise<T>): Promise<T
 
 /** Erro do Asaas sem a chave, sem documento e sem e-mail, na mesma classe (entrada continua entrada). */
 function sanear(e: unknown): Error {
-  const msg = limparTexto(e instanceof Error ? e.message : String(e)).slice(0, 400);
+  const msg = limparTexto(e instanceof Error ? e.message : String(e), undefined, e instanceof ErroDeEntrada).slice(0, 400);
   return e instanceof ErroDeEntrada ? new ErroDeEntrada(msg) : new Error(msg);
 }
 
@@ -517,6 +523,7 @@ export function confirmarCliente({ asaas, esc }: CtxEscrita, usuario: string, a:
     }
     try {
       const criado = await c.escrita.post<ClienteAsaas>('/customers', corpoDoCliente(p.dados, p.avisar));
+      if (!criado?.id) throw new ErroSemId('o Asaas respondeu ao cadastro do cliente sem o id');
       registrar(EVENTO_CLIENTE, { ...base, jaExistia: false, clienteId: criado.id, nome: abreviarNome(p.dados.nome), avisarCliente: p.avisar }, true);
       return {
         cadastrado: true,
@@ -588,15 +595,16 @@ export async function prepararCobranca({ asaas, esc }: CtxEscrita, usuario: stri
   const descricao = descricaoValida(a.descricao);
   const externalReference = referenciaValida(a.externalReference);
   const avisar = a.avisarCliente === true;
-  if (!!a.clienteId === !!a.cpfCnpj?.trim()) throw new ErroDeEntrada('informe o cliente por clienteId (cus_…) OU por cpfCnpj, um dos dois');
+  const clienteId = a.clienteId?.trim();
+  if (!!clienteId === !!a.cpfCnpj?.trim()) throw new ErroDeEntrada('informe o cliente por clienteId (cus_…) OU por cpfCnpj, um dos dois');
   let novo: DadosDoCliente | undefined;
-  if (!a.clienteId) {
+  if (!clienteId) {
     const doc = validarCpfCnpj(a.cpfCnpj);
     novo = a.novoCliente ? prepararDadosDoCliente({ ...a.novoCliente, cpfCnpj: doc }) : { nome: '', cpfCnpj: doc };
   }
 
   const { cabecalho, avisos } = await cabecalhoDaConta(c);
-  const alvo = await acharAlvo(c, { clienteId: a.clienteId, novo });
+  const alvo = await acharAlvo(c, { clienteId, novo });
   if (alvo.tipo === 'novo' && !a.novoCliente) {
     throw new ErroDeEntrada(`não há cliente com o documento ${mascararDoc(novo!.cpfCnpj)} nesta conta. Passe novoCliente (nome, e-mail, telefone, endereço) para cadastrar junto, ou use asaas_preparar_cliente antes.`);
   }
@@ -674,6 +682,7 @@ export function confirmarCobranca({ asaas, esc }: CtxEscrita, usuario: string, a
     else {
       try {
         const criado = await c.escrita.post<ClienteAsaas>('/customers', corpoDoCliente(alvo.dados, p.avisar));
+        if (!criado?.id) throw new ErroSemId('o Asaas respondeu ao cadastro do cliente sem o id');
         clienteId = criado.id;
         clienteCriado = true;
         registrar(EVENTO_CLIENTE, { conta: c.slug, documento: mascararDoc(alvo.dados.cpfCnpj), jaExistia: false, clienteId, nome: abreviarNome(alvo.dados.nome), avisarCliente: p.avisar, pediuPor: p.usuario, confirmadoPor: usuario, junto: 'cobranca' }, true);
@@ -687,6 +696,11 @@ export function confirmarCobranca({ asaas, esc }: CtxEscrita, usuario: string, a
       }
     }
 
+    // a leitura (asaas_cobrancas, extrato) guarda 10 min: depois de escrever (ou de tentar) ela não pode mostrar o "antes" a quem for conferir
+    const esquecerLeituras = () => {
+      asaas.cache.removerPrefixo(`cob|${c.slug}|`);
+      asaas.cache.removerPrefixo(`ext|${c.slug}|`);
+    };
     // conta ANTES de chamar: resposta perdida com a cobrança já criada não pode liberar uma 2ª
     // a chave do registro usa o id do cliente (também o recém-criado): é com ela que a duplicata é achada depois de um reinício
     const chaveFinal = chaveDeDuplicata(c.slug, clienteId, p.valor, p.vencimento, p.descricao, p.externalReference);
@@ -704,12 +718,14 @@ export function confirmarCobranca({ asaas, esc }: CtxEscrita, usuario: string, a
       });
     } catch (e) {
       const s = sanear(e);
+      esquecerLeituras();
       const incerto = podeTerGravado(e);
       // recusa definitiva do Asaas (4xx): nada foi criado, libera a reserva. Sem resposta ou 5xx: pode ter criado, a reserva fica.
       if (!incerto) esc.cobrancas = esc.cobrancas.filter((r) => r !== reserva);
       registrar(EVENTO_COBRANCA, { ...base, chave: chaveFinal, clienteId, ...(incerto ? { incerto: true } : {}) }, false, s.message);
       throw new Error(`${clienteCriado ? `O cliente FOI cadastrado (${clienteId}), mas o boleto não saiu: ` : 'O boleto não saiu: '}${s.message}`);
     }
+    esquecerLeituras();
     if (!pag?.id) {
       // 2xx sem a cobrança no corpo: pode ter criado. Fica a reserva e o registro "incerto".
       registrar(EVENTO_COBRANCA, { ...base, chave: chaveFinal, clienteId, incerto: true }, false, 'o Asaas respondeu sem o id da cobrança');

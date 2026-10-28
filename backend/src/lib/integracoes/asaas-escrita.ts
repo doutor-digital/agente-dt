@@ -16,11 +16,13 @@ type Fetcher = typeof fetch;
 const dormir = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Tira da mensagem o que nunca pode sair: a chave do Asaas, sequências de 11 a 14 dígitos (CPF/CNPJ) e e-mails. */
-export function limparTexto(texto: string, chave?: string): string {
+export function limparTexto(texto: string, chave?: string, soSegredos = false): string {
   let t = texto;
   if (chave && chave.length >= 8) t = t.split(chave).join('[chave]');
+  t = t.replace(/\$?aact_[A-Za-z0-9_\-:.=]+/g, '[chave]');
+  // nossas próprias recusas (soSegredos) só citam documento mascarado, e a externalReference do pedido precisa aparecer inteira
+  if (soSegredos) return t;
   return t
-    .replace(/\$?aact_[A-Za-z0-9_\-:.=]+/g, '[chave]')
     // CNPJ (14) e CPF (11), com ou sem pontuação, fora de ids como cus_000005401844 ou pay_123…
     .replace(/(?<![\w.\/-])\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}(?!\w)/g, '[documento]')
     .replace(/(?<![\w.\/-])\d{3}\.?\d{3}\.?\d{3}-?\d{2}(?!\w)/g, '[documento]')
