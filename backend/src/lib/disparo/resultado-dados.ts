@@ -182,7 +182,8 @@ export async function lerResultado(ondaId: string, l: Leituras = LEITURAS_DE_VER
     prisma.disparoDestinatario.groupBy({ by: ['estado'], where: { ondaId }, _count: true }),
     prisma.disparoDestinatario.count({ where: { ondaId, estado: 'saiu', enviadoEm: { not: null } } }),
     prisma.disparoDestinatario.aggregate({ where: { ondaId, estado: { in: ESTADOS_QUE_RECEBERAM }, enviadoEm: { not: null } }, _count: true, _min: { enviadoEm: true }, _max: { enviadoEm: true } }),
-    prisma.disparoDestinatario.count({ where: { ondaId, estado: 'falhou', enviadoEm: { not: null } } }),
+    // `falhou` COM hora de envio e `enviando` (reivindicado, hora gravada, sem resposta da Meta ainda): a Meta pode ter aceitado.
+    prisma.disparoDestinatario.count({ where: { ondaId, estado: { in: ['falhou', 'enviando'] }, enviadoEm: { not: null } } }),
     prisma.disparoDestinatario.findMany({ where: { ondaId, estado: { in: ESTADOS_QUE_RECEBERAM }, enviadoEm: { not: null } }, select: { enviadoEm: true } }),
   ]);
   const funil = funilDoBanco(Object.fromEntries(porEstado.map((g) => [g.estado, g._count])), saiuQueRecebeu);

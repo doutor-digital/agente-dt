@@ -308,7 +308,7 @@ function bancoDeMentira(c: Cenario = {}) {
       registrar('disparoDestinatario', 'count', a);
       if ('ondaId' in a.where && typeof a.where.ondaId === 'object') return 'onda' in a.where ? (c.outrasDoModelo ?? 0) : (c.outrasOndas ?? 0); // ondaId: { not }
       if (a.where.estado === 'saiu') return 1;
-      if (a.where.estado === 'falhou') return 0;
+      if (typeof a.where.estado === 'object') return 0; // falhou/enviando com hora de envio (incertos)
       return 2; // freios: o que a unidade mandou na janela
     },
     aggregate: async (a: never) => (registrar('disparoDestinatario', 'aggregate', a), { _count: 3, _min: { enviadoEm: recebidos[0]!.enviadoEm }, _max: { enviadoEm: recebidos[2]!.enviadoEm } }),

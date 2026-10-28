@@ -62,7 +62,7 @@ export function enviosPorHora(enviadoEm: ReadonlyArray<Date>): Array<{ hora: str
 export interface EnviosDaOnda {
   /** enviado ou saiu, com hora de envio */
   confirmados: number;
-  /** `falhou` COM hora de envio: a Meta pode ter aceitado (o envio incerto) */
+  /** `falhou` ou `enviando` COM hora de envio: a Meta pode ter aceitado (o envio incerto) */
   incertos: number;
   /** envios de OUTRAS ondas das unidades da mesma conta (WABA) dentro dos dias desta, de qualquer modelo (afeta o custo, que é por categoria) */
   deOutrasOndas: number;
