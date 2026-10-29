@@ -3,11 +3,12 @@
  * para a OpenAI (WebRTC) e nunca passa por aqui. A chave PRÓPRIA do Copiloto nunca sai do servidor; o navegador recebe um
  * segredo que vale poucos minutos.
  *
- * Privacidade: a voz NÃO recebe cartão nem conversa de paciente. Só sabe o nome da etapa e a ficha dela (fichas-das-etapas.ts).
+ * Privacidade: a voz NÃO recebe cartão nem conversa de paciente. Só sabe o nome da etapa, a ficha dela lida da estrutura viva do Kommo
+ * (ficha-viva.ts) e como a unidade funciona hoje (perfil-da-unidade.ts).
  * Ela ensina o Kommo e não altera nada nele. Quem preenche e move o cartão varia por unidade (divisao-com-a-ia.ts).
  */
-import { DIVISAO_COM_A_IA } from './divisao-com-a-ia.js';
-import { fichaDaEtapa } from './fichas-das-etapas.js';
+import { textoDaFichaViva, type FichaViva } from './ficha-viva.js';
+import { regrasDaUnidade, type PerfilDaUnidade } from './perfil-da-unidade.js';
 
 export const MODELO_DE_VOZ_PADRAO = 'gpt-realtime-2.1-mini';
 export const VOZ_PADRAO = 'marin';
@@ -24,29 +25,27 @@ export function lerEtapaDoPedido(corpo: unknown): string | null {
   return typeof e === 'string' && e.trim() ? e.trim().slice(0, MAX_CHARS_DA_ETAPA) : null;
 }
 
-export function instrucoesDaVoz(etapa: string | null): string {
-  const f = fichaDaEtapa(etapa);
+export interface ContextoDaVoz {
+  /** Como a unidade funciona hoje (Sofia, movimentação automática, sincronizador). Null = não deu para ler. */
+  perfil: PerfilDaUnidade | null;
+  /** A ficha da etapa lida da estrutura viva do Kommo. Null = não deu para ler. */
+  ficha: FichaViva | null;
+}
+
+export function instrucoesDaVoz(etapa: string | null, ctx: ContextoDaVoz = { perfil: null, ficha: null }): string {
   const base = [
     'Você é o Copiloto da Doutor Digital. Ensina atendentes (SDR) de clínicas Doutor Hérnia a usar o Kommo, em tempo real, por voz.',
     'Fale em português do Brasil, com calor humano, simples, em no máximo 3 frases curtas por vez. Sem gíria e sem termos técnicos.',
     'Responda só sobre como usar o Kommo e o trabalho de cada etapa do funil. Você não altera nada no Kommo: só orienta e explica (isso é sobre você, não sobre como a unidade trabalha).',
-    DIVISAO_COM_A_IA,
     'NUNCA invente regra, preço, chave Pix, endereço, horário ou política de convênio da clínica. Se não souber, diga que essa regra é da unidade e que a coordenação responde.',
     'NUNCA dê orientação médica ou de saúde. Se perguntarem, diga que isso é com o fisioterapeuta na consulta.',
     'Não peça nem repita nome, telefone, CPF ou e-mail de paciente. Se a pessoa disser algum, não repita e siga a explicação sem usar o dado.',
-    'Para ver na tela, sugira os botões "Fazer tour" (eu aponto onde clicar) e "Assistir ao vídeo" no painel.',
+    'Só descreva o que está abaixo, que vem do sistema agora. Não use aulas, manuais ou processos antigos de memória (por exemplo, "mover o cartão", "salvar o nome no título" ou "atualizar a franquia primeiro"): se algo não estiver abaixo, diga que não tem essa informação e sugira "Fazer tour" ou "Assistir ao vídeo".',
+    regrasDaUnidade(ctx.perfil),
   ];
-  if (f) {
-    base.push(
-      `A pessoa está na etapa ${f.nome}. Ficha da etapa:`,
-      `- Missão: ${f.ficha.missao}`,
-      f.ficha.preencher.length ? `- Campos desta etapa (quem preenche depende da unidade: pode ser a Sofia ou a atendente): ${f.ficha.preencher.join('; ')}` : '- Nesta etapa não há campos para preencher à mão.',
-      f.ficha.proxima.length ? `- Depois, o cartão costuma ir para: ${f.ficha.proxima.join(' ou ')}` : '- Esta etapa não tem próxima etapa comum.',
-      'Se perguntarem o que fazer agora, explique a missão e os campos, um de cada vez, e pergunte se ficou claro.',
-    );
-  } else {
-    base.push('Você não sabe em qual etapa a pessoa está. Se ela perguntar o que fazer numa etapa, pergunte qual etapa é.');
-  }
+  if (ctx.ficha) base.push(textoDaFichaViva(ctx.ficha));
+  else if (etapa) base.push(`A pessoa diz estar na etapa ${etapa}, mas não consegui ler a ficha dela agora. Não liste campos: peça para olhar o cartão na tela e sugira "Fazer tour".`);
+  else base.push('Você não sabe em qual etapa a pessoa está. Se ela perguntar o que fazer numa etapa, pergunte qual etapa é.');
   return base.join('\n');
 }
 
