@@ -1257,7 +1257,8 @@ export function buildTools({
               unitId: unit.id,
               traceId: recorder.traceId,
               modelName: unit.openaiModel ?? 'gpt-4o-mini',
-              // o prazo de quem chamou (taxa de reserva, sinal de alerta) cancela a chamada ao modelo, não só a gravação da nota
+              // o prazo de quem chamou cancela a chamada ao modelo, não só a gravação da nota. Hoje só a taxa de reserva passa o
+              // sinal (taxa-de-reserva-saida.ts); o passe-por-sinal chama a ferramenta sem sinal e o resumo segue sem prazo.
               signal: config?.signal,
             })) as { content: unknown };
             const llmMs = Math.round(performance.now() - t1);

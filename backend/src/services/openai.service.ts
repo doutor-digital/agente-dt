@@ -302,7 +302,8 @@ export interface RecordLlmCallParams {
   /** Gravação de cache de 1 h (o prefixo: ferramentas + prompt fixo). */
   cacheWrite1hTokens?: number;
   latencyMs: number;
-  status?: 'success' | 'error';
+  /** `cancelled`: quem chamou desistiu (prazo estourado, sinal abortado) — não é falha do provedor e não entra na taxa de erro */
+  status?: 'success' | 'error' | 'cancelled';
   errorMessage?: string;
   requestBody?: unknown;
   responseBody?: unknown;
@@ -430,6 +431,14 @@ export function avisarCorte(stopReason: string | undefined, corteEsperado = fals
   return stopReason === 'max_tokens' && !corteEsperado;
 }
 
+/**
+ * A chamada falhou porque QUEM CHAMOU desistiu (o prazo abortou o sinal)? Então não é erro do provedor: o alarme de taxa de erro
+ * (`taxa-erro-worker`) conta só `status = 'error'`, e um prazo que estoura de propósito não pode acendê-lo.
+ */
+export function statusDaFalha(signal?: AbortSignal): 'error' | 'cancelled' {
+  return signal?.aborted ? 'cancelled' : 'error';
+}
+
 export async function invokeChatModel(args: InvokeChatModelArgs): Promise<unknown> {
   const t0 = performance.now();
   let usage: TokenUsage | null = null;
@@ -555,7 +564,7 @@ export async function invokeChatModel(args: InvokeChatModelArgs): Promise<unknow
       model: args.modelName,
       endpoint: 'chat.completions',
       latencyMs,
-      status: 'error',
+      status: statusDaFalha(args.signal),
       errorMessage: msg,
       requestBody: {
         model: args.modelName,
