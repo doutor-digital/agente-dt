@@ -6,6 +6,7 @@
  * POST não é repetido sozinho: timeout ou 5xx pode ter criado a cobrança, e repetir cobraria o paciente duas
  * vezes. Só o 429 (o Asaas nem processou) volta a tentar.
  */
+import { mascararPii } from '../pii.js';
 import { ASAAS_API, ErroAsaas, ritmoDaConta } from './asaas.js';
 
 const AGENTE = 'DoutorDigital-Conector/1.0';
@@ -15,18 +16,23 @@ export const CAMINHOS_DE_ESCRITA = ['/customers', '/payments'] as const;
 type Fetcher = typeof fetch;
 const dormir = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Tira da mensagem o que nunca pode sair: a chave do Asaas, sequências de 11 a 14 dígitos (CPF/CNPJ) e e-mails. */
+/**
+ * Tira da mensagem o que nunca pode sair: a chave do Asaas, CPF/CNPJ (11 e 14 dígitos), e-mail e — pelo `lib/pii.ts` — telefone
+ * (10 a 13 dígitos, com ou sem DDI/máscara) e cartão. Ids do Asaas (cus_…, pay_…) ficam intactos.
+ */
 export function limparTexto(texto: string, chave?: string, soSegredos = false): string {
   let t = texto;
   if (chave && chave.length >= 8) t = t.split(chave).join('[chave]');
   t = t.replace(/\$?aact_[A-Za-z0-9_\-:.=]+/g, '[chave]');
-  // nossas próprias recusas (soSegredos) só citam documento mascarado, e a externalReference do pedido precisa aparecer inteira
+  // nossas próprias recusas (soSegredos) só citam documento mascarado, e o texto do pedido precisa aparecer inteiro
   if (soSegredos) return t;
-  return t
-    // CNPJ (14) e CPF (11), com ou sem pontuação, fora de ids como cus_000005401844 ou pay_123…
+  const ids: string[] = [];
+  t = t.replace(/\b(?:cus|pay)_[A-Za-z0-9]+/g, (m) => `\u0001${ids.push(m) - 1}\u0001`);
+  t = t
     .replace(/(?<![\w.\/-])\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}(?!\w)/g, '[documento]')
     .replace(/(?<![\w.\/-])\d{3}\.?\d{3}\.?\d{3}-?\d{2}(?!\w)/g, '[documento]')
     .replace(/[^\s@"',;]+@[^\s@"',;]+\.[^\s@"',;]+/g, '[e-mail]');
+  return mascararPii(t).replace(/\u0001(\d+)\u0001/g, (_, i: string) => ids[Number(i)] ?? '');
 }
 
 /** POST no Asaas em `/customers` ou `/payments`. A chave só vai no cabeçalho e nunca volta em erro. */
@@ -43,6 +49,8 @@ export async function asaasPost<T = unknown>(contaId: string, chave: string, cam
         method: 'POST',
         headers: { access_token: chave, 'User-Agent': AGENTE, Accept: 'application/json', 'Content-Type': 'application/json' },
         body: JSON.stringify(corpo),
+        // redirecionamento não é seguido: o cabeçalho com a chave não pode ir parar em outro endereço (e o POST pode ter sido processado)
+        redirect: 'error',
         signal: AbortSignal.timeout(30_000),
       });
     } catch {

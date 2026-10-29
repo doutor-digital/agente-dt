@@ -92,3 +92,21 @@ test('asaasPost: 429 repete (o Asaas não processou) e, esgotadas as tentativas,
   assert.match(erro!.message, /nada foi gravado/);
   assert.equal(b.chamadas.length, 3);
 });
+
+test('6) asaasPost não segue redirecionamento (redirect: "error"): a chave não vai parar em outro endereço', async () => {
+  const { fetcher, chamadas } = falso([{ status: 200, corpo: { id: 'x' } }]);
+  await asaasPost('c5', CHAVE, '/payments', {}, fetcher);
+  assert.equal(chamadas[0]!.init.redirect, 'error');
+  // se o fetch recusar o redirecionamento, vira "pode ter gravado" (o POST pode ter sido processado), sem a chave na mensagem
+  const redireciona = (async () => { throw new TypeError(`redirect mode is set to error: https://evil.example/?k=${CHAVE}`); }) as unknown as typeof fetch;
+  const erro = await asaasPost('c5', CHAVE, '/payments', {}, redireciona).then(() => null, (e: Error & { status?: number | null }) => e);
+  assert.equal(erro!.status, null);
+  assert.match(erro!.message, /pode ter acontecido/);
+  assert.ok(!erro!.message.includes('evil') && !erro!.message.includes('aact'));
+});
+
+test('7) limparTexto: telefone de 10, 12 e 13 dígitos (lib/pii) sai; ids do Asaas, datas e valores ficam', () => {
+  const t = limparTexto('tel (63) 3321-4455, 63 98141-1248, +55 63 98141-1248, 5563981411248 e 556333214455; cus_000005401844 pay_6501234567890123 venceu 2026-11-10 valor R$ 250,00');
+  for (const p of ['3321-4455', '98141-1248', '5563981411248', '556333214455']) assert.ok(!t.includes(p), p);
+  assert.match(t, /cus_000005401844 pay_6501234567890123 venceu 2026-11-10 valor R\$ 250,00/);
+});
