@@ -97,6 +97,8 @@ export async function tramitacaoGet<T = unknown>(
         signal: AbortSignal.timeout(30_000),
       });
     } catch (err) {
+      // redirect:'error' lança no 3xx: não é falha de rede, repetir não adianta e a mensagem tem de dizer o que foi
+      if (/redirect/i.test(`${err} ${(err as { cause?: unknown })?.cause ?? ''}`)) throw new ErroTramitacao(`a Tramitação respondeu com redirecionamento em ${caminho}: o conector não segue redirecionamento (a chave iria junto)`, null);
       if (tentativa < 3) {
         await dormir(1000 * (tentativa + 1));
         continue;

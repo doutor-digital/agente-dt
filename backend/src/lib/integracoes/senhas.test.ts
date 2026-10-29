@@ -52,6 +52,24 @@ test('cabeçalhos de credencial sem a palavra senha: Acesso, Credenciais, Chave 
   assert.deepEqual(ok.cabecalhos, ['Nome', 'Benefício INSS']);
 });
 
+test('"INSS", "Gov", "Acesso negado" e "Chave" como VALOR de célula não derrubam a coluna (as palavras extras valem só no cabeçalho)', () => {
+  const r = aba([['Nome', 'Órgão', 'Obs'], ['Ana', 'INSS', 'Acesso negado'], ['Bia', 'Gov', 'Chave de 2ª via'], ['Cris', 'INSS', 'ok']]);
+  assert.deepEqual(r.cabecalhos, ['Nome', 'Órgão', 'Obs']);
+  assert.deepEqual(r.colunasDescartadas, []);
+});
+
+test('texto de senha numa célula do topo descarta a coluna, e o relatório diz que foi por isso (não pelo cabeçalho)', () => {
+  const r = aba([['Nome', 'Dados'], ['Ana', `a senha é ${P}`]]);
+  assert.deepEqual(r.colunasDescartadas, [{ cabecalho: 'coluna B', motivo: 'texto de senha/login nas primeiras linhas da coluna' }]);
+});
+
+test('coluna de telefone com nome ("11987654321 Maria") não é descartada pela regra dos 30%; a célula some, o telefone não vaza', () => {
+  const linhas = [['Nome', 'Contato'], ...Array.from({ length: 5 }, (_, i) => [`P${i}`, `1198765432${i} Maria`])];
+  const r = aba(linhas);
+  assert.deepEqual(r.cabecalhos, ['Nome', 'Contato']);
+  assert.equal(JSON.stringify(r).includes('9876543'), false);
+});
+
 // ---------------------------------------------------------------- CPF e senha na mesma célula (ALTA 3)
 
 const FORMATOS: Array<[string, string]> = [
@@ -129,6 +147,9 @@ test('limparRegistro: NIT, RG, CNH, CTPS e document_number saem, em qualquer pro
   const s = JSON.stringify(r);
   for (const proibido of ['45678', '12345678901', '12.345.678', 'SSP', '99887766', '1234567"']) assert.equal(s.includes(proibido), false, proibido);
   assert.equal((r as { name: string }).name, 'Fulana Fict');
+  // "inss", "acesso" e "chave" são dado comum em registro de API: só as chaves de credencial de verdade saem
+  const comuns = limparRegistro({ inss: 'sim', acesso: '2026-10-01', chave_acesso: 'x1', orgao: 'INSS', meu_inss_pass: 'Segredo#1' }) as Record<string, string>;
+  assert.deepEqual(Object.keys(comuns).sort(), ['acesso', 'chave_acesso', 'inss', 'orgao']);
   assert.equal((r as { customers: Array<{ outro: string }> }).customers[0]!.outro, 'ok');
   assert.equal(normalizarCabecalho('Meu_INSS-Pass'), 'meu inss pass');
 });

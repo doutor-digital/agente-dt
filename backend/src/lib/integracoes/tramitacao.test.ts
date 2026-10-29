@@ -127,3 +127,15 @@ test('resposta de erro que não é JSON não leva trecho do corpo para a mensage
     (e: Error) => /não é JSON/.test(e.message) && !e.message.includes('fulano') && !e.message.includes('Bearer') && !e.message.includes('html'),
   );
 });
+
+test('redirecionamento (redirect:"error" lança no 3xx) falha na hora, com mensagem própria, sem repetir', async () => {
+  let n = 0;
+  const f = (async () => {
+    n++;
+    throw new TypeError('fetch failed', { cause: new Error('unexpected redirect') });
+  }) as unknown as typeof fetch;
+  const t0 = Date.now();
+  await assert.rejects(tramitacaoGet('t-3xx', 'tok', '/v1/processos', {}, f), /redirecionamento/);
+  assert.equal(n, 1, 'não repete');
+  assert.ok(Date.now() - t0 < 500, 'não dorme entre tentativas');
+});

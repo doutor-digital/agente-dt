@@ -10,16 +10,11 @@
  * ou de montar a resposta — nenhuma flag (`completo`, por exemplo) desliga isto.
  */
 
-import { CPF as CPF_SOLTO } from '../pii.js';
+import { CPF as CPF_PII } from '../pii.js';
 
 const semAcento = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '');
 
 const limpar = (s: string) => s.toLowerCase().replace(/[_\-/.\\|]+/g, ' ').replace(/\s+/g, ' ').trim();
-
-/** Minúsculo, sem acento, e `_ - / .` viram espaço: "CPF/Senha", "meu_inss_pass" e "Meu INSS" comparam por igual. */
-export function normalizarCabecalho(s: string): string {
-  return limpar(semAcento(String(s ?? '')));
-}
 
 /**
  * As formas de um cabeçalho ou chave de JSON para as regras de credencial/dado sensível: a normal e a que separa
@@ -30,15 +25,28 @@ function formasDaChave(s: string): string[] {
   return [limpar(sem), limpar(sem.replace(/([a-z0-9])([A-Z])/g, '$1 $2'))];
 }
 
-/**
- * Palavras que fazem um cabeçalho (ou uma chave de JSON) valer como credencial. `inss` e `gov` só valem sozinhos:
- * "Benefício INSS" é dado de processo, "INSS" sozinho como título de coluna é onde se anota a senha.
- */
-const SECRETA = /senha|password|passwd|\bpass\b|\bpwd\b|\bpin\b|meu ?inss|\blogin\b|\bsegredo\b|\bsecret|\btoken\b|gov ?br|\bacesso\b|credenc|\bchave\b|^inss$|^gov$/;
+/** Minúsculo, sem acento, e `_ - / .` viram espaço: "CPF/Senha", "meu_inss_pass" e "Meu INSS" comparam por igual. */
+export function normalizarCabecalho(s: string): string {
+  return formasDaChave(s)[0]!;
+}
 
-/** O cabeçalho é de uma coluna de credencial? Em dúvida (cabeçalho vazio não é), descarta. */
-export function ehColunaSecreta(cabecalho: string): boolean {
-  return formasDaChave(cabecalho).some((f) => SECRETA.test(f));
+/** Palavras que dizem "credencial", em cabeçalho de coluna, em chave de JSON ou em texto de célula. */
+const SECRETA = /senha|password|passwd|\bpass\b|\bpwd\b|\bpin\b|meu ?inss|\blogin\b|\bsegredo\b|\bsecret|\btoken\b|gov ?br/;
+/**
+ * Além das de cima, estas valem SÓ para o cabeçalho de uma coluna (nunca para valor de célula nem chave de JSON, onde
+ * "INSS", "Acesso" e "Chave" são dado comum): "Acesso", "Credenciais", "Chave", e "INSS"/"Gov" sozinhos como título de
+ * coluna — é onde se anota a senha. "Benefício INSS" é dado de processo e fica.
+ */
+const SECRETA_NO_CABECALHO = /\bacesso\b|credenc|\bchave\b|^inss$|^gov$/;
+
+/** O texto diz senha/login/"meu inss"? Vale para texto de célula (as linhas do topo) e, com `ehCabecalhoDeSenha`, para o cabeçalho. */
+export function ehColunaSecreta(texto: string): boolean {
+  return formasDaChave(texto).some((f) => SECRETA.test(f));
+}
+
+/** O cabeçalho de uma coluna é de credencial? Em dúvida, descarta (cabeçalho vazio não é). */
+export function ehCabecalhoDeSenha(cabecalho: string): boolean {
+  return formasDaChave(cabecalho).some((f) => SECRETA.test(f) || SECRETA_NO_CABECALHO.test(f));
 }
 
 /** Chave de objeto (JSON de API) que guarda credencial: `meu_inss_pass`, `password`, `senha`, `api_token`… */
@@ -57,6 +65,9 @@ export function mascararTelefone(valor: string): string {
   const d = DIGITOS(valor);
   return d.length >= 4 ? `(**) *****-${d.slice(-4)}` : '***';
 }
+
+/** A cobertura de CPF do pii.ts (com ou sem pontuação, com espaço), numa cópia só nossa: o `lastIndex` de uma regex /g exportada seria estado compartilhado. */
+const CPF_SOLTO = new RegExp(CPF_PII.source, CPF_PII.flags);
 
 /** CPF, formatado ou só dígitos, que não é pedaço de número maior */
 const CPF_ISOLADO = String.raw`(?<!\d)\d{3}\.?\d{3}\.?\d{3}-?\d{2}(?!\d)`;
@@ -90,9 +101,16 @@ export const CPF_SENHA_OMITIDO = '[CPF/senha omitido]';
 export const SENHA_OMITIDA = '[senha omitida]';
 export const DOCUMENTO_OMITIDO = '[documento omitido]';
 
-/** Tem CPF seguido de mais alguma coisa na mesma célula (possível "cpf + senha")? */
-export function temCpfColado(texto: string): boolean {
-  return CPF_COLADO_CELULA.test(texto);
+/** 11 dígitos soltos no formato de celular (DDD + 9 + 8 dígitos): "11987654321 Maria" é telefone com nome, não CPF com senha */
+const CPF_COLADO_FORA_TELEFONE = new RegExp(`(?<!\\d)(?!\\d{2}9\\d{8}(?!\\d))\\d{3}\\.?\\d{3}\\.?\\d{3}-?\\d{2}(?!\\d)(?=\\s*\\S)`);
+
+/**
+ * Tem CPF seguido de mais alguma coisa na mesma célula (possível "cpf + senha")? Com `contandoTelefone: false`, 11 dígitos
+ * seguidos no formato de celular não contam: a regra dos 30% não derruba coluna de telefone com nome ("11987654321 Maria"),
+ * embora a célula, individualmente, continue sendo omitida.
+ */
+export function temCpfColado(texto: string, contandoTelefone = true): boolean {
+  return (contandoTelefone ? CPF_COLADO_CELULA : CPF_COLADO_FORA_TELEFONE).test(texto);
 }
 
 /**

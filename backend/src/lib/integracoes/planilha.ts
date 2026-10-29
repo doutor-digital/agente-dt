@@ -15,7 +15,7 @@
  */
 import { inflateRawSync } from 'node:zlib';
 import { dormir } from '../../franquia-mcp/ritmo.js';
-import { ehColunaSecreta, mascararCelula, mascararTexto, temCpfColado } from './mascaras.js';
+import { ehCabecalhoDeSenha, ehColunaSecreta, mascararCelula, mascararTexto, temCpfColado } from './mascaras.js';
 
 const AGENTE = 'DoutorDigital-Conector/1.0';
 const EXPORT = 'https://docs.google.com/spreadsheets/d';
@@ -317,22 +317,23 @@ export function limparAba(bruta: Omit<AbaBruta, 'truncado'> & { truncado?: boole
       const v = d.l[c]!;
       if (v.trim() === '') continue;
       cheias[c]!++;
-      if (v.length >= 11 && temCpfColado(v)) colados[c]!++;
+      if (v.length >= 11 && temCpfColado(v, false)) colados[c]!++;
     }
   }
   const descartadas: ColunaDescartada[] = [];
   const manter: number[] = [];
   for (let c = 0; c < largura; c++) {
     const nome = (cab[c] ?? '').trim();
-    const cabecalhoDeSenha = nome !== '' && ehColunaSecreta(nome);
+    const cabecalhoDeSenha = nome !== '' && ehCabecalhoDeSenha(nome);
     const textoDeSenha =
-      cabecalhoDeSenha ||
+      !cabecalhoDeSenha &&
       varridas.some((i) => {
         const t = (bruta.linhas[i]![c] ?? '').trim();
         return t !== '' && t.length <= MAX_TEXTO_DE_DADO && !temCpfColado(t) && ehColunaSecreta(t);
       });
-    const nColados = colados[c]! + (temCpfColado(nome) ? 1 : 0);
-    if (textoDeSenha) descartadas.push({ cabecalho: `coluna ${letrasDe(c)}`, motivo: 'cabeçalho de senha/login' });
+    const nColados = colados[c]! + (temCpfColado(nome, false) ? 1 : 0);
+    if (cabecalhoDeSenha) descartadas.push({ cabecalho: `coluna ${letrasDe(c)}`, motivo: 'cabeçalho de senha/login' });
+    else if (textoDeSenha) descartadas.push({ cabecalho: `coluna ${letrasDe(c)}`, motivo: 'texto de senha/login nas primeiras linhas da coluna' });
     else if (nColados > 0 && nColados / Math.max(cheias[c]!, 1) >= FRACAO_CREDENCIAL) descartadas.push({ cabecalho: `coluna ${letrasDe(c)}`, motivo: 'valores no formato CPF/senha' });
     else manter.push(c);
   }
