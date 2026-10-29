@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { asaasPost, limparTexto } from './asaas-escrita.js';
+import { asaasGet } from './asaas.js';
 
 const CHAVE = '$aact_prod_000MzkwODA2MWY2OGM3MWRlMDU2NWM3MzJlNzZmNGZhZGY6OjAwMDAwXXYZ';
 
@@ -109,4 +110,10 @@ test('7) limparTexto: telefone de 10, 12 e 13 dígitos (lib/pii) sai; ids do Asa
   const t = limparTexto('tel (63) 3321-4455, 63 98141-1248, +55 63 98141-1248, 5563981411248 e 556333214455; cus_000005401844 pay_6501234567890123 venceu 2026-11-10 valor R$ 250,00');
   for (const p of ['3321-4455', '98141-1248', '5563981411248', '556333214455']) assert.ok(!t.includes(p), p);
   assert.match(t, /cus_000005401844 pay_6501234567890123 venceu 2026-11-10 valor R\$ 250,00/);
+});
+
+test('8) asaasGet também não segue redirecionamento: a mesma chave vai no cabeçalho da leitura', async () => {
+  const { fetcher, chamadas } = falso([{ status: 200, corpo: { data: [] } }]);
+  await asaasGet('c8', CHAVE, '/customers', { limit: 1 }, fetcher);
+  assert.equal(chamadas[0]!.init.redirect, 'error');
 });

@@ -42,7 +42,7 @@ export async function asaasGet<T = unknown>(
     await ritmo.vez();
     let resp: Response;
     try {
-      resp = await fetcher(url, { method: 'GET', headers: { access_token: chave, 'User-Agent': AGENTE, Accept: 'application/json' }, signal: AbortSignal.timeout(30_000) });
+      resp = await fetcher(url, { method: 'GET', headers: { access_token: chave, 'User-Agent': AGENTE, Accept: 'application/json' }, redirect: 'error', signal: AbortSignal.timeout(30_000) });
     } catch (err) {
       if (tentativa < 3) { await dormir(1000 * (tentativa + 1)); continue; }
       throw new ErroAsaas(`sem resposta do Asaas em ${caminho}: ${String(err).slice(0, 200)}`, null);
