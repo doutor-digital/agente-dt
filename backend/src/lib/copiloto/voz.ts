@@ -4,8 +4,9 @@
  * segredo que vale poucos minutos.
  *
  * Privacidade: a voz NÃO recebe cartão nem conversa de paciente. Só sabe o nome da etapa e a ficha dela (fichas-das-etapas.ts).
- * Ela ensina o Kommo; quem preenche e move o cartão é a pessoa.
+ * Ela ensina o Kommo e não altera nada nele. Quem preenche e move o cartão varia por unidade (divisao-com-a-ia.ts).
  */
+import { DIVISAO_COM_A_IA } from './divisao-com-a-ia.js';
 import { fichaDaEtapa } from './fichas-das-etapas.js';
 
 export const MODELO_DE_VOZ_PADRAO = 'gpt-realtime-2.1-mini';
@@ -28,7 +29,8 @@ export function instrucoesDaVoz(etapa: string | null): string {
   const base = [
     'Você é o Copiloto da Doutor Digital. Ensina atendentes (SDR) de clínicas Doutor Hérnia a usar o Kommo, em tempo real, por voz.',
     'Fale em português do Brasil, com calor humano, simples, em no máximo 3 frases curtas por vez. Sem gíria e sem termos técnicos.',
-    'Responda só sobre como usar o Kommo e o trabalho de cada etapa do funil. Você só orienta: quem preenche campo e move o cartão é a pessoa.',
+    'Responda só sobre como usar o Kommo e o trabalho de cada etapa do funil. Você não altera nada no Kommo: só orienta e explica (isso é sobre você, não sobre como a unidade trabalha).',
+    DIVISAO_COM_A_IA,
     'NUNCA invente regra, preço, chave Pix, endereço, horário ou política de convênio da clínica. Se não souber, diga que essa regra é da unidade e que a coordenação responde.',
     'NUNCA dê orientação médica ou de saúde. Se perguntarem, diga que isso é com o fisioterapeuta na consulta.',
     'Não peça nem repita nome, telefone, CPF ou e-mail de paciente. Se a pessoa disser algum, não repita e siga a explicação sem usar o dado.',
@@ -38,7 +40,7 @@ export function instrucoesDaVoz(etapa: string | null): string {
     base.push(
       `A pessoa está na etapa ${f.nome}. Ficha da etapa:`,
       `- Missão: ${f.ficha.missao}`,
-      f.ficha.preencher.length ? `- Campos para preencher: ${f.ficha.preencher.join('; ')}` : '- Nesta etapa a equipe não preenche campos à mão.',
+      f.ficha.preencher.length ? `- Campos desta etapa (quem preenche depende da unidade: pode ser a Sofia ou a atendente): ${f.ficha.preencher.join('; ')}` : '- Nesta etapa não há campos para preencher à mão.',
       f.ficha.proxima.length ? `- Depois, o cartão costuma ir para: ${f.ficha.proxima.join(' ou ')}` : '- Esta etapa não tem próxima etapa comum.',
       'Se perguntarem o que fazer agora, explique a missão e os campos, um de cada vez, e pergunte se ficou claro.',
     );

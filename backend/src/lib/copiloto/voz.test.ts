@@ -27,7 +27,7 @@ test('instrucoesDaVoz: as regras de segurança estão sempre lá', () => {
     assert.match(t, /NUNCA invente regra, preço, chave Pix/);
     assert.match(t, /NUNCA dê orientação médica/);
     assert.match(t, /Não peça nem repita nome, telefone, CPF/);
-    assert.match(t, /quem preenche campo e move o cartão é a pessoa/);
+    assert.match(t, /Você não altera nada no Kommo/);
   }
 });
 
