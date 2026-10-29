@@ -1,7 +1,8 @@
 /**
  * Chaves de API de terceiros por unidade: salvar (testando antes), listar sem expor, e ler decifrada
- * para o conector. Provedores: Asaas (financeiro das clínicas), Convênia (RH/departamento pessoal) e
- * Tiquetaque (ponto eletrônico).
+ * para o conector. Provedores: Asaas (financeiro das clínicas), Convênia (RH/departamento pessoal),
+ * Tiquetaque (ponto eletrônico), Planilha (Google Sheets: a "chave" é a lista de planilhas liberadas) e
+ * Tramitação Inteligente (processos e prazos de advocacia).
  */
 import { env } from '../env.js';
 import { prisma } from '../prisma.js';
@@ -9,14 +10,22 @@ import { cifrar, decifrar, finalDaChave } from './cofre.js';
 import { testarChaveAsaas } from './asaas.js';
 import { testarChaveConvenia } from './convenia.js';
 import { testarChaveTiquetaque } from './tiquetaque.js';
+import { testarChavePlanilha } from './planilha.js';
+import { testarChaveTramitacao } from './tramitacao.js';
 
-export const PROVEDORES = ['asaas', 'convenia', 'tiquetaque'] as const;
+export const PROVEDORES = ['asaas', 'convenia', 'tiquetaque', 'planilha', 'tramitacao'] as const;
 export type Provedor = (typeof PROVEDORES)[number];
 
 const segredo = () => process.env.INTEGRACOES_CHAVE_MESTRA || env.SESSION_JWT_SECRET;
 
 /** Teste de cada provedor: prova a chave no serviço e devolve o nome da conta para o painel. */
-const TESTES: Record<Provedor, (chave: string) => Promise<string>> = { asaas: testarChaveAsaas, convenia: testarChaveConvenia, tiquetaque: testarChaveTiquetaque };
+const TESTES: Record<Provedor, (chave: string) => Promise<string>> = {
+  asaas: testarChaveAsaas,
+  convenia: testarChaveConvenia,
+  tiquetaque: testarChaveTiquetaque,
+  planilha: (chave) => testarChavePlanilha(chave),
+  tramitacao: (chave) => testarChaveTramitacao(chave),
+};
 
 export function ehProvedor(p: string): p is Provedor {
   return (PROVEDORES as readonly string[]).includes(p);

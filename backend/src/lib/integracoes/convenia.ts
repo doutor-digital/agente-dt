@@ -46,7 +46,7 @@ type Fetcher = typeof fetch;
 const janelas = new Map<string, JanelaDeRitmo>();
 
 /** Retry-After em segundos (ou data HTTP), com teto de 60 s. */
-function esperaPedida(resp: Response, tentativa: number): number {
+export function esperaPedida(resp: Response, tentativa: number): number {
   const ra = resp.headers.get('retry-after');
   const s = ra ? Number(ra) : NaN;
   if (Number.isFinite(s) && s >= 0) return Math.min(s * 1000, 60_000);
