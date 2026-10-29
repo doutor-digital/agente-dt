@@ -36,6 +36,8 @@ import { criarContextoConvenia, registrarFerramentasConvenia, type ContaConvenia
 import { conveniaGet } from '../lib/integracoes/convenia.js';
 import { criarContextoTiquetaque, registrarFerramentasTiquetaque, type ContaTiquetaque } from './tiquetaque.js';
 import { tiquetaqueGet } from '../lib/integracoes/tiquetaque.js';
+import { contaPlanilhaDaChave, criarContextoPlanilha, registrarFerramentasPlanilha, type ContaPlanilha } from './planilha.js';
+import { contaTramitacaoDaChave, criarContextoTramitacao, registrarFerramentasTramitacao, type ContaTramitacao } from './tramitacao.js';
 import { contasComChave } from '../lib/integracoes/chaves.js';
 import { contaEvolutionDoAmbiente, criarContextoEvolution, EVENTO_DE_ENVIO, registrarFerramentasEvolution } from './evolution.js';
 import { blingGet } from '../lib/bling/cliente.js';
@@ -199,6 +201,28 @@ async function contasTiquetaqueDoBanco(): Promise<Map<string, ContaTiquetaque>> 
     contas.set(c.slug, { slug: c.slug, nome: c.nome, fonte: { get: (caminho, query) => tiquetaqueGet(c.unitId, c.chave, caminho, query ?? {}) } });
   }
   logger.info({ contas: contas.size }, 'mcp-remoto: contas do Tiquetaque carregadas');
+  return contas;
+}
+
+/** Planilhas do Google Sheets liberadas no painel (a "chave" é a lista apelido=id). Chave que não se entende pula só aquela unidade. */
+async function contasPlanilhaDoBanco(): Promise<Map<string, ContaPlanilha>> {
+  const contas = new Map<string, ContaPlanilha>();
+  for (const c of await contasComChave('planilha')) {
+    try {
+      contas.set(c.slug, contaPlanilhaDaChave(c));
+    } catch (err) {
+      logger.warn({ slug: c.slug, motivo: err instanceof Error ? err.message : String(err) }, 'mcp-remoto: planilhas da unidade não carregadas');
+    }
+  }
+  logger.info({ contas: contas.size }, 'mcp-remoto: contas de planilha carregadas');
+  return contas;
+}
+
+/** Contas com a chave da Tramitação Inteligente (advocacia) no painel de integrações. A chave fica só em memória. */
+async function contasTramitacaoDoBanco(): Promise<Map<string, ContaTramitacao>> {
+  const contas = new Map<string, ContaTramitacao>();
+  for (const c of await contasComChave('tramitacao')) contas.set(c.slug, contaTramitacaoDaChave(c));
+  logger.info({ contas: contas.size }, 'mcp-remoto: contas da Tramitação carregadas');
   return contas;
 }
 
@@ -405,6 +429,10 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   manterAtualizado(contasConveniaDoBanco, (contas) => (convenia.contas = contas), 'as contas do Convênia');
   const tiquetaque = criarContextoTiquetaque(new Map());
   manterAtualizado(contasTiquetaqueDoBanco, (contas) => (tiquetaque.contas = contas), 'as contas do Tiquetaque');
+  const planilha = criarContextoPlanilha(new Map());
+  manterAtualizado(contasPlanilhaDoBanco, (contas) => (planilha.contas = contas), 'as planilhas');
+  const tramitacao = criarContextoTramitacao(new Map());
+  manterAtualizado(contasTramitacaoDoBanco, (contas) => (tramitacao.contas = contas), 'as contas da Tramitação');
   // o teto anti-ban conta o que saiu nas últimas 24 h, inclusive antes desta subida do servidor (lido no 1º envio)
   const whatsapp = criarContextoEvolution(contaEvolutionDoAmbiente(), {
     historico: () =>
@@ -440,6 +468,8 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
       registrarFerramentasAsaas(server, asaas, auditar);
       registrarFerramentasConvenia(server, convenia, auditar);
       registrarFerramentasTiquetaque(server, tiquetaque, auditar);
+      registrarFerramentasPlanilha(server, planilha, auditar);
+      registrarFerramentasTramitacao(server, tramitacao, auditar);
       registrarMetaEventos(server, () => rastreio, auditar);
       if (escritores.has(quem.userId)) {
         registrarEscritaKommo(server, kommo, fonteDeEscrita, pendentes, quem.userId, auditar);
@@ -447,7 +477,7 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
         registrarDisparo(server, fonteDeDisparo, `conector:${quem.userId}`, auditar);
       }
       if (leitoresWhatsapp.has(quem.userId)) registrarFerramentasEvolution(server, whatsapp, quem.userId, auditar);
-      registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas, convenia: convenia.contas, tiquetaque: tiquetaque.contas }), auditar);
+      registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas, convenia: convenia.contas, tiquetaque: tiquetaque.contas, planilha: planilha.contas, tramitacao: tramitacao.contas }), auditar);
       registrarCerebro(server, slugs, cacheCerebro, auditar);
       if (franquia) {
         const deps: DepsRelatorio = { franquia, kommo, telefonesDosLeads, vinculosDosLeads };

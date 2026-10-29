@@ -30,7 +30,7 @@ export async function listarChavesHandler(_req: Request, res: Response): Promise
   res.json({ ok: true, chaves: await listarChaves() });
 }
 
-const NOME_DO_PROVEDOR: Record<(typeof PROVEDORES)[number], string> = { asaas: 'Asaas', convenia: 'Convênia (RH)', tiquetaque: 'Tiquetaque (ponto)' };
+const NOME_DO_PROVEDOR: Record<(typeof PROVEDORES)[number], string> = { asaas: 'Asaas', convenia: 'Convênia (RH)', tiquetaque: 'Tiquetaque (ponto)', planilha: 'Planilha (Google Sheets)', tramitacao: 'Tramitação (advocacia)' };
 
 const esc = (s: unknown) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
@@ -60,7 +60,7 @@ form{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}input{flex:1;min-width:1
 button{padding:6px 12px;border:0;border-radius:4px;background:var(--acento);color:#fff;font-weight:600;cursor:pointer}button:focus-visible,input:focus-visible{outline:2px solid var(--acento);outline-offset:2px}output{width:100%;font-size:.88rem}
 </style></head><body><main>
 <h1>Integrações · chaves de API</h1>
-<p class="mudo">Cole a chave de API de cada unidade. Ela é testada na hora e guardada cifrada; o conector do claude.ai só consulta (não cria cobrança, não transfere, não admite nem desliga ninguém). No Asaas: Integrações → Chaves de API → gerar chave de produção. No Convênia: foto do perfil → Configurações → API → Adicionar novo token (basta marcar as listagens e detalhes: colaboradores, desligados, férias, faltas e afastamentos, férias coletivas). No Tiquetaque: TiqueAdmin → Configurações → Integrações → API pública → gerar token (o token da conta cobre todas as empresas e locais dela).</p>
+<p class="mudo">Cole a chave de API de cada unidade. Ela é testada na hora e guardada cifrada; o conector do claude.ai só consulta (não cria cobrança, não transfere, não admite nem desliga ninguém). No Asaas: Integrações → Chaves de API → gerar chave de produção. No Convênia: foto do perfil → Configurações → API → Adicionar novo token (basta marcar as listagens e detalhes: colaboradores, desligados, férias, faltas e afastamentos, férias coletivas). No Tiquetaque: TiqueAdmin → Configurações → Integrações → API pública → gerar token (o token da conta cobre todas as empresas e locais dela). Na Planilha, cole o id (ou a URL) de cada planilha compartilhada como "qualquer pessoa com o link", no formato apelido=id, separando várias por ponto e vírgula; o conector só lê, descarta colunas de senha e mascara CPF e telefone. Na Tramitação Inteligente: Chaves de API (planilha.tramitacaointeligente.com.br/api/chaves) → gerar chave; a API exige o plano Ouro.</p>
 <div class="rolar"><table><thead><tr><th>Unidade</th>${PROVEDORES.map((p) => `<th>${NOME_DO_PROVEDOR[p]}</th>`).join('')}</tr></thead><tbody>${linhas}</tbody></table></div>
 </main><script>
 for (const f of document.querySelectorAll('form[data-slug]')) {
