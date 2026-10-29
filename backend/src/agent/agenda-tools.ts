@@ -15,7 +15,8 @@ import { avisoDeConsultaExistente, consultasFuturas } from './consulta-existente
 import { dataPorExtenso, feriadoNacional } from '../lib/feriados.js';
 import { marcarConsultaNoTurno } from '../lib/cartao-de-chegada.js';
 import { CAMPO_FEITO_POR, CAMPO_SITUACAO_CONSULTA, comMarcacaoEmCurso, registrarMarcacaoDaIa } from '../lib/marcacao-da-ia-no-turno.js';
-import { conferirConsultaDePe, fim8 } from '../lib/consulta-em-outro-cadastro.js';
+import { conferirConsultaDePe } from '../lib/consulta-em-outro-cadastro.js';
+import { fim8 } from '../lib/paciente-existente.js';
 import { fmtBRL, precosDaConsulta } from './prompt-composer.js';
 import { avisarJoao } from '../lib/alerta-whatsapp.js';
 import { avisoLigadoPara, chaveDoAviso, textoDoAviso } from '../lib/aviso-de-agendamento.js';
@@ -1460,7 +1461,8 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
 
       // O cadastro lido UMA vez (o `idClient` que o modelo mandou) e o telefone do lead, que a conferência de baixo reaproveita.
       let leituraDoCadastro: Awaited<ReturnType<typeof SpineService.getClient>> | null = null;
-      const lerCadastro = async () => (leituraDoCadastro ??= await SpineService.getClient(fresca, args.idClient));
+      const lerCadastro = async () =>
+        (leituraDoCadastro ??= await SpineService.getClient(fresca, args.idClient).catch((err: unknown) => ({ ok: false as const, error: String(err) })));
       const foneLead = await telefoneDoLead(kommo, args.leadId);
       const foneInformado = args.telefone ? SpineService.normalizarWhatsapp(args.telefone) : null;
 
@@ -1478,7 +1480,7 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
             'NÃO marque uma segunda.'
           );
         }
-        const lido = await lerCadastro().catch(() => null);
+        const lido = await lerCadastro();
         const cadastro = lido?.ok ? lido.data?.client ?? null : null;
         if (!lido?.ok) semConferir = true; // a franquia não deixou ver o cadastro: ausência de consulta não está provada
         // O telefone do cadastro tem de ser o deste paciente: se não for, a recusa de "é de outra pessoa" (abaixo) fala primeiro.

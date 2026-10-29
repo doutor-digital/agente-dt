@@ -87,11 +87,20 @@ export async function aguardarMarcacaoDaIa(traceId: string | undefined, o: { gra
   if (!t) return false;
   if (t.ok) return true;
   if (t.emCurso > 0) {
-    await Promise.race([new Promise<void>((r) => t.espera.push(r)), dormir(o.limiteMs ?? 120_000)]);
+    let acorda: () => void = () => undefined;
+    await Promise.race([new Promise<void>((r) => t.espera.push((acorda = r))), dormir(o.limiteMs ?? 120_000)]);
+    // estourou o teto: não deixa o resolvedor preso na lista de um turno que pode nunca terminar
+    const i = t.espera.indexOf(acorda);
+    if (i >= 0) t.espera.splice(i, 1);
   }
   return turnos.get(traceId)?.ok === true;
 }
 
 export function _limparTurnosParaTeste(): void {
   turnos.clear();
+}
+
+/** Quantos pedidos de carimbo estão parados esperando este turno (o teto de espera tem de esvaziar isto). */
+export function _esperandoParaTeste(traceId: string): number {
+  return turnos.get(traceId)?.espera.length ?? 0;
 }

@@ -73,10 +73,11 @@ export const ROTULO_DA_EXCLUSAO: Record<MotivoDeExclusao, string> = {
  */
 export function telefoneWhatsapp(bruto: string | null | undefined): string | null {
   const d = (bruto ?? '').replace(/\D/g, '');
+  const comNove = comNonoDigito(d);
   let completo: string;
   if (d.length === 11) completo = `55${d}`;
   else if (d.length === 13 && d.startsWith('55')) completo = d;
-  else if (comNonoDigito(d)) completo = comNonoDigito(d) as string;
+  else if (comNove) completo = comNove;
   else return null;
   const ddd = Number(completo.slice(2, 4));
   if (ddd < 11 || ddd > 99 || ddd % 10 === 0) return null;

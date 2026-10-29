@@ -1,6 +1,7 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  _esperandoParaTeste,
   _limparTurnosParaTeste,
   aguardarMarcacaoDaIa,
   comMarcacaoEmCurso,
@@ -64,6 +65,7 @@ test('tentativa travada: a espera tem teto e responde falso', async () => {
   const presa = comMarcacaoEmCurso('t6', () => new Promise<void>((r) => (solta = r)));
   const t0 = Date.now();
   assert.equal(await aguardarMarcacaoDaIa('t6', { gracaMs: 5, limiteMs: 60 }), false);
+  assert.equal(_esperandoParaTeste('t6'), 0, 'o pedido que estourou o teto não fica preso na lista');
   assert.ok(Date.now() - t0 < 1_000);
   solta();
   await presa;
