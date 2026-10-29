@@ -14,6 +14,8 @@ import { registrarTempoAteAgendamento } from '../services/lead-metrics.service.j
 import { avisoDeConsultaExistente, consultasFuturas } from './consulta-existente.js';
 import { dataPorExtenso, feriadoNacional } from '../lib/feriados.js';
 import { marcarConsultaNoTurno } from '../lib/cartao-de-chegada.js';
+import { CAMPO_FEITO_POR, CAMPO_SITUACAO_CONSULTA, comMarcacaoEmCurso, registrarMarcacaoDaIa } from '../lib/marcacao-da-ia-no-turno.js';
+import { conferirConsultaDePe, fim8 } from '../lib/consulta-em-outro-cadastro.js';
 import { fmtBRL, precosDaConsulta } from './prompt-composer.js';
 import { avisarJoao } from '../lib/alerta-whatsapp.js';
 import { avisoLigadoPara, chaveDoAviso, textoDoAviso } from '../lib/aviso-de-agendamento.js';
@@ -105,11 +107,11 @@ interface Contexto {
 const NOME_AGENDOU = '✓ Agendou';
 const NOME_DATA_AGENDAMENTO = '◷ Agendado pela SDR em';
 /** Bloco DIGITAL: quem marcou. A IA carimba "IA"; o sincronizador da franquia carimba "Humano" quando a SDR marcou. */
-const NOME_FEITO_POR = '⬢ Agendamento feito por';
+const NOME_FEITO_POR = CAMPO_FEITO_POR;
 const NOME_DATA_CONSULTA = '◷ Data da Consulta';
 const NOME_RESPONSAVEL = '☻ Responsável agendamento';
 const RESPONSAVEL_IA = 'I.A Sofia';
-const NOME_SITUACAO_CONSULTA = '✓ Situação da consulta';
+const NOME_SITUACAO_CONSULTA = CAMPO_SITUACAO_CONSULTA;
 const NOME_PAGAMENTO_ANTECIPADO = '¤ Pagamento antecipado';
 const NOME_ST_RETORNO = 'RETORNO PÓS-TRATAMENTO';
 
@@ -414,11 +416,6 @@ export function buildConsultarHorarios({ unit, recorder, estado, kommo }: Contex
       );
     },
   });
-}
-
-function fim8(fone: string | null | undefined): string | null {
-  const d = (fone ?? '').replace(/\D/g, '');
-  return d.length >= 8 ? d.slice(-8) : null;
 }
 
 export async function telefoneDoLead(
@@ -1103,7 +1100,7 @@ export function buildRemarcarConsulta(ctx: Contexto) {
       data: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('Nova data AAAA-MM-DD.'),
       hora: z.string().regex(/^\d{2}:\d{2}$/).describe('Novo horário HH:mm.'),
     }),
-    func: async (args: { leadId: number; idClient: number; data: string; hora: string }) => {
+    func: async (args: { leadId: number; idClient: number; data: string; hora: string }) => comMarcacaoEmCurso(recorder.traceId, async () => {
       const fresca = (await unidadeFresca(unit.id)) ?? unit;
       // Kommo dividido (Petrópolis + Caxias): a agenda pela IA ainda não separa as unidades — não lê nem escreve.
       const contaDividida = await travaDaAgendaDaIa(fresca);
@@ -1208,7 +1205,7 @@ export function buildRemarcarConsulta(ctx: Contexto) {
       }
 
       return recadoDaRemarcacao({ desfecho, antigaPorExtenso, novaPorExtenso, daNova: nova });
-    },
+    }),
   });
 }
 
@@ -1386,6 +1383,8 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
           'desta conversa. Use o MESMO que você passou em buscar_paciente ou cadastrar_paciente.',
         ),
     }),
+    // `comMarcacaoEmCurso`: enquanto isto roda, a gravação avulsa de "feito por = IA / Agendado" (captura de campos, em
+    // paralelo) espera o desfecho — ver marcacao-da-ia-no-turno.ts.
     func: async (args: {
       idClient: number;
       remarcando?: boolean;
@@ -1396,7 +1395,7 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
       telefone?: string;
       diaConfirmado?: boolean;
       formaPagamento?: FormaPagamento;
-    }) => {
+    }) => comMarcacaoEmCurso(recorder.traceId, async () => {
       const feriado = feriadoNacional(args.data);
       if (feriado) {
         return `${dataPorExtenso(args.data)} é feriado nacional (${feriado}) — a clínica não abre. NÃO marque nesse dia; consulte horários em outro dia útil.`;
@@ -1459,6 +1458,82 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         );
       }
 
+      // O cadastro lido UMA vez (o `idClient` que o modelo mandou) e o telefone do lead, que a conferência de baixo reaproveita.
+      let leituraDoCadastro: Awaited<ReturnType<typeof SpineService.getClient>> | null = null;
+      const lerCadastro = async () => (leituraDoCadastro ??= await SpineService.getClient(fresca, args.idClient));
+      const foneLead = await telefoneDoLead(kommo, args.leadId);
+      const foneInformado = args.telefone ? SpineService.normalizarWhatsapp(args.telefone) : null;
+
+      // Quem já tem consulta de pé não ganha OUTRA, nem "esse horário acabou de ser ocupado" (o horário pode estar ocupado
+      // justamente por ela). Vem ANTES da grade: Timbó, 29/10/2026 — a recepção marcou num segundo cadastro da paciente, a IA
+      // tentou o mesmo horário no primeiro e ofereceu outro a quem já estava marcada.
+      let semConferir = false;
+      if (!args.remarcando) {
+        const ja = await consultaAtual(fresca, args.leadId);
+        if (ja) {
+          return (
+            `RECUSADO: este paciente já tem consulta em ${porExtenso(ja.quando)}. ` +
+            'Um paciente só pode ter uma. Se ele quer OUTRO dia ou horário, chame ' +
+            'remarcar_consulta; se quer desmarcar, chame cancelar_consulta. ' +
+            'NÃO marque uma segunda.'
+          );
+        }
+        const lido = await lerCadastro().catch(() => null);
+        const cadastro = lido?.ok ? lido.data?.client ?? null : null;
+        if (!lido?.ok) semConferir = true; // a franquia não deixou ver o cadastro: ausência de consulta não está provada
+        // O telefone do cadastro tem de ser o deste paciente: se não for, a recusa de "é de outra pessoa" (abaixo) fala primeiro.
+        const b = fim8(cadastro?.whatsapp);
+        const aceitos = [fim8(foneLead), fim8(foneInformado)].filter((x): x is string => x !== null);
+        const deOutraPessoa = !!b && aceitos.length > 0 && !aceitos.includes(b);
+        if (cadastro && !deOutraPessoa) {
+          // A recepção marca direto na franquia e o vínculo da Sofia não fica sabendo: `consultaAtual` (acima) só vê a
+          // que ela marcou. Bebedouro, 21/10/2026: a Melissa marcou a Ignêz 22/10 09:00 às 15:07; a IA marcou outra,
+          // 04/11 14h, às 15:10 — no mesmo cadastro. E o cadastro em DOBRO (Timbó, 29/10): a consulta pode estar noutro.
+          const conf = await conferirConsultaDePe(fresca, {
+            paciente: { idClient: args.idClient, name: cadastro.name, whatsapp: cadastro.whatsapp, schedules: cadastro.schedules },
+            fones: [foneLead, foneInformado],
+            agoraLocal: agoraLocal(fresca),
+          });
+          const naClinica = conf.consulta;
+          if (naClinica?.schedule.idSchedule && naClinica.schedule.dayLocal && naClinica.schedule.timeLocal) {
+            const s = naClinica.schedule;
+            const quando = `${s.dayLocal}T${s.timeLocal}`;
+            const noutroCadastro = naClinica.idClient !== args.idClient;
+            // passa a ser a consulta do lead: o prompt mostra, e remarcar/cancelar a enxergam
+            if (args.leadId) {
+              await prisma.spineLeadLink
+                .upsert({
+                  where: { unitId_kommoLeadId: { unitId: fresca.id, kommoLeadId: args.leadId } },
+                  update: { spineIdSchedule: s.idSchedule, agendadoPara: quando, spineIdClient: naClinica.idClient },
+                  create: { unitId: fresca.id, kommoLeadId: args.leadId, spineIdClient: naClinica.idClient, spineIdSchedule: s.idSchedule, agendadoPara: quando },
+                })
+                .catch((err) => logger.warn({ err, leadId: args.leadId }, 'agenda: falha ao vincular a consulta marcada pela clínica'));
+              AgendaReconcileService.esqueceConsulta(fresca.id, args.leadId);
+            }
+            await recorder.step({
+              kind: 'ERROR',
+              title:
+                `agendar_consulta recusado — já tem consulta na clínica em ${quando} (${s.statusName ?? s.idStatus})` +
+                (noutroCadastro ? ` no OUTRO cadastro do paciente (idClient ${naClinica.idClient}, não o ${args.idClient})` : ''),
+              payload: { ...args, idSchedule: s.idSchedule, quando, idClientDaConsulta: naClinica.idClient, cadastrosDuplicados: conf.duplicados },
+            });
+            const pedido = `${args.data}T${args.hora}` === quando;
+            return (
+              `RECUSADO: este paciente já tem consulta marcada na clínica em ${porExtenso(quando)}` +
+              (s.physicalTherapist ? ` (${comQuemVaiSerAtendido(s.physicalTherapist)})` : '') +
+              '. Esse é o horário válido — a equipe marcou direto no sistema. NÃO marque outra e NÃO ofereça outro dia. ' +
+              (pedido
+                ? 'É exatamente o horário que ele pediu: está marcado. Apenas CONFIRME a ele esse dia e hora; NÃO diga que o horário foi ocupado ou que não está disponível. '
+                : 'Confirme esse dia e hora com o paciente; se ele quiser mudar, chame remarcar_consulta. ') +
+              (noutroCadastro
+                ? `(Para a equipe, NÃO comente com o paciente: a clínica tem este paciente cadastrado em mais de um cadastro — idClient ${args.idClient} e ${naClinica.idClient} —, e a consulta está no ${naClinica.idClient}. A partir de agora use o ${naClinica.idClient}.)`
+                : '')
+            ).trim();
+          }
+          semConferir = conf.incompleta;
+        }
+      }
+
       const { erro, slots } = await gradeDoDia(fresca, args.data);
       if (erro) {
         return `Não consegui confirmar a agenda (${erro}). NÃO diga que está marcado.`;
@@ -1477,25 +1552,27 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
           title: `agendar_consulta recusado — ${args.hora} está ${slot.status}`,
           payload: { ...args, motivo: slot.motivo },
         });
+        if (semConferir) {
+          // Lado seguro: o horário pode estar ocupado pela própria consulta deste paciente (cadastro em dobro) e não deu
+          // para conferir. Não se oferece outro horário com base num "ocupado" que talvez seja dele.
+          await recorder.step({
+            kind: 'ERROR',
+            title: `agendar_consulta: ${args.hora} ocupado e não consegui conferir os cadastros do paciente — não ofereci outro horário`,
+            payload: { ...args, motivo: slot.motivo },
+          });
+          return (
+            `${args.hora} aparece ocupado, mas NÃO consegui conferir na clínica se esse horário é do próprio paciente (ele pode já estar marcado ` +
+            'por outro cadastro). A consulta NÃO foi marcada. NÃO diga que o horário foi ocupado por outra pessoa, NÃO ofereça outro horário e NÃO afirme que ele está marcado. ' +
+            'Diga em UMA frase que vai confirmar com a equipe e retorna em instantes.'
+          );
+        }
         return (
           `${args.hora} não está mais disponível (${slot.motivo ?? slot.status}). ` +
           'A consulta NÃO foi marcada. Peça desculpas, consulte os horários de novo e ofereça outro.'
         );
       }
 
-      if (!args.remarcando) {
-        const ja = await consultaAtual(fresca, args.leadId);
-        if (ja) {
-          return (
-            `RECUSADO: este paciente já tem consulta em ${porExtenso(ja.quando)}. ` +
-            'Um paciente só pode ter uma. Se ele quer OUTRO dia ou horário, chame ' +
-            'remarcar_consulta; se quer desmarcar, chame cancelar_consulta. ' +
-            'NÃO marque uma segunda.'
-          );
-        }
-      }
-
-      const conf = await SpineService.getClient(fresca, args.idClient);
+      const conf = await lerCadastro();
       if (conf.ok && !conf.data?.client) {
         await recorder.step({
           kind: 'ERROR',
@@ -1508,38 +1585,7 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         );
       }
       const paciente = conf.ok ? conf.data?.client ?? null : null;
-      // A recepção marca direto na franquia e o vínculo da Sofia não fica sabendo: `consultaAtual` (acima) só vê a
-      // que ela marcou. Bebedouro, 21/10/2026: a Melissa marcou a Ignêz 22/10 09:00 às 15:07; a IA marcou outra,
-      // 04/11 14h, às 15:10 — no mesmo cadastro, que já mostrava a de 22/10.
-      const naClinica = !args.remarcando && paciente ? AgendaReconcileService.avaliacaoDePe(paciente.schedules, agoraLocal(fresca)) : null;
-      if (naClinica?.idSchedule && naClinica.dayLocal && naClinica.timeLocal) {
-        const quando = `${naClinica.dayLocal}T${naClinica.timeLocal}`;
-        // passa a ser a consulta do lead: o prompt mostra, e remarcar/cancelar a enxergam
-        if (args.leadId) {
-          await prisma.spineLeadLink
-            .upsert({
-              where: { unitId_kommoLeadId: { unitId: fresca.id, kommoLeadId: args.leadId } },
-              update: { spineIdSchedule: naClinica.idSchedule, agendadoPara: quando, spineIdClient: args.idClient },
-              create: { unitId: fresca.id, kommoLeadId: args.leadId, spineIdClient: args.idClient, spineIdSchedule: naClinica.idSchedule, agendadoPara: quando },
-            })
-            .catch((err) => logger.warn({ err, leadId: args.leadId }, 'agenda: falha ao vincular a consulta marcada pela clínica'));
-          AgendaReconcileService.esqueceConsulta(fresca.id, args.leadId);
-        }
-        await recorder.step({
-          kind: 'ERROR',
-          title: `agendar_consulta recusado — já tem consulta na clínica em ${quando} (${naClinica.statusName ?? naClinica.idStatus})`,
-          payload: { ...args, idSchedule: naClinica.idSchedule, quando },
-        });
-        return (
-          `RECUSADO: este paciente já tem consulta marcada na clínica em ${porExtenso(quando)}` +
-          (naClinica.physicalTherapist ? ` (${comQuemVaiSerAtendido(naClinica.physicalTherapist)})` : '') +
-          '. Esse é o horário válido — a equipe marcou direto no sistema. NÃO marque outra e NÃO ofereça outro dia. ' +
-          'Confirme esse dia e hora com o paciente; se ele quiser mudar, chame remarcar_consulta.'
-        );
-      }
       if (paciente) {
-        const foneLead = await telefoneDoLead(kommo, args.leadId);
-        const foneInformado = args.telefone ? SpineService.normalizarWhatsapp(args.telefone) : null;
         const aceitos = [fim8(foneLead), fim8(foneInformado)].filter(
           (x): x is string => x !== null,
         );
@@ -1749,6 +1795,7 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
       // Marca o turno: depois que a confirmação em texto chegar, sai o cartão de
       // chegada (foto da fachada + endereço + mapa) numa mensagem à parte.
       marcarConsultaNoTurno(recorder.traceId);
+      registrarMarcacaoDaIa(recorder.traceId);
 
       // A escolha de pagamento fica na conversa: a régua de Pix só sai para quem
       // escolheu Pix, e quem vai pagar na clínica nunca mais ouve falar disso.
@@ -1794,7 +1841,7 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
       return `Consulta marcada para ${dataPorExtenso(args.data)} às ${args.hora}.${
         especialista ? ` Atendimento com ${especialista}.` : ''
       } Confirme ao paciente com EXATAMENTE este dia da semana e data.${orientacaoDePagamento(args.formaPagamento, fresca, semAntecipado)}`;
-    },
+    }),
   });
 }
 
