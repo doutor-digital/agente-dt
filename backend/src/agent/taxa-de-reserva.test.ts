@@ -45,7 +45,7 @@ const com = (over: Partial<ContextoDaTaxa>): ContextoDaTaxa => ({ ...SEM_PROVA, 
 // --- dados da taxa --------------------------------------------------------------------------------------------------------
 
 test('dados: chave copiada exata, titular e valor vêm do cadastro', () => {
-  assert.deepEqual(DADOS, { chave: '12.345.678/0001-90', titular: 'Clinica Teste Ltda', valor: 100 });
+  assert.deepEqual(DADOS, { chave: '12.345.678/0001-90', titular: 'Clinica Teste Ltda', valor: 100, permitidos: [100, 250, 350] });
 });
 
 test('dados: unidade SEM a flag, sem chave ou sem valor não escreve nada', () => {
@@ -634,27 +634,30 @@ const semChaveNemValorErrado = (t: string) => {
   assert.doesNotMatch(t, /R\$ 50\b/, t);
 };
 
-test('2ª rodada, item 2: chave e valor ERRADOS do modelo saem; só os do cadastro ficam', () => {
+test('2ª rodada, item 2 (revisto na 4ª): chave ou valor ERRADOS do modelo — a resposta INTEIRA dá lugar ao bloco certo, sem remoção cirúrgica', () => {
   const r = travaDaTaxaDeReserva('A chave Pix é 15.765.035/0001-52 e a taxa é R$ 50', DADOS, com({ falasDoPaciente: ['e o pix?'] }));
   assert.equal(r?.motivo, 'chave_pedida');
   semChaveNemValorErrado(r!.texto);
-  assert.match(r!.texto, /Chave Pix: 12\.345\.678\/0001-90/);
-  assert.match(r!.texto, /R\$ 100/);
-  // o endereço da mesma resposta fica
+  assert.equal(r!.texto, recadoDaChave(DADOS));
+  assert.equal(r!.preservouOResto, false);
+  // o endereço da mesma resposta NÃO fica ao lado de dado errado: a resposta toda é trocada
   const comEndereco = travaDaTaxaDeReserva(`Fica na ${END}. A chave Pix é 15.765.035/0001-52 e a taxa é R$ 50.`, DADOS, com({ falasDoPaciente: ['e o pix?', 'qual o endereço?'] }));
-  semChaveNemValorErrado(comEndereco!.texto);
-  assert.match(comEndereco!.texto, new RegExp(`Fica na ${END}\\.`));
-  assert.equal(comEndereco!.preservouOResto, true);
+  assert.equal(comEndereco!.texto, recadoDaChave(DADOS));
+  assert.equal(comEndereco!.preservouOResto, false);
+  // sem contradição nenhuma, o endereço fica (a regra do resto preservado segue valendo)
+  const certa = travaDaTaxaDeReserva(`Fica na ${END}. A equipe te envia a chave.`, DADOS, com({ falasDoPaciente: ['e o pix?', 'qual o endereço?'] }));
+  assert.match(certa!.texto, new RegExp(`^Fica na ${END}\\.`));
+  assert.equal(certa!.preservouOResto, true);
 });
 
 test('2ª rodada, item 2: chave errada com o paciente querendo pagar na clínica, e valor errado ao lado da chave certa', () => {
   const clinica = travaDaTaxaDeReserva('Tudo bem! Se quiser garantir, a chave é 15.765.035/0001-52.', DADOS, com({ falasDoPaciente: ['só pago na clínica'] }));
   assert.equal(clinica?.motivo, 'pagar_na_clinica');
   semChaveNemValorErrado(clinica!.texto);
-  assert.match(clinica!.texto, /12\.345\.678\/0001-90/);
+  assert.equal(clinica!.texto, recadoPagarNaClinica(DADOS));
   const valor = travaDaTaxaDeReserva('A chave é 12.345.678/0001-90, a taxa é R$ 50. Me manda o comprovante, tá?', DADOS, com({ falasDoPaciente: ['e o pix?'] }));
   semChaveNemValorErrado(valor!.texto);
-  assert.match(valor!.texto, /R\$ 100/);
+  assert.equal(valor!.texto, recadoDaChave(DADOS));
 });
 
 test('2ª rodada, item 2: o valor da CONSULTA e o valor certo da taxa não são "valor errado"', () => {
@@ -728,7 +731,8 @@ test('2ª rodada, item 6: depois que a insistência foi tratada, "pode pagar tud
   const ctx = com({ falasDoPaciente: ['então pago no dia, ok?'], respostaAnterior: RECADO_INSISTIU_NA_CLINICA, insistenciaJaEncaminhada: true });
   for (const resposta of ['Pode sim, você paga tudo na clínica no dia 😊', 'Pode sim! Você paga tudo na hora, sem problema.']) {
     const r = travaDaTaxaDeReserva(resposta, DADOS, ctx);
-    assert.equal(r?.motivo, 'pagar_na_clinica', resposta);
+    // motivo PRÓPRIO: o rastro não pode dizer "a chave, na mesma mensagem" de um lembrete que não traz chave
+    assert.equal(r?.motivo, 'lembrete_da_taxa', resposta);
     assert.doesNotMatch(r!.texto, /Pode sim|paga tudo/, resposta);
     assert.match(r!.texto, /só fica separado com a taxa de agendamento de R\$ 100/);
     assert.doesNotMatch(r!.texto, /Chave Pix:/);
@@ -741,7 +745,7 @@ test('2ª rodada, item 6: depois que a insistência foi tratada, "pode pagar tud
   // "o restante você paga na clínica" é verdade (a taxa é só a parte antecipada) e fica
   assert.equal(travaDaTaxaDeReserva('Isso, o restante você paga na clínica, no dia.', DADOS, ctx), null);
   // também com o recado SEM promessa na conversa
-  assert.equal(travaDaTaxaDeReserva('Pode sim, você paga tudo na clínica no dia', DADOS, { ...ctx, respostaAnterior: RECADO_INSISTIU_SEM_PROMESSA })?.motivo, 'pagar_na_clinica');
+  assert.equal(travaDaTaxaDeReserva('Pode sim, você paga tudo na clínica no dia', DADOS, { ...ctx, respostaAnterior: RECADO_INSISTIU_SEM_PROMESSA })?.motivo, 'lembrete_da_taxa');
 });
 
 test('2ª rodada, item 7: o recado sem promessa fecha o ciclo — a insistência seguinte não reenvia a chave', () => {
@@ -777,10 +781,40 @@ test('review: "quanto a consulta custa se eu pagar no dia?" segue sendo PERGUNTA
   assert.equal(pacienteQuerPagarNaClinica(['Quanto ao pagamento, pago na clínica mesmo']), true);
 });
 
-test('review: o horário da oração neutra só vale para o "deixei registrado"; despedida solta não vira garantia', () => {
-  for (const frase of ['Quinta às 14h está disponível, até já!', 'Sexta às 9h está livre, pra te receber bem']) {
+test('4ª rodada, item 5: "disponível, até já / te espero / aguardamos você" é a família do caso real "até já às 13h30" e é pega; despedida SEM horário no trecho não', () => {
+  for (const frase of [
+    'Quinta às 14h está disponível, até já!',
+    'Quinta às 14h está disponível, te espero!',
+    'Quinta às 14h está livre, aguardamos você!',
+    'Sexta às 9h está livre, pra te receber bem',
+    'Fica na Av. X, 12. Até já às 13h30!',
+  ]) {
+    assert.equal(afirmaHorarioGarantido(frase), true, frase);
+    assert.equal(travaDaTaxaDeReserva(frase, DADOS, com({ falasDoPaciente: ['quinta'] }))?.motivo, 'horario_sem_comprovante', frase);
+  }
+  // sem dia/hora em lugar nenhum, "até já!" é cortesia de despedida
+  for (const frase of ['Obrigada pelo contato, até já!', 'Qualquer dúvida estou por aqui, te espero na conversa!']) {
     assert.equal(afirmaHorarioGarantido(frase), false, frase);
-    assert.equal(travaDaTaxaDeReserva(frase, DADOS, com({ falasDoPaciente: ['quinta'] })), null, frase);
+  }
+  // o aviso de vaga continua sendo só aviso de vaga
+  assert.equal(afirmaHorarioGarantido('Tudo certo, quinta às 14h está disponível pra você.'), false);
+});
+
+test('4ª rodada, item 4: "deixei registrado que você PRECISA chegar…/estar aqui quinta às 14h" é horário combinado; só o pedido dele é "o que ele disse"', () => {
+  for (const frase of [
+    'Deixei registrado que você precisa chegar 15 minutos antes, quinta às 14h.',
+    'Deixei registrado que você precisa estar aqui quinta às 14h.',
+    'Deixei registrado que você precisa chegar mais cedo na quinta.',
+    // com hora exata, "quer" e "só pode" soam a combinado
+    'Deixei anotado que você quer quinta às 14h e já passei pra equipe.',
+    'Deixei anotado que você só pode quinta às 14h, a equipe já vai confirmar.',
+  ]) {
+    assert.equal(afirmaHorarioGarantido(frase), true, frase);
+    assert.equal(travaDaTaxaDeReserva(frase, DADOS, com({ falasDoPaciente: ['ok'] }))?.motivo, 'horario_sem_comprovante', frase);
+  }
+  // sem hora exata, e o pedido dele com hora exata, seguem sendo só o que ele disse
+  for (const frase of ['Deixei anotado que você quer quinta de manhã.', 'Deixei anotado que você só pode quinta à tarde.', 'Deixei anotado que você prefere quinta às 14h.', 'Deixei anotado que você pediu quinta às 14h.']) {
+    assert.equal(afirmaHorarioGarantido(frase), false, frase);
   }
 });
 
@@ -793,33 +827,134 @@ test('review: "deixei registrado que você vai ficar com quinta às 14h" é a re
   }
 });
 
-test('review: valor da CONSULTA perto de "agendamento"/"pix" não é valor errado da taxa; "R$ 50 de taxa" é', () => {
+test('review (revisto na 4ª): os valores do cadastro (antecipado, no dia, total) ficam, inclusive "R$ 350: R$ 100 + R$ 250"; qualquer OUTRO R$ derruba a resposta inteira', () => {
   const ctx = com({ falasDoPaciente: ['e o pix?'] });
-  const consulta = travaDaTaxaDeReserva('Para o agendamento, a consulta é R$ 350 e atendemos às 8h. A equipe te envia a chave.', DADOS, ctx);
-  assert.match(consulta!.texto, /a consulta é R\$ 350 e atendemos às 8h/);
-  const pix = travaDaTaxaDeReserva('Pagamento via pix: R$ 350 no total. A equipe te envia a chave.', DADOS, ctx);
-  assert.match(pix!.texto, /R\$ 350 no total/);
-  const errado = travaDaTaxaDeReserva('Fica R$ 50 de taxa. Atendemos até as 18h. A equipe te envia a chave.', DADOS, ctx);
-  assert.doesNotMatch(errado!.texto, /R\$ 50\b/);
-  assert.match(errado!.texto, /Atendemos até as 18h/);
+  const certos = [
+    'Para o agendamento, a consulta é R$ 350 e atendemos às 8h. A equipe te envia a chave.',
+    'Pagamento via pix: R$ 350 no total. A equipe te envia a chave.',
+    'A consulta é R$ 350: R$ 100 + R$ 250 no dia. A equipe te envia a chave.',
+    'A taxa já está inclusa nos R$ 350 da consulta. A equipe te envia a chave.',
+    'A taxa é de R$ 100,00 e o restante, R$ 250, é no dia. A equipe te envia a chave.',
+  ];
+  for (const frase of certos) {
+    const r = travaDaTaxaDeReserva(frase, DADOS, ctx);
+    assert.equal(r?.preservouOResto, true, frase);
+    assert.ok(r!.texto.startsWith(frase.replace(' A equipe te envia a chave.', '')), frase);
+  }
+  // sem lista de palavras: qualquer R$ fora do cadastro, perto de Pix/taxa/pagar/reservar/custa/agendamento ou não
+  const errados = [
+    'Fica R$ 50 de taxa. Atendemos até as 18h. A equipe te envia a chave.',
+    'Pra garantir é só pagar R$ 50 por Pix. A equipe te envia a chave.',
+    'São R$ 50 pra reservar o horário. A equipe te envia a chave.',
+    'O agendamento custa R$ 50. A equipe te envia a chave.',
+    'Pra reservar são 50 reais. A equipe te envia a chave.',
+    // o valor do cadastro no papel errado também contradiz
+    'A taxa é R$ 250. A equipe te envia a chave.',
+    'São R$ 350 de taxa. A equipe te envia a chave.',
+  ];
+  for (const frase of errados) {
+    const r = travaDaTaxaDeReserva(frase, DADOS, ctx);
+    assert.equal(r?.texto, recadoDaChave(DADOS), frase);
+    assert.equal(r?.preservouOResto, false, frase);
+  }
 });
 
-test('review: telefone/e-mail de contato da clínica ao lado da palavra "Pix" não é chave errada; outro CNPJ (mesmo tipo) é', () => {
-  const ctx = com({ falasDoPaciente: ['e o pix?'] });
-  const contato = travaDaTaxaDeReserva('Qualquer dúvida sobre o Pix ligue (63) 99999-9999 ou escreva contato@clinica.com. A equipe te envia a chave.', DADOS, ctx);
-  assert.match(contato!.texto, /\(63\) 99999-9999 ou escreva contato@clinica\.com/);
-  const outro = travaDaTaxaDeReserva('O Pix é para 15.765.035/0001-52. A equipe te envia a chave.', DADOS, ctx);
-  assert.doesNotMatch(outro!.texto, /15\.765/);
+test('4ª rodada, item 1: QUALQUER chave Pix diferente da cadastrada — de qualquer tipo — derruba a resposta inteira; telefone fixo e a mesma chave sem máscara, não', () => {
+  const ctx = com({ falasDoPaciente: ['e o pix?', 'qual o endereço?'] });
+  const outras = [
+    'Fica na Av. X, 12. O Pix é para 15.765.035/0001-52. A equipe te envia a chave.', // CNPJ no lugar do CNPJ
+    'Fica na Av. X, 12. A chave Pix é o celular (95) 99123-4567. A equipe te envia a chave.', // tipo diferente: celular
+    'Fica na Av. X, 12. A chave Pix é financeiro@clinica.com.br. A equipe te envia a chave.', // e-mail
+    'Fica na Av. X, 12. A chave Pix é 123.456.789-09. A equipe te envia a chave.', // CPF
+    'Fica na Av. X, 12. A chave Pix é 123e4567-e89b-12d3-a456-426614174000. A equipe te envia a chave.', // aleatória
+    'Fica na Av. X, 12. Qualquer dúvida sobre o Pix ligue (63) 99999-9999. A equipe te envia a chave.', // na dúvida, o bloco inteiro
+    // a chave na linha DE BAIXO do "Chave Pix:" também conta
+    'Fica na Av. X, 12.\nChave Pix:\n15.765.035/0001-52\nA equipe te envia a chave.',
+  ];
+  for (const frase of outras) {
+    const r = travaDaTaxaDeReserva(frase, DADOS, ctx);
+    assert.equal(r?.texto, recadoDaChave(DADOS), frase);
+    assert.equal(r?.preservouOResto, false, frase);
+  }
+  // chave cadastrada e-mail: um CNPJ ao lado do Pix também é outra chave
+  const mail = dadosDaTaxa(unidade({ pixKey: 'pix@clinica.com.br' }))!;
+  assert.equal(travaDaTaxaDeReserva('A chave Pix é 15.765.035/0001-52. A equipe te envia a chave.', mail, ctx)?.texto, recadoDaChave(mail));
+  // telefone de contato longe de qualquer menção a Pix/chave não é chave errada
+  const contato = travaDaTaxaDeReserva('Fica na Av. X, 12. Telefone da recepção: (95) 99123-4567.\nA equipe te envia a chave.', DADOS, ctx);
+  assert.equal(contato?.preservouOResto, true);
+  assert.match(contato!.texto, /\(95\) 99123-4567/);
+  // telefone FIXO (10 dígitos) não é chave Pix; a chave certa sem máscara não é chave errada
+  const fixo = travaDaTaxaDeReserva('Fica na Av. X, 12. Dúvidas sobre o Pix: (95) 3224-5678. A equipe te envia a chave.', DADOS, ctx);
+  assert.equal(fixo?.preservouOResto, true);
+  assert.match(fixo!.texto, /\(95\) 3224-5678/);
+  const semMascara = travaDaTaxaDeReserva('A chave Pix é 12345678000190. Me manda o comprovante, tá?', DADOS, ctx);
+  assert.equal(semMascara?.preservouOResto, true);
   // chave cadastrada como celular, escrita com ou sem o 55
   const cel = dadosDaTaxa(unidade({ pixKey: '+5563991234567' }))!;
   const mesmo = travaDaTaxaDeReserva('Chave Pix: (63) 99123-4567. Me manda o comprovante.', cel, ctx);
   assert.match(mesmo!.texto, /^Chave Pix: \(63\) 99123-4567\. Me manda o comprovante\./, 'o mesmo celular sem o 55 não é chave errada (não é cortado)');
 });
 
+test('4ª rodada, item 1: titular/favorecido diferente do cadastrado derruba a resposta inteira; o do cadastro (inteiro ou só o começo) fica', () => {
+  const ctx = com({ falasDoPaciente: ['e o pix?'] });
+  const titularErrado = [
+    // chave certa + titular errado: a resposta ainda contradiz o cadastro
+    `Claro! Chave Pix: ${DADOS.chave}\nTitular: Attiva Corpo e Mente Clinica de Fisioterapia Ltda\nMe manda o comprovante.`,
+    // chave errada + favorecido de outra empresa
+    'Segue a chave Pix: 15.765.035/0001-52\nFavorecido: Attiva Corpo e Mente Clinica de Fisioterapia Ltda\nO endereço é Av. Ville Roy, 1234.',
+    // o titular dito ao lado do certo
+    `Chave Pix: ${DADOS.chave}\nTitular: Clinica Teste Ltda\nFavorecido: Attiva Corpo e Mente Ltda\nMe manda o comprovante.`,
+    `A chave Pix está em nome de Attiva Corpo e Mente Ltda. A equipe te envia a chave.`,
+  ];
+  for (const frase of titularErrado) {
+    const r = travaDaTaxaDeReserva(frase, DADOS, ctx);
+    assert.equal(r?.texto, recadoDaChave(DADOS), frase);
+    assert.equal(r?.preservouOResto, false, frase);
+  }
+  // sem titular cadastrado, qualquer titular dito pelo modelo é invenção
+  const semTitular = dadosDaTaxa(unidade({ pixHolder: null }))!;
+  assert.equal(travaDaTaxaDeReserva(`Chave Pix: ${semTitular.chave}\nTitular: Maria da Silva\nMe manda o comprovante.`, semTitular, ctx)?.texto, recadoDaChave(semTitular));
+  assert.equal(travaDaTaxaDeReserva(`Chave Pix: ${semTitular.chave}\nMe manda o comprovante.`, semTitular, ctx), null);
+  // a resposta correta e completa não é mexida; o titular pode vir abreviado
+  assert.equal(travaDaTaxaDeReserva(`Chave Pix: ${DADOS.chave}\nTitular: Clinica Teste Ltda\nMe manda o comprovante.`, DADOS, ctx), null);
+  assert.equal(travaDaTaxaDeReserva(`Chave Pix: ${DADOS.chave}\nTitular: Clinica Teste\nMe manda o comprovante.`, DADOS, ctx), null);
+});
+
 test('review: com o pagamento na clínica já tratado, a resposta que JÁ traz a chave certa e o comprovante não é trocada pelo lembrete', () => {
   const ctx = com({ falasDoPaciente: ['vou pagar na clínica mesmo'], respostaAnterior: RECADO_INSISTIU_NA_CLINICA, insistenciaJaEncaminhada: true });
-  const certa = `Pode pagar o restante na clínica. Para garantir o horário, a taxa por Pix:\nChave Pix: ${DADOS.chave}\nMe manda o comprovante.`;
+  // "pagar TUDO na clínica" é o que dispara o lembrete: só a trava `jaTrazAChaveEPedeComprovante` o segura nesta resposta
+  const certa = `Pode pagar tudo na clínica, no dia. Para garantir o horário, a taxa por Pix:\nChave Pix: ${DADOS.chave}\nMe manda o comprovante.`;
   assert.equal(travaDaTaxaDeReserva(certa, DADOS, ctx), null);
+  // a mesma frase SEM a chave e o comprovante dispara o lembrete (prova que o teste acima exercita a trava)
+  assert.equal(travaDaTaxaDeReserva('Pode pagar tudo na clínica, no dia.', DADOS, ctx)?.motivo, 'lembrete_da_taxa');
+  // a chave certa SEM o pedido do comprovante também não segura
+  assert.equal(travaDaTaxaDeReserva(`Pode pagar tudo na clínica, no dia. Chave Pix: ${DADOS.chave}`, DADOS, ctx)?.motivo, 'lembrete_da_taxa');
+});
+
+test('4ª rodada, item 6: no ramo da chave, "pode pagar tudo no dia / na clínica" sai do resto; "o restante você paga na clínica" fica', () => {
+  const ctx = com({ falasDoPaciente: ['e o pix?', 'qual o endereço?'] });
+  const r = travaDaTaxaDeReserva(`Fica na ${END}. Pode pagar tudo no dia, sem problema! A equipe te envia a chave.`, DADOS, ctx);
+  assert.equal(r?.motivo, 'equipe_envia_a_chave');
+  assert.doesNotMatch(r!.texto, /pagar tudo no dia|sem problema/);
+  assert.match(r!.texto, new RegExp(`^Fica na ${END}\\.\n\nPara garantir`));
+  assert.equal(r?.preservouOResto, true);
+  const restante = travaDaTaxaDeReserva(`Fica na ${END}. O restante você paga na clínica, no dia. A equipe te envia a chave.`, DADOS, ctx);
+  assert.match(restante!.texto, /O restante você paga na clínica, no dia\./);
+  // quem já pagou e pede a chave de novo: o mesmo
+  const jaPagou = travaDaTaxaDeReserva(`Fica na ${END}. Pode pagar tudo na clínica. A equipe te envia a chave.`, DADOS, com({ falasDoPaciente: ['qual a chave?'], jaMandouComprovante: true }));
+  assert.doesNotMatch(jaPagou!.texto, /pagar tudo na clínica/);
+});
+
+test('4ª rodada, item 3: "Quanto a taxa se eu pagar no dia?" é PERGUNTA; "quanto a(o) X," com vírgula e sem "?" é recusa', () => {
+  for (const fala of ['Quanto a taxa se eu pagar no dia?', 'Quanto a taxa se eu pagar no dia', 'Quanto à taxa, posso pagar na clínica?', 'Quanto à taxa se eu pagar na clínica?', 'Quanto ao valor se eu pagar no dia?', 'Quanto a gente paga na clínica?']) {
+    assert.equal(pacienteQuerPagarNaClinica([fala]), false, fala);
+  }
+  for (const fala of ['Quanto à taxa, vou pagar na clínica mesmo.', 'Quanto a taxa, só pago na hora', 'Quanto ao pagamento, pago no dia', 'Quanto à consulta, pago no dia.', 'Quanto à forma de pagamento, prefiro pagar na clínica.']) {
+    assert.equal(pacienteQuerPagarNaClinica([fala]), true, fala);
+  }
+  // a pergunta, com a taxa já enviada, não vira o recado da insistência
+  const ctx = com({ falasDoPaciente: ['Quanto a taxa se eu pagar no dia?'], respostaAnterior: recadoPagarNaClinica(DADOS) });
+  assert.equal(travaDaTaxaDeReserva('A taxa é R$ 100 e o restante R$ 250 no dia.', DADOS, ctx), null);
 });
 
 test('review: na insistência sem resto aproveitável o rastro não diz que o resto ficou', () => {

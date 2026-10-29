@@ -9,8 +9,10 @@ import {
   jaEncaminhouAInsistencia,
   RECADO_INSISTIU_NA_CLINICA,
   RECADO_INSISTIU_SEM_PROMESSA,
+  RECADO_SEM_AFIRMACAO,
   recadoDaChave,
   recadoPagarNaClinica,
+  recadoSemComprovante,
   type ContextoDaTaxa,
 } from './taxa-de-reserva.js';
 import { aplicarTaxaDeReservaNaSaida, decidirATaxa, type FerramentasDaTaxa } from './taxa-de-reserva-saida.js';
@@ -119,7 +121,6 @@ test('2ª rodada, item 1: sem poder ler o cartão, o que NÃO é pedido explíci
   const { f, passos } = ferramentas({ cartaoDizPago: async () => Promise.reject(new Error('kommo 500')) });
   for (const [resposta, fala] of [
     ['A equipe te envia a chave certa', 'ok'],
-    ['Já deixei tudo registrado com a equipe pra te receber direito às 14h', 'ok'],
     ['Tudo bem!', 'só pago na clínica'],
     ['A equipe te envia a chave certa', 'ok, vou pagar no pix agora'],
   ] as const) {
@@ -128,7 +129,46 @@ test('2ª rodada, item 1: sem poder ler o cartão, o que NÃO é pedido explíci
     assert.equal(r.troca, null);
     assert.equal(r.liberadaPor, 'cartao_ilegivel');
   }
-  assert.equal(erros(passos).length, 4);
+  assert.equal(erros(passos).length, 3);
+});
+
+test('4ª rodada, item 7: o rastro do lembrete da taxa tem motivo próprio — não diz que a chave foi na mesma mensagem', async () => {
+  const { f, passos } = ferramentas();
+  const ctx = com({ falasDoPaciente: ['então pago no dia, ok?'], respostaAnterior: RECADO_INSISTIU_NA_CLINICA, insistenciaJaEncaminhada: true });
+  const r = await aplicarTaxaDeReservaNaSaida('Pode sim, você paga tudo na clínica no dia 😊', DADOS, ctx, f);
+  assert.equal(r.troca?.motivo, 'lembrete_da_taxa');
+  assert.doesNotMatch(r.texto, /Chave Pix:/);
+  const rastro = passos.find((p) => p.kind === 'THINKING');
+  assert.match(rastro!.title, /lembrete da taxa, sem repetir a chave/);
+  assert.doesNotMatch(rastro!.title, /a chave, na mesma mensagem/);
+});
+
+test('4ª rodada, item 9: sem poder ler o cartão, a AFIRMAÇÃO falsa de horário sai — sem pedir pagamento, sem chave', async () => {
+  const { f, passos, chamadas } = ferramentas({ cartaoDizPago: async () => Promise.reject(new Error('kommo 500')) });
+  // a frase real do caso: sozinha na resposta, sobra só uma cortesia que não promete nada
+  const real = await aplicarTaxaDeReservaNaSaida('Já deixei tudo registrado com a equipe pra te receber direito às 14h', DADOS, com({ falasDoPaciente: ['ok'] }), f);
+  assert.equal(real.troca?.motivo, 'afirmacao_retirada');
+  assert.equal(real.texto, RECADO_SEM_AFIRMACAO);
+  assert.equal(real.liberadaPor, undefined);
+  // o resto da resposta (o endereço) fica; só a afirmação sai
+  const comResto = await aplicarTaxaDeReservaNaSaida('Fica na Av. Ville Roy, 1234. Já deixei tudo registrado com a equipe pra te receber direito às 14h.', DADOS, com({ falasDoPaciente: ['endereço?'] }), f);
+  assert.equal(comResto.texto, 'Fica na Av. Ville Roy, 1234.');
+  assert.equal(comResto.troca?.preservouOResto, true);
+  // o que sobra ainda parece garantir horário ("Tudo certo!" solto): a cortesia curta, não um resto que insinua o mesmo
+  const suspeito = await aplicarTaxaDeReservaNaSaida('Já deixei tudo registrado com a equipe pra te receber direito às 14h. Tudo certo! Fica na Av. Ville Roy, 1234.', DADOS, com({ falasDoPaciente: ['ok'] }), f);
+  assert.equal(suspeito.texto, RECADO_SEM_AFIRMACAO);
+  for (const r of [real, comResto]) {
+    assert.doesNotMatch(r.texto, /Chave Pix|comprovante|R\$|taxa|deixei/i);
+  }
+  // o rastro avisa que o cartão não foi lido, e que só a afirmação saiu
+  assert.equal(erros(passos).length, 3);
+  assert.match(erros(passos)[0].title, /saiu só a afirmação falsa de horário, nada foi pedido/);
+  assert.equal(chamadas.resumir + chamadas.tarefa, 0);
+  // cartão lido e NÃO pago: o recado inteiro de antes (pede a taxa)
+  const lido = ferramentas({ cartaoDizPago: async () => false });
+  const pede = await aplicarTaxaDeReservaNaSaida('Já deixei tudo registrado com a equipe pra te receber direito às 14h', DADOS, com({ falasDoPaciente: ['ok'] }), lido.f);
+  assert.equal(pede.troca?.motivo, 'horario_sem_comprovante');
+  assert.equal(pede.texto, recadoSemComprovante(DADOS));
 });
 
 test('item 10: o vínculo da consulta anula a troca (e nem lê o cartão)', async () => {

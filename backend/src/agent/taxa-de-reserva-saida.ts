@@ -8,12 +8,13 @@
  *    garantido" + a chave, nem quando a equipe demorou mais de 24 h para criar a consulta. Sem conseguir ler o cartão (erro ou
  *    prazo), vale a regra de quem já pagou: nada é pedido por conta da Sofia, mas o pedido EXPLÍCITO da chave ("manda o pix") é
  *    atendido — pedir de novo a quem pode ter pago é pior que deixar o modelo falar, e deixar sem chave quem pediu é a falha de origem.
+ *    Só a AFIRMAÇÃO falsa de horário ("já deixei tudo registrado com a equipe") sai da resposta, também sem pedir pagamento.
  *  - Insistência em pagar só na clínica: a equipe recebe a TAREFA (e o resumo, com prazo que cancela a chamada). O recado só
  *    promete "a equipe vai falar com você" se algum dos dois saiu; senão ele não promete nada.
  *  - Falha ou demora de qualquer ferramenta nunca derruba a resposta ao paciente.
  */
 import type { TrocaDaTaxa, ContextoDaTaxa, DadosDaTaxa } from './taxa-de-reserva.js';
-import { recadoDaInsistencia, travaDaTaxaDeReserva } from './taxa-de-reserva.js';
+import { recadoDaInsistencia, semAAfirmacaoDoHorario, travaDaTaxaDeReserva } from './taxa-de-reserva.js';
 import type { TraceRecorder } from './trace-recorder.js';
 
 /** O mesmo prazo do resumo do sinal de alerta (passe-por-sinal.ts). */
@@ -63,6 +64,8 @@ const QUEM_FALOU: Record<TrocaDaTaxa['motivo'], string> = {
   chave_oferecida: 'a resposta só perguntava se ele queria a chave — a chave saiu por código',
   pagar_na_clinica: 'o paciente quer pagar só na clínica — saiu a taxa em uma frase e a chave, na mesma mensagem',
   insistiu_na_clinica: 'o paciente insiste em pagar só na clínica depois de receber a chave — fica com a equipe, sem prometer o horário',
+  lembrete_da_taxa: 'a insistência já foi tratada e a resposta liberava pagar tudo na clínica — saiu o lembrete da taxa, sem repetir a chave',
+  afirmacao_retirada: 'não deu para ler o cartão e a resposta dava o horário como garantido — saiu só a afirmação, sem pedir pagamento',
 };
 
 /** O que `resumir_lead_para_sdr` devolve quando NÃO criou a nota. */
@@ -162,8 +165,11 @@ export async function decidirATaxa(
   }
   if (cartaoPago) {
     const soOPedido = travaDaTaxaDeReserva(texto, dados, { ...ctx, jaMandouComprovante: true });
-    const liberadaPor = erroDoCartao === undefined ? 'cartao_pago' : 'cartao_ilegivel';
-    return soOPedido ? { troca: soOPedido, erroDoCartao } : { troca: null, liberadaPor, erroDoCartao };
+    if (soOPedido) return { troca: soOPedido, erroDoCartao };
+    // Sem ler o cartão, nada é pedido (ele pode ter pago), mas a AFIRMAÇÃO falsa de horário ("já deixei tudo registrado") não sai como veio.
+    const semAfirmacao = erroDoCartao !== undefined && troca.motivo === 'horario_sem_comprovante' ? semAAfirmacaoDoHorario(texto) : null;
+    if (semAfirmacao) return { troca: semAfirmacao, erroDoCartao };
+    return { troca: null, liberadaPor: erroDoCartao === undefined ? 'cartao_pago' : 'cartao_ilegivel', erroDoCartao };
   }
   return { troca };
 }
@@ -184,7 +190,9 @@ export async function aplicarTaxaDeReservaNaSaida(
     await f.recorder.step({
       kind: 'ERROR',
       title: troca
-        ? 'Taxa de reserva: não consegui ler o cartão para ver se ele já pagou — só o pedido explícito da chave foi atendido'
+        ? troca.motivo === 'afirmacao_retirada'
+          ? 'Taxa de reserva: não consegui ler o cartão para ver se ele já pagou — saiu só a afirmação falsa de horário, nada foi pedido'
+          : 'Taxa de reserva: não consegui ler o cartão para ver se ele já pagou — só o pedido explícito da chave foi atendido'
         : 'Taxa de reserva: não consegui ler o cartão para ver se ele já pagou — a resposta saiu como veio',
       payload: { erro: decisao.erroDoCartao },
     });
