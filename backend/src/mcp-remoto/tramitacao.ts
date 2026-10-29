@@ -14,7 +14,7 @@ import { z } from 'zod';
 import type { Auditar } from '../franquia-mcp/ferramentas.js';
 import { ErroDeEntrada, validarData } from '../franquia-mcp/travas.js';
 import { tramitacaoGet } from '../lib/integracoes/tramitacao.js';
-import { limparRegistro, mascararCelula, mascararTexto, normalizarCabecalho } from '../lib/integracoes/mascaras.js';
+import { limparRegistro, mascararArgumentos, mascararCelula, mascararTexto, normalizarCabecalho } from '../lib/integracoes/mascaras.js';
 import { executar } from './ferramenta.js';
 import { acharSlug } from './unidades.js';
 
@@ -615,7 +615,7 @@ export function registrarFerramentasTramitacao(server: McpServer, ctx: ContextoT
       },
       annotations: ro,
     },
-    (args) => executar('tramitacao_processos', args, auditar, () => tramitacaoProcessos(ctx, args)),
+    (args) => executar('tramitacao_processos', mascararArgumentos(args), auditar, () => tramitacaoProcessos(ctx, args)),
   );
   server.registerTool(
     'tramitacao_processo',
@@ -635,7 +635,7 @@ export function registrarFerramentasTramitacao(server: McpServer, ctx: ContextoT
       },
       annotations: ro,
     },
-    (args) => executar('tramitacao_processo', args, auditar, () => tramitacaoProcesso(ctx, args)),
+    (args) => executar('tramitacao_processo', mascararArgumentos(args), auditar, () => tramitacaoProcesso(ctx, args)),
   );
   server.registerTool(
     'tramitacao_publicacoes',
@@ -658,7 +658,7 @@ export function registrarFerramentasTramitacao(server: McpServer, ctx: ContextoT
       },
       annotations: ro,
     },
-    (args) => executar('tramitacao_publicacoes', { ...args, ...(args.busca ? { busca: mascararTexto(args.busca) } : {}) }, auditar, () => tramitacaoPublicacoes(ctx, args)),
+    (args) => executar('tramitacao_publicacoes', mascararArgumentos(args), auditar, () => tramitacaoPublicacoes(ctx, args)),
   );
   server.registerTool(
     'tramitacao_clientes',
@@ -683,8 +683,8 @@ export function registrarFerramentasTramitacao(server: McpServer, ctx: ContextoT
       },
       annotations: ro,
     },
-    // a auditoria guarda os argumentos: o CPF buscado entra mascarado, não inteiro
-    (args) => executar('tramitacao_clientes', { ...args, ...(args.cpfCnpj ? { cpfCnpj: mascararCelula(args.cpfCnpj, 'cpf cnpj') } : {}), ...(args.busca ? { busca: mascararTexto(args.busca) } : {}) }, auditar, () => tramitacaoClientes(ctx, args)),
+    // a auditoria guarda os argumentos: o CPF buscado (com ou sem pontuação) entra mascarado, não inteiro
+    (args) => executar('tramitacao_clientes', mascararArgumentos(args), auditar, () => tramitacaoClientes(ctx, args)),
   );
   server.registerTool(
     'tramitacao_atividades',
@@ -708,6 +708,6 @@ export function registrarFerramentasTramitacao(server: McpServer, ctx: ContextoT
       },
       annotations: ro,
     },
-    (args) => executar('tramitacao_atividades', args, auditar, () => tramitacaoAtividades(ctx, args)),
+    (args) => executar('tramitacao_atividades', mascararArgumentos(args), auditar, () => tramitacaoAtividades(ctx, args)),
   );
 }

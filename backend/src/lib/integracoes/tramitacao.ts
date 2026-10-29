@@ -37,7 +37,13 @@ const LEITURA_PERMITIDA = [
   /^\/v1\/clientes$/,
   /^\/v1\/atividades$/,
 ];
-const PARAMETROS_PROIBIDOS = new Set(['mostrar_meu_inss_pass']);
+/**
+ * Parâmetro que pede a senha do Meu INSS. Compara só letras e números, em minúsculo: `mostrar_meu_inss_pass[]`,
+ * `mostrar-meu-inss-pass`, `Mostrar_Meu_INSS_Pass ` e `mostrarMeuInssPass` são o mesmo pedido. Em dúvida, recusa:
+ * nenhum parâmetro legítimo deste cliente tem "meu inss" ou "inss pass" no nome.
+ */
+const PARAMETRO_PROIBIDO = /meuinss|insspass|mostrarmeu/;
+const parametroProibido = (k: string): boolean => PARAMETRO_PROIBIDO.test(k.normalize('NFKC').toLowerCase().replace(/[^a-z0-9]/g, ''));
 
 interface CorpoDeErro {
   error?: unknown;
@@ -71,7 +77,7 @@ export async function tramitacaoGet<T = unknown>(
   if (!LEITURA_PERMITIDA.some((r) => r.test(caminho))) throw new ErroTramitacao(`rota ${caminho.slice(0, 80)} fora da lista de leitura do conector`, null);
   const q = new URLSearchParams();
   for (const [k, v] of Object.entries(query)) {
-    if (PARAMETROS_PROIBIDOS.has(k.toLowerCase())) throw new ErroTramitacao(`parâmetro ${k} não permitido: o conector nunca pede senha`, null);
+    if (parametroProibido(k)) throw new ErroTramitacao('parâmetro não permitido: o conector nunca pede senha', null);
     if (v === undefined || v === '') continue;
     if (Array.isArray(v)) for (const x of v) q.append(k.endsWith('[]') ? k : `${k}[]`, String(x));
     else q.append(k, String(v));
@@ -86,6 +92,8 @@ export async function tramitacaoGet<T = unknown>(
       resp = await fetcher(url, {
         method: 'GET',
         headers: { Authorization: `Bearer ${chave}`, 'User-Agent': AGENTE, Accept: 'application/json' },
+        // a chave vai no cabeçalho: nunca seguir redirecionamento (outro host receberia a chave, ou um 3xx responderia por ele)
+        redirect: 'error',
         signal: AbortSignal.timeout(30_000),
       });
     } catch (err) {
@@ -120,7 +128,7 @@ export async function tramitacaoGet<T = unknown>(
     try {
       return JSON.parse(texto) as T;
     } catch {
-      throw new ErroTramitacao(`Tramitação ${resp.status} em ${caminho}: resposta que não é JSON (${texto.slice(0, 120)})`, resp.status);
+      throw new ErroTramitacao(`Tramitação ${resp.status} em ${caminho}: resposta que não é JSON`, resp.status);
     }
   }
   throw new ErroTramitacao(`Tramitação não respondeu em ${caminho} depois de 4 tentativas`, 429);

@@ -2,30 +2,48 @@
  * O que NUNCA sai do conector em planilha ou em CRM jurídico: senha, CPF inteiro, telefone inteiro.
  *
  *  - coluna cujo cabeçalho diz senha/login/token/"meu inss" é DESCARTADA (não mascarada: o valor nem é lido adiante);
- *  - valor no formato `NNN.NNN.NNN-NN/…` (CPF e senha colados na mesma célula) some inteiro;
- *  - CPF e telefone aparecem só com os últimos dígitos.
+ *  - CPF seguido de qualquer coisa na mesma célula (`NNN.NNN.NNN-NN/senha`, `… - senha`, `… senha`, `…: senha`, quebra de
+ *    linha) leva o resto da célula junto: na dúvida, some;
+ *  - CPF e telefone aparecem só com os últimos dígitos; NIT, RG e "senha: xxx" em texto livre também não saem.
  *
  * Funções puras, sem estado. Quem lê a fonte (planilha, Tramitação) chama aqui ANTES de guardar em cache
  * ou de montar a resposta — nenhuma flag (`completo`, por exemplo) desliga isto.
  */
 
+import { CPF as CPF_SOLTO } from '../pii.js';
+
 const semAcento = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '');
+
+const limpar = (s: string) => s.toLowerCase().replace(/[_\-/.\\|]+/g, ' ').replace(/\s+/g, ' ').trim();
 
 /** Minúsculo, sem acento, e `_ - / .` viram espaço: "CPF/Senha", "meu_inss_pass" e "Meu INSS" comparam por igual. */
 export function normalizarCabecalho(s: string): string {
-  return semAcento(String(s ?? '')).toLowerCase().replace(/[_\-/.\\|]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return limpar(semAcento(String(s ?? '')));
 }
 
-const SECRETA = /senha|password|passwd|\bpass\b|\bpwd\b|\bpin\b|meu ?inss|\blogin\b|\bsegredo\b|\bsecret|\btoken\b|gov ?br/;
+/**
+ * As formas de um cabeçalho ou chave de JSON para as regras de credencial/dado sensível: a normal e a que separa
+ * camelCase ("MeuInssPass" → "meu inss pass"). As duas, porque separar quebra "SêNhA"; a regra vale se QUALQUER uma casar.
+ */
+function formasDaChave(s: string): string[] {
+  const sem = semAcento(String(s ?? ''));
+  return [limpar(sem), limpar(sem.replace(/([a-z0-9])([A-Z])/g, '$1 $2'))];
+}
+
+/**
+ * Palavras que fazem um cabeçalho (ou uma chave de JSON) valer como credencial. `inss` e `gov` só valem sozinhos:
+ * "Benefício INSS" é dado de processo, "INSS" sozinho como título de coluna é onde se anota a senha.
+ */
+const SECRETA = /senha|password|passwd|\bpass\b|\bpwd\b|\bpin\b|meu ?inss|\blogin\b|\bsegredo\b|\bsecret|\btoken\b|gov ?br|\bacesso\b|credenc|\bchave\b|^inss$|^gov$/;
 
 /** O cabeçalho é de uma coluna de credencial? Em dúvida (cabeçalho vazio não é), descarta. */
 export function ehColunaSecreta(cabecalho: string): boolean {
-  return SECRETA.test(normalizarCabecalho(cabecalho));
+  return formasDaChave(cabecalho).some((f) => SECRETA.test(f));
 }
 
 /** Chave de objeto (JSON de API) que guarda credencial: `meu_inss_pass`, `password`, `senha`, `api_token`… */
 export function ehChaveSecreta(chave: string): boolean {
-  return SECRETA.test(normalizarCabecalho(chave));
+  return formasDaChave(chave).some((f) => SECRETA.test(f));
 }
 
 const DIGITOS = (s: string) => s.replace(/\D/g, '');
@@ -40,33 +58,47 @@ export function mascararTelefone(valor: string): string {
   return d.length >= 4 ? `(**) *****-${d.slice(-4)}` : '***';
 }
 
+/** CPF, formatado ou só dígitos, que não é pedaço de número maior */
+const CPF_ISOLADO = String.raw`(?<!\d)\d{3}\.?\d{3}\.?\d{3}-?\d{2}(?!\d)`;
 /**
- * CPF (formatado ou só dígitos) colado a outra coisa por `/`, `|` ou `\` — o padrão "cpf/senha". Só esses três:
- * `;` e `:` aparecem em prosa logo depois de um CPF ("CPF 123…-01; réu: …") e não são colagem de credencial.
+ * Texto corrido (publicação, movimentação): só o "cpf/senha" colado por `/`, `|` ou `\`, e só a palavra colada.
+ * `;`, `:` e `-` aparecem em prosa logo depois de um CPF ("CPF 123…-01; réu: …", "… - Maria") e não são colagem de credencial.
  */
-const COLADO = String.raw`(?<!\d)\d{3}\.?\d{3}\.?\d{3}-?\d{2}\s*[/|\\]\s*`;
-/** na célula de planilha o que vem depois do CPF é a senha, que pode ter espaço: leva o resto da célula */
-const CPF_COLADO_CELULA = new RegExp(`${COLADO}[\\s\\S]*$`);
-/** em texto corrido (publicação, movimentação), só a palavra colada: não apaga o resto do parágrafo */
-const CPF_COLADO_TEXTO = new RegExp(`${COLADO}\\S+`, 'g');
-/** "senha: abc123", "senha do gov: abc123", "password=abc": a palavra, um complemento curto e o valor */
-const SENHA_DITA = /\b(?:senha|password|passwd|pwd)\b[^:=\n]{0,25}[:=]\s*\S+/gi;
+const CPF_COLADO_TEXTO = new RegExp(`${CPF_ISOLADO}\\s*[/|\\\\]\\s*\\S+`, 'g');
+/**
+ * Célula de planilha: depois de um CPF, QUALQUER coisa que venha na célula (barra, hífen, espaço, dois-pontos,
+ * quebra de linha, nada visível entre os dois) pode ser a senha, e a senha pode ter espaço: leva o resto da célula.
+ * Falha segura — perde o que vinha depois do CPF, mas nunca mostra uma senha.
+ */
+const CPF_COLADO_CELULA = new RegExp(`${CPF_ISOLADO}(?=\\s*\\S)[\\s\\S]*$`);
+
+/**
+ * "senha: abc123", "password=abc", "senha do gov: abc123" (a palavra, um complemento curto e `:`/`=`) e também sem
+ * pontuação nenhuma — "senha - abc", "senha gov abc", "a senha abc": a palavra, palavras de ligação e o valor.
+ */
+const LIGACAO = String.raw`(?:d[aeo]s?|meu|minha|gov(?:\.?br)?|inss|login|acesso|é|eh|e|foi|era|nova?|atual)(?=[\s:=\-–—]|$)`;
+const SENHA_DITA = new RegExp(String.raw`\b(?:senha|password|passwd|pwd)s?\b(?!\s+omitid[oa]\])(?:[^:=\n]{0,25}[:=]\s*|(?:[\s:=\-–—]+${LIGACAO})*[\s:=\-–—]+)\S+`, 'gi');
 const CPF_FORMATADO = /(?<!\d)\d{3}\.\d{3}\.\d{3}-\d{2}(?!\d)/g;
+/** NIT/PIS (123.45678.90-1) e RG (12.345.678-9): documento que, com nascimento e nome da mãe, recupera conta do gov.br */
+const NIT_FORMATADO = /(?<![\d.])\d{3}\.\d{5}\.\d{2}-\d(?!\d)/g;
+const RG_FORMATADO = /(?<![\d.])\d{1,2}\.\d{3}\.\d{3}-[\dXx](?!\d)/g;
 /** Telefone brasileiro com ou sem +55, DDD e hífen (10 ou 11 dígitos), e também 11 dígitos soltos. Só em fronteira de número. */
 const TELEFONE = /(?<!\d)(?:\+?55[\s.-]?)?(?:\(\d{2}\)|\d{2})[\s.-]?9?\d{4}[\s.-]?\d{4}(?![\d])/g;
 const TELEFONE_SEM_DDD = /(?<!\d)9?\d{4}-\d{4}(?!\d)/g;
 
 export const CPF_SENHA_OMITIDO = '[CPF/senha omitido]';
 export const SENHA_OMITIDA = '[senha omitida]';
+export const DOCUMENTO_OMITIDO = '[documento omitido]';
 
-/** Tem valor "CPF/senha" colado? */
+/** Tem CPF seguido de mais alguma coisa na mesma célula (possível "cpf + senha")? */
 export function temCpfColado(texto: string): boolean {
   return CPF_COLADO_CELULA.test(texto);
 }
 
 /**
- * Mascara, dentro de um texto, o que parece CPF ou telefone; apaga CPF+senha colados e "senha: xxx".
- * `celula` (planilha) leva tudo o que vem depois do CPF colado; `texto` (padrão) só a palavra colada.
+ * Mascara, dentro de um texto, o que parece CPF (com ou sem pontuação, a mesma cobertura do `pii.ts`), NIT, RG ou
+ * telefone; apaga CPF+senha colados e "senha: xxx".
+ * `celula` (planilha) leva tudo o que vem depois do CPF; `texto` (padrão) só a palavra colada por `/`, `|` ou `\`.
  */
 export function mascararTexto(texto: string, modo: 'celula' | 'texto' = 'texto'): string {
   if (!texto) return texto;
@@ -74,8 +106,12 @@ export function mascararTexto(texto: string, modo: 'celula' | 'texto' = 'texto')
     .replace(modo === 'celula' ? CPF_COLADO_CELULA : CPF_COLADO_TEXTO, CPF_SENHA_OMITIDO)
     .replace(SENHA_DITA, SENHA_OMITIDA)
     .replace(CPF_FORMATADO, (m) => mascararCpf(m))
+    .replace(NIT_FORMATADO, DOCUMENTO_OMITIDO)
+    .replace(RG_FORMATADO, DOCUMENTO_OMITIDO)
     .replace(TELEFONE, (m) => mascararTelefone(m))
-    .replace(TELEFONE_SEM_DDD, (m) => mascararTelefone(m));
+    .replace(TELEFONE_SEM_DDD, (m) => mascararTelefone(m))
+    // por último, o que sobrou com cara de CPF: sem pontuação ou com espaço ("CPF 12345678909", "123 456 789 09")
+    .replace(CPF_SOLTO, (m) => mascararCpf(m));
 }
 
 const CABECALHO_CPF = /\bcpf\b|cpf ?cnpj|documento/;
@@ -87,12 +123,12 @@ const CABECALHO_FONE = /telefone|celular|\bfone\b|whats|\btel\b|\bcontato\b|\bph
  */
 export function mascararCelula(valor: string, cabecalho: string, modo: 'celula' | 'texto' = 'celula'): string {
   if (!valor) return valor;
-  const h = normalizarCabecalho(cabecalho);
+  const hs = formasDaChave(cabecalho);
   if (!temCpfColado(valor)) {
     const so = DIGITOS(valor);
     const soNumeros = /^[\s\d.()+-]+$/.test(valor);
-    if (soNumeros && CABECALHO_CPF.test(h) && so.length >= 6 && so.length <= 11) return mascararCpf(valor);
-    if (soNumeros && CABECALHO_FONE.test(h) && so.length >= 8) return mascararTelefone(valor);
+    if (soNumeros && hs.some((h) => CABECALHO_CPF.test(h)) && so.length >= 6 && so.length <= 11) return mascararCpf(valor);
+    if (soNumeros && hs.some((h) => CABECALHO_FONE.test(h)) && so.length >= 8) return mascararTelefone(valor);
   }
   return mascararTexto(valor, modo);
 }
@@ -105,10 +141,16 @@ export function mascararCelula(valor: string, cabecalho: string, modo: 'celula' 
 const PRESERVAR = new Set(['id', 'uuid', 'iid', 'numero_beneficio', 'link', 'link_tramitacao', 'created_at', 'updated_at']);
 /** Chave de dado bancário (conta, agência, Pix): não sai, qualquer que seja o nome exato que a API use. */
 const CHAVE_BANCARIA = /bank|banco|banc[aá]ri|\bpix\b|pix key|agenc|iban|account number|conta corrente/;
-const CHAVE_DE_DOCUMENTO = /cpf|cnpj|documento|telefone|celular|fone|phone|mobile|whats/;
+const CHAVE_DE_DOCUMENTO = /cpf|cnpj|documento|document|telefone|celular|fone|phone|mobile|whats/;
+/**
+ * Chave de documento de identidade (NIT/PIS/PASEP, RG, CNH, CTPS, título, passaporte, `document_number`): não sai nem
+ * mascarado. Com nascimento e nome da mãe — que o `completo` devolve — o NIT e o RG recuperam a conta do gov.br.
+ */
+const CHAVE_IDENTIDADE = /(?:^| )(?:nit|pis|pasep|rg|cnh|ctps|rne|rnm)(?: |$)|identidade|document number|documento numero|numero do documento|passaporte|passport|titulo de eleitor|voter/;
 
 /**
- * Limpa um registro de API inteiro, em qualquer profundidade: some a chave de credencial, mascara CPF/telefone
+ * Limpa um registro de API inteiro, em qualquer profundidade: some a chave de credencial, de dado bancário e de
+ * documento de identidade, mascara CPF/telefone
  * em todo texto (e em número, se a chave for de CPF/telefone). Devolve cópia; o original não é tocado.
  */
 export function limparRegistro<T>(valor: T, chave = ''): T {
@@ -118,16 +160,31 @@ export function limparRegistro<T>(valor: T, chave = ''): T {
   }
   if (typeof valor === 'number') {
     // CPF ou telefone que a API mande como número JSON
-    return (CHAVE_DE_DOCUMENTO.test(normalizarCabecalho(chave)) ? mascararCelula(String(valor), chave, 'texto') : valor) as T;
+    return (formasDaChave(chave).some((f) => CHAVE_DE_DOCUMENTO.test(f)) ? mascararCelula(String(valor), chave, 'texto') : valor) as T;
   }
   if (Array.isArray(valor)) return valor.map((x) => limparRegistro(x, chave)) as T;
   if (valor && typeof valor === 'object') {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(valor as Record<string, unknown>)) {
-      if (ehChaveSecreta(k) || CHAVE_BANCARIA.test(normalizarCabecalho(k))) continue;
+      if (ehChaveSecreta(k) || formasDaChave(k).some((f) => CHAVE_BANCARIA.test(f) || CHAVE_IDENTIDADE.test(f))) continue;
       out[k] = limparRegistro(v, k);
     }
     return out as T;
   }
   return valor;
+}
+
+/**
+ * Argumentos de uma ferramenta como a AUDITORIA os guarda: todo texto passa pela máscara (CPF digitado na busca com
+ * ou sem pontuação, telefone, "senha: xxx"), em qualquer profundidade e em modo célula (na dúvida, apaga o resto).
+ * O campo de CPF/CNPJ puro (`cpfCnpj`) nunca fica inteiro, mesmo sem pontuação.
+ */
+export function mascararArgumentos<T>(args: T): T {
+  const ir = (v: unknown, chave: string): unknown => {
+    if (typeof v === 'string') return formasDaChave(chave).some((f) => CABECALHO_CPF.test(f)) ? mascararCelula(v, chave) : mascararTexto(v, 'celula');
+    if (Array.isArray(v)) return v.map((x) => ir(x, chave));
+    if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, ir(x, k)]));
+    return v;
+  };
+  return ir(args, '') as T;
 }

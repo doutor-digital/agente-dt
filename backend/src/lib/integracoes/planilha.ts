@@ -66,21 +66,32 @@ function indiceDoZip(buf: Buffer): Map<string, EntradaZip> {
   return entradas;
 }
 
-function extrair(buf: Buffer, e: EntradaZip): Buffer {
+/** O teto de descompressão vale para o zip INTEIRO: arquivos de 39 MB, um a um, somariam centenas de MB. */
+interface Orcamento {
+  restante: number;
+}
+
+function extrair(buf: Buffer, e: EntradaZip, orc: Orcamento): Buffer {
   if (buf.readUInt32LE(e.offset) !== 0x04034b50) throw new ErroPlanilha('xlsx corrompido (cabeçalho local do zip)');
   const ini = e.offset + 30 + buf.readUInt16LE(e.offset + 26) + buf.readUInt16LE(e.offset + 28);
   const dados = buf.subarray(ini, ini + e.comprimido);
+  const demais = () => new ErroPlanilha('xlsx grande demais depois de descomprimido');
   if (e.metodo === 0) {
-    if (dados.length > MAX_DESCOMPRIMIDO) throw new ErroPlanilha('xlsx grande demais depois de descomprimido');
+    if (dados.length > orc.restante) throw demais();
+    orc.restante -= dados.length;
     return dados;
   }
   if (e.metodo !== 8) throw new ErroPlanilha(`xlsx com compressão não suportada (${e.metodo})`);
+  if (orc.restante < 1) throw demais();
+  let fora: Buffer;
   try {
     // o tamanho declarado no zip pode mentir: o teto vale para o que de fato sai da descompressão
-    return inflateRawSync(dados, { maxOutputLength: MAX_DESCOMPRIMIDO });
+    fora = inflateRawSync(dados, { maxOutputLength: orc.restante });
   } catch {
     throw new ErroPlanilha('xlsx grande demais depois de descomprimido, ou corrompido');
   }
+  orc.restante -= fora.length;
+  return fora;
 }
 
 // ----------------------------------------------------------------- xml
@@ -161,9 +172,10 @@ export interface AbaBruta {
 export function lerXlsx(buf: Buffer): AbaBruta[] {
   try {
     const zip = indiceDoZip(buf);
+    const orcamento: Orcamento = { restante: MAX_DESCOMPRIMIDO };
     const ler = (nome: string): string | undefined => {
       const e = zip.get(nome);
-      return e ? extrair(buf, e).toString('utf8') : undefined;
+      return e ? extrair(buf, e, orcamento).toString('utf8') : undefined;
     };
     const workbook = ler('xl/workbook.xml');
     if (!workbook) throw new ErroPlanilha('o arquivo baixado não é um xlsx (sem xl/workbook.xml)');
@@ -261,29 +273,41 @@ const letrasDe = (i: number): string => {
   return s;
 };
 
-/** Quantas linhas do topo valem como "cabeçalho possível" (título, legenda, cabeçalho de verdade) e o tamanho máximo de um texto de cabeçalho. */
+/** Quantas linhas do topo valem como "cabeçalho possível" (título, legenda, cabeçalho de verdade). */
 const LINHAS_DO_TOPO = 10;
-const MAX_TEXTO_DE_CABECALHO = 40;
+/** Quantas linhas do topo são lidas à procura de palavra de senha/login numa coluna (cabeçalho fora do lugar, legenda, anotação). */
+const LINHAS_VARRIDAS = 40;
+/** Tamanho máximo de uma célula de DADO que vale como "diz senha": parágrafo de observação não derruba a coluna. O cabeçalho não tem teto. */
+const MAX_TEXTO_DE_DADO = 40;
 
 /**
  * Descarta, ANTES de qualquer outra coisa, a coluna de credencial; mascara CPF/telefone no que sobra. Nada que
  * passe daqui carrega senha.
  *
  * O cabeçalho é a 1ª linha do topo com pelo menos 60% das células da linha mais cheia (planilha com título ou
- * legenda acima do cabeçalho real não o confunde). Coluna é de credencial quando QUALQUER texto curto das
- * primeiras linhas diz senha/login/"meu inss", ou quando um terço das células dela é "CPF/senha" colado.
+ * legenda acima do cabeçalho real não o confunde). Coluna é de credencial quando o cabeçalho (de qualquer tamanho)
+ * diz senha/login/"meu inss", quando um texto curto das primeiras linhas diz o mesmo, ou quando 30% das células
+ * dela têm um CPF seguido de mais alguma coisa (o "cpf + senha" da mesma célula).
+ *
+ * O relatório de colunas descartadas NUNCA reproduz texto de célula: o que motivou o descarte pode ser a própria
+ * senha. Sai só a letra da coluna.
  */
 export function limparAba(bruta: Omit<AbaBruta, 'truncado'> & { truncado?: boolean }): AbaLimpa {
   const preenchidas = (l: string[]) => l.filter((c) => c.trim() !== '').length;
   const topo: number[] = [];
-  for (let i = 0; i < bruta.linhas.length && topo.length < LINHAS_DO_TOPO; i++) if (preenchidas(bruta.linhas[i]!)) topo.push(i);
+  const varridas: number[] = [];
+  for (let i = 0; i < bruta.linhas.length && varridas.length < LINHAS_VARRIDAS; i++) {
+    if (!preenchidas(bruta.linhas[i]!)) continue;
+    varridas.push(i);
+    if (topo.length < LINHAS_DO_TOPO) topo.push(i);
+  }
   if (!topo.length) return { nome: bruta.nome, cabecalhos: [], linhas: [], numerosDasLinhas: [], linhasTotal: 0, truncado: !!bruta.truncado, colunasDescartadas: [] };
   const maisCheia = Math.max(...topo.map((i) => preenchidas(bruta.linhas[i]!)));
   const iCab = topo.find((i) => preenchidas(bruta.linhas[i]!) >= Math.ceil(maisCheia * 0.6))!;
   const cab = bruta.linhas[iCab]!;
   const dados: Array<{ l: string[]; n: number }> = [];
   for (let i = iCab + 1; i < bruta.linhas.length; i++) if (preenchidas(bruta.linhas[i]!)) dados.push({ l: bruta.linhas[i]!, n: i + 1 });
-  const largura = Math.max(cab.length, ...topo.map((i) => bruta.linhas[i]!.length), ...dados.map((d) => d.l.length));
+  const largura = Math.max(cab.length, ...varridas.map((i) => bruta.linhas[i]!.length), ...dados.map((d) => d.l.length));
 
   // um passe só pelas linhas, com contadores por coluna (aba grande: 20 mil linhas x 200 colunas)
   const colados = new Array<number>(largura).fill(0);
@@ -293,17 +317,23 @@ export function limparAba(bruta: Omit<AbaBruta, 'truncado'> & { truncado?: boole
       const v = d.l[c]!;
       if (v.trim() === '') continue;
       cheias[c]!++;
-      if (v.length >= 13 && temCpfColado(v)) colados[c]!++;
+      if (v.length >= 11 && temCpfColado(v)) colados[c]!++;
     }
   }
   const descartadas: ColunaDescartada[] = [];
   const manter: number[] = [];
   for (let c = 0; c < largura; c++) {
     const nome = (cab[c] ?? '').trim();
-    const textoSecreto = topo.map((i) => (bruta.linhas[i]![c] ?? '').trim()).find((t) => t !== '' && t.length <= MAX_TEXTO_DE_CABECALHO && !temCpfColado(t) && ehColunaSecreta(t));
+    const cabecalhoDeSenha = nome !== '' && ehColunaSecreta(nome);
+    const textoDeSenha =
+      cabecalhoDeSenha ||
+      varridas.some((i) => {
+        const t = (bruta.linhas[i]![c] ?? '').trim();
+        return t !== '' && t.length <= MAX_TEXTO_DE_DADO && !temCpfColado(t) && ehColunaSecreta(t);
+      });
     const nColados = colados[c]! + (temCpfColado(nome) ? 1 : 0);
-    if (textoSecreto !== undefined) descartadas.push({ cabecalho: mascararTexto(textoSecreto, 'celula'), motivo: 'cabeçalho de senha/login' });
-    else if (nColados > 0 && nColados / Math.max(cheias[c]!, 1) >= FRACAO_CREDENCIAL) descartadas.push({ cabecalho: mascararTexto(nome, 'celula') || `coluna ${letrasDe(c)}`, motivo: 'valores no formato CPF/senha' });
+    if (textoDeSenha) descartadas.push({ cabecalho: `coluna ${letrasDe(c)}`, motivo: 'cabeçalho de senha/login' });
+    else if (nColados > 0 && nColados / Math.max(cheias[c]!, 1) >= FRACAO_CREDENCIAL) descartadas.push({ cabecalho: `coluna ${letrasDe(c)}`, motivo: 'valores no formato CPF/senha' });
     else manter.push(c);
   }
 

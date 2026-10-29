@@ -49,7 +49,8 @@ test('CPF e senha colados (NNN.NNN.NNN-NN/…): na célula some o resto dela; em
 test('prosa com CPF seguido de ; ou : não perde o resto do parágrafo', () => {
   const t = 'Autor: Maria, CPF 123.456.789-01; réu: Banco X. Prazo de 15 dias para contestar.';
   assert.equal(mascararTexto(t), 'Autor: Maria, CPF ***.***.***-01; réu: Banco X. Prazo de 15 dias para contestar.');
-  assert.equal(mascararTexto(t, 'celula'), 'Autor: Maria, CPF ***.***.***-01; réu: Banco X. Prazo de 15 dias para contestar.');
+  // na CÉLULA o que vem depois de um CPF pode ser a senha, com qualquer separador (decisão do sênior no PR #160): perde o resto, nunca mostra
+  assert.equal(mascararTexto(t, 'celula'), 'Autor: Maria, CPF [CPF/senha omitido]');
 });
 
 test('senha dita em texto livre ("senha: …", "senha do gov = …") some', () => {

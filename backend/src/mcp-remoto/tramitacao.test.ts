@@ -261,3 +261,42 @@ test('ferramentas registradas: as cinco, todas só leitura', () => {
   for (const v of vistas) assert.equal(v.cfg.annotations?.readOnlyHint, true);
   assert.equal(vistas[0]!.cfg.inputSchema!['maxItens']!.safeParse(101).success, false);
 });
+
+// ---------------------------------------------------------------- reprovação do PR #160
+
+type Handler = (args: Record<string, unknown>) => Promise<{ content: Array<{ text: string }> }>;
+function registradas(ctx: ReturnType<typeof ctxDe>, auditoria: Array<{ ferramenta: string; argumentos: unknown }>): Record<string, Handler> {
+  const h: Record<string, Handler> = {};
+  const falso = { registerTool: (nome: string, _cfg: unknown, fn: Handler) => void (h[nome] = fn) } as unknown as McpServer;
+  registrarFerramentasTramitacao(falso, ctx, (r) => void auditoria.push(r));
+  return h;
+}
+
+test('auditoria: CPF digitado (com ou sem pontuação) em cpfCnpj e busca não é gravado inteiro, em nenhuma ferramenta', async () => {
+  const rotas = { '/v1/clientes': () => ({ customers: [], pagination: PAG(0) }), '/v1/publicacoes': () => ({ publications: [], pagination: PAG(0) }), '/v1/processos': () => ({ lawsuits: [], pagination: PAG(0) }) };
+  for (const cpf of ['12345678909', '123456789-09', '123 456 789 09', '123.456.789-09']) {
+    const auditoria: Array<{ ferramenta: string; argumentos: unknown }> = [];
+    const h = registradas(ctxDe(conta(rotas)), auditoria);
+    await h['tramitacao_clientes']!({ unidade: 'magalhaes', cpfCnpj: cpf });
+    await h['tramitacao_clientes']!({ unidade: 'magalhaes', busca: `cpf ${cpf}` });
+    await h['tramitacao_publicacoes']!({ unidade: 'magalhaes', busca: `autor cpf ${cpf} senha - Fic$enha` });
+    await h['tramitacao_processos']!({ unidade: 'magalhaes', busca: cpf });
+    assert.equal(auditoria.length, 4);
+    const gravado = JSON.stringify(auditoria);
+    assert.equal(/12345678909|123456789-09|123 456 789 09|123\.456\.789-09/.test(gravado), false, `auditoria guardou o CPF: ${cpf} -> ${gravado}`);
+    assert.equal(gravado.includes('Fic$enha'), false);
+    assert.match(gravado, /"unidade":"magalhaes"/);
+  }
+});
+
+test('completo: NIT, RG, document_number, conta e Pix do cliente não saem; o resto do cadastro sai mascarado', async () => {
+  const CLI = {
+    id: 7, name: 'Fulana Fict', customer_type: 'pf', cpf_cnpj: '12345678909', email: 'f@exemplo.com', birthdate: '1980-05-15', mother_name: 'Mãe Fict',
+    nit: '123.45678.90-1', rg_numero: '12.345.678-9', document_number: '998877665', meu_inss_pass: 'InssFict#7781', MeuInssPass: 'InssFict#7781',
+    pix_key: 'pixfict@exemplo.com', bank_accounts: [{ account_number: '9876543-2' }], observacoes: 'cpf 98765432100, senha gov Abc#Fict99',
+  };
+  const ctx = ctxDe(conta({ '/v1/clientes': () => ({ customers: [CLI], pagination: PAG(1) }) }));
+  const s = JSON.stringify(await tramitacaoClientes(ctx, { unidade: 'magalhaes', completo: true }));
+  for (const proibido of ['45678', '12.345.678', '998877665', 'InssFict', 'pixfict', '9876543-2', '12345678909', '98765432100', 'Abc#Fict99']) assert.equal(s.includes(proibido), false, proibido);
+  assert.match(s, /Fulana Fict/);
+});

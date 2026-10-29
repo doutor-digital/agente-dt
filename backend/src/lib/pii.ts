@@ -19,8 +19,8 @@
 /** Telefone brasileiro, com ou sem DDI/DDD/máscara. Guarda os 4 últimos. */
 const TELEFONE = /(?:\+?55\s?)?(?:\(?\d{2}\)?[\s.-]?)?9?\d{4}[\s.-]?\d{4}\b/g;
 
-/** CPF com ou sem pontuação. */
-const CPF = /\b\d{3}[.\s]?\d{3}[.\s]?\d{3}[-\s]?\d{2}\b/g;
+/** CPF com ou sem pontuação. Exportado: a máscara do conector (integracoes/mascaras.ts) reaproveita esta cobertura. */
+export const CPF = /\b\d{3}[.\s]?\d{3}[.\s]?\d{3}[-\s]?\d{2}\b/g;
 
 /** CNPJ — aparece em chave Pix nas mensagens da clínica. */
 const CNPJ = /\b\d{2}[.\s]?\d{3}[.\s]?\d{3}[/\s]?\d{4}[-\s]?\d{2}\b/g;

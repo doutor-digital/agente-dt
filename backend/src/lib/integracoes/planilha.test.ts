@@ -80,7 +80,7 @@ test('limparAba: a coluna de senha é DESCARTADA e o valor dela não aparece em 
   const aba = limparAba(lerXlsx(CLIENTES)[0]!);
   assert.deepEqual(aba.cabecalhos, ['Nome', 'CPF', 'Telefone', 'Situação', 'Observações']);
   assert.equal(aba.colunasDescartadas.length, 1);
-  assert.equal(aba.colunasDescartadas[0]!.cabecalho, 'Senha Meu INSS');
+  assert.equal(aba.colunasDescartadas[0]!.cabecalho, 'coluna D', 'só a letra da coluna: o texto da célula que motivou o descarte pode ser a própria senha');
   const tudo = jsonDe(aba);
   for (const proibido of [SENHA_1, SENHA_2, 'Fic$enha-Colada-7', '12345678909', '987.654.321-00', '98765-4321', '11912345678']) {
     assert.equal(tudo.includes(proibido), false, `vazou: ${proibido}`);
@@ -98,7 +98,7 @@ test('limparAba: coluna sem cabeçalho de senha mas com valor CPF/senha colado �
   const aba = limparAba({
     nome: 'X',
     linhas: [
-      ['Nome', 'Acesso'],
+      ['Nome', 'Dados'],
       ['Maria', COLADO],
       ['João', 'Zx-77-ab9'],
     ],

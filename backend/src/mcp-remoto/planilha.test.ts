@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { xlsxFalso } from '../lib/integracoes/xlsx-falso.js';
-import { criarContextoPlanilha, fontePlanilhaPublica, planilhaAbas, planilhaLer, registrarFerramentasPlanilha, type ContextoPlanilha } from './planilha.js';
+import { criarContextoPlanilha, fontePlanilhaPublica, planilhaAbas, planilhaLer, registrarFerramentasPlanilha, type ContaPlanilha, type ContextoPlanilha } from './planilha.js';
 
 // Planilha FICTÍCIA gerada aqui. Nada da planilha real de ninguém entra em teste, log ou PR.
 const SENHAS = ['Fic$enha-Um-9981', 'zz-outra-8842', 'Fic$enha-Colada-7'];
@@ -53,7 +53,7 @@ test('planilha_abas: abas, cabeçalhos que sobraram e o que foi descartado (sem 
   assert.deepEqual(p.abas.map((a) => a.nome), ['Clientes', 'Outra']);
   assert.deepEqual(p.abas[0]!.cabecalhos, ['Nome', 'CPF', 'Telefone', 'Situação', 'Obs']);
   assert.equal(p.abas[0]!.linhas, 4);
-  assert.deepEqual(p.abas[0]!.colunasDescartadas, [{ cabecalho: 'Senha Meu INSS', motivo: 'cabeçalho de senha/login' }]);
+  assert.deepEqual(p.abas[0]!.colunasDescartadas, [{ cabecalho: 'coluna D', motivo: 'cabeçalho de senha/login' }]);
   naoVaza(r);
 });
 
@@ -189,4 +189,50 @@ test('ferramentas registradas: só leitura, e o teto de 200 linhas está no esqu
   const max = vistas[1]!.cfg.inputSchema!['maxLinhas']!;
   assert.equal(max.safeParse(200).success, true);
   assert.equal(max.safeParse(201).success, false);
+});
+
+// ---------------------------------------------------------------- reprovação do PR #160
+
+type Handler = (args: Record<string, unknown>) => Promise<{ content: Array<{ text: string }> }>;
+function registradas(ctx: ContextoPlanilha, auditoria: Array<{ ferramenta: string; argumentos: unknown }>): Record<string, Handler> {
+  const h: Record<string, Handler> = {};
+  const falso = { registerTool: (nome: string, _cfg: unknown, fn: Handler) => void (h[nome] = fn) } as unknown as McpServer;
+  registrarFerramentasPlanilha(falso, ctx, (r) => void auditoria.push(r));
+  return h;
+}
+
+test('auditoria: CPF digitado na busca (com ou sem pontuação) e "senha" digitada não são gravados inteiros', async () => {
+  for (const cpf of ['12345678909', '123456789-09', '123 456 789 09', '123.456.789-09']) {
+    const auditoria: Array<{ ferramenta: string; argumentos: unknown }> = [];
+    const h = registradas(ctxCom(CLIENTES), auditoria);
+    await h['planilha_ler']!({ unidade: 'magalhaes', aba: 'Clientes', busca: cpf });
+    await h['planilha_ler']!({ unidade: 'magalhaes', aba: 'Clientes', busca: `senha - ${SENHAS[0]}` });
+    const gravado = JSON.stringify(auditoria);
+    assert.equal(/12345678909|123456789-09|123 456 789 09|123\.456\.789-09/.test(gravado), false, `auditoria guardou o CPF: ${cpf}`);
+    assert.equal(gravado.includes(SENHAS[0]!), false);
+    assert.equal(auditoria.length, 2);
+    assert.match(gravado, /"unidade":"magalhaes"/, 'o resto dos argumentos continua auditado');
+  }
+});
+
+test('planilha_abas e planilha_ler: a senha nem o texto de dado aparecem na resposta, no cache nem no relatório de descartadas', async () => {
+  const abas = [{ nome: 'At', linhas: [['Nome', 'CPF', 'INSS', 'Obs'], ['Ana Fict', '111.222.333-44', 'MinhaSenha@2024', 'a senha do gov é Gx#Fict55'], ['Bia Fict', '555.666.777-88', 'Outra#99', 'ok']] }];
+  const ctx = ctxCom(abas);
+  const r = JSON.stringify(await planilhaAbas(ctx, { unidade: 'magalhaes' }));
+  const l = JSON.stringify(await planilhaLer(ctx, { unidade: 'magalhaes', completo: true }));
+  const cache = JSON.stringify([...(ctx.cache as unknown as { itens: Map<string, unknown> }).itens.values()]);
+  for (const proibido of ['MinhaSenha@2024', 'Gx#Fict55', 'Outra#99', 'a senha do gov']) for (const [onde, s] of [['abas', r], ['ler', l], ['cache', cache]] as const) assert.equal(s.includes(proibido), false, `${onde}: ${proibido}`);
+  assert.match(r, /coluna C/);
+});
+
+test('cache: planilha vencida sai da memória quando outra é lida (não espera estourar o teto de entradas)', async () => {
+  let agora = 1_000_000;
+  const fetcher = (async () => new Response(new Uint8Array(xlsxFalso(CLIENTES)), { status: 200 })) as typeof fetch;
+  const contas = new Map<string, ContaPlanilha>(['a', 'b'].map((s) => [s, { slug: s, nome: s, planilhas: [{ apelido: 'x', fonte: fontePlanilhaPublica(ID + s, fetcher) }] }]));
+  const ctx = criarContextoPlanilha(contas, { agora: () => agora });
+  await planilhaAbas(ctx, { unidade: 'a' });
+  assert.equal(ctx.cache.tamanho, 1);
+  agora += 11 * 60_000; // passou dos 10 minutos
+  await planilhaAbas(ctx, { unidade: 'b' });
+  assert.equal(ctx.cache.tamanho, 1, 'só a planilha nova ficou; a vencida foi expirada');
 });

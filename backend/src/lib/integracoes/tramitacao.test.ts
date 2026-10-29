@@ -103,3 +103,27 @@ test('teste da chave: só a contagem de processos; 402 explica o plano', async (
   assert.equal(r.includes('Fulano'), false);
   await assert.rejects(() => testarChaveTramitacao('tok', fetcherFalso([json({ message: 'sem plano', reason: 'necessario_assinatura' }, 402)])), /402/);
 });
+
+test('segue redirecionamento? Não: a chave vai no cabeçalho, então redirect é "error"', async () => {
+  const chamadas: Chamada[] = [];
+  await tramitacaoGet('t-redir', 'tok', '/v1/processos', {}, fetcherFalso([json({})], chamadas));
+  assert.equal(chamadas[0]!.init.redirect, 'error');
+});
+
+test('parâmetro que pede a senha do Meu INSS é recusado em qualquer variante (colchetes, espaço, hífen, caixa, camelCase)', async () => {
+  for (const k of ['mostrar_meu_inss_pass', 'mostrar_meu_inss_pass[]', 'mostrar_meu_inss_pass ', 'mostrar-meu-inss-pass', 'Mostrar_Meu_INSS_Pass', 'mostrarMeuInssPass', 'meu_inss_pass']) {
+    const chamadas: Chamada[] = [];
+    await assert.rejects(tramitacaoGet('t-proib', 'tok', '/v1/clientes', { [k]: 'true' }, fetcherFalso([json({})], chamadas)), /não permitido/, JSON.stringify(k));
+    assert.equal(chamadas.length, 0, `nada foi para a rede: ${JSON.stringify(k)}`);
+  }
+  // parâmetros legítimos continuam passando
+  await tramitacaoGet('t-proib', 'tok', '/v1/clientes', { cpf_cnpj: '1', 'tags[]': ['a'], per_page: 20 }, fetcherFalso([json({})]));
+});
+
+test('resposta de erro que não é JSON não leva trecho do corpo para a mensagem', async () => {
+  const corpo = '<html>fulano@exemplo.com Bearer abc.def.ghi plano ouro</html>';
+  await assert.rejects(
+    tramitacaoGet('t-html', 'tok', '/v1/processos', {}, fetcherFalso([() => new Response(corpo, { status: 200 })])),
+    (e: Error) => /não é JSON/.test(e.message) && !e.message.includes('fulano') && !e.message.includes('Bearer') && !e.message.includes('html'),
+  );
+});

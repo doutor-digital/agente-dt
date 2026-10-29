@@ -16,7 +16,7 @@ import type { Auditar } from '../franquia-mcp/ferramentas.js';
 import { Cache, TTL } from '../franquia-mcp/ritmo.js';
 import { ErroDeEntrada } from '../franquia-mcp/travas.js';
 import { interpretarChavePlanilha, lerPlanilhaPublica, type AbaLimpa, type ModoPlanilha, type PlanilhaLimpa } from '../lib/integracoes/planilha.js';
-import { mascararTexto, normalizarCabecalho } from '../lib/integracoes/mascaras.js';
+import { mascararArgumentos, normalizarCabecalho } from '../lib/integracoes/mascaras.js';
 import { executar } from './ferramenta.js';
 import { acharSlug } from './unidades.js';
 
@@ -47,7 +47,8 @@ export interface ContextoPlanilha {
 }
 
 export function criarContextoPlanilha(contas: Map<string, ContaPlanilha>, op: { agora?: () => number } = {}): ContextoPlanilha {
-  return { contas, cache: new Cache(op.agora, 50), emVoo: new Map() };
+  // planilha limpa pode ter megabytes: teto baixo de entradas, e as vencidas saem a cada leitura nova (ver `carregar`)
+  return { contas, cache: new Cache(op.agora, 20), emVoo: new Map() };
 }
 
 /** Modo público: export xlsx por link, sem login. `fetcher` existe para o teste. */
@@ -97,6 +98,7 @@ async function carregar(ctx: ContextoPlanilha, c: ContaPlanilha, p: PlanilhaLibe
     voando = p.fonte
       .ler()
       .then((v) => {
+        ctx.cache.expirar();
         ctx.cache.guardar(chave, v, TTL.busca);
         return v;
       })
@@ -273,7 +275,7 @@ export function registrarFerramentasPlanilha(server: McpServer, ctx: ContextoPla
       inputSchema: { unidade, planilha: z.string().optional().describe('apelido da planilha, se a unidade tiver mais de uma') },
       annotations: ro,
     },
-    (args) => executar('planilha_abas', args, auditar, () => planilhaAbas(ctx, args)),
+    (args) => executar('planilha_abas', mascararArgumentos(args), auditar, () => planilhaAbas(ctx, args)),
   );
   server.registerTool(
     'planilha_ler',
@@ -295,7 +297,7 @@ export function registrarFerramentasPlanilha(server: McpServer, ctx: ContextoPla
       },
       annotations: ro,
     },
-    // a auditoria guarda os argumentos: CPF ou telefone digitado na busca entra mascarado
-    (args) => executar('planilha_ler', { ...args, ...(args.busca ? { busca: mascararTexto(args.busca) } : {}) }, auditar, () => planilhaLer(ctx, args)),
+    // a auditoria guarda os argumentos: CPF (com ou sem pontuação), telefone ou senha digitados na busca entram mascarados
+    (args) => executar('planilha_ler', mascararArgumentos(args), auditar, () => planilhaLer(ctx, args)),
   );
 }

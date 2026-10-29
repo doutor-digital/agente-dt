@@ -81,6 +81,12 @@ export class Cache {
     return item.valor as T;
   }
 
+  /** Remove as entradas vencidas já (o `pegar` só as remove quando alguém pede a mesma chave). */
+  expirar(): void {
+    const agora = this.agora();
+    for (const [k, v] of this.itens) if (v.expira <= agora) this.itens.delete(k);
+  }
+
   guardar(chave: string, valor: unknown, ttlMs: number): void {
     this.itens.delete(chave); // reinsere no fim: a ordem do Map vira "mais recente por último"
     this.itens.set(chave, { valor, expira: this.agora() + ttlMs });
