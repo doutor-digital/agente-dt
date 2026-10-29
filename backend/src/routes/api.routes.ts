@@ -194,7 +194,7 @@ import { widgetPassoEntendiHandler, widgetPassosHandler, widgetHorariosHandler, 
   widgetUsarMotivoHandler, widgetNumerosHandler, widgetPacienteHandler, widgetPingHandler, widgetSyncHandler } from '../controllers/widget-franquia.controller.js';
 import { widgetConflitoHandler, widgetEscolherPacienteHandler } from '../controllers/widget-conflito.controller.js';
 import { ponteCartaoHandler, pontePausarHandler, ponteResumoIaHandler, ponteRetomarHandler } from '../controllers/ponte.controller.js';
-import { copilotoPerguntarHandler } from '../controllers/copiloto.controller.js';
+import { copilotoPerguntarHandler, copilotoVozSessaoHandler } from '../controllers/copiloto.controller.js';
 import { ponteContadorHandler, ponteFilaHandler } from '../controllers/ponte-fila.controller.js';
 import { ponteCamposHandler, ponteGuiaHandler, ponteMoverHandler } from '../controllers/ponte-guia.controller.js';
 import {
@@ -337,6 +337,8 @@ apiRouter.delete('/public/widget/:slug/ponte/pausa', ponteRetomarHandler);
 apiRouter.post('/public/widget/:slug/ponte/resumo-ia', ponteResumoIaHandler);
 // Copiloto da recepção (v1: só lê, explica e sugere campos — nunca grava). Chave por unidade; só nas unidades de COPILOTO_UNIDADES.
 apiRouter.post('/public/widget/:slug/copiloto/perguntar', copilotoPerguntarHandler);
+// Voz em tempo real: só emite o acesso temporário; o áudio vai do navegador direto para a OpenAI.
+apiRouter.post('/public/widget/:slug/copiloto/voz/sessao', copilotoVozSessaoHandler);
 // Fase 3 da Ponte: etiquetas (ver as da conta, pôr e tirar — ▶ só com confirmação), o resultado da ligação da
 // fila "Começar a ligar" (campos ☎ + nota) e as respostas prontas para COPIAR. Tudo no Kommo, nunca no WhatsApp.
 apiRouter.get('/public/widget/:slug/ponte/etiquetas', ponteEtiquetasDaContaHandler);

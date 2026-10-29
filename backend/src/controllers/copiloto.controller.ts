@@ -21,6 +21,7 @@ import { montarContextoDoCartao } from '../lib/copiloto/contexto.js';
 import { chamarOpenAi } from '../lib/copiloto/openai.js';
 import { lerPedido } from '../lib/copiloto/pedido.js';
 import { responderAoCopiloto } from '../lib/copiloto/responder.js';
+import { corpoDaSessao, criarSessaoDeVoz, instrucoesDaVoz, lerEtapaDoPedido, LIMITE_DA_CONVERSA_S, reservarSessao } from '../lib/copiloto/voz.js';
 
 // 10 perguntas por minuto por unidade: cada pergunta faz de 6 a 8 chamadas ao Kommo, que tem fila única no processo
 const LIMITE = { balde: 'copiloto', max: 10 };
@@ -108,5 +109,46 @@ export async function copilotoPerguntarHandler(req: Request, res: Response): Pro
   } catch (err) {
     logger.warn({ err: String(err), unit: unit.slug, leadId: pedido.leadId }, 'copiloto: falhou');
     res.status(502).json({ error: 'não consegui responder agora' });
+  }
+}
+
+// 6 pedidos por minuto por unidade: cada um abre uma conversa que custa por minuto falado
+const LIMITE_VOZ = { balde: 'copiloto-voz', max: 6 };
+
+/**
+ * `POST /api/public/widget/:slug/copiloto/voz/sessao`  `{ etapa? }`
+ *
+ * Emite o acesso temporário para a conversa por voz (OpenAI Realtime). O áudio NÃO passa por aqui. Não recebe cartão nem
+ * conversa de paciente: só o nome da etapa. Libera pela unidade do pedido (COPILOTO_UNIDADES); em Kommo dividido
+ * (Petrópolis × Caxias) o widget chega pela unidade dona da conta, que precisa estar na lista.
+ */
+export async function copilotoVozSessaoHandler(req: Request, res: Response): Promise<void> {
+  const unit = await unidadeDaPonte(req, res, LIMITE_VOZ);
+  if (!unit) return;
+  if (!env.COPILOTO_UNIDADES.includes(unit.slug)) {
+    res.status(404).json({ error: 'copiloto não liberado para esta unidade' });
+    return;
+  }
+  if (!env.COPILOTO_OPENAI_API_KEY) {
+    res.status(503).json({ error: 'copiloto sem chave da IA' });
+    return;
+  }
+  if (!reservarSessao(unit.slug, env.COPILOTO_VOZ_SESSOES_DIA)) {
+    res.status(429).json({ error: 'limite de conversas por voz de hoje atingido' });
+    return;
+  }
+  const inicio = performance.now();
+  try {
+    const etapa = lerEtapaDoPedido(req.body);
+    const corpo = corpoDaSessao(env.COPILOTO_VOZ_MODELO, env.COPILOTO_VOZ_VOZ, instrucoesDaVoz(etapa));
+    const sessao = await criarSessaoDeVoz(env.COPILOTO_OPENAI_API_KEY, corpo);
+    void recordLlmCall({ unitId: unit.id, traceId: null, provider: 'openai', model: env.COPILOTO_VOZ_MODELO, latencyMs: Math.round(performance.now() - inicio), status: 'success' });
+    // só números no log
+    logger.info({ unit: unit.slug, etapa: etapa ?? null }, 'copiloto: conversa por voz aberta');
+    res.json({ segredo: sessao.segredo, expiraEm: sessao.expiraEm, modelo: env.COPILOTO_VOZ_MODELO, limiteSegundos: LIMITE_DA_CONVERSA_S });
+  } catch (err) {
+    void recordLlmCall({ unitId: unit.id, traceId: null, provider: 'openai', model: env.COPILOTO_VOZ_MODELO, latencyMs: Math.round(performance.now() - inicio), status: 'error', errorMessage: String(err).slice(0, 300) });
+    logger.warn({ err: String(err), unit: unit.slug }, 'copiloto: voz falhou');
+    res.status(502).json({ error: 'não consegui abrir a conversa por voz agora' });
   }
 }
