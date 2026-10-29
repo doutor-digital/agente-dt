@@ -491,7 +491,7 @@ test('6ª rodada, item 1: cartão PAGO + dado errado, em QUALQUER motivo (inclus
     ['O antecipado é R$ 50. Quer que eu te passe a chave Pix?', 'ok'], // oferta + valor errado (F1b)
     ['Perfeito! Chave Pix: 94.485.277/0001-40. Me manda o comprovante.', 'vou pagar no pix'], // pediu (não explícito) + chave errada (F1c)
     ['A equipe te envia a chave.\nFavorecido: Attiva Corpo e Mente Clinica de Fisioterapia Ltda', 'ok'], // titular errado (F1d)
-    ['A equipe te envia a chave.\nA taxa e R$ 250.', 'ok'], // valor sem acento
+    ['A equipe te envia a chave.\nA taxa é R$ 250.', 'ok'], // valor errado colado na taxa (com acento: o limite sem acento está documentado)
   ];
   for (const [resposta, fala] of casos) {
     const { f, passos, chamadas } = pago();
@@ -512,6 +512,41 @@ test('6ª rodada, item 1: cartão PAGO sem dado errado segue liberado; pedido EX
   assert.equal(livre.troca, null);
   assert.equal(livre.liberadaPor, 'cartao_pago');
   const pediu = await aplicarTaxaDeReservaNaSaida('Pix: 94.485.277/0001-40.', DADOS, com({ falasDoPaciente: ['manda o pix'] }), pago().f);
+  assert.equal(pediu.texto, recadoDaChave(DADOS));
+  assert.equal(pediu.troca?.motivo, 'chave_pedida');
+});
+
+test('7ª rodada, item 1: cartão PAGO + afirmação do horário (verdade para quem pagou) com "taxa e R$ 250" sem acento → sai como veio; nem cortesia nem trouxeDadoErrado', async () => {
+  for (const resposta of [
+    'Seu horário está garantido para quinta às 14h! Você já pagou a taxa e R$ 250 ficam para o dia.', // p7 B1
+    'Tudo certo, seu horário de quinta às 14h está confirmado. Você já pagou o sinal e R$ 250 você paga no dia.', // p7 B2
+    'Seu horário de quinta às 14h está garantido. São R$ 100 de taxa de agendamento antecipada e R$ 250 no dia.',
+  ]) {
+    const { f, passos } = pago();
+    const r = await aplicarTaxaDeReservaNaSaida(resposta, DADOS, com({ falasDoPaciente: ['ok'] }), f);
+    assert.equal(r.texto, resposta, resposta);
+    assert.equal(r.troca, null, resposta);
+    assert.equal(r.liberadaPor, 'cartao_pago', resposta);
+    assert.equal(passos.filter((p) => /💳/.test(p.title)).length, 0, resposta);
+  }
+});
+
+test('7ª rodada, item 2: comprovante ANTIGO na conversa + "a equipe te envia a chave" com dado errado → a cortesia (dado_errado_retirado), nunca a resposta como veio', async () => {
+  for (const resposta of ['A equipe te envia a chave. Pix: 94.485.277/0001-40.', 'A equipe te envia a chave.\nFavorecido: Attiva Corpo e Mente Clinica de Fisioterapia Ltda']) {
+    for (const cartao of [pago(), ilegivel(), ferramentas({ cartaoDizPago: async () => false })]) { // comprovante antigo vale também com o cartão ilegível: ele já pagou antes
+      const r = await aplicarTaxaDeReservaNaSaida(resposta, DADOS, com({ falasDoPaciente: ['ok'], jaMandouComprovante: true }), cartao.f);
+      assert.equal(r.texto, RECADO_SEM_AFIRMACAO, resposta);
+      assert.equal(r.troca?.motivo, 'dado_errado_retirado', resposta);
+      assert.equal(r.troca?.trouxeDadoErrado, true, resposta);
+      assert.equal(r.liberadaPor, undefined);
+      assert.doesNotMatch(r.texto, /R\$|Chave Pix|garant|comprovante|94\.485|Attiva/i, resposta);
+    }
+  }
+  // sem dado errado segue como veio; pedido EXPLÍCITO da chave segue atendido com a chave certa
+  const { f } = pago();
+  const livre = await aplicarTaxaDeReservaNaSaida('A equipe te envia a chave.', DADOS, com({ falasDoPaciente: ['ok'], jaMandouComprovante: true }), f);
+  assert.equal(livre.troca, null);
+  const pediu = await aplicarTaxaDeReservaNaSaida('Pix: 94.485.277/0001-40.', DADOS, com({ falasDoPaciente: ['manda o pix'], jaMandouComprovante: true }), pago().f);
   assert.equal(pediu.texto, recadoDaChave(DADOS));
   assert.equal(pediu.troca?.motivo, 'chave_pedida');
 });

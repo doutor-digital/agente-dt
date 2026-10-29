@@ -536,18 +536,12 @@ const VALOR_COLADO_NA_TAXA = new RegExp(
   'g',
 );
 /**
- * "a taxa e R$ 250", "o sinal e R$ 250", "o antecipado e R$ 350" — o "é" do verbo escrito SEM acento. Só vale quando NÃO há valor em R$ (ou
- * "N reais") logo antes da palavra da taxa: aí o "e" liga dois valores ("R$ 100 antecipado e R$ 250 no dia", "R$ 100 de taxa antecipada e
- * R$ 250 no dia") e é o cadastro. O "é" COM acento já é o verbo em qualquer caso (`VALOR_COLADO_NA_TAXA`).
- */
-const VALOR_ANTES_DA_PALAVRA = String.raw`(?:r\$\s*\d+(?:[.,]\d+)*|\d+(?:[.,]\d+)*\s*reais)`;
-const VALOR_COLADO_NA_TAXA_SEM_ACENTO = new RegExp(
-  String.raw`(?<!${VALOR_ANTES_DA_PALAVRA}(?:\s+(?!e\b)\p{L}+){0,3}\s+)\b${PALAVRA_DA_TAXA}(?:\s+de\s+(?:agendamento|reserva))?\s+e\s+(?:de\s+)?${VALOR}`,
-  'gu',
-);
-/**
  * O texto SEM tirar os acentos (só minúsculas): o "é" do verbo ("a taxa é R$ 250") não pode ser confundido com o "e" de ligação
- * ("R$ 100 antecipado e R$ 250 no dia"), que `normalizar` deixa igual. O "e" sem acento é tratado à parte (`VALOR_COLADO_NA_TAXA_SEM_ACENTO`).
+ * ("R$ 100 antecipado e R$ 250 no dia"), que `normalizar` deixa igual.
+ *
+ * LIMITE CONHECIDO (decisão do sênior, 7ª rodada): quem escreve "a taxa e R$ 250" SEM acento NÃO é pego aqui. O "e" sem acento é quase
+ * sempre a conjunção ("a taxa antecipada e R$ 250 no dia", "você já pagou a taxa e R$ 250 ficam para o dia"): um regex para o verbo sem
+ * acento marcou frases certas como dado errado (e, para o cartão pago, trocou a resposta por cortesia). O modelo escreve o verbo com acento.
  */
 const comAcento = (v: string) => v.normalize('NFC').toLowerCase().replace(/[*_~]/g, '').replace(/\s+/g, ' ').trim();
 const emNumero = (v: string) => Number(v.replace(/\./g, '').replace(',', '.'));
@@ -564,8 +558,7 @@ function trazOutroValor(t: string, dados: DadosDaTaxa): boolean {
     const v = emNumero(m[1] ?? m[2] ?? '');
     if (!dados.permitidos.some((p) => mesmoValor(p, v))) return true;
   }
-  const acentuado = comAcento(t);
-  for (const m of [...acentuado.matchAll(VALOR_COLADO_NA_TAXA), ...acentuado.matchAll(VALOR_COLADO_NA_TAXA_SEM_ACENTO)]) {
+  for (const m of comAcento(t).matchAll(VALOR_COLADO_NA_TAXA)) {
     const v = emNumero(m[1] ?? m[2] ?? '');
     if (!mesmoValor(v, dados.valor)) return true;
   }
@@ -694,6 +687,19 @@ export function semAAfirmacaoDoHorario(texto: string): TrocaDaTaxa | null {
 }
 
 /**
+ * Quem já pagou (comprovante antigo ou cartão pago) só tem atendido o pedido EXPLÍCITO da chave ("qual o pix?"): a chave certa, sem
+ * pedir pagamento por conta da Sofia. null = ele não pediu a chave (ou a resposta já a traz certa e pede o comprovante). Chamada pela
+ * própria trava (comprovante antigo) e por `decidirATaxa` (cartão pago/ilegível), que decide o dado errado por conta própria
+ * (`semODadoErrado`). PRÉ-CONDIÇÃO do chamador: já filtrou `consultaDePe`, `emTratamento`, `comprovanteLido` e `dados` nulo (como
+ * `travaDaTaxaDeReserva` faz no início) — aqui essas guardas NÃO são reaplicadas.
+ */
+export function soOPedidoDaChave(texto: string, dados: DadosDaTaxa, ctx: ContextoDaTaxa): TrocaDaTaxa | null {
+  if (!pacientePediuAChave(ctx.falasDoPaciente, { soPedidoExplicito: true }) || jaTrazAChaveEPedeComprovante(texto, dados)) return null;
+  const r = conservandoOResto(texto, dados, (t, n) => empurrouAChaveParaEquipe(t) || ofereceuAChaveEmPergunta(t) || liberaPagarNaClinica(n), pedidoDaChave(dados), recadoDaChave(dados));
+  return { ...r, motivo: empurrouAChaveParaEquipe(texto) ? 'equipe_envia_a_chave' : ofereceuAChaveEmPergunta(texto) ? 'chave_oferecida' : 'chave_pedida' };
+}
+
+/**
  * A decisão: null = a resposta sai como veio. Primeiro a chave (pedida pelo paciente, ou empurrada para a equipe); depois o
  * horário dado como garantido sem prova. Uma troca só por turno. Em TODAS as trocas o RESTO da resposta (o endereço que ele
  * também perguntou) fica e o bloco certo é acrescentado; o que contradiz o cadastro (outra chave, outro valor) sai.
@@ -705,9 +711,12 @@ export function travaDaTaxaDeReserva(texto: string, dados: DadosDaTaxa | null, c
   // nem a taxa de quem quer pagar na clínica). Só o pedido EXPLÍCITO da chave ("qual o pix?") é atendido — ele pediu, e a resposta
   // "a equipe te envia a chave" seria a falha que esta trava existe para evitar.
   if (ctx.jaMandouComprovante) {
-    if (!pacientePediuAChave(ctx.falasDoPaciente, { soPedidoExplicito: true }) || jaTrazAChaveEPedeComprovante(texto, dados)) return null;
-    const r = conservandoOResto(texto, dados, (t, n) => empurrouAChaveParaEquipe(t) || ofereceuAChaveEmPergunta(t) || liberaPagarNaClinica(n), pedidoDaChave(dados), recadoDaChave(dados));
-    return { ...r, motivo: empurrouAChaveParaEquipe(texto) ? 'equipe_envia_a_chave' : ofereceuAChaveEmPergunta(texto) ? 'chave_oferecida' : 'chave_pedida' };
+    if (pacientePediuAChave(ctx.falasDoPaciente, { soPedidoExplicito: true })) return soOPedidoDaChave(texto, dados, ctx);
+    // Ninguém pediu a chave: nada é pedido por conta da Sofia. Mas se a trava dispararia (sem o comprovante antigo) e a resposta traz
+    // chave, titular ou valor fora do cadastro, ela não sai como veio: a mesma cortesia do cartão pago (`semODadoErrado`). Resposta que
+    // já traz a chave certa e pede o comprovante não contradiz o cadastro: `semODadoErrado` devolve null e ela sai como veio.
+    const semOComprovante = travaDaTaxaDeReserva(texto, dados, { ...ctx, jaMandouComprovante: false });
+    return semOComprovante ? semODadoErrado(texto, dados, semOComprovante, { cartaoIlegivel: false }) : null;
   }
   // Quer pagar só na clínica. Já recebeu a chave e insiste: equipe (UMA vez por conversa; depois a conversa segue como está,
   // sem novo recado nem novo resumo). Senão: a taxa em uma frase e a chave na MESMA mensagem.

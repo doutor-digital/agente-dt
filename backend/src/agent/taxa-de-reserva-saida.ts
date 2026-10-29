@@ -17,7 +17,7 @@
  *  - Falha ou demora de qualquer ferramenta nunca derruba a resposta ao paciente.
  */
 import type { TrocaDaTaxa, ContextoDaTaxa, DadosDaTaxa } from './taxa-de-reserva.js';
-import { recadoDaInsistencia, semAAfirmacaoDoHorario, semODadoErrado, travaDaTaxaDeReserva } from './taxa-de-reserva.js';
+import { recadoDaInsistencia, semAAfirmacaoDoHorario, semODadoErrado, soOPedidoDaChave, travaDaTaxaDeReserva } from './taxa-de-reserva.js';
 import type { TraceRecorder } from './trace-recorder.js';
 
 /** O mesmo prazo do resumo do sinal de alerta (passe-por-sinal.ts). */
@@ -168,7 +168,7 @@ export async function decidirATaxa(
     erroDoCartao = err instanceof Error ? err.message : String(err);
   }
   if (cartaoPago) {
-    const soOPedido = travaDaTaxaDeReserva(texto, dados, { ...ctx, jaMandouComprovante: true });
+    const soOPedido = soOPedidoDaChave(texto, dados, ctx);
     if (soOPedido) return { troca: soOPedido, erroDoCartao };
     // Sem ler o cartão, nada é pedido (ele pode ter pago), mas a AFIRMAÇÃO falsa de horário ("já deixei tudo registrado") não sai como veio.
     // Dado errado (chave, titular, valor): nem liberada nem editada mantendo-o — sem pedir pagamento (ver `semODadoErrado`).

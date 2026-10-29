@@ -1006,36 +1006,45 @@ test('5ª rodada, item 5: celular com o 55 e 13 dígitos ao lado do Pix é outra
 
 // --- 6ª rodada ------------------------------------------------------------------------------------------------------------------------
 
-test('6ª rodada, item 2: "a taxa e R$ 250" SEM acento volta a ser pego (resposta inteira), sem pegar "R$ 100 antecipado e R$ 250 no dia"', () => {
+test('7ª rodada, item 1: o "e" SEM acento é quase sempre a conjunção — "taxa antecipada e R$ 250 no dia" é o cadastro e não derruba a resposta certa', () => {
   const ctx = com({ falasDoPaciente: ['qual o pix?'] });
-  // o dinheiro errado sem acento: a resposta inteira é trocada, nada dela fica (o "R$ 250" errado não pode sobrar ao lado da chave certa)
+  const cauda = ` Chave Pix: ${DADOS.chave}. Me manda o comprovante.`;
   for (const frase of [
-    'A taxa e R$ 250. A equipe te envia a chave.',
-    'O sinal e R$ 250. A equipe te envia a chave.',
-    'A taxa e de R$ 250. A equipe te envia a chave.',
-    'O antecipado e R$ 350. A equipe te envia a chave.',
-    'A taxa de agendamento e R$ 50. A equipe te envia a chave.',
-    'Fica na Av. X, 12. A TAXA E R$ 250. A equipe te envia a chave.',
+    'São R$ 100 de taxa de agendamento antecipada e R$ 250 no dia.',
+    'Você paga a taxa antecipada e R$ 250 no dia.',
+    'Já recebemos o seu antecipado e R$ 250 você paga no dia.',
+    'Você já pagou a taxa e R$ 250 ficam para o dia.',
+    'Você paga o antecipado e R$ 250 no dia.',
+    'Cem reais de taxa e R$ 250 no dia.',
+    'São R$ 100, que é a taxa e R$ 250 no dia.',
+    'Total R$ 350, sendo a taxa e R$ 250 no dia.',
+    'São R$ 100 de taxa e R$ 250 no dia.',
+    'São 100 reais de sinal e R$ 250 no dia.',
+    'O valor e R$ 100 antecipado e R$ 250 no dia.',
+    'A consulta tem R$ 100,00 antecipado e R$ 250,00 no dia.',
   ]) {
+    assert.equal(travaDaTaxaDeReserva(frase + cauda, DADOS, ctx), null, frase);
+    assert.equal(semODadoErrado(frase + cauda, DADOS, { texto: 'x', motivo: 'equipe_envia_a_chave' }, { cartaoIlegivel: false }), null, frase); // não contradiz o cadastro
+  }
+  // com o resto da resposta: o endereço fica e o bloco certo é acrescentado (nada de resposta inteira trocada por falso positivo)
+  const comResto = travaDaTaxaDeReserva('Fica na Av. Ville Roy, 1234. São R$ 100 de taxa antecipada e R$ 250 no dia. A equipe te envia a chave.', DADOS, ctx);
+  assert.equal(comResto?.preservouOResto, true);
+  assert.notEqual(comResto?.trouxeDadoErrado, true);
+  assert.match(comResto!.texto, /^Fica na Av\. Ville Roy, 1234\. São R\$ 100 de taxa antecipada e R\$ 250 no dia\./);
+});
+
+test('7ª rodada, item 1: o "é" COM acento segue pego em qualquer posição; o LIMITE conhecido — "a taxa e R$ 250" sem acento NÃO é pego (o modelo escreve com acento)', () => {
+  const ctx = com({ falasDoPaciente: ['qual o pix?'] });
+  for (const frase of ['A taxa é R$ 250. A equipe te envia a chave.', 'O sinal é R$ 350. A equipe te envia a chave.', 'A taxa de agendamento é R$ 50. A equipe te envia a chave.', 'A TAXA É R$ 250. A equipe te envia a chave.']) {
     const r = travaDaTaxaDeReserva(frase, DADOS, ctx);
     assert.equal(r?.texto, recadoDaChave(DADOS), frase);
-    assert.equal(r?.preservouOResto, false, frase);
-    assert.doesNotMatch(r!.texto, /250|350|R\$ 50\b/, frase);
+    assert.equal(r?.trouxeDadoErrado, true, frase);
   }
-  // o "e" de ligação depois de um valor em R$ NÃO é o verbo, com ou sem acento no resto da frase
-  for (const frase of [
-    `O valor e R$ 100 antecipado e R$ 250 no dia. Chave Pix: ${DADOS.chave}. Me manda o comprovante.`,
-    `São R$ 100 de taxa e R$ 250 no dia. Chave Pix: ${DADOS.chave}. Me manda o comprovante.`,
-    `São 100 reais de sinal e R$ 250 no dia. Chave Pix: ${DADOS.chave}. Me manda o comprovante.`,
-    `A consulta tem R$ 100,00 antecipado e R$ 250,00 no dia. Chave Pix: ${DADOS.chave}. Me manda o comprovante.`,
-  ]) {
-    assert.equal(travaDaTaxaDeReserva(frase, DADOS, ctx), null, frase);
+  // limite documentado: sem acento, o regex não distingue o verbo da conjunção; a resposta segue o caminho normal (resto preservado)
+  for (const frase of ['A taxa e R$ 250. A equipe te envia a chave.', 'O sinal e R$ 350. A equipe te envia a chave.']) {
+    const r = travaDaTaxaDeReserva(frase, DADOS, ctx);
+    assert.notEqual(r?.trouxeDadoErrado, true, frase);
   }
-  const comResto = travaDaTaxaDeReserva('Fica na Av. Ville Roy, 1234. São R$ 100 antecipado e R$ 250 no dia. A equipe te envia a chave.', DADOS, ctx);
-  assert.equal(comResto?.preservouOResto, true);
-  assert.match(comResto!.texto, /^Fica na Av\. Ville Roy, 1234\. São R\$ 100 antecipado e R\$ 250 no dia\./);
-  // e o valor CERTO colado na taxa, com ou sem acento, não contradiz
-  assert.equal(travaDaTaxaDeReserva(`A taxa e R$ 100. Chave Pix: ${DADOS.chave}. Me manda o comprovante.`, DADOS, ctx), null);
 });
 
 test('6ª rodada, item 3: trouxeDadoErrado marca TODA troca por dado errado (pedido, equipe envia, oferta, clínica, insistência, horário, já pagou)', () => {
@@ -1089,6 +1098,21 @@ test('6ª rodada, item 1: semODadoErrado — cartão PAGO sempre a cortesia (mes
     }
   }
   assert.equal(semODadoErrado('A equipe te envia a chave.', DADOS, { texto: 'x', motivo: 'equipe_envia_a_chave' }, { cartaoIlegivel: false }), null);
+});
+
+test('7ª rodada, item 2: comprovante antigo + a trava dispararia + a resposta contradiz o cadastro → a cortesia (dado_errado_retirado); sem dado errado, null', () => {
+  const ctx = com({ falasDoPaciente: ['ok'], jaMandouComprovante: true });
+  for (const resposta of ['A equipe te envia a chave. Pix: 94.485.277/0001-40.', 'A equipe te envia a chave.\nFavorecido: Attiva Corpo e Mente Clinica de Fisioterapia Ltda', 'Quer que eu te passe a chave Pix? O antecipado é R$ 50.']) {
+    const r = travaDaTaxaDeReserva(resposta, DADOS, ctx);
+    assert.equal(r?.texto, RECADO_SEM_AFIRMACAO, resposta);
+    assert.equal(r?.motivo, 'dado_errado_retirado', resposta);
+    assert.equal(r?.trouxeDadoErrado, true, resposta);
+  }
+  // sem dado errado, ou com dado errado mas sem nada que a trava pegaria: a resposta sai como veio (comprovante antigo não pede nada)
+  assert.equal(travaDaTaxaDeReserva('A equipe te envia a chave.', DADOS, ctx), null);
+  assert.equal(travaDaTaxaDeReserva('Fica na Av. X, 12. O antecipado é R$ 50.', DADOS, ctx), null);
+  // pedido explícito: a chave certa, como antes
+  assert.equal(travaDaTaxaDeReserva('Pix: 94.485.277/0001-40.', DADOS, com({ falasDoPaciente: ['manda o pix'], jaMandouComprovante: true }))?.motivo, 'chave_pedida');
 });
 
 test('6ª rodada, item 4: cartão ilegível — "Pode pagar tudo no dia" não sobra como resto da afirmação retirada (é falso para quem não pagou)', () => {
