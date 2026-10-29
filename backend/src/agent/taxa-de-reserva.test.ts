@@ -768,3 +768,65 @@ test('2ª rodada, item 8: "Quanto à taxa, vou pagar na clínica mesmo" é recus
   }
   assert.equal(pacienteQuerPagarNaClinica(['Quero pagar tudo no dia, quanto fica?']), true);
 });
+
+// --- achados do /code-review sobre a 2ª rodada ---------------------------------------------------------------------------------------
+
+test('review: "quanto a consulta custa se eu pagar no dia?" segue sendo PERGUNTA; só "quanto à taxa/ao pagamento" introduz a recusa', () => {
+  assert.equal(pacienteQuerPagarNaClinica(['Quanto a consulta custa se eu pagar no dia?']), false);
+  assert.equal(pacienteQuerPagarNaClinica(['Quanto a gente paga na clínica?']), false);
+  assert.equal(pacienteQuerPagarNaClinica(['Quanto ao pagamento, pago na clínica mesmo']), true);
+});
+
+test('review: o horário da oração neutra só vale para o "deixei registrado"; despedida solta não vira garantia', () => {
+  for (const frase of ['Quinta às 14h está disponível, até já!', 'Sexta às 9h está livre, pra te receber bem']) {
+    assert.equal(afirmaHorarioGarantido(frase), false, frase);
+    assert.equal(travaDaTaxaDeReserva(frase, DADOS, com({ falasDoPaciente: ['quinta'] })), null, frase);
+  }
+});
+
+test('review: "deixei registrado que você vai ficar com quinta às 14h" é a reserva; só o pedido dele (prefere/quer/pediu) é "o que ele disse"', () => {
+  for (const frase of ['Deixei registrado que você vai ficar com quinta às 14h.', 'Deixei anotado que você tem consulta quinta às 14h.']) {
+    assert.equal(afirmaHorarioGarantido(frase), true, frase);
+  }
+  for (const frase of ['Deixei anotado que prefere quinta à tarde.', 'Deixei anotado que você só pode quinta de manhã.', 'Deixei anotado que você pediu quinta às 14h.']) {
+    assert.equal(afirmaHorarioGarantido(frase), false, frase);
+  }
+});
+
+test('review: valor da CONSULTA perto de "agendamento"/"pix" não é valor errado da taxa; "R$ 50 de taxa" é', () => {
+  const ctx = com({ falasDoPaciente: ['e o pix?'] });
+  const consulta = travaDaTaxaDeReserva('Para o agendamento, a consulta é R$ 350 e atendemos às 8h. A equipe te envia a chave.', DADOS, ctx);
+  assert.match(consulta!.texto, /a consulta é R\$ 350 e atendemos às 8h/);
+  const pix = travaDaTaxaDeReserva('Pagamento via pix: R$ 350 no total. A equipe te envia a chave.', DADOS, ctx);
+  assert.match(pix!.texto, /R\$ 350 no total/);
+  const errado = travaDaTaxaDeReserva('Fica R$ 50 de taxa. Atendemos até as 18h. A equipe te envia a chave.', DADOS, ctx);
+  assert.doesNotMatch(errado!.texto, /R\$ 50\b/);
+  assert.match(errado!.texto, /Atendemos até as 18h/);
+});
+
+test('review: telefone/e-mail de contato da clínica ao lado da palavra "Pix" não é chave errada; outro CNPJ (mesmo tipo) é', () => {
+  const ctx = com({ falasDoPaciente: ['e o pix?'] });
+  const contato = travaDaTaxaDeReserva('Qualquer dúvida sobre o Pix ligue (63) 99999-9999 ou escreva contato@clinica.com. A equipe te envia a chave.', DADOS, ctx);
+  assert.match(contato!.texto, /\(63\) 99999-9999 ou escreva contato@clinica\.com/);
+  const outro = travaDaTaxaDeReserva('O Pix é para 15.765.035/0001-52. A equipe te envia a chave.', DADOS, ctx);
+  assert.doesNotMatch(outro!.texto, /15\.765/);
+  // chave cadastrada como celular, escrita com ou sem o 55
+  const cel = dadosDaTaxa(unidade({ pixKey: '+5563991234567' }))!;
+  const mesmo = travaDaTaxaDeReserva('Chave Pix: (63) 99123-4567. Me manda o comprovante.', cel, ctx);
+  assert.match(mesmo!.texto, /^Chave Pix: \(63\) 99123-4567\. Me manda o comprovante\./, 'o mesmo celular sem o 55 não é chave errada (não é cortado)');
+});
+
+test('review: com o pagamento na clínica já tratado, a resposta que JÁ traz a chave certa e o comprovante não é trocada pelo lembrete', () => {
+  const ctx = com({ falasDoPaciente: ['vou pagar na clínica mesmo'], respostaAnterior: RECADO_INSISTIU_NA_CLINICA, insistenciaJaEncaminhada: true });
+  const certa = `Pode pagar o restante na clínica. Para garantir o horário, a taxa por Pix:\nChave Pix: ${DADOS.chave}\nMe manda o comprovante.`;
+  assert.equal(travaDaTaxaDeReserva(certa, DADOS, ctx), null);
+});
+
+test('review: na insistência sem resto aproveitável o rastro não diz que o resto ficou', () => {
+  const ctx = com({ falasDoPaciente: ['só pago na clínica'], respostaAnterior: recadoPagarNaClinica(DADOS) });
+  const r = travaDaTaxaDeReserva(`Entendi! Se quiser, a chave é ${DADOS.chave}, me manda o comprovante.`, DADOS, ctx);
+  assert.equal(r?.motivo, 'insistiu_na_clinica');
+  assert.equal(r?.texto, RECADO_INSISTIU_NA_CLINICA);
+  assert.equal(r?.preservouOResto, false);
+  assert.equal(r?.resto, undefined);
+});
