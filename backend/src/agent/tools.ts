@@ -1257,6 +1257,8 @@ export function buildTools({
               unitId: unit.id,
               traceId: recorder.traceId,
               modelName: unit.openaiModel ?? 'gpt-4o-mini',
+              // o prazo de quem chamou (taxa de reserva, sinal de alerta) cancela a chamada ao modelo, não só a gravação da nota
+              signal: config?.signal,
             })) as { content: unknown };
             const llmMs = Math.round(performance.now() - t1);
             const summary =

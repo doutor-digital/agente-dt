@@ -237,3 +237,40 @@ test('invokeChatModel: resposta normal passa direto', async () => {
   });
   assert.equal(r, resposta);
 });
+
+test('invokeChatModel: o sinal de quem chamou chega ao modelo (o prazo cancela a chamada, não só a gravação que vem depois)', async () => {
+  const ac = new AbortController();
+  let recebido: AbortSignal | undefined;
+  const resposta = new AIMessage({ content: 'oi', additional_kwargs: { stop_reason: 'end_turn' } });
+  await invokeChatModel({
+    model: {
+      invoke: async (_m, opcoes) => {
+        recebido = opcoes?.signal;
+        return resposta;
+      },
+    },
+    messages: [],
+    unitId: null,
+    traceId: 't3',
+    modelName: 'claude-sonnet-5-5',
+    provider: 'anthropic',
+    signal: ac.signal,
+  });
+  assert.equal(recebido, ac.signal);
+  // sem sinal, nada muda para quem já chamava assim
+  let semSinal: AbortSignal | undefined | 'nao-chamou' = 'nao-chamou';
+  await invokeChatModel({
+    model: {
+      invoke: async (_m, opcoes) => {
+        semSinal = opcoes?.signal;
+        return resposta;
+      },
+    },
+    messages: [],
+    unitId: null,
+    traceId: 't4',
+    modelName: 'claude-sonnet-5-5',
+    provider: 'anthropic',
+  });
+  assert.equal(semSinal, undefined);
+});

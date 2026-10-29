@@ -348,7 +348,7 @@ export async function recordLlmCall(p: RecordLlmCallParams): Promise<void> {
 interface InvokableModel {
   invoke: (
     messages: BaseMessage[],
-    options?: { callbacks?: unknown[] },
+    options?: { callbacks?: unknown[]; signal?: AbortSignal },
   ) => Promise<unknown>;
 }
 
@@ -390,6 +390,8 @@ export interface InvokeChatModelArgs {
    * Sem isto ela disparava o canário de truncamento ~240×/dia e afogava os cortes de verdade (medido em 19/10/2026).
    */
   corteEsperado?: boolean;
+  /** Quem chamou pode desistir (prazo estourado): o sinal vai até o cliente HTTP do modelo, que para de esperar e de gastar. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -437,6 +439,7 @@ export async function invokeChatModel(args: InvokeChatModelArgs): Promise<unknow
 
   try {
     const response = await args.model.invoke(args.messages, {
+      ...(args.signal ? { signal: args.signal } : {}),
       callbacks: [
         {
           handleLLMEnd: (output: {
