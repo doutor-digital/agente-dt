@@ -15,6 +15,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { Auditar } from '../franquia-mcp/ferramentas.js';
 import { ErroDeEntrada } from '../franquia-mcp/travas.js';
+import { ErroSistemas } from '../lib/integracoes/sistemas.js';
 import { executar } from './ferramenta.js';
 import { acharSlug } from './unidades.js';
 
@@ -70,14 +71,26 @@ export function resolverSistema(ctx: ContextoSistemas, pedido?: string): ContaSi
  * papel só-leitura, em transação READ ONLY): só barra o óbvio com mensagem clara.
  */
 export function esqueletoDoSql(sql: string): string {
+  return varrerSql(sql).esqueleto;
+}
+
+const CARACTERE_DE_NOME = /[A-Za-z0-9_$]/;
+
+/** O esqueleto e a posição, no texto original, de cada `;` que está fora de texto e comentário. */
+function varrerSql(sql: string): { esqueleto: string; pontosEVirgula: number[] } {
   let out = '';
+  const pontos: number[] = [];
   let i = 0;
   while (i < sql.length) {
     const c = sql[i]!;
     const prox = sql[i + 1];
+    const antes = sql[i - 1];
     if (c === "'" || c === '"') {
+      // E'...' aceita \ como escape (\' não fecha o texto); a aspa dupla e o texto comum não
+      const comEscape = c === "'" && (antes === 'e' || antes === 'E') && !(sql[i - 2] && CARACTERE_DE_NOME.test(sql[i - 2]!));
       i++;
       while (i < sql.length) {
+        if (comEscape && sql[i] === '\\') { i += 2; continue; }
         if (sql[i] === c) {
           if (sql[i + 1] === c) { i += 2; continue; }
           break;
@@ -96,7 +109,8 @@ export function esqueletoDoSql(sql: string): string {
         if (sql[i] === '/' && sql[i + 1] === '*') { nivel++; i += 2; } else if (sql[i] === '*' && sql[i + 1] === '/') { nivel--; i += 2; } else i++;
       }
       out += ' ';
-    } else if (c === '$') {
+    } else if (c === '$' && !(antes && CARACTERE_DE_NOME.test(antes))) {
+      // $$ ... $$ e $tag$ ... $tag$ — mas `a$$` é um nome (o `$` é letra de nome no Postgres)
       const tag = /^\$[A-Za-z_]*\$/.exec(sql.slice(i))?.[0];
       if (tag) {
         const fim = sql.indexOf(tag, i + tag.length);
@@ -107,26 +121,31 @@ export function esqueletoDoSql(sql: string): string {
         i++;
       }
     } else {
+      if (c === ';') pontos.push(i);
       out += c;
       i++;
     }
   }
-  return out;
+  return { esqueleto: out, pontosEVirgula: pontos };
 }
 
 const ESCRITA_NO_SQL = /\b(insert|update|delete|drop|alter|truncate|create|grant|revoke|copy|vacuum|merge|call|execute)\b/i;
-
 /** Um único comando: devolve o SQL sem o `;` final. */
-function umComando(sql: unknown): { sql: string; esqueleto: string } {
+function umComando(sql: unknown, estrito = false): { sql: string; esqueleto: string } {
   if (typeof sql !== 'string' || !sql.trim()) throw new ErroDeEntrada('sql vazio');
   let texto = sql.trim();
   if (texto.length > 20_000) throw new ErroDeEntrada('sql grande demais (máximo 20.000 caracteres)');
-  let esq = esqueletoDoSql(texto).trim();
-  if (esq.endsWith(';')) {
-    texto = texto.replace(/;\s*$/, '');
-    esq = esq.replace(/;\s*$/, '').trim();
+  const { esqueleto, pontosEVirgula } = varrerSql(texto);
+  let esq = esqueleto.trim();
+  const ultimo = pontosEVirgula.at(-1);
+  // um ";" só e no fim (depois dele só espaço ou comentário): sai do texto enviado
+  if (pontosEVirgula.length === 1 && esq.endsWith(';') && ultimo !== undefined) {
+    texto = (texto.slice(0, ultimo) + texto.slice(ultimo + 1)).trim();
+    esq = esq.slice(0, -1).trim();
   }
   if (esq.includes(';')) throw new ErroDeEntrada('mande um comando só: tem mais de um separado por ";"');
+  // quando o comando vai ser EXECUTADO (simulação que escreve), dúvida é recusa: nenhum ";" escondido em texto
+  if (estrito && texto.includes(';')) throw new ErroDeEntrada('na simulação que escreve não use ";" nem dentro de texto: mande um comando só');
   return { sql: texto, esqueleto: esq };
 }
 
@@ -139,9 +158,9 @@ export function validarSelect(sql: unknown): string {
   return texto;
 }
 
-/** Para a simulação em modo escrever: um comando de dados (o servidor desfaz). Nada de BEGIN/COMMIT/SET/DDL. */
+/** Para a simulação em modo escrever: um comando de dados (o servidor desfaz). Um comando só, sem ";" em lugar nenhum, e só esses verbos (nada de BEGIN/COMMIT/SET/DDL). */
 export function validarComandoDeDados(sql: unknown): string {
-  const { sql: texto, esqueleto } = umComando(sql);
+  const { sql: texto, esqueleto } = umComando(sql, true);
   if (!/^\(*\s*(select|with|insert|update|delete)\b/i.test(esqueleto)) {
     throw new ErroDeEntrada('na simulação use um SELECT, INSERT, UPDATE ou DELETE (um comando só)');
   }
@@ -209,10 +228,18 @@ export async function usuarios(ctx: ContextoSistemas, quem: string, a: { sistema
   return { sistema: c.slug, ...resposta(await c.fonte.chamar('GET', '/admin/v1/usuarios', { quem })) };
 }
 
+function dataValida(v: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?$/.exec(v);
+  if (!m) return false;
+  const [ano, mes, dia, h = 0, mi = 0, se = 0] = m.slice(1).map((x) => (x === undefined ? 0 : Number(x)));
+  const d = new Date(Date.UTC(ano!, mes! - 1, dia!));
+  return d.getUTCFullYear() === ano && d.getUTCMonth() === mes! - 1 && d.getUTCDate() === dia && h! < 24 && mi! < 60 && se! < 60;
+}
+
 export async function log(ctx: ContextoSistemas, quem: string, a: { sistema?: string; tabela?: string; desde?: string; limite?: number }) {
   const c = resolverSistema(ctx, a.sistema);
   const tabela = a.tabela ? nomeSql(a.tabela, 'tabela') : undefined;
-  if (a.desde && !/^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?)?/.test(a.desde)) throw new ErroDeEntrada(`desde: use AAAA-MM-DD ou AAAA-MM-DD HH:MM (recebi "${a.desde.slice(0, 30)}")`);
+  if (a.desde && !dataValida(a.desde)) throw new ErroDeEntrada(`desde: use AAAA-MM-DD ou AAAA-MM-DD HH:MM (recebi "${a.desde.slice(0, 30)}")`);
   const limite = a.limite === undefined ? 100 : Math.min(Math.max(Math.trunc(a.limite), 1), 500);
   return { sistema: c.slug, ...resposta(await c.fonte.chamar('GET', '/admin/v1/log', { quem, query: { tabela, desde: a.desde, limite } })) };
 }
@@ -250,6 +277,10 @@ export class PendentesSistemas {
     this.itens.set(id, { ...p, criadoEm });
     return new Date(criadoEm + VALIDADE_MS).toISOString();
   }
+  /** Resultado incerto (rede caiu na confirmação): o código volta, para a pessoa tentar de novo depois de conferir o registro. */
+  devolver(id: string, p: Pendente): void {
+    this.itens.set(id, p);
+  }
   tirar(id: string, usuario: string): Pendente {
     const p = this.itens.get(id);
     if (!p) throw new ErroDeEntrada('código de confirmação desconhecido ou já usado (ou o conector reiniciou desde a prévia): prepare a alteração de novo');
@@ -279,7 +310,7 @@ export async function prepararAlteracao(
   if (a.operacao === 'atualizar' && !Object.keys(dados).length) throw new ErroDeEntrada('atualizar precisa de "dados" (as colunas novas)');
   if (a.operacao !== 'inserir' && !Object.keys(filtro).length) throw new ErroDeEntrada(`${a.operacao} precisa de "filtro" (coluna = valor): não mexo na tabela inteira`);
   if (a.operacao === 'apagar' && Object.keys(dados).length) throw new ErroDeEntrada('apagar não leva "dados"');
-  if (tabela === 'rh_usuarios') throw new ErroDeEntrada('rh_usuarios só muda por sistemas_usuario (papel, unidade, ativo)');
+  if (tabela.toLowerCase() === 'rh_usuarios') throw new ErroDeEntrada('rh_usuarios só muda por sistemas_usuario (papel, unidade, ativo)');
   const c = resolverSistema(ctx, a.sistema);
   const r = resposta(
     await c.fonte.chamar('POST', '/admin/v1/preparar', {
@@ -309,7 +340,18 @@ export async function confirmarAlteracao(
 ): Promise<Saida> {
   const p = pendentes.tirar(String(a.confirmacao ?? '').trim(), quem.usuario);
   const c = resolverSistema(ctx, p.sistema);
-  const r = resposta(await c.fonte.chamar('POST', '/admin/v1/confirmar', { corpo: { id: String(a.confirmacao).trim(), quem: quem.nome }, quem: quem.nome, timeoutMs: 60_000 }));
+  const id = String(a.confirmacao).trim();
+  let r: Saida;
+  try {
+    r = resposta(await c.fonte.chamar('POST', '/admin/v1/confirmar', { corpo: { id, quem: quem.nome }, quem: quem.nome, timeoutMs: 60_000 }));
+  } catch (e) {
+    // sem resposta (rede, tempo esgotado) ou erro do servidor: pode ter gravado. O código volta e a pessoa confere antes de repetir.
+    if (e instanceof ErroSistemas && (e.status === null || e.status >= 500)) {
+      pendentes.devolver(id, p);
+      throw new ErroDeEntrada(`NÃO sei se a alteração foi gravada (${e.message}). Confira com sistemas_log e sistemas_consultar antes de repetir; o código ${id} continua valendo para tentar confirmar de novo (o servidor aplica cada código uma vez só).`);
+    }
+    throw e;
+  }
   return {
     sistema: c.slug,
     operacao: p.operacao,
@@ -377,9 +419,31 @@ export async function criarConvite(
 
 // ------------------------------------------------------------------ registro das ferramentas
 
+/**
+ * O registro de auditoria do conector guarda os argumentos de cada chamada, com outra retenção e outro público que o
+ * sistema de RH. Aqui os valores dos dados (salário, CPF, nome do convidado…) ficam de fora: guarda-se QUEM mexeu em
+ * QUAL tabela e COLUNAS; o antes e o depois ficam no registro do próprio sistema (sistemas_log).
+ */
+export function auditarSemDados(auditar: Auditar): Auditar {
+  return (r) => {
+    const a = (r.argumentos ?? {}) as Record<string, unknown>;
+    const chaves = (v: unknown) => (v && typeof v === 'object' ? Object.keys(v as object) : []);
+    let argumentos: unknown = r.argumentos;
+    if (r.ferramenta === 'sistemas_preparar_alteracao') {
+      argumentos = { sistema: a.sistema, operacao: a.operacao, tabela: a.tabela, colunasDoFiltro: chaves(a.filtro), colunasDosDados: chaves(a.dados) };
+    } else if (r.ferramenta === 'sistemas_convite') {
+      argumentos = { sistema: a.sistema, papel: a.papel, unidade: a.unidade };
+    } else if (r.ferramenta === 'sistemas_consultar' || r.ferramenta === 'sistemas_simular') {
+      argumentos = { ...a, sql: String(a.sql ?? '').slice(0, 2000) };
+    }
+    auditar({ ...r, argumentos });
+  };
+}
+
 const SISTEMA = z.string().optional().describe('qual sistema (slug da unidade onde está cadastrado); pode omitir se só há um ligado');
 
-export function registrarLeituraSistemas(server: McpServer, ctx: ContextoSistemas, quem: QuemSistemas, auditar: Auditar): void {
+export function registrarLeituraSistemas(server: McpServer, ctx: ContextoSistemas, quem: QuemSistemas, auditarBruto: Auditar): void {
+  const auditar = auditarSemDados(auditarBruto);
   const ro = { readOnlyHint: true, openWorldHint: false };
   server.registerTool(
     'sistemas_esquema',
@@ -447,7 +511,8 @@ export function registrarLeituraSistemas(server: McpServer, ctx: ContextoSistema
         sql: z.string().min(6).max(20_000),
         escrever: z.boolean().optional().describe('true = executa o comando e desfaz (rollback); padrão false = leitura'),
       },
-      annotations: ro,
+      // com escrever=true o comando de gravação RODA (e é desfeito): não pode ser anunciada como só leitura, senão o cliente a aprova sozinho
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     (args) => executar('sistemas_simular', args, auditar, () => simular(ctx, quem.nome, args)),
   );
@@ -458,8 +523,9 @@ export function registrarEscritaSistemas(
   ctx: ContextoSistemas,
   pendentes: PendentesSistemas,
   quem: QuemSistemas,
-  auditar: Auditar,
+  auditarBruto: Auditar,
 ): void {
+  const auditar = auditarSemDados(auditarBruto);
   server.registerTool(
     'sistemas_preparar_alteracao',
     {
@@ -507,7 +573,7 @@ export function registrarEscritaSistemas(
         usuario: z.string().min(1).max(64).describe('user_id (de sistemas_usuarios)'),
         valor: z.union([z.string(), z.boolean()]),
       },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     },
     (args) => executar('sistemas_usuario', args, auditar, () => alterarUsuario(ctx, quem, args)),
   );
@@ -526,7 +592,7 @@ export function registrarEscritaSistemas(
         papel: z.string().min(1).max(30),
         unidade: z.string().max(60).optional(),
       },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     },
     (args) => executar('sistemas_convite', args, auditar, () => criarConvite(ctx, quem, args)),
   );

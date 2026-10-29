@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { lerConfigSistemas, sistemasChamar, testarChaveSistemas } from '../lib/integracoes/sistemas.js';
+import { ErroSistemas, lerConfigSistemas, sistemasChamar, testarChaveSistemas } from '../lib/integracoes/sistemas.js';
 import { listarIntegracoes } from './integracoes.js';
 import {
   alterarUsuario,
@@ -19,6 +19,7 @@ import {
   registrarEscritaSistemas,
   registrarLeituraSistemas,
   resolverSistema,
+  validarComandoDeDados,
   validarSelect,
   type ContaSistemas,
 } from './sistemas.js';
@@ -124,6 +125,23 @@ test('SELECT: aceita select/with, recusa vários comandos e escrita; texto entre
   assert.throws(() => validarSelect(42), /vazio/);
 });
 
+test('SQL: contrabando por E\'\\\'\', nome com $$ e ";" seguido de comentário', () => {
+  // E'..' trata \' como aspa escapada: o ";" e o DELETE seguintes estão FORA do texto
+  assert.throws(() => validarSelect("select E'\\'' ; delete from rh_funcionarios where true --'"), /um comando só/);
+  assert.throws(() => validarComandoDeDados("select E'\\'' ; delete from t --'"), /um comando só/);
+  // a$$ é um nome (o $ é letra de nome): não abre bloco entre $$
+  assert.throws(() => validarSelect('select 1 a$$; drop table t; $$'), /um comando só/);
+  // $$ de verdade esconde o texto, mas o texto escondido não vira comando
+  assert.equal(validarSelect("select $$a;b$$ as x"), "select $$a;b$$ as x");
+  // ";" final seguido de comentário sai do texto enviado
+  assert.equal(validarSelect('select 1; -- nota'), 'select 1 -- nota');
+  // na simulação que escreve, ";" nem dentro de texto
+  assert.equal(validarComandoDeDados('delete from t where id = 1;'), 'delete from t where id = 1');
+  assert.throws(() => validarComandoDeDados("delete from t where nome = 'a;b'"), /nem dentro de texto/);
+  assert.throws(() => validarComandoDeDados('commit'), /SELECT, INSERT, UPDATE ou DELETE/);
+  assert.throws(() => validarComandoDeDados('set role postgres'), /SELECT, INSERT/);
+});
+
 test('consultar: o SQL ruim nem chega ao servidor; resposta enorme é cortada com aviso', async () => {
   const { srv, ctx } = montar();
   await assert.rejects(() => consultar(ctx, QUEM.nome, { sql: 'select 1; select 2' }), /um comando só/);
@@ -163,6 +181,11 @@ test('leitura: esquema (com filtro), consulta, usuários, log e simulação pass
   assert.equal(l.query, '?tabela=rh_funcionarios&desde=2026-10-01&limite=5');
   const lerr = await chamar('sistemas_log', { tabela: 'x; drop' });
   assert.equal(lerr.erro, true);
+  for (const desde of ['2026-01-01; drop table x', '2026-13-01', '2026-02-30', '2026-01-01 lixo']) {
+    const r = await chamar('sistemas_log', { desde });
+    assert.equal(r.erro, true, desde);
+    assert.match(r.texto, /desde: use AAAA-MM-DD/);
+  }
   const s = await chamar('sistemas_simular', { usuario: 'u-2', sql: 'select * from rh_funcionarios' });
   assert.equal(s.json.ok, true);
   assert.deepEqual(srv.chamadas.at(-1)!.corpo, { user_id: 'u-2', sql: 'select * from rh_funcionarios', escrever: false });
@@ -252,6 +275,7 @@ test('preparar recusa o que é perigoso antes de falar com o servidor', async ()
   await ruim({ operacao: 'atualizar', tabela: 'rh_funcionarios', filtro: { id: 1 } }, /precisa de "dados"/);
   await ruim({ operacao: 'apagar', tabela: 'rh_funcionarios', filtro: { id: 1 }, dados: { a: 1 } }, /não leva "dados"/);
   await ruim({ operacao: 'atualizar', tabela: 'rh_usuarios', filtro: { id: 1 }, dados: { papel: 'admin' } }, /sistemas_usuario/);
+  await ruim({ operacao: 'atualizar', tabela: 'RH_Usuarios', filtro: { id: 1 }, dados: { papel: 'admin' } }, /sistemas_usuario/);
   await ruim({ operacao: 'atualizar', tabela: 'rh_funcionarios; drop table x', filtro: { id: 1 }, dados: { a: 1 } }, /tabela/);
   await ruim({ operacao: 'atualizar', tabela: 'rh_funcionarios', filtro: { 'id = 1 or 1': 1 }, dados: { a: 1 } }, /coluna/);
   assert.equal(srv.chamadas.length, 0);
@@ -381,4 +405,57 @@ test('na produção, a escrita do sistema novo só é registrada dentro do bloco
   assert.match(bloco, /^if \(escritores\.has\(quem\.userId\)\) \{/);
   assert.ok(!bloco.includes('}\n      if ('), 'o bloco de quem escreve não pode ter fechado antes');
   assert.ok(src.indexOf('registrarLeituraSistemas(') < src.lastIndexOf('if (escritores.has(quem.userId))', i));
+});
+
+test('anotações: simular e escrita não se anunciam como só leitura; usuário e convite são destrutivos', async () => {
+  const { ctx } = montar();
+  const { c, fechar } = await cliente(ctx, { escreve: true });
+  const por = Object.fromEntries((await c.listTools()).tools.map((t) => [t.name, t.annotations ?? {}]));
+  for (const n of ['sistemas_esquema', 'sistemas_consultar', 'sistemas_usuarios', 'sistemas_log', 'sistemas_preparar_alteracao']) assert.equal(por[n]!.readOnlyHint, true, n);
+  assert.equal(por['sistemas_simular']!.readOnlyHint, false);
+  assert.equal(por['sistemas_confirmar_alteracao']!.destructiveHint, true);
+  assert.equal(por['sistemas_usuario']!.destructiveHint, true);
+  assert.equal(por['sistemas_convite']!.destructiveHint, true);
+  await fechar();
+});
+
+test('auditoria do conector não leva os dados da alteração (salário, CPF, nome do convidado), só tabela e colunas', async () => {
+  const { ctx } = montar();
+  const { chamar, auditoria, fechar } = await cliente(ctx, { escreve: true });
+  await chamar('sistemas_preparar_alteracao', { operacao: 'atualizar', tabela: 'rh_funcionarios', filtro: { cpf: '123.456.789-00' }, dados: { salario: 4321.99 } });
+  await chamar('sistemas_convite', { nome: 'Carla Souza', login: 'carla@x.com', papel: 'gestao' });
+  const aud = JSON.stringify(auditoria);
+  assert.ok(!aud.includes('123.456.789-00') && !aud.includes('4321.99') && !aud.includes('Carla Souza') && !aud.includes('carla@x.com'), aud);
+  assert.deepEqual(auditoria[0]!.argumentos, { sistema: undefined, operacao: 'atualizar', tabela: 'rh_funcionarios', colunasDoFiltro: ['cpf'], colunasDosDados: ['salario'] });
+  await fechar();
+});
+
+test('confirmar sem resposta do servidor: avisa que NÃO sabe se gravou e o código continua valendo; erro definitivo gasta o código', async () => {
+  const { srv, ctx } = montar();
+  const original = ctx.contas.get('hm-tecnologia')!.fonte.chamar;
+  let cai = true;
+  ctx.contas.get('hm-tecnologia')!.fonte.chamar = async (m, c, o) => {
+    if (c.endsWith('/confirmar') && cai) {
+      cai = false;
+      throw new ErroSistemas('não consegui falar com o servidor do sistema novo (sem resposta ou tempo esgotado)', null);
+    }
+    return original(m, c, o);
+  };
+  const pend = new PendentesSistemas();
+  const p = await prepararAlteracao(ctx, pend, QUEM, { operacao: 'inserir', tabela: 'rh_ferias', dados: { funcionario: 1 } });
+  await assert.rejects(() => confirmarAlteracao(ctx, pend, QUEM, { confirmacao: p.confirmacao }), /NÃO sei se a alteração foi gravada.*sistemas_log.*continua valendo/);
+  assert.equal((await confirmarAlteracao(ctx, pend, QUEM, { confirmacao: p.confirmacao })).ok, true);
+
+  // 4xx do servidor: o servidor RECUSOU, nada gravou; o código não volta
+  const q = await prepararAlteracao(ctx, pend, QUEM, { operacao: 'apagar', tabela: 'rh_ferias', filtro: { id: 1 } });
+  srv.preparados.delete(q.confirmacao);
+  await assert.rejects(() => confirmarAlteracao(ctx, pend, QUEM, { confirmacao: q.confirmacao }), /prévia desconhecida/);
+  await assert.rejects(() => confirmarAlteracao(ctx, pend, QUEM, { confirmacao: q.confirmacao }), /desconhecido ou já usado/);
+});
+
+test('cliente: 403 com mensagem do servidor vai como veio; 401 e 403 mudo falam da chave', async () => {
+  const resp = (status: number, corpo: unknown) => (async () => ({ ok: false, status, text: async () => JSON.stringify(corpo) })) as unknown as typeof fetch;
+  await assert.rejects(() => sistemasChamar(CONFIG_FALSA, 'POST', '/admin/v1/preparar', {}, resp(403, { erro: 'apagar em fin_* só pelo servidor' })), /^Error: apagar em fin_\* só pelo servidor$/);
+  await assert.rejects(() => sistemasChamar(CONFIG_FALSA, 'GET', '/admin/v1/usuarios', {}, resp(403, {})), /recusou a chave/);
+  await assert.rejects(() => sistemasChamar(CONFIG_FALSA, 'GET', '/admin/v1/usuarios', {}, resp(401, { erro: 'x' })), /recusou a chave/);
 });

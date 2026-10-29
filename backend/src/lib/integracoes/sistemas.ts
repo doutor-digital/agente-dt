@@ -113,7 +113,8 @@ export async function sistemasChamar(
     dados = null;
   }
   const erroDoServidor = typeof (dados as { erro?: unknown } | null)?.erro === 'string' ? limpar(String((dados as { erro: string }).erro), cfg).slice(0, 600) : null;
-  if (resp.status === 401 || resp.status === 403) {
+  // 401 = chave errada. 403 com mensagem do servidor é regra dele (ex.: "apagar não vale em fin_*") e vai como veio.
+  if (resp.status === 401 || (resp.status === 403 && !erroDoServidor)) {
     throw new ErroSistemas('o servidor do sistema novo recusou a chave de administração: cadastre a chave certa no painel de integrações', resp.status);
   }
   if (!resp.ok) {
