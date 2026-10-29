@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { mascararPii, mascararPiiProfundo } from './pii.js';
+import { maiorCorridaDeDigitos, mascararDigitosSeguidos, mascararPii, mascararPiiProfundo, temDigitosSeguidos } from './pii.js';
 
 /**
  * Segredo já era mascarado no registro; dado de paciente não. A conversa
@@ -66,4 +66,28 @@ test('vazio e não-texto passam sem quebrar', () => {
   assert.equal(mascararPii(''), '');
   assert.equal(mascararPiiProfundo(null), null);
   assert.equal(mascararPiiProfundo(42), 42);
+});
+
+test('dígitos seguidos: CPF/CNPJ/telefone em qualquer agrupamento (espaço, hífen, barra, ponto, parênteses) é achado; datas e códigos curtos, não', () => {
+  for (const t of ['529 982 247 25', '529-982-247-25', '529.982.247/25', '11 222 333 0001 81', '5 2 9 9 8 2 2 4 7 2 5', '(63) 3321-4455', 'cpf: 529982247 25 ok']) {
+    assert.equal(temDigitosSeguidos(t, 10), true, t);
+  }
+  for (const t of ['PED-20261028', '2026-10-28', 'R$ 250,00 em 28/10/2026', 'pedido-1042', 'A20261028B123', '123456789']) {
+    assert.equal(temDigitosSeguidos(t, 10), false, t);
+  }
+  assert.equal(maiorCorridaDeDigitos('529 982 247 25 e 12'), 11);
+  assert.equal(mascararDigitosSeguidos('a 529-982-247-25 b PED-20261028 c', 11, '[doc]'), 'a [doc] b PED-20261028 c');
+});
+
+test('mascararPii: CPF/CNPJ com hífen, espaço ou barra entre os grupos; exigirDdd não mexe em 8 dígitos soltos', () => {
+  assert.equal(mascararPii('cpf 529-982-247-25'), 'cpf «cpf»');
+  assert.equal(mascararPii('cpf 529.982.247/25'), 'cpf «cpf»');
+  assert.equal(mascararPii('PED-20261028 nosso 12345678'), 'PED-«tel ***1028» nosso «tel ***5678»');
+  assert.equal(mascararPii('PED-20261028 nosso 12345678', { exigirDdd: true }), 'PED-20261028 nosso 12345678');
+  assert.equal(mascararPii('ligo 63 98141-1248', { exigirDdd: true }), 'ligo «tel ***1248»');
+});
+
+test('mascararPii com exigirDdd: não come pedaço de número longo que não é telefone (o lookbehind segura o início)', () => {
+  assert.equal(mascararPii('PED-202610281234', { exigirDdd: true }), 'PED-202610281234');
+  assert.equal(mascararPii('(63) 3321-4455', { exigirDdd: true }), '«tel ***4455»');
 });

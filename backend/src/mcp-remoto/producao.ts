@@ -33,7 +33,7 @@ import { PrismaClient } from '@prisma/client';
 import { criarContextoAsaas, registrarFerramentasAsaas, type ContaAsaas } from './asaas.js';
 import { asaasGet } from '../lib/integracoes/asaas.js';
 import { asaasPost } from '../lib/integracoes/asaas-escrita.js';
-import { finalDaChave } from '../lib/integracoes/cofre.js';
+import { finalDaChave, impressaoDaChave } from '../lib/integracoes/cofre.js';
 import { criarEscritaAsaas, EVENTO_COBRANCA, registrarEscritaAsaasSePermitido, type RegistroDeCobranca } from './asaas-escrita.js';
 import { criarContextoConvenia, registrarFerramentasConvenia, type ContaConvenia } from './convenia.js';
 import { conveniaGet } from '../lib/integracoes/convenia.js';
@@ -184,7 +184,7 @@ async function contasAsaasDoBanco(): Promise<Map<string, ContaAsaas>> {
       nome: c.nome,
       fonte: { get: (caminho, query) => asaasGet(c.unitId, c.chave, caminho, query ?? {}) },
       // a porta de escrita (cadastrar cliente e gerar boleto) só é usada por quem está em MCP_ESCRITA_EMAILS
-      escrita: { post: (caminho, corpo) => asaasPost(c.unitId, c.chave, caminho, corpo), chaveFinal: finalDaChave(c.chave), contaSalva: c.conta },
+      escrita: { post: (caminho, corpo) => asaasPost(c.unitId, c.chave, caminho, corpo), chaveFinal: finalDaChave(c.chave), chaveImpressao: impressaoDaChave(c.chave), contaSalva: c.conta },
     });
   }
   logger.info({ contas: contas.size }, 'mcp-remoto: contas do Asaas carregadas');

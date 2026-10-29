@@ -23,6 +23,8 @@ export interface EscritaAsaas {
   post<T>(caminho: '/customers' | '/payments', corpo: Record<string, unknown>): Promise<T>;
   /** Os 4 últimos caracteres da chave, para mostrar em QUAL conta vai gravar. Nunca a chave. */
   chaveFinal: string;
+  /** sha256 da chave INTEIRA: só para o confirmar perceber a troca de chave (o final de 4 caracteres pode coincidir). Nunca mostrar, gravar ou logar. */
+  chaveImpressao: string;
   /** Nome da conta que o Asaas devolveu quando a chave foi salva no painel de integrações. */
   contaSalva?: string | null;
 }

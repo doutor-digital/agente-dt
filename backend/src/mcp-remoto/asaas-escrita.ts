@@ -24,6 +24,7 @@ import { z } from 'zod';
 import type { Auditar } from '../franquia-mcp/ferramentas.js';
 import { ErroDeEntrada, somarDias, validarData } from '../franquia-mcp/travas.js';
 import { limparTexto } from '../lib/integracoes/asaas-escrita.js';
+import { mascararDigitosSeguidos, temDigitosSeguidos } from '../lib/pii.js';
 import { resolverContasAsaas, type ContaAsaas, type ContextoAsaas, type EscritaAsaas } from './asaas.js';
 import { executar } from './ferramenta.js';
 
@@ -131,10 +132,17 @@ export function mascararTelefone(t: string): string {
   return d.length >= 8 ? `(${d.slice(0, 2)}) *****-${d.slice(-4)}` : '*****';
 }
 
-/** 11 ou 14 dígitos seguidos (com ou sem a pontuação de CPF/CNPJ): documento, ou parecido o bastante para não arriscar. */
-const DOC_NO_TEXTO = [/(?<!\d)\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}(?!\d)/g, /(?<!\d)\d{3}\.?\d{3}\.?\d{3}-?\d{2}(?!\d)/g];
-const temDocumento = (t: string) => DOC_NO_TEXTO.some((r) => new RegExp(r.source).test(t));
-const semDocumento = (t: string) => DOC_NO_TEXTO.reduce((s, r) => s.replace(r, '[documento]'), t);
+/**
+ * Quantos dígitos seguidos (com ou sem espaço, ponto, hífen e barra entre eles) já bastam para recusar o texto. A regra mora em
+ * `lib/pii.ts` (UMA só): aqui só se escolhe o limite de cada campo.
+ *  - descrição: 11 (CPF, celular com DDD, CNPJ, número com DDI). Ela vai para o boleto do paciente; a auditoria guarda só o tamanho.
+ *  - externalReference: 10 (inclui telefone fixo com DDD). Ela vai INTEIRA para a auditoria, então é mais estrita.
+ * Na dúvida recusa: um número de pedido longo (ex. aaaammddNNN, 11 dígitos) também cai aqui; a mensagem diz o motivo e como contornar,
+ * sem repetir o valor.
+ */
+export const MIN_DIGITOS_DESCRICAO = 11;
+export const MIN_DIGITOS_REFERENCIA = 10;
+const MARCA_DOCUMENTO = '[documento]';
 
 const SEM_CONTROLE = /[\u0000-\u001f\u007f]/;
 
@@ -245,7 +253,9 @@ function descricaoValida(v: unknown): string {
   const t = String(v ?? '').trim();
   if (!t) throw new ErroDeEntrada('descrição obrigatória: ela aparece no boleto do paciente');
   if (t.length > 500) throw new ErroDeEntrada('descrição: no máximo 500 caracteres');
-  if (temDocumento(t)) throw new ErroDeEntrada('descrição com CPF/CNPJ: ela aparece no boleto do paciente e vai para os registros. Tire o documento do texto.');
+  if (temDigitosSeguidos(t, MIN_DIGITOS_DESCRICAO)) {
+    throw new ErroDeEntrada(`descrição recusada: tem ${MIN_DIGITOS_DESCRICAO} ou mais dígitos seguidos (mesmo com espaço, ponto, hífen ou barra entre eles), que podem ser CPF, CNPJ ou telefone, e ela aparece no boleto do paciente. Tire o número do texto; se for outra coisa (data, número de pedido), escreva com letras no meio.`);
+  }
   if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(t)) throw new ErroDeEntrada('descrição com caracteres de controle');
   return t;
 }
@@ -254,7 +264,9 @@ function referenciaValida(v: unknown): string | undefined {
   if (v === undefined || v === null || String(v).trim() === '') return undefined;
   const t = String(v).trim();
   if (t.length > 100 || SEM_CONTROLE.test(t)) throw new ErroDeEntrada('externalReference: até 100 caracteres, sem caracteres de controle');
-  if (temDocumento(t)) throw new ErroDeEntrada('externalReference com cara de CPF/CNPJ (11 ou 14 dígitos): use o número do pedido, nunca o documento — ela vai inteira para os registros.');
+  if (temDigitosSeguidos(t, MIN_DIGITOS_REFERENCIA)) {
+    throw new ErroDeEntrada(`externalReference recusada: tem ${MIN_DIGITOS_REFERENCIA} ou mais dígitos seguidos (mesmo com espaço, ponto, hífen ou barra entre eles), que podem ser CPF, CNPJ ou telefone, e ela vai inteira para os registros. Use o número do pedido separando os blocos de dígitos com letras (ex.: PED-20261028-N123).`);
+  }
   return t;
 }
 
@@ -281,8 +293,9 @@ interface PendenteCliente {
   unidade: string;
   dados: DadosDoCliente;
   avisar: boolean;
-  /** o final da chave que a prévia mostrou: se a chave da conta mudou, o confirmar recusa */
+  /** o final da chave que a prévia mostrou (só para exibir) e a impressão da chave inteira (é ela que o confirmar compara) */
   chaveTermina: string;
+  chaveImpressao: string;
   criadoEm: number;
 }
 
@@ -299,6 +312,7 @@ interface PendenteCobranca {
   descricao: string;
   externalReference?: string;
   chaveTermina: string;
+  chaveImpressao: string;
   criadoEm: number;
 }
 
@@ -435,10 +449,13 @@ function contaDeEscrita(ctx: ContextoAsaas, esc: EstadoEscritaAsaas, unidade: un
   return c as ContaAsaas & { escrita: EscritaAsaas };
 }
 
-/** A chave da conta pode ter sido trocada no painel entre a prévia e o ok: o resumo que a pessoa aprovou era de OUTRA conta. */
-function conferirChave(c: { slug: string; escrita: EscritaAsaas }, aprovada: string): void {
-  if (c.escrita.chaveFinal !== aprovada) {
-    throw new ErroDeEntrada(`a chave do Asaas de ${c.slug} mudou desde a prévia (aprovada ${aprovada}, agora ${c.escrita.chaveFinal}): nada foi gravado; prepare de novo e confira a conta.`);
+/**
+ * A chave da conta pode ter sido trocada no painel entre a prévia e o ok: o resumo que a pessoa aprovou era de OUTRA conta.
+ * Compara a impressão (sha256) da chave INTEIRA, não o final de 4 caracteres, que duas chaves podem ter igual. O final só aparece na mensagem.
+ */
+function conferirChave(c: { slug: string; escrita: EscritaAsaas }, p: { chaveTermina: string; chaveImpressao: string }): void {
+  if (c.escrita.chaveImpressao !== p.chaveImpressao) {
+    throw new ErroDeEntrada(`a chave do Asaas de ${c.slug} mudou desde a prévia (final aprovado ${p.chaveTermina}, agora ${c.escrita.chaveFinal}; pode mudar mesmo com o final igual): nada foi gravado; prepare de novo e confira a conta.`);
   }
 }
 
@@ -534,7 +551,7 @@ export async function prepararCliente(
       instrucao: `Já cadastrado: NÃO criei outro. Use o id ${existentes.map((x) => x.id).join(' ou ')} em asaas_preparar_cobranca (clienteId). Nada a confirmar.`,
     };
   }
-  const { codigo, expiraEm } = esc.pendentes.guardar({ tipo: 'cliente', usuario, unidade: c.slug, dados, avisar, chaveTermina: c.escrita.chaveFinal });
+  const { codigo, expiraEm } = esc.pendentes.guardar({ tipo: 'cliente', usuario, unidade: c.slug, dados, avisar, chaveTermina: c.escrita.chaveFinal, chaveImpressao: c.escrita.chaveImpressao });
   return {
     conta: cabecalho,
     acao: 'CADASTRAR CLIENTE',
@@ -577,7 +594,7 @@ export function confirmarCliente({ asaas, esc }: CtxEscrita, usuario: string, a:
   return enfileirar(esc, async () => {
     const p = esc.pendentes.tirar(a.confirmacao, usuario, 'cliente');
     const c = contaDeEscrita(asaas, esc, p.unidade);
-    conferirChave(c, p.chaveTermina);
+    conferirChave(c, p);
     // de novo, agora: se alguém cadastrou nesse meio tempo, não cria outro
     const existentes = await clientesPorDoc(c, p.dados.cpfCnpj);
     const base = { conta: c.slug, documento: mascararDoc(p.dados.cpfCnpj), pediuPor: p.usuario, confirmadoPor: usuario };
@@ -695,6 +712,7 @@ export async function prepararCobranca({ asaas, esc }: CtxEscrita, usuario: stri
     vencimento,
     descricao,
     chaveTermina: c.escrita.chaveFinal,
+    chaveImpressao: c.escrita.chaveImpressao,
     ...(externalReference ? { externalReference } : {}),
   });
   return {
@@ -727,7 +745,7 @@ export function confirmarCobranca({ asaas, esc }: CtxEscrita, usuario: string, a
   return enfileirar(esc, async () => {
     const p = esc.pendentes.tirar(a.confirmacao, usuario, 'cobranca');
     const c = contaDeEscrita(asaas, esc, p.unidade);
-    conferirChave(c, p.chaveTermina);
+    conferirChave(c, p);
     // as travas valem de novo, agora: o teto pode ter mudado e o dia virado desde a prévia
     valorValido(p.valor, esc.tetoReais());
     vencimentoValido(p.vencimento, esc.agora());
@@ -740,7 +758,7 @@ export function confirmarCobranca({ asaas, esc }: CtxEscrita, usuario: string, a
     const chave = chaveDeDuplicata(c.slug, alvo.tipo === 'existente' ? alvo.cliente.id : `novo:${alvo.dados.cpfCnpj}`, p.valor, p.vencimento, p.descricao, p.externalReference);
     const barrado = await freio(esc, c.slug, chave);
     if (barrado) throw new ErroDeEntrada(`não gerei: ${barrado}`);
-    const base = { conta: c.slug, valor: p.valor, vencimento: p.vencimento, externalReference: p.externalReference ?? null, pediuPor: p.usuario, confirmadoPor: usuario };
+    const base = { conta: c.slug, valor: p.valor, vencimento: p.vencimento, externalReference: p.externalReference ? mascararDigitosSeguidos(p.externalReference, MIN_DIGITOS_REFERENCIA, MARCA_DOCUMENTO) : null, pediuPor: p.usuario, confirmadoPor: usuario };
 
     let clienteId: string;
     let clienteCriado = false;
@@ -848,7 +866,7 @@ function mascararPedido(a: Record<string, any>): Record<string, unknown> {
   const { cpfCnpj, email, telefone, endereco, novoCliente, descricao, nome, externalReference, ...resto } = a;
   return {
     ...resto,
-    ...(externalReference !== undefined ? { externalReference: semDocumento(String(externalReference)) } : {}),
+    ...(externalReference !== undefined ? { externalReference: mascararDigitosSeguidos(String(externalReference), MIN_DIGITOS_REFERENCIA, MARCA_DOCUMENTO) } : {}),
     ...(nome !== undefined ? { nome: abreviarNome(String(nome)) } : {}),
     ...(cpfCnpj ? { cpfCnpj: mascararDoc(String(cpfCnpj)) } : {}),
     ...(email ? { email: mascararEmail(String(email)) } : {}),

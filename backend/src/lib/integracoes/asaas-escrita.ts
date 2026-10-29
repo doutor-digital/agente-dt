@@ -6,7 +6,7 @@
  * POST não é repetido sozinho: timeout ou 5xx pode ter criado a cobrança, e repetir cobraria o paciente duas
  * vezes. Só o 429 (o Asaas nem processou) volta a tentar.
  */
-import { mascararPii } from '../pii.js';
+import { mascararDigitosSeguidos, mascararPii } from '../pii.js';
 import { ASAAS_API, ErroAsaas, ritmoDaConta } from './asaas.js';
 
 const AGENTE = 'DoutorDigital-Conector/1.0';
@@ -16,9 +16,13 @@ export const CAMINHOS_DE_ESCRITA = ['/customers', '/payments'] as const;
 type Fetcher = typeof fetch;
 const dormir = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** Ids do Asaas (cus_, pay_, sub_ assinatura, ins_ parcelamento) e o nossoNumero do boleto: o diagnóstico precisa deles legíveis. */
+const PROTEGIDOS = [/\b(?:cus|pay|sub|ins)_[A-Za-z0-9]+/g, /\bnossoNumero["':=\s]{1,4}\d{1,10}(?!\d)/g];
+
 /**
- * Tira da mensagem o que nunca pode sair: a chave do Asaas, CPF/CNPJ (11 e 14 dígitos), e-mail e — pelo `lib/pii.ts` — telefone
- * (10 a 13 dígitos, com ou sem DDI/máscara) e cartão. Ids do Asaas (cus_…, pay_…) ficam intactos.
+ * Tira da mensagem o que nunca pode sair: a chave do Asaas, CPF/CNPJ e qualquer corrida de 11+ dígitos seguidos (a regra de
+ * `lib/pii.ts`, com ou sem espaço, ponto, hífen ou barra), e-mail e — também pelo `lib/pii.ts`, só com DDD — telefone e cartão.
+ * Ficam intactos: ids do Asaas (cus_…, pay_…, sub_…, ins_…), nossoNumero e números curtos (PED-20261028, datas, valores).
  */
 export function limparTexto(texto: string, chave?: string, soSegredos = false): string {
   let t = texto;
@@ -26,13 +30,10 @@ export function limparTexto(texto: string, chave?: string, soSegredos = false): 
   t = t.replace(/\$?aact_[A-Za-z0-9_\-:.=]+/g, '[chave]');
   // nossas próprias recusas (soSegredos) só citam documento mascarado, e o texto do pedido precisa aparecer inteiro
   if (soSegredos) return t;
-  const ids: string[] = [];
-  t = t.replace(/\b(?:cus|pay)_[A-Za-z0-9]+/g, (m) => `\u0001${ids.push(m) - 1}\u0001`);
-  t = t
-    .replace(/(?<![\w.\/-])\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}(?!\w)/g, '[documento]')
-    .replace(/(?<![\w.\/-])\d{3}\.?\d{3}\.?\d{3}-?\d{2}(?!\w)/g, '[documento]')
-    .replace(/[^\s@"',;]+@[^\s@"',;]+\.[^\s@"',;]+/g, '[e-mail]');
-  return mascararPii(t).replace(/\u0001(\d+)\u0001/g, (_, i: string) => ids[Number(i)] ?? '');
+  const guardados: string[] = [];
+  for (const r of PROTEGIDOS) t = t.replace(r, (m) => `\u0001${guardados.push(m) - 1}\u0001`);
+  t = mascararDigitosSeguidos(t, 11, '[documento]').replace(/[^\s@"',;]+@[^\s@"',;]+\.[^\s@"',;]+/g, '[e-mail]');
+  return mascararPii(t, { exigirDdd: true }).replace(/\u0001(\d+)\u0001/g, (_, i: string) => guardados[Number(i)] ?? '');
 }
 
 /** POST no Asaas em `/customers` ou `/payments`. A chave só vai no cabeçalho e nunca volta em erro. */

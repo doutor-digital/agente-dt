@@ -5,11 +5,15 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { criarContextoAsaas, type ContaAsaas } from './asaas.js';
+import { finalDaChave, impressaoDaChave } from '../lib/integracoes/cofre.js';
+import { limparTexto } from '../lib/integracoes/asaas-escrita.js';
 import {
   chaveDeDuplicata, confirmarCliente, confirmarCobranca, criarEscritaAsaas, EVENTO_COBRANCA, EVENTO_CLIENTE, mascararDoc, prepararCliente, prepararCobranca,
   registrarEscritaAsaas, registrarEscritaAsaasSePermitido, mascararTelefone, tetoDaCobranca, cobrancasPorHora, unidadesComEscrita, validarCpfCnpj, type PedidoDeCobranca, type RegistroDeCobranca,
 } from './asaas-escrita.js';
 
+const CHAVE_A = '$aact_prod_AAAAAAAAAAAAAAAAAAAAAAAAAAAAxYZ1';
+const CHAVE_B = '$aact_prod_BBBBBBBBBBBBBBBBBBBBBBBBBBBBxYZ1'; // mesmo final, outra chave
 const CPF = '529.982.247-25';
 const CPF_DIGITOS = '52998224725';
 const CNPJ = '11.222.333/0001-81';
@@ -77,6 +81,7 @@ function asaasFalso(o: Opc = {}) {
       : {
           escrita: {
             chaveFinal: '…xYZ1',
+            chaveImpressao: impressaoDaChave(CHAVE_A),
             contaSalva: 'Serra (nome salvo)',
             async post<T>(caminho: string, corpo: Record<string, unknown>): Promise<T> {
               posts.push([caminho, corpo]);
@@ -731,16 +736,16 @@ test('cadastro do cliente: 2xx sem id é "pode ter sido feito", nunca "cliente (
   await assert.rejects(() => confirmarCliente(c.ctx, 'u1', { confirmacao: String(pc.confirmacao) }, c.registrar), /PODE ter sido feito/);
 });
 
-test('clienteId colado com espaços é aceito; só espaços conta como não informado; externalReference de pedido (10 dígitos) aparece inteira na recusa', async () => {
-  const m = montar({ clientes: [EXISTENTE], pagamentos: [{ id: 'pay_5550000000001', externalReference: '2026102812' }] });
+test('clienteId colado com espaços é aceito; só espaços conta como não informado; externalReference de pedido (com letras) aparece inteira na recusa', async () => {
+  const m = montar({ clientes: [EXISTENTE], pagamentos: [{ id: 'pay_5550000000001', externalReference: 'PED-20261028' }] });
   const p = await prepararCobranca(m.ctx, 'u1', { ...COBRANCA, cpfCnpj: undefined, clienteId: '  cus_000005401844 ' });
   assert.ok(p.confirmacao);
   const q = await prepararCobranca(m.ctx, 'u1', { ...COBRANCA, clienteId: '   ', externalReference: 'outra-ref' });
   assert.ok(q.confirmacao);
   const joao = await conectar(m, 'u1', []);
-  const r = await joao.callTool({ name: 'asaas_preparar_cobranca', arguments: { unidade: 'serra', cpfCnpj: CPF, valor: 100, vencimento: VENC, descricao: 'x', externalReference: '2026102812' } });
+  const r = await joao.callTool({ name: 'asaas_preparar_cobranca', arguments: { unidade: 'serra', cpfCnpj: CPF, valor: 100, vencimento: VENC, descricao: 'x', externalReference: 'PED-20261028' } });
   assert.equal(r.isError, true);
-  assert.match(texto(r), /"2026102812" já está na cobrança pay_5550000000001/);
+  assert.match(texto(r), /"PED-20261028" já está na cobrança pay_5550000000001/);
 });
 
 // ------------------------------------------------------------------ rodada do sênior (PR #159)
@@ -808,10 +813,12 @@ test('5) a chave da conta mudou entre a prévia e o ok: o confirmar recusa (clie
   const p = await prepararCobranca(a.ctx, 'u1', COBRANCA);
   assert.equal(p.conta.chaveTermina, '…xYZ1');
   a.f.conta.escrita!.chaveFinal = '…OUTR';
+  a.f.conta.escrita!.chaveImpressao = impressaoDaChave('$aact_prod_OUTRA…OUTR');
   await assert.rejects(() => confirmarCobranca(a.ctx, 'u1', { confirmacao: String(p.confirmacao) }, a.registrar), /chave do Asaas de doutor-hernia-serra mudou desde a prévia.*…xYZ1.*…OUTR/);
   assert.equal(a.f.posts.length, 0);
   // com a chave de volta ao que foi aprovado, um preparar novo funciona
   a.f.conta.escrita!.chaveFinal = '…xYZ1';
+  a.f.conta.escrita!.chaveImpressao = impressaoDaChave(CHAVE_A);
   const p2 = await prepararCobranca(a.ctx, 'u1', COBRANCA);
   await confirmarCobranca(a.ctx, 'u1', { confirmacao: String(p2.confirmacao) }, a.registrar);
   assert.equal(a.f.posts.length, 1);
@@ -819,6 +826,7 @@ test('5) a chave da conta mudou entre a prévia e o ok: o confirmar recusa (clie
   const b = montar();
   const pc = await prepararCliente(b.ctx, 'u1', { unidade: 'serra', nome: 'Maria da Silva', cpfCnpj: CPF });
   b.f.conta.escrita!.chaveFinal = '…OUTR';
+  b.f.conta.escrita!.chaveImpressao = impressaoDaChave('$aact_prod_OUTRA…OUTR');
   await assert.rejects(() => confirmarCliente(b.ctx, 'u1', { confirmacao: String(pc.confirmacao) }, b.registrar), /chave do Asaas .* mudou/);
   assert.equal(b.f.posts.length, 0);
 });
@@ -826,10 +834,10 @@ test('5) a chave da conta mudou entre a prévia e o ok: o confirmar recusa (clie
 test('7) CPF/CNPJ em externalReference e descrição é recusado, e não chega inteiro ao registro; telefone sai dos erros', async () => {
   const m = montar({ clientes: [EXISTENTE] });
   for (const ref of ['52998224725', '529.982.247-25', '11222333000181', '11.222.333/0001-81', 'pedido-52998224725']) {
-    await assert.rejects(() => prepararCobranca(m.ctx, 'u1', { ...COBRANCA, externalReference: ref }), /externalReference com cara de CPF\/CNPJ/, ref);
+    await assert.rejects(() => prepararCobranca(m.ctx, 'u1', { ...COBRANCA, externalReference: ref }), /externalReference recusada: tem 10 ou mais dígitos seguidos/, ref);
   }
   for (const d of ['Consulta do CPF 529.982.247-25', 'doc 52998224725', 'cnpj 11222333000181']) {
-    await assert.rejects(() => prepararCobranca(m.ctx, 'u1', { ...COBRANCA, descricao: d }), /descrição com CPF\/CNPJ/, d);
+    await assert.rejects(() => prepararCobranca(m.ctx, 'u1', { ...COBRANCA, descricao: d }), /descrição recusada: tem 11 ou mais dígitos seguidos/, d);
   }
   assert.ok((await prepararCobranca(m.ctx, 'u1', { ...COBRANCA, externalReference: 'pedido-1042', descricao: 'Consulta 2026-11-10 pedido 1042' })).confirmacao);
   // pelo protocolo, o registro da tentativa recusada mascara a referência
@@ -937,4 +945,87 @@ test('8b) producao.ts liga a escrita do Asaas SÓ pelo portão testado, passando
   // ninguém chama o registrador cru, que não confere quem pode escrever
   assert.equal(src.match(/\bregistrarEscritaAsaas\(/g), null);
   assert.doesNotMatch(src, /import \{[^}]*\bregistrarEscritaAsaas\b[^}]*\} from '\.\/asaas-escrita\.js'/);
+});
+
+// ------------------------------------------------------------------ 4ª rodada do sênior (PR #159)
+
+test('10) duas chaves com o MESMO final de 4 caracteres: o confirmar recusa (compara a chave inteira), cliente e boleto, sem gravar', () => {
+  assert.equal(finalDaChave(CHAVE_A), finalDaChave(CHAVE_B), 'pré-condição: mesmo final');
+  assert.notEqual(impressaoDaChave(CHAVE_A), impressaoDaChave(CHAVE_B));
+  assert.ok(!impressaoDaChave(CHAVE_A).includes('AAAA'));
+  return (async () => {
+    const a = montar({ clientes: [EXISTENTE] });
+    const p = await prepararCobranca(a.ctx, 'u1', COBRANCA);
+    a.f.conta.escrita!.chaveImpressao = impressaoDaChave(CHAVE_B); // final continua '…xYZ1'
+    await assert.rejects(() => confirmarCobranca(a.ctx, 'u1', { confirmacao: String(p.confirmacao) }, a.registrar), /chave do Asaas de doutor-hernia-serra mudou desde a prévia/);
+    assert.equal(a.f.posts.length, 0);
+    const b = montar();
+    const pc = await prepararCliente(b.ctx, 'u1', { unidade: 'serra', nome: 'Maria da Silva', cpfCnpj: CPF });
+    b.f.conta.escrita!.chaveImpressao = impressaoDaChave(CHAVE_B);
+    await assert.rejects(() => confirmarCliente(b.ctx, 'u1', { confirmacao: String(pc.confirmacao) }, b.registrar), /chave do Asaas .* mudou/);
+    assert.equal(b.f.posts.length, 0);
+    // a impressão nunca aparece: nem na prévia, nem na auditoria, nem nos eventos
+    const reg: any[] = [];
+    const c = montar({ clientes: [EXISTENTE] });
+    const cli = await conectar(c, 'u1', reg);
+    const prev = texto(await cli.callTool({ name: 'asaas_preparar_cobranca', arguments: { unidade: 'serra', cpfCnpj: CPF, valor: 100, vencimento: VENC, descricao: 'x', externalReference: 'r10' } }));
+    await cli.callTool({ name: 'asaas_confirmar_cobranca', arguments: { confirmacao: JSON.parse(prev).confirmacao } });
+    const saiu = prev + tudo(reg) + tudo(c.eventos);
+    assert.ok(!saiu.includes(impressaoDaChave(CHAVE_A)) && !saiu.includes('AAAAAAAA'));
+  })();
+});
+
+test('11) CPF/CNPJ com espaço, hífen, barra ou ponto em externalReference e descrição: recusado, nunca gravado, mensagem sem o valor', async () => {
+  const formatos = ['529 982 247 25', '529-982-247-25', '529.982.247/25', '11 222 333 0001 81', '529982247 25', '5 2 9 9 8 2 2 4 7 2 5', 'ref 529 - 982 - 247 - 25'];
+  const m = montar({ clientes: [EXISTENTE] });
+  const registros: any[] = [];
+  const cli = await conectar(m, 'u1', registros);
+  for (const f of formatos) {
+    const e = await prepararCobranca(m.ctx, 'u1', { ...COBRANCA, externalReference: f }).then(() => null, (x: Error) => x);
+    assert.match(e?.message ?? 'ACEITA', /externalReference recusada: tem 10 ou mais dígitos seguidos/, f);
+    assert.ok(!e!.message.includes(f) && !/529|982|247/.test(e!.message), 'a mensagem não repete o valor');
+    const d = await prepararCobranca(m.ctx, 'u1', { ...COBRANCA, descricao: `CPF ${f}`, externalReference: `ok-${f.length}` }).then(() => null, (x: Error) => x);
+    assert.match(d?.message ?? 'ACEITA', /descrição recusada: tem 11 ou mais dígitos seguidos/, f);
+    assert.ok(!/529|982|247/.test(d!.message));
+    const r = await cli.callTool({ name: 'asaas_preparar_cobranca', arguments: { unidade: 'serra', cpfCnpj: CPF, valor: 100, vencimento: VENC, descricao: 'x', externalReference: f } });
+    assert.equal(r.isError, true, f);
+  }
+  const aud = tudo(registros) + tudo(m.eventos);
+  for (const f of formatos) assert.ok(!aud.includes(f), `gravado em claro: ${f}`);
+  assert.ok(!/52998224725|529982247|11222333000181/.test(aud.replace(/\D/g, '')), 'nem como dígitos soltos');
+  assert.equal(m.f.posts.length, 0);
+});
+
+test('12) falsos positivos e telefone fixo: decisão documentada — referência com 10+ dígitos seguidos é recusada (inclusive telefone fixo e aaaammddNNN); com letras entre os blocos passa', async () => {
+  const m = montar({ clientes: [EXISTENTE] });
+  // telefone fixo (10 dígitos) e celular (11) na externalReference: antes o fixo passava inteiro para a auditoria
+  for (const ref of ['6333214455', '(63) 3321-4455', '63 3321 4455', '63981411248', '20261028123', '5563981411248']) {
+    await assert.rejects(() => prepararCobranca(m.ctx, 'u1', { ...COBRANCA, externalReference: ref }), /externalReference recusada/, ref);
+  }
+  // 9 dígitos, número de pedido com letras, data e valor passam
+  for (const ref of ['123456789', 'PED-20261028', 'PED-20261028-N123', 'pedido-1042', '2026-10-28', 'A20261028B123']) {
+    assert.ok((await prepararCobranca(m.ctx, 'u1', { ...COBRANCA, externalReference: ref })).confirmacao, ref);
+  }
+  // descrição: 10 dígitos (fixo) passa, vai só para o boleto e a auditoria guarda o tamanho; 11+ recusa
+  assert.ok((await prepararCobranca(m.ctx, 'u1', { ...COBRANCA, descricao: 'Retorno em 28/10/2026 valor R$ 250,00 contato 6333214455', externalReference: 'd1' })).confirmacao);
+  await assert.rejects(() => prepararCobranca(m.ctx, 'u1', { ...COBRANCA, descricao: 'contato 63981411248', externalReference: 'd2' }), /descrição recusada/);
+});
+
+test('13) limparTexto: ids sub_/ins_, nossoNumero e PED-20261028 saem intactos; CPF com espaço/hífen/barra e telefone com DDD saem', () => {
+  const t = limparTexto('sub_00001234567 ins_000012345678 cus_000005401844 nossoNumero 12345678 nossoNumero":"4821993456 ref PED-20261028 venceu 2026-11-10 R$ 250,00');
+  assert.equal(t, 'sub_00001234567 ins_000012345678 cus_000005401844 nossoNumero 12345678 nossoNumero":"4821993456 ref PED-20261028 venceu 2026-11-10 R$ 250,00');
+  const u = limparTexto('doc 529 982 247 25 e 529-982-247-25 e 529.982.247/25 e 11 222 333 0001 81 e (63) 3321-4455 e 63 98141-1248');
+  for (const p of ['529', '982', '247', '11 222', '3321-4455', '98141-1248']) assert.ok(!u.includes(p), p);
+});
+
+test('14) defesa em profundidade: mesmo se uma referência com documento chegasse ao confirmar (pendente forjado), a auditoria sai mascarada', async () => {
+  const m = montar({ clientes: [EXISTENTE] });
+  const { codigo } = m.esc.pendentes.guardar({
+    tipo: 'cobranca', usuario: 'u1', unidade: 'doutor-hernia-serra', clienteId: EXISTENTE.id, avisar: false, valor: 100, vencimento: VENC,
+    descricao: 'x', externalReference: '529 982 247 25', chaveTermina: '…xYZ1', chaveImpressao: impressaoDaChave(CHAVE_A),
+  });
+  await confirmarCobranca(m.ctx, 'u1', { confirmacao: codigo }, m.registrar);
+  const aud = tudo(m.eventos);
+  assert.ok(!aud.includes('529 982 247 25') && !/529|982|247/.test(aud), aud);
+  assert.match(aud, /\[documento\]/);
 });
