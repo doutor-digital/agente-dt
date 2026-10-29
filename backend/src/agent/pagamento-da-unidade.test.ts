@@ -17,7 +17,7 @@ import {
   precosDaConsulta,
   renderFatosDaUnidade,
 } from './prompt-composer.js';
-import { PAGAMENTO_NO_DIA, REGRA_SEM_ANTECIPADO, unidadeSemAntecipado } from './pagamento-da-unidade.js';
+import { PAGAMENTO_NO_DIA, REGRA_SEM_ANTECIPADO, intencaoDoDegrauParaAUnidade, unidadeSemAntecipado } from './pagamento-da-unidade.js';
 import { regraDePagamento } from './follow-up.js';
 import { orientacaoDePagamento, porQueNaoReservar } from './agenda-tools.js';
 import { aplicarGuardrail } from './guardrail.js';
@@ -176,7 +176,12 @@ test('orientação pós-agendamento: qualquer forma numa unidade sem antecipado 
     assert.ok(t.includes(PAGAMENTO_NO_DIA), forma);
     assert.doesNotMatch(t, /antecipad|12\.345\.678|ESCOLHEU PIX/i, forma);
   }
-  assert.equal(orientacaoDePagamento(undefined, u), '', 'remarcação (sem forma) não ganha texto');
+  // remarcação (sem forma): a unidade sem antecipado ainda recebe o lembrete de que se paga no dia; as demais seguem sem texto
+  assert.ok(orientacaoDePagamento(undefined, u).includes(PAGAMENTO_NO_DIA));
+  assert.equal(orientacaoDePagamento(undefined, unidade({ sourceProdutos: FONTES_COM })), '');
+  // a decisão de quem chama vale sobre a leitura da unidade (o handler decide uma vez por turno)
+  assert.ok(orientacaoDePagamento('na_clinica', unidade(), true).includes(PAGAMENTO_NO_DIA));
+  assert.match(orientacaoDePagamento('na_clinica', SEM(), false), /NÃO mencione Pix nem valor antecipado daqui em diante/);
 });
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -276,11 +281,39 @@ test('régua: o degrau que fala de antecipado/Pix e NÃO é soPix só é seguro 
   assert.match(regraDePagamento(SEM()), /Pix, de pagar antes ou de desconto, ignore essa parte/);
 });
 
+test('régua: o degrau que oferece o antecipado perde essa frase na unidade sem antecipado; nas demais o texto é o mesmo', () => {
+  const caro = DEGRAUS.find((x) => x.motivo === 'Achou caro')!.d.intencao;
+  assert.match(caro, /antecipado de R\$ 150/);
+  const sem = intencaoDoDegrauParaAUnidade(caro, SEM());
+  assert.doesNotMatch(sem, /antecipad|R\$ 150|pix/i);
+  assert.match(sem, /NÃO dê desconto/, 'a proibição fica');
+  assert.match(sem, /Deixe ele fazer a conta\./);
+  // frase de proibição que cita Pix também fica; frase que oferece sai
+  assert.equal(
+    intencaoDoDegrauParaAUnidade('NÃO fale em Pix. Ofereça o Pix antecipado. Pergunte como ele está.', SEM()),
+    'NÃO fale em Pix. Pergunte como ele está.',
+  );
+  // as demais unidades (e Boa Vista): idêntico, byte a byte, em todos os degraus
+  for (const { d } of DEGRAUS) {
+    assert.equal(intencaoDoDegrauParaAUnidade(d.intencao, unidade()), d.intencao);
+    assert.equal(intencaoDoDegrauParaAUnidade(d.intencao, unidade({ acceptsAdvancePayment: false, spineBookingRequiresPayment: true })), d.intencao);
+  }
+});
+
 test('retry de "reservado sem marcar": a instrução da unidade sem antecipado não manda checar como o paciente vai pagar', () => {
   const sem = instrucaoReservaSemMarcar(true);
   assert.doesNotMatch(sem, /chave Pix|como vai pagar|antecipad/i);
   assert.match(sem, /chame agendar_consulta AGORA/);
   assert.match(sem, /nunca sobre pagamento/);
   assert.equal(instrucaoReservaSemMarcar(false), INSTRUCAO_RESERVA_SEM_MARCAR, 'as demais: a instrução de hoje');
+  // o texto de hoje, byte a byte (a constante agora é montada de pedaços compartilhados com a da unidade sem antecipado)
+  assert.equal(
+    INSTRUCAO_RESERVA_SEM_MARCAR,
+    '[instrução interna, não é fala do paciente] Sua resposta acima diz que o horário está reservado ou marcado, ' +
+      'mas NENHUMA consulta foi marcada no sistema da clínica — nada fica guardado, e outro paciente pode pegar esse horário. ' +
+      'Se o paciente JÁ escolheu o dia e a hora (ou mandou o comprovante depois da chave Pix) e já disse como vai pagar, ' +
+      'chame agendar_consulta AGORA. Se falta alguma dessas respostas, reescreva a mensagem SEM dizer que está reservado, ' +
+      'marcado, guardado ou garantido, e pergunte só o que falta. Responda só com a mensagem final ou com a chamada da ferramenta.',
+  );
   assert.match(INSTRUCAO_RESERVA_SEM_MARCAR, /depois da chave Pix\) e já disse como vai pagar/);
 });

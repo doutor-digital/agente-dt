@@ -18,7 +18,7 @@ import { agendamentoDoVinculo, reservaAfirmada } from './reserva-sem-marcar.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
 import { horariosOferecidos } from './horario-oferecido.js';
 import { agoraLocalISO } from './consulta-que-passou.js';
-import { REGRA_SEM_ANTECIPADO, unidadeSemAntecipado } from './pagamento-da-unidade.js';
+import { REGRA_SEM_ANTECIPADO, intencaoDoDegrauParaAUnidade, unidadeSemAntecipado } from './pagamento-da-unidade.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { nomeApresentavel, semNomeDoPerfil } from '../lib/nome-apresentavel.js';
 
@@ -169,7 +169,7 @@ VOCÊ ESTÁ RETOMANDO UMA CONVERSA QUE PAROU. O paciente não respondeu sua últ
 mensagem. Escreva UMA mensagem curta de reengajamento.
 
 O QUE ESTA MENSAGEM PRECISA FAZER:
-${args.intencao}
+${intencaoDoDegrauParaAUnidade(args.intencao, unit)}
 
 REGRAS:
 - UMA mensagem só, curta. Duas ou três linhas no máximo.

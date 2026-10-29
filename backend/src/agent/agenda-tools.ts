@@ -1241,19 +1241,15 @@ export function porQueNaoReservar(args: {
   if (faltaPagamento) {
     pendencias.push('perguntar como ele prefere pagar: Pix antecipado (valor antecipado) ou na clínica no dia');
   }
-  const lista = pendencias.map((p, i) => `${i + 1}) ${p}`).join('; ');
-  if (args.semAntecipado) {
-    // Sem a pergunta de pagamento (unidade que só recebe na clínica), sem botões e sem `formaPagamento`.
-    return (
-      `Consulta NÃO marcada ainda. Antes de reservar falta: ${lista}. ` +
-      'Pergunte isso em UMA mensagem curta e chame agendar_consulta de novo com diaConfirmado=true. ' +
-      'NÃO pergunte nada sobre pagamento: nesta clínica a consulta é paga no dia.'
-    );
-  }
+  // Unidade que só recebe na clínica: sem `formaPagamento`, sem botões e sem pergunta de pagamento.
+  const fecho = args.semAntecipado
+    ? ' NÃO pergunte nada sobre pagamento: nesta clínica a consulta é paga no dia.'
+    : ' Se a pergunta for só a forma de pagamento, termine a mensagem com a linha [[botoes: Pix antecipado | Na clínica]].';
   return (
-    `Consulta NÃO marcada ainda. Antes de reservar falta: ${lista}. ` +
-    'Pergunte isso em UMA mensagem curta e chame agendar_consulta de novo com diaConfirmado=true e formaPagamento preenchido. ' +
-    'Se a pergunta for só a forma de pagamento, termine a mensagem com a linha [[botoes: Pix antecipado | Na clínica]].'
+    `Consulta NÃO marcada ainda. Antes de reservar falta: ${pendencias.map((p, i) => `${i + 1}) ${p}`).join('; ')}. ` +
+    'Pergunte isso em UMA mensagem curta e chame agendar_consulta de novo com diaConfirmado=true' +
+    (args.semAntecipado ? '.' : ' e formaPagamento preenchido.') +
+    fecho
   );
 }
 
@@ -1275,9 +1271,11 @@ export function porQueNaoReservar(args: {
 export function orientacaoDePagamento(
   forma: string | undefined,
   unit?: Pick<Unit, 'pixKey' | 'pixHolder' | 'sourceProdutos' | 'systemPrompt'> & FlagsDePagamento,
+  /** A decisão de quem chama (o handler decide uma vez por turno, com a mesma unidade da porta); padrão: lê a unidade. */
+  semAntecipado: boolean = unidadeSemAntecipado(unit),
 ): string {
-  // Unidade que só recebe no dia: qualquer forma que chegue aqui vira "paga na clínica". Nunca chave, nunca valor antecipado.
-  if (forma !== undefined && unidadeSemAntecipado(unit)) {
+  // Unidade que só recebe no dia: qualquer forma (ou nenhuma, na remarcação) vira "paga na clínica". Nunca chave, nunca valor antecipado.
+  if (semAntecipado) {
     return (
       ` ${PAGAMENTO_NO_DIA} NÃO mencione Pix para reservar, chave Pix, pagar antes da consulta nem desconto. ` +
       'Na confirmação, o pagamento é só "no dia, na clínica".'
@@ -1793,7 +1791,7 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
 
       return `Consulta marcada para ${dataPorExtenso(args.data)} às ${args.hora}.${
         especialista ? ` Atendimento com ${especialista}.` : ''
-      } Confirme ao paciente com EXATAMENTE este dia da semana e data.${orientacaoDePagamento(args.formaPagamento, fresca)}`;
+      } Confirme ao paciente com EXATAMENTE este dia da semana e data.${orientacaoDePagamento(args.formaPagamento, fresca, semAntecipado)}`;
     },
   });
 }
