@@ -37,6 +37,8 @@ import { conveniaGet } from '../lib/integracoes/convenia.js';
 import { criarContextoTiquetaque, registrarFerramentasTiquetaque, type ContaTiquetaque } from './tiquetaque.js';
 import { tiquetaqueGet } from '../lib/integracoes/tiquetaque.js';
 import { contasComChave } from '../lib/integracoes/chaves.js';
+import { lerConfigSistemas, sistemasChamar } from '../lib/integracoes/sistemas.js';
+import { criarContextoSistemas, PendentesSistemas, registrarEscritaSistemas, registrarLeituraSistemas, type ContaSistemas } from './sistemas.js';
 import { contaEvolutionDoAmbiente, criarContextoEvolution, EVENTO_DE_ENVIO, registrarFerramentasEvolution } from './evolution.js';
 import { blingGet } from '../lib/bling/cliente.js';
 import type { Usuario } from './provedor.js';
@@ -199,6 +201,24 @@ async function contasTiquetaqueDoBanco(): Promise<Map<string, ContaTiquetaque>> 
     contas.set(c.slug, { slug: c.slug, nome: c.nome, fonte: { get: (caminho, query) => tiquetaqueGet(c.unitId, c.chave, caminho, query ?? {}) } });
   }
   logger.info({ contas: contas.size }, 'mcp-remoto: contas do Tiquetaque carregadas');
+  return contas;
+}
+
+/**
+ * Sistema novo de RH/Caixa/Financeiro (servidor próprio) com a URL e a chave de administração no painel de integrações. A chave
+ * fica só em memória, decifrada aqui; configuração ilegível vira aviso no log (sem o conteúdo) e a conta fica de fora.
+ */
+async function contasSistemasDoBanco(): Promise<Map<string, ContaSistemas>> {
+  const contas = new Map<string, ContaSistemas>();
+  for (const c of await contasComChave('sistemas')) {
+    try {
+      const cfg = lerConfigSistemas(c.chave);
+      contas.set(c.slug, { slug: c.slug, nome: c.nome, tela: cfg.tela, fonte: { chamar: (metodo, caminho, o) => sistemasChamar(cfg, metodo, caminho, o) } });
+    } catch (err) {
+      logger.warn({ slug: c.slug, motivo: err instanceof Error ? err.message : 'inválida' }, 'mcp-remoto: configuração do sistema novo ilegível; cadastre de novo no painel');
+    }
+  }
+  logger.info({ contas: contas.size }, 'mcp-remoto: contas do sistema novo (RH/Caixa) carregadas');
   return contas;
 }
 
@@ -414,6 +434,9 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   });
   let leitoresWhatsapp = new Set<string>();
   if (whatsapp.conta) manterAtualizado(leitoresDoWhatsapp, (s) => (leitoresWhatsapp = s), 'quem vê o WhatsApp');
+  const sistemas = criarContextoSistemas();
+  manterAtualizado(contasSistemasDoBanco, (contas) => (sistemas.contas = contas), 'as contas do sistema novo');
+  const pendentesSistemas = new PendentesSistemas();
   const cacheCerebro = new Cache();
   // o contexto da franquia nasce dentro de montarConectorRemoto; as ferramentas extras só rodam depois
   let franquia: Contexto | undefined;
@@ -441,13 +464,17 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
       registrarFerramentasConvenia(server, convenia, auditar);
       registrarFerramentasTiquetaque(server, tiquetaque, auditar);
       registrarMetaEventos(server, () => rastreio, auditar);
+      const quemSistemas = { usuario: quem.userId, nome: quem.email || `usuario:${quem.userId}` };
+      registrarLeituraSistemas(server, sistemas, quemSistemas, auditar);
       if (escritores.has(quem.userId)) {
         registrarEscritaKommo(server, kommo, fonteDeEscrita, pendentes, quem.userId, auditar);
         // Disparo de campanha: preparar e mostrar. Aprovar e retomar NÃO existem aqui (são do João, no painel do console).
         registrarDisparo(server, fonteDeDisparo, `conector:${quem.userId}`, auditar);
+        // Sistema novo (RH/Caixa): alterar dados em dois passos, mudar usuário, criar convite — a mesma lista de quem altera cartões.
+        registrarEscritaSistemas(server, sistemas, pendentesSistemas, quemSistemas, auditar);
       }
       if (leitoresWhatsapp.has(quem.userId)) registrarFerramentasEvolution(server, whatsapp, quem.userId, auditar);
-      registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas, convenia: convenia.contas, tiquetaque: tiquetaque.contas }), auditar);
+      registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas, convenia: convenia.contas, tiquetaque: tiquetaque.contas, sistemas: sistemas.contas }), auditar);
       registrarCerebro(server, slugs, cacheCerebro, auditar);
       if (franquia) {
         const deps: DepsRelatorio = { franquia, kommo, telefonesDosLeads, vinculosDosLeads };
