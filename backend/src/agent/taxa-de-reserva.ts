@@ -450,7 +450,9 @@ export interface TrocaDaTaxa {
     | 'lembrete_da_taxa'
     | 'horario_sem_comprovante'
     /** cartão ilegível: só a afirmação falsa de horário saiu, sem pedir pagamento (`semAAfirmacaoDoHorario`) */
-    | 'afirmacao_retirada';
+    | 'afirmacao_retirada'
+    /** cartão pago ou ilegível e a resposta trazia chave, titular ou valor fora do cadastro: saiu a cortesia, sem dados e sem pedir pagamento (`semODadoErrado`) */
+    | 'dado_errado_retirado';
   /** o resto da resposta do modelo foi mantido e o bloco da chave, acrescentado (false = o recado inteiro tomou o lugar) */
   preservouOResto?: boolean;
   /** o que sobrou da resposta do modelo (só quando `preservouOResto`): quem monta o recado de outra forma (a insistência) o reaproveita */
@@ -463,6 +465,11 @@ export interface TrocaDaTaxa {
 // do cadastro, ela inteira dá lugar ao bloco certo (o que a base 9184331 já fazia). O resto (o endereço etc.) só é preservado
 // quando NADA nela contradiz o cadastro. Na dúvida, o bloco inteiro: errar para esse lado custa uma frase; para o outro, um paciente
 // pagando na conta errada.
+//
+// ALCANCE: a contradição só derruba a resposta DENTRO dos fluxos da trava (o paciente pediu a chave, "a equipe envia", a oferta da
+// chave, o horário dado como garantido, pagar na clínica) — e, quando o cartão está pago ou ilegível, em `semODadoErrado`, que
+// também só roda se a trava disparou. Chave/titular/valor errados mandados SEM nenhum desses gatilhos passam (a trava devolve null):
+// é um item separado, decisão do João, e NÃO está coberto aqui.
 
 const digitos = (v: string) => v.replace(/\D/g, '');
 const EMAIL = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi;
@@ -523,9 +530,14 @@ const QUALQUER_VALOR = new RegExp(String.raw`${VALOR}|\b${REAIS_EM_NUMERO}\s*rea
 const PALAVRA_DA_TAXA = String.raw`(?:taxa|antecipad\w*|sinal)`;
 /** "a taxa é R$ 250", "taxa de agendamento de R$ 250", "antecipado: R$ 250" — o valor COLADO na palavra (só "é/de/:" entre as duas). */
 const VALOR_COLADO_NA_TAXA = new RegExp(
-  String.raw`\b${PALAVRA_DA_TAXA}(?:\s+de\s+(?:agendamento|reserva))?\s*(?:(?:e|eh|sera|seria|fica|custa|:|=|-)\s*)?(?:de\s+)?${VALOR}|${VALOR}\s+de\s+${PALAVRA_DA_TAXA}\b`,
+  String.raw`\b${PALAVRA_DA_TAXA}(?:\s+de\s+(?:agendamento|reserva))?\s*(?:(?:é|eh|será|sera|seria|fica|custa|:|=|-)\s*)?(?:de\s+)?${VALOR}|${VALOR}\s+de\s+${PALAVRA_DA_TAXA}\b`,
   'g',
 );
+/**
+ * O texto SEM tirar os acentos (só minúsculas): o "é" do verbo ("a taxa é R$ 250") não pode ser confundido com o "e" de ligação
+ * ("R$ 100 antecipado e R$ 250 no dia"), que `normalizar` deixa igual. Quem escreve "a taxa e R$ 250" sem acento não é pego aqui.
+ */
+const comAcento = (v: string) => v.normalize('NFC').toLowerCase().replace(/[*_~]/g, '').replace(/\s+/g, ' ').trim();
 const emNumero = (v: string) => Number(v.replace(/\./g, '').replace(',', '.'));
 const mesmoValor = (a: number, b: number) => Math.abs(a - b) < 0.005;
 
@@ -540,7 +552,7 @@ function trazOutroValor(t: string, dados: DadosDaTaxa): boolean {
     const v = emNumero(m[1] ?? m[2] ?? '');
     if (!dados.permitidos.some((p) => mesmoValor(p, v))) return true;
   }
-  for (const m of n.matchAll(VALOR_COLADO_NA_TAXA)) {
+  for (const m of comAcento(t).matchAll(VALOR_COLADO_NA_TAXA)) {
     const v = emNumero(m[1] ?? m[2] ?? '');
     if (!mesmoValor(v, dados.valor)) return true;
   }
@@ -633,6 +645,22 @@ function conservandoOResto(
 
 /** Sobrou nada da resposta além da afirmação falsa de horário: uma cortesia que não promete nada e não pede pagamento. */
 export const RECADO_SEM_AFIRMACAO = 'Certo! Qualquer dúvida sobre o seu horário, é só me chamar por aqui. 🙏';
+
+/** Os motivos em que a resposta JÁ estava entregando (ou oferecendo) a chave Pix: com dado errado, a chave certa toma o lugar, como na base. */
+const MOTIVOS_QUE_ENTREGAM_A_CHAVE: ReadonlySet<TrocaDaTaxa['motivo']> = new Set(['chave_pedida', 'equipe_envia_a_chave', 'chave_oferecida']);
+
+/**
+ * Cartão PAGO ou ILEGÍVEL e a trava disparou (`troca`): se a resposta contradiz o cadastro (chave, titular ou valor), ela NÃO sai como
+ * veio nem editada mantendo o dado errado — um paciente pagando na conta errada custa mais que uma frase. Sem pedir pagamento:
+ *  - a resposta já entregava/oferecia a chave (`MOTIVOS_QUE_ENTREGAM_A_CHAVE`): a chave certa toma o lugar (`troca` inteira, como na base);
+ *  - nos outros fluxos (horário garantido, pagar na clínica, insistência): a cortesia `RECADO_SEM_AFIRMACAO`, sem dado nenhum.
+ * null = a resposta não contradiz o cadastro (quem chamou segue o caminho de antes).
+ */
+export function semODadoErrado(texto: string, dados: DadosDaTaxa, troca: TrocaDaTaxa): TrocaDaTaxa | null {
+  if (!contradizOCadastro(texto, dados)) return null;
+  if (MOTIVOS_QUE_ENTREGAM_A_CHAVE.has(troca.motivo)) return { texto: recadoDaChave(dados), motivo: troca.motivo, preservouOResto: false };
+  return { texto: RECADO_SEM_AFIRMACAO, motivo: 'dado_errado_retirado', preservouOResto: false };
+}
 
 /**
  * Cartão ilegível (não dá para saber se ele já pagou): só a AFIRMAÇÃO falsa de horário sai da resposta ("já deixei tudo registrado

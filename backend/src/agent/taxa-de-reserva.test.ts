@@ -965,3 +965,38 @@ test('review: na insistência sem resto aproveitável o rastro não diz que o re
   assert.equal(r?.preservouOResto, false);
   assert.equal(r?.resto, undefined);
 });
+
+test('5ª rodada, item 3: o "e" de ligação não é o "é" do verbo — "R$ 100 antecipado e R$ 250 no dia" é o cadastro e não troca a resposta; "a taxa é R$ 250" segue pego', () => {
+  const ctx = com({ falasDoPaciente: ['qual o pix?'] });
+  const certas = [
+    `O valor é R$ 100 antecipado e R$ 250 no dia. Chave Pix: ${DADOS.chave}. Me manda o comprovante.`,
+    `São R$ 100 de sinal e R$ 250 no dia. Chave Pix: ${DADOS.chave}. Me manda o comprovante.`,
+    `A consulta tem R$ 100 antecipado e R$ 250 no dia. Chave Pix: ${DADOS.chave}. Me manda o comprovante.`,
+  ];
+  for (const frase of certas) {
+    assert.equal(travaDaTaxaDeReserva(frase, DADOS, ctx), null, frase); // já traz a chave certa e o comprovante: nada a corrigir
+  }
+  const r = travaDaTaxaDeReserva('Fica na Av. X, 12. É R$ 100 antecipado e R$ 250 no dia. A equipe te envia a chave.', DADOS, ctx);
+  assert.equal(r?.preservouOResto, true, 'os valores certos ficam, o resto é preservado');
+  // o dinheiro errado de antes continua pego (com e sem acento, "é"/"eh"/"será")
+  for (const frase of ['A taxa é R$ 250. A equipe te envia a chave.', 'A taxa eh R$ 250. A equipe te envia a chave.', 'O antecipado será R$ 250. A equipe te envia a chave.', 'O sinal é R$ 350. A equipe te envia a chave.', 'A taxa de agendamento é R$ 50. A equipe te envia a chave.', 'São R$ 350 de taxa. A equipe te envia a chave.']) {
+    assert.equal(travaDaTaxaDeReserva(frase, DADOS, ctx)?.texto, recadoDaChave(DADOS), frase);
+  }
+});
+
+test('5ª rodada, item 5: "às 14" sem o "h" também é hora exata — "deixei anotado que você quer quinta às 14" é combinado', () => {
+  for (const frase of ['Deixei anotado que você quer quinta às 14.', 'Deixei anotado que você só pode quinta às 14, a equipe já vai confirmar.']) {
+    assert.equal(afirmaHorarioGarantido(frase), true, frase);
+  }
+  // o pedido dele com hora exata segue sendo só o que ele disse
+  assert.equal(afirmaHorarioGarantido('Deixei anotado que você prefere quinta às 14.'), false);
+});
+
+test('5ª rodada, item 5: celular com o 55 e 13 dígitos ao lado do Pix é outra chave e derruba a resposta inteira', () => {
+  const ctx = com({ falasDoPaciente: ['e o pix?'] });
+  for (const frase of ['Fica na Av. X, 12. Pix: +55 95 99123-4567. A equipe te envia a chave.', 'Fica na Av. X, 12. A chave Pix é 5595991234567. A equipe te envia a chave.']) {
+    const r = travaDaTaxaDeReserva(frase, DADOS, ctx);
+    assert.equal(r?.texto, recadoDaChave(DADOS), frase);
+    assert.equal(r?.preservouOResto, false, frase);
+  }
+});

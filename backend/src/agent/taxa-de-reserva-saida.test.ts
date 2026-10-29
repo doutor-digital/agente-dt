@@ -455,3 +455,87 @@ test('2ª rodada, item 4: na insistência o endereço fica, com e sem a promessa
   assert.deepEqual(g.triggered, []);
   assert.equal(g.text, sem.texto);
 });
+
+// --- 5ª rodada: cartão pago ou ilegível NUNCA libera nem edita mantendo chave, titular ou valor errados --------------------------------
+
+const ilegivel = () => ferramentas({ cartaoDizPago: async () => Promise.reject(new Error('kommo 500')) });
+const pago = () => ferramentas({ cartaoDizPago: async () => true });
+
+test('5ª rodada, item 1: cartão ILEGÍVEL + afirmação de horário + chave/valor/titular ERRADOS → cortesia sem dados, nunca só o dado errado', async () => {
+  for (const resposta of [
+    'Já deixei registrado quinta às 14h. Chave Pix: 11.111.111/0001-11.',
+    'Já deixei registrado quinta às 14h com a equipe. A taxa é R$ 50 por Pix.',
+    'Já deixei registrado quinta às 14h com a equipe.\nFavorecido: Attiva Corpo e Mente Ltda',
+  ]) {
+    const { f } = ilegivel();
+    const r = await aplicarTaxaDeReservaNaSaida(resposta, DADOS, com({ falasDoPaciente: ['ok'] }), f);
+    assert.equal(r.texto, RECADO_SEM_AFIRMACAO, resposta);
+    assert.equal(r.troca?.preservouOResto, false, resposta);
+    assert.doesNotMatch(r.texto, /Chave Pix|R\$|Favorecido|Attiva|11\.111/i);
+  }
+});
+
+test('5ª rodada, item 1: cartão ILEGÍVEL ou PAGO + resposta que empurra a chave com a chave ERRADA → o bloco certo (como na base), nunca a resposta como veio', async () => {
+  for (const montar of [ilegivel, pago]) {
+    for (const resposta of ['A equipe te envia a chave. Pix: 94.485.277/0001-40.', 'A equipe te envia a chave.\nFavorecido: Attiva Corpo e Mente Clinica de Fisioterapia Ltda']) {
+      const { f } = montar();
+      const r = await aplicarTaxaDeReservaNaSaida(resposta, DADOS, com({ falasDoPaciente: ['ok'] }), f);
+      assert.equal(r.texto, recadoDaChave(DADOS), resposta);
+      assert.equal(r.troca?.motivo, 'equipe_envia_a_chave');
+      assert.equal(r.liberadaPor, undefined);
+    }
+  }
+});
+
+test('5ª rodada, item 1: cartão PAGO + dado errado fora de um fluxo da chave → cortesia sem dados e sem pedir pagamento (nunca "horário não garantido")', async () => {
+  for (const resposta of ['Já deixei registrado quinta às 14h. Chave Pix: 11.111.111/0001-11.', 'Já deixei registrado quinta às 14h com a equipe. A taxa é R$ 50 por Pix.']) {
+    const { f, chamadas } = pago();
+    const r = await aplicarTaxaDeReservaNaSaida(resposta, DADOS, com({ falasDoPaciente: ['ok'] }), f);
+    assert.equal(r.texto, RECADO_SEM_AFIRMACAO, resposta);
+    assert.doesNotMatch(r.texto, /Chave Pix|R\$|garantid/i);
+    assert.equal(chamadas.resumir + chamadas.tarefa, 0);
+  }
+});
+
+test('5ª rodada, item 1: sem contradição nada muda — cartão pago/ilegível com a chave CERTA na resposta sai como veio', async () => {
+  for (const montar of [ilegivel, pago]) {
+    const { f } = montar();
+    const resposta = `A equipe te envia a chave. Chave Pix: ${DADOS.chave}. A consulta é R$ 100 antecipado e R$ 250 no dia.`;
+    const r = await aplicarTaxaDeReservaNaSaida(resposta, DADOS, com({ falasDoPaciente: ['ok'] }), f);
+    assert.equal(r.texto, resposta);
+    assert.equal(r.troca, null);
+  }
+});
+
+test('5ª rodada, item 1: o rastro diz o que saiu quando o dado errado foi trocado (com e sem o cartão ilegível)', async () => {
+  const a = ilegivel();
+  await aplicarTaxaDeReservaNaSaida('Já deixei registrado quinta às 14h. Chave Pix: 11.111.111/0001-11.', DADOS, com({ falasDoPaciente: ['ok'] }), a.f);
+  assert.match(a.passos.find((p) => p.kind === 'ERROR')!.title, /não consegui ler o cartão/);
+  assert.match(a.passos.find((p) => p.kind === 'THINKING')!.title, /fora do cadastro/);
+  const b = pago();
+  await aplicarTaxaDeReservaNaSaida('Já deixei registrado quinta às 14h. Chave Pix: 11.111.111/0001-11.', DADOS, com({ falasDoPaciente: ['ok'] }), b.f);
+  assert.equal(erros(b.passos).length, 0);
+  assert.match(b.passos.find((p) => p.kind === 'THINKING')!.title, /fora do cadastro/);
+});
+
+test('5ª rodada, item 2: cartão ilegível — a AFIRMAÇÃO de horário sai seja qual for o motivo da trava (equipe envia a chave, pagar na clínica, chave pedida)', async () => {
+  const casos: Array<[string, string]> = [
+    ['Já deixei registrado quinta às 14h com a equipe. A equipe te envia a chave.', 'ok'],
+    ['Tudo certo, já deixei registrado quinta às 14h com a equipe. Pode pagar tudo no dia.', 'quero pagar na clínica'],
+    ['Já deixei registrado quinta às 14h com a equipe. Posso te passar a chave Pix?', 'ok'],
+  ];
+  for (const [resposta, fala] of casos) {
+    const { f } = ilegivel();
+    const r = await aplicarTaxaDeReservaNaSaida(resposta, DADOS, com({ falasDoPaciente: [fala] }), f);
+    assert.doesNotMatch(r.texto, /deixei registrado|14h/i, resposta);
+    assert.equal(r.troca?.motivo, 'afirmacao_retirada', resposta);
+  }
+  // a resposta inteira da base do problema: afirmação + "a equipe te envia a chave" não sai inteira
+  const { f } = ilegivel();
+  const r = await aplicarTaxaDeReservaNaSaida('Já deixei registrado quinta às 14h com a equipe. A equipe te envia a chave.', DADOS, com({ falasDoPaciente: ['ok'] }), f);
+  assert.equal(r.texto, RECADO_SEM_AFIRMACAO);
+  // sem afirmação, o que já era liberado continua liberado
+  const sem = await aplicarTaxaDeReservaNaSaida('A equipe te envia a chave.', DADOS, com({ falasDoPaciente: ['ok'] }), ilegivel().f);
+  assert.equal(sem.troca, null);
+  assert.equal(sem.liberadaPor, 'cartao_ilegivel');
+});
