@@ -1,12 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { criarContextoAsaas, type ContaAsaas } from './asaas.js';
 import {
   chaveDeDuplicata, confirmarCliente, confirmarCobranca, criarEscritaAsaas, EVENTO_COBRANCA, EVENTO_CLIENTE, mascararDoc, prepararCliente, prepararCobranca,
-  registrarEscritaAsaas, tetoDaCobranca, cobrancasPorHora, validarCpfCnpj, type PedidoDeCobranca, type RegistroDeCobranca,
+  registrarEscritaAsaas, registrarEscritaAsaasSePermitido, mascararTelefone, tetoDaCobranca, cobrancasPorHora, unidadesComEscrita, validarCpfCnpj, type PedidoDeCobranca, type RegistroDeCobranca,
 } from './asaas-escrita.js';
 
 const CPF = '529.982.247-25';
@@ -96,10 +97,14 @@ function asaasFalso(o: Opc = {}) {
   return { conta, clientes, posts, gets, pagamentos };
 }
 
-function montar(o: Opc = {}, op: { historico?: (c: string) => Promise<RegistroDeCobranca[]>; tetoReais?: () => number; porHora?: () => number } = {}) {
+function montar(
+  o: Opc = {},
+  op: { historico?: (c: string) => Promise<RegistroDeCobranca[]>; tetoReais?: () => number; porHora?: () => number; unidades?: () => Set<string>; esperaLinhaMs?: number } = {},
+) {
   const f = asaasFalso(o);
   const relogio = { t: AGORA };
-  const esc = criarEscritaAsaas({ agora: () => relogio.t, ...op });
+  // a escrita nasce DESLIGADA em toda unidade: os testes ligam a Serra, e os de "desligada" passam a lista que querem
+  const esc = criarEscritaAsaas({ agora: () => relogio.t, unidades: () => new Set(['doutor-hernia-serra']), ...op });
   const asaas = criarContextoAsaas(new Map([[f.conta.slug, f.conta]]));
   const eventos: Array<{ evento: string; args: Record<string, any>; ok: boolean; erro?: string }> = [];
   const registrar = (evento: string, args: Record<string, unknown>, ok: boolean, erro?: string) => eventos.push({ evento, args, ok, erro });
@@ -126,10 +131,13 @@ test('CPF e CNPJ: dígitos verificadores conferidos; sequência repetida e taman
 test('limites vêm do ambiente, com padrão 5000 e 20 por hora; valor inválido volta ao padrão', () => {
   assert.equal(tetoDaCobranca({}), 5000);
   assert.equal(tetoDaCobranca({ ASAAS_COBRANCA_MAX_REAIS: '1200' }), 1200);
-  assert.equal(tetoDaCobranca({ ASAAS_COBRANCA_MAX_REAIS: 'abc' }), 5000);
-  assert.equal(tetoDaCobranca({ ASAAS_COBRANCA_MAX_REAIS: '-3' }), 5000);
+  assert.equal(tetoDaCobranca({ ASAAS_COBRANCA_MAX_REAIS: '' }), 5000);
   assert.equal(cobrancasPorHora({}), 20);
   assert.equal(cobrancasPorHora({ ASAAS_COBRANCAS_POR_HORA: '5' }), 5);
+  assert.equal(cobrancasPorHora({ ASAAS_COBRANCAS_POR_HORA: '  ' }), 20);
+  // 0 e lixo DESLIGAM (não viram o padrão)
+  for (const v of ['0', 'abc', '-3', 'NaN']) assert.equal(tetoDaCobranca({ ASAAS_COBRANCA_MAX_REAIS: v }), 0, `teto ${v}`);
+  for (const v of ['0', 'abc', '-3', '2.5']) assert.equal(cobrancasPorHora({ ASAAS_COBRANCAS_POR_HORA: v }), 0, `hora ${v}`);
 });
 
 // ------------------------------------------------------------------ cadastrar cliente
@@ -336,7 +344,7 @@ test('boleto: teto por cobrança (5000 passa, 5000,01 não; teto do ambiente man
   // o teto vale de novo no confirmar (foi baixado depois da prévia)
   const m = montar({ clientes: [EXISTENTE] });
   let teto = 5000;
-  const esc2 = criarEscritaAsaas({ agora: () => AGORA, tetoReais: () => teto });
+  const esc2 = criarEscritaAsaas({ agora: () => AGORA, tetoReais: () => teto, unidades: () => new Set(['doutor-hernia-serra']) });
   const ctx2 = { asaas: m.asaas, esc: esc2 };
   const p = await prepararCobranca(ctx2, 'u1', { ...COBRANCA, valor: 1000 });
   teto = 500;
@@ -346,9 +354,12 @@ test('boleto: teto por cobrança (5000 passa, 5000,01 não; teto do ambiente man
 
 test('boleto: valor zero, negativo, texto, com 3 casas ou infinito é recusado', async () => {
   const { ctx } = montar({ clientes: [EXISTENTE] });
-  for (const v of [0, -10, 10.005, Number.POSITIVE_INFINITY, Number.NaN, '250' as unknown as number]) {
+  for (const v of [0, -10, 10.005, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NaN, '250' as unknown as number, 5e-9, 1e-7, 0.004, 1e21]) {
     await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, valor: v }), /valor/, String(v));
   }
+  await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, valor: 5e-9 }), /sem notação científica/);
+  await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, valor: 0.004 }), /no mínimo R\$ 0,01/);
+  assert.ok((await prepararCobranca(ctx, 'u1', { ...COBRANCA, valor: 0.01 })).confirmacao, 'um centavo é o mínimo e passa');
 });
 
 test('boleto: vencimento no passado, depois de 60 dias, data que não existe — hoje e +60 passam', async () => {
@@ -587,7 +598,7 @@ test('protocolo: erro com chave e documento no texto sai limpo na resposta e no 
   });
   const registros: Array<{ ferramenta: string; argumentos: any; ok: boolean; erro?: string }> = [];
   const joao = await conectar(m, 'u1', registros);
-  const prep = JSON.parse(texto(await joao.callTool({ name: 'asaas_preparar_cobranca', arguments: { unidade: 'serra', cpfCnpj: CPF, valor: 100, vencimento: VENC, descricao: `Boleto do CPF ${CPF}`, externalReference: 'r1' } })));
+  const prep = JSON.parse(texto(await joao.callTool({ name: 'asaas_preparar_cobranca', arguments: { unidade: 'serra', cpfCnpj: CPF, valor: 100, vencimento: VENC, descricao: 'Boleto do paciente', externalReference: 'r1' } })));
   const r = await joao.callTool({ name: 'asaas_confirmar_cobranca', arguments: { confirmacao: prep.confirmacao } });
   assert.equal(r.isError, true);
   const saiu = texto(r) + tudo(registros);
@@ -720,14 +731,210 @@ test('cadastro do cliente: 2xx sem id é "pode ter sido feito", nunca "cliente (
   await assert.rejects(() => confirmarCliente(c.ctx, 'u1', { confirmacao: String(pc.confirmacao) }, c.registrar), /PODE ter sido feito/);
 });
 
-test('clienteId colado com espaços é aceito; só espaços conta como não informado; externalReference de 11 dígitos aparece inteira na recusa', async () => {
-  const m = montar({ clientes: [EXISTENTE], pagamentos: [{ id: 'pay_5550000000001', externalReference: '20261028123' }] });
+test('clienteId colado com espaços é aceito; só espaços conta como não informado; externalReference de pedido (10 dígitos) aparece inteira na recusa', async () => {
+  const m = montar({ clientes: [EXISTENTE], pagamentos: [{ id: 'pay_5550000000001', externalReference: '2026102812' }] });
   const p = await prepararCobranca(m.ctx, 'u1', { ...COBRANCA, cpfCnpj: undefined, clienteId: '  cus_000005401844 ' });
   assert.ok(p.confirmacao);
   const q = await prepararCobranca(m.ctx, 'u1', { ...COBRANCA, clienteId: '   ', externalReference: 'outra-ref' });
   assert.ok(q.confirmacao);
   const joao = await conectar(m, 'u1', []);
-  const r = await joao.callTool({ name: 'asaas_preparar_cobranca', arguments: { unidade: 'serra', cpfCnpj: CPF, valor: 100, vencimento: VENC, descricao: 'x', externalReference: '20261028123' } });
+  const r = await joao.callTool({ name: 'asaas_preparar_cobranca', arguments: { unidade: 'serra', cpfCnpj: CPF, valor: 100, vencimento: VENC, descricao: 'x', externalReference: '2026102812' } });
   assert.equal(r.isError, true);
-  assert.match(texto(r), /"20261028123" já está na cobrança pay_5550000000001/);
+  assert.match(texto(r), /"2026102812" já está na cobrança pay_5550000000001/);
+});
+
+// ------------------------------------------------------------------ rodada do sênior (PR #159)
+
+test('1) cliente SEM documento no Asaas não casa com o CPF pedido; só documento igual (dígitos) casa', async () => {
+  const semDoc: Cli = { id: 'cus_000008888888', name: 'Jose Sem Documento', cpfCnpj: '' };
+  const so = montar({ clientesTortos: [semDoc] });
+  await assert.rejects(() => prepararCobranca(so.ctx, 'u1', COBRANCA), /não batem com o CPF\/CNPJ buscado/);
+  await assert.rejects(() => prepararCliente(so.ctx, 'u1', { unidade: 'serra', nome: 'Maria', cpfCnpj: CPF }), /não batem/);
+  assert.equal(so.f.posts.length, 0);
+  // no meio de outros, o sem documento é descartado e o certo é escolhido
+  const misto = montar({ clientesTortos: [semDoc, { ...EXISTENTE, cpfCnpj: '529.982.247-25' }] });
+  const p = await prepararCobranca(misto.ctx, 'u1', COBRANCA);
+  assert.equal((p.cliente as { id?: string }).id, 'cus_000005401844');
+  assert.notEqual((p.cliente as { nome?: string }).nome, 'Jose Sem Documento');
+});
+
+test('2) código já usado: a resposta NÃO afirma que nada foi gravado — manda conferir antes de preparar de novo', async () => {
+  const { ctx, registrar } = montar({ clientes: [EXISTENTE] });
+  const p = await prepararCobranca(ctx, 'u1', COBRANCA);
+  await confirmarCobranca(ctx, 'u1', { confirmacao: String(p.confirmacao) }, registrar);
+  const erro = await confirmarCobranca(ctx, 'u1', { confirmacao: String(p.confirmacao) }, registrar).then(() => null, (e: Error) => e);
+  assert.match(erro!.message, /código já usado ou desconhecido/);
+  assert.match(erro!.message, /asaas_cobrancas \/ asaas_cliente/);
+  assert.doesNotMatch(erro!.message, /nada foi gravado/i);
+});
+
+test('3) o registro de sucesso (duplicata e teto) sai ANTES da busca da linha digitável, que é melhor esforço', async () => {
+  // a) a linha digitável fica pendurada: o registro já existe nesse momento
+  const m = montar({ clientes: [EXISTENTE] });
+  let soltar!: (v: unknown) => void;
+  const original = m.f.conta.fonte.get.bind(m.f.conta.fonte);
+  let pediuLinha!: () => void;
+  const chegou = new Promise<void>((r) => (pediuLinha = r));
+  (m.f.conta.fonte as { get: unknown }).get = async (caminho: string, q: Record<string, any>) => {
+    if (/identificationField$/.test(caminho)) {
+      pediuLinha();
+      return new Promise((r) => (soltar = r));
+    }
+    return original(caminho, q);
+  };
+  const p = await prepararCobranca(m.ctx, 'u1', COBRANCA);
+  const andamento = confirmarCobranca(m.ctx, 'u1', { confirmacao: String(p.confirmacao) }, m.registrar);
+  await chegou;
+  const ev = m.eventos.find((e) => e.evento === EVENTO_COBRANCA);
+  assert.ok(ev && ev.ok, 'o registro de sucesso tem de existir enquanto a linha digitável ainda é buscada');
+  assert.match(String(ev!.args.cobrancaId), /^pay_/);
+  soltar({ identificationField: '34191.79001' });
+  const r = (await andamento) as any;
+  assert.equal(r.cobranca.linhaDigitavel, '34191.79001');
+  assert.equal(m.eventos.filter((e) => e.evento === EVENTO_COBRANCA).length, 1, 'registrado uma vez só');
+
+  // b) a linha digitável nunca vem: passado o prazo, o link basta e nada trava
+  const n = montar({ clientes: [EXISTENTE] }, { esperaLinhaMs: 20 });
+  const orig2 = n.f.conta.fonte.get.bind(n.f.conta.fonte);
+  (n.f.conta.fonte as { get: unknown }).get = async (caminho: string, q: Record<string, any>) => (/identificationField$/.test(caminho) ? new Promise(() => undefined) : orig2(caminho, q));
+  const pn = await prepararCobranca(n.ctx, 'u1', COBRANCA);
+  const rn = (await confirmarCobranca(n.ctx, 'u1', { confirmacao: String(pn.confirmacao) }, n.registrar)) as any;
+  assert.equal(rn.cobranca.linhaDigitavel, null);
+  assert.ok(rn.cobranca.linkDoBoleto);
+});
+
+test('5) a chave da conta mudou entre a prévia e o ok: o confirmar recusa (cliente e boleto) e não grava', async () => {
+  const a = montar({ clientes: [EXISTENTE] });
+  const p = await prepararCobranca(a.ctx, 'u1', COBRANCA);
+  assert.equal(p.conta.chaveTermina, '…xYZ1');
+  a.f.conta.escrita!.chaveFinal = '…OUTR';
+  await assert.rejects(() => confirmarCobranca(a.ctx, 'u1', { confirmacao: String(p.confirmacao) }, a.registrar), /chave do Asaas de doutor-hernia-serra mudou desde a prévia.*…xYZ1.*…OUTR/);
+  assert.equal(a.f.posts.length, 0);
+  // com a chave de volta ao que foi aprovado, um preparar novo funciona
+  a.f.conta.escrita!.chaveFinal = '…xYZ1';
+  const p2 = await prepararCobranca(a.ctx, 'u1', COBRANCA);
+  await confirmarCobranca(a.ctx, 'u1', { confirmacao: String(p2.confirmacao) }, a.registrar);
+  assert.equal(a.f.posts.length, 1);
+
+  const b = montar();
+  const pc = await prepararCliente(b.ctx, 'u1', { unidade: 'serra', nome: 'Maria da Silva', cpfCnpj: CPF });
+  b.f.conta.escrita!.chaveFinal = '…OUTR';
+  await assert.rejects(() => confirmarCliente(b.ctx, 'u1', { confirmacao: String(pc.confirmacao) }, b.registrar), /chave do Asaas .* mudou/);
+  assert.equal(b.f.posts.length, 0);
+});
+
+test('7) CPF/CNPJ em externalReference e descrição é recusado, e não chega inteiro ao registro; telefone sai dos erros', async () => {
+  const m = montar({ clientes: [EXISTENTE] });
+  for (const ref of ['52998224725', '529.982.247-25', '11222333000181', '11.222.333/0001-81', 'pedido-52998224725']) {
+    await assert.rejects(() => prepararCobranca(m.ctx, 'u1', { ...COBRANCA, externalReference: ref }), /externalReference com cara de CPF\/CNPJ/, ref);
+  }
+  for (const d of ['Consulta do CPF 529.982.247-25', 'doc 52998224725', 'cnpj 11222333000181']) {
+    await assert.rejects(() => prepararCobranca(m.ctx, 'u1', { ...COBRANCA, descricao: d }), /descrição com CPF\/CNPJ/, d);
+  }
+  assert.ok((await prepararCobranca(m.ctx, 'u1', { ...COBRANCA, externalReference: 'pedido-1042', descricao: 'Consulta 2026-11-10 pedido 1042' })).confirmacao);
+  // pelo protocolo, o registro da tentativa recusada mascara a referência
+  const registros: Array<{ ferramenta: string; argumentos: any; ok: boolean; erro?: string }> = [];
+  const joao = await conectar(m, 'u1', registros);
+  const r = await joao.callTool({ name: 'asaas_preparar_cobranca', arguments: { unidade: 'serra', cpfCnpj: CPF, valor: 100, vencimento: VENC, descricao: 'x', externalReference: '529.982.247-25' } });
+  assert.equal(r.isError, true);
+  const aud = tudo(registros);
+  assert.ok(!aud.includes('529.982.247-25') && !aud.includes('52998224725'), aud);
+  assert.match(aud, /\[documento\]/);
+  // telefone de 10, 12 e 13 dígitos num erro do Asaas
+  const t = montar({ clientes: [EXISTENTE], falhaNoPagamento: new ErroHttp('Asaas 400: contato (63) 3321-4455, 5563981411248, +55 63 98141-1248 e 556333214455', 400) });
+  const reg2: Array<{ ferramenta: string; argumentos: any; ok: boolean; erro?: string }> = [];
+  const cli = await conectar(t, 'u1', reg2);
+  const prep = JSON.parse(texto(await cli.callTool({ name: 'asaas_preparar_cobranca', arguments: { unidade: 'serra', cpfCnpj: CPF, valor: 100, vencimento: VENC, descricao: 'x', externalReference: 'r1' } })));
+  const e = await cli.callTool({ name: 'asaas_confirmar_cobranca', arguments: { confirmacao: prep.confirmacao } });
+  const saiu = texto(e) + tudo(reg2);
+  for (const proibido of ['33214455', '3321-4455', '5563981411248', '98141-1248', '556333214455']) assert.ok(!saiu.includes(proibido), `telefone vazou: ${proibido}`);
+});
+
+test('8) o portão de quem escreve: fora da lista de escrita as ferramentas nem existem; na lista, são as 4', async () => {
+  const m = montar({ clientes: [EXISTENTE] });
+  const listar = async (usuario: string, escritores: Set<string>) => {
+    const server = new McpServer({ name: 't', version: '0' });
+    const registrou = registrarEscritaAsaasSePermitido(server, m.asaas, m.esc, usuario, escritores, () => undefined);
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    const cliente = new Client({ name: 'teste', version: '0' });
+    await Promise.all([server.connect(a), cliente.connect(b)]);
+    return { registrou, cliente, nomes: (await cliente.listTools().catch(() => ({ tools: [] }))).tools.map((t) => t.name).sort() };
+  };
+  const fora = await listar('u-fora', new Set(['u-joao']));
+  assert.equal(fora.registrou, false);
+  assert.deepEqual(fora.nomes, []);
+  const chamada = await fora.cliente.callTool({ name: 'asaas_preparar_cliente', arguments: { unidade: 'serra', nome: 'Maria', cpfCnpj: CPF } }).catch((e) => ({ isError: true, content: [{ text: String(e) }] }));
+  assert.equal((chamada as { isError?: boolean }).isError, true);
+  const vazia = await listar('u-joao', new Set());
+  assert.equal(vazia.registrou, false, 'sem lista de escrita, ninguém escreve');
+  assert.deepEqual(vazia.nomes, []);
+  const dentro = await listar('u-joao', new Set(['u-joao']));
+  assert.equal(dentro.registrou, true);
+  assert.deepEqual(dentro.nomes, ['asaas_confirmar_cliente', 'asaas_confirmar_cobranca', 'asaas_preparar_cliente', 'asaas_preparar_cobranca']);
+  assert.equal(m.f.posts.length, 0);
+});
+
+test('9) ASAAS_ESCRITA_UNIDADES: vazia/ausente = desligada em todas; só as listadas; "*" não vale; a recusa diz qual variável configurar', async () => {
+  assert.deepEqual([...unidadesComEscrita({})], []);
+  assert.deepEqual([...unidadesComEscrita({ ASAAS_ESCRITA_UNIDADES: '' })], []);
+  assert.deepEqual([...unidadesComEscrita({ ASAAS_ESCRITA_UNIDADES: '  ,, ' })], []);
+  assert.deepEqual([...unidadesComEscrita({ ASAAS_ESCRITA_UNIDADES: '*' })], []);
+  assert.deepEqual([...unidadesComEscrita({ ASAAS_ESCRITA_UNIDADES: 'todas,*, doutor-hernia-serra ,Maraba' })].sort(), ['doutor-hernia-serra', 'maraba', 'todas']);
+  const desligada = [{}, { ASAAS_ESCRITA_UNIDADES: '' }, { ASAAS_ESCRITA_UNIDADES: '*' }, { ASAAS_ESCRITA_UNIDADES: 'doutor-hernia-maraba' }];
+  for (const env of desligada) {
+    const m = montar({ clientes: [EXISTENTE] }, { unidades: () => unidadesComEscrita(env) });
+    await assert.rejects(() => prepararCliente(m.ctx, 'u1', { unidade: 'serra', nome: 'Maria', cpfCnpj: CPF }), /DESLIGADA para doutor-hernia-serra.*ASAAS_ESCRITA_UNIDADES/, tudo(env));
+    await assert.rejects(() => prepararCobranca(m.ctx, 'u1', COBRANCA), /DESLIGADA para doutor-hernia-serra.*ASAAS_ESCRITA_UNIDADES/, tudo(env));
+    assert.equal(m.f.posts.length, 0);
+  }
+  // ligada só para a Serra: funciona; a unidade tirada da lista entre a prévia e o ok não grava
+  let lista = new Set(['doutor-hernia-serra']);
+  const m = montar({ clientes: [EXISTENTE] }, { unidades: () => lista });
+  const p = await prepararCobranca(m.ctx, 'u1', COBRANCA);
+  lista = new Set();
+  await assert.rejects(() => confirmarCobranca(m.ctx, 'u1', { confirmacao: String(p.confirmacao) }, m.registrar), /DESLIGADA/);
+  assert.equal(m.f.posts.length, 0);
+  // a variável de verdade, sem injeção: ausente → desligada
+  const anterior = process.env.ASAAS_ESCRITA_UNIDADES;
+  delete process.env.ASAAS_ESCRITA_UNIDADES;
+  try {
+    const f = asaasFalso({ clientes: [EXISTENTE] });
+    const real = { asaas: criarContextoAsaas(new Map([[f.conta.slug, f.conta]])), esc: criarEscritaAsaas({ agora: () => AGORA }) };
+    await assert.rejects(() => prepararCobranca(real, 'u1', COBRANCA), /ASAAS_ESCRITA_UNIDADES/);
+    process.env.ASAAS_ESCRITA_UNIDADES = 'doutor-hernia-serra';
+    assert.ok((await prepararCobranca(real, 'u1', COBRANCA)).confirmacao);
+  } finally {
+    if (anterior === undefined) delete process.env.ASAAS_ESCRITA_UNIDADES;
+    else process.env.ASAAS_ESCRITA_UNIDADES = anterior;
+  }
+});
+
+test('9) teto e limite por hora em 0 DESLIGAM o boleto (não viram o padrão) e a recusa diz qual variável configurar', async () => {
+  const semTeto = montar({ clientes: [EXISTENTE] }, { tetoReais: () => tetoDaCobranca({ ASAAS_COBRANCA_MAX_REAIS: '0' }) });
+  await assert.rejects(() => prepararCobranca(semTeto.ctx, 'u1', { ...COBRANCA, valor: 10 }), /DESLIGADA.*ASAAS_COBRANCA_MAX_REAIS/);
+  const semHora = montar({ clientes: [EXISTENTE] }, { porHora: () => cobrancasPorHora({ ASAAS_COBRANCAS_POR_HORA: '0' }) });
+  await assert.rejects(() => prepararCobranca(semHora.ctx, 'u1', COBRANCA), /DESLIGADA.*ASAAS_COBRANCAS_POR_HORA/);
+  // zerado entre a prévia e o ok: o confirmar recusa também
+  let n = 5;
+  const m = montar({ clientes: [EXISTENTE] }, { porHora: () => n });
+  const p = await prepararCobranca(m.ctx, 'u1', COBRANCA);
+  n = 0;
+  await assert.rejects(() => confirmarCobranca(m.ctx, 'u1', { confirmacao: String(p.confirmacao) }, m.registrar), /DESLIGADA.*ASAAS_COBRANCAS_POR_HORA/);
+  assert.equal(semTeto.f.posts.length + semHora.f.posts.length + m.f.posts.length, 0);
+});
+
+test('7b) mascararTelefone: com DDI (12 e 13 dígitos) o DDD certo aparece, sem o 55; curto vira só asteriscos', () => {
+  assert.equal(mascararTelefone('(63) 98141-1248'), '(63) *****-1248');
+  assert.equal(mascararTelefone('+55 63 98141-1248'), '(63) *****-1248');
+  assert.equal(mascararTelefone('556333214455'), '(63) *****-4455');
+  assert.equal(mascararTelefone('3321'), '*****');
+});
+
+test('8b) producao.ts liga a escrita do Asaas SÓ pelo portão testado, passando a lista de escritores (e a única chamada de registro)', () => {
+  const src = readFileSync(new URL('./producao.ts', import.meta.url), 'utf8');
+  assert.equal(src.match(/registrarEscritaAsaasSePermitido\(/g)?.length, 1);
+  assert.match(src, /registrarEscritaAsaasSePermitido\(server, asaas, escritaAsaas, quem\.userId, escritores, auditar\)/);
+  // ninguém chama o registrador cru, que não confere quem pode escrever
+  assert.equal(src.match(/\bregistrarEscritaAsaas\(/g), null);
+  assert.doesNotMatch(src, /import \{[^}]*\bregistrarEscritaAsaas\b[^}]*\} from '\.\/asaas-escrita\.js'/);
 });

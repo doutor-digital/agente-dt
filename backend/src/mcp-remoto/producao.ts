@@ -34,7 +34,7 @@ import { criarContextoAsaas, registrarFerramentasAsaas, type ContaAsaas } from '
 import { asaasGet } from '../lib/integracoes/asaas.js';
 import { asaasPost } from '../lib/integracoes/asaas-escrita.js';
 import { finalDaChave } from '../lib/integracoes/cofre.js';
-import { criarEscritaAsaas, EVENTO_COBRANCA, registrarEscritaAsaas, type RegistroDeCobranca } from './asaas-escrita.js';
+import { criarEscritaAsaas, EVENTO_COBRANCA, registrarEscritaAsaasSePermitido, type RegistroDeCobranca } from './asaas-escrita.js';
 import { criarContextoConvenia, registrarFerramentasConvenia, type ContaConvenia } from './convenia.js';
 import { conveniaGet } from '../lib/integracoes/convenia.js';
 import { criarContextoTiquetaque, registrarFerramentasTiquetaque, type ContaTiquetaque } from './tiquetaque.js';
@@ -466,10 +466,11 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
       registrarFerramentasConvenia(server, convenia, auditar);
       registrarFerramentasTiquetaque(server, tiquetaque, auditar);
       registrarMetaEventos(server, () => rastreio, auditar);
+      // Asaas: cadastrar cliente e gerar boleto, em dois passos (cancelar, estornar, editar e transferir NÃO existem), só para quem está
+      // na lista de escrita E só nas unidades de ASAAS_ESCRITA_UNIDADES. O portão fica numa função testada.
+      registrarEscritaAsaasSePermitido(server, asaas, escritaAsaas, quem.userId, escritores, auditar);
       if (escritores.has(quem.userId)) {
         registrarEscritaKommo(server, kommo, fonteDeEscrita, pendentes, quem.userId, auditar);
-        // Asaas: cadastrar cliente e gerar boleto, em dois passos. Cancelar, estornar, editar e transferir NÃO existem aqui.
-        registrarEscritaAsaas(server, asaas, escritaAsaas, quem.userId, auditar);
         // Disparo de campanha: preparar e mostrar. Aprovar e retomar NÃO existem aqui (são do João, no painel do console).
         registrarDisparo(server, fonteDeDisparo, `conector:${quem.userId}`, auditar);
       }

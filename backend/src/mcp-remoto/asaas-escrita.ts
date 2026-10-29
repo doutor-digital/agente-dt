@@ -8,6 +8,11 @@
  * NÃO existe aqui (e o cliente HTTP de escrita nem tem como): cancelar, excluir ou estornar cobrança, editar valor ou
  * vencimento, Pix, cartão, parcelamento, assinatura, transferência, saque, antecipação, alterar ou excluir cliente.
  *
+ * LIGAR/DESLIGAR (falha fechada): a escrita nasce DESLIGADA. ASAAS_ESCRITA_UNIDADES = slugs separados por vírgula das unidades em que
+ * ela vale (ex. "doutor-hernia-serra,doutor-hernia-maraba"); vazia ou ausente = desligada em todas; "*" e "todas" NÃO valem como
+ * curinga. ASAAS_COBRANCA_MAX_REAIS=0 ou ASAAS_COBRANCAS_POR_HORA=0 (ou valor que não é número) = boleto DESLIGADO, nunca "sem limite".
+ * Só quem está em MCP_ESCRITA_EMAILS vê as ferramentas. O cliente HTTP só aceita POST em /customers e /payments.
+ *
  * Dinheiro de verdade, paciente de verdade. Travas: UMA conta por vez ("todas" é recusado); teto por cobrança
  * (ASAAS_COBRANCA_MAX_REAIS, padrão 5000) e por hora e conta (ASAAS_COBRANCAS_POR_HORA, padrão 20); vencimento de hoje a +60
  * dias; cobrança igual (mesmo cliente, valor, vencimento, descrição) em 10 min é recusada com o id da existente; o aviso
@@ -29,14 +34,35 @@ const FUSO = 'America/Sao_Paulo';
 
 // ----------------------------------------------------------------- limites (lidos a cada uso, do ambiente)
 
+/**
+ * Variável ausente ou vazia = o padrão. Valor 0 = DESLIGADO (recusa tudo). Valor que não é número (ou é negativo) também
+ * desliga: configuração torta não pode virar licença para cobrar.
+ */
 export function tetoDaCobranca(e: NodeJS.ProcessEnv = process.env): number {
-  const n = Number(e.ASAAS_COBRANCA_MAX_REAIS);
-  return Number.isFinite(n) && n > 0 ? n : LIMITES_ASAAS.tetoPadraoReais;
+  const bruto = e.ASAAS_COBRANCA_MAX_REAIS?.trim();
+  if (!bruto) return LIMITES_ASAAS.tetoPadraoReais;
+  const n = Number(bruto);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
 }
 
 export function cobrancasPorHora(e: NodeJS.ProcessEnv = process.env): number {
-  const n = Number(e.ASAAS_COBRANCAS_POR_HORA);
-  return Number.isInteger(n) && n > 0 ? n : LIMITES_ASAAS.porHoraPadrao;
+  const bruto = e.ASAAS_COBRANCAS_POR_HORA?.trim();
+  if (!bruto) return LIMITES_ASAAS.porHoraPadrao;
+  const n = Number(bruto);
+  return Number.isInteger(n) && n >= 0 ? n : 0;
+}
+
+/**
+ * Unidades em que a escrita do Asaas está LIGADA: slugs separados por vírgula em ASAAS_ESCRITA_UNIDADES. Ausente ou vazia =
+ * desligada em todas (falha fechada). "*" não é aceito: cada unidade se liga pelo nome.
+ */
+export function unidadesComEscrita(e: NodeJS.ProcessEnv = process.env): Set<string> {
+  return new Set(
+    (e.ASAAS_ESCRITA_UNIDADES ?? '')
+      .split(',')
+      .map((s) => s.trim().toLowerCase())
+      .filter((s) => s && !s.includes('*')),
+  );
 }
 
 // ----------------------------------------------------------------- validação e máscaras
@@ -99,9 +125,16 @@ export function abreviarNome(n: string): string {
 }
 
 export function mascararTelefone(t: string): string {
-  const d = soDigitos(t);
+  let d = soDigitos(t);
+  // com DDI (55 + DDD + 8 ou 9 dígitos) os dois primeiros dígitos não são o DDD
+  if ((d.length === 12 || d.length === 13) && d.startsWith('55')) d = d.slice(2);
   return d.length >= 8 ? `(${d.slice(0, 2)}) *****-${d.slice(-4)}` : '*****';
 }
+
+/** 11 ou 14 dígitos seguidos (com ou sem a pontuação de CPF/CNPJ): documento, ou parecido o bastante para não arriscar. */
+const DOC_NO_TEXTO = [/(?<!\d)\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}(?!\d)/g, /(?<!\d)\d{3}\.?\d{3}\.?\d{3}-?\d{2}(?!\d)/g];
+const temDocumento = (t: string) => DOC_NO_TEXTO.some((r) => new RegExp(r.source).test(t));
+const semDocumento = (t: string) => DOC_NO_TEXTO.reduce((s, r) => s.replace(r, '[documento]'), t);
 
 const SEM_CONTROLE = /[\u0000-\u001f\u007f]/;
 
@@ -188,9 +221,12 @@ function hojeLocal(ms: number): string {
 }
 
 function valorValido(v: unknown, teto: number): number {
-  if (typeof v !== 'number' || !Number.isFinite(v)) throw new ErroDeEntrada('valor: informe um número em reais, ex. 250 ou 250.5');
+  if (teto <= 0) throw new ErroDeEntrada('a geração de boleto pelo conector está DESLIGADA: configure ASAAS_COBRANCA_MAX_REAIS com o teto por cobrança (maior que 0). Nada foi preparado.');
+  if (typeof v !== 'number' || Number.isNaN(v) || !Number.isFinite(v)) throw new ErroDeEntrada('valor: informe um número finito em reais, ex. 250 ou 250.5 (NaN e Infinity não valem)');
+  if (/e/i.test(String(v))) throw new ErroDeEntrada('valor: escreva o número por extenso, sem notação científica (ex. 250.5)');
   if (v <= 0) throw new ErroDeEntrada('valor: precisa ser maior que zero');
   const centavos = Math.round(v * 100);
+  if (centavos < 1) throw new ErroDeEntrada('valor: no mínimo R$ 0,01');
   if (Math.abs(centavos - v * 100) > 1e-6) throw new ErroDeEntrada('valor: no máximo 2 casas decimais');
   if (v > teto) throw new ErroDeEntrada(`${dinheiro(v)} passa do teto de ${dinheiro(teto)} por cobrança no conector: gere esta cobrança direto no painel do Asaas.`);
   return centavos / 100;
@@ -209,6 +245,7 @@ function descricaoValida(v: unknown): string {
   const t = String(v ?? '').trim();
   if (!t) throw new ErroDeEntrada('descrição obrigatória: ela aparece no boleto do paciente');
   if (t.length > 500) throw new ErroDeEntrada('descrição: no máximo 500 caracteres');
+  if (temDocumento(t)) throw new ErroDeEntrada('descrição com CPF/CNPJ: ela aparece no boleto do paciente e vai para os registros. Tire o documento do texto.');
   if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(t)) throw new ErroDeEntrada('descrição com caracteres de controle');
   return t;
 }
@@ -217,6 +254,7 @@ function referenciaValida(v: unknown): string | undefined {
   if (v === undefined || v === null || String(v).trim() === '') return undefined;
   const t = String(v).trim();
   if (t.length > 100 || SEM_CONTROLE.test(t)) throw new ErroDeEntrada('externalReference: até 100 caracteres, sem caracteres de controle');
+  if (temDocumento(t)) throw new ErroDeEntrada('externalReference com cara de CPF/CNPJ (11 ou 14 dígitos): use o número do pedido, nunca o documento — ela vai inteira para os registros.');
   return t;
 }
 
@@ -243,6 +281,8 @@ interface PendenteCliente {
   unidade: string;
   dados: DadosDoCliente;
   avisar: boolean;
+  /** o final da chave que a prévia mostrou: se a chave da conta mudou, o confirmar recusa */
+  chaveTermina: string;
   criadoEm: number;
 }
 
@@ -258,6 +298,7 @@ interface PendenteCobranca {
   vencimento: string;
   descricao: string;
   externalReference?: string;
+  chaveTermina: string;
   criadoEm: number;
 }
 
@@ -280,7 +321,7 @@ export class PendentesAsaas {
   tirar<T extends Pendente['tipo']>(codigo: string, usuario: string, tipo: T): Extract<Pendente, { tipo: T }> {
     const k = codigo.trim().toUpperCase();
     const p = this.itens.get(k);
-    if (!p) throw new ErroDeEntrada('código de confirmação desconhecido ou já usado: prepare de novo (nada foi gravado por este código)');
+    if (!p) throw new ErroDeEntrada('código já usado ou desconhecido: confira com asaas_cobrancas / asaas_cliente se o primeiro uso gravou antes de preparar de novo');
     if (p.usuario !== usuario) throw new ErroDeEntrada('este código foi gerado por outro usuário');
     if (p.tipo !== tipo) throw new ErroDeEntrada(`este código é de ${p.tipo === 'cliente' ? 'cadastro de cliente (asaas_confirmar_cliente)' : 'boleto (asaas_confirmar_cobranca)'}`);
     this.itens.delete(k);
@@ -302,6 +343,10 @@ export interface EstadoEscritaAsaas {
   agora: () => number;
   tetoReais: () => number;
   porHora: () => number;
+  /** unidades com a escrita ligada (ASAAS_ESCRITA_UNIDADES) */
+  unidades: () => Set<string>;
+  /** quanto esperar a linha digitável (melhor esforço) */
+  esperaLinhaMs: number;
   /** cobranças criadas nesta subida e as lidas da auditoria (para o teto e a duplicata sobreviverem a um reinício) */
   cobrancas: RegistroDeCobranca[];
   historico?: (conta: string) => Promise<RegistroDeCobranca[]>;
@@ -310,13 +355,17 @@ export interface EstadoEscritaAsaas {
   fila: Promise<unknown>;
 }
 
-export function criarEscritaAsaas(o: { agora?: () => number; tetoReais?: () => number; porHora?: () => number; historico?: (conta: string) => Promise<RegistroDeCobranca[]> } = {}): EstadoEscritaAsaas {
+export function criarEscritaAsaas(
+  o: { agora?: () => number; tetoReais?: () => number; porHora?: () => number; unidades?: () => Set<string>; esperaLinhaMs?: number; historico?: (conta: string) => Promise<RegistroDeCobranca[]> } = {},
+): EstadoEscritaAsaas {
   const agora = o.agora ?? Date.now;
   return {
     pendentes: new PendentesAsaas(agora),
     agora,
     tetoReais: o.tetoReais ?? (() => tetoDaCobranca()),
     porHora: o.porHora ?? (() => cobrancasPorHora()),
+    unidades: o.unidades ?? (() => unidadesComEscrita()),
+    esperaLinhaMs: o.esperaLinhaMs ?? 10_000,
     cobrancas: [],
     historico: o.historico,
     historicoLido: new Map(),
@@ -353,6 +402,7 @@ async function freio(esc: EstadoEscritaAsaas, conta: string, chave: string): Pro
   const igual = esc.cobrancas.find((r) => r.conta === conta && r.chave === chave && t - r.em < LIMITES_ASAAS.duplicataMs);
   if (igual) return `cobrança igual (mesmo cliente, valor, vencimento e descrição) criada há menos de 10 minutos${igual.cobrancaId ? `: ${igual.cobrancaId}` : ''}. Não criei outra.`;
   const naHora = esc.cobrancas.filter((r) => r.conta === conta).length;
+  if (esc.porHora() <= 0) return 'a geração de boleto pelo conector está DESLIGADA: configure ASAAS_COBRANCAS_POR_HORA com o limite por hora (maior que 0)';
   if (naHora >= esc.porHora()) return `limite de ${esc.porHora()} cobranças por hora nesta conta já foi atingido (${naHora}); tente mais tarde ou gere no painel do Asaas`;
   return null;
 }
@@ -370,14 +420,26 @@ interface ClienteAsaas {
   deleted?: boolean;
 }
 
-function contaDeEscrita(ctx: ContextoAsaas, unidade: unknown): ContaAsaas & { escrita: EscritaAsaas } {
+function contaDeEscrita(ctx: ContextoAsaas, esc: EstadoEscritaAsaas, unidade: unknown): ContaAsaas & { escrita: EscritaAsaas } {
   const pedido = String(unidade ?? '').trim();
   if (!pedido) throw new ErroDeEntrada('informe a unidade (UMA): a escrita no Asaas precisa de uma conta só');
   if (pedido.toLowerCase() === 'todas' || /[,;]/.test(pedido)) throw new ErroDeEntrada('escrita no Asaas é numa conta só: informe UMA unidade ("todas" não vale para gravar)');
   const [c, ...resto] = resolverContasAsaas(ctx, pedido);
   if (!c || resto.length) throw new ErroDeEntrada('escrita no Asaas é numa conta só: informe UMA unidade');
+  if (!esc.unidades().has(c.slug.toLowerCase())) {
+    throw new ErroDeEntrada(
+      `a escrita no Asaas está DESLIGADA para ${c.slug}: configure ASAAS_ESCRITA_UNIDADES com o slug dela (lista separada por vírgula; vazio = desligado em todas; "*" não vale). Nada foi feito.`,
+    );
+  }
   if (!c.escrita) throw new ErroDeEntrada(`a conta do Asaas de ${c.slug} não está liberada para escrita neste conector`);
   return c as ContaAsaas & { escrita: EscritaAsaas };
+}
+
+/** A chave da conta pode ter sido trocada no painel entre a prévia e o ok: o resumo que a pessoa aprovou era de OUTRA conta. */
+function conferirChave(c: { slug: string; escrita: EscritaAsaas }, aprovada: string): void {
+  if (c.escrita.chaveFinal !== aprovada) {
+    throw new ErroDeEntrada(`a chave do Asaas de ${c.slug} mudou desde a prévia (aprovada ${aprovada}, agora ${c.escrita.chaveFinal}): nada foi gravado; prepare de novo e confira a conta.`);
+  }
 }
 
 /** Nome da conta como o Asaas devolve (e, se não vier, o guardado quando a chave foi salva). 401 interrompe: a chave não vale. */
@@ -398,7 +460,8 @@ async function cabecalhoDaConta(c: ContaAsaas & { escrita: EscritaAsaas }) {
 async function clientesPorDoc(c: ContaAsaas, doc: string): Promise<ClienteAsaas[]> {
   const r = await c.fonte.get<{ data?: ClienteAsaas[] }>('/customers', { cpfCnpj: doc, limit: 10 });
   const todos = (r?.data ?? []).filter((x) => !x.deleted);
-  const certos = todos.filter((x) => !x.cpfCnpj || soDigitos(x.cpfCnpj) === doc);
+  // só casa documento IGUAL (dígitos): cliente sem documento ou com outro não é "o mesmo CPF"
+  const certos = todos.filter((x) => !!x.cpfCnpj && soDigitos(x.cpfCnpj) === doc);
   // o Asaas devolveu gente que não é o documento buscado: nada de adivinhar, nada de criar por cima
   if (todos.length && !certos.length) throw new ErroDeEntrada('o Asaas devolveu clientes que não batem com o CPF/CNPJ buscado: nada foi preparado. Confira no painel do Asaas.');
   return certos;
@@ -455,7 +518,7 @@ export async function prepararCliente(
   usuario: string,
   a: { unidade: string; nome: string; cpfCnpj: string; email?: string; telefone?: string; endereco?: EnderecoPedido; avisarCliente?: boolean },
 ) {
-  const c = contaDeEscrita(asaas, a.unidade);
+  const c = contaDeEscrita(asaas, esc, a.unidade);
   const dados = prepararDadosDoCliente(a);
   const avisar = a.avisarCliente === true;
   const { cabecalho, avisos } = await cabecalhoDaConta(c);
@@ -471,7 +534,7 @@ export async function prepararCliente(
       instrucao: `Já cadastrado: NÃO criei outro. Use o id ${existentes.map((x) => x.id).join(' ou ')} em asaas_preparar_cobranca (clienteId). Nada a confirmar.`,
     };
   }
-  const { codigo, expiraEm } = esc.pendentes.guardar({ tipo: 'cliente', usuario, unidade: c.slug, dados, avisar });
+  const { codigo, expiraEm } = esc.pendentes.guardar({ tipo: 'cliente', usuario, unidade: c.slug, dados, avisar, chaveTermina: c.escrita.chaveFinal });
   return {
     conta: cabecalho,
     acao: 'CADASTRAR CLIENTE',
@@ -513,7 +576,8 @@ function sanear(e: unknown): Error {
 export function confirmarCliente({ asaas, esc }: CtxEscrita, usuario: string, a: { confirmacao: string }, registrar: Registrar) {
   return enfileirar(esc, async () => {
     const p = esc.pendentes.tirar(a.confirmacao, usuario, 'cliente');
-    const c = contaDeEscrita(asaas, p.unidade);
+    const c = contaDeEscrita(asaas, esc, p.unidade);
+    conferirChave(c, p.chaveTermina);
     // de novo, agora: se alguém cadastrou nesse meio tempo, não cria outro
     const existentes = await clientesPorDoc(c, p.dados.cpfCnpj);
     const base = { conta: c.slug, documento: mascararDoc(p.dados.cpfCnpj), pediuPor: p.usuario, confirmadoPor: usuario };
@@ -589,7 +653,7 @@ export interface PedidoDeCobranca {
 
 export async function prepararCobranca({ asaas, esc }: CtxEscrita, usuario: string, a: PedidoDeCobranca) {
   recusarForaDoEscopo(a);
-  const c = contaDeEscrita(asaas, a.unidade);
+  const c = contaDeEscrita(asaas, esc, a.unidade);
   const valor = valorValido(a.valor, esc.tetoReais());
   const vencimento = vencimentoValido(a.vencimento, esc.agora());
   const descricao = descricaoValida(a.descricao);
@@ -630,6 +694,7 @@ export async function prepararCobranca({ asaas, esc }: CtxEscrita, usuario: stri
     valor,
     vencimento,
     descricao,
+    chaveTermina: c.escrita.chaveFinal,
     ...(externalReference ? { externalReference } : {}),
   });
   return {
@@ -661,7 +726,8 @@ interface PagamentoAsaas {
 export function confirmarCobranca({ asaas, esc }: CtxEscrita, usuario: string, a: { confirmacao: string }, registrar: Registrar) {
   return enfileirar(esc, async () => {
     const p = esc.pendentes.tirar(a.confirmacao, usuario, 'cobranca');
-    const c = contaDeEscrita(asaas, p.unidade);
+    const c = contaDeEscrita(asaas, esc, p.unidade);
+    conferirChave(c, p.chaveTermina);
     // as travas valem de novo, agora: o teto pode ter mudado e o dia virado desde a prévia
     valorValido(p.valor, esc.tetoReais());
     vencimentoValido(p.vencimento, esc.agora());
@@ -732,16 +798,26 @@ export function confirmarCobranca({ asaas, esc }: CtxEscrita, usuario: string, a
       throw new Error(`${clienteCriado ? `O cliente FOI cadastrado (${clienteId}). ` : ''}O Asaas respondeu sem o id da cobrança: o boleto PODE ter sido gerado. Confira com asaas_cobrancas antes de repetir.`);
     }
     reserva.cobrancaId = pag.id;
+    // o registro que alimenta a duplicata e o teto sai JÁ, com o id: um reinício durante a busca da linha digitável não pode escondê-lo
+    registrar(EVENTO_COBRANCA, { ...base, chave: chaveFinal, clienteId, clienteCriado, cobrancaId: pag.id, status: pag.status ?? null }, true);
+    // a linha digitável é melhor esforço: vem de outra rota, que pode demorar (o Asaas registra o boleto em instantes) — se não vier no prazo, o link basta
     let linha = pag.identificationField ?? null;
     if (!linha) {
-      // a linha digitável vem de outra rota; é leitura e pode demorar a existir — se não vier, o link do boleto basta
+      let timer: NodeJS.Timeout | undefined;
       try {
-        linha = (await c.fonte.get<{ identificationField?: string }>(`/payments/${pag.id}/identificationField`))?.identificationField ?? null;
+        const busca = c.fonte.get<{ identificationField?: string }>(`/payments/${pag.id}/identificationField`).then((r) => r?.identificationField ?? null);
+        busca.catch(() => undefined);
+        const prazo = new Promise<null>((res) => {
+          timer = setTimeout(() => res(null), esc.esperaLinhaMs);
+          timer.unref?.();
+        });
+        linha = await Promise.race([busca, prazo]);
       } catch {
         linha = null;
+      } finally {
+        clearTimeout(timer);
       }
     }
-    registrar(EVENTO_COBRANCA, { ...base, chave: chaveFinal, clienteId, clienteCriado, cobrancaId: pag.id, status: pag.status ?? null }, true);
     return {
       gerado: true,
       conta: c.slug,
@@ -769,9 +845,10 @@ export function confirmarCobranca({ asaas, esc }: CtxEscrita, usuario: string, a
 /** O que vai para a auditoria nos passos "preparar": nunca o documento, o e-mail ou o telefone por inteiro. */
 function mascararPedido(a: Record<string, any>): Record<string, unknown> {
   const novo = a.novoCliente as { nome?: string; email?: string; telefone?: string; endereco?: unknown } | undefined;
-  const { cpfCnpj, email, telefone, endereco, novoCliente, descricao, nome, ...resto } = a;
+  const { cpfCnpj, email, telefone, endereco, novoCliente, descricao, nome, externalReference, ...resto } = a;
   return {
     ...resto,
+    ...(externalReference !== undefined ? { externalReference: semDocumento(String(externalReference)) } : {}),
     ...(nome !== undefined ? { nome: abreviarNome(String(nome)) } : {}),
     ...(cpfCnpj ? { cpfCnpj: mascararDoc(String(cpfCnpj)) } : {}),
     ...(email ? { email: mascararEmail(String(email)) } : {}),
@@ -886,4 +963,21 @@ export function registrarEscritaAsaas(server: McpServer, asaas: ContextoAsaas, e
     },
     (args) => executarSeguro('asaas_confirmar_cobranca', args, auditar, () => confirmarCobranca(ctx, usuario, args, registrar)),
   );
+}
+
+/**
+ * O portão de quem escreve: só quem está na lista de escrita (MCP_ESCRITA_EMAILS, já resolvida em ids) ganha as quatro ferramentas.
+ * Fora da lista elas nem existem na sessão — não aparecem e não podem ser chamadas. Devolve se registrou.
+ */
+export function registrarEscritaAsaasSePermitido(
+  server: McpServer,
+  asaas: ContextoAsaas,
+  esc: EstadoEscritaAsaas,
+  usuario: string,
+  escritores: ReadonlySet<string>,
+  auditar: Auditar,
+): boolean {
+  if (!escritores.has(usuario)) return false;
+  registrarEscritaAsaas(server, asaas, esc, usuario, auditar);
+  return true;
 }
