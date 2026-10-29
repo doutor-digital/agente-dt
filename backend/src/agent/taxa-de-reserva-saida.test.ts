@@ -510,12 +510,19 @@ test('5ª rodada, item 1: sem contradição nada muda — cartão pago/ilegível
 test('5ª rodada, item 1: o rastro diz o que saiu quando o dado errado foi trocado (com e sem o cartão ilegível)', async () => {
   const a = ilegivel();
   await aplicarTaxaDeReservaNaSaida('Já deixei registrado quinta às 14h. Chave Pix: 11.111.111/0001-11.', DADOS, com({ falasDoPaciente: ['ok'] }), a.f);
-  assert.match(a.passos.find((p) => p.kind === 'ERROR')!.title, /não consegui ler o cartão/);
+  assert.match(a.passos.find((p) => p.kind === 'ERROR')!.title, /não consegui ler o cartão.*fora do cadastro.*cortesia/);
   assert.match(a.passos.find((p) => p.kind === 'THINKING')!.title, /fora do cadastro/);
   const b = pago();
   await aplicarTaxaDeReservaNaSaida('Já deixei registrado quinta às 14h. Chave Pix: 11.111.111/0001-11.', DADOS, com({ falasDoPaciente: ['ok'] }), b.f);
   assert.equal(erros(b.passos).length, 0);
   assert.match(b.passos.find((p) => p.kind === 'THINKING')!.title, /fora do cadastro/);
+  // a chave certa tomou o lugar (motivo de chave): o rastro também diz que o motivo real foi o dado errado
+  const c = ilegivel();
+  const r = await aplicarTaxaDeReservaNaSaida('A equipe te envia a chave. Pix: 94.485.277/0001-40.', DADOS, com({ falasDoPaciente: ['ok'] }), c.f);
+  assert.equal(r.troca?.trouxeDadoErrado, true);
+  assert.match(c.passos.find((p) => p.kind === 'ERROR')!.title, /fora do cadastro/);
+  assert.doesNotMatch(c.passos.find((p) => p.kind === 'ERROR')!.title, /só o pedido explícito/);
+  assert.match(c.passos.find((p) => p.kind === 'THINKING')!.title, /equipe enviar a chave.*fora do cadastro/);
 });
 
 test('5ª rodada, item 2: cartão ilegível — a AFIRMAÇÃO de horário sai seja qual for o motivo da trava (equipe envia a chave, pagar na clínica, chave pedida)', async () => {

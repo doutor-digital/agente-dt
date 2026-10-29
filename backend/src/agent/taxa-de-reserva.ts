@@ -457,6 +457,8 @@ export interface TrocaDaTaxa {
   preservouOResto?: boolean;
   /** o que sobrou da resposta do modelo (só quando `preservouOResto`): quem monta o recado de outra forma (a insistência) o reaproveita */
   resto?: string;
+  /** cartão pago/ilegível e a resposta trazia chave, titular ou valor fora do cadastro (`semODadoErrado`): o rastro precisa dizer */
+  trouxeDadoErrado?: boolean;
 }
 
 // --- Chave, titular e valor que CONTRADIZEM o cadastro -------------------------------------------------------------------------
@@ -658,8 +660,8 @@ const MOTIVOS_QUE_ENTREGAM_A_CHAVE: ReadonlySet<TrocaDaTaxa['motivo']> = new Set
  */
 export function semODadoErrado(texto: string, dados: DadosDaTaxa, troca: TrocaDaTaxa): TrocaDaTaxa | null {
   if (!contradizOCadastro(texto, dados)) return null;
-  if (MOTIVOS_QUE_ENTREGAM_A_CHAVE.has(troca.motivo)) return { texto: recadoDaChave(dados), motivo: troca.motivo, preservouOResto: false };
-  return { texto: RECADO_SEM_AFIRMACAO, motivo: 'dado_errado_retirado', preservouOResto: false };
+  if (MOTIVOS_QUE_ENTREGAM_A_CHAVE.has(troca.motivo)) return { texto: recadoDaChave(dados), motivo: troca.motivo, preservouOResto: false, trouxeDadoErrado: true };
+  return { texto: RECADO_SEM_AFIRMACAO, motivo: 'dado_errado_retirado', preservouOResto: false, trouxeDadoErrado: true };
 }
 
 /**

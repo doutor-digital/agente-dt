@@ -199,8 +199,8 @@ export async function aplicarTaxaDeReservaNaSaida(
       title: troca
         ? troca.motivo === 'afirmacao_retirada'
           ? 'Taxa de reserva: não consegui ler o cartão para ver se ele já pagou — saiu só a afirmação falsa de horário, nada foi pedido'
-          : troca.motivo === 'dado_errado_retirado'
-            ? 'Taxa de reserva: não consegui ler o cartão para ver se ele já pagou — a resposta trazia dado fora do cadastro e saiu por uma cortesia, nada foi pedido'
+          : troca.trouxeDadoErrado
+            ? 'Taxa de reserva: não consegui ler o cartão para ver se ele já pagou — a resposta trazia dado fora do cadastro e foi trocada (a chave certa ou uma cortesia sem dados)'
             : 'Taxa de reserva: não consegui ler o cartão para ver se ele já pagou — só o pedido explícito da chave foi atendido'
         : 'Taxa de reserva: não consegui ler o cartão para ver se ele já pagou — a resposta saiu como veio',
       payload: { erro: decisao.erroDoCartao },
@@ -226,8 +226,8 @@ export async function aplicarTaxaDeReservaNaSaida(
 
   await f.recorder.step({
     kind: 'THINKING',
-    title: `💳 Taxa de reserva: ${QUEM_FALOU[troca.motivo]}${troca.preservouOResto ? ' (o resto da resposta ficou)' : ''}`,
-    payload: { motivo: troca.motivo, original: texto, final, preservouOResto: troca.preservouOResto ?? false, equipeAvisada },
+    title: `💳 Taxa de reserva: ${QUEM_FALOU[troca.motivo]}${troca.trouxeDadoErrado && troca.motivo !== 'dado_errado_retirado' ? ' — a resposta trazia chave, titular ou valor fora do cadastro' : ''}${troca.preservouOResto ? ' (o resto da resposta ficou)' : ''}`,
+    payload: { motivo: troca.motivo, original: texto, final, preservouOResto: troca.preservouOResto ?? false, trouxeDadoErrado: troca.trouxeDadoErrado ?? false, equipeAvisada },
   });
 
   if (insistiu && !equipeAvisada) {
