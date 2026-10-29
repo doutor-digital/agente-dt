@@ -299,6 +299,12 @@ model Unit {
   /// garante o horário. Em 05/09/2026 a IA confirmou consulta sem a taxa — o manual da
   /// unidade já proibia; só regra em código segura o modelo.
   spineBookingRequiresPayment Boolean   @default(false) @map("spine_booking_requires_payment")
+  /// A unidade oferece pagamento ANTECIPADO (Pix antes da consulta)? Padrão true: todas as unidades antigas continuam
+  /// perguntando "Pix antecipado ou na clínica". false = só paga no dia, na clínica (Timbó): a IA não pergunta forma de
+  /// pagamento, não fala de antecipado, de chave Pix para reservar nem de desconto. Incompatível com
+  /// spineBookingRequiresPayment (taxa obrigatória é pagamento antecipado): se as duas estiverem ligadas, a taxa vence e
+  /// esta flag é ignorada (ver agent/pagamento-da-unidade.ts).
+  acceptsAdvancePayment       Boolean   @default(true) @map("accepts_advance_payment")
   /// Origem que a Sofia grava na franquia ao cadastrar/converter o paciente para agendar
   /// ("IA SOFIA" = 10002 nas 10 unidades, criada pela franquia em 05/09/2026). Nulo = usa a
   /// origem do lead. A API não tem rota de atualização, então só vale na criação.

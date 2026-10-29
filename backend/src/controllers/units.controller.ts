@@ -118,6 +118,7 @@ const unitInputBase = {
   spineSyncLeads: z.boolean().optional(),
   spineSyncPatients: z.boolean().optional(),
   spineBookingRequiresPayment: z.boolean().optional(),
+  acceptsAdvancePayment: z.boolean().optional(),
   clinicAddress: z.string().max(300).nullable().optional(),
   pixKey: z.string().max(120).nullable().optional(),
   pixHolder: z.string().max(160).nullable().optional(),
