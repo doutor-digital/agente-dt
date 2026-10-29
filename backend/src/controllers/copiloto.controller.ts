@@ -21,6 +21,9 @@ import { montarContextoDoCartao } from '../lib/copiloto/contexto.js';
 import { chamarOpenAi } from '../lib/copiloto/openai.js';
 import { lerPedido } from '../lib/copiloto/pedido.js';
 import { responderAoCopiloto } from '../lib/copiloto/responder.js';
+import { panoramaDaUnidade, type Estado } from '../lib/automacoes-estado.js';
+import { fichaViva } from '../lib/copiloto/ficha-viva.js';
+import { perfilDaUnidade, type PerfilDaUnidade } from '../lib/copiloto/perfil-da-unidade.js';
 import { corpoDaSessao, criarSessaoDeVoz, instrucoesDaVoz, lerEtapaDoPedido, LIMITE_DA_CONVERSA_S, reservarSessao } from '../lib/copiloto/voz.js';
 
 // 10 perguntas por minuto por unidade: cada pergunta faz de 6 a 8 chamadas ao Kommo, que tem fila única no processo
@@ -36,6 +39,29 @@ async function estruturaDaConta(unit: Pick<Unit, 'id'>, kommo: KommoClient) {
   const novo = { em: Date.now(), funis, defs };
   cacheEstrutura.set(unit.id, novo);
   return novo;
+}
+
+/** O estado REAL de cada automação nesta unidade (tela primeiro, `.env` depois). */
+function estadoNaUnidade(slug: string): (id: string) => Estado {
+  const linhas = panoramaDaUnidade(slug);
+  return (id) => linhas.find((l) => l.id === id)?.estado ?? 'desligado';
+}
+
+/** A estrutura viva da conta e o perfil da unidade. Falha de leitura nunca derruba: o perfil sai só com o que o banco sabe. */
+async function estruturaEPerfil(unit: Unit): Promise<{ funis: KommoPipeline[]; defs: CampoDoCartaoDaConta[]; perfil: PerfilDaUnidade }> {
+  let funis: KommoPipeline[] = [];
+  let defs: CampoDoCartaoDaConta[] = [];
+  try {
+    const conta = await contaDoKommo(unit);
+    if (conta.kommoSubdomain && conta.kommoAccessToken) {
+      const e = await estruturaDaConta(conta, createKommoClient(conta));
+      funis = e.funis;
+      defs = e.defs;
+    }
+  } catch (err) {
+    logger.warn({ err: String(err), unit: unit.slug }, 'copiloto: não li a estrutura do Kommo (perfil sai só com o banco)');
+  }
+  return { funis, defs, perfil: perfilDaUnidade(unit, funis, estadoNaUnidade(unit.slug)) };
 }
 
 export async function copilotoPerguntarHandler(req: Request, res: Response): Promise<void> {
@@ -84,6 +110,8 @@ export async function copilotoPerguntarHandler(req: Request, res: Response): Pro
       }))
       .filter((f) => f.texto);
     const ctx = montarContextoDoCartao(lead, estrutura.funis, estrutura.defs);
+    const unidadeDoCartao = dono.tipo === 'unidade' ? dono.unit : unit;
+    const perfil = perfilDaUnidade(unidadeDoCartao, estrutura.funis, estadoNaUnidade(efetiva.slug));
 
     const inicio = performance.now();
     let uso = { promptTokens: 0, completionTokens: 0 };
@@ -96,7 +124,7 @@ export async function copilotoPerguntarHandler(req: Request, res: Response): Pro
           return x;
         },
         // nome, telefone, e-mail e CPF saem de TUDO (conversa, pergunta, histórico e valores dos campos) dentro de `responderAoCopiloto`
-        { ctx, conversa, pergunta: pedido.pergunta, historico: pedido.historico, papel: pedido.papel, nomes },
+        { ctx, conversa, pergunta: pedido.pergunta, historico: pedido.historico, papel: pedido.papel, nomes, perfil },
       );
       void recordLlmCall({ unitId: efetiva.id, traceId: null, provider: 'openai', model: env.COPILOTO_MODELO, promptTokens: uso.promptTokens, completionTokens: uso.completionTokens, latencyMs: Math.round(performance.now() - inicio), status: 'success' });
       // só números no log: nada de conversa nem de pergunta
@@ -140,7 +168,8 @@ export async function copilotoVozSessaoHandler(req: Request, res: Response): Pro
   const inicio = performance.now();
   try {
     const etapa = lerEtapaDoPedido(req.body);
-    const corpo = corpoDaSessao(env.COPILOTO_VOZ_MODELO, env.COPILOTO_VOZ_VOZ, instrucoesDaVoz(etapa));
+    const { funis, defs, perfil } = await estruturaEPerfil(unit);
+    const corpo = corpoDaSessao(env.COPILOTO_VOZ_MODELO, env.COPILOTO_VOZ_VOZ, instrucoesDaVoz(etapa, { perfil, ficha: fichaViva(etapa, funis, defs) }));
     const sessao = await criarSessaoDeVoz(env.COPILOTO_OPENAI_API_KEY, corpo);
     void recordLlmCall({ unitId: unit.id, traceId: null, provider: 'openai', model: env.COPILOTO_VOZ_MODELO, latencyMs: Math.round(performance.now() - inicio), status: 'success' });
     // só números no log
@@ -151,4 +180,21 @@ export async function copilotoVozSessaoHandler(req: Request, res: Response): Pro
     logger.warn({ err: String(err), unit: unit.slug }, 'copiloto: voz falhou');
     res.status(502).json({ error: 'não consegui abrir a conversa por voz agora' });
   }
+}
+
+const LIMITE_PERFIL = { balde: 'copiloto-perfil', max: 30 };
+
+/**
+ * `GET /api/public/widget/:slug/copiloto/perfil` — como a unidade funciona hoje, para o widget ensinar certo (tour, verbos).
+ * Só fatos da unidade: sem cartão, sem paciente, sem segredo.
+ */
+export async function copilotoPerfilHandler(req: Request, res: Response): Promise<void> {
+  const unit = await unidadeDaPonte(req, res, LIMITE_PERFIL);
+  if (!unit) return;
+  if (!env.COPILOTO_UNIDADES.includes(unit.slug)) {
+    res.status(404).json({ error: 'copiloto não liberado para esta unidade' });
+    return;
+  }
+  const { perfil } = await estruturaEPerfil(unit);
+  res.json(perfil);
 }
