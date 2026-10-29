@@ -212,6 +212,9 @@ test('auditoria: CPF digitado na busca (com ou sem pontuação) e "senha" digita
     assert.equal(gravado.includes(SENHAS[0]!), false);
     assert.equal(auditoria.length, 2);
     assert.match(gravado, /"unidade":"magalhaes"/, 'o resto dos argumentos continua auditado');
+    // planilha_abas também audita texto digitado (o apelido da planilha)
+    await h['planilha_abas']!({ unidade: 'magalhaes', planilha: `clientes cpf ${cpf}` });
+    assert.equal(/12345678909|123456789-09|123 456 789 09|123\.456\.789-09/.test(JSON.stringify(auditoria[2])), false, `planilha_abas guardou o CPF: ${cpf}`);
   }
 });
 

@@ -150,18 +150,19 @@ test('mascararArgumentos: CPF digitado sem pontuação, com hífen ou com espaç
 
 // ---------------------------------------------------------------- teto de descompressão no zip inteiro (BAIXA 8)
 
-function zip(entradas: Array<{ nome: string; dados: Buffer }>): Buffer {
+function zip(entradas: Array<{ nome: string; dados: Buffer }>, armazenado = false): Buffer {
   const locais: Buffer[] = [];
   const centrais: Buffer[] = [];
   let off = 0;
   for (const e of entradas) {
     const nome = Buffer.from(e.nome);
-    const comp = deflateRawSync(e.dados, { level: 9 });
+    const comp = armazenado ? e.dados : deflateRawSync(e.dados, { level: 9 });
+    const metodo = armazenado ? 0 : 8;
     const l = Buffer.alloc(30);
-    l.writeUInt32LE(0x04034b50, 0); l.writeUInt16LE(8, 8); l.writeUInt32LE(comp.length, 18); l.writeUInt32LE(e.dados.length, 22); l.writeUInt16LE(nome.length, 26);
+    l.writeUInt32LE(0x04034b50, 0); l.writeUInt16LE(metodo, 8); l.writeUInt32LE(comp.length, 18); l.writeUInt32LE(e.dados.length, 22); l.writeUInt16LE(nome.length, 26);
     locais.push(l, nome, comp);
     const c = Buffer.alloc(46);
-    c.writeUInt32LE(0x02014b50, 0); c.writeUInt16LE(8, 10); c.writeUInt32LE(comp.length, 20); c.writeUInt32LE(e.dados.length, 24); c.writeUInt16LE(nome.length, 28); c.writeUInt32LE(off, 42);
+    c.writeUInt32LE(0x02014b50, 0); c.writeUInt16LE(metodo, 10); c.writeUInt32LE(comp.length, 20); c.writeUInt32LE(e.dados.length, 24); c.writeUInt16LE(nome.length, 28); c.writeUInt32LE(off, 42);
     centrais.push(c, nome);
     off += 30 + nome.length + comp.length;
   }
@@ -179,6 +180,9 @@ test('o teto de descompressão vale para o zip inteiro: várias abas de 15 MB (a
   assert.ok(n * folha.length > MAX_DESCOMPRIMIDO && folha.length < MAX_DESCOMPRIMIDO);
   const grande = zip([{ nome: 'xl/workbook.xml', dados: wb }, { nome: 'xl/_rels/workbook.xml.rels', dados: rels }, ...Array.from({ length: n }, (_, i) => ({ nome: `xl/worksheets/s${i}.xml`, dados: folha }))]);
   assert.throws(() => lerXlsx(grande), /grande demais/);
+  // o mesmo vale para entradas ARMAZENADAS (sem compressão), que não passam pelo inflate
+  const guardado = zip([{ nome: 'xl/workbook.xml', dados: wb }, { nome: 'xl/_rels/workbook.xml.rels', dados: rels }, ...Array.from({ length: n }, (_, i) => ({ nome: `xl/worksheets/s${i}.xml`, dados: folha }))], true);
+  assert.throws(() => lerXlsx(guardado), /grande demais/);
   // duas abas (30 MB no total) cabem
   const duas = zip([{ nome: 'xl/workbook.xml', dados: Buffer.from(wb.toString().replace(/<sheet name="S2"[^>]*\/>/, '')) }, { nome: 'xl/_rels/workbook.xml.rels', dados: rels }, ...[0, 1].map((i) => ({ nome: `xl/worksheets/s${i}.xml`, dados: folha }))]);
   assert.equal(lerXlsx(duas).length, 2);
