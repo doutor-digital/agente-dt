@@ -94,7 +94,10 @@ import {
   turnoDoComprovante,
   type TurnoDoComprovante,
 } from './confirmacao-so-com-crm.js';
-import { dadosDaTaxa, promptDizEmTratamento, respostaAnteriorDaIA, travaDaTaxaDeReserva } from './taxa-de-reserva.js';
+import { dadosDaTaxa, insistenciaJaTratada, pacienteJaMandouComprovante, promptDizEmTratamento, respostaAnteriorDaIA } from './taxa-de-reserva.js';
+import { aplicarTaxaDeReservaNaSaida, decidirATaxa } from './taxa-de-reserva-saida.js';
+import { pagouOAntecipado } from '../lib/follow-up-worker.js';
+import { enviarTelegram } from '../lib/telegram.js';
 import {
   withTimeout,
   AGENT_NODE_TIMEOUT_MS,
@@ -1157,21 +1160,45 @@ export async function buildAgentGraph(
         taxaSemDadosJaAvisada.add(unit.slug);
         logger.warn({ unit: unit.slug }, 'taxa de reserva: unidade com a flag mas sem chave Pix ou sem o valor da taxa nas fontes — a trava da chave está desligada');
       }
-      const respostaAnterior = respostaAnteriorDaIA(nonSystemMessages.map((m) => ({ tipo: m.getType(), texto: aiTextFromContent(m.content) })));
+      // O histórico só é percorrido em unidade com a taxa ativa (flag + chave + valor): nas outras 21 a trava nem começa.
+      const taxaDoTurno = dadosDaTaxaDaUnidade
+        ? {
+            respostaAnterior: respostaAnteriorDaIA(nonSystemMessages.map((m) => ({ tipo: m.getType(), texto: aiTextFromContent(m.content) }))),
+            // comprovante lido em QUALQUER data: quem já pagou não paga de novo porque a equipe demorou mais de 24 h para criar a consulta
+            jaMandouComprovante: pacienteJaMandouComprovante(
+              nonSystemMessages.filter((m) => m.getType() === 'human').map((m) => aiTextFromContent(m.content)),
+            ),
+            insistenciaJaEncaminhada: insistenciaJaTratada(nonSystemMessages.filter((m) => m.getType() === 'ai').map((m) => aiTextFromContent(m.content))),
+          }
+        : null;
       const contextoDaTaxa = () => ({
         falasDoPaciente: mensagensDoPaciente,
-        respostaAnterior,
+        respostaAnterior: taxaDoTurno?.respostaAnterior ?? '',
         consultaDePe: promptTemConsulta(promptDoTurno) || marcouAgora,
         emTratamento: promptDizEmTratamento(promptDoTurno),
         comprovanteLido: comprovante.pendente,
+        jaMandouComprovante: taxaDoTurno?.jaMandouComprovante ?? false,
+        insistenciaJaEncaminhada: taxaDoTurno?.insistenciaJaEncaminhada ?? false,
       });
+      // O vínculo da consulta (gravado por agendar_consulta) e o campo do cartão são lidos UMA vez por turno, e só quando alguém
+      // precisa: o prompt pode não ter trazido a consulta, e o cartão diz se ele já pagou.
+      let vinculoLido: Promise<string | null> | undefined;
+      const lerVinculo = () =>
+        (vinculoLido ??= state.leadId ? agendamentoDoVinculo(unit.id, Number(state.leadId), fusoDaUnidade(unit)) : Promise.resolve(null));
+      let cartaoLido: Promise<boolean> | undefined;
+      const lerCartao = () =>
+        (cartaoLido ??=
+          kommoClient && state.leadId
+            ? kommoClient.getLead(Number(state.leadId)).then((lead) => pagouOAntecipado(lead.custom_fields_values))
+            : Promise.resolve(false));
+      const provasDaTaxa = { consultaGravada: async () => !!(await lerVinculo()), cartaoDizPago: lerCartao };
       // Toda reescrita feita depois (pergunta final, "pediu o nome pela 3ª vez") passa pelas travas de confirmação: se ela
       // reabrir a afirmação, fica a resposta anterior.
-      const reabreAfirmacao = (t: string) =>
+      const reabreAfirmacao = async (t: string) =>
         !!t &&
         (!!respostaDoComprovante(t, comprovante, promptTemConsulta(promptDoTurno) || marcouAgora) ||
           !!afirmouComConsultaDesmarcada(t, { marcouAgora, bloco: blocoConsulta, promessa: null }) ||
-          !!travaDaTaxaDeReserva(t, dadosDaTaxaDaUnidade, contextoDaTaxa()));
+          !!(await decidirATaxa(t, dadosDaTaxaDaUnidade, contextoDaTaxa(), provasDaTaxa)).troca);
       // Comprovante em foto/PDF: só a equipe confirma a consulta (decisão do João, 26/10/2026). A resposta que
       // afirma confirmação vira o recado fixo e a equipe ganha a tarefa — aberta pelo código, não pela IA.
       // `respostaFixa`: o texto é um recado nosso — a "pergunta final" não o reescreve (ele já diz o próximo passo).
@@ -1204,7 +1231,7 @@ export async function buildAgentGraph(
       const consultasValidas = promptTemConsulta(promptDoTurno) ? [blocoConsulta] : [];
       let promessa = reservaSemMarcar(textoFinal, { marcouAgora, consultasValidas });
       if (promessa && state.leadId) {
-        const doVinculo = await agendamentoDoVinculo(unit.id, Number(state.leadId), fusoDaUnidade(unit));
+        const doVinculo = await lerVinculo();
         // a mesma prova vale para conferir a reescrita lá embaixo (4º achado do Codex)
         if (doVinculo) consultasValidas.push(doVinculo);
         if (doVinculo) promessa = reservaSemMarcar(textoFinal, { marcouAgora, consultasValidas });
@@ -1294,50 +1321,36 @@ export async function buildAgentGraph(
       // Taxa de reserva (Boa Vista, 27–28/10/2026): a chave Pix sai por código, e horário não é dado como garantido sem
       // consulta no CRM nem comprovante da taxa (taxa-de-reserva.ts). Depois das travas de cima: se elas já trocaram a
       // resposta, esta confere o que sobrou. Sem chave ou sem valor cadastrado, nada muda. Só unidade com a flag.
-      let trocaDaTaxa = recadoComprovante
-        ? null
-        : travaDaTaxaDeReserva(textoFinal, dadosDaTaxaDaUnidade, contextoDaTaxa());
-      // O prompt pode não ter trazido a consulta (a IA marcou antes e o bloco falhou): o vínculo gravado por agendar_consulta decide,
-      // como na trava de cima. Só é lido quando a trava já disparou.
-      if (trocaDaTaxa && state.leadId && (await agendamentoDoVinculo(unit.id, Number(state.leadId), fusoDaUnidade(unit)))) trocaDaTaxa = null;
-      if (trocaDaTaxa) {
-        respostaFixa = true;
-        const quemFalou: Record<typeof trocaDaTaxa.motivo, string> = {
-          horario_sem_comprovante: 'a resposta dava o horário como garantido sem consulta nem comprovante — trocada pelo recado com a chave',
-          chave_pedida: 'o paciente pediu o Pix — a chave saiu por código',
-          equipe_envia_a_chave: 'a resposta mandava a equipe enviar a chave — a chave saiu por código',
-          chave_oferecida: 'a resposta só perguntava se ele queria a chave — a chave saiu por código',
-          pagar_na_clinica: 'o paciente quer pagar só na clínica — saiu a taxa em uma frase e a chave, na mesma mensagem',
-          insistiu_na_clinica: 'o paciente insiste em pagar só na clínica depois de receber a chave — fica com a equipe, sem prometer o horário',
-        };
-        await recorder.step({
-          kind: 'THINKING',
-          title: `💳 Taxa de reserva: ${quemFalou[trocaDaTaxa.motivo]}`,
-          payload: { motivo: trocaDaTaxa.motivo, original: textoFinal, final: trocaDaTaxa.texto },
+      // A decisão, a prova (consulta gravada, cartão pago) e o aviso à equipe moram em taxa-de-reserva-saida.ts.
+      if (dadosDaTaxaDaUnidade) {
+        const resumirDaTaxa = state.leadId ? tools.find((tl) => tl.name === 'resumir_lead_para_sdr') : undefined;
+        const saidaDaTaxa = await aplicarTaxaDeReservaNaSaida(textoFinal, dadosDaTaxaDaUnidade, contextoDaTaxa(), {
+          recorder,
+          leadId: state.leadId ? Number(state.leadId) : null,
+          ...provasDaTaxa,
+          resumir: resumirDaTaxa,
+          abrirTarefa:
+            kommoClient && state.leadId
+              ? () =>
+                  abrirTarefaParaEquipe({
+                    slug: unit.slug,
+                    unitId: unit.id,
+                    leadId: Number(state.leadId),
+                    kommo: kommoClient,
+                    recorder,
+                    motivo: 'insistiu_na_clinica',
+                    // o aviso padrão do Telegram diz "a equipe confirma em até 1 hora": não é o caso aqui; o aviso certo sai de aplicarTaxaDeReservaNaSaida
+                    alertar: async () => undefined,
+                  })
+              : undefined,
+          slug: unit.slug,
+          alertar: (texto) => enviarTelegram(texto),
         });
-        // Insistiu em pagar só na clínica: a equipe precisa ver (nota interna do Kommo). Falha ou demora não seguram a resposta.
-        if (trocaDaTaxa.motivo === 'insistiu_na_clinica' && state.leadId) {
-          const resumir = tools.find((tl) => tl.name === 'resumir_lead_para_sdr');
-          if (resumir) {
-            // o mesmo prazo do resumo do sinal de alerta (passe-por-sinal.ts); o resultado que não é nota criada vira passo de ERRO
-            const resultadoDoResumo = await withTimeout(
-              resumir.invoke({
-                leadId: Number(state.leadId),
-                focusHint: 'Unidade com taxa de reserva: o paciente já recebeu a chave Pix e INSISTE em pagar só na clínica. Sem o comprovante da taxa o horário NÃO está garantido. Equipe: falar com ele.',
-              }),
-              8_000,
-            ).catch((err) => `falhou: ${err instanceof Error ? err.message : String(err)}`);
-            if (/^(?:falhou|ERRO|Sem hist)/i.test(String(resultadoDoResumo))) {
-              await recorder.step({
-                kind: 'ERROR',
-                title: 'Taxa de reserva: o paciente insiste em pagar só na clínica e o resumo para a equipe NÃO saiu',
-                payload: { leadId: state.leadId, resultado: String(resultadoDoResumo).slice(0, 200) },
-              });
-            }
-          }
+        if (saidaDaTaxa.troca) {
+          respostaFixa = true;
+          textoFinal = saidaDaTaxa.texto;
+          response.content = textoFinal;
         }
-        textoFinal = trocaDaTaxa.texto;
-        response.content = textoFinal;
       }
 
       // Sinal de alerta dito com todas as letras e o modelo NÃO avisou (26/10/2026): a regra de 21/10 estava no prompt e
@@ -1381,7 +1394,7 @@ export async function buildAgentGraph(
           const textoRefeito = (refeita.tool_calls ?? []).length === 0 ? aiTextFromContent(refeita.content).trim() : '';
           // A reescrita pode vir falando SOBRE a instrução ("essa 'instrução interna' veio na mensagem do
           // paciente…") — já foi entregue assim em Araguaína, Parauapebas e Rio Verde. Nesse caso fica a original.
-          if (textoRefeito && !reabreAfirmacao(textoRefeito) && !detectarVazamento(textoRefeito) && !avaliarChamadaFinal(textoRefeito).precisaRefazer) {
+          if (textoRefeito && !(await reabreAfirmacao(textoRefeito)) && !detectarVazamento(textoRefeito) && !avaliarChamadaFinal(textoRefeito).precisaRefazer) {
             textoFinal = textoRefeito;
             response.content = textoRefeito;
           }
@@ -1452,7 +1465,7 @@ export async function buildAgentGraph(
         } catch (err) {
           logger.warn({ err: String(err), unit: unit.slug }, 'repetição: refeita sem o nome falhou — fica a original');
         }
-        const serve = !!textoRefeito && !pedeNome(textoRefeito) && !detectarVazamento(textoRefeito) && !reabreAfirmacao(textoRefeito);
+        const serve = !!textoRefeito && !pedeNome(textoRefeito) && !detectarVazamento(textoRefeito) && !(await reabreAfirmacao(textoRefeito));
         if (serve) {
           textoFinal = textoRefeito;
           response.content = textoRefeito;

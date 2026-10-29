@@ -1182,7 +1182,7 @@ export function buildTools({
         name: 'resumir_lead_para_sdr',
         description: desc('resumir_lead_para_sdr'),
         schema: resumirLeadParaSdrSchema,
-        func: async ({ leadId, focusHint }) => {
+        func: async ({ leadId, focusHint }, _runManager, config) => {
           const t0 = performance.now();
           await recorder.step({
             kind: 'TOOL_CALL',
@@ -1257,6 +1257,9 @@ export function buildTools({
               unitId: unit.id,
               traceId: recorder.traceId,
               modelName: unit.openaiModel ?? 'gpt-4o-mini',
+              // o prazo de quem chamou cancela a chamada ao modelo, não só a gravação da nota. Hoje só a taxa de reserva passa o
+              // sinal (taxa-de-reserva-saida.ts); o passe-por-sinal chama a ferramenta sem sinal e o resumo segue sem prazo.
+              signal: config?.signal,
             })) as { content: unknown };
             const llmMs = Math.round(performance.now() - t1);
             const summary =
@@ -1264,6 +1267,8 @@ export function buildTools({
                 ? response.content
                 : JSON.stringify(response.content);
 
+            // Quem chamou desistiu (prazo estourado, `signal` abortado): nada é gravado, para o "o resumo não saiu" dele ser verdade.
+            if (config?.signal?.aborted) return `ERRO: resumo cancelado (prazo) antes de gravar a nota do lead ${leadId}.`;
             const note = await kommo.addLeadNote(leadId, `📋 Resumo da IA (auto):\n\n${summary}`);
 
             const latency = Math.round(performance.now() - t0);
