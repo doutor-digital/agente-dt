@@ -44,7 +44,7 @@ export interface OpcoesConector {
   ferramentasSimultaneas?: number;
   /** ferramentas além das da franquia (Kommo, cérebro, relatório cruzado), registradas a cada requisição */
   /** `quem.userId` é o usuário do console que fez login no conector (para liberar a escrita só a quem pode). */
-  extras?: (server: McpServer, auditar: Auditar, quem: { userId: string }) => void;
+  extras?: (server: McpServer, auditar: Auditar, quem: { userId: string; email?: string }) => void;
   cimd?: BuscadorCimd;
   agora?: () => number;
   log?: { info(o: object, m?: string): void; warn(o: object, m?: string): void };
@@ -61,6 +61,7 @@ const INSTRUCOES = [
   'e, para quem tem permissão, alterar cartões do Kommo em dois passos (kommo_preparar_alteracao → mostrar o resumo → kommo_confirmar_alteracao só se a pessoa aprovar).',
   'Para quem tem permissão, preparar disparo de campanha pela API oficial do WhatsApp (disparo_*: cadastrar a campanha, montar a onda, ler a prévia e devolver o LINK do painel); aprovar e retomar o envio são do João no painel, nunca por aqui.',
   'Para quem tem permissão, o WhatsApp da Suzanne (evo_*): ler e organizar conversas, grupos e etiquetas; enviar só em dois passos (evo_preparar → mostrar → evo_confirmar com o ok da pessoa).',
+  'o sistema novo de RH/Caixa/Financeiro, de servidor próprio (sistemas_*: esquema do banco, consulta SELECT, usuários, registro de alterações e simulação do que um usuário enxerga — auditoria; para quem tem permissão, alterar dados em dois passos com sistemas_preparar_alteracao → mostrar o resumo → sistemas_confirmar_alteracao só se a pessoa aprovar, e mudar papel/unidade de usuário e criar convite de acesso),',
   'o cérebro que confere um contra o outro (cerebro_*), o relatório cruzado (relatorio_funil) e, para Kommo + Bling, relatorio_vendas.',
   'Para "quantos leads viraram consulta/tratamento", use relatorio_funil: o cruzamento Kommo → franquia é feito em código, por telefone,',
   'e vem com a cobertura — não some números de ferramentas diferentes por conta própria. Unidade aceita nome curto ("serra").',
@@ -179,7 +180,7 @@ export async function montarConectorRemoto(
       o.log?.info({ userId, ferramenta: r.ferramenta, ok: r.ok, ms: r.ms }, 'mcp-remoto: ferramenta');
     };
     registrarFerramentas(server, contexto, { auditar });
-    o.extras?.(server, auditar, { userId });
+    o.extras?.(server, auditar, { userId, email: String(auth?.extra?.email ?? '') || undefined });
     const transporte = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     res.on('close', () => {
       void transporte.close();

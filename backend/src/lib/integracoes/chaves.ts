@@ -1,7 +1,8 @@
 /**
  * Chaves de API de terceiros por unidade: salvar (testando antes), listar sem expor, e ler decifrada
- * para o conector. Provedores: Asaas (financeiro das clínicas), Convênia (RH/departamento pessoal) e
- * Tiquetaque (ponto eletrônico).
+ * para o conector. Provedores: Asaas (financeiro das clínicas), Convênia (RH/departamento pessoal),
+ * Tiquetaque (ponto eletrônico) e Sistemas (RH/Caixa/Financeiro novo, servidor próprio:
+ * a "chave" é um JSON com a URL da API de administração, a ADMIN_KEY e a tela RH — ver `sistemas.ts`).
  */
 import { env } from '../env.js';
 import { prisma } from '../prisma.js';
@@ -9,14 +10,15 @@ import { cifrar, decifrar, finalDaChave } from './cofre.js';
 import { testarChaveAsaas } from './asaas.js';
 import { testarChaveConvenia } from './convenia.js';
 import { testarChaveTiquetaque } from './tiquetaque.js';
+import { lerConfigSistemas, testarChaveSistemas } from './sistemas.js';
 
-export const PROVEDORES = ['asaas', 'convenia', 'tiquetaque'] as const;
+export const PROVEDORES = ['asaas', 'convenia', 'tiquetaque', 'sistemas'] as const;
 export type Provedor = (typeof PROVEDORES)[number];
 
 const segredo = () => process.env.INTEGRACOES_CHAVE_MESTRA || env.SESSION_JWT_SECRET;
 
 /** Teste de cada provedor: prova a chave no serviço e devolve o nome da conta para o painel. */
-const TESTES: Record<Provedor, (chave: string) => Promise<string>> = { asaas: testarChaveAsaas, convenia: testarChaveConvenia, tiquetaque: testarChaveTiquetaque };
+const TESTES: Record<Provedor, (chave: string) => Promise<string>> = { asaas: testarChaveAsaas, convenia: testarChaveConvenia, tiquetaque: testarChaveTiquetaque, sistemas: testarChaveSistemas };
 
 export function ehProvedor(p: string): p is Provedor {
   return (PROVEDORES as readonly string[]).includes(p);
@@ -29,7 +31,7 @@ export async function salvarChave(slug: string, provedor: Provedor, chave: strin
   const unit = await prisma.unit.findUnique({ where: { slug }, select: { id: true } });
   if (!unit) throw new Error(`unidade ${slug} não existe`);
   const conta = await TESTES[provedor](limpa);
-  const dados = { chaveCifrada: cifrar(limpa, segredo()), finalDaChave: finalDaChave(limpa), conta, salvoPor: quem, testadoEm: new Date(), ultimoErro: null };
+  const dados = { chaveCifrada: cifrar(limpa, segredo()), finalDaChave: finalDaChave(provedor === 'sistemas' ? lerConfigSistemas(limpa).chave : limpa), conta, salvoPor: quem, testadoEm: new Date(), ultimoErro: null };
   await prisma.chaveDeIntegracao.upsert({
     where: { unitId_provedor: { unitId: unit.id, provedor } },
     create: { unitId: unit.id, provedor, ...dados },
