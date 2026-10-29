@@ -44,13 +44,13 @@ export function intencaoDoDegrauParaAUnidade(intencao: string, unit: FlagsDePaga
   if (!unidadeSemAntecipado(unit)) return intencao;
   return intencao
     .split(/(?<=[.!?])\s+/)
-    .filter((frase) => !/antecipad|\bpix\b/i.test(frase) || /^(?:n[ãa]o|nunca|sem)\b/i.test(frase.trim()))
+    .filter((frase) => !/antecipad|\bpix\b/i.test(frase) || /^(?:n[ãa]o|nunca)\b/i.test(frase.trim()))
     .join(' ');
 }
 
 /** Como se paga nessas unidades — a frase da confirmação e a resposta a "como pago?". */
 export const PAGAMENTO_NO_DIA = 'O pagamento é feito no dia, na clínica (dinheiro, pix, cartão de débito ou crédito).';
 
-/** A regra que fecha a porta para o modelo (sem a palavra do conceito proibido: o teste do prompt checa que ela não aparece). */
+/** A regra que fecha a porta para o modelo (sem a palavra "antecipad": o teste do prompt checa que ela não aparece). */
 export const REGRA_SEM_ANTECIPADO =
-  'A consulta é paga no dia, na clínica. NUNCA fale em pagar antes da consulta, em Pix para reservar a vaga, em chave Pix nem em desconto.';
+  'A consulta é paga no dia, na clínica. NUNCA fale em pagar antes da consulta, em Pix para reservar a vaga, em enviar chave Pix nem em desconto.';

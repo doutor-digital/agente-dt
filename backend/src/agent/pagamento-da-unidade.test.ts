@@ -23,6 +23,7 @@ import { orientacaoDePagamento, porQueNaoReservar } from './agenda-tools.js';
 import { aplicarGuardrail } from './guardrail.js';
 import type { Fala } from './repeticao.js';
 import { INSTRUCAO_RESERVA_SEM_MARCAR, instrucaoReservaSemMarcar } from './reserva-sem-marcar.js';
+import { INSTRUCAO_DESMARCADA, instrucaoDesmarcada } from './confirmacao-so-com-crm.js';
 import { degrauDoPixNaoSeAplica } from '../lib/follow-up-worker.js';
 import { PRESETS } from '../lib/follow-up-presets.js';
 
@@ -293,6 +294,8 @@ test('régua: o degrau que oferece o antecipado perde essa frase na unidade sem 
     intencaoDoDegrauParaAUnidade('NÃO fale em Pix. Ofereça o Pix antecipado. Pergunte como ele está.', SEM()),
     'NÃO fale em Pix. Pergunte como ele está.',
   );
+  // "Sem rodeios, ofereça o antecipado" NÃO é proibição: começa com "Sem" e sai (só "Não"/"Nunca" abrem exceção)
+  assert.equal(intencaoDoDegrauParaAUnidade('Sem rodeios, termine oferecendo o antecipado de R$ 150. Seja breve.', SEM()), 'Seja breve.');
   // as demais unidades (e Boa Vista): idêntico, byte a byte, em todos os degraus
   for (const { d } of DEGRAUS) {
     assert.equal(intencaoDoDegrauParaAUnidade(d.intencao, unidade()), d.intencao);
@@ -316,4 +319,19 @@ test('retry de "reservado sem marcar": a instrução da unidade sem antecipado n
       'marcado, guardado ou garantido, e pergunte só o que falta. Responda só com a mensagem final ou com a chamada da ferramenta.',
   );
   assert.match(INSTRUCAO_RESERVA_SEM_MARCAR, /depois da chave Pix\) e já disse como vai pagar/);
+});
+
+test('retry de consulta DESMARCADA: a unidade sem antecipado não manda o paciente "escolher forma de pagamento"', () => {
+  const sem = instrucaoDesmarcada(true);
+  assert.doesNotMatch(sem, /pagamento/i);
+  assert.match(sem, /já escolheu dia e hora, use consultar_horarios e agendar_consulta/);
+  assert.equal(instrucaoDesmarcada(false), INSTRUCAO_DESMARCADA, 'as demais: a instrução de hoje');
+  assert.equal(
+    INSTRUCAO_DESMARCADA,
+    '[instrução interna, não é fala do paciente] Sua resposta acima trata como marcada uma consulta que foi DESMARCADA ' +
+      'no sistema da clínica: ela não existe mais. Se o paciente pediu, NESTA mensagem, um horário novo e já escolheu ' +
+      'dia, hora e forma de pagamento, use consultar_horarios e agendar_consulta. Se ele só confirmou o horário antigo ' +
+      'ou perguntou se está tudo certo, NÃO marque nada: diga que vai conferir com a equipe, que confirma em até 1 hora, ' +
+      'sem dizer confirmado, agendado nem reservado. Responda só com a mensagem final ou com a chamada da ferramenta.',
+  );
 });

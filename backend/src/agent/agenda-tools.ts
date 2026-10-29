@@ -1277,7 +1277,8 @@ export function orientacaoDePagamento(
   // Unidade que só recebe no dia: qualquer forma (ou nenhuma, na remarcação) vira "paga na clínica". Nunca chave, nunca valor antecipado.
   if (semAntecipado) {
     return (
-      ` ${PAGAMENTO_NO_DIA} NÃO mencione Pix para reservar, chave Pix, pagar antes da consulta nem desconto. ` +
+      ` ${PAGAMENTO_NO_DIA} O Pix só existe aqui como forma de pagar NA clínica, no dia: NÃO ofereça Pix para reservar a vaga, ` +
+      'NÃO envie chave Pix, NÃO fale em pagar antes da consulta nem em desconto. ' +
       'Na confirmação, o pagamento é só "no dia, na clínica".'
     );
   }
@@ -1318,7 +1319,8 @@ export function orientacaoDePagamento(
 }
 
 export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
-  // Decidido uma vez por turno, com a unidade do contexto: descrição, esquema e porta enxergam a mesma coisa.
+  // Decidido uma vez por turno, com a unidade do contexto: descrição, esquema e porta enxergam a mesma coisa. De propósito NÃO
+  // vem de `fresca`: se a porta pedisse `formaPagamento` e o esquema já não o tivesse, a recusa se repetiria até o fim do turno.
   const semAntecipado = unidadeSemAntecipado(unit);
   return new DynamicStructuredTool({
     name: 'agendar_consulta',

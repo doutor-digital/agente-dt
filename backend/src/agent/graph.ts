@@ -81,7 +81,7 @@ import { conferirTeto, marcarAvisado, logarEstouro, type Veredito } from './teto
 import { conferirTetoMensal, acaoAoEstourar, pausarContaAteProximoMes, type VereditoMensal } from './teto-mensal.js';
 import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
 import {
-  INSTRUCAO_DESMARCADA,
+  instrucaoDesmarcada,
   RECADO_DESMARCADA,
   abrirTarefaParaEquipe,
   afirmaConfirmacao,
@@ -1253,7 +1253,7 @@ export async function buildAgentGraph(
             refeita = (await withTimeout(
               invokeChatModel({
                 model: modeloAtivo,
-                messages: [...finalMessages, response, new HumanMessage(desmarcada ? INSTRUCAO_DESMARCADA : instrucaoReservaSemMarcar(unidadeSemAntecipado(unit)))],
+                messages: [...finalMessages, response, new HumanMessage(desmarcada ? instrucaoDesmarcada(unidadeSemAntecipado(unit)) : instrucaoReservaSemMarcar(unidadeSemAntecipado(unit)))],
                 unitId: unit.id,
                 traceId: recorder.traceId,
                 modelName,

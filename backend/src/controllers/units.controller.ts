@@ -319,7 +319,8 @@ export async function updateUnitHandler(req: Request, res: Response): Promise<vo
     logger.info({ id: unit.id }, 'unit atualizada');
     // Taxa de reserva obrigatória é pagamento antecipado: com as duas flags, a taxa vence e acceptsAdvancePayment=false é ignorada
     // (agent/pagamento-da-unidade.ts). Quem configurou precisa saber que a flag não vale.
-    if (unit.acceptsAdvancePayment === false && unit.spineBookingRequiresPayment) {
+    const mexeuNasFlags = cleaned.acceptsAdvancePayment !== undefined || cleaned.spineBookingRequiresPayment !== undefined;
+    if (mexeuNasFlags && unit.acceptsAdvancePayment === false && unit.spineBookingRequiresPayment) {
       logger.warn(
         { id: unit.id, slug: unit.slug },
         'unit: acceptsAdvancePayment=false junto com spineBookingRequiresPayment=true — a taxa de reserva vence e a flag é ignorada',
