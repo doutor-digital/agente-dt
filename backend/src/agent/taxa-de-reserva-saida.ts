@@ -10,7 +10,8 @@
  *    atendido — pedir de novo a quem pode ter pago é pior que deixar o modelo falar, e deixar sem chave quem pediu é a falha de origem.
  *    Só a AFIRMAÇÃO falsa de horário ("já deixei tudo registrado com a equipe") sai da resposta, também sem pedir pagamento — seja
  *    qual for o motivo da trava. E cartão pago ou ilegível NUNCA libera nem edita uma resposta que contradiz o cadastro (chave,
- *    titular ou valor errados): a chave certa (se a resposta já entregava a chave) ou uma cortesia sem dados toma o lugar.
+ *    titular ou valor errados): cartão PAGO recebe sempre uma cortesia sem dados (nunca o bloco da taxa); cartão ILEGÍVEL
+ *    recebe a chave certa se a resposta já a entregava, senão a mesma cortesia.
  *  - Insistência em pagar só na clínica: a equipe recebe a TAREFA (e o resumo, com prazo que cancela a chamada). O recado só
  *    promete "a equipe vai falar com você" se algum dos dois saiu; senão ele não promete nada.
  *  - Falha ou demora de qualquer ferramenta nunca derruba a resposta ao paciente.
@@ -152,7 +153,7 @@ export async function decidirATaxa(
 ): Promise<DecisaoDaTaxa> {
   const prazoMs = f.prazoDaLeituraMs ?? PRAZO_DA_LEITURA_MS;
   const troca = travaDaTaxaDeReserva(texto, dados, ctx);
-  if (!troca) return { troca: null };
+  if (!troca || !dados) return { troca: null }; // sem dados a trava nunca dispara (a segunda condição só estreita o tipo)
   // O prompt pode não ter trazido a consulta (a IA marcou antes e o bloco falhou): o vínculo gravado por agendar_consulta decide.
   // Só é lido quando a trava já disparou.
   if (await comPrazo(Promise.resolve().then(f.consultaGravada), prazoMs).catch(() => false)) return { troca: null, liberadaPor: 'consulta_gravada' };
@@ -171,7 +172,7 @@ export async function decidirATaxa(
     if (soOPedido) return { troca: soOPedido, erroDoCartao };
     // Sem ler o cartão, nada é pedido (ele pode ter pago), mas a AFIRMAÇÃO falsa de horário ("já deixei tudo registrado") não sai como veio.
     // Dado errado (chave, titular, valor): nem liberada nem editada mantendo-o — sem pedir pagamento (ver `semODadoErrado`).
-    const semOErro = dados ? semODadoErrado(texto, dados, troca) : null;
+    const semOErro = semODadoErrado(texto, dados, troca, { cartaoIlegivel: erroDoCartao !== undefined });
     if (semOErro) return { troca: semOErro, erroDoCartao };
     // Qualquer que seja o MOTIVO da trava ("a equipe te envia a chave", pagar na clínica…), a afirmação falsa de horário sai.
     const semAfirmacao = erroDoCartao !== undefined ? semAAfirmacaoDoHorario(texto) : null;

@@ -457,7 +457,7 @@ export interface TrocaDaTaxa {
   preservouOResto?: boolean;
   /** o que sobrou da resposta do modelo (só quando `preservouOResto`): quem monta o recado de outra forma (a insistência) o reaproveita */
   resto?: string;
-  /** cartão pago/ilegível e a resposta trazia chave, titular ou valor fora do cadastro (`semODadoErrado`): o rastro precisa dizer */
+  /** a resposta trazia chave, titular ou valor fora do cadastro e foi trocada por isso (em qualquer troca, de qualquer cartão): o rastro precisa dizer */
   trouxeDadoErrado?: boolean;
 }
 
@@ -536,8 +536,18 @@ const VALOR_COLADO_NA_TAXA = new RegExp(
   'g',
 );
 /**
+ * "a taxa e R$ 250", "o sinal e R$ 250", "o antecipado e R$ 350" — o "é" do verbo escrito SEM acento. Só vale quando NÃO há valor em R$ (ou
+ * "N reais") logo antes da palavra da taxa: aí o "e" liga dois valores ("R$ 100 antecipado e R$ 250 no dia", "R$ 100 de taxa antecipada e
+ * R$ 250 no dia") e é o cadastro. O "é" COM acento já é o verbo em qualquer caso (`VALOR_COLADO_NA_TAXA`).
+ */
+const VALOR_ANTES_DA_PALAVRA = String.raw`(?:r\$\s*\d+(?:[.,]\d+)*|\d+(?:[.,]\d+)*\s*reais)`;
+const VALOR_COLADO_NA_TAXA_SEM_ACENTO = new RegExp(
+  String.raw`(?<!${VALOR_ANTES_DA_PALAVRA}(?:\s+(?!e\b)\p{L}+){0,3}\s+)\b${PALAVRA_DA_TAXA}(?:\s+de\s+(?:agendamento|reserva))?\s+e\s+(?:de\s+)?${VALOR}`,
+  'gu',
+);
+/**
  * O texto SEM tirar os acentos (só minúsculas): o "é" do verbo ("a taxa é R$ 250") não pode ser confundido com o "e" de ligação
- * ("R$ 100 antecipado e R$ 250 no dia"), que `normalizar` deixa igual. Quem escreve "a taxa e R$ 250" sem acento não é pego aqui.
+ * ("R$ 100 antecipado e R$ 250 no dia"), que `normalizar` deixa igual. O "e" sem acento é tratado à parte (`VALOR_COLADO_NA_TAXA_SEM_ACENTO`).
  */
 const comAcento = (v: string) => v.normalize('NFC').toLowerCase().replace(/[*_~]/g, '').replace(/\s+/g, ' ').trim();
 const emNumero = (v: string) => Number(v.replace(/\./g, '').replace(',', '.'));
@@ -554,7 +564,8 @@ function trazOutroValor(t: string, dados: DadosDaTaxa): boolean {
     const v = emNumero(m[1] ?? m[2] ?? '');
     if (!dados.permitidos.some((p) => mesmoValor(p, v))) return true;
   }
-  for (const m of comAcento(t).matchAll(VALOR_COLADO_NA_TAXA)) {
+  const acentuado = comAcento(t);
+  for (const m of [...acentuado.matchAll(VALOR_COLADO_NA_TAXA), ...acentuado.matchAll(VALOR_COLADO_NA_TAXA_SEM_ACENTO)]) {
     const v = emNumero(m[1] ?? m[2] ?? '');
     if (!mesmoValor(v, dados.valor)) return true;
   }
@@ -635,9 +646,10 @@ function conservandoOResto(
   ehProblema: (trecho: string, normalizado: string) => boolean,
   bloco: string,
   inteiro: string,
-): { texto: string; preservouOResto: boolean; resto?: string } {
+): { texto: string; preservouOResto: boolean; resto?: string; trouxeDadoErrado?: boolean } {
   const recadoInteiro = { texto: inteiro, preservouOResto: false };
-  if (contradizOCadastro(texto, dados)) return recadoInteiro;
+  // dinheiro não se corta: a troca é pelo dado errado, e o rastro (`trouxeDadoErrado`) diz isso em TODO motivo
+  if (contradizOCadastro(texto, dados)) return { ...recadoInteiro, trouxeDadoErrado: true };
   const resto = semOsProblemas(texto, ehProblema);
   if (resto === null) return recadoInteiro;
   if (resto.includes(dados.chave)) return jaTrazAChaveEPedeComprovante(resto, dados) ? { texto: resto, preservouOResto: true } : recadoInteiro;
@@ -653,14 +665,18 @@ const MOTIVOS_QUE_ENTREGAM_A_CHAVE: ReadonlySet<TrocaDaTaxa['motivo']> = new Set
 
 /**
  * Cartão PAGO ou ILEGÍVEL e a trava disparou (`troca`): se a resposta contradiz o cadastro (chave, titular ou valor), ela NÃO sai como
- * veio nem editada mantendo o dado errado — um paciente pagando na conta errada custa mais que uma frase. Sem pedir pagamento:
- *  - a resposta já entregava/oferecia a chave (`MOTIVOS_QUE_ENTREGAM_A_CHAVE`): a chave certa toma o lugar (`troca` inteira, como na base);
- *  - nos outros fluxos (horário garantido, pagar na clínica, insistência): a cortesia `RECADO_SEM_AFIRMACAO`, sem dado nenhum.
+ * veio nem editada mantendo o dado errado — um paciente pagando na conta errada custa mais que uma frase. Sem pedir o pagamento:
+ *  - cartão PAGO, em QUALQUER motivo (inclusive os de chave): a cortesia `RECADO_SEM_AFIRMACAO`, sem dado nenhum — quem pagou não recebe o
+ *    bloco da taxa nem "sem o comprovante, o horário não fica garantido";
+ *  - cartão ILEGÍVEL (pode não ter pago), resposta que já entregava/oferecia a chave (`MOTIVOS_QUE_ENTREGAM_A_CHAVE`): a chave certa toma o
+ *    lugar (`troca` inteira, como na base — decisão do sênior: quem pode não ter pago e esperava a chave a recebe certa);
+ *  - cartão ILEGÍVEL, nos outros fluxos (horário garantido, pagar na clínica, insistência): a cortesia.
+ * O pedido EXPLÍCITO da chave ("manda o pix") não passa por aqui: `decidirATaxa` o atende antes, com a chave certa.
  * null = a resposta não contradiz o cadastro (quem chamou segue o caminho de antes).
  */
-export function semODadoErrado(texto: string, dados: DadosDaTaxa, troca: TrocaDaTaxa): TrocaDaTaxa | null {
+export function semODadoErrado(texto: string, dados: DadosDaTaxa, troca: TrocaDaTaxa, cartao: { cartaoIlegivel: boolean }): TrocaDaTaxa | null {
   if (!contradizOCadastro(texto, dados)) return null;
-  if (MOTIVOS_QUE_ENTREGAM_A_CHAVE.has(troca.motivo)) return { texto: recadoDaChave(dados), motivo: troca.motivo, preservouOResto: false, trouxeDadoErrado: true };
+  if (cartao.cartaoIlegivel && MOTIVOS_QUE_ENTREGAM_A_CHAVE.has(troca.motivo)) return { texto: recadoDaChave(dados), motivo: troca.motivo, preservouOResto: false, trouxeDadoErrado: true };
   return { texto: RECADO_SEM_AFIRMACAO, motivo: 'dado_errado_retirado', preservouOResto: false, trouxeDadoErrado: true };
 }
 
@@ -671,7 +687,8 @@ export function semODadoErrado(texto: string, dados: DadosDaTaxa, troca: TrocaDa
  */
 export function semAAfirmacaoDoHorario(texto: string): TrocaDaTaxa | null {
   if (!afirmaHorarioGarantido(texto)) return null;
-  const resto = semOsProblemas(texto, (t) => afirmaNoTrecho(t));
+  // "Pode pagar tudo no dia" que sobraria é falso para quem não pagou a taxa (cartão ilegível): sai junto, sem pedir nada ao paciente
+  const resto = semOsProblemas(texto, (t, n) => afirmaNoTrecho(t) || liberaPagarNaClinica(n));
   if (resto === null || restoSuspeito(resto)) return { texto: RECADO_SEM_AFIRMACAO, motivo: 'afirmacao_retirada', preservouOResto: false };
   return { texto: resto, motivo: 'afirmacao_retirada', preservouOResto: true, resto };
 }
@@ -707,7 +724,13 @@ export function travaDaTaxaDeReserva(texto: string, dados: DadosDaTaxa | null, c
         RECADO_INSISTIU_NA_CLINICA,
       );
       const resto = r.preservouOResto ? r.resto : undefined; // sem resto aproveitável o recado inteiro tomou o lugar
-      return { texto: recadoDaInsistencia(true, resto ?? null), preservouOResto: !!resto, ...(resto ? { resto } : {}), motivo: 'insistiu_na_clinica' };
+      return {
+        texto: recadoDaInsistencia(true, resto ?? null),
+        preservouOResto: !!resto,
+        ...(resto ? { resto } : {}),
+        ...(r.trouxeDadoErrado ? { trouxeDadoErrado: true } : {}),
+        motivo: 'insistiu_na_clinica',
+      };
     }
     if (!jaTrazAChaveEPedeComprovante(texto, dados)) {
       const r = conservandoOResto(
