@@ -26,17 +26,33 @@ const MAX_ITENS = 12;
 export type ItemOficial = MensagemOficial & { transcricao?: string | null };
 
 /**
+ * No WhatsApp Lite (QR code) o webhook entrega o áudio do paciente como TEXTO — "Você recebeu uma mensagem de
+ * mídia (ID da mensagem: …)" ou "'messageContextInfo' is not yet supported" — e sem o arquivo. O arquivo está na
+ * rota oficial (talks). Mossoró (29/10/2026): 196 avisos assim em 7 dias, 11 áudios transcritos.
+ */
+export function temMidiaSemArquivo(humanMessage: string): boolean {
+  return /Você recebeu uma mensagem de mídia|'messageContextInfo' is not yet supported/i.test(humanMessage);
+}
+
+/**
  * Filtra o que vale a pena mostrar ao modelo: equipe sempre; paciente só quando a
  * mensagem não está na entrada deste turno nem é do turno atual.
  */
-export function selecionarItens(recentes: MensagemOficial[], humanMessage: string, agora: number): MensagemOficial[] {
+export function selecionarItens(
+  recentes: MensagemOficial[],
+  humanMessage: string,
+  agora: number,
+  /** O áudio deste turno NÃO veio pelo webhook (veio só o aviso de mídia): o da rota oficial entra, mesmo sendo recente. */
+  audioDoTurnoSemArquivo = false,
+): MensagemOficial[] {
   const jaNaEntrada = new Set(humanMessage.split('\n').map((s) => s.trim()).filter(Boolean));
   const itens: MensagemOficial[] = [];
   for (const m of recentes) {
     if (m.autor === 'sofia') continue;
     if (m.autor === 'paciente') {
       if (m.texto && jaNaEntrada.has(m.texto)) continue;
-      if (agora - m.em.getTime() < JANELA_DO_TURNO_MS) continue;
+      const ehAudioDoTurno = audioDoTurnoSemArquivo && m.anexo?.tipo === 'voice' && !!m.anexo.link;
+      if (agora - m.em.getTime() < JANELA_DO_TURNO_MS && !ehAudioDoTurno) continue;
     }
     itens.push(m);
   }
@@ -85,10 +101,13 @@ export async function blocoDaConversaOficial(args: {
   recorder: TraceRecorder;
   /** A conversa já lida neste turno (a porta da pausa pela equipe lê antes): evita ler o Kommo duas vezes. */
   msgs?: MensagemOficial[] | null;
+  /** Nenhum áudio chegou pelo webhook neste turno (quem chama sabe). Junto com o aviso de mídia no texto, liga a busca do áudio na rota oficial. */
+  nenhumAudioNoWebhook?: boolean;
 }): Promise<string> {
   const { unit, leadId, humanMessage, recorder } = args;
+  const audioDoTurnoSemArquivo = !!args.nenhumAudioNoWebhook && temMidiaSemArquivo(humanMessage);
   const msgs = args.msgs ?? (await mensagensOficiaisDaUnidade(unit, createKommoClient(unit), leadId, 40));
-  const selecionados = selecionarItens(desdeUltimaFalaDaSofia(msgs), humanMessage, Date.now());
+  const selecionados = selecionarItens(desdeUltimaFalaDaSofia(msgs), humanMessage, Date.now(), audioDoTurnoSemArquivo);
   if (!selecionados.length) return '';
 
   const itens: ItemOficial[] = [];
