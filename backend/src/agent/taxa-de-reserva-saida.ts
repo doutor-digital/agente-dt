@@ -5,14 +5,15 @@
  *
  *  - O que o prompt não trouxe e o código confere antes de trocar: a consulta gravada no vínculo (`agendar_consulta`) e o campo
  *    do cartão "✓ Consulta pg antecipado" (`pagouOAntecipado`). Quem já pagou NUNCA recebe de novo "seu horário não está
- *    garantido" + a chave, nem quando a equipe demorou mais de 24 h para criar a consulta. Sem conseguir ler o cartão, a resposta
- *    sai como veio: pedir pagamento de novo a quem pode ter pago é pior que deixar o modelo falar.
+ *    garantido" + a chave, nem quando a equipe demorou mais de 24 h para criar a consulta. Sem conseguir ler o cartão (erro ou
+ *    prazo), vale a regra de quem já pagou: nada é pedido por conta da Sofia, mas o pedido EXPLÍCITO da chave ("manda o pix") é
+ *    atendido — pedir de novo a quem pode ter pago é pior que deixar o modelo falar, e deixar sem chave quem pediu é a falha de origem.
  *  - Insistência em pagar só na clínica: a equipe recebe a TAREFA (e o resumo, com prazo que cancela a chamada). O recado só
  *    promete "a equipe vai falar com você" se algum dos dois saiu; senão ele não promete nada.
  *  - Falha ou demora de qualquer ferramenta nunca derruba a resposta ao paciente.
  */
 import type { TrocaDaTaxa, ContextoDaTaxa, DadosDaTaxa } from './taxa-de-reserva.js';
-import { RECADO_INSISTIU_NA_CLINICA, RECADO_INSISTIU_SEM_PROMESSA, travaDaTaxaDeReserva } from './taxa-de-reserva.js';
+import { recadoDaInsistencia, travaDaTaxaDeReserva } from './taxa-de-reserva.js';
 import type { TraceRecorder } from './trace-recorder.js';
 
 /** O mesmo prazo do resumo do sinal de alerta (passe-por-sinal.ts). */
@@ -150,14 +151,19 @@ export async function decidirATaxa(
   // Só é lido quando a trava já disparou.
   if (await comPrazo(Promise.resolve().then(f.consultaGravada), prazoMs).catch(() => false)) return { troca: null, liberadaPor: 'consulta_gravada' };
   // Quem já pagou (campo do cartão) não paga de novo — só o pedido EXPLÍCITO da chave segue atendido (mesma regra do comprovante
-  // antigo). Sem ler o cartão não dá para saber: a resposta fica como veio.
+  // antigo). Sem ler o cartão (erro ou prazo) não dá para saber se pagou: vale a mesma regra, e o erro vai no rastro.
+  let cartaoPago: boolean;
+  let erroDoCartao: string | undefined;
   try {
-    if (await comPrazo(Promise.resolve().then(f.cartaoDizPago), prazoMs)) {
-      const soOPedido = travaDaTaxaDeReserva(texto, dados, { ...ctx, jaMandouComprovante: true });
-      return soOPedido ? { troca: soOPedido } : { troca: null, liberadaPor: 'cartao_pago' };
-    }
+    cartaoPago = await comPrazo(Promise.resolve().then(f.cartaoDizPago), prazoMs);
   } catch (err) {
-    return { troca: null, liberadaPor: 'cartao_ilegivel', erroDoCartao: err instanceof Error ? err.message : String(err) };
+    cartaoPago = true; // na dúvida, trata como quem pode ter pago
+    erroDoCartao = err instanceof Error ? err.message : String(err);
+  }
+  if (cartaoPago) {
+    const soOPedido = travaDaTaxaDeReserva(texto, dados, { ...ctx, jaMandouComprovante: true });
+    const liberadaPor = erroDoCartao === undefined ? 'cartao_pago' : 'cartao_ilegivel';
+    return soOPedido ? { troca: soOPedido, erroDoCartao } : { troca: null, liberadaPor, erroDoCartao };
   }
   return { troca };
 }
@@ -174,14 +180,17 @@ export async function aplicarTaxaDeReservaNaSaida(
 ): Promise<SaidaDaTaxa> {
   const decisao = await decidirATaxa(texto, dados, ctx, f);
   const troca = decisao.troca;
+  if (decisao.erroDoCartao !== undefined) {
+    await f.recorder.step({
+      kind: 'ERROR',
+      title: troca
+        ? 'Taxa de reserva: não consegui ler o cartão para ver se ele já pagou — só o pedido explícito da chave foi atendido'
+        : 'Taxa de reserva: não consegui ler o cartão para ver se ele já pagou — a resposta saiu como veio',
+      payload: { erro: decisao.erroDoCartao },
+    });
+  }
   if (!troca) {
-    if (decisao.liberadaPor === 'cartao_ilegivel') {
-      await f.recorder.step({
-        kind: 'ERROR',
-        title: 'Taxa de reserva: não consegui ler o cartão para ver se ele já pagou — a resposta saiu como veio',
-        payload: { erro: decisao.erroDoCartao },
-      });
-    } else if (decisao.liberadaPor === 'cartao_pago') {
+    if (decisao.liberadaPor === 'cartao_pago') {
       await f.recorder.step({
         kind: 'THINKING',
         title: 'Taxa de reserva: o cartão já está com "✓ Consulta pg antecipado" marcado — a taxa não é pedida de novo',
@@ -191,17 +200,20 @@ export async function aplicarTaxaDeReservaNaSaida(
     return { texto, troca: null, liberadaPor: decisao.liberadaPor };
   }
 
+  // Insistiu em pagar só na clínica: a equipe precisa ver. Só promete que ela fala com o paciente se a tarefa ou o resumo saiu —
+  // por isso o texto final só existe depois, e é ESSE (não o que a trava previu) que vai para o rastro.
+  const insistiu = troca.motivo === 'insistiu_na_clinica';
+  const equipeAvisada = insistiu ? await avisarAEquipe(f).catch(() => false) : undefined;
+  const final = insistiu ? recadoDaInsistencia(!!equipeAvisada, troca.preservouOResto ? (troca.resto ?? null) : null) : troca.texto;
+  const trocaFinal: TrocaDaTaxa = { ...troca, texto: final };
+
   await f.recorder.step({
     kind: 'THINKING',
     title: `💳 Taxa de reserva: ${QUEM_FALOU[troca.motivo]}${troca.preservouOResto ? ' (o resto da resposta ficou)' : ''}`,
-    payload: { motivo: troca.motivo, original: texto, final: troca.texto, preservouOResto: troca.preservouOResto ?? false },
+    payload: { motivo: troca.motivo, original: texto, final, preservouOResto: troca.preservouOResto ?? false, equipeAvisada },
   });
 
-  if (troca.motivo !== 'insistiu_na_clinica') return { texto: troca.texto, troca };
-
-  // Insistiu em pagar só na clínica: a equipe precisa ver. Só promete que ela fala com o paciente se a tarefa ou o resumo saiu.
-  const equipeAvisada = await avisarAEquipe(f).catch(() => false);
-  if (!equipeAvisada) {
+  if (insistiu && !equipeAvisada) {
     await f.recorder.step({
       kind: 'ERROR',
       title: 'Taxa de reserva: o paciente insiste em pagar só na clínica e NADA chegou à equipe — o recado não promete que ela fala com ele',
@@ -213,5 +225,5 @@ export async function aplicarTaxaDeReservaNaSaida(
       )
       .catch(() => undefined);
   }
-  return { texto: equipeAvisada ? RECADO_INSISTIU_NA_CLINICA : RECADO_INSISTIU_SEM_PROMESSA, troca, equipeAvisada };
+  return insistiu ? { texto: final, troca: trocaFinal, equipeAvisada } : { texto: final, troca: trocaFinal };
 }

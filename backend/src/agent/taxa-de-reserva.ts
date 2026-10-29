@@ -125,7 +125,8 @@ export function pacienteQuerPagarNaClinica(falasDoTurno: ReadonlyArray<string>):
  * remarcar?"). "Quanto" só exclui se vem ANTES do trecho de pagar ("quero pagar tudo no dia, quanto fica?" segue sendo recusa).
  */
 function perguntaDeOutraCoisa(frase: string, inicioDoPagar: number): boolean {
-  const quanto = frase.search(/\bquanto\b/);
+  // "Quanto à taxa, vou pagar na clínica mesmo" é "quanto a" = "quanto à/ao": introduz o assunto, não pergunta valor
+  const quanto = frase.search(/\bquanto\b(?!\s+(?:a|as|ao|aos)\b)/);
   if (quanto >= 0 && quanto < inicioDoPagar) return true;
   if (!/\?\s*$/.test(frase)) return false;
   return /\b(?:remarc\w*|reagend\w*|desmarc\w*|cancel\w*|cartao|credito|debito|dinheiro|especie|parcel\w*|dividir)\b/.test(frase);
@@ -226,7 +227,16 @@ const ANUNCIA_UMA_ACAO =
 const SO_DISPONIVEL = /\b(?:disponivel|disponiveis|livre|livres|vago|vagos)\b/;
 const AFIRMA_GUARDA = /\b(?:confirmad|agendad|reservad|garantid|marcad|anotad|registrad)[oa]s?\b|\b(?:deixei|deixo|deixar|reservei|reservo|garanti|garanto|agendei|marquei)\b|\btudo cert\w*|\bcertinh\w*/;
 /** "Deixei anotado aqui que o melhor horário é à tarde": a preferência dele foi anotada, não o horário reservado. */
-const ANOTOU_O_QUE_ELE_DISSE = /^\s*(?:aqui\s+|por aqui\s+)?que\b/;
+const ANOTOU_O_QUE_ELE_DISSE = /^\s*(?:aqui\s+|por aqui\s+)?que\s+(?<dito>.*)$/;
+/** Depois do "que", o sujeito é ELE ("que você prefere quinta à tarde", "que o melhor horário é amanhã"): é o pedido dele, mesmo com dia/hora. */
+const SUJEITO_E_ELE = /^(?:voce|vc|ele|ela|o senhor|a senhora|o paciente|o melhor horario|a melhor hora|sua preferencia|a sua preferencia)\b/;
+/** O que foi anotado é a preferência dele? Com dia/hora só se o sujeito for ele; "que seu horário é quinta às 14h" afirma. */
+function anotouOQueEleDisse(depois: string): boolean {
+  const dito = ANOTOU_O_QUE_ELE_DISSE.exec(depois)?.groups?.dito;
+  if (dito === undefined) return false;
+  if (AFIRMA_GUARDA.test(dito)) return false;
+  return !QUANDO_HORARIO.test(dito) || SUJEITO_E_ELE.test(dito.trim());
+}
 const E_ASSUNTO_DE_HORARIO = /\b(?:receber|horario|consulta|atendimento|vaga)\b/;
 
 /**
@@ -260,28 +270,33 @@ function oracaoNeutra(o: string): boolean {
   return (ANUNCIA_UMA_ACAO.test(n) || SO_DISPONIVEL.test(n)) && !AFIRMA_GUARDA.test(n);
 }
 
-function afirmaNaOracao(t: string): boolean {
+/**
+ * `horarioDito`: a oração neutra que saiu do julgamento falava de dia/hora disponível ("quinta às 14h está disponível, deixei tudo
+ * registrado"). O dia e a hora continuam sendo o assunto do resto, que sozinho ("deixei tudo registrado") não os traria.
+ */
+function afirmaNaOracao(t: string, horarioDito = false): boolean {
   const oracoes = t.split(/,\s+/); // vírgula de decimal ("R$ 1,50") não separa oração
   if (oracoes.some(oracaoNeutra)) {
     // a oração neutra sai do julgamento; o que sobra do trecho continua valendo ("Sua consulta está confirmada, vou ver…" afirma)
     const resto = oracoes.filter((o) => !oracaoNeutra(o)).join(', ');
-    return !!resto && afirmaNaOracao(resto);
+    const disseOHorario = oracoes.some((o) => oracaoNeutra(o) && SO_DISPONIVEL.test(normalizar(o)) && QUANDO_HORARIO.test(normalizar(o)));
+    return !!resto && afirmaNaOracao(resto, horarioDito || disseOHorario);
   }
   const n = normalizar(t);
   const assunto = QUANDO_HORARIO.test(n) || E_ASSUNTO_DE_HORARIO.test(n);
   // "Tudo certo, vou precisar do seu nome" é coleta de dado, não horário: a frase solta só vale com horário/consulta/dia no trecho.
   if (afirmaConfirmacao(t, { soForte: true }) || (assunto && afirmaConfirmacao(t))) return true;
   for (const [re, vale] of [
-    [ATE_JA, QUANDO_HORARIO.test(n)],
-    [DEIXEI_REGISTRADO, assunto],
+    [ATE_JA, QUANDO_HORARIO.test(n) || horarioDito],
+    [DEIXEI_REGISTRADO, assunto || horarioDito],
     // "pra te receber bem" é cortesia: só vale com hora ou dia
-    [PRA_TE_RECEBER, QUANDO_HORARIO.test(n)],
+    [PRA_TE_RECEBER, QUANDO_HORARIO.test(n) || horarioDito],
   ] as const) {
     const m = re.exec(n);
     if (!m || !vale) continue;
     if (CONDICAO_ANTES.test(n.slice(0, m.index)) || NAO_AFIRMA_CONFIRMACAO.test(n.slice(Math.max(0, m.index - 25), m.index + m[0].length))) continue;
-    // "deixei anotado que…" sem dia nem hora depois: é o que ELE disse (preferência, nome), não horário garantido
-    if (re === DEIXEI_REGISTRADO && ANOTOU_O_QUE_ELE_DISSE.test(n.slice(m.index + m[0].length)) && !QUANDO_HORARIO.test(n.slice(m.index + m[0].length))) continue;
+    // "deixei anotado que…" e o que vem depois é o que ELE disse (preferência, nome, dia que prefere), não horário garantido
+    if (re === DEIXEI_REGISTRADO && anotouOQueEleDisse(n.slice(m.index + m[0].length))) continue;
     return true;
   }
   return false;
@@ -334,28 +349,43 @@ export function recadoPagarNaClinica(d: DadosDaTaxa): string {
   return `Entendi! ${explicacaoDaClinica(d)}`;
 }
 
+const CORPO_INSISTIU_NA_CLINICA = 'Anotei que você prefere pagar na clínica e a equipe vai falar com você aqui na conversa para ver como fica. 🙏';
+const CORPO_INSISTIU_SEM_PROMESSA =
+  'Entendi que você prefere pagar na clínica. Só que, sem a taxa de agendamento, o horário não fica separado. Se quiser garantir, é só me avisar que eu te passo a chave Pix. 🙏';
+
 /** O paciente insiste em pagar só na clínica depois de receber a chave: a equipe cuida, e o horário NÃO é prometido. */
-export const RECADO_INSISTIU_NA_CLINICA =
-  'Tudo bem! Anotei que você prefere pagar na clínica e a equipe vai falar com você aqui na conversa para ver como fica. 🙏';
+export const RECADO_INSISTIU_NA_CLINICA = `Tudo bem! ${CORPO_INSISTIU_NA_CLINICA}`;
 
 /** O mesmo caso quando NADA chegou à equipe (sem ferramenta, prazo estourado, erro): o recado não promete o que não aconteceu. */
-export const RECADO_INSISTIU_SEM_PROMESSA =
-  'Tudo bem! Entendi que você prefere pagar na clínica. Só que, sem a taxa de agendamento, o horário não fica separado. Se quiser garantir, é só me avisar que eu te passo a chave Pix. 🙏';
-
-/** A conversa já teve o encaminhamento à equipe (com a promessa feita): a insistência é tratada UMA vez por conversa. */
-export function jaEncaminhouAInsistencia(texto: string | null | undefined): boolean {
-  return String(texto ?? '').includes(RECADO_INSISTIU_NA_CLINICA);
-}
-
-/** Quantas vezes o recado SEM promessa (nada chegou à equipe) pode repetir o ciclo antes de parar de tentar (resumo + alerta ao João a cada turno). */
-const TENTATIVAS_SEM_EQUIPE = 2;
+export const RECADO_INSISTIU_SEM_PROMESSA = `Tudo bem! ${CORPO_INSISTIU_SEM_PROMESSA}`;
 
 /**
- * Todas as respostas anteriores da IA nesta conversa: a insistência já foi tratada? Sim se o encaminhamento saiu (com a promessa) ou
- * se já houve `TENTATIVAS_SEM_EQUIPE` recados sem promessa — sem teto, uma falha do Kommo viraria resumo e Telegram a cada turno.
+ * O recado da insistência, com ou sem a promessa da equipe. `resto`: o que a resposta do modelo tinha de aproveitável (o endereço
+ * que ele também perguntou); sem resto, o recado inteiro com a abertura.
  */
+export function recadoDaInsistencia(equipeAvisada: boolean, resto: string | null = null): string {
+  const corpo = equipeAvisada ? CORPO_INSISTIU_NA_CLINICA : CORPO_INSISTIU_SEM_PROMESSA;
+  if (resto) return `${resto}\n\n${corpo}`;
+  return equipeAvisada ? RECADO_INSISTIU_NA_CLINICA : RECADO_INSISTIU_SEM_PROMESSA;
+}
+
+/**
+ * A resposta é (ou traz) o recado da insistência, com ou sem a promessa da equipe. Os dois contam: o recado sem promessa também
+ * fecha o ciclo — o João já foi avisado pelo Telegram e repetir só reenvia a chave e o alerta a cada insistência.
+ */
+export function jaEncaminhouAInsistencia(texto: string | null | undefined): boolean {
+  const t = String(texto ?? '');
+  return t.includes(CORPO_INSISTIU_NA_CLINICA) || t.includes(CORPO_INSISTIU_SEM_PROMESSA);
+}
+
+/** Todas as respostas anteriores da IA nesta conversa: a insistência já foi tratada (com ou sem a promessa da equipe)? */
 export function insistenciaJaTratada(respostasDaIA: ReadonlyArray<string>): boolean {
-  return respostasDaIA.some(jaEncaminhouAInsistencia) || respostasDaIA.filter((t) => t.includes(RECADO_INSISTIU_SEM_PROMESSA)).length >= TENTATIVAS_SEM_EQUIPE;
+  return respostasDaIA.some(jaEncaminhouAInsistencia);
+}
+
+/** O paciente ainda quer pagar na clínica e o modelo disse que pode: o lembrete da taxa, sem repetir a chave nem avisar a equipe de novo. */
+function lembreteDaTaxa(d: DadosDaTaxa): string {
+  return `Só lembrando que o horário só fica separado com a taxa de agendamento de ${reais(d.valor)}, por Pix. Quando quiser garantir, é só me avisar que eu te passo a chave. 🙏`;
 }
 
 /** Alguma fala do paciente traz comprovante lido (foto/PDF), de QUALQUER data: quem já pagou não paga de novo por ter passado 24 h. */
@@ -390,11 +420,57 @@ export interface TrocaDaTaxa {
   motivo: 'chave_pedida' | 'equipe_envia_a_chave' | 'chave_oferecida' | 'pagar_na_clinica' | 'insistiu_na_clinica' | 'horario_sem_comprovante';
   /** o resto da resposta do modelo foi mantido e o bloco da chave, acrescentado (false = o recado inteiro tomou o lugar) */
   preservouOResto?: boolean;
+  /** o que sobrou da resposta do modelo (só quando `preservouOResto`): quem monta o recado de outra forma (a insistência) o reaproveita */
+  resto?: string;
 }
 
-/** A resposta já traz a chave EXATA e pede o comprovante: não há o que corrigir. */
+// --- Chave e valor ERRADOS na resposta do modelo --------------------------------------------------------------------------------
+
+const digitos = (v: string) => v.replace(/\D/g, '');
+const EMAIL = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi;
+const UUID = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
+/** CNPJ, CPF ou celular, com ou sem pontuação: de 10 a 14 dígitos numa sequência só. */
+const SEQUENCIA_DE_DIGITOS = /\d[\d.\-/() ]{8,}\d/g;
+
+/** O trecho fala de Pix/chave e traz uma chave que NÃO é a do cadastro (CNPJ trocado, e-mail, aleatória)? */
+function trazOutraChave(t: string, dados: DadosDaTaxa): boolean {
+  if (!/\b(?:pix|chave)\b/.test(normalizar(t))) return false;
+  const minha = digitos(dados.chave);
+  const minhaTexto = dados.chave.toLowerCase();
+  const outraTextual = [...(t.match(EMAIL) ?? []), ...(t.match(UUID) ?? [])].some((c) => c.toLowerCase() !== minhaTexto);
+  const outraNumerica = (t.match(SEQUENCIA_DE_DIGITOS) ?? []).some((c) => {
+    const d = digitos(c);
+    return d.length >= 10 && d.length <= 14 && !(minha !== '' && (d === minha || minha.endsWith(d)));
+  });
+  return outraTextual || outraNumerica;
+}
+
+const VALOR = String.raw`r\$\s*(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:,\d{1,2})?)`;
+const PALAVRA_DA_TAXA = String.raw`(?:taxa|pix|antecipad\w*|sinal|reserva|agendamento|entrada)`;
+const VALOR_DEPOIS_DA_TAXA = new RegExp(String.raw`\b${PALAVRA_DA_TAXA}\b[^.?!]{0,25}?${VALOR}`, 'g');
+const VALOR_ANTES_DA_TAXA = new RegExp(String.raw`${VALOR}\s*(?:de |da |do )?${PALAVRA_DA_TAXA}\b`, 'g');
+const emNumero = (v: string) => Number(v.replace(/\./g, '').replace(',', '.'));
+
+/** O trecho dá, como valor da taxa, um que NÃO é o do cadastro ("a taxa é R$ 50")? O valor da consulta ("R$ 350") não conta. */
+function trazOutroValorDaTaxa(t: string, dados: DadosDaTaxa): boolean {
+  const n = normalizar(t);
+  const citados = [...n.matchAll(VALOR_DEPOIS_DA_TAXA), ...n.matchAll(VALOR_ANTES_DA_TAXA)].map((m) => emNumero(m[1]));
+  return citados.length > 0 && !citados.some((v) => Math.abs(v - dados.valor) < 0.005);
+}
+
+/** O trecho contradiz o cadastro: outra chave Pix, ou outro valor para a taxa. Nunca fica ao lado dos dados certos. */
+function contradizOCadastro(t: string, dados: DadosDaTaxa): boolean {
+  return trazOutraChave(t, dados) || trazOutroValorDaTaxa(t, dados);
+}
+
+/** A resposta já traz a chave EXATA e pede o comprovante (e não contradiz o cadastro): não há o que corrigir. */
 function jaTrazAChaveEPedeComprovante(texto: string, d: DadosDaTaxa): boolean {
-  return texto.includes(d.chave) && /comprovante/.test(normalizar(texto)) && !empurrouAChaveParaEquipe(texto);
+  return (
+    texto.includes(d.chave) &&
+    /comprovante/.test(normalizar(texto)) &&
+    !empurrouAChaveParaEquipe(texto) &&
+    !trechos(texto).some((t) => contradizOCadastro(t, d))
+  );
 }
 
 /** "Sem isso, o horário pode ser ocupado": pendurado numa frase que saiu, não faz sentido sozinho. */
@@ -417,8 +493,25 @@ function restoSuspeito(resto: string): boolean {
 }
 
 /**
- * Tira da resposta só o que é problema (`ehProblema`), passa o resto pela MESMA trava e acrescenta o bloco. O recado inteiro fica
- * como último recurso: sobrou quase nada, o resto ainda é problema, ou o resto já traz a chave mas sem o pedido do comprovante.
+ * A resposta SEM os trechos-problema (`ehProblema`, o que contradiz o cadastro, o "sem isso…" pendurado). null = não sobra nada
+ * que valha manter: o recado inteiro é o último recurso. Sobrou só uma interjeição ("Perfeito!", "Tudo bem!") também é nada.
+ */
+function semOsProblemas(texto: string, dados: DadosDaTaxa, ehProblema: (trecho: string, normalizado: string) => boolean): string | null {
+  let resto = texto;
+  for (const t of trechos(texto)) {
+    const n = normalizar(t);
+    if (!ehProblema(t, n) && !PENDURADO.test(n) && !contradizOCadastro(t, dados)) continue;
+    const sem = semOTrecho(resto, t);
+    if (sem === null) return null;
+    resto = sem;
+  }
+  resto = resto.trim();
+  return resto.replace(/[\p{P}\p{S}\s]/gu, '').length >= 10 ? resto : null;
+}
+
+/**
+ * Tira da resposta só o que é problema, passa o resto pela MESMA trava e acrescenta o bloco. O recado inteiro fica como último
+ * recurso: sobrou quase nada, o resto ainda é problema, ou o resto já traz a chave mas sem o pedido do comprovante.
  */
 function conservandoOResto(
   texto: string,
@@ -426,27 +519,19 @@ function conservandoOResto(
   ehProblema: (trecho: string, normalizado: string) => boolean,
   bloco: string,
   inteiro: string,
-): { texto: string; preservouOResto: boolean } {
+): { texto: string; preservouOResto: boolean; resto?: string } {
   const recadoInteiro = { texto: inteiro, preservouOResto: false };
-  let resto = texto;
-  for (const t of trechos(texto)) {
-    const n = normalizar(t);
-    if (!ehProblema(t, n) && !PENDURADO.test(n)) continue;
-    const sem = semOTrecho(resto, t);
-    if (sem === null) return recadoInteiro;
-    resto = sem;
-  }
-  resto = resto.trim();
-  if (!resto) return recadoInteiro;
+  const resto = semOsProblemas(texto, dados, ehProblema);
+  if (resto === null) return recadoInteiro;
   if (resto.includes(dados.chave)) return jaTrazAChaveEPedeComprovante(resto, dados) ? { texto: resto, preservouOResto: true } : recadoInteiro;
   if (restoSuspeito(resto)) return recadoInteiro;
-  return { texto: `${resto}\n\n${bloco}`, preservouOResto: true };
+  return { texto: `${resto}\n\n${bloco}`, preservouOResto: true, resto };
 }
 
 /**
  * A decisão: null = a resposta sai como veio. Primeiro a chave (pedida pelo paciente, ou empurrada para a equipe); depois o
- * horário dado como garantido sem prova. Uma troca só por turno. Nas trocas da chave e da clínica o RESTO da resposta
- * (o endereço que ele também perguntou) fica e o bloco da chave é acrescentado.
+ * horário dado como garantido sem prova. Uma troca só por turno. Em TODAS as trocas o RESTO da resposta (o endereço que ele
+ * também perguntou) fica e o bloco certo é acrescentado; o que contradiz o cadastro (outra chave, outro valor) sai.
  */
 export function travaDaTaxaDeReserva(texto: string, dados: DadosDaTaxa | null, ctx: ContextoDaTaxa): TrocaDaTaxa | null {
   if (!dados || ctx.consultaDePe || ctx.emTratamento || ctx.comprovanteLido) return null;
@@ -462,8 +547,19 @@ export function travaDaTaxaDeReserva(texto: string, dados: DadosDaTaxa | null, c
   // Quer pagar só na clínica. Já recebeu a chave e insiste: equipe (UMA vez por conversa; depois a conversa segue como está,
   // sem novo recado nem novo resumo). Senão: a taxa em uma frase e a chave na MESMA mensagem.
   const insistenciaTratada = ctx.insistenciaJaEncaminhada || jaEncaminhouAInsistencia(ctx.respostaAnterior);
-  if (!insistenciaTratada && pacienteQuerPagarNaClinica(ctx.falasDoPaciente)) {
-    if (chaveJaEnviada) return { texto: RECADO_INSISTIU_NA_CLINICA, motivo: 'insistiu_na_clinica' };
+  const querPagarNaClinica = pacienteQuerPagarNaClinica(ctx.falasDoPaciente);
+  if (!insistenciaTratada && querPagarNaClinica) {
+    if (chaveJaEnviada) {
+      // o recado promete (ou não) a equipe conforme o que saiu; aqui vale a versão com promessa, e o resto da resposta é guardado
+      const r = conservandoOResto(
+        texto,
+        dados,
+        (t, n) => t.includes(dados.chave) || ofereceuAChaveEmPergunta(t) || empurrouAChaveParaEquipe(t) || RESPONDE_PAGAR_NA_CLINICA.test(n) || afirmaNoTrecho(t),
+        CORPO_INSISTIU_NA_CLINICA,
+        RECADO_INSISTIU_NA_CLINICA,
+      );
+      return { ...r, texto: r.preservouOResto && r.resto ? recadoDaInsistencia(true, r.resto) : RECADO_INSISTIU_NA_CLINICA, motivo: 'insistiu_na_clinica' };
+    }
     if (!jaTrazAChaveEPedeComprovante(texto, dados)) {
       const r = conservandoOResto(
         texto,
@@ -475,6 +571,14 @@ export function travaDaTaxaDeReserva(texto: string, dados: DadosDaTaxa | null, c
       return { ...r, motivo: 'pagar_na_clinica' };
     }
   }
+  // Insistência já tratada e o modelo diz que ele PODE pagar tudo na clínica: contradiz a taxa. O trecho sai e entra o lembrete da
+  // taxa — sem a chave de novo, sem novo resumo, sem nova tarefa (a equipe já foi avisada, ou o João já recebeu o alerta).
+  // "O restante você paga na clínica" é a verdade (a taxa é a parte antecipada): só "paga TUDO na clínica" contradiz.
+  const liberaPagarNaClinica = (n: string) => RESPONDE_PAGAR_NA_CLINICA.test(n) && !/\b(?:resto|restante|saldo|diferenca|o que falta|complemento)\b/.test(n);
+  if (insistenciaTratada && querPagarNaClinica && trechos(texto).some((t) => liberaPagarNaClinica(normalizar(t)))) {
+    const r = conservandoOResto(texto, dados, (_t, n) => liberaPagarNaClinica(n), lembreteDaTaxa(dados), lembreteDaTaxa(dados));
+    return { ...r, motivo: 'pagar_na_clinica' };
+  }
   const pediu = pacientePediuAChave(ctx.falasDoPaciente, { soPedidoExplicito: chaveJaEnviada });
   const empurrou = empurrouAChaveParaEquipe(texto);
   const ofereceu = ofereceuAChaveEmPergunta(texto);
@@ -482,6 +586,9 @@ export function travaDaTaxaDeReserva(texto: string, dados: DadosDaTaxa | null, c
     const r = conservandoOResto(texto, dados, (t) => empurrouAChaveParaEquipe(t) || ofereceuAChaveEmPergunta(t), pedidoDaChave(dados), recadoDaChave(dados));
     return { ...r, motivo: empurrou ? 'equipe_envia_a_chave' : ofereceu ? 'chave_oferecida' : 'chave_pedida' };
   }
-  if (afirmaHorarioGarantido(texto)) return { texto: recadoSemComprovante(dados), motivo: 'horario_sem_comprovante', preservouOResto: false };
+  if (afirmaHorarioGarantido(texto)) {
+    const r = conservandoOResto(texto, dados, (t) => afirmaNoTrecho(t), recadoSemComprovante(dados), recadoSemComprovante(dados));
+    return { ...r, motivo: 'horario_sem_comprovante' };
+  }
   return null;
 }

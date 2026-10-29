@@ -387,7 +387,7 @@ test('o recado nunca traz lacuna nem dado fora do cadastro', () => {
 // --- Correção pós-merge do #158 (reprovação do sênior, 28/10) -------------------------------------------------------------------
 
 import { comprovantesDoTexto, marcarRecebimento, turnoDoComprovante } from './confirmacao-so-com-crm.js';
-import { pacienteJaMandouComprovante, jaEncaminhouAInsistencia, insistenciaJaTratada, RECADO_INSISTIU_SEM_PROMESSA } from './taxa-de-reserva.js';
+import { pacienteJaMandouComprovante, jaEncaminhouAInsistencia, insistenciaJaTratada, RECADO_INSISTIU_SEM_PROMESSA, recadoDaInsistencia } from './taxa-de-reserva.js';
 
 const HA_3_DIAS = new Date(Date.now() - 3 * 24 * 3_600_000);
 const COMPROVANTE_ANTIGO = marcarRecebimento('[imagem do cliente]: COMPROVANTE: Pix enviado. Valor: R$ 100,00.', HA_3_DIAS);
@@ -540,7 +540,7 @@ test('3: depois do encaminhamento, uma resposta comum do modelo no meio não rea
 
 test('2: o recado sem promessa não diz que a equipe vai falar com ele, e é um recado limpo', () => {
   assert.doesNotMatch(RECADO_INSISTIU_SEM_PROMESSA, /equipe/i);
-  assert.equal(jaEncaminhouAInsistencia(RECADO_INSISTIU_SEM_PROMESSA), false, 'sem promessa não conta como encaminhado: a próxima insistência tenta de novo');
+  assert.equal(jaEncaminhouAInsistencia(RECADO_INSISTIU_SEM_PROMESSA), true, 'o recado sem promessa também fecha o ciclo (o João já recebeu o alerta); senão a chave e o alerta se repetem');
   assert.equal(jaEncaminhouAInsistencia(RECADO_INSISTIU_NA_CLINICA), true);
   assert.equal(afirmaHorarioGarantido(RECADO_INSISTIU_SEM_PROMESSA), false);
   assert.equal(empurrouAChaveParaEquipe(RECADO_INSISTIU_SEM_PROMESSA), false);
@@ -619,9 +619,152 @@ test('2ª revisão: vírgula de decimal não separa oração, e o horário que a
   assert.equal(afirmaHorarioGarantido('Tudo certo, vou ver o valor de R$ 150,00 pra você'), false);
 });
 
-test('2ª revisão: sem equipe avisada a insistência tenta de novo UMA vez e para (sem resumo e alerta a cada turno)', () => {
+test('2ª revisão: a insistência é tratada UMA vez, com ou sem a promessa da equipe (sem resumo e alerta a cada turno)', () => {
   assert.equal(insistenciaJaTratada([]), false);
-  assert.equal(insistenciaJaTratada([RECADO_INSISTIU_SEM_PROMESSA]), false);
-  assert.equal(insistenciaJaTratada([RECADO_INSISTIU_SEM_PROMESSA, 'Tudo bem!', RECADO_INSISTIU_SEM_PROMESSA]), true);
+  assert.equal(insistenciaJaTratada([RECADO_INSISTIU_SEM_PROMESSA]), true);
   assert.equal(insistenciaJaTratada(['oi', RECADO_INSISTIU_NA_CLINICA]), true);
+  assert.equal(insistenciaJaTratada(['oi', 'Tudo bem!']), false);
+});
+
+// --- Correção pós-merge do #158, 2ª rodada do sênior (29/10) -----------------------------------------------------------------------------
+
+const END = 'Av. Ville Roy, 1234';
+const semChaveNemValorErrado = (t: string) => {
+  assert.doesNotMatch(t, /15\.765\.035/, t);
+  assert.doesNotMatch(t, /R\$ 50\b/, t);
+};
+
+test('2ª rodada, item 2: chave e valor ERRADOS do modelo saem; só os do cadastro ficam', () => {
+  const r = travaDaTaxaDeReserva('A chave Pix é 15.765.035/0001-52 e a taxa é R$ 50', DADOS, com({ falasDoPaciente: ['e o pix?'] }));
+  assert.equal(r?.motivo, 'chave_pedida');
+  semChaveNemValorErrado(r!.texto);
+  assert.match(r!.texto, /Chave Pix: 12\.345\.678\/0001-90/);
+  assert.match(r!.texto, /R\$ 100/);
+  // o endereço da mesma resposta fica
+  const comEndereco = travaDaTaxaDeReserva(`Fica na ${END}. A chave Pix é 15.765.035/0001-52 e a taxa é R$ 50.`, DADOS, com({ falasDoPaciente: ['e o pix?', 'qual o endereço?'] }));
+  semChaveNemValorErrado(comEndereco!.texto);
+  assert.match(comEndereco!.texto, new RegExp(`Fica na ${END}\\.`));
+  assert.equal(comEndereco!.preservouOResto, true);
+});
+
+test('2ª rodada, item 2: chave errada com o paciente querendo pagar na clínica, e valor errado ao lado da chave certa', () => {
+  const clinica = travaDaTaxaDeReserva('Tudo bem! Se quiser garantir, a chave é 15.765.035/0001-52.', DADOS, com({ falasDoPaciente: ['só pago na clínica'] }));
+  assert.equal(clinica?.motivo, 'pagar_na_clinica');
+  semChaveNemValorErrado(clinica!.texto);
+  assert.match(clinica!.texto, /12\.345\.678\/0001-90/);
+  const valor = travaDaTaxaDeReserva('A chave é 12.345.678/0001-90, a taxa é R$ 50. Me manda o comprovante, tá?', DADOS, com({ falasDoPaciente: ['e o pix?'] }));
+  semChaveNemValorErrado(valor!.texto);
+  assert.match(valor!.texto, /R\$ 100/);
+});
+
+test('2ª rodada, item 2: o valor da CONSULTA e o valor certo da taxa não são "valor errado"', () => {
+  const r = travaDaTaxaDeReserva('A consulta é R$ 350 no total, sendo R$ 100 de taxa de agendamento. A equipe te envia a chave.', DADOS, com({ falasDoPaciente: ['e o pix?'] }));
+  assert.match(r!.texto, /R\$ 350 no total, sendo R\$ 100 de taxa/);
+  // a resposta correta e completa não é mexida
+  assert.equal(travaDaTaxaDeReserva('A taxa é R$ 100. Chave Pix: 12.345.678/0001-90. Me manda o comprovante.', DADOS, com({ falasDoPaciente: ['e o pix?'] })), null);
+});
+
+test('2ª rodada, item 3: a oração neutra sai do julgamento mas o dia e a hora que ela citava continuam sendo o assunto', () => {
+  for (const frase of [
+    'Perfeito, quinta às 14h está disponível, deixei tudo registrado pra você',
+    'Ótimo, sexta às 9h está livre, já deixei anotado pra você!',
+  ]) {
+    assert.equal(afirmaHorarioGarantido(frase), true, frase);
+    assert.equal(travaDaTaxaDeReserva(frase, DADOS, com({ falasDoPaciente: ['quinta 14h'] }))?.motivo, 'horario_sem_comprovante', frase);
+  }
+  // o que já era informação continua sendo
+  for (const frase of ['Tudo certo, quinta às 14h está disponível pra você', 'Tudo certo, vou ver os horários de quinta pra você', 'Quinta às 14h está disponível. Qual fica melhor?']) {
+    assert.equal(afirmaHorarioGarantido(frase), false, frase);
+  }
+});
+
+test('2ª rodada, item 5: "deixei anotado que você prefere quinta/amanhã…" é o que ELE disse, não horário garantido', () => {
+  for (const frase of [
+    'Deixei anotado que você prefere quinta à tarde. Vou ver os horários.',
+    'Deixei anotado que você prefere amanhã de manhã.',
+    'Anotado! Deixei registrado que você prefere quinta.',
+    'Deixei anotado aqui que o melhor horário pra você é à tarde.',
+  ]) {
+    assert.equal(afirmaHorarioGarantido(frase), false, frase);
+    assert.equal(travaDaTaxaDeReserva(frase, DADOS, com({ falasDoPaciente: ['quinta de tarde'] })), null, frase);
+  }
+  // quando o que vem depois do "que" é o horário dado como fechado, continua pegando
+  assert.equal(afirmaHorarioGarantido('Deixei anotado que seu horário é quinta às 14h.'), true);
+  assert.equal(afirmaHorarioGarantido('Deixei registrado que sua consulta está confirmada para amanhã.'), true);
+});
+
+test('2ª rodada, item 4: no horário sem comprovante o resto da resposta (o endereço) fica', () => {
+  const r = travaDaTaxaDeReserva(`Fica na ${END}. Até já às 13h30!`, DADOS, com({ falasDoPaciente: ['qual o endereço?'] }));
+  assert.equal(r?.motivo, 'horario_sem_comprovante');
+  assert.equal(r?.preservouOResto, true);
+  assert.match(r!.texto, new RegExp(`^Fica na ${END}\\.\n\nSó um detalhe importante: o seu horário ainda não está garantido`));
+  assert.doesNotMatch(r!.texto, /Até já/);
+  assert.match(r!.texto, /Chave Pix: 12\.345\.678\/0001-90/);
+  // sem resto aproveitável, o recado inteiro de antes
+  const sem = travaDaTaxaDeReserva('Perfeito! Até já às 13h30!', DADOS, com({ falasDoPaciente: ['ok'] }));
+  assert.equal(sem?.texto, recadoSemComprovante(DADOS));
+  assert.equal(sem?.preservouOResto, false);
+});
+
+test('2ª rodada, item 4: na insistência o resto da resposta (o endereço) fica, e o recado sai depois dele — com e sem a promessa da equipe', () => {
+  const ctx = com({ falasDoPaciente: ['só pago na clínica', 'qual o endereço?'], respostaAnterior: recadoPagarNaClinica(DADOS) });
+  const r = travaDaTaxaDeReserva(`Fica na ${END}. Tudo bem, entendo!`, DADOS, ctx);
+  assert.equal(r?.motivo, 'insistiu_na_clinica');
+  assert.equal(r?.preservouOResto, true);
+  assert.match(r!.texto, new RegExp(`^Fica na ${END}\\. Tudo bem, entendo!\n\nAnotei que você prefere pagar na clínica e a equipe vai falar`));
+  assert.equal(r?.resto, `Fica na ${END}. Tudo bem, entendo!`);
+  assert.equal(recadoDaInsistencia(false, r!.resto!), `${r!.resto}\n\nEntendi que você prefere pagar na clínica. Só que, sem a taxa de agendamento, o horário não fica separado. Se quiser garantir, é só me avisar que eu te passo a chave Pix. 🙏`);
+  // o que o modelo disse que contradiz (pode pagar na clínica) sai
+  const contradiz = travaDaTaxaDeReserva(`Fica na ${END}. Pode pagar tudo na clínica, no dia.`, DADOS, ctx);
+  assert.doesNotMatch(contradiz!.texto, /Pode pagar tudo/);
+  assert.match(contradiz!.texto, new RegExp(`^Fica na ${END}\\.\n\nAnotei`));
+  // sem resto, o recado inteiro (e idempotente: marca a conversa como tratada)
+  assert.equal(travaDaTaxaDeReserva('Tudo bem!', DADOS, ctx)?.texto, RECADO_INSISTIU_NA_CLINICA);
+  assert.equal(jaEncaminhouAInsistencia(r!.texto), true);
+  assert.equal(jaEncaminhouAInsistencia(recadoDaInsistencia(false, r!.resto!)), true);
+});
+
+test('2ª rodada, item 6: depois que a insistência foi tratada, "pode pagar tudo na clínica" do modelo é trocado — sem a chave de novo e sem nova tarefa', () => {
+  const ctx = com({ falasDoPaciente: ['então pago no dia, ok?'], respostaAnterior: RECADO_INSISTIU_NA_CLINICA, insistenciaJaEncaminhada: true });
+  for (const resposta of ['Pode sim, você paga tudo na clínica no dia 😊', 'Pode sim! Você paga tudo na hora, sem problema.']) {
+    const r = travaDaTaxaDeReserva(resposta, DADOS, ctx);
+    assert.equal(r?.motivo, 'pagar_na_clinica', resposta);
+    assert.doesNotMatch(r!.texto, /Pode sim|paga tudo/, resposta);
+    assert.match(r!.texto, /só fica separado com a taxa de agendamento de R\$ 100/);
+    assert.doesNotMatch(r!.texto, /Chave Pix:/);
+    // o lembrete não dispara a trava de novo (o grafo reconfere a reescrita)
+    assert.equal(travaDaTaxaDeReserva(r!.texto, DADOS, ctx), null, r!.texto);
+    assert.match(aplicarGuardrail(r!.texto, unidade()).text, /./);
+  }
+  // a resposta que não contradiz continua passando direto (o ciclo não reabre)
+  assert.equal(travaDaTaxaDeReserva('Tudo bem!', DADOS, ctx), null);
+  // "o restante você paga na clínica" é verdade (a taxa é só a parte antecipada) e fica
+  assert.equal(travaDaTaxaDeReserva('Isso, o restante você paga na clínica, no dia.', DADOS, ctx), null);
+  // também com o recado SEM promessa na conversa
+  assert.equal(travaDaTaxaDeReserva('Pode sim, você paga tudo na clínica no dia', DADOS, { ...ctx, respostaAnterior: RECADO_INSISTIU_SEM_PROMESSA })?.motivo, 'pagar_na_clinica');
+});
+
+test('2ª rodada, item 7: o recado sem promessa fecha o ciclo — a insistência seguinte não reenvia a chave', () => {
+  let respostaAnterior = recadoPagarNaClinica(DADOS); // a chave foi uma vez
+  const respostas = [respostaAnterior];
+  const motivos: string[] = [];
+  for (const fala of ['só na clínica', 'na clínica mesmo', 'pago na hora', 'já disse, pago no dia', 'só pago lá']) {
+    const r = travaDaTaxaDeReserva('Tudo bem!', DADOS, com({ falasDoPaciente: [fala], respostaAnterior, insistenciaJaEncaminhada: insistenciaJaTratada(respostas) }));
+    motivos.push(r?.motivo ?? 'null');
+    // a saída da primeira insistência é a SEM promessa (a equipe não foi avisada)
+    respostaAnterior = r ? recadoDaInsistencia(false) : 'Tudo bem!';
+    respostas.push(respostaAnterior);
+  }
+  assert.deepEqual(motivos, ['insistiu_na_clinica', 'null', 'null', 'null', 'null']);
+  assert.equal(respostas.filter((t) => t.includes('Chave Pix:')).length, 1);
+});
+
+test('2ª rodada, item 8: "Quanto à taxa, vou pagar na clínica mesmo" é recusa; "quanto pago no dia?" segue sendo pergunta', () => {
+  for (const fala of ['Quanto à taxa, vou pagar na clínica mesmo.', 'Quanto a taxa, só pago na hora', 'Quanto ao pagamento, pago no dia']) {
+    assert.equal(pacienteQuerPagarNaClinica([fala]), true, fala);
+  }
+  for (const fala of ['quanto pago no dia?', 'Quanto eu pago na clínica?']) {
+    assert.equal(pacienteQuerPagarNaClinica([fala]), false, fala);
+  }
+  assert.equal(pacienteQuerPagarNaClinica(['Quero pagar tudo no dia, quanto fica?']), true);
 });

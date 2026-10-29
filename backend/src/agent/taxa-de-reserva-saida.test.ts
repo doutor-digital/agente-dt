@@ -5,6 +5,7 @@ import { z } from 'zod';
 import type { Unit } from '@prisma/client';
 import {
   dadosDaTaxa,
+  insistenciaJaTratada,
   jaEncaminhouAInsistencia,
   RECADO_INSISTIU_NA_CLINICA,
   RECADO_INSISTIU_SEM_PROMESSA,
@@ -105,13 +106,29 @@ test('item 1: a regra do campo é a de lib/follow-up-worker (a FORMA escolhida "
   assert.equal(r.troca?.motivo, 'equipe_envia_a_chave');
 });
 
-test('item 1: sem poder ler o cartão a resposta sai como veio (e o rastro avisa) — não se pede de novo a quem pode ter pago', async () => {
+test('2ª rodada, item 1: sem poder ler o cartão, o pedido EXPLÍCITO da chave recebe a chave (como com o cartão pago) e o rastro avisa', async () => {
   const { f, passos } = ferramentas({ cartaoDizPago: async () => Promise.reject(new Error('kommo 500')) });
-  const r = await aplicarTaxaDeReservaNaSaida('A equipe te envia a chave certa', DADOS, com({ falasDoPaciente: ['e o pix?'] }), f);
-  assert.equal(r.texto, 'A equipe te envia a chave certa');
-  assert.equal(r.liberadaPor, 'cartao_ilegivel');
+  const r = await aplicarTaxaDeReservaNaSaida('A equipe te envia a chave certa', DADOS, com({ falasDoPaciente: ['Mande o pix por gentileza'] }), f);
+  assert.equal(r.troca?.motivo, 'equipe_envia_a_chave');
+  assert.equal(r.texto, recadoDaChave(DADOS));
   assert.equal(erros(passos).length, 1);
   assert.match(erros(passos)[0].title, /não consegui ler o cartão/);
+});
+
+test('2ª rodada, item 1: sem poder ler o cartão, o que NÃO é pedido explícito sai como veio — não se pede de novo a quem pode ter pago', async () => {
+  const { f, passos } = ferramentas({ cartaoDizPago: async () => Promise.reject(new Error('kommo 500')) });
+  for (const [resposta, fala] of [
+    ['A equipe te envia a chave certa', 'ok'],
+    ['Já deixei tudo registrado com a equipe pra te receber direito às 14h', 'ok'],
+    ['Tudo bem!', 'só pago na clínica'],
+    ['A equipe te envia a chave certa', 'ok, vou pagar no pix agora'],
+  ] as const) {
+    const r = await aplicarTaxaDeReservaNaSaida(resposta, DADOS, com({ falasDoPaciente: [fala] }), f);
+    assert.equal(r.texto, resposta);
+    assert.equal(r.troca, null);
+    assert.equal(r.liberadaPor, 'cartao_ilegivel');
+  }
+  assert.equal(erros(passos).length, 4);
 });
 
 test('item 10: o vínculo da consulta anula a troca (e nem lê o cartão)', async () => {
@@ -338,7 +355,63 @@ test('item 1 (revisão): a leitura do cartão e a do vínculo têm prazo — um 
   const r = await aplicarTaxaDeReservaNaSaida('A equipe te envia a chave certa', DADOS, com({ falasDoPaciente: ['ok'] }), a.f);
   assert.equal(r.texto, 'A equipe te envia a chave certa');
   assert.equal(r.liberadaPor, 'cartao_ilegivel');
+  // 2ª rodada: o prazo estourado no cartão é o cartão ilegível — o pedido explícito da chave ainda recebe a chave
+  const pediu = ferramentas({ cartaoDizPago: pendurada, prazoDaLeituraMs: 20 });
+  const rp = await aplicarTaxaDeReservaNaSaida('A equipe te envia a chave certa', DADOS, com({ falasDoPaciente: ['e o pix?'] }), pediu.f);
+  assert.equal(rp.troca?.motivo, 'equipe_envia_a_chave');
+  assert.equal(rp.texto, recadoDaChave(DADOS));
   const b = ferramentas({ consultaGravada: pendurada, prazoDaLeituraMs: 20 });
   const r2 = await aplicarTaxaDeReservaNaSaida('A equipe te envia a chave certa', DADOS, com({ falasDoPaciente: ['e o pix?'] }), b.f);
   assert.equal(r2.troca?.motivo, 'equipe_envia_a_chave', 'sem ler o vínculo, a trava segue (como antes)');
+});
+
+// --- 2ª rodada, itens 7 e 9 ----------------------------------------------------------------------------------------------------------
+
+test('2ª rodada, item 7: tarefa e resumo falhando em 6 turnos de insistência = UM alerta, UM recado, a chave UMA vez', async () => {
+  const alertas: string[] = [];
+  const { f } = ferramentas({
+    resumir: { invoke: async () => 'ERRO: openai 429' },
+    abrirTarefa: async () => 'falhou',
+    alertar: async (t) => void alertas.push(t),
+  });
+  const respostas = [recadoPagarNaClinica(DADOS)];
+  const saidas: string[] = [];
+  for (const fala of ['só na clínica', 'na clínica mesmo', 'pago na hora', 'já disse, pago no dia', 'só pago lá', 'na clínica']) {
+    const r = await aplicarTaxaDeReservaNaSaida(
+      'Tudo bem!',
+      DADOS,
+      com({ falasDoPaciente: [fala], respostaAnterior: respostas[respostas.length - 1], insistenciaJaEncaminhada: insistenciaJaTratada(respostas) }),
+      f,
+    );
+    saidas.push(r.troca?.motivo ?? 'null');
+    respostas.push(r.texto);
+  }
+  assert.deepEqual(saidas, ['insistiu_na_clinica', 'null', 'null', 'null', 'null', 'null']);
+  assert.equal(alertas.length, 1);
+  assert.equal(respostas.filter((t) => t.includes('Chave Pix:')).length, 1);
+});
+
+test('2ª rodada, item 9: o rastro registra o texto que o paciente RECEBE (sem promessa quando nada chegou à equipe), não o previsto', async () => {
+  const sem = ferramentas({ resumir: undefined, abrirTarefa: undefined });
+  const r = await aplicarTaxaDeReservaNaSaida('Tudo bem!', DADOS, INSISTE, sem.f);
+  const passo = sem.passos.find((p) => /💳/.test(p.title));
+  assert.equal((passo!.payload as { final: string }).final, r.texto);
+  assert.equal(r.texto, RECADO_INSISTIU_SEM_PROMESSA);
+  const com1 = ferramentas();
+  const r2 = await aplicarTaxaDeReservaNaSaida('Tudo bem!', DADOS, INSISTE, com1.f);
+  assert.equal((com1.passos.find((p) => /💳/.test(p.title))!.payload as { final: string }).final, r2.texto);
+  assert.equal(r2.texto, RECADO_INSISTIU_NA_CLINICA);
+});
+
+test('2ª rodada, item 4: na insistência o endereço fica, com e sem a promessa da equipe', async () => {
+  const resposta = 'Fica na Av. Ville Roy, 1234. Tudo bem, entendo!';
+  const ok = await aplicarTaxaDeReservaNaSaida(resposta, DADOS, INSISTE, ferramentas().f);
+  assert.match(ok.texto, /^Fica na Av\. Ville Roy, 1234\. Tudo bem, entendo!\n\nAnotei que você prefere pagar na clínica e a equipe vai falar/);
+  const sem = await aplicarTaxaDeReservaNaSaida(resposta, DADOS, INSISTE, ferramentas({ resumir: undefined, abrirTarefa: undefined }).f);
+  assert.match(sem.texto, /^Fica na Av\. Ville Roy, 1234\. Tudo bem, entendo!\n\nEntendi que você prefere pagar na clínica\. Só que, sem a taxa/);
+  assert.doesNotMatch(sem.texto, /equipe/i);
+  assert.equal(sem.equipeAvisada, false);
+  const g = aplicarGuardrail(sem.texto, unidade);
+  assert.deepEqual(g.triggered, []);
+  assert.equal(g.text, sem.texto);
 });
