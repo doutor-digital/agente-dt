@@ -1351,7 +1351,7 @@ export async function processAgent(args: {
     // do paciente que o webhook não trouxe. Só entra quando existe algo novo desde
     // a última fala da Sofia, e uma falha aqui nunca segura o atendimento.
     const blocoOficial = isChatMessage
-      ? await blocoDaConversaOficial({ unit, leadId, humanMessage, recorder, msgs: porta.msgs }).catch((err) => {
+      ? await blocoDaConversaOficial({ unit, leadId, humanMessage, recorder, msgs: porta.msgs, nenhumAudioNoWebhook: audios.length === 0 }).catch((err) => {
           logger.warn({ err: String(err), leadId, unit: unit.slug }, 'conversa oficial: falha ao ler (segue sem)');
           return '';
         })
