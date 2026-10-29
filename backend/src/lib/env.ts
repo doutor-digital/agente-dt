@@ -25,6 +25,11 @@ const schema = z.object({
   // COPILOTO_UNIDADES = slugs (separados por vírgula) onde está liberado; vazio = desligado em toda a rede.
   COPILOTO_OPENAI_API_KEY: z.string().min(10).optional(),
   COPILOTO_MODELO: z.string().default('gpt-4.1-mini'),
+  // Voz em tempo real do Copiloto (OpenAI Realtime). Só vale nas unidades de COPILOTO_UNIDADES e com a mesma chave.
+  COPILOTO_VOZ_MODELO: z.string().default('gpt-realtime-2.1-mini'),
+  COPILOTO_VOZ_VOZ: z.string().default('marin'),
+  // conversas por voz que cada unidade pode abrir por dia (em memória; o teto de gasto da chave é a trava de verdade)
+  COPILOTO_VOZ_SESSOES_DIA: z.coerce.number().int().positive().default(40),
   COPILOTO_UNIDADES: z
     .string()
     .default('')
