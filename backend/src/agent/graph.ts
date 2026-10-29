@@ -81,7 +81,7 @@ import { conferirTeto, marcarAvisado, logarEstouro, type Veredito } from './teto
 import { conferirTetoMensal, acaoAoEstourar, pausarContaAteProximoMes, type VereditoMensal } from './teto-mensal.js';
 import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
 import {
-  INSTRUCAO_DESMARCADA,
+  instrucaoDesmarcada,
   RECADO_DESMARCADA,
   abrirTarefaParaEquipe,
   afirmaConfirmacao,
@@ -97,6 +97,7 @@ import {
 import { dadosDaTaxa, insistenciaJaTratada, pacienteJaMandouComprovante, promptDizEmTratamento, respostaAnteriorDaIA } from './taxa-de-reserva.js';
 import { aplicarTaxaDeReservaNaSaida, decidirATaxa } from './taxa-de-reserva-saida.js';
 import { pagouOAntecipado } from '../lib/follow-up-worker.js';
+import { unidadeSemAntecipado } from './pagamento-da-unidade.js';
 import { enviarTelegram } from '../lib/telegram.js';
 import {
   withTimeout,
@@ -111,7 +112,7 @@ import { fusoDaUnidade } from '../lib/fuso.js';
 import {
   agendamentoDoVinculo,
   blocoDaConsulta,
-  INSTRUCAO_RESERVA_SEM_MARCAR,
+  instrucaoReservaSemMarcar,
   marcouNesteTurno,
   PERGUNTA_NEUTRA,
   promptTemConsulta,
@@ -1252,7 +1253,7 @@ export async function buildAgentGraph(
             refeita = (await withTimeout(
               invokeChatModel({
                 model: modeloAtivo,
-                messages: [...finalMessages, response, new HumanMessage(desmarcada ? INSTRUCAO_DESMARCADA : INSTRUCAO_RESERVA_SEM_MARCAR)],
+                messages: [...finalMessages, response, new HumanMessage(desmarcada ? instrucaoDesmarcada(unidadeSemAntecipado(unit)) : instrucaoReservaSemMarcar(unidadeSemAntecipado(unit)))],
                 unitId: unit.id,
                 traceId: recorder.traceId,
                 modelName,

@@ -64,6 +64,7 @@ import { logger } from '../lib/logger.js';
 import { capturaUnificada } from './captura-unificada.js';
 import { ehSoCumprimento } from '../lib/pediu-para-parar.js';
 import { automacaoLigada } from '../lib/automacoes-estado.js';
+import { PAGAMENTO_NO_DIA, REGRA_SEM_ANTECIPADO, unidadeSemAntecipado, type FlagsDePagamento } from './pagamento-da-unidade.js';
 import {
   carregarRede,
   ehDoutorHernia,
@@ -414,7 +415,13 @@ function renderReacaoEElogio(): string {
    Esta é a ÚNICA situação em que sua resposta NÃO termina com pergunta.`);
 }
 
-function renderRulesGlobal(): string {
+function renderRulesGlobal(unit?: FlagsDePagamento): string {
+  // Unidade sem pagamento antecipado (Timbó): o passo "Pix" e os botões "Pix antecipado | Na clínica" não existem.
+  const semAntecipado = unidadeSemAntecipado(unit);
+  const passos = semAntecipado ? 'dia → horário → dados' : 'dia → horário → dados → Pix';
+  const exemplosDeBotao = semAntecipado
+    ? '(escolher entre os horários que você ofereceu; '
+    : '(escolher entre os horários que você ofereceu; "Pix antecipado" ou "Na clínica";\n  ';
   return xmlBlock('regras_gerais', `- ANTI-ALUCINAÇÃO: nunca invente fatos sobre a clínica (preços, horários,
   procedimentos, prazos, políticas, médicos, especialidades, endereços).
   Use APENAS o que está nas Fontes Oficiais acima OU na Base de Conhecimento.
@@ -463,14 +470,13 @@ function renderRulesGlobal(): string {
   distância, plano de saúde, "vou me organizar", medo do procedimento), reconheça-a em
   uma frase antes de propor o próximo passo ("você comentou que o valor pesava…").
   Nunca aja como se fosse a primeira conversa.
-- UM PASSO POR MENSAGEM: dia → horário → dados → Pix. Nunca peça duas coisas na mesma
+- UM PASSO POR MENSAGEM: ${passos}. Nunca peça duas coisas na mesma
   mensagem nem pule etapa; confirme o que ele escolheu antes de pedir o próximo.
 - IRRITAÇÃO OU BRIGA: se o paciente xingar, ameaçar, citar Procon/advogado/processo ou
   mostrar irritação forte, chame pausar_ia e responda acolhendo em UMA frase, sem se
   defender e sem discutir. Quem assume é a equipe.
 - BOTÕES: quando a pergunta final for FECHADA, com 2 ou 3 respostas curtas possíveis
-  (escolher entre os horários que você ofereceu; "Pix antecipado" ou "Na clínica";
-  "Confirmo" ou "Preciso remarcar"; "Manhã" ou "Tarde"), acrescente DEPOIS da pergunta
+  ${exemplosDeBotao}"Confirmo" ou "Preciso remarcar"; "Manhã" ou "Tarde"), acrescente DEPOIS da pergunta
   uma última linha exatamente neste formato: [[botoes: Opção 1 | Opção 2 | Opção 3]].
   Cada opção com no máximo 20 caracteres, sem link, sem repetir a pergunta. Essa linha
   vira botões no WhatsApp e NÃO aparece como texto. Nunca use em pergunta aberta
@@ -602,8 +608,10 @@ function renderEsperaRules(intents: Record<string, number>): string {
  * achar os dois valores, mandar o modelo usar as fontes sem chutar número.
  */
 export function precosDaConsulta(
-  unit: Pick<Unit, 'sourceProdutos' | 'systemPrompt'>,
+  unit: Pick<Unit, 'sourceProdutos' | 'systemPrompt'> & FlagsDePagamento,
 ): { antecipado: number; noDia: number } | null {
+  // Unidade que só recebe no dia não tem "antecipado": nem para o prompt, nem para o guardrail que corrige o valor.
+  if (unidadeSemAntecipado(unit)) return null;
   const txt = [unit.sourceProdutos, unit.systemPrompt].filter(Boolean).join('\n');
   const num = (s: string) => Number(s.replace(/\./g, '').replace(',', '.'));
   // O valor antecipado é o R$ mais PRÓXIMO antes de "antecipad" — sem outro R$ no meio.
@@ -622,6 +630,9 @@ export function precosDaConsulta(
 export const fmtBRL = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(2).replace('.', ','));
 
 function linhaValorConsulta(unit: Unit): string {
+  if (unidadeSemAntecipado(unit)) {
+    return '✨ Valor: R$ {o valor da consulta que está nas fontes/produtos DESTA unidade — nunca invente; se não houver valor cadastrado, omita a linha e diga que a equipe informa; sem "à vista" e sem desconto} no dia, na clínica';
+  }
   const p = precosDaConsulta(unit);
   // Taxa de reserva obrigatória (Boa Vista): o antecipado NÃO é alternativa ao valor
   // do dia, é uma parte dele. "R$ 100 antecipado ou R$ 250 no dia" fazia o paciente
@@ -681,11 +692,18 @@ function renderAgenda(unit: Unit): string {
 
   // Onde a taxa antecipada é obrigatória, a confirmação só sai DEPOIS do pagamento —
   // então não faz sentido "a vaga é garantida com o PIX": ele já pagou.
-  const linhaPix = unit.spineBookingRequiresPayment
-    ? 'Pagamento antecipado recebido — o horário está garantido. No dia, fica só o restante do valor.'
-    : pix
-      ? `A vaga é garantida com o pagamento antecipado no PIX: ${pix}${favorecido ? ` (${favorecido})` : ''}.`
-      : 'A equipe envia a chave do PIX para garantir a vaga.';
+  // Unidade sem pagamento antecipado (Timbó): só se paga no dia — nunca chave, nunca "garantir a vaga".
+  const semAntecipado = unidadeSemAntecipado(unit);
+  const linhaPix = semAntecipado
+    ? PAGAMENTO_NO_DIA
+    : unit.spineBookingRequiresPayment
+      ? 'Pagamento antecipado recebido — o horário está garantido. No dia, fica só o restante do valor.'
+      : pix
+        ? `A vaga é garantida com o pagamento antecipado no PIX: ${pix}${favorecido ? ` (${favorecido})` : ''}.`
+        : 'A equipe envia a chave do PIX para garantir a vaga.';
+  const regraDoValor = semAntecipado
+    ? `- ${REGRA_SEM_ANTECIPADO}\n  NUNCA escreva "à vista". Não arredonde.`
+    : `- O valor menor é o ANTECIPADO (pago antes da consulta); o maior é o valor no dia.\n  NUNCA escreva "à vista". Não arredonde nem ofereça desconto.`;
 
   const confirmacao = `
 CANCELAR E REMARCAR:
@@ -725,8 +743,7 @@ REGRAS DESTA MENSAGEM:
   profissional, fora daqui — aí tudo bem usar a palavra.
 - Não invente endereço, nome de profissional nem chave PIX. Linha sem dado
   confirmado sai da mensagem — o paciente pergunta, e a equipe responde certo.
-- O valor menor é o ANTECIPADO (pago antes da consulta); o maior é o valor no dia.
-  NUNCA escreva "à vista". Não arredonde nem ofereça desconto.
+${regraDoValor}
 - O dia da semana vem da ferramenta ou do bloco <calendario> — nunca de cabeça.`;
 
   return xmlBlock(
@@ -822,6 +839,20 @@ function renderConversao(unit: Unit): string {
   if (valores.length === 0) return '';
   const precoAncora = `R$ ${valores[valores.length - 1]}`;
   const precoPix = `R$ ${valores[0]}`;
+  // Unidade sem pagamento antecipado (Timbó): não existe "à vista no PIX" nem valor menor — a consulta é paga no dia.
+  // (Os R$ achados nas fontes incluem sessões e pacotes: aqui o valor da consulta vem das Fontes, nunca deste cálculo.)
+  const semAntecipado = unidadeSemAntecipado(unit);
+  const valorDaConsulta = semAntecipado
+    ? '{o valor da consulta, o que está nas Fontes Oficiais}, pago no dia, na clínica'
+    : `${precoAncora}, ou ${precoPix} à vista no PIX`;
+  const reancoraCaro = semAntecipado
+    ? `Acolha sem defender o preço e SEM oferecer desconto: a consulta é paga no dia,
+  na clínica, e não existe valor menor. Devolva ao custo`
+    : `Acolha sem defender o preço. Reancore: o ${precoAncora} é o valor cheio;
+  ${precoPix} é antecipado no PIX — a diferença é dele. Depois devolva ao custo`;
+  const exemploCaro = semAntecipado
+    ? 'A consulta é onde a gente'
+    : `A consulta é ${precoPix} antecipado e é onde a gente`;
 
   return xmlBlock(
     'conversao',
@@ -854,7 +885,7 @@ direito, e faça UMA pergunta sobre a dor. Uma só.
 DEPOIS QUE ELE CONTAR A QUEIXA, aí sim diga o valor — e diga inteiro, sem
 rodeio, ancorado no que ele acabou de contar:
   > "Entendi, {tempo} com essa dor não é pouco. A consulta com o especialista é
-     ${precoAncora}, ou ${precoPix} à vista no PIX. É nela que se descobre a
+     ${valorDaConsulta}. É nela que se descobre a
      causa, em vez de continuar tratando o sintoma."
 
 SE ELE INSISTIR, RESPONDA NA HORA. "Só me diz o valor", "não quero contar
@@ -871,11 +902,10 @@ informa depois. Você sabe o valor e ele é o mesmo para todos.
 O ROTEIRO DE CADA OBJEÇÃO — acolher, reenquadrar, avançar:
 
 "ESTÁ CARO"
-  Acolha sem defender o preço. Reancore: o ${precoAncora} é o valor cheio;
-  ${precoPix} é antecipado no PIX — a diferença é dele. Depois devolva ao custo
+  ${reancoraCaro}
   do que ele já vem gastando (pomada, remédio, sessão avulsa, dia parado).
   > "Faz sentido. Só pra você comparar: quanto você já gastou tentando resolver
-     isso por conta? A consulta é ${precoPix} antecipado e é onde a gente
+     isso por conta? ${exemploCaro}
      descobre a causa — em vez de continuar tratando o sintoma."
 
 "VOU PENSAR"
@@ -2045,7 +2075,7 @@ export function composeFlattenedPrompt(input: ComposeInput): string {
   const sourcesBlock = renderSources(unit);
   if (sourcesBlock) blocks.push(sourcesBlock);
   if (customBase) blocks.push(xmlBlock('instrucoes_extras', customBase));
-  blocks.push(renderRulesGlobal());
+  blocks.push(renderRulesGlobal(unit));
   blocks.push(renderReacaoEElogio());
   blocks.push(xmlBlock('calendario', renderCalendario(new Date(), fusoDaUnidade(unit))));
 
@@ -2150,7 +2180,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
     blocks.push(xmlBlock('instrucoes_extras', customBase));
   }
 
-  blocks.push(renderRulesGlobal());
+  blocks.push(renderRulesGlobal(unit));
   blocks.push(renderReacaoEElogio());
   blocks.push(xmlBlock('calendario', renderCalendario(new Date(), fusoDaUnidade(unit))));
 
@@ -2354,7 +2384,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
   const sourcesBlock = renderSources(unit);
   if (sourcesBlock) cache.push(sourcesBlock);
   if (customBase) cache.push(xmlBlock('instrucoes_extras', customBase));
-  cache.push(renderRulesGlobal());
+  cache.push(renderRulesGlobal(unit));
   cache.push(renderReacaoEElogio());
 
   const featureBlocks = [
@@ -2639,7 +2669,9 @@ export function renderOndeFica(unit: Unit): string {
 
 export function renderFatosDaUnidade(unit: Unit): string {
   const linhas: string[] = [];
-  const chave = unit.pixKey?.trim();
+  // Unidade sem pagamento antecipado (Timbó): sem chave Pix para o follow-up copiar (ela só existe para reservar vaga).
+  const semAntecipado = unidadeSemAntecipado(unit);
+  const chave = semAntecipado ? undefined : unit.pixKey?.trim();
   const titular = unit.pixHolder?.trim();
   if (chave) {
     linhas.push(`- Chave Pix: ${chave}${titular ? ` (titular: ${titular})` : ''}`);
@@ -2656,6 +2688,7 @@ export function renderFatosDaUnidade(unit: Unit): string {
   } else if (p) {
     linhas.push(`- Consulta: R$ ${fmtBRL(p.antecipado)} antecipado (pago antes) ou R$ ${fmtBRL(p.noDia)} no dia`);
   }
+  if (semAntecipado) linhas.push(`- Pagamento: ${PAGAMENTO_NO_DIA} Sem chave Pix para reservar a vaga e sem desconto.`);
   const onde = unit.clinicAddress?.trim();
   if (onde) linhas.push(`- Endereço: ${onde}`);
   if (linhas.length === 0) return '';
@@ -2685,7 +2718,7 @@ export function composeFollowUpSystemPrompt(
     renderPersona(unit, rede),
     renderFatosDaUnidade(unit),
     renderHojeCurto(unit, agora),
-    renderRulesGlobal(),
+    renderRulesGlobal(unit),
     // Sem a lista da rede (o follow-up é enxuto); "é médico?" e "avaliação" valem aqui também.
     renderDoutorHerniaCurto(unit, rede),
   ]

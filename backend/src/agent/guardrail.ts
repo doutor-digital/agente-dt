@@ -8,6 +8,7 @@ import { precosDaConsulta } from './prompt-composer.js';
 import { semProntoSocorro } from './sem-pronto-socorro.js';
 import { ehClinicaParaSinalDeAlerta } from './sinal-de-alerta.js';
 import { sobrouVenda } from './venda-em-alerta.js';
+import { unidadeSemAntecipado } from './pagamento-da-unidade.js';
 
 /** O que a trava de saída precisa saber além da resposta. */
 export interface ContextoDoGuardrail {
@@ -226,7 +227,8 @@ export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoG
   // unidade insere um valor que JÁ é do catálogo, então a checagem abaixo segue
   // valendo sobre o texto preenchido. O que não dá pra preencher não sai.
   const lac = preencherLacunas(texto, {
-    chavePix: unit.pixKey,
+    // Unidade sem pagamento antecipado: não há chave para entregar — "[chave]" não vira a chave da clínica.
+    chavePix: unidadeSemAntecipado(unit) ? null : unit.pixKey,
     titularPix: unit.pixHolder,
     valorAntecipado: precosDaConsulta(unit)?.antecipado ?? null,
   });

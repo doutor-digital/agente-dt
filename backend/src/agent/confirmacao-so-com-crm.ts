@@ -32,12 +32,23 @@ export const RECADO_DESMARCADA =
   'Deixa eu conferir direitinho o seu horário com a equipe — ela te confirma aqui mesmo na conversa em até 1 hora. 🙏';
 
 /** Vai junto da resposta reprovada quando o CRM diz que a consulta foi desmarcada (refeita da trava). */
-export const INSTRUCAO_DESMARCADA =
-  '[instrução interna, não é fala do paciente] Sua resposta acima trata como marcada uma consulta que foi DESMARCADA ' +
-  'no sistema da clínica: ela não existe mais. Se o paciente pediu, NESTA mensagem, um horário novo e já escolheu ' +
-  'dia, hora e forma de pagamento, use consultar_horarios e agendar_consulta. Se ele só confirmou o horário antigo ' +
-  'ou perguntou se está tudo certo, NÃO marque nada: diga que vai conferir com a equipe, que confirma em até 1 hora, ' +
-  'sem dizer confirmado, agendado nem reservado. Responda só com a mensagem final ou com a chamada da ferramenta.';
+export const INSTRUCAO_DESMARCADA = montarInstrucaoDesmarcada(true);
+
+/** Unidade sem pagamento antecipado (Timbó): a instrução não manda o paciente "escolher forma de pagamento". */
+export function instrucaoDesmarcada(semAntecipado: boolean): string {
+  return montarInstrucaoDesmarcada(!semAntecipado);
+}
+
+function montarInstrucaoDesmarcada(comFormaDePagamento: boolean): string {
+  return (
+    '[instrução interna, não é fala do paciente] Sua resposta acima trata como marcada uma consulta que foi DESMARCADA ' +
+    'no sistema da clínica: ela não existe mais. Se o paciente pediu, NESTA mensagem, um horário novo e já escolheu ' +
+    (comFormaDePagamento ? 'dia, hora e forma de pagamento' : 'dia e hora') +
+    ', use consultar_horarios e agendar_consulta. Se ele só confirmou o horário antigo ' +
+    'ou perguntou se está tudo certo, NÃO marque nada: diga que vai conferir com a equipe, que confirma em até 1 hora, ' +
+    'sem dizer confirmado, agendado nem reservado. Responda só com a mensagem final ou com a chamada da ferramenta.'
+  );
+}
 
 /** O bloco `<consulta_do_paciente>` que diz "não há consulta de pé": desmarcada ou não compareceu. */
 const BLOCO_SEM_CONSULTA = /foi DESMARCADA no sistema da clínica|registrou NÃO COMPARECEU/;

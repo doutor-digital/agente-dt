@@ -28,6 +28,7 @@ import { carimbarQuenteAoAgendar, decidirPagamentoAntecipado, valorDoCampo } fro
 import { carimboDaConsulta } from './horario-oferecido.js';
 import { agoraLocalISO } from './consulta-que-passou.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
+import { PAGAMENTO_NO_DIA, unidadeSemAntecipado, type FlagsDePagamento } from './pagamento-da-unidade.js';
 import { apagarDoCache, medidorDoCache } from '../lib/cache-agenda.js';
 import {
   agendamentoDeuCerto,
@@ -1223,10 +1224,13 @@ export function porQueNaoReservar(args: {
   remarcando?: boolean;
   diaConfirmado?: boolean;
   formaPagamento?: string;
+  /** Unidade sem pagamento antecipado (`unidadeSemAntecipado`): só se paga na clínica, então a forma nunca é perguntada. */
+  semAntecipado?: boolean;
 }): string | null {
   if (args.remarcando) return null;
   const faltaDia = args.diaConfirmado !== true;
-  const faltaPagamento = args.formaPagamento !== 'pix_antecipado' && args.formaPagamento !== 'na_clinica';
+  const faltaPagamento =
+    !args.semAntecipado && args.formaPagamento !== 'pix_antecipado' && args.formaPagamento !== 'na_clinica';
   if (!faltaDia && !faltaPagamento) return null;
   const pendencias: string[] = [];
   if (faltaDia) {
@@ -1237,10 +1241,15 @@ export function porQueNaoReservar(args: {
   if (faltaPagamento) {
     pendencias.push('perguntar como ele prefere pagar: Pix antecipado (valor antecipado) ou na clínica no dia');
   }
+  // Unidade que só recebe na clínica: sem `formaPagamento`, sem botões e sem pergunta de pagamento.
+  const fecho = args.semAntecipado
+    ? ' NÃO pergunte nada sobre pagamento: nesta clínica a consulta é paga no dia.'
+    : ' Se a pergunta for só a forma de pagamento, termine a mensagem com a linha [[botoes: Pix antecipado | Na clínica]].';
   return (
     `Consulta NÃO marcada ainda. Antes de reservar falta: ${pendencias.map((p, i) => `${i + 1}) ${p}`).join('; ')}. ` +
-    'Pergunte isso em UMA mensagem curta e chame agendar_consulta de novo com diaConfirmado=true e formaPagamento preenchido. ' +
-    'Se a pergunta for só a forma de pagamento, termine a mensagem com a linha [[botoes: Pix antecipado | Na clínica]].'
+    'Pergunte isso em UMA mensagem curta e chame agendar_consulta de novo com diaConfirmado=true' +
+    (args.semAntecipado ? '.' : ' e formaPagamento preenchido.') +
+    fecho
   );
 }
 
@@ -1261,8 +1270,18 @@ export function porQueNaoReservar(args: {
  */
 export function orientacaoDePagamento(
   forma: string | undefined,
-  unit?: Pick<Unit, 'pixKey' | 'pixHolder' | 'sourceProdutos' | 'systemPrompt'>,
+  unit?: Pick<Unit, 'pixKey' | 'pixHolder' | 'sourceProdutos' | 'systemPrompt'> & FlagsDePagamento,
+  /** A decisão de quem chama (o handler decide uma vez por turno, com a mesma unidade da porta); padrão: lê a unidade. */
+  semAntecipado: boolean = unidadeSemAntecipado(unit),
 ): string {
+  // Unidade que só recebe no dia: qualquer forma (ou nenhuma, na remarcação) vira "paga na clínica". Nunca chave, nunca valor antecipado.
+  if (semAntecipado) {
+    return (
+      ` ${PAGAMENTO_NO_DIA} O Pix só existe aqui como forma de pagar NA clínica, no dia: NÃO ofereça Pix para reservar a vaga, ` +
+      'NÃO envie chave Pix, NÃO fale em pagar antes da consulta nem em desconto. ' +
+      'Na confirmação, o pagamento é só "no dia, na clínica".'
+    );
+  }
   if (forma === 'pix_antecipado') {
     const chave = unit?.pixKey?.trim();
     const titular = unit?.pixHolder?.trim();
@@ -1300,15 +1319,24 @@ export function orientacaoDePagamento(
 }
 
 export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
+  // Decidido uma vez por turno, com a unidade do contexto: descrição, esquema e porta enxergam a mesma coisa. De propósito NÃO
+  // vem de `fresca`: se a porta pedisse `formaPagamento` e o esquema já não o tivesse, a recusa se repetiria até o fim do turno.
+  const semAntecipado = unidadeSemAntecipado(unit);
   return new DynamicStructuredTool({
     name: 'agendar_consulta',
-    description:
-      'Marca a consulta no sistema da clínica. Só use DEPOIS de consultar_horarios, ' +
-      'de o paciente escolher um horário da lista, de ele confirmar que CONSEGUE ir ' +
-      'nesse dia e de escolher a forma de pagamento (Pix antecipado ou na clínica), ' +
-      'e com o idClient obtido em buscar_paciente. Sem diaConfirmado=true e ' +
-      'formaPagamento a tool recusa. Se a tool recusar, NÃO tente outro horário por ' +
-      'conta própria: explique ao paciente e ofereça consultar de novo.',
+    description: semAntecipado
+      ? 'Marca a consulta no sistema da clínica. Só use DEPOIS de consultar_horarios, ' +
+        'de o paciente escolher um horário da lista, de ele confirmar que CONSEGUE ir ' +
+        'nesse dia, e com o idClient obtido em buscar_paciente. Sem diaConfirmado=true ' +
+        'a tool recusa. Esta clínica recebe a consulta no dia, na clínica: NÃO pergunte ' +
+        'nem fale de forma de pagamento. Se a tool recusar, NÃO tente outro horário por ' +
+        'conta própria: explique ao paciente e ofereça consultar de novo.'
+      : 'Marca a consulta no sistema da clínica. Só use DEPOIS de consultar_horarios, ' +
+        'de o paciente escolher um horário da lista, de ele confirmar que CONSEGUE ir ' +
+        'nesse dia e de escolher a forma de pagamento (Pix antecipado ou na clínica), ' +
+        'e com o idClient obtido em buscar_paciente. Sem diaConfirmado=true e ' +
+        'formaPagamento a tool recusa. Se a tool recusar, NÃO tente outro horário por ' +
+        'conta própria: explique ao paciente e ofereça consultar de novo.',
     schema: z.object({
       idClient: z.number().int().positive().describe('idClient do paciente (de buscar_paciente).'),
       // `remarcando` NÃO está no schema: o modelo não pode ligá-lo (ele pula a confirmação de dia/pagamento, a recusa de
@@ -1325,13 +1353,18 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
           '("terça às 11:30"). Comprovante do Pix NÃO vale como confirmação do dia (só onde a unidade exige a ' +
           'taxa de reserva ele libera marcar; a ferramenta decide). "ok" para o horário não conta.',
         ),
-      formaPagamento: z
-        .enum(['pix_antecipado', 'na_clinica'])
-        .optional()
-        .describe(
-          'Como o paciente disse que prefere pagar: pix_antecipado (paga antes, valor antecipado) ' +
-          'ou na_clinica (paga no dia). Pergunte antes de marcar.',
-        ),
+      // Unidade sem pagamento antecipado: o parâmetro nem existe para o modelo (o zod descarta o que ele escrever).
+      ...(semAntecipado
+        ? {}
+        : {
+            formaPagamento: z
+              .enum(['pix_antecipado', 'na_clinica'])
+              .optional()
+              .describe(
+                'Como o paciente disse que prefere pagar: pix_antecipado (paga antes, valor antecipado) ' +
+                'ou na_clinica (paga no dia). Pergunte antes de marcar.',
+              ),
+          }),
       idCategory: z
         .number()
         .int()
@@ -1369,11 +1402,17 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         return `${dataPorExtenso(args.data)} é feriado nacional (${feriado}) — a clínica não abre. NÃO marque nesse dia; consulte horários em outro dia útil.`;
       }
 
-      const pendencia = porQueNaoReservar(args);
+      // Unidade sem pagamento antecipado: a forma é "na clínica", implícita — vale mesmo se o modelo mandar outra.
+      // (Remarcação não passa pela porta de pagamento e não grava a escolha.)
+      if (semAntecipado && !args.remarcando) args = { ...args, formaPagamento: 'na_clinica' };
+
+      const pendencia = porQueNaoReservar({ ...args, semAntecipado });
       if (pendencia) {
         await recorder.step({
           kind: 'ERROR',
-          title: 'agendar_consulta recusado — faltou confirmar o dia ou a forma de pagamento',
+          title: semAntecipado
+            ? 'agendar_consulta recusado — faltou confirmar o dia'
+            : 'agendar_consulta recusado — faltou confirmar o dia ou a forma de pagamento',
           payload: { data: args.data, hora: args.hora, diaConfirmado: args.diaConfirmado ?? null, formaPagamento: args.formaPagamento ?? null },
         });
         return pendencia;
@@ -1754,7 +1793,7 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
 
       return `Consulta marcada para ${dataPorExtenso(args.data)} às ${args.hora}.${
         especialista ? ` Atendimento com ${especialista}.` : ''
-      } Confirme ao paciente com EXATAMENTE este dia da semana e data.${orientacaoDePagamento(args.formaPagamento, fresca)}`;
+      } Confirme ao paciente com EXATAMENTE este dia da semana e data.${orientacaoDePagamento(args.formaPagamento, fresca, semAntecipado)}`;
     },
   });
 }
