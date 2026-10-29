@@ -123,6 +123,22 @@ test('planilha_ler: a aba pode ser omitida só se houver uma; senão lista; unid
   await assert.rejects(planilhaAbas(vazio, { unidade: 'todas' }), /nenhuma/);
 });
 
+test('apelido parcial que casa com duas planilhas dá erro de ambiguidade, não escolhe a primeira', async () => {
+  const f = (id: string) => fontePlanilhaPublica(id, (async () => new Response(new Uint8Array(xlsxFalso(CLIENTES)), { status: 200 })) as typeof fetch);
+  const ctx = criarContextoPlanilha(new Map([['m', { slug: 'm', nome: 'M', planilhas: [{ apelido: 'clientes-2023', fonte: f(ID) }, { apelido: 'clientes-2024', fonte: f(`${ID}B`) }] }]]));
+  await assert.rejects(planilhaLer(ctx, { unidade: 'm', planilha: 'clientes', aba: 'Clientes' }), /ambígua.*clientes-2023.*clientes-2024/);
+  const r = await planilhaLer(ctx, { unidade: 'm', planilha: 'clientes-2024', aba: 'Clientes' });
+  assert.equal(r.planilha, 'clientes-2024');
+});
+
+test('trocar o id da planilha no painel não serve o conteúdo da antiga (o cache conhece o id)', async () => {
+  const uma = (id: string, nome: string) => fontePlanilhaPublica(id, (async () => new Response(new Uint8Array(xlsxFalso([{ nome, linhas: [['A'], [nome]] }])), { status: 200 })) as typeof fetch);
+  const ctx = criarContextoPlanilha(new Map([['m', { slug: 'm', nome: 'M', planilhas: [{ apelido: 'x', fonte: uma(ID, 'Antiga') }] }]]));
+  assert.equal((await planilhaLer(ctx, { unidade: 'm' })).aba, 'Antiga');
+  ctx.contas = new Map([['m', { slug: 'm', nome: 'M', planilhas: [{ apelido: 'x', fonte: uma(`${ID}Z`, 'Nova') }] }]]);
+  assert.equal((await planilhaLer(ctx, { unidade: 'm' })).aba, 'Nova');
+});
+
 test('nome de aba ou de planilha que normaliza para vazio não casa com qualquer uma', async () => {
   const ctx = ctxCom(CLIENTES);
   await assert.rejects(planilhaLer(ctx, { unidade: 'magalhaes', aba: '---' }), /inválido/);

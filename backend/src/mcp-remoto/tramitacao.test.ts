@@ -71,6 +71,13 @@ test('processos: nada de CPF, telefone nem senha na resposta, nem com completo',
   assert.equal(((cheio.processos[0] as unknown) as { court: string }).court, 'trf3', 'completo devolve o registro da API (limpo)');
 });
 
+test('processos: texto livre do advogado (resultado, comarca, juízo) sai mascarado também', async () => {
+  const sujo = { ...PROCESSO, resultado: 'procedente; cliente CPF 123.456.789-01', comarca: 'Campo Grande 11987654321', juizo: 'senha gov: abc123' };
+  const ctx = ctxDe(conta({ '/v1/processos': () => ({ lawsuits: [sujo], pagination: PAG(1) }) }));
+  const s = JSON.stringify(await tramitacaoProcessos(ctx, {}));
+  for (const proibido of ['123.456.789-01', '11987654321', 'abc123']) assert.equal(s.includes(proibido), false, proibido);
+});
+
 test('processos: validação antes de chamar a API (número, tribunal, datas, tamanho da página)', async () => {
   const chamadas: Array<[string, Query]> = [];
   const ctx = ctxDe(conta({ '/v1/processos': () => ({ lawsuits: [], pagination: PAG(0) }) }, chamadas));

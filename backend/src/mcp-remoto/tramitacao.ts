@@ -12,7 +12,6 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { Auditar } from '../franquia-mcp/ferramentas.js';
-import { Cache } from '../franquia-mcp/ritmo.js';
 import { ErroDeEntrada, validarData } from '../franquia-mcp/travas.js';
 import { tramitacaoGet } from '../lib/integracoes/tramitacao.js';
 import { limparRegistro, mascararCelula, mascararTexto, normalizarCabecalho } from '../lib/integracoes/mascaras.js';
@@ -33,13 +32,12 @@ export interface ContaTramitacao {
 
 export interface ContextoTramitacao {
   contas: Map<string, ContaTramitacao>;
-  cache: Cache;
   /** páginas de 100 lidas na busca de cliente por nome (a API não filtra por nome) */
   maxPaginas: number;
 }
 
-export function criarContextoTramitacao(contas: Map<string, ContaTramitacao>, op: { maxPaginas?: number; agora?: () => number } = {}): ContextoTramitacao {
-  return { contas, cache: new Cache(op.agora), maxPaginas: op.maxPaginas ?? 5 };
+export function criarContextoTramitacao(contas: Map<string, ContaTramitacao>, op: { maxPaginas?: number } = {}): ContextoTramitacao {
+  return { contas, maxPaginas: op.maxPaginas ?? 5 };
 }
 
 /** A conta de uma unidade a partir da chave decifrada. A chave fica só na closure, em memória. */
@@ -67,6 +65,11 @@ export function resolverContaTramitacao(ctx: ContextoTramitacao, unidade?: strin
 const reais = (centavos: unknown): number | null => (typeof centavos === 'number' && Number.isFinite(centavos) ? Math.round(centavos) / 100 : null);
 const texto = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
 const nomes = (xs: unknown): string[] => (Array.isArray(xs) ? xs.map((x) => texto((x as { name?: unknown })?.name)).filter((x): x is string => !!x) : []);
+/** texto digitado pelo advogado (título, comarca, resultado…): pode ter CPF, telefone ou senha no meio */
+const livre = (v: unknown): string | null => {
+  const t = texto(v);
+  return t ? mascararTexto(t) : null;
+};
 const cortar = (s: string | null, n: number): { texto: string | null; cortado: boolean } =>
   s !== null && s.length > n ? { texto: `${s.slice(0, n)}…`, cortado: true } : { texto: s, cortado: false };
 /** Chaves sem valor saem da query: a API recusa parâmetro vazio e o teste compara a consulta exata. */
@@ -140,15 +143,15 @@ export function resumirProcesso(p: ProcessoBruto) {
     situacao: texto(p.status),
     tribunal: texto(p.court),
     titulo: p.title ? mascararTexto(p.title) : null,
-    resultado: texto(p.resultado),
+    resultado: livre(p.resultado),
     ajuizamento: texto(p.ajuizamento),
     der: texto(p.der),
-    comarca: texto(p.comarca),
-    juizo: texto(p.juizo),
+    comarca: livre(p.comarca),
+    juizo: livre(p.juizo),
     valorDaCausa: reais(p.valor_da_causa_in_cents),
     receitaPrevista: reais(p.receita_prevista_in_cents),
     beneficio: texto(p.numero_beneficio),
-    unidade: texto(p.unidade),
+    unidade: livre(p.unidade),
     ultimaPublicacao: texto(p.latest_publication_date),
     clientes: (p.customers ?? []).map((c) => ({ id: c.id ?? null, nome: texto(c.name), polo: texto(c.role) })),
     etiquetas: nomes(p.tags),
@@ -352,8 +355,8 @@ export async function tramitacaoPublicacoes(ctx: ContextoTramitacao, a: ArgsPubl
         publicacao: texto(p.publication_date),
         inicioDoPrazo: texto(p.inicio_do_prazo_date),
         tribunal: texto(p.siglaTribunal),
-        orgao: texto(p.nomeOrgao),
-        classe: texto(p.nomeClasse),
+        orgao: livre(p.nomeOrgao),
+        classe: livre(p.nomeClasse),
         numeroProcesso: texto(p.numero_processo_com_mascara) ?? texto(p.numero_processo),
         link: texto(p.link_tramitacao),
         destinatarios: (p.destinatarios ?? []).map((d) => ({ nome: texto(d.nome), polo: POLO_PUBLICACAO[d.polo ?? ''] ?? texto(d.polo) })),
@@ -655,7 +658,7 @@ export function registrarFerramentasTramitacao(server: McpServer, ctx: ContextoT
       },
       annotations: ro,
     },
-    (args) => executar('tramitacao_publicacoes', args, auditar, () => tramitacaoPublicacoes(ctx, args)),
+    (args) => executar('tramitacao_publicacoes', { ...args, ...(args.busca ? { busca: mascararTexto(args.busca) } : {}) }, auditar, () => tramitacaoPublicacoes(ctx, args)),
   );
   server.registerTool(
     'tramitacao_clientes',

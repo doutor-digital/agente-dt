@@ -53,8 +53,8 @@ const CPF_COLADO_TEXTO = new RegExp(`${COLADO}\\S+`, 'g');
 const SENHA_DITA = /\b(?:senha|password|passwd|pwd)\b[^:=\n]{0,25}[:=]\s*\S+/gi;
 const CPF_FORMATADO = /(?<!\d)\d{3}\.\d{3}\.\d{3}-\d{2}(?!\d)/g;
 /** Telefone brasileiro com ou sem +55, DDD e hífen (10 ou 11 dígitos), e também 11 dígitos soltos. Só em fronteira de número. */
-const TELEFONE = /(?<![\d,])(?:\+?55[\s.-]?)?(?:\(\d{2}\)|\d{2})[\s.-]?9?\d{4}[\s.-]?\d{4}(?![\d])/g;
-const TELEFONE_SEM_DDD = /(?<![\d,])9?\d{4}-\d{4}(?!\d)/g;
+const TELEFONE = /(?<!\d)(?:\+?55[\s.-]?)?(?:\(\d{2}\)|\d{2})[\s.-]?9?\d{4}[\s.-]?\d{4}(?![\d])/g;
+const TELEFONE_SEM_DDD = /(?<!\d)9?\d{4}-\d{4}(?!\d)/g;
 
 export const CPF_SENHA_OMITIDO = '[CPF/senha omitido]';
 export const SENHA_OMITIDA = '[senha omitida]';
@@ -103,6 +103,8 @@ export function mascararCelula(valor: string, cabecalho: string, modo: 'celula' 
  * de chaves isentas é furo: `{"number":"11999998888"}` sairia inteiro.
  */
 const PRESERVAR = new Set(['id', 'uuid', 'iid', 'numero_beneficio', 'link', 'link_tramitacao', 'created_at', 'updated_at']);
+/** Chave de dado bancário (conta, agência, Pix): não sai, qualquer que seja o nome exato que a API use. */
+const CHAVE_BANCARIA = /bank|banco|banc[aá]ri|\bpix\b|pix key|agenc|iban|account number|conta corrente/;
 const CHAVE_DE_DOCUMENTO = /cpf|cnpj|documento|telefone|celular|fone|phone|mobile|whats/;
 
 /**
@@ -122,7 +124,7 @@ export function limparRegistro<T>(valor: T, chave = ''): T {
   if (valor && typeof valor === 'object') {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(valor as Record<string, unknown>)) {
-      if (ehChaveSecreta(k)) continue;
+      if (ehChaveSecreta(k) || CHAVE_BANCARIA.test(normalizarCabecalho(k))) continue;
       out[k] = limparRegistro(v, k);
     }
     return out as T;

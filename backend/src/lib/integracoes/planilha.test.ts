@@ -40,6 +40,11 @@ test('lê as abas do xlsx, com texto compartilhado, entidades XML, linha vazia e
   assert.equal(abas[1]!.linhas[1]![1], '2025-12-09', 'serial 46000 com formato dd/mm/yyyy vira data');
 });
 
+test('data e hora: só hora não ganha a data-base de 1899; 23:59:30 vira o dia seguinte, não 00:00 do mesmo dia', () => {
+  const abas = lerXlsx(xlsxFalso([{ nome: 'T', linhas: [['Hora', 'Quando'], [{ data: 0.354166667 }, { data: 45000.9999 }], [{ data: 45000 }, { data: 45000.5 }]] }]));
+  assert.deepEqual(abas[0]!.linhas.slice(1), [['08:30', '2023-03-16'], ['2023-03-15', '2023-03-15 12:00']]);
+});
+
 test('lê também texto "inline" e rejeita arquivo que não é xlsx', () => {
   const inline = xlsxFalso([{ nome: 'A', formaAlternativa: 'inline', linhas: [['x', 'y']] }]);
   assert.deepEqual(lerXlsx(inline)[0]!.linhas[0], ['x', 'y']);

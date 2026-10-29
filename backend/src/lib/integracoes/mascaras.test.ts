@@ -113,3 +113,14 @@ test('registro de API: chave "number"/"numero" não isenta valor; CPF/telefone c
     numero_processo: '5010331-15.2024.4.03.6201',
   });
 });
+
+test('telefones separados por vírgula sem espaço: todos mascarados', () => {
+  assert.equal(mascararTexto('11999998888,11988887777'), '(**) *****-8888,(**) *****-7777');
+  assert.equal(mascararTexto('(11)99999-8888,(11)98888-7777'), '(**) *****-8888,(**) *****-7777');
+  assert.equal(mascararTexto('R$ 1.234,56'), 'R$ 1.234,56');
+});
+
+test('registro de API: dado bancário não sai, com qualquer nome de chave', () => {
+  const out = limparRegistro({ nome: 'Maria', bank_accounts: [{ x: 1 }], bank_name: 'Banco X', pix_key: 'a@b.com', agencia: '123', conta_corrente: '99-1', cidade: 'Campo Grande' });
+  assert.deepEqual(out, { nome: 'Maria', cidade: 'Campo Grande' });
+});

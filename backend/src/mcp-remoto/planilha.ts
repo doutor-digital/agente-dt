@@ -23,6 +23,8 @@ import { acharSlug } from './unidades.js';
 /** O que o conector precisa de uma planilha: a versão JÁ LIMPA dela. */
 export interface FontePlanilha {
   modo: ModoPlanilha;
+  /** de onde vem (o id da planilha): entra na chave do cache, para trocar o id no painel não servir a planilha antiga */
+  id: string;
   ler(): Promise<PlanilhaLimpa>;
 }
 
@@ -50,7 +52,7 @@ export function criarContextoPlanilha(contas: Map<string, ContaPlanilha>, op: { 
 
 /** Modo público: export xlsx por link, sem login. `fetcher` existe para o teste. */
 export function fontePlanilhaPublica(id: string, fetcher: typeof fetch = fetch): FontePlanilha {
-  return { modo: 'publico', ler: () => lerPlanilhaPublica(id, fetcher) };
+  return { modo: 'publico', id, ler: () => lerPlanilhaPublica(id, fetcher) };
 }
 
 /**
@@ -87,7 +89,7 @@ export function resolverContasPlanilha(ctx: ContextoPlanilha, alvo: string | str
 
 /** A planilha limpa fica em memória por 10 min. O que entra no cache já passou pela limpeza. */
 async function carregar(ctx: ContextoPlanilha, c: ContaPlanilha, p: PlanilhaLiberada): Promise<PlanilhaLimpa> {
-  const chave = `planilha|${c.slug}|${p.apelido}`;
+  const chave = `planilha|${c.slug}|${p.apelido}|${p.fonte.id}`;
   const g = ctx.cache.pegar<PlanilhaLimpa>(chave);
   if (g !== undefined) return g;
   let voando = ctx.emVoo.get(chave);
@@ -104,15 +106,19 @@ async function carregar(ctx: ContextoPlanilha, c: ContaPlanilha, p: PlanilhaLibe
   return voando;
 }
 
+/** Cada unidade isolada (uma com erro não derruba as outras) e em paralelo: são downloads independentes. */
 async function emCada<T extends object>(contas: ContaPlanilha[], fn: (c: ContaPlanilha) => Promise<T>) {
   const porUnidade: Record<string, ({ ok: true } & T) | { ok: false; erro: string }> = {};
-  for (const c of contas) {
-    try {
-      porUnidade[c.slug] = { ok: true, ...(await fn(c)) };
-    } catch (e) {
-      porUnidade[c.slug] = { ok: false, erro: e instanceof Error ? e.message : String(e) };
-    }
-  }
+  const feitos = await Promise.all(
+    contas.map(async (c) => {
+      try {
+        return [c.slug, { ok: true as const, ...(await fn(c)) }] as const;
+      } catch (e) {
+        return [c.slug, { ok: false as const, erro: e instanceof Error ? e.message : String(e) }] as const;
+      }
+    }),
+  );
+  for (const [slug, r] of feitos) porUnidade[slug] = r;
   return porUnidade;
 }
 
@@ -126,21 +132,22 @@ export async function planilhaAbas(ctx: ContextoPlanilha, a: { unidade: string |
   const contas = resolverContasPlanilha(ctx, a.unidade);
   const porUnidade = await emCada(contas, async (c) => {
     const alvo = a.planilha ? [escolher(c, a.planilha)] : c.planilhas;
-    const planilhas = [];
-    for (const p of alvo) {
-      const lida = await carregar(ctx, c, p);
-      planilhas.push({
-        apelido: p.apelido,
-        modo: p.fonte.modo,
-        abas: lida.abas.map((ab) => ({
-          nome: ab.nome,
-          linhas: ab.linhasTotal,
-          cabecalhos: ab.cabecalhos,
-          colunasDescartadas: ab.colunasDescartadas,
-          ...(ab.truncado ? { truncado: true } : {}),
-        })),
-      });
-    }
+    const planilhas = await Promise.all(
+      alvo.map(async (p) => {
+        const lida = await carregar(ctx, c, p);
+        return {
+          apelido: p.apelido,
+          modo: p.fonte.modo,
+          abas: lida.abas.map((ab) => ({
+            nome: ab.nome,
+            linhas: ab.linhasTotal,
+            cabecalhos: ab.cabecalhos,
+            colunasDescartadas: ab.colunasDescartadas,
+            ...(ab.truncado ? { truncado: true } : {}),
+          })),
+        };
+      }),
+    );
     return { planilhas };
   });
   return { observacao: OBSERVACAO, porUnidade };
@@ -157,9 +164,12 @@ function escolher(c: ContaPlanilha, pedido?: string): PlanilhaLiberada {
   }
   const n = normalizarCabecalho(pedido);
   if (!n) throw new ErroDeEntrada(`nome de planilha inválido. Disponíveis: ${nomes}`);
-  const achada = c.planilhas.find((p) => normalizarCabecalho(p.apelido) === n) ?? c.planilhas.find((p) => normalizarCabecalho(p.apelido).includes(n));
-  if (!achada) throw new ErroDeEntrada(`planilha "${pedido}" não liberada em ${c.slug}. Disponíveis: ${nomes}`);
-  return achada;
+  const exata = c.planilhas.find((p) => normalizarCabecalho(p.apelido) === n);
+  if (exata) return exata;
+  const parecidas = c.planilhas.filter((p) => normalizarCabecalho(p.apelido).includes(n));
+  if (parecidas.length > 1) throw new ErroDeEntrada(`planilha "${pedido}" ambígua em ${c.slug}: ${parecidas.map((p) => p.apelido).join(', ')}`);
+  if (!parecidas.length) throw new ErroDeEntrada(`planilha "${pedido}" não liberada em ${c.slug}. Disponíveis: ${nomes}`);
+  return parecidas[0]!;
 }
 
 function escolherAba(abas: AbaLimpa[], pedido?: string): AbaLimpa {

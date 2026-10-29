@@ -142,13 +142,13 @@ function estilosDeData(styles: string | undefined): Set<number> {
 }
 
 function dataDoSerial(serial: number): string {
-  const dias = Math.floor(serial);
-  const frac = serial - dias;
-  const d = new Date(Date.UTC(1899, 11, 30) + dias * 86_400_000);
-  const dia = d.toISOString().slice(0, 10);
-  if (frac < 1e-6) return dia;
-  const min = Math.round(frac * 1440);
-  return `${dia} ${String(Math.floor(min / 60) % 24).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
+  const minutos = Math.round(serial * 1440);
+  const dias = Math.floor(minutos / 1440);
+  const resto = minutos % 1440;
+  const hora = `${String(Math.floor(resto / 60)).padStart(2, '0')}:${String(resto % 60).padStart(2, '0')}`;
+  if (dias === 0) return resto ? hora : '00:00'; // formato só de hora: 08:30, sem a data-base de 1899
+  const dia = new Date(Date.UTC(1899, 11, 30) + dias * 86_400_000).toISOString().slice(0, 10);
+  return resto ? `${dia} ${hora}` : dia;
 }
 
 export interface AbaBruta {
@@ -285,15 +285,25 @@ export function limparAba(bruta: Omit<AbaBruta, 'truncado'> & { truncado?: boole
   for (let i = iCab + 1; i < bruta.linhas.length; i++) if (preenchidas(bruta.linhas[i]!)) dados.push({ l: bruta.linhas[i]!, n: i + 1 });
   const largura = Math.max(cab.length, ...topo.map((i) => bruta.linhas[i]!.length), ...dados.map((d) => d.l.length));
 
+  // um passe só pelas linhas, com contadores por coluna (aba grande: 20 mil linhas x 200 colunas)
+  const colados = new Array<number>(largura).fill(0);
+  const cheias = new Array<number>(largura).fill(0);
+  for (const d of dados) {
+    for (let c = 0; c < d.l.length; c++) {
+      const v = d.l[c]!;
+      if (v.trim() === '') continue;
+      cheias[c]!++;
+      if (v.length >= 13 && temCpfColado(v)) colados[c]!++;
+    }
+  }
   const descartadas: ColunaDescartada[] = [];
   const manter: number[] = [];
   for (let c = 0; c < largura; c++) {
     const nome = (cab[c] ?? '').trim();
     const textoSecreto = topo.map((i) => (bruta.linhas[i]![c] ?? '').trim()).find((t) => t !== '' && t.length <= MAX_TEXTO_DE_CABECALHO && !temCpfColado(t) && ehColunaSecreta(t));
-    const colados = dados.filter((d) => temCpfColado(d.l[c] ?? '')).length + (temCpfColado(nome) ? 1 : 0);
-    const cheias = dados.filter((d) => (d.l[c] ?? '').trim() !== '').length;
+    const nColados = colados[c]! + (temCpfColado(nome) ? 1 : 0);
     if (textoSecreto !== undefined) descartadas.push({ cabecalho: mascararTexto(textoSecreto, 'celula'), motivo: 'cabeçalho de senha/login' });
-    else if (colados > 0 && colados / Math.max(cheias, 1) >= FRACAO_CREDENCIAL) descartadas.push({ cabecalho: mascararTexto(nome, 'celula') || `coluna ${letrasDe(c)}`, motivo: 'valores no formato CPF/senha' });
+    else if (nColados > 0 && nColados / Math.max(cheias[c]!, 1) >= FRACAO_CREDENCIAL) descartadas.push({ cabecalho: mascararTexto(nome, 'celula') || `coluna ${letrasDe(c)}`, motivo: 'valores no formato CPF/senha' });
     else manter.push(c);
   }
 
