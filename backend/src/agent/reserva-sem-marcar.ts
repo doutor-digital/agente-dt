@@ -140,6 +140,20 @@ export const INSTRUCAO_RESERVA_SEM_MARCAR =
   'chame agendar_consulta AGORA. Se falta alguma dessas respostas, reescreva a mensagem SEM dizer que está reservado, ' +
   'marcado, guardado ou garantido, e pergunte só o que falta. Responda só com a mensagem final ou com a chamada da ferramenta.';
 
+/** Unidade sem pagamento antecipado (Timbó): a instrução não manda checar "como vai pagar" — a consulta é paga no dia. */
+export const INSTRUCAO_RESERVA_SEM_MARCAR_SEM_ANTECIPADO =
+  '[instrução interna, não é fala do paciente] Sua resposta acima diz que o horário está reservado ou marcado, ' +
+  'mas NENHUMA consulta foi marcada no sistema da clínica — nada fica guardado, e outro paciente pode pegar esse horário. ' +
+  'Se o paciente JÁ escolheu o dia e a hora, chame agendar_consulta AGORA. Se falta alguma dessas respostas, ' +
+  'reescreva a mensagem SEM dizer que está reservado, marcado, guardado ou garantido, e pergunte só o que falta ' +
+  '(nunca sobre pagamento: a consulta é paga no dia, na clínica). ' +
+  'Responda só com a mensagem final ou com a chamada da ferramenta.';
+
+/** A instrução que vai junto da resposta reprovada, conforme a unidade aceite ou não pagamento antecipado. */
+export function instrucaoReservaSemMarcar(semAntecipado: boolean): string {
+  return semAntecipado ? INSTRUCAO_RESERVA_SEM_MARCAR_SEM_ANTECIPADO : INSTRUCAO_RESERVA_SEM_MARCAR;
+}
+
 /**
  * Último recurso, quando a refeita não serve: tira o trecho que promete e fica o resto
  * ("Perfeito! Vou deixar reservado pra você. Só confirmando: você consegue vir…?" → "Perfeito! Só
