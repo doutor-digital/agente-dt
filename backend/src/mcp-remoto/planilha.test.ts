@@ -62,11 +62,12 @@ test('planilha_ler: 50 linhas por padrão, máximo 200, com número da linha e o
   const r = await planilhaLer(ctx, { unidade: 'magalhaes' });
   assert.equal(r.linhas.length, 50);
   assert.equal(r.totalNaAba, 300);
-  assert.equal(r.proximaLinha, 51);
-  assert.equal(r.linhas[0]!.linha, 1);
-  const r2 = await planilhaLer(ctx, { unidade: 'magalhaes', aPartirDaLinha: 51, maxLinhas: 200 });
+  assert.equal(r.proximaLinha, 52, 'o cabeçalho é a linha 1 do Google Sheets: os dados começam na 2 e a 51ª é a 51');
+  assert.equal(r.linhas[0]!.linha, 2);
+  assert.equal(r.linhas[49]!.linha, 51);
+  const r2 = await planilhaLer(ctx, { unidade: 'magalhaes', aPartirDaLinha: 52, maxLinhas: 200 });
   assert.equal(r2.linhas.length, 200);
-  assert.equal(r2.linhas[0]!.linha, 51);
+  assert.equal(r2.linhas[0]!.linha, 52);
   await assert.rejects(planilhaLer(ctx, { unidade: 'magalhaes', maxLinhas: 201 }), /até 200/);
   naoVaza([r, r2]);
 });
@@ -120,6 +121,29 @@ test('planilha_ler: a aba pode ser omitida só se houver uma; senão lista; unid
   await assert.rejects(planilhaLer(ctx, { unidade: 'magalhaes', planilha: 'outra-coisa', aba: 'Clientes' }), /clientes/);
   const vazio = criarContextoPlanilha(new Map());
   await assert.rejects(planilhaAbas(vazio, { unidade: 'todas' }), /nenhuma/);
+});
+
+test('nome de aba ou de planilha que normaliza para vazio não casa com qualquer uma', async () => {
+  const ctx = ctxCom(CLIENTES);
+  await assert.rejects(planilhaLer(ctx, { unidade: 'magalhaes', aba: '---' }), /inválido/);
+  await assert.rejects(planilhaLer(ctx, { unidade: 'magalhaes', planilha: '/', aba: 'Clientes' }), /inválido/);
+});
+
+test('linha devolvida é a da planilha do Google, mesmo com linhas em branco no meio', async () => {
+  const ctx = ctxCom([{ nome: 'A', linhas: [['Nome', 'Obs'], ['Maria', 'x'], [], [], ['João', 'y'], ['Ana', 'z']] }]);
+  const r = await planilhaLer(ctx, { unidade: 'magalhaes' });
+  assert.deepEqual(r.linhas.map((l) => [l.linha, l.valores['Nome']]), [[2, 'Maria'], [5, 'João'], [6, 'Ana']]);
+  const depois = await planilhaLer(ctx, { unidade: 'magalhaes', aPartirDaLinha: 5, maxLinhas: 1 });
+  assert.deepEqual(depois.linhas.map((l) => l.linha), [5]);
+  assert.equal(depois.proximaLinha, 6);
+});
+
+test('chamadas simultâneas na mesma planilha baixam uma vez só', async () => {
+  const chamadas: string[] = [];
+  const ctx = ctxCom(CLIENTES, chamadas);
+  await Promise.all([planilhaAbas(ctx, { unidade: 'magalhaes' }), planilhaLer(ctx, { unidade: 'magalhaes', aba: 'Clientes' }), planilhaLer(ctx, { unidade: 'magalhaes', aba: 'Outra' })]);
+  assert.equal(chamadas.length, 1);
+  assert.equal(ctx.emVoo.size, 0);
 });
 
 test('cache: a planilha limpa fica 10 min em memória e não é baixada de novo a cada consulta', async () => {

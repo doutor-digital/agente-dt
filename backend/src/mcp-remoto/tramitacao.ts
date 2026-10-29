@@ -438,6 +438,7 @@ export interface RespostaClientes {
   encontrados?: number;
   clientes: Array<Resumo<ReturnType<typeof resumirCliente>>>;
   truncado?: boolean;
+  haMais?: boolean;
   aviso?: string;
 }
 
@@ -464,11 +465,13 @@ export async function tramitacaoClientes(ctx: ContextoTramitacao, a: ArgsCliente
   const formatar = (x: ClienteBruto): Resumo<ReturnType<typeof resumirCliente>> => (a.completo ? { ...clienteCompleto(x), ...resumirCliente(x) } : resumirCliente(x));
 
   if (a.busca?.trim()) {
+    // a `pagina` vale sobre os ACHADOS (a API não filtra por nome): a pagina 2 pula os `por` primeiros
     const termos = normalizarCabecalho(a.busca).split(' ').filter(Boolean);
+    const precisa = pg * por;
     const achados: ClienteBruto[] = [];
     let lidas = 0;
     let paginas = 1;
-    for (let p = 1; p <= ctx.maxPaginas && p <= paginas; p++) {
+    for (let p = 1; p <= ctx.maxPaginas && p <= paginas && achados.length < precisa; p++) {
       const r = await c.fonte.get<{ customers?: ClienteBruto[]; pagination?: Paginacao }>('/v1/clientes', semVazios({ ...filtros, per_page: MAX_POR_PAGINA, page: p, order_by: a.ordenar ?? 'name_asc' }));
       lidas = p;
       paginas = r?.pagination?.pages ?? 1;
@@ -476,13 +479,15 @@ export async function tramitacaoClientes(ctx: ContextoTramitacao, a: ArgsCliente
         const alvo = normalizarCabecalho(String(x.name ?? ''));
         if (termos.every((t) => alvo.includes(t))) achados.push(x);
       }
-      if (achados.length >= por) break;
     }
-    const truncado = achados.length < por && lidas < paginas;
+    const naoVistas = lidas < paginas;
+    const haMais = achados.length > precisa || (achados.length === precisa && naoVistas);
+    const truncado = achados.length < precisa && naoVistas;
     return {
       unidade: c.slug,
-      encontrados: Math.min(achados.length, por),
-      clientes: achados.slice(0, por).map(formatar),
+      encontrados: achados.length,
+      clientes: achados.slice((pg - 1) * por, precisa).map(formatar),
+      ...(haMais ? { haMais: true, aviso: `há mais clientes com esse nome: use pagina=${pg + 1}` } : {}),
       ...(truncado ? { truncado: true, aviso: `a Tramitação não busca por nome: li ${lidas} de ${paginas} páginas de clientes (em ordem de nome) e o resto ficou sem ver — use cpfCnpj ou etiquetas para estreitar` } : {}),
     };
   }

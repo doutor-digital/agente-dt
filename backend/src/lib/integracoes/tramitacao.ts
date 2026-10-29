@@ -12,7 +12,7 @@
  * Documentação: <base>/docs.json.
  */
 import { dormir } from '../../franquia-mcp/ritmo.js';
-import { JanelaDeRitmo } from './convenia.js';
+import { esperaPedida, JanelaDeRitmo } from './convenia.js';
 
 export const TRAMITACAO_API = process.env.TRAMITACAO_API_URL || 'https://planilha.tramitacaointeligente.com.br/api';
 const AGENTE = 'DoutorDigital-Conector/1.0';
@@ -38,16 +38,6 @@ const LEITURA_PERMITIDA = [
   /^\/v1\/atividades$/,
 ];
 const PARAMETROS_PROIBIDOS = new Set(['mostrar_meu_inss_pass']);
-
-/** Retry-After em segundos (ou data HTTP), com teto de 60 s. */
-function esperaPedida(resp: Response, tentativa: number): number {
-  const ra = resp.headers.get('retry-after');
-  const s = ra ? Number(ra) : NaN;
-  if (Number.isFinite(s) && s >= 0) return Math.min(s * 1000, 60_000);
-  const d = ra ? Date.parse(ra) : NaN;
-  if (Number.isFinite(d)) return Math.min(Math.max(d - Date.now(), 0), 60_000);
-  return Math.min(2000 * (tentativa + 1), 10_000);
-}
 
 interface CorpoDeErro {
   error?: unknown;

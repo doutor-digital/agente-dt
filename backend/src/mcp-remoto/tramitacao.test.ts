@@ -200,6 +200,19 @@ test('clientes: a API não busca por nome — busca varre algumas páginas e avi
   assert.match(String(r.aviso), /3 de 10 páginas/);
 });
 
+test('clientes: busca com mais achados que a página: avisa que há mais e a pagina 2 continua de onde parou', async () => {
+  const todos = Array.from({ length: 60 }, (_, i) => ({ ...CLIENTE, id: 1000 + i, name: `Silva ${String(i).padStart(2, '0')}` }));
+  const ctx = ctxDe(conta({ '/v1/clientes': (q) => ({ customers: todos.slice((Number(q['page']) - 1) * 100, Number(q['page']) * 100), pagination: PAG(60, Number(q['page']), 1, 100) }) }));
+  const p1 = await tramitacaoClientes(ctx, { busca: 'silva', maxItens: 20 });
+  assert.equal(p1.clientes.length, 20);
+  assert.equal(p1.haMais, true);
+  assert.match(String(p1.aviso), /pagina=2/);
+  const p3 = await tramitacaoClientes(ctx, { busca: 'silva', maxItens: 20, pagina: 3 });
+  assert.deepEqual(p3.clientes.map((c) => c.id), todos.slice(40, 60).map((c) => c.id));
+  assert.equal(p3.haMais, undefined);
+  assert.equal(p3.truncado, undefined);
+});
+
 const ATIVIDADE = {
   id: 5, uuid: 'a5', title: 'Prazo recurso', description: 'Ligar para 11987654321 e confirmar', type: 'Deadline', link: 'https://x', is_public: false, completed: false, completed_on: null, archived_at: null,
   start: '2026-10-30T12:00:00Z', end: null, all_day: true, amount_in_cents: null, deadline_on: '2026-10-30', deadline_start_on: '2026-10-10', deadline_days: 15, deadline_counting: 'dias_uteis',

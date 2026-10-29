@@ -211,7 +211,10 @@ async function contasPlanilhaDoBanco(): Promise<Map<string, ContaPlanilha>> {
     try {
       contas.set(c.slug, contaPlanilhaDaChave(c));
     } catch (err) {
-      logger.warn({ slug: c.slug, motivo: err instanceof Error ? err.message : String(err) }, 'mcp-remoto: planilhas da unidade não carregadas');
+      const motivo = err instanceof Error ? err.message : String(err);
+      logger.warn({ slug: c.slug, motivo }, 'mcp-remoto: planilhas da unidade não carregadas');
+      // o painel mostra o erro ao lado da chave (como no "não consegui decifrar"), em vez de a unidade sumir calada
+      await prisma.chaveDeIntegracao.updateMany({ where: { unitId: c.unitId, provedor: 'planilha' }, data: { ultimoErro: motivo.slice(0, 300) } }).catch(() => undefined);
     }
   }
   logger.info({ contas: contas.size }, 'mcp-remoto: contas de planilha carregadas');

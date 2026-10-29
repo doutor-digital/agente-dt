@@ -95,17 +95,54 @@ test('limparAba: coluna sem cabeçalho de senha mas com valor CPF/senha colado �
     linhas: [
       ['Nome', 'Acesso'],
       ['Maria', COLADO],
-      ['João', 'so-a-senha-123'],
+      ['João', 'Zx-77-ab9'],
     ],
   });
   assert.deepEqual(aba.cabecalhos, ['Nome']);
   assert.match(aba.colunasDescartadas[0]!.motivo, /CPF\/senha/);
-  assert.equal(jsonDe(aba).includes('so-a-senha-123'), false);
+  assert.equal(jsonDe(aba).includes('Zx-77-ab9'), false);
 });
 
 test('limparAba: sem linha de cabeçalho de verdade, o CPF/senha colado na 1ª linha também não passa', () => {
   const aba = limparAba({ nome: 'X', linhas: [[COLADO, 'Maria'], ['x', 'y']] });
   assert.equal(jsonDe(aba).includes('Fic$enha-Colada-7'), false);
+});
+
+test('limparAba: título e legenda acima do cabeçalho não escondem a coluna de senha (senha só em texto puro, sem CPF colado)', () => {
+  const aba = limparAba({
+    nome: 'X',
+    linhas: [
+      ['Cadastro de clientes 2026'],
+      ['Atualizado em 10/2026'],
+      ['Nome', 'CPF', 'Senha Meu INSS', 'Situação'],
+      ['Maria', '12345678909', 'so-a-senha-111', 'Em análise'],
+      ['João', '98765432100', 'outra-senha-222', 'Concedido'],
+    ],
+  });
+  assert.deepEqual(aba.cabecalhos, ['Nome', 'CPF', 'Situação']);
+  assert.equal(jsonDe(aba).includes('so-a-senha-111'), false);
+  assert.equal(jsonDe(aba).includes('outra-senha-222'), false);
+  assert.deepEqual(aba.numerosDasLinhas, [4, 5], 'o número é o da planilha do Google, não o da lista');
+});
+
+test('limparAba: o texto da coluna de senha é achado mesmo se o cabeçalho real não for a linha escolhida', () => {
+  // cabeçalho "Nome | Senha" tem 2 células e a linha de dados abaixo tem 4: o corte de 60% elege a de dados
+  const aba = limparAba({
+    nome: 'X',
+    linhas: [
+      ['Nome', '', 'Senha', ''],
+      ['Maria', 'a', 'minha-senha-333', 'b'],
+      ['João', 'c', 'senha-do-joao-444', 'd'],
+    ],
+  });
+  assert.equal(jsonDe(aba).includes('minha-senha-333'), false);
+  assert.equal(jsonDe(aba).includes('senha-do-joao-444'), false);
+});
+
+test('limparAba: linhas em branco no meio não deslocam o número da linha', () => {
+  const aba = limparAba({ nome: 'X', linhas: [['A', 'B'], ['1', '2'], [], ['3', '4'], ['', ''], ['5', '6']] });
+  assert.deepEqual(aba.numerosDasLinhas, [2, 4, 6]);
+  assert.deepEqual(aba.linhas, [['1', '2'], ['3', '4'], ['5', '6']]);
 });
 
 test('limparAba: cabeçalho vazio ou repetido ganha nome; linhas em branco somem; conta o total', () => {

@@ -243,6 +243,8 @@ export interface AbaLimpa {
   nome: string;
   cabecalhos: string[];
   linhas: string[][];
+  /** número de cada linha de `linhas` na planilha do Google (a 1ª da planilha é 1), para o usuário achar a linha lá */
+  numerosDasLinhas: number[];
   linhasTotal: number;
   /** a aba passou do teto de linhas/colunas lido: os números são parciais */
   truncado: boolean;
@@ -259,39 +261,59 @@ const letrasDe = (i: number): string => {
   return s;
 };
 
+/** Quantas linhas do topo valem como "cabeçalho possível" (título, legenda, cabeçalho de verdade) e o tamanho máximo de um texto de cabeçalho. */
+const LINHAS_DO_TOPO = 10;
+const MAX_TEXTO_DE_CABECALHO = 40;
+
 /**
- * A 1ª linha com algum valor é o cabeçalho. Descarta, ANTES de qualquer outra coisa, a coluna cujo cabeçalho é
- * de credencial ou em que o "CPF/senha" colado é comum; mascara CPF/telefone no que sobra. Nada que passe
- * daqui carrega senha.
+ * Descarta, ANTES de qualquer outra coisa, a coluna de credencial; mascara CPF/telefone no que sobra. Nada que
+ * passe daqui carrega senha.
+ *
+ * O cabeçalho é a 1ª linha do topo com pelo menos 60% das células da linha mais cheia (planilha com título ou
+ * legenda acima do cabeçalho real não o confunde). Coluna é de credencial quando QUALQUER texto curto das
+ * primeiras linhas diz senha/login/"meu inss", ou quando um terço das células dela é "CPF/senha" colado.
  */
 export function limparAba(bruta: Omit<AbaBruta, 'truncado'> & { truncado?: boolean }): AbaLimpa {
-  const nao_vazia = (l: string[]) => l.some((c) => c.trim() !== '');
-  const iCab = bruta.linhas.findIndex(nao_vazia);
-  if (iCab < 0) return { nome: bruta.nome, cabecalhos: [], linhas: [], linhasTotal: 0, truncado: !!bruta.truncado, colunasDescartadas: [] };
+  const preenchidas = (l: string[]) => l.filter((c) => c.trim() !== '').length;
+  const topo: number[] = [];
+  for (let i = 0; i < bruta.linhas.length && topo.length < LINHAS_DO_TOPO; i++) if (preenchidas(bruta.linhas[i]!)) topo.push(i);
+  if (!topo.length) return { nome: bruta.nome, cabecalhos: [], linhas: [], numerosDasLinhas: [], linhasTotal: 0, truncado: !!bruta.truncado, colunasDescartadas: [] };
+  const maisCheia = Math.max(...topo.map((i) => preenchidas(bruta.linhas[i]!)));
+  const iCab = topo.find((i) => preenchidas(bruta.linhas[i]!) >= Math.ceil(maisCheia * 0.6))!;
   const cab = bruta.linhas[iCab]!;
-  const dados = bruta.linhas.slice(iCab + 1).filter(nao_vazia);
-  const largura = Math.max(cab.length, ...dados.map((l) => l.length));
+  const dados: Array<{ l: string[]; n: number }> = [];
+  for (let i = iCab + 1; i < bruta.linhas.length; i++) if (preenchidas(bruta.linhas[i]!)) dados.push({ l: bruta.linhas[i]!, n: i + 1 });
+  const largura = Math.max(cab.length, ...topo.map((i) => bruta.linhas[i]!.length), ...dados.map((d) => d.l.length));
 
   const descartadas: ColunaDescartada[] = [];
   const manter: number[] = [];
   for (let c = 0; c < largura; c++) {
     const nome = (cab[c] ?? '').trim();
-    const colados = dados.filter((l) => temCpfColado(l[c] ?? '')).length + (temCpfColado(nome) ? 1 : 0);
-    const preenchidas = dados.filter((l) => (l[c] ?? '').trim() !== '').length;
-    if (nome && ehColunaSecreta(nome)) descartadas.push({ cabecalho: mascararTexto(nome), motivo: 'cabeçalho de senha/login' });
-    else if (colados > 0 && colados / Math.max(preenchidas, 1) >= FRACAO_CREDENCIAL) descartadas.push({ cabecalho: mascararTexto(nome) || `coluna ${letrasDe(c)}`, motivo: 'valores no formato CPF/senha' });
+    const textoSecreto = topo.map((i) => (bruta.linhas[i]![c] ?? '').trim()).find((t) => t !== '' && t.length <= MAX_TEXTO_DE_CABECALHO && !temCpfColado(t) && ehColunaSecreta(t));
+    const colados = dados.filter((d) => temCpfColado(d.l[c] ?? '')).length + (temCpfColado(nome) ? 1 : 0);
+    const cheias = dados.filter((d) => (d.l[c] ?? '').trim() !== '').length;
+    if (textoSecreto !== undefined) descartadas.push({ cabecalho: mascararTexto(textoSecreto, 'celula'), motivo: 'cabeçalho de senha/login' });
+    else if (colados > 0 && colados / Math.max(cheias, 1) >= FRACAO_CREDENCIAL) descartadas.push({ cabecalho: mascararTexto(nome, 'celula') || `coluna ${letrasDe(c)}`, motivo: 'valores no formato CPF/senha' });
     else manter.push(c);
   }
 
   const usados = new Map<string, number>();
   const cabecalhos = manter.map((c) => {
-    const base = mascararTexto((cab[c] ?? '').trim()) || `coluna ${letrasDe(c)}`;
+    const base = mascararTexto((cab[c] ?? '').trim(), 'celula') || `coluna ${letrasDe(c)}`;
     const n = (usados.get(base) ?? 0) + 1;
     usados.set(base, n);
     return n === 1 ? base : `${base} (${n})`;
   });
-  const linhas = dados.map((l) => manter.map((c, k) => mascararCelula(l[c] ?? '', cabecalhos[k]!)));
-  return { nome: bruta.nome, cabecalhos, linhas, linhasTotal: linhas.length, truncado: !!bruta.truncado, colunasDescartadas: descartadas };
+  const linhas = dados.map((d) => manter.map((c, k) => mascararCelula(d.l[c] ?? '', cabecalhos[k]!)));
+  return {
+    nome: bruta.nome,
+    cabecalhos,
+    linhas,
+    numerosDasLinhas: dados.map((d) => d.n),
+    linhasTotal: linhas.length,
+    truncado: !!bruta.truncado,
+    colunasDescartadas: descartadas,
+  };
 }
 
 // ----------------------------------------------------------------- chave e download

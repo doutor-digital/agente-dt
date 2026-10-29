@@ -40,10 +40,12 @@ export interface ContaPlanilha {
 export interface ContextoPlanilha {
   contas: Map<string, ContaPlanilha>;
   cache: Cache;
+  /** planilhas sendo baixadas agora: chamadas simultâneas esperam a mesma leitura em vez de baixar de novo */
+  emVoo: Map<string, Promise<PlanilhaLimpa>>;
 }
 
 export function criarContextoPlanilha(contas: Map<string, ContaPlanilha>, op: { agora?: () => number } = {}): ContextoPlanilha {
-  return { contas, cache: new Cache(op.agora, 50) };
+  return { contas, cache: new Cache(op.agora, 50), emVoo: new Map() };
 }
 
 /** Modo público: export xlsx por link, sem login. `fetcher` existe para o teste. */
@@ -88,9 +90,18 @@ async function carregar(ctx: ContextoPlanilha, c: ContaPlanilha, p: PlanilhaLibe
   const chave = `planilha|${c.slug}|${p.apelido}`;
   const g = ctx.cache.pegar<PlanilhaLimpa>(chave);
   if (g !== undefined) return g;
-  const v = await p.fonte.ler();
-  ctx.cache.guardar(chave, v, TTL.busca);
-  return v;
+  let voando = ctx.emVoo.get(chave);
+  if (!voando) {
+    voando = p.fonte
+      .ler()
+      .then((v) => {
+        ctx.cache.guardar(chave, v, TTL.busca);
+        return v;
+      })
+      .finally(() => ctx.emVoo.delete(chave));
+    ctx.emVoo.set(chave, voando);
+  }
+  return voando;
 }
 
 async function emCada<T extends object>(contas: ContaPlanilha[], fn: (c: ContaPlanilha) => Promise<T>) {
@@ -145,6 +156,7 @@ function escolher(c: ContaPlanilha, pedido?: string): PlanilhaLiberada {
     throw new ErroDeEntrada(`${c.slug} tem mais de uma planilha: diga qual (${nomes})`);
   }
   const n = normalizarCabecalho(pedido);
+  if (!n) throw new ErroDeEntrada(`nome de planilha inválido. Disponíveis: ${nomes}`);
   const achada = c.planilhas.find((p) => normalizarCabecalho(p.apelido) === n) ?? c.planilhas.find((p) => normalizarCabecalho(p.apelido).includes(n));
   if (!achada) throw new ErroDeEntrada(`planilha "${pedido}" não liberada em ${c.slug}. Disponíveis: ${nomes}`);
   return achada;
@@ -158,6 +170,7 @@ function escolherAba(abas: AbaLimpa[], pedido?: string): AbaLimpa {
     throw new ErroDeEntrada(`a planilha tem mais de uma aba: diga qual (${nomes})`);
   }
   const n = normalizarCabecalho(pedido);
+  if (!n) throw new ErroDeEntrada(`nome de aba inválido. Abas: ${nomes}`);
   const achadas = abas.filter((x) => normalizarCabecalho(x.nome) === n);
   const parcial = achadas.length ? achadas : abas.filter((x) => normalizarCabecalho(x.nome).includes(n));
   if (parcial.length !== 1) throw new ErroDeEntrada(`aba "${pedido}" ${parcial.length ? 'ambígua' : 'não encontrada'}. Abas: ${nomes}`);
@@ -170,7 +183,7 @@ export interface ArgsPlanilhaLer {
   aba?: string;
   busca?: string;
   colunas?: string[];
-  /** número da linha de dados (a 1ª abaixo do cabeçalho é a 1) */
+  /** número da linha como aparece no Google Sheets (a 1ª de dados costuma ser a 2); `proximaLinha` já vem nesse número */
   aPartirDaLinha?: number;
   maxLinhas?: number;
   completo?: boolean;
@@ -207,7 +220,7 @@ export async function planilhaLer(ctx: ContextoPlanilha, a: ArgsPlanilhaLer) {
   };
   const noFiltro: Array<{ linha: number; dados: string[] }> = [];
   aba.linhas.forEach((dados, i) => {
-    if (casa(dados)) noFiltro.push({ linha: i + 1, dados });
+    if (casa(dados)) noFiltro.push({ linha: aba.numerosDasLinhas[i]!, dados });
   });
   const aPartir = noFiltro.filter((x) => x.linha >= inicio);
   const fatia = aPartir.slice(0, max);
@@ -223,7 +236,7 @@ export async function planilhaLer(ctx: ContextoPlanilha, a: ArgsPlanilhaLer) {
       linha: x.linha,
       valores: Object.fromEntries(indices.map((i) => [aba.cabecalhos[i]!, corta(x.dados[i] ?? '')] as const).filter(([, v]) => v !== '')),
     })),
-    proximaLinha: aPartir.length > fatia.length ? fatia[fatia.length - 1]!.linha + 1 : null,
+    proximaLinha: aPartir.length > fatia.length ? aPartir[fatia.length]!.linha : null,
     ...(omitidas ? { colunasOmitidas: omitidas, avisoColunas: `só as ${CORTE_COLUNAS} primeiras colunas; peça colunas=[…] ou completo: true para as outras` } : {}),
     ...(aba.truncado ? { aviso: 'a aba passou do teto de linhas ou colunas lido: os números são parciais' } : {}),
     colunasDescartadas: aba.colunasDescartadas.length,
@@ -266,7 +279,7 @@ export function registrarFerramentasPlanilha(server: McpServer, ctx: ContextoPla
         aba: z.string().optional().describe('nome da aba (ou parte dele), se a planilha tiver mais de uma'),
         busca: z.string().optional().describe('palavras que a linha deve conter, sem acento e sem caixa; roda no dado já mascarado'),
         colunas: z.array(z.string().min(1)).max(50).optional().describe('nomes das colunas a devolver'),
-        aPartirDaLinha: z.number().int().min(1).optional().describe('1 = primeira linha abaixo do cabeçalho'),
+        aPartirDaLinha: z.number().int().min(1).optional().describe('número da linha no Google Sheets, para continuar de onde parou (use "proximaLinha")'),
         maxLinhas: z.number().int().min(1).max(MAX_LINHAS).optional(),
         completo: z.boolean().optional().describe('sem corte de 300 caracteres por célula e de 30 colunas. NÃO libera CPF, telefone nem senha.'),
       },

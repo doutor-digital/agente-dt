@@ -5,7 +5,7 @@ import { ehChaveSecreta, ehColunaSecreta, limparRegistro, mascararCelula, mascar
 // Tudo aqui é inventado: CPFs de exemplo e senhas que não existem.
 
 test('cabeçalhos de credencial são reconhecidos, com ou sem acento, caixa e separador', () => {
-  for (const h of ['Senha', 'SENHA INSS', 'Password', 'senha do gov.br', 'Meu INSS', 'meu_inss_pass', 'CPF-Senha', 'CPF/SENHA', 'Login', 'login do portal', 'Token', 'Acesso gov.br', 'PWD']) {
+  for (const h of ['Senha', 'SENHA INSS', 'Password', 'senha do gov.br', 'Meu INSS', 'meu_inss_pass', 'CPF-Senha', 'CPF/SENHA', 'Login', 'login do portal', 'Token', 'Acesso gov.br', 'PWD', 'PIN']) {
     assert.equal(ehColunaSecreta(h), true, h);
   }
   for (const h of ['Nome', 'Telefone', 'CPF', 'Processo', 'Situação', 'Data de entrada', 'Benefício', 'Observações', 'Passagem', 'Compasso', '']) {
@@ -35,14 +35,29 @@ test('texto livre: número de processo, data, valor e id não são tocados', () 
   }
 });
 
-test('CPF e senha colados (NNN.NNN.NNN-NN/…) somem inteiros, inclusive o que vem depois', () => {
+test('CPF e senha colados (NNN.NNN.NNN-NN/…): na célula some o resto dela; em texto corrido só a palavra colada', () => {
   assert.equal(temCpfColado('123.456.789-09/Abc 12345'), true);
-  assert.equal(mascararTexto('123.456.789-09/SenhaFalsa#1'), '[CPF/senha omitido]');
-  assert.equal(mascararTexto('login: 123.456.789-09 / senha com espaço'), 'login: [CPF/senha omitido]');
-  assert.equal(mascararTexto('12345678909/outraSenha'), '[CPF/senha omitido]');
-  assert.equal(mascararTexto('123.456.789-09 | x9y8'), '[CPF/senha omitido]');
+  assert.equal(mascararTexto('123.456.789-09/SenhaFalsa#1', 'celula'), '[CPF/senha omitido]');
+  assert.equal(mascararTexto('login: 123.456.789-09 / senha com espaço', 'celula'), 'login: [CPF/senha omitido]');
+  assert.equal(mascararTexto('12345678909/outraSenha', 'celula'), '[CPF/senha omitido]');
+  assert.equal(mascararTexto('123.456.789-09 | x9y8', 'celula'), '[CPF/senha omitido]');
+  assert.equal(mascararTexto('acesso 123.456.789-09/SenhaFalsa#1 e depois o prazo de 15 dias'), 'acesso [CPF/senha omitido] e depois o prazo de 15 dias');
   assert.equal(temCpfColado('123.456.789-09'), false);
   assert.equal(temCpfColado('15/10/2026'), false);
+});
+
+test('prosa com CPF seguido de ; ou : não perde o resto do parágrafo', () => {
+  const t = 'Autor: Maria, CPF 123.456.789-01; réu: Banco X. Prazo de 15 dias para contestar.';
+  assert.equal(mascararTexto(t), 'Autor: Maria, CPF ***.***.***-01; réu: Banco X. Prazo de 15 dias para contestar.');
+  assert.equal(mascararTexto(t, 'celula'), 'Autor: Maria, CPF ***.***.***-01; réu: Banco X. Prazo de 15 dias para contestar.');
+});
+
+test('senha dita em texto livre ("senha: …", "senha do gov = …") some', () => {
+  assert.equal(mascararTexto('senha gov: Abc@123 trocar'), '[senha omitida] trocar');
+  assert.equal(mascararTexto('Senha=abc123'), '[senha omitida]');
+  assert.equal(mascararTexto('password: x9'), '[senha omitida]');
+  assert.equal(mascararTexto('cliente esqueceu a senha'), 'cliente esqueceu a senha');
+  assert.equal(mascararTexto('Senha do INSS: confirmar com a cliente'), '[senha omitida] com a cliente', 'perde o 1º termo do valor: erra para o lado seguro');
 });
 
 test('célula: o cabeçalho ajuda onde o formato não basta', () => {
@@ -73,4 +88,28 @@ test('registro de API: some a chave de credencial e mascara texto em qualquer pr
     aninhado: { obs: 'ligar (**) *****-4321', lista: [{ cpf_cnpj: '***.***.***-00' }] },
   });
   assert.equal(entrada.meu_inss_pass, 'Indisponível por padrão', 'o original não é alterado');
+});
+
+test('registro de API: chave "number"/"numero" não isenta valor; CPF/telefone como número JSON mascarados; uuid e links intactos', () => {
+  const uuid = 'a1b2c3d4-1234-5678-9abc-def012345678';
+  const out = limparRegistro({
+    uuid,
+    link: 'https://tramitacaointeligente.com.br/publicacoes/1234-5678',
+    telefone: { number: '11999998888' },
+    outro: { numero: '123.456.789-01' },
+    cpf: 12345678901,
+    phone: 11987654321,
+    valor: 12345678901,
+    numero_processo: '5010331-15.2024.4.03.6201',
+  });
+  assert.deepEqual(out, {
+    uuid,
+    link: 'https://tramitacaointeligente.com.br/publicacoes/1234-5678',
+    telefone: { number: '(**) *****-8888' },
+    outro: { numero: '***.***.***-01' },
+    cpf: '***.***.***-01',
+    phone: '(**) *****-4321',
+    valor: 12345678901,
+    numero_processo: '5010331-15.2024.4.03.6201',
+  });
 });
