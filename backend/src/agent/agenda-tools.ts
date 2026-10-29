@@ -15,7 +15,8 @@ import { avisoDeConsultaExistente, consultasFuturas } from './consulta-existente
 import { dataPorExtenso, feriadoNacional } from '../lib/feriados.js';
 import { marcarConsultaNoTurno } from '../lib/cartao-de-chegada.js';
 import { CAMPO_FEITO_POR, CAMPO_SITUACAO_CONSULTA, comMarcacaoEmCurso, registrarMarcacaoDaIa } from '../lib/marcacao-da-ia-no-turno.js';
-import { conferirConsultaDePe } from '../lib/consulta-em-outro-cadastro.js';
+import { conferirConsultaDePe, type PossivelDuplicado } from '../lib/consulta-em-outro-cadastro.js';
+import { abrirTarefaParaEquipe } from './confirmacao-so-com-crm.js';
 import { fim8 } from '../lib/paciente-existente.js';
 import { fmtBRL, precosDaConsulta } from './prompt-composer.js';
 import { avisarJoao } from '../lib/alerta-whatsapp.js';
@@ -1465,11 +1466,29 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         (leituraDoCadastro ??= await SpineService.getClient(fresca, args.idClient).catch((err: unknown) => ({ ok: false as const, error: String(err) })));
       const foneLead = await telefoneDoLead(kommo, args.leadId);
       const foneInformado = args.telefone ? SpineService.normalizarWhatsapp(args.telefone) : null;
+      // O telefone do cadastro tem de ser o deste paciente (o do cartão ou o que ele informou); se não for, o cadastro é de outra pessoa.
+      const aceitos = [fim8(foneLead), fim8(foneInformado)].filter((x): x is string => x !== null);
+      const deOutraPessoa = (c: { whatsapp?: string | null } | null): boolean => {
+        const b = fim8(c?.whatsapp);
+        return !!b && aceitos.length > 0 && !aceitos.includes(b);
+      };
+      // Tarefa para a equipe no Kommo (uma por cartão e motivo a cada 24 h). `false` = o aviso NÃO saiu: quem responde ao
+      // paciente não pode prometer retorno da equipe.
+      const avisarEquipe = async (motivo: 'cadastro_duplicado' | 'agenda_sem_conferir', detalhe: string): Promise<boolean> => {
+        if (!kommo || !args.leadId) {
+          logger.warn({ unit: fresca.slug, leadId: args.leadId ?? null, motivo }, 'agendar_consulta: sem cartão/Kommo para abrir a tarefa da equipe');
+          return false;
+        }
+        const r = await abrirTarefaParaEquipe({ slug: fresca.slug, unitId: fresca.id, leadId: args.leadId, kommo, recorder, motivo, detalhe });
+        return r !== 'falhou';
+      };
 
       // Quem já tem consulta de pé não ganha OUTRA, nem "esse horário acabou de ser ocupado" (o horário pode estar ocupado
       // justamente por ela). Vem ANTES da grade: Timbó, 29/10/2026 — a recepção marcou num segundo cadastro da paciente, a IA
       // tentou o mesmo horário no primeiro e ofereceu outro a quem já estava marcada.
       let semConferir = false;
+      let possiveis: PossivelDuplicado[] = [];
+      let equipeAvisada = false;
       if (!args.remarcando) {
         const ja = await consultaAtual(fresca, args.leadId);
         if (ja) {
@@ -1483,11 +1502,8 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         const lido = await lerCadastro();
         const cadastro = lido?.ok ? lido.data?.client ?? null : null;
         if (!lido?.ok) semConferir = true; // a franquia não deixou ver o cadastro: ausência de consulta não está provada
-        // O telefone do cadastro tem de ser o deste paciente: se não for, a recusa de "é de outra pessoa" (abaixo) fala primeiro.
-        const b = fim8(cadastro?.whatsapp);
-        const aceitos = [fim8(foneLead), fim8(foneInformado)].filter((x): x is string => x !== null);
-        const deOutraPessoa = !!b && aceitos.length > 0 && !aceitos.includes(b);
-        if (cadastro && !deOutraPessoa) {
+        // Se o cadastro é de outra pessoa, a recusa de "é de outra pessoa" (abaixo) fala primeiro.
+        if (cadastro && !deOutraPessoa(cadastro)) {
           // A recepção marca direto na franquia e o vínculo da Sofia não fica sabendo: `consultaAtual` (acima) só vê a
           // que ela marcou. Bebedouro, 21/10/2026: a Melissa marcou a Ignêz 22/10 09:00 às 15:07; a IA marcou outra,
           // 04/11 14h, às 15:10 — no mesmo cadastro. E o cadastro em DOBRO (Timbó, 29/10): a consulta pode estar noutro.
@@ -1533,6 +1549,23 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
             ).trim();
           }
           semConferir = conf.incompleta;
+          // Mesmo telefone e nome só PARECIDO (mãe/filha, "Christina"/"Cristina", só o primeiro nome): talvez seja a mesma pessoa
+          // em dobro, talvez não. Nada é vinculado, recusado nem usado por causa dele; a equipe é quem decide. Só vira tarefa
+          // quando o outro cadastro tem consulta de pé (sem ela não há o que duplicar).
+          possiveis = conf.possiveisDuplicados;
+          const comConsulta = possiveis.filter((x) => x.consulta);
+          if (comConsulta.length > 0) {
+            await recorder.step({
+              kind: 'TOOL_RESULT',
+              title: `agendar_consulta: possível cadastro em dobro (idClient ${comConsulta.map((x) => x.idClient).join(', ')}) — nome parecido, não igual; nada foi vinculado`,
+              payload: { idClient: args.idClient, possiveis: comConsulta.map((x) => ({ idClient: x.idClient, name: x.name, consulta: x.consulta ? `${x.consulta.schedule.dayLocal}T${x.consulta.schedule.timeLocal}` : null })) },
+            });
+            equipeAvisada = await avisarEquipe(
+              'cadastro_duplicado',
+              `Cadastro usado pela IA: ${args.idClient} («${cadastro.name ?? '?'}»). Outro cadastro com o mesmo telefone: ` +
+                comConsulta.map((x) => `${x.idClient} («${x.name ?? '?'}», consulta ${x.consulta?.schedule.dayLocal} ${x.consulta?.schedule.timeLocal})`).join('; '),
+            );
+          }
         }
       }
 
@@ -1554,18 +1587,34 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
           title: `agendar_consulta recusado — ${args.hora} está ${slot.status}`,
           payload: { ...args, motivo: slot.motivo },
         });
-        if (semConferir) {
-          // Lado seguro: o horário pode estar ocupado pela própria consulta deste paciente (cadastro em dobro) e não deu
-          // para conferir. Não se oferece outro horário com base num "ocupado" que talvez seja dele.
+        // O horário pode estar ocupado pela própria consulta deste paciente: porque não deu para conferir os cadastros, ou porque
+        // o ocupante é um possível cadastro dele em dobro (mesmo telefone, nome parecido). Lado seguro: não se oferece outro
+        // horário com base num "ocupado" que talvez seja dele, e a equipe é avisada (tarefa) para confirmar.
+        const pedidoEm = `${args.data}T${args.hora}`;
+        const ocupadoPorPossivel = possiveis.filter((x) => x.consulta && `${x.consulta.schedule.dayLocal}T${x.consulta.schedule.timeLocal}` === pedidoEm);
+        if (semConferir || ocupadoPorPossivel.length > 0) {
+          const porPossivel = ocupadoPorPossivel.length > 0;
           await recorder.step({
             kind: 'ERROR',
-            title: `agendar_consulta: ${args.hora} ocupado e não consegui conferir os cadastros do paciente — não ofereci outro horário`,
+            title: porPossivel
+              ? `agendar_consulta: ${args.hora} ocupado por um possível cadastro em dobro do paciente (idClient ${ocupadoPorPossivel.map((x) => x.idClient).join(', ')}) — não ofereci outro horário`
+              : `agendar_consulta: ${args.hora} ocupado e não consegui conferir os cadastros do paciente — não ofereci outro horário`,
             payload: { ...args, motivo: slot.motivo },
           });
+          if (!equipeAvisada) {
+            equipeAvisada = await avisarEquipe(
+              'agenda_sem_conferir',
+              `Cadastro usado pela IA: ${args.idClient}; horário pedido: ${args.data} ${args.hora}`,
+            );
+          }
           return (
-            `${args.hora} aparece ocupado, mas NÃO consegui conferir na clínica se esse horário é do próprio paciente (ele pode já estar marcado ` +
-            'por outro cadastro). A consulta NÃO foi marcada. NÃO diga que o horário foi ocupado por outra pessoa, NÃO ofereça outro horário e NÃO afirme que ele está marcado. ' +
-            'Diga em UMA frase que vai confirmar com a equipe e retorna em instantes.'
+            (porPossivel
+              ? `${args.hora} aparece ocupado por uma consulta de outro cadastro com o MESMO telefone e nome parecido (pode ser o próprio paciente em dobro, pode ser um parente): `
+              : `${args.hora} aparece ocupado, mas NÃO consegui conferir na clínica se esse horário é do próprio paciente (ele pode já estar marcado por outro cadastro): `) +
+            'a consulta NÃO foi marcada. NÃO diga que o horário foi ocupado por outra pessoa, NÃO ofereça outro horário e NÃO afirme que ele está marcado. ' +
+            (equipeAvisada
+              ? 'Diga em UMA frase que vai confirmar com a equipe e retorna em instantes.'
+              : 'O aviso à equipe NÃO saiu: NÃO prometa retorno da equipe. Diga em UMA frase que não conseguiu confirmar o horário agora e que vai verificar; se o paciente insistir, encaminhe a um atendente humano.')
           );
         }
         return (
@@ -1588,11 +1637,7 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
       }
       const paciente = conf.ok ? conf.data?.client ?? null : null;
       if (paciente) {
-        const aceitos = [fim8(foneLead), fim8(foneInformado)].filter(
-          (x): x is string => x !== null,
-        );
-        const b = fim8(paciente.whatsapp);
-        if (aceitos.length > 0 && b && !aceitos.includes(b)) {
+        if (deOutraPessoa(paciente)) {
           await recorder.step({
             kind: 'ERROR',
             title: `agendar_consulta recusado — idClient ${args.idClient} é de outra pessoa`,

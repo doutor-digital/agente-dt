@@ -6,14 +6,17 @@
  * "✓ Situação da consulta = Agendado" ANTES do resultado do agendamento. Quem marcou foi a recepção; o cartão ficou
  * dizendo que foi a IA.
  *
- * `agendar_consulta` já carimba esses dois campos sozinho quando dá certo. Então a gravação avulsa dos dois valores só vale
- * se a marcação da IA deu certo no turno — e, como as ferramentas rodam em paralelo, quem vai gravar ESPERA a marcação
+ * `agendar_consulta` já carimba esses dois campos sozinho quando dá certo. A gravação avulsa de "feito por = IA" (que AFIRMA
+ * que a IA marcou) só vale se a marcação da IA deu certo no turno; "Situação = Agendado" é o estado da consulta e não é
+ * travado (revisão do sênior, 29/10: no caso Timbó ela estava, de fato, agendada) — e, como as ferramentas rodam em paralelo, quem vai gravar ESPERA a marcação
  * em andamento terminar (com teto), em vez de adivinhar.
  *
  * Estado por `traceId` (um por turno), em memória, com validade curta.
  */
 
-/** Os dois campos (e valores) que afirmam "a IA marcou". */
+import { ehCabecalhoDeGrupo, normalizarNome } from './kommo-schema.js';
+
+/** O campo que afirma "a IA marcou" (com o valor "IA"), e o que diz o estado da consulta (livre: não afirma quem marcou). */
 export const CAMPO_FEITO_POR = '⬢ Agendamento feito por';
 export const CAMPO_SITUACAO_CONSULTA = '✓ Situação da consulta';
 
@@ -38,17 +41,17 @@ function turno(traceId: string): Turno {
   return t;
 }
 
-function semAcento(s: string): string {
-  return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
-}
-
-/** PURA. Este campo + valor afirmam que a IA marcou a consulta? */
+/**
+ * PURA. Este campo + valor afirmam que a IA marcou a consulta?
+ *
+ * SÓ "⬢ Agendamento feito por = IA": é ele que diz QUEM marcou. "✓ Situação da consulta = Agendado" é o estado da consulta, não
+ * de quem a marcou (no caso Timbó era verdade: a consulta estava agendada, pela recepção) e fica livre para qualquer escritor.
+ * O nome do campo compara pela mesma normalização com que o Kommo resolve campo por nome (`campoPorNome`).
+ */
 export function ehCarimboDeMarcacaoDaIa(campo: string, valor: unknown): boolean {
+  if (ehCabecalhoDeGrupo(campo) || normalizarNome(campo) !== normalizarNome(CAMPO_FEITO_POR)) return false;
   const v = Array.isArray(valor) ? valor.map(String).join(';') : String(valor ?? '');
-  const c = semAcento(campo);
-  if (c === semAcento(CAMPO_FEITO_POR)) return semAcento(v) === 'ia';
-  if (c === semAcento(CAMPO_SITUACAO_CONSULTA)) return semAcento(v) === 'agendado';
-  return false;
+  return normalizarNome(v) === 'ia';
 }
 
 /** Envolve uma tentativa de marcar (agendar/remarcar): enquanto roda, quem quer carimbar espera o desfecho. */

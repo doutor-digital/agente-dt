@@ -12,15 +12,20 @@ import {
 beforeEach(() => _limparTurnosParaTeste());
 const dormir = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-test('ehCarimboDeMarcacaoDaIa: só os dois campos com o valor que afirma "a IA marcou"', () => {
+test('ehCarimboDeMarcacaoDaIa: SÓ "feito por = IA" (quem marcou); "Situação = Agendado" é estado da consulta e não é travado', () => {
   assert.equal(ehCarimboDeMarcacaoDaIa('⬢ Agendamento feito por', 'IA'), true);
   assert.equal(ehCarimboDeMarcacaoDaIa('⬢ Agendamento feito por', ' ia '), true);
+  assert.equal(ehCarimboDeMarcacaoDaIa('⬢ Agendamento feito por', ['IA']), true);
   assert.equal(ehCarimboDeMarcacaoDaIa('⬢ Agendamento feito por', 'Humano'), false);
-  assert.equal(ehCarimboDeMarcacaoDaIa('✓ Situação da consulta', 'Agendado'), true);
-  assert.equal(ehCarimboDeMarcacaoDaIa('✓ Situação da consulta', 'agendado'), true);
+  assert.equal(ehCarimboDeMarcacaoDaIa('✓ Situação da consulta', 'Agendado'), false);
   assert.equal(ehCarimboDeMarcacaoDaIa('✓ Situação da consulta', 'Confirmado'), false);
-  assert.equal(ehCarimboDeMarcacaoDaIa('◷ Data da Consulta', 'Agendado'), false);
-  assert.equal(ehCarimboDeMarcacaoDaIa('✓ Situação da consulta', ['Agendado']), true);
+  assert.equal(ehCarimboDeMarcacaoDaIa('◷ Data da Consulta', 'IA'), false);
+});
+
+test('ehCarimboDeMarcacaoDaIa: o nome do campo casa pela normalização do Kommo (símbolo, acento, caixa), e cabeçalho de grupo nunca', () => {
+  assert.equal(ehCarimboDeMarcacaoDaIa('Agendamento feito por', 'IA'), true);
+  assert.equal(ehCarimboDeMarcacaoDaIa('⬢ AGENDAMENTO  FEITO POR', 'IA'), true);
+  assert.equal(ehCarimboDeMarcacaoDaIa('## Agendamento feito por', 'IA'), false);
 });
 
 test('sem tentativa nenhuma no turno: falso (depois da folga curta)', async () => {

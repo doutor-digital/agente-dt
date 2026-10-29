@@ -5,6 +5,10 @@
  * telefone) e marcou nele sexta 16:00. Quando ela disse "ok, obrigada", a IA tentou 16:00 no 374228, a franquia disse
  * "ocupado" (pela consulta DELA) e a IA ofereceu outros horários a quem já estava marcada.
  *
+ * Revisão do sênior (29/10): "nome compatível + mesmo telefone" juntava mãe e filha, pai e filho, "Ana" e "Ana Paula". Só o
+ * nome IGUAL (normalizado) é o mesmo paciente; o resto é POSSÍVEL duplicado: nada é vinculado nem recusado, e a equipe recebe
+ * uma tarefa no Kommo (uma por cartão e motivo).
+ *
  * Aqui: a franquia é falsa (mesmo molde de `pagamento-da-unidade-agendar.test.ts`) e a recusa tem de acontecer ANTES do
  * "ocupado", apontar o cadastro certo, vincular o lead a ele e nunca criar consulta nova.
  */
@@ -70,7 +74,25 @@ Object.defineProperty(prisma, 'spineLeadLink', {
   configurable: true,
 });
 Object.defineProperty(prisma, 'agendaBlock', { value: { findMany: async () => [] }, configurable: true });
-Object.defineProperty(prisma, 'conversation', { value: { updateMany: async () => ({ count: 1 }), findFirst: async () => null }, configurable: true });
+Object.defineProperty(prisma, 'conversation', { value: { updateMany: async () => ({ count: 1 }), findFirst: async () => null, findUnique: async () => null }, configurable: true });
+
+Object.defineProperty(prisma, 'leadFieldRule', { value: { findMany: async () => [] }, configurable: true });
+
+// dedupe das tarefas da equipe (tabela card_alert), em memória
+const alertas = new Map<string, Date>();
+Object.defineProperty(prisma, 'cardAlert', {
+  value: {
+    findUnique: async (a: { where: { unitId_leadId_ruleKey: { unitId: string; leadId: string; ruleKey: string } } }) => {
+      const k = JSON.stringify(a.where.unitId_leadId_ruleKey);
+      return alertas.has(k) ? { createdAt: alertas.get(k) } : null;
+    },
+    upsert: async (a: { where: { unitId_leadId_ruleKey: { unitId: string; leadId: string; ruleKey: string } } }) => {
+      alertas.set(JSON.stringify(a.where.unitId_leadId_ruleKey), new Date());
+      return {};
+    },
+  },
+  configurable: true,
+});
 
 function marcada(idSchedule: number, hora: string, over: Partial<SpineSchedule> = {}): SpineSchedule {
   return {
@@ -86,9 +108,16 @@ let buscaFalha = false;
 let leituraFalha = new Set<number>();
 let buscas = 0;
 let criadas: string[] = [];
+let tarefas: string[] = [];
+let tarefaFalha = false;
+let cheia = false;
+/** tempo que a franquia falsa leva em CADA chamada (ms) — para exercitar a concorrência de verdade */
+let atraso = 0;
+const dorme = () => (atraso > 0 ? new Promise((r) => setTimeout(r, atraso)) : undefined);
 
 const spine = SpineService as unknown as Record<string, unknown>;
 spine.searchSchedules = async (_u: Unit, f: { initialDate: string }) => {
+  await dorme();
   // a grade vê TODAS as consultas dos cadastros: o horário da recepção aparece ocupado
   const schedules = cadastros.flatMap((c) => c.schedules).filter((s) => s.dayLocal === f.initialDate);
   return { ok: true, data: { schedules, total: schedules.length, pages: 1 } };
@@ -96,14 +125,19 @@ spine.searchSchedules = async (_u: Unit, f: { initialDate: string }) => {
 spine.searchClients = async () => {
   buscas++;
   if (buscaFalha) return { ok: false, error: '500 da franquia' };
-  return { ok: true, data: { clients: cadastros.map((c) => ({ idClient: c.idClient, name: c.name, whatsapp: c.whatsapp })) } };
+  const todos = cadastros.map((c) => ({ idClient: c.idClient, name: c.name, whatsapp: c.whatsapp }));
+  // página cheia: nome comum, 100 homônimos de outros telefones
+  const enchimento = cheia ? Array.from({ length: 100 }, (_, i) => ({ idClient: 9000 + i, name: 'Maria Silva', whatsapp: `55119${String(10000000 + i)}` })) : [];
+  return { ok: true, data: { clients: [...todos, ...enchimento].slice(0, 100) } };
 };
 spine.getClient = async (_u: Unit, id: number) => {
+  await dorme();
   if (leituraFalha.has(id)) return { ok: false, error: 'timeout' };
   const c = cadastros.find((x) => x.idClient === id);
   return { ok: true, data: { client: c ?? null } };
 };
 spine.createSchedule = async (_u: Unit, input: { idClient: number; dateAttendanceLocal: string }) => {
+  await dorme();
   criadas.push(`${input.idClient} ${input.dateAttendanceLocal}`);
   return { ok: true, data: { idSchedule: 9000 } };
 };
@@ -117,18 +151,33 @@ const recorder = {
   },
 } as unknown as TraceRecorder;
 
-const kommo = {
+let foneDoLead = FONE;
+const kommoBase = {
   getLead: async () => ({ _embedded: { contacts: [{ id: 7 }] } }),
-  getContactPhone: async () => `+${FONE}`,
+  getContactPhone: async () => `+${foneDoLead}`,
   setLeadCustomFieldValue: async () => undefined,
   getLead2: async () => null,
-} as unknown as KommoClient;
+  createTask: async (a: { text: string }) => {
+    if (tarefaFalha) throw new Error('429 do Kommo');
+    tarefas.push(a.text);
+    return { id: tarefas.length };
+  },
+} as Record<string, unknown>;
+// Quando a marcação vai até o fim, os carimbos no cartão rodam em segundo plano e usam outras chamadas ao Kommo: o que não é
+// o foco do teste devolve vazio.
+const kommo = new Proxy(kommoBase, { get: (t, k) => (k in t ? t[k as string] : async () => []) }) as unknown as KommoClient;
 
 beforeEach(() => {
   links.length = 0;
   passos.length = 0;
   buscas = 0;
   criadas = [];
+  tarefas = [];
+  tarefaFalha = false;
+  foneDoLead = FONE;
+  alertas.clear();
+  cheia = false;
+  atraso = 0;
   buscaFalha = false;
   leituraFalha = new Set();
   _depsDoCacheParaTeste({ deposito: depositoNaMemoria(), env: {}, registrar: () => undefined });
@@ -200,6 +249,67 @@ test('mesmo nome com telefone diferente NÃO é duplicado', async () => {
   assert.equal(links.length, 0);
 });
 
+// ── Nome só COMPATÍVEL + mesmo telefone = POSSÍVEL duplicado: não vincula, não recusa, avisa a equipe ──────────────────────
+const PARES: Array<[string, string, string]> = [
+  ['mãe e filha', 'Maria Eduarda da Silva', 'Maria José da Silva'],
+  ['pai e filho Júnior', 'José Carlos Pereira Júnior', 'José Carlos Pereira'],
+  ['só o primeiro nome', 'Ana', 'Ana Paula Costa'],
+  ['Christina × Cristina', 'Ana Christina Souza', 'ANA CRISTINA SOUZA'],
+];
+for (const [rotulo, nomeDele, nomeDoOutro] of PARES) {
+  test(`${rotulo}: o horário pedido está LIVRE — marca no cadastro pedido, não vincula o cartão ao outro, avisa a equipe`, async () => {
+    cadastros[0].name = nomeDele;
+    cadastros[1].name = nomeDoOutro; // consulta às 16:00
+    const r = await pedir('10:00');
+    assert.match(r, /Consulta marcada para/);
+    assert.doesNotMatch(r, /RECUSADO|já tem consulta|A partir de agora use/);
+    assert.deepEqual(criadas, [`${ANA} ${DIA}T10:00:00`]);
+    assert.equal(links.filter((l) => l.update.spineIdClient === ANA_DOBRO).length, 0, 'o cartão NUNCA aponta para o cadastro do outro');
+    assert.equal(tarefas.length, 1, 'a equipe é avisada');
+    assert.match(tarefas[0], /CONFERIR CADASTRO/);
+    assert.match(tarefas[0], new RegExp(`${ANA}`));
+    assert.match(tarefas[0], new RegExp(`${ANA_DOBRO}`));
+  });
+
+  test(`${rotulo}: o horário pedido é o da consulta do OUTRO cadastro — não recusa por "já tem", não oferece outro horário, avisa a equipe`, async () => {
+    cadastros[0].name = nomeDele;
+    cadastros[1].name = nomeDoOutro;
+    const r = await pedir('16:00');
+    assert.doesNotMatch(r, /RECUSADO|já tem consulta marcada|A partir de agora use|não está mais disponível/);
+    assert.match(r, /NÃO ofereça outro horário/);
+    assert.match(r, /confirmar com a equipe/);
+    assert.deepEqual(criadas, []);
+    assert.equal(links.length, 0, 'nada foi vinculado');
+    assert.equal(tarefas.length, 1);
+  });
+}
+
+test('possível duplicado SEM consulta de pé não gera tarefa (não há o que duplicar)', async () => {
+  cadastros[0].name = 'Maria Eduarda da Silva';
+  cadastros[1] = { idClient: ANA_DOBRO, name: 'Maria José da Silva', whatsapp: FONE, schedules: [] };
+  assert.match(await pedir('10:00'), /Consulta marcada para/);
+  assert.deepEqual(tarefas, []);
+});
+
+test('a tarefa é UMA por cartão e motivo: pedir de novo no turno seguinte não abre outra', async () => {
+  cadastros[1].name = 'ANA CRISTINA SOUZA';
+  cadastros[0].name = 'Ana Christina Souza';
+  await pedir('16:00');
+  await pedir('16:00');
+  await pedir('16:00');
+  assert.equal(tarefas.length, 1);
+});
+
+test('Timbó exato: nome IGUAL e telefone com/sem o 9 → é o mesmo paciente (recusa e revincula) e NÃO abre tarefa', async () => {
+  foneDoLead = '554792919491';
+  cadastros[0].whatsapp = '+554792919491';
+  cadastros[1].whatsapp = '+5547992919491';
+  const r = await pedir('16:00');
+  assert.match(r, /^RECUSADO: este paciente já tem consulta marcada/);
+  assert.equal(links[0].update.spineIdClient, ANA_DOBRO);
+  assert.deepEqual(tarefas, []);
+});
+
 test('consulta já passada ou desmarcada no outro cadastro não conta', async () => {
   cadastros[1].schedules = [
     marcada(1, '09:00', { idStatus: 57, statusName: 'Desmarcado', isBusy: false, requiresManualValidation: true }),
@@ -219,6 +329,47 @@ test('lado seguro: a busca de cadastros falhou e o horário aparece ocupado — 
   assert.doesNotMatch(r, /RECUSADO|já tem consulta marcada|não está mais disponível/);
   assert.ok(passos.some((p) => /não consegui conferir os cadastros/.test(p.title)));
   assert.deepEqual(criadas, []);
+  // a IA promete "vou confirmar com a equipe": a tarefa existe, de verdade
+  assert.equal(tarefas.length, 1);
+  assert.match(tarefas[0], /CONFERIR HORÁRIO/);
+  assert.match(tarefas[0], new RegExp(`${ANA}`));
+});
+
+test('lado seguro: o Kommo recusou a tarefa — a IA NÃO promete retorno da equipe', async () => {
+  buscaFalha = true;
+  tarefaFalha = true;
+  const r = await pedir('16:00');
+  assert.match(r, /NÃO prometa retorno da equipe/);
+  assert.doesNotMatch(r, /retorna em instantes/);
+  assert.deepEqual(tarefas, []);
+});
+
+test('lado seguro SEM como abrir a tarefa (sem Kommo): a IA NÃO promete retorno da equipe', async () => {
+  buscaFalha = true;
+  const r = await pedir('16:00', {}, false);
+  assert.match(r, /NÃO ofereça outro horário/);
+  assert.match(r, /NÃO prometa retorno da equipe/);
+  assert.doesNotMatch(r, /retorna em instantes/);
+});
+
+test('página cheia no nome inteiro (nome comum) com o horário LIVRE: marca normalmente, sem tarefa', async () => {
+  cheia = true;
+  cadastros = [{ idClient: ANA, name: 'Maria Silva', whatsapp: FONE, schedules: [] }];
+  const r = await pedir('10:00', {}, false);
+  assert.match(r, /Consulta marcada para/);
+  assert.deepEqual(criadas, [`${ANA} ${DIA}T10:00:00`]);
+  assert.deepEqual(tarefas, [], 'horário livre: nada a avisar');
+});
+
+test('nome comum (página cheia) com o horário OCUPADO: confere com a equipe, com tarefa — não chuta "ocupado por outra pessoa"', async () => {
+  cheia = true;
+  cadastros = [
+    { idClient: ANA, name: 'Maria Silva', whatsapp: FONE, schedules: [] },
+    { idClient: 4321, name: 'Pedro Alves', whatsapp: '5547977770000', schedules: [marcada(888, '16:00', { clientName: 'Pedro Alves' })] },
+  ];
+  const r = await pedir('16:00');
+  assert.match(r, /NÃO consegui conferir/);
+  assert.equal(tarefas.length, 1);
 });
 
 test('lado seguro: o cadastro irmão não pôde ser lido e o horário aparece ocupado — mesma resposta', async () => {
@@ -300,15 +451,15 @@ function turnoNovo() {
   return { rec, gravados, passosDoTurno, gravar };
 }
 
-test('carimbo: "feito por = IA" e "Agendado" sem marcação da IA no turno são recusados e NADA é gravado', async () => {
+test('carimbo: "feito por = IA" sem marcação da IA no turno é recusado e NADA é gravado; "Situação = Agendado" NÃO é travado (estado da consulta)', async () => {
   const t = turnoNovo();
   const a = await t.gravar(FEITO_POR, 'IA');
-  const b = await t.gravar(SITUACAO, 'Agendado');
   assert.match(a, /^RECUSADO/);
-  assert.match(b, /^RECUSADO/);
   assert.match(a, /nenhuma marcação sua deu certo neste turno/);
   assert.deepEqual(t.gravados, []);
   assert.ok(t.passosDoTurno.some((x) => /sem marcação da IA neste turno/.test(x)), 'fica no rastro');
+  assert.match(await t.gravar(SITUACAO, 'Agendado'), /^OK/, 'no caso Timbó a consulta ESTAVA agendada (pela recepção)');
+  assert.deepEqual(t.gravados, ['Agendado']);
 });
 
 test('carimbo: outros valores desses campos e outros campos continuam livres (Humano, Confirmado, Queixa)', async () => {
@@ -319,33 +470,34 @@ test('carimbo: outros valores desses campos e outros campos continuam livres (Hu
   assert.deepEqual(t.gravados, ['Humano', 'Confirmado', 'Dor lombar']);
 });
 
-test('carimbo, Timbó em paralelo: agendar_consulta RECUSA (a recepção já marcou) e o carimbo disparado junto não grava', async () => {
+test('carimbo, Timbó em paralelo: agendar_consulta RECUSA (a recepção já marcou) e "feito por = IA" disparado junto não grava', async () => {
   const t = turnoNovo();
   const ferramenta = buildAgendarConsulta({ unit: unidade, recorder: t.rec, kommo }) as unknown as Func;
-  const [resAgendar, resFeitoPor, resSituacao] = await Promise.all([
+  const [resAgendar, resFeitoPor] = await Promise.all([
     ferramenta.func({ idClient: ANA, data: DIA, hora: '16:00', diaConfirmado: true, formaPagamento: 'na_clinica', leadId: 4984700 }),
     t.gravar(FEITO_POR, 'IA'),
-    t.gravar(SITUACAO, 'Agendado'),
   ]);
   assert.match(resAgendar, /^RECUSADO/);
   assert.match(resFeitoPor, /^RECUSADO/);
-  assert.match(resSituacao, /^RECUSADO/);
   assert.deepEqual(t.gravados, []);
 });
 
-test('carimbo, caso normal em paralelo: a IA MARCA e o carimbo avulso, pedido junto (antes ou depois), grava', async () => {
+test('carimbo, caso normal em paralelo, com a franquia MAIS LENTA que a folga de espera (300 ms): a IA marca e o carimbo avulso espera o desfecho e grava', async () => {
+  // Se `agendar_consulta` não se declarasse "em curso" (comMarcacaoEmCurso), o carimbo esgotaria a folga de 300 ms antes de
+  // a franquia responder, concluiria "a IA não marcou" e seria recusado — com a franquia instantânea esse defeito não aparece.
+  atraso = 250; // 250 ms em cada chamada: a marcação inteira leva bem mais que a folga
   cadastros = [{ idClient: ANA, name: 'Ana Christina Souza', whatsapp: FONE, schedules: [] }];
   const t = turnoNovo();
   const ferramenta = buildAgendarConsulta({ unit: unidade, recorder: t.rec }) as unknown as Func;
+  const t0 = Date.now();
   const [resAgendar, resFeitoPor] = await Promise.all([
     ferramenta.func({ idClient: ANA, data: DIA, hora: '10:00', diaConfirmado: true, formaPagamento: 'na_clinica', leadId: 4984700 }),
     t.gravar(FEITO_POR, 'IA'), // chamado ANTES de a ferramenta de agendar começar a rodar
   ]);
+  assert.ok(Date.now() - t0 > 600, 'a marcação durou bem mais que a folga de 300 ms (a franquia falsa precisa ser lenta de verdade)');
   assert.match(resAgendar, /Consulta marcada para/);
   assert.match(resFeitoPor, /^OK/);
-  // e depois do resultado, no turno seguinte da mesma conversa de ferramentas
-  assert.match(await t.gravar(SITUACAO, 'Agendado'), /^OK/);
-  assert.deepEqual(t.gravados, ['IA', 'Agendado']);
+  assert.deepEqual(t.gravados, ['IA']);
 });
 
 test('carimbo: marcação de OUTRO turno não vale (o estado é por turno)', async () => {
