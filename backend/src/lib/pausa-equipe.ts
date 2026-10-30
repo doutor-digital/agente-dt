@@ -42,6 +42,7 @@ import { registrarSimulacao, type Simulacao } from './so-no-papel.js';
 import { emPausa } from './pausa-unidade.js';
 import { leadPausadoPorJanela } from './pausa-lead.js';
 import { pausouSozinhaDesde } from './pausa-propria.js';
+import { registrarPausaDaEquipe } from './pausa-equipe-registro.js';
 import { createKommoClient, isLeadPaused } from '../services/kommo.service.js';
 import { enviosDaSofia, mensagensOficiaisDaUnidade, type MensagemOficial } from '../services/kommo-talks.service.js';
 import { carimbarHumanoAssumiu } from '../services/lead-metrics.service.js';
@@ -123,10 +124,15 @@ export function equipeComAPalavra(
   return { fala, motivo: null };
 }
 
-/** PURA: "Melissa às 10:25" / "o celular da clínica (WhatsApp Business) às 10:25". */
+/** PURA: como a nota chama quem falou ("Melissa", "o celular da clínica (WhatsApp Business)", "a equipe"). */
+export function nomeDoAutor(autorNome: string): string {
+  const nome = autorNome.trim();
+  return !nome ? 'a equipe' : nome.toLowerCase() === APP_DO_CELULAR ? 'o celular da clínica (WhatsApp Business)' : nome;
+}
+
+/** PURA: "Melissa em 20/10 10:25" / "o celular da clínica (WhatsApp Business) em 20/10 10:25". */
 export function descreverFala(m: Pick<MensagemOficial, 'autorNome' | 'em'>, tz = 'America/Sao_Paulo'): string {
-  const nome = m.autorNome.trim();
-  const quem = !nome ? 'a equipe' : nome.toLowerCase() === APP_DO_CELULAR ? 'o celular da clínica (WhatsApp Business)' : nome;
+  const quem = nomeDoAutor(m.autorNome);
   let hora: string;
   try {
     hora = new Intl.DateTimeFormat('pt-BR', { timeZone: tz, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).format(m.em);
@@ -150,8 +156,12 @@ export interface DepsPausaEquipe {
   pausaMexidaDesde: (unit: Unit, leadId: number, desde: Date) => Promise<boolean>;
   /** A caixinha "Pausar IA" está marcada AGORA? Lança se não deu para ler. */
   pausaMarcadaAgora: (unit: Unit, leadId: number) => Promise<boolean>;
-  /** Marca "Pausar IA", carimba "assumido por humano" e cancela a reativação pendente. */
-  marcarPausa: (unit: Unit, leadId: number) => Promise<ResultadoDaPausa>;
+  /**
+   * Marca "Pausar IA", carimba "assumido por humano" e cancela a reativação pendente. Com `fala`, e só quando
+   * foi esta chamada que marcou, registra a pausa como da automação — é o que permite a volta em 1 h
+   * (pausa-equipe-volta.ts). Pausa que já estava marcada (SDR, widget, `pausar_ia`) nunca é registrada.
+   */
+  marcarPausa: (unit: Unit, leadId: number, fala?: Pick<MensagemOficial, 'em' | 'autorNome'>) => Promise<ResultadoDaPausa>;
   simular: (unit: Pick<Unit, 'id' | 'slug'>, automacao: string, s: Simulacao) => void;
 }
 
@@ -174,12 +184,13 @@ async function cancelarReativacao(unit: Unit, leadId: number): Promise<void> {
   }
 }
 
-async function marcarPausaPadrao(unit: Unit, leadId: number): Promise<ResultadoDaPausa> {
+async function marcarPausaPadrao(unit: Unit, leadId: number, fala?: Pick<MensagemOficial, 'em' | 'autorNome'>): Promise<ResultadoDaPausa> {
   await cancelarReativacao(unit, leadId);
   if (!unit.kommoPausedFieldId) return 'sem_campo';
   const kommo = createKommoClient(unit);
   if (await kommo.isLeadFieldChecked(leadId, unit.kommoPausedFieldId)) return 'ja_estava';
   await kommo.setLeadFieldFlag(leadId, unit.kommoPausedFieldId, true);
+  if (fala) await registrarPausaDaEquipe(unit, leadId, fala);
   // Bloco DIGITAL: assumido por humano = Sim, status = Respondendo (o mesmo da auto-pausa antiga do webhook).
   void carimbarHumanoAssumiu(unit, kommo, leadId);
   return 'marcou';
@@ -272,7 +283,7 @@ export async function portaDaEquipe(
     return { pausou: false, msgs: leitura.msgs };
   }
 
-  const resultado = await deps.marcarPausa(unit, leadId).catch((err) => {
+  const resultado = await deps.marcarPausa(unit, leadId, leitura.fala).catch((err) => {
     logger.warn({ err: String(err), unit: unit.slug, leadId }, 'pausa-equipe: falha ao marcar "Pausar IA" (este turno fica calado mesmo assim)');
     return 'falhou' as const;
   });
@@ -348,7 +359,7 @@ export async function travaAntesDeEnviar(
       if (fala) {
         const quem = descreverFala(fala, unit.spineTimezone ?? 'America/Sao_Paulo');
         if (estado === 'ligado') {
-          const r = await deps.marcarPausa(unit, leadId).catch(() => 'falhou');
+          const r = await deps.marcarPausa(unit, leadId, fala).catch(() => 'falhou');
           logger.info({ unit: unit.slug, leadId, resultado: r }, 'IA auto-pausada antes de enviar: a equipe falou com o paciente (rota oficial)');
           motivo = `a equipe falou com o paciente (${quem}) enquanto a Sofia respondia`;
         } else if (fala.em.getTime() >= inicioDoTurno) {
