@@ -24,7 +24,13 @@ import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { createKommoClient, type KommoFieldType, type KommoLead } from '../services/kommo.service.js';
-import { classificar, type SinaisDaConversa } from './qualificacao-por-sinal.js';
+import {
+  classificar,
+  PREFIXOS_DE_PASSO,
+  sinaisDosPassos,
+  type PassoDaConversa,
+  type SinaisDaConversa,
+} from './qualificacao-por-sinal.js';
 import { sexoPeloNome } from './sexo-pelo-nome.js';
 
 const PASSO_MS = 15 * 60_000;
@@ -43,28 +49,70 @@ export function unidadesLigadas(): string[] {
     .filter(Boolean);
 }
 
-interface Alvo {
+export interface Alvo {
   leadId: number;
   mensagensDoPaciente: number;
   ferramentas: string[];
+  /** a franquia tem consulta ligada ao cartão agora (`spine_lead_links.spine_id_schedule`) */
+  temConsultaMarcada: boolean;
 }
 
-/** Conversas que esfriaram na janela, com os sinais já contados pelo banco. */
-async function alvos(unit: Unit): Promise<Alvo[]> {
-  const linhas = await prisma.$queryRawUnsafe<
-    Array<{ lead_id: string; msgs: bigint; ferramentas: string[] | null }>
-  >(
+interface LinhaDeConversa {
+  lead_id: string;
+  msgs: bigint | number | null;
+}
+
+interface PassoDoLead extends PassoDaConversa {
+  leadId: string;
+}
+
+/**
+ * Junta o que o banco devolveu em um alvo por lead. Puro — é aqui que `temConsultaMarcada` passa a existir:
+ * o worker antigo nunca o informava, e por isso cartão em AGENDADO ficava Morno. Só o vínculo ATUAL vale: o passo
+ * "Consulta marcada" é histórico (a consulta pode ter sido cancelada) e entra como ferramenta, não como consulta viva.
+ */
+export function montarAlvos(linhas: LinhaDeConversa[], passos: PassoDoLead[], leadsComConsulta: number[]): Alvo[] {
+  const comVinculo = new Set(leadsComConsulta);
+  const passosPorLead = new Map<string, PassoDoLead[]>();
+  for (const p of passos) {
+    const lista = passosPorLead.get(p.leadId);
+    if (lista) lista.push(p);
+    else passosPorLead.set(p.leadId, [p]);
+  }
+  return linhas.map((l) => {
+    const leadId = Number(l.lead_id);
+    const sinais = sinaisDosPassos(passosPorLead.get(String(l.lead_id)) ?? []);
+    return {
+      leadId,
+      mensagensDoPaciente: Number(l.msgs ?? 0),
+      ferramentas: sinais.ferramentas,
+      temConsultaMarcada: comVinculo.has(leadId),
+    };
+  });
+}
+
+/** O que o classificador recebe de cada alvo. */
+export function sinaisDoAlvo(a: Alvo): SinaisDaConversa {
+  return {
+    mensagensDoPaciente: a.mensagensDoPaciente,
+    ferramentasChamadas: a.ferramentas,
+    temConsultaMarcada: a.temConsultaMarcada,
+  };
+}
+
+/**
+ * Conversas que esfriaram na janela, com os sinais já contados.
+ *
+ * A contagem de mensagens sai de uma consulta SÓ de conversas e mensagens. Antes ela dividia o JOIN com os passos
+ * de execução (`LEFT JOIN LATERAL` sem ligação com a mensagem), que repetia cada mensagem uma vez por passo
+ * "Decisão" e inflava `msgs`: 1 mensagem + 3 passos virava 3 e o lead saía Morno em vez de Frio.
+ */
+export async function alvos(unit: Unit): Promise<Alvo[]> {
+  const linhas = await prisma.$queryRawUnsafe<LinhaDeConversa[]>(
     `SELECT c.lead_id,
-            count(*) FILTER (WHERE m.role = 'user')            AS msgs,
-            array_remove(array_agg(DISTINCT s.ferramenta), NULL) AS ferramentas
+            count(*) FILTER (WHERE m.role = 'user') AS msgs
      FROM conversations c
      JOIN messages m ON m.conversation_id = c.id
-     LEFT JOIN LATERAL (
-       SELECT substring(es.title from 'Decisão: ([a-z_]+)\\(') AS ferramenta
-       FROM execution_steps es
-       JOIN execution_traces et ON et.id = es.trace_id
-       WHERE et.unit_id = c.unit_id AND et.lead_id = c.lead_id AND es.kind = 'TOOL_CALL'
-     ) s ON true
      WHERE c.unit_id = $1
      GROUP BY c.lead_id
      HAVING max(m.created_at) < now() - ($2 || ' hours')::interval
@@ -75,11 +123,30 @@ async function alvos(unit: Unit): Promise<Alvo[]> {
     String(ESFRIOU_HORAS),
     String(JANELA_HORAS),
   );
-  return linhas.map((l) => ({
-    leadId: Number(l.lead_id),
-    mensagensDoPaciente: Number(l.msgs ?? 0),
-    ferramentas: l.ferramentas ?? [],
-  }));
+  if (!linhas.length) return [];
+
+  const ids = linhas.map((l) => String(l.lead_id));
+  // `kommo_lead_id` é Int32 no banco: um id maior derrubaria o findMany inteiro
+  const idsNumericos = ids.map(Number).filter((n) => Number.isInteger(n) && n > 0 && n <= 2_147_483_647);
+  const [passos, vinculos] = await Promise.all([
+    prisma.executionStep.findMany({
+      where: {
+        trace: { unitId: unit.id, leadId: { in: ids } },
+        kind: { in: ['TOOL_CALL', 'TOOL_RESULT', 'ERROR'] },
+        OR: PREFIXOS_DE_PASSO.map((p) => ({ title: { startsWith: p } })),
+      },
+      select: { kind: true, title: true, trace: { select: { leadId: true } } },
+    }),
+    prisma.spineLeadLink.findMany({
+      where: { unitId: unit.id, kommoLeadId: { in: idsNumericos }, spineIdSchedule: { not: null } },
+      select: { kommoLeadId: true },
+    }),
+  ]);
+  return montarAlvos(
+    linhas,
+    passos.map((p) => ({ leadId: p.trace.leadId, kind: p.kind, title: p.title })),
+    vinculos.map((v) => v.kommoLeadId),
+  );
 }
 
 export interface ResultadoPreenchimento {
@@ -183,11 +250,7 @@ export async function preencherDaUnidade(
       };
 
       if (regraQualif) {
-        const sinais: SinaisDaConversa = {
-          mensagensDoPaciente: alvo.mensagensDoPaciente,
-          ferramentasChamadas: alvo.ferramentas,
-        };
-        const c = classificar(sinais);
+        const c = classificar(sinaisDoAlvo(alvo));
         await escrever(regraQualif, c.temperatura, c.porque, 'qualificacao');
       }
 
