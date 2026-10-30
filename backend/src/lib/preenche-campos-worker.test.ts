@@ -111,12 +111,15 @@ test('cartaoExiste: o 204 vazio do Kommo (cartão apagado ou juntado) não é um
 
 test('consultaViva: consulta por vir vale; a que já passou (NÃO COMPARECEU mantém o vínculo) não; sem data, vale', () => {
   const agora = '2026-11-03T15:00';
-  assert.equal(consultaViva('2026-11-03T15:00', agora), true);
   assert.equal(consultaViva('2026-11-03T16:30', agora), true);
   assert.equal(consultaViva('2026-12-01T09:00', agora), true);
-  assert.equal(consultaViva('2026-11-03T14:59', agora), false);
-  assert.equal(consultaViva('2026-10-30T09:00', agora), false);
   assert.equal(consultaViva('2026-11-03T16:30:00', agora), true);
   assert.equal(consultaViva(null, agora), true);
   assert.equal(consultaViva(undefined, agora), true);
+  // quem está na clínica agora, ou acabou de sair, não perde o sinal (folga de 4 h de `consultaNoPassado`)
+  assert.equal(consultaViva('2026-11-03T15:00', agora), true);
+  assert.equal(consultaViva('2026-11-03T14:40', agora), true);
+  assert.equal(consultaViva('2026-11-03T11:30', agora), true);
+  assert.equal(consultaViva('2026-11-03T10:30', agora), false);
+  assert.equal(consultaViva('2026-10-30T09:00', agora), false);
 });

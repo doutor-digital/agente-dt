@@ -32,7 +32,7 @@ import {
   type SinaisDaConversa,
 } from './qualificacao-por-sinal.js';
 import { sexoPeloNome } from './sexo-pelo-nome.js';
-import { agoraLocalISO } from '../agent/consulta-que-passou.js';
+import { agoraLocalISO, consultaNoPassado } from '../agent/consulta-que-passou.js';
 import { fusoDaUnidade } from './fuso.js';
 
 const PASSO_MS = 15 * 60_000;
@@ -104,13 +104,12 @@ export function sinaisDoAlvo(a: Alvo): SinaisDaConversa {
 
 /**
  * O vínculo com a franquia diz "tem consulta POR VIR"? `spineIdSchedule` preenchido não basta: NÃO COMPARECEU mantém o
- * vínculo, e a consulta que já passou não é limpa por ninguém — o cartão ficaria Quente para sempre. Sem data gravada
- * (`agendadoPara` nulo) não dá para dizer que passou: vale como viva, igual à memória do lead (lead-memory.service.ts).
- * Compara "AAAA-MM-DDTHH:mm" com o relógio da clínica; ISO ordena como texto.
+ * vínculo, e a consulta que já passou não é limpa por ninguém — o cartão ficaria Quente para sempre. Usa a MESMA definição
+ * de "consulta que passou" do resto do agente (`consultaNoPassado`: folga de 4 h depois da hora marcada, sem data = não
+ * passou), para que quem está na clínica agora, ou acabou de sair, não perca o sinal.
  */
 export function consultaViva(agendadoPara: string | null | undefined, agoraNaClinica: string): boolean {
-  if (!agendadoPara) return true;
-  return agendadoPara.slice(0, 16) >= agoraNaClinica.slice(0, 16);
+  return !consultaNoPassado(agendadoPara, agoraNaClinica);
 }
 
 /**
@@ -132,13 +131,14 @@ export async function alvos(unit: Unit, agora: Date = new Date()): Promise<Alvo[
      JOIN messages m ON m.conversation_id = c.id
      WHERE c.unit_id = $1
      GROUP BY c.lead_id
-     HAVING max(m.created_at) < now() - ($2 || ' hours')::interval
-        AND max(m.created_at) > now() - ($3 || ' hours')::interval
+     HAVING max(m.created_at) < $4::timestamptz - ($2 || ' hours')::interval
+        AND max(m.created_at) > $4::timestamptz - ($3 || ' hours')::interval
      ORDER BY max(m.created_at) DESC
      LIMIT 300`,
     unit.id,
     String(ESFRIOU_HORAS),
     String(JANELA_HORAS),
+    agora.toISOString(),
   );
   if (!linhas.length) return [];
 
@@ -280,7 +280,7 @@ export async function preencherDaUnidade(
         // virou Quente. Só leadId — nada de nome, telefone ou texto do paciente.
         logger.info(
           { unit: unit.slug, leadId: alvo.leadId, campo: regra.kommoFieldName, valor, porque: porqueNoLog, simulado: simular },
-          'preenche-campos: preencheu',
+          simular ? 'preenche-campos: preencheria (modo seco)' : 'preenche-campos: preencheu',
         );
       };
 

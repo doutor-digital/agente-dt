@@ -26,22 +26,29 @@ let W: typeof import('./preenche-campos-worker.js');
 let classificar: typeof import('./qualificacao-por-sinal.js').classificar;
 
 const horas = (h: number) => new Date(Date.now() - h * 3_600_000);
+/** Docker existe mas não subiu o banco (sem rede para a imagem, sem permissão): o motivo, para pular dizendo por quê. */
+let indisponivel: string | null = null;
 
 before(async () => {
   if (PULAR) return;
-  execFileSync('docker', ['run', '-d', '--rm', '--name', nome, '-e', 'POSTGRES_PASSWORD=x', '-p', '127.0.0.1::5432', 'postgres:16-alpine'], { stdio: 'ignore' });
-  const porta = execFileSync('docker', ['port', nome, '5432/tcp']).toString().trim().split('\n')[0].split(':').pop();
-  for (let i = 0; ; i++) {
-    const r = spawnSync('docker', ['exec', nome, 'psql', '-U', 'postgres', '-tAc', 'select 1'], { stdio: 'ignore' });
-    if (r.status === 0) break;
-    if (i > 60) throw new Error('postgres descartável não subiu');
-    await new Promise((r2) => setTimeout(r2, 500));
+  try {
+    execFileSync('docker', ['run', '-d', '--rm', '--name', nome, '-e', 'POSTGRES_PASSWORD=x', '-p', '127.0.0.1::5432', 'postgres:16-alpine'], { stdio: 'ignore' });
+    const porta = execFileSync('docker', ['port', nome, '5432/tcp']).toString().trim().split('\n')[0].split(':').pop();
+    for (let i = 0; ; i++) {
+      const r = spawnSync('docker', ['exec', nome, 'psql', '-U', 'postgres', '-tAc', 'select 1'], { stdio: 'ignore' });
+      if (r.status === 0) break;
+      if (i > 60) throw new Error('postgres descartável não subiu em 30 s');
+      await new Promise((r2) => setTimeout(r2, 500));
+    }
+    process.env.DATABASE_URL = `postgresql://postgres:x@127.0.0.1:${porta}/postgres`;
+    execFileSync('pnpm', ['exec', 'prisma', 'db', 'push', '--skip-generate'], { cwd: BACKEND, env: process.env, stdio: 'ignore' });
+    ({ prisma } = await import('./prisma.js'));
+    W = await import('./preenche-campos-worker.js');
+    ({ classificar } = await import('./qualificacao-por-sinal.js'));
+  } catch (err) {
+    indisponivel = `Postgres descartável indisponível (${String(err).slice(0, 120)}): alvos() NÃO foi provado contra um banco de verdade`;
+    spawnSync('docker', ['rm', '-f', nome], { stdio: 'ignore' });
   }
-  process.env.DATABASE_URL = `postgresql://postgres:x@127.0.0.1:${porta}/postgres`;
-  execFileSync('pnpm', ['exec', 'prisma', 'db', 'push', '--skip-generate'], { cwd: BACKEND, env: process.env, stdio: 'ignore' });
-  ({ prisma } = await import('./prisma.js'));
-  W = await import('./preenche-campos-worker.js');
-  ({ classificar } = await import('./qualificacao-por-sinal.js'));
 });
 
 after(async () => {
@@ -78,7 +85,8 @@ const FUTURO = '2099-01-01T09:00';
 const PASSADO = '2020-01-01T09:00';
 const HORARIOS = 'consultar_horarios 2026-11-03: 4 confirmado(s) de 6 livre(s) na grade';
 
-test('alvos() contra Postgres: cada condição do banco tem um caso que quebra sem ela', { skip: PULAR }, async () => {
+test('alvos() contra Postgres: cada condição do banco tem um caso que quebra sem ela', { skip: PULAR }, async (ctx) => {
+  if (indisponivel) return ctx.skip(indisponivel);
   const U = await unidade('u-principal', 'conta-a');
   const IRMA = await unidade('u-irma', 'conta-a'); // mesmo Kommo (Petrópolis/Caxias)
   const OUTRA = await unidade('u-outra', 'conta-b'); // outro Kommo, nada a ver
@@ -116,14 +124,16 @@ test('alvos() contra Postgres: cada condição do banco tem um caso que quebra s
   // 10. consulta por vir na própria unidade -> vale
   await conversa(U.id, 111, 6);
   await vinculo(U.id, 111, 5555, FUTURO);
-  // 11. a consulta é daqui a 3 h (viva) / foi há 3 h (passou) — o relógio da clínica é que decide, não só a data
+  // 11. o relógio da clínica é que decide, não só a data: daqui a 3 h e há 3 h (ainda na folga de 4 h) valem; há 6 h não
   await conversa(U.id, 112);
   await vinculo(U.id, 112, 5556, naClinica(3));
   await conversa(U.id, 113);
-  await vinculo(U.id, 113, 5557, naClinica(-3));
+  await vinculo(U.id, 113, 5557, naClinica(-6));
+  await conversa(U.id, 114);
+  await vinculo(U.id, 114, 5558, naClinica(-3));
 
   const r = Object.fromEntries(
-    await Promise.all([101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113].map(async (id) => [id, await alvoDe(id)] as const)),
+    await Promise.all([101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114].map(async (id) => [id, await alvoDe(id)] as const)),
   );
   for (const [id, a] of Object.entries(r)) assert.ok(a, `lead ${id} devia estar entre os alvos`);
   const t = (id: number) => classificar(W.sinaisDoAlvo(r[id]!)).temperatura;
@@ -147,10 +157,12 @@ test('alvos() contra Postgres: cada condição do banco tem um caso que quebra s
   assert.equal(r[111]!.temConsultaMarcada, true);
   assert.equal(t(111), 'Quente');
   assert.equal(r[112]!.temConsultaMarcada, true, 'consulta daqui a 3 h devia estar viva');
-  assert.equal(r[113]!.temConsultaMarcada, false, 'consulta de há 3 h não está mais por vir');
+  assert.equal(r[113]!.temConsultaMarcada, false, 'consulta de há 6 h já passou');
+  assert.equal(r[114]!.temConsultaMarcada, true, 'quem saiu da clínica há 3 h ainda está na folga de 4 h');
 });
 
-test('preencherDaUnidade() contra Postgres: grava a temperatura certa e registra por lead o que escreveu, sem dado pessoal', { skip: PULAR }, async () => {
+test('preencherDaUnidade() contra Postgres: grava a temperatura certa e registra por lead o que escreveu, sem dado pessoal', { skip: PULAR }, async (ctx) => {
+  if (indisponivel) return ctx.skip(indisponivel);
   const U = await unidade('u-log', 'conta-log');
   await prisma.leadFieldRule.create({
     data: { unitId: U.id, kommoFieldId: 900, kommoFieldName: 'Qualificação (IA)', kommoFieldType: 'select', toolName: 'salvar_q', instruction: 'x', kommoFieldEnums: [{ id: 1, value: 'Quente' }] },
