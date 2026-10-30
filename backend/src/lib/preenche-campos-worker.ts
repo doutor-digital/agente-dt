@@ -32,6 +32,8 @@ import {
   type SinaisDaConversa,
 } from './qualificacao-por-sinal.js';
 import { sexoPeloNome } from './sexo-pelo-nome.js';
+import { agoraLocalISO } from '../agent/consulta-que-passou.js';
+import { fusoDaUnidade } from './fuso.js';
 
 const PASSO_MS = 15 * 60_000;
 /** Espera a conversa esfriar: antes disso ela pode continuar e mudar de temperatura. */
@@ -101,13 +103,28 @@ export function sinaisDoAlvo(a: Alvo): SinaisDaConversa {
 }
 
 /**
+ * O vínculo com a franquia diz "tem consulta POR VIR"? `spineIdSchedule` preenchido não basta: NÃO COMPARECEU mantém o
+ * vínculo, e a consulta que já passou não é limpa por ninguém — o cartão ficaria Quente para sempre. Sem data gravada
+ * (`agendadoPara` nulo) não dá para dizer que passou: vale como viva, igual à memória do lead (lead-memory.service.ts).
+ * Compara "AAAA-MM-DDTHH:mm" com o relógio da clínica; ISO ordena como texto.
+ */
+export function consultaViva(agendadoPara: string | null | undefined, agoraNaClinica: string): boolean {
+  if (!agendadoPara) return true;
+  return agendadoPara.slice(0, 16) >= agoraNaClinica.slice(0, 16);
+}
+
+/**
  * Conversas que esfriaram na janela, com os sinais já contados.
  *
  * A contagem de mensagens sai de uma consulta SÓ de conversas e mensagens. Antes ela dividia o JOIN com os passos
  * de execução (`LEFT JOIN LATERAL` sem ligação com a mensagem), que repetia cada mensagem uma vez por passo
  * "Decisão" e inflava `msgs`: 1 mensagem + 3 passos virava 3 e o lead saía Morno em vez de Frio.
+ *
+ * Os passos valem só dentro da janela de 72 h: o lead que pediu horário há uma semana e voltou ontem com uma
+ * mensagem não herda o Quente de uma conversa que já esfriou. O vínculo olha também as unidades que dividem o
+ * mesmo Kommo (Petrópolis/Caxias, resgate/comercial) — é o mesmo cartão.
  */
-export async function alvos(unit: Unit): Promise<Alvo[]> {
+export async function alvos(unit: Unit, agora: Date = new Date()): Promise<Alvo[]> {
   const linhas = await prisma.$queryRawUnsafe<LinhaDeConversa[]>(
     `SELECT c.lead_id,
             count(*) FILTER (WHERE m.role = 'user') AS msgs
@@ -128,24 +145,31 @@ export async function alvos(unit: Unit): Promise<Alvo[]> {
   const ids = linhas.map((l) => String(l.lead_id));
   // `kommo_lead_id` é Int32 no banco: um id maior derrubaria o findMany inteiro
   const idsNumericos = ids.map(Number).filter((n) => Number.isInteger(n) && n > 0 && n <= 2_147_483_647);
+  const desde = new Date(agora.getTime() - JANELA_HORAS * 3_600_000);
+  const irmas = unit.kommoSubdomain
+    ? (await prisma.unit.findMany({ where: { kommoSubdomain: unit.kommoSubdomain }, select: { id: true } })).map((u) => u.id)
+    : [];
+  const unidadesDoCartao = [...new Set([unit.id, ...irmas])];
   const [passos, vinculos] = await Promise.all([
     prisma.executionStep.findMany({
       where: {
+        createdAt: { gte: desde },
         trace: { unitId: unit.id, leadId: { in: ids } },
-        kind: { in: ['TOOL_CALL', 'TOOL_RESULT', 'ERROR'] },
+        kind: { in: ['TOOL_RESULT', 'ERROR'] },
         OR: PREFIXOS_DE_PASSO.map((p) => ({ title: { startsWith: p } })),
       },
       select: { kind: true, title: true, trace: { select: { leadId: true } } },
     }),
     prisma.spineLeadLink.findMany({
-      where: { unitId: unit.id, kommoLeadId: { in: idsNumericos }, spineIdSchedule: { not: null } },
-      select: { kommoLeadId: true },
+      where: { unitId: { in: unidadesDoCartao }, kommoLeadId: { in: idsNumericos }, spineIdSchedule: { not: null } },
+      select: { kommoLeadId: true, agendadoPara: true },
     }),
   ]);
+  const agoraNaClinica = agoraLocalISO(fusoDaUnidade(unit), agora);
   return montarAlvos(
     linhas,
     passos.map((p) => ({ leadId: p.trace.leadId, kind: p.kind, title: p.title })),
-    vinculos.map((v) => v.kommoLeadId),
+    vinculos.filter((v) => consultaViva(v.agendadoPara, agoraNaClinica)).map((v) => v.kommoLeadId),
   );
 }
 
@@ -182,9 +206,12 @@ export function cartaoExiste(lead: KommoLead | '' | null | undefined): lead is K
   return !!lead && typeof lead === 'object' && Number.isInteger(lead.id) && lead.id > 0;
 }
 
+/** O pedaço do cliente do Kommo que o worker usa — e que o teste substitui. */
+export type ClienteDoKommo = Pick<ReturnType<typeof createKommoClient>, 'getLead' | 'setLeadCustomFieldValue'>;
+
 export async function preencherDaUnidade(
   unit: Unit,
-  opts: { simular?: boolean; limite?: number } = {},
+  opts: { simular?: boolean; limite?: number; kommo?: ClienteDoKommo } = {},
 ): Promise<ResultadoPreenchimento> {
   const simular = opts.simular !== false;
   const base: ResultadoPreenchimento = {
@@ -204,7 +231,7 @@ export async function preencherDaUnidade(
   const regraSexo = await campoDaRegra(unit.id, /sexo/i);
   if (!regraQualif && !regraSexo) return { ...base, erro: 'unidade sem regra de Qualificação nem de Sexo' };
 
-  const kommo = createKommoClient(unit);
+  const kommo = opts.kommo ?? createKommoClient(unit);
   const lista = (await alvos(unit)).slice(0, opts.limite ?? 300);
 
   for (const alvo of lista) {
@@ -226,6 +253,8 @@ export async function preencherDaUnidade(
         valor: string,
         porque: string,
         conta: 'qualificacao' | 'sexo',
+        /** o que vai pro log: sem dado pessoal (o `porque` do sexo cita o primeiro nome do paciente) */
+        porqueNoLog: string = porque,
       ) => {
         if (valorDe(regra.kommoFieldId) !== null) {
           base.jaTinha++;
@@ -247,6 +276,12 @@ export async function preencherDaUnidade(
           );
         }
         base[conta]++;
+        // Uma linha por escrita: a rodada só resume (contagens), e sem isto não dá para conferir DEPOIS por que um cartão
+        // virou Quente. Só leadId — nada de nome, telefone ou texto do paciente.
+        logger.info(
+          { unit: unit.slug, leadId: alvo.leadId, campo: regra.kommoFieldName, valor, porque: porqueNoLog, simulado: simular },
+          'preenche-campos: preencheu',
+        );
       };
 
       if (regraQualif) {
@@ -256,7 +291,7 @@ export async function preencherDaUnidade(
 
       if (regraSexo) {
         const d = sexoPeloNome(lead.name);
-        if (d) await escrever(regraSexo, d.sexo, `nome "${d.nome}" (${d.como})`, 'sexo');
+        if (d) await escrever(regraSexo, d.sexo, `nome "${d.nome}" (${d.como})`, 'sexo', `deduzido pelo primeiro nome (${d.como})`);
       }
     } catch (err) {
       base.falhas++;

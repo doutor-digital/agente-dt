@@ -37,41 +37,60 @@ export interface PassoDaConversa {
 /**
  * Como os passos de agenda são gravados DE VERDADE (agenda-tools.ts, marcacao-widget.ts): `TOOL_RESULT` (ou
  * `ERROR` quando a ferramenta recusa) com o nome da ferramenta no começo do título — ex. "consultar_horarios
- * 2026-11-03: 4 confirmado(s)…", "agendar_consulta recusado — …", "Consulta marcada: …". Não existe um campo só
- * com o nome da ferramenta (o payload não traz), então o prefixo do título é o identificador mais estável que há.
- * O worker antigo procurava "Decisão: x(" em TOOL_CALL, formato que a agenda nunca gravou: a regra "pediu
- * horário = Quente" nunca disparava (Timbó 30/10: 1 Quente, 37 Morno, 9 Frio; 12 AGENDADO como Morno).
+ * 2026-11-03: 4 confirmado(s)…", "agendar_consulta falhou: …", "Consulta marcada: …". Não existe um campo só
+ * com o nome da ferramenta (o payload não traz), então o título é o identificador mais estável que há.
+ *
+ * LISTA DO QUE ESQUENTA, não do que esfria. O nome da ferramenta no título NÃO prova intenção: a agenda também
+ * grava a recusa por falta de escolha ("agendar_consulta recusado — faltou confirmar o dia…", "cadastrar_paciente
+ * RECUSADO: não veio o horário escolhido…") e por idClient errado ("…não existe", "…é de outra pessoa"). Nesses
+ * a IA tentou antes de o paciente escolher qualquer coisa — um lead de 1 mensagem saía Quente (PR #178). Só
+ * esquenta o passo em que houve ESCOLHA do paciente: consultou horários, o horário estava ocupado ou a franquia
+ * recusou o que ele escolheu, marcou, remarcou, confirmou. Título novo que não está aqui NÃO esquenta: errar
+ * para o lado do Morno/Frio é barato; um Quente falso aparece no funil e na fila da SDR.
+ *
+ * O worker antigo procurava "Decisão: x(" em TOOL_CALL, formato que nenhuma ferramenta de agenda grava — e que,
+ * sendo o registro da CHAMADA, não provaria escolha mesmo se gravasse. Foi retirado.
  *
  * UMA tabela só: o filtro que traz os passos do banco e o casamento que os lê saem dela, para não divergirem.
+ * `resto` (opcional) restringe o que vem depois do prefixo.
  */
-const TITULO_PARA_FERRAMENTA: Array<{ prefixo: string; ferramenta: string }> = [
-  { prefixo: 'consultar_horarios', ferramenta: 'consultar_horarios' },
-  { prefixo: 'agendar_consulta', ferramenta: 'agendar_consulta' },
-  { prefixo: 'cadastrar_paciente', ferramenta: 'cadastrar_paciente' },
-  { prefixo: 'confirmar_presenca', ferramenta: 'confirmar_presenca' },
-  // o título da remarcação não leva o nome da ferramenta: "remarcar: recusado (…)", "remarcar: <desfecho> (…)"
-  { prefixo: 'remarcar:', ferramenta: 'remarcar_consulta' },
+interface RegraDePasso {
+  prefixo: string;
+  resto?: RegExp;
+  ferramenta: string;
+}
+const REGRAS_DE_PASSO: RegraDePasso[] = [
+  // "consultar_horarios 2026-11-03 (manhã): 4 confirmado(s)…" — e não "consultar_horarios bloqueado — IA pausada…"
+  { prefixo: 'consultar_horarios ', resto: /^\d{4}-\d{2}-\d{2}/, ferramenta: 'consultar_horarios' },
+  // houve escolha de dia/horário e a franquia disse não, ou a chamada falhou
+  { prefixo: 'agendar_consulta recusado — ', resto: /^\d{2}:\d{2} está /, ferramenta: 'agendar_consulta' },
+  { prefixo: 'agendar_consulta recusado — já tem consulta na clínica', ferramenta: 'agendar_consulta' },
+  { prefixo: 'agendar_consulta falhou:', ferramenta: 'agendar_consulta' },
+  // passos de depois do portão de confirmação (dia + pagamento): o horário estava ocupado por possível cadastro em dobro
+  { prefixo: 'agendar_consulta: possível cadastro em dobro', ferramenta: 'agendar_consulta' },
+  { prefixo: 'agendar_consulta: ', resto: /^\d{2}:\d{2} ocupado /, ferramenta: 'agendar_consulta' },
+  // cadastrar_paciente só chega aqui com horário escolhido e livre; as recusas de ANTES disso (sem horário, data
+  // inválida, já passou) não estão na lista
+  { prefixo: 'cadastrar_paciente RECUSADO: a franquia não aceita', ferramenta: 'cadastrar_paciente' },
+  { prefixo: 'cadastrar_paciente RECUSADO: o telefone', ferramenta: 'cadastrar_paciente' },
+  { prefixo: 'cadastrar_paciente: já existia', ferramenta: 'cadastrar_paciente' },
+  // `cadastrar_paciente "Maria": ok via…` / `…: falhou`
+  { prefixo: 'cadastrar_paciente "', ferramenta: 'cadastrar_paciente' },
+  { prefixo: 'confirmar_presenca ', resto: /^\d+:/, ferramenta: 'confirmar_presenca' },
+  // "remarcar: trocada|sobra_no_passado|vaga_presa (antiga 5)" — e não "remarcar: recusado (sem_consulta)"
+  { prefixo: 'remarcar: ', resto: /^(trocada|sobra_no_passado|vaga_presa) /, ferramenta: 'remarcar_consulta' },
   // "Consulta marcada: …" (IA) e "Consulta marcada na franquia: …" (widget da recepção): alguém marcou, e marcar
   // é o fim do caminho de agendar. Conta como `agendar_consulta`, e NÃO como "consulta marcada agora": o passo é
   // histórico — se a consulta foi cancelada depois, só o vínculo atual (`spineIdSchedule`) diz que ainda existe.
   { prefixo: 'Consulta marcada:', ferramenta: 'agendar_consulta' },
   { prefixo: 'Consulta marcada na franquia:', ferramenta: 'agendar_consulta' },
 ];
-/** O formato antigo, que `tools.ts` ainda grava para outras ferramentas. */
-const DECISAO_ANTIGA = /^Decisão: ([a-z_]+)\(/;
-/** A recepção segurava a IA: a ferramenta foi barrada, não é o paciente pedindo horário. */
-const IA_PAUSADA = 'IA pausada pela recepção';
-
 /** Prefixos de título que valem a pena trazer do banco (filtro grosso; o fino é `sinaisDosPassos`). */
-// Do formato antigo só interessam as ferramentas quentes: "Decisão: aplicar tag…" e afins são centenas de linhas inúteis.
-export const PREFIXOS_DE_PASSO = [
-  ...FERRAMENTAS_QUENTES.map((f) => `Decisão: ${f}(`),
-  ...TITULO_PARA_FERRAMENTA.map((r) => r.prefixo),
-];
+export const PREFIXOS_DE_PASSO = [...new Set(REGRAS_DE_PASSO.map((r) => r.prefixo))];
 
-/** O prefixo vale só se termina ali: "agendar_consulta recusado" casa, "agendar_consultas_x" não. */
-function comecaCom(titulo: string, prefixo: string): boolean {
-  return titulo.startsWith(prefixo) && !/^\w/.test(titulo.slice(prefixo.length));
+/** O título casa com a regra: começa pelo prefixo e, se a regra restringe o que vem depois, o resto confere. */
+function casa(titulo: string, r: RegraDePasso): boolean {
+  return titulo.startsWith(r.prefixo) && (!r.resto || r.resto.test(titulo.slice(r.prefixo.length)));
 }
 
 /** Lê os passos de uma conversa e diz que ferramentas de agenda a IA (ou a recepção) usou nela. Puro. */
@@ -81,14 +100,8 @@ export function sinaisDosPassos(passos: PassoDaConversa[]): { ferramentas: strin
     if (!ferramentas.includes(f)) ferramentas.push(f);
   };
   for (const p of passos) {
-    if (p.kind === 'TOOL_CALL') {
-      const m = DECISAO_ANTIGA.exec(p.title);
-      if (m) anota(m[1]);
-      continue;
-    }
     if (p.kind !== 'TOOL_RESULT' && p.kind !== 'ERROR') continue;
-    if (p.title.includes(IA_PAUSADA)) continue;
-    const regra = TITULO_PARA_FERRAMENTA.find((r) => comecaCom(p.title, r.prefixo));
+    const regra = REGRAS_DE_PASSO.find((r) => casa(p.title, r));
     if (regra) anota(regra.ferramenta);
   }
   return { ferramentas };

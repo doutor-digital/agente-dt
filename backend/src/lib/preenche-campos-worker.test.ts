@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cartaoExiste, montarAlvos, sinaisDoAlvo } from './preenche-campos-worker.js';
+import { cartaoExiste, consultaViva, montarAlvos, sinaisDoAlvo } from './preenche-campos-worker.js';
 import { classificar } from './qualificacao-por-sinal.js';
 import type { KommoLead } from '../services/kommo.service.js';
 
@@ -107,4 +107,16 @@ test('cartaoExiste: o 204 vazio do Kommo (cartão apagado ou juntado) não é um
   assert.equal(cartaoExiste(undefined), false);
   assert.equal(cartaoExiste({} as KommoLead), false);
   assert.equal(cartaoExiste({ id: 24703143, name: 'Maria', custom_fields_values: null } as unknown as KommoLead), true);
+});
+
+test('consultaViva: consulta por vir vale; a que já passou (NÃO COMPARECEU mantém o vínculo) não; sem data, vale', () => {
+  const agora = '2026-11-03T15:00';
+  assert.equal(consultaViva('2026-11-03T15:00', agora), true);
+  assert.equal(consultaViva('2026-11-03T16:30', agora), true);
+  assert.equal(consultaViva('2026-12-01T09:00', agora), true);
+  assert.equal(consultaViva('2026-11-03T14:59', agora), false);
+  assert.equal(consultaViva('2026-10-30T09:00', agora), false);
+  assert.equal(consultaViva('2026-11-03T16:30:00', agora), true);
+  assert.equal(consultaViva(null, agora), true);
+  assert.equal(consultaViva(undefined, agora), true);
 });
