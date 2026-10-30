@@ -81,6 +81,24 @@ test('chave Pix para reservar sai; chave enviada pela equipe também', () => {
   assert.match(b.texto, /Te espero terça!$/);
 });
 
+test('Pix colado em garantir/reservar/vaga/sinal/comprovante sai mesmo sem a palavra "antecipado" nem "chave"', () => {
+  for (const frase of [
+    'O Pix garante seu horário.',
+    'Você pode fazer um Pix para reservar a vaga.',
+    'Mande o comprovante do Pix para confirmar.',
+    'Um sinal por Pix segura o seu lugar, vaga garantida.',
+  ]) {
+    const r = semOAntecipadoNaSaida(`Terça às 10h está livre. ${frase} Te espero!`);
+    assert.doesNotMatch(r.texto, /pix|comprovante|sinal/i, frase);
+    assert.match(r.texto, /Terça às 10h está livre\./, frase);
+    assert.match(r.texto, /Te espero!$/, frase);
+  }
+});
+
+test('resposta que era SÓ a linha de botões de pagamento não fica vazia', () => {
+  assert.equal(semOAntecipadoNaSaida('[[botoes: Pix antecipado | Na clínica]]').texto, PAGAMENTO_NO_DIA);
+});
+
 test('"pagar antes" sem Pix também sai; negado ("não precisa pagar antecipado") fica', () => {
   assert.doesNotMatch(semOAntecipadoNaSaida('Você pode pagar antes e ganhar desconto. Terça às 10h?').texto, /pagar antes/i);
   const verdade = 'Não precisa pagar antecipado: a consulta é paga no dia, na clínica.';
