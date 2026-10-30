@@ -70,14 +70,14 @@ export function resolverSistema(ctx: ContextoSistemas, pedido?: string): ContaSi
  * blocos $$…$$. Sobra o esqueleto, onde se procura `;` e palavras de escrita. NÃO substitui o servidor (ele roda como
  * papel só-leitura, em transação READ ONLY): só barra o óbvio com mensagem clara.
  */
-export function esqueletoDoSql(sql: string, marcarAspasDuplas = false): string {
-  return varrerSql(sql, marcarAspasDuplas).esqueleto;
+export function esqueletoDoSql(sql: string): string {
+  return varrerSql(sql).esqueleto;
 }
 
 const CARACTERE_DE_NOME = /[A-Za-z0-9_$]/;
 
 /** O esqueleto e a posição, no texto original, de cada `;` que está fora de texto e comentário. */
-function varrerSql(sql: string, marcarAspasDuplas = false): { esqueleto: string; pontosEVirgula: number[] } {
+function varrerSql(sql: string): { esqueleto: string; pontosEVirgula: number[] } {
   let out = '';
   const pontos: number[] = [];
   let i = 0;
@@ -98,8 +98,7 @@ function varrerSql(sql: string, marcarAspasDuplas = false): { esqueleto: string;
         i++;
       }
       i++;
-      // com `marcarAspasDuplas`, o identificador entre aspas deixa um `"` no esqueleto (quem valida estrutura recusa nome entre aspas)
-      out += marcarAspasDuplas && c === '"' ? ' " ' : ' ';
+      out += ' ';
     } else if (c === '-' && prox === '-') {
       while (i < sql.length && sql[i] !== '\n') i++;
       out += ' ';

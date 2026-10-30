@@ -45,7 +45,7 @@ async function cliente(ctx: ReturnType<typeof criarContextoSistemas>, o: { escre
 const TABELA_COMPLETA = [
   'create table public.caixa_precos (id bigint generated always as identity primary key, servico text not null, valor numeric(10,2) not null default 0)',
   'alter table public.caixa_precos enable row level security',
-  'create policy precos_ver on public.caixa_precos for select using (true)',
+  'create policy precos_ver on public.caixa_precos for select to authenticated using (rh_admin())',
   'create index if not exists caixa_precos_servico_idx on public.caixa_precos (servico)',
   "comment on table public.caixa_precos is 'preços por serviço'",
 ].join(';\n');
@@ -98,6 +98,14 @@ test('aceita colunas, restrições, default, tipo, view com security_invoker e g
     'create or replace view v_precos with (security_invoker=on) as select id from caixa_precos',
     'create policy p on caixa_precos for all to authenticated using (rh_admin()) with check (rh_admin())',
     'alter policy p on caixa_precos using (rh_admin())',
+    'create policy p2 on caixa_precos as permissive for insert to authenticated, service_role with check (rh_admin())',
+    'create table caixa_lanc as select p.id, u.nome from caixa_precos p join caixa_unidades u on u.id = p.unidade_id',
+    'alter table caixa_precos add column unidade_id bigint references caixa_unidades(id)',
+    'alter table caixa_precos add column u2 bigint references public.caixa_unidades (id)',
+    'create view v with (security_barrier = true, security_invoker = true) as select * from caixa_precos',
+    'create view v (a, b) with (security_invoker = true) as select 1, 2',
+    "comment on column public.caixa_precos.valor is 'x'",
+    'comment on constraint valor_ok on caixa_precos is \'x\'',
     "comment on column caixa_precos.valor is 'em reais'",
     'grant select, insert on caixa_precos to authenticated',
     'revoke delete on public.caixa_precos from authenticated, service_role',
@@ -278,7 +286,7 @@ test('banco recusou (ok:false): vira erro em português e o código se gasta; er
   const pend = new PendentesSistemas();
   const p = await prepararEstrutura(ctx, pend, QUEM, { sql: 'create table falha_do_banco (a int)', motivo: MOTIVO });
   const rastro: { resultado?: string } = {};
-  await assert.rejects(() => confirmarEstrutura(ctx, pend, QUEM, { confirmacao: p.confirmacao }, rastro), /NÃO aplicou: relation "caixa_precos" already exists.*desfeito/);
+  await assert.rejects(() => confirmarEstrutura(ctx, pend, QUEM, { confirmacao: p.confirmacao }, rastro), /NÃO aplicou: relation "caixa_precos" already exists.*desfaz/);
   assert.match(rastro.resultado!, /^recusado/);
   await assert.rejects(() => confirmarEstrutura(ctx, pend, QUEM, { confirmacao: p.confirmacao }), /desconhecido ou já usado/);
 
@@ -339,5 +347,41 @@ test('descrições em português dizem que é estrutura e que DROP não existe',
   const t = (await c.listTools()).tools.find((x) => x.name === 'sistemas_preparar_estrutura')!;
   assert.match(t.description!, /ESTRUTURA/);
   assert.match(t.description!, /DROP.*NÃO existem/);
+  await fechar();
+});
+
+test('revisão: recusa esquema fora de public em qualquer parte do comando, funções que recebem SQL em texto, política sem TO e view com a opção no lugar errado', () => {
+  for (const s of [
+    'create table t as select * from private.x',
+    'alter table caixa_precos add column x int references private.y(id)',
+    "comment on table private.x is 'a'",
+    "comment on column private.x.c is 'a'",
+    "create view v with (security_invoker=true) as select query_to_xml('select * from auth.users', true, false, '')",
+    "create view v with (security_invoker=true) as select table_to_xml('caixa_precos', true, false, '')",
+  ]) assert.throws(() => analisarEstrutura(s), /esquema|auth|_to_xml/, s);
+  assert.throws(() => analisarEstrutura('create policy p on caixa_precos for select using (true)'), /precisa dizer para quem vale/);
+  assert.throws(() => analisarEstrutura('create policy p on caixa_precos for select to public using (true)'), /TO authenticated/);
+  assert.throws(() => analisarEstrutura('create policy p on caixa_precos to authenticated, mcp_leitor using (true)'), /TO authenticated/);
+  assert.throws(() => analisarEstrutura('alter policy p on caixa_precos rename to q'), /renomear política/);
+  assert.throws(() => analisarEstrutura('create view v as select 1 with (security_invoker=true)'), /security_invoker/);
+  assert.throws(() => analisarEstrutura("create view v as select 'security_invoker = true'"), /security_invoker/);
+  assert.throws(() => analisarEstrutura('create table x (a int) -- "Caixa"'), /aspas duplas/);
+  assert.match(analisarEstrutura('create policy p on caixa_precos to authenticated using (true)').avisos.join(' '), /usa \(true\)/);
+  const sr = analisarEstrutura('grant select on caixa_precos to service_role');
+  assert.deepEqual(sr.avisos, [], 'service_role não é "todos os usuários logados"');
+});
+
+test('auditoria guarda o SQL inteiro de um lote grande (não só os primeiros 4000 caracteres)', async () => {
+  const { ctx } = montar();
+  const { chamar, auditoria, fechar } = await cliente(ctx, { escreve: true });
+  const sql = Array.from({ length: 24 }, (_, i) => `comment on table caixa_t${i} is '${'x'.repeat(480)}'`).join(';\n') + ';\nalter table caixa_fim add column ultimo int';
+  assert.ok(sql.length > 10_000 && sql.length < 20_000);
+  const p = await chamar('sistemas_preparar_estrutura', { sql, motivo: MOTIVO });
+  assert.equal(p.erro, false, p.texto);
+  await chamar('sistemas_confirmar_estrutura', { confirmacao: p.json.confirmacao });
+  for (const f of ['sistemas_preparar_estrutura', 'sistemas_confirmar_estrutura']) {
+    const a = auditoria.find((x) => x.ferramenta === f)!;
+    assert.ok(a.argumentos.sql.endsWith('add column ultimo int'), f);
+  }
   await fechar();
 });
