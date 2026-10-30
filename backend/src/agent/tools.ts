@@ -15,6 +15,7 @@ import { esquemaDaUnidade } from '../lib/kommo-schema.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
 import { capturaUnificada, coergirValor, descricaoRegistrarCampo } from './captura-unificada.js';
 import { ehRegraDeQualificacao } from './carimbos-do-agendamento.js';
+import { aguardarMarcacaoDaIa, ehCarimboDeMarcacaoDaIa } from '../lib/marcacao-da-ia-no-turno.js';
 import { classificarMotivoHandoff } from '../lib/motivo-handoff.js';
 import { CAMPOS_DIGITAL, carimbarHumanoAssumiu, gravarCampoDigital } from '../services/lead-metrics.service.js';
 import { esquecerPausaPropria, registrarPausaPropria } from '../lib/pausa-propria.js';
@@ -1490,7 +1491,7 @@ export function leadFieldRuleDescription(rule: LeadFieldRule): string {
 export { ehRegraDeQualificacao };
 
 /** Grava o valor no campo da regra (e no título, se a regra manda). Usado pela tool por regra e pela `registrar_campo`. */
-async function gravarCampoDaRegra({
+export async function gravarCampoDaRegra({
   rule,
   kommo,
   recorder,
@@ -1510,6 +1511,22 @@ async function gravarCampoDaRegra({
   const fieldType = rule.kommoFieldType as KommoFieldType;
   const enums = (rule.kommoFieldEnums as Array<{ id: number; value: string }> | null) ?? [];
   const t0 = performance.now();
+
+  // "Feito por = IA" e "Situação = Agendado" dizem que a IA marcou. Quem carimba isso é `agendar_consulta`, quando dá certo; a
+  // gravação avulsa só vale se a marcação da IA deu certo neste turno (Timbó, 29/10/2026: gravou em paralelo, antes do
+  // resultado, e a marcação tinha sido da recepção).
+  if (ehCarimboDeMarcacaoDaIa(rule.kommoFieldName, value) && !(await aguardarMarcacaoDaIa(recorder.traceId))) {
+    await recorder.step({
+      kind: 'ERROR',
+      title: `${rule.toolName} recusado — "${rule.kommoFieldName}" = ${String(value)} sem marcação da IA neste turno`,
+      payload: { leadId, campo: rule.kommoFieldName, value },
+    });
+    return (
+      `RECUSADO: "${rule.kommoFieldName}" = "${String(value)}" diz que VOCÊ marcou a consulta, e nenhuma marcação sua deu certo neste turno. ` +
+      'NÃO grave isso. Se você chamou agendar_consulta e ele deu certo, ele mesmo já grava este campo; se recusou ou falhou, ' +
+      'a consulta não foi marcada por você (ou foi a equipe) — não registre nada aqui.'
+    );
+  }
 
   await recorder.step({
     kind: 'TOOL_CALL',

@@ -7,7 +7,7 @@
  * recupera; uma a mais custa o número verde da unidade.
  */
 import { finalDoTelefone, pediuParaSair } from '../campanha/metricas.js';
-import { DDDS_DO_BRASIL } from '../ddds.js';
+import { comNonoDigito } from '../nono-digito.js';
 
 export { pediuParaSair };
 
@@ -52,7 +52,7 @@ export const ROTULO_DA_EXCLUSAO: Record<MotivoDeExclusao, string> = {
 /**
  * Celular brasileiro com DDD → só dígitos com DDI e o nono dígito (5563999999999). Qualquer outra coisa → null.
  *
- * O nono dígito — a razão antiga e a nova:
+ * O nono dígito — a regra mora em `lib/nono-digito.ts` (o cadastro na franquia usa a MESMA, 29/10/2026); a razão antiga e a nova:
  *  - ANTES (Outubro Rosa, 22 inválidos): número sem o 9 era recusado, porque adivinhar o dígito é mandar para o número de
  *    outra pessoa. Valia para um número QUALQUER, que podia ser fixo ou de outra operadora.
  *  - AGORA (decisão do João, 27/10/2026): as contas antigas do Kommo (Canaã) guardam o WhatsApp com 12 dígitos
@@ -73,10 +73,11 @@ export const ROTULO_DA_EXCLUSAO: Record<MotivoDeExclusao, string> = {
  */
 export function telefoneWhatsapp(bruto: string | null | undefined): string | null {
   const d = (bruto ?? '').replace(/\D/g, '');
+  const comNove = comNonoDigito(d);
   let completo: string;
   if (d.length === 11) completo = `55${d}`;
   else if (d.length === 13 && d.startsWith('55')) completo = d;
-  else if (d.length === 12 && d.startsWith('55') && /[6-9]/.test(d[4]) && DDDS_DO_BRASIL.has(d.slice(2, 4))) completo = `55${d.slice(2, 4)}9${d.slice(4)}`;
+  else if (comNove) completo = comNove;
   else return null;
   const ddd = Number(completo.slice(2, 4));
   if (ddd < 11 || ddd > 99 || ddd % 10 === 0) return null;

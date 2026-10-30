@@ -4,6 +4,7 @@ import type { Unit } from '@prisma/client';
 import { logger } from '../lib/logger.js';
 import { lerTurnos, profissionalDoHorario } from '../lib/profissional-por-turno.js';
 import { motivoParaNaoEscrever } from '../lib/trava-escrita-franquia.js';
+import { comNonoDigito } from '../lib/nono-digito.js';
 
 const DEFAULT_TZ = 'America/Sao_Paulo';
 
@@ -773,12 +774,17 @@ export async function biLeadsSources(
   }
 }
 
+/**
+ * O WhatsApp como a franquia guarda (`+55DDNNNNNNNNN`, §9.3 do contrato). Celular de 12 dígitos (55 + DDD + 8) ganha o nono
+ * dígito — a mesma regra do disparo (`nono-digito.ts`): o WhatsApp entrega o número antigo sem o 9 e, sem isto, o cadastro
+ * nascia diferente do que a recepção digita (Timbó, 29/10/2026: dois cadastros da mesma paciente). Fixo, estrangeiro e número
+ * que já tem o 9 ficam como vieram. Cadastro antigo sem o 9 não é tocado por aqui: só o que se grava a partir de agora.
+ */
 export function normalizarWhatsapp(bruto: string): string {
   const digitos = bruto.replace(/\D/g, '');
   if (digitos.length === 0) return '';
-  if (digitos.startsWith('55') && digitos.length >= 12) return `+${digitos}`;
-  if (digitos.length === 10 || digitos.length === 11) return `+55${digitos}`;
-  return `+${digitos}`;
+  const completo = digitos.length === 10 || digitos.length === 11 ? `55${digitos}` : digitos;
+  return `+${comNonoDigito(completo) ?? completo}`;
 }
 
 const UF_POR_NOME: Record<string, string> = {
