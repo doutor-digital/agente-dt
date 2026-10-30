@@ -49,3 +49,19 @@ test('etiquetas: lombar e cervical entram, a outra sai; Torácica tira as duas',
   assert.equal(regiaoDoValor('TORACICA'), 'Torácica');
   assert.equal(regiaoDoValor('perna'), null);
 });
+
+test('campo multiselect (Timbó): a captura entrega lista e a etiqueta da região ENTRA (antes tirava as duas)', () => {
+  assert.deepEqual(etiquetasDaRegiao(['Lombar']), { colocar: 'lombar', tirar: ['cervical'] });
+  assert.deepEqual(etiquetasDaRegiao(['cervical']), { colocar: 'cervical', tirar: ['lombar'] });
+  assert.equal(regiaoDoValor(['Torácica']), 'Torácica');
+});
+
+test('multiselect com mais de uma região: vale a primeira da lista que tem etiqueta; Torácica/Outra não escondem a lombar', () => {
+  // lombar E cervical: a Sofia lista a principal primeiro; a outra etiqueta sai (o disparo recebe UM grupo só)
+  assert.deepEqual(etiquetasDaRegiao(['Lombar', 'Cervical']), { colocar: 'lombar', tirar: ['cervical'] });
+  assert.deepEqual(etiquetasDaRegiao(['Cervical', 'Lombar']), { colocar: 'cervical', tirar: ['lombar'] });
+  assert.deepEqual(etiquetasDaRegiao(['Torácica', 'Lombar']), { colocar: 'lombar', tirar: ['cervical'] });
+  assert.deepEqual(etiquetasDaRegiao(['Outra', 'Não informada']), { colocar: null, tirar: ['cervical', 'lombar'] });
+  assert.deepEqual(etiquetasDaRegiao([]), { colocar: null, tirar: ['cervical', 'lombar'] });
+  assert.deepEqual(etiquetasDaRegiao(['perna', 'Lombar']), { colocar: 'lombar', tirar: ['cervical'] });
+});
