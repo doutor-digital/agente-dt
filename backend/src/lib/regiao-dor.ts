@@ -53,15 +53,33 @@ export function ehCampoQueixa(nomeCampo: string): boolean {
   return /^\W*queixa\b/i.test(nomeCampo.trim());
 }
 
-/** Casa o valor gravado (com ou sem acento/caixa) com uma das opções. */
-export function regiaoDoValor(valor: unknown): Regiao | null {
-  const v = normalizarTexto(typeof valor === 'string' ? valor : '');
+function casarRegiao(texto: unknown): Regiao | null {
+  const v = normalizarTexto(typeof texto === 'string' ? texto : '');
   return REGIOES.find((r) => normalizarTexto(r) === v) ?? null;
 }
 
-/** Etiquetas a colocar e a tirar quando a região muda. */
+/**
+ * Todas as regiões válidas do valor gravado, na ordem em que vieram. O campo é SELECT na Serra/Imperatriz
+ * (valor = texto) e MULTISELECT na Timbó (valor = lista): os dois caminhos passam por aqui.
+ */
+export function regioesDoValor(valor: unknown): Regiao[] {
+  const itens = Array.isArray(valor) ? valor : [valor];
+  return itens.map(casarRegiao).filter((r): r is Regiao => r !== null);
+}
+
+/** Casa o valor gravado (com ou sem acento/caixa) com uma das opções; com lista, a primeira que casar. */
+export function regiaoDoValor(valor: unknown): Regiao | null {
+  return regioesDoValor(valor)[0] ?? null;
+}
+
+/**
+ * Etiquetas a colocar e a tirar quando a região muda.
+ * Campo multiselect com mais de uma região: vale a PRIMEIRA da lista que vira etiqueta (a Sofia lista a
+ * principal primeiro), então "Torácica; Lombar" etiqueta lombar. Lombar E cervical juntas = só a primeira
+ * etiqueta, a outra sai — o disparo em massa filtra por etiqueta e a pessoa não pode cair nos dois grupos.
+ */
 export function etiquetasDaRegiao(valor: unknown): { colocar: string | null; tirar: string[] } {
-  const regiao = regiaoDoValor(valor);
+  const regiao = regioesDoValor(valor).find((r) => TAG_DA_REGIAO[r]) ?? null;
   const colocar = regiao ? TAG_DA_REGIAO[regiao] ?? null : null;
   const tirar = Object.values(TAG_DA_REGIAO).filter((t) => t !== colocar);
   return { colocar, tirar };

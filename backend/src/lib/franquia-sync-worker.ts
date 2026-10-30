@@ -272,7 +272,7 @@ export function relogioDoSync(slug: string): RelogioSync {
  * `idsClient`: quem a busca mostrou ser este paciente na franquia (vazio = não se sabe) — é o que permite recusar
  * o cartão que já pertence a OUTRO paciente (`cartaoDeOutroPaciente`).
  */
-const cacheLead = new Map<string, { leadId: number | null; idsClient: number[]; leadConfirmado: boolean; expiraEm: number }>();
+const cacheLead = new Map<string, { leadId: number | null; idsClient: number[]; leadConfirmado: boolean; expiraEm: number; fone?: string | null }>();
 
 
 type CampoInfo = Pick<KommoLeadCustomField, 'id' | 'type' | 'enums'>;
@@ -329,7 +329,7 @@ function valoresDoLead(lead: KommoLead, mapa: MapaCampos): Record<string, string
   return out;
 }
 
-async function telefoneDoPaciente(unit: Unit, nome: string, idClient: number | null): Promise<{ fone: string; idsClient: number[] } | null> {
+export async function telefoneDoPaciente(unit: Unit, nome: string, idClient: number | null): Promise<{ fone: string; idsClient: number[] } | null> {
   if (idClient) {
     const r = await SpineService.getClient(unit, idClient);
     if (r.ok && r.data?.client?.whatsapp) return { fone: r.data.client.whatsapp, idsClient: [idClient] };
@@ -393,9 +393,9 @@ export async function resolverLead(unit: Unit, kommo: KommoClient, nome: string,
 }
 
 /** O cartão do paciente e quem ele é na franquia (`idsClient`, vazio quando o caminho não diz). */
-async function resolverPaciente(
+export async function resolverPaciente(
   unit: Unit, kommo: KommoClient, nome: string, idClient: number | null, idsSchedule: number[],
-): Promise<{ leadId: number | null; idsClient: number[]; leadConfirmado: boolean }> {
+): Promise<{ leadId: number | null; idsClient: number[]; leadConfirmado: boolean; /** o telefone que a busca achou (a tarefa solta do calendário o escreve no texto) */ fone?: string | null }> {
   const chaveCache = `${unit.id}:${normalizar(nome)}`;
   const hit = cacheLead.get(chaveCache);
   if (hit && hit.expiraEm > Date.now()) return hit;
@@ -404,6 +404,7 @@ async function resolverPaciente(
   // vínculo da Sofia e id do agendamento são prova; só o telefone com vários cartões é palpite
   let leadConfirmado = true;
   let idsClient: number[] = idClient ? [idClient] : [];
+  let fone: string | null = null;
   if (idsSchedule.length > 0) {
     const link = await prisma.spineLeadLink.findFirst({
       where: { unitId: unit.id, spineIdSchedule: { in: idsSchedule } },
@@ -425,9 +426,10 @@ async function resolverPaciente(
       leadId = porFone?.id ?? null;
       leadConfirmado = porFone?.confirmado ?? true;
       idsClient = achado.idsClient;
+      fone = achado.fone;
     }
   }
-  const out = { leadId, idsClient, leadConfirmado, expiraEm: Date.now() + CACHE_LEAD_MS };
+  const out = { leadId, idsClient, leadConfirmado, fone, expiraEm: Date.now() + CACHE_LEAD_MS };
   cacheLead.set(chaveCache, out);
   return out;
 }
@@ -2357,7 +2359,7 @@ async function unidadesDoSync(): Promise<Unit[]> {
  * Quem tem franquia e Kommo. A irmã de uma conta dividida (Caxias usa o Kommo de Petrópolis) não guarda
  * credencial de Kommo própria — de propósito, para nenhum worker antigo varrer a conta duas vezes — e entra pelo id.
  */
-async function ondeTemSync() {
+export async function ondeTemSync() {
   const irmas = await irmasSemKommoProprio();
   return {
     spineEnabled: true,

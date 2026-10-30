@@ -44,6 +44,7 @@ import { startDisparoWorker, stopDisparoWorker } from './lib/disparo-worker.js';
 import { startPreencheCamposWorker, stopPreencheCamposWorker } from './lib/preenche-campos-worker.js';
 import { startBlingRenovacaoWorker, stopBlingRenovacaoWorker } from './lib/bling-renovacao-worker.js';
 import { startFranquiaSyncWorker, stopFranquiaSyncWorker } from './lib/franquia-sync-worker.js';
+import { startFranquiaCalendarioWorker, stopFranquiaCalendarioWorker } from './lib/franquia-calendario-worker.js';
 import { startUnidadePorCanalWorker, stopUnidadePorCanalWorker } from './lib/unidade-por-canal-worker.js';
 import { startUnidadeNoCartaoWorker, stopUnidadeNoCartaoWorker } from './lib/unidade-no-cartao-worker.js';
 import { startRenomearLeadWorker, stopRenomearLeadWorker } from './lib/renomear-lead-worker.js';
@@ -207,6 +208,7 @@ async function main(): Promise<void> {
       startVozSessaoWorker();
       startCacheKeepaliveWorker();
       startFranquiaSyncWorker();
+      startFranquiaCalendarioWorker();
       startParadosWorker();
       startMotivoNoCabecalhoWorker();
       startUnidadePorCanalWorker();
@@ -234,6 +236,7 @@ async function main(): Promise<void> {
       stopPreencheCamposWorker();
       stopBlingRenovacaoWorker();
       stopFranquiaSyncWorker();
+      stopFranquiaCalendarioWorker();
       stopCacheKeepaliveWorker();
       stopWhatsappCostScheduler();
       stopDashboardMvRefresher();
