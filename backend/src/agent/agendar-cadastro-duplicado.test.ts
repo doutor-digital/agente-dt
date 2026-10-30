@@ -286,6 +286,16 @@ for (const [rotulo, nomeDele, nomeDoOutro] of PARES) {
   });
 }
 
+test('possível duplicado com consulta fora da grade (16:15) e o pedido 16:00 cai em «ocupado» por cruzar: também não oferece outro horário', async () => {
+  cadastros[0].name = 'Ana Christina Souza';
+  cadastros[1].name = 'ANA CRISTINA SOUZA';
+  cadastros[1].schedules = [marcada(556, '16:15')];
+  const r = await pedir('16:00');
+  assert.doesNotMatch(r, /não está mais disponível/);
+  assert.match(r, /NÃO ofereça outro horário/);
+  assert.equal(tarefas.length, 1);
+});
+
 test('possível duplicado SEM consulta de pé não gera tarefa (não há o que duplicar)', async () => {
   cadastros[0].name = 'Maria Eduarda da Silva';
   cadastros[1] = { idClient: ANA_DOBRO, name: 'Maria José da Silva', whatsapp: FONE, schedules: [] };

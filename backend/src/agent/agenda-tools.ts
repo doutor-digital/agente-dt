@@ -8,7 +8,7 @@ import type { KommoClient } from '../services/kommo.service.js';
 import { SpineService } from '../services/spine.service.js';
 import { travaDaUnidadeDeAtendimento } from '../lib/trava-unidade-atendimento.js';
 import { esquemaDaUnidade } from '../lib/kommo-schema.js';
-import { AgendaService } from '../services/agenda.service.js';
+import { AgendaService, DURACAO_NA_FRANQUIA_MIN } from '../services/agenda.service.js';
 import { AgendaReconcileService } from '../services/agenda-reconcile.service.js';
 import { registrarTempoAteAgendamento } from '../services/lead-metrics.service.js';
 import { avisoDeConsultaExistente, consultasFuturas } from './consulta-existente.js';
@@ -1590,8 +1590,14 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         // O horário pode estar ocupado pela própria consulta deste paciente: porque não deu para conferir os cadastros, ou porque
         // o ocupante é um possível cadastro dele em dobro (mesmo telefone, nome parecido). Lado seguro: não se oferece outro
         // horário com base num "ocupado" que talvez seja dele, e a equipe é avisada (tarefa) para confirmar.
-        const pedidoEm = `${args.data}T${args.hora}`;
-        const ocupadoPorPossivel = possiveis.filter((x) => x.consulta && `${x.consulta.schedule.dayLocal}T${x.consulta.schedule.timeLocal}` === pedidoEm);
+        // «ocupado» também vem de consulta que ENCOSTA no horário (a franquia usa blocos de DURACAO_NA_FRANQUIA_MIN): vale a que cai a menos de uma duração
+        const minutos = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
+        const ocupadoPorPossivel = possiveis.filter(
+          (x) =>
+            x.consulta?.schedule.dayLocal === args.data &&
+            !!x.consulta.schedule.timeLocal &&
+            Math.abs(minutos(x.consulta.schedule.timeLocal) - minutos(args.hora)) < DURACAO_NA_FRANQUIA_MIN,
+        );
         // só `ocupado` pode ser a consulta do próprio paciente; bloqueio de agenda e feriado seguem como "não disponível"
         if (slot.status === 'ocupado' && (semConferir || ocupadoPorPossivel.length > 0)) {
           const porPossivel = ocupadoPorPossivel.length > 0;
