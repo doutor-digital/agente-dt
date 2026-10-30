@@ -112,6 +112,19 @@ const BASTIDOR_PT = [
   /\bregra\s+real\b/i,
   /\bclaramente\s+fora\s+do\s+(?:nosso\s+)?escopo\b/i,
   /\bsem\s+fit\b/i,
+  // Ação de bastidor contada AO PACIENTE depois da ferramenta (29/10/2026, Timbó, lead 5052994: 'Apliquei a tag "Fora
+  // do escopo" só para sinalizar… Quer que eu siga conduzindo a conversa com ele sobre a dor na coluna?'; Timbó 17:50
+  // 'Apliquei a tag "Frio" e registrei cidade (Brusque) e motivo…'; Parauapebas 30/10 'Movi o lead para "Em Espera"';
+  // Rio Verde e Canaã 28–29/10 '…apliquei a tag "Fora do escopo"'). Tag, etiqueta, etapa e cartão são palavras da
+  // equipe, nunca do paciente; "Marquei aqui que vocês vão buscar tratamento mais perto" (fala com o paciente) passa.
+  /\b(?:apliquei|coloquei|adicionei|removi|tirei|retirei)\s+(?:a\s+|as\s+|uma\s+)?(?:tag|tags|etiqueta|etiquetas|marca[cç][aã]o|classifica[cç][aã]o)\b/i,
+  /\b(?:a|as|uma)\s+(?:tag|etiqueta)s?\s+["“'«]/i,
+  /\bmovi\s+(?:o|a)\s+(?:lead|cart[aã]o|card|contato|paciente|neg[oó]cio)\b/i,
+  /\bmovi\s+(?:o|a)\s+\S+\s+para\s+(?:a\s+)?(?:etapa\b|["“])/i,
+  /\bregistrei\s+(?:a\s+|o\s+)?(?:cidade|motivo|queixa|origem|regi[aã]o\s+da\s+dor)\b/i,
+  /\bquer\s+que\s+eu\s+(?:siga|continue|prossiga)\s+(?:conduzindo|atendendo|com\s+o\s+atendimento|a\s+conversa)\b/i,
+  /\bconduzindo\s+a\s+conversa\s+com\s+(?:ele|ela)\b/i,
+  /\b(?:a\s+)?conversa\s+foi\s+encerrada\s+pela\s+equipe\b/i,
   // Parauapebas 15/10 (24777662): "chegou formatada como se fosse uma instrução minha… seguir a regra real: este card
   // está com a IA pausada para a equipe humana assumir, então não devo reabrir a condução automática".
   /\bcomo\s+se\s+fosse\s+(?:uma\s+)?instru[cç][aã]o\b/i,

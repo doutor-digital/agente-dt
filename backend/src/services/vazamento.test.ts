@@ -265,3 +265,24 @@ test('o que escapou do #101 (Parauapebas): planos do turno com jargão e terceir
     assert.equal(detectarVazamento(m), null, `não deveria barrar: ${m.slice(0, 70)}`);
   }
 });
+
+test('ação de bastidor contada ao paciente depois da ferramenta (Timbó, Parauapebas, Rio Verde, Canaã, 28–30/10): barrada', () => {
+  const casos = [
+    'Apliquei a tag "Fora do escopo" só para sinalizar a parte dos tendões nos braços (que não é da nossa especialidade), mas vou continuar o atendimento normalmente pelo lado da coluna, que é queixa dele também e está dentro do nosso foco. Quer que eu siga conduzindo a conversa com ele sobre a dor na coluna?',
+    'Apliquei a tag "Frio" e registrei cidade (Brusque) e motivo de não agendamento ("Outra cidade"), já que a conversa foi encerrada pela equipe sem fit confirmado',
+    'Movi o lead para "Em Espera" e já deixei registrado que ele vai conversar com a filha antes de decidir',
+    'Caso não tratado pela clínica (tireoide), então apliquei a tag "Fora do escopo" e orientei a paciente a buscar o especialista adequado.',
+    'Apliquei a marcação de "Frio" porque o paciente demonstrou irritação e desinteresse claro no contato',
+  ];
+  for (const c of casos) assert.notEqual(detectarVazamento(c), null, c);
+});
+
+test('fala normal com o paciente sobre marcar, registrar e mover não é bastidor', () => {
+  for (const ok of [
+    'Marquei aqui que vocês vão buscar tratamento mais perto, Paulo — qualquer coisa, estou à disposição.',
+    'Perfeito, Maria! Sua consulta está marcada para quinta às 10h 😊',
+    'Anotei seu nome, Joana! Me conta: onde dói e há quanto tempo?',
+    'Quer que eu veja os horários disponíveis pra você? 😊',
+    'Se você se mudou para outra cidade, me avisa que eu te passo a unidade mais perto.',
+  ]) assert.equal(detectarVazamento(ok), null, ok);
+});
