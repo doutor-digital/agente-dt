@@ -151,7 +151,7 @@ export function textoDoAlerta(args: {
     ...(args.etapa ? [`Etapa: ${args.etapa}`] : []),
     `Última mensagem: "${ultima || '(sem texto: áudio, imagem ou figurinha)'}"`,
     ...(args.tarefa === 'criada' ? ['✅ Tarefa criada no cartão para a equipe da unidade.'] : []),
-    ...(args.tarefa === 'falhou' ? ['⚠️ Tarefa NÃO criada no cartão — avise a recepção da unidade.'] : []),
+    ...(args.tarefa === 'falhou' ? ['⚠️ Tarefa NÃO confirmada no cartão (o Kommo falhou) — confira o cartão e avise a recepção da unidade.'] : []),
     ...(args.link ? [args.link] : []),
   ].join('\n');
 }
@@ -193,6 +193,8 @@ export interface DepsSemResposta {
   marcarTarefa: (unit: Unit, leadId: number, quando: Date) => Promise<void>;
   /** Abre a tarefa no cartão, prazo = agora, no responsável do cartão. LANÇA se o Kommo não aceitou. */
   criarTarefa: (unit: Unit, leadId: number, texto: string) => Promise<void>;
+  /** O servidor tem o token do Telegram? Sem ele só a tarefa sai — e a espera não é relida a cada minuto por isso. */
+  telegramPronto: () => boolean;
   enviar: (texto: string) => Promise<boolean>;
   simular: (unit: Pick<Unit, 'id' | 'slug'>, automacao: string, s: Simulacao) => void;
 }
@@ -262,8 +264,11 @@ export const DEPS_SEM_RESPOSTA_PADRAO: DepsSemResposta = {
     } catch (err) {
       logger.warn({ err: String(err), unit: unit.slug, leadId }, 'sem-resposta: sem o cartão para achar o responsável — a tarefa vai pelo padrão da unidade');
     }
-    await kommo.createTask({ leadId, text: texto, completeAt: Math.floor(Date.now() / 1000), responsibleUserId: responsavel });
+    const criada = await kommo.createTask({ leadId, text: texto, completeAt: Math.floor(Date.now() / 1000), responsibleUserId: responsavel });
+    // 2xx sem o id da tarefa: não dá para afirmar que ela existe.
+    if (!criada) throw new Error('o Kommo respondeu sem o id da tarefa');
   },
+  telegramPronto: () => telegramConfigurado(),
   enviar: (texto) => enviarTelegram(texto),
   simular: registrarSimulacao,
 };
@@ -299,11 +304,20 @@ function lembrarSimulado(chave: string, agora: Date): void {
 }
 
 /**
- * Tarefa que o Kommo recusou (ou deu timeout): UMA tentativa por espera. Um timeout pode ter criado a tarefa, e
- * repetir a duplicaria no cartão; o Telegram já avisa o João de que a tarefa não saiu. Mesma regra de "mesma
- * espera" das marcas do banco. Reinício esquece: no máximo uma tentativa a mais.
+ * UMA tentativa de tarefa por espera, guardada aqui também (além da marca do banco): (1) o Kommo recusou ou deu
+ * timeout — um timeout pode ter criado a tarefa, e repetir a duplicaria no cartão; o Telegram avisa o João de que a
+ * tarefa não está confirmada; (2) o banco falhou ao gravar a marca (`marcarAviso` engole o erro) — sem isto a tarefa
+ * seria criada de novo a cada minuto. Mesma regra de "mesma espera" das marcas. Reinício esquece: no máximo uma
+ * tentativa a mais.
  */
-const tarefaTentadaEm = new Map<string, Date>();
+const tarefaTentadaEm = new Map<string, { em: Date; ok: boolean }>();
+
+function lembrarTarefaTentada(chave: string, agora: Date, ok: boolean): void {
+  tarefaTentadaEm.set(chave, { em: agora, ok });
+  if (tarefaTentadaEm.size > 20_000) {
+    for (const [k, t] of tarefaTentadaEm) if (agora.getTime() - t.em.getTime() >= REALERTA_MS) tarefaTentadaEm.delete(k);
+  }
+}
 
 /** Só para teste. */
 export function _esquecerConferidas(): void {
@@ -373,37 +387,43 @@ export async function verificarUnidadeSemResposta(
 
       // Duas saídas, cada uma com a sua marca: o Telegram do João e a tarefa para a equipe da unidade.
       const telegramJa = mesmaEsperaJaAlertada(msgs, await deps.alertadoEm(unit, c.leadId), agora);
-      const tarefaJa = mesmaEsperaJaAlertada(msgs, await deps.tarefaEm(unit, c.leadId), agora);
-      const tarefaTentada = !tarefaJa && mesmaEsperaJaAlertada(msgs, tarefaTentadaEm.get(chaveDoLead) ?? null, agora);
-      if (telegramJa && (tarefaJa || tarefaTentada)) {
+      const tentada = tarefaTentadaEm.get(chaveDoLead);
+      const tentadaVale = !!tentada && mesmaEsperaJaAlertada(msgs, tentada.em, agora);
+      const tarefaJa = mesmaEsperaJaAlertada(msgs, await deps.tarefaEm(unit, c.leadId), agora) || (tentadaVale && tentada!.ok);
+      const tarefaFalhou = !tarefaJa && tentadaVale;
+      // Sem token do Telegram só a tarefa sai: a espera fica "conferida" em vez de reler o Kommo a cada minuto.
+      const telegramDispensado = !deps.telegramPronto();
+      if ((telegramJa || telegramDispensado) && (tarefaJa || tarefaFalhou)) {
         lembrarConferida(chaveConferida, agora.getTime());
         continue;
       }
 
       // 1) A tarefa primeiro: o Telegram diz ao João como ela ficou. Se o Kommo falhar, o Telegram sai do mesmo jeito.
-      let tarefa: 'criada' | 'falhou' | null = tarefaJa ? 'criada' : tarefaTentada ? 'falhou' : null;
-      if (!tarefaJa && !tarefaTentada) {
+      let tarefa: 'criada' | 'falhou' | null = tarefaJa ? 'criada' : tarefaFalhou ? 'falhou' : null;
+      if (!tarefaJa && !tarefaFalhou) {
         try {
           await deps.criarTarefa(
             unit,
             c.leadId,
             textoDaTarefa({ slug: unit.slug, contato: c.contactName, esperaMs, ultima: espera.ultimaTexto }),
           );
-          // Marca SÓ depois que o Kommo aceitou.
-          await deps.marcarTarefa(unit, c.leadId, agora);
+          // Lembra na memória ANTES de gravar a marca: se o banco falhar ao gravar, a tarefa não se repete a cada minuto.
+          lembrarTarefaTentada(chaveDoLead, agora, true);
           tarefa = 'criada';
           resumo.tarefas++;
           logger.info({ unit: unit.slug, leadId: c.leadId, esperaMin: Math.floor(esperaMs / 60_000) }, 'sem-resposta: tarefa criada no cartão');
         } catch (err) {
+          lembrarTarefaTentada(chaveDoLead, agora, false);
           tarefa = 'falhou';
           resumo.tarefasFalhas++;
-          tarefaTentadaEm.set(chaveDoLead, agora);
           logger.error({ err: String(err), unit: unit.slug, leadId: c.leadId }, 'sem-resposta: FALHOU criar a tarefa no cartão — o Telegram sai mesmo assim');
         }
+        // Marca SÓ depois que o Kommo aceitou. Fora do try: falha da marca não vira "tarefa não criada".
+        if (tarefa === 'criada') await deps.marcarTarefa(unit, c.leadId, agora);
       }
 
       // 2) O Telegram do João.
-      if (!telegramJa) {
+      if (!telegramJa && !telegramDispensado) {
         const texto = textoDoAlerta({
           unidade: unit.name,
           contato: c.contactName,
@@ -464,7 +484,7 @@ async function varrer(): Promise<void> {
 export function startSemRespostaWorker(): void {
   if (timer) return;
   timer = setInterval(() => void varrer(), SWEEP_MS);
-  logger.info('sem-resposta: worker iniciado (chave alerta-sem-resposta por unidade; Telegram do João)');
+  logger.info('sem-resposta: worker iniciado (chave alerta-sem-resposta por unidade; Telegram do João + tarefa no cartão da unidade)');
 }
 
 export function stopSemRespostaWorker(): void {

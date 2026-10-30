@@ -50,6 +50,10 @@ function cenario(opts: {
   envia?: boolean;
   /** o Kommo recusa a tarefa */
   tarefaFalha?: boolean;
+  /** o banco não grava a marca da tarefa (o `marcarAviso` engole o erro de banco) */
+  marcaTarefaNaoGrava?: boolean;
+  /** servidor sem TELEGRAM_BOT_TOKEN */
+  semToken?: boolean;
 }) {
   const r = {
     enviados: [] as string[],
@@ -77,8 +81,9 @@ function cenario(opts: {
     etapa: async () => 'EM TRATAMENTO',
     tarefaEm: async (_u, leadId) => r.marcasTarefa.get(leadId) ?? null,
     marcarTarefa: async (_u, leadId, quando) => {
-      r.marcasTarefa.set(leadId, quando);
+      if (!opts.marcaTarefaNaoGrava) r.marcasTarefa.set(leadId, quando);
     },
+    telegramPronto: () => !opts.semToken,
     criarTarefa: async (_u, leadId, texto) => {
       r.tentativasDeTarefa++;
       if (opts.tarefaFalha) throw new Error('Kommo 500');
@@ -372,7 +377,7 @@ test('tarefa: o Kommo falhou — o Telegram sai mesmo assim, avisa que a tarefa 
   assert.equal(r.tarefas, 0);
   assert.equal(r.tarefasFalhas, 1);
   assert.equal(c.r.enviados.length, 1);
-  assert.match(c.r.enviados[0], /Tarefa NÃO criada/);
+  assert.match(c.r.enviados[0], /Tarefa NÃO confirmada/);
   assert.equal(c.r.marcasTarefa.size, 0, 'tarefa que não saiu não deixa marca de "criada"');
   assert.ok(c.r.marcas.has(28691582), 'o Telegram marca a espera normalmente');
 
@@ -403,6 +408,27 @@ test('tarefa: Kommo E Telegram falharam — o Telegram tenta de novo, a tarefa n
   await verificarUnidadeSemResposta(unidade, 'ligado', c.deps);
   assert.equal(c.r.tentativasDeTarefa, 1);
   assert.equal(c.r.marcas.size, 0, 'sem marca do Telegram: ele tenta de novo');
+});
+
+test('tarefa: o banco não gravou a marca — a tarefa NÃO é criada de novo a cada minuto', async () => {
+  const c = cenario({ oficiais: [msg('entrada', T0)], agora: depois(6 * 60_000), envia: false, marcaTarefaNaoGrava: true });
+  await verificarUnidadeSemResposta(unidade, 'ligado', c.deps);
+  for (const min of [7, 8, 9]) {
+    c.mudarAgora(depois(min * 60_000));
+    await verificarUnidadeSemResposta(unidade, 'ligado', c.deps);
+  }
+  assert.equal(c.r.tarefas.length, 1);
+});
+
+test('tarefa: sem TELEGRAM_BOT_TOKEN a tarefa sai, o Telegram não, e a espera não é relida a cada minuto', async () => {
+  const c = cenario({ oficiais: [msg('entrada', T0)], agora: depois(6 * 60_000), semToken: true });
+  const r = await verificarUnidadeSemResposta(unidade, 'ligado', c.deps);
+  assert.equal(r.tarefas, 1);
+  assert.equal(c.r.enviados.length, 0);
+  c.mudarAgora(depois(7 * 60_000));
+  await verificarUnidadeSemResposta(unidade, 'ligado', c.deps);
+  assert.equal(c.r.tarefas.length, 1);
+  assert.equal(c.r.leiturasOficiais, 1, 'conferida: não relê o Kommo');
 });
 
 test('tarefa: espera já alertada no Telegram antes desta versão ainda ganha a tarefa, uma vez', async () => {
