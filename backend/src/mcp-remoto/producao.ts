@@ -34,7 +34,8 @@ import { criarContextoAsaas, registrarFerramentasAsaas, type ContaAsaas } from '
 import { asaasGet } from '../lib/integracoes/asaas.js';
 import { asaasPost } from '../lib/integracoes/asaas-escrita.js';
 import { finalDaChave, impressaoDaChave } from '../lib/integracoes/cofre.js';
-import { criarEscritaAsaas, EVENTO_COBRANCA, registrarEscritaAsaasSePermitido, type RegistroDeCobranca } from './asaas-escrita.js';
+import { criarEscritaAsaas, registrarEscritaAsaasSePermitido } from './asaas-escrita.js';
+import { cobrancasRecentesDe } from './auditoria.js';
 import { criarContextoConvenia, registrarFerramentasConvenia, type ContaConvenia } from './convenia.js';
 import { conveniaGet } from '../lib/integracoes/convenia.js';
 import { criarContextoTiquetaque, registrarFerramentasTiquetaque, type ContaTiquetaque } from './tiquetaque.js';
@@ -273,21 +274,6 @@ async function leitoresDoWhatsapp(): Promise<Set<string>> {
   return new Set(us.map((u) => u.id));
 }
 
-/** Boletos gerados na última hora (auditoria do conector): o teto por hora e a duplicata sobrevivem a um reinício. */
-async function cobrancasRecentes(conta: string): Promise<RegistroDeCobranca[]> {
-  const linhas = await prisma.mcpAuditoria.findMany({
-    where: { ferramenta: EVENTO_COBRANCA, createdAt: { gte: new Date(Date.now() - 3_600_000) }, argumentos: { path: ['conta'], equals: conta } },
-    select: { createdAt: true, ok: true, argumentos: true },
-  });
-  const out: RegistroDeCobranca[] = [];
-  for (const l of linhas) {
-    const a = (l.argumentos ?? {}) as { conta?: string; chave?: string; cobrancaId?: string; incerto?: boolean };
-    // falha definitiva do Asaas não conta; sucesso e "sem resposta" (pode ter criado) contam
-    if (a.conta === conta && a.chave && (l.ok || a.incerto)) out.push({ conta, chave: a.chave, em: l.createdAt.getTime(), ...(a.cobrancaId ? { cobrancaId: a.cobrancaId } : {}) });
-  }
-  return out;
-}
-
 const normEtiqueta = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
 
 function fonteDeEscrita(slug: string): FonteEscrita {
@@ -453,7 +439,7 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   let escritores = new Set<string>();
   manterAtualizado(escritoresDoBanco, (s) => (escritores = s), 'quem pode alterar cartões');
   const pendentes = new Pendentes();
-  const escritaAsaas = criarEscritaAsaas({ historico: cobrancasRecentes });
+  const escritaAsaas = criarEscritaAsaas({ historico: (conta) => cobrancasRecentesDe(prisma, conta) });
   manterAtualizado(contasAsaasDoBanco, (contas) => (asaas.contas = contas), 'as contas do Asaas');
   const convenia = criarContextoConvenia(new Map());
   manterAtualizado(contasConveniaDoBanco, (contas) => (convenia.contas = contas), 'as contas do Convênia');

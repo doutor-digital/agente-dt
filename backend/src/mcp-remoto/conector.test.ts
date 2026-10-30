@@ -81,6 +81,12 @@ before(async () => {
         auditar({ ferramenta: 'sonda_auditoria', argumentos: { cpfCnpj: '123.456.789-09', busca: 'tel 11987654321' }, ok: false, ms: 0, erro: 'falhou em /v1/processos/123.456.789-09 e no CNPJ 12.345.678/0001-95' });
         return { content: [{ type: 'text' as const, text: 'ok' }] };
       });
+      // o evento interno da escrita do Asaas, com a chave de duplicata (hash de 32 hex) que tem 11 dígitos seguidos
+      server.registerTool('sonda_evento', { description: 'só no teste' }, () => {
+        auditar({ ferramenta: 'asaas_cobranca_gravada', argumentos: { conta: 'doutor-hernia-serra', chave: 'aeb5823b37ae1c2727751520c82e2607', cobrancaId: 'pay_55119876543', clienteId: 'cus_000005219613', incerto: true }, ok: false, ms: 0 });
+        auditar({ ferramenta: 'evo_envio', argumentos: { para: '5511987654321' }, ok: true, ms: 0 });
+        return { content: [{ type: 'text' as const, text: 'ok' }] };
+      });
     },
   });
   parar = r.parar;
@@ -194,7 +200,7 @@ test('fluxo completo: login → código → token com PKCE → ferramentas da fr
 
   const mcp = await clienteMcp(String(c.json.access_token));
   const { tools } = await mcp.listTools();
-  assert.equal(tools.filter((t) => t.name !== 'sonda_auditoria').length, 11);
+  assert.equal(tools.filter((t) => !t.name.startsWith('sonda_')).length, 11);
   const r = await mcp.callTool({ name: 'buscar_agendamentos', arguments: { unidade: 'serra', inicio: '2026-06-01', fim: '2026-06-30' } });
   const corpo = JSON.parse((r.content as Array<{ text: string }>)[0]!.text);
   assert.equal(corpo.porUnidade.serra.total, 1);
@@ -217,6 +223,17 @@ test('auditoria: o erro e os argumentos que a ferramenta grava direto também ch
   assert.equal(gravado.erro, 'falhou em /v1/processos/***.***.***-09 e no CNPJ **.***.***/****-95');
   // os argumentos de QUALQUER ferramenta (não só os da Tramitação) também chegam mascarados
   assert.deepEqual(gravado.argumentos, { cpfCnpj: '***.***.***-09', busca: 'tel (**) *****-4321' });
+});
+
+test('auditoria: o evento que o código relê (chave de duplicata do boleto) chega ao banco SEM ser mexido; o envio de WhatsApp chega mascarado', async () => {
+  const c = await conectar();
+  const mcp = await clienteMcp(String(c.json.access_token));
+  await mcp.callTool({ name: 'sonda_evento', arguments: {} });
+  await mcp.close();
+  const evento = armazem.auditoria.findLast((a) => a.ferramenta === 'asaas_cobranca_gravada')!;
+  assert.deepEqual(evento.argumentos, { conta: 'doutor-hernia-serra', chave: 'aeb5823b37ae1c2727751520c82e2607', cobrancaId: 'pay_55119876543', clienteId: 'cus_000005219613', incerto: true });
+  const envio = armazem.auditoria.findLast((a) => a.ferramenta === 'evo_envio')!;
+  assert.deepEqual(envio.argumentos, { para: '(**) *****-4321' });
 });
 
 test('tokens ficam só como hash no banco', async () => {

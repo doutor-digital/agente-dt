@@ -21,7 +21,7 @@ import type { Unidade } from '../franquia-mcp/unidade.js';
 import type { ArmazemOAuth } from './armazem.js';
 import { enviarPagina, ProvedorOAuth, type Usuario } from './provedor.js';
 import type { BuscadorCimd } from './cimd.js';
-import { mascararArgumentos, mascararErro } from '../lib/integracoes/mascaras.js';
+import { criarAuditor } from './auditoria.js';
 import { ipDoCliente, Semaforo } from './limites.js';
 
 export interface OpcoesConector {
@@ -175,14 +175,7 @@ export async function montarConectorRemoto(
     const clientId = auth?.clientId ?? '';
     // Sem sessão: um servidor por requisição. Barato (só registra ferramentas) e não guarda estado entre chamadas.
     const server = new McpServer({ name: 'doutor-digital', version: '1.0.0' }, { instructions: INSTRUCOES });
-    const auditar: Auditar = (r) => {
-      o.armazem
-        // último portão antes do banco, para TODAS as ferramentas: CPF/CNPJ/telefone/senha digitados no pedido ou repetidos no erro nunca são gravados inteiros
-        // (quem chama `auditar` direto, sem passar pelo `executar`, também passa por aqui)
-        .auditar({ userId, clientId, ferramenta: r.ferramenta, argumentos: mascararArgumentos(r.argumentos), ok: r.ok, duracaoMs: r.ms, erro: r.erro === undefined ? undefined : mascararErro(r.erro) })
-        .catch((err) => o.log?.warn({ err }, 'mcp-remoto: auditoria não gravou'));
-      o.log?.info({ userId, ferramenta: r.ferramenta, ok: r.ok, ms: r.ms }, 'mcp-remoto: ferramenta');
-    };
+    const auditar: Auditar = criarAuditor(o.armazem, { userId, clientId }, o.log);
     registrarFerramentas(server, contexto, { auditar });
     o.extras?.(server, auditar, { userId, email: String(auth?.extra?.email ?? '') || undefined });
     const transporte = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
