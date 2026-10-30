@@ -21,6 +21,8 @@ export interface OpcoesFalso {
   vazarNoErro?: boolean;
   /** linhas devolvidas por /consulta */
   linhas?: unknown[];
+  /** acrescenta um admin (u-3) e um usuário inativo (u-4) à lista de usuários */
+  maisUsuarios?: boolean;
   /** relógio do servidor, para a prévia vencer */
   agora?: () => number;
 }
@@ -39,6 +41,12 @@ export function servidorAdminFalso(o: OpcoesFalso = {}) {
   const usuarios = [
     { user_id: 'u-1', login: 'maria', nome: 'Maria', papel: 'gestao', unidade: null, ativo: true, criado_em: '2026-10-01T10:00:00Z' },
     { user_id: 'u-2', login: 'joao', nome: 'João', papel: 'unidade', unidade: 'serra', ativo: true, criado_em: '2026-10-02T10:00:00Z' },
+    ...(o.maisUsuarios
+      ? [
+          { user_id: 'u-3', login: 'ana', nome: 'Ana Admin', papel: 'admin', unidade: null, ativo: true, criado_em: '2026-10-03T10:00:00Z' },
+          { user_id: 'u-4', login: 'bia', nome: 'Bia', papel: 'financeiro', unidade: null, ativo: false, criado_em: '2026-10-04T10:00:00Z' },
+        ]
+      : []),
   ];
   let n = 0;
   const json = (status: number, corpo: unknown) =>
@@ -110,9 +118,12 @@ export function servidorAdminFalso(o: OpcoesFalso = {}) {
         registro.push({ tabela: '(estrutura)', quem: corpo.quem, op: 'estrutura' });
         return json(200, { ok: true });
       case 'POST /admin/v1/usuario':
+        // contrato novo do servidor: admin só com `confirmado_admin: true` (que o conector manda só na confirmação)
+        if (corpo.acao === 'papel' && corpo.valor === 'admin' && corpo.confirmado_admin !== true) return json(403, { erro: 'o perfil admin exige confirmado_admin' });
         registro.push({ tabela: 'rh_usuarios', quem: corpo.quem, op: corpo.acao });
         return json(200, { ok: true, antes: { [corpo.acao]: 'x' }, depois: { [corpo.acao]: corpo.valor } });
       case 'POST /admin/v1/convite':
+        if (corpo.papel === 'admin' && corpo.confirmado_admin !== true) return json(403, { erro: 'convite de admin exige confirmado_admin' });
         return json(200, { ok: true, token: 'tok123456789abc', caminho: '#a-tok123456789abc' });
       default:
         return json(404, { erro: 'rota inexistente' });
