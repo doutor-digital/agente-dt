@@ -1349,8 +1349,13 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         .describe(
           'true SOMENTE se o paciente disse, com as palavras dele, que consegue ir nesse dia e horário ' +
           '(sem viagem, trabalho ou imprevisto). Também vale: ele mesmo escreveu o dia/hora que escolheu ' +
-          '("terça às 11:30"). Comprovante do Pix NÃO vale como confirmação do dia (só onde a unidade exige a ' +
-          'taxa de reserva ele libera marcar; a ferramenta decide). "ok" para o horário não conta.',
+          '("terça às 11:30"). ' +
+          // Unidade sem antecipado não tem Pix para reservar: a descrição nem o cita.
+          (semAntecipado
+            ? ''
+            : 'Comprovante do Pix NÃO vale como confirmação do dia (só onde a unidade exige a ' +
+              'taxa de reserva ele libera marcar; a ferramenta decide). ') +
+          '"ok" para o horário não conta.',
         ),
       // Unidade sem pagamento antecipado: o parâmetro nem existe para o modelo (o zod descarta o que ele escrever).
       ...(semAntecipado
@@ -1742,6 +1747,8 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
                 .then((c) => c?.pagamentoEscolhido ?? null)
                 .catch(() => null);
           const pagamento = decidirPagamentoAntecipado({
+            // Unidade sem antecipado: uma escolha `pix_antecipado` gravada na conversa ANTES da correção (#166) não vale mais.
+            semAntecipado,
             ehRetorno,
             // Chegou até aqui numa unidade com taxa de reserva = o grafo liberou pelo comprovante da taxa lido na conversa
             // (a conferência do dinheiro continua sendo da equipe, que ganha a tarefa no mesmo turno).

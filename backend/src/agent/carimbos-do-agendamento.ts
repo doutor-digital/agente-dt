@@ -202,7 +202,7 @@ export interface DecisaoPagamento {
  *  1. RETORNO PÓS-TRATAMENTO → Não (regra antiga, mantida).
  *  2. Pagamento comprovado antes de reservar (`spineBookingRequiresPayment`: a
  *     ferramenta só chega aqui com cartão ou comprovante provando) → Sim.
- *  3. A forma que o paciente escolheu — `formaPagamento` da própria chamada, ou, na
+ *  3. A forma que o paciente escolheu (em unidade sem antecipado, `pix_antecipado` conta como na_clinica) — `formaPagamento` da própria chamada, ou, na
  *     remarcação (que não traz a forma), a escolha guardada na conversa:
  *     pix_antecipado → Sim; na_clinica → Não.
  *  4. Sem sinal: se o cartão já tem valor — ou não deu pra ler o cartão
@@ -217,11 +217,18 @@ export function decidirPagamentoAntecipado(s: {
   escolhaSalva?: string | null;
   /** Valor no cartão: null = vazio; undefined = não deu pra ler o cartão. */
   valorAtual?: unknown;
+  /**
+   * Unidade sem pagamento antecipado (`unidadeSemAntecipado`): uma escolha `pix_antecipado` gravada na conversa antes da
+   * correção (29/10) não pode mais carimbar "Sim" na remarcação; vira "na clínica". Sem escolha nenhuma, nada muda.
+   */
+  semAntecipado?: boolean;
 }): DecisaoPagamento {
   if (s.ehRetorno) return { valor: 'Não', porque: 'retorno pós-tratamento' };
   if (s.pagamentoComprovado) return { valor: 'Sim', porque: 'pagamento comprovado antes da reserva' };
 
-  const forma = s.formaPagamento ?? s.escolhaSalva ?? null;
+  const escolhida = s.formaPagamento ?? s.escolhaSalva ?? null;
+  // Só a escolha `pix_antecipado` é neutralizada: sem escolha nenhuma vale o ramo 4 (não apaga o que a equipe gravou no cartão).
+  const forma = s.semAntecipado && escolhida === 'pix_antecipado' ? 'na_clinica' : escolhida;
   if (forma === 'pix_antecipado') return { valor: 'Sim', porque: 'paciente escolheu Pix antecipado' };
   if (forma === 'na_clinica') return { valor: 'Não', porque: 'paciente escolheu pagar na clínica' };
 

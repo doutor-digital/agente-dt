@@ -76,7 +76,7 @@ export function pacienteFalouDePs(falas: string[]): boolean {
 const ABREVIACAO_NO_FIM = /\b(?:Av|Dr|Dra|Sr|Sra|Srta|Prof|Profa|Rod|Pç|Pça|Est|Al|Trav|Tv|Jd|Vl|Sta|Sto|Ed|Apt|Ap|Sl|Cj|Qd|Lt|Cel|Ltda|Cia|Eng|Pe)\.$/;
 
 /** `quebrarEmFrases` sem partir depois de abreviação de endereço ou de título. */
-function frasesSemAbreviacao(texto: string): Pedaco[] {
+export function frasesSemAbreviacao(texto: string): Pedaco[] {
   const out: Pedaco[] = [];
   for (const p of quebrarEmFrases(texto)) {
     const ant = out[out.length - 1];
