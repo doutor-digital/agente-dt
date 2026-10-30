@@ -2,6 +2,7 @@
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { Auditar } from '../franquia-mcp/ferramentas.js';
 import { ErroDeEntrada } from '../franquia-mcp/travas.js';
+import { mascararErro } from '../lib/integracoes/mascaras.js';
 
 export async function executar(
   nome: string,
@@ -16,7 +17,8 @@ export async function executar(
     resultado = { content: [{ type: 'text', text: JSON.stringify(await fn()) }] };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    erro = e instanceof ErroDeEntrada ? `Pedido inválido: ${msg}` : msg;
+    // o erro repete o pedido (CPF na rota, CNPJ no filtro): mascara antes de voltar ao modelo e de ir para a auditoria
+    erro = mascararErro(e instanceof ErroDeEntrada ? `Pedido inválido: ${msg}` : msg);
     resultado = { isError: true, content: [{ type: 'text', text: erro }] };
   }
   try {
