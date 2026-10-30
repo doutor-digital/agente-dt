@@ -9,6 +9,7 @@ import { semProntoSocorro } from './sem-pronto-socorro.js';
 import { ehClinicaParaSinalDeAlerta } from './sinal-de-alerta.js';
 import { sobrouVenda } from './venda-em-alerta.js';
 import { unidadeSemAntecipado } from './pagamento-da-unidade.js';
+import { semOAntecipadoNaSaida } from './sem-antecipado-saida.js';
 
 /** O que a trava de saída precisa saber além da resposta. */
 export interface ContextoDoGuardrail {
@@ -221,6 +222,19 @@ export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoG
     triggered.push('mapa:link_inventado');
     texto = mapa.texto;
     reescreveu = true;
+  }
+
+  // Unidade SEM pagamento antecipado (Timbó): o modelo repetiu "antecipado pelo Pix", "garante seu horário", chave Pix para
+  // reservar ou os botões antigos [[botoes: Pix antecipado | Na clínica]] — sai da resposta, o resto fica (sem-antecipado-saida.ts).
+  // Antes das lacunas e dos preços: o "R$ 250 antecipado" cortado aqui não chega a virar valor "corrigido". Outras unidades: nada muda.
+  if (unidadeSemAntecipado(unit)) {
+    const semAnt = semOAntecipadoNaSaida(texto);
+    if (semAnt.botoesRemovidos) triggered.push('sem_antecipado:botoes');
+    if (semAnt.removidas.length > 0) triggered.push('sem_antecipado:frases:' + semAnt.removidas.length);
+    if (semAnt.botoesRemovidos || semAnt.removidas.length > 0) {
+      texto = semAnt.texto;
+      reescreveu = true;
+    }
   }
 
   // Lacuna antes de preço: preencher "[chave]" e "R$ [valor]" com o dado real da
