@@ -48,18 +48,19 @@ function mundo(opts: { agora?: number; pausada?: boolean; retomada?: (t: TurnoPe
     restauradas: [] as RespostaSegurada[],
     /** o que SAIU para o paciente */
     saidas: [] as Array<{ leadId: string; texto: string; traceIds: string[] }>,
-    consultas: [] as Array<{ criadosAntes: Date; criadosDepois: Date }>,
+    consultas: [] as Array<{ criadosAntes: Date; criadosDepois: Date; excluirIds: string[] }>,
     agora: opts.agora ?? T_VARREDURA,
   };
   if (opts.pausada) w.pausados.add('u1::5142896');
 
   const deps: DepsRecuperacao = {
     agora: () => w.agora,
-    emVoo: (id) => w.emVoo.has(id),
-    async buscarPerdidos({ criadosAntes, criadosDepois }) {
-      w.consultas.push({ criadosAntes, criadosDepois });
+    idsEmVoo: () => [...w.emVoo],
+    async buscarPerdidos({ criadosAntes, criadosDepois, limite, excluirIds }) {
+      w.consultas.push({ criadosAntes, criadosDepois, excluirIds });
       return w.traces
-        .filter((t) => t.status === 'RUNNING' && t.criadoEm < criadosAntes && t.criadoEm > criadosDepois)
+        .filter((t) => t.status === 'RUNNING' && t.criadoEm < criadosAntes && t.criadoEm > criadosDepois && !excluirIds.includes(t.id))
+        .slice(0, limite)
         .map((t) => ({ traceId: t.id, unitId: t.unitId, leadId: t.leadId, criadoEm: t.criadoEm, input: t.input }));
     },
     async respondidoDepois(t) {
@@ -259,6 +260,21 @@ test('o que ESTE processo tem na fila ou rodando nunca é tomado como perdido', 
   assert.equal(w.saidas.length, 0);
   assert.equal(w.reivindicados.size, 0);
   assert.equal(w.traces[0]!.status, 'RUNNING');
+  assert.deepEqual(w.consultas[0]!.excluirIds, ['em-voo'], 'os em voo saem na consulta, antes do limite');
+});
+
+test('os em voo não ocupam as vagas do limite: perdidos de verdade ainda são achados', async () => {
+  const { w, deps } = mundo();
+  // 60 traces em voo (mais antigos) e 1 perdido mais novo: com o limite de 50 aplicado antes do filtro o perdido nunca apareceria
+  for (let i = 0; i < 60; i++) {
+    w.traces.push(lead(`voo-${i}`, 'oi', -600 + i, { leadId: String(1000 + i) }));
+    w.emVoo.add(`voo-${i}`);
+  }
+  w.traces.push(lead('perdido', 'foto', -5));
+  const r = await recuperarTurnosPerdidos(deps);
+  await dormir(100);
+  assert.equal(r.retomados, 1);
+  assert.equal(w.saidas.length, 1);
 });
 
 test('só o líder do worker_leases varre: o container antigo ainda vivo não tem o trace tomado como perdido', async () => {

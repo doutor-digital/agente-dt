@@ -903,6 +903,7 @@ function execucaoDoTurno(unit: Unit, leadId: number, ctx: ExtractedContext, requ
   return async (combinedMessage: string, audioUrls: string[], imageUrls: string[], traceIds: string[]): Promise<void> => {
     const ownerTraceId = traceIds[0]!;
     const satelliteTraceIds = traceIds.slice(1);
+    let falhou = false;
     try {
       await processAgent({
         unit,
@@ -922,15 +923,22 @@ function execucaoDoTurno(unit: Unit, leadId: number, ctx: ExtractedContext, requ
         requestStart,
         burstSize: traceIds.length,
       });
+    } catch (err) {
+      falhou = true;
+      throw err;
     } finally {
       // Os satélites só são fechados DEPOIS do turno. Fechados antes, o deploy que matasse o turno no meio deixava só o
       // dono como RUNNING, e a recuperação do start refazia só a mensagem dele — as dos satélites já constavam como
       // "tratadas" e sumiam. Com o processo morto este bloco não roda, e a recuperação refaz o burst inteiro.
+      // `status: RUNNING` no filtro: não sobrescreve um satélite que outro (a recuperação) já fechou. Turno que lançou
+      // erro não esconde a mensagem do satélite atrás de um SUCCESS.
       if (satelliteTraceIds.length > 0) {
         await prisma.executionTrace
           .updateMany({
-            where: { id: { in: satelliteTraceIds } },
-            data: { status: 'SUCCESS', iaDecision: `__coalesced_into__:${ownerTraceId}`, latencyMs: 0 },
+            where: { id: { in: satelliteTraceIds }, status: 'RUNNING' },
+            data: falhou
+              ? { status: 'FAILED', iaDecision: `__coalesced_into__:${ownerTraceId}`, latencyMs: 0, errorMessage: 'o turno do burst falhou' }
+              : { status: 'SUCCESS', iaDecision: `__coalesced_into__:${ownerTraceId}`, latencyMs: 0 },
           })
           .catch((err) => logger.warn({ err: String(err), ownerTraceId }, 'coalescer: não consegui fechar os traces coalescidos'));
       }
@@ -1005,13 +1013,9 @@ export async function retomarTurnoPerdido(t: TurnoPerdido): Promise<ResultadoRet
     run: execucaoDoTurno(unit, leadId, ctx, requestStart),
     retomada: { chegouEm: t.criadoEm.getTime() },
   });
-  if (status === 'rejected') {
-    void processAgent({
-      unit, leadId, traceId: t.traceId, humanMessage: ctx.humanMessage, audioUrl: ctx.audioUrl, imageUrl: ctx.imageUrl,
-      chatId: ctx.chatId, talkId: ctx.talkId, contactId: ctx.contactId, authorId: ctx.authorId, accountId: ctx.accountId,
-      isChatMessage: ctx.isChatMessage, requestStart,
-    }).catch((err) => logger.error({ err, traceId: t.traceId }, 'erro fatal no background do agente (recuperação)'));
-  }
+  // Burst cheio (20 mensagens) = o paciente está em plena conversa e há turnos rodando: nada de turno paralelo sobre o
+  // mesmo thread (duas respostas). O trace é fechado com o motivo.
+  if (status === 'rejected') return 'descartado:burst_cheio';
   return 'retomado';
 }
 

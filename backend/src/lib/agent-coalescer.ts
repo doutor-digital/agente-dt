@@ -39,8 +39,8 @@ function janelaAtual(): number {
 /** Traces que este processo tem na fila ou rodando: a recuperação do start nunca mexe neles. */
 const emVoo = new Set<string>();
 
-export function traceEmVoo(traceId: string): boolean {
-  return emVoo.has(traceId);
+export function idsEmVoo(): string[] {
+  return [...emVoo];
 }
 
 function bufferKey(unitSlug: string, leadId: number | string): string {

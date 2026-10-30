@@ -5,7 +5,7 @@ import { emPausa } from './pausa-unidade.js';
 import { leadPausadoPorJanela } from './pausa-lead.js';
 import { isLeadPaused } from '../services/kommo.service.js';
 import { guardarRespostaSegurada, marcarNaoEntregue } from '../agent/entrega-falha.js';
-import { traceEmVoo } from './agent-coalescer.js';
+import { idsEmVoo } from './agent-coalescer.js';
 
 /**
  * Recuperação no start: o deploy (ou uma queda) matou um turno da IA no meio e ninguém retomou.
@@ -66,9 +66,10 @@ export type ResultadoRetomada = 'retomado' | `descartado:${string}`;
 
 export interface DepsRecuperacao {
   agora(): number;
-  /** Este processo tem o trace na fila ou rodando? Então não está perdido — nunca é candidato. */
-  emVoo(traceId: string): boolean;
-  buscarPerdidos(p: { criadosAntes: Date; criadosDepois: Date; limite: number }): Promise<TurnoPerdido[]>;
+  /** Traces que este processo tem na fila ou rodando: não estão perdidos, nunca são candidatos. */
+  idsEmVoo(): string[];
+  /** `excluirIds` entra na consulta (antes do limite): os que estão em voo não podem ocupar as vagas dos perdidos. */
+  buscarPerdidos(p: { criadosAntes: Date; criadosDepois: Date; limite: number; excluirIds: string[] }): Promise<TurnoPerdido[]>;
   /** Já existe mensagem da IA para este paciente depois do pedido? */
   respondidoDepois(t: TurnoPerdido): Promise<boolean>;
   iaPausada(unitId: string, leadId: string): Promise<boolean>;
@@ -95,13 +96,15 @@ export async function recuperarTurnosPerdidos(deps: DepsRecuperacao): Promise<Re
     resumo.descartados[motivo] = (resumo.descartados[motivo] ?? 0) + 1;
   };
 
+  const emVoo = new Set(deps.idsEmVoo());
   const perdidos = (
     await deps.buscarPerdidos({
       criadosAntes: new Date(agora - IDADE_MINIMA_MS),
       criadosDepois: new Date(agora - IDADE_MAXIMA_MS),
       limite: MAX_POR_VARREDURA,
+      excluirIds: [...emVoo],
     })
-  ).filter((t) => !deps.emVoo(t.traceId));
+  ).filter((t) => !emVoo.has(t.traceId)); // de novo, por garantia: quem implementa a consulta pode ignorar o filtro
   resumo.candidatos = perdidos.length;
   if (perdidos.length === 0) return resumo;
 
@@ -203,15 +206,16 @@ const TITULO_SEGURADA = '⏭ Resposta segurada';
 export function depsDeProducao(retomar: (t: TurnoPerdido) => Promise<ResultadoRetomada>): DepsRecuperacao {
   return {
     agora: () => Date.now(),
-    emVoo: traceEmVoo,
+    idsEmVoo: idsEmVoo,
     retomar,
-    async buscarPerdidos({ criadosAntes, criadosDepois, limite }) {
+    async buscarPerdidos({ criadosAntes, criadosDepois, limite, excluirIds }) {
       const linhas = await prisma.executionTrace.findMany({
         where: {
           channel: 'kommo_chat',
           status: 'RUNNING',
           unitId: { not: null },
           createdAt: { lt: criadosAntes, gt: criadosDepois },
+          ...(excluirIds.length ? { id: { notIn: excluirIds } } : {}),
         },
         orderBy: { createdAt: 'asc' },
         take: limite,
@@ -220,8 +224,10 @@ export function depsDeProducao(retomar: (t: TurnoPerdido) => Promise<ResultadoRe
       return linhas.map((l) => ({ traceId: l.id, unitId: l.unitId!, leadId: l.leadId, criadoEm: l.createdAt, input: l.input }));
     },
     async respondidoDepois(t) {
+      // `traceId` não nulo = resposta de um TURNO da IA. Follow-up, reativação e lembrete também gravam role 'assistant',
+      // mas sem trace, e não respondem ao que o paciente escreveu.
       const n = await prisma.message.count({
-        where: { role: 'assistant', createdAt: { gt: t.criadoEm }, conversation: { unitId: t.unitId, leadId: t.leadId } },
+        where: { role: 'assistant', traceId: { not: null }, createdAt: { gt: t.criadoEm }, conversation: { unitId: t.unitId, leadId: t.leadId } },
       });
       return n > 0;
     },
@@ -242,7 +248,7 @@ export function depsDeProducao(retomar: (t: TurnoPerdido) => Promise<ResultadoRe
     async seguradasPendentes(unitId, leadId, aPartirDe) {
       // O que a IA segurou e ninguém entregou: depois da última resposta que saiu e até meia hora antes do pedido perdido.
       const ultima = await prisma.message.findFirst({
-        where: { role: 'assistant', conversation: { unitId, leadId } },
+        where: { role: 'assistant', traceId: { not: null }, conversation: { unitId, leadId } },
         orderBy: { createdAt: 'desc' },
         select: { createdAt: true },
       });
@@ -317,9 +323,11 @@ export function agendarRecuperacao(
   const proxima = (ms: number): void => {
     if (parado) return;
     timer = setTimeout(() => {
-      if (lideradoEm === null && souLider()) lideradoEm = Date.now();
-      if (lideradoEm !== null && Date.now() - lideradoEm > JANELA_APOS_LIDERANCA_MS) {
-        logger.info('recuperar-turnos: janela pós-liderança encerrada');
+      // Perdeu a liderança: a janela fecha e, se reassumir (banco instável, novo deploy), abre de novo.
+      if (!souLider()) lideradoEm = null;
+      else if (lideradoEm === null) lideradoEm = Date.now();
+      if (lideradoEm === null || Date.now() - lideradoEm > JANELA_APOS_LIDERANCA_MS) {
+        proxima(INTERVALO_MS);
         return;
       }
       varrerSeLider(deps, souLider)

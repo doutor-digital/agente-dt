@@ -261,7 +261,12 @@ async function main(): Promise<void> {
 
   // Só varre quem é líder do worker_leases (= o container antigo já drenou e soltou o lease), por 10 min. Mesmo assim a
   // reivindicação por trace é atômica no banco, então dois processos nunca refazem o mesmo pedido (lib/recuperar-turnos.ts).
-  const pararRecuperacao = agendarRecuperacao(retomarTurnoPerdido, () => estadoDosWorkers()?.lider === true);
+  const pararRecuperacao = agendarRecuperacao(retomarTurnoPerdido, () => {
+    // `modo === 'lease'`: no 'sem-lease' (banco fora) o processo se declara líder SEM ter soltado o antigo — varrer ali
+    // tomaria um turno vivo do container antigo por perdido.
+    const e = estadoDosWorkers();
+    return e?.lider === true && e.modo === 'lease';
+  });
 
   const server = app.listen(env.PORT, () => {
     logger.info(`Backend ouvindo em http://localhost:${env.PORT}`);
@@ -276,9 +281,9 @@ async function main(): Promise<void> {
     server.close();
     // Turno da IA no meio (modelo respondeu, ferramenta ainda não rodou) não pode ser cortado: deixa o checkpoint com
     // chamada sem resultado e a conversa passa a tomar 400 do modelo. O Swarm dá 30 s (stop_grace_period).
-    // Teto 50 s dentro dos 60 s do stop_grace_period (docker-compose.yml). A fila do coalescer entra na espera: mensagem
+    // Teto 45 s dentro dos 60 s do stop_grace_period (docker-compose.yml). A fila do coalescer entra na espera: mensagem
     // que ainda esperava a janela virava turno só depois, e o deploy a matava (Timbó, lead 5142896, 30/10/2026).
-    const espera = await esperarTurnosDoDesligamento(Number(process.env.SHUTDOWN_AGUARDA_TURNOS_MS) || 50_000);
+    const espera = await esperarTurnosDoDesligamento(Number(process.env.SHUTDOWN_AGUARDA_TURNOS_MS) || 45_000);
     if (espera.esperouMs > 0 || espera.restantes > 0 || espera.filaRestante > 0) {
       const sobrou = espera.restantes > 0 || espera.filaRestante > 0;
       logger.warn({ ...espera }, sobrou ? 'shutdown: turnos da IA ainda pendentes, saindo mesmo assim (a recuperação do próximo start refaz)' : 'shutdown: turnos da IA terminaram');
