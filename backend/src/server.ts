@@ -31,7 +31,7 @@ import { startJudgeWorker, stopJudgeWorker } from './lib/judge-worker.js';
 import { startResultadosWorker, stopResultadosWorker } from './lib/resultados-worker.js';
 import { iniciarAutomacoes } from './lib/automacoes-estado.js';
 import { iniciarCrmCompartilhado } from './lib/crm-compartilhado.js';
-import { iniciarSupervisorDosWorkers, encerrarSupervisorDosWorkers } from './lib/worker-lease.js';
+import { iniciarSupervisorDosWorkers, encerrarSupervisorDosWorkers, estadoDosWorkers } from './lib/worker-lease.js';
 import { esperarTurnosDoDesligamento } from './lib/turnos-em-andamento.js';
 import { agendarRecuperacao } from './lib/recuperar-turnos.js';
 import { retomarTurnoPerdido } from './controllers/webhook.controller.js';
@@ -259,9 +259,9 @@ async function main(): Promise<void> {
     },
   });
 
-  // Em TODO processo, não só no líder: quem atende o webhook é quem perde o turno no deploy. Vários processos não
-  // duplicam — a reivindicação por trace é atômica no banco (ver lib/recuperar-turnos.ts).
-  const timerDaRecuperacao = agendarRecuperacao(retomarTurnoPerdido);
+  // Só varre quem é líder do worker_leases (= o container antigo já drenou e soltou o lease), por 10 min. Mesmo assim a
+  // reivindicação por trace é atômica no banco, então dois processos nunca refazem o mesmo pedido (lib/recuperar-turnos.ts).
+  const pararRecuperacao = agendarRecuperacao(retomarTurnoPerdido, () => estadoDosWorkers()?.lider === true);
 
   const server = app.listen(env.PORT, () => {
     logger.info(`Backend ouvindo em http://localhost:${env.PORT}`);
@@ -272,7 +272,7 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'shutdown iniciado');
     // Este processo está saindo: a varredura de turnos perdidos é do próximo.
-    if (timerDaRecuperacao) clearTimeout(timerDaRecuperacao);
+    pararRecuperacao();
     server.close();
     // Turno da IA no meio (modelo respondeu, ferramenta ainda não rodou) não pode ser cortado: deixa o checkpoint com
     // chamada sem resultado e a conversa passa a tomar 400 do modelo. O Swarm dá 30 s (stop_grace_period).

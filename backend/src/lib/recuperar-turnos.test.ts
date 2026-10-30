@@ -6,6 +6,7 @@ process.env.AGENT_COALESCE_MS = '30';
 const { scheduleAgentRun } = await import('./agent-coalescer.js');
 const {
   recuperarTurnosPerdidos,
+  varrerSeLider,
   IDADE_MINIMA_MS,
   IDADE_MAXIMA_MS,
   IDADE_TENTATIVA_MORTA_MS,
@@ -35,8 +36,10 @@ interface TraceFalso {
   input: unknown;
 }
 
-function mundo(opts: { agora?: number; bootEm?: number; pausada?: boolean; retomada?: (t: TurnoPerdido) => ResultadoRetomada } = {}) {
+function mundo(opts: { agora?: number; pausada?: boolean; retomada?: (t: TurnoPerdido) => ResultadoRetomada } = {}) {
   const w = {
+    /** traces que ESTE processo tem na fila/rodando */
+    emVoo: new Set<string>(),
     traces: [] as TraceFalso[],
     respostasDaIa: [] as Array<{ unitId: string; leadId: string; em: Date }>,
     pausados: new Set<string>(),
@@ -52,7 +55,7 @@ function mundo(opts: { agora?: number; bootEm?: number; pausada?: boolean; retom
 
   const deps: DepsRecuperacao = {
     agora: () => w.agora,
-    bootEm: opts.bootEm ?? T_BOOT,
+    emVoo: (id) => w.emVoo.has(id),
     async buscarPerdidos({ criadosAntes, criadosDepois }) {
       w.consultas.push({ criadosAntes, criadosDepois });
       return w.traces
@@ -224,16 +227,73 @@ test('pacientes diferentes não se misturam', async () => {
   assert.equal(w.saidas.length, 2);
 });
 
-test('janela: trace criado DEPOIS do boot (turno deste processo) e trace velho demais ficam de fora', async () => {
+test('janela: trace novo demais e trace velho demais ficam de fora', async () => {
   const { w, deps } = mundo();
-  w.traces.push(lead('deste-processo', 'oi', +30)); // criado depois que este processo subiu
   w.traces.push(lead('velho', 'oi', -(IDADE_MAXIMA_MS / 1000) - 600)); // mais de 2 h
-  w.traces.push(lead('muito-novo', 'oi', -1, { leadId: '1' })); // 1 s antes do boot, mas a varredura é em T_BOOT+120 s
-  w.agora = T_BOOT + 10_000; // varredura "cedo": só vale o que tem idade mínima
+  w.traces.push(lead('muito-novo', 'oi', +100, { leadId: '1' })); // 20 s antes da varredura: o antigo pode estar terminando
   const r = await recuperarTurnosPerdidos(deps);
   assert.equal(r.candidatos, 0);
-  assert.equal(w.consultas[0]!.criadosAntes.getTime(), Math.min(T_BOOT, w.agora - IDADE_MINIMA_MS));
+  assert.equal(w.consultas[0]!.criadosAntes.getTime(), w.agora - IDADE_MINIMA_MS);
   assert.equal(w.consultas[0]!.criadosDepois.getTime(), w.agora - IDADE_MAXIMA_MS);
+});
+
+// Revisão: o container antigo segue recebendo webhook entre o boot do novo e o SIGTERM dele. O que ele recebeu nos
+// últimos segundos e não conseguiu terminar é criado DEPOIS do boot do novo — e tem de ser recuperado.
+test('trace criado depois do boot do processo novo (últimos segundos do antigo) também é recuperado', async () => {
+  const { w, deps } = mundo();
+  w.traces.push(lead('do-antigo', 'última mensagem', +10)); // 10 s depois do boot do novo
+  w.agora = T_BOOT + 300_000; // varredura 5 min depois do boot (o trace já tem mais de 2 min)
+  const r = await recuperarTurnosPerdidos(deps);
+  await dormir(100);
+  assert.equal(r.retomados, 1);
+  assert.equal(w.saidas.length, 1);
+});
+
+test('o que ESTE processo tem na fila ou rodando nunca é tomado como perdido', async () => {
+  const { w, deps } = mundo();
+  w.traces.push(lead('em-voo', 'oi', -300));
+  w.emVoo.add('em-voo');
+  const r = await recuperarTurnosPerdidos(deps);
+  await dormir(100);
+  assert.equal(r.candidatos, 0);
+  assert.equal(w.saidas.length, 0);
+  assert.equal(w.reivindicados.size, 0);
+  assert.equal(w.traces[0]!.status, 'RUNNING');
+});
+
+test('só o líder do worker_leases varre: o container antigo ainda vivo não tem o trace tomado como perdido', async () => {
+  const { w, deps } = mundo();
+  w.traces.push(lead('t-foto', 'foto', -5));
+  assert.equal(await varrerSeLider(deps, () => false), null);
+  await dormir(100);
+  assert.equal(w.saidas.length, 0);
+  assert.equal(w.consultas.length, 0, 'nem consultou o banco');
+  const r = await varrerSeLider(deps, () => true);
+  await dormir(100);
+  assert.equal(r!.retomados, 1);
+  assert.equal(w.saidas.length, 1);
+});
+
+test('a resposta segurada só é restaurada se houve turno a caminho (retomada descartada não deixa lixo na memória)', async () => {
+  const { w, deps } = mundo({ retomada: () => 'descartado:encerramento_repetido' });
+  w.traces.push(lead('t-1', '🙏', -5));
+  w.seguradas = [{ reply: 'resposta velha', mensagemId: 'm1' }];
+  await recuperarTurnosPerdidos(deps);
+  assert.deepEqual(w.restauradas, []);
+});
+
+test('mensagem recuperada entra NA ORDEM, antes da mensagem nova, e não troca o run do webhook ao vivo', async () => {
+  const runs: Array<{ combinado: string; quem: string }> = [];
+  const ao_vivo = async (c: string) => { runs.push({ combinado: c, quem: 'ao-vivo' }); };
+  const recuperacao = async (c: string) => { runs.push({ combinado: c, quem: 'recuperacao' }); };
+  scheduleAgentRun({ unitSlug: 'ord', leadId: 1, traceId: 'novo', humanMessage: 'mensagem nova', audioUrl: null, imageUrl: null, run: ao_vivo });
+  const st = scheduleAgentRun({
+    unitSlug: 'ord', leadId: 1, traceId: 'velho', humanMessage: 'mensagem velha', audioUrl: null, imageUrl: null,
+    run: recuperacao, retomada: { chegouEm: Date.now() - 120_000 },
+  });
+  assert.equal(st, 'joined');
+  await dormir(150);
+  assert.deepEqual(runs, [{ combinado: 'mensagem velha\n\nmensagem nova', quem: 'ao-vivo' }]);
 });
 
 test('retomar que descarta (ex.: era resposta ao lembrete): trace fechado com o motivo, sem resposta', async () => {

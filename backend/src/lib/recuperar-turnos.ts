@@ -5,6 +5,7 @@ import { emPausa } from './pausa-unidade.js';
 import { leadPausadoPorJanela } from './pausa-lead.js';
 import { isLeadPaused } from '../services/kommo.service.js';
 import { guardarRespostaSegurada, marcarNaoEntregue } from '../agent/entrega-falha.js';
+import { traceEmVoo } from './agent-coalescer.js';
 
 /**
  * Recuperação no start: o deploy (ou uma queda) matou um turno da IA no meio e ninguém retomou.
@@ -15,9 +16,13 @@ import { guardarRespostaSegurada, marcarNaoEntregue } from '../agent/entrega-fal
  * 10 min em 24 h, concentrados nas horas de deploy.
  *
  * Regras (cada uma tem um teste):
- *  - só trace de WhatsApp via Kommo (`kommo_chat`) ainda RUNNING, criado ANTES deste processo subir, com idade entre
- *    `IDADE_MINIMA_MS` (dá tempo ao container antigo, que no deploy start-first segue vivo até 50 s, de terminar o que fazia)
- *    e `IDADE_MAXIMA_MS` (passado disso a conversa seguiu e responder seria estranho);
+ *  - só roda no LÍDER do `worker_leases`. No deploy start-first o container antigo segue vivo e atendendo até acabar de
+ *    drenar; ele só solta o lease no fim, então "sou o líder" = "o antigo já morreu" e nada ali está só demorando. Sem
+ *    isto a varredura tomaria como perdido um turno vivo do antigo e a paciente receberia duas respostas;
+ *  - só trace de WhatsApp via Kommo (`kommo_chat`) ainda RUNNING, com idade entre `IDADE_MINIMA_MS` e `IDADE_MAXIMA_MS`
+ *    (passado disso a conversa seguiu e responder seria estranho), e que ESTE processo não tenha na fila nem rodando;
+ *  - roda de tempos em tempos, não só no boot: o que o antigo recebeu nos últimos segundos antes de morrer ainda é novo
+ *    demais na primeira varredura;
  *  - se já existe resposta da IA depois do pedido, não reprocessa;
  *  - IA pausada (unidade, cartão ou janela) não reprocessa — a mesma trava do turno normal;
  *  - UMA vez só: o `claimMessageId` é gravado no banco (vale entre processos e entre starts); se esta recuperação também
@@ -28,8 +33,11 @@ import { guardarRespostaSegurada, marcarNaoEntregue } from '../agent/entrega-fal
  *    as duas mensagens (o `<entrega_falhou>`).
  */
 
-/** Espera depois do boot antes de varrer: o container antigo (start-first) pode estar terminando turnos. */
-export const ATRASO_INICIAL_MS = 120_000;
+/** Primeira varredura depois do boot, e de quanto em quanto tempo repete (só o líder varre de fato). */
+export const ATRASO_INICIAL_MS = 60_000;
+export const INTERVALO_MS = 120_000;
+/** Depois de virar líder, varre por este tempo e para (cobre as mensagens dos últimos segundos do antigo). */
+export const JANELA_APOS_LIDERANCA_MS = 10 * 60_000;
 export const IDADE_MINIMA_MS = 120_000;
 export const IDADE_MAXIMA_MS = 2 * 60 * 60_000;
 /** Reivindicação de outro processo que não terminou há tanto tempo: a tentativa morreu, o trace é fechado como falha. */
@@ -58,8 +66,8 @@ export type ResultadoRetomada = 'retomado' | `descartado:${string}`;
 
 export interface DepsRecuperacao {
   agora(): number;
-  /** Instante em que ESTE processo subiu: só trace criado antes disso é candidato. */
-  bootEm: number;
+  /** Este processo tem o trace na fila ou rodando? Então não está perdido — nunca é candidato. */
+  emVoo(traceId: string): boolean;
   buscarPerdidos(p: { criadosAntes: Date; criadosDepois: Date; limite: number }): Promise<TurnoPerdido[]>;
   /** Já existe mensagem da IA para este paciente depois do pedido? */
   respondidoDepois(t: TurnoPerdido): Promise<boolean>;
@@ -87,11 +95,13 @@ export async function recuperarTurnosPerdidos(deps: DepsRecuperacao): Promise<Re
     resumo.descartados[motivo] = (resumo.descartados[motivo] ?? 0) + 1;
   };
 
-  const perdidos = await deps.buscarPerdidos({
-    criadosAntes: new Date(Math.min(deps.bootEm, agora - IDADE_MINIMA_MS)),
-    criadosDepois: new Date(agora - IDADE_MAXIMA_MS),
-    limite: MAX_POR_VARREDURA,
-  });
+  const perdidos = (
+    await deps.buscarPerdidos({
+      criadosAntes: new Date(agora - IDADE_MINIMA_MS),
+      criadosDepois: new Date(agora - IDADE_MAXIMA_MS),
+      limite: MAX_POR_VARREDURA,
+    })
+  ).filter((t) => !deps.emVoo(t.traceId));
   resumo.candidatos = perdidos.length;
   if (perdidos.length === 0) return resumo;
 
@@ -156,11 +166,9 @@ async function recuperarDoPaciente(
   }
   if (meus.length === 0) return;
 
-  // A resposta que a IA segurou porque o paciente escreveu de novo não saiu e vive só na memória do processo morto.
-  for (const s of await deps.seguradasPendentes(unitId, leadId, meus[0]!.criadoEm).catch(() => [])) {
-    deps.restaurarSegurada(unitId, leadId, s);
-  }
-
+  // Lidas ANTES de retomar (o turno nasce na janela do coalescer e não pode esperar o banco), aplicadas DEPOIS.
+  const seguradas = await deps.seguradasPendentes(unitId, leadId, meus[0]!.criadoEm).catch(() => [] as RespostaSegurada[]);
+  let restaurou = false;
   for (const t of meus) {
     let r: ResultadoRetomada;
     try {
@@ -173,6 +181,13 @@ async function recuperarDoPaciente(
     }
     if (r === 'retomado') {
       resumo.retomados++;
+      if (!restaurou) {
+        // A resposta que a IA segurou porque o paciente escreveu de novo não saiu e vive só na memória do processo morto.
+        // Só DEPOIS de haver um turno a caminho (a janela do coalescer ainda não fechou): sem turno, a marca ficaria
+        // na memória até a próxima mensagem do paciente e a IA pediria desculpa por algo que a conversa já passou.
+        restaurou = true;
+        for (const s of seguradas) deps.restaurarSegurada(unitId, leadId, s);
+      }
     } else {
       await deps.encerrar(t.traceId, 'SUCCESS', r.slice('descartado:'.length));
       descartar(r.slice('descartado:'.length));
@@ -185,10 +200,10 @@ async function recuperarDoPaciente(
 const TITULO_SEGURADA = '⏭ Resposta segurada';
 
 /** As dependências de verdade: banco, Kommo e a memória do processo. `retomar` vem do controller (precisa do processAgent). */
-export function depsDeProducao(retomar: (t: TurnoPerdido) => Promise<ResultadoRetomada>, bootEm: number): DepsRecuperacao {
+export function depsDeProducao(retomar: (t: TurnoPerdido) => Promise<ResultadoRetomada>): DepsRecuperacao {
   return {
     agora: () => Date.now(),
-    bootEm,
+    emVoo: traceEmVoo,
     retomar,
     async buscarPerdidos({ criadosAntes, criadosDepois, limite }) {
       const linhas = await prisma.executionTrace.findMany({
@@ -271,18 +286,54 @@ export function depsDeProducao(retomar: (t: TurnoPerdido) => Promise<ResultadoRe
   };
 }
 
-/** Agenda a varredura única depois do boot. Devolve o timer para o desligamento cancelar. */
-export function agendarRecuperacao(retomar: (t: TurnoPerdido) => Promise<ResultadoRetomada>): NodeJS.Timeout | null {
+/**
+ * Uma volta da varredura: só o líder do `worker_leases` (= o container antigo já soltou o lease no fim da drenagem).
+ * Devolve `null` quando não é o líder.
+ */
+export async function varrerSeLider(deps: DepsRecuperacao, souLider: () => boolean): Promise<ResumoRecuperacao | null> {
+  if (!souLider()) return null;
+  return recuperarTurnosPerdidos(deps);
+}
+
+/**
+ * Liga a varredura periódica (primeira em `ATRASO_INICIAL_MS`, depois a cada `INTERVALO_MS`). Devolve a função que
+ * desliga, para o shutdown chamar. Uma volta nunca começa em cima da outra.
+ */
+export function agendarRecuperacao(
+  retomar: (t: TurnoPerdido) => Promise<ResultadoRetomada>,
+  souLider: () => boolean,
+): () => void {
   if (process.env.RECUPERAR_TURNOS_DESLIGADO === '1') {
     logger.info('recuperar-turnos: desligado por RECUPERAR_TURNOS_DESLIGADO=1');
-    return null;
+    return () => undefined;
   }
-  const bootEm = Date.now();
-  const timer = setTimeout(() => {
-    void recuperarTurnosPerdidos(depsDeProducao(retomar, bootEm))
-      .then((r) => logger.info(r, 'recuperar-turnos: varredura concluída'))
-      .catch((err) => logger.error({ err: String(err) }, 'recuperar-turnos: varredura falhou'));
-  }, ATRASO_INICIAL_MS);
-  timer.unref();
-  return timer;
+  const deps = depsDeProducao(retomar);
+  let parado = false;
+  let timer: NodeJS.Timeout | null = null;
+  // A janela conta a partir de quando ESTE processo virou líder (= o antigo morreu): só o que o deploy/queda deixou
+  // para trás interessa. Trace RUNNING fora disso é outra coisa (um caminho que não fecha o trace?) e reprocessá-lo
+  // seria responder de novo a quem pode já ter sido respondido — fica para investigar, não para refazer.
+  let lideradoEm: number | null = null;
+  const proxima = (ms: number): void => {
+    if (parado) return;
+    timer = setTimeout(() => {
+      if (lideradoEm === null && souLider()) lideradoEm = Date.now();
+      if (lideradoEm !== null && Date.now() - lideradoEm > JANELA_APOS_LIDERANCA_MS) {
+        logger.info('recuperar-turnos: janela pós-liderança encerrada');
+        return;
+      }
+      varrerSeLider(deps, souLider)
+        .then((r) => {
+          if (r && r.candidatos > 0) logger.info(r, 'recuperar-turnos: varredura concluída');
+        })
+        .catch((err) => logger.error({ err: String(err) }, 'recuperar-turnos: varredura falhou'))
+        .finally(() => proxima(INTERVALO_MS));
+    }, ms);
+    timer.unref();
+  };
+  proxima(ATRASO_INICIAL_MS);
+  return () => {
+    parado = true;
+    if (timer) clearTimeout(timer);
+  };
 }

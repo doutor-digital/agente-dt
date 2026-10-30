@@ -903,34 +903,38 @@ function execucaoDoTurno(unit: Unit, leadId: number, ctx: ExtractedContext, requ
   return async (combinedMessage: string, audioUrls: string[], imageUrls: string[], traceIds: string[]): Promise<void> => {
     const ownerTraceId = traceIds[0]!;
     const satelliteTraceIds = traceIds.slice(1);
-    if (satelliteTraceIds.length > 0) {
-      await prisma.executionTrace.updateMany({
-        where: { id: { in: satelliteTraceIds } },
-        data: {
-          status: 'SUCCESS',
-          iaDecision: `__coalesced_into__:${ownerTraceId}`,
-          latencyMs: 0,
-        },
+    try {
+      await processAgent({
+        unit,
+        leadId,
+        traceId: ownerTraceId,
+        humanMessage: combinedMessage,
+        audioUrl: audioUrls[0] ?? null,
+        audioUrls,
+        imageUrl: imageUrls[0] ?? null,
+        imageUrls,
+        chatId: ctx.chatId,
+        talkId: ctx.talkId,
+        contactId: ctx.contactId,
+        authorId: ctx.authorId,
+        accountId: ctx.accountId,
+        isChatMessage: ctx.isChatMessage,
+        requestStart,
+        burstSize: traceIds.length,
       });
+    } finally {
+      // Os satélites só são fechados DEPOIS do turno. Fechados antes, o deploy que matasse o turno no meio deixava só o
+      // dono como RUNNING, e a recuperação do start refazia só a mensagem dele — as dos satélites já constavam como
+      // "tratadas" e sumiam. Com o processo morto este bloco não roda, e a recuperação refaz o burst inteiro.
+      if (satelliteTraceIds.length > 0) {
+        await prisma.executionTrace
+          .updateMany({
+            where: { id: { in: satelliteTraceIds } },
+            data: { status: 'SUCCESS', iaDecision: `__coalesced_into__:${ownerTraceId}`, latencyMs: 0 },
+          })
+          .catch((err) => logger.warn({ err: String(err), ownerTraceId }, 'coalescer: não consegui fechar os traces coalescidos'));
+      }
     }
-    await processAgent({
-      unit,
-      leadId,
-      traceId: ownerTraceId,
-      humanMessage: combinedMessage,
-      audioUrl: audioUrls[0] ?? null,
-      audioUrls,
-      imageUrl: imageUrls[0] ?? null,
-      imageUrls,
-      chatId: ctx.chatId,
-      talkId: ctx.talkId,
-      contactId: ctx.contactId,
-      authorId: ctx.authorId,
-      accountId: ctx.accountId,
-      isChatMessage: ctx.isChatMessage,
-      requestStart,
-      burstSize: traceIds.length,
-    });
   };
 }
 
@@ -951,14 +955,29 @@ export async function retomarTurnoPerdido(t: TurnoPerdido): Promise<ResultadoRet
   const ctx = extractContext(parsed.data, leadId);
   if (!ctx.isChatMessage) return 'descartado:nao_e_mensagem_do_kommo';
 
-  // Os caminhos em código que o webhook toma ANTES da IA: se o processo morreu no meio deles, a IA não deve responder
-  // no lugar (o "1" da confirmação de véspera virava "Não entendi…").
-  if (podeSerBotaoDoLembrete(unit.slug, ctx.humanMessage)) return 'descartado:resposta_a_lembrete';
+  // Os caminhos em código que o webhook toma ANTES da IA (ver handleKommoWebhook): resposta à confirmação de véspera e
+  // toque no botão do lembrete. Passam pelos MESMOS tratadores — são idempotentes ("repetida") — e só o que eles
+  // resolverem sai da IA; o que devolverem `null` segue para a IA, como no webhook. Descartar por "parece resposta"
+  // calaria quem escreveu "sim"/"1" fora de qualquer consulta.
   const conv = await prisma.conversation.findUnique({ where: { unitId_leadId: { unitId: unit.id, leadId: String(leadId) } } });
-  if (conv && podeSerRespostaD1(conv, ctx.humanMessage)) return 'descartado:resposta_a_lembrete';
+  if (conv && (podeSerRespostaD1(conv, ctx.humanMessage) || podeSerBotaoDoLembrete(unit.slug, ctx.humanMessage))) {
+    const kommo = createKommoClient(unit);
+    const respostaD1 = await tratarRespostaD1({ unit, leadId, texto: ctx.humanMessage, conv, kommo, traceId: t.traceId }).catch((err) => {
+      logger.warn({ err: String(err), unit: unit.slug, leadId }, 'recuperar-turnos: falha ao tratar resposta à véspera (segue para a IA)');
+      return null;
+    });
+    const lembrete = respostaD1
+      ? null
+      : await tratarBotaoDoLembrete({ unit, leadId, texto: ctx.humanMessage, conv, kommo }).catch((err) => {
+          logger.warn({ err: String(err), unit: unit.slug, leadId }, 'recuperar-turnos: falha ao tratar o toque no lembrete (segue para a IA)');
+          return null;
+        });
+    if (respostaD1 || lembrete) return 'descartado:tratado_em_codigo';
+  }
   if (conv) {
+    // Só o que veio ANTES deste pedido: o histórico de agora já tem a mensagem seguinte do paciente e a resposta da IA.
     const anteriores = await prisma.message.findMany({
-      where: { conversationId: conv.id, traceId: { not: t.traceId } },
+      where: { conversationId: conv.id, traceId: { not: t.traceId }, createdAt: { lt: t.criadoEm } },
       orderBy: { createdAt: 'desc' },
       take: 6,
       select: { role: true, content: true, createdAt: true },
@@ -984,6 +1003,7 @@ export async function retomarTurnoPerdido(t: TurnoPerdido): Promise<ResultadoRet
     audioUrl: ctx.audioUrl,
     imageUrl: ctx.imageUrl,
     run: execucaoDoTurno(unit, leadId, ctx, requestStart),
+    retomada: { chegouEm: t.criadoEm.getTime() },
   });
   if (status === 'rejected') {
     void processAgent({
