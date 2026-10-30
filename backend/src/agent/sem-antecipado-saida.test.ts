@@ -180,7 +180,7 @@ test('negação da oração: "não precisa de chave Pix" fica; "Sem problema, po
 });
 
 test('"chave" que não é de Pix não é tocada', () => {
-  for (const t of ['Vou te passar o endereço; a chave do armário fica na recepção.', 'Passo a passo: a chave de acesso é na recepção.']) {
+  for (const t of ['Vou te passar o endereço; a chave do armário fica na recepção.', 'Passo a passo: a chave de acesso é na recepção.', 'Vou te enviar a chave do armário, ela fica na recepção.']) {
     assert.equal(semOAntecipadoNaSaida(t).texto, t, t);
   }
 });
@@ -200,4 +200,8 @@ test('botões mistos perdem só a opção de pagamento; horários e outras opç�
   );
   const t = 'Quer saber mais?\n[[botoes: Confirmar | Como funciona o pagamento?]]';
   assert.equal(semOAntecipadoNaSaida(t).texto, t);
+});
+
+test('botão misto que sobra com UMA opção só: a linha inteira sai (botão sozinho engana)', () => {
+  assert.equal(semOAntecipadoNaSaida('Qual horário?\n[[botoes: Terça 10h | Pix antecipado]]').texto, 'Qual horário?');
 });
