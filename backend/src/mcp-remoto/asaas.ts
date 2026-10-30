@@ -1,6 +1,7 @@
 /**
  * Asaas no conector: cobranças, extrato, saldo e clientes das clínicas com a chave do Asaas no painel de
- * integrações. Só leitura — a fonte de produção é o `asaasGet` (só GET). Nos testes, uma fonte falsa.
+ * integrações. Aqui é só leitura — a fonte de produção é o `asaasGet` (só GET). Cadastrar cliente e gerar
+ * boleto existem à parte, em dois passos, em `asaas-escrita.ts`. Nos testes, uma fonte falsa.
  *
  * O extrato é o que ENTROU de verdade (não o comprovante que o paciente manda): é por ele que se confere
  * se um Pix caiu.
@@ -17,10 +18,23 @@ export interface FonteAsaas {
   get<T>(caminho: string, query?: Record<string, string | number | undefined>): Promise<T>;
 }
 
+/** A porta de escrita da conta: só cadastrar cliente e gerar cobrança (ver `lib/integracoes/asaas-escrita.ts`). */
+export interface EscritaAsaas {
+  post<T>(caminho: '/customers' | '/payments', corpo: Record<string, unknown>): Promise<T>;
+  /** Os 4 últimos caracteres da chave, para mostrar em QUAL conta vai gravar. Nunca a chave. */
+  chaveFinal: string;
+  /** sha256 da chave INTEIRA: só para o confirmar perceber a troca de chave (o final de 4 caracteres pode coincidir). Nunca mostrar, gravar ou logar. */
+  chaveImpressao: string;
+  /** Nome da conta que o Asaas devolveu quando a chave foi salva no painel de integrações. */
+  contaSalva?: string | null;
+}
+
 export interface ContaAsaas {
   slug: string;
   nome: string;
   fonte: FonteAsaas;
+  /** Sem isto a conta é só leitura. */
+  escrita?: EscritaAsaas;
 }
 
 export interface ContextoAsaas {

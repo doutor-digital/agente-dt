@@ -32,6 +32,9 @@ import type { KommoClient } from '../services/kommo.service.js';
 import { PrismaClient } from '@prisma/client';
 import { criarContextoAsaas, registrarFerramentasAsaas, type ContaAsaas } from './asaas.js';
 import { asaasGet } from '../lib/integracoes/asaas.js';
+import { asaasPost } from '../lib/integracoes/asaas-escrita.js';
+import { finalDaChave, impressaoDaChave } from '../lib/integracoes/cofre.js';
+import { criarEscritaAsaas, EVENTO_COBRANCA, registrarEscritaAsaasSePermitido, type RegistroDeCobranca } from './asaas-escrita.js';
 import { criarContextoConvenia, registrarFerramentasConvenia, type ContaConvenia } from './convenia.js';
 import { conveniaGet } from '../lib/integracoes/convenia.js';
 import { criarContextoTiquetaque, registrarFerramentasTiquetaque, type ContaTiquetaque } from './tiquetaque.js';
@@ -178,7 +181,13 @@ async function contasBlingDoBanco(): Promise<Map<string, ContaBling>> {
 async function contasAsaasDoBanco(): Promise<Map<string, ContaAsaas>> {
   const contas = new Map<string, ContaAsaas>();
   for (const c of await contasComChave('asaas')) {
-    contas.set(c.slug, { slug: c.slug, nome: c.nome, fonte: { get: (caminho, query) => asaasGet(c.unitId, c.chave, caminho, query ?? {}) } });
+    contas.set(c.slug, {
+      slug: c.slug,
+      nome: c.nome,
+      fonte: { get: (caminho, query) => asaasGet(c.unitId, c.chave, caminho, query ?? {}) },
+      // a porta de escrita (cadastrar cliente e gerar boleto) só é usada por quem está em MCP_ESCRITA_EMAILS
+      escrita: { post: (caminho, corpo) => asaasPost(c.unitId, c.chave, caminho, corpo), chaveFinal: finalDaChave(c.chave), chaveImpressao: impressaoDaChave(c.chave), contaSalva: c.conta },
+    });
   }
   logger.info({ contas: contas.size }, 'mcp-remoto: contas do Asaas carregadas');
   return contas;
@@ -253,6 +262,21 @@ async function leitoresDoWhatsapp(): Promise<Set<string>> {
   if (!emails.length) return new Set();
   const us = await prisma.user.findMany({ where: { email: { in: emails }, isActive: true }, select: { id: true } });
   return new Set(us.map((u) => u.id));
+}
+
+/** Boletos gerados na última hora (auditoria do conector): o teto por hora e a duplicata sobrevivem a um reinício. */
+async function cobrancasRecentes(conta: string): Promise<RegistroDeCobranca[]> {
+  const linhas = await prisma.mcpAuditoria.findMany({
+    where: { ferramenta: EVENTO_COBRANCA, createdAt: { gte: new Date(Date.now() - 3_600_000) }, argumentos: { path: ['conta'], equals: conta } },
+    select: { createdAt: true, ok: true, argumentos: true },
+  });
+  const out: RegistroDeCobranca[] = [];
+  for (const l of linhas) {
+    const a = (l.argumentos ?? {}) as { conta?: string; chave?: string; cobrancaId?: string; incerto?: boolean };
+    // falha definitiva do Asaas não conta; sucesso e "sem resposta" (pode ter criado) contam
+    if (a.conta === conta && a.chave && (l.ok || a.incerto)) out.push({ conta, chave: a.chave, em: l.createdAt.getTime(), ...(a.cobrancaId ? { cobrancaId: a.cobrancaId } : {}) });
+  }
+  return out;
 }
 
 const normEtiqueta = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
@@ -420,6 +444,7 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   let escritores = new Set<string>();
   manterAtualizado(escritoresDoBanco, (s) => (escritores = s), 'quem pode alterar cartões');
   const pendentes = new Pendentes();
+  const escritaAsaas = criarEscritaAsaas({ historico: cobrancasRecentes });
   manterAtualizado(contasAsaasDoBanco, (contas) => (asaas.contas = contas), 'as contas do Asaas');
   const convenia = criarContextoConvenia(new Map());
   manterAtualizado(contasConveniaDoBanco, (contas) => (convenia.contas = contas), 'as contas do Convênia');
@@ -464,6 +489,9 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
       registrarFerramentasConvenia(server, convenia, auditar);
       registrarFerramentasTiquetaque(server, tiquetaque, auditar);
       registrarMetaEventos(server, () => rastreio, auditar);
+      // Asaas: cadastrar cliente e gerar boleto, em dois passos (cancelar, estornar, editar e transferir NÃO existem), só para quem está
+      // na lista de escrita E só nas unidades de ASAAS_ESCRITA_UNIDADES. O portão fica numa função testada.
+      registrarEscritaAsaasSePermitido(server, asaas, escritaAsaas, quem.userId, escritores, auditar);
       const quemSistemas = { usuario: quem.userId, nome: quem.email || `usuario:${quem.userId}` };
       registrarLeituraSistemas(server, sistemas, quemSistemas, auditar);
       if (escritores.has(quem.userId)) {

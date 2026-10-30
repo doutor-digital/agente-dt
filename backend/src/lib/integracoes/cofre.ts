@@ -31,3 +31,11 @@ export function decifrar(cifrado: string, segredo: string): string {
 export function finalDaChave(chave: string): string {
   return chave.length > 8 ? `…${chave.slice(-4)}` : '…';
 }
+
+/**
+ * Impressão da chave INTEIRA (sha256), para o conector perceber que a chave trocou entre a prévia e o ok mesmo quando o final
+ * de 4 caracteres coincide. Só para comparar em memória: nunca é mostrada, gravada em auditoria nem posta em log.
+ */
+export function impressaoDaChave(chave: string): string {
+  return createHash('sha256').update(`impressao-da-chave:${chave}`).digest('hex');
+}

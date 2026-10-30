@@ -71,6 +71,11 @@ export class Cache {
     return this.itens.size;
   }
 
+  /** Esquece o que foi guardado sob este prefixo (depois de uma escrita, a leitura não pode mostrar o antes). */
+  removerPrefixo(prefixo: string): void {
+    for (const k of this.itens.keys()) if (k.startsWith(prefixo)) this.itens.delete(k);
+  }
+
   pegar<T>(chave: string): T | undefined {
     const item = this.itens.get(chave);
     if (!item) return undefined;
