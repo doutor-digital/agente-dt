@@ -458,12 +458,16 @@ export async function abrirTarefaParaEquipe(args: {
       title: `Falha ao abrir a tarefa da equipe (${motivo}): ${erro}`,
       payload: { leadId, motivo },
     });
-    // Quem promete é o motivo: nos de cadastro/horário a IA foi instruída a NÃO prometer retorno quando a tarefa não sai.
-    const semPromessa = motivo === 'cadastro_duplicado' || motivo === 'agenda_sem_conferir';
+    // Quem promete é o motivo. «horário»: a IA só promete se a tarefa saiu (senão foi instruída a NÃO prometer). «cadastro»: a
+    // IA não promete nada por causa dela; só a equipe não saberá do cadastro em dobro. Os demais: o paciente já ouviu «em até 1 hora».
+    const textoDaFalha: Partial<Record<typeof motivo, string>> = {
+      agenda_sem_conferir: `a tarefa de conferir o HORÁRIO NÃO saiu (lead ${leadId}): ${erro}. A IA foi instruída a não prometer retorno da equipe nesse caso; ainda assim o paciente ficou sem resposta sobre o horário: avisar a equipe à mão.`,
+      cadastro_duplicado: `a tarefa de conferir o CADASTRO em dobro NÃO saiu (lead ${leadId}): ${erro}. A IA não prometeu nada por causa dela, mas a equipe não sabe do outro cadastro: avisar à mão.`,
+    };
     await (args.alertar ?? enviarTelegram)(
-      semPromessa
-        ? `⚠️ ${slug} — a tarefa para a equipe NÃO saiu (${motivo}, lead ${leadId}): ${erro}. A IA foi instruída a não prometer retorno nesse caso, mas a equipe não sabe do cadastro/horário a conferir: avisar à mão.`
-        : `⚠️ ${slug} — a IA disse ao paciente (lead ${leadId}) que a equipe confirma em até 1 hora, mas a tarefa NÃO saiu (${motivo}): ${erro}. Avisar a equipe à mão.`,
+      `⚠️ ${slug} — ` +
+        (textoDaFalha[motivo] ??
+          `a IA disse ao paciente (lead ${leadId}) que a equipe confirma em até 1 hora, mas a tarefa NÃO saiu (${motivo}): ${erro}. Avisar a equipe à mão.`),
     ).catch(() => undefined);
     return 'falhou';
   }

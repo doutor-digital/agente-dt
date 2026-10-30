@@ -301,7 +301,8 @@ test('3ª rodada: o alerta do Telegram de cadastro_duplicado/agenda_sem_conferir
     assert.equal(alertas.length, 1);
     assert.doesNotMatch(alertas[0], /em até 1 hora/);
     assert.match(alertas[0], /NÃO saiu.*boom/);
-    assert.match(alertas[0], /não prometer|NÃO prometeu|sem promessa/i);
+    assert.match(alertas[0], motivo === 'agenda_sem_conferir' ? /HORÁRIO/ : /CADASTRO/);
+    assert.match(alertas[0], /não prometer|não prometeu/);
   }
   const alertas: string[] = [];
   await abrirTarefaParaEquipe({ slug: 's', unitId: 'u', leadId: 1, kommo: kommo as never, recorder: { step: async () => undefined } as never, motivo: 'desmarcada', dedupe, alertar: async (t) => void alertas.push(t) });
