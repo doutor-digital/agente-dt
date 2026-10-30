@@ -16,12 +16,12 @@ const ENUMS = [
 type Chamada = { metodo: string; args: unknown[] };
 
 /** Kommo falso: só o que o serviço toca. `tipo` é o tipo do campo "⚕ Região da dor" na conta. */
-function kommoFalso(tipo: 'select' | 'multiselect', valorNoCartao: string | null = null) {
+function kommoFalso(tipo: 'select' | 'multiselect', valorNoCartao: string | null = null, enums = ENUMS) {
   const chamadas: Chamada[] = [];
   const kommo = {
     listLeadCustomFields: async () => ({ _embedded: { custom_fields: [{ id: 616648, name: NOME_CAMPO_REGIAO }] } }),
     listPipelines: async () => [],
-    listLeadCustomFieldsTyped: async () => [{ id: 616648, name: NOME_CAMPO_REGIAO, type: tipo, code: null, enums: ENUMS }],
+    listLeadCustomFieldsTyped: async () => [{ id: 616648, name: NOME_CAMPO_REGIAO, type: tipo, code: null, enums }],
     getLead: async () => ({
       id: 1,
       custom_fields_values: valorNoCartao ? [{ field_id: 616648, values: [{ value: valorNoCartao }] }] : [],
@@ -43,6 +43,12 @@ test('dedução da queixa em campo MULTISELECT (Timbó): grava como lista, com o
   const set = chamadas.find((c) => c.metodo === 'set');
   assert.deepEqual(set?.args, [1, 616648, 'multiselect', ['Lombar'], ENUMS]);
   assert.deepEqual(chamadas.find((c) => c.metodo === 'addTag')?.args, [{ leadId: 1, tag: 'lombar' }]);
+});
+
+test('dedução em multiselect cuja opção foi renomeada: não grava nem etiqueta (nada de palpite como texto livre)', async () => {
+  const { kommo, chamadas } = kommoFalso('multiselect', null, [{ id: 1, value: 'Lombar (parte baixa)' }]);
+  assert.equal(await deduzirRegiaoDaQueixa(unidade('u-renomeada'), kommo, 1, 'dor no pescoço', 0), null);
+  assert.equal(chamadas.length, 0);
 });
 
 test('dedução da queixa em campo SELECT (Serra/Imperatriz): continua igual — select, texto, sem enums', async () => {
