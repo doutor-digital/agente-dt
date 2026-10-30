@@ -8,6 +8,7 @@ import { cadastrarLeadDoTurno } from '../lib/cadastro-todo-lead.js';
 import { logger } from '../lib/logger.js';
 import { buildAgentGraph, buildThreadId } from '../agent/graph.js';
 import { comTurnoEmAndamento } from '../lib/turnos-em-andamento.js';
+import { rodarTurnoDoBurst } from '../lib/turno-do-burst.js';
 import { TraceRecorder, syncRecorderSequence } from '../agent/trace-recorder.js';
 import { createKommoClient, isLeadPaused, temPalavra } from '../services/kommo.service.js';
 import { leadPausadoPorJanela } from '../lib/pausa-lead.js';
@@ -36,7 +37,7 @@ import { claimMessageId, TTL_REENTREGA_KOMMO_MS } from '../lib/dedup-cache.js';
 import { rememberIncomingAudio } from '../lib/pending-audio.js';
 import { enforceReplyGap } from '../lib/reply-gate.js';
 import { trackPendingReply, confirmDelivery } from '../lib/stale-reply-monitor.js';
-import { scheduleAgentRun, temPendentes } from '../lib/agent-coalescer.js';
+import { comTurnoAvulso, scheduleAgentRun, temPendentes } from '../lib/agent-coalescer.js';
 import { ehEncerramentoRepetido } from '../lib/encerramento.js';
 import { podeSerRespostaD1, tratarRespostaD1 } from '../lib/confirmacao-d1.js';
 import { podeSerBotaoDoLembrete, tratarBotaoDoLembrete } from '../lib/resposta-ao-lembrete.js';
@@ -865,20 +866,41 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
     humanMessage: ctx.humanMessage,
     audioUrl: ctx.audioUrl,
     imageUrl: ctx.imageUrl,
-    run: async (combinedMessage, audioUrls, imageUrls, traceIds) => {
-      const ownerTraceId = traceIds[0];
-      const satelliteTraceIds = traceIds.slice(1);
-      if (satelliteTraceIds.length > 0) {
-        await prisma.executionTrace.updateMany({
-          where: { id: { in: satelliteTraceIds } },
-          data: {
-            status: 'SUCCESS',
-            iaDecision: `__coalesced_into__:${ownerTraceId}`,
-            latencyMs: 0,
-          },
-        });
-      }
-      await processAgent({
+    run: execucaoDoTurno(unit, leadId, ctx, requestStart),
+  });
+
+  if (status === 'joined') {
+    logger.info(
+      { leadId, traceId: trace.id, unit: unit.slug },
+      'webhook: mensagem anexada a burst em curso',
+    );
+  } else if (status === 'rejected') {
+    // Burst cheio: turno avulso, mas contado como "em voo" para o desligamento esperar por ele.
+    void comTurnoAvulso(trace.id, () => processAgent({
+      unit,
+      leadId,
+      traceId: trace.id,
+      humanMessage: ctx.humanMessage,
+      audioUrl: ctx.audioUrl,
+      imageUrl: ctx.imageUrl,
+      chatId: ctx.chatId,
+      talkId: ctx.talkId,
+      contactId: ctx.contactId,
+      authorId: ctx.authorId,
+      accountId: ctx.accountId,
+      isChatMessage: ctx.isChatMessage,
+      requestStart,
+    })).catch((err) => {
+      logger.error({ err, traceId: trace.id }, 'erro fatal no background do agente (fallback)');
+    });
+  }
+}
+
+/** O que o coalescer roda quando a janela fecha: junta o burst num turno só (ver lib/turno-do-burst.ts). */
+function execucaoDoTurno(unit: Unit, leadId: number, ctx: ExtractedContext, requestStart: number) {
+  return (combinedMessage: string, audioUrls: string[], imageUrls: string[], traceIds: string[]): Promise<void> =>
+    rodarTurnoDoBurst(traceIds, (ownerTraceId) =>
+      processAgent({
         unit,
         leadId,
         traceId: ownerTraceId,
@@ -895,34 +917,8 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
         isChatMessage: ctx.isChatMessage,
         requestStart,
         burstSize: traceIds.length,
-      });
-    },
-  });
-
-  if (status === 'joined') {
-    logger.info(
-      { leadId, traceId: trace.id, unit: unit.slug },
-      'webhook: mensagem anexada a burst em curso',
+      }),
     );
-  } else if (status === 'rejected') {
-    void processAgent({
-      unit,
-      leadId,
-      traceId: trace.id,
-      humanMessage: ctx.humanMessage,
-      audioUrl: ctx.audioUrl,
-      imageUrl: ctx.imageUrl,
-      chatId: ctx.chatId,
-      talkId: ctx.talkId,
-      contactId: ctx.contactId,
-      authorId: ctx.authorId,
-      accountId: ctx.accountId,
-      isChatMessage: ctx.isChatMessage,
-      requestStart,
-    }).catch((err) => {
-      logger.error({ err, traceId: trace.id }, 'erro fatal no background do agente (fallback)');
-    });
-  }
 }
 
 export type AgentDeliverFn = (text: string) => Promise<{ via: string; detail: unknown }>;
