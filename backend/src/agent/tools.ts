@@ -1512,8 +1512,8 @@ export async function gravarCampoDaRegra({
   const enums = (rule.kommoFieldEnums as Array<{ id: number; value: string }> | null) ?? [];
   const t0 = performance.now();
 
-  // "Feito por = IA" e "Situação = Agendado" dizem que a IA marcou. Quem carimba isso é `agendar_consulta`, quando dá certo; a
-  // gravação avulsa só vale se a marcação da IA deu certo neste turno (Timbó, 29/10/2026: gravou em paralelo, antes do
+  // "Feito por = IA" diz que a IA marcou ("Situação = Agendado" é o estado da consulta e não é travado). Quem carimba isso é
+  // `agendar_consulta`, quando dá certo; a gravação avulsa só vale se a marcação da IA deu certo neste turno (Timbó, 29/10/2026: gravou em paralelo, antes do
   // resultado, e a marcação tinha sido da recepção).
   if (ehCarimboDeMarcacaoDaIa(rule.kommoFieldName, value) && !(await aguardarMarcacaoDaIa(recorder.traceId))) {
     await recorder.step({
