@@ -400,9 +400,8 @@ test('boleto: caso real - em 30/10/2026 o vencimento de 30/12/2026 (61 dias) é 
 
 test('boleto: o texto da ferramenta lê o limite da constante, sem número chumbado', () => {
   const src = readFileSync(new URL('./asaas-escrita.ts', import.meta.url), 'utf8');
-  assert.ok(!/\+60 dias|até 60 dias/.test(src), 'sem 60 chumbado nos textos');
-  assert.ok(!/\+90 dias|até 90 dias/.test(src), 'sem 90 chumbado nos textos');
-  assert.match(src, /\$\{LIMITES_ASAAS\.maxDiasVencimento\} dias/);
+  assert.ok(!/\+\s*\d+ dias|até \d+ dias/.test(src), 'sem número chumbado antes de "dias" nos textos');
+  assert.equal(src.match(/\$\{LIMITES_ASAAS\.maxDiasVencimento\} dias/g)?.length, 3, 'mensagem de recusa, descrição da ferramenta e campo leem a constante');
 });
 
 test('boleto: o dia virou entre a prévia e o ok → vencimento que já passou não sai', async () => {

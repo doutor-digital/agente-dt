@@ -14,8 +14,8 @@
  * Só quem está em MCP_ESCRITA_EMAILS vê as ferramentas. O cliente HTTP só aceita POST em /customers e /payments.
  *
  * Dinheiro de verdade, paciente de verdade. Travas: UMA conta por vez ("todas" é recusado); teto por cobrança
- * (ASAAS_COBRANCA_MAX_REAIS, padrão 5000) e por hora e conta (ASAAS_COBRANCAS_POR_HORA, padrão 20); vencimento de hoje até LIMITES_ASAAS.maxDiasVencimento
- * dias; cobrança igual (mesmo cliente, valor, vencimento, descrição) em 10 min é recusada com o id da existente; o aviso
+ * (ASAAS_COBRANCA_MAX_REAIS, padrão 5000) e por hora e conta (ASAAS_COBRANCAS_POR_HORA, padrão 20); vencimento de hoje até o limite de dias
+ * (LIMITES_ASAAS.maxDiasVencimento, a fonte única); cobrança igual (mesmo cliente, valor, vencimento, descrição) em 10 min é recusada com o id da existente; o aviso
  * do Asaas ao cliente é decisão (`avisarCliente`, padrão NÃO). CPF/CNPJ, e-mail e telefone saem mascarados; a chave nunca.
  */
 import { createHash, randomBytes } from 'node:crypto';
@@ -951,7 +951,7 @@ export function registrarEscritaAsaas(server: McpServer, asaas: ContextoAsaas, e
         'PASSO 1 de 2 para GERAR UM BOLETO no Asaas de UMA clínica (SOMENTE boleto, à vista: sem Pix, cartão, parcelamento ou assinatura). NÃO grava: ' +
         'mostra a conta (nome e final da chave), o cliente, valor, vencimento, descrição e se o cliente será avisado pelo Asaas, e devolve um código. ' +
         'Cliente: clienteId (cus_…) OU cpfCnpj de quem já existe; se o CPF/CNPJ não existe, passe novoCliente para cadastrar junto (no mesmo resumo). ' +
-        'Valor > 0 até o teto do conector (padrão R$ 5.000); vencimento de hoje a +' + LIMITES_ASAAS.maxDiasVencimento + ' dias; descrição obrigatória (aparece no boleto). Informe sempre ' +
+        `Valor > 0 até o teto do conector (padrão R$ 5.000); vencimento de hoje a +${LIMITES_ASAAS.maxDiasVencimento} dias; descrição obrigatória (aparece no boleto). Informe sempre ` +
         'externalReference, um identificador ÚNICO deste boleto (ex. nº do pedido; NÃO reutilize para outro boleto), para evitar duplicata. Mostre o resumo à pessoa e só chame asaas_confirmar_cobranca se ela aprovar.',
       inputSchema: {
         unidade,
