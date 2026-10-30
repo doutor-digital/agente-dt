@@ -35,7 +35,7 @@ export async function registrarPausaDaEquipe(
 }
 
 /** As pausas abertas, com a unidade (para o estado da chave e o token do Kommo), das mais velhas para as novas. */
-export async function pausasAbertas(limite = 300) {
+export async function pausasAbertas(limite = 2000) {
   return prisma.pausaDaEquipe.findMany({
     where: { encerradaEm: null, unit: { isActive: true } },
     include: { unit: true },

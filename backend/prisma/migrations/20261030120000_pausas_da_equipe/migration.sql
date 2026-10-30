@@ -18,5 +18,8 @@ CREATE TABLE IF NOT EXISTS "pausas_da_equipe" (
 CREATE UNIQUE INDEX IF NOT EXISTS "pausas_da_equipe_unit_id_kommo_lead_id_key" ON "pausas_da_equipe"("unit_id", "kommo_lead_id");
 CREATE INDEX IF NOT EXISTS "pausas_da_equipe_encerrada_em_idx" ON "pausas_da_equipe"("encerrada_em");
 
-ALTER TABLE "pausas_da_equipe" ADD CONSTRAINT "pausas_da_equipe_unit_id_fkey"
-  FOREIGN KEY ("unit_id") REFERENCES "units"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$ BEGIN
+  ALTER TABLE "pausas_da_equipe" ADD CONSTRAINT "pausas_da_equipe_unit_id_fkey"
+    FOREIGN KEY ("unit_id") REFERENCES "units"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;

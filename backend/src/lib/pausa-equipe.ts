@@ -124,10 +124,15 @@ export function equipeComAPalavra(
   return { fala, motivo: null };
 }
 
-/** PURA: "Melissa às 10:25" / "o celular da clínica (WhatsApp Business) às 10:25". */
+/** PURA: como a nota chama quem falou ("Melissa", "o celular da clínica (WhatsApp Business)", "a equipe"). */
+export function nomeDoAutor(autorNome: string): string {
+  const nome = autorNome.trim();
+  return !nome ? 'a equipe' : nome.toLowerCase() === APP_DO_CELULAR ? 'o celular da clínica (WhatsApp Business)' : nome;
+}
+
+/** PURA: "Melissa em 20/10 10:25" / "o celular da clínica (WhatsApp Business) em 20/10 10:25". */
 export function descreverFala(m: Pick<MensagemOficial, 'autorNome' | 'em'>, tz = 'America/Sao_Paulo'): string {
-  const nome = m.autorNome.trim();
-  const quem = !nome ? 'a equipe' : nome.toLowerCase() === APP_DO_CELULAR ? 'o celular da clínica (WhatsApp Business)' : nome;
+  const quem = nomeDoAutor(m.autorNome);
   let hora: string;
   try {
     hora = new Intl.DateTimeFormat('pt-BR', { timeZone: tz, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).format(m.em);

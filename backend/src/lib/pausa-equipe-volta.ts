@@ -31,7 +31,7 @@ import { registrarSimulacao, type Simulacao } from './so-no-papel.js';
 import { etapaPermitida, precisaDoFunil, type FunisDaConta } from './etapa-permitida.js';
 import { etapaCalada, sofiaCaladaLiberada } from './sofia-calada.js';
 import { esquemaDaUnidade } from './kommo-schema.js';
-import { AUTOMACAO_PAUSA_EQUIPE, estadoDaPausaPelaEquipe, falasHumanasDaEquipe, DEPS_PAUSA_EQUIPE_PADRAO } from './pausa-equipe.js';
+import { AUTOMACAO_PAUSA_EQUIPE, DEPS_PAUSA_EQUIPE_PADRAO, estadoDaPausaPelaEquipe, falasHumanasDaEquipe, nomeDoAutor } from './pausa-equipe.js';
 import { encerrarPausaDaEquipe, pausasAbertas, type DesfechoDaPausa, type PausaAberta } from './pausa-equipe-registro.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { getPausedStagesGlobalSet } from '../services/actions.service.js';
@@ -125,8 +125,7 @@ export function iaAtendeNaEtapa(args: {
 
 /** PURA: "Melissa às 10:25" (ou "…em 29/10 às 10:25" se não for de hoje) / "o celular da clínica (WhatsApp Business) às 10:25". */
 export function descreverUltimaFala(f: UltimaFala, agora: Date, tz = 'America/Sao_Paulo'): string {
-  const nome = f.autorNome.trim();
-  const quem = !nome ? 'a equipe' : nome.toLowerCase() === 'whatsapp business' ? 'o celular da clínica (WhatsApp Business)' : nome;
+  const quem = nomeDoAutor(f.autorNome);
   try {
     const dia = (d: Date) => new Intl.DateTimeFormat('pt-BR', { timeZone: tz, day: '2-digit', month: '2-digit' }).format(d);
     const hora = new Intl.DateTimeFormat('pt-BR', { timeZone: tz, hour: '2-digit', minute: '2-digit' }).format(f.em);
@@ -242,12 +241,14 @@ export async function avaliarPausaAberta(linha: PausaAberta, deps: DepsDaVolta):
   const agora = deps.agora();
   const minutos = deps.minutos();
 
-  const estado = deps.estado(unit.slug);
-  if (estado === 'desligado') return 'chave_desligada';
+  // Validade primeiro e em qualquer estado da chave: é só a nossa linha (não mexe no cartão), e linha velha de
+  // unidade desligada não pode lotar a fila das que ainda podem voltar.
   if (agora.getTime() - linha.pausadoEm.getTime() > VALIDADE_DA_PAUSA_MS) {
-    if (estado === 'ligado') await deps.encerrar(linha.id, 'vencida');
+    await deps.encerrar(linha.id, 'vencida');
     return 'vencida';
   }
+  const estado = deps.estado(unit.slug);
+  if (estado === 'desligado') return 'chave_desligada';
   if (emPausa(unit, agora)) return 'unidade_pausada';
   // A última fala nunca é mais velha que a que provocou a pausa: se esta ainda não fez 1 h, nada a ler.
   if (agora.getTime() - linha.falaEm.getTime() < minutos * 60_000) return 'cedo';
@@ -261,7 +262,11 @@ export async function avaliarPausaAberta(linha: PausaAberta, deps: DepsDaVolta):
     return 'nao_conferi';
   }
   const tempo = passouTempoSemEquipe(msgs, doRegistro, agora, minutos);
-  if (!tempo.passou) return 'cedo';
+  if (!tempo.passou) {
+    // A equipe seguiu falando: só vale olhar de novo quando a nova última fala fizer 1 h.
+    reverEm.set(linha.id, agora.getTime() + tempo.faltamMs);
+    return 'cedo';
+  }
 
   try {
     // Alguém já devolveu à mão, ou mexeu e remarcou: a pausa deixou de ser só nossa.
@@ -291,7 +296,11 @@ export async function avaliarPausaAberta(linha: PausaAberta, deps: DepsDaVolta):
     }
 
     await deps.desmarcar(unit, leadId);
-    await deps.encerrar(linha.id, 'voltou');
+    // Já desmarcou no Kommo: falha ao fechar a linha não pode comer a nota (a próxima varredura a fecha como
+    // "devolvida_por_gente", porque a caixinha já estará desmarcada).
+    await deps.encerrar(linha.id, 'voltou').catch((err) =>
+      logger.warn({ err: String(err), unit: unit.slug, leadId }, 'pausa-equipe (volta): desmarquei mas não consegui fechar a linha (segue)'),
+    );
     logger.info({ unit: unit.slug, leadId, ultima: tempo.ultima.autorNome || null, etapa: etapa.descricao }, 'IA voltou: a equipe ficou sem falar com o paciente');
     await deps.anotar(unit, leadId, notaDaVolta(minutos, quem)).catch((err) =>
       logger.warn({ err: String(err), unit: unit.slug, leadId }, 'pausa-equipe (volta): desmarquei mas não consegui deixar a nota (segue)'),
@@ -310,7 +319,7 @@ export async function avaliarPausaAberta(linha: PausaAberta, deps: DepsDaVolta):
 const REVER_APOS_MS: Partial<Record<ResultadoDaLinha, number>> = {
   etapa_nao_atende: 30 * 60_000,
   pausa_com_data: 30 * 60_000,
-  despausaria: 30 * 60_000,
+  despausaria: 2 * 3600_000,
   nao_conferi: 10 * 60_000,
 };
 const reverEm = new Map<string, number>();
@@ -337,7 +346,6 @@ export async function varrerVolta(
     });
     const espera = REVER_APOS_MS[r];
     if (espera) reverEm.set(linha.id, agora + espera);
-    else reverEm.delete(linha.id);
     total[r] = (total[r] ?? 0) + 1;
   }
   return total;
@@ -367,6 +375,8 @@ async function varrer(): Promise<void> {
 export function startPausaEquipeVoltaWorker(): void {
   if (timer) return;
   timer = setInterval(() => void varrer(), SWEEP_MS);
+  const bruto = process.env.PAUSA_EQUIPE_VOLTA_MIN;
+  if (bruto && !(Number(bruto) > 0)) logger.warn({ bruto }, 'PAUSA_EQUIPE_VOLTA_MIN inválida (use minutos, ex. 60) — valendo 60');
   logger.info({ minutos: minutosDaVolta() }, 'pausa-equipe (volta): worker iniciado (guardado pela chave pausa-equipe)');
 }
 

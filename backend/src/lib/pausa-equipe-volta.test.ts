@@ -317,8 +317,8 @@ test('DESLIGADO: não lê nem escreve nada', async () => {
   assert.deepEqual(r.encerradas, []);
 });
 
-test('pausa aberta há mais de 14 dias (chave ficou desligada): fecha como vencida sem tocar no cartão', async () => {
-  const { deps, r } = fake(new Date(em('11:30').getTime() + VALIDADE_DA_PAUSA_MS));
+test('pausa aberta há mais de 14 dias (mesmo com a chave desligada): fecha como vencida sem tocar no cartão', async () => {
+  const { deps, r } = fake(new Date(em('11:30').getTime() + VALIDADE_DA_PAUSA_MS), { estado: () => 'desligado' });
   assert.equal(await avaliarPausaAberta(linha(), deps), 'vencida');
   assert.deepEqual(r.encerradas, [['p1', 'vencida']]);
   assert.deepEqual(r.desmarcados, []);
@@ -367,4 +367,19 @@ test('varredura: devolve só quem passou de 1 h; quem não pode voltar não é r
   const t2 = await varrerVolta(deps, async () => [bloqueada, recente]);
   assert.deepEqual(t2, { adiada: 1, cedo: 1 });
   assert.equal(leituras, 2);
+});
+
+test('equipe seguiu falando: depois de ler a conversa a linha só é relida quando a nova última fala fizer 1 h', async () => {
+  const msgs = [fala(em('10:25')), fala(em('12:15'), 'Consegui o horário para você', 'Talita')];
+  const { deps, r } = fake(em('12:40'), {}, msgs);
+  const l = linha();
+  assert.deepEqual(await varrerVolta(deps, async () => [l]), { cedo: 1 });
+  assert.deepEqual(await varrerVolta(deps, async () => [l]), { adiada: 1 });
+  assert.equal(r.chamadas.filter((c) => c === 'mensagens').length, 1);
+});
+
+test('falha ao fechar a linha depois de desmarcar: a nota do cartão sai mesmo assim', async () => {
+  const { deps, r } = fake(em('11:30'), { encerrar: async () => Promise.reject(new Error('banco')) });
+  assert.equal(await avaliarPausaAberta(linha(), deps), 'voltou');
+  assert.equal(r.notas.length, 1);
 });
