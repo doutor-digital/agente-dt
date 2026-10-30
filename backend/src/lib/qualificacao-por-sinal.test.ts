@@ -8,7 +8,8 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classificar, sinaisDosPassos } from './qualificacao-por-sinal.js';
+import { readFileSync } from 'node:fs';
+import { classificar, PREFIXOS_DE_PASSO, sinaisDosPassos } from './qualificacao-por-sinal.js';
 
 // Títulos COPIADOS de agenda-tools.ts / marcacao-widget.ts: é assim que os passos são gravados em produção.
 // O worker procurava 'Decisão: x(' em TOOL_CALL — 0 passos assim para a agenda em todo o banco.
@@ -139,4 +140,31 @@ test('lead que só mandou uma mensagem MAS pediu horário é Quente', () => {
   // Acontece: o anúncio já leva a pessoa pedindo horário na primeira frase.
   const c = classificar({ mensagensDoPaciente: 1, ferramentasChamadas: ['agendar_consulta'] });
   assert.equal(c.temperatura, 'Quente');
+});
+
+test('contrato: os títulos que a régua lê ainda são os que a agenda grava (se alguém mudar o texto, este teste avisa)', () => {
+  // A régua casa pelo começo do título (não há campo estruturado). Se agenda-tools.ts ou marcacao-widget.ts passarem a
+  // gravar outro texto, "pediu horário = Quente" volta a nunca disparar — sem erro, sem alerta. Este teste é o alerta.
+  const agenda = readFileSync(new URL('../agent/agenda-tools.ts', import.meta.url), 'utf8');
+  const widget = readFileSync(new URL('./marcacao-widget.ts', import.meta.url), 'utf8');
+  for (const trecho of [
+    '`consultar_horarios ${cursor}',
+    'agendar_consulta recusado —',
+    'agendar_consulta falhou:',
+    '`cadastrar_paciente "${args.nome}": ok via',
+    '`confirmar_presenca ${atual.idSchedule}:',
+    '`remarcar: ${desfecho.tipo}',
+    'title: `Consulta marcada: ${args.data}',
+    'IA pausada pela recepção',
+  ]) {
+    assert.ok(agenda.includes(trecho), `agenda-tools.ts não grava mais "${trecho}"`);
+  }
+  assert.ok(widget.includes('`Consulta marcada na franquia: '), 'marcacao-widget.ts não grava mais "Consulta marcada na franquia: "');
+  // e o filtro do banco cobre todos os prefixos que a régua reconhece
+  for (const p of ['consultar_horarios', 'agendar_consulta', 'cadastrar_paciente', 'confirmar_presenca', 'remarcar:', 'Consulta marcada:', 'Consulta marcada na franquia:']) {
+    assert.ok(PREFIXOS_DE_PASSO.includes(p), p);
+  }
+  // o formato antigo só entra para ferramentas quentes
+  assert.ok(PREFIXOS_DE_PASSO.includes('Decisão: consultar_horarios('));
+  assert.ok(!PREFIXOS_DE_PASSO.includes('Decisão: '));
 });

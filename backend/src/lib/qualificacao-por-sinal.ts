@@ -58,13 +58,16 @@ const TITULO_PARA_FERRAMENTA: Array<{ prefixo: string; ferramenta: string }> = [
   { prefixo: 'Consulta marcada na franquia:', ferramenta: 'agendar_consulta' },
 ];
 /** O formato antigo, que `tools.ts` ainda grava para outras ferramentas. */
-const PREFIXO_DECISAO_ANTIGA = 'Decisão: ';
 const DECISAO_ANTIGA = /^Decisão: ([a-z_]+)\(/;
 /** A recepção segurava a IA: a ferramenta foi barrada, não é o paciente pedindo horário. */
 const IA_PAUSADA = 'IA pausada pela recepção';
 
 /** Prefixos de título que valem a pena trazer do banco (filtro grosso; o fino é `sinaisDosPassos`). */
-export const PREFIXOS_DE_PASSO = [PREFIXO_DECISAO_ANTIGA, ...TITULO_PARA_FERRAMENTA.map((r) => r.prefixo)];
+// Do formato antigo só interessam as ferramentas quentes: "Decisão: aplicar tag…" e afins são centenas de linhas inúteis.
+export const PREFIXOS_DE_PASSO = [
+  ...FERRAMENTAS_QUENTES.map((f) => `Decisão: ${f}(`),
+  ...TITULO_PARA_FERRAMENTA.map((r) => r.prefixo),
+];
 
 /** O prefixo vale só se termina ali: "agendar_consulta recusado" casa, "agendar_consultas_x" não. */
 function comecaCom(titulo: string, prefixo: string): boolean {
