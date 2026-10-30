@@ -1,5 +1,5 @@
 /**
- * Painel das chaves de API de terceiros (Asaas, Convênia, Tiquetaque, Sistemas) por unidade. Só super-admin, e a escrita só
+ * Painel das chaves de API de terceiros (Asaas, Convênia, Tiquetaque, Tramitação, Sistemas) por unidade. Só super-admin, e a escrita só
  * com sessão (nunca com a chave de serviço): colar a chave do Asaas é dar acesso ao dinheiro da clínica, e o
  * token do Convênia ou do Tiquetaque, aos dados pessoais dos funcionários.
  */

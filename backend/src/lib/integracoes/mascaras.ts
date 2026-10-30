@@ -28,25 +28,8 @@ export function normalizarCabecalho(s: string): string {
   return formasDaChave(s)[0]!;
 }
 
-/** Palavras que dizem "credencial", em cabeçalho de coluna, em chave de JSON ou em texto de célula. */
+/** Palavras que dizem "credencial", em chave de JSON ou em texto. */
 const SECRETA = /senha|password|passwd|\bpass\b|\bpwd\b|\bpin\b|meu ?inss|\blogin\b|\bsegredo\b|\bsecret|\btoken\b|gov ?br/;
-/**
- * Além das de cima, estas valem SÓ para o cabeçalho de uma coluna (nunca para valor de célula nem chave de JSON, onde
- * "INSS", "Acesso" e "Chave" são dado comum): "Acesso", "Credenciais", "Chave", e "INSS"/"Gov" sozinhos como título de
- * coluna — é onde se anota a senha. "Benefício INSS" é dado de processo e fica.
- */
-const SECRETA_NO_CABECALHO = /\bacesso\b|credenc|\bchave\b|^inss$|^gov$/;
-
-/** O texto diz senha/login/"meu inss"? Vale para texto de célula (as linhas do topo) e, com `ehCabecalhoDeSenha`, para o cabeçalho. */
-export function ehColunaSecreta(texto: string): boolean {
-  return formasDaChave(texto).some((f) => SECRETA.test(f));
-}
-
-/** O cabeçalho de uma coluna é de credencial? Em dúvida, descarta (cabeçalho vazio não é). */
-export function ehCabecalhoDeSenha(cabecalho: string): boolean {
-  return formasDaChave(cabecalho).some((f) => SECRETA.test(f) || SECRETA_NO_CABECALHO.test(f));
-}
-
 /** Chave de objeto (JSON de API) que guarda credencial: `meu_inss_pass`, `password`, `senha`, `api_token`… */
 export function ehChaveSecreta(chave: string): boolean {
   return formasDaChave(chave).some((f) => SECRETA.test(f));
@@ -109,16 +92,9 @@ export const CPF_SENHA_OMITIDO = '[CPF/senha omitido]';
 export const SENHA_OMITIDA = '[senha omitida]';
 export const DOCUMENTO_OMITIDO = '[documento omitido]';
 
-/** 11 dígitos soltos no formato de celular (DDD + 9 + 8 dígitos): "11987654321 Maria" é telefone com nome, não CPF com senha */
-const CPF_COLADO_FORA_TELEFONE = new RegExp(`(?<!\\d)(?!\\d{2}9\\d{8}(?!\\d))\\d{3}\\.?\\d{3}\\.?\\d{3}-?\\d{2}(?!\\d)(?=\\s*\\S)`);
-
-/**
- * Tem CPF seguido de mais alguma coisa na mesma célula (possível "cpf + senha")? Com `contandoTelefone: false`, 11 dígitos
- * seguidos no formato de celular não contam: a regra dos 30% não derruba coluna de telefone com nome ("11987654321 Maria"),
- * embora a célula, individualmente, continue sendo omitida.
- */
-export function temCpfColado(texto: string, contandoTelefone = true): boolean {
-  return (contandoTelefone ? CPF_COLADO_CELULA : CPF_COLADO_FORA_TELEFONE).test(texto);
+/** Tem CPF seguido de mais alguma coisa na mesma célula (possível "cpf + senha")? */
+export function temCpfColado(texto: string): boolean {
+  return CPF_COLADO_CELULA.test(texto);
 }
 
 /**
@@ -169,6 +145,8 @@ const PRESERVAR = new Set(['id', 'uuid', 'iid', 'numero_beneficio', 'link', 'lin
 /** Chave de dado bancário (conta, agência, Pix): não sai, qualquer que seja o nome exato que a API use. */
 const CHAVE_BANCARIA = /bank|banco|banc[aá]ri|\bpix\b|pix key|agenc|iban|account number|conta corrente/;
 const CHAVE_DE_DOCUMENTO = /cpf|cnpj|documento|document|telefone|celular|fone|phone|mobile|whats/;
+/** chave numérica que só CONTA ou MEDE (documents_count, tamanho_bytes): o número fica como número, mesmo com "document" no nome */
+const CHAVE_DE_MEDIDA = /count|total|qtd|quantidade|size|tamanho|bytes|length|pages|paginas|\bn\b/;
 /**
  * Chave de documento de identidade (NIT/PIS/PASEP, RG, CNH, CTPS, título, passaporte, `document_number`): não sai nem
  * mascarado. Com nascimento e nome da mãe — que o `completo` devolve — o NIT e o RG recuperam a conta do gov.br.
@@ -187,7 +165,8 @@ export function limparRegistro<T>(valor: T, chave = ''): T {
   }
   if (typeof valor === 'number') {
     // CPF ou telefone que a API mande como número JSON
-    return (formasDaChave(chave).some((f) => CHAVE_DE_DOCUMENTO.test(f)) ? mascararCelula(String(valor), chave, 'texto') : valor) as T;
+    const formas = formasDaChave(chave);
+    return (formas.some((f) => CHAVE_DE_DOCUMENTO.test(f)) && !formas.some((f) => CHAVE_DE_MEDIDA.test(f)) ? mascararCelula(String(valor), chave, 'texto') : valor) as T;
   }
   if (Array.isArray(valor)) return valor.map((x) => limparRegistro(x, chave)) as T;
   if (valor && typeof valor === 'object') {

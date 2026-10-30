@@ -78,7 +78,7 @@ before(async () => {
     // ferramenta-sonda: grava na auditoria DIRETO (como a escrita do Kommo faz), sem passar pelo `executar` que mascara o erro
     extras: (server, auditar) => {
       server.registerTool('sonda_auditoria', { description: 'só no teste' }, () => {
-        auditar({ ferramenta: 'sonda_auditoria', argumentos: {}, ok: false, ms: 0, erro: 'falhou em /v1/processos/123.456.789-09 e no CNPJ 12.345.678/0001-95' });
+        auditar({ ferramenta: 'sonda_auditoria', argumentos: { cpfCnpj: '123.456.789-09', busca: 'tel 11987654321' }, ok: false, ms: 0, erro: 'falhou em /v1/processos/123.456.789-09 e no CNPJ 12.345.678/0001-95' });
         return { content: [{ type: 'text' as const, text: 'ok' }] };
       });
     },
@@ -207,7 +207,7 @@ test('fluxo completo: login → código → token com PKCE → ferramentas da fr
   assert.equal(ultimo.ok, true);
 });
 
-test('auditoria: o erro que a ferramenta grava direto também chega ao banco mascarado (último portão, para qualquer ferramenta)', async () => {
+test('auditoria: o erro e os argumentos que a ferramenta grava direto também chegam ao banco mascarados (último portão, para qualquer ferramenta)', async () => {
   const c = await conectar();
   const mcp = await clienteMcp(String(c.json.access_token));
   await mcp.callTool({ name: 'sonda_auditoria', arguments: {} });
@@ -215,6 +215,8 @@ test('auditoria: o erro que a ferramenta grava direto também chega ao banco mas
   const gravado = armazem.auditoria.findLast((a) => a.ferramenta === 'sonda_auditoria')!;
   assert.equal(gravado.ok, false);
   assert.equal(gravado.erro, 'falhou em /v1/processos/***.***.***-09 e no CNPJ **.***.***/****-95');
+  // os argumentos de QUALQUER ferramenta (não só os da Tramitação) também chegam mascarados
+  assert.deepEqual(gravado.argumentos, { cpfCnpj: '***.***.***-09', busca: 'tel (**) *****-4321' });
 });
 
 test('tokens ficam só como hash no banco', async () => {

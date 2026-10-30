@@ -14,7 +14,7 @@ import { z } from 'zod';
 import type { Auditar } from '../franquia-mcp/ferramentas.js';
 import { ErroDeEntrada, validarData } from '../franquia-mcp/travas.js';
 import { tramitacaoGet } from '../lib/integracoes/tramitacao.js';
-import { limparRegistro, mascararArgumentos, mascararCelula, mascararTexto, normalizarCabecalho } from '../lib/integracoes/mascaras.js';
+import { limparRegistro, mascararArgumentos, mascararCelula, mascararErro, mascararTexto, normalizarCabecalho } from '../lib/integracoes/mascaras.js';
 import { executar } from './ferramenta.js';
 import { acharSlug } from './unidades.js';
 
@@ -64,12 +64,12 @@ export function resolverContaTramitacao(ctx: ContextoTramitacao, unidade?: strin
 
 const reais = (centavos: unknown): number | null => (typeof centavos === 'number' && Number.isFinite(centavos) ? Math.round(centavos) / 100 : null);
 const texto = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
-const nomes = (xs: unknown): string[] => (Array.isArray(xs) ? xs.map((x) => texto((x as { name?: unknown })?.name)).filter((x): x is string => !!x) : []);
 /** texto digitado pelo advogado (título, comarca, resultado…): pode ter CPF, telefone ou senha no meio */
 const livre = (v: unknown): string | null => {
   const t = texto(v);
   return t ? mascararTexto(t) : null;
 };
+const nomes = (xs: unknown): string[] => (Array.isArray(xs) ? xs.map((x) => livre((x as { name?: unknown })?.name)).filter((x): x is string => !!x) : []);
 const cortar = (s: string | null, n: number): { texto: string | null; cortado: boolean } =>
   s !== null && s.length > n ? { texto: `${s.slice(0, n)}…`, cortado: true } : { texto: s, cortado: false };
 /** Chaves sem valor saem da query: a API recusa parâmetro vazio e o teste compara a consulta exata. */
@@ -105,7 +105,7 @@ async function parte<T>(fn: () => Promise<T>): Promise<T | { indisponivel: strin
   try {
     return await fn();
   } catch (e) {
-    return { indisponivel: e instanceof Error ? e.message : String(e) };
+    return { indisponivel: mascararErro(e instanceof Error ? e.message : String(e)) };
   }
 }
 
@@ -153,7 +153,7 @@ export function resumirProcesso(p: ProcessoBruto) {
     beneficio: texto(p.numero_beneficio),
     unidade: livre(p.unidade),
     ultimaPublicacao: texto(p.latest_publication_date),
-    clientes: (p.customers ?? []).map((c) => ({ id: c.id ?? null, nome: texto(c.name), polo: texto(c.role) })),
+    clientes: (p.customers ?? []).map((c) => ({ id: c.id ?? null, nome: livre(c.name), polo: livre(c.role) })),
     etiquetas: nomes(p.tags),
     partes: typeof p.parties_count === 'number' ? p.parties_count : null,
   };
@@ -252,7 +252,7 @@ export async function tramitacaoProcesso(ctx: ContextoTramitacao, a: ArgsProcess
           return {
             total: r?.pagination?.count ?? 0,
             contagem: r?.counts ?? null,
-            itens: (r?.parties ?? []).map((p) => ({ nome: texto(p.name), polo: texto(p.role), vinculada: !!p.linked, clienteId: p.customer?.id ?? null })),
+            itens: (r?.parties ?? []).map((p) => ({ nome: livre(p.name), polo: livre(p.role), vinculada: !!p.linked, clienteId: p.customer?.id ?? null })),
           };
         }),
     a.movimentacoes === false
@@ -359,8 +359,8 @@ export async function tramitacaoPublicacoes(ctx: ContextoTramitacao, a: ArgsPubl
         classe: livre(p.nomeClasse),
         numeroProcesso: texto(p.numero_processo_com_mascara) ?? texto(p.numero_processo),
         link: texto(p.link_tramitacao),
-        destinatarios: (p.destinatarios ?? []).map((d) => ({ nome: texto(d.nome), polo: POLO_PUBLICACAO[d.polo ?? ''] ?? texto(d.polo) })),
-        advogados: (p.destinatario_advogados ?? []).map((d) => ({ nome: texto(d.nome), oab: [texto(d.uf_oab), texto(d.numero_oab)].filter(Boolean).join(' ') || null })),
+        destinatarios: (p.destinatarios ?? []).map((d) => ({ nome: livre(d.nome), polo: POLO_PUBLICACAO[d.polo ?? ''] ?? livre(d.polo) })),
+        advogados: (p.destinatario_advogados ?? []).map((d) => ({ nome: livre(d.nome), oab: [texto(d.uf_oab), texto(d.numero_oab)].filter(Boolean).join(' ') || null })),
         texto: t.texto ?? '',
         textoCortado: t.cortado,
       };
@@ -395,15 +395,15 @@ const mascarado = (v: unknown, cabecalho: string): string | null => {
 export function resumirCliente(c: ClienteBruto) {
   return {
     id: c.id,
-    nome: texto(c.name),
+    nome: livre(c.name),
     tipo: texto(c.customer_type),
     cpfCnpj: mascarado(c.cpf_cnpj, 'cpf cnpj'),
-    email: texto(c.email),
+    email: livre(c.email),
     celular: mascarado(c.phone_mobile, 'celular'),
     telefone: mascarado(c.phone_1, 'telefone'),
-    cidade: texto(c.city),
+    cidade: livre(c.city),
     uf: texto(c.state),
-    profissao: texto(c.profession),
+    profissao: livre(c.profession),
     etiquetas: nomes(c.tags),
     cadastradoEm: texto(c.created_at),
     atualizadoEm: texto(c.updated_at),
@@ -569,11 +569,11 @@ export async function tramitacaoAtividades(ctx: ContextoTramitacao, a: ArgsAtivi
       prazoFatal: texto(x.deadline_on),
       prazoDias: typeof x.deadline_days === 'number' ? x.deadline_days : null,
       valor: reais(x.amount_in_cents),
-      responsavel: texto(x.creator?.name),
-      envolvidos: (x.users ?? []).map((u) => ({ nome: texto(u.name), papel: texto(u.role) })),
-      cliente: x.customer ? { id: x.customer.id ?? null, nome: texto(x.customer.name) } : null,
+      responsavel: livre(x.creator?.name),
+      envolvidos: (x.users ?? []).map((u) => ({ nome: livre(u.name), papel: livre(u.role) })),
+      cliente: x.customer ? { id: x.customer.id ?? null, nome: livre(x.customer.name) } : null,
       processo: x.lawsuit ? { id: x.lawsuit.id ?? null, numero: texto(x.lawsuit.number) } : null,
-      cobranca: x.charge ? { status: texto(x.charge.status), valor: reais(x.charge.amount_in_cents), vencimento: texto(x.charge.due_date), paga: !!x.charge.paid } : null,
+      cobranca: x.charge ? { status: livre(x.charge.status), valor: reais(x.charge.amount_in_cents), vencimento: texto(x.charge.due_date), paga: !!x.charge.paid } : null,
       etiquetas: nomes(x.tags),
     })),
   };

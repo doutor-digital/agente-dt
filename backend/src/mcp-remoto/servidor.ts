@@ -21,7 +21,7 @@ import type { Unidade } from '../franquia-mcp/unidade.js';
 import type { ArmazemOAuth } from './armazem.js';
 import { enviarPagina, ProvedorOAuth, type Usuario } from './provedor.js';
 import type { BuscadorCimd } from './cimd.js';
-import { mascararErro } from '../lib/integracoes/mascaras.js';
+import { mascararArgumentos, mascararErro } from '../lib/integracoes/mascaras.js';
 import { ipDoCliente, Semaforo } from './limites.js';
 
 export interface OpcoesConector {
@@ -58,7 +58,7 @@ const INSTRUCOES = [
   'o Asaas das clínicas (asaas_*: cobranças, extrato do que entrou de verdade, saldo, clientes; para quem tem permissão, também cadastrar cliente e gerar BOLETO em dois passos, numa clínica só — asaas_preparar_cliente/asaas_preparar_cobranca → mostrar o resumo, com a conta e se o cliente será avisado → asaas_confirmar_cliente/asaas_confirmar_cobranca só se a pessoa aprovar; não cancela, não estorna, não edita e não faz Pix, cartão, parcelamento nem transferência),',
   'o RH das empresas que usam o Convênia (convenia_*: colaboradores, admissões e desligamentos, férias, afastamentos — ficha completa, com dado pessoal sensível: CPF, salário, dados bancários, endereço, nascimento e dados de saúde; nas listagens use completo: true para a ficha inteira),',
   'o ponto eletrônico Tiquetaque (tiquetaque_*: batidas do dia e quem está trabalhando agora, atrasos e faltas, horas e banco de horas, afastamentos; uma conta cobre várias clínicas e empresas, filtre por local — registro completo, com dado pessoal sensível: CPF, PIS, foto/selfie e GPS da batida, anexo de atestado e justificativa escrita; em tiquetaque_colaboradores e tiquetaque_horas use completo: true para a ficha e o espelho inteiros),',
-  'o Tramitação Inteligente dos escritórios de advocacia (tramitacao_*: processos, publicações, clientes e prazos; só leitura, documentos só como metadados, CPF e telefone mascarados, nunca a senha do Meu INSS),',
+  'a Tramitação Inteligente dos escritórios de advocacia (tramitacao_*: processos, publicações, clientes e prazos; só leitura, documentos só como metadados, CPF e telefone mascarados, nunca a senha do Meu INSS; a busca de cliente por nome lê só parte da base: se a resposta vier com truncado, não conclua que o cliente não existe),',
   'os eventos de conversão mandados para a Meta pelo rastreio de anúncios (meta_eventos, meta_eventos_lead),',
   'e, para quem tem permissão, alterar cartões do Kommo em dois passos (kommo_preparar_alteracao → mostrar o resumo → kommo_confirmar_alteracao só se a pessoa aprovar).',
   'Para quem tem permissão, preparar disparo de campanha pela API oficial do WhatsApp (disparo_*: cadastrar a campanha, montar a onda, ler a prévia e devolver o LINK do painel); aprovar e retomar o envio são do João no painel, nunca por aqui.',
@@ -177,8 +177,9 @@ export async function montarConectorRemoto(
     const server = new McpServer({ name: 'doutor-digital', version: '1.0.0' }, { instructions: INSTRUCOES });
     const auditar: Auditar = (r) => {
       o.armazem
-        // último portão antes do banco: quem chama `auditar` direto (sem passar pelo `executar`) também grava o erro mascarado
-        .auditar({ userId, clientId, ferramenta: r.ferramenta, argumentos: r.argumentos, ok: r.ok, duracaoMs: r.ms, erro: r.erro === undefined ? undefined : mascararErro(r.erro) })
+        // último portão antes do banco, para TODAS as ferramentas: CPF/CNPJ/telefone/senha digitados no pedido ou repetidos no erro nunca são gravados inteiros
+        // (quem chama `auditar` direto, sem passar pelo `executar`, também passa por aqui)
+        .auditar({ userId, clientId, ferramenta: r.ferramenta, argumentos: mascararArgumentos(r.argumentos), ok: r.ok, duracaoMs: r.ms, erro: r.erro === undefined ? undefined : mascararErro(r.erro) })
         .catch((err) => o.log?.warn({ err }, 'mcp-remoto: auditoria não gravou'));
       o.log?.info({ userId, ferramenta: r.ferramenta, ok: r.ok, ms: r.ms }, 'mcp-remoto: ferramenta');
     };

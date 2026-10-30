@@ -349,3 +349,51 @@ test('cliente PJ: o CNPJ do cadastro sai mascarado (resumo e completo)', async (
     assert.match(s, /-95/);
   }
 });
+
+// ---------------------------------------------------------------- achados do code-review (rodada 3)
+
+test('texto digitado em nome, etiqueta, e-mail, profissão, polo e destinatário também sai mascarado (resumo e completo)', async () => {
+  const rotas = {
+    '/v1/clientes': () => ({
+      customers: [{ id: 3, name: 'Ana 123.456.789-09', email: 'fone 11987654321 ana@x.com', profession: 'cpf 98765432100', city: 'Campo Grande', tags: [{ id: 1, name: 'tel (11) 98765-4321' }] }],
+      pagination: PAG(1),
+    }),
+    '/v1/processos': () => ({ lawsuits: [{ ...PROCESSO, customers: [{ id: 7, name: 'Maria 111.222.333-44', role: 'cpf 55566677788' }] }], pagination: PAG(1) }),
+    '/v1/atividades': () => ({ activities: [{ id: 1, title: 't', creator: { name: 'Bia 123.456.789-09' }, users: [{ name: 'Caio 11987654321', role: 'x' }], customer: { id: 1, name: 'Dani 987.654.321-00' } }], pagination: PAG(1) }),
+  };
+  const h = registradas(ctxDe(conta(rotas)), []);
+  const proibido = /123\.456\.789-09|11987654321|98765432100|98765-4321|111\.222\.333-44|55566677788|987\.654\.321-00/;
+  for (const completo of [false, true]) {
+    const a = (await h['tramitacao_clientes']!({ unidade: 'magalhaes', completo })).content[0]!.text;
+    const b = (await h['tramitacao_processos']!({ unidade: 'magalhaes', completo })).content[0]!.text;
+    const c = (await h['tramitacao_atividades']!({ unidade: 'magalhaes' })).content[0]!.text;
+    for (const t of [a, b, c]) assert.equal(proibido.test(t), false, t);
+    assert.match(a, /Ana/);
+    assert.match(a, /Campo Grande/);
+  }
+});
+
+test('processo: parte que falha devolve a mensagem MASCARADA no campo indisponivel', async () => {
+  const rotas = {
+    '/v1/processos/{id}': () => ({ lawsuit: PROCESSO }),
+    '/v1/processos/{id}/partes': () => {
+      throw new ErroTramitacao('Tramitação 500: cliente 123.456.789-09 senha: Zq7#Fict!x91', 500);
+    },
+    '/v1/processos/{id}/movimentacoes': () => ({ movements: [], pagination: PAG(0) }),
+    '/v1/processos/{id}/documentos': () => ({ documents: [], pagination: PAG(0) }),
+  };
+  const h = registradas(ctxDe(conta(rotas)), []);
+  const t = (await h['tramitacao_processo']!({ unidade: 'magalhaes', processo: '42' })).content[0]!.text;
+  assert.equal(/123\.456\.789-09|Zq7/.test(t), false, t);
+  assert.match(t, /indisponivel/);
+});
+
+test('completo: número JSON de contagem/tamanho de documentos continua número; telefone numérico é mascarado', async () => {
+  const rotas = { '/v1/clientes': () => ({ customers: [{ id: 5, name: 'Eva', documents_count: 12345678, document_size_bytes: 1234567, phone_1: 11987654321 }], pagination: PAG(1) }) };
+  const h = registradas(ctxDe(conta(rotas)), []);
+  const r = JSON.parse((await h['tramitacao_clientes']!({ unidade: 'magalhaes', completo: true })).content[0]!.text);
+  const c = r.clientes[0];
+  assert.equal(c.documents_count, 12345678);
+  assert.equal(c.document_size_bytes, 1234567);
+  assert.equal(JSON.stringify(c).includes('11987654321'), false);
+});

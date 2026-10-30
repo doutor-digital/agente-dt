@@ -1,18 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ehChaveSecreta, ehColunaSecreta, limparRegistro, mascararArgumentos, mascararCelula, mascararCnpj, mascararCpf, mascararErro, mascararTelefone, mascararTexto, temCpfColado } from './mascaras.js';
+import { ehChaveSecreta, limparRegistro, mascararArgumentos, mascararCelula, mascararCnpj, mascararCpf, mascararErro, mascararTelefone, mascararTexto, temCpfColado } from './mascaras.js';
 
 // Tudo aqui é inventado: CPFs de exemplo e senhas que não existem.
 
-test('cabeçalhos de credencial são reconhecidos, com ou sem acento, caixa e separador', () => {
-  for (const h of ['Senha', 'SENHA INSS', 'Password', 'senha do gov.br', 'Meu INSS', 'meu_inss_pass', 'CPF-Senha', 'CPF/SENHA', 'Login', 'login do portal', 'Token', 'Acesso gov.br', 'PWD', 'PIN']) {
-    assert.equal(ehColunaSecreta(h), true, h);
-  }
-  for (const h of ['Nome', 'Telefone', 'CPF', 'Processo', 'Situação', 'Data de entrada', 'Benefício', 'Observações', 'Passagem', 'Compasso', '']) {
-    assert.equal(ehColunaSecreta(h), false, h);
-  }
-  assert.equal(ehChaveSecreta('meu_inss_pass'), true);
-  assert.equal(ehChaveSecreta('cpf_cnpj'), false);
+test('chaves de credencial de JSON são reconhecidas, com ou sem acento, caixa e separador', () => {
+  for (const h of ['senha', 'Password', 'meu_inss_pass', 'meuInssPass', 'api_token', 'LOGIN', 'PIN']) assert.equal(ehChaveSecreta(h), true, h);
+  for (const h of ['name', 'cpf_cnpj', 'passagem', 'compasso', 'processo', '']) assert.equal(ehChaveSecreta(h), false, h);
 });
 
 test('CPF e telefone mostram só o final', () => {
