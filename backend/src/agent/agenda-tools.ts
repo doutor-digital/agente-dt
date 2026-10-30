@@ -1592,7 +1592,8 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         // horário com base num "ocupado" que talvez seja dele, e a equipe é avisada (tarefa) para confirmar.
         const pedidoEm = `${args.data}T${args.hora}`;
         const ocupadoPorPossivel = possiveis.filter((x) => x.consulta && `${x.consulta.schedule.dayLocal}T${x.consulta.schedule.timeLocal}` === pedidoEm);
-        if (semConferir || ocupadoPorPossivel.length > 0) {
+        // só `ocupado` pode ser a consulta do próprio paciente; bloqueio de agenda e feriado seguem como "não disponível"
+        if (slot.status === 'ocupado' && (semConferir || ocupadoPorPossivel.length > 0)) {
           const porPossivel = ocupadoPorPossivel.length > 0;
           await recorder.step({
             kind: 'ERROR',

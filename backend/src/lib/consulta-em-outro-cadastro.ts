@@ -107,7 +107,9 @@ export async function conferirConsultaDePe(
   // sem telefone ou sem nome não há como provar que outro cadastro é a MESMA pessoa: não se procura (e não se chuta)
   if (chaves.size > 0 && nome) {
     try {
-      const termos = termosDeBusca(nome, nome);
+      // a franquia prefixa «IA-»/«N-» no nome de quem nasceu pela IA ou pelo n8n; a recepção escreve sem o prefixo, e a busca é por texto
+      const semPrefixo = nome.replace(/^(IA|N)-\s*/i, '').trim() || nome;
+      const termos = termosDeBusca(semPrefixo, semPrefixo);
       const buscas = await Promise.all(termos.map((t) => franquia.searchClients(unit, t, POR_PAGINA).catch(() => null)));
       const iguais = new Set<number>();
       const parecidos = new Set<number>();

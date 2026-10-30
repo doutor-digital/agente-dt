@@ -73,7 +73,8 @@ Object.defineProperty(prisma, 'spineLeadLink', {
   },
   configurable: true,
 });
-Object.defineProperty(prisma, 'agendaBlock', { value: { findMany: async () => [] }, configurable: true });
+let bloqueios: Array<Record<string, unknown>> = [];
+Object.defineProperty(prisma, 'agendaBlock', { value: { findMany: async () => bloqueios }, configurable: true });
 Object.defineProperty(prisma, 'conversation', { value: { updateMany: async () => ({ count: 1 }), findFirst: async () => null, findUnique: async () => null }, configurable: true });
 
 Object.defineProperty(prisma, 'leadFieldRule', { value: { findMany: async () => [] }, configurable: true });
@@ -172,6 +173,7 @@ beforeEach(() => {
   passos.length = 0;
   buscas = 0;
   criadas = [];
+  bloqueios = [];
   tarefas = [];
   tarefaFalha = false;
   foneDoLead = FONE;
@@ -341,6 +343,15 @@ test('lado seguro: o Kommo recusou a tarefa — a IA NÃO promete retorno da equ
   const r = await pedir('16:00');
   assert.match(r, /NÃO prometa retorno da equipe/);
   assert.doesNotMatch(r, /retorna em instantes/);
+  assert.deepEqual(tarefas, []);
+});
+
+test('lado seguro: horário BLOQUEADO pela recepção (não ocupado) com a conferência incompleta segue como "não disponível" — sem tarefa', async () => {
+  buscaFalha = true;
+  bloqueios = [{ dayLocal: DIA, startTime: '15:00', endTime: '16:00', reason: 'médico em reunião' }];
+  const r = await pedir('15:00');
+  assert.match(r, /não está mais disponível/);
+  assert.doesNotMatch(r, /NÃO consegui conferir/);
   assert.deepEqual(tarefas, []);
 });
 

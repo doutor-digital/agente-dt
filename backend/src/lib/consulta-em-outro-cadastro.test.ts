@@ -201,3 +201,12 @@ test('mesmoNome: caixa, acento e espaços não contam; nome vazio nunca é igual
   assert.equal(mesmoNome('', null), false);
   assert.equal(mesmoNome('Ana Christina', 'Ana Cristina'), false);
 });
+
+test('cadastro criado pela IA ("IA-Ana Christina Souza"): a busca vai SEM o prefixo e acha o irmão da recepção', async () => {
+  const a: C = { idClient: 1, name: 'IA-Ana Christina Souza', whatsapp: '5547991234567', schedules: [] };
+  const b: C = { idClient: 2, name: 'ANA CHRISTINA SOUZA', whatsapp: '5547991234567', schedules: [sch(20, '2026-11-06', '16:00')] };
+  const { f, chamadas } = franquia([a, b]);
+  const r = await conferirConsultaDePe(unit, pedido(a), f);
+  assert.deepEqual(chamadas.busca, ['Ana Christina Souza', 'Ana Souza', 'Ana']);
+  assert.equal(r.consulta?.idClient, 2, 'IA-Ana Christina Souza = ANA CHRISTINA SOUZA');
+});
