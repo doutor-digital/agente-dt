@@ -28,6 +28,66 @@ const FERRAMENTAS_QUENTES = [
   'cadastrar_paciente',
 ];
 
+/** O recorte de um passo de execução (`execution_steps`) que importa para a régua. */
+export interface PassoDaConversa {
+  kind: string;
+  title: string;
+}
+
+/**
+ * Como os passos de agenda são gravados DE VERDADE (agenda-tools.ts, marcacao-widget.ts): `TOOL_RESULT` (ou
+ * `ERROR` quando a ferramenta recusa) com o nome da ferramenta no começo do título — ex. "consultar_horarios
+ * 2026-11-03: 4 confirmado(s)…", "agendar_consulta recusado — …", "Consulta marcada: …". Não existe um campo só
+ * com o nome da ferramenta (o payload não traz), então o prefixo do título é o identificador mais estável que há.
+ * O worker antigo procurava "Decisão: x(" em TOOL_CALL, formato que a agenda nunca gravou: a regra "pediu
+ * horário = Quente" nunca disparava (Timbó 30/10: 1 Quente, 37 Morno, 9 Frio; 12 AGENDADO como Morno).
+ */
+const PASSO_DE_FERRAMENTA = /^(consultar_horarios|agendar_consulta|cadastrar_paciente|confirmar_presenca)\b/;
+/** "remarcar: recusado (…)" / "remarcar: <desfecho> (…)" — o título da remarcação não leva o nome da ferramenta. */
+const PASSO_DE_REMARCAR = /^remarcar: /;
+const PASSO_CONSULTA_MARCADA = /^Consulta marcada/;
+/** O formato antigo, que `tools.ts` ainda grava para outras ferramentas. */
+const DECISAO_ANTIGA = /^Decisão: ([a-z_]+)\(/;
+/** A recepção segurava a IA: a ferramenta foi barrada, não é o paciente pedindo horário. */
+const IA_PAUSADA = 'IA pausada pela recepção';
+
+/** Prefixos de título que valem a pena trazer do banco (filtro grosso; o fino é `sinaisDosPassos`). */
+export const PREFIXOS_DE_PASSO = [
+  'Decisão: ',
+  'consultar_horarios',
+  'agendar_consulta',
+  'cadastrar_paciente',
+  'confirmar_presenca',
+  'remarcar: ',
+  'Consulta marcada',
+];
+
+/** Lê os passos de uma conversa e diz que ferramentas de agenda houve e se uma consulta foi marcada. Puro. */
+export function sinaisDosPassos(passos: PassoDaConversa[]): { ferramentas: string[]; consultaMarcada: boolean } {
+  const ferramentas: string[] = [];
+  let consultaMarcada = false;
+  const anota = (f: string) => {
+    if (!ferramentas.includes(f)) ferramentas.push(f);
+  };
+  for (const p of passos) {
+    if (p.kind === 'TOOL_CALL') {
+      const m = DECISAO_ANTIGA.exec(p.title);
+      if (m) anota(m[1]);
+      continue;
+    }
+    if (p.kind !== 'TOOL_RESULT' && p.kind !== 'ERROR') continue;
+    if (p.title.includes(IA_PAUSADA)) continue;
+    if (p.kind === 'TOOL_RESULT' && PASSO_CONSULTA_MARCADA.test(p.title)) {
+      consultaMarcada = true;
+      continue;
+    }
+    const m = PASSO_DE_FERRAMENTA.exec(p.title);
+    if (m) anota(m[1]);
+    else if (PASSO_DE_REMARCAR.test(p.title)) anota('remarcar_consulta');
+  }
+  return { ferramentas, consultaMarcada };
+}
+
 export interface SinaisDaConversa {
   /** Mensagens que o PACIENTE mandou. A da IA não conta — ela sempre fala. */
   mensagensDoPaciente: number;

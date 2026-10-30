@@ -8,7 +8,89 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classificar } from './qualificacao-por-sinal.js';
+import { classificar, sinaisDosPassos } from './qualificacao-por-sinal.js';
+
+// Títulos COPIADOS de agenda-tools.ts / marcacao-widget.ts: é assim que os passos são gravados em produção.
+// O worker procurava 'Decisão: x(' em TOOL_CALL — 0 passos assim para a agenda em todo o banco.
+const T = {
+  consultaCache: 'consultar_horarios 2026-11-03 (manhã): 4 confirmado(s) — do cache (franquia consultada há 3 min)',
+  consultaFranquia: 'consultar_horarios 2026-11-03: 0 confirmado(s) de 2 livre(s) na grade',
+  consultaPausada: 'consultar_horarios bloqueado — IA pausada pela recepção',
+  agendarRecusado: 'agendar_consulta recusado — faltou confirmar o dia ou a forma de pagamento',
+  agendarPausada: 'agendar_consulta recusado — IA pausada pela recepção',
+  agendarFalhou: 'agendar_consulta falhou: timeout',
+  marcada: 'Consulta marcada: 2026-11-03 09:00 (idSchedule 123)',
+  marcadaWidget: 'Consulta marcada na franquia: 2026-11-03 09:00 (idSchedule 123)',
+  cadastro: 'cadastrar_paciente "Maria": ok via lead (idClient 9, origem IA)',
+  cadastroRecusado: 'cadastrar_paciente RECUSADO: a franquia não aceita 2026-11-03 09:00',
+  remarcar: 'remarcar: recusado (sem_consulta)',
+  confirmar: 'confirmar_presenca 55: confirmada',
+};
+
+test('sinaisDosPassos: pedir horário (TOOL_RESULT real) vira consultar_horarios — a regra "pediu horário = Quente" volta a disparar', () => {
+  for (const title of [T.consultaCache, T.consultaFranquia]) {
+    const s = sinaisDosPassos([{ kind: 'TOOL_RESULT', title }]);
+    assert.deepEqual(s.ferramentas, ['consultar_horarios'], title);
+    assert.equal(classificar({ mensagensDoPaciente: 2, ferramentasChamadas: s.ferramentas }).temperatura, 'Quente');
+  }
+});
+
+test('sinaisDosPassos: agendar, cadastrar, remarcar e confirmar — em TOOL_RESULT ou ERROR', () => {
+  assert.deepEqual(sinaisDosPassos([{ kind: 'ERROR', title: T.agendarRecusado }]).ferramentas, ['agendar_consulta']);
+  assert.deepEqual(sinaisDosPassos([{ kind: 'ERROR', title: T.agendarFalhou }]).ferramentas, ['agendar_consulta']);
+  assert.deepEqual(sinaisDosPassos([{ kind: 'TOOL_RESULT', title: T.cadastro }]).ferramentas, ['cadastrar_paciente']);
+  assert.deepEqual(sinaisDosPassos([{ kind: 'ERROR', title: T.cadastroRecusado }]).ferramentas, ['cadastrar_paciente']);
+  assert.deepEqual(sinaisDosPassos([{ kind: 'TOOL_RESULT', title: T.remarcar }]).ferramentas, ['remarcar_consulta']);
+  assert.deepEqual(sinaisDosPassos([{ kind: 'TOOL_RESULT', title: T.confirmar }]).ferramentas, ['confirmar_presenca']);
+});
+
+test('sinaisDosPassos: "Consulta marcada" (IA ou widget) liga consultaMarcada', () => {
+  for (const title of [T.marcada, T.marcadaWidget]) {
+    const s = sinaisDosPassos([{ kind: 'TOOL_RESULT', title }]);
+    assert.equal(s.consultaMarcada, true, title);
+  }
+  assert.equal(sinaisDosPassos([{ kind: 'TOOL_RESULT', title: T.consultaCache }]).consultaMarcada, false);
+});
+
+test('sinaisDosPassos: a pausa da recepção não é intenção do paciente — não esquenta', () => {
+  const s = sinaisDosPassos([
+    { kind: 'TOOL_RESULT', title: T.consultaPausada },
+    { kind: 'ERROR', title: T.agendarPausada },
+  ]);
+  assert.deepEqual(s.ferramentas, []);
+  assert.equal(s.consultaMarcada, false);
+});
+
+test('sinaisDosPassos: o formato antigo "Decisão: x(" em TOOL_CALL continua valendo', () => {
+  assert.deepEqual(sinaisDosPassos([{ kind: 'TOOL_CALL', title: 'Decisão: agendar_consulta(2026-11-03)' }]).ferramentas, [
+    'agendar_consulta',
+  ]);
+});
+
+test('sinaisDosPassos: o que não é de agenda não esquenta (nem por título parecido, nem por kind errado)', () => {
+  const passos = [
+    { kind: 'TOOL_CALL', title: 'Decisão: aplicar tag "x" no lead 1' },
+    { kind: 'TOOL_CALL', title: 'Decisão: pausar IA no lead 1 (motivo)' },
+    { kind: 'TOOL_RESULT', title: 'buscar_paciente "Maria": 0 resultado(s)' },
+    { kind: 'TOOL_RESULT', title: 'cancelar_consulta 5: cancelada' },
+    { kind: 'TOOL_RESULT', title: 'Paciente cadastrado na franquia sem consulta: Maria (idClient 9)' },
+    { kind: 'THINKING', title: 'consultar_horarios 2026-11-03: 4 confirmado(s)' },
+    { kind: 'ERROR', title: '🛡 agendar_consulta tentou marcar para o paciente 9 — este lead é do 8' },
+  ];
+  const s = sinaisDosPassos(passos);
+  assert.deepEqual(s.ferramentas, []);
+  assert.equal(s.consultaMarcada, false);
+  assert.equal(classificar({ mensagensDoPaciente: 4, ferramentasChamadas: s.ferramentas }).temperatura, 'Morno');
+});
+
+test('sinaisDosPassos: sem repetição e na ordem em que aparecem', () => {
+  const s = sinaisDosPassos([
+    { kind: 'TOOL_RESULT', title: T.consultaCache },
+    { kind: 'TOOL_RESULT', title: T.consultaFranquia },
+    { kind: 'TOOL_RESULT', title: T.cadastro },
+  ]);
+  assert.deepEqual(s.ferramentas, ['consultar_horarios', 'cadastrar_paciente']);
+});
 
 test('consulta marcada na franquia é o sinal mais forte — vence tudo', () => {
   const c = classificar({ mensagensDoPaciente: 0, ferramentasChamadas: [], temConsultaMarcada: true });
