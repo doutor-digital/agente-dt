@@ -90,6 +90,91 @@ test('429 respeita o Retry-After e tenta de novo; depois de 4 tentativas desiste
   assert.equal(mais.length, 4);
 });
 
+/** Dorme de mentira: guarda cada espera pedida e não gasta tempo. */
+const relogioFalso = () => {
+  const esperas: number[] = [];
+  return { esperas, dormir: async (ms: number) => void esperas.push(ms) };
+};
+
+test('Retry-After de verdade: espera o que a API pediu (em ms), não 1 ms', async () => {
+  const r = relogioFalso();
+  const chamadas: Chamada[] = [];
+  const ok = await tramitacaoGet('ra1', 'tok', '/v1/processos', {}, fetcherFalso([json({}, 429, { 'retry-after': '3' }), json({ lawsuits: [] })], chamadas), { dormir: r.dormir });
+  assert.deepEqual(ok, { lawsuits: [] });
+  assert.deepEqual(r.esperas, [3000]);
+  assert.equal(chamadas.length, 2);
+  // sem Retry-After: 2 s, 4 s (a espera cresce com a tentativa)
+  const s = relogioFalso();
+  await tramitacaoGet('ra2', 'tok', '/v1/processos', {}, fetcherFalso([json({}, 429), json({}, 429), json({ lawsuits: [] })]), { dormir: s.dormir });
+  assert.deepEqual(s.esperas, [2000, 4000]);
+});
+
+test('5xx e queda de rede esperam 1,5 s / 3 s e 1 s / 2 s antes de tentar de novo', async () => {
+  const a = relogioFalso();
+  await tramitacaoGet('ra3', 'tok', '/v1/processos', {}, fetcherFalso([json({}, 503), json({}, 502), json({ lawsuits: [] })]), { dormir: a.dormir });
+  assert.deepEqual(a.esperas, [1500, 3000]);
+  const b = relogioFalso();
+  let n = 0;
+  const cai = (async () => {
+    if (n++ < 2) throw new TypeError('fetch failed');
+    return json({ lawsuits: [] })();
+  }) as typeof fetch;
+  await tramitacaoGet('ra4', 'tok', '/v1/processos', {}, cai, { dormir: b.dormir });
+  assert.deepEqual(b.esperas, [1000, 2000]);
+});
+
+test('teto TOTAL de espera: Retry-After grande desiste na hora; várias esperas médias param quando a soma passaria do teto', async () => {
+  // um Retry-After maior que o que sobra do teto: nem dorme, devolve o 429 já
+  const a = relogioFalso();
+  const chamadasA: Chamada[] = [];
+  await assert.rejects(
+    () => tramitacaoGet('ra5', 'tok', '/v1/processos', {}, fetcherFalso([json({}, 429, { 'retry-after': '45' })], chamadasA), { dormir: a.dormir, tetoMs: 30_000 }),
+    (e: Error) => (e as ErroTramitacao).status === 429 && /limit/.test(e.message),
+  );
+  assert.deepEqual(a.esperas, []);
+  assert.equal(chamadasA.length, 1);
+  // 20 s cabem (total 20 s); a segunda de 20 s passaria dos 30 s: para
+  const b = relogioFalso();
+  const chamadasB: Chamada[] = [];
+  await assert.rejects(
+    () => tramitacaoGet('ra6', 'tok', '/v1/processos', {}, fetcherFalso([json({}, 429, { 'retry-after': '20' })], chamadasB), { dormir: b.dormir, tetoMs: 30_000 }),
+    (e: Error) => (e as ErroTramitacao).status === 429,
+  );
+  assert.deepEqual(b.esperas, [20_000]);
+  assert.equal(chamadasB.length, 2);
+  // exatamente no teto ainda espera (30 s = 30 s)
+  const c = relogioFalso();
+  await tramitacaoGet('ra7', 'tok', '/v1/processos', {}, fetcherFalso([json({}, 429, { 'retry-after': '30' }), json({ lawsuits: [] })]), { dormir: c.dormir, tetoMs: 30_000 });
+  assert.deepEqual(c.esperas, [30_000]);
+});
+
+test('teto total também vale para 5xx: o erro que a API deu é o que volta, com o corpo ainda legível', async () => {
+  const r = relogioFalso();
+  await assert.rejects(
+    () => tramitacaoGet('ra8', 'tok', '/v1/processos', {}, fetcherFalso([json({ error: 'indisponível' }, 503)]), { dormir: r.dormir, tetoMs: 1000 }),
+    (e: Error) => (e as ErroTramitacao).status === 503 && /indisponível/.test(e.message),
+  );
+  assert.deepEqual(r.esperas, []);
+});
+
+test('queda de rede também respeita o teto total: esperas de 1 s + 2 s não cabem em 2,5 s', async () => {
+  const r = relogioFalso();
+  let chamadas = 0;
+  const cai = (async () => {
+    chamadas++;
+    throw new TypeError('fetch failed');
+  }) as typeof fetch;
+  await assert.rejects(() => tramitacaoGet('ra10', 'tok', '/v1/processos', {}, cai, { dormir: r.dormir, tetoMs: 2500 }), /sem resposta da Tramitação/);
+  assert.deepEqual(r.esperas, [1000]);
+  assert.equal(chamadas, 2);
+});
+
+test('no pior caso o conector espera no máximo o teto padrão (30 s), não 2 minutos', async () => {
+  const r = relogioFalso();
+  await assert.rejects(() => tramitacaoGet('ra9', 'tok', '/v1/processos', {}, fetcherFalso([json({}, 429, { 'retry-after': '25' })]), { dormir: r.dormir }));
+  assert.ok(r.esperas.reduce((x, y) => x + y, 0) <= 30_000, JSON.stringify(r.esperas));
+});
+
 test('400/422 trazem a mensagem da API; 404 diz que não achou; HTML vira erro com a rota', async () => {
   await assert.rejects(() => tramitacaoGet('t6', 'tok', '/v1/processos', { number: 'abc' }, fetcherFalso([json({ error: 'Número inválido' }, 400)])), /400 em \/v1\/processos: Número inválido/);
   await assert.rejects(() => tramitacaoGet('t7', 'tok', '/v1/processos/999', {}, fetcherFalso([json({ error: 'Not found' }, 404)])), (e: Error) => (e as ErroTramitacao).status === 404);

@@ -220,6 +220,65 @@ test('clientes: busca com mais achados que a página: avisa que há mais e a pag
   assert.equal(p3.truncado, undefined);
 });
 
+test('clientes: busca só com pontuação ("-", ".", "  ") não é "achei todos": pede um nome de verdade e nem chama a API', async () => {
+  const chamadas: Array<[string, Query]> = [];
+  const ctx = ctxDe(conta({ '/v1/clientes': () => ({ customers: [CLIENTE], pagination: PAG(1) }) }, chamadas));
+  for (const busca of ['-', '.', ' - . ', '/']) {
+    await assert.rejects(tramitacaoClientes(ctx, { busca }), /busca.*nome/i, busca);
+  }
+  assert.equal(chamadas.length, 0);
+  // com letra ou número a busca continua funcionando
+  const r = await tramitacaoClientes(ctx, { busca: 'maria' });
+  assert.equal(chamadas.length, 1);
+  assert.ok(Array.isArray(r.clientes));
+});
+
+const longo = (n: number) => `${'a'.repeat(n - 1)}b`;
+
+test('processo: maisDetalhes e descrição da movimentação cortam em 600 (resumo) e 4000 (completo), com reticências; completo não traz o mais_detalhes bruto', async () => {
+  const mov = (q: Query) => ({ movements: [{ data_hora: '2026-10-20T10:00:00Z', tipo_nome: 'Juntada', grau: '1º grau', descricao: longo(5000) }], pagination: PAG(1), q });
+  const ctx = ctxDe(
+    conta({
+      '/v1/processos/{id}': () => ({ lawsuit: { ...PROCESSO, mais_detalhes: longo(5000) } }),
+      '/v1/processos/{id}/partes': () => ({ parties: [], pagination: PAG(0), counts: {} }),
+      '/v1/processos/{id}/movimentacoes': mov,
+      '/v1/processos/{id}/documentos': () => ({ documents: [], pagination: PAG(0) }),
+    }),
+  );
+  const resumo = await tramitacaoProcesso(ctx, { processo: '42' });
+  assert.equal((resumo.processo as { maisDetalhes: string }).maisDetalhes, `${'a'.repeat(600)}…`);
+  assert.equal(((resumo.movimentacoes as { itens: Array<{ descricao: string }> }).itens[0]!).descricao, `${'a'.repeat(600)}…`);
+  assert.equal('mais_detalhes' in resumo.processo, false);
+
+  const cheio = await tramitacaoProcesso(ctx, { processo: '42', completo: true });
+  const p = cheio.processo as unknown as Record<string, unknown>;
+  assert.equal(p.maisDetalhes, `${'a'.repeat(4000)}…`);
+  assert.equal(p.maisDetalhes === undefined, false);
+  assert.equal('mais_detalhes' in p, false, 'o texto bruto, sem corte, não pode vir junto do cortado');
+  assert.equal(((cheio.movimentacoes as { itens: Array<{ descricao: string }> }).itens[0]!).descricao, `${'a'.repeat(4000)}…`);
+  assert.ok(JSON.stringify(cheio).length < 12_000, 'nada de texto de 5000 caracteres no completo');
+  // o que cabe no limite não ganha reticências (limite exato)
+  const exato = ctxDe(
+    conta({
+      '/v1/processos/{id}': () => ({ lawsuit: { ...PROCESSO, mais_detalhes: 'x'.repeat(600) } }),
+      '/v1/processos/{id}/partes': () => ({ parties: [], pagination: PAG(0), counts: {} }),
+      '/v1/processos/{id}/movimentacoes': () => ({ movements: [], pagination: PAG(0) }),
+      '/v1/processos/{id}/documentos': () => ({ documents: [], pagination: PAG(0) }),
+    }),
+  );
+  assert.equal(((await tramitacaoProcesso(exato, { processo: '42' })).processo as { maisDetalhes: string }).maisDetalhes, 'x'.repeat(600));
+});
+
+test('processos (lista) com completo: mais_detalhes sai cortado em 4000, uma vez só, e o resumo não o traz', async () => {
+  const ctx = ctxDe(conta({ '/v1/processos': () => ({ lawsuits: [{ ...PROCESSO, mais_detalhes: longo(5000) }], pagination: PAG(1) }) }));
+  const resumo = (await tramitacaoProcessos(ctx, {})).processos[0] as Record<string, unknown>;
+  assert.equal('mais_detalhes' in resumo, false);
+  assert.equal('maisDetalhes' in resumo, false);
+  const cheio = (await tramitacaoProcessos(ctx, { completo: true })).processos[0] as Record<string, unknown>;
+  assert.equal(cheio.maisDetalhes, `${'a'.repeat(4000)}…`);
+  assert.equal('mais_detalhes' in cheio, false);
+});
+
 const ATIVIDADE = {
   id: 5, uuid: 'a5', title: 'Prazo recurso', description: 'Ligar para 11987654321 e confirmar', type: 'Deadline', link: 'https://x', is_public: false, completed: false, completed_on: null, archived_at: null,
   start: '2026-10-30T12:00:00Z', end: null, all_day: true, amount_in_cents: null, deadline_on: '2026-10-30', deadline_start_on: '2026-10-10', deadline_days: 15, deadline_counting: 'dias_uteis',

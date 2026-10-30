@@ -63,6 +63,12 @@ function lerErro(texto: string): CorpoDeErro {
 const curto = (v: unknown, n = 240): string => (typeof v === 'string' ? v.slice(0, n) : '');
 
 /**
+ * Quanto uma chamada pode ESPERAR somando todas as novas tentativas (Retry-After, 5xx, queda de rede). Sem teto, 4 tentativas com
+ * Retry-After de 60 s seguravam a ferramenta por ~3 min, mais do que o claude.ai espera. Passou do teto, devolve o erro que já tem.
+ */
+export const TETO_DE_ESPERA_MS = 30_000;
+
+/**
  * GET na Tramitação. `contaId` separa o ritmo de cada chave; `caminho` começa com "/v1/…". A mensagem de erro
  * usa só `message`/`reason`/`error` da resposta (textos fixos da API), nunca o corpo inteiro: ele pode trazer
  * o e-mail do usuário e dados do plano.
@@ -73,7 +79,17 @@ export async function tramitacaoGet<T = unknown>(
   caminho: string,
   query: Record<string, Valor> = {},
   fetcher: Fetcher = fetch,
+  opc: { dormir?: (ms: number) => Promise<void>; tetoMs?: number } = {},
 ): Promise<T> {
+  const esperar = opc.dormir ?? dormir;
+  const teto = opc.tetoMs ?? TETO_DE_ESPERA_MS;
+  let esperado = 0;
+  /** reserva a espera no teto; false = não cabe, quem chamou desiste de tentar de novo */
+  const cabe = (ms: number): boolean => {
+    if (esperado + ms > teto) return false;
+    esperado += ms;
+    return true;
+  };
   if (!LEITURA_PERMITIDA.some((r) => r.test(caminho))) throw new ErroTramitacao(`rota ${caminho.slice(0, 80)} fora da lista de leitura do conector`, null);
   const q = new URLSearchParams();
   for (const [k, v] of Object.entries(query)) {
@@ -99,16 +115,20 @@ export async function tramitacaoGet<T = unknown>(
     } catch (err) {
       // redirect:'error' lança no 3xx: não é falha de rede, repetir não adianta e a mensagem tem de dizer o que foi
       if (/redirect/i.test(`${err} ${(err as { cause?: unknown })?.cause ?? ''}`)) throw new ErroTramitacao(`a Tramitação respondeu com redirecionamento em ${caminho}: o conector não segue redirecionamento (a chave iria junto)`, null);
-      if (tentativa < 3) {
-        await dormir(1000 * (tentativa + 1));
+      if (tentativa < 3 && cabe(1000 * (tentativa + 1))) {
+        await esperar(1000 * (tentativa + 1));
         continue;
       }
       throw new ErroTramitacao(`sem resposta da Tramitação em ${caminho}: ${String(err).slice(0, 200)}`, null);
     }
     if ((resp.status === 429 || resp.status >= 500) && tentativa < 3) {
-      await resp.body?.cancel();
-      await dormir(resp.status === 429 ? esperaPedida(resp, tentativa) : 1500 * (tentativa + 1));
-      continue;
+      const espera = resp.status === 429 ? esperaPedida(resp, tentativa) : 1500 * (tentativa + 1);
+      // não cabe no teto: segue sem cancelar o corpo, e o tratamento abaixo devolve o 429/5xx que a API deu
+      if (cabe(espera)) {
+        await resp.body?.cancel();
+        await esperar(espera);
+        continue;
+      }
     }
     const texto = await resp.text();
     if (resp.status === 401) throw new ErroTramitacao('a Tramitação recusou a chave (401): chave errada ou removida — gere outra em Configurações → Chaves de API', 401);
@@ -121,7 +141,7 @@ export async function tramitacaoGet<T = unknown>(
         motivo,
       );
     }
-    if (resp.status === 429) throw new ErroTramitacao('a Tramitação limitou as chamadas (429) e não liberou depois de 4 tentativas: espere um pouco e tente de novo', 429);
+    if (resp.status === 429) throw new ErroTramitacao('a Tramitação limitou as chamadas (429) e não liberou no tempo que o conector espera: espere um pouco e tente de novo', 429);
     if (!resp.ok) {
       const e = lerErro(texto);
       throw new ErroTramitacao(`Tramitação ${resp.status} em ${caminho}: ${curto(e.error) || curto(e.message) || (resp.status === 404 ? 'não encontrado' : 'erro sem detalhe')}`, resp.status);

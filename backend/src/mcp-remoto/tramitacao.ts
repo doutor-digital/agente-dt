@@ -161,6 +161,22 @@ export function resumirProcesso(p: ProcessoBruto) {
 
 type Resumo<T> = T & Record<string, unknown>;
 
+/** Cortes de texto livre: o resumo leva 600 caracteres, o `completo` leva 4000 (uma vez, já mascarado). */
+const CORTE_RESUMO = 600;
+const CORTE_COMPLETO = 4000;
+
+/**
+ * `mais_detalhes` mascarado e cortado. Só sai por aqui (campo `maisDetalhes`): o registro bruto do `completo` perde o
+ * `mais_detalhes` original, que ia inteiro (sem o corte de 4000) e duplicado ao lado do cortado.
+ */
+const maisDetalhes = (p: ProcessoBruto, completo: boolean | undefined): string | null =>
+  cortar(p.mais_detalhes ? mascararTexto(p.mais_detalhes) : null, completo ? CORTE_COMPLETO : CORTE_RESUMO).texto;
+
+function registroCompleto(p: ProcessoBruto): Record<string, unknown> {
+  const { mais_detalhes: _bruto, ...resto } = limparRegistro(p);
+  return resto;
+}
+
 const ORDEM_PROCESSOS = ['latest_publication_desc', 'latest_publication_asc', 'title_asc', 'title_desc', 'valor_da_causa_desc', 'valor_da_causa_asc'] as const;
 const STATUS_PROCESSO = ['ativo', 'arquivado', 'suspenso', 'encerrado'] as const;
 const TIPO_PROCESSO = ['judicial', 'administrativo', 'outro'] as const;
@@ -208,7 +224,7 @@ export async function tramitacaoProcessos(ctx: ContextoTramitacao, a: ArgsProces
   );
   const processos = (r?.lawsuits ?? []).map((p): Resumo<ReturnType<typeof resumirProcesso>> => {
     const resumo = resumirProcesso(p);
-    return a.completo ? { ...limparRegistro(p), ...resumo } : resumo;
+    return a.completo ? { ...registroCompleto(p), ...resumo, maisDetalhes: maisDetalhes(p, true) } : resumo;
   });
   return { unidade: c.slug, paginacao: paginacaoDe(r?.pagination, por), processos };
 }
@@ -268,7 +284,7 @@ export async function tramitacaoProcesso(ctx: ContextoTramitacao, a: ArgsProcess
               dataHora: texto(m.data_hora),
               tipo: texto(m.tipo_nome),
               grau: texto(m.grau),
-              descricao: cortar(m.descricao ? mascararTexto(m.descricao) : null, a.completo ? 4000 : 600).texto,
+              descricao: cortar(m.descricao ? mascararTexto(m.descricao) : null, a.completo ? CORTE_COMPLETO : CORTE_RESUMO).texto,
             })),
           };
         }),
@@ -289,7 +305,7 @@ export async function tramitacaoProcesso(ctx: ContextoTramitacao, a: ArgsProcess
   ]);
   return {
     unidade: c.slug,
-    processo: { ...(a.completo ? limparRegistro(bruto) : {}), ...resumo, maisDetalhes: cortar(bruto.mais_detalhes ? mascararTexto(bruto.mais_detalhes) : null, a.completo ? 4000 : 600).texto },
+    processo: { ...(a.completo ? registroCompleto(bruto) : {}), ...resumo, maisDetalhes: maisDetalhes(bruto, a.completo) },
     ...(partes !== undefined ? { partes } : {}),
     ...(movimentacoes !== undefined ? { movimentacoes } : {}),
     ...(documentos !== undefined ? { documentos } : {}),
@@ -470,6 +486,8 @@ export async function tramitacaoClientes(ctx: ContextoTramitacao, a: ArgsCliente
   if (a.busca?.trim()) {
     // a `pagina` vale sobre os ACHADOS (a API não filtra por nome): a pagina 2 pula os `por` primeiros
     const termos = normalizarCabecalho(a.busca).split(' ').filter(Boolean);
+    // só pontuação ("-", ".") some na normalização: sem termo nenhum todo cliente "casaria" e a resposta diria "achei todos"
+    if (!termos.length) throw new ErroDeEntrada('busca: informe pelo menos uma letra ou número do nome do cliente');
     const precisa = pg * por;
     const achados: ClienteBruto[] = [];
     let lidas = 0;
