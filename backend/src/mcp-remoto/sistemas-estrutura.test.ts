@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { ErroDeEntrada } from '../franquia-mcp/travas.js';
 import { ErroSistemas, sistemasChamar } from '../lib/integracoes/sistemas.js';
 import { criarContextoSistemas, PendentesSistemas, prepararAlteracao, registrarEscritaSistemas, registrarLeituraSistemas, type ContaSistemas } from './sistemas.js';
 import { analisarEstrutura, confirmarEstrutura, prepararEstrutura, registrarEstruturaSistemas } from './sistemas-estrutura.js';
@@ -71,163 +72,6 @@ test('na produção, a estrutura só é registrada dentro do bloco de quem pode 
   const bloco = src.slice(src.lastIndexOf('if (escritores.has(quem.userId))', i), i);
   assert.match(bloco, /^if \(escritores\.has\(quem\.userId\)\) \{/);
   assert.ok(!bloco.includes('}\n      if ('), 'o bloco de quem escreve não pode ter fechado antes');
-});
-
-// ---------------------------------------------------------------- o que se aceita
-
-test('aceita criar tabela, RLS, política, índice e comentário; resume o que cada comando faz', () => {
-  const a = analisarEstrutura(TABELA_COMPLETA);
-  assert.deepEqual(a.comandos.map((c) => c.tipo), ['CREATE TABLE', 'ALTER TABLE ENABLE RLS', 'CREATE POLICY', 'CREATE INDEX', 'COMMENT']);
-  assert.match(a.comandos[0]!.o_que, /Cria a tabela caixa_precos/);
-  assert.deepEqual(a.avisos, [], 'RLS ligada no mesmo pedido: sem aviso');
-});
-
-test('aceita colunas, restrições, default, tipo, view com security_invoker e grant para authenticated', () => {
-  const casos = [
-    'alter table caixa_precos add column unidade text',
-    'ALTER TABLE public.caixa_precos ADD COLUMN IF NOT EXISTS ativo boolean NOT NULL DEFAULT true',
-    'alter table caixa_precos add constraint valor_ok check (valor >= 0)',
-    'alter table caixa_precos add primary key (id)',
-    'alter table caixa_precos add column a int, add column b int',
-    'alter table caixa_precos alter column valor set default 0',
-    'alter table caixa_precos alter column valor set data type numeric(12,2)',
-    'alter table caixa_precos alter column servico set not null',
-    'create unique index caixa_precos_u on caixa_precos (servico, unidade)',
-    'create view public.v_precos with (security_invoker = true) as select * from caixa_precos',
-    'create or replace view v_precos with (security_invoker=on) as select id from caixa_precos',
-    'create policy p on caixa_precos for all to authenticated using (rh_admin()) with check (rh_admin())',
-    'alter policy p on caixa_precos using (rh_admin())',
-    'create policy p2 on caixa_precos as permissive for insert to authenticated, service_role with check (rh_admin())',
-    'create view v with (security_invoker = true) as select p.id, u.nome from caixa_precos p join caixa_unidades u on u.id = p.unidade_id',
-    "create table caixa_t (a text default 'x', b int default 0, c timestamptz default now(), d uuid default gen_random_uuid(), e jsonb default '{}'::jsonb, f boolean default false, g text default null, foreign key (a) references caixa_u (id) on delete set default on update cascade)",
-    "alter table caixa_precos alter column valor set default 0.5",
-    'alter table caixa_precos add column unidade_id bigint references caixa_unidades(id)',
-    'alter table caixa_precos add column u2 bigint references public.caixa_unidades (id)',
-    'create view v with (security_barrier = true, security_invoker = true) as select * from caixa_precos',
-    'create view v (a, b) with (security_invoker = true) as select 1, 2',
-    "comment on column public.caixa_precos.valor is 'x'",
-    'comment on constraint valor_ok on caixa_precos is \'x\'',
-    "comment on column caixa_precos.valor is 'em reais'",
-    'grant select, insert on caixa_precos to authenticated',
-    'revoke delete on public.caixa_precos from authenticated, service_role',
-    '-- coluna nova\nalter table caixa_precos add column obs text; -- fim',
-  ];
-  for (const s of casos) assert.doesNotThrow(() => analisarEstrutura(s), s);
-});
-
-test('avisos: mudar tipo pode falhar com dados; NOT NULL sem DEFAULT; tabela nova sem RLS', () => {
-  const tipo = analisarEstrutura('alter table caixa_precos alter column valor type text');
-  assert.match(tipo.avisos.join(' '), /pode FALHAR.*dados/);
-  const nn = analisarEstrutura('alter table caixa_precos add column z int not null');
-  assert.match(nn.avisos.join(' '), /NOT NULL sem DEFAULT/);
-  const sem = analisarEstrutura('create table caixa_x (id int)');
-  assert.match(sem.avisos.join(' '), /SEM segurança por linha/);
-  const outra = analisarEstrutura('create table caixa_x (id int); alter table caixa_y enable row level security');
-  assert.match(outra.avisos.join(' '), /caixa_x nasce SEM/);
-  const gr = analisarEstrutura('grant select on caixa_precos to authenticated');
-  assert.match(gr.avisos.join(' '), /TODOS os usuários logados/);
-});
-
-// ---------------------------------------------------------------- o que se recusa
-
-test('recusa DROP, TRUNCATE, COPY (até dentro de texto/comentário) e ALTER … DROP', () => {
-  for (const s of [
-    'drop table caixa_precos',
-    'DROP TABLE IF EXISTS caixa_precos CASCADE',
-    'truncate caixa_precos',
-    'alter table caixa_precos drop column valor',
-    'alter table caixa_precos alter column valor drop not null',
-    'drop policy p on caixa_precos',
-    "comment on table t is 'depois a gente faz drop'",
-    '/* drop */ create table x (a int)',
-    "copy caixa_precos to '/tmp/x'",
-  ]) assert.throws(() => analisarEstrutura(s), /DROP, TRUNCATE e COPY não existem/, s);
-});
-
-test('recusa contrabando: comando escondido depois de ";", em lote, em texto e em maiúsculas', () => {
-  const ruins: Array<[string, RegExp]> = [
-    ['create table x (a int); drop table y', /DROP/],
-    ['create table x (a int);\n  DROP TABLE y;', /DROP/],
-    ['create table x (a int) ; create role invasor', /não reconheço/],
-    ['create table x (a int); do $$ begin null; end $$', /não reconheço/],
-    ['create table x (a int); alter role sistemas superuser', /não reconheço/],
-    ['create table x (a int); select pg_read_file(\'/etc/passwd\')', /pg_|não reconheço/],
-    ['alter user sistemas password \'x\'', /não reconheço/],
-    ['alter role sistemas set role sistemas', /ROLE|não reconheço|role/i],
-    ['set role sistemas', /SET ROLE/],
-    ['create function public.f() returns int language sql security definer as \'select 1\'', /SECURITY DEFINER/],
-    ['create function public.f() returns int language sql as \'select 1\'', /não reconheço/],
-    ['create table x (a int); execute foo', /EXECUTE/],
-    ['create table x (a int); begin; commit', /não reconheço/],
-    ['vacuum caixa_precos', /não reconheço/],
-    ['select 1', /não reconheço/],
-    ['insert into caixa_precos (servico) values (\'x\')', /não reconheço/],
-    ['delete from caixa_precos', /não reconheço/],
-  ];
-  for (const [s, re] of ruins) assert.throws(() => analisarEstrutura(s), re, s);
-  // texto entre aspas simples não esconde nem inventa ";"
-  assert.doesNotThrow(() => analisarEstrutura("comment on table caixa_precos is 'a; b'"));
-});
-
-test('recusa auth/storage/pg_*/catálogo, nome entre aspas (esconderia o esquema) e outro esquema', () => {
-  for (const s of [
-    'create view v with (security_invoker=true) as select * from auth.users',
-    'alter table auth.users add column x text',
-    'create table x (u uuid references auth.users(id))',
-    'create policy p on caixa_precos using (auth.uid() = id)',
-    'create table storage.x (a int)',
-    'create view v with (security_invoker=true) as select * from pg_catalog.pg_roles',
-    'create view v with (security_invoker=true) as select * from pg_shadow',
-    'create view v with (security_invoker=true) as select * from information_schema.tables',
-    'create view v with (security_invoker=true) as select * from "auth".users',
-    'create table "Caixa" (a int)',
-    'create table extensions.x (a int)',
-  ]) assert.throws(() => analisarEstrutura(s), /esquemas auth|aspas duplas/, s);
-  assert.throws(() => analisarEstrutura('create table outro.x (a int)'), /só o esquema "public"/);
-  assert.throws(() => analisarEstrutura('alter table outro.x add column a int'), /só o esquema "public"/);
-  assert.throws(() => analisarEstrutura('create policy p on outro.x using (true)'), /só o esquema "public"/);
-});
-
-test('recusa ALTER ROLE/USER, GRANT a papéis internos ou ao público, anon, RLS desligada e renomear', () => {
-  for (const s of [
-    'grant sistemas to authenticated',
-    'grant select on caixa_precos to mcp_leitor',
-    'grant select on caixa_precos to sistemas_app',
-    'grant select on caixa_precos to anon',
-    'grant select on caixa_precos to public',
-    'grant select on caixa_precos to authenticated with grant option',
-    'grant all on caixa_precos to authenticated',
-    'grant all privileges on caixa_precos to authenticated',
-    'grant select on all tables in schema public to authenticated',
-    'grant truncate on caixa_precos to authenticated',
-    'grant usage on schema public to authenticated',
-    'revoke all on caixa_precos from authenticated',
-  ]) assert.throws(() => analisarEstrutura(s), /GRANT\/REVOKE|anon|não reconheço|TRUNCATE/, s);
-  assert.throws(() => analisarEstrutura('alter table caixa_precos disable row level security'), /desligar a segurança por linha/);
-  assert.throws(() => analisarEstrutura('alter table caixa_precos rename to x'), /RENAME.*não é permitido/);
-  assert.throws(() => analisarEstrutura('alter table caixa_precos rename column a to b'), /RENAME/);
-  assert.throws(() => analisarEstrutura('alter table caixa_precos owner to sistemas'), /OWNER TO/);
-  assert.throws(() => analisarEstrutura('create policy p on caixa_precos to anon using (true)'), /anon/);
-});
-
-test('recusa view sem security_invoker (passaria por cima da RLS), materializada, índice concorrente e temporária', () => {
-  assert.throws(() => analisarEstrutura('create view v as select * from caixa_precos'), /security_invoker/);
-  assert.throws(() => analisarEstrutura('create view v with (security_invoker = false) as select 1'), /security_invoker/);
-  assert.throws(() => analisarEstrutura('create materialized view v as select 1'), /materializada/);
-  assert.throws(() => analisarEstrutura('create index concurrently i on caixa_precos (a)'), /CONCURRENTLY/);
-  assert.throws(() => analisarEstrutura('create temp table t (a int)'), /temporário/);
-});
-
-test('recusa vazio, só comentário, grande demais, comandos demais e motivo curto', async () => {
-  assert.throws(() => analisarEstrutura(''), /vazio/);
-  assert.throws(() => analisarEstrutura('   '), /vazio/);
-  assert.throws(() => analisarEstrutura('-- nada'), /vazio/);
-  assert.throws(() => analisarEstrutura(undefined), /vazio/);
-  assert.throws(() => analisarEstrutura(`create table x (a text default '${'a'.repeat(21_000)}')`), /grande demais/);
-  assert.throws(() => analisarEstrutura(Array.from({ length: 26 }, (_, i) => `create table t${i} (a int)`).join(';')), /comandos demais/);
-  const { srv, ctx } = montar();
-  await assert.rejects(() => prepararEstrutura(ctx, new PendentesSistemas(), QUEM, { sql: 'create table x (a int)', motivo: 'x' }), /motivo/);
-  assert.equal(srv.chamadas.length, 0, 'recusa não chega ao servidor');
 });
 
 // ---------------------------------------------------------------- dois passos
@@ -336,7 +180,7 @@ test('pelo MCP: registro de auditoria leva quem, SQL, motivo e resultado; a chav
   // recusa também fica registrada, com o motivo da recusa
   const ruim = await chamar('sistemas_preparar_estrutura', { sql: 'drop table x', motivo: MOTIVO });
   assert.equal(ruim.erro, true);
-  assert.match(ruim.texto, /DROP, TRUNCATE e COPY não existem/);
+  assert.match(ruim.texto, /DROP não existe/);
   assert.equal(auditoria.at(-1)!.ok, false);
   assert.ok(!JSON.stringify([p.texto, c.texto, ruim.texto, auditoria]).includes(CHAVE_FALSA));
   await fechar();
@@ -349,27 +193,6 @@ test('descrições em português dizem que é estrutura e que DROP não existe',
   assert.match(t.description!, /ESTRUTURA/);
   assert.match(t.description!, /DROP.*NÃO existem/);
   await fechar();
-});
-
-test('revisão: recusa esquema fora de public em qualquer parte do comando, funções que recebem SQL em texto, política sem TO e view com a opção no lugar errado', () => {
-  for (const s of [
-    'create table t as select * from private.x',
-    'alter table caixa_precos add column x int references private.y(id)',
-    "comment on table private.x is 'a'",
-    "comment on column private.x.c is 'a'",
-    "create view v with (security_invoker=true) as select query_to_xml('select * from auth.users', true, false, '')",
-    "create view v with (security_invoker=true) as select table_to_xml('caixa_precos', true, false, '')",
-  ]) assert.throws(() => analisarEstrutura(s), /esquema|auth|_to_xml/, s);
-  assert.throws(() => analisarEstrutura('create policy p on caixa_precos for select using (true)'), /precisa dizer para quem vale/);
-  assert.throws(() => analisarEstrutura('create policy p on caixa_precos for select to public using (true)'), /TO authenticated/);
-  assert.throws(() => analisarEstrutura('create policy p on caixa_precos to authenticated, mcp_leitor using (true)'), /TO authenticated/);
-  assert.throws(() => analisarEstrutura('alter policy p on caixa_precos rename to q'), /renomear política/);
-  assert.throws(() => analisarEstrutura('create view v as select 1 with (security_invoker=true)'), /security_invoker/);
-  assert.throws(() => analisarEstrutura("create view v as select 'security_invoker = true'"), /security_invoker/);
-  assert.throws(() => analisarEstrutura('create table x (a int) -- "Caixa"'), /aspas duplas/);
-  assert.match(analisarEstrutura('create policy p on caixa_precos to authenticated using (true)').avisos.join(' '), /permissiva/);
-  const sr = analisarEstrutura('grant select on caixa_precos to service_role');
-  assert.deepEqual(sr.avisos, [], 'service_role não é "todos os usuários logados"');
 });
 
 test('auditoria guarda o SQL inteiro de um lote grande (não só os primeiros 4000 caracteres)', async () => {
@@ -387,68 +210,16 @@ test('auditoria guarda o SQL inteiro de um lote grande (não só os primeiros 40
   await fechar();
 });
 
-test('revisão do sênior 1: CREATE TABLE só na forma nome ( colunas ) — AS, INHERITS, PARTITION, WITH e consulta dentro são recusados', () => {
-  for (const s of [
-    'create table x as with d as (delete from caixa_precos returning *) select * from d',
-    'create table x as select * from caixa_precos',
-    'create table if not exists x as table caixa_precos',
-    'create unlogged table x as select 1',
-    'create table x as insert into caixa_precos (a) values (1) returning *',
-    'create table x () inherits (caixa_precos)',
-    'create table x (a int) inherits (caixa_precos)',
-    'create table x partition of caixa_precos for values in (1)',
-    'create table x (a int) partition by range (a)',
-    'create table x (a int) with (fillfactor = 70)',
-    'create table x (a int) tablespace pg_default',
-    'create table x (a int check (a > (select count(*) from caixa_precos)))',
-    'create table x as',
-  ]) assert.throws(() => analisarEstrutura(s), /só na forma|CREATE TABLE|não cabe|esquemas|DEFAULT/, s);
-  assert.throws(() => analisarEstrutura('create table x as with d as (delete from t returning *) select * from d'), /só na forma "CREATE TABLE x/);
-  assert.doesNotThrow(() => analisarEstrutura('create table caixa_x(a int)'));
-  assert.doesNotThrow(() => analisarEstrutura('create table caixa_x (a int, b text, primary key (a))'));
-});
-
-test('revisão do sênior 2: ALTER … TYPE … USING e DEFAULT que não seja valor simples são recusados', () => {
-  for (const s of [
-    "alter table caixa_precos alter column papel type text using 'admin'",
-    'alter table caixa_precos alter column valor type numeric using valor::numeric',
-    'alter table caixa_precos alter column valor set data type text using null',
-    'alter table caixa_precos alter column papel set default meu_papel()',
-    'alter table caixa_precos add column x text default rh_admin()::text',
-    'alter table caixa_precos add column x int default (select 1)',
-    "alter table caixa_precos alter column x set default nextval('seq')",
-    "create table caixa_t (a int default length('x'))",
-    'create table caixa_t (a int default 1 + 1)',
-    "create table caixa_t (a text default coalesce('a', 'b'))",
-  ]) assert.throws(() => analisarEstrutura(s), /USING|DEFAULT|não cabe/, s);
-});
-
-test('revisão do sênior 3: qualquer comando que cite tabela fechada é recusado (GRANT, POLICY, ALTER, COMMENT, VIEW, FK, nome com esquema)', () => {
-  for (const t of ['rh_usuarios', 'rh_docs', 'rh_log', 'rh_site', 'rh_site_stage', 'admin_log', 'admin_sql_log', 'admin_backup', 'public.rh_usuarios', 'RH_USUARIOS']) {
-    for (const s of [
-      `grant update on ${t} to authenticated`,
-      `create policy p on ${t} for update to authenticated using (1=1) with check (1=1)`,
-      `alter table ${t} add column x text`,
-      `alter table ${t} disable row level security`,
-      `comment on table ${t} is 'x'`,
-      `create view v with (security_invoker = true) as select * from ${t}`,
-      `alter table caixa_precos add column u text references ${t}(id)`,
-      `create index i on ${t} (a)`,
-    ]) assert.throws(() => analisarEstrutura(s), /tabela fechada/, s);
+test('preparar recusa pelo parser antes de falar com o servidor, e o resumo/avisos vêm da árvore', async () => {
+  const { srv, ctx } = montar();
+  const pend = new PendentesSistemas();
+  for (const sql of ['drop table caixa_precos', 'create table x as select * from rh_docs', "comment on table caixa is $a1$'$a1$; delete from caixa; comment on table caixa is 'x'", 'alter table caixa add constraint c1 check (public.rh_merge(\'a\', \'b\', null) is null)']) {
+    await assert.rejects(() => prepararEstrutura(ctx, pend, QUEM, { sql, motivo: MOTIVO }), (e: Error) => e instanceof ErroDeEntrada, sql);
   }
-  assert.throws(() => analisarEstrutura("comment on table caixa_precos is 'copiado de rh_docs'"), /tabela fechada/, 'o servidor também recusa o nome dentro de texto');
-  assert.throws(() => analisarEstrutura('grant update on rh_usuarios to authenticated; create policy p on rh_usuarios for update to authenticated using (1=1) with check (1=1)'), /tabela fechada/);
-  assert.match(analisarEstrutura('create policy p on caixa_precos for select to authenticated using (1 = 1)').avisos.join(' '), /permissiva/);
-  assert.match(analisarEstrutura('create policy p on caixa_precos for all to authenticated using (rh_admin()) with check (true)').avisos.join(' '), /permissiva/);
-  // tabelas de nome parecido mas abertas continuam livres
-  assert.doesNotThrow(() => analisarEstrutura('alter table fin_lanc add column obs text'));
-  assert.doesNotThrow(() => analisarEstrutura('alter table caixa_lanc add column docs_ok boolean'));
-});
-
-test('esquema com apelido: "from outro.x outro" não vale como apelido; apelido de tabela local vale', () => {
-  assert.throws(() => analisarEstrutura('create view v with (security_invoker = true) as select outro.a from outro.x outro'), /esquema/);
-  assert.throws(() => analisarEstrutura('create view v with (security_invoker = true) as select o.a from outro.x as o'), /esquema/);
-  assert.throws(() => analisarEstrutura('create view v with (security_invoker = true) as select outro.a from caixa_precos'), /esquema/);
-  assert.doesNotThrow(() => analisarEstrutura('create view v with (security_invoker = true) as select p.a, caixa_u.b from caixa_precos p join caixa_u on caixa_u.id = p.u'));
-  assert.doesNotThrow(() => analisarEstrutura('create view v with (security_invoker = true) as select p.a from public.caixa_precos as p'));
+  await assert.rejects(() => prepararEstrutura(ctx, pend, QUEM, { sql: 'create table x (a int)', motivo: 'x' }), /motivo/);
+  assert.equal(srv.chamadas.length, 0, 'recusa não chega ao servidor');
+  const p = await prepararEstrutura(ctx, pend, QUEM, { sql: 'create table caixa_x (id int); alter table caixa_x alter column id type bigint', motivo: MOTIVO });
+  assert.match(p.avisos.join(' '), /SEM segurança por linha/);
+  assert.match(p.avisos.join(' '), /pode FALHAR/);
+  assert.equal(p.resumo.length, 2);
 });

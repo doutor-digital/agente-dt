@@ -1,0 +1,1554 @@
+[
+ {
+  "sql": "create table x as with d as (delete from rh_funcionarios returning *) select * from d",
+  "esperado": "recusa",
+  "nota": "r2 ctas delete"
+ },
+ {
+  "sql": "create table copia as select * from rh_funcionarios",
+  "esperado": "recusa",
+  "nota": "ctas"
+ },
+ {
+  "sql": "CREATE TABLE copia AS SELECT * FROM rh_funcionarios",
+  "esperado": "recusa",
+  "nota": "ctas maiusculo"
+ },
+ {
+  "sql": "create table x as with d as (update rh_funcionarios set salario = 0 returning *) select * from d",
+  "esperado": "recusa",
+  "nota": "ctas update"
+ },
+ {
+  "sql": "create table x as with d as (insert into rh_usuarios(user_id,papel) values ('u-9','admin') returning *) select * from d",
+  "esperado": "recusa",
+  "nota": "ctas insert"
+ },
+ {
+  "sql": "create table y (a int); create table z as select * from ts_stat('select to_tsvector(x) from au'||'th.users')",
+  "esperado": "recusa",
+  "nota": "ctas funcao"
+ },
+ {
+  "sql": "create table p partition of rh_lancamentos for values in ('x')",
+  "esperado": "recusa",
+  "nota": "partition of"
+ },
+ {
+  "sql": "create table p (a int) inherits (rh_funcionarios)",
+  "esperado": "recusa",
+  "nota": "inherits"
+ },
+ {
+  "sql": "create table x as table caixa",
+  "esperado": "recusa",
+  "nota": "ctas table"
+ },
+ {
+  "sql": "create table x as values (1)",
+  "esperado": "recusa",
+  "nota": "ctas values"
+ },
+ {
+  "sql": "create table x\n( a int ) as select 1",
+  "esperado": "recusa",
+  "nota": "ctas com quebra",
+  "sintaxe": true
+ },
+ {
+  "sql": "create table x (a int) partition by range (a)",
+  "esperado": "recusa",
+  "nota": "partition by"
+ },
+ {
+  "sql": "create table x (a int)/**/inherits(caixa)",
+  "esperado": "recusa",
+  "nota": "inherits comentario"
+ },
+ {
+  "sql": "create table x (a int)--\ninherits (caixa)",
+  "esperado": "recusa",
+  "nota": "inherits comentario linha"
+ },
+ {
+  "sql": "create table x of meu_tipo",
+  "esperado": "recusa",
+  "nota": "of type"
+ },
+ {
+  "sql": "create table q (a int) with (autovacuum_enabled = false)",
+  "esperado": "recusa",
+  "nota": "with"
+ },
+ {
+  "sql": "create table q (a int) tablespace pg_default",
+  "esperado": "recusa",
+  "nota": "tablespace"
+ },
+ {
+  "sql": "create unlogged table q (a int)",
+  "esperado": "aceita",
+  "nota": "unlogged ok"
+ },
+ {
+  "sql": "create temp table q (a int)",
+  "esperado": "recusa",
+  "nota": "temp"
+ },
+ {
+  "sql": "create policy p on rh_funcionarios for select to authenticated using (1=1)",
+  "esperado": "aceita",
+  "nota": "tabela aberta com 1=1 (aviso)"
+ },
+ {
+  "sql": "create policy p on rh_usuarios for update to authenticated using (1=1) with check (1=1)",
+  "esperado": "recusa",
+  "nota": "rh_usuarios"
+ },
+ {
+  "sql": "grant update on rh_usuarios to authenticated; create policy p on rh_usuarios for update to authenticated using (1=1) with check (1=1)",
+  "esperado": "recusa",
+  "nota": "r3 grant+policy"
+ },
+ {
+  "sql": "alter table rh_usuarios alter column papel type text using 'admin'",
+  "esperado": "recusa",
+  "nota": "r3 using"
+ },
+ {
+  "sql": "alter table rh_usuarios alter column papel set default 'admin'",
+  "esperado": "recusa",
+  "nota": "r3 default fechada"
+ },
+ {
+  "sql": "alter table t alter column c type text using (c::text)",
+  "esperado": "recusa",
+  "nota": "using paren"
+ },
+ {
+  "sql": "alter table t alter column c type int using(c::int)",
+  "esperado": "recusa",
+  "nota": "using colado"
+ },
+ {
+  "sql": "alter table t alter c set data type int",
+  "esperado": "aceita",
+  "nota": "set data type"
+ },
+ {
+  "sql": "alter table t alter column c type int\nusing 1",
+  "esperado": "recusa",
+  "nota": "using quebra de linha"
+ },
+ {
+  "sql": "delete from caixa",
+  "esperado": "recusa",
+  "nota": "dml"
+ },
+ {
+  "sql": "update caixa set papel = 'x'",
+  "esperado": "recusa",
+  "nota": "dml"
+ },
+ {
+  "sql": "insert into caixa values (3, 'c')",
+  "esperado": "recusa",
+  "nota": "dml"
+ },
+ {
+  "sql": "select * from caixa",
+  "esperado": "recusa",
+  "nota": "dml"
+ },
+ {
+  "sql": "with d as (delete from caixa returning *) select * from d",
+  "esperado": "recusa",
+  "nota": "dml"
+ },
+ {
+  "sql": "merge into caixa t using caixa s on t.id = s.id when matched then delete",
+  "esperado": "recusa",
+  "nota": "dml"
+ },
+ {
+  "sql": "create table ok1 (a int); delete from caixa",
+  "esperado": "recusa",
+  "nota": "lote com dml"
+ },
+ {
+  "sql": "-- comentario\n delete from caixa",
+  "esperado": "recusa",
+  "nota": "dml apos comentario"
+ },
+ {
+  "sql": "create table x (a int); ; ",
+  "esperado": "aceita",
+  "nota": "ponto e virgula sobrando"
+ },
+ {
+  "sql": "comment on table caixa is $a1$'$a1$; delete from caixa; comment on table caixa is 'x'",
+  "esperado": "recusa",
+  "nota": "r4 tag com digito"
+ },
+ {
+  "sql": "comment on table caixa is $a1$'$a1$; create table z_c as with d as (delete from caixa returning *) select * from d; comment on table caixa is 'x'",
+  "esperado": "recusa",
+  "nota": "r4 tag com digito ctas"
+ },
+ {
+  "sql": "comment on table caixa is $a1$'$a1$; grant select on caixa to anon; comment on table caixa is 'x'",
+  "esperado": "recusa",
+  "nota": "r4 tag grant anon"
+ },
+ {
+  "sql": "comment on table caixa is '--'; delete from caixa",
+  "esperado": "recusa",
+  "nota": "r4 traco traco em texto"
+ },
+ {
+  "sql": "comment on table caixa is '--'; create table z_b as with d as (delete from caixa returning *) select * from d",
+  "esperado": "recusa",
+  "nota": "r4"
+ },
+ {
+  "sql": "comment on table caixa is e'\\''; delete from caixa; comment on table caixa is 'x'",
+  "esperado": "recusa",
+  "nota": "r4 e-string"
+ },
+ {
+  "sql": "comment on table caixa is $$a$$; delete from caixa; comment on table caixa is $$b$$",
+  "esperado": "recusa",
+  "nota": "r4 dolar guloso"
+ },
+ {
+  "sql": "comment on table caixa is 'a'; create table z (a int check (public.f() > 0))",
+  "esperado": "recusa",
+  "nota": "funcao qualificada"
+ },
+ {
+  "sql": "create table e (a text default e'\\'' ); delete from caixa; select '')",
+  "esperado": "recusa",
+  "nota": "e-string com ; ",
+  "sintaxe": true
+ },
+ {
+  "sql": "create table e (a text default 'x\\'); delete from caixa; --')",
+  "esperado": "recusa",
+  "nota": "barra invertida em texto comum"
+ },
+ {
+  "sql": "create table e (a text default $a1$ x $a1$)",
+  "esperado": "recusa",
+  "nota": "dolar com digito legitimo",
+  "astSozinho": "aceita"
+ },
+ {
+  "sql": "create table e (a text default $a$;delete from caixa;$a$)",
+  "esperado": "recusa",
+  "nota": "dolar contendo ; (texto)",
+  "astSozinho": "aceita"
+ },
+ {
+  "sql": "comment on table caixa is 'tabela; de preços; delete from x'",
+  "esperado": "aceita",
+  "nota": "; em texto"
+ },
+ {
+  "sql": "create table t (a text default e'x')",
+  "esperado": "recusa",
+  "nota": "e-string legitima",
+  "astSozinho": "aceita"
+ },
+ {
+  "sql": "comment on table caixa is $$texto$$",
+  "esperado": "recusa",
+  "nota": "dolar legitimo",
+  "astSozinho": "aceita"
+ },
+ {
+  "sql": "alter table caixa add constraint c1 check (length(public.rh_merge('acesso_convites','c1',jsonb_build_object('papel','admin'))::text) >= 0)",
+  "esperado": "recusa",
+  "nota": "r4 check rh_merge"
+ },
+ {
+  "sql": "alter table caixa add constraint c1 check ((public.rh_merge('acesso_convites', 'c1', jsonb_build_object('papel','admin'))) is null)",
+  "esperado": "recusa",
+  "nota": "r4 check rh_merge 2"
+ },
+ {
+  "sql": "alter table caixa add constraint c2 check (public.rh_patch('</body>', '<script src=//x.invalid/a.js></script></body>', 1) > 0 or true)",
+  "esperado": "recusa",
+  "nota": "r4 rh_patch"
+ },
+ {
+  "sql": "alter table caixa add constraint c2 check (rh_patch('</body>', '<script></script></body>', 1) > 0)",
+  "esperado": "recusa",
+  "nota": "rh_patch sem esquema"
+ },
+ {
+  "sql": "create table nova (a int check (rh_gerar_avisos_exp() >= 0))",
+  "esperado": "recusa",
+  "nota": "funcao gravadora"
+ },
+ {
+  "sql": "create index i on t ((public.f(a)))",
+  "esperado": "recusa",
+  "nota": "indice funcao qualificada"
+ },
+ {
+  "sql": "create index i on t ((rh_merge(a, a, null)))",
+  "esperado": "recusa",
+  "nota": "indice funcao gravadora"
+ },
+ {
+  "sql": "create index i on t (lower(a))",
+  "esperado": "aceita",
+  "nota": "indice lower"
+ },
+ {
+  "sql": "create index i on t (a) where rh_merge(a, a, null) is null",
+  "esperado": "recusa",
+  "nota": "predicado gravador"
+ },
+ {
+  "sql": "create unique index if not exists i on public.t (a) where a is not null",
+  "esperado": "aceita",
+  "nota": "indice parcial"
+ },
+ {
+  "sql": "create index i on t using gin (a)",
+  "esperado": "aceita",
+  "nota": "gin"
+ },
+ {
+  "sql": "create table g (a int, b int generated always as (rh_merge(a::text, a::text, null)) stored)",
+  "esperado": "recusa",
+  "nota": "generated gravador"
+ },
+ {
+  "sql": "alter table t add column g text generated always as (upper(n)) stored",
+  "esperado": "aceita",
+  "nota": "generated upper"
+ },
+ {
+  "sql": "create table t (a int default nextval('s'))",
+  "esperado": "recusa",
+  "nota": "default nextval"
+ },
+ {
+  "sql": "create table q (a int default current_setting('x'))",
+  "esperado": "recusa",
+  "nota": "default current_setting"
+ },
+ {
+  "sql": "alter table t add column z text default current_user",
+  "esperado": "recusa",
+  "nota": "default current_user"
+ },
+ {
+  "sql": "create table t (a int default length('x'))",
+  "esperado": "aceita",
+  "nota": "default length (lista curta)"
+ },
+ {
+  "sql": "create table t (a int default 1 + 1)",
+  "esperado": "aceita",
+  "nota": "default aritmetica"
+ },
+ {
+  "sql": "create table t (a text default coalesce('a', 'b'))",
+  "esperado": "aceita",
+  "nota": "default coalesce"
+ },
+ {
+  "sql": "create table t (a int default (select 1))",
+  "esperado": "recusa",
+  "nota": "default subconsulta"
+ },
+ {
+  "sql": "alter table t alter column c set default meu_papel()",
+  "esperado": "recusa",
+  "nota": "default funcao fora da lista"
+ },
+ {
+  "sql": "alter table t alter column c set default 'a' || current_user",
+  "esperado": "recusa",
+  "nota": "default current_user concatenado"
+ },
+ {
+  "sql": "alter table t alter column c set default (select 'admin')",
+  "esperado": "recusa",
+  "nota": "default subconsulta set default"
+ },
+ {
+  "sql": "alter table t alter column c drop default",
+  "esperado": "recusa",
+  "nota": "drop default"
+ },
+ {
+  "sql": "alter table t alter column c drop not null",
+  "esperado": "recusa",
+  "nota": "drop not null"
+ },
+ {
+  "sql": "create table t (id bigint generated by default as identity primary key, x text)",
+  "esperado": "aceita",
+  "nota": "legit: generated by default"
+ },
+ {
+  "sql": "create table t (id bigint generated always as identity primary key, n text)",
+  "esperado": "aceita",
+  "nota": "legit: always identity"
+ },
+ {
+  "sql": "create table t (id uuid primary key default gen_random_uuid(), criado timestamptz not null default now())",
+  "esperado": "aceita",
+  "nota": "legit uuid/now"
+ },
+ {
+  "sql": "create table t (id bigserial primary key, n text not null default '')",
+  "esperado": "aceita",
+  "nota": "legit bigserial"
+ },
+ {
+  "sql": "create table caixa_precos (id bigint generated always as identity primary key, servico text not null, valor numeric(10,2) not null default 0)",
+  "esperado": "aceita",
+  "nota": "legit caixa_precos"
+ },
+ {
+  "sql": "create table t (u uuid references caixa_unidades(id) on delete set default)",
+  "esperado": "aceita",
+  "nota": "fk set default"
+ },
+ {
+  "sql": "create table t (a int, b int, foreign key (a) references caixa_u (id) on delete cascade on update cascade)",
+  "esperado": "aceita",
+  "nota": "fk cascade"
+ },
+ {
+  "sql": "create table t (a int check (a > 0), b text, primary key (a))",
+  "esperado": "aceita",
+  "nota": "check simples"
+ },
+ {
+  "sql": "alter table t add constraint c check (a in (1,2) and b between 1 and 2 and c like 'a%' and d is null)",
+  "esperado": "aceita",
+  "nota": "check in/between/like"
+ },
+ {
+  "sql": "alter table t add column x int, alter column c set default 1, alter column d set not null, alter column e type int, enable row level security",
+  "esperado": "aceita",
+  "nota": "alter varios"
+ },
+ {
+  "sql": "alter table t add column x int, disable row level security",
+  "esperado": "recusa",
+  "nota": "disable rls"
+ },
+ {
+  "sql": "alter table t add column x int, owner to postgres",
+  "esperado": "recusa",
+  "nota": "owner"
+ },
+ {
+  "sql": "alter table t rename to u",
+  "esperado": "recusa",
+  "nota": "rename"
+ },
+ {
+  "sql": "alter table t rename column a to b",
+  "esperado": "recusa",
+  "nota": "rename col"
+ },
+ {
+  "sql": "create table t (a numeric(12,2), b varchar(40), c timestamp, d jsonb default '{}'::jsonb, e boolean default false, f text[] )",
+  "esperado": "aceita",
+  "nota": "tipos"
+ },
+ {
+  "sql": "create table t (a point)",
+  "esperado": "recusa",
+  "nota": "tipo fora da lista"
+ },
+ {
+  "sql": "create table t (a regclass)",
+  "esperado": "recusa",
+  "nota": "tipo regclass"
+ },
+ {
+  "sql": "create table t (a text default 'rh_docs'::regclass)",
+  "esperado": "recusa",
+  "nota": "cast regclass"
+ },
+ {
+  "sql": "create table t (a int, b text default null)",
+  "esperado": "aceita",
+  "nota": "default null"
+ },
+ {
+  "sql": "alter table t alter column c set default 0.5",
+  "esperado": "aceita",
+  "nota": "default decimal"
+ },
+ {
+  "sql": "alter table caixa add column unidade text",
+  "esperado": "aceita",
+  "nota": "add column"
+ },
+ {
+  "sql": "ALTER TABLE public.caixa ADD COLUMN IF NOT EXISTS ativo boolean NOT NULL DEFAULT true",
+  "esperado": "aceita",
+  "nota": "add column if not exists"
+ },
+ {
+  "sql": "alter table caixa_precos alter column valor set data type text",
+  "esperado": "aceita",
+  "nota": "alter tipo sem using"
+ },
+ {
+  "sql": "alter table caixa_precos add primary key (id)",
+  "esperado": "aceita",
+  "nota": "add pk"
+ },
+ {
+  "sql": "grant update on rh_usuarios to authenticated",
+  "esperado": "recusa",
+  "nota": "fechada grant"
+ },
+ {
+  "sql": "create policy p on rh_usuarios for update to authenticated using (true)",
+  "esperado": "recusa",
+  "nota": "fechada policy"
+ },
+ {
+  "sql": "alter table rh_usuarios add column x text",
+  "esperado": "recusa",
+  "nota": "fechada alter"
+ },
+ {
+  "sql": "comment on table rh_usuarios is 'x'",
+  "esperado": "recusa",
+  "nota": "fechada comment"
+ },
+ {
+  "sql": "create view v with (security_invoker = true) as select * from rh_usuarios",
+  "esperado": "recusa",
+  "nota": "fechada view"
+ },
+ {
+  "sql": "alter table caixa add column u text references rh_usuarios(id)",
+  "esperado": "recusa",
+  "nota": "fechada fk"
+ },
+ {
+  "sql": "create index i on rh_usuarios (a)",
+  "esperado": "recusa",
+  "nota": "fechada indice"
+ },
+ {
+  "sql": "grant update on rh_docs to authenticated",
+  "esperado": "recusa",
+  "nota": "fechada grant"
+ },
+ {
+  "sql": "create policy p on rh_docs for update to authenticated using (true)",
+  "esperado": "recusa",
+  "nota": "fechada policy"
+ },
+ {
+  "sql": "alter table rh_docs add column x text",
+  "esperado": "recusa",
+  "nota": "fechada alter"
+ },
+ {
+  "sql": "comment on table rh_docs is 'x'",
+  "esperado": "recusa",
+  "nota": "fechada comment"
+ },
+ {
+  "sql": "create view v with (security_invoker = true) as select * from rh_docs",
+  "esperado": "recusa",
+  "nota": "fechada view"
+ },
+ {
+  "sql": "alter table caixa add column u text references rh_docs(id)",
+  "esperado": "recusa",
+  "nota": "fechada fk"
+ },
+ {
+  "sql": "create index i on rh_docs (a)",
+  "esperado": "recusa",
+  "nota": "fechada indice"
+ },
+ {
+  "sql": "grant update on rh_log to authenticated",
+  "esperado": "recusa",
+  "nota": "fechada grant"
+ },
+ {
+  "sql": "create policy p on rh_log for update to authenticated using (true)",
+  "esperado": "recusa",
+  "nota": "fechada policy"
+ },
+ {
+  "sql": "alter table rh_log add column x text",
+  "esperado": "recusa",
+  "nota": "fechada alter"
+ },
+ {
+  "sql": "comment on table rh_log is 'x'",
+  "esperado": "recusa",
+  "nota": "fechada comment"
+ },
+ {
+  "sql": "create view v with (security_invoker = true) as select * from rh_log",
+  "esperado": "recusa",
+  "nota": "fechada view"
+ },
+ {
+  "sql": "alter table caixa add column u text references rh_log(id)",
+  "esperado": "recusa",
+  "nota": "fechada fk"
+ },
+ {
+  "sql": "create index i on rh_log (a)",
+  "esperado": "recusa",
+  "nota": "fechada indice"
+ },
+ {
+  "sql": "grant update on rh_site to authenticated",
+  "esperado": "recusa",
+  "nota": "fechada grant"
+ },
+ {
+  "sql": "create policy p on rh_site for update to authenticated using (true)",
+  "esperado": "recusa",
+  "nota": "fechada policy"
+ },
+ {
+  "sql": "alter table rh_site add column x text",
+  "esperado": "recusa",
+  "nota": "fechada alter"
+ },
+ {
+  "sql": "comment on table rh_site is 'x'",
+  "esperado": "recusa",
+  "nota": "fechada comment"
+ },
+ {
+  "sql": "create view v with (security_invoker = true) as select * from rh_site",
+  "esperado": "recusa",
+  "nota": "fechada view"
+ },
+ {
+  "sql": "alter table caixa add column u text references rh_site(id)",
+  "esperado": "recusa",
+  "nota": "fechada fk"
+ },
+ {
+  "sql": "create index i on rh_site (a)",
+  "esperado": "recusa",
+  "nota": "fechada indice"
+ },
+ {
+  "sql": "grant update on rh_site_stage to authenticated",
+  "esperado": "recusa",
+  "nota": "fechada grant"
+ },
+ {
+  "sql": "create policy p on rh_site_stage for update to authenticated using (true)",
+  "esperado": "recusa",
+  "nota": "fechada policy"
+ },
+ {
+  "sql": "alter table rh_site_stage add column x text",
+  "esperado": "recusa",
+  "nota": "fechada alter"
+ },
+ {
+  "sql": "comment on table rh_site_stage is 'x'",
+  "esperado": "recusa",
+  "nota": "fechada comment"
+ },
+ {
+  "sql": "create view v with (security_invoker = true) as select * from rh_site_stage",
+  "esperado": "recusa",
+  "nota": "fechada view"
+ },
+ {
+  "sql": "alter table caixa add column u text references rh_site_stage(id)",
+  "esperado": "recusa",
+  "nota": "fechada fk"
+ },
+ {
+  "sql": "create index i on rh_site_stage (a)",
+  "esperado": "recusa",
+  "nota": "fechada indice"
+ },
+ {
+  "sql": "grant update on admin_log to authenticated",
+  "esperado": "recusa",
+  "nota": "fechada grant"
+ },
+ {
+  "sql": "create policy p on admin_log for update to authenticated using (true)",
+  "esperado": "recusa",
+  "nota": "fechada policy"
+ },
+ {
+  "sql": "alter table admin_log add column x text",
+  "esperado": "recusa",
+  "nota": "fechada alter"
+ },
+ {
+  "sql": "comment on table admin_log is 'x'",
+  "esperado": "recusa",
+  "nota": "fechada comment"
+ },
+ {
+  "sql": "create view v with (security_invoker = true) as select * from admin_log",
+  "esperado": "recusa",
+  "nota": "fechada view"
+ },
+ {
+  "sql": "alter table caixa add column u text references admin_log(id)",
+  "esperado": "recusa",
+  "nota": "fechada fk"
+ },
+ {
+  "sql": "create index i on admin_log (a)",
+  "esperado": "recusa",
+  "nota": "fechada indice"
+ },
+ {
+  "sql": "grant update on admin_sql_log to authenticated",
+  "esperado": "recusa",
+  "nota": "fechada grant"
+ },
+ {
+  "sql": "create policy p on admin_sql_log for update to authenticated using (true)",
+  "esperado": "recusa",
+  "nota": "fechada policy"
+ },
+ {
+  "sql": "alter table admin_sql_log add column x text",
+  "esperado": "recusa",
+  "nota": "fechada alter"
+ },
+ {
+  "sql": "comment on table admin_sql_log is 'x'",
+  "esperado": "recusa",
+  "nota": "fechada comment"
+ },
+ {
+  "sql": "create view v with (security_invoker = true) as select * from admin_sql_log",
+  "esperado": "recusa",
+  "nota": "fechada view"
+ },
+ {
+  "sql": "alter table caixa add column u text references admin_sql_log(id)",
+  "esperado": "recusa",
+  "nota": "fechada fk"
+ },
+ {
+  "sql": "create index i on admin_sql_log (a)",
+  "esperado": "recusa",
+  "nota": "fechada indice"
+ },
+ {
+  "sql": "grant update on admin_backup to authenticated",
+  "esperado": "recusa",
+  "nota": "fechada grant"
+ },
+ {
+  "sql": "create policy p on admin_backup for update to authenticated using (true)",
+  "esperado": "recusa",
+  "nota": "fechada policy"
+ },
+ {
+  "sql": "alter table admin_backup add column x text",
+  "esperado": "recusa",
+  "nota": "fechada alter"
+ },
+ {
+  "sql": "comment on table admin_backup is 'x'",
+  "esperado": "recusa",
+  "nota": "fechada comment"
+ },
+ {
+  "sql": "create view v with (security_invoker = true) as select * from admin_backup",
+  "esperado": "recusa",
+  "nota": "fechada view"
+ },
+ {
+  "sql": "alter table caixa add column u text references admin_backup(id)",
+  "esperado": "recusa",
+  "nota": "fechada fk"
+ },
+ {
+  "sql": "create index i on admin_backup (a)",
+  "esperado": "recusa",
+  "nota": "fechada indice"
+ },
+ {
+  "sql": "grant update on public.rh_usuarios to authenticated",
+  "esperado": "recusa",
+  "nota": "fechada grant"
+ },
+ {
+  "sql": "create policy p on public.rh_usuarios for update to authenticated using (true)",
+  "esperado": "recusa",
+  "nota": "fechada policy"
+ },
+ {
+  "sql": "alter table public.rh_usuarios add column x text",
+  "esperado": "recusa",
+  "nota": "fechada alter"
+ },
+ {
+  "sql": "comment on table public.rh_usuarios is 'x'",
+  "esperado": "recusa",
+  "nota": "fechada comment"
+ },
+ {
+  "sql": "create view v with (security_invoker = true) as select * from public.rh_usuarios",
+  "esperado": "recusa",
+  "nota": "fechada view"
+ },
+ {
+  "sql": "alter table caixa add column u text references public.rh_usuarios(id)",
+  "esperado": "recusa",
+  "nota": "fechada fk"
+ },
+ {
+  "sql": "create index i on public.rh_usuarios (a)",
+  "esperado": "recusa",
+  "nota": "fechada indice"
+ },
+ {
+  "sql": "grant update on RH_USUARIOS to authenticated",
+  "esperado": "recusa",
+  "nota": "fechada grant"
+ },
+ {
+  "sql": "create policy p on RH_USUARIOS for update to authenticated using (true)",
+  "esperado": "recusa",
+  "nota": "fechada policy"
+ },
+ {
+  "sql": "alter table RH_USUARIOS add column x text",
+  "esperado": "recusa",
+  "nota": "fechada alter"
+ },
+ {
+  "sql": "comment on table RH_USUARIOS is 'x'",
+  "esperado": "recusa",
+  "nota": "fechada comment"
+ },
+ {
+  "sql": "create view v with (security_invoker = true) as select * from RH_USUARIOS",
+  "esperado": "recusa",
+  "nota": "fechada view"
+ },
+ {
+  "sql": "alter table caixa add column u text references RH_USUARIOS(id)",
+  "esperado": "recusa",
+  "nota": "fechada fk"
+ },
+ {
+  "sql": "create index i on RH_USUARIOS (a)",
+  "esperado": "recusa",
+  "nota": "fechada indice"
+ },
+ {
+  "sql": "grant update on \"rh_usuarios\" to authenticated",
+  "esperado": "recusa",
+  "nota": "fechada grant"
+ },
+ {
+  "sql": "create policy p on \"rh_usuarios\" for update to authenticated using (true)",
+  "esperado": "recusa",
+  "nota": "fechada policy"
+ },
+ {
+  "sql": "alter table \"rh_usuarios\" add column x text",
+  "esperado": "recusa",
+  "nota": "fechada alter"
+ },
+ {
+  "sql": "comment on table \"rh_usuarios\" is 'x'",
+  "esperado": "recusa",
+  "nota": "fechada comment"
+ },
+ {
+  "sql": "create view v with (security_invoker = true) as select * from \"rh_usuarios\"",
+  "esperado": "recusa",
+  "nota": "fechada view"
+ },
+ {
+  "sql": "alter table caixa add column u text references \"rh_usuarios\"(id)",
+  "esperado": "recusa",
+  "nota": "fechada fk"
+ },
+ {
+  "sql": "create index i on \"rh_usuarios\" (a)",
+  "esperado": "recusa",
+  "nota": "fechada indice"
+ },
+ {
+  "sql": "grant update on public.\"rh_docs\" to authenticated",
+  "esperado": "recusa",
+  "nota": "fechada grant"
+ },
+ {
+  "sql": "create policy p on public.\"rh_docs\" for update to authenticated using (true)",
+  "esperado": "recusa",
+  "nota": "fechada policy"
+ },
+ {
+  "sql": "alter table public.\"rh_docs\" add column x text",
+  "esperado": "recusa",
+  "nota": "fechada alter"
+ },
+ {
+  "sql": "comment on table public.\"rh_docs\" is 'x'",
+  "esperado": "recusa",
+  "nota": "fechada comment"
+ },
+ {
+  "sql": "create view v with (security_invoker = true) as select * from public.\"rh_docs\"",
+  "esperado": "recusa",
+  "nota": "fechada view"
+ },
+ {
+  "sql": "alter table caixa add column u text references public.\"rh_docs\"(id)",
+  "esperado": "recusa",
+  "nota": "fechada fk"
+ },
+ {
+  "sql": "create index i on public.\"rh_docs\" (a)",
+  "esperado": "recusa",
+  "nota": "fechada indice"
+ },
+ {
+  "sql": "grant update on U&\"rh\\005fusuarios\" to authenticated",
+  "esperado": "recusa",
+  "nota": "fechada grant"
+ },
+ {
+  "sql": "create policy p on U&\"rh\\005fusuarios\" for update to authenticated using (true)",
+  "esperado": "recusa",
+  "nota": "fechada policy"
+ },
+ {
+  "sql": "alter table U&\"rh\\005fusuarios\" add column x text",
+  "esperado": "recusa",
+  "nota": "fechada alter"
+ },
+ {
+  "sql": "comment on table U&\"rh\\005fusuarios\" is 'x'",
+  "esperado": "recusa",
+  "nota": "fechada comment"
+ },
+ {
+  "sql": "create view v with (security_invoker = true) as select * from U&\"rh\\005fusuarios\"",
+  "esperado": "recusa",
+  "nota": "fechada view"
+ },
+ {
+  "sql": "alter table caixa add column u text references U&\"rh\\005fusuarios\"(id)",
+  "esperado": "recusa",
+  "nota": "fechada fk"
+ },
+ {
+  "sql": "create index i on U&\"rh\\005fusuarios\" (a)",
+  "esperado": "recusa",
+  "nota": "fechada indice"
+ },
+ {
+  "sql": "alter table \"RH_USUARIOS\" add column x int",
+  "esperado": "recusa",
+  "nota": "nome entre aspas maiusculo e OUTRA tabela",
+  "astSozinho": "aceita"
+ },
+ {
+  "sql": "alter table rh_usuarios\n\tenable row level security",
+  "esperado": "recusa",
+  "nota": "fechada quebra"
+ },
+ {
+  "sql": "alter table rh_usuarios/**/ add column x int",
+  "esperado": "recusa",
+  "nota": "fechada comentario"
+ },
+ {
+  "sql": "alter table rh_usuarios-- x\n add column x int",
+  "esperado": "recusa",
+  "nota": "fechada comentario linha"
+ },
+ {
+  "sql": "create table t3 (like rh_usuarios including all)",
+  "esperado": "recusa",
+  "nota": "like fechada"
+ },
+ {
+  "sql": "create table t3 (like caixa)",
+  "esperado": "aceita",
+  "nota": "like aberta"
+ },
+ {
+  "sql": "comment on table caixa is 'copiado de rh_docs'",
+  "esperado": "aceita",
+  "nota": "nome fechado dentro de TEXTO não é nome"
+ },
+ {
+  "sql": "alter table fin_lanc add column obs text",
+  "esperado": "aceita",
+  "nota": "fin_lanc aberta"
+ },
+ {
+  "sql": "alter table caixa_lanc add column docs_ok boolean",
+  "esperado": "aceita",
+  "nota": "coluna parecida"
+ },
+ {
+  "sql": "alter table caixa add column rh_docs int",
+  "esperado": "aceita",
+  "nota": "coluna com nome parecido com tabela fechada: é só um nome de coluna"
+ },
+ {
+  "sql": "grant update on admin_sql_xyz to authenticated",
+  "esperado": "recusa",
+  "nota": "admin_sql*"
+ },
+ {
+  "sql": "comment on index rh_docs_pkey is 'x'",
+  "esperado": "recusa",
+  "nota": "indice derivado de fechada"
+ },
+ {
+  "sql": "grant usage on sequence admin_log_id_seq to authenticated",
+  "esperado": "recusa",
+  "nota": "sequencia derivada de fechada"
+ },
+ {
+  "sql": "alter table caixa add constraint rh_usuarios_x check (a > 0)",
+  "esperado": "aceita",
+  "nota": "nome de restrição parecido não é tabela"
+ },
+ {
+  "sql": "create table auth.x (a int)",
+  "esperado": "recusa",
+  "nota": "auth"
+ },
+ {
+  "sql": "create table auth .x (a int)",
+  "esperado": "recusa",
+  "nota": "auth espaco"
+ },
+ {
+  "sql": "create table \"auth\".x (a int)",
+  "esperado": "recusa",
+  "nota": "auth aspas"
+ },
+ {
+  "sql": "create table storage.x (a int)",
+  "esperado": "recusa",
+  "nota": "storage"
+ },
+ {
+  "sql": "create table outro.x (a int)",
+  "esperado": "recusa",
+  "nota": "outro"
+ },
+ {
+  "sql": "alter table auth.users add column x text",
+  "esperado": "recusa",
+  "nota": "auth.users"
+ },
+ {
+  "sql": "create view v with (security_invoker=true) as select * from auth.users",
+  "esperado": "recusa",
+  "nota": "view auth"
+ },
+ {
+  "sql": "create view v with (security_invoker=true) as select * from \"auth\".users",
+  "esperado": "recusa",
+  "nota": "view auth aspas"
+ },
+ {
+  "sql": "create view v with (security_invoker=true) as select * from auth/**/.users auth",
+  "esperado": "recusa",
+  "nota": "view auth comentario"
+ },
+ {
+  "sql": "create view v with (security_invoker=true) as select * from privado.salarios privado",
+  "esperado": "recusa",
+  "nota": "view privado"
+ },
+ {
+  "sql": "create view v with (security_invoker=true) as select * from pg_catalog.pg_roles",
+  "esperado": "recusa",
+  "nota": "pg_catalog"
+ },
+ {
+  "sql": "create view v with (security_invoker=true) as select * from information_schema.tables",
+  "esperado": "recusa",
+  "nota": "information_schema"
+ },
+ {
+  "sql": "create view v with (security_invoker=true) as select * from pg_shadow",
+  "esperado": "aceita",
+  "nota": "pg_shadow é nome de tabela sem esquema (o banco nega por permissão)"
+ },
+ {
+  "sql": "create table t2 (u uuid references auth.users(id))",
+  "esperado": "recusa",
+  "nota": "fk auth"
+ },
+ {
+  "sql": "comment on column auth.users.email is 'x'",
+  "esperado": "recusa",
+  "nota": "comment auth"
+ },
+ {
+  "sql": "comment on column public.t.c is 'x'",
+  "esperado": "aceita",
+  "nota": "comment column public"
+ },
+ {
+  "sql": "comment on table private.x is 'a'",
+  "esperado": "recusa",
+  "nota": "comment private"
+ },
+ {
+  "sql": "comment on column public.auth.x is 'x'",
+  "esperado": "aceita",
+  "nota": "tabela de nome auth dentro de public"
+ },
+ {
+  "sql": "create view v with (security_invoker = true) as select * from caixa",
+  "esperado": "aceita",
+  "nota": "view ok"
+ },
+ {
+  "sql": "create view v with (security_invoker=on) as select * from caixa",
+  "esperado": "aceita",
+  "nota": "view on"
+ },
+ {
+  "sql": "create view v as select * from caixa",
+  "esperado": "recusa",
+  "nota": "view sem invoker"
+ },
+ {
+  "sql": "create view v with (security_invoker = false) as select 1",
+  "esperado": "recusa",
+  "nota": "invoker false"
+ },
+ {
+  "sql": "create view v with (security_barrier) as select 1 /* security_invoker = true */",
+  "esperado": "recusa",
+  "nota": "invoker no comentario"
+ },
+ {
+  "sql": "create view v with (x = 'security_invoker = true') as select 1",
+  "esperado": "recusa",
+  "nota": "invoker em texto"
+ },
+ {
+  "sql": "create view v as select 1 with (security_invoker=true)",
+  "esperado": "recusa",
+  "nota": "invalido",
+  "sintaxe": true
+ },
+ {
+  "sql": "create materialized view v as select 1",
+  "esperado": "recusa",
+  "nota": "materializada"
+ },
+ {
+  "sql": "create view v with (security_invoker = true) as with d as (delete from caixa returning *) select * from d",
+  "esperado": "recusa",
+  "nota": "view com cte delete"
+ },
+ {
+  "sql": "create view v with (security_invoker = true) as select p.a, caixa_u.b from caixa_precos p join caixa_u on caixa_u.id = p.u",
+  "esperado": "aceita",
+  "nota": "view join"
+ },
+ {
+  "sql": "create view v with (security_invoker = true) as select count(*), sum(valor) from caixa_precos group by servico",
+  "esperado": "aceita",
+  "nota": "view agregado"
+ },
+ {
+  "sql": "create view v with (security_invoker = true) as select f(a) from t",
+  "esperado": "recusa",
+  "nota": "view funcao"
+ },
+ {
+  "sql": "create view v with (security_invoker = true) as select * from t where a in (select a from u)",
+  "esperado": "recusa",
+  "nota": "view subconsulta"
+ },
+ {
+  "sql": "create view v with (security_invoker = true) as select 1 union select 2",
+  "esperado": "recusa",
+  "nota": "view union"
+ },
+ {
+  "sql": "create or replace view v (a, b) with (security_invoker = true) as select 1, 2",
+  "esperado": "aceita",
+  "nota": "view colunas"
+ },
+ {
+  "sql": "alter view v set (security_invoker = false)",
+  "esperado": "recusa",
+  "nota": "alter view"
+ },
+ {
+  "sql": "alter view v owner to postgres",
+  "esperado": "recusa",
+  "nota": "alter view owner"
+ },
+ {
+  "sql": "create view v with (security_invoker = true) as select 1; alter table v owner to x",
+  "esperado": "recusa",
+  "nota": "owner"
+ },
+ {
+  "sql": "create policy p on t for select using (true)",
+  "esperado": "recusa",
+  "nota": "sem TO"
+ },
+ {
+  "sql": "create policy p on t for select to public using (true)",
+  "esperado": "recusa",
+  "nota": "to public"
+ },
+ {
+  "sql": "create policy p on t to authenticated, mcp_leitor using (true)",
+  "esperado": "recusa",
+  "nota": "mcp_leitor"
+ },
+ {
+  "sql": "create policy p on t to anon using (true)",
+  "esperado": "recusa",
+  "nota": "anon"
+ },
+ {
+  "sql": "create policy p on t to postgres using (true)",
+  "esperado": "recusa",
+  "nota": "postgres"
+ },
+ {
+  "sql": "create policy p on t to authenticated using (rh_admin())",
+  "esperado": "aceita",
+  "nota": "policy rh_admin"
+ },
+ {
+  "sql": "create policy p on t to authenticated using (unidade = caixa_minha_unidade())",
+  "esperado": "aceita",
+  "nota": "policy caixa_minha_unidade"
+ },
+ {
+  "sql": "create policy p on t to authenticated using (unidade = public.caixa_minha_unidade())",
+  "esperado": "recusa",
+  "nota": "policy funcao com esquema"
+ },
+ {
+  "sql": "create policy p on t to authenticated using (rh_merge(a, a, null) is null)",
+  "esperado": "recusa",
+  "nota": "policy funcao gravadora"
+ },
+ {
+  "sql": "create policy p on t to authenticated using (exists (select 1 from rh_usuarios u where u.user_id = rh_papel()))",
+  "esperado": "recusa",
+  "nota": "policy subconsulta"
+ },
+ {
+  "sql": "create policy p on t as restrictive for update to authenticated, service_role using (rh_admin()) with check (true)",
+  "esperado": "aceita",
+  "nota": "policy restritiva"
+ },
+ {
+  "sql": "alter policy p on t using (rh_admin())",
+  "esperado": "aceita",
+  "nota": "alter policy"
+ },
+ {
+  "sql": "alter policy p on t to public",
+  "esperado": "recusa",
+  "nota": "alter policy to public"
+ },
+ {
+  "sql": "alter policy p on t rename to q",
+  "esperado": "recusa",
+  "nota": "rename policy"
+ },
+ {
+  "sql": "alter policy existente on rh_funcionarios to authenticated",
+  "esperado": "aceita",
+  "nota": "alter policy to authenticated"
+ },
+ {
+  "sql": "grant select on t to public",
+  "esperado": "recusa",
+  "nota": "public"
+ },
+ {
+  "sql": "grant select on t to anon",
+  "esperado": "recusa",
+  "nota": "anon"
+ },
+ {
+  "sql": "grant all on t to authenticated",
+  "esperado": "recusa",
+  "nota": "all"
+ },
+ {
+  "sql": "grant all privileges on t to authenticated",
+  "esperado": "recusa",
+  "nota": "all priv"
+ },
+ {
+  "sql": "grant truncate on t to authenticated",
+  "esperado": "recusa",
+  "nota": "truncate"
+ },
+ {
+  "sql": "grant select on all tables in schema public to authenticated",
+  "esperado": "recusa",
+  "nota": "all tables"
+ },
+ {
+  "sql": "grant select on t to authenticated with grant option",
+  "esperado": "recusa",
+  "nota": "grant option"
+ },
+ {
+  "sql": "grant authenticated to service_role",
+  "esperado": "recusa",
+  "nota": "role"
+ },
+ {
+  "sql": "grant sistemas to authenticated",
+  "esperado": "recusa",
+  "nota": "role interno"
+ },
+ {
+  "sql": "grant select on t to mcp_leitor",
+  "esperado": "recusa",
+  "nota": "mcp_leitor"
+ },
+ {
+  "sql": "grant usage on schema public to authenticated",
+  "esperado": "recusa",
+  "nota": "schema"
+ },
+ {
+  "sql": "grant select (salario) on caixa to authenticated",
+  "esperado": "recusa",
+  "nota": "coluna"
+ },
+ {
+  "sql": "revoke select on t from authenticated",
+  "esperado": "aceita",
+  "nota": "revoke"
+ },
+ {
+  "sql": "revoke all on t from authenticated",
+  "esperado": "recusa",
+  "nota": "revoke all"
+ },
+ {
+  "sql": "GRANT SELECT, INSERT ON public.caixa_precos TO authenticated",
+  "esperado": "aceita",
+  "nota": "grant ok"
+ },
+ {
+  "sql": "grant select, insert on caixa, public.caixa_u to authenticated, service_role",
+  "esperado": "aceita",
+  "nota": "grant varios"
+ },
+ {
+  "sql": "grant select on t to authenticated cascade",
+  "esperado": "recusa",
+  "nota": "cascade sintaxe",
+  "sintaxe": true
+ },
+ {
+  "sql": "alter default privileges grant select on tables to authenticated",
+  "esperado": "recusa",
+  "nota": "default privileges"
+ },
+ {
+  "sql": "create function public.f() returns int language sql as $$ select 1 $$",
+  "esperado": "recusa",
+  "nota": "function"
+ },
+ {
+  "sql": "create function public.f() returns int language sql security definer as 'select 1'",
+  "esperado": "recusa",
+  "nota": "definer"
+ },
+ {
+  "sql": "create rule r as on insert to t do instead nothing",
+  "esperado": "recusa",
+  "nota": "rule"
+ },
+ {
+  "sql": "create trigger tg after insert on t execute function f()",
+  "esperado": "recusa",
+  "nota": "trigger"
+ },
+ {
+  "sql": "set search_path = auth",
+  "esperado": "recusa",
+  "nota": "set"
+ },
+ {
+  "sql": "set role sistemas",
+  "esperado": "recusa",
+  "nota": "set role"
+ },
+ {
+  "sql": "reset all",
+  "esperado": "recusa",
+  "nota": "reset"
+ },
+ {
+  "sql": "do $$ begin delete from caixa; end $$",
+  "esperado": "recusa",
+  "nota": "do"
+ },
+ {
+  "sql": "call f()",
+  "esperado": "recusa",
+  "nota": "call"
+ },
+ {
+  "sql": "vacuum full",
+  "esperado": "recusa",
+  "nota": "vacuum"
+ },
+ {
+  "sql": "drop table caixa",
+  "esperado": "recusa",
+  "nota": "drop"
+ },
+ {
+  "sql": "alter table caixa drop column valor",
+  "esperado": "recusa",
+  "nota": "drop column"
+ },
+ {
+  "sql": "truncate caixa",
+  "esperado": "recusa",
+  "nota": "truncate"
+ },
+ {
+  "sql": "copy caixa to '/tmp/x'",
+  "esperado": "recusa",
+  "nota": "copy"
+ },
+ {
+  "sql": "create role invasor superuser",
+  "esperado": "recusa",
+  "nota": "create role"
+ },
+ {
+  "sql": "alter role x superuser",
+  "esperado": "recusa",
+  "nota": "alter role"
+ },
+ {
+  "sql": "create extension dblink",
+  "esperado": "recusa",
+  "nota": "extension"
+ },
+ {
+  "sql": "create schema s",
+  "esperado": "recusa",
+  "nota": "schema"
+ },
+ {
+  "sql": "create table x (a int) ; select pg_sleep(100)",
+  "esperado": "recusa",
+  "nota": "pg_sleep"
+ },
+ {
+  "sql": "begin; create table x (a int); commit",
+  "esperado": "recusa",
+  "nota": "transacao"
+ },
+ {
+  "sql": "create index concurrently i on t (a)",
+  "esperado": "recusa",
+  "nota": "concurrently"
+ },
+ {
+  "sql": "",
+  "esperado": "recusa",
+  "nota": "vazio",
+  "sintaxe": true
+ },
+ {
+  "sql": "-- so comentario",
+  "esperado": "recusa",
+  "nota": "so comentario",
+  "sintaxe": true
+ },
+ {
+  "sql": "create table x (a int",
+  "esperado": "recusa",
+  "nota": "sintaxe",
+  "sintaxe": true
+ },
+ {
+  "sql": "create table t (a int); alter table t enable row level security; create policy p on t for select to authenticated using (true)",
+  "esperado": "aceita",
+  "nota": "tabela+rls+policy"
+ },
+ {
+  "sql": "create table t (a int); grant insert on t to authenticated",
+  "esperado": "aceita",
+  "nota": "tabela+grant"
+ },
+ {
+  "sql": "comment on constraint c on t is 'x'",
+  "esperado": "aceita",
+  "nota": "comment constraint"
+ },
+ {
+  "sql": "comment on policy p on t is 'x'",
+  "esperado": "aceita",
+  "nota": "comment policy"
+ },
+ {
+  "sql": "comment on index i is 'x'",
+  "esperado": "aceita",
+  "nota": "comment index"
+ },
+ {
+  "sql": "comment on table t is null",
+  "esperado": "aceita",
+  "nota": "comment null"
+ },
+ {
+  "sql": "create table t (a int default current_timestamp, b date default current_date)",
+  "esperado": "aceita",
+  "nota": "defaults sql value"
+ },
+ {
+  "sql": "create table t (a text default lower('X'), b text default upper('x'))",
+  "esperado": "aceita",
+  "nota": "funcoes ok"
+ },
+ {
+  "sql": "create table t (a timestamptz default now() + interval '1 day')",
+  "esperado": "aceita",
+  "nota": "interval é tipo permitido"
+ }
+]
