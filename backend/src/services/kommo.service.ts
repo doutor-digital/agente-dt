@@ -115,6 +115,19 @@ export const SUPPORTED_FIELD_TYPES: ReadonlySet<string> = new Set<KommoFieldType
   'radiobutton',
 ]);
 
+/** Uma tarefa como o GET /tasks devolve (só o que lemos). */
+export interface KommoTarefa {
+  id: number;
+  text?: string | null;
+  complete_till?: number | null;
+  duration?: number | null;
+  task_type_id?: number | null;
+  entity_id?: number | null;
+  entity_type?: string | null;
+  responsible_user_id?: number | null;
+  is_completed?: boolean;
+}
+
 export interface KommoTalk {
   talk_id: number;
   chat_id?: string | null;
@@ -1710,9 +1723,12 @@ export class KommoClient {
   }
 
   async createTask(args: {
-    leadId: number;
+    /** sem `leadId` a tarefa nasce solta (sem entidade) — aparece no calendário, mas não em cartão nenhum */
+    leadId?: number | null;
     text: string;
     completeAt: number;
+    /** duração em segundos (o calendário do Kommo desenha o bloco) */
+    durationSec?: number;
     responsibleUserId?: number;
     taskTypeId?: number;
     /** quem pediu escolheu o responsável (o João no conector, a ação configurada no console): não troca */
@@ -1723,10 +1739,10 @@ export class KommoClient {
     const postar = async (quem: number | undefined) => {
       const body = [
         {
-          entity_id: args.leadId,
-          entity_type: 'leads',
+          ...(args.leadId ? { entity_id: args.leadId, entity_type: 'leads' } : {}),
           text: downgradeEmoji(args.text),
           complete_till: args.completeAt,
+          ...(args.durationSec ? { duration: args.durationSec } : {}),
           ...(quem ? { responsible_user_id: quem } : {}),
           ...(args.taskTypeId ? { task_type_id: args.taskTypeId } : {}),
         },
@@ -1748,6 +1764,71 @@ export class KommoClient {
       } catch (err2) {
         wrapAxiosError(err2, `createTask(${args.leadId})`);
       }
+    }
+  }
+
+  /**
+   * Tarefas ABERTAS da conta de um tipo (ou de todos), paginadas de 250. `completa` = leu até o fim: lista
+   * cortada no teto de páginas NÃO pode servir de base para "essa tarefa não existe" (criaria duplicada).
+   * Erro de API lança.
+   */
+  async listarTarefasAbertas(args: { taskTypeId?: number; maxPaginas?: number } = {}): Promise<{ tarefas: KommoTarefa[]; completa: boolean }> {
+    const tarefas: KommoTarefa[] = [];
+    const maxPaginas = args.maxPaginas ?? 40;
+    try {
+      for (let page = 1; page <= maxPaginas; page++) {
+        const { data, status } = await this.http.get<{ _embedded?: { tasks?: KommoTarefa[] } } | ''>('/tasks', {
+          params: {
+            'filter[is_completed]': 0,
+            ...(args.taskTypeId ? { 'filter[task_type][]': args.taskTypeId } : {}),
+            'order[complete_till]': 'asc',
+            limit: 250,
+            page,
+          },
+        });
+        // 204 = nenhuma; o Kommo devolve corpo vazio, não lista vazia
+        if (status === 204 || !data) return { tarefas, completa: true };
+        const lote = data._embedded?.tasks ?? [];
+        tarefas.push(...lote);
+        if (lote.length < 250) return { tarefas, completa: true };
+      }
+      return { tarefas, completa: false };
+    } catch (err) {
+      wrapAxiosError(err, 'listarTarefasAbertas');
+    }
+  }
+
+  /** Muda texto, horário e/ou duração de uma tarefa. */
+  async atualizarTarefa(taskId: number, args: { text?: string; completeAt?: number; durationSec?: number }): Promise<void> {
+    const body: Record<string, unknown> = {};
+    if (args.text !== undefined) body.text = downgradeEmoji(args.text);
+    if (args.completeAt !== undefined) body.complete_till = args.completeAt;
+    if (args.durationSec) body.duration = args.durationSec;
+    try {
+      await this.http.patch(`/tasks/${taskId}`, body);
+    } catch (err) {
+      wrapAxiosError(err, `atualizarTarefa(${taskId})`);
+    }
+  }
+
+  /** Conclui a tarefa com um resultado (o texto que o Kommo mostra no histórico). Nunca apaga. */
+  async fecharTarefa(taskId: number, resultado: string): Promise<void> {
+    try {
+      await this.http.patch(`/tasks/${taskId}`, { is_completed: true, result: { text: downgradeEmoji(resultado) } });
+    } catch (err) {
+      wrapAxiosError(err, `fecharTarefa(${taskId})`);
+    }
+  }
+
+  /** Os tipos de tarefa da conta (Follow-up, Reunião, Consulta…). */
+  async listarTiposDeTarefa(): Promise<Array<{ id: number; name: string }>> {
+    try {
+      const { data } = await this.http.get<{ _embedded?: { task_types?: Array<{ id: number; name: string }> } }>('/account', {
+        params: { with: 'task_types' },
+      });
+      return data?._embedded?.task_types ?? [];
+    } catch (err) {
+      wrapAxiosError(err, 'listarTiposDeTarefa');
     }
   }
 
