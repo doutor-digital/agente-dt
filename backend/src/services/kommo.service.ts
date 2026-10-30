@@ -126,6 +126,8 @@ export interface KommoTarefa {
   entity_type?: string | null;
   responsible_user_id?: number | null;
   is_completed?: boolean;
+  /** o resultado com que a tarefa foi concluída (só nas concluídas) */
+  result?: { text?: string | null } | null;
 }
 
 export interface KommoTalk {

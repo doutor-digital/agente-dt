@@ -55,8 +55,7 @@ const deps = (kommo: KommoClient, agenda: SpineSchedule[], extra: Partial<DepsDo
   agora: AGORA,
   pausaMs: 0,
   buscarAgenda: async () => ({ ok: true, agendamentos: agenda }),
-  resolver: async () => ({ leadId: 555, confirmado: true }),
-  telefone: async () => '+5547999990000',
+  resolver: async () => ({ leadId: 555, confirmado: true, fone: '+5547999990000' }),
   ...extra,
 });
 
@@ -93,7 +92,7 @@ test('aplicar: cria a tarefa no cartão, com responsável, tipo "Consulta" achad
   assert.equal(r.semCartao, 0);
   assert.deepEqual(c.criadas, [{
     leadId: 555,
-    text: '🩺 AVALIAÇÃO 14:00 · Dr. Leonardo · AGENDADO [ag:3784113]',
+    text: '🩺 AVALIAÇÃO 14:00 · Dr. Leonardo · AGENDADO [ag:3784113] Paciente: INGRIDE SOUZA LIMA',
     completeAt: Date.parse('2026-11-03T17:00:00Z') / 1000,
     responsibleUserId: 15905863,
     taskTypeId: 4302851,
@@ -112,10 +111,79 @@ test('aplicar: tipo configurado por unidade vence a busca por nome; duração 0 
   assert.equal(c.tipos, 0);
 });
 
-test('aplicar: conta sem tipo "Consulta" usa o tipo 1', async () => {
+test('conta sem tipo "Consulta" e sem tipo configurado: a unidade FICA PARADA (nada de cair no tipo 1, que duplicaria quando o tipo fosse criado)', async () => {
   const { kommo, c } = kommoFalso([], { tipos: [{ id: 1, name: 'Follow-up' }, { id: 2, name: 'Reunião' }] });
+  const r = await varrerCalendario(unit, deps(kommo, [ag()], { modo: 'aplicar' }));
+  assert.deepEqual(c.criadas, []);
+  assert.equal(r.erros, 1);
+  assert.equal(r.criadas, 0);
+});
+
+test('o nome do paciente da franquia vai em TODA tarefa, também a que tem cartão (homônimos no mesmo cartão)', async () => {
+  const { kommo, c } = kommoFalso([]);
   await varrerCalendario(unit, deps(kommo, [ag()], { modo: 'aplicar' }));
-  assert.equal(c.criadas[0].taskTypeId, 1);
+  assert.match(String(c.criadas[0].text), /\[ag:3784113\] Paciente: INGRIDE SOUZA LIMA$/);
+});
+
+test('a tarefa solta usa o telefone que o resolver já achou: nenhuma segunda busca na franquia', async () => {
+  const { kommo, c } = kommoFalso([]);
+  let buscas = 0;
+  await varrerCalendario(unit, deps(kommo, [ag(), ag({ idSchedule: 2 })], {
+    modo: 'aplicar',
+    resolver: async () => { buscas++; return { leadId: null, confirmado: true, fone: '+5547999990000' }; },
+  }));
+  assert.equal(buscas, 2);
+  assert.match(String(c.criadas[1].text), /Tel: \+5547999990000$/);
+});
+
+test('lê a agenda desde hoje-14: a baixa que a recepção dá dias depois FECHA a tarefa (e nada é criado para o passado)', async () => {
+  let lido: { de: string; ate: string } | null = null;
+  const antes = Date.parse('2026-10-28T17:00:00Z') / 1000; // 5 dias atrás
+  const { kommo, c } = kommoFalso([{ id: 3, text: '⚕ SESSÃO 14:00 · AGENDADO [ag:33]', complete_till: antes, entity_id: 9 }]);
+  const r = await varrerCalendario(unit, deps(kommo, [
+    ag({ idSchedule: 33, statusName: 'ATENDIDO', idStatus: 42, dateAttendanceUtc: '2026-10-28T17:00:00.000Z' }),
+    ag({ idSchedule: 34, dateAttendanceUtc: '2026-10-28T17:00:00.000Z' }), // ainda AGENDADO, sem tarefa: passado, não cria
+  ], { modo: 'aplicar', buscarAgenda: async (de, ate) => { lido = { de, ate }; return { ok: true, agendamentos: [
+    ag({ idSchedule: 33, statusName: 'ATENDIDO', idStatus: 42, dateAttendanceUtc: '2026-10-28T17:00:00.000Z' }),
+    ag({ idSchedule: 34, dateAttendanceUtc: '2026-10-28T17:00:00.000Z' }),
+  ] }; } }));
+  assert.deepEqual(lido, { de: '2026-10-19', ate: '2026-12-02' });
+  assert.deepEqual(c.fechadas, [{ id: 3, resultado: 'Atendido' }]);
+  assert.deepEqual(c.criadas, []);
+  assert.equal(r.sumiram, 0);
+});
+
+test('o resumo diz quantas concluídas a leitura devolveu (para medir no seco se o filtro de prazo é ignorado)', async () => {
+  const { kommo } = kommoFalso([], { concluidas: [
+    { id: 5, text: '⚕ A [ag:1]', complete_till: Date.parse('2026-11-03T17:00:00Z') / 1000, result: { text: 'Falou com o paciente' } },
+    { id: 6, text: 'outra tarefa qualquer', complete_till: Date.parse('2026-11-03T17:00:00Z') / 1000 },
+  ] });
+  const r = await varrerCalendario(unit, deps(kommo, [], { modo: 'seco' }));
+  assert.equal(r.concluidasLidas, 2);
+});
+
+test('reativada na franquia (DESMARCADO → AGENDADO, mesmo registro): a tarefa que NÓS fechamos volta; a que a recepção concluiu, não', async () => {
+  const quando = Date.parse('2026-11-03T17:00:00Z') / 1000;
+  const nossa = kommoFalso([], { concluidas: [{ id: 5, text: '⚕ AVALIAÇÃO 14:00 · AGENDADO [ag:3784113]', complete_till: quando, result: { text: 'Desmarcado' } }] });
+  await varrerCalendario(unit, deps(nossa.kommo, [ag()], { modo: 'aplicar' }));
+  assert.equal(nossa.c.criadas.length, 1);
+  _limparMemoriaDoCalendario();
+  const dela = kommoFalso([], { concluidas: [{ id: 5, text: '⚕ AVALIAÇÃO 14:00 · AGENDADO [ag:3784113]', complete_till: quando, result: { text: 'Ligado, vem sim' } }] });
+  await varrerCalendario(unit, deps(dela.kommo, [ag()], { modo: 'aplicar' }));
+  assert.deepEqual(dela.c.criadas, []);
+});
+
+test('trava anti-regravação não bloqueia correção legítima: se ALGUÉM mexeu na tarefa desde a última vez, a franquia volta a valer', async () => {
+  const antes = Date.parse('2026-11-03T17:00:00Z') / 1000;
+  const lista: KommoTarefa[] = [{ id: 1, text: '⚕ AVALIAÇÃO 14:00 · Dr. Leonardo · AGENDADO [ag:11]', complete_till: antes, entity_id: 9 }];
+  const { kommo, c } = kommoFalso(lista);
+  const d = deps(kommo, [ag({ idSchedule: 11, statusName: 'CONFIRMADO' })], { modo: 'aplicar' });
+  await varrerCalendario(unit, d);
+  await varrerCalendario(unit, d); // Kommo não guardou: travado
+  assert.equal(c.atualizadas.length, 1);
+  lista[0] = { ...lista[0], text: '⚕ AVALIAÇÃO 14:00 · Dr. Leonardo · AGENDADO [ag:11] alguém editou' }; // a recepção mexeu
+  await varrerCalendario(unit, d);
+  assert.equal(c.atualizadas.length, 2);
 });
 
 test('idempotente: a 2ª varredura, com a tarefa já no Kommo, não cria nada (reinício do worker)', async () => {
@@ -140,7 +208,7 @@ test('memória: a lista do Kommo atrasada não faz criar de novo o que acabou de
 
 test('sem cartão: tarefa SOLTA (leadId nulo) com nome e telefone no texto, e conta em semCartao', async () => {
   const { kommo, c } = kommoFalso([]);
-  const r = await varrerCalendario(unit, deps(kommo, [ag()], { modo: 'aplicar', resolver: async () => ({ leadId: null, confirmado: true }) }));
+  const r = await varrerCalendario(unit, deps(kommo, [ag()], { modo: 'aplicar', resolver: async () => ({ leadId: null, confirmado: true, fone: '+5547999990000' }) }));
   assert.equal(r.semCartao, 1);
   assert.equal(r.cartaoIncerto, 0);
   assert.equal(c.criadas[0].leadId, null);
@@ -149,7 +217,7 @@ test('sem cartão: tarefa SOLTA (leadId nulo) com nome e telefone no texto, e co
 
 test('cartão incerto (telefone casou com vários cartões): NÃO crava a tarefa no cartão da mãe/filha — vai solta', async () => {
   const { kommo, c } = kommoFalso([]);
-  const r = await varrerCalendario(unit, deps(kommo, [ag()], { modo: 'aplicar', resolver: async () => ({ leadId: 555, confirmado: false }) }));
+  const r = await varrerCalendario(unit, deps(kommo, [ag()], { modo: 'aplicar', resolver: async () => ({ leadId: 555, confirmado: false, fone: '+5547999990000' }) }));
   assert.equal(c.criadas[0].leadId, null);
   assert.equal(r.semCartao, 1);
   assert.equal(r.cartaoIncerto, 1);

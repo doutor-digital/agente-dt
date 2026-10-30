@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  desfechoDaAgenda, idDoMarcador, mapaPorSlug, modoDoCalendario, planejarCalendario, profissionalResumido, sufixoDeTarefaSolta, textoDaTarefa,
+  desfechoDaAgenda, idDoMarcador, janelaDoCalendario, mapaPorSlug, modoDoCalendario, planejarCalendario, profissionalResumido, sufixoComCartao, sufixoDeTarefaSolta, textoDaTarefa,
   tipoPeloNome, type Acao, type ItemDaAgenda, type TarefaAberta,
 } from './franquia-calendario.js';
 
@@ -215,4 +215,28 @@ test('tarefa de consulta ativa que alguém JÁ CONCLUÍDA no Kommo: não recria 
   assert.equal(p.jaConcluidas, 1);
   // sem a concluída, cria
   assert.equal(plano([item()]).acoes[0].tipo, 'criar');
+});
+
+test('reativada: concluída por NÓS (Desmarcado/Atendido/Faltou/Remarcado) não impede nova tarefa; a concluída pela recepção sim', () => {
+  for (const resultado of ['Desmarcado', 'Atendido', 'Faltou', 'Remarcado']) {
+    assert.equal(plano([item()], [], { concluidas: [{ text: GUARDADO, resultado }] }).acoes[0]?.tipo, 'criar', resultado);
+  }
+  assert.deepEqual(plano([item()], [], { concluidas: [{ text: GUARDADO, resultado: 'Ligado, confirmou' }] }).acoes, []);
+  assert.deepEqual(plano([item()], [], { concluidas: [{ text: GUARDADO, resultado: null }] }).acoes, []);
+});
+
+test('baixa atrasada: consulta de 5 dias atrás que a recepção deu ATENDIDO/FALTOU/DESMARCADO fecha a tarefa que ficou aberta', () => {
+  const cincoDiasAtras = Date.parse('2026-10-28T17:00:00Z') / 1000;
+  for (const [status, resultado] of [['ATENDIDO', 'Atendido'], ['FALTOU', 'Faltou'], ['DESMARCADO', 'Desmarcado']] as const) {
+    const p = plano([item({ statusName: status, dateAttendanceUtc: '2026-10-28T17:00:00.000Z' })], [tarefa({ completeTill: cincoDiasAtras })]);
+    assert.deepEqual(p.acoes, [{ tipo: 'fechar', idSchedule: 3784113, taskId: 900, resultado }], status);
+  }
+});
+
+test('janela de leitura: hoje-14 até hoje+30', () => {
+  assert.deepEqual(janelaDoCalendario(TZ, new Date('2026-11-02T15:00:00Z')), { de: '2026-10-19', ate: '2026-12-02' });
+});
+
+test('texto de tarefa com cartão leva o nome do paciente depois do marcador', () => {
+  assert.equal(textoDaTarefa(item(), TZ, sufixoComCartao('INGRIDE SOUZA LIMA')), '🩺 AVALIAÇÃO 14:00 · Dr. Leonardo · AGENDADO [ag:3784113] Paciente: INGRIDE SOUZA LIMA');
 });

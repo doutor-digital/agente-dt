@@ -25,9 +25,8 @@ import { SPINE_STATUS, instanteNoFuso, somarDias, type SpineSchedule } from '../
 import { downgradeEmoji } from '../services/kommo.service.js';
 import { normalizar } from './franquia-sync.js';
 
+export const DIAS_ATRAS = 14;
 export const DURACAO_PADRAO_SEG = 60 * 60;
-/** Tarefas deste tipo, se a conta não tiver um tipo chamado "Consulta". 1 = Follow-up no Kommo. */
-export const TIPO_PADRAO = 1;
 
 export type DesfechoDaAgenda = 'ativo' | 'atendido' | 'faltou' | 'desmarcado' | 'remarcado';
 
@@ -37,6 +36,8 @@ const RESULTADO: Record<Exclude<DesfechoDaAgenda, 'ativo'>, string> = {
   desmarcado: 'Desmarcado',
   remarcado: 'Remarcado',
 };
+/** Os resultados com que NÓS concluímos uma tarefa. Qualquer outro (ou nenhum) é a recepção. */
+const RESULTADOS_NOSSOS = new Set([...Object.values(RESULTADO), 'Duplicada'].map((r) => normalizar(r)));
 
 /** O que a franquia disse sobre o agendamento. Status novo/desconhecido fica `ativo` (mais seguro que fechar). */
 export function desfechoDaAgenda(statusName: string | null | undefined, remarcado: 'manter' | 'fechar' = 'manter', idStatus?: number | null): DesfechoDaAgenda {
@@ -134,6 +135,11 @@ export function textoDaTarefa(item: ItemDaAgenda, tz: string, sufixo = ''): stri
   return `${base} ${marcador(item.idSchedule as number)}${sufixo}`;
 }
 
+/** Depois do marcador, em TODA tarefa: quem é o paciente da franquia. Dois homônimos podem cair no mesmo cartão; o nome na tarefa deixa a recepção ver. */
+export function sufixoComCartao(nome: string | null | undefined): string {
+  return ` Paciente: ${(nome ?? '').trim() || 'sem nome'}`;
+}
+
 /** O que se escreve depois do marcador numa tarefa SEM cartão: quem é e como falar com a pessoa. */
 export function sufixoDeTarefaSolta(nome: string | null | undefined, telefone: string | null | undefined): string {
   const quem = (nome ?? '').trim() || 'sem nome';
@@ -145,7 +151,7 @@ export interface EntradaDoPlano {
   /** tarefas ABERTAS do tipo configurado; as sem marcador são ignoradas aqui */
   tarefas: ReadonlyArray<TarefaAberta>;
   /** tarefas JÁ CONCLUÍDAS (por nós ou pela recepção) na janela: o que alguém concluiu de uma consulta ativa não se recria */
-  concluidas?: ReadonlyArray<Pick<TarefaAberta, 'text'>>;
+  concluidas?: ReadonlyArray<Pick<TarefaAberta, 'text'> & { resultado?: string | null }>;
   agoraEpoch: number;
   tz: string;
   /** janela da busca, em epoch (segundos): só tarefa dentro dela pode ser dada como "sumida" */
@@ -161,7 +167,9 @@ export function planejarCalendario(e: EntradaDoPlano): Plano {
   const fechadasNoKommo = new Set<number>();
   for (const t of e.concluidas ?? []) {
     const id = idDoMarcador(t.text);
-    if (id !== null) fechadasNoKommo.add(id);
+    // Concluída por NÓS (resultado "Desmarcado", "Atendido"…) não conta: se a franquia reativou o agendamento (desmarcado →
+    // agendado outra vez, mesmo registro), a tarefa tem de voltar. Só o que a recepção concluiu é respeitado.
+    if (id !== null && !RESULTADOS_NOSSOS.has(normalizar(t.resultado))) fechadasNoKommo.add(id);
   }
 
   // várias tarefas abertas com o mesmo marcador (reinício no meio do POST): a mais antiga é a canônica
@@ -265,8 +273,12 @@ export function tipoPeloNome(tipos: ReadonlyArray<{ id: number; name: string }>,
   return tipos.find((t) => normalizar(t.name) === alvo)?.id ?? null;
 }
 
-/** A janela do calendário: de ontem a hoje+30 (dias da clínica), em datas yyyy-mm-dd. */
+/**
+ * A janela que a varredura LÊ: de hoje-14 a hoje+30 (dias da clínica), em datas yyyy-mm-dd. Os 14 dias para trás existem para
+ * FECHAR/atualizar: a recepção dá baixa (ATENDIDO/FALTOU/DESMARCADO) dias depois, e com a janela começando ontem essa baixa
+ * nunca chegava à tarefa. Criar continua pulando o passado (`planejarCalendario`).
+ */
 export function janelaDoCalendario(tz: string, agora: Date = new Date()): { de: string; ate: string } {
   const hoje = instanteNoFuso(agora, tz).slice(0, 10);
-  return { de: somarDias(hoje, -1), ate: somarDias(hoje, 30) };
+  return { de: somarDias(hoje, -DIAS_ATRAS), ate: somarDias(hoje, 30) };
 }
