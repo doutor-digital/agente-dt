@@ -266,8 +266,8 @@ export interface Pendente {
   criadoEm: number;
   operacao: string;
   tabela: string;
-  /** só nas alterações de ESTRUTURA (sistemas_preparar_estrutura): o SQL aprovado, guardado aqui e não no que a pessoa manda na confirmação */
-  estrutura?: { sql: string; motivo: string; comandos: number };
+  /** só nas alterações de ESTRUTURA (sistemas_preparar_tabela/coluna/indice): o pedido por campos e o SQL gerado/mostrado, guardados aqui e não no que a pessoa manda na confirmação */
+  estrutura?: { sql: string; motivo: string; comandos: number; entrada: Record<string, unknown> };
   /** só nas concessões de ADMIN (sistemas_preparar_admin): o que foi mostrado à pessoa e vai ser executado na confirmação */
   admin?: AdminPendente;
 }

@@ -7,7 +7,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { sistemasChamar } from '../lib/integracoes/sistemas.js';
 import { alterarUsuario, confirmarAlteracao, criarConvite, criarContextoSistemas, PendentesSistemas, prepararAlteracao, registrarEscritaSistemas, registrarLeituraSistemas, type ContaSistemas } from './sistemas.js';
 import { confirmarAdmin, prepararAdmin, registrarAdminSistemas } from './sistemas-admin.js';
-import { confirmarEstrutura, prepararEstrutura } from './sistemas-estrutura.js';
+import { confirmarEstrutura, prepararTabela } from './sistemas-estrutura.js';
 import { CHAVE_FALSA, CONFIG_FALSA, servidorAdminFalso } from './sistemas-falso.js';
 
 // Conceder ADMIN só em dois passos (sistemas_preparar_admin / sistemas_confirmar_admin); sistemas_usuario e sistemas_convite recusam admin.
@@ -130,7 +130,7 @@ test('um código de um tipo NÃO confirma outro tipo (dados, estrutura, admin), 
   const pend = new PendentesSistemas();
   const adm = await prepararAdmin(ctx, pend, QUEM, { acao: 'promover', usuario: 'u-1', motivo: MOTIVO });
   const dados = await prepararAlteracao(ctx, pend, QUEM, { operacao: 'atualizar', tabela: 'rh_funcionarios', filtro: { id: 1 }, dados: { cargo: 'X' } });
-  const estr = await prepararEstrutura(ctx, pend, QUEM, { sql: 'create table caixa_a (a int)', motivo: MOTIVO });
+  const estr = await prepararTabela(ctx, pend, QUEM, { nome: 'caixa_a', colunas: [{ nome: 'aa', tipo: 'integer' }], motivo: MOTIVO });
   const antes = srv.chamadas.length;
   // admin não confirma como dados nem estrutura
   await assert.rejects(() => confirmarAlteracao(ctx, pend, QUEM, { confirmacao: adm.confirmacao }), /ADMIN.*sistemas_confirmar_admin/);
