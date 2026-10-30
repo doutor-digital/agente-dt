@@ -195,6 +195,22 @@ test('página cheia só conta como incompleta no nome INTEIRO; nos termos largos
   assert.equal((await conferirConsultaDePe(unit, pedido(a), so as never)).incompleta, false);
 });
 
+test('3ª rodada: nome de UMA palavra ("Maria"): a página cheia no nome inteiro é o termo largo — não deixa a conferência incompleta', async () => {
+  const uma: C = { idClient: 1, name: 'Maria', whatsapp: '5547991234567', schedules: [] };
+  const r = await conferirConsultaDePe(unit, pedido(uma), franquia([uma], { cheia: true }).f);
+  assert.equal(r.incompleta, false);
+  // mas a página cheia de um nome de DUAS palavras (o termo inteiro) continua incompleta (teste acima)
+});
+
+test('3ª rodada: possível duplicado com DUAS consultas de pé — devolve as duas (a mais próxima também em `consulta`)', async () => {
+  const a: C = { idClient: 1, name: 'Ana Christina Souza', whatsapp: '5547991234567', schedules: [] };
+  const b: C = { idClient: 2, name: 'ANA CRISTINA SOUZA', whatsapp: '5547991234567', schedules: [sch(21, '2026-11-20', '17:00'), sch(20, '2026-11-06', '09:00')] };
+  const r = await conferirConsultaDePe(unit, pedido(a), franquia([a, b]).f);
+  assert.equal(r.possiveisDuplicados.length, 1);
+  assert.deepEqual(r.possiveisDuplicados[0].consultas.map((c) => c.schedule.idSchedule), [20, 21]);
+  assert.equal(r.possiveisDuplicados[0].consulta?.schedule.idSchedule, 20);
+});
+
 test('mesmoNome: caixa, acento e espaços não contam; nome vazio nunca é igual; Christina × Cristina não é igual', () => {
   assert.equal(mesmoNome('Ana  Christina', 'ANA CHRISTINA'), true);
   assert.equal(mesmoNome('José', 'jose'), true);

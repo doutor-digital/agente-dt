@@ -412,10 +412,16 @@ export async function abrirTarefaParaEquipe(args: {
   alertar?: (texto: string) => Promise<unknown>;
   /** Texto extra da tarefa (ex.: valor lido × esperado). */
   detalhe?: string;
+  /**
+   * Entra na chave de deduplicação (`<chave>:<chaveExtra>`): a tarefa passa a ser "uma por cartão, motivo E isto". Quem promete
+   * ao paciente uma resposta sobre UM horário usa o horário aqui — a tarefa de outro horário não cobre a promessa.
+   */
+  chaveExtra?: string;
 }): Promise<'criada' | 'repetida' | 'falhou'> {
   const { slug, unitId, leadId, kommo, recorder, motivo } = args;
   const dedupe = args.dedupe ?? { avisoRecente, marcarAviso };
-  const chave = { comprovante: 'comprovante_so_equipe', desmarcada: 'consulta_desmarcada_afirmada', insistiu_na_clinica: 'taxa_insistiu_na_clinica', cadastro_duplicado: 'cadastro_possivel_duplicado', agenda_sem_conferir: 'agenda_horario_sem_conferir' }[motivo];
+  const chaveBase = { comprovante: 'comprovante_so_equipe', desmarcada: 'consulta_desmarcada_afirmada', insistiu_na_clinica: 'taxa_insistiu_na_clinica', cadastro_duplicado: 'cadastro_possivel_duplicado', agenda_sem_conferir: 'agenda_horario_sem_conferir' }[motivo];
+  const chave = args.chaveExtra ? `${chaveBase}:${args.chaveExtra}` : chaveBase;
   try {
     if (await dedupe.avisoRecente(unitId, leadId, chave, motivo === 'comprovante' ? JANELA_COMPROVANTE_MS : undefined)) return 'repetida';
     let nome: string | null = null;
@@ -433,7 +439,7 @@ export async function abrirTarefaParaEquipe(args: {
       desmarcada: `CONFERIR CONSULTA · ${slug}${quem} · a consulta está DESMARCADA no CRM e o paciente respondeu como se estivesse marcada. A IA não confirmou: falar com ele e remarcar em até 1 h.`,
       insistiu_na_clinica: `FALAR COM O PACIENTE · ${slug}${quem} · reserva com taxa: ele já recebeu a chave Pix e INSISTE em pagar só na clínica. Sem o comprovante da taxa o horário NÃO está garantido: falar com ele em até 1 h.`,
       cadastro_duplicado: `CONFERIR CADASTRO · ${slug}${quem} · há outro cadastro na franquia com o MESMO telefone e nome parecido (talvez a mesma pessoa em dobro, talvez parente) que já tem consulta marcada. A IA NÃO juntou os cadastros nem usou o do outro: confirmar quem é e, se for a mesma pessoa, manter uma só consulta.`,
-      agenda_sem_conferir: `CONFERIR HORÁRIO · ${slug}${quem} · o paciente pediu um horário que aparece ocupado e a IA não conseguiu conferir se é a consulta DELE (cadastro em dobro ou a franquia não respondeu). A IA não marcou nem ofereceu outro horário e disse que a equipe confirma: confirmar com ele em até 1 h.`,
+      agenda_sem_conferir: `CONFERIR HORÁRIO · ${slug}${quem} · o paciente pediu um horário que aparece ocupado e a IA não conseguiu conferir se é a consulta DELE (cadastro em dobro ou a franquia não respondeu). A IA não marcou nem ofereceu outro horário e disse que a equipe confirma e responde por aqui: confirmar com ele (a tarefa vence em 1 h).`,
     }[motivo];
     const agora = args.agora ?? Date.now;
     const text = args.detalhe ? `${texto} ${args.detalhe}.` : texto;
@@ -452,9 +458,12 @@ export async function abrirTarefaParaEquipe(args: {
       title: `Falha ao abrir a tarefa da equipe (${motivo}): ${erro}`,
       payload: { leadId, motivo },
     });
-    // O paciente já ouviu "a equipe confirma em até 1 hora": sem tarefa, ninguém sabe. Aviso no Telegram do João.
+    // Quem promete é o motivo: nos de cadastro/horário a IA foi instruída a NÃO prometer retorno quando a tarefa não sai.
+    const semPromessa = motivo === 'cadastro_duplicado' || motivo === 'agenda_sem_conferir';
     await (args.alertar ?? enviarTelegram)(
-      `⚠️ ${slug} — a IA disse ao paciente (lead ${leadId}) que a equipe confirma em até 1 hora, mas a tarefa NÃO saiu (${motivo}): ${erro}. Avisar a equipe à mão.`,
+      semPromessa
+        ? `⚠️ ${slug} — a tarefa para a equipe NÃO saiu (${motivo}, lead ${leadId}): ${erro}. A IA foi instruída a não prometer retorno nesse caso, mas a equipe não sabe do cadastro/horário a conferir: avisar à mão.`
+        : `⚠️ ${slug} — a IA disse ao paciente (lead ${leadId}) que a equipe confirma em até 1 hora, mas a tarefa NÃO saiu (${motivo}): ${erro}. Avisar a equipe à mão.`,
     ).catch(() => undefined);
     return 'falhou';
   }
