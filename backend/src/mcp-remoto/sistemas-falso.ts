@@ -33,6 +33,8 @@ export function servidorAdminFalso(o: OpcoesFalso = {}) {
     { id: 2, nome: 'Bruno', cargo: 'Fisio', unidade: 'serra' },
   ];
   const registro: Array<Record<string, unknown>> = [];
+  /** o que `POST /admin/v1/estrutura` (admin_sql) recebeu e "executou" */
+  const estruturas: Array<{ sql: string; quem: string; motivo?: string }> = [];
   const preparados = new Map<string, { op: string; tabela: string; filtro: Record<string, unknown>; dados: Record<string, unknown>; em: number }>();
   const usuarios = [
     { user_id: 'u-1', login: 'maria', nome: 'Maria', papel: 'gestao', unidade: null, ativo: true, criado_em: '2026-10-01T10:00:00Z' },
@@ -99,6 +101,14 @@ export function servidorAdminFalso(o: OpcoesFalso = {}) {
         registro.push({ tabela: p.tabela, quem: corpo.quem, op: p.op });
         return json(200, { ok: true, afetadas, conferido: true, backup_id: 'bk-1' });
       }
+      case 'POST /admin/v1/estrutura':
+        // contrato: { sql, quem, motivo? } -> 200 { ok:true } | 200 { ok:false, erro } (admin_sql devolve a recusa como dado) | { erro } nos 4xx/5xx
+        if (typeof corpo.sql !== 'string' || !corpo.sql.trim()) return json(400, { erro: 'sql vazio' });
+        if (/erro_do_servidor/.test(corpo.sql)) return json(500, { erro: `falha interna em ${CONFIG_FALSA.api}` });
+        if (/falha_do_banco/.test(corpo.sql)) return json(200, { ok: false, erro: 'relation "caixa_precos" already exists' });
+        estruturas.push({ sql: corpo.sql, quem: corpo.quem, motivo: corpo.motivo });
+        registro.push({ tabela: '(estrutura)', quem: corpo.quem, op: 'estrutura' });
+        return json(200, { ok: true });
       case 'POST /admin/v1/usuario':
         registro.push({ tabela: 'rh_usuarios', quem: corpo.quem, op: corpo.acao });
         return json(200, { ok: true, antes: { [corpo.acao]: 'x' }, depois: { [corpo.acao]: corpo.valor } });
@@ -109,5 +119,5 @@ export function servidorAdminFalso(o: OpcoesFalso = {}) {
     }
   }) as unknown as typeof fetch;
 
-  return { fetch: buscar, chamadas, funcionarios, registro, preparados };
+  return { fetch: buscar, chamadas, funcionarios, registro, preparados, estruturas };
 }

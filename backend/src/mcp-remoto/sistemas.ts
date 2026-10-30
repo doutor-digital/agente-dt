@@ -70,14 +70,14 @@ export function resolverSistema(ctx: ContextoSistemas, pedido?: string): ContaSi
  * blocos $$…$$. Sobra o esqueleto, onde se procura `;` e palavras de escrita. NÃO substitui o servidor (ele roda como
  * papel só-leitura, em transação READ ONLY): só barra o óbvio com mensagem clara.
  */
-export function esqueletoDoSql(sql: string): string {
-  return varrerSql(sql).esqueleto;
+export function esqueletoDoSql(sql: string, marcarAspasDuplas = false): string {
+  return varrerSql(sql, marcarAspasDuplas).esqueleto;
 }
 
 const CARACTERE_DE_NOME = /[A-Za-z0-9_$]/;
 
 /** O esqueleto e a posição, no texto original, de cada `;` que está fora de texto e comentário. */
-function varrerSql(sql: string): { esqueleto: string; pontosEVirgula: number[] } {
+function varrerSql(sql: string, marcarAspasDuplas = false): { esqueleto: string; pontosEVirgula: number[] } {
   let out = '';
   const pontos: number[] = [];
   let i = 0;
@@ -98,7 +98,8 @@ function varrerSql(sql: string): { esqueleto: string; pontosEVirgula: number[] }
         i++;
       }
       i++;
-      out += ' ';
+      // com `marcarAspasDuplas`, o identificador entre aspas deixa um `"` no esqueleto (quem valida estrutura recusa nome entre aspas)
+      out += marcarAspasDuplas && c === '"' ? ' " ' : ' ';
     } else if (c === '-' && prox === '-') {
       while (i < sql.length && sql[i] !== '\n') i++;
       out += ' ';
@@ -259,12 +260,14 @@ export async function simular(ctx: ContextoSistemas, quem: string, a: { sistema?
 
 // ------------------------------------------------------------------ escrita
 
-interface Pendente {
+export interface Pendente {
   usuario: string;
   sistema: string;
   criadoEm: number;
   operacao: string;
   tabela: string;
+  /** só nas alterações de ESTRUTURA (sistemas_preparar_estrutura): o SQL aprovado, guardado aqui e não no que a pessoa manda na confirmação */
+  estrutura?: { sql: string; motivo: string; comandos: number };
 }
 
 /** Códigos preparados à espera da confirmação, presos a quem preparou. Em memória: reinício = preparar de novo. */
@@ -281,10 +284,13 @@ export class PendentesSistemas {
   devolver(id: string, p: Pendente): void {
     this.itens.set(id, p);
   }
-  tirar(id: string, usuario: string): Pendente {
+  tirar(id: string, usuario: string, tipo: 'dados' | 'estrutura' = 'dados'): Pendente {
     const p = this.itens.get(id);
     if (!p) throw new ErroDeEntrada('código de confirmação desconhecido ou já usado (ou o conector reiniciou desde a prévia): prepare a alteração de novo');
     if (p.usuario !== usuario) throw new ErroDeEntrada('este código foi gerado por outro usuário');
+    if ((p.estrutura ? 'estrutura' : 'dados') !== tipo) {
+      throw new ErroDeEntrada(tipo === 'estrutura' ? 'este código é de uma alteração de DADOS: confirme com sistemas_confirmar_alteracao' : 'este código é de uma alteração de ESTRUTURA: confirme com sistemas_confirmar_estrutura');
+    }
     this.itens.delete(id);
     if (this.agora() - p.criadoEm > VALIDADE_MS) throw new ErroDeEntrada('o código venceu (10 minutos): prepare a alteração de novo');
     return p;
