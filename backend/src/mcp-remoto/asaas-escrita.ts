@@ -253,7 +253,9 @@ function descricaoValida(v: unknown): string {
   const t = String(v ?? '').trim();
   if (!t) throw new ErroDeEntrada('descrição obrigatória: ela aparece no boleto do paciente');
   if (t.length > 500) throw new ErroDeEntrada('descrição: no máximo 500 caracteres');
-  if (temDigitosSeguidos(t, MIN_DIGITOS_DESCRICAO)) {
+  // Datas ("28/10/2026 - 27/11/2026", "10/2026") não são documento: saem só da conferência dos dígitos, o texto fica igual.
+  const semDatas = t.replace(/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g, ' ').replace(/\b\d{1,2}\/\d{4}\b/g, ' ');
+  if (temDigitosSeguidos(semDatas, MIN_DIGITOS_DESCRICAO)) {
     throw new ErroDeEntrada(`descrição recusada: tem ${MIN_DIGITOS_DESCRICAO} ou mais dígitos seguidos (mesmo com espaço, ponto, hífen ou barra entre eles), que podem ser CPF, CNPJ ou telefone, e ela aparece no boleto do paciente. Tire o número do texto; se for outra coisa (data, número de pedido), escreva com letras no meio.`);
   }
   if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(t)) throw new ErroDeEntrada('descrição com caracteres de controle');
@@ -807,6 +809,10 @@ export function confirmarCobranca({ asaas, esc }: CtxEscrita, usuario: string, a
       // recusa definitiva do Asaas (4xx): nada foi criado, libera a reserva. Sem resposta ou 5xx: pode ter criado, a reserva fica.
       if (!incerto) esc.cobrancas = esc.cobrancas.filter((r) => r !== reserva);
       registrar(EVENTO_COBRANCA, { ...base, chave: chaveFinal, clienteId, ...(incerto ? { incerto: true } : {}) }, false, s.message);
+      // 5xx ou sem resposta: o Asaas pode ter criado o boleto. Dizer "não saiu" faria a pessoa gerar outro (revisão do sênior, 30/10).
+      if (incerto) {
+        throw new Error(`${clienteCriado ? `O cliente FOI cadastrado (${clienteId}). ` : ''}O Asaas não confirmou o boleto (${s.message}): ele PODE ter sido gerado. Confira com asaas_cobrancas antes de repetir.`);
+      }
       throw new Error(`${clienteCriado ? `O cliente FOI cadastrado (${clienteId}), mas o boleto não saiu: ` : 'O boleto não saiu: '}${s.message}`);
     }
     esquecerLeituras();

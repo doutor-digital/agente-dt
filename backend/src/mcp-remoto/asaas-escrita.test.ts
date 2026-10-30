@@ -543,6 +543,31 @@ test('sem resposta do Asaas (pode ter criado): a reserva fica e repetir o mesmo 
   await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, externalReference: undefined }), /cobrança igual/);
 });
 
+test('Asaas 500 no boleto (pode ter criado): a mensagem diz que PODE ter sido gerado, nunca "não saiu"; a reserva fica', async () => {
+  const { ctx, registrar, eventos } = montar({ clientes: [EXISTENTE], falhaNoPagamento: new ErroHttp('Asaas 500 em /payments: erro interno', 500) });
+  const p = await prepararCobranca(ctx, 'u1', { ...COBRANCA, externalReference: undefined });
+  const erro = await confirmarCobranca(ctx, 'u1', { confirmacao: String(p.confirmacao) }, registrar).then(() => null, (e: Error) => e);
+  assert.ok(erro);
+  assert.match(erro!.message, /PODE ter sido gerado/);
+  assert.match(erro!.message, /asaas_cobrancas/);
+  assert.doesNotMatch(erro!.message, /não saiu/);
+  assert.equal(eventos.at(-1)!.args.incerto, true);
+  await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, externalReference: undefined }), /cobrança igual/);
+});
+
+test('Asaas 400 no boleto (recusa definitiva) continua dizendo "não saiu"', async () => {
+  const { ctx, registrar } = montar({ clientes: [EXISTENTE], falhaNoPagamento: new ErroHttp('Asaas 400 em /payments: valor mínimo', 400) });
+  const p = await prepararCobranca(ctx, 'u1', { ...COBRANCA, externalReference: undefined });
+  await assert.rejects(() => confirmarCobranca(ctx, 'u1', { confirmacao: String(p.confirmacao) }, registrar), /não saiu/);
+});
+
+test('descrição com período de datas passa; com CPF continua recusada', async () => {
+  const { ctx } = montar({ clientes: [EXISTENTE] });
+  assert.ok((await prepararCobranca(ctx, 'u1', { ...COBRANCA, descricao: 'Mensalidade 28/10/2026 - 27/11/2026' })).confirmacao);
+  assert.ok((await prepararCobranca(ctx, 'u1', { ...COBRANCA, descricao: 'Pacote de sessões de 10/2026', externalReference: 'teste-datas-2' })).confirmacao);
+  await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, descricao: 'Sessões de 529.982.247-25' }), /descrição recusada/);
+});
+
 // ------------------------------------------------------------------ pelo protocolo (o que o claude.ai vê)
 
 async function conectar(m: ReturnType<typeof montar>, usuario: string, registros: Array<{ ferramenta: string; argumentos: any; ok: boolean; erro?: string }>) {
