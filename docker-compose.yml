@@ -39,7 +39,9 @@ services:
       retries: 5
       start_period: 90s      # margem p/ o prisma migrate deploy no boot
 
-    stop_grace_period: 30s
+    # 60 s: o SIGTERM espera até 45 s pelos turnos da IA (fila do coalescer + turno em curso). O deploy é start-first, então
+    # isto só alonga o deploy quando há turno de verdade no meio.
+    stop_grace_period: 60s
 
     deploy:
       # 1 réplica: o backend tem monitores/timers (stale-reply-monitor) sem lock

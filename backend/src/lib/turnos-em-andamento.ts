@@ -7,6 +7,8 @@
  * O `stop_grace_period` do Swarm (30 s) existia e não era usado.
  */
 
+import { drenarCoalescer } from './agent-coalescer.js';
+
 let emAndamento = 0;
 
 export function turnosEmAndamento(): number {
@@ -20,6 +22,18 @@ export async function comTurnoEmAndamento<T>(fn: () => Promise<T>): Promise<T> {
   } finally {
     emAndamento--;
   }
+}
+
+/**
+ * O que o SIGTERM espera, nesta ordem: (1) a fila do coalescer — mensagem que ainda espera a janela de 8 s ou o turno
+ * encadeado vira turno AGORA (Timbó, 30/10/2026: a foto da paciente morreu na fila); (2) os turnos fora do coalescer
+ * (Salesbot, Meta, etc.). Teto único `maxMs` para os dois; o que sobrar é refeito pela recuperação do próximo start.
+ */
+export async function esperarTurnosDoDesligamento(maxMs: number): Promise<{ filaRestante: number; restantes: number; esperouMs: number }> {
+  const inicio = Date.now();
+  const fila = await drenarCoalescer(maxMs);
+  const emCurso = await aguardarTurnos(Math.max(0, maxMs - (Date.now() - inicio)));
+  return { filaRestante: fila.restantes, restantes: emCurso.restantes, esperouMs: Date.now() - inicio };
 }
 
 /** Espera os turnos acabarem, no máximo `maxMs`. Devolve quantos ainda restavam (0 = saiu limpo). */
