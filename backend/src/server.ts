@@ -17,6 +17,7 @@ import { startDashboardMvRefresher, stopDashboardMvRefresher } from './lib/dashb
 import { startFollowUpWorker, stopFollowUpWorker } from './lib/follow-up-worker.js';
 import { startReminderWorker, stopReminderWorker } from './lib/reminder-worker.js';
 import { startReactivationWorker, stopReactivationWorker } from './lib/reactivation-worker.js';
+import { startPausaEquipeVoltaWorker, stopPausaEquipeVoltaWorker } from './lib/pausa-equipe-volta.js';
 import { startLeadPausaWorker, stopLeadPausaWorker } from './lib/lead-pausa-worker.js';
 import { startSlaAlertWorker, stopSlaAlertWorker } from './lib/sla-alert-worker.js';
 import { startSemRespostaWorker, stopSemRespostaWorker } from './lib/sem-resposta-worker.js';
@@ -196,6 +197,7 @@ async function main(): Promise<void> {
       startFollowUpWorker();
       startReminderWorker();
       startReactivationWorker();
+      startPausaEquipeVoltaWorker();
       startLeadPausaWorker();
       startSlaAlertWorker();
       startSemRespostaWorker();
@@ -244,6 +246,7 @@ async function main(): Promise<void> {
       stopFollowUpWorker();
       stopReminderWorker();
       stopReactivationWorker();
+      stopPausaEquipeVoltaWorker();
       stopLeadPausaWorker();
       stopSlaAlertWorker();
       stopSemRespostaWorker();
