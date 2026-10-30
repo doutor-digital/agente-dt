@@ -31,27 +31,35 @@ export interface SemAntecipadoNaSaida {
 // ── botões ──────────────────────────────────────────────────────────────────────────────────────────────
 
 const LINHA_DE_BOTOES = /[ \t]*\[\[\s*bot(?:õ|o)es?\s*:\s*([^\]]*?)\s*\]\][ \t]*/gi;
-/** A opção que só existe por causa do antecipado: "Pix antecipado", "Pix". */
-const OPCAO_DO_ANTECIPADO = /antecipad|\bpix\b/i;
+/** Par do "Pix" solto: só é opção do antecipado se a outra opção é pagar no dia ("Pix | Na clínica"); "Pix | Cartão | Dinheiro" é forma de pagar NO DIA. */
+const PAGAR_NO_DIA = /na\s+cl[ií]nica|no\s+dia|presencial/i;
+const opcaoDoAntecipado = (o: string, todas: string[]): boolean =>
+  /antecipad/i.test(o) || (/^\W*pix\W*$/i.test(o) && todas.some((x) => PAGAR_NO_DIA.test(x)));
 /** A opção fala de forma de pagamento (para saber que a linha INTEIRA é a pergunta de pagamento). */
 const OPCAO_DE_PAGAMENTO = /antecipad|\bpix\b|\bpag\w+|na\s+cl[ií]nica|no\s+dia|cart[aã]o|dinheiro|d[eé]bito|cr[eé]dito/i;
 
 /**
  * Tira dos botões a opção do antecipado. Linha só de forma de pagamento ("Pix antecipado | Na clínica") some inteira; linha
  * mista ("Terça 10h | Quarta 14h | Pix antecipado") perde só a opção; sobrando menos de 2 opções, a linha some.
+ * `linhaInteira`: a linha toda saiu (a pergunta que vinha ligada a ela fica sem opções).
  */
-function semBotoesDePagamento(texto: string): { texto: string; saiu: boolean } {
+function semBotoesDePagamento(texto: string): { texto: string; saiu: boolean; linhaInteira: boolean } {
   let saiu = false;
+  let linhaInteira = false;
   const novo = texto.replace(LINHA_DE_BOTOES, (inteiro, lista: string) => {
     const opcoes = lista.split('|').map((o) => o.trim()).filter(Boolean);
-    if (!opcoes.some((o) => OPCAO_DO_ANTECIPADO.test(o))) return inteiro;
+    if (!opcoes.some((o) => opcaoDoAntecipado(o, opcoes))) return inteiro;
     saiu = true;
-    const ficam = opcoes.filter((o) => !OPCAO_DO_ANTECIPADO.test(o));
-    if (opcoes.every((o) => OPCAO_DE_PAGAMENTO.test(o)) || ficam.length < 2) return '\n';
-    return `[[botoes: ${ficam.join(' | ')}]]`;
+    const ficam = opcoes.filter((o) => !opcaoDoAntecipado(o, opcoes));
+    if (opcoes.every((o) => OPCAO_DE_PAGAMENTO.test(o)) || ficam.length < 2) {
+      linhaInteira = true;
+      return '\n';
+    }
+    // mantém o que vinha antes e depois da lista (quebra de linha incluída): só a lista muda
+    return inteiro.replace(lista, ficam.join(' | '));
   });
-  if (!saiu) return { texto, saiu };
-  return { texto: novo.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim(), saiu };
+  if (!saiu) return { texto, saiu, linhaInteira };
+  return { texto: novo.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim(), saiu, linhaInteira };
 }
 
 // ── frases ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -64,12 +72,15 @@ const PIX = String.raw`(?:pix|chave)`;
 /** Verbos de OFERTA ("garante", "reservar"): "horário reservado" / "vaga garantida" (estado, não oferta) ficam de fora. */
 const RESERVA = String.raw`(?:garant(?:e|em|ir|indo|iria)|reserv(?:a|ar|e|am|ando)|segur(?:a|ar|e|am)|sinal|entrada|dep[oó]sito)`;
 const PIX_PARA_RESERVAR = new RegExp(`\\b${RESERVA}${PERTO}${PIX}\\b|\\b${PIX}${PERTO}${RESERVA}\\b`, 'iu');
-/** Chave Pix ou comprovante sendo pedido/entregue: "envia a chave do PIX", "mande o comprovante do Pix". */
-const CHAVE_OU_COMPROVANTE_ENVIADO =
-  /\b(?:chave|comprovante)\b[^.!?\n]*\b(?:envi\w+|mand\w+|segue|anex\w+)\b|\b(?:envi\w+|mand\w+|segue|anex\w+)\b[^.!?\n]*\b(?:chave|comprovante)\b/i;
+/** Chave Pix sendo entregue: "envia a chave do PIX", "segue a chave". */
+const CHAVE_ENVIADA = /\bchave\b[^.!?\n]*\b(?:envi\w+|mand\w+|segue)\b|\b(?:envi\w+|mand\w+|segue)\b[^.!?\n]*\bchave\b/i;
+/** Comprovante PEDIDO ao paciente ("mande o comprovante do Pix"); "a recepção envia o comprovante" (depois de pagar no dia) não é. */
+const COMPROVANTE_PEDIDO = /\b(?:mande|envie|anexe|mandar|enviar|manda|me\s+envia)\b[^.!?\n]*\bcomprovante\b/i;
 /** "antecipada para as 9h", "antecipamos para terça": horário adiantado, não pagamento. */
-const HORARIO_ADIANTADO = /^\s+(?:para|pra|em|p\/)\s+(?:a\s+|o\s+|as\s+|às\s+)?(?:\d|amanh|hoje|ontem|seg|ter|qua|qui|sex|s[aá]b|dom|dia\b|semana|cedo|manh)/i;
-const ANTECIPADO = /antecipad\w*|adiantad\w*/gi;
+const HORARIO_ADIANTADO = /^\s+(?:para|pra|em|p\/)\s+(?:a\s+|o\s+|as\s+|às\s+)?(?:\d|amanh[ãa]|hoje|ontem|segunda|ter[çc]a|quarta|quinta|sexta|s[aá]bado|domingo|dia\b|semana|cedo|manh[ãa])/i;
+const ANTECIPADO = /antecipad\w*/gi;
+/** "antecipado" só é pagamento se a frase fala de dinheiro: "horário antecipado, às 9h" não. */
+const DINHEIRO = /\bpix\b|\bpag\w+|R\$|\bvalor\b|desconto|cobr\w+|\btaxa\b|\bchave\b|cart[aã]o|dinheiro|na\s+cl[ií]nica|no\s+dia/i;
 /** "pagar antes", "pague antes da consulta": adjacente, para não pegar "pagamento no dia, chegue 10 minutos antes". */
 const PAGAR_ANTES = /\b(?:pagar|pague|pagando|pago|paga)\s+(?:a\s+consulta\s+|o\s+valor\s+|tudo\s+)?antes\b/gi;
 
@@ -85,10 +96,10 @@ function oferecePagamentoAntecipado(trecho: string, pixNaFrase: boolean = /\bpix
   const pixReserva = PIX_PARA_RESERVAR.exec(trecho);
   if (pixReserva && !negadoAntes(trecho, pixReserva.index)) return true;
   // chave/comprovante só é de Pix se a frase fala de Pix: "a chave de acesso é na recepção" não é.
-  const entrega = temPix ? CHAVE_OU_COMPROVANTE_ENVIADO.exec(trecho) : null;
+  const entrega = (temPix ? CHAVE_ENVIADA.exec(trecho) : null) ?? (temPix ? COMPROVANTE_PEDIDO.exec(trecho) : null);
   if (entrega && !negadoAntes(trecho, entrega.index)) return true;
   for (const m of trecho.matchAll(ANTECIPADO)) {
-    if (HORARIO_ADIANTADO.test(trecho.slice((m.index ?? 0) + m[0].length))) continue;
+    if (HORARIO_ADIANTADO.test(trecho.slice((m.index ?? 0) + m[0].length)) || !DINHEIRO.test(trecho)) continue;
     if (!negadoAntes(trecho, m.index ?? 0)) return true;
   }
   for (const m of trecho.matchAll(PAGAR_ANTES)) {
@@ -144,7 +155,7 @@ export function semOAntecipadoNaSaida(texto: string): SemAntecipadoNaSaida {
 
   for (const p of frasesSemAbreviacao(botoes.texto)) {
     // Saíram os botões de pagamento: a pergunta que vinha ligada a eles ("Prefere pagar como?") não pode ficar sem opções.
-    const perguntaSemBotoes = botoes.saiu && /\?[^\p{L}\p{N}]*$/u.test(p.frase) && PERGUNTA_DE_PAGAMENTO.test(p.frase);
+    const perguntaSemBotoes = botoes.linhaInteira && /\?[^\p{L}\p{N}]*$/u.test(p.frase) && PERGUNTA_DE_PAGAMENTO.test(p.frase);
     if (/^\s*\[\[/.test(p.frase) || !(oferecePagamentoAntecipado(p.frase) || perguntaSemBotoes)) {
       ficam.push(p);
       continue;

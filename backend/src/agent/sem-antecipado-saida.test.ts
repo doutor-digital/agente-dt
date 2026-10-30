@@ -205,3 +205,36 @@ test('botões mistos perdem só a opção de pagamento; horários e outras opç�
 test('botão misto que sobra com UMA opção só: a linha inteira sai (botão sozinho engana)', () => {
   assert.equal(semOAntecipadoNaSaida('Qual horário?\n[[botoes: Terça 10h | Pix antecipado]]').texto, 'Qual horário?');
 });
+
+// ── achados da 2ª rodada do /code-review (30/10) ────────────────────────────────────────────────────────────────────
+
+test('"antecipado para segurar/quitar" (prefixos de dia da semana) NÃO escapa como se fosse horário adiantado', () => {
+  for (const t of ['Pode pagar antecipado para segurar o horário.', 'Pagamento antecipado para quitar o valor, ok?']) {
+    assert.ok(semOAntecipadoNaSaida(t).removidas.length >= 1, t);
+  }
+});
+
+test('"horário adiantado/antecipado" sem falar de dinheiro fica', () => {
+  for (const t of ['Consegui um horário adiantado, às 9h.', 'Seu horário foi antecipado, às 9h. Pode ser?', 'A consulta ficou adiantada.']) {
+    assert.equal(semOAntecipadoNaSaida(t).texto, t, t);
+  }
+});
+
+test('botões "Pix | Cartão | Dinheiro" (forma de pagar NO DIA) ficam; "Pix | Na clínica" (par do antecipado) saem', () => {
+  const dia = 'Como prefere pagar no dia?\n[[botoes: Pix | Cartão | Dinheiro]]';
+  assert.equal(semOAntecipadoNaSaida(dia).texto, dia);
+  assert.equal(semOAntecipadoNaSaida('Como prefere pagar?\n[[botoes: Pix | Na clínica]]').texto, PAGAMENTO_NO_DIA);
+});
+
+test('comprovante: "a recepção envia o comprovante" (depois de pagar no dia) fica; "mande o comprovante do Pix" sai', () => {
+  const ok = 'Aceitamos Pix no dia e a recepção envia o comprovante.';
+  assert.equal(semOAntecipadoNaSaida(ok).texto, ok);
+  assert.equal(semOAntecipadoNaSaida('Terça às 10h está livre. Mande o comprovante do Pix para confirmar. Te espero!').removidas.length, 1);
+});
+
+test('botão misto: a marcação continua em linha própria e a pergunta de horário NÃO é tratada como pergunta de pagamento', () => {
+  const r = semOAntecipadoNaSaida('Qual a melhor forma de chegar? Qual horário?\n[[botoes: Terça 10h | Quarta 14h | Quinta 9h | Pix antecipado]]');
+  assert.equal(r.texto, 'Qual a melhor forma de chegar? Qual horário?\n[[botoes: Terça 10h | Quarta 14h | Quinta 9h]]');
+  const colada = semOAntecipadoNaSaida('Qual horário? [[botoes: Terça 10h | Quarta 14h | Quinta 9h | Pix antecipado]]');
+  assert.equal(colada.texto, 'Qual horário? [[botoes: Terça 10h | Quarta 14h | Quinta 9h]]');
+});
