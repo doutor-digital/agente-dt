@@ -33,7 +33,8 @@ import { iniciarAutomacoes } from './lib/automacoes-estado.js';
 import { iniciarCrmCompartilhado } from './lib/crm-compartilhado.js';
 import { iniciarSupervisorDosWorkers, encerrarSupervisorDosWorkers } from './lib/worker-lease.js';
 import { esperarTurnosDoDesligamento } from './lib/turnos-em-andamento.js';
-import { desligarComGraca, planoDeDesligamento } from './lib/desligamento.js';
+import { idsEmVoo } from './lib/agent-coalescer.js';
+import { desligarComGraca, fecharServidor, planoDeDesligamento } from './lib/desligamento.js';
 import { startVozSessaoWorker, stopVozSessaoWorker } from './lib/voz-sessao-worker.js';
 import { iniciarVigiaDeQualidade, pararVigiaDeQualidade } from './lib/qualidade-numero-worker.js';
 import { startCacheKeepaliveWorker, stopCacheKeepaliveWorker } from './lib/cache-keepalive-worker.js';
@@ -264,7 +265,15 @@ async function main(): Promise<void> {
     logger.info(`Documentação → http://localhost:${env.PORT}/docs`);
   });
 
+  let encerrando = false;
   const shutdown = async (signal: string) => {
+    // SIGTERM seguido de SIGINT (ou o Swarm repetindo) não pode abrir um segundo desligamento: ele desconectaria o banco
+    // no meio da drenagem do primeiro.
+    if (encerrando) {
+      logger.info({ signal }, 'shutdown já em andamento — sinal ignorado');
+      return;
+    }
+    encerrando = true;
     logger.info({ signal }, 'shutdown iniciado');
     // Ordem (lib/desligamento.ts): espera o Traefik tirar este container da lista → fecha a porta → drena a fila do
     // coalescer e espera os turnos da IA (Timbó, lead 5142896, 30/10/2026: a foto da paciente morreu na fila do
@@ -273,11 +282,15 @@ async function main(): Promise<void> {
     const r = await desligarComGraca(planoDeDesligamento(), {
       agora: () => Date.now(),
       dormir: (ms) => new Promise((res) => setTimeout(res, ms)),
-      fecharPorta: () => void server.close(),
+      fecharPorta: (ms) => fecharServidor(server, ms),
       drenar: esperarTurnosDoDesligamento,
     });
     const sobrou = r.restantes > 0 || r.filaRestante > 0;
-    logger.warn({ ...r }, sobrou ? 'shutdown: turnos da IA ainda pendentes, saindo mesmo assim' : 'shutdown: turnos da IA terminaram');
+    // `traceIdsPerdidos`: os traces que ficaram RUNNING com este processo (para achar no banco depois do deploy).
+    logger.warn(
+      { ...r, ...(sobrou ? { traceIdsPerdidos: idsEmVoo() } : {}) },
+      sobrou ? 'shutdown: turnos da IA ainda pendentes, saindo mesmo assim' : 'shutdown: turnos da IA terminaram',
+    );
     // Solta o lease antes de desconectar: o container novo assume em ≤30 s.
     await encerrarSupervisorDosWorkers();
     await prisma.$disconnect();

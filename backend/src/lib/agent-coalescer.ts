@@ -36,7 +36,10 @@ function janelaAtual(): number {
   return desligando ? 0 : COALESCE_WINDOW_MS;
 }
 
-/** Traces que este processo tem na fila ou rodando (burst do coalescer ou turno avulso). */
+/**
+ * Traces que este processo tem na fila ou rodando (burst do coalescer ou turno avulso). Hoje serve ao log do desligamento
+ * (quais traces ficaram para trás); a recuperação do start (PR seguinte) usa para nunca tomar um turno vivo por perdido.
+ */
 const emVoo = new Set<string>();
 
 export function idsEmVoo(): string[] {

@@ -27,7 +27,8 @@ export async function comTurnoEmAndamento<T>(fn: () => Promise<T>): Promise<T> {
 /**
  * O que o SIGTERM espera, nesta ordem: (1) a fila do coalescer — mensagem que ainda espera a janela de 8 s ou o turno
  * encadeado vira turno AGORA (Timbó, 30/10/2026: a foto da paciente morreu na fila); (2) os turnos fora do coalescer
- * (Salesbot, Meta, etc.). Teto único `maxMs` para os dois.
+ * (Salesbot, Meta, etc.). Teto único `maxMs` para os dois. `filaRestante` = o que sobrou na fila do coalescer MAIS os
+ * turnos avulsos (burst cheio); `restantes` = turnos em curso fora do coalescer.
  */
 export async function esperarTurnosDoDesligamento(maxMs: number): Promise<{ filaRestante: number; restantes: number; esperouMs: number }> {
   const inicio = Date.now();
