@@ -48,6 +48,33 @@ test('mensagem de erro sem dado pessoal passa intacta (ids, datas, números de p
   assert.equal(registros[0]!.erro, msg);
 });
 
+test('erro com id do Asaas/Bling/franquia sai INTACTO para o modelo e para a auditoria (id de 10–12 dígitos não é CPF nem telefone)', async () => {
+  const casos = [
+    'Asaas 404 em /payments/pay_12345678901: não encontrada',
+    'cobrança pay_55119876543210 não achada, cliente cus_000005401844',
+    'Bling 404 em /pedidos/vendas/16987654321',
+    'paciente idClient 1234567890 não achado',
+    'assinatura sub_1234567890 e parcelamento ins_12345678901 e nota inv_55123456789',
+  ];
+  for (const msg of casos) {
+    const registros: Registro[] = [];
+    const r = await executar('qualquer', {}, (x) => void registros.push(x), () => {
+      throw new Error(msg);
+    });
+    assert.equal(texto(r), msg, `modelo viu: ${texto(r)}`);
+    assert.equal(registros[0]!.erro, msg, `auditoria guardou: ${registros[0]!.erro}`);
+  }
+});
+
+test('erro com e-mail sai mascarado para o modelo e para a auditoria', async () => {
+  const registros: Registro[] = [];
+  const r = await executar('qualquer', {}, (x) => void registros.push(x), () => {
+    throw new Error('cliente maria.silva@exemplo.com não achado');
+  });
+  assert.equal(texto(r), 'cliente m***@exemplo.com não achado');
+  assert.equal(registros[0]!.erro, 'cliente m***@exemplo.com não achado');
+});
+
 test('sucesso: devolve o JSON, não grava erro e entrega os argumentos como vieram', async () => {
   const registros: Registro[] = [];
   const r = await executar('x', { a: 1 }, (x) => void registros.push(x), () => ({ ok: true }));

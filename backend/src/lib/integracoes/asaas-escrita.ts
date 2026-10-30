@@ -8,6 +8,7 @@
  */
 import { mascararDigitosSeguidos, mascararPii } from '../pii.js';
 import { ASAAS_API, ErroAsaas, ritmoDaConta } from './asaas.js';
+import { IDS_PROTEGIDOS, protegendo } from './mascaras.js';
 
 const AGENTE = 'DoutorDigital-Conector/1.0';
 /** Os únicos caminhos em que este cliente escreve. */
@@ -16,8 +17,8 @@ export const CAMINHOS_DE_ESCRITA = ['/customers', '/payments'] as const;
 type Fetcher = typeof fetch;
 const dormir = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Ids do Asaas (cus_, pay_, sub_ assinatura, ins_ parcelamento) e o nossoNumero do boleto: o diagnóstico precisa deles legíveis. */
-const PROTEGIDOS = [/\b(?:cus|pay|sub|ins)_[A-Za-z0-9]+/g, /\bnossoNumero["':=\s]{1,4}\d{1,10}(?!\d)/g];
+// Ids do Asaas (cus_, pay_, sub_, ins_…) e o nossoNumero do boleto ficam legíveis: a lista é UMA só, em `mascaras.ts`
+// (a mesma que protege o erro de todas as ferramentas do conector).
 
 /**
  * Tira da mensagem o que nunca pode sair: a chave do Asaas, CPF/CNPJ e qualquer corrida de 11+ dígitos seguidos (a regra de
@@ -30,10 +31,9 @@ export function limparTexto(texto: string, chave?: string, soSegredos = false): 
   t = t.replace(/\$?aact_[A-Za-z0-9_\-:.=]+/g, '[chave]');
   // nossas próprias recusas (soSegredos) só citam documento mascarado, e o texto do pedido precisa aparecer inteiro
   if (soSegredos) return t;
-  const guardados: string[] = [];
-  for (const r of PROTEGIDOS) t = t.replace(r, (m) => `\u0001${guardados.push(m) - 1}\u0001`);
-  t = mascararDigitosSeguidos(t, 11, '[documento]').replace(/[^\s@"',;]+@[^\s@"',;]+\.[^\s@"',;]+/g, '[e-mail]');
-  return mascararPii(t, { exigirDdd: true }).replace(/\u0001(\d+)\u0001/g, (_, i: string) => guardados[Number(i)] ?? '');
+  return protegendo(t, IDS_PROTEGIDOS, (resto) =>
+    mascararPii(mascararDigitosSeguidos(resto, 11, '[documento]').replace(/[^\s@"',;]+@[^\s@"',;]+\.[^\s@"',;]+/g, '[e-mail]'), { exigirDdd: true }),
+  );
 }
 
 /** POST no Asaas em `/customers` ou `/payments`. A chave só vai no cabeçalho e nunca volta em erro. */
