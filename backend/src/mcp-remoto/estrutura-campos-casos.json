@@ -1,0 +1,2887 @@
+[
+ {
+  "nome": "tabela simples",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "servico",
+     "tipo": "text",
+     "obrigatoria": true
+    },
+    {
+     "nome": "valor",
+     "tipo": "numeric(12,2)",
+     "padrao": 0
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "ok",
+  "sql": [
+   "create table public.\"caixa_x\" (\"id\" uuid primary key default gen_random_uuid(), \"criado_em\" timestamptz not null default now(), \"servico\" text not null, \"valor\" numeric(12,2) default 0.00)",
+   "alter table public.\"caixa_x\" enable row level security",
+   "create policy \"caixa_x_sel\" on public.\"caixa_x\" for select to authenticated using (public.caixa_gestor())",
+   "create policy \"caixa_x_ins\" on public.\"caixa_x\" for insert to authenticated with check (public.caixa_gestor())",
+   "create policy \"caixa_x_upd\" on public.\"caixa_x\" for update to authenticated using (public.caixa_gestor()) with check (public.caixa_gestor())"
+  ]
+ },
+ {
+  "nome": "tabela com unidade: a própria unidade também vê",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_y",
+   "colunas": [
+    {
+     "nome": "unidade",
+     "tipo": "text",
+     "obrigatoria": true
+    },
+    {
+     "nome": "ativo",
+     "tipo": "boolean",
+     "padrao": true
+    },
+    {
+     "nome": "quando",
+     "tipo": "timestamptz",
+     "padrao": "now()"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "ok",
+  "sql": [
+   "create table public.\"caixa_y\" (\"id\" uuid primary key default gen_random_uuid(), \"criado_em\" timestamptz not null default now(), \"unidade\" text not null, \"ativo\" boolean default true, \"quando\" timestamptz default now())",
+   "alter table public.\"caixa_y\" enable row level security",
+   "create policy \"caixa_y_sel\" on public.\"caixa_y\" for select to authenticated using (public.caixa_pode(unidade))",
+   "create policy \"caixa_y_ins\" on public.\"caixa_y\" for insert to authenticated with check (public.caixa_gestor())",
+   "create policy \"caixa_y_upd\" on public.\"caixa_y\" for update to authenticated using (public.caixa_gestor()) with check (public.caixa_gestor())"
+  ]
+ },
+ {
+  "nome": "tabela com id e criado_em informados",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_z",
+   "colunas": [
+    {
+     "nome": "id",
+     "tipo": "uuid"
+    },
+    {
+     "nome": "criado_em",
+     "tipo": "timestamptz"
+    },
+    {
+     "nome": "cn",
+     "tipo": "integer",
+     "padrao": 5
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "ok",
+  "sql": [
+   "create table public.\"caixa_z\" (\"id\" uuid primary key default gen_random_uuid(), \"criado_em\" timestamptz not null default now(), \"cn\" integer default 5)",
+   "alter table public.\"caixa_z\" enable row level security",
+   "create policy \"caixa_z_sel\" on public.\"caixa_z\" for select to authenticated using (public.caixa_gestor())",
+   "create policy \"caixa_z_ins\" on public.\"caixa_z\" for insert to authenticated with check (public.caixa_gestor())",
+   "create policy \"caixa_z_upd\" on public.\"caixa_z\" for update to authenticated using (public.caixa_gestor()) with check (public.caixa_gestor())"
+  ]
+ },
+ {
+  "nome": "todos os tipos e padrões",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_tipos",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text",
+     "padrao": "texto curto (ok): 10% / a-b"
+    },
+    {
+     "nome": "cb",
+     "tipo": "integer",
+     "padrao": -3
+    },
+    {
+     "nome": "cc",
+     "tipo": "bigint",
+     "padrao": 9007199254740991
+    },
+    {
+     "nome": "cd",
+     "tipo": "numeric(12,2)",
+     "padrao": 12.5
+    },
+    {
+     "nome": "ce",
+     "tipo": "boolean",
+     "padrao": false
+    },
+    {
+     "nome": "cf",
+     "tipo": "date",
+     "padrao": "current_date"
+    },
+    {
+     "nome": "cg",
+     "tipo": "date",
+     "padrao": "2026-02-28"
+    },
+    {
+     "nome": "ch",
+     "tipo": "timestamptz",
+     "padrao": "2026-10-30T12:00:00Z"
+    },
+    {
+     "nome": "ci",
+     "tipo": "uuid",
+     "padrao": "gen_random_uuid()",
+     "unica": true
+    },
+    {
+     "nome": "cj",
+     "tipo": "jsonb",
+     "padrao": "{}"
+    },
+    {
+     "nome": "ck",
+     "tipo": "jsonb",
+     "padrao": "[]"
+    },
+    {
+     "nome": "cl",
+     "tipo": "NUMERIC(12, 2)"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "ok"
+ },
+ {
+  "nome": "nome com maiúscula",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "Caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "nome da tabela"
+ },
+ {
+  "nome": "nome com aspas/injeção",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "x\"; drop table y; --",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "nome da tabela"
+ },
+ {
+  "nome": "nome curto demais",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "a",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "nome da tabela"
+ },
+ {
+  "nome": "nome longo demais",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "nome da tabela"
+ },
+ {
+  "nome": "tabela fechada rh_usuarios",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "rh_usuarios",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "tabela fechada"
+ },
+ {
+  "nome": "tabela fechada rh_docs",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "rh_docs",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "tabela fechada"
+ },
+ {
+  "nome": "tabela fechada rh_log",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "rh_log",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "tabela fechada"
+ },
+ {
+  "nome": "tabela fechada rh_site",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "rh_site",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "tabela fechada"
+ },
+ {
+  "nome": "tabela fechada rh_site_stage",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "rh_site_stage",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "tabela fechada"
+ },
+ {
+  "nome": "tabela fechada rh_log_trg",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "rh_log_trg",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "tabela fechada"
+ },
+ {
+  "nome": "tabela fechada admin_log",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "admin_log",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "tabela fechada"
+ },
+ {
+  "nome": "tabela fechada admin_backup",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "admin_backup",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "tabela fechada"
+ },
+ {
+  "nome": "tabela fechada admin_sql_log",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "admin_sql_log",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "tabela fechada"
+ },
+ {
+  "nome": "tabela fechada admin_x",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "admin_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "tabela fechada"
+ },
+ {
+  "nome": "tabela fechada auth",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "auth",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "tabela fechada"
+ },
+ {
+  "nome": "tabela fechada auth_x",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "auth_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "tabela fechada"
+ },
+ {
+  "nome": "tabela fechada authx",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "authx",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "tabela fechada"
+ },
+ {
+  "nome": "tabela fechada storage",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "storage",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "tabela fechada"
+ },
+ {
+  "nome": "tabela fechada storage_x",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "storage_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "tabela fechada"
+ },
+ {
+  "nome": "tabela fechada pg_x",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "pg_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "tabela fechada"
+ },
+ {
+  "nome": "tabela fechada pg_catalog",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "pg_catalog",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "tabela fechada"
+ },
+ {
+  "nome": "tabela fechada sql_x",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "sql_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "tabela fechada"
+ },
+ {
+  "nome": "tabela fechada supabase_x",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "supabase_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "tabela fechada"
+ },
+ {
+  "nome": "tabela fechada realtime",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "realtime",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "tabela fechada"
+ },
+ {
+  "nome": "tabela fechada vault",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "vault",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "tabela fechada"
+ },
+ {
+  "nome": "tabela fechada extensions",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "extensions",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "tabela fechada"
+ },
+ {
+  "nome": "tabela fechada information_schema",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "information_schema",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "tabela fechada"
+ },
+ {
+  "nome": "tabela fechada cron",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "cron",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "tabela fechada"
+ },
+ {
+  "nome": "tabela fechada graphql",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "graphql",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "tabela fechada"
+ },
+ {
+  "nome": "tabela já existe",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_precos",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text"
+    }
+   ]
+  },
+  "existentes": {
+   "caixa_precos": {
+    "linhas": 3,
+    "colunas": [
+     "id",
+     "servico",
+     "valor",
+     "criado_em"
+    ]
+   },
+   "caixa_vazia": {
+    "linhas": 0,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "caixa_desconhecida": {
+    "linhas": null,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "rh_ferias": {
+    "linhas": 10,
+    "colunas": [
+     "id",
+     "nome"
+    ]
+   }
+  },
+  "esperado": "recusa",
+  "msg": "já existe"
+ },
+ {
+  "nome": "sem colunas",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": []
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "ao menos uma coluna"
+ },
+ {
+  "nome": "colunas não é lista",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": "a text"
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "ao menos uma coluna"
+ },
+ {
+  "nome": "colunas demais",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "c0",
+     "tipo": "text"
+    },
+    {
+     "nome": "c1",
+     "tipo": "text"
+    },
+    {
+     "nome": "c2",
+     "tipo": "text"
+    },
+    {
+     "nome": "c3",
+     "tipo": "text"
+    },
+    {
+     "nome": "c4",
+     "tipo": "text"
+    },
+    {
+     "nome": "c5",
+     "tipo": "text"
+    },
+    {
+     "nome": "c6",
+     "tipo": "text"
+    },
+    {
+     "nome": "c7",
+     "tipo": "text"
+    },
+    {
+     "nome": "c8",
+     "tipo": "text"
+    },
+    {
+     "nome": "c9",
+     "tipo": "text"
+    },
+    {
+     "nome": "c10",
+     "tipo": "text"
+    },
+    {
+     "nome": "c11",
+     "tipo": "text"
+    },
+    {
+     "nome": "c12",
+     "tipo": "text"
+    },
+    {
+     "nome": "c13",
+     "tipo": "text"
+    },
+    {
+     "nome": "c14",
+     "tipo": "text"
+    },
+    {
+     "nome": "c15",
+     "tipo": "text"
+    },
+    {
+     "nome": "c16",
+     "tipo": "text"
+    },
+    {
+     "nome": "c17",
+     "tipo": "text"
+    },
+    {
+     "nome": "c18",
+     "tipo": "text"
+    },
+    {
+     "nome": "c19",
+     "tipo": "text"
+    },
+    {
+     "nome": "c20",
+     "tipo": "text"
+    },
+    {
+     "nome": "c21",
+     "tipo": "text"
+    },
+    {
+     "nome": "c22",
+     "tipo": "text"
+    },
+    {
+     "nome": "c23",
+     "tipo": "text"
+    },
+    {
+     "nome": "c24",
+     "tipo": "text"
+    },
+    {
+     "nome": "c25",
+     "tipo": "text"
+    },
+    {
+     "nome": "c26",
+     "tipo": "text"
+    },
+    {
+     "nome": "c27",
+     "tipo": "text"
+    },
+    {
+     "nome": "c28",
+     "tipo": "text"
+    },
+    {
+     "nome": "c29",
+     "tipo": "text"
+    },
+    {
+     "nome": "c30",
+     "tipo": "text"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "no máximo 30"
+ },
+ {
+  "nome": "coluna repetida",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text"
+    },
+    {
+     "nome": "ca",
+     "tipo": "integer"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "repetida"
+ },
+ {
+  "nome": "id não uuid",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "id",
+     "tipo": "integer"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "uuid"
+ },
+ {
+  "nome": "criado_em não timestamptz",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "criado_em",
+     "tipo": "date"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "timestamptz"
+ },
+ {
+  "nome": "coluna com nome reservado do postgres",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "xmin",
+     "tipo": "text"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "reservado"
+ },
+ {
+  "nome": "coluna com injeção no nome",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "a\" text); drop table y; --",
+     "tipo": "text"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "nome"
+ },
+ {
+  "nome": "campo desconhecido na coluna",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text",
+     "referencia": "rh_usuarios"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "não existe"
+ },
+ {
+  "nome": "coluna que não é objeto",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    "a text"
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "esperava"
+ },
+ {
+  "nome": "tipo fora da lista: serial",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "serial"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "não é permitido"
+ },
+ {
+  "nome": "tipo fora da lista: point",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "point"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "não é permitido"
+ },
+ {
+  "nome": "tipo fora da lista: regclass",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "regclass"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "não é permitido"
+ },
+ {
+  "nome": "tipo fora da lista: text[]",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text[]"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "não é permitido"
+ },
+ {
+  "nome": "tipo fora da lista: varchar(10)",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "varchar(10)"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "não é permitido"
+ },
+ {
+  "nome": "tipo fora da lista: numeric",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "numeric"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "não é permitido"
+ },
+ {
+  "nome": "tipo fora da lista: numeric(10,2)",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "numeric(10,2)"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "não é permitido"
+ },
+ {
+  "nome": "tipo fora da lista: int",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "int"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "não é permitido"
+ },
+ {
+  "nome": "tipo fora da lista: timestamp",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "timestamp"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "não é permitido"
+ },
+ {
+  "nome": "tipo fora da lista: interval",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "interval"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "não é permitido"
+ },
+ {
+  "nome": "tipo fora da lista: text; drop table x",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text; drop table x"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "não é permitido"
+ },
+ {
+  "nome": "tipo fora da lista: bytea",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "bytea"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "não é permitido"
+ },
+ {
+  "nome": "tipo fora da lista: inet",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "inet"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "não é permitido"
+ },
+ {
+  "nome": "tipo fora da lista: ",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": ""
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "não é permitido"
+ },
+ {
+  "nome": "tipo não é texto",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": 5
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "não é permitido"
+ },
+ {
+  "nome": "padrão inválido 0: text = \"x'; drop table y; --\"",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text",
+     "padrao": "x'; drop table y; --"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "padrão|padrao"
+ },
+ {
+  "nome": "padrão inválido 1: text = \"a\\\\b\"",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text",
+     "padrao": "a\\b"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "padrão|padrao"
+ },
+ {
+  "nome": "padrão inválido 2: text = \"a$$b\"",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text",
+     "padrao": "a$$b"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "padrão|padrao"
+ },
+ {
+  "nome": "padrão inválido 3: text = \"a\\\"b\"",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text",
+     "padrao": "a\"b"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "padrão|padrao"
+ },
+ {
+  "nome": "padrão inválido 4: text = \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text",
+     "padrao": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "padrão|padrao"
+ },
+ {
+  "nome": "padrão inválido 5: text = 5",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text",
+     "padrao": 5
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "padrão|padrao"
+ },
+ {
+  "nome": "padrão inválido 6: text = \"linha\\nquebrada\"",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text",
+     "padrao": "linha\nquebrada"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "padrão|padrao"
+ },
+ {
+  "nome": "padrão inválido 7: text = \"now()::regclass\\u0000\"",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text",
+     "padrao": "now()::regclass\u0000"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "padrão|padrao"
+ },
+ {
+  "nome": "padrão inválido 8: integer = 1.5",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "integer",
+     "padrao": 1.5
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "padrão|padrao"
+ },
+ {
+  "nome": "padrão inválido 9: integer = \"1\"",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "integer",
+     "padrao": "1"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "padrão|padrao"
+ },
+ {
+  "nome": "padrão inválido 10: integer = 2147483648",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "integer",
+     "padrao": 2147483648
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "padrão|padrao"
+ },
+ {
+  "nome": "padrão inválido 11: bigint = 100000000000000000000",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "bigint",
+     "padrao": 100000000000000000000
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "padrão|padrao"
+ },
+ {
+  "nome": "padrão inválido 12: numeric(12,2) = 1.234",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "numeric(12,2)",
+     "padrao": 1.234
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "padrão|padrao"
+ },
+ {
+  "nome": "padrão inválido 13: numeric(12,2) = \"1.0\"",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "numeric(12,2)",
+     "padrao": "1.0"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "padrão|padrao"
+ },
+ {
+  "nome": "padrão inválido 14: numeric(12,2) = 1000000000000",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "numeric(12,2)",
+     "padrao": 1000000000000
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "padrão|padrao"
+ },
+ {
+  "nome": "padrão inválido 15: boolean = \"true\"",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "boolean",
+     "padrao": "true"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "padrão|padrao"
+ },
+ {
+  "nome": "padrão inválido 16: boolean = 1",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "boolean",
+     "padrao": 1
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "padrão|padrao"
+ },
+ {
+  "nome": "padrão inválido 17: date = \"now()\"",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "date",
+     "padrao": "now()"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "padrão|padrao"
+ },
+ {
+  "nome": "padrão inválido 18: date = \"2026-02-30\"",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "date",
+     "padrao": "2026-02-30"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "padrão|padrao"
+ },
+ {
+  "nome": "padrão inválido 19: date = \"30/10/2026\"",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "date",
+     "padrao": "30/10/2026"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "padrão|padrao"
+ },
+ {
+  "nome": "padrão inválido 20: timestamptz = \"current_date\"",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "timestamptz",
+     "padrao": "current_date"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "padrão|padrao"
+ },
+ {
+  "nome": "padrão inválido 21: timestamptz = \"2026-10-30\"",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "timestamptz",
+     "padrao": "2026-10-30"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "padrão|padrao"
+ },
+ {
+  "nome": "padrão inválido 22: timestamptz = \"now(); drop table x\"",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "timestamptz",
+     "padrao": "now(); drop table x"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "padrão|padrao"
+ },
+ {
+  "nome": "padrão inválido 23: uuid = \"now()\"",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "uuid",
+     "padrao": "now()"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "padrão|padrao"
+ },
+ {
+  "nome": "padrão inválido 24: uuid = \"abc\"",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "uuid",
+     "padrao": "abc"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "padrão|padrao"
+ },
+ {
+  "nome": "padrão inválido 25: jsonb = \"{\\\"a\\\":1}\"",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "jsonb",
+     "padrao": "{\"a\":1}"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "padrão|padrao"
+ },
+ {
+  "nome": "padrão inválido 26: jsonb = \"{} ; drop\"",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "jsonb",
+     "padrao": "{} ; drop"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "padrão|padrao"
+ },
+ {
+  "nome": "padrão inválido 27: jsonb = {}",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "jsonb",
+     "padrao": {}
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "padrão|padrao"
+ },
+ {
+  "nome": "padrão inválido 28: text = [\"a\"]",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text",
+     "padrao": [
+      "a"
+     ]
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "padrão|padrao"
+ },
+ {
+  "nome": "padrão inválido 29: text = {}",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text",
+     "padrao": {}
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "padrão|padrao"
+ },
+ {
+  "nome": "obrigatoria não booleano",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text",
+     "obrigatoria": "sim"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "true ou false"
+ },
+ {
+  "nome": "unica não booleano",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text",
+     "unica": 1
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "true ou false"
+ },
+ {
+  "nome": "coluna opcional em tabela com linhas",
+  "entrada": {
+   "tipo": "coluna",
+   "tabela": "caixa_precos",
+   "coluna": {
+    "nome": "obs",
+    "tipo": "text"
+   }
+  },
+  "existentes": {
+   "caixa_precos": {
+    "linhas": 3,
+    "colunas": [
+     "id",
+     "servico",
+     "valor",
+     "criado_em"
+    ]
+   },
+   "caixa_vazia": {
+    "linhas": 0,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "caixa_desconhecida": {
+    "linhas": null,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "rh_ferias": {
+    "linhas": 10,
+    "colunas": [
+     "id",
+     "nome"
+    ]
+   }
+  },
+  "esperado": "ok",
+  "sql": [
+   "alter table public.\"caixa_precos\" add column \"obs\" text"
+  ]
+ },
+ {
+  "nome": "coluna obrigatória com padrão em tabela com linhas",
+  "entrada": {
+   "tipo": "coluna",
+   "tabela": "caixa_precos",
+   "coluna": {
+    "nome": "ativo",
+    "tipo": "boolean",
+    "obrigatoria": true,
+    "padrao": true
+   }
+  },
+  "existentes": {
+   "caixa_precos": {
+    "linhas": 3,
+    "colunas": [
+     "id",
+     "servico",
+     "valor",
+     "criado_em"
+    ]
+   },
+   "caixa_vazia": {
+    "linhas": 0,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "caixa_desconhecida": {
+    "linhas": null,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "rh_ferias": {
+    "linhas": 10,
+    "colunas": [
+     "id",
+     "nome"
+    ]
+   }
+  },
+  "esperado": "ok",
+  "sql": [
+   "alter table public.\"caixa_precos\" add column \"ativo\" boolean not null default true"
+  ]
+ },
+ {
+  "nome": "coluna obrigatória sem padrão em tabela VAZIA",
+  "entrada": {
+   "tipo": "coluna",
+   "tabela": "caixa_vazia",
+   "coluna": {
+    "nome": "cx",
+    "tipo": "integer",
+    "obrigatoria": true
+   }
+  },
+  "existentes": {
+   "caixa_precos": {
+    "linhas": 3,
+    "colunas": [
+     "id",
+     "servico",
+     "valor",
+     "criado_em"
+    ]
+   },
+   "caixa_vazia": {
+    "linhas": 0,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "caixa_desconhecida": {
+    "linhas": null,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "rh_ferias": {
+    "linhas": 10,
+    "colunas": [
+     "id",
+     "nome"
+    ]
+   }
+  },
+  "esperado": "ok",
+  "sql": [
+   "alter table public.\"caixa_vazia\" add column \"cx\" integer not null"
+  ]
+ },
+ {
+  "nome": "coluna obrigatória sem padrão em tabela com linhas",
+  "entrada": {
+   "tipo": "coluna",
+   "tabela": "caixa_precos",
+   "coluna": {
+    "nome": "cx",
+    "tipo": "integer",
+    "obrigatoria": true
+   }
+  },
+  "existentes": {
+   "caixa_precos": {
+    "linhas": 3,
+    "colunas": [
+     "id",
+     "servico",
+     "valor",
+     "criado_em"
+    ]
+   },
+   "caixa_vazia": {
+    "linhas": 0,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "caixa_desconhecida": {
+    "linhas": null,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "rh_ferias": {
+    "linhas": 10,
+    "colunas": [
+     "id",
+     "nome"
+    ]
+   }
+  },
+  "esperado": "recusa",
+  "msg": "precisa de \"padrao\""
+ },
+ {
+  "nome": "coluna obrigatória sem padrão em tabela com contagem desconhecida",
+  "entrada": {
+   "tipo": "coluna",
+   "tabela": "caixa_desconhecida",
+   "coluna": {
+    "nome": "cx",
+    "tipo": "integer",
+    "obrigatoria": true
+   }
+  },
+  "existentes": {
+   "caixa_precos": {
+    "linhas": 3,
+    "colunas": [
+     "id",
+     "servico",
+     "valor",
+     "criado_em"
+    ]
+   },
+   "caixa_vazia": {
+    "linhas": 0,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "caixa_desconhecida": {
+    "linhas": null,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "rh_ferias": {
+    "linhas": 10,
+    "colunas": [
+     "id",
+     "nome"
+    ]
+   }
+  },
+  "esperado": "recusa",
+  "msg": "precisa de \"padrao\""
+ },
+ {
+  "nome": "coluna única com padrão fixo em tabela com linhas",
+  "entrada": {
+   "tipo": "coluna",
+   "tabela": "caixa_precos",
+   "coluna": {
+    "nome": "cx",
+    "tipo": "text",
+    "unica": true,
+    "padrao": "a"
+   }
+  },
+  "existentes": {
+   "caixa_precos": {
+    "linhas": 3,
+    "colunas": [
+     "id",
+     "servico",
+     "valor",
+     "criado_em"
+    ]
+   },
+   "caixa_vazia": {
+    "linhas": 0,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "caixa_desconhecida": {
+    "linhas": null,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "rh_ferias": {
+    "linhas": 10,
+    "colunas": [
+     "id",
+     "nome"
+    ]
+   }
+  },
+  "esperado": "recusa",
+  "msg": "repetiria"
+ },
+ {
+  "nome": "coluna única uuid em tabela com linhas",
+  "entrada": {
+   "tipo": "coluna",
+   "tabela": "caixa_precos",
+   "coluna": {
+    "nome": "cx",
+    "tipo": "uuid",
+    "unica": true,
+    "padrao": "gen_random_uuid()"
+   }
+  },
+  "existentes": {
+   "caixa_precos": {
+    "linhas": 3,
+    "colunas": [
+     "id",
+     "servico",
+     "valor",
+     "criado_em"
+    ]
+   },
+   "caixa_vazia": {
+    "linhas": 0,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "caixa_desconhecida": {
+    "linhas": null,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "rh_ferias": {
+    "linhas": 10,
+    "colunas": [
+     "id",
+     "nome"
+    ]
+   }
+  },
+  "esperado": "ok"
+ },
+ {
+  "nome": "coluna já existe",
+  "entrada": {
+   "tipo": "coluna",
+   "tabela": "caixa_precos",
+   "coluna": {
+    "nome": "valor",
+    "tipo": "integer"
+   }
+  },
+  "existentes": {
+   "caixa_precos": {
+    "linhas": 3,
+    "colunas": [
+     "id",
+     "servico",
+     "valor",
+     "criado_em"
+    ]
+   },
+   "caixa_vazia": {
+    "linhas": 0,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "caixa_desconhecida": {
+    "linhas": null,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "rh_ferias": {
+    "linhas": 10,
+    "colunas": [
+     "id",
+     "nome"
+    ]
+   }
+  },
+  "esperado": "recusa",
+  "msg": "já existe"
+ },
+ {
+  "nome": "tabela não existe",
+  "entrada": {
+   "tipo": "coluna",
+   "tabela": "caixa_nao",
+   "coluna": {
+    "nome": "cx",
+    "tipo": "integer"
+   }
+  },
+  "existentes": {
+   "caixa_precos": {
+    "linhas": 3,
+    "colunas": [
+     "id",
+     "servico",
+     "valor",
+     "criado_em"
+    ]
+   },
+   "caixa_vazia": {
+    "linhas": 0,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "caixa_desconhecida": {
+    "linhas": null,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "rh_ferias": {
+    "linhas": 10,
+    "colunas": [
+     "id",
+     "nome"
+    ]
+   }
+  },
+  "esperado": "recusa",
+  "msg": "não existe"
+ },
+ {
+  "nome": "coluna em tabela fechada rh_usuarios",
+  "entrada": {
+   "tipo": "coluna",
+   "tabela": "rh_usuarios",
+   "coluna": {
+    "nome": "papel",
+    "tipo": "text",
+    "padrao": "admin"
+   }
+  },
+  "existentes": {
+   "rh_usuarios": {
+    "linhas": 1,
+    "colunas": [
+     "id"
+    ]
+   }
+  },
+  "esperado": "recusa",
+  "msg": "tabela fechada"
+ },
+ {
+  "nome": "coluna em tabela fechada rh_docs",
+  "entrada": {
+   "tipo": "coluna",
+   "tabela": "rh_docs",
+   "coluna": {
+    "nome": "papel",
+    "tipo": "text",
+    "padrao": "admin"
+   }
+  },
+  "existentes": {
+   "rh_docs": {
+    "linhas": 1,
+    "colunas": [
+     "id"
+    ]
+   }
+  },
+  "esperado": "recusa",
+  "msg": "tabela fechada"
+ },
+ {
+  "nome": "coluna em tabela fechada rh_log",
+  "entrada": {
+   "tipo": "coluna",
+   "tabela": "rh_log",
+   "coluna": {
+    "nome": "papel",
+    "tipo": "text",
+    "padrao": "admin"
+   }
+  },
+  "existentes": {
+   "rh_log": {
+    "linhas": 1,
+    "colunas": [
+     "id"
+    ]
+   }
+  },
+  "esperado": "recusa",
+  "msg": "tabela fechada"
+ },
+ {
+  "nome": "coluna em tabela fechada rh_site",
+  "entrada": {
+   "tipo": "coluna",
+   "tabela": "rh_site",
+   "coluna": {
+    "nome": "papel",
+    "tipo": "text",
+    "padrao": "admin"
+   }
+  },
+  "existentes": {
+   "rh_site": {
+    "linhas": 1,
+    "colunas": [
+     "id"
+    ]
+   }
+  },
+  "esperado": "recusa",
+  "msg": "tabela fechada"
+ },
+ {
+  "nome": "coluna em tabela fechada admin_log",
+  "entrada": {
+   "tipo": "coluna",
+   "tabela": "admin_log",
+   "coluna": {
+    "nome": "papel",
+    "tipo": "text",
+    "padrao": "admin"
+   }
+  },
+  "existentes": {
+   "admin_log": {
+    "linhas": 1,
+    "colunas": [
+     "id"
+    ]
+   }
+  },
+  "esperado": "recusa",
+  "msg": "tabela fechada"
+ },
+ {
+  "nome": "coluna em tabela fechada admin_sql_log",
+  "entrada": {
+   "tipo": "coluna",
+   "tabela": "admin_sql_log",
+   "coluna": {
+    "nome": "papel",
+    "tipo": "text",
+    "padrao": "admin"
+   }
+  },
+  "existentes": {
+   "admin_sql_log": {
+    "linhas": 1,
+    "colunas": [
+     "id"
+    ]
+   }
+  },
+  "esperado": "recusa",
+  "msg": "tabela fechada"
+ },
+ {
+  "nome": "coluna em tabela fechada auth_x",
+  "entrada": {
+   "tipo": "coluna",
+   "tabela": "auth_x",
+   "coluna": {
+    "nome": "papel",
+    "tipo": "text",
+    "padrao": "admin"
+   }
+  },
+  "existentes": {
+   "auth_x": {
+    "linhas": 1,
+    "colunas": [
+     "id"
+    ]
+   }
+  },
+  "esperado": "recusa",
+  "msg": "tabela fechada"
+ },
+ {
+  "nome": "coluna com tipo fora da lista",
+  "entrada": {
+   "tipo": "coluna",
+   "tabela": "caixa_precos",
+   "coluna": {
+    "nome": "cx",
+    "tipo": "regclass"
+   }
+  },
+  "existentes": {
+   "caixa_precos": {
+    "linhas": 3,
+    "colunas": [
+     "id",
+     "servico",
+     "valor",
+     "criado_em"
+    ]
+   },
+   "caixa_vazia": {
+    "linhas": 0,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "caixa_desconhecida": {
+    "linhas": null,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "rh_ferias": {
+    "linhas": 10,
+    "colunas": [
+     "id",
+     "nome"
+    ]
+   }
+  },
+  "esperado": "recusa",
+  "msg": "não é permitido"
+ },
+ {
+  "nome": "coluna padrão por função",
+  "entrada": {
+   "tipo": "coluna",
+   "tabela": "caixa_precos",
+   "coluna": {
+    "nome": "cx",
+    "tipo": "text",
+    "padrao": "public.rh_merge('a','b','{}')"
+   }
+  },
+  "existentes": {
+   "caixa_precos": {
+    "linhas": 3,
+    "colunas": [
+     "id",
+     "servico",
+     "valor",
+     "criado_em"
+    ]
+   },
+   "caixa_vazia": {
+    "linhas": 0,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "caixa_desconhecida": {
+    "linhas": null,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "rh_ferias": {
+    "linhas": 10,
+    "colunas": [
+     "id",
+     "nome"
+    ]
+   }
+  },
+  "esperado": "recusa",
+  "msg": "padrão"
+ },
+ {
+  "nome": "coluna padrão com subconsulta",
+  "entrada": {
+   "tipo": "coluna",
+   "tabela": "caixa_precos",
+   "coluna": {
+    "nome": "cx",
+    "tipo": "integer",
+    "padrao": "(select 1)"
+   }
+  },
+  "existentes": {
+   "caixa_precos": {
+    "linhas": 3,
+    "colunas": [
+     "id",
+     "servico",
+     "valor",
+     "criado_em"
+    ]
+   },
+   "caixa_vazia": {
+    "linhas": 0,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "caixa_desconhecida": {
+    "linhas": null,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "rh_ferias": {
+    "linhas": 10,
+    "colunas": [
+     "id",
+     "nome"
+    ]
+   }
+  },
+  "esperado": "recusa",
+  "msg": "padrão"
+ },
+ {
+  "nome": "coluna não é objeto",
+  "entrada": {
+   "tipo": "coluna",
+   "tabela": "caixa_precos",
+   "coluna": "x text"
+  },
+  "existentes": {
+   "caixa_precos": {
+    "linhas": 3,
+    "colunas": [
+     "id",
+     "servico",
+     "valor",
+     "criado_em"
+    ]
+   },
+   "caixa_vazia": {
+    "linhas": 0,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "caixa_desconhecida": {
+    "linhas": null,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "rh_ferias": {
+    "linhas": 10,
+    "colunas": [
+     "id",
+     "nome"
+    ]
+   }
+  },
+  "esperado": "recusa",
+  "msg": "esperava"
+ },
+ {
+  "nome": "índice simples",
+  "entrada": {
+   "tipo": "indice",
+   "tabela": "caixa_precos",
+   "colunas": [
+    "servico"
+   ]
+  },
+  "existentes": {
+   "caixa_precos": {
+    "linhas": 3,
+    "colunas": [
+     "id",
+     "servico",
+     "valor",
+     "criado_em"
+    ]
+   },
+   "caixa_vazia": {
+    "linhas": 0,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "caixa_desconhecida": {
+    "linhas": null,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "rh_ferias": {
+    "linhas": 10,
+    "colunas": [
+     "id",
+     "nome"
+    ]
+   }
+  },
+  "esperado": "ok",
+  "sql": [
+   "create index if not exists \"caixa_precos_servico_idx\" on public.\"caixa_precos\" (\"servico\")"
+  ]
+ },
+ {
+  "nome": "índice único composto",
+  "entrada": {
+   "tipo": "indice",
+   "tabela": "caixa_precos",
+   "colunas": [
+    "servico",
+    "valor"
+   ],
+   "unico": true
+  },
+  "existentes": {
+   "caixa_precos": {
+    "linhas": 3,
+    "colunas": [
+     "id",
+     "servico",
+     "valor",
+     "criado_em"
+    ]
+   },
+   "caixa_vazia": {
+    "linhas": 0,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "caixa_desconhecida": {
+    "linhas": null,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "rh_ferias": {
+    "linhas": 10,
+    "colunas": [
+     "id",
+     "nome"
+    ]
+   }
+  },
+  "esperado": "ok",
+  "sql": [
+   "create unique index if not exists \"caixa_precos_servico_valor_uq\" on public.\"caixa_precos\" (\"servico\", \"valor\")"
+  ]
+ },
+ {
+  "nome": "índice em coluna que não existe",
+  "entrada": {
+   "tipo": "indice",
+   "tabela": "caixa_precos",
+   "colunas": [
+    "nada"
+   ]
+  },
+  "existentes": {
+   "caixa_precos": {
+    "linhas": 3,
+    "colunas": [
+     "id",
+     "servico",
+     "valor",
+     "criado_em"
+    ]
+   },
+   "caixa_vazia": {
+    "linhas": 0,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "caixa_desconhecida": {
+    "linhas": null,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "rh_ferias": {
+    "linhas": 10,
+    "colunas": [
+     "id",
+     "nome"
+    ]
+   }
+  },
+  "esperado": "recusa",
+  "msg": "não existe"
+ },
+ {
+  "nome": "índice sem colunas",
+  "entrada": {
+   "tipo": "indice",
+   "tabela": "caixa_precos",
+   "colunas": []
+  },
+  "existentes": {
+   "caixa_precos": {
+    "linhas": 3,
+    "colunas": [
+     "id",
+     "servico",
+     "valor",
+     "criado_em"
+    ]
+   },
+   "caixa_vazia": {
+    "linhas": 0,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "caixa_desconhecida": {
+    "linhas": null,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "rh_ferias": {
+    "linhas": 10,
+    "colunas": [
+     "id",
+     "nome"
+    ]
+   }
+  },
+  "esperado": "recusa",
+  "msg": "de 1 a 4"
+ },
+ {
+  "nome": "índice com 5 colunas",
+  "entrada": {
+   "tipo": "indice",
+   "tabela": "caixa_precos",
+   "colunas": [
+    "id",
+    "servico",
+    "valor",
+    "criado_em",
+    "id"
+   ]
+  },
+  "existentes": {
+   "caixa_precos": {
+    "linhas": 3,
+    "colunas": [
+     "id",
+     "servico",
+     "valor",
+     "criado_em"
+    ]
+   },
+   "caixa_vazia": {
+    "linhas": 0,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "caixa_desconhecida": {
+    "linhas": null,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "rh_ferias": {
+    "linhas": 10,
+    "colunas": [
+     "id",
+     "nome"
+    ]
+   }
+  },
+  "esperado": "recusa",
+  "msg": "de 1 a 4"
+ },
+ {
+  "nome": "índice coluna repetida",
+  "entrada": {
+   "tipo": "indice",
+   "tabela": "caixa_precos",
+   "colunas": [
+    "servico",
+    "servico"
+   ]
+  },
+  "existentes": {
+   "caixa_precos": {
+    "linhas": 3,
+    "colunas": [
+     "id",
+     "servico",
+     "valor",
+     "criado_em"
+    ]
+   },
+   "caixa_vazia": {
+    "linhas": 0,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "caixa_desconhecida": {
+    "linhas": null,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "rh_ferias": {
+    "linhas": 10,
+    "colunas": [
+     "id",
+     "nome"
+    ]
+   }
+  },
+  "esperado": "recusa",
+  "msg": "repetida"
+ },
+ {
+  "nome": "índice com expressão",
+  "entrada": {
+   "tipo": "indice",
+   "tabela": "caixa_precos",
+   "colunas": [
+    "lower(servico)"
+   ]
+  },
+  "existentes": {
+   "caixa_precos": {
+    "linhas": 3,
+    "colunas": [
+     "id",
+     "servico",
+     "valor",
+     "criado_em"
+    ]
+   },
+   "caixa_vazia": {
+    "linhas": 0,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "caixa_desconhecida": {
+    "linhas": null,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "rh_ferias": {
+    "linhas": 10,
+    "colunas": [
+     "id",
+     "nome"
+    ]
+   }
+  },
+  "esperado": "recusa",
+  "msg": "coluna 1 do índice"
+ },
+ {
+  "nome": "índice em tabela fechada",
+  "entrada": {
+   "tipo": "indice",
+   "tabela": "rh_docs",
+   "colunas": [
+    "id"
+   ]
+  },
+  "existentes": {
+   "rh_docs": {
+    "linhas": 1,
+    "colunas": [
+     "id"
+    ]
+   }
+  },
+  "esperado": "recusa",
+  "msg": "tabela fechada"
+ },
+ {
+  "nome": "índice unico não booleano",
+  "entrada": {
+   "tipo": "indice",
+   "tabela": "caixa_precos",
+   "colunas": [
+    "servico"
+   ],
+   "unico": "sim"
+  },
+  "existentes": {
+   "caixa_precos": {
+    "linhas": 3,
+    "colunas": [
+     "id",
+     "servico",
+     "valor",
+     "criado_em"
+    ]
+   },
+   "caixa_vazia": {
+    "linhas": 0,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "caixa_desconhecida": {
+    "linhas": null,
+    "colunas": [
+     "id",
+     "a"
+    ]
+   },
+   "rh_ferias": {
+    "linhas": 10,
+    "colunas": [
+     "id",
+     "nome"
+    ]
+   }
+  },
+  "esperado": "recusa",
+  "msg": "true ou false"
+ },
+ {
+  "nome": "tipo do pedido desconhecido",
+  "entrada": {
+   "tipo": "sql",
+   "sql": "drop table x"
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "tipo do pedido"
+ },
+ {
+  "nome": "sem tipo",
+  "entrada": {
+   "nome": "caixa_x"
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "tipo do pedido"
+ }
+]

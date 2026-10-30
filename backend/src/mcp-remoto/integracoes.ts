@@ -35,7 +35,7 @@ export function listarIntegracoes(f: FontesDeIntegracao) {
       ...(tem.asaas ? ['asaas_* (cobranças, extrato, saldo, clientes; para quem tem permissão, cadastrar cliente e gerar boleto em dois passos)'] : []),
       ...(tem.convenia ? ['convenia_* (RH: colaboradores, admissões e desligamentos, férias, afastamentos)'] : []),
       ...(tem.tiquetaque ? ['tiquetaque_* (ponto: batidas do dia e quem está trabalhando, atrasos e faltas, horas e banco de horas, afastamentos — de todos os locais da conta)'] : []),
-      ...(tem.sistemas ? ['sistemas_* (sistema novo de RH/Caixa/Financeiro: esquema, consulta, usuários, log, simulação; alterar em dois passos para quem tem permissão)'] : []),
+      ...(tem.sistemas ? ['sistemas_* (sistema novo de RH/Caixa/Financeiro: esquema, consulta, usuários, log, simulação; alterar dados e estrutura em dois passos para quem tem permissão)'] : []),
     ];
     return { slug, nome, ...tem, ferramentas };
   });
