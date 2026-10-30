@@ -1,8 +1,11 @@
 /**
- * ALERTA NO TELEGRAM: paciente que escreveu e ficou 5 minutos sem resposta (decisão do João, 16/10/2026).
+ * ALERTA NO TELEGRAM + TAREFA NO CARTÃO: paciente que escreveu e ficou 5 minutos sem resposta (decisão do João,
+ * 16/10/2026; a tarefa foi pedida em 30/10/2026 depois que o alerta do Timbó chegou só ao João).
  *
  * Piloto na Açailândia, atrás da chave `alerta-sem-resposta` (ALERTA_SEM_RESPOSTA_SLUGS). Vai para o
- * Telegram do João; os grupos das unidades ficam para depois (o destino já é parâmetro do envio).
+ * Telegram do João e, no mesmo momento, vira uma tarefa "ALERTA · slug · …" no cartão para a equipe da unidade
+ * (prazo = agora, responsável = o do cartão). Cada saída tem a sua marca em `card_alert`, então uma que falha
+ * não cala nem repete a outra. Os grupos das unidades no Telegram ficam para depois.
  *
  * O QUE CONTA COMO RESPOSTA (a escolha conservadora, explicada no PR):
  *   Qualquer mensagem que SAIU para o paciente depois da dele — da equipe, da Sofia ou de um robô do
@@ -31,7 +34,7 @@ import { ehEncerramento } from './encerramento.js';
 import { mascararPii } from './pii.js';
 import { registrarSimulacao, type Simulacao } from './so-no-papel.js';
 import { esquemaDaUnidade } from './kommo-schema.js';
-import { marcarAviso } from './aviso-dedupe.js';
+import { marcarAviso, marcadoEm } from './aviso-dedupe.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { mensagensOficiais, type MensagemOficial } from '../services/kommo-talks.service.js';
 
@@ -47,6 +50,11 @@ export const JANELA_MS = 60 * 60_000;
  * alerta novo a cada mensagem (revisão de 16/10, item 6).
  */
 export const REGRA_SEM_RESPOSTA = 'sem_resposta_telegram';
+/**
+ * A marca da TAREFA no cartão (30/10/2026): outra linha em `card_alert`, com a mesma regra de "mesma espera".
+ * Separada da do Telegram de propósito — se uma das duas saídas falhar, a outra não repete nem é calada.
+ */
+export const REGRA_SEM_RESPOSTA_TAREFA = 'sem_resposta_tarefa';
 /** Espera que segue sem resposta há mais que isto ganha UM lembrete novo (e cobre a conversa nova de quem volta semanas depois). */
 export const REALERTA_MS = 12 * 3600_000;
 /** Quantas mensagens da conversa oficial se leem: folga para ver a resposta mesmo com o paciente escrevendo muito. */
@@ -133,6 +141,8 @@ export function textoDoAlerta(args: {
   esperaMs: number;
   ultima: string;
   link: string | null;
+  /** Como ficou a tarefa no cartão: o João precisa saber se a recepção foi avisada ou se é para ele avisar. */
+  tarefa?: 'criada' | 'falhou' | null;
 }): string {
   const ultima = mascararPii(args.ultima.replace(/\s+/g, ' ').trim()).slice(0, 160);
   return [
@@ -140,8 +150,24 @@ export function textoDoAlerta(args: {
     `Contato: ${args.contato?.trim() || 'paciente'} (lead ${args.leadId})`,
     ...(args.etapa ? [`Etapa: ${args.etapa}`] : []),
     `Última mensagem: "${ultima || '(sem texto: áudio, imagem ou figurinha)'}"`,
+    ...(args.tarefa === 'criada' ? ['✅ Tarefa criada no cartão para a equipe da unidade.'] : []),
+    ...(args.tarefa === 'falhou' ? ['⚠️ Tarefa NÃO criada no cartão — avise a recepção da unidade.'] : []),
     ...(args.link ? [args.link] : []),
   ].join('\n');
+}
+
+/**
+ * Texto da TAREFA no cartão do Kommo (a equipe da unidade lê isto). O prefixo `ALERTA · <slug> ·` é o mesmo das
+ * outras tarefas de alerta (SLA, lembrete…): é a chave do roteador de alertas. Trecho curto e sem dado sensível.
+ */
+export function textoDaTarefa(args: { slug: string; contato: string | null; esperaMs: number; ultima: string }): string {
+  const ultima = mascararPii(args.ultima.replace(/\s+/g, ' ').trim()).slice(0, 100);
+  const nome = args.contato?.replace(/\s+/g, ' ').trim();
+  return (
+    `ALERTA · ${args.slug} · ${nome ? `[Contato: ${nome}] ` : ''}` +
+    `Paciente sem resposta há ${humanizarEspera(args.esperaMs)}. ` +
+    `Última mensagem: "${ultima || '(sem texto: áudio, imagem ou figurinha)'}". Responda agora.`
+  );
 }
 
 export interface CandidataSemResposta {
@@ -162,6 +188,11 @@ export interface DepsSemResposta {
   alertadoEm: (unit: Unit, leadId: number) => Promise<Date | null>;
   marcarAlertado: (unit: Unit, leadId: number, quando: Date) => Promise<void>;
   etapa: (unit: Unit, leadId: number) => Promise<string | null>;
+  /** Quando saiu a última tarefa deste lead (marca própria, separada da do Telegram), ou null. */
+  tarefaEm: (unit: Unit, leadId: number) => Promise<Date | null>;
+  marcarTarefa: (unit: Unit, leadId: number, quando: Date) => Promise<void>;
+  /** Abre a tarefa no cartão, prazo = agora, no responsável do cartão. LANÇA se o Kommo não aceitou. */
+  criarTarefa: (unit: Unit, leadId: number, texto: string) => Promise<void>;
   enviar: (texto: string) => Promise<boolean>;
   simular: (unit: Pick<Unit, 'id' | 'slug'>, automacao: string, s: Simulacao) => void;
 }
@@ -220,6 +251,19 @@ export const DEPS_SEM_RESPOSTA_PADRAO: DepsSemResposta = {
       return null;
     }
   },
+  tarefaEm: async (unit, leadId) => marcadoEm(unit.id, leadId, REGRA_SEM_RESPOSTA_TAREFA),
+  marcarTarefa: (unit, leadId, quando) => marcarAviso(unit.id, leadId, REGRA_SEM_RESPOSTA_TAREFA, quando),
+  criarTarefa: async (unit, leadId, texto) => {
+    const kommo = createKommoClient(unit);
+    // O responsável do cartão; o `createTask` troca o login da consultoria pelo usuário da clínica (quando é um só).
+    let responsavel: number | undefined;
+    try {
+      responsavel = (await kommo.getLead(leadId))?.responsible_user_id || undefined;
+    } catch (err) {
+      logger.warn({ err: String(err), unit: unit.slug, leadId }, 'sem-resposta: sem o cartão para achar o responsável — a tarefa vai pelo padrão da unidade');
+    }
+    await kommo.createTask({ leadId, text: texto, completeAt: Math.floor(Date.now() / 1000), responsibleUserId: responsavel });
+  },
   enviar: (texto) => enviarTelegram(texto),
   simular: registrarSimulacao,
 };
@@ -254,15 +298,27 @@ function lembrarSimulado(chave: string, agora: Date): void {
   }
 }
 
+/**
+ * Tarefa que o Kommo recusou (ou deu timeout): UMA tentativa por espera. Um timeout pode ter criado a tarefa, e
+ * repetir a duplicaria no cartão; o Telegram já avisa o João de que a tarefa não saiu. Mesma regra de "mesma
+ * espera" das marcas do banco. Reinício esquece: no máximo uma tentativa a mais.
+ */
+const tarefaTentadaEm = new Map<string, Date>();
+
 /** Só para teste. */
 export function _esquecerConferidas(): void {
   conferidas.clear();
   simuladoEm.clear();
+  tarefaTentadaEm.clear();
 }
 
 export interface ResumoSemResposta {
   candidatas: number;
   alertas: number;
+  /** Tarefas criadas no cartão do Kommo. */
+  tarefas: number;
+  /** Tarefas que o Kommo não aceitou (o Telegram saiu mesmo assim). */
+  tarefasFalhas: number;
   simulados: number;
   respondidas: number;
 }
@@ -273,7 +329,7 @@ export async function verificarUnidadeSemResposta(
   estado: Estado,
   deps: DepsSemResposta = DEPS_SEM_RESPOSTA_PADRAO,
 ): Promise<ResumoSemResposta> {
-  const resumo: ResumoSemResposta = { candidatas: 0, alertas: 0, simulados: 0, respondidas: 0 };
+  const resumo: ResumoSemResposta = { candidatas: 0, alertas: 0, tarefas: 0, tarefasFalhas: 0, simulados: 0, respondidas: 0 };
   if (estado === 'desligado' || !deps.dentroDoHorario(unit)) return resumo;
   const agora = deps.agora();
   const de = new Date(agora.getTime() - ESPERA_MS - JANELA_MS);
@@ -295,18 +351,17 @@ export async function verificarUnidadeSemResposta(
       }
       if (!deveAlertar(espera, agora)) continue;
       const chaveDoLead = `${unit.id}:${c.leadId}`;
-      const alertadoEm = estado === 'seco' ? (simuladoEm.get(chaveDoLead) ?? null) : await deps.alertadoEm(unit, c.leadId);
-      if (mesmaEsperaJaAlertada(msgs, alertadoEm, agora)) {
-        lembrarConferida(chaveConferida, agora.getTime());
-        continue;
-      }
-
       const esperaMs = agora.getTime() - espera.desde.getTime();
+
       if (estado === 'seco') {
+        if (mesmaEsperaJaAlertada(msgs, simuladoEm.get(chaveDoLead) ?? null, agora)) {
+          lembrarConferida(chaveConferida, agora.getTime());
+          continue;
+        }
         deps.simular(unit, AUTOMACAO_SEM_RESPOSTA, {
           leadId: c.leadId,
           acao: 'alertaria',
-          alvo: 'Telegram do João',
+          alvo: 'Telegram do João + tarefa no cartão',
           valor: `sem resposta há ${humanizarEspera(esperaMs)}`,
           motivo: `última mensagem: "${mascararPii(espera.ultimaTexto).slice(0, 120)}"`,
         });
@@ -316,22 +371,56 @@ export async function verificarUnidadeSemResposta(
         continue;
       }
 
-      const texto = textoDoAlerta({
-        unidade: unit.name,
-        contato: c.contactName,
-        leadId: c.leadId,
-        etapa: await deps.etapa(unit, c.leadId),
-        esperaMs,
-        ultima: espera.ultimaTexto,
-        link: unit.kommoSubdomain ? `https://${unit.kommoSubdomain}.kommo.com/leads/detail/${c.leadId}` : null,
-      });
-      if (await deps.enviar(texto)) {
+      // Duas saídas, cada uma com a sua marca: o Telegram do João e a tarefa para a equipe da unidade.
+      const telegramJa = mesmaEsperaJaAlertada(msgs, await deps.alertadoEm(unit, c.leadId), agora);
+      const tarefaJa = mesmaEsperaJaAlertada(msgs, await deps.tarefaEm(unit, c.leadId), agora);
+      const tarefaTentada = !tarefaJa && mesmaEsperaJaAlertada(msgs, tarefaTentadaEm.get(chaveDoLead) ?? null, agora);
+      if (telegramJa && (tarefaJa || tarefaTentada)) {
+        lembrarConferida(chaveConferida, agora.getTime());
+        continue;
+      }
+
+      // 1) A tarefa primeiro: o Telegram diz ao João como ela ficou. Se o Kommo falhar, o Telegram sai do mesmo jeito.
+      let tarefa: 'criada' | 'falhou' | null = tarefaJa ? 'criada' : tarefaTentada ? 'falhou' : null;
+      if (!tarefaJa && !tarefaTentada) {
+        try {
+          await deps.criarTarefa(
+            unit,
+            c.leadId,
+            textoDaTarefa({ slug: unit.slug, contato: c.contactName, esperaMs, ultima: espera.ultimaTexto }),
+          );
+          // Marca SÓ depois que o Kommo aceitou.
+          await deps.marcarTarefa(unit, c.leadId, agora);
+          tarefa = 'criada';
+          resumo.tarefas++;
+          logger.info({ unit: unit.slug, leadId: c.leadId, esperaMin: Math.floor(esperaMs / 60_000) }, 'sem-resposta: tarefa criada no cartão');
+        } catch (err) {
+          tarefa = 'falhou';
+          resumo.tarefasFalhas++;
+          tarefaTentadaEm.set(chaveDoLead, agora);
+          logger.error({ err: String(err), unit: unit.slug, leadId: c.leadId }, 'sem-resposta: FALHOU criar a tarefa no cartão — o Telegram sai mesmo assim');
+        }
+      }
+
+      // 2) O Telegram do João.
+      if (!telegramJa) {
+        const texto = textoDoAlerta({
+          unidade: unit.name,
+          contato: c.contactName,
+          leadId: c.leadId,
+          etapa: await deps.etapa(unit, c.leadId),
+          esperaMs,
+          ultima: espera.ultimaTexto,
+          link: unit.kommoSubdomain ? `https://${unit.kommoSubdomain}.kommo.com/leads/detail/${c.leadId}` : null,
+          tarefa,
+        });
+        if (!(await deps.enviar(texto))) continue; // Telegram recusou: sem marca, tenta de novo na próxima varredura
         // Marca SÓ depois que o Telegram aceitou: falha de rede não cala o aviso.
         await deps.marcarAlertado(unit, c.leadId, agora);
-        lembrarConferida(chaveConferida, agora.getTime());
         resumo.alertas++;
         logger.info({ unit: unit.slug, leadId: c.leadId, esperaMin: Math.floor(esperaMs / 60_000) }, 'sem-resposta: alerta enviado no Telegram');
       }
+      lembrarConferida(chaveConferida, agora.getTime());
     } catch (err) {
       logger.warn({ err: String(err), unit: unit.slug, leadId: c.leadId }, 'sem-resposta: falha ao conferir o lead — segue');
     }
@@ -355,15 +444,15 @@ async function varrer(): Promise<void> {
       if (estado === 'ligado' && !telegramConfigurado()) {
         if (Date.now() - avisouSemToken > 3600_000) {
           avisouSemToken = Date.now();
-          logger.warn({ unit: unit.slug }, 'sem-resposta: chave ligada mas falta TELEGRAM_BOT_TOKEN no servidor — nenhum alerta sai');
+          logger.warn({ unit: unit.slug }, 'sem-resposta: chave ligada mas falta TELEGRAM_BOT_TOKEN no servidor — só a tarefa no cartão sai, o Telegram não');
         }
-        continue;
+        // Segue: a tarefa para a equipe da unidade não depende do Telegram do João.
       }
       const r = await verificarUnidadeSemResposta(unit, estado).catch((err) => {
         logger.warn({ err: String(err), unit: unit.slug }, 'sem-resposta: unidade falhou');
         return null;
       });
-      if (r && (r.alertas || r.simulados)) logger.info({ unit: unit.slug, estado, ...r }, 'sem-resposta: varredura');
+      if (r && (r.alertas || r.simulados || r.tarefas || r.tarefasFalhas)) logger.info({ unit: unit.slug, estado, ...r }, 'sem-resposta: varredura');
     }
   } catch (err) {
     logger.warn({ err: String(err) }, 'sem-resposta: varredura falhou');
