@@ -225,14 +225,16 @@ const DE_PE: readonly number[] = [
  * da Sofia (`spineLeadLink`) não fica sabendo — `consultaDoLead` só vê a que ela marcou. Sessão de tratamento
  * (com `idTreatment`) não conta.
  */
-export function avaliacaoDePe(schedules: SpineSchedule[], agoraLocal: string): SpineSchedule | null {
+export function avaliacoesDePe(schedules: SpineSchedule[], agoraLocal: string): SpineSchedule[] {
   const agora = agoraLocal.slice(0, 16);
-  return (
-    schedules
-      .filter((s) => s.idTreatment == null && s.idStatus !== null && DE_PE.includes(s.idStatus))
-      .filter((s) => !!s.dayLocal && !!s.timeLocal && `${s.dayLocal}T${s.timeLocal}` > agora)
-      .sort((a, b) => `${a.dayLocal}T${a.timeLocal}`.localeCompare(`${b.dayLocal}T${b.timeLocal}`))[0] ?? null
-  );
+  return schedules
+    .filter((s) => s.idTreatment == null && s.idStatus !== null && DE_PE.includes(s.idStatus))
+    .filter((s) => !!s.dayLocal && !!s.timeLocal && `${s.dayLocal}T${s.timeLocal}` > agora)
+    .sort((a, b) => `${a.dayLocal}T${a.timeLocal}`.localeCompare(`${b.dayLocal}T${b.timeLocal}`));
+}
+
+export function avaliacaoDePe(schedules: SpineSchedule[], agoraLocal: string): SpineSchedule | null {
+  return avaliacoesDePe(schedules, agoraLocal)[0] ?? null;
 }
 
 export function porExtenso(quando: string | null | undefined): string {
@@ -246,6 +248,7 @@ export function porExtenso(quando: string | null | undefined): string {
 export const AgendaReconcileService = {
   consultaDoLead,
   avaliacaoDePe,
+  avaliacoesDePe,
   esqueceConsulta,
   porExtenso,
 };

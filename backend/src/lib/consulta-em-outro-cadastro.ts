@@ -47,8 +47,10 @@ export interface ConsultaDePe {
 export interface PossivelDuplicado {
   idClient: number;
   name: string | null;
-  /** a consulta de pé dele, se a leitura mostrou uma; `null` = nenhuma vista */
+  /** a consulta de pé MAIS PRÓXIMA dele, se a leitura mostrou uma; `null` = nenhuma vista */
   consulta: ConsultaDePe | null;
+  /** TODAS as consultas de pé dele, da mais próxima à mais distante: quem pede o horário da 2ª também cruza com ele */
+  consultas: ConsultaDePe[];
 }
 
 export interface ConferenciaDeCadastros {
@@ -123,8 +125,9 @@ export async function conferirConsultaDePe(
           return;
         }
         // página cheia no nome INTEIRO = pode haver mais gente com esse nome do que veio; nos termos largos ("Ana") a página
-        // cheia é o normal e o telefone é quem decide
-        if (i === 0 && busca.data.clients.length >= POR_PAGINA) incompleta = true;
+        // cheia é o normal e o telefone é quem decide. Nome de UMA palavra ("Maria"): o nome inteiro JÁ é o termo largo — não
+        // há busca mais estreita a esperar, e dar a conferência por incompleta faria todo horário ocupado virar "não ofereço outro"
+        if (i === 0 && termos[0].includes(' ') && busca.data.clients.length >= POR_PAGINA) incompleta = true;
         for (const c of busca.data.clients) {
           if (!c.idClient || c.idClient === paciente.idClient) continue;
           const k = fim8(c.whatsapp);
@@ -151,12 +154,11 @@ export async function conferirConsultaDePe(
         const mesmo = iguais.has(id);
         if (mesmo) duplicados.push(id);
         const c = det?.ok ? det.data?.client ?? null : null;
-        const dele = c ? AgendaReconcileService.avaliacaoDePe(c.schedules, p.agoraLocal) : null;
-        const consulta = dele ? { idClient: id, schedule: dele } : null;
+        const dele = c ? AgendaReconcileService.avaliacoesDePe(c.schedules, p.agoraLocal).map((schedule) => ({ idClient: id, schedule })) : [];
         if (mesmo) {
-          if (consulta) achadas.push(consulta);
+          if (dele[0]) achadas.push(dele[0]);
         } else {
-          possiveisDuplicados.push({ idClient: id, name: nomes.get(id) ?? null, consulta });
+          possiveisDuplicados.push({ idClient: id, name: nomes.get(id) ?? null, consulta: dele[0] ?? null, consultas: dele });
         }
         if (!det || !det.ok) incompleta = true;
       }
