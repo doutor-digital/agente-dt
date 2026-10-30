@@ -21,7 +21,7 @@
  *    vivo da agenda; por isso o padrão é MANTER (a tarefa segue a data do registro). `fechar` existe como
  *    chave (`FRANQUIA_CALENDARIO_REMARCADO=fechar`) para quem provar que a unidade cria registro novo.
  */
-import { instanteNoFuso, somarDias, type SpineSchedule } from '../services/spine.service.js';
+import { SPINE_STATUS, instanteNoFuso, somarDias, type SpineSchedule } from '../services/spine.service.js';
 import { downgradeEmoji } from '../services/kommo.service.js';
 import { normalizar } from './franquia-sync.js';
 
@@ -39,16 +39,17 @@ const RESULTADO: Record<Exclude<DesfechoDaAgenda, 'ativo'>, string> = {
 };
 
 /** O que a franquia disse sobre o agendamento. Status novo/desconhecido fica `ativo` (mais seguro que fechar). */
-export function desfechoDaAgenda(statusName: string | null | undefined, remarcado: 'manter' | 'fechar' = 'manter'): DesfechoDaAgenda {
+export function desfechoDaAgenda(statusName: string | null | undefined, remarcado: 'manter' | 'fechar' = 'manter', idStatus?: number | null): DesfechoDaAgenda {
+  // o id é o que a franquia não escreve de outro jeito; o nome fica de reforço (status novo, id novo)
   const s = normalizar(statusName);
-  if (s === 'atendido') return 'atendido';
-  if (s === 'faltou' || s === 'nao compareceu') return 'faltou';
-  if (s === 'desmarcado') return 'desmarcado';
-  if (s === 'remarcado' && remarcado === 'fechar') return 'remarcado';
+  if (idStatus === SPINE_STATUS.ATENDIDO || s === 'atendido') return 'atendido';
+  if (idStatus === SPINE_STATUS.NAO_COMPARECEU || s === 'faltou' || s === 'nao compareceu') return 'faltou';
+  if (idStatus === SPINE_STATUS.DESMARCADO || s === 'desmarcado') return 'desmarcado';
+  if ((idStatus === SPINE_STATUS.REMARCADO || s === 'remarcado') && remarcado === 'fechar') return 'remarcado';
   return 'ativo';
 }
 
-export type ItemDaAgenda = Pick<SpineSchedule, 'idSchedule' | 'clientName' | 'categoryName' | 'physicalTherapist' | 'statusName' | 'dateAttendanceUtc'>;
+export type ItemDaAgenda = Pick<SpineSchedule, 'idSchedule' | 'clientName' | 'categoryName' | 'physicalTherapist' | 'statusName' | 'dateAttendanceUtc'> & { idStatus?: number | null };
 
 export interface TarefaAberta {
   id: number;
@@ -71,6 +72,8 @@ export interface Plano {
   ignorados: number;
   /** agendamentos ativos que já passaram e não têm tarefa: não se cria tarefa para o passado */
   passados: number;
+  /** agendamentos ativos cuja tarefa alguém já concluiu: respeitado, não se cria outra */
+  jaConcluidas: number;
 }
 
 const MARCADOR = /\[ag:(\d+)\]/;
@@ -141,6 +144,8 @@ export interface EntradaDoPlano {
   agendamentos: ReadonlyArray<ItemDaAgenda>;
   /** tarefas ABERTAS do tipo configurado; as sem marcador são ignoradas aqui */
   tarefas: ReadonlyArray<TarefaAberta>;
+  /** tarefas JÁ CONCLUÍDAS (por nós ou pela recepção) na janela: o que alguém concluiu de uma consulta ativa não se recria */
+  concluidas?: ReadonlyArray<Pick<TarefaAberta, 'text'>>;
   agoraEpoch: number;
   tz: string;
   /** janela da busca, em epoch (segundos): só tarefa dentro dela pode ser dada como "sumida" */
@@ -152,6 +157,12 @@ export function planejarCalendario(e: EntradaDoPlano): Plano {
   const acoes: Acao[] = [];
   let ignorados = 0;
   let passados = 0;
+  let jaConcluidas = 0;
+  const fechadasNoKommo = new Set<number>();
+  for (const t of e.concluidas ?? []) {
+    const id = idDoMarcador(t.text);
+    if (id !== null) fechadasNoKommo.add(id);
+  }
 
   // várias tarefas abertas com o mesmo marcador (reinício no meio do POST): a mais antiga é a canônica
   const porMarcador = new Map<number, TarefaAberta[]>();
@@ -175,7 +186,7 @@ export function planejarCalendario(e: EntradaDoPlano): Plano {
     if (vistos.has(id)) continue; // a paginação da franquia pode repetir um registro
     vistos.add(id);
 
-    const desfecho = desfechoDaAgenda(item.statusName, e.remarcado);
+    const desfecho = desfechoDaAgenda(item.statusName, e.remarcado, item.idStatus);
     const abertas = porMarcador.get(id) ?? [];
 
     if (desfecho !== 'ativo') {
@@ -184,6 +195,11 @@ export function planejarCalendario(e: EntradaDoPlano): Plano {
     }
 
     if (abertas.length === 0) {
+      if (fechadasNoKommo.has(id)) {
+        // a recepção deu a tarefa por feita: recriar a cada varredura brigaria com ela para sempre
+        jaConcluidas++;
+        continue;
+      }
       if (quando < e.agoraEpoch) {
         passados++;
         continue;
@@ -210,7 +226,7 @@ export function planejarCalendario(e: EntradaDoPlano): Plano {
     }
   }
 
-  return { acoes, ignorados, passados };
+  return { acoes, ignorados, passados, jaConcluidas };
 }
 
 // ── configuração por unidade ────────────────────────────────────────────────────────────────────

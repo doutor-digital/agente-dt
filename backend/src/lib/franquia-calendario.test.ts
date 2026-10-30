@@ -201,3 +201,18 @@ test('tipo "Consulta" é achado pelo nome (sem caixa, sem acento); sem ele, null
   assert.equal(tipoPeloNome([{ id: 1, name: 'Follow-up' }, { id: 4302851, name: 'consulta' }]), 4302851);
   assert.equal(tipoPeloNome([{ id: 1, name: 'Follow-up' }, { id: 2, name: 'Reunião' }]), null);
 });
+
+test('desfecho pelo ID do status (o nome pode variar entre franquias); o nome fica de reforço', () => {
+  assert.equal(desfechoDaAgenda('Compareceu', 'manter', 42), 'atendido');
+  assert.equal(desfechoDaAgenda('Ausente', 'manter', 40), 'faltou');
+  assert.equal(desfechoDaAgenda('Cancelado pelo paciente', 'manter', 57), 'desmarcado');
+  assert.equal(desfechoDaAgenda('AGENDADO', 'manter', 37), 'ativo');
+});
+
+test('tarefa de consulta ativa que alguém JÁ CONCLUÍDA no Kommo: não recria (e conta)', () => {
+  const p = plano([item()], [], { concluidas: [{ text: GUARDADO }] });
+  assert.deepEqual(p.acoes, []);
+  assert.equal(p.jaConcluidas, 1);
+  // sem a concluída, cria
+  assert.equal(plano([item()]).acoes[0].tipo, 'criar');
+});

@@ -22,13 +22,24 @@ interface Chamadas {
   tipos: number;
 }
 
-function kommoFalso(abertas: KommoTarefa[], opcoes: { completa?: boolean; falhaNaLista?: boolean; tipos?: Array<{ id: number; name: string }> } = {}) {
+function kommoFalso(
+  abertas: KommoTarefa[],
+  opcoes: { completa?: boolean; falhaNaLista?: boolean; tipos?: Array<{ id: number; name: string }>; concluidas?: KommoTarefa[]; falhaNasConcluidas?: boolean; falhaNosTipos?: boolean } = {},
+) {
   const c: Chamadas = { criadas: [], atualizadas: [], fechadas: [], tipos: 0 };
   let proximo = 7000;
   const kommo = {
     subdomain: `timbosc-${Math.random()}`,
-    listarTiposDeTarefa: async () => { c.tipos++; return opcoes.tipos ?? [{ id: 1, name: 'Follow-up' }, { id: 4302851, name: 'Consulta' }]; },
-    listarTarefasAbertas: async () => {
+    listarTiposDeTarefa: async () => {
+      c.tipos++;
+      if (opcoes.falhaNosTipos) throw new Error('429');
+      return opcoes.tipos ?? [{ id: 1, name: 'Follow-up' }, { id: 4302851, name: 'Consulta' }];
+    },
+    listarTarefas: async (args: { concluidas?: boolean }) => {
+      if (args.concluidas) {
+        if (opcoes.falhaNasConcluidas) throw new Error('400');
+        return { tarefas: opcoes.concluidas ?? [], completa: true };
+      }
       if (opcoes.falhaNaLista) throw new Error('503');
       return { tarefas: abertas, completa: opcoes.completa ?? true };
     },
@@ -206,10 +217,33 @@ test('erro numa tarefa não derruba as outras', async () => {
   const r = await varrerCalendario(unit, deps(kommo, [ag({ idSchedule: 1 }), ag({ idSchedule: 2 })], { modo: 'aplicar' }));
   assert.equal(r.erros, 1);
   assert.equal(c.criadas.length, 1);
+  assert.equal(r.criadas, 1, 'o contador só sobe para o que de fato gravou');
 });
 
 test('busca da franquia truncada: não aponta tarefa como "sumida" (a lista está incompleta)', async () => {
   const { kommo } = kommoFalso([{ id: 2, text: '⚕ SESSÃO [ag:22]', complete_till: Date.parse('2026-11-03T12:00:00Z') / 1000, entity_id: 9 }]);
   const r = await varrerCalendario(unit, deps(kommo, [], { modo: 'aplicar', buscarAgenda: async () => ({ ok: true, agendamentos: [], truncada: true }) }));
   assert.equal(r.sumiram, 0);
+});
+
+test('a recepção concluiu a tarefa de uma consulta ainda AGENDADA: respeita, não cria outra a cada ciclo', async () => {
+  const { kommo, c } = kommoFalso([], { concluidas: [{ id: 5, text: '⚕ AVALIAÇÃO 14:00 · Dr. Leonardo · AGENDADO [ag:3784113]', complete_till: Date.parse('2026-11-03T17:00:00Z') / 1000, entity_id: 555 }] });
+  const r = await varrerCalendario(unit, deps(kommo, [ag()], { modo: 'aplicar' }));
+  assert.deepEqual(c.criadas, []);
+  assert.equal(r.jaConcluidas, 1);
+});
+
+test('lista de concluídas ilegível: não cria nada novo (poderia duplicar), mas segue atualizando e fechando', async () => {
+  const { kommo, c } = kommoFalso([{ id: 2, text: '⚕ SESSÃO 09:00 · AGENDADO [ag:22]', complete_till: Date.parse('2026-11-03T12:00:00Z') / 1000, entity_id: 9 }], { falhaNasConcluidas: true });
+  const r = await varrerCalendario(unit, deps(kommo, [ag(), ag({ idSchedule: 22, statusName: 'ATENDIDO', idStatus: 42 })], { modo: 'aplicar' }));
+  assert.deepEqual(c.criadas, []);
+  assert.deepEqual(c.fechadas, [{ id: 2, resultado: 'Atendido' }]);
+  assert.equal(r.erros, 1);
+});
+
+test('sem saber o tipo (429 na lista de tipos): aborta — cair no tipo 1 esconderia as tarefas já criadas e duplicaria todas', async () => {
+  const { kommo, c } = kommoFalso([], { falhaNosTipos: true });
+  const r = await varrerCalendario(unit, deps(kommo, [ag()], { modo: 'aplicar' }));
+  assert.equal(r.erros, 1);
+  assert.deepEqual(c.criadas, []);
 });

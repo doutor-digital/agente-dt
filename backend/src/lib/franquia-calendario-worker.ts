@@ -52,6 +52,8 @@ export interface ResumoCalendario {
   /** passou do teto de criações da varredura; entram na próxima */
   adiadas: number;
   passados: number;
+  /** consultas ativas cuja tarefa já foi concluída por alguém: respeitado */
+  jaConcluidas: number;
   ignorados: number;
   erros: number;
 }
@@ -77,25 +79,36 @@ export function _limparMemoriaDoCalendario(): void {
   ultimaAtualizacao.clear();
 }
 
-async function tipoDeTarefa(unit: Pick<Unit, 'slug'>, kommo: KommoClient, conta: string): Promise<number> {
+/**
+ * O tipo das tarefas da unidade, ou `null` se não deu para saber. `null` ABORTA a varredura: a lista de tarefas abertas é
+ * filtrada por tipo, e errar o tipo (cair no 1 por um 429 passageiro) esconderia as tarefas já criadas e duplicaria todas.
+ */
+async function tipoDeTarefa(unit: Pick<Unit, 'slug'>, kommo: KommoClient, conta: string): Promise<number | null> {
   const configurado = mapaPorSlug(process.env.FRANQUIA_CALENDARIO_TIPO).get(unit.slug);
   if (configurado) return configurado;
   const hit = tipoPorConta.get(conta);
   if (hit && hit.ate > Date.now()) return hit.id;
-  let id = TIPO_PADRAO;
+  let id: number;
   try {
     id = tipoPeloNome(await kommo.listarTiposDeTarefa()) ?? TIPO_PADRAO;
   } catch (err) {
-    // sem a lista, vale o padrão só desta vez (não entra no cache): errar o tipo é cosmético, não perde tarefa
-    logger.warn({ err: String(err), unit: unit.slug }, 'franquia-calendario: sem a lista de tipos de tarefa — uso o tipo padrão');
-    return TIPO_PADRAO;
+    logger.warn({ err: String(err), unit: unit.slug }, 'franquia-calendario: sem a lista de tipos de tarefa — nada feito nesta varredura');
+    return null;
   }
+  if (id === TIPO_PADRAO) logger.warn({ unit: unit.slug }, 'franquia-calendario: a conta não tem o tipo "Consulta" — uso o tipo 1 (Follow-up), que os robôs também usam; crie o tipo ou configure FRANQUIA_CALENDARIO_TIPO');
   tipoPorConta.set(conta, { id, ate: Date.now() + TIPO_CACHE_MS });
   return id;
 }
 
 function paraTarefa(t: KommoTarefa): TarefaAberta {
   return { id: t.id, text: t.text ?? '', completeTill: typeof t.complete_till === 'number' ? t.complete_till : null, entityId: t.entity_id ?? null };
+}
+
+/** As memórias só valem por minutos (criadas) ou até o próximo deploy (atualizações); sem poda, crescem para sempre. */
+function podarMemoria(): void {
+  const agora = Date.now();
+  for (const [k, em] of criadasRecentes) if (agora - em > CRIADA_RECENTE_MS) criadasRecentes.delete(k);
+  if (ultimaAtualizacao.size > 5000) ultimaAtualizacao.clear();
 }
 
 const dormir = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -105,10 +118,11 @@ export async function varrerCalendario(unit: Unit, deps: DepsDoCalendario = {}):
   const agora = deps.agora ?? new Date();
   const resumo: ResumoCalendario = {
     unit: unit.slug, em: agora.toISOString(), modo, agendamentos: 0, tarefasAbertas: 0, criadas: 0, atualizadas: 0, fechadas: 0,
-    semCartao: 0, cartaoIncerto: 0, sumiram: 0, adiadas: 0, passados: 0, ignorados: 0, erros: 0,
+    semCartao: 0, cartaoIncerto: 0, sumiram: 0, adiadas: 0, passados: 0, jaConcluidas: 0, ignorados: 0, erros: 0,
   };
   if (modo === 'desligado') return resumo;
   const aplicar = modo === 'aplicar';
+  podarMemoria();
   const tz = unit.spineTimezone || 'America/Sao_Paulo';
   const kommo = deps.kommo ?? createKommoClient(await contaDoKommo(unit));
   const pausa = deps.pausaMs ?? PAUSA_ENTRE_ESCRITAS_MS;
@@ -131,10 +145,17 @@ export async function varrerCalendario(unit: Unit, deps: DepsDoCalendario = {}):
   // 2. as tarefas abertas do Kommo (a fonte da verdade da idempotência)
   const conta = kommo.subdomain;
   const taskTypeId = await tipoDeTarefa(unit, kommo, conta);
+  if (taskTypeId === null) {
+    resumo.erros++;
+    return resumo;
+  }
+  // a janela em epoch, pelo relógio da clínica: de 00:00 de ontem até 00:00 do dia seguinte ao último
+  const deEpoch = epochDaConsulta(localParaUtcIso(`${de}T00:00:00`, tz)) ?? 0;
+  const ateEpoch = epochDaConsulta(localParaUtcIso(`${somarDias(ate, 1)}T00:00:00`, tz)) ?? 0;
   let abertas: KommoTarefa[] = [];
   let completa = true;
   try {
-    ({ tarefas: abertas, completa } = await kommo.listarTarefasAbertas({ taskTypeId }));
+    ({ tarefas: abertas, completa } = await kommo.listarTarefas({ taskTypeId }));
   } catch (err) {
     logger.warn({ err: String(err), unit: unit.slug }, 'franquia-calendario: não consegui ler as tarefas abertas — nada feito (criaria duplicada)');
     resumo.erros++;
@@ -142,20 +163,31 @@ export async function varrerCalendario(unit: Unit, deps: DepsDoCalendario = {}):
   }
   resumo.tarefasAbertas = abertas.length;
   if (!completa) logger.warn({ unit: unit.slug, lidas: abertas.length }, 'franquia-calendario: lista de tarefas cortada no teto — não crio tarefa nova nesta varredura');
+  // As CONCLUÍDAS da janela: tarefa que a recepção deu por feita (ou que nós fechamos) não se recria. Sem esta leitura, concluir
+  // uma consulta ainda AGENDADA faria o worker criar outra a cada 10 min. Falhou = não crio nada novo (pode ser duplicada).
+  let concluidas: KommoTarefa[] = [];
+  try {
+    const r = await kommo.listarTarefas({ taskTypeId, concluidas: true, completeTillDe: deEpoch, completeTillAte: ateEpoch });
+    concluidas = r.tarefas;
+    if (!r.completa) completa = false;
+  } catch (err) {
+    logger.warn({ err: String(err), unit: unit.slug }, 'franquia-calendario: não consegui ler as tarefas concluídas — não crio tarefa nova nesta varredura');
+    resumo.erros++;
+    completa = false;
+  }
 
   // 3. decide
-  // a janela em epoch, pelo relógio da clínica: de 00:00 de ontem até 00:00 do dia seguinte ao último
-  const deEpoch = epochDaConsulta(localParaUtcIso(`${de}T00:00:00`, tz)) ?? 0;
-  const ateEpoch = epochDaConsulta(localParaUtcIso(`${somarDias(ate, 1)}T00:00:00`, tz)) ?? 0;
   const plano = planejarCalendario({
     agendamentos: ag.agendamentos,
     tarefas: abertas.map(paraTarefa),
+    concluidas: concluidas.map(paraTarefa),
     agoraEpoch: Math.floor(agora.getTime() / 1000),
     tz,
     janela: { deEpoch, ateEpoch },
     remarcado: process.env.FRANQUIA_CALENDARIO_REMARCADO === 'fechar' ? 'fechar' : 'manter',
   });
   resumo.passados = plano.passados;
+  resumo.jaConcluidas = plano.jaConcluidas;
   resumo.ignorados = plano.ignorados;
 
   const responsavel = mapaPorSlug(process.env.FRANQUIA_CALENDARIO_RESPONSAVEL).get(unit.slug);
@@ -185,12 +217,12 @@ export async function varrerCalendario(unit: Unit, deps: DepsDoCalendario = {}):
       return;
     }
     if (a.tipo === 'fechar') {
-      resumo.fechadas++;
       dizer({ idSchedule: a.idSchedule, taskId: a.taskId, resultado: a.resultado }, 'fecharia');
       if (aplicar) {
         await kommo.fecharTarefa(a.taskId, a.resultado);
         await dormir(pausa);
       }
+      resumo.fechadas++;
       return;
     }
     if (a.tipo === 'atualizar') {
@@ -201,16 +233,16 @@ export async function varrerCalendario(unit: Unit, deps: DepsDoCalendario = {}):
         logger.warn({ unit: unit.slug, idSchedule: a.idSchedule, taskId: a.taskId }, 'franquia-calendario: o Kommo não guardou a atualização anterior — não regravo');
         return;
       }
-      resumo.atualizadas++;
       dizer({ idSchedule: a.idSchedule, taskId: a.taskId, texto: a.texto, completeTill: a.completeTill }, 'atualizaria');
       if (aplicar) {
         await kommo.atualizarTarefa(a.taskId, {
           ...(a.texto !== null ? { text: a.texto } : {}),
           ...(a.completeTill !== null ? { completeAt: a.completeTill, durationSec: durationSec || undefined } : {}),
         });
-        ultimaAtualizacao.set(chave, assinatura);
+        ultimaAtualizacao.set(chave, assinatura); // só depois de gravar: PATCH que falhou tenta de novo na próxima
         await dormir(pausa);
       }
+      resumo.atualizadas++;
       return;
     }
     // criar
@@ -230,24 +262,28 @@ export async function varrerCalendario(unit: Unit, deps: DepsDoCalendario = {}):
     const leadId = r.leadId !== null && r.confirmado ? r.leadId : null;
     let texto = a.texto;
     if (leadId === null) {
-      resumo.semCartao++;
-      if (r.leadId !== null) resumo.cartaoIncerto++;
       const fone = deps.telefone ? await deps.telefone(nome) : await telefoneDoPaciente(unit, nome, null).then((x) => x?.fone ?? null).catch(() => null);
       texto = textoDaTarefa(a.item, tz, sufixoDeTarefaSolta(nome, fone));
     }
-    resumo.criadas++;
     dizer({ idSchedule: a.idSchedule, leadId, solta: leadId === null, texto, completeTill: a.completeTill }, 'criaria');
     if (aplicar) {
+      // marcada ANTES do POST: num timeout o Kommo pode ter gravado a tarefa, e a lista da próxima varredura pode ainda não mostrá-la
+      criadasRecentes.set(`${unit.id}:${a.idSchedule}`, Date.now());
       const feita = await kommo.createTask({
         leadId, text: texto, completeAt: a.completeTill, responsibleUserId: responsavel, taskTypeId, manterResponsavel: true,
         durationSec: durationSec || undefined,
       });
-      criadasRecentes.set(`${unit.id}:${a.idSchedule}`, Date.now());
       if (!feita) {
         resumo.erros++;
         logger.warn({ unit: unit.slug, idSchedule: a.idSchedule, solta: leadId === null }, 'franquia-calendario: o Kommo não devolveu o id da tarefa criada');
+        return;
       }
       await dormir(pausa);
+    }
+    resumo.criadas++;
+    if (leadId === null) {
+      resumo.semCartao++;
+      if (r.leadId !== null) resumo.cartaoIncerto++;
     }
   };
   for (const a of plano.acoes) {

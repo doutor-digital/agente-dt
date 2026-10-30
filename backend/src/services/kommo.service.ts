@@ -1768,19 +1768,24 @@ export class KommoClient {
   }
 
   /**
-   * Tarefas ABERTAS da conta de um tipo (ou de todos), paginadas de 250. `completa` = leu até o fim: lista
-   * cortada no teto de páginas NÃO pode servir de base para "essa tarefa não existe" (criaria duplicada).
-   * Erro de API lança.
+   * Tarefas da conta de um tipo (ou de todos), abertas ou concluídas, paginadas de 250. `completa` = leu até o fim:
+   * lista cortada no teto de páginas NÃO pode servir de base para "essa tarefa não existe" (criaria duplicada).
+   * `completeTillDe/Ate` (epoch, segundos) limitam pelo prazo da tarefa — as concluídas se acumulam para sempre,
+   * as abertas não. Erro de API lança.
    */
-  async listarTarefasAbertas(args: { taskTypeId?: number; maxPaginas?: number } = {}): Promise<{ tarefas: KommoTarefa[]; completa: boolean }> {
+  async listarTarefas(
+    args: { concluidas?: boolean; taskTypeId?: number; completeTillDe?: number; completeTillAte?: number; maxPaginas?: number } = {},
+  ): Promise<{ tarefas: KommoTarefa[]; completa: boolean }> {
     const tarefas: KommoTarefa[] = [];
     const maxPaginas = args.maxPaginas ?? 40;
     try {
       for (let page = 1; page <= maxPaginas; page++) {
         const { data, status } = await this.http.get<{ _embedded?: { tasks?: KommoTarefa[] } } | ''>('/tasks', {
           params: {
-            'filter[is_completed]': 0,
+            'filter[is_completed]': args.concluidas ? 1 : 0,
             ...(args.taskTypeId ? { 'filter[task_type][]': args.taskTypeId } : {}),
+            ...(args.completeTillDe !== undefined ? { 'filter[complete_till][from]': args.completeTillDe } : {}),
+            ...(args.completeTillAte !== undefined ? { 'filter[complete_till][to]': args.completeTillAte } : {}),
             'order[complete_till]': 'asc',
             limit: 250,
             page,
@@ -1794,7 +1799,7 @@ export class KommoClient {
       }
       return { tarefas, completa: false };
     } catch (err) {
-      wrapAxiosError(err, 'listarTarefasAbertas');
+      wrapAxiosError(err, 'listarTarefas');
     }
   }
 
