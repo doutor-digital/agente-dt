@@ -91,7 +91,6 @@ test('aceita colunas, restrições, default, tipo, view com security_invoker e g
     'alter table caixa_precos add column a int, add column b int',
     'alter table caixa_precos alter column valor set default 0',
     'alter table caixa_precos alter column valor set data type numeric(12,2)',
-    'alter table caixa_precos alter column valor type numeric(12,2) using valor::numeric',
     'alter table caixa_precos alter column servico set not null',
     'create unique index caixa_precos_u on caixa_precos (servico, unidade)',
     'create view public.v_precos with (security_invoker = true) as select * from caixa_precos',
@@ -99,7 +98,9 @@ test('aceita colunas, restrições, default, tipo, view com security_invoker e g
     'create policy p on caixa_precos for all to authenticated using (rh_admin()) with check (rh_admin())',
     'alter policy p on caixa_precos using (rh_admin())',
     'create policy p2 on caixa_precos as permissive for insert to authenticated, service_role with check (rh_admin())',
-    'create table caixa_lanc as select p.id, u.nome from caixa_precos p join caixa_unidades u on u.id = p.unidade_id',
+    'create view v with (security_invoker = true) as select p.id, u.nome from caixa_precos p join caixa_unidades u on u.id = p.unidade_id',
+    "create table caixa_t (a text default 'x', b int default 0, c timestamptz default now(), d uuid default gen_random_uuid(), e jsonb default '{}'::jsonb, f boolean default false, g text default null, foreign key (a) references caixa_u (id) on delete set default on update cascade)",
+    "alter table caixa_precos alter column valor set default 0.5",
     'alter table caixa_precos add column unidade_id bigint references caixa_unidades(id)',
     'alter table caixa_precos add column u2 bigint references public.caixa_unidades (id)',
     'create view v with (security_barrier = true, security_invoker = true) as select * from caixa_precos',
@@ -366,7 +367,7 @@ test('revisão: recusa esquema fora de public em qualquer parte do comando, fun�
   assert.throws(() => analisarEstrutura('create view v as select 1 with (security_invoker=true)'), /security_invoker/);
   assert.throws(() => analisarEstrutura("create view v as select 'security_invoker = true'"), /security_invoker/);
   assert.throws(() => analisarEstrutura('create table x (a int) -- "Caixa"'), /aspas duplas/);
-  assert.match(analisarEstrutura('create policy p on caixa_precos to authenticated using (true)').avisos.join(' '), /usa \(true\)/);
+  assert.match(analisarEstrutura('create policy p on caixa_precos to authenticated using (true)').avisos.join(' '), /permissiva/);
   const sr = analisarEstrutura('grant select on caixa_precos to service_role');
   assert.deepEqual(sr.avisos, [], 'service_role não é "todos os usuários logados"');
 });
@@ -384,4 +385,70 @@ test('auditoria guarda o SQL inteiro de um lote grande (não só os primeiros 40
     assert.ok(a.argumentos.sql.endsWith('add column ultimo int'), f);
   }
   await fechar();
+});
+
+test('revisão do sênior 1: CREATE TABLE só na forma nome ( colunas ) — AS, INHERITS, PARTITION, WITH e consulta dentro são recusados', () => {
+  for (const s of [
+    'create table x as with d as (delete from caixa_precos returning *) select * from d',
+    'create table x as select * from caixa_precos',
+    'create table if not exists x as table caixa_precos',
+    'create unlogged table x as select 1',
+    'create table x as insert into caixa_precos (a) values (1) returning *',
+    'create table x () inherits (caixa_precos)',
+    'create table x (a int) inherits (caixa_precos)',
+    'create table x partition of caixa_precos for values in (1)',
+    'create table x (a int) partition by range (a)',
+    'create table x (a int) with (fillfactor = 70)',
+    'create table x (a int) tablespace pg_default',
+    'create table x (a int check (a > (select count(*) from caixa_precos)))',
+    'create table x as',
+  ]) assert.throws(() => analisarEstrutura(s), /só na forma|CREATE TABLE|não cabe|esquemas|DEFAULT/, s);
+  assert.throws(() => analisarEstrutura('create table x as with d as (delete from t returning *) select * from d'), /só na forma "CREATE TABLE x/);
+  assert.doesNotThrow(() => analisarEstrutura('create table caixa_x(a int)'));
+  assert.doesNotThrow(() => analisarEstrutura('create table caixa_x (a int, b text, primary key (a))'));
+});
+
+test('revisão do sênior 2: ALTER … TYPE … USING e DEFAULT que não seja valor simples são recusados', () => {
+  for (const s of [
+    "alter table caixa_precos alter column papel type text using 'admin'",
+    'alter table caixa_precos alter column valor type numeric using valor::numeric',
+    'alter table caixa_precos alter column valor set data type text using null',
+    'alter table caixa_precos alter column papel set default meu_papel()',
+    'alter table caixa_precos add column x text default rh_admin()::text',
+    'alter table caixa_precos add column x int default (select 1)',
+    "alter table caixa_precos alter column x set default nextval('seq')",
+    "create table caixa_t (a int default length('x'))",
+    'create table caixa_t (a int default 1 + 1)',
+    "create table caixa_t (a text default coalesce('a', 'b'))",
+  ]) assert.throws(() => analisarEstrutura(s), /USING|DEFAULT|não cabe/, s);
+});
+
+test('revisão do sênior 3: qualquer comando que cite tabela fechada é recusado (GRANT, POLICY, ALTER, COMMENT, VIEW, FK, nome com esquema)', () => {
+  for (const t of ['rh_usuarios', 'rh_docs', 'rh_log', 'rh_site', 'rh_site_stage', 'admin_log', 'admin_sql_log', 'admin_backup', 'public.rh_usuarios', 'RH_USUARIOS']) {
+    for (const s of [
+      `grant update on ${t} to authenticated`,
+      `create policy p on ${t} for update to authenticated using (1=1) with check (1=1)`,
+      `alter table ${t} add column x text`,
+      `alter table ${t} disable row level security`,
+      `comment on table ${t} is 'x'`,
+      `create view v with (security_invoker = true) as select * from ${t}`,
+      `alter table caixa_precos add column u text references ${t}(id)`,
+      `create index i on ${t} (a)`,
+    ]) assert.throws(() => analisarEstrutura(s), /tabela fechada/, s);
+  }
+  assert.throws(() => analisarEstrutura("comment on table caixa_precos is 'copiado de rh_docs'"), /tabela fechada/, 'o servidor também recusa o nome dentro de texto');
+  assert.throws(() => analisarEstrutura('grant update on rh_usuarios to authenticated; create policy p on rh_usuarios for update to authenticated using (1=1) with check (1=1)'), /tabela fechada/);
+  assert.match(analisarEstrutura('create policy p on caixa_precos for select to authenticated using (1 = 1)').avisos.join(' '), /permissiva/);
+  assert.match(analisarEstrutura('create policy p on caixa_precos for all to authenticated using (rh_admin()) with check (true)').avisos.join(' '), /permissiva/);
+  // tabelas de nome parecido mas abertas continuam livres
+  assert.doesNotThrow(() => analisarEstrutura('alter table fin_lanc add column obs text'));
+  assert.doesNotThrow(() => analisarEstrutura('alter table caixa_lanc add column docs_ok boolean'));
+});
+
+test('esquema com apelido: "from outro.x outro" não vale como apelido; apelido de tabela local vale', () => {
+  assert.throws(() => analisarEstrutura('create view v with (security_invoker = true) as select outro.a from outro.x outro'), /esquema/);
+  assert.throws(() => analisarEstrutura('create view v with (security_invoker = true) as select o.a from outro.x as o'), /esquema/);
+  assert.throws(() => analisarEstrutura('create view v with (security_invoker = true) as select outro.a from caixa_precos'), /esquema/);
+  assert.doesNotThrow(() => analisarEstrutura('create view v with (security_invoker = true) as select p.a, caixa_u.b from caixa_precos p join caixa_u on caixa_u.id = p.u'));
+  assert.doesNotThrow(() => analisarEstrutura('create view v with (security_invoker = true) as select p.a from public.caixa_precos as p'));
 });

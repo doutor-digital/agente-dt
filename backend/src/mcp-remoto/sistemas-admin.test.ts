@@ -197,3 +197,59 @@ test('pelo MCP: dois passos, auditoria sem nome/login do convidado, chave nunca 
   assert.ok(!JSON.stringify([direto.texto, p.texto, c.texto, aud]).includes(CHAVE_FALSA));
   await fechar();
 });
+
+test('convite de admin: resposta ambígua (rede/5xx ou 200 sem link) NÃO devolve o código — repetir criaria um segundo convite', async () => {
+  const { ErroSistemas } = await import('../lib/integracoes/sistemas.js');
+  for (const modo of ['rede', '5xx', 'sem-link'] as const) {
+    const { srv, ctx } = montar();
+    const conta = ctx.contas.get('hm-tecnologia')!;
+    const original = conta.fonte.chamar;
+    let criados = 0;
+    conta.fonte.chamar = async (m, c, o) => {
+      if (!c.endsWith('/convite')) return original(m, c, o);
+      criados++; // o servidor "criou" o convite, mas a resposta não chegou inteira
+      if (modo === 'rede') throw new ErroSistemas('sem resposta', null);
+      if (modo === '5xx') throw new ErroSistemas('falha interna', 502);
+      return { ok: true };
+    };
+    const pend = new PendentesSistemas();
+    const p = await prepararAdmin(ctx, pend, QUEM, { acao: 'convite', nome: 'Carla Souza', login: 'carla', motivo: MOTIVO });
+    const rastro: { resultado?: string } = {};
+    await assert.rejects(() => confirmarAdmin(ctx, pend, QUEM, { confirmacao: p.confirmacao }, rastro), /PODE ter sido criado|NÃO sei se o convite.*SEGUNDO convite/, modo);
+    assert.match(rastro.resultado!, /incerto/, modo);
+    assert.notEqual(rastro.resultado, 'ok');
+    await assert.rejects(() => confirmarAdmin(ctx, pend, QUEM, { confirmacao: p.confirmacao }), /desconhecido ou já usado/, `${modo}: o código não pode voltar`);
+    assert.equal(criados, 1, `${modo}: um convite só`);
+    assert.equal(escritasAdmin(srv).length, 0);
+  }
+});
+
+test('convite de admin: a tela é conferida ANTES de chamar o servidor; promover continua devolvendo o código (idempotente); ok:false do servidor não vira sucesso', async () => {
+  const { srv, ctx } = montar();
+  const pend = new PendentesSistemas();
+  const p = await prepararAdmin(ctx, pend, QUEM, { acao: 'convite', nome: 'Carla', login: 'carla', motivo: MOTIVO });
+  ctx.contas.get('hm-tecnologia')!.tela = undefined; // alguém apagou a tela do painel entre o preparar e o confirmar
+  const antes = srv.chamadas.length;
+  await assert.rejects(() => confirmarAdmin(ctx, pend, QUEM, { confirmacao: p.confirmacao }), /endereço da tela RH.*Nada foi criado/);
+  assert.equal(srv.chamadas.length, antes, 'nada foi ao servidor');
+
+  const { ctx: ctx2 } = montar();
+  const conta = ctx2.contas.get('hm-tecnologia')!;
+  const original = conta.fonte.chamar;
+  conta.fonte.chamar = async (m, c, o) => (c.endsWith('/usuario') ? { ok: false, erro: 'não deu' } : original(m, c, o));
+  const pend2 = new PendentesSistemas();
+  const q = await prepararAdmin(ctx2, pend2, QUEM, { acao: 'promover', usuario: 'u-1', motivo: MOTIVO });
+  const rastro: { resultado?: string } = {};
+  await assert.rejects(() => confirmarAdmin(ctx2, pend2, QUEM, { confirmacao: q.confirmacao }, rastro), /NÃO concedeu: não deu/);
+  assert.match(rastro.resultado!, /^recusado/);
+});
+
+test('código vencido E de outro tipo: diz que venceu (e gasta), não "é de outro tipo"', async () => {
+  let agora = 1_000_000;
+  const { ctx } = montar();
+  const pend = new PendentesSistemas(() => agora);
+  const adm = await prepararAdmin(ctx, pend, QUEM, { acao: 'promover', usuario: 'u-1', motivo: MOTIVO });
+  agora += 11 * 60_000;
+  await assert.rejects(() => confirmarAlteracao(ctx, pend, QUEM, { confirmacao: adm.confirmacao }), /venceu/);
+  await assert.rejects(() => confirmarAdmin(ctx, pend, QUEM, { confirmacao: adm.confirmacao }), /desconhecido ou já usado/);
+});

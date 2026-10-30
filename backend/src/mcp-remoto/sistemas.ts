@@ -70,14 +70,14 @@ export function resolverSistema(ctx: ContextoSistemas, pedido?: string): ContaSi
  * blocos $$…$$. Sobra o esqueleto, onde se procura `;` e palavras de escrita. NÃO substitui o servidor (ele roda como
  * papel só-leitura, em transação READ ONLY): só barra o óbvio com mensagem clara.
  */
-export function esqueletoDoSql(sql: string): string {
-  return varrerSql(sql).esqueleto;
+export function esqueletoDoSql(sql: string, marcarTextos = false): string {
+  return varrerSql(sql, marcarTextos).esqueleto;
 }
 
 const CARACTERE_DE_NOME = /[A-Za-z0-9_$]/;
 
 /** O esqueleto e a posição, no texto original, de cada `;` que está fora de texto e comentário. */
-function varrerSql(sql: string): { esqueleto: string; pontosEVirgula: number[] } {
+function varrerSql(sql: string, marcarTextos = false): { esqueleto: string; pontosEVirgula: number[] } {
   let out = '';
   const pontos: number[] = [];
   let i = 0;
@@ -98,7 +98,8 @@ function varrerSql(sql: string): { esqueleto: string; pontosEVirgula: number[] }
         i++;
       }
       i++;
-      out += ' ';
+      // com `marcarTextos`, o texto entre aspas simples vira 's' (quem confere DEFAULT precisa saber que ali havia um texto)
+      out += marcarTextos && c === "'" ? " 's' " : ' ';
     } else if (c === '-' && prox === '-') {
       while (i < sql.length && sql[i] !== '\n') i++;
       out += ' ';
@@ -115,7 +116,7 @@ function varrerSql(sql: string): { esqueleto: string; pontosEVirgula: number[] }
       if (tag) {
         const fim = sql.indexOf(tag, i + tag.length);
         i = fim < 0 ? sql.length : fim + tag.length;
-        out += ' ';
+        out += marcarTextos ? " 's' " : ' ';
       } else {
         out += c;
         i++;
@@ -301,10 +302,13 @@ export class PendentesSistemas {
     const p = this.itens.get(id);
     if (!p) throw new ErroDeEntrada('código de confirmação desconhecido ou já usado (ou o conector reiniciou desde a prévia): prepare a alteração de novo');
     if (p.usuario !== usuario) throw new ErroDeEntrada('este código foi gerado por outro usuário');
+    if (this.agora() - p.criadoEm > VALIDADE_MS) {
+      this.itens.delete(id);
+      throw new ErroDeEntrada('o código venceu (10 minutos): prepare a alteração de novo');
+    }
     // código de um tipo não confirma outro, e a tentativa errada não gasta o código
     if (tipoDe(p) !== tipo) throw new ErroDeEntrada(`este código é de uma alteração de ${CONFIRMADOR[tipoDe(p)][0]}: confirme com ${CONFIRMADOR[tipoDe(p)][1]}`);
     this.itens.delete(id);
-    if (this.agora() - p.criadoEm > VALIDADE_MS) throw new ErroDeEntrada('o código venceu (10 minutos): prepare a alteração de novo');
     return p;
   }
 }

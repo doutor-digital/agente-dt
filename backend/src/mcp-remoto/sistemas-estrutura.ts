@@ -67,6 +67,33 @@ const RE = {
   concede: new RegExp(`^(grant|revoke) ((?:select|insert|update|delete|usage)(?:\\s*,\\s*(?:select|insert|update|delete|usage))*) on (?:table |sequence )?(${OBJ}(?:\\s*,\\s*${OBJ})*) (?:to|from) (${LISTA_PAPEIS})$`),
 };
 
+/** Tabelas que o /admin/v1 do servidor também fecha (usuários e perfis, documentos e convites, registros, página do RH, administração). */
+const TABELA_FECHADA = /\b(rh_usuarios|rh_docs|rh_log|rh_site|rh_site_stage|admin_[a-z_]+)\b/;
+
+const ATOMO_DEFAULT = "(?:'s'|-?[0-9]+(?:\\.[0-9]+)?|true|false|null|now\\(\\)|current_date|current_timestamp|gen_random_uuid\\(\\))";
+const TIPO_CAST = '(?:::[a-z_]+(?:\\([0-9, ]+\\))?(?:\\[\\])?)*';
+/** DEFAULT aceito: texto, número, true/false/null, now(), current_date/timestamp, gen_random_uuid() (com cast e parênteses). Nada de função de banco nem consulta. */
+const DEFAULT_SIMPLES = new RegExp(`^\\(?\\s*${ATOMO_DEFAULT}\\s*${TIPO_CAST}\\s*\\)?$`);
+
+/** As expressões DEFAULT de um comando (esqueleto com textos marcados como 's'), até a próxima restrição, vírgula ou parêntese de fechamento. */
+function defaultsDe(cmd: string): string[] {
+  const achados: string[] = [];
+  for (const m of cmd.matchAll(/\bdefault\b/g)) {
+    if (/\bon\s+(?:delete|update)\s+set\s+$/.test(cmd.slice(0, m.index))) continue; // ação de chave estrangeira, não valor padrão
+    let nivel = 0;
+    let fim = cmd.length;
+    for (let i = m.index! + 7; i < cmd.length; i++) {
+      const c = cmd[i]!;
+      if (c === '(') nivel++;
+      else if (c === ')') { if (nivel === 0) { fim = i; break; } nivel--; }
+      else if (c === ',' && nivel === 0) { fim = i; break; }
+      else if (nivel === 0 && /\s/.test(c) && /^\s+(?:not null|check|unique|primary|references|constraint|generated|collate|default)\b/.test(cmd.slice(i))) { fim = i; break; }
+    }
+    achados.push(cmd.slice(m.index! + 7, fim).trim());
+  }
+  return achados;
+}
+
 function recusa(msg: string): never {
   throw new ErroDeEntrada(msg);
 }
@@ -150,7 +177,7 @@ function politica(m: RegExpExecArray, cmd: string): Achado {
     recusa(`a política ${m[2]} precisa dizer para quem vale: acrescente "TO authenticated" (usuários logados) — sem isso ela valeria também para quem não fez login`);
   }
   if (papeis && !new RegExp(`^${LISTA_PAPEIS}$`).test(papeis)) recusa(`na política ${m[2]} use "TO authenticated" e/ou "TO service_role" (recebi "TO ${papeis.slice(0, 40)}")`);
-  const avisos = /\b(using|with check)\s*\(\s*true\s*\)/.test(cmd) ? [`a política ${m[2]} usa (true): libera TODAS as linhas de ${t} para todo usuário logado`] : [];
+  const avisos = /\b(using|with check)\s*\(\s*(true|1\s*=\s*1|'s'\s*=\s*'s'|not\s+false)\s*\)/.test(cmd) ? [`a política ${m[2]} é permissiva (true, 1=1…): libera TODAS as linhas de ${t} para todo usuário logado`] : [];
   return { tipo: `${m[1]!.toUpperCase()} POLICY`, o_que: `${m[1] === 'create' ? 'Cria' : 'Altera'} a política ${m[2]} da tabela ${t} (regra de quem vê/grava cada linha)`, avisos };
 }
 
@@ -166,7 +193,27 @@ function comentario(m: RegExpExecArray): Achado {
   return { tipo: 'COMMENT', o_que: `Escreve o comentário d${['column', 'view', 'policy'].includes(m[1]!) ? 'a' : 'o'} ${m[1]} ${alvo}` };
 }
 
-function achar(cmd: string): Achado[] {
+/** Em CREATE/ALTER TABLE não cabe consulta, escrita de dados, USING (reescreve valores) nem DEFAULT que chame função do banco. */
+function soEstruturaDeTabela(cmd: string, cmdTextos: string): void {
+  const dado = /\b(select|insert|returning|union)\b|(?<!\bon\s)\b(update|delete)\b/.exec(cmd);
+  if (dado) recusa(`em CREATE/ALTER TABLE não cabe "${dado[0].toUpperCase()}": consulta e escrita de dados não passam por aqui`);
+  if (/\busing\b/.test(cmd)) recusa('USING não é permitido em ALTER/CREATE TABLE (reescreve os valores da coluna): para converter, crie uma coluna nova');
+  for (const d of defaultsDe(cmdTextos)) {
+    if (!DEFAULT_SIMPLES.test(d)) recusa(`DEFAULT "${d.slice(0, 40)}" não é aceito: use texto, número, true/false/null, now(), current_date, current_timestamp ou gen_random_uuid()`);
+  }
+}
+
+/** Posição do ")" que fecha o "(" em `abre`, ou -1. */
+function fechamento(s: string, abre: number): number {
+  let nivel = 0;
+  for (let i = abre; i < s.length; i++) {
+    if (s[i] === '(') nivel++;
+    else if (s[i] === ')' && --nivel === 0) return i;
+  }
+  return -1;
+}
+
+function achar(cmd: string, cmdTextos: string): Achado[] {
   let m: RegExpExecArray | null;
 
   if (/^create (temp|temporary|global|local)\b/.test(cmd)) recusa('tabela ou objeto temporário não faz sentido por aqui (some quando a conexão fecha): crie a tabela de verdade');
@@ -174,6 +221,14 @@ function achar(cmd: string): Achado[] {
 
   if ((m = RE.tabela.exec(cmd))) {
     const t = nomeDaApp(m[2]!, 'CREATE TABLE');
+    // só a forma  nome ( colunas… )  e mais nada: AS (executa e copia dados), INHERITS, PARTITION OF/BY, WITH, TABLESPACE… ficam de fora
+    const paren = /^\s*\(/.exec(cmd.slice(m[0].length));
+    const abre = paren ? m[0].length + paren[0].length - 1 : -1;
+    const fim = abre >= 0 ? fechamento(cmd, abre) : -1;
+    if (abre < 0 || fim < 0 || cmd.slice(fim + 1).trim() !== '') {
+      recusa(`CREATE TABLE só na forma "CREATE TABLE ${t} ( coluna tipo, … )": sem AS SELECT, INHERITS, PARTITION, WITH, TABLESPACE nem nada depois dos parênteses (AS executa a consulta e copia dados; para popular uma tabela use sistemas_preparar_alteracao)`);
+    }
+    soEstruturaDeTabela(cmd, cmdTextos);
     return [{ tipo: 'CREATE TABLE', o_que: `Cria a tabela ${t}${m[1] ? ' (se ainda não existir)' : ''}`, criou: t }];
   }
   if (/^create (unique )?index concurrently\b/.test(cmd)) {
@@ -194,6 +249,7 @@ function achar(cmd: string): Achado[] {
   }
   if ((m = RE.alterTable.exec(cmd))) {
     const t = nomeDaApp(m[1]!, 'ALTER TABLE');
+    soEstruturaDeTabela(cmd, cmdTextos);
     return partirPorVirgula(m[2]!).map((a) => acaoDeAlterTable(t, a));
   }
   if (/^alter policy \S+ on \S+ rename\b/.test(cmd)) recusa('renomear política não é permitido por aqui: crie a nova com CREATE POLICY');
@@ -217,17 +273,28 @@ function achar(cmd: string): Achado[] {
   recusa(`não reconheço este comando: "${cmd.slice(0, 80)}". ${ACEITO}`);
 }
 
+/** Nomes que o comando declara: tabelas (depois de FROM/JOIN/TABLE/ON/REFERENCES/ONLY) e apelidos (`from caixa_precos p`, `join x as p`). */
+function nomesDeclarados(cmd: string): Set<string> {
+  const nomes = new Set<string>();
+  const NAO_APELIDO = new Set(['where', 'on', 'join', 'left', 'right', 'inner', 'outer', 'full', 'cross', 'using', 'group', 'order', 'limit', 'union', 'as', 'natural', 'for', 'with', 'having', 'set', 'to']);
+  for (const m of cmd.matchAll(/\b(?:from|join|table|on|references|only)\s+(?:if\s+(?:not\s+)?exists\s+)?(?:public\.)?([a-z_][a-z0-9_$]*)(?![\w$]*\s*\.)(?:\s+as)?(?:\s+([a-z_][a-z0-9_$]*))?/g)) {
+    nomes.add(m[1]!);
+    if (m[2] && !NAO_APELIDO.has(m[2])) nomes.add(m[2]);
+  }
+  return nomes;
+}
+
 /**
  * Esquema que não é `public` em qualquer lugar do comando (FROM, REFERENCES, AS SELECT…), não só no objeto principal.
- * `x.y` com `x` que aparece em outro lugar do comando sem ponto é apelido de tabela (ex. `from caixa_precos p … p.id`), não esquema.
+ * `x.y` só vale se `x` é `public`, uma tabela ou um apelido DECLARADOS no comando; `from outro.x outro` não declara apelido (o nome tem ponto).
  */
 function esquemaDeFora(cmd: string): string | undefined {
   if (/^comment on\b/.test(cmd)) return undefined; // o alvo do comentário é conferido em comentario()
+  const declarados = nomesDeclarados(cmd);
   for (const m of cmd.matchAll(/(?<![.\w$])([a-z_][a-z0-9_$]*)\s*\.\s*(?=[a-z_*])/g)) {
     const q = m[1]!;
-    if (q === 'public') continue;
-    const sozinho = new RegExp(`(?<![.\\w$])${q.replace(/\$/g, '\\$')}(?![\\w$])(?!\\s*\\.)`);
-    if (!sozinho.test(cmd)) return q;
+    if (q === 'public' || declarados.has(q)) continue;
+    return q;
   }
   return undefined;
 }
@@ -245,25 +312,34 @@ export function analisarEstrutura(sqlBruto: unknown): AnaliseEstrutura {
   if (apagar) {
     recusa(`DROP, TRUNCATE e COPY não existem por aqui (o servidor recusa a palavra "${apagar[1]!.toUpperCase()}" até dentro de texto ou comentário). Para remover algo, peça a quem administra o servidor; para trocar o valor padrão use ALTER COLUMN SET DEFAULT.`);
   }
+  const fechada = TABELA_FECHADA.exec(cru);
+  if (fechada) {
+    recusa(`"${fechada[1]}" é tabela fechada: usuários, documentos, registros, página do RH e administração não se alteram por aqui (nem GRANT, política, view ou comentário sobre elas). Usuário e papel: sistemas_usuario; dados: sistemas_preparar_alteracao.`);
+  }
   if (cru.includes('"')) recusa('não use aspas duplas (") em lugar nenhum: escreva os nomes de tabela e coluna em minúsculas, com letras, números e "_", e use aspas simples para texto');
   if (ESQUEMA_PROIBIDO.test(cru) || /\b(information_schema|pg_[a-z0-9_]+|[a-z_]*_to_xml[a-z_]*)\b/.test(cru)) {
     recusa('não mexa nem leia os esquemas auth, storage, pg_*, information_schema ou de extensões (nem por função que recebe SQL em texto): só o esquema public. Em política de acesso use as funções do próprio public (veja sistemas_esquema, funcoes), não auth.uid().');
   }
 
   const esq = esqueletoDoSql(sql).toLowerCase();
+  const esqTextos = esqueletoDoSql(sql, true).toLowerCase();
   const proibida = /\b(security\s+definer|set\s+role|reset\s+role|session\s+authorization|execute|lo_import|lo_export|dblink|set_config|anon)\b/.exec(esq);
   if (proibida) {
     recusa(`"${proibida[1]!.replace(/\s+/g, ' ').toUpperCase()}" não é permitido por aqui${proibida[1] === 'anon' ? ' (anon é o acesso SEM login: nada fica aberto a ele)' : ''}`);
   }
 
-  const pedacos = esq.split(';').map((p) => p.replace(/\s+/g, ' ').trim()).filter(Boolean);
-  if (!pedacos.length) recusa('sql vazio (só comentário?)');
-  if (pedacos.length > MAX_COMANDOS) recusa(`comandos demais (${pedacos.length}; máximo ${MAX_COMANDOS}): mande em partes`);
+  const normalizar = (t: string) => t.split(';').map((p) => p.replace(/\s+/g, ' ').trim());
+  const pedacos = normalizar(esq);
+  const comTextos = normalizar(esqTextos); // mesmos ";" nas duas: mesmas posições
+  const usados = pedacos.flatMap((p, i) => (p ? [i] : []));
+  if (!usados.length) recusa('sql vazio (só comentário?)');
+  if (usados.length > MAX_COMANDOS) recusa(`comandos demais (${usados.length}; máximo ${MAX_COMANDOS}): mande em partes`);
 
-  const achados = pedacos.flatMap((p) => {
+  const achados = usados.flatMap((i) => {
+    const p = pedacos[i]!;
     const fora = esquemaDeFora(p);
-    if (fora) recusa(`só o esquema "public" é permitido: "${fora}." aparece num comando (FROM, REFERENCES…). Escreva public.<tabela> ou só a tabela.`);
-    return achar(p);
+    if (fora) recusa(`só o esquema "public" é permitido: "${fora}." aparece num comando (FROM, REFERENCES…) sem ser tabela ou apelido declarado. Escreva public.<tabela> ou só a tabela.`);
+    return achar(p, comTextos[i] ?? p);
   });
   const avisos = achados.flatMap((a) => a.avisos ?? []);
   const comRls = new Set(achados.flatMap((a) => (a.ligouRls ? [a.ligouRls] : [])));

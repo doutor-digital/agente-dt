@@ -89,6 +89,8 @@ export async function confirmarAdmin(
   rastro.acao = adm.acao;
   if (adm.acao === 'promover') rastro.usuario = adm.usuario;
   const c = resolverSistema(ctx, p.sistema);
+  // a tela é conferida ANTES de chamar o servidor: um convite criado sem ter como montar o link ficaria órfão
+  if (adm.acao === 'convite' && !c.tela) throw new ErroDeEntrada('falta o endereço da tela RH na configuração do sistema: cadastre de novo no painel de integrações, com o campo "tela". Nada foi criado; prepare de novo depois.');
   let r: Saida;
   try {
     const bruto = adm.acao === 'promover'
@@ -97,28 +99,44 @@ export async function confirmarAdmin(
     r = bruto && typeof bruto === 'object' ? (bruto as Saida) : {};
   } catch (e) {
     if (e instanceof ErroSistemas && (e.status === null || e.status >= 500)) {
-      pendentes.devolver(id, p);
       rastro.resultado = 'sem resposta: resultado incerto';
-      throw new ErroDeEntrada(`NÃO sei se o perfil admin foi concedido (${e.message}). Confira com sistemas_usuarios antes de repetir; o código ${id} continua valendo.`);
+      // promover é idempotente (repetir dá o mesmo): o código volta. Convite NÃO: repetir pode criar um segundo convite de admin.
+      if (adm.acao === 'promover') {
+        pendentes.devolver(id, p);
+        throw new ErroDeEntrada(`NÃO sei se o perfil admin foi concedido (${e.message}). Confira com sistemas_usuarios antes de repetir; o código ${id} continua valendo.`);
+      }
+      throw new ErroDeEntrada(`NÃO sei se o convite de admin foi criado (${e.message}). O código foi gasto de propósito: repetir poderia criar um SEGUNDO convite. Procure o login "${adm.login}" em rh_docs (col = 'acesso_convites') com sistemas_consultar; se não existir, prepare de novo.`);
     }
     rastro.resultado = `recusado: ${e instanceof Error ? e.message : String(e)}`.slice(0, 500);
     throw e;
   }
-  rastro.resultado = 'ok';
+  if (r.ok === false) {
+    const erro = String(r.erro ?? 'o servidor recusou sem dizer o motivo').slice(0, 300);
+    rastro.resultado = `recusado: ${erro}`;
+    throw new ErroDeEntrada(`o servidor NÃO concedeu: ${erro}`);
+  }
   if (adm.acao === 'promover') {
+    rastro.resultado = 'ok';
     return { sistema: c.slug, ok: r.ok ?? true, usuario: adm.nome, papelAntes: adm.papelAntes, papelDepois: 'admin', antes: r.antes, depois: r.depois, registro: 'A mudança ficou no registro do sistema (sistemas_log) com quem pediu, o antes e o depois.' };
   }
   if (typeof r.caminho !== 'string') {
-    rastro.resultado = 'sem caminho do convite';
-    throw new ErroDeEntrada('o servidor não devolveu o caminho do convite: nenhum link foi gerado');
+    rastro.resultado = 'sem caminho do convite: resultado incerto';
+    throw new ErroDeEntrada(`o servidor respondeu sem o caminho do convite: o convite PODE ter sido criado, mas não há link. NÃO repita a confirmação (criaria um segundo). Procure o login "${adm.login}" em rh_docs (col = 'acesso_convites') com sistemas_consultar.`);
   }
-  if (!c.tela) throw new ErroDeEntrada('falta o endereço da tela RH na configuração do sistema');
+  let link: string;
+  try {
+    link = linkDoConvite(c.tela!, r.caminho);
+  } catch (e) {
+    rastro.resultado = 'ok (convite criado; link não montado)';
+    throw new ErroDeEntrada(`o convite FOI criado, mas não consegui montar o link (${e instanceof Error ? e.message : String(e)}). O caminho é "${r.caminho}": o endereço é o da tela RH + esse caminho. NÃO repita a confirmação.`);
+  }
+  rastro.resultado = 'ok';
   return {
     sistema: c.slug,
     ok: r.ok ?? true,
     convidado: adm.nome,
     papel: 'admin',
-    link: linkDoConvite(c.tela, r.caminho),
+    link,
     validade: '7 dias',
     aviso: 'Convite de ADMIN: quem receber o link escolhe a própria senha e tem acesso total. Envie só para a pessoa convidada.',
   };
