@@ -44,12 +44,19 @@ test('sinaisDosPassos: agendar, cadastrar, remarcar e confirmar — em TOOL_RESU
   assert.deepEqual(sinaisDosPassos([{ kind: 'TOOL_RESULT', title: T.confirmar }]).ferramentas, ['confirmar_presenca']);
 });
 
-test('sinaisDosPassos: "Consulta marcada" (IA ou widget) liga consultaMarcada', () => {
+test('sinaisDosPassos: "Consulta marcada" (IA ou widget) conta como marcação — ferramenta de agenda, não consulta viva', () => {
   for (const title of [T.marcada, T.marcadaWidget]) {
     const s = sinaisDosPassos([{ kind: 'TOOL_RESULT', title }]);
-    assert.equal(s.consultaMarcada, true, title);
+    assert.deepEqual(s.ferramentas, ['agendar_consulta'], title);
+    // o passo é histórico: não diz "tem consulta marcada na franquia" (a consulta pode ter sido cancelada depois)
+    assert.equal(classificar({ mensagensDoPaciente: 2, ferramentasChamadas: s.ferramentas }).porque.includes('franquia'), false);
   }
-  assert.equal(sinaisDosPassos([{ kind: 'TOOL_RESULT', title: T.consultaCache }]).consultaMarcada, false);
+});
+
+test('sinaisDosPassos: o prefixo termina onde deve — nome parecido não esquenta', () => {
+  for (const title of ['agendar_consultas_antigas: x', 'Consulta marcada hoje? vou ver', 'remarcarX: y', 'consultar_horarios_v2 ok']) {
+    assert.deepEqual(sinaisDosPassos([{ kind: 'TOOL_RESULT', title }]).ferramentas, [], title);
+  }
 });
 
 test('sinaisDosPassos: a pausa da recepção não é intenção do paciente — não esquenta', () => {
@@ -58,7 +65,6 @@ test('sinaisDosPassos: a pausa da recepção não é intenção do paciente — 
     { kind: 'ERROR', title: T.agendarPausada },
   ]);
   assert.deepEqual(s.ferramentas, []);
-  assert.equal(s.consultaMarcada, false);
 });
 
 test('sinaisDosPassos: o formato antigo "Decisão: x(" em TOOL_CALL continua valendo', () => {
@@ -79,7 +85,6 @@ test('sinaisDosPassos: o que não é de agenda não esquenta (nem por título pa
   ];
   const s = sinaisDosPassos(passos);
   assert.deepEqual(s.ferramentas, []);
-  assert.equal(s.consultaMarcada, false);
   assert.equal(classificar({ mensagensDoPaciente: 4, ferramentasChamadas: s.ferramentas }).temperatura, 'Morno');
 });
 

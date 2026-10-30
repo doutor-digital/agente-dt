@@ -13,14 +13,17 @@ test('montarAlvos: lead em AGENDADO que estava Morno vira Quente — pelo víncu
   assert.equal(temperaturaDe(a), 'Quente');
 });
 
-test('montarAlvos: consulta marcada também vem do passo "Consulta marcada" (sem vínculo)', () => {
+test('montarAlvos: o passo "Consulta marcada" esquenta (Quente), mas NÃO afirma consulta viva — o vínculo é que diz isso', () => {
+  // consulta marcada e depois cancelada: o vínculo foi zerado, o passo antigo continua no histórico
   const [a] = montarAlvos(
     [{ lead_id: '10', msgs: 3n }],
-    [{ leadId: '10', kind: 'TOOL_RESULT', title: 'Consulta marcada: 2026-11-03 09:00 (idSchedule 1)' }],
+    [{ kind: 'TOOL_RESULT', leadId: '10', title: 'Consulta marcada: 2026-11-03 09:00 (idSchedule 1)' }],
     [],
   );
-  assert.equal(a.temConsultaMarcada, true);
+  assert.equal(a.temConsultaMarcada, false);
+  assert.deepEqual(a.ferramentas, ['agendar_consulta']);
   assert.equal(temperaturaDe(a), 'Quente');
+  assert.doesNotMatch(classificar(sinaisDoAlvo(a)).porque, /consulta marcada na franquia/);
 });
 
 test('montarAlvos: pediu horário (TOOL_RESULT real) sem consulta marcada é Quente', () => {

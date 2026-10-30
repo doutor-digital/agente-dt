@@ -49,11 +49,11 @@ export function unidadesLigadas(): string[] {
     .filter(Boolean);
 }
 
-interface Alvo {
+export interface Alvo {
   leadId: number;
   mensagensDoPaciente: number;
   ferramentas: string[];
-  /** a franquia tem consulta ligada ao cartão, ou a conversa tem o passo "Consulta marcada" */
+  /** a franquia tem consulta ligada ao cartão agora (`spine_lead_links.spine_id_schedule`) */
   temConsultaMarcada: boolean;
 }
 
@@ -68,7 +68,8 @@ interface PassoDoLead extends PassoDaConversa {
 
 /**
  * Junta o que o banco devolveu em um alvo por lead. Puro — é aqui que `temConsultaMarcada` passa a existir:
- * o worker antigo nunca o informava, e por isso cartão em AGENDADO ficava Morno.
+ * o worker antigo nunca o informava, e por isso cartão em AGENDADO ficava Morno. Só o vínculo ATUAL vale: o passo
+ * "Consulta marcada" é histórico (a consulta pode ter sido cancelada) e entra como ferramenta, não como consulta viva.
  */
 export function montarAlvos(linhas: LinhaDeConversa[], passos: PassoDoLead[], leadsComConsulta: number[]): Alvo[] {
   const comVinculo = new Set(leadsComConsulta);
@@ -85,7 +86,7 @@ export function montarAlvos(linhas: LinhaDeConversa[], passos: PassoDoLead[], le
       leadId,
       mensagensDoPaciente: Number(l.msgs ?? 0),
       ferramentas: sinais.ferramentas,
-      temConsultaMarcada: comVinculo.has(leadId) || sinais.consultaMarcada,
+      temConsultaMarcada: comVinculo.has(leadId),
     };
   });
 }
@@ -106,7 +107,7 @@ export function sinaisDoAlvo(a: Alvo): SinaisDaConversa {
  * de execução (`LEFT JOIN LATERAL` sem ligação com a mensagem), que repetia cada mensagem uma vez por passo
  * "Decisão" e inflava `msgs`: 1 mensagem + 3 passos virava 3 e o lead saía Morno em vez de Frio.
  */
-async function alvos(unit: Unit): Promise<Alvo[]> {
+export async function alvos(unit: Unit): Promise<Alvo[]> {
   const linhas = await prisma.$queryRawUnsafe<LinhaDeConversa[]>(
     `SELECT c.lead_id,
             count(*) FILTER (WHERE m.role = 'user') AS msgs
@@ -125,7 +126,8 @@ async function alvos(unit: Unit): Promise<Alvo[]> {
   if (!linhas.length) return [];
 
   const ids = linhas.map((l) => String(l.lead_id));
-  const idsNumericos = ids.map(Number).filter((n) => Number.isInteger(n) && n > 0);
+  // `kommo_lead_id` é Int32 no banco: um id maior derrubaria o findMany inteiro
+  const idsNumericos = ids.map(Number).filter((n) => Number.isInteger(n) && n > 0 && n <= 2_147_483_647);
   const [passos, vinculos] = await Promise.all([
     prisma.executionStep.findMany({
       where: {

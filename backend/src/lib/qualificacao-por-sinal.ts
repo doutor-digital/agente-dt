@@ -41,31 +41,39 @@ export interface PassoDaConversa {
  * com o nome da ferramenta (o payload não traz), então o prefixo do título é o identificador mais estável que há.
  * O worker antigo procurava "Decisão: x(" em TOOL_CALL, formato que a agenda nunca gravou: a regra "pediu
  * horário = Quente" nunca disparava (Timbó 30/10: 1 Quente, 37 Morno, 9 Frio; 12 AGENDADO como Morno).
+ *
+ * UMA tabela só: o filtro que traz os passos do banco e o casamento que os lê saem dela, para não divergirem.
  */
-const PASSO_DE_FERRAMENTA = /^(consultar_horarios|agendar_consulta|cadastrar_paciente|confirmar_presenca)\b/;
-/** "remarcar: recusado (…)" / "remarcar: <desfecho> (…)" — o título da remarcação não leva o nome da ferramenta. */
-const PASSO_DE_REMARCAR = /^remarcar: /;
-const PASSO_CONSULTA_MARCADA = /^Consulta marcada/;
+const TITULO_PARA_FERRAMENTA: Array<{ prefixo: string; ferramenta: string }> = [
+  { prefixo: 'consultar_horarios', ferramenta: 'consultar_horarios' },
+  { prefixo: 'agendar_consulta', ferramenta: 'agendar_consulta' },
+  { prefixo: 'cadastrar_paciente', ferramenta: 'cadastrar_paciente' },
+  { prefixo: 'confirmar_presenca', ferramenta: 'confirmar_presenca' },
+  // o título da remarcação não leva o nome da ferramenta: "remarcar: recusado (…)", "remarcar: <desfecho> (…)"
+  { prefixo: 'remarcar:', ferramenta: 'remarcar_consulta' },
+  // "Consulta marcada: …" (IA) e "Consulta marcada na franquia: …" (widget da recepção): alguém marcou, e marcar
+  // é o fim do caminho de agendar. Conta como `agendar_consulta`, e NÃO como "consulta marcada agora": o passo é
+  // histórico — se a consulta foi cancelada depois, só o vínculo atual (`spineIdSchedule`) diz que ainda existe.
+  { prefixo: 'Consulta marcada:', ferramenta: 'agendar_consulta' },
+  { prefixo: 'Consulta marcada na franquia:', ferramenta: 'agendar_consulta' },
+];
 /** O formato antigo, que `tools.ts` ainda grava para outras ferramentas. */
+const PREFIXO_DECISAO_ANTIGA = 'Decisão: ';
 const DECISAO_ANTIGA = /^Decisão: ([a-z_]+)\(/;
 /** A recepção segurava a IA: a ferramenta foi barrada, não é o paciente pedindo horário. */
 const IA_PAUSADA = 'IA pausada pela recepção';
 
 /** Prefixos de título que valem a pena trazer do banco (filtro grosso; o fino é `sinaisDosPassos`). */
-export const PREFIXOS_DE_PASSO = [
-  'Decisão: ',
-  'consultar_horarios',
-  'agendar_consulta',
-  'cadastrar_paciente',
-  'confirmar_presenca',
-  'remarcar: ',
-  'Consulta marcada',
-];
+export const PREFIXOS_DE_PASSO = [PREFIXO_DECISAO_ANTIGA, ...TITULO_PARA_FERRAMENTA.map((r) => r.prefixo)];
 
-/** Lê os passos de uma conversa e diz que ferramentas de agenda houve e se uma consulta foi marcada. Puro. */
-export function sinaisDosPassos(passos: PassoDaConversa[]): { ferramentas: string[]; consultaMarcada: boolean } {
+/** O prefixo vale só se termina ali: "agendar_consulta recusado" casa, "agendar_consultas_x" não. */
+function comecaCom(titulo: string, prefixo: string): boolean {
+  return titulo.startsWith(prefixo) && !/^\w/.test(titulo.slice(prefixo.length));
+}
+
+/** Lê os passos de uma conversa e diz que ferramentas de agenda a IA (ou a recepção) usou nela. Puro. */
+export function sinaisDosPassos(passos: PassoDaConversa[]): { ferramentas: string[] } {
   const ferramentas: string[] = [];
-  let consultaMarcada = false;
   const anota = (f: string) => {
     if (!ferramentas.includes(f)) ferramentas.push(f);
   };
@@ -77,15 +85,10 @@ export function sinaisDosPassos(passos: PassoDaConversa[]): { ferramentas: strin
     }
     if (p.kind !== 'TOOL_RESULT' && p.kind !== 'ERROR') continue;
     if (p.title.includes(IA_PAUSADA)) continue;
-    if (p.kind === 'TOOL_RESULT' && PASSO_CONSULTA_MARCADA.test(p.title)) {
-      consultaMarcada = true;
-      continue;
-    }
-    const m = PASSO_DE_FERRAMENTA.exec(p.title);
-    if (m) anota(m[1]);
-    else if (PASSO_DE_REMARCAR.test(p.title)) anota('remarcar_consulta');
+    const regra = TITULO_PARA_FERRAMENTA.find((r) => comecaCom(p.title, r.prefixo));
+    if (regra) anota(regra.ferramenta);
   }
-  return { ferramentas, consultaMarcada };
+  return { ferramentas };
 }
 
 export interface SinaisDaConversa {
