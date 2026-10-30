@@ -28,7 +28,13 @@ function valorAtual(lead: KommoLead, fieldId: number): string | null {
  * deduz pela palavra-chave e grava (com etiqueta). "Outra" e "não sei" ficam pra regra dela.
  * Devolve a região gravada, ou null se não gravou.
  */
-export async function deduzirRegiaoDaQueixa(unit: Unit, kommo: KommoClient, leadId: number, queixa: string): Promise<Regiao | null> {
+export async function deduzirRegiaoDaQueixa(
+  unit: Unit,
+  kommo: KommoClient,
+  leadId: number,
+  queixa: string,
+  esperaMs = 4000,
+): Promise<Regiao | null> {
   const regiao = classificarRegiao(queixa);
   if (!regiao || regiao === 'Outra') return null;
   const esquema = await esquemaDaUnidade(unit, kommo);
@@ -36,10 +42,18 @@ export async function deduzirRegiaoDaQueixa(unit: Unit, kommo: KommoClient, lead
   if (fieldId === null) return null;
   // A IA costuma gravar Região e Queixa no mesmo lote de tools; espera a escrita explícita
   // pousar antes de olhar o cartão, senão a dedução sobrescreve o que ela mesma decidiu.
-  await new Promise((r) => setTimeout(r, 4000));
+  await new Promise((r) => setTimeout(r, esperaMs));
   const lead = await kommo.getLead(leadId);
   if (valorAtual(lead, fieldId)) return null;
-  await kommo.setLeadCustomFieldValue(leadId, fieldId, 'select', regiao);
+  // O campo é SELECT na Serra/Imperatriz e MULTISELECT na Timbó (30/10/2026). Multiselect gravado como
+  // 'select' sem opções cai em `{value: texto}` e o Kommo pode recusar: aqui vai como lista, com o enum.
+  // Só lê o tipo quando vai gravar; se a leitura falhar, não grava (o chamador registra o aviso).
+  const campo = (await kommo.listLeadCustomFieldsTyped()).find((c) => c.id === fieldId);
+  if (campo?.type === 'multiselect') {
+    await kommo.setLeadCustomFieldValue(leadId, fieldId, 'multiselect', [regiao], campo.enums);
+  } else {
+    await kommo.setLeadCustomFieldValue(leadId, fieldId, 'select', regiao);
+  }
   await espelharEtiquetaRegiao(kommo, leadId, regiao);
   logger.info({ unit: unit.slug, leadId, regiao }, 'regiao-dor: deduzida da queixa e gravada');
   return regiao;
