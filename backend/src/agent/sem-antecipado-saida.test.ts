@@ -89,7 +89,8 @@ test('Pix colado em garantir/reservar/vaga/sinal/comprovante sai mesmo sem a pal
     'Um sinal por Pix segura o seu lugar, vaga garantida.',
   ]) {
     const r = semOAntecipadoNaSaida(`Terça às 10h está livre. ${frase} Te espero!`);
-    assert.doesNotMatch(r.texto, /pix|comprovante|sinal/i, frase);
+    assert.equal(r.removidas.length, 1, frase);
+    assert.doesNotMatch(r.texto, /garant|reserv|comprovante|sinal|vaga/i, frase);
     assert.match(r.texto, /Terça às 10h está livre\./, frase);
     assert.match(r.texto, /Te espero!$/, frase);
   }
@@ -146,4 +147,57 @@ test('guardrail: resposta sem nada de pagamento passa igual na unidade sem antec
   const r = aplicarGuardrail(t, timbo);
   assert.equal(r.text, t);
   assert.equal(r.rewritten, false);
+});
+
+// ── achados do /code-review (30/10) ─────────────────────────────────────────────────────────────────────────────────
+
+test('"consulta antecipada" no sentido de horário adiantado NÃO é oferta de pagamento', () => {
+  for (const t of [
+    'Sua consulta foi antecipada para as 9h. Te espero lá!',
+    'Consegui antecipar? Sim: antecipamos para terça cedo.',
+    'Sua consulta foi antecipada para amanhã às 10h, o pagamento é no dia, na clínica.',
+  ]) {
+    assert.equal(semOAntecipadoNaSaida(t).texto, t, t);
+  }
+});
+
+test('estado ("horário reservado", "vaga garantida") com pagamento no dia via pix não é oferta', () => {
+  for (const t of [
+    'Horário reservado, pagamento na clínica via pix. Endereço: Rua X, 10.',
+    'Sua vaga está garantida! Você paga no dia por pix e recebe o comprovante.',
+  ]) {
+    assert.equal(semOAntecipadoNaSaida(t).texto, t, t);
+  }
+});
+
+test('negação da oração: "não precisa de chave Pix" fica; "Sem problema, pode pagar antes" e "Não se preocupe, pague antecipado" saem', () => {
+  const verdade1 = 'Não precisa enviar comprovante nem chave Pix.';
+  assert.equal(semOAntecipadoNaSaida(verdade1).texto, verdade1);
+  const verdade2 = 'Aqui o pagamento é só no dia, não trabalhamos com Pix para reservar a vaga.';
+  assert.equal(semOAntecipadoNaSaida(verdade2).texto, verdade2);
+  assert.doesNotMatch(semOAntecipadoNaSaida('Sem problema, você pode pagar antes se quiser. Terça às 10h?').texto, /pagar antes/i);
+  assert.doesNotMatch(semOAntecipadoNaSaida('Não se preocupe, pode pagar antecipado pelo Pix. Terça às 10h?').texto, /antecipad/i);
+});
+
+test('"chave" que não é de Pix não é tocada', () => {
+  for (const t of ['Vou te passar o endereço; a chave do armário fica na recepção.', 'Passo a passo: a chave de acesso é na recepção.']) {
+    assert.equal(semOAntecipadoNaSaida(t).texto, t, t);
+  }
+});
+
+test('saíram os botões de pagamento: a pergunta ligada a eles sai junto (vira a frase do pagamento no dia)', () => {
+  const r = semOAntecipadoNaSaida('Perfeito, terça às 10h! Prefere pagar como?\n[[botoes: Pix antecipado | Na clínica]]');
+  assert.equal(r.texto, `Perfeito, terça às 10h! ${PAGAMENTO_NO_DIA}`);
+  // pergunta que NÃO é de pagamento fica
+  const r2 = semOAntecipadoNaSaida('Qual horário prefere?\n[[botoes: Pix antecipado | Na clínica]]');
+  assert.match(r2.texto, /Qual horário prefere\?/);
+});
+
+test('botões mistos perdem só a opção de pagamento; horários e outras opções ficam', () => {
+  assert.equal(
+    semOAntecipadoNaSaida('Qual prefere?\n[[botoes: Terça 10h | Quarta 14h | Pix antecipado]]').texto,
+    'Qual prefere?\n[[botoes: Terça 10h | Quarta 14h]]',
+  );
+  const t = 'Quer saber mais?\n[[botoes: Confirmar | Como funciona o pagamento?]]';
+  assert.equal(semOAntecipadoNaSaida(t).texto, t);
 });
