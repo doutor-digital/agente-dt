@@ -32,7 +32,9 @@ import { startResultadosWorker, stopResultadosWorker } from './lib/resultados-wo
 import { iniciarAutomacoes } from './lib/automacoes-estado.js';
 import { iniciarCrmCompartilhado } from './lib/crm-compartilhado.js';
 import { iniciarSupervisorDosWorkers, encerrarSupervisorDosWorkers } from './lib/worker-lease.js';
-import { aguardarTurnos } from './lib/turnos-em-andamento.js';
+import { esperarTurnosDoDesligamento } from './lib/turnos-em-andamento.js';
+import { agendarRecuperacao } from './lib/recuperar-turnos.js';
+import { retomarTurnoPerdido } from './controllers/webhook.controller.js';
 import { startVozSessaoWorker, stopVozSessaoWorker } from './lib/voz-sessao-worker.js';
 import { iniciarVigiaDeQualidade, pararVigiaDeQualidade } from './lib/qualidade-numero-worker.js';
 import { startCacheKeepaliveWorker, stopCacheKeepaliveWorker } from './lib/cache-keepalive-worker.js';
@@ -257,6 +259,10 @@ async function main(): Promise<void> {
     },
   });
 
+  // Em TODO processo, não só no líder: quem atende o webhook é quem perde o turno no deploy. Vários processos não
+  // duplicam — a reivindicação por trace é atômica no banco (ver lib/recuperar-turnos.ts).
+  const timerDaRecuperacao = agendarRecuperacao(retomarTurnoPerdido);
+
   const server = app.listen(env.PORT, () => {
     logger.info(`Backend ouvindo em http://localhost:${env.PORT}`);
     logger.info(`Webhook URL → POST http://localhost:${env.PORT}/api/webhooks/{slug}/{kommo|salesbot|meta}`);
@@ -265,12 +271,17 @@ async function main(): Promise<void> {
 
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'shutdown iniciado');
+    // Este processo está saindo: a varredura de turnos perdidos é do próximo.
+    if (timerDaRecuperacao) clearTimeout(timerDaRecuperacao);
     server.close();
     // Turno da IA no meio (modelo respondeu, ferramenta ainda não rodou) não pode ser cortado: deixa o checkpoint com
     // chamada sem resultado e a conversa passa a tomar 400 do modelo. O Swarm dá 30 s (stop_grace_period).
-    const espera = await aguardarTurnos(Number(process.env.SHUTDOWN_AGUARDA_TURNOS_MS) || 22_000);
-    if (espera.esperouMs > 0 || espera.restantes > 0) {
-      logger.warn({ ...espera }, espera.restantes > 0 ? 'shutdown: turnos da IA ainda rodando, saindo mesmo assim' : 'shutdown: turnos da IA terminaram');
+    // Teto 50 s dentro dos 60 s do stop_grace_period (docker-compose.yml). A fila do coalescer entra na espera: mensagem
+    // que ainda esperava a janela virava turno só depois, e o deploy a matava (Timbó, lead 5142896, 30/10/2026).
+    const espera = await esperarTurnosDoDesligamento(Number(process.env.SHUTDOWN_AGUARDA_TURNOS_MS) || 50_000);
+    if (espera.esperouMs > 0 || espera.restantes > 0 || espera.filaRestante > 0) {
+      const sobrou = espera.restantes > 0 || espera.filaRestante > 0;
+      logger.warn({ ...espera }, sobrou ? 'shutdown: turnos da IA ainda pendentes, saindo mesmo assim (a recuperação do próximo start refaz)' : 'shutdown: turnos da IA terminaram');
     }
     // Solta o lease antes de desconectar: o container novo assume em ≤30 s.
     await encerrarSupervisorDosWorkers();

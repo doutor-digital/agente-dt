@@ -8,6 +8,7 @@ import { cadastrarLeadDoTurno } from '../lib/cadastro-todo-lead.js';
 import { logger } from '../lib/logger.js';
 import { buildAgentGraph, buildThreadId } from '../agent/graph.js';
 import { comTurnoEmAndamento } from '../lib/turnos-em-andamento.js';
+import type { ResultadoRetomada, TurnoPerdido } from '../lib/recuperar-turnos.js';
 import { TraceRecorder, syncRecorderSequence } from '../agent/trace-recorder.js';
 import { createKommoClient, isLeadPaused, temPalavra } from '../services/kommo.service.js';
 import { leadPausadoPorJanela } from '../lib/pausa-lead.js';
@@ -865,38 +866,7 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
     humanMessage: ctx.humanMessage,
     audioUrl: ctx.audioUrl,
     imageUrl: ctx.imageUrl,
-    run: async (combinedMessage, audioUrls, imageUrls, traceIds) => {
-      const ownerTraceId = traceIds[0];
-      const satelliteTraceIds = traceIds.slice(1);
-      if (satelliteTraceIds.length > 0) {
-        await prisma.executionTrace.updateMany({
-          where: { id: { in: satelliteTraceIds } },
-          data: {
-            status: 'SUCCESS',
-            iaDecision: `__coalesced_into__:${ownerTraceId}`,
-            latencyMs: 0,
-          },
-        });
-      }
-      await processAgent({
-        unit,
-        leadId,
-        traceId: ownerTraceId,
-        humanMessage: combinedMessage,
-        audioUrl: audioUrls[0] ?? null,
-        audioUrls,
-        imageUrl: imageUrls[0] ?? null,
-        imageUrls,
-        chatId: ctx.chatId,
-        talkId: ctx.talkId,
-        contactId: ctx.contactId,
-        authorId: ctx.authorId,
-        accountId: ctx.accountId,
-        isChatMessage: ctx.isChatMessage,
-        requestStart,
-        burstSize: traceIds.length,
-      });
-    },
+    run: execucaoDoTurno(unit, leadId, ctx, requestStart),
   });
 
   if (status === 'joined') {
@@ -923,6 +893,106 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
       logger.error({ err, traceId: trace.id }, 'erro fatal no background do agente (fallback)');
     });
   }
+}
+
+/**
+ * O que o coalescer roda quando a janela fecha: junta o burst num turno só (o primeiro trace é o dono, os demais viram
+ * "coalescidos"). Compartilhado entre o webhook e a recuperação do start, para os dois pedirem exatamente o mesmo turno.
+ */
+function execucaoDoTurno(unit: Unit, leadId: number, ctx: ExtractedContext, requestStart: number) {
+  return async (combinedMessage: string, audioUrls: string[], imageUrls: string[], traceIds: string[]): Promise<void> => {
+    const ownerTraceId = traceIds[0]!;
+    const satelliteTraceIds = traceIds.slice(1);
+    if (satelliteTraceIds.length > 0) {
+      await prisma.executionTrace.updateMany({
+        where: { id: { in: satelliteTraceIds } },
+        data: {
+          status: 'SUCCESS',
+          iaDecision: `__coalesced_into__:${ownerTraceId}`,
+          latencyMs: 0,
+        },
+      });
+    }
+    await processAgent({
+      unit,
+      leadId,
+      traceId: ownerTraceId,
+      humanMessage: combinedMessage,
+      audioUrl: audioUrls[0] ?? null,
+      audioUrls,
+      imageUrl: imageUrls[0] ?? null,
+      imageUrls,
+      chatId: ctx.chatId,
+      talkId: ctx.talkId,
+      contactId: ctx.contactId,
+      authorId: ctx.authorId,
+      accountId: ctx.accountId,
+      isChatMessage: ctx.isChatMessage,
+      requestStart,
+      burstSize: traceIds.length,
+    });
+  };
+}
+
+/**
+ * Recuperação no start (ver lib/recuperar-turnos.ts): refaz o pedido de um trace que o deploy matou no meio.
+ * Reconstrói a mensagem a partir do webhook gravado no trace e a devolve ao coalescer. NÃO repete o que o webhook faz
+ * antes da IA (já feito pelo processo morto); só decide se o pedido ainda vale como pedido à IA.
+ */
+export async function retomarTurnoPerdido(t: TurnoPerdido): Promise<ResultadoRetomada> {
+  const unit = await prisma.unit.findUnique({ where: { id: t.unitId } });
+  if (!unit || !unit.isActive) return 'descartado:unidade_inativa';
+  const leadId = Number(t.leadId);
+  if (!Number.isFinite(leadId) || leadId <= 0) return 'descartado:lead_invalido';
+
+  // Só pedido que veio do webhook do Kommo com mensagem de paciente (o do widget entrega por outro caminho).
+  const parsed = webhookSchema.safeParse(t.input);
+  if (!parsed.success || !getIncomingMessage(parsed.data)) return 'descartado:nao_e_mensagem_do_kommo';
+  const ctx = extractContext(parsed.data, leadId);
+  if (!ctx.isChatMessage) return 'descartado:nao_e_mensagem_do_kommo';
+
+  // Os caminhos em código que o webhook toma ANTES da IA: se o processo morreu no meio deles, a IA não deve responder
+  // no lugar (o "1" da confirmação de véspera virava "Não entendi…").
+  if (podeSerBotaoDoLembrete(unit.slug, ctx.humanMessage)) return 'descartado:resposta_a_lembrete';
+  const conv = await prisma.conversation.findUnique({ where: { unitId_leadId: { unitId: unit.id, leadId: String(leadId) } } });
+  if (conv && podeSerRespostaD1(conv, ctx.humanMessage)) return 'descartado:resposta_a_lembrete';
+  if (conv) {
+    const anteriores = await prisma.message.findMany({
+      where: { conversationId: conv.id, traceId: { not: t.traceId } },
+      orderBy: { createdAt: 'desc' },
+      take: 6,
+      select: { role: true, content: true, createdAt: true },
+    });
+    if (ehEncerramentoRepetido(ctx.humanMessage, anteriores)) return 'descartado:encerramento_repetido';
+  }
+
+  const recorder = new TraceRecorder(t.traceId, unit.id);
+  await syncRecorderSequence(recorder, t.traceId);
+  await recorder.step({
+    kind: 'THINKING',
+    title: '♻ Retomado após reinício do serviço: o turno anterior morreu no deploy; esta mensagem volta para a IA (uma vez só)',
+    payload: { leadId, recuperadoNoStart: true },
+  });
+  logger.info({ traceId: t.traceId, leadId, unit: unit.slug }, 'recuperar-turnos: pedido perdido volta para a IA');
+
+  const requestStart = performance.now();
+  const status = scheduleAgentRun({
+    unitSlug: unit.slug,
+    leadId,
+    traceId: t.traceId,
+    humanMessage: ctx.humanMessage,
+    audioUrl: ctx.audioUrl,
+    imageUrl: ctx.imageUrl,
+    run: execucaoDoTurno(unit, leadId, ctx, requestStart),
+  });
+  if (status === 'rejected') {
+    void processAgent({
+      unit, leadId, traceId: t.traceId, humanMessage: ctx.humanMessage, audioUrl: ctx.audioUrl, imageUrl: ctx.imageUrl,
+      chatId: ctx.chatId, talkId: ctx.talkId, contactId: ctx.contactId, authorId: ctx.authorId, accountId: ctx.accountId,
+      isChatMessage: ctx.isChatMessage, requestStart,
+    }).catch((err) => logger.error({ err, traceId: t.traceId }, 'erro fatal no background do agente (recuperação)'));
+  }
+  return 'retomado';
 }
 
 export type AgentDeliverFn = (text: string) => Promise<{ via: string; detail: unknown }>;
@@ -1423,7 +1493,8 @@ export async function processAgent(args: {
       await recorder.step({
         kind: 'THINKING',
         title: '⏭ Resposta segurada — o paciente mandou outra mensagem enquanto eu respondia; o próximo turno responde as duas',
-        payload: { leadId, reply, motivo: 'atropelada' },
+        // `mensagemId`: a recuperação do start restaura a resposta segurada a partir daqui se o processo morrer antes do próximo turno
+        payload: { leadId, reply, motivo: 'atropelada', mensagemId: idDaUltimaResposta(result.messages) },
       });
       await finishWidgetSilently();
     }
