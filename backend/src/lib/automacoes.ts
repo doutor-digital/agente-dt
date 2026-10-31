@@ -190,11 +190,11 @@ export const AUTOMACOES: readonly Automacao[] = [
   {
     id: 'alerta-sem-resposta',
     chave: 'ALERTA_SEM_RESPOSTA_SLUGS',
-    nome: 'Alerta no Telegram: paciente sem resposta',
+    nome: 'Alerta: paciente sem resposta (Telegram + tarefa no cartão)',
     oQueFaz:
-      'Quando uma mensagem do paciente fica 5 minutos sem NENHUMA resposta (nem da equipe, nem da Sofia, nem de robô), manda um alerta no Telegram do João com a unidade, o contato, a última mensagem e o link do cartão. Um alerta por espera: só volta a avisar depois que alguém responder e o paciente ficar sem resposta de novo.',
+      'Quando uma mensagem do paciente fica 5 minutos sem NENHUMA resposta (nem da equipe, nem da Sofia, nem de robô), manda um alerta no Telegram do João com a unidade, o contato, a última mensagem e o link do cartão E também cria, no mesmo momento, uma TAREFA no cartão do Kommo para a equipe da unidade ("ALERTA · … Paciente sem resposta há N min… Responda agora"), com prazo agora e no responsável do cartão. Um alerta e uma tarefa por espera: só voltam depois que alguém responder e o paciente ficar sem resposta de novo.',
     pegadinha:
-      'Só em horário de atendimento da unidade (8h–20h, dias da agenda, sem feriado) e só para mensagem dos últimos 60 minutos — a volta de uma queda não vira rajada. Quem decide se houve resposta é a conversa oficial do Kommo (a mesma que a Sofia lê). Precisa de TELEGRAM_BOT_TOKEN no servidor; sem ele, só registra no log. Os grupos das unidades ficam para depois.',
+      'Só em horário de atendimento da unidade (8h–20h, dias da agenda, sem feriado) e só para mensagem dos últimos 60 minutos — a volta de uma queda não vira rajada. Quem decide se houve resposta é a conversa oficial do Kommo (a mesma que a Sofia lê). Se o Kommo recusar a tarefa, o Telegram sai mesmo assim dizendo que a tarefa não foi criada (uma tentativa por espera, para não duplicar); se faltar TELEGRAM_BOT_TOKEN no servidor, a tarefa sai e o Telegram não. Em "só no papel" nada é criado no Kommo. Os grupos das unidades no Telegram ficam para depois.',
     risco: 'manda-mensagem',
     temSeco: true,
     quandoVazio: 'desligado',
