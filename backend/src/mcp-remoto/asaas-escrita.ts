@@ -24,6 +24,7 @@ import { z } from 'zod';
 import type { Auditar } from '../franquia-mcp/ferramentas.js';
 import { ErroDeEntrada, somarDias, validarData } from '../franquia-mcp/travas.js';
 import { limparTexto } from '../lib/integracoes/asaas-escrita.js';
+import { cnpjValido, cpfValido } from '../lib/integracoes/mascaras.js';
 import { mascararDigitosSeguidos, temDigitosSeguidos } from '../lib/pii.js';
 import { resolverContasAsaas, type ContaAsaas, type ContextoAsaas, type EscritaAsaas } from './asaas.js';
 import { executar } from './ferramenta.js';
@@ -69,28 +70,6 @@ export function unidadesComEscrita(e: NodeJS.ProcessEnv = process.env): Set<stri
 // ----------------------------------------------------------------- validação e máscaras
 
 const soDigitos = (s: string) => s.replace(/\D/g, '');
-
-function cpfValido(d: string): boolean {
-  if (d.length !== 11 || /^(\d)\1{10}$/.test(d)) return false;
-  for (const n of [9, 10]) {
-    let soma = 0;
-    for (let i = 0; i < n; i++) soma += Number(d[i]) * (n + 1 - i);
-    if (((soma * 10) % 11) % 10 !== Number(d[n])) return false;
-  }
-  return true;
-}
-
-function cnpjValido(d: string): boolean {
-  if (d.length !== 14 || /^(\d)\1{13}$/.test(d)) return false;
-  for (const n of [12, 13]) {
-    const pesos = n === 12 ? [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2] : [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
-    let soma = 0;
-    for (let i = 0; i < n; i++) soma += Number(d[i]) * pesos[i]!;
-    const r = soma % 11;
-    if ((r < 2 ? 0 : 11 - r) !== Number(d[n])) return false;
-  }
-  return true;
-}
 
 /** CPF (11) ou CNPJ (14) com dígitos verificadores certos; devolve só os dígitos. */
 export function validarCpfCnpj(bruto: unknown): string {

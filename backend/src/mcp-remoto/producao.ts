@@ -34,11 +34,13 @@ import { criarContextoAsaas, registrarFerramentasAsaas, type ContaAsaas } from '
 import { asaasGet } from '../lib/integracoes/asaas.js';
 import { asaasPost } from '../lib/integracoes/asaas-escrita.js';
 import { finalDaChave, impressaoDaChave } from '../lib/integracoes/cofre.js';
-import { criarEscritaAsaas, EVENTO_COBRANCA, registrarEscritaAsaasSePermitido, type RegistroDeCobranca } from './asaas-escrita.js';
+import { criarEscritaAsaas, registrarEscritaAsaasSePermitido } from './asaas-escrita.js';
+import { cobrancasRecentesDe } from './auditoria.js';
 import { criarContextoConvenia, registrarFerramentasConvenia, type ContaConvenia } from './convenia.js';
 import { conveniaGet } from '../lib/integracoes/convenia.js';
 import { criarContextoTiquetaque, registrarFerramentasTiquetaque, type ContaTiquetaque } from './tiquetaque.js';
 import { tiquetaqueGet } from '../lib/integracoes/tiquetaque.js';
+import { contaTramitacaoDaChave, criarContextoTramitacao, registrarFerramentasTramitacao, type ContaTramitacao } from './tramitacao.js';
 import { contasComChave } from '../lib/integracoes/chaves.js';
 import { lerConfigSistemas, sistemasChamar } from '../lib/integracoes/sistemas.js';
 import { registrarAdminSistemas } from './sistemas-admin.js';
@@ -215,6 +217,14 @@ async function contasTiquetaqueDoBanco(): Promise<Map<string, ContaTiquetaque>> 
   return contas;
 }
 
+/** Contas com a chave da Tramitação Inteligente (advocacia) no painel de integrações. A chave fica só em memória. */
+async function contasTramitacaoDoBanco(): Promise<Map<string, ContaTramitacao>> {
+  const contas = new Map<string, ContaTramitacao>();
+  for (const c of await contasComChave('tramitacao')) contas.set(c.slug, contaTramitacaoDaChave(c));
+  logger.info({ contas: contas.size }, 'mcp-remoto: contas da Tramitação carregadas');
+  return contas;
+}
+
 /**
  * Sistema novo de RH/Caixa/Financeiro (servidor próprio) com a URL e a chave de administração no painel de integrações. A chave
  * fica só em memória, decifrada aqui; configuração ilegível vira aviso no log (sem o conteúdo) e a conta fica de fora.
@@ -264,21 +274,6 @@ async function leitoresDoWhatsapp(): Promise<Set<string>> {
   if (!emails.length) return new Set();
   const us = await prisma.user.findMany({ where: { email: { in: emails }, isActive: true }, select: { id: true } });
   return new Set(us.map((u) => u.id));
-}
-
-/** Boletos gerados na última hora (auditoria do conector): o teto por hora e a duplicata sobrevivem a um reinício. */
-async function cobrancasRecentes(conta: string): Promise<RegistroDeCobranca[]> {
-  const linhas = await prisma.mcpAuditoria.findMany({
-    where: { ferramenta: EVENTO_COBRANCA, createdAt: { gte: new Date(Date.now() - 3_600_000) }, argumentos: { path: ['conta'], equals: conta } },
-    select: { createdAt: true, ok: true, argumentos: true },
-  });
-  const out: RegistroDeCobranca[] = [];
-  for (const l of linhas) {
-    const a = (l.argumentos ?? {}) as { conta?: string; chave?: string; cobrancaId?: string; incerto?: boolean };
-    // falha definitiva do Asaas não conta; sucesso e "sem resposta" (pode ter criado) contam
-    if (a.conta === conta && a.chave && (l.ok || a.incerto)) out.push({ conta, chave: a.chave, em: l.createdAt.getTime(), ...(a.cobrancaId ? { cobrancaId: a.cobrancaId } : {}) });
-  }
-  return out;
 }
 
 const normEtiqueta = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
@@ -446,12 +441,14 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   let escritores = new Set<string>();
   manterAtualizado(escritoresDoBanco, (s) => (escritores = s), 'quem pode alterar cartões');
   const pendentes = new Pendentes();
-  const escritaAsaas = criarEscritaAsaas({ historico: cobrancasRecentes });
+  const escritaAsaas = criarEscritaAsaas({ historico: (conta) => cobrancasRecentesDe(prisma, conta) });
   manterAtualizado(contasAsaasDoBanco, (contas) => (asaas.contas = contas), 'as contas do Asaas');
   const convenia = criarContextoConvenia(new Map());
   manterAtualizado(contasConveniaDoBanco, (contas) => (convenia.contas = contas), 'as contas do Convênia');
   const tiquetaque = criarContextoTiquetaque(new Map());
   manterAtualizado(contasTiquetaqueDoBanco, (contas) => (tiquetaque.contas = contas), 'as contas do Tiquetaque');
+  const tramitacao = criarContextoTramitacao(new Map());
+  manterAtualizado(contasTramitacaoDoBanco, (contas) => (tramitacao.contas = contas), 'as contas da Tramitação');
   // o teto anti-ban conta o que saiu nas últimas 24 h, inclusive antes desta subida do servidor (lido no 1º envio)
   const whatsapp = criarContextoEvolution(contaEvolutionDoAmbiente(), {
     historico: () =>
@@ -490,6 +487,7 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
       registrarFerramentasAsaas(server, asaas, auditar);
       registrarFerramentasConvenia(server, convenia, auditar);
       registrarFerramentasTiquetaque(server, tiquetaque, auditar);
+      registrarFerramentasTramitacao(server, tramitacao, auditar);
       registrarMetaEventos(server, () => rastreio, auditar);
       // Asaas: cadastrar cliente e gerar boleto, em dois passos (cancelar, estornar, editar e transferir NÃO existem), só para quem está
       // na lista de escrita E só nas unidades de ASAAS_ESCRITA_UNIDADES. O portão fica numa função testada.
@@ -508,7 +506,7 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
         registrarAdminSistemas(server, sistemas, pendentesSistemas, quemSistemas, auditar);
       }
       if (leitoresWhatsapp.has(quem.userId)) registrarFerramentasEvolution(server, whatsapp, quem.userId, auditar);
-      registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas, convenia: convenia.contas, tiquetaque: tiquetaque.contas, sistemas: sistemas.contas }), auditar);
+      registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas, convenia: convenia.contas, tiquetaque: tiquetaque.contas, tramitacao: tramitacao.contas, sistemas: sistemas.contas }), auditar);
       registrarCerebro(server, slugs, cacheCerebro, auditar);
       if (franquia) {
         const deps: DepsRelatorio = { franquia, kommo, telefonesDosLeads, vinculosDosLeads };

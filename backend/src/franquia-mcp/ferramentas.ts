@@ -8,6 +8,7 @@ import { z } from 'zod';
 import * as c from './consultas.js';
 import type { Contexto } from './contexto.js';
 import { ErroDeEntrada } from './travas.js';
+import { mascararErro } from '../lib/integracoes/mascaras.js';
 
 const unidade = z
   .union([z.string().min(1), z.array(z.string().min(1)).min(1)])
@@ -44,7 +45,8 @@ async function executar(fn: () => Promise<unknown> | unknown): Promise<{ resulta
     return { resultado: { content: [{ type: 'text', text: JSON.stringify(await fn()) }] } };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    const texto = e instanceof ErroDeEntrada ? `Pedido inválido: ${msg}` : msg;
+    // o erro repete o pedido (telefone, CPF): mascara antes de voltar ao modelo e de ir para a auditoria
+    const texto = mascararErro(e instanceof ErroDeEntrada ? `Pedido inválido: ${msg}` : msg);
     return { resultado: { isError: true, content: [{ type: 'text', text: texto }] }, erro: texto };
   }
 }
