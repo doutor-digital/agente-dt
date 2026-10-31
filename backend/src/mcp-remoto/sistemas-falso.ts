@@ -21,6 +21,10 @@ export interface OpcoesFalso {
   vazarNoErro?: boolean;
   /** linhas devolvidas por /consulta */
   linhas?: unknown[];
+  /** acrescenta ao esquema as tabelas caixa_precos (3 linhas), caixa_vazia e a fechada rh_usuarios */
+  maisTabelas?: boolean;
+  /** acrescenta um admin (u-3) e um usuário inativo (u-4) à lista de usuários */
+  maisUsuarios?: boolean;
   /** relógio do servidor, para a prévia vencer */
   agora?: () => number;
 }
@@ -33,10 +37,18 @@ export function servidorAdminFalso(o: OpcoesFalso = {}) {
     { id: 2, nome: 'Bruno', cargo: 'Fisio', unidade: 'serra' },
   ];
   const registro: Array<Record<string, unknown>> = [];
+  /** o que `POST /admin/v1/estrutura` (admin_sql) recebeu e "executou" */
+  const estruturas: Array<Record<string, any>> = [];
   const preparados = new Map<string, { op: string; tabela: string; filtro: Record<string, unknown>; dados: Record<string, unknown>; em: number }>();
   const usuarios = [
     { user_id: 'u-1', login: 'maria', nome: 'Maria', papel: 'gestao', unidade: null, ativo: true, criado_em: '2026-10-01T10:00:00Z' },
     { user_id: 'u-2', login: 'joao', nome: 'João', papel: 'unidade', unidade: 'serra', ativo: true, criado_em: '2026-10-02T10:00:00Z' },
+    ...(o.maisUsuarios
+      ? [
+          { user_id: 'u-3', login: 'ana', nome: 'Ana Admin', papel: 'admin', unidade: null, ativo: true, criado_em: '2026-10-03T10:00:00Z' },
+          { user_id: 'u-4', login: 'bia', nome: 'Bia', papel: 'financeiro', unidade: null, ativo: false, criado_em: '2026-10-04T10:00:00Z' },
+        ]
+      : []),
   ];
   let n = 0;
   const json = (status: number, corpo: unknown) =>
@@ -55,6 +67,13 @@ export function servidorAdminFalso(o: OpcoesFalso = {}) {
           tabelas: [
             { nome: 'rh_funcionarios', linhas: 2, colunas: [{ nome: 'id', tipo: 'int', nulo: false }], rls: true, politicas: [{ nome: 'ver', comando: 'SELECT', usando: 'true', com_check: null }] },
             { nome: 'caixa_lancamentos', linhas: 0, colunas: [], rls: true, politicas: [] },
+            ...(o.maisTabelas
+              ? [
+                  { nome: 'caixa_precos', linhas: 3, colunas: [{ nome: 'id', tipo: 'uuid', nulo: false }, { nome: 'servico', tipo: 'text', nulo: false }, { nome: 'valor', tipo: 'numeric', nulo: true }], rls: true, politicas: [] },
+                  { nome: 'caixa_vazia', linhas: 0, colunas: [{ nome: 'id', tipo: 'uuid', nulo: false }], rls: true, politicas: [] },
+                  { nome: 'rh_usuarios', linhas: 5, colunas: [{ nome: 'user_id', tipo: 'uuid', nulo: false }, { nome: 'papel', tipo: 'text', nulo: false }], rls: true, politicas: [] },
+                ]
+              : []),
           ],
           funcoes: [{ nome: 'meu_papel', definicao: 'select 1' }],
           checks: [{ tabela: 'rh_funcionarios', nome: 'cargo_ok', definicao: "check (cargo <> '')" }],
@@ -99,15 +118,26 @@ export function servidorAdminFalso(o: OpcoesFalso = {}) {
         registro.push({ tabela: p.tabela, quem: corpo.quem, op: p.op });
         return json(200, { ok: true, afetadas, conferido: true, backup_id: 'bk-1' });
       }
+      case 'POST /admin/v1/estrutura':
+        // contrato: { tipo, ...campos, sqlAprovado, quem, motivo? } -> 200 { ok:true, sql } | 200 { ok:false, erro } | { erro } nos 4xx/5xx
+        if (!['tabela', 'coluna', 'indice'].includes(corpo.tipo) || typeof corpo.sqlAprovado !== 'string' || !corpo.sqlAprovado.trim()) return json(400, { erro: 'pedido de estrutura inválido' });
+        if (corpo.nome === 'erro_do_servidor') return json(500, { erro: `falha interna em ${CONFIG_FALSA.api}` });
+        if (corpo.nome === 'falha_do_banco') return json(200, { ok: false, erro: 'o SQL mudou desde a prévia: prepare de novo' });
+        estruturas.push({ ...corpo });
+        registro.push({ tabela: '(estrutura)', quem: corpo.quem, op: 'estrutura' });
+        return json(200, { ok: true, sql: String(corpo.sqlAprovado).split(';\n') });
       case 'POST /admin/v1/usuario':
+        // contrato novo do servidor: admin só com `confirmado_admin: true` (que o conector manda só na confirmação)
+        if (corpo.acao === 'papel' && corpo.valor === 'admin' && corpo.confirmado_admin !== true) return json(403, { erro: 'o perfil admin exige confirmado_admin' });
         registro.push({ tabela: 'rh_usuarios', quem: corpo.quem, op: corpo.acao });
         return json(200, { ok: true, antes: { [corpo.acao]: 'x' }, depois: { [corpo.acao]: corpo.valor } });
       case 'POST /admin/v1/convite':
+        if (corpo.papel === 'admin' && corpo.confirmado_admin !== true) return json(403, { erro: 'convite de admin exige confirmado_admin' });
         return json(200, { ok: true, token: 'tok123456789abc', caminho: '#a-tok123456789abc' });
       default:
         return json(404, { erro: 'rota inexistente' });
     }
   }) as unknown as typeof fetch;
 
-  return { fetch: buscar, chamadas, funcionarios, registro, preparados };
+  return { fetch: buscar, chamadas, funcionarios, registro, preparados, estruturas };
 }
