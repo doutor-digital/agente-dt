@@ -135,6 +135,16 @@ describe('decidirPagamentoAntecipado', () => {
     assert.equal(decidirPagamentoAntecipado({ ...base, escolhaSalva: 'na_clinica', valorAtual: 'Sim' }).valor, 'Não');
   });
 
+  it('unidade sem antecipado: a escolha antiga pix_antecipado (de antes da correção) vira Não na remarcação', () => {
+    assert.equal(decidirPagamentoAntecipado({ ...base, semAntecipado: true, escolhaSalva: 'pix_antecipado', valorAtual: 'Sim' }).valor, 'Não');
+    assert.equal(decidirPagamentoAntecipado({ ...base, semAntecipado: true, formaPagamento: 'pix_antecipado' }).valor, 'Não');
+    // sem escolha nenhuma: nada muda, o que a equipe gravou no cartão não é apagado (ramo 4)
+    assert.equal(decidirPagamentoAntecipado({ ...base, semAntecipado: true, valorAtual: 'Sim' }).valor, null);
+    assert.equal(decidirPagamentoAntecipado({ ...base, semAntecipado: true, valorAtual: null }).valor, 'Não');
+    // e a flag desligada (padrão) não muda nada
+    assert.equal(decidirPagamentoAntecipado({ ...base, semAntecipado: false, escolhaSalva: 'pix_antecipado' }).valor, 'Sim');
+  });
+
   it('a forma da chamada ganha da escolha guardada', () => {
     assert.equal(decidirPagamentoAntecipado({ ...base, formaPagamento: 'na_clinica', escolhaSalva: 'pix_antecipado' }).valor, 'Não');
   });
