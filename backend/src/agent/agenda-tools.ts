@@ -8,7 +8,7 @@ import type { KommoClient } from '../services/kommo.service.js';
 import { SpineService } from '../services/spine.service.js';
 import { travaDaUnidadeDeAtendimento } from '../lib/trava-unidade-atendimento.js';
 import { esquemaDaUnidade } from '../lib/kommo-schema.js';
-import { AgendaService, DURACAO_NA_FRANQUIA_MIN } from '../services/agenda.service.js';
+import { AgendaService, DURACAO_NA_FRANQUIA_MIN, toMinutes } from '../services/agenda.service.js';
 import { AgendaReconcileService } from '../services/agenda-reconcile.service.js';
 import { registrarTempoAteAgendamento } from '../services/lead-metrics.service.js';
 import { avisoDeConsultaExistente, consultasFuturas } from './consulta-existente.js';
@@ -1390,7 +1390,7 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
           'desta conversa. Use o MESMO que você passou em buscar_paciente ou cadastrar_paciente.',
         ),
     }),
-    // `comMarcacaoEmCurso`: enquanto isto roda, a gravação avulsa de "feito por = IA / Agendado" (captura de campos, em
+    // `comMarcacaoEmCurso`: enquanto isto roda, a gravação avulsa de "feito por = IA" (captura de campos, em
     // paralelo) espera o desfecho — ver marcacao-da-ia-no-turno.ts.
     func: async (args: {
       idClient: number;
@@ -1477,14 +1477,14 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         const b = fim8(c?.whatsapp);
         return !!b && aceitos.length > 0 && !aceitos.includes(b);
       };
-      // Tarefa para a equipe no Kommo (uma por cartão e motivo a cada 24 h). `false` = o aviso NÃO saiu: quem responde ao
-      // paciente não pode prometer retorno da equipe.
-      const avisarEquipe = async (motivo: 'cadastro_duplicado' | 'agenda_sem_conferir', detalhe: string): Promise<boolean> => {
+      // Tarefa para a equipe no Kommo (uma por cartão, motivo e `chaveExtra` a cada 24 h). `false` = o aviso NÃO saiu: quem
+      // responde ao paciente não pode prometer retorno da equipe. «Repetida» vale como saiu: já está na mão da equipe.
+      const avisarEquipe = async (motivo: 'cadastro_duplicado' | 'agenda_sem_conferir', detalhe: string, chaveExtra?: string): Promise<boolean> => {
         if (!kommo || !args.leadId) {
           logger.warn({ unit: fresca.slug, leadId: args.leadId ?? null, motivo }, 'agendar_consulta: sem cartão/Kommo para abrir a tarefa da equipe');
           return false;
         }
-        const r = await abrirTarefaParaEquipe({ slug: fresca.slug, unitId: fresca.id, leadId: args.leadId, kommo, recorder, motivo, detalhe });
+        const r = await abrirTarefaParaEquipe({ slug: fresca.slug, unitId: fresca.id, leadId: args.leadId, kommo, recorder, motivo, detalhe, chaveExtra });
         return r !== 'falhou';
       };
 
@@ -1493,7 +1493,6 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
       // tentou o mesmo horário no primeiro e ofereceu outro a quem já estava marcada.
       let semConferir = false;
       let possiveis: PossivelDuplicado[] = [];
-      let equipeAvisada = false;
       if (!args.remarcando) {
         const ja = await consultaAtual(fresca, args.leadId);
         if (ja) {
@@ -1565,10 +1564,12 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
               title: `agendar_consulta: possível cadastro em dobro (idClient ${comConsulta.map((x) => x.idClient).join(', ')}) — nome parecido, não igual; nada foi vinculado`,
               payload: { idClient: args.idClient, possiveis: comConsulta.map((x) => ({ idClient: x.idClient, name: x.name, consulta: x.consulta ? `${x.consulta.schedule.dayLocal}T${x.consulta.schedule.timeLocal}` : null })) },
             });
-            equipeAvisada = await avisarEquipe(
+            // Esta tarefa é de CADASTRO (quem é quem): NÃO cita o horário que o paciente pediu agora, então não sustenta a promessa
+            // «a equipe confirma o horário» — essa tem a sua própria tarefa, abaixo, com o horário na chave.
+            await avisarEquipe(
               'cadastro_duplicado',
               `Cadastro usado pela IA: ${args.idClient} («${cadastro.name ?? '?'}»). Outro cadastro com o mesmo telefone: ` +
-                comConsulta.map((x) => `${x.idClient} («${x.name ?? '?'}», consulta ${x.consulta?.schedule.dayLocal} ${x.consulta?.schedule.timeLocal})`).join('; '),
+                comConsulta.map((x) => `${x.idClient} («${x.name ?? '?'}», consulta${x.consultas.length > 1 ? 's' : ''} ${x.consultas.map((c) => `${c.schedule.dayLocal} ${c.schedule.timeLocal}`).join(' e ')})`).join('; '),
             );
           }
         }
@@ -1596,12 +1597,14 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         // o ocupante é um possível cadastro dele em dobro (mesmo telefone, nome parecido). Lado seguro: não se oferece outro
         // horário com base num "ocupado" que talvez seja dele, e a equipe é avisada (tarefa) para confirmar.
         // «ocupado» também vem de consulta que ENCOSTA no horário (a franquia usa blocos de DURACAO_NA_FRANQUIA_MIN): vale a que cai a menos de uma duração
-        const minutos = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
-        const ocupadoPorPossivel = possiveis.filter(
-          (x) =>
-            x.consulta?.schedule.dayLocal === args.data &&
-            !!x.consulta.schedule.timeLocal &&
-            Math.abs(minutos(x.consulta.schedule.timeLocal) - minutos(args.hora)) < DURACAO_NA_FRANQUIA_MIN,
+        // (com duas consultas de pé no cadastro dele, qualquer uma pode ser a do horário pedido)
+        const ocupadoPorPossivel = possiveis.filter((x) =>
+          x.consultas.some(
+            (c) =>
+              c.schedule.dayLocal === args.data &&
+              !!c.schedule.timeLocal &&
+              Math.abs(toMinutes(c.schedule.timeLocal) - toMinutes(args.hora)) < DURACAO_NA_FRANQUIA_MIN,
+          ),
         );
         // só `ocupado` pode ser a consulta do próprio paciente; bloqueio de agenda e feriado seguem como "não disponível"
         if (slot.status === 'ocupado' && (semConferir || ocupadoPorPossivel.length > 0)) {
@@ -1613,19 +1616,20 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
               : `agendar_consulta: ${args.hora} ocupado e não consegui conferir os cadastros do paciente — não ofereci outro horário`,
             payload: { ...args, motivo: slot.motivo },
           });
-          if (!equipeAvisada) {
-            equipeAvisada = await avisarEquipe(
-              'agenda_sem_conferir',
-              `Cadastro usado pela IA: ${args.idClient}; horário pedido: ${args.data} ${args.hora}`,
-            );
-          }
+          // A promessa "a equipe confirma" só sai se existe uma tarefa que cita ESTE horário (chave = data+hora): a de cadastro,
+          // ou a de outro horário, não vale. Pedido repetido do MESMO horário é tarefa repetida e vale (já está com a equipe).
+          const equipeAvisada = await avisarEquipe(
+            'agenda_sem_conferir',
+            `Cadastro usado pela IA: ${args.idClient}; horário pedido: ${args.data} ${args.hora}`,
+            `${args.data}T${args.hora}`,
+          );
           return (
             (porPossivel
               ? `${args.hora} aparece ocupado por uma consulta de outro cadastro com o MESMO telefone e nome parecido (pode ser o próprio paciente em dobro, pode ser um parente): `
               : `${args.hora} aparece ocupado, mas NÃO consegui conferir na clínica se esse horário é do próprio paciente (ele pode já estar marcado por outro cadastro): `) +
             'a consulta NÃO foi marcada. NÃO diga que o horário foi ocupado por outra pessoa, NÃO ofereça outro horário e NÃO afirme que ele está marcado. ' +
             (equipeAvisada
-              ? 'Diga em UMA frase que vai confirmar com a equipe e retorna em instantes.'
+              ? 'Diga em UMA frase que vai confirmar com a equipe e responde ao paciente por aqui (sem prometer prazo).'
               : 'O aviso à equipe NÃO saiu: NÃO prometa retorno da equipe. Diga em UMA frase que não conseguiu confirmar o horário agora e que vai verificar; se o paciente insistir, encaminhe a um atendente humano.')
           );
         }

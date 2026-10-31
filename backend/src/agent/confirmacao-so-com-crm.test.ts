@@ -277,6 +277,38 @@ test('tarefa repetida em 24 h não abre outra; falha do Kommo não marca o aviso
   assert.match(alertas[0], /tarefa NÃO saiu.*boom/);
 });
 
+test('3ª rodada: `chaveExtra` entra na chave do aviso — outro horário (outra chave) abre outra tarefa; o mesmo, não', async () => {
+  const consultadas: string[] = [];
+  const marcados: string[] = [];
+  const kommo = { getLead: async () => ({}), createTask: async () => ({ id: 1 }) };
+  const dedupe = {
+    avisoRecente: async (_u: string, _l: number, k: string) => (consultadas.push(k), marcados.includes(k)),
+    marcarAviso: async (_u: string, _l: number, k: string) => void marcados.push(k),
+  };
+  const base = { slug: 's', unitId: 'u', leadId: 1, kommo: kommo as never, recorder: { step: async () => undefined } as never, motivo: 'agenda_sem_conferir' as const, dedupe: dedupe as never };
+  assert.equal(await abrirTarefaParaEquipe({ ...base, chaveExtra: '2026-11-06T16:00' }), 'criada');
+  assert.equal(await abrirTarefaParaEquipe({ ...base, chaveExtra: '2026-11-06T16:00' }), 'repetida');
+  assert.equal(await abrirTarefaParaEquipe({ ...base, chaveExtra: '2026-11-06T17:00' }), 'criada');
+  assert.deepEqual(marcados, ['agenda_horario_sem_conferir:2026-11-06T16:00', 'agenda_horario_sem_conferir:2026-11-06T17:00']);
+});
+
+test('3ª rodada: o alerta do Telegram de cadastro_duplicado/agenda_sem_conferir NÃO diz que a IA prometeu "1 hora"; os outros motivos seguem como eram', async () => {
+  const kommo = { getLead: async () => ({}), createTask: async () => { throw new Error('boom'); } };
+  const dedupe = { avisoRecente: async () => false, marcarAviso: async () => undefined } as never;
+  for (const motivo of ['cadastro_duplicado', 'agenda_sem_conferir'] as const) {
+    const alertas: string[] = [];
+    await abrirTarefaParaEquipe({ slug: 's', unitId: 'u', leadId: 1, kommo: kommo as never, recorder: { step: async () => undefined } as never, motivo, dedupe, alertar: async (t) => void alertas.push(t) });
+    assert.equal(alertas.length, 1);
+    assert.doesNotMatch(alertas[0], /em até 1 hora/);
+    assert.match(alertas[0], /NÃO saiu.*boom/);
+    assert.match(alertas[0], motivo === 'agenda_sem_conferir' ? /HORÁRIO/ : /CADASTRO/);
+    assert.match(alertas[0], /não prometer|não prometeu/);
+  }
+  const alertas: string[] = [];
+  await abrirTarefaParaEquipe({ slug: 's', unitId: 'u', leadId: 1, kommo: kommo as never, recorder: { step: async () => undefined } as never, motivo: 'desmarcada', dedupe, alertar: async (t) => void alertas.push(t) });
+  assert.match(alertas[0], /em até 1 hora/);
+});
+
 const BLOCO_DESMARCADA = '\nA consulta deste paciente foi DESMARCADA no sistema da clínica.\nEle NÃO tem mais horário reservado.\n';
 
 test('Balsas 22/10 de ponta a ponta (sem rede): bloco desmarcada + resposta "tudo certo" = trocada', () => {

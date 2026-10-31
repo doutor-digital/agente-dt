@@ -282,7 +282,11 @@ for (const [rotulo, nomeDele, nomeDoOutro] of PARES) {
     assert.match(r, /confirmar com a equipe/);
     assert.deepEqual(criadas, []);
     assert.equal(links.length, 0, 'nada foi vinculado');
-    assert.equal(tarefas.length, 1);
+    // duas tarefas, de assuntos diferentes: o CADASTRO (quem é quem) e o HORÁRIO pedido (a promessa da IA)
+    assert.equal(tarefas.length, 2);
+    assert.match(tarefas[0], /CONFERIR CADASTRO/);
+    assert.match(tarefas[1], /CONFERIR HORÁRIO/);
+    assert.ok(tarefas[1].includes(`${DIA} 16:00`));
   });
 }
 
@@ -293,7 +297,8 @@ test('possível duplicado com consulta fora da grade (16:15) e o pedido 16:00 ca
   const r = await pedir('16:00');
   assert.doesNotMatch(r, /não está mais disponível/);
   assert.match(r, /NÃO ofereça outro horário/);
-  assert.equal(tarefas.length, 1);
+  assert.equal(tarefas.length, 2, 'cadastro + horário');
+  assert.ok(tarefas.some((t) => /CONFERIR HORÁRIO/.test(t) && t.includes(`${DIA} 16:00`)));
 });
 
 test('possível duplicado SEM consulta de pé não gera tarefa (não há o que duplicar)', async () => {
@@ -309,7 +314,7 @@ test('a tarefa é UMA por cartão e motivo: pedir de novo no turno seguinte não
   await pedir('16:00');
   await pedir('16:00');
   await pedir('16:00');
-  assert.equal(tarefas.length, 1);
+  assert.equal(tarefas.length, 2, 'uma de cadastro e uma do horário 16:00 — pedir de novo não abre outras');
 });
 
 test('Timbó exato: nome IGUAL e telefone com/sem o 9 → é o mesmo paciente (recusa e revincula) e NÃO abre tarefa', async () => {
@@ -391,6 +396,76 @@ test('nome comum (página cheia) com o horário OCUPADO: confere com a equipe, c
   const r = await pedir('16:00');
   assert.match(r, /NÃO consegui conferir/);
   assert.equal(tarefas.length, 1);
+});
+
+// ── Rodada 3 do sênior: a promessa "a equipe confirma" exige uma tarefa que cite ESTE horário ────────────────────────────────
+function mae_e_filha() {
+  cadastros[0].name = 'Maria Eduarda da Silva';
+  cadastros[1].name = 'Maria José da Silva'; // consulta às 16:00
+  cadastros.push({ idClient: 4321, name: 'Pedro Alves', whatsapp: '5547977770000', schedules: [marcada(888, '10:00', { clientName: 'Pedro Alves' })] });
+}
+
+test('3ª rodada, I1c: a tarefa de cadastro (aberta no pedido das 10:00) NÃO sustenta a promessa do pedido das 16:00 — abre a tarefa do horário', async () => {
+  mae_e_filha();
+  const r1 = await pedir('10:00');
+  assert.match(r1, /não está mais disponível/, '10:00 é de outra pessoa: segue como ocupado');
+  assert.equal(tarefas.length, 1);
+  assert.match(tarefas[0], /CONFERIR CADASTRO/);
+  const r2 = await pedir('16:00');
+  assert.match(r2, /vai confirmar com a equipe/);
+  assert.equal(tarefas.length, 2, 'uma tarefa nova, do horário');
+  assert.match(tarefas[1], /CONFERIR HORÁRIO/);
+  assert.ok(tarefas[1].includes(`${DIA} 16:00`), `a tarefa cita o horário pedido: ${tarefas[1]}`);
+});
+
+test('3ª rodada: o MESMO horário e motivo pedido de novo é tarefa repetida e ainda sustenta a promessa (já está na mão da equipe)', async () => {
+  mae_e_filha();
+  await pedir('10:00');
+  await pedir('16:00');
+  const r3 = await pedir('16:00');
+  assert.match(r3, /vai confirmar com a equipe/);
+  assert.doesNotMatch(r3, /NÃO prometa retorno/);
+  assert.equal(tarefas.length, 2, 'não abre uma terceira');
+});
+
+test('3ª rodada: outro horário ocupado pelo possível duplicado = outra tarefa (a chave tem o horário)', async () => {
+  mae_e_filha();
+  cadastros[1].schedules = [marcada(555, '16:00'), marcada(556, '17:00')];
+  await pedir('16:00');
+  await pedir('17:00');
+  const horarios = tarefas.filter((t) => /CONFERIR HORÁRIO/.test(t));
+  assert.equal(horarios.length, 2);
+  assert.ok(horarios[0].includes(`${DIA} 16:00`) && horarios[1].includes(`${DIA} 17:00`));
+});
+
+test('3ª rodada: a tarefa do horário FALHA no Kommo (a de cadastro já existia) — a IA NÃO promete retorno', async () => {
+  mae_e_filha();
+  await pedir('10:00');
+  tarefaFalha = true;
+  const r = await pedir('16:00');
+  assert.match(r, /NÃO prometa retorno da equipe/);
+  assert.doesNotMatch(r, /vai confirmar com a equipe/);
+});
+
+test('3ª rodada, I9c: cadastro de UMA palavra ("Maria") em unidade grande (página cheia) e horário ocupado por outra pessoa — segue "não está mais disponível"', async () => {
+  cheia = true;
+  cadastros = [
+    { idClient: ANA, name: 'Maria', whatsapp: FONE, schedules: [] },
+    { idClient: 4321, name: 'Pedro Alves', whatsapp: '5547977770000', schedules: [marcada(888, '16:00', { clientName: 'Pedro Alves' })] },
+  ];
+  const r = await pedir('16:00');
+  assert.match(r, /não está mais disponível/);
+  assert.deepEqual(tarefas, []);
+});
+
+test('3ª rodada, I14: possível duplicado com DUAS consultas — pedir a 2ª (17:00) também não oferece outro horário', async () => {
+  cadastros[0].name = 'Ana Christina Souza';
+  cadastros[1].name = 'ANA CRISTINA SOUZA';
+  cadastros[1].schedules = [marcada(555, '09:00'), marcada(556, '17:00')];
+  const r = await pedir('17:00');
+  assert.doesNotMatch(r, /não está mais disponível/);
+  assert.match(r, /NÃO ofereça outro horário/);
+  assert.ok(tarefas.some((t) => /CONFERIR HORÁRIO/.test(t) && t.includes(`${DIA} 17:00`)));
 });
 
 test('lado seguro: o cadastro irmão não pôde ser lido e o horário aparece ocupado — mesma resposta', async () => {
