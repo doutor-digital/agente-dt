@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { FREIOS_PADRAO, type Freios } from './disparo/freios.js';
-import { rodarUnidade, rodadasSemAndar, motivoDaMeta, type DadosDeGravacao, type Destino, type Modo, type OndaNoLote, type Porto, type UnidadeNoLote } from './disparo/lote.js';
+import { rodarUnidade, rodadasSemAndar, motivoDaMeta, textoDoEspelho, quandoEmTexto, NOTA_MAX, type DadosDeGravacao, type Destino, type Modo, type OndaNoLote, type Porto, type UnidadeNoLote } from './disparo/lote.js';
 import type { ResultadoDoTemplate } from './whatsapp-meta.js';
 import type { SituacaoNaFranquia } from './disparo/regras.js';
 
@@ -10,7 +10,7 @@ const AGORA = new Date(Date.UTC(2026, 9, 21, 12, 30));
 const MADRUGADA = new Date(Date.UTC(2026, 9, 21, 6, 0));
 const sem_pausa: Freios = { ...FREIOS_PADRAO, pausaMs: 0 };
 const UNIDADE: UnidadeNoLote = { id: 'u1', slug: 'doutor-hernia-canaa', nome: 'Doutor Hérnia Canaã', fuso: 'America/Sao_Paulo' };
-const ONDA: OndaNoLote = { id: 'o1', campanhaId: 'c1', aprovadaEm: new Date(Date.UTC(2026, 9, 20, 15)), aprovadaModo: 'ligado', template: 'canaa_resgate', idioma: 'pt_BR', textoModelo: 'Oi {{1}}!', variaveis: ['primeiroNome'], cabecalho: null };
+const ONDA: OndaNoLote = { id: 'o1', campanhaId: 'c1', campanhaNome: 'Campanha de teste', aprovadaEm: new Date(Date.UTC(2026, 9, 20, 15)), aprovadaModo: 'ligado', template: 'canaa_resgate', idioma: 'pt_BR', textoModelo: 'Oi {{1}}!', variaveis: ['primeiroNome'], cabecalho: null };
 
 function destino(n: number): Destino {
   return { id: `d${n}`, ondaId: 'o1', campanhaId: 'c1', unitId: 'u1', telefone: `55639910210${String(n).padStart(2, '0')}`, chave: `6391021${String(n).padStart(3, '0')}`, nome: `Pessoa${n}`, nomeCompleto: `Pessoa${n} Silva`, kommoLeadId: 1000 + n };
@@ -139,7 +139,7 @@ test('LIGADO: manda, grava o id da Meta, deixa nota no cartão e conclui a onda 
   assert.equal(t.estados.get('d1')!.wamid, 'wamid.d1');
   assert.ok(t.estados.get('d1')!.enviadoEm);
   assert.equal(t.chamadas.espelhar.length, 3);
-  assert.match(t.chamadas.espelhar[0]!, /^1001\|.*Oi Pessoa1!.*Kommo não mostra/s);
+  assert.match(t.chamadas.espelhar[0]!, /^1001\|.*Mensagem enviada:\nOi Pessoa1!.*Se o paciente responder, é resposta a esta mensagem\./s);
   assert.deepEqual(t.chamadas.concluidas, ['o1']);
 });
 
@@ -651,4 +651,81 @@ test('limite de taxa na 10ª rodada também pausa o NÚMERO e avisa citando as u
   assert.equal(t.chamadas.avisos.length, 1);
   assert.ok(t.chamadas.avisos[0]!.includes('doutor-hernia-canaa + doutor-hernia-caxias'), t.chamadas.avisos[0]);
   assert.ok(t.chamadas.avisos[0]!.includes('o7'));
+});
+
+// ── A NOTA NO CARTÃO (o que a SDR lê) ───────────────────────────────────────────────────────────────────────
+
+const CABECALHO = { tipo: 'image' as const, link: 'https://drive.kommo.com/s/abc123' };
+const ONDA_CANAA: OndaNoLote = { ...ONDA, campanhaNome: 'Canaã — Resgate de outubro', template: 'canaa_ciatico_onde_doi_0sllyt', textoModelo: 'Oi {{1}}, tudo bem? Falamos de dor ciática.' };
+// 28/10/2026 17:05 UTC = 14:05 em São Paulo
+const QUANDO = new Date(Date.UTC(2026, 9, 28, 17, 5));
+
+test('NOTA: com cabeçalho de mídia, tem campanha, hora, mensagem, link da imagem e a frase da resposta', () => {
+  const nota = textoDoEspelho({ ...ONDA_CANAA, cabecalho: CABECALHO }, 'Oi Maria, tudo bem? Falamos de dor ciática.', QUANDO, 'America/Sao_Paulo');
+  assert.equal(
+    nota,
+    '📲 Campanha "Canaã — Resgate de outubro" — enviada em 28/10 às 14:05 pelo WhatsApp oficial.\n\n' +
+      'Mensagem enviada:\nOi Maria, tudo bem? Falamos de dor ciática.\n\n' +
+      'Imagem enviada junto: https://drive.kommo.com/s/abc123\n\n' +
+      'Se o paciente responder, é resposta a esta mensagem.',
+  );
+});
+
+test('NOTA: sem cabeçalho de mídia, a linha da imagem some', () => {
+  const nota = textoDoEspelho(ONDA_CANAA, 'Oi Maria!', QUANDO, 'America/Sao_Paulo');
+  assert.ok(!/junto/.test(nota));
+  assert.ok(!/https?:/.test(nota));
+  assert.equal(nota, '📲 Campanha "Canaã — Resgate de outubro" — enviada em 28/10 às 14:05 pelo WhatsApp oficial.\n\nMensagem enviada:\nOi Maria!\n\nSe o paciente responder, é resposta a esta mensagem.');
+});
+
+test('NOTA: vídeo e documento têm o nome certo; o link vai como está (sem texto inventado de validade)', () => {
+  const link = 'https://drive.kommo.com/s/xyz?x=1&y=2';
+  assert.ok(textoDoEspelho({ ...ONDA_CANAA, cabecalho: { tipo: 'video', link } }, 'x', QUANDO, 'America/Sao_Paulo').includes(`Vídeo enviado junto: ${link}\n`));
+  const doc = textoDoEspelho({ ...ONDA_CANAA, cabecalho: { tipo: 'document', link, nomeArquivo: 'guia.pdf' } }, 'x', QUANDO, 'America/Sao_Paulo');
+  assert.match(doc, /Documento enviado junto: https:\/\/drive\.kommo\.com\/s\/xyz\?x=1&y=2\n/);
+  assert.ok(!/expir|validade|v[aá]lid/i.test(doc));
+});
+
+test('NOTA: a hora é a do fuso (São Paulo; Boa Vista uma hora a menos) e vira o dia certo', () => {
+  assert.equal(quandoEmTexto(QUANDO, 'America/Sao_Paulo'), '28/10 às 14:05');
+  assert.equal(quandoEmTexto(QUANDO, 'America/Boa_Vista'), '28/10 às 13:05');
+  // 02:30 UTC de 29/10 ainda é noite de 28/10 em São Paulo
+  assert.equal(quandoEmTexto(new Date(Date.UTC(2026, 9, 29, 2, 30)), 'America/Sao_Paulo'), '28/10 às 23:30');
+  assert.equal(quandoEmTexto(new Date(Date.UTC(2026, 9, 29, 3, 0)), 'America/Sao_Paulo'), '29/10 às 00:00');
+  assert.equal(quandoEmTexto(QUANDO, 'Fuso/Invalido'), '28/10 às 14:05', 'fuso inválido cai em São Paulo, não derruba o envio');
+});
+
+test('NOTA: sem telefone, sem wamid, sem nome do modelo da Meta e sem o texto de SAIR', async () => {
+  const t = montar({ modo: 'ligado', quantos: 2 });
+  await rodarUnidade(t.porto, sem_pausa, UNIDADE, [{ ...ONDA_CANAA, cabecalho: CABECALHO }]);
+  assert.equal(t.chamadas.espelhar.length, 2);
+  for (const n of t.chamadas.espelhar) {
+    assert.ok(!/wamid/i.test(n), n);
+    assert.ok(!/5563991021\d\d/.test(n) && !/\d{8,}/.test(n), n);
+    assert.ok(!/canaa_ciatico|_0sllyt/.test(n), 'nome interno do modelo');
+    assert.ok(!/SAIR/.test(n));
+    assert.ok(!/Esta nota existe|Kommo não mostra/.test(n), 'frase técnica antiga');
+  }
+  assert.match(t.chamadas.espelhar[0]!, /Canaã — Resgate de outubro/);
+  assert.match(t.chamadas.espelhar[0]!, /enviada em 21\/10 às 09:30/, 'a hora vem do relógio do porto, no fuso da unidade');
+});
+
+test('NOTA: nome de campanha com quebra de linha vira uma linha só', () => {
+  const nota = textoDoEspelho({ ...ONDA, campanhaNome: '  Resgate\n  de outubro ' }, 'Oi!', QUANDO, 'America/Sao_Paulo');
+  assert.ok(nota.startsWith('📲 Campanha "Resgate de outubro" — enviada em 28/10 às 14:05 pelo WhatsApp oficial.\n\n'));
+});
+
+test('NOTA: corte do teto não parte emoji ao meio', () => {
+  const nota = textoDoEspelho(ONDA_CANAA, '😀'.repeat(NOTA_MAX), QUANDO, 'America/Sao_Paulo');
+  assert.ok(nota.length <= NOTA_MAX);
+  assert.ok(!/[\ud800-\udbff](?![\udc00-\udfff])/.test(nota), 'sem surrogate solto');
+});
+
+test('NOTA: nunca passa do teto; se estourar, encurta a mensagem e preserva o link e a frase final', () => {
+  const link = 'https://drive.kommo.com/s/' + 'a'.repeat(1500);
+  const nota = textoDoEspelho({ ...ONDA_CANAA, cabecalho: { tipo: 'image', link } }, 'palavra '.repeat(1000), QUANDO, 'America/Sao_Paulo');
+  assert.ok(nota.length <= NOTA_MAX, `${nota.length}`);
+  assert.ok(nota.includes(link));
+  assert.ok(nota.endsWith('Se o paciente responder, é resposta a esta mensagem.'));
+  assert.ok(nota.includes('…'));
 });

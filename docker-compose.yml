@@ -39,7 +39,10 @@ services:
       retries: 5
       start_period: 90s      # margem p/ o prisma migrate deploy no boot
 
-    stop_grace_period: 30s
+    # 60 s: 20 s para o Traefik tirar o container da lista + drenagem dos turnos da IA, tudo limitado a 55 s do SIGTERM
+    # (backend/src/lib/desligamento.ts; 5 s de sobra para soltar o lease). O deploy é start-first, então isto só
+    # alonga o deploy em si, não deixa o serviço fora do ar.
+    stop_grace_period: 60s
 
     deploy:
       # 1 réplica: o backend tem monitores/timers (stale-reply-monitor) sem lock

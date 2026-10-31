@@ -250,6 +250,13 @@ test('lista de teste: "slug=*,telefone" NÃO solta a unidade inteira (só vale o
   assert.equal(listaDeTesteDoAmbiente('u', v('u= * '))?.size ?? null, null, 'com espaços ao redor, ainda é o "*" sozinho');
 });
 
+test('lista de teste: o número de 12 dígitos (como o WhatsApp o guarda) vira o de 13, o mesmo que fica gravado no destinatário', () => {
+  const v = (s: string) => ({ DISPARO_LISTA_DE_TESTE: s }) as NodeJS.ProcessEnv;
+  assert.deepEqual([...listaDeTesteDoAmbiente('u', v('u=556391039464'))!], ['5563991039464']);
+  assert.deepEqual([...listaDeTesteDoAmbiente('u', v('u=+55 63 9103-9464,5563991039464'))!], ['5563991039464']);
+  assert.equal(listaDeTesteDoAmbiente('u', v('u=556334211043'))!.size, 0, 'fixo de 12 dígitos: ninguém');
+});
+
 // ── o worker varre SAIR mesmo sem onda aprovada ─────────────────────────────────────────────────────────────────
 
 test('worker: sem nenhuma onda aprovada a varredura de SAIR roda assim mesmo (onda parada por SAIR e oferta de onda concluída dependem dela)', async () => {

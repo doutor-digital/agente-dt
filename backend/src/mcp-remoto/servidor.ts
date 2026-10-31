@@ -21,6 +21,7 @@ import type { Unidade } from '../franquia-mcp/unidade.js';
 import type { ArmazemOAuth } from './armazem.js';
 import { enviarPagina, ProvedorOAuth, type Usuario } from './provedor.js';
 import type { BuscadorCimd } from './cimd.js';
+import { criarAuditor } from './auditoria.js';
 import { ipDoCliente, Semaforo } from './limites.js';
 
 export interface OpcoesConector {
@@ -44,23 +45,25 @@ export interface OpcoesConector {
   ferramentasSimultaneas?: number;
   /** ferramentas além das da franquia (Kommo, cérebro, relatório cruzado), registradas a cada requisição */
   /** `quem.userId` é o usuário do console que fez login no conector (para liberar a escrita só a quem pode). */
-  extras?: (server: McpServer, auditar: Auditar, quem: { userId: string }) => void;
+  extras?: (server: McpServer, auditar: Auditar, quem: { userId: string; email?: string }) => void;
   cimd?: BuscadorCimd;
   agora?: () => number;
   log?: { info(o: object, m?: string): void; warn(o: object, m?: string): void };
 }
 
 const INSTRUCOES = [
-  'Dados da Doutor Digital, só leitura. Comece por listar_integracoes: ela diz o que cada clínica e cada empresa do grupo (ex. HM Tecnologia) tem ligado.',
+  'Dados da Doutor Digital, só leitura (as exceções, para quem tem permissão, são as de dois passos descritas abaixo). Comece por listar_integracoes: ela diz o que cada clínica e cada empresa do grupo (ex. HM Tecnologia) tem ligado.',
   'Fontes: o CRM da franquia Doutor Hérnia (ferramentas sem prefixo: pacientes, agenda, tratamentos, BI),',
   'o CRM comercial Kommo (kommo_*), o ERP Bling das empresas que usam (bling_*: pedidos, contas a receber, notas, clientes),',
-  'o Asaas das clínicas (asaas_*: cobranças, extrato do que entrou de verdade, saldo, clientes),',
+  'o Asaas das clínicas (asaas_*: cobranças, extrato do que entrou de verdade, saldo, clientes; para quem tem permissão, também cadastrar cliente e gerar BOLETO em dois passos, numa clínica só — asaas_preparar_cliente/asaas_preparar_cobranca → mostrar o resumo, com a conta e se o cliente será avisado → asaas_confirmar_cliente/asaas_confirmar_cobranca só se a pessoa aprovar; não cancela, não estorna, não edita e não faz Pix, cartão, parcelamento nem transferência),',
   'o RH das empresas que usam o Convênia (convenia_*: colaboradores, admissões e desligamentos, férias, afastamentos — ficha completa, com dado pessoal sensível: CPF, salário, dados bancários, endereço, nascimento e dados de saúde; nas listagens use completo: true para a ficha inteira),',
   'o ponto eletrônico Tiquetaque (tiquetaque_*: batidas do dia e quem está trabalhando agora, atrasos e faltas, horas e banco de horas, afastamentos; uma conta cobre várias clínicas e empresas, filtre por local — registro completo, com dado pessoal sensível: CPF, PIS, foto/selfie e GPS da batida, anexo de atestado e justificativa escrita; em tiquetaque_colaboradores e tiquetaque_horas use completo: true para a ficha e o espelho inteiros),',
+  'a Tramitação Inteligente dos escritórios de advocacia (tramitacao_*: processos, publicações, clientes e prazos; só leitura, documentos só como metadados, CPF e telefone mascarados, nunca a senha do Meu INSS; a busca de cliente por nome lê só parte da base: se a resposta vier com truncado, não conclua que o cliente não existe),',
   'os eventos de conversão mandados para a Meta pelo rastreio de anúncios (meta_eventos, meta_eventos_lead),',
   'e, para quem tem permissão, alterar cartões do Kommo em dois passos (kommo_preparar_alteracao → mostrar o resumo → kommo_confirmar_alteracao só se a pessoa aprovar).',
   'Para quem tem permissão, preparar disparo de campanha pela API oficial do WhatsApp (disparo_*: cadastrar a campanha, montar a onda, ler a prévia e devolver o LINK do painel); aprovar e retomar o envio são do João no painel, nunca por aqui.',
   'Para quem tem permissão, o WhatsApp da Suzanne (evo_*): ler e organizar conversas, grupos e etiquetas; enviar só em dois passos (evo_preparar → mostrar → evo_confirmar com o ok da pessoa).',
+  'Sistema novo de RH/Caixa/Financeiro, de servidor próprio (sistemas_*): esquema do banco, consulta SELECT, usuários, registro de alterações e simulação do que um usuário enxerga (auditoria); para quem tem permissão, alterar dados em dois passos (sistemas_preparar_alteracao → mostrar o resumo → sistemas_confirmar_alteracao só se a pessoa aprovar), criar a ESTRUTURA do banco por campos, sem SQL (tabela, coluna, índice: sistemas_preparar_tabela, sistemas_preparar_coluna ou sistemas_preparar_indice → mostrar o resumo e o SQL gerado → sistemas_confirmar_estrutura só se a pessoa aprovar; DROP e renomear não existem), mudar papel/unidade de usuário e criar convite de acesso (o perfil ADMIN só em dois passos: sistemas_preparar_admin → mostrar → sistemas_confirmar_admin) — sempre com o ok da pessoa antes.',
   'o cérebro que confere um contra o outro (cerebro_*), o relatório cruzado (relatorio_funil) e, para Kommo + Bling, relatorio_vendas.',
   'Para "quantos leads viraram consulta/tratamento", use relatorio_funil: o cruzamento Kommo → franquia é feito em código, por telefone,',
   'e vem com a cobertura — não some números de ferramentas diferentes por conta própria. Unidade aceita nome curto ("serra").',
@@ -172,14 +175,9 @@ export async function montarConectorRemoto(
     const clientId = auth?.clientId ?? '';
     // Sem sessão: um servidor por requisição. Barato (só registra ferramentas) e não guarda estado entre chamadas.
     const server = new McpServer({ name: 'doutor-digital', version: '1.0.0' }, { instructions: INSTRUCOES });
-    const auditar: Auditar = (r) => {
-      o.armazem
-        .auditar({ userId, clientId, ferramenta: r.ferramenta, argumentos: r.argumentos, ok: r.ok, duracaoMs: r.ms, erro: r.erro })
-        .catch((err) => o.log?.warn({ err }, 'mcp-remoto: auditoria não gravou'));
-      o.log?.info({ userId, ferramenta: r.ferramenta, ok: r.ok, ms: r.ms }, 'mcp-remoto: ferramenta');
-    };
+    const auditar: Auditar = criarAuditor(o.armazem, { userId, clientId }, o.log);
     registrarFerramentas(server, contexto, { auditar });
-    o.extras?.(server, auditar, { userId });
+    o.extras?.(server, auditar, { userId, email: String(auth?.extra?.email ?? '') || undefined });
     const transporte = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     res.on('close', () => {
       void transporte.close();

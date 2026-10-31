@@ -11,6 +11,7 @@ import { automacaoLigada } from './automacoes-estado.js';
 import { leadPausadoPorJanela } from './pausa-lead.js';
 import { enviosDeRetomadaRecentes, limiteDoDiaAtingido, LIMITE_COBRANCAS_POR_DIA, marcaDoDegrau } from './cobrancas-do-dia.js';
 import { fusoDaUnidade } from './fuso.js';
+import { unidadeSemAntecipado, type FlagsDePagamento } from '../agent/pagamento-da-unidade.js';
 
 const SWEEP_MS = 60_000;
 
@@ -28,6 +29,19 @@ interface Degrau {
   pularSePagou?: boolean;
   /** Só sai para quem ESCOLHEU Pix antecipado ao marcar (conversation.pagamentoEscolhido). */
   soPix?: boolean;
+}
+
+/**
+ * O degrau é da régua do Pix e este paciente não a ouve: escolheu pagar na clínica, ou a unidade não tem pagamento
+ * antecipado (Timbó) — escolha gravada ou não: cartão marcado pela recepção não tem `pagamentoEscolhido`, e sem isto
+ * cairia na régua do Pix numa unidade que não tem Pix para reservar.
+ */
+export function degrauDoPixNaoSeAplica(
+  degrau: Pick<Degrau, 'soPix'>,
+  pagamentoEscolhido: string | null | undefined,
+  unit: FlagsDePagamento,
+): boolean {
+  return degrau.soPix === true && (pagamentoEscolhido === 'na_clinica' || unidadeSemAntecipado(unit));
 }
 
 const JANELA_WHATSAPP_MIN = 23 * 60;
@@ -376,7 +390,7 @@ async function varrer(): Promise<void> {
         // Quem escolheu pagar na clínica não recebe a régua do Pix. Foi o que
         // mais apareceu nas desistências de 11/09/2026: "nunca vi isso, só pago
         // na hora" → cedeu a vaga.
-        if (proximo.soPix && conv.pagamentoEscolhido === 'na_clinica') {
+        if (degrauDoPixNaoSeAplica(proximo, conv.pagamentoEscolhido, unit)) {
           await prisma.conversation
             .update({ where: { id: conv.id }, data: { followUpStep: alvo + 1 } })
             .catch(() => undefined);

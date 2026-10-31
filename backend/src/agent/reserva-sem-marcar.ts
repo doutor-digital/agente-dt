@@ -132,13 +132,30 @@ export function marcasDoQuando(texto: string): { datas: Set<string>; dias: Set<s
 /** Quando nem a refeita nem o corte tiram a promessa: melhor perguntar de novo que prometer o que não existe. */
 export const PERGUNTA_NEUTRA = 'Pra eu marcar certinho na agenda: me confirma o dia e o horário que você quer? 😊';
 
+const INSTRUCAO_ABERTURA =
+  '[instrução interna, não é fala do paciente] Sua resposta acima diz que o horário está reservado ou marcado, ' +
+  'mas NENHUMA consulta foi marcada no sistema da clínica — nada fica guardado, e outro paciente pode pegar esse horário. ';
+const INSTRUCAO_SE_FALTA = 'reescreva a mensagem SEM dizer que está reservado, marcado, guardado ou garantido, e pergunte só o que falta';
+const INSTRUCAO_FECHO = 'Responda só com a mensagem final ou com a chamada da ferramenta.';
+
 /** Vai junto da resposta reprovada. Deixa a IA MARCAR (com as ferramentas) quando o paciente já respondeu tudo. */
 export const INSTRUCAO_RESERVA_SEM_MARCAR =
-  '[instrução interna, não é fala do paciente] Sua resposta acima diz que o horário está reservado ou marcado, ' +
-  'mas NENHUMA consulta foi marcada no sistema da clínica — nada fica guardado, e outro paciente pode pegar esse horário. ' +
+  INSTRUCAO_ABERTURA +
   'Se o paciente JÁ escolheu o dia e a hora (ou mandou o comprovante depois da chave Pix) e já disse como vai pagar, ' +
-  'chame agendar_consulta AGORA. Se falta alguma dessas respostas, reescreva a mensagem SEM dizer que está reservado, ' +
-  'marcado, guardado ou garantido, e pergunte só o que falta. Responda só com a mensagem final ou com a chamada da ferramenta.';
+  `chame agendar_consulta AGORA. Se falta alguma dessas respostas, ${INSTRUCAO_SE_FALTA}. ` +
+  INSTRUCAO_FECHO;
+
+/** Unidade sem pagamento antecipado (Timbó): a instrução não manda checar "como vai pagar" — a consulta é paga no dia. */
+const INSTRUCAO_RESERVA_SEM_MARCAR_SEM_ANTECIPADO =
+  INSTRUCAO_ABERTURA +
+  'Se o paciente JÁ escolheu o dia e a hora, chame agendar_consulta AGORA. ' +
+  `Se falta alguma dessas respostas, ${INSTRUCAO_SE_FALTA} (nunca sobre pagamento: a consulta é paga no dia, na clínica). ` +
+  INSTRUCAO_FECHO;
+
+/** A instrução que vai junto da resposta reprovada, conforme a unidade aceite ou não pagamento antecipado. */
+export function instrucaoReservaSemMarcar(semAntecipado: boolean): string {
+  return semAntecipado ? INSTRUCAO_RESERVA_SEM_MARCAR_SEM_ANTECIPADO : INSTRUCAO_RESERVA_SEM_MARCAR;
+}
 
 /**
  * Último recurso, quando a refeita não serve: tira o trecho que promete e fica o resto

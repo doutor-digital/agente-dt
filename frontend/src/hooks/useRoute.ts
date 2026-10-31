@@ -30,6 +30,7 @@ const TAB_TO_SLUG: Record<AppTab, string> = {
   automacoes: 'automacoes',
   'saude-ia': 'saude-ia',
   resultados: 'resultados',
+  disparo: 'disparo',
   'como-funciona': 'como-funciona',
 };
 

@@ -26,6 +26,23 @@ const FALHA_VALE_MS = 60_000;
 const DIAS_A_FRENTE = 180;
 
 /**
+ * A API da franquia recusa intervalo maior que 100 dias (HTTP 400 "Intervalo de datas não pode ser maior que 100 dias.").
+ * A leitura de 180 dias numa chamada só NUNCA funcionou em produção: a segunda rede caía em 'indisponivel' e a onda de
+ * Canaã de 27/10 perdeu 45 de 50 pessoas por "a franquia não respondeu". Daí as janelas: cada uma cobre `[de, de + 90]`
+ * (91 dias; com o fim exclusivo que `searchSchedules` manda, 92 de intervalo) — folga confortável sob os 100.
+ */
+const DIAS_POR_JANELA = 90;
+
+/** As janelas `[inicio, fim]` (AAAA-MM-DD, as duas pontas incluídas) que cobrem `hoje` até `hoje + diasAFrente`, sem sobrepor. */
+export function janelasDaAgenda(hoje: string, diasAFrente: number = DIAS_A_FRENTE, diasPorJanela: number = DIAS_POR_JANELA): Array<[string, string]> {
+  const janelas: Array<[string, string]> = [];
+  for (let de = 0; de <= diasAFrente; de += diasPorJanela + 1) {
+    janelas.push([somarDias(hoje, de), somarDias(hoje, Math.min(de + diasPorJanela, diasAFrente))]);
+  }
+  return janelas;
+}
+
+/**
  * Agendamento que ainda vai acontecer. Mais largo que `temConsultaFutura` do sincronizador (que só olha avaliação e
  * retorno): aqui QUALQUER categoria marcada barra — sessão também. REMARCADO conta: a franquia mantém a data nova no
  * mesmo registro e o paciente vem naquele dia.
@@ -59,22 +76,38 @@ const FRANQUIA_DE_VERDADE: FranquiaPorta = { searchSchedules, searchTreatments, 
 
 async function lerRedeDaAgenda(unit: Unit, agora: Date, f: FranquiaPorta): Promise<RedeDaAgenda | null> {
   const hoje = dataLocalISO(agora, fusoDaUnidade(unit));
+  // Em janelas de até 100 dias (ver DIAS_POR_JANELA), uma depois da outra: a franquia não leva 2 chamadas pesadas ao mesmo tempo.
+  // Qualquer janela que falhe ou venha cortada no teto de páginas invalida a leitura TODA e as seguintes nem são pedidas.
   // 100 por página (o máximo): com 50 o teto de 40 páginas corta em 2.000 agendamentos e a leitura parece completa.
-  const ag = await f.searchSchedules(unit, { initialDate: hoje, endDate: somarDias(hoje, DIAS_A_FRENTE), rowsPerPage: 100 });
+  const agendamentos: Array<Pick<SpineSchedule, 'clientName' | 'dateAttendanceUtc' | 'idStatus'>> = [];
+  for (const [inicio, fim] of janelasDaAgenda(hoje)) {
+    const ag = await f.searchSchedules(unit, { initialDate: inicio, endDate: fim, rowsPerPage: 100 });
+    if (!ag.ok || !ag.data) {
+      logger.warn({ unit: unit.slug, janela: `${inicio}..${fim}`, agenda: ag.error }, 'disparo: não consegui ler a agenda da franquia');
+      return null;
+    }
+    // Leitura cortada no teto de páginas = lista incompleta: quem estaria depois do corte passaria como "livre" (foi assim
+    // que o Outubro Rosa mandou resgate a quem já tinha consulta). Incompleta é INDISPONÍVEL, e indisponível não manda.
+    if (ag.data.truncada) {
+      logger.warn({ unit: unit.slug, janela: `${inicio}..${fim}` }, 'disparo: a leitura da agenda da franquia foi cortada no teto de páginas — tratada como indisponível');
+      return null;
+    }
+    // Sem repetição na junção: as janelas não se sobrepõem e `searchSchedules` já filtra pelo DIA LOCAL dentro de cada uma,
+    // então a consulta da beira cai numa só; e o que se guarda são nomes num Set, onde repetir seria inofensivo de qualquer jeito.
+    agendamentos.push(...ag.data.schedules);
+  }
   const tr = await f.searchTreatments(unit, {});
-  if (!ag.ok || !ag.data || !tr.ok || !tr.data) {
-    logger.warn({ unit: unit.slug, agenda: ag.error, tratamentos: tr.error }, 'disparo: não consegui ler a agenda da franquia');
+  if (!tr.ok || !tr.data) {
+    logger.warn({ unit: unit.slug, tratamentos: tr.error }, 'disparo: não consegui ler os tratamentos da franquia');
     return null;
   }
-  // Leitura cortada no teto de páginas = lista incompleta: quem estaria depois do corte passaria como "livre" (foi assim
-  // que o Outubro Rosa mandou resgate a quem já tinha consulta). Incompleta é INDISPONÍVEL, e indisponível não manda.
-  if (ag.data.truncada || tr.data.truncada) {
-    logger.warn({ unit: unit.slug, agenda: !!ag.data.truncada, tratamentos: !!tr.data.truncada }, 'disparo: a leitura da franquia foi cortada no teto de páginas — tratada como indisponível');
+  if (tr.data.truncada) {
+    logger.warn({ unit: unit.slug }, 'disparo: a leitura dos tratamentos da franquia foi cortada no teto de páginas — tratada como indisponível');
     return null;
   }
   const epoch = Math.floor(agora.getTime() / 1000);
   const comConsulta = new Set<string>();
-  for (const s of ag.data.schedules) if (s.clientName && temAgendamentoFuturo([s], epoch)) comConsulta.add(normalizar(s.clientName));
+  for (const s of agendamentos) if (s.clientName && temAgendamentoFuturo([s], epoch)) comConsulta.add(normalizar(s.clientName));
   const comTratamento = new Set<string>();
   for (const t of tr.data.treatments) if (t.clientName && tratamentoAberto({ idStatus: null, statusName: t.statusName })) comTratamento.add(normalizar(t.clientName));
   return { comConsulta, comTratamento };

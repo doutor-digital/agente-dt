@@ -123,6 +123,25 @@ export function origemJaConhecida(a: AnuncioDeOrigem | null | undefined): boolea
   return Boolean(a.titulo || a.anuncio || a.campanha || a.origem || a.noStatus);
 }
 
+/**
+ * O lead veio de ANÚNCIO PAGO (Click-to-WhatsApp), com prova — a regra do `cadastro-todo-lead`: quem veio de
+ * anúncio é lead, sempre; o resto (orgânico, indicação, "oi" solto) a IA lê e decide.
+ *
+ * Mais estreito de propósito que `origemJaConhecida` (que também conta Reel orgânico, título e nome do anúncio):
+ *  - `⚑ Origem` na família `Meta-*` = o rastreio viu `source_type='ad'` (prova dura, README do rastreio §10.6);
+ *  - `Org-*` = post/Reel orgânico: NÃO é anúncio, nem que o resto do cartão tenha campos de rastreio;
+ *  - sem origem na família, `⌂ Campanha` preenchida só nasce de anúncio (post não tem campanha na Graph).
+ * Título, nome do anúncio, plataforma e "veio do Status" sozinhos NÃO bastam: o post orgânico também grava o `source_id`.
+ * Na dúvida (cartão sem rastreio, ainda vazio no 1º turno, leitura que falhou) é orgânico — e orgânico passa pela IA.
+ */
+export function veioDeAnuncio(a: AnuncioDeOrigem | null | undefined): boolean {
+  if (!a) return false;
+  const origem = (a.origem ?? '').trim().toLowerCase();
+  if (origem.startsWith('meta-')) return true;
+  if (origem.startsWith('org-')) return false;
+  return Boolean(a.campanha?.trim());
+}
+
 /** Texto curto de onde veio, para o bloco e para o log. */
 export function resumoDaOrigem(a: AnuncioDeOrigem): string {
   const partes = [a.plataforma, a.campanha, a.anuncio].filter(Boolean);

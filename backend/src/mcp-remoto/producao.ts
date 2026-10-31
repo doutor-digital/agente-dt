@@ -32,11 +32,20 @@ import type { KommoClient } from '../services/kommo.service.js';
 import { PrismaClient } from '@prisma/client';
 import { criarContextoAsaas, registrarFerramentasAsaas, type ContaAsaas } from './asaas.js';
 import { asaasGet } from '../lib/integracoes/asaas.js';
+import { asaasPost } from '../lib/integracoes/asaas-escrita.js';
+import { finalDaChave, impressaoDaChave } from '../lib/integracoes/cofre.js';
+import { criarEscritaAsaas, registrarEscritaAsaasSePermitido } from './asaas-escrita.js';
+import { cobrancasRecentesDe } from './auditoria.js';
 import { criarContextoConvenia, registrarFerramentasConvenia, type ContaConvenia } from './convenia.js';
 import { conveniaGet } from '../lib/integracoes/convenia.js';
 import { criarContextoTiquetaque, registrarFerramentasTiquetaque, type ContaTiquetaque } from './tiquetaque.js';
 import { tiquetaqueGet } from '../lib/integracoes/tiquetaque.js';
+import { contaTramitacaoDaChave, criarContextoTramitacao, registrarFerramentasTramitacao, type ContaTramitacao } from './tramitacao.js';
 import { contasComChave } from '../lib/integracoes/chaves.js';
+import { lerConfigSistemas, sistemasChamar } from '../lib/integracoes/sistemas.js';
+import { registrarAdminSistemas } from './sistemas-admin.js';
+import { registrarEstruturaSistemas } from './sistemas-estrutura.js';
+import { criarContextoSistemas, PendentesSistemas, registrarEscritaSistemas, registrarLeituraSistemas, type ContaSistemas } from './sistemas.js';
 import { contaEvolutionDoAmbiente, criarContextoEvolution, EVENTO_DE_ENVIO, registrarFerramentasEvolution } from './evolution.js';
 import { blingGet } from '../lib/bling/cliente.js';
 import type { Usuario } from './provedor.js';
@@ -176,7 +185,13 @@ async function contasBlingDoBanco(): Promise<Map<string, ContaBling>> {
 async function contasAsaasDoBanco(): Promise<Map<string, ContaAsaas>> {
   const contas = new Map<string, ContaAsaas>();
   for (const c of await contasComChave('asaas')) {
-    contas.set(c.slug, { slug: c.slug, nome: c.nome, fonte: { get: (caminho, query) => asaasGet(c.unitId, c.chave, caminho, query ?? {}) } });
+    contas.set(c.slug, {
+      slug: c.slug,
+      nome: c.nome,
+      fonte: { get: (caminho, query) => asaasGet(c.unitId, c.chave, caminho, query ?? {}) },
+      // a porta de escrita (cadastrar cliente e gerar boleto) só é usada por quem está em MCP_ESCRITA_EMAILS
+      escrita: { post: (caminho, corpo) => asaasPost(c.unitId, c.chave, caminho, corpo), chaveFinal: finalDaChave(c.chave), chaveImpressao: impressaoDaChave(c.chave), contaSalva: c.conta },
+    });
   }
   logger.info({ contas: contas.size }, 'mcp-remoto: contas do Asaas carregadas');
   return contas;
@@ -199,6 +214,32 @@ async function contasTiquetaqueDoBanco(): Promise<Map<string, ContaTiquetaque>> 
     contas.set(c.slug, { slug: c.slug, nome: c.nome, fonte: { get: (caminho, query) => tiquetaqueGet(c.unitId, c.chave, caminho, query ?? {}) } });
   }
   logger.info({ contas: contas.size }, 'mcp-remoto: contas do Tiquetaque carregadas');
+  return contas;
+}
+
+/** Contas com a chave da Tramitação Inteligente (advocacia) no painel de integrações. A chave fica só em memória. */
+async function contasTramitacaoDoBanco(): Promise<Map<string, ContaTramitacao>> {
+  const contas = new Map<string, ContaTramitacao>();
+  for (const c of await contasComChave('tramitacao')) contas.set(c.slug, contaTramitacaoDaChave(c));
+  logger.info({ contas: contas.size }, 'mcp-remoto: contas da Tramitação carregadas');
+  return contas;
+}
+
+/**
+ * Sistema novo de RH/Caixa/Financeiro (servidor próprio) com a URL e a chave de administração no painel de integrações. A chave
+ * fica só em memória, decifrada aqui; configuração ilegível vira aviso no log (sem o conteúdo) e a conta fica de fora.
+ */
+async function contasSistemasDoBanco(): Promise<Map<string, ContaSistemas>> {
+  const contas = new Map<string, ContaSistemas>();
+  for (const c of await contasComChave('sistemas')) {
+    try {
+      const cfg = lerConfigSistemas(c.chave);
+      contas.set(c.slug, { slug: c.slug, nome: c.nome, tela: cfg.tela, fonte: { chamar: (metodo, caminho, o) => sistemasChamar(cfg, metodo, caminho, o) } });
+    } catch (err) {
+      logger.warn({ slug: c.slug, motivo: err instanceof Error ? err.message : 'inválida' }, 'mcp-remoto: configuração do sistema novo ilegível; cadastre de novo no painel');
+    }
+  }
+  logger.info({ contas: contas.size }, 'mcp-remoto: contas do sistema novo (RH/Caixa) carregadas');
   return contas;
 }
 
@@ -400,11 +441,14 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   let escritores = new Set<string>();
   manterAtualizado(escritoresDoBanco, (s) => (escritores = s), 'quem pode alterar cartões');
   const pendentes = new Pendentes();
+  const escritaAsaas = criarEscritaAsaas({ historico: (conta) => cobrancasRecentesDe(prisma, conta) });
   manterAtualizado(contasAsaasDoBanco, (contas) => (asaas.contas = contas), 'as contas do Asaas');
   const convenia = criarContextoConvenia(new Map());
   manterAtualizado(contasConveniaDoBanco, (contas) => (convenia.contas = contas), 'as contas do Convênia');
   const tiquetaque = criarContextoTiquetaque(new Map());
   manterAtualizado(contasTiquetaqueDoBanco, (contas) => (tiquetaque.contas = contas), 'as contas do Tiquetaque');
+  const tramitacao = criarContextoTramitacao(new Map());
+  manterAtualizado(contasTramitacaoDoBanco, (contas) => (tramitacao.contas = contas), 'as contas da Tramitação');
   // o teto anti-ban conta o que saiu nas últimas 24 h, inclusive antes desta subida do servidor (lido no 1º envio)
   const whatsapp = criarContextoEvolution(contaEvolutionDoAmbiente(), {
     historico: () =>
@@ -414,6 +458,9 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   });
   let leitoresWhatsapp = new Set<string>();
   if (whatsapp.conta) manterAtualizado(leitoresDoWhatsapp, (s) => (leitoresWhatsapp = s), 'quem vê o WhatsApp');
+  const sistemas = criarContextoSistemas();
+  manterAtualizado(contasSistemasDoBanco, (contas) => (sistemas.contas = contas), 'as contas do sistema novo');
+  const pendentesSistemas = new PendentesSistemas();
   const cacheCerebro = new Cache();
   // o contexto da franquia nasce dentro de montarConectorRemoto; as ferramentas extras só rodam depois
   let franquia: Contexto | undefined;
@@ -440,14 +487,26 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
       registrarFerramentasAsaas(server, asaas, auditar);
       registrarFerramentasConvenia(server, convenia, auditar);
       registrarFerramentasTiquetaque(server, tiquetaque, auditar);
+      registrarFerramentasTramitacao(server, tramitacao, auditar);
       registrarMetaEventos(server, () => rastreio, auditar);
+      // Asaas: cadastrar cliente e gerar boleto, em dois passos (cancelar, estornar, editar e transferir NÃO existem), só para quem está
+      // na lista de escrita E só nas unidades de ASAAS_ESCRITA_UNIDADES. O portão fica numa função testada.
+      registrarEscritaAsaasSePermitido(server, asaas, escritaAsaas, quem.userId, escritores, auditar);
+      const quemSistemas = { usuario: quem.userId, nome: quem.email || `usuario:${quem.userId}` };
+      registrarLeituraSistemas(server, sistemas, quemSistemas, auditar);
       if (escritores.has(quem.userId)) {
         registrarEscritaKommo(server, kommo, fonteDeEscrita, pendentes, quem.userId, auditar);
         // Disparo de campanha: preparar e mostrar. Aprovar e retomar NÃO existem aqui (são do João, no painel do console).
         registrarDisparo(server, fonteDeDisparo, `conector:${quem.userId}`, auditar);
+        // Sistema novo (RH/Caixa): alterar dados em dois passos, mudar usuário, criar convite — a mesma lista de quem altera cartões.
+        registrarEscritaSistemas(server, sistemas, pendentesSistemas, quemSistemas, auditar);
+        // ... e criar/alterar ESTRUTURA do banco (tabela, coluna, índice, view, política), também em dois passos. DROP não existe.
+        registrarEstruturaSistemas(server, sistemas, pendentesSistemas, quemSistemas, auditar);
+        // ... e conceder ADMIN (promover usuário ou convite de admin), também em dois passos; sistemas_usuario/convite recusam admin.
+        registrarAdminSistemas(server, sistemas, pendentesSistemas, quemSistemas, auditar);
       }
       if (leitoresWhatsapp.has(quem.userId)) registrarFerramentasEvolution(server, whatsapp, quem.userId, auditar);
-      registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas, convenia: convenia.contas, tiquetaque: tiquetaque.contas }), auditar);
+      registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas, convenia: convenia.contas, tiquetaque: tiquetaque.contas, tramitacao: tramitacao.contas, sistemas: sistemas.contas }), auditar);
       registrarCerebro(server, slugs, cacheCerebro, auditar);
       if (franquia) {
         const deps: DepsRelatorio = { franquia, kommo, telefonesDosLeads, vinculosDosLeads };

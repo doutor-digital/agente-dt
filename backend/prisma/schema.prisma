@@ -299,6 +299,12 @@ model Unit {
   /// garante o horário. Em 05/09/2026 a IA confirmou consulta sem a taxa — o manual da
   /// unidade já proibia; só regra em código segura o modelo.
   spineBookingRequiresPayment Boolean   @default(false) @map("spine_booking_requires_payment")
+  /// A unidade oferece pagamento ANTECIPADO (Pix antes da consulta)? Padrão true: todas as unidades antigas continuam
+  /// perguntando "Pix antecipado ou na clínica". false = só paga no dia, na clínica (Timbó): a IA não pergunta forma de
+  /// pagamento, não fala de antecipado, de chave Pix para reservar nem de desconto. Incompatível com
+  /// spineBookingRequiresPayment (taxa obrigatória é pagamento antecipado): se as duas estiverem ligadas, a taxa vence e
+  /// esta flag é ignorada (ver agent/pagamento-da-unidade.ts).
+  acceptsAdvancePayment       Boolean   @default(true) @map("accepts_advance_payment")
   /// Origem que a Sofia grava na franquia ao cadastrar/converter o paciente para agendar
   /// ("IA SOFIA" = 10002 nas 10 unidades, criada pela franquia em 05/09/2026). Nulo = usa a
   /// origem do lead. A API não tem rota de atualização, então só vale na criação.
@@ -343,6 +349,7 @@ model Unit {
   agendaBlocks      AgendaBlock[]
   agendaCache       AgendaCacheDia[]
   leadPausas        LeadPausa[]
+  pausasDaEquipe    PausaDaEquipe[]
   simulacoes        AutomacaoSimulacao[]
   spineLeadLinks    SpineLeadLink[]
   changeLog         UnitChangeLog[]
@@ -1567,6 +1574,31 @@ model LeadPausa {
   @@unique([unitId, kommoLeadId])
   @@index([ate])
   @@map("lead_pausas")
+}
+
+/// Pausa que a PRÓPRIA Sofia fez porque a equipe falou com o paciente (automação `pausa-equipe`).
+/// É o único jeito de distinguir essa pausa da caixinha "Pausar IA" marcada por gente (SDR), da pausa com data
+/// e da pausa da unidade: só desta a Sofia volta sozinha, depois de 1 h sem fala da equipe (PAUSA_EQUIPE_VOLTA_MIN).
+/// Uma linha por cartão; pausar de novo reabre a mesma linha. `encerradaEm` nulo = pausa aberta.
+model PausaDaEquipe {
+  id          String    @id @default(cuid())
+  unitId      String    @map("unit_id")
+  kommoLeadId Int       @map("kommo_lead_id")
+  /// Quando a Sofia marcou "Pausar IA" (depois de o Kommo confirmar a escrita).
+  pausadoEm   DateTime  @map("pausado_em")
+  /// A fala da equipe que provocou a pausa.
+  falaEm      DateTime  @map("fala_em")
+  falaAutor   String?   @map("fala_autor")
+  encerradaEm DateTime? @map("encerrada_em")
+  /// voltou | devolvida_por_gente | mexida_por_gente | vencida
+  desfecho    String?
+  criadoEm    DateTime  @default(now()) @map("criado_em")
+
+  unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@unique([unitId, kommoLeadId])
+  @@index([encerradaEm])
+  @@map("pausas_da_equipe")
 }
 
 model AgendaBlock {

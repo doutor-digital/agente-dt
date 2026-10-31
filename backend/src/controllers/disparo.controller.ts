@@ -13,8 +13,9 @@ import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { abrirOnda, aprovarOnda, cancelarOnda, concluirMontagem, retomarOnda } from '../lib/disparo/onda.js';
-import { montarPainelDaOnda, semTextoDeSair, telefoneMascarado } from '../lib/disparo/painel.js';
+import { montarPainelDaOnda, motivoSemNumero, semTextoDeSair, telefoneMascarado } from '../lib/disparo/painel.js';
 import { dadosDaTela } from '../lib/disparo/tela.js';
+import { lerResultado } from '../lib/disparo/resultado-dados.js';
 import { campanhaSchema, salvarCampanha, slugDaCampanha } from '../lib/disparo/campanha.js';
 
 export async function disparoCampanhaPutHandler(req: Request, res: Response): Promise<void> {
@@ -65,7 +66,25 @@ export async function disparoOndaJsonHandler(req: Request, res: Response): Promi
   }
   // Sem sessão (chave de serviço) o texto do SAIR não sai: só o João, logado, lê o que o paciente escreveu.
   const dados = req.user ? lida : semTextoDeSair(lida);
-  res.json({ ok: true, ...dados, amostra: dados.amostra.map((a) => ({ nome: a.nome, telefone: telefoneMascarado(a.telefone) })), listaDeTeste: dados.listaDeTeste?.map(telefoneMascarado) ?? null });
+  res.json({ ok: true, ...dados, amostra: dados.amostra.map((a) => ({ nome: a.nome, telefone: telefoneMascarado(a.telefone) })), destinatarios: dados.destinatarios?.map((p) => ({ ...p, telefone: telefoneMascarado(p.telefone), motivo: p.motivo ? motivoSemNumero(p.motivo) : null })), listaDeTeste: dados.listaDeTeste?.map(telefoneMascarado) ?? null });
+}
+
+/**
+ * Os números do resultado de uma onda, para a tela do gestor. Mesma proteção do JSON da onda (chave de serviço ou super-admin).
+ * Não devolve telefone nem texto de SAIR: só contagens, horas e dinheiro. O que não dá para medir vem `null` (ver `fontes.notas`).
+ */
+export async function disparoOndaResultadoHandler(req: Request, res: Response): Promise<void> {
+  try {
+    const r = await lerResultado(String(req.params.id));
+    if (!r) {
+      res.status(404).json({ ok: false, erro: 'onda não encontrada' });
+      return;
+    }
+    res.set('Cache-Control', 'no-store').json({ ok: true, ...r });
+  } catch (err) {
+    logger.error({ err: String(err), onda: req.params.id }, 'disparo: não consegui montar o resultado da onda');
+    res.status(500).json({ ok: false, erro: 'não consegui montar o resultado desta onda' });
+  }
 }
 
 export async function disparoOndaPainelHandler(req: Request, res: Response): Promise<void> {

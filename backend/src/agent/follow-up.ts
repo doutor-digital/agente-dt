@@ -18,6 +18,7 @@ import { agendamentoDoVinculo, reservaAfirmada } from './reserva-sem-marcar.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
 import { horariosOferecidos } from './horario-oferecido.js';
 import { agoraLocalISO } from './consulta-que-passou.js';
+import { REGRA_SEM_ANTECIPADO, intencaoDoDegrauParaAUnidade, unidadeSemAntecipado } from './pagamento-da-unidade.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { nomeApresentavel, semNomeDoPerfil } from '../lib/nome-apresentavel.js';
 
@@ -116,6 +117,16 @@ export function guardrailDaRegua(tratado: string, unit: Unit, ofertaDaCampanha: 
   return { guard, recusou: guard.triggered.some((t) => /^(lacuna|preco|clinico):/.test(t)) };
 }
 
+/**
+ * Unidade sem pagamento antecipado (Timbó): os degraus da régua são genéricos e alguns falam de Pix, de pagar antes e
+ * de desconto ("oferecendo o antecipado de R$ 150"). Aqui a regra da unidade vence o degrau. Vazio nas demais.
+ */
+export function regraDePagamento(unit: Pick<Unit, 'acceptsAdvancePayment' | 'spineBookingRequiresPayment'>): string {
+  return unidadeSemAntecipado(unit)
+    ? `\n- ${REGRA_SEM_ANTECIPADO} Se o objetivo acima falar de Pix, de pagar antes ou de desconto, ignore essa parte.`
+    : '';
+}
+
 export async function runAgentFollowUp(args: FollowUpArgs): Promise<string | null> {
   const unit = await prisma.unit.findUnique({ where: { id: args.unitId } });
   if (!unit) return null;
@@ -158,7 +169,7 @@ VOCÊ ESTÁ RETOMANDO UMA CONVERSA QUE PAROU. O paciente não respondeu sua últ
 mensagem. Escreva UMA mensagem curta de reengajamento.
 
 O QUE ESTA MENSAGEM PRECISA FAZER:
-${args.intencao}
+${intencaoDoDegrauParaAUnidade(args.intencao, unit)}
 
 REGRAS:
 - UMA mensagem só, curta. Duas ou três linhas no máximo.
@@ -172,7 +183,7 @@ REGRAS:
 - PROIBIDO deixar lacuna: nada de "[chave]", "R$ [valor]", "{endereço}", "XXX".
   Ou você escreve o dado exato que está nas Fontes Oficiais, ou não fala dele.
 - Retome pelo que ELE contou: a queixa, a preferência, o que ficou pendente.
-${regraDoNome(nome)}
+${regraDoNome(nome)}${regraDePagamento(unit)}
 ${pedidosDeNome >= LIMITE_TENTATIVAS ? `- NÃO peça o nome: você já pediu ${pedidosDeNome} vezes e ele não deu. Siga sem.\n` : ''}${args.ultimoDegrau ? '- ESTA É A ÚLTIMA. Despeça-se com a porta aberta e NÃO faça pergunta.' : ''}
 
 Responda APENAS com o texto da mensagem, sem aspas e sem explicação.

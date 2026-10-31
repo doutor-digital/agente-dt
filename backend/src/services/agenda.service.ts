@@ -51,7 +51,7 @@ export interface AgendaSlot {
 
 const MEIO_DIA = 12 * 60;
 
-function toMinutes(hhmm: string): number {
+export function toMinutes(hhmm: string): number {
   const [h, m] = hhmm.split(':').map((n) => Number(n));
   if (!Number.isFinite(h) || !Number.isFinite(m)) return NaN;
   return h * 60 + m;

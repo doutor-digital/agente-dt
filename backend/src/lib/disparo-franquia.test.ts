@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Unit } from '@prisma/client';
-import { conferenciaDaFranquia, type FranquiaPorta } from './disparo/franquia.js';
+import { conferenciaDaFranquia, janelasDaAgenda, type FranquiaPorta } from './disparo/franquia.js';
 import { SPINE_STATUS } from '../services/spine.service.js';
 
 const AGORA = new Date(Date.UTC(2026, 9, 26, 15));
@@ -16,14 +16,27 @@ function franquia(o: {
   agenda?: Sch[] | 'falha' | 'lanca';
   tratamentos?: Tr[] | 'falha';
   agendaTruncada?: boolean;
+  /** a agenda por janela (na ordem das chamadas): sobrepõe `agenda`, para provar a junção e a janela que falha */
+  agendaPorJanela?: Array<Sch[] | 'falha' | 'truncada'>;
   tratamentosTruncada?: boolean;
   idClient?: number | null;
   ficha?: { schedules: Sch[]; treatments: Array<{ idStatus: number | null; statusName: string | null }> } | 'falha' | 'lanca';
 } = {}) {
   const chamadas = { agenda: 0, tratamentos: 0, ficha: 0, idClient: 0 };
+  const janelas: Array<[string, string]> = [];
   const porta: FranquiaPorta = {
-    searchSchedules: (async () => {
+    searchSchedules: (async (_u: unknown, p: { initialDate: string; endDate: string }) => {
       chamadas.agenda++;
+      janelas.push([p.initialDate, p.endDate]);
+      // A franquia de verdade: intervalo maior que 100 dias (com o fim EXCLUSIVO que `searchSchedules` manda) é HTTP 400.
+      const dias = (Date.parse(`${p.endDate}T00:00:00Z`) - Date.parse(`${p.initialDate}T00:00:00Z`)) / 86_400_000 + 1;
+      if (dias > 100) return { ok: false, error: '400: Intervalo de datas não pode ser maior que 100 dias.' };
+      if (o.agendaPorJanela) {
+        const daJanela = o.agendaPorJanela[chamadas.agenda - 1];
+        if (daJanela === 'falha' || daJanela === undefined) return { ok: false, error: 'fora do ar' };
+        if (daJanela === 'truncada') return { ok: true, data: { schedules: [], pages: 40, total: 0, truncada: true } };
+        return { ok: true, data: { schedules: daJanela, pages: 1, total: 0 } };
+      }
       if (o.agenda === 'lanca') throw new Error('boom');
       if (o.agenda === 'falha') return { ok: false, error: 'fora do ar' };
       return { ok: true, data: { schedules: o.agenda ?? [], pages: 1, total: 0, truncada: o.agendaTruncada } };
@@ -44,7 +57,7 @@ function franquia(o: {
       return { ok: true, data: { client: o.ficha ?? { schedules: [], treatments: [] } } };
     }) as unknown as FranquiaPorta['getClient'],
   };
-  return { porta, chamadas };
+  return { porta, chamadas, janelas };
 }
 const confere = (unit: Unit, f: ReturnType<typeof franquia>, p: { leadId: number | null; nomeCompleto: string; telefone: string } = PESSOA) => conferenciaDaFranquia(unit, () => AGORA, f.porta)(p);
 const amanha = '2026-10-27T15:00:00Z';
@@ -119,7 +132,7 @@ test('a leitura em bloco acontece UMA vez por conferência (cada pessoa custa s�
   const c = conferenciaDaFranquia(UNIT, () => AGORA, f.porta);
   await c(PESSOA);
   await c({ ...PESSOA, nomeCompleto: 'Joana Souza', leadId: 11 });
-  assert.equal(f.chamadas.agenda, 1);
+  assert.equal(f.chamadas.agenda, janelasDaAgenda('2026-10-26').length, 'uma leitura = uma chamada por janela, e só uma leitura');
   assert.equal(f.chamadas.tratamentos, 1);
   const quebrada = franquia({ agenda: 'falha' });
   const c2 = conferenciaDaFranquia(UNIT, () => AGORA, quebrada.porta);
@@ -132,4 +145,54 @@ test('sem leadId não procura cadastro: só a agenda por nome decide', async () 
   const f = franquia({ idClient: 7 });
   assert.equal(await confere(UNIT, f, { ...PESSOA, leadId: null }), 'livre');
   assert.equal(f.chamadas.idClient, 0);
+});
+
+// ── a janela de 100 dias da franquia (27/10: 45 de 50 pessoas barradas por "a franquia não respondeu") ───────────
+
+test('as janelas da agenda cobrem hoje..+180 sem buraco nem sobreposição, e nenhuma passa de 100 dias', () => {
+  const j = janelasDaAgenda('2026-10-26');
+  assert.deepEqual(j, [['2026-10-26', '2027-01-24'], ['2027-01-25', '2027-04-24']]);
+  const dia = (d: string) => Date.parse(`${d}T00:00:00Z`) / 86_400_000;
+  for (const [a, b] of j) assert.ok(dia(b) - dia(a) + 2 <= 100, `${a}..${b} com o fim exclusivo cabe em 100 dias`);
+  assert.equal(dia(j[1]![0]) - dia(j[0]![1]), 1, 'a segunda começa no dia seguinte ao fim da primeira');
+  assert.equal(dia(j.at(-1)![1]) - dia('2026-10-26'), 180, 'termina em hoje + 180');
+});
+
+test('a leitura NÃO pede a agenda num intervalo só de 180 dias: a franquia de verdade responde 400 (o bug do #126)', async () => {
+  const f = franquia();
+  assert.equal(await confere(UNIT, f), 'livre', 'com janelas, a franquia responde e a pessoa sem nada é livre');
+  assert.equal(f.janelas.length, 2);
+  // o mesmo mock, chamado como o código antigo chamava, recusa — se o mock não recusasse, este teste não pegaria o bug
+  const antigo = await f.porta.searchSchedules({} as never, { initialDate: '2026-10-26', endDate: '2027-04-24' });
+  assert.equal(antigo.ok, false);
+  assert.match(String((antigo as { error?: string }).error), /100 dias/);
+});
+
+test('as duas janelas somam: consulta marcada em QUALQUER uma delas barra', async () => {
+  const daPrimeira: Sch[] = [{ clientName: 'Maria da Silva', dateAttendanceUtc: '2026-11-20T15:00:00Z', idStatus: SPINE_STATUS.AGENDADO }];
+  const daSegunda: Sch[] = [{ clientName: 'Maria da Silva', dateAttendanceUtc: '2027-03-10T15:00:00Z', idStatus: SPINE_STATUS.AGENDADO }];
+  assert.equal(await confere(UNIT, franquia({ agendaPorJanela: [daPrimeira, []] })), 'consulta-futura');
+  assert.equal(await confere(UNIT, franquia({ agendaPorJanela: [[], daSegunda] })), 'consulta-futura', 'a consulta da 2ª janela é a que o intervalo único perdia');
+  assert.equal(await confere(UNIT, franquia({ agendaPorJanela: [[], []] })), 'livre');
+});
+
+test('a mesma consulta devolvida nas duas janelas (a franquia repetiu na beira) continua barrando uma pessoa só', async () => {
+  const mesma = { clientName: 'Joana Souza', dateAttendanceUtc: '2027-01-24T22:00:00Z', idStatus: SPINE_STATUS.AGENDADO, idSchedule: 5 } as Sch;
+  assert.equal(await confere(UNIT, franquia({ agendaPorJanela: [[mesma], [mesma]] }), { ...PESSOA, nomeCompleto: 'Joana Souza' }), 'consulta-futura');
+});
+
+test('uma janela que falha ou vem cortada no teto de páginas torna a leitura INDISPONÍVEL, mesmo que a outra venha vazia', async () => {
+  assert.equal(await confere(UNIT, franquia({ agendaPorJanela: [[], 'falha'] })), 'indisponivel', '2ª janela falhou');
+  assert.equal(await confere(UNIT, franquia({ agendaPorJanela: ['falha', []] })), 'indisponivel', '1ª janela falhou');
+  assert.equal(await confere(UNIT, franquia({ agendaPorJanela: [[], 'truncada'] })), 'indisponivel', '2ª janela truncada');
+  assert.equal(await confere(UNIT, franquia({ agendaPorJanela: ['truncada', []] })), 'indisponivel', '1ª janela truncada');
+});
+
+test('janela que falha: a leitura para ali (não martela a franquia) e a falha vale 1 minuto como antes', async () => {
+  const f = franquia({ agendaPorJanela: ['falha'] });
+  const c = conferenciaDaFranquia(UNIT, () => AGORA, f.porta);
+  await c(PESSOA);
+  await c(PESSOA);
+  assert.equal(f.chamadas.agenda, 1);
+  assert.equal(f.chamadas.tratamentos, 0, 'nem chegou aos tratamentos');
 });

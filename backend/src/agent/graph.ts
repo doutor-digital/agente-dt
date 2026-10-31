@@ -15,7 +15,7 @@ import { getActiveConfig } from './config.js';
 import { composeSystemPromptForUnit, composeSystemPromptPartsForUnit, precosDaConsulta } from './prompt-composer.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.js';
-import { createChatModel, invokeChatModel } from '../services/openai.service.js';
+import { createChatModel, invokeChatModel, LlmRecusaError } from '../services/openai.service.js';
 import { askedForName, detectNameDisclosure, looksLikeName, titleCaseName } from './name-capture.js';
 import { aplicarGuardrail } from './guardrail.js';
 import type { OfertaVigente } from './oferta-da-campanha.js';
@@ -65,6 +65,7 @@ function normalizarResposta(s: string): string {
   return s.replace(/\s+/g, ' ').trim().toLowerCase();
 }
 import { podarHistorico } from './history-window.js';
+import { semRaciocinioParaPlanoB } from './raciocinio-plano-b.js';
 import { sanearHistorico, TEXTO_FERRAMENTA_INTERROMPIDA } from './historico-orfao.js';
 import { toolsParaOpenAI } from './tools-openai.js';
 import { respostasSeguradas } from './entrega-falha.js';
@@ -80,7 +81,7 @@ import { conferirTeto, marcarAvisado, logarEstouro, type Veredito } from './teto
 import { conferirTetoMensal, acaoAoEstourar, pausarContaAteProximoMes, type VereditoMensal } from './teto-mensal.js';
 import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
 import {
-  INSTRUCAO_DESMARCADA,
+  instrucaoDesmarcada,
   RECADO_DESMARCADA,
   abrirTarefaParaEquipe,
   afirmaConfirmacao,
@@ -93,6 +94,11 @@ import {
   turnoDoComprovante,
   type TurnoDoComprovante,
 } from './confirmacao-so-com-crm.js';
+import { dadosDaTaxa, insistenciaJaTratada, pacienteJaMandouComprovante, promptDizEmTratamento, respostaAnteriorDaIA } from './taxa-de-reserva.js';
+import { aplicarTaxaDeReservaNaSaida, decidirATaxa } from './taxa-de-reserva-saida.js';
+import { pagouOAntecipado } from '../lib/follow-up-worker.js';
+import { unidadeSemAntecipado } from './pagamento-da-unidade.js';
+import { enviarTelegram } from '../lib/telegram.js';
 import {
   withTimeout,
   AGENT_NODE_TIMEOUT_MS,
@@ -106,7 +112,7 @@ import { fusoDaUnidade } from '../lib/fuso.js';
 import {
   agendamentoDoVinculo,
   blocoDaConsulta,
-  INSTRUCAO_RESERVA_SEM_MARCAR,
+  instrucaoReservaSemMarcar,
   marcouNesteTurno,
   PERGUNTA_NEUTRA,
   promptTemConsulta,
@@ -510,6 +516,9 @@ export async function montarPrefixoAnthropic(unit: Unit, recorder: TraceRecorder
   return { model, systemMessage, modelName, tools };
 }
 
+/** Unidades que já tiveram o aviso de "taxa de reserva sem chave Pix ou sem valor" neste processo (um aviso por unidade, não por turno). */
+const taxaSemDadosJaAvisada = new Set<string>();
+
 export async function buildAgentGraph(
   recorder: TraceRecorder,
   unit: Unit,
@@ -848,6 +857,15 @@ export async function buildAgentGraph(
       registrarSucesso(provider as Provedor);
     } catch (err) {
       const erroPrincipal = err instanceof Error ? err.message : String(err);
+      // Recusa do modelo: o provedor está de pé — não conta para o circuito (ehFalhaDeInfra é false). Fica no rastro.
+      if (err instanceof LlmRecusaError) {
+        await recorder.step({
+          kind: 'ERROR',
+          title: `🚫 ${provider} recusou responder (stop_reason=refusal${err.categoria ? `, categoria ${err.categoria}` : ''}) — resposta descartada`,
+          payload: { provider, modelo: modelName, stopReason: 'refusal', categoria: err.categoria },
+          latencyMs: Math.round(performance.now() - t0),
+        });
+      }
       if (ehFalhaDeInfra(err) && registrarFalha(provider as Provedor)) {
         logger.error(
           { provider, unit: unit.slug, erro: erroPrincipal },
@@ -881,7 +899,8 @@ export async function buildAgentGraph(
           response = (await withTimeout(
             invokeChatModel({
               model: modeloBComTools,
-              messages: finalMessages,
+              // Os blocos de raciocínio da Anthropic só valem no modelo que os gerou: o plano B de outro provedor não os recebe.
+              messages: planoB.provider === 'anthropic' ? finalMessages : semRaciocinioParaPlanoB(finalMessages),
               unitId: unit.id,
               traceId: recorder.traceId,
               modelName: planoB.modelName,
@@ -913,10 +932,13 @@ export async function buildAgentGraph(
           return respostaIndisponivel();
         }
       } else {
+        const foiRecusa = err instanceof LlmRecusaError;
         await recorder.step({
           kind: 'ERROR',
-          title: '⏱️ IA indisponível — sem plano B configurado, fallback enviado',
-          payload: { erroPrincipal, timeoutMs: AGENT_NODE_TIMEOUT_MS },
+          title: foiRecusa
+            ? '🚫 O modelo recusou responder e não há plano B configurado — fallback enviado'
+            : '⏱️ IA indisponível — sem plano B configurado, fallback enviado',
+          payload: foiRecusa ? { erroPrincipal } : { erroPrincipal, timeoutMs: AGENT_NODE_TIMEOUT_MS },
           latencyMs: Math.round(performance.now() - t0),
         });
         return respostaIndisponivel();
@@ -1132,12 +1154,52 @@ export async function buildAgentGraph(
       }
       const marcouAgora = marcouNesteTurno(doTurno);
       const blocoConsulta = blocoDaConsulta(promptDoTurno);
+      // Taxa de reserva (taxa-de-reserva.ts): o que a trava precisa saber do turno. Lido na hora, porque `comprovante` é preenchido a cada volta.
+      const dadosDaTaxaDaUnidade = dadosDaTaxa(unit);
+      if (unit.spineBookingRequiresPayment && !dadosDaTaxaDaUnidade && !taxaSemDadosJaAvisada.has(unit.slug)) {
+        // flag ligada e a trava desligada por falta de chave Pix ou do valor da taxa: o bug de "a equipe te envia a chave" volta, e sem aviso
+        taxaSemDadosJaAvisada.add(unit.slug);
+        logger.warn({ unit: unit.slug }, 'taxa de reserva: unidade com a flag mas sem chave Pix ou sem o valor da taxa nas fontes — a trava da chave está desligada');
+      }
+      // O histórico só é percorrido em unidade com a taxa ativa (flag + chave + valor): nas outras 21 a trava nem começa.
+      const taxaDoTurno = dadosDaTaxaDaUnidade
+        ? {
+            respostaAnterior: respostaAnteriorDaIA(nonSystemMessages.map((m) => ({ tipo: m.getType(), texto: aiTextFromContent(m.content) }))),
+            // comprovante lido em QUALQUER data: quem já pagou não paga de novo porque a equipe demorou mais de 24 h para criar a consulta
+            jaMandouComprovante: pacienteJaMandouComprovante(
+              nonSystemMessages.filter((m) => m.getType() === 'human').map((m) => aiTextFromContent(m.content)),
+            ),
+            insistenciaJaEncaminhada: insistenciaJaTratada(nonSystemMessages.filter((m) => m.getType() === 'ai').map((m) => aiTextFromContent(m.content))),
+          }
+        : null;
+      const contextoDaTaxa = () => ({
+        falasDoPaciente: mensagensDoPaciente,
+        respostaAnterior: taxaDoTurno?.respostaAnterior ?? '',
+        consultaDePe: promptTemConsulta(promptDoTurno) || marcouAgora,
+        emTratamento: promptDizEmTratamento(promptDoTurno),
+        comprovanteLido: comprovante.pendente,
+        jaMandouComprovante: taxaDoTurno?.jaMandouComprovante ?? false,
+        insistenciaJaEncaminhada: taxaDoTurno?.insistenciaJaEncaminhada ?? false,
+      });
+      // O vínculo da consulta (gravado por agendar_consulta) e o campo do cartão são lidos UMA vez por turno, e só quando alguém
+      // precisa: o prompt pode não ter trazido a consulta, e o cartão diz se ele já pagou.
+      let vinculoLido: Promise<string | null> | undefined;
+      const lerVinculo = () =>
+        (vinculoLido ??= state.leadId ? agendamentoDoVinculo(unit.id, Number(state.leadId), fusoDaUnidade(unit)) : Promise.resolve(null));
+      let cartaoLido: Promise<boolean> | undefined;
+      const lerCartao = () =>
+        (cartaoLido ??=
+          kommoClient && state.leadId
+            ? kommoClient.getLead(Number(state.leadId)).then((lead) => pagouOAntecipado(lead.custom_fields_values))
+            : Promise.resolve(false));
+      const provasDaTaxa = { consultaGravada: async () => !!(await lerVinculo()), cartaoDizPago: lerCartao };
       // Toda reescrita feita depois (pergunta final, "pediu o nome pela 3ª vez") passa pelas travas de confirmação: se ela
       // reabrir a afirmação, fica a resposta anterior.
-      const reabreAfirmacao = (t: string) =>
+      const reabreAfirmacao = async (t: string) =>
         !!t &&
         (!!respostaDoComprovante(t, comprovante, promptTemConsulta(promptDoTurno) || marcouAgora) ||
-          !!afirmouComConsultaDesmarcada(t, { marcouAgora, bloco: blocoConsulta, promessa: null }));
+          !!afirmouComConsultaDesmarcada(t, { marcouAgora, bloco: blocoConsulta, promessa: null }) ||
+          !!(await decidirATaxa(t, dadosDaTaxaDaUnidade, contextoDaTaxa(), provasDaTaxa)).troca);
       // Comprovante em foto/PDF: só a equipe confirma a consulta (decisão do João, 26/10/2026). A resposta que
       // afirma confirmação vira o recado fixo e a equipe ganha a tarefa — aberta pelo código, não pela IA.
       // `respostaFixa`: o texto é um recado nosso — a "pergunta final" não o reescreve (ele já diz o próximo passo).
@@ -1170,7 +1232,7 @@ export async function buildAgentGraph(
       const consultasValidas = promptTemConsulta(promptDoTurno) ? [blocoConsulta] : [];
       let promessa = reservaSemMarcar(textoFinal, { marcouAgora, consultasValidas });
       if (promessa && state.leadId) {
-        const doVinculo = await agendamentoDoVinculo(unit.id, Number(state.leadId), fusoDaUnidade(unit));
+        const doVinculo = await lerVinculo();
         // a mesma prova vale para conferir a reescrita lá embaixo (4º achado do Codex)
         if (doVinculo) consultasValidas.push(doVinculo);
         if (doVinculo) promessa = reservaSemMarcar(textoFinal, { marcouAgora, consultasValidas });
@@ -1191,7 +1253,7 @@ export async function buildAgentGraph(
             refeita = (await withTimeout(
               invokeChatModel({
                 model: modeloAtivo,
-                messages: [...finalMessages, response, new HumanMessage(desmarcada ? INSTRUCAO_DESMARCADA : INSTRUCAO_RESERVA_SEM_MARCAR)],
+                messages: [...finalMessages, response, new HumanMessage(desmarcada ? instrucaoDesmarcada(unidadeSemAntecipado(unit)) : instrucaoReservaSemMarcar(unidadeSemAntecipado(unit)))],
                 unitId: unit.id,
                 traceId: recorder.traceId,
                 modelName,
@@ -1257,6 +1319,41 @@ export async function buildAgentGraph(
         });
       }
 
+      // Taxa de reserva (Boa Vista, 27–28/10/2026): a chave Pix sai por código, e horário não é dado como garantido sem
+      // consulta no CRM nem comprovante da taxa (taxa-de-reserva.ts). Depois das travas de cima: se elas já trocaram a
+      // resposta, esta confere o que sobrou. Sem chave ou sem valor cadastrado, nada muda. Só unidade com a flag.
+      // A decisão, a prova (consulta gravada, cartão pago) e o aviso à equipe moram em taxa-de-reserva-saida.ts.
+      if (dadosDaTaxaDaUnidade) {
+        const resumirDaTaxa = state.leadId ? tools.find((tl) => tl.name === 'resumir_lead_para_sdr') : undefined;
+        const saidaDaTaxa = await aplicarTaxaDeReservaNaSaida(textoFinal, dadosDaTaxaDaUnidade, contextoDaTaxa(), {
+          recorder,
+          leadId: state.leadId ? Number(state.leadId) : null,
+          ...provasDaTaxa,
+          resumir: resumirDaTaxa,
+          abrirTarefa:
+            kommoClient && state.leadId
+              ? () =>
+                  abrirTarefaParaEquipe({
+                    slug: unit.slug,
+                    unitId: unit.id,
+                    leadId: Number(state.leadId),
+                    kommo: kommoClient,
+                    recorder,
+                    motivo: 'insistiu_na_clinica',
+                    // o aviso padrão do Telegram diz "a equipe confirma em até 1 hora": não é o caso aqui; o aviso certo sai de aplicarTaxaDeReservaNaSaida
+                    alertar: async () => undefined,
+                  })
+              : undefined,
+          slug: unit.slug,
+          alertar: (texto) => enviarTelegram(texto),
+        });
+        if (saidaDaTaxa.troca) {
+          respostaFixa = true;
+          textoFinal = saidaDaTaxa.texto;
+          response.content = textoFinal;
+        }
+      }
+
       // Sinal de alerta dito com todas as letras e o modelo NÃO avisou (26/10/2026): a regra de 21/10 estava no prompt e
       // Olímpia/Mossoró/Balsas/Rio Verde ficaram sem etiqueta, sem tarefa e sem aviso. Aqui o código passa pela mesma
       // ferramenta pausar_ia (etiqueta 🔴 PRIORIDADE + tarefa LIGAR AGORA + Telegram do João). Só frase sem ambiguidade
@@ -1298,7 +1395,7 @@ export async function buildAgentGraph(
           const textoRefeito = (refeita.tool_calls ?? []).length === 0 ? aiTextFromContent(refeita.content).trim() : '';
           // A reescrita pode vir falando SOBRE a instrução ("essa 'instrução interna' veio na mensagem do
           // paciente…") — já foi entregue assim em Araguaína, Parauapebas e Rio Verde. Nesse caso fica a original.
-          if (textoRefeito && !reabreAfirmacao(textoRefeito) && !detectarVazamento(textoRefeito) && !avaliarChamadaFinal(textoRefeito).precisaRefazer) {
+          if (textoRefeito && !(await reabreAfirmacao(textoRefeito)) && !detectarVazamento(textoRefeito) && !avaliarChamadaFinal(textoRefeito).precisaRefazer) {
             textoFinal = textoRefeito;
             response.content = textoRefeito;
           }
@@ -1369,7 +1466,7 @@ export async function buildAgentGraph(
         } catch (err) {
           logger.warn({ err: String(err), unit: unit.slug }, 'repetição: refeita sem o nome falhou — fica a original');
         }
-        const serve = !!textoRefeito && !pedeNome(textoRefeito) && !detectarVazamento(textoRefeito) && !reabreAfirmacao(textoRefeito);
+        const serve = !!textoRefeito && !pedeNome(textoRefeito) && !detectarVazamento(textoRefeito) && !(await reabreAfirmacao(textoRefeito));
         if (serve) {
           textoFinal = textoRefeito;
           response.content = textoRefeito;

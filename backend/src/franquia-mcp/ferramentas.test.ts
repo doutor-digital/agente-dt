@@ -104,3 +104,34 @@ test('auditoria recebe cada chamada, com erro quando houve', async () => {
   );
   assert.match(registros[1]?.erro ?? '', /unidade desconhecida/);
 });
+
+test('erro que repete um id (pay_…, idClient de 10 dígitos) volta ao modelo e vai à auditoria INTACTO', async () => {
+  const registros: Array<{ ferramenta: string; ok: boolean; erro?: string }> = [];
+  const unidades = new Map<string, Unidade>([['serra', { slug: 'serra', nome: 'Serra', token: TOKEN, fuso: 'America/Sao_Paulo', baseUrl: falsa.url }]]);
+  const server = new McpServer({ name: 'spine-mcp', version: 'teste' });
+  registrarFerramentas(server, criarContexto(unidades, { intervaloMs: 0, cliente: { log: () => {} } }), { auditar: (r) => registros.push(r) });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  const outro = new Client({ name: 'auditoria', version: '0' });
+  await Promise.all([server.connect(a), outro.connect(b)]);
+  const r = await outro.callTool({ name: 'buscar_pacientes', arguments: { unidade: 'pay_12345678901 idClient 1234567890' } });
+  await outro.close();
+  assert.match(texto(r), /pay_12345678901 idclient 1234567890/i);
+  assert.match(registros[0]?.erro ?? '', /pay_12345678901 idclient 1234567890/i);
+});
+
+test('erro que repete o pedido (CPF, CNPJ, telefone no nome da unidade) volta ao modelo e vai à auditoria mascarado', async () => {
+  const registros: Array<{ ferramenta: string; ok: boolean; erro?: string }> = [];
+  const unidades = new Map<string, Unidade>([['serra', { slug: 'serra', nome: 'Serra', token: TOKEN, fuso: 'America/Sao_Paulo', baseUrl: falsa.url }]]);
+  const server = new McpServer({ name: 'spine-mcp', version: 'teste' });
+  registrarFerramentas(server, criarContexto(unidades, { intervaloMs: 0, cliente: { log: () => {} } }), { auditar: (r) => registros.push(r) });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  const outro = new Client({ name: 'auditoria', version: '0' });
+  await Promise.all([server.connect(a), outro.connect(b)]);
+  const r = await outro.callTool({ name: 'buscar_pacientes', arguments: { unidade: '123.456.789-09 12345678000195 (11) 98765-4321' } });
+  await outro.close();
+  const proibido = /123\.456\.789-09|12345678000195|98765-4321/;
+  assert.equal(proibido.test(texto(r)), false, texto(r));
+  assert.equal(proibido.test(registros[0]?.erro ?? ''), false, registros[0]?.erro);
+  assert.match(registros[0]?.erro ?? '', /unidade desconhecida/);
+  assert.match(registros[0]?.erro ?? '', /-09/);
+});

@@ -9,7 +9,7 @@ import {
   renderConversaOficial,
   ESPERA_SEM_LEITURA_MS,
 } from './kommo-talks.service.js';
-import { selecionarItens, JANELA_DO_TURNO_MS } from '../lib/conversa-oficial.js';
+import { selecionarItens, JANELA_DO_TURNO_MS, temMidiaSemArquivo } from '../lib/conversa-oficial.js';
 
 const t0 = 1_789_222_000; // segundos
 const raw = (over: Partial<Parameters<typeof normalizar>[0][number]> & { id: string }) => ({
@@ -53,6 +53,25 @@ test('selecionarItens: tira a Sofia, o que já está na entrada do turno e o que
   const itens = selecionarItens(msgs, 'pode ser', agora);
   assert.deepEqual(itens.map((m) => m.id), ['a', 'b']);
   assert.ok(JANELA_DO_TURNO_MS >= 60_000);
+});
+
+test('temMidiaSemArquivo: reconhece o aviso do WhatsApp Lite e não confunde com texto comum', () => {
+  assert.equal(temMidiaSemArquivo('Você recebeu uma mensagem de mídia (ID da mensagem: ACC7E9C93B42E8053461CB284EAA)'), true);
+  assert.equal(temMidiaSemArquivo("'messageContextInfo' is not yet supported. Use your device to view this message."), true);
+  assert.equal(temMidiaSemArquivo('Bom dia, quero marcar'), false);
+});
+
+test('selecionarItens: áudio do turno que o webhook não trouxe (WhatsApp Lite) entra; sem o aviso, continua fora', () => {
+  const agora = (t0 + 400) * 1000;
+  const msgs = normalizar([
+    raw({ id: 'v', created_at: t0 + 395, attachment: { type: 'voice', link: 'https://x/lite.ogg' } }), // turno atual, só pela rota oficial
+    raw({ id: 'f', created_at: t0 + 396, attachment: { type: 'picture', link: 'https://x/foto.jpg' } }),
+    raw({ id: 'p', created_at: t0 + 397, text: 'Você recebeu uma mensagem de mídia (ID da mensagem: ACC7E9C9)' }),
+  ]);
+  const aviso = 'Você recebeu uma mensagem de mídia (ID da mensagem: ACC7E9C9)';
+  assert.deepEqual(selecionarItens(msgs, aviso, agora, true).map((m) => m.id), ['v']);
+  assert.deepEqual(selecionarItens(msgs, aviso, agora, false).map((m) => m.id), []);
+  assert.deepEqual(selecionarItens(msgs, aviso, agora).map((m) => m.id), []);
 });
 
 test('renderConversaOficial: com equipe no meio, manda não repetir nem se reapresentar', () => {

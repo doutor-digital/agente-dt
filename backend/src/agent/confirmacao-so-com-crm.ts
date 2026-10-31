@@ -32,12 +32,23 @@ export const RECADO_DESMARCADA =
   'Deixa eu conferir direitinho o seu horário com a equipe — ela te confirma aqui mesmo na conversa em até 1 hora. 🙏';
 
 /** Vai junto da resposta reprovada quando o CRM diz que a consulta foi desmarcada (refeita da trava). */
-export const INSTRUCAO_DESMARCADA =
-  '[instrução interna, não é fala do paciente] Sua resposta acima trata como marcada uma consulta que foi DESMARCADA ' +
-  'no sistema da clínica: ela não existe mais. Se o paciente pediu, NESTA mensagem, um horário novo e já escolheu ' +
-  'dia, hora e forma de pagamento, use consultar_horarios e agendar_consulta. Se ele só confirmou o horário antigo ' +
-  'ou perguntou se está tudo certo, NÃO marque nada: diga que vai conferir com a equipe, que confirma em até 1 hora, ' +
-  'sem dizer confirmado, agendado nem reservado. Responda só com a mensagem final ou com a chamada da ferramenta.';
+export const INSTRUCAO_DESMARCADA = montarInstrucaoDesmarcada(true);
+
+/** Unidade sem pagamento antecipado (Timbó): a instrução não manda o paciente "escolher forma de pagamento". */
+export function instrucaoDesmarcada(semAntecipado: boolean): string {
+  return montarInstrucaoDesmarcada(!semAntecipado);
+}
+
+function montarInstrucaoDesmarcada(comFormaDePagamento: boolean): string {
+  return (
+    '[instrução interna, não é fala do paciente] Sua resposta acima trata como marcada uma consulta que foi DESMARCADA ' +
+    'no sistema da clínica: ela não existe mais. Se o paciente pediu, NESTA mensagem, um horário novo e já escolheu ' +
+    (comFormaDePagamento ? 'dia, hora e forma de pagamento' : 'dia e hora') +
+    ', use consultar_horarios e agendar_consulta. Se ele só confirmou o horário antigo ' +
+    'ou perguntou se está tudo certo, NÃO marque nada: diga que vai conferir com a equipe, que confirma em até 1 hora, ' +
+    'sem dizer confirmado, agendado nem reservado. Responda só com a mensagem final ou com a chamada da ferramenta.'
+  );
+}
 
 /** O bloco `<consulta_do_paciente>` que diz "não há consulta de pé": desmarcada ou não compareceu. */
 const BLOCO_SEM_CONSULTA = /foi DESMARCADA no sistema da clínica|registrou NÃO COMPARECEU/;
@@ -88,6 +99,10 @@ const EXPLICA_PAGAMENTO = /\b(?:pagando|pagamento antecipado|antecipado|antecipa
 /** Dia concreto (não só hora): "terça", "29/10", "amanhã", "hoje". "A partir das 8h" é horário de funcionamento. */
 const QUANDO_DIA = /\b(?:segunda|terca|quarta|quinta|sexta|sabado|domingo)\b|\b\d{1,2}\/\d{1,2}\b|\b(?:amanha|hoje)\b/;
 const QUANDO = /\b(?:segunda|terca|quarta|quinta|sexta|sabado|domingo)\b|\b\d{1,2}\/\d{1,2}\b|\b(?:amanha|hoje)\b|\b\d{1,2}(?::\d{2}|h\d{0,2})\b/;
+
+/** Para quem estende o detector sem mexer nele (`taxa-de-reserva.ts`). */
+export const NAO_AFIRMA_CONFIRMACAO = NAO_AFIRMA;
+export const QUANDO_HORARIO = QUANDO;
 
 /** A oração em que a afirmação aparece: do último separador (vírgula, ponto e vírgula, dois-pontos) até o fim dela. */
 function oracaoDe(n: string, fim: number): string {
@@ -390,17 +405,23 @@ export async function abrirTarefaParaEquipe(args: {
   leadId: number;
   kommo: Pick<KommoClient, 'createTask' | 'getLead'>;
   recorder: Pick<TraceRecorder, 'step'>;
-  motivo: 'comprovante' | 'desmarcada';
+  motivo: 'comprovante' | 'desmarcada' | 'insistiu_na_clinica' | 'cadastro_duplicado' | 'agenda_sem_conferir';
   dedupe?: Dedupe;
   agora?: () => number;
   /** Avisa o João quando a tarefa não saiu: o paciente já ouviu "a equipe confirma em 1 hora". */
   alertar?: (texto: string) => Promise<unknown>;
   /** Texto extra da tarefa (ex.: valor lido × esperado). */
   detalhe?: string;
+  /**
+   * Entra na chave de deduplicação (`<chave>:<chaveExtra>`): a tarefa passa a ser "uma por cartão, motivo E isto". Quem promete
+   * ao paciente uma resposta sobre UM horário usa o horário aqui — a tarefa de outro horário não cobre a promessa.
+   */
+  chaveExtra?: string;
 }): Promise<'criada' | 'repetida' | 'falhou'> {
   const { slug, unitId, leadId, kommo, recorder, motivo } = args;
   const dedupe = args.dedupe ?? { avisoRecente, marcarAviso };
-  const chave = motivo === 'comprovante' ? 'comprovante_so_equipe' : 'consulta_desmarcada_afirmada';
+  const chaveBase = { comprovante: 'comprovante_so_equipe', desmarcada: 'consulta_desmarcada_afirmada', insistiu_na_clinica: 'taxa_insistiu_na_clinica', cadastro_duplicado: 'cadastro_possivel_duplicado', agenda_sem_conferir: 'agenda_horario_sem_conferir' }[motivo];
+  const chave = args.chaveExtra ? `${chaveBase}:${args.chaveExtra}` : chaveBase;
   try {
     if (await dedupe.avisoRecente(unitId, leadId, chave, motivo === 'comprovante' ? JANELA_COMPROVANTE_MS : undefined)) return 'repetida';
     let nome: string | null = null;
@@ -413,10 +434,13 @@ export async function abrirTarefaParaEquipe(args: {
       logger.warn({ err: String(err), leadId }, 'tarefa da equipe: sem o cartão (nome/responsável)');
     }
     const quem = nome ? ` · ${nome}` : '';
-    const texto =
-      motivo === 'comprovante'
-        ? `CONFERIR COMPROVANTE · ${slug}${quem} · o paciente mandou o comprovante: conferir se o pagamento caiu e, se a consulta ainda não estiver na franquia, confirmá-la em até 1 h. A IA não confirmou o pagamento.`
-        : `CONFERIR CONSULTA · ${slug}${quem} · a consulta está DESMARCADA no CRM e o paciente respondeu como se estivesse marcada. A IA não confirmou: falar com ele e remarcar em até 1 h.`;
+    const texto = {
+      comprovante: `CONFERIR COMPROVANTE · ${slug}${quem} · o paciente mandou o comprovante: conferir se o pagamento caiu e, se a consulta ainda não estiver na franquia, confirmá-la em até 1 h. A IA não confirmou o pagamento.`,
+      desmarcada: `CONFERIR CONSULTA · ${slug}${quem} · a consulta está DESMARCADA no CRM e o paciente respondeu como se estivesse marcada. A IA não confirmou: falar com ele e remarcar em até 1 h.`,
+      insistiu_na_clinica: `FALAR COM O PACIENTE · ${slug}${quem} · reserva com taxa: ele já recebeu a chave Pix e INSISTE em pagar só na clínica. Sem o comprovante da taxa o horário NÃO está garantido: falar com ele em até 1 h.`,
+      cadastro_duplicado: `CONFERIR CADASTRO · ${slug}${quem} · há outro cadastro na franquia com o MESMO telefone e nome parecido (talvez a mesma pessoa em dobro, talvez parente) que já tem consulta marcada. A IA NÃO juntou os cadastros nem usou o do outro: confirmar quem é e, se for a mesma pessoa, manter uma só consulta.`,
+      agenda_sem_conferir: `CONFERIR HORÁRIO · ${slug}${quem} · o paciente pediu um horário que aparece ocupado e a IA não conseguiu conferir se é a consulta DELE (cadastro em dobro ou a franquia não respondeu). A IA não marcou nem ofereceu outro horário e disse que a equipe confirma e responde por aqui: confirmar com ele (a tarefa vence em 1 h).`,
+    }[motivo];
     const agora = args.agora ?? Date.now;
     const text = args.detalhe ? `${texto} ${args.detalhe}.` : texto;
     const res = await kommo.createTask({ leadId, text, completeAt: Math.floor(agora() / 1000) + 3600, responsibleUserId: responsavel });
@@ -434,9 +458,16 @@ export async function abrirTarefaParaEquipe(args: {
       title: `Falha ao abrir a tarefa da equipe (${motivo}): ${erro}`,
       payload: { leadId, motivo },
     });
-    // O paciente já ouviu "a equipe confirma em até 1 hora": sem tarefa, ninguém sabe. Aviso no Telegram do João.
+    // Quem promete é o motivo. «horário»: a IA só promete se a tarefa saiu (senão foi instruída a NÃO prometer). «cadastro»: a
+    // IA não promete nada por causa dela; só a equipe não saberá do cadastro em dobro. Os demais: o paciente já ouviu «em até 1 hora».
+    const textoDaFalha: Partial<Record<typeof motivo, string>> = {
+      agenda_sem_conferir: `a tarefa de conferir o HORÁRIO NÃO saiu (lead ${leadId}): ${erro}. A IA foi instruída a não prometer retorno da equipe nesse caso; ainda assim o paciente ficou sem resposta sobre o horário: avisar a equipe à mão.`,
+      cadastro_duplicado: `a tarefa de conferir o CADASTRO em dobro NÃO saiu (lead ${leadId}): ${erro}. A IA não prometeu nada por causa dela, mas a equipe não sabe do outro cadastro: avisar à mão.`,
+    };
     await (args.alertar ?? enviarTelegram)(
-      `⚠️ ${slug} — a IA disse ao paciente (lead ${leadId}) que a equipe confirma em até 1 hora, mas a tarefa NÃO saiu (${motivo}): ${erro}. Avisar a equipe à mão.`,
+      `⚠️ ${slug} — ` +
+        (textoDaFalha[motivo] ??
+          `a IA disse ao paciente (lead ${leadId}) que a equipe confirma em até 1 hora, mas a tarefa NÃO saiu (${motivo}): ${erro}. Avisar a equipe à mão.`),
     ).catch(() => undefined);
     return 'falhou';
   }

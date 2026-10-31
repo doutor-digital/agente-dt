@@ -18,6 +18,12 @@ export class ErroAsaas extends Error {
 
 type Fetcher = typeof fetch;
 const ritmos = new Map<string, Ritmo>();
+/** A fila de requisições da conta: leitura e escrita dividem a mesma (o limite do Asaas é por chave). */
+export function ritmoDaConta(contaId: string): Ritmo {
+  let ritmo = ritmos.get(contaId);
+  if (!ritmo) ritmos.set(contaId, (ritmo = new Ritmo(250)));
+  return ritmo;
+}
 const dormir = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** GET no Asaas. `contaId` separa a fila de cada conta; `caminho` começa com "/". */
@@ -31,13 +37,12 @@ export async function asaasGet<T = unknown>(
   const q = new URLSearchParams();
   for (const [k, v] of Object.entries(query)) if (v !== undefined && v !== '') q.append(k, String(v));
   const url = `${ASAAS_API}${caminho}${q.size ? `?${q.toString()}` : ''}`;
-  let ritmo = ritmos.get(contaId);
-  if (!ritmo) ritmos.set(contaId, (ritmo = new Ritmo(250)));
+  const ritmo = ritmoDaConta(contaId);
   for (let tentativa = 0; tentativa < 4; tentativa++) {
     await ritmo.vez();
     let resp: Response;
     try {
-      resp = await fetcher(url, { method: 'GET', headers: { access_token: chave, 'User-Agent': AGENTE, Accept: 'application/json' }, signal: AbortSignal.timeout(30_000) });
+      resp = await fetcher(url, { method: 'GET', headers: { access_token: chave, 'User-Agent': AGENTE, Accept: 'application/json' }, redirect: 'error', signal: AbortSignal.timeout(30_000) });
     } catch (err) {
       if (tentativa < 3) { await dormir(1000 * (tentativa + 1)); continue; }
       throw new ErroAsaas(`sem resposta do Asaas em ${caminho}: ${String(err).slice(0, 200)}`, null);

@@ -118,6 +118,7 @@ const unitInputBase = {
   spineSyncLeads: z.boolean().optional(),
   spineSyncPatients: z.boolean().optional(),
   spineBookingRequiresPayment: z.boolean().optional(),
+  acceptsAdvancePayment: z.boolean().optional(),
   clinicAddress: z.string().max(300).nullable().optional(),
   pixKey: z.string().max(120).nullable().optional(),
   pixHolder: z.string().max(160).nullable().optional(),
@@ -316,6 +317,15 @@ export async function updateUnitHandler(req: Request, res: Response): Promise<vo
     else if (cleaned.spineTimezone && !cleaned.businessHoursTimezone) cleaned.businessHoursTimezone = cleaned.spineTimezone;
     const unit = await updateUnit(id, cleaned);
     logger.info({ id: unit.id }, 'unit atualizada');
+    // Taxa de reserva obrigatória é pagamento antecipado: com as duas flags, a taxa vence e acceptsAdvancePayment=false é ignorada
+    // (agent/pagamento-da-unidade.ts). Quem configurou precisa saber que a flag não vale.
+    const mexeuNasFlags = cleaned.acceptsAdvancePayment !== undefined || cleaned.spineBookingRequiresPayment !== undefined;
+    if (mexeuNasFlags && unit.acceptsAdvancePayment === false && unit.spineBookingRequiresPayment) {
+      logger.warn(
+        { id: unit.id, slug: unit.slug },
+        'unit: acceptsAdvancePayment=false junto com spineBookingRequiresPayment=true — a taxa de reserva vence e a flag é ignorada',
+      );
+    }
     res.json({ unit: maskUnitSecrets(unit) });
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {

@@ -74,6 +74,8 @@ import type {
   Funcionamento,
 } from '../types/api';
 
+import type { DisparoOndaResumo, DisparoPessoa, DisparoResultado } from '../types/disparo';
+
 const apiBase = import.meta.env.VITE_API_URL
   ? `${import.meta.env.VITE_API_URL.replace(/\/$/, '')}/api`
   : '/api';
@@ -702,6 +704,25 @@ export const api = {
       { params: range },
     );
     return data;
+  },
+  async listDisparoOndas(): Promise<DisparoOndaResumo[]> {
+    const { data } = await http.get<{ ok: boolean; ondas: DisparoOndaResumo[] }>('/disparo/ondas');
+    return data.ondas;
+  },
+  async getDisparoResultado(ondaId: string): Promise<DisparoResultado> {
+    const { data } = await http.get<DisparoResultado>(`/disparo/ondas/${encodeURIComponent(ondaId)}/resultado`);
+    return data;
+  },
+  /** Só as pessoas da onda (nome, estado, hora). O telefone vem mascarado e a tela não o usa. */
+  async getDisparoPessoas(ondaId: string): Promise<DisparoPessoa[]> {
+    const { data } = await http.get<{ ok: boolean; destinatarios?: DisparoPessoa[] }>(`/disparo/ondas/${encodeURIComponent(ondaId)}`);
+    return (data.destinatarios ?? []).map((p) => ({
+      nome: p.nome,
+      estado: p.estado,
+      motivo: p.motivo ?? null,
+      enviadoEm: p.enviadoEm ?? null,
+      kommoLeadId: p.kommoLeadId ?? null,
+    }));
   },
   async getWhatsappTemplates(
     unitId: string,
