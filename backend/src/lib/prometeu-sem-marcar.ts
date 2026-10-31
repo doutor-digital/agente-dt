@@ -311,22 +311,8 @@ export function detectarPromessa(texto: string | null | undefined): Promessa | n
   return null;
 }
 
-/**
- * Mensagens que não são da IA conversando — não entram:
- *  - `kommo_talks`/`backfill-kommo`: texto da equipe copiado do chat oficial do Kommo;
- *  - `confirmacao_*`: a confirmação de véspera só sai para consulta que existe;
- *  - `chat_cartao`: o cartão de chegada só sai depois de marcar;
- *  - `lead_note`: virou nota interna, o paciente nunca leu.
- */
-export function mensagemDaIA(meta: unknown): boolean {
-  const m = (meta && typeof meta === 'object' ? meta : {}) as Record<string, unknown>;
-  const origem = typeof m.origem === 'string' ? m.origem : '';
-  const via = typeof m.via === 'string' ? m.via : '';
-  if (origem === 'kommo_talks' || origem === 'backfill-kommo' || origem.startsWith('confirmacao')) return false;
-  if (m.autor === 'equipe') return false;
-  if (via === 'chat_cartao' || via === 'lead_note') return false;
-  return true;
-}
+/** A regra mora em `mensagem-da-ia.ts` (a mesma lista que o resumo de qualidade usa em SQL). */
+export { mensagemDaIA } from './mensagem-da-ia.js';
 
 /**
  * A consulta que um passo de sucesso do rastro marcou, em hora local da clínica ("2026-10-09T07:00").

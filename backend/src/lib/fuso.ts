@@ -41,7 +41,7 @@ export function dataBRNoFuso(ms: number, tz: string): string {
   }).format(new Date(ms));
 }
 
-function partesNoFuso(d: Date, tz: string): { ano: number; mes: number; dia: number; hora: number; min: number; seg: number } {
+export function partesNoFuso(d: Date, tz: string): { ano: number; mes: number; dia: number; hora: number; min: number; seg: number } {
   const partes = new Intl.DateTimeFormat('en-US', {
     timeZone: tz,
     hourCycle: 'h23',

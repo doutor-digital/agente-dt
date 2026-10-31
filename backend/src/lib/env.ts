@@ -122,6 +122,8 @@ const schema = z.object({
   PARADOS_ESTOQUES_SLUGS: z.string().optional(),
   /** Unidades com o cartão enxuto: o vigia de cartão só cobra o que continua humano (csv; `*` = todas). */
   CARTAO_ENXUTO_SLUGS: z.string().optional(),
+  /** Resumo diário da qualidade da Sofia no Telegram do João (global, não por unidade): `seco` (padrão; só loga) | `ligado` | `desligado`. */
+  RESUMO_DIARIO_IA: z.string().optional(),
 });
 
 const parsed = schema.safeParse(process.env);
