@@ -17,6 +17,7 @@ import { startDashboardMvRefresher, stopDashboardMvRefresher } from './lib/dashb
 import { startFollowUpWorker, stopFollowUpWorker } from './lib/follow-up-worker.js';
 import { startReminderWorker, stopReminderWorker } from './lib/reminder-worker.js';
 import { startReactivationWorker, stopReactivationWorker } from './lib/reactivation-worker.js';
+import { startPausaEquipeVoltaWorker, stopPausaEquipeVoltaWorker } from './lib/pausa-equipe-volta.js';
 import { startLeadPausaWorker, stopLeadPausaWorker } from './lib/lead-pausa-worker.js';
 import { startSlaAlertWorker, stopSlaAlertWorker } from './lib/sla-alert-worker.js';
 import { startSemRespostaWorker, stopSemRespostaWorker } from './lib/sem-resposta-worker.js';
@@ -32,7 +33,9 @@ import { startResultadosWorker, stopResultadosWorker } from './lib/resultados-wo
 import { iniciarAutomacoes } from './lib/automacoes-estado.js';
 import { iniciarCrmCompartilhado } from './lib/crm-compartilhado.js';
 import { iniciarSupervisorDosWorkers, encerrarSupervisorDosWorkers } from './lib/worker-lease.js';
-import { aguardarTurnos } from './lib/turnos-em-andamento.js';
+import { esperarTurnosDoDesligamento } from './lib/turnos-em-andamento.js';
+import { idsEmVoo } from './lib/agent-coalescer.js';
+import { desligarComGraca, fecharServidor, planoDeDesligamento } from './lib/desligamento.js';
 import { startVozSessaoWorker, stopVozSessaoWorker } from './lib/voz-sessao-worker.js';
 import { iniciarVigiaDeQualidade, pararVigiaDeQualidade } from './lib/qualidade-numero-worker.js';
 import { startCacheKeepaliveWorker, stopCacheKeepaliveWorker } from './lib/cache-keepalive-worker.js';
@@ -44,6 +47,7 @@ import { startDisparoWorker, stopDisparoWorker } from './lib/disparo-worker.js';
 import { startPreencheCamposWorker, stopPreencheCamposWorker } from './lib/preenche-campos-worker.js';
 import { startBlingRenovacaoWorker, stopBlingRenovacaoWorker } from './lib/bling-renovacao-worker.js';
 import { startFranquiaSyncWorker, stopFranquiaSyncWorker } from './lib/franquia-sync-worker.js';
+import { startFranquiaCalendarioWorker, stopFranquiaCalendarioWorker } from './lib/franquia-calendario-worker.js';
 import { startUnidadePorCanalWorker, stopUnidadePorCanalWorker } from './lib/unidade-por-canal-worker.js';
 import { startUnidadeNoCartaoWorker, stopUnidadeNoCartaoWorker } from './lib/unidade-no-cartao-worker.js';
 import { startRenomearLeadWorker, stopRenomearLeadWorker } from './lib/renomear-lead-worker.js';
@@ -195,6 +199,7 @@ async function main(): Promise<void> {
       startFollowUpWorker();
       startReminderWorker();
       startReactivationWorker();
+      startPausaEquipeVoltaWorker();
       startLeadPausaWorker();
       startSlaAlertWorker();
       startSemRespostaWorker();
@@ -207,6 +212,7 @@ async function main(): Promise<void> {
       startVozSessaoWorker();
       startCacheKeepaliveWorker();
       startFranquiaSyncWorker();
+      startFranquiaCalendarioWorker();
       startParadosWorker();
       startMotivoNoCabecalhoWorker();
       startUnidadePorCanalWorker();
@@ -234,6 +240,7 @@ async function main(): Promise<void> {
       stopPreencheCamposWorker();
       stopBlingRenovacaoWorker();
       stopFranquiaSyncWorker();
+      stopFranquiaCalendarioWorker();
       stopCacheKeepaliveWorker();
       stopWhatsappCostScheduler();
       stopDashboardMvRefresher();
@@ -241,6 +248,7 @@ async function main(): Promise<void> {
       stopFollowUpWorker();
       stopReminderWorker();
       stopReactivationWorker();
+      stopPausaEquipeVoltaWorker();
       stopLeadPausaWorker();
       stopSlaAlertWorker();
       stopSemRespostaWorker();
@@ -260,15 +268,32 @@ async function main(): Promise<void> {
     logger.info(`Documentação → http://localhost:${env.PORT}/docs`);
   });
 
+  let encerrando = false;
   const shutdown = async (signal: string) => {
-    logger.info({ signal }, 'shutdown iniciado');
-    server.close();
-    // Turno da IA no meio (modelo respondeu, ferramenta ainda não rodou) não pode ser cortado: deixa o checkpoint com
-    // chamada sem resultado e a conversa passa a tomar 400 do modelo. O Swarm dá 30 s (stop_grace_period).
-    const espera = await aguardarTurnos(Number(process.env.SHUTDOWN_AGUARDA_TURNOS_MS) || 22_000);
-    if (espera.esperouMs > 0 || espera.restantes > 0) {
-      logger.warn({ ...espera }, espera.restantes > 0 ? 'shutdown: turnos da IA ainda rodando, saindo mesmo assim' : 'shutdown: turnos da IA terminaram');
+    // SIGTERM seguido de SIGINT (ou o Swarm repetindo) não pode abrir um segundo desligamento: ele desconectaria o banco
+    // no meio da drenagem do primeiro.
+    if (encerrando) {
+      logger.info({ signal }, 'shutdown já em andamento — sinal ignorado');
+      return;
     }
+    encerrando = true;
+    logger.info({ signal }, 'shutdown iniciado');
+    // Ordem (lib/desligamento.ts): espera o Traefik tirar este container da lista → fecha a porta → drena a fila do
+    // coalescer e espera os turnos da IA (Timbó, lead 5142896, 30/10/2026: a foto da paciente morreu na fila do
+    // coalescer). Turno no meio não pode ser cortado: deixa o checkpoint com chamada sem resultado e a conversa passa a
+    // tomar 400 do modelo. Tudo dentro dos 60 s do stop_grace_period (docker-compose.yml).
+    const r = await desligarComGraca(planoDeDesligamento(), {
+      agora: () => Date.now(),
+      dormir: (ms) => new Promise((res) => setTimeout(res, ms)),
+      fecharPorta: (ms) => fecharServidor(server, ms),
+      drenar: esperarTurnosDoDesligamento,
+    });
+    const sobrou = r.restantes > 0 || r.filaRestante > 0;
+    // `traceIdsPerdidos`: os traces que ficaram RUNNING com este processo (para achar no banco depois do deploy).
+    logger.warn(
+      { ...r, ...(sobrou ? { traceIdsPerdidos: idsEmVoo() } : {}) },
+      sobrou ? 'shutdown: turnos da IA ainda pendentes, saindo mesmo assim' : 'shutdown: turnos da IA terminaram',
+    );
     // Solta o lease antes de desconectar: o container novo assume em ≤30 s.
     await encerrarSupervisorDosWorkers();
     await prisma.$disconnect();

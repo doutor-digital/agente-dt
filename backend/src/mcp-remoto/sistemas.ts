@@ -70,14 +70,14 @@ export function resolverSistema(ctx: ContextoSistemas, pedido?: string): ContaSi
  * blocos $$…$$. Sobra o esqueleto, onde se procura `;` e palavras de escrita. NÃO substitui o servidor (ele roda como
  * papel só-leitura, em transação READ ONLY): só barra o óbvio com mensagem clara.
  */
-export function esqueletoDoSql(sql: string): string {
-  return varrerSql(sql).esqueleto;
+export function esqueletoDoSql(sql: string, marcarTextos = false): string {
+  return varrerSql(sql, marcarTextos).esqueleto;
 }
 
 const CARACTERE_DE_NOME = /[A-Za-z0-9_$]/;
 
 /** O esqueleto e a posição, no texto original, de cada `;` que está fora de texto e comentário. */
-function varrerSql(sql: string): { esqueleto: string; pontosEVirgula: number[] } {
+function varrerSql(sql: string, marcarTextos = false): { esqueleto: string; pontosEVirgula: number[] } {
   let out = '';
   const pontos: number[] = [];
   let i = 0;
@@ -98,7 +98,8 @@ function varrerSql(sql: string): { esqueleto: string; pontosEVirgula: number[] }
         i++;
       }
       i++;
-      out += ' ';
+      // com `marcarTextos`, o texto entre aspas simples vira 's' (quem confere DEFAULT precisa saber que ali havia um texto)
+      out += marcarTextos && c === "'" ? " 's' " : ' ';
     } else if (c === '-' && prox === '-') {
       while (i < sql.length && sql[i] !== '\n') i++;
       out += ' ';
@@ -115,7 +116,7 @@ function varrerSql(sql: string): { esqueleto: string; pontosEVirgula: number[] }
       if (tag) {
         const fim = sql.indexOf(tag, i + tag.length);
         i = fim < 0 ? sql.length : fim + tag.length;
-        out += ' ';
+        out += marcarTextos ? " 's' " : ' ';
       } else {
         out += c;
         i++;
@@ -177,7 +178,7 @@ function nomeSql(v: unknown, campo: string): string {
   return v;
 }
 
-function idUsuario(v: unknown): string {
+export function idUsuario(v: unknown): string {
   if (typeof v !== 'string' || !ID_USUARIO.test(v)) throw new ErroDeEntrada('user_id inválido: use o identificador que sistemas_usuarios devolve');
   return v;
 }
@@ -259,13 +260,29 @@ export async function simular(ctx: ContextoSistemas, quem: string, a: { sistema?
 
 // ------------------------------------------------------------------ escrita
 
-interface Pendente {
+export interface Pendente {
   usuario: string;
   sistema: string;
   criadoEm: number;
   operacao: string;
   tabela: string;
+  /** só nas alterações de ESTRUTURA (sistemas_preparar_tabela/coluna/indice): o pedido por campos e o SQL gerado/mostrado, guardados aqui e não no que a pessoa manda na confirmação */
+  estrutura?: { sql: string; motivo: string; comandos: number; entrada: Record<string, unknown> };
+  /** só nas concessões de ADMIN (sistemas_preparar_admin): o que foi mostrado à pessoa e vai ser executado na confirmação */
+  admin?: AdminPendente;
 }
+
+export type AdminPendente =
+  | { acao: 'promover'; usuario: string; nome: string; login: string; papelAntes: string; motivo: string }
+  | { acao: 'convite'; nome: string; login: string; motivo: string };
+
+export type TipoDeCodigo = 'dados' | 'estrutura' | 'admin';
+const tipoDe = (p: Pendente): TipoDeCodigo => (p.estrutura ? 'estrutura' : p.admin ? 'admin' : 'dados');
+const CONFIRMADOR: Record<TipoDeCodigo, [rotulo: string, ferramenta: string]> = {
+  dados: ['DADOS', 'sistemas_confirmar_alteracao'],
+  estrutura: ['ESTRUTURA', 'sistemas_confirmar_estrutura'],
+  admin: ['ADMIN', 'sistemas_confirmar_admin'],
+};
 
 /** Códigos preparados à espera da confirmação, presos a quem preparou. Em memória: reinício = preparar de novo. */
 export class PendentesSistemas {
@@ -281,12 +298,17 @@ export class PendentesSistemas {
   devolver(id: string, p: Pendente): void {
     this.itens.set(id, p);
   }
-  tirar(id: string, usuario: string): Pendente {
+  tirar(id: string, usuario: string, tipo: TipoDeCodigo = 'dados'): Pendente {
     const p = this.itens.get(id);
     if (!p) throw new ErroDeEntrada('código de confirmação desconhecido ou já usado (ou o conector reiniciou desde a prévia): prepare a alteração de novo');
     if (p.usuario !== usuario) throw new ErroDeEntrada('este código foi gerado por outro usuário');
+    if (this.agora() - p.criadoEm > VALIDADE_MS) {
+      this.itens.delete(id);
+      throw new ErroDeEntrada('o código venceu (10 minutos): prepare a alteração de novo');
+    }
+    // código de um tipo não confirma outro, e a tentativa errada não gasta o código
+    if (tipoDe(p) !== tipo) throw new ErroDeEntrada(`este código é de uma alteração de ${CONFIRMADOR[tipoDe(p)][0]}: confirme com ${CONFIRMADOR[tipoDe(p)][1]}`);
     this.itens.delete(id);
-    if (this.agora() - p.criadoEm > VALIDADE_MS) throw new ErroDeEntrada('o código venceu (10 minutos): prepare a alteração de novo');
     return p;
   }
 }
@@ -364,6 +386,9 @@ export async function confirmarAlteracao(
   };
 }
 
+export const PEDE_DOIS_PASSOS =
+  'o perfil ADMIN (acesso total) não se concede direto: use sistemas_preparar_admin (mostra quem vira admin) e, com o ok da pessoa, sistemas_confirmar_admin';
+
 export async function alterarUsuario(
   ctx: ContextoSistemas,
   quem: QuemSistemas,
@@ -371,6 +396,7 @@ export async function alterarUsuario(
 ): Promise<Saida> {
   if (!['papel', 'unidade', 'ativo'].includes(a.acao)) throw new ErroDeEntrada('acao: use papel, unidade ou ativo');
   const user_id = idUsuario(a.usuario);
+  if (a.acao === 'papel' && typeof a.valor === 'string' && /^admin$/i.test(a.valor.trim())) throw new ErroDeEntrada(PEDE_DOIS_PASSOS);
   let valor: string | boolean = a.valor;
   if (a.acao === 'ativo') {
     if (typeof valor === 'string') {
@@ -379,7 +405,7 @@ export async function alterarUsuario(
       else throw new ErroDeEntrada('para "ativo" o valor é sim ou não');
     }
   } else if (typeof valor !== 'string' || !valor.trim()) {
-    throw new ErroDeEntrada(`para "${a.acao}" o valor é o texto novo (papel: admin, gestao, financeiro, unidade ou socio; unidade: a sigla da unidade)`);
+    throw new ErroDeEntrada(`para "${a.acao}" o valor é o texto novo (papel: gestao, financeiro, unidade ou socio — admin só por sistemas_preparar_admin; unidade: a sigla da unidade)`);
   } else valor = valor.trim();
   const c = resolverSistema(ctx, a.sistema);
   return { sistema: c.slug, ...resposta(await c.fonte.chamar('POST', '/admin/v1/usuario', { corpo: { acao: a.acao, user_id, valor, quem: quem.nome }, quem: quem.nome })) };
@@ -401,6 +427,7 @@ export async function criarConvite(
   const c = resolverSistema(ctx, a.sistema);
   if (!c.tela) throw new ErroDeEntrada('falta o endereço da tela RH na configuração do sistema: cadastre de novo no painel de integrações, com o campo "tela"');
   if (!a.nome?.trim() || !a.login?.trim() || !a.papel?.trim()) throw new ErroDeEntrada('convite precisa de nome, login e papel');
+  if (/^admin$/i.test(a.papel.trim())) throw new ErroDeEntrada(PEDE_DOIS_PASSOS);
   const r = resposta(
     await c.fonte.chamar('POST', '/admin/v1/convite', {
       corpo: { nome: a.nome.trim(), login: a.login.trim(), papel: a.papel.trim(), ...(a.unidade?.trim() ? { unidade: a.unidade.trim() } : {}), quem: quem.nome },
@@ -564,8 +591,8 @@ export function registrarEscritaSistemas(
     {
       title: 'Sistema novo (RH/Caixa): mudar papel, unidade ou ativo de um usuário',
       description:
-        'Muda UMA coisa de um usuário do sistema novo, direto (sem prévia — é pequeno e reversível): acao="papel" (admin, gestao, financeiro, unidade ' +
-        'ou socio), acao="unidade" (unidade que existe no cadastro; obrigatória para os papéis unidade e socio) ou acao="ativo" (sim/não). ' +
+        'Muda UMA coisa de um usuário do sistema novo, direto (sem prévia — é pequeno e reversível): acao="papel" (gestao, financeiro, unidade ' +
+        'ou socio; ADMIN não: é em dois passos, por sistemas_preparar_admin), acao="unidade" (unidade que existe no cadastro; obrigatória para os papéis unidade e socio) ou acao="ativo" (sim/não). ' +
         'ANTES de chamar, diga à pessoa quem muda e de quê para quê, e só chame com o ok dela. Devolve o antes e o depois. user_id vem de sistemas_usuarios.',
       inputSchema: {
         sistema: SISTEMA,
@@ -583,7 +610,7 @@ export function registrarEscritaSistemas(
       title: 'Sistema novo (RH/Caixa): criar convite de acesso',
       description:
         'Cria um convite de acesso ao sistema novo e devolve o LINK COMPLETO (vale 7 dias). Não há senha: quem recebe o link escolhe a própria. ' +
-        'Informe nome, login e papel (admin, gestao, financeiro, unidade ou socio); unidade é obrigatória para unidade e socio. ' +
+        'Informe nome, login e papel (gestao, financeiro, unidade ou socio); unidade é obrigatória para unidade e socio. Convite de ADMIN não sai daqui: é em dois passos, por sistemas_preparar_admin. ' +
         'Confirme os dados com a pessoa antes de chamar, e entregue o link só à pessoa convidada.',
       inputSchema: {
         sistema: SISTEMA,

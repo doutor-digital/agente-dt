@@ -43,6 +43,8 @@ import { tiquetaqueGet } from '../lib/integracoes/tiquetaque.js';
 import { contaTramitacaoDaChave, criarContextoTramitacao, registrarFerramentasTramitacao, type ContaTramitacao } from './tramitacao.js';
 import { contasComChave } from '../lib/integracoes/chaves.js';
 import { lerConfigSistemas, sistemasChamar } from '../lib/integracoes/sistemas.js';
+import { registrarAdminSistemas } from './sistemas-admin.js';
+import { registrarEstruturaSistemas } from './sistemas-estrutura.js';
 import { criarContextoSistemas, PendentesSistemas, registrarEscritaSistemas, registrarLeituraSistemas, type ContaSistemas } from './sistemas.js';
 import { contaEvolutionDoAmbiente, criarContextoEvolution, EVENTO_DE_ENVIO, registrarFerramentasEvolution } from './evolution.js';
 import { blingGet } from '../lib/bling/cliente.js';
@@ -498,6 +500,10 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
         registrarDisparo(server, fonteDeDisparo, `conector:${quem.userId}`, auditar);
         // Sistema novo (RH/Caixa): alterar dados em dois passos, mudar usuário, criar convite — a mesma lista de quem altera cartões.
         registrarEscritaSistemas(server, sistemas, pendentesSistemas, quemSistemas, auditar);
+        // ... e criar/alterar ESTRUTURA do banco (tabela, coluna, índice, view, política), também em dois passos. DROP não existe.
+        registrarEstruturaSistemas(server, sistemas, pendentesSistemas, quemSistemas, auditar);
+        // ... e conceder ADMIN (promover usuário ou convite de admin), também em dois passos; sistemas_usuario/convite recusam admin.
+        registrarAdminSistemas(server, sistemas, pendentesSistemas, quemSistemas, auditar);
       }
       if (leitoresWhatsapp.has(quem.userId)) registrarFerramentasEvolution(server, whatsapp, quem.userId, auditar);
       registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas, convenia: convenia.contas, tiquetaque: tiquetaque.contas, tramitacao: tramitacao.contas, sistemas: sistemas.contas }), auditar);

@@ -9,7 +9,7 @@ import { finalDaChave, impressaoDaChave } from '../lib/integracoes/cofre.js';
 import { limparTexto } from '../lib/integracoes/asaas-escrita.js';
 import {
   chaveDeDuplicata, confirmarCliente, confirmarCobranca, criarEscritaAsaas, EVENTO_COBRANCA, EVENTO_CLIENTE, mascararDoc, prepararCliente, prepararCobranca,
-  registrarEscritaAsaas, registrarEscritaAsaasSePermitido, mascararTelefone, tetoDaCobranca, cobrancasPorHora, unidadesComEscrita, validarCpfCnpj, type PedidoDeCobranca, type RegistroDeCobranca,
+  LIMITES_ASAAS, registrarEscritaAsaas, registrarEscritaAsaasSePermitido, mascararTelefone, tetoDaCobranca, cobrancasPorHora, unidadesComEscrita, validarCpfCnpj, type PedidoDeCobranca, type RegistroDeCobranca,
 } from './asaas-escrita.js';
 
 const CHAVE_A = '$aact_prod_AAAAAAAAAAAAAAAAAAAAAAAAAAAAxYZ1';
@@ -367,14 +367,41 @@ test('boleto: valor zero, negativo, texto, com 3 casas ou infinito é recusado',
   assert.ok((await prepararCobranca(ctx, 'u1', { ...COBRANCA, valor: 0.01 })).confirmacao, 'um centavo é o mínimo e passa');
 });
 
-test('boleto: vencimento no passado, depois de 60 dias, data que não existe — hoje e +60 passam', async () => {
+test('boleto: vencimento no passado, depois do limite de dias, data que não existe — hoje e o limite passam', async () => {
   const { ctx } = montar({ clientes: [EXISTENTE] });
   await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, vencimento: '2026-10-27' }), /já passou/);
-  await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, vencimento: '2026-12-28' }), /passa de 60 dias/);
+  await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, vencimento: '2027-01-27' }), /passa de 90 dias/);
   await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, vencimento: '2026-02-30' }), /não é uma data que existe/);
   await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, vencimento: '10/11/2026' }), /AAAA-MM-DD/);
   assert.ok((await prepararCobranca(ctx, 'u1', { ...COBRANCA, vencimento: '2026-10-28', externalReference: 'hoje' })).confirmacao);
-  assert.ok((await prepararCobranca(ctx, 'u1', { ...COBRANCA, vencimento: '2026-12-27', externalReference: 'mais60' })).confirmacao);
+  assert.ok((await prepararCobranca(ctx, 'u1', { ...COBRANCA, vencimento: '2027-01-26', externalReference: 'mais90' })).confirmacao);
+});
+
+test('boleto: limite de vencimento = hoje + 90 dias (constante única); +91 recusado com a mensagem certa', async () => {
+  assert.equal(LIMITES_ASAAS.maxDiasVencimento, 90);
+  const { ctx } = montar({ clientes: [EXISTENTE] });
+  // "hoje" do relógio de teste é 28/10/2026 (America/Sao_Paulo)
+  assert.ok((await prepararCobranca(ctx, 'u1', { ...COBRANCA, vencimento: '2027-01-26', externalReference: 'm90' })).confirmacao, 'hoje+90 passa');
+  await assert.rejects(
+    () => prepararCobranca(ctx, 'u1', { ...COBRANCA, vencimento: '2027-01-27', externalReference: 'm91' }),
+    /vencimento 27\/01\/2027 passa de 90 dias \(limite 26\/01\/2027\)/,
+  );
+});
+
+test('boleto: caso real - em 30/10/2026 o vencimento de 30/12/2026 (61 dias) é aceito; o limite é contado no fuso de São Paulo', async () => {
+  const { ctx, relogio } = montar({ clientes: [EXISTENTE] });
+  relogio.t = Date.parse('2026-10-30T10:00:00-03:00');
+  assert.ok((await prepararCobranca(ctx, 'u1', { ...COBRANCA, vencimento: '2026-12-30', externalReference: 'caso-real' })).confirmacao);
+  // 31/10 01:30 em UTC ainda é 30/10 22:30 em São Paulo: "hoje" = 30/10, limite = 28/01/2027
+  relogio.t = Date.parse('2026-10-31T01:30:00Z');
+  assert.ok((await prepararCobranca(ctx, 'u1', { ...COBRANCA, vencimento: '2027-01-28', externalReference: 'fuso-ok' })).confirmacao);
+  await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, vencimento: '2027-01-29', externalReference: 'fuso-fora' }), /passa de 90 dias \(limite 28\/01\/2027\)/);
+});
+
+test('boleto: o texto da ferramenta lê o limite da constante, sem número chumbado', () => {
+  const src = readFileSync(new URL('./asaas-escrita.ts', import.meta.url), 'utf8');
+  assert.ok(!/\+\s*\d+ dias|até \d+ dias/.test(src), 'sem número chumbado antes de "dias" nos textos');
+  assert.equal(src.match(/\$\{LIMITES_ASAAS\.maxDiasVencimento\} dias/g)?.length, 3, 'mensagem de recusa, descrição da ferramenta e campo leem a constante');
 });
 
 test('boleto: o dia virou entre a prévia e o ok → vencimento que já passou não sai', async () => {

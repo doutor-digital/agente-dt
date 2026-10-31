@@ -19,6 +19,8 @@ import { _depsDoCacheParaTeste, depositoNaMemoria } from '../lib/cache-agenda.js
 import { _semearParaTeste } from '../lib/automacoes-estado.js';
 import { _semearCrmParaTeste } from '../lib/crm-compartilhado.js';
 import { PAGAMENTO_NO_DIA } from './pagamento-da-unidade.js';
+import type { KommoClient } from '../services/kommo.service.js';
+import { limparCacheEsquema } from '../lib/kommo-schema.js';
 
 const TZ = 'America/Sao_Paulo';
 
@@ -56,6 +58,7 @@ function diaDeTeste(): string {
 const DIA = diaDeTeste();
 
 let atual: Unit = unidade();
+let escolhaNaConversa: string | null = null;
 const gravacoes: Array<{ where: unknown; data: { pagamentoEscolhido?: string } }> = [];
 
 Object.defineProperty(prisma, 'unit', { value: { findUnique: async () => atual }, configurable: true });
@@ -70,7 +73,7 @@ Object.defineProperty(prisma, 'conversation', {
       gravacoes.push(a);
       return { count: 1 };
     },
-    findFirst: async () => null,
+    findFirst: async () => (escolhaNaConversa ? { pagamentoEscolhido: escolhaNaConversa } : null),
   },
   configurable: true,
 });
@@ -98,6 +101,7 @@ beforeEach(() => {
   franquia.length = 0;
   passos.length = 0;
   gravacoes.length = 0;
+  escolhaNaConversa = null;
   _depsDoCacheParaTeste({ deposito: depositoNaMemoria(), env: {}, registrar: () => undefined });
   _semearCrmParaTeste([]);
   _semearParaTeste([]);
@@ -207,4 +211,56 @@ test('remarcação (remarcando) numa unidade sem antecipado: não passa pela por
   assert.match(r, /Consulta marcada para/);
   assert.equal(gravacoes.length, 0);
   assert.doesNotMatch(r, /antecipad/i);
+});
+
+// ── follow-ups do #166 (30/10/2026) ─────────────────────────────────────────────────────────────────────────────────
+
+const ID_PAGAMENTO = 77;
+/** Um Kommo de mentira: só guarda o que foi carimbado em cada campo. */
+function kommoQueGrava(): { kommo: KommoClient; carimbos: Map<number, unknown> } {
+  const carimbos = new Map<number, unknown>();
+  const base: Record<string, unknown> = {
+    getLead: async () => ({ status_id: 1, custom_fields_values: [] }),
+    listLeadCustomFields: async () => ({ _embedded: { custom_fields: [{ id: ID_PAGAMENTO, name: '¤ Pagamento antecipado' }] } }),
+    listPipelines: async () => [],
+    setLeadCustomFieldValue: async (_l: number, id: number, _t: string, v: unknown) => void carimbos.set(id, v),
+  };
+  const kommo = new Proxy(base, { get: (t, k) => (k in t ? t[k as string] : async () => []) }) as unknown as KommoClient;
+  return { kommo, carimbos };
+}
+const esperarOsCarimbos = () => new Promise((r) => setTimeout(r, 150));
+
+test('remarcação: escolha antiga pix_antecipado na conversa NÃO carimba "¤ Pagamento antecipado = Sim" na unidade sem antecipado', async () => {
+  atual = unidade({ acceptsAdvancePayment: false });
+  escolhaNaConversa = 'pix_antecipado';
+  limparCacheEsquema();
+  const { kommo, carimbos } = kommoQueGrava();
+  const hora = await primeiroHorario(atual);
+  const r = await (buildAgendarConsulta({ unit: atual, recorder, kommo }) as unknown as Func).func({ idClient: 9, data: DIA, hora, leadId: 1, remarcando: true });
+  assert.match(r, /Consulta marcada para/);
+  await esperarOsCarimbos();
+  assert.equal(carimbos.get(ID_PAGAMENTO), 'Não');
+});
+
+test('remarcação com a flag ligada (padrão): a escolha pix_antecipado guardada continua carimbando "Sim", como sempre', async () => {
+  atual = unidade();
+  escolhaNaConversa = 'pix_antecipado';
+  limparCacheEsquema();
+  const { kommo, carimbos } = kommoQueGrava();
+  const hora = await primeiroHorario(atual);
+  await (buildAgendarConsulta({ unit: atual, recorder, kommo }) as unknown as Func).func({ idClient: 9, data: DIA, hora, leadId: 1, remarcando: true });
+  await esperarOsCarimbos();
+  assert.equal(carimbos.get(ID_PAGAMENTO), 'Sim');
+});
+
+test('sem antecipado: o parâmetro diaConfirmado não cita "Comprovante do Pix"; com a flag ligada a descrição é a de sempre', () => {
+  const sem = agendar(unidade({ acceptsAdvancePayment: false }));
+  const descSem = String((sem.schema.shape.diaConfirmado as { description?: string }).description);
+  assert.doesNotMatch(descSem, /pix|comprovante|taxa de reserva/i);
+  assert.match(descSem, /"ok" para o horário não conta/);
+  const com = agendar(unidade());
+  assert.match(String((com.schema.shape.diaConfirmado as { description?: string }).description), /Comprovante do Pix NÃO vale como confirmação do dia/);
+  // Boa Vista (taxa vence): a descrição continua citando o comprovante
+  const boaVista = agendar(unidade({ acceptsAdvancePayment: false, spineBookingRequiresPayment: true }));
+  assert.match(String((boaVista.schema.shape.diaConfirmado as { description?: string }).description), /Comprovante do Pix/);
 });

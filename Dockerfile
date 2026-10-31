@@ -45,4 +45,6 @@ EXPOSE 8080
 
 # migrate deploy é idempotente (advisory lock) — seguro no start-first, só o
 # container novo aplica; o antigo já está migrado.
-CMD ["sh", "-c", "pnpm exec prisma migrate deploy && node dist/server.js"]
+# `exec`: o node vira o PID 1. Sem ele o sh pode ficar como PID 1 e engolir o SIGTERM do Swarm — o desligamento gracioso
+# (esperar os turnos da IA, soltar o lease) nunca rodaria e o container levaria SIGKILL no fim do stop_grace_period.
+CMD ["sh", "-c", "pnpm exec prisma migrate deploy && exec node dist/server.js"]
