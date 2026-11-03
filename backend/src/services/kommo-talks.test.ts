@@ -71,6 +71,9 @@ test('normalizar: aviso do sistema que sai como mensagem de saída (Lite/waba) s
     raw({ id: '4', created_at: t0 + 9, text: "'messageContextInfo' is not yet supported. Use your device to view this message." }), // mídia do paciente: segue (temMidiaSemArquivo)
   ]);
   assert.deepEqual(msgs.map((m) => m.id), ['3', '4']);
+  // quebra de linha no aviso e `type` ausente (a direção 'saida' é tudo que não é 'incoming')
+  const quebrado = normalizar([raw({ id: '5', type: undefined as unknown as string, author: { type: 'bot', name: 'WhatsApp Lite' }, text: "'messageContextInfo' is not yet supported.\nUse your device to view this message." })]);
+  assert.deepEqual(quebrado, []);
 });
 
 test('selecionarItens: áudio do turno que o webhook não trouxe (WhatsApp Lite) entra; sem o aviso, continua fora', () => {

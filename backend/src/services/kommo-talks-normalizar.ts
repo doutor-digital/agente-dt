@@ -46,7 +46,7 @@ const APPS_DA_EQUIPE = ['whatsapp business', 'whatsapp lite'];
  * (canal Lite: 12 em Boa Vista e 23 em Mossoró em 14 dias, medidos pelo sênior).
  */
 const AVISO_DO_SISTEMA =
-  /^(unable to (open|display) this message|n[aã]o foi poss[ií]vel (abrir|exibir) (esta|essa) mensagem)|\bis not yet supported\b.{0,20}\buse your device to view this message/i;
+  /^(unable to (open|display) this message|n[aã]o foi poss[ií]vel (abrir|exibir) (esta|essa) mensagem)|\bis not yet supported\b[\s\S]{0,30}\buse your device to view this message/i;
 
 export function ehAvisoDoSistema(texto: string): boolean {
   return AVISO_DO_SISTEMA.test(texto.trim());
@@ -88,7 +88,7 @@ export function separarSessaoDaEquipe(msgs: MensagemOficial[], enviosDaSofia: Da
  */
 export function normalizar(raw: KommoTalkMessage[]): MensagemOficial[] {
   return raw
-    .filter((m) => !(m.type === 'outgoing' && ehAvisoDoSistema(m.text ?? '')))
+    .filter((m) => !(m.type !== 'incoming' && ehAvisoDoSistema(m.text ?? '')))
     .map((m) => {
       const autor = classificarAutor(m);
       return {
