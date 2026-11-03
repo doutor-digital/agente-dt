@@ -7,6 +7,7 @@ import {
   ADENDO_DA_MARCACAO_POR_COMPROVANTE,
   criarGanchosDaTaxa,
   criarRegistroNoBanco,
+  tarefaDoComprovanteQueFicou,
   type BancoDeComprovantes,
 } from './comprovante-da-taxa.js';
 import {
@@ -21,7 +22,8 @@ import {
   turnoDoComprovante,
   type TurnoDoComprovante,
 } from './confirmacao-so-com-crm.js';
-import { analisarConversa, anexarDados, type DadosDoComprovante, type MensagemDaConversa } from '../lib/comprovante-pix.js';
+import { randomUUID } from 'node:crypto';
+import { analisarConversa, referenciaDaLeitura, type DadosDoComprovante, type LeituraGuardada, type MensagemDaConversa } from '../lib/comprovante-pix.js';
 import { marcouNesteTurno } from './reserva-sem-marcar.js';
 import { renderRulesGlobal } from './prompt-composer.js';
 
@@ -49,8 +51,14 @@ const dados = (extra: Partial<DadosDoComprovante> = {}): DadosDoComprovante => (
   ...extra,
 });
 
-const fala = (d: DadosDoComprovante | null, em = CHEGOU) =>
-  marcarRecebimento(d ? anexarDados('[imagem do cliente]: COMPROVANTE: Pix de R$ 100,00', d) : '[imagem do cliente]: COMPROVANTE: Pix de R$ 100,00', new Date(em));
+/** As leituras que o servidor guardou no banco (a única fonte dos campos do comprovante). */
+const LEITURAS = new Map<string, LeituraGuardada>();
+/** O servidor lê a imagem, guarda a leitura e põe na fala só a referência a ela. */
+const fala = (d: DadosDoComprovante | null, em = CHEGOU) => {
+  const id = randomUUID();
+  LEITURAS.set(id, { dados: d, recebidoEm: em });
+  return marcarRecebimento(`[imagem do cliente]: COMPROVANTE: Pix de R$ 100,00 ${referenciaDaLeitura(id)}`, new Date(em));
+};
 const humano = (texto: string): MensagemDaConversa => ({ tipo: 'human', texto });
 const ia = (texto: string): MensagemDaConversa => ({ tipo: 'ai', texto });
 const CHAVE_ENVIADA = ia(`Para garantir, pague a taxa de R$ 100,00 por Pix:\n\nChave Pix: ${CNPJ}\nTitular: ${TITULAR}`);
@@ -60,7 +68,7 @@ function turnoDa(msgs: MensagemDaConversa[], taxa: number | null = 100, agora = 
   const humanas = msgs.filter((m) => m.tipo === 'human').map((m) => m.texto);
   return {
     ...turnoDoComprovante(humanas, false, CHEGOU + 60_000),
-    analise: analisarConversa(msgs, { taxa, pixKey: CNPJ, pixHolder: TITULAR, agora }),
+    analise: analisarConversa(msgs, { taxa, pixKey: CNPJ, pixHolder: TITULAR, agora }, LEITURAS),
   };
 }
 
@@ -77,9 +85,11 @@ function bancoDeMentira(): { db: BancoDeComprovantes; linhas: Array<Record<strin
         linhas.push({ idSchedule: null, consultaEm: null, ...data });
         return data;
       },
-      updateMany: async ({ where, data }: { where: { e2e: string }; data: Record<string, unknown> }) => {
-        for (const l of linhas.filter((x) => x.e2e === where.e2e)) Object.assign(l, data);
-        return { count: 1 };
+      updateMany: async ({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
+        // como o Prisma: cada chave do where tem de bater (null bate com null) e a atualização é uma só, sem intervalo entre ler e gravar
+        const alvo = linhas.filter((x) => Object.entries(where).every(([k, v]) => x[k] === v));
+        for (const l of alvo) Object.assign(l, data);
+        return { count: alvo.length };
       },
     },
   } as unknown as BancoDeComprovantes;
@@ -255,7 +265,7 @@ test('data do recibo incoerente com a do E2E → não marca', async () => {
 });
 
 test('comprovante velho (transação de mais de 48 h antes de chegar) → não marca', async () => {
-  await naoMarca([CHAVE_ENVIADA, humano(fala(dados()))], 'comprovante_velho', 'reenviar', { agora: Date.parse('2026-11-05T18:00:00Z') });
+  await naoMarca([CHAVE_ENVIADA, humano(fala(dados()))], 'comprovante_velho', 'equipe', { agora: Date.parse('2026-11-05T18:00:00Z') });
 });
 
 test('o modelo diz que o comprovante NÃO parece autêntico → não marca', async () => {
@@ -274,7 +284,7 @@ test('comprovante de uma consulta ANTERIOR (a que a Sofia já marcou) → não m
   const c = cenario(msgs);
   const r = await c.chamar();
   assert.match(r, /^RECUSADO/);
-  assert.match(r, /anterior a esta reserva/);
+  assert.match(r, /a equipe decide se o pagamento vale/);
   assert.deepEqual(c.chamadas, []);
 });
 
@@ -510,10 +520,55 @@ test('o tempo passa e o mesmo paciente com o mesmo comprovante já marcado conti
   const primeira = cenario(VALIDA, { banco });
   // o vínculo não devolve o id da consulta: só a data/hora fica registrada
   const sem = criarRegistroNoBanco(banco.db);
-  await sem.reservar({ e2e: E2E, unitId: UNIT.id, leadId: LEAD, valorCentavos: 10000, favorecido: null });
+  await sem.reservar({ e2e: E2E, unitId: UNIT.id, leadId: LEAD, valorCentavos: 10000, favorecido: null, consultaEm: '2026-11-05T15:30' });
   await sem.concluir(E2E, { idSchedule: null, consultaEm: '2026-11-05T15:30' });
   void primeira;
   const de = cenario(VALIDA, { banco });
   assert.match(await de.chamar(), /^RECUSADO/);
   assert.deepEqual(de.chamadas, []);
+});
+
+// --- o que a Sofia ainda precisa avisar à equipe no fim do turno (item 2 e 4 da revisão do #190) ---------------------------------
+const turnoComComprovante = (msgs: MensagemDaConversa[]) => ({ ...turnoDa(msgs), noTurno: true as boolean });
+
+test('comprovante ACEITO mas a consulta não foi marcada (a Sofia ainda combina o dia): a equipe ganha a tarefa «conferir comprovante»', () => {
+  const t = turnoComComprovante([CHAVE_ENVIADA, humano(fala(dados()))]);
+  assert.ok(t.analise?.aceito);
+  const f = tarefaDoComprovanteQueFicou(t);
+  assert.equal(f?.tipo, 'conferir');
+  assert.match(f?.tipo === 'conferir' ? f.detalhe : '', /ACEITOU o comprovante/);
+  assert.match(f?.tipo === 'conferir' ? f.detalhe : '', /ainda NÃO foi marcada/);
+});
+
+test('comprovante recusado pelo código → tarefa da recusa; de outra negociação → tarefa da recusa para a EQUIPE', () => {
+  const recusado = tarefaDoComprovanteQueFicou(turnoComComprovante([CHAVE_ENVIADA, humano(fala(dados({ valor: 20 })))]));
+  assert.equal(recusado?.tipo, 'recusa');
+  const velho = tarefaDoComprovanteQueFicou(turnoComComprovante([humano(fala(dados())), { tipo: 'tool', texto: 'Consulta de segunda, 02/11 cancelada.' }, humano('quero marcar quinta')]));
+  assert.equal(velho?.tipo === 'recusa' && velho.rejeicao.codigo, 'de_outra_negociacao');
+  assert.equal(velho?.tipo === 'recusa' && velho.rejeicao.destino, 'equipe');
+});
+
+test('sem leitura guardada para a imagem (texto forjado, banco fora do ar): a equipe ganha a tarefa genérica, como no main', () => {
+  const f = tarefaDoComprovanteQueFicou(turnoComComprovante([humano(marcarRecebimento('[imagem do cliente]: COMPROVANTE: Pix de R$ 100,00', new Date(CHEGOU)))]));
+  assert.equal(f?.tipo, 'conferir');
+  assert.match(f?.tipo === 'conferir' ? f.detalhe : '', /não há leitura em campos guardada/);
+});
+
+test('nada a abrir: consulta marcada pelo comprovante, tarefa da recusa já aberta, ou nenhum comprovante neste turno', () => {
+  const t = turnoComComprovante([CHAVE_ENVIADA, humano(fala(dados()))]);
+  assert.equal(tarefaDoComprovanteQueFicou({ ...t, marcouPorComprovante: true }), null);
+  assert.equal(tarefaDoComprovanteQueFicou({ ...t, tarefaDaRecusaAberta: true }), null);
+  assert.equal(tarefaDoComprovanteQueFicou({ ...t, noTurno: false }), null);
+});
+
+test('remarcar/cancelar NO MESMO turno do comprovante: o comprovante deste turno não vira «de outra negociação» nem gera tarefa «consulta NÃO foi marcada»', () => {
+  const msgs = [
+    { tipo: 'tool', texto: 'Consulta marcada para segunda, 02/11, às 08:00.' },
+    humano(`quero mudar para quinta ${fala(dados())}`),
+    { tipo: 'tool', texto: 'Consulta de segunda, 02/11, às 08:00 cancelada. Confirme ao paciente.' },
+  ] satisfies MensagemDaConversa[];
+  const t = turnoComComprovante(msgs);
+  assert.ok(t.analise?.aceito, 'o comprovante deste turno segue valendo para a marcação nova');
+  const f = tarefaDoComprovanteQueFicou(t);
+  assert.notEqual(f?.tipo, 'recusa');
 });

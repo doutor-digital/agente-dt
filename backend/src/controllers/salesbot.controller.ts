@@ -15,6 +15,9 @@ import { portaDaEquipe, travaAntesDeEnviar } from '../lib/pausa-equipe.js';
 import { garantirTituloPadrao } from '../lib/titulo-padrao.js';
 import { telefoneDeFamiliarNoCartao } from '../lib/telefone-de-familiar.js';
 import { blocoDaConversaOficial } from '../lib/conversa-oficial.js';
+import { lerAnexosDoPaciente } from '../lib/comprovante-lido.js';
+import { neutralizarMarcasDoSistema } from '../lib/comprovante-pix.js';
+import { mensagensOficiaisDaUnidade } from '../services/kommo-talks.service.js';
 import { detectarVazamento, explicarVazamento } from '../services/vazamento.js';
 
 const payloadSchema = z
@@ -155,7 +158,28 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
     return;
   }
 
-  const humanMessage = `${currentTimeTag()} ${message}`;
+  // Unidade com taxa de reserva (Boa Vista): este caminho só traz TEXTO, e texto digitado não pode se passar por comprovante lido. A fala do
+  // paciente perde as marcas que só nós gravamos, e as imagens/PDFs que ele mandou (rota oficial do Kommo) são lidas AQUI, pelo
+  // servidor, e guardadas no banco — é só assim que um comprovante conta (lib/comprovante-lido.ts).
+  let anexosLidos = '';
+  if (unit.spineBookingRequiresPayment && Number.isFinite(Number(leadId))) {
+    try {
+      const msgsOficiais = porta.msgs ?? (await mensagensOficiaisDaUnidade(unit, createKommoClient(unit), Number(leadId), 40));
+      const lidos = await lerAnexosDoPaciente(unit, Number(leadId), msgsOficiais);
+      anexosLidos = lidos.texto;
+      if (lidos.lidos > 0) {
+        await recorder.step({
+          kind: 'THINKING',
+          title: `🧾 Anexos do paciente lidos pela conversa oficial: ${lidos.lidos} lido(s), ${lidos.comprovantes} comprovante(s)`,
+          payload: { lidos: lidos.lidos, comprovantes: lidos.comprovantes },
+        });
+      }
+    } catch (err) {
+      logger.warn({ err: String(err), leadId, unit: unit.slug }, 'salesbot: não consegui ler os anexos do paciente (segue sem)');
+    }
+  }
+  const textoDoPaciente = unit.spineBookingRequiresPayment ? neutralizarMarcasDoSistema(message) : message;
+  const humanMessage = `${anexosLidos ? `${anexosLidos}\n\n` : ''}${currentTimeTag()} ${textoDoPaciente}`;
 
   try {
     const graph = await buildAgentGraph(recorder, unit, Number(leadId));

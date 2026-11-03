@@ -7,8 +7,11 @@
  * este módulo existe: ele tira da frente o comprovante errado, repetido, velho ou editado, e a equipe ganha a tarefa de
  * conferir o extrato depois (`agent/comprovante-da-taxa.ts`).
  *
- * A visão devolve CAMPOS (`DadosDoComprovante`, `services/vision.service.ts`) e o webhook os cola na fala do paciente
- * numa marca `[dados-do-comprovante:…]`. Tudo aqui é puro e determinístico; o que fala com banco/Kommo está no módulo do agente.
+ * A visão devolve CAMPOS (`DadosDoComprovante`, `services/vision.service.ts`) e eles são GUARDADOS NO BANCO (`lib/comprovante-lido.ts`),
+ * presos à unidade, ao cartão e à imagem lida. Na fala do paciente só vai uma referência opaca `[comprovante-lido:<uuid>]`. NADA que
+ * está no texto da conversa vale como dado do comprovante: texto digitado pelo paciente (WhatsApp, salesbot, Meta, áudio transcrito,
+ * conversa oficial do Kommo) não consegue fabricar uma leitura, porque a decisão só confia no que o servidor gravou ao ler a imagem.
+ * Tudo aqui é puro e determinístico; o que fala com banco/Kommo está fora.
  *
  * Identificação fim a fim do Pix (E2E, Manual de Padrões para Iniciação do Pix, Bacen): 32 caracteres =
  * `E` + ISPB de quem pagou (8 dígitos) + data e hora da transação `AAAAMMDDhhmm` (12 dígitos, em UTC) + 11 alfanuméricos.
@@ -16,7 +19,6 @@
  * neste ambiente (sem acesso). Por isso a data do E2E é comparada com a do recibo aceitando UTC, Brasília (UTC-3) e hora local
  * de Boa Vista (UTC-4) — ver `DESLOCAMENTOS_HORAS`.
  */
-import { ehTranscricaoDeComprovante } from './pagamento-antecipado.js';
 
 /** O que a visão leu do comprovante. Campo ausente na imagem = `null` (a visão é instruída a nunca deduzir). */
 export interface DadosDoComprovante {
@@ -40,34 +42,38 @@ export interface DadosDoComprovante {
   motivoAutenticidade: string;
 }
 
-// --- A marca na fala do paciente -----------------------------------------------------------------------------------------
+// --- A referência na fala do paciente ----------------------------------------------------------------------------------------
 
-const MARCA_DOS_DADOS = /\[dados-do-comprovante:([^\]]*)\]/g;
 const MARCA_DO_CARIMBO = /\[recebido-em:([^\]]+)\]/g;
+const REFERENCIA = /\[comprovante-lido:([0-9a-fA-F-]{36})\]/g;
+const MARCAS_DO_SISTEMA = /\[(?=\s*(?:(?:imagem|arquivo)\s+do\s+cliente\s*\]|comprovante-lido\s*:|dados-do-comprovante\s*:|recebido-em\s*:))/gi;
 
-/** A ÚLTIMA ocorrência da marca: as nossas vão no fim do segmento, depois de tudo o que a visão transcreveu. */
-function ultimaMarca(re: RegExp, segmento: string): string | null {
-  let ultima: string | null = null;
-  for (const m of String(segmento ?? '').matchAll(re)) ultima = m[1];
-  return ultima;
-}
-
-/** O carimbo de recebimento do segmento (epoch ms), ou null. */
+/** O carimbo de recebimento do segmento (epoch ms), ou null — só do fluxo antigo (espera da equipe); a decisão de marcar usa a hora do banco. */
 export function carimboDoSegmento(segmento: string): number | null {
-  const bruto = ultimaMarca(MARCA_DO_CARIMBO, segmento);
-  const t = bruto ? Date.parse(bruto) : NaN;
+  let ultima: string | null = null;
+  for (const m of String(segmento ?? '').matchAll(MARCA_DO_CARIMBO)) ultima = m[1];
+  const t = ultima ? Date.parse(ultima) : NaN;
   return Number.isNaN(t) ? null : t;
 }
 
-/** Tira a marca de dados do texto que vai ao modelo: o modelo lê a transcrição; os campos são para o código. */
-export function semAMarcaDeDados(texto: string): string {
-  return String(texto ?? '').replace(/ ?\[dados-do-comprovante:[^\]]*\]/g, '');
+/** `[comprovante-lido:<uuid>]` — aponta para a leitura guardada no banco. */
+export function referenciaDaLeitura(id: string): string {
+  return `[comprovante-lido:${id}]`;
 }
-const MARCAS_DO_SISTEMA = /\[(?=\s*(?:(?:imagem|arquivo)\s+do\s+cliente\s*\]|dados-do-comprovante\s*:|recebido-em\s*:))/gi;
+
+/** Os ids de leitura citados no texto (sem repetição, na ordem). Citar um id não prova nada: o banco só devolve o que é DESTE cartão. */
+export function referenciasNoTexto(texto: string): string[] {
+  return [...new Set([...String(texto ?? '').matchAll(REFERENCIA)].map((m) => m[1].toLowerCase()))];
+}
+
+/** Tira a referência do texto que vai ao modelo: o modelo lê a transcrição; a leitura em campos é para o código. */
+export function semAReferencia(texto: string): string {
+  return String(texto ?? '').replace(/ ?\[comprovante-lido:[0-9a-fA-F-]{36}\]/g, '');
+}
 
 /**
- * O que o PACIENTE digita não pode se passar por leitura nossa: "[imagem do cliente]: COMPROVANTE: …" e as marcas de dados e de
- * recebimento escritas por ele perdem o colchete de abertura. Aplicado à fala dele antes de o webhook acrescentar as leituras reais.
+ * O que o PACIENTE digita (ou a visão transcreve de dentro da imagem) não pode se passar por leitura nossa: "[imagem do cliente]: …",
+ * as referências e a hora de recebimento perdem o colchete de abertura. É só defesa extra: o que sustenta a trava é a leitura no banco.
  */
 export function neutralizarMarcasDoSistema(texto: string): string {
   return String(texto ?? '').replace(MARCAS_DO_SISTEMA, '(');
@@ -79,7 +85,7 @@ const texto = (v: unknown, max = 200): string | null => {
   return t === '' ? null : t;
 };
 
-/** Valida o que veio da visão (ou da marca) e devolve só campos do tipo certo. `null` se não é um objeto. */
+/** Valida o que veio da visão (ou do banco) e devolve só campos do tipo certo. `null` se não é um objeto. */
 export function normalizarDados(bruto: unknown): DadosDoComprovante | null {
   if (!bruto || typeof bruto !== 'object' || Array.isArray(bruto)) return null;
   const o = bruto as Record<string, unknown>;
@@ -98,22 +104,6 @@ export function normalizarDados(bruto: unknown): DadosDoComprovante | null {
     pareceAutentico: typeof o.pareceAutentico === 'boolean' ? o.pareceAutentico : null,
     motivoAutenticidade: texto(o.motivoAutenticidade, 400) ?? '',
   };
-}
-
-/** Acrescenta os dados à leitura em texto. A marca não tem `]` dentro (vai codificada), então o separador de segmentos não a corta. */
-export function anexarDados(descricao: string, dados: DadosDoComprovante): string {
-  return `${descricao} [dados-do-comprovante:${encodeURIComponent(JSON.stringify(dados))}]`;
-}
-
-/** Os dados de UM segmento ("[imagem do cliente]: COMPROVANTE: … [dados-do-comprovante:…]"), ou null. */
-export function lerDadosDoSegmento(segmento: string): DadosDoComprovante | null {
-  const bruto = ultimaMarca(MARCA_DOS_DADOS, segmento);
-  if (bruto === null) return null;
-  try {
-    return normalizarDados(JSON.parse(decodeURIComponent(bruto)));
-  } catch {
-    return null;
-  }
 }
 
 // --- E2E ------------------------------------------------------------------------------------------------------------------
@@ -197,6 +187,28 @@ export function nomeConfere(doRecibo: string | null | undefined, doCadastro: str
 
 export type ResultadoDoDocumento = 'igual' | 'parcial' | 'diferente' | 'ausente';
 
+function digitoVerificador(base: string, pesos: number[]): number {
+  const soma = [...base].reduce((acc, d, i) => acc + Number(d) * pesos[i], 0);
+  const resto = soma % 11;
+  return resto < 2 ? 0 : 11 - resto;
+}
+
+/** CPF com os dois dígitos verificadores certos (e que não seja 000.000.000-00 etc.). */
+export function cpfValido(d: string): boolean {
+  if (!/^\d{11}$/.test(d) || /^(\d)\1{10}$/.test(d)) return false;
+  const a = digitoVerificador(d.slice(0, 9), [10, 9, 8, 7, 6, 5, 4, 3, 2]);
+  const b = digitoVerificador(d.slice(0, 10), [11, 10, 9, 8, 7, 6, 5, 4, 3, 2]);
+  return a === Number(d[9]) && b === Number(d[10]);
+}
+
+/** CNPJ com os dois dígitos verificadores certos. */
+export function cnpjValido(d: string): boolean {
+  if (!/^\d{14}$/.test(d) || /^(\d)\1{13}$/.test(d)) return false;
+  const a = digitoVerificador(d.slice(0, 12), [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]);
+  const b = digitoVerificador(d.slice(0, 13), [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]);
+  return a === Number(d[12]) && b === Number(d[13]);
+}
+
 /**
  * O CPF/CNPJ do recibo contra a chave Pix da unidade (só dígitos). A chave que não é CPF/CNPJ (e-mail, telefone, aleatória) não
  * tem como ser comparada: `ausente`. Recibo mascarado ("**.485.277/****-**"): vale se os dígitos visíveis (6 ou mais) batem na posição.
@@ -205,7 +217,8 @@ export function compararDocumento(doRecibo: string | null | undefined, chavePix:
   const chave = String(chavePix ?? '').trim();
   if (!/^[\d.\-/\s]+$/.test(chave)) return 'ausente';
   const alvo = soDigitos(chave);
-  if (alvo.length !== 11 && alvo.length !== 14) return 'ausente';
+  // Chave só de dígitos pode ser telefone (11 dígitos) ou CPF/CNPJ: só se o dígito verificador fecha ela é tratada como documento.
+  if (!(alvo.length === 11 ? cpfValido(alvo) : alvo.length === 14 ? cnpjValido(alvo) : false)) return 'ausente';
   const limpo = String(doRecibo ?? '').replace(/[.\-/\s]/g, '');
   if (limpo === '' || !/^[\d*•xX#]+$/.test(limpo)) return 'ausente';
   if (/^\d+$/.test(limpo)) return limpo === alvo ? 'igual' : 'diferente';
@@ -284,7 +297,7 @@ export interface ContextoDaAvaliacao {
 }
 
 const rejeita = (destino: DestinoDaRejeicao, codigo: CodigoDaRejeicao, motivo: string): Rejeicao => ({ ok: false, destino, codigo, motivo });
-const brl = (v: number) => `R$ ${v.toFixed(2).replace('.', ',')}`;
+export const brl = (v: number) => `R$ ${v.toFixed(2).replace('.', ',')}`;
 
 /**
  * As checagens, na ordem. O que é inválido (`reenviar`) vem antes do que é só não verificável (`equipe`): o paciente que pagou a
@@ -336,7 +349,8 @@ export function avaliarComprovante(dados: DadosDoComprovante | null, ctx: Contex
   // comprovante guardado de outra consulta não vale só porque o paciente o mostrou de novo.
   if (e2eMs - (ctx.recebidoEm ?? ctx.agora) > TOLERANCIA_DA_HORA_MIN * MIN) return rejeita('reenviar', 'e2e_no_futuro', 'a transação é posterior ao momento em que o comprovante chegou na conversa');
   if (ctx.agora - e2eMs > IDADE_MAXIMA_MS) {
-    return rejeita('reenviar', 'comprovante_velho', `a transação é de ${new Date(e2eMs).toISOString().slice(0, 16)} UTC, mais de 48 h antes de agora`);
+    // Pedir «outro comprovante» a quem pagou certo e esperou não resolve (soa como pagar de novo): a equipe confere no extrato.
+    return rejeita('equipe', 'comprovante_velho', `a transação é de ${new Date(e2eMs).toISOString().slice(0, 16)} UTC, mais de 48 h antes de agora`);
   }
 
   if (dados.pareceAutentico === null) return rejeita('equipe', 'autenticidade_nao_avaliada', 'a leitura não avaliou a autenticidade da imagem');
@@ -361,18 +375,24 @@ export interface MensagemDaConversa {
   texto: string;
 }
 
-export interface ComprovanteNaConversa {
+/** A leitura guardada no banco de UMA imagem: o que o servidor leu e quando. É a única fonte dos campos do comprovante. */
+export interface LeituraGuardada {
   dados: DadosDoComprovante | null;
-  recebidoEm: number | null;
-  /** ordem na conversa */
-  posicao: number;
+  /** quando o servidor leu a imagem (hora do banco) */
+  recebidoEm: number;
 }
 
-/** O que `agendar_consulta`, `remarcar_consulta` e `cancelar_consulta` devolvem quando agem: cada uma abre uma negociação nova. */
-const MARCO_DA_NEGOCIACAO = /^(Consulta marcada para|Remarcada (de|para)|A CONSULTA NOVA ESTÁ MARCADA|Consulta de .+ cancelada)/;
+/** O que `agendar_consulta` e `remarcar_consulta` devolvem quando marcam. */
+export const RESPOSTA_QUE_MARCA = /^(Consulta marcada para|Remarcada (de|para)|A CONSULTA NOVA ESTÁ MARCADA)/;
+/** …e o que `cancelar_consulta` devolve: cada uma abre uma negociação nova. */
+const MARCO_DA_NEGOCIACAO = new RegExp(`${RESPOSTA_QUE_MARCA.source}|^Consulta de .+ cancelada`);
+
+export function ehMarcoDaNegociacao(textoDaFerramenta: string): boolean {
+  return MARCO_DA_NEGOCIACAO.test(String(textoDaFerramenta ?? '').trim());
+}
 
 export interface AnaliseDoComprovante {
-  /** há comprovante lido (foto/PDF) DESTA negociação — depois da última consulta marcada, remarcada ou cancelada */
+  /** há leitura guardada de comprovante (foto/PDF) DESTA negociação — depois da última consulta marcada, remarcada ou cancelada */
   temComprovante: boolean;
   aceito?: Aceito & { dados: DadosDoComprovante; posicao: number };
   /** a falha do comprovante mais recente, quando nenhum passou */
@@ -381,45 +401,53 @@ export interface AnaliseDoComprovante {
   deOutraNegociacao: number;
 }
 
-/** Cada "[imagem|arquivo do cliente]: COMPROVANTE…" da fala, com os dados e o carimbo. */
-function comprovantesDaFala(fala: string): Array<{ dados: DadosDoComprovante | null; recebidoEm: number | null }> {
-  return String(fala ?? '')
-    .split(/(?=\[(?:imagem|arquivo) do cliente\]:)/)
-    .filter((seg) => ehTranscricaoDeComprovante(seg))
-    .map((seg) => {
-      return { dados: lerDadosDoSegmento(seg), recebidoEm: carimboDoSegmento(seg) };
-    });
-}
-
 /**
  * O comprovante que vale para a consulta que o paciente quer marcar agora.
  *
+ * FONTE DOS CAMPOS: `leituras`, o que o servidor guardou no banco ao ler a imagem (preso à unidade e ao cartão desta conversa). O texto
+ * das mensagens só serve para dizer ONDE na conversa cada leitura apareceu (a referência `[comprovante-lido:<uuid>]`): texto digitado,
+ * transcrito de áudio ou vindo da conversa oficial do Kommo não traz leitura nenhuma, então não fabrica comprovante.
+ *
  * Critério de «desta negociação» (o histórico não tem data por mensagem, então vale a ORDEM da conversa):
  *  1. só conta o comprovante que veio DEPOIS da última consulta marcada, remarcada ou cancelada pela Sofia nesta conversa — o de uma
- *     consulta anterior não paga a próxima (a resposta da ferramenta fica no histórico);
+ *     consulta anterior não paga a próxima (a resposta da ferramenta fica no histórico). O que a ferramenta fez NESTE turno (depois da
+ *     última fala do paciente) não conta: o comprovante deste turno não vira «de outra negociação» porque a Sofia cancelou/remarcou agora;
  *  2. a transação tem de ter no máximo 48 h até o momento de marcar (`avaliarComprovante`) — não há limite de 24 h de espera pela equipe;
  *  3. o E2E nunca foi usado antes (banco, `agent/comprovante-da-taxa.ts`).
  * NÃO se exige que a Sofia tenha mandado a chave Pix antes: a recepção também manda a chave, por fora da conversa da IA, e exigir isso
  * jogaria fora o comprovante de quem pagou certo (e foi justamente a queixa de Boa Vista).
  * Dos que passam, o MAIS RECENTE vale; se nenhum passar, a falha do mais recente é a que se explica.
  */
-export function analisarConversa(mensagens: ReadonlyArray<MensagemDaConversa>, ctx: Omit<ContextoDaAvaliacao, 'recebidoEm'> & { recebidoEm?: number | null }): AnaliseDoComprovante {
+export function analisarConversa(
+  mensagens: ReadonlyArray<MensagemDaConversa>,
+  ctx: Omit<ContextoDaAvaliacao, 'recebidoEm'>,
+  leituras: ReadonlyMap<string, LeituraGuardada>,
+): AnaliseDoComprovante {
+  let ultimaFala = -1;
+  mensagens.forEach((m, i) => {
+    if (m.tipo === 'human') ultimaFala = i;
+  });
   let marco = -1;
   mensagens.forEach((m, i) => {
-    if (m.tipo === 'tool' && MARCO_DA_NEGOCIACAO.test(String(m.texto ?? '').trim())) marco = i;
+    if (i < ultimaFala && m.tipo === 'tool' && ehMarcoDaNegociacao(m.texto)) marco = i;
   });
-  const corte = marco;
 
-  const doEscopo: ComprovanteNaConversa[] = [];
-  let deOutraNegociacao = 0;
-  let posicao = 0;
+  // a leitura vale onde a referência aparece pela ÚLTIMA vez (citar de novo uma antiga não a rejuvenesce além disso: o E2E já usado barra)
+  const lugar = new Map<string, number>();
   mensagens.forEach((m, i) => {
     if (m.tipo !== 'human') return;
-    for (const c of comprovantesDaFala(m.texto)) {
-      if (i > corte) doEscopo.push({ ...c, posicao: posicao++ });
-      else deOutraNegociacao++;
-    }
+    for (const ref of referenciasNoTexto(m.texto)) if (leituras.has(ref)) lugar.set(ref, i);
   });
+
+  const doEscopo: Array<LeituraGuardada & { posicao: number }> = [];
+  let deOutraNegociacao = 0;
+  [...lugar.entries()]
+    .sort((x, y) => x[1] - y[1])
+    .forEach(([ref, i], posicao) => {
+      const l = leituras.get(ref) as LeituraGuardada;
+      if (i > marco) doEscopo.push({ ...l, posicao });
+      else deOutraNegociacao++;
+    });
 
   const analise: AnaliseDoComprovante = { temComprovante: doEscopo.length > 0, deOutraNegociacao };
   for (const c of [...doEscopo].reverse()) {

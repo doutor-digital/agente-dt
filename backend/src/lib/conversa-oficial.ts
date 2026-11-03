@@ -18,6 +18,7 @@ import {
   type MensagemOficial,
 } from '../services/kommo-talks.service.js';
 import { transcribeAudio } from '../services/transcription.service.js';
+import { neutralizarMarcasDoSistema } from './comprovante-pix.js';
 
 /** Mensagem mais nova que isto é o turno atual, que já chegou pelo webhook. */
 export const JANELA_DO_TURNO_MS = 3 * 60_000;
@@ -135,7 +136,9 @@ export async function blocoDaConversaOficial(args: {
   await registrarNoHistorico(unit, leadId, itens).catch((err) =>
     logger.warn({ err: String(err), leadId }, 'conversa oficial: falha ao gravar no histórico (segue)'),
   );
-  return renderConversaOficial(itens, unit.spineTimezone ?? 'America/Sao_Paulo');
+  const bloco = renderConversaOficial(itens, unit.spineTimezone ?? 'America/Sao_Paulo');
+  // Unidade com taxa de reserva: mensagem antiga do paciente, trazida da rota oficial, não pode trazer as marcas que só o servidor grava.
+  return unit.spineBookingRequiresPayment ? neutralizarMarcasDoSistema(bloco) : bloco;
 }
 
 /**
