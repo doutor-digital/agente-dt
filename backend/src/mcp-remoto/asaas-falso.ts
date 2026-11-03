@@ -42,6 +42,8 @@ export interface Opc {
   /** o Asaas devolve estes clientes para QUALQUER busca por documento (resposta fora do combinado) */
   clientesTortos?: Cli[];
   saldo?: number;
+  /** o Asaas NÃO devolve o campo `refunds` na cobrança (para provar que sem a lista e sem o campo o estorno recusa) */
+  semCampoRefunds?: boolean;
   /** outro slug para a conta (padrão a Serra) */
   slug?: string;
   /** a impressão curta da chave do Asaas (duas contas com o mesmo valor usam a mesma chave) */
@@ -102,7 +104,12 @@ export function asaasFalso(o: Opc = {}) {
         if (p) {
           const x = pagamentos.find((y) => y.id === p[1]);
           if (!x) throw new ErroHttp('Asaas 404 em /payments', 404);
-          return x as T;
+          if (o.semCampoRefunds) {
+            const { refunds: _r, ...semCampo } = x;
+            void _r;
+            return semCampo as T;
+          }
+          return { ...x, refunds: x.refunds ?? null } as T;
         }
         throw new Error(`rota não simulada: ${caminho}`);
       },

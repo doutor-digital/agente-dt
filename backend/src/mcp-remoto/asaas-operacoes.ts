@@ -13,7 +13,7 @@ import {
   type ClienteAsaas, type CtxEscrita, type EnderecoPedido, type Quem, type Registrar,
 } from './asaas-escrita.js';
 import {
-  acharDestino, dinheiro, EVENTO_OPERACAO, identidadeDoDestino, mascararChavePix, mostrarDestino, textoDoAviso, textoSemDestinos, type Destino, type PedidoDeDestino,
+  acharDestino, arredondar, dinheiro, EVENTO_OPERACAO, identidadeDoDestino, mascararChavePix, mostrarDestino, textoDoAviso, textoSemDestinos, type Destino, type PedidoDeDestino,
 } from './asaas-limites.js';
 
 const emPortugues = (s?: string) => STATUS_PT[s ?? ''] ?? s ?? 'desconhecido';
@@ -191,7 +191,10 @@ export async function cancelarCobranca({ asaas, esc }: CtxEscrita, quem: Quem, a
       );
     }
     const valor = atual.value ?? 0;
-    const base = { conta: c.slug, operacao: 'cancelar_cobranca', valor, noTeto: 0, idAsaas: id, statusAntes: atual.status, pediuPor: quem.id };
+    const base0 = { conta: c.slug, operacao: 'cancelar_cobranca', valor, noTeto: 0, idAsaas: id, statusAntes: atual.status, pediuPor: quem.id };
+    // limite de QUANTIDADE por hora (e a intenção gravada antes), na trava da chave do Asaas: um laço de cancelamentos não passa
+    const reserva = await reservar(esc, c, quem, { tipo: 'cancelamento', valor, noTeto: 0, evento: EVENTO_OPERACAO, argumentos: base0 });
+    const base = { ...base0, intencaoId: reserva.intencaoId, chaveAsaas: reserva.grupo };
     const detalhe = `${atual.billingType ?? ''} · vencimento ${atual.dueDate ? dataBR(atual.dueDate) : '?'} · cliente ${atual.customer ?? '?'}`.trim();
     let r: { deleted?: boolean; id?: string } | null;
     try {
@@ -217,8 +220,6 @@ export async function cancelarCobranca({ asaas, esc }: CtxEscrita, quem: Quem, a
 
 // ----------------------------------------------------------------- estornar cobrança recebida
 
-const arredondar = (n: number) => Math.round(n * 100) / 100;
-
 /**
  * Quanto desta cobrança JÁ foi estornado. Soma o que o Asaas devolve em `/payments/{id}/refunds` e o campo `refunds` da própria cobrança e
  * fica com o MAIOR dos dois (na dúvida, o que resta é menor). Estorno cancelado ou falho não conta. Se a lista não puder ser lida
@@ -232,7 +233,10 @@ async function jaEstornadoDe(c: ContaAsaas, id: string, atual: Pagamento): Promi
     const r = await c.fonte.get<{ data?: Array<{ value?: number; status?: string }> }>(`/payments/${id}/refunds`);
     daLista = soma(r?.data);
   } catch (e) {
-    if ((e as { status?: number })?.status !== 404) throw new ErroDeEntrada('não consegui conferir os estornos anteriores desta cobrança — nada foi feito; tente em instantes');
+    if ((e as { status?: number })?.status === 401) throw e;
+    // a rota de lista falhou (não existe, sem permissão, fora do ar): vale o campo `refunds` da própria cobrança, MAS só se ele veio na resposta
+    // (campo ausente = não sei o que já saiu = não estorna)
+    if (!('refunds' in atual)) throw new ErroDeEntrada('não consegui conferir os estornos anteriores desta cobrança — nada foi feito; tente em instantes');
   }
   return Math.max(daLista, soma(atual.refunds));
 }

@@ -144,7 +144,7 @@ test('evento interno é isento por NOME, não só pelo formato dos campos: chave
   assert.deepEqual(argumentosDaAuditoria('outra_ferramenta', args), { conta: 'x', chave: 'formato-novo-[CPF/senha omitido]' });
 });
 
-test('leitor: só conta o que está na janela de 36 horas e só da conta pedida; cancelar e editar cliente não entram; edição entra com o acréscimo', async () => {
+test('leitor: só conta o que está na janela de 36 horas e só da conta pedida; editar cliente não entra; cancelar entra com noTeto 0 (só para o limite de quantidade); edição entra com o acréscimo', async () => {
   const H = 3_600_000;
   const linha = (ferramenta: string, conta: string, idadeH: number, args: object, ok = true) => ({ createdAt: new Date(AGORA - idadeH * H), ok, ferramenta, argumentos: { conta, ...args } });
   const vistos: Array<{ gte: Date }> = [];
@@ -176,6 +176,7 @@ test('leitor: só conta o que está na janela de 36 horas e só da conta pedida;
     ['estorno', 200, 200, 'e5', 'pay_e5'],
     ['transferencia', 300, 300, 'f6', null],
     ['edicao', 500, 50, null, 'pay_g7'],
+    ['cancelamento', 999, 0, null, 'pay_h8'],
     ['transferencia', 400, 400, null, null],
   ]);
   assert.equal(vistos[0]!.gte.getTime(), AGORA - 36 * H, 'a janela pedida ao banco é de exatamente 36 horas');

@@ -611,9 +611,18 @@ test('estorno: os estornos anteriores vêm da lista do Asaas E do campo da cobra
   await assert.rejects(() => estornarCobranca(so404.ctx, Q, { unidade: 'serra', cobrancaId: PAGA.id, valor: 300 }, so404.registrar), /resta nesta cobrança: R\$ 200,00/);
   const cancelado = montar({ pagamentos: [{ ...PAGA, refunds: [{ value: 600, status: 'CANCELLED' } as never] }] });
   assert.equal(((await estornarCobranca(cancelado.ctx, Q, { unidade: 'serra', cobrancaId: PAGA.id, valor: 800 }, cancelado.registrar)) as any).estornado, true);
-  const ilegivel = montar({ pagamentos: [{ ...PAGA }], falhas: [{ metodo: 'GET', caminho: /refunds$/, erro: new ErroHttp('Asaas 500', 500) }] });
+  // a rota de lista falha (500, 400, 405…) mas a cobrança trouxe o campo `refunds`: vale o campo (o maior dos dois que se conhece)
+  for (const status of [500, 400, 405]) {
+    const comCampo = montar({ pagamentos: [{ ...PAGA, refunds: [{ value: 600 }] }], falhas: [{ metodo: 'GET', caminho: /refunds$/, erro: new ErroHttp(`Asaas ${status}`, status) }] });
+    await assert.rejects(() => estornarCobranca(comCampo.ctx, Q, { unidade: 'serra', cobrancaId: PAGA.id, valor: 300 }, comCampo.registrar), /resta nesta cobrança: R\$ 200,00/, String(status));
+  }
+  // lista falhou E o campo não veio: não sabe o que já saiu, não estorna
+  const ilegivel = montar({ semCampoRefunds: true, pagamentos: [{ ...PAGA }], falhas: [{ metodo: 'GET', caminho: /refunds$/, erro: new ErroHttp('Asaas 500', 500) }] });
   await assert.rejects(() => estornarCobranca(ilegivel.ctx, Q, { unidade: 'serra', cobrancaId: PAGA.id }, ilegivel.registrar), /não consegui conferir os estornos anteriores/);
   assert.equal(ilegivel.f.posts().length, 0);
+  // 401 continua sendo "chave recusada", não vira erro genérico de entrada
+  const chaveRuim = montar({ pagamentos: [{ ...PAGA }], falhas: [{ metodo: 'GET', caminho: /refunds$/, erro: new ErroHttp('o Asaas recusou a chave (401)', 401) }] });
+  await assert.rejects(() => estornarCobranca(chaveRuim.ctx, Q, { unidade: 'serra', cobrancaId: PAGA.id }, chaveRuim.registrar), /recusou a chave/);
 });
 
 // ------------------------------------------------------------------ tetos próprios de estorno e de transferência
@@ -653,4 +662,38 @@ test('os tetos próprios lidos do AMBIENTE de verdade: sem variável = 500/2000;
   } finally {
     chaves.forEach((k, i) => (antes[i] === undefined ? delete process.env[k] : (process.env[k] = antes[i])));
   }
+});
+
+test('cancelar em massa não passa: limite de cancelamentos por hora (padrão 10) por chave do Asaas, valendo entre instâncias; passada a hora, libera', async () => {
+  const ids = Array.from({ length: 14 }, (_, i) => `pay_pendente${String(i).padStart(4, '0')}`);
+  const pagamentos = ids.map((id) => ({ ...PENDENTE, id }));
+  const banco = new BancoFalso();
+  const A = montar({ pagamentos: pagamentos.map((p) => ({ ...p })) }, { banco });
+  const B = montar({ pagamentos: pagamentos.map((p) => ({ ...p })) }, { banco });
+  // alternando as duas instâncias: as 10 primeiras passam, a 11ª em diante não
+  const feitos: string[] = [];
+  for (const [i, id] of ids.entries()) {
+    const m = i % 2 ? B : A;
+    try {
+      await cancelarCobranca(m.ctx, Q, { unidade: 'serra', cobrancaId: id }, m.registrar);
+      feitos.push(id);
+    } catch (e) {
+      assert.match(String(e), /limite de 10 cancelamentos por hora nesta chave do Asaas/);
+    }
+  }
+  assert.equal(feitos.length, 10);
+  assert.equal(A.f.posts().length + B.f.posts().length, 10);
+  assert.equal(A.avisos.length + B.avisos.length, 10, 'a recusa não avisa nem cancela');
+  // passada a hora, libera
+  A.relogio.t += 61 * 60_000;
+  B.relogio.t = A.relogio.t;
+  assert.equal(((await cancelarCobranca(A.ctx, Q, { unidade: 'serra', cobrancaId: ids[10]! }, A.registrar)) as any).cancelada, true);
+  // um cancelamento que o Asaas recusa de vez (4xx) NÃO gasta a cota da hora
+  const ruim = montar({ pagamentos: [{ ...PENDENTE }], falhas: [{ metodo: 'DELETE', caminho: /payments/, erro: new ErroHttp('Asaas 400: não pode', 400) }] });
+  for (let i = 0; i < 12; i++) await assert.rejects(() => cancelarCobranca(ruim.ctx, Q, { unidade: 'serra', cobrancaId: PENDENTE.id }, ruim.registrar), /não pode/);
+  // e o limite sobe por variável
+  const dois = montar({ pagamentos: pagamentos.map((p) => ({ ...p })) }, { cancelamentosPorHora: () => 2 });
+  await cancelarCobranca(dois.ctx, Q, { unidade: 'serra', cobrancaId: ids[0]! }, dois.registrar);
+  await cancelarCobranca(dois.ctx, Q, { unidade: 'serra', cobrancaId: ids[1]! }, dois.registrar);
+  await assert.rejects(() => cancelarCobranca(dois.ctx, Q, { unidade: 'serra', cobrancaId: ids[2]! }, dois.registrar), /limite de 2 cancelamentos por hora/);
 });

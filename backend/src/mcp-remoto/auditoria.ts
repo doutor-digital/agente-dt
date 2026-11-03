@@ -75,7 +75,7 @@ export interface LeitorDeAuditoria {
   };
 }
 
-const TIPOS: Record<string, TipoDeLancamento> = { estornar_cobranca: 'estorno', transferir: 'transferencia', editar_cobranca: 'edicao' };
+const TIPOS: Record<string, TipoDeLancamento> = { estornar_cobranca: 'estorno', transferir: 'transferencia', editar_cobranca: 'edicao', cancelar_cobranca: 'cancelamento' };
 
 /**
  * O que a escrita do Asaas fez nas últimas 36 h (auditoria do conector) na CHAVE do Asaas `grupo` (e na conta `conta`, para o que foi gravado antes de a
@@ -106,7 +106,7 @@ export async function lancamentosRecentesDe(db: LeitorDeAuditoria, conta: string
     const valor = Number(a.valor);
     if (!Number.isFinite(valor)) continue;
     const tipo = l.ferramenta === EVENTO_COBRANCA ? 'cobranca' : TIPOS[a.operacao ?? ''];
-    if (!tipo) continue; // cancelar e editar cliente não consomem teto
+    if (!tipo) continue; // editar cliente não consome teto; cancelar entra (noTeto 0) só para o limite de quantidade por hora
     const noTeto = tipo === 'cobranca' ? valor : Number.isFinite(Number(a.noTeto)) ? Number(a.noTeto) : valor;
     const id = a.cobrancaId ?? a.idAsaas;
     out.push({

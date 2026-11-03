@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { enfileirar, criarEscritaAsaas } from './asaas-escrita.js';
-import { acharDestino, conferirTetos, diaLocal, Livro, mascararChavePix, normalizarChave, tetoEspecificoDe, tetoPorDia, tetoPorOperacao, textoDoAviso, lerDestinos } from './asaas-limites.js';
+import { cancelamentosPorHora, acharDestino, conferirTetos, diaLocal, Livro, mascararChavePix, normalizarChave, tetoEspecificoDe, tetoPorDia, tetoPorOperacao, textoDoAviso, lerDestinos } from './asaas-limites.js';
 
 test('tetos: padrão 5000 por operação e 20000 por dia; vazio, 0, negativo e lixo = o PADRÃO (nunca ilimitado); valor bom manda', () => {
   assert.equal(tetoPorOperacao({}), 5000);
@@ -161,4 +161,10 @@ test('fila: uma por conta — uma conta travada não segura as outras, e duas op
   assert.deepEqual(ordem, ['A2']);
   await new Promise((r) => setImmediate(r));
   assert.equal(esc.filas.size, 0, 'filas paradas não ficam guardadas');
+});
+
+test('ASAAS_CANCELAMENTOS_POR_HORA: padrão 10; vazio, 0 e lixo = o padrão', () => {
+  assert.equal(cancelamentosPorHora({}), 10);
+  assert.equal(cancelamentosPorHora({ ASAAS_CANCELAMENTOS_POR_HORA: '25' }), 25);
+  for (const v of ['', '0', '-3', 'abc', '2.5']) assert.equal(cancelamentosPorHora({ ASAAS_CANCELAMENTOS_POR_HORA: v }), 10, v);
 });

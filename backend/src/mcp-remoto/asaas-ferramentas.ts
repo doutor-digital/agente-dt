@@ -182,7 +182,7 @@ export function registrarEscritaAsaas(server: McpServer, asaas: ContextoAsaas, e
     {
       title: 'Cancelar cobrança (Asaas)',
       description:
-        'CANCELA (exclui) uma cobrança que ainda NÃO foi paga (pendente ou vencida), pelo id (pay_…). Cobrança já paga não cancela: use asaas_estornar_cobranca. Cada cancelamento avisa o João no Telegram. ' +
+        'CANCELA (exclui) uma cobrança que ainda NÃO foi paga (pendente ou vencida), pelo id (pay_…). Cobrança já paga não cancela: use asaas_estornar_cobranca. Cada cancelamento avisa o João no Telegram, e há limite de quantidade por hora (padrão 10 por chave do Asaas): cancelar é irreversível. ' +
         'O valor cancelado NÃO devolve espaço ao teto do dia. ' + SO_QUEM_PODE,
       inputSchema: { unidade, cobrancaId: z.string().min(4).describe('pay_…') },
       annotations: apaga,

@@ -23,7 +23,7 @@ import { cnpjValido, cpfValido } from '../lib/integracoes/mascaras.js';
 import { mascararDigitosSeguidos, temDigitosSeguidos } from '../lib/pii.js';
 import { resolverContasAsaas, type ContaAsaas, type ContextoAsaas, type EscritaAsaas } from './asaas.js';
 import {
-  conferirTetos, dinheiro, diaLocal, mascararDoc, mascararEmail, soDigitos, EVENTO_CLIENTE, EVENTO_COBRANCA, EVENTO_OPERACAO, FUSO_PADRAO, lerDestinos, tetoEspecificoDe, tetoPorDia, tetoPorOperacao, textoDoAviso,
+  arredondar, cancelamentosPorHora, conferirTetos, dinheiro, diaLocal, mascararDoc, mascararEmail, soDigitos, EVENTO_CLIENTE, EVENTO_COBRANCA, EVENTO_OPERACAO, FUSO_PADRAO, lerDestinos, tetoEspecificoDe, tetoPorDia, tetoPorOperacao, textoDoAviso,
   type DestinosLidos, type Livro, type Porteiro, type TetoEspecifico, type TipoDeLancamento, type TipoDeSaida,
 } from './asaas-limites.js';
 
@@ -285,6 +285,8 @@ export interface EstadoEscritaAsaas {
   /** teto próprio de estorno e de transferência (vale o menor com o geral) */
   tetoEspecifico: (tipo: TipoDeSaida) => TetoEspecifico;
   porHora: () => number;
+  /** cancelamentos por hora e por chave do Asaas (ASAAS_CANCELAMENTOS_POR_HORA, padrão 10) */
+  cancelamentosPorHora: () => number;
   /** unidades com a escrita ligada (ASAAS_ESCRITA_UNIDADES) */
   unidades: () => Set<string>;
   /** destinos de transferência permitidos da clínica (ASAAS_TRANSFERENCIA_DESTINOS) */
@@ -318,6 +320,7 @@ export function criarEscritaAsaas(
     tetoDia?: () => number;
     tetoEspecifico?: (tipo: TipoDeSaida) => TetoEspecifico;
     porHora?: () => number;
+    cancelamentosPorHora?: () => number;
     unidades?: () => Set<string>;
     destinos?: (slug: string) => DestinosLidos;
     alertar?: (texto: string) => Promise<boolean>;
@@ -331,6 +334,7 @@ export function criarEscritaAsaas(
     tetoDia: o.tetoDia ?? (() => tetoPorDia()),
     tetoEspecifico: o.tetoEspecifico ?? ((tipo) => tetoEspecificoDe(tipo)),
     porHora: o.porHora ?? (() => cobrancasPorHora()),
+    cancelamentosPorHora: o.cancelamentosPorHora ?? (() => cancelamentosPorHora()),
     unidades: o.unidades ?? (() => unidadesComEscrita()),
     destinos: o.destinos ?? ((slug) => lerDestinos(slug)),
     // o servidor passa o Telegram de verdade (producao.ts); sem isso o aviso não sai, e o teste de producao.ts garante a ligação
@@ -360,8 +364,6 @@ export function fusoDe(c: ContaAsaas): string {
 export function grupoDe(c: ContaAsaas): string {
   return c.escrita?.chaveGrupo ?? c.slug;
 }
-
-const arredondar = (n: number) => Math.round(n * 100) / 100;
 
 /**
  * `consumoDoDia` para a RESPOSTA de uma operação que já aconteceu: é só apresentação, então um soluço do banco aqui nunca pode virar erro
@@ -423,6 +425,14 @@ function verificar(esc: EstadoEscritaAsaas, c: ContaAsaas, livro: Livro, o: Conf
     if (esc.porHora() <= 0) throw new ErroDeEntrada('a criação de cobrança pelo conector está DESLIGADA: configure ASAAS_COBRANCAS_POR_HORA com o limite por hora (maior que 0)');
     const naHora = livro.cobrancasNaHora(t, LIMITES_ASAAS.horaMs);
     if (naHora >= esc.porHora()) throw new ErroDeEntrada(`limite de ${esc.porHora()} cobranças por hora nesta conta já foi atingido (${naHora}); tente mais tarde ou crie no painel do Asaas`);
+  }
+  if (o.tipo === 'cancelamento') {
+    // cancelar não mexe em teto de valor; o que segura o cancelamento em massa (o DELETE é irreversível) é a QUANTIDADE por hora
+    const feitos = livro.cancelamentosNaHora(t, LIMITES_ASAAS.horaMs);
+    if (feitos >= esc.cancelamentosPorHora()) {
+      throw new ErroDeEntrada(`limite de ${esc.cancelamentosPorHora()} cancelamentos por hora nesta chave do Asaas já foi atingido (${feitos}); tente mais tarde, faça no painel do Asaas, ou o João sobe ASAAS_CANCELAMENTOS_POR_HORA no servidor. Nada foi feito.`);
+    }
+    return;
   }
   const saida = o.tipo === 'estorno' || o.tipo === 'transferencia' ? { tipo: o.tipo, teto: esc.tetoEspecifico(o.tipo) } : undefined;
   conferirTetos({ livro, fuso: fusoDe(c), agora: t, valor: o.valor, noTeto: o.noTeto, tetoOperacao: esc.tetoOperacao(), tetoDia: esc.tetoDia(), ...(saida ? { saida } : {}) });

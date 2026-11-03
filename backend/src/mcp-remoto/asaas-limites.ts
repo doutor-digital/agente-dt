@@ -22,6 +22,7 @@ export const FUSO_PADRAO = 'America/Sao_Paulo';
  * Padrões dos tetos. Geral: 5000 por operação e 20000 por dia. Estorno e transferência têm teto PRÓPRIO (500 por operação e 2000 por dia) porque
  * são o caminho de uma injeção de texto virar dinheiro saindo; vale o MENOR entre o específico e o geral. O João sobe por variável de ambiente.
  */
+export const CANCELAMENTOS_POR_HORA_PADRAO = 10;
 export const PADRAO_TETOS = { operacaoReais: 5000, diaReais: 20000, saidaOperacaoReais: 500, saidaDiaReais: 2000 };
 export const JANELA_LIVRO_MS = 36 * 3_600_000;
 
@@ -75,10 +76,17 @@ export function tetoEspecificoDe(tipo: TipoDeSaida, e: NodeJS.ProcessEnv = proce
   return { operacao: positivo(e[v.operacao]) ?? PADRAO_TETOS.saidaOperacaoReais, dia: positivo(e[v.dia]) ?? PADRAO_TETOS.saidaDiaReais };
 }
 
+/** ASAAS_CANCELAMENTOS_POR_HORA (padrão 10, por chave do Asaas): vazio, 0 ou lixo = o padrão. Cancelar é irreversível e não gasta teto de valor, então ganha teto de QUANTIDADE. */
+export function cancelamentosPorHora(e: NodeJS.ProcessEnv = process.env): number {
+  const n = positivo(e.ASAAS_CANCELAMENTOS_POR_HORA);
+  return n !== null && Number.isInteger(n) ? n : CANCELAMENTOS_POR_HORA_PADRAO;
+}
+
 // ----------------------------------------------------------------- dinheiro e dia
 
 export const dinheiro = (n: number) => `R$ ${new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n)}`;
 const centavos = (n: number) => Math.round(n * 100);
+export const arredondar = (n: number) => Math.round(n * 100) / 100;
 
 /** O dia civil (AAAA-MM-DD) de um instante, no fuso da clínica. */
 const formatadores = new Map<string, Intl.DateTimeFormat>();
@@ -102,7 +110,7 @@ export function diaLocal(ms: number, fuso: string = FUSO_PADRAO): string {
 
 // ----------------------------------------------------------------- o livro e o porteiro
 
-export type TipoDeLancamento = 'cobranca' | 'estorno' | 'transferencia' | 'edicao';
+export type TipoDeLancamento = 'cobranca' | 'estorno' | 'transferencia' | 'edicao' | 'cancelamento';
 
 export interface Lancamento {
   conta: string;
@@ -134,6 +142,11 @@ export class Livro {
 
   cobrancasNaHora(agora: number, horaMs: number): number {
     return this.itens.filter((x) => x.tipo === 'cobranca' && agora - x.em < horaMs).length;
+  }
+
+  /** cancelamentos feitos na última hora (o DELETE é irreversível: tem limite de quantidade, já que não gasta teto de valor) */
+  cancelamentosNaHora(agora: number, horaMs: number): number {
+    return this.itens.filter((x) => x.tipo === 'cancelamento' && agora - x.em < horaMs).length;
   }
 
   igual(chave: string, agora: number, janelaMs: number): Lancamento | undefined {
