@@ -122,6 +122,12 @@ test('classificarAutor: o app WhatsApp Business é a EQUIPE, mesmo marcado como 
   assert.equal(classificarAutor({ type: 'outgoing', author: { type: 'bot', name: 'Salesbot' } }), 'sofia');
 });
 
+test('classificarAutor: celular/WhatsApp Web no canal Lite (QR code) é a EQUIPE; robô de nome desconhecido segue Sofia', () => {
+  assert.equal(classificarAutor({ type: 'outgoing', author: { type: 'bot', name: 'WhatsApp Lite' } }), 'equipe');
+  assert.equal(classificarAutor({ type: 'outgoing', author: { type: 'bot', name: ' whatsapp web ' } }), 'equipe');
+  assert.equal(classificarAutor({ type: 'outgoing', author: { type: 'bot', name: 'Robô de lembrete' } }), 'sofia');
+});
+
 test('normalizar marca a sessão "Doutor Digital" (pode ser a Sofia em voz ou a equipe); robô não', () => {
   const msgs = normalizar([
     raw({ id: '1', type: 'outgoing', author: { type: 'internal', name: 'Doutor Digital' }, text: 'Agendada consulta para dia 19/10 às 11h00✅' }),

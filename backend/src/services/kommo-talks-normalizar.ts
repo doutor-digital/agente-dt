@@ -28,17 +28,26 @@ export interface MensagemOficial {
 const NOMES_DA_SOFIA = ['doutor digital', 'i.a sofia', 'ia sofia', 'sofia'];
 
 /**
- * O app WhatsApp Business do celular da clínica (coexistência). O Kommo marca a mensagem como de robô, mas
- * quem escreve ali é gente: tratada como Sofia, a IA não via "Agendada consulta para 19/10 às 11h" da
- * equipe e seguiu pedindo confirmação (Canaã, lead 28339048, 17/10).
+ * O que a equipe escreve pelo CELULAR ou pelo WHATSAPP WEB chega à conversa oficial como "robô" com o nome do
+ * canal, nunca com o nome de quem digitou. Quem escreve ali é gente: tratada como Sofia, a IA não via a
+ * equipe (Canaã, lead 28339048, 17/10: "Agendada consulta para 19/10 às 11h" e ela seguiu pedindo confirmação).
+ *  - "WhatsApp Business": WABA em coexistência com o app Business (Timbó, Bebedouro, Serra… — origin `waba`);
+ *  - "WhatsApp Lite": canal por QR code (Boa Vista, Mossoró — origin `com.amocrm.amocrmwa`). Medido em 03/11/2026:
+ *    66 mensagens assim em Boa Vista, nenhuma junto de um envio da IA (a Sofia sai pelo "Salesbot").
+ * Só estes nomes: robô de nome desconhecido continua valendo como robô (Sofia, régua, transmissão).
  */
-const APPS_DA_EQUIPE = ['whatsapp business'];
+const APPS_DA_EQUIPE = ['whatsapp business', 'whatsapp lite', 'whatsapp web', 'whatsapp'];
+
+/** O autor é o app/canal pelo qual a recepção fala (celular ou WhatsApp Web), e não um robô nem um usuário do Kommo? */
+export function ehAppDaEquipe(nome: string | null | undefined): boolean {
+  return APPS_DA_EQUIPE.includes((nome ?? '').trim().toLowerCase());
+}
 
 export function classificarAutor(m: Pick<KommoTalkMessage, 'type' | 'author'>): AutorOficial {
   const tipo = (m.author?.type ?? '').toLowerCase();
   if (m.type === 'incoming' || tipo === 'external') return 'paciente';
   const nome = (m.author?.name ?? '').trim().toLowerCase();
-  if (APPS_DA_EQUIPE.includes(nome)) return 'equipe';
+  if (ehAppDaEquipe(nome)) return 'equipe';
   if (tipo === 'bot') return 'sofia';
   if (NOMES_DA_SOFIA.includes(nome)) return 'sofia';
   return 'equipe';
