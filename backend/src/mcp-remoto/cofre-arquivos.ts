@@ -19,7 +19,7 @@
  * O estado fica na memória (processo único: `replicas: 1`). Reinício = os envios em curso somem e a pessoa pede de novo.
  */
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { chmod, mkdir, open, readdir, readFile, stat, unlink } from 'node:fs/promises';
+import { chmod, mkdir, open, readdir, readFile, stat, unlink, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 
 export type TipoDeArquivo = 'pdf' | 'doc' | 'docx' | 'jpg' | 'png' | 'txt';
@@ -166,13 +166,25 @@ export function validarArquivo(nomeOriginal: string | undefined, conteudo: Buffe
 
 // ── o cofre ────────────────────────────────────────────────────────────────────────────────────────────────────
 
+const FATIA = 1024 * 1024;
+
+/** `write` pode gravar menos do que o pedido (disco quase cheio, sinal): insiste até gravar tudo ou falhar. Devolve quantos bytes gravou. */
+async function escreverTudo(f: FileHandle, buf: Buffer, posicao: number): Promise<number> {
+  let feito = 0;
+  while (feito < buf.length) {
+    const { bytesWritten } = await f.write(buf, feito, buf.length - feito, posicao + feito);
+    if (bytesWritten <= 0) throw new Error('escrita parou no meio');
+    feito += bytesWritten;
+  }
+  return feito;
+}
+
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 const novoToken = () => randomBytes(32).toString('base64url'); // 256 bits, 43 caracteres
 export const FORMATO_DO_TOKEN = /^[A-Za-z0-9_-]{43}$/;
 
 interface Link {
   hash: string;
-  criadoEm: number;
   expiraEm: number;
   baixadas: number;
   max: number;
@@ -220,6 +232,8 @@ export class CofreDeArquivos {
   readonly limites: Limites;
   readonly dir: string;
   private envios = new Map<string, Envio>();
+  /** arquivos cujo apagamento falhou: a varredura tenta de novo (sem esperar o prazo dos órfãos) */
+  private paraApagar = new Set<string>();
   private porTokenDeEnvio = new Map<string, string>();
   private porTokenDeLink = new Map<string, string>();
   /** o relógio do cofre (os testes o controlam) */
@@ -336,11 +350,14 @@ export class CofreDeArquivos {
       // formato: iv (12) + tag (16) + cifrado. A tag só existe no fim: reserva o lugar dela e volta para preencher (sem 2ª cópia do arquivo na memória)
       const f = await open(caminho, 'wx', 0o600);
       try {
-        await f.write(iv);
-        await f.write(Buffer.alloc(16));
-        await f.write(cifra.update(conteudo));
-        await f.write(cifra.final());
-        await f.write(cifra.getAuthTag(), 0, 16, 12);
+        let pos = 0;
+        pos += await escreverTudo(f, iv, pos);
+        pos += await escreverTudo(f, Buffer.alloc(16), pos);
+        for (let de = 0; de < conteudo.length; de += FATIA) {
+          pos += await escreverTudo(f, cifra.update(conteudo.subarray(de, de + FATIA)), pos); // em fatias: sem 2ª cópia inteira na memória
+        }
+        pos += await escreverTudo(f, cifra.final(), pos);
+        await escreverTudo(f, cifra.getAuthTag(), 12);
       } finally {
         await f.close();
       }
@@ -397,7 +414,7 @@ export class CofreDeArquivos {
     const expiraEm = Math.min(t + min * 60_000, e.apagarEm);
     const token = novoToken();
     const hash = sha256(token);
-    e.links.push({ hash, criadoEm: t, expiraEm, baixadas: 0, max: this.limites.baixadasMax });
+    e.links.push({ hash, expiraEm, baixadas: 0, max: this.limites.baixadasMax });
     this.porTokenDeLink.set(hash, e.id);
     this.auditar({ evento: 'link_gerado', envio: e.id, userId: userId, detalhe: { minutos: Math.round((expiraEm - t) / 60_000), baixadasMax: this.limites.baixadasMax } });
     return { token, nome: e.arquivo.nome, expiraEm, baixadasMax: this.limites.baixadasMax };
@@ -477,7 +494,9 @@ export class CofreDeArquivos {
     }
     if (caminho) {
       unlink(caminho).catch((err: NodeJS.ErrnoException) => {
-        if (err.code !== 'ENOENT') this.o.log?.warn({ err, envio: e.id }, 'cofre: não consegui apagar o arquivo; a varredura tenta de novo');
+        if (err.code === 'ENOENT') return;
+        this.paraApagar.add(caminho);
+        this.o.log?.warn({ err, envio: e.id }, 'cofre: não consegui apagar o arquivo; a varredura tenta de novo');
       });
     }
     this.auditar({ evento: 'apagado', envio: e.id, userId: e.dono, detalhe: { motivo, tinhaArquivo } });
@@ -511,6 +530,14 @@ export class CofreDeArquivos {
   async varrer(): Promise<{ orfaosApagados: number }> {
     this.varrerMemoria();
     let orfaosApagados = 0;
+    for (const caminho of [...this.paraApagar]) {
+      try {
+        await unlink(caminho);
+        this.paraApagar.delete(caminho);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') this.paraApagar.delete(caminho);
+      }
+    }
     let nomes: string[];
     try {
       nomes = await readdir(this.dir);

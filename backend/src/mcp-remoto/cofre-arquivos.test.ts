@@ -625,6 +625,44 @@ test('HTTP: no limite padrão, 20 MB passam inteiros e 20 MB + 1 byte são recus
   }
 });
 
+test('HTTP: PUT com Content-Type de JSON/formulário é recusado na hora (415), sem pendurar nem gastar tentativa; o declarado grande responde 413 inteiro', async () => {
+  const c = cenario({ tamanhoMaxBytes: 4096 });
+  try {
+    await comServidor(c, async (url) => {
+      const p = c.cofre.pedirEnvio({ userId: USUARIO, finalidade: 'teste' });
+      for (const tipo of ['application/json', 'application/x-www-form-urlencoded']) {
+        const r = await fetch(`${url}/arquivos/enviar/${p.token}`, { method: 'PUT', headers: { 'Content-Type': tipo }, body: '{"a":1}' });
+        assert.equal(r.status, 415);
+      }
+      assert.equal(c.cofre.ver(USUARIO, p.id).estado, 'aguardando_envio');
+      // os 415 acima não gastaram tentativa: ainda cabem 4 recusas de tamanho e o link segue valendo; a 5ª queima
+      for (let i = 0; i < 5; i++) assert.equal((await enviar(url, p.token, Buffer.concat([PDF, Buffer.alloc(5000)]))).status, 413, `estouro ${i + 1}`);
+      assert.equal((await enviar(url, p.token, PDF)).status, 410, 'queimado pelas 5 recusas');
+    });
+  } finally {
+    c.limpar();
+  }
+});
+
+test('apagamento que falhou é refeito pela varredura (não espera o prazo dos órfãos)', async (t) => {
+  if (process.getuid?.() === 0) return t.skip('root ignora permissão de pasta');
+  const c = cenario();
+  try {
+    const p = await subir(c);
+    const pasta = path.join(c.dir, 'cofre');
+    chmodSync(pasta, 0o500); // unlink falha com EACCES
+    c.cofre.apagar(USUARIO, p.id);
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(c.arquivosNoDisco().length, 1, 'não conseguiu apagar');
+    chmodSync(pasta, 0o700);
+    await c.cofre.varrer();
+    assert.deepEqual(c.arquivosNoDisco(), [], 'a varredura apagou');
+  } finally {
+    chmodSync(path.join(c.dir, 'cofre'), 0o700);
+    c.limpar();
+  }
+});
+
 test('HTTP: link de envio vencido, inventado e malformado não guardam nada; JSON no envio não passa', async () => {
   const c = cenario();
   try {

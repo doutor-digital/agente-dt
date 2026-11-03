@@ -6,7 +6,8 @@
  *   PUT  /arquivos/enviar/:token          o arquivo cru no corpo; o nome vai em X-Nome-Arquivo (URL-encoded)
  *   GET  /arquivos/baixar/:token/:nome    o download direto (o `:nome` é só para o conector deduzir o nome; quem manda é o token)
  *
- * Nenhuma rota passa pelo parser de JSON/urlencoded: o envio é `application/octet-stream`.
+ * O envio é `application/octet-stream`. Os parsers globais de JSON/urlencoded (server.ts) rodam antes e já teriam lido o corpo de um
+ * PUT com esses tipos: por isso o PUT recusa esses dois tipos logo de cara (415) em vez de ficar esperando um corpo que não vem.
  */
 import { randomBytes } from 'node:crypto';
 import type { Express, Request, Response } from 'express';
@@ -157,6 +158,10 @@ export function montarRotasDoCofre(app: Express, cofre: CofreDeArquivos, o: Opco
     cabecalhosSeguros(res);
     const falha = (status: number, erro: string) => res.status(status).set('Connection', 'close').json({ ok: false, erro });
     if (bloqueado(req, res)) return;
+    if (req.is(['json', 'urlencoded'])) {
+      falha(415, 'Envie o arquivo como application/octet-stream.');
+      return;
+    }
     const token = String(req.params.token);
     const limite = cofre.limites.tamanhoMaxBytes;
     const origem = quem(req);
@@ -209,6 +214,7 @@ export function montarRotasDoCofre(app: Express, cofre: CofreDeArquivos, o: Opco
       sair();
       cofre.liberar(reserva, 'grande', origem);
       falha(413, `O arquivo passa do limite de ${Math.floor(limite / 1024 / 1024)} MB.`);
+      res.once('finish', () => req.destroy());
       return;
     }
 
@@ -241,7 +247,7 @@ export function montarRotasDoCofre(app: Express, cofre: CofreDeArquivos, o: Opco
       sair(false);
       const juntar = () => {
         const inteiro = Buffer.concat(pedacos, total);
-        pedacos.length = 0; // os pedaços saem da memória; fica uma cópia só
+        pedacos.length = 0; // os pedaços saem da memória; daqui em diante é uma cópia só (a cifra trabalha em fatias de 1 MB)
         return inteiro;
       };
       cofre
