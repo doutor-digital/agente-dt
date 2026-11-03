@@ -13,12 +13,17 @@
  * Aqui mora o que é decisão de código (não de prompt): o turno com comprovante não marca nem confirma; a
  * resposta que afirma é trocada pelo recado fixo; a equipe ganha a tarefa. Puro onde dá — o que fala com
  * o Kommo recebe o cliente por parâmetro.
+ *
+ * EXCEÇÃO (decisão do João, 03/11/2026): unidade com taxa de reserva (`spine_booking_requires_payment`, Boa Vista). Lá a Sofia
+ * marca pelo comprovante, depois de o código conferi-lo (`lib/comprovante-pix.ts`: favorecido, valor, E2E, data, autenticidade, E2E
+ * nunca reaproveitado), e a equipe ganha a tarefa «Conferir no extrato». Nas outras unidades a regra de 26/10 segue: só a equipe confirma.
  */
 import type { DynamicStructuredTool } from '@langchain/core/tools';
 import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
 import { logger } from '../lib/logger.js';
 import { enviarTelegram } from '../lib/telegram.js';
 import { ehTranscricaoDeComprovante } from '../lib/pagamento-antecipado.js';
+import { carimboDoSegmento, resumoDaLeitura, type Aceito, type AnaliseDoComprovante, type DadosDoComprovante, type Rejeicao } from '../lib/comprovante-pix.js';
 import { normalizar, trechos, type Promessa } from '../lib/prometeu-sem-marcar.js';
 import type { KommoClient } from '../services/kommo.service.js';
 import type { TraceRecorder } from './trace-recorder.js';
@@ -26,6 +31,10 @@ import type { TraceRecorder } from './trace-recorder.js';
 /** O que a Sofia diz quando chega comprovante. */
 export const RECADO_COMPROVANTE =
   'Recebi seu comprovante! 🙏 A equipe confere o pagamento e confirma a sua consulta em até 1 hora, aqui mesmo na conversa.';
+
+/** Boa Vista: a consulta já está no CRM (marcada pelo comprovante, ou pela equipe) e o paciente fala do comprovante/pagamento. */
+export const RECADO_COMPROVANTE_MARCADO =
+  'Recebi seu comprovante! 🙏 Sua consulta está confirmada. Qualquer dúvida é só me chamar por aqui.';
 
 /** A consulta que a IA tinha como marcada foi desmarcada no CRM: ela não confirma nada, a equipe vê. */
 export const RECADO_DESMARCADA =
@@ -157,6 +166,13 @@ export interface TurnoDoComprovante {
   pendente: boolean;
   /** o valor lido em cada comprovante da espera (`null` = ilegível ou ausente) */
   valores?: ReadonlyArray<number | null>;
+  /**
+   * Só em unidade com taxa de reserva: o comprovante DESTA negociação, já conferido pelo código (`analisarConversa`). O grafo o
+   * recalcula a cada volta, com o histórico inteiro (incluindo as respostas das ferramentas).
+   */
+  analise?: AnaliseDoComprovante;
+  /** `agendar_consulta` marcou neste turno com um comprovante aceito: a tarefa «conferir no extrato» substitui a «conferir comprovante». */
+  marcouPorComprovante?: boolean;
 }
 
 /** A espera da equipe tem prazo: depois de 24 h o comprovante deixa de contar (o histórico inteiro fica no banco). */
@@ -202,9 +218,7 @@ export function comprovantesDoTexto(texto: string): ComprovanteLido[] {
     .split(/(?=\[(?:imagem|arquivo) do cliente\]:)/)
     .filter((seg) => ehTranscricaoDeComprovante(seg))
     .map((seg) => {
-      const carimbo = /\[recebido-em:([^\]]+)\]/.exec(seg);
-      const t = carimbo ? Date.parse(carimbo[1]) : NaN;
-      return { valor: valorDoComprovante(seg), recebidoEm: Number.isNaN(t) ? null : t };
+      return { valor: valorDoComprovante(seg), recebidoEm: carimboDoSegmento(seg) };
     });
 }
 
@@ -265,12 +279,18 @@ export function afirmaPagamentoConferido(texto: string | null | undefined): bool
  * - "Consulta confirmada/agendada" também, a menos que a consulta já esteja no CRM (`consultaNoCrm` = o prompt traz a
  *   consulta de verdade: criada pela equipe, ou paciente que paga o saldo): falar DELA é verdade.
  */
-export function respostaDoComprovante(texto: string, turno: TurnoDoComprovante, consultaNoCrm: boolean): string | null {
+export function respostaDoComprovante(
+  texto: string,
+  turno: TurnoDoComprovante,
+  consultaNoCrm: boolean,
+  /** o recado que sai no lugar: Boa Vista, com a consulta já no CRM, não manda esperar a equipe confirmar (`RECADO_COMPROVANTE_MARCADO`) */
+  recado: string = RECADO_COMPROVANTE,
+): string | null {
   if (!turno.pendente) return null;
-  if (afirmaPagamentoConferido(texto)) return RECADO_COMPROVANTE;
+  if (afirmaPagamentoConferido(texto)) return recado;
   if (consultaNoCrm) return null;
   // Depois do turno do comprovante (espera da equipe) só as afirmações FORTES: a conversa segue comum.
-  return afirmaConfirmacao(texto, { soForte: !turno.noTurno }) ? RECADO_COMPROVANTE : null;
+  return afirmaConfirmacao(texto, { soForte: !turno.noTurno }) ? recado : null;
 }
 
 export const RECUSA_DO_COMPROVANTE =
@@ -285,17 +305,20 @@ export const RECUSA_AGUARDANDO_EQUIPE =
   'agendada, reservada ou garantida. Se o paciente pediu outro dia ou outra forma de pagar, diga que a equipe cuida ' +
   'disso junto da confirmação e chame resumir_lead_para_sdr.';
 
-/** Unidade com taxa de reserva (Boa Vista) e nenhum comprovante da taxa lido na conversa (últimas 24 h). */
+/** Unidade com taxa de reserva (Boa Vista) e nenhum comprovante da taxa lido nesta negociação. */
 export const RECUSA_SEM_COMPROVANTE_DA_TAXA =
-  'RECUSADO: nesta unidade a vaga só é reservada DEPOIS da taxa de reserva, e ainda não há comprovante dela lido ' +
+  'RECUSADO: nesta unidade a vaga só é reservada DEPOIS da taxa de reserva, e ainda não há comprovante dela (foto ou PDF) ' +
   'nesta conversa. A consulta NÃO foi marcada. NÃO diga que está agendada e NÃO chame agendar_consulta de novo neste ' +
-  'turno. Diga ao paciente que o horário fica separado por enquanto e explique como garantir: PIX do valor antecipado ' +
+  'turno. Se o paciente disse que JÁ PAGOU ("já paguei", "fiz o pix") mas não mandou o comprovante, peça o comprovante ' +
+  '(foto ou PDF) UMA vez, nesta mensagem: o que ele escreve NÃO vale como pagamento e o horário só é lançado depois do comprovante. ' +
+  'Diga ao paciente que o horário fica separado por enquanto e explique como garantir: PIX do valor antecipado ' +
   'desta unidade (mande a chave e peça o COMPROVANTE aqui na conversa) ou pagamento na clínica antes do dia. Quando o ' +
-  'comprovante chegar (foto ou PDF) com o valor da taxa, aí sim chame agendar_consulta — e nunca diga "pagamento ' +
+  'comprovante chegar (foto ou PDF), aí sim chame agendar_consulta — e nunca diga "pagamento ' +
   'confirmado": quem confere o dinheiro é a equipe. Se ele preferir pagar na clínica, chame resumir_lead_para_sdr para ' +
   'a equipe acompanhar.';
 
 const brl = (v: number) => `R$ ${v.toFixed(2).replace('.', ',')}`;
+
 
 /** Quanto foi lido nos comprovantes da espera e quanto era esperado — vai na tarefa e no passo do rastro. */
 export function detalheDoValor(turno: TurnoDoComprovante, taxaEsperada: number | null): string {
@@ -303,49 +326,99 @@ export function detalheDoValor(turno: TurnoDoComprovante, taxaEsperada: number |
   return `valor lido: ${lidos}; esperado (taxa de reserva): ${taxaEsperada === null ? 'não cadastrado na unidade' : brl(taxaEsperada)}`;
 }
 
-/** O valor lido bate com a taxa? Exato; só a formatação dos centavos (100 = 100,00) é tolerada. */
-export function taxaConfere(turno: TurnoDoComprovante, taxaEsperada: number | null): boolean {
-  if (taxaEsperada === null || !(taxaEsperada > 0)) return false;
-  return (turno.valores ?? []).some((v) => v !== null && Math.round(v * 100) === Math.round(taxaEsperada * 100));
-}
-
 export interface OpcoesDaTrava {
   /** a unidade exige a taxa de reserva antes de marcar (flag `spineBookingRequiresPayment`) */
   exigePagamento?: boolean;
   /** o valor da taxa, lido de onde a unidade guarda o antecipado (`precosDaConsulta`); null = não cadastrado */
   taxaEsperada?: number | null;
+  /** a chave Pix e o titular da unidade: entram no pedido educado quando o comprovante é de outro favorecido */
+  pixKey?: string | null;
+  pixHolder?: string | null;
+  /** o que roda com o comprovante aceito, antes e depois de marcar (E2E nunca reaproveitado, tarefa de extrato) — `comprovante-da-taxa.ts` */
+  ganchos?: GanchosDoComprovante;
 }
 
-export type DecisaoDaTrava = { libera: true } | { libera: false; titulo: string; texto: string };
+/** Comprovante que passou nas checagens de código. */
+export type ComprovanteAceito = Aceito & { dados: DadosDoComprovante };
+export type ComprovanteRecusado = Rejeicao & { dados: DadosDoComprovante | null };
+
+export type DecisaoDaTrava =
+  | { libera: true; aceito?: ComprovanteAceito }
+  | { libera: false; titulo: string; texto: string; rejeicao?: ComprovanteRecusado };
+
+export interface GanchosDoComprovante {
+  /** Antes de marcar: reserva o E2E. `libera:false` = o comprovante não pode ser usado (já foi, ou o registro não respondeu). */
+  antes(
+    aceito: ComprovanteAceito,
+    args: Record<string, unknown>,
+  ): Promise<{ libera: true } | { libera: false; titulo: string; texto: string; rejeicao: ComprovanteRecusado }>;
+  /** Depois de marcar (ou de a franquia recusar): completa o registro, abre a tarefa do extrato e devolve o texto que o modelo lê. */
+  depois(aceito: ComprovanteAceito, args: Record<string, unknown>, resultado: string): Promise<string>;
+  /** O comprovante existia e não passou: a equipe ganha a tarefa com o motivo técnico. */
+  aoRecusar(rejeicao: ComprovanteRecusado, args: Record<string, unknown>): Promise<void>;
+}
+
+/** O que o modelo lê quando o comprovante não passa: o pedido educado de outro, ou o fluxo antigo (a equipe confere). */
+export function textoDaRecusaDoComprovante(r: ComprovanteRecusado, opcoes: Pick<OpcoesDaTrava, 'taxaEsperada' | 'pixKey' | 'pixHolder'> = {}): string {
+  const naoMarcou =
+    'A consulta NÃO foi marcada. NÃO chame agendar_consulta de novo neste turno e NÃO diga que está confirmada, agendada, reservada ou ' +
+    'garantida, nem que o pagamento foi confirmado. ';
+  if (r.destino === 'equipe') {
+    return (
+      `RECUSADO: não consegui conferir o comprovante que o paciente mandou (motivo técnico, NÃO cite ao paciente: ${r.motivo}). ${naoMarcou}` +
+      `A equipe confere e confirma. Responda ao paciente só isto, com as suas palavras: "${RECADO_COMPROVANTE}"`
+    );
+  }
+  const taxa = opcoes.taxaEsperada ? `R$ ${opcoes.taxaEsperada.toFixed(2).replace('.', ',')}` : 'a taxa de reserva';
+  const chave = opcoes.pixKey?.trim();
+  const titular = opcoes.pixHolder?.trim();
+  const generico =
+    'agradeça, diga que não conseguiu conferir direitinho e peça que ele envie de novo o comprovante, direto do app do banco ' +
+    '(a tela inteira ou o PDF), com valor, favorecido, data e código da transação visíveis';
+  const pedido =
+    r.codigo === 'valor_menor'
+      ? `agradeça, diga que o valor que apareceu no comprovante foi menor que a taxa de reserva de ${taxa} e peça que ele envie o comprovante do valor completo (foto ou PDF)`
+      : (r.codigo === 'favorecido_diferente' || r.codigo === 'documento_diferente') && chave
+        ? `agradeça, diga que o comprovante parece ser de um pagamento para outro destinatário e lembre que a chave Pix da clínica é ${chave}${titular ? ` (no nome de ${titular})` : ''}; peça que ele confira e envie o comprovante do pagamento para essa chave`
+        : r.codigo === 'de_outra_negociacao'
+          ? 'agradeça, diga que o comprovante é de um pagamento anterior a esta reserva e peça o comprovante da taxa desta consulta (foto ou PDF)'
+          : generico;
+  return (
+    `RECUSADO: o comprovante que o paciente mandou NÃO passou na conferência automática (motivo técnico, NÃO cite ao paciente: ${r.motivo}). ${naoMarcou}` +
+    `Responda com as suas palavras, com educação e SEM acusar o paciente de nada (nem falar em fraude, erro dele ou suspeita): ${pedido}. A equipe também foi avisada.`
+  );
+}
 
 /**
- * A decisão da trava, pura (o grafo executa; o eval usa a mesma para não prometer o que o grafo recusa).
+ * A decisão da trava, pura (o grafo executa; o runner do banco dourado usa a mesma para não prometer o que o grafo recusa).
  *
  * - Regra geral: comprovante esperando a equipe = a IA NÃO marca (só a equipe confirma por comprovante).
- * - Unidade com taxa de reserva (decisão do João, 26/10): a IA marca DEPOIS de ler um comprovante cujo valor bate EXATAMENTE
- *   com a taxa. Sem comprovante, valor diferente/ilegível ou taxa não cadastrada → recusa e vai para a equipe.
+ * - Unidade com taxa de reserva (decisão do João, 03/11): a IA marca DEPOIS de o código aceitar o comprovante desta negociação
+ *   (`turno.analise`, calculada com o histórico inteiro — `lib/comprovante-pix.ts`). Sem comprovante, "já paguei" só em texto,
+ *   comprovante que não passou ou taxa não cadastrada → recusa; o que não dá para verificar vai para a equipe.
  */
 export function decidirTrava(turno: TurnoDoComprovante, opcoes: OpcoesDaTrava = {}): DecisaoDaTrava {
-  const esperada = opcoes.taxaEsperada ?? null;
   if (opcoes.exigePagamento) {
-    if (!turno.pendente) {
+    const a = turno.analise;
+    if (a?.aceito) return { libera: true, aceito: a.aceito };
+    const rejeicao: ComprovanteRecusado | null = a?.falha
+      ? a.falha
+      : a && a.deOutraNegociacao > 0
+        ? { ok: false, destino: 'reenviar', codigo: 'de_outra_negociacao', motivo: 'o comprovante é de antes da chave Pix ou da última consulta marcada/cancelada desta conversa', dados: null }
+        : null;
+    if (!rejeicao) {
       return {
         libera: false,
         titulo: 'agendar_consulta recusado — reserva sem pagamento: nenhum comprovante da taxa lido na conversa',
         texto: RECUSA_SEM_COMPROVANTE_DA_TAXA,
       };
     }
-    if (!taxaConfere(turno, esperada)) {
-      return {
-        libera: false,
-        titulo: `agendar_consulta recusado — reserva sem pagamento: o comprovante não bate com a taxa (${detalheDoValor(turno, esperada)})`,
-        texto:
-          `RECUSADO: o comprovante lido NÃO confirma a taxa de reserva (${detalheDoValor(turno, esperada)}). A consulta NÃO foi marcada. ` +
-          'NÃO chame agendar_consulta de novo e NÃO diga que está confirmada, agendada, reservada, garantida nem que o pagamento ' +
-          `foi confirmado. Responda ao paciente só isto, com as suas palavras: "${RECADO_COMPROVANTE}"`,
-      };
-    }
-    return { libera: true };
+    return {
+      libera: false,
+      titulo: `agendar_consulta recusado — reserva sem pagamento: comprovante não aceito (${rejeicao.codigo}) — ${rejeicao.motivo}`,
+      texto: textoDaRecusaDoComprovante(rejeicao, opcoes),
+      rejeicao,
+    };
   }
   if (turno.pendente) {
     return {
@@ -373,9 +446,28 @@ export function travarAgendamentoPorComprovante(
     const original = tool.func.bind(tool);
     tool.func = async (args: unknown, ...resto: unknown[]) => {
       const d = decidirTrava(turno, opcoes);
-      if (d.libera) return original(args as never, ...(resto as never[]));
-      await recorder.step({ kind: 'ERROR', title: d.titulo, payload: { noTurno: turno.noTurno, valores: turno.valores ?? [], args } });
-      return d.texto;
+      const ganchos = opcoes.ganchos;
+      const avisarEquipe = (r: ComprovanteRecusado) =>
+        ganchos?.aoRecusar(r, args as Record<string, unknown>).catch((err) => logger.warn({ err: String(err) }, 'comprovante: falha ao avisar a equipe da recusa'));
+      if (!d.libera) {
+        await recorder.step({ kind: 'ERROR', title: d.titulo, payload: { noTurno: turno.noTurno, valores: turno.valores ?? [], args } });
+        if (d.rejeicao) await avisarEquipe(d.rejeicao);
+        return d.texto;
+      }
+      if (!d.aceito || !ganchos) return original(args as never, ...(resto as never[]));
+
+      const porTras = args as Record<string, unknown>;
+      const antes = await ganchos.antes(d.aceito, porTras);
+      if (!antes.libera) {
+        await recorder.step({ kind: 'ERROR', title: antes.titulo, payload: { args, comprovante: resumoDaLeitura(d.aceito.dados) } });
+        await avisarEquipe(antes.rejeicao);
+        return antes.texto;
+      }
+      // O comprovante foi aceito: a forma é Pix antecipado e a ferramenta sabe (`pagoPorComprovante`) que não é para mandar a chave de novo.
+      // O modelo não consegue escrever `pagoPorComprovante`: o zod do schema descarta o que não conhece (mesmo caminho do `remarcando`).
+      const r = String(await original({ ...porTras, formaPagamento: 'pix_antecipado', pagoPorComprovante: true } as never, ...(resto as never[])));
+      turno.marcouPorComprovante = /^Consulta marcada para/.test(r.trim());
+      return ganchos.depois(d.aceito, porTras, r);
     };
   }
   return tools;
@@ -405,7 +497,7 @@ export async function abrirTarefaParaEquipe(args: {
   leadId: number;
   kommo: Pick<KommoClient, 'createTask' | 'getLead'>;
   recorder: Pick<TraceRecorder, 'step'>;
-  motivo: 'comprovante' | 'desmarcada' | 'insistiu_na_clinica' | 'cadastro_duplicado' | 'agenda_sem_conferir';
+  motivo: 'comprovante' | 'desmarcada' | 'insistiu_na_clinica' | 'cadastro_duplicado' | 'agenda_sem_conferir' | 'conferir_extrato' | 'comprovante_recusado';
   dedupe?: Dedupe;
   agora?: () => number;
   /** Avisa o João quando a tarefa não saiu: o paciente já ouviu "a equipe confirma em 1 hora". */
@@ -420,10 +512,10 @@ export async function abrirTarefaParaEquipe(args: {
 }): Promise<'criada' | 'repetida' | 'falhou'> {
   const { slug, unitId, leadId, kommo, recorder, motivo } = args;
   const dedupe = args.dedupe ?? { avisoRecente, marcarAviso };
-  const chaveBase = { comprovante: 'comprovante_so_equipe', desmarcada: 'consulta_desmarcada_afirmada', insistiu_na_clinica: 'taxa_insistiu_na_clinica', cadastro_duplicado: 'cadastro_possivel_duplicado', agenda_sem_conferir: 'agenda_horario_sem_conferir' }[motivo];
+  const chaveBase = { comprovante: 'comprovante_so_equipe', desmarcada: 'consulta_desmarcada_afirmada', insistiu_na_clinica: 'taxa_insistiu_na_clinica', cadastro_duplicado: 'cadastro_possivel_duplicado', agenda_sem_conferir: 'agenda_horario_sem_conferir', conferir_extrato: 'conferir_extrato', comprovante_recusado: 'comprovante_nao_aceito' }[motivo];
   const chave = args.chaveExtra ? `${chaveBase}:${args.chaveExtra}` : chaveBase;
   try {
-    if (await dedupe.avisoRecente(unitId, leadId, chave, motivo === 'comprovante' ? JANELA_COMPROVANTE_MS : undefined)) return 'repetida';
+    if (await dedupe.avisoRecente(unitId, leadId, chave, motivo === 'comprovante' || motivo === 'comprovante_recusado' ? JANELA_COMPROVANTE_MS : undefined)) return 'repetida';
     let nome: string | null = null;
     let responsavel: number | undefined;
     try {
@@ -440,9 +532,12 @@ export async function abrirTarefaParaEquipe(args: {
       insistiu_na_clinica: `FALAR COM O PACIENTE · ${slug}${quem} · reserva com taxa: ele já recebeu a chave Pix e INSISTE em pagar só na clínica. Sem o comprovante da taxa o horário NÃO está garantido: falar com ele em até 1 h.`,
       cadastro_duplicado: `CONFERIR CADASTRO · ${slug}${quem} · há outro cadastro na franquia com o MESMO telefone e nome parecido (talvez a mesma pessoa em dobro, talvez parente) que já tem consulta marcada. A IA NÃO juntou os cadastros nem usou o do outro: confirmar quem é e, se for a mesma pessoa, manter uma só consulta.`,
       agenda_sem_conferir: `CONFERIR HORÁRIO · ${slug}${quem} · o paciente pediu um horário que aparece ocupado e a IA não conseguiu conferir se é a consulta DELE (cadastro em dobro ou a franquia não respondeu). A IA não marcou nem ofereceu outro horário e disse que a equipe confirma e responde por aqui: confirmar com ele (a tarefa vence em 1 h).`,
+      // A frase inteira vem de quem abre (leva valor, nome e horário da consulta): ver comprovante-da-taxa.ts.
+      conferir_extrato: `CONFERIR NO EXTRATO · ${slug}${quem} · consulta JÁ lançada pela IA com base no comprovante.`,
+      comprovante_recusado: `VER COMPROVANTE · ${slug}${quem} · a IA NÃO aceitou o comprovante que o paciente mandou e pediu outro; a consulta NÃO foi marcada. Se ele disser que já pagou, conferir no extrato e lançar a consulta.`,
     }[motivo];
     const agora = args.agora ?? Date.now;
-    const text = args.detalhe ? `${texto} ${args.detalhe}.` : texto;
+    const text = args.detalhe ? (motivo === 'conferir_extrato' ? `${args.detalhe} · ${slug}${quem}` : `${texto} ${args.detalhe}.`) : texto;
     const res = await kommo.createTask({ leadId, text, completeAt: Math.floor(agora() / 1000) + 3600, responsibleUserId: responsavel });
     await dedupe.marcarAviso(unitId, leadId, chave);
     await recorder.step({
@@ -463,6 +558,8 @@ export async function abrirTarefaParaEquipe(args: {
     const textoDaFalha: Partial<Record<typeof motivo, string>> = {
       agenda_sem_conferir: `a tarefa de conferir o HORÁRIO NÃO saiu (lead ${leadId}): ${erro}. A IA foi instruída a não prometer retorno da equipe nesse caso; ainda assim o paciente ficou sem resposta sobre o horário: avisar a equipe à mão.`,
       cadastro_duplicado: `a tarefa de conferir o CADASTRO em dobro NÃO saiu (lead ${leadId}): ${erro}. A IA não prometeu nada por causa dela, mas a equipe não sabe do outro cadastro: avisar à mão.`,
+      comprovante_recusado: `a tarefa «ver comprovante» (comprovante NÃO aceito pela IA) não saiu (lead ${leadId}): ${erro}. O paciente foi convidado a mandar outro comprovante e a equipe não sabe do motivo: avisar à mão se ele insistir.`,
+      conferir_extrato: `a IA MARCOU uma consulta pelo comprovante de Pix (lead ${leadId}) e a tarefa «conferir no extrato» NÃO saiu: ${erro}. Ninguém foi avisado de conferir o pagamento: conferir à mão.`,
     };
     await (args.alertar ?? enviarTelegram)(
       `⚠️ ${slug} — ` +

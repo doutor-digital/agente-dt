@@ -28,6 +28,7 @@ import { transcribeAudio } from '../services/transcription.service.js';
 import { deveIrParaEquipe, ehFalhaEstrutural, limparFalhasDeAudio, registrarFalhaDeAudio } from '../lib/falha-de-audio.js';
 import { describeImage } from '../services/vision.service.js';
 import { marcarRecebimento } from '../agent/confirmacao-so-com-crm.js';
+import { anexarDados, neutralizarMarcasDoSistema, resumoDaLeitura } from '../lib/comprovante-pix.js';
 import { ehTranscricaoDeComprovante } from '../lib/pagamento-antecipado.js';
 import { tentarNotaDeVoz } from '../lib/resposta-em-voz.js';
 import { findUnitBySlug, ensureDefaultUnit } from '../services/units.service.js';
@@ -1091,6 +1092,10 @@ export async function processAgent(args: {
   const authorId = args.authorId ?? null;
   const accountId = args.accountId ?? null;
   let { humanMessage } = args;
+  // Unidade com taxa de reserva: a Sofia marca pelo comprovante (lib/comprovante-pix.ts). A fala do paciente não pode trazer, escrita
+  // por ele, as marcas que só nós gravamos ("[imagem do cliente]: COMPROVANTE…", dados e hora de recebimento). Turno retomado
+  // traz a fala já gravada pelo sistema, com as marcas verdadeiras: fica como está.
+  if (unit.spineBookingRequiresPayment && !args.retomada) humanMessage = neutralizarMarcasDoSistema(humanMessage);
   let delivered = false;
   // A trava de antes de enviar compara com isto: pausa que a própria Sofia fez DEPOIS daqui é do turno.
   const inicioDoTurno = Date.now();
@@ -1190,11 +1195,25 @@ export async function processAgent(args: {
   let algumAnexoLido = false;
   for (const [i, url] of anexos.entries()) {
     try {
-      const d = await describeImage(unit, url);
-      const desc = d.text || `[${d.tipo} sem conteúdo legível]`;
-      // Comprovante: carimba a hora em que chegou. O histórico não tem data por mensagem, e a espera da equipe (e a
-      // liberação de marcar nas unidades com taxa de reserva) vale só por 24 h — ver confirmacao-so-com-crm.ts.
-      const naConversa = ehTranscricaoDeComprovante(`[${d.tipo} do cliente]: ${desc}`) ? marcarRecebimento(desc) : desc;
+      const d = await describeImage(unit, url, { estruturarComprovante: Boolean(unit.spineBookingRequiresPayment) });
+      // Unidade com taxa de reserva: texto escrito DENTRO da imagem e transcrito pela visão não pode se passar pelas marcas que só nós gravamos.
+      const lido = unit.spineBookingRequiresPayment ? neutralizarMarcasDoSistema(d.text) : d.text;
+      const desc = lido || `[${d.tipo} sem conteúdo legível]`;
+      // Comprovante: carimba a hora em que chegou. O histórico não tem data por mensagem, e a espera da equipe vale só por 24 h
+      // — ver confirmacao-so-com-crm.ts. Unidade com taxa de reserva: os campos lidos (valor, favorecido, E2E…) vão junto.
+      const ehComprovante = ehTranscricaoDeComprovante(`[${d.tipo} do cliente]: ${desc}`);
+      const comDados = ehComprovante && d.comprovante?.dados ? anexarDados(desc, d.comprovante.dados) : desc;
+      const naConversa = ehComprovante ? marcarRecebimento(comDados) : desc;
+      if (ehComprovante && d.comprovante) {
+        await recorder.step({
+          kind: d.comprovante.dados ? 'THINKING' : 'ERROR',
+          title: d.comprovante.dados
+            ? `🧾 Comprovante lido em campos (${d.comprovante.durationMs}ms, ${d.comprovante.modelo}): ${resumoDaLeitura(d.comprovante.dados).slice(0, 160)}`
+            : `🧾 Comprovante: a leitura em campos falhou (${d.comprovante.erro ?? '?'}) — vai para a equipe conferir`,
+          payload: { leitura: d.comprovante.dados, erro: d.comprovante.erro ?? null, modelo: d.comprovante.modelo, usage: d.comprovante.usage ?? null },
+          latencyMs: d.comprovante.durationMs,
+        });
+      }
       humanMessage = humanMessage
         ? `${humanMessage}\n\n[${d.tipo} do cliente]: ${naConversa}`
         : `[${d.tipo} do cliente]: ${naConversa}`;
