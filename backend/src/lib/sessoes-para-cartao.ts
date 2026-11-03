@@ -19,7 +19,9 @@
  *  - marcadas = AGENDADO ou CONFIRMADO ainda por vir;
  *  - previstas = realizadas + faltas + marcadas (desmarcada e remarcada não entram — é arrumação
  *    de agenda, e contá-las faria o tratamento parecer maior do que é);
- *  - próxima = a primeira sessão marcada por vir; última = a última ATENDIDA.
+ *  - próxima = a primeira sessão marcada por vir; última = a última ATENDIDA. Com a chave `chegada-do-dia`
+ *    ligada, a «◷ Próxima sessão» do CARTÃO deixa de ser a do tratamento e passa a ser a CHEGADA do paciente
+ *    (o primeiro atendimento do dia, somando todos os tratamentos) — ver `chegada-do-dia.ts`;
  *  Sessão agendada com data já passada e sem desfecho na franquia não conta em nada: ninguém sabe
  *  se foi atendida, e chutar aqui seria inventar dado.
  *
@@ -27,6 +29,8 @@
  */
 import { SPINE_STATUS, type SpineSchedule, type SpineTreatment } from '../services/spine.service.js';
 import { ehConsulta, normalizar } from './franquia-sync.js';
+import { chegadaDoCartao } from './chegada-do-dia.js';
+import type { Estado } from './automacoes-estado.js';
 
 export const CAMPOS_SESSOES = {
   PREVISTAS: '# Sessões no histórico',
@@ -199,9 +203,16 @@ export interface CampoDoCartao {
   valor: string | null;
 }
 
-export type EscritaDeSessao =
+export type EscritaDeSessao = (
   | { campo: string; tipo: 'numeric' | 'date' | 'text' | 'textarea'; valor: string | number; motivo: string; limpar?: false }
-  | { campo: string; limpar: true; motivo: string };
+  | { campo: string; limpar: true; motivo: string }
+) & {
+  /**
+   * Escrita de uma automação em «só no papel» (chegada-do-dia): quem aplica NÃO grava no Kommo, só registra
+   * na tela o que gravaria. Fica na mesma lista para que nenhum caminho novo escape do portão do seco.
+   */
+  soNoPapel?: 'chegada-do-dia';
+};
 
 export interface EntradaSessoes {
   schedules: SpineSchedule[];
@@ -211,6 +222,17 @@ export interface EntradaSessoes {
   agoraEpoch: number;
   /** Devolve o campo da conta pelo nome, ou null se a conta não o tem. */
   campo: (nome: string) => CampoDoCartao | null;
+  /**
+   * Estado da chave `chegada-do-dia` nesta unidade. `ligado` = a ◷ Próxima sessão é a chegada do paciente;
+   * `seco` = continua a do tratamento e devolve, à parte (`soNoPapel`), o que a nova gravaria; ausente/`desligado` = como sempre foi.
+   */
+  chegadaDoDia?: Estado;
+  /**
+   * Os agendamentos que são SEGURAMENTE deste paciente (ver `agendamentosDoPaciente`), de todos os tratamentos.
+   * `schedules` pode misturar homônimos (a agenda é agrupada por nome); a chegada só pode sair desta lista.
+   * Ausente = lista vazia (nada se grava nem se limpa por chute): quem liga a chave tem de passá-la.
+   */
+  schedulesDoPaciente?: SpineSchedule[];
 }
 
 const num = (v: string | null): number | null => {
@@ -234,16 +256,20 @@ export function escritasDeSessoes(e: EntradaSessoes): EscritaDeSessao[] {
     if (num(c.valor) === valor) return;
     out.push({ campo: nome, tipo: 'numeric', valor, motivo });
   };
-  const data = (nome: string, epoch: number, motivo: string) => {
+  const decidirData = (nome: string, epoch: number, motivo: string, atualSeraEste?: number | null): EscritaDeSessao | null => {
     const c = e.campo(nome);
-    if (!c || (c.tipo !== 'date' && c.tipo !== 'date_time')) return;
-    const atual = num(c.valor);
+    if (!c || (c.tipo !== 'date' && c.tipo !== 'date_time')) return null;
+    const atual = atualSeraEste !== undefined ? atualSeraEste : num(c.valor);
     // `date_time` guarda a hora; `date` guarda só o dia (meia-noite do fuso da conta), então a mesma
     // sessão volta do Kommo até ~24 h diferente do epoch exato — comparar em 60 s regravaria o cartão
     // inteiro a cada varredura.
     const tolerancia = c.tipo === 'date' ? 86_399 : 60;
-    if (atual !== null && Math.abs(atual - epoch) <= tolerancia) return;
-    out.push({ campo: nome, tipo: 'date', valor: epoch, motivo });
+    if (atual !== null && Math.abs(atual - epoch) <= tolerancia) return null;
+    return { campo: nome, tipo: 'date', valor: epoch, motivo };
+  };
+  const data = (nome: string, epoch: number, motivo: string) => {
+    const w = decidirData(nome, epoch, motivo);
+    if (w) out.push(w);
   };
   const texto = (nome: string, valor: string | null | undefined, motivo: string) => {
     const v = String(valor ?? '').trim();
@@ -271,12 +297,51 @@ export function escritasDeSessoes(e: EntradaSessoes): EscritaDeSessao[] {
   numerico(CAMPOS_SESSOES.MARCADAS, r.marcadas, 'sessões agendadas por vir na franquia');
   numerico(CAMPOS_SESSOES.PREVISTAS, r.previstas, 'realizadas + faltas + marcadas');
 
-  if (r.proxima !== null) {
-    data(CAMPOS_SESSOES.PROXIMA, r.proxima, 'próxima sessão marcada na franquia');
-  } else {
+  // A «◷ Próxima sessão». Uma só fonte por vez: a do tratamento (como sempre foi) ou a do paciente (chegada do dia).
+  // Em «só no papel» a do tratamento segue gravando e a do paciente só devolve o que gravaria — nunca as duas valendo.
+  type Proxima = { epoch: number; motivo?: string } | 'limpar' | 'manter';
+  /** O valor que uma escrita deixa no campo: número, null (limpou) ou undefined (não há escrita). */
+  const valorDeixado = (w: EscritaDeSessao | null): number | null | undefined => {
+    if (!w) return undefined;
+    if (w.limpar) return null;
+    return typeof w.valor === 'number' ? w.valor : num(String(w.valor));
+  };
+  // `seraEste`: o valor que o cartão terá depois de outra escrita já decidida (só no «papel»); undefined = o que está nele agora.
+  const escritaDaProxima = (p: Proxima, motivo: string, seraEste?: number | null): EscritaDeSessao | null => {
+    if (p === 'manter') return null;
+    if (p !== 'limpar') return decidirData(CAMPOS_SESSOES.PROXIMA, p.epoch, p.motivo ?? motivo, seraEste);
     // a data que estava lá passou (ou a sessão foi desmarcada): deixar seria mostrar uma "próxima" no passado
     const c = e.campo(CAMPOS_SESSOES.PROXIMA);
-    if (c && (c.tipo === 'date' || c.tipo === 'date_time') && num(c.valor) !== null) out.push({ campo: CAMPOS_SESSOES.PROXIMA, limpar: true, motivo: 'não há sessão marcada por vir' });
+    const valorDepois = seraEste !== undefined ? seraEste : c ? num(c.valor) : null;
+    const temData = !!c && (c.tipo === 'date' || c.tipo === 'date_time') && valorDepois !== null;
+    return temData ? { campo: CAMPOS_SESSOES.PROXIMA, limpar: true, motivo: 'não há sessão marcada por vir' } : null;
+  };
+  const doTratamento: Proxima = r.proxima !== null ? { epoch: r.proxima } : 'limpar';
+  const doPaciente = (): Proxima => {
+    // O tratamento DO CARTÃO não tem sessão por vir (ALTA, FINALIZADO): limpa como sempre — sessão de OUTRO tratamento do paciente
+    // é do cartão dele. O dia da chegada é o da próxima sessão do tratamento do cartão.
+    if (r.proxima === null) return 'limpar';
+    const c = chegadaDoCartao(e.schedulesDoPaciente ?? [], r.proxima, e.agoraEpoch);
+    // âncora fora da lista do paciente (ficha em cache): o valor de sempre, o do tratamento — e o log diz que a chegada não foi calculada
+    if (!c) return { epoch: r.proxima, motivo: 'próxima sessão marcada na franquia (chegada do dia não calculada: a ficha do paciente ainda não tem esta sessão)' };
+    if (!c.jaComecou) return { epoch: c.epoch };
+    // Já começou: mexer agora faria o gatilho de lembrete do Kommo ler um valor novo (disparo retroativo) — mas só vale proteger um valor
+    // que JÁ está no cartão para este dia. Cartão vazio ou com data de outro dia não tem gatilho armado a proteger: recebe a próxima sessão.
+    const noCartao = num(e.campo(CAMPOS_SESSOES.PROXIMA)?.valor ?? null);
+    return noCartao !== null && Math.abs(noCartao - c.epoch) < 86_400 ? 'manter' : { epoch: r.proxima, motivo: 'próxima sessão marcada na franquia (o cartão não tinha a chegada de hoje)' };
+  };
+  const modoChegada = e.chegadaDoDia ?? 'desligado';
+  const MOTIVO_CHEGADA = 'chegada do dia: primeiro atendimento do paciente (todos os tratamentos)';
+  const vale =
+    modoChegada === 'ligado'
+      ? escritaDaProxima(doPaciente(), MOTIVO_CHEGADA)
+      : escritaDaProxima(doTratamento, 'próxima sessão marcada na franquia');
+  if (vale) out.push(vale);
+  if (modoChegada === 'seco') {
+    // contra o que o cartão terá DEPOIS da escrita real (a do tratamento), senão o papel esconderia um vai-e-volta a cada varredura
+    const depoisDoReal = valorDeixado(vale);
+    const papel = escritaDaProxima(doPaciente(), MOTIVO_CHEGADA, depoisDoReal);
+    if (papel && valorDeixado(papel) !== valorDeixado(vale)) out.push({ ...papel, soNoPapel: 'chegada-do-dia' });
   }
 
   if (r.ultima) {

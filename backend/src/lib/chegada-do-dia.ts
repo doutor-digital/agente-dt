@@ -41,21 +41,22 @@ export function horaDoAtendimento(s: Pick<SpineSchedule, 'timeLocal' | 'dateAtte
   return h && /^\d{2}:\d{2}$/.test(h) ? h : null;
 }
 
-/** Tira o mesmo agendamento que veio da agenda E da ficha (mesmo idSchedule) e o que não tem data. Ordem por horário. */
-function unicosDePe(schedules: readonly SpineSchedule[]): SpineSchedule[] {
+/** Tira o mesmo agendamento que veio da agenda E da ficha (mesmo idSchedule), o que não tem data e o de status fora da lista. Ordem por horário. */
+function unicosComStatus(schedules: readonly SpineSchedule[], statusAceitos: readonly number[]): SpineSchedule[] {
   const vistos = new Set<number>();
   const out: SpineSchedule[] = [];
   for (const s of schedules) {
     if (!Number.isFinite(epochDoAtendimento(s))) continue;
-    if (s.idStatus === null || s.idStatus === undefined || !STATUS_DE_PE.includes(s.idStatus)) continue;
+    if (s.idStatus === null || s.idStatus === undefined || !statusAceitos.includes(s.idStatus)) continue;
     if (s.idSchedule != null) {
       if (vistos.has(s.idSchedule)) continue;
       vistos.add(s.idSchedule);
     }
     out.push(s);
   }
-  return out.sort((a, b) => epochDoAtendimento(a) - epochDoAtendimento(b));
+  return out.sort((x, y) => epochDoAtendimento(x) - epochDoAtendimento(y));
 }
+const unicosDePe = (schedules: readonly SpineSchedule[]) => unicosComStatus(schedules, STATUS_DE_PE);
 
 /**
  * Os atendimentos de pé do paciente num dia (AAAA-MM-DD, fuso da clínica), do primeiro ao último.
@@ -119,4 +120,81 @@ export function diaComVariosAtendimentos(schedules: readonly SpineSchedule[], di
 export function gruposDoDia(v: Pick<DiaComVariosAtendimentos, 'atendimentos'>, tipo: 'sessao' | 'consulta'): { iguais: SpineSchedule[]; outros: SpineSchedule[] } {
   const iguais = v.atendimentos.filter((a) => ehConsulta(a) === (tipo === 'consulta'));
   return { iguais, outros: v.atendimentos.filter((a) => !iguais.includes(a)) };
+}
+
+// ── a ◷ Próxima sessão do cartão ─────────────────────────────────────────────────────────────────
+
+/** Dois atendimentos do mesmo dia "em sequência": o seguinte começa até 2 h depois do anterior. */
+export const SEQUENCIA_MAX_S = 2 * 3600;
+
+/** O que já foi atendido hoje também conta como "o dia do paciente", só para achar a chegada (nunca para confirmar). */
+const STATUS_DO_DIA: readonly number[] = [...STATUS_DE_PE, SPINE_STATUS.ATENDIDO];
+
+/**
+ * O valor da «◷ Próxima sessão» do cartão: a CHEGADA da viagem em que está a próxima sessão do tratamento DO CARTÃO.
+ *
+ *  - ANCORADO no tratamento do cartão: `ancoraEpoch` é a próxima sessão por vir dele (quem chama já a calculou). O dia é o dela.
+ *    Um cartão cujo tratamento acabou (ALTA, FINALIZADO) não tem âncora, e quem chama LIMPA o campo como sempre fez — ainda que o
+ *    paciente tenha sessão de OUTRO tratamento (aquele tem o cartão dele);
+ *  - só SESSÕES entram. Avaliação e retorno têm a «◷ Data da Consulta» e os lembretes próprios; pôr o horário de uma consulta no
+ *    campo da sessão faria o lembrete de sessão anunciar um horário que a resposta ao botão não acha ("sessão às 08:00");
+ *  - a chegada é a primeira sessão da SEQUÊNCIA que termina na âncora (cada uma começa até 2 h depois da anterior), de qualquer
+ *    tratamento, atendida ou de pé. Uma sessão de manhã e outra à noite não são a mesma viagem.
+ *
+ * `jaComecou` = a chegada já passou. Quem escreve NÃO mexe no campo nesse caso: trocar "15h30" por "16h" no meio da tarde faria o
+ * gatilho de lembrete do Kommo ler um valor novo e disparar de novo ou a destempo.
+ *
+ * null = a âncora não está na lista do paciente (ficha em cache): quem chama volta ao valor de sempre, o do tratamento.
+ */
+export interface ChegadaDoCartao {
+  epoch: number;
+  dia: string;
+  jaComecou: boolean;
+}
+
+export function chegadaDoCartao(schedules: readonly SpineSchedule[], ancoraEpoch: number, agoraEpoch: number): ChegadaDoCartao | null {
+  // além dos de pé, os já ATENDIDOS contam como "o dia do paciente", só para achar onde a viagem começou (nunca para confirmar)
+  const sessoes = unicosComStatus(schedules, STATUS_DO_DIA);
+  const ancora = sessoes.find((s) => !ehConsulta(s) && epochDoAtendimento(s) === ancoraEpoch && STATUS_DE_PE.includes(s.idStatus as number));
+  const dia = ancora ? diaDoAtendimento(ancora) : null;
+  if (!ancora || !dia) return null;
+  const doDia = sessoes.filter((s) => !ehConsulta(s) && diaDoAtendimento(s) === dia && epochDoAtendimento(s) <= ancoraEpoch);
+  let epoch = ancoraEpoch;
+  for (let i = doDia.length - 1; i >= 0; i--) {
+    const t = epochDoAtendimento(doDia[i]);
+    if (t >= epoch) continue; // a própria âncora e os do mesmo instante
+    if (epoch - t > SEQUENCIA_MAX_S) break;
+    epoch = t;
+  }
+  return { epoch, dia, jaComecou: epoch <= agoraEpoch };
+}
+
+/**
+ * Os agendamentos que são DESTE paciente, para calcular a chegada.
+ *
+ * A varredura agrupa a agenda por NOME (a agenda não traz idClient), então duas pacientes homônimas caem no mesmo balaio — e a
+ * sessão de uma não pode virar a chegada da outra. A fonte segura é a ficha (`GET /clients/{id}`, por idClient). A agenda, mais
+ * fresca, só entra por cima dela: troca a versão de um agendamento que a ficha já conhece, e acrescenta o que carrega o
+ * `idTreatment` de um tratamento DESTE paciente (sessão marcada na última hora). Avaliação nova sem id de tratamento espera a
+ * ficha renovar (cache de 1 h).
+ */
+export function agendamentosSegurosDoPaciente(
+  ficha: readonly SpineSchedule[],
+  agenda: readonly SpineSchedule[],
+  idsDeTratamento: readonly (number | null | undefined)[],
+): SpineSchedule[] {
+  const meus = new Set(idsDeTratamento.filter((n): n is number => typeof n === 'number'));
+  const daAgenda = new Map<number, SpineSchedule>();
+  for (const a of agenda) if (a.idSchedule != null) daAgenda.set(a.idSchedule, a);
+  const idsDaFicha = new Set<number>();
+  const out: SpineSchedule[] = [];
+  for (const f of ficha) {
+    if (f.idSchedule != null) idsDaFicha.add(f.idSchedule);
+    out.push((f.idSchedule != null ? daAgenda.get(f.idSchedule) : undefined) ?? f);
+  }
+  for (const a of agenda) {
+    if (a.idSchedule == null || idsDaFicha.has(a.idSchedule)) continue;
+    if (a.idTreatment != null && meus.has(a.idTreatment)) out.push(a);
+  }
+  return out;
 }

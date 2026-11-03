@@ -70,6 +70,7 @@ import {
   horaFalada,
   horariosDistintos,
   listaDeHorarios,
+  SEQUENCIA_MAX_S,
   type DiaComVariosAtendimentos,
 } from './chegada-do-dia.js';
 
@@ -130,8 +131,6 @@ export const CAMPOS_DO_LEMBRETE = {
 export const JANELA_LEMBRETE_S = 30 * 3600;
 /** Quem toca logo depois do horário (entrega atrasada, leu na porta da clínica) ainda conta. */
 export const TOLERANCIA_DEPOIS_S = 30 * 60;
-/** Dois atendimentos do mesmo dia "em sequência": o segundo começa até 2 h depois do primeiro. */
-export const SEQUENCIA_MAX_S = 2 * 3600;
 /** Horário do cartão × horário da franquia: até 5 min de diferença é o mesmo agendamento. */
 export const MESMO_HORARIO_S = 5 * 60;
 
