@@ -64,6 +64,7 @@ import { logger } from '../lib/logger.js';
 import { capturaUnificada } from './captura-unificada.js';
 import { ehSoCumprimento } from '../lib/pediu-para-parar.js';
 import { automacaoLigada } from '../lib/automacoes-estado.js';
+import { sorrisoColoridoLigado } from '../lib/carinha-antiga.js';
 import {
   FORMAS_NO_DIA,
   PAGAMENTO_NO_DIA,
@@ -643,7 +644,7 @@ function linhaValorConsulta(unit: Unit): string {
     const valor = valorDaConsultaNoDia(unit.sourceProdutos);
     return valor
       ? `✨ Valor: R$ ${valor} no dia, ${FORMAS_NO_DIA}.`
-      : `✨ Valor: R$ {o valor da consulta que está nas fontes/produtos DESTA unidade, com centavos, como lá (ex.: 250,00) — nunca invente; se não houver valor cadastrado, omita a linha e diga que a equipe informa; sem "à vista" e sem desconto} no dia, ${FORMAS_NO_DIA}.`;
+      : `✨ Valor: R$ {o valor da consulta que está nas fontes/produtos DESTA unidade, com centavos, como lá (ex.: NNN,00) — nunca invente; se não houver valor cadastrado, omita a linha e diga que a equipe informa; sem "à vista" e sem desconto} no dia, ${FORMAS_NO_DIA}.`;
   }
   const p = precosDaConsulta(unit);
   // Taxa de reserva obrigatória (Boa Vista): o antecipado NÃO é alternativa ao valor
@@ -720,6 +721,9 @@ function renderAgenda(unit: Unit): string {
   // O formato da confirmação. Unidade sem antecipado (Timbó) tem o seu, pedido pelo João em 03/11/2026: data e horário em
   // negrito, data "Sexta-feira 06/11" (a tool já devolve a linha pronta), sem "Atendimento com", sem o parágrafo do pagamento
   // (a forma já está na linha do valor) e fecha com ☺️. As demais unidades: o texto de sempre, palavra por palavra.
+  // O ☺️ só entra onde o envio o preserva (automação `sorriso-colorido`); desligada, o fecho sai sem rosto — nunca um ☺ preto e branco.
+  const sorriso = semAntecipado && sorrisoColoridoLigado(unit.slug);
+  const fecho = sorriso ? `Até breve! ${SORRISO_DA_CONFIRMACAO}` : 'Até breve!';
   const formatoDaConfirmacao = semAntecipado
     ? `⭐ Data: *{dia da semana e dd/mm, copiados da "Linha pronta da data" da ferramenta — ex.: Sexta-feira 06/11; sem ano}*
 ⏰ Horário: *{HH:mm}*
@@ -727,7 +731,7 @@ ${linhaEndereco}
 ${linhaAntecedencia}
 ${linhaValor}
 
-Qualquer dúvida, é só chamar. Até breve! ${SORRISO_DA_CONFIRMACAO}`
+Qualquer dúvida, é só chamar. ${fecho}`
     : `⭐ Data: {dia da semana e data EXATAMENTE como a ferramenta agendar_consulta devolveu — ex.: terça-feira, 08/09}
 ⏰ Horário: {HH:mm}
 ${linhaEndereco}
@@ -739,8 +743,8 @@ ${linhaPix}
 
 Qualquer dúvida, é só chamar. Até breve!`;
   const regraDeEmojis = semAntecipado
-    ? `- Use SÓ os emojis do formato acima (✅ ⭐ ⏰ ⏳ ✨ e, no fecho, ${SORRISO_DA_CONFIRMACAO}) — são BMP e chegam coloridos
-  neste canal. O ${SORRISO_DA_CONFIRMACAO} é o ÚNICO rosto permitido, só no fecho, copiado com o seletor de variação (U+263A U+FE0F).
+    ? `- Use SÓ os emojis do formato acima (✅ ⭐ ⏰ ⏳ ✨${sorriso ? ` e, no fecho, ${SORRISO_DA_CONFIRMACAO}` : ''}) — são BMP e chegam coloridos
+  neste canal. ${sorriso ? `O ${SORRISO_DA_CONFIRMACAO} é o ÚNICO rosto permitido, só no fecho, copiado com o seletor de variação (U+263A U+FE0F).` : 'NENHUM emoji de rosto, nem no fecho.'}
   NUNCA use 📅 📍 💰 👏 👨‍⚕️ 🎉 😊 🙏 nem outro emoji de rosto/pessoa/objeto:
   são 4 bytes, quebram no Kommo e cortam a mensagem no meio.
 - Os asteriscos de *Data* e *Horário* são o negrito do WhatsApp: escreva com UM asterisco de cada lado, exatamente como

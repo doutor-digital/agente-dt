@@ -147,6 +147,7 @@ test('sem antecipado: marca sem formaPagamento, grava na_clinica e a orientaçã
   assert.ok(r.includes(`Linha pronta da data para a confirmação (copie exatamente, sem ano): ${dataDaConfirmacao(DIA)}.`), r);
   assert.match(r, /^Consulta marcada para /, 'o início da resposta segue o que os vigias leem');
   assert.match(r, /não repita esta frase num parágrafo à parte/);
+  assert.doesNotMatch(r, /Atendimento com|Confirme ao paciente com EXATAMENTE/, 'o retorno não manda o contrário do formato novo');
   assert.equal(gravacoes.length, 1);
   assert.equal(gravacoes[0].data.pagamentoEscolhido, 'na_clinica', 'a régua do Pix lê isto: nunca cobra');
 });
@@ -158,6 +159,7 @@ test('com antecipado (padrão): o retorno da marcação NÃO ganha a "Linha pron
   assert.match(r, /^Consulta marcada para /);
   assert.doesNotMatch(r, /Linha pronta da data/);
   assert.doesNotMatch(r, /parágrafo à parte/);
+  assert.match(r, /Confirme ao paciente com EXATAMENTE este dia da semana e data\./, 'o texto de sempre');
 });
 
 test('sem antecipado: o modelo manda pix_antecipado (ou lixo) e a forma continua sendo na_clinica', async () => {

@@ -1912,9 +1912,12 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         })().catch(() => undefined);
       }
 
-      return `Consulta marcada para ${dataPorExtenso(args.data)} às ${args.hora}.${
-        especialista ? ` Atendimento com ${especialista}.` : ''
-      } Confirme ao paciente com EXATAMENTE este dia da semana e data.${linhaProntaDaData(args.data, semAntecipado)}${orientacaoDePagamento(args.formaPagamento, fresca, semAntecipado)}`;
+      // Unidade sem antecipado: a confirmação não cita o profissional nem o ano, e a data vem pronta — o retorno não pode mandar o
+      // contrário ("Atendimento com…", "este dia da semana e data" por extenso, com ano). Outras unidades: o texto de sempre.
+      const quemEQuando = semAntecipado
+        ? `${especialista ? ` (Profissional: ${especialista} — só se o paciente perguntar; NÃO entra na confirmação.)` : ''}${linhaProntaDaData(args.data, semAntecipado)}`
+        : `${especialista ? ` Atendimento com ${especialista}.` : ''} Confirme ao paciente com EXATAMENTE este dia da semana e data.`;
+      return `Consulta marcada para ${dataPorExtenso(args.data)} às ${args.hora}.${quemEQuando}${orientacaoDePagamento(args.formaPagamento, fresca, semAntecipado)}`;
     }),
   });
 }

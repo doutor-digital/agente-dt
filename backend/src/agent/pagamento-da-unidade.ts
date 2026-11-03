@@ -78,7 +78,7 @@ export function valorDaConsultaNoDia(sourceProdutos: string | null | undefined):
     if (/retorno|sess[ãõ]|tratamento/i.test(m[1])) continue;
     // sobra de ficha antiga ("R$ 250 antecipado ou R$ 350 no dia"): o valor colado em "antecipado"/"à vista" não é o do dia
     const depois = (sourceProdutos ?? '').slice((m.index ?? 0) + m[0].length).split(/R\$|[\n.;]/)[0].slice(0, 40);
-    if (/antecipad|\bà vista\b/i.test(depois)) continue;
+    if (/antecipad|(?<!\p{L})à vista/iu.test(depois)) continue;
     const n = Number(`${m[2].replace(/\./g, '')}.${(m[3] ?? '0').padEnd(2, '0')}`);
     if (!Number.isFinite(n) || n <= 0) continue;
     return n.toFixed(2).replace('.', ',');

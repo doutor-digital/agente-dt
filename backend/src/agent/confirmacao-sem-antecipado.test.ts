@@ -30,6 +30,23 @@ import { downgradeEmoji } from '../services/kommo.service.js';
 import { linhaProntaDaData } from './agenda-tools.js';
 import { FORMAS_NO_DIA, SORRISO_DA_CONFIRMACAO, valorDaConsultaNoDia } from './pagamento-da-unidade.js';
 
+// A automação do sorriso colorido ligada para Timbó (é assim que a unidade roda quando o João a liga na tela de Automações).
+// Cada arquivo de teste roda no seu processo: o env não vaza. Os testes do estado desligado trocam o valor com comEnv().
+process.env.SORRISO_COLORIDO_SLUGS = 'doutor-hernia-timbo';
+
+function comEnv<T>(env: Record<string, string | undefined>, fn: () => T): T {
+  const antes: Record<string, string | undefined> = {};
+  for (const k of Object.keys(env)) antes[k] = process.env[k];
+  for (const [k, v] of Object.entries(env)) (v === undefined ? delete process.env[k] : (process.env[k] = v));
+  try {
+    return fn();
+  } finally {
+    for (const [k, v] of Object.entries(antes)) (v === undefined ? delete process.env[k] : (process.env[k] = v));
+  }
+}
+
+const SLUG = 'doutor-hernia-timbo';
+
 const ENDERECO = 'Rua Blumenau, 1290, Estados, Timbó/SC, 89.093-438 — Comercial AMS, 1º andar, sala 17';
 
 /** As fontes de Timbó como estão em produção (03/11/2026), sem tirar nem pôr. */
@@ -184,6 +201,23 @@ test('linhaProntaDaData: só para unidade sem antecipado; as demais recebem o me
   assert.equal(linhaProntaDaData('lixo', true), '');
 });
 
+test('Timbó com o sorriso colorido DESLIGADO: o prompt não pede o ☺️ (o envio o estragaria) — fecha só com "Até breve!"', () => {
+  comEnv({ SORRISO_COLORIDO_SLUGS: undefined }, () => {
+    const b = blocoDaConfirmacao(timbo());
+    assert.ok(modelo(timbo()).endsWith('Qualquer dúvida, é só chamar. Até breve!'));
+    assert.doesNotMatch(b, /☺/);
+    assert.match(b, /NENHUM emoji de rosto, nem no fecho/);
+    assert.doesNotMatch(b, /ÚNICO rosto permitido/);
+    // o resto do formato não depende da automação
+    assert.match(b, /⭐ Data: \*\{[^}]*\}\*\n⏰ Horário: \*\{HH:mm\}\*\n/);
+  });
+});
+
+test('valorDaConsultaNoDia: "à vista" colado ao valor também o descarta (o \\b do JS não enxerga o "à")', () => {
+  assert.equal(valorDaConsultaNoDia('Consulta: R$ 200 à vista ou R$ 250 no dia'), null);
+  assert.equal(valorDaConsultaNoDia('Consulta: R$ 250 no dia, ou R$ 200 à vista.'), '250,00');
+});
+
 // ---------------------------------------------------------------------------------------------------------------------
 // Regressão: as outras unidades ficam com o texto de antes, palavra por palavra
 // ---------------------------------------------------------------------------------------------------------------------
@@ -288,18 +322,6 @@ test('regressão: nenhuma outra unidade ganha asterisco, ☺️ ou "Linha pronta
 // ☺️: o envio tira o seletor de variação; só onde a unidade liga o sorriso colorido ele chega inteiro
 // ---------------------------------------------------------------------------------------------------------------------
 
-function comEnv<T>(env: Record<string, string | undefined>, fn: () => T): T {
-  const antes: Record<string, string | undefined> = {};
-  for (const k of Object.keys(env)) antes[k] = process.env[k];
-  for (const [k, v] of Object.entries(env)) (v === undefined ? delete process.env[k] : (process.env[k] = v));
-  try {
-    return fn();
-  } finally {
-    for (const [k, v] of Object.entries(antes)) (v === undefined ? delete process.env[k] : (process.env[k] = v));
-  }
-}
-
-const SLUG = 'doutor-hernia-timbo';
 
 test('envio: sem a automação ligada o ☺️ perde o seletor (comportamento de sempre) — fica o ☺ puro', () => {
   comEnv({ SORRISO_COLORIDO_SLUGS: undefined, SEM_CARINHA_SLUGS: undefined }, () => {

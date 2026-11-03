@@ -2922,7 +2922,8 @@ export class KommoClient {
 
     if (chatId) {
       const t0 = performance.now();
-      const safeText = downgradeEmoji(text);
+      // sem o slug de propósito (o caminho nunca aplicou sem-carinha); só o ☺️ da confirmação, onde a unidade o liga, é protegido
+      const safeText = preservandoSorrisoColorido(this.creds.slug, text, (t) => downgradeEmoji(t));
       const wasDowngraded = safeText !== text;
       try {
         const { data } = await this.http.post(`/chats/${chatId}/messages`, {

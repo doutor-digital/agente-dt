@@ -67,6 +67,7 @@ export function preservandoSorrisoColorido(
   texto: string,
   transforma: (t: string) => string,
 ): string {
-  if (!texto.includes(SORRISO_COLORIDO) || !sorrisoColoridoLigado(slug)) return transforma(texto);
+  // texto que já traz a marca (nunca visto): sem proteção, em vez de arriscar trocar o que não é ☺️ por ☺️
+  if (!texto.includes(SORRISO_COLORIDO) || texto.includes(MARCA_DO_SORRISO) || !sorrisoColoridoLigado(slug)) return transforma(texto);
   return transforma(texto.replaceAll(SORRISO_COLORIDO, MARCA_DO_SORRISO)).replaceAll(MARCA_DO_SORRISO, SORRISO_COLORIDO);
 }

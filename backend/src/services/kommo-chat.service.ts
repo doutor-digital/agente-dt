@@ -328,7 +328,7 @@ export async function enviarMensagemDeChat(
   // no cliente do Kommo (downgradeEmoji), e resposta com botão não passa por lá —
   // achado do Codex em 21/09/2026, depois de eu dizer que o coração tinha acabado.
   const cru = m.texto ?? '';
-  const texto = preservandoSorrisoColorido(unit.slug, cru, (t) => semCoracao(semCarinhaLigado(unit.slug) ? semCarinha(t) : t));
+  const texto = semCoracao(preservandoSorrisoColorido(unit.slug, cru, (t) => (semCarinhaLigado(unit.slug) ? semCarinha(t) : t)));
 
   const montar = (talkId: number | null): Record<string, unknown> => {
     const corpo: Record<string, unknown> = {
