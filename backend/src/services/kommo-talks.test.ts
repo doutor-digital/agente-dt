@@ -8,6 +8,8 @@ import {
   normalizar,
   renderConversaOficial,
   ESPERA_SEM_LEITURA_MS,
+  filtroDeEnvios,
+  contaComoEnvioDaSofia,
 } from './kommo-talks.service.js';
 import { selecionarItens, JANELA_DO_TURNO_MS, temMidiaSemArquivo } from '../lib/conversa-oficial.js';
 
@@ -160,4 +162,25 @@ test('com a equipe separada, a Sofia enxerga o "Agendada consulta" antes de resp
   assert.deepEqual(desde.map((m) => m.id), ['2', '3', '4']);
   assert.match(renderConversaOficial(desde), /Equipe \(WhatsApp Business\): "Agendada consulta/);
   assert.match(renderConversaOficial(desde), /NÃO repita nem contradiga o que a equipe disse/);
+});
+
+test('envios da Sofia no modo estrito: só mensagem da IA COM traceId (resposta de turno); follow-up, reativação, lembrete, cópia do Kommo e cartão não', () => {
+  assert.deepEqual(filtroDeEnvios(true), { traceId: { not: null } });
+  assert.deepEqual(filtroDeEnvios(false), {});
+  assert.deepEqual(filtroDeEnvios(undefined), {});
+  // sem o modo estrito, o comportamento antigo: tudo que não é cópia do chat oficial
+  assert.equal(contaComoEnvioDaSofia({ followUp: 2 }, false), true);
+  assert.equal(contaComoEnvioDaSofia({ origem: 'kommo_talks' }, false), false);
+  assert.equal(contaComoEnvioDaSofia(null, undefined), true);
+  // modo estrito: as exclusões da regra única da "mensagem da IA"
+  assert.equal(contaComoEnvioDaSofia({ via: 'salesbot' }, true), true, 'resposta do turno via Salesbot');
+  assert.equal(contaComoEnvioDaSofia({ via: 'meta', messageId: 'x' }, true), true);
+  assert.equal(contaComoEnvioDaSofia(null, true), true);
+  assert.equal(contaComoEnvioDaSofia({ origem: 'kommo_talks' }, true), false);
+  assert.equal(contaComoEnvioDaSofia({ followUp: 2 }, true), false, 'mesmo que alguém gravasse traceId num toque da régua');
+  assert.equal(contaComoEnvioDaSofia({ reactivation: 1 }, true), false);
+  assert.equal(contaComoEnvioDaSofia({ origem: 'lembrete_kommo' }, true), false);
+  assert.equal(contaComoEnvioDaSofia({ autor: 'equipe' }, true), false);
+  assert.equal(contaComoEnvioDaSofia({ via: 'chat_cartao' }, true), false);
+  assert.equal(contaComoEnvioDaSofia({ origem: 'confirmacao_d1' }, true), false);
 });

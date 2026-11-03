@@ -55,6 +55,12 @@ export const REGRA_SEM_RESPOSTA = 'sem_resposta_telegram';
  * Separada da do Telegram de propósito — se uma das duas saídas falhar, a outra não repete nem é calada.
  */
 export const REGRA_SEM_RESPOSTA_TAREFA = 'sem_resposta_tarefa';
+/**
+ * A marca da tarefa que a RECUPERAÇÃO DE TURNOS abre (lib/recuperar-turnos.ts) quando o deploy matou o turno da IA e ela não
+ * pode responder. Mora aqui (e não lá) porque a recuperação já importa este módulo, e dois avisos de "paciente sem resposta"
+ * para a mesma espera são um só para a recepção: cada um confere a marca do outro antes de abrir a sua.
+ */
+export const REGRA_TAREFA_TURNO_PERDIDO = 'turno_perdido_tarefa';
 /** Espera que segue sem resposta há mais que isto ganha UM lembrete novo (e cobre a conversa nova de quem volta semanas depois). */
 export const REALERTA_MS = 12 * 3600_000;
 /** Quantas mensagens da conversa oficial se leem: folga para ver a resposta mesmo com o paciente escrevendo muito. */
@@ -191,6 +197,8 @@ export interface DepsSemResposta {
   /** Quando saiu a última tarefa deste lead (marca própria, separada da do Telegram), ou null. */
   tarefaEm: (unit: Unit, leadId: number) => Promise<Date | null>;
   marcarTarefa: (unit: Unit, leadId: number, quando: Date) => Promise<void>;
+  /** Quando a recuperação de turnos (deploy) abriu tarefa para este lead, ou null — a mesma espera não ganha uma segunda. */
+  tarefaDoTurnoPerdidoEm: (unit: Unit, leadId: number) => Promise<Date | null>;
   /** Abre a tarefa no cartão, prazo = agora, no responsável do cartão. LANÇA se o Kommo não aceitou. */
   criarTarefa: (unit: Unit, leadId: number, texto: string) => Promise<void>;
   /** O servidor tem o token do Telegram? Sem ele só a tarefa sai — e a espera não é relida a cada minuto por isso. */
@@ -255,6 +263,7 @@ export const DEPS_SEM_RESPOSTA_PADRAO: DepsSemResposta = {
   },
   tarefaEm: async (unit, leadId) => marcadoEm(unit.id, leadId, REGRA_SEM_RESPOSTA_TAREFA),
   marcarTarefa: (unit, leadId, quando) => marcarAviso(unit.id, leadId, REGRA_SEM_RESPOSTA_TAREFA, quando),
+  tarefaDoTurnoPerdidoEm: async (unit, leadId) => marcadoEm(unit.id, leadId, REGRA_TAREFA_TURNO_PERDIDO),
   criarTarefa: async (unit, leadId, texto) => {
     const kommo = createKommoClient(unit);
     // O responsável do cartão; o `createTask` troca o login da consultoria pelo usuário da clínica (quando é um só).
@@ -389,7 +398,11 @@ export async function verificarUnidadeSemResposta(
       const telegramJa = mesmaEsperaJaAlertada(msgs, await deps.alertadoEm(unit, c.leadId), agora);
       const tentada = tarefaTentadaEm.get(chaveDoLead);
       const tentadaVale = !!tentada && mesmaEsperaJaAlertada(msgs, tentada.em, agora);
-      const tarefaJa = mesmaEsperaJaAlertada(msgs, await deps.tarefaEm(unit, c.leadId), agora) || (tentadaVale && tentada!.ok);
+      // Tarefa da recuperação de turnos (o deploy matou o turno) cobre a mesma espera: a recepção não precisa de duas.
+      const tarefaJa =
+        mesmaEsperaJaAlertada(msgs, await deps.tarefaEm(unit, c.leadId), agora) ||
+        mesmaEsperaJaAlertada(msgs, await deps.tarefaDoTurnoPerdidoEm(unit, c.leadId), agora) ||
+        (tentadaVale && tentada!.ok);
       const tarefaFalhou = !tarefaJa && tentadaVale;
       // Sem token do Telegram só a tarefa sai: a espera fica "conferida" em vez de reler o Kommo a cada minuto.
       const telegramDispensado = !deps.telegramPronto();

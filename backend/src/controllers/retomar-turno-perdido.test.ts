@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Conversation, Unit } from '@prisma/client';
 
-import { retomarTurnoPerdido, type DepsRetomada } from './webhook.controller.js';
+import { retomarTurnoPerdido, unidadeDonaDoTurno, resumoDoPedido, type DepsRetomada } from './webhook.controller.js';
 import type { TurnoPerdido } from '../lib/recuperar-turnos.js';
 
 /**
@@ -82,12 +82,65 @@ test('unidade inativa ou lead inválido: não agenda, não registra', async () =
   assert.equal(w.agendados.length + w.registrados.length, 0);
 });
 
-test('o que não é mensagem de paciente do Kommo (widget, sem texto, saída) não volta para a IA', async () => {
+test('pedido do modo widget (trace com input widget_request): NÃO volta para a IA e NÃO é descartado — vira TAREFA', async () => {
   const { w, deps } = mundo();
-  assert.equal(await retomarTurnoPerdido(turno({ leadId: 1, text: 'teste do widget' }), UNIT, deps), 'descartado:nao_e_mensagem_do_kommo');
-  assert.equal(await retomarTurnoPerdido(turno(null), UNIT, deps), 'descartado:nao_e_mensagem_do_kommo');
-  assert.equal(await retomarTurnoPerdido(turno(webhook('olá', { type: 'outgoing' })), UNIT, deps), 'descartado:nao_e_mensagem_do_kommo');
+  const widget = { message: 'quero marcar uma consulta', return_url: 'https://amojo.kommo.com/x', via: 'widget_request' };
+  assert.equal(await retomarTurnoPerdido(turno(widget), UNIT, deps), 'tarefa:pedido_via_widget');
+  assert.equal(w.agendados.length + w.registrados.length, 0);
+});
+
+test('o que não é mensagem de paciente do Kommo (formato desconhecido, sem texto, saída) não volta para a IA e vira TAREFA, nunca descarte mudo', async () => {
+  const { w, deps } = mundo();
+  assert.equal(await retomarTurnoPerdido(turno({ leadId: 1, text: 'teste' }), UNIT, deps), 'tarefa:pedido_nao_reconhecido');
+  assert.equal(await retomarTurnoPerdido(turno(null), UNIT, deps), 'tarefa:pedido_nao_reconhecido');
+  assert.equal(await retomarTurnoPerdido(turno(webhook('olá', { type: 'outgoing' })), UNIT, deps), 'tarefa:pedido_nao_reconhecido');
   assert.equal(w.agendados.length, 0);
+});
+
+test('resumoDoPedido: webhook leva contato e texto; widget leva o texto de `message` para a recepção ler; o resto, vazio', () => {
+  assert.deepEqual(resumoDoPedido(turno(webhook('Bom dia'))), { contato: 'Ana', texto: 'Bom dia' });
+  assert.deepEqual(resumoDoPedido(turno({ message: 'quero marcar', via: 'widget_request' })), { contato: null, texto: 'quero marcar' });
+  assert.deepEqual(resumoDoPedido(turno({ via: 'widget_request' })), { contato: null, texto: '' });
+  assert.deepEqual(resumoDoPedido(turno(null)), { contato: null, texto: '' });
+});
+
+// ── a unidade DONA: refeita pela etapa do cartão, não a gravada no trace ───────────────────────────────
+
+function donaDeps(opts: { gravada: Unit | null; dona?: Unit }) {
+  const w = { buscouGravada: [] as string[], resolveu: [] as Array<[string, number]> };
+  return {
+    w,
+    deps: {
+      unidadeGravada: async (id: string) => {
+        w.buscouGravada.push(id);
+        return opts.gravada;
+      },
+      donaPelaEtapa: async (gravada: Unit, leadId: number) => {
+        w.resolveu.push([gravada.id, leadId]);
+        return opts.dona ?? gravada;
+      },
+    },
+  };
+}
+const COMERCIAL = { id: 'u1', slug: 'timbo', isActive: true } as unknown as Unit;
+const RESGATE = { id: 'u2', slug: 'timbo-resgate', isActive: true } as unknown as Unit;
+
+test('unidadeDonaDoTurno: o cartão mudou de funil — vale a unidade da ETAPA de agora, não a gravada no trace', async () => {
+  const { w, deps } = donaDeps({ gravada: COMERCIAL, dona: RESGATE });
+  const dona = await unidadeDonaDoTurno(turno(webhook('oi')), deps);
+  assert.equal(dona?.id, 'u2');
+  assert.deepEqual(w.buscouGravada, ['u1']);
+  assert.deepEqual(w.resolveu, [['u1', 5142896]], 'a etapa é resolvida a partir da gravada, para o lead do pedido');
+});
+
+test('unidadeDonaDoTurno: unidade gravada inexistente ou inativa, dona inativa e lead inválido → null (fecha sem tarefa)', async () => {
+  assert.equal(await unidadeDonaDoTurno(turno(webhook('oi')), donaDeps({ gravada: null }).deps), null);
+  assert.equal(await unidadeDonaDoTurno(turno(webhook('oi')), donaDeps({ gravada: { ...COMERCIAL, isActive: false } as Unit, dona: RESGATE }).deps), null, 'gravada inativa não é salva por uma dona ativa');
+  assert.equal(await unidadeDonaDoTurno(turno(webhook('oi')), donaDeps({ gravada: COMERCIAL, dona: { ...RESGATE, isActive: false } as Unit }).deps), null);
+  const lead = donaDeps({ gravada: COMERCIAL });
+  assert.equal(await unidadeDonaDoTurno(turno(webhook('oi'), { leadId: 'abc' }), lead.deps), null);
+  assert.equal(await unidadeDonaDoTurno(turno(webhook('oi'), { leadId: '0' }), lead.deps), null);
+  assert.deepEqual(lead.w.buscouGravada, [], 'lead inválido nem consulta o banco');
 });
 
 test('"sim"/"1" que pode ser resposta à confirmação de véspera: TAREFA, a IA não responde', async () => {
