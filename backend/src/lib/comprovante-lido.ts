@@ -43,7 +43,7 @@ export interface NovaLeitura {
 /** Recuo antes de tentar de novo uma imagem cuja leitura falhou. */
 export const RECUO_DA_LEITURA_QUE_FALHOU_MS = 10 * 60_000;
 /** Prazo da reserva da entrega: o turno que entrega a leitura tem esse tempo para dar certo antes de outro assumir. */
-export const PRAZO_DA_ENTREGA_MS = 2 * 60_000;
+export const PRAZO_DA_ENTREGA_MS = 5 * 60_000;
 const MARCA_DE_FALHA = 'leitura falhou: ';
 
 /** Grava a leitura (ou devolve a que já existe para a mesma imagem). */
@@ -79,20 +79,17 @@ export async function guardarLeitura(db: BancoDeLeituras, n: NovaLeitura): Promi
 }
 
 /**
- * As leituras citadas, DESTE cartão e desta unidade. Banco fora do ar = nenhuma leitura (a Sofia não marca; o comprovante vai para a equipe).
+ * As leituras citadas, DESTE cartão e desta unidade. Banco fora do ar LANÇA o erro: "não consegui perguntar" não é "não existe" (o grafo não
+ * marca nada nesse turno e pergunta de novo na volta seguinte).
  */
 export async function carregarLeituras(db: BancoDeLeituras, unitId: string, leadId: number | undefined, ids: ReadonlyArray<string>): Promise<Map<string, LeituraGuardada>> {
   const mapa = new Map<string, LeituraGuardada>();
   if (!leadId || ids.length === 0) return mapa;
-  try {
-    const linhas = await db.comprovanteLido.findMany({
-      where: { id: { in: [...ids] }, unitId, kommoLeadId: leadId, ehComprovante: true },
-      select: { id: true, dados: true, criadoEm: true },
-    });
-    for (const l of linhas) mapa.set(l.id.toLowerCase(), { dados: normalizarDados(l.dados), recebidoEm: l.criadoEm.getTime() });
-  } catch (err) {
-    logger.warn({ err: String(err), unitId, leadId }, 'comprovante: não consegui ler as leituras guardadas — nenhum comprovante vale neste turno');
-  }
+  const linhas = await db.comprovanteLido.findMany({
+    where: { id: { in: [...ids] }, unitId, kommoLeadId: leadId, ehComprovante: true },
+    select: { id: true, dados: true, criadoEm: true },
+  });
+  for (const l of linhas) mapa.set(l.id.toLowerCase(), { dados: normalizarDados(l.dados), recebidoEm: l.criadoEm.getTime() });
   return mapa;
 }
 
@@ -128,6 +125,8 @@ export interface AnexosLidos {
   comprovantes: number;
   /** as leituras de comprovante postas na fala: depois de o turno dar certo, `marcarEntregues` */
   paraEntregar: string[];
+  /** anexos do paciente que NÃO foi possível ler neste turno (download ou visão): o modelo é avisado e a equipe ganha a tarefa */
+  naoLidos: number;
 }
 
 /**
@@ -144,7 +143,7 @@ export async function lerAnexosDoPaciente(
   deps: Partial<DepsDosAnexos> = {},
 ): Promise<AnexosLidos> {
   const d: DepsDosAnexos = { db: deps.db ?? prisma, descrever: deps.descrever ?? describeImage, agora: deps.agora ?? Date.now };
-  const vazio: AnexosLidos = { texto: '', lidos: 0, comprovantes: 0, paraEntregar: [] };
+  const vazio: AnexosLidos = { texto: '', lidos: 0, comprovantes: 0, paraEntregar: [], naoLidos: 0 };
   if (!unit.spineBookingRequiresPayment || !msgs?.length) return vazio;
 
   // Só o que chegou DEPOIS da última fala da Sofia (como a conversa oficial do turno): anexo velho que nunca foi lido não entra na fala de
@@ -174,6 +173,7 @@ export async function lerAnexosDoPaciente(
   let lidos = 0;
   let tentativas = 0;
   let comprovantes = 0;
+  let naoLidos = 0;
   for (const m of candidatas) {
     const fonte = fonteDaMensagemOficial(m.id);
     const ja = porFonte.get(fonte);
@@ -184,7 +184,7 @@ export async function lerAnexosDoPaciente(
         await d.db.comprovanteLido.deleteMany({ where: { id: ja.id, erro: ja.erro } }).catch(() => undefined);
       } else {
         // lido antes e nunca entregue (o turno que o leu falhou): entrega de novo, sem pagar a visão outra vez — mas só quem ganhar a
-        // reivindicação (prazo de 2 min): duas mensagens seguidas do paciente não entregam o mesmo comprovante duas vezes
+        // reivindicação (prazo de 5 min): duas mensagens seguidas do paciente não entregam o mesmo comprovante duas vezes
         if (ja.ehComprovante && ja.entregueEm === null) {
           const ganhou = await d.db.comprovanteLido
             .updateMany({ where: { id: ja.id, entregueEm: null, reivindicadaEm: { lt: new Date(d.agora() - PRAZO_DA_ENTREGA_MS) } }, data: { reivindicadaEm: new Date(d.agora()) } })
@@ -224,6 +224,7 @@ export async function lerAnexosDoPaciente(
       }
     } catch (err) {
       logger.warn({ err: String(err), leadId, unit: unit.slug, mensagem: m.id }, 'comprovante: não consegui ler o anexo do paciente na conversa oficial (segue sem)');
+      naoLidos++;
       // registra a falha: a mesma imagem não é tentada a cada mensagem do paciente (só depois do recuo)
       await guardarLeitura(d.db, {
         unitId: unit.id, leadId, fonte, tipo: m.anexo?.tipo === 'file' ? 'arquivo' : 'imagem', ehComprovante: false, dados: null, erro: err instanceof Error ? err.message : String(err), falhou: true,
@@ -231,7 +232,7 @@ export async function lerAnexosDoPaciente(
     }
   }
   // na ordem em que o paciente as mandou
-  return { texto: falas.sort((a, b) => a.em - b.em).map((f) => f.fala).join('\n\n'), lidos, comprovantes, paraEntregar };
+  return { texto: falas.sort((a, b) => a.em - b.em).map((f) => f.fala).join('\n\n'), lidos, comprovantes, paraEntregar, naoLidos };
 }
 
 /** O turno que carregava as leituras deu certo: elas não precisam ser entregues de novo. */

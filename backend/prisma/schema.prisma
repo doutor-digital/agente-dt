@@ -2392,7 +2392,7 @@ model ComprovanteLido {
   /// Quando a referência chegou à conversa com a Sofia (turno que deu certo). Nulo num comprovante = o turno que o leu falhou, e o
   /// próximo o entrega de novo (rota do salesbot, que lê os anexos pela conversa oficial). Imagem que não é comprovante já nasce entregue.
   entregueEm    DateTime? @map("entregue_em")
-  /// Quem está entregando a referência agora (reserva com prazo de 2 min): duas mensagens seguidas do paciente não entregam o mesmo comprovante duas vezes.
+  /// Quem está entregando a referência agora (reserva com prazo de 5 min): duas mensagens seguidas do paciente não entregam o mesmo comprovante duas vezes.
   reivindicadaEm DateTime? @map("reivindicada_em")
   criadoEm      DateTime @default(now()) @map("criado_em")
 

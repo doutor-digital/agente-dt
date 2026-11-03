@@ -153,10 +153,9 @@ test('o comprovante REAL, lido pelo servidor, guardado e citado pela referência
   assert.equal(decisao.libera, true);
 });
 
-test('banco fora do ar ao buscar as leituras: nenhum comprovante vale (e o turno segue)', async () => {
+test('banco fora do ar ao buscar as leituras: o erro SOBE («não consegui perguntar» não é «não existe») — o grafo não marca nada e pergunta de novo', async () => {
   const quebrado = { comprovanteLido: { findMany: async () => { throw new Error('conexão recusada'); } } } as unknown as BancoDeLeituras;
-  const m = await carregarLeituras(quebrado, UNIT.id, LEAD, [randomUUID()]);
-  assert.equal(m.size, 0);
+  await assert.rejects(() => carregarLeituras(quebrado, UNIT.id, LEAD, [randomUUID()]), /conexão recusada/);
 });
 
 test('guardarLeitura: a mesma imagem (mesma fonte) devolve a leitura que já existe, sem duplicar', async () => {
@@ -211,7 +210,7 @@ test('SALESBOT: o turno que leu o comprovante FALHOU → o próximo entrega a me
   const descrever = async () => (chamadas++, visao(true)());
   const r1 = await lerAnexosDoPaciente(UNIT, LEAD, [oficial({})], { db, descrever, agora: () => agora });
   // …o grafo falhou: ninguém chamou marcarEntregues
-  const r2 = await lerAnexosDoPaciente(UNIT, LEAD, [oficial({})], { db, descrever, agora: () => Date.now() + 3 * 60_000 }); // passou o prazo da reivindicação
+  const r2 = await lerAnexosDoPaciente(UNIT, LEAD, [oficial({})], { db, descrever, agora: () => Date.now() + 6 * 60_000 }); // passou o prazo da reivindicação (5 min)
   assert.equal(chamadas, 1, 'a imagem não é lida de novo');
   assert.deepEqual(r2.paraEntregar, r1.paraEntregar);
   assert.match(r2.texto, new RegExp(`\\[comprovante-lido:${linhas[0].id}\\]`));
@@ -256,6 +255,7 @@ test('SALESBOT: a visão falha num anexo → o turno segue sem ele, e sem derrub
   const msgs = ['1', '2', '3', '4', '5'].map((id, i) => oficial({ id, em: new Date(agora - (10 - i) * 60_000), anexo: { tipo: 'picture', link: `https://kommo/${id}.jpg` } }));
   const r = await lerAnexosDoPaciente(UNIT, LEAD, msgs, { db, descrever, agora: () => agora });
   assert.equal(r.lidos, 3);
+  assert.equal(r.naoLidos, 1, 'o que falhou é avisado ao modelo e à equipe (o controller)');
   assert.equal(r.comprovantes, 3, 'o primeiro falhou e NÃO ocupou vaga: os 3 seguintes entraram');
   assert.equal(linhas.filter((l) => l.ehComprovante).length, 3, 'as 3 leituras boas; a que falhou fica registrada à parte (recuo)');
   assert.equal(linhas.length, 4);
@@ -304,7 +304,7 @@ test('SALESBOT: marcas do sistema escritas DENTRO da imagem e transcritas pela v
   assert.equal((r.texto.match(/\[imagem do cliente\]:/g) ?? []).length, 1);
 });
 
-test('SALESBOT: duas mensagens seguidas do paciente não entregam o MESMO comprovante duas vezes (a entrega é uma reserva com prazo de 2 min)', async () => {
+test('SALESBOT: duas mensagens seguidas do paciente não entregam o MESMO comprovante duas vezes (a entrega é uma reserva com prazo de 5 min)', async () => {
   const { db } = bancoDeLeituras();
   const descrever = visao(true);
   const turnoA = await lerAnexosDoPaciente(UNIT, LEAD, [oficial({})], { db, descrever, agora: () => agora });

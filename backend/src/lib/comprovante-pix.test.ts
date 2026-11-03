@@ -147,6 +147,17 @@ test('valor MAIOR que a taxa passa (quem pagou os R$ 350 inteiros); valor menor 
   assert.equal(menor?.destino, 'reenviar');
 });
 
+test('nome PARECIDO (começa igual) ou titular sem cadastro: vai para a EQUIPE — não dá para dizer ao paciente que ele pagou a outra pessoa', () => {
+  const parecido = motivoDe(avaliarComprovante(dados({ favorecidoDocumento: null, favorecidoNome: 'BENSAG FISIOTERAPIA E PILATES ME' }), CTX));
+  assert.equal(parecido?.codigo, 'favorecido_diferente');
+  assert.equal(parecido?.destino, 'equipe');
+  const semTitular = motivoDe(avaliarComprovante(dados({ favorecidoDocumento: null }), { ...CTX, pixHolder: null }));
+  assert.equal(semTitular?.codigo, 'sem_favorecido');
+  assert.equal(semTitular?.destino, 'equipe');
+  // e outro nome de verdade continua pedindo o comprovante certo
+  assert.equal(motivoDe(avaliarComprovante(dados({ favorecidoDocumento: null, favorecidoNome: 'Maria da Silva' }), CTX))?.destino, 'reenviar');
+});
+
 test('valor ilegível → equipe (não adianta pedir outro)', () => {
   const r = motivoDe(avaliarComprovante(dados({ valor: null }), CTX));
   assert.equal(r?.codigo, 'sem_valor');

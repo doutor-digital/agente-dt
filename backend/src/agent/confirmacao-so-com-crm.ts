@@ -23,7 +23,7 @@ import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
 import { logger } from '../lib/logger.js';
 import { enviarTelegram } from '../lib/telegram.js';
 import { ehTranscricaoDeComprovante } from '../lib/pagamento-antecipado.js';
-import { carimboDoSegmento, RESPOSTA_QUE_MARCA, resumoDaLeitura, type Aceito, type AnaliseDoComprovante, type DadosDoComprovante, type Rejeicao } from '../lib/comprovante-pix.js';
+import { brl, carimboDoSegmento, RESPOSTA_QUE_MARCA, resumoDaLeitura, type Aceito, type AnaliseDoComprovante, type DadosDoComprovante, type Rejeicao } from '../lib/comprovante-pix.js';
 import { normalizar, trechos, type Promessa } from '../lib/prometeu-sem-marcar.js';
 import type { KommoClient } from '../services/kommo.service.js';
 import type { TraceRecorder } from './trace-recorder.js';
@@ -387,7 +387,7 @@ export function textoDaRecusaDoComprovante(r: ComprovanteRecusado, opcoes: Pick<
       `A equipe confere e confirma. Responda ao paciente só isto, com as suas palavras: "${RECADO_COMPROVANTE}"`
     );
   }
-  const taxa = opcoes.taxaEsperada ? `R$ ${opcoes.taxaEsperada.toFixed(2).replace('.', ',')}` : 'a taxa de reserva';
+  const taxa = opcoes.taxaEsperada ? brl(opcoes.taxaEsperada) : 'a taxa de reserva';
   const chave = opcoes.pixKey?.trim();
   const titular = opcoes.pixHolder?.trim();
   const generico =

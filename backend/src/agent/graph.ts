@@ -765,8 +765,13 @@ export async function buildAgentGraph(
       // o que o banco não devolveu (inventado, de outro cartão, banco fora) também não é procurado de novo a cada volta do agente
       const faltam = citadas.filter((id) => !leiturasJaProcuradas.has(id));
       if (faltam.length > 0) {
-        for (const [id, l] of await carregarLeituras(prisma, unit.id, leadIdDaConversa ?? Number(state.leadId), faltam)) leiturasDoTurno.set(id, l);
-        for (const id of faltam) leiturasJaProcuradas.add(id);
+        try {
+          for (const [id, l] of await carregarLeituras(prisma, unit.id, leadIdDaConversa ?? Number(state.leadId), faltam)) leiturasDoTurno.set(id, l);
+          for (const id of faltam) leiturasJaProcuradas.add(id);
+        } catch (err) {
+          // não consegui perguntar ao banco: nenhum comprovante vale NESTA volta, e a próxima pergunta de novo
+          logger.warn({ err: String(err), unit: unit.slug }, 'comprovante: não consegui ler as leituras guardadas — nenhum comprovante vale nesta volta');
+        }
       }
       comprovante.analise = analisarConversa(
         mensagensDaConversa,

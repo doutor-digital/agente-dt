@@ -17,6 +17,7 @@ import { telefoneDeFamiliarNoCartao } from '../lib/telefone-de-familiar.js';
 import { blocoDaConversaOficial } from '../lib/conversa-oficial.js';
 import { lerAnexosDoPaciente, marcarEntregues } from '../lib/comprovante-lido.js';
 import { neutralizarMarcasDoSistema } from '../lib/comprovante-pix.js';
+import { abrirTarefaParaEquipe } from '../agent/confirmacao-so-com-crm.js';
 import { mensagensOficiaisDaUnidade } from '../services/kommo-talks.service.js';
 import { detectarVazamento, explicarVazamento } from '../services/vazamento.js';
 
@@ -170,6 +171,19 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
       const lidos = await lerAnexosDoPaciente(unit, Number(leadId), msgsOficiais);
       anexosLidos = lidos.texto;
       leiturasParaEntregar = lidos.paraEntregar;
+      if (lidos.naoLidos > 0) {
+        // como no webhook: o modelo sabe que chegou algo que não foi possível ler (não pede o comprovante como se nada tivesse chegado), e a equipe é avisada
+        anexosLidos = `${anexosLidos ? `${anexosLidos}\n\n` : ''}[cliente mandou uma imagem ou um arquivo, mas não foi possível ler]`;
+        await abrirTarefaParaEquipe({
+          slug: unit.slug,
+          unitId: unit.id,
+          leadId: Number(leadId),
+          kommo: createKommoClient(unit),
+          recorder,
+          motivo: 'comprovante',
+          detalhe: 'o paciente mandou uma imagem/PDF e o servidor NÃO conseguiu ler (download ou visão falhou): ver se é o comprovante da taxa',
+        }).catch(() => undefined);
+      }
       if (lidos.lidos > 0) {
         await recorder.step({
           kind: 'THINKING',
@@ -233,7 +247,7 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
     ));
 
     // O turno deu certo: os comprovantes que ele carregava já estão na conversa e não precisam ser entregues de novo.
-    void marcarEntregues(prisma, leiturasParaEntregar).catch((err) => logger.warn({ err: String(err), leadId }, 'comprovante: não consegui marcar as leituras como entregues'));
+    await marcarEntregues(prisma, leiturasParaEntregar).catch((err) => logger.warn({ err: String(err), leadId }, 'comprovante: não consegui marcar as leituras como entregues'));
 
     const decisao = (result.decision ?? '').trim();
     // Mesma barreira do webhook: bastidor que a reescrita do grafo não limpou não sai — resposta vazia,
