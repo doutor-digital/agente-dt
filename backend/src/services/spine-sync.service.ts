@@ -5,6 +5,7 @@ import { createKommoClient } from './kommo.service.js';
 import { SpineService } from './spine.service.js';
 import { esquemaDaUnidade } from '../lib/kommo-schema.js';
 import { travaDaUnidadeDeAtendimento } from '../lib/trava-unidade-atendimento.js';
+import { conferirCartaoDestaUnidade } from '../lib/crm-compartilhado.js';
 import { CAMPO_ID_CLIENT, ID_AUTOMACAO as AUTOMACAO_1610, estadoCasamentoJornada } from '../lib/casamento-jornada.js';
 import { registrarSimulacao } from '../lib/so-no-papel.js';
 import { MOTIVO_SEM_CASAMENTO, criaPacienteJuntoComOLead } from '../lib/cadastro-todo-lead.js';
@@ -437,6 +438,11 @@ export async function syncPatientToSpine(
   // Conta com duas cidades e o token de uma só (Petrópolis × Caxias): cartão de outra cidade ou sem cidade não entra.
   const trava = await travaDaUnidadeDeAtendimento(unit, kommoLeadId);
   if (trava) return { ok: false, motivo: trava.motivo };
+  // Conta dividida (divisão gravada em unit_crm_compartilhado): só grava se o ⌂ Unidade de atendimento do cartão for desta
+  // unidade — e então a unidade segue marcada para a trava de escrita. Sem divisão: a mesma unidade, sem ler nada.
+  const cartao = await conferirCartaoDestaUnidade(unit, kommoLeadId);
+  if (!cartao.ok) return { ok: false, motivo: cartao.motivo };
+  unit = cartao.unit;
 
   const p = await prepararPaciente(unit, kommoLeadId);
   if (p.etapa === 'ja-cadastrado') {
@@ -485,6 +491,11 @@ export async function syncLeadToSpine(
   // Conta com duas cidades e o token de uma só (Petrópolis × Caxias): cartão de outra cidade ou sem cidade não entra.
   const trava = await travaDaUnidadeDeAtendimento(unit, kommoLeadId);
   if (trava) return { ok: false, motivo: trava.motivo };
+  // Conta dividida (divisão gravada em unit_crm_compartilhado): só grava se o ⌂ Unidade de atendimento do cartão for desta
+  // unidade — e então a unidade segue marcada para a trava de escrita. Sem divisão: a mesma unidade, sem ler nada.
+  const cartao = await conferirCartaoDestaUnidade(unit, kommoLeadId);
+  if (!cartao.ok) return { ok: false, motivo: cartao.motivo };
+  unit = cartao.unit;
 
   const preparo = await prepararLead(unit, kommoLeadId);
   if (preparo.etapa === 'ja-enviado') {

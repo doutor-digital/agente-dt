@@ -8,6 +8,7 @@ import {
   cartoesSemUnidade,
   grupoDe,
   membroDoRotulo,
+  sofiaPodeAtenderOCartao,
   pularCartao,
   unidadeDoCartao,
   unidadeDonaPeloCartaoId,
@@ -246,4 +247,37 @@ test('trava da unidade de atendimento (#56): sem divisão recusa Caxias e vazio;
   assert.equal(vazio.tipo, 'recusa');
   const cax = await unidadeDoCartao(petro, cartao('Caxias'), deps({ [CAXIAS]: unidade(CAXIAS) }));
   assert.equal(cax.tipo === 'unidade' && cax.unit.spineToken, 'token-u-caxias');
+});
+
+// ── a Sofia numa conta dividida (03/11/2026): só fala no cartão desta unidade ─────────────────────────────────
+test('sofiaPodeAtenderOCartao: só o cartão marcado Petrópolis; Caxias, vazio, valor estranho e ilegível calam', async () => {
+  const petro = unidade(PETRO);
+  const ler = (valor: string | null) => async () => cartao(valor);
+  assert.deepEqual(await sofiaPodeAtenderOCartao(petro, 1, ler('Petrópolis')), { pode: true });
+  const caxias = await sofiaPodeAtenderOCartao(petro, 1, ler('Caxias'));
+  assert.equal(caxias.pode, false);
+  assert.equal(caxias.pode === false && caxias.tipo, 'outra');
+  const vazio = await sofiaPodeAtenderOCartao(petro, 1, ler(null));
+  assert.equal(vazio.pode === false && vazio.tipo, 'sem-unidade', 'só o «⌂ Unidade» antigo não conta');
+  const estranho = await sofiaPodeAtenderOCartao(petro, 1, ler('Rio'));
+  assert.equal(estranho.pode === false && estranho.tipo, 'nao-configurada');
+  const nulo = await sofiaPodeAtenderOCartao(petro, 1, async () => null);
+  assert.equal(nulo.pode === false && nulo.tipo, 'ilegivel');
+  const caiu = await sofiaPodeAtenderOCartao(petro, 1, async () => { throw new Error('Kommo fora'); });
+  assert.equal(caiu.pode === false && caiu.tipo, 'ilegivel', 'trava que falha aberta não é trava');
+});
+
+test('sofiaPodeAtenderOCartao: unidade comum fala sem ler o Kommo; a irmã de Caxias só fala nos cartões de Caxias', async () => {
+  assert.deepEqual(await sofiaPodeAtenderOCartao(unidade(ITZ), 1, async () => { throw new Error('não deveria ler'); }), { pode: true });
+  // a irmã lê o cartão na conta da dona (contaDoKommo): aqui a dona vem por um carregador falso no banco
+  const { prisma } = await import('./prisma.js');
+  const antes = Object.getOwnPropertyDescriptor(prisma, 'unit');
+  Object.defineProperty(prisma, 'unit', { value: { findUnique: async ({ where }: { where: { id: string } }) => unidade(where.id) }, configurable: true });
+  try {
+    assert.deepEqual(await sofiaPodeAtenderOCartao(unidade(CAXIAS), 1, async () => cartao('Caxias')), { pode: true });
+    const dePetro = await sofiaPodeAtenderOCartao(unidade(CAXIAS), 1, async () => cartao('Petrópolis'));
+    assert.equal(dePetro.pode, false);
+  } finally {
+    if (antes) Object.defineProperty(prisma, 'unit', antes);
+  }
 });

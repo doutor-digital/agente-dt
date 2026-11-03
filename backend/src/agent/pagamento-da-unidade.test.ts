@@ -336,3 +336,35 @@ test('retry de consulta DESMARCADA: a unidade sem antecipado não manda o pacien
       'sem dizer confirmado, agendado nem reservado. Responda só com a mensagem final ou com a chamada da ferramenta.',
   );
 });
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Taxa de reserva (Boa Vista, Petrópolis): o menor R$ das fontes é a PARTE antecipada de um total, não um preço à vista
+// ---------------------------------------------------------------------------------------------------------------------
+
+const FONTES_TAXA =
+  'A CONSULTA: R$ 200,00 no total, pagos em duas partes — R$ 50,00 antecipados (sinal) para garantir o horário e R$ 150,00 no dia da consulta, na clínica. Os R$ 50,00 abatem do valor.';
+
+test('taxa de reserva: o bloco de conversão ensina o TOTAL e as duas partes — nunca "R$ 50 à vista no PIX"', () => {
+  const u = unidade({ sourceProdutos: FONTES_TAXA, spineBookingRequiresPayment: true });
+  assert.deepEqual(precosDaConsulta(u), { antecipado: 50, noDia: 150 });
+  const p = composeFlattenedPrompt({ unit: u });
+  assert.ok(p.includes('R$ 200 no total — R$ 50 antecipados para garantir o horário (abatem do total) + R$ 150 no dia'));
+  assert.ok(!/à vista no PIX/i.test(p), 'a consulta não tem preço à vista menor');
+  assert.ok(!p.includes('A consulta é R$ 50 antecipado'));
+  assert.ok(p.includes('SEM oferecer desconto'));
+});
+
+test('sem taxa de reserva (antecipado opcional): o bloco de conversão continua o de sempre, palavra por palavra', () => {
+  const p = composeFlattenedPrompt({ unit: unidade({ sourceProdutos: FONTES_COM }) });
+  assert.ok(p.includes('A consulta com o especialista é\n     R$ 350, ou R$ 120 à vista no PIX. É nela que se descobre a'));
+  assert.ok(p.includes('Reancore: o R$ 350 é o valor cheio'));
+});
+
+test('taxa de reserva com fontes que não dão para ler como "antecipado + no dia": nunca cai em "menor = à vista no PIX"', () => {
+  const u = unidade({ sourceProdutos: 'A CONSULTA custa R$ 200,00, com sinal de R$ 50,00 para reservar e o restante na clínica. Sessão avulsa: R$ 90.', spineBookingRequiresPayment: true });
+  assert.equal(precosDaConsulta(u), null);
+  const p = composeFlattenedPrompt({ unit: u });
+  assert.ok(!/à vista no PIX/i.test(p));
+  assert.ok(!p.includes('A consulta é R$ 50 antecipado'));
+  assert.ok(p.includes('exatamente como estão nas Fontes Oficiais'));
+});

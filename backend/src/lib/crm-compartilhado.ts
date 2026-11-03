@@ -310,6 +310,70 @@ async function lerCartaoNaConta(conta: Unit, leadId: number): Promise<KommoLead 
   return createKommoClient(conta).getLead(leadId);
 }
 
+export type PermissaoDaSofia =
+  | { pode: true }
+  | { pode: false; motivo: string; tipo: Exclude<Veredicto['tipo'], 'sem-divisao' | 'desta'> | 'ilegivel' };
+
+/**
+ * Conta dividida (Petrópolis + Caxias): a Sofia de uma unidade só fala nos cartões que o campo «⌂ Unidade de atendimento»
+ * diz que são DELA. Cartão da irmã, sem unidade, com valor que ninguém usa ou que não deu para ler: ela fica calada
+ * e a conversa é da equipe (decisão do João, 03/11/2026 — nada de palpite por número, anúncio ou DDD; o robô
+ * `unidade-por-canal` e a SDR são quem preenche o campo). Falha para o lado de calar: trava que falha aberta não é trava.
+ * Unidade que não divide Kommo: `pode` na hora, sem ler nada.
+ */
+export async function sofiaPodeAtenderOCartao(
+  unit: Pick<Unit, 'id'>,
+  leadId: number,
+  lerCartao: (conta: Unit, leadId: number) => Promise<Pick<KommoLead, 'custom_fields_values'> | null> = lerCartaoNaConta,
+): Promise<PermissaoDaSofia> {
+  const grupo = await grupoDaUnidade(unit.id);
+  if (!grupo) return { pode: true };
+  // Qualquer falha (banco, Kommo) cai em "ilegível": a Sofia cala. Trava que falha aberta não é trava.
+  const lead = await (async () => lerCartao((await contaDoKommo(unit)) as Unit, leadId))().catch(() => null);
+  if (!lead) return { pode: false, tipo: 'ilegivel', motivo: 'não consegui ler o cartão para saber a unidade' };
+  const v = veredictoDoCartao(grupo, unit.id, valorDaUnidadeNoCartao(lead));
+  switch (v.tipo) {
+    case 'sem-divisao':
+    case 'desta':
+      return { pode: true };
+    case 'outra':
+      return { pode: false, tipo: v.tipo, motivo: `cartão de ${v.rotulo}` };
+    case 'nao-configurada':
+      return { pode: false, tipo: v.tipo, motivo: `unidade «${v.valor}» do cartão não é desta conta` };
+    case 'sem-unidade':
+      return { pode: false, tipo: v.tipo, motivo: 'cartão sem «⌂ Unidade de atendimento»' };
+    default:
+      return { pode: false, tipo: v.tipo, motivo: 'esta unidade não tem rótulo no grupo' };
+  }
+}
+
+export type CartaoParaEscrever = { ok: true; unit: Unit } | { ok: false; motivo: string };
+
+/**
+ * Antes de a Sofia (ou o espelho) escrever na franquia POR UM CARTÃO: o cartão é desta unidade? Então devolve a unidade
+ * já marcada para a trava de escrita deixar passar. Conta dividida e cartão da irmã: recusa — a Sofia nunca grava com o
+ * token de uma unidade um paciente da outra; e a própria irmã (sem Kommo próprio) também é recusada (quem cadastra o de
+ * Caxias é o widget, que roteia pelo token certo). Unidade comum: a mesma unidade, sem ler nada.
+ */
+export async function conferirCartaoDestaUnidade(
+  unit: Unit,
+  leadId: number,
+  lerCartao?: (conta: Unit, leadId: number) => Promise<Pick<KommoLead, 'custom_fields_values'> | null>,
+): Promise<CartaoParaEscrever> {
+  // A irmã (Caxias) não tem Kommo próprio: este caminho lê o cartão pelo Kommo da unidade que o chama, então não vale para ela.
+  const conta = await contaDoKommo(unit);
+  if (conta.id !== unit.id) {
+    return { ok: false, motivo: `${unit.name} usa o Kommo de ${conta.name}: o cadastro automático não vale para ela. Nada foi gravado — cadastre pelo widget do cartão.` };
+  }
+  const dono = await unidadeParaOCartao(unit, leadId, lerCartao);
+  if (dono.tipo === 'sem-divisao') return { ok: true, unit: dono.unit };
+  if (dono.tipo === 'recusa') return { ok: false, motivo: dono.motivo };
+  if (dono.unit.id !== unit.id) {
+    return { ok: false, motivo: `Este cartão é de ${dono.rotulo}: o cadastro automático desta unidade não grava na franquia de ${dono.rotulo}. Nada foi gravado — cadastre pelo widget do cartão.` };
+  }
+  return { ok: true, unit: dono.unit as Unit };
+}
+
 /** Frase para a IA quando a conta é dividida: a agenda pela Sofia ainda não separa as duas unidades. */
 export async function travaDaAgendaDaIa(unit: Pick<Unit, 'id'>): Promise<string | null> {
   const grupo = await grupoDaUnidade(unit.id);
