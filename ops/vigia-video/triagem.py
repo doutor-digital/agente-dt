@@ -81,13 +81,14 @@ def limiar_auto(notas):
     if not vals:
         return 0.01
     med = statistics.median(vals)
-    mad = statistics.median([abs(v - med) for v in vals]) or 0.0005
-    # ruído da câmera/compressão fica abaixo disso; movimento real fica acima.
-    # Teto de 40% do percentil 90: sem ruído (vídeo limpo, ou --rapido, que só vê quadros-chave), a mediana dos valores
-    # não nulos JÁ É o movimento e "mediana + 8 MAD" ficava acima dele, escondendo tudo (achado no teste sintético, 03/11).
-    vals.sort()
-    p90 = vals[int(0.9 * (len(vals) - 1))]
-    return max(0.004, min(med + 8 * mad, 0.4 * p90))
+    mad = statistics.median([abs(v - med) for v in vals])
+    # Valores quase IDÊNTICOS e altos não são ruído de câmera (ruído é disperso e baixo): é o próprio movimento. Acontece com vídeo
+    # limpo ou no --rapido, onde só aparecem os quadros-chave e a mediana dos não nulos já é o movimento; "mediana + 8 MAD" ficava
+    # acima dele e escondia tudo (achado no teste sintético, 03/11). O limiar vai para o meio entre zero e esse nível.
+    if med >= 0.02 and mad < 0.1 * med:
+        return max(0.004, 0.5 * med)
+    # ruído da câmera/compressão fica abaixo disso; movimento real fica acima
+    return max(0.004, med + 8 * (mad or 0.0005))
 
 
 def agrupar(notas, limiar, juntar_seg, margem):

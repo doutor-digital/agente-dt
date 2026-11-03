@@ -26,7 +26,8 @@ OBS grava MKV ──► enviar-gravacoes.sh (cron, 15 em 15 min, neste Linux)
 |---|---|
 | `triagem.py` | A triagem (python stdlib + ffmpeg). **Fonte única** (a skill local `~/.claude/skills/vigiar-video` pode apontar para cá). |
 | `enviar-gravacoes.sh` | O que o cron roda: acha gravação pronta, faz a triagem, envia o pacote, marca como enviada. Nunca apaga nada. |
-| `gerar-video-sintetico.sh` / `teste-ponta-a-ponta.sh` | Prova local sem servidor: vídeo de teste com 2 janelas de movimento até a pasta de destino. |
+| `gerar-video-sintetico.sh` / `teste-ponta-a-ponta.sh` | Prova local sem servidor: vídeo de teste com 2 janelas de movimento até a pasta de destino (inclui envio que falha e não refaz a triagem). |
+| `test_triagem.py` | Testes da lógica pura (limiar automático, agrupamento, movimento por hora): `python3 -I test_triagem.py`. |
 | `skill-claude-ai/SKILL.md` | O roteiro para o claude.ai usar as 3 ferramentas. `vigiar-video-conector.zip` é o upload pronto. |
 | `gerar-zip-da-skill.sh` | Refaz o zip depois de editar o `SKILL.md`. |
 
@@ -90,7 +91,9 @@ crontab -e
 - Falhou 3 vezes seguidas (`VIGIA_TENTATIVAS`): desiste daquela gravação e avisa no log; para tentar de novo apague
   `~/.local/state/vigia-video/falhas/<arquivo>`.
 - Marca de "já enviada": `~/.local/state/vigia-video/enviados/<arquivo>`. Apagar a marca reenvia (idempotente).
-- Os pacotes locais ficam em `~/.cache/vigia-video/` (alguns MB cada). O script não apaga nem eles nem os vídeos.
+- Os pacotes locais ficam em `~/.cache/vigia-video/` (alguns MB cada). O script não apaga nem eles nem os vídeos. Se o vídeo mudar
+  e a triagem precisar ser refeita, o pacote antigo é só RENOMEADO para `<pacote>.antigo-<hora>` (nada some; apague à mão se quiser).
+- Se só o envio falhar (rede, chave), a rodada seguinte NÃO refaz a triagem: reaproveita o pacote pronto e tenta enviar de novo.
 - O log cresce sem parar: `logrotate` ou apague de vez em quando.
 - Tamanho: 10 h de câmera com movimento normal dão algumas centenas de eventos; cada folha tem ~20 KB e cada clipe 0,3 a 3 MB
   (clipe é cortado em 180 s; o evento mais longo avisa "o clipe é só o começo").

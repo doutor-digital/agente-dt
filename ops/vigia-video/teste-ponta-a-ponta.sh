@@ -24,8 +24,14 @@ grep -q "PRONTA.*2026-11-03_08-00-00_caixa.mkv -> caixa/2026-11-03_0800" <<<"$sa
 grep -q "espera: 2026-11-03_09-00-00_estoque.mkv" <<<"$saida" || falha "a gravação recente deveria esperar"
 grep -q "ignorada (nome fora do formato.*Gravacao-qualquer.mkv" <<<"$saida" || falha "o nome fora do formato deveria ser ignorado"
 
+echo "--- envio que falha (destino impossível): a triagem fica pronta e não se repete na próxima rodada"
+falhou="$(VIGIA_DESTINO=/proc/nao-existe/ bash "$AQUI/enviar-gravacoes.sh")"; echo "$falhou"
+grep -q "FALHOU o envio de 2026-11-03_08-00-00_caixa.mkv" <<<"$falhou" || falha "o envio para destino impossível deveria falhar"
+[ ! -e "$PASTA/estado/enviados/2026-11-03_08-00-00_caixa.mkv" ] || falha "marcou como enviada uma gravação que falhou"
+
 echo "--- envio"
-bash "$AQUI/enviar-gravacoes.sh"
+reenvio="$(bash "$AQUI/enviar-gravacoes.sh")"; echo "$reenvio"
+grep -q "já pronta em .*; só envio" <<<"$reenvio" || falha "a triagem foi refeita depois de uma falha só de envio"
 D="$PASTA/destino/caixa/2026-11-03_0800"
 for f in eventos.json resumo.md meta.json folhas/evento_0001.jpg folhas/evento_0002.jpg clipes/evento_0001.mp4 clipes/evento_0002.mp4; do
   [ -s "$D/$f" ] || falha "faltou $f no destino"

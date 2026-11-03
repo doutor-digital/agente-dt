@@ -32,8 +32,10 @@ export const LINK_MAX_MIN = 30;
 const MAX_FOLHAS = 8;
 const MAX_EVENTOS_NO_INDICE = 300;
 const TAMANHO_MAX_JSON = 8 * 1024 * 1024;
-const TAMANHO_MAX_FOLHA = 1.5 * 1024 * 1024;
-const MAX_DOWNLOADS_AO_MESMO_TEMPO = 3;
+const TAMANHO_MAX_FOLHA = 600 * 1024;
+/** soma das imagens de UMA resposta (em bytes antes do base64): passou disso, as folhas que sobram vão no próximo lote */
+const ORCAMENTO_DE_IMAGENS = 3 * 1024 * 1024;
+const MAX_DOWNLOADS_AO_MESMO_TEMPO = 20;
 
 const RE_CAMERA = /^[a-z0-9][a-z0-9-]{0,38}$/;
 const RE_STAMP = /^(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})$/;
@@ -152,14 +154,18 @@ interface Pacote {
   eventos: EventoDoPacote[];
 }
 
+/** Sem `meta.json`: o envio ainda não terminou (ou a gravação não existe). Distinto de pacote corrompido. */
+class EnvioEmAndamento extends ErroDeEntrada {}
+
 /** Lê o pacote de UMA gravação. Sem `meta.json` o envio não terminou: para o conector a gravação não existe. */
 async function lerPacote(ctx: ContextoVideo, camera: string, stamp: string): Promise<Pacote> {
   const id = idDaGravacao(camera, stamp);
   if (foraDaRetencao(ctx, stamp)) throw new ErroDeEntrada(`gravacao ${id} não existe (ou passou de ${ctx.retencaoDias} dias e saiu da lista)`);
   const meta = await arquivoDoPacote(ctx, camera, stamp, 'meta.json');
   const ev = await arquivoDoPacote(ctx, camera, stamp, 'eventos.json');
-  if (!meta || !ev) throw new ErroDeEntrada(`gravacao ${id} não existe (ou o envio dela ainda não terminou)`);
+  if (!meta) throw new EnvioEmAndamento(`gravacao ${id} não existe (ou o envio dela ainda não terminou)`);
   try {
+    if (!ev) throw new Error('sem eventos.json');
     MetaSchema.parse(await lerJson(meta));
     const e = EventosSchema.parse(await lerJson(ev));
     return {
@@ -221,13 +227,19 @@ export async function listarGravacoes(ctx: ContextoVideo, a: { camera?: string; 
   const gravacoes: unknown[] = [];
   let ilegiveis = 0;
   let pendentes = 0;
+  let alemDoLimite = 0;
   for (const { camera, stamp } of achadas) {
-    if (gravacoes.length >= limite) break;
+    if (gravacoes.length >= limite) {
+      // além do limite não se abre o pacote, mas o envio incompleto continua sendo contado (a gerente precisa saber que falta uma)
+      if (await arquivoDoPacote(ctx, camera, stamp, 'meta.json')) alemDoLimite++;
+      else pendentes++;
+      continue;
+    }
     let p: Pacote;
     try {
       p = await lerPacote(ctx, camera, stamp);
     } catch (e) {
-      if (e instanceof ErroDeEntrada) pendentes++; // sem meta.json: envio em andamento
+      if (e instanceof EnvioEmAndamento) pendentes++;
       else ilegiveis++;
       continue;
     }
@@ -247,6 +259,7 @@ export async function listarGravacoes(ctx: ContextoVideo, a: { camera?: string; 
     horaReal: 'hora do relógio do computador que gravou (sem conversão de fuso)',
     retencaoDias: ctx.retencaoDias,
     gravacoes,
+    ...(alemDoLimite ? { naoMostradas: alemDoLimite, comoVer: 'aumente "limite" (até 100) ou filtre por camera/dia' } : {}),
     ...(ilegiveis ? { pacotesIlegiveis: ilegiveis } : {}),
     ...(pendentes ? { envioEmAndamento: pendentes } : {}),
     proximoPasso: 'video_folhas({gravacao}) sem "eventos" devolve o índice dos eventos; com até 8 ids devolve as folhas como imagem.',
@@ -258,14 +271,20 @@ export async function listarGravacoes(ctx: ContextoVideo, a: { camera?: string; 
 export async function lerFolhas(ctx: ContextoVideo, a: { gravacao: string; eventos?: number[]; aPartirDoEvento?: number }): Promise<Conteudo> {
   const { camera, stamp } = lerIdDaGravacao(a.gravacao);
   const p = await lerPacote(ctx, camera, stamp);
-  const hora = (seg: number) => fmtHora(p.inicioMs + Math.round(seg) * 1000);
+  const fimMs = p.inicioMs + p.duracaoSeg * 1000;
+  // gravação que atravessa a meia-noite: sem a data, "23:50" de ontem e de hoje se confundem no índice e nos quadros
+  const cruzaDia = fmtDataHora(p.inicioMs).slice(0, 10) !== fmtDataHora(fimMs).slice(0, 10);
+  const hora = (seg: number) => {
+    const ms = p.inicioMs + Math.round(seg) * 1000;
+    return cruzaDia ? fmtDataHora(ms).slice(5) : fmtHora(ms); // "11-04 02:13:05"
+  };
   const dia = (seg: number) => fmtDataHora(p.inicioMs + Math.round(seg) * 1000);
 
   if (!a.eventos || a.eventos.length === 0) {
     const de = a.aPartirDoEvento ?? 1;
     const lista = p.eventos.filter((e) => e.id >= de);
     const pagina = lista.slice(0, MAX_EVENTOS_NO_INDICE);
-    const cabecalho = `${p.id}: ${p.eventos.length} eventos em ${fmtDuracao(p.duracaoSeg)} de gravação (${fmtDataHora(p.inicioMs)} a ${fmtDataHora(p.inicioMs + p.duracaoSeg * 1000)}). Colunas: id, hora real, duração em segundos, pico de movimento (0 a 1; maior = mais mexida na imagem).`;
+    const cabecalho = `${p.id}: ${p.eventos.length} eventos em ${fmtDuracao(p.duracaoSeg)} de gravação (${fmtDataHora(p.inicioMs)} a ${fmtDataHora(fimMs)}). Colunas: id, hora real${cruzaDia ? ' (MM-DD hh:mm:ss: a gravação atravessa a meia-noite)' : ''}, duração em segundos, pico de movimento (0 a 1; maior = mais mexida na imagem).`;
     const linhas = pagina.map((e) => `${e.id} ${hora(e.inicio)} ${Math.round(e.fim - e.inicio)}s ${e.pico ?? '-'}`);
     const resto = lista.length - pagina.length;
     return [
@@ -295,20 +314,36 @@ export async function lerFolhas(ctx: ContextoVideo, a: { gravacao: string; event
       text: `${p.id}: folhas de contato (grade ${p.grade}; os quadros seguem da esquerda para a direita, de cima para baixo). ${AVISO_VIDEO}`,
     },
   ];
+  let gasto = 0;
+  const adiadas: number[] = [];
   for (const id of ids) {
     const e = porId.get(id)!;
     const quadros = (e.quadros_seg ?? []).map((s) => hora(s));
-    const cab = `Evento ${id}: ${dia(e.inicio)} a ${hora(e.fim)} (${Math.round(e.fim - e.inicio)} s), pico de movimento ${e.pico ?? '-'}.${e.clipe_cortado ? ' O clipe é só o começo do evento.' : ''}`;
+    const durEvento = Math.max(1, e.fim - e.inicio);
+    const passo = Math.max(1, Math.round(durEvento / Math.max(1, e.quadros_seg?.length ?? 12)));
+    const clipeAte = e.clipe_cortado && e.clipe_seg ? hora(e.inicio + e.clipe_seg) : null;
+    const cab =
+      `Evento ${id}: ${dia(e.inicio)} a ${hora(e.fim)} (${Math.round(durEvento)} s), pico de movimento ${e.pico ?? '-'}. Um quadro a cada ~${passo} s.` +
+      (clipeAte ? ` ATENÇÃO: o clipe cobre só o começo do evento (até ${clipeAte}); a folha cobre o evento inteiro.` : '');
     const arq = await arquivoDoPacote(ctx, camera, stamp, 'folhas', `evento_${pad4(id)}.jpg`);
-    let imagem: Buffer | null = null;
-    if (arq && (await fs.stat(arq)).size <= TAMANHO_MAX_FOLHA) imagem = await fs.readFile(arq);
-    if (!imagem) {
-      saida.push({ type: 'text', text: `${cab}\n(a folha deste evento não está disponível)` });
+    if (!arq) {
+      saida.push({ type: 'text', text: `${cab}\n(a folha deste evento NÃO EXISTE no pacote: não dê nota por ela; avise o João)` });
       continue;
     }
+    const tamanho = (await fs.stat(arq)).size;
+    if (tamanho > TAMANHO_MAX_FOLHA) {
+      saida.push({ type: 'text', text: `${cab}\n(a folha existe mas tem ${Math.round(tamanho / 1024)} KB, acima do limite de ${Math.round(TAMANHO_MAX_FOLHA / 1024)} KB: não dê nota por ela; peça o clipe)` });
+      continue;
+    }
+    if (gasto + tamanho > ORCAMENTO_DE_IMAGENS) {
+      adiadas.push(id);
+      continue;
+    }
+    gasto += tamanho;
     saida.push({ type: 'text', text: `${cab}\nHorário de cada quadro (${colunas} por linha): ${quadros.join(', ')}` });
-    saida.push({ type: 'image', data: imagem.toString('base64'), mimeType: 'image/jpeg' });
+    saida.push({ type: 'image', data: (await fs.readFile(arq)).toString('base64'), mimeType: 'image/jpeg' });
   }
+  if (adiadas.length) saida.push({ type: 'text', text: `Os eventos ${adiadas.join(', ')} ficaram de fora desta resposta (limite de tamanho das imagens): peça-os de novo, em outro lote.` });
   return saida;
 }
 
@@ -398,15 +433,19 @@ export function montarRotaDoClipe(app: Express, ctx: ContextoVideo, aoBaixar?: (
       }
     };
     res.on('close', liberar);
+    // um player faz várias requisições Range por reprodução: só a abertura (sem Range ou Range que começa em 0) é auditada
+    const range = String(req.headers.range ?? '');
+    const abertura = req.method === 'GET' && (!range || /^bytes=0-/.test(range));
     try {
-      aoBaixar?.({ quem: t.quem, gravacao: t.gravacao, evento: t.evento, ip: ipDoCliente(req), agente: String(req.headers['user-agent'] ?? '').slice(0, 200) || undefined });
+      if (abertura) aoBaixar?.({ quem: t.quem, gravacao: t.gravacao, evento: t.evento, ip: ipDoCliente(req), agente: String(req.headers['user-agent'] ?? '').slice(0, 200) || undefined });
     } catch {
       // auditoria que falha não derruba o download
     }
     res.sendFile(
       arq,
       {
-        dotfiles: 'deny',
+        // o caminho já foi validado (id fechado + realpath dentro de VIGIA_DIR); 'deny' barraria todo clipe se o volume ficar em pasta com ponto (/srv/.dados/...)
+        dotfiles: 'allow',
         cacheControl: false,
         lastModified: false,
         headers: {

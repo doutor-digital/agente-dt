@@ -182,7 +182,7 @@ test('video_folhas: o eventos.json NÃO escolhe caminho; link simbólico para fo
   assert.equal(r.some((b) => b.type === 'image'), false, 'nenhuma imagem: a do 1 é link para fora e a do 2 não existe');
   assert.equal(JSON.stringify(r).includes('CONTEUDO-FORA'), false);
   assert.equal(JSON.stringify(r).includes(Buffer.from('CONTEUDO-FORA-DA-PASTA').toString('base64')), false);
-  assert.equal(r.filter((b: any) => b.type === 'text' && /não está disponível/.test(b.text)).length, 2);
+  assert.equal(r.filter((b: any) => b.type === 'text' && /NÃO EXISTE no pacote/.test(b.text)).length, 2);
   // pasta da câmera inteira apontando para fora também não passa
   symlinkSync(fora, path.join(raiz, 'camera-fora'));
   const dados = ((await listarGravacoes(ctx(), {})) as any).gravacoes.map((g: any) => g.camera);
@@ -260,6 +260,12 @@ test('rota: link válido entrega o clipe (video/mp4, sem cache, nosniff), com Ra
     const rg = await fetch(s.base + caminhoDe(l.url), { headers: { range: 'bytes=0-9' } });
     assert.equal(rg.status, 206);
     assert.equal((await rg.arrayBuffer()).byteLength, 10);
+    // pular no vídeo e HEAD não viram linha de auditoria (um player faz dezenas de pedidos por reprodução)
+    const pulo = await fetch(s.base + caminhoDe(l.url), { headers: { range: 'bytes=100-199' } });
+    assert.equal(pulo.status, 206);
+    await pulo.arrayBuffer();
+    await (await fetch(s.base + caminhoDe(l.url), { method: 'HEAD' })).arrayBuffer();
+    assert.equal(s.acessos.length, 2, 'só a abertura (sem Range ou com bytes=0-) é auditada');
   } finally {
     await s.fechar();
   }
@@ -367,4 +373,79 @@ test('pacote real do enviar-gravacoes.sh (só com VIGIA_DIR_E2E)', { skip: !proc
   assert.equal(folhas.filter((b) => b.type === 'image').length, 2);
   const l: any = await linkDoClipe(c, 'u', { gravacao: lista.gravacoes[0].id, evento: 1 });
   console.log(l.url, l.tamanhoMB, 'MB');
+});
+
+// ------------------------------------------------------------ achados da revisão (03/11)
+
+test('gravação que atravessa a meia-noite: índice e quadros mostram a DATA (MM-DD hh:mm:ss), não só a hora', async () => {
+  const dir = pacote('noite', '2026-11-03_2000', { duracao: 36_000, eventos: 1 });
+  // gravação de 20:00 do dia 03 por 10 h; o evento começa 4 h 13 min 5 s depois = 00:13:05 do dia 04
+  const ev = { duracao_seg: 36_000, eventos: [{ id: 1, inicio: 4 * 3600 + 13 * 60 + 5, fim: 4 * 3600 + 14 * 60, quadros_seg: [3 * 3600 + 59 * 60 + 58, 4 * 3600 + 13 * 60 + 5] }] };
+  writeFileSync(path.join(dir, 'eventos.json'), JSON.stringify(ev));
+  const [idx]: any = await lerFolhas(ctx(), { gravacao: 'noite_2026-11-03_2000' });
+  assert.match(idx.text, /atravessa a meia-noite/);
+  assert.match(idx.text, /^1 11-04 00:13:05 55s -$/m);
+  const r: any[] = await lerFolhas(ctx(), { gravacao: 'noite_2026-11-03_2000', eventos: [1] });
+  assert.match(r[1].text, /11-03 23:59:58, 11-04 00:13:05/, 'os quadros que cruzam a meia-noite trazem a data');
+  // e uma gravação que NÃO cruza continua só com a hora
+  const [simples]: any = await lerFolhas(ctx(), { gravacao: 'caixa_2026-11-03_0800' });
+  assert.doesNotMatch(simples.text, /meia-noite/);
+});
+
+test('folha: informa o passo entre os quadros e avisa quando o clipe cobre só o começo do evento', async () => {
+  const dir = pacote('longo', '2026-11-03_0600', { duracao: 20_000, eventos: 1 });
+  writeFileSync(
+    path.join(dir, 'eventos.json'),
+    JSON.stringify({ duracao_seg: 20_000, eventos: [{ id: 1, inicio: 600, fim: 7800, quadros_seg: Array.from({ length: 12 }, (_, i) => 600 + i * 600), clipe_seg: 180, clipe_cortado: true }] }),
+  );
+  const r: any[] = await lerFolhas(ctx(), { gravacao: 'longo_2026-11-03_0600', eventos: [1] });
+  assert.match(r[1].text, /Um quadro a cada ~600 s\./);
+  assert.match(r[1].text, /o clipe cobre só o começo do evento \(até 06:13:00\); a folha cobre o evento inteiro/);
+});
+
+test('folha grande demais, folha que não existe e orçamento de imagens são ditos de forma DIFERENTE e explícita', async () => {
+  const dir = pacote('grande', '2026-11-03_0500', { duracao: 9000, eventos: 6, folhas: [] });
+  const grande = Buffer.alloc(700 * 1024, 1); // acima do teto de 600 KB por folha
+  const media = Buffer.alloc(500 * 1024, 2);
+  writeFileSync(path.join(dir, 'folhas', 'evento_0001.jpg'), grande); // grande demais; evento 2 não tem folha
+  for (const i of [3, 4, 5, 6]) writeFileSync(path.join(dir, 'folhas', `evento_000${i}.jpg`), media);
+  const r: any[] = await lerFolhas(ctx(), { gravacao: 'grande_2026-11-03_0500', eventos: [1, 2, 3, 4, 5, 6] });
+  const textos = r.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
+  assert.match(textos, /Evento 1:.*\n\(a folha existe mas tem 700 KB, acima do limite de 600 KB/);
+  assert.match(textos, /Evento 2:.*\n\(a folha deste evento NÃO EXISTE no pacote/);
+  assert.equal(r.filter((b) => b.type === 'image').length, 4, '4 x 500 KB = 2 MB cabem no orçamento de 3 MB');
+
+  // estourando o orçamento: 6 folhas de 500 KB = 3 MB + 1; a última fica para o próximo lote, e o texto diz qual
+  const dir2 = pacote('grande2', '2026-11-03_0400', { duracao: 9000, eventos: 7, folhas: [] });
+  for (let i = 1; i <= 7; i++) writeFileSync(path.join(dir2, 'folhas', `evento_000${i}.jpg`), media);
+  const r2: any[] = await lerFolhas(ctx(), { gravacao: 'grande2_2026-11-03_0400', eventos: [1, 2, 3, 4, 5, 6, 7] });
+  assert.equal(r2.filter((b) => b.type === 'image').length, 6, '6 x 500 KB = 3000 KB = 3 MB (o teto)');
+  assert.match(r2.at(-1).text, /Os eventos 7 ficaram de fora desta resposta/);
+});
+
+test('video_gravacoes: o que está além do limite não some do aviso (envio em andamento e quantas ficaram sem mostrar)', async () => {
+  const r: any = await listarGravacoes(ctx(), { limite: 1 });
+  assert.equal(r.gravacoes.length, 1);
+  assert.ok(r.naoMostradas >= 1, 'há mais gravações prontas do que o limite');
+  assert.match(r.comoVer, /limite/);
+  assert.ok(r.envioEmAndamento >= 1, 'o envio incompleto de caixa_2026-11-03_1000 é contado mesmo estando além do limite');
+});
+
+test('rota: clipe de volume em pasta com ponto no caminho (ex. /srv/.dados) abre normalmente', async () => {
+  const raizPonto = path.join(mkdtempSync(path.join(tmpdir(), 'vigia-ponto-')), '.dados', 'vigia');
+  const pasta = path.join(raizPonto, 'caixa', '2026-11-03_0800');
+  mkdirSync(path.join(pasta, 'clipes'), { recursive: true });
+  writeFileSync(path.join(pasta, 'meta.json'), JSON.stringify({ camera: 'caixa' }));
+  writeFileSync(path.join(pasta, 'eventos.json'), JSON.stringify({ duracao_seg: 100, eventos: [{ id: 1, inicio: 1, fim: 9 }] }));
+  writeFileSync(path.join(pasta, 'clipes', 'evento_0001.mp4'), MP4);
+  const c = ctx({ dir: raizPonto });
+  const s = await servidor(c);
+  try {
+    const l: any = await linkDoClipe(c, 'u', { gravacao: 'caixa_2026-11-03_0800', evento: 1 });
+    const r = await fetch(s.base + caminhoDe(l.url));
+    assert.equal(r.status, 200);
+    assert.deepEqual(Buffer.from(await r.arrayBuffer()), MP4);
+  } finally {
+    await s.fechar();
+  }
 });

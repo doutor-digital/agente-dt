@@ -100,20 +100,29 @@ for arq in "$ORIGEM"/*.mkv; do
   if [ "$SIMULAR" = 1 ]; then log "PRONTA (faria a triagem e o envio): $nome -> $camera/$pacote_id"; continue; fi
 
   pacote="$TRABALHO/$camera/$pacote_id"
-  log "triagem de $nome (câmera $camera, início $inicio)"
-  mkdir -p "$pacote"
-  if ! nice -n 19 ionice -c 3 python3 -I "$AQUI/triagem.py" "$arq" --saida "$pacote" --rapido --clipes \
-        --inicio-gravacao "$inicio" > "$pacote/triagem.log" 2>&1; then
-    log "FALHOU a triagem de $nome (veja $pacote/triagem.log)"
-    echo "$(date '+%F %T') triagem" >> "$ESTADO/falhas/$nome"
-    continue
+  assinatura="$(stat -c '%s:%Y' "$arq")"   # tamanho:mtime do vídeo; muda se a gravação mudar
+  if [ -s "$pacote/.triagem-ok" ] && [ "$(cat "$pacote/.triagem-ok")" = "$assinatura" ]; then
+    # só o envio falhou antes: a triagem (cara, ffmpeg sobre horas de vídeo) não se repete
+    log "triagem de $nome já pronta em $pacote; só envio"
+  else
+    # pacote antigo de OUTRA triagem (vídeo mudou): sai do caminho por RENOME, sem apagar, para folhas/clipes velhos não irem junto
+    if [ -e "$pacote" ]; then mv -- "$pacote" "$pacote.antigo-$(date +%s)"; fi
+    log "triagem de $nome (câmera $camera, início $inicio)"
+    mkdir -p "$pacote"
+    if ! nice -n 19 ionice -c 3 python3 -I "$AQUI/triagem.py" "$arq" --saida "$pacote" --rapido --clipes \
+          --inicio-gravacao "$inicio" > "$pacote/triagem.log" 2>&1; then
+      log "FALHOU a triagem de $nome (veja $pacote/triagem.log)"
+      echo "$(date '+%F %T') triagem" >> "$ESTADO/falhas/$nome"
+      continue
+    fi
+    echo "$assinatura" > "$pacote/.triagem-ok"
   fi
 
   if [ "$SEM_ENVIAR" = 1 ]; then log "pronto em $pacote (--sem-enviar: não enviei)"; continue; fi
 
   # o pacote vai SEM o meta.json; o meta.json vai por último e é o que faz o conector listar a gravação
   # (envio interrompido no meio nunca aparece como gravação pronta)
-  ssh_cmd="ssh -i $CHAVE -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=20 -o ServerAliveInterval=30"
+  ssh_cmd="ssh -i '$CHAVE' -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=20 -o ServerAliveInterval=30"
   rs=(rsync -aR --partial --chmod=D755,F644 -e "$ssh_cmd")
   if ! python3 -I - "$pacote" "$camera" "$inicio" "$nome" <<'PY'
 import json, os, sys, datetime
@@ -129,7 +138,7 @@ PY
   fi
   mv -f "$pacote/meta.json.novo" "$pacote/meta.json"   # arquivo temporário do próprio script
   if ( cd "$TRABALHO" \
-       && "${rs[@]}" --exclude='meta.json' --exclude='triagem.log' --exclude='envio.log' --exclude='movimento.tsv' "./$camera/$pacote_id" "$DESTINO" \
+       && "${rs[@]}" --exclude='meta.json' --exclude='.triagem-ok' --exclude='triagem.log' --exclude='envio.log' --exclude='movimento.tsv' "./$camera/$pacote_id" "$DESTINO" \
        && "${rs[@]}" "./$camera/$pacote_id/meta.json" "$DESTINO" ) > "$pacote/envio.log" 2>&1; then
     date '+%F %T' > "$ESTADO/enviados/$nome"
     log "ENVIADA: $nome -> $DESTINO$camera/$pacote_id"
