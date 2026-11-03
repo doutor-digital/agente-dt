@@ -376,3 +376,16 @@ test('o resumo da leitura (tarefa e rastro) traz o que foi lido', () => {
   assert.match(r, /E60746948202611031730abc123XYZ09/);
   assert.match(resumoDaLeitura(null), /sem leitura/);
 });
+
+test('o cancelamento feito NESTE turno invalida o comprovante de uma fala ANTERIOR (consulta que a equipe lançou, sem marco antigo)', () => {
+  const a = analisar([
+    CHAVE_ENVIADA,
+    humano(fala(dados())), // pagou a consulta A (a equipe a lançou por fora: não há marco na conversa)
+    ia('Consulta confirmada pela equipe!'),
+    humano('cancela e marca quinta pra mim'), // sem comprovante novo
+    ferramenta('Consulta de segunda, 02/11, às 08:00 cancelada. Confirme ao paciente.'),
+  ]);
+  assert.equal(a.aceito, undefined);
+  assert.equal(a.temComprovante, false);
+  assert.equal(a.deOutraNegociacao, 1);
+});

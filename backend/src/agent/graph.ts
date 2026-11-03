@@ -1275,7 +1275,7 @@ export async function buildAgentGraph(
         } else if (!comprovante.marcouPorComprovante && !comprovante.tarefaDaRecusaAberta) {
           // Boa Vista, comprovante deste turno e a consulta NÃO foi marcada por ele (a «conferir no extrato» sai ao marcar): o paciente
           // ouviu «recebi», e alguém da equipe tem de saber que o comprovante existe — ver `tarefaDoComprovanteQueFicou`.
-          const ficou = tarefaDoComprovanteQueFicou(comprovante);
+          const ficou = tarefaDoComprovanteQueFicou(comprovante, promptTemConsulta(promptDoTurno) || marcouAgora);
           if (ficou?.tipo === 'recusa') {
             await ganchosDaTaxa?.aoRecusar(ficou.rejeicao, {}).catch((err) => logger.warn({ err: String(err) }, 'comprovante: falha ao avisar a equipe'));
           } else if (ficou) {

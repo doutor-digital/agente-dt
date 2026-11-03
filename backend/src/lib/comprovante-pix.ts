@@ -410,8 +410,9 @@ export interface AnaliseDoComprovante {
  *
  * Critério de «desta negociação» (o histórico não tem data por mensagem, então vale a ORDEM da conversa):
  *  1. só conta o comprovante que veio DEPOIS da última consulta marcada, remarcada ou cancelada pela Sofia nesta conversa — o de uma
- *     consulta anterior não paga a próxima (a resposta da ferramenta fica no histórico). O que a ferramenta fez NESTE turno (depois da
- *     última fala do paciente) não conta: o comprovante deste turno não vira «de outra negociação» porque a Sofia cancelou/remarcou agora;
+ *     consulta anterior não paga a próxima (a resposta da ferramenta fica no histórico, e o cancelamento feito neste turno invalida o
+ *     comprovante de uma fala anterior). Exceção: o comprovante da ÚLTIMA fala do paciente não vira «de outra negociação» porque a Sofia
+ *     cancelou/remarcou depois dele, neste mesmo turno — é para a consulta que ela vai marcar agora;
  *  2. a transação tem de ter no máximo 48 h até o momento de marcar (`avaliarComprovante`) — não há limite de 24 h de espera pela equipe;
  *  3. o E2E nunca foi usado antes (banco, `agent/comprovante-da-taxa.ts`).
  * NÃO se exige que a Sofia tenha mandado a chave Pix antes: a recepção também manda a chave, por fora da conversa da IA, e exigir isso
@@ -427,10 +428,12 @@ export function analisarConversa(
   mensagens.forEach((m, i) => {
     if (m.tipo === 'human') ultimaFala = i;
   });
-  let marco = -1;
+  const marcos: number[] = [];
   mensagens.forEach((m, i) => {
-    if (i < ultimaFala && m.tipo === 'tool' && ehMarcoDaNegociacao(m.texto)) marco = i;
+    if (m.tipo === 'tool' && ehMarcoDaNegociacao(m.texto)) marcos.push(i);
   });
+  // a leitura vale se nenhum marco veio depois dela — a menos que ela seja da última fala (os marcos depois são deste turno)
+  const valeNestaNegociacao = (i: number) => i === ultimaFala || !marcos.some((m) => m > i);
 
   // a leitura vale onde a referência aparece pela ÚLTIMA vez (citar de novo uma antiga não a rejuvenesce além disso: o E2E já usado barra)
   const lugar = new Map<string, number>();
@@ -445,7 +448,7 @@ export function analisarConversa(
     .sort((x, y) => x[1] - y[1])
     .forEach(([ref, i], posicao) => {
       const l = leituras.get(ref) as LeituraGuardada;
-      if (i > marco) doEscopo.push({ ...l, posicao });
+      if (valeNestaNegociacao(i)) doEscopo.push({ ...l, posicao });
       else deOutraNegociacao++;
     });
 

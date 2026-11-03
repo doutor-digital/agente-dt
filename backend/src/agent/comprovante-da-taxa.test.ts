@@ -572,3 +572,12 @@ test('remarcar/cancelar NO MESMO turno do comprovante: o comprovante deste turno
   const f = tarefaDoComprovanteQueFicou(t);
   assert.notEqual(f?.tipo, 'recusa');
 });
+
+test('comprovante aceito e o paciente JÁ tem consulta no CRM: a tarefa não diz que «a consulta NÃO foi marcada»', () => {
+  const t = turnoComComprovante([CHAVE_ENVIADA, humano(fala(dados()))]);
+  const f = tarefaDoComprovanteQueFicou(t, true);
+  assert.equal(f?.tipo, 'conferir');
+  const detalhe = f?.tipo === 'conferir' ? f.detalhe : '';
+  assert.match(detalhe, /já tem consulta no CRM/);
+  assert.doesNotMatch(detalhe, /ainda NÃO foi marcada/);
+});
