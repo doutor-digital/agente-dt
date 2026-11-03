@@ -40,6 +40,18 @@ const NOMES_DA_SOFIA = ['doutor digital', 'i.a sofia', 'ia sofia', 'sofia'];
  */
 const APPS_DA_EQUIPE = ['whatsapp business', 'whatsapp lite'];
 
+/**
+ * Aviso do Kommo/WhatsApp que sai como mensagem de SAÍDA mas não é fala de ninguém: "Unable to open this
+ * message…" (canal waba) e "'messageContextInfo' is not yet supported. Use your device to view this message."
+ * (canal Lite: 12 em Boa Vista e 23 em Mossoró em 14 dias, medidos pelo sênior).
+ */
+const AVISO_DO_SISTEMA =
+  /^(unable to (open|display) this message|n[aã]o foi poss[ií]vel (abrir|exibir) (esta|essa) mensagem|'?\w+'? is not yet supported\.? use your device to view this message)/i;
+
+export function ehAvisoDoSistema(texto: string): boolean {
+  return AVISO_DO_SISTEMA.test(texto.trim());
+}
+
 /** O autor é o app/canal pelo qual a recepção fala (celular ou WhatsApp Web), e não um robô nem um usuário do Kommo? */
 export function ehAppDaEquipe(nome: string | null | undefined): boolean {
   return APPS_DA_EQUIPE.includes((nome ?? '').trim().toLowerCase());

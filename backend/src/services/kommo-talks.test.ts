@@ -63,6 +63,15 @@ test('temMidiaSemArquivo: reconhece o aviso do WhatsApp Lite e não confunde com
   assert.equal(temMidiaSemArquivo('Bom dia, quero marcar'), false);
 });
 
+test('selecionarItens: aviso do sistema que sai como mensagem de saída (Lite) não vai ao prompt nem ao histórico', () => {
+  const agora = (t0 + 1000) * 1000;
+  const msgs = normalizar([
+    raw({ id: '1', created_at: t0, type: 'outgoing', author: { type: 'bot', name: 'WhatsApp Lite' }, text: "'messageContextInfo' is not yet supported. Use your device to view this message." }),
+    raw({ id: '2', created_at: t0 + 5, type: 'outgoing', author: { type: 'bot', name: 'WhatsApp Lite' }, text: 'Oi, aqui é a Talita, tenho horário amanhã.' }),
+  ]);
+  assert.deepEqual(selecionarItens(msgs, 'oi', agora).map((m) => m.id), ['2']);
+});
+
 test('selecionarItens: áudio do turno que o webhook não trouxe (WhatsApp Lite) entra; sem o aviso, continua fora', () => {
   const agora = (t0 + 400) * 1000;
   const msgs = normalizar([

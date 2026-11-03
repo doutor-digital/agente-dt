@@ -45,7 +45,7 @@ import { leadPausadoPorJanela } from './pausa-lead.js';
 import { pausouSozinhaDesde } from './pausa-propria.js';
 import { registrarPausaDaEquipe } from './pausa-equipe-registro.js';
 import { createKommoClient, isLeadPaused } from '../services/kommo.service.js';
-import { enviosDaSofia, ehAppDaEquipe, mensagensOficiaisDaUnidade, type MensagemOficial } from '../services/kommo-talks.service.js';
+import { enviosDaSofia, ehAppDaEquipe, ehAvisoDoSistema, mensagensOficiaisDaUnidade, type MensagemOficial } from '../services/kommo-talks.service.js';
 import { carimbarHumanoAssumiu } from '../services/lead-metrics.service.js';
 
 export const AUTOMACAO_PAUSA_EQUIPE = 'pausa-equipe';
@@ -66,8 +66,6 @@ const MENSAGENS_LIDAS = 40;
  * recepção: em Mossoró, as mensagens longas até 20 s depois do paciente (11 de 253) eram conversa de gente.
  */
 const APP_COM_RESPOSTA_AUTOMATICA = 'whatsapp business';
-/** Aviso do Kommo/WhatsApp que sai como mensagem de saída ("Unable to open this message…"). */
-const AVISO_DO_SISTEMA = /^(unable to (open|display) this message|n[aã]o foi poss[ií]vel (abrir|exibir) (esta|essa) mensagem)/i;
 
 type Recorder = { step(args: { kind: 'THINKING' | 'KOMMO_ACTION' | 'COMPLETED' | 'ERROR'; title: string; payload?: unknown }): Promise<void> };
 
@@ -86,7 +84,7 @@ export function estadoDaPausaPelaEquipe(slug: string, env: NodeJS.ProcessEnv = p
 export function ehRespostaAutomatica(m: MensagemOficial, msgs: readonly MensagemOficial[]): boolean {
   if (m.direcao !== 'saida') return false;
   const texto = m.texto.trim();
-  if (AVISO_DO_SISTEMA.test(texto)) return true;
+  if (ehAvisoDoSistema(texto)) return true;
   if (m.autorNome.trim().toLowerCase() !== APP_COM_RESPOSTA_AUTOMATICA) return false;
   if (m.anexo || texto.length < RESPOSTA_AUTOMATICA_MIN_CARACTERES) return false;
   const t = m.em.getTime();

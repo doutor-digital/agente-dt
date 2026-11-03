@@ -112,6 +112,15 @@ test('Lite: texto longo logo depois do paciente NÃO é resposta automática (es
   assert.equal(falasHumanasDaEquipe([entrada, longo]).length, 1);
 });
 
+test('Lite: "\'messageContextInfo\' is not yet supported…" (aviso do Kommo, 12 em Boa Vista e 23 em Mossoró em 14 dias) não é fala da equipe', () => {
+  const entrada = msg('entrada', em('11:00:00'), 'oi');
+  const aviso = falaLite(em('11:05:00'), "'messageContextInfo' is not yet supported. Use your device to view this message.");
+  const msgs = [entrada, aviso];
+  assert.equal(ehRespostaAutomatica(aviso, msgs), true);
+  assert.deepEqual(falasHumanasDaEquipe(msgs), []);
+  assert.equal(equipeComAPalavra(msgs, null, em('11:05:10')).motivo, 'sem_equipe');
+});
+
 test('nome da fala: celular/Web da clínica, com o nome do canal', () => {
   assert.equal(nomeDoAutor('WhatsApp Lite'), 'o celular ou o WhatsApp Web da clínica (WhatsApp Lite)');
   assert.equal(nomeDoAutor('WhatsApp Business'), 'o celular da clínica (WhatsApp Business)');

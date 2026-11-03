@@ -360,6 +360,16 @@ test('equipeRespondeuDepois: só fala HUMANA depois do pedido; entrada, saída a
   assert.equal(equipeRespondeuDepois([], t), false);
 });
 
+test('equipeRespondeuDepois: aviso "is not yet supported" do canal Lite NÃO responde o pedido (vai tarefa, não fecha em silêncio)', () => {
+  const t = new Date('2026-11-03T20:00:00Z');
+  const aviso = msg('saida', new Date(t.getTime() + 60_000), {
+    autor: 'equipe',
+    autorNome: 'WhatsApp Lite',
+    texto: "'messageContextInfo' is not yet supported. Use your device to view this message.",
+  });
+  assert.equal(equipeRespondeuDepois([aviso], t), false);
+});
+
 test('sem folga de relógio: a fala de ANTES do pedido (ou do mesmo instante) não conta como resposta a ele', () => {
   const t = new Date('2026-10-30T20:00:10.500Z');
   // o Kommo só tem segundos: 20:00:09 e 20:00:10 são ANTERIORES ao pedido das 20:00:10.500

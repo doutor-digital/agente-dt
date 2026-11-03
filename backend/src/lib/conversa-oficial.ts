@@ -13,6 +13,7 @@ import type { TraceRecorder } from '../agent/trace-recorder.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import {
   desdeUltimaFalaDaSofia,
+  ehAvisoDoSistema,
   mensagensOficiaisDaUnidade,
   renderConversaOficial,
   type MensagemOficial,
@@ -49,6 +50,8 @@ export function selecionarItens(
   const itens: MensagemOficial[] = [];
   for (const m of recentes) {
     if (m.autor === 'sofia') continue;
+    // aviso do sistema que sai como mensagem de saída não é fala da equipe: nem no prompt nem no histórico
+    if (m.direcao === 'saida' && ehAvisoDoSistema(m.texto)) continue;
     if (m.autor === 'paciente') {
       if (m.texto && jaNaEntrada.has(m.texto)) continue;
       const ehAudioDoTurno = audioDoTurnoSemArquivo && m.anexo?.tipo === 'voice' && !!m.anexo.link;
