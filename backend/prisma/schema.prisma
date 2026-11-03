@@ -2371,3 +2371,24 @@ model AgendaCacheDia {
   @@index([consultadoEm], map: "agenda_cache_dias_consultado_idx")
   @@map("agenda_cache_dias")
 }
+
+/// Comprovante de Pix que a Sofia aceitou para MARCAR consulta sozinha (unidade com `spine_booking_requires_payment`).
+/// O `e2e` (identificação fim a fim do Pix, 32 caracteres) é único no mundo: o mesmo comprovante nunca marca duas consultas,
+/// nem para outro paciente (print repassado), nem para o mesmo depois de usado. A linha nasce ANTES de marcar (reserva do
+/// e2e, `id_schedule` nulo) e é completada depois; sem FK de propósito: apagar a unidade não pode liberar o e2e de volta.
+model ComprovantePixUsado {
+  id            String   @id @default(cuid())
+  e2e           String   @unique
+  unitId        String   @map("unit_id")
+  kommoLeadId   Int      @map("kommo_lead_id")
+  /// Valor lido no comprovante, em centavos.
+  valorCentavos Int      @map("valor_centavos")
+  favorecido    String?
+  /// Preenchidos quando a consulta foi marcada: id na franquia e "AAAA-MM-DDTHH:mm".
+  idSchedule    Int?     @map("id_schedule")
+  consultaEm    String?  @map("consulta_em")
+  criadoEm      DateTime @default(now()) @map("criado_em")
+
+  @@index([unitId, kommoLeadId])
+  @@map("comprovantes_pix_usados")
+}

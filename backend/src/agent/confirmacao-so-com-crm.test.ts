@@ -8,10 +8,8 @@ import {
   RECUSA_AGUARDANDO_EQUIPE,
   RECUSA_SEM_COMPROVANTE_DA_TAXA,
   decidirTrava,
-  detalheDoValor,
   marcarRecebimento,
   citaEquipe,
-  taxaConfere,
   valorEmReais,
   abrirTarefaParaEquipe,
   afirmaConfirmacao,
@@ -164,47 +162,25 @@ test('`remarcando` não está no schema que o modelo vê (só remarcar_consulta 
 const BV = { exigePagamento: true, taxaEsperada: 100 };
 const rec = (passos: Array<{ title: string }> = []) => ({ step: async (p: never) => void passos.push(p) }) as never;
 
-test('unidade com taxa de reserva (Boa Vista): sem comprovante da taxa recusa; com o valor exato a IA marca', async () => {
-  const chamadas: unknown[] = [];
-  const passos: Array<{ title: string }> = [];
-  const [barrada] = travarAgendamentoPorComprovante([agendarQueMarca(chamadas)], T(['Quero quinta']), rec(passos), BV);
-  assert.equal(await barrada.func({ hora: '09:00' } as never), RECUSA_SEM_COMPROVANTE_DA_TAXA);
-  assert.deepEqual(chamadas, []);
-  assert.match(passos[0].title, /^agendar_consulta recusado — reserva sem pagamento/, 'o painel de funcionamento conta esse prefixo');
-
-  const [livre] = travarAgendamentoPorComprovante([agendarQueMarca(chamadas)], T([comprovanteDe('100,00')]), rec(), BV);
-  assert.match(String(await livre.func({ hora: '09:00' } as never)), /^Consulta marcada/);
-  assert.equal(chamadas.length, 1);
-});
-
-test('Boa Vista: só o valor EXATO da taxa marca — R$ 100,00 marca; 50, 350, 1.000, sem valor e ilegível não', async () => {
-  for (const [valor, marca] of [['100,00', true], ['100', true], ['100.00', true], ['50,00', false], ['350,00', false], ['1.000,00', false], ['1.000', false], ['100,50', false], [null, false]] as const) {
+test('unidade com taxa de reserva (Boa Vista): sem comprovante da taxa recusa e manda pedir o comprovante, também a quem diz "já paguei"', async () => {
+  for (const fala of ['Quero quinta', 'Já paguei o pix', 'fiz o pix agora']) {
     const chamadas: unknown[] = [];
     const passos: Array<{ title: string }> = [];
-    const t = T([comprovanteDe(valor)]);
-    const [tool] = travarAgendamentoPorComprovante([agendarQueMarca(chamadas)], t, rec(passos), BV);
-    const r = String(await tool.func({ hora: '09:00' } as never));
-    assert.equal(r.startsWith('Consulta marcada'), marca, `R$ ${valor}`);
-    assert.equal(chamadas.length, marca ? 1 : 0, `R$ ${valor}`);
-    if (!marca) {
-      assert.match(r, /NÃO confirma a taxa de reserva/);
-      assert.match(r, /esperado \(taxa de reserva\): R\$ 100,00/);
-      assert.match(passos[0].title, /^agendar_consulta recusado — reserva sem pagamento/);
-    }
+    const [barrada] = travarAgendamentoPorComprovante([agendarQueMarca(chamadas)], T([fala]), rec(passos), BV);
+    assert.equal(await barrada.func({ hora: '09:00' } as never), RECUSA_SEM_COMPROVANTE_DA_TAXA, fala);
+    assert.deepEqual(chamadas, []);
+    assert.match(passos[0].title, /^agendar_consulta recusado — reserva sem pagamento/, 'o painel de funcionamento conta esse prefixo');
   }
+  assert.match(RECUSA_SEM_COMPROVANTE_DA_TAXA, /JÁ PAGOU/);
+  assert.match(RECUSA_SEM_COMPROVANTE_DA_TAXA, /UMA vez/);
+  assert.match(RECUSA_SEM_COMPROVANTE_DA_TAXA, /NÃO vale como pagamento/);
 });
 
-test('Boa Vista sem a taxa cadastrada na unidade: a IA não marca, vai para a equipe', async () => {
+test('Boa Vista: o comprovante só vale depois da conferência de código — o valor "bonito" do texto da visão sozinho NÃO marca mais', async () => {
   const chamadas: unknown[] = [];
-  const [tool] = travarAgendamentoPorComprovante([agendarQueMarca(chamadas)], T([comprovanteDe('100,00')]), rec(), { exigePagamento: true, taxaEsperada: null });
-  assert.match(String(await tool.func({ hora: '09:00' } as never)), /não cadastrado na unidade/);
-  assert.deepEqual(chamadas, []);
-});
-
-test('Boa Vista com dois comprovantes: basta um bater; comprovante velho (25 h) não conta', () => {
-  assert.equal(taxaConfere(T([comprovanteDe('50,00'), comprovanteDe('100,00')]), 100), true);
-  assert.equal(taxaConfere(T([comprovanteDe('100,00', 25), 'Oi, quero marcar']), 100), false);
-  assert.equal(decidirTrava(T([comprovanteDe('100,00', 25), 'Oi, quero marcar']), BV).libera, false);
+  const [tool] = travarAgendamentoPorComprovante([agendarQueMarca(chamadas)], T([comprovanteDe('100,00')]), rec(), BV);
+  assert.match(String(await tool.func({ hora: '09:00' } as never)), /^RECUSADO/);
+  assert.deepEqual(chamadas, [], 'sem os campos lidos (turno.analise) não há comprovante aceito');
 });
 
 test('valorEmReais lê o formato brasileiro', () => {
@@ -456,17 +432,6 @@ test('"pagamento confirmado" em Boa Vista depois de marcar: pega as formas que e
     'O pagamento antecipado confirmado garante sua vaga.',
     'Sua consulta está marcada pra quinta às 10h. A mensagem caiu pela metade, pode repetir?',
   ]) assert.equal(respostaDoComprovante(f, t, true), null, f);
-});
-
-test('a tarefa de Boa Vista leva o valor lido e o esperado', async () => {
-  const tarefas: Array<Record<string, unknown>> = [];
-  const kommo = { getLead: async () => ({ name: 'Joana' }), createTask: async (a: Record<string, unknown>) => (tarefas.push(a), { id: 9 }) };
-  await abrirTarefaParaEquipe({
-    slug: 'doutor-hernia-boa-vista', unitId: 'u', leadId: 1, kommo: kommo as never, recorder: rec(), motivo: 'comprovante',
-    dedupe: { avisoRecente: async () => false, marcarAviso: async () => undefined } as never,
-    detalhe: detalheDoValor(T([comprovanteDe('50,00')]), 100),
-  });
-  assert.match(String(tarefas[0].text), /valor lido: R\$ 50,00; esperado \(taxa de reserva\): R\$ 100,00/);
 });
 
 // --- buracos achados pelo sênior depois do #127 (ao vivo): uma frase, um teste ---------------------------------------------

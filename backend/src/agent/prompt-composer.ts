@@ -424,9 +424,18 @@ function renderReacaoEElogio(): string {
    Esta é a ÚNICA situação em que sua resposta NÃO termina com pergunta.`);
 }
 
-function renderRulesGlobal(unit?: FlagsDePagamento): string {
+export function renderRulesGlobal(unit?: FlagsDePagamento): string {
   // Unidade sem pagamento antecipado (Timbó): o passo "Pix" e os botões "Pix antecipado | Na clínica" não existem.
   const semAntecipado = unidadeSemAntecipado(unit);
+  // Unidade com taxa de reserva (Boa Vista, decisão do João de 03/11/2026): o comprovante é conferido pela ferramenta e libera marcar.
+  // As demais unidades: o texto de sempre, palavra por palavra (o bloco é cacheado).
+  const linhaDoComprovante = unit?.spineBookingRequiresPayment
+    ? `COMPROVANTE de Pix (foto ou PDF) nesta unidade, que cobra taxa de reserva: com o comprovante na conversa e o dia e a hora já combinados,
+  chame agendar_consulta — o sistema confere o comprovante (favorecido, valor, código da transação) e marca. Se a ferramenta recusar, diga ao
+  paciente só o que ela mandar. NUNCA escreva "pagamento confirmado" nem "Pix caiu": o dinheiro quem confere é a equipe. "Já paguei" ou "fiz o
+  pix" ESCRITO, sem a foto ou o PDF, não vale: peça o comprovante, uma vez, e não marque.`
+    : `COMPROVANTE (foto, PDF, "paguei"): o pagamento quem confere é a EQUIPE — nunca "pagamento confirmado".
+  Não confirma consulta: a equipe confirma em até 1 hora (com taxa de reserva, a ferramenta libera).`;
   const passos = semAntecipado ? 'dia → horário → dados' : 'dia → horário → dados → Pix';
   const exemplosDeBotao = semAntecipado
     ? '(escolher entre os horários que você ofereceu; '
@@ -441,8 +450,7 @@ function renderRulesGlobal(unit?: FlagsDePagamento): string {
   vir {dia} às {hora}?" também confirma: "sim", "ok", "pode ser", "beleza", "combinado" — siga e
   marque. Também JÁ É confirmação — marque sem perguntar "consegue vir?" de novo: a própria
   pessoa escreve o dia/hora que quer entre os que você ofereceu ("terça às 11:30", "amanhã 14h30").
-  COMPROVANTE (foto, PDF, "paguei"): o pagamento quem confere é a EQUIPE — nunca "pagamento confirmado".
-  Não confirma consulta: a equipe confirma em até 1 hora (com taxa de reserva, a ferramenta libera). NÃO é confirmação: "confirmo depois", "confirmo com antecedência", "vou ver", "se der eu vou", "acho que
+  ${linhaDoComprovante} NÃO é confirmação: "confirmo depois", "confirmo com antecedência", "vou ver", "se der eu vou", "acho que
   sim" — nem um "ok"/"tá"/"pode ser" que veio depois de você insistir. Nesses casos NÃO mande o
   cartão e pergunte UMA vez só, com o dia e a hora por extenso, assim: "Pra eu marcar: você consegue
   vir quinta, 24/09, às 15h?".

@@ -1411,6 +1411,11 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
       telefone?: string;
       diaConfirmado?: boolean;
       formaPagamento?: FormaPagamento;
+      /**
+       * Só a trava do grafo escreve (`comprovante-da-taxa.ts`, Boa Vista): o comprovante de Pix da taxa foi aceito pelo código. O modelo não
+       * a vê no schema e o zod descarta o que ele escrever. Muda só o texto devolvido: a chave Pix não é mais mandada a quem já pagou.
+       */
+      pagoPorComprovante?: boolean;
     }) => comMarcacaoEmCurso(recorder.traceId, async () => {
       const feriado = feriadoNacional(args.data);
       if (feriado) {
@@ -1457,8 +1462,9 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         );
       }
 
-      // Unidade com taxa de reserva (Boa Vista): a IA só marca depois de ler o comprovante da taxa — essa trava mora no
-      // grafo (`travarAgendamentoPorComprovante`, confirmacao-so-com-crm.ts), onde a conversa está à mão.
+      // Unidade com taxa de reserva (Boa Vista): a IA só marca depois que o CÓDIGO aceita o comprovante da taxa (favorecido, valor, E2E,
+      // data, autenticidade — lib/comprovante-pix.ts). Essa trava mora no grafo (`travarAgendamentoPorComprovante`,
+      // confirmacao-so-com-crm.ts; ganchos em comprovante-da-taxa.ts), onde a conversa está à mão.
 
       const dono = await conferirPacienteDoLead(fresca.id, args.leadId, args.idClient);
       if (!dono.ok) {
@@ -1917,7 +1923,7 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
       const quemEQuando = semAntecipado
         ? `${especialista ? ` (Profissional: ${especialista} — só se o paciente perguntar; NÃO entra na confirmação.)` : ''}${linhaProntaDaData(args.data, semAntecipado)}`
         : `${especialista ? ` Atendimento com ${especialista}.` : ''} Confirme ao paciente com EXATAMENTE este dia da semana e data.`;
-      return `Consulta marcada para ${dataPorExtenso(args.data)} às ${args.hora}.${quemEQuando}${orientacaoDePagamento(args.formaPagamento, fresca, semAntecipado)}`;
+      return `Consulta marcada para ${dataPorExtenso(args.data)} às ${args.hora}.${quemEQuando}${args.pagoPorComprovante && !args.remarcando ? '' : orientacaoDePagamento(args.formaPagamento, fresca, semAntecipado)}`;
     }),
   });
 }

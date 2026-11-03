@@ -85,7 +85,8 @@ import {
   RECADO_DESMARCADA,
   abrirTarefaParaEquipe,
   afirmaConfirmacao,
-  detalheDoValor,
+  RECADO_COMPROVANTE,
+  RECADO_COMPROVANTE_MARCADO,
   citaEquipe,
   afirmouComConsultaDesmarcada,
   blocoDizDesmarcada,
@@ -94,6 +95,8 @@ import {
   turnoDoComprovante,
   type TurnoDoComprovante,
 } from './confirmacao-so-com-crm.js';
+import { analisarConversa, semAMarcaDeDados } from '../lib/comprovante-pix.js';
+import { criarGanchosDaTaxa } from './comprovante-da-taxa.js';
 import { dadosDaTaxa, insistenciaJaTratada, pacienteJaMandouComprovante, promptDizEmTratamento, respostaAnteriorDaIA } from './taxa-de-reserva.js';
 import { aplicarTaxaDeReservaNaSaida, decidirATaxa } from './taxa-de-reserva-saida.js';
 import { pagouOAntecipado } from '../lib/follow-up-worker.js';
@@ -136,6 +139,12 @@ export async function getCheckpointer(): Promise<PostgresSaver> {
 
 export function buildThreadId(unitSlug: string, leadId: string | number): string {
   return `unit-${unitSlug}-lead-${leadId}`;
+}
+
+/** Mensagem do paciente sem a marca de campos do comprovante (só o código a lê). Qualquer outra mensagem volta como veio. */
+function semOsCamposDoComprovante(m: BaseMessage): BaseMessage {
+  if (m.getType() !== 'human' || typeof m.content !== 'string' || !m.content.includes('[dados-do-comprovante:')) return m;
+  return new HumanMessage({ content: semAMarcaDeDados(m.content), additional_kwargs: m.additional_kwargs, id: m.id });
 }
 
 function aiTextFromContent(content: unknown): string {
@@ -562,13 +571,22 @@ export async function buildAgentGraph(
     unit,
   );
 
-  // Comprovante em foto/PDF: só a equipe confirma (nas unidades com taxa de reserva, ele libera marcar). O agentNode
-  // preenche isto a cada volta; a ferramenta lê.
-  const comprovante: TurnoDoComprovante = { noTurno: false, pendente: false };
+  // Comprovante em foto/PDF: só a equipe confirma. Nas unidades com taxa de reserva (Boa Vista, decisão do João de 03/11/2026) a IA
+  // marca quando o CÓDIGO aceita o comprovante (lib/comprovante-pix.ts) e a equipe confere o extrato depois. O agentNode preenche
+  // isto a cada volta; a ferramenta lê.
+  const comprovante: TurnoDoComprovante & { tarefaDaRecusaAberta?: boolean } = { noTurno: false, pendente: false };
+  const taxaDaUnidade = precosDaConsulta(unit)?.antecipado ?? null;
+  // O lead DA CONVERSA: o `leadId` que o modelo escreve só é corrigido por `fixarLeadDaConversa`, que roda por dentro desta trava.
+  const ganchosDaTaxa = unit.spineBookingRequiresPayment
+    ? criarGanchosDaTaxa({ unit, leadId: leadIdDaConversa, kommo: kommoClient ?? undefined, recorder, turno: comprovante })
+    : undefined;
   travarAgendamentoPorComprovante(tools, comprovante, recorder, {
     exigePagamento: Boolean(unit.spineBookingRequiresPayment),
     // O valor da taxa vem de onde a unidade já guarda o antecipado; sem ele a IA não marca (vai para a equipe).
-    taxaEsperada: precosDaConsulta(unit)?.antecipado ?? null,
+    taxaEsperada: taxaDaUnidade,
+    pixKey: unit.pixKey,
+    pixHolder: unit.pixHolder,
+    ganchos: ganchosDaTaxa,
   });
 
   const useAnthropic = unit.llmProvider === 'anthropic' && !!unit.anthropicApiKey;
@@ -730,6 +748,17 @@ export async function buildAgentGraph(
         promptTemConsulta(promptDoTurno),
       ),
     );
+    // Unidade com taxa de reserva: o comprovante DESTA negociação, conferido com o histórico inteiro (a ordem das mensagens e as
+    // respostas das ferramentas dizem se ele é de antes da chave ou de uma consulta anterior). Recalculado a cada volta.
+    if (unit.spineBookingRequiresPayment) {
+      comprovante.analise = analisarConversa(
+        nonSystemMessages.map((m) => ({
+          tipo: m.getType(),
+          texto: m.getType() === 'human' ? (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)) : aiTextFromContent(m.content),
+        })),
+        { taxa: taxaDaUnidade, pixKey: unit.pixKey ?? null, pixHolder: unit.pixHolder ?? null, agora: Date.now() },
+      );
+    }
     // Chamada de ferramenta sem resultado (turno cortado no meio) deixaria o lead preso pra sempre no 400 do modelo:
     // o histórico vive no checkpoint. Sanea-se o histórico INTEIRO antes da janela (a poda não pode separar a chamada
     // do resultado e fazer o saneamento inventar "interrompida" para uma ação que deu certo) e só o que VAI ao modelo
@@ -750,7 +779,9 @@ export async function buildAgentGraph(
         payload: { completados: saneado.completados, removidos: saneado.removidos },
       });
     }
-    const finalMessages: BaseMessage[] = [systemMessage, ...janela];
+    // Os campos que a visão leu do comprovante (marca `[dados-do-comprovante:…]`) são para o CÓDIGO conferir: o modelo lê só a transcrição.
+    // Fica de fora do prompt (menos tokens a cada turno e nenhum texto vindo da imagem chega ao modelo por esse canal).
+    const finalMessages: BaseMessage[] = [systemMessage, ...(unit.spineBookingRequiresPayment ? janela.map(semOsCamposDoComprovante) : janela)];
 
     // Conferido ANTES de gastar de novo, e FORA do try: se caísse no catch, o
     // plano B chamaria o modelo assim mesmo e o teto não seguraria nada.
@@ -1197,16 +1228,21 @@ export async function buildAgentGraph(
       // reabrir a afirmação, fica a resposta anterior.
       const reabreAfirmacao = async (t: string) =>
         !!t &&
-        (!!respostaDoComprovante(t, comprovante, promptTemConsulta(promptDoTurno) || marcouAgora) ||
+        (!!respostaDoComprovante(t, comprovante, promptTemConsulta(promptDoTurno) || marcouAgora, recadoDoComprovante) ||
           !!afirmouComConsultaDesmarcada(t, { marcouAgora, bloco: blocoConsulta, promessa: null }) ||
           !!(await decidirATaxa(t, dadosDaTaxaDaUnidade, contextoDaTaxa(), provasDaTaxa)).troca);
       // Comprovante em foto/PDF: só a equipe confirma a consulta (decisão do João, 26/10/2026). A resposta que
       // afirma confirmação vira o recado fixo e a equipe ganha a tarefa — aberta pelo código, não pela IA.
       // `respostaFixa`: o texto é um recado nosso — a "pergunta final" não o reescreve (ele já diz o próximo passo).
       let respostaFixa = false;
+      // Boa Vista com a consulta no CRM (marcada agora pelo comprovante, ou pela equipe): «pagamento confirmado» vira «recebi o comprovante,
+      // a consulta está confirmada» — mandar esperar a equipe confirmar contradiria a consulta que já existe.
+      // Comprovante que o código RECUSOU neste turno não é «consulta confirmada»: aí vale o recado de sempre.
+      const recadoDoComprovante =
+        unit.spineBookingRequiresPayment && (promptTemConsulta(promptDoTurno) || marcouAgora) && !comprovante.analise?.falha ? RECADO_COMPROVANTE_MARCADO : undefined;
       // `marcouAgora`: a consulta acabou de ser criada no CRM (unidade com taxa de reserva, depois do comprovante da taxa): falar
       // DELA é verdade; "pagamento confirmado" continua sendo da equipe.
-      const recadoComprovante = respostaDoComprovante(textoFinal, comprovante, promptTemConsulta(promptDoTurno) || marcouAgora);
+      const recadoComprovante = respostaDoComprovante(textoFinal, comprovante, promptTemConsulta(promptDoTurno) || marcouAgora, recadoDoComprovante);
       if (recadoComprovante) {
         respostaFixa = true;
         await recorder.step({
@@ -1218,15 +1254,38 @@ export async function buildAgentGraph(
         response.content = recadoComprovante;
       }
       if (comprovante.noTurno && kommoClient && state.leadId) {
-        await abrirTarefaParaEquipe({
-          slug: unit.slug,
-          unitId: unit.id,
-          leadId: Number(state.leadId),
-          kommo: kommoClient,
-          recorder,
-          motivo: 'comprovante',
-          detalhe: unit.spineBookingRequiresPayment ? detalheDoValor(comprovante, precosDaConsulta(unit)?.antecipado ?? null) : undefined,
-        });
+        if (!unit.spineBookingRequiresPayment) {
+          await abrirTarefaParaEquipe({
+            slug: unit.slug,
+            unitId: unit.id,
+            leadId: Number(state.leadId),
+            kommo: kommoClient,
+            recorder,
+            motivo: 'comprovante',
+          });
+        } else if (!comprovante.marcouPorComprovante && !comprovante.tarefaDaRecusaAberta) {
+          // Boa Vista, comprovante deste turno e a consulta NÃO foi marcada por ele. A tarefa da recusa sai de dentro da ferramenta; aqui
+          // cobre o que ficou de fora: o modelo nem tentou marcar, o código recusou, o comprovante é de outra negociação, ou a resposta
+          // mandou «a equipe confere» (recado fixo) — o paciente não pode ficar esperando sem ninguém saber. Comprovante ACEITO e ainda
+          // sem consulta (falta o dia) não abre tarefa: a «conferir no extrato» sai quando a consulta é marcada.
+          const a = comprovante.analise;
+          const recusado = a?.falha ?? (a && !a.temComprovante && a.deOutraNegociacao > 0
+            ? { ok: false as const, destino: 'reenviar' as const, codigo: 'de_outra_negociacao' as const, motivo: 'o comprovante é de antes da última consulta marcada, remarcada ou cancelada desta conversa', dados: null }
+            : null);
+          if (recusado) {
+            await ganchosDaTaxa?.aoRecusar(recusado, {}).catch((err) => logger.warn({ err: String(err) }, 'comprovante: falha ao avisar a equipe'));
+          } else if (recadoComprovante === RECADO_COMPROVANTE) {
+            await abrirTarefaParaEquipe({
+              slug: unit.slug,
+              unitId: unit.id,
+              leadId: Number(state.leadId),
+              kommo: kommoClient,
+              recorder,
+              motivo: 'comprovante',
+              detalhe: 'o código aceitou o comprovante, mas a resposta dizia que a consulta/pagamento estava confirmado sem a consulta estar marcada: foi trocada pelo recado «a equipe confere»',
+            });
+          }
+        }
       }
 
       const consultasValidas = promptTemConsulta(promptDoTurno) ? [blocoConsulta] : [];
