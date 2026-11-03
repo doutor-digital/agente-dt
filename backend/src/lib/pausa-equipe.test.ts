@@ -114,7 +114,8 @@ test('Lite: texto longo logo depois do paciente NÃO é resposta automática (es
 
 test('Lite: "\'messageContextInfo\' is not yet supported…" (aviso do Kommo, 12 em Boa Vista e 23 em Mossoró em 14 dias) não é fala da equipe', () => {
   const entrada = msg('entrada', em('11:00:00'), 'oi');
-  const aviso = falaLite(em('11:05:00'), "'messageContextInfo' is not yet supported. Use your device to view this message.");
+  // normalizar já descarta o aviso; a defesa em ehRespostaAutomatica vale para quem montar a lista de outro jeito
+  const aviso = msg('saida', em('11:05:00'), "'messageContextInfo' is not yet supported. Use your device to view this message.", 'equipe', 'WhatsApp Lite');
   const msgs = [entrada, aviso];
   assert.equal(ehRespostaAutomatica(aviso, msgs), true);
   assert.deepEqual(falasHumanasDaEquipe(msgs), []);
