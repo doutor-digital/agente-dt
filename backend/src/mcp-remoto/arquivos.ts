@@ -81,7 +81,9 @@ export function registrarArquivos(
       title: 'Ver se o arquivo já chegou',
       description:
         'PASSO 2 de 3. Diz se o arquivo do envio (id de arquivo_pedir_upload) já chegou: estado, nome, tamanho e tipo. Nunca devolve o conteúdo. ' +
-        'estado "aguardando_envio" = a pessoa ainda não enviou (ou o link venceu); "recebido" = pode gerar o link com arquivo_link_temporario; "apagado" = venceu ou foi apagado, peça um novo envio.',
+        'estado "aguardando_envio" = a pessoa ainda não enviou e o link de envio ainda vale; "recebido" = pode gerar o link com arquivo_link_temporario; ' +
+        '"apagado" = acabou: o link de envio venceu sem arquivo, o último link de download expirou, passou o teto de 2 h ou foi apagado (peça um novo envio). ' +
+        'Uma atualização do sistema também apaga os envios em andamento: se o id não for encontrado, peça um novo.',
       inputSchema: { id: z.string().trim().min(8).max(64).describe('o id devolvido por arquivo_pedir_upload') },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },

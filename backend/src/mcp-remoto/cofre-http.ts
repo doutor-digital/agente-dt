@@ -13,6 +13,7 @@ import { randomBytes } from 'node:crypto';
 import type { Express, Request, Response } from 'express';
 import { CofreDeArquivos, EXTENSOES_ACEITAS, ErroDeCofre } from './cofre-arquivos.js';
 import { ipDoCliente, JanelaDeContagem } from './limites.js';
+import { esc } from './pagina.js';
 
 export const ROTA_ENVIO = '/arquivos/enviar/:token';
 export const ROTA_BAIXA = '/arquivos/baixar/:token/:nome';
@@ -21,6 +22,9 @@ export const ROTA_BAIXA = '/arquivos/baixar/:token/:nome';
 const ENVIOS_SIMULTANEOS = 2;
 /** o corpo inteiro tem que chegar neste tempo (20 MB em 3G cabe) */
 const TEMPO_MAX_DO_ENVIO_MS = 180_000;
+/** downloads lendo o arquivo inteiro ao mesmo tempo (cada um segura o cifrado e o aberto: até 40 MB) */
+const DOWNLOADS_SIMULTANEOS = 4;
+const MENSAGEM_NAO_ACHADO = 'Arquivo não encontrado ou link vencido. Se o sistema foi atualizado há pouco, peça um novo link no Claude.';
 
 function cabecalhosSeguros(res: Response): void {
   res.set({
@@ -31,8 +35,6 @@ function cabecalhosSeguros(res: Response): void {
     'X-Content-Type-Options': 'nosniff',
   });
 }
-
-const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);
 
 export function paginaDeEnvio(o: { finalidade?: string; mensagem?: string; nonce?: string; limiteMb?: number }): string {
   const formulario = o.nonce
@@ -127,6 +129,18 @@ export function montarRotasDoCofre(app: Express, cofre: CofreDeArquivos, o: Opco
   // quem erra token demais é cortado: com 256 bits ninguém acerta, mas o log não deve encher de sondagem
   const erros = o.tentativasPorIp ?? new JanelaDeContagem(30, 10 * 60_000);
   let enviando = 0;
+  let baixando = 0;
+  // Um conector legítimo que insiste num link velho (de antes de um deploy, por exemplo) conta UMA vez por token, não uma por tentativa;
+  // quem chuta tokens diferentes continua somando.
+  const jaVistos = new JanelaDeContagem(1, 10 * 60_000);
+  const sondagem = (req: Request, token: string) => {
+    const ip = ipDoCliente(req);
+    const t = Date.now();
+    const chave = `${ip}|${token.slice(0, 64)}`;
+    if (jaVistos.excedido(chave, t)) return;
+    jaVistos.registrar(chave, t);
+    erros.registrar(ip, t);
+  };
 
   const quem = (req: Request) => ({ ip: ipDoCliente(req), agente: String(req.headers['user-agent'] ?? '') });
   const bloqueado = (req: Request, res: Response): boolean => {
@@ -149,7 +163,7 @@ export function montarRotasDoCofre(app: Express, cofre: CofreDeArquivos, o: Opco
       res.type('html').send(paginaDeEnvio({ finalidade, nonce, limiteMb: Math.floor(cofre.limites.tamanhoMaxBytes / 1024 / 1024) }));
     } catch (err) {
       if (!(err instanceof ErroDeCofre)) throw err;
-      if (err.codigo === 'invalido') erros.registrar(ipDoCliente(req), Date.now());
+      if (err.codigo === 'invalido') sondagem(req, String(req.params.token));
       res.status(err.status).type('html').send(paginaDeEnvio({ mensagem: err.message }));
     }
   });
@@ -175,7 +189,7 @@ export function montarRotasDoCofre(app: Express, cofre: CofreDeArquivos, o: Opco
       reserva = cofre.reservar(token);
     } catch (err) {
       if (!(err instanceof ErroDeCofre)) throw err;
-      if (err.codigo === 'invalido') erros.registrar(ipDoCliente(req), Date.now());
+      if (err.codigo === 'invalido') sondagem(req, token);
       falha(err.status, err.message);
       return;
     }
@@ -205,6 +219,7 @@ export function montarRotasDoCofre(app: Express, cofre: CofreDeArquivos, o: Opco
       if (!sair()) return;
       cofre.liberar(reserva, 'demorou', origem);
       falha(408, 'O envio demorou demais. Tente de novo com uma conexão melhor.');
+      pedacos.length = 0;
       res.once('finish', () => req.destroy());
     }, TEMPO_MAX_DO_ENVIO_MS);
     prazo.unref();
@@ -222,7 +237,7 @@ export function montarRotasDoCofre(app: Express, cofre: CofreDeArquivos, o: Opco
     let total = 0;
     let estourou = false;
     req.on('data', (c: Buffer) => {
-      if (estourou) return;
+      if (estourou || terminou) return; // depois do 408 (ou da queda) não guarda mais nada
       total += c.length;
       if (total > limite) {
         estourou = true;
@@ -237,10 +252,16 @@ export function montarRotasDoCofre(app: Express, cofre: CofreDeArquivos, o: Opco
     });
     req.on('close', () => {
       // a conexão caiu antes do corpo inteiro chegar
-      if (!req.complete && sair()) cofre.liberar(reserva, 'cortou', origem);
+      if (!req.complete && sair()) {
+        pedacos.length = 0;
+        cofre.liberar(reserva, 'cortou', origem);
+      }
     });
     req.on('error', () => {
-      if (sair()) cofre.liberar(reserva, 'erro-de-rede', origem);
+      if (sair()) {
+        pedacos.length = 0;
+        cofre.liberar(reserva, 'erro-de-rede', origem);
+      }
     });
     req.on('end', () => {
       if (estourou || terminou) return;
@@ -265,6 +286,11 @@ export function montarRotasDoCofre(app: Express, cofre: CofreDeArquivos, o: Opco
     cabecalhosSeguros(res);
     if (bloqueado(req, res)) return;
     const head = req.method === 'HEAD';
+    if (!head && baixando >= DOWNLOADS_SIMULTANEOS) {
+      res.status(503).set('Retry-After', '5').type('text/plain').send('Muitos downloads ao mesmo tempo. Tente de novo em alguns segundos.');
+      return;
+    }
+    if (!head) baixando += 1;
     try {
       const a = await cofre.baixar(String(req.params.token), !head, quem(req));
       res.set({
@@ -281,8 +307,10 @@ export function montarRotasDoCofre(app: Express, cofre: CofreDeArquivos, o: Opco
     } catch (err) {
       if (!(err instanceof ErroDeCofre)) throw err;
       // só token que NÃO EXISTE conta como sondagem; link conhecido vencido/esgotado não bloqueia o IP de quem o usa
-      if (err.codigo === 'invalido') erros.registrar(ipDoCliente(req), Date.now());
-      res.status(404).type('text/plain').send('Arquivo não encontrado.');
+      if (err.codigo === 'invalido') sondagem(req, String(req.params.token));
+      res.status(404).type('text/plain').send(MENSAGEM_NAO_ACHADO);
+    } finally {
+      if (!head) baixando -= 1;
     }
   };
   app.get(ROTA_BAIXA, (req, res, next) => void baixar(req, res).catch(next));

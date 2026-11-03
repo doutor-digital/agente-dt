@@ -10,8 +10,10 @@
  *  - Tipo conferido pelo CONTEÚDO (bytes iniciais e estrutura), nunca só pela extensão; extensão que não combina é recusada.
  *  - Link de download: outro token de 256 bits, no máximo 30 min e N baixadas; sem listagem de nada.
  *  - No disco: cifrado (AES-256-GCM) com uma chave por arquivo que só existe na memória do processo. Reiniciar o
- *    processo destrói as chaves: o que sobrou no disco não abre mais (e é apagado pela varredura, até 2 h depois: numa pasta
- *    compartilhada entre dois containers no deploy, só o prazo distingue sobra de arquivo vivo do outro).
+ *    processo destrói as chaves: o que sobrou no disco não abre mais. Mesmo assim o app APAGA a pasta inteira ao desligar
+ *    (SIGTERM, `apagarTudo`) e na subida (`apagarPasta`); só um kill -9/OOM deixa .bin para trás (inúteis, sem chave) até o próximo
+ *    boot ou até a varredura (2 h). Por isso `ARQUIVOS_DIR` tem que ser uma pasta PRIVADA deste container, nunca um volume
+ *    compartilhado: a subida do container novo apagaria os arquivos vivos do antigo.
  *  - Apagado do disco quando o último link expira, quando a pessoa manda, ou no teto de segurança (2 h), o que vier primeiro.
  *  - Nome no disco é só o id aleatório: o nome que a pessoa deu nunca vira caminho (path traversal não tem por onde entrar).
  *  - Auditoria sem conteúdo e sem nome do arquivo (o nome costuma ter o nome do paciente/funcionário).
@@ -97,8 +99,10 @@ const comeca = (b: Buffer, ...bytes: number[]) => b.length >= bytes.length && by
  *  - PDF: "%PDF-" no começo.  JPEG: FF D8 FF.  PNG: assinatura de 8 bytes.
  *  - .doc: contêiner OLE2 COM o fluxo "WordDocument" (o mesmo contêiner serve .xls, .ppt e .msi) e SEM projeto de macro (_VBA_PROJECT).
  *  - .docx: ZIP com "[Content_Types].xml" e "word/" (não aceita .zip/.jar/.xlsx renomeados) e sem macro (vbaProject.bin).
- *  - texto: sem byte de controle nenhum além de tab, quebras de linha e form feed (executável tem NUL logo no começo), e que não
- *    comece como marcação (`<`: HTML/SVG/XML) nem como script (`#!`). O download sai como text/plain com `nosniff`.
+ *  - texto: sem byte de controle nenhum além de tab, quebras de linha e form feed (executável tem NUL logo no começo), e que, depois de
+ *    tirar o BOM UTF-8 e qualquer quantidade de espaços/quebras de linha do começo, não comece como marcação (`<`: HTML/SVG/XML)
+ *    nem como script (`#!`). Texto só entra com a extensão .txt (ou sem extensão): ver `validarArquivo`. O download sai como
+ *    text/plain com `nosniff`.
  */
 export function detectarTipo(b: Buffer): TipoDeArquivo | null {
   if (comeca(b, 0x25, 0x50, 0x44, 0x46, 0x2d)) return 'pdf';
@@ -110,8 +114,15 @@ export function detectarTipo(b: Buffer): TipoDeArquivo | null {
   if (comeca(b, 0x50, 0x4b, 0x03, 0x04)) {
     return b.includes('[Content_Types].xml') && b.includes('word/') && !b.includes('vbaProject.bin') ? 'docx' : null;
   }
-  if (b.length > 0 && ehTexto(b) && !/^\s*(<|#!)/.test(b.subarray(0, 64).toString('latin1'))) return 'txt';
+  if (b.length > 0 && ehTexto(b) && !comecaComoMarcacaoOuScript(b)) return 'txt';
   return null;
+}
+
+/** O primeiro conteúdo de verdade (depois do BOM UTF-8 e de espaços/quebras de linha, sem limite de quantidade) é `<` ou `#!`? */
+function comecaComoMarcacaoOuScript(b: Buffer): boolean {
+  let i = b[0] === 0xef && b[1] === 0xbb && b[2] === 0xbf ? 3 : 0;
+  while (i < b.length && (b[i] === 0x20 || b[i] === 0x09 || b[i] === 0x0a || b[i] === 0x0c || b[i] === 0x0d)) i++;
+  return b[i] === 0x3c || (b[i] === 0x23 && b[i + 1] === 0x21);
 }
 
 function ehTexto(b: Buffer): boolean {
@@ -155,6 +166,14 @@ export function validarArquivo(nomeOriginal: string | undefined, conteudo: Buffe
       throw new ErroDeCofre('tipo', `Arquivo .${ext.slice(0, 10)} não é aceito. Aceitamos: ${EXTENSOES_ACEITAS.map((e) => `.${e}`).join(' ')}.`, 415);
     }
     throw new ErroDeCofre('tipo', 'O conteúdo do arquivo não é de um tipo aceito (PDF, Word, JPG, PNG ou texto). Confira se não está corrompido.', 415);
+  }
+  // Texto é o formato mais fácil de disfarçar (virus.js, run.ps1, a.bat são "texto"): só entra como .txt ou sem extensão nenhuma.
+  // Aqui a extensão é lida sem a folga de cima: qualquer sufixo alfanumérico depois do último ponto conta.
+  if (tipo === 'txt') {
+    const sufixo = depois && /^[a-z0-9_-]{1,10}$/.test(depois) ? depois : '';
+    if (sufixo && sufixo !== 'txt' && !(sufixo in TIPO_DA_EXTENSAO)) {
+      throw new ErroDeCofre('tipo', `Arquivos de texto só são aceitos como .txt (este é .${sufixo}). Se for um documento, envie em PDF ou Word.`, 415);
+    }
   }
   // "Contrato.final" com PDF de verdade dentro: manda o conteúdo (a extensão guardada é a do tipo detectado). Só uma extensão
   // CONHECIDA que não combina com o conteúdo é recusada ("contrato.pdf" que é texto/executável).
@@ -303,7 +322,7 @@ export class CofreDeArquivos {
     if (!FORMATO_DO_TOKEN.test(token)) throw new ErroDeCofre('invalido', 'Este link de envio não existe.', 404);
     const id = this.porTokenDeEnvio.get(sha256(token));
     const e = id ? this.envios.get(id) : undefined;
-    if (!e) throw new ErroDeCofre('invalido', 'Este link de envio não existe ou já foi apagado.', 404);
+    if (!e) throw new ErroDeCofre('invalido', 'Este link de envio não existe ou já foi apagado. Se o sistema foi atualizado há pouco, os envios em andamento se perdem: peça um novo link no Claude.', 404);
     if (e.estado === 'apagado') throw new ErroDeCofre('expirado', 'Este link de envio venceu ou foi encerrado. Peça um novo no Claude.', 410);
     if (e.estado === 'recebido' || e.usadoEm) throw new ErroDeCofre('usado', 'Este link de envio já foi usado. Peça um novo no Claude.', 410);
     if (this.agora() >= e.criadoEm + this.limites.envioValeMs) throw new ErroDeCofre('expirado', 'Este link de envio venceu. Peça um novo no Claude.', 410);
@@ -315,7 +334,9 @@ export class CofreDeArquivos {
     this.varrerMemoria();
     const e = this.envioDoToken(token);
     if (e.estado === 'enviando') throw new ErroDeCofre('ocupado', 'Já há um envio em andamento neste link.', 409);
-    if (this.bytesGuardados() >= this.limites.espacoTotalMaxBytes) throw new ErroDeCofre('cheio', 'O cofre está cheio no momento. Tente de novo em alguns minutos.', 503);
+    // o teto conta o que está guardado MAIS o que os envios em andamento ainda podem trazer (cada um até o tamanho máximo)
+    const emAndamento = [...this.envios.values()].filter((x) => x.estado === 'enviando').length;
+    if (this.bytesGuardados() + (emAndamento + 1) * this.limites.tamanhoMaxBytes > this.limites.espacoTotalMaxBytes) throw new ErroDeCofre('cheio', 'O cofre está cheio no momento. Tente de novo em alguns minutos.', 503);
     e.estado = 'enviando';
     return { envioId: e.id };
   }
@@ -385,7 +406,7 @@ export class CofreDeArquivos {
   private doDono(userId: string, id: string): Envio {
     this.varrerMemoria();
     const e = this.envios.get(id);
-    if (!e || e.dono !== userId) throw new ErroDeCofre('nao_encontrado', 'Envio não encontrado (ou já apagado). Peça um novo com arquivo_pedir_upload.', 404);
+    if (!e || e.dono !== userId) throw new ErroDeCofre('nao_encontrado', 'Envio não encontrado (venceu, foi apagado ou o sistema foi atualizado nesse meio-tempo, o que apaga os envios em andamento). Peça um novo com arquivo_pedir_upload.', 404);
     return e;
   }
 
@@ -569,9 +590,38 @@ export class CofreDeArquivos {
     return n;
   }
 
-  /** Para os testes e o desligamento: apaga tudo. */
-  apagarTudo(): void {
+  /**
+   * Desligamento: invalida tudo e ESPERA os arquivos saírem do disco (o container antigo fica no Swarm, parado, com a pasta dele; o
+   * que sobra ali fica guardado até o Swarm limpar a tarefa). Devolve quantos arquivos apagou.
+   */
+  async apagarTudo(): Promise<number> {
     for (const e of this.envios.values()) this.apagarEnvio(e, 'desligamento');
+    return this.apagarPasta();
+  }
+
+  /**
+   * Apaga da pasta TODOS os arquivos do cofre (nome = 32 hex + .bin), aguardando. Na subida: a chave de qualquer arquivo que já
+   * estivesse aqui morreu com o processo anterior, então é lixo cifrado. Não toca em arquivo com outro nome. Não use numa pasta compartilhada.
+   */
+  async apagarPasta(): Promise<number> {
+    let nomes: string[];
+    try {
+      nomes = await readdir(this.dir);
+    } catch {
+      return 0;
+    }
+    let apagados = 0;
+    for (const n of nomes) {
+      if (!/^[0-9a-f]{32}\.bin$/.test(n)) continue;
+      try {
+        await unlink(path.join(this.dir, n));
+        apagados += 1;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') this.o.log?.warn({ err }, 'cofre: não consegui apagar um arquivo da pasta');
+      }
+    }
+    this.paraApagar.clear();
+    return apagados;
   }
 }
 

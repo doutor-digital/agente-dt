@@ -135,6 +135,97 @@ test('pasta do cofre: falha única ao criar não fica gravada para sempre, e pas
   }
 });
 
+test('texto só entra como .txt ou sem extensão: script/executável "de texto" (virus.js, run.ps1, a.bat) é recusado', () => {
+  const SCRIPT = Buffer.from('powershell -enc AAAA\r\nStart-Process calc\r\n');
+  for (const nome of ['virus.js', 'run.ps1', 'a.bat', 'x.sh', 'VIRUS.JS', 'macro.vbs', 'p.py', 'a.cmd', 'x.ps1', 'virus.powershell', 'z.hta', 'm.php']) {
+    assert.throws(() => validarArquivo(nome, SCRIPT, 1 << 20), /só são aceitos como \.txt/, nome);
+  }
+  // o que continua valendo
+  assert.equal(validarArquivo('notas.txt', SCRIPT, 1 << 20).nome, 'notas.txt');
+  assert.equal(validarArquivo('NOTAS.TXT', TXT, 1 << 20).nome, 'NOTAS.txt');
+  assert.equal(validarArquivo('sem-extensao', TXT, 1 << 20).nome, 'sem-extensao.txt');
+  assert.equal(validarArquivo('Contrato Maria J. Souza', TXT, 1 << 20).nome, 'Contrato-Maria-J.-Souza.txt');
+  // texto com nome de formato conhecido que não combina: a mensagem antiga
+  assert.throws(() => validarArquivo('contrato.docx', TXT, 1 << 20), /conteúdo é texto/);
+});
+
+test('texto que é HTML/SVG/script: BOM e muito espaço na frente não escondem (recusado)', () => {
+  const bom = Buffer.from([0xef, 0xbb, 0xbf]);
+  const variantes: Array<[string, Buffer]> = [
+    ['html puro', Buffer.from('<html><script>alert(1)</script>')],
+    ['html com BOM UTF-8', Buffer.concat([bom, Buffer.from('<html><script>alert(1)</script>')])],
+    ['svg com 70 espaços na frente', Buffer.from(' '.repeat(70) + '<svg onload=alert(1)>')],
+    ['svg com 5000 espaços e quebras', Buffer.from(' \r\n\t'.repeat(1250) + '<svg onload=alert(1)>')],
+    ['BOM + espaços + xml', Buffer.concat([bom, Buffer.from('  \n\n <?xml version="1.0"?><svg/>')])],
+    ['shebang', Buffer.from('#!/bin/sh\nrm -rf /')],
+    ['BOM + shebang', Buffer.concat([bom, Buffer.from('\n\n#!/bin/sh\nrm -rf /')])],
+  ];
+  for (const [nome, conteudo] of variantes) {
+    assert.equal(detectarTipo(conteudo), null, nome);
+    for (const arquivo of ['a.txt', 'a', 'a.svg', 'a.html']) assert.throws(() => validarArquivo(arquivo, conteudo, 1 << 20), ErroDeCofre, `${nome} como ${arquivo}`);
+  }
+  // texto normal com BOM e com "<" no MEIO é texto
+  assert.equal(detectarTipo(Buffer.concat([bom, Buffer.from('\n  Cláusula 1: valor < 100 e > 50\n')])), 'txt');
+  assert.equal(detectarTipo(Buffer.from('# Título em markdown\n- item')), 'txt');
+});
+
+test('desligamento: apagarTudo espera os arquivos saírem do disco e invalida os links; apagarPasta (subida) limpa só os .bin do cofre', async () => {
+  const c = cenario();
+  try {
+    const p1 = await subir(c);
+    const p2 = await subir(c);
+    const l = c.cofre.gerarLink(USUARIO, p1.id, 15);
+    assert.equal(c.arquivosNoDisco().length, 2);
+    const n = await c.cofre.apagarTudo();
+    assert.equal(n >= 0, true);
+    assert.deepEqual(c.arquivosNoDisco(), [], 'nada no disco assim que apagarTudo resolve (sem esperar timer)');
+    assert.equal(await codigoDe(() => c.cofre.baixar(l.token, true)), 'expirado');
+    assert.equal(c.cofre.ver(USUARIO, p2.id).estado, 'apagado');
+
+    // subida: sobras de um processo anterior (chave perdida) saem; arquivo de outro nome não é tocado
+    const pasta = path.join(c.dir, 'cofre');
+    writeFileSync(path.join(pasta, 'b'.repeat(32) + '.bin'), 'lixo cifrado');
+    writeFileSync(path.join(pasta, 'c'.repeat(32) + '.bin'), 'lixo cifrado');
+    writeFileSync(path.join(pasta, 'leia-me.txt'), 'x');
+    const novo = new CofreDeArquivos({ dir: pasta });
+    assert.equal(await novo.apagarPasta(), 2);
+    assert.deepEqual(readdirSync(pasta), ['leia-me.txt']);
+    // pasta que ainda não existe: zero, sem erro
+    assert.equal(await new CofreDeArquivos({ dir: path.join(c.dir, 'nao-existe') }).apagarPasta(), 0);
+  } finally {
+    c.limpar();
+  }
+});
+
+test('teto de espaço conta o que os envios em andamento ainda podem trazer (não passa de 200 MB em +40 MB)', async () => {
+  const c = cenario({ tamanhoMaxBytes: 1024, espacoTotalMaxBytes: 3 * 1024 });
+  try {
+    const ps = [1, 2, 3, 4].map(() => c.cofre.pedirEnvio({ userId: USUARIO, finalidade: 'teste' }));
+    const r1 = c.cofre.reservar(ps[0]!.token);
+    const r2 = c.cofre.reservar(ps[1]!.token);
+    const r3 = c.cofre.reservar(ps[2]!.token); // 3 × 1 KB = o teto
+    assert.equal(await codigoDe(() => c.cofre.reservar(ps[3]!.token)), 'cheio');
+    c.cofre.liberar(r1);
+    c.cofre.liberar(r2);
+    c.cofre.liberar(r3);
+    c.cofre.reservar(ps[3]!.token); // depois que as reservas voltam, cabe
+  } finally {
+    c.limpar();
+  }
+});
+
+test('servidor: o desligamento apaga o cofre antes de sair e a subida limpa a pasta (fiação no código)', () => {
+  const server = readFileSync(new URL('../server.ts', import.meta.url), 'utf8');
+  assert.match(server, /import \{ apagarCofreDeArquivos, ligarConectorRemoto \} from '\.\/mcp-remoto\/producao\.js'/);
+  const iApagar = server.indexOf('await apagarCofreDeArquivos()');
+  assert.ok(iApagar > 0, 'shutdown chama apagarCofreDeArquivos esperando');
+  assert.ok(iApagar < server.indexOf('process.exit(0)'), 'antes de sair');
+  assert.ok(iApagar > server.indexOf('desligarComGraca('), 'depois de fechar a porta e drenar');
+  const prod = readFileSync(new URL('./producao.ts', import.meta.url), 'utf8');
+  assert.match(prod, /await cofre\.apagarPasta\(\)/);
+  assert.ok(prod.indexOf('await cofre.apagarPasta()') < prod.indexOf('montarRotasDoCofre(app, cofre)'), 'limpa antes de abrir as rotas');
+});
+
 test('arquivo maior que o limite é recusado (com 413), sem guardar nada', async () => {
   const c = cenario({ tamanhoMaxBytes: 1024 });
   try {
@@ -561,7 +652,7 @@ test('HTTP ponta a ponta: página (sem gastar o link, sem cache, sem indexar) �
       }
       const quarta = await fetch(caminho);
       assert.equal(quarta.status, 404);
-      assert.equal(await quarta.text(), 'Arquivo não encontrado.');
+      assert.match(await quarta.text(), /^Arquivo não encontrado ou link vencido\..*peça um novo link no Claude/);
     });
   } finally {
     c.limpar();
@@ -732,6 +823,34 @@ test('HTTP: um conector legítimo repetindo a busca de um link vencido/esgotado 
         for (let i = 0; i < 8; i++) assert.equal((await fetch(`${url}/arquivos/baixar/${l.token}/${l.nome}`)).status, 404, 'esgotado, mas não 429');
         c.relogio.t += 6 * MIN;
         for (let i = 0; i < 8; i++) assert.equal((await fetch(`${url}/arquivos/baixar/${l.token}/${l.nome}`)).status, 404, 'vencido, mas não 429');
+      },
+      new JanelaDeContagem(3, 10 * 60_000),
+    );
+  } finally {
+    c.limpar();
+  }
+});
+
+test('HTTP: o mesmo link velho repetido (pós-deploy) conta UMA vez; tokens diferentes continuam somando', async () => {
+  const c = cenario();
+  try {
+    await comServidor(
+      c,
+      async (url) => {
+        const velho = 'V'.repeat(43);
+        for (let i = 0; i < 10; i++) {
+          const r = await fetch(`${url}/arquivos/baixar/${velho}/a.pdf`);
+          assert.equal(r.status, 404, `tentativa ${i + 1} do link velho`);
+          assert.match(await r.text(), /peça um novo link no Claude/);
+        }
+        // a página de envio velha também: mensagem de "peça outro"
+        const pg = await fetch(`${url}/arquivos/enviar/${velho}`);
+        assert.equal(pg.status, 404);
+        assert.match(await pg.text(), /peça um novo link no Claude/);
+        // tokens DIFERENTES somam: o teto (3) corta
+        const estados: number[] = [];
+        for (let i = 0; i < 4; i++) estados.push((await fetch(`${url}/arquivos/baixar/${'N'.repeat(42)}${i}/a.pdf`)).status);
+        assert.deepEqual(estados, [404, 404, 429, 429], 'o link velho já gastou 1 do teto de 3');
       },
       new JanelaDeContagem(3, 10 * 60_000),
     );

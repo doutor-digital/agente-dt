@@ -7,7 +7,7 @@ import { env } from './lib/env.js';
 import { logger } from './lib/logger.js';
 import { prisma } from './lib/prisma.js';
 import { apiRouter } from './routes/api.routes.js';
-import { ligarConectorRemoto } from './mcp-remoto/producao.js';
+import { apagarCofreDeArquivos, ligarConectorRemoto } from './mcp-remoto/producao.js';
 import { paginaPausaHandler } from './controllers/pausa.controller.js';
 import { paginaAltaHandler } from './controllers/alta.controller.js';
 import { getCheckpointer } from './agent/graph.js';
@@ -307,6 +307,10 @@ async function main(): Promise<void> {
       { ...r, ...(sobrou ? { traceIdsPerdidos: idsEmVoo() } : {}) },
       sobrou ? 'shutdown: turnos da IA ainda pendentes, saindo mesmo assim' : 'shutdown: turnos da IA terminaram',
     );
+    // Cofre de arquivos do conector (contratos com CPF/salário): tira do disco ANTES de sair. O container antigo fica parado no Swarm
+    // (até 5 tarefas guardadas) com a pasta dele; sem isto os .bin ficariam lá, cifrados mas presentes.
+    const apagadosDoCofre = await apagarCofreDeArquivos();
+    if (apagadosDoCofre) logger.info({ apagadosDoCofre }, 'shutdown: arquivos do cofre apagados');
     // Solta o lease antes de desconectar: o container novo assume em ≤30 s.
     await encerrarSupervisorDosWorkers();
     await prisma.$disconnect();

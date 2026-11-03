@@ -455,6 +455,19 @@ function registrarCerebro(server: McpServer, slugs: () => string[], cache: Cache
   );
 }
 
+/** O cofre de arquivos em uso, para o desligamento do servidor apagar tudo antes de sair. */
+let cofreAtivo: CofreDeArquivos | undefined;
+
+/** Desligamento (SIGTERM): apaga os arquivos do cofre do disco e espera terminar. Sem cofre ligado, não faz nada. Nunca lança. */
+export async function apagarCofreDeArquivos(): Promise<number> {
+  try {
+    return (await cofreAtivo?.apagarTudo()) ?? 0;
+  } catch (err) {
+    logger.warn({ err }, 'mcp-remoto: não consegui apagar o cofre de arquivos no desligamento');
+    return 0;
+  }
+}
+
 /** Falha ao subir o conector vira log, nunca derruba o agente: a Sofia atendendo vale mais que o conector. */
 export async function ligarConectorRemoto(app: Express): Promise<void> {
   if (!env.MCP_URL_PUBLICA) return;
@@ -483,6 +496,10 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
     auditar: auditarCofre,
     log: logger,
   });
+  cofreAtivo = cofre;
+  // a chave de qualquer arquivo que já estivesse na pasta morreu com o processo anterior: é lixo cifrado, sai agora
+  const sobras = await cofre.apagarPasta();
+  if (sobras) logger.info({ sobras }, 'mcp-remoto: cofre de arquivos — sobras do processo anterior apagadas');
   montarRotasDoCofre(app, cofre);
   setInterval(() => void cofre.varrer().catch((err) => logger.warn({ err }, 'mcp-remoto: varredura do cofre falhou')), 60_000).unref();
   let arquivistas = new Set<string>();
