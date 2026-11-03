@@ -13,6 +13,7 @@
  */
 import type { Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
+import { mensagemDaSofiaConversando } from '../lib/mensagem-da-ia.js';
 import { createKommoClient, type KommoClient } from './kommo.service.js';
 import { historicoOficial, separarSessaoDaEquipe, type AutorOficial, type MensagemOficial } from './kommo-talks-normalizar.js';
 
@@ -28,24 +29,46 @@ export async function mensagensOficiais(kommo: KommoClient, leadId: number, limi
   return (await historicoOficial(kommo, leadId, limit)).mensagens;
 }
 
+/** Resposta de TURNO = a Sofia conversando: o turno grava `traceId`; follow-up, reativação, lembrete e boas-vindas não. */
+export function filtroDeEnvios(soRespostaDeTurno: boolean | undefined): { traceId?: { not: null } } {
+  return soRespostaDeTurno ? { traceId: { not: null } } : {};
+}
+
+/** Esta mensagem `assistant` conta como envio da Sofia? Sempre fora a cópia da conversa oficial; no modo estrito, só a IA conversando. */
+export function contaComoEnvioDaSofia(meta: unknown, soRespostaDeTurno: boolean | undefined): boolean {
+  return soRespostaDeTurno ? mensagemDaSofiaConversando(meta) : (meta as { origem?: string } | null)?.origem !== 'kommo_talks';
+}
+
 /**
  * Quando a Sofia (o agente) mandou mensagem para este lead desde `desde`, em qualquer unidade da mesma conta do
  * Kommo (comercial e resgate dividem o cartão). Não conta o que entrou no histórico copiado da própria rota
  * oficial — essa cópia guarda também a fala da equipe.
+ * `soRespostaDeTurno`: só a Sofia CONVERSANDO (mensagem da IA com `traceId`) — sem follow-up, reativação, lembrete, boas-vindas,
+ * confirmação de véspera e cartão de chegada. É o que prova que um pedido foi respondido.
  */
-export async function enviosDaSofia(unit: Pick<Unit, 'id' | 'kommoSubdomain'>, leadId: number, desde: Date): Promise<Date[]> {
+export async function enviosDaSofia(
+  unit: Pick<Unit, 'id' | 'kommoSubdomain'>,
+  leadId: number,
+  desde: Date,
+  opcoes: { soRespostaDeTurno?: boolean } = {},
+): Promise<Date[]> {
   const unidades = unit.kommoSubdomain
     ? (await prisma.unit.findMany({ where: { kommoSubdomain: unit.kommoSubdomain }, select: { id: true } })).map((u) => u.id)
     : [unit.id];
   const convs = await prisma.conversation.findMany({ where: { unitId: { in: unidades }, leadId: String(leadId) }, select: { id: true } });
   if (!convs.length) return [];
   const ms = await prisma.message.findMany({
-    where: { conversationId: { in: convs.map((c) => c.id) }, role: 'assistant', createdAt: { gte: desde } },
+    where: {
+      conversationId: { in: convs.map((c) => c.id) },
+      role: 'assistant',
+      createdAt: { gte: desde },
+      ...filtroDeEnvios(opcoes.soRespostaDeTurno),
+    },
     select: { createdAt: true, meta: true },
     orderBy: { createdAt: 'desc' },
     take: 300,
   });
-  return ms.filter((m) => (m.meta as { origem?: string } | null)?.origem !== 'kommo_talks').map((m) => m.createdAt);
+  return ms.filter((m) => contaComoEnvioDaSofia(m.meta, opcoes.soRespostaDeTurno)).map((m) => m.createdAt);
 }
 
 /** `mensagensOficiais` com a sessão "Doutor Digital" separada: só é Sofia o que bate com um envio do agente. */

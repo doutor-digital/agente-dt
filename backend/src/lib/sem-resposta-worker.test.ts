@@ -54,6 +54,8 @@ function cenario(opts: {
   marcaTarefaNaoGrava?: boolean;
   /** servidor sem TELEGRAM_BOT_TOKEN */
   semToken?: boolean;
+  /** quando a recuperação de turnos (deploy) abriu a tarefa dela para este lead */
+  tarefaDoTurnoPerdidoEm?: Date;
 }) {
   const r = {
     enviados: [] as string[],
@@ -83,6 +85,7 @@ function cenario(opts: {
     marcarTarefa: async (_u, leadId, quando) => {
       if (!opts.marcaTarefaNaoGrava) r.marcasTarefa.set(leadId, quando);
     },
+    tarefaDoTurnoPerdidoEm: async () => opts.tarefaDoTurnoPerdidoEm ?? null,
     telegramPronto: () => !opts.semToken,
     criarTarefa: async (_u, leadId, texto) => {
       r.tentativasDeTarefa++;
@@ -440,6 +443,35 @@ test('tarefa: espera já alertada no Telegram antes desta versão ainda ganha a 
   c.mudarAgora(depois(9 * 60_000));
   await verificarUnidadeSemResposta(unidade, 'ligado', c.deps);
   assert.equal(c.r.tarefas.length, 1);
+});
+
+test('tarefa: a recuperação de turnos (deploy) já abriu tarefa para esta espera — não abre outra, mas o Telegram sai', async () => {
+  const c = cenario({ oficiais: [msg('entrada', T0)], agora: depois(6 * 60_000), tarefaDoTurnoPerdidoEm: depois(3 * 60_000) });
+  const r = await verificarUnidadeSemResposta(unidade, 'ligado', c.deps);
+  assert.equal(r.tarefas, 0);
+  assert.equal(c.r.tentativasDeTarefa, 0, 'nem tenta criar');
+  assert.equal(c.r.enviados.length, 1, 'o Telegram do João continua');
+  assert.match(c.r.enviados[0]!, /tarefa/i);
+});
+
+test('tarefa: a tarefa da recuperação é de uma espera ANTERIOR (a equipe respondeu depois dela) — a espera nova ganha a sua', async () => {
+  const c = cenario({
+    oficiais: [msg('entrada', T0), msg('saida', depois(60_000)), msg('entrada', depois(120_000))],
+    agora: depois(8 * 60_000),
+    tarefaDoTurnoPerdidoEm: depois(30_000),
+  });
+  const r = await verificarUnidadeSemResposta(unidade, 'ligado', c.deps);
+  assert.equal(r.tarefas, 1);
+});
+
+test('tarefa: a tarefa da recuperação tem mais de 12 h — espera velha, a de agora ganha a sua', async () => {
+  const c = cenario({
+    oficiais: [msg('entrada', T0)],
+    agora: depois(6 * 60_000),
+    tarefaDoTurnoPerdidoEm: new Date(T0.getTime() - REALERTA_MS - 60_000),
+  });
+  const r = await verificarUnidadeSemResposta(unidade, 'ligado', c.deps);
+  assert.equal(r.tarefas, 1);
 });
 
 test('textoDaTarefa: telefone/CPF mascarados, trecho curto, sem quebra de linha; sem nome não inventa contato', () => {

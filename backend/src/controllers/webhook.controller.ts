@@ -974,9 +974,12 @@ export async function retomarTurnoPerdido(t: TurnoPerdido, unit: Unit, deps: Dep
   const leadId = Number(t.leadId);
   if (!Number.isFinite(leadId) || leadId <= 0) return 'descartado:lead_invalido';
 
-  // Só pedido que veio do webhook do Kommo com mensagem de paciente (o do widget entrega por outro caminho).
+  // Só pedido que veio do webhook do Kommo com mensagem de paciente volta para a IA. O do widget entrega por outro
+  // caminho (a resposta volta pelo `return_url` da sessão do bot, que morreu junto com o processo) e qualquer outro
+  // formato é desconhecido: nos dois o paciente pode estar esperando, então a recepção fica sabendo. NUNCA descartar sem
+  // tarefa — o trace fecharia FAILED e não sobraria rastro nenhum de um paciente sem resposta.
   const ctx = contextoDoPedidoGravado(t);
-  if (!ctx) return 'descartado:nao_e_mensagem_do_kommo';
+  if (!ctx) return pedidoDoWidget(t.input) ? 'tarefa:pedido_via_widget' : 'tarefa:pedido_nao_reconhecido';
 
   const conv = await deps.conversa(unit.id, String(leadId));
   // Resposta à confirmação de véspera e toque no botão do lembrete têm tratador em código no webhook (idempotente). Aqui
@@ -1013,19 +1016,35 @@ export async function retomarTurnoPerdido(t: TurnoPerdido, unit: Unit, deps: Dep
  * Quem é a dona do paciente AGORA: a unidade gravada no trace pode já não ser (o cartão mudou de funil e de IA — comercial
  * ↔ resgate dividem a conta do Kommo). Mesma regra do webhook. null = unidade inativa ou lead inválido.
  */
-export async function unidadeDonaDoTurno(t: TurnoPerdido): Promise<Unit | null> {
+export async function unidadeDonaDoTurno(
+  t: TurnoPerdido,
+  deps: { unidadeGravada(id: string): Promise<Unit | null>; donaPelaEtapa(gravada: Unit, leadId: number): Promise<Unit> } = DEPS_DONA_PADRAO,
+): Promise<Unit | null> {
   const leadId = Number(t.leadId);
   if (!Number.isFinite(leadId) || leadId <= 0) return null;
-  const gravada = await prisma.unit.findUnique({ where: { id: t.unitId } });
+  const gravada = await deps.unidadeGravada(t.unitId);
   if (!gravada || !gravada.isActive) return null;
-  const dona = await resolveOwnerUnitByStage(gravada, leadId);
+  const dona = await deps.donaPelaEtapa(gravada, leadId);
   return dona.isActive ? dona : null;
+}
+
+const DEPS_DONA_PADRAO = {
+  unidadeGravada: (id: string) => prisma.unit.findUnique({ where: { id } }),
+  donaPelaEtapa: (gravada: Unit, leadId: number) => resolveOwnerUnitByStage(gravada, leadId),
+};
+
+/** O pedido gravado é do modo widget (`widget_request`), não um webhook de mensagem do Kommo? */
+function pedidoDoWidget(input: unknown): input is { message?: unknown; via: 'widget_request' } {
+  return !!input && typeof input === 'object' && (input as { via?: unknown }).via === 'widget_request';
 }
 
 /** Nome do contato e mensagem do pedido gravado, para o texto da tarefa. */
 export function resumoDoPedido(t: TurnoPerdido): { contato: string | null; texto: string } {
   const ctx = contextoDoPedidoGravado(t);
-  return ctx ? { contato: ctx.contactName, texto: ctx.humanMessage } : { contato: null, texto: '' };
+  if (ctx) return { contato: ctx.contactName, texto: ctx.humanMessage };
+  // O widget leva o texto em `message`: a recepção precisa ler o que o paciente disse.
+  if (pedidoDoWidget(t.input)) return { contato: null, texto: typeof t.input.message === 'string' ? t.input.message : '' };
+  return { contato: null, texto: '' };
 }
 
 /** O contexto do webhook gravado no trace, ou null quando o pedido não é uma mensagem de paciente do Kommo. */

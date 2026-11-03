@@ -136,6 +136,11 @@ export function criarSupervisor(deps: SupervisorDeps): {
       estado.desde = new Date();
       deps.iniciar();
       logger.info({ dono: estado.dono, modo }, 'workers: este processo assumiu a liderança');
+    } else if (estado.modo === 'sem-lease' && modo === 'lease') {
+      // Rodava SEM lease (banco fora) e agora tem o lease: a posse que vale é a de agora. A de antes não provava que o
+      // processo antigo tinha soltado o lease, e a recuperação de turnos conta a janela a partir dela.
+      estado.desde = new Date();
+      logger.info({ dono: estado.dono }, 'workers: este processo passou de sem-lease para lease');
     }
     estado.modo = modo;
   };
