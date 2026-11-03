@@ -77,6 +77,20 @@ function limparSeVencido(agora: number): void {
   void limparClaimsVencidos();
 }
 
+/** O INSERT atômico: `true` = esta chamada gravou a chave (primeira vez, ou a anterior já tinha vencido). Lança se o banco falhar. */
+async function inserirReivindicacao(key: string, agora: number, ttlMs: number): Promise<boolean> {
+  const vencimento = new Date(agora + ttlMs);
+  // ON CONFLICT: o banco resolve a corrida. Quem inseriu (ou assumiu uma chave vencida), processa.
+  const inseridas = await prisma.$executeRaw`
+    INSERT INTO "message_claims" ("key", "expires_at")
+    VALUES (${key}, ${vencimento})
+    ON CONFLICT ("key") DO UPDATE
+      SET "expires_at" = EXCLUDED."expires_at"
+      WHERE "message_claims"."expires_at" <= NOW()
+  `;
+  return inseridas > 0;
+}
+
 /**
  * Reivindica a mensagem. `true` = é a primeira vez, pode processar.
  * `false` = alguém já pegou, ignore.
@@ -98,16 +112,7 @@ export async function claimMessageId(
   if (memoria.size >= MAX_MEMORIA) limparMemoria(agora);
 
   try {
-    const vencimento = new Date(agora + ttlMs);
-    // ON CONFLICT DO NOTHING: o banco resolve a corrida. Quem inseriu, processa.
-    const inseridas = await prisma.$executeRaw`
-      INSERT INTO "message_claims" ("key", "expires_at")
-      VALUES (${key}, ${vencimento})
-      ON CONFLICT ("key") DO UPDATE
-        SET "expires_at" = EXCLUDED."expires_at"
-        WHERE "message_claims"."expires_at" <= NOW()
-    `;
-    const primeiraVez = inseridas > 0;
+    const primeiraVez = await inserirReivindicacao(key, agora, ttlMs);
     if (primeiraVez) memoria.set(key, agora + ttlMs);
     return primeiraVez;
   } catch (err) {
@@ -131,22 +136,14 @@ export async function reivindicarComCerteza(
 ): Promise<'ganhou' | 'perdeu' | 'incerto'> {
   const key = `${scope}:${messageId}`;
   const agora = Date.now();
+  limparSeVencido(agora);
   const jaVista = memoria.get(key);
   if (jaVista && jaVista > agora) return 'perdeu';
+  if (memoria.size >= MAX_MEMORIA) limparMemoria(agora);
   try {
-    const vencimento = new Date(agora + ttlMs);
-    const inseridas = await prisma.$executeRaw`
-      INSERT INTO "message_claims" ("key", "expires_at")
-      VALUES (${key}, ${vencimento})
-      ON CONFLICT ("key") DO UPDATE
-        SET "expires_at" = EXCLUDED."expires_at"
-        WHERE "message_claims"."expires_at" <= NOW()
-    `;
-    if (inseridas > 0) {
-      memoria.set(key, agora + ttlMs);
-      return 'ganhou';
-    }
-    return 'perdeu';
+    if (!(await inserirReivindicacao(key, agora, ttlMs))) return 'perdeu';
+    memoria.set(key, agora + ttlMs);
+    return 'ganhou';
   } catch (err) {
     logger.warn({ err: String(err), key }, 'dedup: banco indisponível — reivindicação incerta (o chamador não refaz sem certeza)');
     return 'incerto';

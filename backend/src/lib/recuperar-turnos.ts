@@ -1,10 +1,10 @@
 import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
-import { reivindicarComCerteza } from './dedup-cache.js';
+import { liberarClaim, reivindicarComCerteza } from './dedup-cache.js';
 import { emPausa } from './pausa-unidade.js';
 import { leadPausadoPorJanela } from './pausa-lead.js';
-import { avisoRecente, marcarAviso } from './aviso-dedupe.js';
+import { marcadoEm, marcarAviso } from './aviso-dedupe.js';
 import { conferirEquipe, ehRespostaAutomatica } from './pausa-equipe.js';
 import { textoDaTarefa } from './sem-resposta-worker.js';
 import { createKommoClient, isLeadPaused } from '../services/kommo.service.js';
@@ -45,6 +45,9 @@ import type { EstadoLideranca } from './worker-lease.js';
  *  - a resposta que estava "segurada" é restaurada a partir do passo gravado no trace (o `<entrega_falhou>`).
  *
  * Todo trace que NÃO foi retomado fecha FAILED com o motivo — nunca SUCCESS, que esconderia um paciente sem resposta.
+ * Exceção: quando a decisão depende de um serviço que falhou (o Kommo não deu para a tarefa, o banco não confirmou a
+ * reivindicação) o trace segue RUNNING e a volta seguinte tenta de novo, até `MAX_VOLTAS_SEM_DECISAO`; passado disso fica
+ * RUNNING com o erro no painel de erros (é o que a medida "RUNNING > 10 min" mostra).
  * Desligar: `RECUPERAR_TURNOS_DESLIGADO=1`.
  */
 
@@ -72,9 +75,8 @@ export const MAX_POR_VARREDURA = 50;
 export const TTL_REIVINDICACAO_MS = 24 * 60 * 60_000;
 export const ESCOPO_REIVINDICACAO = 'turno-recuperado';
 export const MARCA_ABANDONADO = '__abandoned_by_restart__';
-/** Uma tarefa por paciente (a marca é do cartão, não do trace). */
+/** Marca da tarefa por paciente (é do cartão, não do trace): só vale para o pedido que nasceu ANTES dela. */
 export const REGRA_TAREFA_TURNO_PERDIDO = 'turno_perdido_tarefa';
-export const REALERTA_TAREFA_MS = 12 * 3600_000;
 /** Tolerância de relógio entre o Kommo e o nosso banco ao perguntar "saiu mensagem depois do pedido?". */
 export const FOLGA_RELOGIO_MS = 2_000;
 /**
@@ -132,8 +134,8 @@ export interface DepsRecuperacao extends GanchosDoController {
   /** `excluirIds` entra na consulta (antes do limite): os que estão em voo não podem ocupar as vagas dos perdidos. */
   buscarPerdidos(p: { criadosAntes: Date; criadosDepois: Date; limite: number; excluirIds: string[] }): Promise<TurnoPerdido[]>;
   passosDoTrace(traceId: string): Promise<PassoGravado[]>;
-  /** Mensagem da IA para este lead (QUALQUER unidade da mesma conta do Kommo) depois de `desde`? */
-  respondidoNoBanco(unit: Unit, leadId: string, desde: Date): Promise<boolean>;
+  /** Quando a IA mandou mensagem a este lead (QUALQUER unidade da mesma conta do Kommo) desde `desde`. */
+  enviosDaIa(unit: Unit, leadId: string, desde: Date): Promise<Date[]>;
   /** Conversa oficial do Kommo. LANÇA se não leu. */
   lerConversa(unit: Unit, leadId: string): Promise<ConversaLida>;
   iaPausada(unit: Unit, leadId: string): Promise<boolean>;
@@ -143,8 +145,11 @@ export interface DepsRecuperacao extends GanchosDoController {
   reivindicar(traceId: string): Promise<'ganhou' | 'perdeu' | 'incerto'>;
   /** Respostas seguradas ("atropelada") deste paciente que ele nunca leu, mais antigas primeiro. */
   seguradasPendentes(unit: Unit, leadId: string, aPartirDe: Date): Promise<RespostaSegurada[]>;
-  restaurarSegurada(unit: Unit, leadId: string, s: RespostaSegurada): void;
-  /** Abre a tarefa no cartão. `ja_existia` = o mesmo paciente já tem uma (não duplica). LANÇA se o Kommo recusou. */
+  /** Devolve a memória do processo as respostas que o paciente nunca leu (uma só marca por paciente: junta os textos). */
+  restaurarSeguradas(unit: Unit, leadId: string, lista: RespostaSegurada[]): void;
+  /** Devolve a reivindicação de um pedido que não chegou a ser retomado (o processo está saindo). */
+  liberarReivindicacao(traceId: string): Promise<void>;
+  /** Abre a tarefa no cartão. `ja_existia` = já há uma criada DEPOIS deste pedido (não duplica). LANÇA se o Kommo recusou. */
   criarTarefa(unit: Unit, t: TurnoPerdido, esperaMs: number): Promise<'criada' | 'ja_existia'>;
   /** Fecha o trace como FAILED (só se ainda estiver RUNNING). */
   encerrar(traceId: string, motivo: string): Promise<void>;
@@ -193,6 +198,11 @@ export function dadosDeEncerramento(motivo: string) {
     iaDecision: `${MARCA_ABANDONADO}:${motivo}`,
     errorMessage: `abandonado: o serviço reiniciou no meio do turno (${motivo})`,
   };
+}
+
+/** A marca da última tarefa do paciente cobre este pedido? Só se foi criada DEPOIS dele (a tarefa leva a mensagem). */
+export function tarefaCobreOPedido(marca: Date | null, criadoEm: Date): boolean {
+  return !!marca && marca.getTime() >= criadoEm.getTime();
 }
 
 /** A posse da liderança — só em modo `lease`. Em `sem-lease` (banco fora) o processo se declara líder SEM ter soltado o antigo. */
@@ -245,10 +255,12 @@ export async function recuperarTurnosPerdidos(deps: DepsRecuperacao, posse: Date
   if (perdidos.length === 0) return resumo;
 
   // Quem terminou a volta ainda RUNNING e fora do coalescer não foi decidido: gasta uma volta.
+  // Só gasta volta quem foi de fato AVALIADO e ficou sem decisão (uma volta interrompida por `parar` não conta).
   const decididos = new Set<string>();
+  const avaliados = new Set<string>();
   const contarSemDecisao = (): void => {
-    for (const t of perdidos) {
-      if (!decididos.has(t.traceId)) voltas.set(t.traceId, (voltas.get(t.traceId) ?? 0) + 1);
+    for (const id of avaliados) {
+      if (!decididos.has(id)) voltas.set(id, (voltas.get(id) ?? 0) + 1);
     }
   };
 
@@ -280,6 +292,7 @@ export async function recuperarTurnosPerdidos(deps: DepsRecuperacao, posse: Date
     } catch (err) {
       // Não sei de quem é o paciente: não toco (o trace segue RUNNING e a próxima varredura tenta de novo).
       logger.error({ err: String(err), leadId: primeiro.leadId, unitId: primeiro.unitId }, 'recuperar-turnos: não descobri a unidade dona (segue com os outros)');
+      for (const t of turnos) avaliados.add(t.traceId);
       continue;
     }
     if (!unit) {
@@ -293,6 +306,7 @@ export async function recuperarTurnosPerdidos(deps: DepsRecuperacao, posse: Date
 
   for (const { unit, turnos } of donos.values()) {
     if (parar()) break;
+    for (const t of turnos) avaliados.add(t.traceId);
     try {
       await recuperarDoPaciente(depsMarcando, unit, turnos, agora, resumo, decididos, parar);
     } catch (err) {
@@ -310,9 +324,9 @@ async function fechar(deps: DepsRecuperacao, resumo: ResumoRecuperacao, t: Turno
 }
 
 /**
- * Tarefa para a recepção. UMA por paciente (o texto leva a última mensagem), tentada UMA vez: um timeout do Kommo pode
- * ter criado a tarefa e repetir a duplicaria. Os traces fecham FAILED de qualquer jeito; se o Kommo recusou, o motivo
- * diz e o erro vai para o painel de erros.
+ * Tarefa para a recepção. UMA por paciente (o texto leva a última mensagem). Só depois de o Kommo CONFIRMAR é que os
+ * traces fecham: se ele recusou, os traces seguem RUNNING e a próxima volta tenta de novo (até `MAX_VOLTAS_SEM_DECISAO`;
+ * o erro vai para o painel de erros a cada tentativa). Fechar aqui apagaria o único rastro de um paciente sem resposta.
  */
 async function comTarefa(
   deps: DepsRecuperacao,
@@ -323,16 +337,15 @@ async function comTarefa(
   agora: number,
 ): Promise<void> {
   const ultimo = turnos[turnos.length - 1]!;
-  let sufixo = '';
   try {
     const r = await deps.criarTarefa(unit, ultimo, agora - turnos[0]!.criadoEm.getTime());
     if (r === 'criada') resumo.tarefas++;
   } catch (err) {
     resumo.tarefasFalhas++;
-    sufixo = ':tarefa_nao_confirmada';
-    logger.error({ err: String(err), unit: unit.slug, leadId: ultimo.leadId, motivo }, 'recuperar-turnos: a tarefa para a recepção NÃO foi confirmada — paciente sem resposta, confira o cartão');
+    logger.error({ err: String(err), unit: unit.slug, leadId: ultimo.leadId, motivo }, 'recuperar-turnos: a tarefa para a recepção NÃO foi confirmada — o trace segue aberto para a próxima volta; se persistir, confira o cartão');
+    return;
   }
-  for (const t of turnos) await fechar(deps, resumo, t, `${motivo}${sufixo}`);
+  for (const t of turnos) await fechar(deps, resumo, t, motivo);
 }
 
 async function recuperarDoPaciente(
@@ -349,8 +362,10 @@ async function recuperarDoPaciente(
   // 1. Já respondido, no banco (todas as unidades da conta). Cada pedido é julgado sozinho: o primeiro pode ter sido
   //    respondido (trace que só não fechou) e o segundo não.
   let pendentes: TurnoPerdido[] = [];
+  const envios = await deps.enviosDaIa(unit, leadId, new Date(turnos[0]!.criadoEm.getTime() - FOLGA_RELOGIO_MS));
   for (const t of turnos) {
-    if (await deps.respondidoNoBanco(unit, leadId, new Date(t.criadoEm.getTime() - FOLGA_RELOGIO_MS))) {
+    const piso = t.criadoEm.getTime() - FOLGA_RELOGIO_MS;
+    if (envios.some((e) => e.getTime() >= piso)) {
       await fechar(deps, resumo, t, 'ja_respondida');
     } else {
       pendentes.push(t);
@@ -398,9 +413,9 @@ async function recuperarDoPaciente(
   // 7. Uma vez só, em qualquer processo, em qualquer start.
   const meus: TurnoPerdido[] = [];
   const jaTentados: TurnoPerdido[] = [];
+  // O shutdown começou: o turno que eu agendasse morreria com o processo e gastaria a reivindicação à toa.
+  if (parar()) return;
   for (const t of pendentes) {
-    // O shutdown começou: o turno que eu agendasse morreria com o processo e gastaria a reivindicação à toa.
-    if (parar()) return;
     const r = await deps.reivindicar(t.traceId);
     if (r === 'ganhou') meus.push(t);
     else if (r === 'incerto') resumo.descartados.banco_incerto = (resumo.descartados.banco_incerto ?? 0) + 1; // volta seguinte
@@ -414,6 +429,11 @@ async function recuperarDoPaciente(
   const seguradas = await deps.seguradasPendentes(unit, leadId, meus[0]!.criadoEm).catch(() => [] as RespostaSegurada[]);
   let restaurou = false;
   for (const t of meus) {
+    // Saiu da liderança ou do processo depois de reivindicar: devolve a reivindicação, a próxima volta (ou o próximo líder) refaz.
+    if (parar()) {
+      await deps.liberarReivindicacao(t.traceId).catch(() => undefined);
+      continue;
+    }
     let r: ResultadoRetomada;
     try {
       r = await deps.retomar(t, unit);
@@ -430,7 +450,7 @@ async function recuperarDoPaciente(
         // Só DEPOIS de haver um turno a caminho (a janela do coalescer ainda não fechou): sem turno, a marca ficaria
         // na memória até a próxima mensagem do paciente e a IA pediria desculpa por algo que a conversa já passou.
         restaurou = true;
-        for (const s of seguradas) deps.restaurarSegurada(unit, leadId, s);
+        if (seguradas.length > 0) deps.restaurarSeguradas(unit, leadId, seguradas);
       }
     } else if (r.startsWith('tarefa:')) {
       await comTarefa(deps, resumo, unit, [t], r.slice('tarefa:'.length), agora);
@@ -463,10 +483,8 @@ export function depsDeProducao(ganchos: GanchosDoController): DepsRecuperacao {
       const passos = await prisma.executionStep.findMany({ where: { traceId }, select: { kind: true, title: true } });
       return passos.map((p) => ({ kind: p.kind, title: p.title }));
     },
-    async respondidoNoBanco(unit, leadId, desde) {
-      // Todas as unidades da mesma conta do Kommo (comercial e resgate dividem o cartão) — é o que `enviosDaSofia` faz.
-      return (await enviosDaSofia(unit, Number(leadId), desde)).length > 0;
-    },
+    // Todas as unidades da mesma conta do Kommo (comercial e resgate dividem o cartão) — é o que `enviosDaSofia` faz.
+    enviosDaIa: (unit, leadId, desde) => enviosDaSofia(unit, Number(leadId), desde),
     async lerConversa(unit, leadId) {
       const msgs = await mensagensOficiaisDaUnidade(unit, createKommoClient(unit), Number(leadId), 40);
       const l = await conferirEquipe(unit, Number(leadId), undefined, msgs);
@@ -491,6 +509,7 @@ export function depsDeProducao(ganchos: GanchosDoController): DepsRecuperacao {
       return h.enabled && !h.isOpen;
     },
     reivindicar: (traceId) => reivindicarComCerteza(ESCOPO_REIVINDICACAO, traceId, TTL_REIVINDICACAO_MS),
+    liberarReivindicacao: (traceId) => liberarClaim(ESCOPO_REIVINDICACAO, traceId),
     async seguradasPendentes(unit, leadId, aPartirDe) {
       // A resposta pode ter sido segurada quando o cartão era de OUTRA unidade da mesma conta (comercial ↔ resgate).
       const unidades = unit.kommoSubdomain
@@ -525,13 +544,16 @@ export function depsDeProducao(ganchos: GanchosDoController): DepsRecuperacao {
       }
       return r;
     },
-    restaurarSegurada(unit, leadId, s) {
-      marcarNaoEntregue(unit.id, Number(leadId), s.reply, Date.now(), 'atropelada');
-      guardarRespostaSegurada(unit.id, Number(leadId), s.mensagemId);
+    restaurarSeguradas(unit, leadId, lista) {
+      // `marcarNaoEntregue` guarda UM texto por paciente: duas respostas seguradas seguidas viram um só bloco, na ordem.
+      marcarNaoEntregue(unit.id, Number(leadId), lista.map((s) => s.reply.trim()).join('\n\n'), Date.now(), 'atropelada');
+      for (const s of lista) guardarRespostaSegurada(unit.id, Number(leadId), s.mensagemId);
     },
     async criarTarefa(unit, t, esperaMs) {
       const leadId = Number(t.leadId);
-      if (await avisoRecente(unit.id, leadId, REGRA_TAREFA_TURNO_PERDIDO, REALERTA_TAREFA_MS)) return 'ja_existia';
+      // Uma tarefa criada DEPOIS deste pedido já o cobre (e leva a mensagem). Uma anterior a ele, não: a recepção pode já tê-la
+      // concluído, e um segundo deploy no mesmo dia perderia outra mensagem sem aviso nenhum.
+      if (tarefaCobreOPedido(await marcadoEm(unit.id, leadId, REGRA_TAREFA_TURNO_PERDIDO), t.criadoEm)) return 'ja_existia';
       const { contato, texto } = ganchos.resumoDoPedido(t);
       const kommo = createKommoClient(unit);
       // O responsável do cartão; o `createTask` troca o login da consultoria pelo usuário da clínica (quando é um só).

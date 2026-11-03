@@ -10,6 +10,7 @@ const {
   janelaDeBusca,
   filtroDePerdidos,
   dadosDeEncerramento,
+  tarefaCobreOPedido,
   depsDeProducao,
   posseDaLideranca,
   turnoJaAvancou,
@@ -89,6 +90,8 @@ function mundo(opts: { agora?: number } = {}) {
     tarefas: [] as Array<{ unit: string; leadId: string; esperaMs: number }>,
     tarefasJaExistem: new Set<string>(),
     pedidosDeTarefa: 0,
+    chamadasDeRestauracao: 0,
+    liberadas: [] as string[],
     kommoRecusaTarefa: false,
     /** O que SAIU para o paciente (a "IA" do teste responde uma vez por turno). */
     saidas: [] as Array<{ leadId: string; texto: string; traceIds: string[] }>,
@@ -116,9 +119,9 @@ function mundo(opts: { agora?: number } = {}) {
       if (w.donas.has(k)) return w.donas.get(k)!;
       return t.unitId === 'u1' ? UNIT_A : UNIT_B;
     },
-    async respondidoNoBanco(unit, leadId, desde) {
+    async enviosDaIa(unit, leadId, desde) {
       w.unidadesConsultadas.push(unit.id);
-      return w.respostasNoBanco.some((r) => r.leadId === leadId && r.em >= desde);
+      return w.respostasNoBanco.filter((r) => r.leadId === leadId && r.em >= desde).map((r) => r.em);
     },
     async lerConversa() {
       if (!w.kommo) throw new Error('403 do Kommo');
@@ -137,8 +140,13 @@ function mundo(opts: { agora?: number } = {}) {
     async seguradasPendentes() {
       return w.seguradas;
     },
-    restaurarSegurada(_u, _l, s) {
-      w.restauradas.push(s);
+    restaurarSeguradas(_u, _l, lista) {
+      w.restauradas.push(...lista);
+      w.chamadasDeRestauracao++;
+    },
+    async liberarReivindicacao(traceId) {
+      w.reivindicados.delete(traceId);
+      w.liberadas.push(traceId);
     },
     async criarTarefa(unit, t, esperaMs) {
       w.pedidosDeTarefa++;
@@ -521,14 +529,28 @@ test('a tarefa é UMA por paciente, mesmo com vários pedidos perdidos', async (
   assert.equal(w.traces.every((t) => t.status === 'FAILED'), true);
 });
 
-test('o Kommo recusou a tarefa: o trace fecha FAILED dizendo que a tarefa não foi confirmada, sem repetir', async () => {
+test('o Kommo recusou a tarefa: o trace NÃO fecha (única pista do paciente sem resposta); a volta seguinte tenta de novo', async () => {
   const { w, deps } = mundo();
   w.foraDoHorario = true;
   w.kommoRecusaTarefa = true;
   w.traces.push(lead('t1', 'oi', FOTO));
-  const r = await recuperarTurnosPerdidos(deps, POSSE);
+  const voltas = new Map<string, number>();
+  let r = await recuperarTurnosPerdidos(deps, POSSE, { voltasSemDecisao: voltas });
   assert.equal(r.tarefasFalhas, 1);
-  assert.equal(motivoDe(w, 't1'), `${MARCA_ABANDONADO}:fora_do_horario:tarefa_nao_confirmada`);
+  assert.equal(w.traces[0]!.status, 'RUNNING');
+  assert.equal(voltas.get('t1'), 1);
+
+  w.kommoRecusaTarefa = false; // o Kommo voltou
+  r = await recuperarTurnosPerdidos(deps, POSSE, { voltasSemDecisao: voltas });
+  assert.equal(r.tarefas, 1);
+  assert.equal(motivoDe(w, 't1'), `${MARCA_ABANDONADO}:fora_do_horario`);
+});
+
+test('tarefaCobreOPedido: só a tarefa criada DEPOIS do pedido o cobre (um segundo deploy no mesmo dia não fica sem aviso)', () => {
+  const pedido = new Date('2026-10-30T20:01:05Z');
+  assert.equal(tarefaCobreOPedido(null, pedido), false);
+  assert.equal(tarefaCobreOPedido(new Date(pedido.getTime() - 5 * 3600_000), pedido), false, 'tarefa de 5 h antes, talvez já concluída');
+  assert.equal(tarefaCobreOPedido(new Date(pedido.getTime() + 60_000), pedido), true);
 });
 
 // ── (5) uma vez só ─────────────────────────────────────────────────────────────────────────────────────
@@ -736,5 +758,61 @@ test('parar() depois de ler o Kommo e antes de reivindicar: nada é reivindicado
   };
   await recuperarTurnosPerdidos(deps, POSSE, { parar: () => leu });
   assert.equal(w.reivindicados.size, 0);
+  assert.equal(w.liberadas.length, 0, 'nem chegou a reivindicar (não é reivindicar e devolver)');
   assert.equal(w.retomadas.length, 0);
+});
+
+// ── parar depois de reivindicar, volta interrompida, várias seguradas ──────────────────────────────────
+
+test('parar() depois de ganhar a reivindicação e antes de retomar: devolve a reivindicação (a próxima volta refaz)', async () => {
+  const { w, deps } = mundo();
+  w.traces.push(lead('a', 'um', FOTO));
+  w.traces.push(lead('b', 'dois', new Date(FOTO.getTime() + 5_000)));
+  await recuperarTurnosPerdidos(deps, POSSE, { parar: () => w.reivindicados.size + w.liberadas.length >= 2 });
+  assert.deepEqual(w.liberadas.sort(), ['a', 'b']);
+  assert.equal(w.reivindicados.size, 0, 'nada fica gasto à toa');
+  assert.equal(w.retomadas.length, 0);
+  // o próximo líder (ou a próxima volta) consegue retomar
+  const r = await recuperarTurnosPerdidos(deps, POSSE);
+  assert.equal(r.retomados, 2);
+  await dormir(150);
+});
+
+test('volta interrompida por parar() não gasta volta sem decisão de quem nem foi avaliado', async () => {
+  const { w, deps } = mundo();
+  w.traces.push(lead('a', 'oi', FOTO));
+  w.traces.push(lead('b', 'oi', new Date(FOTO.getTime() + 1_000), { leadId: '2' }));
+  const voltas = new Map<string, number>();
+  await recuperarTurnosPerdidos(deps, POSSE, { voltasSemDecisao: voltas, parar: () => true });
+  assert.equal(voltas.size, 0);
+});
+
+test('duas respostas seguradas voltam juntas numa só chamada (a memória guarda um texto por paciente)', async () => {
+  const { w, deps } = mundo();
+  w.traces.push(lead('t1', 'oi', FOTO));
+  w.seguradas = [{ reply: 'primeira', mensagemId: 'm1' }, { reply: 'segunda', mensagemId: 'm2' }];
+  await recuperarTurnosPerdidos(deps, POSSE);
+  await dormir(120);
+  assert.equal(w.chamadasDeRestauracao, 1);
+  assert.deepEqual(w.restauradas.map((x) => x.reply), ['primeira', 'segunda']);
+});
+
+test('o banco é lido UMA vez por paciente, não por trace', async () => {
+  const { w, deps } = mundo();
+  for (let i = 0; i < 5; i++) w.traces.push(lead(`t${i}`, `m${i}`, new Date(FOTO.getTime() + i * 1_000)));
+  await recuperarTurnosPerdidos(deps, POSSE);
+  await dormir(150);
+  assert.equal(w.unidadesConsultadas.length, 1);
+});
+
+test('resposta da IA no banco entre dois pedidos: só o primeiro é "já respondido"', async () => {
+  const { w, deps } = mundo();
+  w.traces.push(lead('a', 'primeira', FOTO));
+  w.traces.push(lead('b', 'segunda', new Date(FOTO.getTime() + 24_000)));
+  w.respostasNoBanco.push({ leadId: '5142896', em: new Date(FOTO.getTime() + 10_000) });
+  const r = await recuperarTurnosPerdidos(deps, POSSE);
+  assert.equal(motivoDe(w, 'a'), `${MARCA_ABANDONADO}:ja_respondida`);
+  assert.equal(r.retomados, 1);
+  assert.deepEqual(w.retomadas, ['b']);
+  await dormir(120);
 });
