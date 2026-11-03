@@ -88,6 +88,14 @@ export const REGRAS_POR_UNIDADE: Record<string, RegrasDaUnidade> = {
       '120250490002070207': CONTA_CAXIAS,
       '120250490034170207': CONTA_CAXIAS,
       '120250490098340207': CONTA_CAXIAS,
+      // Anúncios novos que deixaram 35 cartões abertos sem unidade (03/11). O token da Meta de Petrópolis lê a conta
+      // inteira de Petrópolis e devolve 400 para estes — são da conta de Caxias, que é de outro portfólio e ainda não
+      // foi compartilhada com o usuário de sistema. Mesmo sufixo …0207 de todos os anúncios de Caxias conferidos.
+      '120250266913250207': CONTA_CAXIAS,
+      '120250473853290207': CONTA_CAXIAS,
+      '120250490052450207': CONTA_CAXIAS,
+      '120250490083270207': CONTA_CAXIAS,
+      '120250490098330207': CONTA_CAXIAS,
     },
     // Só o 24 decide. O 21 fica vazio para a SDR: o anúncio de Petrópolis também traz DDD 21 (ver o cabeçalho).
     ddd: { '24': 'Petrópolis' },
