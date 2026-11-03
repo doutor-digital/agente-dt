@@ -186,7 +186,7 @@ export const AUTOMACOES: readonly Automacao[] = [
     oQueFaz:
       'Quando o paciente em tratamento toca "Confirmar presença" no lembrete da sessão (24 h ou 3 h antes da ◷ Próxima sessão), o sistema responde sozinho e marca a sessão como CONFIRMADA na franquia. "Preciso remarcar" vira tarefa para a equipe com a resposta ao paciente.',
     pegadinha:
-      'Acha a sessão pelo ⚙ idTreatment (franquia) do cartão e pelo horário da ◷ Próxima sessão — se não bater exatamente, não confirma nada na franquia: responde e abre tarefa para a equipe confirmar na agenda. Responde mesmo com a Sofia calada na etapa, porque é resposta a um lembrete que nós mandamos.',
+      'Acha a sessão pelo horário da ◷ Próxima sessão entre os agendamentos do paciente na franquia (todos os tratamentos dele) — se não bater exatamente, não confirma nada na franquia: responde e abre tarefa para a equipe confirmar na agenda. Se o paciente tem mais de um atendimento no mesmo dia, a resposta diz todos os horários, manda chegar no primeiro, e confirma todos (o que a franquia não aceitar vira tarefa). Responde mesmo com a Sofia calada na etapa, porque é resposta a um lembrete que nós mandamos.',
     risco: 'manda-mensagem',
     temSeco: true,
     quandoVazio: 'desligado',
@@ -347,6 +347,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     temSeco: true,
     quandoVazio: 'desligado',
     arquivo: 'src/lib/franquia-sync-worker.ts',
+  },
+  {
+    id: 'chegada-do-dia',
+    chave: 'CHEGADA_DO_DIA_SLUGS',
+    nome: 'Chegada do dia: a ◷ Próxima sessão é o 1º atendimento do paciente',
+    oQueFaz:
+      'Paciente com dois tratamentos (cervical + lombar) tem duas sessões em sequência no mesmo dia, 15h30 e 16h. Com esta chave, a ◷ Próxima sessão do cartão passa a ser o PRIMEIRO atendimento do paciente no dia (todos os tratamentos, avaliação e retorno incluídos), e não o da sessão do tratamento que está no cartão — que era o 2º, e o paciente chegava meia hora atrasado seguindo o lembrete. (A resposta ao "Confirmar presença" que diz todos os horários e confirma todas as sessões do dia é da chave "Confirmar presença das sessões", não desta.)',
+    pegadinha:
+      'Só mexe no campo ◷ Próxima sessão, e só quando a franquia-sessoes está ligada na unidade (é ela que escreve o campo). Muda o valor que o gatilho de lembrete do Kommo lê: um cartão cujo horário passa de 16h para 15h30 pode ser relido pelo gatilho — por isso ligue primeiro em "Só no papel" (aparece na tela quantos cartões mudariam) e depois numa unidade só. Depois que o primeiro atendimento do dia começa, o campo NÃO é movido para o segundo (evita lembrete retroativo); ele avança sozinho no dia seguinte. Não muda a ◷ Data da Consulta nem o texto dos modelos (WABA) do Kommo: o modelo mostra só o campo, ou seja, o horário de chegada.',
+    risco: 'escreve-campo',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/chegada-do-dia.ts',
   },
   {
     id: 'franquia-tela',

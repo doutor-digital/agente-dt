@@ -14,6 +14,7 @@ import {
   lerChaveDoToque,
   podeSerBotaoDoLembrete,
   provaDoLembrete,
+  textoRepeticao,
   textoRespostaAoLembrete,
   tratarBotaoDoLembrete,
   type DepsLembrete,
@@ -311,20 +312,25 @@ test('escolherAgendamento: o do MESMO horário do cartão, do tipo certo e de p�
   assert.equal(escolherAgendamento({ schedules: todas, tipo: 'consulta', quandoEpoch: SESSAO_S, idTreatment: null, tz: TZ })?.idSchedule, 9003);
 });
 
-test('escolherAgendamento: horário que não bate, ou dois no mesmo horário → não confirma no escuro', () => {
+test('escolherAgendamento: horário que não bate → não confirma no escuro; dois no mesmo horário → o do tratamento do cartão, senão o primeiro', () => {
   const sessao = agendamento({ utc: '2026-10-17T13:00:00Z' });
   assert.equal(escolherAgendamento({ schedules: [sessao], tipo: 'sessao', quandoEpoch: SESSAO_S, idTreatment: 555, tz: TZ }), null);
   const a = agendamento({ utc: '2026-10-17T12:00:00Z', idTreatment: null });
   const b = agendamento({ utc: '2026-10-17T12:00:00Z', idSchedule: 9010, idTreatment: null });
-  assert.equal(escolherAgendamento({ schedules: [a, b], tipo: 'sessao', quandoEpoch: SESSAO_S, idTreatment: 555, tz: TZ }), null);
+  // os dois são do mesmo paciente: quem confirma é o DIA inteiro (ver os testes de dois atendimentos), então a escolha só abre o dia
+  assert.equal(escolherAgendamento({ schedules: [a, b], tipo: 'sessao', quandoEpoch: SESSAO_S, idTreatment: 555, tz: TZ })?.idSchedule, 9001);
+  const doCartao = agendamento({ utc: '2026-10-17T12:00:00Z', idSchedule: 9012, idTreatment: 555 });
+  const doOutro = agendamento({ utc: '2026-10-17T12:00:00Z', idSchedule: 9013, idTreatment: 999 });
+  assert.equal(escolherAgendamento({ schedules: [doOutro, doCartao], tipo: 'sessao', quandoEpoch: SESSAO_S, idTreatment: 555, tz: TZ })?.idSchedule, 9012);
 });
 
-test('escolherAgendamento: campo só com o dia (meia-noite) aceita o ÚNICO daquele dia', () => {
+test('escolherAgendamento: campo só com o dia (meia-noite) aceita o único daquele dia — e, com vários, o PRIMEIRO (o dia inteiro é confirmado depois)', () => {
   const meiaNoiteLocal = Math.floor(Date.parse('2026-10-17T03:00:00Z') / 1000);
   const sessao = agendamento({ utc: '2026-10-17T12:00:00Z' });
   assert.equal(escolherAgendamento({ schedules: [sessao], tipo: 'sessao', quandoEpoch: meiaNoiteLocal, idTreatment: 555, tz: TZ })?.idSchedule, 9001);
   const outra = agendamento({ utc: '2026-10-17T18:00:00Z', idSchedule: 9011 });
-  assert.equal(escolherAgendamento({ schedules: [sessao, outra], tipo: 'sessao', quandoEpoch: meiaNoiteLocal, idTreatment: 555, tz: TZ }), null);
+  assert.equal(escolherAgendamento({ schedules: [outra, sessao], tipo: 'sessao', quandoEpoch: meiaNoiteLocal, idTreatment: 555, tz: TZ })?.idSchedule, 9001);
+  assert.equal(escolherAgendamento({ schedules: [outra, sessao], tipo: 'sessao', quandoEpoch: Math.floor(Date.parse('2026-10-18T03:00:00Z') / 1000), idTreatment: 555, tz: TZ }), null, 'dia sem nenhum: null');
 });
 
 test('textos: sessão e consulta com dia da semana e hora; remarcar sem prometer horário', () => {
@@ -607,4 +613,294 @@ test('franquia fora do ar: responde, não confirma e avisa a equipe (o "não sei
   assert.deepEqual(c.r.confirmados, []);
   assert.equal(c.r.tarefas.length, 1);
   assert.match(c.r.respostas[0], /sábado, 17\/10 às 09:00/);
+});
+
+// ── dois atendimentos em sequência (Açailândia, 03/11/2026, cartão 24830668) ──────────────────────
+// Maria Aparecida (idClient 353493): tratamentos 125336 (15h30) e 125337 (16h), nos mesmos dias. O cartão guarda
+// o idTreatment 125337 e a ◷ Próxima sessão das 16h. O lembrete e a resposta falavam 16h; ela chegava atrasada.
+
+const AGORA_2 = new Date('2026-11-02T19:00:00Z'); // 02/11 16:00 local, véspera
+const em = (dia: string, hora: string) => Math.floor(Date.parse(`${dia}T${hora}:00-03:00`) / 1000);
+let seqMaria = 5_000_000;
+function atendimentoMaria(dia: string, hora: string, trat: number, status: number = SPINE_STATUS.AGENDADO, over: Partial<SpineSchedule> = {}): SpineSchedule {
+  return agendamento({ utc: new Date(em(dia, hora) * 1000).toISOString(), idSchedule: seqMaria++, idTreatment: trat, idStatus: status, clientName: 'MARIA APARECIDA', ...over });
+}
+const LEMBRETE_1530 = 'Olá, Maria! A sua sessão é amanhã, 03/11, às 15:30. Confirma a sua presença?';
+const LEMBRETE_1600 = 'Olá, Maria! A sua sessão é amanhã, 03/11, às 16:00. Confirma a sua presença?';
+function diaDeMaria() {
+  return [
+    atendimentoMaria('2026-11-03', '15:30', 125336),
+    atendimentoMaria('2026-11-03', '16:00', 125337),
+    atendimentoMaria('2026-11-06', '15:30', 125336),
+    atendimentoMaria('2026-11-06', '16:00', 125337),
+  ];
+}
+
+test('DOIS EM SEQUÊNCIA: cartão com a chegada (15h30) → diz os dois horários, manda chegar às 15h30 e confirma OS DOIS na franquia', async () => {
+  const agenda = diaDeMaria();
+  const c = cenario({
+    agora: AGORA_2,
+    lead: cartao({ 2: em('2026-11-03', '15:30'), 3: 125337, 4: 353493 }),
+    conversa: [saida(LEMBRETE_1530, horasAntes(0.5, AGORA_2)), entrada('Confirmar presença', AGORA_2)],
+    schedules: agenda,
+  });
+  const r = await c.tocar('Confirmar presença');
+  assert.equal(r?.tipo, 'sessao');
+  assert.equal(r?.idSchedule, agenda[0].idSchedule);
+  assert.deepEqual(c.r.confirmados, [agenda[0].idSchedule, agenda[1].idSchedule], 'as duas sessões do dia, e só as do dia (nada de 06/11)');
+  assert.deepEqual(r?.outras, [{ idSchedule: agenda[1].idSchedule, franquia: 'confirmada' }]);
+  assert.equal(c.r.respostas.length, 1);
+  assert.equal(
+    c.r.respostas[0],
+    'Presença confirmada, Maria! 💙 Suas sessões de terça, 03/11, são às 15h30 e 16h — chegue às 15h30. Qualquer coisa é só me chamar por aqui.',
+  );
+  assert.equal(c.r.tarefas.length, 0);
+});
+
+test('DOIS EM SEQUÊNCIA: cartão ainda com as 16h (valor de antes da correção) e lembrete de 16:00 → mesmo resultado, nunca "te esperamos às 16h"', async () => {
+  const agenda = diaDeMaria();
+  const c = cenario({
+    agora: AGORA_2,
+    lead: cartao({ 2: em('2026-11-03', '16:00'), 3: 125337, 4: 353493 }),
+    conversa: [saida(LEMBRETE_1600, horasAntes(0.5, AGORA_2)), entrada('Confirmar presença', AGORA_2)],
+    schedules: agenda,
+  });
+  const r = await c.tocar('Confirmar presença');
+  assert.equal(r?.tipo, 'sessao');
+  assert.equal(r?.idSchedule, agenda[1].idSchedule, 'o cartão apontava a das 16h');
+  assert.deepEqual([...c.r.confirmados].sort(), [agenda[0].idSchedule, agenda[1].idSchedule].sort());
+  assert.match(c.r.respostas[0], /sessões de terça, 03\/11, são às 15h30 e 16h — chegue às 15h30/);
+  assert.doesNotMatch(c.r.respostas[0], /Te esperamos na sua sessão/);
+});
+
+test('o tratamento do cartão é 125337 e a chegada é a sessão do 125336: ela NÃO é descartada por causa do ⚙ idTreatment', async () => {
+  const c = cenario({
+    agora: AGORA_2,
+    lead: cartao({ 2: em('2026-11-03', '15:30'), 3: 125337, 4: 353493 }),
+    conversa: [saida(LEMBRETE_1530, horasAntes(0.5, AGORA_2)), entrada('Confirmar presença', AGORA_2)],
+    schedules: diaDeMaria(),
+  });
+  const r = await c.tocar('Confirmar presença');
+  assert.equal(r?.franquia, 'confirmada');
+});
+
+test('UM DIA SÓ COM UMA SESSÃO (09/11, 16h): a mensagem e a confirmação são as de sempre', async () => {
+  const sozinha = atendimentoMaria('2026-11-09', '16:00', 125337);
+  const agora = new Date('2026-11-08T19:00:00Z');
+  const c = cenario({
+    agora,
+    lead: cartao({ 2: em('2026-11-09', '16:00'), 3: 125337, 4: 353493 }),
+    conversa: [saida('Olá, Maria! A sua sessão é amanhã, 09/11, às 16:00. Confirma a sua presença?', horasAntes(0.5, agora)), entrada('Confirmar presença', agora)],
+    schedules: [sozinha, ...diaDeMaria()],
+  });
+  const r = await c.tocar('Confirmar presença');
+  assert.deepEqual(c.r.confirmados, [sozinha.idSchedule]);
+  assert.equal(r?.outras, undefined);
+  assert.match(c.r.respostas[0], /^Presença confirmada, Maria! 💙 Te esperamos na sua sessão segunda, 09\/11 às 16:00\./);
+});
+
+test('DESMARCADO NO MEIO: a sessão desmarcada não entra na mensagem nem é confirmada', async () => {
+  const [a, b] = [atendimentoMaria('2026-11-03', '15:30', 125336, SPINE_STATUS.DESMARCADO), atendimentoMaria('2026-11-03', '16:00', 125337)];
+  const c = cenario({
+    agora: AGORA_2,
+    lead: cartao({ 2: em('2026-11-03', '16:00'), 3: 125337, 4: 353493 }),
+    conversa: [saida(LEMBRETE_1600, horasAntes(0.5, AGORA_2)), entrada('Confirmar presença', AGORA_2)],
+    schedules: [a, b],
+  });
+  const r = await c.tocar('Confirmar presença');
+  assert.deepEqual(c.r.confirmados, [b.idSchedule]);
+  assert.equal(r?.outras, undefined);
+  assert.match(c.r.respostas[0], /Te esperamos na sua sessão terça, 03\/11 às 16:00/);
+});
+
+test('UM DELES JÁ CONFIRMADO na franquia: confirma só o que falta, sem alertar a equipe', async () => {
+  const [a, b] = [atendimentoMaria('2026-11-03', '15:30', 125336, SPINE_STATUS.CONFIRMADO), atendimentoMaria('2026-11-03', '16:00', 125337)];
+  const c = cenario({
+    agora: AGORA_2,
+    lead: cartao({ 2: em('2026-11-03', '15:30'), 3: 125337, 4: 353493 }),
+    conversa: [saida(LEMBRETE_1530, horasAntes(0.5, AGORA_2)), entrada('Confirmar presença', AGORA_2)],
+    schedules: [a, b],
+  });
+  const r = await c.tocar('Confirmar presença');
+  assert.deepEqual(c.r.confirmados, [b.idSchedule]);
+  assert.equal(r?.franquia, 'ja_confirmada');
+  assert.deepEqual(r?.outras, [{ idSchedule: b.idSchedule, franquia: 'confirmada' }]);
+  assert.equal(c.r.tarefas.length, 0);
+  assert.match(c.r.respostas[0], /15h30 e 16h — chegue às 15h30/);
+});
+
+test('A FRANQUIA RECUSA A SEGUNDA: a primeira fica confirmada, a segunda vira tarefa para a equipe (nada se perde em silêncio)', async () => {
+  const agenda = diaDeMaria();
+  const c = cenario({
+    agora: AGORA_2,
+    lead: cartao({ 2: em('2026-11-03', '15:30'), 3: 125337, 4: 353493 }),
+    conversa: [saida(LEMBRETE_1530, horasAntes(0.5, AGORA_2)), entrada('Confirmar presença', AGORA_2)],
+    schedules: agenda,
+  });
+  c.deps.franquia = {
+    confirmSchedule: async (_u, id) => {
+      if (id === agenda[1].idSchedule) return { ok: false, error: 'recusado' };
+      c.r.confirmados.push(id);
+      return { ok: true };
+    },
+    esquecerConsulta: () => undefined,
+  };
+  const r = await c.tocar('Confirmar presença');
+  assert.deepEqual(c.r.confirmados, [agenda[0].idSchedule]);
+  assert.equal(r?.franquia, 'confirmada');
+  assert.deepEqual(r?.outras, [{ idSchedule: agenda[1].idSchedule, franquia: 'falhou' }]);
+  assert.equal(c.r.tarefas.length, 1);
+  assert.match(c.r.tarefas[0], /não consegui confirmar na franquia/);
+  assert.match(c.r.tarefas[0], /16:00/);
+});
+
+test('"PRECISO REMARCAR" com dois horários no dia: a tarefa lembra a equipe dos dois', async () => {
+  const c = cenario({
+    agora: AGORA_2,
+    lead: cartao({ 2: em('2026-11-03', '15:30'), 3: 125337, 4: 353493 }),
+    conversa: [saida(LEMBRETE_1530, horasAntes(0.5, AGORA_2)), entrada('Preciso remarcar', AGORA_2)],
+    schedules: diaDeMaria(),
+  });
+  await c.tocar('Preciso remarcar');
+  assert.deepEqual(c.r.confirmados, []);
+  assert.equal(c.r.tarefas.length, 1);
+  assert.match(c.r.tarefas[0], /O paciente tem 2 horários nesse dia \(15h30 e 16h\): combinar todos\./);
+  assert.match(c.r.respostas[0], /^Sem problema, Maria! 🙏/);
+});
+
+test('só no papel com dois atendimentos: não responde, não confirma, e o papel diz que seriam os dois', async () => {
+  _semearParaTeste([{ slug: SLUG, automacao: 'confirmar-sessao', estado: 'seco' }]);
+  const c = cenario({
+    agora: AGORA_2,
+    lead: cartao({ 2: em('2026-11-03', '15:30'), 3: 125337, 4: 353493 }),
+    conversa: [saida(LEMBRETE_1530, horasAntes(0.5, AGORA_2)), entrada('Confirmar presença', AGORA_2)],
+    schedules: diaDeMaria(),
+  });
+  const r = await c.tocar('Confirmar presença', {} as NodeJS.ProcessEnv);
+  assert.equal(r, null);
+  assert.equal(c.r.respostas.length, 0);
+  assert.deepEqual(c.r.confirmados, []);
+  assert.equal(c.r.simulados.length, 1);
+  assert.match(String(c.r.simulados[0].alvo), /2 atendimentos do dia \(15h30 e 16h\) CONFIRMADOS na franquia/);
+});
+
+test('hora do lembrete que não é de nenhum atendimento do dia (11:00): continua "incerto" — não confirma', async () => {
+  const c = cenario({
+    agora: AGORA_2,
+    lead: cartao({ 2: em('2026-11-03', '15:30'), 3: 125337, 4: 353493 }),
+    conversa: [saida('A sua sessão é amanhã, 03/11, às 11:00.', horasAntes(0.5, AGORA_2)), entrada('Confirmar presença', AGORA_2)],
+    schedules: diaDeMaria(),
+  });
+  const r = await c.tocar('Confirmar presença');
+  assert.equal(r?.tipo, 'incerto');
+  assert.deepEqual(c.r.confirmados, []);
+});
+
+test('campo do cartão só com o DIA (meia-noite): abre o dia pelo primeiro e confirma os dois, com os dois horários na resposta', async () => {
+  const agenda = diaDeMaria();
+  const c = cenario({
+    agora: AGORA_2,
+    lead: cartao({ 2: em('2026-11-03', '00:00'), 3: 125337, 4: 353493 }),
+    conversa: [saida('Olá, Maria! A sua sessão é amanhã, 03/11. Confirma a sua presença?', horasAntes(0.5, AGORA_2)), entrada('Confirmar presença', AGORA_2)],
+    schedules: agenda,
+  });
+  const r = await c.tocar('Confirmar presença');
+  assert.equal(r?.tipo, 'sessao');
+  assert.deepEqual(c.r.confirmados, [agenda[0].idSchedule, agenda[1].idSchedule]);
+  assert.match(c.r.respostas[0], /sessões de terça, 03\/11, são às 15h30 e 16h — chegue às 15h30/);
+});
+
+test('dois agendamentos no MESMO horário: confirma os dois, e a mensagem continua a de um horário só', async () => {
+  const a = atendimentoMaria('2026-11-03', '15:30', 125336);
+  const b = atendimentoMaria('2026-11-03', '15:30', 125337);
+  const c = cenario({
+    agora: AGORA_2,
+    lead: cartao({ 2: em('2026-11-03', '15:30'), 3: 125337, 4: 353493 }),
+    conversa: [saida(LEMBRETE_1530, horasAntes(0.5, AGORA_2)), entrada('Confirmar presença', AGORA_2)],
+    schedules: [a, b],
+  });
+  const r = await c.tocar('Confirmar presença');
+  assert.equal(r?.idSchedule, b.idSchedule, 'o do tratamento do cartão');
+  assert.deepEqual([...c.r.confirmados].sort(), [a.idSchedule, b.idSchedule].sort());
+  assert.match(c.r.respostas[0], /Te esperamos na sua sessão terça, 03\/11 às 15:30/);
+});
+
+test('SESSÃO + RETORNO no mesmo dia: a resposta diz os dois horários, mas só a SESSÃO (o que o lembrete anunciou) é confirmada — o retorno vira tarefa', async () => {
+  const retorno = atendimentoMaria('2026-11-03', '15:00', 0, SPINE_STATUS.AGENDADO, { categoryName: 'Retorno após tratamento', idTreatment: null });
+  const sessao = atendimentoMaria('2026-11-03', '16:00', 125337);
+  const c = cenario({
+    agora: AGORA_2,
+    lead: cartao({ 2: em('2026-11-03', '16:00'), 3: 125337, 4: 353493 }),
+    conversa: [saida(LEMBRETE_1600, horasAntes(0.5, AGORA_2)), entrada('Confirmar presença', AGORA_2)],
+    schedules: [retorno, sessao],
+  });
+  const r = await c.tocar('Confirmar presença');
+  assert.deepEqual(c.r.confirmados, [sessao.idSchedule]);
+  assert.deepEqual(r?.outras, [{ idSchedule: retorno.idSchedule, franquia: 'outra_consulta' }]);
+  assert.match(c.r.respostas[0], /Seus atendimentos de terça, 03\/11, são às 15h e 16h — chegue às 15h\./);
+  assert.equal(c.r.tarefas.length, 1);
+  assert.match(c.r.tarefas[0], /15:00/);
+});
+
+test('REPETIÇÃO do toque com dois horários: fala da CHEGADA (não repete o erro das 16h) — mesmo se o cartão virou de 16h para 15h30 entre os toques', async () => {
+  const agenda = diaDeMaria();
+  const lead = cartao({ 2: em('2026-11-03', '16:00'), 3: 125337, 4: 353493 });
+  const c = cenario({
+    agora: AGORA_2,
+    lead,
+    conversa: [saida(LEMBRETE_1600, horasAntes(0.5, AGORA_2)), entrada('Confirmar presença', AGORA_2)],
+    schedules: agenda,
+  });
+  await c.tocar('Confirmar presença');
+  // o robô passa a gravar a chegada no cartão e a paciente toca de novo
+  lead.custom_fields_values = [{ field_id: 2, values: [{ value: em('2026-11-03', '15:30') }] }, { field_id: 3, values: [{ value: 125337 }] }, { field_id: 4, values: [{ value: 353493 }] }];
+  const r = await c.tocar('Confirmar presença');
+  assert.equal(r?.resposta, 'repetida');
+  assert.equal(c.r.respostas.length, 2);
+  // este toque é reconhecido pela marca gravada no 1º (que guarda a CHEGADA): a repetição fala da chegada, nunca das 16h
+  assert.equal(c.r.respostas[1], 'Já está confirmado, Maria! ✅ Te esperamos na sua sessão terça, 03/11 às 15:30. Qualquer coisa é só me chamar por aqui.');
+  assert.deepEqual(c.r.confirmados.length, 2, 'a franquia não é tocada de novo');
+});
+
+test('lembrete de 16:00 do RETORNO (outro tipo) não passa pela checagem de hora da sessão: segue "incerto", nada é confirmado', async () => {
+  const retorno = atendimentoMaria('2026-11-03', '16:00', 0, SPINE_STATUS.AGENDADO, { categoryName: 'Retorno após tratamento', idTreatment: null });
+  const sessao = atendimentoMaria('2026-11-03', '15:30', 125336);
+  const c = cenario({
+    agora: AGORA_2,
+    lead: cartao({ 2: em('2026-11-03', '15:30'), 3: 125336, 4: 353493 }),
+    conversa: [saida('A sua sessão é amanhã, 03/11, às 16:00.', horasAntes(0.5, AGORA_2)), entrada('Confirmar presença', AGORA_2)],
+    schedules: [retorno, sessao],
+  });
+  const r = await c.tocar('Confirmar presença');
+  assert.equal(r?.tipo, 'incerto');
+  assert.deepEqual(c.r.confirmados, []);
+});
+
+test('o 2º agendamento do dia não traz dia/hora legível: a equipe é avisada (nada some em silêncio)', async () => {
+  const a = atendimentoMaria('2026-11-03', '15:30', 125336);
+  const b = atendimentoMaria('2026-11-03', '16:00', 125337, SPINE_STATUS.AGENDADO, { timeLocal: null });
+  const c = cenario({
+    agora: AGORA_2,
+    lead: cartao({ 2: em('2026-11-03', '15:30'), 3: 125337, 4: 353493 }),
+    conversa: [saida(LEMBRETE_1530, horasAntes(0.5, AGORA_2)), entrada('Confirmar presença', AGORA_2)],
+    schedules: [a, b],
+  });
+  const r = await c.tocar('Confirmar presença');
+  assert.deepEqual(c.r.confirmados, [a.idSchedule]);
+  assert.deepEqual(r?.outras, [{ idSchedule: b.idSchedule, franquia: 'sem_consulta' }]);
+  assert.equal(c.r.tarefas.length, 1);
+});
+
+test('textoRepeticao com vários horários, e a concordância de "Seus atendimentos" × "Suas sessões"', () => {
+  const sessoes = { dia: '2026-11-03', atendimentos: [], horarios: ['15:30', '16:00'], chegada: '15:30', natureza: 'sessoes' as const };
+  assert.equal(
+    textoRepeticao({ resposta: 'confirmou', tipo: 'sessao', nome: 'Maria Silva', quando: '2026-11-03T16:00', varios: sessoes }),
+    'Já está confirmado, Maria! ✅ Suas sessões de terça, 03/11, são às 15h30 e 16h — chegue às 15h30. Qualquer coisa é só me chamar por aqui.',
+  );
+  assert.match(
+    textoRespostaAoLembrete({ tipo: 'sessao', resposta: 'confirmou', nome: 'Maria Silva', quando: null, varios: { ...sessoes, natureza: 'misto' } }),
+    /^Presença confirmada, Maria! 💙 Seus atendimentos de terça, 03\/11, são às 15h30 e 16h — chegue às 15h30\./,
+  );
+  // um horário só: a repetição é a de sempre
+  assert.match(textoRepeticao({ resposta: 'confirmou', tipo: 'sessao', nome: null, quando: '2026-11-03T16:00', varios: { ...sessoes, horarios: ['16:00'] } }), /^Já está confirmado! ✅ Te esperamos na sua sessão terça, 03\/11 às 16:00\./);
 });
