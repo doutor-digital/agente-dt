@@ -324,10 +324,15 @@ export function avaliarComprovante(dados: DadosDoComprovante | null, ctx: Contex
     return rejeita('equipe', 'sem_favorecido', 'o comprovante não traz o nome nem o CPF/CNPJ do favorecido de forma legível');
   }
   if (doc !== 'igual' && !nomeBate) {
+    // Titular sem cadastro, ou nome PARECIDO (começa igual, mas não é igual): não dá para dizer ao paciente que pagou a outra pessoa. A equipe confere.
+    if (palavrasDoNome(ctx.pixHolder).length === 0) return rejeita('equipe', 'sem_favorecido', 'o titular da chave Pix não está cadastrado na unidade: não há com o que comparar o favorecido');
+    if (nomeConfere(dados.favorecidoNome, ctx.pixHolder)) {
+      return rejeita('equipe', 'favorecido_diferente', `favorecido «${dados.favorecidoNome}» começa igual ao da unidade («${ctx.pixHolder}») mas não é igual, e o recibo não traz CPF/CNPJ que confirme`);
+    }
     return rejeita(
       'reenviar',
       'favorecido_diferente',
-      `favorecido «${dados.favorecidoNome ?? '?'}» não é o da unidade («${ctx.pixHolder ?? 'titular não cadastrado'}»)` + (doc === 'parcial' ? ' (documento mascarado confere, nome não)' : ''),
+      `favorecido «${dados.favorecidoNome ?? '?'}» não é o da unidade («${ctx.pixHolder}»)` + (doc === 'parcial' ? ' (documento mascarado confere, nome não)' : ''),
     );
   }
 

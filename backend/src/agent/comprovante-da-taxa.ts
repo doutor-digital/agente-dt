@@ -197,6 +197,9 @@ export interface ContextoDosGanchos {
   abrirTarefa?: typeof abrirTarefaParaEquipe;
 }
 
+/** O que `agendar_consulta` devolve quando a franquia deu erro ao CRIAR a consulta (agenda-tools.ts, «Não consegui marcar às …»). */
+const RESPOSTA_DE_ERRO_AO_CRIAR = /^Não consegui marcar às/;
+
 const NAO_MARCOU =
   'A consulta NÃO foi marcada. NÃO chame agendar_consulta de novo neste turno e NÃO diga que está confirmada, agendada, reservada ou garantida, nem que o pagamento foi confirmado. ';
 
@@ -260,8 +263,14 @@ export function criarGanchosDaTaxa(ctx: ContextoDosGanchos): GanchosDoComprovant
     async depois(aceito, args, resultado) {
       const marcou = RESPOSTA_QUE_MARCA.test(resultado.trim());
       if (!marcou) {
-        // a franquia recusou (horário ocupado…): a reserva é desfeita e o comprovante segue valendo, para este paciente, em outro horário
-        await registro.liberar(aceito.e2e).catch((err) => logger.warn({ err: String(err) }, 'comprovante: não consegui desfazer a reserva do E2E'));
+        // «Não consegui marcar às…» = a franquia respondeu com erro/timeout ao CRIAR a consulta: ela pode ter criado antes do erro. A reserva
+        // FICA (a equipe vê no CRM). As demais recusas (horário ocupado, fora da grade, cadastro, feriado…) vêm ANTES de criar: a reserva é
+        // desfeita e o comprovante segue valendo, para este paciente, em outro horário.
+        if (RESPOSTA_DE_ERRO_AO_CRIAR.test(resultado.trim())) {
+          logger.warn({ e2e: aceito.e2e, unit: ctx.unit.slug, leadId: ctx.leadId }, 'comprovante: a franquia respondeu com erro ao criar a consulta — o E2E fica reservado, a equipe decide');
+        } else {
+          await registro.liberar(aceito.e2e).catch((err) => logger.warn({ err: String(err) }, 'comprovante: não consegui desfazer a reserva do E2E'));
+        }
         return resultado;
       }
       const data = String(args.data ?? '');

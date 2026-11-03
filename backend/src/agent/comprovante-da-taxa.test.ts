@@ -616,3 +616,13 @@ test('chegou comprovante NESTE turno mas sem leitura guardada (banco falhou ao g
   const so = decidirTrava({ ...turnoDa([humano('já paguei')]), noTurno: false }, { exigePagamento: true, taxaEsperada: 100 });
   assert.equal(!so.libera && so.texto, RECUSA_SEM_COMPROVANTE_DA_TAXA);
 });
+
+test('a franquia respondeu COM ERRO ao criar a consulta («Não consegui marcar às…»): ela pode ter criado antes do erro — a reserva do E2E FICA', async () => {
+  const banco = bancoDeMentira();
+  const falha = cenario(VALIDA, { banco, respostaDaFerramenta: 'Não consegui marcar às 15:30 (timeout). PARE AQUI: não chame agendar_consulta de novo neste turno.' });
+  await falha.chamar();
+  assert.equal(falha.tarefas.length, 0, 'sem consulta confirmada não há o que conferir no extrato');
+  const nova = cenario(VALIDA, { banco });
+  assert.match(await nova.chamar({ hora: '16:30' }), /^RECUSADO/, 'a nova tentativa vai para a equipe');
+  assert.deepEqual(nova.chamadas, []);
+});
