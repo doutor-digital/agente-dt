@@ -3,6 +3,8 @@
  * Kommo do banco, o cérebro e o relatório cruzado. Só é chamado quando `MCP_URL_PUBLICA` está definida.
  */
 import { createHmac } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import type { Express } from 'express';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { User } from '@prisma/client';
@@ -27,6 +29,9 @@ import { registrarIntegracoes } from './integracoes.js';
 import { registrarMetaEventos, type FonteRastreio } from './meta-eventos.js';
 import { Pendentes, registrarEscritaKommo, type FonteEscrita } from './kommo-escrita.js';
 import { registrarDisparo } from './disparo.js';
+import { registrarArquivosSePermitido } from './arquivos.js';
+import { CofreDeArquivos, limitesDoAmbiente, type EventoDoCofre } from './cofre-arquivos.js';
+import { montarRotasDoCofre } from './cofre-http.js';
 import { fonteDeDisparo } from './disparo-producao.js';
 import type { KommoClient } from '../services/kommo.service.js';
 import { PrismaClient } from '@prisma/client';
@@ -276,6 +281,36 @@ async function leitoresDoWhatsapp(): Promise<Set<string>> {
   return new Set(us.map((u) => u.id));
 }
 
+/**
+ * Quem pode pedir envio de arquivo pelo conector (cofre de envio, `arquivos.ts`): quem já escreve (MCP_ESCRITA_EMAILS) mais os
+ * e-mails de MCP_ARQUIVOS_EMAILS, para dar o cofre a quem só precisa dele sem dar também a escrita no Kommo/Asaas/banco.
+ * Usuário ativo do console. Sem nenhuma das duas variáveis, ninguém usa.
+ */
+async function arquivistasDoBanco(): Promise<Set<string>> {
+  const emails = [process.env.MCP_ESCRITA_EMAILS, process.env.MCP_ARQUIVOS_EMAILS]
+    .flatMap((v) => (v ?? '').split(','))
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+  if (!emails.length) return new Set();
+  const us = await prisma.user.findMany({ where: { email: { in: emails }, isActive: true }, select: { id: true } });
+  return new Set(us.map((u) => u.id));
+}
+
+/** Auditoria do cofre (eventos das rotas públicas): sem conteúdo e sem nome de arquivo. Vai para o log e para `mcp_auditoria`. */
+function auditarCofre(e: EventoDoCofre): void {
+  logger.info({ envio: e.envio, evento: e.evento, ...e.detalhe }, 'mcp-remoto: cofre de arquivos');
+  armazemPrisma
+    .auditar({
+      userId: e.userId,
+      clientId: 'cofre-de-arquivos',
+      ferramenta: `arquivo_cofre_${e.evento}`,
+      argumentos: { envio: e.envio, ...e.detalhe, ...(e.ip ? { ip: e.ip } : {}), ...(e.agente ? { agente: e.agente } : {}) },
+      ok: e.evento !== 'download_negado' && e.evento !== 'upload_recusado',
+      duracaoMs: 0,
+    })
+    .catch((err) => logger.warn({ err }, 'mcp-remoto: auditoria do cofre não gravou'));
+}
+
 const normEtiqueta = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
 
 function fonteDeEscrita(slug: string): FonteEscrita {
@@ -441,6 +476,18 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   let escritores = new Set<string>();
   manterAtualizado(escritoresDoBanco, (s) => (escritores = s), 'quem pode alterar cartões');
   const pendentes = new Pendentes();
+  // Cofre de envio: o claude.ai não passa arquivo anexado a outro conector (ex.: ClickSign só aceita LINK). Pasta própria
+  // (ARQUIVOS_DIR; padrão: temporária do container), arquivos cifrados, apagados em minutos.
+  const cofre = new CofreDeArquivos({
+    dir: process.env.ARQUIVOS_DIR?.trim() || path.join(tmpdir(), 'dd-arquivos'),
+    limites: limitesDoAmbiente(process.env),
+    auditar: auditarCofre,
+    log: logger,
+  });
+  montarRotasDoCofre(app, cofre);
+  setInterval(() => void cofre.varrer().catch((err) => logger.warn({ err }, 'mcp-remoto: varredura do cofre falhou')), 60_000).unref();
+  let arquivistas = new Set<string>();
+  manterAtualizado(arquivistasDoBanco, (s) => (arquivistas = s), 'quem pode enviar arquivos');
   const escritaAsaas = criarEscritaAsaas({ historico: (conta) => cobrancasRecentesDe(prisma, conta) });
   manterAtualizado(contasAsaasDoBanco, (contas) => (asaas.contas = contas), 'as contas do Asaas');
   const convenia = criarContextoConvenia(new Map());
@@ -489,6 +536,8 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
       registrarFerramentasTiquetaque(server, tiquetaque, auditar);
       registrarFerramentasTramitacao(server, tramitacao, auditar);
       registrarMetaEventos(server, () => rastreio, auditar);
+      // Arquivos: o portão testado confere a lista; cada envio é só de quem o pediu.
+      registrarArquivosSePermitido(server, cofre, quem.userId, arquivistas, () => new URL(urlPublica).origin, auditar);
       // Asaas: cadastrar cliente e gerar boleto, em dois passos (cancelar, estornar, editar e transferir NÃO existem), só para quem está
       // na lista de escrita E só nas unidades de ASAAS_ESCRITA_UNIDADES. O portão fica numa função testada.
       registrarEscritaAsaasSePermitido(server, asaas, escritaAsaas, quem.userId, escritores, auditar);
