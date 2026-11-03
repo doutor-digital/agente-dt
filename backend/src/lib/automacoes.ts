@@ -186,7 +186,7 @@ export const AUTOMACOES: readonly Automacao[] = [
     oQueFaz:
       'Quando o paciente em tratamento toca "Confirmar presença" no lembrete da sessão (24 h ou 3 h antes da ◷ Próxima sessão), o sistema responde sozinho e marca a sessão como CONFIRMADA na franquia. "Preciso remarcar" vira tarefa para a equipe com a resposta ao paciente.',
     pegadinha:
-      'Acha a sessão pelo ⚙ idTreatment (franquia) do cartão e pelo horário da ◷ Próxima sessão — se não bater exatamente, não confirma nada na franquia: responde e abre tarefa para a equipe confirmar na agenda. Responde mesmo com a Sofia calada na etapa, porque é resposta a um lembrete que nós mandamos.',
+      'Acha a sessão pelo horário da ◷ Próxima sessão entre os agendamentos do paciente na franquia (todos os tratamentos dele; o ⚙ idTreatment do cartão só desempata) — se não bater exatamente, não confirma nada na franquia: responde e abre tarefa para a equipe confirmar na agenda. Se o paciente tem mais de um atendimento NO MESMO DIA que ainda vai acontecer (dois tratamentos em sequência, 15h30 e 16h), a resposta diz todos os horários, manda chegar no primeiro e confirma todos os do mesmo tipo (sessão com sessão); o que a franquia não aceitar, e uma consulta no mesmo dia de uma sessão, vira tarefa para a equipe — e o texto diz que a equipe confirma esse outro. O que já passou não entra: quem toca às 15h45 não ouve "chegue às 15h30". Responde mesmo com a Sofia calada na etapa, porque é resposta a um lembrete que nós mandamos.',
     risco: 'manda-mensagem',
     temSeco: true,
     quandoVazio: 'desligado',
