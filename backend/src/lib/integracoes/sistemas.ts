@@ -1,14 +1,21 @@
 /**
- * Cliente da API de administração do sistema novo de RH/Caixa/Financeiro (`/admin/v1`, servidor próprio, fora do
- * Supabase). Só o conector do claude.ai chama; a rota só existe na rede interna do Swarm (`http://api-rh:8080`).
+ * Cliente da API de administração do sistema novo (`/admin/v1`, servidor próprio, fora do Supabase): o RH/Caixa/Financeiro (banco `rh`) e o
+ * Descontratos/Ficha (banco `dsc`). Só o conector do claude.ai chama; a rota só existe na rede interna do Swarm
+ * (`http://api-rh:8080`, `http://api-dsc:8080`).
  *
- * A "chave" que o painel de integrações guarda para este provedor é um JSON de uma linha:
+ * A "chave" que o painel de integrações guarda para este provedor é um JSON de uma linha. Um sistema só (formato antigo, vale como RH):
  *   {"api":"http://api-rh:8080","chave":"<ADMIN_KEY>","tela":"https://<endereço da tela RH>"}
- * `api` = URL base da API de administração; `chave` = ADMIN_KEY do servidor (cabeçalho `x-admin-key`); `tela` = endereço
- * da tela RH, para montar o link de convite (opcional). A chave nunca sai daqui: nem em resposta, nem em mensagem de erro.
+ * ou os dois sistemas na mesma chave (cada um com o seu nome, o `tipo` e a sua ADMIN_KEY):
+ *   {"sistemas":[{"id":"rh","tipo":"rh","api":"http://api-rh:8080","chave":"<ADMIN_KEY do rh>","tela":"https://…"},
+ *                {"id":"descontratos","tipo":"dsc","api":"http://api-dsc:8080","chave":"<ADMIN_KEY do dsc>"}]}
+ * `api` = URL base da API de administração; `chave` = ADMIN_KEY do servidor (cabeçalho `x-admin-key`); `tela` = endereço da tela RH, para montar
+ * o link de convite (opcional, só do RH); `id` = o nome que o claude.ai usa no parâmetro `sistema`; `tipo` = rh ou dsc (as tabelas fechadas e as
+ * funções de acesso mudam de um para o outro). A chave nunca sai daqui: nem em resposta, nem em mensagem de erro.
  *
  * Contrato: docs/ADMIN-API.md do repositório do sistema novo (sistemas-dd).
  */
+
+export type TipoSistema = 'rh' | 'dsc';
 
 export interface ConfigSistemas {
   /** URL base da API, sem barra no fim (ex. http://api-rh:8080) */
@@ -16,6 +23,10 @@ export interface ConfigSistemas {
   chave: string;
   /** endereço público da tela RH (para o link de convite) */
   tela?: string;
+  /** rh (padrão) ou dsc */
+  tipo?: TipoSistema;
+  /** nome do sistema no conector (parâmetro `sistema`); sem ele vale o nome da unidade onde a chave foi cadastrada */
+  id?: string;
 }
 
 export class ErroSistemas extends Error {
@@ -24,7 +35,7 @@ export class ErroSistemas extends Error {
   }
 }
 
-const FORMATO = 'cole o JSON de uma linha: {"api":"http://api-rh:8080","chave":"<ADMIN_KEY do servidor>","tela":"https://<endereço da tela RH>"}';
+const FORMATO = 'cole o JSON de uma linha: {"api":"http://api-rh:8080","chave":"<ADMIN_KEY do servidor>","tela":"https://<endereço da tela RH>"} (ou {"sistemas":[{"id":"rh","tipo":"rh",…},{"id":"descontratos","tipo":"dsc",…}]} para os dois)';
 
 function urlHttp(bruta: unknown, campo: string): URL {
   let u: URL;
@@ -38,8 +49,29 @@ function urlHttp(bruta: unknown, campo: string): URL {
   return u;
 }
 
-/** Lê e valida o JSON guardado. A mensagem de erro nunca repete o conteúdo colado (a chave está nele). */
-export function lerConfigSistemas(texto: string): ConfigSistemas {
+function umaConfig(o: Record<string, unknown>, rotulo: string): ConfigSistemas {
+  const api = urlHttp(o.api, 'api');
+  if (api.search || api.hash) throw new Error('"api" não pode ter ? nem # (só o endereço base)');
+  const chave = typeof o.chave === 'string' ? o.chave.trim() : '';
+  if (chave.length < 16) throw new Error(`${rotulo}"chave" ausente ou curta demais: é a ADMIN_KEY do servidor, copiada inteira`);
+  const cfg: ConfigSistemas = { api: api.toString().replace(/\/+$/, ''), chave };
+  if (o.tela !== undefined && o.tela !== null && String(o.tela).trim() !== '') {
+    const tela = urlHttp(o.tela, 'tela');
+    cfg.tela = tela.toString();
+  }
+  if (o.tipo !== undefined && o.tipo !== null) {
+    if (o.tipo !== 'rh' && o.tipo !== 'dsc') throw new Error(`${rotulo}"tipo" deve ser "rh" ou "dsc"`);
+    cfg.tipo = o.tipo;
+  }
+  if (o.id !== undefined && o.id !== null) {
+    if (typeof o.id !== 'string' || !/^[a-z0-9][a-z0-9-]{1,39}$/.test(o.id)) throw new Error(`${rotulo}"id" deve ter de 2 a 40 letras minúsculas, números e hífen`);
+    cfg.id = o.id;
+  }
+  return cfg;
+}
+
+/** Lê e valida o JSON guardado (um sistema ou vários). A mensagem de erro nunca repete o conteúdo colado (a chave está nele). */
+export function lerConfigsSistemas(texto: string): ConfigSistemas[] {
   let bruto: unknown;
   try {
     bruto = JSON.parse(texto);
@@ -48,16 +80,22 @@ export function lerConfigSistemas(texto: string): ConfigSistemas {
   }
   if (!bruto || typeof bruto !== 'object' || Array.isArray(bruto)) throw new Error(`o conteúdo não é um objeto JSON: ${FORMATO}`);
   const o = bruto as Record<string, unknown>;
-  const api = urlHttp(o.api, 'api');
-  if (api.search || api.hash) throw new Error('"api" não pode ter ? nem # (só o endereço base)');
-  const chave = typeof o.chave === 'string' ? o.chave.trim() : '';
-  if (chave.length < 16) throw new Error('"chave" ausente ou curta demais: é a ADMIN_KEY do servidor, copiada inteira');
-  const cfg: ConfigSistemas = { api: api.toString().replace(/\/+$/, ''), chave };
-  if (o.tela !== undefined && o.tela !== null && String(o.tela).trim() !== '') {
-    const tela = urlHttp(o.tela, 'tela');
-    cfg.tela = tela.toString();
-  }
-  return cfg;
+  if (o.sistemas === undefined) return [umaConfig(o, '')];
+  if (!Array.isArray(o.sistemas) || o.sistemas.length < 1 || o.sistemas.length > 5) throw new Error('"sistemas" deve ser uma lista de 1 a 5 sistemas');
+  const lista = o.sistemas.map((x, i) => {
+    if (!x || typeof x !== 'object' || Array.isArray(x)) throw new Error(`sistema ${i + 1}: deve ser um objeto JSON`);
+    const c = umaConfig(x as Record<string, unknown>, `sistema ${i + 1}: `);
+    if (!c.id) throw new Error(`sistema ${i + 1}: falta o "id" (o nome que o claude.ai usa: rh, descontratos…)`);
+    return c;
+  });
+  const ids = lista.map((c) => c.id);
+  if (new Set(ids).size !== ids.length) throw new Error('dois sistemas com o mesmo "id"');
+  return lista;
+}
+
+/** O primeiro (ou único) sistema da chave. */
+export function lerConfigSistemas(texto: string): ConfigSistemas {
+  return lerConfigsSistemas(texto)[0]!;
 }
 
 type Fetcher = typeof fetch;
@@ -128,10 +166,16 @@ export async function sistemasChamar(
   return dados;
 }
 
-/** Prova a configuração: lê a lista de usuários. Devolve o rótulo para o painel (só contagem, nada pessoal). */
+/** Prova a configuração: lê a lista de usuários de cada sistema. Devolve o rótulo para o painel (só contagem, nada pessoal). */
 export async function testarChaveSistemas(texto: string, fetcher: Fetcher = fetch): Promise<string> {
-  const cfg = lerConfigSistemas(texto);
-  const r = (await sistemasChamar(cfg, 'GET', '/admin/v1/usuarios', {}, fetcher)) as { usuarios?: unknown[] };
-  const n = Array.isArray(r.usuarios) ? r.usuarios.length : null;
-  return `Sistema novo (RH/Caixa)${n !== null ? ` · ${n} usuários` : ''}${cfg.tela ? '' : ' · sem endereço da tela RH (convite ficará indisponível)'}`.slice(0, 250);
+  const cfgs = lerConfigsSistemas(texto);
+  const partes: string[] = [];
+  for (const cfg of cfgs) {
+    const r = (await sistemasChamar(cfg, 'GET', '/admin/v1/usuarios', {}, fetcher)) as { usuarios?: unknown[] };
+    const n = Array.isArray(r.usuarios) ? r.usuarios.length : null;
+    const nome = cfg.tipo === 'dsc' ? 'Descontratos/Ficha' : 'RH/Caixa';
+    const semTela = cfg.tipo !== 'dsc' && !cfg.tela ? ' · sem endereço da tela RH (convite ficará indisponível)' : '';
+    partes.push(cfgs.length === 1 ? `Sistema novo (${nome})${n !== null ? ` · ${n} usuários` : ''}${semTela}` : `${nome}${n !== null ? ` · ${n} usuários` : ''}${semTela}`);
+  }
+  return (cfgs.length === 1 ? partes[0]! : `Sistema novo (${partes.join(' | ')})`).slice(0, 250);
 }

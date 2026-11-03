@@ -38,7 +38,7 @@ export function listarIntegracoes(f: FontesDeIntegracao) {
       ...(tem.convenia ? ['convenia_* (RH: colaboradores, admissões e desligamentos, férias, afastamentos)'] : []),
       ...(tem.tiquetaque ? ['tiquetaque_* (ponto: batidas do dia e quem está trabalhando, atrasos e faltas, horas e banco de horas, afastamentos — de todos os locais da conta)'] : []),
       ...(tem.tramitacao ? ['tramitacao_* (advocacia: processos, publicações, clientes e prazos; só leitura, documentos só como metadados)'] : []),
-      ...(tem.sistemas ? ['sistemas_* (sistema novo de RH/Caixa/Financeiro: esquema, consulta, usuários, log, simulação; alterar em dois passos para quem tem permissão)'] : []),
+      ...(tem.sistemas ? ['sistemas_* (sistema novo, PostgreSQL próprio: sistema "rh" = RH/Caixa/Financeiro e "descontratos" = Descontratos/Ficha; esquema, consulta, usuários, log, simulação; para quem tem permissão, SQL direto com backup antes (sistemas_sql) e o que destrói em dois passos (sistemas_preparar_sql). Não use o Supabase antigo)'] : []),
     ];
     return { slug, nome, ...tem, ferramentas };
   });
