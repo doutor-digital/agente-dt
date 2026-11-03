@@ -85,7 +85,6 @@ export async function claimMessageId(
   scope: string,
   messageId: string,
   ttlMs: number = TTL_MS,
-  opcoes: { recusarSeBancoFalhar?: boolean } = {},
 ): Promise<boolean> {
   if (!messageId) return true;
 
@@ -112,16 +111,45 @@ export async function claimMessageId(
     if (primeiraVez) memoria.set(key, agora + ttlMs);
     return primeiraVez;
   } catch (err) {
-    // Quem REFAZ trabalho (recuperar-turnos: reprocessa um pedido velho) pede o contrário: sem certeza de que é a
-    // primeira vez, não refaz — resposta em dobro é pior que atraso. Aí a tarefa para a recepção cobre o paciente.
-    if (opcoes.recusarSeBancoFalhar) {
-      logger.warn({ err: String(err), key }, 'dedup: banco indisponível — reivindicação recusada (o chamador não refaz sem certeza)');
-      return false;
-    }
     // Banco fora não pode calar a IA: melhor arriscar duplicata que perder lead.
     logger.warn({ err: String(err), key }, 'dedup: banco indisponível — deixando a mensagem passar');
     memoria.set(key, agora + ttlMs);
     return true;
+  }
+}
+
+/**
+ * Reivindicação para quem REFAZ trabalho (lib/recuperar-turnos.ts reprocessa um pedido velho): o contrário do padrão.
+ * Sem certeza de que é a primeira vez, não refaz — resposta em dobro é pior que atraso, e a tarefa para a recepção cobre
+ * o paciente. Por isso o resultado é de três valores: `incerto` (o banco não respondeu) não é `perdeu` (alguém já pegou)
+ * — o primeiro tenta de novo na próxima volta, o segundo é uma tentativa que já aconteceu.
+ */
+export async function reivindicarComCerteza(
+  scope: string,
+  messageId: string,
+  ttlMs: number = TTL_MS,
+): Promise<'ganhou' | 'perdeu' | 'incerto'> {
+  const key = `${scope}:${messageId}`;
+  const agora = Date.now();
+  const jaVista = memoria.get(key);
+  if (jaVista && jaVista > agora) return 'perdeu';
+  try {
+    const vencimento = new Date(agora + ttlMs);
+    const inseridas = await prisma.$executeRaw`
+      INSERT INTO "message_claims" ("key", "expires_at")
+      VALUES (${key}, ${vencimento})
+      ON CONFLICT ("key") DO UPDATE
+        SET "expires_at" = EXCLUDED."expires_at"
+        WHERE "message_claims"."expires_at" <= NOW()
+    `;
+    if (inseridas > 0) {
+      memoria.set(key, agora + ttlMs);
+      return 'ganhou';
+    }
+    return 'perdeu';
+  } catch (err) {
+    logger.warn({ err: String(err), key }, 'dedup: banco indisponível — reivindicação incerta (o chamador não refaz sem certeza)');
+    return 'incerto';
   }
 }
 

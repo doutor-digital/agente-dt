@@ -975,10 +975,8 @@ export async function retomarTurnoPerdido(t: TurnoPerdido, unit: Unit, deps: Dep
   if (!Number.isFinite(leadId) || leadId <= 0) return 'descartado:lead_invalido';
 
   // Só pedido que veio do webhook do Kommo com mensagem de paciente (o do widget entrega por outro caminho).
-  const parsed = webhookSchema.safeParse(t.input);
-  if (!parsed.success || !getIncomingMessage(parsed.data)) return 'descartado:nao_e_mensagem_do_kommo';
-  const ctx = extractContext(parsed.data, leadId);
-  if (!ctx.isChatMessage) return 'descartado:nao_e_mensagem_do_kommo';
+  const ctx = contextoDoPedidoGravado(t);
+  if (!ctx) return 'descartado:nao_e_mensagem_do_kommo';
 
   const conv = await deps.conversa(unit.id, String(leadId));
   // Resposta à confirmação de véspera e toque no botão do lembrete têm tratador em código no webhook (idempotente). Aqui
@@ -1005,8 +1003,9 @@ export async function retomarTurnoPerdido(t: TurnoPerdido, unit: Unit, deps: Dep
     retomada: { chegouEm: t.criadoEm.getTime() },
   });
   // Burst cheio (20 mensagens) = o paciente está em plena conversa e há turnos rodando: nada de turno paralelo sobre o
-  // mesmo thread (duas respostas). O trace fecha com o motivo.
-  if (status === 'rejected') return 'descartado:burst_cheio';
+  // mesmo thread (duas respostas). Mas a reivindicação já foi gasta e, se esses turnos vivos morrerem, ninguém mais volta
+  // a este pedido: a recepção fica sabendo.
+  if (status === 'rejected') return 'tarefa:burst_cheio';
   return 'retomado';
 }
 
@@ -1025,11 +1024,16 @@ export async function unidadeDonaDoTurno(t: TurnoPerdido): Promise<Unit | null> 
 
 /** Nome do contato e mensagem do pedido gravado, para o texto da tarefa. */
 export function resumoDoPedido(t: TurnoPerdido): { contato: string | null; texto: string } {
+  const ctx = contextoDoPedidoGravado(t);
+  return ctx ? { contato: ctx.contactName, texto: ctx.humanMessage } : { contato: null, texto: '' };
+}
+
+/** O contexto do webhook gravado no trace, ou null quando o pedido não é uma mensagem de paciente do Kommo. */
+function contextoDoPedidoGravado(t: TurnoPerdido): ExtractedContext | null {
   const parsed = webhookSchema.safeParse(t.input);
   const leadId = Number(t.leadId);
-  if (!parsed.success || !getIncomingMessage(parsed.data)) return { contato: null, texto: '' };
-  const ctx = extractContext(parsed.data, leadId);
-  return { contato: ctx.contactName, texto: ctx.humanMessage };
+  if (!parsed.success || !getIncomingMessage(parsed.data)) return null;
+  return extractContext(parsed.data, leadId); // com mensagem entrante, é sempre mensagem de chat
 }
 
 /** O que o orquestrador da recuperação pede ao controller (ver `agendarRecuperacao` em server.ts). */

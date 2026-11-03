@@ -116,7 +116,7 @@ test('encerramento repetido ("obrigada" de novo, a IA já se despediu): descarta
   assert.equal(w.agendados.length, 0);
 });
 
-test('burst cheio: descartado (nada de turno paralelo sobre o mesmo paciente)', async () => {
+test('burst cheio: sem turno paralelo sobre o mesmo paciente, e a recepção fica sabendo (TAREFA)', async () => {
   const { deps } = mundo({ conv: null, status: 'rejected' });
-  assert.equal(await retomarTurnoPerdido(turno(webhook('oi')), UNIT, deps), 'descartado:burst_cheio');
+  assert.equal(await retomarTurnoPerdido(turno(webhook('oi')), UNIT, deps), 'tarefa:burst_cheio');
 });

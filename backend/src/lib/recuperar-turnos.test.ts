@@ -16,6 +16,7 @@ const {
   saiuMensagemDepois,
   IDADE_MINIMA_MS,
   FOLGA_ANTES_DA_POSSE_MS,
+  MAX_VOLTAS_SEM_DECISAO,
   IDADE_TENTATIVA_MORTA_MS,
   MARCA_ABANDONADO,
 } = await import('./recuperar-turnos.js');
@@ -128,10 +129,10 @@ function mundo(opts: { agora?: number } = {}) {
     },
     foraDoHorario: () => w.foraDoHorario,
     async reivindicar(traceId) {
-      if (w.bancoFalhaNaReivindicacao) return false;
-      if (w.reivindicados.has(traceId)) return false;
+      if (w.bancoFalhaNaReivindicacao) return 'incerto';
+      if (w.reivindicados.has(traceId)) return 'perdeu';
       w.reivindicados.add(traceId);
-      return true;
+      return 'ganhou';
     },
     async seguradasPendentes() {
       return w.seguradas;
@@ -445,13 +446,6 @@ test('retomar lança: tarefa + FAILED, e a recuperação dos outros pacientes se
   assert.equal(motivoDe(w, 't1'), `${MARCA_ABANDONADO}:falha_ao_retomar`);
 });
 
-test('burst cheio vira descartado e fecha FAILED (nada de turno paralelo)', async () => {
-  const { w, deps } = mundo();
-  w.traces.push(lead('t1', 'oi', FOTO));
-  w.retomada = () => 'descartado:burst_cheio';
-  await recuperarTurnosPerdidos(deps, POSSE);
-  assert.equal(w.traces[0]!.status, 'FAILED');
-});
 
 test('nenhum caminho deixa um trace não retomado como SUCCESS', async () => {
   const { w, deps } = mundo();
@@ -647,11 +641,100 @@ test('dadosDeEncerramento: sempre FAILED, com o motivo na marca e na mensagem', 
   assert.match(d.errorMessage, /ia_pausada/);
 });
 
-test('em produção a reivindicação RECUSA quando o banco não responde (sem banco no teste)', async () => {
+test('em produção a reivindicação diz "incerto" quando o banco não responde (sem banco no teste)', async () => {
   const deps = depsDeProducao({
     unidadeDona: async () => null,
     retomar: async () => 'retomado',
     resumoDoPedido: () => ({ contato: null, texto: '' }),
   });
-  assert.equal(await deps.reivindicar('trace-sem-banco'), false);
+  assert.equal(await deps.reivindicar('trace-sem-banco'), 'incerto');
+});
+
+// ── banco incerto não é "tentativa que já aconteceu" ───────────────────────────────────────────────────
+
+test('banco incerto na reivindicação, mesmo com o pedido velho: NÃO vira "já tentada" nem tarefa; a volta seguinte retoma', async () => {
+  const { w, deps } = mundo();
+  w.traces.push(lead('t1', 'oi', FOTO));
+  w.bancoFalhaNaReivindicacao = true;
+  w.agora = FOTO.getTime() + IDADE_TENTATIVA_MORTA_MS + 60_000; // mais velho que o limite da tentativa morta
+  const voltas = new Map<string, number>();
+  let r = await recuperarTurnosPerdidos(deps, POSSE, { voltasSemDecisao: voltas });
+  assert.equal(r.retomados, 0);
+  assert.equal(w.tarefas.length, 0, 'o banco falhou, a IA nunca tentou: tarefa de "já tentada" seria mentira');
+  assert.equal(w.traces[0]!.status, 'RUNNING');
+  assert.equal(voltas.get('t1'), 1);
+
+  w.bancoFalhaNaReivindicacao = false; // o banco voltou
+  r = await recuperarTurnosPerdidos(deps, POSSE, { voltasSemDecisao: voltas });
+  assert.equal(r.retomados, 1);
+  await dormir(120);
+  assert.equal(w.saidas.length, 1);
+});
+
+// ── trace sem decisão não pode esconder os mais novos ──────────────────────────────────────────────────
+
+test('50 traces que ficam sem decisão saem da consulta depois de MAX_VOLTAS e deixam entrar o pedido mais novo', async () => {
+  const { w, deps } = mundo();
+  for (let i = 0; i < 50; i++) {
+    const id = `preso-${i}`;
+    w.traces.push(lead(id, 'oi', new Date(FOTO.getTime() - 60_000 + i), { leadId: `${1000 + i}` }));
+    w.reivindicados.add(id); // de outro processo, recente: fica sem decisão
+  }
+  w.traces.push(lead('novo', 'oi', new Date(FOTO.getTime() + 10_000), { leadId: '777' }));
+  const voltas = new Map<string, number>();
+  for (let v = 0; v < MAX_VOLTAS_SEM_DECISAO; v++) {
+    const r = await recuperarTurnosPerdidos(deps, POSSE, { voltasSemDecisao: voltas });
+    assert.equal(r.retomados, 0, `volta ${v}: o "novo" ainda não cabe na fila`);
+  }
+  const r = await recuperarTurnosPerdidos(deps, POSSE, { voltasSemDecisao: voltas });
+  assert.equal(r.retomados, 1, 'depois do teto os presos saem e o novo é visto');
+  assert.deepEqual(w.retomadas, ['novo']);
+  await dormir(120);
+});
+
+test('o que foi retomado ou fechado NÃO gasta volta sem decisão', async () => {
+  const { w, deps } = mundo();
+  w.traces.push(lead('a', 'oi', FOTO));
+  w.traces.push(lead('b', 'oi', FOTO, { leadId: '2' }));
+  w.respostasNoBanco.push({ leadId: '2', em: new Date(FOTO.getTime() + 5_000) });
+  const voltas = new Map<string, number>();
+  await recuperarTurnosPerdidos(deps, POSSE, { voltasSemDecisao: voltas });
+  await dormir(120);
+  assert.equal(voltas.size, 0);
+});
+
+// ── parar no meio ──────────────────────────────────────────────────────────────────────────────────────
+
+test('parar() verdadeiro (shutdown ou perdeu a liderança): não reivindica nem retoma nada', async () => {
+  const { w, deps } = mundo();
+  w.traces.push(lead('a', 'oi', FOTO));
+  const r = await recuperarTurnosPerdidos(deps, POSSE, { parar: () => true });
+  assert.equal(r.retomados, 0);
+  assert.equal(w.reivindicados.size, 0, 'nada gasta a reivindicação de 24 h');
+  assert.equal(w.traces[0]!.status, 'RUNNING');
+});
+
+test('parar() no meio da volta: o paciente seguinte não é tocado', async () => {
+  const { w, deps } = mundo();
+  w.traces.push(lead('a', 'oi', FOTO));
+  w.traces.push(lead('b', 'oi', new Date(FOTO.getTime() + 1_000), { leadId: '2' }));
+  const r = await recuperarTurnosPerdidos(deps, POSSE, { parar: () => w.retomadas.length >= 1 });
+  await dormir(120);
+  assert.equal(r.retomados, 1, 'só o primeiro paciente foi retomado');
+  assert.deepEqual(w.retomadas, ['a']);
+  assert.equal(w.unidadesConsultadas.length, 1, 'o segundo paciente nem foi consultado');
+});
+
+test('parar() depois de ler o Kommo e antes de reivindicar: nada é reivindicado (o claim de 24 h não se gasta à toa)', async () => {
+  const { w, deps } = mundo();
+  w.traces.push(lead('a', 'oi', FOTO));
+  let leu = false;
+  const original = deps.lerConversa;
+  deps.lerConversa = async (u, l) => {
+    leu = true;
+    return original(u, l);
+  };
+  await recuperarTurnosPerdidos(deps, POSSE, { parar: () => leu });
+  assert.equal(w.reivindicados.size, 0);
+  assert.equal(w.retomadas.length, 0);
 });

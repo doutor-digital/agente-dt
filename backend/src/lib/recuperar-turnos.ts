@@ -1,7 +1,7 @@
 import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
-import { claimMessageId } from './dedup-cache.js';
+import { reivindicarComCerteza } from './dedup-cache.js';
 import { emPausa } from './pausa-unidade.js';
 import { leadPausadoPorJanela } from './pausa-lead.js';
 import { avisoRecente, marcarAviso } from './aviso-dedupe.js';
@@ -76,7 +76,13 @@ export const MARCA_ABANDONADO = '__abandoned_by_restart__';
 export const REGRA_TAREFA_TURNO_PERDIDO = 'turno_perdido_tarefa';
 export const REALERTA_TAREFA_MS = 12 * 3600_000;
 /** Tolerância de relógio entre o Kommo e o nosso banco ao perguntar "saiu mensagem depois do pedido?". */
-export const FOLGA_RELOGIO_MS = 5_000;
+export const FOLGA_RELOGIO_MS = 2_000;
+/**
+ * Quantas voltas um trace que ficou SEM decisão (o Kommo ou o banco falhou, a reivindicação é de outro e ainda é recente)
+ * pode ocupar a fila. Passado disso sai da consulta: sem o teto, 50 traces assim, que voltam ao topo a cada 2 min por
+ * ordem de idade, esconderiam os perdidos mais novos. Três voltas cobrem a idade da `IDADE_TENTATIVA_MORTA_MS`.
+ */
+export const MAX_VOLTAS_SEM_DECISAO = 3;
 
 export interface TurnoPerdido {
   traceId: string;
@@ -133,8 +139,8 @@ export interface DepsRecuperacao extends GanchosDoController {
   iaPausada(unit: Unit, leadId: string): Promise<boolean>;
   /** A unidade está fora do horário de atendimento da IA agora? */
   foraDoHorario(unit: Unit): boolean;
-  /** Atômico e permanente: `true` só para o primeiro que pedir; `false` também quando o banco não responde. */
-  reivindicar(traceId: string): Promise<boolean>;
+  /** Atômico e permanente: `ganhou` só para o primeiro que pedir. `incerto` = o banco não respondeu (não refaz, tenta na volta seguinte). */
+  reivindicar(traceId: string): Promise<'ganhou' | 'perdeu' | 'incerto'>;
   /** Respostas seguradas ("atropelada") deste paciente que ele nunca leu, mais antigas primeiro. */
   seguradasPendentes(unit: Unit, leadId: string, aPartirDe: Date): Promise<RespostaSegurada[]>;
   restaurarSegurada(unit: Unit, leadId: string, s: RespostaSegurada): void;
@@ -142,6 +148,13 @@ export interface DepsRecuperacao extends GanchosDoController {
   criarTarefa(unit: Unit, t: TurnoPerdido, esperaMs: number): Promise<'criada' | 'ja_existia'>;
   /** Fecha o trace como FAILED (só se ainda estiver RUNNING). */
   encerrar(traceId: string, motivo: string): Promise<void>;
+}
+
+export interface OpcoesVarredura {
+  /** Voltas que cada trace já gastou sem decisão; a varredura lê e atualiza (vive entre as voltas). */
+  voltasSemDecisao?: Map<string, number>;
+  /** Mandou parar (shutdown, perdeu a liderança): não começa paciente novo nem retoma nada. */
+  parar?: () => boolean;
 }
 
 export interface ResumoRecuperacao {
@@ -217,16 +230,27 @@ export function saiuMensagemDepois(msgs: readonly MensagemOficial[], desde: Date
 
 // ── orquestração ───────────────────────────────────────────────────────────────────────────────────────
 
-export async function recuperarTurnosPerdidos(deps: DepsRecuperacao, posse: Date): Promise<ResumoRecuperacao> {
+export async function recuperarTurnosPerdidos(deps: DepsRecuperacao, posse: Date, opcoes: OpcoesVarredura = {}): Promise<ResumoRecuperacao> {
   const agora = deps.agora();
   const resumo: ResumoRecuperacao = { candidatos: 0, retomados: 0, tarefas: 0, tarefasFalhas: 0, descartados: {} };
+  const voltas = opcoes.voltasSemDecisao ?? new Map<string, number>();
+  const parar = opcoes.parar ?? (() => false);
 
-  const emVoo = new Set(deps.idsEmVoo());
+  // Nunca candidatos: o que este processo tem em voo e o que já gastou as voltas sem decisão.
+  const fora = new Set([...deps.idsEmVoo(), ...[...voltas].filter(([, n]) => n >= MAX_VOLTAS_SEM_DECISAO).map(([id]) => id)]);
   const perdidos = (
-    await deps.buscarPerdidos({ ...janelaDeBusca(agora, posse), limite: MAX_POR_VARREDURA, excluirIds: [...emVoo] })
-  ).filter((t) => !emVoo.has(t.traceId)); // de novo, por garantia: quem implementa a consulta pode ignorar o filtro
+    await deps.buscarPerdidos({ ...janelaDeBusca(agora, posse), limite: MAX_POR_VARREDURA, excluirIds: [...fora] })
+  ).filter((t) => !fora.has(t.traceId)); // de novo, por garantia: quem implementa a consulta pode ignorar o filtro
   resumo.candidatos = perdidos.length;
   if (perdidos.length === 0) return resumo;
+
+  // Quem terminou a volta ainda RUNNING e fora do coalescer não foi decidido: gasta uma volta.
+  const decididos = new Set<string>();
+  const contarSemDecisao = (): void => {
+    for (const t of perdidos) {
+      if (!decididos.has(t.traceId)) voltas.set(t.traceId, (voltas.get(t.traceId) ?? 0) + 1);
+    }
+  };
 
   // Um paciente por vez; dentro dele, na ordem em que escreveu.
   const gravados = new Map<string, TurnoPerdido[]>();
@@ -237,8 +261,18 @@ export async function recuperarTurnosPerdidos(deps: DepsRecuperacao, posse: Date
 
   // A unidade é a DONA de agora (etapa do cartão), e dois grupos gravados em unidades diferentes que hoje têm a mesma
   // dona viram um só — senão sairiam dois turnos paralelos para o mesmo cartão.
+  // Tudo o que é fechado ou retomado conta como decidido (a unica porta é `deps.encerrar` e o `retomado`).
+  const depsMarcando: DepsRecuperacao = {
+    ...deps,
+    encerrar: async (id, motivo) => {
+      await deps.encerrar(id, motivo);
+      decididos.add(id);
+    },
+  };
+
   const donos = new Map<string, { unit: Unit; turnos: TurnoPerdido[] }>();
   for (const turnos of gravados.values()) {
+    if (parar()) break;
     const primeiro = turnos[0]!;
     let unit: Unit | null;
     try {
@@ -249,7 +283,7 @@ export async function recuperarTurnosPerdidos(deps: DepsRecuperacao, posse: Date
       continue;
     }
     if (!unit) {
-      for (const t of turnos) await fechar(deps, resumo, t, 'unidade_ou_lead_invalido');
+      for (const t of turnos) await fechar(depsMarcando, resumo, t, 'unidade_ou_lead_invalido');
       continue;
     }
     const k = `${unit.id}::${primeiro.leadId}`;
@@ -258,13 +292,15 @@ export async function recuperarTurnosPerdidos(deps: DepsRecuperacao, posse: Date
   }
 
   for (const { unit, turnos } of donos.values()) {
+    if (parar()) break;
     try {
-      await recuperarDoPaciente(deps, unit, turnos, agora, resumo);
+      await recuperarDoPaciente(depsMarcando, unit, turnos, agora, resumo, decididos, parar);
     } catch (err) {
       // Um paciente com problema não pode impedir a recuperação dos outros.
       logger.error({ err: String(err), leadId: turnos[0]?.leadId, unit: unit.slug }, 'recuperar-turnos: falha ao recuperar um paciente (segue com os outros)');
     }
   }
+  contarSemDecisao();
   return resumo;
 }
 
@@ -305,6 +341,8 @@ async function recuperarDoPaciente(
   turnos: TurnoPerdido[],
   agora: number,
   resumo: ResumoRecuperacao,
+  decididos: Set<string>,
+  parar: () => boolean,
 ): Promise<void> {
   const leadId = turnos[0]!.leadId;
 
@@ -361,7 +399,11 @@ async function recuperarDoPaciente(
   const meus: TurnoPerdido[] = [];
   const jaTentados: TurnoPerdido[] = [];
   for (const t of pendentes) {
-    if (await deps.reivindicar(t.traceId)) meus.push(t);
+    // O shutdown começou: o turno que eu agendasse morreria com o processo e gastaria a reivindicação à toa.
+    if (parar()) return;
+    const r = await deps.reivindicar(t.traceId);
+    if (r === 'ganhou') meus.push(t);
+    else if (r === 'incerto') resumo.descartados.banco_incerto = (resumo.descartados.banco_incerto ?? 0) + 1; // volta seguinte
     else if (agora - t.criadoEm.getTime() > IDADE_TENTATIVA_MORTA_MS) jaTentados.push(t);
     else resumo.descartados.outro_processo_cuida = (resumo.descartados.outro_processo_cuida ?? 0) + 1;
   }
@@ -382,6 +424,7 @@ async function recuperarDoPaciente(
     }
     if (r === 'retomado') {
       resumo.retomados++;
+      decididos.add(t.traceId);
       if (!restaurou) {
         // A resposta que a IA segurou porque o paciente escreveu de novo não saiu e vive só na memória do processo morto.
         // Só DEPOIS de haver um turno a caminho (a janela do coalescer ainda não fechou): sem turno, a marca ficaria
@@ -447,11 +490,16 @@ export function depsDeProducao(ganchos: GanchosDoController): DepsRecuperacao {
       const h = checkBusinessHours(unit);
       return h.enabled && !h.isOpen;
     },
-    reivindicar: (traceId) => claimMessageId(ESCOPO_REIVINDICACAO, traceId, TTL_REIVINDICACAO_MS, { recusarSeBancoFalhar: true }),
+    reivindicar: (traceId) => reivindicarComCerteza(ESCOPO_REIVINDICACAO, traceId, TTL_REIVINDICACAO_MS),
     async seguradasPendentes(unit, leadId, aPartirDe) {
+      // A resposta pode ter sido segurada quando o cartão era de OUTRA unidade da mesma conta (comercial ↔ resgate).
+      const unidades = unit.kommoSubdomain
+        ? (await prisma.unit.findMany({ where: { kommoSubdomain: unit.kommoSubdomain }, select: { id: true } })).map((u) => u.id)
+        : [unit.id];
+      const unitIds = unidades.length ? unidades : [unit.id];
       // O que a IA segurou e ninguém entregou: depois da última resposta que saiu e até meia hora antes do pedido perdido.
       const ultima = await prisma.message.findFirst({
-        where: { role: 'assistant', traceId: { not: null }, conversation: { unitId: unit.id, leadId } },
+        where: { role: 'assistant', traceId: { not: null }, conversation: { unitId: { in: unitIds }, leadId } },
         orderBy: { createdAt: 'desc' },
         select: { createdAt: true },
       });
@@ -463,7 +511,7 @@ export function depsDeProducao(ganchos: GanchosDoController): DepsRecuperacao {
           title: { startsWith: TITULO_SEGURADA },
           // Sem teto de cima: a resposta é segurada DEPOIS que o pedido perdido chegou (é por causa dele que foi segurada).
           createdAt: { gt: desde },
-          trace: { unitId: unit.id, leadId },
+          trace: { unitId: { in: unitIds }, leadId },
         },
         orderBy: { createdAt: 'asc' },
         select: { payload: true },
@@ -524,6 +572,7 @@ export function agendarRecuperacao(ganchos: GanchosDoController, lideranca: () =
   const deps = depsDeProducao(ganchos);
   let parado = false;
   let timer: NodeJS.Timeout | null = null;
+  const voltasSemDecisao = new Map<string, number>();
   const proxima = (ms: number): void => {
     if (parado) return;
     timer = setTimeout(() => {
@@ -534,7 +583,10 @@ export function agendarRecuperacao(ganchos: GanchosDoController, lideranca: () =
         proxima(INTERVALO_MS);
         return;
       }
-      recuperarTurnosPerdidos(deps, posse)
+      // Para no meio da volta se o processo vai sair ou se deixou de ser o líder (troca de lease: o outro processo é quem
+      // tem turnos vivos agora, e tomá-los por perdidos seria responder em dobro).
+      const parar = (): boolean => parado || lideranca() === null;
+      recuperarTurnosPerdidos(deps, posse, { voltasSemDecisao, parar })
         .then((r) => {
           if (r.candidatos > 0) logger.info(r, 'recuperar-turnos: varredura concluída');
         })

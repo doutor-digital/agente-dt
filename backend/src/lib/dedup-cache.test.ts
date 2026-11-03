@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { claimMessageId, clearDedupCache, deveLimpar, podarMemoria, TTL_REENTREGA_KOMMO_MS } from './dedup-cache.js';
+import { claimMessageId, clearDedupCache, deveLimpar, podarMemoria, reivindicarComCerteza, TTL_REENTREGA_KOMMO_MS } from './dedup-cache.js';
 
 // ── defesa 3: o dedupe do Kommo cobre os reenvios (5 + 15 + 15 + 60 min) ─────────────────────
 
@@ -54,12 +54,12 @@ test('deveLimpar: limpeza do banco no máximo a cada 10 min', () => {
 
 // ── quem REFAZ trabalho pede o contrário: sem certeza, não refaz ────────────────────────────────
 
-test('claimMessageId com recusarSeBancoFalhar: banco fora → recusa (e não guarda na memória)', async () => {
+test('reivindicarComCerteza: banco fora → "incerto" (não é "perdeu") e não guarda na memória', async () => {
   clearDedupCache();
-  // Sem banco no teste: o INSERT falha. O padrão deixa passar; o estrito recusa.
-  assert.equal(await claimMessageId('turno-recuperado', 'trace-x', 60_000, { recusarSeBancoFalhar: true }), false);
-  // Não ficou memória "já vi": o mesmo id no modo padrão ainda passa (é a primeira vez que o padrão pergunta).
-  assert.equal(await claimMessageId('turno-recuperado', 'trace-x', 60_000), true);
+  // Sem banco no teste: o INSERT falha. O padrão deixa passar; o estrito diz que não sabe.
+  assert.equal(await reivindicarComCerteza('turno-recuperado', 'trace-x', 60_000), 'incerto');
+  // Não ficou memória "já vi": a próxima pergunta também vai ao banco (e também não sabe).
+  assert.equal(await reivindicarComCerteza('turno-recuperado', 'trace-x', 60_000), 'incerto');
   clearDedupCache();
 });
 
