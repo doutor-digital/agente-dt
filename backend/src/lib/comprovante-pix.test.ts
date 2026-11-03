@@ -131,6 +131,15 @@ test('favorecido pelo NOME (documento mascarado ou ausente) também vale, com "L
   assert.equal(avaliarComprovante(dados({ favorecidoDocumento: '**.485.277/****-**' }), CTX).ok, true);
 });
 
+test('sem documento, o nome tem de ser IGUAL ao do titular; o recibo que continua o nome só vale com o documento mascarado conferindo', () => {
+  const longo = 'BENSAG FISIOTERAPIA E PILATES LTDA';
+  assert.equal(motivoDe(avaliarComprovante(dados({ favorecidoDocumento: null, favorecidoNome: longo }), CTX))?.codigo, 'favorecido_diferente');
+  assert.equal(avaliarComprovante(dados({ favorecidoDocumento: '**.485.277/****-**', favorecidoNome: longo }), CTX).ok, true);
+  const outra = { ...CTX, pixHolder: 'Clinica Hernia', pixKey: 'financeiro@clinica.com.br' };
+  assert.equal(motivoDe(avaliarComprovante(dados({ favorecidoDocumento: null, favorecidoNome: 'CLINICA HERNIA DISTRIBUIDORA LTDA' }), outra))?.codigo, 'favorecido_diferente');
+  assert.equal(avaliarComprovante(dados({ favorecidoDocumento: null, favorecidoNome: 'Clinica Hernia Ltda' }), outra).ok, true);
+});
+
 test('valor MAIOR que a taxa passa (quem pagou os R$ 350 inteiros); valor menor → pede o comprovante certo', () => {
   assert.equal(avaliarComprovante(dados({ valor: 350 }), CTX).ok, true);
   const menor = motivoDe(avaliarComprovante(dados({ valor: 99.99 }), CTX));

@@ -38,7 +38,7 @@ export type ResultadoDaReserva =
   | 'outro_paciente'
   /** este paciente já tem uma consulta (ou uma marcação em andamento) com ESTE comprovante: a equipe decide se o crédito vale para a nova */
   | 'mesmo_paciente_ja_marcou'
-  /** outro cartão usou um comprovante do mesmo banco, minuto e valor, com o ID lido diferente — pode ser o mesmo, lido com um caractere trocado */
+  /** outro cartão — ou este, já com consulta — usou um comprovante do mesmo banco, minuto e valor, com o ID lido diferente: pode ser o mesmo, lido com um caractere trocado */
   | 'parecido_de_outro'
   /** o banco não respondeu: sem registro não há como impedir o reuso */
   | 'indisponivel';
@@ -82,19 +82,21 @@ export function criarRegistroNoBanco(db: BancoDeComprovantes = prisma): Registro
       const chave = chaveDoE2E(e2e);
       const meu = (r: Pick<Linha, 'unitId' | 'kommoLeadId'>) => r.unitId === unitId && r.kommoLeadId === leadId;
       try {
-        const parecidos = await db.comprovantePixUsado.findMany({
-          where: { e2e: { startsWith: chave.slice(0, PREFIXO) }, valorCentavos },
-          select: { e2e: true, unitId: true, kommoLeadId: true, idSchedule: true, consultaEm: true },
-        });
-        const igual = parecidos.find((r) => r.e2e === chave);
+        // o MESMO E2E, qualquer que seja o valor lido (a visão pode errar o valor numa segunda leitura da mesma imagem)
+        const igual = await db.comprovantePixUsado.findUnique({ where: { e2e: chave }, select: { e2e: true, unitId: true, kommoLeadId: true, idSchedule: true, consultaEm: true } });
         if (igual) {
           if (!meu(igual) || jaMarcou(igual)) return meu(igual) ? 'mesmo_paciente_ja_marcou' : 'outro_paciente';
           // meu, sem consulta (uma tentativa anterior foi desfeita): a reserva é um UPDATE condicional — só uma chamada o ganha
           const ganhou = await db.comprovantePixUsado.updateMany({ where: { e2e: chave, consultaEm: null, idSchedule: null }, data: { consultaEm } });
           return ganhou.count === 1 ? 'reservado' : 'mesmo_paciente_ja_marcou';
         }
-        // outro paciente, mesmo banco, minuto e valor, e o final do ID quase igual: o mesmo comprovante lido com erro
-        if (parecidos.some((r) => !meu(r) && diferencas(r.e2e.slice(PREFIXO), chave.slice(PREFIXO)) <= ERROS_DE_LEITURA)) return 'parecido_de_outro';
+        // mesmo banco, minuto e valor, e o final do ID quase igual: o mesmo comprovante lido com erro. De OUTRO cartão, ou do próprio paciente
+        // que já tem consulta com ele (reenviar a mesma imagem e ler um caractere diferente não pode abrir um segundo uso)
+        const parecidos = await db.comprovantePixUsado.findMany({
+          where: { e2e: { startsWith: chave.slice(0, PREFIXO) }, valorCentavos },
+          select: { e2e: true, unitId: true, kommoLeadId: true, idSchedule: true, consultaEm: true },
+        });
+        if (parecidos.some((r) => (!meu(r) || jaMarcou(r)) && diferencas(r.e2e.slice(PREFIXO), chave.slice(PREFIXO)) <= ERROS_DE_LEITURA)) return 'parecido_de_outro';
         try {
           await db.comprovantePixUsado.create({ data: { e2e: chave, unitId, kommoLeadId: leadId, valorCentavos, favorecido, consultaEm } });
         } catch (err) {
@@ -251,7 +253,7 @@ export function criarGanchosDaTaxa(ctx: ContextoDosGanchos): GanchosDoComprovant
       const motivo =
         r === 'mesmo_paciente_ja_marcou'
           ? 'este comprovante já pagou uma consulta deste paciente que foi marcada antes (a equipe decide se o crédito vale para a nova)'
-          : 'outro paciente usou um comprovante do mesmo banco, minuto e valor, com o ID diferente por poucos caracteres (pode ser o mesmo comprovante lido com um caractere trocado)';
+          : 'já existe consulta (deste ou de outro cartão) paga por um comprovante do mesmo banco, minuto e valor, com o ID diferente por poucos caracteres (pode ser o mesmo comprovante lido com um caractere trocado)';
       return recusado(aceito, 'equipe', 'e2e_do_mesmo_paciente', motivo, TEXTO_PARA_EQUIPE(motivo));
     },
 

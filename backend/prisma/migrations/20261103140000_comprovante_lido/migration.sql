@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS "comprovantes_lidos" (
     "dados" JSONB,
     "erro" TEXT,
     "modelo" TEXT,
+    "entregue_em" TIMESTAMP(3),
     "criado_em" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "comprovantes_lidos_pkey" PRIMARY KEY ("id")

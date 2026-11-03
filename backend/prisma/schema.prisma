@@ -2389,6 +2389,9 @@ model ComprovanteLido {
   dados         Json?
   erro          String?
   modelo        String?
+  /// Quando a referência chegou à conversa com a Sofia (turno que deu certo). Nulo num comprovante = o turno que o leu falhou, e o
+  /// próximo o entrega de novo (rota do salesbot, que lê os anexos pela conversa oficial). Imagem que não é comprovante já nasce entregue.
+  entregueEm    DateTime? @map("entregue_em")
   criadoEm      DateTime @default(now()) @map("criado_em")
 
   @@unique([unitId, kommoLeadId, fonte])
