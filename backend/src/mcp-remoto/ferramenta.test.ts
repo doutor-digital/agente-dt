@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ErroDeEntrada } from '../franquia-mcp/travas.js';
-import { executar } from './ferramenta.js';
+import { executar, executarComImagens } from './ferramenta.js';
 
 type Registro = { ferramenta: string; argumentos: unknown; ok: boolean; ms: number; erro?: string };
 const texto = (r: { content: Array<{ type: string; text?: string }> }) => String(r.content[0]?.text);
@@ -83,4 +83,26 @@ test('sucesso: devolve o JSON, não grava erro e entrega os argumentos como vier
   assert.equal(registros[0]!.erro, undefined);
   assert.equal(registros[0]!.ok, true);
   assert.deepEqual(registros[0]!.argumentos, { a: 1 });
+});
+
+test('executarComImagens: devolve texto e imagem como vieram; audita só os argumentos; erro sai mascarado igual ao executar', async () => {
+  const registros: Registro[] = [];
+  const img = Buffer.from('jpeg-falso').toString('base64');
+  const r = await executarComImagens('vf', { gravacao: 'caixa_2026-11-03_0800', eventos: [1] }, (x) => void registros.push(x), () => [
+    { type: 'text', text: 'Evento 1' },
+    { type: 'image', data: img, mimeType: 'image/jpeg' },
+  ]);
+  assert.deepEqual(r.content, [{ type: 'text', text: 'Evento 1' }, { type: 'image', data: img, mimeType: 'image/jpeg' }]);
+  assert.equal(r.isError, undefined);
+  assert.equal(registros[0]!.ok, true);
+  assert.equal(JSON.stringify(registros[0]).includes(img), false);
+
+  const registros2: Registro[] = [];
+  const e = await executarComImagens('vf', {}, (x) => void registros2.push(x), () => {
+    throw new Error('cliente 12345678909 não achado');
+  });
+  assert.equal(e.isError, true);
+  assert.equal(texto(e as never), 'cliente ***.***.***-09 não achado');
+  assert.equal(registros2[0]!.erro, 'cliente ***.***.***-09 não achado');
+  assert.equal(registros2[0]!.ok, false);
 });

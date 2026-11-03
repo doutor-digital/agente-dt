@@ -50,6 +50,7 @@ import { contaEvolutionDoAmbiente, criarContextoEvolution, EVENTO_DE_ENVIO, regi
 import { blingGet } from '../lib/bling/cliente.js';
 import type { Usuario } from './provedor.js';
 import { registrarRelatorio, type DepsRelatorio } from './relatorio.js';
+import { contextoVideoDoAmbiente, montarRotaDoClipe, registrarVideoSePermitido, type AcessoAoClipe } from './video.js';
 import { montarConectorRemoto } from './servidor.js';
 import { acharSlug, umaPorChave, umaPorToken } from './unidades.js';
 
@@ -331,6 +332,32 @@ async function vinculosDosLeads(slugs: string[], leadIds: number[]): Promise<Map
   return m;
 }
 
+/**
+ * Quem vê o vigia de vídeo (video_*): os e-mails de MCP_VIDEO_EMAILS que existem como usuário ativo do console. É imagem de câmera
+ * de funcionário, então a lista é só da gerente e do João e é à parte das outras. Sem a variável, ninguém vê.
+ */
+async function leitoresDoVideo(): Promise<Set<string>> {
+  const emails = (process.env.MCP_VIDEO_EMAILS ?? '').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean);
+  if (!emails.length) return new Set();
+  const us = await prisma.user.findMany({ where: { email: { in: emails }, isActive: true }, select: { id: true } });
+  return new Set(us.map((u) => u.id));
+}
+
+/** Cada abertura de clipe (link do video_clipe) fica no log e na auditoria do conector: quem pediu, qual clipe, de onde abriu. */
+function auditarClipe(a: AcessoAoClipe): void {
+  logger.info({ gravacao: a.gravacao, evento: a.evento, ip: a.ip }, 'mcp-remoto: clipe do vigia aberto');
+  armazemPrisma
+    .auditar({
+      userId: a.quem,
+      clientId: 'vigia-clipe',
+      ferramenta: 'video_clipe_aberto',
+      argumentos: { gravacao: a.gravacao, evento: a.evento, ip: a.ip, ...(a.agente ? { agente: a.agente } : {}) },
+      ok: true,
+      duracaoMs: 0,
+    })
+    .catch((err) => logger.warn({ err }, 'mcp-remoto: auditoria do clipe não gravou'));
+}
+
 /** Recarrega em segundo plano: na subida e a cada 10 min; se falhar, tenta de novo em 30 s. */
 function manterAtualizado<T>(carregar: () => Promise<T>, aplicar: (v: T) => void, nome: string): void {
   const rodar = () => {
@@ -461,6 +488,18 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   const sistemas = criarContextoSistemas();
   manterAtualizado(contasSistemasDoBanco, (contas) => (sistemas.contas = contas), 'as contas do sistema novo');
   const pendentesSistemas = new PendentesSistemas();
+  // Vigia de vídeo: precisa de VIGIA_DIR (pasta dos pacotes, somente leitura) E de MCP_VIDEO_EMAILS; sem as duas, as ferramentas e a rota não existem.
+  // A chave do link do clipe é derivada, não a do console: um link vazado não vira sessão.
+  const video = contextoVideoDoAmbiente(process.env, {
+    urlPublica,
+    segredo: createHmac('sha256', env.SESSION_JWT_SECRET).update('mcp-remoto:vigia-clipe').digest('hex'),
+  });
+  let leitoresVideo = new Set<string>();
+  if (video) {
+    montarRotaDoClipe(app, video, auditarClipe);
+    manterAtualizado(leitoresDoVideo, (s) => (leitoresVideo = s), 'quem vê o vigia de vídeo');
+    logger.info({ dir: video.dir, retencaoDias: video.retencaoDias }, 'mcp-remoto: vigia de vídeo ligado');
+  }
   const cacheCerebro = new Cache();
   // o contexto da franquia nasce dentro de montarConectorRemoto; as ferramentas extras só rodam depois
   let franquia: Contexto | undefined;
@@ -506,6 +545,7 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
         registrarAdminSistemas(server, sistemas, pendentesSistemas, quemSistemas, auditar);
       }
       if (leitoresWhatsapp.has(quem.userId)) registrarFerramentasEvolution(server, whatsapp, quem.userId, auditar);
+      registrarVideoSePermitido(server, video, quem.userId, leitoresVideo, auditar);
       registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas, convenia: convenia.contas, tiquetaque: tiquetaque.contas, tramitacao: tramitacao.contas, sistemas: sistemas.contas }), auditar);
       registrarCerebro(server, slugs, cacheCerebro, auditar);
       if (franquia) {

@@ -73,6 +73,7 @@ const INSTRUCOES = [
   'ficaram de fora (unidadesForaDoTotal) ou incompletas (unidadesIncompletas). Nunca apresente um total sem dizer quais faltaram.',
   'Agendamentos são filtrados pela data da consulta; tratamentos e leads, pela data de criação. Use agruparPor para contar em vez de listar.',
   'Alcance, cliques e gasto de anúncio vêm do conector do Metricool (se estiver ligado): cruze com a "origem" do relatorio_funil.',
+  'Para quem tem permissão, o vigia de vídeo (video_*): gravações de câmera de horas, já trianguladas por movimento no computador que grava (o vídeo inteiro nunca sobe). video_gravacoes lista, video_folhas devolve o índice dos eventos e as folhas de contato como IMAGEM (até 8 por vez, com a hora real de cada quadro), video_clipe devolve o LINK temporário do clipe para a pessoa abrir no navegador. Dê nota de 0 a 3 por evento e peça clipe só dos de nota 2 ou 3. Descreva o que se VÊ, nunca acuse ninguém: você não vê vídeo e a folha tem baixa resolução; quem decide é a pessoa, vendo o clipe.',
 ].join(' ');
 
 const ERRO_METODO = { jsonrpc: '2.0', error: { code: -32000, message: 'Use POST: este servidor não mantém sessão.' }, id: null };
