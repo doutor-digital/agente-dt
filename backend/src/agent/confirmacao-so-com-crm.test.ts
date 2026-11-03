@@ -8,7 +8,6 @@ import {
   RECUSA_AGUARDANDO_EQUIPE,
   RECUSA_SEM_COMPROVANTE_DA_TAXA,
   decidirTrava,
-  detalheDoValor,
   marcarRecebimento,
   citaEquipe,
   valorEmReais,
@@ -433,17 +432,6 @@ test('"pagamento confirmado" em Boa Vista depois de marcar: pega as formas que e
     'O pagamento antecipado confirmado garante sua vaga.',
     'Sua consulta está marcada pra quinta às 10h. A mensagem caiu pela metade, pode repetir?',
   ]) assert.equal(respostaDoComprovante(f, t, true), null, f);
-});
-
-test('a tarefa de Boa Vista leva o valor lido e o esperado', async () => {
-  const tarefas: Array<Record<string, unknown>> = [];
-  const kommo = { getLead: async () => ({ name: 'Joana' }), createTask: async (a: Record<string, unknown>) => (tarefas.push(a), { id: 9 }) };
-  await abrirTarefaParaEquipe({
-    slug: 'doutor-hernia-boa-vista', unitId: 'u', leadId: 1, kommo: kommo as never, recorder: rec(), motivo: 'comprovante',
-    dedupe: { avisoRecente: async () => false, marcarAviso: async () => undefined } as never,
-    detalhe: detalheDoValor(T([comprovanteDe('50,00')]), 100),
-  });
-  assert.match(String(tarefas[0].text), /valor lido: R\$ 50,00; esperado \(taxa de reserva\): R\$ 100,00/);
 });
 
 // --- buracos achados pelo sênior depois do #127 (ao vivo): uma frase, um teste ---------------------------------------------

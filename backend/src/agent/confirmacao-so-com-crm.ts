@@ -317,14 +317,6 @@ export const RECUSA_SEM_COMPROVANTE_DA_TAXA =
   'confirmado": quem confere o dinheiro é a equipe. Se ele preferir pagar na clínica, chame resumir_lead_para_sdr para ' +
   'a equipe acompanhar.';
 
-const brl = (v: number) => `R$ ${v.toFixed(2).replace('.', ',')}`;
-
-
-/** Quanto foi lido nos comprovantes da espera e quanto era esperado — vai na tarefa e no passo do rastro. */
-export function detalheDoValor(turno: TurnoDoComprovante, taxaEsperada: number | null): string {
-  const lidos = (turno.valores ?? []).map((v) => (v === null ? 'ilegível/ausente' : brl(v))).join(', ') || 'nenhum';
-  return `valor lido: ${lidos}; esperado (taxa de reserva): ${taxaEsperada === null ? 'não cadastrado na unidade' : brl(taxaEsperada)}`;
-}
 
 export interface OpcoesDaTrava {
   /** a unidade exige a taxa de reserva antes de marcar (flag `spineBookingRequiresPayment`) */
@@ -356,6 +348,8 @@ export interface GanchosDoComprovante {
   depois(aceito: ComprovanteAceito, args: Record<string, unknown>, resultado: string): Promise<string>;
   /** O comprovante existia e não passou: a equipe ganha a tarefa com o motivo técnico. */
   aoRecusar(rejeicao: ComprovanteRecusado, args: Record<string, unknown>): Promise<void>;
+  /** `agendar_consulta` lançou erro: o E2E reservado neste processo fica livre para a nova tentativa. */
+  aoFalhar(aceito: ComprovanteAceito): void;
 }
 
 /** O que o modelo lê quando o comprovante não passa: o pedido educado de outro, ou o fluxo antigo (a equipe confere). */
@@ -465,7 +459,13 @@ export function travarAgendamentoPorComprovante(
       }
       // O comprovante foi aceito: a forma é Pix antecipado e a ferramenta sabe (`pagoPorComprovante`) que não é para mandar a chave de novo.
       // O modelo não consegue escrever `pagoPorComprovante`: o zod do schema descarta o que não conhece (mesmo caminho do `remarcando`).
-      const r = String(await original({ ...porTras, formaPagamento: 'pix_antecipado', pagoPorComprovante: true } as never, ...(resto as never[])));
+      let r: string;
+      try {
+        r = String(await original({ ...porTras, formaPagamento: 'pix_antecipado', pagoPorComprovante: true } as never, ...(resto as never[])));
+      } catch (err) {
+        ganchos.aoFalhar(d.aceito);
+        throw err;
+      }
       turno.marcouPorComprovante = /^Consulta marcada para/.test(r.trim());
       return ganchos.depois(d.aceito, porTras, r);
     };

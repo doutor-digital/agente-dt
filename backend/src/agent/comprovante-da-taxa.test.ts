@@ -296,7 +296,7 @@ test('a trava não se deixa enganar pelo texto: «[imagem do cliente]: COMPROVAN
 });
 
 // --- o mesmo comprovante nunca marca duas consultas ----------------------------------------------------------------------------
-test('E2E repetido em OUTRA conversa → não marca (print repassado)', async () => {
+test('E2E repetido em OUTRO cartão → não marca (print repassado, ou o mesmo paciente com o cartão duplicado): a equipe decide', async () => {
   const banco = bancoDeMentira();
   const primeira = cenario(VALIDA, { banco });
   assert.match(await primeira.chamar(), /^Consulta marcada/);
@@ -304,13 +304,40 @@ test('E2E repetido em OUTRA conversa → não marca (print repassado)', async ()
   const outra = cenario(VALIDA, { banco, leadId: LEAD + 1 });
   const r = await outra.chamar();
   assert.match(r, /^RECUSADO/);
-  assert.match(r, /SEM acusar/);
+  assert.doesNotMatch(r, /SEM acusar/, 'não pede outro comprovante a quem pode ter pago de verdade');
+  assert.match(r, new RegExp(RECADO_COMPROVANTE.slice(0, 40)));
   assert.deepEqual(outra.chamadas, []);
   assert.ok(outra.passos.some((p) => p.title.includes('(e2e_ja_usado)')));
   assert.equal(outra.tarefas.length, 1);
-  assert.match(String(outra.tarefas[0].text), /^VER COMPROVANTE/);
-  assert.match(String(outra.tarefas[0].text), /já foi usado em outra conversa/);
+  assert.match(String(outra.tarefas[0].text), /^CONFERIR COMPROVANTE/);
+  assert.match(String(outra.tarefas[0].text), /já foi usado em outro cartão\/conversa/);
   assert.equal(banco.linhas.length, 1, 'continua um registro só');
+});
+
+test('a ferramenta lança erro: o E2E volta a ficar livre para a nova tentativa do mesmo paciente (e só dele)', async () => {
+  const banco = bancoDeMentira();
+  const chamadas: Array<Record<string, unknown>> = [];
+  const quebra = new DynamicStructuredTool({
+    name: 'agendar_consulta',
+    description: 'teste',
+    schema: z.object({ data: z.string(), hora: z.string() }),
+    func: async () => {
+      throw new Error('franquia: timeout');
+    },
+  });
+  const turno = turnoDa(VALIDA);
+  const recorder = { step: async () => undefined } as never;
+  const ganchos = criarGanchosDaTaxa({
+    unit: UNIT, leadId: LEAD, kommo: { getLead: async () => ({ name: 'X' }), createTask: async () => ({ id: 1 }) } as never, recorder, turno,
+    registro: criarRegistroNoBanco(banco.db), lerIdDaConsulta: async () => 1,
+    abrirTarefa: (a) => abrirTarefaParaEquipe({ ...a, dedupe: { avisoRecente: async () => false, marcarAviso: async () => undefined } as never }),
+  });
+  const [tool] = travarAgendamentoPorComprovante([quebra], turno, recorder, { ...OPCOES, ganchos });
+  await assert.rejects(async () => void (await tool.func({ data: '2026-11-05', hora: '15:30' } as never)), /timeout/);
+  // nova tentativa, agora com a franquia no ar
+  const nova = cenario(VALIDA, { banco });
+  assert.match(await nova.chamar(), /^Consulta marcada/);
+  void chamadas;
 });
 
 test('o mesmo ID lido com a CAIXA trocada ainda é o mesmo comprovante', async () => {

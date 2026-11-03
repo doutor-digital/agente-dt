@@ -28,7 +28,7 @@ import { transcribeAudio } from '../services/transcription.service.js';
 import { deveIrParaEquipe, ehFalhaEstrutural, limparFalhasDeAudio, registrarFalhaDeAudio } from '../lib/falha-de-audio.js';
 import { describeImage } from '../services/vision.service.js';
 import { marcarRecebimento } from '../agent/confirmacao-so-com-crm.js';
-import { anexarDados, neutralizarMarcasDoSistema, resumoDaLeitura } from '../lib/comprovante-pix.js';
+import { anexarDados, neutralizarMarcasDoSistema, resumoDaLeitura, semAMarcaDeDados } from '../lib/comprovante-pix.js';
 import { ehTranscricaoDeComprovante } from '../lib/pagamento-antecipado.js';
 import { tentarNotaDeVoz } from '../lib/resposta-em-voz.js';
 import { findUnitBySlug, ensureDefaultUnit } from '../services/units.service.js';
@@ -1093,9 +1093,9 @@ export async function processAgent(args: {
   const accountId = args.accountId ?? null;
   let { humanMessage } = args;
   // Unidade com taxa de reserva: a Sofia marca pelo comprovante (lib/comprovante-pix.ts). A fala do paciente não pode trazer, escrita
-  // por ele, as marcas que só nós gravamos ("[imagem do cliente]: COMPROVANTE…", dados e hora de recebimento). Turno retomado
-  // traz a fala já gravada pelo sistema, com as marcas verdadeiras: fica como está.
-  if (unit.spineBookingRequiresPayment && !args.retomada) humanMessage = neutralizarMarcasDoSistema(humanMessage);
+  // por ele, as marcas que só nós gravamos ("[imagem do cliente]: COMPROVANTE…", dados e hora de recebimento). Vale também para o turno
+  // retomado depois de um deploy: ele refaz a fala a partir do texto cru do webhook, e as imagens são lidas de novo mais abaixo.
+  if (unit.spineBookingRequiresPayment) humanMessage = neutralizarMarcasDoSistema(humanMessage);
   let delivered = false;
   // A trava de antes de enviar compara com isto: pausa que a própria Sofia fez DEPOIS daqui é do turno.
   const inicioDoTurno = Date.now();
@@ -1306,7 +1306,7 @@ export async function processAgent(args: {
           const criada = await kommoCli.addLeadNote(
             leadId,
             '⏸ O paciente continuou escrevendo com a IA pausada e ninguém respondeu. ' +
-              `Última mensagem: "${humanMessage.trim().slice(0, 120)}"`,
+              `Última mensagem: "${semAMarcaDeDados(humanMessage).trim().slice(0, 120)}"`,
           );
           // marca SÓ depois da Kommo confirmar — falha de rede não pode calar o aviso por 24 h
           if (criada) await marcarAviso(unit.id, leadId, 'paciente_insistiu');
@@ -1360,7 +1360,7 @@ export async function processAgent(args: {
           let anotou = false;
           if (!(await avisoRecente(unit.id, leadId, REGRA_NOTA_CALADA))) {
             try {
-              const nota = await kommo.addLeadNote(leadId, notaSofiaCalada(etapa ?? 'etapa encerrada', humanMessage));
+              const nota = await kommo.addLeadNote(leadId, notaSofiaCalada(etapa ?? 'etapa encerrada', semAMarcaDeDados(humanMessage)));
               if (nota?.id) {
                 await marcarAviso(unit.id, leadId, REGRA_NOTA_CALADA);
                 anotou = true;
@@ -1775,7 +1775,7 @@ export async function processAgent(args: {
       unit,
       leadId,
       recentTurns: [
-        { role: 'user', content: humanMessage },
+        { role: 'user', content: semAMarcaDeDados(humanMessage) },
         ...(reply && podeEnviar && !segurada && !travaDoEnvio ? [{ role: 'assistant' as const, content: reply }] : []),
       ],
     });

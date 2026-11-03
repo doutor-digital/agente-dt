@@ -216,15 +216,10 @@ export function criarGanchosDaTaxa(ctx: ContextoDosGanchos): GanchosDoComprovant
       }
 
       if (r === 'outro_paciente') {
-        const motivo = 'este comprovante (mesmo ID da transação) já foi usado em outra conversa';
-        return recusado(
-          aceito,
-          'reenviar',
-          'e2e_ja_usado',
-          motivo,
-          `RECUSADO: o comprovante que o paciente mandou NÃO pôde ser usado (motivo técnico, NÃO cite ao paciente: ${motivo}). ${NAO_MARCOU}` +
-            'Responda com as suas palavras, com educação e SEM acusar o paciente de nada: agradeça, diga que não conseguiu validar esse comprovante e peça o comprovante do pagamento DELE desta reserva (foto ou PDF, direto do app do banco). A equipe também foi avisada.',
-        );
+        // Pode ser um print repassado, ou o mesmo paciente com o cartão do Kommo duplicado: pedir «outro comprovante» a quem já pagou seria
+        // injusto. Ninguém ganha consulta por ele; a equipe vê o motivo na tarefa e decide.
+        const motivo = 'este comprovante (mesmo ID da transação) já foi usado em outro cartão/conversa: print repassado, ou o mesmo paciente com o cartão do Kommo duplicado';
+        return recusado(aceito, 'equipe', 'e2e_ja_usado', motivo, TEXTO_PARA_EQUIPE(motivo));
       }
       if (r === 'indisponivel') {
         const motivo = 'o registro de comprovantes não respondeu: sem ele não há como impedir o mesmo comprovante em duas consultas';
@@ -239,18 +234,24 @@ export function criarGanchosDaTaxa(ctx: ContextoDosGanchos): GanchosDoComprovant
     },
 
     async depois(aceito, args, resultado) {
-      EM_ANDAMENTO.delete(chaveDoE2E(aceito.e2e));
       const marcou = /^Consulta marcada para/.test(resultado.trim());
-      if (!marcou) return resultado; // a franquia recusou (horário ocupado…): o E2E fica reservado para este paciente, que pode escolher outro horário
+      if (!marcou) {
+        EM_ANDAMENTO.delete(chaveDoE2E(aceito.e2e));
+        return resultado; // a franquia recusou (horário ocupado…): o E2E fica reservado para este paciente, que pode escolher outro horário
+      }
       const data = String(args.data ?? '');
       const hora = String(args.hora ?? '');
       const leadId = ctx.leadId;
 
-      // completa o registro com a consulta (o vínculo foi gravado por agendar_consulta antes de ela devolver)
-      void (async () => {
+      // Completa o registro com a consulta ANTES de devolver (o vínculo foi gravado por agendar_consulta antes de ela responder): a
+      // próxima tentativa com o mesmo comprovante já o encontra como «usado numa consulta».
+      try {
         const idSchedule = leadId ? await (ctx.lerIdDaConsulta ?? idDaConsultaNoVinculo)(ctx.unit.id, leadId).catch(() => null) : null;
         await registro.concluir(aceito.e2e, { idSchedule, consultaEm: `${data}T${hora}` });
-      })().catch((err) => logger.warn({ err: String(err), leadId }, 'comprovante: não consegui completar o registro do E2E'));
+      } catch (err) {
+        logger.warn({ err: String(err), leadId }, 'comprovante: não consegui completar o registro do E2E');
+      }
+      EM_ANDAMENTO.delete(chaveDoE2E(aceito.e2e));
 
       // A tarefa «Conferir no extrato». Sem ela ninguém sabe que um Pix não conferido segurou um horário: se não sair, o João é avisado.
       let saiu = false;
@@ -282,6 +283,10 @@ export function criarGanchosDaTaxa(ctx: ContextoDosGanchos): GanchosDoComprovant
         payload: { leadId, data, hora, valor: aceito.valor, e2e: aceito.e2e, favorecido: aceito.favorecido, porDocumento: aceito.porDocumento, porNome: aceito.porNome, leitura: aceito.dados },
       });
       return resultado + ADENDO_DA_MARCACAO_POR_COMPROVANTE;
+    },
+
+    aoFalhar(aceito) {
+      EM_ANDAMENTO.delete(chaveDoE2E(aceito.e2e));
     },
 
     async aoRecusar(rejeicao) {

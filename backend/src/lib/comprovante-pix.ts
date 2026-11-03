@@ -184,14 +184,15 @@ export function palavrasDoNome(s: string | null | undefined): string[] {
     .filter((p) => p !== '' && p !== 'ltda');
 }
 
-/** Igual, ou um é o COMEÇO do outro com pelo menos duas palavras ("Bensag Fisioterapia" × "Bensag Fisioterapia e Pilates"). */
+/**
+ * O nome do recibo é o do cadastro, todas as palavras e na ordem; o recibo pode continuar depois ("Bensag Fisioterapia" × "Bensag
+ * Fisioterapia e Pilates"). Recibo MAIS CURTO que o cadastro não vale: "Maria Silva" não é "Maria Silva Santos".
+ */
 export function nomeConfere(doRecibo: string | null | undefined, doCadastro: string | null | undefined): boolean {
-  const a = palavrasDoNome(doRecibo);
-  const b = palavrasDoNome(doCadastro);
-  if (a.length === 0 || b.length === 0) return false;
-  const [curto, longo] = a.length <= b.length ? [a, b] : [b, a];
-  if (curto.length < 2 && longo.length !== curto.length) return false;
-  return curto.every((p, i) => longo[i] === p);
+  const recibo = palavrasDoNome(doRecibo);
+  const cadastro = palavrasDoNome(doCadastro);
+  if (recibo.length === 0 || cadastro.length === 0 || recibo.length < cadastro.length) return false;
+  return cadastro.every((p, i) => recibo[i] === p);
 }
 
 export type ResultadoDoDocumento = 'igual' | 'parcial' | 'diferente' | 'ausente';

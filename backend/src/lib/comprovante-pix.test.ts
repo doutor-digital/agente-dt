@@ -89,7 +89,9 @@ test('nome do favorecido: sem acento, sem caixa, "Ltda" opcional; mas não qualq
   assert.equal(nomeConfere('Bensag Fisioterapia', TITULAR), true, 'sem Ltda');
   assert.equal(nomeConfere('bensag  fisioterapía ltda.', TITULAR), true, 'acento, caixa e pontuação');
   assert.equal(nomeConfere('BENSAG FISIOTERAPIA E PILATES LTDA', TITULAR), true, 'o recibo tem o nome mais longo');
-  assert.equal(nomeConfere('BENSAG', TITULAR), false, 'uma palavra só não basta');
+  assert.equal(nomeConfere('BENSAG', TITULAR), false, 'recibo mais curto que o cadastro não vale');
+  assert.equal(nomeConfere('Maria Silva', 'Maria Silva Santos'), false, 'titular pessoa física: o nome tem de vir inteiro');
+  assert.equal(nomeConfere('Maria Silva Santos Lima', 'Maria Silva Santos'), true);
   assert.equal(nomeConfere('Maria da Silva', TITULAR), false);
   assert.equal(nomeConfere('FISIOTERAPIA BENSAG', TITULAR), false, 'a ordem importa');
   assert.equal(nomeConfere(null, TITULAR), false);
