@@ -4,121 +4,27 @@ import { readFileSync } from 'node:fs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { criarContextoAsaas, type ContaAsaas } from './asaas.js';
-import { finalDaChave, impressaoDaChave } from '../lib/integracoes/cofre.js';
-import { limparTexto } from '../lib/integracoes/asaas-escrita.js';
+import { criarContextoAsaas } from './asaas.js';
+import { asaasFalso, AGORA, BancoFalso, ErroHttp, montar, porteiroEmMemoria, type Cli } from './asaas-falso.js';
+import { ErroDeEntrada } from '../franquia-mcp/travas.js';
 import {
-  chaveDeDuplicata, confirmarCliente, confirmarCobranca, criarEscritaAsaas, EVENTO_COBRANCA, EVENTO_CLIENTE, mascararDoc, prepararCliente, prepararCobranca,
-  LIMITES_ASAAS, registrarEscritaAsaas, registrarEscritaAsaasSePermitido, mascararTelefone, tetoDaCobranca, cobrancasPorHora, unidadesComEscrita, validarCpfCnpj, type PedidoDeCobranca, type RegistroDeCobranca,
+  chaveDeDuplicata, cobrancasPorHora, criarCliente, criarCobranca, criarEscritaAsaas, EVENTO_CLIENTE, EVENTO_COBRANCA, LIMITES_ASAAS, mascararDoc, mascararTelefone,
+  unidadesComEscrita, validarCpfCnpj, type PedidoDeCobranca,
 } from './asaas-escrita.js';
+import { registrarEscritaAsaas, registrarEscritaAsaasSePermitido } from './asaas-ferramentas.js';
+import { FALHA_DO_BANCO } from './asaas-limites.js';
 
-const CHAVE_A = '$aact_prod_AAAAAAAAAAAAAAAAAAAAAAAAAAAAxYZ1';
-const CHAVE_B = '$aact_prod_BBBBBBBBBBBBBBBBBBBBBBBBBBBBxYZ1'; // mesmo final, outra chave
 const CPF = '529.982.247-25';
 const CPF_DIGITOS = '52998224725';
 const CNPJ = '11.222.333/0001-81';
 const CHAVE_COMPLETA = '$aact_prod_000MzkwODA2MWY2OGM3MWRlMDU2NWM3MzJlNzZmNGZhZGY6OjAwMDAwXXYZ';
-const AGORA = Date.parse('2026-10-28T15:00:00-03:00');
 const VENC = '2026-11-10';
-
-class ErroHttp extends Error {
-  constructor(msg: string, readonly status: number | null) {
-    super(msg);
-  }
-}
-
-interface Cli { id: string; name: string; cpfCnpj: string; email?: string; mobilePhone?: string; notificationDisabled?: boolean; deleted?: boolean }
-
-interface Opc {
-  clientes?: Cli[];
-  pagamentos?: Array<{ id: string; externalReference?: string }>;
-  falhaNoPagamento?: Error;
-  falhaNoCliente?: Error;
-  semNomeDaConta?: boolean;
-  semEscrita?: boolean;
-  semLinhaDigitavel?: boolean;
-  /** o Asaas devolve estes clientes para QUALQUER busca por documento (resposta fora do combinado) */
-  clientesTortos?: Cli[];
-}
-
-function asaasFalso(o: Opc = {}) {
-  const clientes = [...(o.clientes ?? [])];
-  const pagamentos = [...(o.pagamentos ?? [])];
-  const posts: Array<[string, Record<string, any>]> = [];
-  const gets: string[] = [];
-  let seq = 0;
-  const conta: ContaAsaas = {
-    slug: 'doutor-hernia-serra',
-    nome: 'Serra',
-    fonte: {
-      async get<T>(caminho: string, query: Record<string, string | number | undefined> = {}): Promise<T> {
-        gets.push(caminho);
-        if (caminho === '/myAccount/commercialInfo') {
-          if (o.semNomeDaConta) throw new ErroHttp('Asaas 404', 404);
-          return { companyName: 'Clínica Serra Saúde LTDA' } as T;
-        }
-        if (caminho === '/customers') {
-          const doc = String(query.cpfCnpj ?? '');
-          if (o.clientesTortos) return { data: o.clientesTortos } as T;
-          return { data: clientes.filter((c) => !c.deleted && c.cpfCnpj.replace(/\D/g, '') === doc) } as T;
-        }
-        const m = caminho.match(/^\/customers\/(.+)$/);
-        if (m) {
-          const c = clientes.find((x) => x.id === m[1]);
-          if (!c) throw new ErroHttp('Asaas 404 em /customers', 404);
-          return c as T;
-        }
-        if (caminho === '/payments') return { data: pagamentos.filter((p) => p.externalReference === query.externalReference) } as T;
-        if (/^\/payments\/.+\/identificationField$/.test(caminho)) {
-          if (o.semLinhaDigitavel) throw new ErroHttp('Asaas 404', 404);
-          return { identificationField: '34191.79001 01043.510047 91020.150008 5 87650026000' } as T;
-        }
-        throw new Error(`rota não simulada: ${caminho}`);
-      },
-    },
-    ...(o.semEscrita
-      ? {}
-      : {
-          escrita: {
-            chaveFinal: '…xYZ1',
-            chaveImpressao: impressaoDaChave(CHAVE_A),
-            contaSalva: 'Serra (nome salvo)',
-            async post<T>(caminho: string, corpo: Record<string, unknown>): Promise<T> {
-              posts.push([caminho, corpo]);
-              if (caminho === '/customers') {
-                if (o.falhaNoCliente) throw o.falhaNoCliente;
-                const c: Cli = { id: `cus_00000${++seq}1234`, name: String(corpo.name), cpfCnpj: String(corpo.cpfCnpj), notificationDisabled: corpo.notificationDisabled === true };
-                clientes.push(c);
-                return c as T;
-              }
-              if (o.falhaNoPagamento) throw o.falhaNoPagamento;
-              const p = { id: `pay_${++seq}0000000001`, status: 'PENDING', ...corpo, bankSlipUrl: 'https://www.asaas.com/b/pdf/abc123', invoiceUrl: 'https://www.asaas.com/i/abc123' };
-              pagamentos.push({ id: p.id, externalReference: corpo.externalReference as string | undefined });
-              return p as T;
-            },
-          },
-        }),
-  };
-  return { conta, clientes, posts, gets, pagamentos };
-}
-
-function montar(
-  o: Opc = {},
-  op: { historico?: (c: string) => Promise<RegistroDeCobranca[]>; tetoReais?: () => number; porHora?: () => number; unidades?: () => Set<string>; esperaLinhaMs?: number } = {},
-) {
-  const f = asaasFalso(o);
-  const relogio = { t: AGORA };
-  // a escrita nasce DESLIGADA em toda unidade: os testes ligam a Serra, e os de "desligada" passam a lista que querem
-  const esc = criarEscritaAsaas({ agora: () => relogio.t, unidades: () => new Set(['doutor-hernia-serra']), ...op });
-  const asaas = criarContextoAsaas(new Map([[f.conta.slug, f.conta]]));
-  const eventos: Array<{ evento: string; args: Record<string, any>; ok: boolean; erro?: string }> = [];
-  const registrar = (evento: string, args: Record<string, unknown>, ok: boolean, erro?: string) => eventos.push({ evento, args, ok, erro });
-  return { f, esc, asaas, ctx: { asaas, esc }, relogio, eventos, registrar };
-}
+const Q = { id: 'u1', email: 'joao@exemplo.com' };
 
 const COBRANCA: PedidoDeCobranca = { unidade: 'serra', cpfCnpj: CPF, valor: 250, vencimento: VENC, descricao: 'Consulta de avaliação', externalReference: 'pedido-1' };
 const EXISTENTE: Cli = { id: 'cus_000005401844', name: 'Maria da Silva', cpfCnpj: CPF_DIGITOS, email: 'maria.silva@exemplo.com', mobilePhone: '63981411248', notificationDisabled: true };
 const tudo = (x: unknown) => JSON.stringify(x);
+const cobrar = (m: ReturnType<typeof montar>, p: Partial<PedidoDeCobranca> = {}) => criarCobranca(m.ctx, Q, { ...COBRANCA, ...p }, m.registrar) as Promise<any>;
 
 // ------------------------------------------------------------------ validação
 
@@ -133,700 +39,394 @@ test('CPF e CNPJ: dígitos verificadores conferidos; sequência repetida e taman
   assert.equal(mascararDoc('11222333000181'), '**.***.333/0001-**');
 });
 
-test('limites vêm do ambiente, com padrão 5000 e 20 por hora; valor inválido volta ao padrão', () => {
-  assert.equal(tetoDaCobranca({}), 5000);
-  assert.equal(tetoDaCobranca({ ASAAS_COBRANCA_MAX_REAIS: '1200' }), 1200);
-  assert.equal(tetoDaCobranca({ ASAAS_COBRANCA_MAX_REAIS: '' }), 5000);
+test('limite de cobranças por hora vem do ambiente (padrão 20); 0 e lixo DESLIGAM, não viram o padrão', () => {
   assert.equal(cobrancasPorHora({}), 20);
   assert.equal(cobrancasPorHora({ ASAAS_COBRANCAS_POR_HORA: '5' }), 5);
   assert.equal(cobrancasPorHora({ ASAAS_COBRANCAS_POR_HORA: '  ' }), 20);
-  // 0 e lixo DESLIGAM (não viram o padrão)
-  for (const v of ['0', 'abc', '-3', 'NaN']) assert.equal(tetoDaCobranca({ ASAAS_COBRANCA_MAX_REAIS: v }), 0, `teto ${v}`);
   for (const v of ['0', 'abc', '-3', '2.5']) assert.equal(cobrancasPorHora({ ASAAS_COBRANCAS_POR_HORA: v }), 0, `hora ${v}`);
 });
 
-// ------------------------------------------------------------------ cadastrar cliente
-
-test('cliente: a prévia NÃO grava, mostra a conta (nome e final da chave) e mascara documento, e-mail e telefone', async () => {
-  const { f, ctx } = montar();
-  const r = await prepararCliente(ctx, 'u1', { unidade: 'serra', nome: 'Maria da Silva', cpfCnpj: CPF, email: 'maria.silva@exemplo.com', telefone: '(63) 98141-1248' });
-  assert.equal(f.posts.length, 0);
-  assert.equal(r.jaCadastrado, false);
-  assert.deepEqual(r.conta, { unidade: 'doutor-hernia-serra', nomeDaConta: 'Clínica Serra Saúde LTDA', chaveTermina: '…xYZ1' });
-  assert.match(String(r.confirmacao), /^[0-9A-F]{12}$/);
-  const j = tudo(r);
-  assert.ok(!j.includes(CPF_DIGITOS) && !j.includes('529.982.247-25'), 'CPF inteiro vazou');
-  assert.ok(!j.includes('maria.silva@exemplo.com') && !j.includes('98141-1248') && !j.includes('981411248'), 'e-mail/telefone inteiros vazaram');
-  assert.ok(!j.includes('aact'), 'chave');
-  assert.match(j, /NÃO vai mandar e-mail nem SMS/);
+test('mascararTelefone: com DDI (12 e 13 dígitos) o DDD certo aparece, sem o 55; curto vira só asteriscos', () => {
+  assert.equal(mascararTelefone('(63) 98141-1248'), '(63) *****-1248');
+  assert.equal(mascararTelefone('+55 63 98141-1248'), '(63) *****-1248');
+  assert.equal(mascararTelefone('556333214455'), '(63) *****-4455');
+  assert.equal(mascararTelefone('3321'), '*****');
 });
 
-test('cliente: CPF já cadastrado → "já cadastrado", devolve o id e NÃO cria outro nem gera código', async () => {
-  const { f, ctx } = montar({ clientes: [EXISTENTE] });
-  const r = await prepararCliente(ctx, 'u1', { unidade: 'serra', nome: 'Maria S', cpfCnpj: CPF });
+// ------------------------------------------------------------------ cadastrar cliente (direto)
+
+test('cliente: cadastra DIRETO (sem código), SEM aviso por padrão, e o registro sai mascarado', async () => {
+  const m = montar();
+  const r = (await criarCliente(m.ctx, Q, { unidade: 'serra', nome: 'Maria da Silva', cpfCnpj: CPF, email: 'maria@exemplo.com', telefone: '(63) 98141-1248', endereco: { cep: '77000-000', logradouro: 'Rua A', numero: '10', bairro: 'Centro' } }, m.registrar)) as any;
+  assert.equal(r.cadastrado, true);
+  assert.deepEqual(r.conta, { unidade: 'doutor-hernia-serra', nomeDaConta: 'Clínica Serra Saúde LTDA', chaveTermina: '…xYZ1' });
+  assert.equal(m.f.posts().length, 1);
+  const { metodo, caminho, corpo } = m.f.posts()[0]!;
+  assert.deepEqual([metodo, caminho], ['POST', '/customers']);
+  assert.deepEqual(corpo, { name: 'Maria da Silva', cpfCnpj: CPF_DIGITOS, email: 'maria@exemplo.com', mobilePhone: '63981411248', postalCode: '77000000', address: 'Rua A', addressNumber: '10', province: 'Centro', notificationDisabled: true });
+  assert.equal(m.eventos[0]!.evento, EVENTO_CLIENTE);
+  assert.equal(m.eventos[0]!.args.pediuPor, 'u1');
+  const j = tudo(r) + tudo(m.eventos);
+  assert.ok(!j.includes(CPF_DIGITOS) && !j.includes('maria@exemplo.com') && !j.includes('981411248') && !j.includes('aact'), 'dado pessoal vazou');
+  assert.match(j, /NÃO vai mandar e-mail nem SMS/);
+
+  const n = montar();
+  await criarCliente(n.ctx, Q, { unidade: 'serra', nome: 'Maria da Silva', cpfCnpj: CPF, avisarCliente: true }, n.registrar);
+  assert.equal(n.f.posts()[0]!.corpo!.notificationDisabled, false);
+});
+
+test('cliente: CPF já cadastrado → devolve o id e NÃO cria outro; dois pedidos juntos criam UM só (fila)', async () => {
+  const a = montar({ clientes: [EXISTENTE] });
+  const r = (await criarCliente(a.ctx, Q, { unidade: 'serra', nome: 'Maria S', cpfCnpj: CPF }, a.registrar)) as any;
   assert.equal(r.jaCadastrado, true);
-  assert.equal(r.confirmacao, null);
   assert.match(String(r.instrucao), /cus_000005401844/);
-  assert.equal(f.posts.length, 0);
+  assert.equal(a.f.posts().length, 0);
   assert.ok(!tudo(r).includes('maria.silva@exemplo.com'));
+
+  const b = montar();
+  const pedido = { unidade: 'serra', nome: 'Joana Souza', cpfCnpj: CNPJ };
+  const [x, y] = (await Promise.all([criarCliente(b.ctx, Q, pedido, b.registrar), criarCliente(b.ctx, Q, pedido, b.registrar)])) as any[];
+  assert.equal(b.f.posts().length, 1);
+  assert.equal([x, y].filter((z) => z.cadastrado).length, 1);
+  assert.equal([x, y].filter((z) => z.jaCadastrado).length, 1);
 });
 
 test('cliente: CPF inválido, e-mail, telefone e CEP ruins são recusados antes de qualquer coisa', async () => {
-  const { f, ctx } = montar();
-  await assert.rejects(() => prepararCliente(ctx, 'u1', { unidade: 'serra', nome: 'Maria', cpfCnpj: '529.982.247-26' }), /CPF inválido/);
-  await assert.rejects(() => prepararCliente(ctx, 'u1', { unidade: 'serra', nome: 'Maria', cpfCnpj: CPF, email: 'sem-arroba' }), /e-mail inválido/);
-  await assert.rejects(() => prepararCliente(ctx, 'u1', { unidade: 'serra', nome: 'Maria', cpfCnpj: CPF, telefone: '123' }), /telefone inválido/);
-  await assert.rejects(() => prepararCliente(ctx, 'u1', { unidade: 'serra', nome: 'Maria', cpfCnpj: CPF, endereco: { cep: '123', logradouro: 'Rua A', numero: '1' } }), /CEP/);
-  await assert.rejects(() => prepararCliente(ctx, 'u1', { unidade: 'serra', nome: 'M', cpfCnpj: CPF }), /nome do cliente/);
-  assert.equal(f.posts.length, 0);
+  const m = montar();
+  const c = (a: object) => criarCliente(m.ctx, Q, { unidade: 'serra', nome: 'Maria', cpfCnpj: CPF, ...a }, m.registrar);
+  await assert.rejects(() => c({ cpfCnpj: '529.982.247-26' }), /CPF inválido/);
+  await assert.rejects(() => c({ email: 'sem-arroba' }), /e-mail inválido/);
+  await assert.rejects(() => c({ telefone: '123' }), /telefone inválido/);
+  await assert.rejects(() => c({ endereco: { cep: '123', logradouro: 'Rua A', numero: '1' } }), /CEP/);
+  await assert.rejects(() => c({ nome: 'M' }), /nome do cliente/);
+  assert.equal(m.f.posts().length, 0);
 });
 
-test('cliente: confirmar cria SEM aviso (notificationDisabled=true), com avisarCliente=true liga, e o registro sai mascarado', async () => {
-  const { f, ctx, registrar, eventos } = montar();
-  const p = await prepararCliente(ctx, 'u1', { unidade: 'serra', nome: 'Maria da Silva', cpfCnpj: CPF, email: 'maria@exemplo.com', telefone: '63981411248', endereco: { cep: '77000-000', logradouro: 'Rua A', numero: '10', bairro: 'Centro' } });
-  const r = (await confirmarCliente(ctx, 'u1', { confirmacao: String(p.confirmacao).toLowerCase() }, registrar)) as any;
-  assert.equal(r.cadastrado, true);
-  assert.equal(f.posts.length, 1);
-  const [caminho, corpo] = f.posts[0]!;
-  assert.equal(caminho, '/customers');
-  assert.deepEqual(corpo, { name: 'Maria da Silva', cpfCnpj: CPF_DIGITOS, email: 'maria@exemplo.com', mobilePhone: '63981411248', postalCode: '77000000', address: 'Rua A', addressNumber: '10', province: 'Centro', notificationDisabled: true });
-  assert.equal(eventos[0]!.evento, EVENTO_CLIENTE);
-  assert.equal(eventos[0]!.args.pediuPor, 'u1');
-  assert.equal(eventos[0]!.args.confirmadoPor, 'u1');
-  assert.ok(!tudo(eventos).includes(CPF_DIGITOS) && !tudo(r).includes(CPF_DIGITOS));
-
-  const m2 = montar();
-  const p2 = await prepararCliente(m2.ctx, 'u1', { unidade: 'serra', nome: 'Maria da Silva', cpfCnpj: CPF, avisarCliente: true });
-  assert.match(tudo(p2), /PODE mandar e-mail/);
-  await confirmarCliente(m2.ctx, 'u1', { confirmacao: String(p2.confirmacao) }, m2.registrar);
-  assert.equal(m2.f.posts[0]![1].notificationDisabled, false);
+test('cliente: se o Asaas devolver gente que não bate com o CPF buscado, não adivinha nem cria por cima; cliente SEM documento não casa', async () => {
+  const m = montar({ clientesTortos: [{ id: 'cus_000009999999', name: 'Outra Pessoa', cpfCnpj: '11222333000181' }] });
+  await assert.rejects(() => criarCliente(m.ctx, Q, { unidade: 'serra', nome: 'Maria', cpfCnpj: CPF }, m.registrar), /não batem/);
+  assert.equal(m.f.posts().length, 0);
+  const semDoc = montar({ clientesTortos: [{ id: 'cus_000008888888', name: 'Maria da Silva', cpfCnpj: '' }] });
+  await assert.rejects(() => criarCliente(semDoc.ctx, Q, { unidade: 'serra', nome: 'Maria', cpfCnpj: CPF }, semDoc.registrar), /não batem/);
+  assert.equal(semDoc.f.posts().length, 0);
 });
 
-test('cliente: confirmação dupla (em fila ou junta) cria UM só; código de outro usuário, vencido ou de boleto não serve', async () => {
-  const { f, ctx, relogio, registrar } = montar();
-  const p = await prepararCliente(ctx, 'u1', { unidade: 'serra', nome: 'Maria da Silva', cpfCnpj: CPF });
-  await assert.rejects(() => confirmarCliente(ctx, 'u2', { confirmacao: String(p.confirmacao) }, registrar), /outro usuário/);
-  const [a, b] = await Promise.allSettled([confirmarCliente(ctx, 'u1', { confirmacao: String(p.confirmacao) }, registrar), confirmarCliente(ctx, 'u1', { confirmacao: String(p.confirmacao) }, registrar)]);
-  assert.equal(a.status, 'fulfilled');
-  assert.equal(b.status, 'rejected');
-  assert.match(String((b as PromiseRejectedResult).reason.message), /já usado/);
-  assert.equal(f.posts.length, 1);
-  await assert.rejects(() => confirmarCliente(ctx, 'u1', { confirmacao: String(p.confirmacao) }, registrar), /já usado/);
-
-  const p2 = await prepararCliente(ctx, 'u1', { unidade: 'serra', nome: 'Joana Souza', cpfCnpj: CNPJ });
-  relogio.t += 16 * 60_000;
-  await assert.rejects(() => confirmarCliente(ctx, 'u1', { confirmacao: String(p2.confirmacao) }, registrar), /venceu/);
-  assert.equal(f.posts.length, 1);
-
-  const cob = await prepararCobranca(ctx, 'u1', { ...COBRANCA, cpfCnpj: undefined, clienteId: f.clientes[0]!.id, externalReference: 'x-9', vencimento: VENC });
-  await assert.rejects(() => confirmarCliente(ctx, 'u1', { confirmacao: String(cob.confirmacao) }, registrar), /boleto/);
-});
-
-test('cliente: se alguém cadastrou entre a prévia e o ok, o confirmar não cria outro', async () => {
-  const { f, ctx, registrar } = montar();
-  const p = await prepararCliente(ctx, 'u1', { unidade: 'serra', nome: 'Maria da Silva', cpfCnpj: CPF });
-  f.clientes.push(EXISTENTE);
-  const r = (await confirmarCliente(ctx, 'u1', { confirmacao: String(p.confirmacao) }, registrar)) as any;
-  assert.equal(r.jaCadastrado, true);
-  assert.equal(f.posts.length, 0);
+test('cliente: cadastro sem resposta ou 2xx sem id é "pode ter sido feito", nunca "cliente (undefined)"', async () => {
+  const a = montar({ falhaNoCliente: new ErroHttp('timeout', null) });
+  await assert.rejects(() => criarCliente(a.ctx, Q, { unidade: 'serra', nome: 'Maria', cpfCnpj: CPF }, a.registrar), /PODE ter sido feito/);
+  assert.equal(a.eventos[0]!.args.incerto, true);
+  const b = montar();
+  b.f.conta.escrita!.enviar = (async () => ({})) as never;
+  await assert.rejects(() => criarCliente(b.ctx, Q, { unidade: 'serra', nome: 'Maria', cpfCnpj: CPF }, b.registrar), /PODE ter sido feito/);
 });
 
 // ------------------------------------------------------------------ a conta
 
 test('conta: "todas", lista, vazio, conta sem escrita ou desconhecida são recusados — nada é consultado nem gravado', async () => {
-  const { f, ctx } = montar();
+  const { f, ctx, registrar } = montar();
   for (const u of ['todas', 'TODAS', ' todas ', 'serra,maraba', '']) {
-    await assert.rejects(() => prepararCliente(ctx, 'u1', { unidade: u, nome: 'Maria', cpfCnpj: CPF }), /UMA|numa conta só|informe a unidade/, u);
-    await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, unidade: u }), /UMA|numa conta só|informe a unidade/, u);
+    await assert.rejects(() => criarCliente(ctx, Q, { unidade: u, nome: 'Maria', cpfCnpj: CPF }, registrar), /UMA|numa conta só|informe a unidade/, u);
+    await assert.rejects(() => criarCobranca(ctx, Q, { ...COBRANCA, unidade: u }, registrar), /UMA|numa conta só|informe a unidade/, u);
   }
-  await assert.rejects(() => prepararCliente(ctx, 'u1', { unidade: 'maraba', nome: 'Maria', cpfCnpj: CPF }), /sem Asaas/);
+  await assert.rejects(() => criarCliente(ctx, Q, { unidade: 'maraba', nome: 'Maria', cpfCnpj: CPF }, registrar), /sem Asaas/);
   const so = montar({ semEscrita: true });
-  await assert.rejects(() => prepararCliente(so.ctx, 'u1', { unidade: 'serra', nome: 'Maria', cpfCnpj: CPF }), /não está liberada para escrita/);
-  assert.equal(f.posts.length + so.f.posts.length, 0);
+  await assert.rejects(() => criarCliente(so.ctx, Q, { unidade: 'serra', nome: 'Maria', cpfCnpj: CPF }, so.registrar), /não está liberada para escrita/);
+  assert.equal(f.chamadas.length + so.f.chamadas.length, 0);
   assert.equal(f.gets.length + so.f.gets.length, 0);
 });
 
 test('conta: sem o nome no Asaas usa o nome salvo; sem nenhum, avisa para conferir pelo final da chave', async () => {
   const a = montar({ semNomeDaConta: true });
-  const r = await prepararCliente(a.ctx, 'u1', { unidade: 'serra', nome: 'Maria', cpfCnpj: CPF });
+  const r = (await criarCliente(a.ctx, Q, { unidade: 'serra', nome: 'Maria', cpfCnpj: CPF }, a.registrar)) as any;
   assert.equal(r.conta.nomeDaConta, 'Serra (nome salvo)');
   const b = montar({ semNomeDaConta: true });
   (b.f.conta.escrita as { contaSalva?: string | null }).contaSalva = null;
-  const r2 = await prepararCliente(b.ctx, 'u1', { unidade: 'serra', nome: 'Maria', cpfCnpj: CPF });
+  const r2 = (await criarCliente(b.ctx, Q, { unidade: 'serra', nome: 'Maria', cpfCnpj: CPF }, b.registrar)) as any;
   assert.equal(r2.conta.nomeDaConta, null);
   assert.match(r2.avisos.join(' '), /final da chave/);
 });
 
-// ------------------------------------------------------------------ boleto
+test('ASAAS_ESCRITA_UNIDADES: vazia/ausente = desligada em todas; só as listadas; "*" não vale; a recusa diz qual variável configurar', async () => {
+  assert.deepEqual([...unidadesComEscrita({})], []);
+  assert.deepEqual([...unidadesComEscrita({ ASAAS_ESCRITA_UNIDADES: '' })], []);
+  assert.deepEqual([...unidadesComEscrita({ ASAAS_ESCRITA_UNIDADES: '  ,, ' })], []);
+  assert.deepEqual([...unidadesComEscrita({ ASAAS_ESCRITA_UNIDADES: '*' })], []);
+  assert.deepEqual([...unidadesComEscrita({ ASAAS_ESCRITA_UNIDADES: 'todas,*, doutor-hernia-serra ,Maraba' })].sort(), ['doutor-hernia-serra', 'maraba', 'todas']);
+  for (const env of [{}, { ASAAS_ESCRITA_UNIDADES: '' }, { ASAAS_ESCRITA_UNIDADES: '*' }, { ASAAS_ESCRITA_UNIDADES: 'doutor-hernia-maraba' }]) {
+    const m = montar({ clientes: [EXISTENTE] }, { unidades: () => unidadesComEscrita(env) });
+    await assert.rejects(() => criarCliente(m.ctx, Q, { unidade: 'serra', nome: 'Maria', cpfCnpj: CPF }, m.registrar), /DESLIGADA para doutor-hernia-serra.*ASAAS_ESCRITA_UNIDADES/, tudo(env));
+    await assert.rejects(() => cobrar(m), /DESLIGADA para doutor-hernia-serra.*ASAAS_ESCRITA_UNIDADES/, tudo(env));
+    assert.equal(m.f.chamadas.length, 0);
+  }
+  // a variável de verdade, sem injeção: ausente → desligada
+  const anterior = process.env.ASAAS_ESCRITA_UNIDADES;
+  delete process.env.ASAAS_ESCRITA_UNIDADES;
+  try {
+    const f = asaasFalso({ clientes: [EXISTENTE] });
+    const real = { asaas: criarContextoAsaas(new Map([[f.conta.slug, f.conta]])), esc: criarEscritaAsaas({ agora: () => AGORA, porteiro: porteiroEmMemoria(new BancoFalso(), () => AGORA) }) };
+    await assert.rejects(() => criarCobranca(real, Q, COBRANCA, () => undefined), /ASAAS_ESCRITA_UNIDADES/);
+    process.env.ASAAS_ESCRITA_UNIDADES = 'doutor-hernia-serra';
+    assert.equal(((await criarCobranca(real, Q, COBRANCA, () => undefined)) as any).gerado, true);
+  } finally {
+    if (anterior === undefined) delete process.env.ASAAS_ESCRITA_UNIDADES;
+    else process.env.ASAAS_ESCRITA_UNIDADES = anterior;
+  }
+});
 
-test('boleto de cliente que já existe: prévia mostra tudo e NÃO grava; confirmar manda BOLETO e devolve os links', async () => {
-  const { f, ctx, registrar, eventos } = montar({ clientes: [EXISTENTE] });
-  const p = await prepararCobranca(ctx, 'u1', COBRANCA);
-  assert.equal(f.posts.length, 0);
-  assert.equal(p.cliente.situacao, 'já cadastrado');
-  assert.equal(p.conta.chaveTermina, '…xYZ1');
-  assert.match(p.boleto.valor, /^R\$ 250,00$/);
-  assert.match(p.boleto.vencimento, /^10\/11\/2026/);
-  assert.equal(p.aviso.vaiAvisar, false);
-  const j = tudo(p);
-  assert.ok(!j.includes(CPF_DIGITOS) && !j.includes('maria.silva@exemplo.com') && !j.includes('981411248'));
+// ------------------------------------------------------------------ cobrança: boleto
 
-  const r = (await confirmarCobranca(ctx, 'u1', { confirmacao: String(p.confirmacao) }, registrar)) as any;
-  assert.equal(f.posts.length, 1, 'só o pagamento: o cliente já existia');
-  assert.deepEqual(f.posts[0], ['/payments', { customer: 'cus_000005401844', billingType: 'BOLETO', value: 250, dueDate: VENC, description: 'Consulta de avaliação', externalReference: 'pedido-1' }]);
+test('boleto de cliente que já existe: grava DIRETO, manda BOLETO e devolve links, linha digitável e o consumo do dia', async () => {
+  const m = montar({ clientes: [EXISTENTE] });
+  const r = await cobrar(m);
   assert.equal(r.gerado, true);
+  assert.equal(m.f.posts().length, 1);
+  const { metodo, caminho, corpo } = m.f.posts()[0]!;
+  assert.deepEqual([metodo, caminho], ['POST', '/payments']);
+  assert.deepEqual(corpo, { customer: 'cus_000005401844', billingType: 'BOLETO', value: 250, dueDate: VENC, description: 'Consulta de avaliação', externalReference: 'pedido-1' });
   assert.match(r.cobranca.id, /^pay_/);
+  assert.equal(r.cobranca.forma, 'BOLETO');
   assert.equal(r.cobranca.linkDoBoleto, 'https://www.asaas.com/b/pdf/abc123');
-  assert.equal(r.cobranca.linkDaFatura, 'https://www.asaas.com/i/abc123');
+  assert.equal(r.cobranca.linkParaPagar, 'https://www.asaas.com/i/abc123');
   assert.match(r.cobranca.linhaDigitavel, /^34191/);
   assert.equal(r.avisouOCliente, false);
-  const ev = eventos.find((e) => e.evento === EVENTO_COBRANCA)!;
+  assert.equal(r.limites.usadoHoje, 'R$ 250,00');
+  assert.equal(r.limites.restanteHoje, 'R$ 19.750,00');
+  const ev = m.eventos.find((e) => e.evento === EVENTO_COBRANCA)!;
   assert.equal(ev.ok, true);
+  assert.equal(ev.args.valor, 250);
   assert.equal(ev.args.pediuPor, 'u1');
-  assert.equal(ev.args.confirmadoPor, 'u1');
-  assert.equal(ev.args.cobrancaId, r.cobranca.id);
-  assert.ok(!tudo(eventos).includes(CPF_DIGITOS));
+  assert.equal(m.avisos.length, 0, 'cobrança pequena não avisa o João');
+  assert.ok(!tudo(r).includes(CPF_DIGITOS) && !tudo(r).includes('maria.silva@exemplo.com'));
 });
 
 test('boleto sem a linha digitável ainda: o link basta e a resposta não quebra', async () => {
-  const { ctx, registrar } = montar({ clientes: [EXISTENTE], semLinhaDigitavel: true });
-  const p = await prepararCobranca(ctx, 'u1', COBRANCA);
-  const r = (await confirmarCobranca(ctx, 'u1', { confirmacao: String(p.confirmacao) }, registrar)) as any;
+  const m = montar({ clientes: [EXISTENTE], semLinhaDigitavel: true });
+  const r = await cobrar(m);
   assert.equal(r.cobranca.linhaDigitavel, null);
   assert.ok(r.cobranca.linkDoBoleto);
 });
 
-test('boleto por clienteId funciona e id malformado (caminho de URL) é recusado antes de ir ao Asaas', async () => {
-  const { f, ctx } = montar({ clientes: [EXISTENTE] });
-  const p = await prepararCobranca(ctx, 'u1', { ...COBRANCA, cpfCnpj: undefined, clienteId: 'cus_000005401844' });
-  assert.equal((p.cliente as { id?: string }).id, 'cus_000005401844');
-  await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, cpfCnpj: undefined, clienteId: 'cus_1/../../myAccount' }), /clienteId inválido/);
-  await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, cpfCnpj: undefined, clienteId: 'cus_999999999' }), /não existe/);
-  await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, cpfCnpj: undefined }), /clienteId .* OU por cpfCnpj/);
-  await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, clienteId: 'cus_000005401844' }), /clienteId .* OU por cpfCnpj/);
-  assert.equal(f.posts.length, 0);
+test('boleto por clienteId funciona; id malformado (caminho de URL) é recusado antes de ir ao Asaas', async () => {
+  const m = montar({ clientes: [EXISTENTE] });
+  const ok = await cobrar(m, { cpfCnpj: undefined, clienteId: ' cus_000005401844 ', externalReference: 'x-1' });
+  assert.equal(ok.cliente.id, 'cus_000005401844');
+  for (const ruim of ['../payments', 'cus_1', 'cus_000005401844/../x', 'pay_000005401844']) {
+    await assert.rejects(() => cobrar(m, { cpfCnpj: undefined, clienteId: ruim, externalReference: `r-${ruim.length}` }), /clienteId inválido/, ruim);
+  }
+  await assert.rejects(() => cobrar(m, { cpfCnpj: undefined, clienteId: 'cus_000009999999', externalReference: 'x-2' }), /não existe/);
+  await assert.rejects(() => cobrar(m, { clienteId: 'cus_000005401844' }), /clienteId.*OU por cpfCnpj/);
+  await assert.rejects(() => cobrar(m, { cpfCnpj: undefined }), /clienteId.*OU por cpfCnpj/);
 });
 
-test('boleto com cliente novo: cadastra junto (cliente primeiro, boleto depois), sem aviso por padrão', async () => {
-  const { f, ctx, registrar, eventos } = montar();
-  const p = await prepararCobranca(ctx, 'u1', { ...COBRANCA, novoCliente: { nome: 'Maria da Silva', email: 'maria@exemplo.com' } });
-  assert.match(p.cliente.situacao, /SERÁ CADASTRADO/);
-  assert.equal(f.posts.length, 0);
-  const r = (await confirmarCobranca(ctx, 'u1', { confirmacao: String(p.confirmacao) }, registrar)) as any;
-  assert.deepEqual(f.posts.map((x) => x[0]), ['/customers', '/payments']);
-  assert.equal(f.posts[0]![1].notificationDisabled, true);
-  assert.equal(f.posts[1]![1].customer, r.cliente.id);
+test('boleto com cliente novo: cadastra junto (cliente primeiro, cobrança depois), sem aviso por padrão', async () => {
+  const m = montar();
+  const r = await cobrar(m, { novoCliente: { nome: 'Maria da Silva', email: 'maria@exemplo.com' } });
+  assert.deepEqual(m.f.posts().map((p) => p.caminho), ['/customers', '/payments']);
+  assert.equal(m.f.posts()[0]!.corpo!.notificationDisabled, true);
   assert.equal(r.cliente.cadastradoAgora, true);
-  assert.deepEqual(eventos.map((e) => e.evento), [EVENTO_CLIENTE, EVENTO_COBRANCA]);
+  assert.equal(m.f.posts()[1]!.corpo!.customer, r.cliente.id);
+  assert.ok(m.eventos.some((e) => e.evento === EVENTO_CLIENTE && e.args.junto === 'cobranca'));
 });
 
 test('boleto: CPF que não existe e sem novoCliente é recusado; mais de um cadastro com o mesmo CPF não é adivinhado', async () => {
-  const { f, ctx } = montar();
-  await assert.rejects(() => prepararCobranca(ctx, 'u1', COBRANCA), /não há cliente.*novoCliente/);
-  const dup = montar({ clientes: [EXISTENTE, { ...EXISTENTE, id: 'cus_000009999999' }] });
-  await assert.rejects(() => prepararCobranca(dup.ctx, 'u1', COBRANCA), /2 cadastros.*clienteId/);
-  assert.equal(f.posts.length + dup.f.posts.length, 0);
+  const a = montar();
+  await assert.rejects(() => cobrar(a), /não há cliente com o documento \*\*\*\.\*\*\*\.247-\*\*/);
+  const b = montar({ clientes: [EXISTENTE, { ...EXISTENTE, id: 'cus_000005401855' }] });
+  await assert.rejects(() => cobrar(b), /2 cadastros com este CPF.*clienteId/);
+  assert.equal(a.f.posts().length + b.f.posts().length, 0);
 });
 
-test('boleto: cliente novo que falha ao cadastrar não gera boleto; boleto que falha depois diz que o cliente FOI cadastrado', async () => {
-  const a = montar({ falhaNoCliente: new ErroHttp('Asaas 400 em /customers: dados inválidos', 400) });
-  const pa = await prepararCobranca(a.ctx, 'u1', { ...COBRANCA, novoCliente: { nome: 'Maria da Silva' } });
-  await assert.rejects(() => confirmarCobranca(a.ctx, 'u1', { confirmacao: String(pa.confirmacao) }, a.registrar), /não cadastrei o cliente e portanto não gerei/);
-  assert.deepEqual(a.f.posts.map((x) => x[0]), ['/customers']);
-
-  const b = montar({ falhaNoPagamento: new ErroHttp('Asaas 400 em /payments: valor mínimo', 400) });
-  const pb = await prepararCobranca(b.ctx, 'u1', { ...COBRANCA, novoCliente: { nome: 'Maria da Silva' } });
-  await assert.rejects(() => confirmarCobranca(b.ctx, 'u1', { confirmacao: String(pb.confirmacao) }, b.registrar), /cliente FOI cadastrado \(cus_.*boleto não saiu/);
-});
-
-test('boleto: teto por cobrança (5000 passa, 5000,01 não; teto do ambiente manda) — recusa e manda para o painel', async () => {
-  const { f, ctx } = montar({ clientes: [EXISTENTE] });
-  await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, valor: 5000.01 }), /teto de R\$ 5\.000,00.*painel do Asaas/);
-  await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, valor: 12000 }), /teto/);
-  assert.ok((await prepararCobranca(ctx, 'u1', { ...COBRANCA, valor: 5000 })).confirmacao);
-  const baixo = montar({ clientes: [EXISTENTE] }, { tetoReais: () => 300 });
-  await assert.rejects(() => prepararCobranca(baixo.ctx, 'u1', { ...COBRANCA, valor: 300.5 }), /teto de R\$ 300,00/);
-  // o teto vale de novo no confirmar (foi baixado depois da prévia)
-  const m = montar({ clientes: [EXISTENTE] });
-  let teto = 5000;
-  const esc2 = criarEscritaAsaas({ agora: () => AGORA, tetoReais: () => teto, unidades: () => new Set(['doutor-hernia-serra']) });
-  const ctx2 = { asaas: m.asaas, esc: esc2 };
-  const p = await prepararCobranca(ctx2, 'u1', { ...COBRANCA, valor: 1000 });
-  teto = 500;
-  await assert.rejects(() => confirmarCobranca(ctx2, 'u1', { confirmacao: String(p.confirmacao) }, m.registrar), /teto/);
-  assert.equal(f.posts.length + m.f.posts.length, 0);
+test('boleto: cliente novo que falha ao cadastrar não gera cobrança; cobrança que falha depois diz que o cliente FOI cadastrado', async () => {
+  const a = montar({ falhaNoCliente: new ErroHttp('Asaas 400: e-mail inválido', 400) });
+  await assert.rejects(() => cobrar(a, { novoCliente: { nome: 'Maria da Silva' } }), /não cadastrei o cliente e portanto não gerei/);
+  assert.deepEqual(a.f.posts().map((p) => p.caminho), ['/customers'], 'só a tentativa de cadastro; a cobrança nem foi tentada');
+  const b = montar({ falhaNoPagamento: new ErroHttp('Asaas 400: valor inválido', 400) });
+  await assert.rejects(() => cobrar(b, { novoCliente: { nome: 'Maria da Silva' } }), /O cliente FOI cadastrado \(cus_.*\), mas a cobrança não saiu/);
 });
 
 test('boleto: valor zero, negativo, texto, com 3 casas ou infinito é recusado', async () => {
-  const { ctx } = montar({ clientes: [EXISTENTE] });
-  for (const v of [0, -10, 10.005, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NaN, '250' as unknown as number, 5e-9, 1e-7, 0.004, 1e21]) {
-    await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, valor: v }), /valor/, String(v));
+  const m = montar({ clientes: [EXISTENTE] });
+  for (const v of [0, -5, 'abc', 10.123, Infinity, NaN, 1e21, 0.001]) {
+    await assert.rejects(() => cobrar(m, { valor: v as number }), /valor/, String(v));
   }
-  await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, valor: 5e-9 }), /sem notação científica/);
-  await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, valor: 0.004 }), /no mínimo R\$ 0,01/);
-  assert.ok((await prepararCobranca(ctx, 'u1', { ...COBRANCA, valor: 0.01 })).confirmacao, 'um centavo é o mínimo e passa');
+  assert.equal(m.f.posts().length, 0);
 });
 
 test('boleto: vencimento no passado, depois do limite de dias, data que não existe — hoje e o limite passam', async () => {
-  const { ctx } = montar({ clientes: [EXISTENTE] });
-  await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, vencimento: '2026-10-27' }), /já passou/);
-  await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, vencimento: '2027-01-27' }), /passa de 90 dias/);
-  await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, vencimento: '2026-02-30' }), /não é uma data que existe/);
-  await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, vencimento: '10/11/2026' }), /AAAA-MM-DD/);
-  assert.ok((await prepararCobranca(ctx, 'u1', { ...COBRANCA, vencimento: '2026-10-28', externalReference: 'hoje' })).confirmacao);
-  assert.ok((await prepararCobranca(ctx, 'u1', { ...COBRANCA, vencimento: '2027-01-26', externalReference: 'mais90' })).confirmacao);
+  const m = montar({ clientes: [EXISTENTE] });
+  await assert.rejects(() => cobrar(m, { vencimento: '2026-10-27' }), /já passou/);
+  await assert.rejects(() => cobrar(m, { vencimento: '2026-02-30' }), /não é uma data que existe/);
+  await assert.rejects(() => cobrar(m, { vencimento: '10/11/2026' }), /AAAA-MM-DD/);
+  assert.equal((await cobrar(m, { vencimento: '2026-10-28', externalReference: 'hoje' })).gerado, true);
+  const limite = '2027-01-26'; // 28/10/2026 + 90 dias
+  assert.equal((await cobrar(m, { vencimento: limite, externalReference: 'limite' })).gerado, true);
+  await assert.rejects(() => cobrar(m, { vencimento: '2027-01-27', externalReference: 'passou' }), new RegExp(`passa de ${LIMITES_ASAAS.maxDiasVencimento} dias`));
 });
 
-test('boleto: limite de vencimento = hoje + 90 dias (constante única); +91 recusado com a mensagem certa', async () => {
-  assert.equal(LIMITES_ASAAS.maxDiasVencimento, 90);
-  const { ctx } = montar({ clientes: [EXISTENTE] });
-  // "hoje" do relógio de teste é 28/10/2026 (America/Sao_Paulo)
-  assert.ok((await prepararCobranca(ctx, 'u1', { ...COBRANCA, vencimento: '2027-01-26', externalReference: 'm90' })).confirmacao, 'hoje+90 passa');
-  await assert.rejects(
-    () => prepararCobranca(ctx, 'u1', { ...COBRANCA, vencimento: '2027-01-27', externalReference: 'm91' }),
-    /vencimento 27\/01\/2027 passa de 90 dias \(limite 26\/01\/2027\)/,
-  );
+test('boleto: caso real - em 30/10/2026 o vencimento de 30/12/2026 (61 dias) é aceito; o dia é contado no fuso da clínica', async () => {
+  const m = montar({ clientes: [EXISTENTE] });
+  m.relogio.t = Date.parse('2026-10-30T10:00:00-03:00');
+  assert.equal((await cobrar(m, { vencimento: '2026-12-30' })).gerado, true);
+  // 23h30 em São Paulo já é o dia seguinte em UTC: "hoje" continua sendo o de São Paulo
+  const n = montar({ clientes: [EXISTENTE] });
+  n.relogio.t = Date.parse('2026-10-30T23:30:00-03:00');
+  assert.equal((await cobrar(n, { vencimento: '2026-10-30' })).gerado, true);
+  await assert.rejects(() => cobrar(n, { vencimento: '2026-10-29', externalReference: 'ontem' }), /já passou/);
+  // clínica em outro fuso (Manaus, UTC-4): 22h de 30/10 em Manaus ainda é dia 30
+  const man = montar({ clientes: [EXISTENTE], fuso: 'America/Manaus' });
+  man.relogio.t = Date.parse('2026-10-30T22:00:00-04:00');
+  assert.equal((await cobrar(man, { vencimento: '2026-10-30' })).gerado, true);
 });
 
-test('boleto: caso real - em 30/10/2026 o vencimento de 30/12/2026 (61 dias) é aceito; o limite é contado no fuso de São Paulo', async () => {
-  const { ctx, relogio } = montar({ clientes: [EXISTENTE] });
-  relogio.t = Date.parse('2026-10-30T10:00:00-03:00');
-  assert.ok((await prepararCobranca(ctx, 'u1', { ...COBRANCA, vencimento: '2026-12-30', externalReference: 'caso-real' })).confirmacao);
-  // 31/10 01:30 em UTC ainda é 30/10 22:30 em São Paulo: "hoje" = 30/10, limite = 28/01/2027
-  relogio.t = Date.parse('2026-10-31T01:30:00Z');
-  assert.ok((await prepararCobranca(ctx, 'u1', { ...COBRANCA, vencimento: '2027-01-28', externalReference: 'fuso-ok' })).confirmacao);
-  await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, vencimento: '2027-01-29', externalReference: 'fuso-fora' }), /passa de 90 dias \(limite 28\/01\/2027\)/);
+test('descrição é obrigatória, vai até 500, aceita período de datas e recusa CPF/telefone', async () => {
+  const m = montar({ clientes: [EXISTENTE] });
+  await assert.rejects(() => cobrar(m, { descricao: '   ' }), /descrição obrigatória/);
+  await assert.rejects(() => cobrar(m, { descricao: 'x'.repeat(501) }), /no máximo 500/);
+  assert.equal((await cobrar(m, { descricao: 'Mensalidade 28/10/2026 - 27/11/2026', externalReference: 'p1' })).gerado, true);
+  await assert.rejects(() => cobrar(m, { descricao: 'Consulta do CPF 529.982.247-25' }), /dígitos seguidos/);
 });
 
-test('boleto: o texto da ferramenta lê o limite da constante, sem número chumbado', () => {
-  const src = readFileSync(new URL('./asaas-escrita.ts', import.meta.url), 'utf8');
-  assert.ok(!/\+\s*\d+ dias|até \d+ dias/.test(src), 'sem número chumbado antes de "dias" nos textos');
-  assert.equal(src.match(/\$\{LIMITES_ASAAS\.maxDiasVencimento\} dias/g)?.length, 3, 'mensagem de recusa, descrição da ferramenta e campo leem a constante');
+// ------------------------------------------------------------------ cobrança: Pix, cartão, parcelado
+
+test('Pix: manda PIX e devolve o copia-e-cola; Pix parcelado é recusado', async () => {
+  const m = montar({ clientes: [EXISTENTE] });
+  const r = await cobrar(m, { forma: 'PIX' });
+  assert.equal(m.f.posts()[0]!.corpo!.billingType, 'PIX');
+  assert.equal(r.cobranca.forma, 'PIX');
+  assert.match(r.cobranca.pixCopiaECola, /^00020126/);
+  assert.equal(r.cobranca.linhaDigitavel, undefined);
+  await assert.rejects(() => cobrar(m, { forma: 'PIX', parcelas: 3, externalReference: 'p2' }), /não existe no Pix/);
+  assert.equal(m.f.posts().length, 1);
 });
 
-test('boleto: o dia virou entre a prévia e o ok → vencimento que já passou não sai', async () => {
-  const { f, ctx, relogio, registrar } = montar({ clientes: [EXISTENTE] });
-  relogio.t = Date.parse('2026-10-28T23:55:00-03:00');
-  const p = await prepararCobranca(ctx, 'u1', { ...COBRANCA, vencimento: '2026-10-28' });
-  relogio.t = Date.parse('2026-10-29T00:03:00-03:00');
-  await assert.rejects(() => confirmarCobranca(ctx, 'u1', { confirmacao: String(p.confirmacao) }, registrar), /já passou/);
-  assert.equal(f.posts.length, 0);
-});
-
-test('boleto: descrição é obrigatória e vai até 500', async () => {
-  const { ctx } = montar({ clientes: [EXISTENTE] });
-  await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, descricao: '   ' }), /descrição obrigatória/);
-  await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, descricao: 'x'.repeat(501) }), /500/);
-  assert.ok((await prepararCobranca(ctx, 'u1', { ...COBRANCA, descricao: 'x'.repeat(500) })).confirmacao);
-});
-
-test('boleto: Pix, cartão, UNDEFINED, parcelamento e assinatura são recusados; BOLETO explícito passa', async () => {
-  const { f, ctx } = montar({ clientes: [EXISTENTE] });
-  for (const forma of ['PIX', 'CREDIT_CARD', 'UNDEFINED', 'DEBIT_CARD', 'pix', '']) {
-    await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, billingType: forma }), /SOMENTE boleto/, `billingType ${forma}`);
-    await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, formaDePagamento: forma }), /SOMENTE boleto/, `forma ${forma}`);
+test('cartão: sai como LINK de pagamento (CREDIT_CARD, nunca dados de cartão); número, CVV e token no pedido derrubam tudo', async () => {
+  const m = montar({ clientes: [EXISTENTE] });
+  const r = await cobrar(m, { forma: 'CARTAO' });
+  assert.equal(m.f.posts()[0]!.corpo!.billingType, 'CREDIT_CARD');
+  assert.equal(r.cobranca.linkParaPagar, 'https://www.asaas.com/i/abc123');
+  assert.equal(Object.keys(m.f.posts()[0]!.corpo!).some((k) => /card|cart|cvv/i.test(k) && k !== 'billingType'), false);
+  for (const campo of ['numeroDoCartao', 'cvv', 'creditCard', 'creditCardToken', 'creditCardHolderInfo']) {
+    await assert.rejects(() => cobrar(m, { forma: 'CARTAO', externalReference: `c-${campo}`, [campo]: campo === 'creditCard' ? { number: '4111111111111111' } : '4111 1111 1111 1111' }), /NUNCA entram pelo chat/, campo);
   }
-  await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, parcelas: 3 }), /parcelamento/);
-  await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, installmentCount: 2 }), /parcelamento/);
-  await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, assinatura: true }), /assinatura/);
-  await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, recorrencia: 'mensal' }), /assinatura/);
-  assert.ok((await prepararCobranca(ctx, 'u1', { ...COBRANCA, billingType: 'boleto', parcelas: 1, assinatura: false })).confirmacao);
-  assert.equal(f.posts.length, 0);
+  assert.equal(m.f.posts().length, 1);
 });
+
+test('parcelado: installmentCount + totalValue, id do parcelamento na resposta, de 2 a 12; fora disso recusa', async () => {
+  const m = montar({ clientes: [EXISTENTE] });
+  const r = await cobrar(m, { forma: 'CARTAO', parcelas: 6, valor: 1200 });
+  const corpo = m.f.posts()[0]!.corpo!;
+  assert.equal(corpo.installmentCount, 6);
+  assert.equal(corpo.totalValue, 1200);
+  assert.equal(corpo.value, undefined);
+  assert.equal(r.cobranca.parcelamento.parcelas, 6);
+  assert.equal(r.cobranca.parcelamento.idDoParcelamento, 'ins_000000123456');
+  assert.equal(r.limites.usadoHoje, 'R$ 1.200,00', 'o total do parcelamento conta no teto do dia');
+  for (const p of [0, 13, 2.5, 'x']) await assert.rejects(() => cobrar(m, { parcelas: p, externalReference: `par-${p}` }), /parcelas/, String(p));
+  const boleto = await cobrar(m, { parcelas: 3, valor: 300, externalReference: 'par-b' });
+  assert.equal(boleto.cobranca.parcelamento.parcelas, 3);
+  assert.equal(m.f.posts().at(-1)!.corpo!.billingType, 'BOLETO');
+});
+
+test('forma que não existe ("a escolher", assinatura, texto solto) é recusada, sem ser ignorada em silêncio', async () => {
+  const m = montar({ clientes: [EXISTENTE] });
+  for (const f of ['UNDEFINED', 'assinatura', 'DEBIT_CARD', 'x']) await assert.rejects(() => cobrar(m, { forma: f }), /não existe aqui/, f);
+  assert.equal(m.f.posts().length, 0);
+  assert.equal((await cobrar(m, { forma: 'cartão', externalReference: 'f1' })).cobranca.forma, 'CARTÃO (link de pagamento)');
+  assert.equal((await cobrar(m, { forma: 'credit_card', externalReference: 'f2' })).gerado, true);
+});
+
+// ------------------------------------------------------------------ aviso ao cliente
 
 test('aviso ao cliente é decisão: cadastro existente com aviso LIGADO recusa se avisarCliente=false; aceita se true; desligado segue', async () => {
   const ligado = montar({ clientes: [{ ...EXISTENTE, notificationDisabled: false }] });
-  await assert.rejects(() => prepararCobranca(ligado.ctx, 'u1', COBRANCA), /aviso automático do Asaas LIGADO/);
-  const p = await prepararCobranca(ligado.ctx, 'u1', { ...COBRANCA, avisarCliente: true });
-  assert.equal(p.aviso.vaiAvisar, true);
-  assert.match(p.aviso.texto, /VAI mandar/);
-  const r = (await confirmarCobranca(ligado.ctx, 'u1', { confirmacao: String(p.confirmacao) }, ligado.registrar)) as any;
-  assert.equal(r.avisouOCliente, true);
-
-  const semCampo = montar({ clientes: [{ ...EXISTENTE, notificationDisabled: undefined }] });
-  await assert.rejects(() => prepararCobranca(semCampo.ctx, 'u1', COBRANCA), /LIGADO/, 'sem o campo, o Asaas avisa: tratar como ligado');
-
+  await assert.rejects(() => cobrar(ligado), /aviso automático do Asaas LIGADO.*asaas_editar_cliente/s);
+  assert.equal(ligado.f.posts().length, 0);
+  const aceito = await cobrar(ligado, { avisarCliente: true });
+  assert.equal(aceito.avisouOCliente, true);
+  assert.match(aceito.aviso, /VAI mandar e-mail\/SMS/);
   const desligado = montar({ clientes: [EXISTENTE] });
-  const p2 = await prepararCobranca(desligado.ctx, 'u1', { ...COBRANCA, avisarCliente: true });
-  assert.equal(p2.aviso.vaiAvisar, false);
-  assert.match(p2.aviso.texto, /NÃO vai avisar/);
+  assert.equal((await cobrar(desligado)).avisouOCliente, false);
+  assert.match((await cobrar(desligado, { avisarCliente: true, externalReference: 'a2' })).aviso, /NÃO vai avisar/);
 });
 
-test('aviso: cliente novo sai com notificationDisabled=true no padrão e false com avisarCliente=true', async () => {
-  const a = montar();
-  const pa = await prepararCobranca(a.ctx, 'u1', { ...COBRANCA, novoCliente: { nome: 'Maria' }, avisarCliente: true });
-  assert.equal(pa.aviso.vaiAvisar, true);
-  await confirmarCobranca(a.ctx, 'u1', { confirmacao: String(pa.confirmacao) }, a.registrar);
-  assert.equal(a.f.posts[0]![1].notificationDisabled, false);
-});
+// ------------------------------------------------------------------ travas
 
-test('boleto: confirmar duas vezes o MESMO código cria uma cobrança só (em fila ou junto)', async () => {
-  const { f, ctx, registrar } = montar({ clientes: [EXISTENTE] });
-  const p = await prepararCobranca(ctx, 'u1', COBRANCA);
-  const rs = await Promise.allSettled([confirmarCobranca(ctx, 'u1', { confirmacao: String(p.confirmacao) }, registrar), confirmarCobranca(ctx, 'u1', { confirmacao: String(p.confirmacao) }, registrar)]);
-  assert.deepEqual(rs.map((r) => r.status), ['fulfilled', 'rejected']);
-  assert.equal(f.posts.filter((x) => x[0] === '/payments').length, 1);
-  await assert.rejects(() => confirmarCobranca(ctx, 'u1', { confirmacao: String(p.confirmacao) }, registrar), /já usado/);
-});
-
-test('boleto: código de outro usuário não serve e não é gasto; vencido não grava', async () => {
-  const { f, ctx, relogio, registrar } = montar({ clientes: [EXISTENTE] });
-  const p = await prepararCobranca(ctx, 'u1', COBRANCA);
-  await assert.rejects(() => confirmarCobranca(ctx, 'u2', { confirmacao: String(p.confirmacao) }, registrar), /outro usuário/);
-  assert.equal(f.posts.length, 0);
-  relogio.t += 15 * 60_000 + 1;
-  await assert.rejects(() => confirmarCobranca(ctx, 'u1', { confirmacao: String(p.confirmacao) }, registrar), /venceu/);
-  await assert.rejects(() => confirmarCobranca(ctx, 'u1', { confirmacao: 'ABCDEF123456' }, registrar), /desconhecido/);
-  assert.equal(f.posts.length, 0);
-});
-
-test('duplicata: mesmo cliente + valor + vencimento + descrição em menos de 10 min é recusada com o id da existente; depois de 10 min passa', async () => {
-  const { f, ctx, relogio, registrar } = montar({ clientes: [EXISTENTE] });
-  const pedido = { ...COBRANCA, externalReference: undefined };
-  const p1 = await prepararCobranca(ctx, 'u1', pedido);
-  const r1 = (await confirmarCobranca(ctx, 'u1', { confirmacao: String(p1.confirmacao) }, registrar)) as any;
-  relogio.t += 5 * 60_000;
-  await assert.rejects(() => prepararCobranca(ctx, 'u1', pedido), new RegExp(`cobrança igual.*${r1.cobranca.id}`));
-  // valor ou descrição diferentes não são duplicata
-  assert.ok((await prepararCobranca(ctx, 'u1', { ...pedido, valor: 251 })).confirmacao);
-  assert.ok((await prepararCobranca(ctx, 'u1', { ...pedido, descricao: 'Outra coisa' })).confirmacao);
-  // e a trava também vale no confirmar (duas prévias antes do primeiro ok)
+test('duplicata: cobrança igual em menos de 10 min é recusada com o id da existente; depois de 10 min passa; forma e parcelas diferentes não são duplicata', async () => {
   const m = montar({ clientes: [EXISTENTE] });
-  const a = await prepararCobranca(m.ctx, 'u1', pedido);
-  const b = await prepararCobranca(m.ctx, 'u1', pedido);
-  await confirmarCobranca(m.ctx, 'u1', { confirmacao: String(a.confirmacao) }, m.registrar);
-  await assert.rejects(() => confirmarCobranca(m.ctx, 'u1', { confirmacao: String(b.confirmacao) }, m.registrar), /cobrança igual/);
-  assert.equal(m.f.posts.filter((x) => x[0] === '/payments').length, 1);
-  relogio.t += 6 * 60_000;
-  assert.ok((await prepararCobranca(ctx, 'u1', pedido)).confirmacao);
-  assert.equal(f.posts.filter((x) => x[0] === '/payments').length, 1);
+  const sem = { externalReference: undefined };
+  const primeira = await cobrar(m, sem);
+  await assert.rejects(() => cobrar(m, sem), new RegExp(`cobrança igual.*${primeira.cobranca.id}`));
+  assert.equal(m.f.posts().length, 1);
+  assert.equal((await cobrar(m, { ...sem, forma: 'PIX' })).gerado, true, 'outra forma não é a mesma cobrança');
+  m.relogio.t += 11 * 60_000;
+  assert.equal((await cobrar(m, sem)).gerado, true);
 });
 
-test('duplicata: externalReference já usada no Asaas é recusada com o id da cobrança', async () => {
-  const { f, ctx } = montar({ clientes: [EXISTENTE], pagamentos: [{ id: 'pay_5550000000001', externalReference: 'pedido-1' }] });
-  await assert.rejects(() => prepararCobranca(ctx, 'u1', COBRANCA), /externalReference "pedido-1" já está na cobrança pay_5550000000001/);
-  assert.equal(f.posts.length, 0);
-  const semRef = await prepararCobranca(ctx, 'u1', { ...COBRANCA, externalReference: undefined });
-  assert.match(semRef.avisos.join(' '), /sem externalReference/);
+test('duplicata: externalReference já usada no Asaas é recusada com o id da cobrança; a apagada não conta', async () => {
+  const m = montar({ clientes: [EXISTENTE], pagamentos: [{ id: 'pay_0000apagada', status: 'DELETED', value: 1, deleted: true, externalReference: 'pedido-1' }, { id: 'pay_0000viva001', status: 'PENDING', value: 1, externalReference: 'pedido-1' }] });
+  await assert.rejects(() => cobrar(m), /já está na cobrança pay_0000viva001/);
+  const n = montar({ clientes: [EXISTENTE], pagamentos: [{ id: 'pay_0000apagada', status: 'DELETED', value: 1, deleted: true, externalReference: 'pedido-1' }] });
+  assert.equal((await cobrar(n)).gerado, true);
 });
 
-test('teto por hora e por conta: acima de N boletos na hora, recusa; passada a hora, libera; vale também no confirmar', async () => {
-  const { f, ctx, relogio, registrar } = montar({ clientes: [EXISTENTE] }, { porHora: () => 2 });
-  for (let i = 1; i <= 2; i++) {
-    const p = await prepararCobranca(ctx, 'u1', { ...COBRANCA, externalReference: `ref-${i}`, valor: 100 + i });
-    await confirmarCobranca(ctx, 'u1', { confirmacao: String(p.confirmacao) }, registrar);
-  }
-  await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, externalReference: 'ref-3', valor: 103 }), /limite de 2 cobranças por hora/);
-  relogio.t += 61 * 60_000;
-  const p = await prepararCobranca(ctx, 'u1', { ...COBRANCA, externalReference: 'ref-3', valor: 103, vencimento: '2026-11-20' });
-  assert.ok(p.confirmacao);
-  assert.equal(f.posts.length, 2);
-
-  const m = montar({ clientes: [EXISTENTE] }, { porHora: () => 1 });
-  const a = await prepararCobranca(m.ctx, 'u1', { ...COBRANCA, externalReference: 'a', valor: 10 });
-  const b = await prepararCobranca(m.ctx, 'u1', { ...COBRANCA, externalReference: 'b', valor: 20 });
-  await confirmarCobranca(m.ctx, 'u1', { confirmacao: String(a.confirmacao) }, m.registrar);
-  await assert.rejects(() => confirmarCobranca(m.ctx, 'u1', { confirmacao: String(b.confirmacao) }, m.registrar), /limite de 1 cobranças por hora/);
+test('limite por hora e conta: acima de N cobranças na hora, recusa; passada a hora, libera', async () => {
+  let n = 2;
+  const m = montar({ clientes: [EXISTENTE] }, { porHora: () => n });
+  await cobrar(m, { externalReference: 'h1', valor: 11 });
+  await cobrar(m, { externalReference: 'h2', valor: 12 });
+  await assert.rejects(() => cobrar(m, { externalReference: 'h3', valor: 13 }), /limite de 2 cobranças por hora/);
+  m.relogio.t += 61 * 60_000;
+  assert.equal((await cobrar(m, { externalReference: 'h3', valor: 13 })).gerado, true);
+  n = 0;
+  await assert.rejects(() => cobrar(m, { externalReference: 'h4', valor: 14 }), /DESLIGADA.*ASAAS_COBRANCAS_POR_HORA/);
 });
 
-test('histórico da auditoria: depois de um reinício o teto e a duplicata valem; histórico que não carrega = nada é gravado', async () => {
-  const pedido = { ...COBRANCA, externalReference: undefined };
-  const chave = chaveDeDuplicata('doutor-hernia-serra', 'cus_000005401844', 250, VENC, 'Consulta de avaliação');
-  const recente: RegistroDeCobranca[] = [{ conta: 'doutor-hernia-serra', chave, em: AGORA - 3 * 60_000, cobrancaId: 'pay_antes0001' }];
-  const a = montar({ clientes: [EXISTENTE] }, { historico: async () => recente });
-  await assert.rejects(() => prepararCobranca(a.ctx, 'u1', pedido), /cobrança igual.*pay_antes0001/);
-
-  const cheio: RegistroDeCobranca[] = Array.from({ length: 20 }, (_, i) => ({ conta: 'doutor-hernia-serra', chave: `k${i}`, em: AGORA - 20 * 60_000 }));
-  const b = montar({ clientes: [EXISTENTE] }, { historico: async () => cheio });
-  await assert.rejects(() => prepararCobranca(b.ctx, 'u1', pedido), /limite de 20 cobranças por hora/);
-
-  const c = montar({ clientes: [EXISTENTE] }, { historico: async () => { throw new Error('banco fora'); } });
-  await assert.rejects(() => prepararCobranca(c.ctx, 'u1', pedido), /não consegui conferir as cobranças recentes/);
-  assert.equal(a.f.posts.length + b.f.posts.length + c.f.posts.length, 0);
+test('banco da auditoria: a duplicata e os limites vêm do banco (valem depois de um reinício); banco que não responde = nada é gravado', async () => {
+  const chave = chaveDeDuplicata('doutor-hernia-serra', EXISTENTE.id, 250, VENC, 'Consulta de avaliação', 'pedido-1');
+  const banco = new BancoFalso();
+  banco.gravar({ ferramenta: EVENTO_COBRANCA, argumentos: { conta: 'doutor-hernia-serra', chave, valor: 250, cobrancaId: 'pay_antiga' }, ok: true }, AGORA - 60_000);
+  const igual = montar({ clientes: [EXISTENTE] }, { banco });
+  await assert.rejects(() => cobrar(igual, { cpfCnpj: undefined, clienteId: EXISTENTE.id }), /cobrança igual.*pay_antiga/s);
+  assert.equal(igual.f.posts().length, 0);
+  const falha = async () => {
+    throw new ErroDeEntrada(FALHA_DO_BANCO);
+  };
+  const quebrado = montar({ clientes: [EXISTENTE] }, { porteiro: { reservar: falha, ler: falha } });
+  await assert.rejects(() => cobrar(quebrado), /não consegui conferir nem registrar a operação no banco.*nada foi feito/s);
+  assert.equal(quebrado.f.posts().length, 0);
+  // sem porteiro nenhum (servidor subiu sem o banco) a escrita de dinheiro nem anda
+  const f = asaasFalso({ clientes: [EXISTENTE] });
+  const semPorteiro = { asaas: criarContextoAsaas(new Map([[f.conta.slug, f.conta]])), esc: criarEscritaAsaas({ agora: () => AGORA, unidades: () => new Set(['doutor-hernia-serra']) }) };
+  await assert.rejects(() => criarCobranca(semPorteiro, Q, COBRANCA, () => undefined), /sem o porteiro dos tetos/);
+  assert.equal(f.chamadas.length, 0);
 });
+
+// ------------------------------------------------------------------ erros do Asaas
 
 test('403: chave só de leitura → erro em português claro, sem vazar chave, CPF ou e-mail; a recusa definitiva libera a reserva', async () => {
-  const { ctx, registrar, eventos } = montar({
-    clientes: [EXISTENTE],
-    falhaNoPagamento: new ErroHttp(`o Asaas negou a gravação (403): a chave desta conta é só de leitura. cpf 52998224725 email maria.silva@exemplo.com chave ${CHAVE_COMPLETA}`, 403),
-  });
-  const p = await prepararCobranca(ctx, 'u1', COBRANCA);
-  const erro = await confirmarCobranca(ctx, 'u1', { confirmacao: String(p.confirmacao) }, registrar).then(() => null, (e: Error) => e);
+  const m = montar({ clientes: [EXISTENTE], falhaNoPagamento: new ErroHttp(`o Asaas negou a gravação (403): chave ${CHAVE_COMPLETA} de maria.silva@exemplo.com cpf 52998224725`, 403) });
+  const erro = await cobrar(m).then(() => null, (e: Error) => e);
   assert.ok(erro);
-  assert.match(erro.message, /só de leitura/);
-  const tudoQueSaiu = erro.message + tudo(eventos);
-  assert.ok(!tudoQueSaiu.includes(CHAVE_COMPLETA) && !tudoQueSaiu.includes('aact_prod'), 'chave vazou');
-  assert.ok(!tudoQueSaiu.includes(CPF_DIGITOS) && !tudoQueSaiu.includes('maria.silva@exemplo.com'), 'documento/e-mail vazaram');
-  assert.equal(eventos.at(-1)!.ok, false);
-  // 4xx: o Asaas não criou nada, então o mesmo boleto pode ser tentado de novo
-  assert.ok((await prepararCobranca(ctx, 'u1', COBRANCA)).confirmacao);
+  for (const proibido of [CHAVE_COMPLETA, 'aact_prod', CPF_DIGITOS, 'maria.silva@exemplo.com']) assert.ok(!erro.message.includes(proibido), proibido);
+  assert.match(erro.message, /A cobrança não saiu/);
+  assert.equal(await m.usado(), 0, 'recusa definitiva não gasta o teto do dia');
 });
 
-test('sem resposta do Asaas (pode ter criado): a reserva fica e repetir o mesmo boleto é barrado', async () => {
-  const { ctx, registrar, eventos } = montar({ clientes: [EXISTENTE], falhaNoPagamento: new ErroHttp('sem resposta do Asaas em /payments: a gravação pode ter acontecido', null) });
-  const p = await prepararCobranca(ctx, 'u1', { ...COBRANCA, externalReference: undefined });
-  await assert.rejects(() => confirmarCobranca(ctx, 'u1', { confirmacao: String(p.confirmacao) }, registrar), /pode ter acontecido/);
-  assert.equal(eventos.at(-1)!.args.incerto, true);
-  await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, externalReference: undefined }), /cobrança igual/);
-});
-
-test('Asaas 500 no boleto (pode ter criado): a mensagem diz que PODE ter sido gerado, nunca "não saiu"; a reserva fica', async () => {
-  const { ctx, registrar, eventos } = montar({ clientes: [EXISTENTE], falhaNoPagamento: new ErroHttp('Asaas 500 em /payments: erro interno', 500) });
-  const p = await prepararCobranca(ctx, 'u1', { ...COBRANCA, externalReference: undefined });
-  const erro = await confirmarCobranca(ctx, 'u1', { confirmacao: String(p.confirmacao) }, registrar).then(() => null, (e: Error) => e);
-  assert.ok(erro);
-  assert.match(erro!.message, /PODE ter sido gerado/);
-  assert.match(erro!.message, /asaas_cobrancas/);
-  assert.doesNotMatch(erro!.message, /não saiu/);
-  assert.equal(eventos.at(-1)!.args.incerto, true);
-  await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, externalReference: undefined }), /cobrança igual/);
-});
-
-test('Asaas 400 no boleto (recusa definitiva) continua dizendo "não saiu"', async () => {
-  const { ctx, registrar } = montar({ clientes: [EXISTENTE], falhaNoPagamento: new ErroHttp('Asaas 400 em /payments: valor mínimo', 400) });
-  const p = await prepararCobranca(ctx, 'u1', { ...COBRANCA, externalReference: undefined });
-  await assert.rejects(() => confirmarCobranca(ctx, 'u1', { confirmacao: String(p.confirmacao) }, registrar), /não saiu/);
-});
-
-test('descrição com período de datas passa; com CPF continua recusada', async () => {
-  const { ctx } = montar({ clientes: [EXISTENTE] });
-  assert.ok((await prepararCobranca(ctx, 'u1', { ...COBRANCA, descricao: 'Mensalidade 28/10/2026 - 27/11/2026' })).confirmacao);
-  assert.ok((await prepararCobranca(ctx, 'u1', { ...COBRANCA, descricao: 'Pacote de sessões de 10/2026', externalReference: 'teste-datas-2' })).confirmacao);
-  await assert.rejects(() => prepararCobranca(ctx, 'u1', { ...COBRANCA, descricao: 'Sessões de 529.982.247-25' }), /descrição recusada/);
-});
-
-// ------------------------------------------------------------------ pelo protocolo (o que o claude.ai vê)
-
-async function conectar(m: ReturnType<typeof montar>, usuario: string, registros: Array<{ ferramenta: string; argumentos: any; ok: boolean; erro?: string }>) {
-  const server = new McpServer({ name: 't', version: '0' });
-  registrarEscritaAsaas(server, m.asaas, m.esc, usuario, (r) => registros.push(r as never));
-  const [a, b] = InMemoryTransport.createLinkedPair();
-  const cliente = new Client({ name: 'teste', version: '0' });
-  await Promise.all([server.connect(a), cliente.connect(b)]);
-  return cliente;
-}
-const texto = (r: any) => String(r.content?.[0]?.text ?? '');
-
-test('protocolo: só as 4 ferramentas de escrita (nada de cancelar/estornar/transferir); registro com argumentos mascarados; erro sem vazamento', async () => {
-  const m = montar({ clientes: [EXISTENTE] });
-  const registros: Array<{ ferramenta: string; argumentos: any; ok: boolean; erro?: string }> = [];
-  const joao = await conectar(m, 'u-joao', registros);
-  const nomes = (await joao.listTools()).tools.map((t) => t.name).sort();
-  assert.deepEqual(nomes, ['asaas_confirmar_cliente', 'asaas_confirmar_cobranca', 'asaas_preparar_cliente', 'asaas_preparar_cobranca']);
-  assert.ok(!nomes.some((n) => /cancel|estorn|delete|exclu|transfer|saque|antecip|editar|alterar/.test(n)));
-
-  const prep = await joao.callTool({ name: 'asaas_preparar_cliente', arguments: { unidade: 'serra', nome: 'Joana Souza', cpfCnpj: CNPJ, email: 'joana@exemplo.com', telefone: '63981411248' } });
-  const dados = JSON.parse(texto(prep));
-  assert.equal(m.f.posts.length, 0);
-  const aud = tudo(registros);
-  assert.ok(!aud.includes('11222333000181') && !aud.includes('11.222.333/0001-81') && !aud.includes('joana@exemplo.com') && !aud.includes('981411248'), 'registro com dado por inteiro');
-  assert.match(aud, /\*\*\.\*\*\*\.333\/0001-\*\*/);
-  assert.ok(!aud.includes('Joana Souza') && aud.includes('Joana S.'), 'nome inteiro no registro');
-
-  const outro = await conectar(m, 'u-outro', []);
-  const negado = await outro.callTool({ name: 'asaas_confirmar_cliente', arguments: { confirmacao: dados.confirmacao } });
-  assert.equal(negado.isError, true);
-  assert.match(texto(negado), /outro usuário/);
-  const ok = await joao.callTool({ name: 'asaas_confirmar_cliente', arguments: { confirmacao: dados.confirmacao } });
-  assert.notEqual(ok.isError, true);
-  assert.equal(m.f.posts.length, 1);
-  assert.ok(registros.some((r) => r.ferramenta === EVENTO_CLIENTE && r.ok));
-  const reuso = await joao.callTool({ name: 'asaas_confirmar_cliente', arguments: { confirmacao: dados.confirmacao } });
-  assert.equal(reuso.isError, true);
-  assert.equal(m.f.posts.length, 1);
-});
-
-test('protocolo: forma de pagamento Pix é recusada mesmo pelo esquema da ferramenta (nada é ignorado em silêncio)', async () => {
-  const m = montar({ clientes: [EXISTENTE] });
-  const joao = await conectar(m, 'u1', []);
-  const r = await joao.callTool({ name: 'asaas_preparar_cobranca', arguments: { unidade: 'serra', cpfCnpj: CPF, valor: 100, vencimento: VENC, descricao: 'x', billingType: 'PIX' } });
-  assert.equal(r.isError, true);
-  assert.match(texto(r), /SOMENTE boleto/);
-  const todas = await joao.callTool({ name: 'asaas_preparar_cobranca', arguments: { unidade: 'todas', cpfCnpj: CPF, valor: 100, vencimento: VENC, descricao: 'x' } });
-  assert.equal(todas.isError, true);
-  assert.match(texto(todas), /numa conta só/);
-  assert.equal(m.f.posts.length, 0);
-});
-
-test('protocolo: erro com chave e documento no texto sai limpo na resposta e no registro', async () => {
-  const m = montar({
-    clientes: [EXISTENTE],
-    falhaNoPagamento: new ErroHttp(`Asaas 400 em /payments: customer 52998224725 / 529.982.247-25 / 11.222.333/0001-81 ${CHAVE_COMPLETA} maria.silva@exemplo.com`, 400),
-  });
-  const registros: Array<{ ferramenta: string; argumentos: any; ok: boolean; erro?: string }> = [];
-  const joao = await conectar(m, 'u1', registros);
-  const prep = JSON.parse(texto(await joao.callTool({ name: 'asaas_preparar_cobranca', arguments: { unidade: 'serra', cpfCnpj: CPF, valor: 100, vencimento: VENC, descricao: 'Boleto do paciente', externalReference: 'r1' } })));
-  const r = await joao.callTool({ name: 'asaas_confirmar_cobranca', arguments: { confirmacao: prep.confirmacao } });
-  assert.equal(r.isError, true);
-  const saiu = texto(r) + tudo(registros);
-  for (const proibido of [CHAVE_COMPLETA, 'aact_prod', CPF_DIGITOS, '529.982.247-25', '11222333000181', '11.222.333/0001-81', 'maria.silva@exemplo.com']) {
-    assert.ok(!saiu.includes(proibido), `vazou: ${proibido}`);
+test('sem resposta ou 5xx (pode ter criado): a mensagem diz que PODE ter sido gerada, a reserva fica (gasta o teto), o João é avisado', async () => {
+  for (const erro of [new ErroHttp('timeout', null), new ErroHttp('Asaas 503', 503)]) {
+    const m = montar({ clientes: [EXISTENTE], falhaNoPagamento: erro });
+    await assert.rejects(() => cobrar(m), /PODE ter sido gerada/);
+    assert.equal(await m.usado(), 250, 'a reserva fica');
+    assert.equal(m.eventos.find((e) => e.evento === EVENTO_COBRANCA)!.args.incerto, true);
+    assert.match(m.avisos.join('\n'), /RESULTADO INCERTO/);
+    await assert.rejects(() => cobrar(m), /cobrança igual/, 'repetir o mesmo pedido é barrado');
   }
-  assert.match(saiu, /\[documento\]/);
+  const semId = montar({ clientes: [EXISTENTE] });
+  semId.f.conta.escrita!.enviar = (async () => ({})) as never;
+  await assert.rejects(() => cobrar(semId), /sem o id da cobrança.*PODE ter sido gerada/s);
 });
 
-test('fila: dois códigos DIFERENTES do mesmo boleto com cliente novo, confirmados juntos → um cliente e uma cobrança só', async () => {
-  const { f, ctx, registrar } = montar();
-  const pedido = { ...COBRANCA, externalReference: undefined, novoCliente: { nome: 'Maria da Silva' } };
-  const a = await prepararCobranca(ctx, 'u1', pedido);
-  const b = await prepararCobranca(ctx, 'u1', pedido);
-  const rs = await Promise.allSettled([confirmarCobranca(ctx, 'u1', { confirmacao: String(a.confirmacao) }, registrar), confirmarCobranca(ctx, 'u1', { confirmacao: String(b.confirmacao) }, registrar)]);
-  assert.deepEqual(rs.map((r) => r.status), ['fulfilled', 'rejected']);
-  assert.equal(f.posts.filter((x) => x[0] === '/customers').length, 1);
-  assert.equal(f.posts.filter((x) => x[0] === '/payments').length, 1);
-});
-
-test('cliente: se o Asaas devolver gente que não bate com o CPF buscado, não adivinha nem cria por cima', async () => {
-  const torto: Cli = { id: 'cus_000007777777', name: 'Outra Pessoa', cpfCnpj: '11222333000181' };
-  const a = montar({ clientesTortos: [torto] });
-  await assert.rejects(() => prepararCliente(a.ctx, 'u1', { unidade: 'serra', nome: 'Maria', cpfCnpj: CPF }), /não batem com o CPF\/CNPJ buscado/);
-  await assert.rejects(() => prepararCobranca(a.ctx, 'u1', { ...COBRANCA, novoCliente: { nome: 'Maria' } }), /não batem/);
-  assert.equal(a.f.posts.length, 0);
-});
-
-test('boleto: um id de cobrança do Asaas (pay_…) nunca é confundido com documento nos erros', async () => {
-  const m = montar({ clientes: [EXISTENTE], falhaNoPagamento: new ErroHttp('Asaas 400: duplicada de pay_12345678901 do cliente cus_000005401844', 400) });
-  const p = await prepararCobranca(m.ctx, 'u1', COBRANCA);
-  await assert.rejects(() => confirmarCobranca(m.ctx, 'u1', { confirmacao: String(p.confirmacao) }, m.registrar), /pay_12345678901.*cus_000005401844/);
-});
-
-test('cliente novo junto do boleto: a chave de duplicata gravada usa o id criado, então a trava sobrevive a um reinício', async () => {
-  const a = montar();
-  const pedido = { ...COBRANCA, externalReference: undefined, novoCliente: { nome: 'Maria da Silva' } };
-  const p = await prepararCobranca(a.ctx, 'u1', pedido);
-  await confirmarCobranca(a.ctx, 'u1', { confirmacao: String(p.confirmacao) }, a.registrar);
-  const ev = a.eventos.find((e) => e.evento === EVENTO_COBRANCA)!;
-  assert.equal(ev.args.chave, chaveDeDuplicata('doutor-hernia-serra', ev.args.clienteId, 250, VENC, 'Consulta de avaliação'));
-  // "reinício": a auditoria volta como histórico e o cliente (agora existente) é achado pelo CPF
-  const b = montar({ clientes: [{ ...a.f.clientes[0]!, cpfCnpj: CPF_DIGITOS }] }, { historico: async () => [{ conta: 'doutor-hernia-serra', chave: ev.args.chave, em: AGORA - 60_000, cobrancaId: ev.args.cobrancaId }] });
-  await assert.rejects(() => prepararCobranca(b.ctx, 'u1', { ...COBRANCA, externalReference: undefined }), /cobrança igual/);
-});
-
-test('cadastro do cliente sem resposta: NÃO diz que nada foi criado, manda conferir e marca incerto', async () => {
-  const falha = new ErroHttp('sem resposta do Asaas em /customers: a gravação pode ter acontecido', null);
-  const a = montar({ falhaNoCliente: falha });
-  const p = await prepararCliente(a.ctx, 'u1', { unidade: 'serra', nome: 'Maria da Silva', cpfCnpj: CPF });
-  await assert.rejects(() => confirmarCliente(a.ctx, 'u1', { confirmacao: String(p.confirmacao) }, a.registrar), /PODE ter sido feito.*asaas_cliente/);
-  assert.equal(a.eventos.at(-1)!.args.incerto, true);
-  const b = montar({ falhaNoCliente: falha });
-  const pb = await prepararCobranca(b.ctx, 'u1', { ...COBRANCA, novoCliente: { nome: 'Maria da Silva' } });
-  const erro = await confirmarCobranca(b.ctx, 'u1', { confirmacao: String(pb.confirmacao) }, b.registrar).then(() => null, (e: Error) => e);
-  assert.match(erro!.message, /PODE ter sido feito/);
-  assert.doesNotMatch(erro!.message, /não cadastrei/);
-  assert.deepEqual(b.f.posts.map((x) => x[0]), ['/customers']);
-});
-
-test('Asaas responde 2xx sem o id da cobrança: erro claro, registro "incerto" e a reserva fica (nada de TypeError)', async () => {
-  const m = montar({ clientes: [EXISTENTE] });
-  (m.f.conta.escrita as { post: unknown }).post = async (caminho: string) => {
-    m.f.posts.push([caminho, {}]);
-    return null;
-  };
-  const p = await prepararCobranca(m.ctx, 'u1', { ...COBRANCA, externalReference: undefined });
-  await assert.rejects(() => confirmarCobranca(m.ctx, 'u1', { confirmacao: String(p.confirmacao) }, m.registrar), /sem o id da cobrança.*PODE ter sido gerado/);
-  assert.equal(m.eventos.at(-1)!.args.incerto, true);
-  await assert.rejects(() => prepararCobranca(m.ctx, 'u1', { ...COBRANCA, externalReference: undefined }), /cobrança igual/);
-});
-
-test('externalReference: uma cobrança apagada no começo da lista não esconde a viva', async () => {
-  const m = montar({ clientes: [EXISTENTE], pagamentos: [{ id: 'pay_apagada001', externalReference: 'pedido-1' }, { id: 'pay_viva0000001', externalReference: 'pedido-1' }] });
-  const original = m.f.conta.fonte.get.bind(m.f.conta.fonte);
-  (m.f.conta.fonte as { get: unknown }).get = async (caminho: string, query: Record<string, any>) => {
-    const r: any = await original(caminho, query);
-    return caminho === '/payments' ? { data: [{ id: 'pay_apagada001', deleted: true }, ...r.data.slice(1)].slice(0, Number(query.limit ?? 100)) } : r;
-  };
-  await assert.rejects(() => prepararCobranca(m.ctx, 'u1', COBRANCA), /pay_viva0000001/);
-});
-
-test('registro de preparação: nome abreviado e descrição só em tamanho (pode trazer motivo de tratamento)', async () => {
-  const m = montar({ clientes: [EXISTENTE] });
-  const registros: Array<{ ferramenta: string; argumentos: any; ok: boolean; erro?: string }> = [];
-  const joao = await conectar(m, 'u1', registros);
-  await joao.callTool({ name: 'asaas_preparar_cobranca', arguments: { unidade: 'serra', cpfCnpj: CPF, valor: 100, vencimento: VENC, descricao: 'Tratamento de hérnia de disco L5', externalReference: 'r9', novoCliente: { nome: 'Maria da Silva Souza' } } });
-  const aud = tudo(registros);
-  assert.ok(!aud.includes('hérnia de disco') && !aud.includes('Maria da Silva Souza'), aud);
-  assert.match(aud, /"descricaoCaracteres":32/);
-  assert.match(aud, /Maria S\./);
-});
-
-test('depois de escrever, a leitura em cache (asaas_cobrancas, extrato) da conta é esquecida — e a de outra conta não', async () => {
-  const m = montar({ clientes: [EXISTENTE] });
-  m.asaas.cache.guardar('cob|doutor-hernia-serra|q', { velho: true }, 600_000);
-  m.asaas.cache.guardar('ext|doutor-hernia-serra|a|b', { velho: true }, 600_000);
-  m.asaas.cache.guardar('cob|outra-conta|q', { fica: true }, 600_000);
-  const p = await prepararCobranca(m.ctx, 'u1', COBRANCA);
-  assert.ok(m.asaas.cache.pegar('cob|doutor-hernia-serra|q'), 'a prévia não grava, não limpa');
-  await confirmarCobranca(m.ctx, 'u1', { confirmacao: String(p.confirmacao) }, m.registrar);
-  assert.equal(m.asaas.cache.pegar('cob|doutor-hernia-serra|q'), undefined);
-  assert.equal(m.asaas.cache.pegar('ext|doutor-hernia-serra|a|b'), undefined);
-  assert.ok(m.asaas.cache.pegar('cob|outra-conta|q'));
-});
-
-test('cadastro do cliente: 2xx sem id é "pode ter sido feito", nunca "cliente (undefined)"', async () => {
-  const m = montar();
-  (m.f.conta.escrita as { post: unknown }).post = async (caminho: string) => {
-    m.f.posts.push([caminho, {}]);
-    return null;
-  };
-  const p = await prepararCobranca(m.ctx, 'u1', { ...COBRANCA, novoCliente: { nome: 'Maria da Silva' } });
-  const erro = await confirmarCobranca(m.ctx, 'u1', { confirmacao: String(p.confirmacao) }, m.registrar).then(() => null, (e: Error) => e);
-  assert.match(erro!.message, /PODE ter sido feito/);
-  // corpo sem id (objeto vazio) também não segue para o boleto
-  const m2 = montar();
-  (m2.f.conta.escrita as { post: unknown }).post = async (caminho: string) => {
-    m2.f.posts.push([caminho, {}]);
-    return {};
-  };
-  const p2 = await prepararCobranca(m2.ctx, 'u1', { ...COBRANCA, novoCliente: { nome: 'Maria da Silva' } });
-  await assert.rejects(() => confirmarCobranca(m2.ctx, 'u1', { confirmacao: String(p2.confirmacao) }, m2.registrar), /PODE ter sido feito/);
-  assert.deepEqual(m2.f.posts.map((x) => x[0]), ['/customers']);
-  assert.doesNotMatch(erro!.message, /undefined/);
-  assert.deepEqual(m.f.posts.map((x) => x[0]), ['/customers']);
-  const c = montar();
-  (c.f.conta.escrita as { post: unknown }).post = async () => ({});
-  const pc = await prepararCliente(c.ctx, 'u1', { unidade: 'serra', nome: 'Maria da Silva', cpfCnpj: CPF });
-  await assert.rejects(() => confirmarCliente(c.ctx, 'u1', { confirmacao: String(pc.confirmacao) }, c.registrar), /PODE ter sido feito/);
-});
-
-test('clienteId colado com espaços é aceito; só espaços conta como não informado; externalReference de pedido (com letras) aparece inteira na recusa', async () => {
-  const m = montar({ clientes: [EXISTENTE], pagamentos: [{ id: 'pay_5550000000001', externalReference: 'PED-20261028' }] });
-  const p = await prepararCobranca(m.ctx, 'u1', { ...COBRANCA, cpfCnpj: undefined, clienteId: '  cus_000005401844 ' });
-  assert.ok(p.confirmacao);
-  const q = await prepararCobranca(m.ctx, 'u1', { ...COBRANCA, clienteId: '   ', externalReference: 'outra-ref' });
-  assert.ok(q.confirmacao);
-  const joao = await conectar(m, 'u1', []);
-  const r = await joao.callTool({ name: 'asaas_preparar_cobranca', arguments: { unidade: 'serra', cpfCnpj: CPF, valor: 100, vencimento: VENC, descricao: 'x', externalReference: 'PED-20261028' } });
-  assert.equal(r.isError, true);
-  assert.match(texto(r), /"PED-20261028" já está na cobrança pay_5550000000001/);
-});
-
-// ------------------------------------------------------------------ rodada do sênior (PR #159)
-
-test('1) cliente SEM documento no Asaas não casa com o CPF pedido; só documento igual (dígitos) casa', async () => {
-  const semDoc: Cli = { id: 'cus_000008888888', name: 'Jose Sem Documento', cpfCnpj: '' };
-  const so = montar({ clientesTortos: [semDoc] });
-  await assert.rejects(() => prepararCobranca(so.ctx, 'u1', COBRANCA), /não batem com o CPF\/CNPJ buscado/);
-  await assert.rejects(() => prepararCliente(so.ctx, 'u1', { unidade: 'serra', nome: 'Maria', cpfCnpj: CPF }), /não batem/);
-  assert.equal(so.f.posts.length, 0);
-  // no meio de outros, o sem documento é descartado e o certo é escolhido
-  const misto = montar({ clientesTortos: [semDoc, { ...EXISTENTE, cpfCnpj: '529.982.247-25' }] });
-  const p = await prepararCobranca(misto.ctx, 'u1', COBRANCA);
-  assert.equal((p.cliente as { id?: string }).id, 'cus_000005401844');
-  assert.notEqual((p.cliente as { nome?: string }).nome, 'Jose Sem Documento');
-});
-
-test('2) código já usado: a resposta NÃO afirma que nada foi gravado — manda conferir antes de preparar de novo', async () => {
-  const { ctx, registrar } = montar({ clientes: [EXISTENTE] });
-  const p = await prepararCobranca(ctx, 'u1', COBRANCA);
-  await confirmarCobranca(ctx, 'u1', { confirmacao: String(p.confirmacao) }, registrar);
-  const erro = await confirmarCobranca(ctx, 'u1', { confirmacao: String(p.confirmacao) }, registrar).then(() => null, (e: Error) => e);
-  assert.match(erro!.message, /código já usado ou desconhecido/);
-  assert.match(erro!.message, /asaas_cobrancas \/ asaas_cliente/);
-  assert.doesNotMatch(erro!.message, /nada foi gravado/i);
-});
-
-test('3) o registro de sucesso (duplicata e teto) sai ANTES da busca da linha digitável, que é melhor esforço', async () => {
-  // a) a linha digitável fica pendurada: o registro já existe nesse momento
+test('o registro de sucesso (duplicata e tetos) sai ANTES da busca da linha digitável, que é melhor esforço', async () => {
   const m = montar({ clientes: [EXISTENTE] });
   let soltar!: (v: unknown) => void;
   const original = m.f.conta.fonte.get.bind(m.f.conta.fonte);
@@ -839,82 +439,124 @@ test('3) o registro de sucesso (duplicata e teto) sai ANTES da busca da linha di
     }
     return original(caminho, q);
   };
-  const p = await prepararCobranca(m.ctx, 'u1', COBRANCA);
-  const andamento = confirmarCobranca(m.ctx, 'u1', { confirmacao: String(p.confirmacao) }, m.registrar);
+  const andamento = cobrar(m);
   await chegou;
   const ev = m.eventos.find((e) => e.evento === EVENTO_COBRANCA);
   assert.ok(ev && ev.ok, 'o registro de sucesso tem de existir enquanto a linha digitável ainda é buscada');
   assert.match(String(ev!.args.cobrancaId), /^pay_/);
   soltar({ identificationField: '34191.79001' });
-  const r = (await andamento) as any;
-  assert.equal(r.cobranca.linhaDigitavel, '34191.79001');
-  assert.equal(m.eventos.filter((e) => e.evento === EVENTO_COBRANCA).length, 1, 'registrado uma vez só');
+  assert.equal((await andamento).cobranca.linhaDigitavel, '34191.79001');
+  assert.equal(m.eventos.filter((e) => e.evento === EVENTO_COBRANCA).length, 1);
 
-  // b) a linha digitável nunca vem: passado o prazo, o link basta e nada trava
   const n = montar({ clientes: [EXISTENTE] }, { esperaLinhaMs: 20 });
   const orig2 = n.f.conta.fonte.get.bind(n.f.conta.fonte);
   (n.f.conta.fonte as { get: unknown }).get = async (caminho: string, q: Record<string, any>) => (/identificationField$/.test(caminho) ? new Promise(() => undefined) : orig2(caminho, q));
-  const pn = await prepararCobranca(n.ctx, 'u1', COBRANCA);
-  const rn = (await confirmarCobranca(n.ctx, 'u1', { confirmacao: String(pn.confirmacao) }, n.registrar)) as any;
+  const rn = await cobrar(n);
   assert.equal(rn.cobranca.linhaDigitavel, null);
   assert.ok(rn.cobranca.linkDoBoleto);
 });
 
-test('5) a chave da conta mudou entre a prévia e o ok: o confirmar recusa (cliente e boleto) e não grava', async () => {
-  const a = montar({ clientes: [EXISTENTE] });
-  const p = await prepararCobranca(a.ctx, 'u1', COBRANCA);
-  assert.equal(p.conta.chaveTermina, '…xYZ1');
-  a.f.conta.escrita!.chaveFinal = '…OUTR';
-  a.f.conta.escrita!.chaveImpressao = impressaoDaChave('$aact_prod_OUTRA…OUTR');
-  await assert.rejects(() => confirmarCobranca(a.ctx, 'u1', { confirmacao: String(p.confirmacao) }, a.registrar), /chave do Asaas de doutor-hernia-serra mudou desde a prévia.*…xYZ1.*…OUTR/);
-  assert.equal(a.f.posts.length, 0);
-  // com a chave de volta ao que foi aprovado, um preparar novo funciona
-  a.f.conta.escrita!.chaveFinal = '…xYZ1';
-  a.f.conta.escrita!.chaveImpressao = impressaoDaChave(CHAVE_A);
-  const p2 = await prepararCobranca(a.ctx, 'u1', COBRANCA);
-  await confirmarCobranca(a.ctx, 'u1', { confirmacao: String(p2.confirmacao) }, a.registrar);
-  assert.equal(a.f.posts.length, 1);
-
-  const b = montar();
-  const pc = await prepararCliente(b.ctx, 'u1', { unidade: 'serra', nome: 'Maria da Silva', cpfCnpj: CPF });
-  b.f.conta.escrita!.chaveFinal = '…OUTR';
-  b.f.conta.escrita!.chaveImpressao = impressaoDaChave('$aact_prod_OUTRA…OUTR');
-  await assert.rejects(() => confirmarCliente(b.ctx, 'u1', { confirmacao: String(pc.confirmacao) }, b.registrar), /chave do Asaas .* mudou/);
-  assert.equal(b.f.posts.length, 0);
-});
-
-test('7) CPF/CNPJ em externalReference e descrição é recusado, e não chega inteiro ao registro; telefone sai dos erros', async () => {
+test('depois de escrever, a leitura em cache (asaas_cobrancas, extrato) da conta é esquecida — e a de outra conta não', async () => {
   const m = montar({ clientes: [EXISTENTE] });
-  for (const ref of ['52998224725', '529.982.247-25', '11222333000181', '11.222.333/0001-81', 'pedido-52998224725']) {
-    await assert.rejects(() => prepararCobranca(m.ctx, 'u1', { ...COBRANCA, externalReference: ref }), /externalReference recusada: tem 10 ou mais dígitos seguidos/, ref);
-  }
-  for (const d of ['Consulta do CPF 529.982.247-25', 'doc 52998224725', 'cnpj 11222333000181']) {
-    await assert.rejects(() => prepararCobranca(m.ctx, 'u1', { ...COBRANCA, descricao: d }), /descrição recusada: tem 11 ou mais dígitos seguidos/, d);
-  }
-  assert.ok((await prepararCobranca(m.ctx, 'u1', { ...COBRANCA, externalReference: 'pedido-1042', descricao: 'Consulta 2026-11-10 pedido 1042' })).confirmacao);
-  // pelo protocolo, o registro da tentativa recusada mascara a referência
-  const registros: Array<{ ferramenta: string; argumentos: any; ok: boolean; erro?: string }> = [];
-  const joao = await conectar(m, 'u1', registros);
-  const r = await joao.callTool({ name: 'asaas_preparar_cobranca', arguments: { unidade: 'serra', cpfCnpj: CPF, valor: 100, vencimento: VENC, descricao: 'x', externalReference: '529.982.247-25' } });
-  assert.equal(r.isError, true);
-  const aud = tudo(registros);
-  assert.ok(!aud.includes('529.982.247-25') && !aud.includes('52998224725'), aud);
-  assert.match(aud, /\[documento\]/);
-  // telefone de 10, 12 e 13 dígitos num erro do Asaas
-  const t = montar({ clientes: [EXISTENTE], falhaNoPagamento: new ErroHttp('Asaas 400: contato (63) 3321-4455, 5563981411248, +55 63 98141-1248 e 556333214455', 400) });
-  const reg2: Array<{ ferramenta: string; argumentos: any; ok: boolean; erro?: string }> = [];
-  const cli = await conectar(t, 'u1', reg2);
-  const prep = JSON.parse(texto(await cli.callTool({ name: 'asaas_preparar_cobranca', arguments: { unidade: 'serra', cpfCnpj: CPF, valor: 100, vencimento: VENC, descricao: 'x', externalReference: 'r1' } })));
-  const e = await cli.callTool({ name: 'asaas_confirmar_cobranca', arguments: { confirmacao: prep.confirmacao } });
-  const saiu = texto(e) + tudo(reg2);
-  for (const proibido of ['33214455', '3321-4455', '5563981411248', '98141-1248', '556333214455']) assert.ok(!saiu.includes(proibido), `telefone vazou: ${proibido}`);
+  m.asaas.cache.guardar('cob|doutor-hernia-serra|x', 1, 600_000);
+  m.asaas.cache.guardar('ext|doutor-hernia-serra|x', 1, 600_000);
+  m.asaas.cache.guardar('cob|outra|x', 1, 600_000);
+  await cobrar(m);
+  assert.equal(m.asaas.cache.pegar('cob|doutor-hernia-serra|x'), undefined);
+  assert.equal(m.asaas.cache.pegar('ext|doutor-hernia-serra|x'), undefined);
+  assert.equal(m.asaas.cache.pegar('cob|outra|x'), 1);
 });
 
-test('8) o portão de quem escreve: fora da lista de escrita as ferramentas nem existem; na lista, são as 4', async () => {
+test('registro: CPF/CNPJ/telefone em externalReference e descrição é recusado, nunca gravado, e a recusa não repete o valor', async () => {
+  const m = montar({ clientes: [EXISTENTE] });
+  for (const ref of ['52998224725', '529.982.247-25', '529 982 247 25', '11.222.333/0001-81', '63981411248', '6333214455']) {
+    const erro = await cobrar(m, { externalReference: ref }).then(() => null, (e: Error) => e);
+    assert.ok(erro, ref);
+    assert.match(erro.message, /externalReference recusada/);
+    assert.ok(!erro.message.includes(ref), 'a recusa repetiu o valor');
+  }
+  assert.equal((await cobrar(m, { externalReference: 'PED-20261028-N123' })).gerado, true);
+  assert.equal(m.f.posts().length, 1);
+  assert.ok(!tudo(m.eventos).includes(CPF_DIGITOS));
+});
+
+// ------------------------------------------------------------------ pelo protocolo (o que o claude.ai vê)
+
+type Registro = { ferramenta: string; argumentos: any; ok: boolean; erro?: string };
+
+async function conectar(m: ReturnType<typeof montar>, usuario: string, registros: Registro[]) {
+  const server = new McpServer({ name: 't', version: '0' });
+  registrarEscritaAsaas(server, m.asaas, m.esc, { id: usuario, email: `${usuario}@exemplo.com` }, (r) => registros.push(r as never));
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  const cliente = new Client({ name: 'teste', version: '0' });
+  await Promise.all([server.connect(a), cliente.connect(b)]);
+  return cliente;
+}
+const texto = (r: any) => String(r.content?.[0]?.text ?? '');
+
+const FERRAMENTAS = ['asaas_cancelar_cobranca', 'asaas_cobranca', 'asaas_criar_cliente', 'asaas_criar_cobranca', 'asaas_editar_cliente', 'asaas_editar_cobranca', 'asaas_estornar_cobranca', 'asaas_limites', 'asaas_transferir'];
+
+test('protocolo: as ferramentas são diretas (nada de preparar/confirmar) e NÃO existe nada de banco da clínica, chaves, webhooks, usuários, antecipação, empréstimo ou pagar conta', async () => {
+  const m = montar({ clientes: [EXISTENTE] });
+  const joao = await conectar(m, 'u-joao', []);
+  const nomes = (await joao.listTools()).tools.map((t) => t.name).sort();
+  assert.deepEqual(nomes, FERRAMENTAS);
+  assert.ok(!nomes.some((n) => /prepar|confirmar|webhook|chave|token|usuario|antecip|emprest|conta_bancaria|dados_bancarios|pagar|bill|saque/.test(n)));
+  const descricoes = (await joao.listTools()).tools.map((t) => t.description ?? '').join('\n');
+  assert.match(descricoes, /NUNCA: altera dados bancários da clínica, chaves de API, webhooks ou usuários do Asaas/);
+  assert.match(descricoes, /sem pedir confirmação/);
+  const por = new Map((await joao.listTools()).tools.map((t) => [t.name, t.description ?? '']));
+  for (const nome of ['asaas_estornar_cobranca', 'asaas_transferir']) assert.match(por.get(nome)!, /^IRREVERSÍVEL — NÃO TEM VOLTA/, nome);
+  assert.match(por.get('asaas_estornar_cobranca')!, /EXPRESSAMENTE.*JÁ PAGOU/s);
+  assert.match(por.get('asaas_transferir')!, /EXPRESSAMENTE.*conferir valor e destino/s);
+  assert.match(descricoes, /estorno e transferência têm teto PRÓPRIO, menor \(padrão R\$ 500 por operação e R\$ 2\.000 por dia/);
+  assert.match(descricoes, /R\$ 5\.000 por operação e R\$ 20\.000 por dia/);
+});
+
+test('protocolo: cobrança direta pelo claude.ai grava na hora; o registro sai com argumentos mascarados e o erro sem vazamento', async () => {
+  const m = montar({ clientes: [EXISTENTE] });
+  const registros: Registro[] = [];
+  const joao = await conectar(m, 'u-joao', registros);
+  const r = await joao.callTool({ name: 'asaas_criar_cobranca', arguments: { unidade: 'serra', cpfCnpj: CPF, valor: 100, vencimento: VENC, descricao: 'Boleto do paciente', externalReference: 'r1' } });
+  assert.notEqual(r.isError, true);
+  assert.equal(m.f.posts().length, 1, 'sem passo de confirmação');
+  const cli = await joao.callTool({ name: 'asaas_criar_cliente', arguments: { unidade: 'serra', nome: 'Joana Souza', cpfCnpj: CNPJ, email: 'joana@exemplo.com', telefone: '63981411248' } });
+  assert.notEqual(cli.isError, true);
+  const aud = tudo(registros);
+  assert.ok(!aud.includes('11222333000181') && !aud.includes('11.222.333/0001-81') && !aud.includes('joana@exemplo.com') && !aud.includes('981411248') && !aud.includes(CPF_DIGITOS), 'registro com dado por inteiro');
+  assert.match(aud, /\*\*\.\*\*\*\.333\/0001-\*\*/);
+  assert.ok(!aud.includes('Joana Souza') && aud.includes('Joana S.'), 'nome inteiro no registro');
+
+  const ruim = montar({ clientes: [EXISTENTE], falhaNoPagamento: new ErroHttp(`Asaas 400 em /payments: customer 52998224725 / 529.982.247-25 / 11.222.333/0001-81 ${CHAVE_COMPLETA} maria.silva@exemplo.com`, 400) });
+  const regs2: Registro[] = [];
+  const c2 = await conectar(ruim, 'u1', regs2);
+  const e = await c2.callTool({ name: 'asaas_criar_cobranca', arguments: { unidade: 'serra', cpfCnpj: CPF, valor: 100, vencimento: VENC, descricao: 'Boleto do paciente', externalReference: 'r1' } });
+  assert.equal(e.isError, true);
+  const saiu = texto(e) + tudo(regs2);
+  for (const proibido of [CHAVE_COMPLETA, 'aact_prod', CPF_DIGITOS, '529.982.247-25', '11222333000181', '11.222.333/0001-81', 'maria.silva@exemplo.com']) assert.ok(!saiu.includes(proibido), `vazou: ${proibido}`);
+  assert.match(saiu, /\[documento\]/);
+});
+
+test('protocolo: dado de cartão no pedido é recusado e nem chega inteiro ao registro; "todas" não vale para gravar', async () => {
+  const m = montar({ clientes: [EXISTENTE] });
+  const registros: Registro[] = [];
+  const joao = await conectar(m, 'u1', registros);
+  const r = await joao.callTool({ name: 'asaas_criar_cobranca', arguments: { unidade: 'serra', cpfCnpj: CPF, valor: 100, vencimento: VENC, descricao: 'x', forma: 'CARTAO', numeroDoCartao: '4111111111111111', cvv: '123' } });
+  assert.equal(r.isError, true);
+  assert.match(texto(r), /NUNCA entram pelo chat/);
+  assert.ok(!tudo(registros).includes('4111') && !tudo(registros).includes('"123"'), 'cartão no registro');
+  assert.match(tudo(registros), /dadosDeCartaoRecusados/);
+  const todas = await joao.callTool({ name: 'asaas_criar_cobranca', arguments: { unidade: 'todas', cpfCnpj: CPF, valor: 100, vencimento: VENC, descricao: 'x' } });
+  assert.equal(todas.isError, true);
+  assert.match(texto(todas), /numa conta só/);
+  assert.equal(m.f.posts().length, 0);
+});
+
+test('o portão de quem escreve: fora da lista de escrita as ferramentas nem existem; na lista, são todas', async () => {
   const m = montar({ clientes: [EXISTENTE] });
   const listar = async (usuario: string, escritores: Set<string>) => {
     const server = new McpServer({ name: 't', version: '0' });
-    const registrou = registrarEscritaAsaasSePermitido(server, m.asaas, m.esc, usuario, escritores, () => undefined);
+    const registrou = registrarEscritaAsaasSePermitido(server, m.asaas, m.esc, usuario, escritores, () => undefined, { email: 'x@y.com' });
     const [a, b] = InMemoryTransport.createLinkedPair();
     const cliente = new Client({ name: 'teste', version: '0' });
     await Promise.all([server.connect(a), cliente.connect(b)]);
@@ -923,161 +565,37 @@ test('8) o portão de quem escreve: fora da lista de escrita as ferramentas nem 
   const fora = await listar('u-fora', new Set(['u-joao']));
   assert.equal(fora.registrou, false);
   assert.deepEqual(fora.nomes, []);
-  const chamada = await fora.cliente.callTool({ name: 'asaas_preparar_cliente', arguments: { unidade: 'serra', nome: 'Maria', cpfCnpj: CPF } }).catch((e) => ({ isError: true, content: [{ text: String(e) }] }));
+  const chamada = await fora.cliente.callTool({ name: 'asaas_criar_cobranca', arguments: { unidade: 'serra', cpfCnpj: CPF, valor: 1, vencimento: VENC, descricao: 'x' } }).catch((e) => ({ isError: true, content: [{ text: String(e) }] }));
   assert.equal((chamada as { isError?: boolean }).isError, true);
   const vazia = await listar('u-joao', new Set());
   assert.equal(vazia.registrou, false, 'sem lista de escrita, ninguém escreve');
   assert.deepEqual(vazia.nomes, []);
   const dentro = await listar('u-joao', new Set(['u-joao']));
   assert.equal(dentro.registrou, true);
-  assert.deepEqual(dentro.nomes, ['asaas_confirmar_cliente', 'asaas_confirmar_cobranca', 'asaas_preparar_cliente', 'asaas_preparar_cobranca']);
-  assert.equal(m.f.posts.length, 0);
+  assert.deepEqual(dentro.nomes, FERRAMENTAS);
+  assert.equal(m.f.chamadas.length, 0);
 });
 
-test('9) ASAAS_ESCRITA_UNIDADES: vazia/ausente = desligada em todas; só as listadas; "*" não vale; a recusa diz qual variável configurar', async () => {
-  assert.deepEqual([...unidadesComEscrita({})], []);
-  assert.deepEqual([...unidadesComEscrita({ ASAAS_ESCRITA_UNIDADES: '' })], []);
-  assert.deepEqual([...unidadesComEscrita({ ASAAS_ESCRITA_UNIDADES: '  ,, ' })], []);
-  assert.deepEqual([...unidadesComEscrita({ ASAAS_ESCRITA_UNIDADES: '*' })], []);
-  assert.deepEqual([...unidadesComEscrita({ ASAAS_ESCRITA_UNIDADES: 'todas,*, doutor-hernia-serra ,Maraba' })].sort(), ['doutor-hernia-serra', 'maraba', 'todas']);
-  const desligada = [{}, { ASAAS_ESCRITA_UNIDADES: '' }, { ASAAS_ESCRITA_UNIDADES: '*' }, { ASAAS_ESCRITA_UNIDADES: 'doutor-hernia-maraba' }];
-  for (const env of desligada) {
-    const m = montar({ clientes: [EXISTENTE] }, { unidades: () => unidadesComEscrita(env) });
-    await assert.rejects(() => prepararCliente(m.ctx, 'u1', { unidade: 'serra', nome: 'Maria', cpfCnpj: CPF }), /DESLIGADA para doutor-hernia-serra.*ASAAS_ESCRITA_UNIDADES/, tudo(env));
-    await assert.rejects(() => prepararCobranca(m.ctx, 'u1', COBRANCA), /DESLIGADA para doutor-hernia-serra.*ASAAS_ESCRITA_UNIDADES/, tudo(env));
-    assert.equal(m.f.posts.length, 0);
-  }
-  // ligada só para a Serra: funciona; a unidade tirada da lista entre a prévia e o ok não grava
-  let lista = new Set(['doutor-hernia-serra']);
-  const m = montar({ clientes: [EXISTENTE] }, { unidades: () => lista });
-  const p = await prepararCobranca(m.ctx, 'u1', COBRANCA);
-  lista = new Set();
-  await assert.rejects(() => confirmarCobranca(m.ctx, 'u1', { confirmacao: String(p.confirmacao) }, m.registrar), /DESLIGADA/);
-  assert.equal(m.f.posts.length, 0);
-  // a variável de verdade, sem injeção: ausente → desligada
-  const anterior = process.env.ASAAS_ESCRITA_UNIDADES;
-  delete process.env.ASAAS_ESCRITA_UNIDADES;
-  try {
-    const f = asaasFalso({ clientes: [EXISTENTE] });
-    const real = { asaas: criarContextoAsaas(new Map([[f.conta.slug, f.conta]])), esc: criarEscritaAsaas({ agora: () => AGORA }) };
-    await assert.rejects(() => prepararCobranca(real, 'u1', COBRANCA), /ASAAS_ESCRITA_UNIDADES/);
-    process.env.ASAAS_ESCRITA_UNIDADES = 'doutor-hernia-serra';
-    assert.ok((await prepararCobranca(real, 'u1', COBRANCA)).confirmacao);
-  } finally {
-    if (anterior === undefined) delete process.env.ASAAS_ESCRITA_UNIDADES;
-    else process.env.ASAAS_ESCRITA_UNIDADES = anterior;
-  }
+test('asaas_cobranca (consulta com links) só funciona nas clínicas com a escrita liberada', async () => {
+  const m = montar({ pagamentos: [{ id: 'pay_paga00000001', status: 'RECEIVED', value: 10 }] }, { unidades: () => new Set() });
+  const joao = await conectar(m, 'u-joao', []);
+  const r = await joao.callTool({ name: 'asaas_cobranca', arguments: { unidade: 'serra', cobrancaId: 'pay_paga00000001' } });
+  assert.equal(r.isError, true);
+  assert.match(texto(r), /DESLIGADA para doutor-hernia-serra/);
+  const ok = montar({ pagamentos: [{ id: 'pay_paga00000001', status: 'RECEIVED', value: 10 }] });
+  const c2 = await conectar(ok, 'u-joao', []);
+  const r2 = await c2.callTool({ name: 'asaas_cobranca', arguments: { unidade: 'serra', cobrancaId: 'pay_paga00000001' } });
+  assert.notEqual(r2.isError, true);
 });
 
-test('9) teto e limite por hora em 0 DESLIGAM o boleto (não viram o padrão) e a recusa diz qual variável configurar', async () => {
-  const semTeto = montar({ clientes: [EXISTENTE] }, { tetoReais: () => tetoDaCobranca({ ASAAS_COBRANCA_MAX_REAIS: '0' }) });
-  await assert.rejects(() => prepararCobranca(semTeto.ctx, 'u1', { ...COBRANCA, valor: 10 }), /DESLIGADA.*ASAAS_COBRANCA_MAX_REAIS/);
-  const semHora = montar({ clientes: [EXISTENTE] }, { porHora: () => cobrancasPorHora({ ASAAS_COBRANCAS_POR_HORA: '0' }) });
-  await assert.rejects(() => prepararCobranca(semHora.ctx, 'u1', COBRANCA), /DESLIGADA.*ASAAS_COBRANCAS_POR_HORA/);
-  // zerado entre a prévia e o ok: o confirmar recusa também
-  let n = 5;
-  const m = montar({ clientes: [EXISTENTE] }, { porHora: () => n });
-  const p = await prepararCobranca(m.ctx, 'u1', COBRANCA);
-  n = 0;
-  await assert.rejects(() => confirmarCobranca(m.ctx, 'u1', { confirmacao: String(p.confirmacao) }, m.registrar), /DESLIGADA.*ASAAS_COBRANCAS_POR_HORA/);
-  assert.equal(semTeto.f.posts.length + semHora.f.posts.length + m.f.posts.length, 0);
-});
-
-test('7b) mascararTelefone: com DDI (12 e 13 dígitos) o DDD certo aparece, sem o 55; curto vira só asteriscos', () => {
-  assert.equal(mascararTelefone('(63) 98141-1248'), '(63) *****-1248');
-  assert.equal(mascararTelefone('+55 63 98141-1248'), '(63) *****-1248');
-  assert.equal(mascararTelefone('556333214455'), '(63) *****-4455');
-  assert.equal(mascararTelefone('3321'), '*****');
-});
-
-test('8b) producao.ts liga a escrita do Asaas SÓ pelo portão testado, passando a lista de escritores (e a única chamada de registro)', () => {
+test('producao.ts liga a escrita SÓ pelo portão testado (lista de escritores), com o Telegram e o histórico da auditoria', () => {
   const src = readFileSync(new URL('./producao.ts', import.meta.url), 'utf8');
   assert.equal(src.match(/registrarEscritaAsaasSePermitido\(/g)?.length, 1);
-  assert.match(src, /registrarEscritaAsaasSePermitido\(server, asaas, escritaAsaas, quem\.userId, escritores, auditar\)/);
+  assert.match(src, /registrarEscritaAsaasSePermitido\(server, asaas, escritaAsaas, quem\.userId, escritores, auditar, \{ email: quem\.email, clientId: quem\.clientId \}\)/);
   // ninguém chama o registrador cru, que não confere quem pode escrever
   assert.equal(src.match(/\bregistrarEscritaAsaas\(/g), null);
-  assert.doesNotMatch(src, /import \{[^}]*\bregistrarEscritaAsaas\b[^}]*\} from '\.\/asaas-escrita\.js'/);
-});
-
-// ------------------------------------------------------------------ 4ª rodada do sênior (PR #159)
-
-test('10) duas chaves com o MESMO final de 4 caracteres: o confirmar recusa (compara a chave inteira), cliente e boleto, sem gravar', () => {
-  assert.equal(finalDaChave(CHAVE_A), finalDaChave(CHAVE_B), 'pré-condição: mesmo final');
-  assert.notEqual(impressaoDaChave(CHAVE_A), impressaoDaChave(CHAVE_B));
-  assert.ok(!impressaoDaChave(CHAVE_A).includes('AAAA'));
-  return (async () => {
-    const a = montar({ clientes: [EXISTENTE] });
-    const p = await prepararCobranca(a.ctx, 'u1', COBRANCA);
-    a.f.conta.escrita!.chaveImpressao = impressaoDaChave(CHAVE_B); // final continua '…xYZ1'
-    await assert.rejects(() => confirmarCobranca(a.ctx, 'u1', { confirmacao: String(p.confirmacao) }, a.registrar), /chave do Asaas de doutor-hernia-serra mudou desde a prévia/);
-    assert.equal(a.f.posts.length, 0);
-    const b = montar();
-    const pc = await prepararCliente(b.ctx, 'u1', { unidade: 'serra', nome: 'Maria da Silva', cpfCnpj: CPF });
-    b.f.conta.escrita!.chaveImpressao = impressaoDaChave(CHAVE_B);
-    await assert.rejects(() => confirmarCliente(b.ctx, 'u1', { confirmacao: String(pc.confirmacao) }, b.registrar), /chave do Asaas .* mudou/);
-    assert.equal(b.f.posts.length, 0);
-    // a impressão nunca aparece: nem na prévia, nem na auditoria, nem nos eventos
-    const reg: any[] = [];
-    const c = montar({ clientes: [EXISTENTE] });
-    const cli = await conectar(c, 'u1', reg);
-    const prev = texto(await cli.callTool({ name: 'asaas_preparar_cobranca', arguments: { unidade: 'serra', cpfCnpj: CPF, valor: 100, vencimento: VENC, descricao: 'x', externalReference: 'r10' } }));
-    await cli.callTool({ name: 'asaas_confirmar_cobranca', arguments: { confirmacao: JSON.parse(prev).confirmacao } });
-    const saiu = prev + tudo(reg) + tudo(c.eventos);
-    assert.ok(!saiu.includes(impressaoDaChave(CHAVE_A)) && !saiu.includes('AAAAAAAA'));
-  })();
-});
-
-test('11) CPF/CNPJ com espaço, hífen, barra ou ponto em externalReference e descrição: recusado, nunca gravado, mensagem sem o valor', async () => {
-  const formatos = ['529 982 247 25', '529-982-247-25', '529.982.247/25', '11 222 333 0001 81', '529982247 25', '5 2 9 9 8 2 2 4 7 2 5', 'ref 529 - 982 - 247 - 25'];
-  const m = montar({ clientes: [EXISTENTE] });
-  const registros: any[] = [];
-  const cli = await conectar(m, 'u1', registros);
-  for (const f of formatos) {
-    const e = await prepararCobranca(m.ctx, 'u1', { ...COBRANCA, externalReference: f }).then(() => null, (x: Error) => x);
-    assert.match(e?.message ?? 'ACEITA', /externalReference recusada: tem 10 ou mais dígitos seguidos/, f);
-    assert.ok(!e!.message.includes(f) && !/529|982|247/.test(e!.message), 'a mensagem não repete o valor');
-    const d = await prepararCobranca(m.ctx, 'u1', { ...COBRANCA, descricao: `CPF ${f}`, externalReference: `ok-${f.length}` }).then(() => null, (x: Error) => x);
-    assert.match(d?.message ?? 'ACEITA', /descrição recusada: tem 11 ou mais dígitos seguidos/, f);
-    assert.ok(!/529|982|247/.test(d!.message));
-    const r = await cli.callTool({ name: 'asaas_preparar_cobranca', arguments: { unidade: 'serra', cpfCnpj: CPF, valor: 100, vencimento: VENC, descricao: 'x', externalReference: f } });
-    assert.equal(r.isError, true, f);
-  }
-  const aud = tudo(registros) + tudo(m.eventos);
-  for (const f of formatos) assert.ok(!aud.includes(f), `gravado em claro: ${f}`);
-  assert.ok(!/52998224725|529982247|11222333000181/.test(aud.replace(/\D/g, '')), 'nem como dígitos soltos');
-  assert.equal(m.f.posts.length, 0);
-});
-
-test('12) falsos positivos e telefone fixo: decisão documentada — referência com 10+ dígitos seguidos é recusada (inclusive telefone fixo e aaaammddNNN); com letras entre os blocos passa', async () => {
-  const m = montar({ clientes: [EXISTENTE] });
-  // telefone fixo (10 dígitos) e celular (11) na externalReference: antes o fixo passava inteiro para a auditoria
-  for (const ref of ['6333214455', '(63) 3321-4455', '63 3321 4455', '63981411248', '20261028123', '5563981411248']) {
-    await assert.rejects(() => prepararCobranca(m.ctx, 'u1', { ...COBRANCA, externalReference: ref }), /externalReference recusada/, ref);
-  }
-  // 9 dígitos, número de pedido com letras, data e valor passam
-  for (const ref of ['123456789', 'PED-20261028', 'PED-20261028-N123', 'pedido-1042', '2026-10-28', 'A20261028B123']) {
-    assert.ok((await prepararCobranca(m.ctx, 'u1', { ...COBRANCA, externalReference: ref })).confirmacao, ref);
-  }
-  // descrição: 10 dígitos (fixo) passa, vai só para o boleto e a auditoria guarda o tamanho; 11+ recusa
-  assert.ok((await prepararCobranca(m.ctx, 'u1', { ...COBRANCA, descricao: 'Retorno em 28/10/2026 valor R$ 250,00 contato 6333214455', externalReference: 'd1' })).confirmacao);
-  await assert.rejects(() => prepararCobranca(m.ctx, 'u1', { ...COBRANCA, descricao: 'contato 63981411248', externalReference: 'd2' }), /descrição recusada/);
-});
-
-test('13) limparTexto: ids sub_/ins_, nossoNumero e PED-20261028 saem intactos; CPF com espaço/hífen/barra e telefone com DDD saem', () => {
-  const t = limparTexto('sub_00001234567 ins_000012345678 cus_000005401844 nossoNumero 12345678 nossoNumero":"4821993456 ref PED-20261028 venceu 2026-11-10 R$ 250,00');
-  assert.equal(t, 'sub_00001234567 ins_000012345678 cus_000005401844 nossoNumero 12345678 nossoNumero":"4821993456 ref PED-20261028 venceu 2026-11-10 R$ 250,00');
-  const u = limparTexto('doc 529 982 247 25 e 529-982-247-25 e 529.982.247/25 e 11 222 333 0001 81 e (63) 3321-4455 e 63 98141-1248');
-  for (const p of ['529', '982', '247', '11 222', '3321-4455', '98141-1248']) assert.ok(!u.includes(p), p);
-});
-
-test('14) defesa em profundidade: mesmo se uma referência com documento chegasse ao confirmar (pendente forjado), a auditoria sai mascarada', async () => {
-  const m = montar({ clientes: [EXISTENTE] });
-  const { codigo } = m.esc.pendentes.guardar({
-    tipo: 'cobranca', usuario: 'u1', unidade: 'doutor-hernia-serra', clienteId: EXISTENTE.id, avisar: false, valor: 100, vencimento: VENC,
-    descricao: 'x', externalReference: '529 982 247 25', chaveTermina: '…xYZ1', chaveImpressao: impressaoDaChave(CHAVE_A),
-  });
-  await confirmarCobranca(m.ctx, 'u1', { confirmacao: codigo }, m.registrar);
-  const aud = tudo(m.eventos);
-  assert.ok(!aud.includes('529 982 247 25') && !/529|982|247/.test(aud), aud);
-  assert.match(aud, /\[documento\]/);
+  assert.doesNotMatch(src, /import \{[^}]*\bregistrarEscritaAsaas\b[^}]*\} from/);
+  // o aviso de cada transferência/estorno/cancelamento sai pelo Telegram de verdade, e o teto do dia vem do banco
+  assert.match(src, /criarEscritaAsaas\(\{ porteiro: porteiroPrisma\(prisma\), alertar: \(texto\) => enviarTelegram\(texto\) \}\)/);
+  assert.match(src, /asaasEscrever\(c\.unitId, c\.chave, metodo, caminho, corpo\)/);
 });

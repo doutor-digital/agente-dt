@@ -45,17 +45,17 @@ export interface OpcoesConector {
   ferramentasSimultaneas?: number;
   /** ferramentas além das da franquia (Kommo, cérebro, relatório cruzado), registradas a cada requisição */
   /** `quem.userId` é o usuário do console que fez login no conector (para liberar a escrita só a quem pode). */
-  extras?: (server: McpServer, auditar: Auditar, quem: { userId: string; email?: string }) => void;
+  extras?: (server: McpServer, auditar: Auditar, quem: { userId: string; email?: string; clientId?: string }) => void;
   cimd?: BuscadorCimd;
   agora?: () => number;
   log?: { info(o: object, m?: string): void; warn(o: object, m?: string): void };
 }
 
 const INSTRUCOES = [
-  'Dados da Doutor Digital, só leitura (as exceções, para quem tem permissão, são as de dois passos descritas abaixo). Comece por listar_integracoes: ela diz o que cada clínica e cada empresa do grupo (ex. HM Tecnologia) tem ligado.',
+  'Dados da Doutor Digital, só leitura (as exceções, para quem tem permissão, estão descritas abaixo: a maioria é em dois passos, com o ok da pessoa; o Asaas escreve DIRETO, sem passo de confirmação, com tetos e avisos automáticos). Comece por listar_integracoes: ela diz o que cada clínica e cada empresa do grupo (ex. HM Tecnologia) tem ligado.',
   'Fontes: o CRM da franquia Doutor Hérnia (ferramentas sem prefixo: pacientes, agenda, tratamentos, BI),',
   'o CRM comercial Kommo (kommo_*), o ERP Bling das empresas que usam (bling_*: pedidos, contas a receber, notas, clientes),',
-  'o Asaas das clínicas (asaas_*: cobranças, extrato do que entrou de verdade, saldo, clientes; para quem tem permissão, também cadastrar cliente e gerar BOLETO em dois passos, numa clínica só — asaas_preparar_cliente/asaas_preparar_cobranca → mostrar o resumo, com a conta e se o cliente será avisado → asaas_confirmar_cliente/asaas_confirmar_cobranca só se a pessoa aprovar; não cancela, não estorna, não edita e não faz Pix, cartão, parcelamento nem transferência),',
+  'o Asaas das clínicas (asaas_*: cobranças e uma cobrança pelo id, extrato do que entrou de verdade, saldo, clientes. Para quem tem permissão, também ESCREVE DIRETO, sem passo de confirmação, numa clínica só por vez: cadastrar e editar cliente, criar cobrança por BOLETO, PIX ou CARTÃO (cartão sai como link de pagamento, nunca peça nem receba número de cartão) e parcelada, editar cobrança pendente, cancelar cobrança, estornar cobrança recebida (total ou parcial) e transferir (Pix de saída) — asaas_criar_cliente, asaas_editar_cliente, asaas_criar_cobranca, asaas_editar_cobranca, asaas_cancelar_cobranca, asaas_estornar_cobranca, asaas_transferir. Como não há confirmação, confira o pedido com a pessoa ANTES de chamar. Estorno e transferência são IRREVERSÍVEIS (não têm volta): só com o pedido claro da pessoa, depois de conferir valor e destino. Quem protege o dinheiro são travas automáticas: teto por operação (padrão R$ 5.000) e teto por dia e por chave do Asaas (padrão R$ 20.000, somando cobranças criadas + estornos + transferências), e estorno e transferência têm teto próprio, menor (padrão R$ 500 por operação e R$ 2.000 por dia, cada um) — passou do teto, o conector recusa e só o João sobe o teto no servidor; transferência SÓ para destinos da lista permitida da clínica (veja asaas_limites; lista vazia = transferência desligada; destino novo não se cadastra pelo chat, só o João no servidor); o João recebe aviso no Telegram a cada transferência, estorno, cancelamento e cobrança acima de 50% do teto. NUNCA existe: alterar dados bancários da clínica, chaves de API, webhooks ou usuários do Asaas, antecipação, empréstimo, pagar contas),',
   'o RH das empresas que usam o Convênia (convenia_*: colaboradores, admissões e desligamentos, férias, afastamentos — ficha completa, com dado pessoal sensível: CPF, salário, dados bancários, endereço, nascimento e dados de saúde; nas listagens use completo: true para a ficha inteira),',
   'o ponto eletrônico Tiquetaque (tiquetaque_*: batidas do dia e quem está trabalhando agora, atrasos e faltas, horas e banco de horas, afastamentos; uma conta cobre várias clínicas e empresas, filtre por local — registro completo, com dado pessoal sensível: CPF, PIS, foto/selfie e GPS da batida, anexo de atestado e justificativa escrita; em tiquetaque_colaboradores e tiquetaque_horas use completo: true para a ficha e o espelho inteiros),',
   'a Tramitação Inteligente dos escritórios de advocacia (tramitacao_*: processos, publicações, clientes e prazos; só leitura, documentos só como metadados, CPF e telefone mascarados, nunca a senha do Meu INSS; a busca de cliente por nome lê só parte da base: se a resposta vier com truncado, não conclua que o cliente não existe),',
@@ -179,7 +179,7 @@ export async function montarConectorRemoto(
     const server = new McpServer({ name: 'doutor-digital', version: '1.0.0' }, { instructions: INSTRUCOES });
     const auditar: Auditar = criarAuditor(o.armazem, { userId, clientId }, o.log);
     registrarFerramentas(server, contexto, { auditar });
-    o.extras?.(server, auditar, { userId, email: String(auth?.extra?.email ?? '') || undefined });
+    o.extras?.(server, auditar, { userId, email: String(auth?.extra?.email ?? '') || undefined, clientId: clientId || undefined });
     const transporte = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     res.on('close', () => {
       void transporte.close();

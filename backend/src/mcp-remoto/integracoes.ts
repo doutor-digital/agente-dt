@@ -34,7 +34,7 @@ export function listarIntegracoes(f: FontesDeIntegracao) {
       ...(tem.franquia && tem.kommo ? ['relatorio_funil'] : []),
       ...(tem.bling ? ['bling_*'] : []),
       ...(tem.bling && tem.kommo ? ['relatorio_vendas'] : []),
-      ...(tem.asaas ? ['asaas_* (cobranças, extrato, saldo, clientes; para quem tem permissão, cadastrar cliente e gerar boleto em dois passos)'] : []),
+      ...(tem.asaas ? ['asaas_* (cobranças, extrato, saldo, clientes; para quem tem permissão, também criar cobrança por boleto/Pix/cartão, editar, cancelar, estornar e transferir para destinos da lista, direto e com tetos)'] : []),
       ...(tem.convenia ? ['convenia_* (RH: colaboradores, admissões e desligamentos, férias, afastamentos)'] : []),
       ...(tem.tiquetaque ? ['tiquetaque_* (ponto: batidas do dia e quem está trabalhando, atrasos e faltas, horas e banco de horas, afastamentos — de todos os locais da conta)'] : []),
       ...(tem.tramitacao ? ['tramitacao_* (advocacia: processos, publicações, clientes e prazos; só leitura, documentos só como metadados)'] : []),
@@ -64,7 +64,7 @@ export function registrarIntegracoes(server: McpServer, fontes: () => FontesDeIn
       title: 'O que está ligado em cada unidade',
       description:
         'Todas as unidades e empresas do conector (clínicas Doutor Hérnia e empresas do grupo, como a HM Tecnologia) e o que cada uma ' +
-        'tem ligado: CRM da franquia, Kommo, Bling, Asaas (leitura; para quem tem permissão, também cadastra cliente e gera boleto em dois passos), Convênia (RH), Tiquetaque (ponto), Tramitação Inteligente (advocacia), sistema novo de RH/Caixa/Financeiro (sistemas_*) — e quais ferramentas usar. Comece por aqui para saber se algo está integrado.',
+        'tem ligado: CRM da franquia, Kommo, Bling, Asaas (leitura; para quem tem permissão, também cria cobrança por boleto/Pix/cartão, edita, cancela, estorna e transfere para destinos da lista, direto e com tetos), Convênia (RH), Tiquetaque (ponto), Tramitação Inteligente (advocacia), sistema novo de RH/Caixa/Financeiro (sistemas_*) — e quais ferramentas usar. Comece por aqui para saber se algo está integrado.',
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     () => executar('listar_integracoes', {}, auditar, () => listarIntegracoes(fontes())),

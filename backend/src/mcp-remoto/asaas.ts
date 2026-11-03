@@ -1,7 +1,7 @@
 /**
  * Asaas no conector: cobranças, extrato, saldo e clientes das clínicas com a chave do Asaas no painel de
- * integrações. Aqui é só leitura — a fonte de produção é o `asaasGet` (só GET). Cadastrar cliente e gerar
- * boleto existem à parte, em dois passos, em `asaas-escrita.ts`. Nos testes, uma fonte falsa.
+ * integrações. Aqui é só leitura — a fonte de produção é o `asaasGet` (só GET). A escrita (cliente, cobrança,
+ * estorno, transferência) existe à parte, em `asaas-escrita.ts`, `asaas-operacoes.ts` e `asaas-ferramentas.ts`. Nos testes, uma fonte falsa.
  *
  * O extrato é o que ENTROU de verdade (não o comprovante que o paciente manda): é por ele que se confere
  * se um Pix caiu.
@@ -18,13 +18,16 @@ export interface FonteAsaas {
   get<T>(caminho: string, query?: Record<string, string | number | undefined>): Promise<T>;
 }
 
-/** A porta de escrita da conta: só cadastrar cliente e gerar cobrança (ver `lib/integracoes/asaas-escrita.ts`). */
+/** A porta de escrita da conta: só as rotas da lista fechada de `lib/integracoes/asaas-escrita.ts` (o resto é recusado lá). */
 export interface EscritaAsaas {
-  post<T>(caminho: '/customers' | '/payments', corpo: Record<string, unknown>): Promise<T>;
+  enviar<T>(metodo: 'POST' | 'PUT' | 'DELETE', caminho: string, corpo?: Record<string, unknown>): Promise<T>;
   /** Os 4 últimos caracteres da chave, para mostrar em QUAL conta vai gravar. Nunca a chave. */
   chaveFinal: string;
-  /** sha256 da chave INTEIRA: só para o confirmar perceber a troca de chave (o final de 4 caracteres pode coincidir). Nunca mostrar, gravar ou logar. */
-  chaveImpressao: string;
+  /**
+   * Identifica a CHAVE do Asaas sem expô-la: os 16 primeiros caracteres de um sha256 (com sufixo fixo) da chave inteira. Contas que usam a mesma chave têm o
+   * mesmo valor e dividem o teto do dia e a trava de concorrência. Irreversível; vai para a auditoria como `chaveAsaas`.
+   */
+  chaveGrupo: string;
   /** Nome da conta que o Asaas devolveu quando a chave foi salva no painel de integrações. */
   contaSalva?: string | null;
 }
@@ -32,6 +35,8 @@ export interface EscritaAsaas {
 export interface ContaAsaas {
   slug: string;
   nome: string;
+  /** Fuso da clínica (o "dia" do teto diário). Sem ele, São Paulo. */
+  fuso?: string;
   fonte: FonteAsaas;
   /** Sem isto a conta é só leitura. */
   escrita?: EscritaAsaas;
@@ -111,7 +116,8 @@ async function emCada<T extends object>(contas: ContaAsaas[], fn: (c: ContaAsaas
 
 // ----------------------------------------------------------------- cobranças
 
-const STATUS: Record<string, string> = {
+export const STATUS: Record<string, string> = {
+  DELETED: 'excluída',
   PENDING: 'aguardando pagamento', RECEIVED: 'recebida', CONFIRMED: 'confirmada', OVERDUE: 'vencida', REFUNDED: 'estornada',
   RECEIVED_IN_CASH: 'recebida em dinheiro', REFUND_REQUESTED: 'estorno solicitado', REFUND_IN_PROGRESS: 'estorno em andamento',
   CHARGEBACK_REQUESTED: 'chargeback', CHARGEBACK_DISPUTE: 'chargeback em disputa', AWAITING_CHARGEBACK_REVERSAL: 'aguardando reversão',
@@ -132,6 +138,12 @@ interface Cobranca {
   clientPaymentDate?: string | null;
   dateCreated?: string;
   description?: string | null;
+  externalReference?: string | null;
+  invoiceUrl?: string | null;
+  bankSlipUrl?: string | null;
+  installment?: string | null;
+  installmentNumber?: number | null;
+  refunds?: Array<{ value?: number; status?: string; dateCreated?: string }> | null;
 }
 
 const CAMPO_DATA = { vencimento: 'dueDate', pagamento: 'paymentDate', criacao: 'dateCreated' } as const;
@@ -178,6 +190,8 @@ export async function asaasCobrancas(
       ...resumirCobrancas(itens, a.agruparPor, campo as keyof Cobranca),
       truncado,
       itens: itens.slice(0, max).map((x) => ({
+        // o id (pay_…) é o que asaas_cancelar_cobranca / asaas_estornar_cobranca / asaas_editar_cobranca pedem
+        id: x.id, cliente: x.customer, referencia: x.externalReference ?? null,
         vencimento: x.dueDate, pagamento: x.clientPaymentDate ?? x.paymentDate ?? null, valor: x.value, liquido: x.netValue,
         status: STATUS[x.status ?? ''] ?? x.status, forma: FORMA[x.billingType ?? ''] ?? x.billingType, descricao: x.description ?? null,
       })),
@@ -196,6 +210,33 @@ export async function asaasCobrancas(
         } }
       : {}),
     porUnidade,
+  };
+}
+
+/** Uma cobrança pelo id (pay_…) ou pela externalReference: status, valor, forma, links e estornos. É o que se confere antes e depois de cancelar ou estornar. */
+export async function asaasCobranca(ctx: ContextoAsaas, a: { unidade: string; cobrancaId?: string; externalReference?: string }) {
+  if (a.unidade.trim().toLowerCase() === 'todas' || /[,;]/.test(a.unidade)) throw new ErroDeEntrada('informe UMA clínica: a conferência de uma cobrança é numa conta só');
+  const [c] = resolverContasAsaas(ctx, a.unidade);
+  const id = a.cobrancaId?.trim();
+  const ref = a.externalReference?.trim();
+  if (!!id === !!ref) throw new ErroDeEntrada('informe cobrancaId (pay_…) OU externalReference, um dos dois');
+  let x: Cobranca | undefined;
+  if (id) {
+    if (!/^pay_[A-Za-z0-9]{6,40}$/.test(id)) throw new ErroDeEntrada('cobrancaId inválido (esperado algo como pay_080225913252)');
+    x = (await c!.fonte.get<Cobranca>(`/payments/${id}`)) ?? undefined;
+  } else {
+    const r = await c!.fonte.get<{ data?: Array<Cobranca & { deleted?: boolean }> }>('/payments', { externalReference: ref, limit: 20 });
+    x = r?.data?.find((p) => !p.deleted);
+  }
+  if (!x?.id) throw new ErroDeEntrada('cobrança não encontrada nesta conta do Asaas');
+  return {
+    unidade: c!.slug,
+    cobranca: {
+      id: x.id, cliente: x.customer, status: STATUS[x.status ?? ''] ?? x.status, statusDoAsaas: x.status, forma: FORMA[x.billingType ?? ''] ?? x.billingType,
+      valor: x.value, liquido: x.netValue, vencimento: x.dueDate, pagamento: x.clientPaymentDate ?? x.paymentDate ?? null, descricao: x.description ?? null,
+      referencia: x.externalReference ?? null, parcelamento: x.installment ?? null, link: x.invoiceUrl ?? null, linkDoBoleto: x.bankSlipUrl ?? null,
+      estornos: (x.refunds ?? []).map((e) => ({ valor: e.value, status: e.status, data: e.dateCreated })),
+    },
   };
 }
 

@@ -1,18 +1,41 @@
 /**
- * ESCRITA no Asaas, estreita de propósito: só dois POST — cadastrar cliente (`/customers`) e gerar cobrança
- * (`/payments`). Qualquer outro caminho é recusado aqui, antes de sair da máquina: não existe como cancelar,
- * estornar, editar, transferir, sacar ou antecipar por este cliente. A leitura continua em `asaas.ts` (só GET).
+ * ESCRITA no Asaas, numa lista fechada de rotas. Qualquer outro caminho é recusado aqui, antes de sair da máquina.
  *
- * POST não é repetido sozinho: timeout ou 5xx pode ter criado a cobrança, e repetir cobraria o paciente duas
- * vezes. Só o 429 (o Asaas nem processou) volta a tentar.
+ * PERMITIDO (método + rota): cadastrar e editar cliente; criar e editar cobrança (boleto, Pix, cartão por link, parcelado);
+ * cancelar (excluir) cobrança pendente; estornar cobrança recebida; transferir (Pix/conta) — esta última só chega aqui depois
+ * da lista de destinos e dos tetos de `mcp-remoto/asaas-limites.ts`.
+ *
+ * PROIBIDO SEMPRE (não existe rota, então não há o que configurar): dados bancários da clínica, chaves de API, webhooks, usuários
+ * do Asaas, antecipação, empréstimo, pagamento de contas (bill payment), assinatura, exclusão de cliente. A leitura continua em
+ * `asaas.ts` (só GET).
+ *
+ * Escrita não é repetida sozinha: timeout ou 5xx pode ter gravado, e repetir cobraria ou pagaria duas vezes. Só o 429 (o Asaas
+ * nem processou) volta a tentar.
  */
 import { mascararDigitosSeguidos, mascararPii } from '../pii.js';
 import { ASAAS_API, ErroAsaas, ritmoDaConta } from './asaas.js';
 import { IDS_PROTEGIDOS, protegendo } from './mascaras.js';
 
 const AGENTE = 'DoutorDigital-Conector/1.0';
-/** Os únicos caminhos em que este cliente escreve. */
-export const CAMINHOS_DE_ESCRITA = ['/customers', '/payments'] as const;
+
+export type MetodoDeEscrita = 'POST' | 'PUT' | 'DELETE';
+// ids com o prefixo certo do Asaas (cus_ cliente, pay_ cobrança): "/payments/webhook" ou "/customers/myAccount" não são rotas de escrita
+const CLIENTE = 'cus_[A-Za-z0-9]{6,40}';
+const COBRANCA = 'pay_[A-Za-z0-9]{6,40}';
+/** As ÚNICAS rotas em que este cliente escreve (método + caminho inteiro, sem query). */
+export const ROTAS_DE_ESCRITA: ReadonlyArray<{ metodo: MetodoDeEscrita; caminho: RegExp; nome: string }> = [
+  { metodo: 'POST', caminho: /^\/customers$/, nome: 'cadastrar cliente' },
+  { metodo: 'PUT', caminho: new RegExp(`^/customers/${CLIENTE}$`), nome: 'editar cliente' },
+  { metodo: 'POST', caminho: /^\/payments$/, nome: 'criar cobrança' },
+  { metodo: 'PUT', caminho: new RegExp(`^/payments/${COBRANCA}$`), nome: 'editar cobrança' },
+  { metodo: 'DELETE', caminho: new RegExp(`^/payments/${COBRANCA}$`), nome: 'cancelar cobrança' },
+  { metodo: 'POST', caminho: new RegExp(`^/payments/${COBRANCA}/refund$`), nome: 'estornar cobrança' },
+  { metodo: 'POST', caminho: /^\/transfers$/, nome: 'transferir' },
+];
+
+export function rotaPermitida(metodo: string, caminho: string): boolean {
+  return ROTAS_DE_ESCRITA.some((r) => r.metodo === metodo && r.caminho.test(caminho));
+}
 
 type Fetcher = typeof fetch;
 const dormir = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -36,10 +59,17 @@ export function limparTexto(texto: string, chave?: string, soSegredos = false): 
   );
 }
 
-/** POST no Asaas em `/customers` ou `/payments`. A chave só vai no cabeçalho e nunca volta em erro. */
-export async function asaasPost<T = unknown>(contaId: string, chave: string, caminho: string, corpo: Record<string, unknown>, fetcher: Fetcher = fetch): Promise<T> {
-  if (!(CAMINHOS_DE_ESCRITA as readonly string[]).includes(caminho)) {
-    throw new ErroAsaas(`escrita recusada: o conector só grava em ${CAMINHOS_DE_ESCRITA.join(' e ')}`, null);
+/** Escrita no Asaas (POST, PUT ou DELETE) numa rota da lista. A chave só vai no cabeçalho e nunca volta em erro. */
+export async function asaasEscrever<T = unknown>(
+  contaId: string,
+  chave: string,
+  metodo: MetodoDeEscrita,
+  caminho: string,
+  corpo?: Record<string, unknown>,
+  fetcher: Fetcher = fetch,
+): Promise<T> {
+  if (!rotaPermitida(metodo, caminho)) {
+    throw new ErroAsaas('escrita recusada: essa operação não existe neste conector (dados bancários, chaves, webhooks, usuários, antecipação, empréstimo e pagamento de contas nunca são alterados por aqui)', null);
   }
   const ritmo = ritmoDaConta(contaId);
   for (let tentativa = 0; tentativa < 3; tentativa++) {
@@ -47,10 +77,15 @@ export async function asaasPost<T = unknown>(contaId: string, chave: string, cam
     let resp: Response;
     try {
       resp = await fetcher(`${ASAAS_API}${caminho}`, {
-        method: 'POST',
-        headers: { access_token: chave, 'User-Agent': AGENTE, Accept: 'application/json', 'Content-Type': 'application/json' },
-        body: JSON.stringify(corpo),
-        // redirecionamento não é seguido: o cabeçalho com a chave não pode ir parar em outro endereço (e o POST pode ter sido processado)
+        method: metodo,
+        headers: {
+          access_token: chave,
+          'User-Agent': AGENTE,
+          Accept: 'application/json',
+          ...(corpo !== undefined ? { 'Content-Type': 'application/json' } : {}),
+        },
+        ...(corpo !== undefined ? { body: JSON.stringify(corpo) } : {}),
+        // redirecionamento não é seguido: o cabeçalho com a chave não pode ir parar em outro endereço (e a escrita pode ter sido processada)
         redirect: 'error',
         signal: AbortSignal.timeout(30_000),
       });
@@ -59,7 +94,7 @@ export async function asaasPost<T = unknown>(contaId: string, chave: string, cam
       throw new ErroAsaas(`sem resposta do Asaas em ${caminho}: a gravação pode ter acontecido — confira no painel do Asaas antes de repetir`, null);
     }
     if (resp.status === 429) {
-      // o Asaas nem processou: pode tentar de novo sem risco de cobrar em dobro
+      // o Asaas nem processou: pode tentar de novo sem risco de duplicar
       if (tentativa < 2) {
         await dormir(1500 * (tentativa + 1));
         continue;
@@ -74,7 +109,7 @@ export async function asaasPost<T = unknown>(contaId: string, chave: string, cam
     }
     if (resp.status === 401) throw new ErroAsaas('o Asaas recusou a chave (401): chave errada, revogada ou de outro ambiente (sandbox × produção)', 401);
     if (resp.status === 403) {
-      throw new ErroAsaas('o Asaas negou a gravação (403): a chave desta conta é só de leitura ou não tem permissão para cadastrar cliente e gerar cobrança. Gere uma chave com permissão de escrita no painel do Asaas e salve-a no painel de integrações.', 403);
+      throw new ErroAsaas('o Asaas negou a gravação (403): a chave desta conta é só de leitura ou não tem permissão para esta operação (cobrança, estorno ou transferência). Gere uma chave com a permissão no painel do Asaas e salve-a no painel de integrações.', 403);
     }
     if (!resp.ok) throw new ErroAsaas(`Asaas ${resp.status} em ${caminho}: ${limparTexto(texto, chave).slice(0, 300)}`, resp.status);
     try {
