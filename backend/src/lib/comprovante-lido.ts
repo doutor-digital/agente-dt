@@ -13,7 +13,7 @@ import type { Unit } from '@prisma/client';
 import { logger } from './logger.js';
 import { prisma } from './prisma.js';
 import { ehTranscricaoDeComprovante } from './pagamento-antecipado.js';
-import { normalizarDados, referenciaDaLeitura, type DadosDoComprovante, type LeituraGuardada } from './comprovante-pix.js';
+import { neutralizarMarcasDoSistema, normalizarDados, referenciaDaLeitura, type DadosDoComprovante, type LeituraGuardada } from './comprovante-pix.js';
 import type { MensagemOficial } from '../services/kommo-talks-normalizar.js';
 import { describeImage } from '../services/vision.service.js';
 
@@ -100,6 +100,8 @@ export function segmentoDaLeitura(tipo: 'imagem' | 'arquivo', descricao: string,
 const ANEXO_DE_IMAGEM_OU_ARQUIVO = /^(picture|file|document|image)$/i;
 const JANELA_DOS_ANEXOS_MS = 72 * 3_600_000;
 const MAX_ANEXOS_POR_TURNO = 3;
+/** Tentativas por turno (as que falham não ocupam as vagas das lidas, mas também não podem custar chamadas sem fim). */
+const MAX_TENTATIVAS_POR_TURNO = 6;
 
 export interface DepsDosAnexos {
   db: BancoDeLeituras;
@@ -124,20 +126,25 @@ export async function lerAnexosDoPaciente(
 
   const candidatas = msgs
     .filter((m) => m.direcao === 'entrada' && m.autor === 'paciente' && m.anexo?.link && ANEXO_DE_IMAGEM_OU_ARQUIVO.test(m.anexo.tipo) && d.agora() - m.em.getTime() <= JANELA_DOS_ANEXOS_MS)
-    .sort((a, b) => a.em.getTime() - b.em.getTime());
+    // o MAIS NOVO primeiro: o comprovante que o paciente acabou de mandar não espera atrás de anexos antigos (que podem estar com o link vencido)
+    .sort((a, b) => b.em.getTime() - a.em.getTime());
 
-  const falas: string[] = [];
+  const falas: Array<{ em: number; fala: string }> = [];
   let lidos = 0;
+  let tentativas = 0;
   let comprovantes = 0;
   for (const m of candidatas) {
-    if (lidos >= MAX_ANEXOS_POR_TURNO) break;
+    if (lidos >= MAX_ANEXOS_POR_TURNO || tentativas >= MAX_TENTATIVAS_POR_TURNO) break;
     const fonte = fonteDaMensagemOficial(m.id);
     try {
       const antes = await d.db.comprovanteLido.findUnique({ where: { unitId_kommoLeadId_fonte: { unitId: unit.id, kommoLeadId: leadId, fonte } }, select: { id: true } });
       if (antes) continue;
-      lidos++;
+      tentativas++;
       const v = await d.descrever(unit, m.anexo?.link as string, { estruturarComprovante: true });
-      const ehComprovante = ehTranscricaoDeComprovante(`[${v.tipo} do cliente]: ${v.text}`);
+      lidos++;
+      // texto escrito DENTRO da imagem e transcrito pela visão não pode se passar pelas marcas que só o servidor grava
+      const texto = neutralizarMarcasDoSistema(v.text);
+      const ehComprovante = ehTranscricaoDeComprovante(`[${v.tipo} do cliente]: ${texto}`);
       const g = await guardarLeitura(d.db, {
         unitId: unit.id,
         leadId,
@@ -150,11 +157,12 @@ export async function lerAnexosDoPaciente(
       });
       if (ehComprovante && !g.jaExistia) {
         comprovantes++;
-        falas.push(segmentoDaLeitura(v.tipo, v.text, g.id, g.criadoEm));
+        falas.push({ em: m.em.getTime(), fala: segmentoDaLeitura(v.tipo, texto, g.id, g.criadoEm) });
       }
     } catch (err) {
       logger.warn({ err: String(err), leadId, unit: unit.slug, mensagem: m.id }, 'comprovante: não consegui ler o anexo do paciente na conversa oficial (segue sem)');
     }
   }
-  return { texto: falas.join('\n\n'), lidos, comprovantes };
+  // na ordem em que o paciente as mandou
+  return { texto: falas.sort((a, b) => a.em - b.em).map((f) => f.fala).join('\n\n'), lidos, comprovantes };
 }

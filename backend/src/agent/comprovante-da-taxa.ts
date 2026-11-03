@@ -162,7 +162,7 @@ export function detalheDaRecusa(r: ComprovanteRecusado): string {
  */
 export type TarefaQueFicou = { tipo: 'recusa'; rejeicao: ComprovanteRecusado } | { tipo: 'conferir'; detalhe: string } | null;
 
-export function tarefaDoComprovanteQueFicou(turno: TurnoDoComprovante & { tarefaDaRecusaAberta?: boolean }): TarefaQueFicou {
+export function tarefaDoComprovanteQueFicou(turno: TurnoDoComprovante & { tarefaDaRecusaAberta?: boolean }, consultaNoCrm = false): TarefaQueFicou {
   if (!turno.noTurno || turno.marcouPorComprovante || turno.tarefaDaRecusaAberta) return null;
   const a = turno.analise;
   if (a?.falha) return { tipo: 'recusa', rejeicao: a.falha };
@@ -170,7 +170,9 @@ export function tarefaDoComprovanteQueFicou(turno: TurnoDoComprovante & { tarefa
   return {
     tipo: 'conferir',
     detalhe: a?.aceito
-      ? `o código ACEITOU o comprovante (${resumoDaLeitura(a.aceito.dados)}), mas a consulta ainda NÃO foi marcada por ele (falta combinar dia e horário com o paciente, ou ele já tem consulta): lançar a consulta se ele não voltar`
+      ? consultaNoCrm
+        ? `o código ACEITOU o comprovante (${resumoDaLeitura(a.aceito.dados)}), mas o paciente já tem consulta no CRM (marcada antes, pela equipe ou pela IA) e este comprovante não a marcou: conferir no extrato se o Pix caiu`
+        : `o código ACEITOU o comprovante (${resumoDaLeitura(a.aceito.dados)}), mas a consulta ainda NÃO foi marcada por ele (falta combinar dia e horário com o paciente): lançar a consulta se ele não voltar`
       : 'não há leitura em campos guardada para este comprovante (a leitura falhou, ou o texto não veio de uma imagem lida pelo servidor): conferir',
   };
 }
@@ -305,10 +307,10 @@ export function criarGanchosDaTaxa(ctx: ContextoDosGanchos): GanchosDoComprovant
       return resultado + ADENDO_DA_MARCACAO_POR_COMPROVANTE;
     },
 
-    aoFalhar(aceito) {
-      // `agendar_consulta` lançou erro: a marcação não aconteceu, a reserva é desfeita (fire-and-forget; falhar aqui só deixa o comprovante
-      // reservado, que é o lado seguro)
-      void registro.liberar(aceito.e2e).catch((err) => logger.warn({ err: String(err) }, 'comprovante: não consegui desfazer a reserva do E2E'));
+    async aoFalhar(aceito) {
+      // `agendar_consulta` lançou erro: a marcação não aconteceu, a reserva é desfeita ANTES de o erro subir (a nova tentativa do modelo
+      // não pode achar o comprovante reservado). Falhar aqui deixa o comprovante reservado, que é o lado seguro (a equipe decide).
+      await registro.liberar(aceito.e2e).catch((err) => logger.warn({ err: String(err) }, 'comprovante: não consegui desfazer a reserva do E2E'));
     },
 
     async aoRecusar(rejeicao) {

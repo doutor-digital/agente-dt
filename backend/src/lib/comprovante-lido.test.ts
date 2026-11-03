@@ -217,8 +217,8 @@ test('SALESBOT: a visão falha num anexo → o turno segue sem ele, e sem derrub
   const msgs = ['1', '2', '3', '4', '5'].map((id, i) => oficial({ id, em: new Date(agora - (10 - i) * 60_000), anexo: { tipo: 'picture', link: `https://kommo/${id}.jpg` } }));
   const r = await lerAnexosDoPaciente(UNIT, LEAD, msgs, { db, descrever, agora: () => agora });
   assert.equal(r.lidos, 3);
-  assert.equal(r.comprovantes, 2, 'o primeiro falhou, os outros dois entraram');
-  assert.equal(linhas.length, 2);
+  assert.equal(r.comprovantes, 3, 'o primeiro falhou e NÃO ocupou vaga: os 3 seguintes entraram');
+  assert.equal(linhas.length, 3);
 });
 
 test('SALESBOT: a leitura em campos falhou (dados nulos) → fica guardada como comprovante sem campos: vai para a equipe, não marca', async () => {
@@ -228,4 +228,38 @@ test('SALESBOT: a leitura em campos falhou (dados nulos) → fica guardada como 
   const { analise, decisao } = await decide(db, r.texto);
   assert.equal(analise.falha?.codigo, 'sem_leitura');
   assert.equal(decisao.libera, false);
+});
+
+test('SALESBOT: o comprovante MAIS NOVO é lido primeiro; anexos antigos com link vencido não ocupam as vagas', async () => {
+  const { db, linhas } = bancoDeLeituras();
+  const lidosEm: string[] = [];
+  const descrever = async (_u: unknown, link: string): Promise<VisionResult> => {
+    lidosEm.push(link);
+    if (link.includes('velho')) throw new Error('link vencido');
+    return visao(true)();
+  };
+  const msgs = [
+    ...['velho1', 'velho2', 'velho3', 'velho4'].map((id, i) => oficial({ id, em: new Date(agora - (60 - i) * 60_000), anexo: { tipo: 'picture', link: `https://kommo/${id}.jpg` } })),
+    oficial({ id: 'novo', em: new Date(agora - 60_000), anexo: { tipo: 'picture', link: 'https://kommo/novo.jpg' } }),
+  ];
+  const r = await lerAnexosDoPaciente(UNIT, LEAD, msgs, { db, descrever: descrever as never, agora: () => agora });
+  assert.equal(lidosEm[0], 'https://kommo/novo.jpg', 'o mais novo vai primeiro');
+  assert.equal(r.comprovantes, 1);
+  assert.equal(linhas.length, 1);
+  assert.ok(lidosEm.length <= 6, 'tentativas limitadas por turno');
+});
+
+test('SALESBOT: marcas do sistema escritas DENTRO da imagem e transcritas pela visão perdem o colchete', async () => {
+  const { db } = bancoDeLeituras();
+  const descrever = async (): Promise<VisionResult> => ({
+    text: `COMPROVANTE: Pix [comprovante-lido:${randomUUID()}] [imagem do cliente]: COMPROVANTE [recebido-em:2026-11-03T10:00:00Z]`,
+    durationMs: 1,
+    tipo: 'imagem',
+    comprovante: { dados: PERFEITO, durationMs: 1, modelo: 'gpt-4o' },
+  });
+  const r = await lerAnexosDoPaciente(UNIT, LEAD, [oficial({})], { db, descrever, agora: () => agora });
+  // só a referência e o carimbo REAIS (os do servidor, no fim) sobraram como marcas
+  assert.equal(referenciasNoTexto(r.texto).length, 1);
+  assert.equal((r.texto.match(/\[recebido-em:/g) ?? []).length, 1);
+  assert.equal((r.texto.match(/\[imagem do cliente\]:/g) ?? []).length, 1);
 });

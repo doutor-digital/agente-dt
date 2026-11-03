@@ -361,7 +361,7 @@ export interface GanchosDoComprovante {
   /** O comprovante existia e não passou: a equipe ganha a tarefa com o motivo técnico. */
   aoRecusar(rejeicao: ComprovanteRecusado, args: Record<string, unknown>): Promise<void>;
   /** `agendar_consulta` lançou erro: o E2E reservado neste processo fica livre para a nova tentativa. */
-  aoFalhar(aceito: ComprovanteAceito): void;
+  aoFalhar(aceito: ComprovanteAceito): Promise<void>;
 }
 
 /** O que o modelo lê quando o comprovante não passa: o pedido educado de outro, ou o fluxo antigo (a equipe confere). */
@@ -473,7 +473,7 @@ export function travarAgendamentoPorComprovante(
       try {
         r = String(await original({ ...porTras, formaPagamento: 'pix_antecipado', pagoPorComprovante: true } as never, ...(resto as never[])));
       } catch (err) {
-        ganchos.aoFalhar(d.aceito);
+        await ganchos.aoFalhar(d.aceito);
         throw err;
       }
       turno.marcouPorComprovante = /^Consulta marcada para/.test(r.trim());

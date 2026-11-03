@@ -162,9 +162,10 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
   // paciente perde as marcas que só nós gravamos, e as imagens/PDFs que ele mandou (rota oficial do Kommo) são lidas AQUI, pelo
   // servidor, e guardadas no banco — é só assim que um comprovante conta (lib/comprovante-lido.ts).
   let anexosLidos = '';
+  let msgsOficiais = porta.msgs;
   if (unit.spineBookingRequiresPayment && Number.isFinite(Number(leadId))) {
     try {
-      const msgsOficiais = porta.msgs ?? (await mensagensOficiaisDaUnidade(unit, createKommoClient(unit), Number(leadId), 40));
+      msgsOficiais = porta.msgs ?? (await mensagensOficiaisDaUnidade(unit, createKommoClient(unit), Number(leadId), 40));
       const lidos = await lerAnexosDoPaciente(unit, Number(leadId), msgsOficiais);
       anexosLidos = lidos.texto;
       if (lidos.lidos > 0) {
@@ -207,7 +208,7 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
       leadId: Number(leadId),
       humanMessage: message,
       recorder,
-      msgs: porta.msgs,
+      msgs: msgsOficiais,
     }).catch((err) => {
       logger.warn(
         { err: String(err), leadId, unit: unit.slug },
