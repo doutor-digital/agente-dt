@@ -17,7 +17,7 @@ function destino(n: number): Destino {
 }
 
 /** Um Porto de mentira que registra TUDO que sai da casa. */
-function montar(opcoes: { numero?: { unidades: string[]; ondas: string[] }; modo: Modo; quantos?: number; agora?: Date; franquia?: (d: Destino) => SituacaoNaFranquia; sairam?: number; naHora?: number; noDia?: number; teste?: string[] | null; envio?: (d: Destino) => ResultadoDoTemplate | Promise<ResultadoDoTemplate>; pediuSair?: (d: Destino) => boolean; reivindicar?: (d: Destino) => boolean; ultimos?: Array<'enviado' | 'falhou'>; ondaViva?: (chamada: number) => boolean }) {
+function montar(opcoes: { numero?: { unidades: string[]; ondas: string[] }; modo: Modo; quantos?: number; agora?: Date; franquia?: (d: Destino) => SituacaoNaFranquia; sairam?: number; naHora?: number; noDia?: number; teste?: string[] | null; envio?: (d: Destino) => ResultadoDoTemplate | Promise<ResultadoDoTemplate>; pediuSair?: (d: Destino) => boolean; bandeira?: (d: Destino) => boolean; reivindicar?: (d: Destino) => boolean; ultimos?: Array<'enviado' | 'falhou'>; ondaViva?: (chamada: number) => boolean }) {
   const estados = new Map<string, Omit<DadosDeGravacao, 'estado'> & { estado: string }>();
   const todos = Array.from({ length: opcoes.quantos ?? 3 }, (_, i) => destino(i + 1));
   todos.forEach((d) => estados.set(d.id, { estado: 'pendente' }));
@@ -58,6 +58,7 @@ function montar(opcoes: { numero?: { unidades: string[]; ondas: string[] }; modo
     devolverParaAprovacao: async (id, motivo) => void chamadas.devolvidas.push(`${id}|${motivo}`),
     concluirOnda: async (id) => void chamadas.concluidas.push(id),
     pediuSair: async (d) => opcoes.pediuSair?.(d) ?? false,
+    bandeira: async (d) => opcoes.bandeira?.(d) ?? false,
     franquia: async (d) => opcoes.franquia?.(d) ?? 'livre',
     enviar: async (_o, d) => {
       chamadas.enviar.push(d.telefone);
@@ -728,4 +729,13 @@ test('NOTA: nunca passa do teto; se estourar, encurta a mensagem e preserva o li
   assert.ok(nota.includes(link));
   assert.ok(nota.endsWith('Se o paciente responder, é resposta a esta mensagem.'));
   assert.ok(nota.includes('…'));
+});
+
+test('bandeira vermelha que apareceu depois da montagem da lista: não recebe, e nada é enviado a ela', async () => {
+  const t = montar({ modo: 'ligado', quantos: 3, bandeira: (d) => d.id === 'd2' });
+  await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA]);
+  assert.equal(t.estados.get('d2')!.estado, 'descartado');
+  assert.match(String(t.estados.get('d2')!.motivo), /bandeira vermelha/);
+  assert.equal(t.chamadas.enviar.length, 2, 'os outros dois recebem');
+  assert.ok(!t.chamadas.enviar.includes(t.todos.find((d) => d.id === 'd2')!.telefone));
 });

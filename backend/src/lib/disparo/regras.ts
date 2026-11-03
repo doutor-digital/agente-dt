@@ -19,6 +19,7 @@ export type MotivoDeExclusao =
   | 'repetido-na-lista'
   | 'ja-na-campanha'
   | 'pediu-sair'
+  | 'bandeira-vermelha'
   | 'consulta-futura'
   | 'tratamento-aberto'
   | 'franquia-indisponivel';
@@ -44,6 +45,7 @@ export const ROTULO_DA_EXCLUSAO: Record<MotivoDeExclusao, string> = {
   'repetido-na-lista': 'mesmo telefone mais de uma vez na lista',
   'ja-na-campanha': 'já está nesta campanha (não manda duas vezes)',
   'pediu-sair': 'pediu para sair (SAIR)',
+  'bandeira-vermelha': 'tem sinal de alerta clínico (bandeira vermelha): só a equipe fala com ele',
   'consulta-futura': 'tem consulta marcada na franquia',
   'tratamento-aberto': 'tem tratamento aberto na franquia',
   'franquia-indisponivel': 'a franquia não respondeu (na dúvida, não manda)',
@@ -112,6 +114,8 @@ export interface Candidato {
   /** nome do CONTATO (não o título do cartão, que a SDR enche de data e origem) */
   nome: string | null;
   telefoneBruto: string | null;
+  /** o cartão está com bandeira vermelha (etiqueta ou livro): campanha nenhuma manda mensagem */
+  bandeiraVermelha?: boolean;
 }
 
 export interface Elegivel {
@@ -154,6 +158,10 @@ export async function triar(candidatos: Candidato[], ctx: ContextoDoPublico): Pr
   const elegiveis: Elegivel[] = [];
 
   for (const c of candidatos) {
+    if (c.bandeiraVermelha) {
+      nega('bandeira-vermelha');
+      continue;
+    }
     if (!(c.telefoneBruto ?? '').replace(/\D/g, '')) {
       nega('sem-telefone');
       continue;

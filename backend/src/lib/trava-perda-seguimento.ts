@@ -19,6 +19,7 @@ import { logger } from './logger.js';
 import { esquemaDaUnidade, normalizarNome } from './kommo-schema.js';
 import { ETAPA } from './franquia-move.js';
 import { avisoRecente, marcadoEm, marcarAviso } from './aviso-dedupe.js';
+import { cartaoComBandeira, temBandeira } from './bandeira-vermelha.js';
 import { registrarSimulacao } from './so-no-papel.js';
 import { levarParaEsperaComRetomada } from './sofia-fecha-quente-morno.js';
 import { pagouEDesmarcou, travaDaPerdaAutomatica, type CartaoParaTrava, type MotivoDaTrava } from './trava-perda.js';
@@ -36,6 +37,8 @@ export interface VeredictoDaTrava {
 
 /** A trava com a memória do seguimento: quem pagou e desmarcou tem tarefa aberta (segura 7 d) ou já venceu (solta). */
 export async function veredictoDaTrava(unit: Pick<Unit, 'id'>, leadId: number, cartao: CartaoParaTrava, agoraEpoch: number): Promise<VeredictoDaTrava | null> {
+  // Bandeira vermelha no livro (a etiqueta no cartão `travaDaPerdaAutomatica` já lê): sinal de alerta nenhum robô fecha
+  if (cartaoComBandeira(cartao) || (await temBandeira(unit.id, leadId, { noCartao: false }))) return { motivo: 'bandeira vermelha' };
   const trava = travaDaPerdaAutomatica(cartao, agoraEpoch);
   if (!trava) return null;
   if (trava.motivo !== 'pagou e desmarcou') return { motivo: trava.motivo };

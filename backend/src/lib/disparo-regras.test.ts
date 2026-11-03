@@ -159,3 +159,26 @@ test('texto: variáveis na ordem, e o modelo precisa casar com o que a campanha 
   assert.match(problemaNoModelo('Oi {{1}}', ['cpf']) ?? '', /desconhecida/);
   assert.match(problemaNoModelo('  ', []) ?? '', /sem texto/);
 });
+
+test('triagem: cartão com bandeira vermelha (sinal de alerta) fica de fora da campanha, mesmo com telefone e nome bons', async () => {
+  const r = await triar(
+    [{ ...cand(1, 'Maria Souza', '5563991021043'), bandeiraVermelha: true }, cand(2, 'Joana Lima', '5563991021044')],
+    livre,
+  );
+  assert.deepEqual(r.elegiveis.map((e) => e.leadId), [2]);
+  assert.equal(r.fora['bandeira-vermelha'], 1);
+});
+
+test('montarCandidatos marca a bandeira vermelha pela etiqueta no cartão OU pelo livro (etiqueta nunca aceita), e solta quem a equipe liberou', async () => {
+  const { montarCandidatos } = await import('./disparo/publico.js');
+  const cartao = (id: number, tags: string[]) => ({ id, _embedded: { tags: tags.map((name) => ({ name })) } }) as never;
+  const contatoDe = new Map([[1, 10], [2, 20], [3, 30], [4, 40]]);
+  const contatos = new Map([10, 20, 30, 40].map((c) => [c, { nome: 'Ana', telefone: '63991021043' }]));
+  const agora = Date.now();
+  const livro = new Map([
+    ['2', { em: new Date(agora - 60_000), etiquetada: false }], // a etiqueta nunca foi aceita: o livro segura
+    ['3', { em: new Date(agora - 3 * 3600_000), etiquetada: true }], // o Kommo aceitou a etiqueta e a equipe a tirou: solto
+  ]);
+  const r = montarCandidatos([cartao(1, [' PRIORIDADE']), cartao(2, []), cartao(3, []), cartao(4, [])], contatoDe, contatos, livro);
+  assert.deepEqual(r.map((c) => c.bandeiraVermelha), [true, true, false, false]);
+});

@@ -25,7 +25,7 @@ export type RetornoDaEquipe =
   /** a clínica está no horário agora */
   | { tipo: 'aberta' }
   /** fora do horário; `quando` já vem pronto para o paciente: "hoje às 14h", "amanhã (quinta-feira) às 8h" */
-  | { tipo: 'fechada'; quando: string; hoje: boolean }
+  | { tipo: 'fechada'; quando: string; hoje: boolean; /** quantos dias até a clínica reabrir (0 = hoje, 1 = amanhã) */ dias?: number }
   /** a unidade não tem horário confiável cadastrado */
   | { tipo: 'desconhecido' };
 
@@ -84,6 +84,22 @@ function minutosAgora(agora: Date, tz: string): number {
   return h * 60 + m;
 }
 
+/**
+ * A clínica só reabre daqui a 2 dias ou mais (fim de semana, feriado): ninguém vê o cartão antes. «Amanhã às 8h» NÃO entra —
+ * é a noite de sempre, e ali «a equipe continua por aqui amanhã» é promessa que se cumpre.
+ */
+/**
+ * A orientação «se você sentir que não dá para esperar, pode procurar atendimento antes» na resposta de sinal de alerta com a
+ * clínica fechada por 2+ dias. PENDENTE DE DECISÃO DO JOÃO (03/11/2026): a regra de 26/10 só deixa a Sofia dizer isso quando o
+ * PRÓPRIO paciente fala em pronto-socorro. `false` tira a frase daqui E de `fraseDoPasse` (`sinal-de-alerta.ts`); é o único
+ * lugar a trocar.
+ */
+export const ORIENTAR_PROCURAR_ATENDIMENTO_ANTES = true;
+
+export function semEquipeAteOutroDia(r: RetornoDaEquipe): r is Extract<RetornoDaEquipe, { tipo: 'fechada' }> {
+  return r.tipo === 'fechada' && (r.dias ?? 0) >= 2;
+}
+
 export function retornoDaEquipe(unit: Unit, agora: Date = new Date()): RetornoDaEquipe {
   if (!unit.spineEnabled) return { tipo: 'desconhecido' };
   const dias = new Set((unit.spineAgendaDays ?? []).filter((d) => Number.isInteger(d) && d >= 0 && d <= 6));
@@ -111,7 +127,7 @@ export function retornoDaEquipe(unit: Unit, agora: Date = new Date()): RetornoDa
         : i === 1
           ? `amanhã (${diaDaSemana(iso)}) às ${hora}`
           : `${diaDaSemana(iso)}, ${iso.slice(8, 10)}/${iso.slice(5, 7)}, às ${hora}`;
-    return { tipo: 'fechada', quando, hoje: i === 0 };
+    return { tipo: 'fechada', quando, hoje: i === 0, dias: i };
   }
   return { tipo: 'desconhecido' };
 }
@@ -121,7 +137,7 @@ export function retornoDaEquipe(unit: Unit, agora: Date = new Date()): RetornoDa
  * `pausar_ia`, que é a última coisa que ela lê antes de escrever — por isso funciona mesmo em unidade com
  * prompt próprio, e não custa nada no prompt fixo (que fica uma hora em cache e não pode depender da hora).
  */
-export function orientacaoAoTransferir(r: RetornoDaEquipe, urgente = false, avisada = true): string {
+export function orientacaoAoTransferir(r: RetornoDaEquipe, urgente = false, avisada = true, orientarProcurarAtendimento = ORIENTAR_PROCURAR_ATENDIMENTO_ANTES): string {
   const prazo = 'NÃO prometa prazo: nada de "em instantes", "já já", "um instante", "logo te chamam".';
   // Sinal de alerta (decisão de 26/10): nunca sugerir pronto-socorro; se o próprio paciente perguntou ou disse que
   // vai, não desaconselhar.
@@ -141,6 +157,19 @@ export function orientacaoAoTransferir(r: RetornoDaEquipe, urgente = false, avis
       (urgente ? 'a equipe já foi avisada com prioridade' : 'a equipe já foi avisada') +
       ' e continua o atendimento por aqui. ' +
       semPrazo
+    );
+  }
+  // Sinal de alerta com a clínica fechada por 2 dias ou mais (fim de semana, feriado): ninguém vai olhar o cartão antes. Mossoró,
+  // lead 6153423 (30/10, sexta à noite, 02/11 Finados): «nossa equipe vai continuar seu atendimento por aqui a partir de
+  // terça» a quem relatou escape de xixi e fraqueza nas pernas. Promessa de retorno que ninguém cumpre não sai; sai o fato
+  // (o caso está registrado como prioridade e a clínica reabre tal dia) e o que fazer se não puder esperar, sem citar PS.
+  if (urgente && semEquipeAteOutroDia(r)) {
+    return (
+      `A clínica está FECHADA e só reabre ${r.quando} — ninguém da equipe vai ver esta conversa antes disso. NÃO diga que a equipe ` +
+      '"retorna", "te responde", "te chama" nem "continua o atendimento por aqui" antes dessa data. Responda em UMA frase, sem ' +
+      `alarmar: o caso ficou registrado como prioridade e a clínica reabre ${r.quando}` +
+      (orientarProcurarAtendimento ? ', e se ele sentir que não dá para esperar pode procurar atendimento antes' : '') +
+      `. ${semPrazo}`
     );
   }
   if (r.tipo === 'fechada') {

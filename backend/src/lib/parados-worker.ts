@@ -32,6 +32,7 @@ import { TAG_CONFLITO, anotarRoboPos, cartaoTravadoNoConflito, estadoCasamentoJo
 import { cartoesComConflito } from './conflito-paciente.js';
 import { CAMPOS_SYNC } from './franquia-sync.js';
 import { registrarSimulacao } from './so-no-papel.js';
+import { cartaoComBandeira, temBandeira } from './bandeira-vermelha.js';
 import { abrirSeguimentoDoPagou, simularSeguimentoDoPagou, veredictoDaTrava } from './trava-perda-seguimento.js';
 import { contaDividida, grupoDaUnidade, pularCartao, unidadeDonaDoCartao, type GrupoDoCrm } from './crm-compartilhado.js';
 import { carregarFunis, idClientDoCartao, idClientDoLead, temConsultaFutura, type Funis } from './franquia-sync-worker.js';
@@ -386,12 +387,24 @@ export async function moverParaEspera(
     return false;
   }
   if (seco) {
+    // o seco confere a bandeira do mesmo jeito que o ligado (etiqueta no cartão + livro), para o papel não prometer o que o ligado não faria
+    const cartaoSeco = await kommo.getLead(leadId).catch(() => null);
+    if (cartaoSeco ? cartaoComBandeira(cartaoSeco) || (await temBandeira(unit.id, leadId, { noCartao: false })) : await temBandeira(unit.id, leadId)) {
+      registrarSimulacao(unit, automacao, { leadId, acao: 'pularia', alvo: ETAPA.ESPERA, deEtapa: etapaAtual, motivo: 'bandeira vermelha (sinal de alerta): só a equipe move' });
+      return false;
+    }
     logger.info({ ...base, automacao }, 'parados [seco]: moveria pra EM ESPERA');
     registrarSimulacao(unit, automacao, { leadId, acao: 'moveria', alvo: ETAPA.ESPERA, deEtapa: etapaAtual, motivo: d.regra });
     return false;
   }
-  if (!(await aindaNaEtapa(kommo, funis, leadId, etapaAtual))) {
+  const lead = await aindaNaEtapa(kommo, funis, leadId, etapaAtual);
+  if (!lead) {
     logger.info(base, 'parados: cartão mudou de etapa enquanto eu decidia — não mexi');
+    return false;
+  }
+  // Bandeira vermelha (sinal de alerta) não vai para EM ESPERA por prazo: lá ninguém olha, e o cartão precisa de gente.
+  if (cartaoComBandeira(lead) || (await temBandeira(unit.id, leadId, { noCartao: false }))) {
+    logger.info({ ...base, automacao }, 'parados: cartão com bandeira vermelha — não levei para EM ESPERA');
     return false;
   }
   await etiquetar(unit, kommo, leadId, false);

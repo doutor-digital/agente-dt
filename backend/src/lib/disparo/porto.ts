@@ -11,6 +11,7 @@ import { createKommoClient } from '../../services/kommo.service.js';
 import { credenciaisDaUnidade, enviarTemplate } from '../whatsapp-meta.js';
 import { conferenciaDaFranquia } from './franquia.js';
 import { leadsQuePediramSair } from './publico.js';
+import { ehEtiquetaDeBandeira, temBandeira } from '../bandeira-vermelha.js';
 import { contarSairam } from './saidas.js';
 import { telefoneWhatsapp } from './regras.js';
 import { modoDaUnidade } from './modo.js';
@@ -58,6 +59,7 @@ const paraDestino = (d: { id: string; ondaId: string; campanhaId: string; unitId
 
 export function portoReal(unidades: ReadonlyMap<string, Unit>, avisarJoao: (texto: string) => Promise<unknown> = (t) => enviarTelegram(t)): Porto {
   const franquias = new Map<string, ReturnType<typeof conferenciaDaFranquia>>();
+  const kommosDaOnda = new Map<string, ReturnType<typeof createKommoClient>>();
   const mesmoNumero = new Map<string, Promise<string[]>>();
   const unidadesDoMesmoNumero = (unitId: string): Promise<string[]> => {
     let p = mesmoNumero.get(unitId);
@@ -177,6 +179,20 @@ export function portoReal(unidades: ReadonlyMap<string, Unit>, avisarJoao: (text
       if (antes > 0) return true;
       // …ou em qualquer mensagem do cartão.
       return d.kommoLeadId ? (await leadsQuePediramSair(unidade(d.unitId), [d.kommoLeadId])).has(d.kommoLeadId) : false;
+    },
+
+    bandeira: async (d) => {
+      if (!d.kommoLeadId) return false;
+      const u = unidade(d.unitId);
+      let kommo = kommosDaOnda.get(u.id);
+      if (!kommo) kommosDaOnda.set(u.id, (kommo = createKommoClient(u)));
+      let noCartao: boolean | undefined;
+      try {
+        noCartao = (await kommo.tagsDoLead(d.kommoLeadId)).some(ehEtiquetaDeBandeira);
+      } catch {
+        noCartao = undefined; // sem ver o cartão, o livro decide
+      }
+      return temBandeira(u.id, d.kommoLeadId, { noCartao });
     },
 
     franquia: (d) => {
