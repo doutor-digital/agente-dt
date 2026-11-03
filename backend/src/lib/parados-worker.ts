@@ -387,8 +387,9 @@ export async function moverParaEspera(
     return false;
   }
   if (seco) {
-    // o seco não relê o cartão; o livro basta para o papel não prometer o que o ligado não faria
-    if (await temBandeira(unit.id, leadId)) {
+    // o seco confere a bandeira do mesmo jeito que o ligado (etiqueta no cartão + livro), para o papel não prometer o que o ligado não faria
+    const cartaoSeco = await kommo.getLead(leadId).catch(() => null);
+    if (cartaoSeco ? cartaoComBandeira(cartaoSeco) || (await temBandeira(unit.id, leadId, { noCartao: false })) : await temBandeira(unit.id, leadId)) {
       registrarSimulacao(unit, automacao, { leadId, acao: 'pularia', alvo: ETAPA.ESPERA, deEtapa: etapaAtual, motivo: 'bandeira vermelha (sinal de alerta): só a equipe move' });
       return false;
     }
@@ -402,7 +403,7 @@ export async function moverParaEspera(
     return false;
   }
   // Bandeira vermelha (sinal de alerta) não vai para EM ESPERA por prazo: lá ninguém olha, e o cartão precisa de gente.
-  if (cartaoComBandeira(lead) || (await temBandeira(unit.id, leadId))) {
+  if (cartaoComBandeira(lead) || (await temBandeira(unit.id, leadId, { noCartao: false }))) {
     logger.info({ ...base, automacao }, 'parados: cartão com bandeira vermelha — não levei para EM ESPERA');
     return false;
   }

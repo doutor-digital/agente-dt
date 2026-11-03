@@ -38,7 +38,7 @@ export interface VeredictoDaTrava {
 /** A trava com a memória do seguimento: quem pagou e desmarcou tem tarefa aberta (segura 7 d) ou já venceu (solta). */
 export async function veredictoDaTrava(unit: Pick<Unit, 'id'>, leadId: number, cartao: CartaoParaTrava, agoraEpoch: number): Promise<VeredictoDaTrava | null> {
   // Bandeira vermelha no livro (a etiqueta no cartão `travaDaPerdaAutomatica` já lê): sinal de alerta nenhum robô fecha
-  if (cartaoComBandeira(cartao) || (await temBandeira(unit.id, leadId))) return { motivo: 'bandeira vermelha' };
+  if (cartaoComBandeira(cartao) || (await temBandeira(unit.id, leadId, { noCartao: false }))) return { motivo: 'bandeira vermelha' };
   const trava = travaDaPerdaAutomatica(cartao, agoraEpoch);
   if (!trava) return null;
   if (trava.motivo !== 'pagou e desmarcou') return { motivo: trava.motivo };

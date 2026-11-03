@@ -33,6 +33,7 @@ Object.defineProperty(prisma, 'cardAlert', {
   value: {
     findMany: async (args: unknown) => {
       const w = where(args);
+      if ((w.ruleKey as unknown as { in?: string[] }).in) return []; // livro de bandeiras vermelhas (`bandeira-vermelha.ts`): nenhum aqui, e não conta como leitura de marca de conflito
       leiturasDeMarca.push({ leadId: w.leadId });
       if (bancoFora) throw new Error('banco fora (teste)');
       const todas = w.leadId && marcaAtrasada ? [...marcas, marcaAtrasada] : marcas;
@@ -40,7 +41,6 @@ Object.defineProperty(prisma, 'cardAlert', {
         .filter((m) => w.unitId.in.includes(m.unitId) && m.ruleKey.startsWith(w.ruleKey.startsWith) && (!w.leadId || m.leadId === w.leadId))
         .map((m) => ({ leadId: m.leadId }));
     },
-    findUnique: async () => null, // livro de bandeiras vermelhas (`bandeira-vermelha.ts`): nenhum aqui
     upsert: async () => ({}), // "o robô pôs em PERDIDO" (anotarRoboPos), no modo ligado
   },
   configurable: true,

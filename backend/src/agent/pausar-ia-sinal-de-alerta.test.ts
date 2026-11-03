@@ -17,6 +17,7 @@ import { prisma } from '../lib/prisma.js';
 import type { KommoClient } from '../services/kommo.service.js';
 import type { TraceRecorder } from './trace-recorder.js';
 import { buildTools } from './tools.js';
+import { esquecerContas } from '../lib/bandeira-vermelha.js';
 
 delete process.env.TELEGRAM_BOT_TOKEN;
 
@@ -30,6 +31,15 @@ Object.defineProperty(prisma, 'cardAlert', {
       const em = marcas.get(chaveDe(where));
       return em ? { createdAt: em } : null;
     },
+    // o livro de bandeiras olha a conta toda (`unitId: { in }`) e as duas chaves (bandeira + etiqueta confirmada)
+    findMany: async ({ where }: { where: { unitId: { in: string[] }; leadId?: string; ruleKey: { in: string[] } } }) => {
+      const out: Array<{ leadId: string; ruleKey: string; createdAt: Date }> = [];
+      for (const [chave, em] of marcas) {
+        const [u, lead, regra] = chave.split('|');
+        if (where.unitId.in.includes(u) && where.ruleKey.in.includes(regra) && (!where.leadId || where.leadId === lead)) out.push({ leadId: lead, ruleKey: regra, createdAt: em });
+      }
+      return out;
+    },
     upsert: async ({ where }: { where: ChaveMarca }) => {
       marcas.set(chaveDe(where), new Date());
       return {};
@@ -37,6 +47,13 @@ Object.defineProperty(prisma, 'cardAlert', {
   },
   configurable: true,
 });
+
+// a conta do Kommo: u1 (principal) e u2 (resgate) dividem o cartão
+Object.defineProperty(prisma, 'unit', {
+  value: { findUnique: async () => ({ kommoSubdomain: 'conta-x' }), findMany: async () => [{ id: 'u1' }, { id: 'u2' }] },
+  configurable: true,
+});
+Object.defineProperty(prisma, 'unitCrmCompartilhado', { value: { findMany: async () => [] }, configurable: true });
 
 Object.defineProperty(prisma, 'conversation', {
   value: {
@@ -72,6 +89,7 @@ beforeEach(() => {
   etiquetas = [];
   passos = [];
   marcas.clear();
+  esquecerContas();
 });
 
 const kommo = {
@@ -273,8 +291,10 @@ test('transferência comum NÃO põe o cartão no livro de bandeiras', async () 
 
 test('mover_etapa e fechar_lead(lost) recusam cartão com bandeira vermelha no livro', async () => {
   const tools = ferramentas();
+  falharEtiqueta = true; // a etiqueta nunca entra: só o livro segura
   await ferramenta('pausar_ia', undefined, tools).invoke({ leadId: 37, motivo: 'red flag', sinalDeAlerta: true });
-  guardadas = []; // o Kommo não devolve etiqueta nenhuma: só o livro segura
+  falharEtiqueta = false;
+  guardadas = [];
   const mover = String(await ferramenta('mover_etapa', undefined, tools).invoke({ leadId: 37, statusId: 111237883 }));
   assert.match(mover, /^RECUSADO: .*bandeira vermelha/);
   const fechar = String(await ferramenta('fechar_lead', undefined, tools).invoke({ leadId: 37, status: 'lost' }));
@@ -291,15 +311,15 @@ test('mover_etapa recusa cartão com a etiqueta de bandeira (marcado antes do li
 });
 
 test('não gravou a bandeira no livro: o rastro grita, e a tarefa e a pausa saem do mesmo jeito', async () => {
-  const original = Object.getOwnPropertyDescriptor(prisma, 'cardAlert');
+  const original = (prisma as unknown as { cardAlert: unknown }).cardAlert;
   Object.defineProperty(prisma, 'cardAlert', {
-    value: { findUnique: async () => null, upsert: async () => { throw new Error('banco fora'); } },
+    value: { findUnique: async () => null, findMany: async () => [], upsert: async () => { throw new Error('banco fora'); } },
     configurable: true,
   });
   try {
     await ferramenta('pausar_ia').invoke({ leadId: 40, motivo: 'red flag', sinalDeAlerta: true });
   } finally {
-    if (original) Object.defineProperty(prisma, 'cardAlert', original);
+    Object.defineProperty(prisma, 'cardAlert', { value: original, configurable: true });
   }
   assert.ok(passos.some((p) => /Não consegui gravar a bandeira vermelha/.test(p.title)));
   assert.equal(tarefas.length, 1);
@@ -327,4 +347,72 @@ test('clínica fechada por 2 dias ou mais: o Telegram avisa que ninguém vai ver
     globalThis.fetch = fetchOriginal;
     delete process.env.TELEGRAM_BOT_TOKEN;
   }
+});
+
+const ESPERA = 111237883;
+const unidadeComEspera = (over: Partial<Unit> = {}) => unidade({ pipelineIntents: { waiting_deferred: ESPERA }, ...over } as Partial<Unit>);
+
+test('mover_etapa com bandeira recusa SÓ o EM ESPERA: AGENDADO depois de marcar segue livre', async () => {
+  const tools = ferramentas(unidadeComEspera());
+  await ferramenta('pausar_ia', undefined, tools).invoke({ leadId: 60, motivo: 'red flag', sinalDeAlerta: true });
+  guardadas = ['PRIORIDADE'];
+  const espera = String(await ferramenta('mover_etapa', undefined, tools).invoke({ leadId: 60, statusId: ESPERA }));
+  assert.match(espera, /^RECUSADO: .*EM ESPERA/);
+  const agendado = String(await ferramenta('mover_etapa', undefined, tools).invoke({ leadId: 60, statusId: 110657263 }));
+  assert.match(agendado, /^OK/);
+});
+
+test('mover_funil com destino EM ESPERA também é recusado para quem tem bandeira (não só o 143)', async () => {
+  const tools = ferramentas(unidadeComEspera());
+  await ferramenta('pausar_ia', undefined, tools).invoke({ leadId: 61, motivo: 'red flag', sinalDeAlerta: true });
+  guardadas = ['PRIORIDADE'];
+  const r = String(await ferramenta('mover_funil', undefined, tools).invoke({ leadId: 61, pipelineId: 14322243, statusId: ESPERA }));
+  assert.match(r, /^RECUSADO: .*EM ESPERA/);
+});
+
+test('a equipe tirou a etiqueta que o Kommo tinha aceitado: o cartão está solto (sem SQL), a Sofia move', async () => {
+  const tools = ferramentas(unidadeComEspera());
+  await ferramenta('pausar_ia', undefined, tools).invoke({ leadId: 62, motivo: 'red flag', sinalDeAlerta: true });
+  guardadas = ['PRIORIDADE'];
+  assert.match(String(await ferramenta('mover_etapa', undefined, tools).invoke({ leadId: 62, statusId: ESPERA })), /^RECUSADO/, 'com a etiqueta no cartão, segura');
+  guardadas = []; // a equipe tirou a etiqueta
+  assert.match(String(await ferramenta('mover_etapa', undefined, tools).invoke({ leadId: 62, statusId: ESPERA })), /^OK/);
+});
+
+test('a etiqueta NUNCA foi aceita pelo Kommo: a falta dela no cartão não prova que a equipe soltou — o livro segura', async () => {
+  falharEtiqueta = true;
+  const tools = ferramentas(unidadeComEspera());
+  await ferramenta('pausar_ia', undefined, tools).invoke({ leadId: 66, motivo: 'red flag', sinalDeAlerta: true });
+  falharEtiqueta = false;
+  guardadas = [];
+  assert.ok(!marcas.has('u1|66|bandeira-vermelha-etiqueta'), 'sem confirmação');
+  assert.match(String(await ferramenta('mover_etapa', undefined, tools).invoke({ leadId: 66, statusId: ESPERA })), /^RECUSADO/);
+});
+
+test('o livro vale pela CONTA: bandeira gravada na resgate segura o cartão na unidade principal', async () => {
+  falharEtiqueta = true; // sem etiqueta no cartão: só o livro segura
+  await ferramenta('pausar_ia', unidadeComEspera({ id: 'u2', slug: 'doutor-hernia-teste-resgate' })).invoke({ leadId: 63, motivo: 'red flag', sinalDeAlerta: true });
+  falharEtiqueta = false;
+  assert.ok(marcas.has('u2|63|bandeira-vermelha'));
+  guardadas = [];
+  const r = String(await ferramenta('mover_etapa', unidadeComEspera({ id: 'u1' })).invoke({ leadId: 63, statusId: ESPERA }));
+  assert.match(r, /^RECUSADO/);
+});
+
+test('aplicar_tag com «Alerta · Bandeira vermelha» (a regra da unidade) grava a bandeira no livro; tag comum não', async () => {
+  const tools = ferramentas();
+  await ferramenta('aplicar_tag', undefined, tools).invoke({ leadId: 64, tags: ['Alerta · Bandeira vermelha', 'Origem · Anúncio'] });
+  assert.ok(marcas.has('u1|64|bandeira-vermelha'));
+  assert.ok(marcas.has('u1|64|bandeira-vermelha-etiqueta'), 'o Kommo aceitou a etiqueta');
+  await ferramenta('aplicar_tag', undefined, tools).invoke({ leadId: 65, tag: 'Quente' });
+  assert.ok(!marcas.has('u1|65|bandeira-vermelha'));
+});
+
+test('mover_funil para o 143 com bandeira cai na trava de PERDIDO (texto e tarefa certos), não na recusa de EM ESPERA', async () => {
+  const tools = ferramentas(); // sem etapa de espera cadastrada: o destino 143 não pode virar «não sei → recusa de espera»
+  await ferramenta('pausar_ia', undefined, tools).invoke({ leadId: 67, motivo: 'red flag', sinalDeAlerta: true });
+  guardadas = ['PRIORIDADE'];
+  const r = String(await ferramenta('mover_funil', undefined, tools).invoke({ leadId: 67, pipelineId: 1, statusId: 143 }));
+  assert.match(r, /^RECUSADO: .*nunca fecha esse lead como perdido/);
+  assert.doesNotMatch(r, /EM ESPERA/);
 });

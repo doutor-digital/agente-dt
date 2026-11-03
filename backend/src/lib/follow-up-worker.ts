@@ -9,7 +9,7 @@ import { carimbarContato } from '../services/lead-memory.service.js';
 import { carimbarSemResposta } from '../services/lead-metrics.service.js';
 import { automacaoLigada } from './automacoes-estado.js';
 import { leadPausadoPorJanela } from './pausa-lead.js';
-import { foraDasBandeiras, leadsComBandeira } from './bandeira-vermelha.js';
+import { foraDasBandeiras, leadsComBandeira, reconciliarBandeiras } from './bandeira-vermelha.js';
 import { enviosDeRetomadaRecentes, limiteDoDiaAtingido, LIMITE_COBRANCAS_POR_DIA, marcaDoDegrau } from './cobrancas-do-dia.js';
 import { fusoDaUnidade } from './fuso.js';
 import { unidadeSemAntecipado, type FlagsDePagamento } from '../agent/pagamento-da-unidade.js';
@@ -327,6 +327,12 @@ export async function candidatasDoFollowUp(unit: { id: string }, agora: Date = n
   });
 }
 
+/** A equipe que tirou a etiqueta de bandeira solta o cartão: o livro é conferido com o Kommo antes de escolher quem cobrar. */
+export async function escolherCandidatasDoFollowUp(unit: { id: string; slug?: string }, kommo: Parameters<typeof reconciliarBandeiras>[1]) {
+  await reconciliarBandeiras(unit, kommo);
+  return candidatasDoFollowUp(unit);
+}
+
 async function varrer(): Promise<void> {
   if (rodando) return;
   rodando = true;
@@ -342,7 +348,7 @@ async function varrer(): Promise<void> {
 
       const etapas = await etapasDosLeads(unit);
 
-      const candidatas = await candidatasDoFollowUp(unit);
+      const candidatas = await escolherCandidatasDoFollowUp(unit, createKommoClient(unit));
 
       for (const conv of candidatas) {
         const estado = etapas.get(Number(conv.leadId));

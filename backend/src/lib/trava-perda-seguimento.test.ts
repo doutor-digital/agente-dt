@@ -21,6 +21,7 @@ const chaveDe = (w: { unitId_leadId_ruleKey: { unitId: string; leadId: string; r
 Object.defineProperty(prisma, 'cardAlert', {
   value: {
     findMany: async () => [],
+    findFirst: async () => null, // livro de bandeiras vermelhas: nenhum aqui
     findUnique: async (a: { where: { unitId_leadId_ruleKey: { unitId: string; leadId: string; ruleKey: string } } }) => {
       const d = marcas.get(chaveDe(a.where));
       return d ? { createdAt: d } : null;

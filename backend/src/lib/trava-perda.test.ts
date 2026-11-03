@@ -22,7 +22,7 @@ import type { DecisaoParado } from './parados.js';
 let bandeiraNoLivro = false;
 const registradas: Array<{ kommoLeadId: number; acao: string; alvo: string }> = [];
 Object.defineProperty(prisma, 'cardAlert', {
-  value: { findMany: async () => [], upsert: async () => ({}), findUnique: async () => (bandeiraNoLivro ? { createdAt: new Date() } : null) },
+  value: { upsert: async () => ({}), findMany: async (q: { where: { leadId?: string } }) => (bandeiraNoLivro ? [{ leadId: q.where.leadId, ruleKey: 'bandeira-vermelha', createdAt: new Date() }] : []) },
   configurable: true,
 });
 let automacoesGravadas: Array<{ automacao: string; estado: string; unit: { slug: string } }> = [];
@@ -454,4 +454,12 @@ test('parados em modo seco: EM ESPERA de lead com bandeira no livro vira «pular
   assert.deepEqual(registradas.map((r) => `${r.kommoLeadId}:${r.acao}`), ['111:pularia']);
   await moverParaEspera(unit, kommo, funis, 111, ETAPA.ESPERA, espera, true);
   assert.deepEqual(registradas.map((r) => `${r.kommoLeadId}:${r.acao}`), ['111:pularia', '111:moveria']);
+});
+
+test('parados em modo seco confere a ETIQUETA do cartão como o ligado (sem linha no livro): vira «pularia»', async () => {
+  const unit = unidade();
+  const kommo = kommoFalso([leadDe(112, { tags: [' PRIORIDADE'] })], []);
+  const espera = { para: 'EM ESPERA', regra: 'teste', dias: 7 } as DecisaoParado;
+  assert.equal(await moverParaEspera(unit, kommo, funis, 112, ETAPA.ESPERA, espera, true), false);
+  assert.deepEqual(registradas.map((r) => `${r.kommoLeadId}:${r.acao}`), ['112:pularia']);
 });

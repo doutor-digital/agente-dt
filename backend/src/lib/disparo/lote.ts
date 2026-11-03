@@ -89,6 +89,8 @@ export interface Porto {
   concluirOnda(ondaId: string): Promise<void>;
   pediuSair(d: Destino): Promise<boolean>;
   franquia(d: Destino): Promise<SituacaoNaFranquia>;
+  /** o cartão está com bandeira vermelha (sinal de alerta) agora? Quem não implementa não confere. */
+  bandeira?(d: Destino): Promise<boolean>;
   enviar(onda: OndaNoLote, d: Destino, valores: string[]): Promise<ResultadoDoTemplate>;
   espelhar(d: Destino, texto: string): Promise<void>;
   dormir(ms: number): Promise<void>;
@@ -169,6 +171,8 @@ type Veredito =
 /** Decide, sem mandar nada, se a pessoa ainda pode receber. */
 async function aindaPode(porto: Porto, d: Destino): Promise<Veredito> {
   if (await porto.pediuSair(d)) return { tipo: 'barrou', estado: 'saiu', motivo: 'pediu para sair (SAIR) antes do envio' };
+  // Sinal de alerta que apareceu depois da montagem da lista: campanha nenhuma fala com esse paciente
+  if (porto.bandeira && (await porto.bandeira(d))) return { tipo: 'barrou', estado: 'descartado', motivo: 'bandeira vermelha (sinal de alerta): só a equipe fala (conferido na hora do envio)' };
   const f = await porto.franquia(d);
   if (f === 'livre') return { tipo: 'pode' };
   if (f === 'indisponivel') return { tipo: 'adiar', motivo: 'a franquia não respondeu' };

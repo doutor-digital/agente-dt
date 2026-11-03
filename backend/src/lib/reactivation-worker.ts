@@ -7,7 +7,7 @@ import { createKommoClient } from '../services/kommo.service.js';
 import { estadoEtapaDoLead } from '../services/lead-stage.service.js';
 import { leadPausadoPorJanela } from './pausa-lead.js';
 import { falaDaEquipeDesde } from './pausa-equipe.js';
-import { foraDasBandeiras, leadsComBandeira } from './bandeira-vermelha.js';
+import { foraDasBandeiras, leadsComBandeira, reconciliarBandeiras } from './bandeira-vermelha.js';
 
 const SWEEP_MS = 5 * 60_000;
 const ESPERA_MIN = 30;
@@ -93,13 +93,18 @@ export async function candidatasDaReativacao(unit: Pick<Unit, 'id'>, agora: Date
   });
 }
 
+/** A equipe que tirou a etiqueta de bandeira solta o cartão: o livro é conferido com o Kommo antes de escolher quem reativar. */
+export async function escolherCandidatasDaReativacao(unit: Pick<Unit, 'id' | 'slug'>, kommo: Parameters<typeof reconciliarBandeiras>[1]) {
+  await reconciliarBandeiras(unit, kommo);
+  return candidatasDaReativacao(unit);
+}
+
 async function reativarUnidade(unit: Unit): Promise<void> {
   if (!dentroDoHorario(unit)) return;
 
-  const candidatas = await candidatasDaReativacao(unit);
-  if (candidatas.length === 0) return;
-
   const kommo = createKommoClient(unit);
+  const candidatas = await escolherCandidatasDaReativacao(unit, kommo);
+  if (candidatas.length === 0) return;
 
   for (const conv of candidatas) {
     const leadId = Number(conv.leadId);

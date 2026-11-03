@@ -1,6 +1,6 @@
 import type { Unit } from '@prisma/client';
 import type { BaseMessage } from '@langchain/core/messages';
-import { quandoAEquipeResponde, semEquipeAteOutroDia, type RetornoDaEquipe } from '../lib/retorno-da-equipe.js';
+import { ORIENTAR_PROCURAR_ATENDIMENTO_ANTES, quandoAEquipeResponde, semEquipeAteOutroDia, type RetornoDaEquipe } from '../lib/retorno-da-equipe.js';
 
 /**
  * Sinal de alerta clínico: acolher em UMA frase, PARAR a IA e passar NA HORA para a equipe ligar.
@@ -427,7 +427,7 @@ export const SEM_AVISO_NA_PAUSA = '[SEM AVISO À EQUIPE]';
  * pronto-socorro; se o PRÓPRIO paciente falou nele, a frase não desaconselha (decisão de 26/10). `avisada: false` =
  * a tarefa e o Telegram falharam: a frase NÃO diz que a equipe foi avisada.
  */
-export function fraseDoPasse(r: RetornoDaEquipe, pacienteFalouDePs: boolean, avisada = true): string {
+export function fraseDoPasse(r: RetornoDaEquipe, pacienteFalouDePs: boolean, avisada = true, orientarProcurarAtendimento = ORIENTAR_PROCURAR_ATENDIMENTO_ANTES): string {
   const ir = 'Se você sentir que não dá para esperar, pode ir, tá?';
   if (!avisada) {
     return `Sinto muito que você esteja passando por isso 🙏 O seu atendimento segue com a nossa equipe.${pacienteFalouDePs ? ` ${ir}` : ''}`;
@@ -436,7 +436,8 @@ export function fraseDoPasse(r: RetornoDaEquipe, pacienteFalouDePs: boolean, avi
   if (semEquipeAteOutroDia(r)) {
     return (
       'Sinto muito que você esteja passando por isso 🙏 O seu caso ficou registrado com prioridade para a nossa equipe, ' +
-      `e a clínica reabre ${r.quando}. Se você sentir que não dá para esperar, pode procurar atendimento antes, tá?`
+      `e a clínica reabre ${r.quando}.` +
+      (orientarProcurarAtendimento ? ' Se você sentir que não dá para esperar, pode procurar atendimento antes, tá?' : '')
     );
   }
   const quando = quandoAEquipeResponde(r);

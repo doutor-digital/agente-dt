@@ -8,8 +8,27 @@ import type { Unit } from '@prisma/client';
 import { prisma } from '../prisma.js';
 import { createKommoClient, type KommoLead } from '../../services/kommo.service.js';
 import { grupoDaUnidade, pularCartao } from '../crm-compartilhado.js';
+import { cartaoComBandeira, livroDaConta, vigente, type LinhaDoLivro } from '../bandeira-vermelha.js';
 import { conferenciaDaFranquia } from './franquia.js';
 import { chaveDaPessoa, pediuParaSair, telefoneWhatsapp, type Candidato, type ContextoDoPublico } from './regras.js';
+
+/** Cartão + contato → candidato. Bandeira vermelha (etiqueta no cartão, ou livro dentro da graça) vai marcada: `triar` a deixa de fora. */
+export function montarCandidatos(
+  cartoes: KommoLead[],
+  contatoDoCartao: ReadonlyMap<number, number>,
+  contatos: ReadonlyMap<number, { nome: string | null; telefone: string | null }>,
+  livro: ReadonlyMap<string, LinhaDoLivro>,
+): Candidato[] {
+  return cartoes.map((l): Candidato => {
+    const c = contatos.get(contatoDoCartao.get(l.id) ?? -1);
+    return {
+      leadId: l.id,
+      nome: c?.nome ?? null,
+      telefoneBruto: c?.telefone ?? null,
+      bandeiraVermelha: vigente(livro.get(String(l.id)), cartaoComBandeira(l)),
+    };
+  });
+}
 
 /** Os cartões com a etiqueta, com o nome e o telefone do contato principal. */
 export async function candidatosDaEtiqueta(unit: Unit, etiqueta: string): Promise<{ candidatos: Candidato[]; foraDoKommoDividido: number }> {
@@ -28,10 +47,10 @@ export async function candidatosDaEtiqueta(unit: Unit, etiqueta: string): Promis
     if (c) contatoDoCartao.set(l.id, c.id);
   }
   const contatos = await kommo.contatosBasicos([...contatoDoCartao.values()]);
-  const candidatos = nossos.map((l): Candidato => {
-    const c = contatos.get(contatoDoCartao.get(l.id) ?? -1);
-    return { leadId: l.id, nome: c?.nome ?? null, telefoneBruto: c?.telefone ?? null };
-  });
+  // Bandeira vermelha (sinal de alerta) não recebe campanha: etiqueta no cartão, ou livro dentro da graça. Livro ilegível = não manda.
+  const livro = await livroDaConta(unit.id);
+  if (!livro) throw new Error('não consegui ler o livro de bandeiras vermelhas — na dúvida, a campanha não sai');
+  const candidatos = montarCandidatos(nossos, contatoDoCartao, contatos, livro);
   return { candidatos, foraDoKommoDividido: (resumo.deOutraUnidade ?? 0) + (resumo.semUnidade ?? 0) };
 }
 

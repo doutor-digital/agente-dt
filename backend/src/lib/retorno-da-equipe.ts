@@ -88,6 +88,14 @@ function minutosAgora(agora: Date, tz: string): number {
  * A clínica só reabre daqui a 2 dias ou mais (fim de semana, feriado): ninguém vê o cartão antes. «Amanhã às 8h» NÃO entra —
  * é a noite de sempre, e ali «a equipe continua por aqui amanhã» é promessa que se cumpre.
  */
+/**
+ * A orientação «se você sentir que não dá para esperar, pode procurar atendimento antes» na resposta de sinal de alerta com a
+ * clínica fechada por 2+ dias. PENDENTE DE DECISÃO DO JOÃO (03/11/2026): a regra de 26/10 só deixa a Sofia dizer isso quando o
+ * PRÓPRIO paciente fala em pronto-socorro. `false` tira a frase daqui E de `fraseDoPasse` (`sinal-de-alerta.ts`); é o único
+ * lugar a trocar.
+ */
+export const ORIENTAR_PROCURAR_ATENDIMENTO_ANTES = true;
+
 export function semEquipeAteOutroDia(r: RetornoDaEquipe): r is Extract<RetornoDaEquipe, { tipo: 'fechada' }> {
   return r.tipo === 'fechada' && (r.dias ?? 0) >= 2;
 }
@@ -129,7 +137,7 @@ export function retornoDaEquipe(unit: Unit, agora: Date = new Date()): RetornoDa
  * `pausar_ia`, que é a última coisa que ela lê antes de escrever — por isso funciona mesmo em unidade com
  * prompt próprio, e não custa nada no prompt fixo (que fica uma hora em cache e não pode depender da hora).
  */
-export function orientacaoAoTransferir(r: RetornoDaEquipe, urgente = false, avisada = true): string {
+export function orientacaoAoTransferir(r: RetornoDaEquipe, urgente = false, avisada = true, orientarProcurarAtendimento = ORIENTAR_PROCURAR_ATENDIMENTO_ANTES): string {
   const prazo = 'NÃO prometa prazo: nada de "em instantes", "já já", "um instante", "logo te chamam".';
   // Sinal de alerta (decisão de 26/10): nunca sugerir pronto-socorro; se o próprio paciente perguntou ou disse que
   // vai, não desaconselhar.
@@ -159,8 +167,9 @@ export function orientacaoAoTransferir(r: RetornoDaEquipe, urgente = false, avis
     return (
       `A clínica está FECHADA e só reabre ${r.quando} — ninguém da equipe vai ver esta conversa antes disso. NÃO diga que a equipe ` +
       '"retorna", "te responde", "te chama" nem "continua o atendimento por aqui" antes dessa data. Responda em UMA frase, sem ' +
-      `alarmar: o caso ficou registrado como prioridade, a clínica reabre ${r.quando}, e se ele sentir que não dá para esperar ` +
-      `pode procurar atendimento antes. ${semPrazo}`
+      `alarmar: o caso ficou registrado como prioridade e a clínica reabre ${r.quando}` +
+      (orientarProcurarAtendimento ? ', e se ele sentir que não dá para esperar pode procurar atendimento antes' : '') +
+      `. ${semPrazo}`
     );
   }
   if (r.tipo === 'fechada') {

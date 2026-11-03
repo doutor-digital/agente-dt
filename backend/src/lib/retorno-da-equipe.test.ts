@@ -164,3 +164,16 @@ test('sinal de alerta com a clínica fechada até outro dia: a orientação NÃO
   assert.equal(semEquipeAteOutroDia({ tipo: 'fechada', quando: 'x', hoje: false }), false);
   assert.equal(semEquipeAteOutroDia({ tipo: 'fechada', quando: 'x', hoje: false, dias: 2 }), true);
 });
+
+test('«pode procurar atendimento antes» sai quando a chave estiver desligada (decisão do João pendente), sem frase solta', async () => {
+  const { fraseDoPasse } = await import('../agent/sinal-de-alerta.js');
+  const r = { tipo: 'fechada' as const, quando: 'terça-feira, 03/11, às 7h30', hoje: false, dias: 4 };
+  const sem = orientacaoAoTransferir(r, true, true, false);
+  assert.doesNotMatch(sem, /procurar atendimento/);
+  assert.match(sem, /a clínica reabre terça-feira, 03\/11, às 7h30\. NÃO prometa prazo/);
+  const frase = fraseDoPasse(r, false, true, false);
+  assert.doesNotMatch(frase, /procurar atendimento/);
+  assert.match(frase, /a clínica reabre terça-feira, 03\/11, às 7h30\.$/);
+  assert.match(orientacaoAoTransferir(r, true, true, true), /pode procurar atendimento antes/);
+  assert.match(fraseDoPasse(r, false, true, true), /pode procurar atendimento antes/);
+});
