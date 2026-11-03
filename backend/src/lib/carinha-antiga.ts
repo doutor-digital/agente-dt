@@ -38,3 +38,36 @@ export function semCarinha(texto: string): string {
     .replace(/[ \t]+\n/g, '\n')
     .trim();
 }
+
+/**
+ * O sorriso COLORIDO da confirmação de Timbó: ☺ (U+263A) + U+FE0F (seletor de variação 16).
+ *
+ * `downgradeEmoji` tira o U+FE0F de tudo que envia (e `semCarinha` apaga o ☺ inteiro onde a carinha antiga está desligada).
+ * Sem o U+FE0F o WhatsApp mostra o glifo preto e branco; com ele, o emoji colorido que o João pediu no fecho da confirmação
+ * ("Até breve! ☺️", 03/11/2026). O par é BMP (3 + 3 bytes) — não tem o problema dos 4 bytes do Kommo.
+ *
+ * Só onde a automação `sorriso-colorido` está ligada para a unidade (SORRISO_COLORIDO_SLUGS ou a tela de Automações). Nas
+ * demais o envio é o de sempre: o U+FE0F cai e o ☺ puro segue o destino de antes.
+ */
+export function sorrisoColoridoLigado(slug: string | null | undefined, lista = process.env.SORRISO_COLORIDO_SLUGS): boolean {
+  if (!slug) return false;
+  return automacaoLigada(slug, 'sorriso-colorido', lista);
+}
+
+const SORRISO_COLORIDO = '\u263A\uFE0F';
+/** Marca de uso privado (BMP, 1 unidade): nenhum dos saneadores a conhece, então atravessa todos intacta. */
+const MARCA_DO_SORRISO = '\uE000';
+
+/**
+ * Roda `transforma` (os saneadores de emoji do envio) sem deixar que ela estrague o ☺️ colorido — só onde a unidade o permite.
+ * Fora disso, ou sem o par no texto, é só `transforma(texto)`.
+ */
+export function preservandoSorrisoColorido(
+  slug: string | null | undefined,
+  texto: string,
+  transforma: (t: string) => string,
+): string {
+  // texto que já traz a marca (nunca visto): sem proteção, em vez de arriscar trocar o que não é ☺️ por ☺️
+  if (!texto.includes(SORRISO_COLORIDO) || texto.includes(MARCA_DO_SORRISO) || !sorrisoColoridoLigado(slug)) return transforma(texto);
+  return transforma(texto.replaceAll(SORRISO_COLORIDO, MARCA_DO_SORRISO)).replaceAll(MARCA_DO_SORRISO, SORRISO_COLORIDO);
+}

@@ -14,7 +14,7 @@ import { SpineService } from '../services/spine.service.js';
 import type { TraceRecorder } from './trace-recorder.js';
 import { buildAgendarConsulta, buildConsultarHorarios } from './agenda-tools.js';
 import { agoraLocalISO } from './consulta-que-passou.js';
-import { feriadoNacional } from '../lib/feriados.js';
+import { dataDaConfirmacao, feriadoNacional } from '../lib/feriados.js';
 import { _depsDoCacheParaTeste, depositoNaMemoria } from '../lib/cache-agenda.js';
 import { _semearParaTeste } from '../lib/automacoes-estado.js';
 import { _semearCrmParaTeste } from '../lib/crm-compartilhado.js';
@@ -143,8 +143,23 @@ test('sem antecipado: marca sem formaPagamento, grava na_clinica e a orientaçã
   assert.ok(marcou(), 'chegou na franquia');
   assert.ok(r.includes(PAGAMENTO_NO_DIA), r);
   assert.doesNotMatch(r, /antecipad|12\.345\.678|ESCOLHEU PIX|\[\[botoes/i);
+  // 03/11/2026: a data da confirmação vem PRONTA ("Sexta-feira 06/11", sem ano) — o modelo copia em vez de calcular
+  assert.ok(r.includes(`Linha pronta da data para a confirmação (copie exatamente, sem ano): ${dataDaConfirmacao(DIA)}.`), r);
+  assert.match(r, /^Consulta marcada para /, 'o início da resposta segue o que os vigias leem');
+  assert.match(r, /não repita esta frase num parágrafo à parte/);
+  assert.doesNotMatch(r, /Atendimento com|Confirme ao paciente com EXATAMENTE/, 'o retorno não manda o contrário do formato novo');
   assert.equal(gravacoes.length, 1);
   assert.equal(gravacoes[0].data.pagamentoEscolhido, 'na_clinica', 'a régua do Pix lê isto: nunca cobra');
+});
+
+test('com antecipado (padrão): o retorno da marcação NÃO ganha a "Linha pronta da data" nem muda a frase do pagamento', async () => {
+  atual = unidade();
+  const hora = await primeiroHorario(atual);
+  const r = await agendar(atual).func({ idClient: 9, data: DIA, hora, diaConfirmado: true, formaPagamento: 'na_clinica', leadId: 1 });
+  assert.match(r, /^Consulta marcada para /);
+  assert.doesNotMatch(r, /Linha pronta da data/);
+  assert.doesNotMatch(r, /parágrafo à parte/);
+  assert.match(r, /Confirme ao paciente com EXATAMENTE este dia da semana e data\./, 'o texto de sempre');
 });
 
 test('sem antecipado: o modelo manda pix_antecipado (ou lixo) e a forma continua sendo na_clinica', async () => {

@@ -54,3 +54,34 @@ export const PAGAMENTO_NO_DIA = 'O pagamento é feito no dia, na clínica (dinhe
 /** A regra que fecha a porta para o modelo (sem a palavra "antecipad": o teste do prompt checa que ela não aparece). */
 export const REGRA_SEM_ANTECIPADO =
   'A consulta é paga no dia, na clínica. NUNCA fale em pagar antes da consulta, em Pix para reservar a vaga, em enviar chave Pix nem em desconto.';
+
+// ---------------------------------------------------------------------------------------------------------------------
+// A mensagem de confirmação de uma unidade sem antecipado (formato pedido pelo João em 03/11/2026)
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** Como se paga, DENTRO da linha do valor da confirmação (sem o parágrafo à parte que existia até 03/11/2026). */
+export const FORMAS_NO_DIA = 'dinheiro, pix, cartão de débito ou crédito';
+
+/** ☺ + seletor de variação 16: sem o U+FE0F o WhatsApp mostra o glifo preto e branco (ver carinha-antiga.ts). Os dois são BMP. */
+export const SORRISO_DA_CONFIRMACAO = '☺️';
+
+/**
+ * O valor da consulta NO DIA, lido das fontes da unidade ("250,00"), ou null se não achar.
+ *
+ * Nada de número no código: é o primeiro R$ que vem logo depois da palavra "consulta", dentro da mesma frase. Se entre as duas
+ * há "retorno", "sessão" ou "tratamento" ("Consulta de retorno: R$ 100"), é o valor de outro produto e não vale. Sem match, o
+ * prompt manda o modelo ler as fontes.
+ */
+export function valorDaConsultaNoDia(sourceProdutos: string | null | undefined): string | null {
+  const re = /consulta([^\n.;]{0,100}?)R\$\s?(\d{1,3}(?:\.\d{3})+|\d+)(?:,(\d{1,2}))?/gi;
+  for (const m of (sourceProdutos ?? '').matchAll(re)) {
+    if (/retorno|sess[ãõ]|tratamento/i.test(m[1])) continue;
+    // sobra de ficha antiga ("R$ 250 antecipado ou R$ 350 no dia"): o valor colado em "antecipado"/"à vista" não é o do dia
+    const depois = (sourceProdutos ?? '').slice((m.index ?? 0) + m[0].length).split(/R\$|[\n.;]/)[0].slice(0, 40);
+    if (/antecipad|(?<!\p{L})à vista/iu.test(depois)) continue;
+    const n = Number(`${m[2].replace(/\./g, '')}.${(m[3] ?? '0').padEnd(2, '0')}`);
+    if (!Number.isFinite(n) || n <= 0) continue;
+    return n.toFixed(2).replace('.', ',');
+  }
+  return null;
+}

@@ -64,7 +64,16 @@ import { logger } from '../lib/logger.js';
 import { capturaUnificada } from './captura-unificada.js';
 import { ehSoCumprimento } from '../lib/pediu-para-parar.js';
 import { automacaoLigada } from '../lib/automacoes-estado.js';
-import { PAGAMENTO_NO_DIA, REGRA_SEM_ANTECIPADO, unidadeSemAntecipado, type FlagsDePagamento } from './pagamento-da-unidade.js';
+import { sorrisoColoridoLigado } from '../lib/carinha-antiga.js';
+import {
+  FORMAS_NO_DIA,
+  PAGAMENTO_NO_DIA,
+  REGRA_SEM_ANTECIPADO,
+  SORRISO_DA_CONFIRMACAO,
+  unidadeSemAntecipado,
+  valorDaConsultaNoDia,
+  type FlagsDePagamento,
+} from './pagamento-da-unidade.js';
 import {
   carregarRede,
   ehDoutorHernia,
@@ -631,7 +640,11 @@ export const fmtBRL = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixe
 
 function linhaValorConsulta(unit: Unit): string {
   if (unidadeSemAntecipado(unit)) {
-    return '✨ Valor: R$ {o valor da consulta que está nas fontes/produtos DESTA unidade — nunca invente; se não houver valor cadastrado, omita a linha e diga que a equipe informa; sem "à vista" e sem desconto} no dia, na clínica';
+    // O valor vem das fontes da unidade (nada chumbado); a forma de pagamento mora nesta linha — não há parágrafo à parte.
+    const valor = valorDaConsultaNoDia(unit.sourceProdutos);
+    return valor
+      ? `✨ Valor: R$ ${valor} no dia, ${FORMAS_NO_DIA}.`
+      : `✨ Valor: R$ {o valor da consulta que está nas fontes/produtos DESTA unidade, com centavos, como lá (ex.: NNN,00) — nunca invente; se não houver valor cadastrado, omita a linha e diga que a equipe informa; sem "à vista" e sem desconto} no dia, ${FORMAS_NO_DIA}.`;
   }
   const p = precosDaConsulta(unit);
   // Taxa de reserva obrigatória (Boa Vista): o antecipado NÃO é alternativa ao valor
@@ -705,6 +718,45 @@ function renderAgenda(unit: Unit): string {
     ? `- ${REGRA_SEM_ANTECIPADO}\n  NUNCA escreva "à vista". Não arredonde.`
     : `- O valor menor é o ANTECIPADO (pago antes da consulta); o maior é o valor no dia.\n  NUNCA escreva "à vista". Não arredonde nem ofereça desconto.`;
 
+  // O formato da confirmação. Unidade sem antecipado (Timbó) tem o seu, pedido pelo João em 03/11/2026: data e horário em
+  // negrito, data "Sexta-feira 06/11" (a tool já devolve a linha pronta), sem "Atendimento com", sem o parágrafo do pagamento
+  // (a forma já está na linha do valor) e fecha com ☺️. As demais unidades: o texto de sempre, palavra por palavra.
+  // O ☺️ só entra onde o envio o preserva (automação `sorriso-colorido`); desligada, o fecho sai sem rosto — nunca um ☺ preto e branco.
+  const sorriso = semAntecipado && sorrisoColoridoLigado(unit.slug);
+  const fecho = sorriso ? `Até breve! ${SORRISO_DA_CONFIRMACAO}` : 'Até breve!';
+  const formatoDaConfirmacao = semAntecipado
+    ? `⭐ Data: *{dia da semana e dd/mm, copiados da "Linha pronta da data" da ferramenta — ex.: Sexta-feira 06/11; sem ano}*
+⏰ Horário: *{HH:mm}*
+${linhaEndereco}
+${linhaAntecedencia}
+${linhaValor}
+
+Qualquer dúvida, é só chamar. ${fecho}`
+    : `⭐ Data: {dia da semana e data EXATAMENTE como a ferramenta agendar_consulta devolveu — ex.: terça-feira, 08/09}
+⏰ Horário: {HH:mm}
+${linhaEndereco}
+${linhaAntecedencia}
+${linhaValor}
+⭐ Atendimento com: {exatamente o que a tool devolveu — ela já vem como "a fisioterapeuta Fulana"; se não devolveu, omita esta linha}
+
+${linhaPix}
+
+Qualquer dúvida, é só chamar. Até breve!`;
+  const regraDeEmojis = semAntecipado
+    ? `- Use SÓ os emojis do formato acima (✅ ⭐ ⏰ ⏳ ✨${sorriso ? ` e, no fecho, ${SORRISO_DA_CONFIRMACAO}` : ''}) — são BMP e chegam coloridos
+  neste canal. ${sorriso ? `O ${SORRISO_DA_CONFIRMACAO} é o ÚNICO rosto permitido, só no fecho, copiado com o seletor de variação (U+263A U+FE0F).` : 'NENHUM emoji de rosto, nem no fecho.'}
+  NUNCA use 📅 📍 💰 👏 👨‍⚕️ 🎉 😊 🙏 nem outro emoji de rosto/pessoa/objeto:
+  são 4 bytes, quebram no Kommo e cortam a mensagem no meio.
+- Os asteriscos de *Data* e *Horário* são o negrito do WhatsApp: escreva com UM asterisco de cada lado, exatamente como
+  no formato, e SÓ nesses dois valores (nada de **duplo**, nada de negrito no resto da mensagem).
+- Esta confirmação NÃO tem a linha "Atendimento com" nem o parágrafo "O pagamento é feito no dia…": a forma de pagamento
+  já está na linha do valor. Não acrescente nenhum dos dois.
+`
+    : `- Use SÓ os emojis do formato acima (✅ ⭐ ⏰ ⏳ ✨) — são BMP e chegam coloridos
+  neste canal. NUNCA use 📅 📍 💰 👏 👨‍⚕️ 🎉 😊 🙏 nem emoji de rosto/pessoa/objeto:
+  são 4 bytes, quebram no Kommo e cortam a mensagem no meio.
+`;
+
   const confirmacao = `
 CANCELAR E REMARCAR:
 - UM PACIENTE TEM NO MÁXIMO UMA CONSULTA. Se ele já tem e pede outro horário,
@@ -722,23 +774,11 @@ não um parágrafo corrido:
 
 ✅ Agendamento confirmado, {primeiro nome}!
 
-⭐ Data: {dia da semana e data EXATAMENTE como a ferramenta agendar_consulta devolveu — ex.: terça-feira, 08/09}
-⏰ Horário: {HH:mm}
-${linhaEndereco}
-${linhaAntecedencia}
-${linhaValor}
-⭐ Atendimento com: {exatamente o que a tool devolveu — ela já vem como "a fisioterapeuta Fulana"; se não devolveu, omita esta linha}
-
-${linhaPix}
-
-Qualquer dúvida, é só chamar. Até breve!
+${formatoDaConfirmacao}
 
 REGRAS DESTA MENSAGEM:
 - Só depois de a tool confirmar. Nunca antes, nunca "vou marcar".
-- Use SÓ os emojis do formato acima (✅ ⭐ ⏰ ⏳ ✨) — são BMP e chegam coloridos
-  neste canal. NUNCA use 📅 📍 💰 👏 👨‍⚕️ 🎉 😊 🙏 nem emoji de rosto/pessoa/objeto:
-  são 4 bytes, quebram no Kommo e cortam a mensagem no meio.
-- NUNCA chame quem atende de médico, doutor, Dr. ou Dra.: quem faz a consulta é
+${regraDeEmojis}- NUNCA chame quem atende de médico, doutor, Dr. ou Dra.: quem faz a consulta é
   FISIOTERAPEUTA. Se o paciente citar "o médico", ele está falando de outro
   profissional, fora daqui — aí tudo bem usar a palavra.
 - Não invente endereço, nome de profissional nem chave PIX. Linha sem dado
