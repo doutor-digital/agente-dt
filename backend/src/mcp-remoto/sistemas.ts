@@ -287,7 +287,7 @@ export interface Pendente {
   /** só nas concessões de ADMIN (sistemas_preparar_admin): o que foi mostrado à pessoa e vai ser executado na confirmação */
   admin?: AdminPendente;
   /** só no SQL que destrói (sistemas_preparar_sql): o SQL que foi mostrado e vai ser executado na confirmação */
-  sqlLivre?: { sql: string; motivo: string; destroi: boolean };
+  sqlLivre?: { sql: string; motivo: string };
 }
 
 export type AdminPendente =

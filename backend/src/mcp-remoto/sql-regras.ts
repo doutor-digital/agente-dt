@@ -84,7 +84,8 @@ interface Perfil {
 }
 const PERFIS: Record<SistemaSql, Perfil> = {
   rh: {
-    totais: ['rh_usuarios', 'rh_log'],
+    // usuarios/tenants/convites/integracoes: a autorização antiga (meu_perfil, meu_tenant), os convites com token e a configuração das integrações (segredos)
+    totais: ['rh_usuarios', 'rh_log', 'usuarios', 'tenants', 'convites', 'integracoes'],
     estrutura: ['rh_docs', 'rh_site', 'rh_site_stage', 'rh_staging'],
     acesso: new Set([
       'rh_admin', 'rh_papel', 'meu_perfil', 'meu_colaborador', 'meu_tenant', 'caixa_gestor', 'caixa_minha_unidade', 'caixa_pode', 'rh_fin_le',
@@ -698,7 +699,7 @@ function criarTabela(s: No): Achado[] {
       relacao(ev.relation, 'CREATE TABLE (LIKE)');
     } else recusa(`CREATE TABLE ${t}: elemento ${et} não é permitido`);
   }
-  return [direto('CREATE TABLE', `Cria a tabela ${t}${s.if_not_exists ? ' (se ainda não existir)' : ''}`, { criou: s.if_not_exists ? undefined : t, avisos })];
+  return [direto('CREATE TABLE', `Cria a tabela ${t}${s.if_not_exists ? ' (se ainda não existir)' : ''}`, { criou: t, avisos })];
 }
 
 function criarTabelaComo(s: No): Achado[] {
@@ -716,9 +717,9 @@ function criarTabelaComo(s: No): Achado[] {
   if (qt !== 'SelectStmt') recusa('CREATE TABLE AS: o comando de dados (EXECUTE, INSERT…) não é permitido; use um SELECT');
   selecionar(s.query, CONSULTA, 'CREATE TABLE AS (a consulta)');
   if (s.objtype === 'OBJECT_MATVIEW') {
-    return [direto('CREATE MATERIALIZED VIEW', `Cria a view materializada ${t} (guarda uma cópia do resultado; só quem recebe GRANT enxerga)`, { matview: s.if_not_exists ? undefined : t, avisos: [`a view materializada ${t} não tem segurança por linha: o servidor tira o acesso de usuários logados; dê GRANT só a quem deve ver tudo`] })];
+    return [direto('CREATE MATERIALIZED VIEW', `Cria a view materializada ${t} (guarda uma cópia do resultado; só quem recebe GRANT enxerga)`, { matview: t, avisos: [`a view materializada ${t} não tem segurança por linha: o servidor tira o acesso de usuários logados; dê GRANT só a quem deve ver tudo`] })];
   }
-  return [direto('CREATE TABLE AS', `Cria a tabela ${t} a partir de uma consulta (copia os dados dela)`, { criou: s.if_not_exists ? undefined : t })];
+  return [direto('CREATE TABLE AS', `Cria a tabela ${t} a partir de uma consulta (copia os dados dela)`, { criou: t })];
 }
 
 function atualizarVisao(s: No): Achado[] {
@@ -1140,6 +1141,7 @@ function inserir(s: No): Achado[] {
   }
   if (s.selectStmt) selecionar(s.selectStmt, CONSULTA, 'INSERT');
   let copiar: string[] | undefined;
+  let upsertEmMassa = false;
   if (s.onConflictClause) {
     const oc = s.onConflictClause;
     so(oc, ['action', 'infer', 'targetList', 'whereClause'], 'INSERT … ON CONFLICT');
@@ -1156,9 +1158,15 @@ function inserir(s: No): Achado[] {
       atribuicoes(oc.targetList, 'INSERT … ON CONFLICT');
       if (oc.whereClause) expressao(oc.whereClause, CONSULTA, 'INSERT … ON CONFLICT');
       copiar = [t];
+      // INSERT … SELECT … FROM … ON CONFLICT DO UPDATE sem nenhum WHERE reescreve todas as linhas que casarem: é um UPDATE da tabela inteira
+      const fonte = s.selectStmt?.SelectStmt;
+      upsertEmMassa = !!fonte && (fonte.fromClause ?? []).length > 0 && !fonte.whereClause && !oc.whereClause;
     } else if (oc.action !== 'ONCONFLICT_NOTHING') recusa('INSERT … ON CONFLICT: ação inesperada');
   }
   retornando(s.returningClause, 'INSERT');
+  if (upsertEmMassa) {
+    return [{ tipo: 'INSERT', acao: 'confirmar', o_que: `INSERT … SELECT … ON CONFLICT DO UPDATE sem WHERE na tabela ${t}: REESCREVE todas as linhas que já existem e casarem com a consulta`, dados: true, copiar }];
+  }
   return [{ tipo: 'INSERT', acao: 'direto', o_que: `Insere linha(s) na tabela ${t}${copiar ? ' (ON CONFLICT DO UPDATE muda as que já existem)' : ''}`, dados: true, copiar }];
 }
 

@@ -138,7 +138,7 @@ export async function executarComBackup(
   if (r.ok === false) {
     const erro = String(r.erro ?? 'o servidor recusou sem dizer o motivo').slice(0, 800);
     rastro.resultado = `recusado: ${erro}`.slice(0, 300);
-    const guarda = r.guarda === 'tabela_inteira' ? ' Foi desfeito. Se é de propósito, use sistemas_preparar_sql (dois passos).' : ' O servidor roda o pedido todo numa transação e desfez o que já tinha feito; confira com sistemas_esquema.';
+    const guarda = r.guarda === 'tabela_inteira' ? ' Foi desfeito. Para atingir a tabela inteira de propósito, escreva o comando SEM WHERE e use sistemas_preparar_sql (dois passos).' : ' O servidor roda o pedido todo numa transação e desfez o que já tinha feito; confira com sistemas_esquema.';
     throw new ErroDeEntrada(`o servidor NÃO aplicou: ${erro}.${guarda}`);
   }
   rastro.resultado = 'resposta inesperada: resultado incerto';
@@ -186,7 +186,7 @@ export async function prepararSql(
     }
   }
   const id = `sql-${randomBytes(9).toString('hex')}`;
-  const expiraEm = pendentes.guardar(id, { usuario: quem.usuario, sistema: c.slug, operacao: 'sql', tabela: analise.tabelasParaCopiar.join(','), sqlLivre: { sql: analise.sql, motivo, destroi: analise.decisao === 'confirmar' } });
+  const expiraEm = pendentes.guardar(id, { usuario: quem.usuario, sistema: c.slug, operacao: 'sql', tabela: analise.tabelasParaCopiar.join(','), sqlLivre: { sql: analise.sql, motivo } });
   const destroi = analise.decisao === 'confirmar';
   return {
     sistema: c.slug,
