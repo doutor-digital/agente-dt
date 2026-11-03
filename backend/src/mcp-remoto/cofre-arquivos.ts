@@ -10,7 +10,8 @@
  *  - Tipo conferido pelo CONTEÚDO (bytes iniciais e estrutura), nunca só pela extensão; extensão que não combina é recusada.
  *  - Link de download: outro token de 256 bits, no máximo 30 min e N baixadas; sem listagem de nada.
  *  - No disco: cifrado (AES-256-GCM) com uma chave por arquivo que só existe na memória do processo. Reiniciar o
- *    processo destrói as chaves: o que sobrou no disco não abre mais (e é apagado na varredura).
+ *    processo destrói as chaves: o que sobrou no disco não abre mais (e é apagado pela varredura, até 2 h depois: numa pasta
+ *    compartilhada entre dois containers no deploy, só o prazo distingue sobra de arquivo vivo do outro).
  *  - Apagado do disco quando o último link expira, quando a pessoa manda, ou no teto de segurança (2 h), o que vier primeiro.
  *  - Nome no disco é só o id aleatório: o nome que a pessoa deu nunca vira caminho (path traversal não tem por onde entrar).
  *  - Auditoria sem conteúdo e sem nome do arquivo (o nome costuma ter o nome do paciente/funcionário).
@@ -55,7 +56,7 @@ export const LIMITES_PADRAO = {
   /** bytes guardados somados, de todo mundo */
   espacoTotalMaxBytes: 200 * 1024 * 1024,
   /** quanto tempo o registro de um envio apagado ainda responde "apagado" antes de sumir */
-  lembrarApagadoMs: 10 * 60_000,
+  lembrarApagadoMs: 60 * 60_000,
 };
 export type Limites = typeof LIMITES_PADRAO;
 
@@ -147,12 +148,17 @@ export function validarArquivo(nomeOriginal: string | undefined, conteudo: Buffe
   // só vale como extensão o que parece uma ("pdf", "docx"); "Maria J. Souza" e "v1.2" são nome, não extensão
   const depois = ponto > 0 ? ultimo.slice(ponto + 1).toLowerCase() : '';
   const ext = /^[a-z][a-z0-9]{1,4}$/.test(depois) ? depois : '';
-  if (ext && !(ext in TIPO_DA_EXTENSAO)) {
-    throw new ErroDeCofre('tipo', `Arquivo .${ext.slice(0, 10)} não é aceito. Aceitamos: ${EXTENSOES_ACEITAS.map((e) => `.${e}`).join(' ')}.`, 415);
-  }
+  const extConhecida = ext in TIPO_DA_EXTENSAO;
   const tipo = detectarTipo(conteudo);
-  if (!tipo) throw new ErroDeCofre('tipo', 'O conteúdo do arquivo não é de um tipo aceito (PDF, Word, JPG, PNG ou texto). Confira se não está corrompido.', 415);
-  if (ext && TIPO_DA_EXTENSAO[ext] !== tipo) {
+  if (!tipo) {
+    if (ext && !extConhecida) {
+      throw new ErroDeCofre('tipo', `Arquivo .${ext.slice(0, 10)} não é aceito. Aceitamos: ${EXTENSOES_ACEITAS.map((e) => `.${e}`).join(' ')}.`, 415);
+    }
+    throw new ErroDeCofre('tipo', 'O conteúdo do arquivo não é de um tipo aceito (PDF, Word, JPG, PNG ou texto). Confira se não está corrompido.', 415);
+  }
+  // "Contrato.final" com PDF de verdade dentro: manda o conteúdo (a extensão guardada é a do tipo detectado). Só uma extensão
+  // CONHECIDA que não combina com o conteúdo é recusada ("contrato.pdf" que é texto/executável).
+  if (ext && extConhecida && TIPO_DA_EXTENSAO[ext] !== tipo) {
     throw new ErroDeCofre('tipo', `O arquivo diz ser .${ext}, mas o conteúdo é ${TIPOS[tipo].legivel}. Salve de novo no formato certo.`, 415);
   }
   return { tipo, nome: nomeSeguro(ultimo, tipo) };
@@ -228,7 +234,13 @@ export class CofreDeArquivos {
 
   /** Cria a pasta (só do dono do processo). Chamada sozinha antes de qualquer gravação. */
   private garantirPasta(): Promise<void> {
-    this.pronto ??= mkdir(this.dir, { recursive: true, mode: 0o700 }).then(() => chmod(this.dir, 0o700));
+    this.pronto ??= mkdir(this.dir, { recursive: true, mode: 0o700 })
+      // só aperta a permissão de pasta que NÓS criamos (ARQUIVOS_DIR pode apontar para uma pasta que já existe e é de outros)
+      .then((criada) => (criada ? chmod(this.dir, 0o700) : undefined))
+      .catch((err) => {
+        this.pronto = undefined; // falha de uma vez só (disco, permissão corrigida depois) não pode ficar gravada para sempre
+        throw err;
+      });
     return this.pronto;
   }
 

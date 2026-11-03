@@ -182,10 +182,17 @@ export function montarRotasDoCofre(app: Express, cofre: CofreDeArquivos, o: Opco
       nomeOriginal = undefined;
     }
     let terminou = false;
-    const sair = () => {
+    // a vaga só volta quando o corpo (que fica na memória) já foi guardado ou descartado, não quando acaba de chegar
+    let vagaSolta = false;
+    const soltarVaga = () => {
+      if (vagaSolta) return;
+      vagaSolta = true;
+      enviando -= 1;
+    };
+    const sair = (soltar = true) => {
       if (terminou) return false;
       terminou = true;
-      enviando -= 1;
+      if (soltar) soltarVaga();
       clearTimeout(prazo);
       return true;
     };
@@ -193,7 +200,7 @@ export function montarRotasDoCofre(app: Express, cofre: CofreDeArquivos, o: Opco
       if (!sair()) return;
       cofre.liberar(reserva, 'demorou', origem);
       falha(408, 'O envio demorou demais. Tente de novo com uma conexão melhor.');
-      req.destroy();
+      res.once('finish', () => req.destroy());
     }, TEMPO_MAX_DO_ENVIO_MS);
     prazo.unref();
 
@@ -231,7 +238,7 @@ export function montarRotasDoCofre(app: Express, cofre: CofreDeArquivos, o: Opco
     });
     req.on('end', () => {
       if (estourou || terminou) return;
-      sair();
+      sair(false);
       const juntar = () => {
         const inteiro = Buffer.concat(pedacos, total);
         pedacos.length = 0; // os pedaços saem da memória; fica uma cópia só
@@ -243,7 +250,8 @@ export function montarRotasDoCofre(app: Express, cofre: CofreDeArquivos, o: Opco
         .catch((err) => {
           if (err instanceof ErroDeCofre) falha(err.status, err.message);
           else falha(500, 'Erro ao guardar o arquivo. Tente de novo.');
-        });
+        })
+        .finally(soltarVaga);
     });
   });
 

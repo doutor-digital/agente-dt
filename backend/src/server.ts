@@ -96,7 +96,8 @@ async function main(): Promise<void> {
         return cb(null, { origin: true, credentials: false, allowedHeaders: ['Content-Type', 'X-Widget-Key'], methods: ['GET', 'POST', 'DELETE', 'OPTIONS'] });
       }
       const allowed = env.FRONTEND_ORIGIN.includes(origin);
-      if (!allowed) {
+      // a página do cofre de arquivos é do próprio backend (PUT same-origin leva Origin): não é origem estranha, sem alarme
+      if (!allowed && !req.path.startsWith('/arquivos/')) {
         logger.warn(
           { origin, allowedOrigins: env.FRONTEND_ORIGIN },
           'CORS: origin bloqueado — verifique FRONTEND_ORIGIN no .env',
@@ -126,7 +127,8 @@ async function main(): Promise<void> {
   );
 
   app.use((req, _res, next) => {
-    logger.debug({ method: req.method, url: req.url }, 'http');
+    // o token do cofre de arquivos viaja no caminho: nunca vai para o log
+    logger.debug({ method: req.method, url: req.url.replace(/^(\/arquivos\/(?:enviar|baixar)\/)[^/?]+/, '$1[token]') }, 'http');
     next();
   });
 

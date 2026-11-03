@@ -89,7 +89,11 @@ test('nome com ponto que não é extensão ("Maria J. Souza", "v1.2") vale como 
   assert.equal(validarArquivo('Contrato Maria J. Souza', PDF, 1 << 20).nome, 'Contrato-Maria-J.-Souza.pdf');
   assert.equal(validarArquivo('Contrato v1.2', PDF, 1 << 20).nome, 'Contrato-v1.2.pdf');
   assert.throws(() => validarArquivo('programa.exe', EXE, 1 << 20), /\.exe não é aceito/);
-  assert.throws(() => validarArquivo('x.sh', TXT, 1 << 20), /\.sh não é aceito/);
+  // extensão desconhecida com conteúdo válido: manda o conteúdo (o nome guardado termina com a extensão do tipo detectado)
+  assert.equal(validarArquivo('Contrato.final', PDF, 1 << 20).nome, 'Contrato.final.pdf');
+  assert.equal(validarArquivo('Proposta.v2', PDF, 1 << 20).nome, 'Proposta.v2.pdf');
+  // ... mas extensão conhecida que não combina com o conteúdo continua recusada
+  assert.throws(() => validarArquivo('Contrato.docx', PDF, 1 << 20), /conteúdo é PDF/);
 });
 
 test('tipo falso: .exe renomeado para .pdf é recusado (e o motivo diz o que o arquivo é)', () => {
@@ -104,6 +108,31 @@ test('tipo falso: .exe renomeado para .pdf é recusado (e o motivo diz o que o a
   assert.equal(validarArquivo('Contrato.PDF', PDF, 1 << 20).tipo, 'pdf');
   assert.equal(validarArquivo('foto.jpeg', JPG, 1 << 20).nome, 'foto.jpg');
   assert.equal(validarArquivo('sem-extensao', PNG, 1 << 20).nome, 'sem-extensao.png');
+});
+
+test('pasta do cofre: falha única ao criar não fica gravada para sempre, e pasta que já existia não tem a permissão mudada', async (t) => {
+  if (process.getuid?.() === 0) return t.skip('root ignora permissão de pasta');
+  const base = mkdtempSync(path.join(tmpdir(), 'cofre-pasta-'));
+  try {
+    // 1) a pasta-pai não deixa criar; depois a permissão é corrigida e o cofre volta a funcionar sem reiniciar
+    chmodSync(base, 0o500);
+    const cofre = new CofreDeArquivos({ dir: path.join(base, 'novo', 'cofre') });
+    const p = cofre.pedirEnvio({ userId: USUARIO, finalidade: 'teste' });
+    const err = await cofre.guardar(cofre.reservar(p.token), 'a.pdf', PDF).catch((e) => e);
+    assert.ok(err instanceof Error && !(err instanceof ErroDeCofre));
+    chmodSync(base, 0o700);
+    await cofre.guardar(cofre.reservar(p.token), 'a.pdf', PDF);
+    // 2) pasta existente (ex.: ARQUIVOS_DIR=/tmp compartilhada): o app não mexe na permissão dela
+    const alheia = mkdtempSync(path.join(base, 'alheia-'));
+    chmodSync(alheia, 0o755);
+    const cofre2 = new CofreDeArquivos({ dir: alheia });
+    const q = cofre2.pedirEnvio({ userId: USUARIO, finalidade: 'teste' });
+    await cofre2.guardar(cofre2.reservar(q.token), 'a.pdf', PDF);
+    assert.equal(statSync(alheia).mode & 0o777, 0o755);
+  } finally {
+    chmodSync(base, 0o700);
+    rmSync(base, { recursive: true, force: true });
+  }
 });
 
 test('arquivo maior que o limite é recusado (com 413), sem guardar nada', async () => {
@@ -315,7 +344,7 @@ test('teto de segurança de 2 h: sem ninguém pedir link, o worker apaga o arqui
     assert.equal(c.cofre.ver(USUARIO, p.id).estado, 'apagado');
     assert.ok(c.eventos.some((e) => e.evento === 'apagado' && e.detalhe?.motivo === 'teto-de-seguranca'));
     // e o registro some da memória depois de lembrar 10 min
-    c.relogio.t += 11 * MIN;
+    c.relogio.t += 61 * MIN;
     assert.equal(await codigoDe(() => c.cofre.ver(USUARIO, p.id)), 'nao_encontrado');
   } finally {
     c.limpar();
