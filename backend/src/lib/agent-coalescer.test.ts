@@ -67,3 +67,43 @@ test('leads diferentes não se misturam', async () => {
   await dormir(120);
   assert.deepEqual(runs.sort(), ['A', 'B']);
 });
+
+test('pedido RETOMADO entra na ordem em que o paciente escreveu e não troca o run do burst', async () => {
+  const quem: string[] = [];
+  const combinados: string[] = [];
+  const ao_vivo = async (combined: string) => { quem.push('ao_vivo'); combinados.push(combined); };
+  const retomado = async (combined: string) => { quem.push('retomado'); combinados.push(combined); };
+  const agora = Date.now();
+  // O paciente escreveu "segunda" ao vivo; o pedido velho "primeira" (de 10 min atrás) é devolvido depois.
+  scheduleAgentRun({ unitSlug: 'u', leadId: 77, traceId: 'ao-vivo', humanMessage: 'segunda', audioUrl: null, imageUrl: null, run: ao_vivo });
+  const s = scheduleAgentRun({
+    unitSlug: 'u', leadId: 77, traceId: 'velho', humanMessage: 'primeira', audioUrl: null, imageUrl: null, run: retomado,
+    retomada: { chegouEm: agora - 10 * 60_000 },
+  });
+  assert.equal(s, 'joined');
+  await dormir(150);
+  assert.deepEqual(combinados, ['primeira\n\nsegunda'], 'o velho vem antes do ao vivo');
+  assert.deepEqual(quem, ['ao_vivo'], 'quem roda é o contexto da mensagem ao vivo');
+});
+
+test('pedido RETOMADO sozinho abre o burst com o próprio run', async () => {
+  const quem: string[] = [];
+  const retomado = async () => { quem.push('retomado'); };
+  const s = scheduleAgentRun({
+    unitSlug: 'u', leadId: 78, traceId: 'velho', humanMessage: 'oi', audioUrl: null, imageUrl: null, run: retomado,
+    retomada: { chegouEm: Date.now() - 60_000 },
+  });
+  assert.equal(s, 'started');
+  await dormir(150);
+  assert.deepEqual(quem, ['retomado']);
+});
+
+test('dois pedidos retomados ficam na ordem de chegada, mesmo devolvidos fora de ordem', async () => {
+  const combinados: string[] = [];
+  const run = async (c: string) => { combinados.push(c); };
+  const agora = Date.now();
+  scheduleAgentRun({ unitSlug: 'u', leadId: 79, traceId: 'b', humanMessage: 'segunda', audioUrl: null, imageUrl: null, run, retomada: { chegouEm: agora - 5_000 } });
+  scheduleAgentRun({ unitSlug: 'u', leadId: 79, traceId: 'a', humanMessage: 'primeira', audioUrl: null, imageUrl: null, run, retomada: { chegouEm: agora - 9_000 } });
+  await dormir(150);
+  assert.deepEqual(combinados, ['primeira\n\nsegunda']);
+});

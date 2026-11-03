@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { claimMessageId, clearDedupCache, deveLimpar, podarMemoria, TTL_REENTREGA_KOMMO_MS } from './dedup-cache.js';
+import { claimMessageId, clearDedupCache, deveLimpar, podarMemoria, reivindicarComCerteza, TTL_REENTREGA_KOMMO_MS } from './dedup-cache.js';
 
 // ── defesa 3: o dedupe do Kommo cobre os reenvios (5 + 15 + 15 + 60 min) ─────────────────────
 
@@ -50,4 +50,21 @@ test('deveLimpar: limpeza do banco no máximo a cada 10 min', () => {
   assert.equal(deveLimpar(0, 0), false);
   assert.equal(deveLimpar(9 * 60_000, 0), false);
   assert.equal(deveLimpar(10 * 60_000, 0), true);
+});
+
+// ── quem REFAZ trabalho pede o contrário: sem certeza, não refaz ────────────────────────────────
+
+test('reivindicarComCerteza: banco fora → "incerto" (não é "perdeu") e não guarda na memória', async () => {
+  clearDedupCache();
+  // Sem banco no teste: o INSERT falha. O padrão deixa passar; o estrito diz que não sabe.
+  assert.equal(await reivindicarComCerteza('turno-recuperado', 'trace-x', 60_000), 'incerto');
+  // Não ficou memória "já vi": a próxima pergunta também vai ao banco (e também não sabe).
+  assert.equal(await reivindicarComCerteza('turno-recuperado', 'trace-x', 60_000), 'incerto');
+  clearDedupCache();
+});
+
+test('claimMessageId padrão continua deixando passar com o banco fora (a IA não pode calar)', async () => {
+  clearDedupCache();
+  assert.equal(await claimMessageId('kommo', 'msg-padrao', 60_000), true);
+  clearDedupCache();
 });

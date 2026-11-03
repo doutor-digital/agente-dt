@@ -77,6 +77,20 @@ function limparSeVencido(agora: number): void {
   void limparClaimsVencidos();
 }
 
+/** O INSERT atômico: `true` = esta chamada gravou a chave (primeira vez, ou a anterior já tinha vencido). Lança se o banco falhar. */
+async function inserirReivindicacao(key: string, agora: number, ttlMs: number): Promise<boolean> {
+  const vencimento = new Date(agora + ttlMs);
+  // ON CONFLICT: o banco resolve a corrida. Quem inseriu (ou assumiu uma chave vencida), processa.
+  const inseridas = await prisma.$executeRaw`
+    INSERT INTO "message_claims" ("key", "expires_at")
+    VALUES (${key}, ${vencimento})
+    ON CONFLICT ("key") DO UPDATE
+      SET "expires_at" = EXCLUDED."expires_at"
+      WHERE "message_claims"."expires_at" <= NOW()
+  `;
+  return inseridas > 0;
+}
+
 /**
  * Reivindica a mensagem. `true` = é a primeira vez, pode processar.
  * `false` = alguém já pegou, ignore.
@@ -98,16 +112,7 @@ export async function claimMessageId(
   if (memoria.size >= MAX_MEMORIA) limparMemoria(agora);
 
   try {
-    const vencimento = new Date(agora + ttlMs);
-    // ON CONFLICT DO NOTHING: o banco resolve a corrida. Quem inseriu, processa.
-    const inseridas = await prisma.$executeRaw`
-      INSERT INTO "message_claims" ("key", "expires_at")
-      VALUES (${key}, ${vencimento})
-      ON CONFLICT ("key") DO UPDATE
-        SET "expires_at" = EXCLUDED."expires_at"
-        WHERE "message_claims"."expires_at" <= NOW()
-    `;
-    const primeiraVez = inseridas > 0;
+    const primeiraVez = await inserirReivindicacao(key, agora, ttlMs);
     if (primeiraVez) memoria.set(key, agora + ttlMs);
     return primeiraVez;
   } catch (err) {
@@ -115,6 +120,33 @@ export async function claimMessageId(
     logger.warn({ err: String(err), key }, 'dedup: banco indisponível — deixando a mensagem passar');
     memoria.set(key, agora + ttlMs);
     return true;
+  }
+}
+
+/**
+ * Reivindicação para quem REFAZ trabalho (lib/recuperar-turnos.ts reprocessa um pedido velho): o contrário do padrão.
+ * Sem certeza de que é a primeira vez, não refaz — resposta em dobro é pior que atraso, e a tarefa para a recepção cobre
+ * o paciente. Por isso o resultado é de três valores: `incerto` (o banco não respondeu) não é `perdeu` (alguém já pegou)
+ * — o primeiro tenta de novo na próxima volta, o segundo é uma tentativa que já aconteceu.
+ */
+export async function reivindicarComCerteza(
+  scope: string,
+  messageId: string,
+  ttlMs: number = TTL_MS,
+): Promise<'ganhou' | 'perdeu' | 'incerto'> {
+  const key = `${scope}:${messageId}`;
+  const agora = Date.now();
+  limparSeVencido(agora);
+  const jaVista = memoria.get(key);
+  if (jaVista && jaVista > agora) return 'perdeu';
+  if (memoria.size >= MAX_MEMORIA) limparMemoria(agora);
+  try {
+    if (!(await inserirReivindicacao(key, agora, ttlMs))) return 'perdeu';
+    memoria.set(key, agora + ttlMs);
+    return 'ganhou';
+  } catch (err) {
+    logger.warn({ err: String(err), key }, 'dedup: banco indisponível — reivindicação incerta (o chamador não refaz sem certeza)');
+    return 'incerto';
   }
 }
 
