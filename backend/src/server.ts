@@ -7,7 +7,7 @@ import { env } from './lib/env.js';
 import { logger } from './lib/logger.js';
 import { prisma } from './lib/prisma.js';
 import { apiRouter } from './routes/api.routes.js';
-import { ligarConectorRemoto } from './mcp-remoto/producao.js';
+import { apagarCofreDeArquivos, ligarConectorRemoto } from './mcp-remoto/producao.js';
 import { paginaPausaHandler } from './controllers/pausa.controller.js';
 import { paginaAltaHandler } from './controllers/alta.controller.js';
 import { getCheckpointer } from './agent/graph.js';
@@ -96,7 +96,8 @@ async function main(): Promise<void> {
         return cb(null, { origin: true, credentials: false, allowedHeaders: ['Content-Type', 'X-Widget-Key'], methods: ['GET', 'POST', 'DELETE', 'OPTIONS'] });
       }
       const allowed = env.FRONTEND_ORIGIN.includes(origin);
-      if (!allowed) {
+      // a página do cofre de arquivos é do próprio backend (PUT same-origin leva Origin): não é origem estranha, sem alarme
+      if (!allowed && !req.path.startsWith('/arquivos/')) {
         logger.warn(
           { origin, allowedOrigins: env.FRONTEND_ORIGIN },
           'CORS: origin bloqueado — verifique FRONTEND_ORIGIN no .env',
@@ -126,7 +127,8 @@ async function main(): Promise<void> {
   );
 
   app.use((req, _res, next) => {
-    logger.debug({ method: req.method, url: req.url }, 'http');
+    // o token do cofre de arquivos viaja no caminho: nunca vai para o log
+    logger.debug({ method: req.method, url: req.url.replace(/^(\/arquivos\/(?:enviar|baixar)\/)[^/?]+/, '$1[token]') }, 'http');
     next();
   });
 
@@ -297,7 +299,14 @@ async function main(): Promise<void> {
       agora: () => Date.now(),
       dormir: (ms) => new Promise((res) => setTimeout(res, ms)),
       fecharPorta: (ms) => fecharServidor(server, ms),
-      drenar: esperarTurnosDoDesligamento,
+      // O cofre de arquivos (contratos com CPF/salário) sai do disco EM PARALELO à drenagem, assim que a porta fecha: se a drenagem
+      // usar os 60 s e o Swarm mandar SIGKILL, os .bin já foram. Não gasta o prazo da IA.
+      drenar: async (ms) => {
+        // a limpeza respeita o mesmo prazo: disco que trava não segura o process.exit nem a contagem de turnos perdidos
+        const limpeza = Promise.race([apagarCofreDeArquivos(), new Promise((res) => setTimeout(res, ms).unref())]);
+        const [drenagem] = await Promise.all([esperarTurnosDoDesligamento(ms), limpeza]);
+        return drenagem;
+      },
     });
     const sobrou = r.restantes > 0 || r.filaRestante > 0;
     // `traceIdsPerdidos`: os traces que ficaram RUNNING com este processo (para achar no banco depois do deploy).
