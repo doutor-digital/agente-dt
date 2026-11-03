@@ -137,8 +137,11 @@ export function montarRotasDoCofre(app: Express, cofre: CofreDeArquivos, o: Opco
     const ip = ipDoCliente(req);
     const t = Date.now();
     const chave = `${ip}|${token.slice(0, 64)}`;
-    if (jaVistos.excedido(chave, t)) return;
-    jaVistos.registrar(chave, t);
+    // com muitas chaves, a deduplicação (cuja varredura é O(n)) é largada e conta direto: quem chuta tokens não ganha CPU nossa
+    if (jaVistos.tamanho < 2_000) {
+      if (jaVistos.excedido(chave, t)) return;
+      jaVistos.registrar(chave, t);
+    }
     erros.registrar(ip, t);
   };
 

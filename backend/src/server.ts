@@ -299,7 +299,12 @@ async function main(): Promise<void> {
       agora: () => Date.now(),
       dormir: (ms) => new Promise((res) => setTimeout(res, ms)),
       fecharPorta: (ms) => fecharServidor(server, ms),
-      drenar: esperarTurnosDoDesligamento,
+      // O cofre de arquivos (contratos com CPF/salário) sai do disco EM PARALELO à drenagem, assim que a porta fecha: se a drenagem
+      // usar os 60 s e o Swarm mandar SIGKILL, os .bin já foram. Não gasta o prazo da IA.
+      drenar: async (ms) => {
+        const [drenagem] = await Promise.all([esperarTurnosDoDesligamento(ms), apagarCofreDeArquivos()]);
+        return drenagem;
+      },
     });
     const sobrou = r.restantes > 0 || r.filaRestante > 0;
     // `traceIdsPerdidos`: os traces que ficaram RUNNING com este processo (para achar no banco depois do deploy).
@@ -307,10 +312,6 @@ async function main(): Promise<void> {
       { ...r, ...(sobrou ? { traceIdsPerdidos: idsEmVoo() } : {}) },
       sobrou ? 'shutdown: turnos da IA ainda pendentes, saindo mesmo assim' : 'shutdown: turnos da IA terminaram',
     );
-    // Cofre de arquivos do conector (contratos com CPF/salário): tira do disco ANTES de sair. O container antigo fica parado no Swarm
-    // (até 5 tarefas guardadas) com a pasta dele; sem isto os .bin ficariam lá, cifrados mas presentes.
-    const apagadosDoCofre = await apagarCofreDeArquivos();
-    if (apagadosDoCofre) logger.info({ apagadosDoCofre }, 'shutdown: arquivos do cofre apagados');
     // Solta o lease antes de desconectar: o container novo assume em ≤30 s.
     await encerrarSupervisorDosWorkers();
     await prisma.$disconnect();

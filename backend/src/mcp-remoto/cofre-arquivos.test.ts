@@ -197,6 +197,31 @@ test('desligamento: apagarTudo espera os arquivos saírem do disco e invalida os
   }
 });
 
+test('depois do desligamento nada novo entra: o envio que estava gravando não deixa arquivo, e reservar recusa', async () => {
+  const c = cenario();
+  try {
+    const p = c.cofre.pedirEnvio({ userId: USUARIO, finalidade: 'teste' });
+    const q = c.cofre.pedirEnvio({ userId: USUARIO, finalidade: 'teste' });
+    const r = c.cofre.reservar(p.token);
+    const gravando = c.cofre.guardar(r, 'a.pdf', PDF).catch((e) => e);
+    await c.cofre.apagarTudo();
+    const resultado = await gravando;
+    await new Promise((x) => setTimeout(x, 30));
+    assert.deepEqual(c.arquivosNoDisco(), [], 'nenhum .bin sobrou');
+    assert.ok(resultado instanceof ErroDeCofre || typeof resultado === 'object');
+    assert.equal(await codigoDe(() => c.cofre.reservar(q.token)), 'estado');
+  } finally {
+    c.limpar();
+  }
+});
+
+test('texto com número depois do ponto ("Relatorio 03.11", "notas v1.2") é nome, não extensão; __proto__ não vira extensão conhecida', () => {
+  assert.equal(validarArquivo('Relatorio 03.11', TXT, 1 << 20).nome, 'Relatorio-03.11.txt');
+  assert.equal(validarArquivo('notas v1.2', TXT, 1 << 20).nome, 'notas-v1.2.txt');
+  assert.ok(validarArquivo('x.__proto__', TXT, 1 << 20).nome.endsWith('.txt'), 'não é extensão (começa por _), mas o nome guardado termina em .txt');
+  assert.throws(() => validarArquivo('x.ps1', TXT, 1 << 20), /só são aceitos como \.txt/);
+});
+
 test('teto de espaço conta o que os envios em andamento ainda podem trazer (não passa de 200 MB em +40 MB)', async () => {
   const c = cenario({ tamanhoMaxBytes: 1024, espacoTotalMaxBytes: 3 * 1024 });
   try {
@@ -217,10 +242,10 @@ test('teto de espaço conta o que os envios em andamento ainda podem trazer (nã
 test('servidor: o desligamento apaga o cofre antes de sair e a subida limpa a pasta (fiação no código)', () => {
   const server = readFileSync(new URL('../server.ts', import.meta.url), 'utf8');
   assert.match(server, /import \{ apagarCofreDeArquivos, ligarConectorRemoto \} from '\.\/mcp-remoto\/producao\.js'/);
-  const iApagar = server.indexOf('await apagarCofreDeArquivos()');
-  assert.ok(iApagar > 0, 'shutdown chama apagarCofreDeArquivos esperando');
-  assert.ok(iApagar < server.indexOf('process.exit(0)'), 'antes de sair');
-  assert.ok(iApagar > server.indexOf('desligarComGraca('), 'depois de fechar a porta e drenar');
+  // junto da drenagem (Promise.all), dentro do desligarComGraca: roda logo que a porta fecha e é esperada antes do process.exit
+  assert.match(server, /Promise\.all\(\[esperarTurnosDoDesligamento\(ms\), apagarCofreDeArquivos\(\)\]\)/);
+  assert.ok(server.indexOf('apagarCofreDeArquivos()]') > server.indexOf('desligarComGraca('));
+  assert.ok(server.indexOf('apagarCofreDeArquivos()]') < server.indexOf('process.exit(0)'));
   const prod = readFileSync(new URL('./producao.ts', import.meta.url), 'utf8');
   assert.match(prod, /await cofre\.apagarPasta\(\)/);
   assert.ok(prod.indexOf('await cofre.apagarPasta()') < prod.indexOf('montarRotasDoCofre(app, cofre)'), 'limpa antes de abrir as rotas');

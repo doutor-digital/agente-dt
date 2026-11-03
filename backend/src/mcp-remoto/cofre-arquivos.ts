@@ -159,7 +159,7 @@ export function validarArquivo(nomeOriginal: string | undefined, conteudo: Buffe
   // só vale como extensão o que parece uma ("pdf", "docx"); "Maria J. Souza" e "v1.2" são nome, não extensão
   const depois = ponto > 0 ? ultimo.slice(ponto + 1).toLowerCase() : '';
   const ext = /^[a-z][a-z0-9]{1,4}$/.test(depois) ? depois : '';
-  const extConhecida = ext in TIPO_DA_EXTENSAO;
+  const extConhecida = Object.hasOwn(TIPO_DA_EXTENSAO, ext);
   const tipo = detectarTipo(conteudo);
   if (!tipo) {
     if (ext && !extConhecida) {
@@ -170,8 +170,9 @@ export function validarArquivo(nomeOriginal: string | undefined, conteudo: Buffe
   // Texto é o formato mais fácil de disfarçar (virus.js, run.ps1, a.bat são "texto"): só entra como .txt ou sem extensão nenhuma.
   // Aqui a extensão é lida sem a folga de cima: qualquer sufixo alfanumérico depois do último ponto conta.
   if (tipo === 'txt') {
-    const sufixo = depois && /^[a-z0-9_-]{1,10}$/.test(depois) ? depois : '';
-    if (sufixo && sufixo !== 'txt' && !(sufixo in TIPO_DA_EXTENSAO)) {
+    // começa por letra: "Relatorio 03.11" e "notas v1.2" são nome com ponto, não extensão (e o nome guardado termina em .txt de qualquer jeito)
+    const sufixo = depois && /^[a-z][a-z0-9_-]{0,9}$/.test(depois) ? depois : '';
+    if (sufixo && sufixo !== 'txt' && !Object.hasOwn(TIPO_DA_EXTENSAO, sufixo)) {
       throw new ErroDeCofre('tipo', `Arquivos de texto só são aceitos como .txt (este é .${sufixo}). Se for um documento, envie em PDF ou Word.`, 415);
     }
   }
@@ -258,6 +259,8 @@ export class CofreDeArquivos {
   /** o relógio do cofre (os testes o controlam) */
   readonly agora: () => number;
   private pronto: Promise<void> | undefined;
+  /** depois do desligamento nada novo entra */
+  private encerrado = false;
 
   constructor(private o: OpcoesDoCofre) {
     this.limites = { ...LIMITES_PADRAO, ...o.limites };
@@ -332,6 +335,7 @@ export class CofreDeArquivos {
   /** Separa o envio (uma vez só, mesmo com duas abas ao mesmo tempo). Depois: `guardar` ou `liberar`. */
   reservar(token: string): Reserva {
     this.varrerMemoria();
+    if (this.encerrado) throw new ErroDeCofre('estado', 'O sistema está sendo atualizado. Peça um novo link no Claude em um minuto.', 503);
     const e = this.envioDoToken(token);
     if (e.estado === 'enviando') throw new ErroDeCofre('ocupado', 'Já há um envio em andamento neste link.', 409);
     // o teto conta o que está guardado MAIS o que os envios em andamento ainda podem trazer (cada um até o tamanho máximo)
@@ -363,6 +367,7 @@ export class CofreDeArquivos {
     try {
       const { tipo, nome } = validarArquivo(nomeOriginal, conteudo, this.limites.tamanhoMaxBytes);
       await this.garantirPasta();
+      if (this.encerrado) throw new ErroDeCofre('estado', 'O sistema está sendo atualizado. Peça um novo link no Claude em um minuto.', 503);
       const chave = randomBytes(32);
       const iv = randomBytes(12);
       const cifra = createCipheriv('aes-256-gcm', chave, iv);
@@ -572,7 +577,7 @@ export class CofreDeArquivos {
       const caminho = path.join(this.dir, n);
       try {
         const s = await stat(caminho);
-        // arquivo que nenhum envio daqui reclama pode ser de OUTRO processo (dois containers no deploy): só sai pelo prazo
+        // rede de segurança (a subida já apagou a pasta): sobra de kill -9/OOM, arquivo que nenhum envio daqui reclama e que já passou do teto
         if (t - s.mtimeMs > this.limites.ttlDeSegurancaMs) {
           await unlink(caminho);
           orfaosApagados += 1;
@@ -595,6 +600,7 @@ export class CofreDeArquivos {
    * que sobra ali fica guardado até o Swarm limpar a tarefa). Devolve quantos arquivos apagou.
    */
   async apagarTudo(): Promise<number> {
+    this.encerrado = true; // um envio que estava gravando não cria arquivo depois da limpeza
     for (const e of this.envios.values()) this.apagarEnvio(e, 'desligamento');
     return this.apagarPasta();
   }
@@ -613,14 +619,16 @@ export class CofreDeArquivos {
     let apagados = 0;
     for (const n of nomes) {
       if (!/^[0-9a-f]{32}\.bin$/.test(n)) continue;
+      const caminho = path.join(this.dir, n);
       try {
-        await unlink(path.join(this.dir, n));
+        await unlink(caminho);
+        this.paraApagar.delete(caminho);
         apagados += 1;
       } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') this.o.log?.warn({ err }, 'cofre: não consegui apagar um arquivo da pasta');
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') this.paraApagar.delete(caminho);
+        else this.o.log?.warn({ err }, 'cofre: não consegui apagar um arquivo da pasta; a varredura tenta de novo');
       }
     }
-    this.paraApagar.clear();
     return apagados;
   }
 }
