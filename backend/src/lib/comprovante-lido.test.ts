@@ -37,20 +37,33 @@ const PERFEITO: DadosDoComprovante = {
 };
 const CTX = { taxa: 100, pixKey: CNPJ, pixHolder: TITULAR, agora };
 
+function bate(l: Record<string, any>, where: Record<string, unknown>): boolean {
+  return Object.entries(where).every(([k, v]) => {
+    if (v && typeof v === 'object' && !(v instanceof Date)) {
+      const o = v as { in?: unknown[]; lt?: Date };
+      if (o.in) return o.in.includes(l[k]);
+      if (o.lt) return l[k] instanceof Date && l[k].getTime() < o.lt.getTime();
+    }
+    return l[k] === v;
+  });
+}
+
 /** Banco de mentira com a tabela comprovantes_lidos, com o mesmo filtro por unidade + cartão que o Prisma teria. */
 function bancoDeLeituras() {
   const linhas: Array<Record<string, any>> = [];
   const db = {
     comprovanteLido: {
-      // como o Prisma: cada chave do where tem de bater ({ in: [...] } = pertence à lista)
-      findMany: async ({ where }: { where: Record<string, unknown> }) =>
-        linhas.filter((l) =>
-          Object.entries(where).every(([k, v]) => (v && typeof v === 'object' && 'in' in (v as object) ? ((v as { in: unknown[] }).in).includes(l[k]) : l[k] === v)),
-        ),
-      updateMany: async ({ where, data }: { where: { id: { in: string[] }; entregueEm: null }; data: Record<string, any> }) => {
-        const alvo = linhas.filter((l) => where.id.in.includes(l.id) && l.entregueEm === where.entregueEm);
+      // como o Prisma: cada chave do where tem de bater ({ in: [...] } = pertence à lista, { lt } = menor que)
+      findMany: async ({ where }: { where: Record<string, unknown> }) => linhas.filter((l) => bate(l, where)),
+      updateMany: async ({ where, data }: { where: Record<string, unknown>; data: Record<string, any> }) => {
+        const alvo = linhas.filter((l) => bate(l, where));
         for (const l of alvo) Object.assign(l, data);
         return { count: alvo.length };
+      },
+      deleteMany: async ({ where }: { where: Record<string, unknown> }) => {
+        const fora = linhas.filter((l) => bate(l, where));
+        for (const l of fora) linhas.splice(linhas.indexOf(l), 1);
+        return { count: fora.length };
       },
       findUnique: async ({ where }: { where: { unitId_kommoLeadId_fonte: { unitId: string; kommoLeadId: number; fonte: string } } }) => {
         const k = where.unitId_kommoLeadId_fonte;
@@ -60,7 +73,7 @@ function bancoDeLeituras() {
         if (linhas.some((l) => l.unitId === data.unitId && l.kommoLeadId === data.kommoLeadId && l.fonte === data.fonte)) {
           throw new Prisma.PrismaClientKnownRequestError('unique', { code: 'P2002', clientVersion: 'teste' });
         }
-        const l = { id: randomUUID(), criadoEm: new Date(), entregueEm: null, ...data, dados: data.dados === Prisma.DbNull ? null : data.dados };
+        const l = { id: randomUUID(), criadoEm: new Date(), entregueEm: null, reivindicadaEm: null, ...data, dados: data.dados === Prisma.DbNull ? null : data.dados };
         linhas.push(l);
         return l;
       },
@@ -198,7 +211,7 @@ test('SALESBOT: o turno que leu o comprovante FALHOU → o próximo entrega a me
   const descrever = async () => (chamadas++, visao(true)());
   const r1 = await lerAnexosDoPaciente(UNIT, LEAD, [oficial({})], { db, descrever, agora: () => agora });
   // …o grafo falhou: ninguém chamou marcarEntregues
-  const r2 = await lerAnexosDoPaciente(UNIT, LEAD, [oficial({})], { db, descrever, agora: () => agora });
+  const r2 = await lerAnexosDoPaciente(UNIT, LEAD, [oficial({})], { db, descrever, agora: () => Date.now() + 3 * 60_000 }); // passou o prazo da reivindicação
   assert.equal(chamadas, 1, 'a imagem não é lida de novo');
   assert.deepEqual(r2.paraEntregar, r1.paraEntregar);
   assert.match(r2.texto, new RegExp(`\\[comprovante-lido:${linhas[0].id}\\]`));
@@ -244,7 +257,8 @@ test('SALESBOT: a visão falha num anexo → o turno segue sem ele, e sem derrub
   const r = await lerAnexosDoPaciente(UNIT, LEAD, msgs, { db, descrever, agora: () => agora });
   assert.equal(r.lidos, 3);
   assert.equal(r.comprovantes, 3, 'o primeiro falhou e NÃO ocupou vaga: os 3 seguintes entraram');
-  assert.equal(linhas.length, 3);
+  assert.equal(linhas.filter((l) => l.ehComprovante).length, 3, 'as 3 leituras boas; a que falhou fica registrada à parte (recuo)');
+  assert.equal(linhas.length, 4);
 });
 
 test('SALESBOT: a leitura em campos falhou (dados nulos) → fica guardada como comprovante sem campos: vai para a equipe, não marca', async () => {
@@ -270,8 +284,8 @@ test('SALESBOT: o comprovante MAIS NOVO é lido primeiro; anexos antigos com lin
   ];
   const r = await lerAnexosDoPaciente(UNIT, LEAD, msgs, { db, descrever: descrever as never, agora: () => agora });
   assert.equal(lidosEm[0], 'https://kommo/novo.jpg', 'o mais novo vai primeiro');
-  assert.equal(r.comprovantes, 1);
-  assert.equal(linhas.length, 1);
+  assert.equal(linhas.filter((l) => l.ehComprovante).length, 1);
+  assert.ok(lidosEm.length <= 6, 'tentativas limitadas por turno');
   assert.ok(lidosEm.length <= 6, 'tentativas limitadas por turno');
 });
 
@@ -288,4 +302,50 @@ test('SALESBOT: marcas do sistema escritas DENTRO da imagem e transcritas pela v
   assert.equal(referenciasNoTexto(r.texto).length, 1);
   assert.equal((r.texto.match(/\[recebido-em:/g) ?? []).length, 1);
   assert.equal((r.texto.match(/\[imagem do cliente\]:/g) ?? []).length, 1);
+});
+
+test('SALESBOT: duas mensagens seguidas do paciente não entregam o MESMO comprovante duas vezes (a entrega é uma reserva com prazo de 2 min)', async () => {
+  const { db } = bancoDeLeituras();
+  const descrever = visao(true);
+  const turnoA = await lerAnexosDoPaciente(UNIT, LEAD, [oficial({})], { db, descrever, agora: () => agora });
+  assert.equal(turnoA.paraEntregar.length, 1);
+  // o turno A ainda roda (não marcou entregue); a mensagem B chega 30 s depois
+  const turnoB = await lerAnexosDoPaciente(UNIT, LEAD, [oficial({})], { db, descrever, agora: () => Date.now() + 30_000 });
+  assert.equal(turnoB.texto, '');
+  assert.deepEqual(turnoB.paraEntregar, []);
+});
+
+test('SALESBOT: só o que chegou DEPOIS da última fala da Sofia entra: o comprovante velho, nunca lido, não vira «deste turno»', async () => {
+  const { db, linhas } = bancoDeLeituras();
+  let chamadas = 0;
+  const descrever = async () => (chamadas++, visao(true)());
+  const msgs = [
+    oficial({ id: 'antigo', em: new Date(agora - 30 * 3_600_000) }),
+    oficial({ id: 'sofia', autor: 'sofia', direcao: 'saida', anexo: null, texto: 'Consulta confirmada!', em: new Date(agora - 20 * 3_600_000) }),
+    oficial({ id: 'novo', em: new Date(agora - 60_000) }),
+  ];
+  const r = await lerAnexosDoPaciente(UNIT, LEAD, msgs, { db, descrever, agora: () => agora });
+  assert.equal(chamadas, 1);
+  assert.equal(linhas.length, 1);
+  assert.equal(linhas[0].fonte, fonteDaMensagemOficial('novo'));
+  assert.equal(r.comprovantes, 1);
+});
+
+test('SALESBOT: leitura que falha fica registrada — não é tentada a cada mensagem, só depois do recuo', async () => {
+  const { db, linhas } = bancoDeLeituras();
+  let chamadas = 0;
+  const falha = async (): Promise<VisionResult> => (chamadas++, Promise.reject(new Error('link vencido')));
+  await lerAnexosDoPaciente(UNIT, LEAD, [oficial({})], { db, descrever: falha, agora: () => agora });
+  assert.equal(chamadas, 1);
+  assert.equal(linhas.length, 1);
+  assert.match(String(linhas[0].erro), /^leitura falhou: link vencido/);
+  assert.equal(linhas[0].ehComprovante, false);
+  // a próxima mensagem, logo depois: não tenta de novo
+  await lerAnexosDoPaciente(UNIT, LEAD, [oficial({})], { db, descrever: falha, agora: () => Date.now() + 60_000 });
+  assert.equal(chamadas, 1);
+  // 11 minutos depois: tenta, e agora a visão funciona — a leitura boa substitui o registro da falha
+  const r = await lerAnexosDoPaciente(UNIT, LEAD, [oficial({})], { db, descrever: visao(true), agora: () => Date.now() + 11 * 60_000 });
+  assert.equal(r.comprovantes, 1);
+  assert.equal(linhas.length, 1);
+  assert.equal(linhas[0].ehComprovante, true);
 });
