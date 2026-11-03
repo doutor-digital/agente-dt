@@ -57,7 +57,6 @@ let tarefas: Tarefa[] = [];
 let pausas: number[] = [];
 let falharPausa = false;
 let falharEtiqueta = false;
-let falharEtiquetaComEmoji = false;
 let falharTarefa = false;
 let guardadas: string[] | null = null;
 let etiquetas: Array<{ leadId: number; tag?: string; tags?: string[] }> = [];
@@ -68,7 +67,6 @@ beforeEach(() => {
   pausas = [];
   falharPausa = false;
   falharEtiqueta = false;
-  falharEtiquetaComEmoji = false;
   falharTarefa = false;
   guardadas = null;
   etiquetas = [];
@@ -78,7 +76,7 @@ beforeEach(() => {
 
 const kommo = {
   getLead: async (id: number) => ({ id, name: 'Maria 21/10/2026', responsible_user_id: 777, status_id: 1, pipeline_id: 1 }),
-  tagsDoLead: async () => guardadas ?? ['🔴 PRIORIDADE'],
+  tagsDoLead: async () => guardadas ?? ['PRIORIDADE'],
   createTask: async (t: Tarefa) => {
     if (falharTarefa) throw new Error('Kommo fora do ar');
     tarefas.push(t);
@@ -86,7 +84,6 @@ const kommo = {
   },
   addTag: async (p: { leadId: number; tag?: string; tags?: string[] }) => {
     if (falharEtiqueta) throw new Error('Kommo recusou a etiqueta');
-    if (falharEtiquetaComEmoji && /🔴/.test(p.tag ?? '')) throw new Error('Kommo recusou o emoji');
     etiquetas.push(p);
   },
   setLeadFieldFlag: async (leadId: number) => {
@@ -96,6 +93,7 @@ const kommo = {
   listLeadCustomFields: async () => ({ _embedded: { custom_fields: [] } }),
   listPipelines: async () => [],
   setLeadCustomFieldValue: async () => undefined,
+  moveStage: async () => undefined,
 } as unknown as KommoClient;
 
 const recorder = {
@@ -141,8 +139,10 @@ test('pausar_ia com sinal de alerta cria a tarefa urgente na hora, no nome do re
   assert.equal(t.leadId, 42);
   assert.match(t.text, /^ALERTA · doutor-hernia-teste · \[Contato: Maria\] LIGAR AGORA — URGENTE: paciente com sinal de alerta clínico/);
   assert.equal(t.responsibleUserId, 777);
-  // Etiqueta no cartão (Suzanne, 25/10: 0 etiquetas 🔴 PRIORIDADE nas 21 contas).
-  assert.deepEqual(etiquetas, [{ leadId: 42, tag: '🔴 PRIORIDADE' }]);
+  // Etiqueta no cartão (Suzanne, 25/10: 0 etiquetas 🔴 PRIORIDADE nas 21 contas). Sem emoji: o Kommo o tira e deixa « PRIORIDADE»
+  // (92 de 95 cartões, 26/10–03/11), e a recepção filtra por nome exato.
+  assert.deepEqual(etiquetas, [{ leadId: 42, tag: 'PRIORIDADE' }]);
+  assert.ok(marcas.has('u1|42|bandeira-vermelha'), 'a bandeira vai para o livro: segura reativação, follow-up e fechamento automático');
   assert.ok(t.completeAt >= antes && t.completeAt <= antes + 5, 'o prazo é agora');
   assert.deepEqual(pausas, [42]);
   assert.match(r, /^OK — IA pausada/);
@@ -253,16 +253,78 @@ test('a tarefa E o Telegram falharam: a pausa vale, o rastro grita e a IA não m
   assert.ok(passos.some((p) => /ALERTA: sinal de alerta SEM aviso à equipe/.test(p.title)));
 });
 
-test('o Kommo recusou o emoji na etiqueta: entra "PRIORIDADE" sem ele e o rastro registra', async () => {
-  falharEtiquetaComEmoji = true;
-  await ferramenta('pausar_ia').invoke({ leadId: 33, motivo: 'red flag', sinalDeAlerta: true });
-  assert.deepEqual(etiquetas, [{ leadId: 33, tag: 'PRIORIDADE' }]);
-  assert.ok(passos.some((p) => /a com emoji falhou/.test(p.title)));
+test('o Kommo guardou a etiqueta com outro nome: o rastro grita (ERROR) e o livro segura o cartão do mesmo jeito', async () => {
+  guardadas = [' PRIORIDADE'];
+  await ferramenta('pausar_ia').invoke({ leadId: 34, motivo: 'red flag', sinalDeAlerta: true });
+  assert.ok(passos.some((p) => /Kommo guardou a etiqueta diferente de "PRIORIDADE".* PRIORIDADE/.test(p.title)));
+  assert.ok(marcas.has('u1|34|bandeira-vermelha'), 'o livro não depende da etiqueta');
   assert.equal(tarefas.length, 1, 'a tarefa sai do mesmo jeito');
 });
 
-test('o Kommo guardou a etiqueta diferente da pedida: fica como ele devolveu e o rastro registra', async () => {
-  guardadas = ['PRIORIDADE'];
-  await ferramenta('pausar_ia').invoke({ leadId: 34, motivo: 'red flag', sinalDeAlerta: true });
-  assert.ok(passos.some((p) => /Kommo guardou a etiqueta diferente de "🔴 PRIORIDADE".*PRIORIDADE/.test(p.title)));
+test('a etiqueta guardada certa não gera ERROR no rastro', async () => {
+  await ferramenta('pausar_ia').invoke({ leadId: 35, motivo: 'red flag', sinalDeAlerta: true });
+  assert.ok(!passos.some((p) => /guardou a etiqueta diferente/.test(p.title)));
+});
+
+test('transferência comum NÃO põe o cartão no livro de bandeiras', async () => {
+  await ferramenta('pausar_ia').invoke({ leadId: 36, motivo: 'paciente pediu para falar com um atendente' });
+  assert.ok(!marcas.has('u1|36|bandeira-vermelha'));
+});
+
+test('mover_etapa e fechar_lead(lost) recusam cartão com bandeira vermelha no livro', async () => {
+  const tools = ferramentas();
+  await ferramenta('pausar_ia', undefined, tools).invoke({ leadId: 37, motivo: 'red flag', sinalDeAlerta: true });
+  guardadas = []; // o Kommo não devolve etiqueta nenhuma: só o livro segura
+  const mover = String(await ferramenta('mover_etapa', undefined, tools).invoke({ leadId: 37, statusId: 111237883 }));
+  assert.match(mover, /^RECUSADO: .*bandeira vermelha/);
+  const fechar = String(await ferramenta('fechar_lead', undefined, tools).invoke({ leadId: 37, status: 'lost' }));
+  assert.match(fechar, /^RECUSADO: .*bandeira vermelha/);
+  // lead sem bandeira e sem etiqueta: a recusa não se aplica
+  const outro = String(await ferramenta('mover_etapa', undefined, tools).invoke({ leadId: 38, statusId: 111237883 }));
+  assert.doesNotMatch(outro, /bandeira vermelha/);
+});
+
+test('mover_etapa recusa cartão com a etiqueta de bandeira (marcado antes do livro existir), mesmo sem linha no livro', async () => {
+  guardadas = ['Quente', ' PRIORIDADE'];
+  const r = String(await ferramenta('mover_etapa').invoke({ leadId: 39, statusId: 111237883 }));
+  assert.match(r, /^RECUSADO: .*bandeira vermelha/);
+});
+
+test('não gravou a bandeira no livro: o rastro grita, e a tarefa e a pausa saem do mesmo jeito', async () => {
+  const original = Object.getOwnPropertyDescriptor(prisma, 'cardAlert');
+  Object.defineProperty(prisma, 'cardAlert', {
+    value: { findUnique: async () => null, upsert: async () => { throw new Error('banco fora'); } },
+    configurable: true,
+  });
+  try {
+    await ferramenta('pausar_ia').invoke({ leadId: 40, motivo: 'red flag', sinalDeAlerta: true });
+  } finally {
+    if (original) Object.defineProperty(prisma, 'cardAlert', original);
+  }
+  assert.ok(passos.some((p) => /Não consegui gravar a bandeira vermelha/.test(p.title)));
+  assert.equal(tarefas.length, 1);
+  assert.deepEqual(pausas, [40]);
+});
+
+test('clínica fechada por 2 dias ou mais: o Telegram avisa que ninguém vai ver a tarefa, e a IA não recebe ordem de prometer retorno', async () => {
+  // agenda só em um dia da semana que está a 3 dias: a clínica está fechada até lá, a qualquer hora de hoje
+  const diaAberto = (new Date().getDay() + 3) % 7;
+  const unit = unidade({ spineEnabled: true, spineAgendaDays: [diaAberto], spineAgendaStart: '08:00', spineAgendaEnd: '18:00' } as Partial<Unit>);
+  const enviados: string[] = [];
+  const fetchOriginal = globalThis.fetch;
+  process.env.TELEGRAM_BOT_TOKEN = '123456:teste-fake';
+  globalThis.fetch = (async (_url: unknown, init?: { body?: string }) => {
+    enviados.push(String(init?.body ?? ''));
+    return new Response('{"ok":true}', { status: 200 });
+  }) as typeof fetch;
+  try {
+    const r = String(await ferramenta('pausar_ia', unit).invoke({ leadId: 50, motivo: 'não segura o xixi', sinalDeAlerta: true }));
+    assert.match(r, /FECHADA e só reabre/);
+    assert.match(r, /NÃO diga que a equipe "retorna"/);
+    assert.equal(enviados.length, 1);
+    assert.match(decodeURIComponent(enviados[0]), /CLÍNICA FECHADA até/);
+  } finally {
+    globalThis.fetch = fetchOriginal;
+    delete process.env.TELEGRAM_BOT_TOKEN;
+  }
 });

@@ -276,8 +276,8 @@ test('Telegram do João diz LIGAR AGORA e leva o link do cartão', () => {
   assert.match(t, /https:\/\/dholimpia\.kommo\.com\/leads\/detail\/5878155/);
 });
 
-test('a etiqueta é a que a Suzanne confere', () => {
-  assert.equal(ETIQUETA_PRIORIDADE, '🔴 PRIORIDADE');
+test('a etiqueta gravada no Kommo não leva emoji nem espaço: o Kommo tira o 🔴 e deixa « PRIORIDADE» (92 de 95 cartões)', () => {
+  assert.equal(ETIQUETA_PRIORIDADE, 'PRIORIDADE');
 });
 
 // ── A rede de segurança em código ───────────────────────────────────────────────────────────────────────
@@ -399,14 +399,34 @@ test('chamadasDoTurno junta cada chamada ao resultado da ferramenta; a fala inte
 });
 
 test('a frase do passe não promete prazo, não diagnostica e não sugere pronto-socorro', () => {
-  for (const r of [{ tipo: 'aberta' as const }, { tipo: 'fechada' as const, quando: 'amanhã (terça-feira) às 8h', hoje: false }, { tipo: 'desconhecido' as const }]) {
+  for (const r of [{ tipo: 'aberta' as const }, { tipo: 'fechada' as const, quando: 'hoje às 14h', hoje: true }, { tipo: 'desconhecido' as const }]) {
     const f = fraseDoPasse(r, false);
     assert.doesNotMatch(f, /pronto|UPA|hospital|instante|já já|logo|minutos/i);
     assert.match(f, /avisei a nossa equipe/);
   }
-  assert.match(fraseDoPasse({ tipo: 'fechada', quando: 'amanhã (terça-feira) às 8h', hoje: false }, false), /amanhã \(terça-feira\) às 8h/);
+  assert.match(fraseDoPasse({ tipo: 'fechada', quando: 'hoje às 14h', hoje: true }, false), /hoje às 14h/);
   // O paciente falou em pronto-socorro: não desaconselha.
   assert.match(fraseDoPasse({ tipo: 'aberta' }, true), /se você sentir que não dá para esperar, pode ir/i);
+});
+
+test('clínica fechada até outro dia (feriado, fim de semana): a frase do passe NÃO promete que a equipe responde — diz o fato (Mossoró, 30/10)', () => {
+  const r = { tipo: 'fechada' as const, quando: 'terça-feira, 03/11, às 7h30', hoje: false, dias: 4 };
+  const f = fraseDoPasse(r, false);
+  assert.match(f, /reabre terça-feira, 03\/11, às 7h30/);
+  assert.match(f, /registrado com prioridade/);
+  assert.match(f, /se você sentir que não dá para esperar, pode procurar atendimento antes/i);
+  assert.doesNotMatch(f, /te responde|continua|retorna|te chama|pronto|UPA|hospital|instante|já já|logo|minutos/i);
+  // a noite comum (reabre amanhã) segue com a promessa que se cumpre
+  assert.match(fraseDoPasse({ tipo: 'fechada', quando: 'amanhã (quarta-feira) às 8h', hoje: false, dias: 1 }, false), /avisei a nossa equipe, com prioridade, e ela te responde por aqui amanhã/);
+});
+
+test('o aviso no Telegram diz quando a clínica está fechada: ninguém vai ver a tarefa', () => {
+  const base = { unidade: 'Mossoró', subdominio: 'dhm', leadId: 6153423, nome: 'Ivanildo', motivo: 'dificuldade para segurar o xixi' };
+  assert.doesNotMatch(textoTelegramSinalDeAlerta(base), /FECHADA/);
+  const t = textoTelegramSinalDeAlerta({ ...base, fechadaAte: 'terça-feira, 03/11, às 7h30' });
+  assert.match(t, /CLÍNICA FECHADA até terça-feira, 03\/11, às 7h30/);
+  assert.match(t, /Alguém precisa ligar para o paciente/);
+  assert.match(t, /kommo\.com\/leads\/detail\/6153423/);
 });
 
 test('sinal neurológico (ITZ #28642041: "tive um AVC, tremendo o braço, a boca treme") entra no mesmo fluxo', () => {

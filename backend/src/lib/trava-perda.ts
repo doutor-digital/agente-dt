@@ -25,6 +25,7 @@ import { pagouOAntecipado } from './follow-up-worker.js';
 import { CAMPOS_SYNC } from './franquia-sync.js';
 import { epochDoValor, valorDoCampo, type CampoDoCartao } from './ponte-fila.js';
 import { qualificacaoDoCartao } from './ponte-painel.js';
+import { cartaoComBandeira } from './bandeira-vermelha.js';
 
 /** O que o cartão precisa mostrar: os campos e as etiquetas, como o Kommo devolve. */
 export interface CartaoParaTrava {
@@ -32,7 +33,7 @@ export interface CartaoParaTrava {
   _embedded?: { tags?: ReadonlyArray<{ name?: string | null }> | null } | null;
 }
 
-export type MotivoDaTrava = 'consulta futura no cartão' | 'pagou o antecipado' | 'pagou e desmarcou' | 'Quente' | 'Morno';
+export type MotivoDaTrava = 'bandeira vermelha' | 'consulta futura no cartão' | 'pagou o antecipado' | 'pagou e desmarcou' | 'Quente' | 'Morno';
 
 export interface TravaDaPerda {
   motivo: MotivoDaTrava;
@@ -105,6 +106,9 @@ function temperatura(c: CartaoParaTrava): 'Quente' | 'Morno' | null {
  * `pagouVenceu`: a tarefa de «pagou e desmarcou» existe há 7 dias — o pagamento não segura mais (Quente/Morno ainda seguram).
  */
 export function travaDaPerdaAutomatica(cartao: CartaoParaTrava, agoraEpoch: number, opcoes: { semTemperatura?: boolean; semConsulta?: boolean; pagouVenceu?: boolean } = {}): TravaDaPerda | null {
+  // Bandeira vermelha (sinal de alerta clínico) é a primeira: nenhuma outra opção a solta — nem `semConsulta`, nem `pagouVenceu`,
+  // nem `semTemperatura`. Risco clínico precisa de gente, não de robô (03/11/2026, `bandeira-vermelha.ts`).
+  if (cartaoComBandeira(cartao)) return { motivo: 'bandeira vermelha' };
   if (!opcoes.semConsulta && comConsultaFutura(cartao, agoraEpoch)) return { motivo: 'consulta futura no cartão' };
   if (!opcoes.pagouVenceu && pagou(cartao)) return { motivo: pagouEDesmarcou(cartao, agoraEpoch) ? 'pagou e desmarcou' : 'pagou o antecipado' };
   if (opcoes.semTemperatura) return null;
@@ -141,6 +145,8 @@ export interface OpcoesDaDecisaoDaSofia {
   agoraEpoch?: number;
   pipelineDestino?: number;
   consultaNaFranquia?: ConsultaNaFranquia;
+  /** o livro de bandeiras (`bandeira-vermelha.ts`) diz que este lead tem sinal de alerta — vale mesmo se a etiqueta não está no cartão */
+  bandeiraNoLivro?: boolean;
   /** o que o paciente escreveu desde a última resposta nossa. Sem isto, Quente/Morno não são decididos pela fala (só o cartão). */
   ultimasFalas?: () => Promise<string[]>;
 }
@@ -182,7 +188,8 @@ export async function decidirFechamentoDaSofia(
       logger.warn({ err: String(err), leadId }, 'trava-perda: não li os funis — tratei o 143 como PERDIDO');
     }
   }
-  let trava = travaDaPerdaAutomatica(cartao, agoraEpoch, { semTemperatura: true });
+  const travaDaBandeira: TravaDaPerda = { motivo: 'bandeira vermelha' };
+  let trava = opcoes.bandeiraNoLivro ? travaDaBandeira : travaDaPerdaAutomatica(cartao, agoraEpoch, { semTemperatura: true });
   if (trava?.motivo === 'consulta futura no cartão' && opcoes.consultaNaFranquia) {
     try {
       const f = await opcoes.consultaNaFranquia();
@@ -193,6 +200,15 @@ export async function decidirFechamentoDaSofia(
     } catch (err) {
       logger.warn({ err: String(err), leadId }, 'trava-perda: a franquia não respondeu — segurei pela consulta do cartão');
     }
+  }
+  if (trava?.motivo === 'bandeira vermelha') {
+    return recusa({
+      motivo: trava.motivo,
+      avisarEquipe: true,
+      responsavelId: cartao.responsible_user_id,
+      textoDaTarefa: 'A Sofia ia fechar este lead como PERDIDO, mas o cartão está com a BANDEIRA VERMELHA (sinal de alerta clínico). Não foi fechado. Ligue para o paciente: só a equipe encerra este cartão, depois de falar com ele.',
+      texto: 'o cartão está com bandeira vermelha (sinal de alerta clínico) — a Sofia nunca fecha esse lead como perdido. Deixe o cartão onde está; a equipe cuida.',
+    });
   }
   if (trava) {
     return recusa({

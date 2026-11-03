@@ -9,6 +9,7 @@ import { carimbarContato } from '../services/lead-memory.service.js';
 import { carimbarSemResposta } from '../services/lead-metrics.service.js';
 import { automacaoLigada } from './automacoes-estado.js';
 import { leadPausadoPorJanela } from './pausa-lead.js';
+import { foraDasBandeiras, leadsComBandeira } from './bandeira-vermelha.js';
 import { enviosDeRetomadaRecentes, limiteDoDiaAtingido, LIMITE_COBRANCAS_POR_DIA, marcaDoDegrau } from './cobrancas-do-dia.js';
 import { fusoDaUnidade } from './fuso.js';
 import { unidadeSemAntecipado, type FlagsDePagamento } from '../agent/pagamento-da-unidade.js';
@@ -276,6 +277,56 @@ export function dentroDoHorario(
   return minutos >= abre && minutos < fecha;
 }
 
+/**
+ * As conversas que o follow-up olha nesta varredura. Bandeira vermelha (sinal de alerta) NUNCA recebe a escada de venda:
+ * filtrada no banco, para não ocupar vaga das 60. (Seis leads parados por sinal de alerta receberam 16 toques de venda entre
+ * 26/10 e 03/11.)
+ */
+export async function candidatasDoFollowUp(unit: { id: string }, agora: Date = new Date()) {
+  const comBandeira = await leadsComBandeira(unit.id, agora);
+  if (comBandeira === null) return []; // não sei quem tem bandeira: não mando venda a ninguém agora
+  return prisma.conversation.findMany({
+    where: {
+      unitId: unit.id,
+      followUpStoppedReason: null,
+      ...foraDasBandeiras(comBandeira),
+      // Conversa CONVERTIDA continua na fila de proposito.
+      //
+      // Converter aqui quer dizer "marcou a consulta", e era o que tirava o
+      // lead da fila: o motor nasceu para perseguir quem nao marcou. So que
+      // marcar nao e a linha de chegada -- pagar e. O lead 25277743 marcou as
+      // 08:57, foi carimbado como convertido 9 segundos depois, e por isso
+      // nao recebeu nenhum dos toques entre marcar e pagar.
+      //
+      // Quem controla o que sai daqui passa a ser a REGRA DA ETAPA (quem nao
+      // tem regra e ignorado logo abaixo) e a trava de pagamento do degrau.
+      // Medido antes de mudar: 7 conversas convertidas na janela de 23h da
+      // rede inteira entram por esta porta.
+
+      // Fora da janela de 24h do WhatsApp nao ha o que enviar, entao essas
+      // conversas nao podem ocupar vaga na fila. Sem este filtro o motor
+      // gastava as 60 vagas em conversas de dez dias atras — presas ali
+      // porque estao em etapas sem regra, e por isso nunca marcadas como
+      // encerradas — e as recentes, que dava para salvar, nunca chegavam a
+      // ser olhadas. Medido na Parauapebas: as 60 primeiras eram de 18 a 21
+      // de agosto, e so 32 das 304 estavam dentro da janela.
+      lastMessageAt: { gt: inicioDaJanela(agora) },
+    },
+    orderBy: { lastMessageAt: 'asc' },
+    take: 60,
+    // A última fala do paciente vem junto para sabermos se ele pediu tempo ("vou falar com
+    // meu marido e te aviso"). Quem pede tempo não pode tomar o degrau de 5 minutos.
+    include: {
+      messages: {
+        where: { role: 'user' },
+        orderBy: { createdAt: 'desc' },
+        take: 1,
+        select: { meta: true },
+      },
+    },
+  });
+}
+
 async function varrer(): Promise<void> {
   if (rodando) return;
   rodando = true;
@@ -291,45 +342,7 @@ async function varrer(): Promise<void> {
 
       const etapas = await etapasDosLeads(unit);
 
-      const candidatas = await prisma.conversation.findMany({
-        where: {
-          unitId: unit.id,
-          followUpStoppedReason: null,
-          // Conversa CONVERTIDA continua na fila de proposito.
-          //
-          // Converter aqui quer dizer "marcou a consulta", e era o que tirava o
-          // lead da fila: o motor nasceu para perseguir quem nao marcou. So que
-          // marcar nao e a linha de chegada -- pagar e. O lead 25277743 marcou as
-          // 08:57, foi carimbado como convertido 9 segundos depois, e por isso
-          // nao recebeu nenhum dos toques entre marcar e pagar.
-          //
-          // Quem controla o que sai daqui passa a ser a REGRA DA ETAPA (quem nao
-          // tem regra e ignorado logo abaixo) e a trava de pagamento do degrau.
-          // Medido antes de mudar: 7 conversas convertidas na janela de 23h da
-          // rede inteira entram por esta porta.
-
-          // Fora da janela de 24h do WhatsApp nao ha o que enviar, entao essas
-          // conversas nao podem ocupar vaga na fila. Sem este filtro o motor
-          // gastava as 60 vagas em conversas de dez dias atras — presas ali
-          // porque estao em etapas sem regra, e por isso nunca marcadas como
-          // encerradas — e as recentes, que dava para salvar, nunca chegavam a
-          // ser olhadas. Medido na Parauapebas: as 60 primeiras eram de 18 a 21
-          // de agosto, e so 32 das 304 estavam dentro da janela.
-          lastMessageAt: { gt: inicioDaJanela() },
-        },
-        orderBy: { lastMessageAt: 'asc' },
-        take: 60,
-        // A última fala do paciente vem junto para sabermos se ele pediu tempo ("vou falar com
-        // meu marido e te aviso"). Quem pede tempo não pode tomar o degrau de 5 minutos.
-        include: {
-          messages: {
-            where: { role: 'user' },
-            orderBy: { createdAt: 'desc' },
-            take: 1,
-            select: { meta: true },
-          },
-        },
-      });
+      const candidatas = await candidatasDoFollowUp(unit);
 
       for (const conv of candidatas) {
         const estado = etapas.get(Number(conv.leadId));

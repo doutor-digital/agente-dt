@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { ETAPA } from './franquia-move.js';
-import { fecharComoPerdido, fecharOuSegurar, varrerEstoques, seguradoPelaTrava, segurarNoSeco } from './parados-worker.js';
+import { fecharComoPerdido, fecharOuSegurar, moverParaEspera, varrerEstoques, seguradoPelaTrava, segurarNoSeco } from './parados-worker.js';
 import { aplicarMovimento, temConsultaFutura, type ResumoSync } from './franquia-sync-worker.js';
 import { SPINE_STATUS } from '../services/spine.service.js';
 import { recarregarAutomacoes } from './automacoes-estado.js';
@@ -19,9 +19,10 @@ import type { KommoClient, KommoLead } from '../services/kommo.service.js';
 import type { DecisaoParado } from './parados.js';
 
 // ── banco falso: o que o "só no papel" registra e a marca de "robô pôs em PERDIDO" ──
+let bandeiraNoLivro = false;
 const registradas: Array<{ kommoLeadId: number; acao: string; alvo: string }> = [];
 Object.defineProperty(prisma, 'cardAlert', {
-  value: { findMany: async () => [], upsert: async () => ({}) },
+  value: { findMany: async () => [], upsert: async () => ({}), findUnique: async () => (bandeiraNoLivro ? { createdAt: new Date() } : null) },
   configurable: true,
 });
 let automacoesGravadas: Array<{ automacao: string; estado: string; unit: { slug: string } }> = [];
@@ -370,4 +371,87 @@ test('Sofia: consulta no cartão mas a franquia JÁ cancelou → pode fechar; fr
   const pagoComSobra = leadDe(71, { campos: [campo('◷ Data da Consulta', AGORA + 2 * DIA, 5), campo('✓ Consulta pg antecipado', 'Sim', 3)] });
   const r = await recusaDaPerdaDaSofia(kommoDaSofia([pagoComSobra]), 71, { agoraEpoch: AGORA, consultaNaFranquia: franquia({ conhecido: true, consultaFutura: false }) });
   assert.equal(r?.motivo, 'pagou o antecipado');
+});
+
+// ── Bandeira vermelha (03/11/2026): sinal de alerta clínico não vai a PERDIDO por robô nenhum ──
+test('bandeira vermelha trava antes de tudo e nenhuma opção a solta (nem semConsulta, nem pagouVenceu, nem semTemperatura)', () => {
+  for (const tags of [[' PRIORIDADE'], ['Alerta · Bandeira vermelha'], ['Frio', 'PRIORIDADE']]) {
+    const c = cartaoDe({ tags });
+    assert.deepEqual(travaDaPerdaAutomatica(c, AGORA), { motivo: 'bandeira vermelha' }, tags.join('|'));
+    assert.deepEqual(travaDaPerdaAutomatica(c, AGORA, { semConsulta: true, pagouVenceu: true, semTemperatura: true }), { motivo: 'bandeira vermelha' });
+  }
+  // com consulta futura E bandeira, o motivo que vale é a bandeira (a consulta pode cair; a bandeira só a equipe tira)
+  assert.equal(travaDaPerdaAutomatica(cartaoDe({ tags: ['PRIORIDADE'], campos: [campo('◷ Data da Consulta', AGORA + 2 * DIA, 5)] }), AGORA)?.motivo, 'bandeira vermelha');
+});
+
+test('Sofia: fechar como perdido cartão com bandeira vermelha é recusado e abre tarefa para a equipe ligar', async () => {
+  const kommo = kommoDaSofia([leadDe(70, { tags: [' PRIORIDADE'] })]);
+  const r = await recusaDaPerdaDaSofia(kommo, 70, { agoraEpoch: AGORA });
+  assert.equal(r?.motivo, 'bandeira vermelha');
+  assert.equal(r?.avisarEquipe, true);
+  assert.match(r?.texto ?? '', /bandeira vermelha/);
+  assert.match(r?.textoDaTarefa ?? '', /BANDEIRA VERMELHA/);
+});
+
+test('robôs (parados, franquia-move): PERDIDO de cartão com bandeira vermelha fica «travado»', async () => {
+  const unit = unidade();
+  const leads = [leadDe(80, { tags: ['Alerta · Bandeira vermelha'] }), leadDe(81)];
+  const kommo = kommoFalso(leads, []);
+  assert.equal(await fecharOuSegurar(unit, kommo, funis, 80, ETAPA.ESPERA, decisao, false), 'travado');
+  assert.equal(await fecharOuSegurar(unit, kommo, funis, 81, ETAPA.ESPERA, decisao, false), 'fechou');
+});
+
+test('bandeira vermelha só no LIVRO (a etiqueta falhou ao ser posta): o robô também não manda a PERDIDO', async () => {
+  const unit = unidade();
+  const kommo = kommoFalso([leadDe(90)], []);
+  bandeiraNoLivro = true;
+  try {
+    assert.equal(await fecharOuSegurar(unit, kommo, funis, 90, ETAPA.ESPERA, decisao, false), 'travado');
+  } finally {
+    bandeiraNoLivro = false;
+  }
+  assert.equal(await fecharOuSegurar(unit, kommo, funis, 90, ETAPA.ESPERA, decisao, false), 'fechou');
+});
+
+test('parados: EM ESPERA por prazo também não leva cartão com bandeira vermelha (etiqueta no cartão ou livro)', async () => {
+  const unit = unidade();
+  const movidos: number[] = [];
+  const kommo = {
+    ...kommoFalso([leadDe(100, { tags: [' PRIORIDADE'] }), leadDe(101), leadDe(102)], []),
+    moveStage: async ({ leadId }: { leadId: number }) => void movidos.push(leadId),
+  } as unknown as KommoClient;
+  const espera = { para: 'EM ESPERA', regra: 'teste', dias: 7 } as DecisaoParado;
+  assert.equal(await moverParaEspera(unit, kommo, funis, 100, ETAPA.ESPERA, espera, false), false, 'etiqueta no cartão');
+  bandeiraNoLivro = true;
+  try {
+    assert.equal(await moverParaEspera(unit, kommo, funis, 101, ETAPA.ESPERA, espera, false), false, 'só no livro');
+  } finally {
+    bandeiraNoLivro = false;
+  }
+  assert.deepEqual(movidos, []);
+  assert.equal(await moverParaEspera(unit, kommo, funis, 102, ETAPA.ESPERA, espera, false), true, 'o neutro move');
+  assert.deepEqual(movidos, [102]);
+});
+
+test('Sofia: bandeira só no LIVRO também é recusada, com a tarefa para a equipe (cartão sem a etiqueta)', async () => {
+  const kommo = kommoDaSofia([leadDe(110)]);
+  const r = await recusaDaPerdaDaSofia(kommo, 110, { agoraEpoch: AGORA, bandeiraNoLivro: true });
+  assert.equal(r?.motivo, 'bandeira vermelha');
+  assert.equal(r?.avisarEquipe, true);
+  assert.equal(await recusaDaPerdaDaSofia(kommo, 110, { agoraEpoch: AGORA }), null, 'sem a bandeira o neutro passa');
+});
+
+test('parados em modo seco: EM ESPERA de lead com bandeira no livro vira «pularia», não «moveria»', async () => {
+  const unit = unidade();
+  const kommo = kommoFalso([leadDe(111)], []);
+  const espera = { para: 'EM ESPERA', regra: 'teste', dias: 7 } as DecisaoParado;
+  bandeiraNoLivro = true;
+  try {
+    assert.equal(await moverParaEspera(unit, kommo, funis, 111, ETAPA.ESPERA, espera, true), false);
+  } finally {
+    bandeiraNoLivro = false;
+  }
+  assert.deepEqual(registradas.map((r) => `${r.kommoLeadId}:${r.acao}`), ['111:pularia']);
+  await moverParaEspera(unit, kommo, funis, 111, ETAPA.ESPERA, espera, true);
+  assert.deepEqual(registradas.map((r) => `${r.kommoLeadId}:${r.acao}`), ['111:pularia', '111:moveria']);
 });

@@ -25,20 +25,20 @@ import { gravarNomeConfirmadoNoContato } from '../lib/nome-no-contato.js';
 import { recusaDoFunilTratamento, type DestinoDaSofia } from '../lib/guarda-funil-tratamento.js';
 import { decidirFechamentoDaSofia } from '../lib/trava-perda.js';
 import { RETOMAR_EM_DIAS, etiquetarNaoContatar, falasDoUltimoTurno, levarParaEsperaComRetomada } from '../lib/sofia-fecha-quente-morno.js';
-import { orientacaoAoTransferir, retornoDaEquipe, type RetornoDaEquipe } from '../lib/retorno-da-equipe.js';
+import { orientacaoAoTransferir, retornoDaEquipe, semEquipeAteOutroDia, type RetornoDaEquipe } from '../lib/retorno-da-equipe.js';
 import { enviarTelegram } from '../lib/telegram.js';
 import {
   CHAVE_DO_AVISO,
   comLigarAgora,
   ehHandoffPorSinalDeAlerta,
   ETIQUETA_PRIORIDADE,
-  ETIQUETA_PRIORIDADE_SEM_EMOJI,
   ehTarefaDeSinal,
   SEM_AVISO_NA_PAUSA,
   textoDoAvisoUrgente,
   textoTelegramSinalDeAlerta,
 } from './sinal-de-alerta.js';
 import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
+import { ehEtiquetaDeBandeira, registrarBandeira, temBandeira } from '../lib/bandeira-vermelha.js';
 
 /** No Kommo, 142 e 143 existem em TODO funil: ganho e perdido. */
 const STATUS_GANHO = 142;
@@ -182,8 +182,18 @@ export function buildTools({
   ): Promise<{ tarefa: 'criada' | 'repetida' | 'falhou'; telegram: Promise<boolean> }> => {
     if (!unit) return { tarefa: 'falhou', telegram: Promise.resolve(false) };
     const chave = CHAVE_DO_AVISO.transferiu;
+    // A bandeira vai para o LIVRO primeiro e sempre: é ela que segura reativação, follow-up e fechamento automático, e vale
+    // mesmo se o Kommo falhar logo abaixo (`bandeira-vermelha.ts`). Nunca lança.
+    if (!(await registrarBandeira(unit.id, leadId))) {
+      await recorder.step({
+        kind: 'ERROR',
+        title: `🚨 Não consegui gravar a bandeira vermelha do lead ${leadId} no livro — reativação e follow-up não vão enxergar este cartão`,
+        payload: { leadId, motivo },
+      });
+    }
     // A etiqueta vai SEMPRE, antes da trava de 24 h: é idempotente e é o que a recepção filtra no Kommo — se
     // alguém a tirou ou a primeira tentativa falhou, o segundo alerta tem de recolocar. Nunca lança.
+    // O nome é o que o Kommo guarda sem mexer (`ETIQUETA_PRIORIDADE`): com emoji ele tirava o 🔴 e deixava « PRIORIDADE».
     try {
       await kommo.addTag({ leadId, tag: ETIQUETA_PRIORIDADE });
       await recorder.step({
@@ -191,8 +201,7 @@ export function buildTools({
         title: `Etiqueta "${ETIQUETA_PRIORIDADE}" aplicada no lead ${leadId} (sinal de alerta)`,
         payload: { leadId, tag: ETIQUETA_PRIORIDADE },
       });
-      // O emoji na etiqueta nunca foi provado pela API (nenhuma das 6.424 etiquetas das 18 contas tem um assim): confere
-      // o que o Kommo GUARDOU. Se ele tirou ou mudou o emoji, a etiqueta fica como ele devolveu e o rastro registra.
+      // Confere o que o Kommo GUARDOU: se mudar o nome de novo, o rastro grita (a recepção filtra por nome exato).
       try {
         const guardadas = await kommo.tagsDoLead(leadId);
         if (!guardadas.includes(ETIQUETA_PRIORIDADE)) {
@@ -211,21 +220,6 @@ export function buildTools({
         title: `Falha ao aplicar a etiqueta "${ETIQUETA_PRIORIDADE}" no lead ${leadId}: ${err instanceof Error ? err.message : String(err)}`,
         payload: { leadId, motivo },
       });
-      // O Kommo pode recusar o emoji: tenta o nome sem ele, para o cartão sair marcado do mesmo jeito.
-      try {
-        await kommo.addTag({ leadId, tag: ETIQUETA_PRIORIDADE_SEM_EMOJI });
-        await recorder.step({
-          kind: 'KOMMO_ACTION',
-          title: `Etiqueta "${ETIQUETA_PRIORIDADE_SEM_EMOJI}" aplicada no lead ${leadId} (a com emoji falhou)`,
-          payload: { leadId, tag: ETIQUETA_PRIORIDADE_SEM_EMOJI },
-        });
-      } catch (err2) {
-        await recorder.step({
-          kind: 'ERROR',
-          title: `A etiqueta sem emoji também falhou no lead ${leadId}: ${err2 instanceof Error ? err2.message : String(err2)}`,
-          payload: { leadId },
-        });
-      }
     }
     // Uma tarefa por cartão a cada 24 h: a reativação pode transferir de novo — a equipe já sabe.
     if (await avisoRecente(unit.id, leadId, chave)) {
@@ -260,8 +254,16 @@ export function buildTools({
     // resultado no rastro: se não chegou, quem olhar o trace sabe que o João não foi avisado.
     // `pausar_ia` espera este resultado DEPOIS da pausa: se a tarefa e o Telegram falharem, ninguém foi avisado e o
     // paciente não pode ouvir "avisei a equipe".
+    const folga = retornoDaEquipe(unit);
     const telegram = enviarTelegram(
-      textoTelegramSinalDeAlerta({ unidade: unit.name, subdominio: unit.kommoSubdomain, leadId, nome, motivo }),
+      textoTelegramSinalDeAlerta({
+        unidade: unit.name,
+        subdominio: unit.kommoSubdomain,
+        leadId,
+        nome,
+        motivo,
+        fechadaAte: semEquipeAteOutroDia(folga) ? folga.quando : null,
+      }),
     )
       .catch(() => false)
       .then(async (chegou) => {
@@ -420,6 +422,8 @@ export function buildTools({
   const recusarPerdaTravada = async (leadId: number, pipelineDestino?: number): Promise<string | null> => {
     const decisao = await decidirFechamentoDaSofia(kommo, leadId, {
       pipelineDestino,
+      // bandeira no livro (a etiqueta pode ter falhado): a recusa sai com a tarefa para a equipe ligar
+      bandeiraNoLivro: unit ? await temBandeira(unit.id, leadId) : false,
       consultaNaFranquia: unit
         ? async () => {
             // só pelo vínculo gravado (spineLeadLink): achar por telefone/nome pode cair no familiar e soltar a trava pela consulta dele
@@ -509,6 +513,16 @@ export function buildTools({
         title: `Decisão: mover lead ${leadId} para etapa ${statusId}`,
         payload: { leadId, statusId, pipelineId },
       });
+
+      // 03/11: cartão com bandeira vermelha (sinal de alerta: no livro OU com a etiqueta no cartão) só a equipe move — nem EM ESPERA, nem outra etapa
+      if (unit && ((await temBandeira(unit.id, leadId)) || (await kommo.tagsDoLead(leadId).then((t) => t.some(ehEtiquetaDeBandeira)).catch(() => false)))) {
+        await recorder.step({
+          kind: 'TOOL_RESULT',
+          title: 'Recusado: o cartão está com bandeira vermelha (sinal de alerta) — só a equipe muda a etapa',
+          payload: { leadId, statusId, pipelineId },
+        });
+        return 'RECUSADO: o cartão está com bandeira vermelha (sinal de alerta clínico) — só a equipe muda a etapa dele. Deixe onde está.';
+      }
 
       // 16/10: a Sofia não tira o cartão do funil TRATAMENTO (chave casamento-jornada)
       const recusa = await recusarSaidaDoTratamento(leadId, { tipo: 'etapa', statusId, pipelineId });

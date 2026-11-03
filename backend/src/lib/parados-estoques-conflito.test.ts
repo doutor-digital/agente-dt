@@ -40,6 +40,7 @@ Object.defineProperty(prisma, 'cardAlert', {
         .filter((m) => w.unitId.in.includes(m.unitId) && m.ruleKey.startsWith(w.ruleKey.startsWith) && (!w.leadId || m.leadId === w.leadId))
         .map((m) => ({ leadId: m.leadId }));
     },
+    findUnique: async () => null, // livro de bandeiras vermelhas (`bandeira-vermelha.ts`): nenhum aqui
     upsert: async () => ({}), // "o robô pôs em PERDIDO" (anotarRoboPos), no modo ligado
   },
   configurable: true,

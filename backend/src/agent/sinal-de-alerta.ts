@@ -1,6 +1,6 @@
 import type { Unit } from '@prisma/client';
 import type { BaseMessage } from '@langchain/core/messages';
-import { quandoAEquipeResponde, type RetornoDaEquipe } from '../lib/retorno-da-equipe.js';
+import { quandoAEquipeResponde, semEquipeAteOutroDia, type RetornoDaEquipe } from '../lib/retorno-da-equipe.js';
 
 /**
  * Sinal de alerta clínico: acolher em UMA frase, PARAR a IA e passar NA HORA para a equipe ligar.
@@ -18,10 +18,15 @@ import { quandoAEquipeResponde, type RetornoDaEquipe } from '../lib/retorno-da-e
  *    ("sem horário hoje + dor insuportável").
  */
 
-/** Etiqueta que o cartão ganha quando a IA para por sinal de alerta (nome exato pedido pela Suzanne, 25/10). */
-export const ETIQUETA_PRIORIDADE = '🔴 PRIORIDADE';
-/** Plano B se o Kommo recusar o emoji (nunca provado: ver `avisarSinalDeAlerta`). */
-export const ETIQUETA_PRIORIDADE_SEM_EMOJI = 'PRIORIDADE';
+/**
+ * A etiqueta que o cartão ganha quando a IA para por sinal de alerta. A Suzanne pediu «🔴 PRIORIDADE» (25/10), mas a API do
+ * Kommo aceita o emoji sem reclamar e TIRA ele, deixando um espaço na frente: medido em produção (26/10 a 03/11), 92 dos 95
+ * cartões que pararam por sinal de alerta ficaram com « PRIORIDADE» — nenhum com «🔴 PRIORIDADE». O plano B antigo só valia se
+ * o Kommo RECUSASSE o emoji; ele nunca recusou, só mutilou. A recepção filtra por nome exato, então o nome tem de ser o que o
+ * Kommo guarda sem mexer: sem emoji, sem espaço. (As etiquetas « PRIORIDADE» já gravadas se renomeiam na tela de etiquetas
+ * do Kommo, uma vez por conta; o prompt e os textos para gente seguem dizendo «🔴 PRIORIDADE».)
+ */
+export const ETIQUETA_PRIORIDADE = 'PRIORIDADE';
 
 /** Motivo de `pausar_ia` que é sinal de alerta — rede de segurança para quando o modelo esquece a flag. */
 export const MOTIVO_SINAL_DE_ALERTA = new RegExp(
@@ -251,12 +256,15 @@ export function textoTelegramSinalDeAlerta(a: {
   leadId: number;
   nome: string | null;
   motivo: string;
+  /** a clínica só reabre neste dia/hora («terça-feira, 03/11, às 7h30»): ninguém lá vai ver o cartão antes */
+  fechadaAte?: string | null;
 }): string {
   const quem = a.nome?.trim() || `lead ${a.leadId}`;
   const link = a.subdominio ? `https://${a.subdominio}.kommo.com/leads/detail/${a.leadId}` : `lead ${a.leadId}`;
   return [
     `🚑 Sinal de alerta · ${a.unidade} · LIGAR AGORA`,
     `${quem} — ${a.motivo.trim().slice(0, 200)}. A IA parou e passou para a equipe.`,
+    ...(a.fechadaAte ? [`⚠️ CLÍNICA FECHADA até ${a.fechadaAte}: a tarefa no Kommo ninguém vai ver antes. Alguém precisa ligar para o paciente (telefone no cartão).`] : []),
     link,
   ].join('\n');
 }
@@ -423,6 +431,13 @@ export function fraseDoPasse(r: RetornoDaEquipe, pacienteFalouDePs: boolean, avi
   const ir = 'Se você sentir que não dá para esperar, pode ir, tá?';
   if (!avisada) {
     return `Sinto muito que você esteja passando por isso 🙏 O seu atendimento segue com a nossa equipe.${pacienteFalouDePs ? ` ${ir}` : ''}`;
+  }
+  // Clínica fechada por 2 dias ou mais: nada de «a equipe te responde terça» (ninguém lá) — o fato e o que fazer se não puder esperar.
+  if (semEquipeAteOutroDia(r)) {
+    return (
+      'Sinto muito que você esteja passando por isso 🙏 O seu caso ficou registrado com prioridade para a nossa equipe, ' +
+      `e a clínica reabre ${r.quando}. Se você sentir que não dá para esperar, pode procurar atendimento antes, tá?`
+    );
   }
   const quando = quandoAEquipeResponde(r);
   return (

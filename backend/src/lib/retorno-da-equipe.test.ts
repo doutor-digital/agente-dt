@@ -10,7 +10,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Unit } from '@prisma/client';
 
-import { horaFalada, orientacaoAoTransferir, retornoDaEquipe } from './retorno-da-equipe.js';
+import { horaFalada, orientacaoAoTransferir, retornoDaEquipe, semEquipeAteOutroDia } from './retorno-da-equipe.js';
 import { FALLBACK_TETO, textoDoTeto } from '../agent/llm-policy.js';
 
 function unidade(over: Partial<Unit> = {}): Unit {
@@ -47,11 +47,12 @@ test('quarta à noite: volta amanhã (quinta) às 8h', () => {
     tipo: 'fechada',
     quando: 'amanhã (quinta-feira) às 8h',
     hoje: false,
+    dias: 1,
   });
 });
 
 test('de madrugada, antes de abrir: volta hoje', () => {
-  assert.deepEqual(retornoDaEquipe(unidade(), brt('2026-10-21T06:30:00')), { tipo: 'fechada', quando: 'hoje às 8h', hoje: true });
+  assert.deepEqual(retornoDaEquipe(unidade(), brt('2026-10-21T06:30:00')), { tipo: 'fechada', quando: 'hoje às 8h', hoje: true, dias: 0 });
 });
 
 test('sexta à noite: sábado com horário próprio, ou segunda quando não atende sábado', () => {
@@ -60,6 +61,7 @@ test('sexta à noite: sábado com horário próprio, ou segunda quando não aten
     tipo: 'fechada',
     quando: 'amanhã (sábado) às 7h30',
     hoje: false,
+    dias: 1,
   });
   // Sábado depois do meio-dia: o sábado já fechou, volta segunda.
   assert.deepEqual(retornoDaEquipe(comSabado, brt('2026-10-24T12:30:00')).tipo, 'fechada');
@@ -69,6 +71,7 @@ test('sexta à noite: sábado com horário próprio, ou segunda quando não aten
     tipo: 'fechada',
     quando: 'segunda-feira, 26/10, às 8h',
     hoje: false,
+    dias: 3,
   });
 });
 
@@ -77,8 +80,11 @@ test('feriado nacional é dia fechado (Finados, segunda 02/11/2026)', () => {
     tipo: 'fechada',
     quando: 'terça-feira, 03/11, às 8h',
     hoje: false,
+    dias: 4, // sexta à noite → terça: o caso de Mossoró (30/10). A clínica só reabre 4 dias depois.
   });
   assert.equal(retornoDaEquipe(unidade(), brt('2026-11-02T10:00:00')).tipo, 'fechada');
+  assert.equal(semEquipeAteOutroDia(retornoDaEquipe(unidade(), brt('2026-10-30T19:00:00'))), true);
+  assert.equal(semEquipeAteOutroDia(retornoDaEquipe(unidade(), brt('2026-10-21T20:00:00'))), false, 'a noite comum não conta');
 });
 
 test('usa o fuso da unidade (Boa Vista, UTC−4)', () => {
@@ -139,4 +145,22 @@ test('mensagem do teto de gasto não promete "em instantes"', () => {
   for (const r of [{ tipo: 'aberta' } as const, { tipo: 'fechada', quando: 'hoje às 8h', hoje: true } as const]) {
     assert.doesNotMatch(textoDoTeto(r), /instante|já já/i);
   }
+});
+
+test('sinal de alerta com a clínica fechada até outro dia: a orientação NÃO manda prometer retorno da equipe', () => {
+  const r = { tipo: 'fechada' as const, quando: 'terça-feira, 03/11, às 7h30', hoje: false, dias: 4 };
+  const o = orientacaoAoTransferir(r, true, true);
+  assert.match(o, /FECHADA e só reabre terça-feira, 03\/11, às 7h30/);
+  assert.match(o, /NÃO diga que a equipe "retorna", "te responde", "te chama" nem "continua o atendimento por aqui"/);
+  assert.match(o, /pode procurar atendimento antes/);
+  assert.match(o, /NÃO prometa prazo/);
+  assert.match(o, /NÃO sugira pronto-socorro/);
+  // o que não é sinal de alerta, ou fecha só até daqui a pouco, segue como sempre
+  assert.match(orientacaoAoTransferir(r, false, true), /a equipe continua o atendimento por aqui terça-feira/);
+  assert.match(orientacaoAoTransferir({ tipo: 'fechada', quando: 'hoje às 14h', hoje: true, dias: 0 }, true, true), /a equipe continua o atendimento por aqui hoje às 14h/);
+  // a noite comum: reabre amanhã, a promessa se cumpre
+  assert.match(orientacaoAoTransferir({ tipo: 'fechada', quando: 'amanhã (quarta-feira) às 8h', hoje: false, dias: 1 }, true, true), /a equipe continua o atendimento por aqui amanhã/);
+  assert.equal(semEquipeAteOutroDia({ tipo: 'fechada', quando: 'x', hoje: false, dias: 1 }), false);
+  assert.equal(semEquipeAteOutroDia({ tipo: 'fechada', quando: 'x', hoje: false }), false);
+  assert.equal(semEquipeAteOutroDia({ tipo: 'fechada', quando: 'x', hoje: false, dias: 2 }), true);
 });

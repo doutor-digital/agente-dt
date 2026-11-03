@@ -7,6 +7,7 @@ import { createKommoClient } from '../services/kommo.service.js';
 import { estadoEtapaDoLead } from '../services/lead-stage.service.js';
 import { leadPausadoPorJanela } from './pausa-lead.js';
 import { falaDaEquipeDesde } from './pausa-equipe.js';
+import { foraDasBandeiras, leadsComBandeira } from './bandeira-vermelha.js';
 
 const SWEEP_MS = 5 * 60_000;
 const ESPERA_MIN = 30;
@@ -68,20 +69,34 @@ async function encerrar(convId: string): Promise<void> {
     .catch(() => undefined);
 }
 
-async function reativarUnidade(unit: Unit): Promise<void> {
-  if (!dentroDoHorario(unit)) return;
-
-  const limite = new Date(Date.now() - ESPERA_MIN * 60_000);
-  const candidatas = await prisma.conversation.findMany({
+/**
+ * As conversas que esperam reativação: handoff há mais de 30 min, sem consulta, dentro do teto de tentativas — e SEM bandeira
+ * vermelha. Reativar tira a caixinha «Pausar IA» e manda mensagem de venda; em quem parou por sinal de alerta isso devolve o
+ * paciente (escape de xixi, fraqueza nas pernas) a um robô que só sabe agendar. Medido em 26/10–03/11: 16 de 95 leads
+ * parados por sinal de alerta foram reabertos por este worker, 6 em menos de 2 h (Mossoró, lead 6111855, 35 min depois).
+ * A bandeira é filtrada no BANCO (`notIn`), não no laço: uma conversa presa no laço ocupava vaga das 40 e matava a fila.
+ */
+export async function candidatasDaReativacao(unit: Pick<Unit, 'id'>, agora: Date = new Date()) {
+  const limite = new Date(agora.getTime() - ESPERA_MIN * 60_000);
+  const comBandeira = await leadsComBandeira(unit.id, agora);
+  if (comBandeira === null) return []; // não sei quem tem bandeira: não reativo ninguém agora
+  return prisma.conversation.findMany({
     where: {
       unitId: unit.id,
       handoffAt: { not: null, lte: limite },
       convertedAt: null,
       reactivations: { lt: MAX_REATIVACOES },
+      ...foraDasBandeiras(comBandeira),
     },
     orderBy: { handoffAt: 'asc' },
     take: 40,
   });
+}
+
+async function reativarUnidade(unit: Unit): Promise<void> {
+  if (!dentroDoHorario(unit)) return;
+
+  const candidatas = await candidatasDaReativacao(unit);
   if (candidatas.length === 0) return;
 
   const kommo = createKommoClient(unit);
