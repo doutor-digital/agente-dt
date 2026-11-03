@@ -8,8 +8,8 @@ import {
   normalizar,
   renderConversaOficial,
   ESPERA_SEM_LEITURA_MS,
-  filtroDeEnvios,
-  contaComoEnvioDaSofia,
+  idsDasUnidadesDaConta,
+  respostasDeTurnoDaSofia,
 } from './kommo-talks.service.js';
 import { selecionarItens, JANELA_DO_TURNO_MS, temMidiaSemArquivo } from '../lib/conversa-oficial.js';
 
@@ -164,23 +164,50 @@ test('com a equipe separada, a Sofia enxerga o "Agendada consulta" antes de resp
   assert.match(renderConversaOficial(desde), /NÃO repita nem contradiga o que a equipe disse/);
 });
 
-test('envios da Sofia no modo estrito: só mensagem da IA COM traceId (resposta de turno); follow-up, reativação, lembrete, cópia do Kommo e cartão não', () => {
-  assert.deepEqual(filtroDeEnvios(true), { traceId: { not: null } });
-  assert.deepEqual(filtroDeEnvios(false), {});
-  assert.deepEqual(filtroDeEnvios(undefined), {});
-  // sem o modo estrito, o comportamento antigo: tudo que não é cópia do chat oficial
-  assert.equal(contaComoEnvioDaSofia({ followUp: 2 }, false), true);
-  assert.equal(contaComoEnvioDaSofia({ origem: 'kommo_talks' }, false), false);
-  assert.equal(contaComoEnvioDaSofia(null, undefined), true);
-  // modo estrito: as exclusões da regra única da "mensagem da IA"
-  assert.equal(contaComoEnvioDaSofia({ via: 'salesbot' }, true), true, 'resposta do turno via Salesbot');
-  assert.equal(contaComoEnvioDaSofia({ via: 'meta', messageId: 'x' }, true), true);
-  assert.equal(contaComoEnvioDaSofia(null, true), true);
-  assert.equal(contaComoEnvioDaSofia({ origem: 'kommo_talks' }, true), false);
-  assert.equal(contaComoEnvioDaSofia({ followUp: 2 }, true), false, 'mesmo que alguém gravasse traceId num toque da régua');
-  assert.equal(contaComoEnvioDaSofia({ reactivation: 1 }, true), false);
-  assert.equal(contaComoEnvioDaSofia({ origem: 'lembrete_kommo' }, true), false);
-  assert.equal(contaComoEnvioDaSofia({ autor: 'equipe' }, true), false);
-  assert.equal(contaComoEnvioDaSofia({ via: 'chat_cartao' }, true), false);
-  assert.equal(contaComoEnvioDaSofia({ origem: 'confirmacao_d1' }, true), false);
+test('idsDasUnidadesDaConta: as unidades da mesma conta do Kommo; sem conta, ou conta sem linhas, só a própria', async () => {
+  const consultas: unknown[] = [];
+  const db = { unit: { findMany: async (a: unknown) => (consultas.push(a), [{ id: 'u1' }, { id: 'u2' }]) } } as never;
+  assert.deepEqual(await idsDasUnidadesDaConta({ id: 'u1', kommoSubdomain: 'timbo' }, db), ['u1', 'u2']);
+  assert.deepEqual(consultas, [{ where: { kommoSubdomain: 'timbo' }, select: { id: true } }]);
+  assert.deepEqual(await idsDasUnidadesDaConta({ id: 'u1', kommoSubdomain: null }, db), ['u1']);
+  assert.equal(consultas.length, 1, 'sem conta nem consulta');
+  const vazio = { unit: { findMany: async () => [] } } as never;
+  assert.deepEqual(await idsDasUnidadesDaConta({ id: 'u7', kommoSubdomain: 'x' }, vazio), ['u7']);
+});
+
+test('respostasDeTurnoDaSofia: só mensagem da IA COM traceId e conversando, da conta toda; devolve o trace de cada uma', async () => {
+  const chamadas = { msg: [] as unknown[], conv: [] as unknown[] };
+  const em = (n: number) => new Date(1_790_000_000_000 + n);
+  const linhas = [
+    { createdAt: em(1), meta: null, traceId: 'T1' },
+    { createdAt: em(2), meta: { via: 'salesbot' }, traceId: 'T2' },
+    { createdAt: em(3), meta: { followUp: 2 }, traceId: 'T3' },
+    { createdAt: em(4), meta: { reactivation: 1 }, traceId: 'T4' },
+    { createdAt: em(5), meta: { origem: 'lembrete_kommo' }, traceId: 'T5' },
+    { createdAt: em(6), meta: { via: 'chat_cartao' }, traceId: 'T6' },
+    { createdAt: em(7), meta: { origem: 'kommo_talks' }, traceId: 'T7' },
+    { createdAt: em(8), meta: null, traceId: null },
+  ];
+  const db = {
+    unit: { findMany: async () => [{ id: 'u1' }, { id: 'u2' }] },
+    conversation: { findMany: async (a: unknown) => (chamadas.conv.push(a), [{ id: 'c1' }, { id: 'c2' }]) },
+    message: { findMany: async (a: unknown) => (chamadas.msg.push(a), linhas) },
+  } as never;
+  const desde = em(0);
+  const r = await respostasDeTurnoDaSofia({ id: 'u1', kommoSubdomain: 'timbo' }, 7165547, desde, db);
+  assert.deepEqual(r, [{ em: em(1), traceId: 'T1' }, { em: em(2), traceId: 'T2' }]);
+  assert.deepEqual(chamadas.conv, [{ where: { unitId: { in: ['u1', 'u2'] }, leadId: '7165547' }, select: { id: true } }]);
+  const where = (chamadas.msg[0] as { where: Record<string, unknown> }).where;
+  assert.deepEqual(where, { conversationId: { in: ['c1', 'c2'] }, role: 'assistant', createdAt: { gte: desde }, traceId: { not: null } });
+});
+
+test('respostasDeTurnoDaSofia: lead sem conversa não consulta mensagens', async () => {
+  let consultou = false;
+  const db = {
+    unit: { findMany: async () => [{ id: 'u1' }] },
+    conversation: { findMany: async () => [] },
+    message: { findMany: async () => ((consultou = true), []) },
+  } as never;
+  assert.deepEqual(await respostasDeTurnoDaSofia({ id: 'u1', kommoSubdomain: 'x' }, 1, new Date(), db), []);
+  assert.equal(consultou, false);
 });

@@ -95,25 +95,37 @@ test('o estado devolvido é uma cópia: mexer nele não altera o supervisor', as
   assert.equal(sup.estado().lider, true);
 });
 
-test('a posse (`desde`) é de quando o processo ganhou o lease: renovar não a muda, e passar de sem-lease para lease a ZERA', async (t) => {
+test('`desde` (a posse) é de quando virou líder e NÃO anda; `leaseDesde` (a janela de 10 min) é de quando o lease passou a ser meu', async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-11-03T11:00:00Z') });
   const { sup, chamadas } = cenario(['erro', 'erro', 'erro', 'erro', 'minha', 'minha']);
   for (let i = 0; i < 3; i++) await sup.tick();
   assert.equal(sup.estado().modo, 'sem-lease');
-  const semLease = sup.estado().desde!;
-  assert.equal(semLease.toISOString(), '2026-11-03T11:00:00.000Z');
+  assert.equal(sup.estado().desde!.toISOString(), '2026-11-03T11:00:00.000Z');
+  assert.equal(sup.estado().leaseDesde, null, 'em sem-lease o lease não é meu');
 
   t.mock.timers.tick(30_000);
-  await sup.tick(); // ainda sem lease (banco fora): a posse não muda
-  assert.equal(sup.estado().desde!.getTime(), semLease.getTime());
+  await sup.tick(); // ainda sem lease (banco fora)
+  assert.equal(sup.estado().leaseDesde, null);
 
   t.mock.timers.tick(30_000);
-  await sup.tick(); // o banco voltou e o lease é meu: a posse que vale é a de agora
+  await sup.tick(); // o banco voltou e o lease é meu: a JANELA conta daqui, o piso (desde) fica
   assert.equal(sup.estado().modo, 'lease');
-  assert.equal(sup.estado().desde!.toISOString(), '2026-11-03T11:01:00.000Z');
+  assert.equal(sup.estado().desde!.toISOString(), '2026-11-03T11:00:00.000Z', 'o piso não anda');
+  assert.equal(sup.estado().leaseDesde!.toISOString(), '2026-11-03T11:01:00.000Z');
   assert.equal(chamadas.iniciar, 1, 'os workers não ligam de novo');
 
   t.mock.timers.tick(30_000);
-  await sup.tick(); // renovação em modo lease: a posse fica
-  assert.equal(sup.estado().desde!.toISOString(), '2026-11-03T11:01:00.000Z');
+  await sup.tick(); // renovação em modo lease: nada anda
+  assert.equal(sup.estado().desde!.toISOString(), '2026-11-03T11:00:00.000Z');
+  assert.equal(sup.estado().leaseDesde!.toISOString(), '2026-11-03T11:01:00.000Z');
+});
+
+test('assumir já em modo lease: `desde` e `leaseDesde` são o mesmo instante; perder o lease zera os dois', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-11-03T11:00:00Z') });
+  const { sup } = cenario(['minha', 'de-outro']);
+  await sup.tick();
+  assert.equal(sup.estado().leaseDesde!.getTime(), sup.estado().desde!.getTime());
+  await sup.tick();
+  assert.equal(sup.estado().desde, null);
+  assert.equal(sup.estado().leaseDesde, null);
 });

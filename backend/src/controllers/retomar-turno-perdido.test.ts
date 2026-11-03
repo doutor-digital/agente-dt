@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Conversation, Unit } from '@prisma/client';
 
-import { retomarTurnoPerdido, unidadeDonaDoTurno, resumoDoPedido, type DepsRetomada } from './webhook.controller.js';
+import { retomarTurnoPerdido, unidadeDonaDoTurno, resumoDoPedido, TEXTO_PEDIDO_ILEGIVEL, type DepsRetomada } from './webhook.controller.js';
 import type { TurnoPerdido } from '../lib/recuperar-turnos.js';
 
 /**
@@ -100,8 +100,11 @@ test('o que não é mensagem de paciente do Kommo (formato desconhecido, sem tex
 test('resumoDoPedido: webhook leva contato e texto; widget leva o texto de `message` para a recepção ler; o resto, vazio', () => {
   assert.deepEqual(resumoDoPedido(turno(webhook('Bom dia'))), { contato: 'Ana', texto: 'Bom dia' });
   assert.deepEqual(resumoDoPedido(turno({ message: 'quero marcar', via: 'widget_request' })), { contato: null, texto: 'quero marcar' });
-  assert.deepEqual(resumoDoPedido(turno({ via: 'widget_request' })), { contato: null, texto: '' });
-  assert.deepEqual(resumoDoPedido(turno(null)), { contato: null, texto: '' });
+  // sem o texto do pedido a tarefa não afirma "áudio, imagem ou figurinha": manda abrir a conversa
+  assert.deepEqual(resumoDoPedido(turno({ via: 'widget_request' })), { contato: null, texto: TEXTO_PEDIDO_ILEGIVEL });
+  assert.deepEqual(resumoDoPedido(turno({ via: 'widget_request', message: '   ' })), { contato: null, texto: TEXTO_PEDIDO_ILEGIVEL });
+  assert.deepEqual(resumoDoPedido(turno(null)), { contato: null, texto: TEXTO_PEDIDO_ILEGIVEL });
+  assert.deepEqual(resumoDoPedido(turno({ leadId: 1 })), { contato: null, texto: TEXTO_PEDIDO_ILEGIVEL });
 });
 
 // ── a unidade DONA: refeita pela etapa do cartão, não a gravada no trace ───────────────────────────────

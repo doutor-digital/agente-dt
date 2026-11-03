@@ -1033,6 +1033,9 @@ const DEPS_DONA_PADRAO = {
   donaPelaEtapa: (gravada: Unit, leadId: number) => resolveOwnerUnitByStage(gravada, leadId),
 };
 
+/** O que a tarefa diz como "última mensagem" quando o pedido gravado não traz o texto (widget sem `message`, formato desconhecido). */
+export const TEXTO_PEDIDO_ILEGIVEL = '(não consegui ler a mensagem: abra a conversa)';
+
 /** O pedido gravado é do modo widget (`widget_request`), não um webhook de mensagem do Kommo? */
 function pedidoDoWidget(input: unknown): input is { message?: unknown; via: 'widget_request' } {
   return !!input && typeof input === 'object' && (input as { via?: unknown }).via === 'widget_request';
@@ -1043,8 +1046,9 @@ export function resumoDoPedido(t: TurnoPerdido): { contato: string | null; texto
   const ctx = contextoDoPedidoGravado(t);
   if (ctx) return { contato: ctx.contactName, texto: ctx.humanMessage };
   // O widget leva o texto em `message`: a recepção precisa ler o que o paciente disse.
-  if (pedidoDoWidget(t.input)) return { contato: null, texto: typeof t.input.message === 'string' ? t.input.message : '' };
-  return { contato: null, texto: '' };
+  if (pedidoDoWidget(t.input) && typeof t.input.message === 'string' && t.input.message.trim()) return { contato: null, texto: t.input.message };
+  // Sem o texto do pedido não se inventa "áudio, imagem ou figurinha" (a tarefa diria o que não sabemos): manda abrir a conversa.
+  return { contato: null, texto: TEXTO_PEDIDO_ILEGIVEL };
 }
 
 /** O contexto do webhook gravado no trace, ou null quando o pedido não é uma mensagem de paciente do Kommo. */
