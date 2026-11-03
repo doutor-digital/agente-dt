@@ -334,6 +334,18 @@ export interface OpcoesDaTrava {
 export type ComprovanteAceito = Aceito & { dados: DadosDoComprovante };
 export type ComprovanteRecusado = Rejeicao & { dados: DadosDoComprovante | null };
 
+/**
+ * O comprovante é de antes da última consulta marcada/remarcada/cancelada pela Sofia nesta conversa. Vai para a EQUIPE: pedir «outro
+ * comprovante» a quem já pagou (e a consulta foi desfeita) soaria como pagar de novo; quem decide se o crédito vale é a recepção.
+ */
+export const DE_OUTRA_NEGOCIACAO: ComprovanteRecusado = {
+  ok: false,
+  destino: 'equipe',
+  codigo: 'de_outra_negociacao',
+  motivo: 'o comprovante é de antes da última consulta marcada, remarcada ou cancelada nesta conversa: a equipe decide se o pagamento vale para esta consulta',
+  dados: null,
+};
+
 export type DecisaoDaTrava =
   | { libera: true; aceito?: ComprovanteAceito }
   | { libera: false; titulo: string; texto: string; rejeicao?: ComprovanteRecusado };
@@ -374,9 +386,7 @@ export function textoDaRecusaDoComprovante(r: ComprovanteRecusado, opcoes: Pick<
       ? `agradeça, diga que o valor que apareceu no comprovante foi menor que a taxa de reserva de ${taxa} e peça que ele envie o comprovante do valor completo (foto ou PDF)`
       : (r.codigo === 'favorecido_diferente' || r.codigo === 'documento_diferente') && chave
         ? `agradeça, diga que o comprovante parece ser de um pagamento para outro destinatário e lembre que a chave Pix da clínica é ${chave}${titular ? ` (no nome de ${titular})` : ''}; peça que ele confira e envie o comprovante do pagamento para essa chave`
-        : r.codigo === 'de_outra_negociacao'
-          ? 'agradeça, diga que o comprovante é de um pagamento anterior a esta reserva e peça o comprovante da taxa desta consulta (foto ou PDF)'
-          : generico;
+        : generico;
   return (
     `RECUSADO: o comprovante que o paciente mandou NÃO passou na conferência automática (motivo técnico, NÃO cite ao paciente: ${r.motivo}). ${naoMarcou}` +
     `Responda com as suas palavras, com educação e SEM acusar o paciente de nada (nem falar em fraude, erro dele ou suspeita): ${pedido}. A equipe também foi avisada.`
@@ -398,7 +408,7 @@ export function decidirTrava(turno: TurnoDoComprovante, opcoes: OpcoesDaTrava = 
     const rejeicao: ComprovanteRecusado | null = a?.falha
       ? a.falha
       : a && a.deOutraNegociacao > 0
-        ? { ok: false, destino: 'reenviar', codigo: 'de_outra_negociacao', motivo: 'o comprovante é de antes da chave Pix ou da última consulta marcada/cancelada desta conversa', dados: null }
+        ? DE_OUTRA_NEGOCIACAO
         : null;
     if (!rejeicao) {
       return {
@@ -502,8 +512,8 @@ export async function abrirTarefaParaEquipe(args: {
   agora?: () => number;
   /** Avisa o João quando a tarefa não saiu: o paciente já ouviu "a equipe confirma em 1 hora". */
   alertar?: (texto: string) => Promise<unknown>;
-  /** Texto extra da tarefa (ex.: valor lido × esperado). */
-  detalhe?: string;
+  /** Texto extra da tarefa (ex.: o que foi lido). Função: recebe o nome do cartão, que a tarefa já lê do Kommo para o responsável. */
+  detalhe?: string | ((nomeDoCartao: string | null) => string);
   /**
    * Entra na chave de deduplicação (`<chave>:<chaveExtra>`): a tarefa passa a ser "uma por cartão, motivo E isto". Quem promete
    * ao paciente uma resposta sobre UM horário usa o horário aqui — a tarefa de outro horário não cobre a promessa.
@@ -537,7 +547,8 @@ export async function abrirTarefaParaEquipe(args: {
       comprovante_recusado: `VER COMPROVANTE · ${slug}${quem} · a IA NÃO aceitou o comprovante que o paciente mandou e pediu outro; a consulta NÃO foi marcada. Se ele disser que já pagou, conferir no extrato e lançar a consulta.`,
     }[motivo];
     const agora = args.agora ?? Date.now;
-    const text = args.detalhe ? (motivo === 'conferir_extrato' ? `${args.detalhe} · ${slug}${quem}` : `${texto} ${args.detalhe}.`) : texto;
+    const detalhe = typeof args.detalhe === 'function' ? args.detalhe(nome) : args.detalhe;
+    const text = detalhe ? (motivo === 'conferir_extrato' ? `${detalhe} · ${slug}${quem}` : `${texto} ${detalhe}.`) : texto;
     const res = await kommo.createTask({ leadId, text, completeAt: Math.floor(agora() / 1000) + 3600, responsibleUserId: responsavel });
     await dedupe.marcarAviso(unitId, leadId, chave);
     await recorder.step({

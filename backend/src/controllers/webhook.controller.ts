@@ -28,7 +28,8 @@ import { transcribeAudio } from '../services/transcription.service.js';
 import { deveIrParaEquipe, ehFalhaEstrutural, limparFalhasDeAudio, registrarFalhaDeAudio } from '../lib/falha-de-audio.js';
 import { describeImage } from '../services/vision.service.js';
 import { marcarRecebimento } from '../agent/confirmacao-so-com-crm.js';
-import { anexarDados, neutralizarMarcasDoSistema, resumoDaLeitura, semAMarcaDeDados } from '../lib/comprovante-pix.js';
+import { neutralizarMarcasDoSistema, resumoDaLeitura, semAReferencia } from '../lib/comprovante-pix.js';
+import { descricaoComReferencia, fonteDaUrl, guardarLeitura } from '../lib/comprovante-lido.js';
 import { ehTranscricaoDeComprovante } from '../lib/pagamento-antecipado.js';
 import { tentarNotaDeVoz } from '../lib/resposta-em-voz.js';
 import { findUnitBySlug, ensureDefaultUnit } from '../services/units.service.js';
@@ -1147,7 +1148,7 @@ export async function processAgent(args: {
   for (const [i, url] of audios.entries()) {
     try {
       const t = await transcribeAudio(unit, url);
-      const transcript = t.text || '[áudio sem fala detectada]';
+      const transcript = unit.spineBookingRequiresPayment ? neutralizarMarcasDoSistema(t.text || '[áudio sem fala detectada]') : t.text || '[áudio sem fala detectada]';
       humanMessage = humanMessage ? `${humanMessage}\n\n[áudio do cliente]: ${transcript}` : transcript;
       await recorder.step({
         kind: 'THINKING',
@@ -1200,10 +1201,27 @@ export async function processAgent(args: {
       const lido = unit.spineBookingRequiresPayment ? neutralizarMarcasDoSistema(d.text) : d.text;
       const desc = lido || `[${d.tipo} sem conteúdo legível]`;
       // Comprovante: carimba a hora em que chegou. O histórico não tem data por mensagem, e a espera da equipe vale só por 24 h
-      // — ver confirmacao-so-com-crm.ts. Unidade com taxa de reserva: os campos lidos (valor, favorecido, E2E…) vão junto.
+      // — ver confirmacao-so-com-crm.ts. Unidade com taxa de reserva: a leitura em campos (valor, favorecido, E2E…) é GUARDADA NO BANCO,
+      // presa a este cartão e a esta imagem, e a fala leva só a referência a ela (lib/comprovante-lido.ts). Sem gravar, não há referência.
       const ehComprovante = ehTranscricaoDeComprovante(`[${d.tipo} do cliente]: ${desc}`);
-      const comDados = ehComprovante && d.comprovante?.dados ? anexarDados(desc, d.comprovante.dados) : desc;
-      const naConversa = ehComprovante ? marcarRecebimento(comDados) : desc;
+      let naConversa = ehComprovante ? marcarRecebimento(desc) : desc;
+      if (ehComprovante && unit.spineBookingRequiresPayment) {
+        try {
+          const g = await guardarLeitura(prisma, {
+            unitId: unit.id,
+            leadId,
+            fonte: fonteDaUrl(url),
+            tipo: d.tipo,
+            ehComprovante: true,
+            dados: d.comprovante?.dados ?? null,
+            erro: d.comprovante?.erro ?? null,
+            modelo: d.comprovante?.modelo ?? null,
+          });
+          naConversa = descricaoComReferencia(desc, g.id, g.criadoEm);
+        } catch (err) {
+          logger.error({ err: String(err), leadId, unit: unit.slug }, 'comprovante: não consegui guardar a leitura — este comprovante vai para a equipe');
+        }
+      }
       if (ehComprovante && d.comprovante) {
         await recorder.step({
           kind: d.comprovante.dados ? 'THINKING' : 'ERROR',
@@ -1306,7 +1324,7 @@ export async function processAgent(args: {
           const criada = await kommoCli.addLeadNote(
             leadId,
             '⏸ O paciente continuou escrevendo com a IA pausada e ninguém respondeu. ' +
-              `Última mensagem: "${semAMarcaDeDados(humanMessage).trim().slice(0, 120)}"`,
+              `Última mensagem: "${semAReferencia(humanMessage).trim().slice(0, 120)}"`,
           );
           // marca SÓ depois da Kommo confirmar — falha de rede não pode calar o aviso por 24 h
           if (criada) await marcarAviso(unit.id, leadId, 'paciente_insistiu');
@@ -1360,7 +1378,7 @@ export async function processAgent(args: {
           let anotou = false;
           if (!(await avisoRecente(unit.id, leadId, REGRA_NOTA_CALADA))) {
             try {
-              const nota = await kommo.addLeadNote(leadId, notaSofiaCalada(etapa ?? 'etapa encerrada', semAMarcaDeDados(humanMessage)));
+              const nota = await kommo.addLeadNote(leadId, notaSofiaCalada(etapa ?? 'etapa encerrada', semAReferencia(humanMessage)));
               if (nota?.id) {
                 await marcarAviso(unit.id, leadId, REGRA_NOTA_CALADA);
                 anotou = true;
@@ -1775,7 +1793,7 @@ export async function processAgent(args: {
       unit,
       leadId,
       recentTurns: [
-        { role: 'user', content: semAMarcaDeDados(humanMessage) },
+        { role: 'user', content: semAReferencia(humanMessage) },
         ...(reply && podeEnviar && !segurada && !travaDoEnvio ? [{ role: 'assistant' as const, content: reply }] : []),
       ],
     });
