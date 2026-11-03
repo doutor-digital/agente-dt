@@ -157,6 +157,8 @@ test('texto que é HTML/SVG/script: BOM e muito espaço na frente não escondem 
     ['svg com 70 espaços na frente', Buffer.from(' '.repeat(70) + '<svg onload=alert(1)>')],
     ['svg com 5000 espaços e quebras', Buffer.from(' \r\n\t'.repeat(1250) + '<svg onload=alert(1)>')],
     ['BOM + espaços + xml', Buffer.concat([bom, Buffer.from('  \n\n <?xml version="1.0"?><svg/>')])],
+    ['NBSP (UTF-8) + svg', Buffer.from('\u00a0\u00a0\u00a0<svg onload=alert(1)>')],
+    ['dois BOMs + espaços + html', Buffer.concat([bom, bom, Buffer.from('  <html>')])],
     ['shebang', Buffer.from('#!/bin/sh\nrm -rf /')],
     ['BOM + shebang', Buffer.concat([bom, Buffer.from('\n\n#!/bin/sh\nrm -rf /')])],
   ];
@@ -176,8 +178,7 @@ test('desligamento: apagarTudo espera os arquivos saírem do disco e invalida os
     const p2 = await subir(c);
     const l = c.cofre.gerarLink(USUARIO, p1.id, 15);
     assert.equal(c.arquivosNoDisco().length, 2);
-    const n = await c.cofre.apagarTudo();
-    assert.equal(n >= 0, true);
+    await c.cofre.apagarTudo();
     assert.deepEqual(c.arquivosNoDisco(), [], 'nada no disco assim que apagarTudo resolve (sem esperar timer)');
     assert.equal(await codigoDe(() => c.cofre.baixar(l.token, true)), 'expirado');
     assert.equal(c.cofre.ver(USUARIO, p2.id).estado, 'apagado');
@@ -205,10 +206,9 @@ test('depois do desligamento nada novo entra: o envio que estava gravando não d
     const r = c.cofre.reservar(p.token);
     const gravando = c.cofre.guardar(r, 'a.pdf', PDF).catch((e) => e);
     await c.cofre.apagarTudo();
-    const resultado = await gravando;
+    await gravando; // terminou bem (e foi apagado) ou foi recusado: qualquer um dos dois serve
     await new Promise((x) => setTimeout(x, 30));
     assert.deepEqual(c.arquivosNoDisco(), [], 'nenhum .bin sobrou');
-    assert.ok(resultado instanceof ErroDeCofre || typeof resultado === 'object');
     assert.equal(await codigoDe(() => c.cofre.reservar(q.token)), 'estado');
   } finally {
     c.limpar();
@@ -243,9 +243,10 @@ test('servidor: o desligamento apaga o cofre antes de sair e a subida limpa a pa
   const server = readFileSync(new URL('../server.ts', import.meta.url), 'utf8');
   assert.match(server, /import \{ apagarCofreDeArquivos, ligarConectorRemoto \} from '\.\/mcp-remoto\/producao\.js'/);
   // junto da drenagem (Promise.all), dentro do desligarComGraca: roda logo que a porta fecha e é esperada antes do process.exit
-  assert.match(server, /Promise\.all\(\[esperarTurnosDoDesligamento\(ms\), apagarCofreDeArquivos\(\)\]\)/);
-  assert.ok(server.indexOf('apagarCofreDeArquivos()]') > server.indexOf('desligarComGraca('));
-  assert.ok(server.indexOf('apagarCofreDeArquivos()]') < server.indexOf('process.exit(0)'));
+  assert.match(server, /Promise\.all\(\[esperarTurnosDoDesligamento\(ms\), limpeza\]\)/);
+  assert.match(server, /Promise\.race\(\[apagarCofreDeArquivos\(\)/);
+  assert.ok(server.indexOf('apagarCofreDeArquivos()') > server.indexOf('desligarComGraca('));
+  assert.ok(server.indexOf('apagarCofreDeArquivos()') < server.indexOf('process.exit(0)'));
   const prod = readFileSync(new URL('./producao.ts', import.meta.url), 'utf8');
   assert.match(prod, /await cofre\.apagarPasta\(\)/);
   assert.ok(prod.indexOf('await cofre.apagarPasta()') < prod.indexOf('montarRotasDoCofre(app, cofre)'), 'limpa antes de abrir as rotas');
@@ -677,7 +678,7 @@ test('HTTP ponta a ponta: página (sem gastar o link, sem cache, sem indexar) �
       }
       const quarta = await fetch(caminho);
       assert.equal(quarta.status, 404);
-      assert.match(await quarta.text(), /^Arquivo não encontrado ou link vencido\..*peça um novo link no Claude/);
+      assert.match(await quarta.text(), /^Arquivo não encontrado, vencido ou esgotado\..*peça um novo link no Claude/);
     });
   } finally {
     c.limpar();

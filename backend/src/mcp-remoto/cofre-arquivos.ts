@@ -120,8 +120,13 @@ export function detectarTipo(b: Buffer): TipoDeArquivo | null {
 
 /** O primeiro conteúdo de verdade (depois do BOM UTF-8 e de espaços/quebras de linha, sem limite de quantidade) é `<` ou `#!`? */
 function comecaComoMarcacaoOuScript(b: Buffer): boolean {
-  let i = b[0] === 0xef && b[1] === 0xbb && b[2] === 0xbf ? 3 : 0;
-  while (i < b.length && (b[i] === 0x20 || b[i] === 0x09 || b[i] === 0x0a || b[i] === 0x0c || b[i] === 0x0d)) i++;
+  let i = 0;
+  for (;;) {
+    if (b[i] === 0xef && b[i + 1] === 0xbb && b[i + 2] === 0xbf) i += 3; // BOM UTF-8 (quantos vierem)
+    else if (b[i] === 0xc2 && b[i + 1] === 0xa0) i += 2; // espaço sem quebra, em UTF-8
+    else if (i < b.length && (b[i] === 0x20 || b[i] === 0x09 || b[i] === 0x0a || b[i] === 0x0c || b[i] === 0x0d || b[i] === 0xa0)) i += 1;
+    else break;
+  }
   return b[i] === 0x3c || (b[i] === 0x23 && b[i + 1] === 0x21);
 }
 

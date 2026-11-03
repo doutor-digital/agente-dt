@@ -24,7 +24,7 @@ const ENVIOS_SIMULTANEOS = 2;
 const TEMPO_MAX_DO_ENVIO_MS = 180_000;
 /** downloads lendo o arquivo inteiro ao mesmo tempo (cada um segura o cifrado e o aberto: até 40 MB) */
 const DOWNLOADS_SIMULTANEOS = 4;
-const MENSAGEM_NAO_ACHADO = 'Arquivo não encontrado ou link vencido. Se o sistema foi atualizado há pouco, peça um novo link no Claude.';
+const MENSAGEM_NAO_ACHADO = 'Arquivo não encontrado, vencido ou esgotado. Se o sistema foi atualizado há pouco, peça um novo link no Claude.';
 
 function cabecalhosSeguros(res: Response): void {
   res.set({
@@ -293,7 +293,13 @@ export function montarRotasDoCofre(app: Express, cofre: CofreDeArquivos, o: Opco
       res.status(503).set('Retry-After', '5').type('text/plain').send('Muitos downloads ao mesmo tempo. Tente de novo em alguns segundos.');
       return;
     }
-    if (!head) baixando += 1;
+    if (!head) {
+      // a vaga volta quando a resposta TERMINA de sair (cliente lento segura o arquivo na memória até lá), não quando o handler acaba
+      baixando += 1;
+      res.once('close', () => {
+        baixando -= 1;
+      });
+    }
     try {
       const a = await cofre.baixar(String(req.params.token), !head, quem(req));
       res.set({
@@ -312,8 +318,6 @@ export function montarRotasDoCofre(app: Express, cofre: CofreDeArquivos, o: Opco
       // só token que NÃO EXISTE conta como sondagem; link conhecido vencido/esgotado não bloqueia o IP de quem o usa
       if (err.codigo === 'invalido') sondagem(req, String(req.params.token));
       res.status(404).type('text/plain').send(MENSAGEM_NAO_ACHADO);
-    } finally {
-      if (!head) baixando -= 1;
     }
   };
   app.get(ROTA_BAIXA, (req, res, next) => void baixar(req, res).catch(next));

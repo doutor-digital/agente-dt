@@ -302,7 +302,9 @@ async function main(): Promise<void> {
       // O cofre de arquivos (contratos com CPF/salário) sai do disco EM PARALELO à drenagem, assim que a porta fecha: se a drenagem
       // usar os 60 s e o Swarm mandar SIGKILL, os .bin já foram. Não gasta o prazo da IA.
       drenar: async (ms) => {
-        const [drenagem] = await Promise.all([esperarTurnosDoDesligamento(ms), apagarCofreDeArquivos()]);
+        // a limpeza respeita o mesmo prazo: disco que trava não segura o process.exit nem a contagem de turnos perdidos
+        const limpeza = Promise.race([apagarCofreDeArquivos(), new Promise((res) => setTimeout(res, ms).unref())]);
+        const [drenagem] = await Promise.all([esperarTurnosDoDesligamento(ms), limpeza]);
         return drenagem;
       },
     });
