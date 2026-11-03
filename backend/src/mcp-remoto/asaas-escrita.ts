@@ -363,6 +363,18 @@ export function grupoDe(c: ContaAsaas): string {
 
 const arredondar = (n: number) => Math.round(n * 100) / 100;
 
+/**
+ * `consumoDoDia` para a RESPOSTA de uma operação que já aconteceu: é só apresentação, então um soluço do banco aqui nunca pode virar erro
+ * (a pessoa acreditaria que nada foi feito e repetiria).
+ */
+export async function consumoSeguro(esc: EstadoEscritaAsaas, c: ContaAsaas) {
+  try {
+    return await consumoDoDia(esc, c);
+  } catch {
+    return { indisponivel: 'não consegui ler os limites agora (o banco não respondeu); a operação JÁ foi feita. Veja asaas_limites em instantes.' };
+  }
+}
+
 /** Os tetos que valem (o menor entre o próprio e o geral) e quanto já foi usado hoje. */
 export async function consumoDoDia(esc: EstadoEscritaAsaas, c: ContaAsaas) {
   const agora = esc.agora();
@@ -860,7 +872,7 @@ export async function criarCobranca({ asaas, esc }: CtxEscrita, quem: Quem, a: P
       avisouOCliente: aviso.vaiAvisar,
       aviso: aviso.texto,
       avisos,
-      limites: await consumoDoDia(esc, c),
+      limites: await consumoSeguro(esc, c),
       registro: 'Registrado com quem pediu.',
       // o que falta buscar DEPOIS de liberar a fila da conta (melhor esforço, até esperaLinhaMs)
       _depois: { id: pag.id, forma, temLinha: !!pag.identificationField, temLinkDoBoleto: !!pag.bankSlipUrl },

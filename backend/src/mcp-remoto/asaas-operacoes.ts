@@ -8,7 +8,7 @@ import { ErroDeEntrada } from '../franquia-mcp/travas.js';
 import { mascararDigitosSeguidos } from '../lib/pii.js';
 import { STATUS as STATUS_PT, type ContaAsaas } from './asaas.js';
 import {
-  cabecalhoDaConta, chaveDeOperacao, clientePorId, comAvisos, conferirTravas, consumoDoDia, contaDeEscrita, reservar, dataBR, descricaoValida, emailValido, esquecerLeituras,
+  cabecalhoDaConta, chaveDeOperacao, clientePorId, comAvisos, consumoDoDia, consumoSeguro, contaDeEscrita, grupoDe, reservar, dataBR, descricaoValida, emailValido, esquecerLeituras,
   fusoDe, limitar, nomeValido, validarEndereco, podeTerGravado, sanear, telefoneValido, valorValido, vencimentoValido, ErroSemId, mostrarCliente,
   type ClienteAsaas, type CtxEscrita, type EnderecoPedido, type Quem, type Registrar,
 } from './asaas-escrita.js';
@@ -145,7 +145,6 @@ export async function editarCobranca(
     let ids: Record<string, unknown> = {};
     if (acrescimo > 0) {
       const confere = { tipo: 'edicao' as const, valor: novoValor!, noTeto: acrescimo };
-      await conferirTravas(esc, c, confere);
       const r = await reservar(esc, c, quem, { ...confere, evento: EVENTO_OPERACAO, argumentos: base0 });
       ids = { intencaoId: r.intencaoId, chaveAsaas: r.grupo };
     }
@@ -171,7 +170,7 @@ export async function editarCobranca(
       campos,
       cobranca: { id, status: emPortugues(depois?.status ?? atual.status), valor: dinheiro(depois?.value ?? novoValor ?? atual.value ?? 0), vencimento: depois?.dueDate ?? (corpo.dueDate as string | undefined) ?? atual.dueDate ?? null },
       ...(atual.installment ? { atencao: 'esta cobrança é parcela de um parcelamento: só ela foi alterada, as outras parcelas ficam como estavam' } : {}),
-      limites: await consumoDoDia(esc, c),
+      limites: await consumoSeguro(esc, c),
       registro: 'Registrado com quem pediu.',
     };
   });
@@ -257,7 +256,8 @@ export async function estornarCobranca(
           (atual.status === 'PENDING' || atual.status === 'OVERDUE' ? ' Como ainda não foi paga, o caminho é asaas_cancelar_cobranca.' : ' Nada foi feito.'),
       );
     }
-    const total = atual.value ?? 0;
+    const total = Number(atual.value);
+    if (!Number.isFinite(total) || total <= 0) throw new ErroDeEntrada(`não consegui ler o valor da cobrança ${id} no Asaas: nada foi feito; confira no painel.`);
     const jaEstornado = await jaEstornadoDe(c, id, atual);
     // o que ainda dá para devolver: o valor da cobrança menos o que já foi estornado (estorno "total" = o restante)
     const restante = arredondar(total - jaEstornado);
@@ -267,9 +267,8 @@ export async function estornarCobranca(
       throw new ErroDeEntrada(`o estorno de ${dinheiro(valor)} passa do que ainda resta nesta cobrança: ${dinheiro(restante)} (cobrança de ${dinheiro(total)}, já estornado ${dinheiro(jaEstornado)}). Nada foi feito.`);
     }
     const integral = valor >= total;
-    const chave = chaveDeOperacao(c.slug, 'estorno', id, Math.round(valor * 100));
+    const chave = chaveDeOperacao(grupoDe(c), 'estorno', id, Math.round(valor * 100));
     const confere = { tipo: 'estorno' as const, chave, valor, noTeto: valor, descricaoDuplicata: `estorno igual da cobrança ${id}` };
-    await conferirTravas(esc, c, confere);
     const base = { conta: c.slug, operacao: 'estornar_cobranca', valor, noTeto: valor, idAsaas: id, parcial: !integral, jaEstornado, chave, pediuPor: quem.id };
     const { intencaoId, grupo } = await reservar(esc, c, quem, { ...confere, evento: EVENTO_OPERACAO, argumentos: base });
     const ids = { intencaoId, chaveAsaas: grupo };
@@ -297,7 +296,7 @@ export async function estornarCobranca(
       estornado: true,
       cobranca: { id, valorEstornado: dinheiro(valor), valorDaCobranca: dinheiro(total), jaEstornadoAntes: dinheiro(jaEstornado), aindaRestaDevolver: dinheiro(arredondar(restante - valor)), statusAgora: emPortugues(r.status), estornoParcial: base.parcial },
       aviso: 'O estorno pode levar algum tempo para concluir no Asaas: confira o status com asaas_cobranca.',
-      limites: await consumoDoDia(esc, c),
+      limites: await consumoSeguro(esc, c),
       registro: 'Registrado com quem pediu.',
     };
   });
@@ -352,9 +351,8 @@ export async function transferir(
   return comAvisos(esc, c.slug, async (avisar) => {
     const { cabecalho } = await cabecalhoDaConta(c, esc);
     // a duplicata NÃO depende da descrição (senão bastaria mudar o texto para repetir): mesmo destino e mesmo valor em 10 minutos é a mesma transferência
-    const chave = chaveDeOperacao(c.slug, 'transferencia', identidadeDoDestino(destino), Math.round(valor * 100));
+    const chave = chaveDeOperacao(grupoDe(c), 'transferencia', identidadeDoDestino(destino), Math.round(valor * 100));
     const confere = { tipo: 'transferencia' as const, chave, valor, noTeto: valor, descricaoDuplicata: `transferência igual para ${destino.apelido}` };
-    await conferirTravas(esc, c, confere);
     // o saldo é conferido antes só para dar uma resposta clara; quem manda é o Asaas (leitura que falha não trava)
     const saldo = await c.fonte.get<{ balance?: number }>('/finance/balance').then((r) => r?.balance, (e) => { if ((e as { status?: number })?.status === 401) throw e; return undefined; });
     if (typeof saldo === 'number' && saldo < valor) throw new ErroDeEntrada(`saldo insuficiente na conta: ${dinheiro(saldo)} disponível para uma transferência de ${dinheiro(valor)}. Nada foi feito.`);
@@ -393,7 +391,7 @@ export async function transferir(
       transferido: true,
       transferencia: { id: r.id, status: r.status ?? null, valor: dinheiro(valor), destino: mostrarDestino(destino), descricao: descricao ?? null },
       aviso: 'Confirme o status no extrato (asaas_extrato): o Asaas pode deixar a transferência pendente de autorização ou de processamento.',
-      limites: await consumoDoDia(esc, c),
+      limites: await consumoSeguro(esc, c),
       registro: 'Registrado com quem pediu.',
     };
   });

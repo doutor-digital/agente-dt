@@ -218,7 +218,7 @@ export function registrarEscritaAsaas(server: McpServer, asaas: ContextoAsaas, e
         'TRANSFERE dinheiro da conta Asaas da clínica (Pix de saída) SÓ para um destino que já está na lista permitida daquela clínica (veja asaas_limites). O destino é achado pela chave Pix EXATA, pela ' +
         'conta bancária EXATA ou pelo apelido; o que vai ao Asaas é o que está na lista do servidor, nunca o que for digitado aqui. Destino fora da lista é recusado, e a lista vazia deixa a ' +
         'transferência DESLIGADA. NÃO existe cadastrar destino novo pelo chat: quem coloca é o João, no servidor. Cada transferência avisa o João no Telegram (conta, valor, quem pediu, destino). ' +
-        tetos + ' Transferência igual (mesmo destino, valor e descrição) em 10 minutos é recusada. ' + SO_QUEM_PODE,
+        tetos + ' Transferência igual (mesmo destino e mesmo valor, mesmo que a descrição mude) em 10 minutos é recusada. ' + SO_QUEM_PODE,
       inputSchema: {
         unidade,
         destino: z.string().optional().describe('chave Pix exata OU apelido do destino permitido'),
