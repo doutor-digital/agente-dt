@@ -349,6 +349,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/franquia-sync-worker.ts',
   },
   {
+    id: 'chegada-do-dia',
+    chave: 'CHEGADA_DO_DIA_SLUGS',
+    nome: 'Chegada do dia: a ◷ Próxima sessão é a 1ª sessão do paciente no dia',
+    oQueFaz:
+      'Paciente com dois tratamentos (cervical + lombar) tem duas sessões em sequência no mesmo dia, 15h30 e 16h. Com esta chave, a ◷ Próxima sessão do cartão passa a ser a PRIMEIRA sessão desse dia (sessões de todos os tratamentos do paciente, em sequência: até 2 h entre uma e outra), e não só a do tratamento que está no cartão — que era a 2ª, e o paciente chegava meia hora atrasado seguindo o lembrete do robô do Kommo.',
+    pegadinha:
+      'LIGAR À NOITE, NUMA UNIDADE, PRIMEIRO SÓ NO PAPEL: mexe no valor que o gatilho de lembrete do Kommo (24 h / 3 h) lê, e como o Kommo reage a um valor que muda NÃO está provado — um cartão cujo horário passa de 16h para 15h30 pode ser relido pelo gatilho. Em "Só no papel" a tela mostra (automacao_simulacoes) quais cartões mudariam, sem gravar. Só funciona onde a franquia-sessoes está ligada (é ela que escreve o campo). O dia é sempre o da próxima sessão do tratamento DO CARTÃO: cartão em ALTA/FINALIZADO, sem sessão por vir no próprio tratamento, continua sendo limpo, mesmo que o paciente tenha sessão de outro tratamento. Consulta/avaliação nunca entra no campo (ela tem a ◷ Data da Consulta). Depois que a 1ª sessão do dia começa, o campo NÃO é movido para a 2ª (evita lembrete retroativo); avança sozinho no dia seguinte. Não muda a ◷ Data da Consulta nem o texto dos modelos (WABA): o modelo mostra só o campo, ou seja, o horário de chegada. A resposta ao "Confirmar presença" com vários horários é da chave "Confirmar presença das sessões", não desta.',
+    risco: 'escreve-campo',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/chegada-do-dia.ts',
+  },
+  {
     id: 'franquia-tela',
     chave: 'FRANQUIA_TELA_SLUGS',
     nome: 'Dados do atendimento da franquia no cartão',
