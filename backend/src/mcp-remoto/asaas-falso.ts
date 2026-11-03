@@ -4,6 +4,8 @@
  */
 import { criarContextoAsaas, type ContaAsaas } from './asaas.js';
 import { criarEscritaAsaas } from './asaas-escrita.js';
+import { Livro, type Porteiro } from './asaas-limites.js';
+import { lancamentosRecentesDe, type LeitorDeAuditoria } from './auditoria.js';
 
 export class ErroHttp extends Error {
   constructor(msg: string, readonly status: number | null) {
@@ -40,6 +42,10 @@ export interface Opc {
   /** o Asaas devolve estes clientes para QUALQUER busca por documento (resposta fora do combinado) */
   clientesTortos?: Cli[];
   saldo?: number;
+  /** outro slug para a conta (padrão a Serra) */
+  slug?: string;
+  /** a impressão curta da chave do Asaas (duas contas com o mesmo valor usam a mesma chave) */
+  chaveGrupo?: string;
   fuso?: string;
   /** o POST /transfers responde com este status */
   statusDaTransferencia?: string;
@@ -58,8 +64,8 @@ export function asaasFalso(o: Opc = {}) {
     if (f) throw f.erro;
   };
   const conta: ContaAsaas = {
-    slug: 'doutor-hernia-serra',
-    nome: 'Serra',
+    slug: o.slug ?? 'doutor-hernia-serra',
+    nome: o.slug ?? 'Serra',
     ...(o.fuso ? { fuso: o.fuso } : {}),
     fonte: {
       async get<T>(caminho: string, query: Record<string, string | number | undefined> = {}): Promise<T> {
@@ -82,6 +88,11 @@ export function asaasFalso(o: Opc = {}) {
           return c as T;
         }
         if (caminho === '/payments') return { data: pagamentos.filter((p) => p.externalReference === query.externalReference) } as T;
+        if (/^\/payments\/[^/]+\/refunds$/.test(caminho)) {
+          const x = pagamentos.find((y) => y.id === caminho.split('/')[2]);
+          if (!x) throw new ErroHttp('Asaas 404 em /payments', 404);
+          return { data: x.refunds ?? [] } as T;
+        }
         if (/^\/payments\/.+\/identificationField$/.test(caminho)) {
           if (o.semLinhaDigitavel) throw new ErroHttp('Asaas 404', 404);
           return { identificationField: '34191.79001 01043.510047 91020.150008 5 87650026000' } as T;
@@ -101,6 +112,7 @@ export function asaasFalso(o: Opc = {}) {
       : {
           escrita: {
             chaveFinal: '…xYZ1',
+            chaveGrupo: o.chaveGrupo ?? 'grupo-da-serra',
             contaSalva: 'Serra (nome salvo)',
             async enviar<T>(metodo: 'POST' | 'PUT' | 'DELETE', caminho: string, corpo?: Record<string, unknown>): Promise<T> {
               chamadas.push({ metodo, caminho, ...(corpo ? { corpo: corpo as Record<string, any> } : {}) });
@@ -168,36 +180,114 @@ export function asaasFalso(o: Opc = {}) {
 
 export const AGORA = Date.parse('2026-10-28T15:00:00-03:00');
 
+// ----------------------------------------------------------------- o banco e o porteiro de mentira
+
+export interface LinhaDeAuditoria {
+  ferramenta: string;
+  argumentos: Record<string, any>;
+  ok: boolean;
+  erro?: string;
+  createdAt: Date;
+}
+
 /**
- * O conjunto de teste: Asaas falso, estado da escrita com relógio controlável, a Serra ligada, o Telegram falso (`avisos`) e o registro
- * de eventos. `op` troca qualquer peça (tetos, destinos, histórico, relógio…).
+ * Um banco de auditoria de mentira que DUAS instâncias podem dividir (é a tabela `mcp_auditoria` e a trava `pg_advisory_xact_lock`): `comTrava` é a
+ * trava única por chave, `leitor` é o `findMany` do Prisma. Instâncias diferentes = `montar` diferentes com o mesmo `BancoFalso`.
  */
-export function montar(o: Opc = {}, op: Parameters<typeof criarEscritaAsaas>[0] = {}) {
+export class BancoFalso {
+  linhas: LinhaDeAuditoria[] = [];
+  private travas = new Map<string, Promise<void>>();
+
+  async comTrava<T>(chave: string, fn: () => Promise<T>): Promise<T> {
+    const anterior = this.travas.get(chave) ?? Promise.resolve();
+    let solta!: () => void;
+    const minha = new Promise<void>((r) => (solta = r));
+    this.travas.set(chave, anterior.then(() => minha));
+    await anterior;
+    try {
+      return await fn();
+    } finally {
+      solta();
+    }
+  }
+
+  gravar(l: { ferramenta: string; argumentos: unknown; ok: boolean; erro?: string }, em: number): void {
+    this.linhas.push({ ferramenta: l.ferramenta, argumentos: JSON.parse(JSON.stringify(l.argumentos ?? {})), ok: l.ok, erro: l.erro, createdAt: new Date(em) });
+  }
+
+  leitor(): LeitorDeAuditoria {
+    return {
+      mcpAuditoria: {
+        findMany: async ({ where }) =>
+          this.linhas
+            .filter((l) => where.ferramenta.in.includes(l.ferramenta) && l.createdAt >= where.createdAt.gte && where.OR.some((c) => l.argumentos[c.argumentos.path[0]!] === c.argumentos.equals))
+            .map((l) => ({ createdAt: l.createdAt, ok: l.ok, ferramenta: l.ferramenta, argumentos: l.argumentos })),
+      },
+    };
+  }
+}
+
+/** O mesmo contrato do `porteiroPrisma` (trava por chave do Asaas → ler → conferir → gravar a intenção), sobre o banco de mentira. */
+export function porteiroEmMemoria(banco: BancoFalso, agora: () => number, aoReservar?: (evento: string, argumentos: Record<string, any>) => void): Porteiro {
+  let n = 0;
+  return {
+    async reservar(p) {
+      return banco.comTrava(`asaas-dinheiro:${p.grupo}`, async () => {
+        // um respiro entre ler e gravar: sem a trava, duas reservas simultâneas passariam as duas pelo mesmo saldo
+        const livro = new Livro(await lancamentosRecentesDe(banco.leitor(), p.conta, p.agora, p.grupo));
+        await new Promise((r) => setImmediate(r));
+        p.conferir(livro);
+        const intencaoId = `int-${p.grupo}-${++n}-${Math.random().toString(36).slice(2, 8)}`;
+        const argumentos = { ...p.argumentos, conta: p.conta, chaveAsaas: p.grupo, intencaoId, fase: 'intencao', incerto: true };
+        banco.gravar({ ferramenta: p.evento, argumentos, ok: true }, agora());
+        aoReservar?.(p.evento, argumentos);
+        return { intencaoId };
+      });
+    },
+    async ler(grupo, conta, ag) {
+      return new Livro(await lancamentosRecentesDe(banco.leitor(), conta, ag, grupo));
+    },
+  };
+}
+
+export const GRUPO_DA_SERRA = 'grupo-da-serra';
+
+/**
+ * O conjunto de teste: Asaas falso, estado da escrita com relógio controlável, a Serra ligada, o Telegram falso (`avisos`), o banco de auditoria
+ * (`banco`, que pode ser dividido entre duas instâncias) e o registro de eventos. `op` troca qualquer peça (tetos, destinos, relógio…).
+ * Os tetos próprios de estorno e transferência nascem sem limite (vale o geral); os testes deles passam `tetoEspecifico`.
+ */
+export function montar(o: Opc = {}, op: Parameters<typeof criarEscritaAsaas>[0] & { banco?: BancoFalso } = {}) {
   const f = asaasFalso(o);
   const relogio = { t: AGORA };
   const avisos: string[] = [];
+  const banco = op.banco ?? new BancoFalso();
+  /** as intenções (gravadas antes de chamar o Asaas) ficam à parte: `eventos` só tem o que aconteceu */
+  const intencoes: Array<{ evento: string; args: Record<string, any> }> = [];
+  const { banco: _banco, ...resto } = op;
+  void _banco;
+  const agoraDe = resto.agora ?? (() => relogio.t);
   // a escrita nasce DESLIGADA em toda unidade: os testes ligam a Serra, e os de "desligada" passam a lista que querem
   const esc = criarEscritaAsaas({
     agora: () => relogio.t,
     unidades: () => new Set(['doutor-hernia-serra']),
+    tetoEspecifico: () => ({ operacao: Infinity, dia: Infinity }),
+    porteiro: porteiroEmMemoria(banco, agoraDe, (evento, args) => intencoes.push({ evento, args: { ...args, chamadasAteAgora: f.posts().length } })),
     alertar: async (t) => {
       avisos.push(t);
       return true;
     },
-    ...op,
+    ...resto,
   });
   const asaas = criarContextoAsaas(new Map([[f.conta.slug, f.conta]]));
   const eventos: Array<{ evento: string; args: Record<string, any>; ok: boolean; erro?: string }> = [];
-  /** as intenções (gravadas antes de chamar o Asaas) ficam à parte: `eventos` só tem o que aconteceu */
-  const intencoes: Array<{ evento: string; args: Record<string, any> }> = [];
   const registrar = (evento: string, args: Record<string, unknown>, ok: boolean, erro?: string) => {
-    if (args.fase === 'intencao') {
-      // a intenção sai ANTES da chamada ao Asaas: guarda também o que o Asaas já tinha recebido nesse momento
-      intencoes.push({ evento, args: { ...args, chamadasAteAgora: f.posts().length } });
-      return true;
-    }
     eventos.push({ evento, args, ok, erro });
+    banco.gravar({ ferramenta: evento, argumentos: args, ok, erro }, agoraDe());
     return true;
   };
-  return { f, esc, asaas, ctx: { asaas, esc }, relogio, eventos, intencoes, registrar, avisos };
+  /** quanto já conta para o teto do dia da Serra */
+  const usado = async (tipo?: 'cobranca' | 'estorno' | 'transferencia' | 'edicao') =>
+    (await esc.porteiro.ler(f.conta.escrita!.chaveGrupo, f.conta.slug, agoraDe())).somaDoDia(agoraDe(), f.conta.fuso ?? 'America/Sao_Paulo', tipo);
+  return { f, esc, asaas, ctx: { asaas, esc }, relogio, eventos, intencoes, registrar, avisos, banco, usado };
 }

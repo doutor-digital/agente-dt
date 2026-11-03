@@ -38,10 +38,10 @@ import { PrismaClient } from '@prisma/client';
 import { criarContextoAsaas, registrarFerramentasAsaas, type ContaAsaas } from './asaas.js';
 import { asaasGet } from '../lib/integracoes/asaas.js';
 import { asaasEscrever } from '../lib/integracoes/asaas-escrita.js';
-import { finalDaChave } from '../lib/integracoes/cofre.js';
+import { finalDaChave, impressaoDaChave } from '../lib/integracoes/cofre.js';
 import { criarEscritaAsaas } from './asaas-escrita.js';
 import { registrarEscritaAsaasSePermitido } from './asaas-ferramentas.js';
-import { lancamentosRecentesDe } from './auditoria.js';
+import { porteiroPrisma } from './auditoria.js';
 import { enviarTelegram } from '../lib/telegram.js';
 import { criarContextoConvenia, registrarFerramentasConvenia, type ContaConvenia } from './convenia.js';
 import { conveniaGet } from '../lib/integracoes/convenia.js';
@@ -199,7 +199,7 @@ async function contasAsaasDoBanco(): Promise<Map<string, ContaAsaas>> {
       fuso: c.fuso ?? undefined,
       fonte: { get: (caminho, query) => asaasGet(c.unitId, c.chave, caminho, query ?? {}) },
       // a porta de escrita só é usada por quem está em MCP_ESCRITA_EMAILS, nas contas de ASAAS_ESCRITA_UNIDADES; as rotas são uma lista fechada
-      escrita: { enviar: (metodo, caminho, corpo) => asaasEscrever(c.unitId, c.chave, metodo, caminho, corpo), chaveFinal: finalDaChave(c.chave), contaSalva: c.conta },
+      escrita: { enviar: (metodo, caminho, corpo) => asaasEscrever(c.unitId, c.chave, metodo, caminho, corpo), chaveFinal: finalDaChave(c.chave), chaveGrupo: impressaoDaChave(c.chave).slice(0, 16), contaSalva: c.conta },
     });
   }
   logger.info({ contas: contas.size }, 'mcp-remoto: contas do Asaas carregadas');
@@ -534,8 +534,8 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   setInterval(() => void cofre.varrer().catch((err) => logger.warn({ err }, 'mcp-remoto: varredura do cofre falhou')), 60_000).unref();
   let arquivistas = new Set<string>();
   manterAtualizado(arquivistasDoBanco, (s) => (arquivistas = s), 'quem pode enviar arquivos');
-  // os tetos do dia e a duplicata são lidos da auditoria (banco); o aviso de cada transferência/estorno/cancelamento vai pelo Telegram do João
-  const escritaAsaas = criarEscritaAsaas({ historico: (conta) => lancamentosRecentesDe(prisma, conta), alertar: (texto) => enviarTelegram(texto) });
+  // os tetos do dia e a duplicata são lidos do banco DENTRO de uma trava por chave do Asaas (valem entre instâncias); o aviso de cada transferência/estorno/cancelamento vai pelo Telegram do João
+  const escritaAsaas = criarEscritaAsaas({ porteiro: porteiroPrisma(prisma), alertar: (texto) => enviarTelegram(texto) });
   manterAtualizado(contasAsaasDoBanco, (contas) => (asaas.contas = contas), 'as contas do Asaas');
   const convenia = criarContextoConvenia(new Map());
   manterAtualizado(contasConveniaDoBanco, (contas) => (convenia.contas = contas), 'as contas do Convênia');
@@ -600,7 +600,7 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
       registrarArquivosSePermitido(server, cofre, quem.userId, arquivistas, () => new URL(urlPublica).origin, auditar);
       // Asaas: cliente, cobrança (boleto/Pix/cartão/parcelado), editar, cancelar, estornar e transferir, DIRETO, só para quem está na lista de
       // escrita E só nas unidades de ASAAS_ESCRITA_UNIDADES, com tetos, lista de destinos e aviso no Telegram. O portão fica numa função testada.
-      registrarEscritaAsaasSePermitido(server, asaas, escritaAsaas, quem.userId, escritores, auditar, quem.email);
+      registrarEscritaAsaasSePermitido(server, asaas, escritaAsaas, quem.userId, escritores, auditar, { email: quem.email, clientId: quem.clientId });
       const quemSistemas = { usuario: quem.userId, nome: quem.email || `usuario:${quem.userId}` };
       registrarLeituraSistemas(server, sistemas, quemSistemas, auditar);
       if (escritores.has(quem.userId)) {

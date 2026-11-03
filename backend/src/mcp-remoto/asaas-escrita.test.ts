@@ -5,13 +5,14 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { criarContextoAsaas } from './asaas.js';
-import { asaasFalso, AGORA, ErroHttp, montar, type Cli } from './asaas-falso.js';
+import { asaasFalso, AGORA, BancoFalso, ErroHttp, montar, porteiroEmMemoria, type Cli } from './asaas-falso.js';
+import { ErroDeEntrada } from '../franquia-mcp/travas.js';
 import {
   chaveDeDuplicata, cobrancasPorHora, criarCliente, criarCobranca, criarEscritaAsaas, EVENTO_CLIENTE, EVENTO_COBRANCA, LIMITES_ASAAS, mascararDoc, mascararTelefone,
   unidadesComEscrita, validarCpfCnpj, type PedidoDeCobranca,
 } from './asaas-escrita.js';
 import { registrarEscritaAsaas, registrarEscritaAsaasSePermitido } from './asaas-ferramentas.js';
-import type { Lancamento } from './asaas-limites.js';
+import { FALHA_DO_BANCO } from './asaas-limites.js';
 
 const CPF = '529.982.247-25';
 const CPF_DIGITOS = '52998224725';
@@ -162,7 +163,7 @@ test('ASAAS_ESCRITA_UNIDADES: vazia/ausente = desligada em todas; só as listada
   delete process.env.ASAAS_ESCRITA_UNIDADES;
   try {
     const f = asaasFalso({ clientes: [EXISTENTE] });
-    const real = { asaas: criarContextoAsaas(new Map([[f.conta.slug, f.conta]])), esc: criarEscritaAsaas({ agora: () => AGORA }) };
+    const real = { asaas: criarContextoAsaas(new Map([[f.conta.slug, f.conta]])), esc: criarEscritaAsaas({ agora: () => AGORA, porteiro: porteiroEmMemoria(new BancoFalso(), () => AGORA) }) };
     await assert.rejects(() => criarCobranca(real, Q, COBRANCA, () => undefined), /ASAAS_ESCRITA_UNIDADES/);
     process.env.ASAAS_ESCRITA_UNIDADES = 'doutor-hernia-serra';
     assert.equal(((await criarCobranca(real, Q, COBRANCA, () => undefined)) as any).gerado, true);
@@ -380,16 +381,24 @@ test('limite por hora e conta: acima de N cobranças na hora, recusa; passada a 
   await assert.rejects(() => cobrar(m, { externalReference: 'h4', valor: 14 }), /DESLIGADA.*ASAAS_COBRANCAS_POR_HORA/);
 });
 
-test('histórico da auditoria: depois de um reinício a duplicata e os limites valem; histórico que não carrega = nada é gravado', async () => {
+test('banco da auditoria: a duplicata e os limites vêm do banco (valem depois de um reinício); banco que não responde = nada é gravado', async () => {
   const chave = chaveDeDuplicata('doutor-hernia-serra', EXISTENTE.id, 250, VENC, 'Consulta de avaliação', 'pedido-1');
-  const hist: Lancamento[] = [{ conta: 'doutor-hernia-serra', tipo: 'cobranca', valor: 250, noTeto: 250, em: AGORA - 60_000, chave, id: 'pay_antiga' }];
-  const m = montar({ clientes: [EXISTENTE] }, { historico: async () => hist });
-  const igual = montar({ clientes: [EXISTENTE] }, { historico: async () => hist });
+  const banco = new BancoFalso();
+  banco.gravar({ ferramenta: EVENTO_COBRANCA, argumentos: { conta: 'doutor-hernia-serra', chave, valor: 250, cobrancaId: 'pay_antiga' }, ok: true }, AGORA - 60_000);
+  const igual = montar({ clientes: [EXISTENTE] }, { banco });
   await assert.rejects(() => cobrar(igual, { cpfCnpj: undefined, clienteId: EXISTENTE.id }), /cobrança igual.*pay_antiga/s);
   assert.equal(igual.f.posts().length, 0);
-  const quebrado = montar({ clientes: [EXISTENTE] }, { historico: async () => { throw new Error('banco fora'); } });
-  await assert.rejects(() => cobrar(quebrado), /não consegui conferir as operações recentes/);
+  const falha = async () => {
+    throw new ErroDeEntrada(FALHA_DO_BANCO);
+  };
+  const quebrado = montar({ clientes: [EXISTENTE] }, { porteiro: { reservar: falha, ler: falha } });
+  await assert.rejects(() => cobrar(quebrado), /não consegui conferir nem registrar a operação no banco.*nada foi feito/s);
   assert.equal(quebrado.f.posts().length, 0);
+  // sem porteiro nenhum (servidor subiu sem o banco) a escrita de dinheiro nem anda
+  const f = asaasFalso({ clientes: [EXISTENTE] });
+  const semPorteiro = { asaas: criarContextoAsaas(new Map([[f.conta.slug, f.conta]])), esc: criarEscritaAsaas({ agora: () => AGORA, unidades: () => new Set(['doutor-hernia-serra']) }) };
+  await assert.rejects(() => criarCobranca(semPorteiro, Q, COBRANCA, () => undefined), /sem o porteiro dos tetos/);
+  assert.equal(f.chamadas.length, 0);
 });
 
 // ------------------------------------------------------------------ erros do Asaas
@@ -400,14 +409,14 @@ test('403: chave só de leitura → erro em português claro, sem vazar chave, C
   assert.ok(erro);
   for (const proibido of [CHAVE_COMPLETA, 'aact_prod', CPF_DIGITOS, 'maria.silva@exemplo.com']) assert.ok(!erro.message.includes(proibido), proibido);
   assert.match(erro.message, /A cobrança não saiu/);
-  assert.ok(m.esc.livro.somaDoDia('doutor-hernia-serra', AGORA, 'America/Sao_Paulo') === 0, 'recusa definitiva não gasta o teto do dia');
+  assert.equal(await m.usado(), 0, 'recusa definitiva não gasta o teto do dia');
 });
 
 test('sem resposta ou 5xx (pode ter criado): a mensagem diz que PODE ter sido gerada, a reserva fica (gasta o teto), o João é avisado', async () => {
   for (const erro of [new ErroHttp('timeout', null), new ErroHttp('Asaas 503', 503)]) {
     const m = montar({ clientes: [EXISTENTE], falhaNoPagamento: erro });
     await assert.rejects(() => cobrar(m), /PODE ter sido gerada/);
-    assert.ok(m.esc.livro.somaDoDia('doutor-hernia-serra', AGORA, 'America/Sao_Paulo') === 250, 'a reserva fica');
+    assert.equal(await m.usado(), 250, 'a reserva fica');
     assert.equal(m.eventos.find((e) => e.evento === EVENTO_COBRANCA)!.args.incerto, true);
     assert.match(m.avisos.join('\n'), /RESULTADO INCERTO/);
     await assert.rejects(() => cobrar(m), /cobrança igual/, 'repetir o mesmo pedido é barrado');
@@ -496,6 +505,11 @@ test('protocolo: as ferramentas são diretas (nada de preparar/confirmar) e NÃO
   const descricoes = (await joao.listTools()).tools.map((t) => t.description ?? '').join('\n');
   assert.match(descricoes, /NUNCA: altera dados bancários da clínica, chaves de API, webhooks ou usuários do Asaas/);
   assert.match(descricoes, /sem pedir confirmação/);
+  const por = new Map((await joao.listTools()).tools.map((t) => [t.name, t.description ?? '']));
+  for (const nome of ['asaas_estornar_cobranca', 'asaas_transferir']) assert.match(por.get(nome)!, /^IRREVERSÍVEL — NÃO TEM VOLTA/, nome);
+  assert.match(por.get('asaas_estornar_cobranca')!, /EXPRESSAMENTE.*JÁ PAGOU/s);
+  assert.match(por.get('asaas_transferir')!, /EXPRESSAMENTE.*conferir valor e destino/s);
+  assert.match(descricoes, /estorno e transferência têm teto PRÓPRIO, menor \(padrão R\$ 500 por operação e R\$ 2\.000 por dia/);
   assert.match(descricoes, /R\$ 5\.000 por operação e R\$ 20\.000 por dia/);
 });
 
@@ -542,7 +556,7 @@ test('o portão de quem escreve: fora da lista de escrita as ferramentas nem exi
   const m = montar({ clientes: [EXISTENTE] });
   const listar = async (usuario: string, escritores: Set<string>) => {
     const server = new McpServer({ name: 't', version: '0' });
-    const registrou = registrarEscritaAsaasSePermitido(server, m.asaas, m.esc, usuario, escritores, () => undefined, 'x@y.com');
+    const registrou = registrarEscritaAsaasSePermitido(server, m.asaas, m.esc, usuario, escritores, () => undefined, { email: 'x@y.com' });
     const [a, b] = InMemoryTransport.createLinkedPair();
     const cliente = new Client({ name: 'teste', version: '0' });
     await Promise.all([server.connect(a), cliente.connect(b)]);
@@ -565,11 +579,11 @@ test('o portão de quem escreve: fora da lista de escrita as ferramentas nem exi
 test('producao.ts liga a escrita SÓ pelo portão testado (lista de escritores), com o Telegram e o histórico da auditoria', () => {
   const src = readFileSync(new URL('./producao.ts', import.meta.url), 'utf8');
   assert.equal(src.match(/registrarEscritaAsaasSePermitido\(/g)?.length, 1);
-  assert.match(src, /registrarEscritaAsaasSePermitido\(server, asaas, escritaAsaas, quem\.userId, escritores, auditar, quem\.email\)/);
+  assert.match(src, /registrarEscritaAsaasSePermitido\(server, asaas, escritaAsaas, quem\.userId, escritores, auditar, \{ email: quem\.email, clientId: quem\.clientId \}\)/);
   // ninguém chama o registrador cru, que não confere quem pode escrever
   assert.equal(src.match(/\bregistrarEscritaAsaas\(/g), null);
   assert.doesNotMatch(src, /import \{[^}]*\bregistrarEscritaAsaas\b[^}]*\} from/);
   // o aviso de cada transferência/estorno/cancelamento sai pelo Telegram de verdade, e o teto do dia vem do banco
-  assert.match(src, /criarEscritaAsaas\(\{[^}]*lancamentosRecentesDe\(prisma, conta\)[^}]*alertar: \(texto\) => enviarTelegram\(texto\)/s);
+  assert.match(src, /criarEscritaAsaas\(\{ porteiro: porteiroPrisma\(prisma\), alertar: \(texto\) => enviarTelegram\(texto\) \}\)/);
   assert.match(src, /asaasEscrever\(c\.unitId, c\.chave, metodo, caminho, corpo\)/);
 });

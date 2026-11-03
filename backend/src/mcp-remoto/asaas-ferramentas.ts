@@ -12,7 +12,7 @@ import { z } from 'zod';
 import type { Auditar } from '../franquia-mcp/ferramentas.js';
 import { asaasCobranca, type ContextoAsaas } from './asaas.js';
 import { cancelarCobranca, editarCliente, editarCobranca, estornarCobranca, limitesEDestinos, transferir } from './asaas-operacoes.js';
-import { criarCliente, criarCobranca, LIMITES_ASAAS, mascararPedido, sanear, type CtxEscrita, type EstadoEscritaAsaas, type Quem, type Registrar } from './asaas-escrita.js';
+import { criarCliente, criarCobranca, LIMITES_ASAAS, mascararPedido, recusarCamposDesconhecidos, sanear, type CtxEscrita, type EstadoEscritaAsaas, type Quem, type Registrar } from './asaas-escrita.js';
 import { PADRAO_TETOS } from './asaas-limites.js';
 import { executar } from './ferramenta.js';
 
@@ -48,14 +48,32 @@ export function registrarEscritaAsaas(server: McpServer, asaas: ContextoAsaas, e
   const avisarCliente = z.boolean().optional().describe('o Asaas pode mandar e-mail/SMS da cobrança ao cliente? Padrão NÃO (false). Só true se a pessoa pediu.');
   const escreve = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true };
   const apaga = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true };
-  const tetos = `Tetos automáticos por clínica: padrão R$ ${PADRAO_TETOS.operacaoReais.toLocaleString('pt-BR')} por operação e R$ ${PADRAO_TETOS.diaReais.toLocaleString('pt-BR')} por dia (soma de cobranças criadas + estornos + transferências; o servidor pode ter valores diferentes — veja asaas_limites). Passou do teto, recusa.`;
+  const tetos = `Tetos automáticos (por chave do Asaas; veja o que vale de verdade em asaas_limites): padrão R$ ${PADRAO_TETOS.operacaoReais.toLocaleString('pt-BR')} por operação e R$ ${PADRAO_TETOS.diaReais.toLocaleString('pt-BR')} por dia, somando cobranças criadas + estornos + transferências; estorno e transferência têm teto PRÓPRIO, menor (padrão R$ ${PADRAO_TETOS.saidaOperacaoReais.toLocaleString('pt-BR')} por operação e R$ ${PADRAO_TETOS.saidaDiaReais.toLocaleString('pt-BR')} por dia, cada um). Passou do teto, recusa; quem sobe o teto é o João, no servidor.`;
+
+  /**
+   * Registra a ferramenta com o esquema `passthrough`: o SDK NÃO descarta em silêncio o campo que não existe (ex. `cardNumber`, `ccv`, `expiryMonth`);
+   * ele chega aqui e o pedido inteiro é RECUSADO. No registro da auditoria, campo desconhecido entra só pelo nome, nunca pelo valor.
+   */
+  const tool = <S extends z.ZodRawShape>(
+    nome: string,
+    cfg: { title: string; description: string; inputSchema: S; annotations: Record<string, boolean> },
+    fn: (args: z.infer<z.ZodObject<S>>) => Promise<unknown>,
+  ) => {
+    const conhecidos = Object.keys(cfg.inputSchema);
+    server.registerTool(nome, { ...cfg, inputSchema: z.object(cfg.inputSchema).passthrough() }, (args: Record<string, unknown>) =>
+      executarSeguro(nome, mascararPedido(args, conhecidos), auditar, async () => {
+        recusarCamposDesconhecidos(args, conhecidos);
+        return fn(args as z.infer<z.ZodObject<S>>);
+      }),
+    );
+  };
 
   server.registerTool(
     'asaas_limites',
     {
       title: 'Limites e destinos do Asaas (clínica)',
       description:
-        'Mostra, para UMA clínica com escrita liberada: os tetos (por operação e por dia), quanto já foi usado HOJE e quanto resta, e a lista de destinos permitidos para transferência ' +
+        'Mostra, para UMA clínica com escrita liberada: os tetos (geral e próprios de estorno e de transferência, por operação e por dia, por chave do Asaas), quanto já foi usado HOJE e quanto resta, e a lista de destinos permitidos para transferência ' +
         '(vazia = transferência desligada). Consulte antes de transferir ou de uma cobrança grande. Não grava nada. ' + PROIBIDO,
       inputSchema: { unidade },
       annotations: { readOnlyHint: true, openWorldHint: true },
@@ -74,7 +92,7 @@ export function registrarEscritaAsaas(server: McpServer, asaas: ContextoAsaas, e
     },
     (args) => executarSeguro('asaas_cobranca', args, auditar, () => asaasCobranca(asaas, args)),
   );
-  server.registerTool(
+  tool(
     'asaas_criar_cliente',
     {
       title: 'Cadastrar cliente (Asaas)',
@@ -92,9 +110,9 @@ export function registrarEscritaAsaas(server: McpServer, asaas: ContextoAsaas, e
       },
       annotations: escreve,
     },
-    (args) => executarSeguro('asaas_criar_cliente', mascararPedido(args), auditar, () => criarCliente(ctx, quem, args, registrar)),
+    (args) => criarCliente(ctx, quem, args, registrar),
   );
-  server.registerTool(
+  tool(
     'asaas_editar_cliente',
     {
       title: 'Editar cliente (Asaas)',
@@ -111,9 +129,9 @@ export function registrarEscritaAsaas(server: McpServer, asaas: ContextoAsaas, e
       },
       annotations: apaga,
     },
-    (args) => executarSeguro('asaas_editar_cliente', mascararPedido(args), auditar, () => editarCliente(ctx, quem, args, registrar)),
+    (args) => editarCliente(ctx, quem, args, registrar),
   );
-  server.registerTool(
+  tool(
     'asaas_criar_cobranca',
     {
       title: 'Criar cobrança (Asaas)',
@@ -136,22 +154,18 @@ export function registrarEscritaAsaas(server: McpServer, asaas: ContextoAsaas, e
         descricao: z.string().min(1).max(500),
         externalReference: z.string().max(100).optional(),
         avisarCliente,
-        // dados de cartão NUNCA entram: se vierem, a ferramenta recusa o pedido inteiro
-        numeroDoCartao: z.unknown().optional().describe('NÃO USE: dado de cartão nunca entra pelo chat (o pedido é recusado)'),
-        cvv: z.unknown().optional().describe('NÃO USE: dado de cartão nunca entra pelo chat (o pedido é recusado)'),
-        creditCard: z.unknown().optional().describe('NÃO USE: dado de cartão nunca entra pelo chat (o pedido é recusado)'),
       },
       annotations: escreve,
     },
-    (args) => executarSeguro('asaas_criar_cobranca', mascararPedido(args), auditar, () => criarCobranca(ctx, quem, args, registrar)),
+    (args) => criarCobranca(ctx, quem, args, registrar),
   );
-  server.registerTool(
+  tool(
     'asaas_editar_cobranca',
     {
       title: 'Editar cobrança pendente (Asaas)',
       description:
         'ALTERA valor, vencimento ou descrição de uma cobrança PENDENTE (aguardando pagamento) pelo id (pay_…). Cobrança já paga ou vencida não edita (cancele ou estorne). ' +
-        'O valor novo conta no teto por operação; se subir, o acréscimo conta no teto do dia. ' + SO_QUEM_PODE,
+        'O valor novo conta no teto por operação; se subir, o acréscimo conta no teto do dia (reduzir não devolve espaço). ' + SO_QUEM_PODE,
       inputSchema: {
         unidade,
         cobrancaId: z.string().min(4).describe('pay_… (veja o id em asaas_cobrancas ou asaas_cobranca)'),
@@ -161,9 +175,9 @@ export function registrarEscritaAsaas(server: McpServer, asaas: ContextoAsaas, e
       },
       annotations: apaga,
     },
-    (args) => executarSeguro('asaas_editar_cobranca', mascararPedido(args), auditar, () => editarCobranca(ctx, quem, args, registrar)),
+    (args) => editarCobranca(ctx, quem, args, registrar),
   );
-  server.registerTool(
+  tool(
     'asaas_cancelar_cobranca',
     {
       title: 'Cancelar cobrança (Asaas)',
@@ -173,14 +187,16 @@ export function registrarEscritaAsaas(server: McpServer, asaas: ContextoAsaas, e
       inputSchema: { unidade, cobrancaId: z.string().min(4).describe('pay_…') },
       annotations: apaga,
     },
-    (args) => executarSeguro('asaas_cancelar_cobranca', mascararPedido(args), auditar, () => cancelarCobranca(ctx, quem, args, registrar)),
+    (args) => cancelarCobranca(ctx, quem, args, registrar),
   );
-  server.registerTool(
+  tool(
     'asaas_estornar_cobranca',
     {
       title: 'Estornar cobrança recebida (Asaas)',
       description:
-        'ESTORNA (devolve o dinheiro de) uma cobrança já RECEBIDA ou CONFIRMADA, pelo id (pay_…): total (padrão) ou parcial (informe valor). Conta no teto por operação e no teto do dia. ' +
+        'IRREVERSÍVEL — NÃO TEM VOLTA: o dinheiro sai da conta e não há como desfazer por aqui. Só use quando a pessoa pediu EXPRESSAMENTE para devolver o dinheiro de uma cobrança que o paciente JÁ PAGOU ' +
+        '(RECEBIDA ou CONFIRMADA), pelo id (pay_…). Sem o pedido claro da pessoa, ou se a cobrança ainda não foi paga, NÃO use (para cobrança não paga, o caminho é asaas_cancelar_cobranca). ' +
+        'Estorna o valor todo que ainda resta, ou parte dele (informe valor); estornos anteriores da mesma cobrança são descontados: nunca devolve mais do que o paciente pagou. ' +
         'Cada estorno avisa o João no Telegram. Estorno igual em 10 minutos é recusado. ' + tetos + ' ' + SO_QUEM_PODE,
       inputSchema: {
         unidade,
@@ -190,13 +206,15 @@ export function registrarEscritaAsaas(server: McpServer, asaas: ContextoAsaas, e
       },
       annotations: apaga,
     },
-    (args) => executarSeguro('asaas_estornar_cobranca', mascararPedido(args), auditar, () => estornarCobranca(ctx, quem, args, registrar)),
+    (args) => estornarCobranca(ctx, quem, args, registrar),
   );
-  server.registerTool(
+  tool(
     'asaas_transferir',
     {
       title: 'Transferir / Pix de saída (Asaas)',
       description:
+        'IRREVERSÍVEL — NÃO TEM VOLTA: o dinheiro sai da conta da clínica e não há como desfazer por aqui. Só use quando a pessoa pediu EXPRESSAMENTE para transferir aquele valor para aquele destino, ' +
+        'depois de conferir valor e destino com ela; na dúvida, pergunte antes. ' +
         'TRANSFERE dinheiro da conta Asaas da clínica (Pix de saída) SÓ para um destino que já está na lista permitida daquela clínica (veja asaas_limites). O destino é achado pela chave Pix EXATA, pela ' +
         'conta bancária EXATA ou pelo apelido; o que vai ao Asaas é o que está na lista do servidor, nunca o que for digitado aqui. Destino fora da lista é recusado, e a lista vazia deixa a ' +
         'transferência DESLIGADA. NÃO existe cadastrar destino novo pelo chat: quem coloca é o João, no servidor. Cada transferência avisa o João no Telegram (conta, valor, quem pediu, destino). ' +
@@ -213,7 +231,7 @@ export function registrarEscritaAsaas(server: McpServer, asaas: ContextoAsaas, e
       },
       annotations: apaga,
     },
-    (args) => executarSeguro('asaas_transferir', mascararPedido(args), auditar, () => transferir(ctx, quem, args, registrar)),
+    (args) => transferir(ctx, quem, args, registrar),
   );
 }
 
@@ -228,9 +246,9 @@ export function registrarEscritaAsaasSePermitido(
   usuario: string,
   escritores: ReadonlySet<string>,
   auditar: Auditar,
-  email?: string,
+  quem: { email?: string; clientId?: string } = {},
 ): boolean {
   if (!escritores.has(usuario)) return false;
-  registrarEscritaAsaas(server, asaas, esc, { id: usuario, ...(email ? { email } : {}) }, auditar);
+  registrarEscritaAsaas(server, asaas, esc, { id: usuario, ...(quem.email ? { email: quem.email } : {}), ...(quem.clientId ? { clientId: quem.clientId } : {}) }, auditar);
   return true;
 }

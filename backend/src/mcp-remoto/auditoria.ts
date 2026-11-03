@@ -9,7 +9,9 @@
  */
 import type { Auditar } from '../franquia-mcp/ferramentas.js';
 import { mascararArgumentos, mascararErro } from '../lib/integracoes/mascaras.js';
-import { EVENTO_CLIENTE, EVENTO_COBRANCA, EVENTO_OPERACAO, JANELA_LIVRO_MS, type Lancamento, type TipoDeLancamento } from './asaas-limites.js';
+import { randomUUID } from 'node:crypto';
+import { ErroDeEntrada } from '../franquia-mcp/travas.js';
+import { EVENTO_CLIENTE, EVENTO_COBRANCA, EVENTO_OPERACAO, FALHA_DO_BANCO, JANELA_LIVRO_MS, Livro, type Lancamento, type Porteiro, type TipoDeLancamento } from './asaas-limites.js';
 
 /**
  * Eventos que o código grava e relê. Só entram aqui os que são montados sem dado pessoal. O `evo_envio` NÃO entra: o teto
@@ -63,11 +65,11 @@ export function criarAuditor(
  */
 export type AuditarComEspera = (registro: Parameters<Auditar>[0]) => Promise<boolean>;
 
-/** O pedaço do cliente do banco que o leitor usa (o `prisma` real ou um falso nos testes). */
+/** O pedaço do cliente do banco que o leitor usa (o `prisma` real, uma transação dele ou um falso nos testes). */
 export interface LeitorDeAuditoria {
   mcpAuditoria: {
     findMany(args: {
-      where: { ferramenta: { in: string[] }; createdAt: { gte: Date }; argumentos: { path: string[]; equals: string } };
+      where: { ferramenta: { in: string[] }; createdAt: { gte: Date }; OR: Array<{ argumentos: { path: string[]; equals: string } }> };
       select: { createdAt: true; ok: true; ferramenta: true; argumentos: true };
     }): Promise<Array<{ createdAt: Date; ok: boolean; ferramenta: string; argumentos: unknown }>>;
   };
@@ -76,39 +78,94 @@ export interface LeitorDeAuditoria {
 const TIPOS: Record<string, TipoDeLancamento> = { estornar_cobranca: 'estorno', transferir: 'transferencia', editar_cobranca: 'edicao' };
 
 /**
- * O que a escrita do Asaas fez nesta conta nas últimas 36 h (auditoria do conector): cobranças criadas, estornos, transferências, edições.
- * É o que faz o teto do dia, o teto por hora e a duplicata sobreviverem a um reinício. Falha definitiva do Asaas não conta;
- * sucesso e "sem resposta" (pode ter gravado) contam.
+ * O que a escrita do Asaas fez nas últimas 36 h (auditoria do conector) na CHAVE do Asaas `grupo` (e na conta `conta`, para o que foi gravado antes de a
+ * chave entrar no registro): cobranças criadas, estornos, transferências, edições. É o que faz o teto do dia, o teto por hora e a duplicata valerem
+ * entre instâncias e depois de um reinício. Falha definitiva do Asaas não conta; sucesso e "sem resposta" (pode ter gravado) contam.
+ * A INTENÇÃO (gravada antes de chamar o Asaas) conta como "pode ter acontecido" até aparecer o resultado DA MESMA operação (mesmo `intencaoId`).
  */
-export async function lancamentosRecentesDe(db: LeitorDeAuditoria, conta: string, agora: number = Date.now()): Promise<Lancamento[]> {
+export async function lancamentosRecentesDe(db: LeitorDeAuditoria, conta: string, agora: number = Date.now(), grupo?: string): Promise<Lancamento[]> {
   const linhas = await db.mcpAuditoria.findMany({
-    where: { ferramenta: { in: [EVENTO_COBRANCA, EVENTO_OPERACAO] }, createdAt: { gte: new Date(agora - JANELA_LIVRO_MS) }, argumentos: { path: ['conta'], equals: conta } },
+    where: {
+      ferramenta: { in: [EVENTO_COBRANCA, EVENTO_OPERACAO] },
+      createdAt: { gte: new Date(agora - JANELA_LIVRO_MS) },
+      OR: [{ argumentos: { path: ['conta'], equals: conta } }, ...(grupo ? [{ argumentos: { path: ['chaveAsaas'], equals: grupo } }] : [])],
+    },
     select: { createdAt: true, ok: true, ferramenta: true, argumentos: true },
   });
-  type Args = { conta?: string; chave?: string; cobrancaId?: string; idAsaas?: string; incerto?: boolean; valor?: number; noTeto?: number; operacao?: string; fase?: string };
-  // a INTENÇÃO (gravada antes de chamar o Asaas) vale como "pode ter acontecido" até aparecer um resultado da mesma operação (mesma chave, depois dela)
-  const resultados = new Map<string, number[]>();
+  type Args = { conta?: string; chaveAsaas?: string; chave?: string; cobrancaId?: string; idAsaas?: string; incerto?: boolean; valor?: number; noTeto?: number; operacao?: string; fase?: string; intencaoId?: string };
+  const resolvidas = new Set<string>();
   for (const l of linhas) {
     const a = (l.argumentos ?? {}) as Args;
-    if (a.fase !== 'intencao' && a.chave) {
-      const k = `${l.ferramenta}|${a.chave}`;
-      const ts = resultados.get(k) ?? [];
-      ts.push(l.createdAt.getTime());
-      resultados.set(k, ts);
-    }
+    if (a.fase !== 'intencao' && a.intencaoId) resolvidas.add(a.intencaoId);
   }
   const out: Lancamento[] = [];
   for (const l of linhas) {
     const a = (l.argumentos ?? {}) as Args;
-    if (a.fase === 'intencao' && (resultados.get(`${l.ferramenta}|${a.chave}`) ?? []).some((t) => t >= l.createdAt.getTime())) continue;
-    if (a.conta !== conta || !(l.ok || a.incerto)) continue;
+    if (a.fase === 'intencao' && a.intencaoId && resolvidas.has(a.intencaoId)) continue;
+    if (!(a.conta === conta || (grupo && a.chaveAsaas === grupo)) || !(l.ok || a.incerto)) continue;
     const valor = Number(a.valor);
     if (!Number.isFinite(valor)) continue;
     const tipo = l.ferramenta === EVENTO_COBRANCA ? 'cobranca' : TIPOS[a.operacao ?? ''];
     if (!tipo) continue; // cancelar e editar cliente não consomem teto
     const noTeto = tipo === 'cobranca' ? valor : Number.isFinite(Number(a.noTeto)) ? Number(a.noTeto) : valor;
     const id = a.cobrancaId ?? a.idAsaas;
-    out.push({ conta, tipo, valor, noTeto, em: l.createdAt.getTime(), ...(a.chave ? { chave: a.chave } : {}), ...(id ? { id } : {}) });
+    out.push({
+      conta: a.conta ?? conta, tipo, valor, noTeto, em: l.createdAt.getTime(),
+      ...(a.chave ? { chave: a.chave } : {}), ...(id ? { id } : {}), ...(a.intencaoId ? { intencaoId: a.intencaoId } : {}),
+    });
   }
   return out;
+}
+
+/** O pedaço do `PrismaClient` que o porteiro usa. */
+export interface BancoDoPorteiro extends LeitorDeAuditoria {
+  $transaction<T>(fn: (tx: TransacaoDoPorteiro) => Promise<T>, opcoes?: { timeout?: number; maxWait?: number }): Promise<T>;
+}
+export interface TransacaoDoPorteiro extends LeitorDeAuditoria {
+  $executeRaw(consulta: TemplateStringsArray, ...valores: unknown[]): Promise<number>;
+  mcpAuditoria: LeitorDeAuditoria['mcpAuditoria'] & {
+    create(args: { data: { userId: string; clientId: string; ferramenta: string; argumentos: any; ok: boolean; duracaoMs: number } }): Promise<unknown>;
+  };
+}
+
+/**
+ * O porteiro de produção: cada reserva roda numa TRANSAÇÃO que pega `pg_advisory_xact_lock` da chave do Asaas, lê a auditoria, deixa a conferência
+ * recusar e grava a intenção, tudo antes de soltar a trava (no fim da transação). Duas instâncias (deploy com sobreposição, réplica) esperam uma a outra.
+ */
+export function porteiroPrisma(db: BancoDoPorteiro): Porteiro {
+  return {
+    async reservar(p) {
+      const intencaoId = randomUUID();
+      try {
+        await db.$transaction(
+          async (tx) => {
+            await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`asaas-dinheiro:${p.grupo}`}::text, 0))`;
+            p.conferir(new Livro(await lancamentosRecentesDe(tx, p.conta, p.agora, p.grupo)));
+            await tx.mcpAuditoria.create({
+              data: {
+                userId: p.quem.userId,
+                clientId: p.quem.clientId ?? 'conector',
+                ferramenta: p.evento,
+                argumentos: { ...p.argumentos, conta: p.conta, chaveAsaas: p.grupo, intencaoId, fase: 'intencao', incerto: true },
+                ok: true,
+                duracaoMs: 0,
+              },
+            });
+          },
+          { timeout: 15_000, maxWait: 15_000 },
+        );
+      } catch (e) {
+        if (e instanceof ErroDeEntrada) throw e;
+        throw new ErroDeEntrada(FALHA_DO_BANCO);
+      }
+      return { intencaoId };
+    },
+    async ler(grupo, conta, agora) {
+      try {
+        return new Livro(await lancamentosRecentesDe(db, conta, agora, grupo));
+      } catch {
+        throw new ErroDeEntrada(FALHA_DO_BANCO);
+      }
+    },
+  };
 }

@@ -3,14 +3,15 @@ import assert from 'node:assert/strict';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { AGORA, ErroHttp, montar, type Cli, type Pg } from './asaas-falso.js';
+import { AGORA, BancoFalso, ErroHttp, montar, type Cli, type Pg } from './asaas-falso.js';
+import { ErroDeEntrada } from '../franquia-mcp/travas.js';
 import { criarCobranca, EVENTO_OPERACAO, type PedidoDeCobranca } from './asaas-escrita.js';
 import { asaasCobranca } from './asaas.js';
 import { cabecalhoDaConta, contaDeEscrita } from './asaas-escrita.js';
 import { mascararDestinoDoPedido } from './asaas-escrita.js';
 import { registrarEscritaAsaas } from './asaas-ferramentas.js';
 import { cancelarCobranca, editarCliente, editarCobranca, estornarCobranca, limitesEDestinos, transferir } from './asaas-operacoes.js';
-import { lerDestinos, type DestinosLidos } from './asaas-limites.js';
+import { FALHA_DO_BANCO, lerDestinos, type DestinosLidos } from './asaas-limites.js';
 
 const Q = { id: 'u1', email: 'joao@exemplo.com' };
 const CPF = '529.982.247-25';
@@ -29,7 +30,7 @@ const DESTINOS_ENV = JSON.stringify({
 });
 const destinosDoEnv = (env: string | undefined) => (slug: string): DestinosLidos => lerDestinos(slug, { ASAAS_TRANSFERENCIA_DESTINOS: env });
 const comDestinos = { destinos: destinosDoEnv(DESTINOS_ENV) };
-const totais = (m: ReturnType<typeof montar>) => m.esc.livro.somaDoDia('doutor-hernia-serra', m.relogio.t, 'America/Sao_Paulo');
+const totais = (m: ReturnType<typeof montar>) => m.usado();
 
 // ------------------------------------------------------------------ editar cliente
 
@@ -65,10 +66,10 @@ test('editar cobrança pendente: PUT com valor/vencimento/descrição; só PENDE
   const r = (await editarCobranca(m.ctx, Q, { unidade: 'serra', cobrancaId: PENDENTE.id, valor: 450, vencimento: '2026-11-20' }, m.registrar)) as any;
   assert.equal(r.alterada, true);
   assert.deepEqual(m.f.posts()[0], { metodo: 'PUT', caminho: `/payments/${PENDENTE.id}`, corpo: { value: 450, dueDate: '2026-11-20' } });
-  assert.equal(totais(m), 150, 'só o acréscimo de 300 para 450');
+  assert.equal(await totais(m), 150, 'só o acréscimo de 300 para 450');
   // diminuir não gasta teto
   await editarCobranca(m.ctx, Q, { unidade: 'serra', cobrancaId: PENDENTE.id, valor: 100 }, m.registrar);
-  assert.equal(totais(m), 150);
+  assert.equal(await totais(m), 150);
   await assert.rejects(() => editarCobranca(m.ctx, Q, { unidade: 'serra', cobrancaId: PAGA.id, valor: 1 }, m.registrar), /só cobrança PENDENTE.*recebida/);
   await assert.rejects(() => editarCobranca(m.ctx, Q, { unidade: 'serra', cobrancaId: 'pay_vencida00001', valor: 1 }, m.registrar), /Cancele e crie outra/);
   await assert.rejects(() => editarCobranca(m.ctx, Q, { unidade: 'serra', cobrancaId: PENDENTE.id }, m.registrar), /nada para alterar/);
@@ -83,7 +84,7 @@ test('editar cobrança: valor novo acima do teto por operação recusa; editar s
   assert.equal(m.f.posts().length, 0);
   // diminuir uma cobrança que já passa do teto (criada no painel ou com teto antigo) não envolve dinheiro novo
   assert.equal(((await editarCobranca(m.ctx, Q, { unidade: 'serra', cobrancaId: PENDENTE.id, valor: 6000 }, m.registrar)) as any).alterada, true);
-  assert.equal(totais(m), 0);
+  assert.equal(await totais(m), 0);
   assert.equal(((await editarCobranca(m.ctx, Q, { unidade: 'serra', cobrancaId: PENDENTE.id, vencimento: '2026-11-15' }, m.registrar)) as any).alterada, true);
   // subir o valor para mais da metade do teto avisa o João
   const n = montar({ pagamentos: [{ ...PENDENTE }] });
@@ -110,7 +111,7 @@ test('cancelar: DELETE da cobrança pendente ou vencida, SEM confirmação, com 
   assert.equal(m.avisos.length, 2);
   const ev = m.eventos.filter((e) => e.evento === EVENTO_OPERACAO);
   assert.deepEqual(ev.map((e) => [e.args.operacao, e.args.noTeto, e.ok]), [['cancelar_cobranca', 0, true], ['cancelar_cobranca', 0, true]]);
-  assert.equal(totais(m), 0, 'cancelar não gasta teto');
+  assert.equal(await totais(m), 0, 'cancelar não gasta teto');
 });
 
 test('cancelar: cobrança já paga NÃO cancela e manda estornar; inexistente e id torto recusam; nada é gravado nem avisado', async () => {
@@ -140,11 +141,11 @@ test('estornar: total (sem valor no corpo) e parcial (valor no corpo), DIRETO, c
   assert.equal(total.estornado, true);
   assert.deepEqual(m.f.posts()[0], { metodo: 'POST', caminho: `/payments/${PAGA.id}/refund`, corpo: { description: 'paciente desistiu' } });
   assert.equal(total.cobranca.estornoParcial, false);
-  assert.equal(totais(m), 800);
+  assert.equal(await totais(m), 800);
   const parcial = (await estornarCobranca(m.ctx, Q, { unidade: 'serra', cobrancaId: 'pay_paga00000002', valor: 250 }, m.registrar)) as any;
   assert.deepEqual(m.f.posts()[1]!.corpo, { value: 250 });
   assert.equal(parcial.cobranca.estornoParcial, true);
-  assert.equal(totais(m), 1050);
+  assert.equal(await totais(m), 1050);
   assert.equal(m.avisos.length, 2);
   assert.match(m.avisos[0]!, /ESTORNO\n/);
   assert.match(m.avisos[0]!, /ESTORNO TOTAL · motivo: paciente desistiu/);
@@ -158,7 +159,7 @@ test('estornar: total (sem valor no corpo) e parcial (valor no corpo), DIRETO, c
 test('estornar: cobrança pendente manda cancelar; parcial maior que a cobrança recusa; estorno igual em 10 min recusa; acima do teto por operação recusa', async () => {
   const m = montar({ pagamentos: [{ ...PENDENTE }, { ...PAGA }] }, { tetoOperacao: () => 5000 });
   await assert.rejects(() => estornarCobranca(m.ctx, Q, { unidade: 'serra', cobrancaId: PENDENTE.id }, m.registrar), /asaas_cancelar_cobranca/);
-  await assert.rejects(() => estornarCobranca(m.ctx, Q, { unidade: 'serra', cobrancaId: PAGA.id, valor: 900 }, m.registrar), /passa do valor da cobrança/);
+  await assert.rejects(() => estornarCobranca(m.ctx, Q, { unidade: 'serra', cobrancaId: PAGA.id, valor: 900 }, m.registrar), /passa do que ainda resta nesta cobrança/);
   await assert.rejects(() => estornarCobranca(m.ctx, Q, { unidade: 'serra', cobrancaId: PAGA.id, valor: 0 }, m.registrar), /maior que zero/);
   await estornarCobranca(m.ctx, Q, { unidade: 'serra', cobrancaId: PAGA.id, valor: 100 }, m.registrar);
   await assert.rejects(() => estornarCobranca(m.ctx, Q, { unidade: 'serra', cobrancaId: PAGA.id, valor: 100 }, m.registrar), /estorno igual da cobrança pay_paga00000001/);
@@ -172,11 +173,11 @@ test('estornar: cobrança pendente manda cancelar; parcial maior que a cobrança
 test('estornar: Asaas sem resposta = "PODE ter sido feito", gasta o teto e avisa; recusa definitiva (4xx) devolve o teto', async () => {
   const incerto = montar({ pagamentos: [{ ...PAGA }], falhas: [{ metodo: 'POST', caminho: /refund/, erro: new ErroHttp('Asaas 503', 503) }] });
   await assert.rejects(() => estornarCobranca(incerto.ctx, Q, { unidade: 'serra', cobrancaId: PAGA.id }, incerto.registrar), /estorno PODE ter sido feito/);
-  assert.equal(totais(incerto), 800);
+  assert.equal(await totais(incerto), 800);
   assert.match(incerto.avisos.join('\n'), /ESTORNO COM RESULTADO INCERTO/);
   const recusa = montar({ pagamentos: [{ ...PAGA }], falhas: [{ metodo: 'POST', caminho: /refund/, erro: new ErroHttp('Asaas 400: saldo insuficiente', 400) }] });
   await assert.rejects(() => estornarCobranca(recusa.ctx, Q, { unidade: 'serra', cobrancaId: PAGA.id }, recusa.registrar), /saldo insuficiente/);
-  assert.equal(totais(recusa), 0);
+  assert.equal(await totais(recusa), 0);
   assert.equal(recusa.avisos.length, 0);
 });
 
@@ -211,7 +212,7 @@ test('transferir: destino FORA da lista recusa (chave parecida, outra conta, out
   await assert.rejects(() => transferir(m.ctx, Q, { unidade: 'serra', destino: 'fornecedor', contaBancaria: { banco: '341', agencia: '1234', conta: '56789', digito: '0' }, valor: 10 }, m.registrar), /um dos dois/);
   assert.equal(m.f.chamadas.length, 0);
   assert.equal(m.avisos.length, 0);
-  assert.equal(totais(m), 0);
+  assert.equal(await totais(m), 0);
 });
 
 test('transferir: destino DENTRO da lista passa — por chave Pix exata (com ou sem pontuação), por apelido e por conta; o corpo vem da LISTA, não do chat', async () => {
@@ -233,7 +234,7 @@ test('transferir: destino DENTRO da lista passa — por chave Pix exata (com ou 
     bankAccount: { bank: { code: '341' }, accountName: 'Aluguel', ownerName: 'Imobiliária Exemplo', cpfCnpj: CNPJ_DESTINO, agency: '1234', account: '56789', accountDigit: '0', bankAccountType: 'CONTA_CORRENTE' },
   });
   assert.equal(c.transferencia.destino.conta, '***89-0');
-  assert.equal(totais(m), 100 + 200 + 201 + 300);
+  assert.equal(await totais(m), 100 + 200 + 201 + 300);
   // o chat não consegue trocar a chave que vai ao Asaas: o pedido leva uma chave com sobra de texto, e ela não casa
   await assert.rejects(() => transferir(m.ctx, Q, { unidade: 'serra', destino: '11.222.333/0001-81; outra chave', valor: 5 }, m.registrar), /não está na lista/);
 });
@@ -294,14 +295,14 @@ test('transferir: teto DO DIA soma transferências + estornos + cobranças criad
   // 23:30 (02:30Z do dia 29, outro dia em UTC e o MESMO dia em São Paulo): transferência de 300 fecha em 1000
   m.relogio.t = SP('2026-10-28T23:30:00');
   await transferir(m.ctx, Q, { unidade: 'serra', destino: 'fornecedor', valor: 300 }, m.registrar);
-  assert.equal(totais(m), 1000);
+  assert.equal(await totais(m), 1000);
   const antes = m.f.posts().length;
   await assert.rejects(() => transferir(m.ctx, Q, { unidade: 'serra', destino: 'fornecedor', valor: 0.01 }, m.registrar), /passa do teto do dia.*já foram R\$ 1\.000,00.*cobranças criadas \+ estornos \+ transferências.*ASAAS_TETO_DIA_REAIS/s);
   await assert.rejects(() => cobranca('d2', 1), /teto do dia/);
   assert.equal(m.f.posts().length, antes);
   // 00:10 do dia 29 em São Paulo: outro dia, o teto zera
   m.relogio.t = SP('2026-10-29T00:10:00');
-  assert.equal(totais(m), 0);
+  assert.equal(await totais(m), 0);
   assert.equal(((await transferir(m.ctx, Q, { unidade: 'serra', destino: 'fornecedor', valor: 999 }, m.registrar)) as any).limites.restanteHoje, 'R$ 1,00');
 });
 
@@ -315,17 +316,19 @@ test('teto do dia: o dia é o da CLÍNICA — clínica em Manaus (UTC-4) tem a v
   assert.equal(((await transferir(m.ctx, Q, { unidade: 'serra', destino: 'contadora', valor: 1 }, m.registrar)) as any).transferido, true);
 });
 
-test('teto do dia sobrevive ao reinício: lê a auditoria (hoje conta, ontem não), e uma auditoria que não carrega trava tudo', async () => {
+test('teto do dia vem do BANCO: hoje conta, ontem não, e banco que não responde trava tudo', async () => {
   const SP = (iso: string) => Date.parse(`${iso}-03:00`);
-  const hist = async () => [
-    { conta: 'doutor-hernia-serra', tipo: 'transferencia' as const, valor: 700, noTeto: 700, em: SP('2026-10-28T09:00:00'), chave: 'a' },
-    { conta: 'doutor-hernia-serra', tipo: 'estorno' as const, valor: 5000, noTeto: 5000, em: SP('2026-10-27T20:00:00'), chave: 'b' },
-  ];
-  const m = montar({}, { ...comDestinos, tetoDia: () => 1000, historico: hist });
+  const banco = new BancoFalso();
+  banco.gravar({ ferramenta: EVENTO_OPERACAO, argumentos: { conta: 'doutor-hernia-serra', operacao: 'transferir', valor: 700, noTeto: 700, chave: 'a' }, ok: true }, SP('2026-10-28T09:00:00'));
+  banco.gravar({ ferramenta: EVENTO_OPERACAO, argumentos: { conta: 'doutor-hernia-serra', operacao: 'estornar_cobranca', valor: 5000, noTeto: 5000, chave: 'b' }, ok: true }, SP('2026-10-27T20:00:00'));
+  const m = montar({}, { ...comDestinos, banco, tetoDia: () => 1000 });
   await assert.rejects(() => transferir(m.ctx, Q, { unidade: 'serra', destino: 'fornecedor', valor: 301 }, m.registrar), /já foram R\$ 700,00 hoje/);
   assert.equal(((await transferir(m.ctx, Q, { unidade: 'serra', destino: 'fornecedor', valor: 300 }, m.registrar)) as any).transferido, true);
-  const quebrado = montar({}, { ...comDestinos, historico: async () => { throw new Error('banco fora'); } });
-  await assert.rejects(() => transferir(quebrado.ctx, Q, { unidade: 'serra', destino: 'fornecedor', valor: 1 }, quebrado.registrar), /não consegui conferir as operações recentes/);
+  const falha = async () => {
+    throw new ErroDeEntrada(FALHA_DO_BANCO);
+  };
+  const quebrado = montar({}, { ...comDestinos, porteiro: { reservar: falha, ler: falha } });
+  await assert.rejects(() => transferir(quebrado.ctx, Q, { unidade: 'serra', destino: 'fornecedor', valor: 1 }, quebrado.registrar), /não consegui conferir nem registrar a operação no banco/);
   assert.equal(quebrado.f.posts().length, 0);
 });
 
@@ -368,24 +371,26 @@ test('transferir: saldo insuficiente recusa antes de tentar; status FAILED do As
   const pobre = montar({ saldo: 50 }, comDestinos);
   await assert.rejects(() => transferir(pobre.ctx, Q, { unidade: 'serra', destino: 'fornecedor', valor: 100 }, pobre.registrar), /saldo insuficiente.*R\$ 50,00/);
   assert.equal(pobre.f.posts().length, 0);
-  assert.equal(totais(pobre), 0);
+  assert.equal(await totais(pobre), 0);
   const falhou = montar({ statusDaTransferencia: 'FAILED' }, comDestinos);
   await assert.rejects(() => transferir(falhou.ctx, Q, { unidade: 'serra', destino: 'fornecedor', valor: 100 }, falhou.registrar), /não fez a transferência \(FAILED\)/);
-  assert.equal(totais(falhou), 0);
+  assert.equal(await totais(falhou), 0);
   assert.equal(falhou.avisos.length, 0);
   const incerto = montar({ falhas: [{ metodo: 'POST', caminho: /transfers/, erro: new ErroHttp('Asaas 502', 502) }] }, comDestinos);
   await assert.rejects(() => transferir(incerto.ctx, Q, { unidade: 'serra', destino: 'fornecedor', valor: 100 }, incerto.registrar), /transferência PODE ter sido feita.*asaas_extrato/);
-  assert.equal(totais(incerto), 100, 'resposta perdida não libera o teto');
+  assert.equal(await totais(incerto), 100, 'resposta perdida não libera o teto');
   assert.match(incerto.avisos.join('\n'), /TRANSFERÊNCIA COM RESULTADO INCERTO/);
   await assert.rejects(() => transferir(incerto.ctx, Q, { unidade: 'serra', destino: 'fornecedor', valor: 100 }, incerto.registrar), /transferência igual para Fornecedor/);
 });
 
-test('transferir: transferência igual (mesmo destino, valor e descrição) em 10 minutos é recusada; descrição diferente ou 11 minutos depois passa', async () => {
+test('transferir: transferência igual (mesmo destino e valor) em 10 minutos é recusada MESMO com outra descrição; 11 minutos depois ou outro valor passa', async () => {
   const m = montar({}, comDestinos);
-  const t = (descricao?: string) => transferir(m.ctx, Q, { unidade: 'serra', destino: 'fornecedor', valor: 50, descricao }, m.registrar);
+  const t = (descricao?: string, valor = 50) => transferir(m.ctx, Q, { unidade: 'serra', destino: 'fornecedor', valor, descricao }, m.registrar);
   await t('A');
   await assert.rejects(() => t('A'), /transferência igual para Fornecedor/);
-  await t('B');
+  await assert.rejects(() => t('B'), /transferência igual para Fornecedor.*espere 10 minutos/s);
+  await assert.rejects(() => t(undefined), /transferência igual/);
+  await t('A', 51);
   m.relogio.t += 11 * 60_000;
   await t('A');
   assert.equal(m.f.posts().length, 3);
@@ -488,10 +493,14 @@ test('protocolo: transferência para destino fora da lista, pelo claude.ai, volt
   assert.equal(lim.transferencia.ligada, false);
 });
 
-test('limitesEDestinos: mostra tetos, consumo do dia e destinos (chave mascarada) sem gravar', async () => {
-  const m = montar({}, { ...comDestinos, tetoOperacao: () => 3000, tetoDia: () => 9000 });
+test('limitesEDestinos: mostra tetos (geral e próprios), consumo do dia e destinos (chave mascarada) sem gravar', async () => {
+  const m = montar({}, { ...comDestinos, tetoOperacao: () => 3000, tetoDia: () => 9000, tetoEspecifico: () => ({ operacao: 500, dia: 2000 }) });
   const r = await limitesEDestinos(m.ctx, { unidade: 'serra' });
-  assert.deepEqual(r.limites, { tetoPorOperacao: 'R$ 3.000,00', tetoDoDia: 'R$ 9.000,00', usadoHoje: 'R$ 0,00', restanteHoje: 'R$ 9.000,00' });
+  assert.deepEqual(r.limites, {
+    tetoPorOperacao: 'R$ 3.000,00', tetoDoDia: 'R$ 9.000,00', usadoHoje: 'R$ 0,00', restanteHoje: 'R$ 9.000,00',
+    estorno: { tetoPorOperacao: 'R$ 500,00', tetoDoDia: 'R$ 2.000,00', usadoHoje: 'R$ 0,00', restanteHoje: 'R$ 2.000,00' },
+    transferencia: { tetoPorOperacao: 'R$ 500,00', tetoDoDia: 'R$ 2.000,00', usadoHoje: 'R$ 0,00', restanteHoje: 'R$ 2.000,00' },
+  });
   assert.equal(m.f.chamadas.length, 0);
   assert.equal(AGORA > 0, true);
 });
@@ -567,4 +576,81 @@ test('interruptor antigo (ASAAS_COBRANCA_MAX_REAIS=0): TODA escrita da conta fic
   await assert.rejects(() => editarCliente(m.ctx, Q, { unidade: 'serra', clienteId: EXISTENTE.id, nome: 'Outro Nome' }, m.registrar), /DESLIGADA/);
   await assert.rejects(() => criarCobranca(m.ctx, Q, { unidade: 'serra', clienteId: EXISTENTE.id, valor: 1, vencimento: '2026-11-10', descricao: 'x' }, m.registrar), /DESLIGADA/);
   assert.equal(m.f.chamadas.length, 0);
+});
+
+
+// ------------------------------------------------------------------ estorno parcial acumulado (achado do sênior no #194)
+
+test('estorno parcial NÃO ignora os anteriores: R$ 800 pagos, 500 + 400 → o segundo é recusado; o restante é o que dá; "total" = o restante', async () => {
+  const m = montar({ pagamentos: [{ ...PAGA }] });
+  const unidade = 'serra';
+  await estornarCobranca(m.ctx, Q, { unidade, cobrancaId: PAGA.id, valor: 500 }, m.registrar);
+  await assert.rejects(() => estornarCobranca(m.ctx, Q, { unidade, cobrancaId: PAGA.id, valor: 400 }, m.registrar), /passa do que ainda resta nesta cobrança: R\$ 300,00.*já estornado R\$ 500,00/s);
+  assert.deepEqual(m.f.pagamentos[0]!.refunds!.map((r) => r.value), [500]);
+  // "total" depois de um parcial devolve só o que resta, e diz isso no Telegram e nos tetos
+  m.relogio.t += 11 * 60_000;
+  const r = (await estornarCobranca(m.ctx, Q, { unidade, cobrancaId: PAGA.id }, m.registrar)) as any;
+  assert.equal(r.cobranca.valorEstornado, 'R$ 300,00');
+  assert.equal(r.cobranca.jaEstornadoAntes, 'R$ 500,00');
+  assert.equal(r.cobranca.aindaRestaDevolver, 'R$ 0,00');
+  assert.deepEqual(m.f.posts().at(-1)!.corpo, { value: 300 }, 'o corpo leva o valor do restante, não "tudo"');
+  assert.match(m.avisos.at(-1)!, /Valor: R\$ 300,00/);
+  assert.match(m.avisos.at(-1)!, /ESTORNO PARCIAL \(cobrança de R\$ 800,00, já estornado R\$ 500,00\)/);
+  assert.equal(await totais(m), 500 + 300, 'o teto do dia conta o que saiu de verdade');
+  // tudo devolvido: não há o que estornar
+  m.relogio.t += 11 * 60_000;
+  await assert.rejects(() => estornarCobranca(m.ctx, Q, { unidade, cobrancaId: PAGA.id }, m.registrar), /já foi estornada por inteiro|só cobrança RECEBIDA/);
+});
+
+test('estorno: os estornos anteriores vêm da lista do Asaas E do campo da cobrança (vale o maior); estorno cancelado não conta; lista ilegível = não estorna', async () => {
+  const lista = montar({ pagamentos: [{ ...PAGA }] });
+  lista.f.pagamentos[0]!.refunds = [{ value: 600 }];
+  await assert.rejects(() => estornarCobranca(lista.ctx, Q, { unidade: 'serra', cobrancaId: PAGA.id, valor: 300 }, lista.registrar), /resta nesta cobrança: R\$ 200,00/);
+  // a rota de lista dá 404: ainda vale o campo `refunds` da cobrança
+  const so404 = montar({ pagamentos: [{ ...PAGA, refunds: [{ value: 600 }] }], falhas: [{ metodo: 'GET', caminho: /refunds$/, erro: new ErroHttp('Asaas 404', 404) }] });
+  await assert.rejects(() => estornarCobranca(so404.ctx, Q, { unidade: 'serra', cobrancaId: PAGA.id, valor: 300 }, so404.registrar), /resta nesta cobrança: R\$ 200,00/);
+  const cancelado = montar({ pagamentos: [{ ...PAGA, refunds: [{ value: 600, status: 'CANCELLED' } as never] }] });
+  assert.equal(((await estornarCobranca(cancelado.ctx, Q, { unidade: 'serra', cobrancaId: PAGA.id, valor: 800 }, cancelado.registrar)) as any).estornado, true);
+  const ilegivel = montar({ pagamentos: [{ ...PAGA }], falhas: [{ metodo: 'GET', caminho: /refunds$/, erro: new ErroHttp('Asaas 500', 500) }] });
+  await assert.rejects(() => estornarCobranca(ilegivel.ctx, Q, { unidade: 'serra', cobrancaId: PAGA.id }, ilegivel.registrar), /não consegui conferir os estornos anteriores/);
+  assert.equal(ilegivel.f.posts().length, 0);
+});
+
+// ------------------------------------------------------------------ tetos próprios de estorno e de transferência
+
+test('estorno e transferência têm teto PRÓPRIO (padrão 500 por operação e 2000 por dia), cada um por si; o geral continua valendo', async () => {
+  const proprio = { tetoEspecifico: () => ({ operacao: 500, dia: 2000 }) };
+  const m = montar({ pagamentos: [{ ...PAGA, value: 3000 }, { ...PAGA, id: 'pay_paga00000002', value: 3000 }, { ...PAGA, id: 'pay_paga00000003', value: 3000 }, { ...PAGA, id: 'pay_paga00000004', value: 3000 }, { ...PAGA, id: 'pay_paga00000005', value: 3000 }] }, { ...comDestinos, ...proprio });
+  // por operação
+  await assert.rejects(() => estornarCobranca(m.ctx, Q, { unidade: 'serra', cobrancaId: PAGA.id, valor: 500.01 }, m.registrar), /teto de R\$ 500,00 por estorno \(ASAAS_TETO_ESTORNO_OPERACAO_REAIS\)/);
+  await assert.rejects(() => transferir(m.ctx, Q, { unidade: 'serra', destino: 'fornecedor', valor: 500.01 }, m.registrar), /teto de R\$ 500,00 por transferência \(ASAAS_TETO_TRANSFERENCIA_OPERACAO_REAIS\)/);
+  // por dia, cada tipo por si: 4 x 500 de estorno enche os 2000 do estorno e NÃO tira nada da transferência
+  for (let i = 1; i <= 4; i++) await estornarCobranca(m.ctx, Q, { unidade: 'serra', cobrancaId: i === 1 ? PAGA.id : `pay_paga0000000${i}`, valor: 500 }, m.registrar);
+  await assert.rejects(() => estornarCobranca(m.ctx, Q, { unidade: 'serra', cobrancaId: 'pay_paga00000005', valor: 1 }, m.registrar), /teto do dia para estorno.*ASAAS_TETO_ESTORNO_DIA_REAIS/s);
+  for (const [i, v] of [10, 20, 30, 40].entries()) await transferir(m.ctx, Q, { unidade: 'serra', destino: 'fornecedor', valor: 400 + v + i }, m.registrar);
+  assert.equal(await m.usado('estorno'), 2000);
+  assert.equal(await m.usado('transferencia'), 400 * 4 + 10 + 20 + 30 + 40 + 0 + 1 + 2 + 3);
+  // o geral continua valendo por cima: soma de tudo
+  const geral = montar({ pagamentos: [{ ...PAGA }] }, { ...comDestinos, ...proprio, tetoDia: () => 600 });
+  await transferir(geral.ctx, Q, { unidade: 'serra', destino: 'fornecedor', valor: 400 }, geral.registrar);
+  await assert.rejects(() => estornarCobranca(geral.ctx, Q, { unidade: 'serra', cobrancaId: PAGA.id, valor: 201 }, geral.registrar), /teto do dia desta chave do Asaas/);
+  // estorno e transferência: a recusa não grava nada nem avisa
+  assert.equal(m.avisos.filter((a) => /TRANSFERÊNCIA$|ESTORNO$/m.test(a)).length, 8);
+});
+
+test('os tetos próprios lidos do AMBIENTE de verdade: sem variável = 500/2000; com variável sobe; o menor com o geral manda', async () => {
+  const chaves = ['ASAAS_TETO_ESTORNO_OPERACAO_REAIS', 'ASAAS_TETO_ESTORNO_DIA_REAIS', 'ASAAS_TETO_TRANSFERENCIA_OPERACAO_REAIS', 'ASAAS_TETO_TRANSFERENCIA_DIA_REAIS', 'ASAAS_TETO_OPERACAO_REAIS', 'ASAAS_TETO_DIA_REAIS', 'ASAAS_COBRANCA_MAX_REAIS'];
+  const antes = chaves.map((k) => process.env[k]);
+  chaves.forEach((k) => delete process.env[k]);
+  try {
+    const f = montar({}, { destinos: comDestinos.destinos, tetoEspecifico: undefined });
+    // `tetoEspecifico: undefined` deixa o padrão de produção (lê o ambiente)
+    await assert.rejects(() => transferir(f.ctx, Q, { unidade: 'serra', destino: 'fornecedor', valor: 500.01 }, f.registrar), /por transferência \(ASAAS_TETO_TRANSFERENCIA_OPERACAO_REAIS\)/);
+    process.env.ASAAS_TETO_TRANSFERENCIA_OPERACAO_REAIS = '900';
+    assert.equal(((await transferir(f.ctx, Q, { unidade: 'serra', destino: 'fornecedor', valor: 900 }, f.registrar)) as any).transferido, true);
+    process.env.ASAAS_TETO_OPERACAO_REAIS = '300'; // o geral é menor: manda
+    await assert.rejects(() => transferir(f.ctx, Q, { unidade: 'serra', destino: 'fornecedor', valor: 301 }, f.registrar), /teto de R\$ 300,00 por operação \(ASAAS_TETO_OPERACAO_REAIS\)/);
+  } finally {
+    chaves.forEach((k, i) => (antes[i] === undefined ? delete process.env[k] : (process.env[k] = antes[i])));
+  }
 });

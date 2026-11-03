@@ -23,6 +23,11 @@ export interface EscritaAsaas {
   enviar<T>(metodo: 'POST' | 'PUT' | 'DELETE', caminho: string, corpo?: Record<string, unknown>): Promise<T>;
   /** Os 4 últimos caracteres da chave, para mostrar em QUAL conta vai gravar. Nunca a chave. */
   chaveFinal: string;
+  /**
+   * Identifica a CHAVE do Asaas sem expô-la: os 16 primeiros caracteres de um sha256 (com sufixo fixo) da chave inteira. Contas que usam a mesma chave têm o
+   * mesmo valor e dividem o teto do dia e a trava de concorrência. Irreversível; vai para a auditoria como `chaveAsaas`.
+   */
+  chaveGrupo: string;
   /** Nome da conta que o Asaas devolveu quando a chave foi salva no painel de integrações. */
   contaSalva?: string | null;
 }
@@ -111,7 +116,8 @@ async function emCada<T extends object>(contas: ContaAsaas[], fn: (c: ContaAsaas
 
 // ----------------------------------------------------------------- cobranças
 
-const STATUS: Record<string, string> = {
+export const STATUS: Record<string, string> = {
+  DELETED: 'excluída',
   PENDING: 'aguardando pagamento', RECEIVED: 'recebida', CONFIRMED: 'confirmada', OVERDUE: 'vencida', REFUNDED: 'estornada',
   RECEIVED_IN_CASH: 'recebida em dinheiro', REFUND_REQUESTED: 'estorno solicitado', REFUND_IN_PROGRESS: 'estorno em andamento',
   CHARGEBACK_REQUESTED: 'chargeback', CHARGEBACK_DISPUTE: 'chargeback em disputa', AWAITING_CHARGEBACK_REVERSAL: 'aguardando reversão',

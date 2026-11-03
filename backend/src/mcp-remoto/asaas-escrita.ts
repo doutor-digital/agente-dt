@@ -23,8 +23,8 @@ import { cnpjValido, cpfValido } from '../lib/integracoes/mascaras.js';
 import { mascararDigitosSeguidos, temDigitosSeguidos } from '../lib/pii.js';
 import { resolverContasAsaas, type ContaAsaas, type ContextoAsaas, type EscritaAsaas } from './asaas.js';
 import {
-  conferirTetos, dinheiro, diaLocal, mascararDoc, mascararEmail, soDigitos, EVENTO_CLIENTE, EVENTO_COBRANCA, EVENTO_OPERACAO, FUSO_PADRAO, lerDestinos, Livro, tetoPorDia, tetoPorOperacao, textoDoAviso,
-  type DestinosLidos, type Lancamento,
+  conferirTetos, dinheiro, diaLocal, mascararDoc, mascararEmail, soDigitos, EVENTO_CLIENTE, EVENTO_COBRANCA, EVENTO_OPERACAO, FUSO_PADRAO, lerDestinos, tetoEspecificoDe, tetoPorDia, tetoPorOperacao, textoDoAviso,
+  type DestinosLidos, type Livro, type Porteiro, type TetoEspecifico, type TipoDeLancamento, type TipoDeSaida,
 } from './asaas-limites.js';
 
 export { EVENTO_CLIENTE, EVENTO_COBRANCA, EVENTO_OPERACAO, dinheiro, mascararDoc, mascararEmail, soDigitos };
@@ -252,31 +252,38 @@ export function recusarDadosDeCartao(a: Record<string, unknown>): void {
   }
 }
 
-// ----------------------------------------------------------------- estado: tetos, livro, fila, aviso
+/**
+ * Campo que a ferramenta não declara (ex. `cardNumber`, `ccv`, `expiryMonth`, `number`): o pedido inteiro é RECUSADO, não descartado em silêncio.
+ * Campo com cara de cartão ganha a mensagem do cartão. O valor nunca é repetido na mensagem.
+ */
+export function recusarCamposDesconhecidos(a: Record<string, unknown>, conhecidos: readonly string[]): void {
+  const extras = Object.keys(a).filter((k) => !conhecidos.includes(k));
+  if (!extras.length) return;
+  if (extras.some((k) => CAMPOS_DE_CARTAO.test(k))) {
+    throw new ErroDeEntrada('número, validade, CVV ou token de cartão NUNCA entram pelo chat. Use forma "CARTAO": o conector gera o link de pagamento e o paciente digita o cartão direto no Asaas. Nada foi feito.');
+  }
+  const nomes = extras.slice(0, 5).map((k) => mascararDigitosSeguidos(k, 6, '[…]').slice(0, 40));
+  throw new ErroDeEntrada(`campo(s) que não existem nesta ferramenta: ${nomes.join(', ')}. Nada foi feito; use só os campos da descrição da ferramenta.`);
+}
+
+// ----------------------------------------------------------------- estado: tetos, porteiro, fila, aviso
 
 export interface Quem {
   id: string;
   email?: string;
+  /** o cliente OAuth (claude.ai…), só para constar na auditoria */
+  clientId?: string;
 }
 
-/** Grava um evento na auditoria. Em produção devolve uma promessa que vale `false` se o banco não gravou. */
+/** Grava um evento na auditoria (resultado de uma operação). A intenção, que vem ANTES, é do porteiro. */
 export type Registrar = (evento: string, argumentos: Record<string, unknown>, ok: boolean, erro?: string) => unknown;
-
-/**
- * Grava a INTENÇÃO de uma operação de dinheiro ANTES de chamar o Asaas e ESPERA o banco confirmar. Assim o teto do dia e a duplicata
- * enxergam a operação mesmo se o servidor reiniciar no meio da chamada ou o registro final não chegar a ser gravado: a intenção sem
- * resultado conta como "pode ter acontecido". Se o banco não gravou, a operação NÃO sai (fail closed).
- */
-export async function registrarIntencao(registrar: Registrar, evento: string, base: Record<string, unknown>): Promise<void> {
-  // ok=true e sem texto de erro: não aparece como falha em painel nenhum; só o leitor dos tetos (lancamentosRecentesDe) sabe que é uma intenção
-  const r = await registrar(evento, { ...base, fase: 'intencao', incerto: true }, true);
-  if (r === false) throw new ErroDeEntrada('não consegui gravar o registro da operação na auditoria (banco): o pedido NÃO foi enviado ao Asaas; tente em instantes');
-}
 
 export interface EstadoEscritaAsaas {
   agora: () => number;
   tetoOperacao: () => number;
   tetoDia: () => number;
+  /** teto próprio de estorno e de transferência (vale o menor com o geral) */
+  tetoEspecifico: (tipo: TipoDeSaida) => TetoEspecifico;
   porHora: () => number;
   /** unidades com a escrita ligada (ASAAS_ESCRITA_UNIDADES) */
   unidades: () => Set<string>;
@@ -286,37 +293,50 @@ export interface EstadoEscritaAsaas {
   alertar: (texto: string) => Promise<boolean>;
   /** quanto esperar a linha digitável / o Pix copia-e-cola (melhor esforço) */
   esperaLinhaMs: number;
-  livro: Livro;
+  /** lê o banco e grava a intenção numa trava única por chave do Asaas (vale entre instâncias do servidor) */
+  porteiro: Porteiro;
   /** nome da conta no Asaas, por 10 min (uma leitura a menos em cada escrita) */
   nomes: Map<string, { nome: string; ate: number }>;
-  /** operações uma por vez EM CADA CONTA: duas juntas passariam as duas pelos tetos antes de qualquer uma ser contada (contas diferentes não esperam umas pelas outras) */
+  /** operações uma por vez EM CADA CONTA neste processo (contas diferentes não esperam umas pelas outras); entre processos quem segura é o porteiro */
   filas: Map<string, Promise<unknown>>;
 }
+
+/** Sem porteiro (nem nos testes) a escrita não anda: tetos que não conseguem ler o banco não são tetos. */
+const PORTEIRO_AUSENTE: Porteiro = {
+  async reservar() {
+    throw new ErroDeEntrada('o conector subiu sem o porteiro dos tetos (banco): a escrita de dinheiro está desligada');
+  },
+  async ler() {
+    throw new ErroDeEntrada('o conector subiu sem o porteiro dos tetos (banco): a escrita de dinheiro está desligada');
+  },
+};
 
 export function criarEscritaAsaas(
   o: {
     agora?: () => number;
     tetoOperacao?: () => number;
     tetoDia?: () => number;
+    tetoEspecifico?: (tipo: TipoDeSaida) => TetoEspecifico;
     porHora?: () => number;
     unidades?: () => Set<string>;
     destinos?: (slug: string) => DestinosLidos;
     alertar?: (texto: string) => Promise<boolean>;
     esperaLinhaMs?: number;
-    historico?: (conta: string) => Promise<Lancamento[]>;
+    porteiro?: Porteiro;
   } = {},
 ): EstadoEscritaAsaas {
   return {
     agora: o.agora ?? Date.now,
     tetoOperacao: o.tetoOperacao ?? (() => tetoPorOperacao()),
     tetoDia: o.tetoDia ?? (() => tetoPorDia()),
+    tetoEspecifico: o.tetoEspecifico ?? ((tipo) => tetoEspecificoDe(tipo)),
     porHora: o.porHora ?? (() => cobrancasPorHora()),
     unidades: o.unidades ?? (() => unidadesComEscrita()),
     destinos: o.destinos ?? ((slug) => lerDestinos(slug)),
     // o servidor passa o Telegram de verdade (producao.ts); sem isso o aviso não sai, e o teste de producao.ts garante a ligação
     alertar: o.alertar ?? (async () => false),
     esperaLinhaMs: o.esperaLinhaMs ?? 10_000,
-    livro: new Livro(o.historico),
+    porteiro: o.porteiro ?? PORTEIRO_AUSENTE,
     nomes: new Map(),
     filas: new Map(),
   };
@@ -336,30 +356,92 @@ export function fusoDe(c: ContaAsaas): string {
   return c.fuso || FUSO_PADRAO;
 }
 
-/** Quanto do teto do dia já foi usado nesta conta (depois de ler o livro). */
-export function consumoDoDia(esc: EstadoEscritaAsaas, c: ContaAsaas) {
-  const usado = esc.livro.somaDoDia(c.slug, esc.agora(), fusoDe(c));
-  const teto = esc.tetoDia();
-  return { tetoPorOperacao: dinheiro(esc.tetoOperacao()), tetoDoDia: dinheiro(teto), usadoHoje: dinheiro(usado), restanteHoje: dinheiro(Math.max(0, Math.round((teto - usado) * 100) / 100)) };
+/** A chave do Asaas desta conta (impressão curta e irreversível, nunca a chave): contas com a mesma chave dividem tetos e trava. */
+export function grupoDe(c: ContaAsaas): string {
+  return c.escrita?.chaveGrupo ?? c.slug;
 }
 
-/** Por que NÃO pode seguir agora (duplicata, limite por hora, tetos). Lança ErroDeEntrada; lê o livro do banco na 1ª vez. */
-export async function conferirTravas(esc: EstadoEscritaAsaas, c: ContaAsaas, o: { chave?: string; valor: number; noTeto: number; hora?: boolean; descricaoDuplicata?: string }): Promise<void> {
-  await esc.livro.carregar(c.slug);
+const arredondar = (n: number) => Math.round(n * 100) / 100;
+
+/** Os tetos que valem (o menor entre o próprio e o geral) e quanto já foi usado hoje. */
+export async function consumoDoDia(esc: EstadoEscritaAsaas, c: ContaAsaas) {
+  const agora = esc.agora();
+  const livro = await esc.porteiro.ler(grupoDe(c), c.slug, agora);
+  const geralOp = esc.tetoOperacao();
+  const geralDia = esc.tetoDia();
+  const usado = livro.somaDoDia(agora, fusoDe(c));
+  const saida = (tipo: TipoDeSaida) => {
+    const t = esc.tetoEspecifico(tipo);
+    const dia = Math.min(t.dia, geralDia);
+    const usadoTipo = livro.somaDoDia(agora, fusoDe(c), tipo);
+    return { tetoPorOperacao: dinheiro(Math.min(t.operacao, geralOp)), tetoDoDia: dinheiro(dia), usadoHoje: dinheiro(usadoTipo), restanteHoje: dinheiro(Math.max(0, arredondar(Math.min(dia - usadoTipo, geralDia - usado)))) };
+  };
+  return {
+    tetoPorOperacao: dinheiro(geralOp),
+    tetoDoDia: dinheiro(geralDia),
+    usadoHoje: dinheiro(usado),
+    restanteHoje: dinheiro(Math.max(0, arredondar(geralDia - usado))),
+    estorno: saida('estorno'),
+    transferencia: saida('transferencia'),
+  };
+}
+
+export interface ConferenciaDeTravas {
+  tipo: TipoDeLancamento;
+  valor: number;
+  noTeto: number;
+  chave?: string;
+  /** só a criação de cobrança tem limite por hora */
+  hora?: boolean;
+  descricaoDuplicata?: string;
+  /** o que fazer se for de propósito (o texto muda: cobrança aceita mudar a descrição; transferência e estorno, não) */
+  seForDeProposito?: string;
+}
+
+/** As travas sobre o livro lido do banco (duplicata, limite por hora, tetos). Lança ErroDeEntrada. */
+function verificar(esc: EstadoEscritaAsaas, c: ContaAsaas, livro: Livro, o: ConferenciaDeTravas): void {
   const t = esc.agora();
-  esc.livro.podar(t);
   if (o.chave) {
-    const igual = esc.livro.igual(c.slug, o.chave, t, LIMITES_ASAAS.duplicataMs);
+    const igual = livro.igual(o.chave, t, LIMITES_ASAAS.duplicataMs);
     if (igual) {
-      throw new ErroDeEntrada(`${o.descricaoDuplicata ?? 'operação igual'} feita há menos de 10 minutos${igual.id ? `: ${igual.id}` : ''}. Não repeti. Se for de propósito, espere 10 minutos ou mude a descrição.`);
+      throw new ErroDeEntrada(`${o.descricaoDuplicata ?? 'operação igual'} feita há menos de 10 minutos${igual.id ? `: ${igual.id}` : ''}. Não repeti. ${o.seForDeProposito ?? 'Se for de propósito, espere 10 minutos.'}`);
     }
   }
   if (o.hora) {
     if (esc.porHora() <= 0) throw new ErroDeEntrada('a criação de cobrança pelo conector está DESLIGADA: configure ASAAS_COBRANCAS_POR_HORA com o limite por hora (maior que 0)');
-    const naHora = esc.livro.cobrancasNaHora(c.slug, t, LIMITES_ASAAS.horaMs);
+    const naHora = livro.cobrancasNaHora(t, LIMITES_ASAAS.horaMs);
     if (naHora >= esc.porHora()) throw new ErroDeEntrada(`limite de ${esc.porHora()} cobranças por hora nesta conta já foi atingido (${naHora}); tente mais tarde ou crie no painel do Asaas`);
   }
-  conferirTetos({ livro: esc.livro, conta: c.slug, fuso: fusoDe(c), agora: t, valor: o.valor, noTeto: o.noTeto, tetoOperacao: esc.tetoOperacao(), tetoDia: esc.tetoDia(), o: 'ASAAS_TETO_OPERACAO_REAIS' });
+  const saida = o.tipo === 'estorno' || o.tipo === 'transferencia' ? { tipo: o.tipo, teto: esc.tetoEspecifico(o.tipo) } : undefined;
+  conferirTetos({ livro, fuso: fusoDe(c), agora: t, valor: o.valor, noTeto: o.noTeto, tetoOperacao: esc.tetoOperacao(), tetoDia: esc.tetoDia(), ...(saida ? { saida } : {}) });
+}
+
+/** Conferência PRÉVIA, sem trava (para recusar cedo, antes de cadastrar cliente ou gastar chamada). A que vale é a de `reservar`. */
+export async function conferirTravas(esc: EstadoEscritaAsaas, c: ContaAsaas, o: ConferenciaDeTravas): Promise<void> {
+  verificar(esc, c, await esc.porteiro.ler(grupoDe(c), c.slug, esc.agora()), o);
+}
+
+/**
+ * A reserva que vale: dentro da trava única da chave do Asaas, relê o banco, confere tudo de novo e grava a INTENÇÃO antes de qualquer chamada
+ * ao Asaas. Devolve o id da intenção, que o resultado da operação precisa repetir (é assim que a intenção "se resolve" no livro).
+ */
+export async function reservar(
+  esc: EstadoEscritaAsaas,
+  c: ContaAsaas,
+  quem: Quem,
+  o: ConferenciaDeTravas & { evento: string; argumentos: Record<string, unknown> },
+): Promise<{ intencaoId: string; grupo: string }> {
+  const grupo = grupoDe(c);
+  const { intencaoId } = await esc.porteiro.reservar({
+    grupo,
+    conta: c.slug,
+    agora: esc.agora(),
+    conferir: (livro) => verificar(esc, c, livro, o),
+    evento: o.evento,
+    argumentos: o.argumentos,
+    quem: { userId: quem.id, ...(quem.clientId ? { clientId: quem.clientId } : {}) },
+  });
+  return { intencaoId, grupo };
 }
 
 export function enfileirar<T>(esc: EstadoEscritaAsaas, conta: string, fn: () => Promise<T>): Promise<T> {
@@ -668,7 +750,7 @@ export async function criarCobranca({ asaas, esc }: CtxEscrita, quem: Quem, a: P
     novo = a.novoCliente ? prepararDadosDoCliente({ ...a.novoCliente, cpfCnpj: doc }) : { nome: '', cpfCnpj: doc };
   }
 
-  return comAvisos(esc, c.slug, async (avisarJoao) => {
+  const feita = await comAvisos(esc, c.slug, async (avisarJoao) => {
     const { cabecalho, avisos } = await cabecalhoDaConta(c, esc);
     const alvo = await acharAlvo(c, { clienteId, novo });
     if (alvo.tipo === 'novo' && !a.novoCliente) {
@@ -683,7 +765,8 @@ export async function criarCobranca({ asaas, esc }: CtxEscrita, quem: Quem, a: P
       avisos.push('sem externalReference: informe um identificador único desta cobrança (ex. o número do pedido) para a conferência de duplicata ficar mais forte');
     }
     const chavePrevia = chaveDeDuplicata(c.slug, alvo.tipo === 'existente' ? alvo.cliente.id : `novo:${alvo.dados.cpfCnpj}`, valor, vencimento, descricao, externalReference, forma, parcelas);
-    await conferirTravas(esc, c, { chave: chavePrevia, valor, noTeto: valor, hora: true, descricaoDuplicata: 'cobrança igual (mesmo cliente, valor, vencimento e descrição)' });
+    const dupCobranca = { descricaoDuplicata: 'cobrança igual (mesmo cliente, valor, vencimento e descrição)', seForDeProposito: 'Se for de propósito, espere 10 minutos ou mude a descrição.' };
+    await conferirTravas(esc, c, { tipo: 'cobranca', chave: chavePrevia, valor, noTeto: valor, hora: true, ...dupCobranca });
     const base = {
       conta: c.slug, valor, vencimento, forma, parcelas,
       externalReference: externalReference ? mascararDigitosSeguidos(externalReference, MIN_DIGITOS_REFERENCIA, MARCA_DOCUMENTO) : null,
@@ -710,14 +793,14 @@ export async function criarCobranca({ asaas, esc }: CtxEscrita, quem: Quem, a: P
       }
     }
 
-    // conta ANTES de chamar: resposta perdida com a cobrança já criada não pode liberar uma 2ª
-    // a chave do registro usa o id do cliente (também o recém-criado): é com ela que a duplicata é achada depois de um reinício
+    // a RESERVA que vale: dentro da trava da chave do Asaas, relê o banco, confere teto/duplicata/hora de novo e grava a intenção ANTES de chamar o Asaas
+    // (resposta perdida, reinício ou outra instância não liberam uma 2ª). A chave usa o id do cliente (também o recém-criado): é com ela que a duplicata é achada depois
     const chaveFinal = chaveDeDuplicata(c.slug, idDoCliente, valor, vencimento, descricao, externalReference, forma, parcelas);
-    const reserva = esc.livro.lancar({ conta: c.slug, tipo: 'cobranca', valor, noTeto: valor, em: esc.agora(), chave: chaveFinal });
+    let ids: { intencaoId: string; chaveAsaas: string };
     try {
-      await registrarIntencao(registrar, EVENTO_COBRANCA, { ...base, chave: chaveFinal, clienteId: idDoCliente });
+      const r = await reservar(esc, c, quem, { tipo: 'cobranca', chave: chaveFinal, valor, noTeto: valor, hora: true, ...dupCobranca, evento: EVENTO_COBRANCA, argumentos: { ...base, chave: chaveFinal, clienteId: idDoCliente } });
+      ids = { intencaoId: r.intencaoId, chaveAsaas: r.grupo };
     } catch (e) {
-      esc.livro.soltar(reserva);
       throw new ErroDeEntrada(`${clienteCriado ? `O cliente FOI cadastrado (${idDoCliente}). ` : ''}${(e as Error).message}`);
     }
     let pag: PagamentoAsaas;
@@ -734,9 +817,8 @@ export async function criarCobranca({ asaas, esc }: CtxEscrita, quem: Quem, a: P
       const s = sanear(e);
       esquecerLeituras(asaas, c.slug);
       const incerto = podeTerGravado(e);
-      // recusa definitiva do Asaas (4xx): nada foi criado, libera a reserva. Sem resposta ou 5xx: pode ter criado, a reserva fica.
-      if (!incerto) esc.livro.soltar(reserva);
-      registrar(EVENTO_COBRANCA, { ...base, chave: chaveFinal, clienteId: idDoCliente, ...(incerto ? { incerto: true } : {}) }, false, s.message);
+      // recusa definitiva do Asaas (4xx): nada foi criado, este resultado resolve a intenção SEM contar. Sem resposta ou 5xx: pode ter criado, conta.
+      registrar(EVENTO_COBRANCA, { ...base, ...ids, chave: chaveFinal, clienteId: idDoCliente, ...(incerto ? { incerto: true } : {}) }, false, s.message);
       // 5xx ou sem resposta: o Asaas pode ter criado a cobrança. Dizer "não saiu" faria a pessoa gerar outra (revisão do sênior, 30/10).
       if (incerto) {
         avisarJoao(textoDoAviso({ titulo: 'COBRANÇA COM RESULTADO INCERTO', conta: c.slug, nomeDaConta: cabecalho.nomeDaConta, quem, valor, detalhe: 'O Asaas não confirmou: a cobrança PODE ter sido criada. Conferir no painel.' }));
@@ -747,27 +829,17 @@ export async function criarCobranca({ asaas, esc }: CtxEscrita, quem: Quem, a: P
     esquecerLeituras(asaas, c.slug);
     if (!pag?.id) {
       // 2xx sem a cobrança no corpo: pode ter criado. Fica a reserva e o registro "incerto".
-      registrar(EVENTO_COBRANCA, { ...base, chave: chaveFinal, clienteId: idDoCliente, incerto: true }, false, 'o Asaas respondeu sem o id da cobrança');
+      registrar(EVENTO_COBRANCA, { ...base, ...ids, chave: chaveFinal, clienteId: idDoCliente, incerto: true }, false, 'o Asaas respondeu sem o id da cobrança');
       avisarJoao(textoDoAviso({ titulo: 'COBRANÇA COM RESULTADO INCERTO', conta: c.slug, nomeDaConta: cabecalho.nomeDaConta, quem, valor, detalhe: 'O Asaas respondeu sem o id: a cobrança PODE ter sido criada. Conferir no painel.' }));
       throw new Error(`${clienteCriado ? `O cliente FOI cadastrado (${idDoCliente}). ` : ''}O Asaas respondeu sem o id da cobrança: ela PODE ter sido gerada. Confira com asaas_cobrancas antes de repetir.`);
     }
-    reserva.id = pag.id;
     // o registro que alimenta a duplicata e os tetos sai JÁ, com o id: um reinício durante a busca da linha digitável não pode escondê-lo
-    registrar(EVENTO_COBRANCA, { ...base, chave: chaveFinal, clienteId: idDoCliente, clienteCriado, cobrancaId: pag.id, status: pag.status ?? null }, true);
+    registrar(EVENTO_COBRANCA, { ...base, ...ids, chave: chaveFinal, clienteId: idDoCliente, clienteCriado, cobrancaId: pag.id, status: pag.status ?? null }, true);
     // cobrança grande (mais da metade do teto por operação) avisa o João
     if (valor > esc.tetoOperacao() / 2) {
       avisarJoao(textoDoAviso({ titulo: 'COBRANÇA ACIMA DE 50% DO TETO', conta: c.slug, nomeDaConta: cabecalho.nomeDaConta, quem, valor, id: pag.id, detalhe: `${NOME_DA_FORMA[forma]}${parcelas > 1 ? ` em ${parcelas}x` : ''}, vencimento ${dataBR(vencimento)}, cliente ${idDoCliente}` }));
     }
 
-    // a linha digitável / o Pix copia-e-cola é melhor esforço: vem de outra rota, que pode demorar (o Asaas registra a cobrança em instantes) — se não vier no prazo, o link basta
-    let linha: string | null = pag.identificationField ?? null;
-    let pixCopiaECola: string | null = null;
-    if (forma === 'BOLETO' && !linha) {
-      linha = await melhorEsforco(() => c.fonte.get<{ identificationField?: string }>(`/payments/${pag.id}/identificationField`).then((r) => r?.identificationField ?? null), esc.esperaLinhaMs);
-    }
-    if (forma === 'PIX') {
-      pixCopiaECola = await melhorEsforco(() => c.fonte.get<{ payload?: string }>(`/payments/${pag.id}/pixQrCode`).then((r) => r?.payload ?? null), esc.esperaLinhaMs);
-    }
     return {
       gerado: true,
       conta: cabecalho,
@@ -781,19 +853,37 @@ export async function criarCobranca({ asaas, esc }: CtxEscrita, quem: Quem, a: P
         externalReference: externalReference ?? null,
         // cartão: este é o link em que o paciente digita o cartão (no Asaas, nunca no chat)
         linkParaPagar: pag.invoiceUrl ?? null,
-        ...(forma === 'BOLETO' ? { linkDoBoleto: pag.bankSlipUrl ?? null, linhaDigitavel: linha } : {}),
-        ...(forma === 'PIX' ? { pixCopiaECola } : {}),
+        ...(forma === 'BOLETO' ? { linkDoBoleto: pag.bankSlipUrl ?? null, linhaDigitavel: pag.identificationField ?? null } : {}),
+        ...(forma === 'PIX' ? { pixCopiaECola: null as string | null } : {}),
       },
       cliente: { id: idDoCliente, cadastradoAgora: clienteCriado },
       avisouOCliente: aviso.vaiAvisar,
       aviso: aviso.texto,
-      ...(forma === 'BOLETO' && !pag.bankSlipUrl ? { atencao: 'o link do boleto ainda não veio (o Asaas registra o boleto em instantes): consulte com asaas_cobranca em alguns minutos' } : {}),
-      ...(forma === 'PIX' && !pixCopiaECola ? { atencao: 'o Pix copia-e-cola ainda não veio: o link para pagar já serve; consulte de novo em instantes' } : {}),
       avisos,
-      limites: consumoDoDia(esc, c),
+      limites: await consumoDoDia(esc, c),
       registro: 'Registrado com quem pediu.',
+      // o que falta buscar DEPOIS de liberar a fila da conta (melhor esforço, até esperaLinhaMs)
+      _depois: { id: pag.id, forma, temLinha: !!pag.identificationField, temLinkDoBoleto: !!pag.bankSlipUrl },
     };
   });
+
+  // a linha digitável / o Pix copia-e-cola é melhor esforço: vem de outra rota, que pode demorar (o Asaas registra a cobrança em instantes). Fora da fila da
+  // conta, para a espera não segurar as outras operações — se não vier no prazo, o link basta
+  const { _depois, ...resposta } = feita;
+  let atencao: string | undefined;
+  if (_depois.forma === 'BOLETO') {
+    if (!_depois.temLinha) {
+      const linha = await melhorEsforco(() => c.fonte.get<{ identificationField?: string }>(`/payments/${_depois.id}/identificationField`).then((r) => r?.identificationField ?? null), esc.esperaLinhaMs);
+      (resposta.cobranca as { linhaDigitavel?: string | null }).linhaDigitavel = linha;
+    }
+    if (!_depois.temLinkDoBoleto) atencao = 'o link do boleto ainda não veio (o Asaas registra o boleto em instantes): consulte com asaas_cobranca em alguns minutos';
+  }
+  if (_depois.forma === 'PIX') {
+    const pix = await melhorEsforco(() => c.fonte.get<{ payload?: string }>(`/payments/${_depois.id}/pixQrCode`).then((r) => r?.payload ?? null), esc.esperaLinhaMs);
+    (resposta.cobranca as { pixCopiaECola?: string | null }).pixCopiaECola = pix;
+    if (!pix) atencao = 'o Pix copia-e-cola ainda não veio: o link para pagar já serve; consulte de novo em instantes';
+  }
+  return { ...resposta, ...(atencao ? { atencao } : {}) };
 }
 
 // ----------------------------------------------------------------- o que vai para a auditoria dos pedidos
@@ -807,14 +897,18 @@ export function mascararDestinoDoPedido(d: string): string {
 }
 
 /** O que vai para a auditoria dos pedidos: nunca o documento, o e-mail, o telefone ou dado de cartão por inteiro. */
-export function mascararPedido(a: Record<string, any>): Record<string, unknown> {
+export function mascararPedido(entrada: Record<string, any>, conhecidos?: readonly string[]): Record<string, unknown> {
+  // campo que a ferramenta não declara entra só pelo NOME (o valor pode ser um número de cartão)
+  const extras = conhecidos ? Object.keys(entrada).filter((k) => !conhecidos.includes(k)) : [];
+  const a = Object.fromEntries(Object.entries(entrada).filter(([k]) => !extras.includes(k)));
   const novo = a.novoCliente as { nome?: string; email?: string; telefone?: string; endereco?: unknown } | undefined;
   const { cpfCnpj, email, telefone, endereco, novoCliente, descricao, nome, externalReference, destino, contaBancaria, ...resto } = a;
   const semCartao = Object.fromEntries(Object.entries(resto).filter(([k]) => !(CAMPOS_DE_CARTAO.test(k) && k !== 'forma')));
   const tinhaCartao = Object.keys(resto).length !== Object.keys(semCartao).length;
   return {
     ...semCartao,
-    ...(tinhaCartao ? { dadosDeCartaoRecusados: true } : {}),
+    ...(tinhaCartao || extras.some((k) => CAMPOS_DE_CARTAO.test(k)) ? { dadosDeCartaoRecusados: true } : {}),
+    ...(extras.length ? { camposDesconhecidos: extras.slice(0, 5).map((k) => mascararDigitosSeguidos(k, 6, '[…]').slice(0, 40)) } : {}),
     ...(externalReference !== undefined ? { externalReference: mascararDigitosSeguidos(String(externalReference), MIN_DIGITOS_REFERENCIA, MARCA_DOCUMENTO) } : {}),
     ...(nome !== undefined ? { nome: abreviarNome(String(nome)) } : {}),
     ...(cpfCnpj ? { cpfCnpj: mascararDoc(String(cpfCnpj)) } : {}),

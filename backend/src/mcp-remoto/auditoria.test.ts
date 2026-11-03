@@ -9,10 +9,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mascararTexto } from '../lib/integracoes/mascaras.js';
 import { criarContextoAsaas } from './asaas.js';
-import { AGORA, asaasFalso, ErroHttp, type Opc } from './asaas-falso.js';
+import { AGORA, asaasFalso, BancoFalso, ErroHttp, porteiroEmMemoria, type Opc } from './asaas-falso.js';
 import { argumentosDaAuditoria, criarAuditor, EVENTOS_INTERNOS, lancamentosRecentesDe, type LeitorDeAuditoria } from './auditoria.js';
 import { chaveDeDuplicata, criarCobranca, criarEscritaAsaas, EVENTO_CLIENTE, EVENTO_COBRANCA, EVENTO_OPERACAO, type PedidoDeCobranca } from './asaas-escrita.js';
-import { lerDestinos } from './asaas-limites.js';
+import { FALHA_DO_BANCO, lerDestinos } from './asaas-limites.js';
+import { ErroDeEntrada } from '../franquia-mcp/travas.js';
 import { estornarCobranca, transferir } from './asaas-operacoes.js';
 
 const CPF = '529.982.247-25';
@@ -23,26 +24,16 @@ const DESTINOS = JSON.stringify({ 'doutor-hernia-serra': [{ nome: 'Fornecedor', 
 
 /** O banco: guarda o que o gravador mandou (como JSON, que é o que o Postgres devolve) e responde ao `findMany` do leitor. */
 function bancoFalso() {
-  const linhas: Array<{ ferramenta: string; argumentos: unknown; ok: boolean; erro?: string; createdAt: Date }> = [];
+  const banco = new BancoFalso();
   const armazem = {
     async auditar(r: { ferramenta: string; argumentos: unknown; ok: boolean; erro?: string }) {
-      linhas.push({ ferramenta: r.ferramenta, argumentos: JSON.parse(JSON.stringify(r.argumentos ?? {})), ok: r.ok, erro: r.erro, createdAt: new Date(AGORA) });
+      banco.gravar(r, AGORA);
     },
   };
-  const db: LeitorDeAuditoria = {
-    mcpAuditoria: {
-      async findMany({ where }) {
-        const [campo] = where.argumentos.path;
-        return linhas
-          .filter((l) => where.ferramenta.in.includes(l.ferramenta) && l.createdAt >= where.createdAt.gte && (l.argumentos as Record<string, unknown>)[campo!] === where.argumentos.equals)
-          .map((l) => ({ createdAt: l.createdAt, ok: l.ok, ferramenta: l.ferramenta, argumentos: l.argumentos }));
-      },
-    },
-  };
-  return { linhas, armazem, db };
+  return { banco, linhas: banco.linhas, armazem, db: banco.leitor() };
 }
 
-/** Uma subida do servidor: contexto do Asaas, escrita com o histórico lido do banco falso e o gravador real da auditoria. */
+/** Uma subida do servidor: contexto do Asaas, escrita com o porteiro sobre o banco falso (que várias subidas dividem) e o gravador real da auditoria. */
 function subida(banco: ReturnType<typeof bancoFalso>, opc: Opc = {}, tetoDia = 20000) {
   const f = asaasFalso({ clientes: [EXISTENTE], ...opc });
   const asaas = criarContextoAsaas(new Map([[f.conta.slug, f.conta]]));
@@ -52,7 +43,8 @@ function subida(banco: ReturnType<typeof bancoFalso>, opc: Opc = {}, tetoDia = 2
     tetoDia: () => tetoDia,
     destinos: (slug) => lerDestinos(slug, { ASAAS_TRANSFERENCIA_DESTINOS: DESTINOS }),
     alertar: async () => true,
-    historico: (c) => lancamentosRecentesDe(banco.db, c, AGORA),
+    tetoEspecifico: () => ({ operacao: Infinity, dia: Infinity }),
+    porteiro: porteiroEmMemoria(banco.banco, () => AGORA),
   });
   const auditar = criarAuditor(banco.armazem, { userId: Q.id, clientId: 'claude' });
   const registrar = (evento: string, args: Record<string, unknown>, ok: boolean, erro?: string) => auditar({ ferramenta: evento, argumentos: args, ok, ms: 0, ...(erro ? { erro } : {}) });
@@ -160,6 +152,7 @@ test('leitor: só conta o que está na janela de 36 horas e só da conta pedida;
     mcpAuditoria: {
       async findMany({ where }) {
         vistos.push(where.createdAt);
+        assert.deepEqual(where.OR, [{ argumentos: { path: ['conta'], equals: 'serra' } }, { argumentos: { path: ['chaveAsaas'], equals: 'g1' } }]);
         assert.deepEqual(where.ferramenta.in.sort(), [EVENTO_COBRANCA, EVENTO_OPERACAO].sort());
         return [
           linha(EVENTO_COBRANCA, 'serra', 1, { chave: 'a1', valor: 100, cobrancaId: 'pay_a1' }),
@@ -176,7 +169,7 @@ test('leitor: só conta o que está na janela de 36 horas e só da conta pedida;
       },
     },
   };
-  const lidas = await lancamentosRecentesDe(db, 'serra', AGORA);
+  const lidas = await lancamentosRecentesDe(db, 'serra', AGORA, 'g1');
   assert.deepEqual(lidas.map((r) => [r.tipo, r.valor, r.noTeto, r.chave ?? null, r.id ?? null]), [
     ['cobranca', 100, 100, 'a1', 'pay_a1'],
     ['cobranca', 40, 40, 'd4', null],
@@ -231,15 +224,26 @@ test('reinício NO MEIO da chamada: só a intenção ficou no banco, e ela segur
   assert.equal(b.f.posts().length, 0);
 });
 
-test('banco que não grava a intenção = a operação NÃO sai (fail closed), a reserva é devolvida e nada é avisado', async () => {
+test('banco que não responde ao porteiro = a operação NÃO sai (fail closed) e nada é avisado', async () => {
   const banco = bancoFalso();
-  banco.armazem.auditar = async () => {
-    throw new Error('banco fora');
-  };
   const a = subida(banco, { pagamentos: [{ id: 'pay_paga00000001', status: 'RECEIVED', value: 80 }] }, 1000);
-  await assert.rejects(transferir(a.ctx, Q, { unidade: 'serra', destino: 'fornecedor', valor: 700 }, a.registrar), /não consegui gravar o registro.*NÃO foi enviado ao Asaas/s);
-  await assert.rejects(criarCobranca(a.ctx, Q, COBRANCA, a.registrar), /NÃO foi enviado ao Asaas/);
-  await assert.rejects(estornarCobranca(a.ctx, Q, { unidade: 'serra', cobrancaId: 'pay_paga00000001' }, a.registrar), /NÃO foi enviado ao Asaas/);
+  const falha = async () => {
+    throw new ErroDeEntrada(FALHA_DO_BANCO);
+  };
+  a.ctx.esc.porteiro = { reservar: falha, ler: falha };
+  await assert.rejects(transferir(a.ctx, Q, { unidade: 'serra', destino: 'fornecedor', valor: 700 }, a.registrar), /não consegui conferir nem registrar a operação no banco/);
+  await assert.rejects(criarCobranca(a.ctx, Q, COBRANCA, a.registrar), /nada foi feito/);
+  await assert.rejects(estornarCobranca(a.ctx, Q, { unidade: 'serra', cobrancaId: 'pay_paga00000001' }, a.registrar), /nada foi feito/);
   assert.equal(a.f.posts().length, 0);
-  assert.equal(a.ctx.esc.livro.somaDoDia('doutor-hernia-serra', AGORA, 'America/Sao_Paulo'), 0);
+});
+
+test('a intenção SEM resultado de outra operação não é "resolvida" pelo resultado de uma parecida: o casamento é pelo id da intenção, não pelo hash', async () => {
+  const banco = bancoFalso();
+  // duas operações com o MESMO hash (mesmo destino e valor), 20 min uma da outra; a 1ª morreu no meio da chamada (só a intenção), a 2ª terminou
+  const mesma = { conta: 'doutor-hernia-serra', operacao: 'transferir', valor: 700, noTeto: 700, chave: 'mesmo-hash', chaveAsaas: 'g1' };
+  banco.banco.gravar({ ferramenta: EVENTO_OPERACAO, argumentos: { ...mesma, intencaoId: 'int-1', fase: 'intencao', incerto: true }, ok: true }, AGORA - 20 * 60_000);
+  banco.banco.gravar({ ferramenta: EVENTO_OPERACAO, argumentos: { ...mesma, intencaoId: 'int-2', fase: 'intencao', incerto: true }, ok: true }, AGORA - 5 * 60_000);
+  banco.banco.gravar({ ferramenta: EVENTO_OPERACAO, argumentos: { ...mesma, intencaoId: 'int-2', idAsaas: 'tra_2' }, ok: true }, AGORA - 5 * 60_000 + 1000);
+  const lidas = await lancamentosRecentesDe(banco.db, 'doutor-hernia-serra', AGORA, 'g1');
+  assert.deepEqual(lidas.map((r) => r.intencaoId), ['int-1', 'int-2'], 'a órfã (int-1) continua contando; a int-2 conta uma vez só, pelo resultado');
 });

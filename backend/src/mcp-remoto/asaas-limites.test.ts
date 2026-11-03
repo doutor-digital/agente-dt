@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { enfileirar, criarEscritaAsaas } from './asaas-escrita.js';
-import { conferirTetos, diaLocal, Livro, mascararChavePix, normalizarChave, tetoPorDia, tetoPorOperacao, textoDoAviso, lerDestinos } from './asaas-limites.js';
+import { acharDestino, conferirTetos, diaLocal, Livro, mascararChavePix, normalizarChave, tetoEspecificoDe, tetoPorDia, tetoPorOperacao, textoDoAviso, lerDestinos } from './asaas-limites.js';
 
 test('tetos: padrão 5000 por operação e 20000 por dia; vazio, 0, negativo e lixo = o PADRÃO (nunca ilimitado); valor bom manda', () => {
   assert.equal(tetoPorOperacao({}), 5000);
@@ -29,36 +29,62 @@ test('diaLocal: o dia civil de cada fuso; fuso desconhecido cai em São Paulo', 
   assert.equal(diaLocal(t, 'Lugar/Nenhum'), '2026-10-28');
 });
 
-test('livro: a soma do dia usa o fuso da clínica e soma tipos e horas diferentes; edição conta só o acréscimo; cancelar não entra', () => {
-  const L = new Livro();
+test('livro: a soma do dia usa o fuso da clínica e soma tipos e horas diferentes; edição conta só o acréscimo; por tipo', () => {
   const SP = (iso: string) => Date.parse(`${iso}-03:00`);
-  L.lancar({ conta: 'c', tipo: 'cobranca', valor: 100, noTeto: 100, em: SP('2026-10-28T00:05:00') });
-  L.lancar({ conta: 'c', tipo: 'estorno', valor: 200, noTeto: 200, em: SP('2026-10-28T12:00:00') });
-  L.lancar({ conta: 'c', tipo: 'transferencia', valor: 300.1, noTeto: 300.1, em: SP('2026-10-28T23:59:00') });
-  L.lancar({ conta: 'c', tipo: 'edicao', valor: 500, noTeto: 50, em: SP('2026-10-28T10:00:00') });
-  L.lancar({ conta: 'c', tipo: 'cobranca', valor: 999, noTeto: 999, em: SP('2026-10-27T23:59:00') });
-  L.lancar({ conta: 'outra', tipo: 'cobranca', valor: 999, noTeto: 999, em: SP('2026-10-28T10:00:00') });
-  assert.equal(L.somaDoDia('c', SP('2026-10-28T23:59:59'), 'America/Sao_Paulo'), 650.1);
-  assert.equal(L.somaDoDia('c', SP('2026-10-29T00:00:01'), 'America/Sao_Paulo'), 0);
-  assert.equal(L.somaDoDia('c', SP('2026-10-27T23:59:59'), 'America/Sao_Paulo'), 999);
+  const L = new Livro([
+    { conta: 'c', tipo: 'cobranca', valor: 100, noTeto: 100, em: SP('2026-10-28T00:05:00') },
+    { conta: 'c', tipo: 'estorno', valor: 200, noTeto: 200, em: SP('2026-10-28T12:00:00') },
+    { conta: 'c', tipo: 'transferencia', valor: 300.1, noTeto: 300.1, em: SP('2026-10-28T23:59:00') },
+    { conta: 'c', tipo: 'edicao', valor: 500, noTeto: 50, em: SP('2026-10-28T10:00:00') },
+    { conta: 'c', tipo: 'cobranca', valor: 999, noTeto: 999, em: SP('2026-10-27T23:59:00') },
+  ]);
+  assert.equal(L.somaDoDia(SP('2026-10-28T23:59:59'), 'America/Sao_Paulo'), 650.1);
+  assert.equal(L.somaDoDia(SP('2026-10-29T00:00:01'), 'America/Sao_Paulo'), 0);
+  assert.equal(L.somaDoDia(SP('2026-10-27T23:59:59'), 'America/Sao_Paulo'), 999);
+  assert.equal(L.somaDoDia(SP('2026-10-28T23:59:59'), 'America/Sao_Paulo', 'estorno'), 200);
+  assert.equal(L.somaDoDia(SP('2026-10-28T23:59:59'), 'America/Sao_Paulo', 'transferencia'), 300.1);
   // em Manaus (uma hora antes) a virada é outra: a cobrança das 00:05 de 28 em São Paulo (23:05 em Manaus) ainda é dia 27 lá
-  assert.equal(L.somaDoDia('c', SP('2026-10-28T12:00:00'), 'America/Manaus'), 550.1);
-  assert.equal(L.somaDoDia('c', SP('2026-10-27T23:59:59'), 'America/Manaus'), 1099);
-  assert.equal(L.cobrancasNaHora('c', SP('2026-10-28T00:30:00'), 3_600_000), 2);
-  assert.equal(L.cobrancasNaHora('c', SP('2026-10-28T01:00:00'), 3_600_000), 1);
-  // poda: o que passou de 36 h sai
-  L.podar(SP('2026-10-30T12:00:00'));
-  assert.equal(L.somaDoDia('c', SP('2026-10-28T12:00:00'), 'America/Sao_Paulo'), 0);
+  assert.equal(L.somaDoDia(SP('2026-10-28T12:00:00'), 'America/Manaus'), 550.1);
+  assert.equal(L.somaDoDia(SP('2026-10-27T23:59:59'), 'America/Manaus'), 1099);
+  assert.equal(L.cobrancasNaHora(SP('2026-10-28T00:30:00'), 3_600_000), 2);
+  assert.equal(L.cobrancasNaHora(SP('2026-10-28T01:00:00'), 3_600_000), 1);
 });
 
+const AGORA_T = Date.parse('2026-10-28T15:00:00-03:00');
+const base = { fuso: 'America/Sao_Paulo', agora: AGORA_T, tetoOperacao: 1000, tetoDia: 1000.3 };
+const lanc = (tipo: 'cobranca' | 'estorno' | 'transferencia', valor: number) => ({ conta: 'c', tipo, valor, noTeto: valor, em: AGORA_T });
+
 test('conferirTetos: recusa por operação e por dia com a mensagem do teto; no limite exato passa (em centavos, sem erro de ponto flutuante)', () => {
-  const L = new Livro();
-  const base = { livro: L, conta: 'c', fuso: 'America/Sao_Paulo', agora: Date.parse('2026-10-28T15:00:00-03:00'), tetoOperacao: 1000, tetoDia: 1000.3, o: 'ASAAS_TETO_OPERACAO_REAIS' };
-  assert.throws(() => conferirTetos({ ...base, valor: 1000.01, noTeto: 1000.01 }), /passa do teto de R\$ 1\.000,00 por operação/);
-  L.lancar({ conta: 'c', tipo: 'transferencia', valor: 0.1, noTeto: 0.1, em: base.agora });
-  L.lancar({ conta: 'c', tipo: 'transferencia', valor: 0.2, noTeto: 0.2, em: base.agora });
-  conferirTetos({ ...base, valor: 1000, noTeto: 1000 }); // 0.1 + 0.2 + 1000 = 1000.3 exato
-  assert.throws(() => conferirTetos({ ...base, valor: 1000, noTeto: 1000.01 }), /passa do teto do dia/);
+  assert.throws(() => conferirTetos({ ...base, livro: new Livro(), valor: 1000.01, noTeto: 1000.01 }), /passa do teto de R\$ 1\.000,00 por operação/);
+  const L = new Livro([lanc('transferencia', 0.1), lanc('transferencia', 0.2)]);
+  conferirTetos({ ...base, livro: L, valor: 1000, noTeto: 1000 }); // 0.1 + 0.2 + 1000 = 1000.3 exato
+  assert.throws(() => conferirTetos({ ...base, livro: L, valor: 1000, noTeto: 1000.01 }), /passa do teto do dia desta chave do Asaas/);
+});
+
+test('teto PRÓPRIO de estorno e de transferência: padrão 500/2000; vale o menor com o geral; vazio, 0 e lixo = o padrão', () => {
+  assert.deepEqual(tetoEspecificoDe('estorno', {}), { operacao: 500, dia: 2000 });
+  assert.deepEqual(tetoEspecificoDe('transferencia', {}), { operacao: 500, dia: 2000 });
+  assert.deepEqual(tetoEspecificoDe('estorno', { ASAAS_TETO_ESTORNO_OPERACAO_REAIS: '800', ASAAS_TETO_ESTORNO_DIA_REAIS: '3000' }), { operacao: 800, dia: 3000 });
+  assert.deepEqual(tetoEspecificoDe('transferencia', { ASAAS_TETO_TRANSFERENCIA_OPERACAO_REAIS: '1200', ASAAS_TETO_TRANSFERENCIA_DIA_REAIS: '9000' }), { operacao: 1200, dia: 9000 });
+  for (const v of ['', '0', '-5', 'abc']) assert.deepEqual(tetoEspecificoDe('estorno', { ASAAS_TETO_ESTORNO_OPERACAO_REAIS: v, ASAAS_TETO_ESTORNO_DIA_REAIS: v }), { operacao: 500, dia: 2000 }, v);
+  // cada tipo olha a SUA variável
+  assert.deepEqual(tetoEspecificoDe('transferencia', { ASAAS_TETO_ESTORNO_OPERACAO_REAIS: '9' }), { operacao: 500, dia: 2000 });
+
+  const teto = { tipo: 'estorno' as const, teto: { operacao: 500, dia: 2000 } };
+  const grande = { ...base, tetoOperacao: 5000, tetoDia: 20000 };
+  // por operação: o próprio manda quando é menor que o geral
+  assert.throws(() => conferirTetos({ ...grande, livro: new Livro(), valor: 500.01, noTeto: 500.01, saida: teto }), /passa do teto de R\$ 500,00 por estorno \(ASAAS_TETO_ESTORNO_OPERACAO_REAIS\)/);
+  conferirTetos({ ...grande, livro: new Livro(), valor: 500, noTeto: 500, saida: teto });
+  // e o geral manda quando é menor que o próprio
+  assert.throws(() => conferirTetos({ ...grande, tetoOperacao: 300, livro: new Livro(), valor: 400, noTeto: 400, saida: teto }), /teto de R\$ 300,00 por operação \(ASAAS_TETO_OPERACAO_REAIS\)/);
+  // por dia: soma só do MESMO tipo (transferência de ontem à parte não entra no teto do estorno), e o geral continua valendo para a soma de tudo
+  const L = new Livro([lanc('estorno', 1900), lanc('transferencia', 1900)]);
+  conferirTetos({ ...grande, livro: L, valor: 100, noTeto: 100, saida: teto });
+  assert.throws(() => conferirTetos({ ...grande, livro: L, valor: 100.01, noTeto: 100.01, saida: teto }), /teto do dia para estorno.*ASAAS_TETO_ESTORNO_DIA_REAIS/s);
+  const cheio = new Livro([lanc('cobranca', 19500), lanc('estorno', 100)]);
+  assert.throws(() => conferirTetos({ ...grande, livro: cheio, valor: 500, noTeto: 500, saida: teto }), /passa do teto do dia desta chave do Asaas/);
+  // o teto próprio do dia nunca passa do geral
+  assert.throws(() => conferirTetos({ ...grande, tetoDia: 1000, livro: new Livro(), valor: 600, noTeto: 1001, saida: { tipo: 'transferencia', teto: { operacao: 5000, dia: 5000 } } }), /teto do dia/);
 });
 
 test('chave Pix: só o formato do próprio tipo (texto com sobra não vira a chave); máscara não mostra a chave inteira', () => {
@@ -98,23 +124,27 @@ test('aviso do Telegram: conta, valor, quem pediu, destino e id — sem campos v
 });
 
 test('conferirTetos: teto por operação 0 (nome antigo desligado) recusa tudo e diz como corrigir', () => {
-  const L = new Livro();
   assert.throws(
-    () => conferirTetos({ livro: L, conta: 'c', fuso: 'America/Sao_Paulo', agora: AGORA_T, valor: 1, noTeto: 1, tetoOperacao: tetoPorOperacao({ ASAAS_COBRANCA_MAX_REAIS: '0' }), tetoDia: 100, o: 'x' }),
+    () => conferirTetos({ livro: new Livro(), fuso: 'America/Sao_Paulo', agora: AGORA_T, valor: 1, noTeto: 1, tetoOperacao: tetoPorOperacao({ ASAAS_COBRANCA_MAX_REAIS: '0' }), tetoDia: 100 }),
     /DESLIGADO.*ASAAS_COBRANCA_MAX_REAIS.*ASAAS_TETO_OPERACAO_REAIS/s,
   );
 });
 
-test('livro: o histórico que lança de forma SÍNCRONA também vira "nada foi gravado" (fail-closed), e a próxima tentativa lê de novo', async () => {
-  let vezes = 0;
-  const L = new Livro(() => {
-    vezes++;
-    if (vezes === 1) throw new Error('query torta');
-    return Promise.resolve([]);
-  });
-  await assert.rejects(() => L.carregar('c'), /não consegui conferir as operações recentes.*nada foi gravado/);
-  await L.carregar('c');
-  assert.equal(vezes, 2);
+test('agência e conta com hífen ou ponto NÃO viram outra conta: a lista os ignora, o pedido os recusa (só dígitos, como estão)', () => {
+  const entrada = (extra: object) => lerDestinos('x', { ASAAS_TRANSFERENCIA_DESTINOS: JSON.stringify({ x: [{ nome: 'A', banco: '001', agencia: '1234', conta: '98765', conta_digito: '4', titular: 'T', documento: '11222333000181', ...extra }] }) });
+  assert.equal(entrada({}).destinos.length, 1);
+  assert.equal((entrada({}).destinos[0] as { digito: string }).digito, '4');
+  for (const extra of [{ agencia: '1234-5' }, { conta: '98765-4' }, { conta: '98.765' }, { banco: '0 01' }, { conta_digito: '4-' }, { agencia: '12 34' }]) {
+    const l = entrada(extra);
+    assert.equal(l.destinos.length, 0, JSON.stringify(extra));
+    assert.match(l.problemas.join(' '), /só números/);
+  }
+  const ok = entrada({}).destinos;
+  assert.equal(acharDestino(ok, { contaBancaria: { banco: '001', agencia: '1234', conta: '98765', digito: '4' } }).apelido, 'A');
+  // o pedido com hífen não "vira" a conta da lista
+  for (const cb of [{ banco: '001', agencia: '1234-5', conta: '98765', digito: '4' }, { banco: '001', agencia: '1234', conta: '98765-4' }, { banco: '001', agencia: '1234', conta: '9876.5', digito: '4' }]) {
+    assert.throws(() => acharDestino(ok, { contaBancaria: cb }), /só com números/, JSON.stringify(cb));
+  }
 });
 
 test('fila: uma por conta — uma conta travada não segura as outras, e duas operações da MESMA conta rodam uma depois da outra', async () => {
@@ -132,4 +162,3 @@ test('fila: uma por conta — uma conta travada não segura as outras, e duas op
   await new Promise((r) => setImmediate(r));
   assert.equal(esc.filas.size, 0, 'filas paradas não ficam guardadas');
 });
-const AGORA_T = Date.parse('2026-10-28T15:00:00-03:00');

@@ -6,24 +6,21 @@
  */
 import { ErroDeEntrada } from '../franquia-mcp/travas.js';
 import { mascararDigitosSeguidos } from '../lib/pii.js';
-import type { ContaAsaas } from './asaas.js';
+import { STATUS as STATUS_PT, type ContaAsaas } from './asaas.js';
 import {
-  cabecalhoDaConta, chaveDeOperacao, clientePorId, comAvisos, conferirTravas, consumoDoDia, contaDeEscrita, dataBR, descricaoValida, emailValido, esquecerLeituras,
-  fusoDe, limitar, nomeValido, registrarIntencao, validarEndereco, podeTerGravado, sanear, telefoneValido, valorValido, vencimentoValido, ErroSemId, mostrarCliente,
+  cabecalhoDaConta, chaveDeOperacao, clientePorId, comAvisos, conferirTravas, consumoDoDia, contaDeEscrita, reservar, dataBR, descricaoValida, emailValido, esquecerLeituras,
+  fusoDe, limitar, nomeValido, validarEndereco, podeTerGravado, sanear, telefoneValido, valorValido, vencimentoValido, ErroSemId, mostrarCliente,
   type ClienteAsaas, type CtxEscrita, type EnderecoPedido, type Quem, type Registrar,
 } from './asaas-escrita.js';
 import {
   acharDestino, dinheiro, EVENTO_OPERACAO, identidadeDoDestino, mascararChavePix, mostrarDestino, textoDoAviso, textoSemDestinos, type Destino, type PedidoDeDestino,
 } from './asaas-limites.js';
 
-const STATUS_PT: Record<string, string> = {
-  PENDING: 'aguardando pagamento', RECEIVED: 'recebida', CONFIRMED: 'confirmada', OVERDUE: 'vencida', REFUNDED: 'estornada', RECEIVED_IN_CASH: 'recebida em dinheiro',
-  REFUND_REQUESTED: 'estorno solicitado', REFUND_IN_PROGRESS: 'estorno em andamento', CHARGEBACK_REQUESTED: 'chargeback', DELETED: 'excluída',
-};
 const emPortugues = (s?: string) => STATUS_PT[s ?? ''] ?? s ?? 'desconhecido';
 
 interface Pagamento {
   id: string;
+  refunds?: Array<{ value?: number; status?: string }> | null;
   status?: string;
   value?: number;
   dueDate?: string;
@@ -142,12 +139,17 @@ export async function editarCobranca(
     }
     // o teto vale para o valor novo; ao dia só soma o que AUMENTOU
     const acrescimo = novoValor !== undefined ? Math.max(0, Math.round((novoValor - (atual.value ?? 0)) * 100) / 100) : 0;
-    // só mexer em vencimento ou descrição não envolve dinheiro novo: não depende dos tetos (mas ainda lê o livro, que o registro usa)
-    // (diminuir o valor de uma cobrança que já passa do teto também não envolve dinheiro novo)
-    if (acrescimo > 0) await conferirTravas(esc, c, { valor: novoValor!, noTeto: acrescimo });
-    else await esc.livro.carregar(c.slug);
-    const reserva = acrescimo > 0 ? esc.livro.lancar({ conta: c.slug, tipo: 'edicao', valor: novoValor!, noTeto: acrescimo, em: esc.agora(), id }) : null;
-    const base = { conta: c.slug, operacao: 'editar_cobranca', valor: novoValor ?? 0, noTeto: acrescimo, idAsaas: id, campos, pediuPor: quem.id };
+    const base0 = { conta: c.slug, operacao: 'editar_cobranca', valor: novoValor ?? 0, noTeto: acrescimo, idAsaas: id, campos, pediuPor: quem.id };
+    // só mexer em vencimento ou descrição (ou diminuir o valor) não envolve dinheiro novo: não depende dos tetos. Aumentar o valor reserva o acréscimo
+    // na trava da chave do Asaas e grava a intenção ANTES da chamada, como qualquer operação de dinheiro
+    let ids: Record<string, unknown> = {};
+    if (acrescimo > 0) {
+      const confere = { tipo: 'edicao' as const, valor: novoValor!, noTeto: acrescimo };
+      await conferirTravas(esc, c, confere);
+      const r = await reservar(esc, c, quem, { ...confere, evento: EVENTO_OPERACAO, argumentos: base0 });
+      ids = { intencaoId: r.intencaoId, chaveAsaas: r.grupo };
+    }
+    const base = { ...base0, ...ids };
     let depois: Pagamento | null;
     try {
       depois = await c.escrita.enviar<Pagamento>('PUT', `/payments/${id}`, corpo);
@@ -155,7 +157,6 @@ export async function editarCobranca(
       const s = sanear(e);
       const incerto = podeTerGravado(e);
       esquecerLeituras(asaas, c.slug);
-      if (!incerto && reserva) esc.livro.soltar(reserva);
       registrar(EVENTO_OPERACAO, { ...base, ...(incerto ? { incerto: true } : {}) }, false, s.message);
       throw incerto ? new Error(`${s.message} — a alteração PODE ter sido feita: confira com asaas_cobranca antes de repetir.`) : s;
     }
@@ -170,7 +171,7 @@ export async function editarCobranca(
       campos,
       cobranca: { id, status: emPortugues(depois?.status ?? atual.status), valor: dinheiro(depois?.value ?? novoValor ?? atual.value ?? 0), vencimento: depois?.dueDate ?? (corpo.dueDate as string | undefined) ?? atual.dueDate ?? null },
       ...(atual.installment ? { atencao: 'esta cobrança é parcela de um parcelamento: só ela foi alterada, as outras parcelas ficam como estavam' } : {}),
-      limites: consumoDoDia(esc, c),
+      limites: await consumoDoDia(esc, c),
       registro: 'Registrado com quem pediu.',
     };
   });
@@ -217,6 +218,26 @@ export async function cancelarCobranca({ asaas, esc }: CtxEscrita, quem: Quem, a
 
 // ----------------------------------------------------------------- estornar cobrança recebida
 
+const arredondar = (n: number) => Math.round(n * 100) / 100;
+
+/**
+ * Quanto desta cobrança JÁ foi estornado. Soma o que o Asaas devolve em `/payments/{id}/refunds` e o campo `refunds` da própria cobrança e
+ * fica com o MAIOR dos dois (na dúvida, o que resta é menor). Estorno cancelado ou falho não conta. Se a lista não puder ser lida
+ * (e não for um simples 404), não estorna: sem saber o que já saiu, o "restante" não existe.
+ */
+async function jaEstornadoDe(c: ContaAsaas, id: string, atual: Pagamento): Promise<number> {
+  const soma = (xs: Array<{ value?: number; status?: string }> | null | undefined) =>
+    arredondar((xs ?? []).filter((e) => !['CANCELLED', 'FAILED'].includes(String(e.status ?? '').toUpperCase())).reduce((s, e) => s + (Number(e.value) || 0), 0));
+  let daLista = 0;
+  try {
+    const r = await c.fonte.get<{ data?: Array<{ value?: number; status?: string }> }>(`/payments/${id}/refunds`);
+    daLista = soma(r?.data);
+  } catch (e) {
+    if ((e as { status?: number })?.status !== 404) throw new ErroDeEntrada('não consegui conferir os estornos anteriores desta cobrança — nada foi feito; tente em instantes');
+  }
+  return Math.max(daLista, soma(atual.refunds));
+}
+
 export async function estornarCobranca(
   { asaas, esc }: CtxEscrita,
   quem: Quem,
@@ -237,29 +258,31 @@ export async function estornarCobranca(
       );
     }
     const total = atual.value ?? 0;
-    const valor = parcial ?? total;
-    if (valor > total) throw new ErroDeEntrada(`o estorno de ${dinheiro(valor)} passa do valor da cobrança (${dinheiro(total)}). Nada foi feito.`);
-    const chave = chaveDeOperacao(c.slug, 'estorno', id, Math.round(valor * 100));
-    await conferirTravas(esc, c, { chave, valor, noTeto: valor, descricaoDuplicata: `estorno igual da cobrança ${id}` });
-    const reserva = esc.livro.lancar({ conta: c.slug, tipo: 'estorno', valor, noTeto: valor, em: esc.agora(), chave, id });
-    const base = { conta: c.slug, operacao: 'estornar_cobranca', valor, noTeto: valor, idAsaas: id, parcial: parcial !== undefined && parcial < total, chave, pediuPor: quem.id };
-    try {
-      await registrarIntencao(registrar, EVENTO_OPERACAO, base);
-    } catch (e) {
-      esc.livro.soltar(reserva);
-      throw e;
+    const jaEstornado = await jaEstornadoDe(c, id, atual);
+    // o que ainda dá para devolver: o valor da cobrança menos o que já foi estornado (estorno "total" = o restante)
+    const restante = arredondar(total - jaEstornado);
+    if (restante <= 0) throw new ErroDeEntrada(`a cobrança ${id} já foi estornada por inteiro (${dinheiro(jaEstornado)} de ${dinheiro(total)}). Nada foi feito.`);
+    const valor = parcial ?? restante;
+    if (valor > restante) {
+      throw new ErroDeEntrada(`o estorno de ${dinheiro(valor)} passa do que ainda resta nesta cobrança: ${dinheiro(restante)} (cobrança de ${dinheiro(total)}, já estornado ${dinheiro(jaEstornado)}). Nada foi feito.`);
     }
-    const detalhe = `${parcial !== undefined && parcial < total ? `ESTORNO PARCIAL (cobrança de ${dinheiro(total)})` : 'ESTORNO TOTAL'}${motivo ? ` · motivo: ${motivo}` : ''}`;
+    const integral = valor >= total;
+    const chave = chaveDeOperacao(c.slug, 'estorno', id, Math.round(valor * 100));
+    const confere = { tipo: 'estorno' as const, chave, valor, noTeto: valor, descricaoDuplicata: `estorno igual da cobrança ${id}` };
+    await conferirTravas(esc, c, confere);
+    const base = { conta: c.slug, operacao: 'estornar_cobranca', valor, noTeto: valor, idAsaas: id, parcial: !integral, jaEstornado, chave, pediuPor: quem.id };
+    const { intencaoId, grupo } = await reservar(esc, c, quem, { ...confere, evento: EVENTO_OPERACAO, argumentos: base });
+    const ids = { intencaoId, chaveAsaas: grupo };
+    const detalhe = `${integral ? 'ESTORNO TOTAL' : `ESTORNO PARCIAL (cobrança de ${dinheiro(total)}${jaEstornado > 0 ? `, já estornado ${dinheiro(jaEstornado)}` : ''})`}${motivo ? ` · motivo: ${motivo}` : ''}`;
     let r: Pagamento;
     try {
-      r = await c.escrita.enviar<Pagamento>('POST', `/payments/${id}/refund`, { ...(parcial !== undefined && parcial < total ? { value: parcial } : {}), ...(motivo ? { description: motivo } : {}) });
+      r = await c.escrita.enviar<Pagamento>('POST', `/payments/${id}/refund`, { ...(integral ? {} : { value: valor }), ...(motivo ? { description: motivo } : {}) });
       if (!r?.id) throw new ErroSemId('o Asaas respondeu ao estorno sem o id da cobrança');
     } catch (e) {
       const s = sanear(e);
       esquecerLeituras(asaas, c.slug);
       const incerto = podeTerGravado(e);
-      if (!incerto) esc.livro.soltar(reserva);
-      registrar(EVENTO_OPERACAO, { ...base, ...(incerto ? { incerto: true } : {}) }, false, s.message);
+      registrar(EVENTO_OPERACAO, { ...base, ...ids, ...(incerto ? { incerto: true } : {}) }, false, s.message);
       if (incerto) {
         avisar(textoDoAviso({ titulo: 'ESTORNO COM RESULTADO INCERTO', conta: c.slug, nomeDaConta: cabecalho.nomeDaConta, quem, valor, id, detalhe: 'O Asaas não confirmou: o estorno PODE ter sido feito. Conferir no painel.' }));
         throw new Error(`${s.message} — o estorno PODE ter sido feito: confira com asaas_cobranca antes de repetir.`);
@@ -267,14 +290,14 @@ export async function estornarCobranca(
       throw s;
     }
     esquecerLeituras(asaas, c.slug);
-    registrar(EVENTO_OPERACAO, { ...base, status: r.status ?? null }, true);
+    registrar(EVENTO_OPERACAO, { ...base, ...ids, status: r.status ?? null }, true);
     avisar(textoDoAviso({ titulo: 'ESTORNO', conta: c.slug, nomeDaConta: cabecalho.nomeDaConta, quem, valor, id, detalhe }));
     return {
       conta: cabecalho,
       estornado: true,
-      cobranca: { id, valorEstornado: dinheiro(valor), valorDaCobranca: dinheiro(total), statusAgora: emPortugues(r.status), estornoParcial: base.parcial },
+      cobranca: { id, valorEstornado: dinheiro(valor), valorDaCobranca: dinheiro(total), jaEstornadoAntes: dinheiro(jaEstornado), aindaRestaDevolver: dinheiro(arredondar(restante - valor)), statusAgora: emPortugues(r.status), estornoParcial: base.parcial },
       aviso: 'O estorno pode levar algum tempo para concluir no Asaas: confira o status com asaas_cobranca.',
-      limites: consumoDoDia(esc, c),
+      limites: await consumoDoDia(esc, c),
       registro: 'Registrado com quem pediu.',
     };
   });
@@ -328,19 +351,16 @@ export async function transferir(
 
   return comAvisos(esc, c.slug, async (avisar) => {
     const { cabecalho } = await cabecalhoDaConta(c, esc);
-    const chave = chaveDeOperacao(c.slug, 'transferencia', identidadeDoDestino(destino), Math.round(valor * 100), descricao ?? '');
-    await conferirTravas(esc, c, { chave, valor, noTeto: valor, descricaoDuplicata: `transferência igual para ${destino.apelido}` });
+    // a duplicata NÃO depende da descrição (senão bastaria mudar o texto para repetir): mesmo destino e mesmo valor em 10 minutos é a mesma transferência
+    const chave = chaveDeOperacao(c.slug, 'transferencia', identidadeDoDestino(destino), Math.round(valor * 100));
+    const confere = { tipo: 'transferencia' as const, chave, valor, noTeto: valor, descricaoDuplicata: `transferência igual para ${destino.apelido}` };
+    await conferirTravas(esc, c, confere);
     // o saldo é conferido antes só para dar uma resposta clara; quem manda é o Asaas (leitura que falha não trava)
     const saldo = await c.fonte.get<{ balance?: number }>('/finance/balance').then((r) => r?.balance, (e) => { if ((e as { status?: number })?.status === 401) throw e; return undefined; });
     if (typeof saldo === 'number' && saldo < valor) throw new ErroDeEntrada(`saldo insuficiente na conta: ${dinheiro(saldo)} disponível para uma transferência de ${dinheiro(valor)}. Nada foi feito.`);
-    const reserva = esc.livro.lancar({ conta: c.slug, tipo: 'transferencia', valor, noTeto: valor, em: esc.agora(), chave });
     const base = { conta: c.slug, operacao: 'transferir', valor, noTeto: valor, destino: destino.apelido, via: destino.via, chave, pediuPor: quem.id };
-    try {
-      await registrarIntencao(registrar, EVENTO_OPERACAO, base);
-    } catch (e) {
-      esc.livro.soltar(reserva);
-      throw e;
-    }
+    const { intencaoId, grupo } = await reservar(esc, c, quem, { ...confere, evento: EVENTO_OPERACAO, argumentos: base });
+    const ids = { intencaoId, chaveAsaas: grupo };
     const aviso = (titulo: string, extra?: string) => textoDoAviso({ titulo, conta: c.slug, nomeDaConta: cabecalho.nomeDaConta, quem, valor, destino: mostrar, ...(extra ? { detalhe: extra } : {}) });
     let r: Transferencia;
     try {
@@ -349,8 +369,7 @@ export async function transferir(
       const s = sanear(e);
       esquecerLeituras(asaas, c.slug);
       const incerto = podeTerGravado(e);
-      if (!incerto) esc.livro.soltar(reserva);
-      registrar(EVENTO_OPERACAO, { ...base, ...(incerto ? { incerto: true } : {}) }, false, s.message);
+      registrar(EVENTO_OPERACAO, { ...base, ...ids, ...(incerto ? { incerto: true } : {}) }, false, s.message);
       if (incerto) {
         avisar(aviso('TRANSFERÊNCIA COM RESULTADO INCERTO', 'O Asaas não confirmou: o dinheiro PODE ter saído. Conferir no painel.'));
         throw new Error(`${s.message} — a transferência PODE ter sido feita: confira o extrato (asaas_extrato) antes de repetir.`);
@@ -359,24 +378,22 @@ export async function transferir(
     }
     esquecerLeituras(asaas, c.slug);
     if (!r?.id) {
-      registrar(EVENTO_OPERACAO, { ...base, incerto: true }, false, 'o Asaas respondeu sem o id da transferência');
+      registrar(EVENTO_OPERACAO, { ...base, ...ids, incerto: true }, false, 'o Asaas respondeu sem o id da transferência');
       avisar(aviso('TRANSFERÊNCIA COM RESULTADO INCERTO', 'O Asaas respondeu sem o id: o dinheiro PODE ter saído. Conferir no painel.'));
       throw new Error('O Asaas respondeu sem o id da transferência: ela PODE ter sido feita. Confira o extrato (asaas_extrato) antes de repetir.');
     }
-    reserva.id = r.id;
     if (r.status === 'FAILED' || r.status === 'CANCELLED') {
-      esc.livro.soltar(reserva);
-      registrar(EVENTO_OPERACAO, { ...base, idAsaas: r.id, status: r.status }, false, `transferência ${r.status}: ${r.failReason ?? 'sem motivo informado'}`);
+      registrar(EVENTO_OPERACAO, { ...base, ...ids, idAsaas: r.id, status: r.status }, false, `transferência ${r.status}: ${r.failReason ?? 'sem motivo informado'}`);
       throw new ErroDeEntrada(`o Asaas não fez a transferência (${r.status}): ${sanear(new Error(String(r.failReason ?? 'sem motivo informado'))).message}`);
     }
-    registrar(EVENTO_OPERACAO, { ...base, idAsaas: r.id, status: r.status ?? null }, true);
+    registrar(EVENTO_OPERACAO, { ...base, ...ids, idAsaas: r.id, status: r.status ?? null }, true);
     avisar(aviso('TRANSFERÊNCIA', `id ${r.id} · status ${r.status ?? '?'}${descricao ? ` · ${descricao}` : ''}`));
     return {
       conta: cabecalho,
       transferido: true,
       transferencia: { id: r.id, status: r.status ?? null, valor: dinheiro(valor), destino: mostrarDestino(destino), descricao: descricao ?? null },
       aviso: 'Confirme o status no extrato (asaas_extrato): o Asaas pode deixar a transferência pendente de autorização ou de processamento.',
-      limites: consumoDoDia(esc, c),
+      limites: await consumoDoDia(esc, c),
       registro: 'Registrado com quem pediu.',
     };
   });
@@ -386,12 +403,11 @@ export async function transferir(
 
 export async function limitesEDestinos({ asaas, esc }: CtxEscrita, a: { unidade: string }) {
   const c = contaDeEscrita(asaas, esc, a.unidade);
-  await esc.livro.carregar(c.slug);
   const lidos = esc.destinos(c.slug);
   return {
     unidade: c.slug,
     escritaLigada: true,
-    limites: consumoDoDia(esc, c),
+    limites: await consumoDoDia(esc, c),
     transferencia: lidos.ligada
       ? { ligada: true, destinosPermitidos: lidos.destinos.map(mostrarDestino), problemasNaConfiguracao: lidos.problemas }
       : { ligada: false, motivo: textoSemDestinos(c.slug), problemasNaConfiguracao: lidos.problemas },

@@ -19,15 +19,17 @@ import { IDS_PROTEGIDOS, protegendo } from './mascaras.js';
 const AGENTE = 'DoutorDigital-Conector/1.0';
 
 export type MetodoDeEscrita = 'POST' | 'PUT' | 'DELETE';
-const ID = '[A-Za-z0-9_]{3,64}';
+// ids com o prefixo certo do Asaas (cus_ cliente, pay_ cobrança): "/payments/webhook" ou "/customers/myAccount" não são rotas de escrita
+const CLIENTE = 'cus_[A-Za-z0-9]{6,40}';
+const COBRANCA = 'pay_[A-Za-z0-9]{6,40}';
 /** As ÚNICAS rotas em que este cliente escreve (método + caminho inteiro, sem query). */
 export const ROTAS_DE_ESCRITA: ReadonlyArray<{ metodo: MetodoDeEscrita; caminho: RegExp; nome: string }> = [
   { metodo: 'POST', caminho: /^\/customers$/, nome: 'cadastrar cliente' },
-  { metodo: 'PUT', caminho: new RegExp(`^/customers/${ID}$`), nome: 'editar cliente' },
+  { metodo: 'PUT', caminho: new RegExp(`^/customers/${CLIENTE}$`), nome: 'editar cliente' },
   { metodo: 'POST', caminho: /^\/payments$/, nome: 'criar cobrança' },
-  { metodo: 'PUT', caminho: new RegExp(`^/payments/${ID}$`), nome: 'editar cobrança' },
-  { metodo: 'DELETE', caminho: new RegExp(`^/payments/${ID}$`), nome: 'cancelar cobrança' },
-  { metodo: 'POST', caminho: new RegExp(`^/payments/${ID}/refund$`), nome: 'estornar cobrança' },
+  { metodo: 'PUT', caminho: new RegExp(`^/payments/${COBRANCA}$`), nome: 'editar cobrança' },
+  { metodo: 'DELETE', caminho: new RegExp(`^/payments/${COBRANCA}$`), nome: 'cancelar cobrança' },
+  { metodo: 'POST', caminho: new RegExp(`^/payments/${COBRANCA}/refund$`), nome: 'estornar cobrança' },
   { metodo: 'POST', caminho: /^\/transfers$/, nome: 'transferir' },
 ];
 
