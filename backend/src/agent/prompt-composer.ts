@@ -890,15 +890,29 @@ function renderConversao(unit: Unit): string {
   // Unidade sem pagamento antecipado (Timbó): não existe "à vista no PIX" nem valor menor — a consulta é paga no dia.
   // (Os R$ achados nas fontes incluem sessões e pacotes: aqui o valor da consulta vem das Fontes, nunca deste cálculo.)
   const semAntecipado = unidadeSemAntecipado(unit);
+  // Taxa de reserva (Boa Vista, Petrópolis): o menor R$ das fontes NÃO é um preço à vista — é a PARTE antecipada de um total
+  // (R$ 50 + R$ 150 = R$ 200). Sem esta ramificação o bloco ensinava "R$ 200, ou R$ 50 à vista no PIX" e "a consulta é R$ 50
+  // antecipado" (visto na composição do prompt de Petrópolis, 03/11/2026). O total e as duas partes vêm de `precosDaConsulta`;
+  // se as fontes não deixam achar os dois números, o texto manda copiar das Fontes — nunca a conta "menor = à vista".
+  const comTaxa = unit.spineBookingRequiresPayment === true;
+  const taxa = comTaxa ? precosDaConsulta(unit) : null;
+  const totalComTaxa = taxa
+    ? `R$ ${fmtBRL(taxa.antecipado + taxa.noDia)} no total — R$ ${fmtBRL(taxa.antecipado)} antecipados para garantir o horário (abatem do total) + R$ ${fmtBRL(taxa.noDia)} no dia`
+    : '{o valor total da consulta e as duas partes (antecipada e no dia), exatamente como estão nas Fontes Oficiais}';
   const valorDaConsulta = semAntecipado
     ? '{o valor da consulta, o que está nas Fontes Oficiais}, pago no dia, na clínica'
-    : `${precoAncora}, ou ${precoPix} à vista no PIX`;
+    : comTaxa
+      ? totalComTaxa
+      : `${precoAncora}, ou ${precoPix} à vista no PIX`;
   const reancoraCaro = semAntecipado
     ? `Acolha sem defender o preço e SEM oferecer desconto: a consulta é paga no dia,
   na clínica, e não existe valor menor. Devolva ao custo`
-    : `Acolha sem defender o preço. Reancore: o ${precoAncora} é o valor cheio;
+    : comTaxa
+      ? `Acolha sem defender o preço e SEM oferecer desconto: a consulta é ${totalComTaxa}.
+  O valor antecipado abate do total — não é preço menor. Devolva ao custo`
+      : `Acolha sem defender o preço. Reancore: o ${precoAncora} é o valor cheio;
   ${precoPix} é antecipado no PIX — a diferença é dele. Depois devolva ao custo`;
-  const exemploCaro = semAntecipado
+  const exemploCaro = semAntecipado || comTaxa
     ? 'A consulta é onde a gente'
     : `A consulta é ${precoPix} antecipado e é onde a gente`;
 

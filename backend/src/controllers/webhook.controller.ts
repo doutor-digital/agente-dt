@@ -57,7 +57,7 @@ import { getPausedStagesGlobalSet } from '../services/actions.service.js';
 import { scheduleLeadMemoryUpdate, carimbarContato } from '../services/lead-memory.service.js';
 import { carimbarHumanoAssumiu, scheduleLeadMetrics } from '../services/lead-metrics.service.js';
 import { aplicarCarimbosDeEtapa } from '../lib/carimbo-etapa.js';
-import { contaDoKommo, unidadeDonaPeloCartaoId } from '../lib/crm-compartilhado.js';
+import { contaDoKommo, sofiaPodeAtenderOCartao, unidadeDonaPeloCartaoId } from '../lib/crm-compartilhado.js';
 import { esquemaDaUnidade as esquemaKommoDaUnidade } from '../lib/kommo-schema.js';
 import { etapaPermitida, precisaDoFunil, type FunisDaConta } from '../lib/etapa-permitida.js';
 import { etapaCalada, notaSofiaCalada, REGRA_NOTA_CALADA, sofiaCaladaLiberada } from '../lib/sofia-calada.js';
@@ -542,7 +542,11 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
       .catch(() => undefined);
   }
 
-  if (humanTakeoverLeadId && unit.kommoPausedFieldId) {
+  // Conta dividida (Petrópolis + Caxias): a caixinha «Pausar IA» só se marca em cartão DESTA unidade — a fala da equipe de
+  // Caxias não mexe em nada de Petrópolis (nem o contrário). Unidade comum: `pode` na hora, sem ler o cartão.
+  // Cartão ilegível: marca mesmo assim (pausar uma Sofia que talvez nem fale ali é inofensivo; deixá-la falar por cima de gente não é).
+  const daEstaUnidade = humanTakeoverLeadId && unit.kommoPausedFieldId ? await sofiaPodeAtenderOCartao(unit, humanTakeoverLeadId) : null;
+  if (humanTakeoverLeadId && unit.kommoPausedFieldId && daEstaUnidade && (daEstaUnidade.pode || daEstaUnidade.tipo === 'ilegivel')) {
     try {
       const kommo = createKommoClient(unit);
       if (!(await kommo.isLeadFieldChecked(humanTakeoverLeadId, unit.kommoPausedFieldId))) {
@@ -703,6 +707,19 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
   }
 
   unit = await resolveOwnerUnitByStage(unit, leadId);
+
+  // Conta do Kommo dividida entre duas unidades (Petrópolis + Caxias, decisão do João de 03/11/2026): a Sofia desta unidade só
+  // lê, grava e responde cartão que o «⌂ Unidade de atendimento» diz que é DESTA unidade. Cartão da irmã, sem unidade, com valor
+  // que ninguém usa ou ilegível fica com a equipe — sem trace, sem conversa, sem mensagem guardada, sem renomear, sem mover
+  // etapa, sem gastar áudio/imagem. É o primeiro passo da MENSAGEM do paciente (depois do dedupe do id, dos carimbos de etapa e
+  // da conversão, que já são por unidade do cartão). Não cobre o modo widget nem o Meta primário (retornam acima; Petrópolis não os usa).
+  // Unidade que não divide Kommo: não lê nada (crm-compartilhado.ts).
+  const permissao = await sofiaPodeAtenderOCartao(unit, leadId);
+  if (!permissao.pode) {
+    logger.info({ leadId, unit: unit.slug, tipo: permissao.tipo, motivo: permissao.motivo }, 'webhook: cartão não é desta unidade — a Sofia não lê nem responde (conta dividida)');
+    res.status(200).json({ ok: true, skipped: 'conta_dividida_outra_unidade', motivo: permissao.motivo, unit: unit.slug });
+    return;
+  }
 
   const ctx = extractContext(parsed.data, leadId);
 
