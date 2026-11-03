@@ -9,13 +9,13 @@
  */
 import type { Auditar } from '../franquia-mcp/ferramentas.js';
 import { mascararArgumentos, mascararErro } from '../lib/integracoes/mascaras.js';
-import { EVENTO_CLIENTE, EVENTO_COBRANCA, type RegistroDeCobranca } from './asaas-escrita.js';
+import { EVENTO_CLIENTE, EVENTO_COBRANCA, EVENTO_OPERACAO, JANELA_LIVRO_MS, type Lancamento, type TipoDeLancamento } from './asaas-limites.js';
 
 /**
  * Eventos que o código grava e relê. Só entram aqui os que são montados sem dado pessoal. O `evo_envio` NÃO entra: o teto
  * de envios lê só a data e o `ok` dele, e o `argumentos` dele guarda o número de destino inteiro — esse segue mascarado.
  */
-export const EVENTOS_INTERNOS: ReadonlySet<string> = new Set([EVENTO_COBRANCA, EVENTO_CLIENTE]);
+export const EVENTOS_INTERNOS: ReadonlySet<string> = new Set([EVENTO_COBRANCA, EVENTO_CLIENTE, EVENTO_OPERACAO]);
 
 /** Os argumentos como vão ao banco: evento interno intacto, o resto pela máscara. */
 export function argumentosDaAuditoria(ferramenta: string, argumentos: unknown): unknown {
@@ -34,9 +34,9 @@ export function criarAuditor(
   armazem: GravadorDeAuditoria,
   quem: { userId: string; clientId: string },
   log?: { info(o: object, m?: string): void; warn(o: object, m?: string): void },
-): Auditar {
+): AuditarComEspera {
   return (r) => {
-    armazem
+    const gravou = armazem
       .auditar({
         ...quem,
         ferramenta: r.ferramenta,
@@ -45,32 +45,70 @@ export function criarAuditor(
         duracaoMs: r.ms,
         erro: r.erro === undefined ? undefined : mascararErro(r.erro),
       })
-      .catch((err) => log?.warn({ err }, 'mcp-remoto: auditoria não gravou'));
+      .then(
+        () => true,
+        (err) => {
+          log?.warn({ err }, 'mcp-remoto: auditoria não gravou');
+          return false;
+        },
+      );
     log?.info({ userId: quem.userId, ferramenta: r.ferramenta, ok: r.ok, ms: r.ms }, 'mcp-remoto: ferramenta');
+    return gravou;
   };
 }
+
+/**
+ * O `auditar` que devolve uma promessa: `true` se o banco gravou, `false` se não. As ferramentas comuns ignoram (fire-and-forget); a
+ * escrita de dinheiro do Asaas ESPERA a intenção ser gravada antes de chamar o Asaas.
+ */
+export type AuditarComEspera = (registro: Parameters<Auditar>[0]) => Promise<boolean>;
 
 /** O pedaço do cliente do banco que o leitor usa (o `prisma` real ou um falso nos testes). */
 export interface LeitorDeAuditoria {
   mcpAuditoria: {
     findMany(args: {
-      where: { ferramenta: string; createdAt: { gte: Date }; argumentos: { path: string[]; equals: string } };
-      select: { createdAt: true; ok: true; argumentos: true };
-    }): Promise<Array<{ createdAt: Date; ok: boolean; argumentos: unknown }>>;
+      where: { ferramenta: { in: string[] }; createdAt: { gte: Date }; argumentos: { path: string[]; equals: string } };
+      select: { createdAt: true; ok: true; ferramenta: true; argumentos: true };
+    }): Promise<Array<{ createdAt: Date; ok: boolean; ferramenta: string; argumentos: unknown }>>;
   };
 }
 
-/** Boletos gerados na última hora (auditoria do conector): o teto por hora e a duplicata sobrevivem a um reinício. */
-export async function cobrancasRecentesDe(db: LeitorDeAuditoria, conta: string, agora: number = Date.now()): Promise<RegistroDeCobranca[]> {
+const TIPOS: Record<string, TipoDeLancamento> = { estornar_cobranca: 'estorno', transferir: 'transferencia', editar_cobranca: 'edicao' };
+
+/**
+ * O que a escrita do Asaas fez nesta conta nas últimas 36 h (auditoria do conector): cobranças criadas, estornos, transferências, edições.
+ * É o que faz o teto do dia, o teto por hora e a duplicata sobreviverem a um reinício. Falha definitiva do Asaas não conta;
+ * sucesso e "sem resposta" (pode ter gravado) contam.
+ */
+export async function lancamentosRecentesDe(db: LeitorDeAuditoria, conta: string, agora: number = Date.now()): Promise<Lancamento[]> {
   const linhas = await db.mcpAuditoria.findMany({
-    where: { ferramenta: EVENTO_COBRANCA, createdAt: { gte: new Date(agora - 3_600_000) }, argumentos: { path: ['conta'], equals: conta } },
-    select: { createdAt: true, ok: true, argumentos: true },
+    where: { ferramenta: { in: [EVENTO_COBRANCA, EVENTO_OPERACAO] }, createdAt: { gte: new Date(agora - JANELA_LIVRO_MS) }, argumentos: { path: ['conta'], equals: conta } },
+    select: { createdAt: true, ok: true, ferramenta: true, argumentos: true },
   });
-  const out: RegistroDeCobranca[] = [];
+  type Args = { conta?: string; chave?: string; cobrancaId?: string; idAsaas?: string; incerto?: boolean; valor?: number; noTeto?: number; operacao?: string; fase?: string };
+  // a INTENÇÃO (gravada antes de chamar o Asaas) vale como "pode ter acontecido" até aparecer um resultado da mesma operação (mesma chave, depois dela)
+  const resultados = new Map<string, number[]>();
   for (const l of linhas) {
-    const a = (l.argumentos ?? {}) as { conta?: string; chave?: string; cobrancaId?: string; incerto?: boolean };
-    // falha definitiva do Asaas não conta; sucesso e "sem resposta" (pode ter criado) contam
-    if (a.conta === conta && a.chave && (l.ok || a.incerto)) out.push({ conta, chave: a.chave, em: l.createdAt.getTime(), ...(a.cobrancaId ? { cobrancaId: a.cobrancaId } : {}) });
+    const a = (l.argumentos ?? {}) as Args;
+    if (a.fase !== 'intencao' && a.chave) {
+      const k = `${l.ferramenta}|${a.chave}`;
+      const ts = resultados.get(k) ?? [];
+      ts.push(l.createdAt.getTime());
+      resultados.set(k, ts);
+    }
+  }
+  const out: Lancamento[] = [];
+  for (const l of linhas) {
+    const a = (l.argumentos ?? {}) as Args;
+    if (a.fase === 'intencao' && (resultados.get(`${l.ferramenta}|${a.chave}`) ?? []).some((t) => t >= l.createdAt.getTime())) continue;
+    if (a.conta !== conta || !(l.ok || a.incerto)) continue;
+    const valor = Number(a.valor);
+    if (!Number.isFinite(valor)) continue;
+    const tipo = l.ferramenta === EVENTO_COBRANCA ? 'cobranca' : TIPOS[a.operacao ?? ''];
+    if (!tipo) continue; // cancelar e editar cliente não consomem teto
+    const noTeto = tipo === 'cobranca' ? valor : Number.isFinite(Number(a.noTeto)) ? Number(a.noTeto) : valor;
+    const id = a.cobrancaId ?? a.idAsaas;
+    out.push({ conta, tipo, valor, noTeto, em: l.createdAt.getTime(), ...(a.chave ? { chave: a.chave } : {}), ...(id ? { id } : {}) });
   }
   return out;
 }

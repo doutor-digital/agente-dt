@@ -37,10 +37,12 @@ import type { KommoClient } from '../services/kommo.service.js';
 import { PrismaClient } from '@prisma/client';
 import { criarContextoAsaas, registrarFerramentasAsaas, type ContaAsaas } from './asaas.js';
 import { asaasGet } from '../lib/integracoes/asaas.js';
-import { asaasPost } from '../lib/integracoes/asaas-escrita.js';
-import { finalDaChave, impressaoDaChave } from '../lib/integracoes/cofre.js';
-import { criarEscritaAsaas, registrarEscritaAsaasSePermitido } from './asaas-escrita.js';
-import { cobrancasRecentesDe } from './auditoria.js';
+import { asaasEscrever } from '../lib/integracoes/asaas-escrita.js';
+import { finalDaChave } from '../lib/integracoes/cofre.js';
+import { criarEscritaAsaas } from './asaas-escrita.js';
+import { registrarEscritaAsaasSePermitido } from './asaas-ferramentas.js';
+import { lancamentosRecentesDe } from './auditoria.js';
+import { enviarTelegram } from '../lib/telegram.js';
 import { criarContextoConvenia, registrarFerramentasConvenia, type ContaConvenia } from './convenia.js';
 import { conveniaGet } from '../lib/integracoes/convenia.js';
 import { criarContextoTiquetaque, registrarFerramentasTiquetaque, type ContaTiquetaque } from './tiquetaque.js';
@@ -194,9 +196,10 @@ async function contasAsaasDoBanco(): Promise<Map<string, ContaAsaas>> {
     contas.set(c.slug, {
       slug: c.slug,
       nome: c.nome,
+      fuso: c.fuso ?? undefined,
       fonte: { get: (caminho, query) => asaasGet(c.unitId, c.chave, caminho, query ?? {}) },
-      // a porta de escrita (cadastrar cliente e gerar boleto) só é usada por quem está em MCP_ESCRITA_EMAILS
-      escrita: { post: (caminho, corpo) => asaasPost(c.unitId, c.chave, caminho, corpo), chaveFinal: finalDaChave(c.chave), chaveImpressao: impressaoDaChave(c.chave), contaSalva: c.conta },
+      // a porta de escrita só é usada por quem está em MCP_ESCRITA_EMAILS, nas contas de ASAAS_ESCRITA_UNIDADES; as rotas são uma lista fechada
+      escrita: { enviar: (metodo, caminho, corpo) => asaasEscrever(c.unitId, c.chave, metodo, caminho, corpo), chaveFinal: finalDaChave(c.chave), contaSalva: c.conta },
     });
   }
   logger.info({ contas: contas.size }, 'mcp-remoto: contas do Asaas carregadas');
@@ -531,7 +534,8 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   setInterval(() => void cofre.varrer().catch((err) => logger.warn({ err }, 'mcp-remoto: varredura do cofre falhou')), 60_000).unref();
   let arquivistas = new Set<string>();
   manterAtualizado(arquivistasDoBanco, (s) => (arquivistas = s), 'quem pode enviar arquivos');
-  const escritaAsaas = criarEscritaAsaas({ historico: (conta) => cobrancasRecentesDe(prisma, conta) });
+  // os tetos do dia e a duplicata são lidos da auditoria (banco); o aviso de cada transferência/estorno/cancelamento vai pelo Telegram do João
+  const escritaAsaas = criarEscritaAsaas({ historico: (conta) => lancamentosRecentesDe(prisma, conta), alertar: (texto) => enviarTelegram(texto) });
   manterAtualizado(contasAsaasDoBanco, (contas) => (asaas.contas = contas), 'as contas do Asaas');
   const convenia = criarContextoConvenia(new Map());
   manterAtualizado(contasConveniaDoBanco, (contas) => (convenia.contas = contas), 'as contas do Convênia');
@@ -594,9 +598,9 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
       registrarMetaEventos(server, () => rastreio, auditar);
       // Arquivos: o portão testado confere a lista; cada envio é só de quem o pediu.
       registrarArquivosSePermitido(server, cofre, quem.userId, arquivistas, () => new URL(urlPublica).origin, auditar);
-      // Asaas: cadastrar cliente e gerar boleto, em dois passos (cancelar, estornar, editar e transferir NÃO existem), só para quem está
-      // na lista de escrita E só nas unidades de ASAAS_ESCRITA_UNIDADES. O portão fica numa função testada.
-      registrarEscritaAsaasSePermitido(server, asaas, escritaAsaas, quem.userId, escritores, auditar);
+      // Asaas: cliente, cobrança (boleto/Pix/cartão/parcelado), editar, cancelar, estornar e transferir, DIRETO, só para quem está na lista de
+      // escrita E só nas unidades de ASAAS_ESCRITA_UNIDADES, com tetos, lista de destinos e aviso no Telegram. O portão fica numa função testada.
+      registrarEscritaAsaasSePermitido(server, asaas, escritaAsaas, quem.userId, escritores, auditar, quem.email);
       const quemSistemas = { usuario: quem.userId, nome: quem.email || `usuario:${quem.userId}` };
       registrarLeituraSistemas(server, sistemas, quemSistemas, auditar);
       if (escritores.has(quem.userId)) {

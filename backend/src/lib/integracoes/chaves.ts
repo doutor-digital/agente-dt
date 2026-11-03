@@ -62,16 +62,16 @@ export async function listarChaves(): Promise<ChaveListada[]> {
 }
 
 /** Contas de um provedor com a chave decifrada — só para o conector usar em memória. */
-export async function contasComChave(provedor: Provedor): Promise<Array<{ unitId: string; slug: string; nome: string; conta: string | null; chave: string }>> {
+export async function contasComChave(provedor: Provedor): Promise<Array<{ unitId: string; slug: string; nome: string; conta: string | null; chave: string; fuso: string | null }>> {
   const linhas = await prisma.chaveDeIntegracao.findMany({
     where: { provedor },
-    include: { unit: { select: { slug: true, name: true, isActive: true } } },
+    include: { unit: { select: { slug: true, name: true, isActive: true, spineTimezone: true } } },
   });
-  const out: Array<{ unitId: string; slug: string; nome: string; conta: string | null; chave: string }> = [];
+  const out: Array<{ unitId: string; slug: string; nome: string; conta: string | null; chave: string; fuso: string | null }> = [];
   for (const l of linhas) {
     if (!l.unit.isActive) continue;
     try {
-      out.push({ unitId: l.unitId, slug: l.unit.slug, nome: l.unit.name, conta: l.conta, chave: decifrar(l.chaveCifrada, segredo()) });
+      out.push({ unitId: l.unitId, slug: l.unit.slug, nome: l.unit.name, conta: l.conta, chave: decifrar(l.chaveCifrada, segredo()), fuso: l.unit.spineTimezone || null });
     } catch {
       await prisma.chaveDeIntegracao.update({ where: { id: l.id }, data: { ultimoErro: 'não consegui decifrar: o segredo do servidor mudou — cole a chave de novo' } });
     }
