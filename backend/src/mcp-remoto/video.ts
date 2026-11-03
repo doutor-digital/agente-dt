@@ -36,6 +36,7 @@ const TAMANHO_MAX_FOLHA = 600 * 1024;
 /** soma das imagens de UMA resposta (em bytes antes do base64): passou disso, as folhas que sobram vão no próximo lote */
 const ORCAMENTO_DE_IMAGENS = 3 * 1024 * 1024;
 const MAX_DOWNLOADS_AO_MESMO_TEMPO = 20;
+const JANELA_DA_AUDITORIA_MS = 5 * 60_000;
 
 const RE_CAMERA = /^[a-z0-9][a-z0-9-]{0,38}$/;
 const RE_STAMP = /^(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})$/;
@@ -53,12 +54,13 @@ export interface ContextoVideo {
   urlPublica: string;
   segredo: string;
   agora: () => number;
+  log?: { warn(o: object, m?: string): void };
 }
 
 /** `VIGIA_DIR` vazio = o vigia não existe neste servidor. `VIGIA_RETENCAO_DIAS` inválido volta ao padrão. */
 export function contextoVideoDoAmbiente(
   amb: Record<string, string | undefined>,
-  o: { urlPublica: string; segredo: string; agora?: () => number },
+  o: { urlPublica: string; segredo: string; agora?: () => number; log?: ContextoVideo['log'] },
 ): ContextoVideo | null {
   const dir = amb.VIGIA_DIR?.trim();
   if (!dir) return null;
@@ -69,6 +71,7 @@ export function contextoVideoDoAmbiente(
     urlPublica: o.urlPublica.replace(/\/+$/, ''),
     segredo: o.segredo,
     agora: o.agora ?? Date.now,
+    log: o.log,
   };
 }
 
@@ -178,7 +181,9 @@ async function lerPacote(ctx: ContextoVideo, camera: string, stamp: string): Pro
       movimentoPorHora: e.movimento_por_hora ?? [],
       eventos: [...e.eventos].sort((a, b) => a.id - b.id),
     };
-  } catch {
+  } catch (err) {
+    // o motivo vai para o log do servidor (para quem diagnostica); a gerente só recebe a frase simples
+    ctx.log?.warn({ err, gravacao: id }, 'vigia: pacote ilegível');
     throw new Error(`o pacote da gravação ${id} está ilegível (envio incompleto ou corrompido); peça ao João para reenviar`);
   }
 }
@@ -414,6 +419,13 @@ const NAO_ENCONTRADO = 'Link inválido ou vencido. Peça um novo ao Claude (vide
  */
 export function montarRotaDoClipe(app: Express, ctx: ContextoVideo, aoBaixar?: (a: AcessoAoClipe) => void): void {
   let ativos = 0;
+  const vistos = new Map<string, number>();
+  const deveAuditar = (chave: string, agora: number): boolean => {
+    for (const [k, em] of vistos) if (agora - em > JANELA_DA_AUDITORIA_MS) vistos.delete(k);
+    if (vistos.has(chave)) return false;
+    vistos.set(chave, agora);
+    return true;
+  };
   app.get('/vigia/clipe/:token/:nome', async (req: Request, res: Response) => {
     const negar = () => void res.status(404).set({ 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex' }).type('text/plain; charset=utf-8').send(NAO_ENCONTRADO);
     const t = lerTokenDoClipe(ctx, String(req.params.token ?? ''));
@@ -433,11 +445,13 @@ export function montarRotaDoClipe(app: Express, ctx: ContextoVideo, aoBaixar?: (
       }
     };
     res.on('close', liberar);
-    // um player faz várias requisições Range por reprodução: só a abertura (sem Range ou Range que começa em 0) é auditada
-    const range = String(req.headers.range ?? '');
-    const abertura = req.method === 'GET' && (!range || /^bytes=0-/.test(range));
+    // um player faz várias requisições (Range) por reprodução, e o Range é escolha de quem pede: auditar por requisição enche o
+    // registro e se contorna. Uma linha por (link, IP) a cada 5 min.
+    const ip = ipDoCliente(req);
     try {
-      if (abertura) aoBaixar?.({ quem: t.quem, gravacao: t.gravacao, evento: t.evento, ip: ipDoCliente(req), agente: String(req.headers['user-agent'] ?? '').slice(0, 200) || undefined });
+      if (req.method === 'GET' && deveAuditar(`${req.params.token}|${ip}`, ctx.agora())) {
+        aoBaixar?.({ quem: t.quem, gravacao: t.gravacao, evento: t.evento, ip, agente: String(req.headers['user-agent'] ?? '').slice(0, 200) || undefined });
+      }
     } catch {
       // auditoria que falha não derruba o download
     }

@@ -19,7 +19,7 @@
 #   VIGIA_ESTADO      marcas de "já enviada"         (padrão ~/.local/state/vigia-video)
 #   VIGIA_SSH_CHAVE   chave ssh só de envio          (padrão ~/.ssh/vigia_envio)
 #   VIGIA_PARADO_SEG  segundos sem escrita para valer como terminada (padrão 300)
-#   VIGIA_TENTATIVAS  falhas seguidas antes de desistir de uma gravação (padrão 3)
+#   VIGIA_TENTATIVAS  falhas de TRIAGEM seguidas antes de desistir de uma gravação (padrão 3); falha de envio sempre tenta de novo
 #
 # Nome do arquivo (OBS: Configurações → Avançado → Gravação → Formatação do nome de arquivo, formato MKV):
 #   %CCYY-%MM-%DD_%hh-%mm-%ss_caixa      ->  2026-11-03_08-00-00_caixa.mkv
@@ -51,6 +51,7 @@ log() { printf '%s %s\n' "$(date '+%F %T')" "$*"; }
 for c in ffmpeg ffprobe python3 rsync flock; do
   command -v "$c" >/dev/null || { log "ERRO: falta o programa '$c' (sudo apt install ffmpeg python3 rsync util-linux — instalar é com você)"; exit 1; }
 done
+command -v fuser >/dev/null || command -v lsof >/dev/null || { log "ERRO: preciso de fuser (pacote psmisc) ou lsof para saber se o OBS ainda está gravando; sem isso eu poderia enviar uma gravação aberta"; exit 1; }
 [ "$SIMULAR" = 1 ] || [ "$SEM_ENVIAR" = 1 ] || [ -n "$DESTINO" ] || { log "ERRO: defina VIGIA_DESTINO (veja o cabeçalho deste script)"; exit 1; }
 [ -d "$ORIGEM" ] || { log "pasta de gravações não existe: $ORIGEM (nada a fazer)"; exit 0; }
 
@@ -105,8 +106,9 @@ for arq in "$ORIGEM"/*.mkv; do
     # só o envio falhou antes: a triagem (cara, ffmpeg sobre horas de vídeo) não se repete
     log "triagem de $nome já pronta em $pacote; só envio"
   else
-    # pacote antigo de OUTRA triagem (vídeo mudou): sai do caminho por RENOME, sem apagar, para folhas/clipes velhos não irem junto
-    if [ -e "$pacote" ]; then mv -- "$pacote" "$pacote.antigo-$(date +%s)"; fi
+    # pacote COMPLETO de outra triagem (o vídeo mudou): sai do caminho por RENOME, sem apagar, para folhas/clipes velhos não irem junto.
+    # (pacote parcial de uma triagem que falhou é reaproveitado: o mesmo vídeo regera os mesmos nomes por cima)
+    if [ -e "$pacote/.triagem-ok" ]; then mv -- "$pacote" "$pacote.antigo-$(date +%s)"; fi
     log "triagem de $nome (câmera $camera, início $inicio)"
     mkdir -p "$pacote"
     if ! nice -n 19 ionice -c 3 python3 -I "$AQUI/triagem.py" "$arq" --saida "$pacote" --rapido --clipes \
@@ -144,8 +146,8 @@ PY
     log "ENVIADA: $nome -> $DESTINO$camera/$pacote_id"
     feitas=$((feitas + 1))
   else
-    log "FALHOU o envio de $nome (veja $pacote/envio.log)"
-    echo "$(date '+%F %T') envio" >> "$ESTADO/falhas/$nome"
+    # falha de ENVIO (rede fora, servidor reiniciando) não conta para desistir: a triagem já está pronta e a próxima rodada só reenvia
+    log "FALHOU o envio de $nome; tento de novo na próxima rodada (veja $pacote/envio.log)"
   fi
 done
 

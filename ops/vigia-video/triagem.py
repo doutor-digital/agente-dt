@@ -92,18 +92,20 @@ def limiar_auto(notas):
 
 
 def agrupar(notas, limiar, juntar_seg, margem):
-    ativos = [t for t, s in notas if s >= limiar]
-    pico = {t: s for t, s in notas}
+    """Junta os segundos com movimento em eventos, numa passada só (pico e contagem acumulados)."""
     eventos = []
-    for t in ativos:
+    for t, s in notas:
+        if s < limiar:
+            continue
         if eventos and t - eventos[-1]["fim"] <= juntar_seg:
-            eventos[-1]["fim"] = t
+            e = eventos[-1]
+            e["fim"] = t
+            e["pico"] = max(e["pico"], s)
+            e["segundos_com_movimento"] += 1
         else:
-            eventos.append({"inicio": t, "fim": t})
+            eventos.append({"inicio": t, "fim": t, "pico": s, "segundos_com_movimento": 1})
     for e in eventos:
-        seg = [pico[t] for t in ativos if e["inicio"] <= t <= e["fim"]]
-        e["pico"] = round(max(seg), 4)
-        e["segundos_com_movimento"] = len(seg)
+        e["pico"] = round(e["pico"], 4)
         e["inicio"] = max(0.0, e["inicio"] - margem)
         e["fim"] = e["fim"] + margem
     return eventos
@@ -174,6 +176,8 @@ def main():
                     help='hora real do começo do vídeo, ex. "2026-11-03 08:00:00"')
     a = ap.parse_args()
 
+    # valida a hora ANTES das horas de ffmpeg: data inválida falha na hora, não depois de medir 10 h de vídeo
+    base = datetime.strptime(a.inicio_gravacao, "%Y-%m-%d %H:%M:%S") if a.inicio_gravacao else None
     os.makedirs(os.path.join(a.saida, "folhas"), exist_ok=True)
     total = duracao(a.video)
     notas = medir_movimento(a.video, a.saida, a.rapido)
@@ -187,7 +191,6 @@ def main():
     limiar = a.limiar if a.limiar is not None else limiar_auto(notas)
     eventos = agrupar(notas, limiar, a.juntar, a.margem)
     col, lin = (int(x) for x in a.grade.lower().split("x"))
-    base = datetime.strptime(a.inicio_gravacao, "%Y-%m-%d %H:%M:%S") if a.inicio_gravacao else None
 
     if a.clipes:
         os.makedirs(os.path.join(a.saida, "clipes"), exist_ok=True)

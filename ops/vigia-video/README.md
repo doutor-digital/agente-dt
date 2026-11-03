@@ -88,13 +88,16 @@ crontab -e
 
 - Duas rodadas nunca se atropelam (`flock`): se a triagem de 10 h passar de 15 min, o cron seguinte só diz "já existe uma rodada".
 - "Terminou" = nenhum programa com o arquivo aberto (`fuser`/`lsof`) **e** sem escrita há 5 min (`VIGIA_PARADO_SEG`).
-- Falhou 3 vezes seguidas (`VIGIA_TENTATIVAS`): desiste daquela gravação e avisa no log; para tentar de novo apague
-  `~/.local/state/vigia-video/falhas/<arquivo>`.
+- A TRIAGEM falhou 3 vezes seguidas (`VIGIA_TENTATIVAS`): desiste daquela gravação e avisa no log; para tentar de novo apague
+  `~/.local/state/vigia-video/falhas/<arquivo>`. Falha de ENVIO (rede fora, servidor reiniciando) nunca faz desistir: a triagem já está
+  pronta e cada rodada só tenta reenviar.
 - Marca de "já enviada": `~/.local/state/vigia-video/enviados/<arquivo>`. Apagar a marca reenvia (idempotente).
 - Os pacotes locais ficam em `~/.cache/vigia-video/` (alguns MB cada). O script não apaga nem eles nem os vídeos. Se o vídeo mudar
   e a triagem precisar ser refeita, o pacote antigo é só RENOMEADO para `<pacote>.antigo-<hora>` (nada some; apague à mão se quiser).
 - Se só o envio falhar (rede, chave), a rodada seguinte NÃO refaz a triagem: reaproveita o pacote pronto e tenta enviar de novo.
 - O log cresce sem parar: `logrotate` ou apague de vez em quando.
+- `~/.cache/vigia-video/` também cresce (nada o limpa). Com 10 h de câmera por dia são dezenas de MB por gravação: de tempos em tempos
+  liste (`find ~/.cache/vigia-video -mindepth 2 -maxdepth 2 -mtime +60 -print`) e apague o que já foi enviado, depois de conferir.
 - Tamanho: 10 h de câmera com movimento normal dão algumas centenas de eventos; cada folha tem ~20 KB e cada clipe 0,3 a 3 MB
   (clipe é cortado em 180 s; o evento mais longo avisa "o clipe é só o começo").
 

@@ -493,6 +493,7 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   const video = contextoVideoDoAmbiente(process.env, {
     urlPublica,
     segredo: createHmac('sha256', env.SESSION_JWT_SECRET).update('mcp-remoto:vigia-clipe').digest('hex'),
+    log: logger,
   });
   let leitoresVideo = new Set<string>();
   if (video) {

@@ -257,15 +257,22 @@ test('rota: link válido entrega o clipe (video/mp4, sem cache, nosniff), com Ra
     assert.deepEqual(Buffer.from(await r.arrayBuffer()), MP4);
     assert.deepEqual(s.acessos, [{ quem: 'user-gerente', gravacao: 'caixa_2026-11-03_0800', evento: 1, ip: '9.9.9.9', agente: 'Chrome-teste' }]);
     // o navegador pede um pedaço para pular no vídeo
-    const rg = await fetch(s.base + caminhoDe(l.url), { headers: { range: 'bytes=0-9' } });
+    const mesmoIp = { 'x-forwarded-for': '1.2.3.4, 9.9.9.9' };
+    const rg = await fetch(s.base + caminhoDe(l.url), { headers: { ...mesmoIp, range: 'bytes=0-9' } });
     assert.equal(rg.status, 206);
     assert.equal((await rg.arrayBuffer()).byteLength, 10);
-    // pular no vídeo e HEAD não viram linha de auditoria (um player faz dezenas de pedidos por reprodução)
-    const pulo = await fetch(s.base + caminhoDe(l.url), { headers: { range: 'bytes=100-199' } });
+    // pular no vídeo (Range escolhido por quem pede), HEAD e repetir o pedido NÃO viram linhas de auditoria: um player faz dezenas
+    // de pedidos por reprodução, e filtrar pelo Range se contorna. Uma linha por (link, IP) a cada 5 min.
+    const pulo = await fetch(s.base + caminhoDe(l.url), { headers: { ...mesmoIp, range: 'bytes=100-199' } });
     assert.equal(pulo.status, 206);
     await pulo.arrayBuffer();
-    await (await fetch(s.base + caminhoDe(l.url), { method: 'HEAD' })).arrayBuffer();
-    assert.equal(s.acessos.length, 2, 'só a abertura (sem Range ou com bytes=0-) é auditada');
+    await (await fetch(s.base + caminhoDe(l.url), { method: 'HEAD', headers: mesmoIp })).arrayBuffer();
+    const sem1 = await fetch(s.base + caminhoDe(l.url), { headers: { ...mesmoIp, range: 'bytes=1-' } });
+    await sem1.arrayBuffer();
+    assert.equal(s.acessos.length, 1, 'mesmo link e mesmo IP: uma linha só');
+    // outro IP com o mesmo link (o link foi repassado) é uma segunda linha: é exatamente o que a auditoria precisa mostrar
+    await (await fetch(s.base + caminhoDe(l.url), { headers: { 'x-forwarded-for': '5.5.5.5' } })).arrayBuffer();
+    assert.deepEqual(s.acessos.map((a) => a.ip), ['9.9.9.9', '5.5.5.5']);
   } finally {
     await s.fechar();
   }

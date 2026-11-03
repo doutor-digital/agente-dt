@@ -7,6 +7,7 @@
 set -euo pipefail
 AQUI="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PASTA="${1:-$(mktemp -d -t vigia-e2e-XXXXXX)}"
+[ ! -e "$PASTA/estado" ] || { echo "FALHOU: $PASTA já tem estado de um teste anterior; use uma pasta nova (ou nenhuma, que eu crio)" >&2; exit 1; }
 mkdir -p "$PASTA/origem"
 falha() { echo "FALHOU: $*" >&2; exit 1; }
 
@@ -16,6 +17,8 @@ cp "$PASTA/origem/2026-11-03_08-00-00_caixa.mkv" "$PASTA/origem/Gravacao-qualque
 touch -d '2 hours ago' "$PASTA/origem/2026-11-03_08-00-00_caixa.mkv" "$PASTA/origem/Gravacao-qualquer.mkv"
 # 09h00_estoque fica com a data de agora: "mexida há poucos segundos" (OBS ainda gravando)
 
+# o limite de "terminou" fica alto: a triagem do primeiro vídeo não pode fazer o "recente" envelhecer no meio do teste
+export VIGIA_PARADO_SEG=3000
 export VIGIA_ORIGEM="$PASTA/origem" VIGIA_TRABALHO="$PASTA/trabalho" VIGIA_ESTADO="$PASTA/estado" VIGIA_DESTINO="$PASTA/destino/"
 
 echo "--- simulação"
