@@ -178,10 +178,11 @@ export function palavrasDoNome(s: string | null | undefined): string[] {
  * O nome do recibo é o do cadastro, todas as palavras e na ordem; o recibo pode continuar depois ("Bensag Fisioterapia" × "Bensag
  * Fisioterapia e Pilates"). Recibo MAIS CURTO que o cadastro não vale: "Maria Silva" não é "Maria Silva Santos".
  */
-export function nomeConfere(doRecibo: string | null | undefined, doCadastro: string | null | undefined): boolean {
+export function nomeConfere(doRecibo: string | null | undefined, doCadastro: string | null | undefined, opcoes: { exato?: boolean } = {}): boolean {
   const recibo = palavrasDoNome(doRecibo);
   const cadastro = palavrasDoNome(doCadastro);
   if (recibo.length === 0 || cadastro.length === 0 || recibo.length < cadastro.length) return false;
+  if (opcoes.exato && recibo.length !== cadastro.length) return false;
   return cadastro.every((p, i) => recibo[i] === p);
 }
 
@@ -318,7 +319,9 @@ export function avaliarComprovante(dados: DadosDoComprovante | null, ctx: Contex
 
   const doc = compararDocumento(dados.favorecidoDocumento, ctx.pixKey);
   const nomeLido = palavrasDoNome(dados.favorecidoNome).length > 0;
-  const nomeBate = nomeConfere(dados.favorecidoNome, ctx.pixHolder);
+  // O nome sozinho (sem documento que o confirme) tem de ser IGUAL ao do titular: «Clínica X Silva ME» não é «Clínica X». O recibo que continua
+  // o nome só vale quando o documento mascarado já bateu nos dígitos visíveis.
+  const nomeBate = nomeConfere(dados.favorecidoNome, ctx.pixHolder, { exato: doc !== 'parcial' });
   if (doc === 'diferente') {
     return rejeita('reenviar', 'documento_diferente', `CPF/CNPJ do favorecido (${dados.favorecidoDocumento}) não é o da chave Pix da unidade`);
   }

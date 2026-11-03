@@ -9,6 +9,7 @@ import {
   fonteDaUrl,
   guardarLeitura,
   lerAnexosDoPaciente,
+  marcarEntregues,
   type BancoDeLeituras,
 } from './comprovante-lido.js';
 import { analisarConversa, neutralizarMarcasDoSistema, referenciaDaLeitura, referenciasNoTexto, type DadosDoComprovante, type MensagemDaConversa } from './comprovante-pix.js';
@@ -41,8 +42,16 @@ function bancoDeLeituras() {
   const linhas: Array<Record<string, any>> = [];
   const db = {
     comprovanteLido: {
-      findMany: async ({ where }: { where: { id: { in: string[] }; unitId: string; kommoLeadId: number; ehComprovante: boolean } }) =>
-        linhas.filter((l) => where.id.in.includes(l.id) && l.unitId === where.unitId && l.kommoLeadId === where.kommoLeadId && l.ehComprovante === where.ehComprovante),
+      // como o Prisma: cada chave do where tem de bater ({ in: [...] } = pertence à lista)
+      findMany: async ({ where }: { where: Record<string, unknown> }) =>
+        linhas.filter((l) =>
+          Object.entries(where).every(([k, v]) => (v && typeof v === 'object' && 'in' in (v as object) ? ((v as { in: unknown[] }).in).includes(l[k]) : l[k] === v)),
+        ),
+      updateMany: async ({ where, data }: { where: { id: { in: string[] }; entregueEm: null }; data: Record<string, any> }) => {
+        const alvo = linhas.filter((l) => where.id.in.includes(l.id) && l.entregueEm === where.entregueEm);
+        for (const l of alvo) Object.assign(l, data);
+        return { count: alvo.length };
+      },
       findUnique: async ({ where }: { where: { unitId_kommoLeadId_fonte: { unitId: string; kommoLeadId: number; fonte: string } } }) => {
         const k = where.unitId_kommoLeadId_fonte;
         return linhas.find((l) => l.unitId === k.unitId && l.kommoLeadId === k.kommoLeadId && l.fonte === k.fonte) ?? null;
@@ -51,7 +60,7 @@ function bancoDeLeituras() {
         if (linhas.some((l) => l.unitId === data.unitId && l.kommoLeadId === data.kommoLeadId && l.fonte === data.fonte)) {
           throw new Prisma.PrismaClientKnownRequestError('unique', { code: 'P2002', clientVersion: 'teste' });
         }
-        const l = { id: randomUUID(), criadoEm: new Date(), ...data, dados: data.dados === Prisma.DbNull ? null : data.dados };
+        const l = { id: randomUUID(), criadoEm: new Date(), entregueEm: null, ...data, dados: data.dados === Prisma.DbNull ? null : data.dados };
         linhas.push(l);
         return l;
       },
@@ -170,14 +179,31 @@ test('SALESBOT: o comprovante que o paciente mandou é lido pelo servidor, guard
   assert.equal(decisao.libera, true);
 });
 
-test('SALESBOT: a mesma imagem não é lida duas vezes (nem cobrada duas vezes) nos turnos seguintes', async () => {
+test('SALESBOT: a mesma imagem não é lida duas vezes (nem cobrada duas vezes) nos turnos seguintes — depois de entregue', async () => {
   const { db } = bancoDeLeituras();
   let chamadas = 0;
   const descrever = async () => (chamadas++, visao(true)());
-  await lerAnexosDoPaciente(UNIT, LEAD, [oficial({})], { db, descrever, agora: () => agora });
+  const r1 = await lerAnexosDoPaciente(UNIT, LEAD, [oficial({})], { db, descrever, agora: () => agora });
+  assert.equal(r1.paraEntregar.length, 1);
+  await marcarEntregues(db, r1.paraEntregar); // o turno deu certo
   const r2 = await lerAnexosDoPaciente(UNIT, LEAD, [oficial({})], { db, descrever, agora: () => agora });
   assert.equal(chamadas, 1);
   assert.equal(r2.texto, '');
+  assert.deepEqual(r2.paraEntregar, []);
+});
+
+test('SALESBOT: o turno que leu o comprovante FALHOU → o próximo entrega a mesma leitura, sem pagar a visão de novo', async () => {
+  const { db, linhas } = bancoDeLeituras();
+  let chamadas = 0;
+  const descrever = async () => (chamadas++, visao(true)());
+  const r1 = await lerAnexosDoPaciente(UNIT, LEAD, [oficial({})], { db, descrever, agora: () => agora });
+  // …o grafo falhou: ninguém chamou marcarEntregues
+  const r2 = await lerAnexosDoPaciente(UNIT, LEAD, [oficial({})], { db, descrever, agora: () => agora });
+  assert.equal(chamadas, 1, 'a imagem não é lida de novo');
+  assert.deepEqual(r2.paraEntregar, r1.paraEntregar);
+  assert.match(r2.texto, new RegExp(`\\[comprovante-lido:${linhas[0].id}\\]`));
+  const { analise } = await decide(db, r2.texto);
+  assert.ok(analise.aceito, 'a leitura entregue de novo continua valendo');
 });
 
 test('SALESBOT: imagem que não é comprovante (exame) fica registrada para não ser lida de novo, mas não entra na fala', async () => {

@@ -15,7 +15,7 @@ import { portaDaEquipe, travaAntesDeEnviar } from '../lib/pausa-equipe.js';
 import { garantirTituloPadrao } from '../lib/titulo-padrao.js';
 import { telefoneDeFamiliarNoCartao } from '../lib/telefone-de-familiar.js';
 import { blocoDaConversaOficial } from '../lib/conversa-oficial.js';
-import { lerAnexosDoPaciente } from '../lib/comprovante-lido.js';
+import { lerAnexosDoPaciente, marcarEntregues } from '../lib/comprovante-lido.js';
 import { neutralizarMarcasDoSistema } from '../lib/comprovante-pix.js';
 import { mensagensOficiaisDaUnidade } from '../services/kommo-talks.service.js';
 import { detectarVazamento, explicarVazamento } from '../services/vazamento.js';
@@ -162,12 +162,14 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
   // paciente perde as marcas que só nós gravamos, e as imagens/PDFs que ele mandou (rota oficial do Kommo) são lidas AQUI, pelo
   // servidor, e guardadas no banco — é só assim que um comprovante conta (lib/comprovante-lido.ts).
   let anexosLidos = '';
+  let leiturasParaEntregar: string[] = [];
   let msgsOficiais = porta.msgs;
   if (unit.spineBookingRequiresPayment && Number.isFinite(Number(leadId))) {
     try {
       msgsOficiais = porta.msgs ?? (await mensagensOficiaisDaUnidade(unit, createKommoClient(unit), Number(leadId), 40));
       const lidos = await lerAnexosDoPaciente(unit, Number(leadId), msgsOficiais);
       anexosLidos = lidos.texto;
+      leiturasParaEntregar = lidos.paraEntregar;
       if (lidos.lidos > 0) {
         await recorder.step({
           kind: 'THINKING',
@@ -229,6 +231,9 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
         recursionLimit: 24,
       },
     ));
+
+    // O turno deu certo: os comprovantes que ele carregava já estão na conversa e não precisam ser entregues de novo.
+    void marcarEntregues(prisma, leiturasParaEntregar).catch((err) => logger.warn({ err: String(err), leadId }, 'comprovante: não consegui marcar as leituras como entregues'));
 
     const decisao = (result.decision ?? '').trim();
     // Mesma barreira do webhook: bastidor que a reescrita do grafo não limpou não sai — resposta vazia,

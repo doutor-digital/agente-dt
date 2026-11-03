@@ -23,7 +23,7 @@ import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
 import { logger } from '../lib/logger.js';
 import { enviarTelegram } from '../lib/telegram.js';
 import { ehTranscricaoDeComprovante } from '../lib/pagamento-antecipado.js';
-import { carimboDoSegmento, resumoDaLeitura, type Aceito, type AnaliseDoComprovante, type DadosDoComprovante, type Rejeicao } from '../lib/comprovante-pix.js';
+import { carimboDoSegmento, RESPOSTA_QUE_MARCA, resumoDaLeitura, type Aceito, type AnaliseDoComprovante, type DadosDoComprovante, type Rejeicao } from '../lib/comprovante-pix.js';
 import { normalizar, trechos, type Promessa } from '../lib/prometeu-sem-marcar.js';
 import type { KommoClient } from '../services/kommo.service.js';
 import type { TraceRecorder } from './trace-recorder.js';
@@ -346,6 +346,18 @@ export const DE_OUTRA_NEGOCIACAO: ComprovanteRecusado = {
   dados: null,
 };
 
+/**
+ * Chegou comprovante NESTE turno mas não há leitura guardada para ele (o banco falhou ao gravar, ou o texto não veio de uma imagem lida pelo
+ * servidor): pedir «o comprovante» a quem acabou de mandá-lo contradiz o que ele fez; vai para a equipe.
+ */
+export const SEM_LEITURA_GUARDADA: ComprovanteRecusado = {
+  ok: false,
+  destino: 'equipe',
+  codigo: 'sem_leitura',
+  motivo: 'chegou comprovante neste turno, mas não há leitura dele guardada pelo servidor (falha ao gravar, ou o texto não veio de uma imagem lida)',
+  dados: null,
+};
+
 export type DecisaoDaTrava =
   | { libera: true; aceito?: ComprovanteAceito }
   | { libera: false; titulo: string; texto: string; rejeicao?: ComprovanteRecusado };
@@ -409,7 +421,9 @@ export function decidirTrava(turno: TurnoDoComprovante, opcoes: OpcoesDaTrava = 
       ? a.falha
       : a && a.deOutraNegociacao > 0
         ? DE_OUTRA_NEGOCIACAO
-        : null;
+        : turno.noTurno
+          ? SEM_LEITURA_GUARDADA
+          : null;
     if (!rejeicao) {
       return {
         libera: false,
@@ -476,7 +490,7 @@ export function travarAgendamentoPorComprovante(
         await ganchos.aoFalhar(d.aceito);
         throw err;
       }
-      turno.marcouPorComprovante = /^Consulta marcada para/.test(r.trim());
+      turno.marcouPorComprovante = RESPOSTA_QUE_MARCA.test(r.trim());
       return ganchos.depois(d.aceito, porTras, r);
     };
   }

@@ -16,6 +16,7 @@ import {
   RECUSA_SEM_COMPROVANTE_DA_TAXA,
   abrirTarefaParaEquipe,
   decidirTrava,
+  SEM_LEITURA_GUARDADA,
   marcarRecebimento,
   respostaDoComprovante,
   travarAgendamentoPorComprovante,
@@ -580,4 +581,36 @@ test('comprovante aceito e o paciente JÁ tem consulta no CRM: a tarefa não diz
   const detalhe = f?.tipo === 'conferir' ? f.detalhe : '';
   assert.match(detalhe, /já tem consulta no CRM/);
   assert.doesNotMatch(detalhe, /ainda NÃO foi marcada/);
+});
+
+test('o MESMO paciente reenvia a mesma imagem e a visão lê um caractere do ID diferente: não abre um segundo uso', async () => {
+  const banco = bancoDeMentira();
+  const primeira = cenario(VALIDA, { banco });
+  assert.match(await primeira.chamar(), /^Consulta marcada/);
+  const relida = [CHAVE_ENVIADA, humano(fala(dados({ idTransacao: E2E.replace('abc123', 'abc124') })))];
+  const c = cenario(relida, { banco });
+  assert.match(await c.chamar({ hora: '16:30' }), /^RECUSADO/);
+  assert.deepEqual(c.chamadas, []);
+  assert.equal(banco.linhas.length, 1);
+});
+
+test('o MESMO E2E relido com OUTRO valor (a visão errou o valor) continua sendo o mesmo comprovante, também depois de a reserva ser desfeita', async () => {
+  const banco = bancoDeMentira();
+  const falha = cenario(VALIDA, { banco, respostaDaFerramenta: '15:30 não está mais disponível (ocupado). A consulta NÃO foi marcada.' });
+  await falha.chamar();
+  const outroValor = [CHAVE_ENVIADA, humano(fala(dados({ valor: 150 })))];
+  const c = cenario(outroValor, { banco });
+  assert.match(await c.chamar({ hora: '16:30' }), /^Consulta marcada/, 'é o comprovante deste paciente, ainda livre');
+  assert.equal(banco.linhas.length, 1, 'continua um registro só');
+});
+
+test('chegou comprovante NESTE turno mas sem leitura guardada (banco falhou ao gravar): vai para a equipe, a Sofia não pede «o comprovante» a quem acabou de mandá-lo', () => {
+  const t = { ...turnoDa([CHAVE_ENVIADA, humano(marcarRecebimento('[imagem do cliente]: COMPROVANTE: Pix de R$ 100,00', new Date(CHEGOU)))]), noTurno: true };
+  const d = decidirTrava(t, { exigePagamento: true, taxaEsperada: 100, pixKey: CNPJ, pixHolder: TITULAR });
+  assert.equal(d.libera, false);
+  assert.equal(!d.libera && d.rejeicao, SEM_LEITURA_GUARDADA);
+  assert.match(!d.libera ? d.texto : '', new RegExp(RECADO_COMPROVANTE.slice(0, 40)));
+  // e «já paguei» em texto, sem comprovante nenhum, continua pedindo o comprovante
+  const so = decidirTrava({ ...turnoDa([humano('já paguei')]), noTurno: false }, { exigePagamento: true, taxaEsperada: 100 });
+  assert.equal(!so.libera && so.texto, RECUSA_SEM_COMPROVANTE_DA_TAXA);
 });
