@@ -17,7 +17,7 @@ declare module 'axios' {
   }
 }
 import { semCoracao } from '../lib/sem-coracao.js';
-import { semCarinha, semCarinhaLigado } from '../lib/carinha-antiga.js';
+import { preservandoSorrisoColorido, semCarinha, semCarinhaLigado } from '../lib/carinha-antiga.js';
 
 export interface KommoCustomFieldValue {
   field_id: number;
@@ -355,6 +355,11 @@ export function paraNumero(value: string | number | string[]): number | null {
 }
 
 export function downgradeEmoji(text: string, slug?: string | null): string {
+  // O ☺️ do fecho da confirmação (só onde a unidade o liga) atravessa o saneador inteiro — ver carinha-antiga.ts.
+  return preservandoSorrisoColorido(slug, text, (t) => downgradeEmojiSaneado(t, slug));
+}
+
+function downgradeEmojiSaneado(text: string, slug?: string | null): string {
   // Onde a carinha antiga está desligada, o 😊 some em vez de virar ☺ — ver
   // carinha-antiga.ts. Antes do mapa, senão o ☺ já teria sido criado.
   let out = semCoracao(semCarinhaLigado(slug) ? semCarinha(text) : text);

@@ -12,7 +12,7 @@ import { AgendaService, DURACAO_NA_FRANQUIA_MIN, toMinutes } from '../services/a
 import { AgendaReconcileService } from '../services/agenda-reconcile.service.js';
 import { registrarTempoAteAgendamento } from '../services/lead-metrics.service.js';
 import { avisoDeConsultaExistente, consultasFuturas } from './consulta-existente.js';
-import { dataPorExtenso, feriadoNacional } from '../lib/feriados.js';
+import { dataDaConfirmacao, dataPorExtenso, feriadoNacional } from '../lib/feriados.js';
 import { marcarConsultaNoTurno } from '../lib/cartao-de-chegada.js';
 import { CAMPO_FEITO_POR, CAMPO_SITUACAO_CONSULTA, comMarcacaoEmCurso, registrarMarcacaoDaIa } from '../lib/marcacao-da-ia-no-turno.js';
 import { conferirConsultaDePe, type PossivelDuplicado } from '../lib/consulta-em-outro-cadastro.js';
@@ -1253,6 +1253,15 @@ export function porQueNaoReservar(args: {
 }
 
 /**
+ * Unidade sem antecipado: a data da mensagem de confirmação já pronta ("Sexta-feira 06/11", sem ano), para o modelo copiar em
+ * vez de calcular o dia da semana. Outras unidades: '' (a tool devolve o mesmo texto de sempre).
+ */
+export function linhaProntaDaData(dataISO: string, semAntecipado: boolean): string {
+  const pronta = semAntecipado ? dataDaConfirmacao(dataISO) : '';
+  return pronta ? ` Linha pronta da data para a confirmação (copie exatamente, sem ano): ${pronta}.` : '';
+}
+
+/**
  * O que a IA faz depois de marcar, conforme a forma de pagamento escolhida.
  *
  * A chave e o valor vêm INTERPOLADOS aqui, nunca por referência. Em 16/09/2026
@@ -1278,7 +1287,7 @@ export function orientacaoDePagamento(
     return (
       ` ${PAGAMENTO_NO_DIA} O Pix só existe aqui como forma de pagar NA clínica, no dia: NÃO ofereça Pix para reservar a vaga, ` +
       'NÃO envie chave Pix, NÃO fale em pagar antes da consulta nem em desconto. ' +
-      'Na confirmação, o pagamento é só "no dia, na clínica".'
+      'Na mensagem de confirmação a forma de pagamento já vai DENTRO da linha ✨ Valor: não repita esta frase num parágrafo à parte.'
     );
   }
   if (forma === 'pix_antecipado') {
@@ -1905,7 +1914,7 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
 
       return `Consulta marcada para ${dataPorExtenso(args.data)} às ${args.hora}.${
         especialista ? ` Atendimento com ${especialista}.` : ''
-      } Confirme ao paciente com EXATAMENTE este dia da semana e data.${orientacaoDePagamento(args.formaPagamento, fresca, semAntecipado)}`;
+      } Confirme ao paciente com EXATAMENTE este dia da semana e data.${linhaProntaDaData(args.data, semAntecipado)}${orientacaoDePagamento(args.formaPagamento, fresca, semAntecipado)}`;
     }),
   });
 }

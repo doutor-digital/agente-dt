@@ -124,11 +124,12 @@ test('unidade sem antecipado, mesmo com chave Pix cadastrada: a chave não vai p
   assert.doesNotMatch(renderFatosDaUnidade(u), /Chave Pix/);
 });
 
-test('unidade sem antecipado: a confirmação diz que se paga no dia, na clínica; valor sem a palavra "antecipado"', () => {
+test('unidade sem antecipado: a confirmação leva o pagamento no dia dentro da linha do valor; sem a palavra "antecipado"', () => {
   const p = composeSystemPrompt({ unit: SEM() });
-  assert.ok(p.includes(PAGAMENTO_NO_DIA), 'linha do pagamento da confirmação');
+  // desde 03/11/2026 a forma de pagamento mora DENTRO da linha do valor — não há mais o parágrafo à parte da confirmação
+  assert.ok(!p.includes(PAGAMENTO_NO_DIA), 'a confirmação não repete o parágrafo do pagamento');
   assert.ok(p.includes(REGRA_SEM_ANTECIPADO), 'a regra que fecha a porta');
-  assert.match(p, /✨ Valor: R\$ \{[^}]*\} no dia, na clínica/);
+  assert.match(p, /✨ Valor: R\$ 250,00 no dia, dinheiro, pix, cartão de débito ou crédito\./);
   assert.match(p, /UM PASSO POR MENSAGEM: dia → horário → dados\./, 'sem o passo "Pix"');
   assert.doesNotMatch(p, /"Pix antecipado" ou "Na clínica"/);
 });

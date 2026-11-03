@@ -616,6 +616,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/carinha-antiga.ts',
   },
   {
+    id: 'sorriso-colorido',
+    chave: 'SORRISO_COLORIDO_SLUGS',
+    nome: 'Sorriso colorido ☺️ na confirmação',
+    oQueFaz:
+      'Deixa passar, inteiro, o ☺️ (☺ com o seletor de variação) que a confirmação de agendamento da unidade usa no fecho, em vez de rebaixá-lo para o ☺ preto e branco.',
+    pegadinha:
+      'Sem isto o envio arranca o seletor de variação de todo emoji e o WhatsApp mostra o ☺ em preto e branco. Vale só para o par ☺️ exato; qualquer outro emoji segue as regras de sempre. Ligar em Timbó junto com o formato novo da confirmação.',
+    risco: 'comportamento',
+    temSeco: false,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/carinha-antiga.ts',
+  },
+  {
     id: 'cartao-enxuto',
     chave: 'CARTAO_ENXUTO_SLUGS',
     nome: 'Cartão enxuto (vigia)',

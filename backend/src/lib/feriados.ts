@@ -130,6 +130,17 @@ export function dataPorExtenso(dataISO: string): string {
 }
 
 /**
+ * "Sexta-feira 06/11" — a data da mensagem de confirmação de Timbó: dia da semana com inicial maiúscula + dd/mm, sem ano
+ * e sem vírgula. Calculada aqui, nunca pelo modelo (que erra o dia da semana). Data inválida: ''.
+ */
+export function dataDaConfirmacao(dataISO: string): string {
+  const dia = diaDaSemana(dataISO);
+  const [, m, d] = dataISO.split('-');
+  if (!dia || !m || !d) return '';
+  return `${dia[0].toUpperCase()}${dia.slice(1)} ${d}/${m}`;
+}
+
+/**
  * Bloco de calendário para o prompt: hoje + os próximos `dias` dias, cada um com
  * o dia da semana e o feriado quando houver. Existe porque o modelo, sem isso,
  * usa o calendário do ano em que foi treinado (em 2025, 08/09 caía na segunda —
