@@ -380,10 +380,10 @@ async function varrer(): Promise<void> {
         // Quem ja pagou nao ouve falar de pagamento. O degrau e pulado, nao
         // adiado: se o proximo degrau tambem for de cobranca, ele cai aqui na
         // proxima varredura pelo mesmo motivo.
-        // Boa Vista: quem teve a consulta marcada pela Sofia com o comprovante da taxa (últimas 2 semanas) também já pagou, mesmo antes de a
+        // Boa Vista: quem teve a consulta marcada pela Sofia com o comprovante da taxa (consulta de hoje em diante) também já pagou, mesmo antes de a
         // equipe conferir o extrato e marcar «✓ Consulta pg antecipado» no cartão (comprovante-da-taxa.ts).
         const pagouPorComprovante = proximo.pularSePagou && !estado.pagouAntecipado && unit.spineBookingRequiresPayment
-          ? await prisma.comprovantePixUsado.findFirst({ where: { unitId: unit.id, kommoLeadId: Number(conv.leadId), consultaEm: { gte: new Date(Date.now() - 86_400_000).toISOString().slice(0, 10) }, criadoEm: { gte: new Date(Date.now() - 14 * 86_400_000) } }, select: { id: true } }).then((r) => r !== null).catch(() => false)
+          ? await prisma.comprovantePixUsado.findFirst({ where: { unitId: unit.id, kommoLeadId: Number(conv.leadId), consultaEm: { gte: new Date().toLocaleDateString('sv-SE', { timeZone: unit.spineTimezone ?? 'America/Sao_Paulo' }) } }, select: { id: true } }).then((r) => r !== null).catch(() => false)
           : false;
         if (proximo.pularSePagou && (estado.pagouAntecipado || pagouPorComprovante)) {
           await prisma.conversation

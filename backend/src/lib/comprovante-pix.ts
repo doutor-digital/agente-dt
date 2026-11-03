@@ -117,30 +117,25 @@ export function normalizarE2E(s: string | null | undefined): string | null {
   return t === '' ? null : t;
 }
 
+/** epoch ms de uma data/hora lida como UTC, ou null se ela não existe (`Date.UTC` "arruma" 31/02 em 03/03: se voltar diferente, não existia). */
+function utcSeExiste(a: number, mes: number, d: number, h: number, mi: number): number | null {
+  const ms = Date.UTC(a, mes - 1, d, h, mi);
+  const t = new Date(ms);
+  if (t.getUTCFullYear() !== a || t.getUTCMonth() !== mes - 1 || t.getUTCDate() !== d || t.getUTCHours() !== h || t.getUTCMinutes() !== mi) return null;
+  return ms;
+}
+
 /** O instante (epoch ms, UTC) gravado no E2E, ou null se o formato ou a data não existem. */
 export function instanteDoE2E(e2e: string): number | null {
   if (!FORMATO_DO_E2E.test(e2e)) return null;
-  const a = Number(e2e.slice(9, 13));
-  const mes = Number(e2e.slice(13, 15));
-  const d = Number(e2e.slice(15, 17));
-  const h = Number(e2e.slice(17, 19));
-  const mi = Number(e2e.slice(19, 21));
-  const ms = Date.UTC(a, mes - 1, d, h, mi);
-  const t = new Date(ms);
-  // Date.UTC "arruma" 31/02 em 03/03: se voltar diferente, a data não existe
-  if (t.getUTCFullYear() !== a || t.getUTCMonth() !== mes - 1 || t.getUTCDate() !== d || t.getUTCHours() !== h || t.getUTCMinutes() !== mi) return null;
-  return ms;
+  return utcSeExiste(Number(e2e.slice(9, 13)), Number(e2e.slice(13, 15)), Number(e2e.slice(15, 17)), Number(e2e.slice(17, 19)), Number(e2e.slice(19, 21)));
 }
 
 /** "AAAA-MM-DDTHH:mm" impresso no recibo → epoch ms lendo os campos como se fossem UTC (o fuso entra em `DESLOCAMENTOS_HORAS`). */
 export function instanteImpresso(dataHora: string | null | undefined): number | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/.exec(String(dataHora ?? '').trim());
   if (!m) return null;
-  const [a, mes, d, h, mi] = [Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5])];
-  const ms = Date.UTC(a, mes - 1, d, h, mi);
-  const t = new Date(ms);
-  if (t.getUTCFullYear() !== a || t.getUTCMonth() !== mes - 1 || t.getUTCDate() !== d || t.getUTCHours() !== h || t.getUTCMinutes() !== mi) return null;
-  return ms;
+  return utcSeExiste(Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5]));
 }
 
 /**

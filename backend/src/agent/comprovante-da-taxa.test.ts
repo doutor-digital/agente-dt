@@ -325,7 +325,7 @@ test('E2E repetido em OUTRO cartão → não marca (print repassado, ou o mesmo 
   assert.equal(banco.linhas.length, 1, 'continua um registro só');
 });
 
-test('a ferramenta lança erro: o E2E volta a ficar livre para a nova tentativa do mesmo paciente (e só dele)', async () => {
+test('a ferramenta LANÇA erro (timeout: a franquia pode ter criado a consulta): a reserva do E2E FICA e a nova tentativa vai para a equipe', async () => {
   const banco = bancoDeMentira();
   const chamadas: Array<Record<string, unknown>> = [];
   const quebra = new DynamicStructuredTool({
@@ -345,9 +345,11 @@ test('a ferramenta lança erro: o E2E volta a ficar livre para a nova tentativa 
   });
   const [tool] = travarAgendamentoPorComprovante([quebra], turno, recorder, { ...OPCOES, ganchos });
   await assert.rejects(async () => void (await tool.func({ data: '2026-11-05', hora: '15:30' } as never)), /timeout/);
-  // nova tentativa, agora com a franquia no ar
+  // nova tentativa, agora com a franquia no ar: NÃO marca (podia haver consulta criada antes do erro) — a equipe decide
   const nova = cenario(VALIDA, { banco });
-  assert.match(await nova.chamar(), /^Consulta marcada/);
+  assert.match(await nova.chamar(), /^RECUSADO/);
+  assert.deepEqual(nova.chamadas, []);
+  assert.equal(nova.tarefas.length, 1);
   void chamadas;
 });
 

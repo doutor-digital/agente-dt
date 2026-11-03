@@ -579,6 +579,7 @@ export async function buildAgentGraph(
   const comprovante: TurnoDoComprovante & { tarefaDaRecusaAberta?: boolean } = { noTurno: false, pendente: false };
   // As leituras de comprovante já buscadas no banco neste turno (cada volta do agente recalcula a análise, a leitura não muda).
   const leiturasDoTurno = new Map<string, LeituraGuardada>();
+  const leiturasJaProcuradas = new Set<string>();
   const taxaDaUnidade = precosDaConsulta(unit)?.antecipado ?? null;
   // O lead DA CONVERSA: o `leadId` que o modelo escreve só é corrigido por `fixarLeadDaConversa`, que roda por dentro desta trava.
   const ganchosDaTaxa = unit.spineBookingRequiresPayment
@@ -761,8 +762,12 @@ export async function buildAgentGraph(
         texto: m.getType() === 'human' ? (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)) : aiTextFromContent(m.content),
       }));
       const citadas = referenciasNoTexto(mensagensDaConversa.filter((m) => m.tipo === 'human').map((m) => m.texto).join('\n'));
-      const faltam = citadas.filter((id) => !leiturasDoTurno.has(id));
-      if (faltam.length > 0) for (const [id, l] of await carregarLeituras(prisma, unit.id, leadIdDaConversa ?? Number(state.leadId), faltam)) leiturasDoTurno.set(id, l);
+      // o que o banco não devolveu (inventado, de outro cartão, banco fora) também não é procurado de novo a cada volta do agente
+      const faltam = citadas.filter((id) => !leiturasJaProcuradas.has(id));
+      if (faltam.length > 0) {
+        for (const [id, l] of await carregarLeituras(prisma, unit.id, leadIdDaConversa ?? Number(state.leadId), faltam)) leiturasDoTurno.set(id, l);
+        for (const id of faltam) leiturasJaProcuradas.add(id);
+      }
       comprovante.analise = analisarConversa(
         mensagensDaConversa,
         { taxa: taxaDaUnidade, pixKey: unit.pixKey ?? null, pixHolder: unit.pixHolder ?? null, agora: Date.now() },

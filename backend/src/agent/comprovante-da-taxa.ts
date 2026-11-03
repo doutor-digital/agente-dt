@@ -310,9 +310,10 @@ export function criarGanchosDaTaxa(ctx: ContextoDosGanchos): GanchosDoComprovant
     },
 
     async aoFalhar(aceito) {
-      // `agendar_consulta` lançou erro: a marcação não aconteceu, a reserva é desfeita ANTES de o erro subir (a nova tentativa do modelo
-      // não pode achar o comprovante reservado). Falhar aqui deixa o comprovante reservado, que é o lado seguro (a equipe decide).
-      await registro.liberar(aceito.e2e).catch((err) => logger.warn({ err: String(err) }, 'comprovante: não consegui desfazer a reserva do E2E'));
+      // `agendar_consulta` LANÇOU erro (timeout, queda): não dá para saber se a franquia criou a consulta antes do erro. A reserva do E2E
+      // FICA — a nova tentativa vai para a equipe, que vê no CRM; liberar poderia pôr duas consultas no mesmo Pix. (Quem desfaz a reserva é
+      // só a resposta clara de que não marcou: horário ocupado, recusa da franquia — ver `depois`.)
+      logger.warn({ e2e: aceito.e2e, unit: ctx.unit.slug, leadId: ctx.leadId }, 'comprovante: agendar_consulta lançou erro com o E2E reservado — fica reservado, a equipe decide');
     },
 
     async aoRecusar(rejeicao) {

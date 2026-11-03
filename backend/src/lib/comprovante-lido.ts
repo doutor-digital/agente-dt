@@ -15,6 +15,7 @@ import { prisma } from './prisma.js';
 import { ehTranscricaoDeComprovante } from './pagamento-antecipado.js';
 import { neutralizarMarcasDoSistema, normalizarDados, referenciaDaLeitura, type DadosDoComprovante, type LeituraGuardada } from './comprovante-pix.js';
 import type { MensagemOficial } from '../services/kommo-talks-normalizar.js';
+import { desdeUltimaFalaDaSofia } from '../services/kommo-talks.service.js';
 import { describeImage } from '../services/vision.service.js';
 
 /** O pedaço do Prisma que isto usa (os testes passam um banco de mentira). */
@@ -35,7 +36,15 @@ export interface NovaLeitura {
   modelo?: string | null;
   /** já chegou à conversa (imagem que não é comprovante: não há o que entregar) */
   entregue?: boolean;
+  /** a leitura falhou (download, visão): fica registrada para a mesma imagem não ser tentada a cada mensagem — só de novo depois de um recuo */
+  falhou?: boolean;
 }
+
+/** Recuo antes de tentar de novo uma imagem cuja leitura falhou. */
+export const RECUO_DA_LEITURA_QUE_FALHOU_MS = 10 * 60_000;
+/** Prazo da reserva da entrega: o turno que entrega a leitura tem esse tempo para dar certo antes de outro assumir. */
+export const PRAZO_DA_ENTREGA_MS = 2 * 60_000;
+const MARCA_DE_FALHA = 'leitura falhou: ';
 
 /** Grava a leitura (ou devolve a que já existe para a mesma imagem). */
 export async function guardarLeitura(db: BancoDeLeituras, n: NovaLeitura): Promise<{ id: string; criadoEm: Date; entregueEm: Date | null; jaExistia: boolean }> {
@@ -52,9 +61,10 @@ export async function guardarLeitura(db: BancoDeLeituras, n: NovaLeitura): Promi
         tipo: n.tipo,
         ehComprovante: n.ehComprovante,
         dados: n.dados === null ? Prisma.DbNull : (n.dados as unknown as Prisma.InputJsonValue),
-        erro: n.erro ?? null,
+        erro: n.falhou ? `${MARCA_DE_FALHA}${n.erro ?? ''}` : n.erro ?? null,
         modelo: n.modelo ?? null,
-        entregueEm: n.entregue ? new Date() : null,
+        entregueEm: n.entregue || n.falhou ? new Date() : null,
+        reivindicadaEm: n.entregue || n.falhou ? null : new Date(),
       },
       select: { id: true, criadoEm: true, entregueEm: true },
     });
@@ -137,19 +147,22 @@ export async function lerAnexosDoPaciente(
   const vazio: AnexosLidos = { texto: '', lidos: 0, comprovantes: 0, paraEntregar: [] };
   if (!unit.spineBookingRequiresPayment || !msgs?.length) return vazio;
 
-  const candidatas = msgs
+  // Só o que chegou DEPOIS da última fala da Sofia (como a conversa oficial do turno): anexo velho que nunca foi lido não entra na fala de
+  // hoje como se fosse deste turno — o comprovante de uma consulta que já passou não paga a próxima.
+  const candidatas = desdeUltimaFalaDaSofia([...msgs])
     .filter((m) => m.direcao === 'entrada' && m.autor === 'paciente' && m.anexo?.link && ANEXO_DE_IMAGEM_OU_ARQUIVO.test(m.anexo.tipo) && d.agora() - m.em.getTime() <= JANELA_DOS_ANEXOS_MS)
     // o MAIS NOVO primeiro: o comprovante que o paciente acabou de mandar não espera atrás de anexos antigos (que podem estar com o link vencido)
     .sort((a, b) => b.em.getTime() - a.em.getTime());
   if (candidatas.length === 0) return vazio;
 
   // uma ida ao banco para saber o que já foi lido
-  let existentes: Array<{ id: string; fonte: string; ehComprovante: boolean; entregueEm: Date | null }> = [];
+  type Existente = { id: string; fonte: string; tipo: string; ehComprovante: boolean; entregueEm: Date | null; erro: string | null; criadoEm: Date };
+  let existentes: Existente[] = [];
   try {
-    existentes = await d.db.comprovanteLido.findMany({
+    existentes = (await d.db.comprovanteLido.findMany({
       where: { unitId: unit.id, kommoLeadId: leadId, fonte: { in: candidatas.map((m) => fonteDaMensagemOficial(m.id)) } },
-      select: { id: true, fonte: true, ehComprovante: true, entregueEm: true },
-    });
+      select: { id: true, fonte: true, tipo: true, ehComprovante: true, entregueEm: true, erro: true, criadoEm: true },
+    })) as Existente[];
   } catch (err) {
     logger.warn({ err: String(err), leadId, unit: unit.slug }, 'comprovante: não consegui saber o que já foi lido (segue sem os anexos)');
     return vazio;
@@ -165,13 +178,25 @@ export async function lerAnexosDoPaciente(
     const fonte = fonteDaMensagemOficial(m.id);
     const ja = porFonte.get(fonte);
     if (ja) {
-      // lido antes e nunca entregue (o turno que o leu falhou): entrega de novo, sem pagar a visão outra vez
-      if (ja.ehComprovante && ja.entregueEm === null) {
-        comprovantes++;
-        paraEntregar.push(ja.id);
-        falas.push({ em: m.em.getTime(), fala: `[${m.anexo?.tipo === 'file' ? 'arquivo' : 'imagem'} do cliente]: COMPROVANTE: leitura guardada pelo servidor ${referenciaDaLeitura(ja.id)} [recebido-em:${new Date(d.agora()).toISOString()}]` });
+      const falhouAntes = ja.erro?.startsWith(MARCA_DE_FALHA) === true;
+      if (falhouAntes && d.agora() - ja.criadoEm.getTime() >= RECUO_DA_LEITURA_QUE_FALHOU_MS && lidos < MAX_ANEXOS_POR_TURNO && tentativas < MAX_TENTATIVAS_POR_TURNO) {
+        // a leitura falhou há tempo: tenta de novo (o registro da falha é trocado pela leitura)
+        await d.db.comprovanteLido.deleteMany({ where: { id: ja.id, erro: ja.erro } }).catch(() => undefined);
+      } else {
+        // lido antes e nunca entregue (o turno que o leu falhou): entrega de novo, sem pagar a visão outra vez — mas só quem ganhar a
+        // reivindicação (prazo de 2 min): duas mensagens seguidas do paciente não entregam o mesmo comprovante duas vezes
+        if (ja.ehComprovante && ja.entregueEm === null) {
+          const ganhou = await d.db.comprovanteLido
+            .updateMany({ where: { id: ja.id, entregueEm: null, reivindicadaEm: { lt: new Date(d.agora() - PRAZO_DA_ENTREGA_MS) } }, data: { reivindicadaEm: new Date(d.agora()) } })
+            .catch(() => ({ count: 0 }));
+          if (ganhou.count === 1) {
+            comprovantes++;
+            paraEntregar.push(ja.id);
+            falas.push({ em: m.em.getTime(), fala: `[${ja.tipo === 'arquivo' ? 'arquivo' : 'imagem'} do cliente]: COMPROVANTE: leitura guardada pelo servidor ${referenciaDaLeitura(ja.id)} [recebido-em:${new Date(d.agora()).toISOString()}]` });
+          }
+        }
+        continue;
       }
-      continue;
     }
     if (lidos >= MAX_ANEXOS_POR_TURNO || tentativas >= MAX_TENTATIVAS_POR_TURNO) continue;
     try {
@@ -199,6 +224,10 @@ export async function lerAnexosDoPaciente(
       }
     } catch (err) {
       logger.warn({ err: String(err), leadId, unit: unit.slug, mensagem: m.id }, 'comprovante: não consegui ler o anexo do paciente na conversa oficial (segue sem)');
+      // registra a falha: a mesma imagem não é tentada a cada mensagem do paciente (só depois do recuo)
+      await guardarLeitura(d.db, {
+        unitId: unit.id, leadId, fonte, tipo: m.anexo?.tipo === 'file' ? 'arquivo' : 'imagem', ehComprovante: false, dados: null, erro: err instanceof Error ? err.message : String(err), falhou: true,
+      }).catch(() => undefined);
     }
   }
   // na ordem em que o paciente as mandou
