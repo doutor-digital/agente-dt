@@ -424,6 +424,21 @@ test('CORRIDA: o turno anterior entregou a resposta 3 s DEPOIS do pedido novo e 
   assert.equal(motivoDe(w, 'novo'), `${MARCA_ABANDONADO}:resposta_de_turno_anterior_depois_do_pedido`);
 });
 
+test('a resposta de outro turno só pesa para o pedido a que ela é posterior: o pedido que a equipe já respondeu não contamina o seguinte', async () => {
+  const { w, deps } = mundo();
+  w.traces.push(lead('a', 'primeira', FOTO));
+  w.traces.push(lead('b', 'segunda', new Date(FOTO.getTime() + 24_000)));
+  // resposta atrasada de um turno anterior, depois de 'a' e ANTES de 'b'
+  w.respostasNoBanco.push({ leadId: '5142896', em: new Date(FOTO.getTime() + 3_000), traceId: 'anterior', traceCriadoEm: new Date(FOTO.getTime() - 15_000) });
+  // a recepção respondeu a 'a' (depois de 'a', antes de 'b')
+  w.kommo = { msgs: [msg('saida', new Date(FOTO.getTime() + 10_000))], equipeComAPalavra: false, naoConferi: false };
+  const r = await recuperarTurnosPerdidos(deps, POSSE);
+  assert.equal(motivoDe(w, 'a'), `${MARCA_ABANDONADO}:ja_respondida`);
+  assert.equal(r.retomados, 1, 'b não tem resposta de outro turno depois dele');
+  assert.deepEqual(w.retomadas, ['b']);
+  await dormir(120);
+});
+
 test('CORRIDA com a IA pausada: a equipe atende, fecha sem tarefa (a pausa vem antes)', async () => {
   const { w, deps } = mundo();
   w.traces.push(lead('novo', 'oi', FOTO));

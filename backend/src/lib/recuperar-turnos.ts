@@ -445,13 +445,13 @@ async function recuperarDoPaciente(
   //    respondido (trace que só não fechou) e o segundo não.
   let pendentes: TurnoPerdido[] = [];
   const envios = await deps.enviosDaIa(unit, leadId, turnos[0]!.criadoEm);
-  let respostaDeOutroTurno = false;
+  const comRespostaDeOutroTurno = new Set<string>();
   for (const t of turnos) {
     if (respondeuOPedido(envios, t)) {
       await fechar(deps, resumo, t, 'ja_respondida');
     } else {
       // Saiu resposta da Sofia depois do pedido, mas de um turno anterior: a pergunta nova pode estar sem resposta.
-      if (envios.some((e) => e.em.getTime() > t.criadoEm.getTime())) respostaDeOutroTurno = true;
+      if (envios.some((e) => e.em.getTime() > t.criadoEm.getTime())) comRespostaDeOutroTurno.add(t.traceId);
       pendentes.push(t);
     }
   }
@@ -490,7 +490,8 @@ async function recuperarDoPaciente(
   // responder por cima do que o robô disse. Tarefa.
   if (roboFalouDepois) return comTarefa(deps, resumo, unit, pendentes, 'robo_falou_depois_do_pedido', agora);
   // A resposta da Sofia depois do pedido é de um turno que nasceu ANTES dele (entregue tarde): não o respondeu. Tarefa.
-  if (respostaDeOutroTurno) return comTarefa(deps, resumo, unit, pendentes, 'resposta_de_turno_anterior_depois_do_pedido', agora);
+  // (só os que seguem pendentes: o pedido que a equipe já respondeu no passo 2 não contamina os outros)
+  if (pendentes.some((t) => comRespostaDeOutroTurno.has(t.traceId))) return comTarefa(deps, resumo, unit, pendentes, 'resposta_de_turno_anterior_depois_do_pedido', agora);
 
   // 5. O turno morto já tinha passado do webhook: modelo/ferramenta rodaram e não sei o que fizeram. Qualquer um do
   //    paciente nesse estado leva o grupo todo para a tarefa (a conversa é uma só). Olha o BURST inteiro, não só o trace do
