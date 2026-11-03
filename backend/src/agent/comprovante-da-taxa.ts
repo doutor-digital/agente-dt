@@ -16,10 +16,12 @@ import { Prisma } from '@prisma/client';
 import { logger } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
 import { enviarTelegram } from '../lib/telegram.js';
-import { resumoDaLeitura } from '../lib/comprovante-pix.js';
+import { brl, RESPOSTA_QUE_MARCA, resumoDaLeitura } from '../lib/comprovante-pix.js';
+import { recusaCertaDaFranquia } from '../services/spine.service.js';
 import type { KommoClient } from '../services/kommo.service.js';
 import {
   abrirTarefaParaEquipe,
+  DE_OUTRA_NEGOCIACAO,
   RECADO_COMPROVANTE,
   type ComprovanteAceito,
   type ComprovanteRecusado,
@@ -31,20 +33,26 @@ import type { TraceRecorder } from './trace-recorder.js';
 // --- Registro do E2E -------------------------------------------------------------------------------------------------------
 
 export type ResultadoDaReserva =
-  /** o E2E era novo (ou era deste mesmo paciente, ainda sem consulta): pode marcar */
+  /** o E2E era novo (ou era deste mesmo paciente, sem consulta): ficou RESERVADO para esta marcação — pode marcar */
   | 'reservado'
-  /** outro paciente já usou ESTE comprovante */
+  /** outro cartão já usou ESTE comprovante */
   | 'outro_paciente'
-  /** este paciente já marcou uma consulta com ESTE comprovante (a equipe decide se o crédito vale para a nova) */
+  /** este paciente já tem uma consulta (ou uma marcação em andamento) com ESTE comprovante: a equipe decide se o crédito vale para a nova */
   | 'mesmo_paciente_ja_marcou'
-  /** outro paciente usou um comprovante do mesmo banco, minuto e valor, com o ID lido diferente — pode ser o mesmo, lido com um caractere trocado */
+  /** outro cartão — ou este, já com consulta — usou um comprovante do mesmo banco, minuto e valor, com o ID lido diferente: pode ser o mesmo, lido com um caractere trocado */
   | 'parecido_de_outro'
   /** o banco não respondeu: sem registro não há como impedir o reuso */
   | 'indisponivel';
 
 export interface RegistroDeE2E {
-  reservar(info: { e2e: string; unitId: string; leadId: number; valorCentavos: number; favorecido: string | null }): Promise<ResultadoDaReserva>;
+  /**
+   * Reserva o E2E para ESTA marcação, de forma atômica no banco (vale entre processos): a linha nasce já com `consultaEm` — a hora da
+   * consulta que vai ser marcada. Quem chega depois, no mesmo instante ou se o processo cair no meio, a encontra como «já marcou».
+   */
+  reservar(info: { e2e: string; unitId: string; leadId: number; valorCentavos: number; favorecido: string | null; consultaEm: string }): Promise<ResultadoDaReserva>;
   concluir(e2e: string, info: { idSchedule: number | null; consultaEm: string | null }): Promise<void>;
+  /** A franquia não marcou (horário ocupado, erro): desfaz a reserva, o comprovante volta a valer para a nova tentativa DESTE paciente. */
+  liberar(e2e: string): Promise<void>;
 }
 
 /** `E` + ISPB + data/hora: a parte do E2E que já identifica banco e minuto. */
@@ -66,34 +74,51 @@ export const chaveDoE2E = (e2e: string) => e2e.trim().toUpperCase();
 export type BancoDeComprovantes = Pick<typeof prisma, 'comprovantePixUsado'>;
 
 type Linha = { unitId: string; kommoLeadId: number; idSchedule: number | null; consultaEm: string | null };
-/** «Já marcou» = a consulta foi marcada com este comprovante: o id vem do vínculo; a data/hora vai sempre, mesmo se o id não veio. */
+/** «Já marcou» = há consulta com este comprovante, ou uma marcação reservou a hora dela. */
 const jaMarcou = (r: Pick<Linha, 'idSchedule' | 'consultaEm'>) => r.idSchedule !== null || r.consultaEm !== null;
 
 export function criarRegistroNoBanco(db: BancoDeComprovantes = prisma): RegistroDeE2E {
   return {
-    async reservar({ e2e, unitId, leadId, valorCentavos, favorecido }) {
+    async reservar({ e2e, unitId, leadId, valorCentavos, favorecido, consultaEm }) {
       const chave = chaveDoE2E(e2e);
       const meu = (r: Pick<Linha, 'unitId' | 'kommoLeadId'>) => r.unitId === unitId && r.kommoLeadId === leadId;
       try {
+        // o MESMO E2E, qualquer que seja o valor lido (a visão pode errar o valor numa segunda leitura da mesma imagem)
+        const igual = await db.comprovantePixUsado.findUnique({ where: { e2e: chave }, select: { e2e: true, unitId: true, kommoLeadId: true, idSchedule: true, consultaEm: true } });
+        if (igual) {
+          if (!meu(igual) || jaMarcou(igual)) return meu(igual) ? 'mesmo_paciente_ja_marcou' : 'outro_paciente';
+          // meu, sem consulta (uma tentativa anterior foi desfeita): a reserva é um UPDATE condicional — só uma chamada o ganha
+          const ganhou = await db.comprovantePixUsado.updateMany({ where: { e2e: chave, consultaEm: null, idSchedule: null }, data: { consultaEm } });
+          return ganhou.count === 1 ? 'reservado' : 'mesmo_paciente_ja_marcou';
+        }
+        // mesmo banco, minuto e valor, e o final do ID quase igual: o mesmo comprovante lido com erro. De OUTRO cartão, ou do próprio paciente
+        // que já tem consulta com ele (reenviar a mesma imagem e ler um caractere diferente não pode abrir um segundo uso)
         const parecidos = await db.comprovantePixUsado.findMany({
           where: { e2e: { startsWith: chave.slice(0, PREFIXO) }, valorCentavos },
           select: { e2e: true, unitId: true, kommoLeadId: true, idSchedule: true, consultaEm: true },
         });
-        const igual = parecidos.find((r) => r.e2e === chave);
-        if (igual) {
-          if (!meu(igual)) return 'outro_paciente';
-          return jaMarcou(igual) ? 'mesmo_paciente_ja_marcou' : 'reservado';
+        const quaseIgual = (r: { e2e: string }) => diferencas(r.e2e.slice(PREFIXO), chave.slice(PREFIXO)) <= ERROS_DE_LEITURA;
+        if (parecidos.some((r) => (!meu(r) || jaMarcou(r)) && quaseIgual(r))) return 'parecido_de_outro';
+        // do PRÓPRIO paciente, ainda sem consulta (uma tentativa anterior foi desfeita), lido agora com um caractere diferente: é o mesmo Pix.
+        // Assume a linha dele, com o ID como foi lido agora, em vez de criar uma segunda (que abriria um segundo uso do mesmo comprovante)
+        const livre = parecidos.find((r) => meu(r) && !jaMarcou(r) && quaseIgual(r));
+        if (livre) {
+          try {
+            const ganhou = await db.comprovantePixUsado.updateMany({ where: { e2e: livre.e2e, consultaEm: null, idSchedule: null }, data: { e2e: chave, consultaEm } });
+            return ganhou.count === 1 ? 'reservado' : 'mesmo_paciente_ja_marcou';
+          } catch (err) {
+            // outra chamada do mesmo paciente já criou/renomeou a linha com este ID ao mesmo tempo: a unicidade decidiu
+            if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') return 'mesmo_paciente_ja_marcou';
+            throw err;
+          }
         }
-        // outro paciente, mesmo banco, minuto e valor, e o final do ID quase igual: o mesmo comprovante lido com erro
-        if (parecidos.some((r) => !meu(r) && diferencas(r.e2e.slice(PREFIXO), chave.slice(PREFIXO)) <= ERROS_DE_LEITURA)) return 'parecido_de_outro';
         try {
-          await db.comprovantePixUsado.create({ data: { e2e: chave, unitId, kommoLeadId: leadId, valorCentavos, favorecido } });
+          await db.comprovantePixUsado.create({ data: { e2e: chave, unitId, kommoLeadId: leadId, valorCentavos, favorecido, consultaEm } });
         } catch (err) {
           // duas conversas com o mesmo comprovante ao mesmo tempo: a unicidade do banco decide quem ficou
           if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-            const dono = await db.comprovantePixUsado.findUnique({ where: { e2e: chave }, select: { unitId: true, kommoLeadId: true, idSchedule: true, consultaEm: true } });
-            if (dono && meu(dono)) return jaMarcou(dono) ? 'mesmo_paciente_ja_marcou' : 'reservado';
-            return 'outro_paciente';
+            const dono = await db.comprovantePixUsado.findUnique({ where: { e2e: chave }, select: { unitId: true, kommoLeadId: true } });
+            return dono && meu(dono) ? 'mesmo_paciente_ja_marcou' : 'outro_paciente';
           }
           throw err;
         }
@@ -105,6 +130,9 @@ export function criarRegistroNoBanco(db: BancoDeComprovantes = prisma): Registro
     },
     async concluir(e2e, info) {
       await db.comprovantePixUsado.updateMany({ where: { e2e: chaveDoE2E(e2e) }, data: { idSchedule: info.idSchedule, consultaEm: info.consultaEm } });
+    },
+    async liberar(e2e) {
+      await db.comprovantePixUsado.updateMany({ where: { e2e: chaveDoE2E(e2e), idSchedule: null }, data: { consultaEm: null } });
     },
   };
 }
@@ -118,7 +146,6 @@ async function idDaConsultaNoVinculo(unitId: string, leadId: number): Promise<nu
 
 // --- Textos ----------------------------------------------------------------------------------------------------------------
 
-const brl = (v: number) => `R$ ${v.toFixed(2).replace('.', ',')}`;
 const dataBR = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}`;
 
 /** O que o modelo lê depois de marcar pelo comprovante (some-se ao «Consulta marcada para…», que fica na frente). */
@@ -143,6 +170,30 @@ export function detalheDaRecusa(r: ComprovanteRecusado): string {
   return `a conferência automática NÃO aceitou o comprovante (${r.codigo}): ${r.motivo}. Lido: ${resumoDaLeitura(r.dados)}`;
 }
 
+/**
+ * O que ficou por avisar à equipe no fim do turno em que chegou um comprovante, quando a consulta NÃO foi marcada por ele (a tarefa
+ * «conferir no extrato» sai de dentro da ferramenta, ao marcar). Como no main, comprovante que chega nunca fica sem ninguém saber:
+ *  - o código recusou, ou é de outra negociação → tarefa da recusa (motivo técnico);
+ *  - o código ACEITOU mas a Sofia ainda combina o dia (e o paciente pode sumir), ou não há leitura guardada → tarefa «conferir comprovante».
+ * `null` = nada a abrir (não veio comprovante neste turno, a consulta foi marcada por ele, ou a tarefa da recusa já saiu).
+ */
+export type TarefaQueFicou = { tipo: 'recusa'; rejeicao: ComprovanteRecusado } | { tipo: 'conferir'; detalhe: string } | null;
+
+export function tarefaDoComprovanteQueFicou(turno: TurnoDoComprovante & { tarefaDaRecusaAberta?: boolean }, consultaNoCrm = false): TarefaQueFicou {
+  if (!turno.noTurno || turno.marcouPorComprovante || turno.tarefaDaRecusaAberta) return null;
+  const a = turno.analise;
+  if (a?.falha) return { tipo: 'recusa', rejeicao: a.falha };
+  if (a && !a.temComprovante && a.deOutraNegociacao > 0) return { tipo: 'recusa', rejeicao: DE_OUTRA_NEGOCIACAO };
+  return {
+    tipo: 'conferir',
+    detalhe: a?.aceito
+      ? consultaNoCrm
+        ? `o código ACEITOU o comprovante (${resumoDaLeitura(a.aceito.dados)}), mas o paciente já tem consulta no CRM (marcada antes, pela equipe ou pela IA) e este comprovante não a marcou: conferir no extrato se o Pix caiu`
+        : `o código ACEITOU o comprovante (${resumoDaLeitura(a.aceito.dados)}), mas a consulta ainda NÃO foi marcada por ele (falta combinar dia e horário com o paciente): lançar a consulta se ele não voltar`
+      : 'não há leitura em campos guardada para este comprovante (a leitura falhou, ou o texto não veio de uma imagem lida pelo servidor): conferir',
+  };
+}
+
 // --- Os ganchos da trava ---------------------------------------------------------------------------------------------------
 
 export interface ContextoDosGanchos {
@@ -161,6 +212,9 @@ export interface ContextoDosGanchos {
   abrirTarefa?: typeof abrirTarefaParaEquipe;
 }
 
+/** O que `agendar_consulta` devolve quando `createSchedule` falhou (agenda-tools.ts, «Não consegui marcar às HH (ERRO). PARE AQUI…»): captura o ERRO. */
+const RESPOSTA_DE_ERRO_AO_CRIAR = /^Não consegui marcar às \S+ \(([\s\S]*?)\)\. PARE AQUI/;
+
 const NAO_MARCOU =
   'A consulta NÃO foi marcada. NÃO chame agendar_consulta de novo neste turno e NÃO diga que está confirmada, agendada, reservada ou garantida, nem que o pagamento foi confirmado. ';
 
@@ -168,10 +222,6 @@ const NAO_MARCOU =
 const TEXTO_PARA_EQUIPE = (motivo: string) =>
   `RECUSADO: não consegui usar o comprovante que o paciente mandou (motivo técnico, NÃO cite ao paciente: ${motivo}). ${NAO_MARCOU}A equipe confere e confirma. ` +
   `Responda ao paciente só isto, com as suas palavras: "${RECADO_COMPROVANTE}"`;
-
-/** E2E com `agendar_consulta` em andamento neste processo: duas chamadas ao mesmo tempo (o modelo pode emitir duas) não marcam duas consultas. */
-const EM_ANDAMENTO = new Map<string, number>();
-const VALIDADE_DO_ANDAMENTO_MS = 2 * 60_000;
 
 export function criarGanchosDaTaxa(ctx: ContextoDosGanchos): GanchosDoComprovante {
   const registro = ctx.registro ?? registroNoBanco;
@@ -192,7 +242,7 @@ export function criarGanchosDaTaxa(ctx: ContextoDosGanchos): GanchosDoComprovant
   });
 
   return {
-    async antes(aceito) {
+    async antes(aceito, args) {
       if (!ctx.leadId) {
         const motivo = 'a conversa não tem lead: sem como registrar o comprovante';
         return recusado(aceito, 'equipe', 'registro_indisponivel', motivo, TEXTO_PARA_EQUIPE(motivo));
@@ -203,17 +253,9 @@ export function criarGanchosDaTaxa(ctx: ContextoDosGanchos): GanchosDoComprovant
         leadId: ctx.leadId,
         valorCentavos: Math.round(aceito.valor * 100),
         favorecido: aceito.favorecido,
+        consultaEm: `${String(args.data ?? '')}T${String(args.hora ?? '')}`,
       });
-      if (r === 'reservado') {
-        const chave = chaveDoE2E(aceito.e2e);
-        const desde = EM_ANDAMENTO.get(chave);
-        if (desde !== undefined && Date.now() - desde < VALIDADE_DO_ANDAMENTO_MS) {
-          const motivo = 'duas marcações ao mesmo tempo com o mesmo comprovante: só uma vale';
-          return recusado(aceito, 'equipe', 'e2e_do_mesmo_paciente', motivo, TEXTO_PARA_EQUIPE(motivo));
-        }
-        EM_ANDAMENTO.set(chave, Date.now());
-        return { libera: true as const };
-      }
+      if (r === 'reservado') return { libera: true as const };
 
       if (r === 'outro_paciente') {
         // Pode ser um print repassado, ou o mesmo paciente com o cartão do Kommo duplicado: pedir «outro comprovante» a quem já pagou seria
@@ -229,15 +271,26 @@ export function criarGanchosDaTaxa(ctx: ContextoDosGanchos): GanchosDoComprovant
       const motivo =
         r === 'mesmo_paciente_ja_marcou'
           ? 'este comprovante já pagou uma consulta deste paciente que foi marcada antes (a equipe decide se o crédito vale para a nova)'
-          : 'outro paciente usou um comprovante do mesmo banco, minuto e valor, com o ID diferente por poucos caracteres (pode ser o mesmo comprovante lido com um caractere trocado)';
+          : 'já existe consulta (deste ou de outro cartão) paga por um comprovante do mesmo banco, minuto e valor, com o ID diferente por poucos caracteres (pode ser o mesmo comprovante lido com um caractere trocado)';
       return recusado(aceito, 'equipe', 'e2e_do_mesmo_paciente', motivo, TEXTO_PARA_EQUIPE(motivo));
     },
 
     async depois(aceito, args, resultado) {
-      const marcou = /^Consulta marcada para/.test(resultado.trim());
+      const marcou = RESPOSTA_QUE_MARCA.test(resultado.trim());
       if (!marcou) {
-        EM_ANDAMENTO.delete(chaveDoE2E(aceito.e2e));
-        return resultado; // a franquia recusou (horário ocupado…): o E2E fica reservado para este paciente, que pode escolher outro horário
+        // «Não consegui marcar às HH (ERRO)…» = `createSchedule` devolveu !ok. Recusa CERTA (4xx — «409 horário indisponível» —, trava de
+        // escrita, sem token, data inválida) e as recusas de antes de criar (horário ocupado, fora da grade, cadastro, feriado…): a reserva é
+        // desfeita e o comprovante segue valendo, para este paciente, em outro horário. Só quando o erro é INCERTO (timeout, rede, 5xx, 408,
+        // 429) a franquia pode ter criado a consulta antes de falhar: a reserva FICA e a equipe decide.
+        // Se a resposta diz «Não consegui marcar» mas o texto mudou e o erro não se lê, é INCERTO: na dúvida a reserva fica.
+        const erroAoCriar = RESPOSTA_DE_ERRO_AO_CRIAR.exec(resultado.trim())?.[1];
+        const falhouAoCriar = /^Não consegui marcar/.test(resultado.trim());
+        if (falhouAoCriar && (erroAoCriar === undefined || !recusaCertaDaFranquia(erroAoCriar))) {
+          logger.warn({ e2e: aceito.e2e, unit: ctx.unit.slug, leadId: ctx.leadId, erro: erroAoCriar }, 'comprovante: erro incerto ao criar a consulta na franquia — o E2E fica reservado, a equipe decide');
+        } else {
+          await registro.liberar(aceito.e2e).catch((err) => logger.warn({ err: String(err) }, 'comprovante: não consegui desfazer a reserva do E2E'));
+        }
+        return resultado;
       }
       const data = String(args.data ?? '');
       const hora = String(args.hora ?? '');
@@ -251,13 +304,11 @@ export function criarGanchosDaTaxa(ctx: ContextoDosGanchos): GanchosDoComprovant
       } catch (err) {
         logger.warn({ err: String(err), leadId }, 'comprovante: não consegui completar o registro do E2E');
       }
-      EM_ANDAMENTO.delete(chaveDoE2E(aceito.e2e));
 
       // A tarefa «Conferir no extrato». Sem ela ninguém sabe que um Pix não conferido segurou um horário: se não sair, o João é avisado.
       let saiu = false;
       let alertado = false; // `abrirTarefaParaEquipe` já avisa o João quando a tarefa falha
       if (ctx.kommo && leadId) {
-        const nome = await ctx.kommo.getLead(leadId).then((l) => l?.name?.trim() || null).catch(() => null);
         const r = await abrir({
           slug: ctx.unit.slug,
           unitId: ctx.unit.id,
@@ -266,7 +317,8 @@ export function criarGanchosDaTaxa(ctx: ContextoDosGanchos): GanchosDoComprovant
           recorder: ctx.recorder,
           motivo: 'conferir_extrato',
           chaveExtra: chaveDoE2E(aceito.e2e),
-          detalhe: textoDaTarefaDoExtrato(aceito, { data, hora }, nome),
+          // o nome do cartão chega da leitura do cartão que a própria tarefa já faz (uma ida só ao Kommo)
+          detalhe: (nome) => textoDaTarefaDoExtrato(aceito, { data, hora }, nome),
           alertar,
         });
         saiu = r !== 'falhou';
@@ -285,8 +337,11 @@ export function criarGanchosDaTaxa(ctx: ContextoDosGanchos): GanchosDoComprovant
       return resultado + ADENDO_DA_MARCACAO_POR_COMPROVANTE;
     },
 
-    aoFalhar(aceito) {
-      EM_ANDAMENTO.delete(chaveDoE2E(aceito.e2e));
+    async aoFalhar(aceito) {
+      // `agendar_consulta` LANÇOU erro (timeout, queda): não dá para saber se a franquia criou a consulta antes do erro. A reserva do E2E
+      // FICA — a nova tentativa vai para a equipe, que vê no CRM; liberar poderia pôr duas consultas no mesmo Pix. (Quem desfaz a reserva é
+      // só a resposta clara de que não marcou: horário ocupado, recusa da franquia — ver `depois`.)
+      logger.warn({ e2e: aceito.e2e, unit: ctx.unit.slug, leadId: ctx.leadId }, 'comprovante: agendar_consulta lançou erro com o E2E reservado — fica reservado, a equipe decide');
     },
 
     async aoRecusar(rejeicao) {

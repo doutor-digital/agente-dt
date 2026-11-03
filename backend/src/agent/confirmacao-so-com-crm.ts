@@ -23,7 +23,7 @@ import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
 import { logger } from '../lib/logger.js';
 import { enviarTelegram } from '../lib/telegram.js';
 import { ehTranscricaoDeComprovante } from '../lib/pagamento-antecipado.js';
-import { carimboDoSegmento, resumoDaLeitura, type Aceito, type AnaliseDoComprovante, type DadosDoComprovante, type Rejeicao } from '../lib/comprovante-pix.js';
+import { brl, carimboDoSegmento, RESPOSTA_QUE_MARCA, resumoDaLeitura, type Aceito, type AnaliseDoComprovante, type DadosDoComprovante, type Rejeicao } from '../lib/comprovante-pix.js';
 import { normalizar, trechos, type Promessa } from '../lib/prometeu-sem-marcar.js';
 import type { KommoClient } from '../services/kommo.service.js';
 import type { TraceRecorder } from './trace-recorder.js';
@@ -334,6 +334,30 @@ export interface OpcoesDaTrava {
 export type ComprovanteAceito = Aceito & { dados: DadosDoComprovante };
 export type ComprovanteRecusado = Rejeicao & { dados: DadosDoComprovante | null };
 
+/**
+ * O comprovante é de antes da última consulta marcada/remarcada/cancelada pela Sofia nesta conversa. Vai para a EQUIPE: pedir «outro
+ * comprovante» a quem já pagou (e a consulta foi desfeita) soaria como pagar de novo; quem decide se o crédito vale é a recepção.
+ */
+export const DE_OUTRA_NEGOCIACAO: ComprovanteRecusado = {
+  ok: false,
+  destino: 'equipe',
+  codigo: 'de_outra_negociacao',
+  motivo: 'o comprovante é de antes da última consulta marcada, remarcada ou cancelada nesta conversa: a equipe decide se o pagamento vale para esta consulta',
+  dados: null,
+};
+
+/**
+ * Chegou comprovante NESTE turno mas não há leitura guardada para ele (o banco falhou ao gravar, ou o texto não veio de uma imagem lida pelo
+ * servidor): pedir «o comprovante» a quem acabou de mandá-lo contradiz o que ele fez; vai para a equipe.
+ */
+export const SEM_LEITURA_GUARDADA: ComprovanteRecusado = {
+  ok: false,
+  destino: 'equipe',
+  codigo: 'sem_leitura',
+  motivo: 'chegou comprovante neste turno, mas não há leitura dele guardada pelo servidor (falha ao gravar, ou o texto não veio de uma imagem lida)',
+  dados: null,
+};
+
 export type DecisaoDaTrava =
   | { libera: true; aceito?: ComprovanteAceito }
   | { libera: false; titulo: string; texto: string; rejeicao?: ComprovanteRecusado };
@@ -349,7 +373,7 @@ export interface GanchosDoComprovante {
   /** O comprovante existia e não passou: a equipe ganha a tarefa com o motivo técnico. */
   aoRecusar(rejeicao: ComprovanteRecusado, args: Record<string, unknown>): Promise<void>;
   /** `agendar_consulta` lançou erro: o E2E reservado neste processo fica livre para a nova tentativa. */
-  aoFalhar(aceito: ComprovanteAceito): void;
+  aoFalhar(aceito: ComprovanteAceito): Promise<void>;
 }
 
 /** O que o modelo lê quando o comprovante não passa: o pedido educado de outro, ou o fluxo antigo (a equipe confere). */
@@ -363,7 +387,7 @@ export function textoDaRecusaDoComprovante(r: ComprovanteRecusado, opcoes: Pick<
       `A equipe confere e confirma. Responda ao paciente só isto, com as suas palavras: "${RECADO_COMPROVANTE}"`
     );
   }
-  const taxa = opcoes.taxaEsperada ? `R$ ${opcoes.taxaEsperada.toFixed(2).replace('.', ',')}` : 'a taxa de reserva';
+  const taxa = opcoes.taxaEsperada ? brl(opcoes.taxaEsperada) : 'a taxa de reserva';
   const chave = opcoes.pixKey?.trim();
   const titular = opcoes.pixHolder?.trim();
   const generico =
@@ -374,9 +398,7 @@ export function textoDaRecusaDoComprovante(r: ComprovanteRecusado, opcoes: Pick<
       ? `agradeça, diga que o valor que apareceu no comprovante foi menor que a taxa de reserva de ${taxa} e peça que ele envie o comprovante do valor completo (foto ou PDF)`
       : (r.codigo === 'favorecido_diferente' || r.codigo === 'documento_diferente') && chave
         ? `agradeça, diga que o comprovante parece ser de um pagamento para outro destinatário e lembre que a chave Pix da clínica é ${chave}${titular ? ` (no nome de ${titular})` : ''}; peça que ele confira e envie o comprovante do pagamento para essa chave`
-        : r.codigo === 'de_outra_negociacao'
-          ? 'agradeça, diga que o comprovante é de um pagamento anterior a esta reserva e peça o comprovante da taxa desta consulta (foto ou PDF)'
-          : generico;
+        : generico;
   return (
     `RECUSADO: o comprovante que o paciente mandou NÃO passou na conferência automática (motivo técnico, NÃO cite ao paciente: ${r.motivo}). ${naoMarcou}` +
     `Responda com as suas palavras, com educação e SEM acusar o paciente de nada (nem falar em fraude, erro dele ou suspeita): ${pedido}. A equipe também foi avisada.`
@@ -398,8 +420,10 @@ export function decidirTrava(turno: TurnoDoComprovante, opcoes: OpcoesDaTrava = 
     const rejeicao: ComprovanteRecusado | null = a?.falha
       ? a.falha
       : a && a.deOutraNegociacao > 0
-        ? { ok: false, destino: 'reenviar', codigo: 'de_outra_negociacao', motivo: 'o comprovante é de antes da chave Pix ou da última consulta marcada/cancelada desta conversa', dados: null }
-        : null;
+        ? DE_OUTRA_NEGOCIACAO
+        : turno.noTurno
+          ? SEM_LEITURA_GUARDADA
+          : null;
     if (!rejeicao) {
       return {
         libera: false,
@@ -463,10 +487,10 @@ export function travarAgendamentoPorComprovante(
       try {
         r = String(await original({ ...porTras, formaPagamento: 'pix_antecipado', pagoPorComprovante: true } as never, ...(resto as never[])));
       } catch (err) {
-        ganchos.aoFalhar(d.aceito);
+        await ganchos.aoFalhar(d.aceito);
         throw err;
       }
-      turno.marcouPorComprovante = /^Consulta marcada para/.test(r.trim());
+      turno.marcouPorComprovante = RESPOSTA_QUE_MARCA.test(r.trim());
       return ganchos.depois(d.aceito, porTras, r);
     };
   }
@@ -497,13 +521,13 @@ export async function abrirTarefaParaEquipe(args: {
   leadId: number;
   kommo: Pick<KommoClient, 'createTask' | 'getLead'>;
   recorder: Pick<TraceRecorder, 'step'>;
-  motivo: 'comprovante' | 'desmarcada' | 'insistiu_na_clinica' | 'cadastro_duplicado' | 'agenda_sem_conferir' | 'conferir_extrato' | 'comprovante_recusado';
+  motivo: 'comprovante' | 'desmarcada' | 'insistiu_na_clinica' | 'cadastro_duplicado' | 'agenda_sem_conferir' | 'conferir_extrato' | 'comprovante_recusado' | 'anexo_nao_lido';
   dedupe?: Dedupe;
   agora?: () => number;
   /** Avisa o João quando a tarefa não saiu: o paciente já ouviu "a equipe confirma em 1 hora". */
   alertar?: (texto: string) => Promise<unknown>;
-  /** Texto extra da tarefa (ex.: valor lido × esperado). */
-  detalhe?: string;
+  /** Texto extra da tarefa (ex.: o que foi lido). Função: recebe o nome do cartão, que a tarefa já lê do Kommo para o responsável. */
+  detalhe?: string | ((nomeDoCartao: string | null) => string);
   /**
    * Entra na chave de deduplicação (`<chave>:<chaveExtra>`): a tarefa passa a ser "uma por cartão, motivo E isto". Quem promete
    * ao paciente uma resposta sobre UM horário usa o horário aqui — a tarefa de outro horário não cobre a promessa.
@@ -512,10 +536,10 @@ export async function abrirTarefaParaEquipe(args: {
 }): Promise<'criada' | 'repetida' | 'falhou'> {
   const { slug, unitId, leadId, kommo, recorder, motivo } = args;
   const dedupe = args.dedupe ?? { avisoRecente, marcarAviso };
-  const chaveBase = { comprovante: 'comprovante_so_equipe', desmarcada: 'consulta_desmarcada_afirmada', insistiu_na_clinica: 'taxa_insistiu_na_clinica', cadastro_duplicado: 'cadastro_possivel_duplicado', agenda_sem_conferir: 'agenda_horario_sem_conferir', conferir_extrato: 'conferir_extrato', comprovante_recusado: 'comprovante_nao_aceito' }[motivo];
+  const chaveBase = { comprovante: 'comprovante_so_equipe', desmarcada: 'consulta_desmarcada_afirmada', insistiu_na_clinica: 'taxa_insistiu_na_clinica', cadastro_duplicado: 'cadastro_possivel_duplicado', agenda_sem_conferir: 'agenda_horario_sem_conferir', conferir_extrato: 'conferir_extrato', comprovante_recusado: 'comprovante_nao_aceito', anexo_nao_lido: 'anexo_nao_lido' }[motivo];
   const chave = args.chaveExtra ? `${chaveBase}:${args.chaveExtra}` : chaveBase;
   try {
-    if (await dedupe.avisoRecente(unitId, leadId, chave, motivo === 'comprovante' || motivo === 'comprovante_recusado' ? JANELA_COMPROVANTE_MS : undefined)) return 'repetida';
+    if (await dedupe.avisoRecente(unitId, leadId, chave, motivo === 'comprovante' || motivo === 'comprovante_recusado' || motivo === 'anexo_nao_lido' ? JANELA_COMPROVANTE_MS : undefined)) return 'repetida';
     let nome: string | null = null;
     let responsavel: number | undefined;
     try {
@@ -534,10 +558,12 @@ export async function abrirTarefaParaEquipe(args: {
       agenda_sem_conferir: `CONFERIR HORÁRIO · ${slug}${quem} · o paciente pediu um horário que aparece ocupado e a IA não conseguiu conferir se é a consulta DELE (cadastro em dobro ou a franquia não respondeu). A IA não marcou nem ofereceu outro horário e disse que a equipe confirma e responde por aqui: confirmar com ele (a tarefa vence em 1 h).`,
       // A frase inteira vem de quem abre (leva valor, nome e horário da consulta): ver comprovante-da-taxa.ts.
       conferir_extrato: `CONFERIR NO EXTRATO · ${slug}${quem} · consulta JÁ lançada pela IA com base no comprovante.`,
+      anexo_nao_lido: `VER ANEXO · ${slug}${quem} · o paciente mandou uma imagem/PDF e o servidor NÃO conseguiu ler (download, visão ou tipo de arquivo que não lê). Pode ser o comprovante da taxa: abrir o anexo no Kommo; a IA não marca consulta sem ler o comprovante.`,
       comprovante_recusado: `VER COMPROVANTE · ${slug}${quem} · a IA NÃO aceitou o comprovante que o paciente mandou e pediu outro; a consulta NÃO foi marcada. Se ele disser que já pagou, conferir no extrato e lançar a consulta.`,
     }[motivo];
     const agora = args.agora ?? Date.now;
-    const text = args.detalhe ? (motivo === 'conferir_extrato' ? `${args.detalhe} · ${slug}${quem}` : `${texto} ${args.detalhe}.`) : texto;
+    const detalhe = typeof args.detalhe === 'function' ? args.detalhe(nome) : args.detalhe;
+    const text = detalhe ? (motivo === 'conferir_extrato' ? `${detalhe} · ${slug}${quem}` : `${texto} ${detalhe}.`) : texto;
     const res = await kommo.createTask({ leadId, text, completeAt: Math.floor(agora() / 1000) + 3600, responsibleUserId: responsavel });
     await dedupe.marcarAviso(unitId, leadId, chave);
     await recorder.step({
@@ -558,6 +584,7 @@ export async function abrirTarefaParaEquipe(args: {
     const textoDaFalha: Partial<Record<typeof motivo, string>> = {
       agenda_sem_conferir: `a tarefa de conferir o HORÁRIO NÃO saiu (lead ${leadId}): ${erro}. A IA foi instruída a não prometer retorno da equipe nesse caso; ainda assim o paciente ficou sem resposta sobre o horário: avisar a equipe à mão.`,
       cadastro_duplicado: `a tarefa de conferir o CADASTRO em dobro NÃO saiu (lead ${leadId}): ${erro}. A IA não prometeu nada por causa dela, mas a equipe não sabe do outro cadastro: avisar à mão.`,
+      anexo_nao_lido: `a tarefa «ver anexo» (imagem/PDF que o servidor não conseguiu ler) não saiu (lead ${leadId}): ${erro}. O paciente pode ter mandado o comprovante e ninguém da equipe sabe: avisar à mão.`,
       comprovante_recusado: `a tarefa «ver comprovante» (comprovante NÃO aceito pela IA) não saiu (lead ${leadId}): ${erro}. O paciente foi convidado a mandar outro comprovante e a equipe não sabe do motivo: avisar à mão se ele insistir.`,
       conferir_extrato: `a IA MARCOU uma consulta pelo comprovante de Pix (lead ${leadId}) e a tarefa «conferir no extrato» NÃO saiu: ${erro}. Ninguém foi avisado de conferir o pagamento: conferir à mão.`,
     };

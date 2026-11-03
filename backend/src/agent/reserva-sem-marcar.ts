@@ -18,10 +18,11 @@
  */
 import { detectarPromessa, normalizar, trechos, type Promessa } from '../lib/prometeu-sem-marcar.js';
 import { prisma } from '../lib/prisma.js';
+import { RESPOSTA_QUE_MARCA } from '../lib/comprovante-pix.js';
 import { agoraLocalISO } from './consulta-que-passou.js';
 
 /** O que `agendar_consulta` e `remarcar_consulta` devolvem quando dá certo. */
-const MARCOU = /^(Consulta marcada para|Remarcada (de|para)|A CONSULTA NOVA ESTÁ MARCADA)/;
+const MARCOU = RESPOSTA_QUE_MARCA;
 
 export function marcouNesteTurno(resultadosDasFerramentas: ReadonlyArray<string>): boolean {
   return resultadosDasFerramentas.some((t) => MARCOU.test(String(t ?? '').trim()));

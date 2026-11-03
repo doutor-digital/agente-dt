@@ -7,6 +7,7 @@ import {
   ADENDO_DA_MARCACAO_POR_COMPROVANTE,
   criarGanchosDaTaxa,
   criarRegistroNoBanco,
+  tarefaDoComprovanteQueFicou,
   type BancoDeComprovantes,
 } from './comprovante-da-taxa.js';
 import {
@@ -15,13 +16,17 @@ import {
   RECUSA_SEM_COMPROVANTE_DA_TAXA,
   abrirTarefaParaEquipe,
   decidirTrava,
+  SEM_LEITURA_GUARDADA,
   marcarRecebimento,
   respostaDoComprovante,
   travarAgendamentoPorComprovante,
   turnoDoComprovante,
   type TurnoDoComprovante,
 } from './confirmacao-so-com-crm.js';
-import { analisarConversa, anexarDados, type DadosDoComprovante, type MensagemDaConversa } from '../lib/comprovante-pix.js';
+import { randomUUID } from 'node:crypto';
+import { recusaCertaDaFranquia } from '../services/spine.service.js';
+import { MOTIVO_ESCRITA_SEM_CARTAO } from '../lib/trava-escrita-franquia.js';
+import { analisarConversa, referenciaDaLeitura, type DadosDoComprovante, type LeituraGuardada, type MensagemDaConversa } from '../lib/comprovante-pix.js';
 import { marcouNesteTurno } from './reserva-sem-marcar.js';
 import { renderRulesGlobal } from './prompt-composer.js';
 
@@ -49,8 +54,14 @@ const dados = (extra: Partial<DadosDoComprovante> = {}): DadosDoComprovante => (
   ...extra,
 });
 
-const fala = (d: DadosDoComprovante | null, em = CHEGOU) =>
-  marcarRecebimento(d ? anexarDados('[imagem do cliente]: COMPROVANTE: Pix de R$ 100,00', d) : '[imagem do cliente]: COMPROVANTE: Pix de R$ 100,00', new Date(em));
+/** As leituras que o servidor guardou no banco (a única fonte dos campos do comprovante). */
+const LEITURAS = new Map<string, LeituraGuardada>();
+/** O servidor lê a imagem, guarda a leitura e põe na fala só a referência a ela. */
+const fala = (d: DadosDoComprovante | null, em = CHEGOU) => {
+  const id = randomUUID();
+  LEITURAS.set(id, { dados: d, recebidoEm: em });
+  return marcarRecebimento(`[imagem do cliente]: COMPROVANTE: Pix de R$ 100,00 ${referenciaDaLeitura(id)}`, new Date(em));
+};
 const humano = (texto: string): MensagemDaConversa => ({ tipo: 'human', texto });
 const ia = (texto: string): MensagemDaConversa => ({ tipo: 'ai', texto });
 const CHAVE_ENVIADA = ia(`Para garantir, pague a taxa de R$ 100,00 por Pix:\n\nChave Pix: ${CNPJ}\nTitular: ${TITULAR}`);
@@ -60,7 +71,7 @@ function turnoDa(msgs: MensagemDaConversa[], taxa: number | null = 100, agora = 
   const humanas = msgs.filter((m) => m.tipo === 'human').map((m) => m.texto);
   return {
     ...turnoDoComprovante(humanas, false, CHEGOU + 60_000),
-    analise: analisarConversa(msgs, { taxa, pixKey: CNPJ, pixHolder: TITULAR, agora }),
+    analise: analisarConversa(msgs, { taxa, pixKey: CNPJ, pixHolder: TITULAR, agora }, LEITURAS),
   };
 }
 
@@ -77,9 +88,11 @@ function bancoDeMentira(): { db: BancoDeComprovantes; linhas: Array<Record<strin
         linhas.push({ idSchedule: null, consultaEm: null, ...data });
         return data;
       },
-      updateMany: async ({ where, data }: { where: { e2e: string }; data: Record<string, unknown> }) => {
-        for (const l of linhas.filter((x) => x.e2e === where.e2e)) Object.assign(l, data);
-        return { count: 1 };
+      updateMany: async ({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
+        // como o Prisma: cada chave do where tem de bater (null bate com null) e a atualização é uma só, sem intervalo entre ler e gravar
+        const alvo = linhas.filter((x) => Object.entries(where).every(([k, v]) => x[k] === v));
+        for (const l of alvo) Object.assign(l, data);
+        return { count: alvo.length };
       },
     },
   } as unknown as BancoDeComprovantes;
@@ -255,7 +268,7 @@ test('data do recibo incoerente com a do E2E → não marca', async () => {
 });
 
 test('comprovante velho (transação de mais de 48 h antes de chegar) → não marca', async () => {
-  await naoMarca([CHAVE_ENVIADA, humano(fala(dados()))], 'comprovante_velho', 'reenviar', { agora: Date.parse('2026-11-05T18:00:00Z') });
+  await naoMarca([CHAVE_ENVIADA, humano(fala(dados()))], 'comprovante_velho', 'equipe', { agora: Date.parse('2026-11-05T18:00:00Z') });
 });
 
 test('o modelo diz que o comprovante NÃO parece autêntico → não marca', async () => {
@@ -274,7 +287,7 @@ test('comprovante de uma consulta ANTERIOR (a que a Sofia já marcou) → não m
   const c = cenario(msgs);
   const r = await c.chamar();
   assert.match(r, /^RECUSADO/);
-  assert.match(r, /anterior a esta reserva/);
+  assert.match(r, /a equipe decide se o pagamento vale/);
   assert.deepEqual(c.chamadas, []);
 });
 
@@ -314,7 +327,7 @@ test('E2E repetido em OUTRO cartão → não marca (print repassado, ou o mesmo 
   assert.equal(banco.linhas.length, 1, 'continua um registro só');
 });
 
-test('a ferramenta lança erro: o E2E volta a ficar livre para a nova tentativa do mesmo paciente (e só dele)', async () => {
+test('a ferramenta LANÇA erro (timeout: a franquia pode ter criado a consulta): a reserva do E2E FICA e a nova tentativa vai para a equipe', async () => {
   const banco = bancoDeMentira();
   const chamadas: Array<Record<string, unknown>> = [];
   const quebra = new DynamicStructuredTool({
@@ -334,9 +347,11 @@ test('a ferramenta lança erro: o E2E volta a ficar livre para a nova tentativa 
   });
   const [tool] = travarAgendamentoPorComprovante([quebra], turno, recorder, { ...OPCOES, ganchos });
   await assert.rejects(async () => void (await tool.func({ data: '2026-11-05', hora: '15:30' } as never)), /timeout/);
-  // nova tentativa, agora com a franquia no ar
+  // nova tentativa, agora com a franquia no ar: NÃO marca (podia haver consulta criada antes do erro) — a equipe decide
   const nova = cenario(VALIDA, { banco });
-  assert.match(await nova.chamar(), /^Consulta marcada/);
+  assert.match(await nova.chamar(), /^RECUSADO/);
+  assert.deepEqual(nova.chamadas, []);
+  assert.equal(nova.tarefas.length, 1);
   void chamadas;
 });
 
@@ -510,10 +525,170 @@ test('o tempo passa e o mesmo paciente com o mesmo comprovante já marcado conti
   const primeira = cenario(VALIDA, { banco });
   // o vínculo não devolve o id da consulta: só a data/hora fica registrada
   const sem = criarRegistroNoBanco(banco.db);
-  await sem.reservar({ e2e: E2E, unitId: UNIT.id, leadId: LEAD, valorCentavos: 10000, favorecido: null });
+  await sem.reservar({ e2e: E2E, unitId: UNIT.id, leadId: LEAD, valorCentavos: 10000, favorecido: null, consultaEm: '2026-11-05T15:30' });
   await sem.concluir(E2E, { idSchedule: null, consultaEm: '2026-11-05T15:30' });
   void primeira;
   const de = cenario(VALIDA, { banco });
   assert.match(await de.chamar(), /^RECUSADO/);
   assert.deepEqual(de.chamadas, []);
+});
+
+// --- o que a Sofia ainda precisa avisar à equipe no fim do turno (item 2 e 4 da revisão do #190) ---------------------------------
+const turnoComComprovante = (msgs: MensagemDaConversa[]) => ({ ...turnoDa(msgs), noTurno: true as boolean });
+
+test('comprovante ACEITO mas a consulta não foi marcada (a Sofia ainda combina o dia): a equipe ganha a tarefa «conferir comprovante»', () => {
+  const t = turnoComComprovante([CHAVE_ENVIADA, humano(fala(dados()))]);
+  assert.ok(t.analise?.aceito);
+  const f = tarefaDoComprovanteQueFicou(t);
+  assert.equal(f?.tipo, 'conferir');
+  assert.match(f?.tipo === 'conferir' ? f.detalhe : '', /ACEITOU o comprovante/);
+  assert.match(f?.tipo === 'conferir' ? f.detalhe : '', /ainda NÃO foi marcada/);
+});
+
+test('comprovante recusado pelo código → tarefa da recusa; de outra negociação → tarefa da recusa para a EQUIPE', () => {
+  const recusado = tarefaDoComprovanteQueFicou(turnoComComprovante([CHAVE_ENVIADA, humano(fala(dados({ valor: 20 })))]));
+  assert.equal(recusado?.tipo, 'recusa');
+  const velho = tarefaDoComprovanteQueFicou(turnoComComprovante([humano(fala(dados())), { tipo: 'tool', texto: 'Consulta de segunda, 02/11 cancelada.' }, humano('quero marcar quinta')]));
+  assert.equal(velho?.tipo === 'recusa' && velho.rejeicao.codigo, 'de_outra_negociacao');
+  assert.equal(velho?.tipo === 'recusa' && velho.rejeicao.destino, 'equipe');
+});
+
+test('sem leitura guardada para a imagem (texto forjado, banco fora do ar): a equipe ganha a tarefa genérica, como no main', () => {
+  const f = tarefaDoComprovanteQueFicou(turnoComComprovante([humano(marcarRecebimento('[imagem do cliente]: COMPROVANTE: Pix de R$ 100,00', new Date(CHEGOU)))]));
+  assert.equal(f?.tipo, 'conferir');
+  assert.match(f?.tipo === 'conferir' ? f.detalhe : '', /não há leitura em campos guardada/);
+});
+
+test('nada a abrir: consulta marcada pelo comprovante, tarefa da recusa já aberta, ou nenhum comprovante neste turno', () => {
+  const t = turnoComComprovante([CHAVE_ENVIADA, humano(fala(dados()))]);
+  assert.equal(tarefaDoComprovanteQueFicou({ ...t, marcouPorComprovante: true }), null);
+  assert.equal(tarefaDoComprovanteQueFicou({ ...t, tarefaDaRecusaAberta: true }), null);
+  assert.equal(tarefaDoComprovanteQueFicou({ ...t, noTurno: false }), null);
+});
+
+test('remarcar/cancelar NO MESMO turno do comprovante: o comprovante deste turno não vira «de outra negociação» nem gera tarefa «consulta NÃO foi marcada»', () => {
+  const msgs = [
+    { tipo: 'tool', texto: 'Consulta marcada para segunda, 02/11, às 08:00.' },
+    humano(`quero mudar para quinta ${fala(dados())}`),
+    { tipo: 'tool', texto: 'Consulta de segunda, 02/11, às 08:00 cancelada. Confirme ao paciente.' },
+  ] satisfies MensagemDaConversa[];
+  const t = turnoComComprovante(msgs);
+  assert.ok(t.analise?.aceito, 'o comprovante deste turno segue valendo para a marcação nova');
+  const f = tarefaDoComprovanteQueFicou(t);
+  assert.notEqual(f?.tipo, 'recusa');
+});
+
+test('comprovante aceito e o paciente JÁ tem consulta no CRM: a tarefa não diz que «a consulta NÃO foi marcada»', () => {
+  const t = turnoComComprovante([CHAVE_ENVIADA, humano(fala(dados()))]);
+  const f = tarefaDoComprovanteQueFicou(t, true);
+  assert.equal(f?.tipo, 'conferir');
+  const detalhe = f?.tipo === 'conferir' ? f.detalhe : '';
+  assert.match(detalhe, /já tem consulta no CRM/);
+  assert.doesNotMatch(detalhe, /ainda NÃO foi marcada/);
+});
+
+test('o MESMO paciente reenvia a mesma imagem e a visão lê um caractere do ID diferente: não abre um segundo uso', async () => {
+  const banco = bancoDeMentira();
+  const primeira = cenario(VALIDA, { banco });
+  assert.match(await primeira.chamar(), /^Consulta marcada/);
+  const relida = [CHAVE_ENVIADA, humano(fala(dados({ idTransacao: E2E.replace('abc123', 'abc124') })))];
+  const c = cenario(relida, { banco });
+  assert.match(await c.chamar({ hora: '16:30' }), /^RECUSADO/);
+  assert.deepEqual(c.chamadas, []);
+  assert.equal(banco.linhas.length, 1);
+});
+
+test('o MESMO E2E relido com OUTRO valor (a visão errou o valor) continua sendo o mesmo comprovante, também depois de a reserva ser desfeita', async () => {
+  const banco = bancoDeMentira();
+  const falha = cenario(VALIDA, { banco, respostaDaFerramenta: '15:30 não está mais disponível (ocupado). A consulta NÃO foi marcada.' });
+  await falha.chamar();
+  const outroValor = [CHAVE_ENVIADA, humano(fala(dados({ valor: 150 })))];
+  const c = cenario(outroValor, { banco });
+  assert.match(await c.chamar({ hora: '16:30' }), /^Consulta marcada/, 'é o comprovante deste paciente, ainda livre');
+  assert.equal(banco.linhas.length, 1, 'continua um registro só');
+});
+
+test('chegou comprovante NESTE turno mas sem leitura guardada (banco falhou ao gravar): vai para a equipe, a Sofia não pede «o comprovante» a quem acabou de mandá-lo', () => {
+  const t = { ...turnoDa([CHAVE_ENVIADA, humano(marcarRecebimento('[imagem do cliente]: COMPROVANTE: Pix de R$ 100,00', new Date(CHEGOU)))]), noTurno: true };
+  const d = decidirTrava(t, { exigePagamento: true, taxaEsperada: 100, pixKey: CNPJ, pixHolder: TITULAR });
+  assert.equal(d.libera, false);
+  assert.equal(!d.libera && d.rejeicao, SEM_LEITURA_GUARDADA);
+  assert.match(!d.libera ? d.texto : '', new RegExp(RECADO_COMPROVANTE.slice(0, 40)));
+  // e «já paguei» em texto, sem comprovante nenhum, continua pedindo o comprovante
+  const so = decidirTrava({ ...turnoDa([humano('já paguei')]), noTurno: false }, { exigePagamento: true, taxaEsperada: 100 });
+  assert.equal(!so.libera && so.texto, RECUSA_SEM_COMPROVANTE_DA_TAXA);
+});
+
+/** Como `agendar_consulta` devolve a falha de `createSchedule`. */
+const FALHA_AO_CRIAR = (erro: string) => `Não consegui marcar às 15:30 (${erro}). PARE AQUI: não chame agendar_consulta de novo neste turno e não tente outro horário agora.`;
+
+test('409 «Horário indisponível» (recusa CERTA da franquia): a reserva é desfeita e a nova tentativa em OUTRO horário marca', async () => {
+  const banco = bancoDeMentira();
+  const recusada = cenario(VALIDA, { banco, respostaDaFerramenta: FALHA_AO_CRIAR('409: Horário indisponível') });
+  assert.match(await recusada.chamar(), /^Não consegui marcar/);
+  assert.equal(recusada.tarefas.length, 0, 'sem consulta não há o que conferir no extrato');
+  const nova = cenario(VALIDA, { banco });
+  assert.match(await nova.chamar({ hora: '16:30' }), /^Consulta marcada/, 'o Pix não ficou preso');
+  assert.equal(nova.chamadas.length, 1);
+  assert.equal(nova.tarefas.length, 1);
+  assert.match(String(nova.tarefas[0].text), /^CONFERIR NO EXTRATO/, 'a tarefa é a de sempre, não «este comprovante já pagou…»');
+});
+
+test('recusas antes do envio (trava de escrita, unidade sem token, data inválida) também desfazem a reserva', async () => {
+  for (const erro of [MOTIVO_ESCRITA_SEM_CARTAO, 'unidade sem token da API Spine', 'dateAttendanceLocal inválida (use AAAA-MM-DDTHH:mm:ss, sem fuso)', '400: dados inválidos', '422: horário fora da agenda']) {
+    const banco = bancoDeMentira();
+    await cenario(VALIDA, { banco, respostaDaFerramenta: FALHA_AO_CRIAR(erro) }).chamar();
+    assert.match(await cenario(VALIDA, { banco }).chamar({ hora: '16:30' }), /^Consulta marcada/, erro);
+  }
+});
+
+test('erro INCERTO ao criar (timeout, rede, 5xx, 408, 429): a franquia pode ter criado a consulta — a reserva FICA e a nova tentativa vai para a equipe', async () => {
+  for (const erro of ['timeout of 15000ms exceeded', '?: socket hang up', '500: erro interno', '503: indisponível', '504: gateway timeout', '408: timeout', '429: muitas requisições']) {
+    const banco = bancoDeMentira();
+    const falha = cenario(VALIDA, { banco, respostaDaFerramenta: FALHA_AO_CRIAR(erro) });
+    await falha.chamar();
+    const nova = cenario(VALIDA, { banco });
+    assert.match(await nova.chamar({ hora: '16:30' }), /^RECUSADO/, erro);
+    assert.deepEqual(nova.chamadas, [], erro);
+  }
+});
+
+test('recusaCertaDaFranquia: 4xx e recusas locais sim; timeout, rede, 5xx, 408 e 429 não', () => {
+  for (const e of ['400: x', '401: token inválido, ausente ou expirado', '403: token sem permissão', '404: endpoint não encontrado', '409: Horário indisponível', '422: x', MOTIVO_ESCRITA_SEM_CARTAO, 'unidade sem token da API Spine']) assert.equal(recusaCertaDaFranquia(e), true, e);
+  for (const e of ['408: x', '429: x', '500: x', '502: x', '?: timeout of 15000ms exceeded', 'timeout', 'Error: socket hang up', '', null, undefined]) assert.equal(recusaCertaDaFranquia(e as never), false, String(e));
+});
+
+test('próprio paciente, ID RELIDO com um caractere diferente depois de a reserva ser desfeita: assume a MESMA linha (não cria uma segunda para o mesmo Pix)', async () => {
+  const banco = bancoDeMentira();
+  await cenario(VALIDA, { banco, respostaDaFerramenta: FALHA_AO_CRIAR('409: Horário indisponível') }).chamar(); // reserva criada e desfeita
+  const relida = [CHAVE_ENVIADA, humano(fala(dados({ idTransacao: E2E.replace('abc123', 'abc124') })))];
+  assert.match(await cenario(relida, { banco }).chamar({ hora: '16:30' }), /^Consulta marcada/);
+  assert.equal(banco.linhas.length, 1, 'continua um registro só, agora com o ID como foi lido');
+  // e o ID da primeira leitura agora é «parecido» de uma consulta marcada → equipe, não um segundo uso
+  const c = cenario(VALIDA, { banco });
+  assert.match(await c.chamar({ hora: '17:30' }), /^RECUSADO/);
+  assert.deepEqual(c.chamadas, []);
+});
+
+test('resposta «Não consegui marcar…» com o formato mudado (erro ilegível): na dúvida a reserva FICA', async () => {
+  const banco = bancoDeMentira();
+  await cenario(VALIDA, { banco, respostaDaFerramenta: 'Não consegui marcar às 15:30, deu algum erro que o texto não traz.' }).chamar();
+  const nova = cenario(VALIDA, { banco });
+  assert.match(await nova.chamar({ hora: '16:30' }), /^RECUSADO/);
+});
+
+test('mesmo paciente, duas leituras do ID ao mesmo tempo (uma original, uma com caractere trocado): a unicidade decide e não vira «indisponível»', async () => {
+  const banco = bancoDeMentira();
+  await cenario(VALIDA, { banco, respostaDaFerramenta: FALHA_AO_CRIAR('409: Horário indisponível') }).chamar();
+  // a renomeação da linha livre colide com outra chamada que já criou a linha com o ID novo
+  const original = banco.db.comprovantePixUsado.updateMany;
+  (banco.db.comprovantePixUsado as unknown as { updateMany: unknown }).updateMany = async (a: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
+    if (a.data.e2e) throw new Prisma.PrismaClientKnownRequestError('unique', { code: 'P2002', clientVersion: 'teste' });
+    return (original as (x: unknown) => Promise<unknown>)(a);
+  };
+  const relida = [CHAVE_ENVIADA, humano(fala(dados({ idTransacao: E2E.replace('abc123', 'abc124') })))];
+  const c = cenario(relida, { banco });
+  const r = await c.chamar({ hora: '16:30' });
+  assert.match(r, /^RECUSADO/);
+  assert.ok(c.passos.some((p) => p.title.includes('(e2e_do_mesmo_paciente)')), 'e não registro_indisponivel');
 });
