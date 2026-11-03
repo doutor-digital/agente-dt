@@ -34,9 +34,11 @@ const NOMES_DA_SOFIA = ['doutor digital', 'i.a sofia', 'ia sofia', 'sofia'];
  *  - "WhatsApp Business": WABA em coexistência com o app Business (Timbó, Bebedouro, Serra… — origin `waba`);
  *  - "WhatsApp Lite": canal por QR code (Boa Vista, Mossoró — origin `com.amocrm.amocrmwa`). Medido em 03/11/2026:
  *    66 mensagens assim em Boa Vista, nenhuma junto de um envio da IA (a Sofia sai pelo "Salesbot").
- * Só estes nomes: robô de nome desconhecido continua valendo como robô (Sofia, régua, transmissão).
+ * Só estes dois nomes, os medidos: robô de nome desconhecido continua valendo como robô (Sofia, régua,
+ * transmissão). Mossoró (253 mensagens "WhatsApp Lite"): nenhuma com texto de envio da IA — os envios dela
+ * ecoam como "Salesbot" ou "Doutor Digital".
  */
-const APPS_DA_EQUIPE = ['whatsapp business', 'whatsapp lite', 'whatsapp web', 'whatsapp'];
+const APPS_DA_EQUIPE = ['whatsapp business', 'whatsapp lite'];
 
 /** O autor é o app/canal pelo qual a recepção fala (celular ou WhatsApp Web), e não um robô nem um usuário do Kommo? */
 export function ehAppDaEquipe(nome: string | null | undefined): boolean {

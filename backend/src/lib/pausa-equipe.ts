@@ -45,8 +45,7 @@ import { leadPausadoPorJanela } from './pausa-lead.js';
 import { pausouSozinhaDesde } from './pausa-propria.js';
 import { registrarPausaDaEquipe } from './pausa-equipe-registro.js';
 import { createKommoClient, isLeadPaused } from '../services/kommo.service.js';
-import { enviosDaSofia, mensagensOficiaisDaUnidade, type MensagemOficial } from '../services/kommo-talks.service.js';
-import { ehAppDaEquipe } from '../services/kommo-talks-normalizar.js';
+import { enviosDaSofia, ehAppDaEquipe, mensagensOficiaisDaUnidade, type MensagemOficial } from '../services/kommo-talks.service.js';
 import { carimbarHumanoAssumiu } from '../services/lead-metrics.service.js';
 
 export const AUTOMACAO_PAUSA_EQUIPE = 'pausa-equipe';
@@ -62,7 +61,10 @@ const RESPOSTA_AUTOMATICA_ANTES_MS = 5_000;
 export const RESPOSTA_AUTOMATICA_MIN_CARACTERES = 40;
 const MENSAGENS_LIDAS = 40;
 
-/** A saudação e a ausência automáticas são do app Business; o canal Lite (QR code) não tem. */
+/**
+ * A saudação e a ausência automáticas são do app Business. No canal Lite (QR code) não há como separá-las da
+ * recepção: em Mossoró, as mensagens longas até 20 s depois do paciente (11 de 253) eram conversa de gente.
+ */
 const APP_COM_RESPOSTA_AUTOMATICA = 'whatsapp business';
 /** Aviso do Kommo/WhatsApp que sai como mensagem de saída ("Unable to open this message…"). */
 const AVISO_DO_SISTEMA = /^(unable to (open|display) this message|n[aã]o foi poss[ií]vel (abrir|exibir) (esta|essa) mensagem)/i;

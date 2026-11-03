@@ -119,7 +119,7 @@ test('nome da fala: celular/Web da clínica, com o nome do canal', () => {
   assert.equal(nomeDoAutor(''), 'a equipe');
 });
 
-test('robô de verdade continua sendo a Sofia: Salesbot e bot de nome desconhecido não pausam', () => {
+test('robô de verdade continua sendo a Sofia: Salesbot e bot de nome desconhecido não pausam (só os dois canais medidos contam)', () => {
   const sb = falaLite(em('10:00:00'), 'Olá! Sou a Sofia.', 'Salesbot');
   const outro = falaLite(em('10:00:10'), 'Mensagem do robô de outra coisa.', 'Robô de lembrete');
   assert.deepEqual([sb.autor, outro.autor], ['sofia', 'sofia']);
@@ -275,6 +275,19 @@ test('porta em "só no papel": registra "gravaria Pausar IA", a Sofia responde, 
 test('porta ligada (Bebedouro 12:28): marca "Pausar IA" e a Sofia não responde', async () => {
   _semearParaTeste([{ slug: SLUG, automacao: 'pausa-equipe', estado: 'ligado' }]);
   const { deps, chamadas } = depsFalsas();
+  const r = await portaDaEquipe({ unit: unidade, leadId: LEAD }, deps);
+  assert.equal(r.pausou, true);
+  assert.equal(chamadas.marcarPausa, 1);
+});
+
+test('porta ligada, canal Lite (Boa Vista): a SDR escreveu pelo celular → "Pausar IA" marcado e a Sofia fica calada', async () => {
+  _semearParaTeste([{ slug: SLUG, automacao: 'pausa-equipe', estado: 'ligado' }]);
+  const conversa = [
+    msg('entrada', em('09:05:00'), 'queria marcar'),
+    falaLite(em('09:10:00'), 'Oi! Aqui é a Talita, tenho horário amanhã às 10h, pode ser?'),
+    msg('entrada', em('09:12:00'), 'pode sim'),
+  ];
+  const { deps, chamadas } = depsFalsas({ mensagens: async () => conversa, agora: () => em('09:12:10') });
   const r = await portaDaEquipe({ unit: unidade, leadId: LEAD }, deps);
   assert.equal(r.pausou, true);
   assert.equal(chamadas.marcarPausa, 1);

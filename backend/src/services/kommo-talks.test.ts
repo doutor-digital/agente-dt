@@ -124,7 +124,7 @@ test('classificarAutor: o app WhatsApp Business é a EQUIPE, mesmo marcado como 
 
 test('classificarAutor: celular/WhatsApp Web no canal Lite (QR code) é a EQUIPE; robô de nome desconhecido segue Sofia', () => {
   assert.equal(classificarAutor({ type: 'outgoing', author: { type: 'bot', name: 'WhatsApp Lite' } }), 'equipe');
-  assert.equal(classificarAutor({ type: 'outgoing', author: { type: 'bot', name: ' whatsapp web ' } }), 'equipe');
+  assert.equal(classificarAutor({ type: 'outgoing', author: { type: 'bot', name: ' whatsapp lite ' } }), 'equipe');
   assert.equal(classificarAutor({ type: 'outgoing', author: { type: 'bot', name: 'Robô de lembrete' } }), 'sofia');
 });
 
