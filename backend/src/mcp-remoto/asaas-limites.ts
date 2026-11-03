@@ -29,7 +29,9 @@ export const JANELA_LIVRO_MS = 36 * 3_600_000;
 const positivo = (bruto: string | undefined): number | null => {
   const t = bruto?.trim();
   if (!t) return null;
-  const n = Number(t);
+  // formato brasileiro também vale: "20.000" é vinte mil (não 20) e "1.500,50" é mil e quinhentos e cinquenta centavos
+  const normal = /^\d{1,3}(\.\d{3})+(,\d{1,2})?$/.test(t) ? t.replace(/\./g, '').replace(',', '.') : /^\d+,\d{1,2}$/.test(t) ? t.replace(',', '.') : t;
+  const n = Number(normal);
   return Number.isFinite(n) && n > 0 ? n : null;
 };
 

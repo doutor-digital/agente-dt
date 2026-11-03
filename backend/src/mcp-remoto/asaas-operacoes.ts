@@ -86,7 +86,7 @@ export async function editarCliente(
   // a identidade (CPF/CNPJ) NÃO muda por aqui: trocar o documento de um cadastro com cobranças é decisão no painel do Asaas
   if (!campos.length) throw new ErroDeEntrada('nada para alterar: informe ao menos um de nome, email, telefone, endereco ou avisarCliente. O CPF/CNPJ não muda por aqui.');
 
-  return comAvisos(esc, c.slug, async () => {
+  return comAvisos(esc, c.slug, async (avisar) => {
     const { cabecalho } = await cabecalhoDaConta(c, esc);
     const antes = await clientePorId(c, clienteId);
     const base = { conta: c.slug, operacao: 'editar_cliente', valor: 0, noTeto: 0, idAsaas: antes.id, campos, pediuPor: quem.id };
@@ -100,6 +100,7 @@ export async function editarCliente(
       throw incerto ? new Error(`${s.message} — a alteração PODE ter sido feita: confira com asaas_cliente antes de repetir.`) : s;
     }
     registrar(EVENTO_OPERACAO, base, true);
+    avisar(textoDoAviso({ titulo: 'CLIENTE EDITADO', conta: c.slug, nomeDaConta: cabecalho.nomeDaConta, quem, id: antes.id, detalhe: `campos alterados: ${campos.join(', ')}` }));
     // o Asaas guarda celular e fixo em campos separados e a troca por um do outro tipo não apaga o antigo
     const outroTelefone = campos.includes('telefone') && (corpo.mobilePhone ? !!antes.phone : !!antes.mobilePhone);
     return {
@@ -161,7 +162,7 @@ export async function editarCobranca(
     }
     esquecerLeituras(asaas, c.slug);
     registrar(EVENTO_OPERACAO, { ...base, status: depois?.status ?? null }, true);
-    if (novoValor !== undefined && novoValor > esc.tetoOperacao() / 2) {
+    if (novoValor !== undefined && acrescimo > 0 && novoValor > esc.tetoOperacao() / 2) {
       avisar(textoDoAviso({ titulo: 'COBRANÇA EDITADA PARA VALOR ACIMA DE 50% DO TETO', conta: c.slug, nomeDaConta: cabecalho.nomeDaConta, quem, valor: novoValor, id, detalhe: `valor anterior ${dinheiro(atual.value ?? 0)}` }));
     }
     return {
@@ -235,8 +236,8 @@ async function jaEstornadoDe(c: ContaAsaas, id: string, atual: Pagamento): Promi
   } catch (e) {
     if ((e as { status?: number })?.status === 401) throw e;
     // a rota de lista falhou (não existe, sem permissão, fora do ar): vale o campo `refunds` da própria cobrança, MAS só se ele veio na resposta
-    // (campo ausente = não sei o que já saiu = não estorna)
-    if (!('refunds' in atual)) throw new ErroDeEntrada('não consegui conferir os estornos anteriores desta cobrança — nada foi feito; tente em instantes');
+    // (campo ausente ou nulo = não sei o que já saiu = não estorna)
+    if (!Array.isArray(atual.refunds)) throw new ErroDeEntrada('não consegui conferir os estornos anteriores desta cobrança — nada foi feito; tente em instantes');
   }
   return Math.max(daLista, soma(atual.refunds));
 }

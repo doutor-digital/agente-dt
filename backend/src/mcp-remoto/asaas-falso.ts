@@ -109,7 +109,7 @@ export function asaasFalso(o: Opc = {}) {
             void _r;
             return semCampo as T;
           }
-          return { ...x, refunds: x.refunds ?? null } as T;
+          return { ...x, refunds: x.refunds ?? [] } as T;
         }
         throw new Error(`rota não simulada: ${caminho}`);
       },

@@ -642,8 +642,7 @@ export async function melhorEsforco<T>(fn: () => Promise<T>, ms: number): Promis
     const busca = fn();
     busca.catch(() => undefined);
     const prazo = new Promise<null>((res) => {
-      timer = setTimeout(() => res(null), ms);
-      timer.unref?.();
+      timer = setTimeout(() => res(null), ms); // sem unref: o prazo é curto (esperaLinhaMs) e é ele que resolve a espera
     });
     return await Promise.race([busca, prazo]);
   } catch {

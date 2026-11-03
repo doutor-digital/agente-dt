@@ -12,7 +12,7 @@ import { z } from 'zod';
 import type { Auditar } from '../franquia-mcp/ferramentas.js';
 import { asaasCobranca, type ContextoAsaas } from './asaas.js';
 import { cancelarCobranca, editarCliente, editarCobranca, estornarCobranca, limitesEDestinos, transferir } from './asaas-operacoes.js';
-import { criarCliente, criarCobranca, LIMITES_ASAAS, mascararPedido, recusarCamposDesconhecidos, sanear, type CtxEscrita, type EstadoEscritaAsaas, type Quem, type Registrar } from './asaas-escrita.js';
+import { contaDeEscrita, criarCliente, criarCobranca, LIMITES_ASAAS, mascararPedido, recusarCamposDesconhecidos, sanear, type CtxEscrita, type EstadoEscritaAsaas, type Quem, type Registrar } from './asaas-escrita.js';
 import { PADRAO_TETOS } from './asaas-limites.js';
 import { executar } from './ferramenta.js';
 
@@ -90,7 +90,12 @@ export function registrarEscritaAsaas(server: McpServer, asaas: ContextoAsaas, e
       inputSchema: { unidade, cobrancaId: z.string().optional(), externalReference: z.string().optional() },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
-    (args) => executarSeguro('asaas_cobranca', args, auditar, () => asaasCobranca(asaas, args)),
+    (args) =>
+      executarSeguro('asaas_cobranca', args, auditar, async () => {
+        // só nas clínicas com a escrita liberada (é ferramenta de quem escreve; os links de pagamento não saem de clínica desligada)
+        contaDeEscrita(asaas, esc, args.unidade);
+        return asaasCobranca(asaas, args);
+      }),
   );
   tool(
     'asaas_criar_cliente',

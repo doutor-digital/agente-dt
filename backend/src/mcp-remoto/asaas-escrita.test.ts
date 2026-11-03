@@ -576,6 +576,18 @@ test('o portão de quem escreve: fora da lista de escrita as ferramentas nem exi
   assert.equal(m.f.chamadas.length, 0);
 });
 
+test('asaas_cobranca (consulta com links) só funciona nas clínicas com a escrita liberada', async () => {
+  const m = montar({ pagamentos: [{ id: 'pay_paga00000001', status: 'RECEIVED', value: 10 }] }, { unidades: () => new Set() });
+  const joao = await conectar(m, 'u-joao', []);
+  const r = await joao.callTool({ name: 'asaas_cobranca', arguments: { unidade: 'serra', cobrancaId: 'pay_paga00000001' } });
+  assert.equal(r.isError, true);
+  assert.match(texto(r), /DESLIGADA para doutor-hernia-serra/);
+  const ok = montar({ pagamentos: [{ id: 'pay_paga00000001', status: 'RECEIVED', value: 10 }] });
+  const c2 = await conectar(ok, 'u-joao', []);
+  const r2 = await c2.callTool({ name: 'asaas_cobranca', arguments: { unidade: 'serra', cobrancaId: 'pay_paga00000001' } });
+  assert.notEqual(r2.isError, true);
+});
+
 test('producao.ts liga a escrita SÓ pelo portão testado (lista de escritores), com o Telegram e o histórico da auditoria', () => {
   const src = readFileSync(new URL('./producao.ts', import.meta.url), 'utf8');
   assert.equal(src.match(/registrarEscritaAsaasSePermitido\(/g)?.length, 1);

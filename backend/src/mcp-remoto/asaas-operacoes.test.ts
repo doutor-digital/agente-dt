@@ -697,3 +697,28 @@ test('cancelar em massa não passa: limite de cancelamentos por hora (padrão 10
   await cancelarCobranca(dois.ctx, Q, { unidade: 'serra', cobrancaId: ids[1]! }, dois.registrar);
   await assert.rejects(() => cancelarCobranca(dois.ctx, Q, { unidade: 'serra', cobrancaId: ids[2]! }, dois.registrar), /limite de 2 cancelamentos por hora/);
 });
+
+test('editar cliente avisa o João (e-mail, telefone e aviso automático são o caminho de um desvio de cobrança); editar cobrança só avisa quando o valor SOBE', async () => {
+  const m = montar({ clientes: [{ ...EXISTENTE }] });
+  const r = (await editarCliente(m.ctx, Q, { unidade: 'serra', clienteId: EXISTENTE.id, email: 'novo@exemplo.com', avisarCliente: true }, m.registrar)) as any;
+  assert.equal(m.avisos.length, 1);
+  assert.match(m.avisos[0]!, /CLIENTE EDITADO/);
+  assert.match(m.avisos[0]!, /campos alterados: email, avisos automáticos/);
+  assert.ok(!m.avisos[0]!.includes('novo@exemplo.com'), 'o e-mail novo não vai inteiro ao Telegram');
+  assert.equal(r.avisoNoTelegram, 'enviado ao João');
+  const n = montar({ pagamentos: [{ ...PENDENTE, value: 4900 }] });
+  await editarCobranca(n.ctx, Q, { unidade: 'serra', cobrancaId: PENDENTE.id, valor: 3000 }, n.registrar);
+  assert.equal(n.avisos.length, 0, 'reduzir o valor não é alarme');
+  await editarCobranca(n.ctx, Q, { unidade: 'serra', cobrancaId: PENDENTE.id, valor: 3100 }, n.registrar);
+  assert.equal(n.avisos.length, 1, 'subir para mais da metade do teto avisa');
+});
+
+test('estornos anteriores: rota de lista fora do ar e cobrança com refunds NULO (não sei o que já saiu) = não estorna; com a lista vazia no campo, estorna', async () => {
+  const nulo = montar({ pagamentos: [{ ...PAGA }], falhas: [{ metodo: 'GET', caminho: /refunds$/, erro: new ErroHttp('Asaas 503', 503) }] });
+  const get = nulo.f.conta.fonte.get.bind(nulo.f.conta.fonte);
+  (nulo.f.conta.fonte as { get: unknown }).get = async (caminho: string, q: Record<string, any>) => (caminho === `/payments/${PAGA.id}` ? { ...(await get(caminho, q) as object), refunds: null } : get(caminho, q));
+  await assert.rejects(() => estornarCobranca(nulo.ctx, Q, { unidade: 'serra', cobrancaId: PAGA.id }, nulo.registrar), /não consegui conferir os estornos anteriores/);
+  assert.equal(nulo.f.posts().length, 0);
+  const vazio = montar({ pagamentos: [{ ...PAGA }], falhas: [{ metodo: 'GET', caminho: /refunds$/, erro: new ErroHttp('Asaas 503', 503) }] });
+  assert.equal(((await estornarCobranca(vazio.ctx, Q, { unidade: 'serra', cobrancaId: PAGA.id }, vazio.registrar)) as any).estornado, true);
+});

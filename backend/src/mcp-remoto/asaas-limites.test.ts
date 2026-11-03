@@ -163,6 +163,15 @@ test('fila: uma por conta — uma conta travada não segura as outras, e duas op
   assert.equal(esc.filas.size, 0, 'filas paradas não ficam guardadas');
 });
 
+test('tetos aceitam o formato brasileiro: "20.000" é vinte mil, não vinte; "1.500,50" e "300,5" também; lixo continua no padrão', () => {
+  assert.equal(tetoPorDia({ ASAAS_TETO_DIA_REAIS: '20.000' }), 20000);
+  assert.equal(tetoPorDia({ ASAAS_TETO_DIA_REAIS: '1.500,50' }), 1500.5);
+  assert.equal(tetoPorOperacao({ ASAAS_TETO_OPERACAO_REAIS: '5,000' }), 5000, '5,000 não é formato brasileiro de milhar: cai no padrão, que também é 5000');
+  assert.equal(tetoPorOperacao({ ASAAS_TETO_OPERACAO_REAIS: '300,5' }), 300.5);
+  assert.equal(tetoPorOperacao({ ASAAS_TETO_OPERACAO_REAIS: '1200' }), 1200);
+  assert.equal(tetoPorDia({ ASAAS_TETO_DIA_REAIS: 'R$ 20.000' }), 20000 /* padrão */);
+});
+
 test('ASAAS_CANCELAMENTOS_POR_HORA: padrão 10; vazio, 0 e lixo = o padrão', () => {
   assert.equal(cancelamentosPorHora({}), 10);
   assert.equal(cancelamentosPorHora({ ASAAS_CANCELAMENTOS_POR_HORA: '25' }), 25);
