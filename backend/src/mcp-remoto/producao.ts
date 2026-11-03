@@ -264,7 +264,15 @@ function fonteDoRastreio(): FonteRastreio | null {
  * como usuário ativo do console. Sem a variável, ninguém altera — o conector segue só leitura.
  */
 async function escritoresDoBanco(): Promise<Set<string>> {
-  const emails = (process.env.MCP_ESCRITA_EMAILS ?? '').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean);
+  return idsDeUsuariosAtivos('MCP_ESCRITA_EMAILS');
+}
+
+/** Os ids dos usuários ATIVOS do console cujos e-mails estão nas variáveis (csv). Variável vazia/ausente = ninguém. */
+async function idsDeUsuariosAtivos(...variaveis: string[]): Promise<Set<string>> {
+  const emails = variaveis
+    .flatMap((v) => (process.env[v] ?? '').split(','))
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
   if (!emails.length) return new Set();
   const us = await prisma.user.findMany({ where: { email: { in: emails }, isActive: true }, select: { id: true } });
   return new Set(us.map((u) => u.id));
@@ -275,10 +283,7 @@ async function escritoresDoBanco(): Promise<Set<string>> {
  * É o WhatsApp pessoal dela, então a lista é à parte da de quem altera cartões. Sem a variável, ninguém vê.
  */
 async function leitoresDoWhatsapp(): Promise<Set<string>> {
-  const emails = (process.env.MCP_EVOLUTION_EMAILS ?? '').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean);
-  if (!emails.length) return new Set();
-  const us = await prisma.user.findMany({ where: { email: { in: emails }, isActive: true }, select: { id: true } });
-  return new Set(us.map((u) => u.id));
+  return idsDeUsuariosAtivos('MCP_EVOLUTION_EMAILS');
 }
 
 /**
@@ -287,13 +292,7 @@ async function leitoresDoWhatsapp(): Promise<Set<string>> {
  * Usuário ativo do console. Sem nenhuma das duas variáveis, ninguém usa.
  */
 async function arquivistasDoBanco(): Promise<Set<string>> {
-  const emails = [process.env.MCP_ESCRITA_EMAILS, process.env.MCP_ARQUIVOS_EMAILS]
-    .flatMap((v) => (v ?? '').split(','))
-    .map((e) => e.trim().toLowerCase())
-    .filter(Boolean);
-  if (!emails.length) return new Set();
-  const us = await prisma.user.findMany({ where: { email: { in: emails }, isActive: true }, select: { id: true } });
-  return new Set(us.map((u) => u.id));
+  return idsDeUsuariosAtivos('MCP_ESCRITA_EMAILS', 'MCP_ARQUIVOS_EMAILS');
 }
 
 /** Auditoria do cofre (eventos das rotas públicas): sem conteúdo e sem nome de arquivo. Vai para o log e para `mcp_auditoria`. */

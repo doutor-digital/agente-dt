@@ -18,7 +18,7 @@
  * O estado fica na memória (processo único: `replicas: 1`). Reinício = os envios em curso somem e a pessoa pede de novo.
  */
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { chmod, mkdir, readdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, open, readdir, readFile, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 
 export type TipoDeArquivo = 'pdf' | 'doc' | 'docx' | 'jpg' | 'png' | 'txt';
@@ -94,19 +94,22 @@ const comeca = (b: Buffer, ...bytes: number[]) => b.length >= bytes.length && by
 /**
  * O tipo que o CONTEÚDO tem, ou null. Não é antivírus: confere que o arquivo é o que diz ser.
  *  - PDF: "%PDF-" no começo.  JPEG: FF D8 FF.  PNG: assinatura de 8 bytes.
- *  - .doc: contêiner OLE2 COM o fluxo "WordDocument" (o mesmo contêiner serve .xls, .ppt e .msi).
+ *  - .doc: contêiner OLE2 COM o fluxo "WordDocument" (o mesmo contêiner serve .xls, .ppt e .msi) e SEM projeto de macro (_VBA_PROJECT).
  *  - .docx: ZIP com "[Content_Types].xml" e "word/" (não aceita .zip/.jar/.xlsx renomeados) e sem macro (vbaProject.bin).
- *  - texto: sem byte de controle nenhum além de tab, quebras de linha e form feed (executável tem NUL logo no começo).
+ *  - texto: sem byte de controle nenhum além de tab, quebras de linha e form feed (executável tem NUL logo no começo), e que não
+ *    comece como marcação (`<`: HTML/SVG/XML) nem como script (`#!`). O download sai como text/plain com `nosniff`.
  */
 export function detectarTipo(b: Buffer): TipoDeArquivo | null {
   if (comeca(b, 0x25, 0x50, 0x44, 0x46, 0x2d)) return 'pdf';
   if (comeca(b, 0xff, 0xd8, 0xff)) return 'jpg';
   if (comeca(b, 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)) return 'png';
-  if (comeca(b, 0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1)) return b.includes(Buffer.from('WordDocument', 'utf16le')) ? 'doc' : null;
+  if (comeca(b, 0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1)) {
+    return b.includes(Buffer.from('WordDocument', 'utf16le')) && !b.includes(Buffer.from('_VBA_PROJECT', 'utf16le')) ? 'doc' : null;
+  }
   if (comeca(b, 0x50, 0x4b, 0x03, 0x04)) {
     return b.includes('[Content_Types].xml') && b.includes('word/') && !b.includes('vbaProject.bin') ? 'docx' : null;
   }
-  if (b.length > 0 && ehTexto(b)) return 'txt';
+  if (b.length > 0 && ehTexto(b) && !/^\s*(<|#!)/.test(b.subarray(0, 64).toString('latin1'))) return 'txt';
   return null;
 }
 
@@ -141,7 +144,9 @@ export function validarArquivo(nomeOriginal: string | undefined, conteudo: Buffe
   if (conteudo.length > tamanhoMax) throw new ErroDeCofre('tamanho', `O arquivo passa do limite de ${Math.floor(tamanhoMax / 1024 / 1024)} MB.`, 413);
   const ultimo = (nomeOriginal ?? '').split(/[\\/]/).pop() ?? '';
   const ponto = ultimo.lastIndexOf('.');
-  const ext = ponto > 0 ? ultimo.slice(ponto + 1).toLowerCase() : '';
+  // só vale como extensão o que parece uma ("pdf", "docx"); "Maria J. Souza" e "v1.2" são nome, não extensão
+  const depois = ponto > 0 ? ultimo.slice(ponto + 1).toLowerCase() : '';
+  const ext = /^[a-z][a-z0-9]{1,4}$/.test(depois) ? depois : '';
   if (ext && !(ext in TIPO_DA_EXTENSAO)) {
     throw new ErroDeCofre('tipo', `Arquivo .${ext.slice(0, 10)} não é aceito. Aceitamos: ${EXTENSOES_ACEITAS.map((e) => `.${e}`).join(' ')}.`, 415);
   }
@@ -171,7 +176,6 @@ interface Envio {
   id: string;
   dono: string;
   finalidade: string;
-  nomeSugerido?: string;
   criadoEm: number;
   /** teto duro: depois disto nada resta */
   apagarEm: number;
@@ -238,7 +242,7 @@ export class CofreDeArquivos {
 
   // ── pedido de envio ──────────────────────────────────────────────────────────────────────────────────────────
 
-  pedirEnvio(a: { userId: string; finalidade: string; nomeSugerido?: string }): { id: string; token: string; validoAte: number } {
+  pedirEnvio(a: { userId: string; finalidade: string }): { id: string; token: string; validoAte: number } {
     this.varrerMemoria();
     const vivos = [...this.envios.values()].filter((e) => e.dono === a.userId && e.estado !== 'apagado').length;
     if (vivos >= this.limites.ativosPorUsuario) {
@@ -252,7 +256,6 @@ export class CofreDeArquivos {
       id,
       dono: a.userId,
       finalidade: a.finalidade,
-      nomeSugerido: a.nomeSugerido,
       criadoEm: t,
       apagarEm: t + this.limites.ttlDeSegurancaMs,
       tokenHash,
@@ -266,9 +269,8 @@ export class CofreDeArquivos {
   }
 
   /** O que a página de envio precisa saber. Não gasta o link. */
-  inspecionarEnvio(token: string): { finalidade: string; nomeSugerido?: string } {
-    const e = this.envioDoToken(token);
-    return { finalidade: e.finalidade, nomeSugerido: e.nomeSugerido };
+  inspecionarEnvio(token: string): { finalidade: string } {
+    return { finalidade: this.envioDoToken(token).finalidade };
   }
 
   private envioDoToken(token: string): Envio {
@@ -293,10 +295,11 @@ export class CofreDeArquivos {
   }
 
   /** O envio não chegou a ser guardado (cortou, passou do tamanho): o link continua valendo, até `recusasMax` falhas. */
-  liberar(r: Reserva, motivo?: string, req?: { ip?: string; agente?: string }): void {
+  liberar(r: Reserva, motivo?: string, req?: { ip?: string; agente?: string }, culpaDoEnvio = true): void {
     const e = this.envios.get(r.envioId);
     if (!e || e.estado !== 'enviando') return;
-    e.recusas += 1;
+    // falha NOSSA (disco) não gasta as tentativas da pessoa
+    if (culpaDoEnvio) e.recusas += 1;
     e.estado = 'aguardando';
     this.auditar({ evento: 'upload_recusado', envio: e.id, userId: e.dono, detalhe: { motivo: motivo ?? 'interrompido', recusas: e.recusas } }, req);
     if (e.recusas >= this.limites.recusasMax) {
@@ -309,6 +312,7 @@ export class CofreDeArquivos {
   async guardar(r: Reserva, nomeOriginal: string | undefined, conteudo: Buffer, req?: { ip?: string; agente?: string }): Promise<{ nome: string; tipo: TipoDeArquivo; tamanho: number }> {
     const e = this.envios.get(r.envioId);
     if (!e || e.estado !== 'enviando') throw new ErroDeCofre('estado', 'Este envio não está mais aberto.', 409);
+    let caminho: string | undefined;
     try {
       const { tipo, nome } = validarArquivo(nomeOriginal, conteudo, this.limites.tamanhoMaxBytes);
       await this.garantirPasta();
@@ -316,9 +320,18 @@ export class CofreDeArquivos {
       const iv = randomBytes(12);
       const cifra = createCipheriv('aes-256-gcm', chave, iv);
       cifra.setAAD(Buffer.from(e.id));
-      const cifrado = Buffer.concat([cifra.update(conteudo), cifra.final()]);
-      const caminho = path.join(this.dir, `${e.id}.bin`); // o nome no disco é só o id aleatório
-      await writeFile(caminho, Buffer.concat([iv, cifra.getAuthTag(), cifrado]), { flag: 'wx', mode: 0o600 });
+      caminho = path.join(this.dir, `${e.id}.bin`); // o nome no disco é só o id aleatório
+      // formato: iv (12) + tag (16) + cifrado. A tag só existe no fim: reserva o lugar dela e volta para preencher (sem 2ª cópia do arquivo na memória)
+      const f = await open(caminho, 'wx', 0o600);
+      try {
+        await f.write(iv);
+        await f.write(Buffer.alloc(16));
+        await f.write(cifra.update(conteudo));
+        await f.write(cifra.final());
+        await f.write(cifra.getAuthTag(), 0, 16, 12);
+      } finally {
+        await f.close();
+      }
       if (e.estado !== 'enviando') {
         // apagado enquanto gravava (varredura): não deixa arquivo órfão
         await unlink(caminho).catch(() => undefined);
@@ -331,7 +344,8 @@ export class CofreDeArquivos {
       return { nome, tipo, tamanho: conteudo.length };
     } catch (err) {
       if (err instanceof ErroDeCofre && err.codigo === 'estado') throw err;
-      this.liberar(r, err instanceof ErroDeCofre ? err.codigo : 'erro', req);
+      if (!(err instanceof ErroDeCofre) && caminho) await unlink(caminho).catch(() => undefined); // disco cheio: não deixa pedaço
+      this.liberar(r, err instanceof ErroDeCofre ? err.codigo : 'erro-interno', req, err instanceof ErroDeCofre);
       throw err;
     }
   }
@@ -392,9 +406,11 @@ export class CofreDeArquivos {
    */
   async baixar(token: string, contar: boolean, req?: { ip?: string; agente?: string }): Promise<{ nome: string; mime: string; tamanho: number; ler: () => Promise<Buffer> }> {
     this.varrerMemoria();
+    // Para fora tudo é o mesmo 404. Por dentro: 'invalido' = esse token não existe (conta na sondagem por IP); 'expirado' = o token
+    // é de um link conhecido que venceu/esgotou (um conector legítimo que repete a busca não pode se bloquear).
     const negar = (envioId: string, dono: string, motivo: string): never => {
       this.auditar({ evento: 'download_negado', envio: envioId, userId: dono, detalhe: { motivo } }, req);
-      throw new ErroDeCofre('invalido', 'Arquivo não encontrado.', 404);
+      throw new ErroDeCofre('expirado', 'Arquivo não encontrado.', 404);
     };
     if (!FORMATO_DO_TOKEN.test(token)) throw new ErroDeCofre('invalido', 'Arquivo não encontrado.', 404);
     const hash = sha256(token);
@@ -406,29 +422,31 @@ export class CofreDeArquivos {
     if (this.agora() >= link.expiraEm) return negar(e.id, e.dono, 'expirado');
     if (link.baixadas >= link.max) return negar(e.id, e.dono, 'limite');
     const a = e.arquivo;
-    if (contar) {
-      link.baixadas += 1; // conta ANTES de ler: duas baixadas ao mesmo tempo não passam do limite
+    const meta = { nome: a.nome, mime: TIPOS[a.tipo].mime, tamanho: a.tamanho };
+    if (!contar) return { ...meta, ler: () => this.lerCifrado(e, a) };
+    link.baixadas += 1; // conta ANTES de ler: baixadas ao mesmo tempo não passam do limite
+    try {
+      const dados = await this.lerCifrado(e, a);
       this.auditar({ evento: 'download', envio: e.id, userId: e.dono, detalhe: { baixada: link.baixadas, de: link.max, tamanho: a.tamanho } }, req);
+      return { ...meta, ler: async () => dados };
+    } catch {
+      // não entregou (arquivo sumiu, apagado no meio da leitura): a baixada volta
+      link.baixadas -= 1;
+      return negar(e.id, e.dono, 'leitura-falhou');
     }
-    return {
-      nome: a.nome,
-      mime: TIPOS[a.tipo].mime,
-      tamanho: a.tamanho,
-      ler: () => this.lerCifrado(e, a),
-    };
   }
 
   private async lerCifrado(e: Envio, a: NonNullable<Envio['arquivo']>): Promise<Buffer> {
-    let bruto: Buffer;
+    const chave = Buffer.from(a.chave); // cópia: se o envio for apagado no meio da leitura, a chave original é zerada
     try {
-      bruto = await readFile(a.caminho);
-    } catch {
-      throw new ErroDeCofre('invalido', 'Arquivo não encontrado.', 404);
+      const bruto = await readFile(a.caminho);
+      const dec = createDecipheriv('aes-256-gcm', chave, bruto.subarray(0, 12));
+      dec.setAAD(Buffer.from(e.id));
+      dec.setAuthTag(bruto.subarray(12, 28));
+      return Buffer.concat([dec.update(bruto.subarray(28)), dec.final()]);
+    } finally {
+      chave.fill(0);
     }
-    const dec = createDecipheriv('aes-256-gcm', a.chave, bruto.subarray(0, 12));
-    dec.setAAD(Buffer.from(e.id));
-    dec.setAuthTag(bruto.subarray(12, 28));
-    return Buffer.concat([dec.update(bruto.subarray(28)), dec.final()]);
   }
 
   // ── limpeza ──────────────────────────────────────────────────────────────────────────────────────────────────

@@ -52,15 +52,15 @@ export function registrarArquivos(
         'O arquivo costuma ter dado pessoal sensível (CPF, endereço, salário): só peça quando a pessoa realmente vai usá-lo, e não cole o link de envio em lugar público. ' +
         'Depois que a pessoa disser que enviou, confira com arquivo_ver_envio.',
       inputSchema: {
-        finalidade: z.string().trim().min(3).max(200).describe('para que é, curto, aparece na página da pessoa (ex.: "contrato de admissão da Maria para assinar no ClickSign")'),
-        nome_sugerido: z.string().trim().max(120).optional().describe('opcional: como a pessoa deve chamar o arquivo; só orientação, o nome final vem do arquivo'),
+        finalidade: z.string().trim().min(3).max(200).describe('para que é, curto; aparece na página da pessoa (ex.: "contrato de admissão para assinar no ClickSign"). Não fica no registro de auditoria'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
     (args) =>
-      executar('arquivo_pedir_upload', args, auditar, () =>
+      // a finalidade costuma citar o nome da pessoa do contrato: na auditoria vai só o tamanho dela
+      executar('arquivo_pedir_upload', { finalidadeCaracteres: args.finalidade.length }, auditar, () =>
         comoEntrada(() => {
-          const p = cofre.pedirEnvio({ userId: quem.userId, finalidade: args.finalidade, nomeSugerido: args.nome_sugerido });
+          const p = cofre.pedirEnvio({ userId: quem.userId, finalidade: args.finalidade });
           return {
             id: p.id,
             linkDeEnvio: `${base()}/arquivos/enviar/${p.token}`,

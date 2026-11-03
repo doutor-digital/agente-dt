@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -22,6 +22,8 @@ const DOC = Buffer.concat([OLE, Buffer.alloc(32), Buffer.from('WordDocument', 'u
 const XLS_OLE = Buffer.concat([OLE, Buffer.alloc(32), Buffer.from('Workbook', 'utf16le')]);
 const DOCX = Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from('[Content_Types].xml'), Buffer.from('word/document.xml')]);
 const ZIP_QUALQUER = Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from('lib/Main.class')]);
+const DOC_COM_MACRO = Buffer.concat([DOC, Buffer.from('_VBA_PROJECT', 'utf16le')]);
+const HTML = Buffer.from('<html><script>alert(1)</script></html>');
 const EXE = Buffer.concat([Buffer.from('MZ'), Buffer.alloc(2), Buffer.from('This program cannot be run in DOS mode.'), Buffer.alloc(64)]);
 const TXT = Buffer.from('Contrato de trabalho\nSalário: R$ 3.000,00\n');
 const SEGREDO = 'CPF 529.982.247-25 salário 7777';
@@ -77,6 +79,17 @@ test('detectarTipo: cada formato aceito pelo conteúdo; executável, zip comum e
   assert.equal(detectarTipo(XLS_OLE), null, 'OLE sem WordDocument (.xls/.msi)');
   assert.equal(detectarTipo(Buffer.concat([DOCX, Buffer.from('word/vbaProject.bin')])), null, 'docx com macro');
   assert.equal(detectarTipo(Buffer.from([0x41, 0x00, 0x42])), null, 'NUL no meio');
+  assert.equal(detectarTipo(DOC_COM_MACRO), null, '.doc com projeto de macro');
+  assert.equal(detectarTipo(HTML), null, 'marcação não passa por texto');
+  assert.equal(detectarTipo(Buffer.from('  <svg onload=x>')), null);
+  assert.equal(detectarTipo(Buffer.from('#!/bin/sh\nrm -rf /')), null);
+});
+
+test('nome com ponto que não é extensão ("Maria J. Souza", "v1.2") vale como nome; extensão de verdade continua sendo conferida', () => {
+  assert.equal(validarArquivo('Contrato Maria J. Souza', PDF, 1 << 20).nome, 'Contrato-Maria-J.-Souza.pdf');
+  assert.equal(validarArquivo('Contrato v1.2', PDF, 1 << 20).nome, 'Contrato-v1.2.pdf');
+  assert.throws(() => validarArquivo('programa.exe', EXE, 1 << 20), /\.exe não é aceito/);
+  assert.throws(() => validarArquivo('x.sh', TXT, 1 << 20), /\.sh não é aceito/);
 });
 
 test('tipo falso: .exe renomeado para .pdf é recusado (e o motivo diz o que o arquivo é)', () => {
@@ -230,7 +243,7 @@ test('link de download expira e o arquivo some do DISCO (no acesso, sem esperar 
     const a = await c.cofre.baixar(l.token, true);
     assert.equal((await a.ler()).equals(PDF), true);
     c.relogio.t += 10 * MIN;
-    assert.equal(await codigoDe(() => c.cofre.baixar(l.token, true)), 'invalido');
+    assert.equal(await codigoDe(() => c.cofre.baixar(l.token, true)), 'expirado');
     await new Promise((r) => setTimeout(r, 30)); // o unlink é assíncrono
     assert.deepEqual(c.arquivosNoDisco(), [], 'apagado do disco');
     assert.equal(c.cofre.ver(USUARIO, p.id).estado, 'apagado');
@@ -265,7 +278,7 @@ test('limite de baixadas: a 4ª é recusada; HEAD (contar=false) não gasta baix
     await c.cofre.baixar(l.token, false); // HEAD
     await c.cofre.baixar(l.token, false);
     for (let i = 0; i < 3; i++) await c.cofre.baixar(l.token, true);
-    assert.equal(await codigoDe(() => c.cofre.baixar(l.token, true)), 'invalido');
+    assert.equal(await codigoDe(() => c.cofre.baixar(l.token, true)), 'expirado');
     assert.equal(c.cofre.ver(USUARIO, p.id).links[0]!.ativo, false);
     // outro link do mesmo arquivo tem o seu contador e o seu token
     const l2 = c.cofre.gerarLink(USUARIO, p.id, 15);
@@ -329,6 +342,66 @@ test('o worker apaga arquivo órfão (sobra de outro processo) só depois do pra
   }
 });
 
+test('baixada que não entregou volta: arquivo sumido do disco não gasta o limite e responde como "não encontrado"', async () => {
+  const c = cenario();
+  try {
+    const p = await subir(c);
+    const l = c.cofre.gerarLink(USUARIO, p.id, 15);
+    const pasta = path.join(c.dir, 'cofre');
+    const [n] = c.arquivosNoDisco();
+    const guardado = readFileSync(path.join(pasta, n!));
+    rmSync(path.join(pasta, n!));
+    for (let i = 0; i < 5; i++) assert.equal(await codigoDe(() => c.cofre.baixar(l.token, true)), 'expirado');
+    assert.equal(c.cofre.ver(USUARIO, p.id).links[0]!.baixadas, 0, 'nenhuma baixada foi gasta');
+    writeFileSync(path.join(pasta, n!), guardado, { mode: 0o600 });
+    assert.equal((await (await c.cofre.baixar(l.token, true)).ler()).equals(PDF), true);
+  } finally {
+    c.limpar();
+  }
+});
+
+test('apagar no meio de uma leitura em andamento não derruba o download com erro de decifragem', async () => {
+  const c = cenario();
+  try {
+    const p = await subir(c);
+    const l = c.cofre.gerarLink(USUARIO, p.id, 15);
+    const lendo = c.cofre.baixar(l.token, true);
+    c.cofre.apagar(USUARIO, p.id); // zera a chave original enquanto a leitura corre
+    const r = await lendo.then(
+      (a) => a.ler(),
+      (e) => e,
+    );
+    assert.ok(Buffer.isBuffer(r) ? r.equals(PDF) : r instanceof ErroDeCofre, 'ou entregou inteiro ou negou limpo, nunca outro erro');
+  } finally {
+    c.limpar();
+  }
+});
+
+test('falha nossa ao gravar (disco) não deixa pedaço no disco e não gasta as tentativas da pessoa', async (t) => {
+  if (process.getuid?.() === 0) return t.skip('root ignora permissão de pasta');
+  const c = cenario();
+  try {
+    await subir(c); // cria a pasta
+    const pasta = path.join(c.dir, 'cofre');
+    const q = c.cofre.pedirEnvio({ userId: USUARIO, finalidade: 'teste' });
+    chmodSync(pasta, 0o500);
+    try {
+      for (let i = 0; i < 7; i++) {
+        const err = await c.cofre.guardar(c.cofre.reservar(q.token), 'a.pdf', PDF).catch((e) => e);
+        assert.ok(err instanceof Error && !(err instanceof ErroDeCofre), 'erro interno, não recusa');
+      }
+    } finally {
+      chmodSync(pasta, 0o700);
+    }
+    assert.equal(c.arquivosNoDisco().length, 1, 'só o primeiro envio ficou');
+    await c.cofre.guardar(c.cofre.reservar(q.token), 'a.pdf', PDF); // 7 falhas nossas e o link ainda serve
+    assert.equal(c.arquivosNoDisco().length, 2);
+  } finally {
+    chmodSync(path.join(c.dir, 'cofre'), 0o700);
+    c.limpar();
+  }
+});
+
 test('apagar: some do disco na hora e o link para de funcionar', async () => {
   const c = cenario();
   try {
@@ -337,7 +410,7 @@ test('apagar: some do disco na hora e o link para de funcionar', async () => {
     assert.equal(c.cofre.apagar(USUARIO, p.id), true);
     await new Promise((r) => setTimeout(r, 30));
     assert.deepEqual(c.arquivosNoDisco(), []);
-    assert.equal(await codigoDe(() => c.cofre.baixar(l.token, true)), 'invalido');
+    assert.equal(await codigoDe(() => c.cofre.baixar(l.token, true)), 'expirado');
     assert.equal(c.cofre.apagar(USUARIO, p.id), false);
   } finally {
     c.limpar();
@@ -580,6 +653,26 @@ test('HTTP: não existe listagem nem índice, em nenhuma rota nem método', asyn
   }
 });
 
+test('HTTP: um conector legítimo repetindo a busca de um link vencido/esgotado não se bloqueia (só token inexistente conta)', async () => {
+  const c = cenario();
+  try {
+    await comServidor(
+      c,
+      async (url) => {
+        const p = await subir(c);
+        const l = c.cofre.gerarLink(USUARIO, p.id, 5);
+        for (let i = 0; i < 3; i++) assert.equal((await fetch(`${url}/arquivos/baixar/${l.token}/${l.nome}`)).status, 200);
+        for (let i = 0; i < 8; i++) assert.equal((await fetch(`${url}/arquivos/baixar/${l.token}/${l.nome}`)).status, 404, 'esgotado, mas não 429');
+        c.relogio.t += 6 * MIN;
+        for (let i = 0; i < 8; i++) assert.equal((await fetch(`${url}/arquivos/baixar/${l.token}/${l.nome}`)).status, 404, 'vencido, mas não 429');
+      },
+      new JanelaDeContagem(3, 10 * 60_000),
+    );
+  } finally {
+    c.limpar();
+  }
+});
+
 test('HTTP: sondagem de tokens é cortada por IP com 429', async () => {
   const c = cenario();
   try {
@@ -668,6 +761,24 @@ test('fluxo pelas ferramentas: pedir → (a pessoa sobe) → ver → link tempor
 
     assert.equal((await s.chamar('arquivo_apagar', { id })).json!.apagado, true);
     assert.equal((await s.chamar('arquivo_ver_envio', { id })).json!.estado, 'apagado');
+  } finally {
+    c.limpar();
+  }
+});
+
+test('auditoria da ferramenta: a finalidade (que cita nome de gente) não vai para o registro, e o link não vira argumento', async () => {
+  const c = cenario();
+  try {
+    const server = new McpServer({ name: 't', version: '0' });
+    const registros: Array<{ ferramenta: string; argumentos: unknown; erro?: string }> = [];
+    registrarArquivosSePermitido(server, c.cofre, USUARIO, new Set([USUARIO]), () => 'https://agente.exemplo.com', (r) => void registros.push(r));
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    const cliente = new Client({ name: 'teste', version: '0' });
+    await Promise.all([server.connect(a), cliente.connect(b)]);
+    await cliente.callTool({ name: 'arquivo_pedir_upload', arguments: { finalidade: 'contrato de admissão da Maria Aparecida Souza' } });
+    assert.equal(registros.length, 1);
+    assert.equal(JSON.stringify(registros[0]).includes('Maria'), false);
+    assert.equal(JSON.stringify(registros[0]).includes('/arquivos/enviar/'), false);
   } finally {
     c.limpar();
   }

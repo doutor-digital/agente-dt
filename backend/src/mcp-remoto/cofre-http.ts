@@ -17,7 +17,7 @@ export const ROTA_ENVIO = '/arquivos/enviar/:token';
 export const ROTA_BAIXA = '/arquivos/baixar/:token/:nome';
 
 /** envios sendo recebidos ao mesmo tempo (cada um segura até o limite na memória; o container tem 1 GB) */
-const ENVIOS_SIMULTANEOS = 3;
+const ENVIOS_SIMULTANEOS = 2;
 /** o corpo inteiro tem que chegar neste tempo (20 MB em 3G cabe) */
 const TEMPO_MAX_DO_ENVIO_MS = 180_000;
 
@@ -232,8 +232,13 @@ export function montarRotasDoCofre(app: Express, cofre: CofreDeArquivos, o: Opco
     req.on('end', () => {
       if (estourou || terminou) return;
       sair();
+      const juntar = () => {
+        const inteiro = Buffer.concat(pedacos, total);
+        pedacos.length = 0; // os pedaços saem da memória; fica uma cópia só
+        return inteiro;
+      };
       cofre
-        .guardar(reserva, nomeOriginal, Buffer.concat(pedacos), origem)
+        .guardar(reserva, nomeOriginal, juntar(), origem)
         .then((r) => res.json({ ok: true, nome: r.nome, tamanho: r.tamanho }))
         .catch((err) => {
           if (err instanceof ErroDeCofre) falha(err.status, err.message);
@@ -261,7 +266,8 @@ export function montarRotasDoCofre(app: Express, cofre: CofreDeArquivos, o: Opco
       res.status(200).end(await a.ler());
     } catch (err) {
       if (!(err instanceof ErroDeCofre)) throw err;
-      erros.registrar(ipDoCliente(req), Date.now());
+      // só token que NÃO EXISTE conta como sondagem; link conhecido vencido/esgotado não bloqueia o IP de quem o usa
+      if (err.codigo === 'invalido') erros.registrar(ipDoCliente(req), Date.now());
       res.status(404).type('text/plain').send('Arquivo não encontrado.');
     }
   };
