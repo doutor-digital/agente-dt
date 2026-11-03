@@ -17,6 +17,7 @@ const {
   equipeRespondeuDepois,
   roboSaiuDepois,
   jaHaTarefaParaOPedido,
+  traceDoBurstDoPedido,
   JANELA_DO_BURST_MS,
   JANELA_APOS_LIDERANCA_MS,
   agendarRecuperacao,
@@ -128,7 +129,7 @@ function mundo(opts: { agora?: number } = {}) {
         .filter(
           (x) =>
             x.leadId === t.leadId &&
-            (x.status === 'RUNNING' || x.status === 'FAILED') &&
+            traceDoBurstDoPedido({ status: x.status, iaDecision: x.iaDecision }) &&
             x.criadoEm.getTime() >= t.criadoEm.getTime() - JANELA_DO_BURST_MS &&
             x.criadoEm.getTime() <= t.criadoEm.getTime(),
         )
@@ -928,6 +929,7 @@ test('satélite do burst: o DONO (já fechado) rodou o modelo/ferramenta → TAR
   w.traces.push(
     lead('dono', 'primeira', new Date(FOTO.getTime() - 10_000), {
       status: 'FAILED',
+      iaDecision: `${MARCA_ABANDONADO}:ja_respondida`,
       passos: [{ kind: 'WEBHOOK_RECEIVED', title: 'Mensagem' }, { kind: 'TOOL_CALL', title: 'agendar_consulta' }],
     }),
   );
@@ -937,6 +939,15 @@ test('satélite do burst: o DONO (já fechado) rodou o modelo/ferramenta → TAR
   assert.equal(w.retomadas.length, 0);
   assert.equal(w.tarefas.length, 1);
   assert.equal(motivoDe(w, 'satelite'), `${MARCA_ABANDONADO}:turno_ja_tinha_comecado`);
+});
+
+test('satélite: um turno que FALHOU por erro do modelo (FAILED sem marca de abandono) não é o dono do burst — o pedido ainda volta', async () => {
+  const { w, deps } = mundo();
+  w.traces.push(lead('falhou', 'x', new Date(FOTO.getTime() - 20_000), { status: 'FAILED', iaDecision: null, passos: [{ kind: 'THINKING', title: 'IA analisando intenção' }] }));
+  w.traces.push(lead('b', 'oi', FOTO));
+  const r = await recuperarTurnosPerdidos(deps, POSSE);
+  assert.equal(r.retomados, 1);
+  await dormir(100);
 });
 
 test('satélite: o dono do burst é de OUTRO paciente, ou de mais de JANELA_DO_BURST_MS antes → não conta', async () => {
@@ -1066,7 +1077,7 @@ function bancoFalso(opts: { unidadesDaConta?: string[]; ultimaResposta?: Date | 
     executionStep: {
       findMany: async (a: unknown) => {
         chamadas.stepFindMany.push(a);
-        return [{ kind: 'WEBHOOK_RECEIVED', title: 'x', payload: { reply: 'segurada' } }];
+        return [{ kind: 'WEBHOOK_RECEIVED', title: 'x', payload: { reply: 'segurada' }, trace: { status: 'RUNNING', iaDecision: null } }];
       },
     },
     executionTrace: {
@@ -1142,7 +1153,7 @@ test('passosDoBurst: os passos do paciente (qualquer unidade da conta), RUNNING/
   const where = (chamadas.stepFindMany[0] as { where: { trace: { leadId: string; unitId: { in: string[] }; status: { in: string[] }; createdAt: { gte: Date; lte: Date } } } }).where.trace;
   assert.equal(where.leadId, '5142896');
   assert.deepEqual(where.unitId.in, ['u1', 'u2']);
-  assert.deepEqual(where.status.in, ['RUNNING', 'FAILED'], 'turno que terminou SUCCESS não prende as mensagens seguintes');
+  assert.deepEqual(where.status.in, ['RUNNING', 'FAILED']);
   assert.equal(where.createdAt.gte.getTime(), FOTO.getTime() - JANELA_DO_BURST_MS);
   assert.equal(where.createdAt.lte.getTime(), FOTO.getTime());
   assert.deepEqual(passos, [{ kind: 'WEBHOOK_RECEIVED', title: 'x' }]);
@@ -1191,4 +1202,24 @@ test('roboSaiuDepois: fala humana da equipe NÃO é robô (quem decide que o hum
   assert.equal(roboSaiuDepois([msg('saida', new Date(t.getTime() + 60_000))], t), false);
   assert.equal(roboSaiuDepois([msg('entrada', new Date(t.getTime() + 60_000), { autor: 'sofia' })], t), false);
   assert.equal(roboSaiuDepois([msg('saida', new Date(t.getTime() + 60_000), { autor: 'sofia' })], t), true);
+});
+
+test('traceDoBurstDoPedido: RUNNING (o dono que o deploy matou) e FAILED com a marca de abandono; SUCCESS e FAILED por erro do modelo não', () => {
+  assert.equal(traceDoBurstDoPedido({ status: 'RUNNING', iaDecision: null }), true);
+  assert.equal(traceDoBurstDoPedido({ status: 'FAILED', iaDecision: `${MARCA_ABANDONADO}:ja_respondida` }), true);
+  assert.equal(traceDoBurstDoPedido({ status: 'FAILED', iaDecision: null }), false);
+  assert.equal(traceDoBurstDoPedido({ status: 'FAILED', iaDecision: 'erro do modelo' }), false);
+  assert.equal(traceDoBurstDoPedido({ status: 'FAILED', iaDecision: { x: 1 } }), false);
+  assert.equal(traceDoBurstDoPedido({ status: 'SUCCESS', iaDecision: `${MARCA_ABANDONADO}:x` }), false);
+});
+
+test('passosDoBurst: descarta os passos de trace FAILED por erro do modelo (a marca de abandono é conferida no resultado)', async () => {
+  const { banco } = bancoFalso();
+  (banco.executionStep as unknown as { findMany: () => Promise<unknown[]> }).findMany = async () => [
+    { kind: 'THINKING', title: 'IA analisando', trace: { status: 'FAILED', iaDecision: 'erro' } },
+    { kind: 'TOOL_CALL', title: 'agendar', trace: { status: 'FAILED', iaDecision: `${MARCA_ABANDONADO}:ja_respondida` } },
+    { kind: 'WEBHOOK_RECEIVED', title: 'm', trace: { status: 'RUNNING', iaDecision: null } },
+  ];
+  const passos = await depsDeProducao(ganchosVazios, banco).passosDoBurst(UNIT_A, { traceId: 't', unitId: 'u1', leadId: '1', criadoEm: FOTO, input: {} });
+  assert.deepEqual(passos.map((p) => p.kind), ['TOOL_CALL', 'WEBHOOK_RECEIVED']);
 });

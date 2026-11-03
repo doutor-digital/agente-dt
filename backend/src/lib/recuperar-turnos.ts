@@ -238,6 +238,15 @@ export function dentroDaJanelaDeRecuperacao(posse: Date | null, agora: number): 
   return !!posse && agora - posse.getTime() <= JANELA_APOS_LIDERANCA_MS;
 }
 
+/**
+ * O trace de que se leem os passos para saber se o burst AVANÇOU: o que o deploy matou (RUNNING) ou o que uma volta anterior
+ * desta recuperação fechou (FAILED com a marca de abandono). Um FAILED por erro do modelo não é o dono deste burst.
+ */
+export function traceDoBurstDoPedido(trace: { status: string; iaDecision: unknown }): boolean {
+  if (trace.status === 'RUNNING') return true;
+  return trace.status === 'FAILED' && typeof trace.iaDecision === 'string' && trace.iaDecision.startsWith(`${MARCA_ABANDONADO}:`);
+}
+
 /** A posse da liderança — só em modo `lease`. Em `sem-lease` (banco fora) o processo se declara líder SEM ter soltado o antigo. */
 export function posseDaLideranca(e: EstadoLideranca | null): Date | null {
   return e && e.lider && e.modo === 'lease' ? e.desde : null;
@@ -549,9 +558,9 @@ export function depsDeProducao(
     },
     async passosDoBurst(unit, t) {
       // O pedido e quem nasceu até `JANELA_DO_BURST_MS` antes dele, do mesmo paciente (qualquer unidade da conta: a dona
-      // pode ter mudado no meio da rajada). Só RUNNING (o dono que o deploy matou) e FAILED (fechado por uma volta
-      // anterior): um turno que terminou SUCCESS respondeu o que ele viu, e as mensagens que chegaram depois dele não
-      // ficam em tarefa por causa dele.
+      // pode ter mudado no meio da rajada). Só RUNNING (o dono que o deploy matou) e FAILED fechado por uma volta
+      // anterior desta recuperação (marca de abandono): um turno que terminou SUCCESS respondeu o que ele viu, e um que
+      // FALHOU por erro do modelo não é o dono deste burst — as mensagens seguintes não ficam em tarefa por causa deles.
       const passos = await banco.executionStep.findMany({
         where: {
           trace: {
@@ -561,9 +570,10 @@ export function depsDeProducao(
             createdAt: { gte: new Date(t.criadoEm.getTime() - JANELA_DO_BURST_MS), lte: t.criadoEm },
           },
         },
-        select: { kind: true, title: true },
+        select: { kind: true, title: true, trace: { select: { status: true, iaDecision: true } } },
       });
-      return passos.map((p) => ({ kind: p.kind, title: p.title }));
+      // `iaDecision` é JSON: a marca de abandono se confere aqui, não no filtro do Prisma.
+      return passos.filter((p) => traceDoBurstDoPedido(p.trace)).map((p) => ({ kind: p.kind, title: p.title }));
     },
     // Todas as unidades da mesma conta do Kommo (comercial e resgate dividem o cartão) — é o que `enviosDaSofia` faz.
     // Só resposta de turno (com traceId): follow-up, reativação, lembrete e boas-vindas não respondem o pedido.
