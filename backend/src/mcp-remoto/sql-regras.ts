@@ -38,6 +38,8 @@ export interface ComandoSql {
   criou?: string;
   matview?: string;
   funcao?: string;
+  /** funções que ESTE comando apaga (o servidor recusa se forem do sistema, e não do conector) */
+  funcoesRemovidas?: string[];
 }
 
 export interface AnaliseSql {
@@ -621,6 +623,7 @@ interface Achado {
   criou?: string;
   matview?: string;
   funcao?: string;
+  funcoesRemovidas?: string[];
   ligouRls?: string;
   renomeia?: boolean;
   alvo?: { tabela: string; op: 'update' | 'delete' };
@@ -628,6 +631,9 @@ interface Achado {
 
 const direto = (tipo: string, o_que: string, extra: Partial<Achado> = {}): Achado => ({ tipo, acao: 'direto', o_que, estrutura: true, ...extra });
 const confirmar = (tipo: string, o_que: string, extra: Partial<Achado> = {}): Achado => ({ tipo, acao: 'confirmar', o_que, estrutura: true, ...extra });
+
+/** ON DELETE/UPDATE CASCADE, SET NULL ou SET DEFAULT: apagar ou mudar uma linha da mãe apaga ou muda as filhas, sem ninguém pedir. */
+const emCascata = (c: No): boolean => c.contype === 'CONSTR_FOREIGN' && [c.fk_del_action, c.fk_upd_action].some((a) => a === 'c' || a === 'n' || a === 'd');
 
 function constraint(c: No, onde: string, ctxCheck: Ctx = { colunas: true }): { padrao?: boolean } {
   so(c, ['contype', 'conname', 'deferrable', 'initdeferred', 'is_enforced', 'initially_valid', 'skip_validation', 'raw_expr', 'generated_when', 'generated_kind', 'keys', 'including', 'nulls_not_distinct', 'pktable', 'fk_attrs', 'pk_attrs', 'fk_matchtype', 'fk_upd_action', 'fk_del_action', 'fk_del_set_cols', 'options', 'indexname', 'indexspace', 'access_method', 'where_clause', 'exclusions', 'old_pktable_oid', 'inhcount', 'is_no_inherit', 'cooked_expr'], `${onde} (restrição)`);
@@ -664,23 +670,40 @@ function constraint(c: No, onde: string, ctxCheck: Ctx = { colunas: true }): { p
   }
 }
 
-function colunaDef(cd: No, onde: string): { avisos: string[]; nome: string } {
+function colunaDef(cd: No, onde: string): { avisos: string[]; nome: string; cascata: boolean } {
   so(cd, ['colname', 'typeName', 'is_local', 'constraints'], `${onde} (coluna)`);
   nomeNovo(cd.colname, 'da coluna', onde);
   tipoPermitido(cd.typeName, `${onde} (coluna ${cd.colname})`);
   const avisos: string[] = [];
   let naoNulo = false;
   let comPadrao = false;
+  let cascata = false;
   for (const x of cd.constraints ?? []) {
     const [t, c] = tipoDe(x);
     if (t !== 'Constraint') recusa(`${onde}: restrição inesperada`);
     const r = constraint(c, `${onde} (coluna ${cd.colname})`);
+    if (emCascata(c)) cascata = true;
     if (c.contype === 'CONSTR_NOTNULL') naoNulo = true;
     if (r.padrao) comPadrao = true;
   }
   if (/serial$/.test(strings(cd.typeName.names, onde).at(-1) ?? '')) comPadrao = true;
   if (naoNulo && !comPadrao) avisos.push(`a coluna ${cd.colname} é NOT NULL sem DEFAULT: falha se a tabela já tiver linhas`);
-  return { avisos, nome: cd.colname };
+  return { avisos, nome: cd.colname, cascata };
+}
+
+/** Nomes de coluna que a expressão cita (o último campo de cada ColumnRef). */
+function colunasCitadas(no: No, achadas: Set<string> = new Set()): Set<string> {
+  if (Array.isArray(no)) {
+    for (const x of no) colunasCitadas(x, achadas);
+  } else if (no && typeof no === 'object') {
+    for (const [k, v] of Object.entries(no)) {
+      if (k === 'ColumnRef') {
+        const ultimo = ((v as No).fields ?? []).at(-1)?.String?.sval;
+        if (typeof ultimo === 'string') achadas.add(ultimo);
+      } else colunasCitadas(v, achadas);
+    }
+  }
+  return achadas;
 }
 
 function criarTabela(s: No): Achado[] {
@@ -690,14 +713,24 @@ function criarTabela(s: No): Achado[] {
   nomeNovo(t, 'da tabela', 'CREATE TABLE');
   if (!Array.isArray(s.tableElts) || !s.tableElts.length) recusa(`CREATE TABLE só na forma "CREATE TABLE ${t} ( coluna tipo, … )", com ao menos uma coluna`);
   const avisos: string[] = [];
+  let cascata = false;
   for (const el of s.tableElts) {
     const [et, ev] = tipoDe(el);
-    if (et === 'ColumnDef') avisos.push(...colunaDef(ev, `CREATE TABLE ${t}`).avisos);
-    else if (et === 'Constraint') constraint(ev, `CREATE TABLE ${t}`);
+    if (et === 'ColumnDef') {
+      const cd = colunaDef(ev, `CREATE TABLE ${t}`);
+      avisos.push(...cd.avisos);
+      cascata = cascata || cd.cascata;
+    } else if (et === 'Constraint') {
+      constraint(ev, `CREATE TABLE ${t}`);
+      cascata = cascata || emCascata(ev);
+    }
     else if (et === 'TableLikeClause') {
       so(ev, ['relation', 'options'], 'CREATE TABLE (LIKE)');
       relacao(ev.relation, 'CREATE TABLE (LIKE)');
     } else recusa(`CREATE TABLE ${t}: elemento ${et} não é permitido`);
+  }
+  if (cascata) {
+    return [confirmar('CREATE TABLE', `Cria a tabela ${t} com chave estrangeira em CASCATA (ON DELETE/UPDATE CASCADE, SET NULL ou SET DEFAULT): apagar ou mudar uma linha da tabela mãe apagará ou mudará as filhas`, { criou: t, avisos })];
   }
   return [direto('CREATE TABLE', `Cria a tabela ${t}${s.if_not_exists ? ' (se ainda não existir)' : ''}`, { criou: t, avisos })];
 }
@@ -751,6 +784,9 @@ function alterarTabela(s: No): Achado[] {
         if (!['CONSTR_CHECK', 'CONSTR_PRIMARY', 'CONSTR_UNIQUE', 'CONSTR_FOREIGN'].includes(k.contype)) recusa(`${onde}: só CHECK, PRIMARY KEY, UNIQUE e FOREIGN KEY`);
         constraint(k, onde);
         const quais: Record<string, string> = { CONSTR_CHECK: 'check', CONSTR_PRIMARY: 'primary key', CONSTR_UNIQUE: 'unique', CONSTR_FOREIGN: 'foreign key' };
+        if (emCascata(k)) {
+          return confirmar('ALTER TABLE ADD CONSTRAINT', `Acrescenta chave estrangeira em CASCATA na tabela ${t}: apagar ou mudar uma linha da tabela mãe apagará ou mudará as filhas`, copiar);
+        }
         return direto('ALTER TABLE ADD CONSTRAINT', `Acrescenta uma restrição${k.conname ? ` "${k.conname}"` : ''} (${quais[k.contype]}) na tabela ${t}`, copiar);
       }
       case 'AT_ColumnDefault':
@@ -765,6 +801,10 @@ function alterarTabela(s: No): Achado[] {
         so(cd, ['typeName', 'raw_default', 'colname'], `${onde} (tipo)`);
         tipoPermitido(cd.typeName, `${onde} (tipo)`);
         if (cd.raw_default !== undefined) expressao(cd.raw_default, { colunas: true }, `${onde} (USING)`);
+        // USING que ignora a coluna (using null, using 0…) não converte: SOBRESCREVE o valor de todas as linhas
+        if (cd.raw_default !== undefined && !colunasCitadas(cd.raw_default).has(String(c.name))) {
+          return confirmar('ALTER COLUMN TYPE', `Muda o TIPO da coluna ${c.name} da tabela ${t} com USING que não usa a coluna: SOBRESCREVE o valor de TODAS as linhas`, { avisos: [`o USING não olha ${c.name}: todas as linhas ficam com o mesmo valor`], ...copiar });
+        }
         return direto('ALTER COLUMN TYPE', `Muda o TIPO da coluna ${c.name} da tabela ${t}${cd.raw_default ? ' (com USING: reescreve os valores)' : ''}`, {
           avisos: [`mudar o tipo de ${t}.${c.name} pode FALHAR se os dados que já existem não couberem no tipo novo (e reescreve a tabela inteira); se falhar nada muda`],
           ...copiar,
@@ -853,9 +893,22 @@ function papeis(lista: No, onde: string, obrigatorio: boolean, permitidos: Set<s
   });
 }
 
-function permissiva(no: No): boolean {
-  return !!no && avaliar(no) === true;
+/** A expressão olha alguma coluna, subconsulta ou função de acesso? Sem nada disso ela vale igual para todo mundo (true, 1 = 1, coalesce(true, false)…). */
+function dependeDeDados(no: No): boolean {
+  if (Array.isArray(no)) return no.some(dependeDeDados);
+  if (!no || typeof no !== 'object') return false;
+  for (const [k, v] of Object.entries(no)) {
+    if (k === 'ColumnRef' || k === 'SubLink') return true;
+    if (k === 'FuncCall' && v && typeof v === 'object') {
+      const nome = (v as No).funcname?.map((x: No) => x?.String?.sval) ?? [];
+      if (nome.length === 1 && perfil.acesso.has(nome[0])) return true;
+    }
+    if (dependeDeDados(v)) return true;
+  }
+  return false;
 }
+/** Política que vale igual para todo usuário logado: abre as linhas de uma tabela a TODOS — o mesmo efeito de desligar a RLS. */
+const paraTodos = (no: No): boolean => !!no && !dependeDeDados(no);
 
 function politica(tipoStmt: string, s: No): Achado[] {
   so(s, ['policy_name', 'table', 'cmd_name', 'permissive', 'roles', 'qual', 'with_check'], 'POLICY');
@@ -865,9 +918,12 @@ function politica(tipoStmt: string, s: No): Achado[] {
   const ctx: Ctx = { ...CONSULTA, agregados: false };
   if (s.qual) expressao(s.qual, ctx, `a política ${s.policy_name} (USING)`);
   if (s.with_check) expressao(s.with_check, ctx, `a política ${s.policy_name} (WITH CHECK)`);
-  const avisos = permissiva(s.qual) || permissiva(s.with_check) ? [`a política ${s.policy_name} é permissiva (true, 1=1…): libera TODAS as linhas de ${t} para todo usuário logado`] : [];
+  const abreTudo = paraTodos(s.qual) || paraTodos(s.with_check);
+  const avisos = abreTudo ? [`a política ${s.policy_name} vale igual para todo usuário logado (true, 1=1… ou nada que olhe a linha ou quem pergunta): libera TODAS as linhas de ${t}`] : [];
   const criar = tipoStmt === 'CreatePolicyStmt';
-  return [direto(`${criar ? 'CREATE' : 'ALTER'} POLICY`, `${criar ? 'Cria' : 'Altera'} a política ${s.policy_name} da tabela ${t} (regra de quem vê/grava cada linha)`, { avisos })];
+  const o_que = `${criar ? 'Cria' : 'Altera'} a política ${s.policy_name} da tabela ${t} (regra de quem vê/grava cada linha)`;
+  if (abreTudo) return [confirmar(`${criar ? 'CREATE' : 'ALTER'} POLICY`, `${o_que} — LIBERA todas as linhas para qualquer usuário logado (mesmo efeito de desligar a RLS)`, { avisos })];
+  return [direto(`${criar ? 'CREATE' : 'ALTER'} POLICY`, o_que, { avisos })];
 }
 
 const OBJETOS_DE_COMENTARIO: Record<string, { quem: string; max: number }> = {
@@ -1043,6 +1099,11 @@ function apagar(s: No): Achado[] {
   if (s.concurrent) recusa('DROP INDEX CONCURRENTLY não funciona aqui (o servidor roda dentro de uma transação)');
   const que = s.removeType.replace('OBJECT_', '').replace('MATVIEW', 'MATERIALIZED VIEW');
   const cascata = s.behavior === 'DROP_CASCADE';
+  // CASCADE em tipo ou função derruba COLUNAS, políticas e gatilhos de outras tabelas, e as linhas dessas colunas não entram no snapshot
+  if (cascata && (s.removeType === 'OBJECT_TYPE' || s.removeType === 'OBJECT_FUNCTION')) {
+    recusa(`DROP ${que} … CASCADE não é permitido: levaria junto colunas, políticas e gatilhos de outras tabelas. Remova os dependentes antes, um a um, e depois apague (sem CASCADE)`);
+  }
+  const funcoesRemovidas: string[] = [];
   const nomes: string[] = [];
   const copiar: string[] = [];
   for (const o of s.objects ?? []) {
@@ -1052,6 +1113,7 @@ function apagar(s: No): Achado[] {
       const n = nomesSemEsquema(strings(ov.objname, 'DROP FUNCTION'), 1, 'DROP FUNCTION');
       semFechadaEstrutura(n[0]!, 'DROP FUNCTION');
       nomes.push(n[0]!);
+      funcoesRemovidas.push(n[0]!);
     } else if (s.removeType === 'OBJECT_TYPE') {
       if (ot !== 'TypeName') recusa('DROP TYPE: forma inesperada');
       nomes.push(nomeDeTipo(ov.names, 'DROP TYPE'));
@@ -1076,6 +1138,7 @@ function apagar(s: No): Achado[] {
   return [
     confirmar(`DROP ${que}`, `APAGA ${que} ${nomes.join(', ')}${cascata ? ' com CASCADE (leva junto tudo que depende)' : ''}`, {
       copiar,
+      funcoesRemovidas,
       avisos: s.removeType === 'OBJECT_TABLE' ? [`DROP TABLE apaga as linhas: o servidor guarda uma cópia (snapshot) antes, mas só dura 60 dias`] : [],
     }),
   ];
@@ -1158,14 +1221,15 @@ function inserir(s: No): Achado[] {
       atribuicoes(oc.targetList, 'INSERT … ON CONFLICT');
       if (oc.whereClause) expressao(oc.whereClause, CONSULTA, 'INSERT … ON CONFLICT');
       copiar = [t];
-      // INSERT … SELECT … FROM … ON CONFLICT DO UPDATE sem nenhum WHERE reescreve todas as linhas que casarem: é um UPDATE da tabela inteira
+      // INSERT … SELECT … ON CONFLICT DO UPDATE reescreve quantas linhas a consulta casar, e "quantas" não se vê no texto (WHERE true, WHERE id > 0, UNION…):
+      // vindo de uma consulta e não de uma lista de VALUES, pede confirmação. Upsert de VALUES é limitado pela própria lista.
       const fonte = s.selectStmt?.SelectStmt;
-      upsertEmMassa = !!fonte && (fonte.fromClause ?? []).length > 0 && !fonte.whereClause && !oc.whereClause;
+      upsertEmMassa = !!fonte && (fonte.valuesLists ?? []).length === 0;
     } else if (oc.action !== 'ONCONFLICT_NOTHING') recusa('INSERT … ON CONFLICT: ação inesperada');
   }
   retornando(s.returningClause, 'INSERT');
   if (upsertEmMassa) {
-    return [{ tipo: 'INSERT', acao: 'confirmar', o_que: `INSERT … SELECT … ON CONFLICT DO UPDATE sem WHERE na tabela ${t}: REESCREVE todas as linhas que já existem e casarem com a consulta`, dados: true, copiar }];
+    return [{ tipo: 'INSERT', acao: 'confirmar', o_que: `INSERT … SELECT … ON CONFLICT DO UPDATE na tabela ${t}: REESCREVE as linhas que já existem e casarem com a consulta (pode ser a tabela inteira)`, dados: true, copiar }];
   }
   return [{ tipo: 'INSERT', acao: 'direto', o_que: `Insere linha(s) na tabela ${t}${copiar ? ' (ON CONFLICT DO UPDATE muda as que já existem)' : ''}`, dados: true, copiar }];
 }
@@ -1515,7 +1579,7 @@ function classificarInterno(sqlBruto: unknown): AnaliseSql {
   const comandos: ComandoSql[] = [];
   porComando.forEach((lista, idx) => {
     for (const a of lista) {
-      comandos.push({ n: idx + 1, tipo: a.tipo, acao: a.acao, o_que: a.o_que, ...(a.criou ? { criou: a.criou } : {}), ...(a.matview ? { matview: a.matview } : {}), ...(a.funcao ? { funcao: a.funcao } : {}) });
+      comandos.push({ n: idx + 1, tipo: a.tipo, acao: a.acao, o_que: a.o_que, ...(a.criou ? { criou: a.criou } : {}), ...(a.matview ? { matview: a.matview } : {}), ...(a.funcao ? { funcao: a.funcao } : {}), ...(a.funcoesRemovidas?.length ? { funcoesRemovidas: a.funcoesRemovidas } : {}) });
       if (a.alvo) alvosDeEscrita.push({ n: idx + 1, ...a.alvo });
     }
   });

@@ -220,12 +220,24 @@ export async function confirmarSql(
 
 // ------------------------------------------------------------------ ferramentas
 
+/**
+ * Mensagens de erro do parser e do banco citam pedaços do SQL e valores (`near "..."`, `invalid input syntax for type date: "12/13/1990"`): para o registro
+ * do conector ficam sem o que está entre aspas e sem sequências longas de dígitos. O texto inteiro volta só para quem fez o pedido (e o SQL inteiro fica no admin_log do sistema).
+ */
+export function limparParaAuditoria(texto: string | undefined): string | undefined {
+  return texto?.replace(/"[^"]{0,300}"/g, '"…"').replace(/'[^']{0,300}'/g, "'…'").replace(/\d{5,}/g, '#').slice(0, 240);
+}
+
 /** Auditoria do conector: tipos, tabelas, hash e resultado; nunca o texto do SQL nem os valores. */
 function auditarSql(auditar: Auditar, rastro: () => Rastro): Auditar {
   return (r) => {
     const a = (r.argumentos ?? {}) as Record<string, unknown>;
     const x = rastro();
-    auditar({ ...r, argumentos: { sistema: a.sistema, motivo: a.motivo, confirmacao: a.confirmacao, comandos: x.comandos, tabelas: x.tabelas, sqlHash: x.hash, sqlTamanho: x.tamanho, snapshot: x.snapshot, resultado: x.resultado ?? (r.ok ? 'ok' : undefined) } });
+    auditar({
+      ...r,
+      erro: limparParaAuditoria(r.erro),
+      argumentos: { sistema: a.sistema, motivo: a.motivo, confirmacao: a.confirmacao, comandos: x.comandos, tabelas: x.tabelas, sqlHash: x.hash, sqlTamanho: x.tamanho, snapshot: x.snapshot, resultado: limparParaAuditoria(x.resultado) ?? (r.ok ? 'ok' : undefined) },
+    });
   };
 }
 

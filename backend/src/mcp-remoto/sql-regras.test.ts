@@ -6,8 +6,8 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { classificar, ErroSql, MAX_COMANDOS, MAX_SQL } from './sql-regras.js';
 
-const HASH_DOS_CASOS = '07e1a3c3597f0263a0527dc064d2d0513ab03be8e9292f1aa64e75dfce27f7f7';
-const HASH_DAS_REGRAS = 'dc8d44c32665f212e9491140612fc158a2ba280a54c15cc1f2322597f864ce5a';
+const HASH_DOS_CASOS = 'd991fa5f4e902062f1889b8be4f3e63bb4a3dcd89d5e07d078a7496fec94078f';
+const HASH_DAS_REGRAS = '79dbd2ae9bb4a318f79931bf725ca3e2557b057753dea2929c00c11a87396a94';
 
 interface Caso {
   sql: string;

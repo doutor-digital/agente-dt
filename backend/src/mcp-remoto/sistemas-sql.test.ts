@@ -8,7 +8,7 @@ import { ErroSistemas, sistemasChamar } from '../lib/integracoes/sistemas.js';
 import { confirmarAlteracao, criarContextoSistemas, PendentesSistemas, prepararAlteracao, registrarEscritaSistemas, registrarLeituraSistemas, type ContaSistemas } from './sistemas.js';
 import { confirmarEstrutura, prepararTabela } from './sistemas-estrutura.js';
 import { CHAVE_FALSA, CONFIG_FALSA, servidorAdminFalso } from './sistemas-falso.js';
-import { confirmarSql, prepararSql, registrarSqlSistemas, sqlDireto } from './sistemas-sql.js';
+import { confirmarSql, limparParaAuditoria, prepararSql, registrarSqlSistemas, sqlDireto } from './sistemas-sql.js';
 import { INSTRUCOES } from './servidor.js';
 
 // O SQL livre do sistema novo: direto, com backup antes; o que destrói em dois passos; o que nunca roda é recusado. Contra o servidor falso.
@@ -365,5 +365,20 @@ test('pelo MCP: direto, dois passos, auditoria do conector sem o texto do SQL (C
   assert.deepEqual(nega.argumentos.comandos, ['DROP TABLE:confirmar']);
   assert.ok(!JSON.stringify([d.texto, rec.texto, p.texto, c.texto, aud]).includes(CHAVE_FALSA));
   assert.ok(!JSON.stringify([d.texto, rec.texto, p.texto, c.texto, aud]).includes('api-rh'));
+  await fechar();
+});
+
+test('auditoria do conector: erro do parser/banco não leva valor entre aspas nem número longo (CPF, telefone); o resultado também não', async () => {
+  assert.equal(limparParaAuditoria('o SQL não é válido (syntax error at or near "cpf 123.456.789-00")'), 'o SQL não é válido (syntax error at or near "…")');
+  assert.equal(limparParaAuditoria("invalid input syntax for type date: '13/45/1990'"), "invalid input syntax for type date: '…'");
+  assert.equal(limparParaAuditoria('telefone 5511999998888 inválido'), 'telefone # inválido');
+  assert.equal(limparParaAuditoria(undefined), undefined);
+  assert.ok((limparParaAuditoria('x'.repeat(1000)) ?? '').length <= 240);
+  const { ctx } = montar();
+  const { chamar, auditoria, fechar } = await cliente(ctx, { escreve: true });
+  const r = await chamar('sistemas_sql', { sql: "update caixa_precos set valor = 1 where servico = 'cpf 123.456.789-00' and (", motivo: MOTIVO });
+  assert.equal(r.erro, true);
+  const aud = JSON.stringify(auditoria);
+  assert.ok(!aud.includes('123.456.789'), aud);
   await fechar();
 });
