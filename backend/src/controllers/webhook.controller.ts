@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import { HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import type { Unit } from '@prisma/client';
+import type { Conversation, Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { ferramentasChamadas } from '../lib/cadastro-na-franquia.js';
 import { cadastrarLeadDoTurno } from '../lib/cadastro-todo-lead.js';
@@ -50,6 +50,8 @@ import { consultaMarcadaNoTurno, enviarCartaoDeChegada } from '../lib/cartao-de-
 import { descreverPausa, emPausa } from '../lib/pausa-unidade.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
 import { voltarDaEsperaSeRespondeu } from '../lib/parados-worker.js';
+import { voltarDaEsperaNoTurno } from '../lib/voltar-da-espera-no-turno.js';
+import type { GanchosDoController, ResultadoRetomada, TurnoPerdido } from '../lib/recuperar-turnos.js';
 import { getPausedStagesGlobalSet } from '../services/actions.service.js';
 import { scheduleLeadMemoryUpdate, carimbarContato } from '../services/lead-memory.service.js';
 import { carimbarHumanoAssumiu, scheduleLeadMetrics } from '../services/lead-metrics.service.js';
@@ -897,10 +899,17 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
 }
 
 /** O que o coalescer roda quando a janela fecha: junta o burst num turno só (ver lib/turno-do-burst.ts). */
-function execucaoDoTurno(unit: Unit, leadId: number, ctx: ExtractedContext, requestStart: number) {
+function execucaoDoTurno(
+  unit: Unit,
+  leadId: number,
+  ctx: ExtractedContext,
+  requestStart: number,
+  retomada = false,
+  processar: typeof processAgent = processAgent,
+) {
   return (combinedMessage: string, audioUrls: string[], imageUrls: string[], traceIds: string[]): Promise<void> =>
     rodarTurnoDoBurst(traceIds, (ownerTraceId) =>
-      processAgent({
+      processar({
         unit,
         leadId,
         traceId: ownerTraceId,
@@ -917,9 +926,118 @@ function execucaoDoTurno(unit: Unit, leadId: number, ctx: ExtractedContext, requ
         isChatMessage: ctx.isChatMessage,
         requestStart,
         burstSize: traceIds.length,
+        retomada,
       }),
     );
 }
+
+/** O que `retomarTurnoPerdido` lê e escreve fora da lógica de decisão (trocável no teste). */
+export interface DepsRetomada {
+  conversa(unitId: string, leadId: string): Promise<Conversation | null>;
+  /** Só o que veio ANTES do pedido: o histórico de agora já tem a mensagem seguinte do paciente e a resposta da IA. */
+  anteriores(conversationId: string, t: TurnoPerdido): Promise<Array<{ role: string; content: string; createdAt: Date }>>;
+  registrar(t: TurnoPerdido, unit: Unit, leadId: number): Promise<void>;
+  agendar: typeof scheduleAgentRun;
+  processar: typeof processAgent;
+}
+
+const DEPS_RETOMADA_PADRAO: DepsRetomada = {
+  conversa: (unitId, leadId) => prisma.conversation.findUnique({ where: { unitId_leadId: { unitId, leadId } } }),
+  anteriores: (conversationId, t) =>
+    prisma.message.findMany({
+      where: { conversationId, traceId: { not: t.traceId }, createdAt: { lt: t.criadoEm } },
+      orderBy: { createdAt: 'desc' },
+      take: 6,
+      select: { role: true, content: true, createdAt: true },
+    }),
+  async registrar(t, unit, leadId) {
+    const recorder = new TraceRecorder(t.traceId, unit.id);
+    await syncRecorderSequence(recorder, t.traceId);
+    await recorder.step({
+      kind: 'THINKING',
+      title: '♻ Retomado após reinício do serviço: o turno anterior morreu no deploy; esta mensagem volta para a IA (uma vez só)',
+      payload: { leadId, recuperadoNoStart: true },
+    });
+  },
+  agendar: scheduleAgentRun,
+  processar: processAgent,
+};
+
+/**
+ * Recuperação no start (ver lib/recuperar-turnos.ts): refaz o pedido de um trace que o deploy matou no meio, DEPOIS de
+ * o orquestrador ter conferido que ninguém respondeu, que nada pausa e que o turno morto não passou do webhook.
+ * `unit` é a unidade DONA do cartão agora, não a gravada no trace. Reconstrói a mensagem a partir do webhook gravado
+ * e a devolve ao coalescer, marcada como retomada (não mexe na etapa). NÃO repete o que o webhook faz antes da IA.
+ */
+export async function retomarTurnoPerdido(t: TurnoPerdido, unit: Unit, deps: DepsRetomada = DEPS_RETOMADA_PADRAO): Promise<ResultadoRetomada> {
+  if (!unit.isActive) return 'descartado:unidade_inativa';
+  const leadId = Number(t.leadId);
+  if (!Number.isFinite(leadId) || leadId <= 0) return 'descartado:lead_invalido';
+
+  // Só pedido que veio do webhook do Kommo com mensagem de paciente (o do widget entrega por outro caminho).
+  const parsed = webhookSchema.safeParse(t.input);
+  if (!parsed.success || !getIncomingMessage(parsed.data)) return 'descartado:nao_e_mensagem_do_kommo';
+  const ctx = extractContext(parsed.data, leadId);
+  if (!ctx.isChatMessage) return 'descartado:nao_e_mensagem_do_kommo';
+
+  const conv = await deps.conversa(unit.id, String(leadId));
+  // Resposta à confirmação de véspera e toque no botão do lembrete têm tratador em código no webhook (idempotente). Aqui
+  // não os rodo de novo: "sim"/"1" pode ser resposta a um lembrete OU conversa solta, e quem decide é a recepção.
+  if (conv && (podeSerRespostaD1(conv, ctx.humanMessage, t.criadoEm) || podeSerBotaoDoLembrete(unit.slug, ctx.humanMessage))) {
+    return 'tarefa:pode_ser_resposta_a_lembrete';
+  }
+  if (conv) {
+    const anteriores = await deps.anteriores(conv.id, t);
+    if (ehEncerramentoRepetido(ctx.humanMessage, anteriores, t.criadoEm)) return 'descartado:encerramento_repetido';
+  }
+
+  await deps.registrar(t, unit, leadId);
+  logger.info({ traceId: t.traceId, leadId, unit: unit.slug }, 'recuperar-turnos: pedido perdido volta para a IA');
+
+  const status = deps.agendar({
+    unitSlug: unit.slug,
+    leadId,
+    traceId: t.traceId,
+    humanMessage: ctx.humanMessage,
+    audioUrl: ctx.audioUrl,
+    imageUrl: ctx.imageUrl,
+    run: execucaoDoTurno(unit, leadId, ctx, performance.now(), true, deps.processar),
+    retomada: { chegouEm: t.criadoEm.getTime() },
+  });
+  // Burst cheio (20 mensagens) = o paciente está em plena conversa e há turnos rodando: nada de turno paralelo sobre o
+  // mesmo thread (duas respostas). O trace fecha com o motivo.
+  if (status === 'rejected') return 'descartado:burst_cheio';
+  return 'retomado';
+}
+
+/**
+ * Quem é a dona do paciente AGORA: a unidade gravada no trace pode já não ser (o cartão mudou de funil e de IA — comercial
+ * ↔ resgate dividem a conta do Kommo). Mesma regra do webhook. null = unidade inativa ou lead inválido.
+ */
+export async function unidadeDonaDoTurno(t: TurnoPerdido): Promise<Unit | null> {
+  const leadId = Number(t.leadId);
+  if (!Number.isFinite(leadId) || leadId <= 0) return null;
+  const gravada = await prisma.unit.findUnique({ where: { id: t.unitId } });
+  if (!gravada || !gravada.isActive) return null;
+  const dona = await resolveOwnerUnitByStage(gravada, leadId);
+  return dona.isActive ? dona : null;
+}
+
+/** Nome do contato e mensagem do pedido gravado, para o texto da tarefa. */
+export function resumoDoPedido(t: TurnoPerdido): { contato: string | null; texto: string } {
+  const parsed = webhookSchema.safeParse(t.input);
+  const leadId = Number(t.leadId);
+  if (!parsed.success || !getIncomingMessage(parsed.data)) return { contato: null, texto: '' };
+  const ctx = extractContext(parsed.data, leadId);
+  return { contato: ctx.contactName, texto: ctx.humanMessage };
+}
+
+/** O que o orquestrador da recuperação pede ao controller (ver `agendarRecuperacao` em server.ts). */
+export const ganchosDeRecuperacao: GanchosDoController = {
+  unidadeDona: unidadeDonaDoTurno,
+  retomar: (t, unit) => retomarTurnoPerdido(t, unit),
+  resumoDoPedido,
+};
 
 export type AgentDeliverFn = (text: string) => Promise<{ via: string; detail: unknown }>;
 
@@ -942,6 +1060,8 @@ export async function processAgent(args: {
   isChatMessage: boolean;
   requestStart: number;
   burstSize?: number;
+  /** Turno refeito pela recuperação do start (lib/recuperar-turnos.ts): não mexe na etapa do cartão. */
+  retomada?: boolean;
   deliver?: AgentDeliverFn;
 }): Promise<void> {
   const { unit, leadId, traceId, audioUrl, imageUrl, chatId, talkId, contactId, isChatMessage, requestStart, burstSize, deliver } = args;
@@ -981,7 +1101,7 @@ export async function processAgent(args: {
   // volta pra EM QUALIFICAÇÃO na hora — ANTES das travas de horário/etapa, porque o cartão tem de
   // andar mesmo quando a Sofia não vai responder (21h, IA fora da etapa). Esperado, pra este turno
   // já ver a etapa nova. Nunca lança.
-  await voltarDaEsperaSeRespondeu(unit, leadId, humanMessage);
+  await voltarDaEsperaNoTurno(args.retomada, () => voltarDaEsperaSeRespondeu(unit, leadId, humanMessage));
 
   if (burstSize && burstSize > 1) {
     await recorder.step({
@@ -1419,7 +1539,8 @@ export async function processAgent(args: {
       await recorder.step({
         kind: 'THINKING',
         title: '⏭ Resposta segurada — o paciente mandou outra mensagem enquanto eu respondia; o próximo turno responde as duas',
-        payload: { leadId, reply, motivo: 'atropelada' },
+        // `mensagemId`: a recuperação do start restaura a resposta segurada a partir daqui se o processo morrer antes do próximo turno
+        payload: { leadId, reply, motivo: 'atropelada', mensagemId: idDaUltimaResposta(result.messages) },
       });
       await finishWidgetSilently();
     }

@@ -85,6 +85,7 @@ export async function claimMessageId(
   scope: string,
   messageId: string,
   ttlMs: number = TTL_MS,
+  opcoes: { recusarSeBancoFalhar?: boolean } = {},
 ): Promise<boolean> {
   if (!messageId) return true;
 
@@ -111,6 +112,12 @@ export async function claimMessageId(
     if (primeiraVez) memoria.set(key, agora + ttlMs);
     return primeiraVez;
   } catch (err) {
+    // Quem REFAZ trabalho (recuperar-turnos: reprocessa um pedido velho) pede o contrário: sem certeza de que é a
+    // primeira vez, não refaz — resposta em dobro é pior que atraso. Aí a tarefa para a recepção cobre o paciente.
+    if (opcoes.recusarSeBancoFalhar) {
+      logger.warn({ err: String(err), key }, 'dedup: banco indisponível — reivindicação recusada (o chamador não refaz sem certeza)');
+      return false;
+    }
     // Banco fora não pode calar a IA: melhor arriscar duplicata que perder lead.
     logger.warn({ err: String(err), key }, 'dedup: banco indisponível — deixando a mensagem passar');
     memoria.set(key, agora + ttlMs);

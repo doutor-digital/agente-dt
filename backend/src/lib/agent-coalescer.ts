@@ -76,6 +76,12 @@ export function scheduleAgentRun(args: {
   audioUrl: string | null;
   imageUrl: string | null;
   run: (combined: string, audioUrls: string[], imageUrls: string[], traceIds: string[]) => Promise<void>;
+  /**
+   * Pedido VELHO que a recuperação do start devolve à fila (ver recuperar-turnos.ts). Ele entra na ordem em que o
+   * paciente escreveu (antes das mensagens novas) e NÃO troca o `run` do burst: o `run` da mensagem mais nova, ao vivo,
+   * é o que tem o contexto certo.
+   */
+  retomada?: { chegouEm: number };
 }): 'started' | 'joined' | 'rejected' {
   const key = bufferKey(args.unitSlug, args.leadId);
   const existing = buffers.get(key);
@@ -85,7 +91,7 @@ export function scheduleAgentRun(args: {
     text: args.humanMessage,
     audioUrl: args.audioUrl,
     imageUrl: args.imageUrl,
-    arrivedAt: now,
+    arrivedAt: args.retomada?.chegouEm ?? now,
     traceId: args.traceId,
   };
 
@@ -97,8 +103,14 @@ export function scheduleAgentRun(args: {
       );
       return 'rejected';
     }
-    existing.flush = args.run;
-    existing.pending.push(newMsg);
+    if (args.retomada) {
+      // Na ordem de chegada, estável: depois dos que chegaram antes, antes dos que chegaram depois.
+      const i = existing.pending.findIndex((m) => m.arrivedAt > newMsg.arrivedAt);
+      existing.pending.splice(i === -1 ? existing.pending.length : i, 0, newMsg);
+    } else {
+      existing.flush = args.run;
+      existing.pending.push(newMsg);
+    }
     emVoo.add(args.traceId);
     if (existing.running) {
       logger.debug(

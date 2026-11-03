@@ -51,3 +51,20 @@ test('deveLimpar: limpeza do banco no máximo a cada 10 min', () => {
   assert.equal(deveLimpar(9 * 60_000, 0), false);
   assert.equal(deveLimpar(10 * 60_000, 0), true);
 });
+
+// ── quem REFAZ trabalho pede o contrário: sem certeza, não refaz ────────────────────────────────
+
+test('claimMessageId com recusarSeBancoFalhar: banco fora → recusa (e não guarda na memória)', async () => {
+  clearDedupCache();
+  // Sem banco no teste: o INSERT falha. O padrão deixa passar; o estrito recusa.
+  assert.equal(await claimMessageId('turno-recuperado', 'trace-x', 60_000, { recusarSeBancoFalhar: true }), false);
+  // Não ficou memória "já vi": o mesmo id no modo padrão ainda passa (é a primeira vez que o padrão pergunta).
+  assert.equal(await claimMessageId('turno-recuperado', 'trace-x', 60_000), true);
+  clearDedupCache();
+});
+
+test('claimMessageId padrão continua deixando passar com o banco fora (a IA não pode calar)', async () => {
+  clearDedupCache();
+  assert.equal(await claimMessageId('kommo', 'msg-padrao', 60_000), true);
+  clearDedupCache();
+});

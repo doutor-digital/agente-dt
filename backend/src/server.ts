@@ -32,7 +32,9 @@ import { startJudgeWorker, stopJudgeWorker } from './lib/judge-worker.js';
 import { startResultadosWorker, stopResultadosWorker } from './lib/resultados-worker.js';
 import { iniciarAutomacoes } from './lib/automacoes-estado.js';
 import { iniciarCrmCompartilhado } from './lib/crm-compartilhado.js';
-import { iniciarSupervisorDosWorkers, encerrarSupervisorDosWorkers } from './lib/worker-lease.js';
+import { iniciarSupervisorDosWorkers, encerrarSupervisorDosWorkers, estadoDosWorkers } from './lib/worker-lease.js';
+import { agendarRecuperacao, posseDaLideranca } from './lib/recuperar-turnos.js';
+import { ganchosDeRecuperacao } from './controllers/webhook.controller.js';
 import { esperarTurnosDoDesligamento } from './lib/turnos-em-andamento.js';
 import { idsEmVoo } from './lib/agent-coalescer.js';
 import { desligarComGraca, fecharServidor, planoDeDesligamento } from './lib/desligamento.js';
@@ -265,6 +267,10 @@ async function main(): Promise<void> {
     },
   });
 
+  // Refaz o que o deploy matou no meio (lib/recuperar-turnos.ts). Só varre quem é líder do worker_leases em modo `lease`
+  // (= o container antigo já drenou e soltou o lease), por 10 min, e só trace nascido perto da posse da liderança.
+  const pararRecuperacao = agendarRecuperacao(ganchosDeRecuperacao, () => posseDaLideranca(estadoDosWorkers()));
+
   const server = app.listen(env.PORT, () => {
     logger.info(`Backend ouvindo em http://localhost:${env.PORT}`);
     logger.info(`Webhook URL → POST http://localhost:${env.PORT}/api/webhooks/{slug}/{kommo|salesbot|meta}`);
@@ -281,6 +287,8 @@ async function main(): Promise<void> {
     }
     encerrando = true;
     logger.info({ signal }, 'shutdown iniciado');
+    // Este processo está saindo: a varredura de turnos perdidos é do próximo.
+    pararRecuperacao();
     // Ordem (lib/desligamento.ts): espera o Traefik tirar este container da lista → fecha a porta → drena a fila do
     // coalescer e espera os turnos da IA (Timbó, lead 5142896, 30/10/2026: a foto da paciente morreu na fila do
     // coalescer). Turno no meio não pode ser cortado: deixa o checkpoint com chamada sem resultado e a conversa passa a
