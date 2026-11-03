@@ -116,6 +116,11 @@ export async function confirmarEstrutura(
       rastro.resultado = 'sem resposta: resultado incerto';
       throw new ErroDeEntrada(`NÃO sei se a estrutura foi alterada (${e.message}). Confira com sistemas_esquema antes de repetir; o código ${id} continua valendo, mas só repita depois de conferir que NÃO foi aplicado (repetir um CREATE ou ADD que já existe dá erro "já existe").`);
     }
+    // servidor ainda na API 0.1.9 (ou anterior): a rota /estrutura dele espera `sql` e este conector manda os campos. Foi o defeito de 03/11 ("escreva o SQL (campo sql)").
+    if (e instanceof ErroSistemas && /escreva o SQL \(campo sql\)/.test(e.message)) {
+      rastro.resultado = 'servidor desatualizado';
+      throw new ErroDeEntrada('o servidor do sistema novo está numa versão ANTIGA (antes da 0.1.10) e não entende a estrutura por campos. NADA foi criado. Avise o João para publicar a API 0.1.11 (publicar-api-0.1.11.sh); enquanto isso, nada de tabela nova por aqui.');
+    }
     rastro.resultado = `recusado: ${e instanceof Error ? e.message : String(e)}`.slice(0, 500);
     throw e;
   }

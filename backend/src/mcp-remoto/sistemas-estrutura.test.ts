@@ -232,3 +232,15 @@ test('descrições em português dizem que é por campos, que não há SQL próp
   assert.match(t.description!, /text, integer, bigint, numeric\(12,2\), boolean, date, timestamptz, uuid, jsonb/);
   await fechar();
 });
+
+test('servidor antigo (API 0.1.9: "escreva o SQL (campo sql)"): a mensagem diz que o servidor está desatualizado, nada é criado e o código se gasta', async () => {
+  const { ctx } = montar();
+  const conta = [...ctx.contas.values()][0]!;
+  conta.fonte.chamar = async (m, c) => {
+    if (m === 'GET') return { tabelas: [] };
+    throw new ErroSistemas('escreva o SQL (campo sql)', 400);
+  };
+  const pend = new PendentesSistemas();
+  const p = await prepararTabela(ctx, pend, QUEM, { nome: 'caixa_x', colunas: COLUNAS, motivo: MOTIVO });
+  await assert.rejects(() => confirmarEstrutura(ctx, pend, QUEM, { confirmacao: p.confirmacao }), /versão ANTIGA.*0\.1\.10.*NADA foi criado.*0\.1\.11/);
+});
