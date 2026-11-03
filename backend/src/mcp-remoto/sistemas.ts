@@ -5,9 +5,10 @@
  *
  * LEITURA (qualquer pessoa com acesso ao conector): `sistemas_esquema`, `sistemas_consultar` (um SELECT), `sistemas_usuarios`,
  * `sistemas_log`, `sistemas_simular` (auditoria: o que um usuário enxerga/consegue fazer; o modo escrever é sempre desfeito).
- * ESCRITA (só quem está em MCP_ESCRITA_EMAILS, como o Kommo): em DOIS passos, `sistemas_preparar_alteracao` mostra o que vai
- * mudar (antes → depois) e devolve um código; `sistemas_confirmar_alteracao` com o código grava. Mais `sistemas_usuario`
- * (papel, unidade, ativo) e `sistemas_convite` (link de acesso, sem senha).
+ * ESCRITA (só quem está em MCP_ESCRITA_EMAILS, como o Kommo): `sistemas_sql` (sistemas-sql.ts) roda SQL DIRETO — criar e alterar quase tudo —
+ * e o que destrói (DROP, TRUNCATE, UPDATE/DELETE sem WHERE…) segue em dois passos (sistemas_preparar_sql → sistemas_confirmar_sql). Aqui ficam
+ * `sistemas_preparar_alteracao`/`confirmar` (uma linha por vez, com antes → depois), `sistemas_usuario` (papel INCLUSIVE admin, unidade, ativo;
+ * rebaixar ou desativar um admin é em dois passos, em sistemas-admin.ts) e `sistemas_convite` (link de acesso, sem senha).
  *
  * Quem pediu (`quem`) é o e-mail de quem entrou no conector: o servidor o grava no registro de alterações.
  */
@@ -15,7 +16,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { Auditar } from '../franquia-mcp/ferramentas.js';
 import { ErroDeEntrada } from '../franquia-mcp/travas.js';
-import { ErroSistemas } from '../lib/integracoes/sistemas.js';
+import { ErroSistemas, type TipoSistema } from '../lib/integracoes/sistemas.js';
 import { executar } from './ferramenta.js';
 import { acharSlug } from './unidades.js';
 
@@ -30,6 +31,17 @@ export interface ContaSistemas {
   fonte: FonteSistemas;
   /** endereço da tela RH, para montar o link de convite */
   tela?: string;
+  /** rh (RH/Caixa/Financeiro, padrão) ou dsc (Descontratos/Ficha): as tabelas fechadas e as funções de acesso mudam */
+  tipo?: TipoSistema;
+}
+
+export const tipoDaConta = (c: ContaSistemas): TipoSistema => c.tipo ?? 'rh';
+
+/** Usuário, convite, admin e estrutura por campos são do RH/Caixa; no Descontratos o caminho é o SQL (sistemas_sql). */
+export function soRh(c: ContaSistemas, oque: string): void {
+  if (tipoDaConta(c) !== 'rh') {
+    throw new ErroDeEntrada(`${oque} só existe no RH/Caixa. No sistema "${c.slug}" (Descontratos/Ficha) os usuários são geridos pela tela de administração dele; para dados e estrutura use sistemas_sql (e sistemas_preparar_sql para o que destrói).`);
+  }
 }
 
 export interface ContextoSistemas {
@@ -50,15 +62,19 @@ export const VALIDADE_MS = 10 * 60_000;
 /** acima disso a resposta de `sistemas_consultar` é cortada (o servidor já limita a 1.000 linhas) */
 export const MAX_CARACTERES = 200_000;
 
-const SEM_INTEGRACAO = 'o sistema novo (RH/Caixa) ainda não está ligado neste conector: cadastre a URL e a chave no painel de integrações (/api/integracoes/painel, coluna "Sistemas (RH/Caixa)").';
+const SEM_INTEGRACAO = 'o sistema novo (RH/Caixa/Descontratos) ainda não está ligado neste conector: cadastre a URL e a chave no painel de integrações (/api/integracoes/painel, coluna "Sistemas (RH/Caixa)").';
+
+/** Nomes que a conversa usa para os dois sistemas; valem só se o sistema do outro lado está ligado. */
+const APELIDOS: Record<string, string> = { dsc: 'descontratos', descontrato: 'descontratos', ficha: 'descontratos', fichas: 'descontratos', caixa: 'rh', financeiro: 'rh', 'rh-caixa': 'rh' };
 
 export function resolverSistema(ctx: ContextoSistemas, pedido?: string): ContaSistemas {
   if (ctx.contas.size === 0) throw new ErroDeEntrada(SEM_INTEGRACAO);
   if (!pedido?.trim()) {
     if (ctx.contas.size === 1) return [...ctx.contas.values()][0]!;
-    throw new ErroDeEntrada(`informe o sistema. Ligados: ${[...ctx.contas.keys()].join(', ')}`);
+    throw new ErroDeEntrada(`informe o sistema (parâmetro "sistema"). Ligados: ${[...ctx.contas.keys()].join(', ')} — "rh" é o RH/Caixa/Financeiro, "descontratos" é o Descontratos/Ficha`);
   }
-  const slug = acharSlug(ctx.contas.keys(), pedido);
+  const apelido = APELIDOS[pedido.trim().toLowerCase()];
+  const slug = apelido && ctx.contas.has(apelido) ? apelido : acharSlug(ctx.contas.keys(), pedido);
   if (!slug) throw new ErroDeEntrada(`sistema "${pedido}" não está ligado ou é ambíguo. Ligados: ${[...ctx.contas.keys()].join(', ')}`);
   return ctx.contas.get(slug)!;
 }
@@ -153,9 +169,9 @@ function umComando(sql: unknown, estrito = false): { sql: string; esqueleto: str
 /** Só SELECT (ou WITH … SELECT). Qualquer palavra de escrita fora de texto entre aspas é recusada. */
 export function validarSelect(sql: unknown): string {
   const { sql: texto, esqueleto } = umComando(sql);
-  if (!/^\(*\s*(select|with)\b/i.test(esqueleto)) throw new ErroDeEntrada('só é permitido um SELECT (ou WITH … SELECT); para alterar dados use sistemas_preparar_alteracao');
+  if (!/^\(*\s*(select|with)\b/i.test(esqueleto)) throw new ErroDeEntrada('só é permitido um SELECT (ou WITH … SELECT); para alterar dados use sistemas_sql (ou sistemas_preparar_alteracao, uma linha por vez)');
   const achou = ESCRITA_NO_SQL.exec(esqueleto);
-  if (achou) throw new ErroDeEntrada(`a consulta é só leitura e tem a palavra "${achou[1]!.toUpperCase()}": para alterar dados use sistemas_preparar_alteracao`);
+  if (achou) throw new ErroDeEntrada(`a consulta é só leitura e tem a palavra "${achou[1]!.toUpperCase()}": para alterar dados use sistemas_sql (ou sistemas_preparar_alteracao, uma linha por vez)`);
   return texto;
 }
 
@@ -270,18 +286,22 @@ export interface Pendente {
   estrutura?: { sql: string; motivo: string; comandos: number; entrada: Record<string, unknown> };
   /** só nas concessões de ADMIN (sistemas_preparar_admin): o que foi mostrado à pessoa e vai ser executado na confirmação */
   admin?: AdminPendente;
+  /** só no SQL que destrói (sistemas_preparar_sql): o SQL que foi mostrado e vai ser executado na confirmação */
+  sqlLivre?: { sql: string; motivo: string };
 }
 
 export type AdminPendente =
   | { acao: 'promover'; usuario: string; nome: string; login: string; papelAntes: string; motivo: string }
-  | { acao: 'convite'; nome: string; login: string; motivo: string };
+  | { acao: 'convite'; nome: string; login: string; motivo: string }
+  | { acao: 'rebaixar'; usuario: string; nome: string; login: string; papelAntes: string; destino: string; unidade?: string; motivo: string };
 
-export type TipoDeCodigo = 'dados' | 'estrutura' | 'admin';
-const tipoDe = (p: Pendente): TipoDeCodigo => (p.estrutura ? 'estrutura' : p.admin ? 'admin' : 'dados');
+export type TipoDeCodigo = 'dados' | 'estrutura' | 'admin' | 'sql';
+const tipoDe = (p: Pendente): TipoDeCodigo => (p.estrutura ? 'estrutura' : p.admin ? 'admin' : p.sqlLivre ? 'sql' : 'dados');
 const CONFIRMADOR: Record<TipoDeCodigo, [rotulo: string, ferramenta: string]> = {
   dados: ['DADOS', 'sistemas_confirmar_alteracao'],
   estrutura: ['ESTRUTURA', 'sistemas_confirmar_estrutura'],
   admin: ['ADMIN', 'sistemas_confirmar_admin'],
+  sql: ['SQL', 'sistemas_confirmar_sql'],
 };
 
 /** Códigos preparados à espera da confirmação, presos a quem preparou. Em memória: reinício = preparar de novo. */
@@ -332,7 +352,7 @@ export async function prepararAlteracao(
   if (a.operacao === 'atualizar' && !Object.keys(dados).length) throw new ErroDeEntrada('atualizar precisa de "dados" (as colunas novas)');
   if (a.operacao !== 'inserir' && !Object.keys(filtro).length) throw new ErroDeEntrada(`${a.operacao} precisa de "filtro" (coluna = valor): não mexo na tabela inteira`);
   if (a.operacao === 'apagar' && Object.keys(dados).length) throw new ErroDeEntrada('apagar não leva "dados"');
-  if (tabela.toLowerCase() === 'rh_usuarios') throw new ErroDeEntrada('rh_usuarios só muda por sistemas_usuario (papel, unidade, ativo)');
+  if (['rh_usuarios', 'dsc_usuarios'].includes(tabela.toLowerCase())) throw new ErroDeEntrada(`${tabela.toLowerCase()} não muda por aqui: usuário e papel têm ferramenta própria (RH: sistemas_usuario) ou a tela de administração do sistema (Descontratos)`);
   const c = resolverSistema(ctx, a.sistema);
   const r = resposta(
     await c.fonte.chamar('POST', '/admin/v1/preparar', {
@@ -386,8 +406,8 @@ export async function confirmarAlteracao(
   };
 }
 
-export const PEDE_DOIS_PASSOS =
-  'o perfil ADMIN (acesso total) não se concede direto: use sistemas_preparar_admin (mostra quem vira admin) e, com o ok da pessoa, sistemas_confirmar_admin';
+export const PEDE_DOIS_PASSOS_REBAIXAR =
+  'tirar o perfil ADMIN de alguém (mudar o papel ou desativar) não é direto: use sistemas_preparar_admin com acao="rebaixar" (mostra quem perde o acesso) e, com o ok da pessoa, sistemas_confirmar_admin';
 
 export async function alterarUsuario(
   ctx: ContextoSistemas,
@@ -396,7 +416,7 @@ export async function alterarUsuario(
 ): Promise<Saida> {
   if (!['papel', 'unidade', 'ativo'].includes(a.acao)) throw new ErroDeEntrada('acao: use papel, unidade ou ativo');
   const user_id = idUsuario(a.usuario);
-  if (a.acao === 'papel' && typeof a.valor === 'string' && /^admin$/i.test(a.valor.trim())) throw new ErroDeEntrada(PEDE_DOIS_PASSOS);
+  const paraAdmin = a.acao === 'papel' && typeof a.valor === 'string' && /^admin$/i.test(a.valor.trim());
   let valor: string | boolean = a.valor;
   if (a.acao === 'ativo') {
     if (typeof valor === 'string') {
@@ -405,10 +425,20 @@ export async function alterarUsuario(
       else throw new ErroDeEntrada('para "ativo" o valor é sim ou não');
     }
   } else if (typeof valor !== 'string' || !valor.trim()) {
-    throw new ErroDeEntrada(`para "${a.acao}" o valor é o texto novo (papel: gestao, financeiro, unidade ou socio — admin só por sistemas_preparar_admin; unidade: a sigla da unidade)`);
-  } else valor = valor.trim();
+    throw new ErroDeEntrada(`para "${a.acao}" o valor é o texto novo (papel: admin, gestao, financeiro, unidade ou socio; unidade: a sigla da unidade)`);
+  } else valor = paraAdmin ? 'admin' : valor.trim();
   const c = resolverSistema(ctx, a.sistema);
-  return { sistema: c.slug, ...resposta(await c.fonte.chamar('POST', '/admin/v1/usuario', { corpo: { acao: a.acao, user_id, valor, quem: quem.nome }, quem: quem.nome })) };
+  soRh(c, 'sistemas_usuario (papel, unidade, ativo)');
+  // dar admin é direto; TIRAR admin (mudar o papel ou desativar) é em dois passos: confere quem é o usuário antes de mexer
+  if ((a.acao === 'papel' && !paraAdmin) || (a.acao === 'ativo' && valor === false)) {
+    const lista = resposta(await c.fonte.chamar('GET', '/admin/v1/usuarios', { quem: quem.nome }));
+    const u = (Array.isArray(lista.usuarios) ? lista.usuarios : []).find((x: { user_id?: unknown }) => x.user_id === user_id);
+    if (u && (u as { papel?: unknown }).papel === 'admin') throw new ErroDeEntrada(PEDE_DOIS_PASSOS_REBAIXAR);
+  }
+  return {
+    sistema: c.slug,
+    ...resposta(await c.fonte.chamar('POST', '/admin/v1/usuario', { corpo: { acao: a.acao, user_id, valor, quem: quem.nome, ...(paraAdmin ? { confirmado_admin: true } : {}) }, quem: quem.nome })),
+  };
 }
 
 /** Junta a tela RH com o caminho "#a-<token>" do servidor. */
@@ -425,12 +455,13 @@ export async function criarConvite(
   a: { sistema?: string; nome: string; login: string; papel: string; unidade?: string },
 ) {
   const c = resolverSistema(ctx, a.sistema);
+  soRh(c, 'sistemas_convite');
   if (!c.tela) throw new ErroDeEntrada('falta o endereço da tela RH na configuração do sistema: cadastre de novo no painel de integrações, com o campo "tela"');
   if (!a.nome?.trim() || !a.login?.trim() || !a.papel?.trim()) throw new ErroDeEntrada('convite precisa de nome, login e papel');
-  if (/^admin$/i.test(a.papel.trim())) throw new ErroDeEntrada(PEDE_DOIS_PASSOS);
+  const admin = /^admin$/i.test(a.papel.trim());
   const r = resposta(
     await c.fonte.chamar('POST', '/admin/v1/convite', {
-      corpo: { nome: a.nome.trim(), login: a.login.trim(), papel: a.papel.trim(), ...(a.unidade?.trim() ? { unidade: a.unidade.trim() } : {}), quem: quem.nome },
+      corpo: { nome: a.nome.trim(), login: a.login.trim(), papel: admin ? 'admin' : a.papel.trim(), ...(a.unidade?.trim() && !admin ? { unidade: a.unidade.trim() } : {}), quem: quem.nome, ...(admin ? { confirmado_admin: true } : {}) },
       quem: quem.nome,
     }),
   );
@@ -440,7 +471,9 @@ export async function criarConvite(
     ok: r.ok ?? true,
     link: linkDoConvite(c.tela, r.caminho),
     validade: '7 dias',
-    aviso: 'Quem receber o link escolhe a própria senha. Envie só para a pessoa convidada; ninguém precisa de senha por aqui.',
+    aviso: admin
+      ? 'Convite de ADMIN: quem receber o link escolhe a própria senha e tem acesso total. Envie só para a pessoa convidada.'
+      : 'Quem receber o link escolhe a própria senha. Envie só para a pessoa convidada; ninguém precisa de senha por aqui.',
   };
 }
 
@@ -467,7 +500,7 @@ export function auditarSemDados(auditar: Auditar): Auditar {
   };
 }
 
-const SISTEMA = z.string().optional().describe('qual sistema (slug da unidade onde está cadastrado); pode omitir se só há um ligado');
+const SISTEMA = z.string().optional().describe('qual sistema: "rh" (RH/Caixa/Financeiro) ou "descontratos" (Descontratos + Ficha); pode omitir se só há um ligado');
 
 export function registrarLeituraSistemas(server: McpServer, ctx: ContextoSistemas, quem: QuemSistemas, auditarBruto: Auditar): void {
   const auditar = auditarSemDados(auditarBruto);
@@ -475,9 +508,9 @@ export function registrarLeituraSistemas(server: McpServer, ctx: ContextoSistema
   server.registerTool(
     'sistemas_esquema',
     {
-      title: 'Sistema novo (RH/Caixa): esquema do banco',
+      title: 'Sistema novo (RH/Caixa ou Descontratos/Ficha): esquema do banco',
       description:
-        'O mapa do banco do sistema novo de RH, Caixa e Financeiro: tabelas (com número de linhas), colunas e tipos, se a tabela tem RLS ' +
+        'O mapa do banco do sistema novo (RH/Caixa/Financeiro ou Descontratos/Ficha, conforme o parâmetro sistema): tabelas (com número de linhas), colunas e tipos, se a tabela tem RLS ' +
         'e quais políticas, funções do banco e restrições (checks). Comece por aqui antes de montar uma consulta. Use "tabela" para ver só ' +
         'as tabelas cujo nome contém o texto (ex.: "caixa"). Só leitura.',
       inputSchema: { sistema: SISTEMA, tabela: z.string().max(60).optional().describe('filtra pelo nome da tabela'), incluirFuncoes: z.boolean().optional().describe('com "tabela", inclui também as funções do banco (padrão: não)') },
@@ -488,11 +521,11 @@ export function registrarLeituraSistemas(server: McpServer, ctx: ContextoSistema
   server.registerTool(
     'sistemas_consultar',
     {
-      title: 'Sistema novo (RH/Caixa): consulta SELECT',
+      title: 'Sistema novo (RH/Caixa ou Descontratos/Ficha): consulta SELECT',
       description:
         'Roda UM SELECT (ou WITH … SELECT) no banco do sistema novo, só no schema public, com um papel só de leitura: sem hash de senha, sem ' +
         'dados de autenticação; máximo 1.000 linhas e 10 s. Um comando só, sem ";" no meio. Os dados de RH são sensíveis (CPF, salário, ' +
-        'dados bancários): peça só as colunas de que precisa. Para alterar dados use sistemas_preparar_alteracao.',
+        'dados bancários): peça só as colunas de que precisa. Para criar ou alterar (tabela, coluna, dados) use sistemas_sql.',
       inputSchema: { sistema: SISTEMA, sql: z.string().min(6).max(20_000).describe('um SELECT, ex.: select unidade, sum(valor) from caixa_lancamentos group by 1') },
       annotations: ro,
     },
@@ -501,8 +534,8 @@ export function registrarLeituraSistemas(server: McpServer, ctx: ContextoSistema
   server.registerTool(
     'sistemas_usuarios',
     {
-      title: 'Sistema novo (RH/Caixa): usuários e papéis',
-      description: 'Lista quem tem acesso ao sistema novo: identificador, login, nome, papel (admin, gestao, financeiro, unidade, socio), unidade, se está ativo e quando foi criado. O identificador (user_id) é o que sistemas_simular, sistemas_usuario e as demais ferramentas pedem.',
+      title: 'Sistema novo (RH/Caixa ou Descontratos/Ficha): usuários e papéis',
+      description: 'Lista quem tem acesso ao sistema novo: identificador, login, nome, papel (RH: admin, gestao, financeiro, unidade, socio; Descontratos: dono, diretoria, financeiro, unidade), unidade, se está ativo e quando foi criado. O identificador (user_id) é o que sistemas_simular, sistemas_usuario e as demais ferramentas pedem.',
       inputSchema: { sistema: SISTEMA },
       annotations: ro,
     },
@@ -511,8 +544,8 @@ export function registrarLeituraSistemas(server: McpServer, ctx: ContextoSistema
   server.registerTool(
     'sistemas_log',
     {
-      title: 'Sistema novo (RH/Caixa): registro de alterações',
-      description: 'O registro de alterações do sistema novo de RH (quem mudou, quando, em qual tabela, o antes e o depois). Filtre por "tabela" e por "desde" (AAAA-MM-DD). Padrão: 100 registros, máximo 500. Só o sistema de RH tem esse registro.',
+      title: 'Sistema novo (RH/Caixa ou Descontratos/Ficha): registro de alterações',
+      description: 'O registro de alterações do sistema novo de RH (quem mudou, quando, em qual tabela, o antes e o depois). Filtre por "tabela" e por "desde" (AAAA-MM-DD). Padrão: 100 registros, máximo 500. No RH vem o registro das telas; no Descontratos, o das alterações feitas por este conector.',
       inputSchema: {
         sistema: SISTEMA,
         tabela: z.string().max(63).optional(),
@@ -526,7 +559,7 @@ export function registrarLeituraSistemas(server: McpServer, ctx: ContextoSistema
   server.registerTool(
     'sistemas_simular',
     {
-      title: 'Sistema novo (RH/Caixa): simular um usuário (auditoria)',
+      title: 'Sistema novo (RH/Caixa ou Descontratos/Ficha): simular um usuário (auditoria)',
       description:
         'AUDITORIA de acesso: roda um comando COMO um usuário do sistema (do jeito que o app o enxerga, com as regras de RLS) e diz o que ele ' +
         'enxerga ou consegue fazer. Padrão: um SELECT, para ver o que o perfil lê. Com escrever=true o comando (INSERT, UPDATE ou DELETE) é ' +
@@ -556,7 +589,7 @@ export function registrarEscritaSistemas(
   server.registerTool(
     'sistemas_preparar_alteracao',
     {
-      title: 'Sistema novo (RH/Caixa): preparar alteração',
+      title: 'Sistema novo (RH/Caixa ou Descontratos/Ficha): preparar alteração',
       description:
         'PASSO 1 de 2 para ALTERAR dados do sistema novo: inserir, atualizar ou apagar linhas de UMA tabela. NÃO grava nada: o servidor resolve o ' +
         'filtro (igualdade, até 500 linhas) e devolve o resumo, quantas linhas mudam e o antes → depois (até 20 linhas). Mostre isso à pessoa e ' +
@@ -576,7 +609,7 @@ export function registrarEscritaSistemas(
   server.registerTool(
     'sistemas_confirmar_alteracao',
     {
-      title: 'Sistema novo (RH/Caixa): confirmar alteração',
+      title: 'Sistema novo (RH/Caixa ou Descontratos/Ficha): confirmar alteração',
       description:
         'PASSO 2 de 2: grava a alteração preparada, com o código que sistemas_preparar_alteracao devolveu. Só chame depois que a pessoa aprovou ' +
         'o resumo. O código vale 10 minutos e uma vez, e só para quem preparou. O servidor guarda o "antes" (dá para desfazer), grava, relê e ' +
@@ -589,11 +622,12 @@ export function registrarEscritaSistemas(
   server.registerTool(
     'sistemas_usuario',
     {
-      title: 'Sistema novo (RH/Caixa): mudar papel, unidade ou ativo de um usuário',
+      title: 'Sistema novo (RH/Caixa ou Descontratos/Ficha): mudar papel, unidade ou ativo de um usuário',
       description:
-        'Muda UMA coisa de um usuário do sistema novo, direto (sem prévia — é pequeno e reversível): acao="papel" (gestao, financeiro, unidade ' +
-        'ou socio; ADMIN não: é em dois passos, por sistemas_preparar_admin), acao="unidade" (unidade que existe no cadastro; obrigatória para os papéis unidade e socio) ou acao="ativo" (sim/não). ' +
-        'ANTES de chamar, diga à pessoa quem muda e de quê para quê, e só chame com o ok dela. Devolve o antes e o depois. user_id vem de sistemas_usuarios.',
+        'Muda UMA coisa de um usuário do sistema novo, DIRETO, sem prévia: acao="papel" (admin, gestao, financeiro, unidade ou socio — ADMIN também é direto), ' +
+        'acao="unidade" (unidade que existe no cadastro; obrigatória para os papéis unidade e socio) ou acao="ativo" (sim/não). ' +
+        'EXCEÇÃO em dois passos: TIRAR o perfil admin de alguém (mudar o papel dele ou desativá-lo) não roda aqui — use sistemas_preparar_admin com acao="rebaixar". ' +
+        'Devolve o antes e o depois e fica no registro (sistemas_log). user_id vem de sistemas_usuarios.',
       inputSchema: {
         sistema: SISTEMA,
         acao: z.enum(['papel', 'unidade', 'ativo']),
@@ -607,11 +641,11 @@ export function registrarEscritaSistemas(
   server.registerTool(
     'sistemas_convite',
     {
-      title: 'Sistema novo (RH/Caixa): criar convite de acesso',
+      title: 'Sistema novo (RH/Caixa ou Descontratos/Ficha): criar convite de acesso',
       description:
         'Cria um convite de acesso ao sistema novo e devolve o LINK COMPLETO (vale 7 dias). Não há senha: quem recebe o link escolhe a própria. ' +
-        'Informe nome, login e papel (gestao, financeiro, unidade ou socio); unidade é obrigatória para unidade e socio. Convite de ADMIN não sai daqui: é em dois passos, por sistemas_preparar_admin. ' +
-        'Confirme os dados com a pessoa antes de chamar, e entregue o link só à pessoa convidada.',
+        'Informe nome, login e papel (admin, gestao, financeiro, unidade ou socio — convite de ADMIN também é direto); unidade é obrigatória para unidade e socio. ' +
+        'Entregue o link só à pessoa convidada.',
       inputSchema: {
         sistema: SISTEMA,
         nome: z.string().min(1).max(120),

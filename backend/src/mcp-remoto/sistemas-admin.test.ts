@@ -10,7 +10,7 @@ import { confirmarAdmin, prepararAdmin, registrarAdminSistemas } from './sistema
 import { confirmarEstrutura, prepararTabela } from './sistemas-estrutura.js';
 import { CHAVE_FALSA, CONFIG_FALSA, servidorAdminFalso } from './sistemas-falso.js';
 
-// Conceder ADMIN só em dois passos (sistemas_preparar_admin / sistemas_confirmar_admin); sistemas_usuario e sistemas_convite recusam admin.
+// ADMIN: DAR é direto (sistemas_usuario e sistemas_convite mandam confirmado_admin); TIRAR (rebaixar/desativar) é em dois passos (sistemas_preparar_admin / sistemas_confirmar_admin).
 
 const QUEM = { usuario: 'user-1', nome: 'suzanne@exemplo.com' };
 const MOTIVO = 'nova gerente administrativa';
@@ -59,23 +59,63 @@ test('portão: as ferramentas de admin só aparecem para quem escreve; na produ�
   assert.ok(!bloco.includes('}\n      if ('), 'o bloco de quem escreve não pode ter fechado antes');
 });
 
-test('sistemas_usuario e sistemas_convite recusam admin (qualquer caixa/espaço) sem falar com o servidor; os outros papéis seguem diretos', async () => {
+test('dar admin é DIRETO (sistemas_usuario e sistemas_convite mandam confirmado_admin); tirar admin NÃO é direto, nem mudando o papel nem desativando', async () => {
   const { srv, ctx } = montar();
   for (const v of ['admin', 'ADMIN', ' Admin ']) {
-    await assert.rejects(() => alterarUsuario(ctx, QUEM, { acao: 'papel', usuario: 'u-2', valor: v }), /sistemas_preparar_admin/);
-    await assert.rejects(() => criarConvite(ctx, QUEM, { nome: 'Carla', login: 'carla', papel: v }), /sistemas_preparar_admin/);
+    const r = await alterarUsuario(ctx, QUEM, { acao: 'papel', usuario: 'u-2', valor: v });
+    assert.equal(r.ok, true);
+    assert.deepEqual(srv.chamadas.at(-1)!.corpo, { acao: 'papel', user_id: 'u-2', valor: 'admin', quem: QUEM.nome, confirmado_admin: true });
   }
-  assert.equal(srv.chamadas.length, 0);
-  await alterarUsuario(ctx, QUEM, { acao: 'papel', usuario: 'u-2', valor: 'gestao' });
-  await alterarUsuario(ctx, QUEM, { acao: 'ativo', usuario: 'u-2', valor: 'sim' });
-  await alterarUsuario(ctx, QUEM, { acao: 'unidade', usuario: 'u-2', valor: 'serra' });
-  assert.equal((await criarConvite(ctx, QUEM, { nome: 'Carla', login: 'carla', papel: 'gestao' })).link, 'https://rh.exemplo.com.br/app/#a-tok123456789abc');
-  assert.equal(srv.chamadas.length, 4);
-  // a descrição das ferramentas antigas não oferece mais "admin"
+  const conv = await criarConvite(ctx, QUEM, { nome: 'Carla', login: 'carla', papel: ' ADMIN ', unidade: 'serra' });
+  assert.equal(conv.link, 'https://rh.exemplo.com.br/app/#a-tok123456789abc');
+  assert.match(conv.aviso, /Convite de ADMIN/);
+  assert.deepEqual(srv.chamadas.at(-1)!.corpo, { nome: 'Carla', login: 'carla', papel: 'admin', quem: QUEM.nome, confirmado_admin: true });
+  // u-3 já é admin: mudar o papel dele ou desativá-lo NÃO roda direto (e nem chega a escrever no servidor)
+  const antes = srv.chamadas.length;
+  await assert.rejects(() => alterarUsuario(ctx, QUEM, { acao: 'papel', usuario: 'u-3', valor: 'gestao' }), /sistemas_preparar_admin.*rebaixar/);
+  await assert.rejects(() => alterarUsuario(ctx, QUEM, { acao: 'ativo', usuario: 'u-3', valor: 'não' }), /sistemas_preparar_admin.*rebaixar/);
+  assert.deepEqual(srv.chamadas.slice(antes).map((c) => `${c.metodo} ${c.caminho}`), ['GET /admin/v1/usuarios', 'GET /admin/v1/usuarios'], 'só leu a lista de usuários');
+  // quem não é admin segue direto; admin ativar/mudar unidade também
+  await alterarUsuario(ctx, QUEM, { acao: 'papel', usuario: 'u-1', valor: 'gestao' });
+  await alterarUsuario(ctx, QUEM, { acao: 'ativo', usuario: 'u-4', valor: 'sim' });
+  await alterarUsuario(ctx, QUEM, { acao: 'ativo', usuario: 'u-2', valor: 'não' });
+  assert.equal((await criarConvite(ctx, QUEM, { nome: 'Dani', login: 'dani', papel: 'gestao' })).aviso.includes('ADMIN'), false);
   const { c, fechar } = await cliente(ctx, true);
   const tools = (await c.listTools()).tools;
-  for (const n of ['sistemas_usuario', 'sistemas_convite']) assert.match(tools.find((t) => t.name === n)!.description!, /sistemas_preparar_admin/);
+  for (const n of ['sistemas_usuario', 'sistemas_convite']) assert.match(tools.find((t) => t.name === n)!.description!, /ADMIN também é direto/);
+  assert.match(tools.find((t) => t.name === 'sistemas_usuario')!.description!, /TIRAR o perfil admin/);
   await fechar();
+});
+
+test('rebaixar: preparar só LÊ; confirmar tira o admin (outro papel, com unidade, ou desativar); quem não é admin e destino inválido param no preparar', async () => {
+  const { srv, ctx } = montar();
+  const pend = new PendentesSistemas();
+  const p = await prepararAdmin(ctx, pend, QUEM, { acao: 'rebaixar', usuario: 'u-3', novo_papel: 'gestao', motivo: MOTIVO });
+  assert.deepEqual(srv.chamadas.map((c) => `${c.metodo} ${c.caminho}`), ['GET /admin/v1/usuarios'], 'preparar não escreve');
+  assert.match(p.resumo[0], /Ana Admin.*deixa de ser ADMIN e passa a "gestao"/);
+  assert.match(p.instrucao, /tirar o ADMIN.*sistemas_confirmar_admin/);
+  const r = await confirmarAdmin(ctx, pend, QUEM, { confirmacao: p.confirmacao });
+  assert.equal(r.ok, true); assert.equal(r.papelAntes, 'admin'); assert.equal(r.papelDepois, 'gestao');
+  assert.deepEqual(srv.chamadas.at(-1)!.corpo, { acao: 'papel', user_id: 'u-3', valor: 'gestao', quem: QUEM.nome }, 'rebaixar não manda confirmado_admin');
+  // para unidade: primeiro a unidade, depois o papel
+  const pu = await prepararAdmin(ctx, pend, QUEM, { acao: 'rebaixar', usuario: 'u-3', novo_papel: 'unidade', unidade: 'serra', motivo: MOTIVO });
+  const antes = srv.chamadas.length;
+  await confirmarAdmin(ctx, pend, QUEM, { confirmacao: pu.confirmacao });
+  assert.deepEqual(srv.chamadas.slice(antes).map((c) => `${c.corpo.acao}:${c.corpo.valor}`), ['unidade:serra', 'papel:unidade']);
+  // desativar
+  const pd = await prepararAdmin(ctx, pend, QUEM, { acao: 'rebaixar', usuario: 'u-3', novo_papel: 'desativar', motivo: MOTIVO });
+  assert.match(pd.resumo[0], /DESATIVADO/);
+  const rd = await confirmarAdmin(ctx, pend, QUEM, { confirmacao: pd.confirmacao });
+  assert.equal(rd.papelDepois, 'admin (DESATIVADO)');
+  assert.deepEqual(srv.chamadas.at(-1)!.corpo, { acao: 'ativo', user_id: 'u-3', valor: false, quem: QUEM.nome });
+  // recusas no preparar
+  await assert.rejects(() => prepararAdmin(ctx, pend, QUEM, { acao: 'rebaixar', usuario: 'u-1', novo_papel: 'gestao', motivo: MOTIVO }), /não é admin.*sistemas_usuario/);
+  await assert.rejects(() => prepararAdmin(ctx, pend, QUEM, { acao: 'rebaixar', usuario: 'u-3', novo_papel: 'admin', motivo: MOTIVO }), /novo_papel/);
+  await assert.rejects(() => prepararAdmin(ctx, pend, QUEM, { acao: 'rebaixar', usuario: 'u-3', novo_papel: 'socio', motivo: MOTIVO }), /exige a unidade/);
+  await assert.rejects(() => prepararAdmin(ctx, pend, QUEM, { acao: 'rebaixar', usuario: 'u-99', novo_papel: 'gestao', motivo: MOTIVO }), /não encontrado/);
+  // o código de rebaixar é de ADMIN: não confirma como dados nem SQL
+  const pr = await prepararAdmin(ctx, pend, QUEM, { acao: 'rebaixar', usuario: 'u-3', novo_papel: 'gestao', motivo: MOTIVO });
+  await assert.rejects(() => confirmarAlteracao(ctx, pend, QUEM, { confirmacao: pr.confirmacao }), /ADMIN.*sistemas_confirmar_admin/);
 });
 
 test('promover: preparar só LÊ (mostra quem e papel atual → admin); confirmar executa com confirmado_admin e registra', async () => {
@@ -181,10 +221,13 @@ test('pelo MCP: dois passos, auditoria sem nome/login do convidado, chave nunca 
   const { srv, ctx } = montar();
   const { chamar, auditoria, fechar } = await cliente(ctx, true);
   const direto = await chamar('sistemas_usuario', { acao: 'papel', usuario: 'u-1', valor: 'admin' });
-  assert.equal(direto.erro, true); assert.match(direto.texto, /sistemas_preparar_admin/);
+  assert.equal(direto.erro, false, direto.texto);
   const direto2 = await chamar('sistemas_convite', { nome: 'Carla Souza', login: 'carla', papel: 'admin' });
-  assert.equal(direto2.erro, true); assert.match(direto2.texto, /sistemas_preparar_admin/);
-  assert.equal(escritasAdmin(srv).length, 0);
+  assert.equal(direto2.erro, false, direto2.texto); assert.match(direto2.json.link, /#a-tok123456789abc$/);
+  assert.equal(escritasAdmin(srv).length, 2);
+  assert.ok(escritasAdmin(srv).every((c) => c.corpo.confirmado_admin === true));
+  const rebaixar = await chamar('sistemas_usuario', { acao: 'papel', usuario: 'u-3', valor: 'gestao' });
+  assert.equal(rebaixar.erro, true); assert.match(rebaixar.texto, /sistemas_preparar_admin/);
   const p = await chamar('sistemas_preparar_admin', { acao: 'convite', nome: 'Carla Souza', login: 'carla', motivo: MOTIVO });
   assert.equal(p.erro, false, p.texto);
   const c = await chamar('sistemas_confirmar_admin', { confirmacao: p.json.confirmacao });

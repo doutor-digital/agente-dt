@@ -2,7 +2,9 @@
  * O servidor de administração do sistema novo (`/admin/v1`) de mentira, para os testes do conector: um `fetch` que
  * responde como o contrato de docs/ADMIN-API.md — confere a chave, guarda prévias com validade, grava só na confirmação.
  */
+import { createHash } from 'node:crypto';
 import type { ConfigSistemas } from '../lib/integracoes/sistemas.js';
+import { classificar, ErroSql } from './sql-regras.js';
 
 export const CHAVE_FALSA = 'ADMIN-KEY-super-secreta-0123456789';
 export const CONFIG_FALSA: ConfigSistemas = { api: 'http://api-rh:8080', chave: CHAVE_FALSA, tela: 'https://rh.exemplo.com.br/app/' };
@@ -27,6 +29,12 @@ export interface OpcoesFalso {
   maisUsuarios?: boolean;
   /** relógio do servidor, para a prévia vencer */
   agora?: () => number;
+  /** rh (padrão) ou dsc: qual conjunto de tabelas fechadas o servidor falso usa para ler o SQL */
+  tipo?: 'rh' | 'dsc';
+  /** POST /admin/v1/backup falha: 'erro' = HTTP 500; 'recusa' = 200 { ok:false }; 'sem-id' = 200 { ok:true } sem snapshot_id */
+  backupFalha?: 'erro' | 'recusa' | 'sem-id';
+  /** POST /admin/v1/sql: 'incerto' = HTTP 500; 'recusa' = 200 { ok:false, erro } (erro do banco); 'guarda' = a trava das linhas afetadas */
+  sqlFalha?: 'incerto' | 'recusa' | 'guarda';
 }
 
 export function servidorAdminFalso(o: OpcoesFalso = {}) {
@@ -39,6 +47,10 @@ export function servidorAdminFalso(o: OpcoesFalso = {}) {
   const registro: Array<Record<string, unknown>> = [];
   /** o que `POST /admin/v1/estrutura` (admin_sql) recebeu e "executou" */
   const estruturas: Array<Record<string, any>> = [];
+  /** o que POST /admin/v1/backup recebeu e o que POST /admin/v1/sql executou (o servidor de verdade lê o SQL de novo com o MESMO classificador) */
+  const backups: Array<Record<string, any>> = [];
+  const sqls: Array<Record<string, any>> = [];
+  const snapshots = new Map<string, { hash: string; quem: string }>();
   const preparados = new Map<string, { op: string; tabela: string; filtro: Record<string, unknown>; dados: Record<string, unknown>; em: number }>();
   const usuarios = [
     { user_id: 'u-1', login: 'maria', nome: 'Maria', papel: 'gestao', unidade: null, ativo: true, criado_em: '2026-10-01T10:00:00Z' },
@@ -126,6 +138,44 @@ export function servidorAdminFalso(o: OpcoesFalso = {}) {
         estruturas.push({ ...corpo });
         registro.push({ tabela: '(estrutura)', quem: corpo.quem, op: 'estrutura' });
         return json(200, { ok: true, sql: String(corpo.sqlAprovado).split(';\n') });
+      case 'POST /admin/v1/backup': {
+        if (o.backupFalha === 'erro') return json(500, { erro: `falha interna em ${CONFIG_FALSA.api}` });
+        if (o.backupFalha === 'recusa') return json(200, { ok: false, erro: 'o snapshot NÃO foi tirado (disco cheio)' });
+        let a;
+        try {
+          a = classificar(corpo.sql, o.tipo ?? 'rh');
+        } catch (e) {
+          if (e instanceof ErroSql) return json(200, { ok: false, erro: e.message });
+          throw e;
+        }
+        backups.push({ ...corpo });
+        if (!a.precisaSnapshot) return json(200, { ok: true, necessario: false, snapshot_id: null });
+        if (o.backupFalha === 'sem-id') return json(200, { ok: true, necessario: true });
+        const id = `snap-${++n}`;
+        snapshots.set(id, { hash: createHash('sha256').update(a.sql).digest('hex'), quem: corpo.quem });
+        return json(200, { ok: true, necessario: true, snapshot_id: id, linhas_por_tabela: Object.fromEntries(a.tabelasParaCopiar.map((t) => [t, 3])), bytes: 1234, vale_minutos: 10 });
+      }
+      case 'POST /admin/v1/sql': {
+        if (o.sqlFalha === 'incerto') return json(500, { erro: `falha interna em ${CONFIG_FALSA.api}` });
+        let a;
+        try {
+          a = classificar(corpo.sql, o.tipo ?? 'rh');
+        } catch (e) {
+          if (e instanceof ErroSql) return json(200, { ok: false, recusado: true, erro: e.message });
+          throw e;
+        }
+        if (a.decisao === 'confirmar' && corpo.confirmado !== true) return json(400, { erro: 'este SQL destrói ou mexe na tabela inteira: só roda com confirmado:true' });
+        if (a.precisaSnapshot) {
+          const sn = snapshots.get(corpo.snapshot_id);
+          if (!corpo.snapshot_id) return json(400, { erro: 'falta o snapshot_id: tire o backup antes' });
+          if (!sn || sn.quem !== corpo.quem || sn.hash !== createHash('sha256').update(a.sql).digest('hex')) return json(200, { ok: false, erro: 'o snapshot não vale para este pedido' });
+        }
+        if (o.sqlFalha === 'recusa') return json(200, { ok: false, erro: 'o banco recusou no comando 2: column "x" does not exist. O pedido todo foi desfeito (nada foi alterado).', fase: 'comando 2' });
+        if (o.sqlFalha === 'guarda') return json(200, { ok: false, guarda: 'tabela_inteira', erro: 'o comando 1 (UPDATE em caixa_precos) atingiria TODAS as 3 linhas da tabela: nada foi alterado.' });
+        sqls.push({ ...corpo });
+        registro.push({ tabela: '(sql)', quem: corpo.quem, op: 'sql' });
+        return json(200, { ok: true, comandos: a.comandos.map((c) => ({ n: c.n, tipo: c.tipo, afetadas: 1 })), afetadas: a.comandos.length, snapshot_id: corpo.snapshot_id ?? null, avisos: a.avisos });
+      }
       case 'POST /admin/v1/usuario':
         // contrato novo do servidor: admin só com `confirmado_admin: true` (que o conector manda só na confirmação)
         if (corpo.acao === 'papel' && corpo.valor === 'admin' && corpo.confirmado_admin !== true) return json(403, { erro: 'o perfil admin exige confirmado_admin' });
@@ -139,5 +189,5 @@ export function servidorAdminFalso(o: OpcoesFalso = {}) {
     }
   }) as unknown as typeof fetch;
 
-  return { fetch: buscar, chamadas, funcionarios, registro, preparados, estruturas };
+  return { fetch: buscar, chamadas, funcionarios, registro, preparados, estruturas, backups, sqls };
 }

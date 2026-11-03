@@ -1,14 +1,16 @@
 /**
- * Conceder o perfil ADMIN (acesso total ao sistema novo) pelo claude.ai, SEMPRE em dois passos:
- * `sistemas_preparar_admin` mostra quem vira admin (ou quem é convidado como admin) e devolve um código;
- * `sistemas_confirmar_admin` com o código executa. `sistemas_usuario` e `sistemas_convite` recusam "admin" e mandam para cá.
+ * O perfil ADMIN (acesso total ao sistema novo) pelo claude.ai.
+ *  - DAR admin (promover, convite de admin) agora é DIRETO, por `sistemas_usuario` e `sistemas_convite`. Estas ferramentas também aceitam
+ *    `promover` e `convite` em dois passos (quem prefere ver o resumo antes).
+ *  - TIRAR admin (`rebaixar`: mudar o papel ou desativar) é SEMPRE em dois passos aqui: `sistemas_preparar_admin` mostra quem perde o acesso e
+ *    devolve um código; `sistemas_confirmar_admin` com o código executa. `sistemas_usuario` recusa e manda para cá.
  *
  * Por que ferramentas à parte e não um modo dentro de sistemas_usuario/sistemas_convite: aquelas rodam direto, sem prévia; uma ferramenta
  * que às vezes executa e às vezes só mostra convida o erro (a IA acha que gravou). Aqui o nome diz o que acontece.
  *
- * O servidor (sistemas-dd, /admin/v1/usuario e /convite) só aceita admin quando o corpo traz `confirmado_admin: true`; o conector
- * só manda isso na confirmação (nunca na preparação). Quem preparou é quem confirma, o código vale 10 minutos e uma vez, e um código
- * de dados ou de estrutura não confirma admin (nem o contrário).
+ * O servidor (sistemas-dd, /admin/v1/usuario e /convite) só aceita admin quando o corpo traz `confirmado_admin: true`; o conector manda
+ * isso quando a pessoa pede admin. O servidor ainda recusa tirar o único admin ativo. Quem preparou é quem confirma, o código vale 10 minutos
+ * e uma vez, e um código de dados, estrutura ou SQL não confirma admin (nem o contrário).
  */
 import { randomBytes } from 'node:crypto';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -17,9 +19,9 @@ import type { Auditar } from '../franquia-mcp/ferramentas.js';
 import { ErroDeEntrada } from '../franquia-mcp/travas.js';
 import { ErroSistemas } from '../lib/integracoes/sistemas.js';
 import { executar } from './ferramenta.js';
-import { idUsuario, linkDoConvite, resolverSistema, VALIDADE_MS, type ContextoSistemas, type PendentesSistemas, type QuemSistemas, type Saida } from './sistemas.js';
+import { idUsuario, linkDoConvite, resolverSistema, soRh, VALIDADE_MS, type AdminPendente, type ContaSistemas, type ContextoSistemas, type Pendente, type PendentesSistemas, type QuemSistemas, type Saida } from './sistemas.js';
 
-const SISTEMA = z.string().optional().describe('qual sistema (slug da unidade onde está cadastrado); pode omitir se só há um ligado');
+const SISTEMA = z.string().optional().describe('qual sistema: "rh" (RH/Caixa/Financeiro); pode omitir se só há um ligado. O admin só existe no RH');
 
 function motivoValido(v: unknown): string {
   const m = typeof v === 'string' ? v.trim() : '';
@@ -31,11 +33,12 @@ export async function prepararAdmin(
   ctx: ContextoSistemas,
   pendentes: PendentesSistemas,
   quem: QuemSistemas,
-  a: { sistema?: string; acao: 'promover' | 'convite'; usuario?: string; nome?: string; login?: string; motivo: string },
+  a: { sistema?: string; acao: 'promover' | 'convite' | 'rebaixar'; usuario?: string; nome?: string; login?: string; novo_papel?: string; unidade?: string; motivo: string },
 ): Promise<Saida> {
-  if (a.acao !== 'promover' && a.acao !== 'convite') throw new ErroDeEntrada('acao: use promover (um usuário que já existe) ou convite (alguém novo, como admin)');
+  if (a.acao !== 'promover' && a.acao !== 'convite' && a.acao !== 'rebaixar') throw new ErroDeEntrada('acao: use promover (um usuário que já existe), convite (alguém novo, como admin) ou rebaixar (tirar o admin de alguém)');
   const motivo = motivoValido(a.motivo);
   const c = resolverSistema(ctx, a.sistema);
+  soRh(c, 'sistemas_preparar_admin');
   const id = `adm-${randomBytes(9).toString('hex')}`;
   let resumo: string[];
   let admin: NonNullable<Parameters<PendentesSistemas['guardar']>[1]['admin']>;
@@ -53,6 +56,23 @@ export async function prepararAdmin(
       'ADMIN vê e mexe em tudo no sistema novo (RH, Caixa, financeiro, usuários).',
     ];
     admin = { acao: 'promover', usuario: user_id, nome, login, papelAntes, motivo };
+  } else if (a.acao === 'rebaixar') {
+    const user_id = idUsuario(a.usuario);
+    const destino = String(a.novo_papel ?? '').trim().toLowerCase();
+    if (!['gestao', 'financeiro', 'unidade', 'socio', 'desativar'].includes(destino)) throw new ErroDeEntrada('novo_papel: gestao, financeiro, unidade, socio ou desativar');
+    const unidade = a.unidade?.trim() || undefined;
+    if (['unidade', 'socio'].includes(destino) && !unidade) throw new ErroDeEntrada(`o papel ${destino} exige a unidade (campo unidade)`);
+    const lista = (await c.fonte.chamar('GET', '/admin/v1/usuarios', { quem: quem.nome })) as { usuarios?: Array<Record<string, unknown>> };
+    const u = (lista.usuarios ?? []).find((x) => x.user_id === user_id);
+    if (!u) throw new ErroDeEntrada('usuário não encontrado: use o user_id que sistemas_usuarios devolve');
+    if (u.papel !== 'admin') throw new ErroDeEntrada(`${String(u.nome)} não é admin (papel "${String(u.papel)}"): para mudar papel de quem não é admin use sistemas_usuario`);
+    const nome = String(u.nome ?? u.login ?? user_id);
+    const login = String(u.login ?? '');
+    resumo = [
+      destino === 'desativar' ? `${nome} (login ${login}) é DESATIVADO: perde TODO o acesso ao sistema novo (era ADMIN)` : `${nome} (login ${login}) deixa de ser ADMIN e passa a "${destino}"${unidade ? ` da unidade ${unidade}` : ''}: perde o acesso total`,
+      'O servidor recusa tirar o único admin ativo.',
+    ];
+    admin = { acao: 'rebaixar', usuario: user_id, nome, login, papelAntes: 'admin', destino, ...(unidade ? { unidade } : {}), motivo };
   } else {
     if (!c.tela) throw new ErroDeEntrada('falta o endereço da tela RH na configuração do sistema: cadastre de novo no painel de integrações, com o campo "tela"');
     const nome = a.nome?.trim();
@@ -72,7 +92,52 @@ export async function prepararAdmin(
     resumo,
     confirmacao: id,
     expiraEm,
-    instrucao: `Nada foi alterado ainda. Mostre o resumo à pessoa e, SÓ se ela aprovar explicitamente a concessão de ADMIN, chame sistemas_confirmar_admin com confirmacao="${id}" (vale ${VALIDADE_MS / 60_000} minutos, uma vez).`,
+    instrucao: `Nada foi alterado ainda. Mostre o resumo à pessoa e, SÓ se ela aprovar explicitamente${a.acao === 'rebaixar' ? ' tirar o ADMIN' : ' a concessão de ADMIN'}, chame sistemas_confirmar_admin com confirmacao="${id}" (vale ${VALIDADE_MS / 60_000} minutos, uma vez).`,
+  };
+}
+
+/** Tirar o admin: um ou dois chamados a /usuario (a unidade primeiro, depois o papel; ou só desativar). Idempotente: se a resposta se perde, o código volta. */
+async function rebaixar(
+  c: ContaSistemas,
+  pendentes: PendentesSistemas,
+  id: string,
+  p: Pendente,
+  adm: Extract<AdminPendente, { acao: 'rebaixar' }>,
+  quem: QuemSistemas,
+  rastro: { resultado?: string },
+): Promise<Saida> {
+  const passos: Array<{ acao: string; valor: string | boolean }> =
+    adm.destino === 'desativar' ? [{ acao: 'ativo', valor: false }] : [...(adm.unidade ? [{ acao: 'unidade', valor: adm.unidade }] : []), { acao: 'papel', valor: adm.destino }];
+  let r: Saida = {};
+  for (const passo of passos) {
+    try {
+      const bruto = await c.fonte.chamar('POST', '/admin/v1/usuario', { corpo: { ...passo, user_id: adm.usuario, quem: quem.nome }, quem: quem.nome });
+      r = bruto && typeof bruto === 'object' ? (bruto as Saida) : {};
+    } catch (e) {
+      if (e instanceof ErroSistemas && (e.status === null || e.status >= 500)) {
+        rastro.resultado = 'sem resposta: resultado incerto';
+        pendentes.devolver(id, p);
+        throw new ErroDeEntrada(`NÃO sei se o admin foi retirado (${e.message}). Confira com sistemas_usuarios antes de repetir; o código ${id} continua valendo (repetir dá o mesmo resultado).`);
+      }
+      rastro.resultado = `recusado: ${e instanceof Error ? e.message : String(e)}`.slice(0, 500);
+      throw e;
+    }
+    if (r.ok === false) {
+      const erro = String(r.erro ?? 'o servidor recusou sem dizer o motivo').slice(0, 300);
+      rastro.resultado = `recusado: ${erro}`;
+      throw new ErroDeEntrada(`o servidor NÃO retirou o admin: ${erro}`);
+    }
+  }
+  rastro.resultado = 'ok';
+  return {
+    sistema: c.slug,
+    ok: true,
+    usuario: adm.nome,
+    papelAntes: 'admin',
+    papelDepois: adm.destino === 'desativar' ? 'admin (DESATIVADO)' : adm.destino,
+    antes: r.antes,
+    depois: r.depois,
+    registro: 'A mudança ficou no registro do sistema (sistemas_log) com quem pediu, o antes e o depois.',
   };
 }
 
@@ -87,8 +152,9 @@ export async function confirmarAdmin(
   const p = pendentes.tirar(id, quem.usuario, 'admin');
   const adm = p.admin!;
   rastro.acao = adm.acao;
-  if (adm.acao === 'promover') rastro.usuario = adm.usuario;
+  if (adm.acao === 'promover' || adm.acao === 'rebaixar') rastro.usuario = adm.usuario;
   const c = resolverSistema(ctx, p.sistema);
+  if (adm.acao === 'rebaixar') return rebaixar(c, pendentes, id, p, adm, quem, rastro);
   // a tela é conferida ANTES de chamar o servidor: um convite criado sem ter como montar o link ficaria órfão
   if (adm.acao === 'convite' && !c.tela) throw new ErroDeEntrada('falta o endereço da tela RH na configuração do sistema: cadastre de novo no painel de integrações, com o campo "tela". Nada foi criado; prepare de novo depois.');
   let r: Saida;
@@ -157,15 +223,17 @@ export function registrarAdminSistemas(server: McpServer, ctx: ContextoSistemas,
     {
       title: 'Sistema novo (RH/Caixa): preparar concessão de ADMIN',
       description:
-        'PASSO 1 de 2 para dar o perfil ADMIN (acesso total) no sistema novo: acao="promover" (usuário que já existe; informe usuario = user_id de sistemas_usuarios) ou ' +
-        'acao="convite" (alguém novo; informe nome e login). NÃO muda nada: devolve o resumo (quem vira admin, papel atual → admin) e um código. ' +
-        'Mostre o resumo à pessoa e só chame sistemas_confirmar_admin se ela aprovar a concessão de ADMIN. Outros papéis seguem em sistemas_usuario e sistemas_convite.',
+        'PASSO 1 de 2 para mexer no perfil ADMIN (acesso total) do sistema novo. acao="rebaixar" TIRA o admin de alguém (informe usuario = user_id e novo_papel: gestao, financeiro, unidade, socio — com unidade — ou desativar): ' +
+        'é o único caminho para isso. acao="promover" (usuário que já existe) e acao="convite" (alguém novo, como admin; informe nome e login) também funcionam aqui, mas DAR admin já é direto por sistemas_usuario e sistemas_convite. ' +
+        'NÃO muda nada: devolve o resumo e um código. Mostre o resumo à pessoa e só chame sistemas_confirmar_admin se ela aprovar.',
       inputSchema: {
         sistema: SISTEMA,
-        acao: z.enum(['promover', 'convite']),
-        usuario: z.string().max(64).optional().describe('user_id (de sistemas_usuarios) — só em promover'),
+        acao: z.enum(['promover', 'convite', 'rebaixar']),
+        usuario: z.string().max(64).optional().describe('user_id (de sistemas_usuarios) — em promover e rebaixar'),
         nome: z.string().max(120).optional().describe('só em convite'),
         login: z.string().max(120).optional().describe('só em convite'),
+        novo_papel: z.string().max(20).optional().describe('só em rebaixar: gestao, financeiro, unidade, socio ou desativar'),
+        unidade: z.string().max(60).optional().describe('só em rebaixar para unidade ou socio'),
         motivo: z.string().min(5).max(300).describe('por que — fica no registro'),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
@@ -177,8 +245,8 @@ export function registrarAdminSistemas(server: McpServer, ctx: ContextoSistemas,
     {
       title: 'Sistema novo (RH/Caixa): confirmar concessão de ADMIN',
       description:
-        'PASSO 2 de 2: concede o perfil ADMIN (ou cria o convite de admin e devolve o link), com o código de sistemas_preparar_admin. Só chame depois que a pessoa aprovou ' +
-        'explicitamente. O código vale 10 minutos e uma vez, só para quem preparou; um código de dados ou de estrutura não serve aqui.',
+        'PASSO 2 de 2: executa o que sistemas_preparar_admin mostrou (tirar o admin de alguém; ou conceder admin / criar o convite de admin e devolver o link), com o código. Só chame depois que a pessoa aprovou ' +
+        'explicitamente. O código vale 10 minutos e uma vez, só para quem preparou; um código de dados, estrutura ou SQL não serve aqui.',
       inputSchema: { confirmacao: z.string().min(4).max(64) },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     },

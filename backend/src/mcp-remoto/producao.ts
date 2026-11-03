@@ -42,9 +42,10 @@ import { criarContextoTiquetaque, registrarFerramentasTiquetaque, type ContaTiqu
 import { tiquetaqueGet } from '../lib/integracoes/tiquetaque.js';
 import { contaTramitacaoDaChave, criarContextoTramitacao, registrarFerramentasTramitacao, type ContaTramitacao } from './tramitacao.js';
 import { contasComChave } from '../lib/integracoes/chaves.js';
-import { lerConfigSistemas, sistemasChamar } from '../lib/integracoes/sistemas.js';
+import { lerConfigsSistemas, sistemasChamar } from '../lib/integracoes/sistemas.js';
 import { registrarAdminSistemas } from './sistemas-admin.js';
 import { registrarEstruturaSistemas } from './sistemas-estrutura.js';
+import { registrarSqlSistemas } from './sistemas-sql.js';
 import { criarContextoSistemas, PendentesSistemas, registrarEscritaSistemas, registrarLeituraSistemas, type ContaSistemas } from './sistemas.js';
 import { contaEvolutionDoAmbiente, criarContextoEvolution, EVENTO_DE_ENVIO, registrarFerramentasEvolution } from './evolution.js';
 import { blingGet } from '../lib/bling/cliente.js';
@@ -226,20 +227,30 @@ async function contasTramitacaoDoBanco(): Promise<Map<string, ContaTramitacao>> 
 }
 
 /**
- * Sistema novo de RH/Caixa/Financeiro (servidor próprio) com a URL e a chave de administração no painel de integrações. A chave
- * fica só em memória, decifrada aqui; configuração ilegível vira aviso no log (sem o conteúdo) e a conta fica de fora.
+ * Sistemas novos (servidor próprio, PostgreSQL): RH/Caixa/Financeiro (`rh`) e Descontratos/Ficha (`descontratos`), cada um com a URL e a chave de
+ * administração no painel de integrações (uma chave com os dois, ou só um). A chave fica só em memória, decifrada aqui; configuração ilegível vira
+ * aviso no log (sem o conteúdo) e a conta fica de fora.
  */
 async function contasSistemasDoBanco(): Promise<Map<string, ContaSistemas>> {
   const contas = new Map<string, ContaSistemas>();
   for (const c of await contasComChave('sistemas')) {
     try {
-      const cfg = lerConfigSistemas(c.chave);
-      contas.set(c.slug, { slug: c.slug, nome: c.nome, tela: cfg.tela, fonte: { chamar: (metodo, caminho, o) => sistemasChamar(cfg, metodo, caminho, o) } });
+      for (const cfg of lerConfigsSistemas(c.chave)) {
+        const slug = cfg.id ?? c.slug;
+        if (contas.has(slug)) logger.warn({ slug }, 'mcp-remoto: dois cadastros do sistema novo com o mesmo nome; vale o último');
+        contas.set(slug, {
+          slug,
+          nome: cfg.id ? `${c.nome} · ${cfg.id}` : c.nome,
+          tela: cfg.tela,
+          tipo: cfg.tipo ?? 'rh',
+          fonte: { chamar: (metodo, caminho, o) => sistemasChamar(cfg, metodo, caminho, o) },
+        });
+      }
     } catch (err) {
       logger.warn({ slug: c.slug, motivo: err instanceof Error ? err.message : 'inválida' }, 'mcp-remoto: configuração do sistema novo ilegível; cadastre de novo no painel');
     }
   }
-  logger.info({ contas: contas.size }, 'mcp-remoto: contas do sistema novo (RH/Caixa) carregadas');
+  logger.info({ contas: contas.size }, 'mcp-remoto: contas do sistema novo (RH/Caixa, Descontratos/Ficha) carregadas');
   return contas;
 }
 
@@ -500,9 +511,11 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
         registrarDisparo(server, fonteDeDisparo, `conector:${quem.userId}`, auditar);
         // Sistema novo (RH/Caixa): alterar dados em dois passos, mudar usuário, criar convite — a mesma lista de quem altera cartões.
         registrarEscritaSistemas(server, sistemas, pendentesSistemas, quemSistemas, auditar);
-        // ... e criar/alterar ESTRUTURA do banco (tabela, coluna, índice, view, política), também em dois passos. DROP não existe.
+        // ... e criar/alterar ESTRUTURA do banco por campos (tabela, coluna, índice), em dois passos (o caminho cuidadoso, anterior ao SQL livre).
         registrarEstruturaSistemas(server, sistemas, pendentesSistemas, quemSistemas, auditar);
-        // ... e conceder ADMIN (promover usuário ou convite de admin), também em dois passos; sistemas_usuario/convite recusam admin.
+        // ... e SQL livre: criar e alterar quase tudo DIRETO (com backup antes); o que destrói (DROP, TRUNCATE, UPDATE/DELETE sem WHERE…) em dois passos.
+        registrarSqlSistemas(server, sistemas, pendentesSistemas, quemSistemas, auditar);
+        // ... e mexer no ADMIN: rebaixar/desativar admin em dois passos (dar admin é direto, por sistemas_usuario e sistemas_convite).
         registrarAdminSistemas(server, sistemas, pendentesSistemas, quemSistemas, auditar);
       }
       if (leitoresWhatsapp.has(quem.userId)) registrarFerramentasEvolution(server, whatsapp, quem.userId, auditar);

@@ -3,7 +3,8 @@
  *   `sistemas_preparar_tabela` / `sistemas_preparar_coluna` / `sistemas_preparar_indice` validam os campos (estrutura-campos.ts), GERAM o SQL,
  *   mostram o resumo e o SQL e devolvem um código; `sistemas_confirmar_estrutura` com o código manda ao servidor
  *   (`POST /admin/v1/estrutura`) os MESMOS campos + o SQL aprovado; o servidor valida de novo, gera o SQL e só executa se for idêntico.
- * DROP, renomear, apagar e SQL próprio não existem aqui. (O SQL livre volta depois, com parser; está guardado na branch wip/estrutura-parser.)
+ * Este é o caminho CUIDADOSO (sempre em dois passos, por campos). DROP, renomear e SQL próprio não existem AQUI: para isso há `sistemas_sql` (direto, com backup)
+ * e `sistemas_preparar_sql` (o que destrói), em sistemas-sql.ts.
  *
  * Só quem está em MCP_ESCRITA_EMAILS vê as ferramentas (o portão fica em producao.ts, junto com as outras escritas).
  *
@@ -19,10 +20,10 @@ import { ErroDeEntrada } from '../franquia-mcp/travas.js';
 import { ErroSistemas } from '../lib/integracoes/sistemas.js';
 import { ErroEstrutura, planejarColuna, planejarIndice, planejarTabela, type Existentes, type Plano } from './estrutura-campos.js';
 import { executar } from './ferramenta.js';
-import { resolverSistema, VALIDADE_MS, type ContaSistemas, type ContextoSistemas, type PendentesSistemas, type QuemSistemas, type Saida } from './sistemas.js';
+import { resolverSistema, soRh, VALIDADE_MS, type ContaSistemas, type ContextoSistemas, type PendentesSistemas, type QuemSistemas, type Saida } from './sistemas.js';
 
 const MOTIVO = z.string().min(5).max(300).describe('por que — fica no registro (ex.: "tabela de preços do caixa")');
-const SISTEMA = z.string().optional().describe('qual sistema (slug da unidade onde está cadastrado); pode omitir se só há um ligado');
+const SISTEMA = z.string().optional().describe('qual sistema: "rh" (RH/Caixa/Financeiro); pode omitir se só há um ligado. Por campos só no RH; no Descontratos use sistemas_sql');
 
 function motivoValido(v: unknown): string {
   const m = typeof v === 'string' ? v.trim() : '';
@@ -61,6 +62,7 @@ async function preparar(
 ): Promise<Saida> {
   const motivo = motivoValido(motivoBruto);
   const c = resolverSistema(ctx, sistema);
+  soRh(c, 'a estrutura por campos (sistemas_preparar_tabela/coluna/indice)');
   const existentes = await lerExistentes(c);
   const p = validar(() => planejar(existentes));
   const id = `est-${randomBytes(9).toString('hex')}`;
@@ -114,6 +116,11 @@ export async function confirmarEstrutura(
       rastro.resultado = 'sem resposta: resultado incerto';
       throw new ErroDeEntrada(`NÃO sei se a estrutura foi alterada (${e.message}). Confira com sistemas_esquema antes de repetir; o código ${id} continua valendo, mas só repita depois de conferir que NÃO foi aplicado (repetir um CREATE ou ADD que já existe dá erro "já existe").`);
     }
+    // servidor ainda na API 0.1.9 (ou anterior): a rota /estrutura dele espera `sql` e este conector manda os campos. Foi o defeito de 03/11 ("escreva o SQL (campo sql)").
+    if (e instanceof ErroSistemas && /escreva o SQL \(campo sql\)/.test(e.message)) {
+      rastro.resultado = 'servidor desatualizado';
+      throw new ErroDeEntrada('o servidor do sistema novo está numa versão ANTIGA (antes da 0.1.10) e não entende a estrutura por campos. NADA foi criado. Avise o João para publicar a API 0.1.11 (publicar-api-0.1.11.sh); enquanto isso, nada de tabela nova por aqui.');
+    }
     rastro.resultado = `recusado: ${e instanceof Error ? e.message : String(e)}`.slice(0, 500);
     throw e;
   }
@@ -157,7 +164,7 @@ export function registrarEstruturaSistemas(server: McpServer, ctx: ContextoSiste
   const auditar = auditarEstrutura(auditarBruto);
   const nota =
     'NÃO executa nada: valida os campos, GERA o SQL e devolve o resumo, os avisos, o SQL e um código. Mostre isso à pessoa e só chame sistemas_confirmar_estrutura se ela aprovar. ' +
-    'É só para CRIAR/ALTERAR estrutura (não há DROP, renomear nem SQL próprio). Para alterar LINHAS (dados) use sistemas_preparar_alteracao.';
+    'É só para CRIAR/ALTERAR estrutura em dois passos, por campos (nestas ferramentas não há DROP, renomear nem SQL próprio; para isso e para o caminho direto, sem confirmação, use sistemas_sql). Para alterar LINHAS (dados) use sistemas_sql ou sistemas_preparar_alteracao.';
   server.registerTool(
     'sistemas_preparar_tabela',
     {
