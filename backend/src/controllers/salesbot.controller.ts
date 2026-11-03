@@ -180,8 +180,7 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
           leadId: Number(leadId),
           kommo: createKommoClient(unit),
           recorder,
-          motivo: 'comprovante',
-          detalhe: 'o paciente mandou uma imagem/PDF e o servidor NÃO conseguiu ler (download ou visão falhou): ver se é o comprovante da taxa',
+          motivo: 'anexo_nao_lido',
         }).catch(() => undefined);
       }
       if (lidos.lidos > 0) {

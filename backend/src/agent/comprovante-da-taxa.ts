@@ -17,6 +17,7 @@ import { logger } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
 import { enviarTelegram } from '../lib/telegram.js';
 import { brl, RESPOSTA_QUE_MARCA, resumoDaLeitura } from '../lib/comprovante-pix.js';
+import { recusaCertaDaFranquia } from '../services/spine.service.js';
 import type { KommoClient } from '../services/kommo.service.js';
 import {
   abrirTarefaParaEquipe,
@@ -96,7 +97,21 @@ export function criarRegistroNoBanco(db: BancoDeComprovantes = prisma): Registro
           where: { e2e: { startsWith: chave.slice(0, PREFIXO) }, valorCentavos },
           select: { e2e: true, unitId: true, kommoLeadId: true, idSchedule: true, consultaEm: true },
         });
-        if (parecidos.some((r) => (!meu(r) || jaMarcou(r)) && diferencas(r.e2e.slice(PREFIXO), chave.slice(PREFIXO)) <= ERROS_DE_LEITURA)) return 'parecido_de_outro';
+        const quaseIgual = (r: { e2e: string }) => diferencas(r.e2e.slice(PREFIXO), chave.slice(PREFIXO)) <= ERROS_DE_LEITURA;
+        if (parecidos.some((r) => (!meu(r) || jaMarcou(r)) && quaseIgual(r))) return 'parecido_de_outro';
+        // do PRÓPRIO paciente, ainda sem consulta (uma tentativa anterior foi desfeita), lido agora com um caractere diferente: é o mesmo Pix.
+        // Assume a linha dele, com o ID como foi lido agora, em vez de criar uma segunda (que abriria um segundo uso do mesmo comprovante)
+        const livre = parecidos.find((r) => meu(r) && !jaMarcou(r) && quaseIgual(r));
+        if (livre) {
+          try {
+            const ganhou = await db.comprovantePixUsado.updateMany({ where: { e2e: livre.e2e, consultaEm: null, idSchedule: null }, data: { e2e: chave, consultaEm } });
+            return ganhou.count === 1 ? 'reservado' : 'mesmo_paciente_ja_marcou';
+          } catch (err) {
+            // outra chamada do mesmo paciente já criou/renomeou a linha com este ID ao mesmo tempo: a unicidade decidiu
+            if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') return 'mesmo_paciente_ja_marcou';
+            throw err;
+          }
+        }
         try {
           await db.comprovantePixUsado.create({ data: { e2e: chave, unitId, kommoLeadId: leadId, valorCentavos, favorecido, consultaEm } });
         } catch (err) {
@@ -197,8 +212,8 @@ export interface ContextoDosGanchos {
   abrirTarefa?: typeof abrirTarefaParaEquipe;
 }
 
-/** O que `agendar_consulta` devolve quando a franquia deu erro ao CRIAR a consulta (agenda-tools.ts, «Não consegui marcar às …»). */
-const RESPOSTA_DE_ERRO_AO_CRIAR = /^Não consegui marcar às/;
+/** O que `agendar_consulta` devolve quando `createSchedule` falhou (agenda-tools.ts, «Não consegui marcar às HH (ERRO). PARE AQUI…»): captura o ERRO. */
+const RESPOSTA_DE_ERRO_AO_CRIAR = /^Não consegui marcar às \S+ \(([\s\S]*?)\)\. PARE AQUI/;
 
 const NAO_MARCOU =
   'A consulta NÃO foi marcada. NÃO chame agendar_consulta de novo neste turno e NÃO diga que está confirmada, agendada, reservada ou garantida, nem que o pagamento foi confirmado. ';
@@ -263,11 +278,15 @@ export function criarGanchosDaTaxa(ctx: ContextoDosGanchos): GanchosDoComprovant
     async depois(aceito, args, resultado) {
       const marcou = RESPOSTA_QUE_MARCA.test(resultado.trim());
       if (!marcou) {
-        // «Não consegui marcar às…» = a franquia respondeu com erro/timeout ao CRIAR a consulta: ela pode ter criado antes do erro. A reserva
-        // FICA (a equipe vê no CRM). As demais recusas (horário ocupado, fora da grade, cadastro, feriado…) vêm ANTES de criar: a reserva é
-        // desfeita e o comprovante segue valendo, para este paciente, em outro horário.
-        if (RESPOSTA_DE_ERRO_AO_CRIAR.test(resultado.trim())) {
-          logger.warn({ e2e: aceito.e2e, unit: ctx.unit.slug, leadId: ctx.leadId }, 'comprovante: a franquia respondeu com erro ao criar a consulta — o E2E fica reservado, a equipe decide');
+        // «Não consegui marcar às HH (ERRO)…» = `createSchedule` devolveu !ok. Recusa CERTA (4xx — «409 horário indisponível» —, trava de
+        // escrita, sem token, data inválida) e as recusas de antes de criar (horário ocupado, fora da grade, cadastro, feriado…): a reserva é
+        // desfeita e o comprovante segue valendo, para este paciente, em outro horário. Só quando o erro é INCERTO (timeout, rede, 5xx, 408,
+        // 429) a franquia pode ter criado a consulta antes de falhar: a reserva FICA e a equipe decide.
+        // Se a resposta diz «Não consegui marcar» mas o texto mudou e o erro não se lê, é INCERTO: na dúvida a reserva fica.
+        const erroAoCriar = RESPOSTA_DE_ERRO_AO_CRIAR.exec(resultado.trim())?.[1];
+        const falhouAoCriar = /^Não consegui marcar/.test(resultado.trim());
+        if (falhouAoCriar && (erroAoCriar === undefined || !recusaCertaDaFranquia(erroAoCriar))) {
+          logger.warn({ e2e: aceito.e2e, unit: ctx.unit.slug, leadId: ctx.leadId, erro: erroAoCriar }, 'comprovante: erro incerto ao criar a consulta na franquia — o E2E fica reservado, a equipe decide');
         } else {
           await registro.liberar(aceito.e2e).catch((err) => logger.warn({ err: String(err) }, 'comprovante: não consegui desfazer a reserva do E2E'));
         }

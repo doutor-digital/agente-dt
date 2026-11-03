@@ -3,7 +3,7 @@ import axios, { type AxiosError, type AxiosInstance, type InternalAxiosRequestCo
 import type { Unit } from '@prisma/client';
 import { logger } from '../lib/logger.js';
 import { lerTurnos, profissionalDoHorario } from '../lib/profissional-por-turno.js';
-import { motivoParaNaoEscrever } from '../lib/trava-escrita-franquia.js';
+import { motivoParaNaoEscrever, MOTIVO_ESCRITA_SEM_CARTAO } from '../lib/trava-escrita-franquia.js';
 import { comNonoDigito } from '../lib/nono-digito.js';
 
 const DEFAULT_TZ = 'America/Sao_Paulo';
@@ -266,6 +266,22 @@ export interface SpineCreateSchedule {
   dateAttendanceLocal: string;
   idCategory: number;
   idStaff?: number;
+}
+
+/**
+ * O erro que `createSchedule` devolveu mostra que a franquia NÃO criou a consulta? Recusa certa: resposta 4xx (horário indisponível, cadastro
+ * inválido…) e as recusas ANTES de enviar (trava de escrita, unidade sem token, data inválida). Incerta, e a consulta pode ter sido criada
+ * antes do erro: timeout, queda de rede, 5xx e também 408/429. Quem reserva algo por causa da marcação (o comprovante de Pix) desfaz a
+ * reserva só na recusa certa.
+ */
+export function recusaCertaDaFranquia(error: string | null | undefined): boolean {
+  const e = String(error ?? '').trim();
+  const status = /^(\d{3}): /.exec(e);
+  if (status) {
+    const n = Number(status[1]);
+    return n >= 400 && n < 500 && n !== 408 && n !== 429;
+  }
+  return e === MOTIVO_ESCRITA_SEM_CARTAO || e.startsWith('unidade sem token da API Spine') || e.startsWith('dateAttendanceLocal inválida');
 }
 
 export async function createSchedule(

@@ -1,13 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { cnpjValido, cpfValido } from './integracoes/mascaras.js';
 import {
   analisarConversa,
   avaliarComprovante,
   carimboDoSegmento,
-  cnpjValido,
   compararDocumento,
-  cpfValido,
   ehMarcoDaNegociacao,
   horaDoReciboBateComE2E,
   instanteDoE2E,

@@ -24,6 +24,8 @@ import {
   type TurnoDoComprovante,
 } from './confirmacao-so-com-crm.js';
 import { randomUUID } from 'node:crypto';
+import { recusaCertaDaFranquia } from '../services/spine.service.js';
+import { MOTIVO_ESCRITA_SEM_CARTAO } from '../lib/trava-escrita-franquia.js';
 import { analisarConversa, referenciaDaLeitura, type DadosDoComprovante, type LeituraGuardada, type MensagemDaConversa } from '../lib/comprovante-pix.js';
 import { marcouNesteTurno } from './reserva-sem-marcar.js';
 import { renderRulesGlobal } from './prompt-composer.js';
@@ -617,12 +619,76 @@ test('chegou comprovante NESTE turno mas sem leitura guardada (banco falhou ao g
   assert.equal(!so.libera && so.texto, RECUSA_SEM_COMPROVANTE_DA_TAXA);
 });
 
-test('a franquia respondeu COM ERRO ao criar a consulta («Não consegui marcar às…»): ela pode ter criado antes do erro — a reserva do E2E FICA', async () => {
+/** Como `agendar_consulta` devolve a falha de `createSchedule`. */
+const FALHA_AO_CRIAR = (erro: string) => `Não consegui marcar às 15:30 (${erro}). PARE AQUI: não chame agendar_consulta de novo neste turno e não tente outro horário agora.`;
+
+test('409 «Horário indisponível» (recusa CERTA da franquia): a reserva é desfeita e a nova tentativa em OUTRO horário marca', async () => {
   const banco = bancoDeMentira();
-  const falha = cenario(VALIDA, { banco, respostaDaFerramenta: 'Não consegui marcar às 15:30 (timeout). PARE AQUI: não chame agendar_consulta de novo neste turno.' });
-  await falha.chamar();
-  assert.equal(falha.tarefas.length, 0, 'sem consulta confirmada não há o que conferir no extrato');
+  const recusada = cenario(VALIDA, { banco, respostaDaFerramenta: FALHA_AO_CRIAR('409: Horário indisponível') });
+  assert.match(await recusada.chamar(), /^Não consegui marcar/);
+  assert.equal(recusada.tarefas.length, 0, 'sem consulta não há o que conferir no extrato');
   const nova = cenario(VALIDA, { banco });
-  assert.match(await nova.chamar({ hora: '16:30' }), /^RECUSADO/, 'a nova tentativa vai para a equipe');
-  assert.deepEqual(nova.chamadas, []);
+  assert.match(await nova.chamar({ hora: '16:30' }), /^Consulta marcada/, 'o Pix não ficou preso');
+  assert.equal(nova.chamadas.length, 1);
+  assert.equal(nova.tarefas.length, 1);
+  assert.match(String(nova.tarefas[0].text), /^CONFERIR NO EXTRATO/, 'a tarefa é a de sempre, não «este comprovante já pagou…»');
+});
+
+test('recusas antes do envio (trava de escrita, unidade sem token, data inválida) também desfazem a reserva', async () => {
+  for (const erro of [MOTIVO_ESCRITA_SEM_CARTAO, 'unidade sem token da API Spine', 'dateAttendanceLocal inválida (use AAAA-MM-DDTHH:mm:ss, sem fuso)', '400: dados inválidos', '422: horário fora da agenda']) {
+    const banco = bancoDeMentira();
+    await cenario(VALIDA, { banco, respostaDaFerramenta: FALHA_AO_CRIAR(erro) }).chamar();
+    assert.match(await cenario(VALIDA, { banco }).chamar({ hora: '16:30' }), /^Consulta marcada/, erro);
+  }
+});
+
+test('erro INCERTO ao criar (timeout, rede, 5xx, 408, 429): a franquia pode ter criado a consulta — a reserva FICA e a nova tentativa vai para a equipe', async () => {
+  for (const erro of ['timeout of 15000ms exceeded', '?: socket hang up', '500: erro interno', '503: indisponível', '504: gateway timeout', '408: timeout', '429: muitas requisições']) {
+    const banco = bancoDeMentira();
+    const falha = cenario(VALIDA, { banco, respostaDaFerramenta: FALHA_AO_CRIAR(erro) });
+    await falha.chamar();
+    const nova = cenario(VALIDA, { banco });
+    assert.match(await nova.chamar({ hora: '16:30' }), /^RECUSADO/, erro);
+    assert.deepEqual(nova.chamadas, [], erro);
+  }
+});
+
+test('recusaCertaDaFranquia: 4xx e recusas locais sim; timeout, rede, 5xx, 408 e 429 não', () => {
+  for (const e of ['400: x', '401: token inválido, ausente ou expirado', '403: token sem permissão', '404: endpoint não encontrado', '409: Horário indisponível', '422: x', MOTIVO_ESCRITA_SEM_CARTAO, 'unidade sem token da API Spine']) assert.equal(recusaCertaDaFranquia(e), true, e);
+  for (const e of ['408: x', '429: x', '500: x', '502: x', '?: timeout of 15000ms exceeded', 'timeout', 'Error: socket hang up', '', null, undefined]) assert.equal(recusaCertaDaFranquia(e as never), false, String(e));
+});
+
+test('próprio paciente, ID RELIDO com um caractere diferente depois de a reserva ser desfeita: assume a MESMA linha (não cria uma segunda para o mesmo Pix)', async () => {
+  const banco = bancoDeMentira();
+  await cenario(VALIDA, { banco, respostaDaFerramenta: FALHA_AO_CRIAR('409: Horário indisponível') }).chamar(); // reserva criada e desfeita
+  const relida = [CHAVE_ENVIADA, humano(fala(dados({ idTransacao: E2E.replace('abc123', 'abc124') })))];
+  assert.match(await cenario(relida, { banco }).chamar({ hora: '16:30' }), /^Consulta marcada/);
+  assert.equal(banco.linhas.length, 1, 'continua um registro só, agora com o ID como foi lido');
+  // e o ID da primeira leitura agora é «parecido» de uma consulta marcada → equipe, não um segundo uso
+  const c = cenario(VALIDA, { banco });
+  assert.match(await c.chamar({ hora: '17:30' }), /^RECUSADO/);
+  assert.deepEqual(c.chamadas, []);
+});
+
+test('resposta «Não consegui marcar…» com o formato mudado (erro ilegível): na dúvida a reserva FICA', async () => {
+  const banco = bancoDeMentira();
+  await cenario(VALIDA, { banco, respostaDaFerramenta: 'Não consegui marcar às 15:30, deu algum erro que o texto não traz.' }).chamar();
+  const nova = cenario(VALIDA, { banco });
+  assert.match(await nova.chamar({ hora: '16:30' }), /^RECUSADO/);
+});
+
+test('mesmo paciente, duas leituras do ID ao mesmo tempo (uma original, uma com caractere trocado): a unicidade decide e não vira «indisponível»', async () => {
+  const banco = bancoDeMentira();
+  await cenario(VALIDA, { banco, respostaDaFerramenta: FALHA_AO_CRIAR('409: Horário indisponível') }).chamar();
+  // a renomeação da linha livre colide com outra chamada que já criou a linha com o ID novo
+  const original = banco.db.comprovantePixUsado.updateMany;
+  (banco.db.comprovantePixUsado as unknown as { updateMany: unknown }).updateMany = async (a: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
+    if (a.data.e2e) throw new Prisma.PrismaClientKnownRequestError('unique', { code: 'P2002', clientVersion: 'teste' });
+    return (original as (x: unknown) => Promise<unknown>)(a);
+  };
+  const relida = [CHAVE_ENVIADA, humano(fala(dados({ idTransacao: E2E.replace('abc123', 'abc124') })))];
+  const c = cenario(relida, { banco });
+  const r = await c.chamar({ hora: '16:30' });
+  assert.match(r, /^RECUSADO/);
+  assert.ok(c.passos.some((p) => p.title.includes('(e2e_do_mesmo_paciente)')), 'e não registro_indisponivel');
 });

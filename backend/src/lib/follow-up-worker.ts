@@ -1,3 +1,4 @@
+import { temConsultaPagaPorComprovante } from './comprovante-pago.js';
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { createKommoClient } from '../services/kommo.service.js';
@@ -383,7 +384,7 @@ async function varrer(): Promise<void> {
         // Boa Vista: quem teve a consulta marcada pela Sofia com o comprovante da taxa (consulta de hoje em diante) também já pagou, mesmo antes de a
         // equipe conferir o extrato e marcar «✓ Consulta pg antecipado» no cartão (comprovante-da-taxa.ts).
         const pagouPorComprovante = proximo.pularSePagou && !estado.pagouAntecipado && unit.spineBookingRequiresPayment
-          ? await prisma.comprovantePixUsado.findFirst({ where: { unitId: unit.id, kommoLeadId: Number(conv.leadId), idSchedule: { not: null }, consultaEm: { gte: new Date().toLocaleDateString('sv-SE', { timeZone: unit.spineTimezone ?? 'America/Sao_Paulo' }) } }, select: { id: true } }).then((r) => r !== null).catch(() => false)
+          ? await temConsultaPagaPorComprovante(prisma, unit.id, Number(conv.leadId), unit.spineTimezone ?? 'America/Sao_Paulo')
           : false;
         if (proximo.pularSePagou && (estado.pagouAntecipado || pagouPorComprovante)) {
           await prisma.conversation

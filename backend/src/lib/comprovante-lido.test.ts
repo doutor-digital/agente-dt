@@ -13,6 +13,7 @@ import {
   type BancoDeLeituras,
 } from './comprovante-lido.js';
 import { analisarConversa, neutralizarMarcasDoSistema, referenciaDaLeitura, referenciasNoTexto, type DadosDoComprovante, type MensagemDaConversa } from './comprovante-pix.js';
+import { temConsultaPagaPorComprovante } from './comprovante-pago.js';
 import { decidirTrava } from '../agent/confirmacao-so-com-crm.js';
 import { renderConversaOficial } from '../services/kommo-talks.service.js';
 import type { MensagemOficial } from '../services/kommo-talks-normalizar.js';
@@ -331,21 +332,67 @@ test('SALESBOT: só o que chegou DEPOIS da última fala da Sofia entra: o compro
   assert.equal(r.comprovantes, 1);
 });
 
-test('SALESBOT: leitura que falha fica registrada — não é tentada a cada mensagem, só depois do recuo', async () => {
+test('SALESBOT: leitura que falha fica registrada — não é tentada a cada mensagem do paciente', async () => {
   const { db, linhas } = bancoDeLeituras();
   let chamadas = 0;
   const falha = async (): Promise<VisionResult> => (chamadas++, Promise.reject(new Error('link vencido')));
-  await lerAnexosDoPaciente(UNIT, LEAD, [oficial({})], { db, descrever: falha, agora: () => agora });
+  const r1 = await lerAnexosDoPaciente(UNIT, LEAD, [oficial({})], { db, descrever: falha, agora: () => agora });
+  assert.equal(r1.naoLidos, 1);
   assert.equal(chamadas, 1);
   assert.equal(linhas.length, 1);
   assert.match(String(linhas[0].erro), /^leitura falhou: link vencido/);
   assert.equal(linhas[0].ehComprovante, false);
-  // a próxima mensagem, logo depois: não tenta de novo
-  await lerAnexosDoPaciente(UNIT, LEAD, [oficial({})], { db, descrever: falha, agora: () => Date.now() + 60_000 });
-  assert.equal(chamadas, 1);
-  // 11 minutos depois: tenta, e agora a visão funciona — a leitura boa substitui o registro da falha
-  const r = await lerAnexosDoPaciente(UNIT, LEAD, [oficial({})], { db, descrever: visao(true), agora: () => Date.now() + 11 * 60_000 });
-  assert.equal(r.comprovantes, 1);
-  assert.equal(linhas.length, 1);
-  assert.equal(linhas[0].ehComprovante, true);
+  const r2 = await lerAnexosDoPaciente(UNIT, LEAD, [oficial({})], { db, descrever: falha, agora: () => Date.now() + 60 * 60_000 });
+  assert.equal(chamadas, 1, 'a mesma imagem não custa visão a cada mensagem');
+  assert.equal(r2.naoLidos, 1, 'mas o modelo e a equipe são avisados de novo enquanto a Sofia não responde (o turno que avisou pode ter falhado)');
+});
+
+test('SALESBOT: anexo que o servidor não sabe ler (tipo desconhecido, sem link) NÃO some em silêncio: conta como «não lido» (modelo avisado e tarefa); áudio/vídeo/figurinha não', async () => {
+  const { db } = bancoDeLeituras();
+  let chamadas = 0;
+  const descrever = async () => (chamadas++, visao(true)());
+  const casos: Array<[string, { tipo: string; link: string | null }, number]> = [
+    ['picture sem link', { tipo: 'picture', link: null }, 1],
+    ['tipo estranho de arquivo', { tipo: 'media_file_x', link: 'https://x/a' }, 1],
+    ['contato', { tipo: 'vcard', link: 'https://x/v' }, 0],
+    ['enquete', { tipo: 'poll', link: null }, 0],
+    ['sticker', { tipo: 'sticker', link: 'https://x/b' }, 0],
+    ['video', { tipo: 'video', link: 'https://x/c' }, 0],
+    ['voice', { tipo: 'voice', link: 'https://x/d' }, 0],
+  ];
+  for (const [nome, anexo, esperado] of casos) {
+    const r = await lerAnexosDoPaciente(UNIT, LEAD, [oficial({ id: nome, anexo })], { db, descrever, agora: () => agora });
+    assert.equal(r.naoLidos, esperado, nome);
+    assert.equal(r.texto, '', nome);
+  }
+  assert.equal(chamadas, 0, 'nenhum deles foi mandado à visão');
+});
+
+test('SALESBOT: tipo de anexo com mime (image/jpeg, application/pdf) é lido como imagem/arquivo', async () => {
+  const { db } = bancoDeLeituras();
+  for (const tipo of ['image/jpeg', 'application/pdf']) {
+    const r = await lerAnexosDoPaciente(UNIT, LEAD, [oficial({ id: tipo, anexo: { tipo, link: `https://x/${tipo}` } })], { db, descrever: visao(true), agora: () => agora });
+    assert.equal(r.comprovantes, 1, tipo);
+  }
+});
+
+// --- régua de cobrança: quem pagou por comprovante não é cobrado ---------------------------------------------------------------------
+function bancoDePagos(linhas: Array<{ unitId: string; kommoLeadId: number; consultaEm: string | null; idSchedule: number | null }>) {
+  return {
+    comprovantePixUsado: {
+      findFirst: async ({ where }: { where: { unitId: string; kommoLeadId: number; consultaEm: { gte: string } } }) =>
+        linhas.find((l) => l.unitId === where.unitId && l.kommoLeadId === where.kommoLeadId && l.consultaEm !== null && l.consultaEm >= where.consultaEm.gte) ?? null,
+    },
+  } as never;
+}
+
+test('RÉGUA: consulta paga por comprovante, de hoje em diante, NÃO é cobrada — mesmo sem id da consulta (a franquia não o devolveu ou o vínculo falhou)', async () => {
+  const hoje = new Date('2026-11-05T15:00:00Z');
+  const semId = [{ unitId: 'u', kommoLeadId: 1, consultaEm: '2026-11-07T15:30', idSchedule: null }];
+  assert.equal(await temConsultaPagaPorComprovante(bancoDePagos(semId), 'u', 1, 'America/Boa_Vista', hoje), true);
+  assert.equal(await temConsultaPagaPorComprovante(bancoDePagos(semId), 'u', 2, 'America/Boa_Vista', hoje), false, 'outro cartão');
+  assert.equal(await temConsultaPagaPorComprovante(bancoDePagos([{ unitId: 'u', kommoLeadId: 1, consultaEm: '2026-11-01T15:30', idSchedule: 9 }]), 'u', 1, 'America/Boa_Vista', hoje), false, 'consulta que já passou');
+  assert.equal(await temConsultaPagaPorComprovante(bancoDePagos([{ unitId: 'u', kommoLeadId: 1, consultaEm: null, idSchedule: null }]), 'u', 1, 'America/Boa_Vista', hoje), false, 'reserva desfeita');
+  const quebrado = { comprovantePixUsado: { findFirst: async () => { throw new Error('fora do ar'); } } } as never;
+  assert.equal(await temConsultaPagaPorComprovante(quebrado, 'u', 1, 'America/Boa_Vista', hoje), false, 'na dúvida cobra, como antes');
 });

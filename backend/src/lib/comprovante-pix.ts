@@ -19,6 +19,7 @@
  * neste ambiente (sem acesso). Por isso a data do E2E é comparada com a do recibo aceitando UTC, Brasília (UTC-3) e hora local
  * de Boa Vista (UTC-4) — ver `DESLOCAMENTOS_HORAS`.
  */
+import { cnpjValido, cpfValido } from './integracoes/mascaras.js';
 
 /** O que a visão leu do comprovante. Campo ausente na imagem = `null` (a visão é instruída a nunca deduzir). */
 export interface DadosDoComprovante {
@@ -182,28 +183,6 @@ export function nomeConfere(doRecibo: string | null | undefined, doCadastro: str
 }
 
 export type ResultadoDoDocumento = 'igual' | 'parcial' | 'diferente' | 'ausente';
-
-function digitoVerificador(base: string, pesos: number[]): number {
-  const soma = [...base].reduce((acc, d, i) => acc + Number(d) * pesos[i], 0);
-  const resto = soma % 11;
-  return resto < 2 ? 0 : 11 - resto;
-}
-
-/** CPF com os dois dígitos verificadores certos (e que não seja 000.000.000-00 etc.). */
-export function cpfValido(d: string): boolean {
-  if (!/^\d{11}$/.test(d) || /^(\d)\1{10}$/.test(d)) return false;
-  const a = digitoVerificador(d.slice(0, 9), [10, 9, 8, 7, 6, 5, 4, 3, 2]);
-  const b = digitoVerificador(d.slice(0, 10), [11, 10, 9, 8, 7, 6, 5, 4, 3, 2]);
-  return a === Number(d[9]) && b === Number(d[10]);
-}
-
-/** CNPJ com os dois dígitos verificadores certos. */
-export function cnpjValido(d: string): boolean {
-  if (!/^\d{14}$/.test(d) || /^(\d)\1{13}$/.test(d)) return false;
-  const a = digitoVerificador(d.slice(0, 12), [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]);
-  const b = digitoVerificador(d.slice(0, 13), [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]);
-  return a === Number(d[12]) && b === Number(d[13]);
-}
 
 /**
  * O CPF/CNPJ do recibo contra a chave Pix da unidade (só dígitos). A chave que não é CPF/CNPJ (e-mail, telefone, aleatória) não

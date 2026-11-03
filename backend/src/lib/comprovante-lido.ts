@@ -36,12 +36,10 @@ export interface NovaLeitura {
   modelo?: string | null;
   /** já chegou à conversa (imagem que não é comprovante: não há o que entregar) */
   entregue?: boolean;
-  /** a leitura falhou (download, visão): fica registrada para a mesma imagem não ser tentada a cada mensagem — só de novo depois de um recuo */
+  /** a leitura falhou (download, visão): fica registrada para a mesma imagem não ser tentada a cada mensagem do paciente */
   falhou?: boolean;
 }
 
-/** Recuo antes de tentar de novo uma imagem cuja leitura falhou. */
-export const RECUO_DA_LEITURA_QUE_FALHOU_MS = 10 * 60_000;
 /** Prazo da reserva da entrega: o turno que entrega a leitura tem esse tempo para dar certo antes de outro assumir. */
 export const PRAZO_DA_ENTREGA_MS = 5 * 60_000;
 const MARCA_DE_FALHA = 'leitura falhou: ';
@@ -107,7 +105,11 @@ export function segmentoDaLeitura(tipo: 'imagem' | 'arquivo', descricao: string,
 
 // --- Rota do salesbot: o texto chega sem a imagem; ela está na conversa oficial do Kommo --------------------------------------------
 
-const ANEXO_DE_IMAGEM_OU_ARQUIVO = /^(picture|file|document|image)$/i;
+const ANEXO_DE_IMAGEM_OU_ARQUIVO = /^(?:picture|file|document|image|image\/[\w.+-]+|application\/pdf)$/i;
+/** Tipos que PARECEM foto ou documento (mesmo os que o servidor não sabe ler): esses não podem sumir em silêncio. Contato, enquete, reação… ficam de fora. */
+const ANEXO_QUE_PARECE_IMAGEM_OU_ARQUIVO = /(?:pic|photo|image|img|file|doc|pdf|attach|media|scan)/i;
+/** Anexos que nunca são comprovante e que ninguém precisa ver: áudio, vídeo, figurinha… */
+const ANEXO_QUE_NAO_E_COMPROVANTE = /^(?:voice|audio|video|sticker|gif|location|contact|link)(?:\/.*)?$/i;
 const JANELA_DOS_ANEXOS_MS = 72 * 3_600_000;
 const MAX_ANEXOS_POR_TURNO = 3;
 /** Tentativas por turno (as que falham não ocupam as vagas das lidas, mas também não podem custar chamadas sem fim). */
@@ -148,11 +150,16 @@ export async function lerAnexosDoPaciente(
 
   // Só o que chegou DEPOIS da última fala da Sofia (como a conversa oficial do turno): anexo velho que nunca foi lido não entra na fala de
   // hoje como se fosse deste turno — o comprovante de uma consulta que já passou não paga a próxima.
-  const candidatas = desdeUltimaFalaDaSofia([...msgs])
-    .filter((m) => m.direcao === 'entrada' && m.autor === 'paciente' && m.anexo?.link && ANEXO_DE_IMAGEM_OU_ARQUIVO.test(m.anexo.tipo) && d.agora() - m.em.getTime() <= JANELA_DOS_ANEXOS_MS)
+  const doPaciente = desdeUltimaFalaDaSofia([...msgs]).filter((m) => m.direcao === 'entrada' && m.autor === 'paciente' && m.anexo && d.agora() - m.em.getTime() <= JANELA_DOS_ANEXOS_MS);
+  const legivel = (m: MensagemOficial) => Boolean(m.anexo?.link) && ANEXO_DE_IMAGEM_OU_ARQUIVO.test(m.anexo?.tipo ?? '');
+  // anexo que não é áudio/vídeo/figurinha e que o servidor não sabe ler (tipo desconhecido, sem link): não pode sumir em silêncio — o modelo é avisado
+  // e a equipe ganha a tarefa (o comprovante pode estar ali)
+  const semComoLer = doPaciente.filter((m) => !legivel(m) && !ANEXO_QUE_NAO_E_COMPROVANTE.test(m.anexo?.tipo ?? '') && ANEXO_QUE_PARECE_IMAGEM_OU_ARQUIVO.test(m.anexo?.tipo ?? '')).length;
+  const candidatas = doPaciente
+    .filter(legivel)
     // o MAIS NOVO primeiro: o comprovante que o paciente acabou de mandar não espera atrás de anexos antigos (que podem estar com o link vencido)
     .sort((a, b) => b.em.getTime() - a.em.getTime());
-  if (candidatas.length === 0) return vazio;
+  if (candidatas.length === 0) return { ...vazio, naoLidos: semComoLer };
 
   // uma ida ao banco para saber o que já foi lido
   type Existente = { id: string; fonte: string; tipo: string; ehComprovante: boolean; entregueEm: Date | null; erro: string | null; criadoEm: Date };
@@ -173,30 +180,26 @@ export async function lerAnexosDoPaciente(
   let lidos = 0;
   let tentativas = 0;
   let comprovantes = 0;
-  let naoLidos = 0;
+  let naoLidos = semComoLer;
   for (const m of candidatas) {
     const fonte = fonteDaMensagemOficial(m.id);
     const ja = porFonte.get(fonte);
     if (ja) {
-      const falhouAntes = ja.erro?.startsWith(MARCA_DE_FALHA) === true;
-      if (falhouAntes && d.agora() - ja.criadoEm.getTime() >= RECUO_DA_LEITURA_QUE_FALHOU_MS && lidos < MAX_ANEXOS_POR_TURNO && tentativas < MAX_TENTATIVAS_POR_TURNO) {
-        // a leitura falhou há tempo: tenta de novo (o registro da falha é trocado pela leitura)
-        await d.db.comprovanteLido.deleteMany({ where: { id: ja.id, erro: ja.erro } }).catch(() => undefined);
-      } else {
-        // lido antes e nunca entregue (o turno que o leu falhou): entrega de novo, sem pagar a visão outra vez — mas só quem ganhar a
-        // reivindicação (prazo de 5 min): duas mensagens seguidas do paciente não entregam o mesmo comprovante duas vezes
-        if (ja.ehComprovante && ja.entregueEm === null) {
-          const ganhou = await d.db.comprovanteLido
-            .updateMany({ where: { id: ja.id, entregueEm: null, reivindicadaEm: { lt: new Date(d.agora() - PRAZO_DA_ENTREGA_MS) } }, data: { reivindicadaEm: new Date(d.agora()) } })
-            .catch(() => ({ count: 0 }));
-          if (ganhou.count === 1) {
-            comprovantes++;
-            paraEntregar.push(ja.id);
-            falas.push({ em: m.em.getTime(), fala: `[${ja.tipo === 'arquivo' ? 'arquivo' : 'imagem'} do cliente]: COMPROVANTE: leitura guardada pelo servidor ${referenciaDaLeitura(ja.id)} [recebido-em:${new Date(d.agora()).toISOString()}]` });
-          }
+      // a leitura FALHOU num turno anterior e o anexo ainda é posterior à última fala da Sofia (o turno que avisou não respondeu): avisa de novo
+      if (ja.erro?.startsWith(MARCA_DE_FALHA)) naoLidos++;
+      // lido antes e nunca entregue (o turno que o leu falhou): entrega de novo, sem pagar a visão outra vez — mas só quem ganhar a
+      // reivindicação (prazo de 5 min): duas mensagens seguidas do paciente não entregam o mesmo comprovante duas vezes
+      if (ja.ehComprovante && ja.entregueEm === null) {
+        const ganhou = await d.db.comprovanteLido
+          .updateMany({ where: { id: ja.id, entregueEm: null, reivindicadaEm: { lt: new Date(d.agora() - PRAZO_DA_ENTREGA_MS) } }, data: { reivindicadaEm: new Date(d.agora()) } })
+          .catch(() => ({ count: 0 }));
+        if (ganhou.count === 1) {
+          comprovantes++;
+          paraEntregar.push(ja.id);
+          falas.push({ em: m.em.getTime(), fala: `[${ja.tipo === 'arquivo' ? 'arquivo' : 'imagem'} do cliente]: COMPROVANTE: leitura guardada pelo servidor ${referenciaDaLeitura(ja.id)} [recebido-em:${new Date(d.agora()).toISOString()}]` });
         }
-        continue;
       }
+      continue;
     }
     if (lidos >= MAX_ANEXOS_POR_TURNO || tentativas >= MAX_TENTATIVAS_POR_TURNO) continue;
     try {
@@ -225,9 +228,9 @@ export async function lerAnexosDoPaciente(
     } catch (err) {
       logger.warn({ err: String(err), leadId, unit: unit.slug, mensagem: m.id }, 'comprovante: não consegui ler o anexo do paciente na conversa oficial (segue sem)');
       naoLidos++;
-      // registra a falha: a mesma imagem não é tentada a cada mensagem do paciente (só depois do recuo)
+      // registra a falha: a mesma imagem não é tentada a cada mensagem do paciente (o aviso à equipe, `naoLidos`, cobre o resto)
       await guardarLeitura(d.db, {
-        unitId: unit.id, leadId, fonte, tipo: m.anexo?.tipo === 'file' ? 'arquivo' : 'imagem', ehComprovante: false, dados: null, erro: err instanceof Error ? err.message : String(err), falhou: true,
+        unitId: unit.id, leadId, fonte, tipo: /file|doc|pdf/i.test(m.anexo?.tipo ?? '') ? 'arquivo' : 'imagem', ehComprovante: false, dados: null, erro: err instanceof Error ? err.message : String(err), falhou: true,
       }).catch(() => undefined);
     }
   }
