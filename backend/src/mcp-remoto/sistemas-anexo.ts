@@ -9,6 +9,8 @@
  *                                do passo 1, não de argumentos: o link de um lançamento não anexa a outro.
  *  3. `sistemas_anexar_url`      o servidor BAIXA o arquivo de um endereço (lista branca de domínios, sem rede interna: ver `baixar-url.ts`) e entrega igual.
  *
+ * `sistemas_preparar_documento` (em sistemas-documento.ts) é o passo 1 dos DOCUMENTOS (colaborador, empresa, paciente do Caixa, contrato de cliente); o passo 2 é este mesmo `sistemas_anexar_envio`.
+ *
  * Só quem pode escrever no sistema vê estas ferramentas (a mesma lista de `sistemas_confirmar_alteracao`). Quem anexou fica em `admin_log` e
  * `rh_log` do servidor (e-mail de quem entrou no conector) e na auditoria do conector (só tabela, tipo, lançamento e domínio; nunca o conteúdo).
  */
@@ -21,6 +23,8 @@ import { baixarUrl, type Baixado, type OpcoesDeDownload } from './baixar-url.js'
 import { CofreDeArquivos, ErroDeCofre, detectarTipo, type TipoDeArquivo } from './cofre-arquivos.js';
 import { executar } from './ferramenta.js';
 import { resolverSistema, type ContextoSistemas, type QuemSistemas, type Saida } from './sistemas.js';
+import { classificarErroDaEntrega, nomeLimpo, type ResultadoDaEntrega } from './sistemas-entrega.js';
+import { anexarEnvioDocumento, DESTINO_DOCUMENTO, registrarDocumentosSistemas } from './sistemas-documento.js';
 
 export const TIPOS_ANEXO = ['comprovante', 'nota_fiscal', 'recibo'] as const;
 type TipoAnexo = (typeof TIPOS_ANEXO)[number];
@@ -45,12 +49,7 @@ function destinoConferido(d: Readonly<Record<string, string>> | undefined): { si
   return { sistema: d.sistema, tabela: d.tabela as Tabela, lancamento: d.lancamento!, tipoAnexo: d.tipoAnexo as TipoAnexo };
 }
 
-/** Nome de arquivo que vai para o sistema: só o último trecho, sem barras, sem '..', sem caractere de controle. */
-export function nomeLimpo(bruto: string): string {
-  const base = bruto.split(/[\\/]/).pop() ?? '';
-  // eslint-disable-next-line no-control-regex
-  return base.replace(/[\u0000-\u001f\u007f]/g, '').replace(/\.{2,}/g, '.').trim().slice(0, 100);
-}
+export { nomeLimpo };
 
 export interface DepsAnexo {
   cofre: CofreDeArquivos;
@@ -105,7 +104,7 @@ async function entregar(
   sistema: string,
   enviadoNome: string,
   p: { tabela: Tabela; lancamento: string; tipo: TipoAnexo; nome: string; bytes: Buffer; origem: string },
-): Promise<{ definitivo: boolean; resposta?: Saida; erro?: ErroSistemas | Error; desatualizado?: boolean }> {
+): Promise<ResultadoDaEntrega<Saida>> {
   const c = resolverSistema(ctx, sistema);
   try {
     const r = (await c.fonte.chamar('POST', '/admin/v1/anexo', {
@@ -115,9 +114,7 @@ async function entregar(
     })) as Saida;
     return { definitivo: true, resposta: r };
   } catch (e) {
-    if (e instanceof ErroSistemas && e.status !== null && e.status < 500 && e.status !== 404) return { definitivo: true, erro: e };
-    if (e instanceof ErroSistemas && e.status === 404) return { definitivo: false, erro: e, desatualizado: true };
-    return { definitivo: false, erro: e as Error };
+    return classificarErroDaEntrega(e);
   }
 }
 
@@ -137,8 +134,9 @@ function resultado(slug: string, r: Saida, extra: Record<string, unknown> = {}) 
   };
 }
 
-function mensagemDeFalha(e: ErroSistemas | Error | undefined, certo: boolean, desatualizado = false): string {
+function mensagemDeFalha(e: ErroSistemas | Error | undefined, certo: boolean, desatualizado = false, naoGravou = false): string {
   const texto = e?.message ?? 'erro desconhecido';
+  if (naoGravou) return `o servidor do sistema não aceitou agora (${texto}). Nada foi gravado e o arquivo continua guardado no cofre até vencer: tente de novo.`;
   if (desatualizado) {
     return 'o servidor do sistema respondeu 404: está DESATUALIZADO (ainda sem a rota /admin/v1/anexo; a API 0.1.10.3 precisa ser publicada antes) ou o lançamento sumiu. Nada foi gravado e o arquivo continua guardado no cofre até vencer; avise o João e tente de novo depois da atualização.';
   }
@@ -173,6 +171,7 @@ export function registrarAnexosSistemas(server: McpServer, ctx: ContextoSistemas
   const enviadoNome = deps.enviadoNome ?? NOME_PADRAO;
   const base = () => deps.baseUrl().replace(/\/+$/, '');
   const baixar = deps.baixar ?? baixarUrl;
+  registrarDocumentosSistemas(server, ctx, quem, { cofre: deps.cofre, baseUrl: deps.baseUrl, enviadoNome }, auditarBruto);
   const SISTEMA = z.string().optional().describe('qual sistema (slug); pode omitir se só há um ligado');
   const TABELA = z.enum(TABELAS).describe('caixa_lanc = lançamento do Caixa da unidade (cria o documento com prévia para a conferência); fin_lanc = lançamento do Financeiro (guarda o arquivo e preenche a coluna anexo)');
   const TIPO = z.enum(TIPOS_ANEXO);
@@ -236,10 +235,10 @@ export function registrarAnexosSistemas(server: McpServer, ctx: ContextoSistemas
     {
       title: 'Sistema novo (Caixa/Financeiro): anexar o arquivo enviado ao lançamento',
       description:
-        'PASSO 2 de 2. Pega o arquivo que chegou pelo link de sistemas_preparar_anexo e o anexa ao lançamento daquele pedido (o destino vem do pedido, não daqui): ' +
+        'PASSO 2 de 2. Pega o arquivo que chegou pelo link de sistemas_preparar_anexo (comprovante de lançamento) OU de sistemas_preparar_documento (documento de colaborador, empresa, paciente ou cliente) e o anexa ao destino daquele pedido (o destino vem do pedido, não daqui). Lançamento: ' +
         'grava no armazenamento do Caixa (unidade/AAAA-MM/uuid-nome), cria o documento em caixa_docs com ia_status "aguardando" e as prévias em caixa_docs_prev (lançamento do Caixa) ' +
         'ou, em fin_lanc, grava o documento em rh_docs (col anexos) e preenche a coluna anexo com o id dele (o que o botão do comprovante da tela abre; sem prévia). Depois apaga o arquivo do cofre. Se o arquivo ainda não chegou, diz isso (peça para enviar e chame de novo). ' +
-        'Uma vez só por envio. Registra quem anexou. Confira antes com a pessoa que o lançamento é o certo.',
+        'Documento (sistemas_preparar_documento): grava no mesmo lugar e formato da tela (pasta do colaborador, documentos da empresa, caixa_docs do paciente ou contrato do cliente). Uma vez só por envio. Registra quem anexou. Confira antes com a pessoa que o destino é o certo.',
       inputSchema: { envio: z.string().trim().min(8).max(64).describe('o "envio" devolvido por sistemas_preparar_anexo') },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
@@ -248,7 +247,10 @@ export function registrarAnexosSistemas(server: McpServer, ctx: ContextoSistemas
         let d;
         let dest;
         try {
-          dest = destinoConferido(deps.cofre.destinoDe(quem.usuario, args.envio));
+          const guardado = deps.cofre.destinoDe(quem.usuario, args.envio);
+          // envio pedido por sistemas_preparar_documento: outro destino, outra rota do servidor (sistemas-documento.ts)
+          if (guardado?.tipo === DESTINO_DOCUMENTO) return await anexarEnvioDocumento(ctx, quem, deps.cofre, args.envio, enviadoNome, guardado);
+          dest = destinoConferido(guardado);
           // `abrir` marca o envio como em uso antes de qualquer espera: uma segunda chamada ao mesmo tempo é recusada (nada de anexo em dobro)
           d = await deps.cofre.abrir(quem.usuario, args.envio);
         } catch (e) {
@@ -265,7 +267,7 @@ export function registrarAnexosSistemas(server: McpServer, ctx: ContextoSistemas
         // o servidor respondeu (aceitou ou recusou): o arquivo não tem mais o que fazer no cofre. Sem resposta: fica, para tentar de novo depois de conferir.
         if (out.definitivo) deps.cofre.apagar(quem.usuario, args.envio);
         else deps.cofre.soltar(quem.usuario, args.envio);
-        if (!out.resposta) throw new ErroDeEntrada(mensagemDeFalha(out.erro, out.definitivo, out.desatualizado));
+        if (!out.resposta) throw new ErroDeEntrada(mensagemDeFalha(out.erro, out.definitivo, out.desatualizado, out.naoGravou));
         return resultado(dest.sistema, out.resposta, { origem: 'envio', arquivoApagadoDoCofre: true });
       }),
   );
@@ -301,7 +303,7 @@ export function registrarAnexosSistemas(server: McpServer, ctx: ContextoSistemas
         const sugerido = nomeLimpo(b.nomeSugerido).replace(/\.(pdf|jpe?g|png)$/i, '');
         const nome = `${(sugerido || args.tipo).slice(0, 90)}.${tipo}`;
         const out = await entregar(ctx, quem, slug, enviadoNome, { tabela: args.tabela, lancamento: id, tipo: args.tipo, nome, bytes: b.bytes, origem: `url:${b.host}` });
-        if (!out.resposta) throw new ErroDeEntrada(mensagemDeFalha(out.erro, out.definitivo, out.desatualizado));
+        if (!out.resposta) throw new ErroDeEntrada(mensagemDeFalha(out.erro, out.definitivo, out.desatualizado, out.naoGravou));
         return resultado(slug, out.resposta, { origem: `baixado de ${b.host}`, tamanhoBaixado: b.bytes.length });
       }),
   );
