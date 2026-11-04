@@ -34,6 +34,22 @@ export const NOME_PADRAO = 'Lia (pela Suzanne)';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DESTINO_TIPO = 'anexo-lancamento';
 
+/** O destino guardado no pedido, conferido de novo na entrega (nada de cast: um formato inesperado é recusado). */
+function destinoConferido(d: Readonly<Record<string, string>> | undefined): { sistema: string; tabela: Tabela; lancamento: string; tipoAnexo: TipoAnexo } {
+  if (!d || d.tipo !== DESTINO_TIPO) throw new ErroDeEntrada('esse envio não foi pedido por sistemas_preparar_anexo: não sei a que lançamento anexar. Peça um novo link por sistemas_preparar_anexo.');
+  if (!d.sistema || !(TABELAS as readonly string[]).includes(d.tabela ?? '') || !(TIPOS_ANEXO as readonly string[]).includes(d.tipoAnexo ?? '') || !UUID.test(d.lancamento ?? '')) {
+    throw new ErroDeEntrada('o pedido deste envio está incompleto: peça um novo link por sistemas_preparar_anexo.');
+  }
+  return { sistema: d.sistema, tabela: d.tabela as Tabela, lancamento: d.lancamento!, tipoAnexo: d.tipoAnexo as TipoAnexo };
+}
+
+/** Nome de arquivo que vai para o sistema: só o último trecho, sem barras, sem '..', sem caractere de controle. */
+export function nomeLimpo(bruto: string): string {
+  const base = bruto.split(/[\\/]/).pop() ?? '';
+  // eslint-disable-next-line no-control-regex
+  return base.replace(/[\u0000-\u001f\u007f]/g, '').replace(/\.{2,}/g, '.').trim().slice(0, 100);
+}
+
 export interface DepsAnexo {
   cofre: CofreDeArquivos;
   /** origem pública do conector (é o domínio do link de envio) */
@@ -190,14 +206,14 @@ export function registrarAnexosSistemas(server: McpServer, ctx: ContextoSistemas
           envio: p.id,
           linkDeEnvio: link,
           validoAte: iso(p.validoAte),
-          validoMinutos: ENVIO_VALE_MS / 60_000,
+          validoMinutos: Math.max(1, Math.round((p.validoAte - deps.cofre.agora()) / 60_000)),
           lancamento: { tabela: args.tabela, id, tipoDoAnexo: args.tipo, linha: lanc.resumo },
           aceita: ['pdf', 'jpg', 'png'],
           tamanhoMaxMB: ANEXO_MAX_BYTES / 1024 / 1024,
           comandoCurl: `curl -sS -X PUT --data-binary @ARQUIVO -H 'Content-Type: application/octet-stream' -H 'X-Nome-Arquivo: ${nome}' '${link}'`,
           dominioDoLink: new URL(link).host,
           proximoPasso: `Quando o arquivo tiver sido enviado (a página diz "Pronto!" ou o curl devolve {"ok":true}), chame sistemas_anexar_envio com envio="${p.id}".`,
-          aviso: 'O link é de uso único e expira em 10 minutos; só serve para ESTE lançamento. Se o ambiente não alcançar o domínio, peça à pessoa para abrir o link.',
+          aviso: 'O link é de uso único e expira em poucos minutos (veja validoAte); só serve para ESTE lançamento. Se o ambiente não alcançar o domínio, peça à pessoa para abrir o link.',
         };
       }),
   );
@@ -217,21 +233,27 @@ export function registrarAnexosSistemas(server: McpServer, ctx: ContextoSistemas
     (args) =>
       executar('sistemas_anexar_envio', args, auditar, async () => {
         let d;
+        let dest;
         try {
-          const destino = deps.cofre.destinoDe(quem.usuario, args.envio);
-          if (destino?.tipo !== DESTINO_TIPO) throw new ErroDeEntrada('esse envio não foi pedido por sistemas_preparar_anexo: não sei a que lançamento anexar. Peça um novo link por sistemas_preparar_anexo.');
+          dest = destinoConferido(deps.cofre.destinoDe(quem.usuario, args.envio));
+          // `abrir` marca o envio como em uso antes de qualquer espera: uma segunda chamada ao mesmo tempo é recusada (nada de anexo em dobro)
           d = await deps.cofre.abrir(quem.usuario, args.envio);
         } catch (e) {
           if (e instanceof ErroDeCofre) throw new ErroDeEntrada(e.message);
           throw e;
         }
-        const dest = d.destino!;
-        const tabela = dest.tabela as Tabela;
-        const out = await entregar(ctx, quem, dest.sistema!, enviadoNome, { tabela, lancamento: dest.lancamento!, tipo: dest.tipoAnexo as TipoAnexo, nome: d.nome, bytes: d.conteudo, origem: 'envio' });
+        let out;
+        try {
+          out = await entregar(ctx, quem, dest.sistema, enviadoNome, { tabela: dest.tabela, lancamento: dest.lancamento, tipo: dest.tipoAnexo, nome: nomeLimpo(d.nome) || 'arquivo', bytes: d.conteudo, origem: 'envio' });
+        } catch (e) {
+          deps.cofre.soltar(quem.usuario, args.envio);
+          throw e;
+        }
         // o servidor respondeu (aceitou ou recusou): o arquivo não tem mais o que fazer no cofre. Sem resposta: fica, para tentar de novo depois de conferir.
         if (out.definitivo) deps.cofre.apagar(quem.usuario, args.envio);
+        else deps.cofre.soltar(quem.usuario, args.envio);
         if (!out.resposta) throw new ErroDeEntrada(mensagemDeFalha(out.erro, out.definitivo));
-        return resultado(dest.sistema!, out.resposta, { origem: 'envio', arquivoApagadoDoCofre: true });
+        return resultado(dest.sistema, out.resposta, { origem: 'envio', arquivoApagadoDoCofre: true });
       }),
   );
 
@@ -261,8 +283,8 @@ export function registrarAnexosSistemas(server: McpServer, ctx: ContextoSistemas
               : `o endereço (${b.host}) não devolveu PDF, JPG nem PNG (conteúdo: ${b.contentType || 'desconhecido'}).`,
           );
         }
-        const ext = tipo === 'jpg' ? 'jpg' : tipo;
-        const nome = (/\.(pdf|jpe?g|png)$/i.test(b.nomeSugerido) ? b.nomeSugerido : `${b.nomeSugerido || args.tipo}.${ext}`).slice(0, 100);
+        const sugerido = nomeLimpo(b.nomeSugerido);
+        const nome = (/\.(pdf|jpe?g|png)$/i.test(sugerido) ? sugerido : `${sugerido || args.tipo}.${tipo}`).slice(0, 100);
         const out = await entregar(ctx, quem, slug, enviadoNome, { tabela: args.tabela, lancamento: id, tipo: args.tipo, nome, bytes: b.bytes, origem: `url:${b.host}` });
         if (!out.resposta) throw new ErroDeEntrada(mensagemDeFalha(out.erro, out.definitivo));
         return resultado(slug, out.resposta, { origem: `baixado de ${b.host}`, tamanhoBaixado: b.bytes.length });

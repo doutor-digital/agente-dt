@@ -10,7 +10,7 @@ import { ErroSistemas } from '../lib/integracoes/sistemas.js';
 import { baixarUrl, dominiosPermitidos, DOMINIOS_PADRAO, hostPermitido, ipPrivado, type Requisitar, type Resposta } from './baixar-url.js';
 import { CofreDeArquivos, ErroDeCofre } from './cofre-arquivos.js';
 import { criarContextoSistemas, type ContaSistemas } from './sistemas.js';
-import { registrarAnexosSistemas, type DepsAnexo } from './sistemas-anexo.js';
+import { nomeLimpo, registrarAnexosSistemas, type DepsAnexo } from './sistemas-anexo.js';
 
 // ── amostras ──────────────────────────────────────────────────────────────────────────────────────────
 const PDF = Buffer.from('%PDF-1.7\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n');
@@ -378,4 +378,81 @@ test('baixarUrl: o pedido não leva cookie nem Authorization, e a resposta não 
   assert.match(fonte, /'Accept-Encoding': 'identity'/);
   assert.ok(!/Authorization|Cookie/.test(fonte.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')), 'nenhum cabeçalho de credencial');
   assert.match(fonte, /servername: u\.hostname/);
+});
+
+// ── achados da revisão ────────────────────────────────────────────────────────────────────────────────
+test('anexar_envio duas vezes ao mesmo tempo (retry/paralelo): UMA entrega ao servidor; a outra é recusada; incerteza devolve o arquivo para nova tentativa', async () => {
+  let solta!: () => void;
+  const segura = new Promise<void>((r) => (solta = r));
+  let n = 0;
+  const srv = servidor({ anexo: () => ((n++), { ok: true, doc_id: `doc-${n}`, caminho: 'x', paginas: 1, previas: 1 }) });
+  // o servidor demora: as duas chamadas se sobrepõem
+  const original = srv.ctx.contas.get('hm-tecnologia')!.fonte.chamar.bind(srv.ctx.contas.get('hm-tecnologia')!.fonte);
+  srv.ctx.contas.get('hm-tecnologia')!.fonte.chamar = async (m, c, o) => {
+    if (c === '/admin/v1/anexo') await segura;
+    return original(m, c, o);
+  };
+  const a = ambiente(srv);
+  try {
+    const k = await cliente(a);
+    const p = await pedirESubir(a, k, PDF);
+    const primeira = k.chamar('sistemas_anexar_envio', { envio: p.envio });
+    await new Promise((r) => setTimeout(r, 20));
+    const segunda = await k.chamar('sistemas_anexar_envio', { envio: p.envio });
+    assert.ok(segunda.erro && /já está sendo entregue/.test(segunda.texto), segunda.texto);
+    solta();
+    assert.equal((await primeira).erro, false);
+    assert.equal(n, 1, 'o servidor recebeu UMA entrega');
+  } finally { a.limpar(); }
+  // sem resposta do servidor: o arquivo volta a ficar disponível e a nova tentativa funciona
+  let tentativa = 0;
+  const srv2 = servidor({ anexo: () => (++tentativa === 1 ? new ErroSistemas('sem resposta', null) : { ok: true, doc_id: 'doc-9', caminho: 'x', paginas: 1, previas: 1 }) });
+  const b = ambiente(srv2);
+  try {
+    const k = await cliente(b);
+    const p = await pedirESubir(b, k, PDF);
+    assert.ok((await k.chamar('sistemas_anexar_envio', { envio: p.envio })).erro);
+    assert.equal((await k.chamar('sistemas_anexar_envio', { envio: p.envio })).erro, false);
+  } finally { b.limpar(); }
+});
+
+test('um envio de anexo não vira link de download (nem pelas ferramentas do cofre) e destino incompleto é recusado', async () => {
+  const a = ambiente(servidor());
+  try {
+    const k = await cliente(a);
+    const p = await pedirESubir(a, k, PDF);
+    assert.throws(() => a.cofre.gerarLink(QUEM.usuario, p.envio, 10), (e: any) => e instanceof ErroDeCofre && /só segue para o sistema/.test(e.message));
+    const torto = a.cofre.pedirEnvio({ userId: QUEM.usuario, finalidade: 'x', destino: { tipo: 'anexo-lancamento', tabela: 'rh_usuarios', lancamento: LANC, tipoAnexo: 'recibo', sistema: 'hm-tecnologia' } });
+    await a.cofre.guardar(a.cofre.reservar(torto.token), 'c.pdf', PDF);
+    const r = await k.chamar('sistemas_anexar_envio', { envio: torto.id });
+    assert.ok(r.erro && /incompleto/.test(r.texto), r.texto);
+    assert.equal(a.srv.anexos().length, 0);
+  } finally { a.limpar(); }
+});
+
+test('nome do arquivo vindo da URL: sem pasta, sem ponto-ponto, sem caractere de controle', async () => {
+  assert.equal(nomeLimpo('../../x.pdf'), 'x.pdf');
+  assert.equal(nomeLimpo('a\\b\\c.pdf'), 'c.pdf');
+  assert.equal(nomeLimpo('rec\u0000ibo\n.pdf'), 'recibo.pdf');
+  assert.equal(nomeLimpo('a..b.pdf'), 'a.b.pdf');
+  const srv = servidor();
+  const a = ambiente(srv, { baixar: baixa(PDF, { nome: '../../etc/x.pdf' }).baixar as any });
+  try {
+    const k = await cliente(a);
+    assert.equal((await k.chamar('sistemas_anexar_url', { tabela: 'caixa_lanc', lancamento: LANC, tipo: 'comprovante', url: 'https://recibo.infinitepay.io/a' })).erro, false);
+    assert.equal(srv.anexos()[0]!.corpo.nome, 'x.pdf');
+  } finally { a.limpar(); }
+});
+
+test('baixarUrl: IPv4 primeiro; se a conexão falha tenta o próximo endereço JÁ verificado; todos falham → erro', async () => {
+  const tentados: string[] = [];
+  const req: Requisitar = async (_u, ip) => {
+    tentados.push(ip);
+    if (ip === '104.18.1.1') throw new Error('ECONNREFUSED');
+    return resposta(200, { corpo: PDF });
+  };
+  const ok = await baixarUrl('https://www.asaas.com/x', { dominios: DOMINIOS_PADRAO, resolver: async () => ['2606:4700::1111', '104.18.1.1', '104.18.1.2'], requisitar: req });
+  assert.ok(ok.bytes.equals(PDF));
+  assert.deepEqual(tentados, ['104.18.1.1', '104.18.1.2'], 'IPv4 antes do IPv6; o que falhou não bloqueia o resto');
+  await assert.rejects(baixarUrl('https://www.asaas.com/x', { dominios: DOMINIOS_PADRAO, resolver: PUBLICO, requisitar: async () => { throw new Error('ENETUNREACH'); } }), /não consegui baixar/);
 });

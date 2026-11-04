@@ -230,6 +230,8 @@ interface Envio {
   tamanhoMax: number;
   /** para onde o arquivo vai depois (ex.: um lançamento do Caixa); fica preso ao envio e só quem o pediu lê */
   destino?: Readonly<Record<string, string>>;
+  /** alguém está entregando este arquivo agora (`abrir` sem `soltar`): uma segunda entrega ao mesmo tempo é recusada */
+  emUso?: boolean;
   tokenHash: string;
   estado: 'aguardando' | 'enviando' | 'recebido' | 'apagado';
   recusas: number;
@@ -471,12 +473,22 @@ export class CofreDeArquivos {
     const e = this.doDono(userId, id);
     if (e.estado === 'apagado') throw new ErroDeCofre('estado', 'O arquivo já foi apagado. Peça um novo envio.', 409);
     if (e.estado !== 'recebido' || !e.arquivo) throw new ErroDeCofre('estado', 'O arquivo ainda não chegou: peça à pessoa que abra o link de envio e envie o arquivo.', 409);
+    // marca ANTES de qualquer await: duas chamadas ao mesmo tempo (retry, paralelo) não entregam o mesmo arquivo duas vezes
+    if (e.emUso) throw new ErroDeCofre('ocupado', 'Este arquivo já está sendo entregue agora. Espere o resultado antes de repetir.', 409);
+    e.emUso = true;
     const a = e.arquivo;
     try {
       return { nome: a.nome, tipo: a.tipo, mime: TIPOS[a.tipo].mime, tamanho: a.tamanho, destino: e.destino, conteudo: await this.lerCifrado(e, a) };
     } catch {
+      e.emUso = false;
       throw new ErroDeCofre('estado', 'Não consegui ler o arquivo guardado (sumiu ou o sistema foi atualizado). Peça um novo envio.', 409);
     }
+  }
+
+  /** Quem abriu e NÃO apagou (a entrega ficou incerta) devolve o arquivo para uma nova tentativa. */
+  soltar(userId: string, id: string): void {
+    const e = this.envios.get(id);
+    if (e && e.dono === userId) e.emUso = false;
   }
 
   /** O destino que o pedido guardou, sem tocar no arquivo (para a ferramenta conferir antes de gastar). */
@@ -486,6 +498,7 @@ export class CofreDeArquivos {
 
   gerarLink(userId: string, id: string, minutos: number | undefined): { token: string; nome: string; expiraEm: number; baixadasMax: number } {
     const e = this.doDono(userId, id);
+    if (e.destino) throw new ErroDeCofre('estado', 'Este arquivo é de um anexo de lançamento do Caixa e só segue para o sistema (sistemas_anexar_envio); não gero link de download dele.', 409);
     if (e.estado !== 'recebido' || !e.arquivo) {
       throw new ErroDeCofre('estado', e.estado === 'apagado' ? 'O arquivo já foi apagado. Peça um novo envio.' : 'O arquivo ainda não chegou. Espere a pessoa enviar (arquivo_ver_envio).', 409);
     }

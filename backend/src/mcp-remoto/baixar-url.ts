@@ -121,8 +121,8 @@ const resolverDeVerdade: Resolvedor = async (host) => (await dns.promises.lookup
 export interface Resposta {
   status: number;
   headers: Record<string, string | string[] | undefined>;
-  /** lê o corpo até `max` bytes; passou do limite → lança */
-  corpo(max: number): Promise<Buffer>;
+  /** lê o corpo até `max` bytes e `tempoMs` milissegundos; passou de um dos dois → lança (e fecha a conexão) */
+  corpo(max: number, tempoMs: number): Promise<Buffer>;
   descartar(): void;
 }
 export type Requisitar = (u: URL, ip: string, tempoMs: number) => Promise<Resposta>;
@@ -130,6 +130,8 @@ export type Requisitar = (u: URL, ip: string, tempoMs: number) => Promise<Respos
 /** O pedido de verdade: conecta no IP já verificado e fala TLS com o NOME (certificado e SNI do domínio). */
 const requisitarHttps: Requisitar = (u, ip, tempoMs) =>
   new Promise((ok, falha) => {
+    // prazo DURO até os cabeçalhos chegarem (o `timeout` do socket só vale para inatividade): estoura → derruba a conexão
+    const prazo = setTimeout(() => req.destroy(new Error('tempo esgotado')), tempoMs);
     const req = https.request(
       {
         host: u.hostname,
@@ -143,32 +145,44 @@ const requisitarHttps: Requisitar = (u, ip, tempoMs) =>
         timeout: tempoMs,
       },
       (res: IncomingMessage) => {
+        clearTimeout(prazo);
         ok({
           status: res.statusCode ?? 0,
           headers: res.headers,
-          corpo: (max) =>
+          corpo: (max, tempoCorpoMs) =>
             new Promise<Buffer>((resolve, reject) => {
               const partes: Buffer[] = [];
               let total = 0;
+              const limite = setTimeout(() => {
+                res.destroy();
+                reject(new ErroDeEntrada('o site demorou demais para mandar o arquivo'));
+              }, tempoCorpoMs);
+              const fim = <T>(f: (v: T) => void) => (v: T) => {
+                clearTimeout(limite);
+                f(v);
+              };
               res.on('data', (c: Buffer) => {
                 total += c.length;
                 if (total > max) {
                   res.destroy();
-                  reject(new ErroDeEntrada(`o arquivo passa do limite de ${Math.floor(max / 1024 / 1024)} MB`));
+                  fim(reject)(new ErroDeEntrada(`o arquivo passa do limite de ${Math.floor(max / 1024 / 1024)} MB`));
                   return;
                 }
                 partes.push(c);
               });
-              res.on('end', () => resolve(Buffer.concat(partes, total)));
-              res.on('error', reject);
-              res.on('aborted', () => reject(new Error('conexão cortada')));
+              res.on('end', () => fim(resolve)(Buffer.concat(partes, total)));
+              res.on('error', fim(reject));
+              res.on('aborted', () => fim(reject)(new Error('conexão cortada')));
             }),
           descartar: () => res.destroy(),
         });
       },
     );
     req.on('timeout', () => req.destroy(new Error('tempo esgotado')));
-    req.on('error', falha);
+    req.on('error', (e) => {
+      clearTimeout(prazo);
+      falha(e);
+    });
     req.end();
   });
 
@@ -234,16 +248,20 @@ export async function baixarUrl(bruta: string, o: OpcoesDeDownload): Promise<Bai
     if (ips.length === 0) throw new ErroDeEntrada(`não consegui encontrar o site ${atual.hostname}`);
     // TODOS os endereços têm que ser públicos: um nome que também aponta para a rede interna é recusado inteiro
     if (ips.some(ipPrivado)) throw new ErroDeEntrada(`o site ${atual.hostname} aponta para um endereço interno: recusado`);
-    let resp: Resposta;
-    try {
-      resp = await Promise.race([
-        requisitar(atual, ips[0]!, restante()),
-        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('tempo esgotado')), restante()).unref()),
-      ]);
-    } catch (e) {
-      if (e instanceof ErroDeEntrada) throw e;
-      throw new ErroDeEntrada(`não consegui baixar de ${atual.hostname} (${e instanceof Error ? e.message.slice(0, 60) : 'erro de rede'})`);
+    // IPv4 primeiro (a VPS pode não ter rota IPv6); se a conexão falha, tenta o próximo endereço JÁ VERIFICADO (nunca um nome resolvido de novo)
+    const ordem = [...ips.filter((x) => isIP(x) === 4), ...ips.filter((x) => isIP(x) !== 4)].slice(0, 4);
+    let resp: Resposta | undefined;
+    let ultimoErro = 'erro de rede';
+    for (const ip of ordem) {
+      try {
+        resp = await requisitar(atual, ip, restante());
+        break;
+      } catch (e) {
+        if (e instanceof ErroDeEntrada) throw e;
+        ultimoErro = e instanceof Error ? e.message.slice(0, 60) : 'erro de rede';
+      }
     }
+    if (!resp) throw new ErroDeEntrada(`não consegui baixar de ${atual.hostname} (${ultimoErro})`);
     if ([301, 302, 303, 307, 308].includes(resp.status)) {
       resp.descartar();
       const destino = resp.headers.location;
@@ -270,10 +288,7 @@ export async function baixarUrl(bruta: string, o: OpcoesDeDownload): Promise<Bai
     }
     let bytes: Buffer;
     try {
-      bytes = await Promise.race([
-        resp.corpo(maxBytes),
-        new Promise<never>((_, rej) => setTimeout(() => { resp.descartar(); rej(new ErroDeEntrada('o site demorou demais para mandar o arquivo')); }, restante()).unref()),
-      ]);
+      bytes = await resp.corpo(maxBytes, restante());
     } catch (e) {
       if (e instanceof ErroDeEntrada) throw e;
       throw new ErroDeEntrada('a conexão com o site caiu no meio do download');
