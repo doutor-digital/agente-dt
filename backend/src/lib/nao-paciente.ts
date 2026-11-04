@@ -27,7 +27,9 @@ import { resolveEnumId } from '../services/kommo.service.js';
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { normalizarNome } from './kommo-schema.js';
-import { travaDaPerdaAutomatica } from './trava-perda.js';
+import { consultaJaOcorreu, travaDaPerdaAutomatica } from './trava-perda.js';
+import { valorDoCampo } from './ponte-fila.js';
+import { CAMPO_ID_CLIENT } from './casamento-jornada.js';
 import { etiquetaDeNaoContatar } from './sofia-fecha-quente-morno.js';
 import { esquecerPausaPropria, registrarPausaPropria } from './pausa-propria.js';
 import { CAMPO, motivoDaSdrNoCartao, nomesDoCampo } from './parados.js';
@@ -149,10 +151,25 @@ export async function marcarNaoPaciente(p: PedidoNaoPaciente): Promise<Resultado
     logger.info({ ...base }, 'nao-paciente: o cartão está em GANHO — é paciente, recusei');
     return recusar('este cartão está em GANHO (já fechou tratamento): é paciente. Não é candidato; siga o atendimento normal.');
   }
-  const trava = travaDaPerdaAutomatica(cartao, agora, { semTemperatura: true });
+  // Tudo que mostra que a pessoa JÁ É (ou está virando) paciente segura a ferramenta — inclusive Quente/Morno (sem `semTemperatura`):
+  // o erro caro é mandar paciente para PERDIDO com a IA calada; o barato é a Sofia atender um candidato como paciente.
+  const trava = travaDaPerdaAutomatica(cartao, agora);
   if (trava) {
-    logger.info({ ...base, trava: trava.motivo }, 'nao-paciente: o cartão tem consulta ou pagamento — é paciente, recusei');
+    logger.info({ ...base, trava: trava.motivo }, 'nao-paciente: o cartão tem consulta, pagamento ou temperatura — é paciente, recusei');
     return recusar(`este cartão está com «${trava.motivo}»: é paciente, não candidato. Não marque; siga o atendimento normal.`);
+  }
+  if (consultaJaOcorreu(cartao)) {
+    logger.info({ ...base }, 'nao-paciente: a consulta deste cartão já aconteceu (atendido/não compareceu) — é paciente, recusei');
+    return recusar('este cartão já teve consulta (compareceu, foi atendido ou faltou): é paciente. Não marque; siga o atendimento normal.');
+  }
+  const idClientNoCartao = String(valorDoCampo(cartao.custom_fields_values, CAMPO_ID_CLIENT) ?? '').trim();
+  const vinculo = await vinculoComAFranquia(unit.id, leadId);
+  if (vinculo === 'erro') {
+    return { ...recusar(''), desfecho: 'erro', recusa: undefined, falhas: ['leitura do vínculo com a franquia'] };
+  }
+  if (vinculo === 'paciente' || idClientNoCartao) {
+    logger.info({ ...base, vinculo, idClientNoCartao: !!idClientNoCartao }, 'nao-paciente: o cartão tem vínculo de paciente com a franquia — recusei');
+    return recusar('este cartão tem vínculo de paciente na franquia (idClient ou consulta): é paciente. Não marque; siga o atendimento normal.');
   }
 
   const perdidoComercial = comercial ? statusPerdidoDoFunil(comercial.statuses) : null;
@@ -299,6 +316,24 @@ export async function marcarNaoPaciente(p: PedidoNaoPaciente): Promise<Resultado
   return { desfecho: completo ? 'feito' : 'parcial', etiquetas, pausada, motivo, movido, emPerdido: movido || jaEstaFechado, falhas };
 }
 
+/**
+ * O cartão está ligado a um PACIENTE da franquia (`spine_lead_links.spine_id_client` ou `spine_id_schedule`)?
+ * `spine_id_lead` sozinho NÃO conta: desde 27/10 a IA cadastra como LEAD na franquia todo contato (`cadastro-todo-lead`), candidato
+ * incluso — recusar por ele tiraria a regra de quem mais precisa dela. Falha de leitura = `erro` (não se sabe; nada é escrito).
+ */
+async function vinculoComAFranquia(unitId: string, leadId: number): Promise<'paciente' | 'nenhum' | 'erro'> {
+  try {
+    const v = await prisma.spineLeadLink.findUnique({
+      where: { unitId_kommoLeadId: { unitId, kommoLeadId: leadId } },
+      select: { spineIdClient: true, spineIdSchedule: true },
+    });
+    return v && (v.spineIdClient != null || v.spineIdSchedule != null) ? 'paciente' : 'nenhum';
+  } catch (err) {
+    logger.warn({ err: String(err), unitId, leadId }, 'nao-paciente: não consegui ler o vínculo com a franquia');
+    return 'erro';
+  }
+}
+
 /** A escada de reengajamento congela: quem pediu vaga não recebe "ainda está aí?". */
 async function pararFollowUp(p: PedidoNaoPaciente, falhas: string[]): Promise<void> {
   await prisma.conversation
@@ -339,11 +374,7 @@ async function pausarIa(p: PedidoNaoPaciente, falhas: string[]): Promise<boolean
 export function textoParaOModelo(r: ResultadoNaoPaciente): string {
   if (r.desfecho === 'recusado') return `RECUSADO: ${r.recusa}`;
   if (r.desfecho === 'erro') {
-    return (
-      'ERRO — não consegui conferir o cartão agora e NADA foi marcado (a IA continua ligada; se a pessoa escrever de novo, chame a ferramenta de novo). ' +
-      'Se ela é mesmo candidata, responda UMA frase só: agradeça e diga que o recrutamento é tratado pela equipe da clínica (currículo recebido, se mandou o arquivo; senão, que pode mandar por aqui), sem pergunta no fim. ' +
-      'Se ficou em dúvida, atenda normalmente.'
-    );
+    return 'ERRO — não consegui conferir o cartão agora e NADA foi marcado (a IA continua ligada). Atenda a mensagem normalmente, com a pergunta final de sempre; se a pessoa escrever de novo, a ferramenta pode ser chamada de novo.';
   }
   const fala =
     'Agora responda UMA frase só ao candidato: agradeça e diga que o recrutamento é tratado pela equipe da clínica — e que o currículo foi recebido, se ele mandou o arquivo ou o vídeo; ' +

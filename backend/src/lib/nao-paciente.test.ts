@@ -20,6 +20,8 @@ let tarefas: string[] = [];
 let notas: string[] = [];
 let paradas: Array<{ where: unknown; data: unknown }> = [];
 let avisos: string[] = [];
+let vinculo: { spineIdClient?: number | null; spineIdSchedule?: number | null; spineIdLead?: number | null } | null = null;
+let vinculoFalha = false;
 
 // Duas contas: o id da OPÇÃO é diferente em cada uma, e a conta do Salto não tem a opção.
 const CAMPO_MOTIVO_ID = 777;
@@ -43,10 +45,22 @@ beforeEach(() => {
   notas = [];
   paradas = [];
   avisos = [];
+  vinculo = null;
+  vinculoFalha = false;
   falhar = {};
   cartao = cartaoNovo();
   conta = { campo: true, opcoes: [{ id: 11, value: 'Sem interesse' }, { id: 4242, value: 'Não é paciente (currículo)' }] };
   _limparPausasProprias();
+});
+
+Object.defineProperty(prisma, 'spineLeadLink', {
+  value: {
+    findUnique: async () => {
+      if (vinculoFalha) throw new Error('banco fora');
+      return vinculo;
+    },
+  },
+  configurable: true,
 });
 
 Object.defineProperty(prisma, 'conversation', {
@@ -312,4 +326,65 @@ test('já estava em PERDIDO (a equipe fechou) mas sem etiqueta: etiqueta + motiv
   r = await marcar();
   assert.equal(r.motivo, 'mantido_da_equipe');
   assert.ok(!escritas.includes('campos'));
+});
+
+// ── o que é paciente de verdade (senior, #207): Quente/Morno, consulta que já aconteceu, vínculo na franquia ──
+
+const recusaSemEscrita = async (descricao: string) => {
+  const r = await marcar();
+  assert.equal(r.desfecho, 'recusado', descricao);
+  assert.deepEqual(escritas, [], `${descricao}: nada pode ser escrito`);
+  assert.match(textoParaOModelo(r), /^RECUSADO/);
+};
+
+test('lead Quente (etiqueta) ou Morno (etiqueta) é paciente: RECUSADO, a Sofia atende normal', async () => {
+  cartao = cartaoNovo({ _embedded: { tags: [{ id: 3, name: 'Quente' }] } });
+  await recusaSemEscrita('Quente por etiqueta');
+  cartao = cartaoNovo({ _embedded: { tags: [{ id: 3, name: 'Morno' }] } });
+  await recusaSemEscrita('Morno por etiqueta');
+});
+
+test('lead sem temperatura e sem nada de paciente continua sendo candidato (a trava não é geral demais)', async () => {
+  cartao = cartaoNovo({ _embedded: { tags: [{ id: 3, name: 'Frio' }] } });
+  assert.equal((await marcar()).desfecho, 'feito');
+});
+
+test('consulta que já aconteceu (Atendido, Não compareceu, ✓ Compareceu preenchido) é paciente: RECUSADO', async () => {
+  const passado = Math.floor(Date.now() / 1000) - 5 * 86_400;
+  for (const situacao of ['Atendido', 'Não compareceu']) {
+    escritas = [];
+    cartao = cartaoNovo({
+      custom_fields_values: [
+        { field_name: '◷ Data da Consulta', values: [{ value: passado }] },
+        { field_name: '✓ Situação da consulta', values: [{ value: situacao }] },
+      ],
+    });
+    await recusaSemEscrita(`situação ${situacao}`);
+  }
+  cartao = cartaoNovo({ custom_fields_values: [{ field_name: '✓ Compareceu', values: [{ value: 'Sim' }] }] });
+  await recusaSemEscrita('Compareceu = Sim');
+});
+
+test('vínculo de paciente na franquia (idClient ou consulta em spine_lead_links) é paciente: RECUSADO', async () => {
+  vinculo = { spineIdClient: 555 };
+  await recusaSemEscrita('spine_id_client');
+  vinculo = { spineIdSchedule: 99 };
+  await recusaSemEscrita('spine_id_schedule');
+});
+
+test('⚙ idClient (franquia) gravado no cartão também é vínculo de paciente: RECUSADO', async () => {
+  cartao = cartaoNovo({ custom_fields_values: [{ field_name: '⚙ idClient (franquia)', values: [{ value: '4321' }] }] });
+  await recusaSemEscrita('idClient no cartão');
+});
+
+test('lead cadastrado na franquia SÓ como lead (spine_id_lead, regra de 27/10: todo contato vira lead) continua candidato', async () => {
+  vinculo = { spineIdLead: 777, spineIdClient: null, spineIdSchedule: null };
+  assert.equal((await marcar()).desfecho, 'feito');
+});
+
+test('não consegui ler o vínculo com a franquia: ERRO, nada escrito (não se sabe se é paciente)', async () => {
+  vinculoFalha = true;
+  const r = await marcar();
+  assert.equal(r.desfecho, 'erro');
+  assert.deepEqual(escritas, []);
 });

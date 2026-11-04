@@ -17,6 +17,7 @@ import { _limparPausasProprias, pausouSozinhaDesde } from '../lib/pausa-propria.
 logger.warn = (() => undefined) as never;
 logger.error = (() => undefined) as never;
 
+Object.defineProperty(prisma, 'spineLeadLink', { value: { findUnique: async () => null }, configurable: true });
 Object.defineProperty(prisma, 'conversation', {
   value: { updateMany: async () => ({ count: 1 }), findFirst: async () => null },
   configurable: true,
@@ -103,7 +104,17 @@ test('juiz da pergunta final: candidato marcado neste turno não é reescrito em
   assert.equal(marcouCandidatoNoTurno([new HumanMessage('oi'), chamada, ok]), true);
   assert.equal(marcouCandidatoNoTurno([new HumanMessage('oi'), chamada, parcial]), true);
   const erro = new ToolMessage({ content: 'ERRO — não consegui conferir o cartão agora e NADA foi marcado.', tool_call_id: 'c1', name: 'marcar_nao_paciente' });
-  assert.equal(marcouCandidatoNoTurno([new HumanMessage('oi'), chamada, erro]), true, 'ERRO também pede a frase única, sem pergunta de venda');
+  assert.equal(marcouCandidatoNoTurno([new HumanMessage('oi'), chamada, erro]), false, 'ERRO: nada foi marcado, a pergunta final de sempre vale');
   assert.equal(marcouCandidatoNoTurno([new HumanMessage('oi'), chamada, recusado]), false);
   assert.equal(marcouCandidatoNoTurno(velha), false, 'a marcação de um turno anterior não vale para o turno de agora');
+});
+
+test('a ferramenta está no DEFAULT_TOOLS do console (liga/desliga por unidade) com a MESMA descrição de tools.ts', async () => {
+  const { DEFAULTS } = await import('./config.js');
+  const { DEFAULT_TOOL_DESCRIPTIONS } = await import('./tools.js');
+  const t = DEFAULTS.tools.find((x) => x.name === 'marcar_nao_paciente');
+  assert.ok(t, 'faltou no DEFAULT_TOOLS');
+  assert.equal(t.enabled, true);
+  assert.equal(t.description, DEFAULT_TOOL_DESCRIPTIONS.marcar_nao_paciente, 'cópia diferente sobrescreveria a de tools.ts e levaria as travas de "quando NÃO usar"');
+  assert.match(t.description, /trabalho em laboratório/);
 });

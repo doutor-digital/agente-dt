@@ -25,7 +25,8 @@ from units
 where slug in ('doutor-hernia-petropolis', 'doutor-hernia-timbo');
 
 -- 2b) Outra cópia do texto? `escolherBase` usa o prompt do AgentConfig quando a automação 'prompt-da-unidade' está desligada
---     para a unidade. Se esta consulta mostrar linhas com candidato=t, o texto de lá também precisa sair (me avise: não mexo sem ver).
+--     para a unidade. Esta consulta só MOSTRA; quem aborta é o bloco DO abaixo: se um agent_configs ATIVO de Petrópolis/Timbó contiver
+--     "Candidato a vaga", o script dá RAISE e NADA é alterado (nem o backup) — o texto de lá também precisa sair, e isso se vê antes.
 select u.slug, a.is_active, (a.system_prompt ~ 'Candidato a vaga') as candidato
 from agent_configs a join units u on u.id = a.unit_id
 where u.slug in ('doutor-hernia-petropolis', 'doutor-hernia-timbo');
@@ -40,6 +41,9 @@ begin
     depois := regexp_replace(r.system_prompt, '^- Candidato a vaga:[^\n]*\n', '', 'n');
     if length(r.system_prompt) = length(depois) then
       raise exception '% : não achei a linha "- Candidato a vaga:" (o texto do banco mudou?) — nada foi alterado', r.slug;
+    end if;
+    if exists (select 1 from agent_configs a where a.unit_id = r.id and a.is_active and a.system_prompt ~ 'Candidato a vaga') then
+      raise exception '% : há um agent_configs ATIVO com "Candidato a vaga" — o prompt que o modelo lê pode ser aquele, não units.system_prompt. Nada foi alterado; trate essa cópia junto.', r.slug;
     end if;
     -- o item é UMA linha; se a linha seguinte não for outro item, título ou linha em branco, o item quebrava em duas e sobraria resto
     if r.system_prompt !~ E'(?n)^- Candidato a vaga:[^\\n]*\\n(- |#|\\n)' then
