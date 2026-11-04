@@ -10,6 +10,7 @@ import { apiRouter } from './routes/api.routes.js';
 import { apagarCofreDeArquivos, ligarConectorRemoto } from './mcp-remoto/producao.js';
 import { paginaPausaHandler } from './controllers/pausa.controller.js';
 import { paginaAltaHandler } from './controllers/alta.controller.js';
+import { paginaIaHandler } from './controllers/ia-unidade.controller.js';
 import { getCheckpointer } from './agent/graph.js';
 import { ensureDefaultUnit } from './services/units.service.js';
 import { startWhatsappCostScheduler, stopWhatsappCostScheduler } from './lib/whatsapp-cost-scheduler.js';
@@ -141,6 +142,9 @@ async function main(): Promise<void> {
 
   // Página da recepção para aprovar alta e marcar quem parou no meio.
   app.get('/alta/:slug', paginaAltaHandler);
+
+  // Página da recepção para ver, no celular, se a Sofia e as colunas do Kommo estão certas (só leitura, mesmo código).
+  app.get('/ia/:slug', paginaIaHandler);
   app.use('/api', apiRouter);
 
   app.use('/docs', express.static(DOCS_DIR, { extensions: ['html'] }));
