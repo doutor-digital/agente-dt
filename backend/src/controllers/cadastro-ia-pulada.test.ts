@@ -10,6 +10,7 @@ import type { Unit } from '@prisma/client';
 import type { AnuncioDeOrigem } from '../agent/anuncio-de-origem.js';
 import { _semearParaTeste } from '../lib/automacoes-estado.js';
 import { _limparCacheParaTeste, type DepsDoCadastro } from '../lib/cadastro-todo-lead.js';
+import { _semearCrmParaTeste } from '../lib/crm-compartilhado.js';
 import { cadastrarQuandoIaPulada } from './webhook.controller.js';
 
 const PET = { id: 'u-pet', slug: 'petropolis', spineSyncLeads: true } as unknown as Unit;
@@ -34,6 +35,11 @@ const ligar = (estado: 'ligado' | 'seco') => _semearParaTeste([{ slug: 'petropol
 beforeEach(() => {
   _semearParaTeste([]);
   _limparCacheParaTeste();
+  // Conta dividida: Petrópolis + Caxias dividem o Kommo. É o único escopo do cadastro com a IA pulada.
+  _semearCrmParaTeste([
+    { unitId: 'u-pet', contaUnitId: 'u-pet', rotulo: 'Petrópolis', slug: 'petropolis' },
+    { unitId: 'u-cax', contaUnitId: 'u-pet', rotulo: 'Caxias', slug: 'caxias' },
+  ]);
   process.env.NUMEROS_INTERNOS = `recepcao:${INTERNO.slice(-11)}`;
 });
 
@@ -86,6 +92,35 @@ test('o sincronizador que explode não derruba o turno', async () => {
   }, deps());
   await r?.execucao; // o erro é engolido pelo gancho; nada propaga
   assert.ok(r);
+});
+
+test('unidade que NÃO divide Kommo: o cadastro com a IA pulada não roda (fica para outro PR), mesmo com a chave ligada', async () => {
+  const solo = { id: 'u-solo', slug: 'solo', spineSyncLeads: true } as unknown as Unit;
+  _semearParaTeste([{ slug: 'solo', automacao: 'cadastro-todo-lead', estado: 'ligado' }]);
+  let n = 0;
+  let decidiu = 0;
+  const d = deps();
+  d.situacaoNaFranquia = async () => (decidiu++, 'nova');
+  const r = await cadastrarQuandoIaPulada({ unit: solo, leadId: 20, isChatMessage: true }, async () => void n++, d);
+  assert.equal(r, null);
+  assert.equal(n, 0);
+  assert.equal(decidiu, 0, 'nem chega a decidir');
+});
+
+test('chave cadastro-todo-lead DESLIGADA: sai antes de ler qualquer coisa', async () => {
+  let decidiu = 0;
+  const d = deps();
+  d.situacaoNaFranquia = async () => (decidiu++, 'nova');
+  const r = await cadastrarQuandoIaPulada({ unit: PET, leadId: 21, isChatMessage: true }, async () => undefined, d);
+  assert.equal(r, null);
+  assert.equal(decidiu, 0);
+});
+
+test('addMessage do turno adiado grava a hora da fala do paciente (pedido.desde), não a da varredura', () => {
+  const src = readFileSync(new URL('./webhook.controller.ts', import.meta.url), 'utf8');
+  const i = src.indexOf('export async function iniciarTurnoAdiado');
+  const trecho = src.slice(i, src.indexOf('export type AgentDeliverFn', i));
+  assert.match(trecho, /await addMessage\(\{[^\n]*createdAt: pedido\.desde/);
 });
 
 // ── a ligação: cada saída "IA pulada" do processAgent devolve TURNO_PULADO ─────────────────────────

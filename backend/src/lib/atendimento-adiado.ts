@@ -138,7 +138,8 @@ export type MotivoSemTurno =
   | 'ja-reivindicado'
   | 'reivindicacao-incerta'
   | 'sem-iniciador'
-  | 'falha-ao-iniciar';
+  | 'falha-ao-iniciar'
+  | 'falha-ao-conferir';
 
 export interface ResultadoDoAdiado {
   /**
@@ -198,22 +199,34 @@ export async function atenderCartaoQueGanhouUnidade(
     if (deps.agora() - espera.ultimaEm.getTime() > IDADE_MAXIMA_DA_ESPERA_MS) motivo = 'espera-velha';
     else if (textos.length === 0) motivo = 'so-midia';
     else if (!deps.horarioAberto(unit)) motivo = 'fora-do-horario'; // adia: a IA abre mais tarde e a espera ainda pode ser respondida
-    else if (await deps.jaHouveMensagemDesde(unit, leadId, espera.desde).catch(() => true)) motivo = 'ja-atendido';
-    else if (!deps.iniciarTurno) motivo = 'sem-iniciador';
     else {
-      // Uma vez só por espera: a chave é o início dela (estável enquanto ninguém responde). Sem certeza, não refaz.
-      const chave = `${unit.id}:${leadId}:${espera.desde.getTime()}`;
-      const r = await deps.reivindicar(chave);
-      if (r === 'perdeu') motivo = 'ja-reivindicado';
-      else if (r === 'incerto') motivo = 'reivindicacao-incerta';
+      // Falha ao conferir (banco fora) NÃO é "já atendido": isso é decisão final (carimba e não cadastra) e o paciente ficaria sem
+      // resposta para sempre. Sem saber, adia — a próxima varredura confere de novo.
+      const atendido = await deps.jaHouveMensagemDesde(unit, leadId, espera.desde).then(
+        (v) => (v ? ('sim' as const) : ('nao' as const)),
+        (err) => {
+          logger.warn({ err: String(err), leadId, unit: unit.slug }, 'atendimento-adiado: não consegui conferir se já houve resposta — tento na próxima varredura');
+          return 'falha' as const;
+        },
+      );
+      if (atendido === 'falha') motivo = 'falha-ao-conferir';
+      else if (atendido === 'sim') motivo = 'ja-atendido';
+      else if (!deps.iniciarTurno) motivo = 'sem-iniciador';
       else {
-        try {
-          await deps.iniciarTurno({ unit, leadId, textos, desde: espera.desde, contactId: entrada.contactId, telefone: entrada.telefone });
-          iniciou = true;
-        } catch (err) {
-          logger.warn({ err: String(err), leadId, unit: unit.slug }, 'atendimento-adiado: falha ao iniciar o turno atrasado');
-          await deps.liberar(chave).catch(() => undefined);
-          motivo = 'falha-ao-iniciar';
+        // Uma vez só por espera: a chave é o início dela (estável enquanto ninguém responde). Sem certeza, não refaz.
+        const chave = `${unit.id}:${leadId}:${espera.desde.getTime()}`;
+        const r = await deps.reivindicar(chave);
+        if (r === 'perdeu') motivo = 'ja-reivindicado';
+        else if (r === 'incerto') motivo = 'reivindicacao-incerta';
+        else {
+          try {
+            await deps.iniciarTurno({ unit, leadId, textos, desde: espera.desde, contactId: entrada.contactId, telefone: entrada.telefone });
+            iniciou = true;
+          } catch (err) {
+            logger.warn({ err: String(err), leadId, unit: unit.slug }, 'atendimento-adiado: falha ao iniciar o turno atrasado');
+            await deps.liberar(chave).catch(() => undefined);
+            motivo = 'falha-ao-iniciar';
+          }
         }
       }
     }
@@ -230,7 +243,7 @@ export async function atenderCartaoQueGanhouUnidade(
   (foraDoHorario ? logger.debug : logger.info).call(logger, { leadId, unit: unit.slug, motivo, esperouMin }, 'atendimento-adiado: cartão ganhou a unidade — turno NÃO iniciado');
   // `adiar`: a marca fica e a próxima varredura volta aqui — decidir o cadastro agora o repetiria a cada 5 min e, depois, o turno
   // que vier cadastraria de novo com outras falas. Só a decisão definitiva cadastra.
-  const adiar = motivo === 'reivindicacao-incerta' || motivo === 'sem-iniciador' || motivo === 'falha-ao-iniciar' || motivo === 'fora-do-horario';
+  const adiar = motivo === 'reivindicacao-incerta' || motivo === 'sem-iniciador' || motivo === 'falha-ao-iniciar' || motivo === 'falha-ao-conferir' || motivo === 'fora-do-horario';
   if (adiar) return { turno: 'adiar', motivo, esperouMin };
   // Outro turno já cuida deste paciente (e cadastra no fim dele): cadastrar daqui seria uma segunda leitura, com falas diferentes.
   const cadastro = motivo === 'ja-atendido' || motivo === 'ja-reivindicado' ? undefined : await cadastrarSemTurno(entrada, msgs, deps);
@@ -346,7 +359,11 @@ export async function retomarCartoesCalados(
   try {
     const grupo = await grupoDaUnidade(unit.id);
     if (!grupo) return resumo; // Kommo de uma unidade só: o portão nunca cala, não há marca
-    const marcas = (await deps.marcasPendentes(unit.id, new Date(deps.agora() - JANELA_DA_MARCA_MS))).slice(0, MAX_MARCAS_POR_VARREDURA);
+    const todas = await deps.marcasPendentes(unit.id, new Date(deps.agora() - JANELA_DA_MARCA_MS));
+    if (todas.length > MAX_MARCAS_POR_VARREDURA) {
+      logger.warn({ unit: unit.slug, pendentes: todas.length, teto: MAX_MARCAS_POR_VARREDURA }, 'atendimento-adiado: mais marcas pendentes que o teto da varredura — as mais antigas esperam (investigar: cartões que não ganham unidade?)');
+    }
+    const marcas = todas.slice(0, MAX_MARCAS_POR_VARREDURA);
     resumo.marcas = marcas.length;
     for (const marca of marcas) {
       try {

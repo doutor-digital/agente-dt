@@ -4,7 +4,7 @@ import type { BaseMessage } from '@langchain/core/messages';
 import type { Conversation, Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { ferramentasChamadas } from '../lib/cadastro-na-franquia.js';
-import { cadastrarLeadDoTurno, type DecisaoDoLead, type DepsDoCadastro, type SincronizarLead } from '../lib/cadastro-todo-lead.js';
+import { cadastrarLeadDoTurno, estadoCadastroTodoLead, type DecisaoDoLead, type DepsDoCadastro, type SincronizarLead } from '../lib/cadastro-todo-lead.js';
 import { deixaMarcaDeCalada, marcarCartaoCalado, type PedidoDeTurno } from '../lib/atendimento-adiado.js';
 import { logger } from '../lib/logger.js';
 import { buildAgentGraph, buildThreadId } from '../agent/graph.js';
@@ -59,7 +59,7 @@ import { getPausedStagesGlobalSet } from '../services/actions.service.js';
 import { scheduleLeadMemoryUpdate, carimbarContato } from '../services/lead-memory.service.js';
 import { carimbarHumanoAssumiu, scheduleLeadMetrics } from '../services/lead-metrics.service.js';
 import { aplicarCarimbosDeEtapa } from '../lib/carimbo-etapa.js';
-import { contaDoKommo, sofiaPodeAtenderOCartao, unidadeDonaPeloCartaoId } from '../lib/crm-compartilhado.js';
+import { contaDoKommo, grupoDaUnidade, sofiaPodeAtenderOCartao, unidadeDonaPeloCartaoId } from '../lib/crm-compartilhado.js';
 import { esquemaDaUnidade as esquemaKommoDaUnidade } from '../lib/kommo-schema.js';
 import { etapaPermitida, precisaDoFunil, type FunisDaConta } from '../lib/etapa-permitida.js';
 import { etapaCalada, notaSofiaCalada, REGRA_NOTA_CALADA, sofiaCaladaLiberada } from '../lib/sofia-calada.js';
@@ -1115,7 +1115,9 @@ export async function iniciarTurnoAdiado(pedido: PedidoDeTurno): Promise<void> {
   });
   const conv = await upsertConversation({ unitId: unit.id, leadId: String(leadId), phone: pedido.telefone ?? undefined, channel: 'kommo_chat' });
   await guardarTelefoneDoContato(unit, conv, contactId);
-  await addMessage({ conversationId: conv.id, traceId: trace.id, role: 'user', content: humanMessage, meta: { adiado: true, contactId } });
+  // `createdAt: pedido.desde`: a fala é de quando o paciente escreveu, não de quando a varredura a achou — o lead-metrics tira daqui o
+  // "Primeiro contato" e o "Tempo até a 1ª resposta".
+  await addMessage({ conversationId: conv.id, traceId: trace.id, role: 'user', content: humanMessage, createdAt: pedido.desde, meta: { adiado: true, contactId } });
   const ctx: ExtractedContext = {
     humanMessage,
     audioUrl: null,
@@ -1195,7 +1197,11 @@ export async function cadastrarQuandoIaPulada(
   const { unit, leadId } = args;
   // Só mensagem de chat de verdade (o paciente escreveu): webhook de campo/etapa traz texto sintético e não é "entrou em contato".
   if (!args.isChatMessage || !unit.spineSyncLeads || leadId <= 0) return null;
+  // Escopo deste PR: só a conta dividida (Petrópolis × Caxias), onde o cartão nasce sem unidade e o lead vira cadastro depois. O
+  // cadastro geral com a IA pulada, para as demais unidades, é outro PR. Chave desligada: sai antes de qualquer leitura ou log.
+  if (estadoCadastroTodoLead(unit.slug) === 'desligado') return null;
   try {
+    if (!(await grupoDaUnidade(unit.id))) return null;
     // `ferramentas: []`: a IA não rodou, então não há "agendou" — é só o caminho do lead que entrou em contato (decidirCadastroDoLead).
     const r = await cadastrarLeadDoTurno({ unit, leadId, ferramentas: [] }, sincronizar, deps);
     if (!r.decisao.criar && !r.decisao.silenciosa) {

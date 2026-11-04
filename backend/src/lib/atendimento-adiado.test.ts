@@ -15,6 +15,7 @@ import type { KommoLead } from '../services/kommo.service.js';
 import type { AnuncioDeOrigem } from '../agent/anuncio-de-origem.js';
 import {
   IDADE_MAXIMA_DA_ESPERA_MS,
+  MAX_MARCAS_POR_VARREDURA,
   _limparParaTeste,
   atenderCartaoQueGanhouUnidade,
   deixaMarcaDeCalada,
@@ -61,6 +62,7 @@ function mundo(o: {
   agora?: number;
   reivindicacao?: 'incerto';
   turnoFalha?: boolean;
+  jaHouveFalha?: boolean;
 } = {}) {
   const w = { liberadas: [] as string[], turnos: [] as PedidoDeTurno[], sincronizados: [] as Array<{ leadId: number; soLead?: boolean }>, reivindicadas: new Set<string>(), telefoneLido: [] as string[] };
   const cadastro: DepsDoCadastro = {
@@ -83,7 +85,10 @@ function mundo(o: {
       if (o.falhaConversa) throw new Error('kommo fora');
       return o.msgs ?? [OLA];
     },
-    jaHouveMensagemDesde: async () => o.jaHouve ?? false,
+    jaHouveMensagemDesde: async () => {
+      if (o.jaHouveFalha) throw new Error('banco fora');
+      return o.jaHouve ?? false;
+    },
     horarioAberto: () => o.aberto ?? true,
     liberar: async (chave) => void (w.reivindicadas.delete(chave), w.liberadas.push(chave)),
     reivindicar: async (chave) => {
@@ -440,4 +445,35 @@ test('fala com mais de 2 h na hora em que a unidade chega: não responde (e sai 
   // e no limite: 1 h 59 min ainda responde
   const quase = mundo({ msgs: [velha], agora: hhmm(17, 14).getTime() + 119 * 60_000 });
   assert.equal((await atenderCartaoQueGanhouUnidade(entrada(), quase.deps)).turno, 'iniciado');
+});
+
+test('banco fora ao conferir "já atendido": ADIA (não vira ja-atendido), não carimba, não cadastra — e quando o banco volta, responde', async () => {
+  ligarCadastro();
+  const fora = mundo({ jaHouveFalha: true });
+  const r = await atenderCartaoQueGanhouUnidade(entrada(), fora.deps);
+  assert.equal(r.turno, 'adiar');
+  assert.equal(r.motivo, 'falha-ao-conferir');
+  assert.equal(fora.w.turnos.length, 0);
+  assert.equal(fora.w.sincronizados.length, 0);
+  assert.equal(fora.w.reivindicadas.size, 0, 'nada reivindicado: a próxima varredura pode responder');
+
+  // na varredura: sem carimbo de tratado
+  const v = varredura('Petrópolis', fora);
+  const rv = await retomarCartoesCalados(PET, false, v.deps);
+  assert.equal(rv.retomados, 0);
+  assert.deepEqual(v.w.tratados, [], 'decisão não é final: a marca continua na fila');
+
+  // banco de volta: UMA resposta
+  const volta = mundo();
+  assert.equal((await atenderCartaoQueGanhouUnidade(entrada(), volta.deps)).turno, 'iniciado');
+  assert.equal(volta.w.turnos.length, 1);
+});
+
+test('mais marcas pendentes que o teto: avisa (warn) e trata só as primeiras', async () => {
+  const adiado = mundo();
+  const v = varredura('Petrópolis', adiado);
+  const em = hhmm(17, 14);
+  v.deps.marcasPendentes = async () => Array.from({ length: MAX_MARCAS_POR_VARREDURA + 5 }, (_, i) => ({ leadId: 1000 + i, em }));
+  const r = await retomarCartoesCalados(PET, false, v.deps);
+  assert.equal(r.marcas, MAX_MARCAS_POR_VARREDURA);
 });
