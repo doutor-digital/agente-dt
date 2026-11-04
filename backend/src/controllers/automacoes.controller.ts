@@ -63,6 +63,13 @@ export async function definirAutomacaoHandler(req: Request, res: Response): Prom
     res.status(404).json({ erro: 'unidade não encontrada' });
     return;
   }
+  if (estado === 'ligado' && catalogo.exigeSecoAntes) {
+    const hoje = panoramaDaUnidade(unit.slug).find((a) => a.id === idAutomacao)?.estado;
+    if (hoje !== 'seco' && hoje !== 'ligado') {
+      res.status(400).json({ erro: `"${catalogo.nome}" só liga depois de rodar em "Só no papel": ponha em "Só no papel", espere uma rodada e confira o log antes` });
+      return;
+    }
+  }
 
   const quem = (req as { user?: { email?: string } }).user?.email ?? null;
   await prisma.unitAutomacao.upsert({

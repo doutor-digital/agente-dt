@@ -52,6 +52,12 @@ const GRUPOS: Array<{ risco: RiscoAutomacao; titulo: string; explica: string; Ic
     Icone: PiPencilSimpleLineBold,
   },
   {
+    risco: 'cria-tarefa',
+    titulo: 'Criam tarefas no Kommo',
+    explica: 'Põem e concluem tarefas no Calendário. Não mexem em campo nem em etapa: o erro é uma tarefa a mais ou a menos — corrigível.',
+    Icone: PiClipboardTextBold,
+  },
+  {
     risco: 'comportamento',
     titulo: 'Mudam o jeito da IA (ou o custo)',
     explica: 'Não movem nem escrevem nada: mexem em como a IA responde ou em quanto ela gasta.',

@@ -143,9 +143,13 @@ export function panoramaDaUnidade(slug: string, ambiente: NodeJS.ProcessEnv = pr
   return AUTOMACOES.map((a) => {
     const raw = ambiente[a.chave];
     const gravado = estadoGravado(slug, a.id);
+    // o calendário tem DUAS listas no .env: na primeira e fora de _APLICAR é "só no papel", não "ligado"
+    const doAmbiente = a.chaveAplicar && naListaDoAmbiente(slug, raw, a.id)
+      ? (naListaDoAmbiente(slug, ambiente[a.chaveAplicar]) ? 'ligado' : 'seco')
+      : estadoDoAmbiente(slug, raw, a.id);
     return {
       ...a,
-      estado: gravado ?? estadoDoAmbiente(slug, raw, a.id),
+      estado: gravado ?? doAmbiente,
       vemDoAmbiente: gravado === null,
       ambiente: (raw ?? '').trim(),
     };

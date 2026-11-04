@@ -284,8 +284,9 @@ test('marcador com prefixo (Kommo dividido): cada formato só casa consigo mesmo
   assert.equal(idDoMarcador('x [ag:caxias:12] y', 'caxias'), 12);
   assert.equal(idDoMarcador('x [ag:12] y', 'caxias'), null, 'e o da dona não é o da irmã');
   assert.equal(sufixoDepoisDoMarcador('t [ag:caxias:12] Paciente: Ana', 'caxias'), ' Paciente: Ana');
-  assert.equal(prefixoDaUnidade('Caxias'), 'caxias');
-  assert.equal(prefixoDaUnidade(' Duque de Caxias '), 'duquedecaxias');
+  // vem do SLUG (estável), não do rótulo da opção do campo, que a recepção pode renomear
+  assert.equal(prefixoDaUnidade('doutor-hernia-caxias'), 'caxias');
+  assert.equal(prefixoDaUnidade('doutor-hernia-duque-de-caxias'), 'duquedecaxias');
   assert.equal(prefixoDaUnidade(null), '');
 });
 

@@ -84,7 +84,7 @@ const apiBase = import.meta.env.VITE_API_URL
 /** O que a carga de implantação faria, sem escrever nada. */
 /** Uma automação do catálogo, com o estado desta unidade. Espelha `backend/src/lib/automacoes.ts`. */
 export type EstadoAutomacao = 'ligado' | 'seco' | 'desligado';
-export type RiscoAutomacao = 'move-cartao' | 'manda-mensagem' | 'escreve-campo' | 'comportamento';
+export type RiscoAutomacao = 'move-cartao' | 'manda-mensagem' | 'escreve-campo' | 'cria-tarefa' | 'comportamento';
 
 export interface Automacao {
   id: string;

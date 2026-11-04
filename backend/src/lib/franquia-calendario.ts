@@ -93,9 +93,9 @@ function regexDoMarcador(prefixo: string): RegExp {
   return r;
 }
 
-/** Letras e dígitos, minúsculo, sem acento — o que cabe no marcador. Vazio = sem prefixo. */
-export function prefixoDaUnidade(rotulo: string | null | undefined): string {
-  return normalizar(rotulo).replace(/[^a-z0-9]/g, '');
+/** Do SLUG da unidade (que não muda), sem "doutor-hernia-", só letras e dígitos: `doutor-hernia-caxias` → `caxias`. Vazio = sem prefixo. */
+export function prefixoDaUnidade(slug: string | null | undefined): string {
+  return normalizar(slug).replace(/^doutor[\s-]*hernia[\s-]*/, '').replace(/[^a-z0-9]/g, '');
 }
 
 export function marcador(idSchedule: number, prefixo = ''): string {

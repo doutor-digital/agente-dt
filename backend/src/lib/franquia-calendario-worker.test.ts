@@ -2,7 +2,7 @@ import { beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Unit } from '@prisma/client';
 
-import { _limparMemoriaDoCalendario, CRIADA_RECENTE_MS, paraleloDoCalendario, rodarEmFaixas, varrerCalendario, type DepsDoCalendario } from './franquia-calendario-worker.js';
+import { _limparMemoriaDoCalendario, CRIADA_RECENTE_MS, faixasPorConta, paraleloDoCalendario, rodarEmFaixas, varrerCalendario, type DepsDoCalendario } from './franquia-calendario-worker.js';
 import type { GrupoDoCrm } from './crm-compartilhado.js';
 import { KommoApiError, type KommoClient, type KommoTarefa } from '../services/kommo.service.js';
 import type { SpineSchedule } from '../services/spine.service.js';
@@ -486,4 +486,60 @@ test('tabela unit_calendario ainda não existe (P2021): vale o .env, como antes;
   const r2 = await varrerCalendario(unit, deps(k2, [ag()], { modo: 'aplicar', lerConfig: async () => { throw new Error('conexão caiu'); } }));
   assert.equal(r2.erros, 1);
   assert.deepEqual(c2.criadas, []);
+});
+
+test('duas unidades no MESMO Kommo fora de um grupo: só a primeira roda, a outra é recusada (não duplica nem fecha a tarefa da outra)', () => {
+  const u = (slug: string) => ({ slug });
+  const { faixas, recusadas } = faixasPorConta([
+    { unit: u('doutor-hernia-imperatriz'), conta: 'attiva', grupoId: null },
+    { unit: u('imperatriz-resgate'), conta: 'attiva', grupoId: null },
+    { unit: u('imperatriz-financeiro'), conta: 'attiva', grupoId: null },
+    { unit: u('doutor-hernia-serra'), conta: 'serra', grupoId: null },
+  ]);
+  assert.deepEqual(faixas.map((f) => f.map((x) => x.slug)), [['doutor-hernia-imperatriz'], ['doutor-hernia-serra']]);
+  assert.deepEqual(recusadas.map((r) => r.unit.slug), ['imperatriz-resgate', 'imperatriz-financeiro']);
+});
+
+test('conta dividida (Petrópolis × Caxias): as duas ficam na MESMA faixa, em fila; uma terceira fora do grupo é recusada', () => {
+  const u = (slug: string) => ({ slug });
+  const { faixas, recusadas } = faixasPorConta([
+    { unit: u('doutor-hernia-petropolis'), conta: 'lvp', grupoId: 'g1' },
+    { unit: u('petropolis-resgate'), conta: 'lvp', grupoId: null },
+    { unit: u('doutor-hernia-caxias'), conta: 'lvp', grupoId: 'g1' },
+  ]);
+  assert.deepEqual(faixas.map((f) => f.map((x) => x.slug)), [['doutor-hernia-petropolis', 'doutor-hernia-caxias']]);
+  assert.deepEqual(recusadas.map((r) => r.unit.slug), ['petropolis-resgate']);
+});
+
+test('a cota de criações por varredura só gasta com tarefa que NASCEU: 429 no meio não rouba vaga das outras', async () => {
+  const { kommo, c } = kommoFalso([]);
+  const agenda = Array.from({ length: 100 }, (_, i) => ag({ idSchedule: 1000 + i, clientName: `PACIENTE ${i}` }));
+  let n = 0;
+  const r = await varrerCalendario(unit, deps(kommo, agenda, {
+    modo: 'aplicar',
+    resolver: async () => { if (n++ < 5) throw new Error('429'); return { leadId: null, confirmado: true, fone: null }; },
+  }));
+  assert.equal(r.erros, 5);
+  assert.equal(r.criadas, 80, 'as 5 que falharam não gastaram a cota de 80');
+  assert.equal(c.criadas.length, 80);
+  assert.equal(r.adiadas, 15);
+});
+
+test('sem dono configurado e a conta com mais de um usuário da clínica: AVISA no log (a tarefa iria para o dono do token)', async () => {
+  delete process.env.FRANQUIA_CALENDARIO_RESPONSAVEL;
+  const { kommo } = kommoFalso([]);
+  let usuariosLidos = 0;
+  (kommo as unknown as { listUsers: unknown }).listUsers = async () => { usuariosLidos++; return [{ id: 1, name: 'Doutor Digital' }, { id: 2, name: 'Ana' }, { id: 3, name: 'Bia' }]; };
+  const avisos: string[] = [];
+  const { logger } = await import('./logger.js');
+  const original = logger.warn.bind(logger);
+  (logger as unknown as { warn: unknown }).warn = (...a: unknown[]) => { avisos.push(String(a[a.length - 1])); };
+  try {
+    await varrerCalendario(unit, deps(kommo, [ag()], { modo: 'seco' }));
+    await varrerCalendario(unit, deps(kommo, [ag()], { modo: 'seco' }));
+  } finally {
+    (logger as unknown as { warn: unknown }).warn = original;
+  }
+  assert.equal(avisos.filter((m) => /não tem UM só usuário da clínica/.test(m)).length, 1, 'avisa uma vez só');
+  assert.equal(usuariosLidos, 1);
 });

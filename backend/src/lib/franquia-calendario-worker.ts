@@ -23,8 +23,9 @@ import { createKommoClient, KommoApiError, type KommoClient, type KommoTarefa } 
 import { SpineService, somarDias, localParaUtcIso, type SpineSchedule } from '../services/spine.service.js';
 import { contaDoKommo, grupoDaUnidade, podeMexer, valorDaUnidadeNoCartao, veredictoDoCartao, type GrupoDoCrm } from './crm-compartilhado.js';
 import { estadoGravado } from './automacoes-estado.js';
+import { ehDaConsultoria } from './responsavel-da-tarefa.js';
 import { normalizar } from './franquia-sync.js';
-import { ondeTemSync, resolverPaciente, type EntradaDoCacheDeLead } from './franquia-sync-worker.js';
+import { comVagaDaFranquia, ondeTemSync, resolverPaciente, type EntradaDoCacheDeLead } from './franquia-sync-worker.js';
 import {
   DURACAO_PADRAO_SEG, configDaUnidade, epochDaConsulta, intervaloDoCalendarioMs, janelaDoCalendario, modoDoCalendario, planejarCalendario,
   prefixoDaUnidade, slugNaLista, sufixoComCartao, sufixoDeTarefaSolta, textoDaTarefa, tipoPeloNome,
@@ -97,6 +98,7 @@ const criadasRecentes = new Map<string, number>();
  * e vale 6 h: o calendário casa só pelo nome, que é mais fraco, e não pode escrever lá.
  */
 const cacheDoCalendario = new Map<string, EntradaDoCacheDeLead>();
+const avisadasSemDono = new Set<string>();
 /** Última atualização aplicada por agendamento: se o Kommo não "guardou" o que mandamos, não regravamos para sempre. */
 const ultimaAtualizacao = new Map<string, { assinatura: string; visto: string }>();
 
@@ -105,6 +107,7 @@ export function _limparMemoriaDoCalendario(): void {
   criadasRecentes.clear();
   ultimaAtualizacao.clear();
   cacheDoCalendario.clear();
+  avisadasSemDono.clear();
 }
 
 /**
@@ -147,6 +150,26 @@ function podarMemoria(): void {
   if (cacheDoCalendario.size > MAX_CACHE_DO_CALENDARIO) cacheDoCalendario.clear();
 }
 
+/**
+ * Sem dono configurado, o `createTask` manda a tarefa para o ÚNICO usuário da clínica. Conta com mais de um (ou sem nenhum além da
+ * consultoria) cai no dono do token — o login "Doutor Digital" —, e a recepção não vê a tarefa. Avisa uma vez por unidade e processo.
+ */
+async function avisarSeNaoHaDonoUnico(unit: Pick<Unit, 'slug'>, kommo: KommoClient): Promise<void> {
+  if (avisadasSemDono.has(unit.slug)) return;
+  avisadasSemDono.add(unit.slug);
+  try {
+    const clinica = (await kommo.listUsers()).filter((u) => u.rights?.is_active !== false && !ehDaConsultoria(u));
+    if (clinica.length !== 1) {
+      logger.warn(
+        { unit: unit.slug, usuariosDaClinica: clinica.length },
+        'franquia-calendario: unidade sem dono configurado e a conta não tem UM só usuário da clínica — a tarefa vai para o dono do token (configure responsible_user_id em unit_calendario)',
+      );
+    }
+  } catch {
+    avisadasSemDono.delete(unit.slug); // não deu para ler os usuários: tenta de novo na próxima
+  }
+}
+
 const dormir = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export async function varrerCalendario(unit: Unit, deps: DepsDoCalendario = {}): Promise<ResumoCalendario> {
@@ -168,7 +191,9 @@ export async function varrerCalendario(unit: Unit, deps: DepsDoCalendario = {}):
   let prefixo = '';
   if (grupo) {
     const membro = grupo.membros.find((m) => m.unitId === unit.id);
-    prefixo = unit.id === grupo.contaUnitId ? '' : prefixoDaUnidade(membro?.rotulo);
+    // O prefixo vem do SLUG (não muda), nunca do rótulo: o rótulo é o texto da opção do campo no Kommo e quem o renomeia faria
+    // a unidade ler as tarefas antigas como de outra e recriar a agenda inteira sem fechar as velhas.
+    prefixo = unit.id === grupo.contaUnitId ? '' : prefixoDaUnidade(unit.slug);
     if (!membro || (unit.id !== grupo.contaUnitId && !prefixo)) {
       logger.warn({ unit: unit.slug }, 'franquia-calendario: unidade em conta dividida sem rótulo próprio — não sei quais cartões são dela, pulei');
       resumo.erros++;
@@ -277,6 +302,7 @@ export async function varrerCalendario(unit: Unit, deps: DepsDoCalendario = {}):
 
   // dono configurado = esse, sem troca. Sem dono: o `createTask` aplica a regra de sempre (o único usuário da clínica, nunca o login da consultoria)
   const responsavel = config.responsavel ?? undefined;
+  if (responsavel === undefined) await avisarSeNaoHaDonoUnico(unit, kommo);
   const durationSec = config.duracaoMin !== null ? config.duracaoMin * 60 : DURACAO_PADRAO_SEG;
 
   const idsPorPaciente = new Map<string, number[]>();
@@ -293,7 +319,8 @@ export async function varrerCalendario(unit: Unit, deps: DepsDoCalendario = {}):
     if (aplicar || linhasSeco++ >= MAX_LINHAS_DE_LOG_SECO) return;
     logger.info({ unit: unit.slug, ...o }, `franquia-calendario: [seco] ${msg}`);
   };
-  let criadasAgora = 0;
+  let criadasAgora = 0; // criações que DERAM CERTO: é o que gasta a cota
+  let tentativasAgora = 0; // criações tentadas (inclui as que falharam): teto para uma falha geral não martelar o Kommo e a franquia
   const aplicarAcao = async (a: Acao): Promise<void> => {
     if (a.tipo === 'sumiu') {
       if (ag.truncada) return; // busca incompleta: não dá para dizer que sumiu
@@ -338,11 +365,11 @@ export async function varrerCalendario(unit: Unit, deps: DepsDoCalendario = {}):
     if (!completa) return;
     const recente = criadasRecentes.get(`${unit.id}:${a.idSchedule}`);
     if (recente && Date.now() - recente < CRIADA_RECENTE_MS) return;
-    if (criadasAgora >= MAX_CRIAR_POR_VARREDURA) {
+    if (criadasAgora >= MAX_CRIAR_POR_VARREDURA || tentativasAgora >= MAX_CRIAR_POR_VARREDURA * 2) {
       resumo.adiadas++;
       return;
     }
-    criadasAgora++;
+    tentativasAgora++;
     const nome = a.item.clientName ?? '';
     const ids = idsPorPaciente.get(normalizar(nome)) ?? [a.idSchedule];
     const r = deps.resolver
@@ -369,6 +396,7 @@ export async function varrerCalendario(unit: Unit, deps: DepsDoCalendario = {}):
       }
       await dormir(pausa);
     }
+    criadasAgora++;
     resumo.criadas++;
     if (leadId === null) {
       resumo.semCartao++;
@@ -392,11 +420,37 @@ let timer: NodeJS.Timeout | null = null;
 let primeira: NodeJS.Timeout | null = null;
 let rodando = false;
 
-let ultimoAvisoDeSlugs = '';
+/**
+ * Uma unidade por CONTA do Kommo. Duas unidades na mesma conta FORA de um grupo (Imperatriz e os "-resgate/-financeiro/-tratamento"
+ * usam o subdomínio da principal) leriam a mesma lista de tarefas com o mesmo `[ag:N]`: duplicariam a agenda ou fechariam a tarefa
+ * da outra. Dentro de um grupo (Petrópolis × Caxias) o prefixo do marcador separa as duas, e elas ficam na MESMA faixa. Pura.
+ * `unidades` vem na ordem em que as recusas devem ser decididas: a primeira de cada conta fica.
+ */
+export function faixasPorConta<T extends { slug: string }>(
+  unidades: ReadonlyArray<{ unit: T; conta: string; grupoId: string | null }>,
+): { faixas: T[][]; recusadas: Array<{ unit: T; conta: string; motivo: string }> } {
+  const porConta = new Map<string, Array<{ unit: T; grupoId: string | null }>>();
+  for (const u of unidades) porConta.set(u.conta, [...(porConta.get(u.conta) ?? []), u]);
+  const faixas: T[][] = [];
+  const recusadas: Array<{ unit: T; conta: string; motivo: string }> = [];
+  for (const [conta, lista] of porConta) {
+    const grupoDaConta = lista.find((x) => x.grupoId !== null)?.grupoId ?? null;
+    const aceitas = grupoDaConta ? lista.filter((x) => x.grupoId === grupoDaConta) : lista.slice(0, 1);
+    for (const x of lista) {
+      if (aceitas.includes(x)) continue;
+      recusadas.push({ unit: x.unit, conta, motivo: `a conta ${conta} já é atendida por ${aceitas[0].unit.slug}${grupoDaConta ? ' (conta dividida)' : ''}` });
+    }
+    faixas.push(aceitas.map((x) => x.unit));
+  }
+  return { faixas, recusadas };
+}
 
-/** As unidades que rodam agora: com franquia e Kommo, ATIVAS, e ligadas (ou em "só no papel") na tela ou no `.env`. */
-async function unidadesDoCalendario(): Promise<Unit[]> {
-  const units = await prisma.unit.findMany({ where: { ...(await ondeTemSync()), isActive: true } });
+let ultimoAvisoDeSlugs = '';
+const recusadasAvisadas = new Set<string>();
+
+/** As unidades que rodam agora, em faixas (uma por conta do Kommo): com franquia e Kommo, ATIVAS, e ligadas (ou em "só no papel") na tela ou no `.env`. */
+async function unidadesDoCalendario(): Promise<Unit[][]> {
+  const units = await prisma.unit.findMany({ where: { ...(await ondeTemSync()), isActive: true }, orderBy: { id: 'asc' } });
   const doCalendario = units.filter((u) => modoDoCalendario(u.slug, undefined, estadoGravado(u.slug, ID_AUTOMACAO)) !== 'desligado');
   // slug do .env escrito errado, ou unidade sem token da franquia/Kommo: sem este aviso o passo "liga" e não faz nada, em silêncio
   const raw = process.env.FRANQUIA_CALENDARIO_SLUGS;
@@ -409,7 +463,19 @@ async function unidadesDoCalendario(): Promise<Unit[]> {
       if (faltam.length) logger.warn({ faltam }, 'franquia-calendario: slug da lista sem unidade ativa com franquia e Kommo configurados');
     }
   }
-  return doCalendario;
+  const comConta = [];
+  for (const unit of doCalendario) {
+    const dona = await contaDoKommo(unit);
+    const conta = (dona.kommoSubdomain ?? '').trim().toLowerCase() || `unit:${dona.id}`;
+    comConta.push({ unit, conta, grupoId: (await grupoDaUnidade(unit.id))?.contaUnitId ?? null });
+  }
+  const { faixas, recusadas } = faixasPorConta(comConta);
+  for (const r of recusadas) {
+    if (recusadasAvisadas.has(r.unit.slug)) continue;
+    recusadasAvisadas.add(r.unit.slug);
+    logger.warn({ unit: r.unit.slug, conta: r.conta }, `franquia-calendario: unidade ligada RECUSADA — ${r.motivo}; duas unidades no mesmo Kommo fora de um grupo duplicariam a agenda. Desligue uma das duas`);
+  }
+  return faixas;
 }
 
 /**
@@ -442,17 +508,14 @@ async function varrerTodas(): Promise<void> {
   const inicio = Date.now();
   let unidades = 0;
   try {
-    const faixas = new Map<string, Unit[]>();
-    for (const unit of await unidadesDoCalendario()) {
-      unidades++;
-      const grupo = await grupoDaUnidade(unit.id);
-      const chave = grupo ? grupo.contaUnitId : unit.id;
-      faixas.set(chave, [...(faixas.get(chave) ?? []), unit]);
-    }
-    await rodarEmFaixas([...faixas.values()], paraleloDoCalendario(), async (unit) => {
+    const faixas = await unidadesDoCalendario();
+    unidades = faixas.reduce((n, f) => n + f.length, 0);
+    await rodarEmFaixas(faixas, paraleloDoCalendario(), async (unit) => {
       const t0 = Date.now();
       try {
-        const r = await varrerCalendario(unit);
+        // dentro da trava global da franquia (a mesma do sincronizador, no máx. 6 ao mesmo tempo): o calendário não soma
+        // requisições por cima dela. A vaga só é segurada durante a varredura da unidade (segundos), nunca entre unidades.
+        const r = await comVagaDaFranquia(() => varrerCalendario(unit));
         logger.info({ ...r, ms: Date.now() - t0 }, 'franquia-calendario: varredura concluída');
       } catch (err) {
         logger.error({ err, unit: unit.slug }, 'franquia-calendario: varredura falhou');
