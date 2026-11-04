@@ -652,7 +652,7 @@ function linhaValorConsulta(unit: Unit): string {
     const valor = valorDaConsultaNoDia(unit.sourceProdutos);
     return valor
       ? `✨ Valor: R$ ${valor} no dia, ${FORMAS_NO_DIA}.`
-      : `✨ Valor: R$ {o valor da consulta que está nas fontes/produtos DESTA unidade, com centavos, como lá (ex.: NNN,00) — nunca invente; se não houver valor cadastrado, omita a linha e diga que a equipe informa; sem "à vista" e sem desconto} no dia, ${FORMAS_NO_DIA}.`;
+      : `✨ Valor: R$ {o valor da consulta que está nas fontes/produtos DESTA unidade, com centavos, como lá (ex.: NNN,00) — nunca invente; se não houver valor cadastrado, omita a linha e diga que a equipe informa; sem "à vista" e sem falar de desconto} no dia, ${FORMAS_NO_DIA}.`;
   }
   const p = precosDaConsulta(unit);
   // Taxa de reserva obrigatória (Boa Vista): o antecipado NÃO é alternativa ao valor
@@ -2750,7 +2750,7 @@ export function renderFatosDaUnidade(unit: Unit): string {
   } else if (p) {
     linhas.push(`- Consulta: R$ ${fmtBRL(p.antecipado)} antecipado (pago antes) ou R$ ${fmtBRL(p.noDia)} no dia`);
   }
-  if (semAntecipado) linhas.push(`- Pagamento: ${PAGAMENTO_NO_DIA} Sem chave Pix para reservar a vaga e sem desconto.`);
+  if (semAntecipado) linhas.push(`- Pagamento: ${PAGAMENTO_NO_DIA} Sem chave Pix para reservar a vaga. Não fale de desconto por conta própria (nada de "sem desconto").`);
   const onde = unit.clinicAddress?.trim();
   if (onde) linhas.push(`- Endereço: ${onde}`);
   if (linhas.length === 0) return '';
