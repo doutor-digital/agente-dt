@@ -24,20 +24,23 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:
 import { chmod, mkdir, open, readdir, readFile, stat, unlink, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 
-export type TipoDeArquivo = 'pdf' | 'doc' | 'docx' | 'jpg' | 'png' | 'txt';
+export type TipoDeArquivo = 'pdf' | 'doc' | 'docx' | 'xlsx' | 'jpg' | 'png' | 'txt';
 
 export const TIPOS: Record<TipoDeArquivo, { ext: string; mime: string; legivel: string }> = {
   pdf: { ext: 'pdf', mime: 'application/pdf', legivel: 'PDF' },
   doc: { ext: 'doc', mime: 'application/msword', legivel: 'Word (.doc)' },
   docx: { ext: 'docx', mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', legivel: 'Word (.docx)' },
+  xlsx: { ext: 'xlsx', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', legivel: 'Excel (.xlsx)' },
   jpg: { ext: 'jpg', mime: 'image/jpeg', legivel: 'imagem JPEG' },
   png: { ext: 'png', mime: 'image/png', legivel: 'imagem PNG' },
   txt: { ext: 'txt', mime: 'text/plain; charset=utf-8', legivel: 'texto (.txt)' },
 };
 
 /** extensão que a pessoa pode ter escrito → o tipo que o conteúdo tem de ter */
-const TIPO_DA_EXTENSAO: Record<string, TipoDeArquivo> = { pdf: 'pdf', doc: 'doc', docx: 'docx', jpg: 'jpg', jpeg: 'jpg', png: 'png', txt: 'txt' };
-export const EXTENSOES_ACEITAS = Object.keys(TIPO_DA_EXTENSAO);
+const TIPO_DA_EXTENSAO: Record<string, TipoDeArquivo> = { pdf: 'pdf', doc: 'doc', docx: 'docx', xlsx: 'xlsx', jpg: 'jpg', jpeg: 'jpg', png: 'png', txt: 'txt' };
+const TODAS_AS_EXTENSOES = Object.keys(TIPO_DA_EXTENSAO);
+/** o que o envio COMUM aceita (a planilha .xlsx só entra quando o pedido a lista em `tipos`) */
+export const EXTENSOES_ACEITAS = TODAS_AS_EXTENSOES.filter((e) => e !== 'xlsx');
 
 export const LIMITES_PADRAO = {
   /** tamanho máximo do arquivo */
@@ -98,7 +101,8 @@ const comeca = (b: Buffer, ...bytes: number[]) => b.length >= bytes.length && by
  * O tipo que o CONTEÚDO tem, ou null. Não é antivírus: confere que o arquivo é o que diz ser.
  *  - PDF: "%PDF-" no começo.  JPEG: FF D8 FF.  PNG: assinatura de 8 bytes.
  *  - .doc: contêiner OLE2 COM o fluxo "WordDocument" (o mesmo contêiner serve .xls, .ppt e .msi) e SEM projeto de macro (_VBA_PROJECT).
- *  - .docx: ZIP com "[Content_Types].xml" e "word/" (não aceita .zip/.jar/.xlsx renomeados) e sem macro (vbaProject.bin).
+ *  - .docx: ZIP com "[Content_Types].xml" e "word/" (não aceita .zip/.jar renomeados) e sem macro (vbaProject.bin).
+ *  - .xlsx: ZIP com "[Content_Types].xml" e "xl/workbook.xml", sem macro. Só entra num envio que PEDE xlsx em `tipos` (anexo de documento ao sistema); o envio comum (ClickSign) não aceita.
  *  - texto: sem byte de controle nenhum além de tab, quebras de linha e form feed (executável tem NUL logo no começo), e que, depois de
  *    tirar o BOM UTF-8 e qualquer quantidade de espaços/quebras de linha do começo, não comece como marcação (`<`: HTML/SVG/XML)
  *    nem como script (`#!`). Texto só entra com a extensão .txt (ou sem extensão): ver `validarArquivo`. O download sai como
@@ -112,7 +116,12 @@ export function detectarTipo(b: Buffer): TipoDeArquivo | null {
     return b.includes(Buffer.from('WordDocument', 'utf16le')) && !b.includes(Buffer.from('_VBA_PROJECT', 'utf16le')) ? 'doc' : null;
   }
   if (comeca(b, 0x50, 0x4b, 0x03, 0x04)) {
-    return b.includes('[Content_Types].xml') && b.includes('word/') && !b.includes('vbaProject.bin') ? 'docx' : null;
+    if (!b.includes('[Content_Types].xml') || b.includes('vbaProject.bin')) return null;
+    // as duas marcas ao mesmo tempo = não dá para dizer o que é: recusa
+    const palavra = b.includes('word/');
+    const planilha = b.includes('xl/workbook.xml');
+    if (palavra && !planilha) return 'docx';
+    return planilha && !palavra ? 'xlsx' : null;
   }
   if (b.length > 0 && ehTexto(b) && !comecaComoMarcacaoOuScript(b)) return 'txt';
   return null;
@@ -145,7 +154,7 @@ function ehTexto(b: Buffer): boolean {
 export function nomeSeguro(bruto: string | undefined, tipo: TipoDeArquivo): string {
   let base = (bruto ?? '').normalize('NFKD').replace(/[̀-ͯ]/g, '');
   base = base.split(/[\\/]/).pop() ?? '';
-  base = base.replace(new RegExp(`\\.(${EXTENSOES_ACEITAS.join('|')})$`, 'i'), '');
+  base = base.replace(new RegExp(`\\.(${TODAS_AS_EXTENSOES.join('|')})$`, 'i'), '');
   base = base
     .replace(/[^A-Za-z0-9._-]+/g, '-')
     .replace(/\.{2,}/g, '.')
@@ -402,6 +411,8 @@ export class CofreDeArquivos {
       if (e.tipos && !e.tipos.includes(tipo)) {
         throw new ErroDeCofre('tipo', `Para este envio só aceitamos ${e.tipos.map((x) => TIPOS[x].legivel).join(', ')}. Este arquivo é ${TIPOS[tipo].legivel}.`, 415);
       }
+      // planilha (xlsx) só entra quando o pedido a lista em `tipos`; o envio comum não a aceita
+      if (!e.tipos && tipo === 'xlsx') throw new ErroDeCofre('tipo', 'Arquivo Excel (.xlsx) não é aceito neste envio. Aceitamos: PDF, Word, JPG, PNG ou texto.', 415);
       await this.garantirPasta();
       if (this.encerrado) throw new ErroDeCofre('estado', 'O sistema está sendo atualizado. Peça um novo link no Claude em um minuto.', 503);
       const chave = randomBytes(32);

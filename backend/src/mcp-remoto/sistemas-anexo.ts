@@ -9,6 +9,8 @@
  *                                do passo 1, não de argumentos: o link de um lançamento não anexa a outro.
  *  3. `sistemas_anexar_url`      o servidor BAIXA o arquivo de um endereço (lista branca de domínios, sem rede interna: ver `baixar-url.ts`) e entrega igual.
  *
+ * `sistemas_preparar_documento` (em sistemas-documento.ts) é o passo 1 dos DOCUMENTOS (colaborador, empresa, paciente do Caixa, contrato de cliente); o passo 2 é este mesmo `sistemas_anexar_envio`.
+ *
  * Só quem pode escrever no sistema vê estas ferramentas (a mesma lista de `sistemas_confirmar_alteracao`). Quem anexou fica em `admin_log` e
  * `rh_log` do servidor (e-mail de quem entrou no conector) e na auditoria do conector (só tabela, tipo, lançamento e domínio; nunca o conteúdo).
  */
@@ -21,6 +23,7 @@ import { baixarUrl, type Baixado, type OpcoesDeDownload } from './baixar-url.js'
 import { CofreDeArquivos, ErroDeCofre, detectarTipo, type TipoDeArquivo } from './cofre-arquivos.js';
 import { executar } from './ferramenta.js';
 import { resolverSistema, type ContextoSistemas, type QuemSistemas, type Saida } from './sistemas.js';
+import { anexarEnvioDocumento, DESTINO_DOCUMENTO, registrarDocumentosSistemas } from './sistemas-documento.js';
 
 export const TIPOS_ANEXO = ['comprovante', 'nota_fiscal', 'recibo'] as const;
 type TipoAnexo = (typeof TIPOS_ANEXO)[number];
@@ -173,6 +176,7 @@ export function registrarAnexosSistemas(server: McpServer, ctx: ContextoSistemas
   const enviadoNome = deps.enviadoNome ?? NOME_PADRAO;
   const base = () => deps.baseUrl().replace(/\/+$/, '');
   const baixar = deps.baixar ?? baixarUrl;
+  registrarDocumentosSistemas(server, ctx, quem, { cofre: deps.cofre, baseUrl: deps.baseUrl, enviadoNome }, auditarBruto);
   const SISTEMA = z.string().optional().describe('qual sistema (slug); pode omitir se só há um ligado');
   const TABELA = z.enum(TABELAS).describe('caixa_lanc = lançamento do Caixa da unidade (cria o documento com prévia para a conferência); fin_lanc = lançamento do Financeiro (guarda o arquivo e preenche a coluna anexo)');
   const TIPO = z.enum(TIPOS_ANEXO);
@@ -236,10 +240,10 @@ export function registrarAnexosSistemas(server: McpServer, ctx: ContextoSistemas
     {
       title: 'Sistema novo (Caixa/Financeiro): anexar o arquivo enviado ao lançamento',
       description:
-        'PASSO 2 de 2. Pega o arquivo que chegou pelo link de sistemas_preparar_anexo e o anexa ao lançamento daquele pedido (o destino vem do pedido, não daqui): ' +
+        'PASSO 2 de 2. Pega o arquivo que chegou pelo link de sistemas_preparar_anexo (comprovante de lançamento) OU de sistemas_preparar_documento (documento de colaborador, empresa, paciente ou cliente) e o anexa ao destino daquele pedido (o destino vem do pedido, não daqui). Lançamento: ' +
         'grava no armazenamento do Caixa (unidade/AAAA-MM/uuid-nome), cria o documento em caixa_docs com ia_status "aguardando" e as prévias em caixa_docs_prev (lançamento do Caixa) ' +
         'ou, em fin_lanc, grava o documento em rh_docs (col anexos) e preenche a coluna anexo com o id dele (o que o botão do comprovante da tela abre; sem prévia). Depois apaga o arquivo do cofre. Se o arquivo ainda não chegou, diz isso (peça para enviar e chame de novo). ' +
-        'Uma vez só por envio. Registra quem anexou. Confira antes com a pessoa que o lançamento é o certo.',
+        'Documento (sistemas_preparar_documento): grava no mesmo lugar e formato da tela (pasta do colaborador, documentos da empresa, caixa_docs do paciente ou contrato do cliente). Uma vez só por envio. Registra quem anexou. Confira antes com a pessoa que o destino é o certo.',
       inputSchema: { envio: z.string().trim().min(8).max(64).describe('o "envio" devolvido por sistemas_preparar_anexo') },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
@@ -248,7 +252,10 @@ export function registrarAnexosSistemas(server: McpServer, ctx: ContextoSistemas
         let d;
         let dest;
         try {
-          dest = destinoConferido(deps.cofre.destinoDe(quem.usuario, args.envio));
+          const guardado = deps.cofre.destinoDe(quem.usuario, args.envio);
+          // envio pedido por sistemas_preparar_documento: outro destino, outra rota do servidor (sistemas-documento.ts)
+          if (guardado?.tipo === DESTINO_DOCUMENTO) return await anexarEnvioDocumento(ctx, quem, deps.cofre, args.envio, enviadoNome, guardado);
+          dest = destinoConferido(guardado);
           // `abrir` marca o envio como em uso antes de qualquer espera: uma segunda chamada ao mesmo tempo é recusada (nada de anexo em dobro)
           d = await deps.cofre.abrir(quem.usuario, args.envio);
         } catch (e) {
