@@ -49,6 +49,17 @@ const SITUACOES_COM_CONSULTA_DE_PE = new Set(['', 'agendado', 'confirmado', 'rem
 /** Já passou pela consulta (compareceu ou faltou): daí em diante o pagamento antecipado não segura mais o cartão. */
 const SITUACOES_DEPOIS_DA_CONSULTA = new Set(['atendido', 'naocompareceu']);
 
+/**
+ * A consulta JÁ aconteceu ou o paciente já faltou: situação Atendido/Não compareceu, ou «✓ Compareceu» preenchido. Quem passou por
+ * aí é paciente de verdade, nunca candidato a vaga (usado por `nao-paciente.ts`; a trava da perda automática não o usa).
+ */
+export function consultaJaOcorreu(c: CartaoParaTrava): boolean {
+  const situacao = normalizarNome(String(valorDoCampo(c.custom_fields_values, CAMPOS_SYNC.SITUACAO) ?? ''));
+  if (SITUACOES_DEPOIS_DA_CONSULTA.has(situacao)) return true;
+  const compareceu = String(valorDoCampo(c.custom_fields_values, CAMPOS_SYNC.COMPARECEU) ?? '').trim();
+  return compareceu !== '' && compareceu !== 'false' && compareceu !== '0';
+}
+
 function temTag(c: CartaoParaTrava, ...nomes: string[]): boolean {
   const alvos = new Set(nomes.map(normalizarNome));
   return (c._embedded?.tags ?? []).some((t) => alvos.has(normalizarNome(t.name ?? '')));

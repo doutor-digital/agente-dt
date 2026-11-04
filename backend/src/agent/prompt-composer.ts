@@ -421,7 +421,31 @@ function renderReacaoEElogio(): string {
    conversa antes.)
    NÃO ofereça consulta, NÃO pergunte a queixa, NÃO puxe assunto de venda — quem
    só reagiu a um story não pediu nada, e oferta aqui afasta.
-   Esta é a ÚNICA situação em que sua resposta NÃO termina com pergunta.`);
+   Fora a regra de <nao_paciente> (candidato a vaga, mais abaixo), esta é a ÚNICA situação em que sua resposta NÃO termina com pergunta.`);
+}
+
+/**
+ * Candidato a vaga: regra GLOBAL (decisão do João, 04/11/2026, todas as unidades). Antes só Petrópolis e Timbó tinham
+ * isto, e no texto livre do `system_prompt`; nas outras a Sofia tratava o currículo como lead e cobrava dor e consulta.
+ * A parte que muda o cartão (etiqueta, motivo, PERDIDO, pausa) é da ferramenta `marcar_nao_paciente` — aqui só se
+ * diz QUANDO chamar e o que dizer. Fornecedor, agência, propaganda e funcionário NÃO entram: seguem o prompt da unidade.
+ * Vai também para quem escreveu o prompt inteiro (`singlePromptMode`), ao lado do bloco da rede.
+ */
+export function renderNaoPaciente(): string {
+  return xmlBlock('nao_paciente', `CANDIDATO A VAGA (vale para toda unidade, e vence qualquer instrução da unidade sobre candidatos).
+Se quem escreve quer TRABALHAR na clínica — pergunta de vaga, emprego ou "estão contratando?", manda o próprio currículo (PDF ou foto
+de um currículo), manda um vídeo de apresentação para a vaga ou diz que vai deixar o currículo —, faça nesta ordem:
+1) chame marcar_nao_paciente({ tipo: "curriculo" }). É ela que tira o cartão do funil de pacientes; você não mexe em etapa, etiqueta nem pausa;
+2) responda UMA frase só, em tom simpático: agradeça, diga que o recrutamento é tratado direto pela equipe da clínica e que o currículo foi
+   recebido. Se a pessoa só perguntou da vaga e não mandou nada, troque "o currículo foi recebido" por "pode mandar o currículo por aqui,
+   que ele fica com a equipe". Exemplo: "Obrigada pelo interesse! Recebi seu currículo, e o recrutamento é feito direto pela equipe da clínica 😊".
+Depois disso, nada mais: sem pergunta no fim (esta é uma exceção à regra da pergunta final e à dos botões), sem prometer vaga, prazo nem
+salário, sem falar de consulta, preço ou horário, sem pedir dado de saúde e sem usar o roteiro de paciente.
+NÃO chame quando a pessoa só MENCIONA o trabalho dela dentro de uma conversa de paciente ("trabalho em laboratório", "sou enfermeira e
+estou com dor", "sou fisioterapeuta"): isso é paciente, siga o atendimento normal. Exame, laudo, ressonância, receita, foto ou vídeo da
+dor ou da limitação de movimento são de PACIENTE, nunca currículo. Se não estiver claro se ela quer vaga ou atendimento, NÃO chame:
+pergunte em uma frase como pode ajudar. Se a ferramenta responder RECUSADO ou ERRO, nada foi marcado: ignore esta regra e atenda normalmente (com a pergunta final de sempre).
+Fornecedor, agência, propaganda e funcionário da clínica NÃO são tratados por esta regra: sigam as instruções da unidade.`);
 }
 
 export function renderRulesGlobal(unit?: FlagsDePagamento): string {
@@ -2145,6 +2169,7 @@ export function composeFlattenedPrompt(input: ComposeInput): string {
   if (customBase) blocks.push(xmlBlock('instrucoes_extras', customBase));
   blocks.push(renderRulesGlobal(unit));
   blocks.push(renderReacaoEElogio());
+  blocks.push(renderNaoPaciente());
   blocks.push(xmlBlock('calendario', renderCalendario(new Date(), fusoDaUnidade(unit))));
 
   const featureBlocks = [
@@ -2218,6 +2243,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
     // Fato da rede e quem atende — valem também para quem escreveu o prompt inteiro à mão.
     const redeSingle = renderDoutorHernia(unit, input.redeDeUnidades);
     if (redeSingle) single.push(redeSingle);
+    single.push(renderNaoPaciente());
     if (leadId && Number.isFinite(leadId) && leadId > 0) {
       single.push(renderConversationContext(leadId, telefone));
     }
@@ -2250,6 +2276,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
 
   blocks.push(renderRulesGlobal(unit));
   blocks.push(renderReacaoEElogio());
+  blocks.push(renderNaoPaciente());
   blocks.push(xmlBlock('calendario', renderCalendario(new Date(), fusoDaUnidade(unit))));
 
   const featureBlocks = [
@@ -2442,7 +2469,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
     // depois do prompt da unidade — vale também para quem escreveu o prompt inteiro.
     const semAgenda = renderSemAgenda(unit);
     return {
-      cacheable: [(customBase ?? '').trim(), redeBlock].filter(Boolean).join('\n\n'),
+      cacheable: [(customBase ?? '').trim(), redeBlock, renderNaoPaciente()].filter(Boolean).join('\n\n'),
       dynamic: [...porUnidade, ...(semAgenda ? [semAgenda] : []), ...dynamic].join('\n\n'),
     };
   }
@@ -2454,6 +2481,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
   if (customBase) cache.push(xmlBlock('instrucoes_extras', customBase));
   cache.push(renderRulesGlobal(unit));
   cache.push(renderReacaoEElogio());
+  cache.push(renderNaoPaciente());
 
   const featureBlocks = [
     renderCollectName(unit),

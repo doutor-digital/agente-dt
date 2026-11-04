@@ -1,5 +1,6 @@
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
+import { DEFAULT_TOOL_DESCRIPTIONS } from './tools.js';
 
 export type ToolConfig = {
   name: string;
@@ -123,6 +124,13 @@ const DEFAULT_TOOLS: ToolConfig[] = [
       'Move o lead pra OUTRO funil inteiro no Kommo (não apenas etapa). Use ' +
       'quando muda o contexto — ex: lead que fechou venda volta com nova demanda ' +
       '→ mover do funil "Captação" pro "Pós-venda".',
+  },
+  {
+    // Aparece no console e pode ser desligada por unidade. A descrição é A de tools.ts (uma cópia curta aqui a sobrescreveria
+    // e levaria embora as travas de "quando NÃO usar").
+    name: 'marcar_nao_paciente',
+    enabled: true,
+    description: DEFAULT_TOOL_DESCRIPTIONS.marcar_nao_paciente,
   },
 ];
 

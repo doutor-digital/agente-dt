@@ -24,6 +24,7 @@ const FERRAMENTAS_REAIS = new Set([
   'atribuir_responsavel',
   'definir_valor_lead',
   'fechar_lead',
+  'marcar_nao_paciente',
   'agendar_consulta',
   'buscar_paciente',
   'cadastrar_paciente',
