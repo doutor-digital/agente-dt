@@ -30,6 +30,8 @@ import { registrarMetaEventos, type FonteRastreio } from './meta-eventos.js';
 import { Pendentes, registrarEscritaKommo, type FonteEscrita } from './kommo-escrita.js';
 import { registrarDisparo } from './disparo.js';
 import { registrarArquivosSePermitido } from './arquivos.js';
+import { dominiosPermitidos } from './baixar-url.js';
+import { registrarAnexosSistemas } from './sistemas-anexo.js';
 import { CofreDeArquivos, limitesDoAmbiente, type EventoDoCofre } from './cofre-arquivos.js';
 import { montarRotasDoCofre } from './cofre-http.js';
 import { fonteDeDisparo } from './disparo-producao.js';
@@ -613,6 +615,15 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
         registrarEstruturaSistemas(server, sistemas, pendentesSistemas, quemSistemas, auditar);
         // ... e conceder ADMIN (promover usuário ou convite de admin), também em dois passos; sistemas_usuario/convite recusam admin.
         registrarAdminSistemas(server, sistemas, pendentesSistemas, quemSistemas, auditar);
+        // ... e ANEXAR comprovante/nota/recibo a um lançamento do Caixa ou do Financeiro: link de envio (cofre, 10 min, uso único) ou o servidor baixa de
+        // um domínio da lista branca (ANEXO_URL_DOMINIOS acrescenta; o padrão é InfinitePay e Asaas). O arquivo vai para o armazenamento do Caixa.
+        registrarAnexosSistemas(
+          server,
+          sistemas,
+          quemSistemas,
+          { cofre, baseUrl: () => new URL(urlPublica).origin, dominios: dominiosPermitidos(process.env), enviadoNome: process.env.ANEXO_ENVIADO_NOME?.trim() || undefined },
+          auditar,
+        );
       }
       if (leitoresWhatsapp.has(quem.userId)) registrarFerramentasEvolution(server, whatsapp, quem.userId, auditar);
       registrarVideoSePermitido(server, video, quem.userId, leitoresVideo, auditar);
