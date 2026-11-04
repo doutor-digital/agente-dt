@@ -199,7 +199,7 @@ test('fora do horário da unidade: não acorda a IA para uma fala velha (a mensa
   assert.equal(w.sincronizados.length, 1, 'fora do horário a IA não fala, mas o lead existe');
 });
 
-test('espera velha (> 6 h) e só mídia: sem turno, com cadastro', async () => {
+test('espera velha (> 2 h) e só mídia: sem turno, com cadastro', async () => {
   ligarCadastro();
   const velha = mundo({ agora: hhmm(17, 14).getTime() + IDADE_MAXIMA_DA_ESPERA_MS + 60_000 });
   assert.equal((await atenderCartaoQueGanhouUnidade(entrada(), velha.deps)).motivo, 'espera-velha');
@@ -377,4 +377,43 @@ test('pendentesDe: marca tratada não ocupa vaga; marca nova depois do carimbo v
     l('x', 'sofia_calada_sem_unidade', 12),
   ]);
   assert.deepEqual(r.map((x) => x.leadId), [3, 2]);
+});
+
+// ── o incidente de 03→04/11 (cartão 5044975): a marcação veio 49 s depois da mensagem ──────────────
+
+test('INCIDENTE 5044975: mensagem 04:35:35, cartão vazio, robô marca Petrópolis 49 s depois → a IA responde UMA vez, mesmo com varreduras repetidas', async () => {
+  const msgNoMadrugada = msg('entrada', new Date(Date.UTC(2026, 10, 4, 4, 35, 35)), 'Boa noite, quero marcar uma avaliação');
+  const agora = Date.UTC(2026, 10, 4, 4, 36, 24);
+  const adiado = mundo({ msgs: [msgNoMadrugada], agora });
+  const marcaEm = new Date(Date.UTC(2026, 10, 4, 4, 35, 36));
+  const v = varredura('Petrópolis', adiado, { marcaEm });
+  v.deps.agora = () => agora;
+
+  const r1 = await retomarCartoesCalados(PET, false, v.deps);
+  assert.equal(r1.retomados, 1);
+  assert.equal(adiado.w.turnos.length, 1, 'a fala parada ganha resposta');
+  assert.deepEqual(adiado.w.turnos[0]!.textos, ['Boa noite, quero marcar uma avaliação']);
+
+  // a marca não foi carimbada por algum motivo (falha de banco, outra instância): a trava de reivindicação segura o duplo envio
+  const r2 = await retomarCartoesCalados(PET, false, varredura('Petrópolis', adiado, { marcaEm }).deps);
+  assert.equal(r2.erros, 0);
+  assert.equal(adiado.w.turnos.length, 1, 'a mesma espera nunca dispara dois turnos');
+});
+
+test('fala com mais de 2 h na hora em que a unidade chega: não responde (e sai da fila), mas o lead é cadastrado', async () => {
+  ligarCadastro();
+  const velha = msg('entrada', hhmm(17, 14), 'Olá, quero agendar uma avaliação');
+  const agora = hhmm(17, 14).getTime() + 2 * 3600_000 + 60_000;
+  const adiado = mundo({ msgs: [velha], agora });
+  const v = varredura('Petrópolis', adiado);
+  v.deps.agora = () => agora;
+  const r = await retomarCartoesCalados(PET, false, v.deps);
+  assert.equal(r.retomados, 1, 'decisão definitiva: tratada');
+  assert.equal(adiado.w.turnos.length, 0, 'IA não acorda para fala de mais de 2 h');
+  assert.deepEqual(v.w.tratados, [LEAD], 'não fica na fila para sempre');
+  assert.equal(adiado.w.sincronizados.length, 1);
+
+  // e no limite: 1 h 59 min ainda responde
+  const quase = mundo({ msgs: [velha], agora: hhmm(17, 14).getTime() + 119 * 60_000 });
+  assert.equal((await atenderCartaoQueGanhouUnidade(entrada(), quase.deps)).turno, 'iniciado');
 });

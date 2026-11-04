@@ -51,7 +51,7 @@ export const ESCOPO_DA_RETOMADA = 'unidade-ganha';
 /** Quanto tempo uma marca vale (fora disso o cartão é assunto da equipe e do alerta de "sem resposta"). */
 export const JANELA_DA_MARCA_MS = 24 * 3600_000;
 /** Espera mais velha que isto não é respondida por uma IA acordando do nada: a recepção já viu (ou deveria ter visto). */
-export const IDADE_MAXIMA_DA_ESPERA_MS = 6 * 3600_000;
+export const IDADE_MAXIMA_DA_ESPERA_MS = 2 * 3600_000;
 /** Quantas marcas uma varredura trata (cada uma lê o cartão e a conversa no Kommo). */
 export const MAX_MARCAS_POR_VARREDURA = 10;
 
