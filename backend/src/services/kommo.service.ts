@@ -729,6 +729,17 @@ function wrapAxiosError(err: unknown, context: string): never {
   throw err;
 }
 
+/** Uma mudança de coluna (`lead_status_changed`) já lida. `por` 0 = integração/robô. */
+export interface MudancaDeEtapaDoKommo {
+  id: string;
+  leadId: number;
+  nome: string | null;
+  por: number;
+  em: number;
+  de: { pipelineId: number; statusId: number } | null;
+  para: { pipelineId: number; statusId: number } | null;
+}
+
 /** Nota do cartão como a API v4 devolve. `created_by` 0 = integração/robô. */
 export interface NotaKommo {
   id: number;
@@ -2498,6 +2509,86 @@ export class KommoClient {
     }
   }
 
+  /**
+   * UMA página (250) dos cartões ABERTOS nestas etapas, do id mais novo ao mais velho — a página `/ia/:slug` conta
+   * as colunas com isto. Sem filtro de data: cartão novo entra no topo e só empurra a lista. LANÇA se o Kommo falhar
+   * (página vazia quer dizer "acabou", nunca "deu erro"). Quem chama decide o teto de páginas.
+   */
+  async listLeadsAbertosPagina(etapas: ReadonlyArray<{ pipelineId: number; statusId: number }>, page = 1): Promise<KommoLead[]> {
+    const params: Record<string, unknown> = { limit: 250, page, 'order[id]': 'desc' };
+    etapas.forEach((e, i) => {
+      params[`filter[statuses][${i}][pipeline_id]`] = e.pipelineId;
+      params[`filter[statuses][${i}][status_id]`] = e.statusId;
+    });
+    try {
+      const { data } = await this.http.get<{ _embedded?: { leads?: KommoLead[] } } | ''>('/leads', { params });
+      return (data && data._embedded?.leads) || [];
+    } catch (err) {
+      wrapAxiosError(err, `listLeadsAbertosPagina(${page})`);
+    }
+  }
+
+  /**
+   * Mudanças de coluna desde `desdeEpoch` (uma página de 100), com o NOME do cartão que o Kommo já devolve junto
+   * (`_embedded.entity`) e quem fez (`created_by`: 0 = integração/robô). LANÇA se o Kommo falhar; `temMais` diz que
+   * existe página seguinte.
+   */
+  async mudancasDeEtapaDesde(desdeEpoch: number, page = 1): Promise<{ eventos: MudancaDeEtapaDoKommo[]; temMais: boolean }> {
+    try {
+      const { data, status } = await this.http.get<
+        | {
+            _embedded?: {
+              events?: Array<{
+                id?: string;
+                entity_id?: number;
+                created_by?: number;
+                created_at?: number;
+                value_before?: Array<{ lead_status?: { id?: number; pipeline_id?: number } }>;
+                value_after?: Array<{ lead_status?: { id?: number; pipeline_id?: number } }>;
+                _embedded?: { entity?: { name?: string } };
+              }>;
+            };
+            _links?: { next?: unknown };
+          }
+        | ''
+      >('/events', {
+        params: {
+          'filter[entity]': 'lead',
+          'filter[type]': 'lead_status_changed',
+          'filter[created_at][from]': desdeEpoch,
+          // sem `with=lead_name` o Kommo manda só o id do cartão em `_embedded.entity` (medido em Timbó, 04/11/2026)
+          with: 'lead_name',
+          'order[created_at]': 'desc',
+          limit: 100,
+          page,
+        },
+      });
+      if (status === 204 || !data) return { eventos: [], temMais: false };
+      const lote = data._embedded?.events ?? [];
+      const etapa = (v?: Array<{ lead_status?: { id?: number; pipeline_id?: number } }>) => {
+        const s = v?.[0]?.lead_status;
+        return s && Number.isInteger(s.id) && Number.isInteger(s.pipeline_id) ? { statusId: Number(s.id), pipelineId: Number(s.pipeline_id) } : null;
+      };
+      const eventos: MudancaDeEtapaDoKommo[] = [];
+      for (const e of lote) {
+        const leadId = Number(e.entity_id);
+        if (!Number.isInteger(leadId) || leadId <= 0) continue;
+        eventos.push({
+          id: String(e.id ?? `${leadId}:${e.created_at}`),
+          leadId,
+          nome: typeof e._embedded?.entity?.name === 'string' ? e._embedded.entity.name : null,
+          por: Number(e.created_by ?? 0) || 0,
+          em: Number(e.created_at ?? 0) || 0,
+          de: etapa(e.value_before),
+          para: etapa(e.value_after),
+        });
+      }
+      return { eventos, temMais: lote.length >= 100 && !!data._links?.next };
+    } catch (err) {
+      wrapAxiosError(err, `mudancasDeEtapaDesde(${page})`);
+    }
+  }
+
   async listLeadsPorTelefone(telefone: string, limite = 50): Promise<KommoLead[]> {
     let digitos = telefone.replace(/\D+/g, '');
     if (digitos.length >= 12 && digitos.startsWith('55')) digitos = digitos.slice(2);
@@ -3179,6 +3270,22 @@ export function createKommoClient(
 ): KommoClient {
   const creds = credsFromUnit(unit);
   return new KommoClient(creds, buildHttp(creds));
+}
+
+/**
+ * Cliente para leituras ACESSÓRIAS (a página `/ia/:slug`): igual ao `createKommoClient`, mas nenhum 403/429 desta
+ * instância aciona o freio global (`kommoBackoff`) — uma leitura de painel nunca pode congelar o Kommo da Sofia.
+ * As chamadas continuam passando pelo limitador de 180 ms (a ordem na fila é a mesma da Sofia).
+ */
+export function createKommoClientSemFreio(
+  unit: Parameters<typeof createKommoClient>[0],
+  /** só o teste usa: troca a rede por um Kommo falso */
+  opcoes: Parameters<typeof buildHttp>[1] = {},
+): KommoClient {
+  const creds = credsFromUnit(unit);
+  const http = buildHttp(creds, opcoes);
+  http.defaults.semFreio = true;
+  return new KommoClient(creds, http);
 }
 
 export async function isLeadPaused(

@@ -214,6 +214,7 @@ import {
   chaveDeServicoOuSessao,
 } from '../controllers/cerebro.controller.js';
 import { listarAltaHandler, decidirAltaHandler } from '../controllers/alta.controller.js';
+import { iaApiHandler } from '../controllers/ia-unidade.controller.js';
 import { previaCargaHandler, aplicarCargaHandler } from '../controllers/franquia-carga.controller.js';
 import {
   listarAutomacoesHandler,
@@ -376,6 +377,8 @@ apiRouter.post('/public/widget/:slug/ligacao/chamada/:id/desligar', ligacaoDesli
 // ALTA nunca é automática: o gatilho dela dispara um bot sem nenhuma condição.
 apiRouter.get('/public/alta/:slug', listarAltaHandler);
 apiRouter.post('/public/alta/:slug', decidirAltaHandler);
+// A recepção vê a Sofia e as colunas pela página /ia/:slug (mesmo código da unidade, só leitura).
+apiRouter.get('/public/ia/:slug', iaApiHandler);
 
 // "Digitando…" + tique azul. Quem chama é o n8n do rastreio, que é quem tem o
 // `wamid` do webhook cru da Meta; a decisão de acender fica aqui.
