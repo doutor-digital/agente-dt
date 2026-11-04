@@ -86,19 +86,7 @@ export async function transcribeAudio(
       maxBodyLength: Infinity,
     });
   } catch (err) {
-    if (!axios.isAxiosError(err)) throw err;
-    // O axios diz só "status code 429"; o motivo (saldo × limite por minuto) está no corpo.
-    const c = classificarErroDaOpenAI(err.response?.status, err.response?.data);
-    if (c.saldo) {
-      void opsAlert({
-        chave: 'saldo:openai-transcricao',
-        title: 'Áudios sem transcrição — OpenAI sem saldo',
-        message:
-          'A transcrição de áudio está sendo recusada por falta de saldo na OpenAI. Enquanto não recarregar, ' +
-          `nenhum áudio de paciente vira texto e as conversas com áudio vão para a equipe. Erro: ${c.resumo}`,
-      });
-    }
-    throw new FalhaDeTranscricao(`Transcrição recusada pela OpenAI (${c.resumo})`, c.estrutural, c.saldo);
+    return falhaDaOpenAI(err);
   }
 
   const text = (res.data?.text ?? '').trim();
@@ -114,6 +102,78 @@ export async function transcribeAudio(
     'áudio transcrito',
   );
   return { text, durationMs: Math.round(performance.now() - t0) };
+}
+
+
+/**
+ * Erro do POST na OpenAI → FalhaDeTranscricao (e alerta de saldo). O axios diz só "status code 429"; o motivo (saldo × limite por
+ * minuto) está no corpo. Serve a transcrição do áudio do paciente e à do conector (`transcreverComSegmentos`).
+ */
+function falhaDaOpenAI(err: unknown): never {
+  if (!axios.isAxiosError(err)) throw err;
+  const c = classificarErroDaOpenAI(err.response?.status, err.response?.data);
+  if (c.saldo) {
+    void opsAlert({
+      chave: 'saldo:openai-transcricao',
+      title: 'Áudios sem transcrição — OpenAI sem saldo',
+      message:
+        'A transcrição de áudio está sendo recusada por falta de saldo na OpenAI. Enquanto não recarregar, ' +
+        `nenhum áudio de paciente vira texto e as conversas com áudio vão para a equipe. Erro: ${c.resumo}`,
+    });
+  }
+  throw new FalhaDeTranscricao(`Transcrição recusada pela OpenAI (${c.resumo})`, c.estrutural, c.saldo);
+}
+
+/** Um segmento do `verbose_json` do whisper-1 (só o que o conector usa). */
+export interface SegmentoWhisper {
+  start: number;
+  end: number;
+  text: string;
+  avg_logprob: number;
+  no_speech_prob: number;
+  compression_ratio: number;
+}
+
+export interface TranscricaoComSegmentos {
+  text: string;
+  duration?: number;
+  segments: SegmentoWhisper[];
+}
+
+/** O limite da OpenAI por arquivo de áudio. */
+export const LIMITE_ARQUIVO_OPENAI_BYTES = MAX_AUDIO_BYTES;
+
+/**
+ * Transcreve um áudio JÁ em memória pedindo os SEGMENTOS (tempos, confiança): whisper-1, `verbose_json`, temperatura 0, idioma fixo.
+ * O gpt-4o-mini-transcribe não devolve segmentos. Mesma chave e mesmo tratamento de erro da transcrição de paciente.
+ */
+export async function transcreverComSegmentos(
+  audio: Buffer,
+  o: { ext: string; prompt: string; language?: string; apiKey?: string; timeoutMs?: number },
+): Promise<TranscricaoComSegmentos> {
+  const apiKey = o.apiKey || env.OPENAI_TRANSCRIPTION_API_KEY || env.OPENAI_API_KEY;
+  if (!apiKey) throw new FalhaDeTranscricao('Nenhuma chave OpenAI disponível — não dá pra transcrever', true);
+  if (audio.byteLength === 0) throw new Error('Áudio vazio (0 bytes)');
+  if (audio.byteLength > MAX_AUDIO_BYTES) throw new Error('Áudio acima do limite de 25 MB da OpenAI (corte em pedaços antes)');
+  const form = new FormData();
+  form.append('file', audio, { filename: `audio.${o.ext}`, contentType: `audio/${o.ext}` });
+  form.append('model', 'whisper-1');
+  form.append('language', o.language ?? 'pt');
+  form.append('temperature', '0');
+  form.append('prompt', o.prompt);
+  form.append('response_format', 'verbose_json');
+  form.append('timestamp_granularities[]', 'segment');
+  try {
+    const res = await axios.post<{ text?: string; duration?: number; segments?: SegmentoWhisper[] }>(TRANSCRIBE_URL, form, {
+      headers: { ...form.getHeaders(), Authorization: `Bearer ${apiKey}` },
+      timeout: o.timeoutMs ?? 180_000,
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity,
+    });
+    return { text: (res.data?.text ?? '').trim(), duration: res.data?.duration, segments: res.data?.segments ?? [] };
+  } catch (err) {
+    return falhaDaOpenAI(err);
+  }
 }
 
 /**
