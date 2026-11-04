@@ -86,6 +86,7 @@ test('o texto da regra: chama a ferramenta, UMA frase, exceção da pergunta fin
   assert.match(r, /recrutamento é tratado direto pela equipe da clínica/);
   assert.match(r, /trabalho em laboratório/);
   assert.match(r, /RECUSADO/);
+  assert.match(r, /Exame, laudo, ressonância/, 'laudo e exame não são currículo');
   // fornecedor e propaganda ficam como estão
   assert.match(r, /Fornecedor, agência, propaganda e funcionário/);
 });

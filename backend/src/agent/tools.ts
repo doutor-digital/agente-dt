@@ -1425,11 +1425,13 @@ export function buildTools({
       if (!unit) return 'ERRO: unidade ausente — nada foi marcado.';
       const r = await marcarNaoPaciente({ unit, kommo, leadId, tipo, pausedFieldId });
       await recorder.step({
-        kind: r.desfecho === 'recusado' ? 'TOOL_RESULT' : r.desfecho === 'parcial' ? 'ERROR' : 'KOMMO_ACTION',
+        kind: r.desfecho === 'recusado' ? 'TOOL_RESULT' : r.desfecho === 'parcial' || r.desfecho === 'erro' ? 'ERROR' : 'KOMMO_ACTION',
         title:
           r.desfecho === 'recusado'
             ? `Não marcado como candidato: ${r.recusa}`
-            : `Candidato (${tipo}) ${r.desfecho === 'ja_estava' ? 'já estava marcado' : r.desfecho === 'feito' ? 'marcado' : 'marcado em parte'}: ` +
+            : r.desfecho === 'erro'
+              ? `Candidato (${tipo}) NÃO marcado: não consegui ler o cartão no Kommo (${r.falhas.join('; ')})`
+              : `Candidato (${tipo}) ${r.desfecho === 'ja_estava' ? 'já estava marcado' : r.desfecho === 'feito' ? 'marcado' : 'marcado em parte'}: ` +
               `etiqueta ${r.etiquetas ? 'sim' : 'NÃO'}, motivo ${r.motivo}, PERDIDO ${r.movido ? 'sim' : 'não'}, IA ${r.pausada ? 'pausada' : 'NÃO pausada'}` +
               (r.falhas.length ? ` — falhas: ${r.falhas.join('; ')}` : ''),
         payload: { leadId, tipo, ...r },

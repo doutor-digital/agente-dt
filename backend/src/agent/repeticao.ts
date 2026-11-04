@@ -414,7 +414,6 @@ const FERRAMENTAS_DE_AVANCO = new Set([
   'fechar_lead',
   'mover_etapa',
   'mover_funil',
-  'marcar_nao_paciente',
 ]);
 
 /** Nomes das ferramentas chamadas depois da última fala do paciente (o turno em curso). */

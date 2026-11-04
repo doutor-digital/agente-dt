@@ -1496,7 +1496,7 @@ export async function buildAgentGraph(
       // mesma ferramenta pausar_ia; pediu o nome pela 3ª vez → refaz UMA vez sem o pedido (se a refeita não servir,
       // fica a original — um 3º pedido é ruim, mas mensagem quebrada é pior).
       // Já passou por sinal de alerta neste turno: a trava da repetição não pausa de novo nem troca a frase do passe.
-      const trava = passouPorSinal ? null : travaDaResposta(repeticao, textoFinal, ferramentasDoTurno(nonSystemMessages));
+      const trava = passouPorSinal || candidatoNoTurno ? null : travaDaResposta(repeticao, textoFinal, ferramentasDoTurno(nonSystemMessages));
       if (trava?.acao === 'passar_para_equipe') {
         const pausar = tools.find((t) => t.name === 'pausar_ia');
         let resultadoPausa: string | null = null;

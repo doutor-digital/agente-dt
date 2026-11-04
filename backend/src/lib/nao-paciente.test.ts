@@ -207,15 +207,17 @@ test('cartão no funil TRATAMENTO ou em GANHO é paciente: RECUSADO', async () =
   assert.deepEqual(escritas, []);
 });
 
-test('não consegui ler o cartão: não escreve nada', async () => {
+test('não consegui ler o cartão: não escreve nada e o modelo ouve ERRO, não RECUSADO', async () => {
   const antes = kommo.getLead;
   (kommo as unknown as { getLead: () => Promise<never> }).getLead = async () => {
     throw new Error('timeout');
   };
   try {
     const r = await marcar();
-    assert.equal(r.desfecho, 'recusado');
+    assert.equal(r.desfecho, 'erro', 'falha de leitura NÃO é "é paciente"');
     assert.deepEqual(escritas, []);
+    assert.match(textoParaOModelo(r), /^ERRO/);
+    assert.doesNotMatch(textoParaOModelo(r), /RECUSADO/);
   } finally {
     (kommo as unknown as { getLead: unknown }).getLead = antes;
   }
@@ -262,7 +264,7 @@ test('chamar duas vezes no mesmo turno: a segunda não escreve etiqueta nem move
   cartao = cartaoNovo({ status_id: 143, _embedded: { tags: [{ id: 1, name: 'CURRÍCULO' }] } });
   const r: ResultadoNaoPaciente = await marcar();
   assert.equal(r.desfecho, 'ja_estava');
-  assert.deepEqual(escritas, ['pausa']);
+  assert.deepEqual(escritas, ['pausa', 'followUp']);
   assert.deepEqual(movimentos, []);
 });
 
@@ -275,6 +277,12 @@ test('já em PERDIDO, sem etiqueta, e a etiqueta falha: o motivo NÃO consta com
   assert.ok(!escritas.includes('campos'));
   assert.ok(!notas[0].includes('motivo «Não é paciente'), 'a nota não pode afirmar o que não foi feito');
   assert.match(textoParaOModelo(r), /o motivo/);
+});
+
+test('o atalho de "já estava marcado" também para a escada de follow-up', async () => {
+  cartao = cartaoNovo({ status_id: 143, _embedded: { tags: [{ id: 1, name: 'CURRÍCULO' }] } });
+  await marcar();
+  assert.deepEqual(escritas, ['pausa', 'followUp']);
 });
 
 test('já marcado, mas a IA não pôde ser pausada: parcial, tarefa para a equipe, e o modelo NÃO ouve "segue pausada"', async () => {

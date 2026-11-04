@@ -30,13 +30,12 @@ import { normalizarNome } from './kommo-schema.js';
 import { travaDaPerdaAutomatica } from './trava-perda.js';
 import { etiquetaDeNaoContatar } from './sofia-fecha-quente-morno.js';
 import { esquecerPausaPropria, registrarPausaPropria } from './pausa-propria.js';
-import { motivoDaSdrNoCartao } from './parados.js';
+import { CAMPO, motivoDaSdrNoCartao, nomesDoCampo } from './parados.js';
 
 export const TIPOS_NAO_PACIENTE = ['curriculo'] as const;
 export type TipoNaoPaciente = (typeof TIPOS_NAO_PACIENTE)[number];
 
 export const ETIQUETA_CURRICULO = 'CURRÍCULO';
-export const CAMPO_MOTIVO_NAO_AGENDAMENTO = '⊘ Motivo do não agendamento';
 export const OPCAO_MOTIVO_CURRICULO = 'Não é paciente (currículo)';
 export const MOTIVO_DE_PARADA_DO_FOLLOW_UP = 'não é paciente (currículo)';
 
@@ -64,9 +63,10 @@ export type SituacaoDoMotivo = 'gravado' | 'sem_campo' | 'sem_opcao' | 'mantido_
 export interface ResultadoNaoPaciente {
   /**
    * `feito`: tudo o que dava foi feito; `ja_estava`: o cartão já estava marcado (nada novo escrito);
-   * `parcial`: algum passo falhou (o texto diz qual); `recusado`: é paciente — nada foi escrito.
+   * `parcial`: algum passo falhou (o texto diz qual); `recusado`: o cartão é de paciente (ou de outro funil) — nada foi escrito;
+   * `erro`: o Kommo não respondeu na leitura — nada foi escrito e NÃO se sabe se é paciente (a próxima mensagem tenta de novo).
    */
-  desfecho: 'feito' | 'ja_estava' | 'parcial' | 'recusado';
+  desfecho: 'feito' | 'ja_estava' | 'parcial' | 'recusado' | 'erro';
   etiquetas: boolean;
   pausada: boolean;
   motivo: SituacaoDoMotivo;
@@ -131,7 +131,7 @@ export async function marcarNaoPaciente(p: PedidoNaoPaciente): Promise<Resultado
     [cartao, pipes] = await Promise.all([kommo.getLead(leadId), kommo.listPipelines()]);
   } catch (err) {
     logger.warn({ err: String(err), ...base }, 'nao-paciente: não consegui ler o cartão/funis — nada foi marcado');
-    return recusar('não consegui ler o cartão agora para conferir. Nada foi marcado: trate a mensagem normalmente e a marcação pode ser feita na próxima.');
+    return { ...recusar(''), desfecho: 'erro', recusa: undefined, falhas: [`leitura do cartão: ${String(err)}`] };
   }
 
   const comercial = funilComercial(pipes);
@@ -162,6 +162,7 @@ export async function marcarNaoPaciente(p: PedidoNaoPaciente): Promise<Resultado
   // Idempotência: o modelo pode chamar duas vezes no mesmo turno, ou o candidato mandar o vídeo depois do PDF.
   if (jaEstaFechado && jaEtiquetado) {
     const pausada = await pausarIa(p, falhas);
+    await pararFollowUp(p, falhas);
     if (!pausada) {
       await kommo
         .createTask({
@@ -172,9 +173,14 @@ export async function marcarNaoPaciente(p: PedidoNaoPaciente): Promise<Resultado
         })
         .catch((err) => logger.warn({ err: String(err), ...base }, 'nao-paciente: não consegui abrir a tarefa para a equipe'));
     }
-    return { desfecho: pausada ? 'ja_estava' : 'parcial', etiquetas: true, pausada, motivo: 'mantido_da_equipe', movido: false, emPerdido: true, falhas };
+    return { desfecho: pausada ? 'ja_estava' : 'parcial', etiquetas: true, pausada, motivo: motivoDaSdrNoCartao(cartao.custom_fields_values) ? 'mantido_da_equipe' : 'nao_gravou', movido: false, emPerdido: true, falhas };
   }
 
+  // a leitura dos campos da conta (com as opções) anda junto com as etiquetas: a resposta ao candidato espera esta ferramenta
+  const lendoCampos = kommo.listLeadCustomFieldsTyped().then(
+    (v) => ({ v }),
+    (e: unknown) => ({ e }),
+  );
   const naoContatar = await etiquetaDeNaoContatar(unit, kommo);
 
   // 2. Etiquetas ANTES da etapa. Se não entraram, o cartão NÃO anda: PERDIDO sem a etiqueta dispara a régua de recuperação.
@@ -200,12 +206,7 @@ export async function marcarNaoPaciente(p: PedidoNaoPaciente): Promise<Resultado
 
   // 3. Para a IA (depois das etiquetas, antes de mexer na etapa: a conversa não pode seguir enquanto o cartão anda).
   const pausada = await pausarIa(p, falhas);
-  await prisma.conversation
-    .updateMany({ where: { unitId: unit.id, leadId: String(leadId) }, data: { followUpStoppedReason: MOTIVO_DE_PARADA_DO_FOLLOW_UP } })
-    .catch((err) => {
-      falhas.push(`follow-up: ${String(err)}`);
-      logger.warn({ err: String(err), ...base }, 'nao-paciente: não consegui parar a escada de follow-up');
-    });
+  await pararFollowUp(p, falhas);
 
   // 4. O motivo, pelo NOME do campo e da opção. Nunca grava outra coisa no lugar.
   let motivo: SituacaoDoMotivo = 'nao_gravou';
@@ -213,18 +214,21 @@ export async function marcarNaoPaciente(p: PedidoNaoPaciente): Promise<Resultado
   let motivoPronto = false;
   let campos: Array<{ field_id: number; values: Array<Record<string, unknown>> }> | undefined;
   try {
-    const todos = await kommo.listLeadCustomFieldsTyped();
-    const doMotivo = todos.filter((c) => normalizarNome(c.name) === normalizarNome(CAMPO_MOTIVO_NAO_AGENDAMENTO) && (c.type === 'select' || c.type === 'radiobutton'));
+    const lido = await lendoCampos;
+    if ('e' in lido) throw lido.e;
+    const todos = lido.v;
+    const nomesDoMotivo = new Set(nomesDoCampo(CAMPO.MOTIVO_NAO_AGENDAMENTO).map(normalizarNome));
+    const doMotivo = todos.filter((c) => nomesDoMotivo.has(normalizarNome(c.name)) && (c.type === 'select' || c.type === 'radiobutton'));
     if (doMotivo.length === 0) {
       motivo = 'sem_campo';
-      logger.warn({ ...base, campo: CAMPO_MOTIVO_NAO_AGENDAMENTO }, 'nao-paciente: esta conta não tem o campo do motivo — o cartão vai a PERDIDO sem motivo gravado');
+      logger.warn({ ...base, campo: CAMPO.MOTIVO_NAO_AGENDAMENTO }, 'nao-paciente: esta conta não tem o campo do motivo — o cartão vai a PERDIDO sem motivo gravado');
     } else {
       const achado = doMotivo
         .map((c) => ({ campo: c, enumId: resolveEnumId(OPCAO_MOTIVO_CURRICULO, c.enums ?? []) }))
         .find((x) => x.enumId !== null);
       if (!achado) {
         motivo = 'sem_opcao';
-        logger.warn({ ...base, campo: CAMPO_MOTIVO_NAO_AGENDAMENTO, opcao: OPCAO_MOTIVO_CURRICULO }, 'nao-paciente: esta conta não tem a opção do motivo — nenhum outro motivo foi gravado no lugar');
+        logger.warn({ ...base, campo: CAMPO.MOTIVO_NAO_AGENDAMENTO, opcao: OPCAO_MOTIVO_CURRICULO }, 'nao-paciente: esta conta não tem a opção do motivo — nenhum outro motivo foi gravado no lugar');
       } else if (jaEstaFechado && motivoDaSdrNoCartao(cartao.custom_fields_values)) {
         motivo = 'mantido_da_equipe'; // a equipe já fechou e escreveu o motivo dela
       } else {
@@ -294,6 +298,16 @@ export async function marcarNaoPaciente(p: PedidoNaoPaciente): Promise<Resultado
   return { desfecho: completo ? 'feito' : 'parcial', etiquetas, pausada, motivo, movido, emPerdido: movido || jaEstaFechado, falhas };
 }
 
+/** A escada de reengajamento congela: quem pediu vaga não recebe "ainda está aí?". */
+async function pararFollowUp(p: PedidoNaoPaciente, falhas: string[]): Promise<void> {
+  await prisma.conversation
+    .updateMany({ where: { unitId: p.unit.id, leadId: String(p.leadId) }, data: { followUpStoppedReason: MOTIVO_DE_PARADA_DO_FOLLOW_UP } })
+    .catch((err) => {
+      falhas.push(`follow-up: ${String(err)}`);
+      logger.warn({ err: String(err), unit: p.unit.slug, leadId: p.leadId }, 'nao-paciente: não consegui parar a escada de follow-up');
+    });
+}
+
 /** "Pausar IA" no cartão, com a marca de "fui eu" para a resposta deste turno não ser jogada fora pela trava de antes de enviar. */
 async function pausarIa(p: PedidoNaoPaciente, falhas: string[]): Promise<boolean> {
   const { unit, kommo, leadId, pausedFieldId } = p;
@@ -323,6 +337,13 @@ async function pausarIa(p: PedidoNaoPaciente, falhas: string[]): Promise<boolean
 /** O que a ferramenta devolve ao modelo. Nunca conta a falha ao candidato: só diz o que escrever. */
 export function textoParaOModelo(r: ResultadoNaoPaciente): string {
   if (r.desfecho === 'recusado') return `RECUSADO: ${r.recusa}`;
+  if (r.desfecho === 'erro') {
+    return (
+      'ERRO — não consegui conferir o cartão agora e NADA foi marcado (a IA continua ligada; se a pessoa escrever de novo, chame a ferramenta de novo). ' +
+      'Se ela é mesmo candidata, responda UMA frase só: agradeça, diga que o currículo foi recebido e que o recrutamento é tratado pela equipe da clínica, sem pergunta no fim. ' +
+      'Se ficou em dúvida, atenda normalmente.'
+    );
+  }
   const fala =
     'Agora responda UMA frase só ao candidato: agradeça, diga que o currículo foi recebido e que o recrutamento é tratado pela equipe da clínica. ' +
     'Sem pergunta no fim, sem prometer vaga, prazo ou salário, sem falar de consulta, preço ou horário, e sem dizer que "marcou", "etiquetou" ou "fechou" nada.';
@@ -334,5 +355,5 @@ export function textoParaOModelo(r: ResultadoNaoPaciente): string {
     !r.pausada && 'a pausa da IA',
     r.motivo !== 'gravado' && r.motivo !== 'mantido_da_equipe' && 'o motivo',
   ].filter(Boolean);
-  return `PARCIAL — a equipe vai terminar a marcação à mão (faltou: ${faltou.join(', ') || 'um detalhe'}); não conte isso ao candidato. ${fala}`;
+  return `PARCIAL — faltou: ${faltou.join(', ') || 'um detalhe'} (a nota do cartão registra, e a equipe é avisada por tarefa quando o cartão não saiu do funil); não conte isso ao candidato. ${fala}`;
 }

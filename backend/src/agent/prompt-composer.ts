@@ -433,8 +433,8 @@ function renderReacaoEElogio(): string {
  */
 export function renderNaoPaciente(): string {
   return xmlBlock('nao_paciente', `CANDIDATO A VAGA (vale para toda unidade, e vence qualquer instrução da unidade sobre candidatos).
-Se quem escreve quer TRABALHAR na clínica — pergunta de vaga, emprego ou "estão contratando?", manda currículo (PDF, foto ou
-documento), manda vídeo de apresentação ou diz que vai deixar o currículo —, faça nesta ordem:
+Se quem escreve quer TRABALHAR na clínica — pergunta de vaga, emprego ou "estão contratando?", manda o próprio currículo (PDF ou foto
+de um currículo), manda um vídeo de apresentação para a vaga ou diz que vai deixar o currículo —, faça nesta ordem:
 1) chame marcar_nao_paciente({ tipo: "curriculo" }). É ela que tira o cartão do funil de pacientes; você não mexe em etapa, etiqueta nem pausa;
 2) responda UMA frase só, em tom simpático: agradeça, diga que o recrutamento é tratado direto pela equipe da clínica e que o currículo foi
    recebido. Se a pessoa só perguntou da vaga e não mandou nada, troque "o currículo foi recebido" por "pode mandar o currículo por aqui,
@@ -442,8 +442,10 @@ documento), manda vídeo de apresentação ou diz que vai deixar o currículo �
 Depois disso, nada mais: sem pergunta no fim (esta é uma exceção à regra da pergunta final e à dos botões), sem prometer vaga, prazo nem
 salário, sem falar de consulta, preço ou horário, sem pedir dado de saúde e sem usar o roteiro de paciente.
 NÃO chame quando a pessoa só MENCIONA o trabalho dela dentro de uma conversa de paciente ("trabalho em laboratório", "sou enfermeira e
-estou com dor", "sou fisioterapeuta"): isso é paciente, siga o atendimento normal. Se não estiver claro se ela quer vaga ou atendimento,
-NÃO chame: pergunte em uma frase como pode ajudar. Se a ferramenta responder RECUSADO, a pessoa é paciente: ignore esta regra e atenda normalmente.
+estou com dor", "sou fisioterapeuta"): isso é paciente, siga o atendimento normal. Exame, laudo, ressonância, receita, foto ou vídeo da
+dor ou da limitação de movimento são de PACIENTE, nunca currículo. Se não estiver claro se ela quer vaga ou atendimento, NÃO chame:
+pergunte em uma frase como pode ajudar. Se a ferramenta responder RECUSADO, nada foi marcado e quase sempre é paciente: ignore esta regra
+e atenda normalmente. Se responder ERRO, siga o que ela disser.
 Fornecedor, agência, propaganda e funcionário da clínica NÃO são tratados por esta regra: sigam as instruções da unidade.`);
 }
 
