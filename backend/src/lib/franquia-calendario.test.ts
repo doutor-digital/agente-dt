@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  configDaUnidade, intervaloDoCalendarioMs, marcador, prefixoDaUnidade, sufixoDepoisDoMarcador,
   desfechoDaAgenda, idDoMarcador, janelaDoCalendario, mapaPorSlug, modoDoCalendario, planejarCalendario, profissionalResumido, sufixoComCartao, sufixoDeTarefaSolta, textoDaTarefa,
   tipoPeloNome, type Acao, type ItemDaAgenda, type TarefaAberta,
 } from './franquia-calendario.js';
@@ -239,4 +240,65 @@ test('janela de leitura: hoje-14 até hoje+30', () => {
 
 test('texto de tarefa com cartão leva o nome do paciente depois do marcador', () => {
   assert.equal(textoDaTarefa(item(), TZ, sufixoComCartao('INGRIDE SOUZA LIMA')), '🩺 AVALIAÇÃO 14:00 · Dr. Leonardo · AGENDADO [ag:3784113] Paciente: INGRIDE SOUZA LIMA');
+});
+
+// ── várias unidades ─────────────────────────────────────────────────────────────────────────────────
+
+test('modo: o que a tela gravou manda sobre o .env; sem nada gravado, vale o .env de sempre (Timbó segue como estava)', () => {
+  const env = { slugs: 'doutor-hernia-timbo', aplicar: 'doutor-hernia-timbo' };
+  assert.equal(modoDoCalendario('doutor-hernia-timbo', env, null), 'aplicar');
+  assert.equal(modoDoCalendario('doutor-hernia-serra', env, null), 'desligado');
+  // a tela liga a Serra sem tocar no .env
+  assert.equal(modoDoCalendario('doutor-hernia-serra', env, 'seco'), 'seco');
+  assert.equal(modoDoCalendario('doutor-hernia-serra', env, 'ligado'), 'aplicar');
+  // e desliga Timbó mesmo com o .env dizendo aplicar
+  assert.equal(modoDoCalendario('doutor-hernia-timbo', env, 'desligado'), 'desligado');
+});
+
+test('config por unidade: a tabela vence o .env; sem nenhum dos dois é null (o worker decide); duração 0 vale', () => {
+  const env = { tipo: 'serra:5, timbo:4302851', responsavel: 'timbo:15905863', duracaoMin: '45' };
+  assert.deepEqual(configDaUnidade('timbo', null, env), { tipo: 4302851, responsavel: 15905863, duracaoMin: 45 });
+  assert.deepEqual(configDaUnidade('timbo', { taskTypeId: 9, responsibleUserId: 8, duracaoMin: 0 }, env), { tipo: 9, responsavel: 8, duracaoMin: 0 });
+  assert.deepEqual(configDaUnidade('maraba', null, {}), { tipo: null, responsavel: null, duracaoMin: null });
+  // linha com campos vazios cai para o .env, campo a campo
+  assert.deepEqual(configDaUnidade('timbo', { taskTypeId: null, responsibleUserId: 8, duracaoMin: null }, env), { tipo: 4302851, responsavel: 8, duracaoMin: 45 });
+  // lixo na tabela não vira tipo
+  assert.equal(configDaUnidade('x', { taskTypeId: -1, responsibleUserId: 0, duracaoMin: null }, {}).tipo, null);
+});
+
+test('intervalo da rodada: 15 min por padrão; configurável, mas nunca abaixo de 3 nem acima de 60', () => {
+  assert.equal(intervaloDoCalendarioMs(undefined), 15 * 60_000);
+  assert.equal(intervaloDoCalendarioMs(''), 15 * 60_000);
+  assert.equal(intervaloDoCalendarioMs('lixo'), 15 * 60_000);
+  assert.equal(intervaloDoCalendarioMs('5'), 5 * 60_000);
+  assert.equal(intervaloDoCalendarioMs('"5"'), 5 * 60_000);
+  assert.equal(intervaloDoCalendarioMs('1'), 3 * 60_000);
+  assert.equal(intervaloDoCalendarioMs('500'), 60 * 60_000);
+});
+
+test('marcador com prefixo (Kommo dividido): cada formato só casa consigo mesmo', () => {
+  assert.equal(marcador(12), '[ag:12]');
+  assert.equal(marcador(12, 'caxias'), '[ag:caxias:12]');
+  assert.equal(idDoMarcador('x [ag:12] y'), 12);
+  assert.equal(idDoMarcador('x [ag:caxias:12] y'), null, 'o marcador da irmã não é o da dona');
+  assert.equal(idDoMarcador('x [ag:caxias:12] y', 'caxias'), 12);
+  assert.equal(idDoMarcador('x [ag:12] y', 'caxias'), null, 'e o da dona não é o da irmã');
+  assert.equal(sufixoDepoisDoMarcador('t [ag:caxias:12] Paciente: Ana', 'caxias'), ' Paciente: Ana');
+  assert.equal(prefixoDaUnidade('Caxias'), 'caxias');
+  assert.equal(prefixoDaUnidade(' Duque de Caxias '), 'duquedecaxias');
+  assert.equal(prefixoDaUnidade(null), '');
+});
+
+test('plano com prefixo: cria com o marcador da irmã e ignora (não fecha, não aponta) as tarefas da dona', () => {
+  const daDona = tarefa({ id: 10, text: GUARDADO }); // [ag:3784113]
+  const p = plano([item()], [daDona], { prefixo: 'caxias' });
+  assert.equal(p.acoes.length, 1);
+  const a = p.acoes[0];
+  assert.equal(a.tipo, 'criar');
+  assert.match((a as Extract<Acao, { tipo: 'criar' }>).texto, /\[ag:caxias:3784113\]$/);
+  // e a dona, olhando a tarefa da irmã, não a toma por sua
+  const daIrma = tarefa({ id: 11, text: '⚕ AVALIAÇÃO 14:00 · Dr. Leonardo · AGENDADO [ag:caxias:3784113]' });
+  const pd = plano([item()], [daIrma]);
+  assert.equal(pd.acoes.length, 1);
+  assert.equal(pd.acoes[0].tipo, 'criar');
 });

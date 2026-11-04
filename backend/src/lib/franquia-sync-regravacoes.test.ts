@@ -265,3 +265,21 @@ test('paciente só da agenda (sem idClient): o casamento por telefone diz quem e
   assert.deepEqual(r.idsClient, [125923, 130000]);
   assert.equal(cartaoDeOutroPaciente(357882, r.idsClient), true);
 });
+
+test('resolverPaciente com cache PRÓPRIO (o do calendário): lembra lá e não escreve no cache do sincronizador', async () => {
+  clientesNaBusca.splice(0, clientesNaBusca.length, { idClient: 777, name: 'MARIA CACHE', whatsapp: '+5524988887777' });
+  let buscasNoKommo = 0;
+  const { kommo } = kommoFalso({ listLeadsPorTelefone: async () => { buscasNoKommo++; return [{ id: 4001, updated_at: 1 }]; } });
+  const unit = unidade();
+  const meu = new Map<string, import('./franquia-sync-worker.js').EntradaDoCacheDeLead>();
+  const a = await _interno.resolverPaciente(unit, kommo, 'MARIA CACHE', null, [], meu);
+  assert.equal(a.leadId, 4001);
+  assert.equal(meu.size, 1, 'a resposta ficou no cache de quem pediu');
+  // de novo com o mesmo cache: não busca outra vez
+  await _interno.resolverPaciente(unit, kommo, 'MARIA CACHE', null, [], meu);
+  assert.equal(buscasNoKommo, 1);
+  // o cache do sincronizador NÃO viu nada: pedindo sem cache próprio, busca de novo e acha o cartão que o Kommo diz agora
+  const { kommo: k2 } = kommoFalso({ listLeadsPorTelefone: async () => [{ id: 4002, updated_at: 1 }] });
+  const b = await _interno.resolverPaciente(unit, k2, 'MARIA CACHE', null, []);
+  assert.equal(b.leadId, 4002);
+});

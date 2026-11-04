@@ -77,21 +77,40 @@ export interface Plano {
   jaConcluidas: number;
 }
 
-const MARCADOR = /\[ag:(\d+)\]/;
-
-export function marcador(idSchedule: number): string {
-  return `[ag:${idSchedule}]`;
+/**
+ * O marcador é `[ag:<idSchedule>]`. Duas unidades que dividem UM Kommo (Petrópolis × Caxias) leem a mesma lista de tarefas e os
+ * `idSchedule` de franquias diferentes podem coincidir: a irmã usa um PREFIXO (`[ag:caxias:<id>]`) e cada uma só enxerga o próprio
+ * formato — `[ag:123]` (sem prefixo) nunca casa com `[ag:caxias:123]` e vice-versa. Unidade de Kommo só dela: sem prefixo, como sempre foi.
+ */
+const MARCADORES = new Map<string, RegExp>();
+function regexDoMarcador(prefixo: string): RegExp {
+  let r = MARCADORES.get(prefixo);
+  if (!r) {
+    // o prefixo só tem letras e dígitos (ver `prefixoDaUnidade`): nada para escapar
+    r = new RegExp(`\\[ag:${prefixo ? `${prefixo}:` : ''}(\\d+)\\]`);
+    MARCADORES.set(prefixo, r);
+  }
+  return r;
 }
 
-export function idDoMarcador(texto: string | null | undefined): number | null {
-  const m = MARCADOR.exec(texto ?? '');
+/** Letras e dígitos, minúsculo, sem acento — o que cabe no marcador. Vazio = sem prefixo. */
+export function prefixoDaUnidade(rotulo: string | null | undefined): string {
+  return normalizar(rotulo).replace(/[^a-z0-9]/g, '');
+}
+
+export function marcador(idSchedule: number, prefixo = ''): string {
+  return `[ag:${prefixo ? `${prefixo}:` : ''}${idSchedule}]`;
+}
+
+export function idDoMarcador(texto: string | null | undefined, prefixo = ''): number | null {
+  const m = regexDoMarcador(prefixo).exec(texto ?? '');
   return m ? Number(m[1]) : null;
 }
 
 /** O que vem DEPOIS do marcador — preservado nas atualizações. */
-export function sufixoDepoisDoMarcador(texto: string | null | undefined): string {
+export function sufixoDepoisDoMarcador(texto: string | null | undefined, prefixo = ''): string {
   const t = texto ?? '';
-  const m = MARCADOR.exec(t);
+  const m = regexDoMarcador(prefixo).exec(t);
   return m ? t.slice(m.index + m[0].length) : '';
 }
 
@@ -126,13 +145,13 @@ function comoOKommoGuarda(t: string): string {
 }
 
 /** `🩺 AVALIAÇÃO 14:00 · Dr. Leonardo · AGENDADO [ag:3784113]` + o que já houvesse depois do marcador. */
-export function textoDaTarefa(item: ItemDaAgenda, tz: string, sufixo = ''): string {
+export function textoDaTarefa(item: ItemDaAgenda, tz: string, sufixo = '', prefixo = ''): string {
   const categoria = (item.categoryName ?? '').trim().toUpperCase() || 'CONSULTA';
   const hora = horaLocal(item.dateAttendanceUtc, tz) ?? '--:--';
   const prof = profissionalResumido(item.physicalTherapist);
   const status = (item.statusName ?? '').trim().toUpperCase();
   const base = ['🩺 ' + categoria + ' ' + hora, prof, status].filter(Boolean).join(' · ');
-  return `${base} ${marcador(item.idSchedule as number)}${sufixo}`;
+  return `${base} ${marcador(item.idSchedule as number, prefixo)}${sufixo}`;
 }
 
 /** Depois do marcador, em TODA tarefa: quem é o paciente da franquia. Dois homônimos podem cair no mesmo cartão; o nome na tarefa deixa a recepção ver. */
@@ -157,6 +176,8 @@ export interface EntradaDoPlano {
   /** janela da busca, em epoch (segundos): só tarefa dentro dela pode ser dada como "sumida" */
   janela: { deEpoch: number; ateEpoch: number };
   remarcado?: 'manter' | 'fechar';
+  /** prefixo do marcador desta unidade (Kommo dividido); sem ele, `[ag:N]` */
+  prefixo?: string;
 }
 
 export function planejarCalendario(e: EntradaDoPlano): Plano {
@@ -164,9 +185,10 @@ export function planejarCalendario(e: EntradaDoPlano): Plano {
   let ignorados = 0;
   let passados = 0;
   let jaConcluidas = 0;
+  const prefixo = e.prefixo ?? '';
   const fechadasNoKommo = new Set<number>();
   for (const t of e.concluidas ?? []) {
-    const id = idDoMarcador(t.text);
+    const id = idDoMarcador(t.text, prefixo);
     // Concluída por NÓS (resultado "Desmarcado", "Atendido"…) não conta: se a franquia reativou o agendamento (desmarcado →
     // agendado outra vez, mesmo registro), a tarefa tem de voltar. Só o que a recepção concluiu é respeitado.
     if (id !== null && !RESULTADOS_NOSSOS.has(normalizar(t.resultado))) fechadasNoKommo.add(id);
@@ -175,7 +197,7 @@ export function planejarCalendario(e: EntradaDoPlano): Plano {
   // várias tarefas abertas com o mesmo marcador (reinício no meio do POST): a mais antiga é a canônica
   const porMarcador = new Map<number, TarefaAberta[]>();
   for (const t of e.tarefas) {
-    const id = idDoMarcador(t.text);
+    const id = idDoMarcador(t.text, prefixo);
     if (id === null) continue;
     const lista = porMarcador.get(id) ?? [];
     lista.push(t);
@@ -212,13 +234,13 @@ export function planejarCalendario(e: EntradaDoPlano): Plano {
         passados++;
         continue;
       }
-      acoes.push({ tipo: 'criar', idSchedule: id, item, texto: textoDaTarefa(item, e.tz), completeTill: quando });
+      acoes.push({ tipo: 'criar', idSchedule: id, item, texto: textoDaTarefa(item, e.tz, '', prefixo), completeTill: quando });
       continue;
     }
 
     const [canonica, ...repetidas] = abertas;
     for (const t of repetidas) acoes.push({ tipo: 'fechar', idSchedule: id, taskId: t.id, resultado: 'Duplicada' });
-    const desejado = textoDaTarefa(item, e.tz, sufixoDepoisDoMarcador(canonica.text));
+    const desejado = textoDaTarefa(item, e.tz, sufixoDepoisDoMarcador(canonica.text, prefixo), prefixo);
     const mudaTexto = comoOKommoGuarda(desejado) !== (canonica.text ?? '').trim();
     const mudaHora = canonica.completeTill !== quando;
     if (mudaTexto || mudaHora) {
@@ -258,11 +280,17 @@ export function slugNaLista(slug: string, raw: string | undefined): boolean {
 
 export type ModoDoCalendario = 'desligado' | 'seco' | 'aplicar';
 
-/** Ligado por `FRANQUIA_CALENDARIO_SLUGS`; só ESCREVE no Kommo se também estiver em `FRANQUIA_CALENDARIO_APLICAR`. */
-export function modoDoCalendario(slug: string, env: { slugs?: string; aplicar?: string } = {
-  slugs: process.env.FRANQUIA_CALENDARIO_SLUGS,
-  aplicar: process.env.FRANQUIA_CALENDARIO_APLICAR,
-}): ModoDoCalendario {
+/**
+ * O que a tela de Automações gravou para a unidade (`gravado`) manda: ligado = escreve, seco = só registra, desligado = nada. Sem nada
+ * gravado, vale o `.env` de sempre: ligado por `FRANQUIA_CALENDARIO_SLUGS`, e só ESCREVE no Kommo se também estiver em
+ * `FRANQUIA_CALENDARIO_APLICAR` (é assim que Timbó roda desde 30/10).
+ */
+export function modoDoCalendario(
+  slug: string,
+  env: { slugs?: string; aplicar?: string } = { slugs: process.env.FRANQUIA_CALENDARIO_SLUGS, aplicar: process.env.FRANQUIA_CALENDARIO_APLICAR },
+  gravado: 'ligado' | 'seco' | 'desligado' | null = null,
+): ModoDoCalendario {
+  if (gravado) return gravado === 'ligado' ? 'aplicar' : gravado;
   if (!slugNaLista(slug, env.slugs)) return 'desligado';
   return slugNaLista(slug, env.aplicar) ? 'aplicar' : 'seco';
 }
@@ -281,4 +309,55 @@ export function tipoPeloNome(tipos: ReadonlyArray<{ id: number; name: string }>,
 export function janelaDoCalendario(tz: string, agora: Date = new Date()): { de: string; ate: string } {
   const hoje = instanteNoFuso(agora, tz).slice(0, 10);
   return { de: somarDias(hoje, -DIAS_ATRAS), ate: somarDias(hoje, 30) };
+}
+
+/** A linha de `unit_calendario` (só o que o worker lê). */
+export interface LinhaDeConfig {
+  taskTypeId: number | null;
+  responsibleUserId: number | null;
+  duracaoMin: number | null;
+}
+
+export interface ConfigDaUnidade {
+  tipo: number | null;
+  responsavel: number | null;
+  /** `null` = padrão (60); 0 = não manda duração */
+  duracaoMin: number | null;
+}
+
+const inteiroPositivo = (v: number | null | undefined): number | null => (typeof v === 'number' && Number.isInteger(v) && v > 0 ? v : null);
+
+/**
+ * Tipo, dono e duração de UMA unidade. A linha de `unit_calendario` manda; sem ela vale o `.env` de sempre (Timbó, desde 30/10:
+ * `slug:valor`); sem nenhum dos dois, `null` e o worker decide (tipo "Consulta" da conta, dono = único usuário da clínica, 60 min).
+ * A duração do `.env` é uma só para todas (`FRANQUIA_CALENDARIO_DURACAO_MIN`); na tabela é por unidade, e 0 vale (= não manda duração).
+ */
+export function configDaUnidade(
+  slug: string,
+  linha: LinhaDeConfig | null | undefined,
+  env: { tipo?: string; responsavel?: string; duracaoMin?: string } = {
+    tipo: process.env.FRANQUIA_CALENDARIO_TIPO,
+    responsavel: process.env.FRANQUIA_CALENDARIO_RESPONSAVEL,
+    duracaoMin: process.env.FRANQUIA_CALENDARIO_DURACAO_MIN,
+  },
+): ConfigDaUnidade {
+  let duracaoMin: number | null = null;
+  if (typeof linha?.duracaoMin === 'number' && Number.isFinite(linha.duracaoMin) && linha.duracaoMin >= 0) duracaoMin = Math.floor(linha.duracaoMin);
+  else if (env.duracaoMin !== undefined && env.duracaoMin !== '') duracaoMin = Math.max(0, Math.floor(Number(env.duracaoMin) || 0));
+  return {
+    tipo: inteiroPositivo(linha?.taskTypeId) ?? mapaPorSlug(env.tipo).get(slug) ?? null,
+    responsavel: inteiroPositivo(linha?.responsibleUserId) ?? mapaPorSlug(env.responsavel).get(slug) ?? null,
+    duracaoMin,
+  };
+}
+
+/**
+ * De quanto em quanto tempo a rodada roda: `FRANQUIA_CALENDARIO_INTERVALO_MIN`, padrão 15, entre 3 e 60. O piso existe porque cada
+ * rodada lê a franquia e o Kommo de TODAS as unidades ligadas, uma de cada vez: a rodada tem de caber no intervalo (o log
+ * "rodada concluída" mostra `ms` e `intervaloMs`).
+ */
+export function intervaloDoCalendarioMs(raw: string | undefined = process.env.FRANQUIA_CALENDARIO_INTERVALO_MIN): number {
+  const n = Number((raw ?? '').replace(/^['"]|['"]$/g, ''));
+  const min = Number.isFinite(n) && n > 0 ? Math.min(60, Math.max(3, n)) : 15;
+  return min * 60_000;
 }

@@ -2,35 +2,47 @@
  * Agenda da franquia no Calendário do Kommo — o worker. A decisão (o que criar/atualizar/fechar) é de
  * `franquia-calendario.ts` (puro); aqui se busca, casa paciente → cartão e aplica.
  *
- * Liga por unidade em `FRANQUIA_CALENDARIO_SLUGS` (csv; `*` = todas; vazio = desligado), INDEPENDENTE de a
- * unidade estar em `FRANQUIA_SYNC_SLUGS`: este passo só cria/atualiza/conclui TAREFAS e nunca grava campo do
- * cartão. Sem `FRANQUIA_CALENDARIO_APLICAR` (csv, mesma forma) a unidade fica em modo seco: lê e registra no
- * log o que faria. Outras variáveis (`slug:valor`, csv): `FRANQUIA_CALENDARIO_RESPONSAVEL` (userId do Kommo),
- * `FRANQUIA_CALENDARIO_TIPO` (id do tipo de tarefa; sem ele procura o tipo "Consulta" da conta, e sem esse a unidade FICA PARADA).
- * `FRANQUIA_CALENDARIO_DURACAO_MIN` (padrão 60; 0 = não manda duração) e `FRANQUIA_CALENDARIO_REMARCADO`
- * (`manter` — padrão — ou `fechar`; ver o porquê em `franquia-calendario.ts`).
+ * LIGA POR UNIDADE NA TELA DE AUTOMAÇÕES (`franquia-calendario`: ligado = escreve, "só no papel" = lê e registra, desligado). Sem nada
+ * gravado na tela vale o `.env` de sempre, que continua mandando em Timbó: `FRANQUIA_CALENDARIO_SLUGS` (csv; `*` = todas; vazio =
+ * desligado), e só ESCREVE quem também está em `FRANQUIA_CALENDARIO_APLICAR`. INDEPENDENTE de a unidade estar no sincronizador: este
+ * passo só cria/atualiza/conclui TAREFAS e nunca grava campo nem etapa do cartão.
+ *
+ * O que muda de conta para conta mora na tabela `unit_calendario` (tipo da tarefa, dono, duração), com o `.env` antigo
+ * (`FRANQUIA_CALENDARIO_TIPO` / `_RESPONSAVEL` = `slug:valor`, csv) como reserva. Sem nenhum dos dois: tipo "Consulta" da conta (e sem
+ * esse a unidade FICA PARADA — não há tipo "padrão"), dono = o único usuário da clínica, 60 min.
+ * `FRANQUIA_CALENDARIO_DURACAO_MIN` (padrão 60; 0 = não manda duração), `FRANQUIA_CALENDARIO_REMARCADO` (`manter` — padrão — ou
+ * `fechar`; ver o porquê em `franquia-calendario.ts`) e `FRANQUIA_CALENDARIO_INTERVALO_MIN` (padrão 15) valem para todas.
+ *
+ * Kommo dividido (Petrópolis × Caxias): a dona usa o marcador de sempre, `[ag:N]`; a irmã, `[ag:caxias:N]`. Cada uma só vê as próprias
+ * tarefas e só põe a tarefa num cartão cujo «⌂ Unidade de atendimento» é o dela; senão a tarefa nasce solta, com nome e telefone.
  */
 import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { createKommoClient, type KommoClient, type KommoTarefa } from '../services/kommo.service.js';
 import { SpineService, somarDias, localParaUtcIso, type SpineSchedule } from '../services/spine.service.js';
-import { contaDoKommo, grupoDaUnidade } from './crm-compartilhado.js';
+import { contaDoKommo, grupoDaUnidade, podeMexer, valorDaUnidadeNoCartao, veredictoDoCartao, type GrupoDoCrm } from './crm-compartilhado.js';
+import { estadoGravado } from './automacoes-estado.js';
 import { normalizar } from './franquia-sync.js';
-import { ondeTemSync, resolverPaciente } from './franquia-sync-worker.js';
+import { ondeTemSync, resolverPaciente, type EntradaDoCacheDeLead } from './franquia-sync-worker.js';
 import {
-  DURACAO_PADRAO_SEG, epochDaConsulta, janelaDoCalendario, mapaPorSlug, modoDoCalendario, planejarCalendario, slugNaLista,
-  sufixoComCartao, sufixoDeTarefaSolta, textoDaTarefa, tipoPeloNome, type Acao, type ModoDoCalendario, type TarefaAberta,
+  DURACAO_PADRAO_SEG, configDaUnidade, epochDaConsulta, intervaloDoCalendarioMs, janelaDoCalendario, modoDoCalendario, planejarCalendario,
+  prefixoDaUnidade, slugNaLista, sufixoComCartao, sufixoDeTarefaSolta, textoDaTarefa, tipoPeloNome,
+  type Acao, type LinhaDeConfig, type ModoDoCalendario, type TarefaAberta,
 } from './franquia-calendario.js';
 
-const SWEEP_MS = 15 * 60_000;
+const ID_AUTOMACAO = 'franquia-calendario';
 const PRIMEIRA_MS = 120_000;
 const PAUSA_ENTRE_ESCRITAS_MS = 200;
 /** Tarefas NOVAS por varredura: a primeira de uma unidade grande se espalha por várias, em vez de bater no Kommo de uma vez. */
 const MAX_CRIAR_POR_VARREDURA = Number(process.env.FRANQUIA_CALENDARIO_MAX_CRIAR) || 80;
 const MAX_LINHAS_DE_LOG_SECO = 200;
-/** Tarefa criada há pouco não se cria de novo mesmo que a lista do Kommo ainda não a mostre. */
-const CRIADA_RECENTE_MS = 10 * 60_000;
+/**
+ * Tarefa criada há pouco não se cria de novo mesmo que a lista do Kommo ainda não a mostre. 30 min (eram 10): com a varredura a
+ * cada 3–15 min e várias unidades em fila, a lista do Kommo pode demorar a refletir o POST, e criar de novo duplica a agenda.
+ */
+export const CRIADA_RECENTE_MS = 30 * 60_000;
+const MAX_CACHE_DO_CALENDARIO = 5000;
 const TIPO_CACHE_MS = 6 * 60 * 60_000;
 
 export interface ResumoCalendario {
@@ -66,6 +78,12 @@ export interface ResumoCalendario {
 export interface DepsDoCalendario {
   kommo?: KommoClient;
   agora?: Date;
+  /** a linha de `unit_calendario` da unidade (`null` = sem linha); sem isto lê do banco */
+  lerConfig?: () => Promise<LinhaDeConfig | null>;
+  /** o grupo do Kommo dividido (`null` = Kommo só dela); sem isto lê do banco */
+  grupo?: GrupoDoCrm | null;
+  /** este cartão é desta unidade? só consultado em Kommo dividido; sem isto lê o cartão no Kommo */
+  cartaoEhDaUnidade?: (leadId: number) => Promise<boolean>;
   buscarAgenda?: (de: string, ate: string) => Promise<{ ok: boolean; erro?: string; agendamentos: SpineSchedule[]; truncada?: boolean }>;
   resolver?: (nome: string, idsSchedule: number[]) => Promise<{ leadId: number | null; confirmado: boolean; fone?: string | null }>;
   modo?: ModoDoCalendario;
@@ -74,6 +92,11 @@ export interface DepsDoCalendario {
 
 const tipoPorConta = new Map<string, { id: number; ate: number }>();
 const criadasRecentes = new Map<string, number>();
+/**
+ * O casamento paciente → cartão do calendário, SÓ dele. O do sincronizador (`cacheLead`) é lido para decidir o que gravar no cartão
+ * e vale 6 h: o calendário casa só pelo nome, que é mais fraco, e não pode escrever lá.
+ */
+const cacheDoCalendario = new Map<string, EntradaDoCacheDeLead>();
 /** Última atualização aplicada por agendamento: se o Kommo não "guardou" o que mandamos, não regravamos para sempre. */
 const ultimaAtualizacao = new Map<string, { assinatura: string; visto: string }>();
 
@@ -81,16 +104,16 @@ export function _limparMemoriaDoCalendario(): void {
   tipoPorConta.clear();
   criadasRecentes.clear();
   ultimaAtualizacao.clear();
+  cacheDoCalendario.clear();
 }
 
 /**
  * O tipo das tarefas da unidade: o configurado, ou o "Consulta" da conta. Sem nenhum dos dois, `null` e a unidade FICA PARADA
  * nesta varredura — não há tipo "padrão". A lista de tarefas abertas é filtrada por tipo, então trocar o tipo no meio do caminho
- * (cair no 1 por falta de "Consulta" e depois alguém criar o tipo, ou mudar `FRANQUIA_CALENDARIO_TIPO`) esconde as tarefas
+ * (cair no 1 por falta de "Consulta" e depois alguém criar o tipo, ou mudar o tipo configurado da unidade) esconde as tarefas
  * antigas e duplica a agenda inteira; e o tipo 1 é o Follow-up dos robôs, uma lista enorme que não é nossa.
  */
-async function tipoDeTarefa(unit: Pick<Unit, 'slug'>, kommo: KommoClient, conta: string): Promise<number | null> {
-  const configurado = mapaPorSlug(process.env.FRANQUIA_CALENDARIO_TIPO).get(unit.slug);
+async function tipoDeTarefa(unit: Pick<Unit, 'slug'>, kommo: KommoClient, conta: string, configurado: number | null): Promise<number | null> {
   if (configurado) return configurado;
   const hit = tipoPorConta.get(conta);
   if (hit && hit.ate > Date.now()) return hit.id;
@@ -102,7 +125,7 @@ async function tipoDeTarefa(unit: Pick<Unit, 'slug'>, kommo: KommoClient, conta:
     return null;
   }
   if (id === null) {
-    logger.warn({ unit: unit.slug }, 'franquia-calendario: a conta não tem o tipo de tarefa "Consulta" e FRANQUIA_CALENDARIO_TIPO não está configurado — unidade parada (crie o tipo ou configure slug:id)');
+    logger.warn({ unit: unit.slug }, 'franquia-calendario: a conta não tem o tipo de tarefa "Consulta" e a unidade não tem tipo configurado (unit_calendario / FRANQUIA_CALENDARIO_TIPO) — unidade parada (crie o tipo "Consulta" na conta ou configure o id)');
     return null;
   }
   tipoPorConta.set(conta, { id, ate: Date.now() + TIPO_CACHE_MS });
@@ -120,12 +143,14 @@ function podarMemoria(): void {
   const agora = Date.now();
   for (const [k, em] of criadasRecentes) if (agora - em > CRIADA_RECENTE_MS) criadasRecentes.delete(k);
   if (ultimaAtualizacao.size > 5000) ultimaAtualizacao.clear();
+  if (cacheDoCalendario.size > MAX_CACHE_DO_CALENDARIO) for (const [k, v] of cacheDoCalendario) if (v.expiraEm <= agora) cacheDoCalendario.delete(k);
+  if (cacheDoCalendario.size > MAX_CACHE_DO_CALENDARIO) cacheDoCalendario.clear();
 }
 
 const dormir = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export async function varrerCalendario(unit: Unit, deps: DepsDoCalendario = {}): Promise<ResumoCalendario> {
-  const modo = deps.modo ?? modoDoCalendario(unit.slug);
+  const modo = deps.modo ?? modoDoCalendario(unit.slug, undefined, estadoGravado(unit.slug, ID_AUTOMACAO));
   const agora = deps.agora ?? new Date();
   const resumo: ResumoCalendario = {
     unit: unit.slug, em: agora.toISOString(), modo, agendamentos: 0, tarefasAbertas: 0, concluidasLidas: 0, criadas: 0, atualizadas: 0, fechadas: 0,
@@ -137,6 +162,28 @@ export async function varrerCalendario(unit: Unit, deps: DepsDoCalendario = {}):
   const tz = unit.spineTimezone || 'America/Sao_Paulo';
   const kommo = deps.kommo ?? createKommoClient(await contaDoKommo(unit));
   const pausa = deps.pausaMs ?? PAUSA_ENTRE_ESCRITAS_MS;
+
+  // Kommo dividido: o marcador desta unidade (a irmã tem prefixo) e o rótulo que diz quais cartões são dela
+  const grupo = deps.grupo !== undefined ? deps.grupo : await grupoDaUnidade(unit.id);
+  let prefixo = '';
+  if (grupo) {
+    const membro = grupo.membros.find((m) => m.unitId === unit.id);
+    prefixo = unit.id === grupo.contaUnitId ? '' : prefixoDaUnidade(membro?.rotulo);
+    if (!membro || (unit.id !== grupo.contaUnitId && !prefixo)) {
+      logger.warn({ unit: unit.slug }, 'franquia-calendario: unidade em conta dividida sem rótulo próprio — não sei quais cartões são dela, pulei');
+      resumo.erros++;
+      return resumo;
+    }
+  }
+  const cartaoEhDaUnidade = deps.cartaoEhDaUnidade ?? (async (leadId: number) => {
+    if (!grupo) return true;
+    try {
+      return podeMexer(veredictoDoCartao(grupo, unit.id, valorDaUnidadeNoCartao(await kommo.getLead(leadId))));
+    } catch {
+      return false; // não consegui ler o cartão: não ponho a tarefa nele (fica solta, com nome e telefone)
+    }
+  });
+  const config = configDaUnidade(unit.slug, deps.lerConfig ? await deps.lerConfig() : await prisma.unitCalendario.findUnique({ where: { unitId: unit.id } }));
 
   // 1. a agenda da franquia. Sem ela não se decide nada (nem fechar: agenda vazia por pane não é agenda vazia).
   const { de, ate } = janelaDoCalendario(tz, agora);
@@ -155,7 +202,7 @@ export async function varrerCalendario(unit: Unit, deps: DepsDoCalendario = {}):
 
   // 2. as tarefas abertas do Kommo (a fonte da verdade da idempotência)
   const conta = kommo.subdomain;
-  const taskTypeId = await tipoDeTarefa(unit, kommo, conta);
+  const taskTypeId = await tipoDeTarefa(unit, kommo, conta, config.tipo);
   if (taskTypeId === null) {
     resumo.erros++;
     return resumo;
@@ -197,15 +244,15 @@ export async function varrerCalendario(unit: Unit, deps: DepsDoCalendario = {}):
     tz,
     janela: { deEpoch, ateEpoch },
     remarcado: process.env.FRANQUIA_CALENDARIO_REMARCADO === 'fechar' ? 'fechar' : 'manter',
+    prefixo,
   });
   resumo.passados = plano.passados;
   resumo.jaConcluidas = plano.jaConcluidas;
   resumo.ignorados = plano.ignorados;
 
-  const responsavel = mapaPorSlug(process.env.FRANQUIA_CALENDARIO_RESPONSAVEL).get(unit.slug);
-  if (!responsavel) logger.warn({ unit: unit.slug }, 'franquia-calendario: FRANQUIA_CALENDARIO_RESPONSAVEL sem esta unidade — a tarefa nasce com o dono do token');
-  const minutos = process.env.FRANQUIA_CALENDARIO_DURACAO_MIN;
-  const durationSec = minutos !== undefined && minutos !== '' ? Math.max(0, Number(minutos) || 0) * 60 : DURACAO_PADRAO_SEG;
+  // dono configurado = esse, sem troca. Sem dono: o `createTask` aplica a regra de sempre (o único usuário da clínica, nunca o login da consultoria)
+  const responsavel = config.responsavel ?? undefined;
+  const durationSec = config.duracaoMin !== null ? config.duracaoMin * 60 : DURACAO_PADRAO_SEG;
 
   const idsPorPaciente = new Map<string, number[]>();
   for (const s of ag.agendamentos) {
@@ -272,20 +319,22 @@ export async function varrerCalendario(unit: Unit, deps: DepsDoCalendario = {}):
     }
     criadasAgora++;
     const nome = a.item.clientName ?? '';
+    const ids = idsPorPaciente.get(normalizar(nome)) ?? [a.idSchedule];
     const r = deps.resolver
-      ? await deps.resolver(nome, idsPorPaciente.get(normalizar(nome)) ?? [a.idSchedule])
-      : await resolverPaciente(unit, kommo, nome, null, idsPorPaciente.get(normalizar(nome)) ?? [a.idSchedule]).then((x) => ({ leadId: x.leadId, confirmado: x.leadConfirmado, fone: x.fone ?? null }));
-    // Só cartão PROVADO recebe a tarefa: telefone que casa com vários cartões (mãe e filha dividem o WhatsApp) é palpite.
-    const leadId = r.leadId !== null && r.confirmado ? r.leadId : null;
+      ? await deps.resolver(nome, ids)
+      : await resolverPaciente(unit, kommo, nome, null, ids, cacheDoCalendario).then((x) => ({ leadId: x.leadId, confirmado: x.leadConfirmado, fone: x.fone ?? null }));
+    // Só cartão PROVADO recebe a tarefa: telefone que casa com vários cartões (mãe e filha dividem o WhatsApp) é palpite. E, em Kommo
+    // dividido, só o cartão que o campo «⌂ Unidade de atendimento» diz ser desta unidade.
+    const leadId = r.leadId !== null && r.confirmado && (await cartaoEhDaUnidade(r.leadId)) ? r.leadId : null;
     // O nome do paciente da franquia vai em TODA tarefa: dois homônimos podem cair no mesmo cartão, e assim a recepção vê quem é.
     // O telefone vem do próprio `resolverPaciente` (já cacheado); nada de segunda busca na franquia.
-    const texto = textoDaTarefa(a.item, tz, leadId === null ? sufixoDeTarefaSolta(nome, r.fone ?? null) : sufixoComCartao(nome));
+    const texto = textoDaTarefa(a.item, tz, leadId === null ? sufixoDeTarefaSolta(nome, r.fone ?? null) : sufixoComCartao(nome), prefixo);
     dizer({ idSchedule: a.idSchedule, leadId, solta: leadId === null, texto, completeTill: a.completeTill }, 'criaria');
     if (aplicar) {
       // marcada ANTES do POST: num timeout o Kommo pode ter gravado a tarefa, e a lista da próxima varredura pode ainda não mostrá-la
       criadasRecentes.set(`${unit.id}:${a.idSchedule}`, Date.now());
       const feita = await kommo.createTask({
-        leadId, text: texto, completeAt: a.completeTill, responsibleUserId: responsavel, taskTypeId, manterResponsavel: true,
+        leadId, text: texto, completeAt: a.completeTill, responsibleUserId: responsavel, taskTypeId, manterResponsavel: responsavel !== undefined,
         durationSec: durationSec || undefined,
       });
       if (!feita) {
@@ -318,16 +367,39 @@ let timer: NodeJS.Timeout | null = null;
 let primeira: NodeJS.Timeout | null = null;
 let rodando = false;
 
+/** As unidades que rodam agora: com franquia e Kommo, ATIVAS, e ligadas (ou em "só no papel") na tela ou no `.env`. */
 async function unidadesDoCalendario(): Promise<Unit[]> {
+  const units = await prisma.unit.findMany({ where: { ...(await ondeTemSync()), isActive: true } });
+  const doCalendario = units.filter((u) => modoDoCalendario(u.slug, undefined, estadoGravado(u.slug, ID_AUTOMACAO)) !== 'desligado');
+  // slug do .env escrito errado, ou unidade sem token da franquia/Kommo: sem este aviso o passo "liga" e não faz nada, em silêncio
   const raw = process.env.FRANQUIA_CALENDARIO_SLUGS;
-  if (!raw || !raw.replace(/['"\s]/g, '')) return [];
-  const units = await prisma.unit.findMany({ where: await ondeTemSync() });
-  const doCalendario = units.filter((u) => slugNaLista(u.slug, raw));
-  // slug escrito errado, ou unidade sem token da franquia/Kommo: sem este aviso o passo "liga" e não faz nada, em silêncio
-  const achados = new Set(doCalendario.map((u) => u.slug));
-  const faltam = raw.replace(/['"]/g, '').split(',').map((s) => s.trim()).filter((s) => s && s !== '*' && !achados.has(s));
-  if (faltam.length) logger.warn({ faltam }, 'franquia-calendario: slug da lista sem unidade com franquia e Kommo configurados');
+  if (raw && raw.replace(/['"\s]/g, '')) {
+    const achados = new Set(units.map((u) => u.slug));
+    const faltam = raw.replace(/['"]/g, '').split(',').map((s) => s.trim()).filter((s) => s && s !== '*' && !achados.has(s));
+    if (faltam.length) logger.warn({ faltam }, 'franquia-calendario: slug da lista sem unidade ativa com franquia e Kommo configurados');
+  }
   return doCalendario;
+}
+
+/**
+ * Roda `fn` em cada item, com até `paralelo` FAIXAS ao mesmo tempo; dentro de uma faixa é um de cada vez. Uma faixa é uma conta do Kommo
+ * (Petrópolis e Caxias dividem a conta e o limite de requisições dela, então ficam na mesma faixa).
+ */
+export async function rodarEmFaixas<T>(faixas: T[][], paralelo: number, fn: (item: T) => Promise<void>): Promise<void> {
+  let proxima = 0;
+  const trabalhador = async () => {
+    while (proxima < faixas.length) {
+      const faixa = faixas[proxima++];
+      for (const item of faixa) await fn(item);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(paralelo, faixas.length)) }, trabalhador));
+}
+
+/** Quantas contas do Kommo a rodada atende ao mesmo tempo: `FRANQUIA_CALENDARIO_PARALELO`, padrão 3, de 1 a 6 (o teto do sincronizador). */
+export function paraleloDoCalendario(raw: string | undefined = process.env.FRANQUIA_CALENDARIO_PARALELO): number {
+  const n = Math.floor(Number((raw ?? '').replace(/^['"]|['"]$/g, '')));
+  return Number.isFinite(n) && n > 0 ? Math.min(6, n) : 3;
 }
 
 async function varrerTodas(): Promise<void> {
@@ -336,33 +408,43 @@ async function varrerTodas(): Promise<void> {
     return;
   }
   rodando = true;
+  const inicio = Date.now();
+  let unidades = 0;
   try {
+    const faixas = new Map<string, Unit[]>();
     for (const unit of await unidadesDoCalendario()) {
+      unidades++;
+      const grupo = await grupoDaUnidade(unit.id);
+      const chave = grupo ? grupo.contaUnitId : unit.id;
+      faixas.set(chave, [...(faixas.get(chave) ?? []), unit]);
+    }
+    await rodarEmFaixas([...faixas.values()], paraleloDoCalendario(), async (unit) => {
       const t0 = Date.now();
       try {
-        // Kommo dividido entre unidades (Petrópolis + Caxias): o marcador [ag:N] é por unidade e as duas dividem a lista
-        // de tarefas — ids iguais se confundiriam. Fora desta versão: recusa em vez de arriscar.
-        if (await grupoDaUnidade(unit.id)) {
-          logger.warn({ unit: unit.slug }, 'franquia-calendario: unidade em conta do Kommo dividida — não suportada, pulei');
-          continue;
-        }
         const r = await varrerCalendario(unit);
         logger.info({ ...r, ms: Date.now() - t0 }, 'franquia-calendario: varredura concluída');
       } catch (err) {
         logger.error({ err, unit: unit.slug }, 'franquia-calendario: varredura falhou');
       }
-    }
+    });
+  } catch (err) {
+    logger.error({ err }, 'franquia-calendario: a rodada falhou antes de varrer');
   } finally {
     rodando = false;
+    // a duração da rodada inteira é o que diz se o intervalo cabe: rodada maior que o intervalo descarta a batida seguinte
+    if (unidades > 0) logger.info({ unidades, ms: Date.now() - inicio, intervaloMs: intervaloDoCalendarioMs(), paralelo: paraleloDoCalendario() }, 'franquia-calendario: rodada concluída');
   }
 }
 
 export function startFranquiaCalendarioWorker(): void {
   if (timer || primeira) return;
   const slugs = process.env.FRANQUIA_CALENDARIO_SLUGS;
-  logger.info({ slugs: slugs || '(vazio = desligado)', aplicar: process.env.FRANQUIA_CALENDARIO_APLICAR || '(vazio = seco)' }, 'franquia-calendario: worker iniciado');
+  logger.info(
+    { slugs: slugs || '(vazio = só o que a tela ligar)', aplicar: process.env.FRANQUIA_CALENDARIO_APLICAR || '(vazio = seco)', intervaloMin: intervaloDoCalendarioMs() / 60_000 },
+    'franquia-calendario: worker iniciado',
+  );
   primeira = setTimeout(() => void varrerTodas(), PRIMEIRA_MS);
-  timer = setInterval(() => void varrerTodas(), SWEEP_MS);
+  timer = setInterval(() => void varrerTodas(), intervaloDoCalendarioMs());
 }
 
 export function stopFranquiaCalendarioWorker(): void {

@@ -323,6 +323,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/franquia-sync-worker.ts',
   },
   {
+    id: 'franquia-calendario',
+    chave: 'FRANQUIA_CALENDARIO_SLUGS',
+    nome: 'Agenda da franquia no Calendário do Kommo',
+    oQueFaz:
+      'Cada agendamento da franquia vira UMA tarefa no horário da consulta, no Calendário do Kommo (/todo/calendar), e acompanha a franquia: remarcou, a tarefa muda de hora; atendeu, faltou ou desmarcou, a tarefa é concluída com o resultado.',
+    pegadinha:
+      'Só mexe em TAREFAS (nunca em campo nem em etapa do cartão) e nunca apaga: fechar é concluir com resultado. Em "Só no papel" lê a franquia e o Kommo e registra o que criaria, sem escrever. A unidade só roda se a conta do Kommo tiver o tipo de tarefa "Consulta" (ou um tipo escolhido em unit_calendario) — sem ele fica parada e o log avisa. TROCAR O TIPO depois de criar tarefas duplica a agenda inteira. Numa conta dividida (Petrópolis × Caxias) cada unidade usa o próprio marcador e só põe a tarefa no cartão que é dela. Roda a cada 15 minutos (FRANQUIA_CALENDARIO_INTERVALO_MIN muda), então a tarefa aparece no Kommo em até esse tempo depois de marcar na franquia.',
+    risco: 'escreve-campo',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/franquia-calendario-worker.ts',
+  },
+  {
     id: 'preenche-campos',
     chave: 'PREENCHE_CAMPOS_SLUGS',
     nome: 'Preenche o que a IA deixou vazio',

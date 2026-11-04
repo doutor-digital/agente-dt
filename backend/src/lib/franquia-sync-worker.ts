@@ -272,7 +272,8 @@ export function relogioDoSync(slug: string): RelogioSync {
  * `idsClient`: quem a busca mostrou ser este paciente na franquia (vazio = não se sabe) — é o que permite recusar
  * o cartão que já pertence a OUTRO paciente (`cartaoDeOutroPaciente`).
  */
-const cacheLead = new Map<string, { leadId: number | null; idsClient: number[]; leadConfirmado: boolean; expiraEm: number; fone?: string | null }>();
+export type EntradaDoCacheDeLead = { leadId: number | null; idsClient: number[]; leadConfirmado: boolean; expiraEm: number; fone?: string | null };
+const cacheLead = new Map<string, EntradaDoCacheDeLead>();
 
 
 type CampoInfo = Pick<KommoLeadCustomField, 'id' | 'type' | 'enums'>;
@@ -395,9 +396,15 @@ export async function resolverLead(unit: Unit, kommo: KommoClient, nome: string,
 /** O cartão do paciente e quem ele é na franquia (`idsClient`, vazio quando o caminho não diz). */
 export async function resolverPaciente(
   unit: Unit, kommo: KommoClient, nome: string, idClient: number | null, idsSchedule: number[],
+  /**
+   * Onde lembrar a resposta. O padrão é o cache do sincronizador (`cacheLead`, que a marcação e `pacienteDaAgenda` também leem).
+   * O calendário passa o SEU: ele casa só pelo nome (sem `idClient`), e um casamento mais fraco guardado no cache do sincronizador
+   * seria lido por ele como se fosse o dele, por 6 h.
+   */
+  cache: Map<string, EntradaDoCacheDeLead> = cacheLead,
 ): Promise<{ leadId: number | null; idsClient: number[]; leadConfirmado: boolean; /** o telefone que a busca achou (a tarefa solta do calendário o escreve no texto) */ fone?: string | null }> {
   const chaveCache = `${unit.id}:${normalizar(nome)}`;
-  const hit = cacheLead.get(chaveCache);
+  const hit = cache.get(chaveCache);
   if (hit && hit.expiraEm > Date.now()) return hit;
 
   let leadId: number | null = null;
@@ -430,7 +437,7 @@ export async function resolverPaciente(
     }
   }
   const out = { leadId, idsClient, leadConfirmado, fone, expiraEm: Date.now() + CACHE_LEAD_MS };
-  cacheLead.set(chaveCache, out);
+  cache.set(chaveCache, out);
   return out;
 }
 
