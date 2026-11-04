@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -955,7 +956,7 @@ test('fluxo pelas ferramentas: pedir → (a pessoa sobe) → ver → link tempor
 
     const visto = await s.chamar('arquivo_ver_envio', { id });
     assert.equal(visto.json!.estado, 'recebido');
-    assert.deepEqual(visto.json!.arquivo, { nome: 'Contrato-Maria.pdf', tipo: 'application/pdf', tamanhoBytes: PDF.length, recebidoEm: visto.json!.arquivo.recebidoEm });
+    assert.deepEqual(visto.json!.arquivo, { nome: 'Contrato-Maria.pdf', tipo: 'application/pdf', tamanhoBytes: PDF.length, sha256: createHash('sha256').update(PDF).digest('hex'), recebidoEm: visto.json!.arquivo.recebidoEm });
     assert.equal(visto.texto.includes('%PDF'), false, 'sem conteúdo');
 
     const outro = await sessao(c, OUTRO, new Set([OUTRO]));

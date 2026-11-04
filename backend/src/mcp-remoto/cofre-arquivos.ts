@@ -21,10 +21,12 @@
  * O estado fica na memória (processo único: `replicas: 1`). Reinício = os envios em curso somem e a pessoa pede de novo.
  */
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
+import { createReadStream, createWriteStream } from 'node:fs';
 import { chmod, mkdir, open, readdir, readFile, stat, unlink, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
 
-export type TipoDeArquivo = 'pdf' | 'doc' | 'docx' | 'xlsx' | 'jpg' | 'png' | 'txt';
+export type TipoDeArquivo = 'pdf' | 'doc' | 'docx' | 'xlsx' | 'jpg' | 'png' | 'txt' | 'mp4' | 'mov' | 'm4a' | 'mp3' | 'wav';
 
 export const TIPOS: Record<TipoDeArquivo, { ext: string; mime: string; legivel: string }> = {
   pdf: { ext: 'pdf', mime: 'application/pdf', legivel: 'PDF' },
@@ -34,17 +36,33 @@ export const TIPOS: Record<TipoDeArquivo, { ext: string; mime: string; legivel: 
   jpg: { ext: 'jpg', mime: 'image/jpeg', legivel: 'imagem JPEG' },
   png: { ext: 'png', mime: 'image/png', legivel: 'imagem PNG' },
   txt: { ext: 'txt', mime: 'text/plain; charset=utf-8', legivel: 'texto (.txt)' },
+  mp4: { ext: 'mp4', mime: 'video/mp4', legivel: 'vídeo MP4' },
+  mov: { ext: 'mov', mime: 'video/quicktime', legivel: 'vídeo MOV' },
+  m4a: { ext: 'm4a', mime: 'audio/mp4', legivel: 'áudio M4A' },
+  mp3: { ext: 'mp3', mime: 'audio/mpeg', legivel: 'áudio MP3' },
+  wav: { ext: 'wav', mime: 'audio/wav', legivel: 'áudio WAV' },
 };
 
+/** vídeo e áudio: só entram num envio que PEDE esses tipos em `tipos` (transcrição de áudio de câmera) e têm um teto de tamanho próprio */
+export const TIPOS_DE_MIDIA: readonly TipoDeArquivo[] = ['mp4', 'mov', 'm4a', 'mp3', 'wav'];
+const ehMidia = (t: TipoDeArquivo) => TIPOS_DE_MIDIA.includes(t);
+/** .mp4, .mov e .m4a são o mesmo contêiner (ISO/QuickTime): a marca interna varia de câmera para câmera, então a extensão entre eles não é conferida */
+const FAMILIA_ISO: readonly TipoDeArquivo[] = ['mp4', 'mov', 'm4a'];
+
 /** extensão que a pessoa pode ter escrito → o tipo que o conteúdo tem de ter */
-const TIPO_DA_EXTENSAO: Record<string, TipoDeArquivo> = { pdf: 'pdf', doc: 'doc', docx: 'docx', xlsx: 'xlsx', jpg: 'jpg', jpeg: 'jpg', png: 'png', txt: 'txt' };
+const TIPO_DA_EXTENSAO: Record<string, TipoDeArquivo> = {
+  pdf: 'pdf', doc: 'doc', docx: 'docx', xlsx: 'xlsx', jpg: 'jpg', jpeg: 'jpg', png: 'png', txt: 'txt',
+  mp4: 'mp4', mov: 'mov', m4a: 'm4a', mp3: 'mp3', wav: 'wav',
+};
 const TODAS_AS_EXTENSOES = Object.keys(TIPO_DA_EXTENSAO);
-/** o que o envio COMUM aceita (a planilha .xlsx só entra quando o pedido a lista em `tipos`) */
-export const EXTENSOES_ACEITAS = TODAS_AS_EXTENSOES.filter((e) => e !== 'xlsx');
+/** o que o envio COMUM aceita (a planilha .xlsx e vídeo/áudio só entram quando o pedido os lista em `tipos`) */
+export const EXTENSOES_ACEITAS = TODAS_AS_EXTENSOES.filter((e) => e !== 'xlsx' && !ehMidia(TIPO_DA_EXTENSAO[e]!));
 
 export const LIMITES_PADRAO = {
   /** tamanho máximo do arquivo */
   tamanhoMaxBytes: 20 * 1024 * 1024,
+  /** teto de um envio que pede SÓ vídeo/áudio (transcrição de câmera); os outros tipos não ganham nada com isto */
+  tamanhoMaxMidiaBytes: 80 * 1024 * 1024,
   /** quanto tempo o link de envio vale */
   envioValeMs: 30 * 60_000,
   /** teto de segurança: nada fica mais que isso, mesmo que ninguém peça link */
@@ -123,7 +141,31 @@ export function detectarTipo(b: Buffer): TipoDeArquivo | null {
     if (palavra && !planilha) return 'docx';
     return planilha && !palavra ? 'xlsx' : null;
   }
+  const midia = detectarMidia(b);
+  if (midia) return midia;
   if (b.length > 0 && ehTexto(b) && !comecaComoMarcacaoOuScript(b)) return 'txt';
+  return null;
+}
+
+/**
+ * Vídeo/áudio pelos bytes iniciais (não é antivírus nem prova que toca; quem decodifica é o ffmpeg):
+ *  - contêiner ISO/QuickTime: "ftyp" no byte 4 (marca "qt  " = mov, "M4A "/"M4B " = m4a, o resto = mp4) ou, em .mov antigo, um primeiro átomo moov/mdat/wide;
+ *  - WAV: "RIFF" + "WAVE";  MP3: "ID3" ou o quadro de sincronia (FF Ex, com versão e camada válidas).
+ */
+function detectarMidia(b: Buffer): TipoDeArquivo | null {
+  if (b.length >= 12 && b.toString('latin1', 4, 8) === 'ftyp') {
+    const marca = b.toString('latin1', 8, 12);
+    if (marca === 'qt  ') return 'mov';
+    return marca === 'M4A ' || marca === 'M4B ' ? 'm4a' : 'mp4';
+  }
+  if (b.length >= 12 && ['moov', 'mdat', 'wide'].includes(b.toString('latin1', 4, 8))) {
+    const tam = b.readUInt32BE(0); // tamanho do primeiro átomo: 0 (até o fim), 1 (estendido) ou 8..tamanho do arquivo; texto qualquer não cai aqui
+    if (tam === 0 || tam === 1 || (tam >= 8 && tam <= b.length)) return 'mov';
+  }
+  if (b.length >= 12 && b.toString('latin1', 0, 4) === 'RIFF' && b.toString('latin1', 8, 12) === 'WAVE') return 'wav';
+  // cabeçalho ID3v2: "ID3", versão 2 a 4, revisão < FF, tamanho em 4 bytes de 7 bits ("ID3456..." de um texto não passa)
+  if (comeca(b, 0x49, 0x44, 0x33) && b.length >= 10 && b[3]! >= 2 && b[3]! <= 4 && b[4]! < 0xff && [6, 7, 8, 9].every((i) => b[i]! < 0x80)) return 'mp3';
+  if (b.length >= 4 && b[0] === 0xff && (b[1]! & 0xe0) === 0xe0 && (b[1]! & 0x18) !== 0x08 && (b[1]! & 0x06) !== 0) return 'mp3';
   return null;
 }
 
@@ -192,7 +234,8 @@ export function validarArquivo(nomeOriginal: string | undefined, conteudo: Buffe
   }
   // "Contrato.final" com PDF de verdade dentro: manda o conteúdo (a extensão guardada é a do tipo detectado). Só uma extensão
   // CONHECIDA que não combina com o conteúdo é recusada ("contrato.pdf" que é texto/executável).
-  if (ext && extConhecida && TIPO_DA_EXTENSAO[ext] !== tipo) {
+  const mesmaFamilia = FAMILIA_ISO.includes(tipo) && FAMILIA_ISO.includes(TIPO_DA_EXTENSAO[ext]!);
+  if (ext && extConhecida && TIPO_DA_EXTENSAO[ext] !== tipo && !mesmaFamilia) {
     throw new ErroDeCofre('tipo', `O arquivo diz ser .${ext}, mas o conteúdo é ${TIPOS[tipo].legivel}. Salve de novo no formato certo.`, 415);
   }
   return { tipo, nome: nomeSeguro(ultimo, tipo) };
@@ -246,7 +289,7 @@ interface Envio {
   recusas: number;
   usadoEm?: number;
   apagadoEm?: number;
-  arquivo?: { nome: string; tipo: TipoDeArquivo; tamanho: number; recebidoEm: number; chave: Buffer; caminho: string };
+  arquivo?: { nome: string; tipo: TipoDeArquivo; tamanho: number; recebidoEm: number; chave: Buffer; caminho: string; sha256: string };
   links: Link[];
 }
 
@@ -271,7 +314,7 @@ export interface VisaoDoEnvio {
   finalidade: string;
   envioValeAte: number | null;
   apagaAte: number;
-  arquivo?: { nome: string; tipo: string; tamanhoBytes: number; recebidoEm: number };
+  arquivo?: { nome: string; tipo: string; tamanhoBytes: number; recebidoEm: number; sha256: string };
   links: Array<{ expiraEm: number; baixadas: number; maximo: number; ativo: boolean }>;
 }
 
@@ -336,7 +379,10 @@ export class CofreDeArquivos {
     const token = novoToken();
     const tokenHash = sha256(token);
     const validoMs = Math.min(Math.max(a.validoMs ?? this.limites.envioValeMs, 60_000), this.limites.envioValeMs);
-    const tamanhoMax = Math.min(a.tamanhoMaxBytes ?? this.limites.tamanhoMaxBytes, this.limites.tamanhoMaxBytes);
+    // o teto maior vale só para o envio que pede EXCLUSIVAMENTE vídeo/áudio; qualquer outro tipo na lista volta ao teto comum
+    const soMidia = Boolean(a.tipos && a.tipos.length > 0 && a.tipos.every(ehMidia));
+    const teto = soMidia ? this.limites.tamanhoMaxMidiaBytes : this.limites.tamanhoMaxBytes;
+    const tamanhoMax = Math.min(a.tamanhoMaxBytes ?? teto, teto);
     this.envios.set(id, {
       id,
       dono: a.userId,
@@ -381,8 +427,10 @@ export class CofreDeArquivos {
     const e = this.envioDoToken(token);
     if (e.estado === 'enviando') throw new ErroDeCofre('ocupado', 'Já há um envio em andamento neste link.', 409);
     // o teto conta o que está guardado MAIS o que os envios em andamento ainda podem trazer (cada um até o tamanho máximo)
-    const emAndamento = [...this.envios.values()].filter((x) => x.estado === 'enviando').length;
-    if (this.bytesGuardados() + (emAndamento + 1) * this.limites.tamanhoMaxBytes > this.limites.espacoTotalMaxBytes) throw new ErroDeCofre('cheio', 'O cofre está cheio no momento. Tente de novo em alguns minutos.', 503);
+    // (cada envio reserva o seu próprio máximo, nunca menos que o teto comum: vídeo de 80 MB não passa despercebido)
+    const reservaDe = (x: Envio) => Math.max(x.tamanhoMax, this.limites.tamanhoMaxBytes);
+    const reservado = [...this.envios.values()].filter((x) => x.estado === 'enviando').reduce((n, x) => n + reservaDe(x), 0);
+    if (this.bytesGuardados() + reservado + reservaDe(e) > this.limites.espacoTotalMaxBytes) throw new ErroDeCofre('cheio', 'O cofre está cheio no momento. Tente de novo em alguns minutos.', 503);
     e.estado = 'enviando';
     return { envioId: e.id, tamanhoMaxBytes: e.tamanhoMax };
   }
@@ -413,6 +461,9 @@ export class CofreDeArquivos {
       }
       // planilha (xlsx) só entra quando o pedido a lista em `tipos`; o envio comum não a aceita
       if (!e.tipos && tipo === 'xlsx') throw new ErroDeCofre('tipo', 'Arquivo Excel (.xlsx) não é aceito neste envio. Aceitamos: PDF, Word, JPG, PNG ou texto.', 415);
+      // vídeo/áudio também: só no envio que o pede (arquivo_pedir_upload com midia=true)
+      if (!e.tipos && ehMidia(tipo)) throw new ErroDeCofre('tipo', `Vídeo e áudio não são aceitos neste envio (este é ${TIPOS[tipo].legivel}). Se é para transcrever, peça o link de novo com arquivo_pedir_upload usando midia=true.`, 415);
+      const sha256Hex = createHash('sha256').update(conteudo).digest('hex');
       await this.garantirPasta();
       if (this.encerrado) throw new ErroDeCofre('estado', 'O sistema está sendo atualizado. Peça um novo link no Claude em um minuto.', 503);
       const chave = randomBytes(32);
@@ -439,7 +490,7 @@ export class CofreDeArquivos {
         await unlink(caminho).catch(() => undefined);
         throw new ErroDeCofre('estado', 'Este envio não está mais aberto.', 409);
       }
-      e.arquivo = { nome, tipo, tamanho: conteudo.length, recebidoEm: this.agora(), chave, caminho };
+      e.arquivo = { nome, tipo, tamanho: conteudo.length, recebidoEm: this.agora(), chave, caminho, sha256: sha256Hex };
       e.estado = 'recebido';
       e.usadoEm = this.agora();
       this.auditar({ evento: 'upload_recebido', envio: e.id, userId: e.dono, detalhe: { tipo, tamanho: conteudo.length } }, req);
@@ -471,7 +522,7 @@ export class CofreDeArquivos {
       finalidade: e.finalidade,
       envioValeAte: e.estado === 'aguardando' || e.estado === 'enviando' ? e.venceEm : null,
       apagaAte: e.apagarEm,
-      ...(e.arquivo && e.estado !== 'apagado' ? { arquivo: { nome: e.arquivo.nome, tipo: TIPOS[e.arquivo.tipo].mime, tamanhoBytes: e.arquivo.tamanho, recebidoEm: e.arquivo.recebidoEm } } : {}),
+      ...(e.arquivo && e.estado !== 'apagado' ? { arquivo: { nome: e.arquivo.nome, tipo: TIPOS[e.arquivo.tipo].mime, tamanhoBytes: e.arquivo.tamanho, recebidoEm: e.arquivo.recebidoEm, sha256: e.arquivo.sha256 } } : {}),
       links: e.links.map((l) => ({ expiraEm: l.expiraEm, baixadas: l.baixadas, maximo: l.max, ativo: t < l.expiraEm && l.baixadas < l.max })),
     };
   }
@@ -505,6 +556,53 @@ export class CofreDeArquivos {
   /** O destino que o pedido guardou, sem tocar no arquivo (para a ferramenta conferir antes de gastar). */
   destinoDe(userId: string, id: string): Readonly<Record<string, string>> | undefined {
     return this.doDono(userId, id).destino;
+  }
+
+  /**
+   * Decifra o arquivo para um caminho em disco, em fluxo (sem trazer o arquivo inteiro para a memória: vídeo de 80 MB) e conferindo o SHA-256
+   * guardado na chegada. Quem pediu apaga o destino depois. Uma exportação por vez por envio. Não apaga o envio.
+   */
+  async exportarParaArquivo(userId: string, id: string, destino: string): Promise<{ nome: string; tipo: TipoDeArquivo; tamanho: number; sha256: string; destinoDoEnvio: Readonly<Record<string, string>> | undefined }> {
+    const e = this.doDono(userId, id);
+    if (e.estado === 'apagado') throw new ErroDeCofre('estado', 'O arquivo já foi apagado. Peça um novo envio.', 409);
+    if (e.estado !== 'recebido' || !e.arquivo) throw new ErroDeCofre('estado', 'O arquivo ainda não chegou: peça à pessoa que abra o link de envio e envie o arquivo.', 409);
+    if (e.emUso) throw new ErroDeCofre('ocupado', 'Este arquivo já está em uso agora. Espere o resultado antes de repetir.', 409);
+    e.emUso = true;
+    const a = e.arquivo;
+    const chave = Buffer.from(a.chave); // cópia: se o envio for apagado no meio da leitura, a chave original é zerada
+    try {
+      const f = await open(a.caminho, 'r');
+      const cabeca = Buffer.alloc(28);
+      try {
+        await f.read(cabeca, 0, 28, 0);
+      } finally {
+        await f.close();
+      }
+      const dec = createDecipheriv('aes-256-gcm', chave, cabeca.subarray(0, 12));
+      dec.setAAD(Buffer.from(e.id));
+      dec.setAuthTag(cabeca.subarray(12, 28));
+      const hash = createHash('sha256');
+      await pipeline(
+        createReadStream(a.caminho, { start: 28 }),
+        dec,
+        async function* (fonte: AsyncIterable<Buffer>) {
+          for await (const pedaco of fonte) {
+            hash.update(pedaco);
+            yield pedaco;
+          }
+        },
+        createWriteStream(destino, { flags: 'wx', mode: 0o600 }),
+      );
+      const sha256 = hash.digest('hex');
+      if (sha256 !== a.sha256) throw new Error('sha256 diferente do da chegada');
+      return { nome: a.nome, tipo: a.tipo, tamanho: a.tamanho, sha256, destinoDoEnvio: e.destino };
+    } catch (err) {
+      this.o.log?.warn({ err, envio: e.id }, 'cofre: exportarParaArquivo falhou (disco, arquivo sumiu ou conteúdo alterado)');
+      throw new ErroDeCofre('estado', 'Não consegui ler o arquivo guardado (sumiu, foi alterado, o disco do servidor falhou ou o sistema foi atualizado). Peça um novo envio.', 409);
+    } finally {
+      chave.fill(0);
+      e.emUso = false;
+    }
   }
 
   gerarLink(userId: string, id: string, minutos: number | undefined): { token: string; nome: string; expiraEm: number; baixadasMax: number } {

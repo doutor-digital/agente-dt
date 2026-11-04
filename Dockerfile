@@ -9,10 +9,11 @@
 FROM node:22-slim
 
 # corepack → pnpm na versão do packageManager. curl → healthcheck do Swarm
-# (start-first depende dele). openssl → engine do Prisma.
+# (start-first depende dele). openssl → engine do Prisma. ffmpeg (+ffprobe) → extrair e limpar o áudio
+# dos vídeos de câmera da ferramenta transcrever_audio do conector.
 RUN corepack enable \
  && apt-get update \
- && apt-get install -y --no-install-recommends curl openssl ca-certificates \
+ && apt-get install -y --no-install-recommends curl openssl ca-certificates ffmpeg \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /repo

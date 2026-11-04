@@ -22,6 +22,10 @@ export const ROTA_BAIXA = '/arquivos/baixar/:token/:nome';
 const ENVIOS_SIMULTANEOS = 2;
 /** o corpo inteiro tem que chegar neste tempo (20 MB em 3G cabe) */
 const TEMPO_MAX_DO_ENVIO_MS = 180_000;
+/** envio acima de 25 MB (vídeo/áudio para transcrever): o corpo e a cópia da junção ficam na memória (~2x), então só UM por vez, e com mais tempo para chegar */
+const LIMITE_DE_ENVIO_GRANDE = 25 * 1024 * 1024;
+// abaixo dos 300 s do requestTimeout do Node (que derrubaria a conexão antes): 80 MB em ~280 s pedem ~2,3 Mbps de subida
+const TEMPO_MAX_DO_ENVIO_GRANDE_MS = 280_000;
 /** downloads lendo o arquivo inteiro ao mesmo tempo (cada um segura o cifrado e o aberto: até 40 MB) */
 const DOWNLOADS_SIMULTANEOS = 4;
 const MENSAGEM_NAO_ACHADO = 'Arquivo não encontrado, vencido ou esgotado. Se o sistema foi atualizado há pouco, peça um novo link no Claude.';
@@ -130,6 +134,7 @@ export function montarRotasDoCofre(app: Express, cofre: CofreDeArquivos, o: Opco
   // quem erra token demais é cortado: com 256 bits ninguém acerta, mas o log não deve encher de sondagem
   const erros = o.tentativasPorIp ?? new JanelaDeContagem(30, 10 * 60_000);
   let enviando = 0;
+  let enviandoGrande = 0;
   let baixando = 0;
   // Um conector legítimo que insiste num link velho (de antes de um deploy, por exemplo) conta UMA vez por token, não uma por tentativa;
   // quem chuta tokens diferentes continua somando.
@@ -200,7 +205,15 @@ export function montarRotasDoCofre(app: Express, cofre: CofreDeArquivos, o: Opco
       falha(err.status, err.message);
       return;
     }
+    const grande = limite > LIMITE_DE_ENVIO_GRANDE;
+    if (grande && enviandoGrande >= 1) {
+      cofre.liberar(reserva, 'ocupado', origem, false); // a vaga é nossa, não gasta as tentativas da pessoa
+      res.set('Retry-After', '30');
+      falha(503, 'Já há um vídeo/áudio sendo recebido. Tente de novo em um minuto.');
+      return;
+    }
     enviando += 1;
+    if (grande) enviandoGrande += 1;
     let nomeOriginal: string | undefined;
     try {
       nomeOriginal = decodeURIComponent(String(req.headers['x-nome-arquivo'] ?? '')).slice(0, 200);
@@ -214,6 +227,7 @@ export function montarRotasDoCofre(app: Express, cofre: CofreDeArquivos, o: Opco
       if (vagaSolta) return;
       vagaSolta = true;
       enviando -= 1;
+      if (grande) enviandoGrande -= 1;
     };
     const sair = (soltar = true) => {
       if (terminou) return false;
@@ -228,7 +242,7 @@ export function montarRotasDoCofre(app: Express, cofre: CofreDeArquivos, o: Opco
       falha(408, 'O envio demorou demais. Tente de novo com uma conexão melhor.');
       pedacos.length = 0;
       res.once('finish', () => req.destroy());
-    }, TEMPO_MAX_DO_ENVIO_MS);
+    }, grande ? TEMPO_MAX_DO_ENVIO_GRANDE_MS : TEMPO_MAX_DO_ENVIO_MS);
     prazo.unref();
 
     const declarado = Number(req.headers['content-length']);

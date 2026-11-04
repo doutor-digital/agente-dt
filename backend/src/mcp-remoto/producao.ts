@@ -60,6 +60,8 @@ import { blingGet } from '../lib/bling/cliente.js';
 import type { Usuario } from './provedor.js';
 import { registrarRelatorio, type DepsRelatorio } from './relatorio.js';
 import { contextoVideoDoAmbiente, montarRotaDoClipe, registrarVideoSePermitido, type AcessoAoClipe } from './video.js';
+import { criarTranscritor, limparTemporarios, registrarTranscricaoSePermitido } from './transcricao-audio.js';
+import { transcreverComSegmentos } from '../services/transcription.service.js';
 import { montarConectorRemoto } from './servidor.js';
 import { acharSlug, umaPorChave, umaPorToken } from './unidades.js';
 
@@ -565,9 +567,13 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
     log: logger,
   });
   let leitoresVideo = new Set<string>();
+  // a mesma lista (MCP_VIDEO_EMAILS) também libera a transcrição de áudio de câmera, que não depende da pasta VIGIA_DIR: carrega sempre
+  manterAtualizado(leitoresDoVideo, (s) => (leitoresVideo = s), 'quem vê o vigia de vídeo');
+  // transcrever_audio: ffmpeg (FFMPEG_PATH, padrão `ffmpeg` no PATH) + OpenAI whisper-1. Uma só instância: a trava de "uma transcrição por vez" vale para todas as sessões.
+  void limparTemporarios().then((n) => n && logger.info({ n }, 'mcp-remoto: pastas temporárias de transcrição antigas apagadas'));
+  const transcritor = criarTranscritor({ cofre, transcrever: (audio, o) => transcreverComSegmentos(audio, o), log: logger });
   if (video) {
     montarRotaDoClipe(app, video, auditarClipe);
-    manterAtualizado(leitoresDoVideo, (s) => (leitoresVideo = s), 'quem vê o vigia de vídeo');
     logger.info({ dir: video.dir, retencaoDias: video.retencaoDias }, 'mcp-remoto: vigia de vídeo ligado');
   }
   const cacheCerebro = new Cache();
@@ -599,7 +605,7 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
       registrarFerramentasTramitacao(server, tramitacao, auditar);
       registrarMetaEventos(server, () => rastreio, auditar);
       // Arquivos: o portão testado confere a lista; cada envio é só de quem o pediu.
-      registrarArquivosSePermitido(server, cofre, quem.userId, arquivistas, () => new URL(urlPublica).origin, auditar);
+      registrarArquivosSePermitido(server, cofre, quem.userId, arquivistas, () => new URL(urlPublica).origin, auditar, leitoresVideo);
       // Asaas: cliente, cobrança (boleto/Pix/cartão/parcelado), editar, cancelar, estornar e transferir, DIRETO, só para quem está na lista de
       // escrita E só nas unidades de ASAAS_ESCRITA_UNIDADES, com tetos, lista de destinos e aviso no Telegram. O portão fica numa função testada.
       registrarEscritaAsaasSePermitido(server, asaas, escritaAsaas, quem.userId, escritores, auditar, { email: quem.email, clientId: quem.clientId });
@@ -627,6 +633,7 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
       }
       if (leitoresWhatsapp.has(quem.userId)) registrarFerramentasEvolution(server, whatsapp, quem.userId, auditar);
       registrarVideoSePermitido(server, video, quem.userId, leitoresVideo, auditar);
+      registrarTranscricaoSePermitido(server, transcritor, quem.userId, leitoresVideo, auditar);
       registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas, convenia: convenia.contas, tiquetaque: tiquetaque.contas, tramitacao: tramitacao.contas, sistemas: sistemas.contas }), auditar);
       registrarCerebro(server, slugs, cacheCerebro, auditar);
       if (franquia) {
