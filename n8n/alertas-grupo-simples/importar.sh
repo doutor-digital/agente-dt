@@ -23,12 +23,16 @@ set -a; . /root/.n8n-api.env; set +a
 
 umask 077
 ENV_FILE=/root/.alerta-grupo.env
-ALERTA_GRUPO_SEGREDO=''; ALERTA_GRUPO_CRED_ID=''
+ALERTA_GRUPO_SEGREDO=''; ALERTA_GRUPO_SEGREDO_ENVIO=''; ALERTA_GRUPO_CRED_ID=''
 [ -s "$ENV_FILE" ] && . "$ENV_FILE"
 if [ -z "$ALERTA_GRUPO_SEGREDO" ]; then
   ALERTA_GRUPO_SEGREDO=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
 fi
-gravar_env() { printf 'ALERTA_GRUPO_SEGREDO=%s\nALERTA_GRUPO_CRED_ID=%s\n' "$ALERTA_GRUPO_SEGREDO" "$ALERTA_GRUPO_CRED_ID" > "$ENV_FILE"; chmod 600 "$ENV_FILE"; }
+# segredo PRÓPRIO do webhook interno de envio: diferente do que vai na URL do Kommo (visível aos admins da conta)
+if [ -z "$ALERTA_GRUPO_SEGREDO_ENVIO" ]; then
+  ALERTA_GRUPO_SEGREDO_ENVIO=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+fi
+gravar_env() { printf 'ALERTA_GRUPO_SEGREDO=%s\nALERTA_GRUPO_SEGREDO_ENVIO=%s\nALERTA_GRUPO_CRED_ID=%s\n' "$ALERTA_GRUPO_SEGREDO" "$ALERTA_GRUPO_SEGREDO_ENVIO" "$ALERTA_GRUPO_CRED_ID" > "$ENV_FILE"; chmod 600 "$ENV_FILE"; }
 gravar_env
 
 TMP=$(mktemp); TMP2=$(mktemp); chmod 600 "$TMP" "$TMP2"; trap 'rm -f "$TMP" "$TMP2"' EXIT
@@ -57,10 +61,10 @@ else
 fi
 
 # ---- workflow ----
-SEG="$ALERTA_GRUPO_SEGREDO" CRED="$ALERTA_GRUPO_CRED_ID" URLENVIO="$BASE/webhook/alerta-grupo-envio?k=$ALERTA_GRUPO_SEGREDO" python3 - workflow.json "$TMP" <<'PY'
+SEG="$ALERTA_GRUPO_SEGREDO" SEGENV="$ALERTA_GRUPO_SEGREDO_ENVIO" CRED="$ALERTA_GRUPO_CRED_ID" URLENVIO="$BASE/webhook/alerta-grupo-envio?k=$ALERTA_GRUPO_SEGREDO_ENVIO" python3 - workflow.json "$TMP" <<'PY'
 import json, os, sys
 w = json.load(open(sys.argv[1]))
-troca = {'__SEGREDO_WEBHOOK__': os.environ['SEG'], '__URL_ENVIO__': os.environ['URLENVIO'], '__CRED_EVOLUTION_ID__': os.environ['CRED']}
+troca = {'__SEGREDO_WEBHOOK__': os.environ['SEG'], '__SEGREDO_ENVIO__': os.environ['SEGENV'], '__URL_ENVIO__': os.environ['URLENVIO'], '__CRED_EVOLUTION_ID__': os.environ['CRED']}
 def sub(o):
     if isinstance(o, str):
         for k, v in troca.items(): o = o.replace(k, v)

@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url';
 const aqui = dirname(fileURLToPath(import.meta.url));
 const ler = (f) => readFileSync(join(aqui, 'src', f), 'utf8');
 const comum = ler('comum.js');
-const codigo = (f) => ler(f).replace('//__COMUM__', comum);
+const config = ler('config.js');
+const codigo = (f) => ler(f).replace('//__COMUM__', comum).replace('//__CONFIG__', config);
 
 export const montar = () => ({
   name: 'DD · Alertas grupo (simples)',
@@ -35,7 +36,7 @@ export const montar = () => ({
         method: 'POST',
         url: '={{ $json.urlEnvio }}',
         sendBody: true, specifyBody: 'json',
-        jsonBody: '={{ JSON.stringify({ instancia: $json.instancia, number: $json.number, text: $json.text, delay: $json.delay, linkPreview: $json.linkPreview, mentioned: $json.mentioned }) }}',
+        jsonBody: '={{ JSON.stringify({ number: $json.number, text: $json.text, delay: $json.delay, linkPreview: $json.linkPreview, mentioned: $json.mentioned }) }}',
         options: { timeout: 10000 },
       },
       retryOnFail: false,
@@ -47,7 +48,7 @@ export const montar = () => ({
     },
     {
       id: 'c2', name: 'Validar envio', type: 'n8n-nodes-base.code', typeVersion: 2, position: [260, 520],
-      parameters: { mode: 'runOnceForAllItems', language: 'javaScript', jsCode: ler('validar.js') },
+      parameters: { mode: 'runOnceForAllItems', language: 'javaScript', jsCode: codigo('validar.js') },
     },
     {
       // Chave da Evolution = CREDENCIAL do n8n (Header Auth), nunca texto no nó. O importar.sh cria e preenche o id.

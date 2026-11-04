@@ -53,12 +53,16 @@ A cada minuto ─────────► Despachar (resumo de 15 min, teto, 
 Webhook alerta-grupo-envio ► Validar envio (segredo + formato) ──► Evolution sendText   (não toca no static data)
 ```
 
-- A **instância** está numa constante no topo do nó *Despachar*: `INSTANCIA = 'alertas3'`. Os grupos, a menção e o número de teste
-  estão no topo do nó *Entrada* (`UNITS`, `SUBS`, `TEST_NUM`).
+- A **instância** está numa constante no topo do nó *Validar envio*: `INSTANCIA = 'alertas3'` — **fixa**: o corpo da chamada interna nunca a escolhe.
+  Os grupos, a menção e o número de teste (`UNITS`, `SUBS`, `TEST_NUM`) vêm de **`src/config.js`**, colado pelo build nos nós *Entrada* e *Validar envio*
+  (uma lista só; edite o arquivo, rode o build e reimporte — editar à mão no n8n obriga a mexer nos dois nós).
+- **O webhook interno de envio é a parte perigosa** (com a credencial da Evolution, quem o chama manda mensagem), por isso *Validar envio* só aceita:
+  `number` ∈ {jids de `UNITS`, `TEST_NUM`}; `delay` ≤ 5000 ms; texto < 2000 caracteres; menção só de quem está em `UNITS`; instância fixa.
+  Mesmo com o segredo vazado, não dá para mandar nada à Suzanne, ao 9117 ou a qualquer outro número.
 - Menção: só na bandeira vermelha, e só se `mention` da unidade estiver preenchido (Açailândia: o número do mapa antigo; `''` para tirar).
 - O segredo do webhook vai na URL (`?k=…`): quem não tem o segredo recebe `recusado` e nada é enfileirado; **sem segredo configurado o
-  webhook fica fechado** (nunca aberto). O mesmo segredo protege o webhook interno de envio. O `importar.sh` gera o segredo e guarda em
-  `/root/.alerta-grupo.env` (600).
+  webhook fica fechado** (nunca aberto). O webhook interno de envio tem **segredo PRÓPRIO**, diferente do que vai na URL do Kommo (essa URL é visível aos
+  administradores da conta). O `importar.sh` gera os dois e guarda em `/root/.alerta-grupo.env` (600).
 - **A chave da Evolution não está no workflow nem no repositório**: o nó *Evolution sendText* usa uma **credencial do n8n** (Header Auth,
   `apikey`, nome `DD · Evolution (apikey) · alertas grupo`) que o `importar.sh` cria uma vez. Por padrão ele a lê do contêiner da Evolution,
   que é a **chave mestra** (controla todas as instâncias, inclusive a da Suzanne). Quando a `alertas3` existir, **troque pelo token
@@ -93,6 +97,7 @@ curl -sS -X POST "https://webhook-n8n.doutordigitalconsultoria.com/webhook/alert
 
 ## Checklist para ligar (quando o chip estiver conectado)
 
+0. **PASSO 0, ANTES DE ATIVAR (faça depois do passo 2 e antes do 5) — trocar a credencial pela apikey da instância `alertas3`.** A credencial importada hoje é a **chave mestra** da Evolution (controla todas as instâncias, inclusive o WhatsApp da Suzanne). Depois de criar a `alertas3` e escanear o QR, pegue o token **da instância** no manager, grave-o num arquivo chmod 600 na VPS, apague a linha `ALERTA_GRUPO_CRED_ID` de `/root/.alerta-grupo.env`, apague a credencial `DD · Evolution (apikey) · alertas grupo` no n8n (**com o ok do João**) e rode `EVOLUTION_APIKEY_ARQUIVO=/caminho/do/token bash /root/importar.sh`. Só então ativar. (A validação de destino já limita o estrago, mas a chave mestra não deve ficar numa credencial de fluxo.)
 1. **Chip**: comprado e esquentado 7 dias (WhatsApp Business com foto/nome/recado, conversa real, número salvo pela equipe). Não é o 9117 do financeiro.
 2. **Evolution de produção** (`https://evolution.doutordigitalconsultoria.com/manager/`): criar a instância **`alertas3`** (o nome tem que ser o da constante `INSTANCIA`) e escanear o QR com o chip. Não mexer na `alertas2`.
 3. Pôr o chip no grupo **"Mkt | Dr Hérnia Açailândia"** (jid `120363399681615902@g.us`). Não listar todos os grupos da instância (429 em 08/10).
@@ -111,8 +116,8 @@ no n8n. Reconectar é manual, no máximo 1×/hora. O vigia dos robôs deveria ol
 
 - `workflow.json` — gerado; **não editar à mão**. `node build.mjs` o recria a partir de `src/*.js`.
 - `src/entrada.js`, `src/despachar.js`, `src/comum.js` — o código dos nós (o `comum` é colado nos dois).
-- `test.mjs` — `node --test n8n/alertas-grupo-simples/test.mjs` (26 casos: relógio e sorteio falsos).
-- `src/validar.js` — nó do webhook interno de envio.
+- `test.mjs` — `node --test n8n/alertas-grupo-simples/test.mjs` (30 casos: relógio e sorteio falsos).
+- `src/validar.js` — nó do webhook interno de envio (instância fixa, lista de destinos, teto de delay). `src/config.js` — `UNITS`, `SUBS`, `TEST_NUM`.
 - `importar.sh` — importa desativado na VPS de produção.
 
 ## Limites conhecidos

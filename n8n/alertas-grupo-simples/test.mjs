@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { montar } from './build.mjs';
 
 const wf = montar();
-const cod = (nome) => wf.nodes.find((n) => n.name.startsWith(nome)).parameters.jsCode.replace('__SEGREDO_WEBHOOK__', 'seg123').replace('__URL_ENVIO__', 'http://interno/webhook/alerta-grupo-envio?k=seg123');
+const cod = (nome) => wf.nodes.find((n) => n.name.startsWith(nome)).parameters.jsCode.replace('__SEGREDO_WEBHOOK__', 'seg123').replace('__SEGREDO_ENVIO__', 'env456').replace('__URL_ENVIO__', 'http://interno/webhook/alerta-grupo-envio?k=env456');
 const ENTRADA = cod('Entrada'), DESPACHAR = cod('Despachar'), VALIDAR = cod('Validar');
 const GRUPO = '120363399681615902@g.us', JOAO = '5563991021043';
 const SUB = 'doutorherniaacailandia';
@@ -52,7 +52,7 @@ test('bandeira vermelha: sai na hora (atraso 20-90 s), sem o motivo clínico e c
   assert.equal(tick(sd, T0 + 10000).length, 0, 'ainda dentro do atraso');
   const out = tick(sd, T0 + 95000);
   assert.equal(out.length, 1);
-  assert.equal(out[0].json.instancia, 'alertas3');
+  assert.equal(out[0].json.instancia, undefined, 'o gatilho não escolhe instância');
   assert.equal(out[0].json.number, GRUPO);
   assert.deepEqual(out[0].json.mentioned, ['559991063655@s.whatsapp.net']);
 });
@@ -273,13 +273,13 @@ test('gatilho entrega ao webhook interno (não fala com a Evolution) e não sai 
   const sd = {};
   entra(sd, T0, 'ALERTA · acailandia · [Contato: A] LIGAR AGORA sinal de alerta clínico', { lead: '1' });
   const out = tick(sd, T0 + 100000);
-  assert.equal(out[0].json.urlEnvio, 'http://interno/webhook/alerta-grupo-envio?k=seg123');
+  assert.equal(out[0].json.urlEnvio, 'http://interno/webhook/alerta-grupo-envio?k=env456');
   const nodes = wf.nodes.filter((n) => n.type === 'n8n-nodes-base.httpRequest');
   const entrega = nodes.find((n) => n.name === 'Entregar ao envio');
   assert.ok(!JSON.stringify(entrega).includes('evolution_api'));
   const sd2 = {};
   entra(sd2, T0, 'ALERTA · acailandia · [Contato: A] LIGAR AGORA sinal de alerta clínico', { lead: '1' });
-  const sem = DESPACHAR.replace("const URL_ENVIO = 'http://interno/webhook/alerta-grupo-envio?k=seg123';", "const URL_ENVIO = '__URL_ENVIO__';");
+  const sem = DESPACHAR.replace("const URL_ENVIO = 'http://interno/webhook/alerta-grupo-envio?k=env456';", "const URL_ENVIO = '__URL_ENVIO__';");
   assert.notEqual(sem, DESPACHAR);
   assert.equal(rodar(sem, { sd: sd2, agora: T0 + 100000 }).length, 0);
   assert.equal(sd2.saida.length, 1, 'nada foi reservado');
@@ -295,13 +295,48 @@ test('nenhum segredo/chave no workflow.json: Evolution é credencial do n8n', ()
   assert.ok(envio.credentials.httpHeaderAuth.id.startsWith('__'));
 });
 
-test('Validar envio: segredo e formato', () => {
-  const ok = { instancia: 'alertas3', number: GRUPO, text: 'oi', delay: 2000, linkPreview: false, mentioned: ['559991063655@s.whatsapp.net'] };
-  const v = (body, k = 'seg123') => rodar(VALIDAR, { sd: {}, agora: T0, body, query: { k } });
+const SUZANNE = '556381411248', FINANCEIRO = '556391178914';
+const ok = { number: GRUPO, text: 'oi', delay: 2000, mentioned: ['559991063655@s.whatsapp.net'] };
+const v = (body, k = 'env456') => rodar(VALIDAR, { sd: {}, agora: T0, body, query: { k } });
+
+test('Validar envio: o segredo do envio é PRÓPRIO, diferente do que vai ao Kommo', () => {
   assert.equal(v(ok).length, 1);
+  assert.equal(v(ok, 'seg123').length, 0, 'segredo do Kommo não abre o webhook interno');
   assert.equal(v(ok, 'x').length, 0);
-  assert.equal(v({ ...ok, number: 'abc' }).length, 0);
-  assert.equal(v({ ...ok, instancia: '../x' }).length, 0);
+  const aberto = VALIDAR.replace("const SEGREDO_ENVIO = 'env456';", "const SEGREDO_ENVIO = '__SEGREDO_ENVIO__';");
+  assert.notEqual(aberto, VALIDAR);
+  assert.equal(rodar(aberto, { sd: {}, agora: T0, body: ok, query: {} }).length, 0, 'sem segredo configurado: fechado');
+});
+
+test('Validar envio: instância fixa, o corpo não escolhe', () => {
+  const r = v({ ...ok, instancia: 'alertas2' });
+  assert.equal(r[0].json.instancia, 'alertas3');
+  for (const inst of ['alertas2', 'suzanne', '../x', 'alertas3/../x']) assert.equal(v({ ...ok, instancia: inst })[0].json.instancia, 'alertas3');
+  assert.match(wf.nodes.find((n) => n.name === 'Evolution sendText').parameters.url, /\$json\.instancia/);
+  assert.ok(!wf.nodes.find((n) => n.name === 'Entregar ao envio').parameters.jsonBody.includes('instancia'));
+});
+
+test('Validar envio: número só da lista (jids de UNITS + teste do João)', () => {
+  assert.equal(v(ok).length, 1);
+  assert.equal(v({ ...ok, number: JOAO })[0].json.number, JOAO);
+  for (const n of [SUZANNE, FINANCEIRO, '120363000000000000@g.us', '120363410263631223@g.us', 'abc', '', GRUPO + 'x', 559991063655, null, ['5563991021043']])
+    assert.equal(v({ ...ok, number: n }).length, 0, String(n));
+});
+
+test('Validar envio: delay com teto, texto limitado, menção só de quem está em UNITS', () => {
+  assert.equal(v({ ...ok, delay: 999999 })[0].json.delay, 5000);
+  assert.equal(v({ ...ok, delay: -5 })[0].json.delay, 0);
+  assert.equal(v({ ...ok, delay: 'x' })[0].json.delay, 0);
   assert.equal(v({ ...ok, text: '' }).length, 0);
-  assert.equal(v({ ...ok, number: JOAO }).length, 1);
+  assert.equal(v({ ...ok, text: 'a'.repeat(2000) }).length, 0);
+  assert.equal(v({ ...ok, text: 'a'.repeat(1999) }).length, 1);
+  assert.equal(v({ ...ok, mentioned: ['5511999999999@s.whatsapp.net'] })[0].json.mentioned, undefined);
+  assert.deepEqual(v({ ...ok, mentioned: ['559991063655@s.whatsapp.net', '5511999999999@s.whatsapp.net'] })[0].json.mentioned, ['559991063655@s.whatsapp.net']);
+  assert.equal(v({ ...ok, linkPreview: true })[0].json.linkPreview, false);
+});
+
+test('a lista de destinos é uma só (config.js) nos nós Entrada e Validar', () => {
+  const pega = (c) => c.match(/const UNITS = \{[\s\S]*?\n\};/)[0];
+  assert.equal(pega(ENTRADA), pega(VALIDAR));
+  assert.ok(ENTRADA.includes("const TEST_NUM = '5563991021043'") && VALIDAR.includes("const TEST_NUM = '5563991021043'"));
 });

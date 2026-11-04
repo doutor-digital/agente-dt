@@ -1,20 +1,8 @@
 // ===== CONFIG (edite aqui) =====
-const TEST_NUM = '5563991021043';          // 🧪 vai SEMPRE para este número (João), nunca para grupo
 const DEDUPE_HORAS = 2;                    // 1 alerta por paciente (lead) por tipo a cada 2 h
 const SILENCIO_INICIO = 21, SILENCIO_FIM = 7; // hora de Brasília
 const JITTER_MIN_S = 20, JITTER_MAX_S = 90;   // atraso aleatório antes de cada envio
-// Só estas unidades mandam para grupo. Para ligar a 2ª: some uma linha aqui (jid copiado do mapa do fluxo antigo K33m9ZYNA6R3h2j0).
-const UNITS = {
-  acailandia: { jid: '120363399681615902@g.us', nome: 'Açailândia', mention: '559991063655' }, // mention: só na bandeira vermelha; '' = sem menção
-  // imperatriz: { jid: '...@g.us', nome: 'Imperatriz', mention: '' },
-};
-// Subdomínio da conta Kommo -> slug (a conta manda mais que o slug do texto). Unidade que está aqui mas não em UNITS = descartada e logada.
-const SUBS = {
-  doutorherniaacailandia: 'acailandia', attivacorpoementeitz: 'imperatriz', araguainadoutorhernia: 'araguaina',
-  doutorherniaporto: 'porto', doutorherniabalsas: 'balsas', doutorherniacanaa: 'canaa', marabadoutorhernia: 'maraba',
-  parauapebasdoutorhernia: 'parauapebas', drherniaserra: 'serra', boavistarrdoutorhernia: 'boavista',
-  doutorherniarioverde2026: 'rioverde',
-};
+//__CONFIG__
 const SEGREDO = '__SEGREDO_WEBHOOK__';     // o importar.sh troca por um valor aleatório; vazio = sem checagem
 const CFG = { SILENCIO_INICIO, SILENCIO_FIM };
 //__COMUM__

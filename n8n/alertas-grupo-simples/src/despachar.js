@@ -1,5 +1,4 @@
 // ===== CONFIG (edite aqui) =====
-const INSTANCIA = 'alertas3';              // << ÚNICO lugar da instância da Evolution. Trocar o remetente = trocar esta linha.
 const TETO_POR_HORA = 6;                   // mensagens por hora, por grupo
 const SILENCIO_INICIO = 21, SILENCIO_FIM = 7; // hora de Brasília
 const INTERVALO_MIN_S = 20;                // folga mínima entre dois envios quaisquer deste remetente
@@ -7,7 +6,7 @@ const DIGEST_MIN = 15;                     // resumo de "sem resposta" a cada 15
 const JITTER_MIN_S = 20, JITTER_MAX_S = 90;
 const MAX_LINHAS = 8;                      // pacientes listados por resumo
 const FILA_MAX_HORAS = 6;                  // paciente na fila há mais que isto sai da lista (não vira alerta velho)
-const URL_ENVIO = '__URL_ENVIO__';          // webhook interno deste mesmo workflow (o importar.sh preenche; contém o segredo)
+const URL_ENVIO = '__URL_ENVIO__';          // webhook interno deste mesmo workflow (o importar.sh preenche; contém o segredo PRÓPRIO do envio, diferente do que vai ao Kommo)
 const CFG = { SILENCIO_INICIO, SILENCIO_FIM };
 //__COMUM__
 
@@ -81,7 +80,7 @@ if (pronta.digest) {
   text = `${cab(pronta.nome)}\n${linhas.join('\n')}${mais > 0 ? `\n+ ${mais} outros` : ''}\n\nResponder agora.`;
 }
 if (pronta.teste) text = `🧪 TESTE\n${text}`;
-const out = { urlEnvio: URL_ENVIO, instancia: INSTANCIA, number: pronta.jid, text, delay: rand(1500, 4000), linkPreview: false };
+const out = { urlEnvio: URL_ENVIO, number: pronta.jid, text, delay: rand(1500, 4000), linkPreview: false };
 if (pronta.mention) out.mentioned = [`${pronta.mention}@s.whatsapp.net`];
 if (!pronta.teste) { (sd.envios[pronta.jid] = sd.envios[pronta.jid] || []).push(agora); conta(sd, agora, `enviado:${pronta.tipo}`); conta(sd, agora, `enviado_total:${pronta.jid}`); }
 sd.ultimoEnvio = agora;
