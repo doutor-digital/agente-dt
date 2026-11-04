@@ -4,7 +4,8 @@ import type { BaseMessage } from '@langchain/core/messages';
 import type { Conversation, Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { ferramentasChamadas } from '../lib/cadastro-na-franquia.js';
-import { cadastrarLeadDoTurno } from '../lib/cadastro-todo-lead.js';
+import { cadastrarLeadDoTurno, estadoCadastroTodoLead, type DecisaoDoLead, type DepsDoCadastro, type SincronizarLead } from '../lib/cadastro-todo-lead.js';
+import { deixaMarcaDeCalada, marcarCartaoCalado, type PedidoDeTurno } from '../lib/atendimento-adiado.js';
 import { logger } from '../lib/logger.js';
 import { buildAgentGraph, buildThreadId } from '../agent/graph.js';
 import { comTurnoEmAndamento } from '../lib/turnos-em-andamento.js';
@@ -58,7 +59,7 @@ import { getPausedStagesGlobalSet } from '../services/actions.service.js';
 import { scheduleLeadMemoryUpdate, carimbarContato } from '../services/lead-memory.service.js';
 import { carimbarHumanoAssumiu, scheduleLeadMetrics } from '../services/lead-metrics.service.js';
 import { aplicarCarimbosDeEtapa } from '../lib/carimbo-etapa.js';
-import { contaDoKommo, sofiaPodeAtenderOCartao, unidadeDonaPeloCartaoId } from '../lib/crm-compartilhado.js';
+import { contaDoKommo, grupoDaUnidade, sofiaPodeAtenderOCartao, unidadeDonaPeloCartaoId } from '../lib/crm-compartilhado.js';
 import { esquemaDaUnidade as esquemaKommoDaUnidade } from '../lib/kommo-schema.js';
 import { etapaPermitida, precisaDoFunil, type FunisDaConta } from '../lib/etapa-permitida.js';
 import { etapaCalada, notaSofiaCalada, REGRA_NOTA_CALADA, sofiaCaladaLiberada } from '../lib/sofia-calada.js';
@@ -718,6 +719,12 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
   const permissao = await sofiaPodeAtenderOCartao(unit, leadId);
   if (!permissao.pode) {
     logger.info({ leadId, unit: unit.slug, tipo: permissao.tipo, motivo: permissao.motivo }, 'webhook: cartão não é desta unidade — a Sofia não lê nem responde (conta dividida)');
+    // Sem unidade (ou cartão ilegível) o cartão AINDA pode vir a ser desta unidade (o robô unidade-por-canal marca em minutos, a SDR
+    // a qualquer hora). Só uma MARCA no cartão — nada da conversa é guardado: quando a unidade chegar, a varredura do robô lê a
+    // conversa oficial e atende quem ficou esperando (lib/atendimento-adiado.ts). Cartão de Caxias e valor desconhecido não deixam marca.
+    // (A reivindicação do id da mensagem não é devolvida: o 200 abaixo já impede o reenvio do Kommo, e uma segunda entrada da mesma
+    // mensagem depois da retomada responderia em dobro.)
+    if (deixaMarcaDeCalada(permissao.tipo)) await marcarCartaoCalado(unit.id, leadId);
     res.status(200).json({ ok: true, skipped: 'conta_dividida_outra_unidade', motivo: permissao.motivo, unit: unit.slug });
     return;
   }
@@ -1081,9 +1088,69 @@ export const ganchosDeRecuperacao: GanchosDoController = {
   resumoDoPedido,
 };
 
+/**
+ * O cartão que estava sem unidade (conta dividida) ganhou a desta unidade e o paciente ficou esperando: faz o que o webhook teria
+ * feito se a unidade já estivesse lá — conversa, telefone, a fala guardada, o trace — e entrega o turno ao coalescer, marcado como
+ * retomado (não mexe na etapa do cartão). Daí em diante é o `processAgent` de sempre, com todas as travas dele. Ver `lib/atendimento-adiado.ts`.
+ */
+export async function iniciarTurnoAdiado(pedido: PedidoDeTurno): Promise<void> {
+  const { unit, leadId } = pedido;
+  const humanMessage = pedido.textos.join('\n');
+  const contactId = pedido.contactId ? String(pedido.contactId) : null;
+  const trace = await prisma.executionTrace.create({
+    data: {
+      unitId: unit.id,
+      threadId: buildThreadId(unit.slug, leadId),
+      leadId: String(leadId),
+      channel: 'kommo_chat',
+      input: { via: 'unidade_ganha', leadId, desde: pedido.desde.toISOString(), textos: pedido.textos } as object,
+      status: 'RUNNING',
+    },
+  });
+  const recorder = new TraceRecorder(trace.id, unit.id);
+  await recorder.step({
+    kind: 'WEBHOOK_RECEIVED',
+    title: `⏱ Cartão ${leadId} ganhou a unidade depois de o paciente escrever (desde ${pedido.desde.toISOString()}): "${humanMessage.slice(0, 80)}"`,
+    payload: { leadId, via: 'unidade_ganha', textos: pedido.textos },
+  });
+  const conv = await upsertConversation({ unitId: unit.id, leadId: String(leadId), phone: pedido.telefone ?? undefined, channel: 'kommo_chat' });
+  await guardarTelefoneDoContato(unit, conv, contactId);
+  // `createdAt: pedido.desde`: a fala é de quando o paciente escreveu, não de quando a varredura a achou — o lead-metrics tira daqui o
+  // "Primeiro contato" e o "Tempo até a 1ª resposta".
+  await addMessage({ conversationId: conv.id, traceId: trace.id, role: 'user', content: humanMessage, createdAt: pedido.desde, meta: { adiado: true, contactId } });
+  const ctx: ExtractedContext = {
+    humanMessage,
+    audioUrl: null,
+    imageUrl: null,
+    chatId: null,
+    talkId: null,
+    contactId,
+    contactName: null,
+    authorId: null,
+    accountId: null,
+    isChatMessage: true,
+  };
+  const status = scheduleAgentRun({
+    unitSlug: unit.slug,
+    leadId,
+    traceId: trace.id,
+    humanMessage,
+    audioUrl: null,
+    imageUrl: null,
+    run: execucaoDoTurno(unit, leadId, ctx, performance.now(), true),
+    retomada: { chegouEm: pedido.desde.getTime() },
+  });
+  if (status === 'rejected') {
+    // Burst cheio: turno avulso, contado como "em voo" — o mesmo que o webhook faz. Não lança: a fala já está guardada e o turno vai rodar.
+    void comTurnoAvulso(trace.id, () => processAgent({ unit, leadId, traceId: trace.id, humanMessage, audioUrl: null, imageUrl: null, chatId: null, talkId: null, contactId, isChatMessage: true, requestStart: performance.now(), retomada: true })).catch((err) => {
+      logger.error({ err, traceId: trace.id }, 'erro fatal no turno atrasado (fallback)');
+    });
+  }
+}
+
 export type AgentDeliverFn = (text: string) => Promise<{ via: string; detail: unknown }>;
 
-export async function processAgent(args: {
+export interface ArgsDoTurno {
   unit: Unit;
   leadId: number;
   traceId: string;
@@ -1105,7 +1172,49 @@ export async function processAgent(args: {
   /** Turno refeito pela recuperação do start (lib/recuperar-turnos.ts): não mexe na etapa do cartão. */
   retomada?: boolean;
   deliver?: AgentDeliverFn;
-}): Promise<void> {
+}
+
+/** O turno não chegou ao modelo: horário, pausa, etapa fora da allowlist/calada ou a equipe falou. Quem o chamou decide o que fazer sem a IA. */
+const TURNO_PULADO = 'pulado' as const;
+
+/**
+ * O turno da IA, mais o que sobra quando ela NÃO fala. Cadastro de lead na franquia (chave `cadastro-todo-lead`) não pode depender
+ * de a IA ter falado: de dia, em Petrópolis, quem atende é a SDR e a IA só entra às 18h — quase todo lead do dia nunca chegaria
+ * ao cadastro. Com a IA pulada o paciente continua sendo lead, e o cadastro roda aqui com as mesmas travas (ver `cadastrarLeadDoTurno`).
+ */
+export async function processAgent(args: ArgsDoTurno): Promise<void> {
+  const r = await processarTurno(args);
+  // Sem `await`: a decisão pode chamar a IA de triagem e a franquia, e o turno (coalescer, desligamento gracioso) não espera por isso.
+  // `cadastrarQuandoIaPulada` nunca lança.
+  if (r === TURNO_PULADO) void cadastrarQuandoIaPulada(args);
+}
+
+export async function cadastrarQuandoIaPulada(
+  args: Pick<ArgsDoTurno, 'unit' | 'leadId' | 'isChatMessage'>,
+  sincronizar: SincronizarLead<Unit> = SpineSyncService.syncLeadToSpine,
+  deps?: DepsDoCadastro,
+): Promise<{ decisao: DecisaoDoLead; execucao: Promise<unknown> | null } | null> {
+  const { unit, leadId } = args;
+  // Só mensagem de chat de verdade (o paciente escreveu): webhook de campo/etapa traz texto sintético e não é "entrou em contato".
+  if (!args.isChatMessage || !unit.spineSyncLeads || leadId <= 0) return null;
+  // Escopo deste PR: só a conta dividida (Petrópolis × Caxias), onde o cartão nasce sem unidade e o lead vira cadastro depois. O
+  // cadastro geral com a IA pulada, para as demais unidades, é outro PR. Chave desligada: sai antes de qualquer leitura ou log.
+  if (estadoCadastroTodoLead(unit.slug) === 'desligado') return null;
+  try {
+    if (!(await grupoDaUnidade(unit.id))) return null;
+    // `ferramentas: []`: a IA não rodou, então não há "agendou" — é só o caminho do lead que entrou em contato (decidirCadastroDoLead).
+    const r = await cadastrarLeadDoTurno({ unit, leadId, ferramentas: [] }, sincronizar, deps);
+    if (!r.decisao.criar && !r.decisao.silenciosa) {
+      logger.info({ leadId, unit: unit.slug, motivo: r.decisao.motivo }, 'spine-sync: não criei na franquia (IA pulada neste turno)');
+    }
+    return r;
+  } catch (err) {
+    logger.warn({ err: String(err), leadId, unit: unit.slug }, 'spine-sync: falha no cadastro com a IA pulada (segue)');
+    return null;
+  }
+}
+
+async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | void> {
   const { unit, leadId, traceId, audioUrl, imageUrl, chatId, talkId, contactId, isChatMessage, requestStart, burstSize, deliver } = args;
   const authorId = args.authorId ?? null;
   const accountId = args.accountId ?? null;
@@ -1140,7 +1249,7 @@ export async function processAgent(args: {
     await recorder.step({ kind: 'COMPLETED', title: `⏸️ ${desc} — quem atende agora é a equipe`, payload: { leadId, pausaAte: unit.pausaAte, pausaPor: unit.pausaPor }, latencyMs: totalLatency });
     await recorder.finalize({ status: 'SUCCESS', latencyMs: totalLatency, iaDecision: '__paused_by_unit__' });
     logger.info({ traceId, leadId, unit: unit.slug, pausaAte: unit.pausaAte }, 'agente pulado (pausa da unidade)');
-    return;
+    return TURNO_PULADO;
   }
 
   // Decisão do João (18/09/2026): paciente em EM ESPERA que escreve DE VERDADE (não "ok, obrigado")
@@ -1319,7 +1428,7 @@ export async function processAgent(args: {
       iaDecision: '__out_of_hours__',
     });
     logger.info({ traceId, leadId, unit: unit.slug }, 'agente pulado (fora do horário comercial)');
-    return;
+    return TURNO_PULADO;
   }
 
   if ((await isLeadPaused(unit, leadId)) || (await leadPausadoPorJanela(unit.id, leadId))) {
@@ -1365,7 +1474,7 @@ export async function processAgent(args: {
       iaDecision: '__paused__',
     });
     logger.info({ traceId, leadId, unit: unit.slug }, 'agente pulado (IA Pausada)');
-    return;
+    return TURNO_PULADO;
   }
 
   try {
@@ -1413,6 +1522,7 @@ export async function processAgent(args: {
           });
           await recorder.finalize({ status: 'SUCCESS', latencyMs: totalLatency, iaDecision: '__stage_silent__' });
           logger.info({ traceId, leadId, unit: unit.slug, etapa, anotou }, 'agente pulado (etapa calada pelo nome)');
+          // Etapa calada (GANHO/ALTA/cancelado): cartão da jornada, não lead novo — sem cadastro por aqui.
           return;
         }
       }
@@ -1451,7 +1561,7 @@ export async function processAgent(args: {
           { traceId, leadId, unit: unit.slug, statusId: sid, pipelineId: pid, allowedStatusIds },
           'agente pulado (etapa fora da allowlist kommoAllowedStatusIds)',
         );
-        return;
+        return TURNO_PULADO;
       }
 
       const matched =
@@ -1480,7 +1590,7 @@ export async function processAgent(args: {
           { traceId, leadId, unit: unit.slug, statusId: sid, pipelineId: pid },
           'agente pulado (regra global pause_in_stages)',
         );
-        return;
+        return TURNO_PULADO;
       }
     }
   } catch (err) {
@@ -1507,7 +1617,7 @@ export async function processAgent(args: {
     });
     await recorder.finalize({ status: 'SUCCESS', latencyMs: totalLatency, iaDecision: '__paused_by_team__' });
     logger.info({ traceId, leadId, unit: unit.slug }, 'agente pulado (a equipe falou com o paciente)');
-    return;
+    return TURNO_PULADO;
   }
 
   try {
@@ -1823,8 +1933,9 @@ export async function processAgent(args: {
     // 27/10/2026: a franquia mudou a regra — toda pessoa que entra em contato vira LEAD (menos número
     // interno). Atrás da chave `cadastro-todo-lead`, que nasce desligada: desligada, a decisão é a de 26/09 (acima) e só
     // a trava de concorrência (um cadastro por vez por lead) vale a mais.
-    // LIMITAÇÃO conhecida: este ponto é o fim do turno da IA. Lead atendido só pela SDR (IA pulada: fora do horário, em
-    // pausa, equipe falou) nunca chega aqui e não é cadastrado por esta regra.
+    // Este ponto é o fim do turno em que a IA RODOU. Quando ela é pulada (fora do horário, pausa da unidade/do cartão, etapa fora
+    // da allowlist ou pausada por regra, equipe falou) o cadastro roda em `processAgent` → `cadastrarQuandoIaPulada`; e o cartão que
+    // ganha a unidade depois (conta dividida) volta por `lib/atendimento-adiado.ts`.
     if (unit.spineSyncLeads && leadId > 0) {
       // Só o sinal da ferramenta aqui: a etapa do cartão vive noutro escopo, e cartão que
       // já está em AGENDADO é coberto pelo sincronizador da franquia, não por este caminho.

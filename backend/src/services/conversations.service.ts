@@ -1,4 +1,4 @@
-import type { Conversation, Message } from '@prisma/client';
+import type { Conversation, Message, Prisma } from '@prisma/client';
 import { notifyDashboard } from '../lib/dashboard-webhook.js';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
@@ -40,6 +40,23 @@ export interface AddMessageParams {
   role: 'user' | 'assistant' | 'system';
   content: string;
   meta?: Record<string, unknown>;
+  /** Só para fala que o sistema guarda DEPOIS de ela ter acontecido (atendimento adiado): a hora em que o paciente escreveu. Padrão: agora. */
+  createdAt?: Date;
+}
+
+/** PURA: o que vai para a tabela. `createdAt` só entra quando o chamador o dá (senão vale o `now()` do banco). */
+export function dadosDaMensagem(p: AddMessageParams, pedido: 'adiamento' | 'irritacao' | null): Prisma.MessageUncheckedCreateInput {
+  return {
+    conversationId: p.conversationId,
+    traceId: p.traceId ?? null,
+    role: p.role,
+    content: p.content,
+    // O "pediu tempo" viaja na mensagem que o disse, e é de lá que a régua o lê para pular
+    // os degraus curtos. Não cabe na conversa: `followUpStoppedReason` a tiraria da fila de
+    // vez, e adiar não é desistir.
+    meta: (pedido === 'adiamento' ? { ...(p.meta ?? {}), pediuTempo: true } : p.meta) as Prisma.InputJsonValue | undefined,
+    ...(p.createdAt ? { createdAt: p.createdAt } : {}),
+  };
 }
 
 export async function addMessage(p: AddMessageParams): Promise<Message> {
@@ -48,20 +65,7 @@ export async function addMessage(p: AddMessageParams): Promise<Message> {
   // problema volta, e foi exatamente o que aconteceu com a leitura da conversa oficial.
   const pedido = p.role === 'user' ? pediuParaParar(p.content) : null;
 
-  const message = await prisma.message.create({
-    data: {
-      conversationId: p.conversationId,
-      traceId: p.traceId ?? null,
-      role: p.role,
-      content: p.content,
-      // O "pediu tempo" viaja na mensagem que o disse, e é de lá que a régua o lê para pular
-      // os degraus curtos. Não cabe na conversa: `followUpStoppedReason` a tiraria da fila de
-      // vez, e adiar não é desistir.
-      meta: (pedido === 'adiamento' ? { ...(p.meta ?? {}), pediuTempo: true } : p.meta) as
-        | object
-        | undefined,
-    },
-  });
+  const message = await prisma.message.create({ data: dadosDaMensagem(p, pedido) });
   await prisma.conversation.update({
     where: { id: p.conversationId },
     data: {

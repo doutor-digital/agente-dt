@@ -15,6 +15,7 @@ import { estadoDaAutomacao } from './automacoes-estado.js';
 import { registrarSimulacao } from './so-no-papel.js';
 import { contaDoAnuncio } from './conta-do-anuncio.js';
 import { normalizarNome } from './kommo-schema.js';
+import { depsDaVarreduraPadrao, retomarCartoesCalados } from './atendimento-adiado.js';
 import {
   CAMPO_UNIDADE,
   CAMPOS_ANUNCIO,
@@ -42,6 +43,8 @@ const AUTOR_ROBO_TTL_MS = 10 * 60_000;
 let timer: NodeJS.Timeout | null = null;
 let primeira: NodeJS.Timeout | null = null;
 let rodando = false;
+/** Quando a última varredura COMEÇOU: o intervalo real entre duas (deploy, varredura lenta) aparece no log. */
+let ultimoInicio = 0;
 
 const pausa = () => new Promise((r) => setTimeout(r, PAUSA_ENTRE_ESCRITAS_MS));
 const autores = new Map<string, { autor: number; ate: number }>();
@@ -200,7 +203,10 @@ async function varrerUnidade(slug: string, regras: RegrasDaUnidade): Promise<voi
         remover: etiquetasSobrando(plano.unidade, etiquetas, regras),
       });
       resumo.gravados++;
-      logger.info({ unit: slug, leadId: lead.id, unidade: plano.unidade, motivo: plano.motivo }, 'unidade-por-canal: unidade marcada');
+      // `atrasoMin`: do nascimento do cartão até a marcação. É a espera do paciente quando a Sofia está calada por falta de
+      // unidade (03/11: um caso levou 32 min com a mediana dita em 4,3) — fica no log para a medida deixar de ser de memória.
+      const atrasoMin = lead.created_at ? Math.round((Date.now() / 1000 - lead.created_at) / 60) : undefined;
+      logger.info({ unit: slug, leadId: lead.id, unidade: plano.unidade, motivo: plano.motivo, atrasoMin }, 'unidade-por-canal: unidade marcada');
     } catch (err) {
       resumo.erros++;
       logger.warn({ err: String(err), unit: slug, leadId: lead.id }, 'unidade-por-canal: falha ao marcar');
@@ -210,15 +216,45 @@ async function varrerUnidade(slug: string, regras: RegrasDaUnidade): Promise<voi
   if (resumo.gravados || resumo.corrigidos || resumo.diverge || resumo.etiqueta || resumo.adiados || resumo.erros) logger.info({ unit: slug, seco, ...resumo }, 'unidade-por-canal: varredura');
 }
 
+/**
+ * Depois de marcar: o cartão em que a Sofia foi calada por falta de unidade (marca deixada pelo portão da conta dividida)
+ * e que agora é desta unidade volta a ser atendido — e cadastrado. Ver `atendimento-adiado.ts`. Só age com o robô LIGADO
+ * (em "só no papel" apenas loga o que retomaria).
+ */
+async function retomarDaUnidade(slug: string): Promise<void> {
+  const estado = estadoDaAutomacao(slug, 'unidade-por-canal', process.env.UNIDADE_POR_CANAL_SLUGS);
+  if (estado === 'desligado') return;
+  const unit = await prisma.unit.findUnique({ where: { slug } });
+  if (!unit?.kommoAccessToken) return;
+  const r = await retomarCartoesCalados(unit, estado === 'seco', depsDaVarreduraPadrao(createKommoClient(unit), unit.id));
+  if (r.retomados || r.erros || r.deOutra) logger.info({ unit: slug, seco: estado === 'seco', ...r }, 'unidade-por-canal: cartões calados reavaliados');
+}
+
 async function varrer(): Promise<void> {
-  if (rodando) return;
+  if (rodando) {
+    // A varredura anterior ainda não acabou: este disparo se perde. Se isto aparece, o intervalo de 5 min é mentira.
+    logger.warn({ rodandoHaMin: Math.round((Date.now() - ultimoInicio) / 60_000) }, 'unidade-por-canal: disparo perdido — a varredura anterior ainda está rodando');
+    return;
+  }
   rodando = true;
+  const inicio = Date.now();
+  const intervaloMin = ultimoInicio ? Math.round((inicio - ultimoInicio) / 60_000) : null;
+  ultimoInicio = inicio;
   try {
     for (const [slug, regras] of Object.entries(REGRAS_POR_UNIDADE)) {
       await varrerUnidade(slug, regras).catch((err) => logger.warn({ err: String(err), unit: slug }, 'unidade-por-canal: varredura falhou'));
     }
+    // Depois de marcar TODAS as unidades: a reavaliação dos calados pode demorar (lê conversa, cadastra) e não pode atrasar a marcação.
+    for (const slug of Object.keys(REGRAS_POR_UNIDADE)) {
+      await retomarDaUnidade(slug).catch((err) => logger.warn({ err: String(err), unit: slug }, 'unidade-por-canal: reavaliação dos cartões calados falhou'));
+    }
   } finally {
     rodando = false;
+    const ms = Date.now() - inicio;
+    // Só fala quando foge do combinado (varredura > 1 min, ou 2+ intervalos entre duas): uma linha por varredura normal seria ruído.
+    if (ms > 60_000 || (intervaloMin !== null && intervaloMin > (2 * SWEEP_MS) / 60_000)) {
+      logger.warn({ ms, intervaloMin, esperadoMin: SWEEP_MS / 60_000 }, 'unidade-por-canal: varredura fora do combinado');
+    }
   }
 }
 

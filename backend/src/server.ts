@@ -34,7 +34,8 @@ import { iniciarAutomacoes } from './lib/automacoes-estado.js';
 import { iniciarCrmCompartilhado } from './lib/crm-compartilhado.js';
 import { iniciarSupervisorDosWorkers, encerrarSupervisorDosWorkers, estadoDosWorkers } from './lib/worker-lease.js';
 import { agendarRecuperacao, posseDaLideranca } from './lib/recuperar-turnos.js';
-import { ganchosDeRecuperacao } from './controllers/webhook.controller.js';
+import { ganchosDeRecuperacao, iniciarTurnoAdiado } from './controllers/webhook.controller.js';
+import { definirIniciadorDoTurno } from './lib/atendimento-adiado.js';
 import { esperarTurnosDoDesligamento } from './lib/turnos-em-andamento.js';
 import { idsEmVoo } from './lib/agent-coalescer.js';
 import { desligarComGraca, fecharServidor, planoDeDesligamento } from './lib/desligamento.js';
@@ -268,6 +269,9 @@ async function main(): Promise<void> {
       stopVozSessaoWorker();
     },
   });
+
+  // O worker do unidade-por-canal reinicia o turno de quem esperou a unidade do cartão (lib/atendimento-adiado.ts) sem importar o controller.
+  definirIniciadorDoTurno(iniciarTurnoAdiado);
 
   // Refaz o que o deploy matou no meio (lib/recuperar-turnos.ts). Só varre quem é líder do worker_leases em modo `lease`
   // (= o container antigo já drenou e soltou o lease), por 10 min, e só trace nascido perto da posse da liderança.
