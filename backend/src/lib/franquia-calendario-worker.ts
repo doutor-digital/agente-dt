@@ -406,36 +406,49 @@ async function varrerUnidadeDoCalendario(unit: Unit, deps: DepsDoCalendario): Pr
       : await resolverPaciente(unit, kommo, nome, null, ids, cacheDoCalendario).then((x) => ({ leadId: x.leadId, confirmado: x.leadConfirmado, fone: x.fone ?? null }));
     // Só cartão PROVADO recebe a tarefa: telefone que casa com vários cartões (mãe e filha dividem o WhatsApp) é palpite. E, em Kommo
     // dividido, só o cartão que o campo «⌂ Unidade de atendimento» diz ser desta unidade.
-    const leadId = r.leadId !== null && r.confirmado && (await cartaoEhDaUnidade(r.leadId)) ? r.leadId : null;
+    let leadId = r.leadId !== null && r.confirmado && (await cartaoEhDaUnidade(r.leadId)) ? r.leadId : null;
     // O nome do paciente da franquia vai em TODA tarefa: dois homônimos podem cair no mesmo cartão, e assim a recepção vê quem é.
     // O telefone vem do próprio `resolverPaciente` (já cacheado); nada de segunda busca na franquia.
-    const texto = textoDaTarefa(a.item, tz, leadId === null ? sufixoDeTarefaSolta(nome, r.fone ?? null) : sufixoComCartao(nome), prefixo);
+    let texto = textoDaTarefa(a.item, tz, leadId === null ? sufixoDeTarefaSolta(nome, r.fone ?? null) : sufixoComCartao(nome), prefixo);
     dizer({ idSchedule: a.idSchedule, leadId, solta: leadId === null, texto, completeTill: a.completeTill }, 'criaria');
     if (aplicar) {
       // marcada ANTES do POST: num timeout o Kommo pode ter gravado a tarefa, e a lista da próxima varredura pode ainda não mostrá-la
       criadasRecentes.set(`${unit.id}:${a.idSchedule}`, Date.now());
+      const postar = (lead: number | null, txt: string) => kommo.createTask({
+        leadId: lead, text: txt, completeAt: a.completeTill, responsibleUserId: responsavel, taskTypeId, manterResponsavel: responsavel !== undefined,
+        durationSec: durationSec || undefined,
+      });
+      const recusou = (err: unknown): err is KommoApiError => err instanceof KommoApiError && [400, 404, 422].includes(err.status ?? 0);
+      // recusa explícita: a tarefa NÃO nasceu, então a marca não pode esconder o agendamento por 30 min (timeout/5xx: pode ter nascido, a marca fica);
+      // a pausa vale também no erro (o intervalo mínimo entre pedidos é da conta do Kommo, dividida com a Sofia da rede toda); e 3 recusas
+      // seguidas são recusa permanente (tipo apagado, dono desativado): para de criar nesta unidade até a próxima rodada
+      const contarRecusa = async (err: KommoApiError) => {
+        criadasRecentes.delete(`${unit.id}:${a.idSchedule}`);
+        await dormir(pausa);
+        if (++recusasSeguidas >= LIMITE_DE_RECUSAS_SEGUIDAS) {
+          criacoesSuspensas = true;
+          logger.warn(
+            { unit: unit.slug, status: err.status, taskTypeId, responsavel: responsavel ?? null },
+            `franquia-calendario: o Kommo recusou ${LIMITE_DE_RECUSAS_SEGUIDAS} criações seguidas — paro de criar nesta unidade até a próxima rodada (tipo de tarefa apagado? dono desativado?)`,
+          );
+        }
+      };
       let feita: { id?: number } | null;
       try {
-        feita = await kommo.createTask({
-          leadId, text: texto, completeAt: a.completeTill, responsibleUserId: responsavel, taskTypeId, manterResponsavel: responsavel !== undefined,
-          durationSec: durationSec || undefined,
-        });
+        feita = await postar(leadId, texto);
       } catch (err) {
-        // recusa explícita (400/404/422): a tarefa NÃO nasceu, então a marca não pode esconder o agendamento por 30 min. Timeout/5xx: pode ter
-        // nascido, a marca fica.
-        if (err instanceof KommoApiError && [400, 404, 422].includes(err.status ?? 0)) {
-          criadasRecentes.delete(`${unit.id}:${a.idSchedule}`);
-          // a pausa vale também no erro: o intervalo mínimo entre pedidos é da conta do Kommo, dividida com a Sofia da rede toda
-          await dormir(pausa);
-          if (++recusasSeguidas >= LIMITE_DE_RECUSAS_SEGUIDAS) {
-            criacoesSuspensas = true;
-            logger.warn(
-              { unit: unit.slug, status: err.status, taskTypeId, responsavel: responsavel ?? null },
-              `franquia-calendario: o Kommo recusou ${LIMITE_DE_RECUSAS_SEGUIDAS} criações seguidas — paro de criar nesta unidade até a próxima rodada (tipo de tarefa apagado? dono desativado?)`,
-            );
-          }
+        if (!recusou(err)) throw err;
+        if (leadId === null) { await contarRecusa(err); throw err; }
+        // o culpado pode ser o CARTÃO (mesclado ou apagado entre a leitura e o POST) e não a conta: uma tentativa SOLTA, com nome e telefone
+        await dormir(pausa);
+        leadId = null;
+        texto = textoDaTarefa(a.item, tz, sufixoDeTarefaSolta(nome, r.fone ?? null), prefixo);
+        try {
+          feita = await postar(null, texto);
+        } catch (err2) {
+          if (recusou(err2)) await contarRecusa(err2);
+          throw err2;
         }
-        throw err;
       }
       if (!feita) {
         resumo.erros++;
@@ -517,9 +530,13 @@ async function unidadesDoCalendario(): Promise<Unit[][]> {
   }
   const comConta = [];
   for (const unit of doCalendario) {
-    const dona = await contaDoKommo(unit);
-    const conta = (dona.kommoSubdomain ?? '').trim().toLowerCase() || `unit:${dona.id}`;
-    comConta.push({ unit, conta, grupoId: (await grupoDaUnidade(unit.id))?.contaUnitId ?? null });
+    try {
+      const dona = await contaDoKommo(unit);
+      const conta = (dona.kommoSubdomain ?? '').trim().toLowerCase() || `unit:${dona.id}`;
+      comConta.push({ unit, conta, grupoId: (await grupoDaUnidade(unit.id))?.contaUnitId ?? null });
+    } catch (err) {
+      logger.warn({ err: String(err), unit: unit.slug }, 'franquia-calendario: não consegui descobrir a conta do Kommo desta unidade — pulei só ela');
+    }
   }
   const { faixas, recusadas } = faixasPorConta(comConta);
   for (const r of recusadas) {

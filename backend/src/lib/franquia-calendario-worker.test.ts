@@ -562,7 +562,7 @@ test('recusa explícita do Kommo (422): a marca de "criada há pouco" é apagada
     c.criadas.push(a);
     return { id: 1 };
   };
-  const d = deps(kommo, [ag()], { modo: 'aplicar' });
+  const d = deps(kommo, [ag()], { modo: 'aplicar', resolver: async () => ({ leadId: null, confirmado: true, fone: null }) });
   const r1 = await varrerCalendario(unit, d);
   assert.equal(r1.erros, 1);
   const r2 = await varrerCalendario(unit, d);
@@ -599,7 +599,7 @@ test('recusa PERMANENTE do Kommo (tipo apagado, dono desativado): para depois de
   (kommo as unknown as { createTask: unknown }).createTask = async () => { posts++; throw new KommoApiError('createTask: 422', 422, null); };
   const agenda = Array.from({ length: 40 }, (_, i) => ag({ idSchedule: 5000 + i, clientName: `PACIENTE ${i}` }));
   const t0 = Date.now();
-  const r = await varrerCalendario(unit, { ...deps(kommo, agenda, { modo: 'aplicar' }), pausaMs: 25 });
+  const r = await varrerCalendario(unit, { ...deps(kommo, agenda, { modo: 'aplicar', resolver: async () => ({ leadId: null, confirmado: true, fone: null }) }), pausaMs: 25 });
   assert.equal(posts, 3, 'só 3 POSTs, não 40 (nem 160)');
   assert.ok(Date.now() - t0 >= 70, 'a pausa vale também no erro');
   assert.equal(r.erros, 3);
@@ -616,7 +616,22 @@ test('uma criação que deu certo zera a conta das recusas seguidas', async () =
     throw new KommoApiError('createTask: 422', 422, null);
   };
   const agenda = Array.from({ length: 6 }, (_, i) => ag({ idSchedule: 6000 + i, clientName: `PACIENTE ${i}` }));
-  const r = await varrerCalendario(unit, deps(kommo, agenda, { modo: 'aplicar' }));
+  const r = await varrerCalendario(unit, deps(kommo, agenda, { modo: 'aplicar', resolver: async () => ({ leadId: null, confirmado: true, fone: null }) }));
   assert.equal(n, 6, 'nunca chegou a 3 recusas seguidas');
   assert.equal(r.criadas, 2);
+});
+
+test('cartão que o Kommo recusa (mesclado/apagado): tenta UMA vez solta, com nome e telefone, e isso não conta para o disjuntor', async () => {
+  const { kommo, c } = kommoFalso([]);
+  (kommo as unknown as { createTask: unknown }).createTask = async (a: Record<string, unknown>) => {
+    if (a.leadId) throw new KommoApiError('createTask: 422', 422, null);
+    c.criadas.push(a);
+    return { id: 9 };
+  };
+  const agenda = Array.from({ length: 6 }, (_, i) => ag({ idSchedule: 7000 + i, clientName: `PACIENTE ${i}` }));
+  const r = await varrerCalendario(unit, deps(kommo, agenda, { modo: 'aplicar' }));
+  assert.equal(r.criadas, 6, 'os 6 nasceram, soltas');
+  assert.equal(r.semCartao, 6);
+  assert.equal(r.erros, 0);
+  assert.match(String(c.criadas[0].text), /Tel: \+5547999990000$/);
 });
