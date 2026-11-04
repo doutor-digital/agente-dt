@@ -6,6 +6,7 @@ import { env } from '../lib/env.js';
 import { resolveOpenAIApiKey } from './openai.service.js';
 import { classificarErroDaOpenAI, FalhaDeTranscricao } from '../lib/falha-de-audio.js';
 import { opsAlert } from '../lib/ops-alert.js';
+import { mediaLogprob, modeloDeTranscricao } from '../lib/transcricao-modelo.js';
 
 const TRANSCRIBE_URL = 'https://api.openai.com/v1/audio/transcriptions';
 
@@ -149,18 +150,21 @@ export const LIMITE_ARQUIVO_OPENAI_BYTES = MAX_AUDIO_BYTES;
  */
 export async function transcreverComSegmentos(
   audio: Buffer,
-  o: { ext: string; prompt: string; language?: string; apiKey?: string; timeoutMs?: number },
+  o: { ext: string; prompt?: string; language?: string; apiKey?: string; timeoutMs?: number; duracaoSeg?: number; modelo?: string },
 ): Promise<TranscricaoComSegmentos> {
   const apiKey = o.apiKey || env.OPENAI_TRANSCRIPTION_API_KEY || env.OPENAI_API_KEY;
   if (!apiKey) throw new FalhaDeTranscricao('Nenhuma chave OpenAI disponível — não dá pra transcrever', true);
   if (audio.byteLength === 0) throw new Error('Áudio vazio (0 bytes)');
   if (audio.byteLength > MAX_AUDIO_BYTES) throw new Error('Áudio acima do limite de 25 MB da OpenAI (corte em pedaços antes)');
+  const modelo = o.modelo ?? modeloDeTranscricao();
+  if (modelo !== 'whisper-1') return transcreverGpt4o(audio, apiKey, modelo, o);
   const form = new FormData();
   form.append('file', audio, { filename: `audio.${o.ext}`, contentType: `audio/${o.ext}` });
   form.append('model', 'whisper-1');
   form.append('language', o.language ?? 'pt');
   form.append('temperature', '0');
-  form.append('prompt', o.prompt);
+  // sem texto de instrução: em trecho mudo o modelo devolvia o próprio prompt como se fosse fala (relato da Lia, 04/11)
+  if (o.prompt?.trim()) form.append('prompt', o.prompt);
   form.append('response_format', 'verbose_json');
   form.append('timestamp_granularities[]', 'segment');
   try {
@@ -171,6 +175,38 @@ export async function transcreverComSegmentos(
       maxBodyLength: Infinity,
     });
     return { text: (res.data?.text ?? '').trim(), duration: res.data?.duration, segments: res.data?.segments ?? [] };
+  } catch (err) {
+    return falhaDaOpenAI(err);
+  }
+}
+
+/** gpt-4o(-mini)-transcribe: um pedaço curto vira UM segmento (0 → duracaoSeg), com a confiança da média dos logprobs. Sem prompt. */
+async function transcreverGpt4o(
+  audio: Buffer,
+  apiKey: string,
+  modelo: string,
+  o: { ext: string; language?: string; timeoutMs?: number; duracaoSeg?: number },
+): Promise<TranscricaoComSegmentos> {
+  const form = new FormData();
+  form.append('file', audio, { filename: `audio.${o.ext}`, contentType: `audio/${o.ext}` });
+  form.append('model', modelo);
+  form.append('language', o.language ?? 'pt');
+  form.append('temperature', '0');
+  form.append('response_format', 'json');
+  form.append('include[]', 'logprobs');
+  try {
+    const res = await axios.post<{ text?: string; logprobs?: Array<{ logprob?: number }> }>(TRANSCRIBE_URL, form, {
+      headers: { ...form.getHeaders(), Authorization: `Bearer ${apiKey}` },
+      timeout: o.timeoutMs ?? 180_000,
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity,
+    });
+    const text = (res.data?.text ?? '').trim();
+    const fim = o.duracaoSeg && o.duracaoSeg > 0 ? o.duracaoSeg : 0;
+    const segments: SegmentoWhisper[] = text
+      ? [{ start: 0, end: fim, text, avg_logprob: mediaLogprob(res.data?.logprobs), no_speech_prob: 0, compression_ratio: 1 }]
+      : [];
+    return { text, duration: fim || undefined, segments };
   } catch (err) {
     return falhaDaOpenAI(err);
   }

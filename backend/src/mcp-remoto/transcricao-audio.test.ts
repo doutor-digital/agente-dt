@@ -9,6 +9,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { SegmentoWhisper } from '../services/transcription.service.js';
+import { mediaLogprob } from '../lib/transcricao-modelo.js';
 import { registrarArquivosSePermitido } from './arquivos.js';
 import { CofreDeArquivos, detectarTipo, validarArquivo, TIPOS_DE_MIDIA } from './cofre-arquivos.js';
 import {
@@ -18,6 +19,7 @@ import {
   DESTINO_TRANSCRICAO,
   escolherInicio,
   FILTRO_LIMPEZA,
+  PEDACO_GPT4O_SEG,
   juntarPedacos,
   linhasComHorario,
   montarSrt,
@@ -201,7 +203,7 @@ async function sessao(userId: string, video: string[], arquivistas: string[] = [
   const server = new McpServer({ name: 't', version: '0' });
   const registros: any[] = [];
   const auditar = (r: any) => void registros.push(r);
-  const transcritor = criarTranscritor({ cofre: c.cofre, transcrever: async () => ({ text: '', segments: [] }) });
+  const transcritor = criarTranscritor({ modelo: 'whisper-1', cofre: c.cofre, transcrever: async () => ({ text: '', segments: [] }) });
   registrarArquivosSePermitido(server, c.cofre, userId, new Set(arquivistas), () => 'https://agente.test', auditar, new Set(video));
   const ligou = registrarTranscricaoSePermitido(server, transcritor, userId, new Set(video), auditar);
   const [a, b] = InMemoryTransport.createLinkedPair();
@@ -280,11 +282,11 @@ test('transcrição ponta a ponta (ffmpeg real, OpenAI simulada): sha do origina
     const sha = createHash('sha256').update(readFileSync(arq)).digest('hex');
     const p = await subirArquivo(cofre, arq);
     const chamadas: Array<{ bytes: number; prompt: string }> = [];
-    const transcritor = criarTranscritor({
+    const transcritor = criarTranscritor({ modelo: 'whisper-1',
       cofre,
       tmpBase: tmp,
       transcrever: async (audio, o) => {
-        chamadas.push({ bytes: audio.length, prompt: o.prompt });
+        chamadas.push({ bytes: audio.length, prompt: o.prompt ?? '' });
         return { text: 'x', segments: [seg(0, 2, 'Bom dia, pode entrar.'), seg(2, 4, 'Legendas pela comunidade Amara.org'), seg(4, 6, 'acho que é a gaveta', { avg_logprob: -1.2 })] };
       },
     });
@@ -299,7 +301,7 @@ test('transcrição ponta a ponta (ffmpeg real, OpenAI simulada): sha do origina
     assert.equal(r.tem_fala, true);
     assert.match(r.srt, /^1\n00:00:00,000 --> 00:00:02,000\nBom dia, pode entrar\.\n\n2\n/);
     assert.equal(chamadas.length, 1);
-    assert.match(chamadas[0]!.prompt, /câmera de segurança/);
+    assert.equal(chamadas[0]!.prompt, '', 'sem texto de instrução (ele voltava como fala nos trechos mudos)');
     assert.ok(chamadas[0]!.bytes > 1000 && chamadas[0]!.bytes < 100_000, 'só o áudio (mp3 pequeno) vai para a OpenAI, nunca o vídeo');
     assert.equal(r.arquivo_apagado_do_cofre, true);
     assert.deepEqual(readdirSync(tmp), [], 'pasta temporária (com o vídeo decifrado) apagada');
@@ -313,7 +315,7 @@ test('transcrição ponta a ponta (ffmpeg real, OpenAI simulada): sha do origina
     assert.equal(r2.arquivo_apagado_do_cofre, false);
     assert.equal(cofre.ver('u1', p2.id).estado, 'recebido', 'apagar_depois=false mantém para testar de novo');
     // áudio mudo: o Whisper alucina e a saída diz que não há fala
-    const mudo = criarTranscritor({ cofre, tmpBase: tmp, transcrever: async () => ({ text: 'x', segments: [seg(0, 5, 'Obrigado por assistir!'), seg(5, 6, '', { no_speech_prob: 0.97 })] }) });
+    const mudo = criarTranscritor({ modelo: 'whisper-1', cofre, tmpBase: tmp, transcrever: async () => ({ text: 'x', segments: [seg(0, 5, 'Obrigado por assistir!'), seg(5, 6, '', { no_speech_prob: 0.97 })] }) });
     const r3 = await mudo('u1', { envio_id: p2.id, limpar_audio: false });
     assert.equal(r3.tem_fala, false);
     assert.match(r3.mensagem!, /não tem fala/);
@@ -333,7 +335,7 @@ test('transcrição: áudio acima do limite é cortado em pedaços e os tempos s
     const tamanhos: number[] = [];
     let soltar!: () => void;
     const trava = new Promise<void>((res) => (soltar = res));
-    const transcritor = criarTranscritor({
+    const transcritor = criarTranscritor({ modelo: 'whisper-1',
       cofre,
       tmpBase: base,
       limiteOpenAiBytes: 12_000, // força o recorte (o mp3 de 6 s tem ~36 KB)
@@ -359,7 +361,7 @@ test('transcrição: áudio acima do limite é cortado em pedaços e os tempos s
     const mudo = path.join(base, 'mudo.mp4');
     execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=black:s=160x120:d=2:r=5', '-c:v', 'libx264', '-preset', 'ultrafast', mudo]);
     const p2 = await subirArquivo(cofre, mudo);
-    const t2 = criarTranscritor({ cofre, tmpBase: base, transcrever: async () => ({ text: '', segments: [] }) });
+    const t2 = criarTranscritor({ modelo: 'whisper-1', cofre, tmpBase: base, transcrever: async () => ({ text: '', segments: [] }) });
     await assert.rejects(() => t2('u1', { envio_id: p2.id }), /não tem faixa de áudio/);
   } finally {
     limpar();
@@ -391,4 +393,41 @@ test('limpeza do áudio: o filtro roda no ffmpeg de verdade, sem lowpass, e sobe
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
+});
+
+
+test('gpt-4o-transcribe (padrão): sem prompt, cada pedaço curto vira um segmento com o tempo do pedaço', { skip: !TEM_FFMPEG }, async () => {
+  const base = mkdtempSync(path.join(tmpdir(), 'transc-gpt4o-'));
+  const tmp = path.join(base, 'tmp');
+  execFileSync('mkdir', ['-p', tmp]);
+  const { cofre, limpar } = cofreDeTeste();
+  try {
+    const arq = criarVideoDeTeste(base);
+    const p = await subirArquivo(cofre, arq);
+    const chamadas: Array<{ prompt?: string; duracaoSeg?: number; modelo?: string }> = [];
+    const transcritor = criarTranscritor({
+      cofre,
+      tmpBase: tmp,
+      modelo: 'gpt-4o-transcribe',
+      transcrever: async (_audio, o) => {
+        chamadas.push({ prompt: o.prompt, duracaoSeg: o.duracaoSeg, modelo: o.modelo });
+        return { text: 'Bom dia, pode entrar.', segments: [seg(0, o.duracaoSeg ?? 0, 'Bom dia, pode entrar.')] };
+      },
+    });
+    const r = await transcritor('u1', { envio_id: p.id, inicio_gravacao: '2026-11-04T15:44:50' });
+    assert.equal(r.modelo, 'gpt-4o-transcribe');
+    assert.ok(chamadas.length >= 1);
+    assert.equal(chamadas[0]!.prompt, undefined, 'nenhum texto de instrução vai para a OpenAI');
+    assert.equal(chamadas[0]!.modelo, 'gpt-4o-transcribe');
+    assert.ok((chamadas[0]!.duracaoSeg ?? 0) > 0 && (chamadas[0]!.duracaoSeg ?? 99) <= PEDACO_GPT4O_SEG + 1, `duração do pedaço ${chamadas[0]!.duracaoSeg}`);
+    assert.deepEqual(r.linhas, ['[15:44:50] Bom dia, pode entrar.']);
+  } finally {
+    limpar();
+  }
+});
+
+test('mediaLogprob: média dos tokens; sem tokens = -1 (confiança desconhecida)', () => {
+  assert.equal(mediaLogprob([{ logprob: -0.2 }, { logprob: -0.4 }]), -0.30000000000000004);
+  assert.equal(mediaLogprob([]), -1);
+  assert.equal(mediaLogprob(undefined), -1);
 });

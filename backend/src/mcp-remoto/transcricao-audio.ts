@@ -23,6 +23,10 @@ import { z } from 'zod';
 import type { Auditar } from '../franquia-mcp/ferramentas.js';
 import { ErroDeEntrada } from '../franquia-mcp/travas.js';
 import type { SegmentoWhisper, TranscricaoComSegmentos } from '../services/transcription.service.js';
+import { modeloDeTranscricao } from '../lib/transcricao-modelo.js';
+
+/** com gpt-4o-transcribe (sem segmentos nativos) o áudio vai em pedaços deste tamanho: cada pedaço vira uma linha com horário */
+export const PEDACO_GPT4O_SEG = 15;
 import { executar } from './ferramenta.js';
 import { CofreDeArquivos, ErroDeCofre } from './cofre-arquivos.js';
 
@@ -307,7 +311,9 @@ export function argsDeExtracao(entrada: string, saida: string, limpar: boolean):
 export interface DepsTranscricao {
   cofre: CofreDeArquivos;
   /** chama a OpenAI com UM pedaço de áudio já em memória (a produção usa `transcreverComSegmentos`) */
-  transcrever: (audio: Buffer, o: { ext: string; prompt: string }) => Promise<TranscricaoComSegmentos>;
+  transcrever: (audio: Buffer, o: { ext: string; prompt?: string; duracaoSeg?: number; modelo?: string }) => Promise<TranscricaoComSegmentos>;
+  /** modelo da OpenAI (padrão: TRANSCRICAO_MODELO ou gpt-4o-transcribe) */
+  modelo?: string;
   ffmpeg?: string;
   ffprobe?: string;
   /** onde ficam os temporários (padrão: tmp do sistema) */
@@ -380,24 +386,29 @@ export function criarTranscritor(deps: DepsTranscricao) {
       await rm(entrada, { force: true }); // o temporário do original sai assim que o áudio existe (o original segue intacto no cofre)
 
       const bytes = (await stat(audio)).size;
-      const corte = planejarRecorte(bytes, sonda.duracaoSeg, limiteOpenAi);
-      const pedacos: Array<{ arquivo: string; inicioSeg: number }> = [];
+      const modelo = deps.modelo ?? modeloDeTranscricao();
+      const porTamanho = planejarRecorte(bytes, sonda.duracaoSeg, limiteOpenAi);
+      // gpt-4o-transcribe não devolve tempos: pedaços curtos SEMPRE (o tempo de cada linha = começo do pedaço)
+      const corte = modelo === 'whisper-1' ? porTamanho : Math.min(porTamanho ?? PEDACO_GPT4O_SEG, PEDACO_GPT4O_SEG);
+      const pedacos: Array<{ arquivo: string; inicioSeg: number; duracaoSeg: number }> = [];
       if (corte === null) {
-        pedacos.push({ arquivo: audio, inicioSeg: 0 });
+        pedacos.push({ arquivo: audio, inicioSeg: 0, duracaoSeg: sonda.duracaoSeg });
       } else {
         await rodarFerramenta(ffmpeg, ['-nostdin', '-hide_banner', '-v', 'error', '-y', '-i', audio, '-f', 'segment', '-segment_time', String(corte), '-c', 'copy', path.join(dir, 'parte-%03d.mp3')]);
         let acumulado = 0;
         for (const nome of (await readdir(dir)).filter((n) => /^parte-\d{3}\.mp3$/.test(n)).sort()) {
           const arquivo = path.join(dir, nome);
-          pedacos.push({ arquivo, inicioSeg: acumulado });
-          acumulado += (await sondar(ffprobe, arquivo)).duracaoSeg; // duração real de cada pedaço: o corte cai no quadro mais próximo
+          const dur = (await sondar(ffprobe, arquivo)).duracaoSeg;
+          pedacos.push({ arquivo, inicioSeg: acumulado, duracaoSeg: dur });
+          acumulado += dur; // duração real de cada pedaço: o corte cai no quadro mais próximo
         }
       }
 
       const partes: Array<{ inicioSeg: number; segmentos: SegmentoWhisper[] }> = [];
       for (const p of pedacos) {
         const buf = await readFile(p.arquivo);
-        const r = await deps.transcrever(buf, { ext: 'mp3', prompt: PROMPT_CONTEXTO });
+        // sem texto de instrução: ele voltava como fala nos trechos mudos (relato da Lia, 04/11)
+        const r = await deps.transcrever(buf, { ext: 'mp3', duracaoSeg: p.duracaoSeg, modelo });
         partes.push({ inicioSeg: p.inicioSeg, segmentos: r.segments });
       }
 
@@ -417,7 +428,7 @@ export function criarTranscritor(deps: DepsTranscricao) {
         original_alterado: false,
         provas: 'sha256 é o do arquivo exatamente como foi enviado (calculado na chegada e conferido de novo na leitura); a transcrição trabalha numa cópia do áudio',
         idioma: 'pt',
-        modelo: 'whisper-1',
+        modelo,
         limpar_audio: limpar,
         filtro_de_limpeza: limpar ? FILTRO_LIMPEZA : null,
         pedacos_enviados_a_openai: pedacos.length,
