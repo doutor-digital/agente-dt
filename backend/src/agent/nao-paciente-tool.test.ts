@@ -102,6 +102,8 @@ test('juiz da pergunta final: candidato marcado neste turno não é reescrito em
 
   assert.equal(marcouCandidatoNoTurno([new HumanMessage('oi'), chamada, ok]), true);
   assert.equal(marcouCandidatoNoTurno([new HumanMessage('oi'), chamada, parcial]), true);
+  const erro = new ToolMessage({ content: 'ERRO — não consegui conferir o cartão agora e NADA foi marcado.', tool_call_id: 'c1', name: 'marcar_nao_paciente' });
+  assert.equal(marcouCandidatoNoTurno([new HumanMessage('oi'), chamada, erro]), true, 'ERRO também pede a frase única, sem pergunta de venda');
   assert.equal(marcouCandidatoNoTurno([new HumanMessage('oi'), chamada, recusado]), false);
   assert.equal(marcouCandidatoNoTurno(velha), false, 'a marcação de um turno anterior não vale para o turno de agora');
 });

@@ -232,7 +232,7 @@ test('etiqueta não entrou: o cartão NÃO anda (PERDIDO sem a etiqueta dispara 
   assert.equal(r.desfecho, 'parcial');
   assert.deepEqual(movimentos, []);
   assert.equal(tarefas.length, 1);
-  assert.match(tarefas[0], /Mova à mão/);
+  assert.match(tarefas[0], /Confira o cartão/);
 });
 
 test('o Kommo recusa o PERDIDO (campo obrigatório): relata, abre tarefa, IA pausada, motivo não conta como gravado', async () => {
@@ -261,37 +261,42 @@ test('a pausa falhou e a leitura confirma que não pausou: esquece a marca (o pr
 });
 
 test('chamar duas vezes no mesmo turno: a segunda não escreve etiqueta nem move de novo', async () => {
-  cartao = cartaoNovo({ status_id: 143, _embedded: { tags: [{ id: 1, name: 'CURRÍCULO' }] } });
+  cartao = cartaoNovo({ status_id: 143, _embedded: { tags: [{ id: 1, name: 'CURRÍCULO' }, { id: 2, name: 'NO_FOLLOW_UP' }] } });
   const r: ResultadoNaoPaciente = await marcar();
   assert.equal(r.desfecho, 'ja_estava');
   assert.deepEqual(escritas, ['pausa', 'followUp']);
   assert.deepEqual(movimentos, []);
 });
 
-test('já em PERDIDO, sem etiqueta, e a etiqueta falha: o motivo NÃO consta como gravado (nada foi escrito)', async () => {
+test('já em PERDIDO, sem etiqueta, e a etiqueta falha: o motivo é gravado (é o que dá), a falta da etiqueta vira tarefa e a nota diz a verdade', async () => {
   cartao = cartaoNovo({ status_id: 143 });
   falhar.addTag = true;
   const r = await marcar();
   assert.equal(r.etiquetas, false);
-  assert.notEqual(r.motivo, 'gravado');
-  assert.ok(!escritas.includes('campos'));
-  assert.ok(!notas[0].includes('motivo «Não é paciente'), 'a nota não pode afirmar o que não foi feito');
-  assert.match(textoParaOModelo(r), /o motivo/);
-});
-
-test('o atalho de "já estava marcado" também para a escada de follow-up', async () => {
-  cartao = cartaoNovo({ status_id: 143, _embedded: { tags: [{ id: 1, name: 'CURRÍCULO' }] } });
-  await marcar();
-  assert.deepEqual(escritas, ['pausa', 'followUp']);
+  assert.equal(r.desfecho, 'parcial');
+  assert.equal(tarefas.length, 1, 'a equipe é avisada: o cartão está em PERDIDO sem a etiqueta que segura a régua');
+  assert.ok(!r.falhas.some((f) => /não movido/.test(f)), 'não é falha de mover: já estava em PERDIDO');
+  assert.equal(r.motivo, 'gravado');
+  assert.ok(escritas.includes('campos'));
+  assert.match(notas[0], /\(NÃO entrou\)/);
+  assert.match(textoParaOModelo(r), /a etiqueta/);
 });
 
 test('já marcado, mas a IA não pôde ser pausada: parcial, tarefa para a equipe, e o modelo NÃO ouve "segue pausada"', async () => {
-  cartao = cartaoNovo({ status_id: 143, _embedded: { tags: [{ id: 1, name: 'CURRÍCULO' }] } });
+  cartao = cartaoNovo({ status_id: 143, _embedded: { tags: [{ id: 1, name: 'CURRÍCULO' }, { id: 2, name: 'NO_FOLLOW_UP' }] } });
   const r = await marcar({ pausedFieldId: null });
   assert.equal(r.desfecho, 'parcial');
   assert.equal(tarefas.length, 1);
   assert.doesNotMatch(textoParaOModelo(r), /segue pausada/);
   assert.doesNotMatch(textoParaOModelo(r), /a mudança para PERDIDO/, 'já estava em PERDIDO: não faltou isso');
+});
+
+test('em PERDIDO com CURRÍCULO mas SEM a etiqueta de não contatar: não é atalho — a etiqueta que segura a régua volta', async () => {
+  cartao = cartaoNovo({ status_id: 143, _embedded: { tags: [{ id: 1, name: 'CURRÍCULO' }] } });
+  const r = await marcar();
+  assert.notEqual(r.desfecho, 'ja_estava');
+  assert.ok(escritas.includes('addTag'));
+  assert.ok(etiquetasGravadas.includes('NO_FOLLOW_UP'));
 });
 
 test('já estava em PERDIDO (a equipe fechou) mas sem etiqueta: etiqueta + motivo, sem mover; motivo da equipe fica', async () => {

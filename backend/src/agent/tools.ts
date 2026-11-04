@@ -114,7 +114,7 @@ export const DEFAULT_TOOL_DESCRIPTIONS: Record<string, string> = {
     '(pergunta de vaga ou emprego) ou mandou currículo, vídeo de apresentação ou arquivo de candidatura. O sistema etiqueta o cartão, ' +
     'registra o motivo, move para PERDIDO, pausa a IA e para o follow-up — tudo de uma vez. NÃO use para quem só MENCIONA o trabalho ' +
     'dele ("trabalho em laboratório", "sou enfermeira") dentro de uma conversa de paciente, nem para fornecedor, propaganda ou ' +
-    'funcionário. Depois de chamar, responda UMA frase de agradecimento (currículo recebido; o recrutamento é com a equipe da clínica).',
+    'funcionário. Depois de chamar, responda UMA frase de agradecimento (o recrutamento é com a equipe da clínica; currículo recebido, se ele mandou o arquivo).',
 };
 
 export interface BuildToolsArgs {

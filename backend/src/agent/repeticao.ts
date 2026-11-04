@@ -433,7 +433,7 @@ export function ferramentasDoTurno(mensagens: BaseMessage[]): string[] {
 }
 
 /**
- * `marcar_nao_paciente` deu certo (ou em parte) neste turno? Quem escreve é candidato a vaga e a resposta é a UMA frase de
+ * `marcar_nao_paciente` deu certo, em parte ou falhou na leitura (ERRO —) neste turno? Quem escreve é candidato a vaga e a resposta é a UMA frase de
  * agradecimento, sem pergunta no fim — o juiz da "pergunta final" (cta-final) não pode reescrevê-la em venda de consulta.
  * RECUSADO/ERRO = é paciente: o turno segue as regras de sempre, inclusive a pergunta final.
  */
@@ -444,7 +444,7 @@ export function marcouCandidatoNoTurno(mensagens: BaseMessage[]): boolean {
     if (tipo === 'human') break;
     if (tipo === 'tool' && (m as unknown as { name?: string }).name === 'marcar_nao_paciente') {
       const conteudo = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
-      if (/^(OK|PARCIAL)\b/.test(conteudo.trim())) return true;
+      if (/^(OK|PARCIAL|ERRO —)/.test(conteudo.trim())) return true; // ERRO — (Kommo fora na leitura) também pede a frase única
     }
   }
   return false;

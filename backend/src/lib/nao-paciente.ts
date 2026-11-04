@@ -157,7 +157,9 @@ export async function marcarNaoPaciente(p: PedidoNaoPaciente): Promise<Resultado
 
   const perdidoComercial = comercial ? statusPerdidoDoFunil(comercial.statuses) : null;
   const jaEstaFechado = !!comercial && perdidoComercial !== null && cartao.pipeline_id === comercial.id && cartao.status_id === perdidoComercial;
-  const jaEtiquetado = tags(cartao).some((t) => normalizarNome(t) === normalizarNome(ETIQUETA_CURRICULO));
+  const naoContatar = await etiquetaDeNaoContatar(unit, kommo);
+  const etiquetasDoCartao = tags(cartao).map(normalizarNome);
+  const jaEtiquetado = [ETIQUETA_CURRICULO, naoContatar].every((t) => etiquetasDoCartao.includes(normalizarNome(t)));
 
   // Idempotência: o modelo pode chamar duas vezes no mesmo turno, ou o candidato mandar o vídeo depois do PDF.
   if (jaEstaFechado && jaEtiquetado) {
@@ -181,7 +183,6 @@ export async function marcarNaoPaciente(p: PedidoNaoPaciente): Promise<Resultado
     (v) => ({ v }),
     (e: unknown) => ({ e }),
   );
-  const naoContatar = await etiquetaDeNaoContatar(unit, kommo);
 
   // 2. Etiquetas ANTES da etapa. Se não entraram, o cartão NÃO anda: PERDIDO sem a etiqueta dispara a régua de recuperação.
   let etiquetas = false;
@@ -243,7 +244,7 @@ export async function marcarNaoPaciente(p: PedidoNaoPaciente): Promise<Resultado
 
   // 5. PERDIDO do COMERCIAL, com o motivo no mesmo PATCH (se o Kommo recusar o valor, o cartão não anda sem ele).
   let movido = false;
-  if (!etiquetas) {
+  if (!etiquetas && !jaEstaFechado) {
     falhas.push('cartão não movido: as etiquetas não entraram');
   } else if (!comercial || perdidoComercial === null) {
     falhas.push('cartão não movido: não achei o PERDIDO do funil COMERCIAL desta conta');
@@ -282,11 +283,11 @@ export async function marcarNaoPaciente(p: PedidoNaoPaciente): Promise<Resultado
     pausada ? 'IA pausada' : 'IA NÃO foi pausada',
   ].join(' · ');
   await kommo.addLeadNote(leadId, `${resumo}. O arquivo do currículo continua na conversa do cartão.`).catch((err) => logger.warn({ err: String(err), ...base }, 'nao-paciente: não consegui deixar a nota'));
-  if (!movido && !jaEstaFechado) {
+  if ((!movido && !jaEstaFechado) || !etiquetas) {
     await kommo
       .createTask({
         leadId,
-        text: `Candidato a vaga (currículo): a Sofia não conseguiu mover o cartão para PERDIDO (${falhas.join('; ') || 'sem detalhe'}). Mova à mão e ponha o motivo «${OPCAO_MOTIVO_CURRICULO}».`,
+        text: `Candidato a vaga (currículo): a Sofia não conseguiu terminar a marcação (${falhas.join('; ') || 'sem detalhe'}). Confira o cartão: etiqueta ${ETIQUETA_CURRICULO} e NO_FOLLOW_UP, PERDIDO do COMERCIAL e o motivo «${OPCAO_MOTIVO_CURRICULO}».`,
         completeAt: agora + 3600,
         responsibleUserId: cartao.responsible_user_id,
       })
@@ -340,12 +341,13 @@ export function textoParaOModelo(r: ResultadoNaoPaciente): string {
   if (r.desfecho === 'erro') {
     return (
       'ERRO — não consegui conferir o cartão agora e NADA foi marcado (a IA continua ligada; se a pessoa escrever de novo, chame a ferramenta de novo). ' +
-      'Se ela é mesmo candidata, responda UMA frase só: agradeça, diga que o currículo foi recebido e que o recrutamento é tratado pela equipe da clínica, sem pergunta no fim. ' +
+      'Se ela é mesmo candidata, responda UMA frase só: agradeça e diga que o recrutamento é tratado pela equipe da clínica (currículo recebido, se mandou o arquivo; senão, que pode mandar por aqui), sem pergunta no fim. ' +
       'Se ficou em dúvida, atenda normalmente.'
     );
   }
   const fala =
-    'Agora responda UMA frase só ao candidato: agradeça, diga que o currículo foi recebido e que o recrutamento é tratado pela equipe da clínica. ' +
+    'Agora responda UMA frase só ao candidato: agradeça e diga que o recrutamento é tratado pela equipe da clínica — e que o currículo foi recebido, se ele mandou o arquivo ou o vídeo; ' +
+    'se só perguntou da vaga e não mandou nada, diga que ele pode mandar o currículo por aqui, que fica com a equipe. ' +
     'Sem pergunta no fim, sem prometer vaga, prazo ou salário, sem falar de consulta, preço ou horário, e sem dizer que "marcou", "etiquetou" ou "fechou" nada.';
   if (r.desfecho === 'feito') return `OK — candidato marcado: etiqueta, motivo e PERDIDO aplicados, IA pausada e follow-up parado. ${fala}`;
   if (r.desfecho === 'ja_estava') return `OK — este cartão já estava marcado como candidato; a IA segue pausada. ${fala}`;
