@@ -456,3 +456,51 @@ test('baixarUrl: IPv4 primeiro; se a conexão falha tenta o próximo endereço J
   assert.deepEqual(tentados, ['104.18.1.1', '104.18.1.2'], 'IPv4 antes do IPv6; o que falhou não bloqueia o resto');
   await assert.rejects(baixarUrl('https://www.asaas.com/x', { dominios: DOMINIOS_PADRAO, resolver: PUBLICO, requisitar: async () => { throw new Error('ENETUNREACH'); } }), /não consegui baixar/);
 });
+
+// ── revisão do sênior ─────────────────────────────────────────────────────────────────────────────────
+test('404 do servidor = DESATUALIZADO, não recusa: o arquivo FICA no cofre, nada é apagado e a mensagem diz o que fazer; depois de atualizar, a mesma entrega funciona', async () => {
+  let atualizado = false;
+  const srv = servidor({ anexo: () => (atualizado ? { ok: true, doc_id: 'doc-1', caminho: 'x', paginas: 1, previas: 1 } : new ErroSistemas('nao_encontrado', 404)) });
+  const a = ambiente(srv);
+  try {
+    const k = await cliente(a);
+    const p = await pedirESubir(a, k, PDF);
+    const r = await k.chamar('sistemas_anexar_envio', { envio: p.envio });
+    assert.ok(r.erro && /DESATUALIZADO.*0\.1\.10\.3.*continua guardado no cofre/.test(r.texto), r.texto);
+    assert.equal(a.cofre.ver(QUEM.usuario, p.envio).estado, 'recebido', 'o arquivo não foi apagado');
+    atualizado = true;
+    assert.equal((await k.chamar('sistemas_anexar_envio', { envio: p.envio })).erro, false);
+  } finally { a.limpar(); }
+});
+
+test('sem nome_arquivo o comando curl leva o nome SEM extensão: um PNG/JPG no envio não é recusado por "comprovante.pdf"', async () => {
+  const a = ambiente(servidor());
+  try {
+    const k = await cliente(a);
+    const p = await k.chamar('sistemas_preparar_anexo', { tabela: 'caixa_lanc', lancamento: LANC, tipo: 'nota_fiscal' });
+    assert.match(p.json.comandoCurl, /X-Nome-Arquivo: nota_fiscal'/);
+    assert.ok(!/X-Nome-Arquivo: [^']*\./.test(p.json.comandoCurl));
+    // e é isso que o cofre recebe: PNG com esse nome entra, o link NÃO é queimado
+    const token = String(p.json.linkDeEnvio).split('/').pop()!;
+    const g = await a.cofre.guardar(a.cofre.reservar(token), 'nota_fiscal', PNG);
+    assert.equal(g.tipo, 'png');
+    assert.equal(g.nome, 'nota_fiscal.png');
+  } finally { a.limpar(); }
+});
+
+test('anexar_url: a extensão vem do CONTEÚDO, não do endereço (recibo.png que entrega PDF vira recibo.pdf)', async () => {
+  const srv = servidor();
+  const a = ambiente(srv, { baixar: baixa(PDF, { nome: 'recibo.png' }).baixar as any });
+  try {
+    const k = await cliente(a);
+    assert.equal((await k.chamar('sistemas_anexar_url', { tabela: 'caixa_lanc', lancamento: LANC, tipo: 'recibo', url: 'https://www.asaas.com/recibo.png' })).erro, false);
+    assert.equal(srv.anexos()[0]!.corpo.nome, 'recibo.pdf');
+  } finally { a.limpar(); }
+  const srv2 = servidor();
+  const b = ambiente(srv2, { baixar: baixa(PNG, { nome: 'recibo.pdf' }).baixar as any });
+  try {
+    const k = await cliente(b);
+    assert.equal((await k.chamar('sistemas_anexar_url', { tabela: 'caixa_lanc', lancamento: LANC, tipo: 'recibo', url: 'https://www.asaas.com/recibo.pdf' })).erro, false);
+    assert.equal(srv2.anexos()[0]!.corpo.nome, 'recibo.png');
+  } finally { b.limpar(); }
+});

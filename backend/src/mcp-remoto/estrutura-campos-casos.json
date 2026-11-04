@@ -2883,5 +2883,36 @@
   "existentes": {},
   "esperado": "recusa",
   "msg": "tipo do pedido"
+ },
+ {
+  "nome": "cronograma_x não é o esquema cron: pode criar",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "cronograma_x",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "ok"
+ },
+ {
+  "nome": "tabela fechada cron_jobs (prefixo cron_)",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "cron_jobs",
+   "colunas": [
+    {
+     "nome": "ca",
+     "tipo": "text"
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "fechada"
  }
 ]

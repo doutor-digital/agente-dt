@@ -1,7 +1,7 @@
 /**
  * Anexar comprovante, nota fiscal ou recibo a um lançamento do sistema novo (Caixa `caixa_lanc` ou Financeiro `fin_lanc`) pelo chat.
  * É a ponte entre o cofre de envio (`cofre-arquivos.ts`, o mesmo do ClickSign) e a rota `POST /admin/v1/anexo` do servidor do sistema, que
- * guarda o arquivo no armazenamento do Caixa e gera as prévias como a tela (contrato: docs/ADMIN-API.md do repositório sistemas-dd).
+ * guarda o arquivo (Caixa: armazenamento do Caixa + prévias como a tela; Financeiro: documento em rh_docs col 'anexos', o formato que a tela do Financeiro abre) (contrato: docs/ADMIN-API.md do repositório sistemas-dd).
  *
  *  1. `sistemas_preparar_anexo`  confere o lançamento e devolve o LINK DE ENVIO (cofre: 256 bits, uso único, 10 min, só PDF/JPG/PNG até 15 MB,
  *                                preso ao lançamento e a quem pediu). A pessoa abre o link, ou o ambiente da Lia faz um PUT nele.
@@ -93,14 +93,17 @@ async function conferirLancamento(ctx: ContextoSistemas, quem: QuemSistemas, sis
   return { slug: c.slug, lanc: { unidade: String(linha.unidade ?? ''), valor: linha.valor, resumo: linha } };
 }
 
-/** Entrega os bytes ao servidor do sistema. `definitivo` = o servidor respondeu (aceitou ou recusou); false = não sei se gravou. */
+/**
+ * Entrega os bytes ao servidor do sistema. `definitivo` = o servidor respondeu com uma recusa/aceite da REGRA dele (2xx, 4xx); false = o arquivo tem que ficar.
+ * 404 NÃO é recusa: é o servidor desatualizado (ainda sem a rota /admin/v1/anexo) ou algo que sumiu; o arquivo continua no cofre. 5xx e sem resposta: não sei se gravou.
+ */
 async function entregar(
   ctx: ContextoSistemas,
   quem: QuemSistemas,
   sistema: string,
   enviadoNome: string,
   p: { tabela: Tabela; lancamento: string; tipo: TipoAnexo; nome: string; bytes: Buffer; origem: string },
-): Promise<{ definitivo: boolean; resposta?: Saida; erro?: ErroSistemas | Error }> {
+): Promise<{ definitivo: boolean; resposta?: Saida; erro?: ErroSistemas | Error; desatualizado?: boolean }> {
   const c = resolverSistema(ctx, sistema);
   try {
     const r = (await c.fonte.chamar('POST', '/admin/v1/anexo', {
@@ -110,7 +113,8 @@ async function entregar(
     })) as Saida;
     return { definitivo: true, resposta: r };
   } catch (e) {
-    if (e instanceof ErroSistemas && e.status !== null && e.status < 500) return { definitivo: true, erro: e };
+    if (e instanceof ErroSistemas && e.status !== null && e.status < 500 && e.status !== 404) return { definitivo: true, erro: e };
+    if (e instanceof ErroSistemas && e.status === 404) return { definitivo: false, erro: e, desatualizado: true };
     return { definitivo: false, erro: e as Error };
   }
 }
@@ -127,12 +131,15 @@ function resultado(slug: string, r: Saida, extra: Record<string, unknown> = {}) 
       ? r.previas > 0
         ? 'O documento está no Caixa com ia_status "aguardando"; as prévias estão em caixa_docs_prev (doc_id acima) para a conferência.'
         : 'O documento está no Caixa com ia_status "aguardando", MAS sem prévia (veja aviso_previa): não dá para conferir o conteúdo por aqui; peça um arquivo sem senha ou em outro formato.'
-      : 'A coluna anexo do fin_lanc foi preenchida com "caixa-docs/<caminho>" (o arquivo está no armazenamento do Caixa; a tela gera o link assinado por esse caminho).',
+      : 'A coluna anexo do fin_lanc foi preenchida com o id do documento em rh_docs (col "anexos"), o formato que o botão do comprovante da tela do Financeiro abre. Não há prévia.',
   };
 }
 
-function mensagemDeFalha(e: ErroSistemas | Error | undefined, certo: boolean): string {
+function mensagemDeFalha(e: ErroSistemas | Error | undefined, certo: boolean, desatualizado = false): string {
   const texto = e?.message ?? 'erro desconhecido';
+  if (desatualizado) {
+    return 'o servidor do sistema respondeu 404: está DESATUALIZADO (ainda sem a rota /admin/v1/anexo; a API 0.1.10.3 precisa ser publicada antes) ou o lançamento sumiu. Nada foi gravado e o arquivo continua guardado no cofre até vencer; avise o João e tente de novo depois da atualização.';
+  }
   return certo
     ? `o servidor do sistema recusou o anexo: ${texto}`
     : `NÃO sei se o anexo foi gravado (${texto}). Confira com sistemas_consultar em caixa_docs (ou o campo anexo do fin_lanc) e com sistemas_log ANTES de repetir.`;
@@ -200,7 +207,8 @@ export function registrarAnexosSistemas(server: McpServer, ctx: ContextoSistemas
           throw e;
         }
         const link = `${base()}/arquivos/enviar/${p.token}`;
-        const nome = encodeURIComponent((args.nome_arquivo ?? `${args.tipo}.pdf`).replace(/[\r\n]/g, ' '));
+        // sem nome dado: SEM extensão (o tipo vem do conteúdo; "comprovante.pdf" com um PNG dentro seria recusado e queimaria o link)
+        const nome = encodeURIComponent((args.nome_arquivo ?? args.tipo).replace(/[\r\n]/g, ' '));
         return {
           sistema: slug,
           envio: p.id,
@@ -225,7 +233,7 @@ export function registrarAnexosSistemas(server: McpServer, ctx: ContextoSistemas
       description:
         'PASSO 2 de 2. Pega o arquivo que chegou pelo link de sistemas_preparar_anexo e o anexa ao lançamento daquele pedido (o destino vem do pedido, não daqui): ' +
         'grava no armazenamento do Caixa (unidade/AAAA-MM/uuid-nome), cria o documento em caixa_docs com ia_status "aguardando" e as prévias em caixa_docs_prev (lançamento do Caixa) ' +
-        'ou preenche a coluna anexo (fin_lanc). Depois apaga o arquivo do cofre. Se o arquivo ainda não chegou, diz isso (peça para enviar e chame de novo). ' +
+        'ou, em fin_lanc, grava o documento em rh_docs (col anexos) e preenche a coluna anexo com o id dele (o que o botão do comprovante da tela abre; sem prévia). Depois apaga o arquivo do cofre. Se o arquivo ainda não chegou, diz isso (peça para enviar e chame de novo). ' +
         'Uma vez só por envio. Registra quem anexou. Confira antes com a pessoa que o lançamento é o certo.',
       inputSchema: { envio: z.string().trim().min(8).max(64).describe('o "envio" devolvido por sistemas_preparar_anexo') },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
@@ -252,7 +260,7 @@ export function registrarAnexosSistemas(server: McpServer, ctx: ContextoSistemas
         // o servidor respondeu (aceitou ou recusou): o arquivo não tem mais o que fazer no cofre. Sem resposta: fica, para tentar de novo depois de conferir.
         if (out.definitivo) deps.cofre.apagar(quem.usuario, args.envio);
         else deps.cofre.soltar(quem.usuario, args.envio);
-        if (!out.resposta) throw new ErroDeEntrada(mensagemDeFalha(out.erro, out.definitivo));
+        if (!out.resposta) throw new ErroDeEntrada(mensagemDeFalha(out.erro, out.definitivo, out.desatualizado));
         return resultado(dest.sistema, out.resposta, { origem: 'envio', arquivoApagadoDoCofre: true });
       }),
   );
@@ -283,10 +291,11 @@ export function registrarAnexosSistemas(server: McpServer, ctx: ContextoSistemas
               : `o endereço (${b.host}) não devolveu PDF, JPG nem PNG (conteúdo: ${b.contentType || 'desconhecido'}).`,
           );
         }
-        const sugerido = nomeLimpo(b.nomeSugerido);
-        const nome = (/\.(pdf|jpe?g|png)$/i.test(sugerido) ? sugerido : `${sugerido || args.tipo}.${tipo}`).slice(0, 100);
+        // a extensão vem do CONTEÚDO, não do endereço (".../recibo.png" que entrega um PDF vira recibo.pdf)
+        const sugerido = nomeLimpo(b.nomeSugerido).replace(/\.(pdf|jpe?g|png)$/i, '');
+        const nome = `${(sugerido || args.tipo).slice(0, 90)}.${tipo}`;
         const out = await entregar(ctx, quem, slug, enviadoNome, { tabela: args.tabela, lancamento: id, tipo: args.tipo, nome, bytes: b.bytes, origem: `url:${b.host}` });
-        if (!out.resposta) throw new ErroDeEntrada(mensagemDeFalha(out.erro, out.definitivo));
+        if (!out.resposta) throw new ErroDeEntrada(mensagemDeFalha(out.erro, out.definitivo, out.desatualizado));
         return resultado(slug, out.resposta, { origem: `baixado de ${b.host}`, tamanhoBaixado: b.bytes.length });
       }),
   );

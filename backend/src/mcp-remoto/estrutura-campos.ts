@@ -36,6 +36,8 @@ export interface Plano {
   sql: string[];
   resumo: string[];
   avisos: string[];
+  /** nome do índice que o plano cria (só no tipo "indice"): o servidor recusa se já existir objeto com este nome (o corte em 63 caracteres pode colidir) */
+  criaIndice?: string;
 }
 
 // ------------------------------------------------------------------ regras
@@ -44,7 +46,7 @@ const NOME = /^[a-z][a-z0-9_]{1,40}$/;
 const TEXTO_SEGURO = /^[A-Za-z0-9À-ÿ _.,:;/()%@#+=?!-]{0,60}$/;
 
 /** Tabelas e prefixos que não se criam nem se alteram por aqui: usuários, documentos, registros, página do RH, administração, esquemas do sistema. */
-const FECHADOS_PREFIXO = ['rh_usuarios', 'rh_docs', 'rh_log', 'rh_site', 'admin_', 'auth', 'storage', 'pg_', 'sql_', 'supabase', 'realtime', 'vault', 'extensions', 'graphql', 'cron', 'information_schema', 'pgsodium', 'pgbouncer'];
+const FECHADOS_PREFIXO = ['rh_usuarios', 'rh_docs', 'rh_log', 'rh_site', 'admin_', 'auth', 'storage', 'pg_', 'sql_', 'supabase', 'realtime', 'vault', 'extensions', 'graphql', 'cron_', 'information_schema', 'pgsodium', 'pgbouncer'];
 const COLUNAS_DO_SISTEMA = ['tableoid', 'cmin', 'cmax', 'xmin', 'xmax', 'ctid'];
 
 /** Lista fechada de tipos: o que a pessoa escreve (chave) e o que vai para o SQL. */
@@ -64,7 +66,8 @@ export const TIPOS_ACEITOS = Object.keys(TIPOS);
 const MAX_COLUNAS = 30;
 const MAX_COLUNAS_INDICE = 4;
 
-export const nomeFechado = (nome: string): boolean => FECHADOS_PREFIXO.some((p) => nome.startsWith(p));
+/** "cron" é o esquema do pg_cron; o prefixo é "cron_" para não fechar nomes legítimos como cronograma_* (03/11, revisão do sênior). */
+export const nomeFechado = (nome: string): boolean => nome === 'cron' || FECHADOS_PREFIXO.some((p) => nome.startsWith(p));
 
 function recusa(msg: string): never {
   throw new ErroEstrutura(msg);
@@ -229,6 +232,12 @@ export function planejarColuna(e: { tabela?: unknown; coluna?: unknown }, ex: Ex
   };
 }
 
+/**
+ * Nome do índice: tabela_colunas_idx|uq, cortado em 63 (limite do Postgres). O corte pode fazer DOIS índices diferentes terem o mesmo nome; como o comando é
+ * `create index if not exists`, o segundo seria ignorado em silêncio com ok:true. Quem executa (o servidor) confere se já existe objeto com este nome e recusa.
+ */
+export const nomeDoIndice = (tabela: string, cols: string[], unico: boolean): string => `${tabela}_${cols.join('_')}_${unico ? 'uq' : 'idx'}`.slice(0, 63);
+
 export function planejarIndice(e: { tabela?: unknown; colunas?: unknown; unico?: unknown }, ex: Existentes): Plano {
   const alvo = tabelaAlvo(e.tabela, ex, 'tabela');
   if (!Array.isArray(e.colunas) || e.colunas.length < 1 || e.colunas.length > MAX_COLUNAS_INDICE) recusa(`colunas: informe de 1 a ${MAX_COLUNAS_INDICE} colunas do índice`);
@@ -236,11 +245,12 @@ export function planejarIndice(e: { tabela?: unknown; colunas?: unknown; unico?:
   if (new Set(cols).size !== cols.length) recusa('coluna repetida no índice');
   for (const c of cols) if (!alvo.info.colunas.includes(c)) recusa(`a coluna "${c}" não existe na tabela ${alvo.nome}`);
   const unico = booleano(e.unico, 'unico');
-  const nomeIndice = `${alvo.nome}_${cols.join('_')}_${unico ? 'uq' : 'idx'}`.slice(0, 63);
+  const nomeIndice = nomeDoIndice(alvo.nome, cols, unico);
   const sql = [`create ${unico ? 'unique ' : ''}index if not exists ${q(nomeIndice)} on public.${q(alvo.nome)} (${cols.map(q).join(', ')})`];
   return {
     tipo: 'indice',
     tabela: alvo.nome,
+    criaIndice: nomeIndice,
     sql,
     resumo: [`Cria o índice${unico ? ' ÚNICO' : ''} ${nomeIndice} em ${alvo.nome} (${cols.join(', ')}).`],
     avisos: unico ? ['índice único falha se já houver valores repetidos nessas colunas; se falhar nada muda'] : [],

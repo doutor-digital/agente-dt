@@ -6,8 +6,8 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { ErroEstrutura, nomeFechado, planejar, planejarTabela, TIPOS_ACEITOS, type Existentes } from './estrutura-campos.js';
 
-const HASH_DAS_REGRAS = '1357df6acc6e49ec7a2126bed5c9579a510481f776c1238548a836eadb311f04';
-const HASH_DOS_CASOS = '3a3350d0bfd57d555dd194ea9e5ca2498e7191d068482076cdb56ab6d938b8a6';
+const HASH_DAS_REGRAS = 'dd798a7b336b75be7938a61645cf9889a8f97d24093da5df0958bb48bc8a8c69';
+const HASH_DOS_CASOS = '29139e6e0d044cb2d03009c18a35d52dfbd24cbd666fa181f3eab1744e1c2389';
 
 interface Caso {
   nome: string;
