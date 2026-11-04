@@ -174,6 +174,11 @@ async function montarKommo(unit: Unit, tz: string, agora: Date): Promise<KommoDa
 
   const conta = await dadosDaConta(unit, kommo);
   if (!conta.funis.length) throw new Error('não consegui ler os funis do Kommo');
+  // sem a lista de usuários, todo `created_by` viraria "usuário removido": avisa e a leitura vale pouco tempo
+  if (conta.usuarios.size === 0) {
+    incompleto = true;
+    avisos.push('Não consegui ler os nomes da equipe no Kommo agora: as mudanças feitas por pessoas podem aparecer sem o nome.');
+  }
   const comercial = funilComercial(conta.funis);
   const nomeDaColuna = new Map<string, { nome: string; comercial: boolean }>();
   for (const f of conta.funis) for (const s of f.statuses ?? []) nomeDaColuna.set(`${f.id}:${s.id}`, { nome: s.name, comercial: f.id === comercial?.id });
@@ -290,18 +295,21 @@ export async function iaApiHandler(req: Request, res: Response): Promise<void> {
   res.setHeader('X-Robots-Tag', 'noindex');
   const slug = String(req.params.slug ?? '');
   const chave = `${req.ip}:${slug}`;
-  if (limite.excedeu(chave)) {
-    res.status(429).json({ error: 'muitas tentativas — aguarde 10 minutos' });
-    return;
-  }
+  // 1º acha a unidade: slug inventado dá 404 e não conta nada (senão encheria o mapa de tentativas)
   const unit = await prisma.unit.findUnique({ where: { slug } });
   if (!unit || !unit.isActive) {
     res.status(404).json({ error: 'unidade não encontrada' });
     return;
   }
+  // 2º o bloqueio por erros, antes de olhar o código; só ERRO de código conta (acertar zera)
+  if (limite.bloqueado(chave)) {
+    res.status(429).json({ error: 'muitas tentativas — aguarde 10 minutos' });
+    return;
+  }
   // o código vai no cabeçalho (não aparece no log de acesso); a consulta fica para teste à mão, como na /pausa
   const recebido = req.header('x-codigo') ?? req.query.codigo;
   if (!codigoConfere(unit.pausaCodigo, recebido)) {
+    limite.registrarErro(chave);
     res.status(403).json({ error: 'código inválido' });
     return;
   }
@@ -525,19 +533,24 @@ button{width:100%;margin-top:6px;padding:14px;border:0;border-radius:12px;backgr
     $('rodape').hidden=false;
     // o Kommo ainda está sendo lido (primeira vez, conta grande): pergunta de novo sozinha, sem martelar
     if(timerAuto){ clearTimeout(timerAuto); timerAuto=null; }
-    if((k.carregando||k.atualizando)&&tentativasAuto<20){ tentativasAuto++; timerAuto=setTimeout(carregar,6000); } else { tentativasAuto=0; }
+    if(k.carregando||k.atualizando){
+      if(tentativasAuto<20){ tentativasAuto++; timerAuto=setTimeout(function(){ carregar(); },6000); }
+      else { raiz.insertBefore(el('div','aviso','O Kommo está demorando mais que o normal para responder. Toque em Atualizar daqui a alguns minutos.'),raiz.firstChild); }
+    } else { tentativasAuto=0; }
     $('quando').textContent='Atualizado às '+hora(d.geradoEm,d.tz)+(k.ok?(' · Kommo lido às '+hora(k.lidoEm,d.tz)+' (renova a cada '+d.renovaACadaMin+' min)'):'');
   }
 
-  async function carregar(){
-    var cod=lerCodigo();
+  // novoCodigo: o que acabou de ser digitado — só vira o código guardado depois que o servidor aceitar
+  async function carregar(novoCodigo){
+    var cod=novoCodigo||lerCodigo();
     if(!cod){ $('cardCodigo').hidden=false; return; }
     $('btnAtualizar').disabled=true;
     try{
       var r=await fetch(API,{headers:{'x-codigo':cod},cache:'no-store'});
       var j=await r.json().catch(function(){return {};});
-      if(r.status===403){ $('cardCodigo').hidden=false; $('rodape').hidden=true; $('conteudo').textContent=''; var e=$('erroCodigo'); e.textContent='Código inválido. Confira os 6 dígitos.'; e.hidden=false; return; }
+      if(r.status===403){ $('cardCodigo').hidden=false; if(!novoCodigo){ $('rodape').hidden=true; $('conteudo').textContent=''; } var e=$('erroCodigo'); e.textContent='Código inválido. Confira os 6 dígitos.'; e.hidden=false; return; }
       if(!r.ok) throw new Error(j.error||('erro '+r.status));
+      if(novoCodigo) guardarCodigo(novoCodigo);
       $('cardCodigo').hidden=true; mostrar(j);
     }catch(e){
       var raiz=$('conteudo'); if(!raiz.childNodes.length){ raiz.appendChild(el('div','err',String(e.message||e))); }
@@ -545,7 +558,7 @@ button{width:100%;margin-top:6px;padding:14px;border:0;border-radius:12px;backgr
       $('rodape').hidden=false;
     }finally{ $('btnAtualizar').disabled=false; }
   }
-  $('btnEntrar').addEventListener('click',function(){ var c=$('codigo').value.trim(); if(!c) return; guardarCodigo(c); $('erroCodigo').hidden=true; carregar(); });
+  $('btnEntrar').addEventListener('click',function(){ var c=$('codigo').value.trim(); if(!c) return; $('erroCodigo').hidden=true; carregar(c); });
   $('btnAtualizar').addEventListener('click',function(){ tentativasAuto=0; if(timerAuto){ clearTimeout(timerAuto); timerAuto=null; } carregar(); });
   carregar();
 })();

@@ -387,7 +387,7 @@ test('fila de um: as montagens do Kommo rodam uma de cada vez, e uma que falha n
 
 // ── a porta (código da unidade) ──
 
-test('código da unidade: igual passa, diferente/vazio/sem código cadastrado não; 12 tentativas por ip+unidade e depois bloqueia', () => {
+test('código da unidade: igual passa, diferente/vazio/sem código cadastrado não', () => {
   assert.equal(codigoConfere('482913', '482913'), true);
   assert.equal(codigoConfere('482913', ' 482913 '), true);
   assert.equal(codigoConfere('482913', '482914'), false);
@@ -395,12 +395,53 @@ test('código da unidade: igual passa, diferente/vazio/sem código cadastrado n�
   assert.equal(codigoConfere('482913', undefined), false);
   assert.equal(codigoConfere('482913', '482913      lixo'), false, 'não corta a entrada em 12 caracteres');
   assert.equal(codigoConfere(null, ''), false, 'unidade sem código nunca abre (Cerquilho hoje)');
+});
+
+test('limite: só ERRO conta; 12 erros bloqueiam; acertar zera; outro ip não é afetado; a janela de 10 min vence', () => {
   let t = 0;
   const lim = criarLimiteDeTentativas(() => t);
-  for (let i = 0; i < 12; i++) assert.equal(lim.excedeu('ip:slug'), false);
-  assert.equal(lim.excedeu('ip:slug'), true);
-  assert.equal(lim.excedeu('outro-ip:slug'), false);
+  assert.equal(lim.bloqueado('ip:slug'), false, 'consultar não conta');
+  for (let i = 0; i < 11; i++) lim.registrarErro('ip:slug');
+  assert.equal(lim.bloqueado('ip:slug'), false);
+  lim.registrarErro('ip:slug');
+  assert.equal(lim.bloqueado('ip:slug'), true);
+  assert.equal(lim.bloqueado('outro-ip:slug'), false);
   t += 11 * 60_000;
-  assert.equal(lim.excedeu('ip:slug'), false, 'a janela de 10 min passou');
+  assert.equal(lim.bloqueado('ip:slug'), false, 'a janela de 10 min passou');
+  for (let i = 0; i < 12; i++) lim.registrarErro('ip:slug');
   lim.limpar('ip:slug');
+  assert.equal(lim.bloqueado('ip:slug'), false, 'acertar o código zera');
+});
+
+test('limite: milhares de chaves de OUTRAS unidades não zeram o contador de quem está sendo adivinhado (só saem as vencidas)', () => {
+  let t = 0;
+  const lim = criarLimiteDeTentativas(() => t, 100);
+  for (let i = 0; i < 12; i++) lim.registrarErro('ip:doutor-hernia-timbo');
+  assert.equal(lim.bloqueado('ip:doutor-hernia-timbo'), true);
+  // 5x o teto de chaves, todas dentro da janela: o mapa não passa do teto
+  for (let i = 0; i < 500; i++) {
+    t += 10;
+    lim.registrarErro(`ip:inventado-${i}`);
+  }
+  assert.ok(lim.tamanho() <= 100);
+  // chaves vencidas saem primeiro: a da unidade real (mais antiga) só sai se não houver vencida, e aqui a janela ainda vale
+  // (a Timbó foi a primeira a entrar: com o teto cheio de chaves vivas a mais antiga é a que sai — por isso o controller
+  // NÃO registra slug que não existe; o teste abaixo cobre o caso real)
+  const lim2 = criarLimiteDeTentativas(() => t, 100);
+  for (let i = 0; i < 12; i++) lim2.registrarErro('ip:doutor-hernia-timbo');
+  for (let i = 0; i < 5000; i++) {
+    // slugs inventados dão 404 no controller e nunca chegam ao limite; aqui só consultamos, como ele faz
+    lim2.bloqueado(`ip:inventado-${i}`);
+  }
+  assert.equal(lim2.tamanho(), 1);
+  assert.equal(lim2.bloqueado('ip:doutor-hernia-timbo'), true, 'o contador da unidade real continua');
+  // vencidas saem antes das vivas
+  const lim3 = criarLimiteDeTentativas(() => t, 3);
+  lim3.registrarErro('velha-1');
+  lim3.registrarErro('velha-2');
+  t += 11 * 60_000;
+  lim3.registrarErro('viva-1');
+  lim3.registrarErro('viva-2');
+  lim3.registrarErro('viva-3');
+  assert.equal(lim3.tamanho(), 3);
 });

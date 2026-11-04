@@ -17,23 +17,53 @@ export function codigoConfere(esperado: string | null | undefined, recebido: unk
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-/** Conta tentativas por chave; `excedeu` soma uma e diz se passou do teto; `limpar` zera (acertou o código). */
-export function criarLimiteDeTentativas(agora: () => number = Date.now) {
-  const tentativas = new Map<string, { n: number; desde: number }>();
+const MAX_DE_CHAVES = 5000;
+
+/**
+ * Conta só os ERROS de código, por chave (ip+unidade). Quem chama:
+ *   1. acha a unidade (slug que não existe dá 404 e NÃO entra aqui: senão ~5.000 slugs inventados lotariam o mapa);
+ *   2. `bloqueado(chave)` → 429 (antes de conferir o código, para não servir de gabarito);
+ *   3. código errado → `registrarErro(chave)`; código certo → `limpar(chave)`.
+ * O mapa tem teto: ao chegar nele só saem as chaves VENCIDAS (nunca zera o contador de quem ainda está na janela);
+ * se mesmo assim não houver vaga, sai a mais antiga, uma de cada vez.
+ */
+export function criarLimiteDeTentativas(agora: () => number = Date.now, maxChaves = MAX_DE_CHAVES) {
+  const erros = new Map<string, { n: number; desde: number }>();
+  const vencida = (t: { desde: number }, t0: number) => t0 - t.desde > JANELA_DE_TENTATIVAS_MS;
+  const abrirVaga = (t0: number) => {
+    if (erros.size < maxChaves) return;
+    for (const [k, v] of erros) if (vencida(v, t0)) erros.delete(k);
+    if (erros.size >= maxChaves) {
+      const maisAntiga = erros.keys().next().value;
+      if (maisAntiga !== undefined) erros.delete(maisAntiga);
+    }
+  };
   return {
-    excedeu(chave: string): boolean {
-      const t0 = agora();
-      const t = tentativas.get(chave);
-      if (!t || t0 - t.desde > JANELA_DE_TENTATIVAS_MS) {
-        if (tentativas.size > 5000) tentativas.clear();
-        tentativas.set(chave, { n: 1, desde: t0 });
+    /** Já errou o código vezes demais nesta janela? */
+    bloqueado(chave: string): boolean {
+      const t = erros.get(chave);
+      if (!t) return false;
+      if (vencida(t, agora())) {
+        erros.delete(chave);
         return false;
       }
-      t.n += 1;
-      return t.n > MAX_DE_TENTATIVAS;
+      return t.n >= MAX_DE_TENTATIVAS;
+    },
+    registrarErro(chave: string): void {
+      const t0 = agora();
+      const t = erros.get(chave);
+      if (t && !vencida(t, t0)) {
+        t.n += 1;
+        return;
+      }
+      erros.delete(chave);
+      abrirVaga(t0);
+      erros.set(chave, { n: 1, desde: t0 });
     },
     limpar(chave: string): void {
-      tentativas.delete(chave);
+      erros.delete(chave);
     },
+    /** só para teste */
+    tamanho: () => erros.size,
   };
 }
