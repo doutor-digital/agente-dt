@@ -7,12 +7,16 @@ const DIGEST_MIN = 15;                     // resumo de "sem resposta" a cada 15
 const JITTER_MIN_S = 20, JITTER_MAX_S = 90;
 const MAX_LINHAS = 8;                      // pacientes listados por resumo
 const FILA_MAX_HORAS = 6;                  // paciente na fila há mais que isto sai da lista (não vira alerta velho)
+const URL_ENVIO = '__URL_ENVIO__';          // webhook interno deste mesmo workflow (o importar.sh preenche; contém o segredo)
 const CFG = { SILENCIO_INICIO, SILENCIO_FIM };
 //__COMUM__
 
 // Roda a cada minuto. Muda o estado AQUI, de uma vez, e termina rápido: o n8n grava o static data inteiro no fim da
-// execução, então uma execução longa (Wait) sobrescreveria o que outra gravou no meio. Por isso o atraso aleatório é um
-// horário (`quando`) e não um nó Wait.
+// execução, então uma execução longa (Wait, ou o envio à Evolution, que espera o "digitando…") sobrescreveria o que outra
+// gravou no meio. Por isso (1) o atraso aleatório é um horário (`quando`), não um nó Wait, e (2) este gatilho só ENTREGA a
+// mensagem ao webhook interno `alerta-grupo-envio` (responde na hora) e termina; quem fala com a Evolution é essa outra
+// execução, que não mexe no static data.
+if (!URL_ENVIO || URL_ENVIO.startsWith('__')) return []; // sem destino configurado: não reserva nada
 const sd = iniciaSd($getWorkflowStaticData('global'));
 const agora = Date.now();
 const silencio = emSilencio(agora, CFG);
@@ -77,7 +81,7 @@ if (pronta.digest) {
   text = `${cab(pronta.nome)}\n${linhas.join('\n')}${mais > 0 ? `\n+ ${mais} outros` : ''}\n\nResponder agora.`;
 }
 if (pronta.teste) text = `🧪 TESTE\n${text}`;
-const out = { instancia: INSTANCIA, number: pronta.jid, text, delay: rand(1500, 4000), linkPreview: false };
+const out = { urlEnvio: URL_ENVIO, instancia: INSTANCIA, number: pronta.jid, text, delay: rand(1500, 4000), linkPreview: false };
 if (pronta.mention) out.mentioned = [`${pronta.mention}@s.whatsapp.net`];
 if (!pronta.teste) { (sd.envios[pronta.jid] = sd.envios[pronta.jid] || []).push(agora); conta(sd, agora, `enviado:${pronta.tipo}`); conta(sd, agora, `enviado_total:${pronta.jid}`); }
 sd.ultimoEnvio = agora;

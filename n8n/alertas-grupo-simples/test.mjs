@@ -4,8 +4,8 @@ import assert from 'node:assert/strict';
 import { montar } from './build.mjs';
 
 const wf = montar();
-const cod = (nome) => wf.nodes.find((n) => n.name.startsWith(nome)).parameters.jsCode.replace('__SEGREDO_WEBHOOK__', 'seg123');
-const ENTRADA = cod('Entrada'), DESPACHAR = cod('Despachar');
+const cod = (nome) => wf.nodes.find((n) => n.name.startsWith(nome)).parameters.jsCode.replace('__SEGREDO_WEBHOOK__', 'seg123').replace('__URL_ENVIO__', 'http://interno/webhook/alerta-grupo-envio?k=seg123');
+const ENTRADA = cod('Entrada'), DESPACHAR = cod('Despachar'), VALIDAR = cod('Validar');
 const GRUPO = '120363399681615902@g.us', JOAO = '5563991021043';
 const SUB = 'doutorherniaacailandia';
 
@@ -27,7 +27,7 @@ const T0 = brt('2026-11-05T10:00:00'); // quinta, 10h
 
 test('tarefa que não é ALERTA é ignorada sem rastro', () => {
   const sd = {};
-  assert.match(entra(sd, T0, 'Ligar para o paciente'), /ignorado/);
+  assert.match(entra(sd, T0, 'Ligar para o paciente'), /fora dos 3/);
   assert.deepEqual(sd.saida, []);
 });
 
@@ -69,9 +69,9 @@ test('consulta agendada pela IA', () => {
 test('nota (sem prefixo de slug) com a conta de Açailândia também roteia', () => {
   const sd = {};
   const body = { 'leads[note][0][note][text]': '🤖 CONSULTA AGENDADA PELA I.A Sofia — 07/11 às 09:00. [Contato: Pedro]', 'leads[note][0][note][element_id]': '55', 'account[subdomain]': SUB };
-  // texto sem a palavra ALERTA não passa (nota de hoje) — documentado no README
+  // texto sem o prefixo ALERTA não passa (nota de hoje) — documentado no README
   const r = rodar(ENTRADA, { sd, agora: T0, body });
-  assert.match(r[0].json.decisao, /ignorado/);
+  assert.match(r[0].json.decisao, /fora dos 3/);
 });
 
 test('sem resposta: guarda, e só o relógio de 15 min manda 1 resumo por grupo', () => {
@@ -121,6 +121,7 @@ test('dedupe: o mesmo paciente e tipo só 1 vez em 2 h', () => {
   const sd = {};
   const txt = 'ALERTA · acailandia · [Contato: Maria] LIGAR AGORA — URGENTE: sinal de alerta clínico (x)';
   assert.match(entra(sd, T0, txt, { lead: '9' }), /bandeira|sai em/);
+  tick(sd, T0 + 100000); // sai
   assert.match(entra(sd, T0 + 90 * 60000, txt, { lead: '9' }), /2 h/);
   assert.match(entra(sd, T0 + 125 * 60000, txt, { lead: '9' }), /sai em/);
   assert.match(entra(sd, T0 + 126 * 60000, txt, { lead: '10' }), /sai em/, 'outro paciente passa');
@@ -223,4 +224,84 @@ test('tick ocioso não suja o static data', () => {
   const antes = JSON.stringify(sd);
   tick(sd, T0 + 60000);
   assert.equal(JSON.stringify(sd), antes);
+});
+
+test('bandeira criada pela REGRA da unidade (sem o prefixo ALERTA) passa — reprodução do sênior do PR 213', () => {
+  const sd = {};
+  const d = entra(sd, T0, '[Contato: Maria] Paciente com sinal de alerta (perda de força na perna) — LIGAR AGORA');
+  assert.match(d, /sai em/);
+  assert.equal(sd.saida.length, 1);
+  assert.match(sd.saida[0].text, /Bandeira vermelha · Açailândia/);
+  assert.ok(!/perna|for[cç]a/i.test(sd.saida[0].text), 'motivo clínico vazou');
+  const sd2 = {};
+  entra(sd2, T0, 'ALERTA · acailandia · [Contato: Maria] LIGAR AGORA — URGENTE: paciente com sinal de alerta clínico (perda de força). Pausei a IA.');
+  assert.equal(sd2.saida.length, 1);
+});
+
+test('sem o prefixo ALERTA só a bandeira vale; sem resposta e agendada exigem o prefixo', () => {
+  const sd = {};
+  for (const t of ['Ligar para o paciente que está aguardando há 2 horas', '[Contato: A] sem resposta há 10 min', '🤖 CONSULTA AGENDADA PELA I.A Sofia — 07/11 às 09:00. [Contato: Pedro]']) {
+    assert.match(entra(sd, T0, t, { lead: '1' }), /fora dos 3/, t);
+  }
+  assert.equal(sd.saida.length + Object.keys(sd.fila).length, 0);
+  assert.equal(Object.keys(sd.contagem || {}).length, 0, 'descarte de tipo não escreve contagem');
+});
+
+test('"sem sinal de alerta" sem o prefixo não é bandeira', () => {
+  const sd = {};
+  assert.match(entra(sd, T0, '[Contato: A] Paciente sem sinal de alerta, seguir fluxo normal'), /fora dos 3/);
+});
+
+test('webhook sem segredo configurado fica fechado (placeholder não vira porta aberta)', () => {
+  const sd = {};
+  const aberto = ENTRADA.replace("const SEGREDO = 'seg123';", "const SEGREDO = '__SEGREDO_WEBHOOK__';");
+  assert.notEqual(aberto, ENTRADA);
+  const r = rodar(aberto, { sd, agora: T0, body: tarefa('ALERTA · acailandia · [Contato: A] sinal de alerta clínico'), query: {} });
+  assert.match(r[0].json.decisao, /não configurado/);
+  assert.equal(sd.saida, undefined);
+});
+
+test('2 bandeiras do mesmo paciente na noite: só 1 sai às 7h', () => {
+  const sd = {};
+  const txt = 'ALERTA · acailandia · [Contato: Maria] LIGAR AGORA — URGENTE: sinal de alerta clínico (x)';
+  entra(sd, brt('2026-11-05T21:30:00'), txt, { lead: '9' });
+  assert.match(entra(sd, brt('2026-11-06T03:00:00'), txt, { lead: '9' }), /já tem um igual|2 h/);
+  assert.equal(sd.saida.length, 1);
+});
+
+test('gatilho entrega ao webhook interno (não fala com a Evolution) e não sai sem destino configurado', () => {
+  const sd = {};
+  entra(sd, T0, 'ALERTA · acailandia · [Contato: A] LIGAR AGORA sinal de alerta clínico', { lead: '1' });
+  const out = tick(sd, T0 + 100000);
+  assert.equal(out[0].json.urlEnvio, 'http://interno/webhook/alerta-grupo-envio?k=seg123');
+  const nodes = wf.nodes.filter((n) => n.type === 'n8n-nodes-base.httpRequest');
+  const entrega = nodes.find((n) => n.name === 'Entregar ao envio');
+  assert.ok(!JSON.stringify(entrega).includes('evolution_api'));
+  const sd2 = {};
+  entra(sd2, T0, 'ALERTA · acailandia · [Contato: A] LIGAR AGORA sinal de alerta clínico', { lead: '1' });
+  const sem = DESPACHAR.replace("const URL_ENVIO = 'http://interno/webhook/alerta-grupo-envio?k=seg123';", "const URL_ENVIO = '__URL_ENVIO__';");
+  assert.notEqual(sem, DESPACHAR);
+  assert.equal(rodar(sem, { sd: sd2, agora: T0 + 100000 }).length, 0);
+  assert.equal(sd2.saida.length, 1, 'nada foi reservado');
+});
+
+test('nenhum segredo/chave no workflow.json: Evolution é credencial do n8n', () => {
+  const j = JSON.stringify(wf);
+  assert.ok(!/c936fd1a|apikey['"]?\s*,\s*['"]?value/i.test(j));
+  const envio = wf.nodes.find((n) => n.name === 'Evolution sendText');
+  assert.equal(envio.parameters.authentication, 'genericCredentialType');
+  assert.equal(envio.parameters.genericAuthType, 'httpHeaderAuth');
+  assert.ok(!JSON.stringify(envio.parameters).toLowerCase().includes('"apikey"'));
+  assert.ok(envio.credentials.httpHeaderAuth.id.startsWith('__'));
+});
+
+test('Validar envio: segredo e formato', () => {
+  const ok = { instancia: 'alertas3', number: GRUPO, text: 'oi', delay: 2000, linkPreview: false, mentioned: ['559991063655@s.whatsapp.net'] };
+  const v = (body, k = 'seg123') => rodar(VALIDAR, { sd: {}, agora: T0, body, query: { k } });
+  assert.equal(v(ok).length, 1);
+  assert.equal(v(ok, 'x').length, 0);
+  assert.equal(v({ ...ok, number: 'abc' }).length, 0);
+  assert.equal(v({ ...ok, instancia: '../x' }).length, 0);
+  assert.equal(v({ ...ok, text: '' }).length, 0);
+  assert.equal(v({ ...ok, number: JOAO }).length, 1);
 });

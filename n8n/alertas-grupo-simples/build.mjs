@@ -29,16 +29,39 @@ export const montar = () => ({
       parameters: { mode: 'runOnceForAllItems', language: 'javaScript', jsCode: codigo('despachar.js') },
     },
     {
-      id: 'b3', name: 'Evolution sendText', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [520, 260],
+      // Só entrega ao webhook interno (que responde na hora) e termina: a execução do gatilho não espera a Evolution.
+      id: 'b3', name: 'Entregar ao envio', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [520, 260],
+      parameters: {
+        method: 'POST',
+        url: '={{ $json.urlEnvio }}',
+        sendBody: true, specifyBody: 'json',
+        jsonBody: '={{ JSON.stringify({ instancia: $json.instancia, number: $json.number, text: $json.text, delay: $json.delay, linkPreview: $json.linkPreview, mentioned: $json.mentioned }) }}',
+        options: { timeout: 10000 },
+      },
+      retryOnFail: false,
+    },
+    {
+      id: 'c1', name: 'Webhook alerta-grupo-envio', type: 'n8n-nodes-base.webhook', typeVersion: 2, position: [0, 520],
+      webhookId: 'alerta-grupo-envio-simples',
+      parameters: { httpMethod: 'POST', path: 'alerta-grupo-envio', responseMode: 'onReceived', options: {} },
+    },
+    {
+      id: 'c2', name: 'Validar envio', type: 'n8n-nodes-base.code', typeVersion: 2, position: [260, 520],
+      parameters: { mode: 'runOnceForAllItems', language: 'javaScript', jsCode: ler('validar.js') },
+    },
+    {
+      // Chave da Evolution = CREDENCIAL do n8n (Header Auth), nunca texto no nó. O importar.sh cria e preenche o id.
+      id: 'c3', name: 'Evolution sendText', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [520, 520],
       parameters: {
         method: 'POST',
         url: "={{ 'http://evolution_api:8080/message/sendText/' + $json.instancia }}",
-        sendHeaders: true,
-        headerParameters: { parameters: [{ name: 'apikey', value: '__EVOLUTION_APIKEY__' }] },
+        authentication: 'genericCredentialType',
+        genericAuthType: 'httpHeaderAuth',
         sendBody: true, specifyBody: 'json',
         jsonBody: '={{ JSON.stringify({ number: $json.number, text: $json.text, delay: $json.delay, linkPreview: $json.linkPreview, mentioned: $json.mentioned }) }}',
         options: { timeout: 15000 },
       },
+      credentials: { httpHeaderAuth: { id: '__CRED_EVOLUTION_ID__', name: 'DD · Evolution (apikey) · alertas grupo' } },
       // sem retry: falha de envio não vira laço (lição do ban de 06/10). A execução com erro fica guardada.
       retryOnFail: false,
     },
@@ -46,7 +69,9 @@ export const montar = () => ({
   connections: {
     'Webhook alerta-grupo': { main: [[{ node: 'Entrada (classifica e guarda)', type: 'main', index: 0 }]] },
     'A cada minuto': { main: [[{ node: 'Despachar (fila, teto, silêncio)', type: 'main', index: 0 }]] },
-    'Despachar (fila, teto, silêncio)': { main: [[{ node: 'Evolution sendText', type: 'main', index: 0 }]] },
+    'Despachar (fila, teto, silêncio)': { main: [[{ node: 'Entregar ao envio', type: 'main', index: 0 }]] },
+    'Webhook alerta-grupo-envio': { main: [[{ node: 'Validar envio', type: 'main', index: 0 }]] },
+    'Validar envio': { main: [[{ node: 'Evolution sendText', type: 'main', index: 0 }]] },
   },
   settings: {
     executionOrder: 'v1',

@@ -21,9 +21,9 @@ const CFG = { SILENCIO_INICIO, SILENCIO_FIM };
 
 const it = $input.first().json;
 const body = it.body || {};
-if (SEGREDO && !SEGREDO.startsWith('__') && String((it.query || {}).k || '') !== SEGREDO) {
-  return [{ json: { decisao: 'recusado: segredo errado' } }];
-}
+// Sem segredo configurado (placeholder não trocado pelo importar.sh) o webhook fica FECHADO, não aberto.
+if (!SEGREDO || SEGREDO.startsWith('__')) return [{ json: { decisao: 'recusado: segredo não configurado' } }];
+if (String((it.query || {}).k || '') !== SEGREDO) return [{ json: { decisao: 'recusado: segredo errado' } }];
 const sd = iniciaSd($getWorkflowStaticData('global'));
 const agora = Date.now();
 
@@ -38,14 +38,19 @@ let leadId = get('task[add][0][element_id]', 'task', 'add', 0, 'element_id');
 if (!text) for (const k in body) { if (/\[text\]$/.test(k) && body[k]) { text = String(body[k]); const m = k.replace(/\[text\]$/, '[element_id]'); leadId = leadId || String(body[m] || ''); break; } }
 const dec = (s) => String(s).replace(/&quot;/g, '"').replace(/&#0?39;/g, "'").replace(/&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 text = dec(text).replace(/\s+/g, ' ').trim();
-if (!text || !/ALERTA/i.test(text)) return [{ json: { decisao: 'ignorado: não é tarefa ALERTA' } }]; // maioria das tarefas do Kommo: nem entra na contagem
+if (!text) return [{ json: { decisao: 'ignorado: sem texto' } }];
 
 // ---- slug + mensagem ----
+// "ALERTA ·" só é separador quando está no COMEÇO do texto. A tarefa criada pela regra da unidade (tools.ts) vem sem o prefixo:
+// "[Contato: Maria] Paciente com sinal de alerta (…) — LIGAR AGORA" — cortar depois do "alerta" de "sinal de alerta" a perdia.
 const sub = String(body['account[subdomain]'] || (body.account || {}).subdomain || '');
+const temPrefixo = /^\s*ALERTA\b/i.test(text);
 let slug = '', msg = text;
-const m = text.match(/ALERTA\s*[·:|\-]\s*([a-z0-9_-]+)\s*[·:|\-]\s*(.+)$/i);
-if (m) { slug = m[1].toLowerCase(); msg = m[2].trim(); }
-else { const m2 = text.match(/ALERTA\s*[·:|\-]?\s*(.+)$/i); if (m2) msg = m2[1].trim(); }
+if (temPrefixo) {
+  const m = text.match(/^\s*ALERTA\s*[·:|\-]\s*([a-z0-9_-]+)\s*[·:|\-]\s*(.+)$/i);
+  if (m) { slug = m[1].toLowerCase(); msg = m[2].trim(); }
+  else { const m2 = text.match(/^\s*ALERTA\s*[·:|\-]?\s*(.+)$/i); if (m2) msg = m2[1].trim(); }
+}
 let nome = '';
 const mc = msg.match(/\[Contato:\s*([^\]]+)\]\s*/i);
 if (mc) { nome = mc[1].trim(); msg = msg.replace(mc[0], '').trim(); }
@@ -58,7 +63,9 @@ let tipo = null;
 if (/(?<!\b(?:sem|nenhum|nem)\s)(?:sina(?:l|is) de alerta|bandeira vermelha|red ?flag)|🚩/u.test(s)) tipo = 'bandeira';
 else if (/agendad[ao] pela i\.?\s*a/.test(s)) tipo = 'agendada';
 else if (/(aguardando\s+h[áa]|sem resposta|ningu[eé]m respond)/.test(s) && !/pagamento|entrada pendente|pix pendente/.test(s)) tipo = 'sem_resposta';
-if (!tipo) { conta(sd, agora, 'fora_dos_3_tipos'); return [{ json: { decisao: 'descartado: tipo fora dos 3' } }]; }
+// Só a bandeira vermelha vale sem o prefixo "ALERTA ·" (é como a regra da unidade a escreve); os outros dois exigem o prefixo.
+// Descarte de tipo não escreve nada no static data: a maioria das tarefas do Kommo passa por aqui e não pode competir com quem grava.
+if (!tipo || (!temPrefixo && tipo !== 'bandeira')) return [{ json: { decisao: 'descartado: tipo fora dos 3' } }];
 
 // ---- rota: conta Kommo primeiro, depois slug do texto ----
 let chave = SUBS[sub] || null;
@@ -83,6 +90,12 @@ if (!teste && (leadId || nome)) {
     registra(sd, agora, `dedupe ${tipo} ${quem}`);
     return [{ json: { decisao: 'descartado: já avisado nas últimas 2 h' } }];
   }
+}
+// já tem a mesma coisa esperando na fila (ex.: 2 bandeiras do mesmo paciente na noite -> só 1 às 7h)
+if (!teste && (leadId || nome) && sd.saida.some((x) => x.dk === dk)) {
+  conta(sd, agora, `dedupe:${tipo}`);
+  registra(sd, agora, `dedupe (já na fila) ${tipo} ${quem}`);
+  return [{ json: { decisao: 'descartado: já tem um igual esperando para sair' } }];
 }
 // silêncio: bandeira fica guardada até 7h; as outras morrem à noite
 const silencio = !teste && emSilencio(agora, CFG);
@@ -119,7 +132,7 @@ let quando = agora + rand(JITTER_MIN_S, JITTER_MAX_S) * 1000;
 if (silencio) quando = proximoFimDoSilencio(agora, CFG) + rand(JITTER_MIN_S, JITTER_MAX_S) * 1000;
 const mencao = tipo === 'bandeira' && u && u.mention && !teste ? u.mention : '';
 if (mencao) corpo += `\n\n@${mencao}`;
-sd.saida.push({ id: `${tipo[0]}${agora}`, jid, tipo, teste, quando, expira: quando + (tipo === 'bandeira' ? 14 * HORA : 3 * HORA), text: corpo, mention: mencao });
+sd.saida.push({ id: `${tipo[0]}${agora}`, dk, jid, tipo, teste, quando, expira: quando + (tipo === 'bandeira' ? 14 * HORA : 3 * HORA), text: corpo, mention: mencao });
 conta(sd, agora, `entrou:${tipo}`);
 registra(sd, agora, `saida ${tipo} ${quem} (${unidadeNome})${teste ? ' [TESTE]' : ''} p/ ${new Date(quando).toISOString()}`);
 return [{ json: { decisao: silencio ? 'bandeira guardada até 7h' : `${tipo}: sai em ~${Math.round((quando - agora) / 1000)} s (próximo minuto do relógio)` } }];
