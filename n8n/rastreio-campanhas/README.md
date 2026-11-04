@@ -877,3 +877,19 @@ O `verify_token` da inscrição antiga não é recuperável por API — se preci
 pegar o id do nó no n8n da easypanel.
 
 Faltam **Porto Nacional** e **Serra** (workflows criados e parados, esperando o app).
+
+### 11.6 Timbó (04/11/2026) e o token de Ads por unidade
+
+Timbó entrou pela receita limpa (app novo, `GET /{app}/subscriptions` = 0): campos e tags
+já existiam na conta `timbosc` (só faltavam as 2 tags `Origem:`), credenciais n8n
+`Kommo Timbó` / `WhatsApp Trigger · Timbó`, workflow `P4H8290pOc1eoiw5` (webhook
+`meta-ctwa-timbo`), WABA `1085453084341859`, `POST /{WABA}/subscribed_apps` com conferência
+de que a Kommo (`1022173854571346`) continuou na lista.
+
+**`META_ADS_TOKEN` global caiu em 01/10/2026** ("session has been invalidated"): desde
+então NENHUMA unidade grava `⌂ Campanha`/`⌂ Conjunto`/`⌂ Anúncio (ad)` (o log `kommo|sucesso`
+deixou de listar `campanha`). Um token só não serve a todas — cada unidade tem a conta de
+anúncio no Business dela. Por isso `ops/unidades.mjs` aceita `tokenAdsEnv` por unidade: o
+Config do workflow lê `$env.<NOME> || $env.META_ADS_TOKEN`. O NOME da env vai no JSON; o valor
+fica só no serviço do n8n (`--env-add` nos TRÊS: editor, worker, webhook — rolling restart).
+Timbó usa `META_ADS_TOKEN_TIMBO`.

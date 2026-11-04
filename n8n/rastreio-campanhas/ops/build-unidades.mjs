@@ -29,7 +29,7 @@ const camposPorUnidade = JSON.parse(readFileSync(resolve(aqui, 'campos-por-unida
 
 /** WABA conhecida por unidade. Só a Imperatriz está descoberta — o resto entra quando
  *  o app da Meta daquela unidade for criado (o `entry.id` não vem no nó nativo). */
-const WABA = { imperatriz: '1558318502323307', rioverde: '475739905626795', taubate: '1036096599272746' };
+const WABA = { imperatriz: '1558318502323307', rioverde: '475739905626795', taubate: '1036096599272746', timbo: '1085453084341859' };
 
 const ORDEM_CAMPOS = [
   'campanha', 'conjunto', 'anuncio', 'anuncioId',
@@ -80,6 +80,19 @@ function gerar(unidade) {
   if (!alvoCampos.test(js)) throw new Error(`[${unidade.slug}] âncora do bloco de campos não encontrada`);
   js = js.replace(alvoCampos, blocoCampos(ids, unidade.slug));
   config.parameters.jsCode = js;
+
+  // 1b. Token de leitura de Ads por unidade (opcional). O META_ADS_TOKEN global é de UM
+  //     usuário/business; quando ele cai (sessão invalidada em 01/10/2026) a rede inteira
+  //     perde campanha/conjunto/anúncio. Unidade com `tokenAdsEnv` lê a env própria e só
+  //     então cai no global. O NOME da env vai no workflow; o valor nunca.
+  if (unidade.tokenAdsEnv) {
+    const alvoToken = "tokenAds: $env.META_ADS_TOKEN || '',";
+    if (!config.parameters.jsCode.includes(alvoToken)) throw new Error(`[${unidade.slug}] âncora do tokenAds não encontrada`);
+    config.parameters.jsCode = config.parameters.jsCode.replace(
+      alvoToken,
+      `tokenAds: $env.${unidade.tokenAdsEnv} || $env.META_ADS_TOKEN || '',`,
+    );
+  }
 
   // 2. Credencial do Kommo em todos os nós que falam com o CRM.
   let trocadas = 0;

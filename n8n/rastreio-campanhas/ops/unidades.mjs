@@ -19,6 +19,7 @@ export const UNIDADES = [
   { slug: 'rioverde',      nome: 'Rio Verde',      subdominio: 'doutorherniarioverde2026', credencial: { id: 'gJav1pY0g503e5Qf', name: 'Kommo Rio Verde' }, trigger: { id: 'S4a5UQDddxV2XVlr', name: 'WhatsApp Trigger · Rio Verde' } },
   { slug: 'taubate',       nome: 'Taubaté',        subdominio: 'doutorherniataubatedt',    credencial: { id: 'rmHbc6sqKSi9G0TG', name: 'Kommo Taubaté' }, trigger: { id: 'yPMGb4lDTckcfRt9', name: 'WhatsApp Trigger · Taubaté' } },
   { slug: 'trauma',        nome: 'Instituto Trauma', subdominio: 'institutotraumakommon',  credencial: { id: 'IDrv4gZyutIINGMw', name: 'Kommo Trauma' } },
+  { slug: 'timbo',         nome: 'Timbó',          subdominio: 'timbosc',                  credencial: { id: 'XeawYlyRvi6HBZUE', name: 'Kommo Timbó' }, trigger: { id: 'IS0NLrUxBtiQnYEn', name: 'WhatsApp Trigger · Timbó' }, tokenAdsEnv: 'META_ADS_TOKEN_TIMBO' },
 ];
 
 /**
