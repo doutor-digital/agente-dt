@@ -504,3 +504,15 @@ test('anexar_url: a extensão vem do CONTEÚDO, não do endereço (recibo.png qu
     assert.equal(srv2.anexos()[0]!.corpo.nome, 'recibo.png');
   } finally { b.limpar(); }
 });
+
+test('fin_lanc: o link de envio já nasce com o teto de 6 MB (o Caixa continua 15 MB)', async () => {
+  const a = ambiente(servidor({ lancamento: { id: LANC, unidade: 'Marabá-PA', valor: 10, anexo: null } }));
+  try {
+    const k = await cliente(a);
+    const f = await k.chamar('sistemas_preparar_anexo', { tabela: 'fin_lanc', lancamento: LANC, tipo: 'recibo' });
+    assert.equal(f.json.tamanhoMaxMB, 6);
+    assert.equal(a.cofre.reservar(String(f.json.linkDeEnvio).split('/').pop()!).tamanhoMaxBytes, 6 * 1024 * 1024);
+    const c = await k.chamar('sistemas_preparar_anexo', { tabela: 'caixa_lanc', lancamento: LANC, tipo: 'recibo' });
+    assert.equal(c.json.tamanhoMaxMB, 15);
+  } finally { a.limpar(); }
+});

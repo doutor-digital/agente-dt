@@ -29,6 +29,8 @@ const TABELAS = ['caixa_lanc', 'fin_lanc'] as const;
 type Tabela = (typeof TABELAS)[number];
 const ACEITOS: readonly TipoDeArquivo[] = ['pdf', 'jpg', 'png'];
 export const ANEXO_MAX_BYTES = 15 * 1024 * 1024;
+/** fin_lanc: o servidor guarda o arquivo inteiro em base64 numa linha de rh_docs: teto menor (igual ao da API) */
+export const ANEXO_FIN_MAX_BYTES = 6 * 1024 * 1024;
 export const ENVIO_VALE_MS = 10 * 60_000;
 export const NOME_PADRAO = 'Lia (pela Suzanne)';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -164,6 +166,8 @@ function auditarAnexo(auditar: Auditar): Auditar {
   };
 }
 
+const maxDe = (t: Tabela) => (t === 'fin_lanc' ? ANEXO_FIN_MAX_BYTES : ANEXO_MAX_BYTES);
+
 export function registrarAnexosSistemas(server: McpServer, ctx: ContextoSistemas, quem: QuemSistemas, deps: DepsAnexo, auditarBruto: Auditar): void {
   const auditar = auditarAnexo(auditarBruto);
   const enviadoNome = deps.enviadoNome ?? NOME_PADRAO;
@@ -180,7 +184,7 @@ export function registrarAnexosSistemas(server: McpServer, ctx: ContextoSistemas
       title: 'Sistema novo (Caixa/Financeiro): pedir o link para enviar o comprovante de um lançamento',
       description:
         'PASSO 1 de 2 para ANEXAR um comprovante, nota fiscal ou recibo a UM lançamento (caixa_lanc ou fin_lanc). Confere que o lançamento existe e devolve o LINK DE ENVIO: ' +
-        `de uso único, vale ${ENVIO_VALE_MS / 60_000} minutos, preso a este lançamento e a este tipo, aceita só PDF, JPG ou PNG até ${ANEXO_MAX_BYTES / 1024 / 1024} MB (conferido pelo conteúdo). ` +
+        `de uso único, vale ${ENVIO_VALE_MS / 60_000} minutos, preso a este lançamento e a este tipo, aceita só PDF, JPG ou PNG até ${ANEXO_MAX_BYTES / 1024 / 1024} MB no Caixa e ${ANEXO_FIN_MAX_BYTES / 1024 / 1024} MB no Financeiro (conferido pelo conteúdo). ` +
         'Entregue o link à pessoa (abre no celular ou computador) OU, se você tem o arquivo no seu ambiente e o domínio do link está liberado em Configurações > Capacidades, ' +
         'envie você mesma com o comando devolvido em "comandoCurl". Depois chame sistemas_anexar_envio com o "envio". Não grava nada ainda. ' +
         'Se o arquivo está num endereço (recibo da InfinitePay, boleto do Asaas), use sistemas_anexar_url em vez deste. Não cole o link de envio em lugar público.',
@@ -199,7 +203,7 @@ export function registrarAnexosSistemas(server: McpServer, ctx: ContextoSistemas
             finalidade: `${LEGIVEL[args.tipo]} do lançamento de ${lanc.valor} (${lanc.unidade}), em PDF, JPG ou PNG`,
             validoMs: ENVIO_VALE_MS,
             tipos: ACEITOS,
-            tamanhoMaxBytes: ANEXO_MAX_BYTES,
+            tamanhoMaxBytes: maxDe(args.tabela),
             destino: { tipo: DESTINO_TIPO, sistema: slug, tabela: args.tabela, lancamento: id, tipoAnexo: args.tipo },
           });
         } catch (e) {
@@ -217,7 +221,7 @@ export function registrarAnexosSistemas(server: McpServer, ctx: ContextoSistemas
           validoMinutos: Math.max(1, Math.round((p.validoAte - deps.cofre.agora()) / 60_000)),
           lancamento: { tabela: args.tabela, id, tipoDoAnexo: args.tipo, linha: lanc.resumo },
           aceita: ['pdf', 'jpg', 'png'],
-          tamanhoMaxMB: ANEXO_MAX_BYTES / 1024 / 1024,
+          tamanhoMaxMB: maxDe(args.tabela) / 1024 / 1024,
           comandoCurl: `curl -sS -X PUT --data-binary @ARQUIVO -H 'Content-Type: application/octet-stream' -H 'X-Nome-Arquivo: ${nome}' '${link}'`,
           dominioDoLink: new URL(link).host,
           proximoPasso: `Quando o arquivo tiver sido enviado (a página diz "Pronto!" ou o curl devolve {"ok":true}), chame sistemas_anexar_envio com envio="${p.id}".`,
