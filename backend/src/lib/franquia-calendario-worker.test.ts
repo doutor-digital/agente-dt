@@ -2,8 +2,9 @@ import { beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Unit } from '@prisma/client';
 
-import { _limparMemoriaDoCalendario, varrerCalendario, type DepsDoCalendario } from './franquia-calendario-worker.js';
-import type { KommoClient, KommoTarefa } from '../services/kommo.service.js';
+import { _limparMemoriaDoCalendario, CRIADA_RECENTE_MS, faixasPorConta, paraleloDoCalendario, rodadaSecaLimpa, rodarEmFaixas, varrerCalendario, type DepsDoCalendario } from './franquia-calendario-worker.js';
+import type { GrupoDoCrm } from './crm-compartilhado.js';
+import { KommoApiError, type KommoClient, type KommoTarefa } from '../services/kommo.service.js';
 import type { SpineSchedule } from '../services/spine.service.js';
 
 const unit = { id: 'u-timbo', slug: 'doutor-hernia-timbo', spineTimezone: 'America/Sao_Paulo' } as unknown as Unit;
@@ -54,6 +55,8 @@ const deps = (kommo: KommoClient, agenda: SpineSchedule[], extra: Partial<DepsDo
   kommo,
   agora: AGORA,
   pausaMs: 0,
+  lerConfig: async () => null,
+  grupo: null,
   buscarAgenda: async () => ({ ok: true, agendamentos: agenda }),
   resolver: async () => ({ leadId: 555, confirmado: true, fone: '+5547999990000' }),
   ...extra,
@@ -314,4 +317,321 @@ test('sem saber o tipo (429 na lista de tipos): aborta — cair no tipo 1 escond
   const r = await varrerCalendario(unit, deps(kommo, [ag()], { modo: 'aplicar' }));
   assert.equal(r.erros, 1);
   assert.deepEqual(c.criadas, []);
+});
+
+// ── várias unidades: config por unidade, cache próprio, Kommo dividido ───────────────────────────────
+
+test('a memória de "acabei de criar" dura pelo menos 30 min (a lista do Kommo atrasa quando há várias unidades em fila)', () => {
+  assert.ok(CRIADA_RECENTE_MS >= 30 * 60_000);
+});
+
+test('config da tabela vence o .env: tipo, dono e duração por unidade', async () => {
+  process.env.FRANQUIA_CALENDARIO_TIPO = 'doutor-hernia-timbo:77';
+  const { kommo, c } = kommoFalso([]);
+  await varrerCalendario(unit, deps(kommo, [ag()], { modo: 'aplicar', lerConfig: async () => ({ taskTypeId: 88, responsibleUserId: 99, duracaoMin: 30 }) }));
+  assert.equal(c.criadas[0].taskTypeId, 88);
+  assert.equal(c.criadas[0].responsibleUserId, 99);
+  assert.equal(c.criadas[0].manterResponsavel, true);
+  assert.equal(c.criadas[0].durationSec, 1800);
+  assert.equal(c.tipos, 0, 'tipo configurado: nem pergunta ao Kommo');
+});
+
+test('unidade sem dono configurado: NÃO fixa o responsável — o createTask aplica a regra do único usuário da clínica (nunca o login da consultoria)', async () => {
+  delete process.env.FRANQUIA_CALENDARIO_RESPONSAVEL;
+  const { kommo, c } = kommoFalso([]);
+  await varrerCalendario(unit, deps(kommo, [ag()], { modo: 'aplicar' }));
+  assert.equal(c.criadas[0].responsibleUserId, undefined);
+  assert.notEqual(c.criadas[0].manterResponsavel, true);
+});
+
+test('o tipo de uma conta não vaza para outra: cada Kommo é perguntado pelo seu "Consulta"', async () => {
+  const a = kommoFalso([], { tipos: [{ id: 1, name: 'Follow-up' }, { id: 111, name: 'Consulta' }] });
+  const b = kommoFalso([], { tipos: [{ id: 1, name: 'Follow-up' }, { id: 222, name: 'Consulta' }] });
+  const outra = { id: 'u-serra', slug: 'doutor-hernia-serra', spineTimezone: 'America/Sao_Paulo' } as unknown as Unit;
+  await varrerCalendario(unit, deps(a.kommo, [ag()], { modo: 'aplicar' }));
+  await varrerCalendario(outra, deps(b.kommo, [ag()], { modo: 'aplicar' }));
+  assert.equal(a.c.criadas[0].taskTypeId, 111);
+  assert.equal(b.c.criadas[0].taskTypeId, 222);
+});
+
+test('Kommo dividido: a irmã marca com prefixo e só enxerga as próprias tarefas (o mesmo idSchedule da dona não se confunde)', async () => {
+  const grupo: GrupoDoCrm = { contaUnitId: 'u-petro', membros: [
+    { unitId: 'u-petro', contaUnitId: 'u-petro', rotulo: 'Petrópolis', slug: 'doutor-hernia-petropolis' },
+    { unitId: 'u-caxias', contaUnitId: 'u-petro', rotulo: 'Caxias', slug: 'doutor-hernia-caxias' },
+  ] };
+  const caxias = { id: 'u-caxias', slug: 'doutor-hernia-caxias', spineTimezone: 'America/Sao_Paulo' } as unknown as Unit;
+  const quando = Date.parse('2026-11-03T17:00:00Z') / 1000;
+  // a lista da conta tem a tarefa da DONA para o idSchedule 3784113 — a irmã tem um agendamento com o MESMO número
+  const { kommo, c } = kommoFalso([{ id: 1, text: '⚕ AVALIAÇÃO 14:00 · AGENDADO [ag:3784113]', complete_till: quando, entity_id: 9 }]);
+  const r = await varrerCalendario(caxias, deps(kommo, [ag()], { modo: 'aplicar', grupo, cartaoEhDaUnidade: async () => true }));
+  assert.equal(r.criadas, 1, 'a tarefa da dona não conta como a da Caxias');
+  assert.equal(r.sumiram, 0, 'e a da dona não vira "sumida" para a Caxias');
+  assert.match(String(c.criadas[0].text), /\[ag:caxias:3784113\]/);
+  assert.deepEqual([c.atualizadas, c.fechadas], [[], []]);
+  // a dona, na mesma lista, continua com o marcador de sempre e ignora a tarefa `[ag:caxias:N]`
+  const petro = { id: 'u-petro', slug: 'doutor-hernia-petropolis', spineTimezone: 'America/Sao_Paulo' } as unknown as Unit;
+  const dona = kommoFalso([{ id: 2, text: '⚕ AVALIAÇÃO 14:00 · AGENDADO [ag:caxias:3784113]', complete_till: quando, entity_id: 9 }]);
+  const rd = await varrerCalendario(petro, deps(dona.kommo, [ag()], { modo: 'aplicar', grupo, cartaoEhDaUnidade: async () => true }));
+  assert.equal(rd.criadas, 1);
+  assert.match(String(dona.c.criadas[0].text), /\[ag:3784113\]/);
+  assert.doesNotMatch(String(dona.c.criadas[0].text), /caxias/);
+});
+
+test('Kommo dividido: cartão de OUTRA unidade (ou sem unidade) não recebe a tarefa — ela nasce solta', async () => {
+  const grupo: GrupoDoCrm = { contaUnitId: 'u-petro', membros: [
+    { unitId: 'u-petro', contaUnitId: 'u-petro', rotulo: 'Petrópolis', slug: 'doutor-hernia-petropolis' },
+    { unitId: 'u-caxias', contaUnitId: 'u-petro', rotulo: 'Caxias', slug: 'doutor-hernia-caxias' },
+  ] };
+  const caxias = { id: 'u-caxias', slug: 'doutor-hernia-caxias', spineTimezone: 'America/Sao_Paulo' } as unknown as Unit;
+  const { kommo, c } = kommoFalso([]);
+  // sem `cartaoEhDaUnidade` injetado: usa o Kommo falso, que devolve um cartão com o campo da unidade = Petrópolis
+  (kommo as unknown as { getLead: unknown }).getLead = async () => ({ id: 555, custom_fields_values: [{ field_name: '⌂ Unidade de atendimento', values: [{ value: 'Petrópolis' }] }] });
+  const r = await varrerCalendario(caxias, deps(kommo, [ag()], { modo: 'aplicar', grupo }));
+  assert.equal(c.criadas[0].leadId, null);
+  assert.equal(r.semCartao, 1);
+  // cartão que o campo diz ser da Caxias recebe
+  const ok = kommoFalso([]);
+  (ok.kommo as unknown as { getLead: unknown }).getLead = async () => ({ id: 555, custom_fields_values: [{ field_name: '⌂ Unidade de atendimento', values: [{ value: 'Caxias' }] }] });
+  _limparMemoriaDoCalendario();
+  await varrerCalendario(caxias, deps(ok.kommo, [ag()], { modo: 'aplicar', grupo }));
+  assert.equal(ok.c.criadas[0].leadId, 555);
+});
+
+test('Kommo dividido: unidade sem rótulo próprio no grupo não escreve nada (não sabe quais cartões são dela)', async () => {
+  const grupo: GrupoDoCrm = { contaUnitId: 'u-petro', membros: [{ unitId: 'u-petro', contaUnitId: 'u-petro', rotulo: 'Petrópolis' }] };
+  const caxias = { id: 'u-caxias', slug: 'doutor-hernia-caxias', spineTimezone: 'America/Sao_Paulo' } as unknown as Unit;
+  const { kommo, c } = kommoFalso([]);
+  const r = await varrerCalendario(caxias, deps(kommo, [ag()], { modo: 'aplicar', grupo }));
+  assert.equal(r.erros, 1);
+  assert.deepEqual([c.criadas, c.atualizadas, c.fechadas], [[], [], []]);
+});
+
+test('modo seco no Kommo dividido também não escreve nada', async () => {
+  const grupo: GrupoDoCrm = { contaUnitId: 'u-petro', membros: [
+    { unitId: 'u-petro', contaUnitId: 'u-petro', rotulo: 'Petrópolis' }, { unitId: 'u-caxias', contaUnitId: 'u-petro', rotulo: 'Caxias' },
+  ] };
+  const caxias = { id: 'u-caxias', slug: 'doutor-hernia-caxias', spineTimezone: 'America/Sao_Paulo' } as unknown as Unit;
+  const { kommo, c } = kommoFalso([]);
+  const r = await varrerCalendario(caxias, deps(kommo, [ag()], { modo: 'seco', grupo, cartaoEhDaUnidade: async () => true }));
+  assert.equal(r.criadas, 1);
+  assert.deepEqual([c.criadas, c.atualizadas, c.fechadas], [[], [], []]);
+});
+
+test('rodada em faixas: respeita o paralelismo e mantém cada faixa (uma conta do Kommo) em fila', async () => {
+  let ativas = 0, maximo = 0;
+  const ordem: string[] = [];
+  const faixas = [['a1', 'a2'], ['b1'], ['c1'], ['d1']];
+  await rodarEmFaixas(faixas, 2, async (item) => {
+    ativas++; maximo = Math.max(maximo, ativas);
+    ordem.push(`+${item}`);
+    await new Promise((r) => setTimeout(r, 5));
+    ordem.push(`-${item}`);
+    ativas--;
+  });
+  assert.equal(maximo, 2, 'nunca mais que 2 faixas ao mesmo tempo');
+  assert.equal(ordem.length, 10, 'todas as unidades rodaram');
+  assert.ok(ordem.indexOf('-a1') < ordem.indexOf('+a2'), 'dentro da faixa, uma de cada vez');
+  await rodarEmFaixas([], 3, async () => assert.fail('sem faixas, nada roda'));
+});
+
+test('paralelismo da rodada: 3 por padrão, de 1 a 6', () => {
+  assert.equal(paraleloDoCalendario(undefined), 3);
+  assert.equal(paraleloDoCalendario('lixo'), 3);
+  assert.equal(paraleloDoCalendario('1'), 1);
+  assert.equal(paraleloDoCalendario('"2"'), 2);
+  assert.equal(paraleloDoCalendario('50'), 6);
+  assert.equal(paraleloDoCalendario('0'), 3);
+});
+
+test('Kommo dividido: erro passageiro ao ler o cartão (429) NÃO cria a tarefa solta — fica para a próxima varredura, sem gravar nada', async () => {
+  const grupo: GrupoDoCrm = { contaUnitId: 'u-petro', membros: [
+    { unitId: 'u-petro', contaUnitId: 'u-petro', rotulo: 'Petrópolis' }, { unitId: 'u-caxias', contaUnitId: 'u-petro', rotulo: 'Caxias' },
+  ] };
+  const caxias = { id: 'u-caxias', slug: 'doutor-hernia-caxias', spineTimezone: 'America/Sao_Paulo' } as unknown as Unit;
+  const { kommo, c } = kommoFalso([]);
+  let tentativas = 0;
+  (kommo as unknown as { getLead: unknown }).getLead = async () => {
+    if (tentativas++ === 0) throw new KommoApiError('getLead: 429', 429, null);
+    return { id: 555, custom_fields_values: [{ field_name: '⌂ Unidade de atendimento', values: [{ value: 'Caxias' }] }] };
+  };
+  const d = deps(kommo, [ag()], { modo: 'aplicar', grupo });
+  const r1 = await varrerCalendario(caxias, d);
+  assert.equal(r1.erros, 1);
+  assert.deepEqual(c.criadas, [], 'nada criado, nem solta');
+  const r2 = await varrerCalendario(caxias, d); // a próxima varredura acha o cartão e põe a tarefa nele
+  assert.equal(r2.erros, 0);
+  assert.equal((c.criadas as Array<Record<string, unknown>>)[0].leadId, 555);
+});
+
+test('Kommo dividido: o cartão é lido UMA vez por varredura, mesmo com várias consultas do mesmo paciente', async () => {
+  const grupo: GrupoDoCrm = { contaUnitId: 'u-petro', membros: [
+    { unitId: 'u-petro', contaUnitId: 'u-petro', rotulo: 'Petrópolis' }, { unitId: 'u-caxias', contaUnitId: 'u-petro', rotulo: 'Caxias' },
+  ] };
+  const caxias = { id: 'u-caxias', slug: 'doutor-hernia-caxias', spineTimezone: 'America/Sao_Paulo' } as unknown as Unit;
+  const { kommo } = kommoFalso([]);
+  let leituras = 0;
+  (kommo as unknown as { getLead: unknown }).getLead = async () => { leituras++; return { id: 555, custom_fields_values: [{ field_name: '⌂ Unidade de atendimento', values: [{ value: 'Caxias' }] }] }; };
+  await varrerCalendario(caxias, deps(kommo, [ag({ idSchedule: 1 }), ag({ idSchedule: 2 }), ag({ idSchedule: 3 })], { modo: 'aplicar', grupo }));
+  assert.equal(leituras, 1);
+});
+
+test('tabela unit_calendario ainda não existe (P2021): vale o .env, como antes; outro erro do banco: nada é feito', async () => {
+  const { kommo, c } = kommoFalso([]);
+  const semTabela = Object.assign(new Error('The table does not exist'), { code: 'P2021' });
+  const r = await varrerCalendario(unit, deps(kommo, [ag()], { modo: 'aplicar', lerConfig: async () => { throw semTabela; } }));
+  assert.equal(r.criadas, 1);
+  assert.equal(c.criadas[0].responsibleUserId, 15905863, 'o dono do .env');
+  const { kommo: k2, c: c2 } = kommoFalso([]);
+  _limparMemoriaDoCalendario();
+  const r2 = await varrerCalendario(unit, deps(k2, [ag()], { modo: 'aplicar', lerConfig: async () => { throw new Error('conexão caiu'); } }));
+  assert.equal(r2.erros, 1);
+  assert.deepEqual(c2.criadas, []);
+});
+
+test('duas unidades no MESMO Kommo fora de um grupo: só a primeira roda, a outra é recusada (não duplica nem fecha a tarefa da outra)', () => {
+  const u = (slug: string) => ({ slug });
+  const { faixas, recusadas } = faixasPorConta([
+    { unit: u('doutor-hernia-imperatriz'), conta: 'attiva', grupoId: null },
+    { unit: u('imperatriz-resgate'), conta: 'attiva', grupoId: null },
+    { unit: u('imperatriz-financeiro'), conta: 'attiva', grupoId: null },
+    { unit: u('doutor-hernia-serra'), conta: 'serra', grupoId: null },
+  ]);
+  assert.deepEqual(faixas.map((f) => f.map((x) => x.slug)), [['doutor-hernia-imperatriz'], ['doutor-hernia-serra']]);
+  assert.deepEqual(recusadas.map((r) => r.unit.slug), ['imperatriz-resgate', 'imperatriz-financeiro']);
+});
+
+test('conta dividida (Petrópolis × Caxias): as duas ficam na MESMA faixa, em fila; uma terceira fora do grupo é recusada', () => {
+  const u = (slug: string) => ({ slug });
+  const { faixas, recusadas } = faixasPorConta([
+    { unit: u('doutor-hernia-petropolis'), conta: 'lvp', grupoId: 'g1' },
+    { unit: u('petropolis-resgate'), conta: 'lvp', grupoId: null },
+    { unit: u('doutor-hernia-caxias'), conta: 'lvp', grupoId: 'g1' },
+  ]);
+  assert.deepEqual(faixas.map((f) => f.map((x) => x.slug)), [['doutor-hernia-petropolis', 'doutor-hernia-caxias']]);
+  assert.deepEqual(recusadas.map((r) => r.unit.slug), ['petropolis-resgate']);
+});
+
+test('a cota de criações por varredura só gasta com tarefa que NASCEU: 429 no meio não rouba vaga das outras', async () => {
+  const { kommo, c } = kommoFalso([]);
+  const agenda = Array.from({ length: 100 }, (_, i) => ag({ idSchedule: 1000 + i, clientName: `PACIENTE ${i}` }));
+  let n = 0;
+  const r = await varrerCalendario(unit, deps(kommo, agenda, {
+    modo: 'aplicar',
+    resolver: async () => { if (n++ < 5) throw new Error('429'); return { leadId: null, confirmado: true, fone: null }; },
+  }));
+  assert.equal(r.erros, 5);
+  assert.equal(r.criadas, 80, 'as 5 que falharam não gastaram a cota de 80');
+  assert.equal(c.criadas.length, 80);
+  assert.equal(r.adiadas, 15);
+});
+
+test('sem dono configurado e a conta com mais de um usuário da clínica: AVISA no log (a tarefa iria para o dono do token)', async () => {
+  delete process.env.FRANQUIA_CALENDARIO_RESPONSAVEL;
+  const { kommo } = kommoFalso([]);
+  let usuariosLidos = 0;
+  (kommo as unknown as { usuariosDaClinica: unknown }).usuariosDaClinica = async () => { usuariosLidos++; return 2; };
+  const avisos: string[] = [];
+  const { logger } = await import('./logger.js');
+  const original = logger.warn.bind(logger);
+  (logger as unknown as { warn: unknown }).warn = (...a: unknown[]) => { avisos.push(String(a[a.length - 1])); };
+  try {
+    await varrerCalendario(unit, deps(kommo, [ag()], { modo: 'seco' }));
+    await varrerCalendario(unit, deps(kommo, [ag()], { modo: 'seco' }));
+  } finally {
+    (logger as unknown as { warn: unknown }).warn = original;
+  }
+  assert.equal(avisos.filter((m) => /não tem UM só usuário da clínica/.test(m)).length, 1, 'avisa uma vez só');
+  assert.equal(usuariosLidos, 1);
+});
+
+test('conta compartilhada fora de grupo: fica a unidade "doutor-hernia-*", mesmo que a auxiliar venha primeiro', () => {
+  const u = (slug: string) => ({ slug });
+  const { faixas, recusadas } = faixasPorConta([
+    { unit: u('imperatriz-resgate'), conta: 'attiva', grupoId: null },
+    { unit: u('doutor-hernia-imperatriz'), conta: 'attiva', grupoId: null },
+  ]);
+  assert.deepEqual(faixas.map((f) => f.map((x) => x.slug)), [['doutor-hernia-imperatriz']]);
+  assert.deepEqual(recusadas.map((r) => r.unit.slug), ['imperatriz-resgate']);
+});
+
+test('recusa explícita do Kommo (422): a marca de "criada há pouco" é apagada e a próxima varredura tenta de novo; timeout mantém a marca', async () => {
+  const { kommo, c } = kommoFalso([]);
+  let n = 0;
+  (kommo as unknown as { createTask: unknown }).createTask = async (a: Record<string, unknown>) => {
+    if (n++ === 0) throw new KommoApiError('createTask: 422', 422, null);
+    c.criadas.push(a);
+    return { id: 1 };
+  };
+  const d = deps(kommo, [ag()], { modo: 'aplicar', resolver: async () => ({ leadId: null, confirmado: true, fone: null }) });
+  const r1 = await varrerCalendario(unit, d);
+  assert.equal(r1.erros, 1);
+  const r2 = await varrerCalendario(unit, d);
+  assert.equal(r2.criadas, 1, 'tentou de novo, sem esperar 30 min');
+  // timeout: a tarefa pode ter nascido; a marca segura a repetição
+  _limparMemoriaDoCalendario();
+  const t = kommoFalso([]);
+  let m = 0;
+  (t.kommo as unknown as { createTask: unknown }).createTask = async (a: Record<string, unknown>) => {
+    if (m++ === 0) throw new KommoApiError('createTask: timeout', undefined, null);
+    t.c.criadas.push(a);
+    return { id: 1 };
+  };
+  const dt = deps(t.kommo, [ag()], { modo: 'aplicar' });
+  await varrerCalendario(unit, dt);
+  const r3 = await varrerCalendario(unit, dt);
+  assert.equal(r3.criadas, 0);
+});
+
+test('rodadaSecaLimpa: só vale depois de uma varredura SECA sem erro (é o que a tela exige para passar a "ligado")', async () => {
+  assert.equal(rodadaSecaLimpa(unit.slug), false, 'nunca rodou');
+  const { kommo } = kommoFalso([]);
+  await varrerCalendario(unit, deps(kommo, [ag()], { modo: 'seco' }));
+  assert.equal(rodadaSecaLimpa(unit.slug), true);
+  await varrerCalendario(unit, deps(kommo, [ag()], { modo: 'seco', buscarAgenda: async () => ({ ok: false, erro: 'timeout', agendamentos: [] }) }));
+  assert.equal(rodadaSecaLimpa(unit.slug), false, 'a última teve erro');
+  await varrerCalendario(unit, deps(kommo, [ag()], { modo: 'aplicar' }));
+  assert.equal(rodadaSecaLimpa(unit.slug), false, 'a última foi com escrita');
+});
+
+test('recusa PERMANENTE do Kommo (tipo apagado, dono desativado): para depois de 3 recusas seguidas, com a pausa entre elas e um aviso só', async () => {
+  const { kommo } = kommoFalso([]);
+  let posts = 0;
+  (kommo as unknown as { createTask: unknown }).createTask = async () => { posts++; throw new KommoApiError('createTask: 422', 422, null); };
+  const agenda = Array.from({ length: 40 }, (_, i) => ag({ idSchedule: 5000 + i, clientName: `PACIENTE ${i}` }));
+  const t0 = Date.now();
+  const r = await varrerCalendario(unit, { ...deps(kommo, agenda, { modo: 'aplicar', resolver: async () => ({ leadId: null, confirmado: true, fone: null }) }), pausaMs: 25 });
+  assert.equal(posts, 3, 'só 3 POSTs, não 40 (nem 160)');
+  assert.ok(Date.now() - t0 >= 70, 'a pausa vale também no erro');
+  assert.equal(r.erros, 3);
+  assert.equal(r.adiadas, 37);
+  assert.equal(r.criadas, 0);
+});
+
+test('uma criação que deu certo zera a conta das recusas seguidas', async () => {
+  const { kommo, c } = kommoFalso([]);
+  let n = 0;
+  (kommo as unknown as { createTask: unknown }).createTask = async (a: Record<string, unknown>) => {
+    n++;
+    if (n === 3 || n === 6) { c.criadas.push(a); return { id: n }; }
+    throw new KommoApiError('createTask: 422', 422, null);
+  };
+  const agenda = Array.from({ length: 6 }, (_, i) => ag({ idSchedule: 6000 + i, clientName: `PACIENTE ${i}` }));
+  const r = await varrerCalendario(unit, deps(kommo, agenda, { modo: 'aplicar', resolver: async () => ({ leadId: null, confirmado: true, fone: null }) }));
+  assert.equal(n, 6, 'nunca chegou a 3 recusas seguidas');
+  assert.equal(r.criadas, 2);
+});
+
+test('cartão que o Kommo recusa (mesclado/apagado): tenta UMA vez solta, com nome e telefone, e isso não conta para o disjuntor', async () => {
+  const { kommo, c } = kommoFalso([]);
+  (kommo as unknown as { createTask: unknown }).createTask = async (a: Record<string, unknown>) => {
+    if (a.leadId) throw new KommoApiError('createTask: 422', 422, null);
+    c.criadas.push(a);
+    return { id: 9 };
+  };
+  const agenda = Array.from({ length: 6 }, (_, i) => ag({ idSchedule: 7000 + i, clientName: `PACIENTE ${i}` }));
+  const r = await varrerCalendario(unit, deps(kommo, agenda, { modo: 'aplicar' }));
+  assert.equal(r.criadas, 6, 'os 6 nasceram, soltas');
+  assert.equal(r.semCartao, 6);
+  assert.equal(r.erros, 0);
+  assert.match(String(c.criadas[0].text), /Tel: \+5547999990000$/);
 });

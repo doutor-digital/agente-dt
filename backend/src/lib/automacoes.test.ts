@@ -6,6 +6,7 @@ import {
   _semearParaTeste,
   ehEstado,
   estadoDaAutomacao,
+  estadoDoAmbienteComAplicar,
   estadoGravado,
   naListaDoAmbiente,
   panoramaDaUnidade,
@@ -146,4 +147,23 @@ test('nascer em seco sem ter modo seco é erro de catálogo', () => {
   const base = AUTOMACOES[0];
   const problemas = verificarCatalogo([{ ...base, id: 'x-teste', chave: 'X_TESTE_SLUGS', temSeco: false, quandoVazio: 'seco' }]);
   assert.deepEqual(problemas, ['x-teste nasce em seco mas não tem modo seco']);
+});
+
+test('calendário: na lista do .env e fora de _APLICAR a tela mostra "só no papel", não "ligado"', () => {
+  _semearParaTeste([]);
+  const env = { FRANQUIA_CALENDARIO_SLUGS: 'doutor-hernia-timbo,doutor-hernia-serra', FRANQUIA_CALENDARIO_APLICAR: 'doutor-hernia-timbo' } as unknown as NodeJS.ProcessEnv;
+  const estado = (slug: string) => panoramaDaUnidade(slug, env).find((l) => l.id === 'franquia-calendario')?.estado;
+  assert.equal(estado('doutor-hernia-timbo'), 'ligado');
+  assert.equal(estado('doutor-hernia-serra'), 'seco');
+  assert.equal(estado('doutor-hernia-taubate'), 'desligado');
+  assert.equal(automacaoPorId('franquia-calendario')?.risco, 'cria-tarefa');
+  assert.equal(automacaoPorId('franquia-calendario')?.exigeSecoAntes, true);
+});
+
+test('as duas listas do calendário têm UMA definição (a tela e o worker usam a mesma)', () => {
+  assert.equal(estadoDoAmbienteComAplicar('a', '', ''), 'desligado');
+  assert.equal(estadoDoAmbienteComAplicar('a', 'a', ''), 'seco');
+  assert.equal(estadoDoAmbienteComAplicar('a', 'a', 'a'), 'ligado');
+  assert.equal(estadoDoAmbienteComAplicar('a', '*', 'b'), 'seco');
+  assert.equal(estadoDoAmbienteComAplicar('a', 'b', 'a'), 'desligado', 'APLICAR sozinho não liga nada');
 });

@@ -28,6 +28,8 @@ export type Risco =
   | 'manda-mensagem'
   /** Escreve campo do cartão — o erro é dado errado, corrigível. */
   | 'escreve-campo'
+  /** Cria/conclui TAREFA no Kommo (calendário) — nunca toca em campo nem em etapa; o erro é tarefa a mais ou a menos, corrigível. */
+  | 'cria-tarefa'
   /** Só muda como a IA se comporta ou quanto custa — não move nem escreve nada. */
   | 'comportamento';
 
@@ -45,6 +47,13 @@ export interface Automacao {
   risco: Risco;
   /** Tem modo seco (decide e registra no log, mas não toca no Kommo). */
   temSeco: boolean;
+  /**
+   * Segunda variável de ambiente, a lista de quem ESCREVE: na lista de `chave` e fora desta = "só no papel"; nas duas = ligado.
+   * Só o calendário tem (`FRANQUIA_CALENDARIO_APLICAR`). Sem ela, a tela mostraria "ligado" para quem está em seco.
+   */
+  chaveAplicar?: string;
+  /** A tela só deixa passar para "ligado" quem JÁ está em "só no papel": a 1ª carga de uma automação grande precisa de um seco conferido. */
+  exigeSecoAntes?: boolean;
   /**
    * O que vale quando a variável de ambiente está VAZIA. Quase tudo é `desligado`, mas duas
    * automações nasceram ligadas pra todo mundo — e isso é exatamente o tipo de coisa que ninguém
@@ -321,6 +330,21 @@ export const AUTOMACOES: readonly Automacao[] = [
     temSeco: true,
     quandoVazio: 'desligado',
     arquivo: 'src/lib/franquia-sync-worker.ts',
+  },
+  {
+    id: 'franquia-calendario',
+    chave: 'FRANQUIA_CALENDARIO_SLUGS',
+    nome: 'Agenda da franquia no Calendário do Kommo',
+    oQueFaz:
+      'Cada agendamento da franquia vira UMA tarefa no horário da consulta, no Calendário do Kommo (/todo/calendar), e acompanha a franquia: remarcou, a tarefa muda de hora; atendeu, faltou ou desmarcou, a tarefa é concluída com o resultado.',
+    pegadinha:
+      'Só mexe em TAREFAS (nunca em campo nem em etapa do cartão) e nunca apaga: fechar é concluir com resultado. Em "Só no papel" lê a franquia e o Kommo e registra o que criaria, sem escrever. A unidade só roda se a conta do Kommo tiver o tipo de tarefa "Consulta" (ou um tipo escolhido em unit_calendario) — sem ele fica parada e o log avisa. TROCAR O TIPO depois de criar tarefas duplica a agenda inteira. Numa conta dividida (Petrópolis × Caxias) cada unidade usa o próprio marcador e só põe a tarefa no cartão que é dela. Roda a cada 15 minutos (FRANQUIA_CALENDARIO_INTERVALO_MIN muda), então a tarefa aparece no Kommo em até esse tempo depois de marcar na franquia.',
+    risco: 'cria-tarefa',
+    temSeco: true,
+    chaveAplicar: 'FRANQUIA_CALENDARIO_APLICAR',
+    exigeSecoAntes: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/franquia-calendario-worker.ts',
   },
   {
     id: 'preenche-campos',

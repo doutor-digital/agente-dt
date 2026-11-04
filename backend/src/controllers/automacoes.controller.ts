@@ -10,6 +10,7 @@ import type { Request, Response } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { automacaoPorId } from '../lib/automacoes.js';
+import { rodadaSecaLimpa } from '../lib/franquia-calendario-worker.js';
 import { ACOES_SIMULADAS, resumirSimulacoes } from '../lib/so-no-papel.js';
 import {
   ehEstado,
@@ -62,6 +63,18 @@ export async function definirAutomacaoHandler(req: Request, res: Response): Prom
   if (!unit) {
     res.status(404).json({ erro: 'unidade não encontrada' });
     return;
+  }
+  if (estado === 'ligado' && catalogo.exigeSecoAntes) {
+    const hoje = panoramaDaUnidade(unit.slug).find((a) => a.id === idAutomacao)?.estado;
+    if (hoje !== 'seco' && hoje !== 'ligado') {
+      res.status(400).json({ erro: `"${catalogo.nome}" só liga depois de rodar em "Só no papel": ponha em "Só no papel", espere uma rodada e confira o log antes` });
+      return;
+    }
+    // não basta ter clicado em "Só no papel": a última varredura da unidade tem de ter sido seca e SEM erro (tipo achado, agenda lida)
+    if (hoje === 'seco' && idAutomacao === 'franquia-calendario' && !rodadaSecaLimpa(unit.slug)) {
+      res.status(400).json({ erro: `"${catalogo.nome}": ainda não houve uma rodada em "Só no papel" sem erro nesta unidade. Espere a próxima rodada (o intervalo é FRANQUIA_CALENDARIO_INTERVALO_MIN, 15 min por padrão) e confira o log "franquia-calendario: varredura concluída"` });
+      return;
+    }
   }
 
   const quem = (req as { user?: { email?: string } }).user?.email ?? null;
