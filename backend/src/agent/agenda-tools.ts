@@ -1225,11 +1225,13 @@ export function porQueNaoReservar(args: {
   formaPagamento?: string;
   /** Unidade sem pagamento antecipado (`unidadeSemAntecipado`): só se paga na clínica, então a forma nunca é perguntada. */
   semAntecipado?: boolean;
+  /** Taxa de reserva obrigatória (Boa Vista): a forma é sempre pix_antecipado; nunca perguntar nem dar o botão "Na clínica". */
+  taxaObrigatoria?: boolean;
 }): string | null {
   if (args.remarcando) return null;
   const faltaDia = args.diaConfirmado !== true;
   const faltaPagamento =
-    !args.semAntecipado && args.formaPagamento !== 'pix_antecipado' && args.formaPagamento !== 'na_clinica';
+    !args.semAntecipado && !args.taxaObrigatoria && args.formaPagamento !== 'pix_antecipado' && args.formaPagamento !== 'na_clinica';
   if (!faltaDia && !faltaPagamento) return null;
   const pendencias: string[] = [];
   if (faltaDia) {
@@ -1243,11 +1245,13 @@ export function porQueNaoReservar(args: {
   // Unidade que só recebe na clínica: sem `formaPagamento`, sem botões e sem pergunta de pagamento.
   const fecho = args.semAntecipado
     ? ' NÃO pergunte nada sobre pagamento: nesta clínica a consulta é paga no dia.'
-    : ' Se a pergunta for só a forma de pagamento, termine a mensagem com a linha [[botoes: Pix antecipado | Na clínica]].';
+    : args.taxaObrigatoria
+      ? ' NÃO pergunte forma de pagamento e NUNCA ofereça pagar na clínica: nesta unidade a taxa de reserva é obrigatória.'
+      : ' Se a pergunta for só a forma de pagamento, termine a mensagem com a linha [[botoes: Pix antecipado | Na clínica]].';
   return (
     `Consulta NÃO marcada ainda. Antes de reservar falta: ${pendencias.map((p, i) => `${i + 1}) ${p}`).join('; ')}. ` +
     'Pergunte isso em UMA mensagem curta e chame agendar_consulta de novo com diaConfirmado=true' +
-    (args.semAntecipado ? '.' : ' e formaPagamento preenchido.') +
+    (args.semAntecipado || args.taxaObrigatoria ? '.' : ' e formaPagamento preenchido.') +
     fecho
   );
 }
@@ -1438,7 +1442,7 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
       if (semAntecipado && !args.remarcando) args = { ...args, formaPagamento: 'na_clinica' };
       if (taxaObrigatoria && !args.remarcando) args = { ...args, formaPagamento: 'pix_antecipado' };
 
-      const pendencia = porQueNaoReservar({ ...args, semAntecipado });
+      const pendencia = porQueNaoReservar({ ...args, semAntecipado, taxaObrigatoria });
       if (pendencia) {
         await recorder.step({
           kind: 'ERROR',

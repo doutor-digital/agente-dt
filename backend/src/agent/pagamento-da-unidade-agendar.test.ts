@@ -1,4 +1,4 @@
-import { decidirTrava } from './confirmacao-so-com-crm.js';
+import { travarAgendamentoPorComprovante } from './confirmacao-so-com-crm.js';
 /**
  * `agendar_consulta` numa unidade SEM pagamento antecipado (Timbó, 29/10/2026).
  *
@@ -13,7 +13,7 @@ import type { Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { SpineService } from '../services/spine.service.js';
 import type { TraceRecorder } from './trace-recorder.js';
-import { buildAgendarConsulta, buildConsultarHorarios } from './agenda-tools.js';
+import { buildAgendarConsulta, buildConsultarHorarios, porQueNaoReservar } from './agenda-tools.js';
 import { agoraLocalISO } from './consulta-que-passou.js';
 import { dataDaConfirmacao, feriadoNacional } from '../lib/feriados.js';
 import { _depsDoCacheParaTeste, depositoNaMemoria } from '../lib/cache-agenda.js';
@@ -220,10 +220,29 @@ test('flag false + taxa de reserva obrigatória (Boa Vista): não pergunta a for
   const r = await agendar(atual).func({ idClient: 9, data: DIA, hora, diaConfirmado: true, leadId: 1 });
   assert.doesNotMatch(r, /perguntar como ele prefere pagar/);
   assert.doesNotMatch(r, /ou pagamento na clínica/i);
-  // Quem segura a consulta sem comprovante é a trava do grafo (travarAgendamentoPorComprovante), não esta ferramenta:
-  // aqui ela é chamada direto. A trava, com a taxa obrigatória e nenhum comprovante lido, recusa:
-  const trava = decidirTrava({ noTurno: false, pendente: false }, { exigePagamento: true, taxaEsperada: 100 });
-  assert.equal(trava.libera, false);
+});
+
+// Quem segura a consulta sem comprovante é a trava do grafo (travarAgendamentoPorComprovante): com ela, como em produção,
+// nada é marcado e a recusa não oferece pagar na clínica.
+test('Boa Vista com a trava do grafo: sem comprovante da taxa a consulta NÃO é marcada', async () => {
+  atual = unidade({ acceptsAdvancePayment: false, spineBookingRequiresPayment: true });
+  const hora = await primeiroHorario(atual);
+  const ferramentas = [agendar(atual)];
+  travarAgendamentoPorComprovante(ferramentas as never, { noTurno: false, pendente: false }, { step: () => undefined } as never, {
+    exigePagamento: true,
+    taxaEsperada: 100,
+  });
+  const r = String(await ferramentas[0]!.func({ idClient: 9, data: DIA, hora, diaConfirmado: true, leadId: 1 } as never));
+  assert.ok(!marcou());
+  assert.match(r, /RECUSADO/);
+  assert.doesNotMatch(r, /ou pagamento na clínica/i);
+});
+
+test('taxa obrigatória: a pendência de "dia não confirmado" não pede forma de pagamento nem dá o botão "Na clínica"', () => {
+  const p = String(porQueNaoReservar({ diaConfirmado: false, taxaObrigatoria: true }));
+  assert.doesNotMatch(p, /Na clínica \]\]|\[\[botoes: Pix antecipado/);
+  assert.doesNotMatch(p, /formaPagamento preenchido/);
+  assert.match(p, /taxa de reserva é obrigatória/);
 });
 
 test('remarcação (remarcando) numa unidade sem antecipado: não passa pela porta e NÃO grava escolha de pagamento', async () => {
