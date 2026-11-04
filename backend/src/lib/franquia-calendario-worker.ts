@@ -23,7 +23,6 @@ import { createKommoClient, KommoApiError, type KommoClient, type KommoTarefa } 
 import { SpineService, somarDias, localParaUtcIso, type SpineSchedule } from '../services/spine.service.js';
 import { contaDoKommo, grupoDaUnidade, podeMexer, valorDaUnidadeNoCartao, veredictoDoCartao, type GrupoDoCrm } from './crm-compartilhado.js';
 import { estadoGravado } from './automacoes-estado.js';
-import { ehDaConsultoria } from './responsavel-da-tarefa.js';
 import { normalizar } from './franquia-sync.js';
 import { comVagaDaFranquia, ondeTemSync, resolverPaciente, type EntradaDoCacheDeLead } from './franquia-sync-worker.js';
 import {
@@ -99,6 +98,15 @@ const criadasRecentes = new Map<string, number>();
  */
 const cacheDoCalendario = new Map<string, EntradaDoCacheDeLead>();
 const avisadasSemDono = new Set<string>();
+const semTipoAvisadas = new Set<string>();
+/** A última varredura de cada unidade (a tela só deixa ligar quem teve uma rodada SECA limpa — ver `rodadaSecaLimpa`). */
+const ultimoResumo = new Map<string, ResumoCalendario>();
+
+/** A última varredura desta unidade foi em "só no papel" e sem erro? É o que a tela exige antes de passar para "ligado". */
+export function rodadaSecaLimpa(slug: string): boolean {
+  const r = ultimoResumo.get(slug);
+  return !!r && r.modo === 'seco' && r.erros === 0;
+}
 /** Última atualização aplicada por agendamento: se o Kommo não "guardou" o que mandamos, não regravamos para sempre. */
 const ultimaAtualizacao = new Map<string, { assinatura: string; visto: string }>();
 
@@ -108,6 +116,8 @@ export function _limparMemoriaDoCalendario(): void {
   ultimaAtualizacao.clear();
   cacheDoCalendario.clear();
   avisadasSemDono.clear();
+  semTipoAvisadas.clear();
+  ultimoResumo.clear();
 }
 
 /**
@@ -128,7 +138,10 @@ async function tipoDeTarefa(unit: Pick<Unit, 'slug'>, kommo: KommoClient, conta:
     return null;
   }
   if (id === null) {
-    logger.warn({ unit: unit.slug }, 'franquia-calendario: a conta não tem o tipo de tarefa "Consulta" e a unidade não tem tipo configurado (unit_calendario / FRANQUIA_CALENDARIO_TIPO) — unidade parada (crie o tipo "Consulta" na conta ou configure o id)');
+    if (!semTipoAvisadas.has(unit.slug)) {
+      semTipoAvisadas.add(unit.slug);
+      logger.warn({ unit: unit.slug }, 'franquia-calendario: a conta não tem o tipo de tarefa "Consulta" e a unidade não tem tipo configurado (unit_calendario / FRANQUIA_CALENDARIO_TIPO) — unidade parada (crie o tipo "Consulta" na conta ou configure o id)');
+    }
     return null;
   }
   tipoPorConta.set(conta, { id, ate: Date.now() + TIPO_CACHE_MS });
@@ -158,21 +171,29 @@ async function avisarSeNaoHaDonoUnico(unit: Pick<Unit, 'slug'>, kommo: KommoClie
   if (avisadasSemDono.has(unit.slug)) return;
   avisadasSemDono.add(unit.slug);
   try {
-    const clinica = (await kommo.listUsers()).filter((u) => u.rights?.is_active !== false && !ehDaConsultoria(u));
-    if (clinica.length !== 1) {
+    const n = await kommo.usuariosDaClinica(); // do cache de 6 h do cliente (o mesmo que o createTask usa)
+    if (n === null) {
+      logger.warn({ unit: unit.slug }, 'franquia-calendario: unidade sem dono configurado e não consegui listar os usuários da conta — confira para quem vão as tarefas');
+    } else if (n !== 1) {
       logger.warn(
-        { unit: unit.slug, usuariosDaClinica: clinica.length },
+        { unit: unit.slug, usuariosDaClinica: n },
         'franquia-calendario: unidade sem dono configurado e a conta não tem UM só usuário da clínica — a tarefa vai para o dono do token (configure responsible_user_id em unit_calendario)',
       );
     }
   } catch {
-    avisadasSemDono.delete(unit.slug); // não deu para ler os usuários: tenta de novo na próxima
+    /* só um aviso: se a leitura falhar, as tarefas seguem o caminho de sempre */
   }
 }
 
 const dormir = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export async function varrerCalendario(unit: Unit, deps: DepsDoCalendario = {}): Promise<ResumoCalendario> {
+  const r = await varrerUnidadeDoCalendario(unit, deps);
+  ultimoResumo.set(unit.slug, r);
+  return r;
+}
+
+async function varrerUnidadeDoCalendario(unit: Unit, deps: DepsDoCalendario): Promise<ResumoCalendario> {
   const modo = deps.modo ?? modoDoCalendario(unit.slug, undefined, estadoGravado(unit.slug, ID_AUTOMACAO));
   const agora = deps.agora ?? new Date();
   const resumo: ResumoCalendario = {
@@ -239,7 +260,9 @@ export async function varrerCalendario(unit: Unit, deps: DepsDoCalendario = {}):
   const { de, ate } = janelaDoCalendario(tz, agora);
   const ag = deps.buscarAgenda
     ? await deps.buscarAgenda(de, ate)
-    : await SpineService.searchSchedules(unit, { initialDate: de, endDate: ate, rowsPerPage: 100 }).then((r) => ({
+    // cada chamada à franquia passa pela trava global dela (a do sincronizador, no máx. 6 ao mesmo tempo): o calendário não soma
+    // requisições por cima. A vaga é segurada SÓ durante a chamada (ms), nunca durante as escritas no Kommo.
+    : await comVagaDaFranquia(() => SpineService.searchSchedules(unit, { initialDate: de, endDate: ate, rowsPerPage: 100 })).then((r) => ({
         ok: r.ok, erro: r.error, agendamentos: r.data?.schedules ?? [], truncada: r.data?.truncada,
       }));
   if (!ag.ok) {
@@ -374,7 +397,7 @@ export async function varrerCalendario(unit: Unit, deps: DepsDoCalendario = {}):
     const ids = idsPorPaciente.get(normalizar(nome)) ?? [a.idSchedule];
     const r = deps.resolver
       ? await deps.resolver(nome, ids)
-      : await resolverPaciente(unit, kommo, nome, null, ids, cacheDoCalendario).then((x) => ({ leadId: x.leadId, confirmado: x.leadConfirmado, fone: x.fone ?? null }));
+      : await comVagaDaFranquia(() => resolverPaciente(unit, kommo, nome, null, ids, cacheDoCalendario)).then((x) => ({ leadId: x.leadId, confirmado: x.leadConfirmado, fone: x.fone ?? null }));
     // Só cartão PROVADO recebe a tarefa: telefone que casa com vários cartões (mãe e filha dividem o WhatsApp) é palpite. E, em Kommo
     // dividido, só o cartão que o campo «⌂ Unidade de atendimento» diz ser desta unidade.
     const leadId = r.leadId !== null && r.confirmado && (await cartaoEhDaUnidade(r.leadId)) ? r.leadId : null;
@@ -385,10 +408,18 @@ export async function varrerCalendario(unit: Unit, deps: DepsDoCalendario = {}):
     if (aplicar) {
       // marcada ANTES do POST: num timeout o Kommo pode ter gravado a tarefa, e a lista da próxima varredura pode ainda não mostrá-la
       criadasRecentes.set(`${unit.id}:${a.idSchedule}`, Date.now());
-      const feita = await kommo.createTask({
-        leadId, text: texto, completeAt: a.completeTill, responsibleUserId: responsavel, taskTypeId, manterResponsavel: responsavel !== undefined,
-        durationSec: durationSec || undefined,
-      });
+      let feita: { id?: number } | null;
+      try {
+        feita = await kommo.createTask({
+          leadId, text: texto, completeAt: a.completeTill, responsibleUserId: responsavel, taskTypeId, manterResponsavel: responsavel !== undefined,
+          durationSec: durationSec || undefined,
+        });
+      } catch (err) {
+        // recusa explícita (400/404/422): a tarefa NÃO nasceu, então a marca não pode esconder o agendamento por 30 min. Timeout/5xx: pode ter
+        // nascido, a marca fica.
+        if (err instanceof KommoApiError && [400, 404, 422].includes(err.status ?? 0)) criadasRecentes.delete(`${unit.id}:${a.idSchedule}`);
+        throw err;
+      }
       if (!feita) {
         resumo.erros++;
         logger.warn({ unit: unit.slug, idSchedule: a.idSchedule, solta: leadId === null }, 'franquia-calendario: o Kommo não devolveu o id da tarefa criada');
@@ -434,6 +465,8 @@ export function faixasPorConta<T extends { slug: string }>(
   const faixas: T[][] = [];
   const recusadas: Array<{ unit: T; conta: string; motivo: string }> = [];
   for (const [conta, lista] of porConta) {
+    // a unidade "de verdade" (doutor-hernia-*) fica; as auxiliares da mesma conta (-resgate, -financeiro...) são as recusadas
+    lista.sort((a, b) => Number(b.unit.slug.startsWith('doutor-hernia-')) - Number(a.unit.slug.startsWith('doutor-hernia-')));
     const grupoDaConta = lista.find((x) => x.grupoId !== null)?.grupoId ?? null;
     const aceitas = grupoDaConta ? lista.filter((x) => x.grupoId === grupoDaConta) : lista.slice(0, 1);
     for (const x of lista) {
@@ -513,9 +546,7 @@ async function varrerTodas(): Promise<void> {
     await rodarEmFaixas(faixas, paraleloDoCalendario(), async (unit) => {
       const t0 = Date.now();
       try {
-        // dentro da trava global da franquia (a mesma do sincronizador, no máx. 6 ao mesmo tempo): o calendário não soma
-        // requisições por cima dela. A vaga só é segurada durante a varredura da unidade (segundos), nunca entre unidades.
-        const r = await comVagaDaFranquia(() => varrerCalendario(unit));
+        const r = await varrerCalendario(unit);
         logger.info({ ...r, ms: Date.now() - t0 }, 'franquia-calendario: varredura concluída');
       } catch (err) {
         logger.error({ err, unit: unit.slug }, 'franquia-calendario: varredura falhou');

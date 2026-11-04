@@ -6,6 +6,7 @@ import {
   _semearParaTeste,
   ehEstado,
   estadoDaAutomacao,
+  estadoDoAmbienteComAplicar,
   estadoGravado,
   naListaDoAmbiente,
   panoramaDaUnidade,
@@ -157,4 +158,12 @@ test('calendário: na lista do .env e fora de _APLICAR a tela mostra "só no pap
   assert.equal(estado('doutor-hernia-taubate'), 'desligado');
   assert.equal(automacaoPorId('franquia-calendario')?.risco, 'cria-tarefa');
   assert.equal(automacaoPorId('franquia-calendario')?.exigeSecoAntes, true);
+});
+
+test('as duas listas do calendário têm UMA definição (a tela e o worker usam a mesma)', () => {
+  assert.equal(estadoDoAmbienteComAplicar('a', '', ''), 'desligado');
+  assert.equal(estadoDoAmbienteComAplicar('a', 'a', ''), 'seco');
+  assert.equal(estadoDoAmbienteComAplicar('a', 'a', 'a'), 'ligado');
+  assert.equal(estadoDoAmbienteComAplicar('a', '*', 'b'), 'seco');
+  assert.equal(estadoDoAmbienteComAplicar('a', 'b', 'a'), 'desligado', 'APLICAR sozinho não liga nada');
 });

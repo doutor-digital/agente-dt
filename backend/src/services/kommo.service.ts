@@ -1,5 +1,5 @@
 import axios, { AxiosError, type AxiosAdapter, type AxiosInstance, type AxiosRequestConfig } from 'axios';
-import { responsavelDaTarefa, type UsuarioKommo } from '../lib/responsavel-da-tarefa.js';
+import { ehDaConsultoria, responsavelDaTarefa, type UsuarioKommo } from '../lib/responsavel-da-tarefa.js';
 import type { Unit } from '@prisma/client';
 import { env } from '../lib/env.js';
 import { logger } from '../lib/logger.js';
@@ -1844,8 +1844,8 @@ export class KommoClient {
     }
   }
 
-  /** Tarefa do "Doutor Digital" (ou sem dono) vai para o usuário da clínica — ver lib/responsavel-da-tarefa.ts. */
-  private async responsavelDaTarefa(pedido?: number): Promise<number | undefined> {
+  /** Os usuários da conta, do cache de 6 h (`null` = o Kommo não deixou listar). Uma leitura só para várias tarefas juntas. */
+  private async usuariosDaConta(): Promise<UsuarioKommo[] | null> {
     const chave = this.creds.subdomain;
     const agora = Date.now();
     let cache = usuariosPorConta.get(chave);
@@ -1863,7 +1863,22 @@ export class KommoClient {
       cache = { usuarios, ate: agora + USUARIOS_VALIDADE_MS };
       usuariosPorConta.set(chave, cache);
     }
-    const lista = await cache.usuarios;
+    return cache.usuarios;
+  }
+
+  /**
+   * Quantos usuários da clínica (ativos, fora o login da consultoria) a conta tem; `null` = não deu para listar. A tarefa sem dono só
+   * vai para a clínica quando é UM só (ver `responsavelDaTarefa`): o calendário avisa quando não é.
+   */
+  async usuariosDaClinica(): Promise<number | null> {
+    const lista = await this.usuariosDaConta();
+    return lista ? lista.filter((u) => u.rights?.is_active !== false && !ehDaConsultoria(u)).length : null;
+  }
+
+  /** Tarefa do "Doutor Digital" (ou sem dono) vai para o usuário da clínica — ver lib/responsavel-da-tarefa.ts. */
+  private async responsavelDaTarefa(pedido?: number): Promise<number | undefined> {
+    const chave = this.creds.subdomain;
+    const lista = await this.usuariosDaConta();
     if (!lista) return pedido;
     const escolhido = responsavelDaTarefa(lista, pedido);
     if (escolhido !== pedido) {

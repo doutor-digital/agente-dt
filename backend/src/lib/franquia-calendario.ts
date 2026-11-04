@@ -24,6 +24,7 @@
 import { SPINE_STATUS, instanteNoFuso, somarDias, type SpineSchedule } from '../services/spine.service.js';
 import { downgradeEmoji } from '../services/kommo.service.js';
 import { normalizar } from './franquia-sync.js';
+import { estadoDoAmbienteComAplicar } from './automacoes-estado.js';
 
 export const DIAS_ATRAS = 14;
 export const DURACAO_PADRAO_SEG = 60 * 60;
@@ -291,8 +292,8 @@ export function modoDoCalendario(
   gravado: 'ligado' | 'seco' | 'desligado' | null = null,
 ): ModoDoCalendario {
   if (gravado) return gravado === 'ligado' ? 'aplicar' : gravado;
-  if (!slugNaLista(slug, env.slugs)) return 'desligado';
-  return slugNaLista(slug, env.aplicar) ? 'aplicar' : 'seco';
+  const doEnv = estadoDoAmbienteComAplicar(slug, env.slugs, env.aplicar); // a mesma definição que a tela usa
+  return doEnv === 'ligado' ? 'aplicar' : doEnv;
 }
 
 /** O tipo "Consulta" da conta, se houver (sem acento, sem caixa). */

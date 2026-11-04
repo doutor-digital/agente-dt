@@ -2,7 +2,7 @@ import { beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Unit } from '@prisma/client';
 
-import { _limparMemoriaDoCalendario, CRIADA_RECENTE_MS, faixasPorConta, paraleloDoCalendario, rodarEmFaixas, varrerCalendario, type DepsDoCalendario } from './franquia-calendario-worker.js';
+import { _limparMemoriaDoCalendario, CRIADA_RECENTE_MS, faixasPorConta, paraleloDoCalendario, rodadaSecaLimpa, rodarEmFaixas, varrerCalendario, type DepsDoCalendario } from './franquia-calendario-worker.js';
 import type { GrupoDoCrm } from './crm-compartilhado.js';
 import { KommoApiError, type KommoClient, type KommoTarefa } from '../services/kommo.service.js';
 import type { SpineSchedule } from '../services/spine.service.js';
@@ -529,7 +529,7 @@ test('sem dono configurado e a conta com mais de um usuário da clínica: AVISA 
   delete process.env.FRANQUIA_CALENDARIO_RESPONSAVEL;
   const { kommo } = kommoFalso([]);
   let usuariosLidos = 0;
-  (kommo as unknown as { listUsers: unknown }).listUsers = async () => { usuariosLidos++; return [{ id: 1, name: 'Doutor Digital' }, { id: 2, name: 'Ana' }, { id: 3, name: 'Bia' }]; };
+  (kommo as unknown as { usuariosDaClinica: unknown }).usuariosDaClinica = async () => { usuariosLidos++; return 2; };
   const avisos: string[] = [];
   const { logger } = await import('./logger.js');
   const original = logger.warn.bind(logger);
@@ -542,4 +542,53 @@ test('sem dono configurado e a conta com mais de um usuário da clínica: AVISA 
   }
   assert.equal(avisos.filter((m) => /não tem UM só usuário da clínica/.test(m)).length, 1, 'avisa uma vez só');
   assert.equal(usuariosLidos, 1);
+});
+
+test('conta compartilhada fora de grupo: fica a unidade "doutor-hernia-*", mesmo que a auxiliar venha primeiro', () => {
+  const u = (slug: string) => ({ slug });
+  const { faixas, recusadas } = faixasPorConta([
+    { unit: u('imperatriz-resgate'), conta: 'attiva', grupoId: null },
+    { unit: u('doutor-hernia-imperatriz'), conta: 'attiva', grupoId: null },
+  ]);
+  assert.deepEqual(faixas.map((f) => f.map((x) => x.slug)), [['doutor-hernia-imperatriz']]);
+  assert.deepEqual(recusadas.map((r) => r.unit.slug), ['imperatriz-resgate']);
+});
+
+test('recusa explícita do Kommo (422): a marca de "criada há pouco" é apagada e a próxima varredura tenta de novo; timeout mantém a marca', async () => {
+  const { kommo, c } = kommoFalso([]);
+  let n = 0;
+  (kommo as unknown as { createTask: unknown }).createTask = async (a: Record<string, unknown>) => {
+    if (n++ === 0) throw new KommoApiError('createTask: 422', 422, null);
+    c.criadas.push(a);
+    return { id: 1 };
+  };
+  const d = deps(kommo, [ag()], { modo: 'aplicar' });
+  const r1 = await varrerCalendario(unit, d);
+  assert.equal(r1.erros, 1);
+  const r2 = await varrerCalendario(unit, d);
+  assert.equal(r2.criadas, 1, 'tentou de novo, sem esperar 30 min');
+  // timeout: a tarefa pode ter nascido; a marca segura a repetição
+  _limparMemoriaDoCalendario();
+  const t = kommoFalso([]);
+  let m = 0;
+  (t.kommo as unknown as { createTask: unknown }).createTask = async (a: Record<string, unknown>) => {
+    if (m++ === 0) throw new KommoApiError('createTask: timeout', undefined, null);
+    t.c.criadas.push(a);
+    return { id: 1 };
+  };
+  const dt = deps(t.kommo, [ag()], { modo: 'aplicar' });
+  await varrerCalendario(unit, dt);
+  const r3 = await varrerCalendario(unit, dt);
+  assert.equal(r3.criadas, 0);
+});
+
+test('rodadaSecaLimpa: só vale depois de uma varredura SECA sem erro (é o que a tela exige para passar a "ligado")', async () => {
+  assert.equal(rodadaSecaLimpa(unit.slug), false, 'nunca rodou');
+  const { kommo } = kommoFalso([]);
+  await varrerCalendario(unit, deps(kommo, [ag()], { modo: 'seco' }));
+  assert.equal(rodadaSecaLimpa(unit.slug), true);
+  await varrerCalendario(unit, deps(kommo, [ag()], { modo: 'seco', buscarAgenda: async () => ({ ok: false, erro: 'timeout', agendamentos: [] }) }));
+  assert.equal(rodadaSecaLimpa(unit.slug), false, 'a última teve erro');
+  await varrerCalendario(unit, deps(kommo, [ag()], { modo: 'aplicar' }));
+  assert.equal(rodadaSecaLimpa(unit.slug), false, 'a última foi com escrita');
 });

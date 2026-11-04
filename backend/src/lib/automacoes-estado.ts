@@ -109,6 +109,15 @@ export function estadoDoAmbiente(slug: string, raw: string | undefined, id?: str
   return a?.quandoVazio === 'seco' && a.temSeco ? 'seco' : 'desligado';
 }
 
+/**
+ * O estado pelo `.env` de uma automação com DUAS listas (o calendário): na primeira e fora da segunda = "só no papel"; nas duas = ligado.
+ * É a ÚNICA definição: a tela (`panoramaDaUnidade`) e o worker (`modoDoCalendario`) usam esta, para nunca mostrarem uma coisa e fazerem outra.
+ */
+export function estadoDoAmbienteComAplicar(slug: string, rawLista: string | undefined, rawAplicar: string | undefined): Estado {
+  if (!naListaDoAmbiente(slug, rawLista)) return 'desligado';
+  return naListaDoAmbiente(slug, rawAplicar) ? 'ligado' : 'seco';
+}
+
 /** Atalho para as portas que só querem saber se roda. */
 export function automacaoLigada(slug: string, id: string, raw: string | undefined): boolean {
   return estadoDaAutomacao(slug, id, raw) === 'ligado';
@@ -144,9 +153,7 @@ export function panoramaDaUnidade(slug: string, ambiente: NodeJS.ProcessEnv = pr
     const raw = ambiente[a.chave];
     const gravado = estadoGravado(slug, a.id);
     // o calendário tem DUAS listas no .env: na primeira e fora de _APLICAR é "só no papel", não "ligado"
-    const doAmbiente = a.chaveAplicar && naListaDoAmbiente(slug, raw, a.id)
-      ? (naListaDoAmbiente(slug, ambiente[a.chaveAplicar]) ? 'ligado' : 'seco')
-      : estadoDoAmbiente(slug, raw, a.id);
+    const doAmbiente = a.chaveAplicar ? estadoDoAmbienteComAplicar(slug, raw, ambiente[a.chaveAplicar]) : estadoDoAmbiente(slug, raw, a.id);
     return {
       ...a,
       estado: gravado ?? doAmbiente,
