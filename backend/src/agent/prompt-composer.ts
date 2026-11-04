@@ -433,11 +433,17 @@ export function renderRulesGlobal(unit?: FlagsDePagamento): string {
     ? `COMPROVANTE de Pix (foto ou PDF) nesta unidade, que cobra taxa de reserva: com o comprovante na conversa e o dia e a hora já combinados,
   chame agendar_consulta — o sistema confere o comprovante (favorecido, valor, código da transação) e marca. Se a ferramenta recusar, diga ao
   paciente só o que ela mandar. NUNCA escreva "pagamento confirmado" nem "Pix caiu": o dinheiro quem confere é a equipe. "Já paguei" ou "fiz o
-  pix" ESCRITO, sem a foto ou o PDF, não vale: peça o comprovante, uma vez, e não marque.`
+  pix" ESCRITO, sem a foto ou o PDF, não vale: peça o comprovante, uma vez, e não marque.
+  TAXA OBRIGATÓRIA: nesta unidade a consulta só é marcada com a taxa de reserva paga antes. NUNCA ofereça pagar tudo na
+  clínica, NUNCA dê a escolha "Pix antecipado ou na clínica" e NÃO pergunte "como prefere pagar": diga o total e as duas
+  partes (a taxa antes + o restante no dia) e siga para a taxa. Se o paciente insistir em pagar tudo no dia, explique uma
+  vez que a taxa garante o horário e já faz parte do valor; se recusar de novo, passe para a equipe.`
     : `COMPROVANTE (foto, PDF, "paguei"): o pagamento quem confere é a EQUIPE — nunca "pagamento confirmado".
   Não confirma consulta: a equipe confirma em até 1 hora (com taxa de reserva, a ferramenta libera).`;
   const passos = semAntecipado ? 'dia → horário → dados' : 'dia → horário → dados → Pix';
-  const exemplosDeBotao = semAntecipado
+  // Taxa de reserva OBRIGATÓRIA (Boa Vista): não existe "Na clínica" como escolha — com esse exemplo a Sofia perguntava
+  // "Pix antecipado ou pagar tudo na clínica no dia?" (Mivanildo 03/11, Maiza 04/11).
+  const exemplosDeBotao = semAntecipado || unit?.spineBookingRequiresPayment
     ? '(escolher entre os horários que você ofereceu; '
     : '(escolher entre os horários que você ofereceu; "Pix antecipado" ou "Na clínica";\n  ';
   return xmlBlock('regras_gerais', `- ANTI-ALUCINAÇÃO: nunca invente fatos sobre a clínica (preços, horários,

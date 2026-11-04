@@ -1225,11 +1225,13 @@ export function porQueNaoReservar(args: {
   formaPagamento?: string;
   /** Unidade sem pagamento antecipado (`unidadeSemAntecipado`): só se paga na clínica, então a forma nunca é perguntada. */
   semAntecipado?: boolean;
+  /** Taxa de reserva obrigatória (Boa Vista): a forma é sempre pix_antecipado; nunca perguntar nem dar o botão "Na clínica". */
+  taxaObrigatoria?: boolean;
 }): string | null {
   if (args.remarcando) return null;
   const faltaDia = args.diaConfirmado !== true;
   const faltaPagamento =
-    !args.semAntecipado && args.formaPagamento !== 'pix_antecipado' && args.formaPagamento !== 'na_clinica';
+    !args.semAntecipado && !args.taxaObrigatoria && args.formaPagamento !== 'pix_antecipado' && args.formaPagamento !== 'na_clinica';
   if (!faltaDia && !faltaPagamento) return null;
   const pendencias: string[] = [];
   if (faltaDia) {
@@ -1243,11 +1245,13 @@ export function porQueNaoReservar(args: {
   // Unidade que só recebe na clínica: sem `formaPagamento`, sem botões e sem pergunta de pagamento.
   const fecho = args.semAntecipado
     ? ' NÃO pergunte nada sobre pagamento: nesta clínica a consulta é paga no dia.'
-    : ' Se a pergunta for só a forma de pagamento, termine a mensagem com a linha [[botoes: Pix antecipado | Na clínica]].';
+    : args.taxaObrigatoria
+      ? ' NÃO pergunte forma de pagamento e NUNCA ofereça pagar na clínica: nesta unidade a taxa de reserva é obrigatória.'
+      : ' Se a pergunta for só a forma de pagamento, termine a mensagem com a linha [[botoes: Pix antecipado | Na clínica]].';
   return (
     `Consulta NÃO marcada ainda. Antes de reservar falta: ${pendencias.map((p, i) => `${i + 1}) ${p}`).join('; ')}. ` +
     'Pergunte isso em UMA mensagem curta e chame agendar_consulta de novo com diaConfirmado=true' +
-    (args.semAntecipado ? '.' : ' e formaPagamento preenchido.') +
+    (args.semAntecipado || args.taxaObrigatoria ? '.' : ' e formaPagamento preenchido.') +
     fecho
   );
 }
@@ -1330,6 +1334,8 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
   // Decidido uma vez por turno, com a unidade do contexto: descrição, esquema e porta enxergam a mesma coisa. De propósito NÃO
   // vem de `fresca`: se a porta pedisse `formaPagamento` e o esquema já não o tivesse, a recusa se repetiria até o fim do turno.
   const semAntecipado = unidadeSemAntecipado(unit);
+  // Taxa de reserva obrigatória (Boa Vista): não existe "na clínica" — a forma é sempre pix_antecipado e a Sofia não pergunta.
+  const taxaObrigatoria = !semAntecipado && !!unit?.spineBookingRequiresPayment;
   return new DynamicStructuredTool({
     name: 'agendar_consulta',
     description: semAntecipado
@@ -1339,6 +1345,13 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         'a tool recusa. Esta clínica recebe a consulta no dia, na clínica: NÃO pergunte ' +
         'nem fale de forma de pagamento. Se a tool recusar, NÃO tente outro horário por ' +
         'conta própria: explique ao paciente e ofereça consultar de novo.'
+      : taxaObrigatoria
+      ? 'Marca a consulta no sistema da clínica. Só use DEPOIS de consultar_horarios, ' +
+        'de o paciente escolher um horário da lista, de ele confirmar que CONSEGUE ir ' +
+        'nesse dia e de o COMPROVANTE da taxa de reserva estar na conversa (a tool confere), ' +
+        'e com o idClient obtido em buscar_paciente. Nesta unidade a taxa é OBRIGATÓRIA: NÃO pergunte ' +
+        'forma de pagamento e NUNCA ofereça pagar na clínica. Sem diaConfirmado=true a tool recusa. ' +
+        'Se a tool recusar, NÃO tente outro horário por conta própria: diga ao paciente só o que ela mandar.'
       : 'Marca a consulta no sistema da clínica. Só use DEPOIS de consultar_horarios, ' +
         'de o paciente escolher um horário da lista, de ele confirmar que CONSEGUE ir ' +
         'nesse dia e de escolher a forma de pagamento (Pix antecipado ou na clínica), ' +
@@ -1374,8 +1387,10 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
               .enum(['pix_antecipado', 'na_clinica'])
               .optional()
               .describe(
-                'Como o paciente disse que prefere pagar: pix_antecipado (paga antes, valor antecipado) ' +
-                'ou na_clinica (paga no dia). Pergunte antes de marcar.',
+                taxaObrigatoria
+                  ? 'Nesta unidade a taxa de reserva é obrigatória: é sempre pix_antecipado (o sistema preenche). NÃO pergunte.'
+                  : 'Como o paciente disse que prefere pagar: pix_antecipado (paga antes, valor antecipado) ' +
+                    'ou na_clinica (paga no dia). Pergunte antes de marcar.',
               ),
           }),
       idCategory: z
@@ -1425,8 +1440,9 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
       // Unidade sem pagamento antecipado: a forma é "na clínica", implícita — vale mesmo se o modelo mandar outra.
       // (Remarcação não passa pela porta de pagamento e não grava a escolha.)
       if (semAntecipado && !args.remarcando) args = { ...args, formaPagamento: 'na_clinica' };
+      if (taxaObrigatoria && !args.remarcando) args = { ...args, formaPagamento: 'pix_antecipado' };
 
-      const pendencia = porQueNaoReservar({ ...args, semAntecipado });
+      const pendencia = porQueNaoReservar({ ...args, semAntecipado, taxaObrigatoria });
       if (pendencia) {
         await recorder.step({
           kind: 'ERROR',
