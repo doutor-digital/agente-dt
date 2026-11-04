@@ -18,6 +18,7 @@ import { ErroDeEntrada } from '../franquia-mcp/travas.js';
 import { ErroSistemas } from '../lib/integracoes/sistemas.js';
 import { CofreDeArquivos, ErroDeCofre, type TipoDeArquivo } from './cofre-arquivos.js';
 import { executar } from './ferramenta.js';
+import { classificarErroDaEntrega, nomeLimpo, type ResultadoDaEntrega } from './sistemas-entrega.js';
 import { resolverSistema, type ContextoSistemas, type QuemSistemas, type Saida } from './sistemas.js';
 
 export const DESTINO_DOCUMENTO = 'documento';
@@ -29,8 +30,6 @@ const ACEITOS_RH: readonly TipoDeArquivo[] = ['pdf', 'jpg', 'png', 'docx', 'xlsx
 const ACEITOS_CAIXA: readonly TipoDeArquivo[] = ['pdf', 'jpg', 'png'];
 export const DOCUMENTO_MAX_BYTES = 15 * 1024 * 1024;
 export const DOCUMENTO_VALE_MS = 10 * 60_000;
-/** o servidor leu o pedido e disse não (formato, registro, repetido, tamanho, tipo): repetir o mesmo arquivo não adianta */
-const RECUSAS_DEFINITIVAS = new Set([400, 404, 409, 413, 415, 422]);
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
 const DATA = /^\d{4}-\d{2}-\d{2}$/;
 const ROTULO: Record<DestinoDoc, string> = {
@@ -86,9 +85,6 @@ export function nomeParaCurl(bruto: string): string {
     .replace(/^[-._]+|[-_]+$/g, '')
     .slice(0, 80);
 }
-const nomeLimpo = (bruto: string) =>
-  // eslint-disable-next-line no-control-regex
-  (bruto.split(/[\\/]/).pop() ?? '').replace(/[\u0000-\u001f\u007f]/g, '').replace(/\.{2,}/g, '.').trim().slice(0, 100);
 
 /** O corpo que a rota espera, igual na conferência e na entrega (a entrega acrescenta o arquivo). */
 function corpoDoDestino(d: DestinoGuardado, quem: QuemSistemas, enviadoNome: string, nome: string): Record<string, unknown> {
@@ -111,7 +107,7 @@ async function entregar(
   d: DestinoGuardado,
   enviadoNome: string,
   arquivo: { nome: string; bytes: Buffer },
-): Promise<{ definitivo: boolean; naoGravou?: boolean; resposta?: Saida; erro?: ErroSistemas | Error }> {
+): Promise<ResultadoDaEntrega<Saida>> {
   const c = resolverSistema(ctx, d.sistema);
   try {
     const r = (await c.fonte.chamar('POST', '/admin/v1/documento', {
@@ -121,10 +117,7 @@ async function entregar(
     })) as Saida;
     return { definitivo: true, resposta: r };
   } catch (e) {
-    // recusa de CONTEÚDO/destino (o pedido em si não serve): o arquivo não tem mais o que fazer no cofre. Outro 4xx (chave, 408, 429…) é falha do momento: nada foi gravado e o arquivo fica para tentar de novo.
-    if (e instanceof ErroSistemas && e.status !== null && RECUSAS_DEFINITIVAS.has(e.status)) return { definitivo: true, erro: e };
-    if (e instanceof ErroSistemas && e.status !== null && e.status < 500) return { definitivo: false, naoGravou: true, erro: e };
-    return { definitivo: false, erro: e as Error };
+    return classificarErroDaEntrega(e);
   }
 }
 
@@ -164,7 +157,9 @@ export async function anexarEnvioDocumento(ctx: ContextoSistemas, quem: QuemSist
     throw new ErroDeEntrada(
       out.definitivo
         ? `o servidor do sistema recusou o documento: ${texto}`
-        : out.naoGravou
+        : out.desatualizado
+          ? 'o servidor do sistema respondeu 404: está DESATUALIZADO (ainda sem a rota /admin/v1/documento; a API 0.1.10.4 precisa ser publicada antes) ou o registro sumiu. Nada foi gravado e o arquivo continua guardado no cofre até vencer; avise o João e tente de novo depois da atualização.'
+          : out.naoGravou
           ? `o servidor do sistema não aceitou agora (${texto}). Nada foi gravado e o arquivo continua guardado por alguns minutos: tente sistemas_anexar_envio de novo.`
           : `NÃO sei se o documento foi gravado (${texto}). Confira com sistemas_consultar (a pasta do registro, ou caixa_docs) e com sistemas_log ANTES de repetir.`,
     );
@@ -233,7 +228,8 @@ export function registrarDocumentosSistemas(server: McpServer, ctx: ContextoSist
         const c = resolverSistema(ctx, args.sistema);
         const guardado: DestinoGuardado = { sistema: c.slug, alvo, id, tratRef, tipoDocumento, validade, assinar: args.precisa_assinatura === true };
         // só letras, números, ponto, hífen e sublinhado: o nome vai para o servidor e para o comando curl (entre aspas simples)
-        const nomeArquivo = nomeParaCurl(args.nome_arquivo ?? '') || `${nomeParaCurl(tipoDocumento).replace(/\.[A-Za-z0-9]+$/, '') || 'documento'}.pdf`;
+        // sem nome dado: SEM extensão (o tipo vem do conteúdo; "aso.pdf" com um JPG dentro seria recusado e queimaria o link)
+        const nomeArquivo = nomeParaCurl(args.nome_arquivo ?? '') || nomeParaCurl(tipoDocumento).replace(/\./g, '-') || 'documento';
         // o servidor diz QUEM é o destino (e recusa o que não existe) ANTES de gastar um link
         const conf = (await c.fonte.chamar('POST', '/admin/v1/documento/conferir', { corpo: corpoDoDestino(guardado, quem, deps.enviadoNome, nomeArquivo), quem: quem.nome })) as Saida;
         if (!conf || conf.ok !== true || !conf.alvo || typeof conf.alvo !== 'object' || Array.isArray(conf.alvo)) throw new ErroDeEntrada('o servidor não confirmou o destino (resposta fora do contrato): nenhum link foi gerado. Avise o João; pode ser versão antiga do servidor do sistema.');

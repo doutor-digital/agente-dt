@@ -14,6 +14,7 @@ import { registrarAnexosSistemas, type DepsAnexo } from './sistemas-anexo.js';
 import { destinoDocumentoConferido } from './sistemas-documento.js';
 
 // ── amostras ──────────────────────────────────────────────────────────────────────────────────────────
+const JPG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 0xff, 0xd9]);
 const PDF = Buffer.from('%PDF-1.7\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n');
 const PK = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
 const DOCX = Buffer.concat([PK, Buffer.from('[Content_Types].xml word/document.xml')]);
@@ -389,7 +390,7 @@ test('o comando curl nunca leva apóstrofo nem nome estranho (nome_arquivo e o n
     const p = await k.chamar('sistemas_preparar_documento', colab({ tipo_documento: "Atestado d'água/.." }));
     assert.equal(p.erro, false, p.texto);
     const enviado = a.srv.conferencias().at(-1)!.corpo.nome;
-    assert.match(enviado, /^[A-Za-z0-9._-]+\.pdf$/, enviado);
+    assert.match(enviado, /^[A-Za-z0-9-]+$/, enviado); // sem extensão: o tipo vem do conteúdo
     assert.ok(!enviado.includes('..'));
   } finally { a.limpar(); }
 });
@@ -443,5 +444,36 @@ test('ZIP com as marcas de Word E de Excel ao mesmo tempo não é aceito como do
     const token = String(p.json.linkDeEnvio).split('/').pop()!;
     const ambiguo = Buffer.concat([PK, Buffer.from('[Content_Types].xml word/document.xml xl/workbook.xml')]);
     assert.equal(await a.cofre.guardar(a.cofre.reservar(token), 'x.docx', ambiguo).catch((e: ErroDeCofre) => e.codigo), 'tipo');
+  } finally { a.limpar(); }
+});
+
+test('sem nome_arquivo o curl não leva extensão: JPG, DOCX e XLSX enviados com o nome do comando entram (com ".pdf" fixo o link queimaria)', async () => {
+  const a = ambiente(servidor());
+  try {
+    const k = await cliente(a);
+    for (const [conteudo, ext] of [[JPG, 'jpg'], [DOCX, 'docx'], [XLSX, 'xlsx'], [PDF, 'pdf']] as const) {
+      const p = await k.chamar('sistemas_preparar_documento', colab({ tipo_documento: 'ASO admissional' }));
+      assert.equal(p.erro, false, p.texto);
+      // o nome que o ambiente da Lia manda no cabeçalho X-Nome-Arquivo, do jeito que o curl devolvido o traz
+      const nome = decodeURIComponent(/X-Nome-Arquivo: ([^']*)'/.exec(p.json.comandoCurl)![1]!);
+      assert.doesNotMatch(nome, /\.[A-Za-z0-9]{2,5}$/, nome);
+      assert.doesNotMatch(a.srv.conferencias().at(-1)!.corpo.nome, /\.[A-Za-z0-9]{2,5}$/);
+      const token = String(p.json.linkDeEnvio).split('/').pop()!;
+      const r = await a.cofre.guardar(a.cofre.reservar(token), nome, conteudo);
+      assert.equal(r.tipo, ext);
+    }
+  } finally { a.limpar(); }
+});
+
+test('404 na entrega = servidor desatualizado (ou registro sumiu): NADA queima, o arquivo fica no cofre e a mensagem diz isso; repetir depois funciona', async () => {
+  let n = 0;
+  const a = ambiente(servidor({ documento: () => (++n === 1 ? new ErroSistemas('o servidor do sistema novo não tem essa rota (404)', 404) : { ok: true, conferido: true, destino: 'rh_colaborador', caminho: 'colaboradores/x/y.pdf' }) }));
+  try {
+    const k = await cliente(a);
+    const p = await pedirESubir(a, k, PDF);
+    const r1 = await k.chamar('sistemas_anexar_envio', { envio: p.envio });
+    assert.ok(r1.erro && /DESATUALIZADO/.test(r1.texto) && /continua guardado/.test(r1.texto), r1.texto);
+    assert.equal(a.cofre.ver(QUEM.usuario, p.envio).estado, 'recebido');
+    assert.equal((await k.chamar('sistemas_anexar_envio', { envio: p.envio })).erro, false);
   } finally { a.limpar(); }
 });

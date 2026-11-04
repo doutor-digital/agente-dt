@@ -23,6 +23,7 @@ import { baixarUrl, type Baixado, type OpcoesDeDownload } from './baixar-url.js'
 import { CofreDeArquivos, ErroDeCofre, detectarTipo, type TipoDeArquivo } from './cofre-arquivos.js';
 import { executar } from './ferramenta.js';
 import { resolverSistema, type ContextoSistemas, type QuemSistemas, type Saida } from './sistemas.js';
+import { classificarErroDaEntrega, nomeLimpo, type ResultadoDaEntrega } from './sistemas-entrega.js';
 import { anexarEnvioDocumento, DESTINO_DOCUMENTO, registrarDocumentosSistemas } from './sistemas-documento.js';
 
 export const TIPOS_ANEXO = ['comprovante', 'nota_fiscal', 'recibo'] as const;
@@ -48,12 +49,7 @@ function destinoConferido(d: Readonly<Record<string, string>> | undefined): { si
   return { sistema: d.sistema, tabela: d.tabela as Tabela, lancamento: d.lancamento!, tipoAnexo: d.tipoAnexo as TipoAnexo };
 }
 
-/** Nome de arquivo que vai para o sistema: só o último trecho, sem barras, sem '..', sem caractere de controle. */
-export function nomeLimpo(bruto: string): string {
-  const base = bruto.split(/[\\/]/).pop() ?? '';
-  // eslint-disable-next-line no-control-regex
-  return base.replace(/[\u0000-\u001f\u007f]/g, '').replace(/\.{2,}/g, '.').trim().slice(0, 100);
-}
+export { nomeLimpo };
 
 export interface DepsAnexo {
   cofre: CofreDeArquivos;
@@ -108,7 +104,7 @@ async function entregar(
   sistema: string,
   enviadoNome: string,
   p: { tabela: Tabela; lancamento: string; tipo: TipoAnexo; nome: string; bytes: Buffer; origem: string },
-): Promise<{ definitivo: boolean; resposta?: Saida; erro?: ErroSistemas | Error; desatualizado?: boolean }> {
+): Promise<ResultadoDaEntrega<Saida>> {
   const c = resolverSistema(ctx, sistema);
   try {
     const r = (await c.fonte.chamar('POST', '/admin/v1/anexo', {
@@ -118,9 +114,7 @@ async function entregar(
     })) as Saida;
     return { definitivo: true, resposta: r };
   } catch (e) {
-    if (e instanceof ErroSistemas && e.status !== null && e.status < 500 && e.status !== 404) return { definitivo: true, erro: e };
-    if (e instanceof ErroSistemas && e.status === 404) return { definitivo: false, erro: e, desatualizado: true };
-    return { definitivo: false, erro: e as Error };
+    return classificarErroDaEntrega(e);
   }
 }
 
@@ -140,8 +134,9 @@ function resultado(slug: string, r: Saida, extra: Record<string, unknown> = {}) 
   };
 }
 
-function mensagemDeFalha(e: ErroSistemas | Error | undefined, certo: boolean, desatualizado = false): string {
+function mensagemDeFalha(e: ErroSistemas | Error | undefined, certo: boolean, desatualizado = false, naoGravou = false): string {
   const texto = e?.message ?? 'erro desconhecido';
+  if (naoGravou) return `o servidor do sistema não aceitou agora (${texto}). Nada foi gravado e o arquivo continua guardado no cofre até vencer: tente de novo.`;
   if (desatualizado) {
     return 'o servidor do sistema respondeu 404: está DESATUALIZADO (ainda sem a rota /admin/v1/anexo; a API 0.1.10.3 precisa ser publicada antes) ou o lançamento sumiu. Nada foi gravado e o arquivo continua guardado no cofre até vencer; avise o João e tente de novo depois da atualização.';
   }
@@ -272,7 +267,7 @@ export function registrarAnexosSistemas(server: McpServer, ctx: ContextoSistemas
         // o servidor respondeu (aceitou ou recusou): o arquivo não tem mais o que fazer no cofre. Sem resposta: fica, para tentar de novo depois de conferir.
         if (out.definitivo) deps.cofre.apagar(quem.usuario, args.envio);
         else deps.cofre.soltar(quem.usuario, args.envio);
-        if (!out.resposta) throw new ErroDeEntrada(mensagemDeFalha(out.erro, out.definitivo, out.desatualizado));
+        if (!out.resposta) throw new ErroDeEntrada(mensagemDeFalha(out.erro, out.definitivo, out.desatualizado, out.naoGravou));
         return resultado(dest.sistema, out.resposta, { origem: 'envio', arquivoApagadoDoCofre: true });
       }),
   );
@@ -308,7 +303,7 @@ export function registrarAnexosSistemas(server: McpServer, ctx: ContextoSistemas
         const sugerido = nomeLimpo(b.nomeSugerido).replace(/\.(pdf|jpe?g|png)$/i, '');
         const nome = `${(sugerido || args.tipo).slice(0, 90)}.${tipo}`;
         const out = await entregar(ctx, quem, slug, enviadoNome, { tabela: args.tabela, lancamento: id, tipo: args.tipo, nome, bytes: b.bytes, origem: `url:${b.host}` });
-        if (!out.resposta) throw new ErroDeEntrada(mensagemDeFalha(out.erro, out.definitivo, out.desatualizado));
+        if (!out.resposta) throw new ErroDeEntrada(mensagemDeFalha(out.erro, out.definitivo, out.desatualizado, out.naoGravou));
         return resultado(slug, out.resposta, { origem: `baixado de ${b.host}`, tamanhoBaixado: b.bytes.length });
       }),
   );
