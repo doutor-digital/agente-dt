@@ -1,3 +1,4 @@
+import { decidirTrava } from './confirmacao-so-com-crm.js';
 /**
  * `agendar_consulta` numa unidade SEM pagamento antecipado (Timbó, 29/10/2026).
  *
@@ -211,12 +212,18 @@ test('flag ligada: na_clinica grava na_clinica e a orientação de hoje ("NÃO m
   assert.equal(gravacoes[0].data.pagamentoEscolhido, 'na_clinica');
 });
 
-test('flag false + taxa de reserva obrigatória (Boa Vista): a taxa vence, a pergunta de pagamento continua', async () => {
+// 04/11/2026 (João, Boa Vista): com a taxa obrigatória NÃO existe "como prefere pagar" — a forma é sempre pix_antecipado
+// (preenchida pelo sistema). Sem o comprovante da taxa a consulta continua NÃO marcada.
+test('flag false + taxa de reserva obrigatória (Boa Vista): não pergunta a forma de pagamento e sem comprovante não marca', async () => {
   atual = unidade({ acceptsAdvancePayment: false, spineBookingRequiresPayment: true });
   const hora = await primeiroHorario(atual);
   const r = await agendar(atual).func({ idClient: 9, data: DIA, hora, diaConfirmado: true, leadId: 1 });
-  assert.match(r, /perguntar como ele prefere pagar/);
-  assert.ok(!marcou());
+  assert.doesNotMatch(r, /perguntar como ele prefere pagar/);
+  assert.doesNotMatch(r, /ou pagamento na clínica/i);
+  // Quem segura a consulta sem comprovante é a trava do grafo (travarAgendamentoPorComprovante), não esta ferramenta:
+  // aqui ela é chamada direto. A trava, com a taxa obrigatória e nenhum comprovante lido, recusa:
+  const trava = decidirTrava({ noTurno: false, pendente: false }, { exigePagamento: true, taxaEsperada: 100 });
+  assert.equal(trava.libera, false);
 });
 
 test('remarcação (remarcando) numa unidade sem antecipado: não passa pela porta e NÃO grava escolha de pagamento', async () => {
