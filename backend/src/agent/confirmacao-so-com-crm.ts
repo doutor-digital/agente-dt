@@ -311,11 +311,11 @@ export const RECUSA_SEM_COMPROVANTE_DA_TAXA =
   'nesta conversa. A consulta NÃO foi marcada. NÃO diga que está agendada e NÃO chame agendar_consulta de novo neste ' +
   'turno. Se o paciente disse que JÁ PAGOU ("já paguei", "fiz o pix") mas não mandou o comprovante, peça o comprovante ' +
   '(foto ou PDF) UMA vez, nesta mensagem: o que ele escreve NÃO vale como pagamento e o horário só é lançado depois do comprovante. ' +
-  'Diga ao paciente que o horário fica separado por enquanto e explique como garantir: PIX do valor antecipado ' +
-  'desta unidade (mande a chave e peça o COMPROVANTE aqui na conversa) ou pagamento na clínica antes do dia. Quando o ' +
-  'comprovante chegar (foto ou PDF), aí sim chame agendar_consulta — e nunca diga "pagamento ' +
-  'confirmado": quem confere o dinheiro é a equipe. Se ele preferir pagar na clínica, chame resumir_lead_para_sdr para ' +
-  'a equipe acompanhar.';
+  'Diga ao paciente que o horário fica separado por enquanto e explique como garantir: PIX da taxa de reserva ' +
+  'desta unidade (mande a chave e peça o COMPROVANTE aqui na conversa). NUNCA ofereça pagar na clínica nem dê a escolha ' +
+  '"Pix ou na clínica": a taxa é obrigatória e já faz parte do valor. Quando o comprovante chegar (foto ou PDF), aí sim ' +
+  'chame agendar_consulta — e nunca diga "pagamento confirmado": quem confere o dinheiro é a equipe. Se ele insistir em ' +
+  'não pagar a taxa antes, explique uma vez e, se recusar de novo, chame resumir_lead_para_sdr para a equipe acompanhar.';
 
 
 export interface OpcoesDaTrava {

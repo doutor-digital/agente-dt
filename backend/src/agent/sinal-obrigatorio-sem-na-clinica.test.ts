@@ -16,3 +16,20 @@ test('unidade com antecipado opcional: continua igual (botões "Pix antecipado" 
   assert.ok(txt.includes('"Pix antecipado" ou "Na clínica"'));
   assert.ok(!txt.includes('TAXA OBRIGATÓRIA'));
 });
+
+import { RECUSA_SEM_COMPROVANTE_DA_TAXA } from './confirmacao-so-com-crm.js';
+import { buildAgendarConsulta } from './agenda-tools.js';
+
+test('a recusa sem comprovante da taxa não oferece pagar na clínica', () => {
+  assert.ok(!/ou pagamento na clínica/i.test(RECUSA_SEM_COMPROVANTE_DA_TAXA));
+  assert.ok(!/preferir pagar na clínica/i.test(RECUSA_SEM_COMPROVANTE_DA_TAXA));
+  assert.match(RECUSA_SEM_COMPROVANTE_DA_TAXA, /NUNCA ofereça pagar na clínica/);
+});
+
+test('agendar_consulta em unidade com taxa obrigatória: não manda perguntar "Pix antecipado ou na clínica"', () => {
+  const comTaxa = buildAgendarConsulta({ unit: { spineBookingRequiresPayment: true }, recorder: {}, kommo: {} } as never);
+  assert.ok(!comTaxa.description.includes('(Pix antecipado ou na clínica)'));
+  assert.match(comTaxa.description, /taxa é OBRIGATÓRIA/);
+  const opcional = buildAgendarConsulta({ unit: { spineBookingRequiresPayment: false }, recorder: {}, kommo: {} } as never);
+  assert.ok(opcional.description.includes('(Pix antecipado ou na clínica)'));
+});
