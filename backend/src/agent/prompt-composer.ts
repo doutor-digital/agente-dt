@@ -2750,7 +2750,7 @@ export function renderFatosDaUnidade(unit: Unit): string {
   } else if (p) {
     linhas.push(`- Consulta: R$ ${fmtBRL(p.antecipado)} antecipado (pago antes) ou R$ ${fmtBRL(p.noDia)} no dia`);
   }
-  if (semAntecipado) linhas.push(`- Pagamento: ${PAGAMENTO_NO_DIA} Sem chave Pix para reservar a vaga. Não fale de desconto por conta própria (nada de "sem desconto").`);
+  if (semAntecipado) linhas.push(`- Pagamento: ${PAGAMENTO_NO_DIA} Sem chave Pix para reservar a vaga. Não fale de desconto por conta própria.`);
   const onde = unit.clinicAddress?.trim();
   if (onde) linhas.push(`- Endereço: ${onde}`);
   if (linhas.length === 0) return '';
