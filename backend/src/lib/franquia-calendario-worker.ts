@@ -19,7 +19,7 @@
 import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
-import { createKommoClient, type KommoClient, type KommoTarefa } from '../services/kommo.service.js';
+import { createKommoClient, KommoApiError, type KommoClient, type KommoTarefa } from '../services/kommo.service.js';
 import { SpineService, somarDias, localParaUtcIso, type SpineSchedule } from '../services/spine.service.js';
 import { contaDoKommo, grupoDaUnidade, podeMexer, valorDaUnidadeNoCartao, veredictoDoCartao, type GrupoDoCrm } from './crm-compartilhado.js';
 import { estadoGravado } from './automacoes-estado.js';
@@ -175,15 +175,40 @@ export async function varrerCalendario(unit: Unit, deps: DepsDoCalendario = {}):
       return resumo;
     }
   }
-  const cartaoEhDaUnidade = deps.cartaoEhDaUnidade ?? (async (leadId: number) => {
-    if (!grupo) return true;
+  const veredictos = new Map<number, Promise<boolean>>(); // um cartão lido uma vez por varredura
+  const lerCartao = async (leadId: number): Promise<boolean> => {
     try {
       return podeMexer(veredictoDoCartao(grupo, unit.id, valorDaUnidadeNoCartao(await kommo.getLead(leadId))));
-    } catch {
-      return false; // não consegui ler o cartão: não ponho a tarefa nele (fica solta, com nome e telefone)
+    } catch (err) {
+      // cartão que não existe mais: a tarefa nasce solta. Qualquer outro erro (429, timeout) LANÇA: a criação deste agendamento
+      // fica para a próxima varredura (nada foi gravado ainda) em vez de nascer solta para sempre por um tropeço passageiro
+      if (err instanceof KommoApiError && err.status === 404) return false;
+      throw err;
     }
+  };
+  const cartaoEhDaUnidade = deps.cartaoEhDaUnidade ?? (async (leadId: number) => {
+    if (!grupo) return true;
+    let v = veredictos.get(leadId);
+    if (!v) {
+      v = lerCartao(leadId);
+      veredictos.set(leadId, v);
+      v.catch(() => veredictos.delete(leadId)); // não guarda a falha
+    }
+    return v;
   });
-  const config = configDaUnidade(unit.slug, deps.lerConfig ? await deps.lerConfig() : await prisma.unitCalendario.findUnique({ where: { unitId: unit.id } }));
+  let linha: LinhaDeConfig | null;
+  try {
+    linha = deps.lerConfig ? await deps.lerConfig() : await prisma.unitCalendario.findUnique({ where: { unitId: unit.id } });
+  } catch (err) {
+    if ((err as { code?: string })?.code !== 'P2021') {
+      // sem saber o tipo gravado, cair no "Consulta" por nome poderia trocar o tipo da unidade e duplicar a agenda: não faz nada
+      logger.warn({ err: String(err), unit: unit.slug }, 'franquia-calendario: não consegui ler unit_calendario — nada feito nesta varredura');
+      resumo.erros++;
+      return resumo;
+    }
+    linha = null; // P2021 = a tabela ainda não existe (a migration não rodou): vale o .env, como antes deste passo existir
+  }
+  const config = configDaUnidade(unit.slug, linha);
 
   // 1. a agenda da franquia. Sem ela não se decide nada (nem fechar: agenda vazia por pane não é agenda vazia).
   const { de, ate } = janelaDoCalendario(tz, agora);
@@ -367,6 +392,8 @@ let timer: NodeJS.Timeout | null = null;
 let primeira: NodeJS.Timeout | null = null;
 let rodando = false;
 
+let ultimoAvisoDeSlugs = '';
+
 /** As unidades que rodam agora: com franquia e Kommo, ATIVAS, e ligadas (ou em "só no papel") na tela ou no `.env`. */
 async function unidadesDoCalendario(): Promise<Unit[]> {
   const units = await prisma.unit.findMany({ where: { ...(await ondeTemSync()), isActive: true } });
@@ -376,7 +403,11 @@ async function unidadesDoCalendario(): Promise<Unit[]> {
   if (raw && raw.replace(/['"\s]/g, '')) {
     const achados = new Set(units.map((u) => u.slug));
     const faltam = raw.replace(/['"]/g, '').split(',').map((s) => s.trim()).filter((s) => s && s !== '*' && !achados.has(s));
-    if (faltam.length) logger.warn({ faltam }, 'franquia-calendario: slug da lista sem unidade ativa com franquia e Kommo configurados');
+    const chave = faltam.join(',');
+    if (chave !== ultimoAvisoDeSlugs) {
+      ultimoAvisoDeSlugs = chave;
+      if (faltam.length) logger.warn({ faltam }, 'franquia-calendario: slug da lista sem unidade ativa com franquia e Kommo configurados');
+    }
   }
   return doCalendario;
 }

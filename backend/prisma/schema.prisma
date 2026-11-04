@@ -1581,27 +1581,6 @@ model LeadPausa {
 /// É o único jeito de distinguir essa pausa da caixinha "Pausar IA" marcada por gente (SDR), da pausa com data
 /// e da pausa da unidade: só desta a Sofia volta sozinha, depois de 1 h sem fala da equipe (PAUSA_EQUIPE_VOLTA_MIN).
 /// Uma linha por cartão; pausar de novo reabre a mesma linha. `encerradaEm` nulo = pausa aberta.
-/// Como a agenda da franquia vira tarefa no Calendário do Kommo, POR UNIDADE (tipo de tarefa, dono, duração). Quem liga/desliga
-/// é a tela de Automações (`franquia-calendario`); aqui mora só o que muda de conta para conta. Linha ausente = automático:
-/// tipo "Consulta" da conta, dono = o único usuário da clínica, 60 min. Ver `franquia-calendario-worker.ts`.
-model UnitCalendario {
-  id     String @id @default(cuid())
-  unitId String @unique @map("unit_id")
-
-  /// id do tipo de tarefa no Kommo da conta. NÃO trocar depois de criar tarefas: a leitura é filtrada por tipo e a agenda duplicaria.
-  taskTypeId        Int? @map("task_type_id")
-  /// userId do Kommo que recebe as tarefas
-  responsibleUserId Int? @map("responsible_user_id")
-  duracaoMin        Int? @map("duracao_min")
-
-  atualizadoPor String?  @map("atualizado_por")
-  atualizadoEm  DateTime @updatedAt @map("atualizado_em")
-
-  unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
-
-  @@map("unit_calendario")
-}
-
 model PausaDaEquipe {
   id          String    @id @default(cuid())
   unitId      String    @map("unit_id")
@@ -1621,6 +1600,27 @@ model PausaDaEquipe {
   @@unique([unitId, kommoLeadId])
   @@index([encerradaEm])
   @@map("pausas_da_equipe")
+}
+
+/// Como a agenda da franquia vira tarefa no Calendário do Kommo, POR UNIDADE (tipo de tarefa, dono, duração). Quem liga/desliga
+/// é a tela de Automações (`franquia-calendario`); aqui mora só o que muda de conta para conta. Linha ausente = automático:
+/// tipo "Consulta" da conta, dono = o único usuário da clínica, 60 min. Ver `franquia-calendario-worker.ts`.
+model UnitCalendario {
+  id     String @id @default(cuid())
+  unitId String @unique @map("unit_id")
+
+  /// id do tipo de tarefa no Kommo da conta. NÃO trocar depois de criar tarefas: a leitura é filtrada por tipo e a agenda duplicaria.
+  taskTypeId        Int? @map("task_type_id")
+  /// userId do Kommo que recebe as tarefas
+  responsibleUserId Int? @map("responsible_user_id")
+  duracaoMin        Int? @map("duracao_min")
+
+  atualizadoPor String?  @map("atualizado_por")
+  atualizadoEm  DateTime @updatedAt @map("atualizado_em")
+
+  unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@map("unit_calendario")
 }
 
 model AgendaBlock {

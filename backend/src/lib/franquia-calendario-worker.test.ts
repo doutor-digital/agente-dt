@@ -4,7 +4,7 @@ import type { Unit } from '@prisma/client';
 
 import { _limparMemoriaDoCalendario, CRIADA_RECENTE_MS, paraleloDoCalendario, rodarEmFaixas, varrerCalendario, type DepsDoCalendario } from './franquia-calendario-worker.js';
 import type { GrupoDoCrm } from './crm-compartilhado.js';
-import type { KommoClient, KommoTarefa } from '../services/kommo.service.js';
+import { KommoApiError, type KommoClient, type KommoTarefa } from '../services/kommo.service.js';
 import type { SpineSchedule } from '../services/spine.service.js';
 
 const unit = { id: 'u-timbo', slug: 'doutor-hernia-timbo', spineTimezone: 'America/Sao_Paulo' } as unknown as Unit;
@@ -363,7 +363,7 @@ test('Kommo dividido: a irmã marca com prefixo e só enxerga as próprias taref
   const quando = Date.parse('2026-11-03T17:00:00Z') / 1000;
   // a lista da conta tem a tarefa da DONA para o idSchedule 3784113 — a irmã tem um agendamento com o MESMO número
   const { kommo, c } = kommoFalso([{ id: 1, text: '⚕ AVALIAÇÃO 14:00 · AGENDADO [ag:3784113]', complete_till: quando, entity_id: 9 }]);
-  const r = await varrerCalendario(caxias, deps(kommo, [ag()], { modo: 'aplicar', grupo }));
+  const r = await varrerCalendario(caxias, deps(kommo, [ag()], { modo: 'aplicar', grupo, cartaoEhDaUnidade: async () => true }));
   assert.equal(r.criadas, 1, 'a tarefa da dona não conta como a da Caxias');
   assert.equal(r.sumiram, 0, 'e a da dona não vira "sumida" para a Caxias');
   assert.match(String(c.criadas[0].text), /\[ag:caxias:3784113\]/);
@@ -371,7 +371,7 @@ test('Kommo dividido: a irmã marca com prefixo e só enxerga as próprias taref
   // a dona, na mesma lista, continua com o marcador de sempre e ignora a tarefa `[ag:caxias:N]`
   const petro = { id: 'u-petro', slug: 'doutor-hernia-petropolis', spineTimezone: 'America/Sao_Paulo' } as unknown as Unit;
   const dona = kommoFalso([{ id: 2, text: '⚕ AVALIAÇÃO 14:00 · AGENDADO [ag:caxias:3784113]', complete_till: quando, entity_id: 9 }]);
-  const rd = await varrerCalendario(petro, deps(dona.kommo, [ag()], { modo: 'aplicar', grupo }));
+  const rd = await varrerCalendario(petro, deps(dona.kommo, [ag()], { modo: 'aplicar', grupo, cartaoEhDaUnidade: async () => true }));
   assert.equal(rd.criadas, 1);
   assert.match(String(dona.c.criadas[0].text), /\[ag:3784113\]/);
   assert.doesNotMatch(String(dona.c.criadas[0].text), /caxias/);
@@ -412,7 +412,7 @@ test('modo seco no Kommo dividido também não escreve nada', async () => {
   ] };
   const caxias = { id: 'u-caxias', slug: 'doutor-hernia-caxias', spineTimezone: 'America/Sao_Paulo' } as unknown as Unit;
   const { kommo, c } = kommoFalso([]);
-  const r = await varrerCalendario(caxias, deps(kommo, [ag()], { modo: 'seco', grupo }));
+  const r = await varrerCalendario(caxias, deps(kommo, [ag()], { modo: 'seco', grupo, cartaoEhDaUnidade: async () => true }));
   assert.equal(r.criadas, 1);
   assert.deepEqual([c.criadas, c.atualizadas, c.fechadas], [[], [], []]);
 });
@@ -441,4 +441,49 @@ test('paralelismo da rodada: 3 por padrão, de 1 a 6', () => {
   assert.equal(paraleloDoCalendario('"2"'), 2);
   assert.equal(paraleloDoCalendario('50'), 6);
   assert.equal(paraleloDoCalendario('0'), 3);
+});
+
+test('Kommo dividido: erro passageiro ao ler o cartão (429) NÃO cria a tarefa solta — fica para a próxima varredura, sem gravar nada', async () => {
+  const grupo: GrupoDoCrm = { contaUnitId: 'u-petro', membros: [
+    { unitId: 'u-petro', contaUnitId: 'u-petro', rotulo: 'Petrópolis' }, { unitId: 'u-caxias', contaUnitId: 'u-petro', rotulo: 'Caxias' },
+  ] };
+  const caxias = { id: 'u-caxias', slug: 'doutor-hernia-caxias', spineTimezone: 'America/Sao_Paulo' } as unknown as Unit;
+  const { kommo, c } = kommoFalso([]);
+  let tentativas = 0;
+  (kommo as unknown as { getLead: unknown }).getLead = async () => {
+    if (tentativas++ === 0) throw new KommoApiError('getLead: 429', 429, null);
+    return { id: 555, custom_fields_values: [{ field_name: '⌂ Unidade de atendimento', values: [{ value: 'Caxias' }] }] };
+  };
+  const d = deps(kommo, [ag()], { modo: 'aplicar', grupo });
+  const r1 = await varrerCalendario(caxias, d);
+  assert.equal(r1.erros, 1);
+  assert.deepEqual(c.criadas, [], 'nada criado, nem solta');
+  const r2 = await varrerCalendario(caxias, d); // a próxima varredura acha o cartão e põe a tarefa nele
+  assert.equal(r2.erros, 0);
+  assert.equal((c.criadas as Array<Record<string, unknown>>)[0].leadId, 555);
+});
+
+test('Kommo dividido: o cartão é lido UMA vez por varredura, mesmo com várias consultas do mesmo paciente', async () => {
+  const grupo: GrupoDoCrm = { contaUnitId: 'u-petro', membros: [
+    { unitId: 'u-petro', contaUnitId: 'u-petro', rotulo: 'Petrópolis' }, { unitId: 'u-caxias', contaUnitId: 'u-petro', rotulo: 'Caxias' },
+  ] };
+  const caxias = { id: 'u-caxias', slug: 'doutor-hernia-caxias', spineTimezone: 'America/Sao_Paulo' } as unknown as Unit;
+  const { kommo } = kommoFalso([]);
+  let leituras = 0;
+  (kommo as unknown as { getLead: unknown }).getLead = async () => { leituras++; return { id: 555, custom_fields_values: [{ field_name: '⌂ Unidade de atendimento', values: [{ value: 'Caxias' }] }] }; };
+  await varrerCalendario(caxias, deps(kommo, [ag({ idSchedule: 1 }), ag({ idSchedule: 2 }), ag({ idSchedule: 3 })], { modo: 'aplicar', grupo }));
+  assert.equal(leituras, 1);
+});
+
+test('tabela unit_calendario ainda não existe (P2021): vale o .env, como antes; outro erro do banco: nada é feito', async () => {
+  const { kommo, c } = kommoFalso([]);
+  const semTabela = Object.assign(new Error('The table does not exist'), { code: 'P2021' });
+  const r = await varrerCalendario(unit, deps(kommo, [ag()], { modo: 'aplicar', lerConfig: async () => { throw semTabela; } }));
+  assert.equal(r.criadas, 1);
+  assert.equal(c.criadas[0].responsibleUserId, 15905863, 'o dono do .env');
+  const { kommo: k2, c: c2 } = kommoFalso([]);
+  _limparMemoriaDoCalendario();
+  const r2 = await varrerCalendario(unit, deps(k2, [ag()], { modo: 'aplicar', lerConfig: async () => { throw new Error('conexão caiu'); } }));
+  assert.equal(r2.erros, 1);
+  assert.deepEqual(c2.criadas, []);
 });
