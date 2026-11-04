@@ -124,6 +124,14 @@ const DEFAULT_TOOLS: ToolConfig[] = [
       'quando muda o contexto — ex: lead que fechou venda volta com nova demanda ' +
       '→ mover do funil "Captação" pro "Pós-venda".',
   },
+  {
+    name: 'marcar_nao_paciente',
+    enabled: true,
+    description:
+      'Tira do funil de pacientes quem NÃO é paciente (por ora, tipo "curriculo": candidato a vaga que ' +
+      'perguntou de emprego ou mandou currículo/vídeo). Etiqueta, registra o motivo, move para PERDIDO, ' +
+      'pausa a IA e para o follow-up. Depois, UMA frase de agradecimento.',
+  },
 ];
 
 export const DEFAULTS = {

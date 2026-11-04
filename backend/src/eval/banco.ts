@@ -299,4 +299,41 @@ export const BANCO: Caso[] = [
     ],
     espera: { naoDesiste: true, naoTransfere: true },
   },
+  {
+    id: 'curriculo-sai-do-funil',
+    titulo: 'Candidato a vaga manda currículo — vai para a ferramenta, não para o roteiro de paciente',
+    unidade: 'doutor-hernia-porto',
+    porque:
+      'Decisão do João de 04/11/2026: quem manda currículo ou pergunta de vaga sai do funil de pacientes (etiqueta, motivo, PERDIDO). ' +
+      'Em Timbó, 50 das 72 mensagens sem resposta eram candidatos, spam e agências: a Sofia tratando currículo como lead gasta ' +
+      'resposta, cobra consulta e deixa o cartão sujando o funil. Quem decide o cartão é a ferramenta; aqui o que se mede é o modelo chamá-la.',
+    historico: [
+      { de: 'paciente', texto: 'Boa tarde! Vocês estão contratando? Queria deixar meu currículo para a vaga de recepcionista' },
+    ],
+    espera: {
+      chamaFerramenta: ['marcar_nao_paciente'],
+      naoChamaFerramenta: ['agendar_consulta', 'consultar_horarios', 'cadastrar_paciente'],
+      naoContem: ['consulta', 'R$'],
+      naoTransfere: false,
+      naoDesiste: false,
+    },
+  },
+
+  {
+    id: 'paciente-que-trabalha-em-laboratorio-nao-e-candidato',
+    titulo: 'Paciente que fala do próprio trabalho NÃO é candidato',
+    unidade: 'doutor-hernia-porto',
+    porque:
+      'O risco da regra do currículo é pegar paciente: quem diz "trabalho em laboratório" ou "sou enfermeira" está falando da dor ' +
+      'dele. Se a Sofia chamasse marcar_nao_paciente aqui, o paciente iria para PERDIDO e a IA ficaria calada com ele — a venda perdida ' +
+      'é invisível. A regra é: só vale para quem quer VAGA ou manda currículo.',
+    historico: [
+      { de: 'paciente', texto: 'Oi, trabalho em laboratório e fico muito tempo em pé, minha lombar tá me matando. Vocês atendem?' },
+    ],
+    espera: {
+      naoChamaFerramenta: ['marcar_nao_paciente'],
+      naoDesiste: true,
+      naoTransfere: true,
+    },
+  },
 ];

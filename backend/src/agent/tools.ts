@@ -39,6 +39,7 @@ import {
   textoTelegramSinalDeAlerta,
 } from './sinal-de-alerta.js';
 import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
+import { TIPOS_NAO_PACIENTE, marcarNaoPaciente, textoParaOModelo } from '../lib/nao-paciente.js';
 
 /** No Kommo, 142 e 143 existem em TODO funil: ganho e perdido. */
 const STATUS_GANHO = 142;
@@ -108,6 +109,12 @@ export const DEFAULT_TOOL_DESCRIPTIONS: Record<string, string> = {
     'quando muda o contexto do lead — ex: lead que fechou primeira venda ' +
     'volta com nova demanda → move do funil "Captação" pro "Pós-venda". ' +
     'Se não passar statusId, Kommo coloca no primeiro status do funil destino.',
+  marcar_nao_paciente:
+    'Tira do funil de pacientes quem NÃO é paciente. Por ora só tipo "curriculo": a pessoa disse que quer trabalhar na clínica ' +
+    '(pergunta de vaga ou emprego) ou mandou currículo, vídeo de apresentação ou arquivo de candidatura. O sistema etiqueta o cartão, ' +
+    'registra o motivo, move para PERDIDO, pausa a IA e para o follow-up — tudo de uma vez. NÃO use para quem só MENCIONA o trabalho ' +
+    'dele ("trabalho em laboratório", "sou enfermeira") dentro de uma conversa de paciente, nem para fornecedor, propaganda ou ' +
+    'funcionário. Depois de chamar, responda UMA frase de agradecimento (currículo recebido; o recrutamento é com a equipe da clínica).',
 };
 
 export interface BuildToolsArgs {
@@ -1400,6 +1407,38 @@ export function buildTools({
     buildLeadFieldRuleTool({ rule, kommo, recorder, tz: fusoDaUnidade(unit), unit }),
   );
 
+  const marcarNaoPacienteSchema = z.object({
+    leadId: z.number().int().positive().describe('ID numérico do lead no Kommo.'),
+    tipo: z.enum(TIPOS_NAO_PACIENTE).describe('"curriculo" = candidato a vaga: perguntou de emprego ou mandou currículo/vídeo de apresentação.'),
+  });
+  const marcar_nao_paciente = new DynamicStructuredTool({
+    name: 'marcar_nao_paciente',
+    description: desc('marcar_nao_paciente'),
+    schema: marcarNaoPacienteSchema,
+    func: async ({ leadId, tipo }) => {
+      const t0 = performance.now();
+      await recorder.step({
+        kind: 'TOOL_CALL',
+        title: `Decisão: lead ${leadId} não é paciente (${tipo})`,
+        payload: { leadId, tipo },
+      });
+      if (!unit) return 'ERRO: unidade ausente — nada foi marcado.';
+      const r = await marcarNaoPaciente({ unit, kommo, leadId, tipo, pausedFieldId });
+      await recorder.step({
+        kind: r.desfecho === 'recusado' ? 'TOOL_RESULT' : r.desfecho === 'parcial' ? 'ERROR' : 'KOMMO_ACTION',
+        title:
+          r.desfecho === 'recusado'
+            ? `Não marcado como candidato: ${r.recusa}`
+            : `Candidato (${tipo}) ${r.desfecho === 'ja_estava' ? 'já estava marcado' : r.desfecho === 'feito' ? 'marcado' : 'marcado em parte'}: ` +
+              `etiqueta ${r.etiquetas ? 'sim' : 'NÃO'}, motivo ${r.motivo}, PERDIDO ${r.movido ? 'sim' : 'não'}, IA ${r.pausada ? 'pausada' : 'NÃO pausada'}` +
+              (r.falhas.length ? ` — falhas: ${r.falhas.join('; ')}` : ''),
+        payload: { leadId, tipo, ...r },
+        latencyMs: Math.round(performance.now() - t0),
+      });
+      return textoParaOModelo(r);
+    },
+  });
+
   const nativeTools: DynamicStructuredTool[] = [
     aplicar_tag,
     mover_etapa,
@@ -1411,6 +1450,7 @@ export function buildTools({
     definir_valor_lead,
     fechar_lead,
     mover_funil,
+    marcar_nao_paciente,
   ];
   if (resumir_lead_para_sdr) nativeTools.push(resumir_lead_para_sdr);
 
