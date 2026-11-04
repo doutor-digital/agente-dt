@@ -212,7 +212,8 @@ export function registrarAnexosSistemas(server: McpServer, ctx: ContextoSistemas
         }
         const link = `${base()}/arquivos/enviar/${p.token}`;
         // sem nome dado: SEM extensão (o tipo vem do conteúdo; "comprovante.pdf" com um PNG dentro seria recusado e queimaria o link)
-        const nome = encodeURIComponent((args.nome_arquivo ?? args.tipo).replace(/[\r\n]/g, ' '));
+        // encodeURIComponent deixa passar ' ( ) * !: a aspa simples fecharia o texto do curl (e abriria um comando); tudo isso vai em %XX
+        const nome = encodeURIComponent((args.nome_arquivo ?? args.tipo).replace(/[\r\n]/g, ' ')).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
         return {
           sistema: slug,
           envio: p.id,
@@ -275,7 +276,7 @@ export function registrarAnexosSistemas(server: McpServer, ctx: ContextoSistemas
       title: 'Sistema novo (Caixa/Financeiro): anexar a um lançamento o arquivo de um endereço',
       description:
         'O SERVIDOR baixa o comprovante de um endereço e o anexa ao lançamento (caixa_lanc ou fin_lanc) como sistemas_anexar_envio — para quando o seu ambiente não alcança o site. ' +
-        `Só domínios da lista: ${deps.dominios.join(', ')} (outro só o João libera, no servidor). Só https, sem redirecionar para fora da lista, sem rede interna, até ${ANEXO_MAX_BYTES / 1024 / 1024} MB e 25 segundos. ` +
+        `Só domínios da lista: ${deps.dominios.join(', ')} (outro só o João libera, no servidor). Só https, sem redirecionar para fora da lista, sem rede interna, até ${ANEXO_MAX_BYTES / 1024 / 1024} MB no Caixa e ${ANEXO_FIN_MAX_BYTES / 1024 / 1024} MB no Financeiro, e 25 segundos. ` +
         'O endereço tem que levar DIRETO a um PDF, JPG ou PNG. Uma PÁGINA (HTML) não vale: o servidor não tem navegador para imprimir a página em PDF; nesse caso peça à pessoa o PDF ou um print e use sistemas_preparar_anexo. ' +
         'Grava direto (sem prévia de confirmação): confira o lançamento com a pessoa antes.',
       inputSchema: { sistema: SISTEMA, tabela: TABELA, lancamento: LANC, tipo: TIPO, url: z.string().url().max(2000).describe('endereço https do arquivo') },
@@ -285,7 +286,8 @@ export function registrarAnexosSistemas(server: McpServer, ctx: ContextoSistemas
       executar('sistemas_anexar_url', args, auditar, async () => {
         const id = lancamentoValido(args.lancamento);
         const { slug } = await conferirLancamento(ctx, quem, args.sistema, args.tabela, id);
-        const b = await baixar(args.url, { dominios: deps.dominios, ...deps.download });
+        // o teto é o da tabela (fin_lanc: 6 MB), como no link de envio
+        const b = await baixar(args.url, { dominios: deps.dominios, maxBytes: maxDe(args.tabela), ...deps.download });
         const tipo = detectarTipo(b.bytes);
         if (tipo !== 'pdf' && tipo !== 'jpg' && tipo !== 'png') {
           const html = b.contentType.includes('html') || /^\s*</.test(b.bytes.subarray(0, 64).toString('utf8'));

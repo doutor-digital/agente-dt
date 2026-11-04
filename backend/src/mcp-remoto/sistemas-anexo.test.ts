@@ -516,3 +516,30 @@ test('fin_lanc: o link de envio já nasce com o teto de 6 MB (o Caixa continua 1
     assert.equal(c.json.tamanhoMaxMB, 15);
   } finally { a.limpar(); }
 });
+
+test('aspas simples e outros caracteres do shell no nome_arquivo não saem crus no comando curl', async () => {
+  const a = ambiente(servidor());
+  try {
+    const k = await cliente(a);
+    const r = await k.chamar('sistemas_preparar_anexo', { tabela: 'caixa_lanc', lancamento: LANC, tipo: 'recibo', nome_arquivo: "o'; rm -rf ~ #(x)*!.pdf" });
+    const cmd = String(r.json.comandoCurl);
+    const nome = /X-Nome-Arquivo: ([^']*)'/.exec(cmd)![1]!;
+    assert.ok(!/['();*! ]/.test(nome), nome);
+    assert.equal(decodeURIComponent(nome), "o'; rm -rf ~ #(x)*!.pdf");
+    // o comando inteiro tem exatamente 6 aspas simples (as 3 de Content-Type... e a URL), nenhuma vinda do nome
+    assert.equal((cmd.match(/'/g) ?? []).length, 6);
+  } finally { a.limpar(); }
+});
+
+test('anexar_url em fin_lanc passa o teto de 6 MB ao downloader (no Caixa, 15 MB)', async () => {
+  const vistos: Array<number | undefined> = [];
+  const a = ambiente(servidor({ lancamento: { id: LANC, unidade: 'Marabá-PA', valor: 10, anexo: null } }), {
+    baixar: (async (_u: string, o: { maxBytes?: number }) => (vistos.push(o.maxBytes), { bytes: PDF, host: 'www.asaas.com', contentType: 'application/pdf', nomeSugerido: 'x' })) as any,
+  });
+  try {
+    const k = await cliente(a);
+    await k.chamar('sistemas_anexar_url', { tabela: 'fin_lanc', lancamento: LANC, tipo: 'recibo', url: 'https://www.asaas.com/x' });
+    await k.chamar('sistemas_anexar_url', { tabela: 'caixa_lanc', lancamento: LANC, tipo: 'recibo', url: 'https://www.asaas.com/x' });
+    assert.deepEqual(vistos, [6 * 1024 * 1024, 15 * 1024 * 1024]);
+  } finally { a.limpar(); }
+});
