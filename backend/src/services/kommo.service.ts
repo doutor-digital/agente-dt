@@ -618,6 +618,13 @@ async function kommoAcquireSlot(): Promise<void> {
   if (wait > 0) await new Promise((r) => setTimeout(r, wait));
 }
 
+/** O corpo do 403 diz que falta escopo/permissão no token (não é bloqueio por excesso de chamadas). */
+export function eh403DeEscopo(corpo: unknown): boolean {
+  if (corpo == null) return false;
+  const texto = typeof corpo === 'string' ? corpo : JSON.stringify(corpo);
+  return /invalid scope|insufficient scope|scope/i.test(texto);
+}
+
 function kommoBackoff(retryAfterSec?: number): void {
   const ms = Math.min(Math.max((retryAfterSec ?? 5) * 1000, 2000), 60_000);
   const alvo = Date.now() + ms;
@@ -694,7 +701,9 @@ export function buildHttp(
         await esperar(ESPERAS_REDE_MS[feitas]);
         return http.request(cfg);
       }
-      if ((status === 429 || status === 403) && !cfg?.semFreio) {
+      // 403 de ESCOPO ("Invalid scope": o token não tem permissão para aquela rota) é da conta, não é o Kommo pedindo
+      // para frear — não pode congelar as outras unidades. 403 sem essa marca (bloqueio por excesso) e 429 seguem freando.
+      if ((status === 429 || (status === 403 && !eh403DeEscopo(error.response?.data))) && !cfg?.semFreio) {
         const ra = Number((error.response?.data as { retry_after?: number } | undefined)?.retry_after);
         kommoBackoff(Number.isFinite(ra) ? ra : status === 403 ? 30 : undefined);
       }
@@ -1159,8 +1168,11 @@ export class KommoClient {
    */
   async listTalks(leadId: number): Promise<KommoTalk[]> {
     try {
+      // semFreio: leitura acessória. Conta sem o escopo de chats (Imperatriz, Parauapebas) responde 403 sempre, e cada 403
+      // congelava o Kommo da REDE inteira por 30 s — 04/11/2026, mediana das respostas foi de 20 s para 63 s.
       const { data, status } = await this.http.get<{ _embedded?: { talks?: KommoTalk[] } }>('/talks', {
         params: { 'filter[entity_id][]': leadId, 'filter[entity_type]': 'lead' },
+        semFreio: true,
       });
       if (status === 204 || !data) return [];
       return data._embedded?.talks ?? [];
@@ -1335,7 +1347,7 @@ export class KommoClient {
     try {
       const { data, status } = await this.http.get<{ _embedded?: { messages?: KommoTalkMessage[] } }>(
         `/talks/${talkId}/messages`,
-        { params: page ? { limit, page } : { limit } },
+        { params: page ? { limit, page } : { limit }, semFreio: true },
       );
       if (status === 204 || !data) return [];
       return data._embedded?.messages ?? [];
