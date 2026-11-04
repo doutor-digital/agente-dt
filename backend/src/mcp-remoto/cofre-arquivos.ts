@@ -222,6 +222,14 @@ interface Envio {
   criadoEm: number;
   /** teto duro: depois disto nada resta */
   apagarEm: number;
+  /** até quando o link de envio vale (cada pedido pode pedir menos que o padrão) */
+  venceEm: number;
+  /** só estes tipos entram neste envio (sem lista, todos os aceitos) */
+  tipos?: readonly TipoDeArquivo[];
+  /** tamanho máximo DESTE envio (nunca acima do limite geral) */
+  tamanhoMax: number;
+  /** para onde o arquivo vai depois (ex.: um lançamento do Caixa); fica preso ao envio e só quem o pediu lê */
+  destino?: Readonly<Record<string, string>>;
   tokenHash: string;
   estado: 'aguardando' | 'enviando' | 'recebido' | 'apagado';
   recusas: number;
@@ -233,6 +241,17 @@ interface Envio {
 
 export interface Reserva {
   readonly envioId: string;
+  /** o limite de tamanho deste envio (o PUT corta antes de ler o corpo inteiro) */
+  readonly tamanhoMaxBytes: number;
+}
+
+/** O que um pedido de envio pode apertar em relação ao padrão (nunca afrouxar). */
+export interface OpcoesDoEnvio {
+  /** validade do link de envio; o padrão é o do cofre e esse é o teto */
+  validoMs?: number;
+  tipos?: readonly TipoDeArquivo[];
+  tamanhoMaxBytes?: number;
+  destino?: Readonly<Record<string, string>>;
 }
 
 export interface VisaoDoEnvio {
@@ -295,7 +314,7 @@ export class CofreDeArquivos {
 
   // ── pedido de envio ──────────────────────────────────────────────────────────────────────────────────────────
 
-  pedirEnvio(a: { userId: string; finalidade: string }): { id: string; token: string; validoAte: number } {
+  pedirEnvio(a: { userId: string; finalidade: string } & OpcoesDoEnvio): { id: string; token: string; validoAte: number; tamanhoMaxBytes: number } {
     this.varrerMemoria();
     const vivos = [...this.envios.values()].filter((e) => e.dono === a.userId && e.estado !== 'apagado').length;
     if (vivos >= this.limites.ativosPorUsuario) {
@@ -305,12 +324,18 @@ export class CofreDeArquivos {
     const id = randomBytes(16).toString('hex');
     const token = novoToken();
     const tokenHash = sha256(token);
+    const validoMs = Math.min(Math.max(a.validoMs ?? this.limites.envioValeMs, 60_000), this.limites.envioValeMs);
+    const tamanhoMax = Math.min(a.tamanhoMaxBytes ?? this.limites.tamanhoMaxBytes, this.limites.tamanhoMaxBytes);
     this.envios.set(id, {
       id,
       dono: a.userId,
       finalidade: a.finalidade,
       criadoEm: t,
       apagarEm: t + this.limites.ttlDeSegurancaMs,
+      venceEm: t + validoMs,
+      tamanhoMax,
+      ...(a.tipos ? { tipos: [...a.tipos] } : {}),
+      ...(a.destino ? { destino: { ...a.destino } } : {}),
       tokenHash,
       estado: 'aguardando',
       recusas: 0,
@@ -318,12 +343,13 @@ export class CofreDeArquivos {
     });
     this.porTokenDeEnvio.set(tokenHash, id);
     this.auditar({ evento: 'upload_pedido', envio: id, userId: a.userId });
-    return { id, token, validoAte: t + this.limites.envioValeMs };
+    return { id, token, validoAte: t + validoMs, tamanhoMaxBytes: tamanhoMax };
   }
 
   /** O que a página de envio precisa saber. Não gasta o link. */
-  inspecionarEnvio(token: string): { finalidade: string } {
-    return { finalidade: this.envioDoToken(token).finalidade };
+  inspecionarEnvio(token: string): { finalidade: string; tamanhoMaxBytes: number; tipos: readonly TipoDeArquivo[] | undefined } {
+    const e = this.envioDoToken(token);
+    return { finalidade: e.finalidade, tamanhoMaxBytes: e.tamanhoMax, tipos: e.tipos };
   }
 
   private envioDoToken(token: string): Envio {
@@ -333,7 +359,7 @@ export class CofreDeArquivos {
     if (!e) throw new ErroDeCofre('invalido', 'Este link de envio não existe ou já foi apagado. Se o sistema foi atualizado há pouco, os envios em andamento se perdem: peça um novo link no Claude.', 404);
     if (e.estado === 'apagado') throw new ErroDeCofre('expirado', 'Este link de envio venceu ou foi encerrado. Peça um novo no Claude.', 410);
     if (e.estado === 'recebido' || e.usadoEm) throw new ErroDeCofre('usado', 'Este link de envio já foi usado. Peça um novo no Claude.', 410);
-    if (this.agora() >= e.criadoEm + this.limites.envioValeMs) throw new ErroDeCofre('expirado', 'Este link de envio venceu. Peça um novo no Claude.', 410);
+    if (this.agora() >= e.venceEm) throw new ErroDeCofre('expirado', 'Este link de envio venceu. Peça um novo no Claude.', 410);
     return e;
   }
 
@@ -347,7 +373,7 @@ export class CofreDeArquivos {
     const emAndamento = [...this.envios.values()].filter((x) => x.estado === 'enviando').length;
     if (this.bytesGuardados() + (emAndamento + 1) * this.limites.tamanhoMaxBytes > this.limites.espacoTotalMaxBytes) throw new ErroDeCofre('cheio', 'O cofre está cheio no momento. Tente de novo em alguns minutos.', 503);
     e.estado = 'enviando';
-    return { envioId: e.id };
+    return { envioId: e.id, tamanhoMaxBytes: e.tamanhoMax };
   }
 
   /** O envio não chegou a ser guardado (cortou, passou do tamanho): o link continua valendo, até `recusasMax` falhas. */
@@ -370,7 +396,10 @@ export class CofreDeArquivos {
     if (!e || e.estado !== 'enviando') throw new ErroDeCofre('estado', 'Este envio não está mais aberto.', 409);
     let caminho: string | undefined;
     try {
-      const { tipo, nome } = validarArquivo(nomeOriginal, conteudo, this.limites.tamanhoMaxBytes);
+      const { tipo, nome } = validarArquivo(nomeOriginal, conteudo, e.tamanhoMax);
+      if (e.tipos && !e.tipos.includes(tipo)) {
+        throw new ErroDeCofre('tipo', `Para este envio só aceitamos ${e.tipos.map((x) => TIPOS[x].legivel).join(', ')}. Este arquivo é ${TIPOS[tipo].legivel}.`, 415);
+      }
       await this.garantirPasta();
       if (this.encerrado) throw new ErroDeCofre('estado', 'O sistema está sendo atualizado. Peça um novo link no Claude em um minuto.', 503);
       const chave = randomBytes(32);
@@ -427,11 +456,32 @@ export class CofreDeArquivos {
       id: e.id,
       estado: e.estado === 'apagado' ? 'apagado' : e.arquivo ? 'recebido' : 'aguardando_envio',
       finalidade: e.finalidade,
-      envioValeAte: e.estado === 'aguardando' || e.estado === 'enviando' ? e.criadoEm + this.limites.envioValeMs : null,
+      envioValeAte: e.estado === 'aguardando' || e.estado === 'enviando' ? e.venceEm : null,
       apagaAte: e.apagarEm,
       ...(e.arquivo && e.estado !== 'apagado' ? { arquivo: { nome: e.arquivo.nome, tipo: TIPOS[e.arquivo.tipo].mime, tamanhoBytes: e.arquivo.tamanho, recebidoEm: e.arquivo.recebidoEm } } : {}),
       links: e.links.map((l) => ({ expiraEm: l.expiraEm, baixadas: l.baixadas, maximo: l.max, ativo: t < l.expiraEm && l.baixadas < l.max })),
     };
+  }
+
+  /**
+   * Quem pediu o envio lê o arquivo recebido (para o conector entregá-lo a um sistema nosso, sem passar por link). Devolve o destino
+   * guardado no pedido. Não apaga: quem usou apaga (`apagar`) depois que o outro lado confirmou.
+   */
+  async abrir(userId: string, id: string): Promise<{ nome: string; tipo: TipoDeArquivo; mime: string; tamanho: number; destino: Readonly<Record<string, string>> | undefined; conteudo: Buffer }> {
+    const e = this.doDono(userId, id);
+    if (e.estado === 'apagado') throw new ErroDeCofre('estado', 'O arquivo já foi apagado. Peça um novo envio.', 409);
+    if (e.estado !== 'recebido' || !e.arquivo) throw new ErroDeCofre('estado', 'O arquivo ainda não chegou: peça à pessoa que abra o link de envio e envie o arquivo.', 409);
+    const a = e.arquivo;
+    try {
+      return { nome: a.nome, tipo: a.tipo, mime: TIPOS[a.tipo].mime, tamanho: a.tamanho, destino: e.destino, conteudo: await this.lerCifrado(e, a) };
+    } catch {
+      throw new ErroDeCofre('estado', 'Não consegui ler o arquivo guardado (sumiu ou o sistema foi atualizado). Peça um novo envio.', 409);
+    }
+  }
+
+  /** O destino que o pedido guardou, sem tocar no arquivo (para a ferramenta conferir antes de gastar). */
+  destinoDe(userId: string, id: string): Readonly<Record<string, string>> | undefined {
+    return this.doDono(userId, id).destino;
   }
 
   gerarLink(userId: string, id: string, minutos: number | undefined): { token: string; nome: string; expiraEm: number; baixadasMax: number } {
@@ -550,7 +600,7 @@ export class CofreDeArquivos {
       }
       if (t >= e.apagarEm) this.apagarEnvio(e, 'teto-de-seguranca');
       else if (e.estado === 'recebido' && e.links.length > 0 && e.links.every((l) => t >= l.expiraEm)) this.apagarEnvio(e, 'link-expirou');
-      else if ((e.estado === 'aguardando') && t >= e.criadoEm + this.limites.envioValeMs && !e.usadoEm) {
+      else if ((e.estado === 'aguardando') && t >= e.venceEm && !e.usadoEm) {
         // ninguém enviou a tempo: não há arquivo; fecha o pedido
         this.apagarEnvio(e, 'envio-venceu');
       }

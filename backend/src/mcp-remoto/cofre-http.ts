@@ -36,18 +36,19 @@ function cabecalhosSeguros(res: Response): void {
   });
 }
 
-export function paginaDeEnvio(o: { finalidade?: string; mensagem?: string; nonce?: string; limiteMb?: number }): string {
+export function paginaDeEnvio(o: { finalidade?: string; mensagem?: string; nonce?: string; limiteMb?: number; extensoes?: readonly string[] }): string {
+  const extensoes = o.extensoes ?? EXTENSOES_ACEITAS;
   const formulario = o.nonce
     ? `
   <p class="finalidade">${esc(o.finalidade ?? '')}</p>
   <label class="escolher">
     <span id="rotulo">Toque para escolher o arquivo</span>
-    <input id="arquivo" type="file" accept="${EXTENSOES_ACEITAS.map((e) => `.${e}`).join(',')}">
+    <input id="arquivo" type="file" accept="${extensoes.map((e) => `.${e}`).join(',')}">
   </label>
   <button id="enviar" type="button" disabled>Enviar</button>
   <progress id="barra" max="100" value="0" hidden></progress>
   <p id="aviso" role="status" class="aviso"></p>
-  <p class="nota">Aceitamos PDF, Word (.doc/.docx), JPG, PNG e texto, até ${o.limiteMb ?? 20} MB.
+  <p class="nota">Aceitamos ${o.extensoes ? 'apenas ' + o.extensoes.map((e) => e.toUpperCase()).join(', ') : 'PDF, Word (.doc/.docx), JPG, PNG e texto'}, até ${o.limiteMb ?? 20} MB.
   O arquivo fica guardado de forma temporária e cifrada e é apagado em até 2 horas. Este endereço serve para um envio só: não o compartilhe.</p>
   <script nonce="${o.nonce}">
   (function () {
@@ -162,8 +163,10 @@ export function montarRotasDoCofre(app: Express, cofre: CofreDeArquivos, o: Opco
       `default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
     );
     try {
-      const { finalidade } = cofre.inspecionarEnvio(String(req.params.token));
-      res.type('html').send(paginaDeEnvio({ finalidade, nonce, limiteMb: Math.floor(cofre.limites.tamanhoMaxBytes / 1024 / 1024) }));
+      const { finalidade, tamanhoMaxBytes, tipos } = cofre.inspecionarEnvio(String(req.params.token));
+      // envio restrito a certos tipos: a página só oferece as extensões deles (jpg inclui jpeg)
+      const extensoes = tipos ? tipos.flatMap((t) => (t === 'jpg' ? ['jpg', 'jpeg'] : [t])) : undefined;
+      res.type('html').send(paginaDeEnvio({ finalidade, nonce, limiteMb: Math.floor(tamanhoMaxBytes / 1024 / 1024), extensoes }));
     } catch (err) {
       if (!(err instanceof ErroDeCofre)) throw err;
       if (err.codigo === 'invalido') sondagem(req, String(req.params.token));
@@ -180,7 +183,7 @@ export function montarRotasDoCofre(app: Express, cofre: CofreDeArquivos, o: Opco
       return;
     }
     const token = String(req.params.token);
-    const limite = cofre.limites.tamanhoMaxBytes;
+    let limite = cofre.limites.tamanhoMaxBytes;
     const origem = quem(req);
     if (enviando >= ENVIOS_SIMULTANEOS) {
       res.set('Retry-After', '15');
@@ -190,6 +193,7 @@ export function montarRotasDoCofre(app: Express, cofre: CofreDeArquivos, o: Opco
     let reserva;
     try {
       reserva = cofre.reservar(token);
+      limite = reserva.tamanhoMaxBytes; // o pedido pode ter apertado o limite (ex.: anexo do Caixa, 15 MB)
     } catch (err) {
       if (!(err instanceof ErroDeCofre)) throw err;
       if (err.codigo === 'invalido') sondagem(req, token);
