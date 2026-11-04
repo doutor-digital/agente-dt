@@ -53,7 +53,7 @@ export const JANELA_DA_MARCA_MS = 24 * 3600_000;
 /** Espera mais velha que isto não é respondida por uma IA acordando do nada: a recepção já viu (ou deveria ter visto). */
 export const IDADE_MAXIMA_DA_ESPERA_MS = 2 * 3600_000;
 /** Quantas marcas uma varredura trata (cada uma lê o cartão e a conversa no Kommo). */
-export const MAX_MARCAS_POR_VARREDURA = 10;
+export const MAX_MARCAS_POR_VARREDURA = 25;
 
 /** Os tipos do portão que deixam marca. */
 export function deixaMarcaDeCalada(tipo: string): boolean {
@@ -87,7 +87,7 @@ export function definirIniciadorDoTurno(fn: IniciaTurno | null): void {
 export interface DepsDoAdiado {
   agora(): number;
   conversaOficial(unit: Unit, leadId: number): Promise<MensagemOficial[]>;
-  /** Já há mensagem nossa (banco) deste cartão desde `desde`? Então um turno normal já cuidou — o paciente escreveu de novo depois da marcação. */
+  /** Um turno normal (resposta da IA ou turno que o webhook abriu) já cuidou deste cartão desde `desde`? A fala do paciente guardada, sozinha, não conta. */
   jaHouveMensagemDesde(unit: Unit, leadId: number, desde: Date): Promise<boolean>;
   horarioAberto(unit: Unit): boolean;
   reivindicar(chave: string): Promise<'ganhou' | 'perdeu' | 'incerto'>;
@@ -102,11 +102,21 @@ export const depsPadraoDoAdiado = (): DepsDoAdiado => ({
   agora: () => Date.now(),
   conversaOficial: (unit, leadId) => mensagensOficiaisDaUnidade(unit, createKommoClient(unit), leadId, 40),
   async jaHouveMensagemDesde(unit, leadId, desde) {
-    const m = await prisma.message.findFirst({
-      where: { createdAt: { gte: desde }, conversation: { unitId: unit.id, leadId: String(leadId) } },
+    // Resposta nossa (papel assistant). A fala do PACIENTE guardada não conta: o próprio turno atrasado a grava antes de subir, e um
+    // turno que falhou no meio nunca poderia ser refeito (ficaria "já atendido" por causa da fala que ele mesmo guardou).
+    const resposta = await prisma.message.findFirst({
+      where: { role: 'assistant', createdAt: { gte: desde }, conversation: { unitId: unit.id, leadId: String(leadId) } },
       select: { id: true },
     });
-    return !!m;
+    if (resposta) return true;
+    // Turno aberto pelo webhook normal (o paciente escreveu de novo depois da marcação) e ainda sem resposta gravada: não abrir um
+    // segundo. O turno aberto por este arquivo (`via: unidade_ganha`) não conta — a reivindicação já o protege.
+    const traces = await prisma.executionTrace.findMany({
+      where: { unitId: unit.id, leadId: String(leadId), createdAt: { gte: desde } },
+      select: { input: true },
+      take: 20,
+    });
+    return traces.some((t) => (t.input as { via?: string } | null)?.via !== 'unidade_ganha');
   },
   horarioAberto(unit) {
     const h = checkBusinessHours(unit);
@@ -133,7 +143,8 @@ export type MotivoSemTurno =
 export interface ResultadoDoAdiado {
   /**
    * `erro`: não deu para ler a conversa — nada foi feito. `adiar`: não deu para decidir com certeza (reivindicação incerta, turno que
-   * não subiu, iniciador ausente) — nada ficou reivindicado e a marca fica para a próxima varredura. `nao`: decisão definitiva.
+   * não subiu, iniciador ausente) ou a IA ainda não abriu (fora do horário, espera ainda dentro do prazo) — nada ficou reivindicado
+   * nem cadastrado e a marca fica para a próxima varredura; quando a espera passar do prazo, a decisão vira `espera-velha` e cadastra. `nao`: decisão definitiva.
    */
   turno: 'iniciado' | 'nao' | 'erro' | 'adiar';
   motivo?: MotivoSemTurno;
@@ -186,7 +197,7 @@ export async function atenderCartaoQueGanhouUnidade(
     esperouMin = Math.round((deps.agora() - espera.desde.getTime()) / 60_000);
     if (deps.agora() - espera.ultimaEm.getTime() > IDADE_MAXIMA_DA_ESPERA_MS) motivo = 'espera-velha';
     else if (textos.length === 0) motivo = 'so-midia';
-    else if (!deps.horarioAberto(unit)) motivo = 'fora-do-horario';
+    else if (!deps.horarioAberto(unit)) motivo = 'fora-do-horario'; // adia: a IA abre mais tarde e a espera ainda pode ser respondida
     else if (await deps.jaHouveMensagemDesde(unit, leadId, espera.desde).catch(() => true)) motivo = 'ja-atendido';
     else if (!deps.iniciarTurno) motivo = 'sem-iniciador';
     else {
@@ -214,11 +225,16 @@ export async function atenderCartaoQueGanhouUnidade(
     return { turno: 'iniciado', esperouMin };
   }
 
-  logger.info({ leadId, unit: unit.slug, motivo, esperouMin }, 'atendimento-adiado: cartão ganhou a unidade — turno NÃO iniciado');
+  const foraDoHorario = motivo === 'fora-do-horario';
+  // Fora do horário a varredura volta a cada 5 min até a IA abrir (ou a espera vencer): uma linha por varredura seria ruído.
+  (foraDoHorario ? logger.debug : logger.info).call(logger, { leadId, unit: unit.slug, motivo, esperouMin }, 'atendimento-adiado: cartão ganhou a unidade — turno NÃO iniciado');
+  // `adiar`: a marca fica e a próxima varredura volta aqui — decidir o cadastro agora o repetiria a cada 5 min e, depois, o turno
+  // que vier cadastraria de novo com outras falas. Só a decisão definitiva cadastra.
+  const adiar = motivo === 'reivindicacao-incerta' || motivo === 'sem-iniciador' || motivo === 'falha-ao-iniciar' || motivo === 'fora-do-horario';
+  if (adiar) return { turno: 'adiar', motivo, esperouMin };
   // Outro turno já cuida deste paciente (e cadastra no fim dele): cadastrar daqui seria uma segunda leitura, com falas diferentes.
   const cadastro = motivo === 'ja-atendido' || motivo === 'ja-reivindicado' ? undefined : await cadastrarSemTurno(entrada, msgs, deps);
-  const adiar = motivo === 'reivindicacao-incerta' || motivo === 'sem-iniciador' || motivo === 'falha-ao-iniciar';
-  return { turno: adiar ? 'adiar' : 'nao', motivo, esperouMin, cadastro };
+  return { turno: 'nao', motivo, esperouMin, cadastro };
 }
 
 /**
@@ -356,6 +372,10 @@ export async function retomarCartoesCalados(
         const contactId = contatoPrincipalDe(lead);
         const telefone = contactId ? await deps.telefoneDoContato(contactId).catch(() => null) : null;
         const r = await deps.atender({ unit, leadId: marca.leadId, contactId, telefone });
+        if (r.turno === 'adiar' && r.motivo === 'fora-do-horario') {
+          resumo.aguardando++;
+          continue; // a IA ainda não abriu: sem carimbo, a próxima varredura olha de novo
+        }
         if (r.turno === 'erro' || r.turno === 'adiar') {
           resumo.erros++;
           continue; // fica sem carimbo: a próxima varredura tenta de novo

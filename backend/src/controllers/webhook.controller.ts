@@ -1182,7 +1182,9 @@ const TURNO_PULADO = 'pulado' as const;
  */
 export async function processAgent(args: ArgsDoTurno): Promise<void> {
   const r = await processarTurno(args);
-  if (r === TURNO_PULADO) await cadastrarQuandoIaPulada(args);
+  // Sem `await`: a decisão pode chamar a IA de triagem e a franquia, e o turno (coalescer, desligamento gracioso) não espera por isso.
+  // `cadastrarQuandoIaPulada` nunca lança.
+  if (r === TURNO_PULADO) void cadastrarQuandoIaPulada(args);
 }
 
 export async function cadastrarQuandoIaPulada(

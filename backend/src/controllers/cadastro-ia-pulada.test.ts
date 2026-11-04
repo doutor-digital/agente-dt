@@ -110,5 +110,5 @@ test('ligação: toda saída em que a IA é pulada (horário, pausa da unidade, 
   const calada = src.indexOf("'agente pulado (etapa calada pelo nome)'");
   assert.equal(/return[^;]*;/.exec(src.slice(calada))?.[0], 'return;');
   // O wrapper público é quem cadastra.
-  assert.match(src, /const r = await processarTurno\(args\);\s+if \(r === TURNO_PULADO\) await cadastrarQuandoIaPulada\(args\);/);
+  assert.match(src, /const r = await processarTurno\(args\);[\s\S]*?if \(r === TURNO_PULADO\) void cadastrarQuandoIaPulada\(args\);/);
 });

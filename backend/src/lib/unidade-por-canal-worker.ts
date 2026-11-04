@@ -243,6 +243,9 @@ async function varrer(): Promise<void> {
   try {
     for (const [slug, regras] of Object.entries(REGRAS_POR_UNIDADE)) {
       await varrerUnidade(slug, regras).catch((err) => logger.warn({ err: String(err), unit: slug }, 'unidade-por-canal: varredura falhou'));
+    }
+    // Depois de marcar TODAS as unidades: a reavaliação dos calados pode demorar (lê conversa, cadastra) e não pode atrasar a marcação.
+    for (const slug of Object.keys(REGRAS_POR_UNIDADE)) {
       await retomarDaUnidade(slug).catch((err) => logger.warn({ err: String(err), unit: slug }, 'unidade-por-canal: reavaliação dos cartões calados falhou'));
     }
   } finally {

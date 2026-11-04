@@ -35,6 +35,8 @@ const INTERNO = '5524999990001';
 
 const hhmm = (h: number, m: number) => new Date(Date.UTC(2026, 10, 3, h, m, 0));
 const AGORA = hhmm(17, 46).getTime();
+/** Depois do prazo da espera (2 h): o caminho em que não há turno e a decisão é definitiva — o que cadastra sem a IA. */
+const DEPOIS_DO_PRAZO = hhmm(17, 14).getTime() + 2 * 3600_000 + 60_000;
 
 const msg = (direcao: 'entrada' | 'saida', em: Date, texto: string, extra: Partial<MensagemOficial> = {}): MensagemOficial => ({
   id: `${direcao}-${em.getTime()}`,
@@ -190,13 +192,34 @@ test('reivindicação incerta ou turno que não sobe: nada fica reivindicado e a
   assert.equal(falha.w.reivindicadas.size, 0);
 });
 
-test('fora do horário da unidade: não acorda a IA para uma fala velha (a mensagem de "fora do horário" sairia atrasada), mas cadastra', async () => {
+test('fora do horário da unidade: não acorda a IA agora, ADIA (sem cadastrar nem carimbar) — quando a IA abrir dentro do prazo, responde', async () => {
   ligarCadastro();
-  const { w, deps } = mundo({ aberto: false });
-  const r = await atenderCartaoQueGanhouUnidade(entrada(), deps);
+  const fechado = mundo({ aberto: false });
+  const r = await atenderCartaoQueGanhouUnidade(entrada(), fechado.deps);
+  assert.equal(r.turno, 'adiar');
   assert.equal(r.motivo, 'fora-do-horario');
-  assert.equal(w.turnos.length, 0);
-  assert.equal(w.sincronizados.length, 1, 'fora do horário a IA não fala, mas o lead existe');
+  assert.equal(fechado.w.turnos.length, 0);
+  assert.equal(fechado.w.sincronizados.length, 0, 'adiado não cadastra: cada varredura repetiria, e o turno cadastra no fim');
+
+  // varredura: não carimba, conta como aguardando (não como erro)
+  const v = varredura('Petrópolis', fechado);
+  const rv = await retomarCartoesCalados(PET, false, v.deps);
+  assert.deepEqual({ ...rv }, { marcas: 1, retomados: 0, aguardando: 1, deOutra: 0, erros: 0 });
+  assert.deepEqual(v.w.tratados, []);
+
+  // a IA abre (mesma espera, ainda dentro de 2 h): UMA resposta
+  const aberto = mundo({ aberto: true, agora: AGORA + 14 * 60_000 });
+  const rv2 = await retomarCartoesCalados(PET, false, varredura('Petrópolis', aberto).deps);
+  assert.equal(rv2.retomados, 1);
+  assert.equal(aberto.w.turnos.length, 1);
+
+  // a IA só abre depois do prazo: vira "espera velha", decisão definitiva — cadastra e sai da fila
+  const tarde = mundo({ aberto: false, agora: hhmm(17, 14).getTime() + IDADE_MAXIMA_DA_ESPERA_MS + 60_000 });
+  const vt = varredura('Petrópolis', tarde);
+  vt.deps.agora = () => hhmm(17, 14).getTime() + IDADE_MAXIMA_DA_ESPERA_MS + 60_000;
+  assert.equal((await retomarCartoesCalados(PET, false, vt.deps)).retomados, 1);
+  assert.equal(tarde.w.turnos.length, 0);
+  assert.equal(tarde.w.sincronizados.length, 1);
 });
 
 test('espera velha (> 2 h) e só mídia: sem turno, com cadastro', async () => {
@@ -220,40 +243,41 @@ test('Kommo fora ao ler a conversa: nada é feito, nada é reivindicado (a varre
   assert.equal(w.sincronizados.length, 0);
 });
 
-test('sem o iniciador registrado (boot incompleto): não inventa turno, cadastra', async () => {
+test('sem o iniciador registrado (boot incompleto): não inventa turno, adia (a marca fica, nada cadastrado ainda)', async () => {
   ligarCadastro();
   const { w, deps } = mundo({ iniciador: false });
   const r = await atenderCartaoQueGanhouUnidade(entrada(), deps);
   assert.equal(r.motivo, 'sem-iniciador');
-  assert.equal(w.sincronizados.length, 1);
+  assert.equal(r.turno, 'adiar');
+  assert.equal(w.sincronizados.length, 0);
 });
 
 // ── as regras do cadastro continuam valendo neste caminho ─────────────────────────────────────────
 
 test('número interno: não cadastra', async () => {
   ligarCadastro();
-  const { w, deps } = mundo({ aberto: false });
+  const { w, deps } = mundo({ agora: DEPOIS_DO_PRAZO });
   await atenderCartaoQueGanhouUnidade(entrada(INTERNO), deps);
   assert.equal(w.sincronizados.length, 0);
 });
 
 test('SECO: decide e loga, não cadastra', async () => {
   ligarCadastro('seco');
-  const { w, deps } = mundo({ aberto: false });
+  const { w, deps } = mundo({ agora: DEPOIS_DO_PRAZO });
   const r = await atenderCartaoQueGanhouUnidade(entrada(), deps);
   assert.equal(r.cadastro, 'decidido');
   assert.equal(w.sincronizados.length, 0, 'em seco quem decide é a regra de 26/09 (não agendou → não cria)');
 });
 
 test('chave cadastro-todo-lead DESLIGADA: nada é cadastrado por este caminho', async () => {
-  const { w, deps } = mundo({ aberto: false });
+  const { w, deps } = mundo({ agora: DEPOIS_DO_PRAZO });
   await atenderCartaoQueGanhouUnidade(entrada(), deps);
   assert.equal(w.sincronizados.length, 0);
 });
 
 test('unidade sem espelhamento de leads (spine_sync_leads=false): nunca cadastra', async () => {
   ligarCadastro();
-  const { w, deps } = mundo({ aberto: false });
+  const { w, deps } = mundo({ agora: DEPOIS_DO_PRAZO });
   const r = await atenderCartaoQueGanhouUnidade({ ...entrada(), unit: { ...PET, spineSyncLeads: false } as unknown as Unit }, deps);
   assert.equal(r.cadastro, 'pulado');
   assert.equal(w.sincronizados.length, 0);
@@ -261,7 +285,7 @@ test('unidade sem espelhamento de leads (spine_sync_leads=false): nunca cadastra
 
 test('orgânico (sem anúncio) com "oi": é dúvida — não cadastra', async () => {
   ligarCadastro();
-  const { w, deps, cadastro } = mundo({ aberto: false, msgs: [msg('entrada', hhmm(17, 14), 'oi')] });
+  const { w, deps, cadastro } = mundo({ agora: DEPOIS_DO_PRAZO, msgs: [msg('entrada', hhmm(17, 14), 'oi')] });
   cadastro.anuncioDoLead = async () => null;
   cadastro.avaliarPelaIa = async () => ({ decisao: 'duvida', motivo: 'só um oi' });
   await atenderCartaoQueGanhouUnidade(entrada(), deps);
