@@ -6,6 +6,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
   confirmar,
   contaEvolutionDoAmbiente,
+  freio,
   criarContextoEvolution,
   grupos,
   LIMITES_EVOLUTION,
@@ -217,4 +218,25 @@ test('depois de reiniciar: o teto conta os envios de antes; sem conseguir ler, n
   const quebrado = criarContextoEvolution(CONTA, { fetch: g.fetch, agora: () => DIA, historico: async () => { throw new Error('banco fora'); } });
   await assert.rejects(() => confirmar(quebrado, 'u1', preparar(quebrado, 'u1', 'texto', { para: '5563981411248', texto: 'Oi' }).codigo), /nada foi enviado/);
   assert.equal(g.chamadas.length, 0);
+});
+
+// 04/11/2026 (Suzanne): teto e silêncio ajustáveis no servidor; 0 = sem limite. O padrão continua o de sempre.
+test('limites zerados: sem teto por hora/dia e sem silêncio noturno — a confirmação continua', () => {
+  const antes = { ...LIMITES_EVOLUTION };
+  try {
+    Object.assign(LIMITES_EVOLUTION, { porHora: 0, porDia: 0, silencio: false });
+    const madrugada = new Date('2026-11-04T05:30:00Z').getTime(); // 02h30 em Brasília
+    const ctx = { agora: () => madrugada, envios: Array.from({ length: 500 }, (_, i) => madrugada - i * 1000) } as never;
+    assert.equal(freio(ctx), null);
+  } finally {
+    Object.assign(LIMITES_EVOLUTION, antes);
+  }
+});
+
+test('padrão: silêncio das 21h às 7h e teto de 20/hora continuam valendo', () => {
+  const madrugada = new Date('2026-11-04T05:30:00Z').getTime();
+  assert.match(String(freio({ agora: () => madrugada, envios: [] } as never)), /silêncio/);
+  const dia = new Date('2026-11-04T13:00:00Z').getTime(); // 10h em Brasília
+  const vinte = Array.from({ length: 20 }, (_, i) => dia - i * 60_000);
+  assert.match(String(freio({ agora: () => dia, envios: vinte } as never)), /por hora/);
 });

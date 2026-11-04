@@ -18,7 +18,29 @@ import { executar } from './ferramenta.js';
 
 /** Nome do registro de cada mensagem que saiu, na auditoria do conector — a produção relê para o teto. */
 export const EVENTO_DE_ENVIO = 'evo_envio';
-export const LIMITES_EVOLUTION = { porHora: 20, porDia: 100, horaInicio: 7, horaFim: 21, validadeMs: 10 * 60_000, gruposMs: 30 * 60_000, esperaGruposMs: 40_000 };
+/** Número inteiro ≥ 0 de uma variável de ambiente; ausente ou inválido = o padrão. 0 = sem limite. */
+function limiteDoAmbiente(nome: string, padrao: number): number {
+  const v = process.env[nome];
+  if (v === undefined || v.trim() === '') return padrao;
+  const n = Number(v);
+  return Number.isInteger(n) && n >= 0 ? n : padrao;
+}
+/**
+ * Teto por hora / por dia e o silêncio noturno. Padrão = o freio de sempre (20/h, 100/dia, 21h–7h). Ajustável no servidor,
+ * sem deploy de código (04/11/2026, pedido da Suzanne: ela confirma cada mensagem, e o teto travou respostas urgentes às 9h40):
+ * EVO_LIMITE_POR_HORA=0 e EVO_LIMITE_POR_DIA=0 tiram o teto; EVO_SILENCIO_NOTURNO=0 tira o silêncio. O "digitando" de
+ * 1,2–3 s e a confirmação em dois passos continuam sempre.
+ */
+export const LIMITES_EVOLUTION = {
+  porHora: limiteDoAmbiente('EVO_LIMITE_POR_HORA', 20),
+  porDia: limiteDoAmbiente('EVO_LIMITE_POR_DIA', 100),
+  silencio: process.env.EVO_SILENCIO_NOTURNO?.trim() !== '0',
+  horaInicio: 7,
+  horaFim: 21,
+  validadeMs: 10 * 60_000,
+  gruposMs: 30 * 60_000,
+  esperaGruposMs: 40_000,
+};
 const FUSO = 'America/Sao_Paulo';
 
 export interface ContaEvolution {
@@ -314,10 +336,10 @@ export function freio(ctx: ContextoEvolution): string | null {
   const t = ctx.agora();
   const h = horaLocal(t);
   const L = LIMITES_EVOLUTION;
-  if (h < L.horaInicio || h >= L.horaFim) return `silêncio das ${L.horaFim}h às ${L.horaInicio}h (anti-ban) — confirme de novo depois das ${L.horaInicio}h`;
+  if (L.silencio && (h < L.horaInicio || h >= L.horaFim)) return `silêncio das ${L.horaFim}h às ${L.horaInicio}h (anti-ban) — confirme de novo depois das ${L.horaInicio}h`;
   ctx.envios = ctx.envios.filter((e) => t - e < 86_400_000);
-  if (ctx.envios.filter((e) => t - e < 3_600_000).length >= L.porHora) return `limite de ${L.porHora} envios por hora (anti-ban)`;
-  if (ctx.envios.length >= L.porDia) return `limite de ${L.porDia} envios por dia (anti-ban)`;
+  if (L.porHora > 0 && ctx.envios.filter((e) => t - e < 3_600_000).length >= L.porHora) return `limite de ${L.porHora} envios por hora (anti-ban)`;
+  if (L.porDia > 0 && ctx.envios.length >= L.porDia) return `limite de ${L.porDia} envios por dia (anti-ban)`;
   return null;
 }
 
@@ -491,8 +513,9 @@ export function registrarFerramentasEvolution(server: McpServer, ctx: ContextoEv
     `WhatsApp ${nome}: preparar envio`,
     'PASSO 1 de 2 para ENVIAR mensagem ou mexer em grupo: NÃO executa nada — devolve o resumo e um código. Mostre o resumo à pessoa e só ' +
       'chame evo_confirmar se ela aprovar. Tipos: texto, midia (url), audio (url), localizacao, reacao, grupo_criar, grupo_participantes ' +
-      `(acao add/remove/promote/demote), grupo_assunto, grupo_descricao. Freio anti-ban: ${LIMITES_EVOLUTION.porHora}/hora, ${LIMITES_EVOLUTION.porDia}/dia, ` +
-      `nada entre ${LIMITES_EVOLUTION.horaFim}h e ${LIMITES_EVOLUTION.horaInicio}h.`,
+      `(acao add/remove/promote/demote), grupo_assunto, grupo_descricao. Freio anti-ban: ${LIMITES_EVOLUTION.porHora ? `${LIMITES_EVOLUTION.porHora}/hora` : 'sem teto por hora'}, ` +
+      `${LIMITES_EVOLUTION.porDia ? `${LIMITES_EVOLUTION.porDia}/dia` : 'sem teto por dia'}, ` +
+      `${LIMITES_EVOLUTION.silencio ? `nada entre ${LIMITES_EVOLUTION.horaFim}h e ${LIMITES_EVOLUTION.horaInicio}h` : 'sem silêncio noturno'}.`,
     {
       tipo: z.enum(['texto', 'midia', 'audio', 'localizacao', 'reacao', 'grupo_criar', 'grupo_participantes', 'grupo_assunto', 'grupo_descricao']),
       para: z.string().optional().describe('número ou JID do grupo (envios)'),
