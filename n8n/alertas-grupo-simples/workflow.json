@@ -1,0 +1,218 @@
+{
+  "name": "DD · Alertas grupo (simples)",
+  "nodes": [
+    {
+      "id": "a1",
+      "name": "Webhook alerta-grupo",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "alerta-grupo-simples",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "alerta-grupo",
+        "responseMode": "onReceived",
+        "options": {}
+      }
+    },
+    {
+      "id": "a2",
+      "name": "Entrada (classifica e guarda)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// ===== CONFIG (edite aqui) =====\nconst DEDUPE_HORAS = 2;                    // 1 alerta por paciente (lead) por tipo a cada 2 h\nconst SILENCIO_INICIO = 21, SILENCIO_FIM = 7; // hora de Brasília\nconst JITTER_MIN_S = 20, JITTER_MAX_S = 90;   // atraso aleatório antes de cada envio\n// ===== DESTINOS (fonte única; o build cola este bloco nos nós Entrada e Validar) =====\nconst TEST_NUM = '5563991021043';          // 🧪 vai SEMPRE para este número (João), nunca para grupo\n// Só estas unidades mandam para grupo. Para ligar a 2ª: some uma linha aqui (jid copiado do mapa do fluxo antigo K33m9ZYNA6R3h2j0).\nconst UNITS = {\n  acailandia: { jid: '120363399681615902@g.us', nome: 'Açailândia', mention: '559991063655' }, // mention: só na bandeira vermelha; '' = sem menção\n  // imperatriz: { jid: '...@g.us', nome: 'Imperatriz', mention: '' },\n};\n// Subdomínio da conta Kommo -> slug (a conta manda mais que o slug do texto). Unidade que está aqui mas não em UNITS = descartada e logada.\nconst SUBS = {\n  doutorherniaacailandia: 'acailandia', attivacorpoementeitz: 'imperatriz', araguainadoutorhernia: 'araguaina',\n  doutorherniaporto: 'porto', doutorherniabalsas: 'balsas', doutorherniacanaa: 'canaa', marabadoutorhernia: 'maraba',\n  parauapebasdoutorhernia: 'parauapebas', drherniaserra: 'serra', boavistarrdoutorhernia: 'boavista',\n  doutorherniarioverde2026: 'rioverde',\n};\n\nconst SEGREDO = '__SEGREDO_WEBHOOK__';     // o importar.sh troca por um valor aleatório; vazio = sem checagem\nconst CFG = { SILENCIO_INICIO, SILENCIO_FIM };\n// ===== AUXILIARES (iguais nos dois nós; o build cola este bloco nos dois) =====\nconst MIN = 60 * 1000;\nconst HORA = 60 * MIN;\nconst BRT = -3 * HORA; // America/Sao_Paulo = UTC-3 (sem horário de verão desde 2019)\nconst rand = (a, b) => a + Math.floor(Math.random() * (b - a + 1));\n// Relógio de parede de Brasília: campos UTC de uma data deslocada em -3h.\nconst brt = (ts) => {\n  const d = new Date(ts + BRT);\n  const p2 = (n) => String(n).padStart(2, '0');\n  return { hora: d.getUTCHours(), dia: `${d.getUTCFullYear()}-${p2(d.getUTCMonth() + 1)}-${p2(d.getUTCDate())}` };\n};\nconst emSilencio = (ts, c) => { const h = brt(ts).hora; return h >= c.SILENCIO_INICIO || h < c.SILENCIO_FIM; };\n// Próximo SILENCIO_FIM:00 (hora de Brasília) a partir de ts.\nconst proximoFimDoSilencio = (ts, c) => {\n  const l = new Date(ts + BRT);\n  let alvo = Date.UTC(l.getUTCFullYear(), l.getUTCMonth(), l.getUTCDate(), c.SILENCIO_FIM, 0, 0);\n  if (alvo <= ts + BRT) alvo += 24 * HORA;\n  return alvo - BRT;\n};\n// Só atribui o que falta: o n8n marca o static data como \"mudou\" a cada atribuição, e queremos gravar só quando há mudança de verdade.\nconst iniciaSd = (sd) => {\n  const pad = { fila: {}, saida: [], dedupe: {}, envios: {}, ultimoSlot: {}, contagem: {}, log: [], ultimoEnvio: 0, tetoLog: 0 };\n  for (const k in pad) if (sd[k] === undefined) sd[k] = pad[k];\n  return sd;\n};\nconst conta = (sd, ts, chave) => {\n  const d = brt(ts).dia;\n  sd.contagem[d] = sd.contagem[d] || {};\n  sd.contagem[d][chave] = (sd.contagem[d][chave] || 0) + 1;\n};\nconst registra = (sd, ts, linha) => {\n  const p = brt(ts);\n  sd.log.push(`${p.dia} ${String(p.hora).padStart(2, '0')}:${String(new Date(ts).getUTCMinutes()).padStart(2, '0')} ${linha}`);\n  if (sd.log.length > 120) sd.log.splice(0, sd.log.length - 120);\n};\n// \"há 25 min\" / \"há 1h05\" / \"há 2h\" / \"há 3 horas\" -> ms (0 se não achar).\nconst esperaEmMs = (t) => {\n  const mh = String(t).match(/h[áa]\\s+(\\d+)\\s*h(?:oras?)?(?:\\s*e?\\s*(\\d{1,2})(?!\\d))?/i);\n  if (mh) return (Number(mh[1]) * 60 + Number(mh[2] || 0)) * MIN;\n  const mm = String(t).match(/h[áa]\\s+(\\d+)\\s*(?:min|minutos?)\\b/i);\n  return mm ? Number(mm[1]) * MIN : 0;\n};\nconst humanizar = (ms) => {\n  const min = Math.max(0, Math.round(ms / MIN));\n  if (min < 60) return `${min} min`;\n  const h = Math.floor(min / 60), r = min % 60;\n  return r ? `${h}h${String(r).padStart(2, '0')}` : `${h}h`;\n};\n\n\nconst it = $input.first().json;\nconst body = it.body || {};\n// Sem segredo configurado (placeholder não trocado pelo importar.sh) o webhook fica FECHADO, não aberto.\nif (!SEGREDO || SEGREDO.startsWith('__')) return [{ json: { decisao: 'recusado: segredo não configurado' } }];\nif (String((it.query || {}).k || '') !== SEGREDO) return [{ json: { decisao: 'recusado: segredo errado' } }];\nconst sd = iniciaSd($getWorkflowStaticData('global'));\nconst agora = Date.now();\n\n// ---- lê o payload urlencoded do Kommo (chave achatada; cai para objeto aninhado e para qualquer [text]) ----\nconst get = (k, ...nest) => {\n  if (body[k] !== undefined && body[k] !== '') return String(body[k]);\n  try { let o = body; for (const n of nest) o = o[n]; if (o !== undefined && typeof o !== 'object') return String(o); } catch (e) {}\n  return '';\n};\nlet text = get('task[add][0][text]', 'task', 'add', 0, 'text') || get('task[update][0][text]') || String(body.text || '');\nlet leadId = get('task[add][0][element_id]', 'task', 'add', 0, 'element_id');\nif (!text) for (const k in body) { if (/\\[text\\]$/.test(k) && body[k]) { text = String(body[k]); const m = k.replace(/\\[text\\]$/, '[element_id]'); leadId = leadId || String(body[m] || ''); break; } }\nconst dec = (s) => String(s).replace(/&quot;/g, '\"').replace(/&#0?39;/g, \"'\").replace(/&apos;/g, \"'\").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');\ntext = dec(text).replace(/\\s+/g, ' ').trim();\nif (!text) return [{ json: { decisao: 'ignorado: sem texto' } }];\n\n// ---- slug + mensagem ----\n// \"ALERTA ·\" só é separador quando está no COMEÇO do texto. A tarefa criada pela regra da unidade (tools.ts) vem sem o prefixo:\n// \"[Contato: Maria] Paciente com sinal de alerta (…) — LIGAR AGORA\" — cortar depois do \"alerta\" de \"sinal de alerta\" a perdia.\nconst sub = String(body['account[subdomain]'] || (body.account || {}).subdomain || '');\nconst temPrefixo = /^\\s*ALERTA\\b/i.test(text);\nlet slug = '', msg = text;\nif (temPrefixo) {\n  const m = text.match(/^\\s*ALERTA\\s*[·:|\\-]\\s*([a-z0-9_-]+)\\s*[·:|\\-]\\s*(.+)$/i);\n  if (m) { slug = m[1].toLowerCase(); msg = m[2].trim(); }\n  else { const m2 = text.match(/^\\s*ALERTA\\s*[·:|\\-]?\\s*(.+)$/i); if (m2) msg = m2[1].trim(); }\n}\nlet nome = '';\nconst mc = msg.match(/\\[Contato:\\s*([^\\]]+)\\]\\s*/i);\nif (mc) { nome = mc[1].trim(); msg = msg.replace(mc[0], '').trim(); }\nconst teste = /^\\s*🧪/u.test(msg);\nif (teste) msg = msg.replace(/^\\s*🧪\\s*/u, '');\n\n// ---- classifica: só 3 tipos passam. O trecho citado da conversa (\"Última mensagem: ...\") sai ANTES (dado de saúde, e pode enganar o filtro) ----\nconst s = msg.replace(/ltima mensagem:.*$/i, '').toLowerCase();\nlet tipo = null;\nif (/(?<!\\b(?:sem|nenhum|nem)\\s)(?:sina(?:l|is) de alerta|bandeira vermelha|red ?flag)|🚩/u.test(s)) tipo = 'bandeira';\nelse if (/agendad[ao] pela i\\.?\\s*a/.test(s)) tipo = 'agendada';\nelse if (/(aguardando\\s+h[áa]|sem resposta|ningu[eé]m respond)/.test(s) && !/pagamento|entrada pendente|pix pendente/.test(s)) tipo = 'sem_resposta';\n// Só a bandeira vermelha vale sem o prefixo \"ALERTA ·\" (é como a regra da unidade a escreve); os outros dois exigem o prefixo.\n// Descarte de tipo não escreve nada no static data: a maioria das tarefas do Kommo passa por aqui e não pode competir com quem grava.\nif (!tipo || (!temPrefixo && tipo !== 'bandeira')) return [{ json: { decisao: 'descartado: tipo fora dos 3' } }];\n\n// ---- rota: conta Kommo primeiro, depois slug do texto ----\nlet chave = SUBS[sub] || null;\nif (!chave && slug) chave = Object.keys(UNITS).find((k) => slug === k || slug.includes(k)) || slug;\nconst u = chave && UNITS[chave] && UNITS[chave].jid ? UNITS[chave] : null;\nif (!u && !teste) {\n  conta(sd, agora, `sem_rota:${chave || sub || slug || '?'}`);\n  registra(sd, agora, `DESCARTADO sem rota (${chave || sub || slug || '?'}) tipo=${tipo} lead=${leadId || '-'}`);\n  return [{ json: { decisao: 'descartado: unidade sem rota ' + (chave || '?') } }];\n}\nconst unidadeNome = u ? u.nome : (chave || 'teste');\nconst link = leadId ? `https://${sub || 'doutorherniaacailandia'}.kommo.com/leads/detail/${leadId}` : '';\nconst quem = nome || 'paciente';\nconst jid = teste ? TEST_NUM : u.jid;\n\n// ---- anti-volume: dedupe por paciente+tipo (🧪 não entra) ----\nconst dk = `${tipo}:${jid}:${leadId || nome.toLowerCase()}`;\nfor (const k in sd.dedupe) if (agora - sd.dedupe[k] > 3 * HORA) delete sd.dedupe[k];\nif (!teste && (leadId || nome)) {\n  if (sd.dedupe[dk] && agora - sd.dedupe[dk] < DEDUPE_HORAS * HORA) {\n    conta(sd, agora, `dedupe:${tipo}`);\n    registra(sd, agora, `dedupe ${tipo} ${quem}`);\n    return [{ json: { decisao: 'descartado: já avisado nas últimas 2 h' } }];\n  }\n}\n// já tem a mesma coisa esperando na fila (ex.: 2 bandeiras do mesmo paciente na noite -> só 1 às 7h)\nif (!teste && (leadId || nome) && sd.saida.some((x) => x.dk === dk)) {\n  conta(sd, agora, `dedupe:${tipo}`);\n  registra(sd, agora, `dedupe (já na fila) ${tipo} ${quem}`);\n  return [{ json: { decisao: 'descartado: já tem um igual esperando para sair' } }];\n}\n// silêncio: bandeira fica guardada até 7h; as outras morrem à noite\nconst silencio = !teste && emSilencio(agora, CFG);\nif (silencio && tipo !== 'bandeira') {\n  conta(sd, agora, `silencio:${tipo}`);\n  registra(sd, agora, `descartado no silêncio ${tipo} ${quem}`);\n  return [{ json: { decisao: 'descartado: silêncio 21h–7h' } }];\n}\nif (leadId || nome) sd.dedupe[dk] = agora;\n\n// ---- enfileira ----\nif (tipo === 'sem_resposta') {\n  const desde = agora - esperaEmMs(msg);\n  if (teste) { // 🧪: não espera os 15 min — vira já uma mensagem de um item só, para ver o formato final\n    sd.saida.push({ id: `t${agora}`, jid, tipo, teste: true, digest: true, nome: unidadeNome, itens: [{ nome: quem, desde, link }], quando: agora + rand(JITTER_MIN_S, JITTER_MAX_S) * 1000, expira: agora + 30 * MIN });\n  } else {\n    const f = (sd.fila[jid] = sd.fila[jid] || { nome: unidadeNome, itens: [] });\n    f.nome = unidadeNome;\n    if (f.itens.some((i) => i.id === (leadId || nome))) return [{ json: { decisao: 'já na fila' } }];\n    f.itens.push({ id: leadId || nome, nome: quem, desde, link });\n  }\n  conta(sd, agora, `entrou:${tipo}`);\n  registra(sd, agora, `fila ${tipo} ${quem} (${unidadeNome})${teste ? ' [TESTE]' : ''}`);\n  return [{ json: { decisao: teste ? 'teste: sai em ~1-2 min para o João' : 'guardado para o resumo de 15 min' } }];\n}\nlet corpo;\nif (tipo === 'bandeira') {\n  corpo = `🚩 *Bandeira vermelha · ${unidadeNome}*\\n👤 ${quem} — sinal de alerta. Ligar agora.${link ? `\\n🔗 ${link}` : ''}`;\n} else {\n  const det = ((msg.replace(/\\s*Confirmar com o paciente\\.?/i, '').match(/agendad[ao] pela i\\.?\\s*a(?:\\s*sofia)?\\s*[—:\\-]\\s*(.+)$/i) || [])[1] || '').replace(/[.\\s]+$/, '');\n  corpo = `🤖 *Consulta agendada pela I.A · ${unidadeNome}*\\n👤 ${quem}${det ? ` — ${det.slice(0, 80)}` : ''}${link ? `\\n🔗 ${link}` : ''}`;\n}\nlet quando = agora + rand(JITTER_MIN_S, JITTER_MAX_S) * 1000;\nif (silencio) quando = proximoFimDoSilencio(agora, CFG) + rand(JITTER_MIN_S, JITTER_MAX_S) * 1000;\nconst mencao = tipo === 'bandeira' && u && u.mention && !teste ? u.mention : '';\nif (mencao) corpo += `\\n\\n@${mencao}`;\nsd.saida.push({ id: `${tipo[0]}${agora}`, dk, jid, tipo, teste, quando, expira: quando + (tipo === 'bandeira' ? 14 * HORA : 3 * HORA), text: corpo, mention: mencao });\nconta(sd, agora, `entrou:${tipo}`);\nregistra(sd, agora, `saida ${tipo} ${quem} (${unidadeNome})${teste ? ' [TESTE]' : ''} p/ ${new Date(quando).toISOString()}`);\nreturn [{ json: { decisao: silencio ? 'bandeira guardada até 7h' : `${tipo}: sai em ~${Math.round((quando - agora) / 1000)} s (próximo minuto do relógio)` } }];\n"
+      }
+    },
+    {
+      "id": "b1",
+      "name": "A cada minuto",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        260
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "b2",
+      "name": "Despachar (fila, teto, silêncio)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        260
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// ===== CONFIG (edite aqui) =====\nconst TETO_POR_HORA = 6;                   // mensagens por hora, por grupo\nconst SILENCIO_INICIO = 21, SILENCIO_FIM = 7; // hora de Brasília\nconst INTERVALO_MIN_S = 20;                // folga mínima entre dois envios quaisquer deste remetente\nconst DIGEST_MIN = 15;                     // resumo de \"sem resposta\" a cada 15 min (relógio: :00 :15 :30 :45)\nconst JITTER_MIN_S = 20, JITTER_MAX_S = 90;\nconst MAX_LINHAS = 8;                      // pacientes listados por resumo\nconst FILA_MAX_HORAS = 6;                  // paciente na fila há mais que isto sai da lista (não vira alerta velho)\nconst URL_ENVIO = '__URL_ENVIO__';          // webhook interno deste mesmo workflow (o importar.sh preenche; contém o segredo PRÓPRIO do envio, diferente do que vai ao Kommo)\nconst CFG = { SILENCIO_INICIO, SILENCIO_FIM };\n// ===== AUXILIARES (iguais nos dois nós; o build cola este bloco nos dois) =====\nconst MIN = 60 * 1000;\nconst HORA = 60 * MIN;\nconst BRT = -3 * HORA; // America/Sao_Paulo = UTC-3 (sem horário de verão desde 2019)\nconst rand = (a, b) => a + Math.floor(Math.random() * (b - a + 1));\n// Relógio de parede de Brasília: campos UTC de uma data deslocada em -3h.\nconst brt = (ts) => {\n  const d = new Date(ts + BRT);\n  const p2 = (n) => String(n).padStart(2, '0');\n  return { hora: d.getUTCHours(), dia: `${d.getUTCFullYear()}-${p2(d.getUTCMonth() + 1)}-${p2(d.getUTCDate())}` };\n};\nconst emSilencio = (ts, c) => { const h = brt(ts).hora; return h >= c.SILENCIO_INICIO || h < c.SILENCIO_FIM; };\n// Próximo SILENCIO_FIM:00 (hora de Brasília) a partir de ts.\nconst proximoFimDoSilencio = (ts, c) => {\n  const l = new Date(ts + BRT);\n  let alvo = Date.UTC(l.getUTCFullYear(), l.getUTCMonth(), l.getUTCDate(), c.SILENCIO_FIM, 0, 0);\n  if (alvo <= ts + BRT) alvo += 24 * HORA;\n  return alvo - BRT;\n};\n// Só atribui o que falta: o n8n marca o static data como \"mudou\" a cada atribuição, e queremos gravar só quando há mudança de verdade.\nconst iniciaSd = (sd) => {\n  const pad = { fila: {}, saida: [], dedupe: {}, envios: {}, ultimoSlot: {}, contagem: {}, log: [], ultimoEnvio: 0, tetoLog: 0 };\n  for (const k in pad) if (sd[k] === undefined) sd[k] = pad[k];\n  return sd;\n};\nconst conta = (sd, ts, chave) => {\n  const d = brt(ts).dia;\n  sd.contagem[d] = sd.contagem[d] || {};\n  sd.contagem[d][chave] = (sd.contagem[d][chave] || 0) + 1;\n};\nconst registra = (sd, ts, linha) => {\n  const p = brt(ts);\n  sd.log.push(`${p.dia} ${String(p.hora).padStart(2, '0')}:${String(new Date(ts).getUTCMinutes()).padStart(2, '0')} ${linha}`);\n  if (sd.log.length > 120) sd.log.splice(0, sd.log.length - 120);\n};\n// \"há 25 min\" / \"há 1h05\" / \"há 2h\" / \"há 3 horas\" -> ms (0 se não achar).\nconst esperaEmMs = (t) => {\n  const mh = String(t).match(/h[áa]\\s+(\\d+)\\s*h(?:oras?)?(?:\\s*e?\\s*(\\d{1,2})(?!\\d))?/i);\n  if (mh) return (Number(mh[1]) * 60 + Number(mh[2] || 0)) * MIN;\n  const mm = String(t).match(/h[áa]\\s+(\\d+)\\s*(?:min|minutos?)\\b/i);\n  return mm ? Number(mm[1]) * MIN : 0;\n};\nconst humanizar = (ms) => {\n  const min = Math.max(0, Math.round(ms / MIN));\n  if (min < 60) return `${min} min`;\n  const h = Math.floor(min / 60), r = min % 60;\n  return r ? `${h}h${String(r).padStart(2, '0')}` : `${h}h`;\n};\n\n\n// Roda a cada minuto. Muda o estado AQUI, de uma vez, e termina rápido: o n8n grava o static data inteiro no fim da\n// execução, então uma execução longa (Wait, ou o envio à Evolution, que espera o \"digitando…\") sobrescreveria o que outra\n// gravou no meio. Por isso (1) o atraso aleatório é um horário (`quando`), não um nó Wait, e (2) este gatilho só ENTREGA a\n// mensagem ao webhook interno `alerta-grupo-envio` (responde na hora) e termina; quem fala com a Evolution é essa outra\n// execução, que não mexe no static data.\nif (!URL_ENVIO || URL_ENVIO.startsWith('__')) return []; // sem destino configurado: não reserva nada\nconst sd = iniciaSd($getWorkflowStaticData('global'));\nconst agora = Date.now();\nconst silencio = emSilencio(agora, CFG);\n\n// ---- limpeza (só grava se algo saiu) ----\nfor (const j of Object.keys(sd.envios)) {\n  const v = sd.envios[j].filter((t) => agora - t < HORA);\n  if (!v.length) delete sd.envios[j]; else if (v.length !== sd.envios[j].length) sd.envios[j] = v;\n}\nfor (const d of Object.keys(sd.contagem)) if (agora - Date.parse(d + 'T12:00:00Z') > 10 * 24 * HORA) delete sd.contagem[d];\nconst vivas = sd.saida.filter((x) => !(x.expira && x.expira < agora));\nif (vivas.length !== sd.saida.length) {\n  for (const x of sd.saida) if (!vivas.includes(x)) { conta(sd, agora, `expirou:${x.tipo}`); registra(sd, agora, `EXPIROU ${x.tipo} p/ ${x.jid}`); }\n  sd.saida = vivas;\n}\n\n// ---- resumo \"sem resposta\": 1 por grupo por janela de 15 min; nada se a lista estiver vazia ----\nconst cab = (n) => [`⏱️ *Sem resposta · ${n}*`, `⏱️ *Pacientes esperando · ${n}*`, `⏱️ *Aguardando atendimento · ${n}*`][rand(0, 2)];\nconst slot = Math.floor(agora / (DIGEST_MIN * MIN));\nconst noInicioDoSlot = agora - slot * DIGEST_MIN * MIN < 5 * MIN; // o resumo só sai nos primeiros minutos de :00 :15 :30 :45\nfor (const jid of Object.keys(sd.fila)) {\n  const f = sd.fila[jid];\n  const novos = f.itens.filter((i) => agora - i.desde < FILA_MAX_HORAS * HORA);\n  if (novos.length !== f.itens.length) f.itens = novos;\n  if (!f.itens.length) { delete sd.fila[jid]; continue; }\n  if (silencio) { conta(sd, agora, 'silencio:sem_resposta'); registra(sd, agora, `fila ${f.nome} descartada no silêncio (${f.itens.length})`); delete sd.fila[jid]; continue; }\n  if (!noInicioDoSlot || sd.ultimoSlot[jid] === slot) continue; // fora da hora do resumo, ou este quarto de hora já saiu\n  sd.ultimoSlot[jid] = slot;\n  sd.saida.push({ id: `d${agora}`, jid, tipo: 'sem_resposta', teste: false, digest: true, nome: f.nome, itens: f.itens, quando: agora + rand(JITTER_MIN_S, JITTER_MAX_S) * 1000, expira: agora + 40 * MIN });\n  delete sd.fila[jid];\n}\n\n// ---- no silêncio, o que não é teste nem bandeira guardada morre ----\nif (silencio) {\n  const ficam = sd.saida.filter((x) => x.teste || x.tipo === 'bandeira');\n  if (ficam.length !== sd.saida.length) {\n    for (const x of sd.saida) if (!ficam.includes(x)) { conta(sd, agora, `silencio:${x.tipo}`); registra(sd, agora, `descartado no silêncio ${x.tipo}`); }\n    sd.saida = ficam;\n  }\n}\n\n// ---- um envio por vez (e um por minuto, pelo relógio do gatilho) ----\nif (agora - sd.ultimoEnvio < INTERVALO_MIN_S * 1000) return [];\nconst noTeto = (x) => !x.teste && (sd.envios[x.jid] || []).length >= TETO_POR_HORA;\nconst prontas = sd.saida.filter((x) => x.quando <= agora && (x.teste || !silencio));\nconst pronta = prontas\n  .filter((x) => !noTeto(x))\n  .sort((a, b) => (a.tipo === 'bandeira' ? 0 : 1) - (b.tipo === 'bandeira' ? 0 : 1) || a.quando - b.quando)[0];\nif (!pronta) {\n  if (prontas.some(noTeto) && sd.tetoLog !== Math.floor(agora / HORA)) { // 1 linha por hora, não por minuto\n    sd.tetoLog = Math.floor(agora / HORA);\n    registra(sd, agora, `teto de ${TETO_POR_HORA}/h atingido: ${prontas.filter(noTeto).length} esperando`);\n  }\n  return [];\n}\n\nsd.saida = sd.saida.filter((x) => x !== pronta);\nlet text = pronta.text;\nif (pronta.digest) {\n  const linhas = pronta.itens.slice(0, MAX_LINHAS).map((i) => `• *${i.nome}* · ${humanizar(agora - i.desde)}${i.link ? `\\n   ${i.link}` : ''}`);\n  const mais = pronta.itens.length - MAX_LINHAS;\n  text = `${cab(pronta.nome)}\\n${linhas.join('\\n')}${mais > 0 ? `\\n+ ${mais} outros` : ''}\\n\\nResponder agora.`;\n}\nif (pronta.teste) text = `🧪 TESTE\\n${text}`;\nconst out = { urlEnvio: URL_ENVIO, number: pronta.jid, text, delay: rand(1500, 4000), linkPreview: false };\nif (pronta.mention) out.mentioned = [`${pronta.mention}@s.whatsapp.net`];\nif (!pronta.teste) { (sd.envios[pronta.jid] = sd.envios[pronta.jid] || []).push(agora); conta(sd, agora, `enviado:${pronta.tipo}`); conta(sd, agora, `enviado_total:${pronta.jid}`); }\nsd.ultimoEnvio = agora;\nregistra(sd, agora, `ENVIA ${pronta.tipo}${pronta.teste ? ' [TESTE]' : ''} p/ ${pronta.jid} (${text.length} car.)`);\nreturn [{ json: out }];\n"
+      }
+    },
+    {
+      "id": "b3",
+      "name": "Entregar ao envio",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        520,
+        260
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.urlEnvio }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ number: $json.number, text: $json.text, delay: $json.delay, linkPreview: $json.linkPreview, mentioned: $json.mentioned }) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "retryOnFail": false
+    },
+    {
+      "id": "c1",
+      "name": "Webhook alerta-grupo-envio",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        520
+      ],
+      "webhookId": "alerta-grupo-envio-simples",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "alerta-grupo-envio",
+        "responseMode": "onReceived",
+        "options": {}
+      }
+    },
+    {
+      "id": "c2",
+      "name": "Validar envio",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        520
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// ===== CONFIG (edite aqui) =====\nconst INSTANCIA = 'alertas3';              // << ÚNICO lugar da instância da Evolution. Fixa: o corpo da chamada NUNCA escolhe a instância.\nconst SEGREDO_ENVIO = '__SEGREDO_ENVIO__'; // segredo PRÓPRIO deste webhook (o importar.sh gera); NÃO é o que vai na URL do Kommo\nconst DELAY_MAX_MS = 5000;                 // teto do \"digitando…\"\n// ===== DESTINOS (fonte única; o build cola este bloco nos nós Entrada e Validar) =====\nconst TEST_NUM = '5563991021043';          // 🧪 vai SEMPRE para este número (João), nunca para grupo\n// Só estas unidades mandam para grupo. Para ligar a 2ª: some uma linha aqui (jid copiado do mapa do fluxo antigo K33m9ZYNA6R3h2j0).\nconst UNITS = {\n  acailandia: { jid: '120363399681615902@g.us', nome: 'Açailândia', mention: '559991063655' }, // mention: só na bandeira vermelha; '' = sem menção\n  // imperatriz: { jid: '...@g.us', nome: 'Imperatriz', mention: '' },\n};\n// Subdomínio da conta Kommo -> slug (a conta manda mais que o slug do texto). Unidade que está aqui mas não em UNITS = descartada e logada.\nconst SUBS = {\n  doutorherniaacailandia: 'acailandia', attivacorpoementeitz: 'imperatriz', araguainadoutorhernia: 'araguaina',\n  doutorherniaporto: 'porto', doutorherniabalsas: 'balsas', doutorherniacanaa: 'canaa', marabadoutorhernia: 'maraba',\n  parauapebasdoutorhernia: 'parauapebas', drherniaserra: 'serra', boavistarrdoutorhernia: 'boavista',\n  doutorherniarioverde2026: 'rioverde',\n};\n\n\n// Webhook interno: só o gatilho de 1 minuto deve chamá-lo. Mesmo que o segredo vaze, ele só consegue mandar texto\n// (até 2000 car.) para os grupos de UNITS e para o número de teste, pela instância fixa acima, com menção só de quem está em UNITS.\nconst it = $input.first().json;\nconst b = it.body || {};\nif (!SEGREDO_ENVIO || SEGREDO_ENVIO.startsWith('__')) return [];   // sem segredo configurado: fechado\nif (String((it.query || {}).k || '') !== SEGREDO_ENVIO) return [];\nconst jidsPermitidos = new Set([TEST_NUM, ...Object.values(UNITS).map((u) => u.jid).filter(Boolean)]);\nconst mencoesPermitidas = new Set(Object.values(UNITS).map((u) => u.mention).filter(Boolean).map((n) => `${n}@s.whatsapp.net`));\nif (typeof b.number !== 'string' || !jidsPermitidos.has(b.number)) return [];\nif (typeof b.text !== 'string' || !b.text.length || b.text.length >= 2000) return [];\nconst mentioned = Array.isArray(b.mentioned) ? b.mentioned.map(String).filter((m) => mencoesPermitidas.has(m)).slice(0, 3) : [];\nreturn [{ json: {\n  instancia: INSTANCIA, number: b.number, text: b.text,\n  delay: Math.min(Math.max(Number(b.delay) || 0, 0), DELAY_MAX_MS),\n  linkPreview: false, mentioned: mentioned.length ? mentioned : undefined,\n} }];\n"
+      }
+    },
+    {
+      "id": "c3",
+      "name": "Evolution sendText",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        520,
+        520
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://evolution_api:8080/message/sendText/' + $json.instancia }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ number: $json.number, text: $json.text, delay: $json.delay, linkPreview: $json.linkPreview, mentioned: $json.mentioned }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "__CRED_EVOLUTION_ID__",
+          "name": "DD · Evolution (apikey) · alertas grupo"
+        }
+      },
+      "retryOnFail": false
+    }
+  ],
+  "connections": {
+    "Webhook alerta-grupo": {
+      "main": [
+        [
+          {
+            "node": "Entrada (classifica e guarda)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "A cada minuto": {
+      "main": [
+        [
+          {
+            "node": "Despachar (fila, teto, silêncio)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Despachar (fila, teto, silêncio)": {
+      "main": [
+        [
+          {
+            "node": "Entregar ao envio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook alerta-grupo-envio": {
+      "main": [
+        [
+          {
+            "node": "Validar envio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar envio": {
+      "main": [
+        [
+          {
+            "node": "Evolution sendText",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Sao_Paulo",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all",
+    "saveManualExecutions": true
+  }
+}
