@@ -136,12 +136,18 @@ test('o id da opção muda por conta: outra conta, outro enum_id', async () => {
   assert.deepEqual(movimentos[0].campos, [{ field_id: CAMPO_MOTIVO_ID, values: [{ enum_id: 9001 }] }]);
 });
 
-test('cartão que está em OUTRO funil vai para o PERDIDO do COMERCIAL com (pipeline_id, status_id) juntos', async () => {
+test('cartão em OUTRO funil (RESGATE): é terreno de paciente recuperado, RECUSADO e nada é escrito', async () => {
   cartao = cartaoNovo({ pipeline_id: 300, status_id: 3 });
   const r = await marcar();
-  assert.equal(r.desfecho, 'feito');
+  assert.equal(r.desfecho, 'recusado');
+  assert.match(r.recusa ?? '', /não está no funil COMERCIAL/);
+  assert.deepEqual(escritas, []);
+});
+
+test('o PERDIDO é do COMERCIAL pelo funil principal; o 143 do TRATAMENTO (TRATAMENTO CANCELADO) nunca é alvo', async () => {
+  await marcar();
   assert.equal(movimentos[0].pipelineId, 100);
-  assert.equal(movimentos[0].statusId, 143);
+  assert.notEqual(movimentos[0].pipelineId, 200);
 });
 
 test('texto para o modelo: UMA frase, sem pergunta, sem prometer', async () => {
@@ -258,6 +264,26 @@ test('chamar duas vezes no mesmo turno: a segunda não escreve etiqueta nem move
   assert.equal(r.desfecho, 'ja_estava');
   assert.deepEqual(escritas, ['pausa']);
   assert.deepEqual(movimentos, []);
+});
+
+test('já em PERDIDO, sem etiqueta, e a etiqueta falha: o motivo NÃO consta como gravado (nada foi escrito)', async () => {
+  cartao = cartaoNovo({ status_id: 143 });
+  falhar.addTag = true;
+  const r = await marcar();
+  assert.equal(r.etiquetas, false);
+  assert.notEqual(r.motivo, 'gravado');
+  assert.ok(!escritas.includes('campos'));
+  assert.ok(!notas[0].includes('motivo «Não é paciente'), 'a nota não pode afirmar o que não foi feito');
+  assert.match(textoParaOModelo(r), /o motivo/);
+});
+
+test('já marcado, mas a IA não pôde ser pausada: parcial, tarefa para a equipe, e o modelo NÃO ouve "segue pausada"', async () => {
+  cartao = cartaoNovo({ status_id: 143, _embedded: { tags: [{ id: 1, name: 'CURRÍCULO' }] } });
+  const r = await marcar({ pausedFieldId: null });
+  assert.equal(r.desfecho, 'parcial');
+  assert.equal(tarefas.length, 1);
+  assert.doesNotMatch(textoParaOModelo(r), /segue pausada/);
+  assert.doesNotMatch(textoParaOModelo(r), /a mudança para PERDIDO/, 'já estava em PERDIDO: não faltou isso');
 });
 
 test('já estava em PERDIDO (a equipe fechou) mas sem etiqueta: etiqueta + motivo, sem mover; motivo da equipe fica', async () => {

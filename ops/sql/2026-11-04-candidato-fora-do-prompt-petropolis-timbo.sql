@@ -24,6 +24,12 @@ select slug,
 from units
 where slug in ('doutor-hernia-petropolis', 'doutor-hernia-timbo');
 
+-- 2b) Outra cópia do texto? `escolherBase` usa o prompt do AgentConfig quando a automação 'prompt-da-unidade' está desligada
+--     para a unidade. Se esta consulta mostrar linhas com candidato=t, o texto de lá também precisa sair (me avise: não mexo sem ver).
+select u.slug, a.is_active, (a.system_prompt ~ 'Candidato a vaga') as candidato
+from agent_configs a join units u on u.id = a.unit_id
+where u.slug in ('doutor-hernia-petropolis', 'doutor-hernia-timbo');
+
 -- 3) Tira a linha. O bloco DO confere o resultado e aborta (rollback do backup também) se não for exatamente 1 linha por unidade.
 do $$
 declare
@@ -34,6 +40,10 @@ begin
     depois := regexp_replace(r.system_prompt, '^- Candidato a vaga:[^\n]*\n', '', 'n');
     if length(r.system_prompt) = length(depois) then
       raise exception '% : não achei a linha "- Candidato a vaga:" (o texto do banco mudou?) — nada foi alterado', r.slug;
+    end if;
+    -- o item é UMA linha; se a linha seguinte não for outro item, título ou linha em branco, o item quebrava em duas e sobraria resto
+    if r.system_prompt !~ E'(?n)^- Candidato a vaga:[^\\n]*\\n(- |#|\\n)' then
+      raise exception '% : o item "Candidato a vaga" tem mais de uma linha — confira à mão antes de rodar', r.slug;
     end if;
     if depois ~ '- Candidato a vaga:' then
       raise exception '% : sobrou outra linha de candidato — confira à mão antes de rodar', r.slug;

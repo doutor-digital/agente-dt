@@ -433,6 +433,24 @@ export function ferramentasDoTurno(mensagens: BaseMessage[]): string[] {
   return nomes;
 }
 
+/**
+ * `marcar_nao_paciente` deu certo (ou em parte) neste turno? Quem escreve é candidato a vaga e a resposta é a UMA frase de
+ * agradecimento, sem pergunta no fim — o juiz da "pergunta final" (cta-final) não pode reescrevê-la em venda de consulta.
+ * RECUSADO/ERRO = é paciente: o turno segue as regras de sempre, inclusive a pergunta final.
+ */
+export function marcouCandidatoNoTurno(mensagens: BaseMessage[]): boolean {
+  for (let i = mensagens.length - 1; i >= 0; i--) {
+    const m = mensagens[i];
+    const tipo = m.getType();
+    if (tipo === 'human') break;
+    if (tipo === 'tool' && (m as unknown as { name?: string }).name === 'marcar_nao_paciente') {
+      const conteudo = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+      if (/^(OK|PARCIAL)\b/.test(conteudo.trim())) return true;
+    }
+  }
+  return false;
+}
+
 export const INSTRUCAO_REFAZER_SEM_NOME =
   '[instrução interna, não é fala do paciente] Você já pediu o nome 2 vezes nesta conversa e ele não deu. ' +
   'Reescreva a MESMA resposta SEM pedir o nome (nem "como posso te chamar", nem "qual seu nome"): mantenha o resto, ' +

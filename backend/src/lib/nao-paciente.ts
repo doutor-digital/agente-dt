@@ -71,6 +71,8 @@ export interface ResultadoNaoPaciente {
   pausada: boolean;
   motivo: SituacaoDoMotivo;
   movido: boolean;
+  /** o cartão está em PERDIDO do COMERCIAL (movido agora, ou já estava) */
+  emPerdido: boolean;
   /** só em `recusado`: por quê (vai para a IA, em linguagem de bastidor) */
   recusa?: string;
   /** o que deu errado, para o trace e para a nota */
@@ -107,6 +109,7 @@ const recusar = (recusa: string): ResultadoNaoPaciente => ({
   pausada: false,
   motivo: 'nao_gravou',
   movido: false,
+  emPerdido: false,
   recusa,
   falhas: [],
 });
@@ -137,7 +140,12 @@ export async function marcarNaoPaciente(p: PedidoNaoPaciente): Promise<Resultado
     logger.info({ ...base }, 'nao-paciente: o cartão está no funil TRATAMENTO — é paciente, recusei');
     return recusar('este cartão está no funil TRATAMENTO: é paciente (ou ex-paciente). Não é candidato; siga o atendimento normal.');
   }
-  if (cartao.status_id === GANHO && (!comercial || cartao.pipeline_id === comercial.id)) {
+  if (comercial && cartao.pipeline_id !== comercial.id) {
+    // RESGATE, pós-venda, qualquer outro funil: a gente não sabe se é paciente recuperado. Só o COMERCIAL é terreno de candidato.
+    logger.info({ ...base, pipelineId: cartao.pipeline_id, comercialId: comercial.id }, 'nao-paciente: o cartão não está no funil COMERCIAL — recusei');
+    return recusar('este cartão não está no funil COMERCIAL (está em outro funil da conta, onde ficam pacientes). Não marque; siga o atendimento normal.');
+  }
+  if (cartao.status_id === GANHO) {
     logger.info({ ...base }, 'nao-paciente: o cartão está em GANHO — é paciente, recusei');
     return recusar('este cartão está em GANHO (já fechou tratamento): é paciente. Não é candidato; siga o atendimento normal.');
   }
@@ -154,7 +162,17 @@ export async function marcarNaoPaciente(p: PedidoNaoPaciente): Promise<Resultado
   // Idempotência: o modelo pode chamar duas vezes no mesmo turno, ou o candidato mandar o vídeo depois do PDF.
   if (jaEstaFechado && jaEtiquetado) {
     const pausada = await pausarIa(p, falhas);
-    return { desfecho: 'ja_estava', etiquetas: true, pausada, motivo: 'mantido_da_equipe', movido: false, falhas };
+    if (!pausada) {
+      await kommo
+        .createTask({
+          leadId,
+          text: `Candidato a vaga (currículo) já marcado, mas a Sofia NÃO conseguiu pausar a IA neste cartão (${falhas.join('; ')}). Marque «Pausar IA» à mão.`,
+          completeAt: agora + 3600,
+          responsibleUserId: cartao.responsible_user_id,
+        })
+        .catch((err) => logger.warn({ err: String(err), ...base }, 'nao-paciente: não consegui abrir a tarefa para a equipe'));
+    }
+    return { desfecho: pausada ? 'ja_estava' : 'parcial', etiquetas: true, pausada, motivo: 'mantido_da_equipe', movido: false, emPerdido: true, falhas };
   }
 
   const naoContatar = await etiquetaDeNaoContatar(unit, kommo);
@@ -191,6 +209,8 @@ export async function marcarNaoPaciente(p: PedidoNaoPaciente): Promise<Resultado
 
   // 4. O motivo, pelo NOME do campo e da opção. Nunca grava outra coisa no lugar.
   let motivo: SituacaoDoMotivo = 'nao_gravou';
+  /** o motivo foi achado e está pronto para ir; só vira `gravado` depois de o Kommo aceitar o PATCH que o leva */
+  let motivoPronto = false;
   let campos: Array<{ field_id: number; values: Array<Record<string, unknown>> }> | undefined;
   try {
     const todos = await kommo.listLeadCustomFieldsTyped();
@@ -209,7 +229,7 @@ export async function marcarNaoPaciente(p: PedidoNaoPaciente): Promise<Resultado
         motivo = 'mantido_da_equipe'; // a equipe já fechou e escreveu o motivo dela
       } else {
         campos = [{ field_id: achado.campo.id, values: [{ enum_id: achado.enumId as number }] }];
-        motivo = 'gravado';
+        motivoPronto = true;
       }
     }
   } catch (err) {
@@ -229,8 +249,8 @@ export async function marcarNaoPaciente(p: PedidoNaoPaciente): Promise<Resultado
     if (campos) {
       try {
         await kommo.gravarCamposDoLead(leadId, campos);
+        motivo = 'gravado';
       } catch (err) {
-        motivo = 'nao_gravou';
         falhas.push(`motivo: ${String(err)}`);
         logger.error({ err: String(err), ...base }, 'nao-paciente: não consegui gravar o motivo no cartão que já estava em PERDIDO');
       }
@@ -239,13 +259,12 @@ export async function marcarNaoPaciente(p: PedidoNaoPaciente): Promise<Resultado
     try {
       await kommo.moverCartao(leadId, { statusId: perdidoComercial, pipelineId: comercial.id, campos });
       movido = true;
+      if (motivoPronto) motivo = 'gravado';
     } catch (err) {
-      if (motivo === 'gravado') motivo = 'nao_gravou';
       falhas.push(`movimento para PERDIDO: ${String(err)}`);
       logger.error({ err: String(err), ...base, pipelineId: comercial.id, statusId: perdidoComercial }, 'nao-paciente: o Kommo recusou mover para PERDIDO (campo obrigatório no PERDIDO?)');
     }
   }
-  if (!movido && !jaEstaFechado && motivo === 'gravado') motivo = 'nao_gravou'; // o motivo só vale se foi no mesmo PATCH que moveu
 
   // 6. Rastro no cartão para a equipe; e tarefa se o cartão ficou no funil de pacientes.
   const resumo = [
@@ -272,7 +291,7 @@ export async function marcarNaoPaciente(p: PedidoNaoPaciente): Promise<Resultado
 
   logger.info({ ...base, etiquetas, pausada, motivo, movido, falhas }, 'nao-paciente: candidato tratado');
   const completo = etiquetas && pausada && (movido || jaEstaFechado) && (motivo === 'gravado' || motivo === 'mantido_da_equipe') && falhas.length === 0;
-  return { desfecho: completo ? 'feito' : 'parcial', etiquetas, pausada, motivo, movido, falhas };
+  return { desfecho: completo ? 'feito' : 'parcial', etiquetas, pausada, motivo, movido, emPerdido: movido || jaEstaFechado, falhas };
 }
 
 /** "Pausar IA" no cartão, com a marca de "fui eu" para a resposta deste turno não ser jogada fora pela trava de antes de enviar. */
@@ -311,7 +330,7 @@ export function textoParaOModelo(r: ResultadoNaoPaciente): string {
   if (r.desfecho === 'ja_estava') return `OK — este cartão já estava marcado como candidato; a IA segue pausada. ${fala}`;
   const faltou = [
     !r.etiquetas && 'a etiqueta',
-    !r.movido && 'a mudança para PERDIDO',
+    !r.emPerdido && 'a mudança para PERDIDO',
     !r.pausada && 'a pausa da IA',
     r.motivo !== 'gravado' && r.motivo !== 'mantido_da_equipe' && 'o motivo',
   ].filter(Boolean);

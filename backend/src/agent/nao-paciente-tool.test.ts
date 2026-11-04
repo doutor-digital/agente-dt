@@ -89,3 +89,18 @@ test('o texto da regra: chama a ferramenta, UMA frase, exceção da pergunta fin
   // fornecedor e propaganda ficam como estão
   assert.match(r, /Fornecedor, agência, propaganda e funcionário/);
 });
+
+test('juiz da pergunta final: candidato marcado neste turno não é reescrito em venda; RECUSADO e turno de paciente seguem a regra de sempre', async () => {
+  const { HumanMessage, AIMessage, ToolMessage } = await import('@langchain/core/messages');
+  const { marcouCandidatoNoTurno } = await import('./repeticao.js');
+  const chamada = new AIMessage({ content: '', tool_calls: [{ id: 'c1', name: 'marcar_nao_paciente', args: { tipo: 'curriculo' } }] });
+  const ok = new ToolMessage({ content: 'OK — candidato marcado: etiqueta, motivo e PERDIDO aplicados.', tool_call_id: 'c1', name: 'marcar_nao_paciente' });
+  const recusado = new ToolMessage({ content: 'RECUSADO: este cartão está com «consulta futura no cartão».', tool_call_id: 'c1', name: 'marcar_nao_paciente' });
+  const parcial = new ToolMessage({ content: 'PARCIAL — a equipe vai terminar a marcação à mão.', tool_call_id: 'c1', name: 'marcar_nao_paciente' });
+  const velha = [new HumanMessage('mando o currículo'), chamada, ok, new AIMessage('Obrigada!'), new HumanMessage('e quanto custa a consulta?')];
+
+  assert.equal(marcouCandidatoNoTurno([new HumanMessage('oi'), chamada, ok]), true);
+  assert.equal(marcouCandidatoNoTurno([new HumanMessage('oi'), chamada, parcial]), true);
+  assert.equal(marcouCandidatoNoTurno([new HumanMessage('oi'), chamada, recusado]), false);
+  assert.equal(marcouCandidatoNoTurno(velha), false, 'a marcação de um turno anterior não vale para o turno de agora');
+});

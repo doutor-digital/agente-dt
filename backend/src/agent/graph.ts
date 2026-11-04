@@ -35,6 +35,7 @@ import {
   falasDoHistorico,
   ferramentasDoTurno,
   INSTRUCAO_REFAZER_SEM_NOME,
+  marcouCandidatoNoTurno,
   pedeNome,
   travaDaResposta,
 } from './repeticao.js';
@@ -1449,7 +1450,9 @@ export async function buildAgentGraph(
       }
 
       const cta = avaliarChamadaFinal(textoFinal, { pacienteEncerrou: !!encerrou });
-      if (cta.precisaRefazer && !passouPorSinal && !respostaFixa && !detectarVazamento(textoFinal) && aplicarGuardrail(textoFinal, unit, { mensagensDoPaciente, ...extrasDoGuardrail }).triggered.length === 0) {
+      // Candidato a vaga marcado neste turno: a resposta é UMA frase de agradecimento SEM pergunta (regra do bloco <nao_paciente>).
+      const candidatoNoTurno = marcouCandidatoNoTurno(nonSystemMessages);
+      if (cta.precisaRefazer && !passouPorSinal && !respostaFixa && !candidatoNoTurno && !detectarVazamento(textoFinal) && aplicarGuardrail(textoFinal, unit, { mensagensDoPaciente, ...extrasDoGuardrail }).triggered.length === 0) {
         const t1 = performance.now();
         try {
           const refeita = (await withTimeout(
