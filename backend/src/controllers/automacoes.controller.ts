@@ -72,7 +72,7 @@ export async function definirAutomacaoHandler(req: Request, res: Response): Prom
     }
     // não basta ter clicado em "Só no papel": a última varredura da unidade tem de ter sido seca e SEM erro (tipo achado, agenda lida)
     if (hoje === 'seco' && idAutomacao === 'franquia-calendario' && !rodadaSecaLimpa(unit.slug)) {
-      res.status(400).json({ erro: `"${catalogo.nome}": ainda não houve uma rodada em "Só no papel" sem erro nesta unidade. Espere a próxima rodada (até 15 min) e confira o log "franquia-calendario: varredura concluída"` });
+      res.status(400).json({ erro: `"${catalogo.nome}": ainda não houve uma rodada em "Só no papel" sem erro nesta unidade. Espere a próxima rodada (o intervalo é FRANQUIA_CALENDARIO_INTERVALO_MIN, 15 min por padrão) e confira o log "franquia-calendario: varredura concluída"` });
       return;
     }
   }

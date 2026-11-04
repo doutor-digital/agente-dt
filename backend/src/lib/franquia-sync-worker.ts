@@ -2404,9 +2404,6 @@ async function comVaga<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-/** A trava global da franquia para quem lê a franquia de fora do sincronizador (o calendário): mesmo teto, mesma fila. */
-export const comVagaDaFranquia = comVaga;
-
 /** Varre UMA unidade. É aqui que a trava por unidade e o relógio dela se encontram. */
 async function varrerUnidade(unit: Unit, forcada = false): Promise<void> {
   const desde = emVoo.get(unit.slug);

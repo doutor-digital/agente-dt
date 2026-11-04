@@ -24,7 +24,7 @@ import { SpineService, somarDias, localParaUtcIso, type SpineSchedule } from '..
 import { contaDoKommo, grupoDaUnidade, podeMexer, valorDaUnidadeNoCartao, veredictoDoCartao, type GrupoDoCrm } from './crm-compartilhado.js';
 import { estadoGravado } from './automacoes-estado.js';
 import { normalizar } from './franquia-sync.js';
-import { comVagaDaFranquia, ondeTemSync, resolverPaciente, type EntradaDoCacheDeLead } from './franquia-sync-worker.js';
+import { ondeTemSync, resolverPaciente, type EntradaDoCacheDeLead } from './franquia-sync-worker.js';
 import {
   DURACAO_PADRAO_SEG, configDaUnidade, epochDaConsulta, intervaloDoCalendarioMs, janelaDoCalendario, modoDoCalendario, planejarCalendario,
   prefixoDaUnidade, slugNaLista, sufixoComCartao, sufixoDeTarefaSolta, textoDaTarefa, tipoPeloNome,
@@ -43,6 +43,8 @@ const MAX_LINHAS_DE_LOG_SECO = 200;
  */
 export const CRIADA_RECENTE_MS = 30 * 60_000;
 const MAX_CACHE_DO_CALENDARIO = 5000;
+/** Recusas explícitas do Kommo (400/404/422) seguidas, numa unidade, antes de parar de criar na rodada. */
+const LIMITE_DE_RECUSAS_SEGUIDAS = 3;
 const TIPO_CACHE_MS = 6 * 60 * 60_000;
 
 export interface ResumoCalendario {
@@ -144,6 +146,7 @@ async function tipoDeTarefa(unit: Pick<Unit, 'slug'>, kommo: KommoClient, conta:
     }
     return null;
   }
+  semTipoAvisadas.delete(unit.slug); // o tipo apareceu: se sumir de novo, avisa de novo
   tipoPorConta.set(conta, { id, ate: Date.now() + TIPO_CACHE_MS });
   return id;
 }
@@ -260,9 +263,9 @@ async function varrerUnidadeDoCalendario(unit: Unit, deps: DepsDoCalendario): Pr
   const { de, ate } = janelaDoCalendario(tz, agora);
   const ag = deps.buscarAgenda
     ? await deps.buscarAgenda(de, ate)
-    // cada chamada à franquia passa pela trava global dela (a do sincronizador, no máx. 6 ao mesmo tempo): o calendário não soma
-    // requisições por cima. A vaga é segurada SÓ durante a chamada (ms), nunca durante as escritas no Kommo.
-    : await comVagaDaFranquia(() => SpineService.searchSchedules(unit, { initialDate: de, endDate: ate, rowsPerPage: 100 })).then((r) => ({
+    // FORA da trava global do sincronizador (`comVaga`, 6): ele segura cada vaga a varredura INTEIRA da unidade (~15 min), e o calendário
+    // esperaria na fila por uma rodada. O limite do calendário é o PRÓPRIO: `rodarEmFaixas` (FRANQUIA_CALENDARIO_PARALELO, padrão 3 contas).
+    : await SpineService.searchSchedules(unit, { initialDate: de, endDate: ate, rowsPerPage: 100 }).then((r) => ({
         ok: r.ok, erro: r.error, agendamentos: r.data?.schedules ?? [], truncada: r.data?.truncada,
       }));
   if (!ag.ok) {
@@ -326,6 +329,7 @@ async function varrerUnidadeDoCalendario(unit: Unit, deps: DepsDoCalendario): Pr
   // dono configurado = esse, sem troca. Sem dono: o `createTask` aplica a regra de sempre (o único usuário da clínica, nunca o login da consultoria)
   const responsavel = config.responsavel ?? undefined;
   if (responsavel === undefined) await avisarSeNaoHaDonoUnico(unit, kommo);
+  else avisadasSemDono.delete(unit.slug); // dono configurado: se for removido depois, avisa de novo
   const durationSec = config.duracaoMin !== null ? config.duracaoMin * 60 : DURACAO_PADRAO_SEG;
 
   const idsPorPaciente = new Map<string, number[]>();
@@ -343,6 +347,8 @@ async function varrerUnidadeDoCalendario(unit: Unit, deps: DepsDoCalendario): Pr
     logger.info({ unit: unit.slug, ...o }, `franquia-calendario: [seco] ${msg}`);
   };
   let criadasAgora = 0; // criações que DERAM CERTO: é o que gasta a cota
+  let recusasSeguidas = 0; // recusas explícitas do Kommo (400/404/422) em fila: recusa permanente não se repete 160 vezes por rodada
+  let criacoesSuspensas = false;
   let tentativasAgora = 0; // criações tentadas (inclui as que falharam): teto para uma falha geral não martelar o Kommo e a franquia
   const aplicarAcao = async (a: Acao): Promise<void> => {
     if (a.tipo === 'sumiu') {
@@ -388,7 +394,7 @@ async function varrerUnidadeDoCalendario(unit: Unit, deps: DepsDoCalendario): Pr
     if (!completa) return;
     const recente = criadasRecentes.get(`${unit.id}:${a.idSchedule}`);
     if (recente && Date.now() - recente < CRIADA_RECENTE_MS) return;
-    if (criadasAgora >= MAX_CRIAR_POR_VARREDURA || tentativasAgora >= MAX_CRIAR_POR_VARREDURA * 2) {
+    if (criacoesSuspensas || criadasAgora >= MAX_CRIAR_POR_VARREDURA || tentativasAgora >= MAX_CRIAR_POR_VARREDURA * 2) {
       resumo.adiadas++;
       return;
     }
@@ -397,7 +403,7 @@ async function varrerUnidadeDoCalendario(unit: Unit, deps: DepsDoCalendario): Pr
     const ids = idsPorPaciente.get(normalizar(nome)) ?? [a.idSchedule];
     const r = deps.resolver
       ? await deps.resolver(nome, ids)
-      : await comVagaDaFranquia(() => resolverPaciente(unit, kommo, nome, null, ids, cacheDoCalendario)).then((x) => ({ leadId: x.leadId, confirmado: x.leadConfirmado, fone: x.fone ?? null }));
+      : await resolverPaciente(unit, kommo, nome, null, ids, cacheDoCalendario).then((x) => ({ leadId: x.leadId, confirmado: x.leadConfirmado, fone: x.fone ?? null }));
     // Só cartão PROVADO recebe a tarefa: telefone que casa com vários cartões (mãe e filha dividem o WhatsApp) é palpite. E, em Kommo
     // dividido, só o cartão que o campo «⌂ Unidade de atendimento» diz ser desta unidade.
     const leadId = r.leadId !== null && r.confirmado && (await cartaoEhDaUnidade(r.leadId)) ? r.leadId : null;
@@ -417,14 +423,27 @@ async function varrerUnidadeDoCalendario(unit: Unit, deps: DepsDoCalendario): Pr
       } catch (err) {
         // recusa explícita (400/404/422): a tarefa NÃO nasceu, então a marca não pode esconder o agendamento por 30 min. Timeout/5xx: pode ter
         // nascido, a marca fica.
-        if (err instanceof KommoApiError && [400, 404, 422].includes(err.status ?? 0)) criadasRecentes.delete(`${unit.id}:${a.idSchedule}`);
+        if (err instanceof KommoApiError && [400, 404, 422].includes(err.status ?? 0)) {
+          criadasRecentes.delete(`${unit.id}:${a.idSchedule}`);
+          // a pausa vale também no erro: o intervalo mínimo entre pedidos é da conta do Kommo, dividida com a Sofia da rede toda
+          await dormir(pausa);
+          if (++recusasSeguidas >= LIMITE_DE_RECUSAS_SEGUIDAS) {
+            criacoesSuspensas = true;
+            logger.warn(
+              { unit: unit.slug, status: err.status, taskTypeId, responsavel: responsavel ?? null },
+              `franquia-calendario: o Kommo recusou ${LIMITE_DE_RECUSAS_SEGUIDAS} criações seguidas — paro de criar nesta unidade até a próxima rodada (tipo de tarefa apagado? dono desativado?)`,
+            );
+          }
+        }
         throw err;
       }
       if (!feita) {
         resumo.erros++;
         logger.warn({ unit: unit.slug, idSchedule: a.idSchedule, solta: leadId === null }, 'franquia-calendario: o Kommo não devolveu o id da tarefa criada');
+        await dormir(pausa);
         return;
       }
+      recusasSeguidas = 0;
       await dormir(pausa);
     }
     criadasAgora++;

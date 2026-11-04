@@ -592,3 +592,31 @@ test('rodadaSecaLimpa: só vale depois de uma varredura SECA sem erro (é o que 
   await varrerCalendario(unit, deps(kommo, [ag()], { modo: 'aplicar' }));
   assert.equal(rodadaSecaLimpa(unit.slug), false, 'a última foi com escrita');
 });
+
+test('recusa PERMANENTE do Kommo (tipo apagado, dono desativado): para depois de 3 recusas seguidas, com a pausa entre elas e um aviso só', async () => {
+  const { kommo } = kommoFalso([]);
+  let posts = 0;
+  (kommo as unknown as { createTask: unknown }).createTask = async () => { posts++; throw new KommoApiError('createTask: 422', 422, null); };
+  const agenda = Array.from({ length: 40 }, (_, i) => ag({ idSchedule: 5000 + i, clientName: `PACIENTE ${i}` }));
+  const t0 = Date.now();
+  const r = await varrerCalendario(unit, { ...deps(kommo, agenda, { modo: 'aplicar' }), pausaMs: 25 });
+  assert.equal(posts, 3, 'só 3 POSTs, não 40 (nem 160)');
+  assert.ok(Date.now() - t0 >= 70, 'a pausa vale também no erro');
+  assert.equal(r.erros, 3);
+  assert.equal(r.adiadas, 37);
+  assert.equal(r.criadas, 0);
+});
+
+test('uma criação que deu certo zera a conta das recusas seguidas', async () => {
+  const { kommo, c } = kommoFalso([]);
+  let n = 0;
+  (kommo as unknown as { createTask: unknown }).createTask = async (a: Record<string, unknown>) => {
+    n++;
+    if (n === 3 || n === 6) { c.criadas.push(a); return { id: n }; }
+    throw new KommoApiError('createTask: 422', 422, null);
+  };
+  const agenda = Array.from({ length: 6 }, (_, i) => ag({ idSchedule: 6000 + i, clientName: `PACIENTE ${i}` }));
+  const r = await varrerCalendario(unit, deps(kommo, agenda, { modo: 'aplicar' }));
+  assert.equal(n, 6, 'nunca chegou a 3 recusas seguidas');
+  assert.equal(r.criadas, 2);
+});
