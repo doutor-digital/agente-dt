@@ -497,6 +497,25 @@ function quandoLocal(d: Date, fuso: string): string {
 const ANEXO: Record<string, string> = { voice: 'áudio', audio: 'áudio', picture: 'imagem', image: 'imagem', video: 'vídeo', file: 'arquivo', document: 'documento', sticker: 'figurinha', location: 'localização', contact: 'contato' };
 
 /**
+ * O Kommo recusa (403) ler as mensagens quando o token da conta não tem o escopo de chats — medido em out/2026: 249 falhas em 14 dias,
+ * todas 403, só em Imperatriz e Parauapebas (e 6 em Serra/Açailândia, em poucos cartões). Repetir não adianta e o pedido não está errado;
+ * o conserto de fundo é trocar o token da conta, que é do João. O cartão (kommo_lead) continua abrindo nessas contas.
+ */
+export function explicar403DaConversa(e: unknown, unidade: string): unknown {
+  const status = e instanceof Error && e.name === 'KommoApiError' ? (e as { status?: number }).status : undefined;
+  if (status !== 403) return e;
+  const corpo = JSON.stringify((e as { responseBody?: unknown }).responseBody ?? '');
+  const motivo = /scope/i.test(corpo)
+    ? 'o token dessa conta não tem a permissão de conversas (chats)'
+    : 'o token dessa conta não tem acesso às mensagens deste cartão';
+  return new Error(
+    `O Kommo de ${unidade} recusou a leitura da conversa (403): ${motivo}. Não é erro do seu pedido e repetir não adianta; ` +
+      'quem resolve é o João, gerando um token novo da conta com a permissão de conversas. ' +
+      'Enquanto isso o cartão abre (kommo_lead), mas as mensagens do WhatsApp não vêm por aqui.',
+  );
+}
+
+/**
  * A conversa de UM lead, como o WhatsApp a vê: cada mensagem marcada como paciente, Sofia ou equipe.
  * É conversa de saúde — por isso um lead por chamada, nunca a unidade inteira; cada consulta fica no
  * registro do conector com o usuário que pediu.
@@ -514,7 +533,9 @@ export async function kommoConversa(ctx: ContextoKommo, a: { unidade: string; le
     ...(a.inicio ? { desde: epochDoDiaLocal(a.inicio, u!.fuso) } : {}),
     ...(a.fim ? { ate: epochDoDiaLocal(a.fim, u!.fuso, true) } : {}),
   };
-  const conversa = u!.fonte.conversa.bind(u!.fonte);
+  const lerConversa = u!.fonte.conversa.bind(u!.fonte);
+  // 403 do Kommo na conversa: em português e dizendo de quem é o conserto, não "Request failed with status code 403"
+  const conversa: typeof lerConversa = (...args) => lerConversa(...args).catch((e: unknown) => { throw explicar403DaConversa(e, u!.slug); });
   let lead: KommoLead;
   let conv: Awaited<ReturnType<typeof conversa>>;
   let dono: ReturnType<typeof conferirDono> = {};

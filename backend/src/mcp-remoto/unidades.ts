@@ -53,8 +53,36 @@ export function umaPorToken(unidades: Unidade[]): { ficam: Map<string, Unidade>;
   return { ficam: limpas, descartadas };
 }
 
+/** Sem acento, minúsculas, só letras e números separados por hífen: "Rio Verde" → ["rio","verde"]. */
+function pedacos(texto: string): string[] {
+  return texto
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
+/** Funil de apoio da mesma franquia: nunca é a resposta de um nome curto ("imperatriz" não é imperatriz-financeiro). */
+const DE_APOIO = /^(resgate|financeiro|tratamento)$/;
+
 /**
- * Slug exato, ou nome curto: "serra" acha "doutor-hernia-serra". Só vale se UMA casar.
+ * Nomes que o pessoal usa e que não aparecem no slug (medido em `mcp_auditoria`, out/2026): "porto nacional" é o
+ * `doutor-hernia-porto`; "trauma" é o `default` (o Kommo do Instituto Trauma). Só valem se o alvo estiver na lista
+ * que a ferramenta tem (a Taubaté não tem Asaas: o apelido não inventa conta).
+ */
+const APELIDOS: Record<string, string> = {
+  portonacional: 'doutor-hernia-porto',
+  trauma: 'default',
+  institutotrauma: 'default',
+};
+
+/**
+ * Slug exato, ou nome curto: "serra" acha "doutor-hernia-serra". Só vale se UMA casar — ambíguo é recusa, nunca palpite.
+ * Aceita o nome como a pessoa escreve: com espaço, acento ou sem hífen ("Rio Verde", "boa vista", "Timbó" →
+ * doutor-hernia-rioverde, doutor-hernia-boa-vista, doutor-hernia-timbo). O nome curto casa por PEDAÇOS inteiros do
+ * slug (o fim: "vista" e "boa vista"; o começo: "hm" → hm-tecnologia), nunca por pedaço de palavra. Resgate,
+ * financeiro e tratamento só respondem pelo slug inteiro.
  * Mesma regra do contexto da franquia, pra Kommo e cérebro.
  */
 export function acharSlug(slugs: Iterable<string>, pedido: string): string | undefined {
@@ -62,10 +90,28 @@ export function acharSlug(slugs: Iterable<string>, pedido: string): string | und
   const todos = [...slugs];
   if (todos.includes(p)) return p;
   if (!p) return undefined;
-  const candidatos = todos.filter((s) => s.endsWith(`-${p}`));
-  if (candidatos.length === 1) return candidatos[0];
-  if (candidatos.length > 1) return undefined;
+  const chave = pedacos(p).join('');
+  if (!chave) return undefined;
+  const unico = (lista: string[]) => (lista.length === 1 ? lista[0] : undefined);
+  const lidos = todos.map((slug) => ({ slug, partes: pedacos(slug) }));
+
+  // o mesmo nome escrito de outro jeito: "rio verde", "rio-verde", "Marabá", "Doutor Digital"
+  const iguais = lidos.filter((l) => l.partes.join('') === chave).map((l) => l.slug);
+  if (iguais.length) return unico(iguais);
+
+  const apelido = APELIDOS[chave];
+  if (apelido && todos.includes(apelido)) return apelido;
+
+  // o que sobra é nome curto; quem pediu só "resgate" ou "financeiro" não pediu unidade nenhuma
+  if (pedacos(p).every((x) => DE_APOIO.test(x))) return undefined;
+  const principais = lidos.filter((l) => !l.partes.some((x) => DE_APOIO.test(x)));
+  const pelasPontas = (fim: boolean) =>
+    principais
+      .filter((l) => l.partes.some((_, i) => (fim ? l.partes.slice(-(i + 1)) : l.partes.slice(0, i + 1)).join('') === chave))
+      .map((l) => l.slug);
+  // "serra" acha doutor-hernia-serra; se mais de uma casar pelo fim, é ambíguo (não tenta o começo)
+  const pelofim = pelasPontas(true);
+  if (pelofim.length) return unico(pelofim);
   // "hm" acha "hm-tecnologia": o nome curto da empresa vem antes do hífen, ao contrário das clínicas
-  const peloComeco = todos.filter((s) => s.startsWith(`${p}-`));
-  return peloComeco.length === 1 ? peloComeco[0] : undefined;
+  return unico(pelasPontas(false));
 }

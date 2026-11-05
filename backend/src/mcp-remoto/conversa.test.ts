@@ -101,3 +101,38 @@ test('kommo_conversa: "todas" pede o teto de 500, período vira desde/ate no fus
   assert.equal(pedidos[2]![0], 30);
   await assert.rejects(() => kommoConversa(ctx, { unidade: 'serra', leadId: 7, inicio: '2026-10-16', fim: '2026-10-01' }));
 });
+
+test('kommo_conversa com 403 de escopo: explica em português quem resolve, sem "Request failed with status code 403"', async () => {
+  const { KommoApiError } = await import('../services/kommo.service.js');
+  const fonte = fonteFalsa([leadFalso(7, '2026-10-01T12:00:00Z')]);
+  fonte.conversa = async () => {
+    throw new KommoApiError('listTalkMessages(9038): Request failed with status code 403', 403, { title: 'Forbidden', detail: 'Invalid scope' });
+  };
+  const ctx = criarContextoKommo(new Map([['doutor-hernia-parauapebas', unidadeKommo('doutor-hernia-parauapebas', fonte)]]));
+  await assert.rejects(
+    kommoConversa(ctx, { unidade: 'parauapebas', leadId: 7 }),
+    (e: Error) => {
+      assert.match(e.message, /Kommo de doutor-hernia-parauapebas recusou a leitura da conversa \(403\)/);
+      assert.match(e.message, /permissão de conversas/);
+      assert.match(e.message, /João/);
+      assert.doesNotMatch(e.message, /Request failed/);
+      assert.equal(e.constructor.name, 'Error', 'não é "Pedido inválido": o pedido está certo');
+      return true;
+    },
+  );
+});
+
+test('kommo_conversa com 403 sem marca de escopo: não promete o que não sabe; outros erros passam como vieram', async () => {
+  const { KommoApiError } = await import('../services/kommo.service.js');
+  const falha = async (e: Error) => {
+    const fonte = fonteFalsa([leadFalso(7, '2026-10-01T12:00:00Z')]);
+    fonte.conversa = async () => { throw e; };
+    const ctx = criarContextoKommo(new Map([['doutor-hernia-serra', unidadeKommo('doutor-hernia-serra', fonte)]]));
+    return kommoConversa(ctx, { unidade: 'serra', leadId: 7 }).then(() => '', (x: Error) => x.message);
+  };
+  const sem = await falha(new KommoApiError('listTalkMessages(1): Request failed with status code 403', 403, { detail: 'Forbidden' }));
+  assert.match(sem, /não tem acesso às mensagens deste cartão/);
+  assert.doesNotMatch(sem, /chats/);
+  assert.equal(await falha(new KommoApiError('listTalkMessages(1): Request failed with status code 500', 500, null)), 'listTalkMessages(1): Request failed with status code 500');
+  assert.equal(await falha(new Error('socket hang up')), 'socket hang up');
+});

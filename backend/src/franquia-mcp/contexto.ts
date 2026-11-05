@@ -6,6 +6,7 @@ import { ClienteSpine, type OpcoesCliente } from './cliente.js';
 import type { Unidade } from './unidade.js';
 import { Cache, Contador, emParalelo, Orcamento, Ritmo } from './ritmo.js';
 import { ErroDeEntrada } from './travas.js';
+import { acharSlug } from '../mcp-remoto/unidades.js';
 
 export interface OpcoesContexto {
   /** intervalo mínimo entre duas requisições do mesmo token */
@@ -84,15 +85,12 @@ export function resolverUnidades(ctx: Contexto, alvo: string | string[]): Unidad
 }
 
 /**
- * Slug exato, ou nome curto: "serra" acha "doutor-hernia-serra" (slug que termina em "-serra").
+ * Slug exato ou nome curto ("serra", "rio verde", "Timbó"): a mesma regra do conector (`acharSlug`).
  * Só vale se UMA unidade casar — "dois resultados" é pergunta, não resposta.
  */
 function acharUnidade(ctx: Contexto, pedido: string): Unidade | undefined {
-  const exata = ctx.unidades.get(pedido);
-  if (exata) return exata;
-  if (!pedido) return undefined;
-  const candidatas = [...ctx.unidades.values()].filter((u) => u.slug.endsWith(`-${pedido}`));
-  return candidatas.length === 1 ? candidatas[0] : undefined;
+  const slug = acharSlug(ctx.unidades.keys(), pedido);
+  return slug ? ctx.unidades.get(slug) : undefined;
 }
 
 /**
