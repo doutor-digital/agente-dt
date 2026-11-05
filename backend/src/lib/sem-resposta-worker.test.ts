@@ -14,6 +14,7 @@ import {
   soAgradecimento,
   textoDoAlerta,
   textoDaTarefa,
+  tarefaDoTurnoPerdidoNaConta,
   verificarUnidadeSemResposta,
   type DepsSemResposta,
 } from './sem-resposta-worker.js';
@@ -482,4 +483,17 @@ test('textoDaTarefa: telefone/CPF mascarados, trecho curto, sem quebra de linha;
   assert.ok(t.length < 330, `texto curto (${t.length})`);
   assert.match(t, /Responda agora\.$/);
   assert.match(textoDaTarefa({ slug: SLUG, contato: 'Ana', esperaMs: ESPERA_MS, ultima: '' }), /\[Contato: Ana\].*\(sem texto: áudio, imagem ou figurinha\)/);
+});
+
+test('tarefaDoTurnoPerdidoNaConta: lê a marca da recuperação em TODAS as unidades da conta (comercial ↔ resgate) e devolve a mais recente', async () => {
+  const lidas: string[] = [];
+  const r = await tarefaDoTurnoPerdidoNaConta({ id: 'u1', kommoSubdomain: 'conta' }, 28691582, {
+    ids: async () => ['u1', 'u2'],
+    ler: async (unitId, leadId, regra) => {
+      lidas.push(`${unitId}:${leadId}:${regra}`);
+      return unitId === 'u2' ? depois(180_000) : null;
+    },
+  });
+  assert.equal(r?.getTime(), depois(180_000).getTime());
+  assert.deepEqual(lidas, ['u1:28691582:turno_perdido_tarefa', 'u2:28691582:turno_perdido_tarefa']);
 });

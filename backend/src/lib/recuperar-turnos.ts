@@ -4,11 +4,11 @@ import { logger } from './logger.js';
 import { liberarClaim, reivindicarComCerteza } from './dedup-cache.js';
 import { emPausa } from './pausa-unidade.js';
 import { leadPausadoPorJanela } from './pausa-lead.js';
-import { marcadoEm, marcarAviso } from './aviso-dedupe.js';
+import { marcadoEm, marcadoEmNaConta, marcarAviso } from './aviso-dedupe.js';
 import { conferirEquipe, ehRespostaAutomatica } from './pausa-equipe.js';
 import { textoDaTarefa, REGRA_TAREFA_TURNO_PERDIDO, REGRA_SEM_RESPOSTA_TAREFA } from './sem-resposta-worker.js';
 import { createKommoClient, isLeadPaused } from '../services/kommo.service.js';
-import { enviosDaSofia, mensagensOficiaisDaUnidade, type MensagemOficial } from '../services/kommo-talks.service.js';
+import { idsDasUnidadesDaConta, mensagensOficiaisDaUnidade, respostasDeTurnoDaSofia, type MensagemOficial } from '../services/kommo-talks.service.js';
 import { guardarRespostaSegurada, marcarNaoEntregue } from '../agent/entrega-falha.js';
 import { checkBusinessHours } from '../agent/prompt-composer.js';
 import { idsEmVoo } from './agent-coalescer.js';
@@ -101,6 +101,19 @@ export interface TurnoPerdido {
   input: unknown;
 }
 
+/** Uma resposta de turno da Sofia: quando saiu, o trace (turno) de que veio e quando esse trace NASCEU (null = não achei). */
+export interface EnvioDaIa {
+  em: Date;
+  traceId: string;
+  traceCriadoEm: Date | null;
+}
+
+/** O que o orquestrador sabe da liderança: de quando é a posse (piso da busca) e desde quando ela é em modo `lease` (janela de 10 min). */
+export interface PosseDaLideranca {
+  desde: Date;
+  janelaDesde: Date;
+}
+
 export interface RespostaSegurada {
   reply: string;
   mensagemId: string | null;
@@ -146,10 +159,10 @@ export interface DepsRecuperacao extends GanchosDoController {
    */
   passosDoBurst(unit: Unit, t: TurnoPerdido): Promise<PassoGravado[]>;
   /**
-   * Quando a SOFIA respondeu (resposta de turno: mensagem da IA com `traceId`) a este lead, em QUALQUER unidade da mesma
-   * conta do Kommo, desde `desde`. Não conta follow-up, reativação, lembrete, boas-vindas nem Salesbot.
+   * As respostas de TURNO da Sofia (mensagem da IA com `traceId`) a este lead, em QUALQUER unidade da mesma conta do Kommo,
+   * desde `desde`, cada uma com o trace de que veio. Não conta follow-up, reativação, lembrete, boas-vindas nem Salesbot.
    */
-  enviosDaIa(unit: Unit, leadId: string, desde: Date): Promise<Date[]>;
+  enviosDaIa(unit: Unit, leadId: string, desde: Date): Promise<EnvioDaIa[]>;
   /** Conversa oficial do Kommo. LANÇA se não leu. */
   lerConversa(unit: Unit, leadId: string): Promise<ConversaLida>;
   iaPausada(unit: Unit, leadId: string): Promise<boolean>;
@@ -248,8 +261,10 @@ export function traceDoBurstDoPedido(trace: { status: string; iaDecision: unknow
 }
 
 /** A posse da liderança — só em modo `lease`. Em `sem-lease` (banco fora) o processo se declara líder SEM ter soltado o antigo. */
-export function posseDaLideranca(e: EstadoLideranca | null): Date | null {
-  return e && e.lider && e.modo === 'lease' ? e.desde : null;
+export function posseDaLideranca(e: EstadoLideranca | null): PosseDaLideranca | null {
+  if (!e || !e.lider || e.modo !== 'lease' || !e.desde) return null;
+  // `desde` é a posse (o piso da busca não anda); `leaseDesde` é de quando o lease é meu (a janela de 10 min conta daí).
+  return { desde: e.desde, janelaDesde: e.leaseDesde ?? e.desde };
 }
 
 /**
@@ -278,6 +293,19 @@ export function turnoJaAvancou(passos: readonly PassoGravado[]): boolean {
  */
 export function roboSaiuDepois(msgs: readonly MensagemOficial[], desde: Date): boolean {
   return msgs.some((m) => m.direcao === 'saida' && m.autor === 'sofia' && m.em.getTime() > desde.getTime() && !ehRespostaAutomatica(m, msgs));
+}
+
+/**
+ * A Sofia respondeu ESTE pedido? Só vale a resposta de turno que saiu depois dele E veio de um trace que já existia quando ele
+ * chegou ou nasceu depois (o próprio trace do pedido, ou um turno que o viu). A resposta ATRASADA de um turno anterior
+ * (trace nascido antes do pedido, entregue depois dele) responde a pergunta antiga: não prova nada sobre este pedido.
+ */
+export function respondeuOPedido(envios: readonly EnvioDaIa[], t: Pick<TurnoPerdido, 'traceId' | 'criadoEm'>): boolean {
+  return envios.some(
+    (e) =>
+      e.em.getTime() > t.criadoEm.getTime() &&
+      (e.traceId === t.traceId || (e.traceCriadoEm !== null && e.traceCriadoEm.getTime() >= t.criadoEm.getTime())),
+  );
 }
 
 /**
@@ -417,10 +445,13 @@ async function recuperarDoPaciente(
   //    respondido (trace que só não fechou) e o segundo não.
   let pendentes: TurnoPerdido[] = [];
   const envios = await deps.enviosDaIa(unit, leadId, turnos[0]!.criadoEm);
+  const comRespostaDeOutroTurno = new Set<string>();
   for (const t of turnos) {
-    if (envios.some((e) => e.getTime() > t.criadoEm.getTime())) {
+    if (respondeuOPedido(envios, t)) {
       await fechar(deps, resumo, t, 'ja_respondida');
     } else {
+      // Saiu resposta da Sofia depois do pedido, mas de um turno anterior: a pergunta nova pode estar sem resposta.
+      if (envios.some((e) => e.em.getTime() > t.criadoEm.getTime())) comRespostaDeOutroTurno.add(t.traceId);
       pendentes.push(t);
     }
   }
@@ -458,6 +489,9 @@ async function recuperarDoPaciente(
   // Um robô falou com o paciente depois do pedido e a Sofia não: o pedido segue sem resposta, e retomá-lo agora seria
   // responder por cima do que o robô disse. Tarefa.
   if (roboFalouDepois) return comTarefa(deps, resumo, unit, pendentes, 'robo_falou_depois_do_pedido', agora);
+  // A resposta da Sofia depois do pedido é de um turno que nasceu ANTES dele (entregue tarde): não o respondeu. Tarefa.
+  // (só os que seguem pendentes: o pedido que a equipe já respondeu no passo 2 não contamina os outros)
+  if (pendentes.some((t) => comRespostaDeOutroTurno.has(t.traceId))) return comTarefa(deps, resumo, unit, pendentes, 'resposta_de_turno_anterior_depois_do_pedido', agora);
 
   // 5. O turno morto já tinha passado do webhook: modelo/ferramenta rodaram e não sei o que fizeram. Qualquer um do
   //    paciente nesse estado leva o grupo todo para a tarefa (a conversa é uma só). Olha o BURST inteiro, não só o trace do
@@ -526,23 +560,15 @@ const TITULO_SEGURADA = '⏭ Resposta segurada';
 /** O pedaço do Prisma que a recuperação usa — trocável no teste (a suíte roda sem banco). */
 export type BancoDaRecuperacao = Pick<typeof prisma, 'unit' | 'message' | 'executionStep' | 'executionTrace'>;
 
-/** Ids das unidades da MESMA conta do Kommo (comercial e resgate dividem o cartão); só a própria quando não há conta. */
-async function unidadesDaConta(banco: BancoDaRecuperacao, unit: Unit): Promise<string[]> {
-  const unidades = unit.kommoSubdomain
-    ? (await banco.unit.findMany({ where: { kommoSubdomain: unit.kommoSubdomain }, select: { id: true } })).map((u) => u.id)
-    : [unit.id];
-  return unidades.length ? unidades : [unit.id];
-}
-
 /** As dependências de verdade: banco, Kommo e a memória do processo. Os ganchos vêm do controller (precisa do processAgent). */
 export function depsDeProducao(
   ganchos: GanchosDoController,
   banco: BancoDaRecuperacao = prisma,
   /** O que vem de fora do banco do Prisma, trocável no teste: a marca da tarefa no cartão (`card_alert`) e os envios da Sofia. */
-  externos: { marcadoEm?: typeof marcadoEm; enviosDaSofia?: typeof enviosDaSofia } = {},
+  externos: { marcadoEm?: typeof marcadoEm; respostasDeTurno?: typeof respostasDeTurnoDaSofia } = {},
 ): DepsRecuperacao {
   const marcadoEmDoCartao = externos.marcadoEm ?? marcadoEm;
-  const enviosDaSofiaNoBanco = externos.enviosDaSofia ?? enviosDaSofia;
+  const respostasDeTurno = externos.respostasDeTurno ?? respostasDeTurnoDaSofia;
   return {
     ...ganchos,
     agora: () => Date.now(),
@@ -565,7 +591,7 @@ export function depsDeProducao(
         where: {
           trace: {
             leadId: t.leadId,
-            unitId: { in: await unidadesDaConta(banco, unit) },
+            unitId: { in: await idsDasUnidadesDaConta(unit, banco) },
             status: { in: ['RUNNING', 'FAILED'] },
             createdAt: { gte: new Date(t.criadoEm.getTime() - JANELA_DO_BURST_MS), lte: t.criadoEm },
           },
@@ -575,9 +601,18 @@ export function depsDeProducao(
       // `iaDecision` é JSON: a marca de abandono se confere aqui, não no filtro do Prisma.
       return passos.filter((p) => traceDoBurstDoPedido(p.trace)).map((p) => ({ kind: p.kind, title: p.title }));
     },
-    // Todas as unidades da mesma conta do Kommo (comercial e resgate dividem o cartão) — é o que `enviosDaSofia` faz.
-    // Só resposta de turno (com traceId): follow-up, reativação, lembrete e boas-vindas não respondem o pedido.
-    enviosDaIa: (unit, leadId, desde) => enviosDaSofiaNoBanco(unit, Number(leadId), desde, { soRespostaDeTurno: true }),
+    // Todas as unidades da mesma conta do Kommo (comercial e resgate dividem o cartão). Só resposta de turno (com traceId):
+    // follow-up, reativação, lembrete e boas-vindas não respondem o pedido. Cada uma leva o trace de que veio e quando ele nasceu.
+    async enviosDaIa(unit, leadId, desde) {
+      const respostas = await respostasDeTurno(unit, Number(leadId), desde);
+      if (respostas.length === 0) return [];
+      const traces = await banco.executionTrace.findMany({
+        where: { id: { in: [...new Set(respostas.map((r) => r.traceId))] } },
+        select: { id: true, createdAt: true },
+      });
+      const nasceu = new Map(traces.map((x) => [x.id, x.createdAt]));
+      return respostas.map((r) => ({ em: r.em, traceId: r.traceId, traceCriadoEm: nasceu.get(r.traceId) ?? null }));
+    },
     async lerConversa(unit, leadId) {
       const msgs = await mensagensOficiaisDaUnidade(unit, createKommoClient(unit), Number(leadId), 40);
       const l = await conferirEquipe(unit, Number(leadId), undefined, msgs);
@@ -605,7 +640,7 @@ export function depsDeProducao(
     liberarReivindicacao: (traceId) => liberarClaim(ESCOPO_REIVINDICACAO, traceId),
     async seguradasPendentes(unit, leadId, aPartirDe) {
       // A resposta pode ter sido segurada quando o cartão era de OUTRA unidade da mesma conta (comercial ↔ resgate).
-      const unitIds = await unidadesDaConta(banco, unit);
+      const unitIds = await idsDasUnidadesDaConta(unit, banco);
       // O que a IA segurou e ninguém entregou: depois da última resposta que saiu e até meia hora antes do pedido perdido.
       const ultima = await banco.message.findFirst({
         where: { role: 'assistant', traceId: { not: null }, conversation: { unitId: { in: unitIds }, leadId } },
@@ -644,7 +679,11 @@ export function depsDeProducao(
       // Uma tarefa criada DEPOIS deste pedido já o cobre (e leva a mensagem). Uma anterior a ele, não: a recepção pode já tê-la
       // concluído, e um segundo deploy no mesmo dia perderia outra mensagem sem aviso nenhum. Vale a desta recuperação e a do
       // alerta de sem-resposta (#182): as duas dizem "paciente sem resposta" e a recepção não precisa de duas.
-      const marcas = await Promise.all([REGRA_TAREFA_TURNO_PERDIDO, REGRA_SEM_RESPOSTA_TAREFA].map((r) => marcadoEmDoCartao(unit.id, leadId, r)));
+      // Na conta do Kommo inteira: comercial e resgate dividem o cartão, e a marca fica na unidade que abriu a tarefa.
+      const unidades = await idsDasUnidadesDaConta(unit, banco);
+      const marcas = await Promise.all(
+        [REGRA_TAREFA_TURNO_PERDIDO, REGRA_SEM_RESPOSTA_TAREFA].map((r) => marcadoEmNaConta(unidades, leadId, r, marcadoEmDoCartao)),
+      );
       if (jaHaTarefaParaOPedido(marcas, t.criadoEm)) return 'ja_existia';
       const { contato, texto } = ganchos.resumoDoPedido(t);
       const kommo = createKommoClient(unit);
@@ -680,7 +719,7 @@ export function depsDeProducao(
  */
 export function agendarRecuperacao(
   ganchos: GanchosDoController,
-  lideranca: () => Date | null,
+  lideranca: () => PosseDaLideranca | null,
   deps: DepsRecuperacao = depsDeProducao(ganchos),
 ): () => void {
   if (process.env.RECUPERAR_TURNOS_DESLIGADO === '1') {
@@ -695,14 +734,14 @@ export function agendarRecuperacao(
     timer = setTimeout(() => {
       const posse = lideranca();
       // Só o que o deploy/queda deixou para trás interessa (ver `dentroDaJanelaDeRecuperacao`): o resto fica para investigar.
-      if (!posse || !dentroDaJanelaDeRecuperacao(posse, Date.now())) {
+      if (!posse || !dentroDaJanelaDeRecuperacao(posse.janelaDesde, Date.now())) {
         proxima(INTERVALO_MS);
         return;
       }
       // Para no meio da volta se o processo vai sair ou se deixou de ser o líder (troca de lease: o outro processo é quem
       // tem turnos vivos agora, e tomá-los por perdidos seria responder em dobro).
       const parar = (): boolean => parado || lideranca() === null;
-      recuperarTurnosPerdidos(deps, posse, { voltasSemDecisao, parar })
+      recuperarTurnosPerdidos(deps, posse.desde, { voltasSemDecisao, parar })
         .then((r) => {
           if (r.candidatos > 0) logger.info(r, 'recuperar-turnos: varredura concluída');
         })

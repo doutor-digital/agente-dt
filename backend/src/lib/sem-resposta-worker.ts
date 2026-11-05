@@ -34,9 +34,9 @@ import { ehEncerramento } from './encerramento.js';
 import { mascararPii } from './pii.js';
 import { registrarSimulacao, type Simulacao } from './so-no-papel.js';
 import { esquemaDaUnidade } from './kommo-schema.js';
-import { marcarAviso, marcadoEm } from './aviso-dedupe.js';
+import { marcarAviso, marcadoEm, marcadoEmNaConta } from './aviso-dedupe.js';
 import { createKommoClient } from '../services/kommo.service.js';
-import { mensagensOficiais, type MensagemOficial } from '../services/kommo-talks.service.js';
+import { idsDasUnidadesDaConta, mensagensOficiais, type MensagemOficial } from '../services/kommo-talks.service.js';
 
 export const AUTOMACAO_SEM_RESPOSTA = 'alerta-sem-resposta';
 /** Quanto o paciente espera antes do alerta. */
@@ -235,6 +235,18 @@ async function candidatasDoBanco(unit: Unit, de: Date, ate: Date): Promise<Candi
   return out;
 }
 
+/**
+ * Quando a recuperação de turnos abriu tarefa para este lead em QUALQUER unidade da mesma conta do Kommo (comercial e resgate
+ * dividem o cartão; a marca fica na unidade que abriu). `ids` e `ler` são trocáveis no teste.
+ */
+export async function tarefaDoTurnoPerdidoNaConta(
+  unit: Pick<Unit, 'id' | 'kommoSubdomain'>,
+  leadId: number,
+  deps: { ids: typeof idsDasUnidadesDaConta; ler: typeof marcadoEm } = { ids: idsDasUnidadesDaConta, ler: marcadoEm },
+): Promise<Date | null> {
+  return marcadoEmNaConta(await deps.ids(unit), leadId, REGRA_TAREFA_TURNO_PERDIDO, deps.ler);
+}
+
 export const DEPS_SEM_RESPOSTA_PADRAO: DepsSemResposta = {
   agora: () => new Date(),
   dentroDoHorario,
@@ -263,7 +275,7 @@ export const DEPS_SEM_RESPOSTA_PADRAO: DepsSemResposta = {
   },
   tarefaEm: async (unit, leadId) => marcadoEm(unit.id, leadId, REGRA_SEM_RESPOSTA_TAREFA),
   marcarTarefa: (unit, leadId, quando) => marcarAviso(unit.id, leadId, REGRA_SEM_RESPOSTA_TAREFA, quando),
-  tarefaDoTurnoPerdidoEm: async (unit, leadId) => marcadoEm(unit.id, leadId, REGRA_TAREFA_TURNO_PERDIDO),
+  tarefaDoTurnoPerdidoEm: (unit, leadId) => tarefaDoTurnoPerdidoNaConta(unit, leadId),
   criarTarefa: async (unit, leadId, texto) => {
     const kommo = createKommoClient(unit);
     // O responsável do cartão; o `createTask` troca o login da consultoria pelo usuário da clínica (quando é um só).

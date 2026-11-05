@@ -29,46 +29,65 @@ export async function mensagensOficiais(kommo: KommoClient, leadId: number, limi
   return (await historicoOficial(kommo, leadId, limit)).mensagens;
 }
 
-/** Resposta de TURNO = a Sofia conversando: o turno grava `traceId`; follow-up, reativação, lembrete e boas-vindas não. */
-export function filtroDeEnvios(soRespostaDeTurno: boolean | undefined): { traceId?: { not: null } } {
-  return soRespostaDeTurno ? { traceId: { not: null } } : {};
-}
-
-/** Esta mensagem `assistant` conta como envio da Sofia? Sempre fora a cópia da conversa oficial; no modo estrito, só a IA conversando. */
-export function contaComoEnvioDaSofia(meta: unknown, soRespostaDeTurno: boolean | undefined): boolean {
-  return soRespostaDeTurno ? mensagemDaSofiaConversando(meta) : (meta as { origem?: string } | null)?.origem !== 'kommo_talks';
+/**
+ * Ids das unidades da MESMA conta do Kommo (comercial e resgate dividem o cartão); só a própria quando não há conta ou
+ * a consulta volta vazia. `db` é trocável no teste.
+ */
+export async function idsDasUnidadesDaConta(
+  unit: Pick<Unit, 'id' | 'kommoSubdomain'>,
+  db: Pick<typeof prisma, 'unit'> = prisma,
+): Promise<string[]> {
+  const ids = unit.kommoSubdomain
+    ? (await db.unit.findMany({ where: { kommoSubdomain: unit.kommoSubdomain }, select: { id: true } })).map((u) => u.id)
+    : [unit.id];
+  return ids.length ? ids : [unit.id];
 }
 
 /**
  * Quando a Sofia (o agente) mandou mensagem para este lead desde `desde`, em qualquer unidade da mesma conta do
  * Kommo (comercial e resgate dividem o cartão). Não conta o que entrou no histórico copiado da própria rota
  * oficial — essa cópia guarda também a fala da equipe.
- * `soRespostaDeTurno`: só a Sofia CONVERSANDO (mensagem da IA com `traceId`) — sem follow-up, reativação, lembrete, boas-vindas,
- * confirmação de véspera e cartão de chegada. É o que prova que um pedido foi respondido.
  */
-export async function enviosDaSofia(
-  unit: Pick<Unit, 'id' | 'kommoSubdomain'>,
-  leadId: number,
-  desde: Date,
-  opcoes: { soRespostaDeTurno?: boolean } = {},
-): Promise<Date[]> {
-  const unidades = unit.kommoSubdomain
-    ? (await prisma.unit.findMany({ where: { kommoSubdomain: unit.kommoSubdomain }, select: { id: true } })).map((u) => u.id)
-    : [unit.id];
+export async function enviosDaSofia(unit: Pick<Unit, 'id' | 'kommoSubdomain'>, leadId: number, desde: Date): Promise<Date[]> {
+  const unidades = await idsDasUnidadesDaConta(unit);
   const convs = await prisma.conversation.findMany({ where: { unitId: { in: unidades }, leadId: String(leadId) }, select: { id: true } });
   if (!convs.length) return [];
   const ms = await prisma.message.findMany({
-    where: {
-      conversationId: { in: convs.map((c) => c.id) },
-      role: 'assistant',
-      createdAt: { gte: desde },
-      ...filtroDeEnvios(opcoes.soRespostaDeTurno),
-    },
+    where: { conversationId: { in: convs.map((c) => c.id) }, role: 'assistant', createdAt: { gte: desde } },
     select: { createdAt: true, meta: true },
     orderBy: { createdAt: 'desc' },
     take: 300,
   });
-  return ms.filter((m) => contaComoEnvioDaSofia(m.meta, opcoes.soRespostaDeTurno)).map((m) => m.createdAt);
+  return ms.filter((m) => (m.meta as { origem?: string } | null)?.origem !== 'kommo_talks').map((m) => m.createdAt);
+}
+
+/** Uma resposta de TURNO da Sofia: quando saiu e de qual trace (turno) veio. */
+export interface RespostaDeTurno {
+  em: Date;
+  traceId: string;
+}
+
+/**
+ * As respostas de TURNO da Sofia a este lead desde `desde`, em qualquer unidade da mesma conta: mensagem da IA conversando
+ * COM `traceId` (o turno grava; follow-up, reativação, lembrete, boas-vindas, confirmação de véspera e cartão de chegada
+ * não). Devolve também o trace, para quem precisa saber a QUE pedido a resposta se refere.
+ */
+export async function respostasDeTurnoDaSofia(
+  unit: Pick<Unit, 'id' | 'kommoSubdomain'>,
+  leadId: number,
+  desde: Date,
+  db: Pick<typeof prisma, 'unit' | 'conversation' | 'message'> = prisma,
+): Promise<RespostaDeTurno[]> {
+  const unidades = await idsDasUnidadesDaConta(unit, db);
+  const convs = await db.conversation.findMany({ where: { unitId: { in: unidades }, leadId: String(leadId) }, select: { id: true } });
+  if (!convs.length) return [];
+  const ms = await db.message.findMany({
+    where: { conversationId: { in: convs.map((c) => c.id) }, role: 'assistant', createdAt: { gte: desde }, traceId: { not: null } },
+    select: { createdAt: true, meta: true, traceId: true },
+    orderBy: { createdAt: 'desc' },
+    take: 300,
+  });
+  return ms.filter((m) => !!m.traceId && mensagemDaSofiaConversando(m.meta)).map((m) => ({ em: m.createdAt, traceId: m.traceId! }));
 }
 
 /** `mensagensOficiais` com a sessão "Doutor Digital" separada: só é Sofia o que bate com um envio do agente. */

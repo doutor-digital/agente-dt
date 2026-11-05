@@ -48,6 +48,20 @@ export async function marcadoEm(unitId: string, leadId: number | string, ruleKey
   }
 }
 
+/**
+ * A marca mais recente do aviso em QUALQUER das unidades (da mesma conta do Kommo): comercial e resgate dividem o cartão, e a
+ * tarefa aberta por uma vale para a outra. `ler` é trocável no teste.
+ */
+export async function marcadoEmNaConta(
+  unitIds: readonly string[],
+  leadId: number | string,
+  ruleKey: string,
+  ler: typeof marcadoEm = marcadoEm,
+): Promise<Date | null> {
+  const marcas = await Promise.all(unitIds.map((id) => ler(id, leadId, ruleKey)));
+  return marcas.reduce<Date | null>((mais, m) => (m && (!mais || m.getTime() > mais.getTime()) ? m : mais), null);
+}
+
 /** Registra que o aviso foi criado agora (chamar só depois do sucesso na Kommo). */
 export async function marcarAviso(
   unitId: string,

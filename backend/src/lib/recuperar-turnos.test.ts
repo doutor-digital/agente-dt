@@ -15,6 +15,7 @@ const {
   posseDaLideranca,
   turnoJaAvancou,
   equipeRespondeuDepois,
+  respondeuOPedido,
   roboSaiuDepois,
   jaHaTarefaParaOPedido,
   traceDoBurstDoPedido,
@@ -85,7 +86,7 @@ function mundo(opts: { agora?: number } = {}) {
     emVoo: new Set<string>(),
     traces: [] as TraceFalso[],
     /** Mensagens da IA no BANCO, por lead (qualquer unidade da conta). */
-    respostasNoBanco: [] as Array<{ leadId: string; em: Date }>,
+    respostasNoBanco: [] as Array<{ leadId: string; em: Date; traceId?: string; traceCriadoEm?: Date | null }>,
     /** A conversa oficial do Kommo. `null` = o Kommo não respondeu. */
     kommo: { msgs: [] as MensagemOficial[], equipeComAPalavra: false, naoConferi: false } as ConversaLida | null,
     pausados: new Set<string>(),
@@ -142,7 +143,10 @@ function mundo(opts: { agora?: number } = {}) {
     },
     async enviosDaIa(unit, leadId, desde) {
       w.unidadesConsultadas.push(unit.id);
-      return w.respostasNoBanco.filter((r) => r.leadId === leadId && r.em >= desde).map((r) => r.em);
+      return w.respostasNoBanco
+        .filter((r) => r.leadId === leadId && r.em >= desde)
+        // por padrão a resposta é de um turno que nasceu logo antes dela (depois do pedido, como na vida normal)
+        .map((r) => ({ em: r.em, traceId: r.traceId ?? 'turno-x', traceCriadoEm: r.traceCriadoEm === undefined ? new Date(r.em.getTime() - 1) : r.traceCriadoEm }));
     },
     async lerConversa() {
       if (!w.kommo) throw new Error('403 do Kommo');
@@ -196,7 +200,7 @@ function mundo(opts: { agora?: number } = {}) {
         imageUrl: null,
         run: async (combinado, _a, _i, traceIds) => {
           w.saidas.push({ leadId: t.leadId, texto: combinado, traceIds });
-          w.respostasNoBanco.push({ leadId: t.leadId, em: new Date(w.agora + 1) });
+          w.respostasNoBanco.push({ leadId: t.leadId, em: new Date(w.agora + 1), traceId: t.traceId, traceCriadoEm: t.criadoEm });
           for (const id of traceIds) {
             const tr = w.traces.find((x) => x.id === id);
             if (tr) tr.status = 'SUCCESS';
@@ -329,6 +333,140 @@ test('robô falou e a IA está pausada: a equipe atende, fecha sem tarefa (pausa
   assert.equal(w.tarefas.length, 0);
 });
 
+test('a resposta automática do WhatsApp Business (saudação/ausência) NÃO conta como resposta', async () => {
+  const { w, deps } = mundo();
+  w.traces.push(lead('t1', 'oi', FOTO));
+  w.kommo = {
+    msgs: [
+      msg('entrada', FOTO),
+      msg('saida', new Date(FOTO.getTime() + 2_000), {
+        autorNome: 'WhatsApp Business',
+        texto: 'Olá! Nosso horário de atendimento é de segunda a sexta, das 8h às 18h. Já já respondemos.',
+      }),
+    ],
+    equipeComAPalavra: false,
+    naoConferi: false,
+  };
+  const r = await recuperarTurnosPerdidos(deps, POSSE);
+  assert.equal(r.retomados, 1);
+  assert.equal(w.tarefas.length, 0);
+});
+
+test('o "já respondido" é julgado por pedido: o primeiro foi respondido, o segundo não', async () => {
+  const { w, deps } = mundo();
+  w.traces.push(lead('a', 'primeira', FOTO));
+  w.traces.push(lead('b', 'segunda', new Date(FOTO.getTime() + 24_000)));
+  w.kommo = { msgs: [msg('saida', new Date(FOTO.getTime() + 10_000))], equipeComAPalavra: false, naoConferi: false };
+  const r = await recuperarTurnosPerdidos(deps, POSSE);
+  assert.equal(motivoDe(w, 'a'), `${MARCA_ABANDONADO}:ja_respondida`);
+  assert.equal(r.retomados, 1);
+  assert.deepEqual(w.retomadas, ['b']);
+  await dormir(120);
+});
+
+test('aviso do sistema ("Unable to open this message") que o Kommo marca como sofia NÃO é robô falando: o pedido volta', async () => {
+  const { w, deps } = mundo();
+  w.traces.push(lead('t1', 'oi', FOTO));
+  w.kommo = { msgs: [msg('saida', new Date(FOTO.getTime() + 3_000), { autor: 'sofia', autorNome: 'Salesbot', texto: 'Unable to open this message' })], equipeComAPalavra: false, naoConferi: false };
+  const r = await recuperarTurnosPerdidos(deps, POSSE);
+  assert.equal(r.retomados, 1);
+  assert.equal(w.tarefas.length, 0);
+  await dormir(100);
+});
+
+test('aviso do sistema marcado como equipe também não é fala humana (não fecha como respondido)', () => {
+  const t = new Date('2026-10-30T20:00:00Z');
+  assert.equal(equipeRespondeuDepois([msg('saida', new Date(t.getTime() + 3_000), { texto: 'Unable to open this message' })], t), false);
+  assert.equal(roboSaiuDepois([msg('saida', new Date(t.getTime() + 3_000), { autor: 'sofia', texto: 'Não foi possível abrir esta mensagem' })], t), false);
+  assert.equal(roboSaiuDepois([msg('saida', new Date(t.getTime() + 3_000), { autor: 'sofia', texto: 'Olá! Bem-vinda.' })], t), true);
+});
+
+test('o robô falou entre os dois pedidos (depois só do primeiro): basta UM pedido para o paciente todo ir para a tarefa', async () => {
+  const { w, deps } = mundo();
+  w.traces.push(lead('a', 'primeira', FOTO));
+  w.traces.push(lead('b', 'segunda', new Date(FOTO.getTime() + 24_000)));
+  w.kommo = { msgs: [msg('saida', new Date(FOTO.getTime() + 10_000), { autor: 'sofia', autorNome: 'Salesbot' })], equipeComAPalavra: false, naoConferi: false };
+  await recuperarTurnosPerdidos(deps, POSSE);
+  assert.equal(w.retomadas.length, 0);
+  assert.equal(w.tarefas.length, 1);
+});
+
+test('fala de entrada (paciente) nunca é resposta, mesmo marcada como equipe', () => {
+  const t = new Date('2026-10-30T20:00:00Z');
+  assert.equal(equipeRespondeuDepois([msg('entrada', new Date(t.getTime() + 60_000), { autor: 'equipe' })], t), false);
+});
+
+// ── a resposta atrasada do turno ANTERIOR não prova nada sobre o pedido novo ───────────────────────────
+
+test('respondeuOPedido: só a resposta DEPOIS do pedido, de trace nascido no pedido/depois ou do próprio trace', () => {
+  const t = { traceId: 'NOVO', criadoEm: new Date('2026-11-03T11:24:27.400Z') };
+  const em = (ms: number) => new Date(t.criadoEm.getTime() + ms);
+  assert.equal(respondeuOPedido([], t), false);
+  assert.equal(respondeuOPedido([{ em: em(3_000), traceId: 'ANT', traceCriadoEm: em(-15_000) }], t), false, 'turno anterior entregue tarde');
+  assert.equal(respondeuOPedido([{ em: em(3_000), traceId: 'ANT', traceCriadoEm: null }], t), false, 'sem saber de quando é o trace: dúvida');
+  assert.equal(respondeuOPedido([{ em: em(3_000), traceId: 'NOVO', traceCriadoEm: em(-15_000) }], t), true, 'o próprio trace do pedido');
+  assert.equal(respondeuOPedido([{ em: em(3_000), traceId: 'OUTRO', traceCriadoEm: em(0) }], t), true, 'trace nascido no instante do pedido');
+  assert.equal(respondeuOPedido([{ em: em(3_000), traceId: 'OUTRO', traceCriadoEm: em(-1) }], t), false, '1 ms antes do pedido');
+  assert.equal(respondeuOPedido([{ em: em(3_000), traceId: 'OUTRO', traceCriadoEm: em(2_000) }], t), true, 'turno que nasceu depois');
+  assert.equal(respondeuOPedido([{ em: em(0), traceId: 'NOVO', traceCriadoEm: em(0) }], t), false, 'no mesmo instante do pedido não é "depois"');
+  assert.equal(respondeuOPedido([{ em: em(-1), traceId: 'NOVO', traceCriadoEm: em(0) }], t), false, 'antes do pedido');
+  assert.equal(respondeuOPedido([{ em: em(-5_000), traceId: 'X', traceCriadoEm: em(-9_000) }, { em: em(4_000), traceId: 'NOVO', traceCriadoEm: em(0) }], t), true, 'uma que vale basta');
+});
+
+test('CORRIDA: o turno anterior entregou a resposta 3 s DEPOIS do pedido novo e o novo morreu — NÃO fecha ja_respondida: tarefa, nunca retomada', async () => {
+  const { w, deps } = mundo();
+  w.traces.push(lead('novo', 'outra pergunta', FOTO));
+  w.respostasNoBanco.push({ leadId: '5142896', em: new Date(FOTO.getTime() + 3_000), traceId: 'anterior', traceCriadoEm: new Date(FOTO.getTime() - 15_000) });
+  const r = await recuperarTurnosPerdidos(deps, POSSE);
+  assert.equal(r.retomados, 0);
+  assert.equal(w.retomadas.length, 0);
+  assert.equal(w.tarefas.length, 1, 'a recepção fica sabendo');
+  assert.equal(motivoDe(w, 'novo'), `${MARCA_ABANDONADO}:resposta_de_turno_anterior_depois_do_pedido`);
+});
+
+test('a resposta de outro turno só pesa para o pedido a que ela é posterior: o pedido que a equipe já respondeu não contamina o seguinte', async () => {
+  const { w, deps } = mundo();
+  w.traces.push(lead('a', 'primeira', FOTO));
+  w.traces.push(lead('b', 'segunda', new Date(FOTO.getTime() + 24_000)));
+  // resposta atrasada de um turno anterior, depois de 'a' e ANTES de 'b'
+  w.respostasNoBanco.push({ leadId: '5142896', em: new Date(FOTO.getTime() + 3_000), traceId: 'anterior', traceCriadoEm: new Date(FOTO.getTime() - 15_000) });
+  // a recepção respondeu a 'a' (depois de 'a', antes de 'b')
+  w.kommo = { msgs: [msg('saida', new Date(FOTO.getTime() + 10_000))], equipeComAPalavra: false, naoConferi: false };
+  const r = await recuperarTurnosPerdidos(deps, POSSE);
+  assert.equal(motivoDe(w, 'a'), `${MARCA_ABANDONADO}:ja_respondida`);
+  assert.equal(r.retomados, 1, 'b não tem resposta de outro turno depois dele');
+  assert.deepEqual(w.retomadas, ['b']);
+  await dormir(120);
+});
+
+test('CORRIDA com a IA pausada: a equipe atende, fecha sem tarefa (a pausa vem antes)', async () => {
+  const { w, deps } = mundo();
+  w.traces.push(lead('novo', 'oi', FOTO));
+  w.pausados.add('u1::5142896');
+  w.respostasNoBanco.push({ leadId: '5142896', em: new Date(FOTO.getTime() + 3_000), traceId: 'anterior', traceCriadoEm: new Date(FOTO.getTime() - 15_000) });
+  await recuperarTurnosPerdidos(deps, POSSE);
+  assert.equal(motivoDe(w, 'novo'), `${MARCA_ABANDONADO}:ia_pausada`);
+  assert.equal(w.tarefas.length, 0);
+});
+
+test('a resposta do PRÓPRIO trace do pedido (o turno respondeu e o deploy matou antes de fechar) fecha ja_respondida', async () => {
+  const { w, deps } = mundo();
+  w.traces.push(lead('novo', 'oi', FOTO));
+  w.respostasNoBanco.push({ leadId: '5142896', em: new Date(FOTO.getTime() + 8_000), traceId: 'novo', traceCriadoEm: FOTO });
+  await recuperarTurnosPerdidos(deps, POSSE);
+  assert.equal(motivoDe(w, 'novo'), `${MARCA_ABANDONADO}:ja_respondida`);
+  assert.equal(w.tarefas.length, 0);
+});
+
+test('resposta exatamente no instante do pedido não o responde (sem >=)', async () => {
+  const { w, deps } = mundo();
+  w.traces.push(lead('novo', 'oi', FOTO));
+  w.respostasNoBanco.push({ leadId: '5142896', em: FOTO, traceId: 'novo', traceCriadoEm: FOTO });
+  const r = await recuperarTurnosPerdidos(deps, POSSE);
+  assert.equal(r.retomados, 1);
+  await dormir(100);
+});
+
 test('caso Bebedouro (lead 7165547, 03/11): pedido 11:24:27, a recepção respondeu com nota de voz às 11:26:59 → ja_respondida, sem tarefa e sem retomada', async () => {
   const posse = new Date('2026-11-03T11:26:00Z');
   const { w, deps } = mundo({ agora: posse.getTime() + 120_000 });
@@ -416,10 +554,13 @@ test('filtroDePerdidos: só RUNNING, só kommo_chat, dentro da janela, sem os em
 });
 
 test('posseDaLideranca: só líder em modo lease; sem-lease (banco fora) e aguardando não varrem', () => {
-  const base: EstadoLideranca = { lider: true, modo: 'lease', desde: POSSE, dono: 'a', falhasSeguidas: 0, ultimaVerificacao: null };
-  assert.equal(posseDaLideranca(base), POSSE);
+  const base: EstadoLideranca = { lider: true, modo: 'lease', desde: POSSE, leaseDesde: POSSE, dono: 'a', falhasSeguidas: 0, ultimaVerificacao: null };
+  assert.deepEqual(posseDaLideranca(base), { desde: POSSE, janelaDesde: POSSE });
+  const depois = new Date(POSSE.getTime() + 5 * 60_000);
+  assert.deepEqual(posseDaLideranca({ ...base, leaseDesde: depois }), { desde: POSSE, janelaDesde: depois }, 'o piso fica na posse; a janela conta do lease');
   assert.equal(posseDaLideranca({ ...base, modo: 'sem-lease' }), null, 'sem lease o antigo pode estar vivo');
-  assert.equal(posseDaLideranca({ ...base, lider: false, modo: 'aguardando', desde: null }), null);
+  assert.equal(posseDaLideranca({ ...base, lider: false, modo: 'aguardando', desde: null, leaseDesde: null }), null);
+  assert.equal(posseDaLideranca({ ...base, desde: null }), null);
   assert.equal(posseDaLideranca(null), null);
 });
 
@@ -974,7 +1115,7 @@ test('dentroDaJanelaDeRecuperacao: só nos 10 min seguintes à posse (a borda in
 
 test('agendarRecuperacao: varre dentro da janela e, passada ela, NÃO varre mais (só reagenda)', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.parse('2026-11-03T11:26:00Z') });
-  const posse = new Date(Date.now());
+  const posse = { desde: new Date(Date.now()), janelaDesde: new Date(Date.now()) };
   let buscas = 0;
   const { deps } = mundo();
   const contando: DepsRecuperacao = { ...deps, buscarPerdidos: async () => { buscas++; return []; } };
@@ -993,6 +1134,30 @@ test('agendarRecuperacao: varre dentro da janela e, passada ela, NÃO varre mais
   await andar(INTERVALO_MS); // 11 min: passou de 10
   for (let i = 0; i < 5; i++) await andar(INTERVALO_MS);
   assert.equal(buscas, 5, 'passada a janela não varre mais');
+  parar();
+});
+
+test('agendarRecuperacao: a JANELA de 10 min conta do lease (janelaDesde) e o PISO da busca da posse (desde) — cada um com o seu', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.parse('2026-11-03T11:08:00Z') });
+  // virou líder às 11:00 em sem-lease e o lease só veio às 11:08 (agora)
+  const posse = { desde: new Date('2026-11-03T11:00:00Z'), janelaDesde: new Date(Date.now()) };
+  const pisos: Date[] = [];
+  const { deps } = mundo();
+  const contando: DepsRecuperacao = { ...deps, buscarPerdidos: async (p) => { pisos.push(p.criadosDepois); return []; } };
+  const ganchos = { unidadeDona: async () => null, retomar: async () => 'retomado' as const, resumoDoPedido: () => ({ contato: null, texto: '' }) };
+  const parar = agendarRecuperacao(ganchos, () => posse, contando);
+  const andar = async (ms: number) => {
+    t.mock.timers.tick(ms);
+    for (let i = 0; i < 30; i++) await Promise.resolve();
+  };
+  await andar(ATRASO_INICIAL_MS); // 11:09 — 9 min depois da posse, 1 min depois do lease
+  for (let i = 0; i < 3; i++) await andar(INTERVALO_MS); // até 11:15 — 15 min depois da posse, 7 min depois do lease: ainda varre
+  assert.equal(pisos.length, 4, 'a janela conta do lease, não da posse');
+  assert.ok(pisos.every((d) => d.getTime() === posse.desde.getTime() - FOLGA_ANTES_DA_POSSE_MS), 'o piso fica na posse (menos a folga)');
+  for (let i = 0; i < 4; i++) await andar(INTERVALO_MS); // passou de 10 min do lease
+  const n = pisos.length;
+  for (let i = 0; i < 3; i++) await andar(INTERVALO_MS);
+  assert.equal(pisos.length, n, 'passados 10 min do lease não varre mais');
   parar();
 });
 
@@ -1027,7 +1192,7 @@ const ganchosVazios = { unidadeDona: async () => null, retomar: async () => 'ret
 test('em produção, criarTarefa não abre outra quando o alerta de sem-resposta (sem_resposta_tarefa) já abriu uma DEPOIS do pedido', async () => {
   const pedido = new Date('2026-11-03T11:24:27Z');
   const consultadas: string[] = [];
-  const deps = depsDeProducao(ganchosVazios, {} as BancoDaRecuperacao, {
+  const deps = depsDeProducao(ganchosVazios, bancoFalso({ unidadesDaConta: ['u1'] }).banco, {
     marcadoEm: async (_u, _l, regra) => {
       consultadas.push(regra);
       return regra === 'sem_resposta_tarefa' ? new Date(pedido.getTime() + 5 * 60_000) : null;
@@ -1040,10 +1205,23 @@ test('em produção, criarTarefa não abre outra quando o alerta de sem-resposta
 
 test('em produção, criarTarefa não abre outra quando a própria recuperação já abriu uma DEPOIS do pedido', async () => {
   const pedido = new Date('2026-11-03T11:24:27Z');
-  const deps = depsDeProducao(ganchosVazios, {} as BancoDaRecuperacao, {
+  const deps = depsDeProducao(ganchosVazios, bancoFalso({ unidadesDaConta: ['u1'] }).banco, {
     marcadoEm: async (_u, _l, regra) => (regra === 'turno_perdido_tarefa' ? new Date(pedido.getTime() + 60_000) : null),
   });
   assert.equal(await deps.criarTarefa(UNIT_A, { traceId: 't', unitId: 'u1', leadId: '7165547', criadoEm: pedido, input: {} }, 1), 'ja_existia');
+});
+
+test('criarTarefa: a tarefa aberta pela OUTRA unidade da mesma conta do Kommo (comercial ↔ resgate) também cobre o pedido', async () => {
+  const pedido = new Date('2026-11-03T11:24:27Z');
+  const lidas: string[] = [];
+  const deps = depsDeProducao(ganchosVazios, bancoFalso({ unidadesDaConta: ['u1', 'u2'] }).banco, {
+    marcadoEm: async (unitId, _l, regra) => {
+      lidas.push(`${unitId}:${regra}`);
+      return unitId === 'u2' && regra === 'sem_resposta_tarefa' ? new Date(pedido.getTime() + 60_000) : null;
+    },
+  });
+  assert.equal(await deps.criarTarefa(UNIT_A, { traceId: 't', unitId: 'u1', leadId: '7165547', criadoEm: pedido, input: {} }, 1), 'ja_existia');
+  assert.equal(lidas.length, 4, `2 unidades × 2 marcas: ${lidas}`);
 });
 
 // ── produção contra um banco falso: as consultas certas, com os filtros certos ─────────────────────────
@@ -1173,16 +1351,32 @@ test('iaPausada em produção: relê a unidade do banco (a recepção pode ter p
   assert.equal(await deps.iaPausada(UNIT_A, '5142896'), true, 'sem unidade não há IA a retomar');
 });
 
-test('em produção, o "já respondido" do banco pede SÓ resposta de turno (com traceId) — follow-up, boas-vindas e lembrete não fecham o pedido', async () => {
+test('em produção, enviosDaIa devolve cada resposta de turno com o trace de que veio e quando ele NASCEU (null se não achar)', async () => {
+  const nasceu = new Date('2026-11-03T11:24:12Z');
+  const { banco, chamadas } = bancoFalso();
+  (banco.executionTrace as unknown as { findMany: (a: unknown) => Promise<unknown[]> }).findMany = async (a) => {
+    chamadas.traceFindMany.push(a);
+    return [{ id: 'ANT', createdAt: nasceu }];
+  };
   const pedidas: unknown[] = [];
-  const deps = depsDeProducao(ganchosVazios, {} as BancoDaRecuperacao, {
-    enviosDaSofia: async (...args) => {
-      pedidas.push(args[3]);
-      return [];
+  const deps = depsDeProducao(ganchosVazios, banco, {
+    respostasDeTurno: async (unit, leadId, desde) => {
+      pedidas.push([unit.id, leadId, desde]);
+      return [
+        { em: new Date('2026-11-03T11:24:30Z'), traceId: 'ANT' },
+        { em: new Date('2026-11-03T11:24:31Z'), traceId: 'SUMIU' },
+      ];
     },
   });
-  await deps.enviosDaIa(UNIT_A, '7165547', FOTO);
-  assert.deepEqual(pedidas, [{ soRespostaDeTurno: true }]);
+  const r = await deps.enviosDaIa(UNIT_A, '7165547', FOTO);
+  assert.deepEqual(pedidas, [['u1', 7165547, FOTO]]);
+  assert.deepEqual(r, [
+    { em: new Date('2026-11-03T11:24:30Z'), traceId: 'ANT', traceCriadoEm: nasceu },
+    { em: new Date('2026-11-03T11:24:31Z'), traceId: 'SUMIU', traceCriadoEm: null },
+  ]);
+  assert.deepEqual((chamadas.traceFindMany[0] as { where: { id: { in: string[] } } }).where.id.in.sort(), ['ANT', 'SUMIU']);
+  const vazio = depsDeProducao(ganchosVazios, banco, { respostasDeTurno: async () => [] });
+  assert.deepEqual(await vazio.enviosDaIa(UNIT_A, '1', FOTO), []);
 });
 
 test('o "já respondido" do banco é por pedido, sem folga: a resposta do turno ANTERIOR (1,5 s antes do 2º pedido) não fecha o 2º', async () => {
@@ -1222,4 +1416,56 @@ test('passosDoBurst: descarta os passos de trace FAILED por erro do modelo (a ma
   ];
   const passos = await depsDeProducao(ganchosVazios, banco).passosDoBurst(UNIT_A, { traceId: 't', unitId: 'u1', leadId: '1', criadoEm: FOTO, input: {} });
   assert.deepEqual(passos.map((p) => p.kind), ['TOOL_CALL', 'WEBHOOK_RECEIVED']);
+});
+
+// ── passosDoBurst com um banco que RESPEITA o filtro (o falso de cima devolve o que mandarem, qualquer que seja o where) ────
+
+interface PassoComTrace {
+  kind: string;
+  title: string;
+  trace: { id: string; leadId: string; unitId: string; status: string; iaDecision: unknown; createdAt: Date };
+}
+
+/** Avalia só os filtros que `passosDoBurst` usa; um filtro que ele passe a usar sem o teste saber QUEBRA o teste de propósito. */
+function casaComOFiltroDoTrace(where: Record<string, unknown>, tr: PassoComTrace['trace']): boolean {
+  return Object.entries(where).every(([chave, v]) => {
+    if (chave === 'id') return tr.id === v;
+    if (chave === 'leadId') return tr.leadId === v;
+    if (chave === 'unitId') return (v as { in: string[] }).in.includes(tr.unitId);
+    if (chave === 'status') return (v as { in: string[] }).in.includes(tr.status);
+    if (chave === 'createdAt') {
+      const { gte, lte } = v as { gte?: Date; lte?: Date };
+      return (!gte || tr.createdAt >= gte) && (!lte || tr.createdAt <= lte);
+    }
+    throw new Error(`filtro do trace que o teste não conhece: ${chave}`);
+  });
+}
+
+function bancoComPassos(passos: PassoComTrace[], unidadesDaConta = ['u1', 'u2']) {
+  const { banco } = bancoFalso({ unidadesDaConta });
+  (banco.executionStep as unknown as { findMany: (a: { where: { trace: Record<string, unknown> } }) => Promise<unknown[]> }).findMany = async (a) =>
+    passos.filter((p) => casaComOFiltroDoTrace(a.where.trace, p.trace));
+  return banco;
+}
+
+test('passosDoBurst (banco que respeita o filtro): o satélite enxerga o passo do DONO, que é de outro trace', async () => {
+  const mk = (id: string, deslocamentoMs: number, over: Partial<PassoComTrace['trace']> = {}) => ({
+    id, leadId: '5142896', unitId: 'u1', status: 'RUNNING', iaDecision: null as unknown, createdAt: new Date(FOTO.getTime() + deslocamentoMs), ...over,
+  });
+  const passos: PassoComTrace[] = [
+    { kind: 'WEBHOOK_RECEIVED', title: 'm', trace: mk('satelite', 0) },
+    { kind: 'TOOL_CALL', title: 'do-dono', trace: mk('dono', -10_000) },
+    { kind: 'TOOL_CALL', title: 'dono-outra-unidade-da-conta', trace: mk('d2', -5_000, { unitId: 'u2' }) },
+    { kind: 'TOOL_CALL', title: 'outro-paciente', trace: mk('o', -5_000, { leadId: '999' }) },
+    { kind: 'TOOL_CALL', title: 'outra-conta', trace: mk('c', -5_000, { unitId: 'u9' }) },
+    { kind: 'TOOL_CALL', title: 'longe-demais', trace: mk('l', -JANELA_DO_BURST_MS - 1_000) },
+    { kind: 'TOOL_CALL', title: 'depois-do-pedido', trace: mk('p', 5_000) },
+    { kind: 'TOOL_CALL', title: 'sucesso', trace: mk('s', -5_000, { status: 'SUCCESS' }) },
+    { kind: 'TOOL_CALL', title: 'falha-do-modelo', trace: mk('f', -5_000, { status: 'FAILED', iaDecision: 'erro' }) },
+    { kind: 'TOOL_CALL', title: 'fechado-pela-recuperacao', trace: mk('r', -5_000, { status: 'FAILED', iaDecision: `${MARCA_ABANDONADO}:x` }) },
+  ];
+  const deps = depsDeProducao(ganchosVazios, bancoComPassos(passos));
+  const vistos = (await deps.passosDoBurst(UNIT_A, { traceId: 'satelite', unitId: 'u1', leadId: '5142896', criadoEm: FOTO, input: {} })).map((p) => p.title);
+  assert.deepEqual(vistos.sort(), ['do-dono', 'dono-outra-unidade-da-conta', 'fechado-pela-recuperacao', 'm'].sort());
+  assert.equal(turnoJaAvancou(await deps.passosDoBurst(UNIT_A, { traceId: 'satelite', unitId: 'u1', leadId: '5142896', criadoEm: FOTO, input: {} })), true);
 });

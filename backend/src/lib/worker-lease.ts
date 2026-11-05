@@ -94,6 +94,8 @@ export interface EstadoLideranca {
   /** `lease` = com o lease do banco · `sem-lease` = banco indisponível, rodando por precaução · `aguardando` = outro processo lidera. */
   modo: 'lease' | 'sem-lease' | 'aguardando';
   desde: Date | null;
+  /** Desde quando o lease do banco é meu (= o processo antigo soltou). Igual a `desde` quando assumi já em `lease`; null fora do modo `lease`. */
+  leaseDesde: Date | null;
   dono: string;
   falhasSeguidas: number;
   ultimaVerificacao: Date | null;
@@ -125,6 +127,7 @@ export function criarSupervisor(deps: SupervisorDeps): {
     lider: false,
     modo: 'aguardando',
     desde: null,
+    leaseDesde: null,
     dono: deps.dono ?? DONO,
     falhasSeguidas: 0,
     ultimaVerificacao: null,
@@ -134,12 +137,13 @@ export function criarSupervisor(deps: SupervisorDeps): {
     if (!estado.lider) {
       estado.lider = true;
       estado.desde = new Date();
+      estado.leaseDesde = modo === 'lease' ? estado.desde : null;
       deps.iniciar();
       logger.info({ dono: estado.dono, modo }, 'workers: este processo assumiu a liderança');
     } else if (estado.modo === 'sem-lease' && modo === 'lease') {
-      // Rodava SEM lease (banco fora) e agora tem o lease: a posse que vale é a de agora. A de antes não provava que o
-      // processo antigo tinha soltado o lease, e a recuperação de turnos conta a janela a partir dela.
-      estado.desde = new Date();
+      // Rodava SEM lease (banco fora) e agora tem o lease. `desde` (a posse, o piso da busca da recuperação de turnos) NÃO anda:
+      // empurrá-lo deixaria sem rastro o trace morto entre uma coisa e outra. O que anda é o início da janela de 10 min.
+      estado.leaseDesde = new Date();
       logger.info({ dono: estado.dono }, 'workers: este processo passou de sem-lease para lease');
     }
     estado.modo = modo;
@@ -167,6 +171,7 @@ export function criarSupervisor(deps: SupervisorDeps): {
     } else if (estado.lider) {
       estado.lider = false;
       estado.desde = null;
+      estado.leaseDesde = null;
       estado.modo = 'aguardando';
       deps.parar();
       logger.warn({ dono: estado.dono }, 'workers: outro processo detém o lease — workers desligados aqui');
