@@ -67,6 +67,7 @@ function normalizarResposta(s: string): string {
 }
 import { podarHistorico } from './history-window.js';
 import { mensagensParaPlanoB } from './raciocinio-plano-b.js';
+import { alvoDoReescritor, podeRefazerNoPrincipal, type PlanoBEmUso } from './pos-processamento-plano-b.js';
 import { sanearHistorico, TEXTO_FERRAMENTA_INTERROMPIDA } from './historico-orfao.js';
 import { toolsParaOpenAI } from './tools-openai.js';
 import { respostasSeguradas } from './entrega-falha.js';
@@ -857,6 +858,8 @@ export async function buildAgentGraph(
     let modeloAtivo = model;
     let provedorAtivo: string = provider;
     let respondeuPlanoB = false;
+    // Qual plano B respondeu (se algum): as chamadas de pós-processamento saem por ele, não pelo principal que caiu.
+    let planoBEmUso: PlanoBEmUso | null = null;
     try {
       // Provedor comprovadamente fora não ganha mais 35 segundos de espera por
       // mensagem: pula direto pro plano B, e volta sozinho quando se recuperar.
@@ -963,6 +966,7 @@ export async function buildAgentGraph(
           )) as AIMessage;
 
           respondeuPlanoB = true;
+          planoBEmUso = { provider: planoB.provider, modelName: planoB.modelName };
           await recorder.step({
             kind: 'THINKING',
             title: `🔁 Plano B: ${planoB.provider} (${planoB.modelName}) respondeu no lugar do modelo principal`,
@@ -1022,15 +1026,16 @@ export async function buildAgentGraph(
         let reescrito = '';
         let erroReescrita: string | null = null;
         try {
-          const revisor = createChatModel(unit, { model: modelName, temperature: 0, maxTokens: 400 });
+          // Plano B respondeu: o reescritor sai por ele (o principal está fora e custaria o tempo limite inteiro).
+          const alvo = alvoDoReescritor({ unit, modelName, provedorAtivo, planoBEmUso, criarModelo: createChatModel, maxTokens: 400 });
           const r = (await withTimeout(
             invokeChatModel({
-              model: revisor as unknown as Parameters<typeof invokeChatModel>[0]['model'],
+              model: alvo.model as unknown as Parameters<typeof invokeChatModel>[0]['model'],
               messages: [new SystemMessage(SISTEMA_REESCRITOR_BASTIDOR), new HumanMessage(pedidoAoReescritor(userMessage ?? null, text))],
               unitId: unit.id,
               traceId: recorder.traceId,
-              modelName,
-              provider: provedorAtivo,
+              modelName: alvo.modelName,
+              provider: alvo.provider,
               tools: [],
               conversaId: idDaConversa,
             }),
@@ -1452,7 +1457,7 @@ export async function buildAgentGraph(
       const cta = avaliarChamadaFinal(textoFinal, { pacienteEncerrou: !!encerrou });
       // Candidato a vaga marcado neste turno: a resposta é UMA frase de agradecimento SEM pergunta (regra do bloco <nao_paciente>).
       const candidatoNoTurno = marcouCandidatoNoTurno(nonSystemMessages);
-      if (cta.precisaRefazer && !passouPorSinal && !respostaFixa && !candidatoNoTurno && !detectarVazamento(textoFinal) && aplicarGuardrail(textoFinal, unit, { mensagensDoPaciente, ...extrasDoGuardrail }).triggered.length === 0) {
+      if (cta.precisaRefazer && !passouPorSinal && !respostaFixa && podeRefazerNoPrincipal(respondeuPlanoB) && !candidatoNoTurno && !detectarVazamento(textoFinal) && aplicarGuardrail(textoFinal, unit, { mensagensDoPaciente, ...extrasDoGuardrail }).triggered.length === 0) {
         const t1 = performance.now();
         try {
           const refeita = (await withTimeout(
