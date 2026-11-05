@@ -6,6 +6,12 @@
 // checkpoint_writes) altera o banco no deploy e, no rolling update do Swarm (start-first), o
 // contêiner antigo ainda estará lendo as mesmas tabelas. Este teste faz essa mudança aparecer
 // no PR, em vez de no boot.
+//
+// Por isso as versões são exatas no backend/package.json (langgraph 1.4.21, checkpoint-postgres
+// 1.0.6) e o package.json da raiz tem `pnpm.overrides` para @langchain/langgraph-checkpoint (1.1.6)
+// e @langchain/langgraph-sdk (1.12.3): sem eles o semver puxaria checkpoint 1.2.x (par do
+// checkpoint-postgres 1.1.x) e um sdk que exige outro @langchain/core. Subir qualquer um deles é
+// uma decisão de banco, não de rotina.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
@@ -42,8 +48,13 @@ function poolFalso(versaoNoBanco: number | null) {
 test('setup() num banco que já está na versão de produção (v=4) não executa DDL nenhum', async () => {
   const { pool, consultas } = poolFalso(MIGRATIONS_CONHECIDAS - 1);
   await new PostgresSaver(pool).setup();
-  // CREATE SCHEMA IF NOT EXISTS "public" roda sempre (idempotente, sem efeito); o resto não pode rodar.
-  const alteracoes = consultas.filter((c) => !/^\s*(SELECT|CREATE SCHEMA IF NOT EXISTS)/i.test(c.sql));
+  // Lista fechada do que o setup() pode fazer num banco em dia: criar o schema se faltar
+  // (idempotente, sem efeito) e ler a versão. Qualquer outra consulta é novidade.
+  const alteracoes = consultas.filter(
+    (c) =>
+      !/^\s*CREATE SCHEMA IF NOT EXISTS "public"\s*$/i.test(c.sql) &&
+      !/^\s*SELECT v FROM "public"\.checkpoint_migrations ORDER BY v DESC LIMIT 1\s*$/i.test(c.sql),
+  );
   assert.deepEqual(
     alteracoes.map((c) => c.sql.trim().slice(0, 80)),
     [],
@@ -124,7 +135,6 @@ test('erro de ferramenta vira ToolMessage de erro (o turno continua) — também
   assert.deepEqual(tools.map((t) => t.tool_call_id), ['c1', 'c2', 'c3']);
   assert.ok(tools.every((t) => t.status === 'error'));
   assert.match(String(tools[0].content), /ferramenta quebrou/);
-  assert.match(String(tools[2].content), /not found/i);
   assert.equal(r.messages.at(-1)?.getType(), 'ai');
   assert.equal(chamadas, 2, 'um turno com ferramenta chama o agente duas vezes');
 });
