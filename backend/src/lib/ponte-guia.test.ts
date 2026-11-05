@@ -319,6 +319,11 @@ describe('guia da Ponte — campo que um robô da unidade preenche (valor-consul
     assert.ok(faltam({ 2449931: { enum_id: 1845440 } }, ['¤ Valor da Consulta']).includes('¤ Valor da Consulta'));
   });
 
+  it('consulta JÁ PASSOU (vencida sem baixa, retorno antigo): o robô não grava, então a SDR continua preenchendo', () => {
+    const passada = { [DATA]: { value: 1_700_000_000 }, 2449931: { enum_id: 1845440 } };
+    assert.ok(faltam(passada, ['¤ Valor da Consulta']).includes('¤ Valor da Consulta'));
+  });
+
   it('campo da conta de tipo que o robô não grava (texto): a SDR continua preenchendo', () => {
     const comoTexto = DEFS.map((d) => (d.name === '¤ Valor da Consulta' ? { ...d, type: 'text' } : d));
     assert.ok(faltam(COM_DATA, ['¤ Valor da Consulta'], comoTexto).includes('¤ Valor da Consulta'));
