@@ -104,6 +104,13 @@ test('dois RH ligados continuam pedindo o sistema (isso não mudou), e o Descont
   assert.equal(resolverSistema(ctx, undefined, 'dsc').slug, 'descontratos');
 });
 
+test('com dois RH e o Descontratos, pedir a leitura sem "sistema" lista TODAS as contas (inclusive o Descontratos) no erro', () => {
+  const { ctx } = doisSistemas();
+  ctx.contas.set('hm-tecnologia', { ...ctx.contas.get('doutor-digital')!, slug: 'hm-tecnologia', nome: 'HM' });
+  assert.throws(() => resolverSistema(ctx, undefined, 'qualquer'), /informe o sistema\. Ligados: doutor-digital, descontratos, hm-tecnologia$/);
+  assert.throws(() => resolverSistema(ctx, undefined), /Ligados: doutor-digital, hm-tecnologia$/);
+});
+
 test('sem a conta do Descontratos tudo é como antes; só o Descontratos ligado: sem "sistema" a leitura usa ele, as ferramentas do RH explicam', () => {
   const { ctx } = doisSistemas();
   const soRh = criarContextoSistemas(new Map([['doutor-digital', ctx.contas.get('doutor-digital')!]]));
@@ -228,6 +235,7 @@ test('concluir: entradas ruins são recusadas ANTES de falar com o servidor', as
     [{ id: 'a b', acao: 'finalizar' }, /id inválido/],
     [{ protocolo: 'a;b', acao: 'finalizar' }, /protocolo inválido/],
     [{ id: 'a', acao: 'pagar' }, /valor_pago/],
+    [{ id: 'a', acao: 'pagar', valor_pago: 0 }, /maior que zero/],
     [{ id: 'a', acao: 'finalizar', valor_pago: 10 }, /só da acao "pagar"/],
     [{ id: 'a', acao: 'quitado', data_pagamento: '2026-11-04' }, /só da acao "pagar"/],
   ];
@@ -330,6 +338,11 @@ test('montagem das contas: RH pelo slug da unidade, Descontratos pelo slug fixo;
   assert.equal(dois.size, 1);
   assert.equal(avisos.length, 1);
   assert.deepEqual(avisos[0]!.unidades, ['a', 'b']);
+  // a primeira linha ilegível não derruba o Descontratos se a segunda é boa
+  avisos.length = 0;
+  const segunda = montarContasSistemas([], [{ slug: 'a', nome: 'A', chave: 'lixo' }, { slug: 'b', nome: 'B', chave: dscJson }], (a) => avisos.push(a));
+  assert.deepEqual([...segunda.keys()], ['descontratos']);
+  assert.equal(avisos.length, 2);
   avisos.length = 0;
   const colide = montarContasSistemas([{ slug: 'descontratos', nome: 'Unidade', chave: rhJson }], [{ slug: 'x', nome: 'X', chave: dscJson }], (a) => avisos.push(a));
   assert.equal(tipoDaConta(colide.get('descontratos')!), 'rh');

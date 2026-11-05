@@ -68,6 +68,7 @@ export async function contasComChave(provedor: Provedor): Promise<Array<{ unitId
   const linhas = await prisma.chaveDeIntegracao.findMany({
     where: { provedor },
     include: { unit: { select: { slug: true, name: true, isActive: true, spineTimezone: true } } },
+    orderBy: { criadoEm: 'asc' }, // determinístico: o Descontratos (uma conta só) vale a linha mais antiga
   });
   const out: Array<{ unitId: string; slug: string; nome: string; conta: string | null; chave: string; fuso: string | null }> = [];
   for (const l of linhas) {

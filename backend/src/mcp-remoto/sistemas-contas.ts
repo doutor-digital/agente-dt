@@ -31,15 +31,17 @@ export function montarContasSistemas(
       avisar({ slug: c.slug, motivo: err instanceof Error ? err.message : 'inválida' });
     }
   }
-  if (descontratos.length > 1) avisar({ unidades: descontratos.map((c) => c.slug), motivo: 'o Descontratos está cadastrado em mais de uma unidade; só a primeira vale' });
-  const dsc = descontratos[0];
-  if (dsc) {
+  if (descontratos.length > 1) avisar({ unidades: descontratos.map((c) => c.slug), motivo: 'o Descontratos está cadastrado em mais de uma unidade; vale a primeira que estiver legível (a mais antiga)' });
+  // a primeira linha LEGÍVEL vale (as linhas vêm da mais antiga para a mais nova): uma ilegível não derruba o Descontratos se houver outra boa
+  for (const dsc of descontratos) {
     try {
       const cfg = lerConfigSistemas(dsc.chave);
       if (contas.has(SLUG_DESCONTRATOS)) throw new Error(`já existe uma unidade chamada ${SLUG_DESCONTRATOS}`);
       contas.set(SLUG_DESCONTRATOS, { slug: SLUG_DESCONTRATOS, nome: 'Descontratos/Ficha', tipo: 'dsc', fonte: fonteDe(cfg, fetcher) });
+      break;
     } catch (err) {
       avisar({ slug: dsc.slug, motivo: err instanceof Error ? err.message : 'inválida' });
+      if (contas.has(SLUG_DESCONTRATOS)) break; // o slug já é de uma unidade do RH: outra linha não resolve
     }
   }
   return contas;

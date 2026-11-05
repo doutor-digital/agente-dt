@@ -82,7 +82,8 @@ export function resolverSistema(ctx: ContextoSistemas, pedido?: string, exigir: 
     if (!candidatas.length && exigir === 'qualquer') candidatas = todas;
     if (candidatas.length === 1) return candidatas[0]!;
     if (!candidatas.length) throw new ErroDeEntrada(`o sistema ${NOME_DO_TIPO[tipoPadrao]} ainda não está ligado neste conector. Ligados: ${[...ctx.contas.keys()].join(', ')}`);
-    throw new ErroDeEntrada(`informe o sistema. Ligados: ${candidatas.map((c) => c.slug).join(', ')}`);
+    // a lista mostra TODAS as contas (inclusive o Descontratos) para quem pediu a leitura "do Descontratos" sem dizer o sistema
+    throw new ErroDeEntrada(`informe o sistema. Ligados: ${(exigir === 'qualquer' ? todas : candidatas).map((c) => c.slug).join(', ')}`);
   }
   const apelido = APELIDOS_DSC.test(pedido.trim()) ? todas.filter((c) => tipoDaConta(c) === 'dsc') : [];
   const slug = apelido.length === 1 ? apelido[0]!.slug : acharSlug(ctx.contas.keys(), pedido);
@@ -448,7 +449,7 @@ export async function prepararDescontrato(
   if (id !== undefined && !ID_DESCONTRATO.test(id)) throw new ErroDeEntrada('id inválido');
   if (protocolo !== undefined && !PROTOCOLO_DESCONTRATO.test(protocolo)) throw new ErroDeEntrada('protocolo inválido (ex.: ARA-2026-001)');
   if (a.acao === 'pagar') {
-    if (typeof a.valor_pago !== 'number' || !Number.isFinite(a.valor_pago) || a.valor_pago < 0) throw new ErroDeEntrada('pagar precisa de valor_pago (em reais, número): o valor que o comprovante mostra');
+    if (typeof a.valor_pago !== 'number' || !Number.isFinite(a.valor_pago) || a.valor_pago <= 0) throw new ErroDeEntrada('pagar precisa de valor_pago maior que zero (em reais, número): o valor que o comprovante mostra. Sem valor a devolver, use finalizar ou quitado');
   } else if (a.valor_pago !== undefined || a.data_pagamento !== undefined) {
     throw new ErroDeEntrada('valor_pago e data_pagamento são só da acao "pagar"');
   }
@@ -693,7 +694,7 @@ export function registrarEscritaSistemas(
         id: z.string().max(64).optional().describe('dsc_docs.id do descontrato (col = cancelamentos)'),
         protocolo: z.string().max(40).optional().describe('protocolo, ex. ARA-2026-001 (use o id se houver mais de um com o mesmo protocolo)'),
         acao: z.enum(ACOES_DESCONTRATO),
-        valor_pago: z.number().min(0).max(10_000_000).optional().describe('só em "pagar": o valor pago, em reais (ex. 150.5)'),
+        valor_pago: z.number().max(10_000_000).optional().describe('só em "pagar": o valor pago, em reais (ex. 150.5)'),
         data_pagamento: z.string().max(10).optional().describe('só em "pagar": AAAA-MM-DD (padrão: hoje, fuso de Araguaína; não pode ser futura)'),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
