@@ -102,37 +102,57 @@ test('kommo_conversa: "todas" pede o teto de 500, período vira desde/ate no fus
   await assert.rejects(() => kommoConversa(ctx, { unidade: 'serra', leadId: 7, inicio: '2026-10-16', fim: '2026-10-01' }));
 });
 
-test('kommo_conversa com 403 de escopo: explica em português quem resolve, sem "Request failed with status code 403"', async () => {
+test('kommo_conversa com 403 de escopo: explica em português quem resolve, guarda a exceção original', async () => {
   const { KommoApiError } = await import('../services/kommo.service.js');
+  const original = new KommoApiError('listTalkMessages(9038): Request failed with status code 403', 403, { title: 'Forbidden', detail: 'Invalid scope' });
   const fonte = fonteFalsa([leadFalso(7, '2026-10-01T12:00:00Z')]);
-  fonte.conversa = async () => {
-    throw new KommoApiError('listTalkMessages(9038): Request failed with status code 403', 403, { title: 'Forbidden', detail: 'Invalid scope' });
-  };
+  fonte.conversa = async () => { throw original; };
   const ctx = criarContextoKommo(new Map([['doutor-hernia-parauapebas', unidadeKommo('doutor-hernia-parauapebas', fonte)]]));
   await assert.rejects(
     kommoConversa(ctx, { unidade: 'parauapebas', leadId: 7 }),
     (e: Error) => {
       assert.match(e.message, /Kommo de doutor-hernia-parauapebas recusou a leitura da conversa \(403\)/);
-      assert.match(e.message, /permissão de conversas/);
+      assert.match(e.message, /token dessa conta não tem a permissão de conversas/);
       assert.match(e.message, /João/);
-      assert.doesNotMatch(e.message, /Request failed/);
+      assert.match(e.message, /listTalkMessages\(9038\).*403\]$/, 'a auditoria grava o status e a rota originais');
+      assert.equal(e.cause, original);
       assert.equal(e.constructor.name, 'Error', 'não é "Pedido inválido": o pedido está certo');
       return true;
     },
   );
 });
 
-test('kommo_conversa com 403 sem marca de escopo: não promete o que não sabe; outros erros passam como vieram', async () => {
+test('kommo_conversa com 403 SEM marca de escopo: não culpa o token, não promete nada, diz que a causa não foi identificada', async () => {
   const { KommoApiError } = await import('../services/kommo.service.js');
   const falha = async (e: Error) => {
     const fonte = fonteFalsa([leadFalso(7, '2026-10-01T12:00:00Z')]);
     fonte.conversa = async () => { throw e; };
     const ctx = criarContextoKommo(new Map([['doutor-hernia-serra', unidadeKommo('doutor-hernia-serra', fonte)]]));
-    return kommoConversa(ctx, { unidade: 'serra', leadId: 7 }).then(() => '', (x: Error) => x.message);
+    return kommoConversa(ctx, { unidade: 'serra', leadId: 7 }).then(() => null, (x: Error) => x);
   };
-  const sem = await falha(new KommoApiError('listTalkMessages(1): Request failed with status code 403', 403, { detail: 'Forbidden' }));
-  assert.match(sem, /não tem acesso às mensagens deste cartão/);
-  assert.doesNotMatch(sem, /chats/);
-  assert.equal(await falha(new KommoApiError('listTalkMessages(1): Request failed with status code 500', 500, null)), 'listTalkMessages(1): Request failed with status code 500');
-  assert.equal(await falha(new Error('socket hang up')), 'socket hang up');
+  for (const corpo of [{ detail: 'Forbidden' }, { title: 'Too many requests' }, null, 'texto qualquer']) {
+    const original = new KommoApiError('listTalkMessages(1): Request failed with status code 403', 403, corpo);
+    const x = (await falha(original))!;
+    assert.match(x.message, /recusou a leitura da conversa \(403\) e o conector não identificou a causa/);
+    assert.match(x.message, /excesso de chamadas/);
+    assert.doesNotMatch(x.message, /token|chats|permissão de conversas|João|repetir não adianta|cartão abre|kommo_lead/i);
+    assert.match(x.message, /listTalkMessages\(1\).*403\]$/);
+    assert.equal(x.cause, original);
+  }
+});
+
+test('kommo_conversa: outros erros passam como vieram (500, rede, 403 que não é do Kommo)', async () => {
+  const { KommoApiError } = await import('../services/kommo.service.js');
+  const falha = async (e: Error) => {
+    const fonte = fonteFalsa([leadFalso(7, '2026-10-01T12:00:00Z')]);
+    fonte.conversa = async () => { throw e; };
+    const ctx = criarContextoKommo(new Map([['doutor-hernia-serra', unidadeKommo('doutor-hernia-serra', fonte)]]));
+    return kommoConversa(ctx, { unidade: 'serra', leadId: 7 }).then(() => null, (x: Error) => x);
+  };
+  const e500 = new KommoApiError('listTalkMessages(1): Request failed with status code 500', 500, null);
+  assert.equal(await falha(e500), e500);
+  const rede = new Error('socket hang up');
+  assert.equal(await falha(rede), rede);
+  const outro403 = Object.assign(new Error('403 de outra coisa'), { status: 403, responseBody: 'Invalid scope' });
+  assert.equal(await falha(outro403), outro403);
 });

@@ -8,7 +8,7 @@
  */
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { KommoLead, KommoPipeline, NotaKommo } from '../services/kommo.service.js';
+import { eh403DeEscopo, type KommoLead, type KommoPipeline, type NotaKommo } from '../services/kommo.service.js';
 import { TETO_HISTORICO, type MensagemOficial } from '../services/kommo-talks-normalizar.js';
 import type { Auditar } from '../franquia-mcp/ferramentas.js';
 import { instanteNoFuso } from '../franquia-mcp/normalizar.js';
@@ -497,22 +497,24 @@ function quandoLocal(d: Date, fuso: string): string {
 const ANEXO: Record<string, string> = { voice: 'áudio', audio: 'áudio', picture: 'imagem', image: 'imagem', video: 'vídeo', file: 'arquivo', document: 'documento', sticker: 'figurinha', location: 'localização', contact: 'contato' };
 
 /**
- * O Kommo recusa (403) ler as mensagens quando o token da conta não tem o escopo de chats — medido em out/2026: 249 falhas em 14 dias,
- * todas 403, só em Imperatriz e Parauapebas (e 6 em Serra/Açailândia, em poucos cartões). Repetir não adianta e o pedido não está errado;
- * o conserto de fundo é trocar o token da conta, que é do João. O cartão (kommo_lead) continua abrindo nessas contas.
+ * 403 do Kommo na leitura da conversa. Só o corpo do erro separa as duas causas (mesma regra do freio em `kommo.service`):
+ * - "Invalid scope": o token da conta não tem a permissão de chats. Medido em out/2026, 243 das 249 falhas de 14 dias (Parauapebas 144,
+ *   Imperatriz 99); repetir não adianta, o conserto é um token novo da conta e é do João. O cartão (kommo_lead) abre nessas contas.
+ * - sem a marca: pode ser bloqueio por excesso de chamadas ou cartão sem acesso. As outras 6 falhas (Serra, Açailândia) são assim, e
+ *   as duas contas leem conversas normalmente com o mesmo token (637 e 682 leituras ok), então aqui NÃO se culpa o token.
+ * A exceção original segue em `cause`, e o status e a rota vão no fim do texto, que é o que a auditoria grava.
  */
 export function explicar403DaConversa(e: unknown, unidade: string): unknown {
   const status = e instanceof Error && e.name === 'KommoApiError' ? (e as { status?: number }).status : undefined;
   if (status !== 403) return e;
-  const corpo = JSON.stringify((e as { responseBody?: unknown }).responseBody ?? '');
-  const motivo = /scope/i.test(corpo)
-    ? 'o token dessa conta não tem a permissão de conversas (chats)'
-    : 'o token dessa conta não tem acesso às mensagens deste cartão';
-  return new Error(
-    `O Kommo de ${unidade} recusou a leitura da conversa (403): ${motivo}. Não é erro do seu pedido e repetir não adianta; ` +
-      'quem resolve é o João, gerando um token novo da conta com a permissão de conversas. ' +
-      'Enquanto isso o cartão abre (kommo_lead), mas as mensagens do WhatsApp não vêm por aqui.',
-  );
+  const detalhe = `[Kommo: ${(e as Error).message}]`;
+  const texto = eh403DeEscopo((e as { responseBody?: unknown }).responseBody)
+    ? `O Kommo de ${unidade} recusou a leitura da conversa (403): o token dessa conta não tem a permissão de conversas (chats). ` +
+      'Não é erro do seu pedido e repetir não adianta; quem resolve é o João, gerando um token novo da conta com a permissão de conversas. ' +
+      'Enquanto isso o cartão abre (kommo_lead), mas as mensagens do WhatsApp não vêm por aqui.'
+    : `O Kommo de ${unidade} recusou a leitura da conversa (403) e o conector não identificou a causa: o corpo da resposta não diz que falta permissão, ` +
+      'então pode ser bloqueio temporário por excesso de chamadas ou um cartão sem acesso.';
+  return new Error(`${texto} ${detalhe}`, { cause: e });
 }
 
 /**

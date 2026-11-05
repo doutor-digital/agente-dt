@@ -69,10 +69,11 @@ const DE_APOIO = /^(resgate|financeiro|tratamento)$/;
 /**
  * Nomes que o pessoal usa e que não aparecem no slug (medido em `mcp_auditoria`, out/2026): "porto nacional" é o
  * `doutor-hernia-porto`; "trauma" é o `default` (o Kommo do Instituto Trauma). Só valem se o alvo estiver na lista
- * que a ferramenta tem (a Taubaté não tem Asaas: o apelido não inventa conta).
+ * que a ferramenta tem (a Taubaté não tem Asaas: o apelido não inventa conta), e um slug real com o mesmo nome ganha dele.
  */
 const APELIDOS: Record<string, string> = {
   portonacional: 'doutor-hernia-porto',
+  doutorherniaportonacional: 'doutor-hernia-porto',
   trauma: 'default',
   institutotrauma: 'default',
 };
@@ -99,11 +100,7 @@ export function acharSlug(slugs: Iterable<string>, pedido: string): string | und
   const iguais = lidos.filter((l) => l.partes.join('') === chave).map((l) => l.slug);
   if (iguais.length) return unico(iguais);
 
-  const apelido = APELIDOS[chave];
-  if (apelido && todos.includes(apelido)) return apelido;
-
-  // o que sobra é nome curto; quem pediu só "resgate" ou "financeiro" não pediu unidade nenhuma
-  if (pedacos(p).every((x) => DE_APOIO.test(x))) return undefined;
+  // o que sobra é nome curto, e só as principais respondem por ele ("resgate" sozinho não casa com nenhuma)
   const principais = lidos.filter((l) => !l.partes.some((x) => DE_APOIO.test(x)));
   const pelasPontas = (fim: boolean) =>
     principais
@@ -113,5 +110,9 @@ export function acharSlug(slugs: Iterable<string>, pedido: string): string | und
   const pelofim = pelasPontas(true);
   if (pelofim.length) return unico(pelofim);
   // "hm" acha "hm-tecnologia": o nome curto da empresa vem antes do hífen, ao contrário das clínicas
-  return unico(pelasPontas(false));
+  const pelocomeco = pelasPontas(false);
+  if (pelocomeco.length) return unico(pelocomeco);
+  // por último, o apelido: unidade de verdade com aquele nome (inteiro ou curto) sempre ganha dele
+  const apelido = APELIDOS[chave];
+  return apelido && todos.includes(apelido) ? apelido : undefined;
 }

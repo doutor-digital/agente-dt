@@ -118,6 +118,39 @@ test('acharSlug: resgate, financeiro e tratamento não casam por engano com o no
   assert.equal(acharSlug(comApoio, 'porto resgate'), 'porto-resgate');
 });
 
+test('acharSlug: cada guarda de ambiguidade recusa (rio-verde × rioverde, fim repetido, começo repetido, nome inteiro igual)', () => {
+  // duas grafias do mesmo nome na lista: não há como saber qual
+  assert.equal(acharSlug(['rio-verde', 'rioverde'], 'rio verde'), undefined);
+  // dois com o mesmo fim "serra": ambíguo, e NÃO cai no começo ("serra-tec") para desempatar
+  assert.equal(acharSlug(['a-serra', 'b-serra', 'serra-tec'], 'serra'), undefined);
+  // só o começo, mas dois: ambíguo
+  assert.equal(acharSlug(['hm-tecnologia', 'hm-saude'], 'hm'), undefined);
+  // o fim ganha do começo quando é um só
+  assert.equal(acharSlug(['a-serra', 'serra-tec'], 'serra'), 'a-serra');
+  // slug exato ganha de grafia parecida
+  assert.equal(acharSlug(['a-b', 'ab'], 'a-b'), 'a-b');
+  assert.equal(acharSlug(['a-b', 'ab'], 'ab'), 'ab');
+  // acento no meio da palavra não parte a palavra: 'rnia' não é um pedaço de 'hérnia'
+  assert.equal(acharSlug(['hérnia'], 'rnia'), undefined);
+  assert.equal(acharSlug(['hérnia'], 'hernia'), 'hérnia');
+  // o nome inteiro de outro jeito: um só acha, dois não
+  assert.equal(acharSlug(['a-b', 'c-d'], 'A B'), 'a-b');
+});
+
+test('acharSlug: apelidos (instituto trauma, porto nacional por extenso) e slug real que colide com o apelido', () => {
+  assert.equal(acharSlug(COM_KOMMO, 'instituto trauma'), 'default');
+  assert.equal(acharSlug(COM_KOMMO, 'Instituto-Trauma'), 'default');
+  assert.equal(acharSlug(COM_KOMMO, 'Doutor Hérnia Porto Nacional'), 'doutor-hernia-porto');
+  assert.equal(acharSlug(COM_KOMMO, 'doutor-hernia-porto-nacional'), 'doutor-hernia-porto');
+  assert.equal(acharSlug(COM_ASAAS, 'Doutor Hérnia Porto Nacional'), 'doutor-hernia-porto');
+  assert.equal(acharSlug(['doutor-hernia-serra'], 'Doutor Hérnia Porto Nacional'), undefined);
+  // quem tem uma unidade de verdade com o nome do apelido, fica com ela
+  assert.equal(acharSlug(['trauma', 'default'], 'trauma'), 'trauma');
+  assert.equal(acharSlug(['instituto-trauma', 'default'], 'instituto trauma'), 'instituto-trauma');
+  assert.equal(acharSlug(['porto-nacional', 'doutor-hernia-porto'], 'porto nacional'), 'porto-nacional');
+  assert.equal(acharSlug(['doutor-hernia-trauma', 'default'], 'trauma'), 'doutor-hernia-trauma');
+});
+
 test('acharSlug: conta dividida (Petrópolis e Caxias no mesmo Kommo) continua sendo duas unidades', () => {
   const dividida = ['doutor-hernia-petropolis', 'doutor-hernia-caxias', 'doutor-hernia-serra'];
   assert.equal(acharSlug(dividida, 'Petrópolis'), 'doutor-hernia-petropolis');
