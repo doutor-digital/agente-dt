@@ -5,8 +5,10 @@
  *   (`POST /admin/v1/estrutura`) os MESMOS campos + o SQL aprovado; o servidor valida de novo, gera o SQL e só executa se for idêntico.
  * REGRA DE ACESSO: quem lê/cria/altera as linhas de uma tabela nova se escolhe numa lista FECHADA de 4 modelos (`regra`), nunca por expressão digitada; a única coisa que a pessoa
  * informa além do modelo é o nome da coluna da unidade. `sistemas_preparar_regra` troca o modelo de uma tabela que ESTE caminho criou (dono rh_ddl); tabela de outro dono
- * (fin_lanc, rh_docs, caixa_lanc, portal_vinculo…) é recusada aqui e de novo no servidor.
- * DROP, renomear, apagar e SQL próprio não existem aqui. (O SQL livre volta depois, com parser; está guardado na branch wip/estrutura-parser.)
+ * (fin_lanc, rh_docs, caixa_lanc, portal_vinculo…) é recusada aqui e de novo no servidor. (COLUNA e ÍNDICE novos valem também em tabela antiga, de outro dono: isso já era assim.)
+ * COMPATIBILIDADE com o servidor (falha fechada nos dois sentidos): o SQL da TABELA nova mudou (privilégios explícitos), então criar tabela exige conector e servidor 0.1.10.8-pol juntos:
+ * conector novo + servidor 0.1.10.6 recusa a tabela ("SQL diferente do aprovado"), com ou sem `regra`; servidor novo + conector antigo também. Coluna e índice não mudaram. O tipo `regra` só existe no servidor novo.
+ * DROP de tabela, coluna ou índice, renomear, apagar linhas e SQL próprio não existem aqui. (A troca de regra substitui as 3 políticas da PRÓPRIA tabela: o SQL dela começa com `drop policy if exists`.) (O SQL livre volta depois, com parser; está guardado na branch wip/estrutura-parser.)
  *
  * Só quem está em MCP_ESCRITA_EMAILS vê as ferramentas (o portão fica em producao.ts, junto com as outras escritas).
  *
@@ -20,8 +22,8 @@ import { z } from 'zod';
 import type { Auditar } from '../franquia-mcp/ferramentas.js';
 import { ErroDeEntrada } from '../franquia-mcp/travas.js';
 import { ErroSistemas } from '../lib/integracoes/sistemas.js';
-import type { TabelaExistente } from './estrutura-campos.js';
-import { ErroEstrutura, planejarColuna, planejarIndice, planejarRegra, planejarTabela, REGRAS, REGRAS_ACEITAS, type Existentes, type Plano } from './estrutura-campos.js';
+import type { PoliticaDoEsquema, TabelaExistente } from './estrutura-campos.js';
+import { ErroEstrutura, impressaoDasPoliticas, unidadeCriaLinhas, planejarColuna, planejarIndice, planejarRegra, planejarTabela, REGRAS, REGRAS_ACEITAS, type Existentes, type Plano } from './estrutura-campos.js';
 import { executar } from './ferramenta.js';
 import { resolverSistema, VALIDADE_MS, type ContaSistemas, type ContextoSistemas, type PendentesSistemas, type QuemSistemas, type Saida } from './sistemas.js';
 
@@ -44,7 +46,7 @@ interface TabelaDoEsquema {
   dono?: string;
   linhas?: number | null;
   colunas?: Array<{ nome?: string; tipo?: string }>;
-  politicas?: Array<{ nome?: string }>;
+  politicas?: PoliticaDoEsquema[];
 }
 async function lerExistentes(c: ContaSistemas): Promise<Existentes> {
   const r = (await c.fonte.chamar('GET', '/admin/v1/esquema')) as { tabelas?: TabelaDoEsquema[] };
@@ -65,6 +67,9 @@ async function lerExistentes(c: ContaSistemas): Promise<Existentes> {
       ...(typeof t.dono === 'string' ? { dono: t.dono } : {}),
       relkind: t.view ? 'v' : 'r',
       politicas: (t.politicas ?? []).map((x) => String(x.nome)),
+      // a impressão das políticas que a prévia viu (o servidor recusa a troca se a regra mudou desde então) e se a unidade já cria linhas (aviso de índice único)
+      impressao: impressaoDasPoliticas(t.politicas ?? []),
+      unidadeInsere: unidadeCriaLinhas(t.politicas ?? []),
     });
   }
   return { tabelas };
@@ -88,11 +93,14 @@ async function preparar(
   motivoBruto: unknown,
   entrada: Record<string, unknown>,
   planejar: (ex: Existentes) => Plano,
+  /** campos que só se sabem depois de ler o esquema (ex.: a impressão das políticas vistas) e que vão ao servidor junto com os da pessoa */
+  completar?: (ex: Existentes) => Record<string, unknown>,
 ): Promise<Saida> {
   const motivo = motivoValido(motivoBruto);
   const c = resolverSistema(ctx, sistema);
   const existentes = await lerExistentes(c);
   const p = validar(() => planejar(existentes));
+  if (completar) entrada = { ...entrada, ...completar(existentes) };
   const id = `est-${randomBytes(9).toString('hex')}`;
   const sql = p.sql.join(';\n');
   const expiraEm = pendentes.guardar(id, { usuario: quem.usuario, sistema: c.slug, operacao: 'estrutura', tabela: p.tabela, estrutura: { sql, motivo, comandos: p.sql.length, entrada } });
@@ -116,7 +124,7 @@ export function prepararTabela(ctx: ContextoSistemas, pendentes: PendentesSistem
 
 export function prepararRegra(ctx: ContextoSistemas, pendentes: PendentesSistemas, quem: QuemSistemas, a: { sistema?: string; tabela: string; regra: string; coluna_unidade?: string; motivo: string }): Promise<Saida> {
   const campos = { tabela: a.tabela, regra: a.regra, ...(a.coluna_unidade !== undefined ? { coluna_unidade: a.coluna_unidade } : {}) };
-  return preparar(ctx, pendentes, quem, a.sistema, a.motivo, { tipo: 'regra', ...campos }, (ex) => planejarRegra(campos, ex));
+  return preparar(ctx, pendentes, quem, a.sistema, a.motivo, { tipo: 'regra', ...campos }, (ex) => planejarRegra(campos, ex), (ex) => ({ politicas_vistas: ex.tabelas.get(a.tabela)?.impressao }));
 }
 
 export function prepararColuna(ctx: ContextoSistemas, pendentes: PendentesSistemas, quem: QuemSistemas, a: { sistema?: string; tabela: string; coluna: unknown; motivo: string }): Promise<Saida> {
@@ -149,7 +157,7 @@ export async function confirmarEstrutura(
     if (e instanceof ErroSistemas && (e.status === null || e.status >= 500)) {
       pendentes.devolver(id, p);
       rastro.resultado = 'sem resposta: resultado incerto';
-      throw new ErroDeEntrada(`NÃO sei se a estrutura foi alterada (${e.message}). Confira com sistemas_esquema antes de repetir; o código ${id} continua valendo, mas só repita depois de conferir que NÃO foi aplicado (repetir um CREATE ou ADD que já existe dá erro "já existe").`);
+      throw new ErroDeEntrada(`NÃO sei se a estrutura foi alterada (${e.message}). Confira com sistemas_esquema antes de repetir; o código ${id} continua valendo, mas só repita depois de conferir que NÃO foi aplicado (repetir um CREATE ou ADD que já existe dá erro "já existe"; repetir uma troca de regra que já foi aplicada, ou depois de outra troca, o servidor recusa com "mudou desde a prévia" e nada muda).`);
     }
     // servidor ainda na API 0.1.9 (ou anterior): a rota /estrutura dele espera `sql` e este conector manda os campos. Foi o defeito de 03/11 ("escreva o SQL (campo sql)").
     if (e instanceof ErroSistemas && /escreva o SQL \(campo sql\)/.test(e.message)) {
@@ -182,8 +190,9 @@ export async function confirmarEstrutura(
     if (String(entrada.tipo) === 'regra' && /tipo do pedido: use tabela, coluna ou indice\b/.test(erro)) {
       throw new ErroDeEntrada('o servidor do sistema novo está numa versão ANTERIOR à 0.1.10.8-pol e não conhece a troca de regra de acesso. NADA foi alterado. Avise o João para publicar a versão nova.');
     }
-    const antigo = (entrada.regra !== undefined || String(entrada.tipo) === 'regra') && /o SQL que o servidor gera agora é diferente/.test(erro)
-      ? ' Se a tabela não mudou desde a prévia e você escolheu uma regra de acesso, o servidor pode estar numa versão ANTERIOR à 0.1.10.8-pol (que ainda não conhece as regras): avise o João para publicar. Se a tabela mudou, é só preparar de novo.'
+    // criar TABELA ou trocar regra: o SQL que o conector mostra (com privilégios explícitos) só é igual ao do servidor se os dois estiverem na 0.1.10.8-pol; com ou sem `regra`
+    const antigo = (String(entrada.tipo) === 'tabela' || String(entrada.tipo) === 'regra') && /o SQL que o servidor gera agora é diferente/.test(erro)
+      ? ' Se a tabela NÃO mudou desde a prévia, o servidor do sistema novo pode estar numa versão ANTERIOR à 0.1.10.8-pol (o SQL de tabela nova mudou: com ou sem regra de acesso ele recusa até o João publicar a versão nova); preparar de novo não resolve nesse caso. Se a tabela mudou, é só preparar de novo.'
       : '';
     throw new ErroDeEntrada(`o servidor NÃO aplicou: ${erro}. O servidor roda o pedido todo numa transação e desfaz o que já tinha feito quando algo falha; mesmo assim confira com sistemas_esquema e prepare de novo (o código gastou).${antigo}`);
   }
@@ -216,7 +225,8 @@ export function registrarEstruturaSistemas(server: McpServer, ctx: ContextoSiste
   const auditar = auditarEstrutura(auditarBruto);
   const nota =
     'NÃO executa nada: valida os campos, GERA o SQL e devolve o resumo, os avisos, o SQL e um código. Mostre isso à pessoa e só chame sistemas_confirmar_estrutura se ela aprovar. ' +
-    'É só para CRIAR/ALTERAR estrutura (não há DROP, renomear nem SQL próprio). Para alterar LINHAS (dados) use sistemas_preparar_alteracao.';
+    'É só para CRIAR/ALTERAR estrutura (não há DROP de tabela, coluna ou índice, nem renomear, nem SQL próprio; a troca de regra substitui as 3 políticas da própria tabela, e o SQL dela começa com "drop policy if exists"). ' +
+    'Para alterar LINHAS (dados) use sistemas_preparar_alteracao.';
   server.registerTool(
     'sistemas_preparar_tabela',
     {
@@ -249,7 +259,7 @@ export function registrarEstruturaSistemas(server: McpServer, ctx: ContextoSiste
     {
       title: 'Sistema novo (RH/Caixa): preparar coluna nova',
       description:
-        'PASSO 1 de 2 para ACRESCENTAR uma COLUNA a uma tabela que já existe (não fechada), por campos. Coluna obrigatória em tabela que já tem linhas precisa de "padrao". ' + nota,
+        'PASSO 1 de 2 para ACRESCENTAR uma COLUNA a uma tabela que já existe (não fechada, inclusive tabela antiga de outro dono como fin_* e caixa_*), por campos. Coluna obrigatória em tabela que já tem linhas precisa de "padrao". ' + nota,
       inputSchema: { sistema: SISTEMA, tabela: z.string().max(60), coluna: COLUNA, motivo: MOTIVO },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -259,7 +269,7 @@ export function registrarEstruturaSistemas(server: McpServer, ctx: ContextoSiste
     'sistemas_preparar_indice',
     {
       title: 'Sistema novo (RH/Caixa): preparar índice',
-      description: 'PASSO 1 de 2 para CRIAR um ÍNDICE (de 1 a 4 colunas, opcionalmente único) numa tabela que já existe (não fechada). ' + nota,
+      description: 'PASSO 1 de 2 para CRIAR um ÍNDICE (de 1 a 4 colunas, opcionalmente único) numa tabela que já existe (não fechada, inclusive tabela antiga de outro dono). ' + nota,
       inputSchema: { sistema: SISTEMA, tabela: z.string().max(60), colunas: z.array(z.string().max(60)).min(1).max(4), unico: z.boolean().optional(), motivo: MOTIVO },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },

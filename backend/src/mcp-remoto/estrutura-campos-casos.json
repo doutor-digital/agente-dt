@@ -4101,5 +4101,328 @@
   },
   "esperado": "recusa",
   "msg": "não usa coluna de unidade"
+ },
+ {
+  "nome": "regra2: coluna_unidade sem regra não cai em gestao_e_financeiro por engano",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_a",
+   "colunas": [
+    {
+     "nome": "unidade",
+     "tipo": "text",
+     "obrigatoria": true
+    }
+   ],
+   "coluna_unidade": "unidade"
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "coluna_unidade só vale junto de uma regra"
+ },
+ {
+  "nome": "regra2: tipo de coluna que é objeto com toString",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_b",
+   "colunas": [
+    {
+     "nome": "xy",
+     "tipo": {
+      "toString": 1
+     }
+    }
+   ]
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "não é permitido"
+ },
+ {
+  "nome": "regra2: regra que é objeto com toString",
+  "entrada": {
+   "tipo": "tabela",
+   "nome": "caixa_c",
+   "colunas": [
+    {
+     "nome": "unidade",
+     "tipo": "text",
+     "obrigatoria": true
+    }
+   ],
+   "regra": {
+    "toString": 1
+   }
+  },
+  "existentes": {},
+  "esperado": "recusa",
+  "msg": "não existe. Regras aceitas"
+ },
+ {
+  "nome": "regra2: regra que é objeto com valueOf",
+  "entrada": {
+   "tipo": "regra",
+   "tabela": "caixa_t",
+   "regra": {
+    "valueOf": 1,
+    "toString": "x"
+   }
+  },
+  "existentes": {
+   "caixa_t": {
+    "linhas": 3,
+    "colunas": [
+     "id",
+     "criado_em",
+     "unidade"
+    ],
+    "tipos": {
+     "id": "uuid",
+     "criado_em": "timestamp with time zone",
+     "unidade": "text"
+    },
+    "dono": "rh_ddl",
+    "relkind": "r",
+    "politicas": [
+     "caixa_t_sel",
+     "caixa_t_ins",
+     "caixa_t_upd"
+    ]
+   }
+  },
+  "esperado": "recusa",
+  "msg": "não existe. Regras aceitas"
+ },
+ {
+  "nome": "regra2: troca em partição/herdeira",
+  "entrada": {
+   "tipo": "regra",
+   "tabela": "caixa_t",
+   "regra": "gestao_e_financeiro"
+  },
+  "existentes": {
+   "caixa_t": {
+    "linhas": 3,
+    "colunas": [
+     "id",
+     "criado_em",
+     "unidade"
+    ],
+    "tipos": {
+     "id": "uuid",
+     "criado_em": "timestamp with time zone",
+     "unidade": "text"
+    },
+    "dono": "rh_ddl",
+    "relkind": "r",
+    "politicas": [
+     "caixa_t_sel",
+     "caixa_t_ins",
+     "caixa_t_upd"
+    ],
+    "especial": [
+     "partição",
+     "herança"
+    ]
+   }
+  },
+  "esperado": "recusa",
+  "msg": "não é uma tabela comum deste caminho \\(partição, herança\\)"
+ },
+ {
+  "nome": "regra2: troca em tabela com gatilho",
+  "entrada": {
+   "tipo": "regra",
+   "tabela": "caixa_t",
+   "regra": "gestao_e_financeiro"
+  },
+  "existentes": {
+   "caixa_t": {
+    "linhas": 3,
+    "colunas": [
+     "id",
+     "criado_em",
+     "unidade"
+    ],
+    "tipos": {
+     "id": "uuid",
+     "criado_em": "timestamp with time zone",
+     "unidade": "text"
+    },
+    "dono": "rh_ddl",
+    "relkind": "r",
+    "politicas": [
+     "caixa_t_sel",
+     "caixa_t_ins",
+     "caixa_t_upd"
+    ],
+    "especial": [
+     "gatilho"
+    ]
+   }
+  },
+  "esperado": "recusa",
+  "msg": "não é uma tabela comum deste caminho \\(gatilho\\)"
+ },
+ {
+  "nome": "regra2: troca em tabela com rule e coluna gerada",
+  "entrada": {
+   "tipo": "regra",
+   "tabela": "caixa_t",
+   "regra": "gestao_e_financeiro"
+  },
+  "existentes": {
+   "caixa_t": {
+    "linhas": 3,
+    "colunas": [
+     "id",
+     "criado_em",
+     "unidade"
+    ],
+    "tipos": {
+     "id": "uuid",
+     "criado_em": "timestamp with time zone",
+     "unidade": "text"
+    },
+    "dono": "rh_ddl",
+    "relkind": "r",
+    "politicas": [
+     "caixa_t_sel",
+     "caixa_t_ins",
+     "caixa_t_upd"
+    ],
+    "especial": [
+     "rule",
+     "coluna gerada"
+    ]
+   }
+  },
+  "esperado": "recusa",
+  "msg": "rule, coluna gerada"
+ },
+ {
+  "nome": "regra2: troca em tabela comum (especial vazio)",
+  "entrada": {
+   "tipo": "regra",
+   "tabela": "caixa_t",
+   "regra": "gestao_e_financeiro"
+  },
+  "existentes": {
+   "caixa_t": {
+    "linhas": 3,
+    "colunas": [
+     "id",
+     "criado_em",
+     "unidade"
+    ],
+    "tipos": {
+     "id": "uuid",
+     "criado_em": "timestamp with time zone",
+     "unidade": "text"
+    },
+    "dono": "rh_ddl",
+    "relkind": "r",
+    "politicas": [
+     "caixa_t_sel",
+     "caixa_t_ins",
+     "caixa_t_upd"
+    ],
+    "especial": []
+   }
+  },
+  "esperado": "ok",
+  "sql": [
+   "drop policy if exists \"caixa_t_sel\" on public.\"caixa_t\"",
+   "drop policy if exists \"caixa_t_ins\" on public.\"caixa_t\"",
+   "drop policy if exists \"caixa_t_upd\" on public.\"caixa_t\"",
+   "alter table public.\"caixa_t\" enable row level security",
+   "create policy \"caixa_t_sel\" on public.\"caixa_t\" for select to authenticated using (public.caixa_gestor())",
+   "create policy \"caixa_t_ins\" on public.\"caixa_t\" for insert to authenticated with check (public.caixa_gestor())",
+   "create policy \"caixa_t_upd\" on public.\"caixa_t\" for update to authenticated using (public.caixa_gestor()) with check (public.caixa_gestor())",
+   "revoke all on table public.\"caixa_t\" from public, anon, authenticated, service_role, mcp_leitor, mcp_consulta_rh",
+   "grant select, insert, update on table public.\"caixa_t\" to authenticated",
+   "grant select, insert, update, delete on table public.\"caixa_t\" to service_role",
+   "grant select on table public.\"caixa_t\" to mcp_leitor, mcp_consulta_rh"
+  ]
+ },
+ {
+  "nome": "regra2: troca com a regra já mudada desde a prévia",
+  "entrada": {
+   "tipo": "regra",
+   "tabela": "caixa_t",
+   "regra": "gestao_e_financeiro",
+   "politicas_vistas": "antes"
+  },
+  "existentes": {
+   "caixa_t": {
+    "linhas": 3,
+    "colunas": [
+     "id",
+     "criado_em",
+     "unidade"
+    ],
+    "tipos": {
+     "id": "uuid",
+     "criado_em": "timestamp with time zone",
+     "unidade": "text"
+    },
+    "dono": "rh_ddl",
+    "relkind": "r",
+    "politicas": [
+     "caixa_t_sel",
+     "caixa_t_ins",
+     "caixa_t_upd"
+    ],
+    "impressao": "depois"
+   }
+  },
+  "esperado": "recusa",
+  "msg": "mudou desde a prévia"
+ },
+ {
+  "nome": "regra2: troca com a regra como na prévia",
+  "entrada": {
+   "tipo": "regra",
+   "tabela": "caixa_t",
+   "regra": "gestao_e_financeiro",
+   "politicas_vistas": "igual"
+  },
+  "existentes": {
+   "caixa_t": {
+    "linhas": 3,
+    "colunas": [
+     "id",
+     "criado_em",
+     "unidade"
+    ],
+    "tipos": {
+     "id": "uuid",
+     "criado_em": "timestamp with time zone",
+     "unidade": "text"
+    },
+    "dono": "rh_ddl",
+    "relkind": "r",
+    "politicas": [
+     "caixa_t_sel",
+     "caixa_t_ins",
+     "caixa_t_upd"
+    ],
+    "impressao": "igual"
+   }
+  },
+  "esperado": "ok",
+  "sql": [
+   "drop policy if exists \"caixa_t_sel\" on public.\"caixa_t\"",
+   "drop policy if exists \"caixa_t_ins\" on public.\"caixa_t\"",
+   "drop policy if exists \"caixa_t_upd\" on public.\"caixa_t\"",
+   "alter table public.\"caixa_t\" enable row level security",
+   "create policy \"caixa_t_sel\" on public.\"caixa_t\" for select to authenticated using (public.caixa_gestor())",
+   "create policy \"caixa_t_ins\" on public.\"caixa_t\" for insert to authenticated with check (public.caixa_gestor())",
+   "create policy \"caixa_t_upd\" on public.\"caixa_t\" for update to authenticated using (public.caixa_gestor()) with check (public.caixa_gestor())",
+   "revoke all on table public.\"caixa_t\" from public, anon, authenticated, service_role, mcp_leitor, mcp_consulta_rh",
+   "grant select, insert, update on table public.\"caixa_t\" to authenticated",
+   "grant select, insert, update, delete on table public.\"caixa_t\" to service_role",
+   "grant select on table public.\"caixa_t\" to mcp_leitor, mcp_consulta_rh"
+  ]
  }
 ]

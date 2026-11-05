@@ -7,6 +7,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ErroDeEntrada } from '../franquia-mcp/travas.js';
 import { ErroSistemas, sistemasChamar } from '../lib/integracoes/sistemas.js';
 import { criarContextoSistemas, PendentesSistemas, prepararAlteracao, registrarEscritaSistemas, registrarLeituraSistemas, type ContaSistemas } from './sistemas.js';
+import { impressaoDasPoliticas } from './estrutura-campos.js';
 import { confirmarEstrutura, prepararColuna, prepararIndice, prepararRegra, prepararTabela, registrarEstruturaSistemas } from './sistemas-estrutura.js';
 import { CHAVE_FALSA, CONFIG_FALSA, servidorAdminFalso } from './sistemas-falso.js';
 
@@ -227,7 +228,7 @@ test('descrições em português dizem que é por campos, que não há SQL próp
   const { c, fechar } = await cliente(ctx, { escreve: true });
   const t = (await c.listTools()).tools.find((x) => x.name === 'sistemas_preparar_tabela')!;
   assert.match(t.description!, /sem SQL/);
-  assert.match(t.description!, /não há DROP, renomear nem SQL próprio/);
+  assert.match(t.description!, /não há DROP de tabela, coluna ou índice, nem renomear, nem SQL próprio/);
   assert.match(t.description!, /rh_usuarios, rh_docs, rh_log/);
   assert.match(t.description!, /text, integer, bigint, numeric\(12,2\), boolean, date, timestamptz, uuid, jsonb/);
   await fechar();
@@ -288,7 +289,10 @@ test('troca de regra: só em tabela criada por este caminho; preparar só LÊ; c
   const rastro: { sql?: string; resultado?: string } = {};
   const r = await confirmarEstrutura(ctx, pend, QUEM, { confirmacao: p.confirmacao }, rastro);
   assert.equal(r.ok, true);
-  assert.deepEqual(srv.estruturas[0], { tipo: 'regra', tabela: 'caixa_semaforo', regra: 'so_admin_e_gestao', sqlAprovado: p.sql, quem: QUEM.nome, motivo: MOTIVO });
+  const { politicas_vistas: vistas, ...resto } = srv.estruturas[0] as Record<string, unknown>;
+  assert.deepEqual(resto, { tipo: 'regra', tabela: 'caixa_semaforo', regra: 'so_admin_e_gestao', sqlAprovado: p.sql, quem: QUEM.nome, motivo: MOTIVO });
+  assert.equal(typeof vistas, 'string', 'a troca leva a impressão das políticas que a prévia viu');
+  assert.equal(vistas, impressaoDasPoliticas((await esquemaDe(srv, 'caixa_semaforo')).politicas), 'a mesma função do servidor, sobre o /esquema');
   assert.equal(rastro.resultado, 'ok');
   // com a coluna de unidade escolhida
   const u = await prepararRegra(ctx, pend, QUEM, { tabela: 'caixa_semaforo', regra: 'unidade_le_gestao_grava', coluna_unidade: 'loja', motivo: MOTIVO });
@@ -339,7 +343,7 @@ test('servidor SEM o dono no /esquema (antes da 0.1.10.8-pol): a prévia deixa p
   await assert.rejects(() => confirmarEstrutura(b.ctx, pb, QUEM, { confirmacao: q.confirmacao }), /ANTERIOR à 0\.1\.10\.8-pol.*NADA foi alterado/);
   // tabela com regra num servidor que ignora a regra: o SQL gerado "difere" e o aviso diz o porquê provável
   const t = await prepararTabela(ctx, pend, QUEM, { nome: 'caixa_k', colunas: COLUNAS, regra: 'so_admin_e_gestao', motivo: MOTIVO });
-  await assert.rejects(() => confirmarEstrutura(ctx, pend, QUEM, { confirmacao: t.confirmacao }), /gera agora é diferente.*Se a tabela não mudou.*pode estar numa versão ANTERIOR à 0\.1\.10\.8-pol.*Se a tabela mudou, é só preparar de novo/s);
+  await assert.rejects(() => confirmarEstrutura(ctx, pend, QUEM, { confirmacao: t.confirmacao }), /gera agora é diferente.*Se a tabela NÃO mudou desde a prévia.*ANTERIOR à 0\.1\.10\.8-pol.*Se a tabela mudou, é só preparar de novo/s);
   assert.equal(srv.estruturas.length, 0);
 });
 
@@ -373,4 +377,60 @@ test('pelo MCP: a regra é um enum fechado no esquema da ferramenta, a descriç�
   assert.equal(auditoria.find((a) => a.ferramenta === 'sistemas_preparar_regra' && a.ok)!.argumentos.regra, 'unidade_le_e_lanca');
   assert.ok(!JSON.stringify([ok.texto, conf.texto, auditoria]).includes(CHAVE_FALSA));
   await fechar();
+});
+
+/** a tabela como o /esquema do servidor falso a entrega (pergunta a ele como o conector pergunta) */
+async function esquemaDe(srv: ReturnType<typeof servidorAdminFalso>, tabela: string): Promise<{ politicas: Array<Record<string, unknown>> }> {
+  const r = await srv.fetch('http://servidor-falso/admin/v1/esquema', { method: 'GET', headers: { 'x-admin-key': CHAVE_FALSA } } as never);
+  return (JSON.parse(await r.text()) as { tabelas: Array<{ nome: string; politicas: Array<Record<string, unknown>> }> }).tabelas.find((t) => t.nome === tabela)!;
+}
+
+// ---------------------------------------------------------------- bloco 2 do sênior
+
+test('COMPATIBILIDADE: conector novo + servidor 0.1.10.6 — criar TABELA é recusada COM e SEM regra, com a dica de versão nos dois casos; coluna e índice passam; a troca de regra diz "servidor anterior"', async () => {
+  const { srv, ctx } = montar({ maisTabelas: true, servidorAntigo: true });
+  const pend = new PendentesSistemas();
+  for (const regra of [undefined, 'so_admin_e_gestao']) {
+    const t = await prepararTabela(ctx, pend, QUEM, { nome: `caixa_${regra ? 'com' : 'sem'}`, colunas: COLUNAS, ...(regra ? { regra } : {}), motivo: MOTIVO });
+    await assert.rejects(() => confirmarEstrutura(ctx, pend, QUEM, { confirmacao: t.confirmacao }), /gera agora é diferente.*Se a tabela NÃO mudou desde a prévia.*ANTERIOR à 0\.1\.10\.8-pol.*com ou sem regra de acesso.*preparar de novo não resolve.*Se a tabela mudou, é só preparar de novo/s);
+  }
+  assert.equal(srv.estruturas.length, 0);
+  const c = await prepararColuna(ctx, pend, QUEM, { tabela: 'caixa_precos', coluna: { nome: 'ativo', tipo: 'boolean' }, motivo: MOTIVO });
+  assert.equal((await confirmarEstrutura(ctx, pend, QUEM, { confirmacao: c.confirmacao })).ok, true);
+  const i = await prepararIndice(ctx, pend, QUEM, { tabela: 'caixa_precos', colunas: ['servico'], motivo: MOTIVO });
+  assert.equal((await confirmarEstrutura(ctx, pend, QUEM, { confirmacao: i.confirmacao })).ok, true);
+  assert.equal(srv.estruturas.length, 2, 'coluna e índice chegaram');
+});
+
+test('texto verdadeiro: descrições e instruções dizem que coluna e índice valem em tabela antiga, que a troca de regra leva "drop policy" e que tabela exige conector e servidor juntos', async () => {
+  const { ctx } = montar();
+  const { c, fechar } = await cliente(ctx, { escreve: true });
+  const ferramentas = (await c.listTools()).tools;
+  const por = (n: string) => ferramentas.find((x) => x.name === n)!;
+  assert.match(por('sistemas_preparar_coluna').description!, /inclusive tabela antiga de outro dono como fin_\* e caixa_\*/);
+  assert.match(por('sistemas_preparar_indice').description!, /inclusive tabela antiga de outro dono/);
+  assert.match(por('sistemas_preparar_regra').description!, /drop policy if exists/);
+  const fonte = readFileSync(new URL('./servidor.ts', import.meta.url), 'utf8');
+  assert.match(fonte, /coluna e índice valem também em tabela antiga; a regra só troca em tabela criada por este caminho/);
+  assert.doesNotMatch(fonte, /tabela de outro dono não existem/);
+  const estr = readFileSync(new URL('./sistemas-estrutura.ts', import.meta.url), 'utf8');
+  assert.doesNotMatch(estr, /tudo como antes/);
+  await fechar();
+});
+
+test('índice ÚNICO em tabela que deixa a unidade criar linhas (unidade_le_e_lanca) avisa da duplicidade; índice comum e tabela de outro modelo, não', async () => {
+  const { ctx } = montar();
+  const pend = new PendentesSistemas();
+  const u = await prepararIndice(ctx, pend, QUEM, { tabela: 'caixa_lancada', colunas: ['codigo'], unico: true, motivo: MOTIVO });
+  assert.match(u.avisos.join(' '), /deixa a UNIDADE criar linhas.*descobre que o valor existe/);
+  assert.doesNotMatch((await prepararIndice(ctx, pend, QUEM, { tabela: 'caixa_lancada', colunas: ['codigo'], motivo: MOTIVO })).avisos.join(' '), /UNIDADE criar/);
+  assert.doesNotMatch((await prepararIndice(ctx, pend, QUEM, { tabela: 'caixa_semaforo', colunas: ['loja'], unico: true, motivo: MOTIVO })).avisos.join(' '), /UNIDADE criar/);
+});
+
+test('troca de regra: a impressão que vai ao servidor é a do /esquema; coluna_unidade sem regra na tabela nova é recusada (não cai em outra regra por engano); objeto com toString não derruba', async () => {
+  const { ctx } = montar();
+  const pend = new PendentesSistemas();
+  await assert.rejects(() => prepararTabela(ctx, pend, QUEM, { nome: 'caixa_q', colunas: [{ nome: 'unidade', tipo: 'text' }], coluna_unidade: 'unidade', motivo: MOTIVO }), (e: Error) => e instanceof ErroDeEntrada && /coluna_unidade só vale junto de uma regra/.test(e.message));
+  await assert.rejects(() => prepararTabela(ctx, pend, QUEM, { nome: 'caixa_q', colunas: COLUNAS, regra: { toString: 1 } as never, motivo: MOTIVO }), (e: Error) => e instanceof ErroDeEntrada && /não existe\. Regras aceitas/.test(e.message));
+  await assert.rejects(() => prepararTabela(ctx, pend, QUEM, { nome: 'caixa_q', colunas: [{ nome: 'xy', tipo: { toString: 1 } as never }], motivo: MOTIVO }), (e: Error) => e instanceof ErroDeEntrada && /não é permitido/.test(e.message));
 });

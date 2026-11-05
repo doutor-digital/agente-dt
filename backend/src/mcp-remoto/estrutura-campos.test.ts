@@ -4,15 +4,15 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { ErroEstrutura, nomeFechado, planejar, planejarTabela, REGRAS, REGRAS_ACEITAS, TIPOS_ACEITOS, type Existentes } from './estrutura-campos.js';
+import { ErroEstrutura, impressaoDasPoliticas, nomeFechado, planejar, planejarIndice, planejarTabela, REGRAS, REGRAS_ACEITAS, TIPOS_ACEITOS, unidadeCriaLinhas, type Existentes } from './estrutura-campos.js';
 
-const HASH_DAS_REGRAS = '80dd36daa07689e3194cbef89272cf27ce5bb7d9509037d77307beb5295c53e5';
-const HASH_DOS_CASOS = 'd5419778aa2718a18821a344afc52bd55b81124b3d1da751220aaea2ad09c204';
+const HASH_DAS_REGRAS = '00fd05ab325ab37ee27a56fc0cdf9a97ac478a452df46e8bfcf9a7e1c107a700';
+const HASH_DOS_CASOS = 'f3f186aa28ac2a54ae1b7baaf4b2596b59f45b3b9b0efd8dded92a6aeb44514c';
 
 interface Caso {
   nome: string;
   entrada: Record<string, unknown>;
-  existentes: Record<string, { linhas: number | null; colunas: string[]; tipos?: Record<string, string>; dono?: string; relkind?: string; politicas?: string[] }>;
+  existentes: Record<string, { linhas: number | null; colunas: string[]; tipos?: Record<string, string>; dono?: string; relkind?: string; politicas?: string[]; especial?: string[]; impressao?: string }>;
   esperado: 'ok' | 'recusa';
   sql?: string[];
   msg?: string;
@@ -74,4 +74,20 @@ test('regras: exatamente os 4 modelos medidos em produção; unidade_le_e_lanca 
     assert.equal((sql.match(/create policy/g) ?? []).length, 3, r);
   }
   assert.equal(planejarTabela({ nome: 'caixa_w3', regra: 'unidade_le_gestao_grava', colunas: [{ nome: 'unidade', tipo: 'text' }] }, ex).avisos.length, 0, 'sem aviso fixo nos outros modelos');
+});
+
+test('texto verdadeiro: os 2 modelos de unidade dizem que admin, gestão E FINANCEIRO veem/criam/alteram; índice único em tabela que deixa a unidade criar linhas avisa da duplicidade; impressão das políticas é estável', () => {
+  for (const r of ['unidade_le_gestao_grava', 'unidade_le_e_lanca']) assert.match(REGRAS[r]!.descricao, /^admin, gestão e financeiro veem, criam e alteram tudo \(inclusive trocam a unidade de uma linha\)/);
+  const base = { linhas: 1, colunas: ['id', 'codigo', 'unidade'] };
+  const com = planejarIndice({ tabela: 'caixa_t', colunas: ['codigo'], unico: true }, { tabelas: new Map([['caixa_t', { ...base, unidadeInsere: true }]]) });
+  assert.match(com.avisos.join(' '), /deixa a UNIDADE criar linhas.*descobre que o valor existe/);
+  assert.doesNotMatch(planejarIndice({ tabela: 'caixa_t', colunas: ['codigo'], unico: true }, { tabelas: new Map([['caixa_t', { ...base, unidadeInsere: false }]]) }).avisos.join(' '), /UNIDADE criar/);
+  assert.doesNotMatch(planejarIndice({ tabela: 'caixa_t', colunas: ['codigo'] }, { tabelas: new Map([['caixa_t', { ...base, unidadeInsere: true }]]) }).avisos.join(' '), /UNIDADE criar/, 'índice comum não tem o problema');
+  const a = { nome: 'p1', comando: 'SELECT', usando: 'caixa_gestor()', com_check: null, roles: ['authenticated'] };
+  const b = { nome: 'p2', comando: 'INSERT', usando: null, com_check: 'caixa_pode(unidade)', roles: ['authenticated', 'anon'] };
+  assert.equal(impressaoDasPoliticas([a, b]), impressaoDasPoliticas([b, { ...a, roles: ['authenticated'] }]), 'não depende da ordem das políticas');
+  assert.notEqual(impressaoDasPoliticas([a, b]), impressaoDasPoliticas([a, { ...b, com_check: 'true' }]));
+  assert.equal(impressaoDasPoliticas([a, b]), impressaoDasPoliticas([a, { ...b, roles: '{anon,authenticated}' }]), 'roles como texto do /esquema dá a mesma impressão que a lista do servidor');
+  assert.equal(unidadeCriaLinhas([a, b]), true); assert.equal(unidadeCriaLinhas([a]), false);
+  assert.doesNotThrow(() => impressaoDasPoliticas([{ nome: { toString: 1 }, comando: [1], usando: { valueOf: 'x' }, roles: [{ toString: 1 }] }]), 'valor estranho não lança');
 });

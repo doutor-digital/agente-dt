@@ -37,6 +37,12 @@ export interface TabelaExistente {
   relkind?: string;
   /** nomes das políticas que a tabela tem hoje */
   politicas?: string[];
+  /** o que faz a tabela deixar de ser "tabela comum deste caminho": partição, herança, gatilho, rule, coluna gerada. Vazio/ausente = nada disso (o servidor sempre informa; a prévia do conector em servidor antigo não sabe) */
+  especial?: string[];
+  /** impressão das políticas de hoje (`impressaoDasPoliticas`): a troca de regra só vale se a tabela ainda estiver como na prévia */
+  impressao?: string;
+  /** hoje a política de INSERT usa `caixa_pode(…)`, isto é, a unidade cria linhas (modelo unidade_le_e_lanca) */
+  unidadeInsere?: boolean;
 }
 /** O que já existe no banco (só as tabelas que importam para o pedido). */
 export interface Existentes {
@@ -114,7 +120,7 @@ function nomeValido(v: unknown, o: string): string {
 
 function tipoValido(v: unknown, o: string): string {
   const t = typeof v === 'string' ? v.toLowerCase().replace(/\s+/g, '') : '';
-  if (!Object.hasOwn(TIPOS, t)) recusa(`${o}: tipo "${typeof v === 'string' ? v.slice(0, 30) : v}" não é permitido. Tipos aceitos: ${TIPOS_ACEITOS.join(', ')}`);
+  if (!Object.hasOwn(TIPOS, t)) recusa(`${o}: tipo "${typeof v === 'string' ? v.slice(0, 30) : typeof v}" não é permitido. Tipos aceitos: ${TIPOS_ACEITOS.join(', ')}`);
   return t;
 }
 
@@ -231,8 +237,8 @@ const ADMIN: Termo = { fn: 'rh_admin', unidade: false };
  * Nenhum modelo dá DELETE: ninguém apaga pela tela (apagar é do servidor). As funções são as que o banco já tem (SECURITY DEFINER, search_path fixo).
  */
 export const REGRAS: Readonly<Record<string, ModeloDeRegra>> = Object.freeze({
-  unidade_le_gestao_grava: { descricao: 'a gestão vê, cria e altera tudo; a própria unidade só VÊ as linhas da sua unidade (como caixa_semaforo)', precisaUnidade: true, sel: POR_UNIDADE, ins: GESTAO, upd: GESTAO },
-  unidade_le_e_lanca: { descricao: 'a gestão vê, cria e altera tudo; a própria unidade VÊ e CRIA linhas da sua unidade, com QUALQUER valor nas demais colunas (id, criado_em, status, valores: SEM as travas de status e autor da caixa_lanc); não altera nem apaga', precisaUnidade: true, sel: POR_UNIDADE, ins: POR_UNIDADE, upd: GESTAO },
+  unidade_le_gestao_grava: { descricao: 'admin, gestão e financeiro veem, criam e alteram tudo (inclusive trocam a unidade de uma linha); a própria unidade só VÊ as linhas da sua unidade (como caixa_semaforo)', precisaUnidade: true, sel: POR_UNIDADE, ins: GESTAO, upd: GESTAO },
+  unidade_le_e_lanca: { descricao: 'admin, gestão e financeiro veem, criam e alteram tudo (inclusive trocam a unidade de uma linha); a própria unidade VÊ e CRIA linhas da sua unidade, com QUALQUER valor nas demais colunas (id, criado_em, status, valores: SEM as travas de status e autor da caixa_lanc); não altera nem apaga', precisaUnidade: true, sel: POR_UNIDADE, ins: POR_UNIDADE, upd: GESTAO },
   gestao_e_financeiro: { descricao: 'só admin, gestão e financeiro veem, criam e alteram; unidade nenhuma (como portal_vinculo)', precisaUnidade: false, sel: GESTAO, ins: GESTAO, upd: GESTAO },
   so_admin_e_gestao: { descricao: 'só admin e gestão veem, criam e alteram; o financeiro e as unidades nada (como rh_docs)', precisaUnidade: false, sel: ADMIN, ins: ADMIN, upd: ADMIN },
 });
@@ -265,7 +271,7 @@ function resolverRegra(regra: unknown, coluna: unknown, tipoDe: (c: string) => s
     if (padrao === null) recusa(`${o}: informe a regra (uma de: ${REGRAS_ACEITAS.join(', ')})`);
     id = padrao;
   } else {
-    if (typeof regra !== 'string' || !Object.hasOwn(REGRAS, regra)) recusa(`${o}: a regra "${typeof regra === 'string' ? regra.slice(0, 40) : regra}" não existe. Regras aceitas: ${REGRAS_ACEITAS.join(', ')}`);
+    if (typeof regra !== 'string' || !Object.hasOwn(REGRAS, regra)) recusa(`${o}: a regra "${typeof regra === 'string' ? regra.slice(0, 40) : typeof regra}" não existe. Regras aceitas: ${REGRAS_ACEITAS.join(', ')}`);
     id = regra;
   }
   const modelo = REGRAS[id];
@@ -282,6 +288,28 @@ function resolverRegra(regra: unknown, coluna: unknown, tipoDe: (c: string) => s
 
 /** Políticas, privilégios e conferência de uma regra. As políticas sempre se chamam <tabela>_sel, _ins e _upd e valem só para `authenticated`. */
 export const nomesDePolitica = (tabela: string): string[] => [`${tabela}_sel`, `${tabela}_ins`, `${tabela}_upd`];
+
+export interface PoliticaDoEsquema {
+  nome?: unknown;
+  comando?: unknown;
+  usando?: unknown;
+  com_check?: unknown;
+  roles?: unknown;
+}
+const txt = (v: unknown): string | null => (v === null || v === undefined ? null : typeof v === 'string' ? v : typeof v === 'number' || typeof v === 'boolean' ? String(v) : null);
+/**
+ * Impressão das políticas de uma tabela, igual no servidor (lê de pg_policies) e no conector (lê de /esquema, que vem do mesmo pg_policies): se a regra mudou depois da prévia,
+ * a impressão muda e a troca é recusada. É isso que impede repetir um código depois de um 5xx e desfazer uma troca feita no meio.
+ */
+export function impressaoDasPoliticas(pols: PoliticaDoEsquema[]): string {
+  // pg_policies.roles é name[]: o servidor o lê como lista (roles::text[]) e o /esquema o entrega como TEXTO "{authenticated,anon}" (o driver não converte name[]); os dois dão a mesma impressão
+  const papeis = (r: unknown): string[] => (Array.isArray(r) ? r.map((x) => txt(x) ?? '') : typeof r === 'string' && /^\{.*\}$/.test(r) ? r.slice(1, -1).split(',').filter(Boolean) : []).sort();
+  const linhas = pols.map((p) => [txt(p.nome) ?? '', txt(p.comando) ?? '', txt(p.usando), txt(p.com_check), papeis(p.roles)] as const);
+  linhas.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  return JSON.stringify(linhas);
+}
+/** A política de INSERT usa caixa_pode(…): a unidade cria linhas (modelo unidade_le_e_lanca). */
+export const unidadeCriaLinhas = (pols: PoliticaDoEsquema[]): boolean => pols.some((p) => txt(p.comando) === 'INSERT' && /caixa_pode\(/.test(txt(p.com_check) ?? ''));
 
 function sqlDaRegra(tabela: string, r: RegraResolvida): { sql: string[]; conferencia: Conferencia } {
   const T = `public.${q(tabela)}`;
@@ -351,6 +379,7 @@ export function planejarTabela(e: { nome?: unknown; colunas?: unknown; regra?: u
   if (criado && criado.tipo !== 'timestamptz') recusa('coluna "criado_em": se informar, tem de ser timestamptz');
   // sem "regra" o comportamento de sempre: com coluna "unidade" (text) a unidade vê; sem ela, só a gestão. Com "regra", o modelo escolhido e a coluna conferida (existir e ser text).
   const tipoDe = (c: string): string | undefined => colunas.find((x) => x.nome === c)?.tipo;
+  if ((e.regra === undefined || e.regra === null) && e.coluna_unidade !== undefined && e.coluna_unidade !== null) recusa('coluna_unidade só vale junto de uma regra que filtra pela unidade (unidade_le_gestao_grava ou unidade_le_e_lanca): informe a regra, ou tire coluna_unidade');
   const padrao = tipoDe('unidade') === 'text' ? 'unidade_le_gestao_grava' : 'gestao_e_financeiro';
   const regra = resolverRegra(e.regra, e.coluna_unidade, tipoDe, padrao, 'regra');
   const partes: string[] = [];
@@ -373,19 +402,22 @@ export function planejarTabela(e: { nome?: unknown; colunas?: unknown; regra?: u
 
 /**
  * Troca a regra de acesso de uma tabela que ESTE caminho criou (dono rh_ddl). Tabela de outro dono (fin_lanc, rh_docs, portal_vinculo, caixa_lanc, auth*, storage*…)
- * é recusada aqui e, se este teste fosse burlado, o próprio Postgres recusaria: rh_ddl não é dono delas e não pode mexer na política.
+ * é recusada aqui. ESTE teste é a única trava de verdade: se ele for burlado o Postgres NÃO recusa, porque rh_ddl herda a posse das tabelas de `sistemas` e conseguiria trocar a política delas.
  */
-export function planejarRegra(e: { tabela?: unknown; regra?: unknown; coluna_unidade?: unknown }, ex: Existentes): Plano {
+export function planejarRegra(e: { tabela?: unknown; regra?: unknown; coluna_unidade?: unknown; politicas_vistas?: unknown }, ex: Existentes): Plano {
   const alvo = tabelaAlvo(e.tabela, ex, 'tabela');
   const info = alvo.info;
   // ATENÇÃO: o banco NÃO é a segunda trava aqui. O papel rh_ddl herda a posse de tudo que é do dono original (`grant sistemas to rh_ddl with inherit true`, migration 060): ele CONSEGUIRIA
   // trocar a política de fin_lanc. Quem impede é esta checagem do dono, que o servidor refaz no catálogo, com a tabela travada, antes de executar. Não a afrouxe.
   if (info.dono !== undefined && info.dono !== DONO_DDL) recusa(`a tabela "${alvo.nome}" não foi criada por este caminho (o dono é ${info.dono}): a regra dela só o João muda, no servidor`);
   if (info.relkind !== undefined && info.relkind !== 'r') recusa(`"${alvo.nome}" não é uma tabela comum: a regra só vale para tabela`);
+  if (info.especial && info.especial.length) recusa(`"${alvo.nome}" não é uma tabela comum deste caminho (${info.especial.join(', ')}): a regra dela só o João muda, no servidor`);
   const nossas = nomesDePolitica(alvo.nome);
   const estranhas = (info.politicas ?? []).filter((n) => !nossas.includes(n));
   if (estranhas.length) recusa(`a tabela "${alvo.nome}" tem política que este caminho não criou (${estranhas.slice(0, 5).join(', ')}): para não apagar regra de outra origem, a troca fica com o João, no servidor`);
   if (e.regra === undefined || e.regra === null) recusa(`regra: informe a regra (uma de: ${REGRAS_ACEITAS.join(', ')})`);
+  // a regra da tabela mudou depois da prévia (outra troca, ou esta mesma já aplicada e repetida depois de um erro 5xx): não desfaz o que veio no meio
+  if (typeof e.politicas_vistas === 'string' && info.impressao !== undefined && e.politicas_vistas !== info.impressao) recusa(`a regra de ${alvo.nome} mudou desde a prévia (outra troca, ou esta mesma já foi aplicada): confira com sistemas_esquema e prepare de novo`);
   const tipoDe = (c: string): string | undefined | null => {
     if (!info.colunas.includes(c)) return undefined;
     return info.tipos ? (info.tipos.get(c) ?? null) : null;
@@ -444,7 +476,10 @@ export function planejarIndice(e: { tabela?: unknown; colunas?: unknown; unico?:
     criaIndice: nomeIndice,
     sql,
     resumo: [`Cria o índice${unico ? ' ÚNICO' : ''} ${nomeIndice} em ${alvo.nome} (${cols.join(', ')}).`],
-    avisos: unico ? ['índice único falha se já houver valores repetidos nessas colunas; se falhar nada muda'] : [],
+    avisos: [
+      ...(unico ? ['índice único falha se já houver valores repetidos nessas colunas; se falhar nada muda'] : []),
+      ...(unico && alvo.info.unidadeInsere ? [`${alvo.nome} deixa a UNIDADE criar linhas (unidade_le_e_lanca): com índice único, uma unidade que tente criar um valor já usado por OUTRA unidade recebe erro de duplicidade e assim descobre que o valor existe; inclua a coluna da unidade no índice`] : []),
+    ],
   };
 }
 
@@ -458,7 +493,7 @@ export function planejar(entrada: Record<string, unknown>, ex: Existentes): Plan
     case 'indice':
       return planejarIndice(entrada as { tabela?: unknown; colunas?: unknown; unico?: unknown }, ex);
     case 'regra':
-      return planejarRegra(entrada as { tabela?: unknown; regra?: unknown; coluna_unidade?: unknown }, ex);
+      return planejarRegra(entrada as { tabela?: unknown; regra?: unknown; coluna_unidade?: unknown; politicas_vistas?: unknown }, ex);
     default:
       return recusa('tipo do pedido: use tabela, coluna, indice ou regra');
   }
