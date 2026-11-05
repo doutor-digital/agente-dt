@@ -36,6 +36,8 @@ import { franquiaRespeitaEspera } from './espera-retomada.js';
 import { fecharOuSegurar, seguradoPelaTrava } from './parados-worker.js';
 import { TAG_SEM_REGUA, campoDoPerdidoDaFranquia, type DecisaoParado } from './parados.js';
 import { automacaoLigada, estadoDaAutomacao, type Estado } from './automacoes-estado.js';
+import { CAMPO_VALOR_DA_CONSULTA, decidirValorDaConsulta } from './valor-consulta.js';
+import { valorDaConsultaNoDia } from '../agent/pagamento-da-unidade.js';
 import {
   CAMPO_ID_CLIENT, PREFIXO_CONFLITO, TAG_CONFLITO, ID_AUTOMACAO as AUTOMACAO_1610, anotarRoboPos, idsDoConflito, cartaoTravadoNoConflito, cartoesComMaisDeUmPaciente, chaveDaDevolucao, chaveDaFalta, chaveDaSujeira, chaveDaTarefaDeDevolucao,
   chaveDoRoboPos, tarefaDaSujeira,
@@ -173,6 +175,8 @@ export interface ResumoSync {
   camposSdr?: { gravaria: number; confere: number; diverge: number };
   /** cartões em que a fase 1e escreveu nesta varredura (teto `MAX_CAMPOS_SDR_POR_VARREDURA`) */
   camposSdrCartoes?: number;
+  /** cartões em que o `valor-consulta` gravou (ou gravaria, em seco) nesta varredura (teto `MAX_VALOR_CONSULTA_POR_VARREDURA`) */
+  valorConsultaCartoes?: number;
   /** fase 2: cartões antigos em AGENDADO (fora da janela D-3) revisados pelo histórico do paciente (23/09/2026) */
   revisados: number;
   /** PERDIDOs que a trava da perda automática (consulta futura / pagou / Quente / Morno) segurou: o cartão fica onde está, não é erro */
@@ -1540,6 +1544,67 @@ async function espelharCamposSdr(
   }
 }
 
+/** Teto de cartões com escrita por varredura: ligar numa unidade com muita avaliação marcada não pode segurar o resto. Próprio desta chave. */
+const MAX_VALOR_CONSULTA_POR_VARREDURA = Number(process.env.VALOR_CONSULTA_MAX) || 60;
+
+/**
+ * ¤ Valor da Consulta (fase 1f): o preço da consulta que está nas fontes da unidade, no cartão de quem tem avaliação
+ * marcada. A regra mora em `valor-consulta.ts`; aqui só se lê o cartão e se aplica.
+ *
+ * Chave `valor-consulta` (tela de Automações): desligado não faz nada; seco registra "gravaria"; ligado grava SÓ em
+ * campo vazio. O seco do sincronizador inteiro (`ctx.seco`) também segura: sem escrita escondida no caminho novo.
+ */
+async function espelharValorDaConsulta(ctx: CtxSync, leadId: number, lead: KommoLead, consulta: SpineSchedule | null): Promise<void> {
+  const { unit, kommo, resumo } = ctx;
+  const estado = estadoDaAutomacao(unit.slug, 'valor-consulta', process.env.VALOR_CONSULTA_SLUGS);
+  if (estado === 'desligado') return;
+
+  const alvo = normalizar(CAMPO_VALOR_DA_CONSULTA);
+  // nome exato (com o símbolo) primeiro: "Valor da consulta" sem o ¤ não é este campo se houver os dois
+  const mesmos = (ctx.camposPorNome ?? []).filter(([k]) => k === alvo).map(([, i]) => i);
+  const info = mesmos.find((i) => i.nome === CAMPO_VALOR_DA_CONSULTA) ?? mesmos[0] ?? null;
+  const guardado = info ? lead.custom_fields_values?.find((f) => f.field_id === info.id)?.values?.[0]?.value : undefined;
+  const noCartao = guardado === undefined || guardado === null || String(guardado).trim() === '' ? null : String(guardado);
+
+  const d = decidirValorDaConsulta({
+    estado,
+    consulta,
+    tipoDoCampo: info?.type ?? null,
+    noCartao,
+    preco: valorDaConsultaNoDia(unit.sourceProdutos),
+    secoGlobal: ctx.seco === true,
+  });
+
+  if (d.acao === 'nada') {
+    // sem preço nas fontes é o único motivo que pede ação de gente: uma linha por unidade, não por cartão
+    if (d.motivo === 'sem-preco' && !jaRegistrou(`${unit.slug}:valor-consulta:sem-preco`)) {
+      logger.warn({ unit: unit.slug, leadId }, 'valor-consulta: avaliação marcada, mas as fontes da unidade não trazem o preço da consulta — não gravei');
+    }
+    if (d.motivo === 'campo-sem-numero' && !jaRegistrou(`${unit.slug}:valor-consulta:campo-sem-numero`)) {
+      logger.warn({ unit: unit.slug, tipo: info?.type }, 'valor-consulta: o campo da conta não é monetário nem numérico — não gravei');
+    }
+    return;
+  }
+  if (!info) return;
+  if ((resumo.valorConsultaCartoes ?? 0) >= MAX_VALOR_CONSULTA_POR_VARREDURA) return;
+  resumo.valorConsultaCartoes = (resumo.valorConsultaCartoes ?? 0) + 1;
+
+  if (d.acao === 'gravaria') {
+    logger.info({ unit: unit.slug, leadId, campo: CAMPO_VALOR_DA_CONSULTA, valor: d.valor, motivo: d.motivo }, 'valor-consulta [seco]: gravaria');
+    registrarSimulacao(unit, 'valor-consulta', { leadId, acao: 'gravaria', alvo: CAMPO_VALOR_DA_CONSULTA, valor: d.valor, motivo: d.motivo });
+    return;
+  }
+  try {
+    await kommo.setLeadCustomFieldValue(leadId, info.id, info.type, d.valor, info.enums);
+    resumo.escritas++;
+    logger.info({ unit: unit.slug, leadId, campo: CAMPO_VALOR_DA_CONSULTA, valor: d.valor, motivo: d.motivo }, 'valor-consulta: gravado');
+  } catch (err) {
+    resumo.erros++;
+    logger.warn({ err, unit: unit.slug, leadId, campo: CAMPO_VALOR_DA_CONSULTA }, 'valor-consulta: falha ao gravar');
+  }
+  await new Promise((res) => setTimeout(res, PAUSA_ENTRE_ESCRITAS_MS));
+}
+
 /** Etiqueta que a SDR filtra no Kommo: o cartão tem um paciente no `⚙ idClient` e a franquia casou OUTRO com ele. */
 export { TAG_CONFLITO };
 
@@ -1954,6 +2019,11 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
   // fase 1e (teste em seco): campos que a SDR preenchia — tipo de lead, responsável, data do cancelamento
   await espelharCamposSdr(ctx, leadId, lead, p, consulta, feitoPelaIa).catch((err) =>
     logger.warn({ err: String(err), unit: unit.slug, leadId }, 'franquia-sync: campos da SDR falharam'),
+  );
+
+  // fase 1f: ¤ Valor da Consulta, do preço das fontes da unidade, quando há avaliação marcada (chave `valor-consulta`)
+  await espelharValorDaConsulta(ctx, leadId, lead, consulta).catch((err) =>
+    logger.warn({ err: String(err), unit: unit.slug, leadId }, 'valor-consulta: falhou'),
   );
 
   // fase 2: a franquia move o cartão
@@ -2552,4 +2622,4 @@ export function stopFranquiaSyncWorker(): void {
   proximaEm.clear();
 }
 
-export const _interno = { mapearCampos, valoresDoLead, procurarPaciente, espelharPaciente, recusarOutroPaciente, resolverPaciente, marcarConflitoDeTelefone, avisarFaltas, processarCartao, sincronizarUnidade, revisarPeloHistorico, gravarIdClientNoCartao, fecharSessoesDoTratamento };
+export const _interno = { mapearCampos, valoresDoLead, procurarPaciente, espelharPaciente, recusarOutroPaciente, resolverPaciente, marcarConflitoDeTelefone, avisarFaltas, processarCartao, espelharValorDaConsulta, sincronizarUnidade, revisarPeloHistorico, gravarIdClientNoCartao, fecharSessoesDoTratamento };

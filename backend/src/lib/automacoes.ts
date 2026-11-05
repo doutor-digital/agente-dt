@@ -412,6 +412,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/campos-sdr.ts',
   },
   {
+    id: 'valor-consulta',
+    chave: 'VALOR_CONSULTA_SLUGS',
+    nome: 'Valor da Consulta preenchido sozinho',
+    oQueFaz:
+      'Preenche o ¤ Valor da Consulta com o preço da consulta das fontes da unidade quando o paciente tem consulta marcada. Grava só em campo vazio.',
+    pegadinha:
+      'O preço vem do texto "CONSULTA … R$ …, pago no dia" das fontes da unidade (nada fixo no código); sem preço lá, não grava e o log avisa. Só vale para AVALIAÇÃO ainda por acontecer (agendada, confirmada ou remarcada): atendida, falta, desmarcada, retorno e sessão não recebem. Nunca troca o que já está no campo, nem o 0 da cortesia. Roda junto do sincronizador da franquia (precisa estar ligado na unidade) e vê a mesma janela de D-3 a D+45. Ligado, o guia "O que eu faço agora?" deixa de pedir este campo à SDR em AGENDADO. Em "Só no papel" só registra o que gravaria; se o sincronizador inteiro estiver em seco, também não grava.',
+    risco: 'escreve-campo',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/valor-consulta.ts',
+  },
+  {
     id: 'unidade-por-canal',
     chave: 'UNIDADE_POR_CANAL_SLUGS',
     nome: 'Unidade de atendimento (Petrópolis × Caxias)',

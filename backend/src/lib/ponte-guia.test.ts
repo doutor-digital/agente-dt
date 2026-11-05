@@ -298,6 +298,28 @@ describe('guia da Ponte — consulta que já passou não serve para AGENDADO', (
   });
 });
 
+describe('guia da Ponte — campo que um robô da unidade preenche (valor-consulta)', () => {
+  const faltamEmAgendado = (preenchidosPorRobo?: readonly string[]) =>
+    montarGuia({ lead: cartao(ST.agendado, { 2449931: { enum_id: 1845440 } }), defs: DEFS, funis: FUNIS, tz: TZ, preenchidosPorRobo }).faltam.map((d) => d.nome);
+
+  it('sem robô, o Valor da Consulta continua na lista da SDR em AGENDADO', () => {
+    assert.ok(faltamEmAgendado().includes('¤ Valor da Consulta'));
+    assert.ok(faltamEmAgendado([]).includes('¤ Valor da Consulta'));
+  });
+
+  it('com o robô ligado, sai da lista da SDR; o resto da etapa fica', () => {
+    const f = faltamEmAgendado(['¤ Valor da Consulta']);
+    assert.ok(!f.includes('¤ Valor da Consulta'));
+    assert.ok(f.includes('¤ Pagamento antecipado'));
+  });
+
+  it('se a conta EXIGE o campo em AGENDADO, o guia continua cobrando mesmo com o robô (o Kommo trava a etapa)', () => {
+    const exigido = DEFS.map((d) => (d.name === '¤ Valor da Consulta' ? { ...d, required_statuses: em([COM, ST.agendado]) } : d));
+    const g = montarGuia({ lead: cartao(ST.agendado, { 2449931: { enum_id: 1845440 } }), defs: exigido, funis: FUNIS, tz: TZ, preenchidosPorRobo: ['¤ Valor da Consulta'] });
+    assert.ok(g.faltam.some((d) => d.nome === '¤ Valor da Consulta'));
+  });
+});
+
 describe('guia da Ponte — cabeçalho nunca é alvo', () => {
   it('"##…" e "*…*" são cabeçalho; "# Idade" (número) não', () => {
     for (const n of ['## CONSULTA', '##^Paciente', '##Paciente', '*AGENDADO*', '*AUTOMÁTICO · NÃO PREENCHER', '  ## X']) assert.equal(ehCabecalho(n), true, n);
