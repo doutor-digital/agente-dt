@@ -558,7 +558,7 @@ export interface EntradaDoGuia {
   agora?: Date;
   /**
    * Campos da SDR que um robô desta unidade preenche sozinho (ex.: o Valor da Consulta): saem da lista de pendências e das
-   * sugestões — mas só no cartão que o sincronizador já casou com a franquia (tem ◷ Data da Consulta) e se o campo da conta
+   * sugestões — mas só no cartão que o sincronizador já casou com a franquia (tem ◷ Data da Consulta NO FUTURO) e se o campo da conta
    * aceita o número do robô (monetário/numérico). Fora disso o robô não chega lá e a SDR continua sendo quem preenche.
    */
   preenchidosPorRobo?: readonly string[];
@@ -569,7 +569,21 @@ function roboPreenche(e: EntradaDoGuia, d: DefinicaoDeCampo): boolean {
   if (!(e.preenchidosPorRobo ?? []).some((n) => d.name.trim() === n)) return false;
   if (d.type !== 'monetary' && d.type !== 'numeric') return false;
   const data = campoPorNome(e.defs, CAMPOS_SYNC.DATA_CONSULTA);
-  return !!data && !vazioNoCartao(e.lead, data.id);
+  if (!data || vazioNoCartao(e.lead, data.id)) return false;
+  // O robô só grava em avaliação que AINDA VAI acontecer (lib/valor-consulta.ts). Consulta vencida sem baixa, ou retorno com
+  // data antiga, ele não toca — esconder o campo ali deixaria o cartão vazio para sempre (revisão do PR #224, 05/11/2026).
+  const n = Number(valoresDe(e.lead, data.id)[0]?.value);
+  if (!Number.isFinite(n) || n <= 0) return false;
+  if (!((n > 1e11 ? n : n * 1000) > (e.agora ?? new Date()).getTime())) return false;
+  // E tem que ser AVALIAÇÃO ainda de pé (Agendado/Confirmado/Remarcado), como `avaliacaoPorVir` do robô: retorno, sessão ou
+  // desmarcada no futuro o robô não grava. O cartão diz isso pelos campos que o próprio sincronizador espelha; faltou um
+  // dos dois, a SDR continua preenchendo (revisão do PR #225).
+  const situacao = campoPorNome(e.defs, CAMPOS_SYNC.SITUACAO);
+  const categoria = campoPorNome(e.defs, CAMPOS_SYNC.CATEGORIA);
+  if (!situacao || !categoria) return false;
+  const sit = normalizarNome(textoDoValor(situacao, valoresDe(e.lead, situacao.id), e.tz) ?? '');
+  const cat = normalizarNome(textoDoValor(categoria, valoresDe(e.lead, categoria.id), e.tz) ?? '');
+  return ['agendado', 'confirmado', 'remarcado'].includes(sit) && cat.includes('avalia');
 }
 
 /** A unidade de atendimento (Petrópolis × Caxias), quando a conta tem o campo. */
