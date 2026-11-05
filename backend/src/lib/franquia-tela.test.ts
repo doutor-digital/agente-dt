@@ -8,7 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { SessaoTela, abrirSessaoTela, montarAvisoDaTela, dataDaTela, ehTelaDeEdicao, ehTelaDeLogin, lerAtendimentoDaTela } from './franquia-tela.js';
+import { ID_COMPANY_POR_SLUG, SessaoTela, abrirSessaoTela, montarAvisoDaTela, dataDaTela, ehTelaDeEdicao, ehTelaDeLogin, lerAtendimentoDaTela } from './franquia-tela.js';
 
 const OPCOES_PAGAMENTO = ['Selecione', 'DINHEIRO', 'CARTÃO DE DÉBITO', 'CRÉDITO 2X', 'PIX'];
 function opcoes(lista: string[], marcada: string | null): string {
@@ -164,4 +164,8 @@ test('a página real tem DOIS selects id_form_payment: o 1º quebrado (erros de 
   assert.equal(lerAtendimentoDaTela(tela().replace(/<select class="form-select" name="id_form_payment"[\s\S]*?<\/select>/, limpo + quebrado))!.formaPagamento, 'CRÉDITO 12X');
   // nenhum marcado em nenhum dos dois: continua vazio
   assert.equal(lerAtendimentoDaTela(tela().replace(/<select class="form-select" name="id_form_payment"[\s\S]*?<\/select>/, quebrado + quebrado))!.formaPagamento, null);
+});
+
+test('Timbó está no mapa com o mesmo id do raspador de bloqueios (436) — sem ele a tela nunca é lida', () => {
+  assert.equal(ID_COMPANY_POR_SLUG['doutor-hernia-timbo'], 436);
 });
