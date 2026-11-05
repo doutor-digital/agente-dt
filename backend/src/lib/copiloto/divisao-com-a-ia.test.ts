@@ -21,11 +21,10 @@ test('voz: a regra errada saiu e a divisão com a IA entrou, com e sem etapa', (
     assert.match(t, /Você não altera nada no Kommo/);
     assert.match(t, /DIVISÃO DE TRABALHO COM A IA/);
   }
-  assert.match(instrucoesDaVoz('EM QUALIFICAÇÃO'), /pode ser a Sofia ou a atendente/);
 });
 
-test('texto: continua "Você NÃO grava nada", sem dizer que quem digita é sempre a atendente, e traz a divisão', () => {
+test('texto: continua "Você NÃO grava nada", sem dizer que quem digita é sempre a atendente, e manda seguir o bloco da unidade', () => {
   assert.match(REGRAS_DO_COPILOTO, /Você NÃO grava nada no Kommo/);
   assert.doesNotMatch(REGRAS_DO_COPILOTO, /Quem digita no Kommo é a atendente\./);
-  assert.match(REGRAS_DO_COPILOTO, /DIVISÃO DE TRABALHO COM A IA/);
+  assert.match(REGRAS_DO_COPILOTO, /ESTA unidade funciona/);
 });

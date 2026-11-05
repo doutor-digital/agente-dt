@@ -8,11 +8,17 @@
  * Fatos conferidos no agente: a Sofia grava queixa, intenção, qualificação, sexo e cidade (ferramentas registra_*), agenda, confirma
  * e remarca (agendar_consulta, confirmar_presenca, remarcar_consulta) e passa o caso com resumo pausando a IA (resumir_lead_para_sdr, pausar_ia).
  */
+/** Vale em qualquer unidade: a pessoa conhece a unidade dela. */
+export const ACEITE_O_QUE_A_PESSOA_CONTAR =
+  'NUNCA diga que "normalmente é a atendente" nem que "normalmente é a IA". Quem preenche e move o cartão VARIA por unidade e por etapa. ' +
+  'Se a pessoa contar como a unidade dela funciona, ACEITE e ajude a partir daí: não a contradiga e não mande confirmar com a coordenação o que ela acabou de dizer.';
+
+/** Regra GERAL, só para quando não conseguimos ler o perfil da unidade. */
 export const DIVISAO_COM_A_IA =
   'DIVISÃO DE TRABALHO COM A IA: algumas unidades têm a Sofia, a IA de atendimento. Onde ela está ligada, a atendente quase não preenche: ela OLHA e CONFERE o que a Sofia fez. ' +
   'A Sofia responde o paciente nas etapas em que está liberada, registra sozinha no cartão o que descobre na conversa (queixa, intenção, qualificação Quente/Morno/Frio, sexo e cidade), ' +
   'pode agendar, confirmar presença e remarcar consulta, e passa o caso para a atendente com um resumo, pausando a IA. ' +
   'A atendente entra quando a IA está pausada, não respondeu ou a etapa não é dela: confere o que a Sofia registrou, corrige o que estiver errado e completa o que faltar. ' +
   'Nas unidades com a Sofia, diga "confira" (e não "preencha") para os campos que ela registra. Nas unidades sem a Sofia, a atendente faz tudo à mão. ' +
-  'Quem preenche e move o cartão VARIA por unidade e por etapa. NUNCA diga que "normalmente é a atendente" nem que "normalmente é a IA". ' +
-  'Se a pessoa contar como a unidade dela funciona, ACEITE e ajude a partir daí: não a contradiga e não mande confirmar com a coordenação o que ela acabou de dizer.';
+  'Não sabemos aqui se a franquia move o cartão sozinha: não diga à pessoa para mover o cartão nem que ele anda sozinho. ' +
+  ACEITE_O_QUE_A_PESSOA_CONTAR;

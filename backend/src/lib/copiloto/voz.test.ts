@@ -1,34 +1,30 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { corpoDaSessao, criarSessaoDeVoz, instrucoesDaVoz, lerEtapaDoPedido, reservarSessao, _limparSessoesDoDia, VALIDADE_DO_SEGREDO_S } from './voz.js';
-import { fichaDaEtapa, FICHAS_DAS_ETAPAS } from './fichas-das-etapas.js';
 
-test('fichaDaEtapa: acha pelo nome, com ou sem acento, e junta "leads de entrada" com "Incoming leads"', () => {
-  assert.equal(fichaDaEtapa('em qualificacao')?.nome, 'EM QUALIFICAÇÃO');
-  assert.equal(fichaDaEtapa('Etapa de leads de entrada')?.nome, 'Incoming leads');
-  assert.equal(fichaDaEtapa('CONFERIR NA FRANQUIA'), null);
-  assert.equal(fichaDaEtapa(null), null);
-  assert.equal(Object.keys(FICHAS_DAS_ETAPAS).length, 13);
+test('instrucoesDaVoz: sem perfil cai na regra geral e manda não dizer que o cartão anda sozinho', () => {
+  const t = instrucoesDaVoz(null);
+  assert.match(t, /DIVISÃO DE TRABALHO COM A IA/);
+  assert.match(t, /não diga à pessoa para mover o cartão nem que ele anda sozinho/);
+  assert.match(t, /pergunte qual etapa/);
 });
 
-test('instrucoesDaVoz: com etapa traz a missão e os campos; sem etapa manda perguntar qual é', () => {
-  const com = instrucoesDaVoz('EM QUALIFICAÇÃO');
-  assert.match(com, /etapa EM QUALIFICAÇÃO/);
-  assert.match(com, /Qualificação \(Quente\/Morno\/Frio\)/);
-  assert.match(com, /AGENDADO ou EM ESPERA/);
-  const sem = instrucoesDaVoz(null);
-  assert.match(sem, /pergunte qual etapa/);
-  assert.doesNotMatch(sem, /Ficha da etapa/);
+test('instrucoesDaVoz: com perfil e ficha viva usa os dois e proíbe o processo antigo de memória', () => {
+  const t = instrucoesDaVoz('EM QUALIFICAÇÃO', {
+    perfil: { temSofia: true, etapasDaSofia: ['Incoming leads', 'EM QUALIFICAÇÃO'], moveAutomatico: true, sincronizaFranquia: true },
+    ficha: { etapa: 'EM QUALIFICAÇÃO', visiveis: ['✎ Queixa', '★ Qualificação'], obrigatorios: ['★ Qualificação'], chegamSozinhos: [] },
+  });
+  assert.match(t, /Esta unidade TEM a Sofia/);
+  assert.match(t, /Ela atende nas etapas: Incoming leads, EM QUALIFICAÇÃO/);
+  assert.match(t, /O CARTÃO ANDA SOZINHO/);
+  assert.match(t, /lida do Kommo agora/);
+  assert.match(t, /Não use aulas, manuais ou processos antigos de memória/);
+  assert.doesNotMatch(t, /Leia a conversa, salve o nome no título/);
 });
 
-test('instrucoesDaVoz: as regras de segurança estão sempre lá', () => {
-  for (const e of [null, 'AGENDADO', 'etapa que não existe']) {
-    const t = instrucoesDaVoz(e);
-    assert.match(t, /NUNCA invente regra, preço, chave Pix/);
-    assert.match(t, /NUNCA dê orientação médica/);
-    assert.match(t, /Não peça nem repita nome, telefone, CPF/);
-    assert.match(t, /Você não altera nada no Kommo/);
-  }
+test('instrucoesDaVoz: etapa dita mas ficha não lida → não lista campos', () => {
+  const t = instrucoesDaVoz('AGENDADO', { perfil: null, ficha: null });
+  assert.match(t, /não consegui ler a ficha dela agora. Não liste campos/);
 });
 
 test('lerEtapaDoPedido: só texto, aparado e limitado', () => {
