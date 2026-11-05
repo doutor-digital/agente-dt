@@ -500,12 +500,19 @@ trilha manual (GET/POST, HMAC, 401, ACK), entram `On messages` +
 `Normalizar formato do Trigger`. Todo o miolo é **byte a byte o de produção** — é o que
 o `derive-nativo.mjs` garante.
 
-Gerar de novo depois de reexportar a produção:
+Aplicar de novo na Imperatriz. **A fonte do `PUT` é `ops/unidades/imperatriz.json`**, gerado por
+`node ops/build-unidades.mjs`: ele traz os ids da unidade e lê `META_ADS_TOKEN_IMPERATRIZ`.
+
+> Não use `rastreio-campanhas-nativo.json` nem `producao/4T4HALkkLJtcNAY1.json` como fonte: o
+> primeiro é só o molde do gerador (lê subdomínio e ids por `$env`) e o segundo é o registro do
+> export. E **não rode `node derive-nativo.mjs` para isto**: sem argumento ele parte de
+> `producao/ZqW9mOjb0td2Flik.json`, que é antigo, e volta 4 nós e o `tokenAds` ao estado antigo;
+> com o export da Imperatriz ele recusa a entrada. Depois do `PUT`, confira o `tokenAds` no Config.
 
 ```bash
-node derive-nativo.mjs
+node ops/build-unidades.mjs
 K=$N8N_API_KEY
-BODY=$(node -e "const w=require('./rastreio-campanhas-nativo.json');
+BODY=$(node -e "const w=require('./ops/unidades/imperatriz.json');
   const ok=['executionOrder','saveDataErrorExecution','saveDataSuccessExecution',
             'saveExecutionProgress','saveManualExecutions','executionTimeout','errorWorkflow','timezone'];
   const s={}; for(const k of ok) if(w.settings[k]!==undefined) s[k]=w.settings[k];
@@ -877,3 +884,19 @@ O `verify_token` da inscrição antiga não é recuperável por API — se preci
 pegar o id do nó no n8n da easypanel.
 
 Faltam **Porto Nacional** e **Serra** (workflows criados e parados, esperando o app).
+
+### 11.6 Timbó (04/11/2026) e o token de Ads por unidade
+
+Timbó entrou pela receita limpa (app novo, `GET /{app}/subscriptions` = 0): campos e tags
+já existiam na conta `timbosc` (só faltavam as 2 tags `Origem:`), credenciais n8n
+`Kommo Timbó` / `WhatsApp Trigger · Timbó`, workflow `P4H8290pOc1eoiw5` (webhook
+`meta-ctwa-timbo`), WABA `1085453084341859`, `POST /{WABA}/subscribed_apps` com conferência
+de que a Kommo (`1022173854571346`) continuou na lista.
+
+**`META_ADS_TOKEN` global caiu em 01/10/2026** ("session has been invalidated"): desde
+então NENHUMA unidade grava `⌂ Campanha`/`⌂ Conjunto`/`⌂ Anúncio (ad)` (o log `kommo|sucesso`
+deixou de listar `campanha`). Um token só não serve a todas — cada unidade tem a conta de
+anúncio no Business dela. Por isso `ops/unidades.mjs` aceita `tokenAdsEnv` por unidade: o
+Config do workflow lê `$env.<NOME> || $env.META_ADS_TOKEN`. O NOME da env vai no JSON; o valor
+fica só no serviço do n8n (`--env-add` nos TRÊS: editor, worker, webhook — rolling restart).
+Timbó usa `META_ADS_TOKEN_TIMBO`.

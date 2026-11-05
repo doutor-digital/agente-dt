@@ -7,18 +7,19 @@
  * até alguém cadastrar o token dela.
  */
 export const UNIDADES = [
-  { slug: 'imperatriz',    nome: 'Imperatriz',     subdominio: 'attivacorpoementeitz',     credencial: { id: 'MnPGiOOvaSPm9HgC', name: 'Kommo Imperatriz' },      pasta: 'Imperatriz - Rastreio', canonica: true },
-  { slug: 'acailandia',    nome: 'Açailândia',     subdominio: 'doutorherniaacailandia',   credencial: { id: 'DqLADDQI9UEv6NiF', name: 'Kommo Açailândia' }, trigger: { id: 'Yp2dK9Y5FSp0tfIU', name: 'WhatsApp Trigger · Açailândia' } },
-  { slug: 'araguaina',     nome: 'Araguaína',      subdominio: 'araguainadoutorhernia',    credencial: { id: 'QzoiphPGyGWg5dGQ', name: 'Kommo Araguaína' }, trigger: { id: 'ZZnhN6aGTxT8xRwS', name: 'WhatsApp Trigger · Araguaína' } },
-  { slug: 'balsas',        nome: 'Balsas',         subdominio: 'doutorherniabalsas',       credencial: { id: '7kVS4ZItRvWsZ9Rc', name: 'Kommo Balsas' }, trigger: { id: 'M5byoYYggB3kpbpC', name: 'WhatsApp Trigger · Balsas' } },
-  { slug: 'canaa',         nome: 'Canaã',          subdominio: 'doutorherniacanaa',        credencial: { id: '8W38EQwnQoHBaWtM', name: 'Kommo Canaã' }, trigger: { id: 'hCZNhjAsNqN8yd5F', name: 'WhatsApp Trigger · Canaã' } },
-  { slug: 'maraba',        nome: 'Marabá',         subdominio: 'marabadoutorhernia',       credencial: { id: 'OlXyNeejUa9C25Lq', name: 'Kommo Marabá' }, trigger: { id: 'FfdrmajF7u2ZTN8h', name: 'WhatsApp Trigger · Marabá' } },
-  { slug: 'parauapebas',   nome: 'Parauapebas',    subdominio: 'parauapebasdoutorhernia',  credencial: { id: 'uDAqF7NwhVpJaVS0', name: 'Kommo Parauapebas' }, trigger: { id: 'zJr1ho1dNLLOuAmM', name: 'WhatsApp Trigger · Parauapebas' } },
-  { slug: 'porto',         nome: 'Porto Nacional', subdominio: 'doutorherniaporto',        credencial: { id: '0pmkejndWKuiPTZC', name: 'Kommo Porto Nacional' }, trigger: { id: 'ruVSzcd7DpD1xQ77', name: 'WhatsApp Trigger · Porto Nacional' } },
-  { slug: 'serra',         nome: 'Serra',          subdominio: 'drherniaserra',            credencial: { id: 'q2R9WqjWa9HCGkH4', name: 'Kommo Serra' }, trigger: { id: 'q6f4vQ471pWZykAT', name: 'WhatsApp Trigger · Serra' } },
+  { slug: 'imperatriz',    nome: 'Imperatriz',     subdominio: 'attivacorpoementeitz',     credencial: { id: 'MnPGiOOvaSPm9HgC', name: 'Kommo Imperatriz' },      pasta: 'Imperatriz - Rastreio', canonica: true, tokenAdsEnv: 'META_ADS_TOKEN_IMPERATRIZ' },
+  { slug: 'acailandia',    nome: 'Açailândia',     subdominio: 'doutorherniaacailandia',   credencial: { id: 'DqLADDQI9UEv6NiF', name: 'Kommo Açailândia' }, trigger: { id: 'Yp2dK9Y5FSp0tfIU', name: 'WhatsApp Trigger · Açailândia' }, tokenAdsEnv: 'META_ADS_TOKEN_ACAILANDIA' },
+  { slug: 'araguaina',     nome: 'Araguaína',      subdominio: 'araguainadoutorhernia',    credencial: { id: 'QzoiphPGyGWg5dGQ', name: 'Kommo Araguaína' }, trigger: { id: 'ZZnhN6aGTxT8xRwS', name: 'WhatsApp Trigger · Araguaína' }, tokenAdsEnv: 'META_ADS_TOKEN_ARAGUAINA' },
+  { slug: 'balsas',        nome: 'Balsas',         subdominio: 'doutorherniabalsas',       credencial: { id: '7kVS4ZItRvWsZ9Rc', name: 'Kommo Balsas' }, trigger: { id: 'M5byoYYggB3kpbpC', name: 'WhatsApp Trigger · Balsas' }, tokenAdsEnv: 'META_ADS_TOKEN_BALSAS' },
+  { slug: 'canaa',         nome: 'Canaã',          subdominio: 'doutorherniacanaa',        credencial: { id: '8W38EQwnQoHBaWtM', name: 'Kommo Canaã' }, trigger: { id: 'hCZNhjAsNqN8yd5F', name: 'WhatsApp Trigger · Canaã' }, tokenAdsEnv: 'META_ADS_TOKEN_CANAA' },
+  { slug: 'maraba',        nome: 'Marabá',         subdominio: 'marabadoutorhernia',       credencial: { id: 'OlXyNeejUa9C25Lq', name: 'Kommo Marabá' }, trigger: { id: 'FfdrmajF7u2ZTN8h', name: 'WhatsApp Trigger · Marabá' }, tokenAdsEnv: 'META_ADS_TOKEN_MARABA' },
+  { slug: 'parauapebas',   nome: 'Parauapebas',    subdominio: 'parauapebasdoutorhernia',  credencial: { id: 'uDAqF7NwhVpJaVS0', name: 'Kommo Parauapebas' }, trigger: { id: 'zJr1ho1dNLLOuAmM', name: 'WhatsApp Trigger · Parauapebas' }, tokenAdsEnv: 'META_ADS_TOKEN_PARAUAPEBAS' },
+  { slug: 'porto',         nome: 'Porto Nacional', subdominio: 'doutorherniaporto',        credencial: { id: '0pmkejndWKuiPTZC', name: 'Kommo Porto Nacional' }, trigger: { id: 'ruVSzcd7DpD1xQ77', name: 'WhatsApp Trigger · Porto Nacional' }, tokenAdsEnv: 'META_ADS_TOKEN_PORTO' },
+  { slug: 'serra',         nome: 'Serra',          subdominio: 'drherniaserra',            credencial: { id: 'q2R9WqjWa9HCGkH4', name: 'Kommo Serra' }, trigger: { id: 'q6f4vQ471pWZykAT', name: 'WhatsApp Trigger · Serra' }, tokenAdsEnv: 'META_ADS_TOKEN_SERRA' },
   { slug: 'rioverde',      nome: 'Rio Verde',      subdominio: 'doutorherniarioverde2026', credencial: { id: 'gJav1pY0g503e5Qf', name: 'Kommo Rio Verde' }, trigger: { id: 'S4a5UQDddxV2XVlr', name: 'WhatsApp Trigger · Rio Verde' } },
-  { slug: 'taubate',       nome: 'Taubaté',        subdominio: 'doutorherniataubatedt',    credencial: { id: 'rmHbc6sqKSi9G0TG', name: 'Kommo Taubaté' }, trigger: { id: 'yPMGb4lDTckcfRt9', name: 'WhatsApp Trigger · Taubaté' } },
-  { slug: 'trauma',        nome: 'Instituto Trauma', subdominio: 'institutotraumakommon',  credencial: { id: 'IDrv4gZyutIINGMw', name: 'Kommo Trauma' } },
+  { slug: 'taubate',       nome: 'Taubaté',        subdominio: 'doutorherniataubatedt',    credencial: { id: 'rmHbc6sqKSi9G0TG', name: 'Kommo Taubaté' }, trigger: { id: 'yPMGb4lDTckcfRt9', name: 'WhatsApp Trigger · Taubaté' }, tokenAdsEnv: 'META_ADS_TOKEN_TAUBATE' },
+  { slug: 'trauma',        nome: 'Instituto Trauma', subdominio: 'institutotraumakommon',  credencial: { id: 'IDrv4gZyutIINGMw', name: 'Kommo Trauma' }, tokenAdsEnv: 'META_ADS_TOKEN_TRAUMA' },
+  { slug: 'timbo',         nome: 'Timbó',          subdominio: 'timbosc',                  credencial: { id: 'XeawYlyRvi6HBZUE', name: 'Kommo Timbó' }, trigger: { id: 'IS0NLrUxBtiQnYEn', name: 'WhatsApp Trigger · Timbó' }, tokenAdsEnv: 'META_ADS_TOKEN_TIMBO' },
 ];
 
 /**

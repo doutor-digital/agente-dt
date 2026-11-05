@@ -226,5 +226,25 @@
     "utmCampaign": 215634,
     "utmContent": 215630,
     "utmTerm": 215638
+  },
+  "timbo": {
+    "campanha": 386080,
+    "conjunto": 386092,
+    "anuncio": 386084,
+    "anuncioId": 386086,
+    "headline": 386088,
+    "ctwaClid": 386094,
+    "origemUrl": 386096,
+    "plataforma": 386082,
+    "imagemAnuncio": 386090,
+    "ultimoAnuncio": 386220,
+    "cliques": 386222,
+    "primeiroContato": 385972,
+    "origemTipo": 386078,
+    "utmSource": 322572,
+    "utmMedium": 322568,
+    "utmCampaign": 322570,
+    "utmContent": 322566,
+    "utmTerm": 322574
   }
 }
