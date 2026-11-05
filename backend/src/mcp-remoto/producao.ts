@@ -51,10 +51,10 @@ import { criarContextoTiquetaque, registrarFerramentasTiquetaque, type ContaTiqu
 import { tiquetaqueGet } from '../lib/integracoes/tiquetaque.js';
 import { contaTramitacaoDaChave, criarContextoTramitacao, registrarFerramentasTramitacao, type ContaTramitacao } from './tramitacao.js';
 import { contasComChave } from '../lib/integracoes/chaves.js';
-import { lerConfigSistemas, sistemasChamar } from '../lib/integracoes/sistemas.js';
 import { registrarAdminSistemas } from './sistemas-admin.js';
 import { registrarEstruturaSistemas } from './sistemas-estrutura.js';
 import { criarContextoSistemas, PendentesSistemas, registrarEscritaSistemas, registrarLeituraSistemas, type ContaSistemas } from './sistemas.js';
+import { contasDoRh, montarContasSistemas } from './sistemas-contas.js';
 import { contaEvolutionDoAmbiente, criarContextoEvolution, EVENTO_DE_ENVIO, registrarFerramentasEvolution } from './evolution.js';
 import { blingGet } from '../lib/bling/cliente.js';
 import type { Usuario } from './provedor.js';
@@ -243,16 +243,12 @@ async function contasTramitacaoDoBanco(): Promise<Map<string, ContaTramitacao>> 
  * fica só em memória, decifrada aqui; configuração ilegível vira aviso no log (sem o conteúdo) e a conta fica de fora.
  */
 async function contasSistemasDoBanco(): Promise<Map<string, ContaSistemas>> {
-  const contas = new Map<string, ContaSistemas>();
-  for (const c of await contasComChave('sistemas')) {
-    try {
-      const cfg = lerConfigSistemas(c.chave);
-      contas.set(c.slug, { slug: c.slug, nome: c.nome, tela: cfg.tela, fonte: { chamar: (metodo, caminho, o) => sistemasChamar(cfg, metodo, caminho, o) } });
-    } catch (err) {
-      logger.warn({ slug: c.slug, motivo: err instanceof Error ? err.message : 'inválida' }, 'mcp-remoto: configuração do sistema novo ilegível; cadastre de novo no painel');
-    }
-  }
-  logger.info({ contas: contas.size }, 'mcp-remoto: contas do sistema novo (RH/Caixa) carregadas');
+  const contas = montarContasSistemas(
+    await contasComChave('sistemas'),
+    await contasComChave('descontratos'),
+    ({ motivo, ...onde }) => logger.warn({ ...onde, motivo }, 'mcp-remoto: configuração do sistema novo ilegível ou repetida; cadastre de novo no painel'),
+  );
+  logger.info({ contas: contas.size }, 'mcp-remoto: contas do sistema novo (RH/Caixa e Descontratos) carregadas');
   return contas;
 }
 
@@ -634,7 +630,7 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
       if (leitoresWhatsapp.has(quem.userId)) registrarFerramentasEvolution(server, whatsapp, quem.userId, auditar);
       registrarVideoSePermitido(server, video, quem.userId, leitoresVideo, auditar);
       registrarTranscricaoSePermitido(server, transcritor, quem.userId, leitoresVideo, auditar);
-      registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas, convenia: convenia.contas, tiquetaque: tiquetaque.contas, tramitacao: tramitacao.contas, sistemas: sistemas.contas }), auditar);
+      registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas, convenia: convenia.contas, tiquetaque: tiquetaque.contas, tramitacao: tramitacao.contas, sistemas: contasDoRh(sistemas.contas) }), auditar);
       registrarCerebro(server, slugs, cacheCerebro, auditar);
       if (franquia) {
         const deps: DepsRelatorio = { franquia, kommo, telefonesDosLeads, vinculosDosLeads };

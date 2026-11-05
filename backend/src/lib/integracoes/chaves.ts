@@ -2,7 +2,8 @@
  * Chaves de API de terceiros por unidade: salvar (testando antes), listar sem expor, e ler decifrada
  * para o conector. Provedores: Asaas (financeiro das clínicas), Convênia (RH/departamento pessoal),
  * Tiquetaque (ponto eletrônico), Tramitação Inteligente (processos e prazos de advocacia) e Sistemas (RH/Caixa/Financeiro
- * novo, servidor próprio: a "chave" é um JSON com a URL da API de administração, a ADMIN_KEY e a tela RH — ver `sistemas.ts`).
+ * novo, servidor próprio: a "chave" é um JSON com a URL da API de administração, a ADMIN_KEY e a tela RH — ver `sistemas.ts`) e Descontratos (o mesmo
+ * tipo de JSON, sem a tela; é um servidor à parte, com a própria ADMIN_KEY).
  */
 import { env } from '../env.js';
 import { prisma } from '../prisma.js';
@@ -11,9 +12,9 @@ import { testarChaveAsaas } from './asaas.js';
 import { testarChaveConvenia } from './convenia.js';
 import { testarChaveTiquetaque } from './tiquetaque.js';
 import { testarChaveTramitacao } from './tramitacao.js';
-import { lerConfigSistemas, testarChaveSistemas } from './sistemas.js';
+import { lerConfigSistemas, testarChaveDescontratos, testarChaveSistemas } from './sistemas.js';
 
-export const PROVEDORES = ['asaas', 'convenia', 'tiquetaque', 'tramitacao', 'sistemas'] as const;
+export const PROVEDORES = ['asaas', 'convenia', 'tiquetaque', 'tramitacao', 'sistemas', 'descontratos'] as const;
 export type Provedor = (typeof PROVEDORES)[number];
 
 const segredo = () => process.env.INTEGRACOES_CHAVE_MESTRA || env.SESSION_JWT_SECRET;
@@ -24,6 +25,7 @@ const TESTES: Record<Provedor, (chave: string) => Promise<string>> = {
   convenia: testarChaveConvenia, tiquetaque: testarChaveTiquetaque,
   tramitacao: (chave) => testarChaveTramitacao(chave),
   sistemas: testarChaveSistemas,
+  descontratos: testarChaveDescontratos,
 };
 
 export function ehProvedor(p: string): p is Provedor {
@@ -37,7 +39,7 @@ export async function salvarChave(slug: string, provedor: Provedor, chave: strin
   const unit = await prisma.unit.findUnique({ where: { slug }, select: { id: true } });
   if (!unit) throw new Error(`unidade ${slug} não existe`);
   const conta = await TESTES[provedor](limpa);
-  const dados = { chaveCifrada: cifrar(limpa, segredo()), finalDaChave: finalDaChave(provedor === 'sistemas' ? lerConfigSistemas(limpa).chave : limpa), conta, salvoPor: quem, testadoEm: new Date(), ultimoErro: null };
+  const dados = { chaveCifrada: cifrar(limpa, segredo()), finalDaChave: finalDaChave(provedor === 'sistemas' || provedor === 'descontratos' ? lerConfigSistemas(limpa).chave : limpa), conta, salvoPor: quem, testadoEm: new Date(), ultimoErro: null };
   await prisma.chaveDeIntegracao.upsert({
     where: { unitId_provedor: { unitId: unit.id, provedor } },
     create: { unitId: unit.id, provedor, ...dados },
@@ -66,6 +68,7 @@ export async function contasComChave(provedor: Provedor): Promise<Array<{ unitId
   const linhas = await prisma.chaveDeIntegracao.findMany({
     where: { provedor },
     include: { unit: { select: { slug: true, name: true, isActive: true, spineTimezone: true } } },
+    orderBy: { criadoEm: 'asc' }, // determinístico: o Descontratos (uma conta só) vale a linha mais antiga
   });
   const out: Array<{ unitId: string; slug: string; nome: string; conta: string | null; chave: string; fuso: string | null }> = [];
   for (const l of linhas) {

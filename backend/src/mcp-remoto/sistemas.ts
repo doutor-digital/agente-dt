@@ -10,6 +10,11 @@
  * (papel, unidade, ativo) e `sistemas_convite` (link de acesso, sem senha).
  *
  * Quem pediu (`quem`) é o e-mail de quem entrou no conector: o servidor o grava no registro de alterações.
+ *
+ * DESCONTRATOS (provisório, até o banco dele migrar para o do RH): uma segunda conta, `tipo: 'dsc'`, slug `descontratos` (provedor `descontratos` do painel).
+ * Nela só valem `sistemas_esquema`, `sistemas_consultar` (leitura) e `sistemas_preparar_descontrato` + `sistemas_confirmar_alteracao` (concluir descontrato em dois
+ * passos). Todas as outras ferramentas são do RH/Caixa e recusam a conta do Descontratos (o servidor do Descontratos também as recusa: lista fechada de rotas).
+ * Sem `sistema`, as ferramentas continuam caindo no RH, como antes de existir a segunda conta.
  */
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
@@ -24,9 +29,14 @@ export interface FonteSistemas {
   chamar(metodo: 'GET' | 'POST', caminho: string, o?: { corpo?: unknown; query?: Record<string, string | number | undefined>; quem?: string; timeoutMs?: number }): Promise<unknown>;
 }
 
+/** `rh` = RH/Caixa/Financeiro (todas as ferramentas sistemas_*); `dsc` = Descontratos/Ficha (leitura + concluir descontrato). Conta sem `tipo` é RH. */
+export type TipoSistema = 'rh' | 'dsc';
+
 export interface ContaSistemas {
   slug: string;
   nome: string;
+  /** padrão `rh` */
+  tipo?: TipoSistema;
   fonte: FonteSistemas;
   /** endereço da tela RH, para montar o link de convite */
   tela?: string;
@@ -52,15 +62,45 @@ export const MAX_CARACTERES = 200_000;
 
 const SEM_INTEGRACAO = 'o sistema novo (RH/Caixa) ainda não está ligado neste conector: cadastre a URL e a chave no painel de integrações (/api/integracoes/painel, coluna "Sistemas (RH/Caixa)").';
 
-export function resolverSistema(ctx: ContextoSistemas, pedido?: string): ContaSistemas {
+/** o slug da conta do Descontratos (a do RH usa o slug da unidade onde foi cadastrada) */
+export const SLUG_DESCONTRATOS = 'descontratos';
+export const tipoDaConta = (c: ContaSistemas): TipoSistema => c.tipo ?? 'rh';
+const NOME_DO_TIPO: Record<TipoSistema, string> = { rh: 'RH/Caixa/Financeiro', dsc: 'Descontratos/Ficha' };
+/** Como a pessoa confere se uma alteração gravou: cada sistema tem a sua ferramenta e, no Descontratos, o `sistema` TEM de vir (sem ele a consulta vai ao RH, onde dsc_docs não existe). */
+const COMO_CONFERIR: Record<TipoSistema, string> = {
+  rh: 'com sistemas_log e sistemas_consultar',
+  dsc: 'com sistemas_consultar usando sistema="descontratos" (select id, data->>\'status\' status, data->\'historico\' from dsc_docs where col = \'cancelamentos\' and id = \'<id do descontrato>\'): o status e a última linha do historico mostram se gravou; sistemas_log não existe no Descontratos',
+};
+const APELIDOS_DSC = /^(dsc|descontratos?|ficha|fichas)$/i;
+
+/**
+ * A conta que atende o pedido. `exigir` diz de que sistema é a ferramenta: `rh` (o padrão — qualquer ferramenta nova nasce fechada para o Descontratos),
+ * `dsc` ou `qualquer` (só leitura: esquema e consulta). SEM `sistema` o padrão é o RH, mesmo havendo a conta do Descontratos: assim quem já usava as
+ * ferramentas sem dizer o sistema continua no RH. Pedindo um sistema de outro tipo que o da ferramenta, a recusa explica o caminho certo.
+ */
+export function resolverSistema(ctx: ContextoSistemas, pedido?: string, exigir: TipoSistema | 'qualquer' = 'rh'): ContaSistemas {
   if (ctx.contas.size === 0) throw new ErroDeEntrada(SEM_INTEGRACAO);
+  const todas = [...ctx.contas.values()];
   if (!pedido?.trim()) {
-    if (ctx.contas.size === 1) return [...ctx.contas.values()][0]!;
-    throw new ErroDeEntrada(`informe o sistema. Ligados: ${[...ctx.contas.keys()].join(', ')}`);
+    const tipoPadrao: TipoSistema = exigir === 'qualquer' ? 'rh' : exigir;
+    const candidatas = todas.filter((c) => tipoDaConta(c) === tipoPadrao); // sem fallback: sem conta RH carregada, a leitura sem `sistema` NÃO cai no Descontratos em silêncio
+    if (candidatas.length === 1) return candidatas[0]!;
+    if (!candidatas.length) throw new ErroDeEntrada(`o sistema ${NOME_DO_TIPO[tipoPadrao]} ainda não está ligado neste conector (ou não foi carregado agora). Ligados: ${[...ctx.contas.keys()].join(', ')}. Para ler o Descontratos diga sistema="descontratos"`);
+    // a lista mostra TODAS as contas (inclusive o Descontratos) para quem pediu a leitura "do Descontratos" sem dizer o sistema
+    throw new ErroDeEntrada(`informe o sistema. Ligados: ${(exigir === 'qualquer' ? todas : candidatas).map((c) => c.slug).join(', ')}`);
   }
-  const slug = acharSlug(ctx.contas.keys(), pedido);
+  const apelido = APELIDOS_DSC.test(pedido.trim()) ? todas.filter((c) => tipoDaConta(c) === 'dsc') : [];
+  const slug = apelido.length === 1 ? apelido[0]!.slug : acharSlug(ctx.contas.keys(), pedido);
   if (!slug) throw new ErroDeEntrada(`sistema "${pedido}" não está ligado ou é ambíguo. Ligados: ${[...ctx.contas.keys()].join(', ')}`);
-  return ctx.contas.get(slug)!;
+  const conta = ctx.contas.get(slug)!;
+  if (exigir !== 'qualquer' && tipoDaConta(conta) !== exigir) {
+    throw new ErroDeEntrada(
+      exigir === 'rh'
+        ? `"${conta.slug}" é o ${NOME_DO_TIPO[tipoDaConta(conta)]}: esta ferramenta só existe no RH/Caixa. No Descontratos use sistemas_esquema, sistemas_consultar e sistemas_preparar_descontrato (com sistemas_confirmar_alteracao)`
+        : `"${conta.slug}" é o ${NOME_DO_TIPO[tipoDaConta(conta)]}, não o Descontratos`,
+    );
+  }
+  return conta;
 }
 
 // ------------------------------------------------------------------ validação do SQL
@@ -191,7 +231,7 @@ const resposta = (r: unknown): Saida => (r && typeof r === 'object' && !Array.is
 // ------------------------------------------------------------------ leitura
 
 export async function esquema(ctx: ContextoSistemas, a: { sistema?: string; tabela?: string; incluirFuncoes?: boolean }) {
-  const c = resolverSistema(ctx, a.sistema);
+  const c = resolverSistema(ctx, a.sistema, 'qualquer');
   const r = resposta(await c.fonte.chamar('GET', '/admin/v1/esquema'));
   const busca = a.tabela?.trim().toLowerCase();
   if (!busca) return { sistema: c.slug, ...r };
@@ -202,7 +242,7 @@ export async function esquema(ctx: ContextoSistemas, a: { sistema?: string; tabe
 
 export async function consultar(ctx: ContextoSistemas, quem: string, a: { sistema?: string; sql: string }) {
   const sql = validarSelect(a.sql);
-  const c = resolverSistema(ctx, a.sistema);
+  const c = resolverSistema(ctx, a.sistema, 'qualquer');
   const r = resposta(await c.fonte.chamar('POST', '/admin/v1/consulta', { corpo: { sql }, quem }));
   const linhas = Array.isArray(r.linhas) ? r.linhas : [];
   let cortado = r.cortado === true;
@@ -361,7 +401,7 @@ export async function confirmarAlteracao(
   a: { confirmacao: string },
 ): Promise<Saida> {
   const p = pendentes.tirar(String(a.confirmacao ?? '').trim(), quem.usuario);
-  const c = resolverSistema(ctx, p.sistema);
+  const c = resolverSistema(ctx, p.sistema, 'qualquer'); // o código só nasceu numa ferramenta que já conferiu o tipo da conta
   const id = String(a.confirmacao).trim();
   let r: Saida;
   try {
@@ -370,7 +410,7 @@ export async function confirmarAlteracao(
     // sem resposta (rede, tempo esgotado) ou erro do servidor: pode ter gravado. O código volta e a pessoa confere antes de repetir.
     if (e instanceof ErroSistemas && (e.status === null || e.status >= 500)) {
       pendentes.devolver(id, p);
-      throw new ErroDeEntrada(`NÃO sei se a alteração foi gravada (${e.message}). Confira com sistemas_log e sistemas_consultar antes de repetir; o código ${id} continua valendo para tentar confirmar de novo (o servidor aplica cada código uma vez só).`);
+      throw new ErroDeEntrada(`NÃO sei se a alteração foi gravada (${e.message}). Confira ${COMO_CONFERIR[tipoDaConta(c)]} antes de repetir; o código ${id} continua valendo para tentar confirmar de novo (o servidor aplica cada código uma vez só).`);
     }
     throw e;
   }
@@ -380,9 +420,60 @@ export async function confirmarAlteracao(
     tabela: p.tabela,
     ...r,
     ...(r.conferido === false
-      ? { atencao: 'a releitura depois de gravar NÃO bateu com o esperado: confira com sistemas_consultar e sistemas_log; o "antes" está guardado (backup_id) e dá para desfazer pelo servidor.' }
+      ? { atencao: `a releitura depois de gravar NÃO bateu com o esperado: confira ${COMO_CONFERIR[tipoDaConta(c)]}; o "antes" está guardado (backup_id) e dá para desfazer pelo servidor.` }
       : {}),
-    registro: 'A alteração ficou no registro do sistema (sistemas_log) com quem pediu, o antes e o depois.',
+    registro:
+      tipoDaConta(c) === 'dsc'
+        ? 'A alteração ficou no histórico do próprio descontrato (aparece na tela, marcada "via conector") e no registro do servidor, com o antes guardado (backup_id).'
+        : 'A alteração ficou no registro do sistema (sistemas_log) com quem pediu, o antes e o depois.',
+  };
+}
+
+// ------------------------------------------------------------------ Descontratos: concluir um descontrato
+
+export const ACOES_DESCONTRATO = ['pagar', 'finalizar', 'quitado'] as const;
+export type AcaoDescontrato = (typeof ACOES_DESCONTRATO)[number];
+const ID_DESCONTRATO = /^[A-Za-z0-9_-]{1,64}$/;
+const PROTOCOLO_DESCONTRATO = /^[A-Za-z0-9-]{3,40}$/;
+
+/**
+ * PASSO 1 de 2 para concluir um descontrato (Descontratos/Ficha). O servidor monta, com as regras da tela, o que seria gravado e devolve o antes → depois; aqui
+ * se guarda o código (preso a quem pediu, 10 minutos). A confirmação é `sistemas_confirmar_alteracao`. Nada é gravado neste passo.
+ */
+export async function prepararDescontrato(
+  ctx: ContextoSistemas,
+  pendentes: PendentesSistemas,
+  quem: QuemSistemas,
+  a: { sistema?: string; id?: string; protocolo?: string; acao: AcaoDescontrato; valor_pago?: number; data_pagamento?: string },
+): Promise<Saida> {
+  if (!ACOES_DESCONTRATO.includes(a.acao)) throw new ErroDeEntrada(`acao: use ${ACOES_DESCONTRATO.join(', ')}`);
+  const id = a.id?.trim() || undefined;
+  const protocolo = a.protocolo?.trim() || undefined;
+  if ((id === undefined) === (protocolo === undefined)) throw new ErroDeEntrada('informe o id OU o protocolo do descontrato (um dos dois; ache-os com sistemas_consultar em dsc_docs, col = cancelamentos)');
+  if (id !== undefined && !ID_DESCONTRATO.test(id)) throw new ErroDeEntrada('id inválido');
+  if (protocolo !== undefined && !PROTOCOLO_DESCONTRATO.test(protocolo)) throw new ErroDeEntrada('protocolo inválido (ex.: ARA-2026-001)');
+  if (a.acao === 'pagar') {
+    if (typeof a.valor_pago !== 'number' || !Number.isFinite(a.valor_pago) || a.valor_pago <= 0) throw new ErroDeEntrada('pagar precisa de valor_pago maior que zero (em reais, número): o valor que o comprovante mostra. Sem valor a devolver, use finalizar ou quitado');
+  } else if (a.valor_pago !== undefined || a.data_pagamento !== undefined) {
+    throw new ErroDeEntrada('valor_pago e data_pagamento são só da acao "pagar"');
+  }
+  const c = resolverSistema(ctx, a.sistema, 'dsc');
+  const r = resposta(
+    await c.fonte.chamar('POST', '/admin/v1/descontrato/preparar', {
+      corpo: { ...(id ? { id } : { protocolo }), acao: a.acao, ...(a.acao === 'pagar' ? { valor_pago: a.valor_pago, ...(a.data_pagamento ? { data_pagamento: a.data_pagamento } : {}) } : {}), quem: quem.nome },
+      quem: quem.nome,
+    }),
+  );
+  const { id: codigo, ...resto } = r;
+  if (typeof codigo !== 'string' || !codigo) throw new ErroDeEntrada('o servidor não devolveu o código da prévia: nada foi preparado');
+  const expiraEm = pendentes.guardar(codigo, { usuario: quem.usuario, sistema: c.slug, operacao: `concluir descontrato (${a.acao})`, tabela: 'dsc_docs' });
+  return {
+    sistema: c.slug,
+    acao: a.acao,
+    ...resto,
+    confirmacao: codigo,
+    expiraEm,
+    instrucao: `Nada foi gravado ainda. Mostre à pessoa QUAL descontrato é (protocolo, unidade, paciente), o que muda (antes → depois) e os avisos; só se ela aprovar, chame sistemas_confirmar_alteracao com confirmacao="${codigo}" (vale 10 minutos, uma vez).`,
   };
 }
 
@@ -458,6 +549,8 @@ export function auditarSemDados(auditar: Auditar): Auditar {
     let argumentos: unknown = r.argumentos;
     if (r.ferramenta === 'sistemas_preparar_alteracao') {
       argumentos = { sistema: a.sistema, operacao: a.operacao, tabela: a.tabela, colunasDoFiltro: chaves(a.filtro), colunasDosDados: chaves(a.dados) };
+    } else if (r.ferramenta === 'sistemas_preparar_descontrato') {
+      argumentos = { sistema: a.sistema, acao: a.acao, id: a.id, protocolo: a.protocolo, comValor: a.valor_pago !== undefined };
     } else if (r.ferramenta === 'sistemas_convite') {
       argumentos = { sistema: a.sistema, papel: a.papel, unidade: a.unidade };
     } else if (r.ferramenta === 'sistemas_consultar' || r.ferramenta === 'sistemas_simular') {
@@ -467,7 +560,7 @@ export function auditarSemDados(auditar: Auditar): Auditar {
   };
 }
 
-const SISTEMA = z.string().optional().describe('qual sistema (slug da unidade onde está cadastrado); pode omitir se só há um ligado');
+const SISTEMA = z.string().optional().describe('qual sistema: o RH/Caixa (slug da unidade onde está cadastrado) ou, só em sistemas_esquema e sistemas_consultar, "descontratos"; pode omitir: é o RH/Caixa');
 
 export function registrarLeituraSistemas(server: McpServer, ctx: ContextoSistemas, quem: QuemSistemas, auditarBruto: Auditar): void {
   const auditar = auditarSemDados(auditarBruto);
@@ -479,7 +572,7 @@ export function registrarLeituraSistemas(server: McpServer, ctx: ContextoSistema
       description:
         'O mapa do banco do sistema novo de RH, Caixa e Financeiro: tabelas (com número de linhas), colunas e tipos, se a tabela tem RLS ' +
         'e quais políticas, funções do banco e restrições (checks). Comece por aqui antes de montar uma consulta. Use "tabela" para ver só ' +
-        'as tabelas cujo nome contém o texto (ex.: "caixa"). Só leitura.',
+        'as tabelas cujo nome contém o texto (ex.: "caixa"). Só leitura. Com sistema="descontratos" mostra o banco do Descontratos/Ficha (a coluna token da ficha não aparece).',
       inputSchema: { sistema: SISTEMA, tabela: z.string().max(60).optional().describe('filtra pelo nome da tabela'), incluirFuncoes: z.boolean().optional().describe('com "tabela", inclui também as funções do banco (padrão: não)') },
       annotations: ro,
     },
@@ -492,7 +585,9 @@ export function registrarLeituraSistemas(server: McpServer, ctx: ContextoSistema
       description:
         'Roda UM SELECT (ou WITH … SELECT) no banco do sistema novo, só no schema public, com um papel só de leitura: sem hash de senha, sem ' +
         'dados de autenticação; máximo 1.000 linhas e 10 s. Um comando só, sem ";" no meio. Os dados de RH são sensíveis (CPF, salário, ' +
-        'dados bancários): peça só as colunas de que precisa. Para alterar dados use sistemas_preparar_alteracao.',
+        'dados bancários): peça só as colunas de que precisa. Para alterar dados use sistemas_preparar_alteracao. DESCONTRATOS: com sistema="descontratos" a consulta ' +
+        'roda no banco do Descontratos/Ficha; os descontratos são as linhas de dsc_docs com col = \'cancelamentos\' (o campo data é um JSON: status, protocolo, paciente, contrato, ' +
+        'diretoria, anexos, pagamento, historico…), notif_fila é a fila de avisos e dsc_usuarios quem acessa a tela. Para concluir um descontrato: sistemas_preparar_descontrato.',
       inputSchema: { sistema: SISTEMA, sql: z.string().min(6).max(20_000).describe('um SELECT, ex.: select unidade, sum(valor) from caixa_lancamentos group by 1') },
       annotations: ro,
     },
@@ -585,6 +680,30 @@ export function registrarEscritaSistemas(
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     },
     (args) => executar('sistemas_confirmar_alteracao', args, auditar, () => confirmarAlteracao(ctx, pendentes, quem, args)),
+  );
+  server.registerTool(
+    'sistemas_preparar_descontrato',
+    {
+      title: 'Descontratos: preparar a conclusão de um descontrato',
+      description:
+        'PASSO 1 de 2 para CONCLUIR um descontrato (cancelamento) no sistema Descontratos/Ficha, do jeito que a tela do financeiro faz. NÃO grava nada: devolve qual ' +
+        'descontrato é, o antes → depois e avisos, mais um código. Mostre isso à pessoa e só chame sistemas_confirmar_alteracao se ela aprovar. Ações: ' +
+        '"pagar" (registrar o pagamento da devolução; precisa de valor_pago, em reais, e opcionalmente data_pagamento AAAA-MM-DD; status "assinado" ou "pronto_pagamento" → "pago"), ' +
+        '"finalizar" (sem valor a devolver e sem saldo devedor; "assinado" → "encerrado") ou "quitado" (sem valor a devolver, o paciente tinha saldo devedor e quitou; "assinado" → "encerrado"). ' +
+        'As regras são as da tela: o comprovante do pagamento já tem de estar anexado NA TELA (o chat não anexa arquivo no Descontratos), óbito pago pelo paciente exige a carta de ' +
+        'responsabilidade, e status fora dos acima é recusado com o motivo. Não aprova, não marca assinatura, não arquiva. Identifique pelo id OU pelo protocolo (ache com ' +
+        'sistemas_consultar em dsc_docs where col = \'cancelamentos\', sistema "descontratos").',
+      inputSchema: {
+        sistema: z.string().optional().describe('pode omitir: é o sistema Descontratos (slug "descontratos")'),
+        id: z.string().max(64).optional().describe('dsc_docs.id do descontrato (col = cancelamentos)'),
+        protocolo: z.string().max(40).optional().describe('protocolo, ex. ARA-2026-001 (use o id se houver mais de um com o mesmo protocolo)'),
+        acao: z.enum(ACOES_DESCONTRATO),
+        valor_pago: z.number().max(10_000_000).optional().describe('só em "pagar": o valor pago, em reais (ex. 150.5)'),
+        data_pagamento: z.string().max(10).optional().describe('só em "pagar": AAAA-MM-DD (padrão: hoje, fuso de Araguaína; não pode ser futura)'),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    (args) => executar('sistemas_preparar_descontrato', args, auditar, () => prepararDescontrato(ctx, pendentes, quem, args)),
   );
   server.registerTool(
     'sistemas_usuario',
