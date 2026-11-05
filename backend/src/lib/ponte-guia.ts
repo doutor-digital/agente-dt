@@ -556,6 +556,20 @@ export interface EntradaDoGuia {
   mensagens?: ReadonlyMap<string, readonly string[]>;
   /** O relógio (o teste fixa). */
   agora?: Date;
+  /**
+   * Campos da SDR que um robô desta unidade preenche sozinho (ex.: o Valor da Consulta): saem da lista de pendências e das
+   * sugestões — mas só no cartão que o sincronizador já casou com a franquia (tem ◷ Data da Consulta) e se o campo da conta
+   * aceita o número do robô (monetário/numérico). Fora disso o robô não chega lá e a SDR continua sendo quem preenche.
+   */
+  preenchidosPorRobo?: readonly string[];
+}
+
+/** O robô preenche este campo NESTE cartão? (nome exato, sem o `casaNome` que ignora o símbolo: "Valor da consulta" sem ¤ é outro campo) */
+function roboPreenche(e: EntradaDoGuia, d: DefinicaoDeCampo): boolean {
+  if (!(e.preenchidosPorRobo ?? []).some((n) => d.name.trim() === n)) return false;
+  if (d.type !== 'monetary' && d.type !== 'numeric') return false;
+  const data = campoPorNome(e.defs, CAMPOS_SYNC.DATA_CONSULTA);
+  return !!data && !vazioNoCartao(e.lead, data.id);
 }
 
 /** A unidade de atendimento (Petrópolis × Caxias), quando a conta tem o campo. */
@@ -614,7 +628,7 @@ export function montarGuia(e: EntradaDoGuia): GuiaDoCartao {
     const exigidos = obrigatoriosParaEntrar(defs, funil, etapa.id);
     const daSdr = nomesDaSdrNaEtapa(etapa, funil, comercial?.id ?? null)
       .map((n) => campoPorNome(defs, n))
-      .filter((d): d is DefinicaoDeCampo => !!d && !escondidoEm(d, funil.id, etapa.id) && campoDaSdr(d));
+      .filter((d): d is DefinicaoDeCampo => !!d && !escondidoEm(d, funil.id, etapa.id) && campoDaSdr(d) && !roboPreenche(e, d));
     const ids = new Set(exigidos.map((d) => d.id));
     // PERDIDO depois da consulta tem o motivo no "⊘ Motivo de não fechamento": com um dos dois ⊘ preenchido, o outro
     // não é pendência (a não ser que o Kommo o exija)
@@ -638,7 +652,7 @@ export function montarGuia(e: EntradaDoGuia): GuiaDoCartao {
       const exigidos = new Set(faltamAqui.map((d) => d.id));
       const sugere = (s.sugere ?? [])
         .map((n) => campoPorNome(defs, n))
-        .filter((d): d is DefinicaoDeCampo => !!d && !exigidos.has(d.id) && campoDaSdr(d) && vazioNoCartao(lead, d.id));
+        .filter((d): d is DefinicaoDeCampo => !!d && !exigidos.has(d.id) && campoDaSdr(d) && vazioNoCartao(lead, d.id) && !roboPreenche(e, d));
       const camposQueFaltam = faltamAqui.map((d) => campoDoGuia(d, lead, tz, true));
       const passou = dataNoPassado(defs, s, lead, tz, e.agora ?? new Date());
       if (passou) camposQueFaltam.push({ ...campoDoGuia(passou, lead, tz, true, dicaDaDataNoPassado(passou, lead, tz)), editavel: false });
@@ -1031,6 +1045,8 @@ export interface ContaDoGuia {
   mensagens?: ReadonlyMap<string, readonly string[]>;
   /** Os motivos de perda do Kommo (cabeçalho do PERDIDO), lidos só quando vai para PERDIDO. */
   motivosDePerda?: () => Promise<Array<{ id: number; name: string }>>;
+  /** Campos da SDR que um robô da unidade preenche sozinho: o guia não os pede (a Ponte ainda aceita se a SDR digitar). */
+  preenchidosPorRobo?: readonly string[];
   teto?: number;
   /** O relógio (o teste fixa). */
   agora?: Date;
@@ -1054,7 +1070,7 @@ export type ResultadoDoGuia = { ok: true; guia: GuiaDoCartao } | Recusa;
 export async function guiaDoCartao(ctx: ContaDoGuia, kommo: Pick<KommoDoGuia, 'getLead'>, leadId: number): Promise<ResultadoDoGuia> {
   const lead = await lerCartao(kommo, leadId);
   if (!lead) return { ok: false, status: 404, erro: 'cartão não encontrado no Kommo' };
-  return { ok: true, guia: montarGuia({ lead, defs: ctx.defs, funis: ctx.funis, tz: ctx.tz, mensagens: ctx.mensagens, agora: ctx.agora }) };
+  return { ok: true, guia: montarGuia({ lead, defs: ctx.defs, funis: ctx.funis, tz: ctx.tz, mensagens: ctx.mensagens, agora: ctx.agora, preenchidosPorRobo: ctx.preenchidosPorRobo }) };
 }
 
 /** Confere no cartão RELIDO que cada campo gravado ficou com o valor pedido. Devolve os que não ficaram. */
@@ -1075,7 +1091,7 @@ export async function gravarCamposPelaPonte(ctx: ContaDoGuia, kommo: KommoDoGuia
   if (!lead) return { ok: false, status: 404, erro: 'cartão não encontrado no Kommo' };
   const plano = planejarCampos(ctx.defs, lead, pedido.campos, ctx.tz);
   if (!plano.ok) return plano;
-  const guia = (l: CartaoDoGuia) => montarGuia({ lead: l, defs: ctx.defs, funis: ctx.funis, tz: ctx.tz, mensagens: ctx.mensagens, agora: ctx.agora });
+  const guia = (l: CartaoDoGuia) => montarGuia({ lead: l, defs: ctx.defs, funis: ctx.funis, tz: ctx.tz, mensagens: ctx.mensagens, agora: ctx.agora, preenchidosPorRobo: ctx.preenchidosPorRobo });
   if (!plano.gravar.length) {
     return { ok: true, leadId: lead.id, gravados: [], iguais: plano.iguais, nota: null, guia: guia(lead) };
   }
@@ -1209,7 +1225,7 @@ export async function moverPelaPonte(ctx: ContaDoGuia, kommo: KommoDoGuia, pedid
       gravados: plano.gravar.map((g) => ({ nome: g.nome, texto: g.texto })),
       motivoDePerda: motivo?.name ?? null,
       nota,
-      guia: montarGuia({ lead: final, defs: ctx.defs, funis: ctx.funis, tz: ctx.tz, mensagens: ctx.mensagens, agora: ctx.agora }),
+      guia: montarGuia({ lead: final, defs: ctx.defs, funis: ctx.funis, tz: ctx.tz, mensagens: ctx.mensagens, agora: ctx.agora, preenchidosPorRobo: ctx.preenchidosPorRobo }),
     };
   } finally {
     if (!andou) vaga.devolver();

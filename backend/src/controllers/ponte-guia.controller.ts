@@ -22,6 +22,7 @@ import { createKommoClient, type KommoClient } from '../services/kommo.service.j
 import { CacheDaConta, contaDaUnidade } from '../lib/ponte-cache.js';
 import { camposDaConta } from '../lib/ponte-ligacao.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
+import { CAMPO_VALOR_DA_CONSULTA, valorDaConsultaVemDoRobo } from '../lib/valor-consulta.js';
 import { leadIdDoPedido } from '../lib/ponte-pausa.js';
 import {
   gravarCamposPelaPonte,
@@ -66,6 +67,9 @@ async function contaDoGuia(unit: Unit, kommo: KommoClient): Promise<ContaDoGuia>
     funis: dados.funis,
     tz: fusoDaUnidade(unit),
     mensagens: mensagensDaUnidade(unit),
+    // robô ligado nesta unidade (chave + sincronizador + preço nas fontes): o guia não pede mais o Valor da Consulta à SDR nos cartões que
+    // o sincronizador já casou com a franquia. Em seco nada grava, então a SDR continua sendo quem preenche.
+    preenchidosPorRobo: valorDaConsultaVemDoRobo(unit) ? [CAMPO_VALOR_DA_CONSULTA] : [],
     motivosDePerda: () => cacheMotivos.obter(conta, () => kommo.listLossReasons()),
   };
 }

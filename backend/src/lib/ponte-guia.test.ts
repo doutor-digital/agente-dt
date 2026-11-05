@@ -298,6 +298,38 @@ describe('guia da Ponte — consulta que já passou não serve para AGENDADO', (
   });
 });
 
+describe('guia da Ponte — campo que um robô da unidade preenche (valor-consulta)', () => {
+  const DATA = 2449934; // ◷ Data da Consulta: o cartão que o sincronizador já casou com a franquia tem
+  const COM_DATA = { [DATA]: { value: 1_800_000_000 }, 2449931: { enum_id: 1845440 } };
+  const faltam = (valores: Record<number, { value?: unknown; enum_id?: number }>, preenchidosPorRobo?: readonly string[], defs = DEFS) =>
+    montarGuia({ lead: cartao(ST.agendado, valores), defs, funis: FUNIS, tz: TZ, preenchidosPorRobo }).faltam.map((d) => d.nome);
+
+  it('sem robô, o Valor da Consulta continua na lista da SDR em AGENDADO', () => {
+    assert.ok(faltam(COM_DATA).includes('¤ Valor da Consulta'));
+    assert.ok(faltam(COM_DATA, []).includes('¤ Valor da Consulta'));
+  });
+
+  it('com o robô ligado e o cartão casado com a franquia, sai da lista da SDR; o resto da etapa fica', () => {
+    const f = faltam(COM_DATA, ['¤ Valor da Consulta']);
+    assert.ok(!f.includes('¤ Valor da Consulta'));
+    assert.ok(f.includes('¤ Pagamento antecipado'));
+  });
+
+  it('cartão SEM a data da consulta (o sincronizador não chegou nele): a SDR continua preenchendo', () => {
+    assert.ok(faltam({ 2449931: { enum_id: 1845440 } }, ['¤ Valor da Consulta']).includes('¤ Valor da Consulta'));
+  });
+
+  it('campo da conta de tipo que o robô não grava (texto): a SDR continua preenchendo', () => {
+    const comoTexto = DEFS.map((d) => (d.name === '¤ Valor da Consulta' ? { ...d, type: 'text' } : d));
+    assert.ok(faltam(COM_DATA, ['¤ Valor da Consulta'], comoTexto).includes('¤ Valor da Consulta'));
+  });
+
+  it('se a conta EXIGE o campo em AGENDADO, o guia continua cobrando mesmo com o robô (o Kommo trava a etapa)', () => {
+    const exigido = DEFS.map((d) => (d.name === '¤ Valor da Consulta' ? { ...d, required_statuses: em([COM, ST.agendado]) } : d));
+    assert.ok(faltam(COM_DATA, ['¤ Valor da Consulta'], exigido).includes('¤ Valor da Consulta'));
+  });
+});
+
 describe('guia da Ponte — cabeçalho nunca é alvo', () => {
   it('"##…" e "*…*" são cabeçalho; "# Idade" (número) não', () => {
     for (const n of ['## CONSULTA', '##^Paciente', '##Paciente', '*AGENDADO*', '*AUTOMÁTICO · NÃO PREENCHER', '  ## X']) assert.equal(ehCabecalho(n), true, n);
