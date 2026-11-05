@@ -17,5 +17,11 @@
     "prisma:migrate": "pnpm --filter agente-dt-backend run prisma:migrate",
     "prisma:generate": "pnpm --filter agente-dt-backend run prisma:generate",
     "prisma:studio": "pnpm --filter agente-dt-backend run prisma:studio"
+  },
+  "pnpm": {
+    "overrides": {
+      "@langchain/langgraph-checkpoint": "1.1.6",
+      "@langchain/langgraph-sdk": "1.12.3"
+    }
   }
 }
