@@ -63,6 +63,19 @@ test('temMidiaSemArquivo: reconhece o aviso do WhatsApp Lite e não confunde com
   assert.equal(temMidiaSemArquivo('Bom dia, quero marcar'), false);
 });
 
+test('normalizar: aviso do sistema que sai como mensagem de saída (Lite/waba) sai da conversa; o do PACIENTE e a fala de gente ficam', () => {
+  const msgs = normalizar([
+    raw({ id: '1', created_at: t0, type: 'outgoing', author: { type: 'bot', name: 'WhatsApp Lite' }, text: "'messageContextInfo' is not yet supported. Use your device to view this message." }),
+    raw({ id: '2', created_at: t0 + 1, type: 'outgoing', author: { type: 'bot', name: 'WhatsApp Business' }, text: 'Unable to open this message. Ask the contact to send it in a supported WhatsApp format.' }),
+    raw({ id: '3', created_at: t0 + 5, type: 'outgoing', author: { type: 'bot', name: 'WhatsApp Lite' }, text: 'Oi, aqui é a Talita, tenho horário amanhã.' }),
+    raw({ id: '4', created_at: t0 + 9, text: "'messageContextInfo' is not yet supported. Use your device to view this message." }), // mídia do paciente: segue (temMidiaSemArquivo)
+  ]);
+  assert.deepEqual(msgs.map((m) => m.id), ['3', '4']);
+  // quebra de linha no aviso e `type` ausente (a direção 'saida' é tudo que não é 'incoming')
+  const quebrado = normalizar([raw({ id: '5', type: undefined as unknown as string, author: { type: 'bot', name: 'WhatsApp Lite' }, text: "'messageContextInfo' is not yet supported.\nUse your device to view this message." })]);
+  assert.deepEqual(quebrado, []);
+});
+
 test('selecionarItens: áudio do turno que o webhook não trouxe (WhatsApp Lite) entra; sem o aviso, continua fora', () => {
   const agora = (t0 + 400) * 1000;
   const msgs = normalizar([
@@ -120,6 +133,12 @@ test('decidirCobranca: equipe falou por último ou paciente respondeu depois →
 test('classificarAutor: o app WhatsApp Business é a EQUIPE, mesmo marcado como robô pelo Kommo', () => {
   assert.equal(classificarAutor({ type: 'outgoing', author: { type: 'bot', name: 'WhatsApp Business' } }), 'equipe');
   assert.equal(classificarAutor({ type: 'outgoing', author: { type: 'bot', name: 'Salesbot' } }), 'sofia');
+});
+
+test('classificarAutor: celular/WhatsApp Web no canal Lite (QR code) é a EQUIPE; robô de nome desconhecido segue Sofia', () => {
+  assert.equal(classificarAutor({ type: 'outgoing', author: { type: 'bot', name: 'WhatsApp Lite' } }), 'equipe');
+  assert.equal(classificarAutor({ type: 'outgoing', author: { type: 'bot', name: ' whatsapp lite ' } }), 'equipe');
+  assert.equal(classificarAutor({ type: 'outgoing', author: { type: 'bot', name: 'Robô de lembrete' } }), 'sofia');
 });
 
 test('normalizar marca a sessão "Doutor Digital" (pode ser a Sofia em voz ou a equipe); robô não', () => {

@@ -8,6 +8,7 @@ import {
   descreverFala,
   ehRespostaAutomatica,
   equipeComAPalavra,
+  nomeDoAutor,
   estadoDaPausaPelaEquipe,
   falaDaEquipeDepoisDe,
   falaDaEquipeDesde,
@@ -20,7 +21,8 @@ import {
 import { _limparPausasProprias, pausouSozinhaDesde, registrarPausaPropria } from './pausa-propria.js';
 import { _semearParaTeste } from './automacoes-estado.js';
 import { automacaoPorId } from './automacoes.js';
-import type { MensagemOficial } from '../services/kommo-talks.service.js';
+import { normalizar, type MensagemOficial } from '../services/kommo-talks.service.js';
+import type { KommoTalkMessage } from '../services/kommo.service.js';
 import type { Simulacao } from './so-no-papel.js';
 
 /**
@@ -67,6 +69,72 @@ const conversaBebedouro = (): MensagemOficial[] => [
   msg('saida', em('10:26:06'), 'Meu nome é Melissa sou Secretária da Clínica Doutor Hérnia.'),
   msg('entrada', em('12:28:26'), 'Nilza Maria Balieiro Lugato'),
 ];
+
+// ── celular e WhatsApp Web em canal "WhatsApp Lite" (QR code): Boa Vista e Mossoró, 03/11/2026 ──────────
+//
+// Medido em produção em 03/11: nesses canais (origin `com.amocrm.amocrmwa`) o que a recepção escreve pelo
+// celular ou pelo WhatsApp Web chega à conversa oficial como `author {type:'bot', name:'WhatsApp Lite'}` —
+// não "WhatsApp Business". Boa Vista: 66 mensagens assim, 0 delas junto de um envio da IA (a Sofia sai pelo
+// Salesbot). O classificador as tratava como Sofia, e a pausa-equipe nunca via a equipe.
+
+const falaLite = (quando: Date, texto: string, nome = 'WhatsApp Lite') =>
+  normalizar([
+    {
+      id: String(++seq),
+      type: 'outgoing',
+      text: texto,
+      created_at: Math.floor(quando.getTime() / 1000),
+      author: { type: 'bot', name: nome },
+    } as unknown as KommoTalkMessage,
+  ])[0]!;
+
+test('Lite: a SDR escreve pelo celular/Web, o paciente responde e a Sofia ia responder por cima → a equipe tem a palavra', () => {
+  const robo = normalizar([
+    { id: 'a', type: 'outgoing', text: 'Olá! Sou a Sofia, da Clínica Doutor Hérnia.', created_at: Math.floor(em('09:00:00').getTime() / 1000), author: { type: 'bot', name: 'Salesbot' } } as unknown as KommoTalkMessage,
+  ])[0]!;
+  const msgs = [
+    robo,
+    msg('entrada', em('09:05:00'), 'queria marcar'),
+    falaLite(em('09:10:00'), 'Oi! Aqui é a Talita, tenho horário amanhã às 10h, pode ser?'),
+    msg('entrada', em('09:12:00'), 'pode sim'),
+  ];
+  assert.equal(msgs[2]!.autor, 'equipe');
+  assert.equal(msgs[0]!.autor, 'sofia');
+  const d = equipeComAPalavra(msgs, robo.em, em('09:12:05'));
+  assert.equal(d.motivo, null);
+  assert.equal(d.fala?.autorNome, 'WhatsApp Lite');
+});
+
+test('Lite: texto longo logo depois do paciente NÃO é resposta automática (essa só existe no app Business) — é gente', () => {
+  const entrada = msg('entrada', em('12:50:00'), 'qual o valor?');
+  const longo = falaLite(em('12:50:05'), 'Olá! A consulta com o especialista custa R$ 250,00 e é feita na própria clínica, pode vir amanhã?');
+  assert.equal(ehRespostaAutomatica(longo, [entrada, longo]), false);
+  assert.equal(falasHumanasDaEquipe([entrada, longo]).length, 1);
+});
+
+test('Lite: "\'messageContextInfo\' is not yet supported…" (aviso do Kommo, 12 em Boa Vista e 23 em Mossoró em 14 dias) não é fala da equipe', () => {
+  const entrada = msg('entrada', em('11:00:00'), 'oi');
+  // normalizar já descarta o aviso; a defesa em ehRespostaAutomatica vale para quem montar a lista de outro jeito
+  const aviso = msg('saida', em('11:05:00'), "'messageContextInfo' is not yet supported. Use your device to view this message.", 'equipe', 'WhatsApp Lite');
+  const msgs = [entrada, aviso];
+  assert.equal(ehRespostaAutomatica(aviso, msgs), true);
+  assert.deepEqual(falasHumanasDaEquipe(msgs), []);
+  assert.equal(equipeComAPalavra(msgs, null, em('11:05:10')).motivo, 'sem_equipe');
+});
+
+test('nome da fala: celular/Web da clínica, com o nome do canal', () => {
+  assert.equal(nomeDoAutor('WhatsApp Lite'), 'o celular ou o WhatsApp Web da clínica (WhatsApp Lite)');
+  assert.equal(nomeDoAutor('WhatsApp Business'), 'o celular da clínica (WhatsApp Business)');
+  assert.equal(nomeDoAutor('Melissa'), 'Melissa');
+  assert.equal(nomeDoAutor(''), 'a equipe');
+});
+
+test('robô de verdade continua sendo a Sofia: Salesbot e bot de nome desconhecido não pausam (só os dois canais medidos contam)', () => {
+  const sb = falaLite(em('10:00:00'), 'Olá! Sou a Sofia.', 'Salesbot');
+  const outro = falaLite(em('10:00:10'), 'Mensagem do robô de outra coisa.', 'Robô de lembrete');
+  assert.deepEqual([sb.autor, outro.autor], ['sofia', 'sofia']);
+  assert.deepEqual(falasHumanasDaEquipe([sb, outro]), []);
+});
 
 // ── resposta automática do WhatsApp Business ────────────────────────────────────────────────────
 
@@ -217,6 +285,19 @@ test('porta em "só no papel": registra "gravaria Pausar IA", a Sofia responde, 
 test('porta ligada (Bebedouro 12:28): marca "Pausar IA" e a Sofia não responde', async () => {
   _semearParaTeste([{ slug: SLUG, automacao: 'pausa-equipe', estado: 'ligado' }]);
   const { deps, chamadas } = depsFalsas();
+  const r = await portaDaEquipe({ unit: unidade, leadId: LEAD }, deps);
+  assert.equal(r.pausou, true);
+  assert.equal(chamadas.marcarPausa, 1);
+});
+
+test('porta ligada, canal Lite (Boa Vista): a SDR escreveu pelo celular → "Pausar IA" marcado e a Sofia fica calada', async () => {
+  _semearParaTeste([{ slug: SLUG, automacao: 'pausa-equipe', estado: 'ligado' }]);
+  const conversa = [
+    msg('entrada', em('09:05:00'), 'queria marcar'),
+    falaLite(em('09:10:00'), 'Oi! Aqui é a Talita, tenho horário amanhã às 10h, pode ser?'),
+    msg('entrada', em('09:12:00'), 'pode sim'),
+  ];
+  const { deps, chamadas } = depsFalsas({ mensagens: async () => conversa, agora: () => em('09:12:10') });
   const r = await portaDaEquipe({ unit: unidade, leadId: LEAD }, deps);
   assert.equal(r.pausou, true);
   assert.equal(chamadas.marcarPausa, 1);

@@ -16,7 +16,8 @@
  *
  * QUEM VÊ TUDO: a conversa oficial (`/talks/{id}/messages`), a mesma que a Sofia já lê antes de
  * responder. Lá aparece a fala da equipe pelo Kommo web, pelo app do Kommo (usuário com nome) e pelo
- * celular (autor "WhatsApp Business", que o Kommo marca como robô — ver kommo-talks-normalizar.ts).
+ * celular ou pelo WhatsApp Web (autor "WhatsApp Business" ou "WhatsApp Lite", que o Kommo marca como robô —
+ * ver kommo-talks-normalizar.ts).
  *
  * O QUE CONTA COMO "A EQUIPE TEM A PALAVRA" (`equipeComAPalavra`):
  *  - uma fala HUMANA da equipe (não robô: Salesbot, régua, transmissão já saem como 'sofia'; e não a
@@ -44,7 +45,7 @@ import { leadPausadoPorJanela } from './pausa-lead.js';
 import { pausouSozinhaDesde } from './pausa-propria.js';
 import { registrarPausaDaEquipe } from './pausa-equipe-registro.js';
 import { createKommoClient, isLeadPaused } from '../services/kommo.service.js';
-import { enviosDaSofia, mensagensOficiaisDaUnidade, type MensagemOficial } from '../services/kommo-talks.service.js';
+import { enviosDaSofia, ehAppDaEquipe, ehAvisoDoSistema, mensagensOficiaisDaUnidade, type MensagemOficial } from '../services/kommo-talks.service.js';
 import { carimbarHumanoAssumiu } from '../services/lead-metrics.service.js';
 
 export const AUTOMACAO_PAUSA_EQUIPE = 'pausa-equipe';
@@ -60,9 +61,11 @@ const RESPOSTA_AUTOMATICA_ANTES_MS = 5_000;
 export const RESPOSTA_AUTOMATICA_MIN_CARACTERES = 40;
 const MENSAGENS_LIDAS = 40;
 
-const APP_DO_CELULAR = 'whatsapp business';
-/** Aviso do Kommo/WhatsApp que sai como mensagem de saída ("Unable to open this message…"). */
-const AVISO_DO_SISTEMA = /^(unable to (open|display) this message|n[aã]o foi poss[ií]vel (abrir|exibir) (esta|essa) mensagem)/i;
+/**
+ * A saudação e a ausência automáticas são do app Business. No canal Lite (QR code) não há como separá-las da
+ * recepção: em Mossoró, as mensagens longas até 20 s depois do paciente (11 de 253) eram conversa de gente.
+ */
+const APP_COM_RESPOSTA_AUTOMATICA = 'whatsapp business';
 
 type Recorder = { step(args: { kind: 'THINKING' | 'KOMMO_ACTION' | 'COMPLETED' | 'ERROR'; title: string; payload?: unknown }): Promise<void> };
 
@@ -81,8 +84,8 @@ export function estadoDaPausaPelaEquipe(slug: string, env: NodeJS.ProcessEnv = p
 export function ehRespostaAutomatica(m: MensagemOficial, msgs: readonly MensagemOficial[]): boolean {
   if (m.direcao !== 'saida') return false;
   const texto = m.texto.trim();
-  if (AVISO_DO_SISTEMA.test(texto)) return true;
-  if (m.autorNome.trim().toLowerCase() !== APP_DO_CELULAR) return false;
+  if (ehAvisoDoSistema(texto)) return true;
+  if (m.autorNome.trim().toLowerCase() !== APP_COM_RESPOSTA_AUTOMATICA) return false;
   if (m.anexo || texto.length < RESPOSTA_AUTOMATICA_MIN_CARACTERES) return false;
   const t = m.em.getTime();
   return msgs.some((p) => {
@@ -127,7 +130,9 @@ export function equipeComAPalavra(
 /** PURA: como a nota chama quem falou ("Melissa", "o celular da clínica (WhatsApp Business)", "a equipe"). */
 export function nomeDoAutor(autorNome: string): string {
   const nome = autorNome.trim();
-  return !nome ? 'a equipe' : nome.toLowerCase() === APP_DO_CELULAR ? 'o celular da clínica (WhatsApp Business)' : nome;
+  if (!nome) return 'a equipe';
+  if (nome.toLowerCase() === APP_COM_RESPOSTA_AUTOMATICA) return 'o celular da clínica (WhatsApp Business)';
+  return ehAppDaEquipe(nome) ? `o celular ou o WhatsApp Web da clínica (${nome})` : nome;
 }
 
 /** PURA: "Melissa em 20/10 10:25" / "o celular da clínica (WhatsApp Business) em 20/10 10:25". */
