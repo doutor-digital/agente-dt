@@ -27,6 +27,10 @@ export interface OpcoesFalso {
   maisUsuarios?: boolean;
   /** relógio do servidor, para a prévia vencer */
   agora?: () => number;
+  /** servidor ANTES da 0.1.10.8-pol: não informa o dono no /esquema e não conhece o tipo "regra" de /estrutura */
+  servidorAntigo?: boolean;
+  /** com `servidorAntigo`: a recusa do tipo "regra" chega como 200 { ok:false, erro } em vez de 400 */
+  antigoComo200?: boolean;
 }
 
 export function servidorAdminFalso(o: OpcoesFalso = {}) {
@@ -65,16 +69,30 @@ export function servidorAdminFalso(o: OpcoesFalso = {}) {
       case 'GET /admin/v1/esquema':
         return json(200, {
           tabelas: [
-            { nome: 'rh_funcionarios', linhas: 2, colunas: [{ nome: 'id', tipo: 'int', nulo: false }], rls: true, politicas: [{ nome: 'ver', comando: 'SELECT', usando: 'true', com_check: null }] },
-            { nome: 'caixa_lancamentos', linhas: 0, colunas: [], rls: true, politicas: [] },
+            { nome: 'rh_funcionarios', linhas: 2, colunas: [{ nome: 'id', tipo: 'int', nulo: false }], rls: true, politicas: [{ nome: 'ver', comando: 'SELECT', usando: 'true', com_check: null }], dono: 'sistemas' },
+            { nome: 'caixa_lancamentos', linhas: 0, colunas: [], rls: true, politicas: [], dono: 'sistemas' },
             ...(o.maisTabelas
               ? [
-                  { nome: 'caixa_precos', linhas: 3, colunas: [{ nome: 'id', tipo: 'uuid', nulo: false }, { nome: 'servico', tipo: 'text', nulo: false }, { nome: 'valor', tipo: 'numeric', nulo: true }], rls: true, politicas: [] },
-                  { nome: 'caixa_vazia', linhas: 0, colunas: [{ nome: 'id', tipo: 'uuid', nulo: false }], rls: true, politicas: [] },
-                  { nome: 'rh_usuarios', linhas: 5, colunas: [{ nome: 'user_id', tipo: 'uuid', nulo: false }, { nome: 'papel', tipo: 'text', nulo: false }], rls: true, politicas: [] },
+                  { nome: 'caixa_precos', linhas: 3, colunas: [{ nome: 'id', tipo: 'uuid', nulo: false }, { nome: 'servico', tipo: 'text', nulo: false }, { nome: 'valor', tipo: 'numeric', nulo: true }], rls: true, politicas: [], dono: 'rh_ddl' },
+                  { nome: 'caixa_vazia', linhas: 0, colunas: [{ nome: 'id', tipo: 'uuid', nulo: false }], rls: true, politicas: [], dono: 'rh_ddl' },
+                  { nome: 'rh_usuarios', linhas: 5, colunas: [{ nome: 'user_id', tipo: 'uuid', nulo: false }, { nome: 'papel', tipo: 'text', nulo: false }], rls: true, politicas: [], dono: 'sistemas' },
+                  // criada por este caminho, com unidade (text), uma coluna que NÃO é text e as 3 políticas padrão
+                  { nome: 'caixa_semaforo', linhas: 4, colunas: [{ nome: 'id', tipo: 'uuid', nulo: false }, { nome: 'unidade', tipo: 'text', nulo: true }, { nome: 'loja', tipo: 'text', nulo: true }, { nome: 'valor', tipo: 'numeric', nulo: true }], rls: true,
+                    politicas: ['caixa_semaforo_sel', 'caixa_semaforo_ins', 'caixa_semaforo_upd'].map((nome) => ({ nome, comando: 'SELECT', usando: 'x', com_check: null })), dono: 'rh_ddl' },
+                  // criada por este caminho mas com uma política que ele NÃO criou
+                  { nome: 'caixa_estranha', linhas: 1, colunas: [{ nome: 'id', tipo: 'uuid', nulo: false }, { nome: 'unidade', tipo: 'text', nulo: true }], rls: true, politicas: [{ nome: 'caixa_estranha_sel', comando: 'SELECT', usando: 'x', com_check: null }, { nome: 'liberada_por_fora', comando: 'ALL', usando: 'true', com_check: null }], dono: 'rh_ddl' },
+                  // criada por este caminho com o modelo unidade_le_e_lanca (a política de INSERT usa caixa_pode)
+                  { nome: 'caixa_lancada', linhas: 2, colunas: [{ nome: 'id', tipo: 'uuid', nulo: false }, { nome: 'codigo', tipo: 'text', nulo: true }, { nome: 'unidade', tipo: 'text', nulo: true }], rls: true,
+                    politicas: [{ nome: 'caixa_lancada_sel', comando: 'SELECT', usando: 'caixa_pode(unidade)', com_check: null, roles: '{authenticated}' }, { nome: 'caixa_lancada_ins', comando: 'INSERT', usando: null, com_check: 'caixa_pode(unidade)', roles: '{authenticated}' }, { nome: 'caixa_lancada_upd', comando: 'UPDATE', usando: 'caixa_gestor()', com_check: 'caixa_gestor()', roles: '{authenticated}' }], dono: 'rh_ddl' },
+                  // criada por este caminho, mas com gatilho (o servidor 0.1.10.8-pol informa `especial` no /esquema)
+                  { nome: 'caixa_com_gatilho', linhas: 1, colunas: [{ nome: 'id', tipo: 'uuid', nulo: false }, { nome: 'unidade', tipo: 'text', nulo: true }], rls: true, politicas: [], dono: 'rh_ddl', especial: ['gatilho'] },
+                  // view do rh_ddl (o /esquema real marca `view: true`)
+                  { nome: 'caixa_vista', view: true, linhas: null, colunas: [{ nome: 'unidade', tipo: 'text', nulo: true }], rls: false, politicas: [], dono: 'rh_ddl' },
+                  // antiga (dono sistemas), com unidade
+                  { nome: 'fin_lanc', linhas: 900, colunas: [{ nome: 'id', tipo: 'text', nulo: false }, { nome: 'unidade', tipo: 'text', nulo: true }], rls: true, politicas: [{ nome: 'fin_lanc_sel', comando: 'SELECT', usando: 'x', com_check: null }], dono: 'sistemas' },
                 ]
               : []),
-          ],
+          ].map((t) => (o.servidorAntigo ? Object.fromEntries(Object.entries(t).filter(([k]) => k !== 'dono' && k !== 'especial')) : t)),
           funcoes: [{ nome: 'meu_papel', definicao: 'select 1' }],
           checks: [{ tabela: 'rh_funcionarios', nome: 'cargo_ok', definicao: "check (cargo <> '')" }],
         });
@@ -120,7 +138,14 @@ export function servidorAdminFalso(o: OpcoesFalso = {}) {
       }
       case 'POST /admin/v1/estrutura':
         // contrato: { tipo, ...campos, sqlAprovado, quem, motivo? } -> 200 { ok:true, sql } | 200 { ok:false, erro } | { erro } nos 4xx/5xx
-        if (!['tabela', 'coluna', 'indice'].includes(corpo.tipo) || typeof corpo.sqlAprovado !== 'string' || !corpo.sqlAprovado.trim()) return json(400, { erro: 'pedido de estrutura inválido' });
+        // o servidor 0.1.10.6 (admin.ts: `throw new Erro('tipo do pedido: use tabela, coluna ou indice')`, status 400); `antigoComo200` simula a variante em que o texto chegaria como 200 ok:false
+        if (o.servidorAntigo && corpo.tipo === 'regra') return o.antigoComo200 ? json(200, { ok: false, erro: 'tipo do pedido: use tabela, coluna ou indice' }) : json(400, { erro: 'tipo do pedido: use tabela, coluna ou indice' });
+        if (!['tabela', 'coluna', 'indice', 'regra'].includes(corpo.tipo) || typeof corpo.sqlAprovado !== 'string' || !corpo.sqlAprovado.trim()) return json(400, { erro: 'pedido de estrutura inválido' });
+        // servidor 0.1.10.6 REAL: o SQL que ele gera para tabela nova é o de antes (sem revoke/grant explícitos), então o que este conector mostra e manda SEMPRE difere dele — com ou sem `regra`.
+        // (coluna e índice têm o mesmo SQL nas duas versões e passam.)
+        if (o.servidorAntigo && corpo.tipo === 'tabela') return json(200, { ok: false, erro: 'o SQL que o servidor gera agora é diferente do que foi aprovado (a tabela pode ter mudado desde a prévia): prepare de novo' });
+        // servidor 0.1.10.8-pol REAL: a troca de regra exige a impressão das políticas que a prévia viu
+        if (corpo.tipo === 'regra' && typeof corpo.politicas_vistas !== 'string') return json(400, { erro: 'falta politicas_vistas (as políticas da tabela que o conector viu na prévia): prepare de novo pelo conector atualizado' });
         if (corpo.nome === 'erro_do_servidor') return json(500, { erro: `falha interna em ${CONFIG_FALSA.api}` });
         if (corpo.nome === 'falha_do_banco') return json(200, { ok: false, erro: 'o SQL mudou desde a prévia: prepare de novo' });
         estruturas.push({ ...corpo });
