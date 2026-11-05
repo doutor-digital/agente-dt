@@ -66,6 +66,11 @@ const SEM_INTEGRACAO = 'o sistema novo (RH/Caixa) ainda não está ligado neste 
 export const SLUG_DESCONTRATOS = 'descontratos';
 export const tipoDaConta = (c: ContaSistemas): TipoSistema => c.tipo ?? 'rh';
 const NOME_DO_TIPO: Record<TipoSistema, string> = { rh: 'RH/Caixa/Financeiro', dsc: 'Descontratos/Ficha' };
+/** Como a pessoa confere se uma alteração gravou: cada sistema tem a sua ferramenta e, no Descontratos, o `sistema` TEM de vir (sem ele a consulta vai ao RH, onde dsc_docs não existe). */
+const COMO_CONFERIR: Record<TipoSistema, string> = {
+  rh: 'com sistemas_log e sistemas_consultar',
+  dsc: 'com sistemas_consultar usando sistema="descontratos" (select id, data->>\'status\' status, data->\'historico\' from dsc_docs where col = \'cancelamentos\' and id = \'<id do descontrato>\'): o status e a última linha do historico mostram se gravou; sistemas_log não existe no Descontratos',
+};
 const APELIDOS_DSC = /^(dsc|descontratos?|ficha|fichas)$/i;
 
 /**
@@ -78,10 +83,9 @@ export function resolverSistema(ctx: ContextoSistemas, pedido?: string, exigir: 
   const todas = [...ctx.contas.values()];
   if (!pedido?.trim()) {
     const tipoPadrao: TipoSistema = exigir === 'qualquer' ? 'rh' : exigir;
-    let candidatas = todas.filter((c) => tipoDaConta(c) === tipoPadrao);
-    if (!candidatas.length && exigir === 'qualquer') candidatas = todas;
+    const candidatas = todas.filter((c) => tipoDaConta(c) === tipoPadrao); // sem fallback: sem conta RH carregada, a leitura sem `sistema` NÃO cai no Descontratos em silêncio
     if (candidatas.length === 1) return candidatas[0]!;
-    if (!candidatas.length) throw new ErroDeEntrada(`o sistema ${NOME_DO_TIPO[tipoPadrao]} ainda não está ligado neste conector. Ligados: ${[...ctx.contas.keys()].join(', ')}`);
+    if (!candidatas.length) throw new ErroDeEntrada(`o sistema ${NOME_DO_TIPO[tipoPadrao]} ainda não está ligado neste conector (ou não foi carregado agora). Ligados: ${[...ctx.contas.keys()].join(', ')}. Para ler o Descontratos diga sistema="descontratos"`);
     // a lista mostra TODAS as contas (inclusive o Descontratos) para quem pediu a leitura "do Descontratos" sem dizer o sistema
     throw new ErroDeEntrada(`informe o sistema. Ligados: ${(exigir === 'qualquer' ? todas : candidatas).map((c) => c.slug).join(', ')}`);
   }
@@ -406,7 +410,7 @@ export async function confirmarAlteracao(
     // sem resposta (rede, tempo esgotado) ou erro do servidor: pode ter gravado. O código volta e a pessoa confere antes de repetir.
     if (e instanceof ErroSistemas && (e.status === null || e.status >= 500)) {
       pendentes.devolver(id, p);
-      throw new ErroDeEntrada(`NÃO sei se a alteração foi gravada (${e.message}). Confira com sistemas_log e sistemas_consultar antes de repetir; o código ${id} continua valendo para tentar confirmar de novo (o servidor aplica cada código uma vez só).`);
+      throw new ErroDeEntrada(`NÃO sei se a alteração foi gravada (${e.message}). Confira ${COMO_CONFERIR[tipoDaConta(c)]} antes de repetir; o código ${id} continua valendo para tentar confirmar de novo (o servidor aplica cada código uma vez só).`);
     }
     throw e;
   }
@@ -416,7 +420,7 @@ export async function confirmarAlteracao(
     tabela: p.tabela,
     ...r,
     ...(r.conferido === false
-      ? { atencao: 'a releitura depois de gravar NÃO bateu com o esperado: confira com sistemas_consultar e sistemas_log; o "antes" está guardado (backup_id) e dá para desfazer pelo servidor.' }
+      ? { atencao: `a releitura depois de gravar NÃO bateu com o esperado: confira ${COMO_CONFERIR[tipoDaConta(c)]}; o "antes" está guardado (backup_id) e dá para desfazer pelo servidor.` }
       : {}),
     registro:
       tipoDaConta(c) === 'dsc'

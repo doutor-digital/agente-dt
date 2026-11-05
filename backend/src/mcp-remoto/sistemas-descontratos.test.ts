@@ -118,7 +118,9 @@ test('sem a conta do Descontratos tudo é como antes; só o Descontratos ligado:
   assert.throws(() => resolverSistema(soRh, undefined, 'dsc'), /Descontratos\/Ficha ainda não está ligado/);
   assert.throws(() => resolverSistema(soRh, 'descontratos', 'qualquer'), /não está ligado/);
   const soDsc = criarContextoSistemas(new Map([['descontratos', ctx.contas.get('descontratos')!]]));
-  assert.equal(resolverSistema(soDsc, undefined, 'qualquer').slug, 'descontratos');
+  // sem conta RH carregada, a leitura SEM "sistema" não cai no Descontratos em silêncio (consultaria o banco errado sem ninguém notar)
+  assert.throws(() => resolverSistema(soDsc, undefined, 'qualquer'), /RH\/Caixa\/Financeiro ainda não está ligado.*sistema="descontratos"/);
+  assert.equal(resolverSistema(soDsc, 'descontratos', 'qualquer').slug, 'descontratos');
   assert.throws(() => resolverSistema(soDsc, undefined), /RH\/Caixa\/Financeiro ainda não está ligado/);
 });
 
@@ -223,6 +225,41 @@ test('concluir em dois passos: preparar não grava; confirmar (sistemas_confirma
   assert.equal(dsc.gravados.length, 1);
   assert.equal((await k.chamar('sistemas_confirmar_alteracao', { confirmacao: prep.json.confirmacao })).erro, true, 'uso único');
   assert.equal(dsc.gravados.length, 1);
+  await k.fechar();
+});
+
+test('confirmação incerta no Descontratos: a orientação é a do Descontratos (sistema="descontratos"), o código volta e a 2ª tentativa grava', async () => {
+  const { dsc, ctx } = doisSistemas();
+  const k = await cliente(ctx);
+  const prep = await k.chamar('sistemas_preparar_descontrato', { id: 'confirma-503', acao: 'finalizar' });
+  const x = await k.chamar('sistemas_confirmar_alteracao', { confirmacao: prep.json.confirmacao });
+  assert.equal(x.erro, true);
+  assert.match(x.texto, /NÃO sei se a alteração foi gravada/);
+  assert.match(x.texto, /sistemas_consultar usando sistema="descontratos"/);
+  assert.match(x.texto, /from dsc_docs where col = 'cancelamentos'/);
+  assert.match(x.texto, /sistemas_log não existe no Descontratos/);
+  assert.doesNotMatch(x.texto, /Confira com sistemas_log e sistemas_consultar/, 'não manda conferir com a ferramenta que recusa o Descontratos');
+  assert.match(x.texto, new RegExp(`o código ${prep.json.confirmacao} continua valendo`));
+  assert.equal(dsc.gravados.length, 0);
+  // o código voltou: repetir confirma (o servidor de verdade manteve a prévia)
+  const ok = await k.chamar('sistemas_confirmar_alteracao', { confirmacao: prep.json.confirmacao });
+  assert.equal(ok.erro, false, ok.texto);
+  assert.equal(dsc.gravados.length, 1);
+  await k.fechar();
+});
+
+test('documento que mudou entre a prévia e a confirmação (409): o código acabou e a mensagem manda preparar de novo — não promete que o código vale', async () => {
+  const { dsc, ctx } = doisSistemas();
+  const k = await cliente(ctx);
+  const prep = await k.chamar('sistemas_preparar_descontrato', { id: 'confirma-409', acao: 'finalizar' });
+  const x = await k.chamar('sistemas_confirmar_alteracao', { confirmacao: prep.json.confirmacao });
+  assert.equal(x.erro, true);
+  assert.match(x.texto, /prepare de novo/);
+  assert.doesNotMatch(x.texto, /continua valendo/);
+  const de_novo = await k.chamar('sistemas_confirmar_alteracao', { confirmacao: prep.json.confirmacao });
+  assert.equal(de_novo.erro, true);
+  assert.match(de_novo.texto, /desconhecido ou já usado/);
+  assert.equal(dsc.gravados.length, 0);
   await k.fechar();
 });
 

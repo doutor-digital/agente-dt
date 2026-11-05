@@ -10,7 +10,7 @@ export interface ChamadaDsc { metodo: string; caminho: string; corpo: any; chave
 export function servidorDescontratosFalso(o: { agora?: () => number } = {}) {
   const chamadas: ChamadaDsc[] = [];
   const agora = o.agora ?? Date.now;
-  const previas = new Map<string, { corpo: any; em: number }>();
+  const previas = new Map<string, { corpo: any; em: number; falhou?: boolean }>();
   /** descontratos gravados (confirmados) */
   const gravados: Array<{ id: string; corpo: any }> = [];
   let n = 0;
@@ -36,6 +36,9 @@ export function servidorDescontratosFalso(o: { agora?: () => number } = {}) {
       case 'POST /admin/v1/confirmar': {
         const p = previas.get(corpo.id);
         if (!p) return json(400, { erro: 'prévia não encontrada ou vencida (valem 10 minutos): prepare de novo' });
+        // como o servidor de verdade: trava ocupada = 503 e o código CONTINUA valendo (a 2ª tentativa passa); documento mexido = 409 e o código acaba
+        if (p.corpo.id === 'confirma-503' && !p.falhou) { p.falhou = true; return json(503, { erro: 'o descontrato está em uso por outra operação (esperei 5 segundos pela trava)' }); }
+        if (p.corpo.id === 'confirma-409') { previas.delete(corpo.id); return json(409, { erro: 'o descontrato mudou desde a prévia (alguém mexeu na tela?): prepare de novo' }); }
         previas.delete(corpo.id);
         gravados.push({ id: corpo.id, corpo: p.corpo });
         return json(200, { ok: true, afetadas: 1, conferido: true, backup_id: 'bk-dsc-1', descontrato: { id: p.corpo.id ?? 'd-1', status_antes: 'pronto_pagamento', status_depois: 'pago' } });
