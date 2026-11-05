@@ -85,14 +85,14 @@ function gerar(unidade) {
   //     usuário/business; quando ele cai (sessão invalidada em 01/10/2026) a rede inteira
   //     perde campanha/conjunto/anúncio. Unidade com `tokenAdsEnv` lê a env própria e só
   //     então cai no global. O NOME da env vai no workflow; o valor nunca.
-  if (unidade.tokenAdsEnv) {
-    const alvoToken = "tokenAds: $env.META_ADS_TOKEN || '',";
-    if (!config.parameters.jsCode.includes(alvoToken)) throw new Error(`[${unidade.slug}] âncora do tokenAds não encontrada`);
-    config.parameters.jsCode = config.parameters.jsCode.replace(
-      alvoToken,
-      `tokenAds: $env.${unidade.tokenAdsEnv} || $env.META_ADS_TOKEN || '',`,
-    );
-  }
+  //     A base (Imperatriz) já lê a env própria: a expressão é sempre reescrita, para uma
+  //     unidade sem `tokenAdsEnv` nunca herdar o token de outra.
+  const alvoToken = /tokenAds: (?:\$env\.META_ADS_TOKEN_[A-Z0-9_]+ \|\| )?\$env\.META_ADS_TOKEN \|\| '',/;
+  if (!alvoToken.test(config.parameters.jsCode)) throw new Error(`[${unidade.slug}] âncora do tokenAds não encontrada`);
+  config.parameters.jsCode = config.parameters.jsCode.replace(
+    alvoToken,
+    () => `tokenAds: ${unidade.tokenAdsEnv ? `$env.${unidade.tokenAdsEnv} || ` : ''}$env.META_ADS_TOKEN || '',`,
+  );
 
   // 2. Credencial do Kommo em todos os nós que falam com o CRM.
   let trocadas = 0;

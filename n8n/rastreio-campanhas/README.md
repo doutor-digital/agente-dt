@@ -502,6 +502,16 @@ o `derive-nativo.mjs` garante.
 
 Gerar de novo depois de reexportar a produção:
 
+> **Reexporte antes.** Desde 05/11/2026 a Imperatriz lê `META_ADS_TOKEN_IMPERATRIZ`, e
+> `producao/4T4HALkkLJtcNAY1.json` e `rastreio-campanhas-nativo.json` já trazem isso. Se você
+> aplicar um JSON antigo, o `PUT` volta silenciosamente ao token global, que está morto.
+> Depois do `PUT`, confira o `tokenAds` no Config. O gerador das outras unidades reescreve
+> essa expressão, então o token da Imperatriz não vaza para elas.
+>
+> **`node derive-nativo.mjs` sem argumento parte de `producao/ZqW9mOjb0td2Flik.json`, que é
+> antigo:** em 05/11/2026 ele trocou o código de 4 nós e os `settings`. Passe o export novo como
+> argumento e leia o `git diff` antes de qualquer `PUT`.
+
 ```bash
 node derive-nativo.mjs
 K=$N8N_API_KEY
