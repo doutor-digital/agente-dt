@@ -66,7 +66,7 @@ function normalizarResposta(s: string): string {
   return s.replace(/\s+/g, ' ').trim().toLowerCase();
 }
 import { podarHistorico } from './history-window.js';
-import { semRaciocinioParaPlanoB } from './raciocinio-plano-b.js';
+import { mensagensParaPlanoB } from './raciocinio-plano-b.js';
 import { sanearHistorico, TEXTO_FERRAMENTA_INTERROMPIDA } from './historico-orfao.js';
 import { toolsParaOpenAI } from './tools-openai.js';
 import { respostasSeguradas } from './entrega-falha.js';
@@ -951,7 +951,7 @@ export async function buildAgentGraph(
             invokeChatModel({
               model: modeloBComTools,
               // Os blocos de raciocínio da Anthropic só valem no modelo que os gerou: o plano B de outro provedor não os recebe.
-              messages: planoB.provider === 'anthropic' ? finalMessages : semRaciocinioParaPlanoB(finalMessages),
+              messages: mensagensParaPlanoB(planoB.provider, finalMessages),
               unitId: unit.id,
               traceId: recorder.traceId,
               modelName: planoB.modelName,
