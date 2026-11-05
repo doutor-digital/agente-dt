@@ -22,8 +22,7 @@ import { createKommoClient, type KommoClient } from '../services/kommo.service.j
 import { CacheDaConta, contaDaUnidade } from '../lib/ponte-cache.js';
 import { camposDaConta } from '../lib/ponte-ligacao.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
-import { automacaoLigada } from '../lib/automacoes-estado.js';
-import { CAMPO_VALOR_DA_CONSULTA } from '../lib/valor-consulta.js';
+import { CAMPO_VALOR_DA_CONSULTA, valorDaConsultaVemDoRobo } from '../lib/valor-consulta.js';
 import { leadIdDoPedido } from '../lib/ponte-pausa.js';
 import {
   gravarCamposPelaPonte,
@@ -57,10 +56,6 @@ async function unidadeComKommo(req: Request, res: Response, limite: { balde: str
   return unit;
 }
 
-function valorDaConsultaVemDoRobo(slug: string): boolean {
-  return automacaoLigada(slug, 'valor-consulta', process.env.VALOR_CONSULTA_SLUGS) && automacaoLigada(slug, 'franquia-sync', process.env.FRANQUIA_SYNC_SLUGS);
-}
-
 /** O que o guia precisa da conta: campos (10 min), funis (10 min), fuso, mensagens conhecidas e motivos de perda. */
 async function contaDoGuia(unit: Unit, kommo: KommoClient): Promise<ContaDoGuia> {
   const conta = contaDaUnidade(unit);
@@ -72,9 +67,9 @@ async function contaDoGuia(unit: Unit, kommo: KommoClient): Promise<ContaDoGuia>
     funis: dados.funis,
     tz: fusoDaUnidade(unit),
     mensagens: mensagensDaUnidade(unit),
-    // com a chave `valor-consulta` LIGADA (e o sincronizador também, que é quem a roda) o robô preenche o Valor da Consulta: o guia não o pede
-    // mais à SDR. Em seco nada grava, então a SDR continua sendo quem preenche.
-    preenchidosPorRobo: valorDaConsultaVemDoRobo(unit.slug) ? [CAMPO_VALOR_DA_CONSULTA] : [],
+    // robô ligado nesta unidade (chave + sincronizador + preço nas fontes): o guia não pede mais o Valor da Consulta à SDR nos cartões que
+    // o sincronizador já casou com a franquia. Em seco nada grava, então a SDR continua sendo quem preenche.
+    preenchidosPorRobo: valorDaConsultaVemDoRobo(unit) ? [CAMPO_VALOR_DA_CONSULTA] : [],
     motivosDePerda: () => cacheMotivos.obter(conta, () => kommo.listLossReasons()),
   };
 }

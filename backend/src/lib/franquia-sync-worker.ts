@@ -1563,31 +1563,44 @@ async function espelharValorDaConsulta(ctx: CtxSync, leadId: number, lead: Kommo
   // nome exato (com o símbolo) primeiro: "Valor da consulta" sem o ¤ não é este campo se houver os dois
   const mesmos = (ctx.camposPorNome ?? []).filter(([k]) => k === alvo).map(([, i]) => i);
   const info = mesmos.find((i) => i.nome === CAMPO_VALOR_DA_CONSULTA) ?? mesmos[0] ?? null;
-  const guardado = info ? lead.custom_fields_values?.find((f) => f.field_id === info.id)?.values?.[0]?.value : undefined;
-  const noCartao = guardado === undefined || guardado === null || String(guardado).trim() === '' ? null : String(guardado);
+  const vazioEm = (l: KommoLead): string | null => {
+    const v = info ? l.custom_fields_values?.find((f) => f.field_id === info.id)?.values?.[0]?.value : undefined;
+    return v === undefined || v === null || String(v).trim() === '' ? null : String(v);
+  };
 
   const d = decidirValorDaConsulta({
     estado,
     consulta,
+    consultaEpoch: consulta?.dateAttendanceUtc ? Math.floor(Date.parse(consulta.dateAttendanceUtc) / 1000) : null,
+    agoraEpoch: ctx.agoraEpoch,
     tipoDoCampo: info?.type ?? null,
-    noCartao,
+    noCartao: vazioEm(lead),
     preco: valorDaConsultaNoDia(unit.sourceProdutos),
     secoGlobal: ctx.seco === true,
   });
 
   if (d.acao === 'nada') {
-    // sem preço nas fontes é o único motivo que pede ação de gente: uma linha por unidade, não por cartão
-    if (d.motivo === 'sem-preco' && !jaRegistrou(`${unit.slug}:valor-consulta:sem-preco`)) {
-      logger.warn({ unit: unit.slug, leadId }, 'valor-consulta: avaliação marcada, mas as fontes da unidade não trazem o preço da consulta — não gravei');
-    }
-    if (d.motivo === 'campo-sem-numero' && !jaRegistrou(`${unit.slug}:valor-consulta:campo-sem-numero`)) {
-      logger.warn({ unit: unit.slug, tipo: info?.type }, 'valor-consulta: o campo da conta não é monetário nem numérico — não gravei');
-    }
+    // os motivos que pedem ação de gente: uma linha por unidade e por processo, não por cartão
+    const avisos: Partial<Record<typeof d.motivo, string>> = {
+      'sem-preco': 'avaliação marcada, mas as fontes da unidade não trazem o preço da consulta ("CONSULTA … R$ …") — não gravei',
+      'sem-campo': 'a conta não tem o campo ¤ Valor da Consulta — não gravei',
+      'campo-sem-numero': 'o campo ¤ Valor da Consulta da conta não é monetário nem numérico — não gravei',
+    };
+    const aviso = avisos[d.motivo];
+    // só vale avisar de quem teria recebido: sem-campo/campo-sem-numero aparecem antes de olhar a consulta, então confere
+    if (aviso && consulta && !jaRegistrou(`${unit.slug}:valor-consulta:${d.motivo}`)) logger.warn({ unit: unit.slug, leadId, motivo: d.motivo }, `valor-consulta: ${aviso}`);
     return;
   }
   if (!info) return;
-  if ((resumo.valorConsultaCartoes ?? 0) >= MAX_VALOR_CONSULTA_POR_VARREDURA) return;
-  resumo.valorConsultaCartoes = (resumo.valorConsultaCartoes ?? 0) + 1;
+  const ja = resumo.valorConsultaCartoes ?? 0;
+  if (ja >= MAX_VALOR_CONSULTA_POR_VARREDURA) {
+    if (ja === MAX_VALOR_CONSULTA_POR_VARREDURA) {
+      resumo.valorConsultaCartoes = ja + 1; // 1 aviso por varredura; os que sobraram entram na próxima
+      logger.info({ unit: unit.slug, teto: MAX_VALOR_CONSULTA_POR_VARREDURA }, 'valor-consulta: teto da varredura — os demais cartões ficam para a próxima');
+    }
+    return;
+  }
+  resumo.valorConsultaCartoes = ja + 1;
 
   if (d.acao === 'gravaria') {
     logger.info({ unit: unit.slug, leadId, campo: CAMPO_VALOR_DA_CONSULTA, valor: d.valor, motivo: d.motivo }, 'valor-consulta [seco]: gravaria');
@@ -1595,6 +1608,13 @@ async function espelharValorDaConsulta(ctx: CtxSync, leadId: number, lead: Kommo
     return;
   }
   try {
+    // O cartão desta varredura tem minutos de idade (várias chamadas e pausas antes de chegar aqui): a recepção pode ter digitado
+    // o valor (ou um 0 de cortesia) nesse meio-tempo. Relê antes de escrever; sem conseguir reler, não escreve.
+    const fresco = await kommo.getLead(leadId);
+    if (vazioEm(fresco) !== null) {
+      logger.info({ unit: unit.slug, leadId }, 'valor-consulta: alguém preencheu o campo enquanto a varredura rodava — não gravei');
+      return;
+    }
     await kommo.setLeadCustomFieldValue(leadId, info.id, info.type, d.valor, info.enums);
     resumo.escritas++;
     logger.info({ unit: unit.slug, leadId, campo: CAMPO_VALOR_DA_CONSULTA, valor: d.valor, motivo: d.motivo }, 'valor-consulta: gravado');

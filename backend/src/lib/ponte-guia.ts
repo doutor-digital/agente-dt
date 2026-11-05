@@ -556,8 +556,20 @@ export interface EntradaDoGuia {
   mensagens?: ReadonlyMap<string, readonly string[]>;
   /** O relógio (o teste fixa). */
   agora?: Date;
-  /** Campos da SDR que um robô desta unidade preenche sozinho (ex.: o Valor da Consulta): saem da lista de pendências e das sugestões. */
+  /**
+   * Campos da SDR que um robô desta unidade preenche sozinho (ex.: o Valor da Consulta): saem da lista de pendências e das
+   * sugestões — mas só no cartão que o sincronizador já casou com a franquia (tem ◷ Data da Consulta) e se o campo da conta
+   * aceita o número do robô (monetário/numérico). Fora disso o robô não chega lá e a SDR continua sendo quem preenche.
+   */
   preenchidosPorRobo?: readonly string[];
+}
+
+/** O robô preenche este campo NESTE cartão? (nome exato, sem o `casaNome` que ignora o símbolo: "Valor da consulta" sem ¤ é outro campo) */
+function roboPreenche(e: EntradaDoGuia, d: DefinicaoDeCampo): boolean {
+  if (!(e.preenchidosPorRobo ?? []).some((n) => d.name.trim() === n)) return false;
+  if (d.type !== 'monetary' && d.type !== 'numeric') return false;
+  const data = campoPorNome(e.defs, CAMPOS_SYNC.DATA_CONSULTA);
+  return !!data && !vazioNoCartao(e.lead, data.id);
 }
 
 /** A unidade de atendimento (Petrópolis × Caxias), quando a conta tem o campo. */
@@ -616,7 +628,7 @@ export function montarGuia(e: EntradaDoGuia): GuiaDoCartao {
     const exigidos = obrigatoriosParaEntrar(defs, funil, etapa.id);
     const daSdr = nomesDaSdrNaEtapa(etapa, funil, comercial?.id ?? null)
       .map((n) => campoPorNome(defs, n))
-      .filter((d): d is DefinicaoDeCampo => !!d && !escondidoEm(d, funil.id, etapa.id) && campoDaSdr(d) && !(e.preenchidosPorRobo ?? []).some((n) => casaNome(d.name, n)));
+      .filter((d): d is DefinicaoDeCampo => !!d && !escondidoEm(d, funil.id, etapa.id) && campoDaSdr(d) && !roboPreenche(e, d));
     const ids = new Set(exigidos.map((d) => d.id));
     // PERDIDO depois da consulta tem o motivo no "⊘ Motivo de não fechamento": com um dos dois ⊘ preenchido, o outro
     // não é pendência (a não ser que o Kommo o exija)
@@ -640,7 +652,7 @@ export function montarGuia(e: EntradaDoGuia): GuiaDoCartao {
       const exigidos = new Set(faltamAqui.map((d) => d.id));
       const sugere = (s.sugere ?? [])
         .map((n) => campoPorNome(defs, n))
-        .filter((d): d is DefinicaoDeCampo => !!d && !exigidos.has(d.id) && campoDaSdr(d) && vazioNoCartao(lead, d.id) && !(e.preenchidosPorRobo ?? []).some((n) => casaNome(d.name, n)));
+        .filter((d): d is DefinicaoDeCampo => !!d && !exigidos.has(d.id) && campoDaSdr(d) && vazioNoCartao(lead, d.id) && !roboPreenche(e, d));
       const camposQueFaltam = faltamAqui.map((d) => campoDoGuia(d, lead, tz, true));
       const passou = dataNoPassado(defs, s, lead, tz, e.agora ?? new Date());
       if (passou) camposQueFaltam.push({ ...campoDoGuia(passou, lead, tz, true, dicaDaDataNoPassado(passou, lead, tz)), editavel: false });

@@ -8,8 +8,9 @@
  * A REGRA (pura, sem Kommo):
  *  - o valor vem das fontes da unidade (`valorDaConsultaNoDia(source_produtos)`, em `agent/pagamento-da-unidade.ts`).
  *    Nenhum número no código: sem preço nas fontes, não escreve (e o worker registra o motivo);
- *  - quando: a consulta que o cartão espelha é uma AVALIAÇÃO ainda por acontecer (Agendado, Confirmado ou
- *    Remarcado). Retorno e sessão não têm este preço; atendida, faltou e desmarcada não são "consulta marcada";
+ *  - quando: a consulta que o cartão espelha é uma AVALIAÇÃO ainda por acontecer: status Agendado, Confirmado ou
+ *    Remarcado E horário no futuro (consulta de ontem que a recepção não deu baixa não ganha valor depois do fato).
+ *    Retorno e sessão não têm este preço; atendida, faltou e desmarcada não são "consulta marcada";
  *  - só em campo VAZIO. Qualquer coisa já digitada fica — inclusive 0, que a recepção usa para cortesia;
  *  - chave própria por unidade (`valor-consulta`, tela de Automações): desligado não faz nada, seco só registra.
  *
@@ -18,7 +19,8 @@
  */
 import { SPINE_STATUS, type SpineSchedule } from '../services/spine.service.js';
 import { ehAvaliacao } from './franquia-sync.js';
-import type { Estado } from './automacoes-estado.js';
+import { automacaoLigada, type Estado } from './automacoes-estado.js';
+import { valorDaConsultaNoDia } from '../agent/pagamento-da-unidade.js';
 
 export const CAMPO_VALOR_DA_CONSULTA = '¤ Valor da Consulta';
 
@@ -32,6 +34,9 @@ export interface EntradaValorDaConsulta {
   estado: Estado;
   /** a consulta que o cartão espelha nesta varredura (a mesma que o sincronizador usa) */
   consulta: Pick<SpineSchedule, 'categoryName' | 'idStatus'> | null;
+  /** quando ela acontece e que horas são (epoch, s): só avaliação que ainda vai acontecer recebe */
+  consultaEpoch: number | null;
+  agoraEpoch: number;
   /** o campo existe nesta conta? e de que tipo */
   tipoDoCampo: string | null;
   /** o que o cartão tem hoje no campo: `null` = vazio */
@@ -61,8 +66,9 @@ export function precoEmNumero(preco: string | null | undefined): number | null {
 }
 
 /** A consulta é uma avaliação que ainda vai acontecer? */
-export function avaliacaoPorVir(consulta: EntradaValorDaConsulta['consulta']): boolean {
+export function avaliacaoPorVir(consulta: EntradaValorDaConsulta['consulta'], consultaEpoch: number | null, agoraEpoch: number): boolean {
   if (!consulta || consulta.idStatus === null || consulta.idStatus === undefined) return false;
+  if (consultaEpoch === null || !(consultaEpoch > agoraEpoch)) return false;
   return ehAvaliacao(consulta) && CONSULTA_POR_VIR.includes(consulta.idStatus);
 }
 
@@ -71,10 +77,23 @@ export function decidirValorDaConsulta(e: EntradaValorDaConsulta): DecisaoValorD
   if (e.estado === 'desligado') return { acao: 'nada', motivo: 'desligado' };
   if (e.tipoDoCampo === null) return { acao: 'nada', motivo: 'sem-campo' };
   if (!TIPOS_QUE_ACEITAM_NUMERO.includes(e.tipoDoCampo)) return { acao: 'nada', motivo: 'campo-sem-numero' };
-  if (!avaliacaoPorVir(e.consulta)) return { acao: 'nada', motivo: 'sem-consulta-por-vir' };
+  if (!avaliacaoPorVir(e.consulta, e.consultaEpoch, e.agoraEpoch)) return { acao: 'nada', motivo: 'sem-consulta-por-vir' };
   if (e.noCartao !== null && e.noCartao.trim() !== '') return { acao: 'nada', motivo: 'ja-preenchido' };
   const valor = precoEmNumero(e.preco);
   if (valor === null) return { acao: 'nada', motivo: 'sem-preco' };
   const motivo = 'avaliação marcada e campo vazio (preço das fontes da unidade)';
   return { acao: e.estado === 'seco' || e.secoGlobal ? 'gravaria' : 'gravar', valor, motivo };
+}
+
+/**
+ * O robô vai preencher o Valor da Consulta nesta unidade? Ligado (não seco), com o sincronizador também ligado — é ele
+ * quem roda a regra — e com o preço nas fontes. É a pergunta do guia da Ponte: só então ele deixa de pedir o campo à
+ * SDR. O worker decide cartão a cartão com `decidirValorDaConsulta`; esta é a condição da UNIDADE.
+ */
+export function valorDaConsultaVemDoRobo(unit: { slug: string; sourceProdutos?: string | null }): boolean {
+  return (
+    automacaoLigada(unit.slug, 'valor-consulta', process.env.VALOR_CONSULTA_SLUGS) &&
+    automacaoLigada(unit.slug, 'franquia-sync', process.env.FRANQUIA_SYNC_SLUGS) &&
+    valorDaConsultaNoDia(unit.sourceProdutos) !== null
+  );
 }

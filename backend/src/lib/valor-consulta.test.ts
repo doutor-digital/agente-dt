@@ -8,8 +8,11 @@ import { decidirValorDaConsulta, precoEmNumero, type EntradaValorDaConsulta } fr
 
 const consulta = (over: Partial<Pick<SpineSchedule, 'categoryName' | 'idStatus'>> = {}) => ({ categoryName: 'AVALIAÇÃO', idStatus: SPINE_STATUS.AGENDADO as number | null, ...over });
 
+const AGORA = 1_800_000_000;
+const AMANHA = AGORA + 86_400;
+
 const base = (over: Partial<EntradaValorDaConsulta> = {}): EntradaValorDaConsulta => ({
-  estado: 'ligado', consulta: consulta(), tipoDoCampo: 'monetary', noCartao: null, preco: '250,00', ...over,
+  estado: 'ligado', consulta: consulta(), consultaEpoch: AMANHA, agoraEpoch: AGORA, tipoDoCampo: 'monetary', noCartao: null, preco: '250,00', ...over,
 });
 
 // ── a regra pura ───────────────────────────────────────────────────────────────
@@ -59,6 +62,12 @@ test('só avaliação por vir: retorno, sessão, atendida, falta, desmarcada e s
   }
 });
 
+test('avaliação que já passou (ainda "Agendado" por falta de baixa) não ganha valor depois do fato', () => {
+  for (const consultaEpoch of [AGORA - 3600, AGORA - 2 * 86_400, AGORA, null]) {
+    assert.deepEqual(decidirValorDaConsulta(base({ consultaEpoch })), { acao: 'nada', motivo: 'sem-consulta-por-vir' }, String(consultaEpoch));
+  }
+});
+
 test('conta sem o campo, ou com o campo de tipo que não aceita número: não grava', () => {
   assert.deepEqual(decidirValorDaConsulta(base({ tipoDoCampo: null })), { acao: 'nada', motivo: 'sem-campo' });
   for (const t of ['text', 'select', 'date']) assert.deepEqual(decidirValorDaConsulta(base({ tipoDoCampo: t })), { acao: 'nada', motivo: 'campo-sem-numero' }, t);
@@ -80,12 +89,21 @@ interface Escrita { leadId: number; campo: number; tipo: string; valor: unknown 
 
 const resumoVazio = (): ResumoSync => ({ unit: SLUG, em: '', agendamentos: 0, tratamentos: 0, pacientes: 0, comLead: 0, semLead: 0, escritas: 0, erros: 0, exemplosSemLead: [], movimentos: 0, revisados: 0 });
 
+/** `relido` = o que o Kommo devolve quando a varredura relê o cartão antes de escrever (padrão: continua vazio). */
+function kommoFalso(escritas: Escrita[], relido: unknown = cartaoCom()) {
+  return {
+    getLead: async () => relido,
+    setLeadCustomFieldValue: async (leadId: number, campo: number, tipo: string, valor: unknown) => { escritas.push({ leadId, campo, tipo, valor }); },
+  };
+}
+
 function ctxDe(escritas: Escrita[], extra: Record<string, unknown> = {}, sourceProdutos: string | null = FONTES_TIMBO) {
   return {
     unit: { id: 'u-timbo', slug: SLUG, sourceProdutos } as never,
-    kommo: { setLeadCustomFieldValue: async (leadId: number, campo: number, tipo: string, valor: unknown) => { escritas.push({ leadId, campo, tipo, valor }); } } as never,
+    kommo: kommoFalso(escritas) as never,
     resumo: resumoVazio(),
     camposPorNome: CAMPOS,
+    agoraEpoch: AGORA,
     ...extra,
   } as unknown as Parameters<typeof _interno.espelharValorDaConsulta>[0];
 }
@@ -95,7 +113,7 @@ const cartaoCom = (valores: Array<[number, unknown]> = []) => ({
   custom_fields_values: valores.map(([field_id, value]) => ({ field_id, values: [{ value }] })),
 }) as never;
 
-const AGENDADA = { idSchedule: 1, idStatus: SPINE_STATUS.AGENDADO, categoryName: 'AVALIAÇÃO' } as SpineSchedule;
+const AGENDADA = { idSchedule: 1, idStatus: SPINE_STATUS.AGENDADO, categoryName: 'AVALIAÇÃO', dateAttendanceUtc: new Date((AMANHA) * 1000).toISOString() } as SpineSchedule;
 
 async function rodar(estado: 'ligado' | 'seco' | 'desligado' | null, f: () => Promise<void>) {
   _semearParaTeste(estado ? [{ slug: SLUG, automacao: 'valor-consulta', estado }] : []);
@@ -117,6 +135,25 @@ test('worker, ligado: campo já preenchido (mesmo com outro valor) não é tocad
   // só o campo do tratamento preenchido: o da consulta segue vazio e é gravado
   await rodar('ligado', () => _interno.espelharValorDaConsulta(ctxDe(escritas), 5, cartaoCom([[78, 1500]]), AGENDADA));
   assert.deepEqual(escritas, [{ leadId: 5, campo: 77, tipo: 'monetary', valor: 250 }]);
+});
+
+test('worker: se a recepção preencheu o campo enquanto a varredura rodava, o robô relê e não sobrescreve', async () => {
+  const escritas: Escrita[] = [];
+  const ctx = ctxDe(escritas, { kommo: kommoFalso(escritas, cartaoCom([[77, 0]])) });
+  await rodar('ligado', () => _interno.espelharValorDaConsulta(ctx, 5, cartaoCom(), AGENDADA));
+  assert.deepEqual(escritas, [], 'o 0 da cortesia digitado depois do início da varredura fica');
+  // sem conseguir reler o cartão, também não escreve
+  const semLeitura = ctxDe(escritas, { kommo: { ...kommoFalso(escritas), getLead: async () => { throw new Error('429'); } } });
+  await rodar('ligado', () => _interno.espelharValorDaConsulta(semLeitura, 5, cartaoCom(), AGENDADA));
+  assert.deepEqual(escritas, []);
+  assert.equal(semLeitura.resumo.erros, 1);
+});
+
+test('worker: avaliação de ontem ainda "Agendada" não recebe', async () => {
+  const escritas: Escrita[] = [];
+  const ontem = { ...AGENDADA, dateAttendanceUtc: new Date((AGORA - 86_400) * 1000).toISOString() } as SpineSchedule;
+  await rodar('ligado', () => _interno.espelharValorDaConsulta(ctxDe(escritas), 5, cartaoCom(), ontem));
+  assert.deepEqual(escritas, []);
 });
 
 test('worker: unidade sem preço nas fontes não grava', async () => {
@@ -155,7 +192,7 @@ test('worker: conta sem o campo não escreve; falha do Kommo conta erro e não d
   await rodar('ligado', () => _interno.espelharValorDaConsulta(ctxDe(escritas, { camposPorNome: camposDaConta([{ id: 99, name: '✎ Queixa', type: 'text' }]) }), 5, cartaoCom(), AGENDADA));
   assert.deepEqual(escritas, []);
 
-  const quebrado = ctxDe(escritas, { kommo: { setLeadCustomFieldValue: async () => { throw new Error('400'); } } });
+  const quebrado = ctxDe(escritas, { kommo: { ...kommoFalso(escritas), setLeadCustomFieldValue: async () => { throw new Error('400'); } } });
   await rodar('ligado', () => _interno.espelharValorDaConsulta(quebrado, 5, cartaoCom(), AGENDADA));
   assert.equal(quebrado.resumo.erros, 1);
   assert.equal(quebrado.resumo.escritas, 0);

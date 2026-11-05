@@ -299,24 +299,34 @@ describe('guia da Ponte — consulta que já passou não serve para AGENDADO', (
 });
 
 describe('guia da Ponte — campo que um robô da unidade preenche (valor-consulta)', () => {
-  const faltamEmAgendado = (preenchidosPorRobo?: readonly string[]) =>
-    montarGuia({ lead: cartao(ST.agendado, { 2449931: { enum_id: 1845440 } }), defs: DEFS, funis: FUNIS, tz: TZ, preenchidosPorRobo }).faltam.map((d) => d.nome);
+  const DATA = 2449934; // ◷ Data da Consulta: o cartão que o sincronizador já casou com a franquia tem
+  const COM_DATA = { [DATA]: { value: 1_800_000_000 }, 2449931: { enum_id: 1845440 } };
+  const faltam = (valores: Record<number, { value?: unknown; enum_id?: number }>, preenchidosPorRobo?: readonly string[], defs = DEFS) =>
+    montarGuia({ lead: cartao(ST.agendado, valores), defs, funis: FUNIS, tz: TZ, preenchidosPorRobo }).faltam.map((d) => d.nome);
 
   it('sem robô, o Valor da Consulta continua na lista da SDR em AGENDADO', () => {
-    assert.ok(faltamEmAgendado().includes('¤ Valor da Consulta'));
-    assert.ok(faltamEmAgendado([]).includes('¤ Valor da Consulta'));
+    assert.ok(faltam(COM_DATA).includes('¤ Valor da Consulta'));
+    assert.ok(faltam(COM_DATA, []).includes('¤ Valor da Consulta'));
   });
 
-  it('com o robô ligado, sai da lista da SDR; o resto da etapa fica', () => {
-    const f = faltamEmAgendado(['¤ Valor da Consulta']);
+  it('com o robô ligado e o cartão casado com a franquia, sai da lista da SDR; o resto da etapa fica', () => {
+    const f = faltam(COM_DATA, ['¤ Valor da Consulta']);
     assert.ok(!f.includes('¤ Valor da Consulta'));
     assert.ok(f.includes('¤ Pagamento antecipado'));
   });
 
+  it('cartão SEM a data da consulta (o sincronizador não chegou nele): a SDR continua preenchendo', () => {
+    assert.ok(faltam({ 2449931: { enum_id: 1845440 } }, ['¤ Valor da Consulta']).includes('¤ Valor da Consulta'));
+  });
+
+  it('campo da conta de tipo que o robô não grava (texto): a SDR continua preenchendo', () => {
+    const comoTexto = DEFS.map((d) => (d.name === '¤ Valor da Consulta' ? { ...d, type: 'text' } : d));
+    assert.ok(faltam(COM_DATA, ['¤ Valor da Consulta'], comoTexto).includes('¤ Valor da Consulta'));
+  });
+
   it('se a conta EXIGE o campo em AGENDADO, o guia continua cobrando mesmo com o robô (o Kommo trava a etapa)', () => {
     const exigido = DEFS.map((d) => (d.name === '¤ Valor da Consulta' ? { ...d, required_statuses: em([COM, ST.agendado]) } : d));
-    const g = montarGuia({ lead: cartao(ST.agendado, { 2449931: { enum_id: 1845440 } }), defs: exigido, funis: FUNIS, tz: TZ, preenchidosPorRobo: ['¤ Valor da Consulta'] });
-    assert.ok(g.faltam.some((d) => d.nome === '¤ Valor da Consulta'));
+    assert.ok(faltam(COM_DATA, ['¤ Valor da Consulta'], exigido).includes('¤ Valor da Consulta'));
   });
 });
 
