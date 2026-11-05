@@ -18,6 +18,7 @@ import { prisma } from './prisma.js';
 import { escritasDoPaciente, idadeADesencalhar } from './paciente-para-cartao.js';
 import { escritasDoTratamento } from './tratamento-para-cartao.js';
 import { CAMPOS_SESSOES, acharCampoDeSessao, escritasDeSessoes, separarCiclo } from './sessoes-para-cartao.js';
+import { agendamentosDoPaciente } from './chegada-do-dia.js';
 import { planejarAtendimento, type CampoCandidato } from './atendimento-para-cartao.js';
 import { abrirSessaoTela, montarAvisoDaTela, type AtendimentoTela, type ProblemaDaTela, type SessaoTela } from './franquia-tela.js';
 import { avisarJoao } from './alerta-whatsapp.js';
@@ -1229,11 +1230,24 @@ async function espelharSessoes(ctx: CtxSync, leadId: number, lead: KommoLead, p:
       'franquia-sessoes: mais de um tratamento e não sei de qual é cada sessão — não gravo contador',
     );
   }
-  const planejadas = escritasDeSessoes({ schedules, tratamento: p.tratamento, tratamentosDoPaciente, agoraEpoch, campo });
-  if (planejadas.length > 0) resumo.sessoes = (resumo.sessoes ?? 0) + 1;
+  // Chave `chegada-do-dia` (tela de Automações): a ◷ Próxima sessão vira o 1º atendimento do paciente, somando os tratamentos.
+  const chegadaDoDia = estadoDaAutomacao(unit.slug, 'chegada-do-dia', process.env.CHEGADA_DO_DIA_SLUGS);
+  // A chegada sai só do que é seguramente DESTE paciente (ficha por idClient + agenda de tratamento dele): a agenda é agrupada por nome.
+  // Só quando a chave está em uso nesta unidade: não custa nada às que não ligaram.
+  const schedulesDoPaciente =
+    chegadaDoDia !== 'desligado' && hist ? agendamentosDoPaciente(hist.schedules, p.consultas, (tratamentosDoPaciente ?? []).map((t) => t.idTreatment)) : undefined;
+  const planejadas = escritasDeSessoes({ schedules, tratamento: p.tratamento, tratamentosDoPaciente, agoraEpoch, campo, chegadaDoDia, schedulesDoPaciente });
+  if (planejadas.some((e) => !e.soNoPapel)) resumo.sessoes = (resumo.sessoes ?? 0) + 1;
   for (const e of planejadas) {
     const info = acharCampoDeSessao(porNome, e.campo, normalizar);
     if (!info) continue;
+    // «Só no papel» da chegada do dia: NUNCA grava, nem com a chave das sessões ligada. Vem antes de tudo o resto.
+    if (e.soNoPapel) {
+      const valor = e.limpar ? '(limpar)' : e.valor;
+      logger.info({ unit: unit.slug, leadId, campo: e.campo, valor, motivo: e.motivo }, 'franquia-sync [seco]: gravaria a chegada do dia');
+      registrarSimulacao(unit, e.soNoPapel, { leadId, acao: 'gravaria', alvo: e.campo, valor, noCartao: campo(e.campo)?.valor, motivo: e.motivo });
+      continue;
+    }
     if (seco) {
       logger.info({ unit: unit.slug, leadId, campo: e.campo, valor: e.limpar ? '(limpar)' : e.valor, motivo: e.motivo }, 'franquia-sync [seco]: gravaria sessão/tratamento');
       registrarSimulacao(unit, estado === 'seco' ? 'franquia-sessoes' : (ctx.automacaoDoSeco ?? 'franquia-revisao'), { leadId, acao: 'gravaria', alvo: e.campo, valor: e.limpar ? '(limpar)' : e.valor, noCartao: campo(e.campo)?.valor, motivo: e.motivo });

@@ -17,6 +17,9 @@
  *      confirmava a sessão das 18h quando o toque era na véspera do retorno das 10h de amanhã;
  *   2. o campo do cartão daquele tipo (◷ Data da Consulta ou ◷ Próxima sessão) nas próximas 30 h;
  *   3. o agendamento da franquia no mesmo horário (±5 min) — e, quando o lembrete traz a hora, a mesma hora.
+ * Paciente com MAIS DE UM atendimento no mesmo dia (dois tratamentos em sequência, 15h30 e 16h — Açailândia,
+ * 03/11/2026): o agendamento achado pelo horário do cartão abre o DIA; a resposta diz todos os horários e manda
+ * chegar no primeiro, e a confirmação vai para TODOS os atendimentos de pé daquele dia (`chegada-do-dia.ts`).
  * Falta 2 ou 3, ou o lembrete não diz o tipo: responde e abre tarefa, sem confirmar nada na franquia.
  * Falta 1 (o "Confirmado" digitado respondendo outra pergunta da SDR): não é com este tratamento — segue
  * para a Sofia, como sempre.
@@ -59,6 +62,7 @@ import type { KommoClient, KommoLead } from '../services/kommo.service.js';
 import { mensagensOficiais, type MensagemOficial } from '../services/kommo-talks.service.js';
 import { addMessage } from '../services/conversations.service.js';
 import { nomeApresentavel, vocativo } from './nome-apresentavel.js';
+import { diaComVariosAtendimentos, horaFalada, horariosDistintos, listaDeHorarios, type DiaComVariosAtendimentos } from './chegada-do-dia.js';
 
 export type { TipoLembrete } from './lembrete-chaves.js';
 
@@ -261,8 +265,10 @@ const epochDoAgendamento = (s: Pick<SpineSchedule, 'dateAttendanceUtc'>): number
  * PURA: entre os agendamentos do paciente, o que o lembrete anunciou.
  *
  * Tem de ser do tipo certo (avaliação/retorno × sessão), estar de pé (agendado ou confirmado) e cair
- * no MESMO horário do cartão (±5 min). Campo do cartão só com o dia (meia-noite): vale o único
- * agendamento daquele dia. Dois no mesmo horário, ou nenhum: null — não se confirma no escuro.
+ * no MESMO horário do cartão (±5 min). Campo do cartão só com o dia (meia-noite): vale o PRIMEIRO
+ * agendamento daquele dia. Nenhum: null — não se confirma no escuro. Mais de um no mesmo horário: o do
+ * ⚙ idTreatment do cartão, se der para dizer, senão o primeiro; o chamador confirma o DIA inteiro
+ * (`diaComVariosAtendimentos`), então a escolha só abre o dia.
  */
 export function escolherAgendamento(args: {
   schedules: SpineSchedule[];
@@ -278,14 +284,20 @@ export function escolherAgendamento(args: {
     if (!Number.isFinite(epochDoAgendamento(s))) return false;
     if (s.idStatus !== null && s.idStatus !== SPINE_STATUS.AGENDADO && s.idStatus !== SPINE_STATUS.CONFIRMADO) return false;
     if (tipo === 'consulta' ? !ehConsulta(s) : ehConsulta(s)) return false;
-    if (tipo === 'sessao' && idTreatment && s.idTreatment !== null && s.idTreatment !== idTreatment) return false;
     vistos.add(s.idSchedule);
     return true;
   });
 
+  // Todos os agendamentos de `schedules` são do MESMO paciente (ficha por idClient, ou a agenda do tratamento dele). O ⚙ idTreatment
+  // do cartão deixou de ser filtro: a ◷ Próxima sessão é a CHEGADA do paciente e pode ser a sessão do outro tratamento dele (15h30,
+  // com o cartão guardando o da 16h). Fica como PREFERÊNCIA quando dois cabem no mesmo horário; quem confirma, depois, é o dia inteiro.
+  const preferir = (lista: SpineSchedule[]): SpineSchedule | null => {
+    if (lista.length <= 1) return lista[0] ?? null;
+    const doCartao = idTreatment ? lista.filter((s) => s.idTreatment === idTreatment) : [];
+    return doCartao.length === 1 ? doCartao[0] : lista[0];
+  };
   const exatos = vivos.filter((s) => Math.abs(epochDoAgendamento(s) - quandoEpoch) <= MESMO_HORARIO_S);
-  if (exatos.length === 1) return exatos[0];
-  if (exatos.length > 1) return null;
+  if (exatos.length > 0) return preferir(exatos);
 
   // Campo de data sem hora: o Kommo guarda meia-noite (no fuso da conta ou em UTC, conforme a conta).
   const dias = new Set<string>();
@@ -294,8 +306,11 @@ export function escolherAgendamento(args: {
   const utc = new Date(quandoEpoch * 1000).toISOString();
   if (utc.slice(11, 16) === '00:00') dias.add(utc.slice(0, 10));
   if (dias.size === 0) return null;
-  const doDia = vivos.filter((s) => s.dayLocal !== null && dias.has(s.dayLocal));
-  return doDia.length === 1 ? doDia[0] : null;
+  // Mais de um no dia (dois tratamentos em sequência): o primeiro abre o DIA; a resposta diz todos e a confirmação cobre todos.
+  const doDia = vivos
+    .filter((s) => s.dayLocal !== null && dias.has(s.dayLocal))
+    .sort((a, b) => epochDoAgendamento(a) - epochDoAgendamento(b));
+  return preferir(doDia.filter((s) => epochDoAgendamento(s) === epochDoAgendamento(doDia[0])));
 }
 
 /** O agendamento escolhido no formato que `confirmarNaFranquia` já entende. */
@@ -318,15 +333,27 @@ function quandoPorExtenso(quando: string | null): string {
   return ` ${diaCurto(quando)} às ${quando.slice(11, 16)}`;
 }
 
+/** "terça, 03/11, são às 15h30 e 16h" — o dia com todos os horários; a mensagem fecha dizendo onde chegar. */
+function trechoDosVarios(v: DiaComVariosAtendimentos): { plural: string; quando: string } {
+  const plural = v.natureza === 'sessoes' ? 'Suas sessões' : v.natureza === 'consultas' ? 'Suas consultas' : 'Seus atendimentos';
+  return { plural, quando: `${diaCurto(`${v.dia}T${v.chegada}`)}, são às ${listaDeHorarios(v.horarios)}` };
+}
+
 export function textoRespostaAoLembrete(args: {
   tipo: TipoLembrete;
   resposta: RespostaD1;
   nome: string | null | undefined;
   /** "AAAA-MM-DDTHH:mm" local, ou null */
   quando: string | null;
+  /** O paciente tem mais de um atendimento nesse dia: a mensagem diz todos e manda chegar no primeiro. */
+  varios?: DiaComVariosAtendimentos | null;
 }): string {
   const nome = primeiroNome(args.nome);
   const quando = quandoPorExtenso(args.quando);
+  if (args.resposta === 'confirmou' && args.varios && args.varios.horarios.length >= 2) {
+    const t = trechoDosVarios(args.varios);
+    return `Presença confirmada${nome}! 💙 ${t.plural} de ${t.quando} — chegue às ${horaFalada(args.varios.chegada)}. Qualquer coisa é só me chamar por aqui.`;
+  }
   if (args.resposta === 'remarcar') {
     return `Sem problema${nome}! 🙏 Vou pedir para a equipe combinar um novo horário com você por aqui. Se preferir, me diga qual dia e período ficam melhores.`;
   }
@@ -342,12 +369,14 @@ export function textoTarefaRemarcar(args: {
   nome: string | null | undefined;
   quando: string | null;
   texto: string;
+  varios?: DiaComVariosAtendimentos | null;
 }): string {
   const oQue = args.tipo === 'sessao' ? 'a sessão' : 'a consulta';
   const quando = args.quando ? ` de${quandoPorExtenso(args.quando)}` : '';
+  const outros = args.varios && args.varios.horarios.length >= 2 ? ` O paciente tem ${args.varios.horarios.length} horários nesse dia (${listaDeHorarios(args.varios.horarios)}): combinar todos.` : '';
   return (
     `ALERTA · ${args.slug} · [Contato: ${args.nome ?? 'paciente'}] 🔁 Pediu para remarcar ${oQue}${quando} ` +
-    `(tocou "${args.texto.trim().slice(0, 60)}" no lembrete). Combinar novo horário com o paciente.`
+    `(tocou "${args.texto.trim().slice(0, 60)}" no lembrete). Combinar novo horário com o paciente.${outros}`
   );
 }
 
@@ -429,12 +458,18 @@ export function textoRepeticao(args: {
   nome: string | null | undefined;
   /** "AAAA-MM-DDTHH:mm" local, ou null */
   quando: string | null;
+  /** Mais de um horário no dia: a repetição diz todos e a chegada, como a primeira resposta (senão repetiria o erro das 16h). */
+  varios?: DiaComVariosAtendimentos | null;
 }): string {
   const nome = primeiroNome(args.nome);
   if (args.resposta === 'remarcar') {
     return `Já pedi para a equipe combinar um novo horário com você${nome} 🙏 Eles te chamam por aqui.`;
   }
   if (args.tipo === 'incerto') return `Já recebemos sua confirmação${nome}! ✅ Qualquer coisa é só me chamar por aqui.`;
+  if (args.varios && args.varios.horarios.length >= 2) {
+    const t = trechoDosVarios(args.varios);
+    return `Já está confirmado${nome}! ✅ ${t.plural} de ${t.quando} — chegue às ${horaFalada(args.varios.chegada)}. Qualquer coisa é só me chamar por aqui.`;
+  }
   const onde = args.tipo === 'sessao' ? ' na sua sessão' : '';
   return `Já está confirmado${nome}! ✅ Te esperamos${onde}${quandoPorExtenso(args.quando)}. Qualquer coisa é só me chamar por aqui.`;
 }
@@ -572,6 +607,8 @@ export interface ResultadoDoLembrete {
   idSchedule: number | null;
   /** Só no "confirmou" de um tipo certo: o que aconteceu na franquia. */
   franquia: ResultadoFranquia | null;
+  /** Os outros atendimentos do mesmo dia (2º tratamento em sequência) confirmados junto, um a um. */
+  outras?: Array<{ idSchedule: number | null; franquia: ResultadoFranquia }>;
   /** No "incerto": por que não deu para saber. */
   motivo?: string;
 }
@@ -604,9 +641,10 @@ async function responderRepeticao(
   deps: DepsLembrete,
   tipo: TipoLembrete | 'incerto',
   ref: string | null,
+  varios: DiaComVariosAtendimentos | null = null,
 ): Promise<ResultadoDoLembrete> {
   const quando = tipo !== 'incerto' && ref && ref.slice(11, 16) !== '00:00' ? ref : null;
-  const texto = textoRepeticao({ resposta: c.resposta, tipo, nome: nomeDoContexto(c), quando });
+  const texto = textoRepeticao({ resposta: c.resposta, tipo, nome: nomeDoContexto(c), quando, varios });
   await c.kommo.sendChatReply({ leadId: c.leadId, text: texto, chatId: null, talkId: null, contactId: null });
   await deps.registrarResposta(c.conv.id ?? null, texto);
   logger.info({ ...c.log, tipo }, 'lembrete: o mesmo toque de novo — respondido "já está", sem refazer nada');
@@ -680,6 +718,7 @@ export async function tratarBotaoDoLembrete(
   const tz = fusoDaFranquia(unit);
   let escolhido: SpineSchedule | null = null;
   let schedules: SpineSchedule[] | null = null;
+  let varios: DiaComVariosAtendimentos | null = null;
   let horarioDoCartao: string | null = null;
   if (alvo.tipo !== 'incerto') {
     const tipo = alvo.tipo;
@@ -690,17 +729,30 @@ export async function tratarBotaoDoLembrete(
         logger.warn({ ...c.log, err: String(err) }, 'lembrete: falha ao ler a agenda do paciente na franquia');
         return null;
       });
+    // O ⚙ idTreatment do cartão é só preferência: a ◷ Próxima sessão é a CHEGADA do paciente e pode ser a sessão do OUTRO
+    // tratamento dele (15h30, enquanto o cartão guarda o da 16h). `agendamentos` já traz só agendamentos do paciente.
     escolhido = schedules ? escolherAgendamento({ schedules, tipo, quandoEpoch: alvo.quandoEpoch, idTreatment: datas.idTreatment, tz }) : null;
-    // A hora escrita no lembrete tem de ser a do agendamento (ou a do cartão, quando a franquia não achou).
+    varios = escolhido?.dayLocal && schedules ? diaComVariosAtendimentos(schedules, escolhido.dayLocal) : null;
+    // A hora escrita no lembrete tem de ser a do agendamento (ou a do cartão, quando a franquia não achou) — ou a de
+    // qualquer atendimento do mesmo dia: o lembrete de antes da mudança dizia 16:00 e o cartão agora diz 15:30.
     const horaReferencia = escolhido?.timeLocal ?? (horarioDoCartao.slice(11, 16) === '00:00' ? null : horarioDoCartao.slice(11, 16));
-    if (alvo.hora && horaReferencia && alvo.hora !== horaReferencia) {
+    const horasDoTipo = horariosDistintos((varios?.atendimentos ?? []).filter((a) => ehConsulta(a) === (tipo === 'consulta')));
+    if (alvo.hora && horaReferencia && alvo.hora !== horaReferencia && !horasDoTipo.includes(alvo.hora)) {
       alvo = { tipo: 'incerto', estado: alvo.estado, motivo: `o lembrete diz ${alvo.hora} e a agenda diz ${horaReferencia}` };
       escolhido = null;
+      varios = null;
     }
   }
 
   const automacao = alvo.tipo === 'incerto' ? AUTOMACAO_DO_LEMBRETE.consulta : AUTOMACAO_DO_LEMBRETE[alvo.tipo];
-  const ref = alvo.tipo === 'incerto' ? prova.mensagemId : (horarioDoCartao as string);
+  // Com vários horários no dia a marca é a CHEGADA, não o horário do cartão: o campo pode virar de 16h para 15h30 entre dois
+  // toques, e o segundo continuaria sendo o mesmo toque. A repetição também mostra a chegada.
+  const ref =
+    alvo.tipo === 'incerto'
+      ? prova.mensagemId
+      : varios && varios.horarios.length >= 2
+        ? `${varios.dia}T${varios.chegada}`
+        : (horarioDoCartao as string);
   const chave = chaveDoToque(alvo.tipo, ref, resposta);
 
   if (alvo.estado === 'seco') {
@@ -712,7 +764,9 @@ export async function tratarBotaoDoLembrete(
         alvo.tipo === 'incerto'
           ? 'resposta ao paciente + tarefa (não daria para saber qual agendamento)'
           : resposta === 'confirmou'
-            ? `${oQue} CONFIRMADA na franquia + resposta ao paciente`
+            ? varios
+              ? `${varios.atendimentos.length} atendimentos do dia (${listaDeHorarios(varios.horarios)}) CONFIRMADOS na franquia + resposta com todos os horários`
+              : `${oQue} CONFIRMADA na franquia + resposta ao paciente`
             : `tarefa: pediu para remarcar a ${oQue}`,
       valor: escolhido ? `${escolhido.dayLocal}T${escolhido.timeLocal}` : (horarioDoCartao ?? prova.em.toISOString()),
       motivo:
@@ -736,9 +790,9 @@ export async function tratarBotaoDoLembrete(
   }
   emAndamento.add(trava);
   try {
-    if (await deps.jaTratado(unit.id, leadId, chave)) return await responderRepeticao(c, deps, alvo.tipo, ref);
+    if (await deps.jaTratado(unit.id, leadId, chave)) return await responderRepeticao(c, deps, alvo.tipo, ref, varios);
     if (alvo.tipo === 'incerto') return await responderIncerto(c, deps, alvo.motivo, chave);
-    return await responderAoLembrete(c, deps, { tipo: alvo.tipo, horarioDoCartao: horarioDoCartao as string, escolhido, schedules, chave });
+    return await responderAoLembrete(c, deps, { tipo: alvo.tipo, horarioDoCartao: horarioDoCartao as string, escolhido, schedules, varios, chave });
   } finally {
     emAndamento.delete(trava);
   }
@@ -768,10 +822,10 @@ async function responderIncerto(c: Contexto, deps: DepsLembrete, motivo: string,
 async function responderAoLembrete(
   c: Contexto,
   deps: DepsLembrete,
-  a: { tipo: TipoLembrete; horarioDoCartao: string; escolhido: SpineSchedule | null; schedules: SpineSchedule[] | null; chave: string },
+  a: { tipo: TipoLembrete; horarioDoCartao: string; escolhido: SpineSchedule | null; schedules: SpineSchedule[] | null; varios: DiaComVariosAtendimentos | null; chave: string },
 ): Promise<ResultadoDoLembrete> {
   const { unit, leadId, texto, conv, kommo, resposta } = c;
-  const { tipo, horarioDoCartao, escolhido, chave } = a;
+  const { tipo, horarioDoCartao, escolhido, varios, chave } = a;
   const oQue: 'consulta' | 'sessão' = tipo === 'sessao' ? 'sessão' : 'consulta';
   const consulta = escolhido ? comoConsultaReconciliada(escolhido) : null;
   // O horário dito ao paciente: o da franquia quando bateu; senão o do cartão (é o que o lembrete mostrou),
@@ -782,7 +836,7 @@ async function responderAoLembrete(
     await kommo
       .createTask({
         leadId,
-        text: textoTarefaRemarcar({ slug: unit.slug, tipo, nome: conv.contactName, quando: quandoDito, texto }),
+        text: textoTarefaRemarcar({ slug: unit.slug, tipo, nome: conv.contactName, quando: quandoDito, texto, varios }),
         completeAt: Math.floor(deps.agora().getTime() / 1000) + 30 * 60,
       })
       .catch((err) => logger.warn({ ...c.log, err: String(err) }, 'lembrete: falha ao abrir a tarefa de remarcação'));
@@ -793,21 +847,34 @@ async function responderAoLembrete(
     });
   }
 
-  const resp = textoRespostaAoLembrete({ tipo, resposta, nome: nomeDoContexto(c), quando: quandoDito });
+  const resp = textoRespostaAoLembrete({ tipo, resposta, nome: nomeDoContexto(c), quando: quandoDito, varios });
   await kommo.sendChatReply({ leadId, text: resp, chatId: null, talkId: null, contactId: null });
   // A resposta já saiu: marca antes de falar com a franquia, que pode demorar ou falhar.
   await deps.marcarTratado(unit.id, leadId, chave).catch(() => undefined);
   await deps.registrarResposta(conv.id ?? null, resp);
 
   let franquia: ResultadoFranquia | null = null;
+  const outras: Array<{ idSchedule: number | null; franquia: ResultadoFranquia }> = [];
   if (resposta === 'confirmou') {
-    franquia = await confirmarNaFranquia(
-      { unit, leadId, consulta, contactName: conv.contactName, kommo, oQue },
-      // A prova de que o lembrete falou DESTE agendamento: a última fala foi o lembrete daquele tipo e o
-      // horário do cartão bateu com o da franquia (escolherAgendamento).
-      { ...deps.franquia, perguntou: async () => consulta !== null },
-    );
+    // A prova de que o lembrete falou DESTE agendamento: a última fala foi o lembrete daquele tipo e o
+    // horário do cartão bateu com o da franquia (escolherAgendamento).
+    const comProva = { ...deps.franquia, perguntou: async () => consulta !== null };
+    franquia = await confirmarNaFranquia({ unit, leadId, consulta, contactName: conv.contactName, kommo, oQue }, comProva);
+    // Os OUTROS atendimentos de pé do mesmo dia (o 2º tratamento, em sequência): o paciente confirmou o dia, não só o 1º horário.
+    // Mesmo caminho e mesma tarefa de alerta de sempre — o que a franquia não aceitar vira tarefa para a equipe, um a um
+    // (`confirmarNaFranquia` nunca lança). Só se confirma o MESMO tipo que o lembrete anunciou (sessão com sessão): um retorno
+    // no mesmo dia que o lembrete da sessão não citou não vira CONFIRMADO por tabela — a equipe é avisada para confirmar.
+    for (const o of varios?.atendimentos ?? []) {
+      if (o.idSchedule === null || o.idSchedule === escolhido?.idSchedule) continue;
+      const outra = comoConsultaReconciliada(o); // null (sem dia/hora) cai em 'sem_consulta': a equipe é avisada
+      const mesmoTipo = !!escolhido && ehConsulta(o) === ehConsulta(escolhido);
+      const r = await confirmarNaFranquia(
+        { unit, leadId, consulta: outra, contactName: conv.contactName, kommo, oQue: ehConsulta(o) ? 'consulta' : 'sessão' },
+        { ...deps.franquia, perguntou: async () => mesmoTipo },
+      );
+      outras.push({ idSchedule: o.idSchedule, franquia: r });
+    }
   }
-  logger.info({ ...c.log, tipo, idSchedule: escolhido?.idSchedule ?? null, franquia }, 'lembrete: toque respondido em código, sem Sofia');
-  return { resposta, tipo, idSchedule: escolhido?.idSchedule ?? null, franquia };
+  logger.info({ ...c.log, tipo, idSchedule: escolhido?.idSchedule ?? null, franquia, outras: outras.length ? outras : undefined }, 'lembrete: toque respondido em código, sem Sofia');
+  return { resposta, tipo, idSchedule: escolhido?.idSchedule ?? null, franquia, ...(outras.length ? { outras } : {}) };
 }
