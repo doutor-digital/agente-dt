@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { AIMessage, HumanMessage, SystemMessage, ToolMessage, type BaseMessage } from '@langchain/core/messages';
+import { AIMessage, ChatMessage, HumanMessage, SystemMessage, ToolMessage, type BaseMessage } from '@langchain/core/messages';
 import { ChatAnthropic } from '@langchain/anthropic';
 import { ChatOpenAI } from '@langchain/openai';
 import { DynamicStructuredTool } from '@langchain/core/tools';
@@ -130,11 +130,6 @@ test('PLANO B (OpenAI): toda ferramenta sai com type=function, mesmo depois do p
   assert.ok(!JSON.stringify(corpo.tools).includes('leadId'));
 });
 
-test('PLANO B (OpenAI): sem passar por toolsParaOpenAI o pedido sai quebrado (a reprodução do 400)', async () => {
-  const corpo = await pedidoParaAOpenAI(ferramentasDoClaude(), historicoDoClaude());
-  assert.equal(corpo.tools?.[0]?.type, undefined);
-});
-
 test('PLANO B (OpenAI): nenhuma mensagem leva cache_control, e o prompt do sistema vira texto', async () => {
   const corpo = await pedidoParaAOpenAI(toolsParaOpenAI(ferramentasDoClaude()), mensagensParaPlanoB('openai', historicoDoClaude()));
 
@@ -146,11 +141,6 @@ test('PLANO B (OpenAI): nenhuma mensagem leva cache_control, e o prompt do siste
   const ia = corpo.messages.find((m) => m.role === 'assistant') as unknown as { tool_calls: Array<{ type: string; id: string }> };
   assert.equal(ia.tool_calls[0]!.type, 'function');
   assert.equal(ia.tool_calls[0]!.id, 'toolu_1');
-});
-
-test('PLANO B: sem a limpeza o prompt em blocos chega na OpenAI com cache_control (a reprodução)', async () => {
-  const corpo = await pedidoParaAOpenAI(toolsParaOpenAI(ferramentasDoClaude()), historicoDoClaude());
-  assert.ok(JSON.stringify(corpo.messages[0]).includes('cache_control'));
 });
 
 test('mensagensParaPlanoB não altera as mensagens recebidas e devolve a mesma referência quando nada muda', () => {
@@ -193,4 +183,21 @@ test('as ferramentas do principal NÃO são mutadas pelo plano B (providerToolDe
   const antes = JSON.stringify((tools[0] as { extras?: unknown }).extras);
   toolsParaOpenAI(tools);
   assert.equal(JSON.stringify((tools[0] as { extras?: unknown }).extras), antes);
+});
+
+test('mensagem de tipo fora do comum (generic) também perde o cache_control, sem alterar a original', () => {
+  const g = new ChatMessage({ role: 'observador', content: [{ type: 'text', text: 'a', cache_control: { type: 'ephemeral' } }] } as never);
+  const [saida] = mensagensParaPlanoB('openai', [g]);
+  assert.equal(saida!.content, 'a');
+  assert.ok(JSON.stringify(g.content).includes('cache_control'));
+});
+
+test('vários blocos de texto não colam uma frase na outra; invalid_tool_calls da IA são preservados', () => {
+  const ia = new AIMessage({
+    content: [{ type: 'text', text: 'Meu nome é Ana.' }, { type: 'text', text: 'Quero agendar.', cache_control: { type: 'ephemeral' } }] as never,
+    invalid_tool_calls: [{ id: 'i1', name: 'x', args: '{', error: 'json', type: 'invalid_tool_call' }],
+  });
+  const [saida] = mensagensParaPlanoB('google', [ia]);
+  assert.equal(saida!.content, 'Meu nome é Ana.\n\nQuero agendar.');
+  assert.equal((saida as AIMessage).invalid_tool_calls?.length, 1);
 });

@@ -42,7 +42,7 @@ export function semRaciocinioParaPlanoB(messages: BaseMessage[]): BaseMessage[] 
  * `[{type:'text', text, cache_control}]` e a conversa pode levar a marca no último bloco. O conversor do ChatOpenAI repassa
  * o bloco CRU — o campo desconhecido chega na OpenAI dentro de `messages[i].content[j]`. Para o plano B de outro provedor
  * a marca não significa nada: sai, e o que sobrar só de blocos de texto volta a ser string (o formato que OpenAI e Google
- * esperam de uma mensagem simples; o prompt do sistema junta os blocos com linha em branco).
+ * esperam de uma mensagem simples; os blocos se juntam com linha em branco, para não colar uma frase na outra).
  *
  * Função pura: não altera as mensagens recebidas (o principal as manda intactas, com a marca) e devolve a MESMA referência
  * para a mensagem que não tem marca nenhuma.
@@ -61,7 +61,7 @@ function semMarcaDeCache(m: BaseMessage): BaseMessage {
   const soTexto = blocos.every((b) => typeof b === 'string' || (b as { type?: string })?.type === 'text');
   const content = (
     soTexto
-      ? blocos.map((b) => (typeof b === 'string' ? b : ((b as { text?: string }).text ?? ''))).join(m.getType() === 'system' ? '\n\n' : '')
+      ? blocos.map((b) => (typeof b === 'string' ? b : ((b as { text?: string }).text ?? ''))).join('\n\n')
       : blocos
   ) as never;
   switch (m.getType()) {
@@ -74,6 +74,7 @@ function semMarcaDeCache(m: BaseMessage): BaseMessage {
       return new AIMessage({
         content,
         tool_calls: ai.tool_calls,
+        invalid_tool_calls: ai.invalid_tool_calls,
         additional_kwargs: ai.additional_kwargs,
         response_metadata: ai.response_metadata,
         usage_metadata: ai.usage_metadata,
@@ -86,7 +87,8 @@ function semMarcaDeCache(m: BaseMessage): BaseMessage {
       return new ToolMessage({ content, tool_call_id: t.tool_call_id, name: t.name, status: t.status, artifact: t.artifact, id: t.id });
     }
     default:
-      return m;
+      // tipos que o grafo não produz (generic, function): cópia rasa com o conteúdo limpo, o original fica intacto
+      return Object.assign(Object.create(Object.getPrototypeOf(m)), m, { content });
   }
 }
 
