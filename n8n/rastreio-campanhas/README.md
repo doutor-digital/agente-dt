@@ -500,22 +500,19 @@ trilha manual (GET/POST, HMAC, 401, ACK), entram `On messages` +
 `Normalizar formato do Trigger`. Todo o miolo é **byte a byte o de produção** — é o que
 o `derive-nativo.mjs` garante.
 
-Gerar de novo depois de reexportar a produção:
+Aplicar de novo na Imperatriz. **A fonte do `PUT` é `ops/unidades/imperatriz.json`**, gerado por
+`node ops/build-unidades.mjs`: ele traz os ids da unidade e lê `META_ADS_TOKEN_IMPERATRIZ`.
 
-> **Reexporte antes.** Desde 05/11/2026 a Imperatriz lê `META_ADS_TOKEN_IMPERATRIZ`, e
-> `producao/4T4HALkkLJtcNAY1.json` e `rastreio-campanhas-nativo.json` já trazem isso. Se você
-> aplicar um JSON antigo, o `PUT` volta silenciosamente ao token global, que está morto.
-> Depois do `PUT`, confira o `tokenAds` no Config. O gerador das outras unidades reescreve
-> essa expressão, então o token da Imperatriz não vaza para elas.
->
-> **`node derive-nativo.mjs` sem argumento parte de `producao/ZqW9mOjb0td2Flik.json`, que é
-> antigo:** em 05/11/2026 ele trocou o código de 4 nós e os `settings`. Passe o export novo como
-> argumento e leia o `git diff` antes de qualquer `PUT`.
+> Não use `rastreio-campanhas-nativo.json` nem `producao/4T4HALkkLJtcNAY1.json` como fonte: o
+> primeiro é só o molde do gerador (lê subdomínio e ids por `$env`) e o segundo é o registro do
+> export. E **não rode `node derive-nativo.mjs` para isto**: sem argumento ele parte de
+> `producao/ZqW9mOjb0td2Flik.json`, que é antigo, e volta 4 nós e o `tokenAds` ao estado antigo;
+> com o export da Imperatriz ele recusa a entrada. Depois do `PUT`, confira o `tokenAds` no Config.
 
 ```bash
-node derive-nativo.mjs
+node ops/build-unidades.mjs
 K=$N8N_API_KEY
-BODY=$(node -e "const w=require('./rastreio-campanhas-nativo.json');
+BODY=$(node -e "const w=require('./ops/unidades/imperatriz.json');
   const ok=['executionOrder','saveDataErrorExecution','saveDataSuccessExecution',
             'saveExecutionProgress','saveManualExecutions','executionTimeout','errorWorkflow','timezone'];
   const s={}; for(const k of ok) if(w.settings[k]!==undefined) s[k]=w.settings[k];
