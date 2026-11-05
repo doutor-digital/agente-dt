@@ -4,9 +4,9 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { ErroEstrutura, impressaoDasPoliticas, nomeFechado, planejar, planejarIndice, planejarTabela, REGRAS, REGRAS_ACEITAS, TIPOS_ACEITOS, unidadeCriaLinhas, type Existentes } from './estrutura-campos.js';
+import { ErroEstrutura, impressaoDasPoliticas, nomeFechado, planejar, planejarColuna, planejarIndice, planejarTabela, REGRAS, REGRAS_ACEITAS, TIPOS_ACEITOS, unidadeCriaLinhas, type Existentes } from './estrutura-campos.js';
 
-const HASH_DAS_REGRAS = '00fd05ab325ab37ee27a56fc0cdf9a97ac478a452df46e8bfcf9a7e1c107a700';
+const HASH_DAS_REGRAS = '3cef31b022378f7060a007d0f287e6587fe25a9723d1f900d872ff97e6f274ee';
 const HASH_DOS_CASOS = 'f3f186aa28ac2a54ae1b7baaf4b2596b59f45b3b9b0efd8dded92a6aeb44514c';
 
 interface Caso {
@@ -90,4 +90,12 @@ test('texto verdadeiro: os 2 modelos de unidade dizem que admin, gestão E FINAN
   assert.equal(impressaoDasPoliticas([a, b]), impressaoDasPoliticas([a, { ...b, roles: '{anon,authenticated}' }]), 'roles como texto do /esquema dá a mesma impressão que a lista do servidor');
   assert.equal(unidadeCriaLinhas([a, b]), true); assert.equal(unidadeCriaLinhas([a]), false);
   assert.doesNotThrow(() => impressaoDasPoliticas([{ nome: { toString: 1 }, comando: [1], usando: { valueOf: 'x' }, roles: [{ toString: 1 }] }]), 'valor estranho não lança');
+});
+
+test('coluna ÚNICA nova em tabela que deixa a unidade criar linhas (unidade_le_e_lanca) avisa da duplicidade; coluna comum ou tabela de outro modelo, não', () => {
+  const ex = (unidadeInsere: boolean): Existentes => ({ tabelas: new Map([['caixa_t', { linhas: 0, colunas: ['id', 'unidade'], unidadeInsere }]]) });
+  const unica = { tabela: 'caixa_t', coluna: { nome: 'codigo', tipo: 'text', unica: true } };
+  assert.match(planejarColuna(unica, ex(true)).avisos.join(' '), /deixa a UNIDADE criar linhas.*coluna ÚNICA.*descobre que o valor existe/);
+  assert.doesNotMatch(planejarColuna(unica, ex(false)).avisos.join(' '), /UNIDADE criar/);
+  assert.doesNotMatch(planejarColuna({ tabela: 'caixa_t', coluna: { nome: 'codigo', tipo: 'text' } }, ex(true)).avisos.join(' '), /UNIDADE criar/);
 });

@@ -84,13 +84,15 @@ export function servidorAdminFalso(o: OpcoesFalso = {}) {
                   // criada por este caminho com o modelo unidade_le_e_lanca (a política de INSERT usa caixa_pode)
                   { nome: 'caixa_lancada', linhas: 2, colunas: [{ nome: 'id', tipo: 'uuid', nulo: false }, { nome: 'codigo', tipo: 'text', nulo: true }, { nome: 'unidade', tipo: 'text', nulo: true }], rls: true,
                     politicas: [{ nome: 'caixa_lancada_sel', comando: 'SELECT', usando: 'caixa_pode(unidade)', com_check: null, roles: '{authenticated}' }, { nome: 'caixa_lancada_ins', comando: 'INSERT', usando: null, com_check: 'caixa_pode(unidade)', roles: '{authenticated}' }, { nome: 'caixa_lancada_upd', comando: 'UPDATE', usando: 'caixa_gestor()', com_check: 'caixa_gestor()', roles: '{authenticated}' }], dono: 'rh_ddl' },
+                  // criada por este caminho, mas com gatilho (o servidor 0.1.10.8-pol informa `especial` no /esquema)
+                  { nome: 'caixa_com_gatilho', linhas: 1, colunas: [{ nome: 'id', tipo: 'uuid', nulo: false }, { nome: 'unidade', tipo: 'text', nulo: true }], rls: true, politicas: [], dono: 'rh_ddl', especial: ['gatilho'] },
                   // view do rh_ddl (o /esquema real marca `view: true`)
                   { nome: 'caixa_vista', view: true, linhas: null, colunas: [{ nome: 'unidade', tipo: 'text', nulo: true }], rls: false, politicas: [], dono: 'rh_ddl' },
                   // antiga (dono sistemas), com unidade
                   { nome: 'fin_lanc', linhas: 900, colunas: [{ nome: 'id', tipo: 'text', nulo: false }, { nome: 'unidade', tipo: 'text', nulo: true }], rls: true, politicas: [{ nome: 'fin_lanc_sel', comando: 'SELECT', usando: 'x', com_check: null }], dono: 'sistemas' },
                 ]
               : []),
-          ].map((t) => (o.servidorAntigo ? Object.fromEntries(Object.entries(t).filter(([k]) => k !== 'dono')) : t)),
+          ].map((t) => (o.servidorAntigo ? Object.fromEntries(Object.entries(t).filter(([k]) => k !== 'dono' && k !== 'especial')) : t)),
           funcoes: [{ nome: 'meu_papel', definicao: 'select 1' }],
           checks: [{ tabela: 'rh_funcionarios', nome: 'cargo_ok', definicao: "check (cargo <> '')" }],
         });

@@ -446,6 +446,7 @@ export function planejarColuna(e: { tabela?: unknown; coluna?: unknown }, ex: Ex
   const sql = [`alter table public.${q(alvo.nome)} add column ${definicao(c)}`];
   const avisos: string[] = [];
   if (c.padrao !== null && temLinhas) avisos.push(`as linhas que já existem em ${alvo.nome} recebem o padrão ${c.padrao}`);
+  if (c.unica && alvo.info.unidadeInsere) avisos.push(`${alvo.nome} deixa a UNIDADE criar linhas (unidade_le_e_lanca): com coluna ÚNICA, uma unidade que tente criar um valor já usado por OUTRA unidade recebe erro de duplicidade e assim descobre que o valor existe; prefira um índice único que inclua a coluna da unidade`);
   return {
     tipo: 'coluna',
     tabela: alvo.nome,

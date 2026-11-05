@@ -47,6 +47,8 @@ interface TabelaDoEsquema {
   linhas?: number | null;
   colunas?: Array<{ nome?: string; tipo?: string }>;
   politicas?: PoliticaDoEsquema[];
+  /** 0.1.10.8-pol em diante: partição, herança, gatilho, rule, coluna gerada */
+  especial?: unknown[];
 }
 async function lerExistentes(c: ContaSistemas): Promise<Existentes> {
   const r = (await c.fonte.chamar('GET', '/admin/v1/esquema')) as { tabelas?: TabelaDoEsquema[] };
@@ -68,6 +70,7 @@ async function lerExistentes(c: ContaSistemas): Promise<Existentes> {
       relkind: t.view ? 'v' : 'r',
       politicas: (t.politicas ?? []).map((x) => String(x.nome)),
       // a impressão das políticas que a prévia viu (o servidor recusa a troca se a regra mudou desde então) e se a unidade já cria linhas (aviso de índice único)
+      ...(Array.isArray(t.especial) ? { especial: t.especial.map(String) } : {}),
       impressao: impressaoDasPoliticas(t.politicas ?? []),
       unidadeInsere: unidadeCriaLinhas(t.politicas ?? []),
     });
@@ -112,12 +115,12 @@ async function preparar(
     sql,
     confirmacao: id,
     expiraEm,
-    instrucao: `Nada foi alterado ainda. Mostre à pessoa o resumo${p.avisos.length ? ', os avisos' : ''} e o SQL e, se ela aprovar, chame sistemas_confirmar_estrutura com confirmacao="${id}" (vale ${VALIDADE_MS / 60_000} minutos, uma vez). Nada é apagado por aqui.`,
+    instrucao: `Nada foi alterado ainda. Mostre à pessoa o resumo${p.avisos.length ? ', os avisos' : ''} e o SQL e, se ela aprovar, chame sistemas_confirmar_estrutura com confirmacao="${id}" (vale ${VALIDADE_MS / 60_000} minutos, uma vez). ${p.tipo === 'regra' ? 'A troca substitui as 3 políticas da tabela (as de antes ficam em admin_backup); ' : ''}nenhuma tabela, coluna ou índice é apagada por aqui.`,
   };
 }
 
 export function prepararTabela(ctx: ContextoSistemas, pendentes: PendentesSistemas, quem: QuemSistemas, a: { sistema?: string; nome: string; colunas: unknown[]; regra?: string; coluna_unidade?: string; motivo: string }): Promise<Saida> {
-  // só vão ao servidor os campos que a pessoa informou: sem `regra` o pedido é o de sempre (servidor antigo entende)
+  // só vão ao servidor os campos que a pessoa informou. ATENÇÃO: sem `regra` o pedido leva os mesmos campos de antes, mas o SQL que o conector gera e manda aprovado é o NOVO (privilégios explícitos): um servidor antes da 0.1.10.8-pol recusa a tabela por 'SQL diferente' mesmo sem regra
   const campos = { nome: a.nome, colunas: a.colunas, ...(a.regra !== undefined ? { regra: a.regra } : {}), ...(a.coluna_unidade !== undefined ? { coluna_unidade: a.coluna_unidade } : {}) };
   return preparar(ctx, pendentes, quem, a.sistema, a.motivo, { tipo: 'tabela', ...campos }, (ex) => planejarTabela(campos, ex));
 }
@@ -164,7 +167,7 @@ export async function confirmarEstrutura(
       rastro.resultado = 'servidor desatualizado';
       throw new ErroDeEntrada('o servidor do sistema novo está numa versão ANTIGA (antes da 0.1.10) e não entende a estrutura por campos. NADA foi criado. Avise o João para publicar a API 0.1.10.1 (ou mais nova); enquanto isso, nada de tabela nova por aqui.');
     }
-    // servidor antes da 0.1.10.8-pol: não conhece o tipo "regra" (400) — e, numa tabela com `regra`, gera o SQL de antes e por isso "difere" do aprovado
+    // servidor antes da 0.1.10.8-pol: não conhece o tipo "regra" (400); e QUALQUER tabela nova, com ou sem `regra`, ele gera com o SQL de antes e por isso "difere" do aprovado (tratado mais abaixo, no ok:false)
     if (e instanceof ErroSistemas && e.status === 400 && /tipo do pedido: use tabela, coluna ou indice\b/.test(e.message) && String(entrada.tipo) === 'regra') {
       rastro.resultado = 'servidor desatualizado';
       throw new ErroDeEntrada('o servidor do sistema novo está numa versão ANTERIOR à 0.1.10.8-pol e não conhece a troca de regra de acesso. NADA foi alterado. Avise o João para publicar a versão nova.');

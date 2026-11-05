@@ -322,6 +322,7 @@ test('troca de regra recusada (nada vai ao servidor): tabela antiga, fechada, in
   await ruim({ tabela: 'caixa_vazia', regra: 'unidade_le_gestao_grava', motivo: MOTIVO }, /a coluna "unidade" não existe na tabela/);
   await ruim({ tabela: 'caixa_semaforo', regra: 'gestao_e_financeiro', motivo: 'x' }, /motivo/);
   await ruim({ tabela: 'caixa_vista', regra: 'gestao_e_financeiro', motivo: MOTIVO }, /não é uma tabela comum/);
+  await ruim({ tabela: 'caixa_com_gatilho', regra: 'gestao_e_financeiro', motivo: MOTIVO }, /não é uma tabela comum deste caminho \(gatilho\)/);
   assert.equal(srv.estruturas.length, 0);
   assert.ok(srv.chamadas.every((c) => c.metodo === 'GET'), 'só leituras');
 });
@@ -433,4 +434,17 @@ test('troca de regra: a impressão que vai ao servidor é a do /esquema; coluna_
   await assert.rejects(() => prepararTabela(ctx, pend, QUEM, { nome: 'caixa_q', colunas: [{ nome: 'unidade', tipo: 'text' }], coluna_unidade: 'unidade', motivo: MOTIVO }), (e: Error) => e instanceof ErroDeEntrada && /coluna_unidade só vale junto de uma regra/.test(e.message));
   await assert.rejects(() => prepararTabela(ctx, pend, QUEM, { nome: 'caixa_q', colunas: COLUNAS, regra: { toString: 1 } as never, motivo: MOTIVO }), (e: Error) => e instanceof ErroDeEntrada && /não existe\. Regras aceitas/.test(e.message));
   await assert.rejects(() => prepararTabela(ctx, pend, QUEM, { nome: 'caixa_q', colunas: [{ nome: 'xy', tipo: { toString: 1 } as never }], motivo: MOTIVO }), (e: Error) => e instanceof ErroDeEntrada && /não é permitido/.test(e.message));
+});
+
+test('instrução do passo 1 não mente: troca de regra diz que substitui as políticas; o resto diz que nada é apagado; coluna ÚNICA nova em tabela unidade_le_e_lanca avisa', async () => {
+  const { ctx } = montar();
+  const pend = new PendentesSistemas();
+  const t = await prepararTabela(ctx, pend, QUEM, { nome: 'caixa_v', colunas: COLUNAS, motivo: MOTIVO });
+  assert.match(t.instrucao as string, /nenhuma tabela, coluna ou índice é apagada por aqui/); assert.doesNotMatch(t.instrucao as string, /substitui as 3 políticas/);
+  const r = await prepararRegra(ctx, pend, QUEM, { tabela: 'caixa_semaforo', regra: 'so_admin_e_gestao', motivo: MOTIVO });
+  assert.match(r.instrucao as string, /A troca substitui as 3 políticas da tabela \(as de antes ficam em admin_backup\); nenhuma tabela, coluna ou índice é apagada/);
+  const c = await prepararColuna(ctx, pend, QUEM, { tabela: 'caixa_lancada', coluna: { nome: 'codigo2', tipo: 'text', unica: true }, motivo: MOTIVO });
+  assert.match(c.avisos.join(' '), /deixa a UNIDADE criar linhas.*coluna ÚNICA/);
+  const fonte = readFileSync(new URL('./sistemas-estrutura.ts', import.meta.url), 'utf8');
+  assert.doesNotMatch(fonte, /servidor antigo entende/);
 });
