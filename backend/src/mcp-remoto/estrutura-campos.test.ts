@@ -4,15 +4,15 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { ErroEstrutura, nomeFechado, planejar, planejarTabela, TIPOS_ACEITOS, type Existentes } from './estrutura-campos.js';
+import { ErroEstrutura, nomeFechado, planejar, planejarTabela, REGRAS, REGRAS_ACEITAS, TIPOS_ACEITOS, type Existentes } from './estrutura-campos.js';
 
-const HASH_DAS_REGRAS = 'dd798a7b336b75be7938a61645cf9889a8f97d24093da5df0958bb48bc8a8c69';
-const HASH_DOS_CASOS = '29139e6e0d044cb2d03009c18a35d52dfbd24cbd666fa181f3eab1744e1c2389';
+const HASH_DAS_REGRAS = 'c1170a34892da65c6b23f220986db7d139b8ce39dc847ed14145e204a066f2cb';
+const HASH_DOS_CASOS = 'd5419778aa2718a18821a344afc52bd55b81124b3d1da751220aaea2ad09c204';
 
 interface Caso {
   nome: string;
   entrada: Record<string, unknown>;
-  existentes: Record<string, { linhas: number | null; colunas: string[] }>;
+  existentes: Record<string, { linhas: number | null; colunas: string[]; tipos?: Record<string, string>; dono?: string; relkind?: string; politicas?: string[] }>;
   esperado: 'ok' | 'recusa';
   sql?: string[];
   msg?: string;
@@ -29,7 +29,7 @@ test(`conjunto de casos (${casos.length}): o SQL gerado é o esperado e toda ent
   assert.ok(casos.length > 100);
   const erros: string[] = [];
   for (const c of casos) {
-    const ex: Existentes = { tabelas: new Map(Object.entries(c.existentes)) };
+    const ex: Existentes = { tabelas: new Map(Object.entries(c.existentes).map(([k, v]) => [k, { ...v, tipos: v.tipos ? new Map(Object.entries(v.tipos)) : undefined }])) };
     let sql: string[] | null = null;
     let msg = '';
     try {
@@ -51,8 +51,27 @@ test('nada do que a pessoa escreve vira SQL solto: todo SQL gerado só tem nomes
   const ex: Existentes = { tabelas: new Map() };
   const p = planejarTabela({ nome: 'caixa_seguro', colunas: [{ nome: 'obs', tipo: 'text', padrao: 'a; b (c) 10%' }, { nome: 'valor', tipo: 'numeric(12,2)', padrao: 1.5 }] }, ex);
   const tudo = p.sql.join('\n');
-  assert.ok(!/drop|truncate|delete from|insert into|grant|--|\/\*|\$/i.test(tudo.replace(/'a; b \(c\) 10%'/, '')), tudo);
+  // os 4 comandos de privilégio são fixos (papéis e verbos da lista, nome da tabela entre aspas): tiram-se antes de procurar palavra perigosa
+  const semPrivilegios = tudo.replace(/^(revoke all on table|grant [a-z, ]+ on table) public\."caixa_seguro" (from|to) [a-z_, ]+$/gm, '');
+  assert.equal((tudo.match(/^(revoke|grant) /gm) ?? []).length, 4, 'exatamente 4 comandos de privilégio, todos fixos');
+  assert.ok(!/drop|truncate|delete from|insert into|grant|revoke|--|\/\*|\$/i.test(semPrivilegios.replace(/'a; b \(c\) 10%'/, '')), semPrivilegios);
   assert.deepEqual(TIPOS_ACEITOS, ['text', 'integer', 'bigint', 'numeric(12,2)', 'boolean', 'date', 'timestamptz', 'uuid', 'jsonb']);
   for (const n of ['rh_usuarios', 'rh_docs', 'rh_log', 'rh_site_x', 'admin_log', 'auth_users', 'storage_x', 'pg_roles']) assert.equal(nomeFechado(n), true, n);
   for (const n of ['caixa_lanc', 'fin_lanc', 'caixa_precos', 'rh_ferias', 'colaboradores']) assert.equal(nomeFechado(n), false, n);
+});
+
+test('regras: exatamente os 4 modelos medidos em produção; unidade_le_e_lanca AVISA sempre que a unidade preenche qualquer coluna; nenhum modelo dá DELETE', () => {
+  assert.deepEqual(REGRAS_ACEITAS, ['unidade_le_gestao_grava', 'unidade_le_e_lanca', 'gestao_e_financeiro', 'so_admin_e_gestao']);
+  assert.ok(Object.isFrozen(REGRAS));
+  const ex: Existentes = { tabelas: new Map() };
+  const p = planejarTabela({ nome: 'caixa_w', regra: 'unidade_le_e_lanca', colunas: [{ nome: 'unidade', tipo: 'text' }, { nome: 'aprovado', tipo: 'boolean' }] }, ex);
+  assert.match(p.avisos.join(' '), /NÃO tem as travas de status e de autor da caixa_lanc.*aprovação/s);
+  assert.match(REGRAS.unidade_le_e_lanca!.descricao, /QUALQUER valor/);
+  for (const r of REGRAS_ACEITAS) {
+    const col = REGRAS[r]!.precisaUnidade ? [{ nome: 'unidade', tipo: 'text' }] : [{ nome: 'obs', tipo: 'text' }];
+    const sql = planejarTabela({ nome: 'caixa_w2', regra: r, colunas: col }, ex).sql.join('\n');
+    assert.ok(!/for delete|for all/i.test(sql), r);
+    assert.equal((sql.match(/create policy/g) ?? []).length, 3, r);
+  }
+  assert.equal(planejarTabela({ nome: 'caixa_w3', regra: 'unidade_le_gestao_grava', colunas: [{ nome: 'unidade', tipo: 'text' }] }, ex).avisos.length, 0, 'sem aviso fixo nos outros modelos');
 });

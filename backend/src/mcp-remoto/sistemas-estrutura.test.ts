@@ -7,7 +7,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ErroDeEntrada } from '../franquia-mcp/travas.js';
 import { ErroSistemas, sistemasChamar } from '../lib/integracoes/sistemas.js';
 import { criarContextoSistemas, PendentesSistemas, prepararAlteracao, registrarEscritaSistemas, registrarLeituraSistemas, type ContaSistemas } from './sistemas.js';
-import { confirmarEstrutura, prepararColuna, prepararIndice, prepararTabela, registrarEstruturaSistemas } from './sistemas-estrutura.js';
+import { confirmarEstrutura, prepararColuna, prepararIndice, prepararRegra, prepararTabela, registrarEstruturaSistemas } from './sistemas-estrutura.js';
 import { CHAVE_FALSA, CONFIG_FALSA, servidorAdminFalso } from './sistemas-falso.js';
 
 // Criar/alterar ESTRUTURA por campos (sistemas_preparar_tabela/coluna/indice → sistemas_confirmar_estrutura), contra o servidor falso.
@@ -49,16 +49,16 @@ async function cliente(ctx: ReturnType<typeof criarContextoSistemas>, o: { escre
 
 // ---------------------------------------------------------------- portão por e-mail
 
-test('portão: quem não escreve não vê as ferramentas de estrutura; quem escreve vê as quatro; o SQL livre NÃO existe mais', async () => {
+test('portão: quem não escreve não vê as ferramentas de estrutura; quem escreve vê as cinco; o SQL livre NÃO existe mais', async () => {
   const { ctx } = montar();
   const leitor = await cliente(ctx, { escreve: false });
   const nomes = (await leitor.c.listTools()).tools.map((t) => t.name);
-  assert.ok(!nomes.some((n) => n.includes('estrutura') || n.includes('_tabela') || n.includes('_coluna') || n.includes('_indice')), nomes.join());
+  assert.ok(!nomes.some((n) => n.includes('estrutura') || n.includes('_tabela') || n.includes('_coluna') || n.includes('_indice') || n.includes('_regra')), nomes.join());
   const escritor = await cliente(ctx, { escreve: true });
   const todos = (await escritor.c.listTools()).tools.map((t) => t.name);
-  for (const n of ['sistemas_preparar_tabela', 'sistemas_preparar_coluna', 'sistemas_preparar_indice', 'sistemas_confirmar_estrutura']) assert.ok(todos.includes(n), n);
+  for (const n of ['sistemas_preparar_tabela', 'sistemas_preparar_coluna', 'sistemas_preparar_indice', 'sistemas_preparar_regra', 'sistemas_confirmar_estrutura']) assert.ok(todos.includes(n), n);
   assert.ok(!todos.includes('sistemas_preparar_estrutura'), 'a ferramenta de SQL livre foi removida');
-  for (const t of (await escritor.c.listTools()).tools.filter((x) => x.name.startsWith('sistemas_preparar_t') || x.name.startsWith('sistemas_preparar_c') || x.name.startsWith('sistemas_preparar_i'))) {
+  for (const t of (await escritor.c.listTools()).tools.filter((x) => x.name.startsWith('sistemas_preparar_t') || x.name.startsWith('sistemas_preparar_c') || x.name.startsWith('sistemas_preparar_i') || x.name.startsWith('sistemas_preparar_r'))) {
     assert.ok(!('sql' in ((t.inputSchema as { properties?: Record<string, unknown> }).properties ?? {})), `${t.name} não pode receber SQL`);
   }
   await leitor.fechar();
@@ -84,13 +84,13 @@ test('tabela: preparar só LÊ o esquema, mostra resumo e o SQL gerado; confirma
   assert.equal(srv.estruturas.length, 0);
   assert.match(p.sql, /^create table public\."caixa_x" \("id" uuid primary key default gen_random_uuid\(\), "criado_em" timestamptz not null default now\(\), "servico" text not null, "valor" numeric\(12,2\) default 0\.00\);\nalter table public\."caixa_x" enable row level security;\ncreate policy "caixa_x_sel"/);
   assert.match(p.resumo[0], /Cria a tabela caixa_x/);
-  assert.match(p.resumo[1], /só a gestão/);
+  assert.match(p.resumo[1], /gestao_e_financeiro.*admin, gestão e financeiro/s);
   assert.match(p.confirmacao, /^est-[0-9a-f]{18}$/);
   assert.match(p.instrucao, /sistemas_confirmar_estrutura/);
   const rastro: { sql?: string; motivo?: string; resultado?: string } = {};
   const r = await confirmarEstrutura(ctx, pend, QUEM, { confirmacao: p.confirmacao }, rastro);
   assert.equal(r.ok, true);
-  assert.equal(r.comandos, 5);
+  assert.equal(r.comandos, 9);
   assert.equal(srv.estruturas.length, 1);
   assert.deepEqual(srv.estruturas[0], { tipo: 'tabela', nome: 'caixa_x', colunas: COLUNAS, sqlAprovado: p.sql, quem: QUEM.nome, motivo: MOTIVO });
   const c = srv.chamadas.at(-1)!;
@@ -243,4 +243,123 @@ test('servidor antigo (API 0.1.9: "escreva o SQL (campo sql)"): a mensagem diz q
   const pend = new PendentesSistemas();
   const p = await prepararTabela(ctx, pend, QUEM, { nome: 'caixa_x', colunas: COLUNAS, motivo: MOTIVO });
   await assert.rejects(() => confirmarEstrutura(ctx, pend, QUEM, { confirmacao: p.confirmacao }), /versão ANTIGA.*0\.1\.10.*NADA foi criado.*0\.1\.10\.1/);
+});
+
+// ---------------------------------------------------------------- regra de acesso por modelo fechado
+
+test('tabela com regra: o SQL mostra as políticas e os privilégios do modelo; o servidor recebe regra + coluna_unidade; sem regra o pedido é o de sempre (sem os campos novos)', async () => {
+  const { srv, ctx } = montar();
+  const pend = new PendentesSistemas();
+  const cols = [{ nome: 'loja', tipo: 'text', obrigatoria: true }, { nome: 'valor', tipo: 'numeric(12,2)' }];
+  const p = await prepararTabela(ctx, pend, QUEM, { nome: 'caixa_transf', colunas: cols, regra: 'unidade_le_e_lanca', coluna_unidade: 'loja', motivo: MOTIVO });
+  assert.match(p.sql, /create policy "caixa_transf_sel" on public\."caixa_transf" for select to authenticated using \(public\.caixa_pode\("loja"\)\)/);
+  assert.match(p.sql, /create policy "caixa_transf_ins" .* with check \(public\.caixa_pode\("loja"\)\)/);
+  assert.match(p.sql, /create policy "caixa_transf_upd" .* using \(public\.caixa_gestor\(\)\) with check \(public\.caixa_gestor\(\)\)/);
+  assert.match(p.sql, /revoke all on table public\."caixa_transf" from public, anon, authenticated, service_role, mcp_leitor, mcp_consulta_rh/);
+  assert.match(p.sql, /grant select on table public\."caixa_transf" to mcp_leitor, mcp_consulta_rh/);
+  assert.match(p.resumo.join(' '), /unidade_le_e_lanca.*CRIA linhas da sua unidade.*coluna loja/s);
+  assert.match(p.resumo.join(' '), /LÊ TODAS AS LINHAS/);
+  await confirmarEstrutura(ctx, pend, QUEM, { confirmacao: p.confirmacao });
+  assert.deepEqual(srv.estruturas[0], { tipo: 'tabela', nome: 'caixa_transf', colunas: cols, regra: 'unidade_le_e_lanca', coluna_unidade: 'loja', sqlAprovado: p.sql, quem: QUEM.nome, motivo: MOTIVO });
+  const sem = await prepararTabela(ctx, pend, QUEM, { nome: 'caixa_sem', colunas: COLUNAS, motivo: MOTIVO });
+  await confirmarEstrutura(ctx, pend, QUEM, { confirmacao: sem.confirmacao });
+  assert.ok(!('regra' in srv.estruturas[1]!) && !('coluna_unidade' in srv.estruturas[1]!), 'sem regra, o pedido não leva os campos novos (servidor antigo entende)');
+});
+
+test('coluna única com a regra unidade_le_e_lanca avisa do erro de duplicidade que revela valor de outra unidade', async () => {
+  const { ctx } = montar();
+  const p = await prepararTabela(ctx, new PendentesSistemas(), QUEM, { nome: 'caixa_u', colunas: [{ nome: 'unidade', tipo: 'text' }, { nome: 'codigo', tipo: 'text', unica: true }], regra: 'unidade_le_e_lanca', motivo: MOTIVO });
+  assert.match(p.avisos.join(' '), /ÚNICA.*descobre que o valor existe/);
+});
+
+test('troca de regra: só em tabela criada por este caminho; preparar só LÊ; confirmar manda tipo "regra" + campos + SQL aprovado', async () => {
+  const { srv, ctx } = montar();
+  const pend = new PendentesSistemas();
+  const p = await prepararRegra(ctx, pend, QUEM, { tabela: 'caixa_semaforo', regra: 'so_admin_e_gestao', motivo: MOTIVO });
+  assert.deepEqual(srv.chamadas.map((c) => `${c.metodo} ${c.caminho}`), ['GET /admin/v1/esquema'], 'preparar não escreve');
+  assert.match(p.sql, /^drop policy if exists "caixa_semaforo_sel" on public\."caixa_semaforo";\ndrop policy if exists "caixa_semaforo_ins"/);
+  assert.match(p.sql, /create policy "caixa_semaforo_sel" .* using \(public\.rh_admin\(\)\)/);
+  assert.match(p.avisos.join(' '), /guardadas em admin_backup/);
+  assert.match(p.avisos.join(' '), /já tem linhas/);
+  const rastro: { sql?: string; resultado?: string } = {};
+  const r = await confirmarEstrutura(ctx, pend, QUEM, { confirmacao: p.confirmacao }, rastro);
+  assert.equal(r.ok, true);
+  assert.deepEqual(srv.estruturas[0], { tipo: 'regra', tabela: 'caixa_semaforo', regra: 'so_admin_e_gestao', sqlAprovado: p.sql, quem: QUEM.nome, motivo: MOTIVO });
+  assert.equal(rastro.resultado, 'ok');
+  // com a coluna de unidade escolhida
+  const u = await prepararRegra(ctx, pend, QUEM, { tabela: 'caixa_semaforo', regra: 'unidade_le_gestao_grava', coluna_unidade: 'loja', motivo: MOTIVO });
+  assert.match(u.sql, /using \(public\.caixa_pode\("loja"\)\)/);
+});
+
+test('troca de regra recusada (nada vai ao servidor): tabela antiga, fechada, inexistente, com política de outra origem, regra inexistente/construída, coluna de unidade ruim, nome malicioso', async () => {
+  const { srv, ctx } = montar();
+  const pend = new PendentesSistemas();
+  const ruim = (a: Parameters<typeof prepararRegra>[3], re: RegExp) => assert.rejects(() => prepararRegra(ctx, pend, QUEM, a), (e: Error) => e instanceof ErroDeEntrada && re.test(e.message));
+  await ruim({ tabela: 'fin_lanc', regra: 'gestao_e_financeiro', motivo: MOTIVO }, /não foi criada por este caminho \(o dono é sistemas\)/);
+  await ruim({ tabela: 'rh_funcionarios', regra: 'gestao_e_financeiro', motivo: MOTIVO }, /não foi criada por este caminho/);
+  await ruim({ tabela: 'caixa_lancamentos', regra: 'gestao_e_financeiro', motivo: MOTIVO }, /não foi criada por este caminho/);
+  await ruim({ tabela: 'rh_usuarios', regra: 'gestao_e_financeiro', motivo: MOTIVO }, /tabela fechada/);
+  await ruim({ tabela: 'rh_docs', regra: 'so_admin_e_gestao', motivo: MOTIVO }, /tabela fechada/);
+  await ruim({ tabela: 'admin_log', regra: 'so_admin_e_gestao', motivo: MOTIVO }, /tabela fechada/);
+  await ruim({ tabela: 'auth.users', regra: 'so_admin_e_gestao', motivo: MOTIVO }, /use minúsculas/);
+  await ruim({ tabela: 'caixa_semaforo"; drop table x; --', regra: 'so_admin_e_gestao', motivo: MOTIVO }, /use minúsculas/);
+  await ruim({ tabela: 'caixa_nao_existe', regra: 'so_admin_e_gestao', motivo: MOTIVO }, /não existe/);
+  await ruim({ tabela: 'caixa_estranha', regra: 'so_admin_e_gestao', motivo: MOTIVO }, /política que este caminho não criou \(liberada_por_fora\)/);
+  await ruim({ tabela: 'caixa_semaforo', regra: 'todo_mundo_le', motivo: MOTIVO }, /não existe\. Regras aceitas/);
+  for (const regra of ['__proto__', 'constructor', 'toString', 'true', 'gestao_e_financeiro; drop table x']) await ruim({ tabela: 'caixa_semaforo', regra, motivo: MOTIVO }, /não existe\. Regras aceitas/);
+  await ruim({ tabela: 'caixa_semaforo', regra: 'unidade_le_e_lanca', coluna_unidade: 'valor', motivo: MOTIVO }, /tem de ser text/);
+  await ruim({ tabela: 'caixa_semaforo', regra: 'unidade_le_e_lanca', coluna_unidade: 'nada', motivo: MOTIVO }, /a coluna "nada" não existe na tabela/);
+  await ruim({ tabela: 'caixa_semaforo', regra: 'gestao_e_financeiro', coluna_unidade: 'unidade', motivo: MOTIVO }, /não usa coluna de unidade/);
+  await ruim({ tabela: 'caixa_semaforo', regra: 'unidade_le_e_lanca', coluna_unidade: 'unidade"); drop table x; --', motivo: MOTIVO }, /use minúsculas/);
+  await ruim({ tabela: 'caixa_vazia', regra: 'unidade_le_gestao_grava', motivo: MOTIVO }, /a coluna "unidade" não existe na tabela/);
+  await ruim({ tabela: 'caixa_semaforo', regra: 'gestao_e_financeiro', motivo: 'x' }, /motivo/);
+  assert.equal(srv.estruturas.length, 0);
+  assert.ok(srv.chamadas.every((c) => c.metodo === 'GET'), 'só leituras');
+});
+
+test('servidor SEM o dono no /esquema (antes da 0.1.10.8-pol): a prévia deixa passar a tabela de outro dono, e QUEM RECUSA É O SERVIDOR; tipo "regra" desconhecido => mensagem de servidor desatualizado, nada muda', async () => {
+  const { srv, ctx } = montar({ maisTabelas: true, servidorAntigo: true });
+  const pend = new PendentesSistemas();
+  const p = await prepararRegra(ctx, pend, QUEM, { tabela: 'fin_lanc', regra: 'gestao_e_financeiro', motivo: MOTIVO });
+  assert.match(p.sql, /drop policy if exists "fin_lanc_sel"/, 'sem o dono a prévia não sabe: é o servidor que recusa');
+  const rastro: { resultado?: string } = {};
+  await assert.rejects(() => confirmarEstrutura(ctx, pend, QUEM, { confirmacao: p.confirmacao }, rastro), /ANTERIOR à 0\.1\.10\.8-pol.*NADA foi alterado/);
+  assert.equal(rastro.resultado, 'servidor desatualizado');
+  assert.equal(srv.estruturas.length, 0);
+  // tabela com regra num servidor que ignora a regra: o SQL gerado "difere" e o aviso diz o porquê provável
+  const t = await prepararTabela(ctx, pend, QUEM, { nome: 'caixa_k', colunas: COLUNAS, regra: 'so_admin_e_gestao', motivo: MOTIVO });
+  await assert.rejects(() => confirmarEstrutura(ctx, pend, QUEM, { confirmacao: t.confirmacao }), /gera agora é diferente.*pode estar numa versão ANTERIOR à 0\.1\.10\.8-pol/s);
+  assert.equal(srv.estruturas.length, 0);
+});
+
+test('pelo MCP: a regra é um enum fechado no esquema da ferramenta, a descrição lista os 4 modelos e avisa que a Lia lê tudo; regra fora da lista é recusada antes de chegar ao conector', async () => {
+  const { srv, ctx } = montar();
+  const { c, chamar, auditoria, fechar } = await cliente(ctx, { escreve: true });
+  const tools = (await c.listTools()).tools;
+  const t = tools.find((x) => x.name === 'sistemas_preparar_tabela')!;
+  const r = tools.find((x) => x.name === 'sistemas_preparar_regra')!;
+  for (const ferramenta of [t, r]) {
+    const prop = (ferramenta.inputSchema as { properties: Record<string, { enum?: string[] }> }).properties.regra!;
+    assert.deepEqual(prop.enum, ['unidade_le_gestao_grava', 'unidade_le_e_lanca', 'gestao_e_financeiro', 'so_admin_e_gestao']);
+    for (const m of ['unidade_le_gestao_grava', 'unidade_le_e_lanca', 'gestao_e_financeiro', 'so_admin_e_gestao']) assert.match(ferramenta.description!, new RegExp(m));
+    assert.ok(!('sql' in (ferramenta.inputSchema as { properties: object }).properties));
+  }
+  assert.match(t.description!, /A leitura da Lia \(consulta\) vê TODAS as linhas/);
+  assert.match(r.description!, /fin_\*, caixa_lanc, rh_docs, portal_vinculo.*RECUSADAS/);
+  assert.equal((r.annotations as { readOnlyHint?: boolean }).readOnlyHint, true, 'preparar não escreve');
+  const fora = await chamar('sistemas_preparar_regra', { tabela: 'caixa_semaforo', regra: 'aberto_para_todos', motivo: MOTIVO });
+  assert.equal(fora.erro, true);
+  const proto = await chamar('sistemas_preparar_regra', { tabela: 'caixa_semaforo', regra: '__proto__', motivo: MOTIVO });
+  assert.equal(proto.erro, true);
+  const antiga = await chamar('sistemas_preparar_regra', { tabela: 'fin_lanc', regra: 'gestao_e_financeiro', motivo: MOTIVO });
+  assert.equal(antiga.erro, true);
+  assert.match(antiga.texto, /não foi criada por este caminho/);
+  const ok = await chamar('sistemas_preparar_regra', { tabela: 'caixa_semaforo', regra: 'unidade_le_e_lanca', motivo: MOTIVO });
+  assert.equal(ok.erro, false, ok.texto);
+  const conf = await chamar('sistemas_confirmar_estrutura', { confirmacao: ok.json.confirmacao });
+  assert.equal(conf.json.ok, true, conf.texto);
+  assert.equal(srv.estruturas.length, 1);
+  assert.equal(auditoria.find((a) => a.ferramenta === 'sistemas_preparar_regra' && a.ok)!.argumentos.regra, 'unidade_le_e_lanca');
+  assert.ok(!JSON.stringify([ok.texto, conf.texto, auditoria]).includes(CHAVE_FALSA));
+  await fechar();
 });
