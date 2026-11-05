@@ -135,3 +135,16 @@ export async function testarChaveSistemas(texto: string, fetcher: Fetcher = fetc
   const n = Array.isArray(r.usuarios) ? r.usuarios.length : null;
   return `Sistema novo (RH/Caixa)${n !== null ? ` · ${n} usuários` : ''}${cfg.tela ? '' : ' · sem endereço da tela RH (convite ficará indisponível)'}`.slice(0, 250);
 }
+
+/**
+ * Prova a configuração do DESCONTRATOS (provedor `descontratos`): o servidor dele só tem esquema/consulta/concluir descontrato, então lê o esquema.
+ * Mesmo formato de JSON ({api, chave}; `tela` não é usada). Devolve o rótulo para o painel (só contagem).
+ */
+export async function testarChaveDescontratos(texto: string, fetcher: Fetcher = fetch): Promise<string> {
+  const cfg = lerConfigSistemas(texto);
+  const r = (await sistemasChamar(cfg, 'GET', '/admin/v1/esquema', {}, fetcher)) as { tabelas?: Array<{ nome?: unknown }> };
+  const nomes = Array.isArray(r.tabelas) ? r.tabelas.map((t) => String(t.nome ?? '')) : [];
+  // um servidor do RH respondendo aqui (chave do RH colada na coluna errada) não pode ser aceito como Descontratos
+  if (!nomes.includes('dsc_docs')) throw new Error('este servidor não é o Descontratos (não tem a tabela dsc_docs): confira a URL base e a chave');
+  return `Descontratos/Ficha · ${nomes.length} tabelas`.slice(0, 250);
+}

@@ -30,7 +30,7 @@ export async function listarChavesHandler(_req: Request, res: Response): Promise
   res.json({ ok: true, chaves: await listarChaves() });
 }
 
-const NOME_DO_PROVEDOR: Record<(typeof PROVEDORES)[number], string> = { asaas: 'Asaas', convenia: 'Convênia (RH)', tiquetaque: 'Tiquetaque (ponto)', tramitacao: 'Tramitação (advocacia)', sistemas: 'Sistemas (RH/Caixa)' };
+const NOME_DO_PROVEDOR: Record<(typeof PROVEDORES)[number], string> = { asaas: 'Asaas', convenia: 'Convênia (RH)', tiquetaque: 'Tiquetaque (ponto)', tramitacao: 'Tramitação (advocacia)', sistemas: 'Sistemas (RH/Caixa)', descontratos: 'Descontratos (Ficha)' };
 
 const esc = (s: unknown) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
@@ -44,7 +44,7 @@ export async function painelIntegracoesHandler(_req: Request, res: Response): Pr
         const estado = c
           ? `<span class="ok">ligado · ${esc(c.conta ?? '')} (${esc(c.final)})</span>${c.ultimoErro ? `<br><span class="erro">${esc(c.ultimoErro)}</span>` : ''}`
           : '<span class="mudo">sem chave</span>';
-        return `<td>${estado}<form data-slug="${esc(u.slug)}" data-provedor="${p}"><input type="password" name="chave" autocomplete="off" placeholder="${p === 'sistemas' ? 'colar o JSON {api, chave, tela}' : 'colar a chave de API'}" aria-label="chave ${NOME_DO_PROVEDOR[p]} de ${esc(u.name)}"><button>Salvar</button><output></output></form></td>`;
+        return `<td>${estado}<form data-slug="${esc(u.slug)}" data-provedor="${p}"><input type="password" name="chave" autocomplete="off" placeholder="${p === 'sistemas' ? 'colar o JSON {api, chave, tela}' : p === 'descontratos' ? 'colar o JSON {api, chave}' : 'colar a chave de API'}" aria-label="chave ${NOME_DO_PROVEDOR[p]} de ${esc(u.name)}"><button>Salvar</button><output></output></form></td>`;
       }).join('');
       return `<tr><td><b>${esc(u.name)}</b><br><span class="mudo">${esc(u.slug)}</span></td>${cels}</tr>`;
     })
