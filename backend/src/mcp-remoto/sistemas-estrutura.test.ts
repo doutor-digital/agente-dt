@@ -280,7 +280,11 @@ test('troca de regra: só em tabela criada por este caminho; preparar só LÊ; c
   assert.match(p.sql, /^drop policy if exists "caixa_semaforo_sel" on public\."caixa_semaforo";\ndrop policy if exists "caixa_semaforo_ins"/);
   assert.match(p.sql, /create policy "caixa_semaforo_sel" .* using \(public\.rh_admin\(\)\)/);
   assert.match(p.avisos.join(' '), /guardadas em admin_backup/);
+  assert.doesNotMatch(p.avisos.join(' '), /o servidor não informou o dono/, 'com o dono informado não há esse aviso');
   assert.match(p.avisos.join(' '), /já tem linhas/);
+  assert.equal(p.avisos.some((a: string) => /NÃO tem as travas de status/.test(a)), false, 'so_admin_e_gestao não leva o aviso do modelo de unidade');
+  const l = await prepararRegra(ctx, pend, QUEM, { tabela: 'caixa_semaforo', regra: 'unidade_le_e_lanca', motivo: MOTIVO });
+  assert.match(l.avisos.join(' '), /NÃO tem as travas de status e de autor.*\n?.*se a tabela tem coluna ou índice ÚNICO/s, 'a troca para unidade_le_e_lanca avisa do modelo e da duplicidade (o esquema não mostra índices únicos)');
   const rastro: { sql?: string; resultado?: string } = {};
   const r = await confirmarEstrutura(ctx, pend, QUEM, { confirmacao: p.confirmacao }, rastro);
   assert.equal(r.ok, true);
@@ -313,6 +317,7 @@ test('troca de regra recusada (nada vai ao servidor): tabela antiga, fechada, in
   await ruim({ tabela: 'caixa_semaforo', regra: 'unidade_le_e_lanca', coluna_unidade: 'unidade"); drop table x; --', motivo: MOTIVO }, /use minúsculas/);
   await ruim({ tabela: 'caixa_vazia', regra: 'unidade_le_gestao_grava', motivo: MOTIVO }, /a coluna "unidade" não existe na tabela/);
   await ruim({ tabela: 'caixa_semaforo', regra: 'gestao_e_financeiro', motivo: 'x' }, /motivo/);
+  await ruim({ tabela: 'caixa_vista', regra: 'gestao_e_financeiro', motivo: MOTIVO }, /não é uma tabela comum/);
   assert.equal(srv.estruturas.length, 0);
   assert.ok(srv.chamadas.every((c) => c.metodo === 'GET'), 'só leituras');
 });
@@ -326,9 +331,15 @@ test('servidor SEM o dono no /esquema (antes da 0.1.10.8-pol): a prévia deixa p
   await assert.rejects(() => confirmarEstrutura(ctx, pend, QUEM, { confirmacao: p.confirmacao }, rastro), /ANTERIOR à 0\.1\.10\.8-pol.*NADA foi alterado/);
   assert.equal(rastro.resultado, 'servidor desatualizado');
   assert.equal(srv.estruturas.length, 0);
+  assert.match(p.avisos.join(' '), /o servidor não informou o dono de fin_lanc.*NÃO foi conferido nesta prévia/, 'sem o dono, a prévia AVISA que não conferiu');
+  // a variante em que o mesmo texto chegaria como 200 { ok:false }
+  const b = montar({ maisTabelas: true, servidorAntigo: true, antigoComo200: true });
+  const pb = new PendentesSistemas();
+  const q = await prepararRegra(b.ctx, pb, QUEM, { tabela: 'caixa_semaforo', regra: 'so_admin_e_gestao', motivo: MOTIVO });
+  await assert.rejects(() => confirmarEstrutura(b.ctx, pb, QUEM, { confirmacao: q.confirmacao }), /ANTERIOR à 0\.1\.10\.8-pol.*NADA foi alterado/);
   // tabela com regra num servidor que ignora a regra: o SQL gerado "difere" e o aviso diz o porquê provável
   const t = await prepararTabela(ctx, pend, QUEM, { nome: 'caixa_k', colunas: COLUNAS, regra: 'so_admin_e_gestao', motivo: MOTIVO });
-  await assert.rejects(() => confirmarEstrutura(ctx, pend, QUEM, { confirmacao: t.confirmacao }), /gera agora é diferente.*pode estar numa versão ANTERIOR à 0\.1\.10\.8-pol/s);
+  await assert.rejects(() => confirmarEstrutura(ctx, pend, QUEM, { confirmacao: t.confirmacao }), /gera agora é diferente.*Se a tabela não mudou.*pode estar numa versão ANTERIOR à 0\.1\.10\.8-pol.*Se a tabela mudou, é só preparar de novo/s);
   assert.equal(srv.estruturas.length, 0);
 });
 

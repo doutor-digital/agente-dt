@@ -168,6 +168,7 @@ test('toda ferramenta do RH recusa a conta do Descontratos SEM falar com o servi
     ['sistemas_preparar_tabela', { nome: 'nova_tabela', colunas: [{ nome: 'campo', tipo: 'text' }], motivo: 'teste do portão' }],
     ['sistemas_preparar_coluna', { tabela: 'dsc_docs', coluna: { nome: 'campo', tipo: 'text' }, motivo: 'teste do portão' }],
     ['sistemas_preparar_indice', { tabela: 'dsc_docs', colunas: ['col'], motivo: 'teste do portão' }],
+    ['sistemas_preparar_regra', { tabela: 'dsc_docs', regra: 'gestao_e_financeiro', motivo: 'teste do portão' }],
     ['sistemas_preparar_admin', { acao: 'promover', usuario: 'u-1', motivo: 'teste do portão' }],
     ['sistemas_preparar_anexo', { tabela: 'fin_lanc', lancamento: '00000000-0000-4000-8000-000000000000', tipo: 'recibo' }],
     ['sistemas_preparar_documento', { destino: 'rh_colaborador', id: 'c-1', tipo_documento: 'ASO' }],

@@ -314,10 +314,12 @@ function sqlDaRegra(tabela: string, r: RegraResolvida): { sql: string[]; confere
 }
 
 /** Avisos que valem sempre que o modelo é este (a prévia mostra; o texto da descrição do modelo sozinho não basta). */
-function avisosDaRegra(r: RegraResolvida, temColunaUnica: boolean): string[] {
+function avisosDaRegra(r: RegraResolvida, temColunaUnica: boolean | null): string[] {
   if (r.id !== 'unidade_le_e_lanca') return [];
   const a = ['unidade_le_e_lanca NÃO tem as travas de status e de autor da caixa_lanc: a unidade cria a linha com QUALQUER valor nas demais colunas. Se a tabela tem coluna de aprovação, status ou valor que só a gestão deveria definir, a unidade a preenche sozinha: nesse caso use unidade_le_gestao_grava'];
-  if (temColunaUnica) a.push('regra unidade_le_e_lanca com coluna ÚNICA: uma unidade que tente criar um valor já usado por OUTRA unidade recebe erro de duplicidade e assim descobre que o valor existe; use índice único com a coluna da unidade junto, ou outra regra');
+  if (temColunaUnica === true) a.push('regra unidade_le_e_lanca com coluna ÚNICA: uma unidade que tente criar um valor já usado por OUTRA unidade recebe erro de duplicidade e assim descobre que o valor existe; use índice único com a coluna da unidade junto, ou outra regra');
+  // null = não sei (troca de regra: o esquema não informa índices únicos)
+  if (temColunaUnica === null) a.push('se a tabela tem coluna ou índice ÚNICO (inclusive a chave id), uma unidade que tente criar um valor já usado por OUTRA unidade recebe erro de duplicidade e assim descobre que o valor existe; o esquema não mostra índices únicos, confira antes de aprovar');
   return a;
 }
 
@@ -394,7 +396,7 @@ export function planejarRegra(e: { tabela?: unknown; regra?: unknown; coluna_uni
     ...nomesDePolitica(alvo.nome).map((n) => `drop policy if exists ${q(n)} on public.${q(alvo.nome)}`),
     ...dr.sql,
   ];
-  const avisos: string[] = [`as políticas atuais de ${alvo.nome} são guardadas em admin_backup antes da troca (para desfazer à mão)`, ...avisosDaRegra(regra, false)];
+  const avisos: string[] = [...(info.dono === undefined ? [`o servidor não informou o dono de ${alvo.nome}: o dono NÃO foi conferido nesta prévia; quem confere é o servidor, na confirmação (tabela que não foi criada por este caminho ele recusa)`] : []), `as políticas atuais de ${alvo.nome} são guardadas em admin_backup antes da troca (para desfazer à mão)`, ...avisosDaRegra(regra, null)];
   if (info.politicas && info.politicas.length === 0) avisos.push(`${alvo.nome} não tem política nenhuma hoje: com RLS ligada e sem política ninguém da tela enxerga nada; esta troca dá a regra escolhida`);
   if (info.linhas === null || info.linhas > 0) avisos.push(`${alvo.nome} já tem linhas: quem passa a poder ver muda NA HORA para todas elas`);
   return { tipo: 'regra', tabela: alvo.nome, sql, resumo: resumoDaRegra(alvo.nome, regra), avisos, conferencia: dr.conferencia, regra: { modelo: regra.id, colunaUnidade: regra.colunaUnidade } };

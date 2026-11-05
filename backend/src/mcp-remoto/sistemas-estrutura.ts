@@ -51,11 +51,17 @@ async function lerExistentes(c: ContaSistemas): Promise<Existentes> {
   const tabelas = new Map<string, TabelaExistente>();
   for (const t of r.tabelas ?? []) {
     if (typeof t.nome !== 'string') continue;
-    const colunas = (t.colunas ?? []).map((x) => String(x.nome));
+    // um laço só: coluna sem `tipo` entra em `colunas` mas NÃO em `tipos` (tipo desconhecido, não a palavra "undefined")
+    const colunas: string[] = [];
+    const tipos = new Map<string, string>();
+    for (const x of t.colunas ?? []) {
+      colunas.push(String(x.nome));
+      if (typeof x.tipo === 'string') tipos.set(String(x.nome), x.tipo);
+    }
     tabelas.set(t.nome, {
       linhas: typeof t.linhas === 'number' ? t.linhas : null,
       colunas,
-      tipos: new Map((t.colunas ?? []).map((x) => [String(x.nome), String(x.tipo)] as [string, string])),
+      tipos,
       ...(typeof t.dono === 'string' ? { dono: t.dono } : {}),
       relkind: t.view ? 'v' : 'r',
       politicas: (t.politicas ?? []).map((x) => String(x.nome)),
@@ -172,8 +178,12 @@ export async function confirmarEstrutura(
   if (r.ok === false) {
     const erro = String(r.erro ?? 'o servidor recusou sem dizer o motivo').slice(0, 600);
     rastro.resultado = `recusado: ${erro}`.slice(0, 500);
+    // o servidor 0.1.10.6 recusa o tipo "regra" com 400; o texto também é aceito vindo como 200 ok:false (contrato do arquivo: erro de validação é dado)
+    if (String(entrada.tipo) === 'regra' && /tipo do pedido: use tabela, coluna ou indice\b/.test(erro)) {
+      throw new ErroDeEntrada('o servidor do sistema novo está numa versão ANTERIOR à 0.1.10.8-pol e não conhece a troca de regra de acesso. NADA foi alterado. Avise o João para publicar a versão nova.');
+    }
     const antigo = (entrada.regra !== undefined || String(entrada.tipo) === 'regra') && /o SQL que o servidor gera agora é diferente/.test(erro)
-      ? ' Se você escolheu uma regra de acesso, o servidor pode estar numa versão ANTERIOR à 0.1.10.8-pol (que ainda não conhece as regras): avise o João para publicar.'
+      ? ' Se a tabela não mudou desde a prévia e você escolheu uma regra de acesso, o servidor pode estar numa versão ANTERIOR à 0.1.10.8-pol (que ainda não conhece as regras): avise o João para publicar. Se a tabela mudou, é só preparar de novo.'
       : '';
     throw new ErroDeEntrada(`o servidor NÃO aplicou: ${erro}. O servidor roda o pedido todo numa transação e desfaz o que já tinha feito quando algo falha; mesmo assim confira com sistemas_esquema e prepare de novo (o código gastou).${antigo}`);
   }

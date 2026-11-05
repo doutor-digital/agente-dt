@@ -29,6 +29,8 @@ export interface OpcoesFalso {
   agora?: () => number;
   /** servidor ANTES da 0.1.10.8-pol: não informa o dono no /esquema e não conhece o tipo "regra" de /estrutura */
   servidorAntigo?: boolean;
+  /** com `servidorAntigo`: a recusa do tipo "regra" chega como 200 { ok:false, erro } em vez de 400 */
+  antigoComo200?: boolean;
 }
 
 export function servidorAdminFalso(o: OpcoesFalso = {}) {
@@ -79,6 +81,8 @@ export function servidorAdminFalso(o: OpcoesFalso = {}) {
                     politicas: ['caixa_semaforo_sel', 'caixa_semaforo_ins', 'caixa_semaforo_upd'].map((nome) => ({ nome, comando: 'SELECT', usando: 'x', com_check: null })), dono: 'rh_ddl' },
                   // criada por este caminho mas com uma política que ele NÃO criou
                   { nome: 'caixa_estranha', linhas: 1, colunas: [{ nome: 'id', tipo: 'uuid', nulo: false }, { nome: 'unidade', tipo: 'text', nulo: true }], rls: true, politicas: [{ nome: 'caixa_estranha_sel', comando: 'SELECT', usando: 'x', com_check: null }, { nome: 'liberada_por_fora', comando: 'ALL', usando: 'true', com_check: null }], dono: 'rh_ddl' },
+                  // view do rh_ddl (o /esquema real marca `view: true`)
+                  { nome: 'caixa_vista', view: true, linhas: null, colunas: [{ nome: 'unidade', tipo: 'text', nulo: true }], rls: false, politicas: [], dono: 'rh_ddl' },
                   // antiga (dono sistemas), com unidade
                   { nome: 'fin_lanc', linhas: 900, colunas: [{ nome: 'id', tipo: 'text', nulo: false }, { nome: 'unidade', tipo: 'text', nulo: true }], rls: true, politicas: [{ nome: 'fin_lanc_sel', comando: 'SELECT', usando: 'x', com_check: null }], dono: 'sistemas' },
                 ]
@@ -129,7 +133,8 @@ export function servidorAdminFalso(o: OpcoesFalso = {}) {
       }
       case 'POST /admin/v1/estrutura':
         // contrato: { tipo, ...campos, sqlAprovado, quem, motivo? } -> 200 { ok:true, sql } | 200 { ok:false, erro } | { erro } nos 4xx/5xx
-        if (o.servidorAntigo && corpo.tipo === 'regra') return json(400, { erro: 'tipo do pedido: use tabela, coluna ou indice' });
+        // o servidor 0.1.10.6 (admin.ts: `throw new Erro('tipo do pedido: use tabela, coluna ou indice')`, status 400); `antigoComo200` simula a variante em que o texto chegaria como 200 ok:false
+        if (o.servidorAntigo && corpo.tipo === 'regra') return o.antigoComo200 ? json(200, { ok: false, erro: 'tipo do pedido: use tabela, coluna ou indice' }) : json(400, { erro: 'tipo do pedido: use tabela, coluna ou indice' });
         if (!['tabela', 'coluna', 'indice', 'regra'].includes(corpo.tipo) || typeof corpo.sqlAprovado !== 'string' || !corpo.sqlAprovado.trim()) return json(400, { erro: 'pedido de estrutura inválido' });
         // servidor antigo: ignora `regra`, gera o SQL de antes e por isso "difere" do aprovado
         if (o.servidorAntigo && corpo.regra !== undefined) return json(200, { ok: false, erro: 'o SQL que o servidor gera agora é diferente do que foi aprovado (a tabela pode ter mudado desde a prévia): prepare de novo' });
