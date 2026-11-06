@@ -2538,6 +2538,13 @@ function isTrivialUserMessage(text: string): boolean {
   );
 }
 
+/**
+ * Saída do composer: a consulta do paciente é DESCONHECIDA (unidade sem franquia, a leitura da franquia ou do cartão falhou, ou o
+ * cartão diz que ele já agendou/é paciente)? O grafo lê de volta, e "sem consulta no prompt" não vira "ainda não marcou"
+ * (despedida-humano.ts).
+ */
+export type ConsultaSaida = { desconhecida?: boolean };
+
 export async function composeSystemPromptForUnit(input: {
   unit: Unit;
   agentConfigPrompt?: string;
@@ -2548,11 +2555,8 @@ export async function composeSystemPromptForUnit(input: {
   historico?: Fala[];
   /** Onde deixar a oferta que foi carregada: o grafo a lê de volta para o guardrail de preço, sem consultar duas vezes. */
   ofertaSaida?: { valor?: OfertaVigente | null };
-  /**
-   * Onde deixar se a consulta do paciente é DESCONHECIDA (a franquia não respondeu, ou o cartão diz que ele já agendou/é paciente e o
-   * prompt não ficou com consulta): o grafo lê de volta, e "sem consulta no prompt" não vira "ainda não marcou" (despedida-humano.ts).
-   */
-  consultaSaida?: { desconhecida?: boolean };
+  /** Onde deixar se a consulta é desconhecida (ver `ConsultaSaida`). */
+  consultaSaida?: ConsultaSaida;
 }): Promise<string> {
   return composeSystemPrompt(await loadComposeInput(input));
 }
@@ -2567,11 +2571,8 @@ export async function composeSystemPromptPartsForUnit(input: {
   historico?: Fala[];
   /** Onde deixar a oferta que foi carregada: o grafo a lê de volta para o guardrail de preço, sem consultar duas vezes. */
   ofertaSaida?: { valor?: OfertaVigente | null };
-  /**
-   * Onde deixar se a consulta do paciente é DESCONHECIDA (a franquia não respondeu, ou o cartão diz que ele já agendou/é paciente e o
-   * prompt não ficou com consulta): o grafo lê de volta, e "sem consulta no prompt" não vira "ainda não marcou" (despedida-humano.ts).
-   */
-  consultaSaida?: { desconhecida?: boolean };
+  /** Onde deixar se a consulta é desconhecida (ver `ConsultaSaida`). */
+  consultaSaida?: ConsultaSaida;
 }): Promise<{ cacheable: string; dynamic: string }> {
   return composeSystemPromptParts(await loadComposeInput(input));
 }
@@ -2586,11 +2587,8 @@ async function loadComposeInput(input: {
   historico?: Fala[];
   /** Onde deixar a oferta que foi carregada: o grafo a lê de volta para o guardrail de preço, sem consultar duas vezes. */
   ofertaSaida?: { valor?: OfertaVigente | null };
-  /**
-   * Onde deixar se a consulta do paciente é DESCONHECIDA (a franquia não respondeu, ou o cartão diz que ele já agendou/é paciente e o
-   * prompt não ficou com consulta): o grafo lê de volta, e "sem consulta no prompt" não vira "ainda não marcou" (despedida-humano.ts).
-   */
-  consultaSaida?: { desconhecida?: boolean };
+  /** Onde deixar se a consulta é desconhecida (ver `ConsultaSaida`). */
+  consultaSaida?: ConsultaSaida;
 }): Promise<ComposeInput> {
   const shouldRunRag =
     !!input.userMessage &&

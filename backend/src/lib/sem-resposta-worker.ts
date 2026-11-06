@@ -358,6 +358,8 @@ export interface ResumoSemResposta {
   tarefasFalhas: number;
   simulados: number;
   respondidas: number;
+  /** Esperas que a Sofia calou de propósito e a despedida-humano já avisou (não são "respondidas"). */
+  cobertasPelaDespedida: number;
 }
 
 /** Uma varredura numa unidade. Nunca lança por causa de um lead. */
@@ -366,7 +368,7 @@ export async function verificarUnidadeSemResposta(
   estado: Estado,
   deps: DepsSemResposta = DEPS_SEM_RESPOSTA_PADRAO,
 ): Promise<ResumoSemResposta> {
-  const resumo: ResumoSemResposta = { candidatas: 0, alertas: 0, tarefas: 0, tarefasFalhas: 0, simulados: 0, respondidas: 0 };
+  const resumo: ResumoSemResposta = { candidatas: 0, alertas: 0, tarefas: 0, tarefasFalhas: 0, simulados: 0, respondidas: 0, cobertasPelaDespedida: 0 };
   if (estado === 'desligado' || !deps.dentroDoHorario(unit)) return resumo;
   const agora = deps.agora();
   const de = new Date(agora.getTime() - ESPERA_MS - JANELA_MS);
@@ -391,7 +393,7 @@ export async function verificarUnidadeSemResposta(
       // Só cobre a espera se o aviso veio DEPOIS da última mensagem dele: pergunta nova depois do aviso é espera nova.
       const avisoDaDespedida = deps.despedidaAvisouEm ? await deps.despedidaAvisouEm(unit, c.leadId) : null;
       if (avisoDaDespedida && avisoDaDespedida.getTime() >= espera.ultimaEm.getTime() && mesmaEsperaJaAlertada(msgs, avisoDaDespedida, agora)) {
-        resumo.respondidas++;
+        resumo.cobertasPelaDespedida++;
         lembrarConferida(chaveConferida, agora.getTime());
         continue;
       }

@@ -129,8 +129,10 @@ test('"agora não" respondendo a pergunta da Sofia, ou fala longa, é informaç�
   assert.equal(detectarDespedida([pac('oi'), ia('Você está com dor agora?'), pac('Agora não')]), null);
   assert.equal(detectarDespedida([pac('oi'), ia('Você tem exames recentes?'), pac('Agora não tenho em mãos, mas fiz ressonância')]), null);
   assert.equal(detectarDespedida([pac('oi'), ia('Você pretende operar?'), pac('Não vou fazer cirurgia, só tratar')]), null);
-  // mas o adiamento inequívoco vale mesmo depois de uma pergunta dela
-  assert.equal(detectarDespedida([pac('oi'), ia('Posso ver um horário?'), pac('Agora não vou querer')])?.tipo, 'adiou');
+  // "agora não vou querer" respondendo a uma oferta dela é RECUSA, não adiamento: a Sofia responde
+  assert.equal(detectarDespedida([pac('oi'), ia('Posso ver um horário?'), pac('Agora não vou querer')]), null);
+  // o adiamento inequívoco vale mesmo depois de uma pergunta dela
+  assert.equal(detectarDespedida([pac('oi'), ia('Posso ver um horário?'), pac('Vou pensar')])?.tipo, 'adiou');
 });
 
 test('a Sofia tinha PEDIDO algo (sem "?"): "ok obrigada" é resposta, não despedida', () => {
@@ -866,5 +868,61 @@ test('revisão: a marca do aviso não grava no banco mas a tarefa existe — a m
     assert.ok(await DEPS_PADRAO.marcaEm(u, 4242));
   } finally {
     if (original) Object.defineProperty(prisma, 'cardAlert', original);
+  }
+});
+
+// ── 4ª reprovação do #240: falsos positivos nas frases de adiamento ─────────────────────────────
+
+test('FP 1. "para agendar/marcar" sozinho é o pedido de quem QUER marcar: a Sofia responde', () => {
+  const ajuda: Fala[] = [pac('oi'), ia('Oi! Como posso te ajudar?')];
+  for (const fala of ['Para agendar', 'É para agendar', 'para marcar consulta', 'Quero para agendar', 'para marcar a consulta', 'Para agendar, obrigada']) {
+    assert.equal(detectarDespedida([...ajuda, pac(fala)]), null, fala);
+    assert.equal(detectarDespedida([...PRECO, pac(fala)]), null, fala);
+  }
+  // colado a um verbo de voltar, é a despedida
+  assert.equal(detectarDespedida([...PRECO, pac('entro em contato para agendar')])?.tipo, 'adiou');
+  assert.equal(detectarDespedida([...PRECO, pac('Obrigada, entro em contato para marcar a consulta')])?.tipo, 'adiou');
+  assert.equal(detectarDespedida([...PRECO, pac('Obrigada, entro em contato para agendar logo mais')])?.tipo, 'adiou');
+});
+
+test('FP 2. "retorno" é substantivo em clínica; "volto", "te ligo" sozinhos não são promessa: exigem "eu" ou tempo', () => {
+  const ajuda: Fala[] = [pac('oi'), ia('Oi! Como posso te ajudar?')];
+  for (const fala of ['É retorno', 'retorno', 'volto', 'te ligo', 'te retorno', 'Obrigada, é retorno', 'consulta de retorno']) {
+    assert.equal(detectarDespedida([...ajuda, pac(fala)]), null, fala);
+    assert.equal(detectarDespedida([...PRECO, pac(fala)]), null, fala);
+  }
+  for (const fala of ['eu te retorno', 'retorno depois', 'depois eu volto', 'eu volto', 'mais tarde te ligo', 'eu te ligo', 'vou pensar e te retorno', 'volto a falar com vocês', 'Obrigada, te aviso']) {
+    assert.equal(detectarDespedida([...PRECO, pac(fala)])?.tipo, 'adiou', fala);
+  }
+});
+
+test('FP 3. "quando puder" / "vou ver" respondem pergunta ou pedido da Sofia — não são adiamento', () => {
+  const horario: Fala[] = [pac('oi'), ia('Qual o melhor horário pra te ligar?')];
+  assert.equal(detectarDespedida([...horario, pac('Quando puder')]), null);
+  assert.equal(detectarDespedida([...horario, pac('quando puder, obrigada')]), null);
+  const exame: Fala[] = [pac('oi'), ia('Para eu adiantar, me envie o exame por aqui, por favor.')];
+  assert.equal(detectarDespedida([...exame, pac('Ok vou ver')]), null);
+  assert.equal(detectarDespedida([...exame, pac('vou ver')]), null);
+  const exameComPergunta: Fala[] = [pac('oi'), ia('Pode me mandar o exame por aqui?')];
+  assert.equal(detectarDespedida([...exameComPergunta, pac('Ok vou ver')]), null);
+  // sem pedido da Sofia, continuam valendo
+  assert.equal(detectarDespedida([...PRECO, pac('quando puder eu volto')])?.tipo, 'adiou');
+  assert.equal(detectarDespedida([...PRECO, pac('Ok vou ver')])?.tipo, 'adiou');
+  assert.equal(detectarDespedida([...PRECO, pac('quando puder, obrigada')])?.tipo, 'adiou');
+});
+
+test('"Não vou querer, obrigada" respondendo a uma oferta é recusa: a Sofia responde (não vira "adiou")', () => {
+  const oferta: Fala[] = [pac('oi'), ia('Quer que eu te mande a localização da clínica?')];
+  assert.equal(detectarDespedida([...oferta, pac('Não vou querer, obrigada')]), null);
+  assert.equal(detectarDespedida([...PRECO, pac('Não vou querer, obrigada')])?.tipo, 'adiou');
+});
+
+test('pré-processamento barato: letra final repetida, nome da persona e interjeição não são conteúdo', () => {
+  for (const fala of ['Obrigadaa', 'Obrigada Sofia', 'Ah ta, obrigada', 'Valeuuu', 'obrigado dra sofia', 'Hmm ok obrigada']) {
+    assert.equal(detectarDespedida([...PRECO, pac(fala)])?.tipo, 'agradeceu', fala);
+  }
+  // e continuam fora (ficam para depois, a Sofia responde): esposo, vou me programar, vou ver minha agenda
+  for (const fala of ['vou conversar com meu esposo', 'vou me programar', 'vou ver minha agenda']) {
+    assert.equal(detectarDespedida([...PRECO, pac(fala)]), null, fala);
   }
 });

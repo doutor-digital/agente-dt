@@ -498,6 +498,8 @@ test('despedida-humano: a Sofia se calou e a equipe já recebeu a tarefa dela �
   assert.equal(r.alertas, 0);
   assert.equal(c.r.tentativasDeTarefa, 0);
   assert.equal(c.r.enviados.length, 0);
+  assert.equal(r.cobertasPelaDespedida, 1, 'conta no contador próprio');
+  assert.equal(r.respondidas, 0, 'e não como "respondida"');
 });
 
 test('despedida-humano: o aviso da despedida é de uma espera ANTERIOR (a equipe respondeu depois) — a espera nova ganha o alerta de sempre', async () => {

@@ -83,34 +83,56 @@ function normalizar(texto: string): string {
     .normalize('NFD')
     .replace(/\p{M}/gu, '')
     .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    // letra final repetida ("obrigadaa", "valeuu"): vira a palavra normal
+    .replace(/([aeiou])\1+(?=\s|$)/g, '$1')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
 const COM_VOCES = String.raw`(?: com (?:voces|vcs|a clinica|a equipe|o senhor|a senhora))?`;
+/** "para agendar/marcar" SÓ conta colado a um verbo de voltar ("entro em contato para agendar"); sozinho é o pedido de quem QUER marcar. */
+const PARA_AGENDAR = String.raw`(?: para (?:agendar|marcar)(?: (?:a )?(?:consulta|avaliacao|horario))?)?`;
 const T = String.raw`(?:mais pra frente|mais para frente|em outro momento|outra hora|depois|mais tarde|logo mais|amanha|semana que vem|mes que vem|quando (?:eu )?(?:puder|der|decidir|conseguir|resolver))`;
-const FORTE_VERBO = String.raw`(?:entro em contato|entrarei em contato|volto|voltarei|retorno|retornarei|te (?:aviso|chamo|falo|procuro|ligo|retorno))`;
+/** Promessa de voltar que não se confunde com outra coisa. ("retorno" é substantivo em clínica; "volto"/"te ligo"/"te retorno" precisam de "eu" ou de tempo.) */
+const FORTE_VERBO = String.raw`(?:entro em contato|entrarei em contato|voltarei|retornarei|volto a (?:falar|conversar|procurar|entrar em contato)|te (?:aviso|chamo|falo|procuro))`;
+/** Verbos ambíguos: só com "eu" antes ou tempo ao lado ("eu te retorno", "retorno depois", "depois te ligo"). */
+const AMBIGUO_VERBO = String.raw`(?:volto|retorno|te ligo|te retorno)`;
 const FRACO_VERBO = String.raw`(?:vejo|marco|agendo|decido|faco|resolvo|falo|aviso|chamo|procuro|ligo)`;
 
 /**
  * Adiamento INEQUÍVOCO: vale mesmo que a Sofia tenha terminado perguntando (adiar é a resposta dele a ela). A ORDEM importa: as
  * frases específicas ("qualquer coisa eu te chamo", "amanhã eu te chamo") saem antes do verbo solto ("te chamo"), senão ele
- * levaria só a metade e sobraria "qualquer coisa".
+ * levaria só a metade e sobraria "qualquer coisa". "Quando puder", "vou ver" no fim, "não vou querer" e "para agendar" NÃO estão
+ * aqui: respondem a pergunta/pedido da Sofia ("Qual o melhor horário pra te ligar?" — "Quando puder"), ou são o pedido de quem quer marcar.
  */
 const ADIA_FORTE: RegExp[] = [
+  // "vou pensar/ver e te retorno": o "e te …" fecha a promessa (sem ele, "retorno" sozinho é ambíguo)
+  /\bvou (?:pensar|ver|verificar|analisar|avaliar|me organizar)(?: (?:melhor|isso|aqui|com calma|direitinho|um pouco|bem|nisso|no assunto))* e (?:te|lhe) (?:aviso|chamo|falo|procuro|ligo|retorno)\b/g,
   /\bvou pensar(?: (?:melhor|um pouco|com calma|direitinho|bem|nisso|no assunto))*\b/g,
   /\bvou (?:me )?organizar\b/g,
   /\bvou (?:analisar|avaliar)(?: (?:melhor|isso|com calma))*\b/g,
-  /\bvou (?:ver|verificar)(?: (?:isso|aqui|com calma|direitinho))?(?= e (?:te|lhe) | e depois| depois|$)/g,
+  /\bvou (?:ver|verificar)(?: (?:isso|aqui|com calma|direitinho))?(?= e (?:te|lhe) | e depois)/g,
   /\bvou (?:conversar|falar) com (?:meu|minha|o|a) (?:marido|esposa|mulher|filho|filha|familia|irmao|irma|mae|pai)\b/g,
   /\bvou deixar (?:isso )?(?:pra|para) (?:o )?(?:outro|proximo|depois|mais tarde)(?: (?:mes|dia|semana|ano))?\b/g,
+  /\b(?:qualquer coisa|se precisar) (?:eu )?(?:te )?(?:chamo|aviso|falo|procuro)\b/g,
+  // tempo + (eu) + verbo, com "para agendar" opcional colado ao verbo
+  new RegExp(String.raw`\b${T} (?:eu )?(?:${FORTE_VERBO}|${AMBIGUO_VERBO})${PARA_AGENDAR}${COM_VOCES}\b`, 'g'),
+  // verbo forte, com tempo opcional depois
+  new RegExp(String.raw`\b(?:eu )?${FORTE_VERBO}${PARA_AGENDAR}${COM_VOCES}(?: ${T})?\b`, 'g'),
+  // verbo ambíguo: "eu" antes, ou tempo depois
+  new RegExp(String.raw`\beu ${AMBIGUO_VERBO}${PARA_AGENDAR}${COM_VOCES}(?: ${T})?\b`, 'g'),
+  new RegExp(String.raw`\b${AMBIGUO_VERBO}${PARA_AGENDAR}${COM_VOCES} ${T}\b`, 'g'),
+];
+
+/**
+ * Só valem se a Sofia NÃO perguntou nem pediu nada (senão são a resposta a ela): "quando puder" (a "Qual o melhor horário pra te
+ * ligar?"), "vou ver" no fim (a "me envie o exame"), "não vou querer" (a uma oferta: é recusa, não adiamento).
+ */
+const ADIA_SEM_PEDIDO: RegExp[] = [
+  /\b(?:quando|assim que) (?:eu )?(?:puder|decidir|resolver|conseguir|der)\b/g,
+  /\bvou (?:ver|verificar)(?: (?:isso|aqui|com calma|direitinho))?(?= depois|$)/g,
   /\bnao vou (?:querer|marcar|agendar)(?: (?:marcar|agendar))?\b/g,
   /\bnao quero (?:agora|por enquanto|no momento)\b/g,
-  /\b(?:qualquer coisa|se precisar) (?:eu )?(?:te )?(?:chamo|aviso|falo|procuro)\b/g,
-  /\b(?:quando|assim que) (?:eu )?(?:puder|decidir|resolver|conseguir|der)\b/g,
-  /\bpara (?:agendar|marcar)(?: (?:a )?(?:consulta|avaliacao|horario))?\b/g,
-  new RegExp(String.raw`\b${T} (?:eu )?${FORTE_VERBO}(?: a (?:falar|conversar|procurar|entrar em contato))?${COM_VOCES}\b`, 'g'),
-  new RegExp(String.raw`\b(?:eu )?${FORTE_VERBO}(?: a (?:falar|conversar|procurar|entrar em contato))?${COM_VOCES}(?: ${T})?\b`, 'g'),
 ];
 
 /** Adiamento com verbo genérico ("depois eu vejo", "mais tarde eu falo"): só vale se a Sofia NÃO tinha perguntado nada. */
@@ -143,7 +165,11 @@ const AGRADECE: RegExp[] = [
 ];
 
 /** "Ok", "tá bom": sozinhos não dizem nada; depois de um adiamento no mesmo bloco continuam a despedida. */
-const ACK: RegExp[] = [/\b(?:ok(?:ay|ey)?|okk+|blz|beleza|show|top|perfeito|certo|fechado|combinado|entendi|entendido|ta bom|tabom|ta|tranquilo)\b/g];
+const ACK: RegExp[] = [
+  /\b(?:ok(?:ay|ey)?|okk+|blz|beleza|show|top|perfeito|certo|fechado|combinado|entendi|entendido|ta bom|tabom|ta|tranquilo)\b/g,
+  // interjeição e o nome da persona ("Ah ta, obrigada", "Obrigada Sofia")
+  /\b(?:a+h+|ata|hu+m+|hm+|oh+|(?:dra |doutora )?sofia)\b/g,
+];
 
 
 
@@ -190,6 +216,7 @@ function analisarFala(texto: string, ctx: ContextoDaIa): Analise | null {
     [DESCULPA_BENIGNA, () => undefined, true],
     [ADIA_FORTE, (x) => { adiou ||= x; }, true],
     [ADIA_GENERICO, (x) => { adiou ||= x; }, !ctx.perguntou],
+    [ADIA_SEM_PEDIDO, (x) => { adiou ||= x; }, abre],
     [ADIA_FRACO, (x) => { adiou ||= x; }, abre],
   ];
   for (const [res, marca, vale] of passos) {
