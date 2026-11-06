@@ -114,6 +114,7 @@ interface Escritas {
   campos: Array<{ id: number; campo: number; valor: string }>;
   ordem: string[];
   removidas: Array<{ id: number; tag: string }>;
+  limpos: Array<{ id: number; campo: number }>;
 }
 function kommoFalso(leads: KommoLead[], e: Escritas, fresco: Record<number, Partial<KommoLead>> = {}): KommoClient {
   const porId = (id: number) => ({ ...(leads.find((l) => l.id === id) as KommoLead), ...(fresco[id] ?? {}) });
@@ -133,6 +134,7 @@ function kommoFalso(leads: KommoLead[], e: Escritas, fresco: Record<number, Part
     listPipelines: async () => [],
     listLeadTags: async () => [{ id: 1, name: 'NO_FOLLOW_UP' }],
     removeTag: async (id: number, tag: string) => void e.removidas.push({ id, tag }),
+    clearLeadCustomField: async (id: number, campo: number) => void e.limpos.push({ id, campo }),
     addTag: async (a: { leadId: number; tags?: string[] }) => {
       e.ordem.push('tag');
       e.tags.push({ id: a.leadId, tags: a.tags ?? [] });
@@ -152,7 +154,7 @@ function kommoFalso(leads: KommoLead[], e: Escritas, fresco: Record<number, Part
     listLeadCustomFieldsTyped: async () => [{ id: 5, name: '⊘ Motivo do não agendamento', type: 'select', code: null, enums: OPCOES.map((value, i) => ({ id: i + 1, value })) }],
   } as unknown as KommoClient;
 }
-const escritas = (): Escritas => ({ status: [], tags: [], notas: [], campos: [], ordem: [], removidas: [] });
+const escritas = (): Escritas => ({ status: [], tags: [], notas: [], campos: [], ordem: [], removidas: [], limpos: [] });
 
 const lead = (id: number, statusId = 11, extra: Partial<KommoLead> = {}): KommoLead => ({ id, name: `Lead ${id}`, status_id: statusId, pipeline_id: 1, updated_at: AGORA - id, custom_fields_values: [], _embedded: { tags: [] }, ...extra });
 /** um cartão cujo paciente recusou há 70 h e a Sofia respondeu */
@@ -243,6 +245,7 @@ test('REVISÃO 4b: o status falha DEPOIS de a etiqueta entrar → a perda-ia des
   const r = resumoNovo(unit, false);
   await varrerPerda(ctxDe(unit, k, false), r);
   assert.deepEqual(e.removidas.map((x) => x.tag).sort(), ['NO_FOLLOW_UP', 'perdido pela IA']);
+  assert.deepEqual(e.limpos, [{ id: 910, campo: 5 }], 'o ⊘ que a IA gravou nesta tentativa não vira «motivo da SDR» num cartão aberto');
   assert.equal(r.erros, 1);
   assert.equal(r.moveria, 0);
 
@@ -252,6 +255,27 @@ test('REVISÃO 4b: o status falha DEPOIS de a etiqueta entrar → a perda-ia des
   const d = { para: 'PERDIDO' as const, regra: 'x', dias: 30, motivoPerda: 'Não interagiu', semRegua: true };
   await assert.rejects(fecharComoPerdido(unidade(), k2, funis, 911, ETAPA.QUALIFICACAO, d, false, 'parados', l2));
   assert.deepEqual(e2.removidas, [], 'o parados de sempre: comportamento idêntico, sem desfazer nada');
+});
+
+test('REVISÃO 4d: o status deu TEMPO ESGOTADO → o Kommo pode ter aplicado: mantém etiquetas e motivo, não desfaz nada', async () => {
+  const unit = unidade();
+  const e = escritas();
+  const l = comRecusa(913);
+  const k = { ...kommoFalso([l], e), setLeadStatus: async () => { throw new Error('timeout of 15000ms exceeded'); } } as unknown as KommoClient;
+  const r = resumoNovo(unit, false);
+  await varrerPerda(ctxDe(unit, k, false), r);
+  assert.equal(r.erros, 1);
+  assert.deepEqual([e.removidas, e.limpos], [[], []]);
+});
+
+test('leitura das etiquetas da conta que falha não é «não tem»: não move e não grava «visto» por um dia', async () => {
+  const unit = unidade();
+  const e = escritas();
+  const k = { ...kommoFalso([comRecusa(914)], e), listLeadTags: async () => { throw new Error('429'); } } as unknown as KommoClient;
+  await varrerPerda(ctxDe(unit, k, false), resumoNovo(unit, false));
+  await varrerPerda(ctxDe(unit, k, false), resumoNovo(unit, false));
+  assert.deepEqual(e.status, []);
+  assert.equal(chamadasAIa, 2, 'releu na varredura seguinte');
 });
 
 test('REVISÃO 4c: o status deu timeout mas o Kommo JÁ moveu o cartão → as etiquetas ficam (a régua não pode mandar mensagem)', async () => {

@@ -342,28 +342,7 @@ export function decidirReguaEsgotada(statusConversa: string | null | undefined, 
   };
 }
 
-// Só agradecimento, despedida e saudação. "sim", "pode ser", "tudo bem" ficam FORA: são resposta
-// afirmativa à retomada ("quer que eu já marque?") e têm de trazer o cartão de volta.
-const CORTESIA = new Set([
-  'ok', 'okay', 'oks', 'okk', 'ta', 'tabom', 'blz', 'beleza', 'certo', 'combinado', 'valeu', 'vlw',
-  'obrigado', 'obrigada', 'obg', 'brigado', 'brigada', 'grato', 'grata', 'gratidao', 'show', 'perfeito', 'otimo',
-  'bom', 'dia', 'tarde', 'noite', 'boa', 'ate', 'logo', 'mais', 'amem', 'deus', 'abencoe', 'bjs', 'beijo', 'beijos',
-  'abraco', 'abracos', 'igualmente', 'pra', 'voce', 'tambem',
-]);
-
-/** "ok, obrigado 🙏" não é o paciente voltando: não cancela a espera. */
-export function ehRespostaDeCortesia(mensagem: string | null | undefined): boolean {
-  const limpa = String(mensagem ?? '')
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .trim();
-  if (!limpa) return true;
-  const palavras = limpa.split(/\s+/).filter(Boolean);
-  if (palavras.length > 5) return false;
-  return palavras.every((p) => CORTESIA.has(p));
-}
+export { ehRespostaDeCortesia } from './cortesia.js';
 
 export function textoDaNota(d: DecisaoParado, etapaAtual: string): string {
   if (d.para === 'PERDIDO') {

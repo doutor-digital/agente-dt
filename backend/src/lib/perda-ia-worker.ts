@@ -158,9 +158,9 @@ export function decisaoDeFecho(d: Extract<DecisaoDaPerda, { tipo: 'mover' }>, et
 /**
  * A conta tem a etiqueta que os gatilhos de PERDIDO leem? Sem ela (Rio Verde) não há como segurar a régua e o motivo definitivo não
  * move. Rio Verde fica de fora até os gatilhos de PERDIDO da conta serem conferidos (ela tem NAO_PERTURBAR, mas não se sabe se os
- * gatilhos a leem). Usa o cache de etiquetas de `etiquetaDeNaoContatar`; leitura que falhou = «não tem».
+ * gatilhos a leem). Usa o cache de etiquetas de `etiquetaDeNaoContatar`; `null` = não consegui ler as etiquetas.
  */
-function contaTemNoFollowUp(unit: Unit, kommo: KommoClient): Promise<boolean> {
+function contaTemNoFollowUp(unit: Unit, kommo: KommoClient): Promise<boolean | null> {
   return contaTemEtiqueta(unit, kommo, TAG_SEM_REGUA);
 }
 
@@ -227,6 +227,7 @@ export async function varrerPerda(ctx: CtxPerda, resumo: Resumo): Promise<void> 
   // 3) o caro: ler a conversa e a IA, no teto
   let falhasDaIa = 0;
   let leituras = 0;
+  let temTag: boolean | null | undefined;
   for (const { lead, etapa } of fila) {
     if (resumo.avaliados >= MAX_AVALIACOES || resumo.moveria >= MAX_MOVIMENTOS || leituras >= MAX_LEITURAS) break;
     if (falhasDaIa >= FALHAS_DA_IA_QUE_ENCERRAM) {
@@ -269,10 +270,19 @@ export async function varrerPerda(ctx: CtxPerda, resumo: Resumo): Promise<void> 
       }
 
       // motivo definitivo sem a etiqueta que segura a régua = sem como evitar a mensagem: não move (o log diz o motivo)
-      if (motivoDefinitivo(decisao.motivo) && !(await contaTemNoFollowUp(unit, kommo))) {
-        logger.warn({ unit: unit.slug, leadId: lead.id, motivo: decisao.motivo, seco }, `perda-ia: a conta não tem a etiqueta ${TAG_SEM_REGUA} — não movi (a régua de PERDIDO mandaria mensagem a quem recusou)`);
-        if (seco) registrarSimulacao(unit, ID_PERDA_IA, { leadId: lead.id, acao: 'pularia', alvo: ETAPA.PERDIDO, deEtapa: etapa, motivo: `a conta não tem a etiqueta ${TAG_SEM_REGUA}: motivo «${decisao.motivo}» exige` });
-        continue;
+      if (motivoDefinitivo(decisao.motivo)) {
+        temTag ??= await contaTemNoFollowUp(unit, kommo); // uma leitura por varredura, não uma por cartão
+        if (temTag === null) {
+          // leitura que falhou não é «a conta não tem»: não grava «visto» por um dia e encerra a varredura (não adianta gastar IA à toa)
+          vistoAte.delete(`${unit.id}:${ID_PERDA_IA}:${lead.id}`);
+          logger.warn({ unit: unit.slug, leadId: lead.id }, 'perda-ia: não consegui ler as etiquetas da conta — encerrei a varredura, tento na próxima');
+          break;
+        }
+        if (!temTag) {
+          logger.warn({ unit: unit.slug, leadId: lead.id, motivo: decisao.motivo, seco }, `perda-ia: a conta não tem a etiqueta ${TAG_SEM_REGUA} — não movi (a régua de PERDIDO mandaria mensagem a quem recusou)`);
+          if (seco) registrarSimulacao(unit, ID_PERDA_IA, { leadId: lead.id, acao: 'pularia', alvo: ETAPA.PERDIDO, deEtapa: etapa, motivo: `a conta não tem a etiqueta ${TAG_SEM_REGUA}: motivo «${decisao.motivo}» exige` });
+          continue;
+        }
       }
       // a franquia manda: consulta futura ou tratamento em andamento lá seguram (erro lança: franquia fora do ar ≠ "livre")
       const f = await franquiaDoPaciente(unit, lead.id, lead.name ?? null, agora);
@@ -295,7 +305,8 @@ export async function varrerPerda(ctx: CtxPerda, resumo: Resumo): Promise<void> 
       }
       const d = decisaoDeFecho(decisao, etapa);
       const r = await fecharOuSegurar(unit, kommo, funis, lead.id, etapa, d, seco, ID_PERDA_IA, lead);
-      if (!seco && r === 'sem-etiqueta') vistoAte.delete(`${unit.id}:${ID_PERDA_IA}:${lead.id}`); // só a falha da etiqueta é transitória: tenta na próxima varredura
+      // 'sem-etiqueta' (falha transitória) e 'nada' (o cartão mudou de etapa enquanto a IA lia) não valem um dia de «visto»
+      if (!seco && (r === 'sem-etiqueta' || r === 'nada')) vistoAte.delete(`${unit.id}:${ID_PERDA_IA}:${lead.id}`);
       if (seco ? r !== 'travado' : r === 'fechou') {
         resumo.moveria++;
         if (!seco) await pausa();

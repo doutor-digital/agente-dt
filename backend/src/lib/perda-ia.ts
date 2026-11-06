@@ -32,7 +32,7 @@ import { chamarAnthropic, type Chamar } from './cadastro-triagem-ia.js';
 import { logger } from './logger.js';
 import { normalizar } from './franquia-sync.js';
 import { fraseProva, provaDaFrase, type FalaDaConversa, type Sugestao } from './sugestao-motivo.js';
-import { ehRespostaDeCortesia } from './parados.js';
+import { ehRespostaDeCortesia } from './cortesia.js';
 
 export const ID_PERDA_IA = 'perda-ia';
 export const ID_MOTIVO_PERDIDO_IA = 'motivo-perdido-ia';

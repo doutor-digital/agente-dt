@@ -31,6 +31,7 @@ import { ETAPA, TRATAMENTO_EM_ANDAMENTO } from './franquia-move.js';
 import { TAG_CONFLITO, anotarRoboPos, cartaoTravadoNoConflito, estadoCasamentoJornada } from './casamento-jornada.js';
 import { cartoesComConflito } from './conflito-paciente.js';
 import { CAMPOS_SYNC } from './franquia-sync.js';
+import { PERDIDO } from './motivo-no-cabecalho.js';
 import { registrarSimulacao } from './so-no-papel.js';
 import { abrirSeguimentoDoPagou, simularSeguimentoDoPagou, veredictoDaTrava } from './trava-perda-seguimento.js';
 import { contaDividida, grupoDaUnidade, pularCartao, unidadeDonaDoCartao, type GrupoDoCrm } from './crm-compartilhado.js';
@@ -140,14 +141,15 @@ function contatoPrincipal(lead: KommoLead): number | null {
   return (cs.find((c) => c.is_main) ?? cs[0])?.id ?? null;
 }
 
-async function gravarSelect(unit: Unit, kommo: KommoClient, leadId: number, nome: string, opcao: string): Promise<void> {
+async function gravarSelect(unit: Unit, kommo: KommoClient, leadId: number, nome: string, opcao: string): Promise<boolean> {
   const esquema = await esquemaDaUnidade(unit, kommo);
   const id = nomesDoCampo(nome).map((x) => esquema.campoPorNome(x)).find((x) => x !== null) ?? null;
   if (id === null) {
     logger.warn({ unit: unit.slug, leadId, campo: nome }, 'parados: campo não existe nesta conta — segui sem ele');
-    return;
+    return false;
   }
   await kommo.setLeadCustomFieldValue(leadId, id, 'select', opcao);
+  return true;
 }
 
 async function gravarData(unit: Unit, kommo: KommoClient, leadId: number, nome: string, epoch: number): Promise<void> {
@@ -159,7 +161,8 @@ async function gravarData(unit: Unit, kommo: KommoClient, leadId: number, nome: 
 
 async function limparCampo(unit: Unit, kommo: KommoClient, leadId: number, nome: string): Promise<void> {
   const esquema = await esquemaDaUnidade(unit, kommo);
-  const id = esquema.campoPorNome(nome);
+  // pelos mesmos nomes (atual e antigos) com que `gravarSelect` achou o campo
+  const id = nomesDoCampo(nome).map((x) => esquema.campoPorNome(x)).find((x) => x !== null) ?? null;
   if (id === null) return;
   await kommo.clearLeadCustomField(leadId, id);
 }
@@ -243,9 +246,6 @@ async function franquiaSegura(unit: Unit, leadId: number, nome: string | null, a
   if (f.consultaFutura) return { conhecido: true, segura: true, motivo: 'consulta futura na franquia' };
   return { conhecido: f.conhecido, segura: false };
 }
-
-/** PERDIDO no Kommo (o 143 existe em todo funil). */
-const PERDIDO_ID = 143;
 
 const pausa = () => new Promise((r) => setTimeout(r, PAUSA_ENTRE_ESCRITAS_MS));
 
@@ -362,13 +362,15 @@ export async function fecharOuSegurar(
     logger.warn({ ...base, automacao }, 'parados: a etiqueta de não contatar não entrou — NÃO movi o cartão');
     return 'sem-etiqueta';
   }
+  let gravouOCampo = false;
   const motivoDaSdr = d.campo ? motivoDaSdrNoCartao(lead.custom_fields_values) : null;
   if (motivoDaSdr) {
     logger.info({ ...base, campo: d.campo?.nome, valor: motivoDaSdr }, 'parados: o cartão já tinha motivo — mantive o da SDR');
   } else if (d.campo) {
-    await gravarSelect(unit, kommo, leadId, d.campo.nome, d.campo.opcao).catch((err) =>
-      logger.warn({ err: String(err), ...base, campo: d.campo?.nome, opcao: d.campo?.opcao }, 'parados: falha ao gravar o motivo no cartão (a opção existe no campo desta conta?)'),
-    );
+    gravouOCampo = await gravarSelect(unit, kommo, leadId, d.campo.nome, d.campo.opcao).catch((err) => {
+      logger.warn({ err: String(err), ...base, campo: d.campo?.nome, opcao: d.campo?.opcao }, 'parados: falha ao gravar o motivo no cartão (a opção existe no campo desta conta?)');
+      return false;
+    });
   }
   try {
     await kommo.setLeadStatus(leadId, { won: false, lossReasonId: lossId ?? undefined });
@@ -376,17 +378,20 @@ export async function fecharOuSegurar(
     // só quando a etiqueta era CONDIÇÃO do fecho (perda-ia): o cartão ficaria aberto com NO_FOLLOW_UP, calado e fora das varreduras.
     // O `parados` de sempre segue como era (a falha sobe e o cartão fica como estava).
     if (d.etiquetaObrigatoria) {
-      // só tira o que ESTA tentativa pôs, e só se o cartão NÃO foi movido: timeout depois de o Kommo aplicar o PATCH deixaria o cartão
-      // em PERDIDO sem a etiqueta que segura a régua. Estado desconhecido = mantém as etiquetas e avisa.
-      const atual = await kommo.getLead(leadId).catch(() => null);
-      const tinhaAntes = new Set((lead._embedded?.tags ?? []).map((t) => normalizarNome(t.name ?? '')));
-      if (!atual || atual.status_id === PERDIDO_ID) {
-        logger.error({ err: String(err), ...base, automacao }, 'parados: o status deu erro mas o cartão pode ter sido movido — mantive as etiquetas, conferir à mão');
+      // Só desfaz o que ESTA tentativa pôs, e só quando SABE que o cartão não foi movido. Tempo esgotado ou cartão ilegível = o Kommo
+      // pode ter aplicado o PATCH: o cartão em PERDIDO sem a etiqueta receberia a régua. Nesses casos mantém tudo e avisa.
+      const estouro = /timeout|timed out|ETIMEDOUT|ECONNABORTED|ECONNRESET|socket hang up|aborted/i.test(String(err));
+      const atual = estouro ? null : await kommo.getLead(leadId).catch(() => null);
+      if (!atual || atual.status_id === PERDIDO) {
+        logger.error({ err: String(err), ...base, automacao }, 'parados: o status deu erro (tempo esgotado ou estado desconhecido) e o cartão pode ter sido movido — mantive as etiquetas e o motivo, CONFERIR À MÃO');
       } else {
+        const tinhaAntes = new Set((lead._embedded?.tags ?? []).map((t) => normalizarNome(t.name ?? '')));
         for (const t of (d.etiquetas ?? []).filter((x) => !tinhaAntes.has(normalizarNome(x)))) {
           await kommo.removeTag(leadId, t).catch((e) => logger.error({ err: String(e), ...base, automacao, etiqueta: t }, 'parados: o status falhou e NÃO consegui tirar a etiqueta — o cartão está aberto e etiquetado, conferir à mão'));
         }
-        logger.warn({ err: String(err), ...base, automacao }, 'parados: o status falhou depois da etiqueta — desfiz as etiquetas que pus');
+        // o ⊘ que a IA gravou nesta tentativa viraria «motivo da SDR» num cartão aberto
+        if (gravouOCampo && d.campo) await limparCampo(unit, kommo, leadId, d.campo.nome).catch((e) => logger.error({ err: String(e), ...base, automacao }, 'parados: o status falhou e NÃO consegui limpar o motivo que gravei — conferir à mão'));
+        logger.warn({ err: String(err), ...base, automacao }, 'parados: o status falhou depois da etiqueta — desfiz as etiquetas e o motivo que pus');
       }
     }
     throw err;

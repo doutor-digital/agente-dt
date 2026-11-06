@@ -231,6 +231,41 @@ test('REVISÃO 5b: prova única — frase curta («oi», «...», «ok») nunca 
   assert.equal(fraseProva('moro em Itaguaí', pergunta), false, 'fala com «?» não prova');
 });
 
+test('REVISÃO 5c: cortesia nunca prova — «bom dia», «boa tarde», «obrigada», «ok obrigado», na frase OU na fala — nos 3 caminhos', () => {
+  for (const cortesia of ['bom dia', 'boa tarde', 'obrigada', 'ok obrigado', 'Obrigada!']) {
+    const conversa = [fala('SOFIA', 'a consulta é R$ 250', 60), fala('PACIENTE', cortesia, 59)];
+    // frase = cortesia, fala = cortesia
+    assert.equal(fraseProva(cortesia, conversa), false, `fraseProva «${cortesia}»`);
+    const r = motivoDoPerdido({ motivo: 'Outra cidade', frase: cortesia, travado: false }, conversa, OPCOES);
+    assert.equal(r?.rebaixado, true, `motivoDoPerdido «${cortesia}»`);
+    assert.equal(decidirPerda(resp({ motivo: 'Sem interesse', frase_do_paciente: cortesia }), conversa, OPCOES).tipo, 'nada', `decidirPerda «${cortesia}»`);
+    assert.equal(interpretarResposta(JSON.stringify({ frase_do_paciente: cortesia, resposta: 'Sem interesse' }), [...conversa, fala('SOFIA', 'ok', 58)], OPCOES)?.travado, true, `widget «${cortesia}»`);
+  }
+  // frase de verdade dentro de uma fala que é só cortesia não existe; e cortesia citada de uma fala longa continua sem provar
+  const longa = [fala('PACIENTE', 'bom dia, moro em Itaguaí e não consigo ir', 59), fala('SOFIA', 'ok', 58)];
+  assert.equal(fraseProva('bom dia', longa), false, 'a frase é cortesia');
+  assert.equal(fraseProva('moro em Itaguaí', longa), true, 'a frase de verdade prova');
+});
+
+test('REVISÃO 5d: sentido invertido não prova — «Não quero» × «Não, quero agendar sim» e «tenho interesse» × «Não tenho interesse»', () => {
+  const agendar = [fala('PACIENTE', 'Não, quero agendar sim', 59), fala('SOFIA', 'ótimo!', 58)];
+  assert.equal(fraseProva('Não quero', agendar), false, 'a vírgula separa o «não» do «quero»');
+  assert.equal(decidirPerda(resp({ frase_do_paciente: 'Não quero' }), agendar, OPCOES).tipo, 'nada');
+  assert.equal(motivoDoPerdido({ motivo: 'Sem interesse', frase: 'Não quero', travado: false }, agendar, OPCOES)?.rebaixado, true);
+  // o par certo ainda prova
+  const recusa = [fala('PACIENTE', 'Não quero, obrigada.', 59), fala('SOFIA', 'tudo bem', 58)];
+  assert.equal(fraseProva('Não quero', recusa), true);
+  assert.equal(fraseProva('não quero, obrigada', recusa), true, 'a frase com a própria pontuação casa');
+  // um negador colado antes inverte: «tenho interesse» dentro de «Não tenho interesse» (ou de «Tenho interesse sim») não prova recusa
+  const nao = [fala('PACIENTE', 'Não tenho interesse', 59), fala('SOFIA', 'ok', 58)];
+  assert.equal(fraseProva('tenho interesse', nao), false);
+  assert.equal(fraseProva('Não tenho interesse', nao), true);
+  const sim = [fala('PACIENTE', 'Tenho interesse sim, quando posso ir', 59), fala('SOFIA', 'ok', 58)];
+  assert.equal(fraseProva('Não tenho interesse', sim), false, 'a frase não está lá');
+  // fronteira de palavra
+  assert.equal(fraseProva('não quero', [fala('PACIENTE', 'não querom nada disso', 59)]), false);
+});
+
 test('REVISÃO 5: motivo-perdido-ia — específico só com frase que prove; sem prova, genérico; sem fala do paciente, nada', () => {
   const sug = (motivo: string, frase = '') => ({ motivo, frase, travado: false });
   // paciente falou por último e a IA chutou «Outra cidade» sem frase: a trava do widget não pega (ela só olha «a clínica falou por último»)
