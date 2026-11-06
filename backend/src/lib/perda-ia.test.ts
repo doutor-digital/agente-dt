@@ -11,7 +11,9 @@ import {
   lerRespostaDaPerda,
   linhaDoTempo,
   montarPromptDaPerda,
-  motivoTrabalhavel,
+  motivoDefinitivo,
+  motivoDoPerdido,
+  motivoPodeMover,
   perguntarAoModelo,
   porQueNaoAvaliar,
   INSTRUCAO_PERDA,
@@ -22,7 +24,7 @@ import type { FalaDaConversa } from './sugestao-motivo.js';
 
 const AGORA = 1_800_000_000;
 const H = 3600;
-const OPCOES = ['Plano de Saúde', 'Sem condições financeira', 'Outra cidade', 'Sem interesse', 'Clicou por engano', 'Não interagiu', 'Não deu continuidade ao atendimento', 'Informação para terceiro'];
+const OPCOES = ['Plano de Saúde', 'Sem condições financeira', 'Outra cidade', 'Sem interesse', 'Clicou por engano', 'Não interagiu', 'Não deu continuidade ao atendimento', 'Informação para terceiro', 'Vai se organizar', 'Está viajando', 'Assinou contrato', 'Outra patologia'];
 
 const fala = (autor: FalaDaConversa['autor'], texto: string, horasAtras: number): FalaDaConversa => ({ autor, texto, em: AGORA - horasAtras * H });
 const resp = (o: Partial<RespostaDaPerda> = {}): RespostaDaPerda => ({
@@ -157,10 +159,77 @@ test('portões baratos: sem fala do paciente, equipe falando nas últimas 24 h e
   assert.equal(porQueNaoAvaliar(ok, 48), null);
 });
 
-test('efeito da régua: só preço e terceiro ficam sem a etiqueta de não contatar', () => {
-  assert.equal(motivoTrabalhavel('Sem condições financeira'), true);
-  assert.equal(motivoTrabalhavel('Informação para terceiro'), true);
-  for (const m of ['Sem interesse', 'Outra cidade', 'Plano de Saúde', 'Clicou por engano', 'Outra patologia', 'Algum motivo novo da conta']) assert.equal(motivoTrabalhavel(m), false, m);
+test('LISTA FECHADA: só os definitivos e o preço movem; espera, contrato, terceiro e sumiço nunca movem (mesmo que a conta tenha a opção)', () => {
+  for (const m of ['Sem interesse', 'Outra cidade', 'Plano de Saúde', 'Clicou por engano', 'Outra patologia']) {
+    assert.equal(motivoPodeMover(m), true, m);
+    assert.equal(motivoDefinitivo(m), true, `${m} leva NO_FOLLOW_UP`);
+  }
+  assert.equal(motivoPodeMover('Sem condições financeira'), true);
+  assert.equal(motivoDefinitivo('Sem condições financeira'), false, 'preço é recuperável: sem a etiqueta');
+  for (const m of ['Vai se organizar', 'Está viajando', 'Assinou contrato', 'Informação para terceiro', 'Não interagiu', 'Algum motivo novo da conta']) {
+    assert.equal(motivoPodeMover(m), false, m);
+    assert.equal(motivoDefinitivo(m), false, m);
+  }
+});
+
+test('opção fora da lista fechada não move, mesmo com tudo o mais perfeito', () => {
+  const falas = [fala('PACIENTE', 'vou viajar, falo quando voltar', 70), fala('SOFIA', 'ok', 70)];
+  for (const motivo of ['Vai se organizar', 'Está viajando', 'Assinou contrato', 'Informação para terceiro']) {
+    const d = decidirPerda(resp({ motivo, frase_do_paciente: 'vou viajar, falo quando voltar' }), falas, OPCOES);
+    assert.equal(d.tipo, 'nada', motivo);
+    assert.match(d.tipo === 'nada' ? d.porque : '', /lista fechada/);
+  }
+});
+
+test('REVISÃO 1: «achei muito caro» → «tem parcelamento em 10x?» → Sofia responde → 48 h: NEGOCIAÇÃO, nunca perda', () => {
+  const r = resp({ motivo: 'Sem condições financeira', frase_do_paciente: 'achei muito caro' });
+  const falas = [fala('PACIENTE', 'achei muito caro', 100), fala('SOFIA', 'posso ver condições', 99), fala('PACIENTE', 'tem parcelamento em 10x?', 98), fala('SOFIA', 'sim, em até 10x', 97)];
+  assert.equal(decidirPerda(r, falas, OPCOES).tipo, 'nada');
+  // sem o «?» também: o que ele disse depois reabre a conversa
+  const semInterrogacao = [fala('PACIENTE', 'achei muito caro', 100), fala('SOFIA', 'posso ver condições', 99), fala('PACIENTE', 'e parcela em 10x', 98), fala('SOFIA', 'sim', 97)];
+  assert.equal(decidirPerda(r, semInterrogacao, OPCOES).tipo, 'nada');
+  // cortesia depois da recusa é só despedida: continua perda
+  const cortesia = [fala('PACIENTE', 'achei muito caro', 100), fala('SOFIA', 'entendo', 99), fala('PACIENTE', 'ok, obrigada', 98), fala('SOFIA', 'disponha', 97)];
+  assert.equal(decidirPerda(r, cortesia, OPCOES).tipo, 'mover');
+});
+
+test('REVISÃO 2: a FALA que traz a frase tem «?» → dúvida aberta («se eu não quiser fazer cirurgia vocês atendem?»)', () => {
+  const falas = [fala('PACIENTE', 'não quero cirurgia. se eu não quiser fazer cirurgia vocês atendem?', 80), fala('SOFIA', 'atendemos sim', 79)];
+  const d = decidirPerda(resp({ frase_do_paciente: 'não quero cirurgia' }), falas, OPCOES);
+  assert.equal(d.tipo, 'nada');
+  assert.match(d.tipo === 'nada' ? d.porque : '', /pergunta/);
+});
+
+test('REVISÃO 6: JSON válido com null em motivo e frase não é falha da IA — vira vazio e a matriz decide', () => {
+  const r = lerRespostaDaPerda('{"perdido":"duvida","padrao":"nenhum","confianca":"baixa","motivo":null,"frase_do_paciente":null,"justificativa":"vago"}');
+  assert.equal(r?.motivo, '');
+  assert.equal(r?.frase_do_paciente, '');
+  assert.equal(decidirPerda(r, [], OPCOES).tipo, 'nada');
+  const sim = lerRespostaDaPerda('{"perdido":"sim","padrao":"sem_resposta","confianca":"alta","motivo":null,"frase_do_paciente":null,"justificativa":"3 toques"}');
+  assert.equal(decidirPerda(sim, [], OPCOES).tipo, 'vacuo');
+});
+
+test('REVISÃO 5: motivo-perdido-ia — específico só com frase que prove; sem prova, genérico; sem fala do paciente, nada', () => {
+  const sug = (motivo: string, frase = '') => ({ motivo, frase, travado: false });
+  // paciente falou por último e a IA chutou «Outra cidade» sem frase: a trava do widget não pega (ela só olha «a clínica falou por último»)
+  const porUltimo = [fala('SOFIA', 'oi', 50), fala('PACIENTE', 'quanto é?', 40), fala('PACIENTE', 'ok', 39)];
+  const r1 = motivoDoPerdido(sug('Outra cidade'), porUltimo, OPCOES);
+  assert.equal(r1?.motivo, 'Não deu continuidade ao atendimento');
+  assert.equal(r1?.rebaixado, true);
+  // com frase que prova, o específico fica
+  const prova = [fala('PACIENTE', 'moro em Manaus', 40), fala('SOFIA', 'ok', 39)];
+  assert.equal(motivoDoPerdido(sug('Outra cidade', 'moro em Manaus'), prova, OPCOES)?.motivo, 'Outra cidade');
+  // frase inventada ou pergunta: não prova
+  assert.equal(motivoDoPerdido(sug('Outra cidade', 'moro longe'), prova, OPCOES)?.motivo, 'Não interagiu');
+  assert.equal(motivoDoPerdido(sug('Plano de Saúde', 'atende pelo plano?'), [fala('PACIENTE', 'atende pelo plano?', 40)], OPCOES)?.motivo, 'Não interagiu');
+  // a fala com pergunta não prova, mesmo que a frase em si não termine em «?»
+  assert.equal(motivoDoPerdido(sug('Sem interesse', 'não quero cirurgia'), [fala('PACIENTE', 'não quero cirurgia. se eu não quiser vocês atendem?', 40), fala('SOFIA', 'sim', 39)], OPCOES)?.motivo, 'Não interagiu');
+  // conversa vazia / só a clínica falou: nada
+  assert.equal(motivoDoPerdido(sug('Outra cidade'), [], OPCOES), null);
+  assert.equal(motivoDoPerdido(sug('Não interagiu'), [fala('SOFIA', 'oi', 40)], OPCOES), null);
+  // genérico de sumiço passa sem frase
+  assert.equal(motivoDoPerdido(sug('Não deu continuidade ao atendimento'), porUltimo, OPCOES)?.motivo, 'Não deu continuidade ao atendimento');
+  assert.equal(motivoDoPerdido(null, porUltimo, OPCOES), null);
 });
 
 // ── o prompt e a chamada ──

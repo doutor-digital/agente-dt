@@ -13,7 +13,7 @@ import { ETIQUETA_CURRICULO } from './nao-paciente.js';
 
 export const PERDIDO = 143;
 
-/** Etiquetas de quem já foi tratado (currículo, não contatar) ou já foi mexido por esta automação: o cartão fica como está. */
+/** Etiquetas de quem já foi tratado (currículo, não contatar): o cartão fica como está. */
 const ETIQUETAS_QUE_SEGURAM = [TAG_SEM_REGUA, ...ETIQUETAS_DE_NAO_CONTATAR, ETIQUETA_CURRICULO].map(normalizarNome);
 
 function temEtiqueta(lead: Pick<KommoLead, '_embedded'>, alvos: readonly string[]): boolean {

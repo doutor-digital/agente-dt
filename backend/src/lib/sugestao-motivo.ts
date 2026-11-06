@@ -70,6 +70,14 @@ export function montarPrompt(falas: FalaDaConversa[], opcoes: string[]): string 
   );
 }
 
+/** A frase do paciente que justifica um motivo específico: existe no que ELE escreveu e não é pergunta. */
+export function fraseProva(frase: string, falas: FalaDaConversa[]): boolean {
+  const f = frase.trim();
+  if (f.length === 0 || f.endsWith('?')) return false;
+  const doPaciente = normalizar(falas.filter((x) => x.autor === 'PACIENTE').map((x) => x.texto).join(' '));
+  return doPaciente.includes(normalizar(f).slice(0, 40));
+}
+
 export interface Sugestao {
   motivo: string;
   /** frase do paciente que justifica (vazia quando ele não disse o motivo) */
@@ -95,8 +103,7 @@ export function interpretarResposta(texto: string, falas: FalaDaConversa[], opco
   const frase = String(j.frase_do_paciente ?? '').trim();
 
   if (!GENERICOS.includes(normalizar(motivo))) {
-    const doPaciente = normalizar(falas.filter((f) => f.autor === 'PACIENTE').map((f) => f.texto).join(' '));
-    const prova = frase.length > 0 && !frase.endsWith('?') && doPaciente.includes(normalizar(frase).slice(0, 40));
+    const prova = fraseProva(frase, falas);
     const clinicaFalouPorUltimo = falas.length > 0 && falas[falas.length - 1].autor !== 'PACIENTE';
     if (!prova && clinicaFalouPorUltimo) {
       const conversou = falas.filter((f) => f.autor === 'PACIENTE').length >= 2;

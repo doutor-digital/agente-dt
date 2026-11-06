@@ -22,12 +22,12 @@ import { createKommoClient, type KommoClient, type KommoLead } from '../services
 import { estadoDaAutomacao } from './automacoes-estado.js';
 import { registrarSimulacao } from './so-no-papel.js';
 import { carregarFunis, type Funis } from './franquia-sync-worker.js';
+import { normalizarNome } from './kommo-schema.js';
 import { ETAPA } from './franquia-move.js';
-import { CAMPO } from './parados.js';
+import { CAMPO, TAG_SEM_REGUA } from './parados.js';
 import type { DecisaoParado } from './parados.js';
 import { fecharOuSegurar, franquiaDoPaciente } from './parados-worker.js';
 import { contaDividida, pularCartao, type GrupoDoCrm } from './crm-compartilhado.js';
-import { etiquetaDeNaoContatar } from './sofia-fecha-quente-morno.js';
 import { CAMPO_MOTIVO_NAO_AGENDAMENTO, interpretarResposta, montarPrompt, type FalaDaConversa } from './sugestao-motivo.js';
 import { lerFalasDoCartao, transcreverAudios } from './conversa-do-cartao.js';
 import {
@@ -37,7 +37,8 @@ import {
   TAG_PERDA_IA,
   classificarPerda,
   linhaDoTempo,
-  motivoTrabalhavel,
+  motivoDoPerdido,
+  motivoDefinitivo,
   perguntarAoModelo,
   porQueNaoAvaliar,
   type DecisaoDaPerda,
@@ -129,9 +130,13 @@ const resumoNovo = (unit: Unit, automacao: string, seco: boolean): Resumo => ({
 
 // ─── perda-ia: detecta e move ─────────────────────────────────────────────────────────────────────
 
-/** A decisão do modelo vestida de fecho do `parados`: mesma etiqueta-antes-do-status, mesmo motivo, mesma trava, nota própria. */
-export function decisaoDeFecho(d: Extract<DecisaoDaPerda, { tipo: 'mover' }>, etapa: string, etiquetaNaoContatar: string | null): DecisaoParado {
-  const semRegua = !motivoTrabalhavel(d.motivo);
+/**
+ * A decisão do modelo vestida de fecho do `parados`: mesma etiqueta-antes-do-status, mesmo motivo, mesma trava, nota própria.
+ * Motivo definitivo leva `NO_FOLLOW_UP` COMO CONDIÇÃO (`etiquetaObrigatoria`): se a etiqueta não entrar o cartão não é movido,
+ * e por isso a nota pode afirmar que ela entrou.
+ */
+export function decisaoDeFecho(d: Extract<DecisaoDaPerda, { tipo: 'mover' }>, etapa: string): DecisaoParado {
+  const semRegua = motivoDefinitivo(d.motivo);
   const padrao = ROTULO_DO_PADRAO[d.padrao];
   return {
     para: 'PERDIDO',
@@ -140,13 +145,31 @@ export function decisaoDeFecho(d: Extract<DecisaoDaPerda, { tipo: 'mover' }>, et
     motivoPerda: d.motivo,
     campo: { nome: CAMPO.MOTIVO_NAO_AGENDAMENTO, opcao: d.motivo },
     semRegua,
-    etiquetas: [TAG_PERDA_IA, ...(semRegua && etiquetaNaoContatar ? [etiquetaNaoContatar] : [])],
+    etiquetas: [TAG_PERDA_IA, ...(semRegua ? [TAG_SEM_REGUA] : [])],
+    etiquetaObrigatoria: semRegua,
     nota:
       `Movido de ${etapa} para PERDIDO pela IA, que leu a conversa. Padrão: ${padrao}. Motivo: ${d.motivo}. ` +
       `Justificativa: ${d.justificativa} Frase do paciente: «${d.frase}». ` +
-      `${semRegua ? 'Etiqueta de não contatar aplicada: a régua de PERDIDO não manda mensagem. ' : 'Pode receber a régua de PERDIDO da conta. '}` +
+      `${semRegua ? `Etiqueta ${TAG_SEM_REGUA} aplicada antes da mudança: a régua de PERDIDO não manda mensagem. ` : 'Motivo recuperável: pode receber a régua de PERDIDO da conta. '}` +
       'Se o paciente voltar a escrever, a Sofia retoma.',
   };
+}
+
+/** A conta tem a etiqueta que os gatilhos de PERDIDO leem? Sem ela (Rio Verde) não há como segurar a régua. Erro de leitura = não tem. */
+const temNoFollowUp = new Map<string, { em: number; tem: boolean }>();
+async function contaTemNoFollowUp(unit: Unit, kommo: KommoClient): Promise<boolean> {
+  const hit = temNoFollowUp.get(unit.id);
+  // quem NÃO tem a etiqueta é relido logo (alguém pode criá-la); quem tem, vale por 1 h
+  if (hit && Date.now() - hit.em < (hit.tem ? 60 * 60_000 : 10 * 60_000)) return hit.tem;
+  let tem = false;
+  try {
+    tem = (await kommo.listLeadTags(25)).some((t) => normalizarNome(t.name ?? '') === normalizarNome(TAG_SEM_REGUA));
+  } catch (err) {
+    logger.warn({ err: String(err), unit: unit.slug }, 'perda-ia: não li as etiquetas da conta — tratei como sem NO_FOLLOW_UP');
+    return false; // não guarda: tenta de novo na próxima
+  }
+  temNoFollowUp.set(unit.id, { em: Date.now(), tem });
+  return tem;
 }
 
 const ETAPAS_DA_PERDA = [ETAPA.QUALIFICACAO, ETAPA.ESPERA] as const;
@@ -158,7 +181,7 @@ const ETAPAS_DA_PERDA = [ETAPA.QUALIFICACAO, ETAPA.ESPERA] as const;
 async function cartoesDaEtapa(kommo: KommoClient, pipelineId: number, statusId: number): Promise<KommoLead[]> {
   const out: KommoLead[] = [];
   for (let page = 1; page <= MAX_PAGINAS_ETAPA; page++) {
-    const pag = await kommo.listLeadsPorEtapa(pipelineId, statusId, 250, page, true, 'desc');
+    const pag = await kommo.listLeadsPorEtapa(pipelineId, statusId, 250, page, false, 'desc');
     out.push(...pag);
     if (pag.length < 250) break;
   }
@@ -253,6 +276,12 @@ export async function varrerPerda(ctx: CtxPerda, resumo: Resumo): Promise<void> 
         continue;
       }
 
+      // motivo definitivo sem a etiqueta que segura a régua = sem como evitar a mensagem: não move (o log diz o motivo)
+      if (motivoDefinitivo(decisao.motivo) && !(await contaTemNoFollowUp(unit, kommo))) {
+        logger.warn({ unit: unit.slug, leadId: lead.id, motivo: decisao.motivo, seco }, `perda-ia: a conta não tem a etiqueta ${TAG_SEM_REGUA} — não movi (a régua de PERDIDO mandaria mensagem a quem recusou)`);
+        if (seco) registrarSimulacao(unit, ID_PERDA_IA, { leadId: lead.id, acao: 'pularia', alvo: ETAPA.PERDIDO, deEtapa: etapa, motivo: `a conta não tem a etiqueta ${TAG_SEM_REGUA}: motivo «${decisao.motivo}» exige` });
+        continue;
+      }
       // a franquia manda: consulta futura ou tratamento em andamento lá seguram (erro lança: franquia fora do ar ≠ "livre")
       const f = await franquiaDoPaciente(unit, lead.id, lead.name ?? null, agora);
       if (f.consultaFutura || f.emAndamento) {
@@ -272,9 +301,9 @@ export async function varrerPerda(ctx: CtxPerda, resumo: Resumo): Promise<void> 
           continue;
         }
       }
-      const etiqueta = !seco && !motivoTrabalhavel(decisao.motivo) ? await etiquetaDeNaoContatar(unit, kommo) : null;
-      const d = decisaoDeFecho(decisao, etapa, etiqueta);
+      const d = decisaoDeFecho(decisao, etapa);
       const r = await fecharOuSegurar(unit, kommo, funis, lead.id, etapa, d, seco, ID_PERDA_IA, lead);
+      if (!seco && r === 'nada') vistoAte.delete(`${unit.id}:${ID_PERDA_IA}:${lead.id}`); // a etiqueta não entrou (ou o cartão mudou): tenta na próxima varredura
       if (seco ? r !== 'travado' : r === 'fechou') {
         resumo.moveria++;
         if (!seco) await pausa();
@@ -326,17 +355,19 @@ export async function varrerMotivos(ctx: { unit: Unit; kommo: KommoClient; funis
       resumo.custoUsd += r.custoUsd;
       marcarVisto(unit, ID_MOTIVO_PERDIDO_IA, lead.id);
       const sug = interpretarResposta(r.texto, falas, opcoes);
-      if (!sug) {
-        logger.info({ unit: unit.slug, leadId: lead.id }, `${ID_MOTIVO_PERDIDO_IA}: sem opção adequada na lista da conta — não gravei nada`);
-        if (seco) registrarSimulacao(unit, ID_MOTIVO_PERDIDO_IA, { leadId: lead.id, acao: 'pularia', alvo: CAMPO_MOTIVO_NAO_AGENDAMENTO, motivo: 'a IA não achou opção adequada na lista da conta' });
+      // motivo específico só com frase do paciente que prove; senão o genérico; conversa sem fala dele, nada
+      const escolha = motivoDoPerdido(sug, falas, opcoes);
+      if (!escolha) {
+        logger.info({ unit: unit.slug, leadId: lead.id }, `${ID_MOTIVO_PERDIDO_IA}: sem opção adequada na lista da conta (ou sem fala do paciente que prove) — não gravei nada`);
+        if (seco) registrarSimulacao(unit, ID_MOTIVO_PERDIDO_IA, { leadId: lead.id, acao: 'pularia', alvo: CAMPO_MOTIVO_NAO_AGENDAMENTO, motivo: 'sem opção adequada na lista da conta, ou sem fala do paciente que prove' });
         continue;
       }
-      const opcao = campo.enums.find((e) => e.value === sug.motivo);
+      const opcao = campo.enums.find((e) => e.value === escolha.motivo);
       if (!opcao) continue;
       if (seco) {
         resumo.gravados++;
-        logger.info({ unit: unit.slug, leadId: lead.id, motivo: opcao.value, travado: sug.travado }, `${ID_MOTIVO_PERDIDO_IA} [seco]: gravaria`);
-        registrarSimulacao(unit, ID_MOTIVO_PERDIDO_IA, { leadId: lead.id, acao: 'gravaria', alvo: CAMPO_MOTIVO_NAO_AGENDAMENTO, valor: opcao.value, motivo: sug.frase ? `paciente: «${sug.frase.slice(0, 120)}»` : 'sem frase do paciente (sumiço)' });
+        logger.info({ unit: unit.slug, leadId: lead.id, motivo: opcao.value, rebaixado: escolha.rebaixado }, `${ID_MOTIVO_PERDIDO_IA} [seco]: gravaria`);
+        registrarSimulacao(unit, ID_MOTIVO_PERDIDO_IA, { leadId: lead.id, acao: 'gravaria', alvo: CAMPO_MOTIVO_NAO_AGENDAMENTO, valor: opcao.value, motivo: escolha.frase ? `paciente: «${escolha.frase.slice(0, 120)}»` : 'sem frase do paciente (sumiço)' });
         continue;
       }
       // nunca sobrescreve: relê o cartão (a SDR pode ter escolhido enquanto a IA lia)
@@ -344,7 +375,7 @@ export async function varrerMotivos(ctx: { unit: Unit; kommo: KommoClient; funis
       if (porQueNaoPreencherMotivo({ ...fresco, closed_at: lead.closed_at ?? fresco.closed_at }, { agoraEpoch: Math.floor(Date.now() / 1000), comercialId: funis.comercialId })) continue;
       await kommo.setLeadCustomFieldValue(lead.id, campo.id, 'select', opcao.value, campo.enums);
       await kommo
-        .addLeadNote(lead.id, `A IA leu a conversa e preencheu o ⊘ Motivo do não agendamento: «${opcao.value}»${sug.frase ? ` (paciente: «${sug.frase.slice(0, 120)}»)` : ''}. Troque se estiver errado.`)
+        .addLeadNote(lead.id, `A IA leu a conversa e preencheu o ⊘ Motivo do não agendamento: «${opcao.value}»${escolha.frase ? ` (paciente: «${escolha.frase.slice(0, 120)}»)` : ''}. Troque se estiver errado.`)
         .catch(() => null);
       resumo.gravados++;
       logger.info({ unit: unit.slug, leadId: lead.id, motivo: opcao.value }, `${ID_MOTIVO_PERDIDO_IA}: motivo gravado`);

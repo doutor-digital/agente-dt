@@ -73,3 +73,9 @@ test('as talks mais recentes entram primeiro no teto (a ordem da API não é gar
   const { falas } = await lerFalasDoCartao(k, 10, { maxTalks: 2 });
   assert.deepEqual(falas.map((f) => f.texto), ['da talk 2', 'da talk 3'], 'ficam as talks 2 e 3 (as mais recentes), em ordem de hora');
 });
+
+test('texto longo com áudio não perde o «[áudio]» no corte (é ele que a transcrição troca)', async () => {
+  const { falas } = await lerFalasDoCartao(kommo({ 1: [msg('1', 1, 'a'.repeat(900), { type: 'external' }, { type: 'voice', link: 'http://a/1.ogg' })] }), 10);
+  assert.ok(falas[0].texto.length <= 600);
+  assert.ok(falas[0].texto.endsWith('[áudio]'));
+});

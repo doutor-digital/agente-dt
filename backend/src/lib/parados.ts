@@ -213,6 +213,8 @@ export interface DecisaoParado {
   nota?: string;
   /** as etiquetas que este fecho põe ANTES do status, no lugar de `⏱ movido por prazo` (+ NO_FOLLOW_UP). Vale só pra PERDIDO. */
   etiquetas?: string[];
+  /** a etiqueta é CONDIÇÃO do fecho (a de não contatar da perda-ia): se não entrar, o cartão NÃO é movido. O `parados` de sempre não usa. */
+  etiquetaObrigatoria?: boolean;
 }
 
 export function prazoDaEtapa(etapa: string, prazos: PrazosDeEtapa = PRAZOS): number | null {

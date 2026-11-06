@@ -20,18 +20,19 @@
  *
  * TRAVAS EM CÓDIGO (o modelo erra; o código não deixa o erro virar movimento):
  *  - só move com `perdido = sim`, confiança alta e um padrão de 1, 2 ou 4;
- *  - o motivo tem de ser uma opção que a CONTA tem, e não um dos genéricos de sumiço (esses são do vácuo);
- *  - a frase do PACIENTE que prova tem de existir nas 3 últimas falas dele e não ser pergunta ("quanto custa?" não é recusa);
- *  - se a última fala da conversa é do paciente (sem resposta nossa), ela é a prova e não pode ser pergunta: pergunta aberta
- *    é dúvida aberta, nunca perda;
+ *  - o motivo tem de ser uma opção que a CONTA tem E estar na lista fechada de motivos definitivos (`motivoPodeMover`);
+ *  - a frase do PACIENTE que prova tem de existir nas 3 últimas falas dele, a FALA inteira não pode ter pergunta, e depois dela ele só pode
+ *    ter dito cortesia: «achei muito caro» seguido de «tem parcelamento em 10x?» é negociação, nunca perda;
  *  - qualquer falha da IA (sem chave, HTTP, JSON fora do formato) = não faz nada.
  */
 import { z } from 'zod';
 import type { Unit } from '@prisma/client';
-import { recordLlmCall, calculateCost, configurarRaciocinioAnthropic } from '../services/openai.service.js';
+import { calculateCost } from '../services/openai.service.js';
+import { chamarAnthropic, type Chamar } from './cadastro-triagem-ia.js';
 import { logger } from './logger.js';
 import { normalizar } from './franquia-sync.js';
-import type { FalaDaConversa } from './sugestao-motivo.js';
+import { fraseProva, type FalaDaConversa, type Sugestao } from './sugestao-motivo.js';
+import { ehRespostaDeCortesia } from './parados.js';
 
 export const ID_PERDA_IA = 'perda-ia';
 export const ID_MOTIVO_PERDIDO_IA = 'motivo-perdido-ia';
@@ -110,8 +111,9 @@ export const RespostaDaPerda = z.object({
   perdido: z.preprocess(normalizarEnum, z.enum(['sim', 'nao', 'duvida'])),
   padrao: z.preprocess(normalizarEnum, z.enum(PADROES)),
   confianca: z.preprocess(normalizarEnum, z.enum(['alta', 'media', 'baixa'])),
-  motivo: z.string().trim().default(''),
-  frase_do_paciente: z.string().trim().default(''),
+  // JSON válido com null não é falha da IA: o modelo escreve "motivo": null quando nenhuma opção serve
+  motivo: z.string().trim().nullish().transform((v) => v ?? ''),
+  frase_do_paciente: z.string().trim().nullish().transform((v) => v ?? ''),
   justificativa: z.string().trim().min(1),
 });
 export type RespostaDaPerda = z.infer<typeof RespostaDaPerda>;
@@ -132,13 +134,25 @@ export function lerRespostaDaPerda(texto: string | null | undefined): RespostaDa
 
 // ─── a decisão (puro) ─────────────────────────────────────────────────────────────────────────────
 
-/** O que o João chama de "morto": a etiqueta de não contatar entra e a régua de PERDIDO não manda nada (decisão de 02/10/2026). */
-const MOTIVOS_TRABALHAVEIS = new Set(['sem condicoes financeira', 'sem condicoes financeiras', 'informacao para terceiro']);
+/**
+ * A LISTA FECHADA dos motivos que a IA pode usar para MOVER (nada fora dela move, mesmo que a conta tenha a opção):
+ *  - definitivos («mortos», decisão do João de 02/10): a etiqueta de não contatar entra ANTES do status e a régua de PERDIDO não manda nada;
+ *  - recuperável por preço: sem a etiqueta, a régua pode ir.
+ * Ficam de FORA de propósito: «Vai se organizar», «Está viajando» (são espera, não perda), «Assinou contrato» (é paciente),
+ * «Informação para terceiro» (a pessoa pode marcar para o parente) e os de sumiço (vácuo é do `parados`).
+ */
+const MOTIVOS_DEFINITIVOS = new Set(['sem interesse', 'plano de saude', 'outra cidade', 'clicou por engano', 'outra patologia']);
+const MOTIVOS_RECUPERAVEIS = new Set(['sem condicoes financeira', 'sem condicoes financeiras']);
 const MOTIVOS_DE_SUMICO = new Set(['nao interagiu', 'nao deu continuidade ao atendimento']);
 
-/** Recuperável com disparo (preço, terceiro): não leva a etiqueta. Todo o resto — e o que não conhecemos — leva: na dúvida, mudo. */
-export function motivoTrabalhavel(motivo: string): boolean {
-  return MOTIVOS_TRABALHAVEIS.has(normalizar(motivo));
+export function motivoPodeMover(motivo: string): boolean {
+  const n = normalizar(motivo);
+  return MOTIVOS_DEFINITIVOS.has(n) || MOTIVOS_RECUPERAVEIS.has(n);
+}
+
+/** Motivo definitivo: exige a etiqueta de não contatar (sem ela a régua de PERDIDO mandaria mensagem a quem recusou). */
+export function motivoDefinitivo(motivo: string): boolean {
+  return MOTIVOS_DEFINITIVOS.has(normalizar(motivo));
 }
 
 export const ROTULO_DO_PADRAO: Record<Padrao, string> = {
@@ -168,20 +182,22 @@ export function decidirPerda(r: RespostaDaPerda | null, falas: readonly FalaDaCo
   const motivo = casar(r.motivo, opcoes);
   if (!motivo) return { tipo: 'nada', porque: `a conta não tem a opção «${r.motivo || 'vazio'}» no ⊘ Motivo do não agendamento` };
   if (MOTIVOS_DE_SUMICO.has(normalizar(motivo))) return { tipo: 'vacuo', justificativa: r.justificativa };
+  if (!motivoPodeMover(motivo)) return { tipo: 'nada', porque: `«${motivo}» não está na lista fechada de motivos que movem (espera, contrato e terceiro nunca perdem)` };
 
   const doPaciente = falas.filter((f) => f.autor === 'PACIENTE');
   const frase = normalizar(r.frase_do_paciente);
   if (frase.length < 6 || r.frase_do_paciente.trim().endsWith('?')) return { tipo: 'nada', porque: 'sem frase do paciente que prove (ou a frase é uma pergunta)' };
+  // a ocorrência MAIS RECENTE nas 3 últimas falas dele: quem repete «não tenho interesse» vale pela última vez que disse
   const ultimas = doPaciente.slice(-3);
-  // a ocorrência MAIS RECENTE: quem repete «não tenho interesse» não vira «falou por último»
-  const achou = [...ultimas].reverse().find((f) => normalizar(f.texto).includes(frase.slice(0, 40)));
-  if (!achou) return { tipo: 'nada', porque: 'a frase citada não está nas 3 últimas falas do paciente' };
-
-  const ultima = falas[falas.length - 1];
-  if (ultima?.autor === 'PACIENTE') {
-    // ninguém respondeu: só é perda se a própria última fala dele é a recusa, e uma pergunta aberta nunca é
-    if (achou !== ultima) return { tipo: 'nada', porque: 'dúvida aberta: o paciente falou por último, depois da frase citada' };
-    if (ultima.texto.includes('?')) return { tipo: 'nada', porque: 'dúvida aberta: a última fala do paciente tem pergunta' };
+  const idx = ultimas.map((f) => normalizar(f.texto).includes(frase.slice(0, 40))).lastIndexOf(true);
+  if (idx < 0) return { tipo: 'nada', porque: 'a frase citada não está nas 3 últimas falas do paciente' };
+  const achou = ultimas[idx];
+  // a FALA inteira que traz a recusa não pode ter pergunta: «se eu não quiser fazer cirurgia vocês atendem?»
+  if (achou.texto.includes('?')) return { tipo: 'nada', porque: 'dúvida aberta: a fala que traz a frase tem pergunta' };
+  // e nada que ele disse DEPOIS pode reabrir a conversa: só cortesia («obrigada», «ok»). «tem parcelamento em 10x?» depois de «achei muito caro» é negociação
+  const depois = ultimas.slice(idx + 1);
+  if (depois.some((f) => f.texto.includes('?') || !ehRespostaDeCortesia(f.texto))) {
+    return { tipo: 'nada', porque: 'dúvida aberta: o paciente falou de novo depois da frase citada, e não foi só cortesia' };
   }
   return { tipo: 'mover', padrao: r.padrao, motivo, justificativa: r.justificativa, frase: r.frase_do_paciente.slice(0, 120) };
 }
@@ -228,7 +244,7 @@ export function montarPromptDaPerda(falas: readonly FalaDaConversa[], opcoes: re
 
 // ─── a chamada ao modelo ──────────────────────────────────────────────────────────────────────────
 
-export type Chamar = (url: string, init: RequestInit) => Promise<Pick<Response, 'ok' | 'status' | 'json'>>;
+export type { Chamar };
 
 export interface RespostaDoModelo {
   texto: string;
@@ -237,62 +253,21 @@ export interface RespostaDoModelo {
 }
 
 /**
- * Pergunta ao modelo. NUNCA lança: qualquer falha (sem chave, HTTP, erro da Anthropic, tempo) é `null` e quem chama não
- * faz nada. A chamada entra na mesma conta da IA da unidade (tela de custo). `chamar` só existe para o teste.
+ * Pergunta ao modelo (a chamada é a de `chamarAnthropic`, a mesma da triagem do cadastro). NUNCA lança: qualquer falha
+ * (sem chave, HTTP, erro da Anthropic, tempo) é `null` e quem chama não faz nada.
  */
 export async function perguntarAoModelo(
   unit: Pick<Unit, 'id' | 'slug' | 'anthropicApiKey'>,
   p: { system?: string; user: string; automacao: string },
-  chamar: Chamar = (url, init) => fetch(url, init),
+  chamar?: Chamar,
   chaveDoAmbiente: string | undefined = process.env.ANTHROPIC_API_KEY,
 ): Promise<RespostaDoModelo | null> {
-  const chave = unit.anthropicApiKey || chaveDoAmbiente;
-  if (!chave) {
-    logger.warn({ unit: unit.slug, automacao: p.automacao }, `${p.automacao}: unidade sem chave da Anthropic — não li a conversa`);
-    return null;
-  }
-  const inicio = performance.now();
-  try {
-    const resp = await chamar('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'x-api-key': chave, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify({
-        model: MODELO_PERDA_IA,
-        max_tokens: MAX_TOKENS_PERDA_IA,
-        thinking: configurarRaciocinioAnthropic(MODELO_PERDA_IA, null).thinking,
-        ...(p.system ? { system: p.system } : {}),
-        messages: [{ role: 'user', content: p.user }],
-      }),
-      signal: AbortSignal.timeout(TIMEOUT_PERDA_IA_MS),
-    });
-    const data = (await resp.json().catch(() => ({}))) as {
-      content?: Array<{ type?: string; text?: string }>;
-      usage?: { input_tokens?: number; output_tokens?: number };
-      error?: unknown;
-    };
-    const entrada = data.usage?.input_tokens ?? 0;
-    const saida = data.usage?.output_tokens ?? 0;
-    void recordLlmCall({
-      unitId: unit.id,
-      traceId: null,
-      provider: 'anthropic',
-      model: MODELO_PERDA_IA,
-      promptTokens: entrada,
-      completionTokens: saida,
-      latencyMs: Math.round(performance.now() - inicio),
-      status: resp.ok && !data.error ? 'success' : 'error',
-      errorMessage: data.error ? JSON.stringify(data.error).slice(0, 300) : undefined,
-    });
-    if (!resp.ok || data.error) {
-      logger.warn({ unit: unit.slug, status: resp.status, erro: JSON.stringify(data.error ?? '').slice(0, 200) }, `${p.automacao}: a Anthropic recusou a leitura — não fiz nada`);
-      return null;
-    }
-    const texto = (data.content ?? []).filter((b) => b.type === 'text').map((b) => b.text ?? '').join('\n');
-    return { texto, custoUsd: calculateCost(MODELO_PERDA_IA, entrada, saida) };
-  } catch (err) {
-    logger.warn({ err: String(err), unit: unit.slug }, `${p.automacao}: a IA não conseguiu ler a conversa — não fiz nada`);
-    return null;
-  }
+  const r = await chamarAnthropic(unit, { modelo: MODELO_PERDA_IA, maxTokens: MAX_TOKENS_PERDA_IA, timeoutMs: TIMEOUT_PERDA_IA_MS, system: p.system, user: p.user }, chamar, chaveDoAmbiente);
+  if (r.ok) return { texto: r.texto, custoUsd: calculateCost(MODELO_PERDA_IA, r.entrada, r.saida) };
+  if (r.motivo === 'sem_chave') logger.warn({ unit: unit.slug }, `${p.automacao}: unidade sem chave da Anthropic — não li a conversa`);
+  else if (r.motivo === 'http') logger.warn({ unit: unit.slug, status: r.status, erro: r.erro }, `${p.automacao}: a Anthropic recusou a leitura — não fiz nada`);
+  else logger.warn({ err: r.erro, unit: unit.slug }, `${p.automacao}: a IA não conseguiu ler a conversa — não fiz nada`);
+  return null;
 }
 
 /** A decisão completa de um cartão a partir das falas já lidas: prompt → modelo → zod → matriz. Não escreve nada. */
@@ -311,4 +286,23 @@ export async function classificarPerda(
   );
   const resposta = r ? lerRespostaDaPerda(r.texto) : null;
   return { decisao: decidirPerda(resposta, falas, opcoes), resposta, custoUsd: r?.custoUsd ?? 0 };
+}
+
+// ─── motivo-perdido-ia: o motivo de quem já está em PERDIDO ──────────────────────────────────────
+
+/**
+ * Motivo ESPECÍFICO («Outra cidade», «Plano de Saúde»...) só com frase do paciente que prove. Sem prova, só o genérico de sumiço
+ * (conversou → «Não deu continuidade», quase não conversou → «Não interagiu») e, sem NENHUMA fala dele (conversa vazia, canal que
+ * o Kommo não deixa ler), nada: não há o que classificar. A trava do botão do widget só cobre «a clínica falou por último»; aqui,
+ * onde ninguém confirma depois, o paciente falar por último ou a conversa estar vazia também não pode virar motivo chutado.
+ */
+export function motivoDoPerdido(sug: Sugestao | null, falas: FalaDaConversa[], opcoes: readonly string[]): { motivo: string; frase: string; rebaixado: boolean } | null {
+  if (!sug) return null;
+  const doPaciente = falas.filter((f) => f.autor === 'PACIENTE').length;
+  if (doPaciente === 0) return null;
+  // prova = a frase existe numa fala do paciente SEM pergunta (o mesmo critério da perda-ia: «não quero… vocês atendem?» é dúvida)
+  const provaSemPergunta = fraseProva(sug.frase, falas) && falas.some((f) => f.autor === 'PACIENTE' && !f.texto.includes('?') && normalizar(f.texto).includes(normalizar(sug.frase.trim()).slice(0, 40)));
+  if (MOTIVOS_DE_SUMICO.has(normalizar(sug.motivo)) || provaSemPergunta) return { motivo: sug.motivo, frase: sug.frase, rebaixado: false };
+  const generico = casar(doPaciente >= 2 ? 'Não deu continuidade ao atendimento' : 'Não interagiu', opcoes);
+  return generico ? { motivo: generico, frase: '', rebaixado: true } : null;
 }

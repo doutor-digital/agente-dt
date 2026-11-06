@@ -104,6 +104,73 @@ export interface UnidadeDaIa {
   anthropicApiKey?: string | null;
 }
 
+export interface PedidoAnthropic {
+  modelo: string;
+  maxTokens: number;
+  timeoutMs: number;
+  system?: string;
+  user: string;
+}
+
+export type RespostaAnthropic =
+  | { ok: true; texto: string; entrada: number; saida: number }
+  | { ok: false; motivo: 'sem_chave' }
+  | { ok: false; motivo: 'http'; status: number; erro: string }
+  | { ok: false; motivo: 'excecao'; erro: string };
+
+/**
+ * A chamada à Anthropic que as automações de IA barata compartilham (triagem do cadastro, perda-ia): chave da unidade ou do
+ * ambiente, "sem pensar", tempo limite e custo registrado na conta da unidade. NUNCA lança — o resultado diz o que houve e
+ * cada automação decide o que fazer (aqui, sempre: nada). `chamar` só existe para o teste não bater na API de verdade.
+ */
+export async function chamarAnthropic(
+  unit: UnidadeDaIa,
+  p: PedidoAnthropic,
+  chamar: Chamar = (url, init) => fetch(url, init),
+  chaveDoAmbiente: string | undefined = process.env.ANTHROPIC_API_KEY,
+): Promise<RespostaAnthropic> {
+  const chave = unit.anthropicApiKey || chaveDoAmbiente;
+  if (!chave) return { ok: false, motivo: 'sem_chave' };
+  const inicio = performance.now();
+  try {
+    const resp = await chamar('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': chave, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: p.modelo,
+        max_tokens: p.maxTokens,
+        // Haiku 5.5: "sem pensar" é `disabled` (a configuração que o projeto já usa para esta família)
+        thinking: configurarRaciocinioAnthropic(p.modelo, null).thinking,
+        ...(p.system ? { system: p.system } : {}),
+        messages: [{ role: 'user', content: p.user }],
+      }),
+      signal: AbortSignal.timeout(p.timeoutMs),
+    });
+    const data = (await resp.json().catch(() => ({}))) as {
+      content?: Array<{ type?: string; text?: string }>;
+      usage?: { input_tokens?: number; output_tokens?: number };
+      error?: unknown;
+    };
+    const entrada = data.usage?.input_tokens ?? 0;
+    const saida = data.usage?.output_tokens ?? 0;
+    void recordLlmCall({
+      unitId: unit.id,
+      traceId: null,
+      provider: 'anthropic',
+      model: p.modelo,
+      promptTokens: entrada,
+      completionTokens: saida,
+      latencyMs: Math.round(performance.now() - inicio),
+      status: resp.ok && !data.error ? 'success' : 'error',
+      errorMessage: data.error ? JSON.stringify(data.error).slice(0, 300) : undefined,
+    });
+    if (!resp.ok || data.error) return { ok: false, motivo: 'http', status: resp.status, erro: JSON.stringify(data.error ?? '').slice(0, 200) };
+    return { ok: true, texto: (data.content ?? []).filter((b) => b.type === 'text').map((b) => b.text ?? '').join('\n'), entrada, saida };
+  } catch (err) {
+    return { ok: false, motivo: 'excecao', erro: String(err) };
+  }
+}
+
 /**
  * Pergunta ao modelo. NUNCA lança: a falha vira `duvida`. Custo e latência entram na mesma conta da IA da unidade
  * (tela de custo), como toda chamada de modelo. `chamar` só existe para o teste não bater na API de verdade.
@@ -114,46 +181,18 @@ export async function avaliarPelaIa(
   chamar: Chamar = (url, init) => fetch(url, init),
   chaveDoAmbiente: string | undefined = process.env.ANTHROPIC_API_KEY,
 ): Promise<DecisaoDaIa> {
-  const chave = unit.anthropicApiKey || chaveDoAmbiente;
-  if (!chave) return { decisao: 'duvida', motivo: 'sem chave da Anthropic para a IA ler a conversa', falhou: true };
-  const inicio = performance.now();
-  try {
-    const resp = await chamar('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'x-api-key': chave, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify({
-        model: MODELO_TRIAGEM_IA,
-        max_tokens: MAX_TOKENS_TRIAGEM_IA,
-        // Haiku 5.5: "sem pensar" é `disabled` (a configuração que o projeto já usa para esta família)
-        thinking: configurarRaciocinioAnthropic(MODELO_TRIAGEM_IA, null).thinking,
-        system: PROMPT_DA_TRIAGEM,
-        messages: [{ role: 'user', content: montarFalasParaIa(falas) }],
-      }),
-      signal: AbortSignal.timeout(TIMEOUT_TRIAGEM_IA_MS),
-    });
-    const data = (await resp.json().catch(() => ({}))) as {
-      content?: Array<{ type?: string; text?: string }>;
-      usage?: { input_tokens?: number; output_tokens?: number };
-      error?: unknown;
-    };
-    void recordLlmCall({
-      unitId: unit.id,
-      traceId: null,
-      provider: 'anthropic',
-      model: MODELO_TRIAGEM_IA,
-      promptTokens: data.usage?.input_tokens ?? 0,
-      completionTokens: data.usage?.output_tokens ?? 0,
-      latencyMs: Math.round(performance.now() - inicio),
-      status: resp.ok && !data.error ? 'success' : 'error',
-      errorMessage: data.error ? JSON.stringify(data.error).slice(0, 300) : undefined,
-    });
-    if (!resp.ok || data.error) {
-      logger.warn({ unit: unit.slug, status: resp.status, erro: JSON.stringify(data.error ?? '').slice(0, 200) }, 'cadastro-todo-lead: a Anthropic recusou a leitura — dúvida');
-      return { decisao: 'duvida', motivo: `a IA não respondeu (HTTP ${resp.status})`, falhou: true };
-    }
-    return interpretarDecisaoDaIa((data.content ?? []).filter((b) => b.type === 'text').map((b) => b.text ?? '').join('\n'));
-  } catch (err) {
-    logger.warn({ err: String(err), unit: unit.slug }, 'cadastro-todo-lead: a IA não conseguiu ler a conversa');
-    return { decisao: 'duvida', motivo: 'a IA não respondeu (erro ou tempo esgotado)', falhou: true };
+  const r = await chamarAnthropic(
+    unit,
+    { modelo: MODELO_TRIAGEM_IA, maxTokens: MAX_TOKENS_TRIAGEM_IA, timeoutMs: TIMEOUT_TRIAGEM_IA_MS, system: PROMPT_DA_TRIAGEM, user: montarFalasParaIa(falas) },
+    chamar,
+    chaveDoAmbiente,
+  );
+  if (r.ok) return interpretarDecisaoDaIa(r.texto);
+  if (r.motivo === 'sem_chave') return { decisao: 'duvida', motivo: 'sem chave da Anthropic para a IA ler a conversa', falhou: true };
+  if (r.motivo === 'http') {
+    logger.warn({ unit: unit.slug, status: r.status, erro: r.erro }, 'cadastro-todo-lead: a Anthropic recusou a leitura — dúvida');
+    return { decisao: 'duvida', motivo: `a IA não respondeu (HTTP ${r.status})`, falhou: true };
   }
+  logger.warn({ err: r.erro, unit: unit.slug }, 'cadastro-todo-lead: a IA não conseguiu ler a conversa');
+  return { decisao: 'duvida', motivo: 'a IA não respondeu (erro ou tempo esgotado)', falhou: true };
 }
