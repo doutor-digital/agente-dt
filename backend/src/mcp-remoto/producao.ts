@@ -49,6 +49,8 @@ import { criarContextoConvenia, registrarFerramentasConvenia, type ContaConvenia
 import { conveniaGet } from '../lib/integracoes/convenia.js';
 import { criarContextoTiquetaque, registrarFerramentasTiquetaque, type ContaTiquetaque } from './tiquetaque.js';
 import { tiquetaqueGet } from '../lib/integracoes/tiquetaque.js';
+import { criarContextoZenfisio, registrarFerramentasZenfisio, type ContaZenfisio } from './zenfisio.js';
+import { entityIdDaConta, lerConfigZenfisio, zenfisioGet } from '../lib/integracoes/zenfisio.js';
 import { contaTramitacaoDaChave, criarContextoTramitacao, registrarFerramentasTramitacao, type ContaTramitacao } from './tramitacao.js';
 import { contasComChave } from '../lib/integracoes/chaves.js';
 import { registrarAdminSistemas } from './sistemas-admin.js';
@@ -217,6 +219,34 @@ async function contasConveniaDoBanco(): Promise<Map<string, ContaConvenia>> {
     contas.set(c.slug, { slug: c.slug, nome: c.nome, fonte: { get: (caminho, query) => conveniaGet(c.unitId, c.chave, caminho, query ?? {}) } });
   }
   logger.info({ contas: contas.size }, 'mcp-remoto: contas do Convênia carregadas');
+  return contas;
+}
+
+/**
+ * Contas com a chave do ZenFisio (clínica de fisioterapia) no painel de integrações. A chave é um JSON (clientId, clientSecret, e-mail,
+ * senha, entityId); fica só em memória, decifrada aqui. Chave que não lê como JSON válido é pulada com aviso no log, sem derrubar as outras.
+ */
+async function contasZenfisioDoBanco(): Promise<Map<string, ContaZenfisio>> {
+  const contas = new Map<string, ContaZenfisio>();
+  for (const c of await contasComChave('zenfisio')) {
+    let cfg;
+    try {
+      cfg = lerConfigZenfisio(c.chave);
+    } catch (e) {
+      logger.warn({ slug: c.slug, erro: e instanceof Error ? e.message : String(e) }, 'mcp-remoto: chave do ZenFisio inválida, conta pulada');
+      continue;
+    }
+    let entity: Promise<number> | undefined;
+    contas.set(c.slug, {
+      slug: c.slug,
+      nome: c.nome,
+      fonte: {
+        get: (caminho, query) => zenfisioGet(c.unitId, cfg, caminho, query ?? {}),
+        entityId: () => (entity ??= entityIdDaConta(c.unitId, cfg).catch((e) => { entity = undefined; throw e; })),
+      },
+    });
+  }
+  logger.info({ contas: contas.size }, 'mcp-remoto: contas do ZenFisio carregadas');
   return contas;
 }
 
@@ -541,6 +571,8 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   manterAtualizado(contasConveniaDoBanco, (contas) => (convenia.contas = contas), 'as contas do Convênia');
   const tiquetaque = criarContextoTiquetaque(new Map());
   manterAtualizado(contasTiquetaqueDoBanco, (contas) => (tiquetaque.contas = contas), 'as contas do Tiquetaque');
+  const zenfisio = criarContextoZenfisio(new Map());
+  manterAtualizado(contasZenfisioDoBanco, (contas) => (zenfisio.contas = contas), 'as contas do ZenFisio');
   const tramitacao = criarContextoTramitacao(new Map());
   manterAtualizado(contasTramitacaoDoBanco, (contas) => (tramitacao.contas = contas), 'as contas da Tramitação');
   // o teto anti-ban conta o que saiu nas últimas 24 h, inclusive antes desta subida do servidor (lido no 1º envio)
@@ -598,6 +630,7 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
       registrarFerramentasAsaas(server, asaas, auditar);
       registrarFerramentasConvenia(server, convenia, auditar);
       registrarFerramentasTiquetaque(server, tiquetaque, auditar);
+      registrarFerramentasZenfisio(server, zenfisio, auditar);
       registrarFerramentasTramitacao(server, tramitacao, auditar);
       registrarMetaEventos(server, () => rastreio, auditar);
       // Arquivos: o portão testado confere a lista; cada envio é só de quem o pediu.
@@ -630,7 +663,7 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
       if (leitoresWhatsapp.has(quem.userId)) registrarFerramentasEvolution(server, whatsapp, quem.userId, auditar);
       registrarVideoSePermitido(server, video, quem.userId, leitoresVideo, auditar);
       registrarTranscricaoSePermitido(server, transcritor, quem.userId, leitoresVideo, auditar);
-      registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas, convenia: convenia.contas, tiquetaque: tiquetaque.contas, tramitacao: tramitacao.contas, sistemas: contasDoRh(sistemas.contas) }), auditar);
+      registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas, convenia: convenia.contas, tiquetaque: tiquetaque.contas, tramitacao: tramitacao.contas, sistemas: contasDoRh(sistemas.contas), zenfisio: zenfisio.contas }), auditar);
       registrarCerebro(server, slugs, cacheCerebro, auditar);
       if (franquia) {
         const deps: DepsRelatorio = { franquia, kommo, telefonesDosLeads, vinculosDosLeads };
