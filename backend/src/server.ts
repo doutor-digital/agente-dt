@@ -56,6 +56,7 @@ import { startFranquiaCalendarioWorker, stopFranquiaCalendarioWorker } from './l
 import { startUnidadePorCanalWorker, stopUnidadePorCanalWorker } from './lib/unidade-por-canal-worker.js';
 import { startUnidadeNoCartaoWorker, stopUnidadeNoCartaoWorker } from './lib/unidade-no-cartao-worker.js';
 import { startRenomearLeadWorker, stopRenomearLeadWorker } from './lib/renomear-lead-worker.js';
+import { startTipoLeadChegadaWorker, stopTipoLeadChegadaWorker } from './lib/tipo-lead-chegada-worker.js';
 import { startLigacaoWhatsappWorker, stopLigacaoWhatsappWorker } from './controllers/ligacao-whatsapp.controller.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -228,6 +229,7 @@ async function main(): Promise<void> {
       startUnidadePorCanalWorker();
       startUnidadeNoCartaoWorker();
       startRenomearLeadWorker();
+      startTipoLeadChegadaWorker();
       startLigacaoWhatsappWorker();
       startNaoLidasWorker();
       startCampanhaWorker();
@@ -244,6 +246,7 @@ async function main(): Promise<void> {
       stopUnidadePorCanalWorker();
       stopUnidadeNoCartaoWorker();
       stopRenomearLeadWorker();
+      stopTipoLeadChegadaWorker();
       stopLigacaoWhatsappWorker();
       stopNaoLidasWorker();
       stopCampanhaWorker();
