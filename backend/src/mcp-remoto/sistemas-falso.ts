@@ -55,6 +55,9 @@ export function servidorAdminFalso(o: OpcoesFalso = {}) {
       : []),
   ];
   let n = 0;
+  /** a página da tela (rh_site): parte -> conteúdo; e os backups das trocas */
+  const paginas = new Map<number, string>([[0, '<html>INICIO<script>var a = 1;</script>FIM</html>'], [1, 'x x']]);
+  const backups = new Map<string, { part: number; antes: string; depois?: string; desfeito?: boolean }>();
   const json = (status: number, corpo: unknown) =>
     ({ ok: status >= 200 && status < 300, status, text: async () => (typeof corpo === 'string' ? corpo : JSON.stringify(corpo)) }) as unknown as Response;
 
@@ -159,10 +162,35 @@ export function servidorAdminFalso(o: OpcoesFalso = {}) {
       case 'POST /admin/v1/convite':
         if (corpo.papel === 'admin' && corpo.confirmado_admin !== true) return json(403, { erro: 'convite de admin exige confirmado_admin' });
         return json(200, { ok: true, token: 'tok123456789abc', caminho: '#a-tok123456789abc' });
+      case 'POST /admin/v1/site/trocar': {
+        // contrato: { part, de, para, quem } -> 200 { ok, part, tabela, bytes_antes, bytes_depois, backup_id } | 409 trecho ausente/repetido | 400 sintaxe
+        if (corpo.de === 'EXPLODE500') return json(500, { erro: 'falha interna em ' + CONFIG_FALSA.api });
+        if (/NOVO-HOST/.test(corpo.para) && corpo.aceitar_hosts_novos !== true) return json(400, { erro: 'a mudança cita um servidor NOVO ("coleta.exemplo"): NADA foi gravado.' });
+        const parte = paginas.get(corpo.part);
+        if (parte === undefined) return json(404, { erro: `a parte ${corpo.part} não existe` });
+        const ocorr = parte.split(corpo.de).length - 1;
+        if (ocorr !== 1) return json(409, { erro: ocorr ? `o trecho aparece ${ocorr} vezes` : 'o trecho não aparece' });
+        const novo = parte.replace(corpo.de, () => corpo.para);
+        if (/SINTAXE_RUIM/.test(novo)) return json(400, { erro: 'o JavaScript da página ficaria com erro de sintaxe; NADA foi gravado.' });
+        const backup_id = `00000000-0000-4000-8000-${String(++n).padStart(12, '0')}`;
+        backups.set(backup_id, { part: corpo.part, antes: parte, depois: novo });
+        paginas.set(corpo.part, novo);
+        registro.push({ tabela: 'rh_site', quem: corpo.quem, op: 'site' });
+        return json(200, { ok: true, part: corpo.part, tabela: 'rh_site', bytes_antes: parte.length, bytes_depois: novo.length, backup_id, conferido: !/CONFERIDO_FALSE/.test(corpo.para) });
+      }
+      case 'POST /admin/v1/desfazer': {
+        const b = backups.get(corpo.backup_id);
+        if (!b) return json(400, { erro: 'esse backup não existe' });
+        if (b.desfeito) return json(400, { erro: 'esse backup já foi desfeito' });
+        if (paginas.get(b.part) !== b.depois && b.depois !== undefined && corpo.forcar !== true) return json(400, { erro: 'a linha mudou depois da escrita' });
+        b.desfeito = true;
+        paginas.set(b.part, b.antes);
+        return json(200, { ok: true, tabela: 'rh_site', op_original: 'atualizar', afetadas: 1, backup_id: `00000000-0000-4000-8000-${String(++n).padStart(12, '0')}`, desfeito: corpo.backup_id });
+      }
       default:
         return json(404, { erro: 'rota inexistente' });
     }
   }) as unknown as typeof fetch;
 
-  return { fetch: buscar, chamadas, funcionarios, registro, preparados, estruturas };
+  return { fetch: buscar, chamadas, funcionarios, registro, preparados, estruturas, paginas, backups };
 }
