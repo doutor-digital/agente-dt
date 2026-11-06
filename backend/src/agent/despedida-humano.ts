@@ -33,7 +33,7 @@ import type { Unit } from '@prisma/client';
 import { logger } from '../lib/logger.js';
 import type { Estado } from '../lib/automacoes-estado.js';
 import { AUTOMACAO_DESPEDIDA_HUMANO, JANELA_MESMO_EVENTO_MS, estadoDaDespedidaHumano } from '../lib/despedida-humano-estado.js';
-import { avisoRecente, marcadoEm, marcarAviso, REGRA_DESPEDIDA, REGRA_DESPEDIDA_ULTIMA } from '../lib/aviso-dedupe.js';
+import { avisoRecente, JANELA_24H_MS, marcadoEm, marcarAviso, REGRA_DESPEDIDA, REGRA_DESPEDIDA_ULTIMA } from '../lib/aviso-dedupe.js';
 import { mascararPii } from '../lib/pii.js';
 import { registrarSimulacao, type Simulacao } from '../lib/so-no-papel.js';
 import { prisma } from '../lib/prisma.js';
@@ -43,12 +43,11 @@ import { turnoDoPaciente } from './paciente-encerrou.js';
 import { sinalNaFala } from './sinal-de-alerta.js';
 
 export { AUTOMACAO_DESPEDIDA_HUMANO, estadoDaDespedidaHumano };
-export const JANELA_DESPEDIDA_MS = 24 * 3600_000;
 export { JANELA_MESMO_EVENTO_MS };
 /** Prazo da tarefa: não é urgência (o paciente foi embora), mas alguém precisa olhar logo, com o paciente ainda quente. */
 export const PRAZO_TAREFA_S = 30 * 60;
-/** Tarefa de ALERTA com prazo mais longe que isto não é "a equipe cuidando do paciente agora". */
-export const TAREFA_LONGE_MS = 24 * 3600_000;
+/** Tarefa de ALERTA com prazo mais longe que isto (2 h) não é "a equipe cuidando do paciente agora". */
+export const TAREFA_LONGE_MS = 2 * 3600_000;
 /** Mais longo que isto não é despedida: é conversa. */
 const MAX_CARACTERES = 220;
 
@@ -75,6 +74,9 @@ const EMOJI_DE_CORTESIA = /[👍🙏❤💙💚😊🙂😉☺😄😁🤗👏�
 /** Normaliza para comparar: minúsculas, sem acento, sem pontuação; emoji de cortesia some, outro emoji vira a palavra "emoji" (resto). "tô" vira "to". */
 function normalizar(texto: string): string {
   return texto
+    // emoticon de texto: sorriso é cortesia; triste/chorando (:( ;( =( ): T_T -_- >_<) vira resto, como o emoji de aflição
+    .replace(/(?<![\p{L}\p{N}])(?:[:;=8]'?-?[(\[/\\|]|[)\]]-?'?[:;=]|t[_.]t|-_-|>_<|:'\()(?![\p{L}\p{N}])/giu, ' emoji ')
+    .replace(/(?<![\p{L}\p{N}])(?:[:;=]-?[)dD]|\^\^|<3)(?![\p{L}\p{N}])/gu, ' ')
     .replace(EMOJI_DE_CORTESIA, ' ')
     .replace(/[\p{Extended_Pictographic}\p{Emoji_Presentation}]/gu, ' emoji ')
     .toLowerCase()
@@ -128,7 +130,8 @@ const DESCULPA_BENIGNA: RegExp[] = [
   /\b(?:to|tou|estou|ta|esta|estava) (?:no|em|na) (?:trabalho|servico|reuniao|aula|transito|mercado|banco|onibus)\b/g,
   /\b(?:to|tou|estou) (?:muito )?(?:trabalhando|dirigindo|ocupad[oa]|correndo|saindo|chegando|almocando|em reuniao)\b/g,
   /\b(?:(?:to|tou|estou|ta|esta) )?(?:muito )?(?:sem tempo|correria|corrido|corrida)\b/g,
-  /\bnao (?:posso|consigo) (?:falar|conversar|atender|responder|digitar|escrever)\b/g,
+  // só com "agora"/"no momento": "não consigo falar/digitar" sozinho pode ser sintoma (fala, mão)
+  /\bnao posso (?:falar|conversar|atender|responder) (?:agora|no momento)\b/g,
 ];
 
 /** Agradecimento / despedida. Sua presença é o que faz uma fala sem adiamento valer como "agradeceu". */
@@ -142,8 +145,7 @@ const AGRADECE: RegExp[] = [
 /** "Ok", "tá bom": sozinhos não dizem nada; depois de um adiamento no mesmo bloco continuam a despedida. */
 const ACK: RegExp[] = [/\b(?:ok(?:ay|ey)?|okk+|blz|beleza|show|top|perfeito|certo|fechado|combinado|entendi|entendido|ta bom|tabom|ta|tranquilo)\b/g];
 
-/** A Sofia ofereceu mais ajuda ("posso ajudar em mais algo?"): aí "não" é a despedida. */
-const NEGA_OFERTA: RegExp[] = [/\b(?:nao precisa|nao|nada|so isso|e so isso|e so)\b/g];
+
 
 /** O que pode SOBRAR sem ser conteúdo: palavras de ligação. ("to", "bem", "mal", "nao", "sim" NÃO estão aqui de propósito.) */
 const LIGACAO = new Set([
@@ -197,9 +199,10 @@ function analisarFala(texto: string, ctx: ContextoDaIa): Analise | null {
     marca(r.tirou);
   }
   const ag = tirar(t, AGRADECE);
-  t = ag.resto;
+  t = ag.resto.replace(/\s+/g, ' ').trim();
+  // "Não, obrigada" a "posso ajudar em mais algo?": o "não" é a despedida, só se for tudo o que sobrou do agradecimento
+  if (ctx.ofereceuAjuda && ag.tirou && /^(?:nao(?: precisa)?|nada|so isso|e so isso)$/.test(t)) t = '';
   t = tirar(t, ACK).resto;
-  if (ctx.ofereceuAjuda) t = tirar(t, NEGA_OFERTA).resto;
   const sobra = t.split(' ').filter((w) => w && !LIGACAO.has(w));
   return { limpa: sobra.length === 0, adiou, agradeceu: ag.tirou };
 }
@@ -243,10 +246,13 @@ export function temSinalOuUrgencia(textos: string[]): boolean {
  * FECHAM o bloco (a Sofia responde). Sem adiamento, vale como "agradeceu" quando há agradecimento e a Sofia não tinha
  * perguntado nem pedido nada (ou tinha oferecido mais ajuda: "Não, obrigada").
  */
-export function detectarDespedida(falas: Fala[]): Despedida | null {
-  const { textos, ultimaIa } = turnoDoPaciente(falas);
+export function detectarDespedida(falas: Fala[], falasDoPaciente?: string[]): Despedida | null {
+  const turno = turnoDoPaciente(falas);
+  const { ultimaIa } = turno;
+  // `falasDoPaciente`: o que ele disse neste turno INCLUINDO as linhas dele que vêm no bloco <conversa_oficial> (mensagens que o
+  // webhook não trouxe); `falas` não as tem. Tudo o que ele disse passa pela lista branca.
+  const textos = falasDoPaciente && falasDoPaciente.length > 0 ? falasDoPaciente : turno.textos;
   if (textos.length === 0 || !ultimaIa) return null;
-  if (temSinalOuUrgencia(textos)) return null;
   const ctx: ContextoDaIa = { perguntou: iaTerminouPerguntando(ultimaIa), iaPediu: IA_PEDIU.test(ultimaIa), ofereceuAjuda: OFERTA_DE_AJUDA.test(ultimaIa) };
   const analises: Analise[] = [];
   for (const t of textos) {
@@ -267,7 +273,7 @@ const rotulo = (d: Despedida): string => (d.tipo === 'adiou' ? 'adiou' : 'se des
 /**
  * PURA: há no cartão uma tarefa que JÁ chama a equipe para este paciente? Só conta tarefa de ALERTA (o prefixo
  * `ALERTA ·` é a das nossas e das de sinal/entrega/sem resposta; lembrete de robô e tarefa de rotina não chamam ninguém),
- * ABERTA, NÃO vencida e com prazo até 24 h à frente. Vencida (inclusive a DESPEDIDA que ninguém fechou ontem) não conta:
+ * ABERTA, NÃO vencida e com prazo até 2 h à frente. Vencida (inclusive a DESPEDIDA que ninguém fechou ontem) não conta:
  * nesses casos nasce tarefa nova, porque a nota sozinha não notifica ninguém.
  */
 export function tarefaDaEquipeSegura(tarefas: readonly KommoTarefa[], agora: Date): boolean {
@@ -333,10 +339,25 @@ export interface DepsDaDespedida {
   simular: (unit: Pick<Unit, 'id' | 'slug'>, automacao: string, s: Simulacao) => void;
 }
 
+/**
+ * O banco pode falhar ao gravar a marca (`marcarAviso` engole o erro) DEPOIS de a tarefa existir: sem isto cada "ok" seguinte
+ * criaria outra. Memória do processo como segunda camada (reinício esquece: no máximo uma tarefa a mais).
+ */
+const avisadosNaMemoria = new Map<string, Date>();
+const chaveDoLead = (unit: Pick<Unit, 'id'>, leadId: number) => `${unit.id}:${leadId}`;
+
 export const DEPS_PADRAO: DepsDaDespedida = {
   agora: () => new Date(),
-  avisoDeHoje: (unit, leadId) => avisoRecente(unit.id, leadId, REGRA_DESPEDIDA, JANELA_DESPEDIDA_MS),
-  marcaEm: (unit, leadId) => marcadoEm(unit.id, leadId, REGRA_DESPEDIDA),
+  avisoDeHoje: async (unit, leadId) => {
+    const memoria = avisadosNaMemoria.get(chaveDoLead(unit, leadId));
+    if (memoria && Date.now() - memoria.getTime() < JANELA_24H_MS) return true;
+    return avisoRecente(unit.id, leadId, REGRA_DESPEDIDA, JANELA_24H_MS);
+  },
+  marcaEm: async (unit, leadId) => {
+    const doBanco = await marcadoEm(unit.id, leadId, REGRA_DESPEDIDA);
+    const memoria = avisadosNaMemoria.get(chaveDoLead(unit, leadId)) ?? null;
+    return doBanco && memoria ? (doBanco > memoria ? doBanco : memoria) : (doBanco ?? memoria);
+  },
   iaFalouDepois: async (unit, leadId, desde) => {
     try {
       const n = await prisma.message.count({
@@ -375,7 +396,11 @@ export const DEPS_PADRAO: DepsDaDespedida = {
       return false;
     }
   },
-  marcar: (unit, leadId, quando) => marcarAviso(unit.id, leadId, REGRA_DESPEDIDA, quando),
+  marcar: async (unit, leadId, quando) => {
+    avisadosNaMemoria.set(chaveDoLead(unit, leadId), quando);
+    if (avisadosNaMemoria.size > 20_000) for (const [k, t] of avisadosNaMemoria) if (Date.now() - t.getTime() > JANELA_24H_MS) avisadosNaMemoria.delete(k);
+    await marcarAviso(unit.id, leadId, REGRA_DESPEDIDA, quando);
+  },
   marcarUltima: (unit, leadId, quando) => marcarAviso(unit.id, leadId, REGRA_DESPEDIDA_ULTIMA, quando),
   simular: registrarSimulacao,
 };
@@ -385,6 +410,8 @@ export interface EntradaDaDespedida {
   leadId: number;
   estado: Estado;
   falas: Fala[];
+  /** O que o paciente disse neste turno, com as linhas dele do bloco <conversa_oficial> (`falasDoTurno`). */
+  falasDoPaciente?: string[];
   /** O prompt do turno traz consulta marcada / próximo agendamento (`promptTemConsulta`). */
   temConsulta: boolean;
   /** A consulta é DESCONHECIDA (franquia fora do ar, cartão diz que já agendou/é paciente, unidade sem franquia): "sem consulta no prompt" não é "ainda não marcou". */
@@ -397,15 +424,15 @@ export interface EntradaDaDespedida {
  * Chamada DEPOIS de montar o prompt (precisa saber se há consulta) e ANTES do modelo (silêncio não gasta token).
  */
 export async function decidirDespedida(entrada: EntradaDaDespedida, deps: DepsDaDespedida = DEPS_PADRAO): Promise<Decisao> {
-  const { unit, leadId, estado, falas, temConsulta, consultaDesconhecida, recorder } = entrada;
+  const { unit, leadId, estado, falas, falasDoPaciente, temConsulta, consultaDesconhecida, recorder } = entrada;
   if (estado === 'desligado') return { acao: 'responder', motivo: 'chave desligada' };
   try {
     // Sinal de alerta, dor ou urgência no que ele disse: NUNCA silêncio, mesmo junto de "vou pensar" (graph.ts roda esta porta
     // ANTES de `passarPorSinalNoTurno`, então a checagem tem de estar aqui).
-    if (temSinalOuUrgencia(turnoDoPaciente(falas).textos)) {
+    if (temSinalOuUrgencia(falasDoPaciente && falasDoPaciente.length > 0 ? falasDoPaciente : turnoDoPaciente(falas).textos)) {
       return { acao: 'responder', motivo: 'sinal de alerta, dor ou urgência — a Sofia responde' };
     }
-    const despedida = detectarDespedida(falas);
+    const despedida = detectarDespedida(falas, falasDoPaciente);
     if (!despedida) return { acao: 'responder', motivo: 'não é despedida nem adiamento' };
     if (temConsulta) {
       return { acao: 'responder', motivo: 'tem consulta marcada — despedida depois de agendar é normal' };

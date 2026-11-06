@@ -759,6 +759,7 @@ export async function buildAgentGraph(
           leadId: Number(state.leadId),
           estado: estadoDespedida,
           falas,
+          falasDoPaciente: mensagensDoPaciente,
           temConsulta: promptTemConsulta(promptDoTurno),
           consultaDesconhecida: consultaDoTurno.desconhecida !== false,
           recorder,

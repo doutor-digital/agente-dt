@@ -380,7 +380,8 @@ test('tarefaDaEquipeSegura: só ALERTA aberta, não vencida, até 24 h à frente
   assert.equal(tarefaDaEquipeSegura([alertaAberta()], AGORA), true);
   assert.equal(tarefaDaEquipeSegura([alertaAberta({ text: '  alerta · x · y' })], AGORA), true);
   assert.equal(tarefaDaEquipeSegura([alertaAberta({ complete_till: agora - 1 })], AGORA), false);
-  assert.equal(tarefaDaEquipeSegura([alertaAberta({ complete_till: agora + 86_400 + 5 })], AGORA), false);
+  assert.equal(tarefaDaEquipeSegura([alertaAberta({ complete_till: agora + 7200 + 5 })], AGORA), false);
+  assert.equal(tarefaDaEquipeSegura([alertaAberta({ complete_till: agora + 7200 })], AGORA), true);
   assert.equal(tarefaDaEquipeSegura([], AGORA), false);
 });
 
@@ -802,4 +803,68 @@ test('LISTA BRANCA: varredura — adiamento/agradecimento + QUALQUER conteúdo (
     }
   }
   assert.ok(n > 600);
+});
+
+test('revisão (3º code-review): emoticon de texto triste = resto; sorriso = cortesia', () => {
+  assert.equal(detectarDespedida([...PRECO, pac('Obrigada :(')]), null);
+  assert.equal(detectarDespedida([...PRECO, pac('Vou pensar :( :(')]), null);
+  assert.equal(detectarDespedida([...PRECO, pac('obrigada T_T')]), null);
+  assert.equal(detectarDespedida([...PRECO, pac('Obrigada :)')])?.tipo, 'agradeceu');
+  assert.equal(detectarDespedida([...PRECO, pac('Vou pensar :D')])?.tipo, 'adiou');
+  assert.equal(detectarDespedida([...PRECO, pac('Obrigada <3')])?.tipo, 'agradeceu');
+});
+
+test('revisão: "não consigo falar/digitar" pode ser sintoma — só "não posso falar AGORA" é desculpa benigna', () => {
+  for (const fala of ['Obrigada, não consigo falar', 'Obrigada, não consigo digitar', 'Vou pensar, não consigo falar', 'Obrigada, não posso responder']) {
+    assert.equal(detectarDespedida([...PRECO, pac(fala)]), null, fala);
+  }
+  assert.equal(detectarDespedida([...PRECO, pac('não posso falar agora, entro em contato depois')])?.tipo, 'adiou');
+});
+
+test('revisão: depois de "posso ajudar em mais algo?", só o "não" INTEIRO é despedida', () => {
+  const oferta: Fala[] = [pac('oi'), ia('A consulta é R$ 250,00. Posso ajudar em mais alguma coisa?')];
+  assert.equal(detectarDespedida([...oferta, pac('Não, obrigada')])?.tipo, 'agradeceu');
+  assert.equal(detectarDespedida([...oferta, pac('Não precisa, obrigada')])?.tipo, 'agradeceu');
+  for (const fala of ['Não tá bom, obrigada', 'Não entendi, obrigada', 'Não é só isso, obrigada']) {
+    assert.equal(detectarDespedida([...oferta, pac(fala)]), null, fala);
+  }
+});
+
+test('revisão: o sinal que só aparece no bloco <conversa_oficial> (falasDoTurno) também passa pela lista branca e pelo sinal', async () => {
+  // o HumanMessage diz só "Obrigada, vou pensar"; o bloco traz uma fala dele que a Sofia ainda não viu
+  const doTurno = ['perdi a força na perna e não sinto o pé\nObrigada, vou pensar'];
+  assert.equal(detectarDespedida([...PRECO, pac('Obrigada, vou pensar')])?.tipo, 'adiou');
+  assert.equal(detectarDespedida([...PRECO, pac('Obrigada, vou pensar')], doTurno), null);
+  const { c, deps, recorder } = montar();
+  const r = await decidirDespedida(entrada(recorder, { falas: [...PRECO, pac('Obrigada, vou pensar')], falasDoPaciente: doTurno }), deps);
+  assert.equal(r.acao, 'responder');
+  assert.match(r.motivo, /sinal de alerta/);
+  assert.deepEqual(c.tarefas, []);
+  // fala do bloco que não é sinal mas é conteúdo: também responde
+  const r2 = await decidirDespedida(entrada(recorder, { falas: [...PRECO, pac('Obrigada, vou pensar')], falasDoPaciente: ['qual o endereço\nObrigada, vou pensar'] }), deps);
+  assert.equal(r2.acao, 'responder');
+});
+
+test('revisão: a marca do aviso não grava no banco mas a tarefa existe — a memória do processo segura o próximo "ok" (sem tarefa em dobro)', async () => {
+  const { DEPS_PADRAO } = await import('./despedida-humano.js');
+  const { prisma } = await import('../lib/prisma.js');
+  const original = Object.getOwnPropertyDescriptor(prisma, 'cardAlert');
+  Object.defineProperty(prisma, 'cardAlert', {
+    value: {
+      findUnique: async () => null,
+      upsert: async () => {
+        throw new Error('banco caiu');
+      },
+    },
+    configurable: true,
+  });
+  try {
+    const u = { id: 'u-mem', slug: 'x' } as unknown as Unit;
+    assert.equal(await DEPS_PADRAO.avisoDeHoje(u, 4242), false);
+    await DEPS_PADRAO.marcar(u, 4242, new Date());
+    assert.equal(await DEPS_PADRAO.avisoDeHoje(u, 4242), true, 'a memória segura');
+    assert.ok(await DEPS_PADRAO.marcaEm(u, 4242));
+  } finally {
+    if (original) Object.defineProperty(prisma, 'cardAlert', original);
+  }
 });

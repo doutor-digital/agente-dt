@@ -2671,6 +2671,7 @@ async function loadComposeInput(input: {
             { err, leadId: input.leadId },
             'estadoEtapaDoLead falhou — sem bloco de etapa no prompt',
           );
+          consultaFalhou = true; // sem o cartão não se sabe se ele já agendou ou é paciente
           return null;
         })
       : Promise.resolve(null),
@@ -2700,7 +2701,10 @@ async function loadComposeInput(input: {
   // tratar a pessoa como desconhecida. Caso Wilson, 15/09/2026.
   const etapaFinal =
     !estadoEtapa?.jaAgendadoOuPaciente && telefone && input.leadId
-      ? await estadoEtapaDoLead(input.unit, input.leadId, telefone).catch(() => estadoEtapa)
+      ? await estadoEtapaDoLead(input.unit, input.leadId, telefone).catch(() => {
+        consultaFalhou = true;
+        return estadoEtapa;
+      })
       : estadoEtapa;
 
   // O cartão diz que a pessoa já agendou ou é paciente, mas a consulta não foi a Sofia que marcou —
