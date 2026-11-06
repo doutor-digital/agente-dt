@@ -4,6 +4,7 @@ import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import type { Unit } from '@prisma/client';
 
 import { _semearParaTeste } from '../lib/automacoes-estado.js';
+import { AUTOMACAO_DESPEDIDA_HUMANO as ID_DA_AUTOMACAO } from '../lib/despedida-humano-estado.js';
 import { AUTOMACOES } from '../lib/automacoes.js';
 import { REGRA_DESPEDIDA } from '../lib/aviso-dedupe.js';
 import type { KommoTarefa } from '../services/kommo.service.js';
@@ -607,4 +608,81 @@ test('11. o texto da tarefa deixa a citação do paciente depois de "Última men
   assert.match(t, /^ALERTA · doutor-hernia-timbo · \[DESPEDIDA\] /);
   assert.match(t, / Última mensagem: "vou pensar"\. A Sofia não respondeu\.$/);
   assert.equal(t.replace(/ltima mensagem:.*$/i, '').includes('vou pensar'), false);
+});
+
+test('aviso de hoje MAS velho (mais de 6 h) e a Sofia não falou: não garante que alguém olhou — a tarefa vigente segura, ou nasce tarefa nova', async () => {
+  const marca = new Date(AGORA.getTime() - 10 * 3600_000);
+  const a = montar({}, { marca, iaFalou: false });
+  const r = await decidirDespedida(entrada(a.recorder), a.deps);
+  assert.equal(r.acao, 'silenciar');
+  assert.equal(a.c.tarefas.length, 1, 'tarefa nova');
+  const b = montar({}, { marca, iaFalou: false, abertas: [alertaAberta()] });
+  const r2 = await decidirDespedida(entrada(b.recorder), b.deps);
+  assert.equal(r2.acao, 'silenciar');
+  assert.deepEqual(b.c.tarefas, [], 'a ALERTA vigente segura');
+});
+
+test('a tarefa foi criada mas a marca/nota falhou: a Sofia segue CALADA (senão o paciente leva o "combinado" e a equipe a tarefa)', async () => {
+  const { c, deps, recorder } = montar({
+    marcar: async () => {
+      throw new Error('banco caiu');
+    },
+  });
+  const r = await decidirDespedida(entrada(recorder), deps);
+  assert.equal(r.acao, 'silenciar');
+  assert.equal(c.tarefas.length, 1);
+});
+
+test('revisão: pedido junto SEM "?" no mesmo recado do adiamento — a Sofia responde', () => {
+  for (const fala of [
+    'Vou pensar. Pode passar o endereço',
+    'Vou pensar, mande o endereço',
+    'Vou pensar. Aceita cartão',
+    'Vou pensar. Aceitam Unimed',
+    'Vou pensar, vocês ficam onde',
+    'Vou pensar, quero o endereço',
+    'Entrarei em contato, obrigada. Preciso do endereço',
+    'Vou pensar nesse horário, mas quero marcar sexta',
+    'Vou pensar no valor, mas já quero agendar',
+  ]) {
+    assert.equal(detectarDespedida([...PRECO, pac(fala)]), null, fala);
+  }
+});
+
+test('revisão: "obrigada" a um pedido da Sofia sem "?" é resposta, não despedida', () => {
+  for (const ultima of [
+    'Me conta qual o melhor dia pra você.',
+    'Me fala seu nome completo, por favor.',
+    'Se quiser, me diz o melhor período.',
+    'Qual a sua cidade',
+    'Posso ajudar? Se preferir, explico a avaliação.',
+  ]) {
+    for (const fala of ['Obrigada', 'Ok obrigado']) {
+      assert.equal(detectarDespedida([pac('oi'), ia(ultima), pac(fala)]), null, `${ultima} / ${fala}`);
+    }
+  }
+});
+
+test('revisão: "não vou querer" um item/horário específico não adia a consulta toda', () => {
+  assert.equal(detectarDespedida([...PRECO, pac('Não vou querer o exame, só a consulta')]), null);
+  assert.equal(detectarDespedida([...PRECO, pac('Não vou marcar pra hoje, só amanhã')]), null);
+  assert.equal(detectarDespedida([...PRECO, pac('Não vou querer marcar agora')])?.tipo, 'adiou');
+  assert.equal(detectarDespedida([...PRECO, pac('Não vou querer, obrigada')])?.tipo, 'adiou');
+});
+
+test('revisão: dor/urgência com outras palavras também responde', () => {
+  for (const fala of ['Vou pensar, tô sofrendo muito', 'Vou pensar, tô com muito incômodo e não consigo dormir', 'depois eu vejo, tá travada minha coluna', 'vou pensar, sinto uma fisgada', 'vou pensar, queimação na perna']) {
+    assert.equal(detectarDespedida([...PRECO, pac(fala)]), null, fala);
+  }
+});
+
+test('revisão: "agora não" que INFORMA ("agora não tenho exame", "agora não tenho como pagar") não é adiamento', () => {
+  assert.equal(detectarDespedida([...PRECO, pac('agora não tenho exame')]), null);
+  assert.equal(detectarDespedida([...PRECO, pac('agora não tenho como pagar')]), null);
+  assert.equal(detectarDespedida([...PRECO, pac('agora não, obrigada')])?.tipo, 'adiou');
+  assert.equal(detectarDespedida([...PRECO, pac('Agora não.')])?.tipo, 'adiou');
+});
+
+test('o id da automação é UMA definição só (agente e alerta de sem resposta leem a mesma)', () => {
+  assert.equal(ID_DA_AUTOMACAO, AUTOMACAO_DESPEDIDA_HUMANO);
 });

@@ -35,6 +35,7 @@ import { mascararPii } from './pii.js';
 import { registrarSimulacao, type Simulacao } from './so-no-papel.js';
 import { esquemaDaUnidade } from './kommo-schema.js';
 import { marcarAviso, marcadoEm, REGRA_DESPEDIDA } from './aviso-dedupe.js';
+import { estadoDaDespedidaHumano } from './despedida-humano-estado.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { mensagensOficiais, type MensagemOficial } from '../services/kommo-talks.service.js';
 
@@ -271,7 +272,7 @@ export const DEPS_SEM_RESPOSTA_PADRAO: DepsSemResposta = {
   tarefaDoTurnoPerdidoEm: async (unit, leadId) => marcadoEm(unit.id, leadId, REGRA_TAREFA_TURNO_PERDIDO),
   // Só lê a marca onde a despedida está LIGADA: desligada (ou só no papel) a Sofia responde e não há aviso a cobrir.
   despedidaAvisouEm: async (unit, leadId) =>
-    estadoDaAutomacao(unit.slug, 'despedida-humano', process.env.DESPEDIDA_HUMANO_SLUGS) === 'ligado' ? marcadoEm(unit.id, leadId, REGRA_DESPEDIDA) : null,
+    estadoDaDespedidaHumano(unit.slug) === 'ligado' ? marcadoEm(unit.id, leadId, REGRA_DESPEDIDA) : null,
   criarTarefa: async (unit, leadId, texto) => {
     const kommo = createKommoClient(unit);
     // O responsável do cartão; o `createTask` troca o login da consultoria pelo usuário da clínica (quando é um só).

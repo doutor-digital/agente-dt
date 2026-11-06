@@ -32,7 +32,8 @@
 import type { Unit } from '@prisma/client';
 import type { BaseMessage } from '@langchain/core/messages';
 import { logger } from '../lib/logger.js';
-import { estadoDaAutomacao, type Estado } from '../lib/automacoes-estado.js';
+import type { Estado } from '../lib/automacoes-estado.js';
+import { AUTOMACAO_DESPEDIDA_HUMANO, estadoDaDespedidaHumano } from '../lib/despedida-humano-estado.js';
 import { avisoRecente, marcadoEm, marcarAviso, REGRA_DESPEDIDA } from '../lib/aviso-dedupe.js';
 import { mascararPii } from '../lib/pii.js';
 import { pediuParaParar } from '../lib/pediu-para-parar.js';
@@ -44,18 +45,19 @@ import { pacienteEncerrou, turnoDoPaciente } from './paciente-encerrou.js';
 import { sinalNaFala } from './sinal-de-alerta.js';
 import { ehEncerramento } from '../lib/encerramento.js';
 
-export const AUTOMACAO_DESPEDIDA_HUMANO = 'despedida-humano';
+export { AUTOMACAO_DESPEDIDA_HUMANO, estadoDaDespedidaHumano };
 export const JANELA_DESPEDIDA_MS = 24 * 3600_000;
+/**
+ * Despedida repetida sem a Sofia ter falado: dentro desta janela depois do último aviso é o MESMO evento (segue calada). Passada,
+ * o aviso de ontem não garante que alguém olhou: vale o caminho normal (tarefa da equipe vigente, ou tarefa nova).
+ */
+export const JANELA_MESMO_EVENTO_MS = 6 * 3600_000;
 /** Prazo da tarefa: não é urgência (o paciente foi embora), mas alguém precisa olhar logo, com o paciente ainda quente. */
 export const PRAZO_TAREFA_S = 30 * 60;
 /** Tarefa de ALERTA com prazo mais longe que isto não é "a equipe cuidando do paciente agora". */
 export const TAREFA_LONGE_MS = 24 * 3600_000;
 /** Mais longo que isto não é despedida: é conversa. */
 const MAX_CARACTERES = 220;
-
-export function estadoDaDespedidaHumano(slug: string, env: NodeJS.ProcessEnv = process.env): Estado {
-  return estadoDaAutomacao(slug, AUTOMACAO_DESPEDIDA_HUMANO, env.DESPEDIDA_HUMANO_SLUGS);
-}
 
 // ── parte pura ──────────────────────────────────────────────────────────────────────────────────
 
@@ -78,7 +80,7 @@ const VOLTAR = String.raw`(?:vejo|marco|agendo|decido|volto|entro|chamo|falo|avi
 const ADIA_FORTE = new RegExp(
   [
     String.raw`\bentrarei\s+em\s+contato\b|\bvoltarei\b|\bretornarei\b`,
-    String.raw`\bn[ãa]o\s+vou\s+(?:querer|marcar|agendar)\b`,
+    String.raw`\bn[ãa]o\s+vou\s+(?:querer(?:\s+(?:marcar|agendar))?|marcar|agendar)(?=\s*(?:[,.!;]|$)|\s+(?:agora|por\s+enquanto|no\s+momento|ainda|obrigad|a\s+consulta|consulta|nada|isso))`,
     String.raw`\bn[ãa]o\s+quero\s+(?:agora|por\s+enquanto|no\s+momento)\b`,
     String.raw`\bvou\s+(?:me\s+)?organizar\b`,
     String.raw`\bvou\s+deixar\s+(?:isso\s+)?(?:pra|para)\s+(?:o\s+)?(?:outro|pr[óo]ximo|depois|mais\s+tarde)\b`,
@@ -101,7 +103,8 @@ const VERIFICAR_PARA_RESPONDER = /\bvou\s+verificar\s+(?:se|com|quanto|qual|o\s+
  * ("Você tem exame? — Agora não tenho"; "Está com dor? — Agora não"). Só valem em fala curta, quando a Sofia NÃO terminou
  * perguntando e NÃO tinha pedido algo ("agora não posso, mais tarde te mando o exame" depois de ela pedir o exame).
  */
-const ADIA_FRACO = /\bagora\s+n[ãa]o\b|\bpor\s+enquanto\s+n[ãa]o\b|\bno\s+momento\s+n[ãa]o\b|\boutra\s+hora\b/i;
+const ADIA_FRACO =
+  /\b(?:agora|por\s+enquanto|no\s+momento)\s+n[ãa]o(?=\s*(?:[,.!;]|$)|\s+(?:obrigad|vou|quero|posso|d[áa]|consigo|preciso)\b)|\bem\s+outra\s+hora\b|\boutra\s+hora\s*$/i;
 const MAX_CARACTERES_FRACO = 80;
 
 /**
@@ -115,6 +118,10 @@ const PEDE_ALGO = new RegExp(
     String.raw`\bme\s+(?:passa|passe|manda|mande|envia|envie|diz|diga|fala|fale|informa|informe|explica|explique)\b`,
     String.raw`(?:^|[.!;\n]\s*|,\s*(?:e\s+|mas\s+)?|\bmas\s+|\be\s+)(?:qual|quais|quanto|quantos|onde|como|que\s+horas?)\b`,
     String.raw`\b(?:queria|gostaria\s+de)\s+(?:saber|entender|perguntar)\b`,
+    // pedido sem "?": "pode passar o endereço", "mande o endereço", "preciso do valor", "quero marcar sexta", "aceita cartão"
+    String.raw`\b(?:pode|poderia)\s+(?:passar|enviar|mandar|informar|explicar)\b|\b(?:manda|mande|envia|envie|passa|passe)\b`,
+    String.raw`\bpreciso\s+d[aeo]s?\b|\bquero\s+(?:o|a|os|as|um|uma|saber|marcar|agendar|ir|ver|fazer)\b`,
+    String.raw`\b(?:aceita|aceitam|atende|atendem)\b|\btem\s+como\b|\bonde\s+fica|\bvoc[êe]s?\s+(?:ficam|atendem|aceitam|tem|t[eê]m)\b`,
     String.raw`\b(?:pode|poderia|consegue|podemos|d[áa])\s+(?:ser|me|marcar|fazer|pra|para)\b`,
     String.raw`\b(?:prefiro|fica\s+melhor\s+(?:pra|para|[àa]s?|de|na|no|em)|vamos\s+marcar|pode\s+marcar|marca\s+(?:pra|para))\b`,
     // "às 14", "as 9": o `\b` do JS é ASCII e não vê fronteira antes do "à" — por isso o lookbehind unicode
@@ -130,7 +137,7 @@ const PEDE_ALGO = new RegExp(
  * este lado é a Sofia responder "combinado" como hoje.
  */
 const PRECISA_DE_RESPOSTA =
-  /\bd[oó]i\b|\bdoendo\b|\bdor(?:es)?\b|insuport|n[ãa]o\s+aguent|\burgente\b|\burg[êe]ncia\b|\bemerg[êe]ncia\b|\bsocorro\b|desesper|\bpiorand|\bpior\b|\bpiorou\b|n[ãa]o\s+consigo\s+(?:andar|levantar|me\s+mexer)|formigament|\bparalis/iu;
+  /\bd[oó]i\b|\bdoendo\b|\bdor(?:es)?\b|insuport|n[ãa]o\s+aguent|\burgente\b|\burg[êe]ncia\b|\bemerg[êe]ncia\b|\bsocorro\b|desesper|\bpiorand|\bpior\b|\bpiorou\b|n[ãa]o\s+consigo\s+(?:andar|levantar|me\s+mexer)|formigament|\bparalis|sofrend|inc[ôo]modo|travad|n[ãa]o\s+consigo\s+dormir|latej|choque|fisgada|queima[çc][ãa]o|\bdorm[êe]ncia|dormente/iu;
 
 /** Sinal de alerta, dor ou urgência em alguma das falas: a Sofia responde (e `passarPorSinalNoTurno` cuida do resto). */
 export function temSinalOuUrgencia(textos: string[]): boolean {
@@ -156,12 +163,12 @@ export function iaTerminouPerguntando(texto: string | null | undefined): boolean
   const i = t.lastIndexOf('?');
   if (i < 0) return false;
   const depois = t.slice(i + 1).replace(/[\s\p{Extended_Pictographic}\p{Emoji_Presentation}️‍.!)\]]+/gu, ' ').trim();
-  return depois.length <= 40;
+  return depois.length <= 70;
 }
 
 /** A fala da IA PEDIU algo ou prometeu voltar, sem "?" ("Me envie o comprovante.", "Vou confirmar com a equipe e já te retorno."): "ok, obrigada" é resposta, não despedida. */
 const IA_PEDIU =
-  /\b(?:envie|mande|manda|envia|informe|passe|diga)\b|\bpreciso\s+d[aeo]s?\b|\bpode\s+me\b|\bpoderia\b|\baguard[ea]\b|\bte\s+retorno\b|\bvou\s+(?:confirmar|verificar|ver)\s+com\b/i;
+  /\bme\s+(?:conta|conte|fala|fale|diz|diga|avise|avisa|informe|envie|mande|passe|manda|passa|envia|confirma|confirme)\b|(?:^|[.!\n]\s*)(?:qual|quais|quanto|onde|como|quando|que\s+horas?|em\s+qual|voc[êe]\s+(?:prefere|quer|pode|consegue|tem))\b|\b(?:envie|mande|manda|envia|informe|passe|diga)\b|\bpreciso\s+d[aeo]s?\b|\bpode\s+me\b|\bpoderia\b|\baguard[ea]\b|\bte\s+retorno\b|\bvou\s+(?:confirmar|verificar|ver)\s+com\b/i;
 
 /** A pergunta da IA era "posso ajudar em mais algo?": "Não, obrigada" é a despedida. */
 const OFERTA_DE_AJUDA =
@@ -398,8 +405,8 @@ export async function decidirDespedida(entrada: EntradaDaDespedida, deps: DepsDa
     // ── ligado ──
     const agora = deps.agora();
 
-    // Já avisamos hoje: 1 aviso por cartão por dia. Se a Sofia não falou depois do aviso, é a MESMA situação (o segundo
-    // "obrigada"): segue calada, a equipe já sabe. Se ela falou depois, a conversa voltou e foi embora de novo — sem
+    // Já avisamos hoje: 1 aviso por cartão por dia. Se a Sofia não falou depois do aviso e ele é recente, é a MESMA situação (o
+    // segundo "obrigada"): segue calada, a equipe já sabe. Se ela falou depois, a conversa voltou e foi embora de novo — sem
     // aviso novo (limite do dia) a Sofia não pode se calar: responde como hoje.
     if (await deps.avisoDeHoje(unit, leadId)) {
       const desde = await deps.marcaEm(unit, leadId);
@@ -414,16 +421,20 @@ export async function decidirDespedida(entrada: EntradaDaDespedida, deps: DepsDa
           .catch(() => undefined);
         return { acao: 'responder', motivo: 'aviso do dia já saiu e a Sofia falou depois' };
       }
-      // Regrava a marca: o alerta de "sem resposta" só cobre a espera se o aviso for posterior à última mensagem dele.
-      await deps.marcar(unit, leadId, agora);
-      await recorder
-        .step({
-          kind: 'THINKING',
-          title: '🤝 Despedida repetida: a equipe já foi avisada hoje e a Sofia não falou depois — segue em silêncio',
-          payload: { leadId, fala: despedida.fala },
-        })
-        .catch(() => undefined);
-      return { acao: 'silenciar', motivo: 'aviso de hoje ainda vale', despedida, alertou: false };
+      // Aviso velho (mais de 6 h) sem ninguém ter falado: não garante que alguém olhou — cai no caminho normal abaixo (tarefa da
+      // equipe vigente, ou tarefa nova). Dentro de 6 h é o MESMO evento: segue calada.
+      if (desde && agora.getTime() - desde.getTime() <= JANELA_MESMO_EVENTO_MS) {
+        // Regrava a marca: o alerta de "sem resposta" só cobre a espera se o aviso for posterior à última mensagem dele.
+        await deps.marcar(unit, leadId, agora).catch(() => undefined);
+        await recorder
+          .step({
+            kind: 'THINKING',
+            title: '🤝 Despedida repetida: a equipe foi avisada há pouco e a Sofia não falou depois — segue em silêncio',
+            payload: { leadId, fala: despedida.fala },
+          })
+          .catch(() => undefined);
+        return { acao: 'silenciar', motivo: 'aviso recente ainda vale', despedida, alertou: false };
+      }
     }
 
     // A equipe já tem tarefa aberta neste cartão: não empilha. A nota diz o que aconteceu.
@@ -435,7 +446,7 @@ export async function decidirDespedida(entrada: EntradaDaDespedida, deps: DepsDa
     }
     if (aberta) {
       const anotou = await deps.anotar(unit, leadId, textoDaNota(despedida, 'ja_existia'));
-      await deps.marcar(unit, leadId, agora);
+      await deps.marcar(unit, leadId, agora).catch(() => undefined);
       await recorder
         .step({
           kind: 'KOMMO_ACTION',
@@ -463,8 +474,9 @@ export async function decidirDespedida(entrada: EntradaDaDespedida, deps: DepsDa
         .catch(() => undefined);
       return { acao: 'responder', motivo: `tarefa falhou: ${msg}` };
     }
-    // Marca SÓ depois de o Kommo confirmar (falha de rede não cala o aviso por 24 h).
-    await deps.marcar(unit, leadId, agora);
+    // Marca SÓ depois de o Kommo confirmar (falha de rede não cala o aviso por 24 h). A tarefa JÁ existe: nada daqui para baixo
+    // pode virar "responder" (o paciente receberia o "combinado" E a equipe, a tarefa).
+    await deps.marcar(unit, leadId, agora).catch((err) => logger.warn({ err: String(err), unit: unit.slug, leadId }, 'despedida-humano: tarefa criada, mas a marca não gravou (segue calada)'));
     const anotou = await deps.anotar(unit, leadId, textoDaNota(despedida, 'criada'));
     await recorder
       .step({
