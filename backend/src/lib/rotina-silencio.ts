@@ -42,6 +42,7 @@ import {
   marcarVisto,
   marcasDaUnidade,
   marcasDoSilencio,
+  motivosNativosDaConta,
   nascimentoDoCartao,
   pessoaDoCartao,
   porQueNaoTocar,
@@ -185,6 +186,8 @@ export async function varrerSilencio(ctx: Ctx, seco: boolean, p: ParamsDoSilenci
   // o que se decidiu «no papel» não pode segurar a mesma decisão depois que a régua é ligada
   const chaveDoCache = `${p.chave}:${seco ? 'seco' : 'ligado'}`;
   const opcoes: OpcoesDeCartao = { agora, tz, pausarIaFieldId: ctx.pausarIaFieldId, ...p.opcoesDoCartao };
+  // quem fechou "Sem interesse" pelo diálogo NATIVO do Kommo (sem preencher o campo ⊘) também é caso encerrado
+  if (opcoes.conferirMotivoMorto) opcoes.motivosNativos = await motivosNativosDaConta(ctx);
 
   // 1) o cartão, de graça
   let fila: KommoLead[] = [];
@@ -232,11 +235,27 @@ export async function varrerSilencio(ctx: Ctx, seco: boolean, p: ParamsDoSilenci
       conta(r.barrados, 'conversa-nas-ultimas-24h');
       continue;
     }
+    const dela = marcasDe(lead).filter((m) => m.chave === p.chave);
+    const ultimoEm = dela.reduce((m, x) => Math.max(m, x.em), 0);
+    // ESTOQUE ANTIGO sem gastar chamada: nenhum degrau enviado, a última mensagem que o banco viu é mais velha que a janela de entrada
+    // e (em PERDIDO) a perda também. Sem isto, 40 cartões velhos dariam um /events por varredura, todo dia, para sempre. O banco só
+    // pode errar para o lado de não mandar (se não viu uma mensagem do paciente, ele já estava fora). EM ESPERA/NÃO COMPARECEU, que
+    // contam da entrada na etapa, ficam de fora deste atalho.
+    if (
+      dela.length === 0 &&
+      !p.ancorarNaEntrada &&
+      ultima !== undefined &&
+      agora - ultima >= p.entradaAteDias * DIA_S &&
+      (!p.ancorarNaPerda || lead.status_id !== 143 || !lead.closed_at || agora - lead.closed_at >= p.entradaAteDias * DIA_S)
+    ) {
+      r.foraDaJanela++;
+      conta(r.barrados, 'estoque-antigo-pelo-banco');
+      marcarVisto(unit.id, chaveDoCache, lead.id, agora + DIA_S);
+      continue;
+    }
     // já enviou o ÚLTIMO degrau pronto e ninguém falou depois: sai da fila sem gastar chamada (esgotada, ou à espera de os próximos
     // degraus ficarem prontos na conta). Com o padrão (1 degrau pronto) é a maioria do estoque — sem isto eles voltariam a cada 6 h,
     // ficariam na frente da fila e esgotariam a cota de avaliações.
-    const dela = marcasDe(lead).filter((m) => m.chave === p.chave);
-    const ultimoEm = dela.reduce((m, x) => Math.max(m, x.em), 0);
     if (dela.some((m) => m.toque >= ultimoPronto) && (ultima === undefined || ultima <= ultimoEm) && agora - ultimoEm < VALIDADE_DO_ATALHO_S) {
       if (ultimoPronto >= p.dias.length) r.esgotadas++;
       else conta(r.seguradas, 'aguarda-proximo-degrau-pronto');
@@ -276,13 +295,19 @@ export async function varrerSilencio(ctx: Ctx, seco: boolean, p: ParamsDoSilenci
         }
         tp = Math.max(ultima, entrou);
       }
+      // As marcas valem pela ÚLTIMA MENSAGEM DO PACIENTE — não pela âncora. A âncora muda (a SDR fecha o cartão em PERDIDO, ele muda de
+      // etapa) e uma marca anterior a ela seria descartada: o degrau 1 sairia de novo. Só a mensagem do paciente zera a régua.
+      const dasMarcas = ultima === null ? [] : marcasDoSilencio(marcasDe(lead), p.chave, ultima);
+      // Com degrau já enviado o relógio segue na mensagem do paciente (a âncora só serve para ENTRAR na régua).
+      const ancora = dasMarcas.length ? ultima : tp;
+      tp = ancora;
       const d = decidirToque({
         agora,
         dias: p.dias,
         etiquetas: p.etiquetas,
         prontos: p.prontos,
-        ultimaDoPaciente: tp,
-        marcas: tp === null ? [] : marcasDoSilencio(marcasDe(lead), p.chave, tp),
+        ultimaDoPaciente: ancora,
+        marcas: dasMarcas,
         entradaAteDias: p.entradaAteDias,
       });
       if (d.tipo === 'fora') {

@@ -5,12 +5,9 @@
  */
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import type { Unit } from '@prisma/client';
-import type { KommoLead } from '../services/kommo.service.js';
-import { AGORA, COM, DIA, H, PERDIDO, SEM_FRANQUIA, campos, chamadas, ctx, escritas, extrasDoKommo, franquiaFalsa, leadsComTag, novo, poeMarca, simulacoes, tagsPostas, tracos, zerar } from './rotina-teste-util.js';
+import { AGORA, COM, DIA, H, PERDIDO, SEM_FRANQUIA, chamadas, ctx, escritas, extrasDoKommo, franquiaFalsa, leadsComTag, novo, poeMarca, simulacoes, tagsPostas, tracos, zerar } from './rotina-teste-util.js';
 import { idDaMarca, pessoaDoCartao, type Ctx, type ResumoDaRegua } from './rotina-nucleo.js';
 import { configDoExLead, estadoDoExLead, varrerExLead } from './rotina-exlead-worker.js';
-import { nuncaAgendou } from './rotina-exlead-nunca.js';
 
 beforeEach(zerar);
 
@@ -162,11 +159,49 @@ test('no seco registra por régua, não escreve, e a conta sem ▶ Reativação 
   assert.equal(r.exlead.seguradas['sem-etiqueta-na-conta'], 1);
 });
 
-test('nuncaAgendou: o cartão que mostra consulta, ou a franquia com histórico, desmente; erro da franquia lança', async () => {
-  const unit = { id: 'u' } as Unit;
-  const lead = (c: Record<string, unknown>) => ({ id: 1, name: 'A', custom_fields_values: campos(c) }) as unknown as KommoLead;
-  assert.equal(await nuncaAgendou(unit, lead({}), async () => SEM_FRANQUIA), true);
-  assert.equal(await nuncaAgendou(unit, lead({ '◷ Data da Consulta': AGORA }), async () => SEM_FRANQUIA), false);
-  assert.equal(await nuncaAgendou(unit, lead({}), async () => ({ ...SEM_FRANQUIA, conhecido: true, temHistorico: true })), false);
-  await assert.rejects(nuncaAgendou(unit, lead({}), async () => { throw new Error('franquia fora'); }));
+// ─── EM ESPERA conta da entrada na etapa ──────────────────────────────────────────────────────────
+
+test('EM ESPERA conta da ENTRADA na etapa: a SDR move para esperar a ligação (sem ◷ Retomar em) e a Reativação NÃO sai horas depois', async () => {
+  extrasDoKommo.modelos = COM_V2;
+  const entrouAgora = novo({ etapa: [COM, 14], silencioDias: 100, entrou: AGORA - 3 * H });
+  const entrouHa31 = novo({ etapa: [COM, 14], silencioDias: 100, entrou: AGORA - 31 * DIA });
+  const semData = novo({ etapa: [COM, 14], silencioDias: 100, entrou: null });
+  const r = await exlead(ctx(), false);
+  assert.deepEqual(leadsComTag(), [entrouHa31.lead.id]);
+  assert.equal(r.exlead.esperando, 1, 'o que entrou agora espera 30 dias');
+  assert.equal(r.exlead.seguradas['sem-data-de-entrada-na-etapa'], 1, 'sem a data de entrada: não arrisca');
+  assert.ok(entrouAgora && semData);
+});
+
+test('PERDIDO continua contando da perda (não da entrada em outra etapa)', async () => {
+  extrasDoKommo.modelos = COM_V2;
+  const x = novo({ etapa: PERDIDO, silencioDias: 100, closed: AGORA - 31 * DIA, entrou: AGORA - 31 * DIA });
+  await exlead(ctx(), false);
+  assert.deepEqual(leadsComTag(), [x.lead.id]);
+});
+
+// ─── motivo de perda NATIVO ───────────────────────────────────────────────────────────────────────
+
+test('"Sem interesse" fechado pelo diálogo NATIVO do Kommo (sem o campo ⊘) não recebe Reativação — nem a 2 e a 3', async () => {
+  extrasDoKommo.modelos = COM_V2;
+  extrasDoKommo.motivosNativos = [{ id: 5, name: 'Sem interesse' }, { id: 8, name: 'Sem condições financeira' }];
+  const morto = novo({ etapa: PERDIDO, silencioDias: 40, campos: RESP, lossReasonId: 5 });
+  const trabalhavel = novo({ etapa: PERDIDO, silencioDias: 40, campos: RESP, lossReasonId: 8 });
+  const dois = novo({ etapa: PERDIDO, silencioDias: 62, campos: RESP, lossReasonId: 5 });
+  const c = ctx({ intents: { rotina_exlead_toques_prontos: 3 } });
+  poeMarca(idDaMarca(c.unit.id, pessoaDoCartao(dois.lead), 'exlead', 1, dois.paciente as number), c.unit.id, dois.lead.id, 32 * 24);
+  const r = await exlead(c, false);
+  assert.deepEqual(leadsComTag(), [trabalhavel.lead.id]);
+  assert.equal(r.exlead.barrados['motivo-morto'], 2, 'o 1º e o 2º degrau do "Sem interesse" nativo');
+  assert.ok(morto);
+});
+
+test('a lista de motivos nativos não lê: o cartão com motivo nativo fica, o sem motivo segue', async () => {
+  extrasDoKommo.modelos = COM_V2;
+  extrasDoKommo.motivosNativos = null;
+  const comMotivo = novo({ etapa: PERDIDO, silencioDias: 40, campos: RESP, lossReasonId: 5 });
+  const semMotivo = novo({ etapa: [COM, 14], silencioDias: 40, campos: RESP, entrou: AGORA - 40 * DIA });
+  await exlead(ctx(), false);
+  assert.deepEqual(leadsComTag(), [semMotivo.lead.id]);
+  assert.ok(comMotivo);
 });

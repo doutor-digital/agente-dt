@@ -18,7 +18,7 @@ import {
   type ModelosV2,
   type Decisao,
 } from './etiquetas-auto.js';
-import { estadoDoExLead, nuncaAgendou } from './rotina-exlead-nunca.js';
+import { pessoaDoCartao } from './rotina-nucleo.js';
 
 /**
  * Varre as unidades com "Etiquetas ▶ automáticas" ligada ou em "só no papel" e aplica as regras de
@@ -148,28 +148,28 @@ export async function v2DaUnidade(unit: Unit, kommo: KommoClient): Promise<Model
 }
 
 /**
- * A Rotina «ex-lead» absorve a Reativação de quem NUNCA agendou: devolve «pula» no lugar de «coloca» para esse cartão. Quem já
- * consultou (ex-paciente) segue aqui. Franquia que não responde = pula também ("caiu" nunca vira "pode pôr"); a janela de 2 dias
- * da Reativação deixa a próxima varredura tentar de novo.
+ * A Rotina diária «ex-lead» (`rotina-exlead-worker.ts`) usa a MESMA ▶ Reativação e conta a que este robô já pôs como o 1º degrau. A
+ * divisão é pela MARCA, não por previsão: este robô só PULA o cartão se a rotina JÁ pôs algum degrau para essa pessoa (nos últimos
+ * 200 dias) — aí a Reativação já foi dada e repeti-la seria mensagem em dobro. O que a rotina ainda não alcançou (lista cortada em
+ * 1.500 cartões, «Pausar IA», ◷ Retomar em, quem nunca escreveu…) continua saindo daqui, como sempre saiu: nenhum buraco.
  */
-export async function deixarOExLeadParaARotina(
+export async function pularSeARotinaJaCuidou(
   unit: Unit,
   lead: KommoLead,
   d: Decisao,
-  nunca: typeof nuncaAgendou = nuncaAgendou,
-  /** o paciente escreveu alguma vez no último ano? A rotina só cobre quem conversou (sem mensagem dele não há «dias sem resposta») */
-  conversou: (lead: KommoLead) => Promise<boolean> = async () => true,
+  jaTemDegrau: (unitId: string, pessoa: string) => Promise<boolean> = rotinaExLeadJaTocou,
 ): Promise<Decisao> {
   if (d.tipo !== 'coloca') return d;
-  const resposta = await nunca(unit, lead).catch((err) => {
-    logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id }, 'etiquetas: não confirmei na franquia se é ex-lead — não pus a Reativação');
-    return null;
+  const tocou = await jaTemDegrau(unit.id, pessoaDoCartao(lead)).catch((err) => {
+    logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id }, 'etiquetas: não consegui ler as marcas da rotina — não pus a Reativação (tenta na próxima janela)');
+    return true;
   });
-  if (resposta === false) return d;
-  // nunca agendou, mas também nunca escreveu (lead de campanha, carga): a rotina não alcança, então a Reativação continua daqui
-  if (resposta === true && !(await conversou(lead).catch(() => false))) return d;
-  const motivo = resposta === null ? 'não consegui conferir a franquia agora — tenta na próxima' : 'nunca agendou: quem cuida é a Rotina diária «ex-lead»';
-  return { tipo: 'pula', etiqueta: d.etiqueta, chave: d.chave, motivo };
+  return tocou ? { tipo: 'pula', etiqueta: d.etiqueta, chave: d.chave, motivo: 'a Rotina diária «ex-lead» já deu a Reativação a esta pessoa' } : d;
+}
+
+async function rotinaExLeadJaTocou(unitId: string, pessoa: string): Promise<boolean> {
+  const achada = await prisma.executionTrace.findFirst({ where: { unitId, id: { startsWith: `rotina-${unitId}-${pessoa}-exlead-` } }, select: { id: true } });
+  return achada !== null;
 }
 
 async function decisoesDaUnidade(unit: Unit, kommo: KommoClient): Promise<Array<{ lead: KommoLead; d: Decisao }>> {
@@ -207,17 +207,9 @@ async function decisoesDaUnidade(unit: Unit, kommo: KommoClient): Promise<Array<
     statusId: 143,
   });
   const conversas = await ultimasConversas(unit.id, perdidos.leads.map((l) => l.id));
-  // A Rotina «ex-lead» (rotina-robos-worker.ts) ABSORVE a Reativação de quem nunca agendou: onde ela está LIGADA, esta
-  // regra só segue com o ex-paciente. Em «só no papel» a rotina não escreve, então aqui nada muda (sem buraco no meio).
-  const absorvida = estadoDoExLead(unit.slug) === 'ligado';
   for (const l of perdidos.leads) {
     let d = decidirReativacao(l, agora, conversas.get(l.id) ?? null, v2.reativacao);
-    if (d && absorvida) {
-      d = await deixarOExLeadParaARotina(unit, l, d, nuncaAgendou, async (lead) => {
-        const contato = (lead._embedded?.contacts ?? []).find((c) => c.is_main)?.id ?? lead._embedded?.contacts?.[0]?.id;
-        return contato !== undefined && (await kommo.contatoEscreveuDesde(contato, agora - 365 * DIA_S));
-      });
-    }
+    if (d) d = await pularSeARotinaJaCuidou(unit, l, d);
     if (d?.tipo === 'coloca') {
       const motivo = await voltouEmOutroCartao(unit.id, kommo, l, l.closed_at ?? 0, agora);
       if (motivo) {

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { deixarOExLeadParaARotina, soDestaUnidade } from './etiquetas-auto-worker.js';
+import { pularSeARotinaJaCuidou, soDestaUnidade } from './etiquetas-auto-worker.js';
 import { grupoDe, type GrupoDoCrm, type MembroDoCrm } from './crm-compartilhado.js';
 import type { KommoLead } from '../services/kommo.service.js';
 
@@ -36,20 +36,23 @@ test('etiquetas no Kommo de uma unidade só: nada muda (o campo nem é lido)', (
   assert.equal(r, QUATRO, 'a mesma lista');
 });
 
-test('Reativação absorvida pela Rotina «ex-lead»: quem nunca agendou vira «pula», o ex-paciente segue, e franquia fora do ar não põe', async () => {
+test('Reativação e Rotina «ex-lead»: o etiquetas-auto só PULA o que a rotina JÁ cuidou (marca da pessoa); o resto segue saindo daqui', async () => {
   const unit = { id: 'u', slug: 'u' } as never;
-  const lead = { id: 5 } as KommoLead;
+  const lead = { id: 5, _embedded: { contacts: [{ id: 77, is_main: true }] } } as unknown as KommoLead;
   const coloca = { tipo: 'coloca', etiqueta: '▶ Reativação', chave: 'reativacao:5:1', motivo: '30 dias' } as const;
-  const nunca = await deixarOExLeadParaARotina(unit, lead, coloca, async () => true);
-  assert.equal(nunca.tipo, 'pula');
-  assert.match(nunca.motivo, /Rotina diária/);
-  assert.deepEqual(await deixarOExLeadParaARotina(unit, lead, coloca, async () => false), coloca, 'já consultou: continua aqui');
-  const fora = await deixarOExLeadParaARotina(unit, lead, coloca, async () => { throw new Error('franquia fora'); });
-  assert.equal(fora.tipo, 'pula');
-  assert.match(fora.motivo, /franquia/);
-  // nunca agendou, mas nunca escreveu (lead de campanha): a rotina não alcança — a Reativação continua aqui
-  assert.deepEqual(await deixarOExLeadParaARotina(unit, lead, coloca, async () => true, async () => false), coloca);
-  assert.equal((await deixarOExLeadParaARotina(unit, lead, coloca, async () => true, async () => true)).tipo, 'pula');
+  let perguntou = '';
+  const jaTocou = async (_u: string, pessoa: string) => {
+    perguntou = pessoa;
+    return true;
+  };
+  const pulado = await pularSeARotinaJaCuidou(unit, lead, coloca, jaTocou);
+  assert.equal(pulado.tipo, 'pula');
+  assert.match(pulado.motivo, /Rotina diária/);
+  assert.equal(perguntou, 'c77', 'a pergunta é por PESSOA (contato), não por cartão');
+  // a rotina ainda não alcançou (lista cortada, Pausar IA, nunca escreveu...): continua saindo daqui — nenhum buraco
+  assert.deepEqual(await pularSeARotinaJaCuidou(unit, lead, coloca, async () => false), coloca);
+  // não consegui ler as marcas: na dúvida não manda (a janela de 2 dias tenta de novo)
+  assert.equal((await pularSeARotinaJaCuidou(unit, lead, coloca, async () => { throw new Error('banco fora'); })).tipo, 'pula');
   const pula = { ...coloca, tipo: 'pula' } as const;
-  assert.equal(await deixarOExLeadParaARotina(unit, lead, pula, async () => { throw new Error('não deve chamar'); }), pula);
+  assert.equal(await pularSeARotinaJaCuidou(unit, lead, pula, async () => { throw new Error('não deve chamar'); }), pula);
 });

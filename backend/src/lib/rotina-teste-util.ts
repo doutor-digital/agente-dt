@@ -111,14 +111,19 @@ export const cartoes: CartaoFalso[] = [];
 export const chamadas: string[] = [];
 export const tagsNoKommo = new Map<number, string[]>();
 /** os outros cartões de um contato (para o «voltou em outro cartão» do ex-lead) e os modelos da conta */
-export const extrasDoKommo = { outrosDoContato: [] as KommoLead[], modelos: [] as Array<{ name: string; _embedded?: { reviews?: Array<{ status?: string }> } }> };
+export const extrasDoKommo = {
+  outrosDoContato: [] as KommoLead[],
+  modelos: [] as Array<{ name: string; _embedded?: { reviews?: Array<{ status?: string }> } }>,
+  /** os motivos de perda NATIVOS da conta (`/leads/loss_reasons`); `null` = a leitura falha */
+  motivosNativos: [] as Array<{ id: number; name: string }> | null,
+};
 
 export function campos(c: Record<string, unknown>): KommoLead['custom_fields_values'] {
   return Object.entries(c).map(([nome, value], i) => ({ field_id: 5000 + i, field_name: nome, values: [{ value }] })) as KommoLead['custom_fields_values'];
 }
 
 export function novo(
-  opts: { etapa?: [number, number]; silencioDias?: number | null; tags?: string[]; campos?: Record<string, unknown>; falas?: CartaoFalso['falas']; nome?: string; closed?: number; contato?: number; entrou?: number | null; created?: number } = {},
+  opts: { etapa?: [number, number]; silencioDias?: number | null; tags?: string[]; campos?: Record<string, unknown>; falas?: CartaoFalso['falas']; nome?: string; closed?: number; lossReasonId?: number; contato?: number; entrou?: number | null; created?: number } = {},
 ): CartaoFalso {
   const id = 1000 + ++n;
   const [pipeline_id, status_id] = opts.etapa ?? [COM, 11];
@@ -131,6 +136,7 @@ export function novo(
     updated_at: AGORA - n,
     created_at: opts.created ?? AGORA - 400 * DIA,
     closed_at: opts.closed,
+    loss_reason_id: opts.lossReasonId,
     custom_fields_values: campos(opts.campos ?? {}),
     _embedded: { tags: (opts.tags ?? []).map((name, i) => ({ id: i + 1, name })), contacts: [{ id: contato, is_main: true }] },
   } as unknown as KommoLead;
@@ -181,6 +187,11 @@ export const kommo = {
     return [...ids, ...extrasDoKommo.outrosDoContato.map((l) => l.id)];
   },
   listChatTemplates: async () => extrasDoKommo.modelos,
+  listLossReasons: async () => {
+    chamadas.push('listLossReasons');
+    if (extrasDoKommo.motivosNativos === null) throw new Error('Kommo fora');
+    return extrasDoKommo.motivosNativos;
+  },
 };
 export const kommoDoCtx = kommo as unknown as Ctx['kommo'];
 
@@ -230,6 +241,7 @@ export function zerar(): void {
   fichas.clear();
   extrasDoKommo.outrosDoContato = [];
   extrasDoKommo.modelos = [];
+  extrasDoKommo.motivosNativos = [];
   franquiaFalsa.por = () => SEM_FRANQUIA;
   _limparCacheDaRotina();
 }

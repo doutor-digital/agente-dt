@@ -6,17 +6,20 @@
  * a ENTRADA e a EM QUALIFICAÇÃO têm a régua por etapa e o `parados` (90 dias sem mexer → PERDIDO, e aí entra aqui); quem está
  * AGENDADO, COMPARECEU ou EM TRATAMENTO é paciente, não ex-lead.
  *
- * ABSORVE a Reativação do `etiquetas-auto` (que põe a ▶ Reativação 30 d depois de PERDIDO): onde esta régua está LIGADA, o
- * `etiquetas-auto` deixa de pôr em quem NUNCA agendou (`deixarOExLeadParaARotina`) e segue com o ex-paciente. Em «só no papel» os dois
- * seguem como estão. Se o `etiquetas-auto` já pôs a ▶ Reativação nesse PERDIDO, vale como o 1º degrau.
+ * DIVIDE a Reativação com o `etiquetas-auto` PELA MARCA, sem buraco: ele continua pondo a ▶ Reativação 30 d depois da perda, mas PULA a
+ * pessoa a quem esta rotina já deu algum degrau (`pularSeARotinaJaCuidou`); e a Reativação que ele já pôs conta aqui como o 1º degrau.
+ * O que esta rotina não alcança (lista cortada em 1.500 cartões, «Pausar IA», ◷ Retomar em, quem nunca escreveu) segue saindo de lá.
  *
  * É a MESMA ▶ Reativação, então vale a MESMA proteção do `etiquetas-auto` (mensagem quebrada ou insistência indevida):
  *  - sem a `_v2` aprovada na unidade, o modelo diz "Aqui é {☻ Responsável agendamento}": responsável vazio ou que não é gente segura o 1º toque;
  *  - cartão que nasceu em PERDIDO (importação/carga): os 30 dias não são do paciente;
  *  - quem voltou a conversar em OUTRO cartão (cartão aberto depois da perda, conversa nos últimos 30 dias): não.
  * Além disso: motivo de perda encerrado (Outra cidade, Clicou por engano, Outra patologia, Plano de Saúde, Sem interesse…), NO_FOLLOW_UP,
- * opt-out e CURRÍCULO nunca recebem. O 1º toque só vale com silêncio entre 30 e 60 dias; o relógio conta da última mensagem OU da entrada
- * em PERDIDO, o que for mais recente (o estoque que o `parados` perde depois de meses calado entra 30 dias depois da perda).
+ * opt-out e CURRÍCULO nunca recebem — o motivo do campo ⊘ OU o escolhido no diálogo NATIVO do Kommo (`loss_reason_id`). O 1º toque só
+ * vale com silêncio entre 30 e 60 dias. O relógio conta da última mensagem OU da entrada na situação atual, o que for mais recente: em
+ * PERDIDO, a perda (o estoque que o `parados` perde depois de meses calado entra 30 dias depois dela); em EM ESPERA, a entrada na etapa
+ * (a SDR que move para esperar uma ligação não dispara a Reativação horas depois). Depois do 1º degrau o relógio segue só na mensagem
+ * do paciente: mudar de etapa não zera a régua.
  */
 import type { KommoClient, KommoLead } from '../services/kommo.service.js';
 import { logger } from './logger.js';
@@ -114,7 +117,10 @@ export async function varrerExLead(ctx: Ctx, seco: boolean, resumo: Record<strin
         janelaOlhadaDias: 365,
         opcoesDoCartao: { conferirMotivoMorto: true },
         soQuemNuncaAgendou: true,
-        ancorarNaPerda: true,
+        // PERDIDO conta da perda; EM ESPERA, da ENTRADA na etapa (a SDR combina esperar por ligação e move sem «◷ Retomar em»: a
+        // última mensagem pode ser antiga e a Reativação sairia horas depois)
+        ancorarNaPerda: etapa === ETAPA.PERDIDO,
+        ancorarNaEntrada: etapa === ETAPA.ESPERA,
         marcasExtras: marcasDaReativacaoAntiga,
         travaExtra: travasDaReativacao,
       },

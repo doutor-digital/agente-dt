@@ -101,9 +101,10 @@ const params = (extra: Partial<ParamsDoSilencio> = {}): ParamsDoSilencio => ({
   ...extra,
 });
 const ETAPA_Q = { pipelineId: COM, statusId: 11 };
-async function varrer(c: ReturnType<typeof ctx>, seco: boolean, p: ParamsDoSilencio = params()) {
+const ETAPA_PERDIDO = { pipelineId: COM, statusId: 143 };
+async function varrer(c: ReturnType<typeof ctx>, seco: boolean, p: ParamsDoSilencio = params(), etapa = p.chave === 'exlead' ? ETAPA_PERDIDO : ETAPA_Q) {
   const r = resumoNovo();
-  await varrerSilencio(c, seco, p, await cartoesDaEtapa(c.kommo, ETAPA_Q), r);
+  await varrerSilencio(c, seco, p, await cartoesDaEtapa(c.kommo, etapa), r);
   return r;
 }
 
@@ -258,4 +259,59 @@ test('erro do Kommo num cartão pula o cartão (nunca vira «pode mandar») e n�
   } finally {
     (util.kommo as { ultimaMensagemDoContatoDesde: unknown }).ultimaMensagemDoContatoDesde = original;
   }
+});
+
+// ─── a âncora muda, a régua não recomeça ──────────────────────────────────────────────────────────
+
+test('A ÂNCORA TROCA: EM ESPERA recebe o 1º degrau no dia 30, a SDR fecha em PERDIDO no dia 35 — a marca do dia 30 continua valendo e no dia 65 sai o 2º, não outro 1º', async () => {
+  const x = novo({ etapa: [COM, 143], silencioDias: 65, closed: AGORA - 30 * DIA });
+  const c = ctx({ intents: { rotina_exlead_toques_prontos: 3 } });
+  // o 1º degrau saiu há 35 dias (ele estava em EM ESPERA); a perda é de 30 dias atrás: âncora = closed_at > a marca
+  poeMarca(idDaMarca(c.unit.id, pessoaDoCartao(x.lead), 'exlead', 1, AGORA - 65 * DIA), c.unit.id, x.lead.id, 35 * 24);
+  const p = params({ chave: 'exlead', etapa: 'PERDIDO', dias: [30, 60, 90], etiquetas: ['▶ Reativação', '▶ Reativação 2', '▶ Reativação 3'], prontos: 3, entradaAteDias: 60, janelaOlhadaDias: 365, ancorarNaPerda: true });
+  await varrer(c, false, p);
+  assert.deepEqual(tagsPostas(), ['▶ Reativação 2'], 'o 2º degrau, com o relógio na mensagem do paciente (65 dias ≥ 60) e o espaço de 30 dias depois do 1º');
+});
+
+test('A ÂNCORA TROCA e o 2º degrau ainda não venceu: nada sai (não repete o 1º)', async () => {
+  const x = novo({ etapa: [COM, 143], silencioDias: 50, closed: AGORA - 10 * DIA });
+  const c = ctx({ intents: { rotina_exlead_toques_prontos: 3 } });
+  poeMarca(idDaMarca(c.unit.id, pessoaDoCartao(x.lead), 'exlead', 1, AGORA - 50 * DIA), c.unit.id, x.lead.id, 20 * 24);
+  const p = params({ chave: 'exlead', etapa: 'PERDIDO', dias: [30, 60, 90], etiquetas: ['▶ Reativação', '▶ Reativação 2', '▶ Reativação 3'], prontos: 3, entradaAteDias: 60, janelaOlhadaDias: 365, ancorarNaPerda: true });
+  const r = await varrer(c, false, p);
+  assert.equal(tagsPostas().length, 0);
+  assert.equal(r.esperando, 1);
+});
+
+test('só a MENSAGEM DO PACIENTE zera a régua: mudar de etapa/âncora não zera, responder zera', async () => {
+  const c = ctx({ intents: { rotina_toques_prontos: 3 } });
+  const respondeu = novo({ silencioDias: 3 });
+  // marca de há 10 dias; a última mensagem dele é de 3 dias atrás (depois da marca): zerou
+  poeMarca(idDaMarca(c.unit.id, pessoaDoCartao(respondeu.lead), 'qualificacao', 1, AGORA - 20 * DIA), c.unit.id, respondeu.lead.id, 240);
+  await varrer(c, false, params({ prontos: 3 }));
+  assert.deepEqual(tagsPostas(), ['▶ Retomada'], 'recomeça pelo 1º');
+});
+
+// ─── estoque antigo sem gastar chamada ────────────────────────────────────────────────────────────
+
+test('estoque antigo sem degrau: o que o banco já viu calado há mais que a janela não gasta a chamada de mensagem (nem todo dia)', async () => {
+  const velho1 = novo({ silencioDias: 80 });
+  const velho2 = novo({ silencioDias: 90 });
+  const recente = novo({ silencioDias: 3 });
+  conversas.set(String(velho1.lead.id), AGORA - 80 * DIA);
+  conversas.set(String(velho2.lead.id), AGORA - 90 * DIA);
+  const r = await varrer(ctx(), false);
+  assert.ok(!chamadas.includes(`mensagem:${velho1.contato}`) && !chamadas.includes(`mensagem:${velho2.contato}`));
+  assert.equal(r.barrados['estoque-antigo-pelo-banco'], 2);
+  assert.deepEqual(leadsComTag(), [recente.lead.id]);
+});
+
+test('estoque antigo: em PERDIDO recente (perda de ontem) a mensagem velha NÃO exclui — a âncora é a perda; e sem linha no banco não se conclui nada', async () => {
+  const perdidoOntem = novo({ etapa: [COM, 143], silencioDias: 80, closed: AGORA - DIA });
+  conversas.set(String(perdidoOntem.lead.id), AGORA - 80 * DIA);
+  const semBanco = novo({ etapa: [COM, 143], silencioDias: 80, closed: AGORA - 70 * DIA });
+  const p = params({ chave: 'exlead', etapa: 'PERDIDO', dias: [30, 60, 90], etiquetas: ['▶ Reativação', '▶ Reativação 2', '▶ Reativação 3'], entradaAteDias: 60, janelaOlhadaDias: 365, ancorarNaPerda: true });
+  await varrer(ctx(), false, p);
+  assert.ok(chamadas.includes(`mensagem:${perdidoOntem.contato}`));
+  assert.ok(chamadas.includes(`mensagem:${semBanco.contato}`));
 });

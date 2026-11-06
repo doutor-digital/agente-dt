@@ -12,6 +12,7 @@ import {
   chamadas,
   ctx,
   escritas,
+  extrasDoKommo,
   kommo,
   novo,
   poeMarca,
@@ -32,6 +33,7 @@ import {
   lerMarca,
   marcasDoSilencio,
   motivoMorto,
+  motivoMortoNativo,
   nascimentoDoCartao,
   pessoaDoCartao,
   porQueNaoTocar,
@@ -426,3 +428,49 @@ test('cartão que mudou entre a leitura e a escrita (virou NO_FOLLOW_UP): não p
 });
 
 void H;
+
+// ─── motivo de perda NATIVO do Kommo (diálogo «Fechado - perdido») ────────────────────────────────
+
+const NATIVOS = new Map([[5, 'Sem interesse'], [6, 'Plano de Saúde'], [7, 'Sem condições financeira']]);
+
+test('motivo encerrado escolhido no diálogo NATIVO do Kommo (loss_reason_id) também trava, sem o campo ⊘', () => {
+  const quente = { ...carta(), loss_reason_id: 5 };
+  assert.equal(motivoMortoNativo(quente, NATIVOS), 'Sem interesse');
+  assert.equal(motivoMortoNativo({ loss_reason_id: 7 }, NATIVOS), null, 'trabalhável');
+  assert.equal(motivoMortoNativo({ loss_reason_id: 999 }, NATIVOS), null, 'id que a conta não lista');
+  assert.equal(motivoMortoNativo({ loss_reason_id: null }, NATIVOS), null);
+  const o = { ...opcoes, conferirMotivoMorto: true };
+  assert.equal(porQueNaoTocar(quente, { ...o, motivosNativos: NATIVOS })?.codigo, 'motivo-morto');
+  assert.equal(porQueNaoTocar({ ...carta(), loss_reason_id: 7 }, { ...o, motivosNativos: NATIVOS }), null);
+  assert.equal(porQueNaoTocar(quente, opcoes), null, 'as réguas que não conferem o motivo de PERDIDO não olham');
+  // a lista não pôde ser lida: com motivo nativo no cartão, na dúvida não manda
+  assert.equal(porQueNaoTocar(quente, { ...o, motivosNativos: null })?.codigo, 'motivo-nativo-desconhecido');
+  assert.equal(porQueNaoTocar(carta(), { ...o, motivosNativos: null }), null, 'sem motivo nativo no cartão, a lista nem importa');
+});
+
+test('tocar (o caminho de escrita de QUALQUER régua) barra o motivo nativo encerrado — inclusive no aniversário — e não lê a lista de quem não tem motivo', async () => {
+  extrasDoKommo.motivosNativos = [{ id: 5, name: 'Sem interesse' }, { id: 7, name: 'Sem condições financeira' }];
+  const morto = novo({ lossReasonId: 5 });
+  const trabalhavel = novo({ lossReasonId: 7 });
+  const aberto = novo();
+  const r = resumoNovo();
+  const c = ctx();
+  assert.equal(await tocar(c, false, toque(morto), r), 'segurou');
+  assert.equal(r.seguradas['motivo-nativo-morto'], 1);
+  assert.equal(await tocar(c, false, toque(trabalhavel), r), 'ok');
+  const antes = chamadas.filter((x) => x === 'listLossReasons').length;
+  assert.equal(await tocar(c, false, toque(aberto), r), 'ok');
+  assert.equal(chamadas.filter((x) => x === 'listLossReasons').length, antes, 'cartão aberto não consulta a lista');
+  assert.equal(chamadas.filter((x) => x === 'listLossReasons').length, 1, 'e a lista é lida uma vez por varredura');
+  assert.deepEqual(chamadas.filter((x) => x.startsWith('addTag')).length, 2);
+});
+
+test('tocar: lista de motivos nativos que não lê + cartão com motivo nativo = fica (no papel aparece o porquê)', async () => {
+  extrasDoKommo.motivosNativos = null;
+  const x = novo({ lossReasonId: 5 });
+  const r = resumoNovo();
+  assert.equal(await tocar(ctx(), true, toque(x), r), 'segurou');
+  assert.equal(r.seguradas['motivo-nativo-desconhecido'], 1);
+  assert.ok(simulacoes.some((s) => s.acao === 'pularia' && /não pôde ser lido/.test(s.motivo ?? '')));
+  assert.equal(escritas().length, 0);
+});

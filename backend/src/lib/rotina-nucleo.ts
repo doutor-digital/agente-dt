@@ -177,7 +177,7 @@ const MOTIVOS_MORTOS = [
   'Informação para terceiro',
 ].map(normalizarNome);
 
-export type Cartao = Pick<KommoLead, 'custom_fields_values' | '_embedded'>;
+export type Cartao = Pick<KommoLead, 'custom_fields_values' | '_embedded' | 'loss_reason_id'>;
 
 function tags(lead: Cartao): string[] {
   return (lead._embedded?.tags ?? []).map((t) => normalizarNome(t.name ?? ''));
@@ -185,6 +185,17 @@ function tags(lead: Cartao): string[] {
 
 export function temEtiqueta(lead: Cartao, nome: string): boolean {
   return tags(lead).includes(normalizarNome(nome));
+}
+
+/** Os nomes dos motivos de perda NATIVOS do Kommo (o diálogo «Fechado - perdido»), por id, da conta. */
+export type MotivosNativos = ReadonlyMap<number, string>;
+
+/** O nome do motivo "morto" ESCOLHIDO NO DIÁLOGO NATIVO do Kommo (`loss_reason_id`), ou null. Id que a conta não lista: não é morto conhecido. */
+export function motivoMortoNativo(lead: Pick<KommoLead, 'loss_reason_id'>, nativos: MotivosNativos): string | null {
+  const id = lead.loss_reason_id;
+  if (!id) return null;
+  const nome = nativos.get(id);
+  return nome && MOTIVOS_MORTOS.includes(normalizarNome(nome)) ? nome : null;
 }
 
 /** O motivo de perda "morto" que o cartão carrega (nos dois campos ⊘), ou null. */
@@ -210,6 +221,11 @@ export interface OpcoesDeCartao {
   pausarIaFieldId: number | null;
   /** confere o motivo de perda "morto" (ex-lead e aniversário); as réguas por etapa não olham PERDIDO */
   conferirMotivoMorto?: boolean;
+  /**
+   * Motivos nativos da conta (`GET /leads/loss_reasons`): quem fechou "Sem interesse" pelo DIÁLOGO do Kommo, sem preencher o campo ⊘,
+   * também é caso encerrado. `null` = a lista não pôde ser lida: o cartão com `loss_reason_id` fica (na dúvida, não manda).
+   */
+  motivosNativos?: MotivosNativos | null;
   /** aniversário: só as travas de "não contatar" — Pausar IA, ◷ Retomar em e consulta futura NÃO impedem um parabéns */
   soNaoContatar?: boolean;
 }
@@ -224,6 +240,11 @@ export function porQueNaoTocar(lead: Cartao, o: OpcoesDeCartao): RazaoDeFicar | 
   if (o.conferirMotivoMorto) {
     const m = motivoMorto(lead);
     if (m) return { codigo: 'motivo-morto', texto: `perdido por «${m}»: caso encerrado` };
+    if (lead.loss_reason_id && o.motivosNativos === null) return { codigo: 'motivo-nativo-desconhecido', texto: 'o motivo de perda do Kommo não pôde ser lido: na dúvida, não manda' };
+    if (lead.loss_reason_id && o.motivosNativos) {
+      const n = motivoMortoNativo(lead, o.motivosNativos);
+      if (n) return { codigo: 'motivo-morto', texto: `perdido por «${n}» (motivo nativo do Kommo): caso encerrado` };
+    }
   }
   if (o.soNaoContatar) return null;
   if (o.pausarIaFieldId !== null) {
@@ -338,6 +359,7 @@ export type KommoDoNucleo = Pick<
   | 'listTalks'
   | 'listTalkMessages'
   | 'listLeadsPorIds'
+  | 'listLossReasons'
   | 'getLead'
   | 'addTag'
   | 'removeTag'
@@ -369,6 +391,8 @@ export interface Ctx {
   /** a régua de aniversário está LIGADA nesta unidade (as outras cedem o dia do aniversário a ela) */
   aniversarioLigado?: boolean;
   marcas?: Promise<MarcasDaUnidade>;
+  /** os motivos de perda nativos da conta, lidos uma vez por varredura (null = não deu para ler) */
+  motivosNativos?: Promise<MotivosNativos | null>;
   /** pessoas tocadas nesta varredura (a marca nova ainda não está na leitura do banco) */
   tocados?: Set<string>;
   franquia?: (unit: Unit, leadId: number, nome: string | null, agora: number) => Promise<NaFranquia>;
@@ -414,6 +438,7 @@ export async function funisDaConta(unit: Unit, kommo: KommoClient): Promise<Funi
 /** Para o teste começar limpo. */
 export function _limparCacheDaRotina(): void {
   vistoAte.clear();
+  nativosCache.clear();
   funisCache.clear();
   simulados.clear();
 }
@@ -463,6 +488,25 @@ export async function carregarMarcas(ctx: Ctx): Promise<MarcasDaUnidade> {
 
 export function marcasDaUnidade(ctx: Ctx): Promise<MarcasDaUnidade> {
   return (ctx.marcas ??= carregarMarcas(ctx));
+}
+
+const nativosCache = new Map<string, { em: number; mapa: MotivosNativos }>();
+const NATIVOS_TTL_MS = 60 * 60_000;
+
+/** Os motivos de perda nativos da conta (cache de 1 h por unidade). `null` se a leitura falhar — quem confere trata como «na dúvida, não manda». */
+export function motivosNativosDaConta(ctx: Ctx): Promise<MotivosNativos | null> {
+  return (ctx.motivosNativos ??= (async () => {
+    const hit = nativosCache.get(ctx.unit.id);
+    if (hit && Date.now() - hit.em < NATIVOS_TTL_MS) return hit.mapa;
+    try {
+      const mapa = new Map((await ctx.kommo.listLossReasons()).map((m) => [m.id, m.name] as const));
+      nativosCache.set(ctx.unit.id, { em: Date.now(), mapa });
+      return mapa;
+    } catch (err) {
+      logger.warn({ err: String(err), unit: ctx.unit.slug }, 'rotina: não li os motivos de perda do Kommo — cartão com motivo nativo fica');
+      return null;
+    }
+  })());
 }
 
 /** Esta pessoa já recebeu um toque hoje (rotina, `etiquetas-auto`, ou nesta varredura)? */
@@ -568,6 +612,16 @@ export async function tocar(ctx: Ctx, seco: boolean, t: Toque, r: ResumoDaRegua)
     r.acimaDoTeto++;
     if (seco) noPapel('pularia', `teto do dia (${ctx.base.teto}): sairia amanhã`);
     return 'teto';
+  }
+  // motivo de perda NATIVO do Kommo de caso encerrado ("Sem interesse" pelo diálogo): vale para QUALQUER régua que passe por aqui
+  if (t.lead.loss_reason_id) {
+    const nativos = await motivosNativosDaConta(ctx);
+    const morto = nativos ? motivoMortoNativo(t.lead, nativos) : null;
+    if (morto || nativos === null) {
+      conta(r.seguradas, morto ? 'motivo-nativo-morto' : 'motivo-nativo-desconhecido');
+      if (seco) noPapel('pularia', morto ? `perdido por «${morto}» (motivo nativo do Kommo): caso encerrado` : 'o motivo de perda do Kommo não pôde ser lido');
+      return 'segurou';
+    }
   }
   // a mesma PESSOA em dois cartões (ex.: PERDIDO + QUALIFICAÇÃO) não recebe dois modelos no mesmo dia
   if (seco) {
