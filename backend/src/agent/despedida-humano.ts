@@ -95,7 +95,7 @@ const PARA_AGENDAR = String.raw`(?: para (?:agendar|marcar)(?: (?:a )?(?:consult
 const T = String.raw`(?:mais pra frente|mais para frente|em outro momento|outra hora|depois|mais tarde|logo mais|amanha|semana que vem|mes que vem|quando (?:eu )?(?:puder|der|decidir|conseguir|resolver))`;
 /** Promessa de voltar que não se confunde com outra coisa. ("retorno" é substantivo em clínica; "volto"/"te ligo"/"te retorno" precisam de "eu" ou de tempo.) */
 const FORTE_VERBO = String.raw`(?:entro em contato|entrarei em contato|voltarei|retornarei|volto a (?:falar|conversar|procurar|entrar em contato)|te (?:aviso|chamo|falo|procuro))`;
-/** Verbos ambíguos: só com "eu" antes ou tempo ao lado ("eu te retorno", "retorno depois", "depois te ligo"). */
+/** Verbos ambíguos: só com "eu" explícito ("eu te retorno", "depois eu volto"). "Retorno amanhã" é a consulta de retorno, "volto depois" é fato. */
 const AMBIGUO_VERBO = String.raw`(?:volto|retorno|te ligo|te retorno)`;
 const FRACO_VERBO = String.raw`(?:vejo|marco|agendo|decido|faco|resolvo|falo|aviso|chamo|procuro|ligo)`;
 
@@ -116,12 +116,12 @@ const ADIA_FORTE: RegExp[] = [
   /\bvou deixar (?:isso )?(?:pra|para) (?:o )?(?:outro|proximo|depois|mais tarde)(?: (?:mes|dia|semana|ano))?\b/g,
   /\b(?:qualquer coisa|se precisar) (?:eu )?(?:te )?(?:chamo|aviso|falo|procuro)\b/g,
   // tempo + (eu) + verbo, com "para agendar" opcional colado ao verbo
-  new RegExp(String.raw`\b${T} (?:eu )?(?:${FORTE_VERBO}|${AMBIGUO_VERBO})${PARA_AGENDAR}${COM_VOCES}\b`, 'g'),
+  new RegExp(String.raw`\b${T} (?:eu )?${FORTE_VERBO}${PARA_AGENDAR}${COM_VOCES}\b`, 'g'),
+  new RegExp(String.raw`\b${T} eu ${AMBIGUO_VERBO}${PARA_AGENDAR}${COM_VOCES}\b`, 'g'),
   // verbo forte, com tempo opcional depois
   new RegExp(String.raw`\b(?:eu )?${FORTE_VERBO}${PARA_AGENDAR}${COM_VOCES}(?: ${T})?\b`, 'g'),
-  // verbo ambíguo: "eu" antes, ou tempo depois
+  // verbo ambíguo: só com "eu" explícito
   new RegExp(String.raw`\beu ${AMBIGUO_VERBO}${PARA_AGENDAR}${COM_VOCES}(?: ${T})?\b`, 'g'),
-  new RegExp(String.raw`\b${AMBIGUO_VERBO}${PARA_AGENDAR}${COM_VOCES} ${T}\b`, 'g'),
 ];
 
 /**
@@ -130,7 +130,7 @@ const ADIA_FORTE: RegExp[] = [
  */
 const ADIA_SEM_PEDIDO: RegExp[] = [
   /\b(?:quando|assim que) (?:eu )?(?:puder|decidir|resolver|conseguir|der)\b/g,
-  /\bvou (?:ver|verificar)(?: (?:isso|aqui|com calma|direitinho))?(?= depois|$)/g,
+  /\bvou (?:ver|verificar)(?: (?:isso|aqui|com calma|direitinho))?(?= depois|\s*$)/g,
   /\bnao vou (?:querer|marcar|agendar)(?: (?:marcar|agendar))?\b/g,
   /\bnao quero (?:agora|por enquanto|no momento)\b/g,
 ];
@@ -176,13 +176,14 @@ const ACK: RegExp[] = [
 /** O que pode SOBRAR sem ser conteúdo: palavras de ligação. ("to", "bem", "mal", "nao", "sim" NÃO estão aqui de propósito.) */
 const LIGACAO = new Set([
   'e', 'eu', 'te', 'lhe', 'me', 'a', 'o', 'as', 'os', 'um', 'uma', 'de', 'do', 'da', 'em', 'no', 'na', 'pra', 'para', 'por',
-  'que', 'se', 'logo', 'mais', 'depois', 'agora', 'ja', 'entao', 'ai', 'aqui', 'so', 'mesmo', 'tambem', 'favor', 'pois', 'la',
-  'vou', 'vamos', 'irei', 'muito', 'com', 'voces', 'vcs',
+  'que', 'se', 'logo', 'mais', 'depois', 'agora', 'ja', 'entao', 'ai', 'so', 'mesmo', 'tambem', 'favor', 'pois', 'com', 'voces', 'vcs',
 ]);
 
 interface Analise {
   /** Sobrou só palavra de ligação. */
   limpa: boolean;
+  /** Não sobrou NADA (nem palavra de ligação): é só cortesia. "Obrigada, vamos lá" não é pura. */
+  pura: boolean;
   adiou: boolean;
   agradeceu: boolean;
 }
@@ -212,26 +213,28 @@ function analisarFala(texto: string, ctx: ContextoDaIa): Analise | null {
   let t = normalizar(texto); // vazio = só emoji de cortesia (👍): limpa, sem nada reconhecido
   const abre = !ctx.perguntou && !ctx.iaPediu;
   let adiou = false;
-  const passos: Array<[RegExp[], (tirou: boolean) => void, boolean]> = [
-    [DESCULPA_BENIGNA, () => undefined, true],
-    [ADIA_FORTE, (x) => { adiou ||= x; }, true],
-    [ADIA_GENERICO, (x) => { adiou ||= x; }, !ctx.perguntou],
-    [ADIA_SEM_PEDIDO, (x) => { adiou ||= x; }, abre],
-    [ADIA_FRACO, (x) => { adiou ||= x; }, abre],
-  ];
-  for (const [res, marca, vale] of passos) {
-    if (!vale) continue;
-    const r = tirar(t, res);
-    t = r.resto;
-    marca(r.tirou);
-  }
+  // O agradecimento sai primeiro: "ok vou ver, obrigada" tem de ficar "ok vou ver" para o fim de frase valer.
   const ag = tirar(t, AGRADECE);
   t = ag.resto.replace(/\s+/g, ' ').trim();
   // "Não, obrigada" a "posso ajudar em mais algo?": o "não" é a despedida, só se for tudo o que sobrou do agradecimento
   if (ctx.ofereceuAjuda && ag.tirou && /^(?:nao(?: precisa)?|nada|so isso|e so isso)$/.test(t)) t = '';
+  const passos: Array<[RegExp[], boolean]> = [
+    [DESCULPA_BENIGNA, true],
+    [ADIA_FORTE, true],
+    [ADIA_GENERICO, abre],
+    [ADIA_SEM_PEDIDO, abre],
+    [ADIA_FRACO, abre],
+  ];
+  for (const [res, vale] of passos) {
+    if (!vale) continue;
+    const r = tirar(t, res);
+    t = r.resto;
+    if (res !== DESCULPA_BENIGNA) adiou ||= r.tirou;
+  }
   t = tirar(t, ACK).resto;
-  const sobra = t.split(' ').filter((w) => w && !LIGACAO.has(w));
-  return { limpa: sobra.length === 0, adiou, agradeceu: ag.tirou };
+  const palavras = t.split(' ').filter(Boolean);
+  const sobra = palavras.filter((w) => !LIGACAO.has(w));
+  return { limpa: sobra.length === 0, pura: palavras.length === 0, adiou, agradeceu: ag.tirou };
 }
 
 /** "Muito obrigada pelas informações" etc. já estão em AGRADECE. */
@@ -253,13 +256,44 @@ export function iaTerminouPerguntando(texto: string | null | undefined): boolean
   return depois.length <= 70;
 }
 
-/** A fala da IA PEDIU algo ou prometeu voltar, sem "?" ("Me envie o comprovante.", "Vou confirmar com a equipe e já te retorno."): "ok, obrigada" é resposta, não despedida. */
-const IA_PEDIU =
-  /\bme\s+(?:conta|conte|fala|fale|diz|diga|avise|avisa|informe|envie|mande|passe|manda|passa|envia|confirma|confirme)\b|(?:^|[.!\n]\s*)(?:qual|quais|quanto|onde|como|quando|que\s+horas?|em\s+qual|voc[êe]\s+(?:prefere|quer|pode|consegue|tem))\b|\b(?:envie|mande|manda|envia|informe|passe|diga)\b|\bpreciso\s+d[aeo]s?\b|\bpode\s+me\b|\bpoderia\b|\baguard[ea]\b|\bte\s+retorno\b|\bvou\s+(?:confirmar|verificar|ver)\s+com\b/i;
+/**
+ * A última fala da Sofia deixa algo PENDENTE sem ser pergunta com "?": pede ("me envie o exame", "seu nome completo e CPF, por favor"),
+ * oferece ("posso reservar", "se quiser, agendo"), propõe horário ("tenho horário amanhã às 14h"), pré-reserva ("falta o Pix") ou
+ * promete voltar ("já te retorno"). Aí "ok, obrigada" / "depois eu vejo" é RESPOSTA a ela, não despedida. Largo de propósito: o custo
+ * de errar é a Sofia responder "combinado" como hoje. Roda sobre o texto sem acento.
+ */
+const IA_PEDIU = new RegExp(
+  [
+    String.raw`\bme (?:conta|conte|fala|fale|diz|diga|avise|avisa|informe|envie|mande|passe|manda|passa|envia|confirma|confirme)\b`,
+    String.raw`\b(?:envie|mande|manda|envia|informe|passe|diga|preciso|precisamos|gostaria|poderia|pode me|aguarde|aguarda|te retorno|ja te retorno)\b`,
+    String.raw`\bvou (?:confirmar|verificar|ver|checar) com\b`,
+    String.raw`\b(?:posso|podemos|se quiser|se preferir|se desejar|tenho horario|temos horario|horarios?|vaga|vagas|reserv\w*|agend\w*|marcar|marcad\w*|pix|cpf|nome completo|por favor|falta|faltam|confirm\w*)\b`,
+    String.raw`\b\d{1,2} ?h\b|\b\d{1,2}:\d{2}\b`,
+    String.raw`\b(?:ha quanto tempo|desde quando|quantos anos|quanto tempo)\b`,
+    // pergunta sem "?" no começo da frase
+    String.raw`(?:^|[.!\n] ?)(?:qual|quais|quanto|onde|como|quando|que horas?|em qual|voce (?:prefere|quer|pode|consegue|tem))\b`,
+  ].join('|'),
+  'i',
+);
+
+/** minúsculas e sem acento, MANTENDO a pontuação (o `normalizar` a apaga e as âncoras de frase precisam dela). */
+const semAcento = (t: string): string => t.toLowerCase().normalize('NFD').replace(/\p{M}/gu, '');
 
 /** A pergunta da IA era "posso ajudar em mais algo?": "Não, obrigada" é a despedida. */
 const OFERTA_DE_AJUDA =
   /\b(?:posso|podemos)\s+(?:te\s+|lhe\s+)?ajudar\s+(?:em|com)\s+(?:mais|algo|outra|alguma)|\bmais\s+alguma\s+(?:coisa|d[úu]vida)|\balguma\s+outra\s+(?:d[úu]vida|coisa)|\balgo\s+mais\b|\bficou\s+(?:com\s+)?alguma\s+d[úu]vida|\bprecisa\s+de\s+mais\s+(?:algo|alguma|informa)/i;
+
+/**
+ * A pergunta da Sofia era SÓ "posso ajudar em mais algo?" — a única pergunta da mensagem, e a frase com o "?" é a oferta. Oferta de
+ * ajuda dita no meio de outra coisa ("Posso reservar as 14h? Se tiver outra dúvida, me avise.") não vira "não, obrigada = despedida".
+ */
+function ofereceuMaisAjuda(ultimaIa: string): boolean {
+  const t = ultimaIa.replace(LINHA_DE_BOTOES, '').trim();
+  if ((t.match(/\?/g) ?? []).length !== 1) return false;
+  const i = t.indexOf('?');
+  const frase = t.slice(Math.max(t.lastIndexOf('.', i), t.lastIndexOf('!', i), t.lastIndexOf('\n', i)) + 1, i + 1);
+  return OFERTA_DE_AJUDA.test(frase);
+}
 
 /** Sinal de alerta com todas as letras (rede de segurança extra; a lista branca já responde a tudo que não é despedida limpa). */
 export function temSinalOuUrgencia(textos: string[]): boolean {
@@ -280,7 +314,11 @@ export function detectarDespedida(falas: Fala[], falasDoPaciente?: string[]): De
   // webhook não trouxe); `falas` não as tem. Tudo o que ele disse passa pela lista branca.
   const textos = falasDoPaciente && falasDoPaciente.length > 0 ? falasDoPaciente : turno.textos;
   if (textos.length === 0 || !ultimaIa) return null;
-  const ctx: ContextoDaIa = { perguntou: iaTerminouPerguntando(ultimaIa), iaPediu: IA_PEDIU.test(ultimaIa), ofereceuAjuda: OFERTA_DE_AJUDA.test(ultimaIa) };
+  const ctx: ContextoDaIa = {
+    perguntou: iaTerminouPerguntando(ultimaIa),
+    iaPediu: IA_PEDIU.test(semAcento(ultimaIa)),
+    ofereceuAjuda: ofereceuMaisAjuda(ultimaIa),
+  };
   const analises: Analise[] = [];
   for (const t of textos) {
     const a = analisarFala(t, ctx);
@@ -289,8 +327,9 @@ export function detectarDespedida(falas: Fala[], falasDoPaciente?: string[]): De
   }
   const adiou = analises.some((a) => a.adiou);
   if (adiou) return { tipo: 'adiou', fala: textos.join('\n').trim() };
+  // Sem adiamento, só cortesia PURA vale (nem palavra de ligação sobra): "Obrigada, vamos lá" / "Ok, irei, obrigada" é aceitar, não despedir.
   const livre = (!ctx.perguntou && !ctx.iaPediu) || ctx.ofereceuAjuda;
-  if (livre && analises.some((a) => a.agradeceu)) return { tipo: 'agradeceu', fala: textos.join('\n').trim() };
+  if (livre && analises.every((a) => a.pura) && analises.some((a) => a.agradeceu)) return { tipo: 'agradeceu', fala: textos.join('\n').trim() };
   return null;
 }
 
