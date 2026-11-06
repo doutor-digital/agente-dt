@@ -20,6 +20,8 @@ export const JANELA_24H_MS = 24 * 60 * 60 * 1000;
  * resposta" confere antes de abrir o seu.
  */
 export const REGRA_DESPEDIDA = 'despedida_humano';
+/** A última fala que a Sofia calou por despedida (regravada a cada "ok"): o alerta de "sem resposta" cobre a espera por ela. */
+export const REGRA_DESPEDIDA_ULTIMA = 'despedida_humano_ultima';
 
 /** Já houve aviso desse tipo pra esse lead dentro da janela? (só leitura) */
 export async function avisoRecente(

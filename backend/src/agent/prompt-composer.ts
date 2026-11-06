@@ -2548,6 +2548,11 @@ export async function composeSystemPromptForUnit(input: {
   historico?: Fala[];
   /** Onde deixar a oferta que foi carregada: o grafo a lê de volta para o guardrail de preço, sem consultar duas vezes. */
   ofertaSaida?: { valor?: OfertaVigente | null };
+  /**
+   * Onde deixar se a consulta do paciente é DESCONHECIDA (a franquia não respondeu, ou o cartão diz que ele já agendou/é paciente e o
+   * prompt não ficou com consulta): o grafo lê de volta, e "sem consulta no prompt" não vira "ainda não marcou" (despedida-humano.ts).
+   */
+  consultaSaida?: { desconhecida?: boolean };
 }): Promise<string> {
   return composeSystemPrompt(await loadComposeInput(input));
 }
@@ -2562,6 +2567,11 @@ export async function composeSystemPromptPartsForUnit(input: {
   historico?: Fala[];
   /** Onde deixar a oferta que foi carregada: o grafo a lê de volta para o guardrail de preço, sem consultar duas vezes. */
   ofertaSaida?: { valor?: OfertaVigente | null };
+  /**
+   * Onde deixar se a consulta do paciente é DESCONHECIDA (a franquia não respondeu, ou o cartão diz que ele já agendou/é paciente e o
+   * prompt não ficou com consulta): o grafo lê de volta, e "sem consulta no prompt" não vira "ainda não marcou" (despedida-humano.ts).
+   */
+  consultaSaida?: { desconhecida?: boolean };
 }): Promise<{ cacheable: string; dynamic: string }> {
   return composeSystemPromptParts(await loadComposeInput(input));
 }
@@ -2576,6 +2586,11 @@ async function loadComposeInput(input: {
   historico?: Fala[];
   /** Onde deixar a oferta que foi carregada: o grafo a lê de volta para o guardrail de preço, sem consultar duas vezes. */
   ofertaSaida?: { valor?: OfertaVigente | null };
+  /**
+   * Onde deixar se a consulta do paciente é DESCONHECIDA (a franquia não respondeu, ou o cartão diz que ele já agendou/é paciente e o
+   * prompt não ficou com consulta): o grafo lê de volta, e "sem consulta no prompt" não vira "ainda não marcou" (despedida-humano.ts).
+   */
+  consultaSaida?: { desconhecida?: boolean };
 }): Promise<ComposeInput> {
   const shouldRunRag =
     !!input.userMessage &&
@@ -2602,6 +2617,7 @@ async function loadComposeInput(input: {
         })
     : Promise.resolve(null);
 
+  let consultaFalhou = false;
   const [templates, flagged, knowledge, actions, globalActions, leadFieldRules, leadMemory, consulta, estadoEtapa, lessons, contato, outraSofia, redeDeUnidades, ofertaDaCampanha] = await Promise.all([
     prisma.messageTemplate.findMany({
       where: { unitId: input.unit.id },
@@ -2645,6 +2661,7 @@ async function loadComposeInput(input: {
             { err, leadId: input.leadId },
             'consultaDoLead falhou — sem bloco de consulta no prompt',
           );
+          consultaFalhou = true;
           return null;
         })
       : Promise.resolve(null),
@@ -2698,8 +2715,16 @@ async function loadComposeInput(input: {
   const pacienteFranquia =
     input.leadId && input.unit.spineEnabled && perguntarAFranquia
       ? await pacienteNaFranquia(input.unit, input.leadId, [etapaFinal?.tituloDoCartao, contato?.contactName], telefone)
-          .catch(() => null)
+          .catch(() => {
+            consultaFalhou = true;
+            return null;
+          })
       : null;
+  if (input.consultaSaida) {
+    // Desconhecida: sem integração com a franquia (não dá para afirmar "não marcou"), ou a leitura falhou, ou o cartão diz
+    // que ele já agendou/é paciente. Fora disso, "sem bloco de consulta" quer dizer que a franquia respondeu que não há.
+    input.consultaSaida.desconhecida = !input.unit.spineEnabled || consultaFalhou || !!etapaFinal?.jaAgendadoOuPaciente;
+  }
 
   return {
     ...input,

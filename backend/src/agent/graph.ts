@@ -709,6 +709,8 @@ export async function buildAgentGraph(
     // A oferta do disparo de campanha que este paciente recebeu: o prompt a ensina à Sofia e o guardrail de preço a aceita.
     // O prompt a carrega (junto com o resto, em paralelo) e a deixa aqui, para o guardrail ler a MESMA coisa sem consultar de novo.
     const ofertaDoTurno: { valor?: OfertaVigente | null } = {};
+    // Se a consulta do paciente é desconhecida (franquia fora do ar etc.): "sem consulta no prompt" não é "ainda não marcou".
+    const consultaDoTurno: { desconhecida?: boolean } = {};
 
     let systemMessage: SystemMessage;
     // O prompt deste turno em texto: a guarda do nome do profissional (lá embaixo) só deixa sair
@@ -723,6 +725,7 @@ export async function buildAgentGraph(
         leadId: state.leadId,
         historico: falas,
         ofertaSaida: ofertaDoTurno,
+        consultaSaida: consultaDoTurno,
       });
       promptDoTurno = `${cacheable}\n${dynamic ?? ''}`;
       systemMessage = new SystemMessage({
@@ -740,6 +743,7 @@ export async function buildAgentGraph(
         leadId: state.leadId,
         historico: falas,
         ofertaSaida: ofertaDoTurno,
+        consultaSaida: consultaDoTurno,
       });
       promptDoTurno = dynamicPrompt;
       systemMessage = new SystemMessage(dynamicPrompt);
@@ -756,11 +760,12 @@ export async function buildAgentGraph(
           estado: estadoDespedida,
           falas,
           temConsulta: promptTemConsulta(promptDoTurno),
+          consultaDesconhecida: consultaDoTurno.desconhecida !== false,
           recorder,
         });
         if (despedida.acao === 'silenciar') {
           // Sem mensagem da IA no histórico: o paciente não leu nada. Quem fecha o trace é o canal de entrega (resposta vazia).
-          return { decision: '' } satisfies Partial<AgentStateType>;
+          return { decision: '', silencio: true } satisfies Partial<AgentStateType>;
         }
       }
     }

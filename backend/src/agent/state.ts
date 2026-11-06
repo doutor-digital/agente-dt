@@ -22,6 +22,16 @@ export const AgentState = Annotation.Root({
     default: () => null,
   }),
 
+  /**
+   * A Sofia ficou calada de propósito neste turno (despedida-humano.ts): o paciente não leu nada e a equipe foi avisada. Quem
+   * invoca o grafo manda `silencio: false` na entrada de CADA turno — o checkpoint guarda o estado entre turnos e sem isso o
+   * valor do turno anterior vazaria.
+   */
+  silencio: Annotation<boolean>({
+    reducer: (_prev, next) => next,
+    default: () => false,
+  }),
+
   traceId: Annotation<string>({
     reducer: (_prev, next) => next,
     default: () => '',

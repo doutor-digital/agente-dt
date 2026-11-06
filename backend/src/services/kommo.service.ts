@@ -1989,19 +1989,25 @@ export class KommoClient {
    * cartão. Erro lança.
    */
   async tarefasAbertasDoLead(leadId: number): Promise<KommoTarefa[]> {
+    const abertas: KommoTarefa[] = [];
     try {
-      const { data, status } = await this.http.get<{ _embedded?: { tasks?: KommoTarefa[] } } | ''>('/tasks', {
-        params: {
-          'filter[entity_id][]': leadId,
-          'filter[entity_type]': 'leads',
-          'filter[is_completed]': 0,
-          limit: 50,
-        },
-      });
-      if (status === 204 || !data) return [];
-      return (data._embedded?.tasks ?? []).filter(
-        (t) => !t.is_completed && Number(t.entity_id) === leadId && (!t.entity_type || t.entity_type === 'leads'),
-      );
+      // Pagina: um cartão com mais de 250 tarefas abertas é raro, mas "li só as primeiras" não pode virar "não há tarefa".
+      for (let page = 1; page <= 10; page++) {
+        const { data, status } = await this.http.get<{ _embedded?: { tasks?: KommoTarefa[] } } | ''>('/tasks', {
+          params: {
+            'filter[entity_id][]': leadId,
+            'filter[entity_type]': 'leads',
+            'filter[is_completed]': 0,
+            limit: 250,
+            page,
+          },
+        });
+        if (status === 204 || !data) break;
+        const lote = data._embedded?.tasks ?? [];
+        abertas.push(...lote);
+        if (lote.length < 250) break;
+      }
+      return abertas.filter((t) => !t.is_completed && Number(t.entity_id) === leadId && (!t.entity_type || t.entity_type === 'leads'));
     } catch (err) {
       wrapAxiosError(err, `tarefasAbertasDoLead(${leadId})`);
     }

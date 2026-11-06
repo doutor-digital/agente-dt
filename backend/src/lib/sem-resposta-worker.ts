@@ -34,8 +34,8 @@ import { ehEncerramento } from './encerramento.js';
 import { mascararPii } from './pii.js';
 import { registrarSimulacao, type Simulacao } from './so-no-papel.js';
 import { esquemaDaUnidade } from './kommo-schema.js';
-import { marcarAviso, marcadoEm, REGRA_DESPEDIDA } from './aviso-dedupe.js';
-import { estadoDaDespedidaHumano } from './despedida-humano-estado.js';
+import { marcarAviso, marcadoEm, REGRA_DESPEDIDA, REGRA_DESPEDIDA_ULTIMA } from './aviso-dedupe.js';
+import { estadoDaDespedidaHumano, JANELA_MESMO_EVENTO_MS } from './despedida-humano-estado.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { mensagensOficiais, type MensagemOficial } from '../services/kommo-talks.service.js';
 
@@ -270,9 +270,14 @@ export const DEPS_SEM_RESPOSTA_PADRAO: DepsSemResposta = {
   tarefaEm: async (unit, leadId) => marcadoEm(unit.id, leadId, REGRA_SEM_RESPOSTA_TAREFA),
   marcarTarefa: (unit, leadId, quando) => marcarAviso(unit.id, leadId, REGRA_SEM_RESPOSTA_TAREFA, quando),
   tarefaDoTurnoPerdidoEm: async (unit, leadId) => marcadoEm(unit.id, leadId, REGRA_TAREFA_TURNO_PERDIDO),
-  // Só lê a marca onde a despedida está LIGADA: desligada (ou só no papel) a Sofia responde e não há aviso a cobrir.
-  despedidaAvisouEm: async (unit, leadId) =>
-    estadoDaDespedidaHumano(unit.slug) === 'ligado' ? marcadoEm(unit.id, leadId, REGRA_DESPEDIDA) : null,
+  // Só lê a marca onde a despedida está LIGADA. Devolve a da ÚLTIMA fala calada, e só enquanto a tarefa do aviso é recente (6 h):
+  // tarefa vencida e ignorada deixa o "sem resposta" agir.
+  despedidaAvisouEm: async (unit, leadId) => {
+    if (estadoDaDespedidaHumano(unit.slug) !== 'ligado') return null;
+    const tarefa = await marcadoEm(unit.id, leadId, REGRA_DESPEDIDA);
+    if (!tarefa || Date.now() - tarefa.getTime() > JANELA_MESMO_EVENTO_MS) return null;
+    return marcadoEm(unit.id, leadId, REGRA_DESPEDIDA_ULTIMA);
+  },
   criarTarefa: async (unit, leadId, texto) => {
     const kommo = createKommoClient(unit);
     // O responsável do cartão; o `createTask` troca o login da consultoria pelo usuário da clínica (quando é um só).

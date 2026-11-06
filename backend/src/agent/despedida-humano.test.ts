@@ -1,6 +1,5 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import type { Unit } from '@prisma/client';
 
 import { _semearParaTeste } from '../lib/automacoes-estado.js';
@@ -22,7 +21,6 @@ import {
   temSinalOuUrgencia,
   textoDaNota,
   textoDaTarefa,
-  turnoFicouEmSilencio,
   type DepsDaDespedida,
 } from './despedida-humano.js';
 
@@ -174,13 +172,14 @@ interface Chamadas {
   tarefas: Array<{ leadId: number; texto: string; completeAt: number; responsavel: number | null }>;
   notas: string[];
   marcas: Date[];
+  ultimas: Date[];
   simulacoes: Array<{ acao: string; alvo: string; leadId: number }>;
   passos: Array<{ kind: string; title: string }>;
   leituras: string[];
 }
 
 function montar(over: Partial<DepsDaDespedida> = {}, estado: { marca?: Date | null; iaFalou?: boolean; abertas?: KommoTarefa[] } = {}) {
-  const c: Chamadas = { tarefas: [], notas: [], marcas: [], simulacoes: [], passos: [], leituras: [] };
+  const c: Chamadas = { tarefas: [], notas: [], marcas: [], ultimas: [], simulacoes: [], passos: [], leituras: [] };
   let marca = estado.marca ?? null;
   const deps: DepsDaDespedida = {
     agora: () => AGORA,
@@ -209,6 +208,9 @@ function montar(over: Partial<DepsDaDespedida> = {}, estado: { marca?: Date | nu
       marca = quando;
       c.marcas.push(quando);
     },
+    marcarUltima: async (_u, _l, quando) => {
+      c.ultimas.push(quando);
+    },
     simular: (_u, _a, s) => c.simulacoes.push({ acao: s.acao, alvo: s.alvo, leadId: s.leadId }),
     ...over,
   };
@@ -226,6 +228,7 @@ const entrada = (recorder: never, over: Record<string, unknown> = {}) => ({
   estado: 'ligado' as const,
   falas: CASO_REAL,
   temConsulta: false,
+  consultaDesconhecida: false,
   recorder,
   ...over,
 });
@@ -278,7 +281,7 @@ test('DESLIGADO: nada é lido, nada é escrito, a Sofia responde (comportamento 
   const { c, deps, recorder } = montar();
   const r = await decidirDespedida(entrada(recorder, { estado: 'desligado' }), deps);
   assert.equal(r.acao, 'responder');
-  assert.deepEqual(c, { tarefas: [], notas: [], marcas: [], simulacoes: [], passos: [], leituras: [] });
+  assert.deepEqual(c, { tarefas: [], notas: [], marcas: [], ultimas: [], simulacoes: [], passos: [], leituras: [] });
 });
 
 test('SECO: registra "alertaria", não escreve no Kommo e a Sofia responde como hoje', async () => {
@@ -381,12 +384,13 @@ test('tarefaDaEquipeSegura: só ALERTA aberta, não vencida, até 24 h à frente
   assert.equal(tarefaDaEquipeSegura([], AGORA), false);
 });
 
-test('despedida repetida (aviso de hoje, Sofia não falou depois): regrava a marca, para o "sem resposta" cobrir a espera inteira', async () => {
+test('despedida repetida (aviso recente, Sofia não falou): regrava só a marca da ÚLTIMA fala calada, NUNCA a do aviso (a janela de 6 h conta da tarefa)', async () => {
   const { c, deps, recorder } = montar({}, { marca: new Date(AGORA.getTime() - 3600_000), iaFalou: false });
   const r = await decidirDespedida(entrada(recorder), deps);
   assert.equal(r.acao, 'silenciar');
   assert.deepEqual(c.tarefas, []);
-  assert.deepEqual(c.marcas, [AGORA]);
+  assert.deepEqual(c.ultimas, [AGORA]);
+  assert.deepEqual(c.marcas, [], 'a marca do aviso não desliza a cada "ok"');
 });
 
 test('não consegui ler as tarefas do cartão: segue e cria a minha (melhor um aviso a mais que silêncio)', async () => {
@@ -451,7 +455,7 @@ test('o texto da tarefa mascara dado pessoal e é curto', () => {
   assert.doesNotMatch(t, /99988/);
   assert.doesNotMatch(t, /529\.982/);
   assert.ok(t.length < 400);
-  assert.match(textoDaNota({ tipo: 'agradeceu', fala: 'obrigada' }, 'aviso_de_hoje'), /A equipe já foi avisada hoje\./);
+  assert.match(textoDaNota({ tipo: 'agradeceu', fala: 'obrigada' }, 'ja_existia'), /Já há tarefa aberta da equipe/);
 });
 
 // ── a chave: catálogo e estado ──────────────────────────────────────────────────────────────────
@@ -502,16 +506,6 @@ test('o caso real: com a chave desligada a decisão é "responder" e nenhum efei
   assert.equal(c.tarefas.length + c.notas.length + c.marcas.length + c.simulacoes.length + c.passos.length + c.leituras.length, 0);
 });
 
-// ── silêncio no grafo: canais que mandariam texto de espera ─────────────────────────────────────
-
-test('turnoFicouEmSilencio: última mensagem é do paciente = silêncio; resposta ou ferramenta = não', () => {
-  assert.equal(turnoFicouEmSilencio([new AIMessage('oi'), new HumanMessage('obrigada')]), true);
-  assert.equal(turnoFicouEmSilencio([new HumanMessage('obrigada'), new AIMessage('de nada')]), false);
-  assert.equal(turnoFicouEmSilencio([new AIMessage({ content: '', tool_calls: [{ id: 'a', name: 'x', args: {} }] }), new ToolMessage({ content: 'ok', tool_call_id: 'a' })]), false);
-  assert.equal(turnoFicouEmSilencio([]), false);
-  assert.equal(turnoFicouEmSilencio(undefined), false);
-});
-
 // ── os casos do sênior (#240), frases literais ──────────────────────────────────────────────────
 
 const PRECO: Fala[] = [pac('oi, quanto custa?'), ia('A consulta é R$ 250,00, com avaliação completa.')];
@@ -531,7 +525,6 @@ test('1. SINAL DE ALERTA, dor ou urgência junto do adiamento: NUNCA silêncio (
     const { c, deps, recorder } = montar();
     const r = await decidirDespedida(entrada(recorder, { falas: [...PRECO, pac(fala)] }), deps);
     assert.equal(r.acao, 'responder', fala);
-    assert.match(r.motivo, /sinal de alerta, dor ou urgência/);
     assert.deepEqual(c.tarefas, []);
     assert.deepEqual(c.marcas, []);
   }
@@ -539,7 +532,7 @@ test('1. SINAL DE ALERTA, dor ou urgência junto do adiamento: NUNCA silêncio (
   assert.equal(detectarDespedida([...PRECO, pac('estou perdendo a força na perna'), pac('vou pensar')]), null);
   // negado não é sinal: "não tenho dor" continua... mas dor mencionada é conservador (responde)
   assert.equal(temSinalOuUrgencia(['vou pensar, obrigada']), false);
-  assert.equal(temSinalOuUrgencia(['vou pensar, tô com muita dor']), true);
+  assert.equal(temSinalOuUrgencia(['tô perdendo a força na perna']), true);
 });
 
 test('2. adiamento fraco também respeita o que a Sofia PEDIU (o exame)', () => {
@@ -574,12 +567,15 @@ test('4. queixa lida como adiamento: "mais pra frente"/"em outro momento" sem ve
   assert.equal(detectarDespedida([...PRECO, pac('Em outro momento eu volto a falar com vocês')])?.tipo, 'adiou');
 });
 
-test('5. "como/qual" no MEIO da promessa de voltar não é pedido', () => {
-  assert.equal(detectarDespedida([...PRECO, pac('vou ver como fica minha agenda e te retorno')])?.tipo, 'adiou');
-  assert.equal(detectarDespedida([...PRECO, pac('Depois eu vejo qual dia fica melhor')])?.tipo, 'adiou');
-  // no começo da oração continua sendo pedido
+test('5. "como/qual" e o resto da frase: o PADRÃO É RESPONDER (na lista branca, sobra conteúdo = Sofia responde)', () => {
+  // antes eram adiamento; com a lista branca "como fica minha agenda" / "qual dia fica melhor" é resto, e responder é o lado seguro
+  assert.equal(detectarDespedida([...PRECO, pac('vou ver como fica minha agenda e te retorno')]), null);
+  assert.equal(detectarDespedida([...PRECO, pac('Depois eu vejo qual dia fica melhor')]), null);
   assert.equal(detectarDespedida([...PRECO, pac('Vou pensar, mas qual o endereço')]), null);
   assert.equal(detectarDespedida([...PRECO, pac('Agora não. Como funciona o pagamento')]), null);
+  // e a forma limpa continua adiando
+  assert.equal(detectarDespedida([...PRECO, pac('Depois eu vejo')])?.tipo, 'adiou');
+  assert.equal(detectarDespedida([...PRECO, pac('vou ver e te retorno')])?.tipo, 'adiou');
 });
 
 test('6. "ok"/👍 depois do adiamento continuam a despedida (o caso da Stefany); agradecimento ANTES do adiamento não anula', () => {
@@ -685,4 +681,125 @@ test('revisão: "agora não" que INFORMA ("agora não tenho exame", "agora não 
 
 test('o id da automação é UMA definição só (agente e alerta de sem resposta leem a mesma)', () => {
   assert.equal(ID_DA_AUTOMACAO, AUTOMACAO_DESPEDIDA_HUMANO);
+});
+
+// ── LISTA BRANCA (2ª reprovação do #240): o que SOBRA depois de tirar despedida + cortesia + desculpa benigna ────────────────
+
+test('LISTA BRANCA: urgência fora de qualquer léxico NUNCA vira silêncio (frases literais do sênior)', async () => {
+  for (const fala of [
+    'to no hospital, depois eu marco',
+    'depois eu falo, tô internada',
+    'Agora não, tô no pronto atendimento',
+    'não tô aguentando mais, depois eu vejo',
+    'minha coluna travou, depois eu vejo',
+    'a hérnia estourou, vou pensar',
+    'Tô de cama, depois eu falo',
+    'tô muito mal, depois eu vejo',
+    'nem consigo sentar, vou pensar',
+    'mais tarde eu falo, minha perna formigando',
+    'Obrigada, vou pensar 😭',
+    'vou pensar 🚑',
+  ]) {
+    for (const base of [PRECO, PRECO_COM_PERGUNTA]) assert.equal(detectarDespedida([...base, pac(fala)]), null, fala);
+    const { c, deps, recorder } = montar();
+    const r = await decidirDespedida(entrada(recorder, { falas: [...PRECO, pac(fala)] }), deps);
+    assert.equal(r.acao, 'responder', fala);
+    assert.deepEqual(c.tarefas, [], fala);
+    assert.deepEqual(c.marcas, [], fala);
+  }
+});
+
+test('LISTA BRANCA: o caso da Stefany e as formas limpas CALAM, com cortesia e desculpa benigna', () => {
+  for (const fala of [
+    'Obrigada, entro em contato para agendar logo mais',
+    'obrigada! depois eu vejo',
+    'Vou pensar, obrigado 🙏',
+    'estou no trabalho agora, depois eu vejo, obrigada',
+    'to dirigindo, mais tarde eu falo',
+    'agora estou sem tempo, entro em contato depois',
+    'não posso falar agora, entro em contato mais tarde',
+    'Valeu, qualquer coisa eu te chamo',
+    'Muito obrigada pelas informações, vou pensar',
+  ]) {
+    assert.equal(detectarDespedida([...PRECO, pac(fala)])?.tipo, 'adiou', fala);
+  }
+  // e o "ok"/👍 que vem depois não acorda a Sofia
+  const calada = [...PRECO_COM_PERGUNTA, pac('Obrigada, entro em contato para agendar logo mais')];
+  for (const ok of ['ok', '👍', 'Ok 👍', 'tá bom', 'combinado', 'obrigada 🙏']) {
+    assert.equal(detectarDespedida([...calada, pac(ok)])?.tipo, 'adiou', ok);
+  }
+  // emoji de aflição depois do "ok" acorda
+  assert.equal(detectarDespedida([...calada, pac('😭')]), null);
+  assert.equal(detectarDespedida([...calada, pac('ok 🤕')]), null);
+});
+
+test('2. cumprimento DEPOIS da despedida fecha o bloco: a Sofia responde', () => {
+  const calada = [...PRECO_COM_PERGUNTA, pac('Obrigada, entro em contato para agendar logo mais')];
+  assert.equal(detectarDespedida([...calada, pac('Bom dia')]), null);
+  assert.equal(detectarDespedida([...calada, pac('Boa tarde, tudo bem')]), null);
+  assert.equal(detectarDespedida([...calada, pac('oi')]), null);
+  assert.equal(detectarDespedida([...calada, pac('ok'), pac('Boa tarde')]), null);
+  assert.equal(detectarDespedida([...calada, pac('Quero marcar sexta')]), null);
+  assert.equal(detectarDespedida([...calada, pac('sim')]), null);
+});
+
+test('3. resposta a pergunta de triagem não é adiamento: verbo genérico ("faço/vejo") só vale se a Sofia NÃO perguntou', () => {
+  const triagem: Fala[] = [pac('oi'), ia('Você já fez algum exame?')];
+  assert.equal(detectarDespedida([...triagem, pac('Ainda não, depois eu faço')]), null);
+  assert.equal(detectarDespedida([...triagem, pac('Depois eu faço')]), null);
+  assert.equal(detectarDespedida([...triagem, pac('depois eu vejo')]), null);
+  assert.equal(detectarDespedida([...triagem, pac('Agora não')]), null);
+  // o inequívoco vale mesmo depois de pergunta
+  assert.equal(detectarDespedida([...triagem, pac('Vou pensar')])?.tipo, 'adiou');
+  assert.equal(detectarDespedida([...triagem, pac('Entro em contato depois')])?.tipo, 'adiou');
+  // sem pergunta da Sofia, o genérico vale
+  assert.equal(detectarDespedida([...PRECO, pac('depois eu vejo')])?.tipo, 'adiou');
+});
+
+test('4. a janela de 6 h conta da TAREFA: aviso velho + "ok" não é renovado, o "ok" não desliza a marca do aviso', async () => {
+  const marca = new Date(AGORA.getTime() - 7 * 3600_000);
+  const { c, deps, recorder } = montar({}, { marca, iaFalou: false });
+  const r = await decidirDespedida(entrada(recorder), deps);
+  assert.equal(r.acao, 'silenciar');
+  assert.equal(c.tarefas.length, 1, 'a tarefa original venceu sem tarefa nova: nasce a nova');
+  // dentro de 6 h: só a marca da última fala é regravada
+  const b = montar({}, { marca: new Date(AGORA.getTime() - 2 * 3600_000), iaFalou: false });
+  await decidirDespedida(entrada(b.recorder), b.deps);
+  assert.deepEqual(b.c.marcas, []);
+  assert.deepEqual(b.c.ultimas, [AGORA]);
+});
+
+test('franquia fora do ar / cartão diz que já agendou: "sem consulta no prompt" NÃO é "ainda não marcou" — a Sofia responde (também em seco)', async () => {
+  for (const estado of ['ligado', 'seco'] as const) {
+    const { c, deps, recorder } = montar();
+    const r = await decidirDespedida(entrada(recorder, { estado, consultaDesconhecida: true }), deps);
+    assert.equal(r.acao, 'responder');
+    assert.match(r.motivo, /não sei se há consulta marcada/);
+    assert.deepEqual(c.tarefas, []);
+    assert.deepEqual(c.simulacoes, []);
+  }
+});
+
+test('LISTA BRANCA: varredura — adiamento/agradecimento + QUALQUER conteúdo (clínico, urgência, dinheiro, luto) na mesma fala = a Sofia responde', () => {
+  const adia = ['vou pensar', 'depois eu vejo', 'obrigada', 'entro em contato', 'agora não', 'obrigado, vou pensar', 'mais tarde eu falo'];
+  const conteudo = [
+    'tô internada', 'tô no hospital', 'tô de cama', 'tô muito mal', 'nem consigo sentar', 'nem consigo andar', 'a dor aumentou',
+    'estourou', 'travou', 'tô passando mal', 'desmaiei', 'não consigo levantar', 'tô sem sentir a perna', 'tô com febre',
+    'tô sangrando', 'tô com falta de ar', 'fui operada ontem', 'tô com covid', 'meu pai morreu', 'perdi meu emprego',
+    'tô sem dinheiro', 'tô sem condições', 'tô triste', 'tô desesperado', 'não aguento mais', 'chamei o samu', 'caí da escada',
+    'minha mãe está internada', 'o convênio negou', 'achei caro', 'vocês atendem sábado', 'meu cpf é 123', 'tenho exame de 2019',
+  ];
+  let n = 0;
+  for (const a of adia) {
+    for (const c of conteudo) {
+      for (const fala of [`${a}, ${c}`, `${c}, ${a}`, `${a}. ${c}`]) {
+        n++;
+        assert.equal(detectarDespedida([...PRECO, pac(fala)]), null, fala);
+        assert.equal(detectarDespedida([...PRECO_COM_PERGUNTA, pac(fala)]), null, fala);
+        // e em duas mensagens seguidas
+        assert.equal(detectarDespedida([...PRECO, pac(a), pac(c)]), null, `${a} | ${c}`);
+      }
+    }
+  }
+  assert.ok(n > 600);
 });

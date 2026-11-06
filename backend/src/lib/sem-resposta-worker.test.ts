@@ -536,3 +536,27 @@ test('despedida-humano: a leitura da marca só acontece onde a chave está LIGAD
     _semearParaTeste([]);
   }
 });
+
+test('despedida-humano LIGADA: o "sem resposta" lê a marca da ÚLTIMA fala calada, e só enquanto a tarefa do aviso tem menos de 6 h', async () => {
+  const { DEPS_SEM_RESPOSTA_PADRAO } = await import('./sem-resposta-worker.js');
+  const { prisma } = await import('./prisma.js');
+  const { REGRA_DESPEDIDA, REGRA_DESPEDIDA_ULTIMA } = await import('./aviso-dedupe.js');
+  const marcas = new Map<string, Date>();
+  const original = Object.getOwnPropertyDescriptor(prisma, 'cardAlert');
+  Object.defineProperty(prisma, 'cardAlert', {
+    value: { findUnique: async (a: { where: { unitId_leadId_ruleKey: { ruleKey: string } } }) => { const d = marcas.get(a.where.unitId_leadId_ruleKey.ruleKey); return d ? { createdAt: d } : null; } },
+    configurable: true,
+  });
+  try {
+    _semearParaTeste([{ slug: SLUG, automacao: 'despedida-humano', estado: 'ligado' }]);
+    const ultima = new Date(Date.now() - 60_000);
+    marcas.set(REGRA_DESPEDIDA, new Date(Date.now() - 3600_000));
+    marcas.set(REGRA_DESPEDIDA_ULTIMA, ultima);
+    assert.deepEqual(await DEPS_SEM_RESPOSTA_PADRAO.despedidaAvisouEm!(unidade, 1), ultima);
+    marcas.set(REGRA_DESPEDIDA, new Date(Date.now() - 7 * 3600_000)); // tarefa velha e ignorada: o "sem resposta" volta a agir
+    assert.equal(await DEPS_SEM_RESPOSTA_PADRAO.despedidaAvisouEm!(unidade, 1), null);
+  } finally {
+    if (original) Object.defineProperty(prisma, 'cardAlert', original);
+    _semearParaTeste([]);
+  }
+});

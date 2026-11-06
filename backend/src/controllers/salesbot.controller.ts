@@ -18,7 +18,6 @@ import { blocoDaConversaOficial } from '../lib/conversa-oficial.js';
 import { lerAnexosDoPaciente, marcarEntregues } from '../lib/comprovante-lido.js';
 import { neutralizarMarcasDoSistema } from '../lib/comprovante-pix.js';
 import { abrirTarefaParaEquipe } from '../agent/confirmacao-so-com-crm.js';
-import { turnoFicouEmSilencio } from '../agent/despedida-humano.js';
 import { mensagensOficiaisDaUnidade } from '../services/kommo-talks.service.js';
 import { detectarVazamento, explicarVazamento } from '../services/vazamento.js';
 
@@ -238,6 +237,7 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
       {
         leadId: Number(leadId),
         traceId: trace.id,
+        silencio: false,
         messages: [new HumanMessage(entradaDoModelo)],
       },
       {
@@ -267,7 +267,7 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
     // A Sofia se calou de propósito (despedida-humano.ts): a equipe foi avisada por tarefa e o paciente não recebe "só verificando".
     const pronta = vazou
       ? ''
-      : decisao || (turnoFicouEmSilencio(result.messages) ? '' : 'Recebi sua mensagem, tô só verificando com a equipe um instante 🙏');
+      : decisao || (result.silencio ? '' : 'Recebi sua mensagem, tô só verificando com a equipe um instante 🙏');
     // Pausaram o cartão (ou a equipe escreveu) enquanto o modelo pensava: a resposta não sai.
     const travou = pronta
       ? await travaAntesDeEnviar({ unit, leadId: Number(leadId), inicioDoTurno, resposta: pronta, recorder }).catch(() => null)

@@ -45,3 +45,20 @@ test('tarefasAbertasDoLead: 204 (nenhuma) é lista vazia', async () => {
   const { k } = cliente({ status: 204, data: '' });
   assert.deepEqual(await k.tarefasAbertasDoLead(777), []);
 });
+
+test('tarefasAbertasDoLead: pagina — mais de 250 tarefas abertas não viram "não há tarefa"', async () => {
+  const paginas: number[] = [];
+  const tarefa = (id: number) => ({ id, entity_id: 777, entity_type: 'leads', is_completed: false });
+  const http = {
+    get: async (_url: string, cfg: { params: Record<string, unknown> }) => {
+      const page = Number(cfg.params.page);
+      paginas.push(page);
+      const lote = page === 1 ? Array.from({ length: 250 }, (_, i) => tarefa(i + 1)) : [tarefa(1000)];
+      return { status: 200, data: { _embedded: { tasks: lote } } };
+    },
+  } as unknown as AxiosInstance;
+  const k = new KommoClient({ subdomain: 'timbo', accessToken: 't' } as never, http);
+  const t = await k.tarefasAbertasDoLead(777);
+  assert.equal(t.length, 251);
+  assert.deepEqual(paginas, [1, 2]);
+});
