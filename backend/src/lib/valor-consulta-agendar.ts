@@ -19,8 +19,24 @@ import { logger } from './logger.js';
 import { normalizar } from './franquia-sync.js';
 import { registrarSimulacao } from './so-no-papel.js';
 import { CAMPO_VALOR_DA_CONSULTA, consultaEhHoje, decidirValorDaConsulta, epochDaConsulta, precosDaUnidade, sinaisDoCartao } from './valor-consulta.js';
-import { gravarValorDaConsulta, robotPodeTrocar, valorNoCartao } from './valor-consulta-aplicar.js';
+import { gravarValorDaConsulta, robotPodeTrocar, valorNoCartao, type CampoDoValor } from './valor-consulta-aplicar.js';
 import { marcasNoBanco, type MarcasDoValor } from './valor-consulta-marca.js';
+
+/** O campo na conta (id, tipo, opções) muda raramente: uma leitura por unidade a cada 10 min, não uma por agendamento. */
+const CAMPOS_TTL_MS = 10 * 60_000;
+const campoGuardado = new Map<string, { campo: CampoDoValor | null; expiraEm: number }>();
+export function _limparCacheDoCampo(): void { campoGuardado.clear(); }
+
+async function campoDoValor(unit: Unit, kommo: KommoClient): Promise<CampoDoValor | null> {
+  const g = campoGuardado.get(unit.id);
+  if (g && g.expiraEm > Date.now()) return g.campo;
+  const bruto = (await kommo.listLeadCustomFields()) as { _embedded?: { custom_fields?: Array<{ id: number; name: string; type: string; enums?: Array<{ id: number; value: string }> | null }> } } | undefined;
+  const campos = (bruto?._embedded?.custom_fields ?? []).filter((c) => normalizar(c.name) === normalizar(CAMPO_VALOR_DA_CONSULTA));
+  const def = campos.find((c) => c.name === CAMPO_VALOR_DA_CONSULTA) ?? campos[0] ?? null;
+  const campo = def ? { id: def.id, type: def.type as CampoDoValor['type'], enums: (def.enums ?? []).map((e) => ({ id: e.id, value: e.value })) } : null;
+  campoGuardado.set(unit.id, { campo, expiraEm: Date.now() + CAMPOS_TTL_MS });
+  return campo;
+}
 
 export async function valorDaConsultaAoAgendar(a: {
   unit: Unit;
@@ -30,7 +46,10 @@ export async function valorDaConsultaAoAgendar(a: {
   /** "2026-11-07" e "14:30", no relógio da unidade */
   data: string;
   hora: string;
-  /** o que a Sofia VAI gravar em ¤ Pagamento antecipado (`decidirPagamentoAntecipado`); null = não mexe, então não há o que decidir aqui */
+  /**
+   * o que a Sofia VAI gravar em ¤ Pagamento antecipado (`decidirPagamentoAntecipado`). null = ela não mexe no campo (a forma já estava
+   * no cartão, por ex. a SDR pôs Sim antes): vale a forma que o cartão mostra.
+   */
   pagamento: 'Sim' | 'Não' | null;
   ehRetorno: boolean;
   /** o agendamento é a avaliação (categoria 1, o padrão)? Outra categoria não recebe o preço da avaliação */
@@ -45,17 +64,15 @@ export async function valorDaConsultaAoAgendar(a: {
   const sync = estadoDaAutomacao(unit.slug, 'franquia-sync', process.env.FRANQUIA_SYNC_SLUGS);
   if (sync === 'desligado') return 'franquia-sync-desligado';
   const precos = precosDaUnidade(unit);
+  if (precos.divergente) return 'precos-divergentes';
   if (precos.antecipado === null) return 'sem-antecipado';
-  if (a.ehRetorno || a.ehAvaliacao === false || a.pagamento === null || !leadAtual) return 'sem-avaliacao-ou-forma';
+  if (a.ehRetorno || a.ehAvaliacao === false || !leadAtual) return 'sem-avaliacao-ou-forma';
   // as saídas que não dependem do campo vêm ANTES da leitura dos campos da conta (uma chamada ao Kommo por agendamento)
   if (unit.spineBookingRequiresPayment) return 'taxa-de-reserva';
-  const sinais = sinaisDoCartao(leadAtual, undefined, a.pagamento);
+  const sinais = sinaisDoCartao(leadAtual, a.pagamento);
   if (sinais.comConvenio) return 'convenio';
 
-  const bruto = (await kommo.listLeadCustomFields()) as { _embedded?: { custom_fields?: Array<{ id: number; name: string; type: string; enums?: Array<{ id: number; value: string }> | null }> } } | undefined;
-  const campos = (bruto?._embedded?.custom_fields ?? []).filter((c) => normalizar(c.name) === normalizar(CAMPO_VALOR_DA_CONSULTA));
-  const def = campos.find((c) => c.name === CAMPO_VALOR_DA_CONSULTA) ?? campos[0] ?? null;
-  const campo = def ? { id: def.id, type: def.type as never, enums: (def.enums ?? []).map((e) => ({ id: e.id, value: e.value })) } : null;
+  const campo = await campoDoValor(unit, kommo);
 
   const agoraEpoch = a.agoraEpoch ?? Math.floor(Date.now() / 1000);
   const fuso = fusoDaUnidade(unit);
@@ -80,6 +97,7 @@ export async function valorDaConsultaAoAgendar(a: {
     taxaDeReserva: Boolean(unit.spineBookingRequiresPayment),
     comConvenio: sinais.comConvenio,
     marcaCentavos: marca?.centavos ?? null,
+    marcaQual: marca?.qual ?? null,
   });
   if (d.acao === 'nada' || !campo) return d.acao === 'nada' ? d.motivo : 'sem-campo';
 
@@ -89,7 +107,7 @@ export async function valorDaConsultaAoAgendar(a: {
     registrarSimulacao(unit, 'valor-consulta', { leadId, acao: 'gravaria', alvo: CAMPO_VALOR_DA_CONSULTA, valor: d.valor, motivo: d.motivo });
     return 'gravaria';
   }
-  const r = await gravarValorDaConsulta({ unit, kommo, leadId, campo, decisao: d, marcaEsperada: marca?.centavos ?? null, marcas, origem: 'sofia' });
+  const r = await gravarValorDaConsulta({ unit, kommo, leadId, campo, decisao: d, marcaEsperada: marca?.centavos ?? null, marcas, origem: 'sofia', fresco: leadAtual });
   if (r === 'gravou') logger.info({ unit: unit.slug, leadId, campo: CAMPO_VALOR_DA_CONSULTA, valor: d.valor, troca: d.troca === true, motivo: d.motivo }, 'valor-consulta [ao agendar]: gravado');
   return r;
 }

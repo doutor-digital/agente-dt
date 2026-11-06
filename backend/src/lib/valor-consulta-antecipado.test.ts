@@ -8,7 +8,7 @@ import {
   consultaEhHoje, decidirValorDaConsulta, emCentavos, epochDaConsulta, formaDoCartao, precosDaUnidade, sinaisDoCartao, temSinalDeConvenio, valorDaConsultaVemDoRobo,
   type EntradaValorDaConsulta,
 } from './valor-consulta.js';
-import { valorDaConsultaAoAgendar } from './valor-consulta-agendar.js';
+import { _limparCacheDoCampo, valorDaConsultaAoAgendar } from './valor-consulta-agendar.js';
 import type { MarcaDoValor, MarcasDoValor } from './valor-consulta-marca.js';
 
 // Salto-like: R$ 250 no dia, R$ 200 antecipado (Pix). Timbó: só no dia.
@@ -24,6 +24,8 @@ const base = (over: Partial<EntradaValorDaConsulta> = {}): EntradaValorDaConsult
   estado: 'ligado', consulta, consultaEpoch: AMANHA, agoraEpoch: AGORA, tipoDoCampo: 'monetary', noCartao: null, preco: '250,00',
   precoAntecipado: '200,00', forma: 'vazio', consultaHoje: false, ...over,
 });
+/** a marca que o robô deixou: o valor e QUAL preço era */
+const marca = (centavos: number, qual: 'antecipado' | 'no-dia') => ({ marcaCentavos: centavos, marcaQual: qual });
 const valorGravado = (d: ReturnType<typeof decidirValorDaConsulta>) => (d.acao === 'nada' ? d.motivo : `${d.acao}:${d.valor}`);
 
 // ── a regra pura ───────────────────────────────────────────────────────────────
@@ -44,26 +46,40 @@ test('forma vazia → espera; no DIA da consulta, ainda vazia → preço no dia'
 });
 
 test('Não→Sim: o robô troca o que ELE gravou (cartão tem exatamente a marca)', () => {
-  const d = decidirValorDaConsulta(base({ forma: 'sim', noCartao: '250', marcaCentavos: 25000 }));
+  const d = decidirValorDaConsulta(base({ forma: 'sim', noCartao: '250', ...marca(25000, 'no-dia') }));
   assert.equal(d.acao, 'gravar');
   assert.equal(d.acao === 'gravar' && d.valor, 200);
   assert.equal(d.acao === 'gravar' && d.troca, true);
   // o Kommo devolve monetário com casas: "250.0000" continua sendo o mesmo número
-  assert.equal(valorGravado(decidirValorDaConsulta(base({ forma: 'sim', noCartao: '250.0000', marcaCentavos: 25000 }))), 'gravar:200');
+  assert.equal(valorGravado(decidirValorDaConsulta(base({ forma: 'sim', noCartao: '250.0000', ...marca(25000, 'no-dia') }))), 'gravar:200');
   // e o caminho de volta (Sim→Não) também, pela mesma regra
-  assert.equal(valorGravado(decidirValorDaConsulta(base({ forma: 'nao', noCartao: '200', marcaCentavos: 20000 }))), 'gravar:250');
+  assert.equal(valorGravado(decidirValorDaConsulta(base({ forma: 'nao', noCartao: '200', ...marca(20000, 'antecipado') }))), 'gravar:250');
 });
 
 test('valor de PESSOA nunca é trocado: sem marca, marca de outro número, ou 0 da cortesia', () => {
   assert.equal(valorGravado(decidirValorDaConsulta(base({ forma: 'sim', noCartao: '250', marcaCentavos: null }))), 'ja-preenchido', 'sem marca = digitado');
-  assert.equal(valorGravado(decidirValorDaConsulta(base({ forma: 'sim', noCartao: '300', marcaCentavos: 25000 }))), 'ja-preenchido', 'alguém mudou depois do robô');
-  assert.equal(valorGravado(decidirValorDaConsulta(base({ forma: 'sim', noCartao: '0', marcaCentavos: 25000 }))), 'ja-preenchido', 'cortesia');
-  assert.equal(valorGravado(decidirValorDaConsulta(base({ forma: 'sim', noCartao: '0', marcaCentavos: 0 }))), 'ja-preenchido', 'marca de 0 não existe, mas se existisse o 0 é de gente');
+  assert.equal(valorGravado(decidirValorDaConsulta(base({ forma: 'sim', noCartao: '300', ...marca(25000, 'no-dia') }))), 'ja-preenchido', 'alguém mudou depois do robô');
+  assert.equal(valorGravado(decidirValorDaConsulta(base({ forma: 'sim', noCartao: '0', ...marca(25000, 'no-dia') }))), 'ja-preenchido', 'cortesia');
+  assert.equal(valorGravado(decidirValorDaConsulta(base({ forma: 'sim', noCartao: '0', ...marca(0, 'no-dia') }))), 'ja-preenchido', 'marca de 0 não existe, mas se existisse o 0 é de gente');
 });
 
 test('o valor já é o certo: não grava de novo (nada de regravação)', () => {
-  assert.equal(valorGravado(decidirValorDaConsulta(base({ forma: 'sim', noCartao: '200', marcaCentavos: 20000 }))), 'ja-preenchido');
-  assert.equal(valorGravado(decidirValorDaConsulta(base({ forma: 'nao', noCartao: '250', marcaCentavos: 25000 }))), 'ja-preenchido');
+  assert.equal(valorGravado(decidirValorDaConsulta(base({ forma: 'sim', noCartao: '200', ...marca(20000, 'antecipado') }))), 'ja-preenchido');
+  assert.equal(valorGravado(decidirValorDaConsulta(base({ forma: 'nao', noCartao: '250', ...marca(25000, 'no-dia') }))), 'ja-preenchido');
+});
+
+test('mudança de PREÇO nas fontes não regrava: só a mudança de FORMA troca', () => {
+  // o robô gravou 250 (no dia) e o preço no dia nas fontes subiu para 260: a forma é a mesma (Não), então o valor prometido fica
+  assert.equal(valorGravado(decidirValorDaConsulta(base({ forma: 'nao', preco: '260,00', noCartao: '250', ...marca(25000, 'no-dia') }))), 'ja-preenchido');
+  // idem no antecipado: gravou 200, o antecipado nas fontes virou 190
+  assert.equal(valorGravado(decidirValorDaConsulta(base({ forma: 'sim', precoAntecipado: '190,00', noCartao: '200', ...marca(20000, 'antecipado') }))), 'ja-preenchido');
+  // marca antiga sem `qual` conhecido (não existe hoje) nunca troca
+  assert.equal(valorGravado(decidirValorDaConsulta(base({ forma: 'sim', noCartao: '250', marcaCentavos: 25000 }))), 'ja-preenchido');
+});
+
+test('unidade com antecipado e preços que não fecham: não grava (não cai na regra de Timbó)', () => {
+  assert.equal(valorGravado(decidirValorDaConsulta(base({ precosDivergentes: true, precoAntecipado: null, forma: 'sim' }))), 'precos-divergentes');
+  assert.equal(valorGravado(decidirValorDaConsulta(base({ precosDivergentes: true, precoAntecipado: null, forma: 'nao' }))), 'precos-divergentes');
 });
 
 test('plano/convênio e taxa de reserva: não grava, com o motivo', () => {
@@ -73,21 +89,21 @@ test('plano/convênio e taxa de reserva: não grava, com o motivo', () => {
   // a taxa vale mesmo sem antecipado legível: na dúvida, não grava
   assert.equal(valorGravado(decidirValorDaConsulta(base({ forma: 'vazio', taxaDeReserva: true, precoAntecipado: null }))), 'taxa-de-reserva');
   // e nem a correção passa por cima do convênio
-  assert.equal(valorGravado(decidirValorDaConsulta(base({ forma: 'sim', comConvenio: true, noCartao: '250', marcaCentavos: 25000 }))), 'convenio');
+  assert.equal(valorGravado(decidirValorDaConsulta(base({ forma: 'sim', comConvenio: true, noCartao: '250', ...marca(25000, 'no-dia') }))), 'convenio');
 });
 
 test('seco decide "gravaria" (também a troca); desligado nem olha', () => {
   assert.equal(valorGravado(decidirValorDaConsulta(base({ forma: 'sim', estado: 'seco' }))), 'gravaria:200');
-  assert.equal(valorGravado(decidirValorDaConsulta(base({ forma: 'sim', estado: 'ligado', secoGlobal: true, noCartao: '250', marcaCentavos: 25000 }))), 'gravaria:200');
+  assert.equal(valorGravado(decidirValorDaConsulta(base({ forma: 'sim', estado: 'ligado', secoGlobal: true, noCartao: '250', ...marca(25000, 'no-dia') }))), 'gravaria:200');
   assert.equal(valorGravado(decidirValorDaConsulta(base({ forma: 'sim', estado: 'desligado' }))), 'desligado');
 });
 
 test('Timbó (sem preço antecipado): a regra de sempre, qualquer que seja a forma, o convênio ou a marca', () => {
-  for (const extra of [{ forma: 'sim' as const }, { forma: 'nao' as const }, { forma: 'vazio' as const }, { comConvenio: true }, { marcaCentavos: 25000 }]) {
+  for (const extra of [{ forma: 'sim' as const }, { forma: 'nao' as const }, { forma: 'vazio' as const }, { comConvenio: true }, { ...marca(25000, 'no-dia') }]) {
     const d = decidirValorDaConsulta(base({ precoAntecipado: null, ...extra }));
     assert.equal(valorGravado(d), 'gravar:250', JSON.stringify(extra));
   }
-  assert.equal(valorGravado(decidirValorDaConsulta(base({ precoAntecipado: null, noCartao: '250', marcaCentavos: 25000, forma: 'sim' }))), 'ja-preenchido');
+  assert.equal(valorGravado(decidirValorDaConsulta(base({ precoAntecipado: null, noCartao: '250', ...marca(25000, 'no-dia'), forma: 'sim' }))), 'ja-preenchido');
   assert.equal(valorGravado(decidirValorDaConsulta(base({ precoAntecipado: null, preco: null }))), 'sem-preco');
 });
 
@@ -142,10 +158,7 @@ test('sinaisDoCartao lê por NOME do campo e etiquetas; a forma decidida pela So
     _embedded: { tags: [{ name: 'X' }] },
   };
   assert.deepEqual(sinaisDoCartao(lead), { forma: 'nao', comConvenio: true });
-  assert.equal(sinaisDoCartao(lead, undefined, 'Sim').forma, 'sim');
-  // cartão do guia sem field_name: o nome vem do esquema
-  const semNome = { custom_fields_values: [{ field_id: 9, values: [{ value: 'Sim' }] }] };
-  assert.equal(sinaisDoCartao(semNome, (id) => (id === 9 ? '¤ Pagamento antecipado' : undefined)).forma, 'sim');
+  assert.equal(sinaisDoCartao(lead, 'Sim').forma, 'sim');
 });
 
 test('consultaEhHoje usa o fuso da unidade; epochDaConsulta lê a data da Sofia no relógio da unidade', () => {
@@ -160,19 +173,22 @@ test('consultaEhHoje usa o fuso da unidade; epochDaConsulta lê a data da Sofia 
 });
 
 test('precosDaUnidade: o antecipado vem das fontes (as mesmas da Sofia); Timbó e taxa de reserva não têm', () => {
-  assert.deepEqual(precosDaUnidade({ sourceProdutos: FONTES_ANTECIPADO }), { noDia: '250,00', antecipado: '200,00' });
-  assert.deepEqual(precosDaUnidade({ sourceProdutos: FONTES_TIMBO }), { noDia: '250,00', antecipado: null });
-  assert.deepEqual(precosDaUnidade({ sourceProdutos: FONTES_ANTECIPADO, acceptsAdvancePayment: false }), { noDia: '250,00', antecipado: null });
+  assert.deepEqual(precosDaUnidade({ sourceProdutos: FONTES_ANTECIPADO }), { noDia: '250,00', antecipado: '200,00', divergente: false });
+  assert.deepEqual(precosDaUnidade({ sourceProdutos: FONTES_TIMBO }), { noDia: '250,00', antecipado: null, divergente: false });
+  assert.deepEqual(precosDaUnidade({ sourceProdutos: FONTES_ANTECIPADO, acceptsAdvancePayment: false }), { noDia: '250,00', antecipado: null, divergente: false });
+  // as duas leituras discordam do preço no dia (300 × 350): tem antecipado, mas não fecha
+  assert.deepEqual(precosDaUnidade({ sourceProdutos: 'A CONSULTA custa R$ 300. Avaliação: R$ 200 antecipado ou R$ 350 no dia.' }), { noDia: '300,00', antecipado: null, divergente: true });
   // o R$ do plano não é o antecipado particular
   const serraLike = 'Consulta: R$ 350 no dia, ou R$ 250 com pagamento antecipado por PIX. Com plano de saúde: R$ 220.';
   assert.equal(precosDaUnidade({ sourceProdutos: serraLike }).antecipado, '250,00');
-  assert.deepEqual(precosDaUnidade({ sourceProdutos: null }), { noDia: null, antecipado: null });
+  assert.deepEqual(precosDaUnidade({ sourceProdutos: null }), { noDia: null, antecipado: null, divergente: false });
 });
 
-test('guia: taxa de reserva (Boa Vista) tira a unidade da lista de "o robô preenche"', () => {
+test('guia: unidade COM antecipado (ou preços que não fecham) e com taxa de reserva não esconde o campo da SDR; sem antecipado (Timbó) esconde', () => {
   _semearParaTeste([{ slug: 'u-guia', automacao: 'valor-consulta', estado: 'ligado' }, { slug: 'u-guia', automacao: 'franquia-sync', estado: 'ligado' }]);
   try {
-    assert.equal(valorDaConsultaVemDoRobo({ slug: 'u-guia', sourceProdutos: FONTES_ANTECIPADO }), true);
+    assert.equal(valorDaConsultaVemDoRobo({ slug: 'u-guia', sourceProdutos: FONTES_ANTECIPADO }), false, 'o robô espera a forma: o campo fica vazio, a SDR segue sendo pedida');
+    assert.equal(valorDaConsultaVemDoRobo({ slug: 'u-guia', sourceProdutos: 'A CONSULTA custa R$ 300. Avaliação: R$ 200 antecipado ou R$ 350 no dia.' }), false);
     assert.equal(valorDaConsultaVemDoRobo({ slug: 'u-guia', sourceProdutos: FONTES_TIMBO }), true);
     assert.equal(valorDaConsultaVemDoRobo({ slug: 'u-guia', sourceProdutos: FONTES_ANTECIPADO, spineBookingRequiresPayment: true }), false);
   } finally { _semearParaTeste([]); }
@@ -265,6 +281,23 @@ test('worker: comprovante muda a forma Não→Sim (✓ pago) e o robô troca o v
   assert.deepEqual(guardadas.map((g) => g.m), [{ centavos: 20000, qual: 'antecipado' }]);
 });
 
+test('worker: o preço mudou nas fontes mas a forma não: não regrava o que o robô já gravou', async () => {
+  const escritas: Escrita[] = [];
+  const { marcas } = marcasFalsas({ 5: { centavos: 25000, qual: 'no-dia' } });
+  const lead = cartao({ forma: 'Não', valor: 250 });
+  const unit = UNIT({}, 'CONSULTA particular: R$ 260,00 no dia, ou R$ 200,00 se pago antecipado via Pix.');
+  await rodar('ligado', () => _interno.espelharValorDaConsulta(ctxDe(escritas, lead, { marcas }, unit), 5, lead, AGENDADA));
+  assert.deepEqual(escritas, []);
+});
+
+test('worker: fontes com antecipado que não fecha com o preço no dia: não grava nada', async () => {
+  const escritas: Escrita[] = [];
+  const lead = cartao({ forma: 'Não' });
+  const unit = UNIT({}, 'A CONSULTA custa R$ 300. Avaliação: R$ 200 antecipado ou R$ 350 no dia.');
+  await rodar('ligado', () => _interno.espelharValorDaConsulta(ctxDe(escritas, lead, { marcas: marcasFalsas().marcas }, unit), 5, lead, AGENDADA));
+  assert.deepEqual(escritas, []);
+});
+
 test('worker: a segunda varredura, com o valor já certo, não grava de novo (sem regravação)', async () => {
   const escritas: Escrita[] = [];
   const { marcas } = marcasFalsas({ 5: { centavos: 20000, qual: 'antecipado' } });
@@ -350,6 +383,7 @@ test('worker, Timbó (sem antecipado): idêntico ao de sempre — grava 250 no v
 
 // ── a Sofia, ao agendar ────────────────────────────────────────────────────────
 const agendar = (over: Record<string, unknown>, estado: 'ligado' | 'seco' | 'desligado' = 'ligado', sync: 'ligado' | 'seco' | 'desligado' = 'ligado') => {
+  _limparCacheDoCampo();
   const escritas: Escrita[] = [];
   const marcas = marcasFalsas();
   const lead = (over.leadAtual ?? cartao()) as never;
@@ -381,11 +415,36 @@ test('Sofia ao agendar: respeita a chave (desligado nada; seco só registra), co
   const syncSeco = await agendar({}, 'ligado', 'seco');
   assert.equal(syncSeco.r, 'gravaria');
   assert.deepEqual(syncSeco.escritas, []);
-  assert.equal((await agendar({ pagamento: null })).r, 'sem-avaliacao-ou-forma');
   assert.equal((await agendar({ unit: UNIT({ spineBookingRequiresPayment: true }) })).r, 'taxa-de-reserva');
   const timbo = await agendar({ unit: UNIT({ acceptsAdvancePayment: false }, FONTES_TIMBO) });
   assert.equal(timbo.r, 'sem-antecipado');
   assert.deepEqual(timbo.escritas, []);
+});
+
+test('Sofia ao agendar: a forma já estava no cartão (a SDR pôs Sim antes) e a Sofia não a regrava: vale a do cartão', async () => {
+  const sim = await agendar({ pagamento: null, leadAtual: cartao({ forma: 'Sim' }) });
+  assert.equal(sim.r, 'gravou');
+  assert.deepEqual(sim.escritas, [{ leadId: 5, campo: 77, tipo: 'monetary', valor: 200 }]);
+  const nao = await agendar({ pagamento: null, leadAtual: cartao({ forma: 'Não' }) });
+  assert.deepEqual(nao.escritas, [{ leadId: 5, campo: 77, tipo: 'monetary', valor: 250 }]);
+  // sem forma em lugar nenhum e longe do dia da consulta: espera
+  const vazia = await agendar({ pagamento: null });
+  assert.equal(vazia.r, 'espera-forma');
+  assert.deepEqual(vazia.escritas, []);
+});
+
+test('Sofia ao agendar: o campo da conta é lido uma vez por unidade (cache), não uma por agendamento', async () => {
+  _limparCacheDoCampo();
+  let leituras = 0;
+  const escritas: Escrita[] = [];
+  const lead = cartao();
+  const kommo = { ...kommoFalso(escritas, lead), listLeadCustomFields: async () => { leituras++; return { _embedded: { custom_fields: [{ id: 77, name: '¤ Valor da Consulta', type: 'monetary', enums: null }] } }; } };
+  _semearParaTeste([{ slug: SLUG, automacao: 'valor-consulta', estado: 'ligado' }, { slug: SLUG, automacao: 'franquia-sync', estado: 'ligado' }]);
+  try {
+    for (const leadId of [5, 6, 7]) await valorDaConsultaAoAgendar({ unit: UNIT(), kommo: kommo as never, leadId, leadAtual: lead, data: '2026-11-20', hora: '14:00', pagamento: 'Sim', ehRetorno: false, marcas: marcasFalsas().marcas, agoraEpoch: Date.parse('2026-11-06T12:00:00Z') / 1000 });
+  } finally { _semearParaTeste([]); }
+  assert.equal(leituras, 1);
+  assert.equal(escritas.length, 3);
 });
 
 test('Sofia ao agendar, remarcação Não→Sim: troca o que o robô gravou; o que a pessoa digitou fica', async () => {

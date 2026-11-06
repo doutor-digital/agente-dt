@@ -562,18 +562,12 @@ export interface EntradaDoGuia {
    * aceita o número do robô (monetário/numérico). Fora disso o robô não chega lá e a SDR continua sendo quem preenche.
    */
   preenchidosPorRobo?: readonly string[];
-  /**
-   * O robô desiste DESTE cartão mesmo com o campo na lista acima (ex.: Valor da Consulta de paciente com plano/convênio, em unidade com
-   * pagamento antecipado: o robô não chuta o preço do convênio). Aí o guia volta a pedir o campo à SDR.
-   */
-  robosDesistemDoCartao?: (lead: CartaoDoGuia) => boolean;
 }
 
 /** O robô preenche este campo NESTE cartão? (nome exato, sem o `casaNome` que ignora o símbolo: "Valor da consulta" sem ¤ é outro campo) */
 function roboPreenche(e: EntradaDoGuia, d: DefinicaoDeCampo): boolean {
   if (!(e.preenchidosPorRobo ?? []).some((n) => d.name.trim() === n)) return false;
   if (d.type !== 'monetary' && d.type !== 'numeric') return false;
-  if (e.robosDesistemDoCartao?.(e.lead)) return false;
   const data = campoPorNome(e.defs, CAMPOS_SYNC.DATA_CONSULTA);
   if (!data || vazioNoCartao(e.lead, data.id)) return false;
   // O robô só grava em avaliação que AINDA VAI acontecer (lib/valor-consulta.ts). Consulta vencida sem baixa, ou retorno com
@@ -1067,8 +1061,6 @@ export interface ContaDoGuia {
   motivosDePerda?: () => Promise<Array<{ id: number; name: string }>>;
   /** Campos da SDR que um robô da unidade preenche sozinho: o guia não os pede (a Ponte ainda aceita se a SDR digitar). */
   preenchidosPorRobo?: readonly string[];
-  /** Cartões de que o robô desiste mesmo com o campo acima (ver `EntradaDoGuia.robosDesistemDoCartao`). */
-  robosDesistemDoCartao?: (lead: CartaoDoGuia) => boolean;
   teto?: number;
   /** O relógio (o teste fixa). */
   agora?: Date;
@@ -1092,7 +1084,7 @@ export type ResultadoDoGuia = { ok: true; guia: GuiaDoCartao } | Recusa;
 export async function guiaDoCartao(ctx: ContaDoGuia, kommo: Pick<KommoDoGuia, 'getLead'>, leadId: number): Promise<ResultadoDoGuia> {
   const lead = await lerCartao(kommo, leadId);
   if (!lead) return { ok: false, status: 404, erro: 'cartão não encontrado no Kommo' };
-  return { ok: true, guia: montarGuia({ lead, defs: ctx.defs, funis: ctx.funis, tz: ctx.tz, mensagens: ctx.mensagens, agora: ctx.agora, preenchidosPorRobo: ctx.preenchidosPorRobo, robosDesistemDoCartao: ctx.robosDesistemDoCartao }) };
+  return { ok: true, guia: montarGuia({ lead, defs: ctx.defs, funis: ctx.funis, tz: ctx.tz, mensagens: ctx.mensagens, agora: ctx.agora, preenchidosPorRobo: ctx.preenchidosPorRobo }) };
 }
 
 /** Confere no cartão RELIDO que cada campo gravado ficou com o valor pedido. Devolve os que não ficaram. */
@@ -1113,7 +1105,7 @@ export async function gravarCamposPelaPonte(ctx: ContaDoGuia, kommo: KommoDoGuia
   if (!lead) return { ok: false, status: 404, erro: 'cartão não encontrado no Kommo' };
   const plano = planejarCampos(ctx.defs, lead, pedido.campos, ctx.tz);
   if (!plano.ok) return plano;
-  const guia = (l: CartaoDoGuia) => montarGuia({ lead: l, defs: ctx.defs, funis: ctx.funis, tz: ctx.tz, mensagens: ctx.mensagens, agora: ctx.agora, preenchidosPorRobo: ctx.preenchidosPorRobo, robosDesistemDoCartao: ctx.robosDesistemDoCartao });
+  const guia = (l: CartaoDoGuia) => montarGuia({ lead: l, defs: ctx.defs, funis: ctx.funis, tz: ctx.tz, mensagens: ctx.mensagens, agora: ctx.agora, preenchidosPorRobo: ctx.preenchidosPorRobo });
   if (!plano.gravar.length) {
     return { ok: true, leadId: lead.id, gravados: [], iguais: plano.iguais, nota: null, guia: guia(lead) };
   }
@@ -1247,7 +1239,7 @@ export async function moverPelaPonte(ctx: ContaDoGuia, kommo: KommoDoGuia, pedid
       gravados: plano.gravar.map((g) => ({ nome: g.nome, texto: g.texto })),
       motivoDePerda: motivo?.name ?? null,
       nota,
-      guia: montarGuia({ lead: final, defs: ctx.defs, funis: ctx.funis, tz: ctx.tz, mensagens: ctx.mensagens, agora: ctx.agora, preenchidosPorRobo: ctx.preenchidosPorRobo, robosDesistemDoCartao: ctx.robosDesistemDoCartao }),
+      guia: montarGuia({ lead: final, defs: ctx.defs, funis: ctx.funis, tz: ctx.tz, mensagens: ctx.mensagens, agora: ctx.agora, preenchidosPorRobo: ctx.preenchidosPorRobo }),
     };
   } finally {
     if (!andou) vaga.devolver();

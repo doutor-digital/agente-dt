@@ -40,10 +40,12 @@ export async function gravarValorDaConsulta(a: {
   /** só unidade com pagamento antecipado guarda marca */
   marcas?: MarcasDoValor;
   origem: 'sofia' | 'sincronizador';
+  /** o cartão lido segundos antes por quem chama (a Sofia, no mesmo turno): poupa a releitura. A varredura não passa: o dela tem minutos. */
+  fresco?: KommoLead;
 }): Promise<ResultadoDaGravacao> {
   const { unit, kommo, leadId, campo, decisao } = a;
   // O cartão desta decisão tem minutos de idade: a recepção pode ter digitado o valor (ou um 0 de cortesia) nesse meio-tempo.
-  const fresco = await kommo.getLead(leadId);
+  const fresco = a.fresco ?? (await kommo.getLead(leadId));
   const atual = valorNoCartao(fresco, campo.id);
   if (decisao.troca) {
     if (atual === null || a.marcaEsperada === null || emCentavos(atual) !== a.marcaEsperada) return 'mudou-no-meio';

@@ -75,6 +75,10 @@ export interface EntradaValorDaConsulta {
   comConvenio?: boolean;
   /** centavos que o PRÓPRIO robô gravou neste cartão (`valor-consulta-marca.ts`), ou null/ausente se nunca gravou */
   marcaCentavos?: number | null;
+  /** qual preço o robô gravou (a marca): só uma MUDANÇA DE FORMA troca o valor, nunca uma mudança de preço nas fontes */
+  marcaQual?: 'antecipado' | 'no-dia' | null;
+  /** as fontes dão um antecipado que não fecha com o preço no dia (`precosDaUnidade.divergente`): na dúvida não grava */
+  precosDivergentes?: boolean;
 }
 
 /** `¤ Pagamento antecipado` (ou o pagamento comprovado): Sim → antecipado; Não → no dia; vazio → ainda não se sabe. */
@@ -88,6 +92,7 @@ export type MotivoDeNaoGravar =
   | 'ja-preenchido'
   | 'sem-preco'
   | 'taxa-de-reserva'
+  | 'precos-divergentes'
   | 'convenio'
   | 'espera-forma';
 
@@ -126,6 +131,8 @@ export function decidirValorDaConsulta(e: EntradaValorDaConsulta): DecisaoValorD
   // Taxa de reserva (Boa Vista): o "antecipado" é PARTE do valor, não desconto, e o valor da consulta ali não é um preço só.
   // Vale mesmo sem preço antecipado legível nas fontes: na dúvida, não grava.
   if (e.taxaDeReserva) return { acao: 'nada', motivo: 'taxa-de-reserva' };
+  // Unidade que anuncia antecipado, mas cujas leituras de preço não concordam: não cai na regra de quem não tem antecipado (Timbó).
+  if (e.precosDivergentes) return { acao: 'nada', motivo: 'precos-divergentes' };
   const modo = e.estado === 'seco' || e.secoGlobal ? 'gravaria' : 'gravar';
   const preenchido = e.noCartao !== null && e.noCartao.trim() !== '';
   const noDia = precoEmNumero(e.preco);
@@ -145,9 +152,10 @@ export function decidirValorDaConsulta(e: EntradaValorDaConsulta): DecisaoValorD
   const alvo = qual === 'antecipado' ? antecipado : qual === 'no-dia' ? noDia : null;
 
   if (preenchido) {
-    // Só o robô se corrige: o cartão ainda tem EXATAMENTE o que ele gravou e agora o certo é outro número.
+    // Só o robô se corrige: o cartão ainda tem EXATAMENTE o que ele gravou E a forma mudou (a marca era de OUTRO preço).
+    // Preço que mudou nas fontes não regrava: o valor já posto é uma promessa feita ao paciente.
     const atual = emCentavos(e.noCartao);
-    if (alvo !== null && qual !== null && e.marcaCentavos != null && e.marcaCentavos > 0 && atual === e.marcaCentavos && Math.round(alvo * 100) !== atual) {
+    if (alvo !== null && qual !== null && e.marcaQual != null && e.marcaQual !== qual && e.marcaCentavos != null && e.marcaCentavos > 0 && atual === e.marcaCentavos && Math.round(alvo * 100) !== atual) {
       return { acao: modo, valor: alvo, qual, troca: true, motivo: `a forma de pagamento mudou (${qual === 'antecipado' ? 'antecipado' : 'no dia'}): o robô troca o que ele mesmo gravou` };
     }
     return { acao: 'nada', motivo: 'ja-preenchido' };
@@ -190,13 +198,11 @@ export function temSinalDeConvenio(planoDeSaude: unknown, etiquetas: ReadonlyArr
  */
 export function sinaisDoCartao(
   lead: { custom_fields_values?: ReadonlyArray<{ field_id: number; field_name?: string; values?: ReadonlyArray<{ value?: unknown }> | null }> | null; _embedded?: { tags?: ReadonlyArray<{ name: string }> | null } | null },
-  /** o cartão do guia pode vir sem `field_name`: aí o nome sai do esquema da conta */
-  nomeDoCampo?: (id: number) => string | undefined,
   /** a Sofia acabou de decidir a forma e vai gravá-la: vale esta, não a que o cartão ainda mostra */
   pagamentoAntecipadoDecidido?: 'Sim' | 'Não' | null,
 ): { forma: FormaDoPagamento; comConvenio: boolean } {
   const campo = (nome: string): unknown => {
-    const c = (lead.custom_fields_values ?? []).find((f) => normalizar(f.field_name ?? nomeDoCampo?.(f.field_id)) === nome);
+    const c = (lead.custom_fields_values ?? []).find((f) => normalizar(f.field_name) === nome);
     return c?.values?.[0]?.value ?? null;
   };
   const etiquetas = (lead._embedded?.tags ?? []).map((t) => t.name);
@@ -226,6 +232,8 @@ export interface PrecosDaUnidade {
   noDia: string | null;
   /** "150,00": o antecipado particular. null = a unidade não tem (ou as fontes não fecham: ver abaixo) */
   antecipado: string | null;
+  /** a unidade TEM antecipado nas fontes mas as duas leituras de preço não fecham: o robô não grava (não vale a regra de quem não tem) */
+  divergente: boolean;
 }
 
 type UnidadeComFontes = { sourceProdutos?: string | null; systemPrompt?: string | null } & FlagsDePagamento;
@@ -253,8 +261,9 @@ function lerPrecosDaUnidade(unit: UnidadeComFontes): PrecosDaUnidade {
   const noDia = valorDaConsultaNoDia(unit.sourceProdutos);
   const p = precosDaConsulta({ sourceProdutos: unit.sourceProdutos ?? null, systemPrompt: unit.systemPrompt ?? '', acceptsAdvancePayment: unit.acceptsAdvancePayment, spineBookingRequiresPayment: unit.spineBookingRequiresPayment });
   const dia = precoEmNumero(noDia);
-  if (!p || dia === null || Math.round(p.noDia * 100) !== Math.round(dia * 100) || !(p.antecipado < dia)) return { noDia, antecipado: null };
-  return { noDia, antecipado: emReais(p.antecipado) };
+  if (!p) return { noDia, antecipado: null, divergente: false };
+  if (dia === null || Math.round(p.noDia * 100) !== Math.round(dia * 100) || !(p.antecipado < dia)) return { noDia, antecipado: null, divergente: true };
+  return { noDia, antecipado: emReais(p.antecipado), divergente: false };
 }
 
 /**
@@ -271,5 +280,9 @@ export function valorDaConsultaVemDoRobo(unit: { slug: string; sourceProdutos?: 
   }
   // taxa de reserva (Boa Vista): o robô desiste da unidade inteira, a SDR segue preenchendo
   if (unit.spineBookingRequiresPayment) return false;
-  return precosDaUnidade(unit).noDia !== null;
+  const p = precosDaUnidade(unit);
+  // Unidade com antecipado (ou com preços que não fecham): o robô ESPERA a forma de pagamento e o campo fica vazio nesse meio-tempo. Se o guia
+  // o escondesse, a SDR moveria o cartão com Sim e o modelo "consulta prepagamento" sairia com "é ." — então o guia continua pedindo.
+  if (p.antecipado !== null || p.divergente) return false;
+  return p.noDia !== null;
 }

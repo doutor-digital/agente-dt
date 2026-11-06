@@ -1593,6 +1593,8 @@ async function espelharValorDaConsulta(ctx: CtxSync, leadId: number, lead: Kommo
     taxaDeReserva: Boolean(unit.spineBookingRequiresPayment),
     comConvenio: sinais?.comConvenio,
     marcaCentavos: marca?.centavos ?? null,
+    marcaQual: marca?.qual ?? null,
+    precosDivergentes: precos.divergente,
   });
 
   if (d.acao === 'nada') {
@@ -1601,6 +1603,7 @@ async function espelharValorDaConsulta(ctx: CtxSync, leadId: number, lead: Kommo
       'sem-preco': 'avaliação marcada, mas as fontes da unidade não trazem o preço da consulta ("CONSULTA … R$ …") — não gravei',
       'sem-campo': 'a conta não tem o campo ¤ Valor da Consulta — não gravei',
       'campo-sem-numero': 'o campo ¤ Valor da Consulta da conta não é monetário nem numérico — não gravei',
+      'precos-divergentes': 'as fontes da unidade trazem um preço antecipado que não fecha com o preço no dia — não gravei (confira o texto das fontes)',
       'taxa-de-reserva': 'unidade com taxa de reserva (o antecipado é parte do valor, não desconto) — o robô não grava o Valor da Consulta aqui',
     };
     const aviso = avisos[d.motivo];
