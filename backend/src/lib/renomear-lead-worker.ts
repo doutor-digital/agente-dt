@@ -24,6 +24,7 @@ import { createKommoClient, type KommoClient, type KommoLead } from '../services
 import { estadoDaAutomacao } from './automacoes-estado.js';
 import { registrarSimulacao } from './so-no-papel.js';
 import { contaDoKommo, grupoDaUnidade, valorDaUnidadeNoCartao, type MembroDoCrm } from './crm-compartilhado.js';
+import { algumaChaveAtiva, contatoPrincipal } from './kommo-lead-util.js';
 import { fusoDaUnidade } from './fuso.js';
 import { dataCurta, ehSemNome, estadoDoCartao, planejarRenomeacao, type EstadoDaChave } from './renomear-lead.js';
 
@@ -54,11 +55,6 @@ const anunciados = new Set<number>();
 
 const estadoDe = (slug: string): EstadoDaChave => estadoDaAutomacao(slug, ID, process.env.RENOMEAR_LEAD_SLUGS);
 
-function contatoPrincipal(lead: KommoLead): number | null {
-  const contatos = lead._embedded?.contacts ?? [];
-  return (contatos.find((c) => c.is_main) ?? contatos[0])?.id ?? null;
-}
-
 export interface Resumo {
   candidatos: number;
   gravados: number;
@@ -80,12 +76,6 @@ export interface ContextoDaConta {
   /** epoch em segundos */
   agora: number;
   registrar?: typeof registrarSimulacao;
-}
-
-/** Alguma unidade da conta (ela mesma, ou o grupo Petrópolis + Caxias) está em seco ou ligada? */
-function algumaChaveAtiva(unit: { slug: string }, membros: ReadonlyArray<MembroDoCrm> | null, estado: (slug: string) => EstadoDaChave): boolean {
-  const slugs = membros?.length ? membros.map((m) => m.slug).filter((s): s is string => !!s) : [unit.slug];
-  return slugs.some((s) => estado(s) !== 'desligado');
 }
 
 /** Uma rodada numa conta do Kommo. Devolve o resumo (ou `null` se não havia nada a fazer). */

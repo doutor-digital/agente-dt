@@ -2,6 +2,7 @@ import type { LeadFieldRule } from '@prisma/client';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import type { KommoFieldType } from './kommo.service.js';
+import { sofiaNaoGravaTipoDeLead } from '../lib/tipo-lead-chegada.js';
 
 export interface LeadFieldRuleInput {
   kommoFieldId: number;
@@ -23,11 +24,17 @@ export async function listLeadFieldRules(unitId: string): Promise<LeadFieldRule[
   });
 }
 
-export async function listEnabledLeadFieldRules(unitId: string): Promise<LeadFieldRule[]> {
-  return prisma.leadFieldRule.findMany({
+/**
+ * As regras que a Sofia usa. Com o `slug` da unidade, a regra do "⬢ Tipo de lead" sai quando o robô da chegada
+ * (`tipo-lead-chegada`) está LIGADO nela: ele é o único escritor do campo, e o prompt não pode mandar a Sofia usar uma
+ * ferramenta que não existe mais. Sem `slug` devolve todas (telas de configuração).
+ */
+export async function listEnabledLeadFieldRules(unitId: string, slug?: string | null): Promise<LeadFieldRule[]> {
+  const regras = await prisma.leadFieldRule.findMany({
     where: { unitId, enabled: true },
     orderBy: { createdAt: 'asc' },
   });
+  return slug ? regras.filter((r) => !sofiaNaoGravaTipoDeLead(slug, r.kommoFieldName)) : regras;
 }
 
 export async function createLeadFieldRule(

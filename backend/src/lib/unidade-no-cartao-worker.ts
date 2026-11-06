@@ -19,6 +19,7 @@ import { logger } from './logger.js';
 import { createKommoClient, type KommoClient, type KommoLead } from '../services/kommo.service.js';
 import { estadoDaAutomacao } from './automacoes-estado.js';
 import { registrarSimulacao } from './so-no-papel.js';
+import { valorDoCampo } from './kommo-lead-util.js';
 import { unidadeNoCartao } from './trava-unidade-atendimento.js';
 import {
   CAMPO_UNIDADE_MODELO,
@@ -69,11 +70,6 @@ function avisarUmaVez(slug: string, msg: string): void {
   if (avisados.has(`${slug}:${msg}`)) return;
   avisados.add(`${slug}:${msg}`);
   logger.warn({ unit: slug }, `${ID}: ${msg}`);
-}
-
-function valorDoCampo(lead: KommoLead, fieldId: number): string | null {
-  const v = lead.custom_fields_values?.find((f) => f.field_id === fieldId)?.values?.[0]?.value;
-  return v === undefined || v === null || String(v).trim() === '' ? null : String(v).trim();
 }
 
 type Planejado = { leadId: number } & PlanoUnidadeNoCartao;

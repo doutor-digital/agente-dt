@@ -2632,7 +2632,7 @@ async function loadComposeInput(input: {
     }),
     input.excludeLeadFieldRules
       ? Promise.resolve([])
-      : listEnabledLeadFieldRules(input.unit.id),
+      : listEnabledLeadFieldRules(input.unit.id, input.unit.slug),
     input.leadId
       ? getLeadMemoryForAgent(input.unit, input.leadId).catch((err) => {
           logger.warn({ err, leadId: input.leadId }, 'getLeadMemory falhou — sem memória no prompt');
@@ -2860,7 +2860,7 @@ export async function composeFlattenedPromptForUnit(input: {
       logger.warn({ err }, 'composeFlattenedPromptForUnit: listEnabledGlobalActions falhou — seguindo sem');
       return [];
     }),
-    listEnabledLeadFieldRules(input.unit.id),
+    listEnabledLeadFieldRules(input.unit.id, input.unit.slug),
     carregarRede().catch(() => [] as UnidadeDaRede[]),
   ]);
   return composeFlattenedPrompt({

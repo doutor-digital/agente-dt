@@ -25,6 +25,8 @@ import { normalizar } from './franquia-sync.js';
 export interface PacienteDaFranquia {
   idClient: number;
   nome: string | null;
+  /** quando foi cadastrado na franquia (ISO, UTC), se ela disse — o ⬢ Tipo de lead da chegada só aceita cadastro ANTERIOR ao cartão */
+  created?: string;
 }
 
 export type Achado =
@@ -53,7 +55,7 @@ export async function pacienteExistente(
 ): Promise<Achado> {
   const alvo = fim8(fone);
   if (!alvo) return { tipo: 'sem_resposta' };
-  const porId = new Map<number, string | null>();
+  const porId = new Map<number, { nome: string | null; created?: string }>();
   /** termos cuja página NÃO veio cheia: a busca por eles viu todo mundo com esse nome */
   const completos = new Set<string>();
   let falhou = false;
@@ -66,7 +68,7 @@ export async function pacienteExistente(
     const clientes = r.data?.clients ?? [];
     if (clientes.length < POR_PAGINA) completos.add(termo);
     for (const c of clientes) {
-      if (c.idClient && fim8(c.whatsapp) === alvo) porId.set(c.idClient, c.name);
+      if (c.idClient && fim8(c.whatsapp) === alvo) porId.set(c.idClient, { nome: c.name, ...(c.created ? { created: c.created } : {}) });
     }
   }
   if (falhou) return { tipo: 'sem_resposta' };
@@ -77,7 +79,7 @@ export async function pacienteExistente(
     if (!completos.has(primeiro)) return { tipo: 'inconclusivo' };
   }
 
-  const lista: PacienteDaFranquia[] = [...porId].map(([idClient, n]) => ({ idClient, nome: n }));
+  const lista: PacienteDaFranquia[] = [...porId].map(([idClient, v]) => ({ idClient, ...v }));
   if (lista.length === 0) return { tipo: 'nao_achou' };
   if (lista.length === 1) return { tipo: 'achou', ...lista[0] };
 

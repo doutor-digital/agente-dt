@@ -178,7 +178,7 @@ export async function rodarCaso(
       kommo: kommoDeMentira,
       descriptionOverrides: descricoes,
       pausedFieldId: unit.kommoPausedFieldId,
-      leadFieldRules: await listEnabledLeadFieldRules(unit.id),
+      leadFieldRules: await listEnabledLeadFieldRules(unit.id, unit.slug),
       unit,
     });
     const tools = todas.filter((t) => configPorNome.get(t.name)?.enabled ?? true);

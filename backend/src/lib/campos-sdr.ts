@@ -76,6 +76,23 @@ export function datasNoNome(nome: string | null | undefined, referenciaEpoch: nu
 }
 
 /**
+ * Quando foi o 1º contato (epoch s): a data mais antiga entre a criação do cartão, o campo "Data do primeiro contato"
+ * e as datas escritas no nome. `referenciaEpoch` limita as datas do nome (ver `datasNoNome`). null = nenhuma data.
+ * Outros cartões do mesmo contato entram por `outrasDatas` (criação e datas dos nomes deles).
+ */
+export function primeiroContatoEm(e: {
+  nome: string | null | undefined;
+  criadoEmEpoch: number | null | undefined;
+  primeiroContatoEpoch: number | null | undefined;
+  referenciaEpoch: number;
+  outrasDatas?: ReadonlyArray<number | null | undefined>;
+}): number | null {
+  const candidatas = [e.criadoEmEpoch, e.primeiroContatoEpoch, ...datasNoNome(e.nome, e.referenciaEpoch), ...(e.outrasDatas ?? [])]
+    .filter((x): x is number => typeof x === 'number' && Number.isFinite(x) && x > 0);
+  return candidatas.length === 0 ? null : Math.min(...candidatas);
+}
+
+/**
  * Resgate ou Cadastro. O 1º contato é a data mais antiga entre a criação do cartão, o campo "Data do primeiro
  * contato" e as datas escritas no nome. `referenciaEpoch` = quando o lead chegou ao agendamento (o carimbo
  * "Agendado pela SDR em" ou, sem ele, a data da consulta). NUNCA "agora": um cartão de maio que agendou em maio
@@ -88,10 +105,9 @@ export function tipoDoLead(e: {
   referenciaEpoch: number | null;
 }): 'Resgate' | 'Cadastro' | null {
   if (!e.referenciaEpoch) return null;
-  const candidatas = [e.criadoEmEpoch, e.primeiroContatoEpoch, ...datasNoNome(e.nome, e.referenciaEpoch)]
-    .filter((x): x is number => typeof x === 'number' && Number.isFinite(x) && x > 0);
-  if (candidatas.length === 0) return null;
-  return e.referenciaEpoch - Math.min(...candidatas) > DIAS_PARA_RESGATE * DIA_S ? 'Resgate' : 'Cadastro';
+  const primeiro = primeiroContatoEm({ nome: e.nome, criadoEmEpoch: e.criadoEmEpoch, primeiroContatoEpoch: e.primeiroContatoEpoch, referenciaEpoch: e.referenciaEpoch });
+  if (primeiro === null) return null;
+  return e.referenciaEpoch - primeiro > DIAS_PARA_RESGATE * DIA_S ? 'Resgate' : 'Cadastro';
 }
 
 /**

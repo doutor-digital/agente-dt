@@ -16,6 +16,9 @@ import type { Unit } from '@prisma/client';
 import type { KommoClient } from './kommo.service.js';
 import type { Estado } from '../lib/automacoes-estado.js';
 
+/** Começo do `motivo` que o espelhamento grava no vínculo quando CASOU com paciente que já existia (quem lê o vínculo compara com isto). */
+export const PREFIXO_PACIENTE_EXISTENTE = 'paciente já existe na franquia';
+
 export type PacienteExistente =
   | { tipo: 'achou'; idClient: number; por: 'idClient' | 'telefone' | 'nome' }
   /** `outroNome`: o telefone (ou o cartão) é de UM paciente com outro nome — pode ser alguém da família. */
@@ -70,7 +73,7 @@ export function decidirCadastro(estado: Estado, existente: PacienteExistente | n
       : { criar: true };
   }
   const motivo = existente.tipo === 'achou'
-    ? `paciente já existe na franquia (idClient ${existente.idClient}, achado por ${existente.por}): não criei lead`
+    ? `${PREFIXO_PACIENTE_EXISTENTE} (idClient ${existente.idClient}, achado por ${existente.por}): não criei lead`
     : existente.outroNome
       ? `o telefone (ou o cartão) é do paciente idClient ${existente.ids.join(', ')} da franquia, com outro nome: não criei lead — pode ser outra pessoa da família; a equipe confere`
       : `o telefone é de ${existente.ids.length} pacientes da franquia (${existente.ids.join(', ')}): não criei lead — a SDR escolhe no widget`;

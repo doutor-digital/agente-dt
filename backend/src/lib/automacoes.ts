@@ -413,6 +413,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/campos-sdr.ts',
   },
   {
+    id: 'tipo-lead-chegada',
+    chave: 'TIPO_LEAD_CHEGADA_SLUGS',
+    nome: '⬢ Tipo de lead na chegada do lead',
+    oQueFaz:
+      'Preenche o ⬢ Tipo de lead quando o lead chega: Resgate se a pessoa já existia (na franquia ou primeiro contato há mais de 90 dias), Cadastro se é nova. Grava só em campo vazio e não troca depois.',
+    pegadinha:
+      'Roda sozinho a cada 3 minutos nos cartões abertos criados nas últimas 6 h (com 3 min de vida; qualquer funil), com ou sem Sofia na unidade; não mexe no estoque antigo. Escritores do ⬢ Tipo de lead: este robô (na chegada), o campos-sdr (no agendamento, só em campo vazio — com o campo já preenchido só registra confere/diverge) e a captura da Sofia, que grava SEM ler. LIGADO, a Sofia deixa de gravar esse campo (nem recebe a ferramenta) e o robô é o único escritor; em "Só no papel" a Sofia segue como hoje, então o seco ainda não mostra o resultado final. Qualquer valor no campo, inclusive "Transferido de outra unidade", é respeitado. Na dúvida NÃO grava e tenta de novo (a cada 10 a 60 min, enquanto o cartão estiver na janela): franquia fora do ar, contato sem telefone, índice ausente/velho, unidade sem franquia conectada — nunca vira "Cadastro" por erro. A franquia ignora filtro de telefone, então o telefone é procurado num ÍNDICE do nosso lado (pacientes + leads da franquia, últimos 8 dígitos), montado até 1×/dia por unidade (carga lenta, com pausa e teto de chamadas; só para unidade em seco ou ligada) e guardado no banco. Cadastro só sai com o índice da unidade inteiro e com menos de 36 h; índice ainda não montado, velho, cortado pelo teto (base muito grande) ou com erro = não grava e o log avisa. Telefone que está na franquia como paciente OU lead de data anterior ao cartão = Resgate (mãe e filha no mesmo número também). A busca por nome fica de reforço. O índice só enxerga o campo WhatsApp do cadastro e leads dos últimos 3 anos. Cartões criados em lote (15 no mesmo minuto ou 60 em 10 min: importação, carga da franquia) ficam de fora — o campos-sdr os alcança no agendamento. Cartão em que a Sofia/recepção já criou o paciente ou marcou a consulta fica para o campos-sdr (a busca acharia o paciente recém-criado). Conta sem o campo ⬢ Tipo de lead (nome exato) ou sem a opção "Resgate"/"Cadastro": não grava e avisa no log. Conta dividida (Petrópolis × Caxias): só age no cartão que já tem a ⌂ Unidade de atendimento. Em "Só no papel" lê o Kommo e a franquia (só leitura) e registra o que gravaria.',
+    risco: 'escreve-campo',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/tipo-lead-chegada.ts',
+  },
+  {
     id: 'campos-sdr-tipos',
     chave: 'CAMPOS_SDR_TIPOS_SLUGS',
     nome: 'Tipo de agendamento e de fechamento = Tipo de lead',

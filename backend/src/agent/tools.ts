@@ -14,6 +14,7 @@ import { looksLikeName } from './name-capture.js';
 import { esquemaDaUnidade } from '../lib/kommo-schema.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
 import { capturaUnificada, coergirValor, descricaoRegistrarCampo } from './captura-unificada.js';
+import { sofiaNaoGravaTipoDeLead } from '../lib/tipo-lead-chegada.js';
 import { ehRegraDeQualificacao } from './carimbos-do-agendamento.js';
 import { aguardarMarcacaoDaIa, ehCarimboDeMarcacaoDaIa } from '../lib/marcacao-da-ia-no-turno.js';
 import { classificarMotivoHandoff } from '../lib/motivo-handoff.js';
@@ -1401,9 +1402,12 @@ export function buildTools({
 
   // Captura unificada (env por unidade): uma `registrar_campo` no lugar de uma tool por regra — o prefixo cacheado
   // perde ~11 mil tokens de schema e o modelo continua sabendo quando gravar cada campo (descrição da tool).
-  const dynamicTools = capturaUnificada(unit?.slug) && leadFieldRules.length > 0
-    ? [buildRegistrarCampoTool({ rules: leadFieldRules, kommo, recorder, tz: fusoDaUnidade(unit), unit })]
-    : leadFieldRules.map((rule) =>
+  // "⬢ Tipo de lead": com a chave `tipo-lead-chegada` LIGADA o robô é o único escritor — a Sofia nem recebe a ferramenta (e
+  // `gravarCampoDaRegra` recusa mesmo assim). Em "só no papel" ela segue como hoje.
+  const regrasDaSofia = leadFieldRules.filter((r) => !sofiaNaoGravaTipoDeLead(unit?.slug, r.kommoFieldName));
+  const dynamicTools = capturaUnificada(unit?.slug) && regrasDaSofia.length > 0
+    ? [buildRegistrarCampoTool({ rules: regrasDaSofia, kommo, recorder, tz: fusoDaUnidade(unit), unit })]
+    : regrasDaSofia.map((rule) =>
     buildLeadFieldRuleTool({ rule, kommo, recorder, tz: fusoDaUnidade(unit), unit }),
   );
 
@@ -1553,6 +1557,17 @@ export async function gravarCampoDaRegra({
   const fieldType = rule.kommoFieldType as KommoFieldType;
   const enums = (rule.kommoFieldEnums as Array<{ id: number; value: string }> | null) ?? [];
   const t0 = performance.now();
+
+  // O robô da chegada (`tipo-lead-chegada`, ligado) é o único escritor do ⬢ Tipo de lead: a captura grava SEM LER e sobrescreveria
+  // o que ele (ou a SDR) pôs. Nada é gravado; a resposta diz à IA para seguir sem o campo.
+  if (sofiaNaoGravaTipoDeLead(unit?.slug, rule.kommoFieldName)) {
+    await recorder.step({
+      kind: 'TOOL_CALL',
+      title: `${rule.toolName} ignorado — "${rule.kommoFieldName}" é preenchido pelo sistema quando o lead chega`,
+      payload: { leadId, campo: rule.kommoFieldName, value },
+    });
+    return `OK — "${rule.kommoFieldName}" é preenchido pelo sistema; não grave este campo.`;
+  }
 
   // "Feito por = IA" diz que a IA marcou ("Situação = Agendado" é o estado da consulta e não é travado). Quem carimba isso é
   // `agendar_consulta`, quando dá certo; a gravação avulsa só vale se a marcação da IA deu certo neste turno (Timbó, 29/10/2026: gravou em paralelo, antes do
