@@ -160,14 +160,18 @@ test('telefone: últimos 8 dígitos atravessam o nono dígito e o +55; DDD difer
   assert.equal(chaveFone(FONE), '99172442');
   assert.equal(chaveFone('123'), null);
   assert.ok(mesmoTelefone(FONE, FONE_SEM_NONO));
-  assert.ok(mesmoTelefone('47999172442', '99172442'), 'sem DDD de um dos lados vale o final');
+  assert.ok(!mesmoTelefone('47999172442', '99172442'), 'sem DDD de um dos lados NÃO casa: vincular ao paciente errado não tem volta');
+  assert.ok(!mesmoTelefone('99172442', '99172442'), 'nem os dois sem DDD');
+  assert.ok(mesmoTelefone('47 99917-2442', '(47) 99917-2442'));
   assert.ok(!mesmoTelefone('47999172442', '11999172442'), 'mesmos 8 dígitos em outro DDD é outra pessoa');
   assert.ok(!mesmoTelefone(FONE, '47 99917-2443'));
   // zero de tronco e formas que não parecem DDD + número: na dúvida é o mesmo número (o erro caro é ACEITAR em duplicidade)
   assert.ok(mesmoTelefone('011987654321', '+5511987654321'), '0 de tronco');
   assert.ok(mesmoTelefone('0 11 98765-4321', '11987654321'));
   assert.ok(!mesmoTelefone('011987654321', '+5521987654321'), 'DDD de verdade diferente continua diferente');
-  assert.ok(mesmoTelefone('+55 11 98765-4321', '987654321'), 'um lado sem DDD: só o final decide');
+  assert.ok(!mesmoTelefone('+55 11 98765-4321', '987654321'), 'um lado sem DDD: não casa');
+  assert.ok(mesmoTelefone('+1 202 555 0143', '12025550143'), 'número de fora do Brasil só casa se for idêntico');
+  assert.ok(!mesmoTelefone('+1 202 555 0143', '+44 202 555 0143'));
 });
 
 test('primeira etapa do funil: pula a de entrada (type 1) e GANHO/PERDIDO, pela ordem (sort), não pela posição na lista', () => {
@@ -350,6 +354,19 @@ test('cartão só FECHADO (PERDIDO) não segura o aceite; o cartão em etapa de 
   const r = await rodarConta(k.porta, c);
   assert.equal(r.aceitos, 1);
   assert.ok(!k.escritas.some((e) => e.tipo === 'vincular'));
+});
+
+test('cartão com o telefone SEM DDD não é par: o lead recente é aceito como novo e o velho fica na caixa (nunca vincula ao errado)', async () => {
+  for (const [modo, idade] of [['recente', 10], ['estoque', 600]] as const) {
+    const k = kommoFalso({
+      caixa: [lead('u-a', idade, 1)],
+      contatos: [{ id: 1, telefones: [FONE], leadIds: [5_000_001] }, { id: 2, telefones: ['99917-2442'], leadIds: [321] }],
+      cartoes: [cartao(321)],
+    });
+    await rodarConta(k.porta, ctx({ estoque: 'ligado' }).c);
+    assert.ok(!k.escritas.some((e) => e.tipo === 'vincular'), `${modo}: nunca vincula`);
+    assert.equal(k.escritas.filter((e) => e.tipo === 'aceitar').length, modo === 'recente' ? 1 : 0);
+  }
 });
 
 test('o próprio cartão provisório e os outros leads da caixa nunca são "par"', async () => {

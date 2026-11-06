@@ -87,19 +87,19 @@ export function chaveFone(t: string): string | null {
 }
 
 /**
- * Mesma linha? Últimos 8 dígitos iguais; e, quando os DOIS números trazem o DDD, o DDD também (8 dígitos iguais em cidades
- * diferentes existem). Sem DDD de um dos lados, vale só o final — é o que atravessa as duas formas de gravar o mesmo número.
+ * Mesma linha? Últimos 8 dígitos iguais E o DDD presente e igual nos DOIS lados (10 ou 11 dígitos nacionais: DDD + número).
+ * Sem DDD em um dos lados NÃO casa: 8 dígitos iguais existem em cidades diferentes, e vincular ao paciente errado não tem volta.
+ * O custo do falso negativo é pequeno: o lead recente é aceito como cartão novo (a Sofia vê o cadastro antigo pelo telefone) e o
+ * velho fica na caixa para uma pessoa. Formas que não têm cara de DDD + número só casam se forem EXATAMENTE o mesmo número.
  */
 export function mesmoTelefone(a: string, b: string): boolean {
   const ka = chaveFone(a);
   if (!ka || ka !== chaveFone(b)) return false;
   const na = nacional(a);
   const nb = nacional(b);
-  // só compara o DDD quando os DOIS lados têm a forma de DDD + número (10 ou 11 dígitos). Na dúvida são o mesmo número:
-  // o erro caro é achar que são pessoas diferentes e ACEITAR um cartão duplicado.
   const comDdd = (n: string) => n.length === 10 || n.length === 11;
   if (comDdd(na) && comDdd(nb)) return na.slice(0, 2) === nb.slice(0, 2);
-  return true;
+  return na === nb && na.length >= 10;
 }
 
 /** A primeira etapa de TRABALHO do funil: a de menor `sort` que não é a de entrada (type 1) nem GANHO/PERDIDO (142/143). */
