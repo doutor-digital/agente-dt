@@ -3,7 +3,8 @@
  * para o conector. Provedores: Asaas (financeiro das clínicas), Convênia (RH/departamento pessoal),
  * Tiquetaque (ponto eletrônico), Tramitação Inteligente (processos e prazos de advocacia) e Sistemas (RH/Caixa/Financeiro
  * novo, servidor próprio: a "chave" é um JSON com a URL da API de administração, a ADMIN_KEY e a tela RH — ver `sistemas.ts`) e Descontratos (o mesmo
- * tipo de JSON, sem a tela; é um servidor à parte, com a própria ADMIN_KEY).
+ * tipo de JSON, sem a tela; é um servidor à parte, com a própria ADMIN_KEY) e ZenFisio (clínica de fisioterapia: a "chave" é um JSON com
+ * clientId, clientSecret, e-mail e senha de login e o entityId da unidade — ver `zenfisio.ts`).
  */
 import { env } from '../env.js';
 import { prisma } from '../prisma.js';
@@ -13,8 +14,9 @@ import { testarChaveConvenia } from './convenia.js';
 import { testarChaveTiquetaque } from './tiquetaque.js';
 import { testarChaveTramitacao } from './tramitacao.js';
 import { lerConfigSistemas, testarChaveDescontratos, testarChaveSistemas } from './sistemas.js';
+import { lerConfigZenfisio, testarChaveZenfisio } from './zenfisio.js';
 
-export const PROVEDORES = ['asaas', 'convenia', 'tiquetaque', 'tramitacao', 'sistemas', 'descontratos'] as const;
+export const PROVEDORES = ['asaas', 'convenia', 'tiquetaque', 'tramitacao', 'sistemas', 'descontratos', 'zenfisio'] as const;
 export type Provedor = (typeof PROVEDORES)[number];
 
 const segredo = () => process.env.INTEGRACOES_CHAVE_MESTRA || env.SESSION_JWT_SECRET;
@@ -26,6 +28,7 @@ const TESTES: Record<Provedor, (chave: string) => Promise<string>> = {
   tramitacao: (chave) => testarChaveTramitacao(chave),
   sistemas: testarChaveSistemas,
   descontratos: testarChaveDescontratos,
+  zenfisio: (chave) => testarChaveZenfisio(chave),
 };
 
 export function ehProvedor(p: string): p is Provedor {
@@ -39,7 +42,7 @@ export async function salvarChave(slug: string, provedor: Provedor, chave: strin
   const unit = await prisma.unit.findUnique({ where: { slug }, select: { id: true } });
   if (!unit) throw new Error(`unidade ${slug} não existe`);
   const conta = await TESTES[provedor](limpa);
-  const dados = { chaveCifrada: cifrar(limpa, segredo()), finalDaChave: finalDaChave(provedor === 'sistemas' || provedor === 'descontratos' ? lerConfigSistemas(limpa).chave : limpa), conta, salvoPor: quem, testadoEm: new Date(), ultimoErro: null };
+  const dados = { chaveCifrada: cifrar(limpa, segredo()), finalDaChave: finalDaChave(provedor === 'sistemas' || provedor === 'descontratos' ? lerConfigSistemas(limpa).chave : provedor === 'zenfisio' ? lerConfigZenfisio(limpa).clientSecret : limpa), conta, salvoPor: quem, testadoEm: new Date(), ultimoErro: null };
   await prisma.chaveDeIntegracao.upsert({
     where: { unitId_provedor: { unitId: unit.id, provedor } },
     create: { unitId: unit.id, provedor, ...dados },
