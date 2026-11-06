@@ -193,7 +193,7 @@ function ctx(extra: { intents?: Record<string, number>; tags?: string[]; teto?: 
     cfg,
     pausarIaFieldId: 777,
     tagsDaConta: extra.tags ?? TODAS,
-    teto: { restanteHoje: cfg.teto, restanteNaVarredura: cfg.porVarredura, ...extra.teto },
+    teto: { restanteHoje: cfg.teto, restanteNaVarredura: cfg.porVarredura, simulado: cfg.teto, ...extra.teto },
     franquia: async (_u, leadId) => franquia(leadId),
     ficha: (async (_u: unknown, idClient: number) => {
       const f = fichas.get(idClient);
@@ -369,12 +369,22 @@ test('funil TRATAMENTO nunca é varrido pelas réguas de silêncio', async () =>
   assert.equal(chamadas.length, 0, 'nem leu o cartão');
 });
 
-test('no dia do aniversário o cartão é do toque de aniversário: a retomada pula', async () => {
+test('no dia do aniversário o cartão de PACIENTE é do toque de aniversário (quando ele está ligado): a retomada pula; lead que nunca consultou segue', async () => {
   const hoje = new Date(AGORA * 1000).toISOString().slice(5, 10);
-  novo({ campos: { '◷ Data de nascimento': Date.parse(`1980-${hoje}T03:00:00Z`) / 1000 } });
-  const r = await etapas(ctx(), false);
-  assert.equal(tagsPostas().length, 0);
-  assert.equal(r.qualificacao.barrados['aniversario-hoje'], 1);
+  const nasc = Date.parse(`1980-${hoje}T03:00:00Z`) / 1000;
+  novo({ etapa: [COM, 12], campos: { '◷ Data de nascimento': nasc, '◷ Data da Consulta': AGORA - 3 * DIA, '✓ Situação da consulta': 'Não compareceu' }, silencioDias: 2 });
+  const lead = novo({ campos: { '◷ Data de nascimento': nasc } });
+  const c = ctx();
+  c.aniversarioLigado = true;
+  const r = await etapas(c, false);
+  assert.deepEqual(chamadas.filter((x) => x.startsWith('addTag')), [`addTag:${lead.lead.id}:▶ Retomada`]);
+  assert.equal(r.naocompareceu.barrados['aniversario-hoje'], 1);
+  chamadas.length = 0;
+  tracos = new Map();
+  _limparCacheDaRotina();
+  const desligado = ctx(); // aniversário desligado: ninguém cede nada
+  await etapas(desligado, false);
+  assert.equal(tagsPostas().length, 2);
 });
 
 test('não junto de outro toque no mesmo dia: o cartão que já recebeu algo hoje (rotina ou etiquetas-auto) fica pra amanhã', async () => {
@@ -410,6 +420,26 @@ test('teto da varredura (10 por padrão): não solta tudo de uma vez', async () 
   for (let i = 0; i < 14; i++) novo();
   await etapas(ctx({ intents: { rotina_teto_dia: 30 } }), false);
   assert.equal(tagsPostas().length, 10);
+});
+
+test('falha ao pôr a etiqueta: se o cartão NÃO tem a etiqueta, solta a marca (tenta de novo); se ela consta (timeout depois de gravar), a marca fica', async () => {
+  const a = novo();
+  const b = novo();
+  const original = kommo.addTag;
+  (kommo as { addTag: unknown }).addTag = async (p: { leadId: number; tag?: string }) => {
+    if (p.leadId === b.lead.id) tagsNoKommo.set(b.lead.id, [p.tag as string]); // o Kommo gravou e a resposta se perdeu
+    throw new Error('timeout');
+  };
+  try {
+    const c = ctx();
+    const r = await etapas(c, false);
+    assert.equal(r.qualificacao.erros, 2);
+    assert.ok(!tracos.has(`rotina-${c.unit.id}-${a.lead.id}-qualificacao-1-${a.paciente}`), 'não gravou: a marca saiu, a próxima varredura tenta de novo');
+    assert.ok(tracos.has(`rotina-${c.unit.id}-${b.lead.id}-qualificacao-1-${b.paciente}`), 'gravou: a marca FICA, senão o paciente recebe o modelo duas vezes');
+    assert.equal(c.teto.restanteHoje, 29, 'o teto conta o que saiu de fato (b, que o Kommo gravou); a falha de verdade (a) não gasta vaga');
+  } finally {
+    (kommo as { addTag: unknown }).addTag = original;
+  }
 });
 
 // ─── etiqueta inexistente ─────────────────────────────────────────────────────────────────────────
@@ -458,7 +488,8 @@ test('SECO não escreve nada: nem etiqueta, nem nota, nem marca — só registra
   assert.deepEqual(quem.map((s) => s.deEtapa).sort(), [ETAPA.NAO_COMPARECEU, ETAPA.NEGOCIACAO, ETAPA.QUALIFICACAO].sort());
   assert.ok(quem.every((s) => s.alvo === '1º toque · ▶ Retomada' && s.automacao === 'rotina-robos'));
   assert.equal(r.qualificacao.porToque['1'] + r.naocompareceu.porToque['1'] + r.negociacao.porToque['1'], 3);
-  assert.equal(c.teto.restanteHoje, 27, 'o seco simula o teto');
+  assert.equal(c.teto.simulado, 27, 'o seco simula o teto');
+  assert.equal(c.teto.restanteHoje, 30, 'sem gastar o teto de verdade');
 });
 
 test('seco acima do teto mostra «pularia: teto do dia» em vez de calar', async () => {
@@ -467,6 +498,26 @@ test('seco acima do teto mostra «pularia: teto do dia» em vez de calar', async
   assert.equal(simulacoes.filter((s) => s.acao === 'etiquetaria').length, 2);
   assert.equal(r.qualificacao.acimaDoTeto, 1);
   assert.ok(simulacoes.some((s) => s.acao === 'pularia' && /teto do dia/.test(s.motivo ?? '')));
+});
+
+test('o teto «simulado» do papel não gasta a vaga de uma régua LIGADA na mesma unidade', async () => {
+  for (let i = 0; i < 3; i++) novo({ etapa: [COM, 12], silencioDias: 2 });
+  paciente({ etapa: [COM, 15] });
+  const c = ctx({ intents: { rotina_teto_dia: 3 } });
+  await aniversario(c, true); // aniversário só no papel
+  assert.equal(c.teto.simulado, 2);
+  assert.equal(c.teto.restanteHoje, 3, 'o teto de verdade ficou intacto');
+  await etapas(c, false); // etapas ligadas
+  assert.equal(tagsPostas().length, 3, 'as três retomadas saíram: o papel do aniversário não tirou a vaga delas');
+});
+
+test('o que foi decidido «no papel» não segura a mesma decisão depois que a régua é ligada', async () => {
+  novo({ silencioDias: 3 });
+  const c = ctx();
+  await etapas(c, true);
+  assert.equal(tagsPostas().length, 0);
+  await etapas(c, false);
+  assert.equal(tagsPostas().length, 1, 'virou ligado: o cartão é avaliado de novo');
 });
 
 test('os estados são por régua e começam DESLIGADOS', () => {
@@ -528,6 +579,15 @@ test('ex-lead: estoque antigo (silêncio ≥ 60 d sem 1º toque) não entra de u
   chamadas.length = 0;
   await exlead(c, false);
   assert.deepEqual(tagsPostas(), ['▶ Reativação 2']);
+});
+
+test('ex-lead: o relógio também conta da ENTRADA em PERDIDO — o estoque que o parados perdeu depois de meses calado entra 30 dias depois da perda, e a perda de hoje espera', async () => {
+  const calouHaMuito = novo({ etapa: PERDIDO, silencioDias: 100, closed: AGORA - 31 * DIA }); // calado há 100 d, perdido há 31
+  const perdidoHoje = novo({ etapa: PERDIDO, silencioDias: 100, closed: AGORA - 2 * H }); // calado há 100 d, perdido agora
+  const r = await exlead(ctx(), false);
+  assert.deepEqual(chamadas.filter((x) => x.startsWith('addTag')), [`addTag:${calouHaMuito.lead.id}:▶ Reativação`]);
+  assert.ok(perdidoHoje);
+  assert.equal(r.exlead.esperando, 1);
 });
 
 test('ex-lead: a ▶ Reativação que o etiquetas-auto já pôs naquele PERDIDO conta como o 1º degrau (nada de mensagem em dobro)', async () => {
@@ -650,6 +710,13 @@ test('aniversário: NO_FOLLOW_UP, NAO_PERTURBAR, opt-out, CURRÍCULO e motivo de
   for (const c of cartoes) if (c.lead.status_id === 11) c.lead.status_id = 15;
   await aniversario(ctx(), false);
   assert.deepEqual(chamadas.filter((x) => x.startsWith('addTag')), [`addTag:${livre.lead.id}:▶ Aniversário`]);
+});
+
+test('aniversário atrasado: unidade fechada no fim de semana cumprimenta no 1º dia útil (até 2 dias); depois disso a data passou', async () => {
+  const dois = novo({ etapa: [COM, 15], campos: { '◷ Data de nascimento': nasc('1980-11-04'), '◷ Data da Consulta': AGORA - 30 * DIA } });
+  novo({ etapa: [COM, 15], campos: { '◷ Data de nascimento': nasc('1980-11-03'), '◷ Data da Consulta': AGORA - 30 * DIA } });
+  await aniversario(ctx(), false);
+  assert.deepEqual(chamadas.filter((x) => x.startsWith('addTag')), [`addTag:${dois.lead.id}:▶ Aniversário`]);
 });
 
 test('aniversário só de manhã, no fuso da unidade; fora da janela não lê nem o funil', async () => {

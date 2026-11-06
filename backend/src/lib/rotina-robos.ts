@@ -354,24 +354,33 @@ export function diaDeNascimentoDaFicha(bruto: string | null | undefined): string
   return iso && !Number.isNaN(Date.parse(`${iso}T12:00:00Z`)) ? iso : null;
 }
 
+/** Dias de atraso que o aniversário aceita: a unidade fechada no sábado, no domingo ou no feriado cumprimenta no 1º dia útil. */
+export const ATRASO_MAX_ANIVERSARIO_DIAS = 2;
+
 /**
- * É aniversário hoje, no fuso da unidade? `dia` = AAAA-MM-DD do nascimento. 29/02 comemora em 28/02 nos anos sem
- * bissexto. Ano absurdo (futuro, antes de 1900) = não manda: data de nascimento digitada errada é pior que não mandar.
+ * É aniversário hoje, no fuso da unidade? `dia` = AAAA-MM-DD do nascimento. Com `atrasoMax`, vale também o aniversário dos
+ * últimos N dias (o 1º dia útil depois do fim de semana ou do feriado) — a marca de «1 por ano» impede o repique.
+ * 29/02 comemora em 28/02 nos anos sem bissexto. Ano absurdo (futuro, antes de 1900) = não manda: data de nascimento
+ * digitada errada é pior que não mandar.
  */
-export function aniversarioNoDia(dia: string | null, agora: number, tz: string): boolean {
+export function aniversarioNoDia(dia: string | null, agora: number, tz: string, atrasoMax = 0): boolean {
   if (!dia) return false;
   const ano = Number(dia.slice(0, 4));
-  const hoje = hojeNaUnidade(agora, tz);
-  const anoHoje = Number(hoje.slice(0, 4));
-  if (!Number.isFinite(ano) || ano < 1900 || ano >= anoHoje) return false;
-  const bissexto = (anoHoje % 4 === 0 && anoHoje % 100 !== 0) || anoHoje % 400 === 0;
+  const anoAgora = Number(hojeNaUnidade(agora, tz).slice(0, 4));
+  if (!Number.isFinite(ano) || ano < 1900 || ano >= anoAgora) return false;
   const md = dia.slice(5);
-  return md === hoje.slice(5) || (md === '02-29' && !bissexto && hoje.slice(5) === '02-28');
+  for (let k = 0; k <= atrasoMax; k++) {
+    const hoje = hojeNaUnidade(agora - k * DIA_S, tz);
+    const anoDoDia = Number(hoje.slice(0, 4));
+    const bissexto = (anoDoDia % 4 === 0 && anoDoDia % 100 !== 0) || anoDoDia % 400 === 0;
+    if (md === hoje.slice(5) || (md === '02-29' && !bissexto && hoje.slice(5) === '02-28')) return true;
+  }
+  return false;
 }
 
 /** Aniversário a partir de um campo `date` do Kommo (epoch s, meia-noite no fuso da conta). */
-export function aniversarioHoje(nascimento: number | null, agora: number, tz: string): boolean {
-  return nascimento === null ? false : aniversarioNoDia(diaDoCampoData(nascimento), agora, tz);
+export function aniversarioHoje(nascimento: number | null, agora: number, tz: string, atrasoMax = 0): boolean {
+  return nascimento === null ? false : aniversarioNoDia(diaDoCampoData(nascimento), agora, tz, atrasoMax);
 }
 
 /** Hora local (0–23) da unidade. */

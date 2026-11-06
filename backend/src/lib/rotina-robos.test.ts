@@ -20,6 +20,7 @@ import {
   lerMarca,
   marcasDoSilencio,
   motivoMorto,
+  nascimentoDoCartao,
   naJanelaDoAniversario,
   porQueNaoTocar,
   statusDeFalecido,
@@ -224,6 +225,23 @@ test('aniversário: dia e mês batem no fuso da unidade; ano de nascimento absur
   assert.equal(aniversarioHoje(nasc('2026-11-06'), AGORA, TZ), false, 'nasceu hoje: data digitada errada');
   assert.equal(aniversarioHoje(nasc('1850-11-06'), AGORA, TZ), false);
   assert.equal(aniversarioHoje(null, AGORA, TZ), false);
+});
+
+test('nascido antes de 1970: o Kommo guarda o epoch NEGATIVO e o aniversário ainda bate (a maioria dos pacientes é dessa faixa)', () => {
+  const de1950 = nasc('1950-11-06');
+  assert.ok(de1950 < 0);
+  assert.equal(aniversarioHoje(de1950, AGORA, TZ), true);
+  assert.equal(aniversarioHoje(nasc('1950-11-07'), AGORA, TZ), false);
+  assert.equal(nascimentoDoCartao(carta([], { '◷ Data de nascimento': de1950 })), de1950);
+  assert.equal(nascimentoDoCartao(carta([], { '◷ Data de nascimento': String(de1950) })), de1950, 'em texto também');
+  assert.equal(nascimentoDoCartao(carta()), null);
+});
+
+test('aniversário com atraso: o 1º dia útil depois do fim de semana ou feriado cobre os 2 dias anteriores, e só', () => {
+  assert.equal(aniversarioHoje(nasc('1980-11-04'), AGORA, TZ, 2), true, 'fez 2 dias atrás');
+  assert.equal(aniversarioHoje(nasc('1980-11-03'), AGORA, TZ, 2), false, '3 dias atrás: passou');
+  assert.equal(aniversarioHoje(nasc('1980-11-04'), AGORA, TZ), false, 'sem tolerância: só hoje');
+  assert.equal(aniversarioHoje(nasc('1980-11-07'), AGORA, TZ, 2), false, 'amanhã não vale');
 });
 
 test('a ficha da franquia diz a data em ISO ou dd/mm/aaaa; lixo vira null', () => {

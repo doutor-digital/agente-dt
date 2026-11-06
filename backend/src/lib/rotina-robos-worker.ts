@@ -54,6 +54,7 @@ import {
   MAX_SILENCIO_ETAPAS_DIAS,
   PREFIXO_DA_MARCA,
   REGUAS_POR_ETAPA,
+  ATRASO_MAX_ANIVERSARIO_DIAS,
   aniversarioHoje,
   aniversarioNoDia,
   diaDeNascimentoDaFicha,
@@ -120,6 +121,8 @@ const conta = (m: Record<string, number>, k: string) => void (m[k] = (m[k] ?? 0)
 interface Teto {
   restanteHoje: number;
   restanteNaVarredura: number;
+  /** o teto que o «só no papel» simula, para o papel mostrar o corte do teto SEM gastar a vaga de uma régua ligada */
+  simulado: number;
 }
 
 export interface Ctx {
@@ -134,6 +137,11 @@ export interface Ctx {
   /** as etiquetas de cartão que a CONTA tem — o `tags_to_add` do Kommo CRIA a que não existe */
   tagsDaConta: readonly string[];
   teto: Teto;
+  /** as marcas de hoje, lidas UMA vez por varredura (e os cartões que esta varredura já tocou) */
+  /** a régua de aniversário está LIGADA nesta unidade (as outras cedem o dia do aniversário a ela) */
+  aniversarioLigado?: boolean;
+  hoje?: Promise<Array<{ leadId: number; id: string }>>;
+  tocados?: Set<number>;
   franquia?: (unit: Unit, leadId: number, nome: string | null, agora: number) => Promise<NaFranquia>;
   ficha?: typeof fichaDoPaciente;
 }
@@ -199,6 +207,13 @@ async function marcasDeHoje(unit: Unit, agora: number, tz: string): Promise<Arra
   return linhas.filter((l) => hojeNaUnidade(Math.floor(l.createdAt.getTime() / 1000), tz) === hoje).map((l) => ({ leadId: Number(l.leadId), id: l.id }));
 }
 
+/** Cartões com marca da rotina de hoje, lidos uma vez por varredura; o que esta varredura toca entra na hora. */
+async function cartoesComToqueHoje(ctx: Ctx): Promise<Set<number>> {
+  ctx.hoje ??= marcasDeHoje(ctx.unit, ctx.agora, ctx.tz);
+  const lidos = await ctx.hoje;
+  return new Set([...lidos.map((m) => m.leadId), ...(ctx.tocados ?? [])]);
+}
+
 /** Toques de OUTROS robôs hoje (etiquetas-auto) no mesmo cartão também contam para "não junto com outro toque". */
 async function toquesDoEtiquetasAutoHoje(unitId: string, leadIds: number[], agora: number, tz: string): Promise<Set<number>> {
   if (leadIds.length === 0) return new Set();
@@ -216,7 +231,12 @@ async function ultimasMensagensNoBanco(unitId: string, leadIds: number[]): Promi
     where: { unitId, leadId: { in: leadIds.map(String) } },
     select: { leadId: true, lastMessageAt: true },
   });
-  return new Map(linhas.map((l) => [Number(l.leadId), Math.floor(l.lastMessageAt.getTime() / 1000)]));
+  const mapa = new Map<number, number>();
+  for (const l of linhas) {
+    const t = Math.floor(l.lastMessageAt.getTime() / 1000);
+    mapa.set(Number(l.leadId), Math.max(t, mapa.get(Number(l.leadId)) ?? 0)); // não há chave única (unidade, cartão): vale a mais recente
+  }
+  return mapa;
 }
 
 // ─── pôr a etiqueta (o único caminho de escrita) ──────────────────────────────────────────────────
@@ -283,13 +303,13 @@ export async function tocar(ctx: Ctx, seco: boolean, t: Toque, r: ResumoDaRegua)
     if (seco) noPapel('pularia', `a conta não tem a etiqueta ${t.etiqueta}`);
     return 'sem-etiqueta';
   }
-  if (ctx.teto.restanteHoje <= 0 || (!seco && ctx.teto.restanteNaVarredura <= 0)) {
+  if ((seco ? ctx.teto.simulado : ctx.teto.restanteHoje) <= 0 || (!seco && ctx.teto.restanteNaVarredura <= 0)) {
     r.acimaDoTeto++;
     if (seco) noPapel('pularia', `teto do dia (${ctx.cfg.teto}): sairia amanhã`);
     return 'teto';
   }
   if (seco) {
-    ctx.teto.restanteHoje--;
+    ctx.teto.simulado--;
     conta(r.porToque, String(t.toque));
     noPapel('etiquetaria', t.motivo);
     return 'ok';
@@ -310,13 +330,20 @@ export async function tocar(ctx: Ctx, seco: boolean, t: Toque, r: ResumoDaRegua)
     if (jaTem) await kommo.removeTag(t.lead.id, jaTem);
     await kommo.addTag({ leadId: t.lead.id, tag: daConta });
   } catch (err) {
-    await soltarMarca(unit, t);
     r.erros++;
-    logger.warn({ err: String(err), unit: unit.slug, leadId: t.lead.id, etiqueta: daConta }, 'rotina: falha ao pôr a etiqueta — soltei a marca');
-    return 'falhou';
+    // timeout ou 5xx pode vir DEPOIS de o Kommo gravar a etiqueta (e o robô mandar o modelo): só solta a marca se a releitura
+    // PROVA que a etiqueta não está lá. Na dúvida a marca fica — o erro cai do lado de não mandar de novo.
+    const gravou = await kommo.getLead(t.lead.id).then(
+      (l) => etiquetaNoCartao(daConta, (l._embedded?.tags ?? []).map((x) => x.name)) !== null,
+      () => true,
+    );
+    if (!gravou) await soltarMarca(unit, t);
+    logger.warn({ err: String(err), unit: unit.slug, leadId: t.lead.id, etiqueta: daConta, gravou }, gravou ? 'rotina: erro ao pôr a etiqueta, mas ela consta no cartão (ou não deu para reler) — a marca fica' : 'rotina: falha ao pôr a etiqueta — soltei a marca');
+    if (!gravou) return 'falhou';
   }
   ctx.teto.restanteHoje--;
   ctx.teto.restanteNaVarredura--;
+  (ctx.tocados ??= new Set()).add(t.lead.id);
   conta(r.porToque, String(t.toque));
   await kommo.addLeadNote(t.lead.id, `🤖 Rotina diária: etiqueta ${daConta} (${t.toque}º toque) — ${t.motivo}.`).catch(() => undefined);
   logger.info({ unit: unit.slug, leadId: t.lead.id, etiqueta: daConta, toque: t.toque, regua: t.chave }, 'rotina: etiqueta posta');
@@ -344,6 +371,13 @@ interface ParamsDoSilencio {
   opcoesDoCartao: Partial<OpcoesDeCartao>;
   /** só do ex-lead: quem já teve consulta no cartão ou na franquia não é ex-lead */
   soQuemNuncaAgendou: boolean;
+  /**
+   * O silêncio conta da última mensagem do paciente OU da entrada em PERDIDO, o que for mais recente. Sem isto o estoque que o
+   * `parados` manda para PERDIDO depois de 90 dias calado nunca entraria (já passou da janela) e a Reativação de 30 dias depois
+   * da perda, que o `etiquetas-auto` fazia, sumiria. Cartão perdido hoje espera 30 dias: ninguém recebe «e aí?» horas depois
+   * de a SDR fechar.
+   */
+  ancorarNaPerda?: boolean;
   /** marcas de outras fontes que valem como degrau já enviado (a Reativação do `etiquetas-auto`) */
   marcasExtras?: (ctx: Ctx, leads: KommoLead[]) => Promise<Map<number, MarcaLida[]>>;
 }
@@ -351,26 +385,29 @@ interface ParamsDoSilencio {
 export async function varrerSilencio(ctx: Ctx, seco: boolean, p: ParamsDoSilencio, leads: KommoLead[], r: ResumoDaRegua): Promise<void> {
   const { unit, kommo, agora, tz } = ctx;
   r.lidos += leads.length;
+  // o que se decidiu «no papel» não pode segurar a mesma decisão depois que a régua é ligada
+  const chaveDoCache = `${p.chave}:${seco ? 'seco' : 'ligado'}`;
   const opcoes: OpcoesDeCartao = { agora, tz, pausarIaFieldId: ctx.pausarIaFieldId, ...p.opcoesDoCartao };
 
   // 1) o cartão, de graça
   let fila: KommoLead[] = [];
   for (const lead of leads) {
     if (pularCartao(ctx.grupo, unit.id, lead, {})) continue; // Kommo dividido: só os cartões desta unidade
-    if (jaVisto(unit.id, p.chave, lead.id, agora)) continue;
+    if (jaVisto(unit.id, chaveDoCache, lead.id, agora)) continue;
     const razao = porQueNaoTocar(lead, opcoes);
     if (razao) {
       conta(r.barrados, razao.codigo);
       continue;
     }
-    // no dia do aniversário o cartão é do toque de aniversário: nada de retomada junto
-    if (aniversarioHoje(nascimentoDoCartao(lead), agora, tz)) {
+    // no dia do aniversário o cartão é do toque de aniversário: nada de retomada junto (só vale onde ele está LIGADO, e para quem
+    // seria paciente — lead que nunca consultou não ganha parabéns, então não há o que esperar)
+    if (ctx.aniversarioLigado && aniversarioHoje(nascimentoDoCartao(lead), agora, tz, ATRASO_MAX_ANIVERSARIO_DIAS) && (cartaoMostraConsulta(lead) || idClientDoCartao(lead, []) !== null)) {
       conta(r.barrados, 'aniversario-hoje');
       continue;
     }
     if (p.soQuemNuncaAgendou && cartaoMostraConsulta(lead)) {
       conta(r.barrados, 'ja-teve-consulta-no-cartao');
-      marcarVisto(unit.id, p.chave, lead.id, agora + 7 * DIA_S);
+      marcarVisto(unit.id, chaveDoCache, lead.id, agora + 7 * DIA_S);
       continue;
     }
     fila.push(lead);
@@ -384,7 +421,7 @@ export async function varrerSilencio(ctx: Ctx, seco: boolean, p: ParamsDoSilenci
     p.marcasExtras ? p.marcasExtras(ctx, fila) : Promise.resolve(new Map<number, MarcaLida[]>()),
     toquesDoEtiquetasAutoHoje(unit.id, ids, agora, tz),
   ]);
-  const hoje = new Set((await marcasDeHoje(unit, agora, tz)).map((m) => m.leadId));
+  const hoje = await cartoesComToqueHoje(ctx);
   fila = fila.filter((lead) => {
     if (hoje.has(lead.id) || hojeAutoTouch.has(lead.id)) {
       conta(r.barrados, 'ja-recebeu-toque-hoje');
@@ -400,7 +437,7 @@ export async function varrerSilencio(ctx: Ctx, seco: boolean, p: ParamsDoSilenci
     const ultimoEm = dela.reduce((m, x) => Math.max(m, x.em), 0);
     if (dela.some((m) => m.toque >= p.dias.length) && (ultima === undefined || ultima <= ultimoEm)) {
       r.esgotadas++;
-      marcarVisto(unit.id, p.chave, lead.id, agora + 12 * HORA_S);
+      marcarVisto(unit.id, chaveDoCache, lead.id, agora + 12 * HORA_S);
       return false;
     }
     return true;
@@ -420,7 +457,9 @@ export async function varrerSilencio(ctx: Ctx, seco: boolean, p: ParamsDoSilenci
     leituras++;
     r.avaliados++;
     try {
-      const tp = await kommo.ultimaMensagemDoContatoDesde(contato, agora - p.janelaOlhadaDias * DIA_S);
+      const ultima = await kommo.ultimaMensagemDoContatoDesde(contato, agora - p.janelaOlhadaDias * DIA_S);
+      // quem nunca escreveu continua «fora»: a perda só adianta o relógio de quem JÁ conversou
+      const tp = ultima !== null && p.ancorarNaPerda && lead.status_id === 143 && lead.closed_at ? Math.max(ultima, lead.closed_at) : ultima;
       const dosCartao = [...(marcas.get(lead.id) ?? []), ...(extras.get(lead.id) ?? [])];
       const d = decidirToque({
         agora,
@@ -433,24 +472,24 @@ export async function varrerSilencio(ctx: Ctx, seco: boolean, p: ParamsDoSilenci
       });
       if (d.tipo === 'fora') {
         r.foraDaJanela++;
-        marcarVisto(unit.id, p.chave, lead.id, agora + DIA_S);
+        marcarVisto(unit.id, chaveDoCache, lead.id, agora + DIA_S);
         continue;
       }
       if (d.tipo === 'esgotada') {
         r.esgotadas++;
-        marcarVisto(unit.id, p.chave, lead.id, agora + 12 * HORA_S);
+        marcarVisto(unit.id, chaveDoCache, lead.id, agora + 12 * HORA_S);
         continue;
       }
       if (d.tipo === 'espera') {
         r.esperando++;
-        marcarVisto(unit.id, p.chave, lead.id, d.ate ?? agora + 6 * HORA_S);
+        marcarVisto(unit.id, chaveDoCache, lead.id, d.ate ?? agora + 6 * HORA_S);
         continue;
       }
       const alvo = `${d.toque}º toque · ${d.etiqueta}`;
       if (d.tipo === 'sem-gatilho') {
         conta(r.seguradas, 'sem-gatilho-confirmado');
         if (seco) registrarSimulacao(unit, p.automacao, { leadId: lead.id, acao: 'pularia', alvo, deEtapa: p.etapa, valor: d.toque, motivo: `o ${d.toque}º degrau ainda não tem robô e gatilho confirmados nesta conta (rotina_toques_prontos)` });
-        marcarVisto(unit.id, p.chave, lead.id, agora + 6 * HORA_S);
+        marcarVisto(unit.id, chaveDoCache, lead.id, agora + 6 * HORA_S);
         continue;
       }
 
@@ -458,7 +497,7 @@ export async function varrerSilencio(ctx: Ctx, seco: boolean, p: ParamsDoSilenci
       const segura = async (codigo: string, motivo: string, horas = 6) => {
         conta(r.seguradas, codigo);
         if (seco) registrarSimulacao(unit, p.automacao, { leadId: lead.id, acao: 'pularia', alvo, deEtapa: p.etapa, valor: d.toque, motivo });
-        marcarVisto(unit.id, p.chave, lead.id, agora + horas * HORA_S);
+        marcarVisto(unit.id, chaveDoCache, lead.id, agora + horas * HORA_S);
       };
       if (await leadPausadoPorJanela(unit.id, lead.id)) {
         await segura('lead-pausado', 'a recepção pausou este cartão');
@@ -498,9 +537,11 @@ export async function varrerSilencio(ctx: Ctx, seco: boolean, p: ParamsDoSilenci
         : `${d.silencioDias} dias sem o paciente escrever em ${p.etapa}`;
       const res = await tocar(ctx, seco, { lead, automacao: p.automacao, chave: p.chave, toque: d.toque, etiqueta: d.etiqueta, tp: tp as number, quem: lead.id, etapa: p.etapa, motivo, aindaVale }, r);
       if (res === 'teto' && !seco) break;
-      if (res === 'ok' || res === 'segurou') marcarVisto(unit.id, p.chave, lead.id, agora + 6 * HORA_S);
+      // falha da conta (sem a etiqueta do degrau), marca que não gravou ou cartão que mudou: não reavaliar em toda varredura
+      if (res !== 'teto') marcarVisto(unit.id, chaveDoCache, lead.id, agora + (res === 'ok' ? 6 : 3) * HORA_S);
     } catch (err) {
       r.erros++;
+      marcarVisto(unit.id, chaveDoCache, lead.id, agora + 3 * HORA_S);
       // erro do Kommo ou da franquia num cartão: pula o cartão, nunca vira "pode mandar"
       logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id, regua: p.chave }, 'rotina: erro num cartão — pulei');
     }
@@ -577,9 +618,11 @@ export async function varrerExLead(ctx: Ctx, seco: boolean, resumo: Record<strin
         etiquetas: ETIQUETAS_EXLEAD,
         prontos: ctx.cfg.toquesProntosExlead,
         entradaAteDias: dias[0] + ENTRADA_EXLEAD_DIAS,
-        janelaOlhadaDias: dias[dias.length - 1] + ENTRADA_EXLEAD_DIAS,
+        // olha bem longe: o estoque que o `parados` perdeu depois de meses calado tem a última mensagem lá atrás
+        janelaOlhadaDias: 365,
         opcoesDoCartao: { conferirMotivoMorto: true },
         soQuemNuncaAgendou: true,
+        ancorarNaPerda: true,
         // a Reativação do `etiquetas-auto` já pode ter mandado o 1º toque deste cartão (ele marca por cartão + data da perda)
         marcasExtras: marcasDaReativacaoAntiga,
       },
@@ -648,7 +691,7 @@ async function cartoesDoUniverso(ctx: Ctx): Promise<KommoLead[]> {
 
 export async function varrerAniversario(ctx: Ctx, seco: boolean, resumo: Record<string, ResumoDaRegua>): Promise<void> {
   const r = (resumo[CHAVE_ANIVERSARIO] = resumoNovo());
-  const { unit, agora, tz } = ctx;
+  const { unit, agora, tz, kommo } = ctx;
   if (!naJanelaDoAniversario(agora, tz)) {
     r.seguradas['fora-da-janela-da-manha'] = 1;
     return;
@@ -665,7 +708,7 @@ export async function varrerAniversario(ctx: Ctx, seco: boolean, resumo: Record<
     for (const k of aniversariantes.keys()) if (!k.endsWith(`:${dia}`)) aniversariantes.delete(k);
     const todos = await cartoesDoUniverso(ctx);
     r.lidos = todos.length;
-    doDia = todos.filter((l) => aniversarioHoje(nascimentoDoCartao(l), agora, tz) && ehPaciente(l, ctx.funis));
+    doDia = todos.filter((l) => aniversarioHoje(nascimentoDoCartao(l), agora, tz, ATRASO_MAX_ANIVERSARIO_DIAS) && ehPaciente(l, ctx.funis));
     aniversariantes.set(chave, doDia);
   }
   const ano = Number(dia.slice(0, 4));
@@ -681,8 +724,7 @@ export async function varrerAniversario(ctx: Ctx, seco: boolean, resumo: Record<
     return true;
   });
   const ids = fila.map((l) => l.id);
-  const [hoje, doEtiquetasAuto] = await Promise.all([marcasDeHoje(unit, agora, tz), toquesDoEtiquetasAutoHoje(unit.id, ids, agora, tz)]);
-  const comToqueHoje = new Set(hoje.map((m) => m.leadId));
+  const [comToqueHoje, doEtiquetasAuto] = await Promise.all([cartoesComToqueHoje(ctx), toquesDoEtiquetasAutoHoje(unit.id, ids, agora, tz)]);
   const quemDe = (l: KommoLead): string => {
     const c = contatoPrincipal(l);
     return c !== null ? `c${c}` : `l${l.id}`;
@@ -703,10 +745,19 @@ export async function varrerAniversario(ctx: Ctx, seco: boolean, resumo: Record<
   });
 
   const tratamentoEm = ctx.funis.tratamentoId !== null ? ctx.funis.idDe('TRATAMENTO', ETAPA.EM_TRATAMENTO) : null;
-  for (const lead of fila) {
+  const chaveDoCache = `${CHAVE_ANIVERSARIO}:${seco ? 'seco' : 'ligado'}`;
+  for (const velho of fila) {
     if (!seco && ctx.teto.restanteNaVarredura <= 0) break;
+    if (jaVisto(unit.id, chaveDoCache, velho.id, agora)) continue;
     r.avaliados++;
     try {
+      // a lista do dia vem da primeira leitura (pode ter 3 h): a etapa que decide «só parabéns × com convite» é a de AGORA
+      const lead = await kommo.getLead(velho.id);
+      lead.name ??= velho.name;
+      if (porQueNaoTocar(lead, { ...opcoes, agora })) {
+        marcarVisto(unit.id, chaveDoCache, velho.id, agora + 6 * HORA_S);
+        continue;
+      }
       let emTratamento = tratamentoEm !== null && lead.pipeline_id === tratamentoEm.pipelineId && lead.status_id === tratamentoEm.statusId;
       // a franquia é o cadastro: confere a data (e se o paciente está vivo e em tratamento) pelo VÍNCULO do cartão, nunca por busca de nome
       const idClient = idClientDoCartao(lead, []);
@@ -716,11 +767,13 @@ export async function varrerAniversario(ctx: Ctx, seco: boolean, resumo: Record<
         const ficha = res.data.ficha;
         if (statusDeFalecido(ficha.status)) {
           conta(r.barrados, 'falecido-na-franquia');
+          marcarVisto(unit.id, chaveDoCache, velho.id, agora + DIA_S);
           continue;
         }
         const nasc = diaDeNascimentoDaFicha(ficha.birthdate);
-        if (nasc !== null && !aniversarioNoDia(nasc, agora, tz)) {
+        if (nasc !== null && !aniversarioNoDia(nasc, agora, tz, ATRASO_MAX_ANIVERSARIO_DIAS)) {
           conta(r.seguradas, 'franquia-diz-outra-data');
+          marcarVisto(unit.id, chaveDoCache, velho.id, agora + DIA_S);
           continue;
         }
         if (ficha.treatments.some((t) => (t as { idStatus?: number }).idStatus === TRATAMENTO_EM_ANDAMENTO)) emTratamento = true;
@@ -738,9 +791,11 @@ export async function varrerAniversario(ctx: Ctx, seco: boolean, resumo: Record<
         r,
       );
       if (res === 'teto' && !seco) break;
+      if (res !== 'teto') marcarVisto(unit.id, chaveDoCache, velho.id, agora + 3 * HORA_S);
     } catch (err) {
       r.erros++;
-      logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id }, 'rotina: erro no aniversário de um cartão — pulei');
+      marcarVisto(unit.id, chaveDoCache, velho.id, agora + 3 * HORA_S);
+      logger.warn({ err: String(err), unit: unit.slug, leadId: velho.id }, 'rotina: erro no aniversário de um cartão — pulei');
     }
   }
 }
@@ -767,7 +822,6 @@ export async function varrerUnidade(unit: Unit, agora: number = Math.floor(Date.
   const tz = unit.spineTimezone ?? 'America/Sao_Paulo';
   const cfg = configDaUnidade(unit.pipelineIntents);
   if (cfg.invalidas.length) logger.warn({ unit: unit.slug, invalidas: cfg.invalidas }, 'rotina: prazos inválidos na unidade — usei os padrões');
-  const feitosHoje = (await marcasDeHoje(unit, agora, tz)).length;
   const ctx: Ctx = {
     unit,
     kommo,
@@ -778,8 +832,12 @@ export async function varrerUnidade(unit: Unit, agora: number = Math.floor(Date.
     cfg,
     pausarIaFieldId: unit.kommoPausedFieldId ?? null,
     tagsDaConta: await etiquetasDaConta(unit.kommoSubdomain ?? unit.slug, kommo),
-    teto: { restanteHoje: Math.max(0, cfg.teto - feitosHoje), restanteNaVarredura: cfg.porVarredura },
+    teto: { restanteHoje: 0, restanteNaVarredura: cfg.porVarredura, simulado: 0 },
+    aniversarioLigado: estados.aniversario === 'ligado',
   };
+  ctx.hoje = marcasDeHoje(unit, agora, tz);
+  const feitosHoje = (await ctx.hoje).length;
+  ctx.teto.restanteHoje = ctx.teto.simulado = Math.max(0, cfg.teto - feitosHoje);
   const resumo: Record<string, ResumoDaRegua> = {};
   // aniversário primeiro: é uma vez por ano e não pode perder a vaga do teto para a cobrança do dia
   if (estados.aniversario !== 'desligado') await varrerAniversario(ctx, estados.aniversario === 'seco', resumo);
