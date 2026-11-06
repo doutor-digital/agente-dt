@@ -107,6 +107,20 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/parados-estoques.ts',
   },
   {
+    id: 'perda-ia',
+    chave: 'PERDA_IA_SLUGS',
+    nome: 'IA move pra PERDIDO quem já recusou',
+    oQueFaz:
+      'De hora em hora a IA lê a conversa dos cartões em EM QUALIFICAÇÃO e EM ESPERA em que o paciente não escreve há 48 h ou mais e move pra PERDIDO só quem JÁ DISSE que acabou: recusa clara ("já fechei com outro", "não tenho interesse", "achei muito caro"), fora da região ou do serviço, ou engano/spam. Grava o ⊘ Motivo do não agendamento (opção da lista da conta), uma nota com a justificativa e a frase do paciente, e a etiqueta "perdido pela IA".',
+    pegadinha:
+      'Nunca move: dúvida aberta (o paciente perguntou e ninguém respondeu), "vou ver / vou falar com meu marido", quem a IA não tem certeza ALTA, consulta futura (cartão ou franquia), tratamento em andamento, pagamento antecipado, Quente/Morno, ◷ Retomar em de hoje em diante, "Pausar IA" marcado, equipe falando nas últimas 24 h, NO_FOLLOW_UP/CURRÍCULO, funil TRATAMENTO. Só vale a frase do paciente que está nas 3 últimas falas dele e não é pergunta. Falha da IA ou da franquia = o cartão fica. SUMIÇO (vácuo) NÃO move aqui: é do worker de parados (régua esgotada, EM ESPERA 30 dias); aqui o vácuo só aparece como "pularia". Fica de fora NÃO COMPARECEU (tem consulta na franquia) e a entrada (é da Sofia). Teto por unidade por varredura: 20 cartões lidos e 5 movidos. EFEITO de ir pra PERDIDO: recusa definitiva (sem interesse, outra cidade, plano, engano, outra patologia) leva a etiqueta de não contatar ANTES da etapa, então a régua de PERDIDO (48/96/120 h) não manda nada; só "Sem condições financeira" e "Informação para terceiro" ficam sem a etiqueta e podem receber a régua. Em "Só no papel" a leitura RODA (~US$ 0,0004 por cartão) e a tela mostra "moveria" com padrão, motivo e justificativa — é o que se confere antes de ligar. Passa pelo mesmo fecho e pela mesma trava da perda automática do worker de parados.',
+    risco: 'move-cartao',
+    temSeco: true,
+    exigeSecoAntes: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/perda-ia-worker.ts',
+  },
+  {
     id: 'franquia-move',
     chave: 'FRANQUIA_MOVE_SLUGS',
     nome: 'A franquia move a etapa',
@@ -475,6 +489,20 @@ export const AUTOMACOES: readonly Automacao[] = [
     temSeco: false,
     quandoVazio: 'desligado',
     arquivo: 'src/lib/sugestao-motivo.ts',
+  },
+  {
+    id: 'motivo-perdido-ia',
+    chave: 'MOTIVO_PERDIDO_IA_SLUGS',
+    nome: 'IA preenche o motivo do cartão que foi pra PERDIDO',
+    oQueFaz:
+      'Quando um cartão entra em PERDIDO (últimas 24 h, e pelo menos 10 min depois, pra SDR ter tempo de escolher) com o ⊘ Motivo do não agendamento vazio, a IA lê a conversa — a mesma leitura e o mesmo classificador do botão "Sugerir motivo" do widget — e preenche com a opção da lista DA CONTA que casa. Deixa uma nota no cartão. Depois o robô "Motivo no topo do cartão perdido" copia o motivo pro topo, se estiver ligado.',
+    pegadinha:
+      'Nunca sobrescreve: campo já preenchido (nem o de não fechamento), cartão de currículo e quem já foi atendido ficam como estão; relê o cartão logo antes de gravar. Sem opção que sirva na lista da conta, não grava nada (não inventa "Outro"). Se a IA estiver fora do ar, não faz nada. Em "Só no papel" a leitura RODA (custo pequeno) e a tela mostra "gravaria" com o motivo e a frase do paciente. Até 20 cartões por varredura (de hora em hora) por unidade; cada cartão é lido uma vez por dia. Modelo barato (Haiku 5.5, ~US$ 0,0004 por cartão); o botão do widget usa um modelo mais forte e acerta ~70% — compare o seco com o gabarito antes de ligar. Escrever no campo NÃO dispara os robôs de entrada em PERDIDO (eles disparam na mudança de etapa).',
+    risco: 'escreve-campo',
+    temSeco: true,
+    exigeSecoAntes: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/perda-ia-worker.ts',
   },
   {
     id: 'widget-cadastrar',

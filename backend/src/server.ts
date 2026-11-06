@@ -45,6 +45,7 @@ import { iniciarVigiaDeQualidade, pararVigiaDeQualidade } from './lib/qualidade-
 import { startCacheKeepaliveWorker, stopCacheKeepaliveWorker } from './lib/cache-keepalive-worker.js';
 import { startParadosWorker, stopParadosWorker } from './lib/parados-worker.js';
 import { startMotivoNoCabecalhoWorker, stopMotivoNoCabecalhoWorker } from './lib/motivo-no-cabecalho-worker.js';
+import { startPerdaIaWorker, stopPerdaIaWorker } from './lib/perda-ia-worker.js';
 import { startNaoLidasWorker, stopNaoLidasWorker } from './lib/nao-lidas-worker.js';
 import { startCampanhaWorker, stopCampanhaWorker } from './lib/campanha-worker.js';
 import { startResumoDiarioIaWorker, stopResumoDiarioIaWorker } from './lib/resumo-diario-ia-worker.js';
@@ -225,6 +226,7 @@ async function main(): Promise<void> {
       startFranquiaCalendarioWorker();
       startParadosWorker();
       startMotivoNoCabecalhoWorker();
+      startPerdaIaWorker();
       startUnidadePorCanalWorker();
       startUnidadeNoCartaoWorker();
       startRenomearLeadWorker();
@@ -241,6 +243,7 @@ async function main(): Promise<void> {
       pararVigiaDeQualidade();
       stopParadosWorker();
       stopMotivoNoCabecalhoWorker();
+      stopPerdaIaWorker();
       stopUnidadePorCanalWorker();
       stopUnidadeNoCartaoWorker();
       stopRenomearLeadWorker();
