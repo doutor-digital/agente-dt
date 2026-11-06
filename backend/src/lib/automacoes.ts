@@ -832,6 +832,17 @@ export const AUTOMACOES: readonly Automacao[] = [
     exigeSecoAntes: true,
     quandoVazio: 'desligado',
     arquivo: 'src/lib/faxina-do-mes-worker.ts',
+    id: 'despedida-humano',
+    chave: 'DESPEDIDA_HUMANO_SLUGS',
+    nome: 'Despediu ou adiou: a Sofia cala e a equipe é avisada',
+    oQueFaz:
+      'Quando o paciente se despede ou adia ("obrigada, entro em contato logo mais", "agora não vou querer", "vou pensar", "depois eu vejo") e AINDA NÃO tem consulta marcada, a Sofia não responde — nem o "combinado, é só me chamar" — e o cartão ganha uma tarefa "ALERTA · slug · [DESPEDIDA] …" para a equipe retomar (prazo de 30 min, no responsável do cartão) e uma nota. O aviso é a própria tarefa do Kommo; não vai Telegram nem WhatsApp.',
+    pegadinha:
+      'NÃO marca "Pausar IA": se o paciente voltar a escrever, a Sofia responde normal; se a equipe responder, a pausa-equipe a faz parar. Um "obrigada" que responde a uma pergunta da Sofia, "sim, obrigado", cumprimento sozinho, pergunta e pedido junto ("agora não, mas qual o valor?") não contam; quem JÁ TEM consulta marcada segue com a despedida curta de sempre. Só se cala quando o aviso existe: tarefa criada agora, aviso de hoje sem fala da Sofia depois, ou tarefa da equipe já aberta no cartão. Se o Kommo recusar a tarefa, a Sofia responde como hoje e o erro fica no rastro. 1 aviso por cartão por dia. Com a Sofia calada, a última mensagem da conversa é do paciente, então o follow-up de curto prazo (degraus dentro da janela de 24 h do WhatsApp) não dispara até ele escrever de novo; as rotinas diárias por etapa seguem. O alerta de "paciente sem resposta" (alerta-sem-resposta) não repete o aviso para a mesma espera. Em "Só no papel" a Sofia responde como hoje e a lista mostra "alertaria". Piloto: Timbó.',
+    risco: 'cria-tarefa',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/agent/despedida-humano.ts',
   },
 ] as const;
 

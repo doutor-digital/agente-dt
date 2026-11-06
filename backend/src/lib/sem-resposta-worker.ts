@@ -61,6 +61,11 @@ export const REGRA_SEM_RESPOSTA_TAREFA = 'sem_resposta_tarefa';
  * para a mesma espera são um só para a recepção: cada um confere a marca do outro antes de abrir a sua.
  */
 export const REGRA_TAREFA_TURNO_PERDIDO = 'turno_perdido_tarefa';
+/**
+ * A marca do aviso da despedida (agent/despedida-humano.ts): a Sofia se calou porque o paciente se despediu ou adiou e a equipe
+ * recebeu a tarefa dela. Mora aqui pelo mesmo motivo da de cima: este worker confere a marca antes de abrir o seu.
+ */
+export const REGRA_DESPEDIDA = 'despedida_humano';
 /** Espera que segue sem resposta há mais que isto ganha UM lembrete novo (e cobre a conversa nova de quem volta semanas depois). */
 export const REALERTA_MS = 12 * 3600_000;
 /** Quantas mensagens da conversa oficial se leem: folga para ver a resposta mesmo com o paciente escrevendo muito. */
@@ -199,6 +204,11 @@ export interface DepsSemResposta {
   marcarTarefa: (unit: Unit, leadId: number, quando: Date) => Promise<void>;
   /** Quando a recuperação de turnos (deploy) abriu tarefa para este lead, ou null — a mesma espera não ganha uma segunda. */
   tarefaDoTurnoPerdidoEm: (unit: Unit, leadId: number) => Promise<Date | null>;
+  /**
+   * Quando a Sofia se calou de propósito e avisou a equipe (despedida-humano.ts), ou null. Aquela espera não é descuido: a equipe
+   * foi avisada pela tarefa própria, e o alerta de "sem resposta" não repete (nem no Telegram do João). Opcional: sem ela, vale o de antes.
+   */
+  despedidaAvisouEm?: (unit: Unit, leadId: number) => Promise<Date | null>;
   /** Abre a tarefa no cartão, prazo = agora, no responsável do cartão. LANÇA se o Kommo não aceitou. */
   criarTarefa: (unit: Unit, leadId: number, texto: string) => Promise<void>;
   /** O servidor tem o token do Telegram? Sem ele só a tarefa sai — e a espera não é relida a cada minuto por isso. */
@@ -264,6 +274,7 @@ export const DEPS_SEM_RESPOSTA_PADRAO: DepsSemResposta = {
   tarefaEm: async (unit, leadId) => marcadoEm(unit.id, leadId, REGRA_SEM_RESPOSTA_TAREFA),
   marcarTarefa: (unit, leadId, quando) => marcarAviso(unit.id, leadId, REGRA_SEM_RESPOSTA_TAREFA, quando),
   tarefaDoTurnoPerdidoEm: async (unit, leadId) => marcadoEm(unit.id, leadId, REGRA_TAREFA_TURNO_PERDIDO),
+  despedidaAvisouEm: async (unit, leadId) => marcadoEm(unit.id, leadId, REGRA_DESPEDIDA),
   criarTarefa: async (unit, leadId, texto) => {
     const kommo = createKommoClient(unit);
     // O responsável do cartão; o `createTask` troca o login da consultoria pelo usuário da clínica (quando é um só).
@@ -373,6 +384,12 @@ export async function verificarUnidadeSemResposta(
         continue;
       }
       if (!deveAlertar(espera, agora)) continue;
+      // A Sofia se calou porque o paciente se despediu/adiou e a equipe já recebeu a tarefa dela: mesma espera, um aviso só.
+      if (deps.despedidaAvisouEm && mesmaEsperaJaAlertada(msgs, await deps.despedidaAvisouEm(unit, c.leadId), agora)) {
+        resumo.respondidas++;
+        lembrarConferida(chaveConferida, agora.getTime());
+        continue;
+      }
       const chaveDoLead = `${unit.id}:${c.leadId}`;
       const esperaMs = agora.getTime() - espera.desde.getTime();
 

@@ -56,6 +56,8 @@ function cenario(opts: {
   semToken?: boolean;
   /** quando a recuperação de turnos (deploy) abriu a tarefa dela para este lead */
   tarefaDoTurnoPerdidoEm?: Date;
+  /** quando a Sofia se calou por despedida/adiamento e avisou a equipe (despedida-humano) */
+  despedidaAvisouEm?: Date;
 }) {
   const r = {
     enviados: [] as string[],
@@ -86,6 +88,7 @@ function cenario(opts: {
       if (!opts.marcaTarefaNaoGrava) r.marcasTarefa.set(leadId, quando);
     },
     tarefaDoTurnoPerdidoEm: async () => opts.tarefaDoTurnoPerdidoEm ?? null,
+    despedidaAvisouEm: async () => opts.despedidaAvisouEm ?? null,
     telegramPronto: () => !opts.semToken,
     criarTarefa: async (_u, leadId, texto) => {
       r.tentativasDeTarefa++;
@@ -482,4 +485,27 @@ test('textoDaTarefa: telefone/CPF mascarados, trecho curto, sem quebra de linha;
   assert.ok(t.length < 330, `texto curto (${t.length})`);
   assert.match(t, /Responda agora\.$/);
   assert.match(textoDaTarefa({ slug: SLUG, contato: 'Ana', esperaMs: ESPERA_MS, ultima: '' }), /\[Contato: Ana\].*\(sem texto: áudio, imagem ou figurinha\)/);
+});
+
+test('despedida-humano: a Sofia se calou e a equipe já recebeu a tarefa dela — o "sem resposta" não repete (nem tarefa, nem Telegram)', async () => {
+  const c = cenario({
+    oficiais: [msg('entrada', T0, 'Obrigada, entro em contato para agendar logo mais')],
+    agora: depois(6 * 60_000),
+    despedidaAvisouEm: depois(10_000),
+  });
+  const r = await verificarUnidadeSemResposta(unidade, 'ligado', c.deps);
+  assert.equal(r.tarefas, 0);
+  assert.equal(r.alertas, 0);
+  assert.equal(c.r.tentativasDeTarefa, 0);
+  assert.equal(c.r.enviados.length, 0);
+});
+
+test('despedida-humano: o aviso da despedida é de uma espera ANTERIOR (a equipe respondeu depois) — a espera nova ganha o alerta de sempre', async () => {
+  const c = cenario({
+    oficiais: [msg('entrada', T0), msg('saida', depois(60_000)), msg('entrada', depois(120_000), 'preciso de ajuda')],
+    agora: depois(8 * 60_000),
+    despedidaAvisouEm: depois(30_000),
+  });
+  const r = await verificarUnidadeSemResposta(unidade, 'ligado', c.deps);
+  assert.equal(r.tarefas, 1);
 });

@@ -1983,6 +1983,30 @@ export class KommoClient {
     }
   }
 
+  /**
+   * As tarefas ABERTAS de um cartão. Filtra de novo aqui o que voltou (entidade e estado): se o Kommo ignorar o filtro
+   * e devolver tarefas da conta, quem pergunta "este cartão tem tarefa?" não pode receber um sim por causa de outro
+   * cartão. Erro lança.
+   */
+  async tarefasAbertasDoLead(leadId: number): Promise<KommoTarefa[]> {
+    try {
+      const { data, status } = await this.http.get<{ _embedded?: { tasks?: KommoTarefa[] } } | ''>('/tasks', {
+        params: {
+          'filter[entity_id][]': leadId,
+          'filter[entity_type]': 'leads',
+          'filter[is_completed]': 0,
+          limit: 50,
+        },
+      });
+      if (status === 204 || !data) return [];
+      return (data._embedded?.tasks ?? []).filter(
+        (t) => !t.is_completed && Number(t.entity_id) === leadId && (!t.entity_type || t.entity_type === 'leads'),
+      );
+    } catch (err) {
+      wrapAxiosError(err, `tarefasAbertasDoLead(${leadId})`);
+    }
+  }
+
   /** Muda texto, horário e/ou duração de uma tarefa. */
   async atualizarTarefa(taskId: number, args: { text?: string; completeAt?: number; durationSec?: number }): Promise<void> {
     const body: Record<string, unknown> = {};
