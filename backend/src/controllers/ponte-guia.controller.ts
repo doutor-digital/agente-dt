@@ -67,8 +67,9 @@ async function contaDoGuia(unit: Unit, kommo: KommoClient): Promise<ContaDoGuia>
     funis: dados.funis,
     tz: fusoDaUnidade(unit),
     mensagens: mensagensDaUnidade(unit),
-    // robô ligado nesta unidade (chave + sincronizador + preço nas fontes): o guia não pede mais o Valor da Consulta à SDR nos cartões que
-    // o sincronizador já casou com a franquia. Em seco nada grava, então a SDR continua sendo quem preenche.
+    // robô ligado nesta unidade (chave + sincronizador + preço nas fontes, e unidade SEM pagamento antecipado): o guia não pede mais o Valor
+    // da Consulta à SDR nos cartões que o sincronizador já casou com a franquia. Em seco nada grava, então a SDR continua sendo quem
+    // preenche. Em unidade com antecipado o guia pede enquanto o campo estiver vazio (o robô espera a forma de pagamento).
     preenchidosPorRobo: valorDaConsultaVemDoRobo(unit) ? [CAMPO_VALOR_DA_CONSULTA] : [],
     motivosDePerda: () => cacheMotivos.obter(conta, () => kommo.listLossReasons()),
   };

@@ -352,6 +352,7 @@ model Unit {
   pausasDaEquipe    PausaDaEquipe[]
   calendario        UnitCalendario?
   simulacoes        AutomacaoSimulacao[]
+  valoresDaConsulta ValorConsultaGravado[]
   spineLeadLinks    SpineLeadLink[]
   changeLog         UnitChangeLog[]
   lessons           UnitLesson[]
@@ -1980,6 +1981,27 @@ model AutomacaoSimulacao {
   @@unique([unitId, automacao, kommoLeadId, alvo], map: "automacao_simulacoes_chave_key")
   @@index([unitId, automacao, ultimaEm(sort: Desc)], map: "automacao_simulacoes_lista_idx")
   @@map("automacao_simulacoes")
+}
+
+/// O que o robô `valor-consulta` gravou em "¤ Valor da Consulta" de cada cartão (só unidade com pagamento antecipado). É a marca
+/// de "foi o robô": quando a forma de pagamento muda (Não→Sim por comprovante), ele só troca o valor se o cartão ainda tem
+/// exatamente este. Valor digitado por pessoa não bate com a marca, então nunca é trocado. Ver lib/valor-consulta-marca.ts.
+model ValorConsultaGravado {
+  id          String   @id @default(cuid())
+  unitId      String   @map("unit_id")
+  kommoLeadId Int      @map("kommo_lead_id")
+  /// o valor gravado, em centavos
+  centavos    Int
+  /// antecipado | no-dia
+  qual        String
+  /// sofia (ao agendar) | sincronizador (varredura)
+  origem      String
+  gravadoEm   DateTime @default(now()) @map("gravado_em")
+
+  unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@unique([unitId, kommoLeadId], map: "valor_consulta_gravado_chave_key")
+  @@map("valor_consulta_gravado")
 }
 
 // ── Conector remoto (claude.ai) — OAuth 2.1 do MCP ─────────────────────────
