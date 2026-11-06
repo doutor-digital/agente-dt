@@ -359,6 +359,21 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/resposta-com-botoes.ts',
   },
 
+  {
+    id: 'rotina-robos',
+    chave: 'ROTINA_ROBOS_SLUGS',
+    nome: 'Rotina diária: esquecidos por etapa',
+    oQueFaz:
+      'Todo dia, em horário comercial, põe a etiqueta ▶ Retomada (e a 2 e a 3) em quem o paciente parou de responder e ninguém tocou: EM QUALIFICAÇÃO com 2, 4 e 7 dias sem resposta, NÃO COMPARECEU com 1, 3 e 6 (contados da falta ou da última mensagem, o que for mais recente), EM NEGOCIAÇÃO com 2, 5 e 9. A etiqueta aciona o robô do Kommo, que manda o modelo do WhatsApp.',
+    pegadinha:
+      'Um degrau por vez, na ordem, sem repetir e sem pular; qualquer mensagem do paciente zera a régua; depois do último degrau sem resposta não manda mais nada (quem move é o parados). O dia 1 da QUALIFICAÇÃO é da Sofia (follow-up-24h, dentro da janela). Nunca manda para NO_FOLLOW_UP, NAO_PERTURBAR, opt-out, CURRÍCULO, consulta futura (cartão ou franquia), ◷ Retomar em de hoje em diante, «Pausar IA», equipe que falou nas últimas 48 h ou qualquer fala nas últimas 24 h. Os degraus e o teto são da PESSOA, não do cartão: dois cartões do mesmo contato não recebem dois modelos no mesmo dia. TETO por unidade por dia (30; rotina_teto_dia) somado com as outras réguas da rotina e com a marca de cada toque. Prazos por unidade: rotina_qualificacao_d1..d3, rotina_naocompareceu_d1..d3, rotina_negociacao_d1..d3. Só funciona se a conta tiver a etiqueta e o gatilho dela no Kommo (o gatilho só se lê com sessão): rotina_toques_prontos diz quantos degraus (1 a 3) estão prontos; o padrão é 1 (▶ Retomada), e quem já recebeu o último degrau pronto sai da fila sem gastar chamada. Etiqueta que a conta não tem = não faz nada. SOBREPOSIÇÃO: em EM NEGOCIAÇÃO os robôs decisao_retomada_4d / encerramento_7d do Kommo (relativos à ◷ Data da Consulta) podem mandar a deles também; com o parados ligado, a régua esgotada da Sofia leva a QUALIFICAÇÃO para PERDIDO antes do 2º dia. Em «só no papel» a tela mostra por etapa e por degrau quantos receberiam (teto simulado por dia).',
+    risco: 'manda-mensagem',
+    temSeco: true,
+    exigeSecoAntes: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/rotina-etapas-worker.ts',
+  },
+
   // ── escrevem campo ──────────────────────────────────────────────────────────────────────────
   {
     id: 'franquia-sync',
