@@ -76,6 +76,8 @@ interface Mundo {
   semOpcoes?: boolean;
   tipoDoCampo?: 'select' | 'text';
   semCampo?: boolean;
+  /** só o campo antigo, sem o símbolo (Salto/Tatuí) */
+  soCampoAntigo?: boolean;
   /** valor que o getLead devolve na releitura (a SDR escolheu no meio) */
   releitura?: string | null;
   setFalha?: boolean;
@@ -93,7 +95,8 @@ function montar(m: Mundo) {
       const campos: Array<{ id: number; name: string; type: string; code: null; enums: Array<{ id: number; value: string }> }> = [
         { id: ID_PRIMEIRO, name: CAMPO_PRIMEIRO_CONTATO, type: 'date', code: null, enums: [] },
       ];
-      if (!m.semCampo) {
+      if (m.soCampoAntigo) campos.push({ id: 998, name: 'Tipo de lead', type: 'select', code: null, enums: OPCOES });
+      else if (!m.semCampo) {
         campos.push({
           id: ID_TIPO,
           name: CAMPO_TIPO_LEAD,
@@ -140,6 +143,7 @@ function depsDe(opcoes: {
   estado?: Estado;
   franquia?: (e: { titulo: string; nomeDoContato: string | null; telefone: string | null }) => Promise<RespostaDaFranquia>;
   jaAgendou?: boolean;
+  vinculoFalha?: boolean;
   dono?: 'recusa';
 }) {
   const buscas: Array<{ titulo: string; nomeDoContato: string | null; telefone: string | null }> = [];
@@ -148,7 +152,10 @@ function depsDe(opcoes: {
     estadoDe: () => opcoes.estado ?? 'ligado',
     donoDoCartao: async () =>
       opcoes.dono === 'recusa' ? { tipo: 'recusa', codigo: 'sem_unidade', motivo: 'sem unidade' } : { tipo: 'sem-divisao', unit },
-    jaAgendou: async () => opcoes.jaAgendou ?? false,
+    pacienteCriadoPorNos: async () => {
+      if (opcoes.vinculoFalha) throw new Error('banco fora');
+      return opcoes.jaAgendou ?? false;
+    },
     franquiaConhece: async (_u, e) => {
       buscas.push(e);
       return opcoes.franquia ? opcoes.franquia(e) : { resultado: 'nao', motivo: 'o telefone não está na franquia' };
@@ -293,6 +300,13 @@ test('conta sem a opção "Cadastro"/"Resgate": não grava e registra', async ()
   assert.equal(d.simulacoes[0]?.acao, 'pularia');
 });
 
+test('conta só com o campo antigo "Tipo de lead" (sem o ⬢): não grava nele', async () => {
+  const d = depsDe({});
+  const r = await rodar({ cartoes: [{ id: 1 }], contatos: { 10: CONTATO }, soCampoAntigo: true }, d);
+  assert.equal(r.resumo, null);
+  assert.equal(r.chamadas.gravacoes.length, 0);
+});
+
 test('conta sem o campo, ou com o campo como texto: não grava', async () => {
   const d = depsDe({});
   assert.equal((await rodar({ cartoes: [{ id: 1 }], contatos: { 10: CONTATO }, semCampo: true }, d)).resumo, null);
@@ -319,6 +333,39 @@ test('uma falha de gravação não vira Cadastro nem trava: conta o erro e o car
   const r2 = await rodar({ cartoes: [{ id: 1 }], contatos: { 10: CONTATO } }, d);
   assert.deepEqual(r2.chamadas.gravacoes, [{ leadId: 1, valor: 'Cadastro' }]);
   assert.equal(d.buscas.length, 1, 'a decisão ficou guardada: sem nova busca na franquia');
+});
+
+test('não conseguiu conferir o vínculo do cartão: adia, não decide às cegas', async () => {
+  const d = depsDe({ vinculoFalha: true });
+  const r = await rodar({ cartoes: [{ id: 1 }], contatos: { 10: CONTATO } }, d);
+  assert.equal(r.chamadas.gravacoes.length, 0);
+  assert.equal(d.buscas.length, 0);
+  assert.equal(r.resumo?.adiados, 1);
+});
+
+test('quem fica sem decisão é tentado de novo enquanto está na janela (espera cresce, não desiste)', async () => {
+  let respondendo = false;
+  const d = depsDe({ franquia: async () => (respondendo ? { resultado: 'nao', motivo: 'o telefone não está na franquia' } : { resultado: 'desconhecido', motivo: 'franquia fora do ar' }) });
+  const m: Mundo = { cartoes: [{ id: 1 }], contatos: { 10: CONTATO } };
+  // 6 tentativas falhas: esperas de 10, 20, 30, 40, 50 min
+  let t = AGORA;
+  for (let i = 0; i < 6; i++) {
+    const { kommo } = montar(m);
+    await tipoNaChegadaConta({ unit, membros: null, kommo, deps: d.deps, agora: t, pausaMs: 0 });
+    t += (i + 1) * 10 * 60 + 1;
+  }
+  assert.equal(d.buscas.length, 6);
+  respondendo = true;
+  const { kommo, chamadas } = montar(m);
+  await tipoNaChegadaConta({ unit, membros: null, kommo, deps: d.deps, agora: t + 3600, pausaMs: 0 });
+  assert.deepEqual(chamadas.gravacoes, [{ leadId: 1, valor: 'Cadastro' }]);
+});
+
+test('cartão fechado (ganho/perdido) não recebe tipo', async () => {
+  const d = depsDe({});
+  const r = await rodar({ cartoes: [{ id: 1, status: 142 }, { id: 2, status: 143 }], contatos: { 10: CONTATO, 20: CONTATO } }, d);
+  assert.equal(r.chamadas.gravacoes.length, 0);
+  assert.equal(d.buscas.length, 0);
 });
 
 test('cartão que já agendou fica com o campos-sdr; cartão perdido é ignorado; conta dividida sem unidade espera', async () => {
@@ -358,6 +405,8 @@ test('resgatePelaIdade: o 1º contato é o mais antigo; 90 dias exatos ainda é 
   const base = { nome: 'Lead 06/11/2026', criadoEmEpoch: AGORA, primeiroContatoEpoch: null, outros: [] };
   assert.equal(resgatePelaIdade(base), null);
   assert.equal(resgatePelaIdade({ ...base, primeiroContatoEpoch: AGORA - 90 * DIA }), null);
+  // 90 dias e meio: o campos-sdr (em segundos) já chama de Resgate, e este também
+  assert.match(resgatePelaIdade({ ...base, primeiroContatoEpoch: AGORA - 90 * DIA - 12 * 3600 })!, /90 dias/);
   assert.match(resgatePelaIdade({ ...base, primeiroContatoEpoch: AGORA - 91 * DIA })!, /91 dias/);
   assert.match(resgatePelaIdade({ ...base, outros: [{ nome: 'Ana 02/03/2026', criadoEmEpoch: AGORA - 10 * DIA }] })!, /dias/);
   assert.equal(resgatePelaIdade({ ...base, criadoEmEpoch: null }), null);

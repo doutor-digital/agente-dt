@@ -38,11 +38,14 @@ const DIA_S = 86_400;
 
 export type TipoDeLead = 'Resgate' | 'Cadastro';
 
-/** O campo pelo nome exato (com o símbolo) primeiro: a normalização tira o "⬢" e o "Tipo de lead" antigo casaria. */
-export function acharCampo<T extends { name: string }>(campos: ReadonlyArray<T>, nome: string): T | null {
+/**
+ * O campo pelo nome exato (com o símbolo). `soExato`: sem o plano B pelo nome normalizado — a normalização tira o "⬢" e o
+ * "Tipo de lead" antigo (Salto/Tatuí, estrutura velha) casaria; para gravar, só o campo certo.
+ */
+export function acharCampo<T extends { name: string }>(campos: ReadonlyArray<T>, nome: string, soExato = false): T | null {
   const exatos = campos.filter((c) => c.name.trim() === nome);
   if (exatos.length === 1) return exatos[0]!;
-  if (exatos.length > 1) return null;
+  if (exatos.length > 1 || soExato) return null;
   const alvo = normalizar(nome);
   const parecidos = campos.filter((c) => normalizar(c.name) === alvo);
   return parecidos.length === 1 ? parecidos[0]! : null;
@@ -84,8 +87,9 @@ export function resgatePelaIdade(e: {
   const outrasDatas = e.outros.flatMap((o) => [o.criadoEmEpoch, ...datasNoNome(o.nome, chegada)]);
   const primeiro = primeiroContatoEm({ nome: e.nome, criadoEmEpoch: chegada, primeiroContatoEpoch: e.primeiroContatoEpoch, referenciaEpoch: chegada, outrasDatas });
   if (primeiro === null) return null;
-  const dias = Math.floor((chegada - primeiro) / DIA_S);
-  return dias > DIAS_PARA_RESGATE ? `1º contato há ${dias} dias (mais de ${DIAS_PARA_RESGATE})` : null;
+  // em segundos, como o `tipoDoLead` do campos-sdr: 90 dias e meio já é Resgate nos dois
+  if (chegada - primeiro <= DIAS_PARA_RESGATE * DIA_S) return null;
+  return `1º contato há ${Math.floor((chegada - primeiro) / DIA_S)} dias (mais de ${DIAS_PARA_RESGATE})`;
 }
 
 export type Conhecido = 'sim' | 'nao' | 'desconhecido';

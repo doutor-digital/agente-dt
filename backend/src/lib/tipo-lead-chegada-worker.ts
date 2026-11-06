@@ -7,13 +7,13 @@
  *    acordaria aí; o `cadastro-todo-lead` só roda com a chave dele ligada e só se a unidade espelha lead na franquia;
  *  - a regra independe de agendar, e o sincronizador da franquia só visita cartão com consulta;
  *  - não pesa no turno da IA nem no 200 do webhook (o Kommo reenvia quem demora mais de 2 s).
- *  O custo é a espera: a cada 3 minutos olha os cartões criados nas últimas 6 h com pelo menos 2 minutos de vida (dá tempo
+ *  O custo é a espera: a cada 3 minutos olha os cartões abertos criados nas últimas 6 h com pelo menos 3 minutos de vida (dá tempo
  *  do contato ganhar telefone e nome). Mesmo molde do `renomear-lead-worker` e do `unidade-no-cartao-worker`.
  *
  * O que lê, por cartão, SÓ UMA VEZ (a decisão fica guardada neste processo): o contato (telefone e nome), os outros
  * cartões do contato (1º contato antigo) e — só se isso não bastou para Resgate — a franquia (uma busca por cartão).
- * Franquia ou Kommo com erro, sem telefone ou sem nome para buscar = NÃO grava e tenta de novo em 10 min (no máximo 4
- * vezes); nunca vira "Cadastro" por erro.
+ * Franquia ou Kommo com erro, sem telefone ou sem nome para buscar = NÃO grava e tenta de novo (10, 20, 30… até 60 min, enquanto
+ * o cartão estiver na janela de 6 h); nunca vira "Cadastro" por erro.
  *
  * Chave `tipo-lead-chegada` na tela de Automações: desligado não faz nada (nem lê o Kommo); "só no papel" lê e decide mas só
  * registra "gravaria"; ligado grava SÓ em campo vazio, relendo o cartão antes (a SDR pode ter escolhido no meio).
@@ -47,15 +47,17 @@ const PRIMEIRA_VARREDURA_MS = 100_000;
 /** Só cartões que nasceram nestas últimas horas: o estoque antigo não é deste robô. */
 const JANELA_S = 6 * 3600;
 /** Dá tempo do contato ganhar telefone e nome. */
-const IDADE_MINIMA_S = 2 * 60;
+const IDADE_MINIMA_S = 3 * 60;
 const MAX_PAGINAS = 4;
 /** Cartões que gastam leitura nova (outros cartões do contato + franquia) por rodada — importação em massa não vira rajada. */
 const MAX_AVALIACOES_POR_RODADA = 25;
 const MAX_GRAVACOES_POR_RODADA = 50;
 const PAUSA_ENTRE_ESCRITAS_MS = 400;
-const ESPERA_ENTRE_TENTATIVAS_MS = 10 * 60_000;
-const MAX_TENTATIVAS = 4;
-const PERDIDO = 143;
+/** Espera entre tentativas de quem ficou sem decisão: 10, 20, 30… min, no máximo 60 — até a janela de 6 h acabar. */
+const ESPERA_BASE_MS = 10 * 60_000;
+const ESPERA_MAX_MS = 60 * 60_000;
+/** Fechado no Kommo: ganho (142) ou perdido (143). */
+const FECHADOS = new Set([142, 143]);
 
 export interface Resumo {
   candidatos: number;
@@ -77,8 +79,11 @@ export type KommoDoTipo = Pick<
 export interface DepsDoTipo {
   estadoDe(slug: string): Estado;
   donoDoCartao(contaUnit: Unit, lead: KommoLead): Promise<DonoDoCartao>;
-  /** O cartão já tem consulta marcada (a Sofia cadastra o paciente no agendamento): daí em diante quem decide é o `campos-sdr`. */
-  jaAgendou(unitId: string, leadId: number): Promise<boolean>;
+  /**
+   * O paciente deste cartão (ou a consulta) foi criado por NÓS — a Sofia ao agendar, o widget "só cadastrar": a busca na
+   * franquia o acharia e isso não é "já existia". Daí em diante quem decide é o `campos-sdr`. Lança se o banco falhar.
+   */
+  pacienteCriadoPorNos(unitId: string, leadId: number): Promise<boolean>;
   franquiaConhece(unit: Unit, e: { titulo: string; nomeDoContato: string | null; telefone: string | null }): Promise<RespostaDaFranquia>;
   registrar: typeof registrarSimulacao;
 }
@@ -163,11 +168,11 @@ export async function tipoNaChegadaConta(ctx: ContextoDaConta): Promise<Resumo |
 
   const { leads, truncado } = await kommo.listLeadsNaJanela('created_at', agora - JANELA_S, agora - IDADE_MINIMA_S, MAX_PAGINAS, true);
   if (truncado) logger.warn({ unit: unit.slug, leads: leads.length }, `${ID}: lista de cartões novos cortada — trato os mais recentes e o resto fica para quem agendar (campos-sdr)`);
-  const candidatos = leads.filter((l) => l.status_id !== PERDIDO).sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0) || a.id - b.id);
+  const candidatos = leads.filter((l) => !FECHADOS.has(l.status_id)).sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0) || a.id - b.id);
   if (candidatos.length === 0) return null;
 
   const campos = await kommo.listLeadCustomFieldsTyped();
-  const campo = acharCampo(campos, CAMPO_TIPO_LEAD);
+  const campo = acharCampo(campos, CAMPO_TIPO_LEAD, true);
   if (!campo) {
     avisarUmaVez(unit.slug, `a conta não tem o campo "${CAMPO_TIPO_LEAD}" (ou tem dois com esse nome)`);
     return null;
@@ -190,7 +195,7 @@ export async function tipoNaChegadaConta(ctx: ContextoDaConta): Promise<Resumo |
   if (vazios.length === 0) return resumo;
 
   // telefone e nome do contato, em lote — só dos que ainda precisam de decisão. Falhou: lança (quem chama registra e tenta de novo).
-  const precisam = vazios.filter((l) => !decididos.has(`${unit.id}|${l.id}`));
+  const precisam = vazios.filter((l) => !decididos.has(`${unit.id}|${l.id}`));  // id do cartão é único na conta do Kommo
   const contatos: Map<number, { nome: string | null; telefone: string | null }> = precisam.length
     ? await kommo.contatosBasicos(precisam.map(contatoPrincipal).filter((n): n is number => n !== null))
     : new Map();
@@ -214,12 +219,12 @@ export async function tipoNaChegadaConta(ctx: ContextoDaConta): Promise<Resumo |
       resumo.desligados++;
       continue;
     }
-    const chave = `${donoUnit.id}|${lead.id}`;
+    const chave = `${unit.id}|${lead.id}`;
 
     let decisao: Decidido | null | undefined = decididos.get(chave);
     if (!decisao) {
       const t = tentativas.get(chave);
-      if (t && (t.n >= MAX_TENTATIVAS || agora * 1000 < t.proxima)) {
+      if (t && agora * 1000 < t.proxima) {
         resumo.adiados++;
         continue;
       }
@@ -229,7 +234,12 @@ export async function tipoNaChegadaConta(ctx: ContextoDaConta): Promise<Resumo |
       }
       // quem já tem consulta marcada passa pelo campos-sdr (no agendamento): a busca na franquia acharia o paciente que a
       // própria Sofia acabou de cadastrar, e isso não é "já existia".
-      if (await deps.jaAgendou(donoUnit.id, lead.id).catch(() => false)) {
+      // Erro ao conferir = adia (nunca decide às cegas): um Resgate por engano é permanente.
+      const deixa = await deps.pacienteCriadoPorNos(donoUnit.id, lead.id).catch((err) => {
+        logger.warn({ err: String(err), leadId: lead.id, unit: donoUnit.slug }, `${ID}: não consegui conferir o vínculo do cartão — adio`);
+        return true;
+      });
+      if (deixa) {
         resumo.adiados++;
         continue;
       }
@@ -238,7 +248,7 @@ export async function tipoNaChegadaConta(ctx: ContextoDaConta): Promise<Resumo |
       if (!decisao) {
         const n = (tentativas.get(chave)?.n ?? 0) + 1;
         aparar(tentativas);
-        tentativas.set(chave, { n, proxima: agora * 1000 + ESPERA_ENTRE_TENTATIVAS_MS });
+        tentativas.set(chave, { n, proxima: agora * 1000 + Math.min(ESPERA_MAX_MS, ESPERA_BASE_MS * n) });
         resumo.adiados++;
         continue;
       }
@@ -343,12 +353,16 @@ async function avaliar(a: {
 export const depsPadrao: DepsDoTipo = {
   estadoDe: (slug) => estadoDaAutomacao(slug, ID, process.env.TIPO_LEAD_CHEGADA_SLUGS),
   donoDoCartao: (contaUnit, lead) => unidadeDoCartao(contaUnit, lead),
-  async jaAgendou(unitId, leadId) {
+  async pacienteCriadoPorNos(unitId, leadId) {
     const l = await prisma.spineLeadLink.findUnique({
       where: { unitId_kommoLeadId: { unitId, kommoLeadId: leadId } },
-      select: { spineIdSchedule: true, agendadoPara: true },
+      select: { spineIdSchedule: true, agendadoPara: true, spineIdClient: true, motivo: true },
     });
-    return !!(l?.spineIdSchedule || l?.agendadoPara);
+    if (!l) return false;
+    if (l.spineIdSchedule || l.agendadoPara) return true;
+    // vínculo com paciente: se foi o casamento (achou quem JÁ existia) é prova de Resgate e segue para a busca; qualquer outro
+    // (widget "só cadastrar", agendamento) pode ser o paciente recém-criado
+    return !!l.spineIdClient && !/^paciente já existe/i.test(l.motivo ?? '');
   },
   franquiaConhece: (unit, e) => franquiaConhece(unit, e),
   registrar: registrarSimulacao,

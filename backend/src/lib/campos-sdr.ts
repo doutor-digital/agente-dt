@@ -105,7 +105,7 @@ export function tipoDoLead(e: {
   referenciaEpoch: number | null;
 }): 'Resgate' | 'Cadastro' | null {
   if (!e.referenciaEpoch) return null;
-  const primeiro = primeiroContatoEm({ ...e, referenciaEpoch: e.referenciaEpoch });
+  const primeiro = primeiroContatoEm({ nome: e.nome, criadoEmEpoch: e.criadoEmEpoch, primeiroContatoEpoch: e.primeiroContatoEpoch, referenciaEpoch: e.referenciaEpoch });
   if (primeiro === null) return null;
   return e.referenciaEpoch - primeiro > DIAS_PARA_RESGATE * DIA_S ? 'Resgate' : 'Cadastro';
 }
