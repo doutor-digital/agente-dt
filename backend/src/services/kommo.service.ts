@@ -137,6 +137,8 @@ export interface KommoTarefa {
   entity_id?: number | null;
   entity_type?: string | null;
   responsible_user_id?: number | null;
+  /** quem criou: 0 = integração/robô (alerta, guia, Sofia); id de usuário = gente. Ausente = não sabemos (tratar como gente). */
+  created_by?: number | null;
   is_completed?: boolean;
   /** o resultado com que a tarefa foi concluída (só nas concluídas) */
   result?: { text?: string | null } | null;

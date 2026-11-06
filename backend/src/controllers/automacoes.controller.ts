@@ -11,6 +11,7 @@ import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { automacaoPorId } from '../lib/automacoes.js';
 import { rodadaSecaLimpa } from '../lib/franquia-calendario-worker.js';
+import { iniciarFaxinaSobDemanda } from '../lib/faxina-do-mes-worker.js';
 import { ACOES_SIMULADAS, resumirSimulacoes } from '../lib/so-no-papel.js';
 import {
   ehEstado,
@@ -186,3 +187,30 @@ export async function simulacoesHandler(req: Request, res: Response): Promise<vo
   });
 }
 
+
+/**
+ * POST /units/:id/automacoes/faxina-do-mes/rodar — roda a Faxina do mês desta unidade AGORA (fora do dia 1), no estado que a
+ * tela deu a ela (só no papel não grava nada). Responde na hora; o relatório chega no Telegram do João.
+ * Corpo opcional: `{ "telegram": false }` roda sem mandar a mensagem (o relatório fica no log).
+ */
+export async function rodarFaxinaHandler(req: Request, res: Response): Promise<void> {
+  const unit = await prisma.unit.findUnique({ where: { id: String(req.params.id) }, select: { id: true, slug: true, name: true } });
+  if (!unit) {
+    res.status(404).json({ erro: 'unidade não encontrada' });
+    return;
+  }
+  await recarregarAutomacoes(); // o estado que a tela acabou de gravar, não o de até 30 s atrás
+  const telegram = (req.body as { telegram?: unknown } | undefined)?.telegram !== false;
+  const r = await iniciarFaxinaSobDemanda(unit.slug, { telegram });
+  logger.warn({ unit: unit.slug, ...r, por: (req as { user?: { email?: string } }).user?.email ?? null }, 'faxina do mês sob demanda');
+  if (!r.iniciado) {
+    res.status(r.status ?? 409).json({ erro: r.motivo });
+    return;
+  }
+  res.status(202).json({
+    ok: true,
+    unidade: unit.slug,
+    modo: r.modo,
+    mensagem: r.modo === 'seco' ? 'Rodando em só no papel: nada é gravado no Kommo. O relatório chega no Telegram.' : 'Rodando de verdade. O relatório chega no Telegram.',
+  });
+}
