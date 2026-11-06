@@ -832,6 +832,8 @@ export const AUTOMACOES: readonly Automacao[] = [
     exigeSecoAntes: true,
     quandoVazio: 'desligado',
     arquivo: 'src/lib/faxina-do-mes-worker.ts',
+  },
+  {
     id: 'despedida-humano',
     chave: 'DESPEDIDA_HUMANO_SLUGS',
     nome: 'Despediu ou adiou: a Sofia cala e a equipe é avisada',

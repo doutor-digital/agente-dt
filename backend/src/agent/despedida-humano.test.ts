@@ -13,11 +13,12 @@ import { avaliarChamadaFinal } from './cta-final.js';
 import {
   AUTOMACAO_DESPEDIDA_HUMANO,
   PRAZO_TAREFA_S,
-  TAREFA_VELHA_MS,
   decidirDespedida,
   detectarDespedida,
   estadoDaDespedidaHumano,
   iaTerminouPerguntando,
+  tarefaDaEquipeSegura,
+  temSinalOuUrgencia,
   textoDaNota,
   textoDaTarefa,
   turnoFicouEmSilencio,
@@ -160,7 +161,8 @@ test('rajada do paciente no mesmo turno: vale o que ele disse seguido', () => {
 test('iaTerminouPerguntando: pergunta no fim (com emoji) conta; pergunta no meio não', () => {
   assert.equal(iaTerminouPerguntando('Posso ver um horário pra você? ☺️'), true);
   assert.equal(iaTerminouPerguntando('Posso ver um horário?'), true);
-  assert.equal(iaTerminouPerguntando('Quer marcar? Fico à disposição.'), false);
+  assert.equal(iaTerminouPerguntando('Quer marcar? Fico à disposição.'), true, 'pergunta + frase curta continua sendo pergunta');
+  assert.equal(iaTerminouPerguntando('Quer marcar a consulta? Se preferir, posso explicar com calma como funciona o atendimento aqui na clínica.'), false);
   assert.equal(iaTerminouPerguntando('A consulta é R$ 250.'), false);
   assert.equal(iaTerminouPerguntando(null), false);
 });
@@ -234,7 +236,7 @@ test('LIGADO + caso real: Sofia em silêncio, tarefa ALERTA com prazo e respons�
   assert.equal(c.tarefas.length, 1);
   const t = c.tarefas[0];
   assert.match(t.texto, /^ALERTA · doutor-hernia-timbo · \[DESPEDIDA\] \[Contato: Maria Souza\] Paciente adiou e ainda não marcou — vale um contato humano\./);
-  assert.match(t.texto, /Última fala: "Obrigada, entro em contato para agendar logo mais"\. A Sofia não respondeu\.$/);
+  assert.match(t.texto, /Última mensagem: "Obrigada, entro em contato para agendar logo mais"\. A Sofia não respondeu\.$/);
   assert.equal(t.leadId, 777);
   assert.equal(t.responsavel, 4242);
   assert.equal(t.completeAt, Math.floor(AGORA.getTime() / 1000) + PRAZO_TAREFA_S);
@@ -331,9 +333,19 @@ test('duas despedidas seguidas no mesmo minuto: só a primeira cria tarefa (a ma
   assert.equal(c.tarefas.length, 1);
 });
 
-test('já há tarefa aberta da equipe no cartão: não empilha, a Sofia fica em silêncio e a nota diz o porquê', async () => {
-  const aberta: KommoTarefa = { id: 1, text: 'Ligar para o paciente', is_completed: false, complete_till: Math.floor(AGORA.getTime() / 1000) + 3600, entity_id: 777, entity_type: 'leads' };
-  const { c, deps, recorder } = montar({}, { abertas: [aberta] });
+const emSegundos = (ms: number) => Math.floor(ms / 1000);
+const alertaAberta = (over: Partial<KommoTarefa> = {}): KommoTarefa => ({
+  id: 1,
+  text: 'ALERTA · doutor-hernia-timbo · [Contato: Ana] Paciente sem resposta há 6 min. Responda agora.',
+  is_completed: false,
+  complete_till: emSegundos(AGORA.getTime()) + 1800,
+  entity_id: 777,
+  entity_type: 'leads',
+  ...over,
+});
+
+test('já há tarefa de ALERTA aberta, não vencida, no cartão: não empilha, a Sofia fica em silêncio e a nota diz o porquê', async () => {
+  const { c, deps, recorder } = montar({}, { abertas: [alertaAberta()] });
   const r = await decidirDespedida(entrada(recorder), deps);
   assert.equal(r.acao, 'silenciar');
   assert.deepEqual(c.tarefas, []);
@@ -341,21 +353,39 @@ test('já há tarefa aberta da equipe no cartão: não empilha, a Sofia fica em 
   assert.equal(c.marcas.length, 1);
 });
 
-test('tarefa aberta mas vencida há mais de 3 dias é lixo antigo: não segura o aviso', async () => {
-  const velha: KommoTarefa = { id: 2, is_completed: false, complete_till: Math.floor((AGORA.getTime() - TAREFA_VELHA_MS - 3600_000) / 1000) };
-  const { c, deps, recorder } = montar({}, { abertas: [velha] });
-  const r = await decidirDespedida(entrada(recorder), deps);
-  assert.equal(r.acao, 'silenciar');
-  assert.equal(c.tarefas.length, 1);
+test('tarefa que NÃO segura o aviso (cria tarefa nova): vencida, DESPEDIDA ignorada ontem, de robô, longe ou sem prazo', async () => {
+  const agora = emSegundos(AGORA.getTime());
+  const casos: Array<[string, KommoTarefa]> = [
+    ['ALERTA vencida há 2 h', alertaAberta({ complete_till: agora - 7200 })],
+    ['DESPEDIDA de ontem que ninguém fechou', alertaAberta({ text: 'ALERTA · doutor-hernia-timbo · [DESPEDIDA] Paciente adiou…', complete_till: agora - 86_400 })],
+    ['lembrete de robô com prazo à frente', alertaAberta({ text: 'Ligar para o paciente', complete_till: agora + 3600 })],
+    ['ALERTA com prazo daqui a 7 dias', alertaAberta({ complete_till: agora + 7 * 86_400 })],
+    ['ALERTA sem prazo', alertaAberta({ complete_till: null })],
+    ['ALERTA já concluída', alertaAberta({ is_completed: true })],
+  ];
+  for (const [nome, tarefa] of casos) {
+    const { c, deps, recorder } = montar({}, { abertas: [tarefa] });
+    const r = await decidirDespedida(entrada(recorder), deps);
+    assert.equal(r.acao, 'silenciar', nome);
+    assert.equal(c.tarefas.length, 1, `${nome}: a tarefa nova sai (a nota sozinha não notifica ninguém)`);
+  }
 });
 
-test('lembrete de robô com prazo longe ("ligar em 7 dias") ou sem prazo NÃO é a equipe cuidando: o aviso sai', async () => {
-  const longe: KommoTarefa = { id: 3, is_completed: false, complete_till: Math.floor(AGORA.getTime() / 1000) + 7 * 86400 };
-  const semPrazo: KommoTarefa = { id: 4, is_completed: false, complete_till: null };
-  const { c, deps, recorder } = montar({}, { abertas: [longe, semPrazo] });
+test('tarefaDaEquipeSegura: só ALERTA aberta, não vencida, até 24 h à frente', () => {
+  const agora = emSegundos(AGORA.getTime());
+  assert.equal(tarefaDaEquipeSegura([alertaAberta()], AGORA), true);
+  assert.equal(tarefaDaEquipeSegura([alertaAberta({ text: '  alerta · x · y' })], AGORA), true);
+  assert.equal(tarefaDaEquipeSegura([alertaAberta({ complete_till: agora - 1 })], AGORA), false);
+  assert.equal(tarefaDaEquipeSegura([alertaAberta({ complete_till: agora + 86_400 + 5 })], AGORA), false);
+  assert.equal(tarefaDaEquipeSegura([], AGORA), false);
+});
+
+test('despedida repetida (aviso de hoje, Sofia não falou depois): regrava a marca, para o "sem resposta" cobrir a espera inteira', async () => {
+  const { c, deps, recorder } = montar({}, { marca: new Date(AGORA.getTime() - 3600_000), iaFalou: false });
   const r = await decidirDespedida(entrada(recorder), deps);
   assert.equal(r.acao, 'silenciar');
-  assert.equal(c.tarefas.length, 1);
+  assert.deepEqual(c.tarefas, []);
+  assert.deepEqual(c.marcas, [AGORA]);
 });
 
 test('não consegui ler as tarefas do cartão: segue e cria a minha (melhor um aviso a mais que silêncio)', async () => {
@@ -479,4 +509,102 @@ test('turnoFicouEmSilencio: última mensagem é do paciente = silêncio; respost
   assert.equal(turnoFicouEmSilencio([new AIMessage({ content: '', tool_calls: [{ id: 'a', name: 'x', args: {} }] }), new ToolMessage({ content: 'ok', tool_call_id: 'a' })]), false);
   assert.equal(turnoFicouEmSilencio([]), false);
   assert.equal(turnoFicouEmSilencio(undefined), false);
+});
+
+// ── os casos do sênior (#240), frases literais ──────────────────────────────────────────────────
+
+const PRECO: Fala[] = [pac('oi, quanto custa?'), ia('A consulta é R$ 250,00, com avaliação completa.')];
+const PRECO_COM_PERGUNTA: Fala[] = [pac('oi, quanto custa?'), ia('A consulta é R$ 250,00. Posso ver um horário pra você?')];
+
+test('1. SINAL DE ALERTA, dor ou urgência junto do adiamento: NUNCA silêncio (a Sofia responde, o passe de sinal cuida)', async () => {
+  for (const fala of [
+    'vou pensar, mas tô perdendo a força na perna',
+    'vou pensar. não estou segurando o xixi desde ontem',
+    'Obrigada. Depois eu falo, a boca ficou torta agora',
+    'vou pensar, tô com muita dor',
+    'quando eu conseguir andar eu vou, a dor tá insuportável',
+  ]) {
+    for (const base of [PRECO, PRECO_COM_PERGUNTA]) {
+      assert.equal(detectarDespedida([...base, pac(fala)]), null, fala);
+    }
+    const { c, deps, recorder } = montar();
+    const r = await decidirDespedida(entrada(recorder, { falas: [...PRECO, pac(fala)] }), deps);
+    assert.equal(r.acao, 'responder', fala);
+    assert.match(r.motivo, /sinal de alerta, dor ou urgência/);
+    assert.deepEqual(c.tarefas, []);
+    assert.deepEqual(c.marcas, []);
+  }
+  // o sinal numa fala ANTERIOR do mesmo bloco sem resposta também vale
+  assert.equal(detectarDespedida([...PRECO, pac('estou perdendo a força na perna'), pac('vou pensar')]), null);
+  // negado não é sinal: "não tenho dor" continua... mas dor mencionada é conservador (responde)
+  assert.equal(temSinalOuUrgencia(['vou pensar, obrigada']), false);
+  assert.equal(temSinalOuUrgencia(['vou pensar, tô com muita dor']), true);
+});
+
+test('2. adiamento fraco também respeita o que a Sofia PEDIU (o exame)', () => {
+  const pediuExame: Fala[] = [pac('oi'), ia('Para eu adiantar, me envie o exame por aqui, por favor.')];
+  assert.equal(detectarDespedida([...pediuExame, pac('agora não posso falar, mais tarde te mando o exame')]), null);
+  const pediuComPergunta: Fala[] = [pac('oi'), ia('Pode me mandar o exame por aqui? Assim já adianto.')];
+  assert.equal(detectarDespedida([...pediuComPergunta, pac('agora não posso falar, mais tarde te mando o exame')]), null);
+  // sem pedido da Sofia, "agora não" curto continua sendo adiamento
+  assert.equal(detectarDespedida([...PRECO, pac('agora não, obrigada')])?.tipo, 'adiou');
+});
+
+test('3. pergunta com a linha de botões, ou pergunta + frase curta, ainda é pergunta', () => {
+  const dor: Fala[] = [pac('oi'), ia('Tá sentindo dor neste momento? Me conta.')];
+  assert.equal(detectarDespedida([...dor, pac('no momento não, obrigada')]), null);
+  const botoes: Fala[] = [pac('oi'), ia('Qual período fica melhor pra você?\n[[botoes: Manhã | Tarde]]')];
+  assert.equal(detectarDespedida([...botoes, pac('Agora não')]), null);
+  assert.equal(detectarDespedida([...botoes, pac('Obrigada')]), null);
+  const botoesSemInterrogacao: Fala[] = [pac('oi'), ia('Prefere manhã ou tarde\n[[botoes: Manhã | Tarde]]')];
+  assert.equal(detectarDespedida([...botoesSemInterrogacao, pac('Obrigada')]), null);
+  assert.equal(iaTerminouPerguntando('Qual período?\n[[botoes: Manhã | Tarde]]'), true);
+  assert.equal(iaTerminouPerguntando('Tá sentindo dor neste momento? Me conta.'), true);
+  assert.equal(iaTerminouPerguntando('A consulta é R$ 250.\n'), false);
+});
+
+test('4. queixa lida como adiamento: "mais pra frente"/"em outro momento" sem verbo de marcar não é adiamento', () => {
+  for (const fala of ['Dói mais pra frente, perto da virilha', 'Já tive essa crise em outro momento', 'vou verificar se tenho o exame', 'vou verificar com o convênio']) {
+    assert.equal(detectarDespedida([...PRECO, pac(fala)]), null, fala);
+  }
+  // com verbo de marcar/voltar, é adiamento
+  assert.equal(detectarDespedida([...PRECO, pac('Mais pra frente eu marco')])?.tipo, 'adiou');
+  assert.equal(detectarDespedida([...PRECO, pac('eu vejo isso mais pra frente')])?.tipo, 'adiou');
+  assert.equal(detectarDespedida([...PRECO, pac('Em outro momento eu volto a falar com vocês')])?.tipo, 'adiou');
+});
+
+test('5. "como/qual" no MEIO da promessa de voltar não é pedido', () => {
+  assert.equal(detectarDespedida([...PRECO, pac('vou ver como fica minha agenda e te retorno')])?.tipo, 'adiou');
+  assert.equal(detectarDespedida([...PRECO, pac('Depois eu vejo qual dia fica melhor')])?.tipo, 'adiou');
+  // no começo da oração continua sendo pedido
+  assert.equal(detectarDespedida([...PRECO, pac('Vou pensar, mas qual o endereço')]), null);
+  assert.equal(detectarDespedida([...PRECO, pac('Agora não. Como funciona o pagamento')]), null);
+});
+
+test('6. "ok"/👍 depois do adiamento continuam a despedida (o caso da Stefany); agradecimento ANTES do adiamento não anula', () => {
+  const calada = [...PRECO_COM_PERGUNTA, pac('Obrigada, entro em contato para agendar logo mais')];
+  assert.equal(detectarDespedida(calada)?.tipo, 'adiou');
+  for (const ok of ['ok', 'Ok 👍', '👍', 'tá bom', 'blz', 'combinado']) {
+    assert.equal(detectarDespedida([...calada, pac(ok)])?.tipo, 'adiou', ok);
+  }
+  // "sim"/"não" soltos não são continuação
+  assert.equal(detectarDespedida([...calada, pac('sim')]), null);
+  // agradecimento antes, mesmo depois de pergunta da Sofia
+  assert.equal(detectarDespedida([...PRECO_COM_PERGUNTA, pac('Obrigada!'), pac('Vou pensar e te retorno')])?.tipo, 'adiou');
+  // outras formas de adiar
+  assert.equal(detectarDespedida([...PRECO, pac('Obrigada, vou me organizar e te chamo')])?.tipo, 'adiou');
+  assert.equal(detectarDespedida([...PRECO, pac('vou deixar pra outro mês')])?.tipo, 'adiou');
+  // "Não, obrigada" a "Posso ajudar em mais algo?"
+  const oferta: Fala[] = [pac('oi'), ia('A consulta é R$ 250,00. Posso ajudar em mais alguma coisa?')];
+  assert.equal(detectarDespedida([...oferta, pac('Não, obrigada')])?.tipo, 'agradeceu');
+  assert.equal(detectarDespedida([...oferta, pac('Sim, obrigada')]), null);
+  // pergunta que NÃO é oferta de ajuda: "Não, obrigada" é resposta
+  assert.equal(detectarDespedida([...PRECO_COM_PERGUNTA, pac('Não, obrigada')]), null);
+});
+
+test('11. o texto da tarefa deixa a citação do paciente depois de "Última mensagem:" (o roteador n8n corta dali, dado de saúde)', () => {
+  const t = textoDaTarefa({ slug: TIMBO, contato: 'Ana', despedida: { tipo: 'adiou', fala: 'vou pensar' } });
+  assert.match(t, /^ALERTA · doutor-hernia-timbo · \[DESPEDIDA\] /);
+  assert.match(t, / Última mensagem: "vou pensar"\. A Sofia não respondeu\.$/);
+  assert.equal(t.replace(/ltima mensagem:.*$/i, '').includes('vou pensar'), false);
 });

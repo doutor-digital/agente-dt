@@ -269,7 +269,9 @@ export const DEPS_SEM_RESPOSTA_PADRAO: DepsSemResposta = {
   tarefaEm: async (unit, leadId) => marcadoEm(unit.id, leadId, REGRA_SEM_RESPOSTA_TAREFA),
   marcarTarefa: (unit, leadId, quando) => marcarAviso(unit.id, leadId, REGRA_SEM_RESPOSTA_TAREFA, quando),
   tarefaDoTurnoPerdidoEm: async (unit, leadId) => marcadoEm(unit.id, leadId, REGRA_TAREFA_TURNO_PERDIDO),
-  despedidaAvisouEm: async (unit, leadId) => marcadoEm(unit.id, leadId, REGRA_DESPEDIDA),
+  // Só lê a marca onde a despedida está LIGADA: desligada (ou só no papel) a Sofia responde e não há aviso a cobrir.
+  despedidaAvisouEm: async (unit, leadId) =>
+    estadoDaAutomacao(unit.slug, 'despedida-humano', process.env.DESPEDIDA_HUMANO_SLUGS) === 'ligado' ? marcadoEm(unit.id, leadId, REGRA_DESPEDIDA) : null,
   criarTarefa: async (unit, leadId, texto) => {
     const kommo = createKommoClient(unit);
     // O responsável do cartão; o `createTask` troca o login da consultoria pelo usuário da clínica (quando é um só).

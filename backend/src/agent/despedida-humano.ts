@@ -41,14 +41,14 @@ import { prisma } from '../lib/prisma.js';
 import { createKommoClient, type KommoTarefa } from '../services/kommo.service.js';
 import type { Fala } from './repeticao.js';
 import { pacienteEncerrou, turnoDoPaciente } from './paciente-encerrou.js';
+import { sinalNaFala } from './sinal-de-alerta.js';
+import { ehEncerramento } from '../lib/encerramento.js';
 
 export const AUTOMACAO_DESPEDIDA_HUMANO = 'despedida-humano';
 export const JANELA_DESPEDIDA_MS = 24 * 3600_000;
 /** Prazo da tarefa: não é urgência (o paciente foi embora), mas alguém precisa olhar logo, com o paciente ainda quente. */
 export const PRAZO_TAREFA_S = 30 * 60;
-/** Tarefa aberta e vencida há mais que isto é lixo antigo do cartão, não "a equipe já está nisso". */
-export const TAREFA_VELHA_MS = 3 * 24 * 3600_000;
-/** Tarefa com prazo mais longe que isto ("ligar em 7 dias") é lembrete de robô: não é a equipe cuidando do paciente agora. */
+/** Tarefa de ALERTA com prazo mais longe que isto não é "a equipe cuidando do paciente agora". */
 export const TAREFA_LONGE_MS = 24 * 3600_000;
 /** Mais longo que isto não é despedida: é conversa. */
 const MAX_CARACTERES = 220;
@@ -66,85 +66,136 @@ export interface Despedida {
   fala: string;
 }
 
+/** Verbos de quem promete VOLTAR a tratar do assunto ("eu marco", "te aviso", "volto a falar"). */
+const VOLTAR = String.raw`(?:vejo|marco|agendo|decido|volto|entro|chamo|falo|aviso|procuro|retorno|resolvo|fa[cç]o|ligo)`;
+
 /**
  * Adiamento INEQUÍVOCO (vale mesmo que a IA tenha terminado com pergunta — adiar é a resposta dele a ela): o que o
  * `pediuParaParar` (a régua) já reconhece, mais o que ele deixa passar: "entrarei em contato", "não vou querer",
- * "mais pra frente", "logo mais eu…".
+ * "vou me organizar", "vou deixar pra outro mês", "logo mais eu…". "Mais pra frente" e "em outro momento" só valem
+ * COM verbo de marcar/voltar: "Dói mais pra frente, perto da virilha" e "já tive essa crise em outro momento" são queixa.
  */
 const ADIA_FORTE = new RegExp(
   [
     String.raw`\bentrarei\s+em\s+contato\b|\bvoltarei\b|\bretornarei\b`,
     String.raw`\bn[ãa]o\s+vou\s+(?:querer|marcar|agendar)\b`,
     String.raw`\bn[ãa]o\s+quero\s+(?:agora|por\s+enquanto|no\s+momento)\b`,
-    String.raw`\bmais\s+(?:pra|para)\s+frente\b`,
-    String.raw`\bem\s+outro\s+momento\b`,
-    String.raw`\b(?:logo\s+mais|mais\s+tarde|depois)\s+(?:eu\s+)?(?:te\s+|lhe\s+)?(?:vejo|marco|agendo|decido|volto|entro|chamo|falo|aviso|procuro|retorno)\b`,
-    String.raw`\b(?:amanh[ãa]|semana\s+que\s+vem|m[eê]s\s+que\s+vem)\s+(?:eu\s+)?(?:te\s+|lhe\s+)?(?:vejo|marco|agendo|decido|volto|entro|chamo|falo|aviso|procuro|retorno)\b`,
+    String.raw`\bvou\s+(?:me\s+)?organizar\b`,
+    String.raw`\bvou\s+deixar\s+(?:isso\s+)?(?:pra|para)\s+(?:o\s+)?(?:outro|pr[óo]ximo|depois|mais\s+tarde)\b`,
+    String.raw`\b(?:mais\s+(?:pra|para)\s+frente|em\s+outro\s+momento)\s+(?:eu\s+)?(?:te\s+|lhe\s+)?${VOLTAR}\b`,
+    String.raw`\b${VOLTAR}\b[^.!?\n,;]{0,25}?\b(?:mais\s+(?:pra|para)\s+frente|em\s+outro\s+momento)\b`,
+    String.raw`\b(?:logo\s+mais|mais\s+tarde|depois)\s+(?:eu\s+)?(?:te\s+|lhe\s+)?${VOLTAR}\b`,
+    String.raw`\b(?:amanh[ãa]|semana\s+que\s+vem|m[eê]s\s+que\s+vem)\s+(?:eu\s+)?(?:te\s+|lhe\s+)?${VOLTAR}\b`,
   ].join('|'),
   'i',
 );
 
 /**
+ * "Vou verificar se tenho o exame" / "vou verificar com o convênio" é o paciente respondendo, não adiando. O
+ * `pediuParaParar` lê "vou verificar" como adiamento (e a régua que o usa não é tocada): aqui a oração sai antes de perguntar.
+ */
+const VERIFICAR_PARA_RESPONDER = /\bvou\s+verificar\s+(?:se|com|quanto|qual|o\s+exame|meu\s+exame|no|na)\b[^,.;!\n]*/gi;
+
+/**
  * Adiamento FRACO: "agora não", "por enquanto não", "no momento não", "outra hora" também respondem pergunta de triagem
- * ("Você tem exame? — Agora não tenho"; "Está com dor? — Agora não"). Só valem em fala curta e quando a Sofia NÃO
- * terminou perguntando.
+ * ("Você tem exame? — Agora não tenho"; "Está com dor? — Agora não"). Só valem em fala curta, quando a Sofia NÃO terminou
+ * perguntando e NÃO tinha pedido algo ("agora não posso, mais tarde te mando o exame" depois de ela pedir o exame).
  */
 const ADIA_FRACO = /\bagora\s+n[ãa]o\b|\bpor\s+enquanto\s+n[ãa]o\b|\bno\s+momento\s+n[ãa]o\b|\boutra\s+hora\b/i;
 const MAX_CARACTERES_FRACO = 80;
 
 /**
  * O paciente pede ALGO junto, ou negocia horário ("agora não consigo, pode ser quinta às 14h"): isso é conversa em
- * andamento, e a Sofia tem de responder. Só despedida/adiamento limpo aciona o humano.
+ * andamento, e a Sofia tem de responder. Só despedida/adiamento limpo aciona o humano. "Como/qual/quanto/onde" só valem no
+ * COMEÇO da oração ("mas qual o endereço"): no meio ("vou ver como fica minha agenda", "depois eu vejo qual dia fica
+ * melhor") fazem parte da promessa de voltar.
  */
 const PEDE_ALGO = new RegExp(
   [
     String.raw`\bme\s+(?:passa|passe|manda|mande|envia|envie|diz|diga|fala|fale|informa|informe|explica|explique)\b`,
-    String.raw`\b(?:qual|quais|quanto|quantos|onde|como|que\s+horas?)\b`,
+    String.raw`(?:^|[.!;\n]\s*|,\s*(?:e\s+|mas\s+)?|\bmas\s+|\be\s+)(?:qual|quais|quanto|quantos|onde|como|que\s+horas?)\b`,
     String.raw`\b(?:queria|gostaria\s+de)\s+(?:saber|entender|perguntar)\b`,
     String.raw`\b(?:pode|poderia|consegue|podemos|d[áa])\s+(?:ser|me|marcar|fazer|pra|para)\b`,
-    String.raw`\b(?:prefiro|fica\s+melhor|vamos\s+marcar|pode\s+marcar|marca\s+(?:pra|para))\b`,
+    String.raw`\b(?:prefiro|fica\s+melhor\s+(?:pra|para|[àa]s?|de|na|no|em)|vamos\s+marcar|pode\s+marcar|marca\s+(?:pra|para))\b`,
     // "às 14", "as 9": o `\b` do JS é ASCII e não vê fronteira antes do "à" — por isso o lookbehind unicode
     String.raw`(?<![\p{L}\p{N}])[àa]s\s+\d{1,2}|\b\d{1,2}\s*(?:h\b|horas?\b|:\d{2})`,
   ].join('|'),
   'iu',
 );
 
+/**
+ * O paciente fala de dor, de piora ou de urgência: NUNCA silêncio. Complementa o `sinalNaFala` (que só vê os sinais de
+ * alerta com todas as letras): "vou pensar, tô com muita dor" e "quando eu conseguir andar eu vou, a dor tá insuportável"
+ * não são sinal de alerta literal, mas quem está assim precisa de resposta agora. Largo de propósito: o custo de errar para
+ * este lado é a Sofia responder "combinado" como hoje.
+ */
+const PRECISA_DE_RESPOSTA =
+  /\bd[oó]i\b|\bdoendo\b|\bdor(?:es)?\b|insuport|n[ãa]o\s+aguent|\burgente\b|\burg[êe]ncia\b|\bemerg[êe]ncia\b|\bsocorro\b|desesper|\bpiorand|\bpior\b|\bpiorou\b|n[ãa]o\s+consigo\s+(?:andar|levantar|me\s+mexer)|formigament|\bparalis/iu;
+
+/** Sinal de alerta, dor ou urgência em alguma das falas: a Sofia responde (e `passarPorSinalNoTurno` cuida do resto). */
+export function temSinalOuUrgencia(textos: string[]): boolean {
+  return !!sinalNaFala(textos) || textos.some((t) => PRECISA_DE_RESPOSTA.test(t));
+}
+
 /** "Muito obrigada pelas informações": agradecimento com motivo, que o `ehEncerramento` (só palavras soltas) não reconhece. */
 const AGRADECE_POR =
   /^(?:muito\s+)?(?:obrigad[oa]s?|brigad[oa]|valeu|agrade[çc]o)\s+(?:pel[oa]s?|por)\s+(?:toda\s+)?(?:a\s+|as\s+|o\s+|os\s+)?(?:informa[çc][ãõ][eo]s?|explica[çc][ãõ][eo]s?|aten[çc][ãa]o|ajuda|retorno|esclarecimentos?|orienta[çc][ãõ][eo]s?|disponibilidade)[\s.!,\p{Extended_Pictographic}\p{Emoji_Presentation}️]*$/iu;
 
-/** A fala da IA terminou perguntando ("…posso ver um horário pra você? ☺️")? Aí um "obrigada" solto é RESPOSTA, não despedida. */
+const LINHA_DE_BOTOES = /^\s*\[\[\s*botoes\s*:.*$/gim;
+
+/**
+ * A fala da IA terminou perguntando ("…posso ver um horário pra você? ☺️", "Tá sentindo dor? Me conta.")? Aí um "obrigada"
+ * solto é RESPOSTA, não despedida. A linha `[[botoes: …]]` não conta como texto (a pergunta vem antes dela) e pergunta com
+ * botões é pergunta mesmo sem "?"; depois do último "?" cabe uma frase curta.
+ */
 export function iaTerminouPerguntando(texto: string | null | undefined): boolean {
-  const t = (texto ?? '').trim();
-  if (!t) return false;
-  return /\?[\s\p{Extended_Pictographic}\p{Emoji_Presentation}️‍.!)\]]*$/u.test(t);
+  const bruto = (texto ?? '').trim();
+  if (!bruto) return false;
+  const t = bruto.replace(LINHA_DE_BOTOES, '').trim();
+  if (t.length !== bruto.length) return true;
+  const i = t.lastIndexOf('?');
+  if (i < 0) return false;
+  const depois = t.slice(i + 1).replace(/[\s\p{Extended_Pictographic}\p{Emoji_Presentation}️‍.!)\]]+/gu, ' ').trim();
+  return depois.length <= 40;
 }
 
 /** A fala da IA PEDIU algo ou prometeu voltar, sem "?" ("Me envie o comprovante.", "Vou confirmar com a equipe e já te retorno."): "ok, obrigada" é resposta, não despedida. */
 const IA_PEDIU =
   /\b(?:envie|mande|manda|envia|informe|passe|diga)\b|\bpreciso\s+d[aeo]s?\b|\bpode\s+me\b|\bpoderia\b|\baguard[ea]\b|\bte\s+retorno\b|\bvou\s+(?:confirmar|verificar|ver)\s+com\b/i;
 
-/**
- * Uma fala sozinha do paciente. `ultimaIa` é a última fala da Sofia antes dela. `depoisDeAdiar`: uma fala anterior do mesmo
- * bloco já foi adiamento — o "obrigada" que vem depois não responde mais à pergunta da Sofia, é a continuação da despedida.
- */
-function classificarFala(texto: string, ultimaIa: string, depoisDeAdiar: boolean): TipoDeDespedida | null {
-  const t = texto.trim();
-  if (!t || t.length > MAX_CARACTERES || t.includes('?') || PEDE_ALGO.test(t)) return null;
-  const parada = pediuParaParar(t);
-  if (parada === 'irritacao') return null; // outro caso: a régua já se cala
-  if (parada === 'adiamento' || ADIA_FORTE.test(t)) return 'adiou';
-  const perguntou = iaTerminouPerguntando(ultimaIa);
-  if (!perguntou && t.length <= MAX_CARACTERES_FRACO && ADIA_FRACO.test(t)) return 'adiou';
-  const contextoLivre = depoisDeAdiar || (!perguntou && !IA_PEDIU.test(ultimaIa));
-  if (contextoLivre && (AGRADECE_POR.test(t) || pacienteEncerrou([ia(ultimaIa), pac(t)]) === 'agradeceu')) {
-    return 'agradeceu';
-  }
-  return null;
-}
+/** A pergunta da IA era "posso ajudar em mais algo?": "Não, obrigada" é a despedida. */
+const OFERTA_DE_AJUDA =
+  /\b(?:posso|podemos)\s+(?:te\s+|lhe\s+)?ajudar\s+(?:em|com)\s+(?:mais|algo|outra|alguma)|\bmais\s+alguma\s+(?:coisa|d[úu]vida)|\balguma\s+outra\s+(?:d[úu]vida|coisa)|\balgo\s+mais\b|\bficou\s+(?:com\s+)?alguma\s+d[úu]vida|\bprecisa\s+de\s+mais\s+(?:algo|alguma|informa)/i;
 
 const ia = (texto: string): Fala => ({ papel: 'ia', texto });
 const pac = (texto: string): Fala => ({ papel: 'paciente', texto });
+
+/** Só um "ok"/👍/"tá bom" (sem sim, não, isso). */
+const SO_OK = /(?<![\p{L}])(?:sim|n[ãa]o|isso|uhum|aham)(?![\p{L}])/iu;
+
+/** Uma fala sozinha do paciente, no que ela É (adiou / agradeceu), sem olhar o contexto da Sofia além do que `ultimaIa` diz. */
+function classificarFala(texto: string, ultimaIa: string, haAdiamento: boolean): TipoDeDespedida | null {
+  const t = texto.trim();
+  if (!t || t.length > MAX_CARACTERES || t.includes('?') || PEDE_ALGO.test(t)) return null;
+  if (pediuParaParar(t) === 'irritacao') return null; // outro caso: a régua já se cala
+  const encerrou = pacienteEncerrou([ia(ultimaIa), pac(t)]);
+  if (
+    pediuParaParar(t.replace(VERIFICAR_PARA_RESPONDER, ' ')) === 'adiamento' ||
+    ADIA_FORTE.test(t) ||
+    encerrou === 'vai_se_organizar'
+  ) {
+    return 'adiou';
+  }
+  const perguntou = iaTerminouPerguntando(ultimaIa);
+  const iaPediu = IA_PEDIU.test(ultimaIa);
+  if (!perguntou && !iaPediu && t.length <= MAX_CARACTERES_FRACO && ADIA_FRACO.test(t)) return 'adiou';
+  // Contexto livre: a Sofia só informou; ou ofereceu mais ajuda ("Não, obrigada"); ou o bloco JÁ tem um adiamento (aí o
+  // "obrigada" antes e o "ok"/👍 depois são parte da mesma despedida — com o silêncio já feito, um "ok" não pode acordá-la).
+  const livre = haAdiamento || OFERTA_DE_AJUDA.test(ultimaIa) || (!perguntou && !iaPediu);
+  if (livre && (AGRADECE_POR.test(t) || encerrou === 'agradeceu')) return 'agradeceu';
+  if (haAdiamento && ehEncerramento(t) && !SO_OK.test(t)) return 'agradeceu';
+  return null;
+}
 
 /**
  * O paciente se despediu ou adiou neste turno? PURA.
@@ -153,19 +204,23 @@ const pac = (texto: string): Fala => ({ papel: 'paciente', texto });
  * seguinte ("Quero marcar sexta") se junta ao mesmo bloco de falas sem resposta — e uma frase de adiamento antiga não pode
  * calá-la de novo diante de um pedido novo (nem uma pergunta sem resposta de um turno que falhou, ficar sem ela).
  *
- *  - ADIOU: "vou pensar", "entro em contato", "agora não vou querer", "depois eu vejo", "mais pra frente"…
+ *  - ADIOU: "vou pensar", "entro em contato", "agora não vou querer", "depois eu vejo", "vou me organizar"…
  *  - AGRADECEU: obrigado/valeu/até logo (sem pergunta e sem "sim", segundo o `pacienteEncerrou`) e a última fala da IA
- *    não terminou em pergunta nem pediu nada. "concordou" (um "ok" depois de a IA já ter fechado) não conta: não há
- *    nada novo a avisar, e a despedida repetida já é calada por `ehEncerramentoRepetido`.
- *  - nada a que se despedir (a IA ainda não falou), pergunta do paciente, irritação ("para de mandar mensagem") ou
- *    pedido junto = null.
+ *    não terminou em pergunta nem pediu nada — ou era "posso ajudar em mais algo?". Dentro de um bloco com adiamento,
+ *    "obrigada" (antes) e "ok"/👍 (depois) continuam a despedida. "concordou" sozinho (um "ok" depois de a IA ter fechado)
+ *    não conta: não há nada novo a avisar.
+ *  - SEMPRE null (a Sofia responde): sinal de alerta, dor, urgência (`temSinalOuUrgencia`), irritação, pergunta do
+ *    paciente, pedido junto, nada a que se despedir (a IA ainda não falou).
  */
 export function detectarDespedida(falas: Fala[]): Despedida | null {
   const { textos, ultimaIa } = turnoDoPaciente(falas);
   if (textos.length === 0 || !ultimaIa) return null;
+  if (temSinalOuUrgencia(textos)) return null;
+  // O adiamento vale para o bloco inteiro, esteja onde estiver: "Obrigada!" + "Vou pensar e te retorno".
+  const haAdiamento = textos.some((t) => classificarFala(t, ultimaIa, false) === 'adiou');
   let adiou = false;
   for (const t of textos) {
-    const tipo = classificarFala(t, ultimaIa, adiou);
+    const tipo = classificarFala(t, ultimaIa, haAdiamento);
     if (!tipo) return null;
     if (tipo === 'adiou') adiou = true;
   }
@@ -174,6 +229,20 @@ export function detectarDespedida(falas: Fala[]): Despedida | null {
 
 /** Como o rastro e a nota chamam o que o paciente fez. */
 const rotulo = (d: Despedida): string => (d.tipo === 'adiou' ? 'adiou' : 'se despediu');
+
+/**
+ * PURA: há no cartão uma tarefa que JÁ chama a equipe para este paciente? Só conta tarefa de ALERTA (o prefixo
+ * `ALERTA ·` é a das nossas e das de sinal/entrega/sem resposta; lembrete de robô e tarefa de rotina não chamam ninguém),
+ * ABERTA, NÃO vencida e com prazo até 24 h à frente. Vencida (inclusive a DESPEDIDA que ninguém fechou ontem) não conta:
+ * nesses casos nasce tarefa nova, porque a nota sozinha não notifica ninguém.
+ */
+export function tarefaDaEquipeSegura(tarefas: readonly KommoTarefa[], agora: Date): boolean {
+  const de = Math.floor(agora.getTime() / 1000);
+  const ate = Math.floor((agora.getTime() + TAREFA_LONGE_MS) / 1000);
+  return tarefas.some(
+    (t) => !t.is_completed && /^\s*ALERTA\b/i.test(t.text ?? '') && !!t.complete_till && t.complete_till >= de && t.complete_till <= ate,
+  );
+}
 
 export type Decisao =
   | { acao: 'responder'; motivo: string }
@@ -189,7 +258,7 @@ export function textoDaTarefa(args: { slug: string; contato: string | null; desp
       : 'Paciente agradeceu/se despediu e ainda não marcou';
   return (
     `ALERTA · ${args.slug} · [DESPEDIDA] ${nome ? `[Contato: ${nome}] ` : ''}${oQue} — vale um contato humano. ` +
-    `Última fala: "${fala}". A Sofia não respondeu.`
+    `Última mensagem: "${fala}". A Sofia não respondeu.`
   );
 }
 
@@ -295,6 +364,11 @@ export async function decidirDespedida(entrada: EntradaDaDespedida, deps: DepsDa
   const { unit, leadId, estado, falas, temConsulta, recorder } = entrada;
   if (estado === 'desligado') return { acao: 'responder', motivo: 'chave desligada' };
   try {
+    // Sinal de alerta, dor ou urgência no que ele disse: NUNCA silêncio, mesmo junto de "vou pensar" (graph.ts roda esta porta
+    // ANTES de `passarPorSinalNoTurno`, então a checagem tem de estar aqui).
+    if (temSinalOuUrgencia(turnoDoPaciente(falas).textos)) {
+      return { acao: 'responder', motivo: 'sinal de alerta, dor ou urgência — a Sofia responde' };
+    }
     const despedida = detectarDespedida(falas);
     if (!despedida) return { acao: 'responder', motivo: 'não é despedida nem adiamento' };
     if (temConsulta) {
@@ -340,6 +414,8 @@ export async function decidirDespedida(entrada: EntradaDaDespedida, deps: DepsDa
           .catch(() => undefined);
         return { acao: 'responder', motivo: 'aviso do dia já saiu e a Sofia falou depois' };
       }
+      // Regrava a marca: o alerta de "sem resposta" só cobre a espera se o aviso for posterior à última mensagem dele.
+      await deps.marcar(unit, leadId, agora);
       await recorder
         .step({
           kind: 'THINKING',
@@ -353,9 +429,7 @@ export async function decidirDespedida(entrada: EntradaDaDespedida, deps: DepsDa
     // A equipe já tem tarefa aberta neste cartão: não empilha. A nota diz o que aconteceu.
     let aberta = false;
     try {
-      const de = Math.floor((agora.getTime() - TAREFA_VELHA_MS) / 1000);
-      const ate = Math.floor((agora.getTime() + TAREFA_LONGE_MS) / 1000);
-      aberta = (await deps.tarefasAbertas(unit, leadId)).some((t) => !t.is_completed && !!t.complete_till && t.complete_till >= de && t.complete_till <= ate);
+      aberta = tarefaDaEquipeSegura(await deps.tarefasAbertas(unit, leadId), agora);
     } catch (err) {
       logger.warn({ err: String(err), unit: unit.slug, leadId }, 'despedida-humano: não consegui ler as tarefas do cartão — sigo e crio a minha');
     }

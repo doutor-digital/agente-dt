@@ -519,3 +519,20 @@ test('despedida-humano: pergunta NOVA do paciente depois do aviso da despedida (
   const r = await verificarUnidadeSemResposta(unidade, 'ligado', c.deps);
   assert.equal(r.tarefas, 1);
 });
+
+test('despedida-humano: a leitura da marca só acontece onde a chave está LIGADA (desligada/seco não lê o banco por candidato)', async () => {
+  const { DEPS_SEM_RESPOSTA_PADRAO } = await import('./sem-resposta-worker.js');
+  const original = process.env.DESPEDIDA_HUMANO_SLUGS;
+  try {
+    delete process.env.DESPEDIDA_HUMANO_SLUGS;
+    _semearParaTeste([]);
+    // desligada: devolve null sem tocar no banco (um prisma falso explodiria; aqui nem existe conexão)
+    assert.equal(await DEPS_SEM_RESPOSTA_PADRAO.despedidaAvisouEm!(unidade, 123), null);
+    _semearParaTeste([{ slug: SLUG, automacao: 'despedida-humano', estado: 'seco' }]);
+    assert.equal(await DEPS_SEM_RESPOSTA_PADRAO.despedidaAvisouEm!(unidade, 123), null);
+  } finally {
+    if (original === undefined) delete process.env.DESPEDIDA_HUMANO_SLUGS;
+    else process.env.DESPEDIDA_HUMANO_SLUGS = original;
+    _semearParaTeste([]);
+  }
+});
