@@ -164,6 +164,8 @@ export function servidorAdminFalso(o: OpcoesFalso = {}) {
         return json(200, { ok: true, token: 'tok123456789abc', caminho: '#a-tok123456789abc' });
       case 'POST /admin/v1/site/trocar': {
         // contrato: { part, de, para, quem } -> 200 { ok, part, tabela, bytes_antes, bytes_depois, backup_id } | 409 trecho ausente/repetido | 400 sintaxe
+        if (corpo.de === 'EXPLODE500') return json(500, { erro: 'falha interna em ' + CONFIG_FALSA.api });
+        if (/NOVO-HOST/.test(corpo.para) && corpo.aceitar_hosts_novos !== true) return json(400, { erro: 'a mudança cita um servidor NOVO ("coleta.exemplo"): NADA foi gravado.' });
         const parte = paginas.get(corpo.part);
         if (parte === undefined) return json(404, { erro: `a parte ${corpo.part} não existe` });
         const ocorr = parte.split(corpo.de).length - 1;
@@ -174,7 +176,7 @@ export function servidorAdminFalso(o: OpcoesFalso = {}) {
         backups.set(backup_id, { part: corpo.part, antes: parte, depois: novo });
         paginas.set(corpo.part, novo);
         registro.push({ tabela: 'rh_site', quem: corpo.quem, op: 'site' });
-        return json(200, { ok: true, part: corpo.part, tabela: 'rh_site', bytes_antes: parte.length, bytes_depois: novo.length, backup_id, conferido: true });
+        return json(200, { ok: true, part: corpo.part, tabela: 'rh_site', bytes_antes: parte.length, bytes_depois: novo.length, backup_id, conferido: !/CONFERIDO_FALSE/.test(corpo.para) });
       }
       case 'POST /admin/v1/desfazer': {
         const b = backups.get(corpo.backup_id);

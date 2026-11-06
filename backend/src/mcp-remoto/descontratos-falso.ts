@@ -43,8 +43,22 @@ export function servidorDescontratosFalso(o: { agora?: () => number } = {}) {
         gravados.push({ id: corpo.id, corpo: p.corpo });
         return json(200, { ok: true, afetadas: 1, conferido: true, backup_id: 'bk-dsc-1', descontrato: { id: p.corpo.id ?? 'd-1', status_antes: 'pronto_pagamento', status_depois: 'pago' } });
       }
+            // a página da tela (dsc_site): o servidor 0.1.10.10 aceita /preparar só para dsc_site, e /site/trocar e /desfazer
+      case 'POST /admin/v1/preparar': {
+        const corpo = init.body ? JSON.parse(String(init.body)) : {};
+        if (corpo.tabela !== 'dsc_site') return json(400, { erro: 'no Descontratos esta rota só escreve em dsc_site (a página da tela); descontratos mudam por sistemas_preparar_descontrato' });
+        const id = `prep-dsc-${++n}`;
+        previas.set(id, { corpo, em: agora() });
+        return json(200, { id, resumo: `${corpo.op} em dsc_site`, afetadas: 1, antes: [], depois: [] });
+      }
+      case 'POST /admin/v1/site/trocar':
+        return json(200, { ok: true, part: JSON.parse(String(init.body)).part, tabela: 'dsc_site', bytes_antes: 10, bytes_depois: 11, backup_id: '00000000-0000-4000-8000-0000000000d5', conferido: true });
+      case 'POST /admin/v1/desfazer': {
+        const corpo = JSON.parse(String(init.body));
+        return corpo.backup_id === '00000000-0000-4000-8000-0000000000d5' ? json(200, { ok: true, tabela: 'dsc_site', op_original: 'atualizar', afetadas: 1, backup_id: '00000000-0000-4000-8000-0000000000d6', desfeito: corpo.backup_id }) : json(400, { erro: 'a tabela dsc_docs não volta por aqui' });
+      }
       default:
-        return json(404, { erro: 'essa rota não existe no Descontratos (só esquema, consulta e concluir descontrato)' });
+        return json(404, { erro: 'essa rota não existe no Descontratos (só esquema, consulta, concluir descontrato e a página da tela)' });
     }
   }) as unknown as typeof fetch;
   return { fetch: buscar, chamadas, gravados, previas };

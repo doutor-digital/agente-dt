@@ -85,7 +85,7 @@ test('entradas inválidas nem chegam ao servidor', async () => {
   const n = rh.chamadas.length;
   assert.equal((await chamar('sistemas_site_trocar', { parte: -1, de: 'a', para: 'b' })).erro, true);
   assert.equal((await chamar('sistemas_site_trocar', { parte: 0, de: '', para: 'b' })).erro, true);
-  assert.equal((await chamar('sistemas_desfazer', { backup: 'não é uuid' })).erro, true);
+  assert.equal((await chamar('sistemas_desfazer', { backup_id: 'não é uuid, é uma frase longa' })).erro, true);
   assert.equal(rh.chamadas.length, n);
   await fechar();
 });
@@ -95,20 +95,20 @@ test('desfazer: uma chamada devolve a página; repetir é recusado; "forcar" só
   const { chamar, fechar } = await cliente(ctx);
   const antes = rh.paginas.get(0);
   const t = await chamar('sistemas_site_trocar', { parte: 0, de: 'INICIO', para: 'COMECO' });
-  const d = await chamar('sistemas_desfazer', { backup: t.json.backup_id });
+  const d = await chamar('sistemas_desfazer', { backup_id: t.json.backup_id });
   assert.equal(d.erro, false, d.texto);
   assert.equal(d.json.ok, true);
   assert.equal(rh.paginas.get(0), antes);
-  const repetido = await chamar('sistemas_desfazer', { backup: t.json.backup_id });
+  const repetido = await chamar('sistemas_desfazer', { backup_id: t.json.backup_id });
   assert.equal(repetido.erro, true);
   assert.match(repetido.texto, /já foi desfeito/);
   // outra pessoa mexeu depois: o servidor recusa; sem forcar na chamada, o corpo não leva forcar
   const t2 = await chamar('sistemas_site_trocar', { parte: 0, de: 'INICIO', para: 'UM' });
   rh.paginas.set(0, rh.paginas.get(0)!.replace('UM', 'OUTRA PESSOA'));
-  const recusa = await chamar('sistemas_desfazer', { backup: t2.json.backup_id });
+  const recusa = await chamar('sistemas_desfazer', { backup_id: t2.json.backup_id });
   assert.equal(recusa.erro, true);
   assert.equal(rh.chamadas.filter((x) => x.caminho === '/admin/v1/desfazer').at(-1)!.corpo.forcar, undefined);
-  const forcada = await chamar('sistemas_desfazer', { backup: t2.json.backup_id, forcar: true });
+  const forcada = await chamar('sistemas_desfazer', { backup_id: t2.json.backup_id, forcar: true });
   assert.equal(forcada.erro, false);
   assert.equal(rh.chamadas.filter((x) => x.caminho === '/admin/v1/desfazer').at(-1)!.corpo.forcar, true);
   await fechar();
@@ -141,7 +141,7 @@ test('auditoria do conector: a troca registra parte e TAMANHOS, nunca o texto da
   const { chamar, auditoria, fechar } = await cliente(ctx);
   await chamar('sistemas_site_trocar', { parte: 0, de: 'INICIO', para: 'SEGREDO-NA-PAGINA-123' });
   const a = auditoria.find((x) => x.ferramenta === 'sistemas_site_trocar')!;
-  assert.deepEqual(a.argumentos, { sistema: undefined, parte: 0, deTamanho: 6, paraTamanho: 21 });
+  assert.deepEqual(a.argumentos, { sistema: undefined, parte: 0, deTamanho: 6, paraTamanho: 21, aceitouServidorNovo: false });
   assert.ok(!JSON.stringify(auditoria).includes('SEGREDO-NA-PAGINA-123'));
   await fechar();
 });
@@ -155,5 +155,73 @@ test('papel fisio: as ferramentas de usuário e convite o anunciam e o convite d
   assert.equal(conv.erro, false, conv.texto);
   assert.match(conv.json.link, /#a-/);
   assert.deepEqual(rh.chamadas.find((x) => x.caminho === '/admin/v1/convite')!.corpo.unidade, undefined);
+  await fechar();
+});
+
+test('resposta ambígua (5xx): a ferramenta NÃO manda repetir às cegas e diz onde conferir', async () => {
+  const { rh, ctx } = sistemas();
+  const { chamar, fechar } = await cliente(ctx);
+  const antes = rh.paginas.get(0);
+  const r = await chamar('sistemas_site_trocar', { parte: 0, de: 'EXPLODE500', para: 'x' });
+  assert.equal(r.erro, true);
+  assert.match(r.texto, /NÃO sei se a troca foi gravada/);
+  assert.match(r.texto, /admin_log/);
+  assert.ok(!r.texto.includes(CHAVE_FALSA));
+  assert.equal(rh.paginas.get(0), antes);
+  await fechar();
+});
+
+test('conferido:false não vira "Gravado e conferido"; servidor novo só passa com o ok explícito (aceitarServidorNovo)', async () => {
+  const { rh, ctx } = sistemas();
+  const { chamar, fechar } = await cliente(ctx);
+  const ruim = await chamar('sistemas_site_trocar', { parte: 0, de: 'INICIO', para: 'CONFERIDO_FALSE' });
+  assert.equal(ruim.erro, false, ruim.texto);
+  assert.match(ruim.json.atencao, /NÃO bateu/);
+  assert.match(ruim.json.instrucao, /MAS a conferência não bateu/);
+  assert.ok(!/Gravado e conferido/.test(ruim.json.instrucao));
+  const recusada = await chamar('sistemas_site_trocar', { parte: 1, de: 'x x', para: 'NOVO-HOST' });
+  assert.equal(recusada.erro, true);
+  assert.match(recusada.texto, /servidor NOVO/);
+  assert.equal(rh.chamadas.filter((x) => x.caminho === '/admin/v1/site/trocar').at(-1)!.corpo.aceitar_hosts_novos, undefined);
+  const aceita = await chamar('sistemas_site_trocar', { parte: 1, de: 'x x', para: 'NOVO-HOST', aceitarServidorNovo: true });
+  assert.equal(aceita.erro, false, aceita.texto);
+  assert.equal(rh.chamadas.filter((x) => x.caminho === '/admin/v1/site/trocar').at(-1)!.corpo.aceitar_hosts_novos, true);
+  await fechar();
+});
+
+test('DSC_SITE em maiúsculas vai para o Descontratos e a confirmação responde como página (volta, tela, como conferir)', async () => {
+  const { dsc, ctx } = sistemas();
+  const { chamar, fechar } = await cliente(ctx);
+  const p = await chamar('sistemas_preparar_alteracao', { sistema: 'descontratos', operacao: 'atualizar', tabela: 'DSC_SITE', filtro: { part: 3 }, dados: { content: 'x' } });
+  assert.equal(p.erro, false, p.texto);
+  assert.ok(dsc.chamadas.some((x: any) => x.caminho === '/admin/v1/preparar'));
+  const c = await chamar('sistemas_confirmar_alteracao', { confirmacao: p.json.confirmacao });
+  assert.equal(c.erro, false, c.texto);
+  assert.match(c.json.registro, /admin_log/);
+  assert.ok(!/histórico do próprio descontrato/.test(c.json.registro), 'a página do Descontratos não tem histórico de descontrato');
+  assert.match(c.json.tela, /próxima abertura/);
+  await fechar();
+});
+
+test('Descontratos: a troca e a volta da página chegam ao servidor dele; backup de outra tabela do Descontratos é recusado pelo servidor e a ferramenta mostra o motivo', async () => {
+  const { ctx } = sistemas();
+  const { chamar, fechar } = await cliente(ctx);
+  const t = await chamar('sistemas_site_trocar', { sistema: 'descontratos', parte: 2, de: 'a', para: 'b' });
+  assert.equal(t.erro, false, t.texto);
+  assert.equal(t.json.sistema, 'descontratos');
+  const d = await chamar('sistemas_desfazer', { sistema: 'descontratos', backup_id: t.json.backup_id });
+  assert.equal(d.erro, false, d.texto);
+  const outro = await chamar('sistemas_desfazer', { sistema: 'descontratos', backup_id: '00000000-0000-4000-8000-0000000000aa' });
+  assert.equal(outro.erro, true);
+  assert.match(outro.texto, /não volta por aqui/);
+  await fechar();
+});
+
+test('auditoria: a mensagem de erro da troca não leva o que o servidor citou entre aspas', async () => {
+  const { ctx } = sistemas();
+  const { chamar, auditoria, fechar } = await cliente(ctx);
+  await chamar('sistemas_site_trocar', { parte: 1, de: 'x x', para: 'NOVO-HOST' });
+  const a = auditoria.find((x) => x.ferramenta === 'sistemas_site_trocar' && !x.ok)!;
+  assert.ok(a.erro && !a.erro.includes('coleta.exemplo'), a.erro);
   await fechar();
 });
