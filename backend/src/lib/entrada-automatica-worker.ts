@@ -45,6 +45,27 @@ export function agruparPorConta<T extends { slug: string; kommoSubdomain: string
   return contas;
 }
 
+/**
+ * O Kommo desta conta é dividido entre clínicas? `erro` NÃO é `nao`: sem a resposta não dá para saber de quem é o lead, e vincular/aceitar
+ * não tem volta. Quem chama pula a conta nos dois casos. `consulta` só o teste troca.
+ */
+export async function dividida(
+  membros: Array<{ id: string }>,
+  consulta: (m: Array<{ id: string }>) => Promise<unknown> = contaDividida,
+): Promise<'sim' | 'nao' | 'erro'> {
+  try {
+    return (await consulta(membros)) ? 'sim' : 'nao';
+  } catch (err) {
+    logger.warn({ err: String(err) }, 'entrada-automatica: falhei ao consultar o Kommo dividido');
+    return 'erro';
+  }
+}
+
+/** Quem vê a prévia do «Só no papel» na tela: toda unidade da conta que ligou ESTA automação (a irmã também quer ver o que ela faria). */
+export function quemVeAPrevia<T extends { slug: string }>(membros: readonly T[], estadoDe: (slug: string) => Estado): T[] {
+  return membros.filter((u) => estadoDe(u.slug) !== 'desligado');
+}
+
 const memorias = new Map<string, MemoriaDaConta>();
 let rodando = false;
 /** O worker foi parado (perdeu a liderança, SIGTERM): a rodada em andamento não escreve mais. */
@@ -77,8 +98,14 @@ export async function varrerEntrada(): Promise<void> {
       }
       // Kommo dividido entre clínicas (Petrópolis × Caxias antes da separação): a caixa não diz de qual unidade é o lead, e
       // vincular/aceitar no cartão da outra clínica não tem volta. Não mexe.
-      if (await contaDividida(membros).catch(() => null)) {
-        avisarUmaVez(conta, 'o Kommo é dividido entre unidades (unit_crm_compartilhado): a caixa não diz de quem é o lead — não mexo');
+      const divisao = await dividida(membros);
+      if (divisao !== 'nao') {
+        avisarUmaVez(
+          conta,
+          divisao === 'sim'
+            ? 'o Kommo é dividido entre unidades (unit_crm_compartilhado): a caixa não diz de quem é o lead — não mexo'
+            : 'não consegui consultar se o Kommo é dividido entre unidades (erro no banco) — pulei a conta nesta rodada',
+        );
         continue;
       }
       const memoria = memorias.get(conta) ?? memoriaNova();
@@ -91,7 +118,10 @@ export async function varrerEntrada(): Promise<void> {
           agora: Math.floor(Date.now() / 1000),
           cfg,
           memoria,
-          registrar: ({ automacao, ...s }) => registrarSimulacao(dona, automacao, s),
+          registrar: ({ automacao, ...s }) => {
+            const ve = quemVeAPrevia(membros, automacao === ID_ENTRADA ? estadoRecente : estadoEstoque);
+            for (const u of ve.length ? ve : [dona]) registrarSimulacao(u, automacao, s);
+          },
           cancelado: () => parado,
         });
         const mexeu = resumo.vinculados + resumo.aceitos + resumo.vincularia + resumo.aceitaria + resumo.ambiguos + resumo.erros;

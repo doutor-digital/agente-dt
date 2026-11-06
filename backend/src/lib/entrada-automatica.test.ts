@@ -26,7 +26,7 @@ import {
   type ContextoDaRodada,
   type PortaKommo,
 } from './entrada-automatica.js';
-import { agruparPorConta, estadoDaConta } from './entrada-automatica-worker.js';
+import { agruparPorConta, dividida, estadoDaConta, quemVeAPrevia } from './entrada-automatica-worker.js';
 import { AUTOMACOES, automacaoPorChave, automacaoPorId, verificarCatalogo } from './automacoes.js';
 
 const AGORA = 1_800_000_000;
@@ -60,8 +60,9 @@ interface ContatoFalso {
 }
 
 /** Um Kommo falso inteiro: a caixa, os contatos, os cartões. Falhas por chamada com `falhar`. */
-function kommoFalso(m: { caixa: EntradaDoKommo[]; contatos: ContatoFalso[]; cartoes: Array<Partial<KommoLead> & { id: number }>; pipelines?: KommoPipeline[] }) {
+function kommoFalso(m: { caixa: EntradaDoKommo[]; contatos: ContatoFalso[]; cartoes: Array<Partial<KommoLead> & { id: number }>; pipelines?: KommoPipeline[]; completa?: boolean }) {
   const chamadas: string[] = [];
+  const paginasPedidas: number[] = [];
   const escritas: Array<{ tipo: 'vincular' | 'aceitar' | 'nota'; args: unknown[] }> = [];
   const falhar: Record<string, Array<unknown>> = {}; // 'vincular' -> [erro1, erro2…] consumidos em ordem
   const falha = (nome: string) => {
@@ -71,26 +72,24 @@ function kommoFalso(m: { caixa: EntradaDoKommo[]; contatos: ContatoFalso[]; cart
   const porta: PortaKommo = {
     async listarEntrada(op) {
       chamadas.push('listarEntrada');
+      paginasPedidas.push(op?.maxPaginas ?? 0);
       falha('listarEntrada');
       assert.equal(op?.categoria, 'chats', 'a rodada só pede chats');
-      return { itens: [...m.caixa], completa: true };
+      return { itens: [...m.caixa], completa: m.completa ?? true };
     },
     async telefonesDoContato(id) {
       chamadas.push('telefonesDoContato');
       falha('telefonesDoContato');
       return m.contatos.find((c) => c.id === id)?.telefones ?? [];
     },
-    async buscarContatos(texto, limite) {
+    async buscarContatosPorTelefone(texto, limite) {
       chamadas.push('buscarContatos');
       assert.equal(limite, 50);
-      if (falhar.busca?.length) {
-        falhar.busca.shift();
-        return null; // o Kommo real devolve null quando a consulta falha
-      }
+      falha('busca'); // o cliente real LANÇA quando a consulta falha
       const k = texto.replace(/\D/g, '');
       return m.contatos
         .filter((c) => c.telefones.some((t) => t.replace(/\D/g, '').endsWith(k)))
-        .map((c) => ({ id: c.id, nome: null, telefone: c.telefones[0] ?? null, telefones: c.telefones, leadIds: c.leadIds }));
+        .map((c) => ({ id: c.id, telefones: c.telefones, leadIds: c.leadIds }));
     },
     async listLeadsPorIds(ids) {
       chamadas.push('listLeadsPorIds');
@@ -115,7 +114,7 @@ function kommoFalso(m: { caixa: EntradaDoKommo[]; contatos: ContatoFalso[]; cart
       return { id: 1 };
     },
   };
-  return { porta, chamadas, escritas, falhar };
+  return { porta, chamadas, escritas, falhar, paginasPedidas };
 }
 
 const lead = (uid: string, criadoHaMin: number, contatoId: number, extra: Partial<EntradaDoKommo> = {}): EntradaDoKommo => ({
@@ -370,13 +369,13 @@ test('o próprio cartão provisório e os outros leads da caixa nunca são "par"
 
 test('FALHA DA API não perde nada: busca que falha NÃO vira "sem cartão" (não aceita), e a conta descansa', async () => {
   const k = kommoFalso({ caixa: [lead('u-a', 10, 1)], contatos: [{ id: 1, telefones: [FONE], leadIds: [5_000_001] }], cartoes: [] });
-  k.falhar.busca = [true];
+  k.falhar.busca = [new KommoApiError('busca', 500, {})];
   const m = memoriaNova();
   const { c } = ctx({ memoria: m });
   const r = await rodarConta(k.porta, c);
   assert.equal(r.aceitos, 0);
   assert.equal(r.erros, 1);
-  assert.match(String(r.encerrouCedo), /busca por telefone falhou/);
+  assert.match(String(r.encerrouCedo), /Kommo falhou/);
   assert.deepEqual(k.escritas, []);
   assert.ok(m.bloqueadaAte > Date.now() && m.bloqueadaAte <= Date.now() + DESCANSO_CURTO_MS);
   // em descanso: a rodada seguinte nem chama o Kommo
@@ -590,6 +589,56 @@ test('estoque sem par volta a ser olhado só depois de 12 h (são centenas), o r
   assert.ok(novo > 2 * 3600_000 && novo <= 3 * 3600_000, 'recente: 3 h');
 });
 
+test('403 na BUSCA de contatos (token sem escopo): a conta descansa 1 hora de uma vez, não 5 minutos para sempre', async () => {
+  const k = kommoFalso({ caixa: [lead('u-a', 10, 1), lead('u-b', 11, 2)], contatos: [{ id: 1, telefones: [FONE], leadIds: [] }, { id: 2, telefones: [FONE_SEM_NONO], leadIds: [] }], cartoes: [] });
+  k.falhar.busca = [new KommoApiError('busca', 403, {})];
+  const m = memoriaNova();
+  const r = await rodarConta(k.porta, ctx({ memoria: m }).c);
+  assert.match(String(r.encerrouCedo), /1 hora/);
+  assert.ok(m.bloqueadaAte > Date.now() + BLOQUEIO_MS - 5000);
+  assert.deepEqual(k.escritas, [], 'busca que falha nunca vira "sem cartão"');
+});
+
+test('só o recente ligado: lê UMA página da caixa; com o estoque ligado, pagina até o teto', async () => {
+  const k = kommoFalso({ caixa: [], contatos: [], cartoes: [] });
+  await rodarConta(k.porta, ctx({ recente: 'ligado', estoque: 'desligado' }).c);
+  await rodarConta(k.porta, ctx({ recente: 'ligado', estoque: 'seco' }).c);
+  await rodarConta(k.porta, ctx({ recente: 'desligado', estoque: 'ligado' }).c);
+  assert.deepEqual(k.paginasPedidas, [1, 4, 4]);
+});
+
+test('lista truncada só alarma no modo só-recente se a página inteira ainda é "de agora"', async () => {
+  const velha = kommoFalso({ caixa: [lead('u-a', 600, 1)], contatos: [], cartoes: [], completa: false });
+  assert.equal((await rodarConta(velha.porta, ctx().c)).listaTruncada, false, 'a página já passou da janela: nada recente ficou para trás');
+  const nova = kommoFalso({ caixa: [lead('u-a', 30, 1)], contatos: [], cartoes: [], completa: false });
+  assert.equal((await rodarConta(nova.porta, ctx().c)).listaTruncada, true);
+});
+
+test('o lead ADIADO (mesmo telefone de outro tratado na rodada) custou chamadas e conta no teto', async () => {
+  const k = kommoFalso({
+    caixa: [lead('u-a', 30, 1), lead('u-b', 20, 2), lead('u-c', 10, 3)],
+    contatos: [{ id: 1, telefones: [FONE], leadIds: [] }, { id: 2, telefones: [FONE], leadIds: [] }, { id: 3, telefones: ['47 90000-0003'], leadIds: [] }],
+    cartoes: [],
+  });
+  const r = await rodarConta(k.porta, ctx({ cfg: { ...CFG, maxAvaliacoes: 2 } }).c);
+  assert.equal(r.aceitos, 1);
+  assert.equal(r.adiados, 1);
+  assert.equal(k.chamadas.filter((x) => x === 'telefonesDoContato').length, 2, 'o terceiro nem foi olhado');
+});
+
+test('Kommo dividido: erro ao consultar NÃO é "não dividido" — a conta é pulada (vincular/aceitar não tem volta)', async () => {
+  const membros = [{ id: 'a' }];
+  assert.equal(await dividida(membros, async () => null), 'nao');
+  assert.equal(await dividida(membros, async () => ({ grupo: 1 })), 'sim');
+  assert.equal(await dividida(membros, async () => { throw new Error('prisma fora do ar'); }), 'erro');
+});
+
+test('prévia do «Só no papel»: toda unidade da conta que ligou aquela automação vê, a desligada não', () => {
+  const m = [{ slug: 'a' }, { slug: 'b' }, { slug: 'c' }];
+  const estado = (slug: string) => (slug === 'c' ? 'desligado' : slug === 'a' ? 'seco' : 'ligado');
+  assert.deepEqual(quemVeAPrevia(m, estado).map((u) => u.slug), ['a', 'b']);
+});
+
 // ─── o worker e o catálogo ────────────────────────────────────────────────────────────────────────
 
 test('estado da conta: quem está desligado não conta; qualquer "só no papel" entre os que ligaram segura a conta no papel', () => {
@@ -696,4 +745,18 @@ test('cliente: 403 de vincular (token sem admin) lança com o status, e telefone
   });
   await assert.rejects(() => kommo.vincularEntrada('u', 1), (e: unknown) => e instanceof KommoApiError && e.status === 403 && classeDoErro(e) === 'permanente');
   assert.deepEqual(await kommo.telefonesDoContato(9), ['+5547999172442']);
+});
+
+test('cliente: buscarContatosPorTelefone lê telefones e cartões; 204 é lista vazia; 403 LANÇA com o status (não vira null)', async () => {
+  const ok = createKommoClientSemFreio(UNIT, {
+    adapter: redeFalsa(() => ({
+      status: 200,
+      corpo: { _embedded: { contacts: [{ id: 5, custom_fields_values: [{ field_code: 'PHONE', values: [{ value: ' +5547999172442 ' }] }], _embedded: { leads: [{ id: 321 }] } }, { name: 'sem id' }] } },
+    })).adapter,
+  });
+  assert.deepEqual(await ok.buscarContatosPorTelefone('99172442'), [{ id: 5, telefones: ['+5547999172442'], leadIds: [321] }]);
+  const vazio = createKommoClientSemFreio(UNIT, { adapter: redeFalsa(() => ({ status: 204 })).adapter });
+  assert.deepEqual(await vazio.buscarContatosPorTelefone('99172442'), []);
+  const negado = createKommoClientSemFreio(UNIT, { adapter: redeFalsa(() => ({ status: 403, corpo: { title: 'Forbidden' } })).adapter });
+  await assert.rejects(() => negado.buscarContatosPorTelefone('99172442'), (e: unknown) => e instanceof KommoApiError && e.status === 403);
 });

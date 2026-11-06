@@ -35,6 +35,7 @@
  */
 import type { EntradaDoKommo, KommoClient, KommoLead, KommoPipeline } from '../services/kommo.service.js';
 import type { Estado } from './automacoes-estado.js';
+import { fim8 } from './paciente-existente.js';
 import type { Simulacao } from './so-no-papel.js';
 import { logger } from './logger.js';
 
@@ -82,8 +83,7 @@ function nacional(t: string): string {
 
 /** Os últimos 8 dígitos (imunes ao nono dígito e ao +55), ou `null` se não há 8 para comparar. */
 export function chaveFone(t: string): string | null {
-  const d = soDigitos(t);
-  return d.length >= 8 ? d.slice(-8) : null;
+  return fim8(t);
 }
 
 /**
@@ -157,7 +157,7 @@ export function classeDoErro(err: unknown): ClasseDoErro {
 
 export type PortaKommo = Pick<
   KommoClient,
-  'listarEntrada' | 'telefonesDoContato' | 'buscarContatos' | 'listLeadsPorIds' | 'listPipelines' | 'vincularEntrada' | 'aceitarEntrada' | 'addLeadNote'
+  'listarEntrada' | 'telefonesDoContato' | 'buscarContatosPorTelefone' | 'listLeadsPorIds' | 'listPipelines' | 'vincularEntrada' | 'aceitarEntrada' | 'addLeadNote'
 >;
 
 /** O que dura entre rodadas, POR CONTA: o que já foi olhado (para não repetir a busca) e o bloqueio por erro que não passa. */
@@ -227,9 +227,6 @@ const resumoNovo = (unit: string): ResumoDaRodada => ({
 
 const pausaPadrao = () => new Promise<void>((r) => setTimeout(r, PAUSA_ENTRE_ESCRITAS_MS));
 
-/** Fim da rodada por causa de um erro de rede/Kommo: o que não foi feito continua na caixa. */
-class RodadaEncerrada extends Error {}
-
 const MOTIVO_DO_NADA: Record<Extract<Decisao, { tipo: 'nada' }>['motivo'], string> = {
   ambiguo: 'o telefone tem mais de um cartão aberto: decidir qual é da conversa é da recepção',
   'sem-par-velho': 'sem cartão do mesmo telefone, mas a conversa é antiga: aceitar mandaria mensagem de boas-vindas fora de hora',
@@ -253,9 +250,12 @@ export async function rodarConta(kommo: PortaKommo, ctx: ContextoDaRodada): Prom
   const pausa = ctx.pausa ?? pausaPadrao;
 
   try {
-    const { itens, completa } = await kommo.listarEntrada({ categoria: 'chats', maxPaginas: cfg.maxPaginas });
+    // só o recente ligado: ele é novo, e a lista vem do mais novo ao mais velho — uma página basta (não pagina 600 leads a cada 3 min)
+    const soRecente = ctx.estoque === 'desligado';
+    const { itens, completa } = await kommo.listarEntrada({ categoria: 'chats', maxPaginas: soRecente ? 1 : cfg.maxPaginas });
     resumo.lidos = itens.length;
-    resumo.listaTruncada = !completa;
+    // truncada de verdade = pode haver lead que a rodada precisava e não leu (no modo só-recente, só se a página inteira ainda é "de agora")
+    resumo.listaTruncada = !completa && (!soRecente || Math.min(...itens.map((i) => i.criadoEm)) > ctx.agora - cfg.janelaS);
     const chats = itens.filter((i) => i.categoria === 'chats');
     resumo.foraDeEscopo = itens.length - chats.length;
 
@@ -319,19 +319,18 @@ export async function rodarConta(kommo: PortaKommo, ctx: ContextoDaRodada): Prom
         }
         const telefones = await kommo.telefonesDoContato(i.contatoId);
         const chaves = [...new Set(telefones.map(chaveFone).filter((k): k is string => !!k))];
+        resumo.avaliados++; // cada lead que custou chamada ao Kommo conta no teto, inclusive o adiado
         if (chaves.some((k) => telefonesDaRodada.has(k))) {
           // outro lead do MESMO telefone acabou de ser tratado nesta rodada: a busca do Kommo pode não ter visto o cartão novo ainda
           resumo.adiados++;
           continue;
         }
-        resumo.avaliados++;
 
         // 2. quem mais tem este telefone: a busca do Kommo é difusa, então cada contato devolvido é CONFERIDO pelo telefone
         const cartaoIds = new Set<number>();
         let buscaCheia = false;
         for (const k of chaves) {
-          const achados = await kommo.buscarContatos(k, 50);
-          if (achados === null) throw new RodadaEncerrada('a busca por telefone falhou: o lead fica na caixa (não dá para dizer "sem cartão")');
+          const achados = await kommo.buscarContatosPorTelefone(k, 50); // erro LANÇA: busca que falha nunca vira "sem cartão"
           if (achados.length >= 50) buscaCheia = true;
           for (const c of achados) {
             if (!c.telefones.some((t) => telefones.some((meu) => mesmoTelefone(t, meu)))) continue;
@@ -415,13 +414,6 @@ export async function rodarConta(kommo: PortaKommo, ctx: ContextoDaRodada): Prom
         permanentesSeguidos = 0;
         await pausa();
       } catch (err) {
-        if (err instanceof RodadaEncerrada) {
-          resumo.erros++;
-          visto(VISTO_FALHA_MS);
-          memoria.bloqueadaAte = Date.now() + DESCANSO_CURTO_MS;
-          resumo.encerrouCedo = err.message;
-          return resumo;
-        }
         const classe = classeDoErro(err);
         if (classe === 'ja-resolvido' && fase === 'ler') {
           // 404 ao ler o contato: contato apagado ou unido. Não é "alguém tratou": o lead continua na caixa, sem como ser avaliado
@@ -444,6 +436,12 @@ export async function rodarConta(kommo: PortaKommo, ctx: ContextoDaRodada): Prom
           return resumo;
         }
         visto(6 * 60 * 60_000); // não bate no mesmo lead de 3 em 3 minutos por um erro que não passa
+        if (fase === 'ler') {
+          // 400/401/403 numa LEITURA (contato, busca, cartões): o token não tem o escopo — vale para a conta toda, não para este lead
+          memoria.bloqueadaAte = Date.now() + BLOQUEIO_MS;
+          resumo.encerrouCedo = 'o Kommo recusou uma leitura (403: token sem escopo de contatos?): a conta descansa por 1 hora';
+          return resumo;
+        }
         if (++permanentesSeguidos >= ERROS_PERMANENTES_QUE_ENCERRAM) {
           memoria.bloqueadaAte = Date.now() + BLOQUEIO_MS;
           resumo.encerrouCedo = 'três erros seguidos que não passam sozinhos (token sem direito?): a conta descansa por 1 hora';

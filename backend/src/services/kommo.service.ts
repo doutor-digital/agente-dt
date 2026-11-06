@@ -1244,6 +1244,43 @@ export class KommoClient {
   }
 
   /**
+   * Contatos que casam com um texto (telefone), com os leads deles — como `buscarContatos`, mas o erro do Kommo LANÇA em vez de
+   * virar `null` (quem decide "sem cartão" precisa do status: 403 é token sem escopo e não passa em 5 minutos). 204 = `[]`.
+   */
+  async buscarContatosPorTelefone(
+    texto: string,
+    limite = 50,
+  ): Promise<Array<{ id: number; telefones: string[]; leadIds: number[] }>> {
+    const termo = texto.trim();
+    if (!termo) return [];
+    try {
+      const { data, status } = await this.http.get<{
+        _embedded?: {
+          contacts?: Array<{
+            id?: number;
+            custom_fields_values?: Array<{ field_code?: string; values?: Array<{ value?: unknown }> }> | null;
+            _embedded?: { leads?: Array<{ id?: number }> };
+          }>;
+        };
+      }>('/contacts', { params: { query: termo, limit: Math.min(50, Math.max(1, limite)), with: 'leads' } });
+      if (status === 204) return [];
+      return (data?._embedded?.contacts ?? []).flatMap((c) => {
+        if (typeof c.id !== 'number') return [];
+        const campo = c.custom_fields_values?.find((f) => f.field_code === 'PHONE');
+        return [
+          {
+            id: c.id,
+            telefones: (campo?.values ?? []).map((v) => (typeof v.value === 'string' ? v.value.trim() : '')).filter(Boolean),
+            leadIds: (c._embedded?.leads ?? []).map((l) => l.id).filter((id): id is number => typeof id === 'number'),
+          },
+        ];
+      });
+    } catch (err) {
+      wrapAxiosError(err, `buscarContatosPorTelefone(${termo})`);
+    }
+  }
+
+  /**
    * Vincula o lead de entrada (chat) a um cartão que já existe: o mesmo botão "vincular" da tela. A conversa passa a cair
    * no cartão e o lead de entrada some. NÃO muda a etapa do cartão, NÃO cria cartão, NÃO une os contatos. Só chats; só admin.
    * Erro do Kommo LANÇA (o chamador decide se tenta de novo).
