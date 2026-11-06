@@ -18,6 +18,7 @@ import {
   type ModelosV2,
   type Decisao,
 } from './etiquetas-auto.js';
+import { estadoDoExLead, nuncaAgendou } from './rotina-exlead-nunca.js';
 
 /**
  * Varre as unidades com "Etiquetas ▶ automáticas" ligada ou em "só no papel" e aplica as regras de
@@ -104,7 +105,7 @@ async function ultimasConversas(unitId: string, leadIds: number[]): Promise<Map<
  * conversa de hoje não aparece no cartão perdido. Antes de reativar, olha os outros cartões do
  * contato: cartão aberto depois da perda, ou conversa nos últimos 30 dias, cancela.
  */
-async function voltouEmOutroCartao(
+export async function voltouEmOutroCartao(
   unitId: string,
   kommo: KommoClient,
   lead: KommoLead,
@@ -132,7 +133,7 @@ const SEM_V2: ModelosV2 = { boasVindas: false, retorno: false, reativacao: false
 const modelosCache = new Map<string, { em: number; v2: ModelosV2 }>();
 
 /** Quais `_v2` a unidade tem aprovadas. Falha de leitura NÃO fica no cache: tenta de novo na próxima. */
-async function v2DaUnidade(unit: Unit, kommo: KommoClient): Promise<ModelosV2> {
+export async function v2DaUnidade(unit: Unit, kommo: KommoClient): Promise<ModelosV2> {
   const c = modelosCache.get(unit.id);
   if (c && Date.now() - c.em < MODELOS_VALIDADE_MS) return c.v2;
   try {
@@ -144,6 +145,31 @@ async function v2DaUnidade(unit: Unit, kommo: KommoClient): Promise<ModelosV2> {
     logger.warn({ err: String(err), unit: unit.slug }, 'etiquetas: não li os modelos — segue valendo o modelo original');
     return SEM_V2;
   }
+}
+
+/**
+ * A Rotina «ex-lead» absorve a Reativação de quem NUNCA agendou: devolve «pula» no lugar de «coloca» para esse cartão. Quem já
+ * consultou (ex-paciente) segue aqui. Franquia que não responde = pula também ("caiu" nunca vira "pode pôr"); a janela de 2 dias
+ * da Reativação deixa a próxima varredura tentar de novo.
+ */
+export async function deixarOExLeadParaARotina(
+  unit: Unit,
+  lead: KommoLead,
+  d: Decisao,
+  nunca: typeof nuncaAgendou = nuncaAgendou,
+  /** o paciente escreveu alguma vez no último ano? A rotina só cobre quem conversou (sem mensagem dele não há «dias sem resposta») */
+  conversou: (lead: KommoLead) => Promise<boolean> = async () => true,
+): Promise<Decisao> {
+  if (d.tipo !== 'coloca') return d;
+  const resposta = await nunca(unit, lead).catch((err) => {
+    logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id }, 'etiquetas: não confirmei na franquia se é ex-lead — não pus a Reativação');
+    return null;
+  });
+  if (resposta === false) return d;
+  // nunca agendou, mas também nunca escreveu (lead de campanha, carga): a rotina não alcança, então a Reativação continua daqui
+  if (resposta === true && !(await conversou(lead).catch(() => false))) return d;
+  const motivo = resposta === null ? 'não consegui conferir a franquia agora — tenta na próxima' : 'nunca agendou: quem cuida é a Rotina diária «ex-lead»';
+  return { tipo: 'pula', etiqueta: d.etiqueta, chave: d.chave, motivo };
 }
 
 async function decisoesDaUnidade(unit: Unit, kommo: KommoClient): Promise<Array<{ lead: KommoLead; d: Decisao }>> {
@@ -181,8 +207,17 @@ async function decisoesDaUnidade(unit: Unit, kommo: KommoClient): Promise<Array<
     statusId: 143,
   });
   const conversas = await ultimasConversas(unit.id, perdidos.leads.map((l) => l.id));
+  // A Rotina «ex-lead» (rotina-robos-worker.ts) ABSORVE a Reativação de quem nunca agendou: onde ela está LIGADA, esta
+  // regra só segue com o ex-paciente. Em «só no papel» a rotina não escreve, então aqui nada muda (sem buraco no meio).
+  const absorvida = estadoDoExLead(unit.slug) === 'ligado';
   for (const l of perdidos.leads) {
-    const d = decidirReativacao(l, agora, conversas.get(l.id) ?? null, v2.reativacao);
+    let d = decidirReativacao(l, agora, conversas.get(l.id) ?? null, v2.reativacao);
+    if (d && absorvida) {
+      d = await deixarOExLeadParaARotina(unit, l, d, nuncaAgendou, async (lead) => {
+        const contato = (lead._embedded?.contacts ?? []).find((c) => c.is_main)?.id ?? lead._embedded?.contacts?.[0]?.id;
+        return contato !== undefined && (await kommo.contatoEscreveuDesde(contato, agora - 365 * DIA_S));
+      });
+    }
     if (d?.tipo === 'coloca') {
       const motivo = await voltouEmOutroCartao(unit.id, kommo, l, l.closed_at ?? 0, agora);
       if (motivo) {

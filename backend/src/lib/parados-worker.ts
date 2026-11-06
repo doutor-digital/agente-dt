@@ -198,6 +198,8 @@ export interface NaFranquia {
   consultaFutura: boolean;
   emAndamento: boolean;
   finalizado: boolean;
+  /** a franquia tem ALGUM agendamento ou tratamento deste paciente (qualquer data, qualquer situação): "nunca agendou" = false */
+  temHistorico?: boolean;
 }
 
 /**
@@ -236,6 +238,7 @@ async function franquiaDoIdClient(unit: Unit, idClient: number, agoraEpoch: numb
     consultaFutura: temConsultaFutura(schedules, agoraEpoch),
     emAndamento: treatments.some((t) => t.idStatus === TRATAMENTO_EM_ANDAMENTO),
     finalizado: treatments.some((t) => tratamentoFinalizado({ idStatus: t.idStatus, statusName: t.statusName })),
+    temHistorico: schedules.length > 0 || treatments.length > 0,
   };
 }
 
