@@ -481,7 +481,7 @@ export async function montarPrefixoAnthropic(unit: Unit, recorder: TraceRecorder
   } catch {
     kommoClient = null;
   }
-  const leadFieldRules = await listEnabledLeadFieldRules(unit.id);
+  const leadFieldRules = await listEnabledLeadFieldRules(unit.id, unit.slug);
   const allTools = kommoClient
     ? buildTools({
         recorder,
@@ -552,7 +552,7 @@ export async function buildAgentGraph(
     logger.warn({ err, unit: unit.slug }, 'Unit sem credenciais Kommo — tools desabilitadas');
   }
 
-  const leadFieldRules = await listEnabledLeadFieldRules(unit.id);
+  const leadFieldRules = await listEnabledLeadFieldRules(unit.id, unit.slug);
 
   const allTools = kommoClient
     ? buildTools({

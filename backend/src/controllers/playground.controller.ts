@@ -368,7 +368,7 @@ operador revisar.`;
   if (lastUser) {
     timeline.push({ kind: 'user_message', ts: Date.now(), content: lastUser.content });
   }
-  const leadFieldRules = await listEnabledLeadFieldRules(unit.id);
+  const leadFieldRules = await listEnabledLeadFieldRules(unit.id, unit.slug);
   const tools = buildSandboxTools({
     leadFieldRules,
     tz: fusoDaUnidade(unit),

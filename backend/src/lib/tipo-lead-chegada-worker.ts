@@ -44,8 +44,7 @@ import {
   type TipoDeLead,
 } from './tipo-lead-chegada.js';
 import { agendarIndice } from './franquia-indice-telefones.js';
-import { algumaChaveAtiva, contatoPrincipal } from './renomear-lead-worker.js';
-import { valorDoCampo } from './unidade-no-cartao-worker.js';
+import { algumaChaveAtiva, contatoPrincipal, valorDoCampo } from './kommo-lead-util.js';
 import { PREFIXO_PACIENTE_EXISTENTE } from '../services/paciente-existente.js';
 
 const SWEEP_MS = 3 * 60_000;
@@ -75,6 +74,8 @@ export interface Resumo {
   adiados: number;
   semOpcao: number;
   emLote: number;
+  /** a prova era a franquia mas o paciente é nosso (Sofia/widget): ficou para o campos-sdr */
+  vinculoNosso: number;
   erros: number;
 }
 
@@ -87,8 +88,10 @@ export interface DepsDoTipo {
   estadoDe(slug: string): Estado;
   donoDoCartao(contaUnit: Unit, lead: KommoLead): Promise<DonoDoCartao>;
   /**
-   * O paciente deste cartão (ou a consulta) foi criado por NÓS — a Sofia ao agendar, o widget "só cadastrar": a busca na
-   * franquia o acharia e isso não é "já existia". Daí em diante quem decide é o `campos-sdr`. Lança se o banco falhar.
+   * O paciente deste cartão (ou a consulta) foi criado por NÓS — a Sofia ao agendar, o widget "só cadastrar", o espelhamento com
+   * `spine_sync_patients`. Só pesa quando a PROVA de Resgate é a franquia: ela pode estar vendo o que nós mesmos criamos
+   * (a data de criação já separa a maioria dos casos; isto é o cinto de segurança). Daí o cartão fica com o `campos-sdr`.
+   * Lança se o banco falhar.
    */
   pacienteCriadoPorNos(unitId: string, leadId: number): Promise<boolean>;
   franquiaConhece(unit: Unit, e: { titulo: string; nomeDoContato: string | null; telefone: string | null; chegadaEpoch: number | null }): Promise<RespostaDaFranquia>;
@@ -121,6 +124,8 @@ interface Decidido {
 const decididos = new Map<string, Decidido>();
 const tentativas = new Map<string, { n: number; proxima: number }>();
 const anunciados = new Set<string>();
+/** Cartões em que a prova foi a franquia mas o paciente é NOSSO (Sofia/widget): ficam para o campos-sdr, sem nova busca. */
+const daParaOCamposSdr = new Set<string>();
 const avisados = new Set<string>();
 
 /** Só para teste. */
@@ -129,6 +134,26 @@ export function _limparParaTeste(): void {
   tentativas.clear();
   anunciados.clear();
   avisados.clear();
+  daParaOCamposSdr.clear();
+  camposEmCache.clear();
+}
+
+function paraOCamposSdr(chave: string, resumo: Resumo): void {
+  aparar(daParaOCamposSdr);
+  daParaOCamposSdr.add(chave);
+  resumo.adiados++;
+  resumo.vinculoNosso++;
+}
+
+/** Os campos da conta mudam raramente: uma leitura a cada 30 min por conta, não uma a cada varredura de 3 min. */
+const camposEmCache = new Map<string, { em: number; campos: Awaited<ReturnType<KommoDoTipo['listLeadCustomFieldsTyped']>> }>();
+const CAMPOS_VALEM_S = 30 * 60;
+async function camposDaConta(contaId: string, kommo: KommoDoTipo, agora: number) {
+  const c = camposEmCache.get(contaId);
+  if (c && agora - c.em < CAMPOS_VALEM_S) return c.campos;
+  const campos = await kommo.listLeadCustomFieldsTyped();
+  camposEmCache.set(contaId, { em: agora, campos });
+  return campos;
 }
 
 function aparar(m: { size: number; clear(): void }): void {
@@ -172,12 +197,18 @@ export async function tipoNaChegadaConta(ctx: ContextoDaConta): Promise<Resumo |
   // chave em seco ou ligada (as outras nunca gastam uma chamada da franquia por causa desta automação).
   for (const u of ctx.unidadesDaConta ?? [unit]) if (deps.estadoDe(u.slug) !== 'desligado') deps.garantirIndice(u);
 
-  const { leads, truncado } = await kommo.listLeadsNaJanela('created_at', agora - JANELA_S, agora - IDADE_MINIMA_S, MAX_PAGINAS, true);
+  // Lê até AGORA (não só os com 3 min de vida): a detecção de lote precisa ver a rajada inteira, inclusive os cartões mais novos.
+  const { leads, truncado } = await kommo.listLeadsNaJanela('created_at', agora - JANELA_S, agora, MAX_PAGINAS, true);
   if (truncado) logger.warn({ unit: unit.slug, leads: leads.length }, `${ID}: lista de cartões novos cortada — trato os mais recentes e o resto fica para quem agendar (campos-sdr)`);
-  const candidatos = leads.filter((l) => !FECHADOS.has(l.status_id)).sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0) || a.id - b.id);
+  // Importação em massa (carga da franquia, planilha) cria centenas de cartões "novos" de uma vez: não é chegada de lead. A contagem
+  // vê TODOS os cartões da janela (inclusive os já preenchidos e os recém-criados), senão uma rajada parcial passa abaixo do limite.
+  const emLote = cartoesCriadosEmLote(leads);
+  const candidatos = leads
+    .filter((l) => !FECHADOS.has(l.status_id) && (l.created_at ?? 0) <= agora - IDADE_MINIMA_S)
+    .sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0) || a.id - b.id);
   if (candidatos.length === 0) return null;
 
-  const campos = await kommo.listLeadCustomFieldsTyped();
+  const campos = await camposDaConta(unit.id, kommo, agora);
   const campo = acharCampo(campos, CAMPO_TIPO_LEAD, true);
   if (!campo) {
     avisarUmaVez(unit.slug, `a conta não tem o campo "${CAMPO_TIPO_LEAD}" (ou tem dois com esse nome)`);
@@ -190,15 +221,13 @@ export async function tipoNaChegadaConta(ctx: ContextoDaConta): Promise<Resumo |
   }
   const campoPrimeiro = acharCampo(campos, CAMPO_PRIMEIRO_CONTATO);
 
-  const resumo: Resumo = { candidatos: 0, gravados: 0, simulados: 0, desligados: 0, jaPreenchidos: 0, semUnidade: 0, adiados: 0, semOpcao: 0, emLote: 0, erros: 0 };
+  const resumo: Resumo = { candidatos: 0, gravados: 0, simulados: 0, desligados: 0, jaPreenchidos: 0, semUnidade: 0, adiados: 0, semOpcao: 0, emLote: 0, vinculoNosso: 0, erros: 0 };
   // vazios de verdade: preenchido (qualquer valor, inclusive "Transferido de outra unidade") não é tocado
   const vazios = candidatos.filter((l) => {
     if (valorDoCampo(l, campo.id) === null) return true;
     resumo.jaPreenchidos++;
     return false;
   });
-  // Importação em massa (carga da franquia, planilha) cria centenas de cartões "novos" de uma vez: não é chegada de lead.
-  const emLote = cartoesCriadosEmLote(vazios);
   const doDia = vazios.filter((l) => !emLote.has(l.id));
   resumo.emLote = vazios.length - doDia.length;
   if (resumo.emLote > 0) avisarUmaVez(unit.slug, `${resumo.emLote} cartões criados em lote (importação) ficaram de fora — o campos-sdr os alcança no agendamento`);
@@ -247,6 +276,10 @@ export async function tipoNaChegadaConta(ctx: ContextoDaConta): Promise<Resumo |
   for (const alvo of alvos) {
     const { lead, donoUnit, estado, chave } = alvo;
 
+    if (daParaOCamposSdr.has(chave)) {
+      resumo.adiados++;
+      continue;
+    }
     let decisao: Decidido | null | undefined = decididos.get(chave);
     if (!decisao) {
       const t = tentativas.get(chave);
@@ -258,14 +291,13 @@ export async function tipoNaChegadaConta(ctx: ContextoDaConta): Promise<Resumo |
         resumo.adiados++;
         continue;
       }
-      if (await criadoPorNos(alvo)) {
-        resumo.adiados++;
-        continue;
-      }
       avaliacoes++;
       decisao = await avaliar({ kommo, deps, unit: donoUnit, lead, contatos, campoPrimeiro, agora });
       // a Sofia pode ter cadastrado o paciente enquanto a franquia era consultada: reconfere ANTES de aceitar a prova da franquia
-      if (decisao?.viaFranquia && (await criadoPorNos(alvo))) decisao = null;
+      if (decisao?.viaFranquia && (await criadoPorNos(alvo))) {
+        paraOCamposSdr(chave, resumo);
+        continue;
+      }
       if (!decisao) {
         const n = (tentativas.get(chave)?.n ?? 0) + 1;
         aparar(tentativas);
@@ -305,7 +337,7 @@ export async function tipoNaChegadaConta(ctx: ContextoDaConta): Promise<Resumo |
       // decisão guardada de uma rodada anterior: a Sofia pode ter cadastrado o paciente desde então
       if (decisao.viaFranquia && (await criadoPorNos(alvo))) {
         decididos.delete(chave);
-        resumo.adiados++;
+        paraOCamposSdr(chave, resumo);
         continue;
       }
       // a SDR pode ter escolhido enquanto líamos: relê antes de gravar. Vale o que já estiver lá.

@@ -326,6 +326,8 @@ export interface SpineClient {
   idClient: number | null;
   name: string | null;
   whatsapp: string | null;
+  /** quando foi cadastrado lá (ISO, UTC), se a franquia disse */
+  created?: string;
 }
 
 export async function searchClients(
@@ -337,12 +339,13 @@ export async function searchClients(
   if (!http) return { ok: false, error: 'unidade sem token da API Spine' };
   try {
     const { data } = await http.post<{
-      data?: { data?: Array<{ idClient?: number; name?: string; whatsapp?: string }> };
+      data?: { data?: Array<{ idClient?: number; name?: string; whatsapp?: string; created?: string }> };
     }>('/api/clients/search', { name, pagination: { page: 1, rowsPerPage: Math.min(100, Math.max(1, rowsPerPage)) } });
     const clients = (data?.data?.data ?? []).map((c) => ({
       idClient: c.idClient ?? null,
       name: c.name ?? null,
       whatsapp: c.whatsapp ?? null,
+      ...(typeof c.created === 'string' && c.created ? { created: c.created } : {}),
     }));
     return { ok: true, data: { clients } };
   } catch (err) {

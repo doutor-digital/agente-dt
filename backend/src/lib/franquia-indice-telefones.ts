@@ -25,7 +25,8 @@
  *  - pausa entre chamadas e teto de chamadas por carga: a franquia não pode sentir. Uma carga por vez no processo;
  *  - nunca roda para unidade que não tem a automação ligada ou em seco (`agendarIndice` só é chamado por quem está ativo).
  */
-import type { Unit } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
+import { Prisma, type Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { chaveTelefone } from './franquia-sync.js';
@@ -80,7 +81,7 @@ export interface StatusDoIndice {
 export interface Armazem {
   lerStatus(unitId: string): Promise<StatusDoIndice | null>;
   salvarStatus(unitId: string, patch: Partial<StatusDoIndice> & { pacientes?: number; leads?: number; erro?: string | null }): Promise<void>;
-  /** Grava as entradas NOVAS (chave+origem já existentes ficam como estão: a primeira lida é a mais antiga). */
+  /** Grava as entradas; chave+origem já existente guarda a data mais antiga (e uma linha sem data ganha a que chegar). */
   gravar(unitId: string, entradas: Entrada[]): Promise<number>;
   procurar(unitId: string, chave: string): Promise<Entrada[]>;
 }
@@ -96,15 +97,26 @@ export const armazemPadrao: Armazem = {
     await prisma.franquiaIndiceStatus.upsert({ where: { unitId }, create: { unitId, ...patch }, update: patch });
   },
   async gravar(unitId, entradas) {
-    let novos = 0;
-    for (let i = 0; i < entradas.length; i += 1000) {
-      const r = await prisma.franquiaTelefone.createMany({
-        data: entradas.slice(i, i + 1000).map((e) => ({ unitId, chave: e.chave, origem: e.origem, idNaFranquia: e.id, criadoNaFranquia: e.criado })),
-        skipDuplicates: true,
-      });
-      novos += r.count;
+    let gravadas = 0;
+    // Upsert que guarda a data MAIS ANTIGA: `LEAST` ignora nulo (uma linha sem data ganha a data que chegar depois, e uma data
+    // nunca é trocada por uma mais nova nem por "sem data"). A data vai como texto ISO em UTC e é lida como `timestamp` (sem fuso),
+    // o mesmo que o Prisma grava em `TIMESTAMP(3)`.
+    for (let i = 0; i < entradas.length; i += 500) {
+      const lote = entradas.slice(i, i + 500);
+      const valores = lote.map(
+        (e) => Prisma.sql`(${randomUUID()}, ${unitId}, ${e.chave}, ${e.origem}, ${e.id}::integer, ${e.criado ? e.criado.toISOString() : null}::timestamp, now())`,
+      );
+      gravadas += await prisma.$executeRaw`
+        INSERT INTO "franquia_telefones" ("id", "unit_id", "chave", "origem", "id_na_franquia", "criado_na_franquia", "atualizado_em")
+        VALUES ${Prisma.join(valores)}
+        ON CONFLICT ("unit_id", "chave", "origem") DO UPDATE SET
+          "id_na_franquia" = CASE
+            WHEN "franquia_telefones"."criado_na_franquia" IS NULL OR EXCLUDED."criado_na_franquia" < "franquia_telefones"."criado_na_franquia"
+              THEN EXCLUDED."id_na_franquia" ELSE "franquia_telefones"."id_na_franquia" END,
+          "criado_na_franquia" = LEAST("franquia_telefones"."criado_na_franquia", EXCLUDED."criado_na_franquia"),
+          "atualizado_em" = now()`;
     }
-    return novos;
+    return gravadas;
   },
   async procurar(unitId, chave) {
     const linhas = await prisma.franquiaTelefone.findMany({ where: { unitId, chave } });
@@ -159,6 +171,16 @@ export function janelasDeLeads(desde: string, ate: string): Array<{ de: string; 
 }
 
 // ── a carga ────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Quantas páginas a franquia tem. `totalPages`, ou o `total` dividido; sem os dois, só se a página veio CURTA (menos de 100
+ * itens = a única). Página cheia sem total é "não sei se li tudo": null, e a carga falha em vez de marcar completo.
+ */
+export function totalDePaginas(d: SpinePaginaTelefones): number | null {
+  if (d.totalPages !== null) return d.totalPages;
+  if (d.total !== null) return Math.max(1, Math.ceil(d.total / POR_PAGINA));
+  return d.itens.length < POR_PAGINA ? 1 : null;
+}
 
 export type BuscarPagina = (e: { tipo: 'paciente' } | { tipo: 'lead'; initialDate: string; endDate: string }, page: number) => Promise<SpineResult<SpinePaginaTelefones>>;
 
@@ -218,7 +240,7 @@ export async function carregarIndice(unit: Pick<Unit, 'id' | 'slug'>, deps: Deps
     // ── pacientes ──
     const primeira = await pagina({ tipo: 'paciente' }, 1);
     totalPacientes = primeira.total;
-    const totalPaginas = primeira.totalPages ?? (primeira.total !== null ? Math.max(1, Math.ceil(primeira.total / POR_PAGINA)) : null);
+    const totalPaginas = totalDePaginas(primeira);
     if (totalPaginas === null) throw new Parar('erro', 'a franquia não informou o total de páginas de pacientes — não dá para saber se li tudo');
 
     let comecaEm = 1;
@@ -246,7 +268,8 @@ export async function carregarIndice(unit: Pick<Unit, 'id' | 'slug'>, deps: Deps
     for (const janela of janelasDeLeads(desde, hoje)) {
       const e = { tipo: 'lead' as const, initialDate: janela.de, endDate: janela.ate };
       const primeiraJ = await pagina(e, 1);
-      const totalJ = primeiraJ.totalPages ?? (primeiraJ.total !== null ? Math.max(1, Math.ceil(primeiraJ.total / POR_PAGINA)) : 1);
+      const totalJ = totalDePaginas(primeiraJ);
+      if (totalJ === null) throw new Parar('erro', `a franquia não informou o total de páginas de leads (${janela.de}..${janela.ate}) — não dá para saber se li tudo`);
       if (totalJ > MAX_PAGINAS_POR_JANELA) {
         await gravarEntradas(unit.id, armazem, primeiraJ.itens, 'lead').then((n) => (leads += n));
         throw new Parar('cortado', `a janela de leads ${janela.de}..${janela.ate} tem ${totalJ} páginas (teto ${MAX_PAGINAS_POR_JANELA})`);

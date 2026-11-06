@@ -29,6 +29,7 @@ import {
   indiceFresco,
   janelasDeLeads,
   precisaCarregar,
+  totalDePaginas,
   type Armazem,
   type BuscarPagina,
   type Entrada,
@@ -57,10 +58,12 @@ function armazemEmMemoria() {
       let n = 0;
       for (const e of entradas) {
         const k = `${e.chave}|${e.origem}`;
-        if (!linhas.has(k)) {
+        const atual = linhas.get(k);
+        // o mesmo contrato do SQL de verdade: a data MAIS ANTIGA vence e "sem data" ganha a que chegar
+        if (!atual) {
           linhas.set(k, e);
           n++;
-        }
+        } else if (e.criado && (!atual.criado || e.criado < atual.criado)) linhas.set(k, e);
       }
       return n;
     },
@@ -220,9 +223,10 @@ test('erro da franquia no meio: não marca completo, guarda o que já leu e regi
   assert.equal((await a.armazem.procurar('u1', '99991111')).length, 1, 'a página 1 ficou gravada (idempotente)');
 });
 
-test('franquia que não informa o total de páginas: não dá para saber se leu tudo → erro', async () => {
+test('franquia que não informa o total de páginas e devolve página CHEIA: não dá para saber se leu tudo → erro', async () => {
   const a = armazemEmMemoria();
-  const buscar: BuscarPagina = async (e) => (e.tipo === 'paciente' ? ok([item(1, '+5547999991111')], null, null) : ok([], 1, 0));
+  const cheia = Array.from({ length: 100 }, (_, i) => item(i + 1, `+55479999${String(1000 + i)}`));
+  const buscar: BuscarPagina = async (e) => (e.tipo === 'paciente' ? ok(cheia, null, null) : ok([], 1, 0));
   const r = await carregarIndice(unit, depsDe(a, buscar).deps);
   assert.equal(r.resultado, 'erro');
   assert.equal(a.status()?.completoEm ?? null, null);
@@ -300,4 +304,33 @@ test('quando carregar: nunca carregou → sim; recente → não; 20 h → sim; e
   assert.equal(precisaCarregar({ ...velho, resultado: 'cortado', tentativaEm: new Date(T0 - 5 * H) }, T0), false);
   assert.equal(precisaCarregar({ ...velho, resultado: 'cortado', tentativaEm: new Date(T0 - ESPERA_APOS_CORTE_MS - 1) }, T0), true);
   assert.equal(precisaCarregar({ ...base, completoEm: null, tentativaEm: null, resultado: null }, T0), true);
+});
+
+test('total de páginas: o informado; o total dividido; página curta = a única; página cheia sem total = não sei', () => {
+  const pg = (n: number, totalPages: number | null, total: number | null) => ({ itens: Array.from({ length: n }, (_, i) => item(i + 1, '+5547999991111')), totalPages, total });
+  assert.equal(totalDePaginas(pg(100, 7, 650)), 7);
+  assert.equal(totalDePaginas(pg(100, null, 650)), 7);
+  assert.equal(totalDePaginas(pg(40, null, null)), 1);
+  assert.equal(totalDePaginas(pg(0, null, null)), 1);
+  assert.equal(totalDePaginas(pg(100, null, null)), null);
+});
+
+test('leads: janela cheia sem o total de páginas NÃO é tratada como uma página só — a carga falha e não fica completa', async () => {
+  const a = armazemEmMemoria();
+  const cheia = Array.from({ length: 100 }, (_, i) => item(i + 1, `+55479999${String(1000 + i)}`));
+  const buscar: BuscarPagina = async (e) => (e.tipo === 'paciente' ? ok([item(1, '+5547999991111')]) : ok(cheia, null, null));
+  const r = await carregarIndice(unit, depsDe(a, buscar).deps);
+  assert.equal(r.resultado, 'erro');
+  assert.equal(a.status()?.completoEm ?? null, null);
+});
+
+test('regravar: a data mais antiga vence e uma linha sem data ganha a que chegar depois', async () => {
+  const a = armazemEmMemoria();
+  await a.armazem.gravar('u1', [{ chave: '99991111', origem: 'paciente', id: 1, criado: null }]);
+  await a.armazem.gravar('u1', [{ chave: '99991111', origem: 'paciente', id: 2, criado: new Date('2025-05-01T00:00:00Z') }]);
+  await a.armazem.gravar('u1', [{ chave: '99991111', origem: 'paciente', id: 3, criado: new Date('2025-09-01T00:00:00Z') }]);
+  await a.armazem.gravar('u1', [{ chave: '99991111', origem: 'paciente', id: 4, criado: new Date('2024-01-01T00:00:00Z') }]);
+  const [e] = await a.armazem.procurar('u1', '99991111');
+  assert.equal(e!.id, 4);
+  assert.equal(e!.criado?.toISOString(), '2024-01-01T00:00:00.000Z');
 });

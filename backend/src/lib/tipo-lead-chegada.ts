@@ -123,6 +123,17 @@ export interface RespostaDaFranquia {
   motivo: string;
   /** a franquia (ou o banco do índice) falhou — diferente de "não deu para buscar" (sem nome, nome comum) */
   falhou?: true;
+  /** achou cadastro com este telefone, mas sem data de criação: não prova nem desmente */
+  semData?: true;
+}
+
+/** Cadastro só conta como "já existia" se nasceu antes do cartão, com folga para relógio diferente entre a franquia e o Kommo. */
+export const FOLGA_DA_CHEGADA_MS = 2 * 60_000;
+
+export function foiAntes(criado: Date | string | null | undefined, chegadaMs: number | null): boolean {
+  if (!criado || chegadaMs === null) return false;
+  const ms = criado instanceof Date ? criado.getTime() : Date.parse(criado);
+  return Number.isFinite(ms) && ms < chegadaMs - FOLGA_DA_CHEGADA_MS;
 }
 
 export type BuscarPaciente = (unit: Unit, nome: string, titulo: string, fone: string, opcoes?: { soPrimeiroNome?: boolean }) => Promise<Achado>;
@@ -142,6 +153,7 @@ async function reforcoPorNome(
   unit: Unit,
   e: { titulo: string | null | undefined; nomeDoContato: string | null | undefined; telefone: string },
   buscar: BuscarPaciente,
+  chegadaMs: number | null,
 ): Promise<RespostaDaFranquia> {
   // "Lead 06/11/2026" / "Lead #123" é o título provisório, não nome: buscar "Lead" na franquia seria ruído.
   const tituloBruto = String(e.titulo ?? '');
@@ -162,11 +174,15 @@ async function reforcoPorNome(
   } catch (err) {
     return { resultado: 'desconhecido', falhou: true, motivo: `a franquia não respondeu (${String(err).slice(0, 120)})` };
   }
+  // Só vale cadastro ANTERIOR ao cartão: o paciente que a recepção, a Sofia ou o sincronizador criaram DEPOIS da chegada não é "já existia".
+  const anteriores = (achado.tipo === 'achou' ? [achado] : achado.tipo === 'ambiguo' ? achado.candidatos : []).filter((c) => foiAntes(c.created, chegadaMs));
+  const semData = (achado.tipo === 'achou' ? [achado] : achado.tipo === 'ambiguo' ? achado.candidatos : []).some((c) => !c.created);
   switch (achado.tipo) {
     case 'achou':
-      return { resultado: 'sim', motivo: `já cadastrada na franquia (idClient ${achado.idClient}, achada pelo nome e confirmada pelo telefone)` };
     case 'ambiguo':
-      return { resultado: 'sim', motivo: `já cadastrada na franquia (${achado.candidatos.length} cadastros com este telefone)` };
+      if (anteriores.length > 0) return { resultado: 'sim', motivo: `já cadastrada na franquia (idClient ${anteriores.map((c) => c.idClient).join(', ')}, achada pelo nome e confirmada pelo telefone)` };
+      if (semData) return { resultado: 'desconhecido', semData: true, motivo: 'a franquia tem um cadastro com este telefone mas sem data de criação — não dá para saber se é anterior ao cartão' };
+      return { resultado: 'nao', motivo: 'o cadastro com este telefone na franquia é posterior ao cartão (criado depois da chegada)' };
     case 'nao_achou':
       return { resultado: 'nao', motivo: 'a busca por nome não achou o telefone' };
     case 'inconclusivo':
@@ -214,7 +230,7 @@ export async function franquiaConhece(
         return false;
       }
       // sem a hora da chegada não dá para separar o que já existia do que nós acabamos de criar: não prova
-      return chegadaMs !== null && x.criado.getTime() < chegadaMs;
+      return foiAntes(x.criado, chegadaMs);
     });
     if (provas.length > 0) {
       const o = provas.map((x) => `${x.origem} ${x.id ?? '?'}`).join(', ');
@@ -223,7 +239,7 @@ export async function franquiaConhece(
   }
 
   // 2. reforço por nome: acha quem o índice ainda não tem
-  const porNome = await reforcoPorNome(unit as Unit, { ...e, telefone: fone }, deps.buscar ?? pacienteExistente);
+  const porNome = await reforcoPorNome(unit as Unit, { ...e, telefone: fone }, deps.buscar ?? pacienteExistente, chegadaMs);
   if (porNome.resultado === 'sim') return porNome;
 
   // 3. "não está em lugar nenhum" só com o índice inteiro e fresco
@@ -235,7 +251,7 @@ export async function franquiaConhece(
     };
   }
   if (semData) return { resultado: 'desconhecido', motivo: 'a franquia tem um cadastro com este telefone mas sem data de criação — não dá para saber se é anterior ao cartão' };
-  if (porNome.falhou) return { resultado: 'desconhecido', falhou: true, motivo: porNome.motivo };
+  if (porNome.falhou || porNome.semData) return { resultado: 'desconhecido', motivo: porNome.motivo };
   return { resultado: 'nao', motivo: `o telefone não está na franquia (nem paciente, nem lead; índice de ${indice.idadeHoras} h)` };
 }
 

@@ -369,12 +369,17 @@ test('uma falha de gravação não vira Cadastro nem trava: conta o erro e o car
   assert.equal(d.buscas.length, 1, 'a decisão ficou guardada: sem nova busca na franquia');
 });
 
-test('não conseguiu conferir o vínculo do cartão: adia, não decide às cegas', async () => {
-  const d = depsDe({ vinculoFalha: true });
+test('prova da franquia + não conseguiu conferir o vínculo do cartão: adia, não decide às cegas', async () => {
+  const d = depsDe({ vinculoFalha: true, franquia: async () => ({ resultado: 'sim', motivo: 'já cadastrada na franquia' }) });
   const r = await rodar({ cartoes: [{ id: 1 }], contatos: { 10: CONTATO } }, d);
   assert.equal(r.chamadas.gravacoes.length, 0);
-  assert.equal(d.buscas.length, 0);
   assert.equal(r.resumo?.adiados, 1);
+});
+
+test('"pessoa nova" (franquia não achou) não depende do vínculo: banco do vínculo fora não impede o Cadastro', async () => {
+  const d = depsDe({ vinculoFalha: true });
+  const r = await rodar({ cartoes: [{ id: 1 }], contatos: { 10: CONTATO } }, d);
+  assert.deepEqual(r.chamadas.gravacoes, [{ leadId: 1, valor: 'Cadastro' }]);
 });
 
 test('quem fica sem decisão é tentado de novo enquanto está na janela (espera cresce, não desiste)', async () => {
@@ -402,12 +407,22 @@ test('cartão fechado (ganho/perdido) não recebe tipo', async () => {
   assert.equal(d.buscas.length, 0);
 });
 
-test('cartão que já agendou fica com o campos-sdr; cartão perdido é ignorado; conta dividida sem unidade espera', async () => {
-  const agendou = depsDe({ jaAgendou: true });
-  const a = await rodar({ cartoes: [{ id: 1 }], contatos: { 10: CONTATO } }, agendou);
+test('paciente NOSSO (Sofia/widget) + franquia "sim": fica com o campos-sdr, sem nova busca; "nao" ainda grava Cadastro', async () => {
+  const nosso = depsDe({ jaAgendou: true, franquia: async () => ({ resultado: 'sim', motivo: 'já cadastrada na franquia' }) });
+  const m: Mundo = { cartoes: [{ id: 1 }], contatos: { 10: CONTATO } };
+  const a = await rodar(m, nosso);
   assert.equal(a.chamadas.gravacoes.length, 0);
-  assert.equal(agendou.buscas.length, 0);
+  assert.equal(a.resumo?.vinculoNosso, 1);
+  await rodar(m, nosso);
+  assert.equal(nosso.buscas.length, 1, 'não busca de novo: o cartão é do campos-sdr');
 
+  _limparParaTeste();
+  const novo = depsDe({ jaAgendou: true });
+  const b = await rodar({ cartoes: [{ id: 2 }], contatos: { 20: CONTATO } }, novo);
+  assert.deepEqual(b.chamadas.gravacoes, [{ leadId: 2, valor: 'Cadastro' }]);
+});
+
+test('cartão perdido é ignorado; conta dividida sem unidade espera', async () => {
   const perdido = depsDe({});
   const p = await rodar({ cartoes: [{ id: 2, status: 143 }], contatos: { 20: CONTATO } }, perdido);
   assert.equal(p.chamadas.gravacoes.length, 0);
@@ -527,9 +542,27 @@ test('cadastro com o telefone mas sem data: não prova Resgate e impede o Cadast
   assert.equal(r.resultado, 'desconhecido');
 });
 
-test('o reforço por nome acha quem o índice ainda não tem (cadastrado depois da carga) → sim', async () => {
-  const r = await franquiaConhece(unit, e0, { indice: indiceCom([]), buscar: buscarCom({ tipo: 'achou', idClient: 8, nome: 'Stefany Silva' }) });
-  assert.equal(r.resultado, 'sim');
+test('o reforço por nome acha quem o índice ainda não tem — só vale cadastro ANTERIOR ao cartão', async () => {
+  const antes = await franquiaConhece(unit, e0, { indice: indiceCom([]), buscar: buscarCom({ tipo: 'achou', idClient: 8, nome: 'Stefany Silva', created: ANTES.toISOString() }) });
+  assert.equal(antes.resultado, 'sim');
+  // recepção/Sofia cadastrou DEPOIS da chegada: não é "já existia" → pessoa nova
+  const depois = await franquiaConhece(unit, e0, { indice: indiceCom([]), buscar: buscarCom({ tipo: 'achou', idClient: 8, nome: 'Stefany Silva', created: DEPOIS.toISOString() }) });
+  assert.equal(depois.resultado, 'nao');
+  // sem data: não prova nem desmente → não grava
+  const semData = await franquiaConhece(unit, e0, { indice: indiceCom([]), buscar: buscarCom({ tipo: 'achou', idClient: 8, nome: 'Stefany Silva' }) });
+  assert.equal(semData.resultado, 'desconhecido');
+  // dois cadastros no telefone (mãe e filha): basta um anterior
+  const dois = await franquiaConhece(unit, e0, {
+    indice: indiceCom([]),
+    buscar: buscarCom({ tipo: 'ambiguo', candidatos: [{ idClient: 1, nome: 'A', created: DEPOIS.toISOString() }, { idClient: 2, nome: 'B', created: ANTES.toISOString() }] }),
+  });
+  assert.equal(dois.resultado, 'sim');
+});
+
+test('cadastro criado 1 minuto antes da chegada não conta (folga contra relógios diferentes)', async () => {
+  const quaseJuntos = new Date((AGORA - 60) * 1000);
+  const r = await franquiaConhece(unit, e0, { indice: indiceCom([leadDaFranquia(quaseJuntos)]), buscar: NINGUEM });
+  assert.equal(r.resultado, 'nao');
 });
 
 test('índice fresco, mas a franquia caiu no reforço por nome: não grava (nunca Cadastro por erro)', async () => {
@@ -647,18 +680,28 @@ test('importação em massa: nenhum cartão do lote é lido nem gravado', async 
   assert.equal(resumo?.emLote, LOTE_NO_MINUTO + 2);
 });
 
+test('lote visto por inteiro: cartões já preenchidos e os recém-criados contam para a detecção', async () => {
+  const d = depsDe({});
+  // 20 cartões no mesmo minuto: 6 já preenchidos pela SDR + 14 vazios (14 < 15 sozinhos); a rajada de 20 é importação
+  const cartoes: Cartao[] = Array.from({ length: 20 }, (_, i) => ({ id: i + 1, criadoHa: 600, tipo: i < 6 ? 'Cadastro' : null }));
+  const contatos = Object.fromEntries(cartoes.map((c) => [c.id * 10, CONTATO]));
+  const { chamadas, resumo } = await rodar({ cartoes, contatos }, d);
+  assert.equal(chamadas.gravacoes.length, 0);
+  assert.equal(resumo?.emLote, 14);
+});
+
 // ── corrida com o cadastro da Sofia (revisão do sênior) ────────────────────────────────────────
 
 test('a Sofia cadastrou o paciente DURANTE a consulta à franquia: a prova da franquia é descartada, nada é gravado', async () => {
   let conferencias = 0;
   const d = depsDe({ franquia: async () => ({ resultado: 'sim', motivo: 'já cadastrada na franquia' }) });
-  d.deps.pacienteCriadoPorNos = async () => ++conferencias >= 2; // 1ª (antes da busca): não; 2ª (depois): sim
+  d.deps.pacienteCriadoPorNos = async () => ++conferencias >= 1; // o vínculo aparece quando a franquia já respondeu
   const r = await rodar({ cartoes: [{ id: 1 }], contatos: { 10: CONTATO } }, d);
   assert.equal(r.chamadas.gravacoes.length, 0);
-  assert.equal(r.resumo?.adiados, 1);
+  assert.equal(r.resumo?.vinculoNosso, 1);
 });
 
-test('decisão guardada por franquia + Sofia cadastrou depois: reconfere ANTES de gravar e desiste', async () => {
+test('decisão guardada por franquia (seco) + Sofia cadastrou depois: reconfere ANTES de gravar e desiste', async () => {
   let criado = false;
   const d = depsDe({ estado: 'seco', franquia: async () => ({ resultado: 'sim', motivo: 'já cadastrada na franquia' }) });
   d.deps.pacienteCriadoPorNos = async () => criado;
@@ -668,6 +711,7 @@ test('decisão guardada por franquia + Sofia cadastrou depois: reconfere ANTES d
   d.deps.estadoDe = () => 'ligado';
   const r = await rodar(m, d);
   assert.equal(r.chamadas.gravacoes.length, 0);
+  assert.equal(r.resumo?.vinculoNosso, 1);
 });
 
 // ── Petrópolis × Caxias (revisão do sênior) ────────────────────────────────────────────────────

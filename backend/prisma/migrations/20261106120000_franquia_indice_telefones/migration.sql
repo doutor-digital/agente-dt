@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS "franquia_indice_status" (
     "leads" INTEGER NOT NULL DEFAULT 0,
     "resultado" TEXT,
     "erro" TEXT,
-    "atualizado_em" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "atualizado_em" TIMESTAMP(3) NOT NULL,
 
     CONSTRAINT "franquia_indice_status_pkey" PRIMARY KEY ("unit_id")
 );
