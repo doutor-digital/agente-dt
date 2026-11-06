@@ -26,6 +26,7 @@ import { ROTA_WEBHOOK_KOMMO, parserDoWebhookKommo } from './lib/parser-webhook-k
 import { startAgendamentoPerdidoWorker, stopAgendamentoPerdidoWorker } from './lib/agendamento-perdido-worker.js';
 import { startPrometeuSemMarcarWorker, stopPrometeuSemMarcarWorker } from './lib/prometeu-sem-marcar-worker.js';
 import { startEtiquetasAutoWorker, stopEtiquetasAutoWorker } from './lib/etiquetas-auto-worker.js';
+import { startRotinaExLeadWorker, stopRotinaExLeadWorker } from './lib/rotina-exlead-worker.js';
 import { startTaxaErroWorker, stopTaxaErroWorker } from './lib/taxa-erro-worker.js';
 import { startCardValidationWorker, stopCardValidationWorker } from './lib/card-validation-worker.js';
 import { startStaleReplyMonitor } from './lib/stale-reply-monitor.js';
@@ -220,6 +221,7 @@ async function main(): Promise<void> {
       startAgendamentoPerdidoWorker();
       startPrometeuSemMarcarWorker();
       startEtiquetasAutoWorker();
+      startRotinaExLeadWorker();
       startTaxaErroWorker();
       startCardValidationWorker();
       startResultadosWorker();
@@ -279,6 +281,7 @@ async function main(): Promise<void> {
       stopAgendamentoPerdidoWorker();
       stopPrometeuSemMarcarWorker();
       stopEtiquetasAutoWorker();
+      stopRotinaExLeadWorker();
       stopTaxaErroWorker();
       stopCardValidationWorker();
       stopResultadosWorker();

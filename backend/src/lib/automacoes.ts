@@ -334,13 +334,27 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/agendamento-perdido-worker.ts',
   },
   {
+    id: 'rotina-exlead',
+    chave: 'ROTINA_EXLEAD_SLUGS',
+    nome: 'Rotina diária: ex-lead que nunca agendou',
+    oQueFaz:
+      'Quem nunca teve consulta (nem no cartão nem na franquia) e hoje está em PERDIDO ou EM ESPERA recebe a ▶ Reativação 30 dias depois da última mensagem do paciente (ou da entrada em PERDIDO, o que for mais recente), a ▶ Reativação 2 aos 60 e a ▶ Reativação 3 aos 90.',
+    pegadinha:
+      'DIVIDE a ▶ Reativação com as Etiquetas ▶ automáticas pela MARCA, sem buraco: o etiquetas-auto continua pondo a Reativação de 30 d depois da perda, mas PULA a pessoa a quem esta rotina já deu algum degrau; e a Reativação que ele já pôs conta como o 1º degrau daqui (nada em dobro). O que a rotina não alcança (lista cortada, «Pausar IA», ◷ Retomar em, quem nunca escreveu) segue saindo do etiquetas-auto como sempre. É a mesma ▶ e o mesmo robô, então valem as MESMAS travas dele: sem a `_v2` do modelo, responsável vazio ou que não é gente segura o 1º toque; cartão que nasceu em PERDIDO (carga) e quem voltou em outro cartão não recebem. Nunca manda para motivo de perda encerrado — o do campo ⊘ OU o escolhido no diálogo NATIVO do Kommo (Outra cidade, Clicou por engano, Outra patologia, Plano de Saúde, Sem interesse, Bandeira vermelha, Assinou contrato…) —, NO_FOLLOW_UP, NAO_PERTURBAR, opt-out, CURRÍCULO, Fora do escopo. O 1º toque só vale enquanto o silêncio está entre 30 e 60 dias: o estoque mais velho não entra de uma vez (o teto do dia também o espalha). Em PERDIDO o relógio conta da última mensagem ou da perda; em EM ESPERA, da última mensagem ou da ENTRADA na etapa (a SDR que move para esperar uma ligação não dispara a Reativação horas depois). Depois do 1º degrau o relógio segue na última mensagem do paciente: só ela zera a régua, mudar de etapa não. Paciente que a franquia não conhece (vínculo, nome, telefone) conta como «nunca agendou». Degraus e teto são da PESSOA: dois cartões do mesmo contato não recebem dois modelos no mesmo dia. Prazos: rotina_exlead_d1..d3; degraus prontos: rotina_exlead_toques_prontos (padrão 1). Teto do dia somado com as outras réguas.',
+    risco: 'manda-mensagem',
+    temSeco: true,
+    exigeSecoAntes: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/rotina-exlead-worker.ts',
+  },
+  {
     id: 'etiquetas-auto',
     chave: 'ETIQUETAS_AUTO_SLUGS',
     nome: 'Etiquetas ▶ automáticas',
     oQueFaz:
       'Põe sozinho as etiquetas que a SDR punha à mão: ▶ Boas-vindas quando o cartão entra em GANHO, ▶ Confirmar retorno 24 h antes do retorno (RETORNO PÓS-TRATAMENTO) e ▶ Reativação depois de 30 dias em PERDIDO sem conversa. A etiqueta aciona o bot do Kommo, que manda a mensagem.',
     pegadinha:
-      'Só funciona se a etiqueta tiver gatilho no Kommo daquela unidade. Não põe se o modelo for sair com buraco (programa, próxima sessão ou responsável vazios — cada regra deixa de olhar esses campos quando a unidade tem a `_v2` do modelo dela aprovada: `…sdr_reativacao_lead_frio_v2` ("a equipe Doutor Digital"), `…sdr_boas_vindas_programa_v2` (sem programa nem data) e `…sdr_confirmacao_retorno_v2` (mostra a ◷ Data da Consulta); quem cria a v2 troca o modelo do bot no mesmo passo) nem pra quem pediu pra não receber — em "só no papel" isso aparece como "pularia" com o motivo. A Reativação só pega quem cruza os 30 dias agora: o estoque antigo de PERDIDO nunca entra de uma vez. A ▶ Retomada não está aqui: depende do robô da 3C. No Kommo dividido (Petrópolis + Caxias), só o cartão com a ⌂ Unidade de atendimento da unidade recebe etiqueta — o de outra unidade e o sem unidade ficam de fora (o robô da etiqueta mandaria o endereço e o Pix errados). Caxias ainda não recebe etiqueta nenhuma: espera os gatilhos com a condição de unidade e os robôs caxias_. Pra testar num cartão só: ligue e ponha os ids em pipelineIntents.etiquetas_teste_leads — o resto segue no papel.',
+      'Só funciona se a etiqueta tiver gatilho no Kommo daquela unidade. Não põe se o modelo for sair com buraco (programa, próxima sessão ou responsável vazios — cada regra deixa de olhar esses campos quando a unidade tem a `_v2` do modelo dela aprovada: `…sdr_reativacao_lead_frio_v2` ("a equipe Doutor Digital"), `…sdr_boas_vindas_programa_v2` (sem programa nem data) e `…sdr_confirmacao_retorno_v2` (mostra a ◷ Data da Consulta); quem cria a v2 troca o modelo do bot no mesmo passo) nem pra quem pediu pra não receber — em "só no papel" isso aparece como "pularia" com o motivo. A Reativação só pega quem cruza os 30 dias agora: o estoque antigo de PERDIDO nunca entra de uma vez. A Rotina «ex-lead» dá os degraus 2 e 3 da ▶ Reativação a quem nunca agendou; este robô pula a pessoa a quem ela já deu um degrau. A ▶ Retomada não está aqui: depende do robô da 3C (a Rotina diária «esquecidos por etapa» é outra coisa). No Kommo dividido (Petrópolis + Caxias), só o cartão com a ⌂ Unidade de atendimento da unidade recebe etiqueta — o de outra unidade e o sem unidade ficam de fora (o robô da etiqueta mandaria o endereço e o Pix errados). Caxias ainda não recebe etiqueta nenhuma: espera os gatilhos com a condição de unidade e os robôs caxias_. Pra testar num cartão só: ligue e ponha os ids em pipelineIntents.etiquetas_teste_leads — o resto segue no papel.',
     risco: 'manda-mensagem',
     temSeco: true,
     quandoVazio: 'desligado',

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { soDestaUnidade } from './etiquetas-auto-worker.js';
+import { pularSeARotinaJaCuidou, soDestaUnidade } from './etiquetas-auto-worker.js';
 import { grupoDe, type GrupoDoCrm, type MembroDoCrm } from './crm-compartilhado.js';
 import type { KommoLead } from '../services/kommo.service.js';
 
@@ -34,4 +34,25 @@ test('etiquetas no Kommo dividido: Petrópolis só etiqueta o cartão de Petróp
 test('etiquetas no Kommo de uma unidade só: nada muda (o campo nem é lido)', () => {
   const r = soDestaUnidade(null, 'u-imperatriz', QUATRO);
   assert.equal(r, QUATRO, 'a mesma lista');
+});
+
+test('Reativação e Rotina «ex-lead»: o etiquetas-auto só PULA o que a rotina JÁ cuidou (marca da pessoa); o resto segue saindo daqui', async () => {
+  const unit = { id: 'u', slug: 'u' } as never;
+  const lead = { id: 5, _embedded: { contacts: [{ id: 77, is_main: true }] } } as unknown as KommoLead;
+  const coloca = { tipo: 'coloca', etiqueta: '▶ Reativação', chave: 'reativacao:5:1', motivo: '30 dias' } as const;
+  let perguntou = '';
+  const jaTocou = async (_u: string, pessoa: string) => {
+    perguntou = pessoa;
+    return true;
+  };
+  const pulado = await pularSeARotinaJaCuidou(unit, lead, coloca, jaTocou);
+  assert.equal(pulado.tipo, 'pula');
+  assert.match(pulado.motivo, /Rotina diária/);
+  assert.equal(perguntou, 'c77', 'a pergunta é por PESSOA (contato), não por cartão');
+  // a rotina ainda não alcançou (lista cortada, Pausar IA, nunca escreveu...): continua saindo daqui — nenhum buraco
+  assert.deepEqual(await pularSeARotinaJaCuidou(unit, lead, coloca, async () => false), coloca);
+  // não consegui ler as marcas: na dúvida não manda (a janela de 2 dias tenta de novo)
+  assert.equal((await pularSeARotinaJaCuidou(unit, lead, coloca, async () => { throw new Error('banco fora'); })).tipo, 'pula');
+  const pula = { ...coloca, tipo: 'pula' } as const;
+  assert.equal(await pularSeARotinaJaCuidou(unit, lead, pula, async () => { throw new Error('não deve chamar'); }), pula);
 });

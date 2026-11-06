@@ -18,6 +18,7 @@ import {
   type ModelosV2,
   type Decisao,
 } from './etiquetas-auto.js';
+import { pessoaDoCartao } from './rotina-nucleo.js';
 
 /**
  * Varre as unidades com "Etiquetas ▶ automáticas" ligada ou em "só no papel" e aplica as regras de
@@ -104,7 +105,7 @@ async function ultimasConversas(unitId: string, leadIds: number[]): Promise<Map<
  * conversa de hoje não aparece no cartão perdido. Antes de reativar, olha os outros cartões do
  * contato: cartão aberto depois da perda, ou conversa nos últimos 30 dias, cancela.
  */
-async function voltouEmOutroCartao(
+export async function voltouEmOutroCartao(
   unitId: string,
   kommo: KommoClient,
   lead: KommoLead,
@@ -132,7 +133,7 @@ const SEM_V2: ModelosV2 = { boasVindas: false, retorno: false, reativacao: false
 const modelosCache = new Map<string, { em: number; v2: ModelosV2 }>();
 
 /** Quais `_v2` a unidade tem aprovadas. Falha de leitura NÃO fica no cache: tenta de novo na próxima. */
-async function v2DaUnidade(unit: Unit, kommo: KommoClient): Promise<ModelosV2> {
+export async function v2DaUnidade(unit: Unit, kommo: KommoClient): Promise<ModelosV2> {
   const c = modelosCache.get(unit.id);
   if (c && Date.now() - c.em < MODELOS_VALIDADE_MS) return c.v2;
   try {
@@ -144,6 +145,33 @@ async function v2DaUnidade(unit: Unit, kommo: KommoClient): Promise<ModelosV2> {
     logger.warn({ err: String(err), unit: unit.slug }, 'etiquetas: não li os modelos — segue valendo o modelo original');
     return SEM_V2;
   }
+}
+
+/**
+ * A Rotina diária «ex-lead» (`rotina-exlead-worker.ts`) usa a MESMA ▶ Reativação e conta a que este robô já pôs como o 1º degrau. A
+ * divisão é pela MARCA, não por previsão: este robô só PULA o cartão se a rotina JÁ pôs algum degrau para essa pessoa (nos últimos
+ * 200 dias) — aí a Reativação já foi dada e repeti-la seria mensagem em dobro. O que a rotina ainda não alcançou (lista cortada em
+ * 1.500 cartões, «Pausar IA», ◷ Retomar em, quem nunca escreveu…) continua saindo daqui, como sempre saiu: nenhum buraco.
+ */
+export async function pularSeARotinaJaCuidou(
+  unit: Unit,
+  lead: KommoLead,
+  d: Decisao,
+  jaTemDegrau: (unitId: string, pessoa: string) => Promise<boolean> = rotinaExLeadJaTocou,
+): Promise<Decisao> {
+  if (d.tipo !== 'coloca') return d;
+  const tocou = await jaTemDegrau(unit.id, pessoaDoCartao(lead)).catch((err) => {
+    logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id }, 'etiquetas: não consegui ler as marcas da rotina — não pus a Reativação (tenta na próxima janela)');
+    return true;
+  });
+  return tocou ? { tipo: 'pula', etiqueta: d.etiqueta, chave: d.chave, motivo: 'a Rotina diária «ex-lead» já deu a Reativação a esta pessoa' } : d;
+}
+
+async function rotinaExLeadJaTocou(unitId: string, pessoa: string): Promise<boolean> {
+  // últimos 200 dias, como diz o comentário acima (a leitura das marcas da rotina também é de 200)
+  const desde = new Date(Date.now() - 200 * DIA_S * 1000);
+  const achada = await prisma.executionTrace.findFirst({ where: { unitId, id: { startsWith: `rotina-${unitId}-${pessoa}-exlead-` }, createdAt: { gte: desde } }, select: { id: true } });
+  return achada !== null;
 }
 
 async function decisoesDaUnidade(unit: Unit, kommo: KommoClient): Promise<Array<{ lead: KommoLead; d: Decisao }>> {
@@ -182,7 +210,8 @@ async function decisoesDaUnidade(unit: Unit, kommo: KommoClient): Promise<Array<
   });
   const conversas = await ultimasConversas(unit.id, perdidos.leads.map((l) => l.id));
   for (const l of perdidos.leads) {
-    const d = decidirReativacao(l, agora, conversas.get(l.id) ?? null, v2.reativacao);
+    let d = decidirReativacao(l, agora, conversas.get(l.id) ?? null, v2.reativacao);
+    if (d) d = await pularSeARotinaJaCuidou(unit, l, d);
     if (d?.tipo === 'coloca') {
       const motivo = await voltouEmOutroCartao(unit.id, kommo, l, l.closed_at ?? 0, agora);
       if (motivo) {

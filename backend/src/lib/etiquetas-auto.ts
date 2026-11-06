@@ -237,6 +237,25 @@ export function modelosV2(modelos: ReadonlyArray<ModeloComStatus> | null): Model
   };
 }
 
+export const MOTIVO_NASCEU_EM_PERDIDO = 'o cartão nasceu em PERDIDO (importação/carga) — os 30 dias não são do paciente';
+
+/** O cartão foi criado já em PERDIDO (carga/importação, menos de 1 h antes de fechar): os 30 dias não são do paciente. */
+export function nasceuEmPerdido(lead: Pick<KommoLead, 'created_at'>, perdeu: number): boolean {
+  const criado = epochSeg(lead.created_at);
+  return !!criado && perdeu - criado < HORA;
+}
+
+/**
+ * O modelo ORIGINAL da Reativação diz "Aqui é {responsável}, da Doutor Hérnia": ☻ Responsável agendamento vazio, ou que não é gente
+ * ("Doutor Digital", "I.A SOFIA"), quebra a mensagem. Devolve o motivo, ou null. Não vale quando a unidade tem a `_v2` aprovada.
+ */
+export function responsavelQueQuebraOModelo(lead: Cartao): string | null {
+  const responsavel = String(valor(lead, CAMPO.RESPONSAVEL) ?? '').trim();
+  if (!responsavel) return `${CAMPO.RESPONSAVEL} vazio — o modelo sairia "Aqui é , da Doutor Hérnia"`;
+  if (RESPONSAVEL_QUE_NAO_E_GENTE.test(responsavel)) return `${CAMPO.RESPONSAVEL} = ${responsavel} — o modelo sairia "Aqui é ${responsavel}, da Doutor Hérnia"`;
+  return null;
+}
+
 /**
  * Cartão em PERDIDO (COMERCIAL). `ultimaConversa` = última mensagem que o sistema viu com este
  * paciente (epoch s), ou null quando nunca houve conversa pela IA.
@@ -257,19 +276,13 @@ export function decidirReativacao(
   const chave = `reativacao:${lead.id}:${perdeu}`;
   if (optOut(lead)) return { tipo: 'pula', etiqueta: ETIQUETA.REATIVACAO, chave, motivo: 'paciente pediu para não receber mensagens' };
   if (temEtiqueta(lead, ...DESQUALIFICADO)) return { tipo: 'pula', etiqueta: ETIQUETA.REATIVACAO, chave, motivo: 'perdido como fora do escopo' };
-  const criado = epochSeg(lead.created_at);
-  if (criado && perdeu - criado < HORA) {
-    return { tipo: 'pula', etiqueta: ETIQUETA.REATIVACAO, chave, motivo: 'o cartão nasceu em PERDIDO (importação/carga) — os 30 dias não são do paciente' };
+  if (nasceuEmPerdido(lead, perdeu)) {
+    return { tipo: 'pula', etiqueta: ETIQUETA.REATIVACAO, chave, motivo: MOTIVO_NASCEU_EM_PERDIDO };
   }
   if (ultimaConversa && agora - ultimaConversa < limite) {
     return { tipo: 'pula', etiqueta: ETIQUETA.REATIVACAO, chave, motivo: `conversou em ${dataBR(ultimaConversa)}, menos de ${DIAS_REATIVACAO} dias` };
   }
-  const responsavel = String(valor(lead, CAMPO.RESPONSAVEL) ?? '').trim();
-  if (!modeloV2 && !responsavel) {
-    return { tipo: 'pula', etiqueta: ETIQUETA.REATIVACAO, chave, motivo: `${CAMPO.RESPONSAVEL} vazio — o modelo sairia "Aqui é , da Doutor Hérnia"`};
-  }
-  if (!modeloV2 && RESPONSAVEL_QUE_NAO_E_GENTE.test(responsavel)) {
-    return { tipo: 'pula', etiqueta: ETIQUETA.REATIVACAO, chave, motivo: `${CAMPO.RESPONSAVEL} = ${responsavel} — o modelo sairia "Aqui é ${responsavel}, da Doutor Hérnia"`};
-  }
+  const semResponsavel = modeloV2 ? null : responsavelQueQuebraOModelo(lead);
+  if (semResponsavel) return { tipo: 'pula', etiqueta: ETIQUETA.REATIVACAO, chave, motivo: semResponsavel };
   return { tipo: 'coloca', etiqueta: ETIQUETA.REATIVACAO, chave, motivo: `${DIAS_REATIVACAO} dias em PERDIDO (desde ${dataBR(perdeu)}) sem conversa` };
 }
