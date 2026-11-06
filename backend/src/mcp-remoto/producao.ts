@@ -52,6 +52,7 @@ import { tiquetaqueGet } from '../lib/integracoes/tiquetaque.js';
 import { contaTramitacaoDaChave, criarContextoTramitacao, registrarFerramentasTramitacao, type ContaTramitacao } from './tramitacao.js';
 import { contasComChave } from '../lib/integracoes/chaves.js';
 import { registrarAdminSistemas } from './sistemas-admin.js';
+import { registrarFinUnidadesSistemas } from './sistemas-fin-unidades.js';
 import { registrarEstruturaSistemas } from './sistemas-estrutura.js';
 import { criarContextoSistemas, PendentesSistemas, registrarEscritaSistemas, registrarLeituraSistemas, type ContaSistemas } from './sistemas.js';
 import { contasDoRh, montarContasSistemas } from './sistemas-contas.js';
@@ -617,6 +618,8 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
         registrarEstruturaSistemas(server, sistemas, pendentesSistemas, quemSistemas, auditar);
         // ... e conceder ADMIN (promover usuário ou convite de admin), também em dois passos; sistemas_usuario/convite recusam admin.
         registrarAdminSistemas(server, sistemas, pendentesSistemas, quemSistemas, auditar);
+        // ... e dizer QUAIS empresas do Financeiro um usuário financeiro enxerga (lista fin_unidades), também em dois passos.
+        registrarFinUnidadesSistemas(server, sistemas, pendentesSistemas, quemSistemas, auditar);
         // ... e ANEXAR comprovante/nota/recibo a um lançamento do Caixa ou do Financeiro: link de envio (cofre, 10 min, uso único) ou o servidor baixa de
         // um domínio da lista branca (ANEXO_URL_DOMINIOS acrescenta; o padrão é InfinitePay e Asaas). O arquivo vai para o armazenamento do Caixa.
         registrarAnexosSistemas(
