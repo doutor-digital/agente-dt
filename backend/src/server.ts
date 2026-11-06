@@ -46,6 +46,7 @@ import { startCacheKeepaliveWorker, stopCacheKeepaliveWorker } from './lib/cache
 import { startParadosWorker, stopParadosWorker } from './lib/parados-worker.js';
 import { startMotivoNoCabecalhoWorker, stopMotivoNoCabecalhoWorker } from './lib/motivo-no-cabecalho-worker.js';
 import { startPerdaIaWorker, stopPerdaIaWorker } from './lib/perda-ia-worker.js';
+import { startRotinaRobosWorker, stopRotinaRobosWorker } from './lib/rotina-robos-worker.js';
 import { startNaoLidasWorker, stopNaoLidasWorker } from './lib/nao-lidas-worker.js';
 import { startCampanhaWorker, stopCampanhaWorker } from './lib/campanha-worker.js';
 import { startResumoDiarioIaWorker, stopResumoDiarioIaWorker } from './lib/resumo-diario-ia-worker.js';
@@ -228,6 +229,7 @@ async function main(): Promise<void> {
       startParadosWorker();
       startMotivoNoCabecalhoWorker();
       startPerdaIaWorker();
+      startRotinaRobosWorker();
       startUnidadePorCanalWorker();
       startUnidadeNoCartaoWorker();
       startRenomearLeadWorker();
@@ -246,6 +248,7 @@ async function main(): Promise<void> {
       stopParadosWorker();
       stopMotivoNoCabecalhoWorker();
       stopPerdaIaWorker();
+      stopRotinaRobosWorker();
       stopUnidadePorCanalWorker();
       stopUnidadeNoCartaoWorker();
       stopRenomearLeadWorker();

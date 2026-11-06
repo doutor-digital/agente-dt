@@ -18,6 +18,7 @@ import {
   type ModelosV2,
   type Decisao,
 } from './etiquetas-auto.js';
+import { estadoDoExLead, nuncaAgendou } from './rotina-robos-worker.js';
 
 /**
  * Varre as unidades com "Etiquetas ▶ automáticas" ligada ou em "só no papel" e aplica as regras de
@@ -146,6 +147,22 @@ async function v2DaUnidade(unit: Unit, kommo: KommoClient): Promise<ModelosV2> {
   }
 }
 
+/**
+ * A Rotina «ex-lead» absorve a Reativação de quem NUNCA agendou: devolve «pula» no lugar de «coloca» para esse cartão. Quem já
+ * consultou (ex-paciente) segue aqui. Franquia que não responde = pula também ("caiu" nunca vira "pode pôr"); a janela de 2 dias
+ * da Reativação deixa a próxima varredura tentar de novo.
+ */
+export async function deixarOExLeadParaARotina(unit: Unit, lead: KommoLead, d: Decisao, nunca: typeof nuncaAgendou = nuncaAgendou): Promise<Decisao> {
+  if (d.tipo !== 'coloca') return d;
+  const resposta = await nunca(unit, lead).catch((err) => {
+    logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id }, 'etiquetas: não confirmei na franquia se é ex-lead — não pus a Reativação');
+    return null;
+  });
+  if (resposta === false) return d;
+  const motivo = resposta === null ? 'não consegui conferir a franquia agora — tenta na próxima' : 'nunca agendou: quem cuida é a Rotina diária «ex-lead»';
+  return { tipo: 'pula', etiqueta: d.etiqueta, chave: d.chave, motivo };
+}
+
 async function decisoesDaUnidade(unit: Unit, kommo: KommoClient): Promise<Array<{ lead: KommoLead; d: Decisao }>> {
   const esquema = await esquemaDaUnidade(unit, kommo);
   const comercial = esquema.pipelinePorNome('COMERCIAL');
@@ -181,8 +198,12 @@ async function decisoesDaUnidade(unit: Unit, kommo: KommoClient): Promise<Array<
     statusId: 143,
   });
   const conversas = await ultimasConversas(unit.id, perdidos.leads.map((l) => l.id));
+  // A Rotina «ex-lead» (rotina-robos-worker.ts) ABSORVE a Reativação de quem nunca agendou: onde ela está LIGADA, esta
+  // regra só segue com o ex-paciente. Em «só no papel» a rotina não escreve, então aqui nada muda (sem buraco no meio).
+  const absorvida = estadoDoExLead(unit.slug) === 'ligado';
   for (const l of perdidos.leads) {
-    const d = decidirReativacao(l, agora, conversas.get(l.id) ?? null, v2.reativacao);
+    let d = decidirReativacao(l, agora, conversas.get(l.id) ?? null, v2.reativacao);
+    if (d && absorvida) d = await deixarOExLeadParaARotina(unit, l, d);
     if (d?.tipo === 'coloca') {
       const motivo = await voltouEmOutroCartao(unit.id, kommo, l, l.closed_at ?? 0, agora);
       if (motivo) {

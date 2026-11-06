@@ -312,11 +312,53 @@ export const AUTOMACOES: readonly Automacao[] = [
     oQueFaz:
       'Põe sozinho as etiquetas que a SDR punha à mão: ▶ Boas-vindas quando o cartão entra em GANHO, ▶ Confirmar retorno 24 h antes do retorno (RETORNO PÓS-TRATAMENTO) e ▶ Reativação depois de 30 dias em PERDIDO sem conversa. A etiqueta aciona o bot do Kommo, que manda a mensagem.',
     pegadinha:
-      'Só funciona se a etiqueta tiver gatilho no Kommo daquela unidade. Não põe se o modelo for sair com buraco (programa, próxima sessão ou responsável vazios — cada regra deixa de olhar esses campos quando a unidade tem a `_v2` do modelo dela aprovada: `…sdr_reativacao_lead_frio_v2` ("a equipe Doutor Digital"), `…sdr_boas_vindas_programa_v2` (sem programa nem data) e `…sdr_confirmacao_retorno_v2` (mostra a ◷ Data da Consulta); quem cria a v2 troca o modelo do bot no mesmo passo) nem pra quem pediu pra não receber — em "só no papel" isso aparece como "pularia" com o motivo. A Reativação só pega quem cruza os 30 dias agora: o estoque antigo de PERDIDO nunca entra de uma vez. A ▶ Retomada não está aqui: depende do robô da 3C. No Kommo dividido (Petrópolis + Caxias), só o cartão com a ⌂ Unidade de atendimento da unidade recebe etiqueta — o de outra unidade e o sem unidade ficam de fora (o robô da etiqueta mandaria o endereço e o Pix errados). Caxias ainda não recebe etiqueta nenhuma: espera os gatilhos com a condição de unidade e os robôs caxias_. Pra testar num cartão só: ligue e ponha os ids em pipelineIntents.etiquetas_teste_leads — o resto segue no papel.',
+      'Só funciona se a etiqueta tiver gatilho no Kommo daquela unidade. Não põe se o modelo for sair com buraco (programa, próxima sessão ou responsável vazios — cada regra deixa de olhar esses campos quando a unidade tem a `_v2` do modelo dela aprovada: `…sdr_reativacao_lead_frio_v2` ("a equipe Doutor Digital"), `…sdr_boas_vindas_programa_v2` (sem programa nem data) e `…sdr_confirmacao_retorno_v2` (mostra a ◷ Data da Consulta); quem cria a v2 troca o modelo do bot no mesmo passo) nem pra quem pediu pra não receber — em "só no papel" isso aparece como "pularia" com o motivo. A Reativação só pega quem cruza os 30 dias agora: o estoque antigo de PERDIDO nunca entra de uma vez. A ▶ Retomada não está aqui (é da Rotina diária); a ▶ Reativação de quem nunca agendou passa para a Rotina «ex-lead» quando ela está ligada. No Kommo dividido (Petrópolis + Caxias), só o cartão com a ⌂ Unidade de atendimento da unidade recebe etiqueta — o de outra unidade e o sem unidade ficam de fora (o robô da etiqueta mandaria o endereço e o Pix errados). Caxias ainda não recebe etiqueta nenhuma: espera os gatilhos com a condição de unidade e os robôs caxias_. Pra testar num cartão só: ligue e ponha os ids em pipelineIntents.etiquetas_teste_leads — o resto segue no papel.',
     risco: 'manda-mensagem',
     temSeco: true,
     quandoVazio: 'desligado',
     arquivo: 'src/lib/etiquetas-auto-worker.ts',
+  },
+  {
+    id: 'rotina-robos',
+    chave: 'ROTINA_ROBOS_SLUGS',
+    nome: 'Rotina diária: esquecidos por etapa',
+    oQueFaz:
+      'Todo dia, em horário comercial, põe a etiqueta ▶ Retomada (e a 2 e a 3) em quem o paciente parou de responder e ninguém tocou: EM QUALIFICAÇÃO com 2, 4 e 7 dias sem resposta, NÃO COMPARECEU com 1, 3 e 6, EM NEGOCIAÇÃO com 2, 5 e 9. A etiqueta aciona o robô do Kommo, que manda o modelo do WhatsApp.',
+    pegadinha:
+      'Um degrau por vez, na ordem, sem repetir e sem pular; qualquer mensagem do paciente zera a régua; depois do 3º sem resposta não manda mais nada (quem move é o parados). O dia 1 da QUALIFICAÇÃO é da Sofia (follow-up-24h, dentro da janela). Nunca manda para NO_FOLLOW_UP, NAO_PERTURBAR, opt-out, CURRÍCULO, consulta futura (cartão ou franquia), ◷ Retomar em de hoje em diante, «Pausar IA», equipe que falou nas últimas 48 h ou qualquer fala nas últimas 24 h, nem no dia do aniversário. TETO por unidade por dia (30; chave rotina_teto_dia na unidade) somando as TRÊS réguas da rotina. Prazos por unidade: rotina_qualificacao_d1..d3, rotina_naocompareceu_d1..d3, rotina_negociacao_d1..d3. Só funciona se a conta tiver a etiqueta e o gatilho dela no Kommo (o gatilho só se lê com sessão): rotina_toques_prontos diz quantos degraus (1 a 3) estão prontos; o padrão é 1 (▶ Retomada). Etiqueta que a conta não tem = não faz nada naquela etapa. Atenção: com o parados ligado, a régua esgotada da Sofia (⬢ Status da conversa = Sem resposta, 24 h depois do último toque) já leva a QUALIFICAÇÃO para PERDIDO antes do 2º dia. Em «só no papel» a tela mostra por etapa e por degrau quantos receberiam.',
+    risco: 'manda-mensagem',
+    temSeco: true,
+    exigeSecoAntes: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/rotina-robos-worker.ts',
+  },
+  {
+    id: 'rotina-exlead',
+    chave: 'ROTINA_EXLEAD_SLUGS',
+    nome: 'Rotina diária: ex-lead que nunca agendou',
+    oQueFaz:
+      'Quem nunca teve consulta (nem no cartão nem na franquia) e hoje está em PERDIDO ou EM ESPERA recebe a ▶ Reativação 30 dias depois da última mensagem do paciente, a ▶ Reativação 2 aos 60 e a ▶ Reativação 3 aos 90.',
+    pegadinha:
+      'ABSORVE a Reativação das Etiquetas ▶ automáticas: onde esta régua está LIGADA, o etiquetas-auto deixa de pôr a ▶ Reativação em quem nunca agendou (continua pondo em quem já consultou — ex-paciente). Em «só no papel» os dois seguem como estão. Nunca manda para motivo de perda encerrado (Outra cidade, Clicou por engano, Outra patologia, Plano de Saúde, Sem interesse, Bandeira vermelha, Assinou contrato…), NO_FOLLOW_UP, NAO_PERTURBAR, opt-out, CURRÍCULO, Fora do escopo. O 1º toque só vale enquanto o silêncio está entre 30 e 60 dias: o estoque mais velho não entra de uma vez (o teto do dia também o espalha). Se o etiquetas-auto já pôs a ▶ Reativação nesse PERDIDO, conta como o 1º toque. Prazos: rotina_exlead_d1..d3; degraus prontos: rotina_exlead_toques_prontos (padrão 1). Teto do dia somado com as outras duas réguas.',
+    risco: 'manda-mensagem',
+    temSeco: true,
+    exigeSecoAntes: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/rotina-robos-worker.ts',
+  },
+  {
+    id: 'rotina-aniversario',
+    chave: 'ROTINA_ANIVERSARIO_SLUGS',
+    nome: 'Rotina diária: aniversário',
+    oQueFaz:
+      'No dia do aniversário (fuso da unidade, entre 9h e 12h), paciente e ex-paciente recebem a ▶ Aniversário: parabéns e um convite. Quem está em tratamento ativo recebe a ▶ Aniversário tratamento (só parabéns, sem convite).',
+    pegadinha:
+      'A data vem do campo ◷ Data de nascimento do cartão (que o sincronizador copia da franquia) e, quando o cartão tem ⚙ idClient, é conferida na ficha da franquia — se a franquia diz outra data ou o paciente consta como falecido, não manda. Sem data confiável não manda. Só paciente de verdade (funil TRATAMENTO, consulta no cartão ou ⚙ idClient): lead que nunca consultou não ganha parabéns. Uma vez por ano por pessoa (a marca é do contato, dois cartões da mesma pessoa não recebem dois), nunca junto de outro toque no mesmo dia (a retomada e o ex-lead pulam quem faz aniversário hoje), nunca para NO_FOLLOW_UP, NAO_PERTURBAR, opt-out, CURRÍCULO ou motivo de perda encerrado. O funil TRATAMENTO NÃO é trava aqui. Sem a etiqueta ▶ Aniversário tratamento na conta, quem está em tratamento não recebe nada (o convite não vale para quem já está se tratando). Teto do dia somado com as outras duas réguas; o aniversário é varrido primeiro.',
+    risco: 'manda-mensagem',
+    temSeco: true,
+    exigeSecoAntes: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/rotina-robos-worker.ts',
   },
   {
     id: 'chat-botoes',

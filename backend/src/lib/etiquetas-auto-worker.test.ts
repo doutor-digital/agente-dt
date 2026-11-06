@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { soDestaUnidade } from './etiquetas-auto-worker.js';
+import { deixarOExLeadParaARotina, soDestaUnidade } from './etiquetas-auto-worker.js';
 import { grupoDe, type GrupoDoCrm, type MembroDoCrm } from './crm-compartilhado.js';
 import type { KommoLead } from '../services/kommo.service.js';
 
@@ -34,4 +34,19 @@ test('etiquetas no Kommo dividido: Petrópolis só etiqueta o cartão de Petróp
 test('etiquetas no Kommo de uma unidade só: nada muda (o campo nem é lido)', () => {
   const r = soDestaUnidade(null, 'u-imperatriz', QUATRO);
   assert.equal(r, QUATRO, 'a mesma lista');
+});
+
+test('Reativação absorvida pela Rotina «ex-lead»: quem nunca agendou vira «pula», o ex-paciente segue, e franquia fora do ar não põe', async () => {
+  const unit = { id: 'u', slug: 'u' } as never;
+  const lead = { id: 5 } as KommoLead;
+  const coloca = { tipo: 'coloca', etiqueta: '▶ Reativação', chave: 'reativacao:5:1', motivo: '30 dias' } as const;
+  const nunca = await deixarOExLeadParaARotina(unit, lead, coloca, async () => true);
+  assert.equal(nunca.tipo, 'pula');
+  assert.match(nunca.motivo, /Rotina diária/);
+  assert.deepEqual(await deixarOExLeadParaARotina(unit, lead, coloca, async () => false), coloca, 'já consultou: continua aqui');
+  const fora = await deixarOExLeadParaARotina(unit, lead, coloca, async () => { throw new Error('franquia fora'); });
+  assert.equal(fora.tipo, 'pula');
+  assert.match(fora.motivo, /franquia/);
+  const pula = { ...coloca, tipo: 'pula' } as const;
+  assert.equal(await deixarOExLeadParaARotina(unit, lead, pula, async () => { throw new Error('não deve chamar'); }), pula);
 });
