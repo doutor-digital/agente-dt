@@ -31,6 +31,7 @@ import { ETAPA, TRATAMENTO_EM_ANDAMENTO } from './franquia-move.js';
 import { TAG_CONFLITO, anotarRoboPos, cartaoTravadoNoConflito, estadoCasamentoJornada } from './casamento-jornada.js';
 import { cartoesComConflito } from './conflito-paciente.js';
 import { CAMPOS_SYNC } from './franquia-sync.js';
+import { PERDIDO } from './motivo-no-cabecalho.js';
 import { registrarSimulacao } from './so-no-papel.js';
 import { abrirSeguimentoDoPagou, simularSeguimentoDoPagou, veredictoDaTrava } from './trava-perda-seguimento.js';
 import { contaDividida, grupoDaUnidade, pularCartao, unidadeDonaDoCartao, type GrupoDoCrm } from './crm-compartilhado.js';
@@ -140,14 +141,15 @@ function contatoPrincipal(lead: KommoLead): number | null {
   return (cs.find((c) => c.is_main) ?? cs[0])?.id ?? null;
 }
 
-async function gravarSelect(unit: Unit, kommo: KommoClient, leadId: number, nome: string, opcao: string): Promise<void> {
+async function gravarSelect(unit: Unit, kommo: KommoClient, leadId: number, nome: string, opcao: string): Promise<boolean> {
   const esquema = await esquemaDaUnidade(unit, kommo);
   const id = nomesDoCampo(nome).map((x) => esquema.campoPorNome(x)).find((x) => x !== null) ?? null;
   if (id === null) {
     logger.warn({ unit: unit.slug, leadId, campo: nome }, 'parados: campo não existe nesta conta — segui sem ele');
-    return;
+    return false;
   }
   await kommo.setLeadCustomFieldValue(leadId, id, 'select', opcao);
+  return true;
 }
 
 async function gravarData(unit: Unit, kommo: KommoClient, leadId: number, nome: string, epoch: number): Promise<void> {
@@ -159,16 +161,19 @@ async function gravarData(unit: Unit, kommo: KommoClient, leadId: number, nome: 
 
 async function limparCampo(unit: Unit, kommo: KommoClient, leadId: number, nome: string): Promise<void> {
   const esquema = await esquemaDaUnidade(unit, kommo);
-  const id = esquema.campoPorNome(nome);
+  // pelos mesmos nomes (atual e antigos) com que `gravarSelect` achou o campo
+  const id = nomesDoCampo(nome).map((x) => esquema.campoPorNome(x)).find((x) => x !== null) ?? null;
   if (id === null) return;
   await kommo.clearLeadCustomField(leadId, id);
 }
 
-async function etiquetar(unit: Unit, kommo: KommoClient, leadId: number, semRegua: boolean, proprias?: string[]): Promise<void> {
+async function etiquetar(unit: Unit, kommo: KommoClient, leadId: number, semRegua: boolean, proprias?: string[]): Promise<boolean> {
   try {
     await kommo.addTag({ leadId, tags: proprias?.length ? proprias : semRegua ? [TAG_PRAZO, TAG_SEM_REGUA] : [TAG_PRAZO] });
+    return true;
   } catch (err) {
     logger.warn({ err: String(err), unit: unit.slug, leadId }, 'parados: falha ao etiquetar');
+    return false;
   }
 }
 
@@ -321,7 +326,8 @@ export async function fecharComoPerdido(
 
 /**
  * O mesmo fecho, dizendo o que houve: `fechou`, `travado` (a trava da perda automática segurou — NÃO é recusa do Kommo, quem
- * chama não deve tentar de novo como se fosse erro) ou `nada` (no papel, ou o cartão mudou de etapa no meio).
+ * chama não deve tentar de novo como se fosse erro), `sem-etiqueta` (a etiqueta de não contatar, exigida pela decisão, não entrou: nada foi
+ * movido nem escrito; pode tentar de novo) ou `nada` (no papel, ou o cartão mudou de etapa no meio).
  */
 export async function fecharOuSegurar(
   unit: Unit,
@@ -333,7 +339,7 @@ export async function fecharOuSegurar(
   seco: boolean,
   automacao: string = 'parados',
   cartaoDaLista?: KommoLead | null,
-): Promise<'fechou' | 'travado' | 'nada'> {
+): Promise<'fechou' | 'travado' | 'nada' | 'sem-etiqueta'> {
   const base = { unit: unit.slug, leadId, de: etapaAtual, regra: d.regra, motivo: d.motivoPerda };
   // Este é o portão de TODO PERDIDO de código (parados, estoques, franquia-move): a trava tem de valer aqui, no papel também.
   if (seco) {
@@ -350,16 +356,46 @@ export async function fecharOuSegurar(
   if (await seguradoPelaTrava(unit, leadId, lead, { deEtapa: etapaAtual, seco: false, automacao, nivelDoLog: 'info', noPortao: true, kommo, funis })) return 'travado';
   const lossId = d.motivoPerda ? await idDoMotivoDePerda(unit, kommo, d.motivoPerda).catch(() => null) : null;
   // Etiqueta ANTES de mudar o status: o gatilho de PERDIDO (not_equal NO_FOLLOW_UP) lê a condição no evento.
-  await etiquetar(unit, kommo, leadId, d.semRegua === true, d.para === 'PERDIDO' ? d.etiquetas : undefined);
+  const etiquetou = await etiquetar(unit, kommo, leadId, d.semRegua === true, d.para === 'PERDIDO' ? d.etiquetas : undefined);
+  if (!etiquetou && d.etiquetaObrigatoria) {
+    // a etiqueta é o que segura a régua de PERDIDO: sem ela o paciente que recusou receberia "sentimos sua falta"
+    logger.warn({ ...base, automacao }, 'parados: a etiqueta de não contatar não entrou — NÃO movi o cartão');
+    return 'sem-etiqueta';
+  }
+  let gravouOCampo = false;
   const motivoDaSdr = d.campo ? motivoDaSdrNoCartao(lead.custom_fields_values) : null;
   if (motivoDaSdr) {
     logger.info({ ...base, campo: d.campo?.nome, valor: motivoDaSdr }, 'parados: o cartão já tinha motivo — mantive o da SDR');
   } else if (d.campo) {
-    await gravarSelect(unit, kommo, leadId, d.campo.nome, d.campo.opcao).catch((err) =>
-      logger.warn({ err: String(err), ...base, campo: d.campo?.nome, opcao: d.campo?.opcao }, 'parados: falha ao gravar o motivo no cartão (a opção existe no campo desta conta?)'),
-    );
+    gravouOCampo = await gravarSelect(unit, kommo, leadId, d.campo.nome, d.campo.opcao).catch((err) => {
+      logger.warn({ err: String(err), ...base, campo: d.campo?.nome, opcao: d.campo?.opcao }, 'parados: falha ao gravar o motivo no cartão (a opção existe no campo desta conta?)');
+      return false;
+    });
   }
-  await kommo.setLeadStatus(leadId, { won: false, lossReasonId: lossId ?? undefined });
+  try {
+    await kommo.setLeadStatus(leadId, { won: false, lossReasonId: lossId ?? undefined });
+  } catch (err) {
+    // só quando a etiqueta era CONDIÇÃO do fecho (perda-ia): o cartão ficaria aberto com NO_FOLLOW_UP, calado e fora das varreduras.
+    // O `parados` de sempre segue como era (a falha sobe e o cartão fica como estava).
+    if (d.etiquetaObrigatoria) {
+      // Só desfaz o que ESTA tentativa pôs, e só quando SABE que o cartão não foi movido. Tempo esgotado ou cartão ilegível = o Kommo
+      // pode ter aplicado o PATCH: o cartão em PERDIDO sem a etiqueta receberia a régua. Nesses casos mantém tudo e avisa.
+      const estouro = /timeout|timed out|ETIMEDOUT|ECONNABORTED|ECONNRESET|socket hang up|aborted/i.test(String(err));
+      const atual = estouro ? null : await kommo.getLead(leadId).catch(() => null);
+      if (!atual || atual.status_id === PERDIDO) {
+        logger.error({ err: String(err), ...base, automacao }, 'parados: o status deu erro (tempo esgotado ou estado desconhecido) e o cartão pode ter sido movido — mantive as etiquetas e o motivo, CONFERIR À MÃO');
+      } else {
+        const tinhaAntes = new Set((lead._embedded?.tags ?? []).map((t) => normalizarNome(t.name ?? '')));
+        for (const t of (d.etiquetas ?? []).filter((x) => !tinhaAntes.has(normalizarNome(x)))) {
+          await kommo.removeTag(leadId, t).catch((e) => logger.error({ err: String(e), ...base, automacao, etiqueta: t }, 'parados: o status falhou e NÃO consegui tirar a etiqueta — o cartão está aberto e etiquetado, conferir à mão'));
+        }
+        // o ⊘ que a IA gravou nesta tentativa viraria «motivo da SDR» num cartão aberto
+        if (gravouOCampo && d.campo) await limparCampo(unit, kommo, leadId, d.campo.nome).catch((e) => logger.error({ err: String(e), ...base, automacao }, 'parados: o status falhou e NÃO consegui limpar o motivo que gravei — conferir à mão'));
+        logger.warn({ err: String(err), ...base, automacao }, 'parados: o status falhou depois da etiqueta — desfiz as etiquetas e o motivo que pus');
+      }
+    }
+    throw err;
+  }
   invalidarEtapa(unit.id, leadId);
   // regra de 16/10: foi um ROBÔ que pôs em PERDIDO — "a franquia manda" não confunde isto com a equipe insistindo
   await anotarRoboPos(unit, leadId, ETAPA.PERDIDO).catch(() => undefined);

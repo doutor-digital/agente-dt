@@ -34,16 +34,13 @@ export async function lerFalasDoCartao(
   msgs.sort((a, b) => a.created_at - b.created_at);
   const falas: FalaDaConversa[] = [];
   for (const m of msgs) {
-    let texto = (m.text ?? '').replace(/\s+/g, ' ').trim();
+    // o corte vem ANTES da marca: um texto longo com áudio não pode perder o «[áudio]» (é ele que a transcrição troca)
     const anexo = m.attachment?.type;
-    let audioLink: string | undefined;
-    if (anexo === 'voice') {
-      texto = `${texto} [áudio]`.trim();
-      if (m.attachment?.link) audioLink = m.attachment.link;
-    } else if (anexo) {
-      texto = `${texto} [${anexo === 'picture' ? 'imagem' : anexo === 'file' ? 'arquivo' : anexo}]`.trim();
-    }
-    if (texto) falas.push({ autor: autorDaMensagem(m.author), texto: texto.slice(0, MAX_CHARS_POR_FALA), em: m.created_at, ...(audioLink ? { audioLink } : {}) });
+    const marca = anexo === 'voice' ? '[áudio]' : anexo ? `[${anexo === 'picture' ? 'imagem' : anexo === 'file' ? 'arquivo' : String(anexo).slice(0, 20)}]` : '';
+    const base = (m.text ?? '').replace(/\s+/g, ' ').trim().slice(0, MAX_CHARS_POR_FALA - (marca ? marca.length + 1 : 0));
+    const texto = `${base.trimEnd()} ${marca}`.trim();
+    const audioLink = anexo === 'voice' && m.attachment?.link ? m.attachment.link : undefined;
+    if (texto) falas.push({ autor: autorDaMensagem(m.author), texto, em: m.created_at, ...(audioLink ? { audioLink } : {}) });
   }
   return { falas, ultimaId: msgs.length ? String(msgs[msgs.length - 1].id) : 'vazia' };
 }

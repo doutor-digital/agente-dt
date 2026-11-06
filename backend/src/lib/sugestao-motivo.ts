@@ -12,6 +12,7 @@
  * trava em código: motivo específico só vale com uma frase do PACIENTE que não seja pergunta.
  */
 import { normalizar } from './franquia-sync.js';
+import { ehRespostaDeCortesia } from './cortesia.js';
 
 export const CAMPO_MOTIVO_NAO_AGENDAMENTO = '⊘ Motivo do não agendamento';
 
@@ -70,6 +71,60 @@ export function montarPrompt(falas: FalaDaConversa[], opcoes: string[]): string 
   );
 }
 
+/** Menos que isto (já normalizada) não prova nada: «oi», «...», «ok» estão em qualquer conversa. */
+export const MIN_CHARS_DA_PROVA = 6;
+
+export type ProvaDaFrase = { ok: true; fala: FalaDaConversa } | { ok: false; porque: 'curta' | 'pergunta' | 'ausente' };
+
+
+/** Minúscula, sem acento, espaços colapsados — e a PONTUAÇÃO fica: «não, quero agendar» não pode virar «não quero agendar». */
+function comPontuacao(s: string): string {
+  return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+/** Palavra que inverte o que vem depois: «tenho interesse» dentro de «NÃO tenho interesse» não prova recusa nenhuma. */
+const NEGADORES = new Set(['nao', 'nunca', 'jamais', 'nem', 'sem', 'nenhum', 'nenhuma']);
+const ehLetra = (c: string | undefined) => !!c && /[a-z0-9]/.test(c);
+
+/** Primeira ocorrência de `alvo` em `texto` em fronteira de palavra e sem negador logo antes (a menos que a própria frase comece por um). */
+function achaSemInverter(texto: string, alvo: string): boolean {
+  const comecaNegando = NEGADORES.has(alvo.split(' ')[0].replace(/[^a-z0-9]/g, ''));
+  for (let i = texto.indexOf(alvo); i >= 0; i = texto.indexOf(alvo, i + 1)) {
+    if (ehLetra(texto[i - 1]) || ehLetra(texto[i + alvo.length])) continue;
+    const anterior = texto.slice(0, i).match(/([a-z0-9]+) $/)?.[1];
+    if (anterior && NEGADORES.has(anterior) && !comecaNegando) continue;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * A ÚNICA regra de prova de um motivo (widget, motivo-perdido-ia e perda-ia usam esta). A frase que a IA cita tem de:
+ *  - ter pelo menos 6 caracteres (só letras e números) e não ser cortesia («bom dia», «obrigada», «ok obrigado»: estão em toda conversa);
+ *  - estar contida, COM A PONTUAÇÃO, em UMA fala do PACIENTE — a mais recente que a traz — em fronteira de palavra e sem negador
+ *    colado antes. Comparar sem pontuação deixava «não quero» provar «Não, quero agendar sim», e comparar sem olhar o negador deixava
+ *    «tenho interesse» provar «não tenho interesse». Preferi isto a tentar entender o que vem DEPOIS da frase: é simples, errar
+ *    significa não provar (o cartão fica) e cobre os dois sentidos invertidos reproduzidos. Custo conhecido: se o modelo «arrumar» a
+ *    pontuação da citação (tirar uma vírgula), a prova falha e o motivo cai no genérico — por isso o prompt manda copiar IGUAL;
+ *  - e essa fala inteira não pode ser cortesia nem ter pergunta («não quero cirurgia. vocês atendem?» é dúvida).
+ * `doPaciente` são só as falas dele, na ordem em que valem.
+ */
+export function provaDaFrase(frase: string, doPaciente: readonly FalaDaConversa[]): ProvaDaFrase {
+  if (frase.trim().endsWith('?')) return { ok: false, porque: 'pergunta' };
+  let alvo = comPontuacao(frase).replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, '');
+  if (alvo.length > 40) alvo = alvo.slice(0, 41).replace(/ \S*$/, '') || alvo.slice(0, 40);
+  if (normalizar(alvo).length < MIN_CHARS_DA_PROVA || ehRespostaDeCortesia(frase)) return { ok: false, porque: 'curta' };
+  const fala = [...doPaciente].reverse().find((f) => achaSemInverter(comPontuacao(f.texto), alvo));
+  if (!fala) return { ok: false, porque: 'ausente' };
+  if (fala.texto.includes('?')) return { ok: false, porque: 'pergunta' };
+  if (ehRespostaDeCortesia(fala.texto)) return { ok: false, porque: 'curta' };
+  return { ok: true, fala };
+}
+
+export function fraseProva(frase: string, falas: readonly FalaDaConversa[]): boolean {
+  return provaDaFrase(frase, falas.filter((f) => f.autor === 'PACIENTE')).ok;
+}
+
 export interface Sugestao {
   motivo: string;
   /** frase do paciente que justifica (vazia quando ele não disse o motivo) */
@@ -95,8 +150,7 @@ export function interpretarResposta(texto: string, falas: FalaDaConversa[], opco
   const frase = String(j.frase_do_paciente ?? '').trim();
 
   if (!GENERICOS.includes(normalizar(motivo))) {
-    const doPaciente = normalizar(falas.filter((f) => f.autor === 'PACIENTE').map((f) => f.texto).join(' '));
-    const prova = frase.length > 0 && !frase.endsWith('?') && doPaciente.includes(normalizar(frase).slice(0, 40));
+    const prova = fraseProva(frase, falas);
     const clinicaFalouPorUltimo = falas.length > 0 && falas[falas.length - 1].autor !== 'PACIENTE';
     if (!prova && clinicaFalouPorUltimo) {
       const conversou = falas.filter((f) => f.autor === 'PACIENTE').length >= 2;
