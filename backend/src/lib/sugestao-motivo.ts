@@ -48,6 +48,10 @@ export type Autor = 'PACIENTE' | 'SOFIA' | 'EQUIPE';
 export interface FalaDaConversa {
   autor: Autor;
   texto: string;
+  /** quando foi dita (epoch s). Só a perda-ia usa; a sugestão do widget ignora. */
+  em?: number;
+  /** áudio do paciente ainda sem transcrição (`transcreverAudios` troca o "[áudio]" do texto pela fala) */
+  audioLink?: string;
 }
 
 /** Quem é quem na conversa oficial: external = paciente; bot (ou o usuário "Doutor Digital", a voz da Sofia) = Sofia. */

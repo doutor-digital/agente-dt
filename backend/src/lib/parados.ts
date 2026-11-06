@@ -209,6 +209,10 @@ export interface DecisaoParado {
   semRegua?: boolean;
   /** de onde vem a regra, pra nota do cartão (padrão: a combinada em 18/09/2026) */
   combinada?: string;
+  /** a nota do cartão já escrita (a perda-ia explica o que a IA leu; "movido pelo prazo" seria mentira). Vale só pra PERDIDO. */
+  nota?: string;
+  /** as etiquetas que este fecho põe ANTES do status, no lugar de `⏱ movido por prazo` (+ NO_FOLLOW_UP). Vale só pra PERDIDO. */
+  etiquetas?: string[];
 }
 
 export function prazoDaEtapa(etapa: string, prazos: PrazosDeEtapa = PRAZOS): number | null {
@@ -361,6 +365,7 @@ export function ehRespostaDeCortesia(mensagem: string | null | undefined): boole
 
 export function textoDaNota(d: DecisaoParado, etapaAtual: string): string {
   if (d.para === 'PERDIDO') {
+    if (d.nota) return d.nota;
     return (
       `⏱ Movido de ${etapaAtual} para PERDIDO pelo prazo: ${d.regra}. Motivo: ${d.motivoPerda}. ` +
       `${d.combinada ?? 'Regra combinada em 18/09/2026'} — o cartão anda sozinho; se o paciente voltar a escrever, a Sofia retoma.`

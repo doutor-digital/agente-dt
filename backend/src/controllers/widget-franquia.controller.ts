@@ -21,11 +21,11 @@ import { cadastrarPeloWidget } from '../lib/cadastro-pelo-widget.js';
 import { chaveConfere, janelaDoPeriodo, janelaExplicita, resumirAuditoria } from '../lib/widget-agenda.js';
 import { normalizar } from '../lib/franquia-sync.js';
 import { resumoDoPacienteNaFranquia } from '../lib/paciente-na-franquia.js';
-import { createKommoClient, type KommoTalkMessage } from '../services/kommo.service.js';
-import { transcribeAudio } from '../services/transcription.service.js';
+import { createKommoClient } from '../services/kommo.service.js';
 import { automacaoLigada } from '../lib/automacoes-estado.js';
 import { unidadeParaOCartao } from '../lib/crm-compartilhado.js';
-import { CAMPO_MOTIVO_NAO_AGENDAMENTO, autorDaMensagem, interpretarResposta, montarPrompt, type FalaDaConversa } from '../lib/sugestao-motivo.js';
+import { lerFalasDoCartao, transcreverAudios } from '../lib/conversa-do-cartao.js';
+import { CAMPO_MOTIVO_NAO_AGENDAMENTO, interpretarResposta, montarPrompt, type FalaDaConversa } from '../lib/sugestao-motivo.js';
 
 const chamadas = new Map<string, { n: number; desde: number }>();
 const JANELA_MS = 60_000;
@@ -338,28 +338,11 @@ async function campoDoMotivo(unit: Unit) {
   return campo;
 }
 
+/** A conversa oficial com os áudios transcritos. A leitura é a de `lib/conversa-do-cartao.ts`, a mesma da perda-ia. */
 async function conversaOficial(unit: Unit, leadId: number): Promise<{ falas: FalaDaConversa[]; ultimaId: string }> {
-  const kommo = createKommoClient(unit);
-  const talks = (await kommo.listTalks(leadId)).slice(0, 5);
-  const msgs: KommoTalkMessage[] = [];
-  for (const t of talks) msgs.push(...(await kommo.listTalkMessages(Number((t as { talk_id?: number; id?: number }).talk_id ?? (t as { id?: number }).id), 100)));
-  msgs.sort((a, b) => a.created_at - b.created_at);
-  const falas: FalaDaConversa[] = [];
-  let audios = 0;
-  for (const m of msgs) {
-    let texto = (m.text ?? '').replace(/\s+/g, ' ').trim();
-    const anexo = m.attachment?.type;
-    if (anexo === 'voice' && m.attachment?.link && audios < 6) {
-      audios++;
-      const t = await transcribeAudio(unit, m.attachment.link).catch(() => null);
-      if (t?.text) texto = `${texto} (áudio) ${t.text}`.trim();
-      else texto = `${texto} [áudio]`.trim();
-    } else if (anexo) {
-      texto = `${texto} [${anexo === 'picture' ? 'imagem' : anexo === 'file' ? 'arquivo' : anexo}]`.trim();
-    }
-    if (texto) falas.push({ autor: autorDaMensagem(m.author), texto: texto.slice(0, 600) });
-  }
-  return { falas, ultimaId: msgs.length ? String(msgs[msgs.length - 1].id) : 'vazia' };
+  const r = await lerFalasDoCartao(createKommoClient(unit), leadId);
+  await transcreverAudios(unit, r.falas);
+  return r;
 }
 
 /** GET /public/widget/:slug/sugestao-motivo?lead=<id> → { motivo, frase, travado, opcoes } */

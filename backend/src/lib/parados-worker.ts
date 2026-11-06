@@ -164,9 +164,9 @@ async function limparCampo(unit: Unit, kommo: KommoClient, leadId: number, nome:
   await kommo.clearLeadCustomField(leadId, id);
 }
 
-async function etiquetar(unit: Unit, kommo: KommoClient, leadId: number, semRegua: boolean): Promise<void> {
+async function etiquetar(unit: Unit, kommo: KommoClient, leadId: number, semRegua: boolean, proprias?: string[]): Promise<void> {
   try {
-    await kommo.addTag({ leadId, tags: semRegua ? [TAG_PRAZO, TAG_SEM_REGUA] : [TAG_PRAZO] });
+    await kommo.addTag({ leadId, tags: proprias?.length ? proprias : semRegua ? [TAG_PRAZO, TAG_SEM_REGUA] : [TAG_PRAZO] });
   } catch (err) {
     logger.warn({ err: String(err), unit: unit.slug, leadId }, 'parados: falha ao etiquetar');
   }
@@ -350,7 +350,7 @@ export async function fecharOuSegurar(
   if (await seguradoPelaTrava(unit, leadId, lead, { deEtapa: etapaAtual, seco: false, automacao, nivelDoLog: 'info', noPortao: true, kommo, funis })) return 'travado';
   const lossId = d.motivoPerda ? await idDoMotivoDePerda(unit, kommo, d.motivoPerda).catch(() => null) : null;
   // Etiqueta ANTES de mudar o status: o gatilho de PERDIDO (not_equal NO_FOLLOW_UP) lê a condição no evento.
-  await etiquetar(unit, kommo, leadId, d.semRegua === true);
+  await etiquetar(unit, kommo, leadId, d.semRegua === true, d.para === 'PERDIDO' ? d.etiquetas : undefined);
   const motivoDaSdr = d.campo ? motivoDaSdrNoCartao(lead.custom_fields_values) : null;
   if (motivoDaSdr) {
     logger.info({ ...base, campo: d.campo?.nome, valor: motivoDaSdr }, 'parados: o cartão já tinha motivo — mantive o da SDR');
