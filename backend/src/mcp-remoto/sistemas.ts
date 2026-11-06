@@ -310,18 +310,31 @@ export interface Pendente {
   estrutura?: { sql: string; motivo: string; comandos: number; entrada: Record<string, unknown> };
   /** só nas concessões de ADMIN (sistemas_preparar_admin): o que foi mostrado à pessoa e vai ser executado na confirmação */
   admin?: AdminPendente;
+  /** só nas trocas da lista de empresas do Financeiro de um usuário (sistemas_preparar_fin_unidades): o que foi mostrado e vai ser gravado na confirmação */
+  finUnidades?: FinUnidadesPendente;
+}
+
+export interface FinUnidadesPendente {
+  usuario: string;
+  nome: string;
+  login: string;
+  /** lista de hoje (null = todas) e a que o servidor devolveu no ENSAIO, já na grafia oficial (null = todas) */
+  antes: string[] | null;
+  depois: string[] | null;
+  motivo: string;
 }
 
 export type AdminPendente =
   | { acao: 'promover'; usuario: string; nome: string; login: string; papelAntes: string; motivo: string }
   | { acao: 'convite'; nome: string; login: string; motivo: string };
 
-export type TipoDeCodigo = 'dados' | 'estrutura' | 'admin';
-const tipoDe = (p: Pendente): TipoDeCodigo => (p.estrutura ? 'estrutura' : p.admin ? 'admin' : 'dados');
+export type TipoDeCodigo = 'dados' | 'estrutura' | 'admin' | 'fin_unidades';
+const tipoDe = (p: Pendente): TipoDeCodigo => (p.estrutura ? 'estrutura' : p.admin ? 'admin' : p.finUnidades ? 'fin_unidades' : 'dados');
 const CONFIRMADOR: Record<TipoDeCodigo, [rotulo: string, ferramenta: string]> = {
   dados: ['DADOS', 'sistemas_confirmar_alteracao'],
   estrutura: ['ESTRUTURA', 'sistemas_confirmar_estrutura'],
   admin: ['ADMIN', 'sistemas_confirmar_admin'],
+  fin_unidades: ['EMPRESAS DO FINANCEIRO (fin_unidades)', 'sistemas_confirmar_fin_unidades'],
 };
 
 /** Códigos preparados à espera da confirmação, presos a quem preparou. Em memória: reinício = preparar de novo. */
@@ -372,7 +385,7 @@ export async function prepararAlteracao(
   if (a.operacao === 'atualizar' && !Object.keys(dados).length) throw new ErroDeEntrada('atualizar precisa de "dados" (as colunas novas)');
   if (a.operacao !== 'inserir' && !Object.keys(filtro).length) throw new ErroDeEntrada(`${a.operacao} precisa de "filtro" (coluna = valor): não mexo na tabela inteira`);
   if (a.operacao === 'apagar' && Object.keys(dados).length) throw new ErroDeEntrada('apagar não leva "dados"');
-  if (tabela.toLowerCase() === 'rh_usuarios') throw new ErroDeEntrada('rh_usuarios só muda por sistemas_usuario (papel, unidade, ativo)');
+  if (tabela.toLowerCase() === 'rh_usuarios') throw new ErroDeEntrada('rh_usuarios só muda por sistemas_usuario (papel, unidade, ativo) e por sistemas_preparar_fin_unidades (lista de empresas do Financeiro)');
   const c = resolverSistema(ctx, a.sistema);
   const r = resposta(
     await c.fonte.chamar('POST', '/admin/v1/preparar', {

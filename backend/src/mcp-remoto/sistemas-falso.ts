@@ -25,6 +25,8 @@ export interface OpcoesFalso {
   maisTabelas?: boolean;
   /** acrescenta um admin (u-3) e um usuário inativo (u-4) à lista de usuários */
   maisUsuarios?: boolean;
+  /** servidor NOVO (API com fin_unidades): /usuarios traz a coluna, existe um financeiro (u-5) e POST /usuario aceita acao fin_unidades (com ensaio), como o sistemas-dd */
+  comFinanceiro?: boolean;
   /** relógio do servidor, para a prévia vencer */
   agora?: () => number;
   /** servidor ANTES da 0.1.10.8-pol: não informa o dono no /esquema e não conhece o tipo "regra" de /estrutura */
@@ -54,6 +56,12 @@ export function servidorAdminFalso(o: OpcoesFalso = {}) {
         ]
       : []),
   ];
+  if (o.comFinanceiro) {
+    usuarios.push({ user_id: 'u-5', login: 'fin', nome: 'Fin Teste', papel: 'financeiro', unidade: null, ativo: true, criado_em: '2026-10-05T10:00:00Z' });
+    for (const u of usuarios as Array<Record<string, unknown>>) u.fin_unidades ??= null;
+  }
+  const conhecidas = ['Açailândia-MA', 'Balsas-MA', 'Instituto Trauma', 'Magalhães Advocacia', 'Marabá-PA'];
+  const chaveNome = (x: string) => x.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().replace(/\s*-\s*[a-z]{2}$/, '').replace(/\s+/g, ' ').trim();
   let n = 0;
   const json = (status: number, corpo: unknown) =>
     ({ ok: status >= 200 && status < 300, status, text: async () => (typeof corpo === 'string' ? corpo : JSON.stringify(corpo)) }) as unknown as Response;
@@ -106,7 +114,7 @@ export function servidorAdminFalso(o: OpcoesFalso = {}) {
       case 'POST /admin/v1/simular':
         return json(200, corpo.escrever ? { ok: false, erro: 'permission denied for table rh_funcionarios' } : { ok: true, linhas: [{ id: 1 }] });
       case 'GET /admin/v1/usuarios':
-        return json(200, { usuarios });
+        return json(200, { usuarios, ...(o.comFinanceiro ? { recursos: ['fin_unidades_ensaio'] } : {}) });
       case 'GET /admin/v1/log':
         return json(200, { registros: registro.filter((r) => !u.searchParams.get('tabela') || r.tabela === u.searchParams.get('tabela')) });
       case 'POST /admin/v1/preparar': {
@@ -152,6 +160,27 @@ export function servidorAdminFalso(o: OpcoesFalso = {}) {
         registro.push({ tabela: '(estrutura)', quem: corpo.quem, op: 'estrutura' });
         return json(200, { ok: true, sql: String(corpo.sqlAprovado).split(';\n') });
       case 'POST /admin/v1/usuario':
+        if (corpo.acao === 'fin_unidades') {
+          if (!o.comFinanceiro) return json(400, { erro: 'acao deve ser papel, unidade ou ativo' });
+          const alvo = (usuarios as Array<Record<string, any>>).find((x) => x.user_id === corpo.user_id);
+          if (!alvo) return json(400, { erro: 'usuário não encontrado' });
+          if (alvo.papel !== 'financeiro') return json(400, { erro: `fin_unidades só vale para o papel financeiro (este usuário é ${alvo.papel})` });
+          let nova: string[] | null = null;
+          if (Array.isArray(corpo.valor) && corpo.valor.length) {
+            nova = [];
+            for (const x of corpo.valor as string[]) {
+              const c = conhecidas.find((k) => chaveNome(k) === chaveNome(x));
+              if (!c) return json(400, { erro: `o banco recusou: fin_unidades: "${x}" não é uma empresa/unidade conhecida. Conhecidas: ${conhecidas.join(', ')}` });
+              if (!nova.includes(c)) nova.push(c);
+            }
+            nova.sort();
+          }
+          const antes = { ...alvo };
+          if (corpo.ensaio === true) return json(200, { ok: true, ensaio: true, antes, depois: { ...alvo, fin_unidades: nova } });
+          alvo.fin_unidades = nova;
+          registro.push({ tabela: 'rh_usuarios', quem: corpo.quem, op: 'fin_unidades', valor: nova });
+          return json(200, { ok: true, antes, depois: { ...alvo }, backup_id: 'bk-fin-1' });
+        }
         // contrato novo do servidor: admin só com `confirmado_admin: true` (que o conector manda só na confirmação)
         if (corpo.acao === 'papel' && corpo.valor === 'admin' && corpo.confirmado_admin !== true) return json(403, { erro: 'o perfil admin exige confirmado_admin' });
         registro.push({ tabela: 'rh_usuarios', quem: corpo.quem, op: corpo.acao });

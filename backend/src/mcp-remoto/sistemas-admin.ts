@@ -21,7 +21,7 @@ import { idUsuario, linkDoConvite, resolverSistema, VALIDADE_MS, type ContextoSi
 
 const SISTEMA = z.string().optional().describe('qual sistema (slug da unidade onde está cadastrado); pode omitir se só há um ligado');
 
-function motivoValido(v: unknown): string {
+export function motivoValido(v: unknown): string {
   const m = typeof v === 'string' ? v.trim() : '';
   if (m.length < 5) throw new ErroDeEntrada('diga o motivo em uma frase (mínimo 5 caracteres): quem vira admin e por quê fica no registro');
   return m.slice(0, 300);
