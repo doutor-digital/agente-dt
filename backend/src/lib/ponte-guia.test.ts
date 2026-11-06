@@ -345,6 +345,13 @@ describe('guia da Ponte — campo que um robô da unidade preenche (valor-consul
     assert.ok(faltam(COM_DATA, ['¤ Valor da Consulta'], DEFS).includes('¤ Valor da Consulta'));
   });
 
+  it('cartão de que o robô desiste (plano/convênio, em unidade com antecipado): a SDR volta a preencher; os demais seguem escondidos', () => {
+    const desiste = (lead: { id: number }) => lead.id === 777;
+    const monta = (id: number) => montarGuia({ lead: { ...cartao(ST.agendado, COM_DATA), id }, defs: DEFS_VC, funis: FUNIS, tz: TZ, preenchidosPorRobo: ['¤ Valor da Consulta'], robosDesistemDoCartao: desiste, agora: AGORA_VC }).faltam.map((d) => d.nome);
+    assert.ok(monta(777).includes('¤ Valor da Consulta'));
+    assert.ok(!monta(778).includes('¤ Valor da Consulta'));
+  });
+
   it('campo da conta de tipo que o robô não grava (texto): a SDR continua preenchendo', () => {
     const comoTexto = DEFS_VC.map((d) => (d.name === '¤ Valor da Consulta' ? { ...d, type: 'text' } : d));
     assert.ok(faltam(COM_DATA, ['¤ Valor da Consulta'], comoTexto).includes('¤ Valor da Consulta'));

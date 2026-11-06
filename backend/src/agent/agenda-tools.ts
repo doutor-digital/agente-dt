@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import type { Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
+import { valorDaConsultaAoAgendar } from '../lib/valor-consulta-agendar.js';
 import { logger } from '../lib/logger.js';
 import type { TraceRecorder } from './trace-recorder.js';
 import type { KommoClient } from '../services/kommo.service.js';
@@ -1792,6 +1793,12 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
             escolhaSalva,
             valorAtual: leadAtual ? valorDoCampo(leadAtual, idPagamento) : undefined,
           });
+
+          // ¤ Valor da Consulta ANTES de a forma de pagamento: o modelo "consulta prepagamento" do Kommo lê este campo assim que a forma vira
+          // Sim. Só unidade com preço antecipado nas fontes e com a chave `valor-consulta` ligada/seca; falhar aqui não derruba o agendamento.
+          await valorDaConsultaAoAgendar({
+            unit: fresca, kommo, leadId: args.leadId!, leadAtual, data: args.data, hora: args.hora, pagamento: pagamento.valor, ehRetorno, ehAvaliacao: (args.idCategory ?? 1) === 1,
+          }).catch((err) => logger.warn({ err, leadId: args.leadId, unit: unit.slug }, 'valor-consulta: falhou ao agendar — a varredura da franquia tenta de novo'));
 
           const carimbos: Array<{ campo: string; id: number | null; fn: (id: number) => Promise<void> }> = [
             { campo: NOME_AGENDOU, id: idDe(NOME_AGENDOU), fn: (id) => kommo.setLeadCustomFieldValue(args.leadId!, id, 'select', 'Sim') },

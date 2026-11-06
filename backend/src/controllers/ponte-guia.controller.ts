@@ -22,7 +22,7 @@ import { createKommoClient, type KommoClient } from '../services/kommo.service.j
 import { CacheDaConta, contaDaUnidade } from '../lib/ponte-cache.js';
 import { camposDaConta } from '../lib/ponte-ligacao.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
-import { CAMPO_VALOR_DA_CONSULTA, valorDaConsultaVemDoRobo } from '../lib/valor-consulta.js';
+import { CAMPO_VALOR_DA_CONSULTA, precosDaUnidade, sinaisDoCartao, valorDaConsultaVemDoRobo } from '../lib/valor-consulta.js';
 import { leadIdDoPedido } from '../lib/ponte-pausa.js';
 import {
   gravarCamposPelaPonte,
@@ -70,6 +70,8 @@ async function contaDoGuia(unit: Unit, kommo: KommoClient): Promise<ContaDoGuia>
     // robô ligado nesta unidade (chave + sincronizador + preço nas fontes): o guia não pede mais o Valor da Consulta à SDR nos cartões que
     // o sincronizador já casou com a franquia. Em seco nada grava, então a SDR continua sendo quem preenche.
     preenchidosPorRobo: valorDaConsultaVemDoRobo(unit) ? [CAMPO_VALOR_DA_CONSULTA] : [],
+    // unidade com pagamento antecipado: o robô não grava o valor de paciente com plano/convênio, então a SDR volta a ser quem preenche
+    robosDesistemDoCartao: precosDaUnidade(unit).antecipado !== null ? (lead) => sinaisDoCartao(lead, (id) => defs.find((d) => d.id === id)?.name).comConvenio : undefined,
     motivosDePerda: () => cacheMotivos.obter(conta, () => kommo.listLossReasons()),
   };
 }

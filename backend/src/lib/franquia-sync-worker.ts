@@ -36,8 +36,10 @@ import { franquiaRespeitaEspera } from './espera-retomada.js';
 import { fecharOuSegurar, seguradoPelaTrava } from './parados-worker.js';
 import { TAG_SEM_REGUA, campoDoPerdidoDaFranquia, type DecisaoParado } from './parados.js';
 import { automacaoLigada, estadoDaAutomacao, type Estado } from './automacoes-estado.js';
-import { CAMPO_VALOR_DA_CONSULTA, decidirValorDaConsulta } from './valor-consulta.js';
-import { valorDaConsultaNoDia } from '../agent/pagamento-da-unidade.js';
+import { CAMPO_VALOR_DA_CONSULTA, consultaEhHoje, decidirValorDaConsulta, precosDaUnidade, sinaisDoCartao } from './valor-consulta.js';
+import { gravarValorDaConsulta, robotPodeTrocar, valorNoCartao } from './valor-consulta-aplicar.js';
+import { marcasNoBanco, type MarcasDoValor } from './valor-consulta-marca.js';
+import { fusoDaUnidade } from './fuso.js';
 import {
   CAMPO_ID_CLIENT, PREFIXO_CONFLITO, TAG_CONFLITO, ID_AUTOMACAO as AUTOMACAO_1610, anotarRoboPos, idsDoConflito, cartaoTravadoNoConflito, cartoesComMaisDeUmPaciente, chaveDaDevolucao, chaveDaFalta, chaveDaSujeira, chaveDaTarefaDeDevolucao,
   chaveDoRoboPos, tarefaDaSujeira,
@@ -987,6 +989,8 @@ interface CtxSync {
   camposPorNome?: CampoDaConta[];
   /** Sessão na tela da franquia, aberta na primeira vez que um cartão precisa dela (login por varredura, por unidade). */
   tela?: { sessao: SessaoTela | null; aberta: boolean };
+  /** Onde mora a marca do que o robô `valor-consulta` gravou (o teste passa uma de mentira; padrão: o banco). */
+  marcas?: MarcasDoValor;
   /** `FRANQUIA_REVISAO_SECO=1`: a revisão pelo histórico só registra o que faria (campos e etapa); a varredura normal não muda */
   seco?: boolean;
   /** Ficha (`GET /api/clients/{id}`) já lida NESTA varredura, por idClient: o mesmo paciente não custa duas chamadas. */
@@ -1552,7 +1556,8 @@ const MAX_VALOR_CONSULTA_POR_VARREDURA = Number(process.env.VALOR_CONSULTA_MAX) 
  * marcada. A regra mora em `valor-consulta.ts`; aqui só se lê o cartão e se aplica.
  *
  * Chave `valor-consulta` (tela de Automações): desligado não faz nada; seco registra "gravaria"; ligado grava SÓ em
- * campo vazio. O seco do sincronizador inteiro (`ctx.seco`) também segura: sem escrita escondida no caminho novo.
+ * campo vazio (e, em unidade com pagamento antecipado, troca o que o PRÓPRIO robô gravou quando a forma de pagamento mudou).
+ * O seco do sincronizador inteiro (`ctx.seco`) também segura: sem escrita escondida no caminho novo.
  */
 async function espelharValorDaConsulta(ctx: CtxSync, leadId: number, lead: KommoLead, consulta: SpineSchedule | null): Promise<void> {
   const { unit, kommo, resumo } = ctx;
@@ -1563,20 +1568,31 @@ async function espelharValorDaConsulta(ctx: CtxSync, leadId: number, lead: Kommo
   // nome exato (com o símbolo) primeiro: "Valor da consulta" sem o ¤ não é este campo se houver os dois
   const mesmos = (ctx.camposPorNome ?? []).filter(([k]) => k === alvo).map(([, i]) => i);
   const info = mesmos.find((i) => i.nome === CAMPO_VALOR_DA_CONSULTA) ?? mesmos[0] ?? null;
-  const vazioEm = (l: KommoLead): string | null => {
-    const v = info ? l.custom_fields_values?.find((f) => f.field_id === info.id)?.values?.[0]?.value : undefined;
-    return v === undefined || v === null || String(v).trim() === '' ? null : String(v);
-  };
+  const vazioEm = (l: KommoLead): string | null => (info ? valorNoCartao(l, info.id) : null);
+
+  const consultaEpoch = consulta?.dateAttendanceUtc ? Math.floor(Date.parse(consulta.dateAttendanceUtc) / 1000) : null;
+  const precos = precosDaUnidade(unit);
+  // Só com preço antecipado nas fontes se olha forma de pagamento, plano e a marca; sem ele (Timbó) é a regra de sempre.
+  const comAntecipado = precos.antecipado !== null;
+  const sinais = comAntecipado ? sinaisDoCartao(lead) : null;
+  const marcas = ctx.marcas ?? marcasNoBanco;
+  const marca = comAntecipado && vazioEm(lead) !== null ? await marcas.ler(unit.id, leadId).catch(() => null) : null;
 
   const d = decidirValorDaConsulta({
     estado,
     consulta,
-    consultaEpoch: consulta?.dateAttendanceUtc ? Math.floor(Date.parse(consulta.dateAttendanceUtc) / 1000) : null,
+    consultaEpoch,
     agoraEpoch: ctx.agoraEpoch,
     tipoDoCampo: info?.type ?? null,
     noCartao: vazioEm(lead),
-    preco: valorDaConsultaNoDia(unit.sourceProdutos),
+    preco: precos.noDia,
     secoGlobal: ctx.seco === true,
+    precoAntecipado: precos.antecipado,
+    forma: sinais?.forma,
+    consultaHoje: consultaEhHoje(consultaEpoch, ctx.agoraEpoch, fusoDaUnidade(unit)),
+    taxaDeReserva: Boolean(unit.spineBookingRequiresPayment),
+    comConvenio: sinais?.comConvenio,
+    marcaCentavos: marca?.centavos ?? null,
   });
 
   if (d.acao === 'nada') {
@@ -1585,10 +1601,14 @@ async function espelharValorDaConsulta(ctx: CtxSync, leadId: number, lead: Kommo
       'sem-preco': 'avaliação marcada, mas as fontes da unidade não trazem o preço da consulta ("CONSULTA … R$ …") — não gravei',
       'sem-campo': 'a conta não tem o campo ¤ Valor da Consulta — não gravei',
       'campo-sem-numero': 'o campo ¤ Valor da Consulta da conta não é monetário nem numérico — não gravei',
+      'taxa-de-reserva': 'unidade com taxa de reserva (o antecipado é parte do valor, não desconto) — o robô não grava o Valor da Consulta aqui',
     };
     const aviso = avisos[d.motivo];
     // só vale avisar de quem teria recebido: sem-campo/campo-sem-numero aparecem antes de olhar a consulta, então confere
     if (aviso && consulta && !jaRegistrou(`${unit.slug}:valor-consulta:${d.motivo}`)) logger.warn({ unit: unit.slug, leadId, motivo: d.motivo }, `valor-consulta: ${aviso}`);
+    // plano/convênio: por cartão (uma vez por processo) para dar para conferir quem ficou de fora
+    if (d.motivo === 'convenio' && !jaRegistrou(`${unit.slug}:valor-consulta:convenio:${leadId}`)) logger.info({ unit: unit.slug, leadId, motivo: d.motivo }, 'valor-consulta: paciente com plano/convênio — não gravei (o preço do convênio não é o particular)');
+    if (d.motivo === 'espera-forma' && !jaRegistrou(`${unit.slug}:valor-consulta:espera:${leadId}`)) logger.info({ unit: unit.slug, leadId, motivo: d.motivo }, 'valor-consulta: espera a forma de pagamento (¤ Pagamento antecipado) — grava o preço no dia só no dia da consulta');
     return;
   }
   if (!info) return;
@@ -1602,22 +1622,27 @@ async function espelharValorDaConsulta(ctx: CtxSync, leadId: number, lead: Kommo
   }
   resumo.valorConsultaCartoes = ja + 1;
 
-  if (d.acao === 'gravaria') {
-    logger.info({ unit: unit.slug, leadId, campo: CAMPO_VALOR_DA_CONSULTA, valor: d.valor, motivo: d.motivo }, 'valor-consulta [seco]: gravaria');
-    registrarSimulacao(unit, 'valor-consulta', { leadId, acao: 'gravaria', alvo: CAMPO_VALOR_DA_CONSULTA, valor: d.valor, motivo: d.motivo });
-    return;
-  }
   try {
-    // O cartão desta varredura tem minutos de idade (várias chamadas e pausas antes de chegar aqui): a recepção pode ter digitado
-    // o valor (ou um 0 de cortesia) nesse meio-tempo. Relê antes de escrever; sem conseguir reler, não escreve.
-    const fresco = await kommo.getLead(leadId);
-    if (vazioEm(fresco) !== null) {
-      logger.info({ unit: unit.slug, leadId }, 'valor-consulta: alguém preencheu o campo enquanto a varredura rodava — não gravei');
+    if (d.acao === 'gravaria') {
+      // Troca: além de o cartão ter exatamente a marca, a última mudança do campo tem de ser de integração (no ligado,
+      // `gravarValorDaConsulta` confere depois de reler o cartão). No seco confere aqui, para não prometer o que o ligado recusaria.
+      if (d.troca && !(await robotPodeTrocar(kommo, leadId, info.id))) return;
+      logger.info({ unit: unit.slug, leadId, campo: CAMPO_VALOR_DA_CONSULTA, valor: d.valor, motivo: d.motivo }, 'valor-consulta [seco]: gravaria');
+      registrarSimulacao(unit, 'valor-consulta', { leadId, acao: 'gravaria', alvo: CAMPO_VALOR_DA_CONSULTA, valor: d.valor, motivo: d.motivo });
       return;
     }
-    await kommo.setLeadCustomFieldValue(leadId, info.id, info.type, d.valor, info.enums);
+    const r = await gravarValorDaConsulta({
+      unit, kommo, leadId, campo: info, decisao: d, marcaEsperada: marca?.centavos ?? null, origem: 'sincronizador',
+      marcas: comAntecipado ? marcas : undefined,
+    });
+    if (r !== 'gravou') {
+      logger.info({ unit: unit.slug, leadId, resultado: r }, r === 'nao-e-do-robo'
+        ? 'valor-consulta: a última mudança do campo não foi de integração (ou não consegui conferir) — não troquei'
+        : 'valor-consulta: alguém mexeu no campo enquanto a varredura rodava — não gravei');
+      return;
+    }
     resumo.escritas++;
-    logger.info({ unit: unit.slug, leadId, campo: CAMPO_VALOR_DA_CONSULTA, valor: d.valor, motivo: d.motivo }, 'valor-consulta: gravado');
+    logger.info({ unit: unit.slug, leadId, campo: CAMPO_VALOR_DA_CONSULTA, valor: d.valor, troca: d.troca === true, motivo: d.motivo }, 'valor-consulta: gravado');
   } catch (err) {
     resumo.erros++;
     logger.warn({ err, unit: unit.slug, leadId, campo: CAMPO_VALOR_DA_CONSULTA }, 'valor-consulta: falha ao gravar');
