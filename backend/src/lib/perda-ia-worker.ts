@@ -428,6 +428,39 @@ async function varrerUnidade(unit: Unit, todas: Unit[], dividida?: { kommoDe: Un
   }
 }
 
+/**
+ * Para a faxina do mês: uma passada do `motivo-perdido-ia` numa unidade agora (a janela dele é a de sempre: perdidos das
+ * últimas 24 h, teto `MAX_MOTIVOS`). Só roda onde ele está ligado ou em «só no papel»; e não entra no meio da varredura de hora
+ * em hora. A `perda-ia` (que MOVE cartão) não é chamada: a faxina não move nada por conta própria.
+ */
+export async function motivosDaUnidadeAgora(
+  unit: Unit,
+  todas: Unit[],
+): Promise<{ executou: boolean; motivo?: string; estado: 'ligado' | 'seco' | 'desligado'; candidatos: number; gravados: number; erros: number }> {
+  const estado = estadoMotivo(unit.slug);
+  const vazio = { estado, candidatos: 0, gravados: 0, erros: 0 };
+  if (estado === 'desligado') return { executou: false, motivo: 'desligado nesta unidade', ...vazio };
+  if (rodando) return { executou: false, motivo: 'a varredura de hora em hora estava em andamento', ...vazio };
+  rodando = true;
+  try {
+    const dividida = await contaDividida(todas);
+    const contaUnit = dividida?.conta ?? unit;
+    if (!contaUnit.kommoAccessToken) return { executou: false, motivo: 'unidade sem credencial do Kommo', ...vazio };
+    const kommo = createKommoClient(contaUnit);
+    const funis = await funisDaConta(contaUnit, kommo);
+    if (!funis) return { executou: false, motivo: 'não achei o funil COMERCIAL', ...vazio };
+    const resumo = resumoNovo(unit, ID_MOTIVO_PERDIDO_IA, estado === 'seco');
+    try {
+      await varrerMotivos({ unit, kommo, funis, grupo: dividida?.grupo ?? null, seco: resumo.seco, agora: Math.floor(Date.now() / 1000) }, resumo);
+    } finally {
+      logger.info(resumo, `${ID_MOTIVO_PERDIDO_IA}: varredura (pedida pela faxina do mês)`);
+    }
+    return { executou: true, estado, candidatos: resumo.candidatos, gravados: resumo.gravados, erros: resumo.erros };
+  } finally {
+    rodando = false;
+  }
+}
+
 async function varrer(): Promise<void> {
   if (rodando) return;
   rodando = true;

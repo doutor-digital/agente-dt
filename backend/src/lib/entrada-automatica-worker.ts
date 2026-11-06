@@ -16,7 +16,7 @@ import { createKommoClientSemFreio } from '../services/kommo.service.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import { registrarSimulacao } from './so-no-papel.js';
 import { contaDividida } from './crm-compartilhado.js';
-import { ID_ENTRADA, ID_ESTOQUE, configDoAmbiente, memoriaNova, rodarConta, type MemoriaDaConta } from './entrada-automatica.js';
+import { ID_ENTRADA, ID_ESTOQUE, configDoAmbiente, memoriaNova, rodarConta, type MemoriaDaConta, type ResumoDaRodada } from './entrada-automatica.js';
 
 const SWEEP_MS = Number(process.env.ENTRADA_SWEEP_MS) || 3 * 60_000;
 const PRIMEIRA_VARREDURA_MS = 90_000;
@@ -67,6 +67,9 @@ export function quemVeAPrevia<T extends { slug: string }>(membros: readonly T[],
 }
 
 const memorias = new Map<string, MemoriaDaConta>();
+/** O resumo da última rodada de cada conta (a faxina do mês LÊ isto quando a `entrada-estoque` já está ligada ou em só no papel). Em memória: um deploy zera. */
+const ultimosResumos = new Map<string, { em: number; resumo: ResumoDaRodada }>();
+export const ultimoResumoDaEntrada = (conta: string) => ultimosResumos.get(conta.trim().toLowerCase()) ?? null;
 let rodando = false;
 /** O worker foi parado (perdeu a liderança, SIGTERM): a rodada em andamento não escreve mais. */
 let parado = false;
@@ -124,6 +127,7 @@ export async function varrerEntrada(): Promise<void> {
           },
           cancelado: () => parado,
         });
+        ultimosResumos.set(conta, { em: Date.now(), resumo });
         const mexeu = resumo.vinculados + resumo.aceitos + resumo.vincularia + resumo.aceitaria + resumo.ambiguos + resumo.erros;
         logger.info({ conta, recente, estoque, ...resumo }, mexeu > 0 ? 'entrada-automatica: rodada' : 'entrada-automatica: rodada sem novidade');
         if (resumo.listaTruncada) logger.warn({ conta, lidos: resumo.lidos }, 'entrada-automatica: a caixa tem mais leads do que o teto de páginas — o resto entra quando a fila andar');

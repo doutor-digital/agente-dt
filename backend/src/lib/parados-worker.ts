@@ -506,7 +506,7 @@ export async function voltarDaEsperaSeRespondeu(unit: Unit, leadId: number, mens
   }
 }
 
-interface Resumo {
+export interface Resumo {
   unit: string;
   conta: string;
   seco: boolean;
@@ -717,6 +717,7 @@ async function varrerConta(unit: Unit, unidadesDaConta: Unit[], dividida?: { kom
   }
 
   logger.info(resumo, 'parados: varredura da conta');
+  ultimosResumos.set(unit.slug, { em: Date.now(), resumo });
   return resumo;
 }
 
@@ -1000,6 +1001,12 @@ async function varrer(): Promise<void> {
   } finally {
     rodando = false;
   }
+}
+
+/** O resumo da última varredura de cada unidade (para a faxina do mês LER, sem disparar passada extra). Em memória: um deploy zera. */
+const ultimosResumos = new Map<string, { em: number; resumo: Resumo }>();
+export function ultimoResumoDosParados(slug: string): { em: number; resumo: Resumo } | null {
+  return ultimosResumos.get(slug) ?? null;
 }
 
 let timer: NodeJS.Timeout | null = null;

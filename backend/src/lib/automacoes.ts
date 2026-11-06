@@ -819,6 +819,20 @@ export const AUTOMACOES: readonly Automacao[] = [
     quandoVazio: 'desligado',
     arquivo: 'src/lib/rotina-aniversario-worker.ts',
   },
+  {
+    id: 'faxina-do-mes',
+    chave: 'FAXINA_DO_MES_SLUGS',
+    nome: 'Faxina do mês',
+    oQueFaz:
+      'No dia 1 de cada mês, de madrugada (2h às 7h), arruma o que o dia a dia deixou para trás e manda o relatório no Telegram do João: vincula chat antigo da fila de entrada ao cartão aberto do mesmo telefone, conclui tarefa de robô vencida há mais de 30 dias, tira etiqueta ▶ que ficou presa no cartão, relata o que as automações de etapa já fizeram e pede uma passada do motivo de perda.',
+    pegadinha:
+      'A faxina NÃO move cartão por regra própria e não dispara passada de etapa: LÊ o resumo da última varredura de parados, estoques parados e sincronizador/revisão dos agendados velhos (desligada fica quieta; em só no papel conta o «moveria»). Só chama o motivo-perdido-ia. Em «Só no papel» a faxina não grava NADA no Kommo e não dispara o motivo-perdido-ia ligado: o relatório diz o que FARIA. Os chats da caixa «Leads de entrada» seguem a regra da `entrada-estoque` (a mesma do robô de 3 em 3 minutos): só vincula quando o telefone (últimos 8 dígitos E mesmo DDD) bate com UM cartão aberto; 2+ cartões vão para a equipe com os links; quem não tem par fica na caixa (a faxina NUNCA aceita lead). Só trata chat com mais de 120 minutos na caixa: o mais novo é do robô de 3 em 3 minutos (se ele estiver desligado, fica na caixa). Se a `entrada-estoque` já está ligada ou em só no papel na conta, a faxina só relata a última rodada dela. Tarefa de pessoa nunca é tocada (só created_by 0 com marca de alerta), e ALERTA CLÍNICO (sinal de alerta, URGENTE, LIGAR AGORA) nunca é fechado: vai para «precisam da equipe» com o link. Tetos por unidade: 100 chats lidos, 60 vínculos, 300 tarefas, 100 etiquetas; o que passar fica para o mês seguinte. Uma vez por unidade por mês (trava no banco). Conta dividida (Petrópolis × Caxias) não junta chat. Para testar fora do dia 1: POST /units/:id/automacoes/faxina-do-mes/rodar (o relatório chega no Telegram).',
+    risco: 'move-cartao',
+    temSeco: true,
+    exigeSecoAntes: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/faxina-do-mes-worker.ts',
+  },
 ] as const;
 
 const PORCHAVE = new Map(AUTOMACOES.map((a) => [a.chave, a]));
