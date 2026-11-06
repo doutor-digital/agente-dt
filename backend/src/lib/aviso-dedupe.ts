@@ -14,6 +14,15 @@ import { logger } from './logger.js';
 
 export const JANELA_24H_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * A marca do aviso da despedida (agent/despedida-humano.ts): a Sofia se calou porque o paciente se despediu ou adiou e a equipe
+ * recebeu a tarefa dela. Aqui (e não no agente nem no worker) porque as duas pontas leem a mesma marca: o alerta de "sem
+ * resposta" confere antes de abrir o seu.
+ */
+export const REGRA_DESPEDIDA = 'despedida_humano';
+/** A última fala que a Sofia calou por despedida (regravada a cada "ok"): o alerta de "sem resposta" cobre a espera por ela. */
+export const REGRA_DESPEDIDA_ULTIMA = 'despedida_humano_ultima';
+
 /** Já houve aviso desse tipo pra esse lead dentro da janela? (só leitura) */
 export async function avisoRecente(
   unitId: string,

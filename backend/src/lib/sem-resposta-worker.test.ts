@@ -56,6 +56,8 @@ function cenario(opts: {
   semToken?: boolean;
   /** quando a recuperação de turnos (deploy) abriu a tarefa dela para este lead */
   tarefaDoTurnoPerdidoEm?: Date;
+  /** quando a Sofia se calou por despedida/adiamento e avisou a equipe (despedida-humano) */
+  despedidaAvisouEm?: Date;
 }) {
   const r = {
     enviados: [] as string[],
@@ -86,6 +88,7 @@ function cenario(opts: {
       if (!opts.marcaTarefaNaoGrava) r.marcasTarefa.set(leadId, quando);
     },
     tarefaDoTurnoPerdidoEm: async () => opts.tarefaDoTurnoPerdidoEm ?? null,
+    despedidaAvisouEm: async () => opts.despedidaAvisouEm ?? null,
     telegramPronto: () => !opts.semToken,
     criarTarefa: async (_u, leadId, texto) => {
       r.tentativasDeTarefa++;
@@ -482,4 +485,80 @@ test('textoDaTarefa: telefone/CPF mascarados, trecho curto, sem quebra de linha;
   assert.ok(t.length < 330, `texto curto (${t.length})`);
   assert.match(t, /Responda agora\.$/);
   assert.match(textoDaTarefa({ slug: SLUG, contato: 'Ana', esperaMs: ESPERA_MS, ultima: '' }), /\[Contato: Ana\].*\(sem texto: áudio, imagem ou figurinha\)/);
+});
+
+test('despedida-humano: a Sofia se calou e a equipe já recebeu a tarefa dela — o "sem resposta" não repete (nem tarefa, nem Telegram)', async () => {
+  const c = cenario({
+    oficiais: [msg('entrada', T0, 'Obrigada, entro em contato para agendar logo mais')],
+    agora: depois(6 * 60_000),
+    despedidaAvisouEm: depois(10_000),
+  });
+  const r = await verificarUnidadeSemResposta(unidade, 'ligado', c.deps);
+  assert.equal(r.tarefas, 0);
+  assert.equal(r.alertas, 0);
+  assert.equal(c.r.tentativasDeTarefa, 0);
+  assert.equal(c.r.enviados.length, 0);
+  assert.equal(r.cobertasPelaDespedida, 1, 'conta no contador próprio');
+  assert.equal(r.respondidas, 0, 'e não como "respondida"');
+});
+
+test('despedida-humano: o aviso da despedida é de uma espera ANTERIOR (a equipe respondeu depois) — a espera nova ganha o alerta de sempre', async () => {
+  const c = cenario({
+    oficiais: [msg('entrada', T0), msg('saida', depois(60_000)), msg('entrada', depois(120_000), 'preciso de ajuda')],
+    agora: depois(8 * 60_000),
+    despedidaAvisouEm: depois(30_000),
+  });
+  const r = await verificarUnidadeSemResposta(unidade, 'ligado', c.deps);
+  assert.equal(r.tarefas, 1);
+});
+
+test('despedida-humano: pergunta NOVA do paciente depois do aviso da despedida (ninguém respondeu) não é coberta pelo aviso — o "sem resposta" alerta', async () => {
+  const c = cenario({
+    oficiais: [msg('entrada', T0, 'Obrigada, entro em contato logo mais'), msg('entrada', depois(10 * 60_000), 'Na verdade queria saber o endereço')],
+    agora: depois(16 * 60_000),
+    despedidaAvisouEm: depois(10_000),
+  });
+  const r = await verificarUnidadeSemResposta(unidade, 'ligado', c.deps);
+  assert.equal(r.tarefas, 1);
+});
+
+test('despedida-humano: a leitura da marca só acontece onde a chave está LIGADA (desligada/seco não lê o banco por candidato)', async () => {
+  const { DEPS_SEM_RESPOSTA_PADRAO } = await import('./sem-resposta-worker.js');
+  const original = process.env.DESPEDIDA_HUMANO_SLUGS;
+  try {
+    delete process.env.DESPEDIDA_HUMANO_SLUGS;
+    _semearParaTeste([]);
+    // desligada: devolve null sem tocar no banco (um prisma falso explodiria; aqui nem existe conexão)
+    assert.equal(await DEPS_SEM_RESPOSTA_PADRAO.despedidaAvisouEm!(unidade, 123), null);
+    _semearParaTeste([{ slug: SLUG, automacao: 'despedida-humano', estado: 'seco' }]);
+    assert.equal(await DEPS_SEM_RESPOSTA_PADRAO.despedidaAvisouEm!(unidade, 123), null);
+  } finally {
+    if (original === undefined) delete process.env.DESPEDIDA_HUMANO_SLUGS;
+    else process.env.DESPEDIDA_HUMANO_SLUGS = original;
+    _semearParaTeste([]);
+  }
+});
+
+test('despedida-humano LIGADA: o "sem resposta" lê a marca da ÚLTIMA fala calada, e só enquanto a tarefa do aviso tem menos de 6 h', async () => {
+  const { DEPS_SEM_RESPOSTA_PADRAO } = await import('./sem-resposta-worker.js');
+  const { prisma } = await import('./prisma.js');
+  const { REGRA_DESPEDIDA, REGRA_DESPEDIDA_ULTIMA } = await import('./aviso-dedupe.js');
+  const marcas = new Map<string, Date>();
+  const original = Object.getOwnPropertyDescriptor(prisma, 'cardAlert');
+  Object.defineProperty(prisma, 'cardAlert', {
+    value: { findUnique: async (a: { where: { unitId_leadId_ruleKey: { ruleKey: string } } }) => { const d = marcas.get(a.where.unitId_leadId_ruleKey.ruleKey); return d ? { createdAt: d } : null; } },
+    configurable: true,
+  });
+  try {
+    _semearParaTeste([{ slug: SLUG, automacao: 'despedida-humano', estado: 'ligado' }]);
+    const ultima = new Date(Date.now() - 60_000);
+    marcas.set(REGRA_DESPEDIDA, new Date(Date.now() - 3600_000));
+    marcas.set(REGRA_DESPEDIDA_ULTIMA, ultima);
+    assert.deepEqual(await DEPS_SEM_RESPOSTA_PADRAO.despedidaAvisouEm!(unidade, 1), ultima);
+    marcas.set(REGRA_DESPEDIDA, new Date(Date.now() - 7 * 3600_000)); // tarefa velha e ignorada: o "sem resposta" volta a agir
+    assert.equal(await DEPS_SEM_RESPOSTA_PADRAO.despedidaAvisouEm!(unidade, 1), null);
+  } finally {
+    if (original) Object.defineProperty(prisma, 'cardAlert', original);
+    _semearParaTeste([]);
+  }
 });

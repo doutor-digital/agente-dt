@@ -2538,6 +2538,13 @@ function isTrivialUserMessage(text: string): boolean {
   );
 }
 
+/**
+ * Saída do composer: a consulta do paciente é DESCONHECIDA (unidade sem franquia, a leitura da franquia ou do cartão falhou, ou o
+ * cartão diz que ele já agendou/é paciente)? O grafo lê de volta, e "sem consulta no prompt" não vira "ainda não marcou"
+ * (despedida-humano.ts).
+ */
+export type ConsultaSaida = { desconhecida?: boolean };
+
 export async function composeSystemPromptForUnit(input: {
   unit: Unit;
   agentConfigPrompt?: string;
@@ -2548,6 +2555,8 @@ export async function composeSystemPromptForUnit(input: {
   historico?: Fala[];
   /** Onde deixar a oferta que foi carregada: o grafo a lê de volta para o guardrail de preço, sem consultar duas vezes. */
   ofertaSaida?: { valor?: OfertaVigente | null };
+  /** Onde deixar se a consulta é desconhecida (ver `ConsultaSaida`). */
+  consultaSaida?: ConsultaSaida;
 }): Promise<string> {
   return composeSystemPrompt(await loadComposeInput(input));
 }
@@ -2562,6 +2571,8 @@ export async function composeSystemPromptPartsForUnit(input: {
   historico?: Fala[];
   /** Onde deixar a oferta que foi carregada: o grafo a lê de volta para o guardrail de preço, sem consultar duas vezes. */
   ofertaSaida?: { valor?: OfertaVigente | null };
+  /** Onde deixar se a consulta é desconhecida (ver `ConsultaSaida`). */
+  consultaSaida?: ConsultaSaida;
 }): Promise<{ cacheable: string; dynamic: string }> {
   return composeSystemPromptParts(await loadComposeInput(input));
 }
@@ -2576,6 +2587,8 @@ async function loadComposeInput(input: {
   historico?: Fala[];
   /** Onde deixar a oferta que foi carregada: o grafo a lê de volta para o guardrail de preço, sem consultar duas vezes. */
   ofertaSaida?: { valor?: OfertaVigente | null };
+  /** Onde deixar se a consulta é desconhecida (ver `ConsultaSaida`). */
+  consultaSaida?: ConsultaSaida;
 }): Promise<ComposeInput> {
   const shouldRunRag =
     !!input.userMessage &&
@@ -2602,6 +2615,7 @@ async function loadComposeInput(input: {
         })
     : Promise.resolve(null);
 
+  let consultaFalhou = false;
   const [templates, flagged, knowledge, actions, globalActions, leadFieldRules, leadMemory, consulta, estadoEtapa, lessons, contato, outraSofia, redeDeUnidades, ofertaDaCampanha] = await Promise.all([
     prisma.messageTemplate.findMany({
       where: { unitId: input.unit.id },
@@ -2645,6 +2659,7 @@ async function loadComposeInput(input: {
             { err, leadId: input.leadId },
             'consultaDoLead falhou — sem bloco de consulta no prompt',
           );
+          consultaFalhou = true;
           return null;
         })
       : Promise.resolve(null),
@@ -2654,6 +2669,7 @@ async function loadComposeInput(input: {
             { err, leadId: input.leadId },
             'estadoEtapaDoLead falhou — sem bloco de etapa no prompt',
           );
+          consultaFalhou = true; // sem o cartão não se sabe se ele já agendou ou é paciente
           return null;
         })
       : Promise.resolve(null),
@@ -2683,7 +2699,10 @@ async function loadComposeInput(input: {
   // tratar a pessoa como desconhecida. Caso Wilson, 15/09/2026.
   const etapaFinal =
     !estadoEtapa?.jaAgendadoOuPaciente && telefone && input.leadId
-      ? await estadoEtapaDoLead(input.unit, input.leadId, telefone).catch(() => estadoEtapa)
+      ? await estadoEtapaDoLead(input.unit, input.leadId, telefone).catch(() => {
+        consultaFalhou = true;
+        return estadoEtapa;
+      })
       : estadoEtapa;
 
   // O cartão diz que a pessoa já agendou ou é paciente, mas a consulta não foi a Sofia que marcou —
@@ -2698,8 +2717,16 @@ async function loadComposeInput(input: {
   const pacienteFranquia =
     input.leadId && input.unit.spineEnabled && perguntarAFranquia
       ? await pacienteNaFranquia(input.unit, input.leadId, [etapaFinal?.tituloDoCartao, contato?.contactName], telefone)
-          .catch(() => null)
+          .catch(() => {
+            consultaFalhou = true;
+            return null;
+          })
       : null;
+  if (input.consultaSaida) {
+    // Desconhecida: sem integração com a franquia (não dá para afirmar "não marcou"), ou a leitura falhou, ou o cartão diz
+    // que ele já agendou/é paciente. Fora disso, "sem bloco de consulta" quer dizer que a franquia respondeu que não há.
+    input.consultaSaida.desconhecida = !input.unit.spineEnabled || consultaFalhou || !!etapaFinal?.jaAgendadoOuPaciente;
+  }
 
   return {
     ...input,

@@ -34,7 +34,8 @@ import { ehEncerramento } from './encerramento.js';
 import { mascararPii } from './pii.js';
 import { registrarSimulacao, type Simulacao } from './so-no-papel.js';
 import { esquemaDaUnidade } from './kommo-schema.js';
-import { marcarAviso, marcadoEm } from './aviso-dedupe.js';
+import { marcarAviso, marcadoEm, REGRA_DESPEDIDA, REGRA_DESPEDIDA_ULTIMA } from './aviso-dedupe.js';
+import { estadoDaDespedidaHumano, JANELA_MESMO_EVENTO_MS } from './despedida-humano-estado.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { mensagensOficiais, type MensagemOficial } from '../services/kommo-talks.service.js';
 
@@ -199,6 +200,11 @@ export interface DepsSemResposta {
   marcarTarefa: (unit: Unit, leadId: number, quando: Date) => Promise<void>;
   /** Quando a recuperação de turnos (deploy) abriu tarefa para este lead, ou null — a mesma espera não ganha uma segunda. */
   tarefaDoTurnoPerdidoEm: (unit: Unit, leadId: number) => Promise<Date | null>;
+  /**
+   * Quando a Sofia se calou de propósito e avisou a equipe (despedida-humano.ts), ou null. Aquela espera não é descuido: a equipe
+   * foi avisada pela tarefa própria, e o alerta de "sem resposta" não repete (nem no Telegram do João). Opcional: sem ela, vale o de antes.
+   */
+  despedidaAvisouEm?: (unit: Unit, leadId: number) => Promise<Date | null>;
   /** Abre a tarefa no cartão, prazo = agora, no responsável do cartão. LANÇA se o Kommo não aceitou. */
   criarTarefa: (unit: Unit, leadId: number, texto: string) => Promise<void>;
   /** O servidor tem o token do Telegram? Sem ele só a tarefa sai — e a espera não é relida a cada minuto por isso. */
@@ -264,6 +270,14 @@ export const DEPS_SEM_RESPOSTA_PADRAO: DepsSemResposta = {
   tarefaEm: async (unit, leadId) => marcadoEm(unit.id, leadId, REGRA_SEM_RESPOSTA_TAREFA),
   marcarTarefa: (unit, leadId, quando) => marcarAviso(unit.id, leadId, REGRA_SEM_RESPOSTA_TAREFA, quando),
   tarefaDoTurnoPerdidoEm: async (unit, leadId) => marcadoEm(unit.id, leadId, REGRA_TAREFA_TURNO_PERDIDO),
+  // Só lê a marca onde a despedida está LIGADA. Devolve a da ÚLTIMA fala calada, e só enquanto a tarefa do aviso é recente (6 h):
+  // tarefa vencida e ignorada deixa o "sem resposta" agir.
+  despedidaAvisouEm: async (unit, leadId) => {
+    if (estadoDaDespedidaHumano(unit.slug) !== 'ligado') return null;
+    const tarefa = await marcadoEm(unit.id, leadId, REGRA_DESPEDIDA);
+    if (!tarefa || Date.now() - tarefa.getTime() > JANELA_MESMO_EVENTO_MS) return null;
+    return marcadoEm(unit.id, leadId, REGRA_DESPEDIDA_ULTIMA);
+  },
   criarTarefa: async (unit, leadId, texto) => {
     const kommo = createKommoClient(unit);
     // O responsável do cartão; o `createTask` troca o login da consultoria pelo usuário da clínica (quando é um só).
@@ -344,6 +358,8 @@ export interface ResumoSemResposta {
   tarefasFalhas: number;
   simulados: number;
   respondidas: number;
+  /** Esperas que a Sofia calou de propósito e a despedida-humano já avisou (não são "respondidas"). */
+  cobertasPelaDespedida: number;
 }
 
 /** Uma varredura numa unidade. Nunca lança por causa de um lead. */
@@ -352,7 +368,7 @@ export async function verificarUnidadeSemResposta(
   estado: Estado,
   deps: DepsSemResposta = DEPS_SEM_RESPOSTA_PADRAO,
 ): Promise<ResumoSemResposta> {
-  const resumo: ResumoSemResposta = { candidatas: 0, alertas: 0, tarefas: 0, tarefasFalhas: 0, simulados: 0, respondidas: 0 };
+  const resumo: ResumoSemResposta = { candidatas: 0, alertas: 0, tarefas: 0, tarefasFalhas: 0, simulados: 0, respondidas: 0, cobertasPelaDespedida: 0 };
   if (estado === 'desligado' || !deps.dentroDoHorario(unit)) return resumo;
   const agora = deps.agora();
   const de = new Date(agora.getTime() - ESPERA_MS - JANELA_MS);
@@ -373,6 +389,14 @@ export async function verificarUnidadeSemResposta(
         continue;
       }
       if (!deveAlertar(espera, agora)) continue;
+      // A Sofia se calou porque o paciente se despediu/adiou e a equipe já recebeu a tarefa dela: mesma espera, um aviso só.
+      // Só cobre a espera se o aviso veio DEPOIS da última mensagem dele: pergunta nova depois do aviso é espera nova.
+      const avisoDaDespedida = deps.despedidaAvisouEm ? await deps.despedidaAvisouEm(unit, c.leadId) : null;
+      if (avisoDaDespedida && avisoDaDespedida.getTime() >= espera.ultimaEm.getTime() && mesmaEsperaJaAlertada(msgs, avisoDaDespedida, agora)) {
+        resumo.cobertasPelaDespedida++;
+        lembrarConferida(chaveConferida, agora.getTime());
+        continue;
+      }
       const chaveDoLead = `${unit.id}:${c.leadId}`;
       const esperaMs = agora.getTime() - espera.desde.getTime();
 

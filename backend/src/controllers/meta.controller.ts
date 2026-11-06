@@ -143,6 +143,7 @@ async function processMetaMessage(
       {
         leadId: 0,
         traceId: trace.id,
+        silencio: false,
         messages: [new HumanMessage(textoDoPaciente)],
       },
       {

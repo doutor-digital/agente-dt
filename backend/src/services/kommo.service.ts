@@ -1954,7 +1954,7 @@ export class KommoClient {
    * as abertas não. Erro de API lança.
    */
   async listarTarefas(
-    args: { concluidas?: boolean; taskTypeId?: number; completeTillDe?: number; completeTillAte?: number; maxPaginas?: number } = {},
+    args: { concluidas?: boolean; taskTypeId?: number; /** só as tarefas deste cartão */ leadId?: number; completeTillDe?: number; completeTillAte?: number; maxPaginas?: number } = {},
   ): Promise<{ tarefas: KommoTarefa[]; completa: boolean }> {
     const tarefas: KommoTarefa[] = [];
     const maxPaginas = args.maxPaginas ?? 40;
@@ -1964,6 +1964,7 @@ export class KommoClient {
           params: {
             'filter[is_completed]': args.concluidas ? 1 : 0,
             ...(args.taskTypeId ? { 'filter[task_type][]': args.taskTypeId } : {}),
+            ...(args.leadId ? { 'filter[entity_id][]': args.leadId, 'filter[entity_type]': 'leads' } : {}),
             ...(args.completeTillDe !== undefined ? { 'filter[complete_till][from]': args.completeTillDe } : {}),
             ...(args.completeTillAte !== undefined ? { 'filter[complete_till][to]': args.completeTillAte } : {}),
             'order[complete_till]': 'asc',
@@ -1981,6 +1982,17 @@ export class KommoClient {
     } catch (err) {
       wrapAxiosError(err, 'listarTarefas');
     }
+  }
+
+  /**
+   * As tarefas ABERTAS de um cartão. Filtra de novo aqui o que voltou (entidade e estado): se o Kommo ignorar o filtro
+   * e devolver tarefas da conta, quem pergunta "este cartão tem tarefa?" não pode receber um sim por causa de outro
+   * cartão. Erro lança.
+   */
+  async tarefasAbertasDoLead(leadId: number): Promise<KommoTarefa[]> {
+    // A mesma paginação de `listarTarefas` (250 por página); `maxPaginas` curto: um cartão não tem tantas tarefas abertas.
+    const { tarefas } = await this.listarTarefas({ concluidas: false, leadId, maxPaginas: 10 });
+    return tarefas.filter((t) => !t.is_completed && Number(t.entity_id) === leadId && (!t.entity_type || t.entity_type === 'leads'));
   }
 
   /** Muda texto, horário e/ou duração de uma tarefa. */

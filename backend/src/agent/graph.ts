@@ -56,6 +56,7 @@ import {
   travaDoHorario,
 } from './horario-oferecido.js';
 import { empurraHorario, pacienteEncerrou, semEmpurrarHorario } from './paciente-encerrou.js';
+import { decidirDespedida, estadoDaDespedidaHumano } from './despedida-humano.js';
 import { falaDoPacienteNoTurno, instrucaoSemObjecao, objecaoInventada, semASonda } from './objecao-inventada.js';
 
 const FALLBACK_LOOP_GUARDRAIL =
@@ -708,6 +709,8 @@ export async function buildAgentGraph(
     // A oferta do disparo de campanha que este paciente recebeu: o prompt a ensina à Sofia e o guardrail de preço a aceita.
     // O prompt a carrega (junto com o resto, em paralelo) e a deixa aqui, para o guardrail ler a MESMA coisa sem consultar de novo.
     const ofertaDoTurno: { valor?: OfertaVigente | null } = {};
+    // Se a consulta do paciente é desconhecida (franquia fora do ar etc.): "sem consulta no prompt" não é "ainda não marcou".
+    const consultaDoTurno: { desconhecida?: boolean } = {};
 
     let systemMessage: SystemMessage;
     // O prompt deste turno em texto: a guarda do nome do profissional (lá embaixo) só deixa sair
@@ -722,6 +725,7 @@ export async function buildAgentGraph(
         leadId: state.leadId,
         historico: falas,
         ofertaSaida: ofertaDoTurno,
+        consultaSaida: consultaDoTurno,
       });
       promptDoTurno = `${cacheable}\n${dynamic ?? ''}`;
       systemMessage = new SystemMessage({
@@ -739,9 +743,32 @@ export async function buildAgentGraph(
         leadId: state.leadId,
         historico: falas,
         ofertaSaida: ofertaDoTurno,
+        consultaSaida: consultaDoTurno,
       });
       promptDoTurno = dynamicPrompt;
       systemMessage = new SystemMessage(dynamicPrompt);
+    }
+    // O paciente se despediu ou adiou e não tem consulta marcada (despedida-humano.ts): com a chave LIGADA a Sofia não
+    // responde e a equipe é avisada por tarefa no cartão. Antes do modelo (silêncio não gasta token) e fora do meio do
+    // turno (depois de uma ferramenta a resposta ao paciente é obrigatória). Desligada, a decisão nem é calculada.
+    if (!meioDoTurno) {
+      const estadoDespedida = estadoDaDespedidaHumano(unit.slug);
+      if (estadoDespedida !== 'desligado') {
+        const despedida = await decidirDespedida({
+          unit,
+          leadId: Number(state.leadId),
+          estado: estadoDespedida,
+          falas,
+          falasDoPaciente: mensagensDoPaciente,
+          temConsulta: promptTemConsulta(promptDoTurno),
+          consultaDesconhecida: consultaDoTurno.desconhecida !== false,
+          recorder,
+        });
+        if (despedida.acao === 'silenciar') {
+          // Sem mensagem da IA no histórico: o paciente não leu nada. Quem fecha o trace é o canal de entrega (resposta vazia).
+          return { decision: '', silencio: true } satisfies Partial<AgentStateType>;
+        }
+      }
     }
     const extrasDoGuardrail = { ofertaDaCampanha: ofertaDoTurno.valor?.oferta ?? null };
     // Comprovante (foto/PDF) neste turno, ou nas últimas falas do paciente: a ferramenta de agendar recusa e a resposta que

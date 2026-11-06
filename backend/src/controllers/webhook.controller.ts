@@ -1665,6 +1665,7 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
       {
         leadId,
         traceId,
+        silencio: false,
         messages: [new HumanMessage(entradaDoModelo)],
       },
       {
