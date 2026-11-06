@@ -180,10 +180,31 @@ export function agendamentoNormalizado(a: AgendamentoBruto): Agendamento {
   };
 }
 
-/** Status que contam como comparecimento ou falta, sem acento e minúsculos. */
-const ATENDIDO = new Set(['atendido', 'compareceu', 'realizado']);
-const FALTOU = new Set(['faltou', 'falta', 'nao compareceu']);
 const statusChave = (s: string) => normalizar(s).trim();
+
+/**
+ * Desfecho de um agendamento pelo nome do status. Medido no Instituto Trauma (06/11/2026): Atendido, Faltou, "Faltou (com aviso
+ * prévio)", "Faltou (sem aviso prévio)", Cancelado, "Não atendido" e Agendado. Todo status que COMEÇA com "faltou" é falta (a 1ª
+ * versão só contava "Faltou" puro e dava 6,9% onde o certo era 27,7%). Cancelado e Não atendido não são falta: têm contagem própria.
+ * Status desconhecido cai em "outro" e aparece no resumo, para nunca sumir da conta sem aviso.
+ */
+export type Desfecho = 'atendido' | 'falta' | 'cancelado' | 'naoAtendido' | 'emAberto' | 'outro';
+export function desfecho(status: string): Desfecho {
+  const s = statusChave(status);
+  if (/^(atendido|compareceu|realizado)\b/.test(s)) return 'atendido';
+  if (/^(faltou|falta)\b/.test(s) || s === 'nao compareceu') return 'falta';
+  if (/^(cancelad|desmarcad)/.test(s)) return 'cancelado';
+  if (/^nao atendid/.test(s)) return 'naoAtendido';
+  if (/^(agendad|confirmad|aguardando|em atendimento|sem status)/.test(s)) return 'emAberto';
+  return 'outro';
+}
+/** "com aviso" / "sem aviso" dentro do status de falta. */
+function tipoDeFalta(status: string): 'comAviso' | 'semAviso' | 'semDetalhe' {
+  const s = statusChave(status);
+  if (s.includes('sem aviso')) return 'semAviso';
+  if (s.includes('com aviso')) return 'comAviso';
+  return 'semDetalhe';
+}
 
 /** Lê as páginas da agenda do período, até o teto. */
 async function lerAgenda(
@@ -246,20 +267,33 @@ function contar<T>(itens: T[], chave: (t: T) => string): Record<string, number> 
   return Object.fromEntries(Object.entries(out).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])));
 }
 
-/** Atendido + faltou + taxa de falta (falta ÷ (atendido + falta)), só com o que já aconteceu. */
+/** Desfechos do que já aconteceu (dias até hoje) e a taxa de falta = faltas ÷ (atendidos + faltas). */
 function comparecimento(itens: Agendamento[], hoje: string) {
   const passados = itens.filter((a) => a.data !== null && a.data <= hoje);
-  const atendidos = passados.filter((a) => ATENDIDO.has(statusChave(a.status))).length;
-  const faltas = passados.filter((a) => FALTOU.has(statusChave(a.status))).length;
+  const de = (d: Desfecho) => passados.filter((a) => desfecho(a.status) === d);
+  const atendidos = de('atendido').length;
+  const faltasLista = de('falta');
+  const faltas = faltasLista.length;
   const base = atendidos + faltas;
-  const semDesfecho = passados.length - base;
+  const pct = (n: number, d: number) => (d ? Math.round((n / d) * 1000) / 10 : null);
+  const outros = de('outro');
   return {
     atendidos,
     faltas,
-    taxaDeFalta: base ? Math.round((faltas / base) * 1000) / 10 : null,
-    // agendamento de dia passado que não virou Atendido nem Faltou: status esquecido, desmarcação ou outro status da clínica
-    passadosSemDesfecho: semDesfecho,
-    regra: 'taxaDeFalta = faltas ÷ (atendidos + faltas), em %, só de dias até hoje. passadosSemDesfecho = dia passado ainda com outro status (ex. Agendado): confira com a recepção.',
+    faltasPorTipo: {
+      comAviso: faltasLista.filter((a) => tipoDeFalta(a.status) === 'comAviso').length,
+      semAviso: faltasLista.filter((a) => tipoDeFalta(a.status) === 'semAviso').length,
+      semDetalhe: faltasLista.filter((a) => tipoDeFalta(a.status) === 'semDetalhe').length,
+    },
+    cancelados: de('cancelado').length,
+    naoAtendidos: de('naoAtendido').length,
+    taxaDeFalta: pct(faltas, base),
+    // dia passado ainda Agendado/Confirmado: a recepção não fechou o status
+    passadosSemDesfecho: de('emAberto').length,
+    ...(outros.length ? { outrosStatus: contar(outros, (x) => x.status) } : {}),
+    regra:
+      'taxaDeFalta = faltas ÷ (atendidos + faltas), em %, só de dias até hoje; falta = todo status que começa com "Faltou". ' +
+      'Cancelado e Não atendido ficam fora da taxa e têm contagem própria. passadosSemDesfecho = dia passado ainda Agendado/Confirmado.',
   };
 }
 
@@ -319,10 +353,10 @@ export async function zenfisioAgenda(ctx: ContextoZenfisio, a: ArgsAgenda) {
         [a.agruparPor!]: chave,
         agendamentos: lista.length,
         porStatus: contar(lista, (x) => x.status),
-        minutosAtendidos: lista.filter((x) => ATENDIDO.has(statusChave(x.status))).reduce((s, x) => s + (x.minutos ?? 0), 0),
+        minutosAtendidos: lista.filter((x) => desfecho(x.status) === 'atendido').reduce((s, x) => s + (x.minutos ?? 0), 0),
         ...(() => {
           const c = comparecimento(lista, hoje);
-          return { atendidos: c.atendidos, faltas: c.faltas, taxaDeFalta: c.taxaDeFalta };
+          return { atendidos: c.atendidos, faltas: c.faltas, cancelados: c.cancelados, naoAtendidos: c.naoAtendidos, taxaDeFalta: c.taxaDeFalta };
         })(),
       }))
       .sort((p, q) => q.agendamentos - p.agendamentos);
@@ -397,8 +431,8 @@ export function registrarFerramentasZenfisio(server: McpServer, ctx: ContextoZen
       title: 'Agenda da clínica (ZenFisio)',
       description:
         'Agendamentos do ZenFisio num período (pela DATA DA CONSULTA, até 93 dias por chamada): paciente, profissional, horário, status ' +
-        '(Agendado, Atendido, Faltou…), convênio, procedimento, sala e pacote de tratamento. O resumo traz contagem por status, atendidos, ' +
-        'faltas, taxa de falta (faltas ÷ (atendidos + faltas), só de dias até hoje) e agendamentos de dias passados que ficaram sem desfecho. ' +
+        '(Agendado, Atendido, Faltou com/sem aviso, Cancelado, Não atendido…), convênio, procedimento, sala e pacote de tratamento. O resumo traz contagem por status, atendidos, ' +
+        'faltas (todo status "Faltou…", separado em com aviso, sem aviso e sem detalhe), cancelados, não atendidos, taxa de falta (faltas ÷ (atendidos + faltas), só de dias até hoje) e agendamentos de dias passados ainda em aberto. ' +
         'Use agruparPor="profissional" para ocupação e falta por profissional, "dia"/"mes" para evolução. Bloqueios de horário não contam. ' +
         'Traz o NOME do paciente; o comentário livre do agendamento não sai. A consulta fica registrada na auditoria.',
       inputSchema: {
