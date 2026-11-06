@@ -19,6 +19,7 @@ import type { Unit } from '@prisma/client';
 import type { KommoClient, KommoLead } from '../services/kommo.service.js';
 import { invalidarEtapa } from '../services/lead-stage.service.js';
 import { logger } from './logger.js';
+import { normalizarNome } from './kommo-schema.js';
 import type { EsquemaKommo } from './kommo-schema.js';
 import { ETAPA } from './franquia-move.js';
 import { CAMPO } from './parados.js';
@@ -171,21 +172,30 @@ export function falasDoUltimoTurno(msgs: ReadonlyArray<{ role: string; content: 
  * não a tem e usa `NAO_PERTURBAR`; `Fluxo · Opt-out WhatsApp` é o último recurso.
  */
 export const ETIQUETAS_DE_NAO_CONTATAR = ['NO_FOLLOW_UP', 'NAO_PERTURBAR', 'Fluxo · Opt-out WhatsApp'] as const;
-const cacheDaEtiqueta = new Map<string, { em: number; nome: string }>();
+const cacheDaEtiqueta = new Map<string, { em: number; nome: string; existentes: ReadonlySet<string> | null }>();
 const CACHE_ETIQUETA_MS = 60 * 60_000;
 
 export async function etiquetaDeNaoContatar(unit: Pick<Unit, 'id'>, kommo: Pick<KommoClient, 'listLeadTags'>): Promise<string> {
   const hit = cacheDaEtiqueta.get(unit.id);
   if (hit && Date.now() - hit.em < CACHE_ETIQUETA_MS) return hit.nome;
   let nome: string = ETIQUETAS_DE_NAO_CONTATAR[0];
+  let existentes: ReadonlySet<string> | null = null;
   try {
-    const existentes = new Set((await kommo.listLeadTags(25)).map((t) => t.name));
-    nome = ETIQUETAS_DE_NAO_CONTATAR.find((n) => existentes.has(n)) ?? nome;
+    existentes = new Set((await kommo.listLeadTags(25)).map((t) => t.name));
+    nome = ETIQUETAS_DE_NAO_CONTATAR.find((n) => existentes?.has(n)) ?? nome;
   } catch (err) {
     logger.warn({ err: String(err), unit: unit.id }, 'sofia-fecha: não li as etiquetas da conta — usei NO_FOLLOW_UP');
   }
-  cacheDaEtiqueta.set(unit.id, { em: Date.now(), nome });
+  // leitura que falhou vale por 5 min (e não 1 h): a conta pode TER a etiqueta e um 429 não pode calar a perda-ia por uma hora
+  cacheDaEtiqueta.set(unit.id, { em: existentes ? Date.now() : Date.now() - (CACHE_ETIQUETA_MS - 5 * 60_000), nome, existentes });
   return nome;
+}
+
+/** A conta TEM esta etiqueta (comparação sem acento nem maiúscula)? Mesma leitura e mesmo cache de `etiquetaDeNaoContatar`; leitura que falhou = não. */
+export async function contaTemEtiqueta(unit: Pick<Unit, 'id'>, kommo: Pick<KommoClient, 'listLeadTags'>, nome: string): Promise<boolean> {
+  await etiquetaDeNaoContatar(unit, kommo);
+  const existentes = cacheDaEtiqueta.get(unit.id)?.existentes;
+  return !!existentes && [...existentes].some((n) => normalizarNome(n ?? '') === normalizarNome(nome));
 }
 
 /** Põe a etiqueta ANTES de fechar (os gatilhos de PERDIDO leem a condição no evento). Falha não impede o fechamento: vai para o log. */

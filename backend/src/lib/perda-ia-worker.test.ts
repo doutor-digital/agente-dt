@@ -113,6 +113,7 @@ interface Escritas {
   notas: Array<{ id: number; texto: string }>;
   campos: Array<{ id: number; campo: number; valor: string }>;
   ordem: string[];
+  removidas: Array<{ id: number; tag: string }>;
 }
 function kommoFalso(leads: KommoLead[], e: Escritas, fresco: Record<number, Partial<KommoLead>> = {}): KommoClient {
   const porId = (id: number) => ({ ...(leads.find((l) => l.id === id) as KommoLead), ...(fresco[id] ?? {}) });
@@ -131,6 +132,7 @@ function kommoFalso(leads: KommoLead[], e: Escritas, fresco: Record<number, Part
     listLeadCustomFields: async () => ({ _embedded: { custom_fields: [{ id: 5, name: '⊘ Motivo do não agendamento' }] } }),
     listPipelines: async () => [],
     listLeadTags: async () => [{ id: 1, name: 'NO_FOLLOW_UP' }],
+    removeTag: async (id: number, tag: string) => void e.removidas.push({ id, tag }),
     addTag: async (a: { leadId: number; tags?: string[] }) => {
       e.ordem.push('tag');
       e.tags.push({ id: a.leadId, tags: a.tags ?? [] });
@@ -150,7 +152,7 @@ function kommoFalso(leads: KommoLead[], e: Escritas, fresco: Record<number, Part
     listLeadCustomFieldsTyped: async () => [{ id: 5, name: '⊘ Motivo do não agendamento', type: 'select', code: null, enums: OPCOES.map((value, i) => ({ id: i + 1, value })) }],
   } as unknown as KommoClient;
 }
-const escritas = (): Escritas => ({ status: [], tags: [], notas: [], campos: [], ordem: [] });
+const escritas = (): Escritas => ({ status: [], tags: [], notas: [], campos: [], ordem: [], removidas: [] });
 
 const lead = (id: number, statusId = 11, extra: Partial<KommoLead> = {}): KommoLead => ({ id, name: `Lead ${id}`, status_id: statusId, pipeline_id: 1, updated_at: AGORA - id, custom_fields_values: [], _embedded: { tags: [] }, ...extra });
 /** um cartão cujo paciente recusou há 70 h e a Sofia respondeu */
@@ -231,6 +233,37 @@ test('REVISÃO 4: o parados de sempre segue IDÊNTICO — etiqueta que falha só
   const fechou = await fecharComoPerdido(unit, k, funis, 902, ETAPA.QUALIFICACAO, d, false, 'parados', l);
   assert.equal(fechou, true);
   assert.equal(e.status.length, 1);
+});
+
+test('REVISÃO 4b: o status falha DEPOIS de a etiqueta entrar → a perda-ia desfaz as etiquetas (cartão não fica calado e fora da varredura); o parados de sempre não mexe', async () => {
+  const unit = unidade();
+  const e = escritas();
+  const l = comRecusa(910);
+  const k = { ...kommoFalso([l], e), setLeadStatus: async () => { throw new Error('kommo 500 no status'); } } as unknown as KommoClient;
+  const r = resumoNovo(unit, false);
+  await varrerPerda(ctxDe(unit, k, false), r);
+  assert.deepEqual(e.removidas.map((x) => x.tag).sort(), ['NO_FOLLOW_UP', 'perdido pela IA']);
+  assert.equal(r.erros, 1);
+  assert.equal(r.moveria, 0);
+
+  const e2 = escritas();
+  const l2 = lead(911);
+  const k2 = { ...kommoFalso([l2], e2), setLeadStatus: async () => { throw new Error('kommo 500 no status'); } } as unknown as KommoClient;
+  const d = { para: 'PERDIDO' as const, regra: 'x', dias: 30, motivoPerda: 'Não interagiu', semRegua: true };
+  await assert.rejects(fecharComoPerdido(unidade(), k2, funis, 911, ETAPA.QUALIFICACAO, d, false, 'parados', l2));
+  assert.deepEqual(e2.removidas, [], 'o parados de sempre: comportamento idêntico, sem desfazer nada');
+});
+
+test('REVISÃO 4c: o status deu timeout mas o Kommo JÁ moveu o cartão → as etiquetas ficam (a régua não pode mandar mensagem)', async () => {
+  const unit = unidade();
+  const e = escritas();
+  const l = comRecusa(912);
+  const k = { ...kommoFalso([l], e, {}), setLeadStatus: async () => { throw new Error('timeout'); } } as unknown as KommoClient;
+  let leituras = 0;
+  const comMovido = { ...k, getLead: async (id: number) => (++leituras >= 3 ? { ...l, id, status_id: 143 } : l) } as unknown as KommoClient;
+  const r = await (async () => { const res = resumoNovo(unit, false); await varrerPerda(ctxDe(unit, comMovido, false), res); return res; })();
+  assert.equal(r.erros, 1, 'chegou ao status (e errou)');
+  assert.deepEqual(e.removidas, []);
 });
 
 test('motivo recuperável (preço) NÃO tem etiqueta obrigatória: se o addTag falha, move assim mesmo (a nota diz que a régua pode ir)', async () => {

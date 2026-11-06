@@ -20,7 +20,7 @@ import {
   type Chamar,
   type RespostaDaPerda,
 } from './perda-ia.js';
-import type { FalaDaConversa } from './sugestao-motivo.js';
+import { fraseProva, interpretarResposta, provaDaFrase, type FalaDaConversa } from './sugestao-motivo.js';
 
 const AGORA = 1_800_000_000;
 const H = 3600;
@@ -207,6 +207,28 @@ test('REVISÃO 6: JSON válido com null em motivo e frase não é falha da IA �
   assert.equal(decidirPerda(r, [], OPCOES).tipo, 'nada');
   const sim = lerRespostaDaPerda('{"perdido":"sim","padrao":"sem_resposta","confianca":"alta","motivo":null,"frase_do_paciente":null,"justificativa":"3 toques"}');
   assert.equal(decidirPerda(sim, [], OPCOES).tipo, 'vacuo');
+});
+
+test('REVISÃO 5b: prova única — frase curta («oi», «...», «ok») nunca prova, em nenhum dos três caminhos', () => {
+  const conversa = [fala('PACIENTE', 'oi bom dia', 60), fala('PACIENTE', 'moro em Itaguaí', 59), fala('SOFIA', 'ok', 58)];
+  for (const curta of ['oi', '...', 'ok', 'bom', '']) {
+    assert.equal(fraseProva(curta, conversa), false, `fraseProva «${curta}»`);
+    assert.equal(provaDaFrase(curta, conversa).ok, false);
+    // motivo-perdido-ia: «Outra cidade» / «Plano de Saúde» com frase curta rebaixa para o genérico
+    const r = motivoDoPerdido({ motivo: 'Outra cidade', frase: curta, travado: false }, conversa, OPCOES);
+    assert.equal(r?.rebaixado, true, `motivoDoPerdido «${curta}»`);
+    assert.equal(r?.motivo, 'Não deu continuidade ao atendimento');
+    // perda-ia: não move
+    assert.equal(decidirPerda(resp({ motivo: 'Outra cidade', padrao: 'fora_de_perfil', frase_do_paciente: curta }), conversa, OPCOES).tipo, 'nada', `decidirPerda «${curta}»`);
+    // widget: a trava rebaixa quando a clínica falou por último
+    const sug = interpretarResposta(JSON.stringify({ frase_do_paciente: curta, resposta: 'Outra cidade' }), conversa, OPCOES);
+    assert.equal(sug?.travado, true, `widget «${curta}»`);
+  }
+  // 6 caracteres numa única fala sem «?» prova; dividida em duas falas, não
+  assert.equal(fraseProva('moro em Itaguaí', conversa), true);
+  assert.equal(fraseProva('bom dia moro em Itaguaí', conversa), false, 'a frase não pode costurar duas falas');
+  const pergunta = [fala('PACIENTE', 'moro em Itaguaí, vocês atendem aí?', 60), fala('SOFIA', 'sim', 59)];
+  assert.equal(fraseProva('moro em Itaguaí', pergunta), false, 'fala com «?» não prova');
 });
 
 test('REVISÃO 5: motivo-perdido-ia — específico só com frase que prove; sem prova, genérico; sem fala do paciente, nada', () => {

@@ -31,7 +31,7 @@ import { calculateCost } from '../services/openai.service.js';
 import { chamarAnthropic, type Chamar } from './cadastro-triagem-ia.js';
 import { logger } from './logger.js';
 import { normalizar } from './franquia-sync.js';
-import { fraseProva, type FalaDaConversa, type Sugestao } from './sugestao-motivo.js';
+import { fraseProva, provaDaFrase, type FalaDaConversa, type Sugestao } from './sugestao-motivo.js';
 import { ehRespostaDeCortesia } from './parados.js';
 
 export const ID_PERDA_IA = 'perda-ia';
@@ -184,16 +184,21 @@ export function decidirPerda(r: RespostaDaPerda | null, falas: readonly FalaDaCo
   if (MOTIVOS_DE_SUMICO.has(normalizar(motivo))) return { tipo: 'vacuo', justificativa: r.justificativa };
   if (!motivoPodeMover(motivo)) return { tipo: 'nada', porque: `«${motivo}» não está na lista fechada de motivos que movem (espera, contrato e terceiro nunca perdem)` };
 
-  const doPaciente = falas.filter((f) => f.autor === 'PACIENTE');
-  const frase = normalizar(r.frase_do_paciente);
-  if (frase.length < 6 || r.frase_do_paciente.trim().endsWith('?')) return { tipo: 'nada', porque: 'sem frase do paciente que prove (ou a frase é uma pergunta)' };
-  // a ocorrência MAIS RECENTE nas 3 últimas falas dele: quem repete «não tenho interesse» vale pela última vez que disse
-  const ultimas = doPaciente.slice(-3);
-  const idx = ultimas.map((f) => normalizar(f.texto).includes(frase.slice(0, 40))).lastIndexOf(true);
-  if (idx < 0) return { tipo: 'nada', porque: 'a frase citada não está nas 3 últimas falas do paciente' };
-  const achou = ultimas[idx];
-  // a FALA inteira que traz a recusa não pode ter pergunta: «se eu não quiser fazer cirurgia vocês atendem?»
-  if (achou.texto.includes('?')) return { tipo: 'nada', porque: 'dúvida aberta: a fala que traz a frase tem pergunta' };
+  // a prova é a regra única de `provaDaFrase` (≥ 6 caracteres, numa fala dele sem «?»), só nas 3 últimas falas do paciente
+  const ultimas = falas.filter((f) => f.autor === 'PACIENTE').slice(-3);
+  const prova = provaDaFrase(r.frase_do_paciente, ultimas);
+  if (!prova.ok) {
+    return {
+      tipo: 'nada',
+      porque:
+        prova.porque === 'pergunta'
+          ? 'dúvida aberta: a fala que traz a frase tem pergunta'
+          : prova.porque === 'curta'
+            ? 'sem frase do paciente que prove (vazia ou curta demais)'
+            : 'a frase citada não está nas 3 últimas falas do paciente',
+    };
+  }
+  const idx = ultimas.lastIndexOf(prova.fala);
   // e nada que ele disse DEPOIS pode reabrir a conversa: só cortesia («obrigada», «ok»). «tem parcelamento em 10x?» depois de «achei muito caro» é negociação
   const depois = ultimas.slice(idx + 1);
   if (depois.some((f) => f.texto.includes('?') || !ehRespostaDeCortesia(f.texto))) {
@@ -300,8 +305,8 @@ export function motivoDoPerdido(sug: Sugestao | null, falas: FalaDaConversa[], o
   if (!sug) return null;
   const doPaciente = falas.filter((f) => f.autor === 'PACIENTE').length;
   if (doPaciente === 0) return null;
-  // prova = a frase existe numa fala do paciente SEM pergunta (o mesmo critério da perda-ia: «não quero… vocês atendem?» é dúvida)
-  const provaSemPergunta = fraseProva(sug.frase, falas) && falas.some((f) => f.autor === 'PACIENTE' && !f.texto.includes('?') && normalizar(f.texto).includes(normalizar(sug.frase.trim()).slice(0, 40)));
+  // a MESMA prova da perda-ia e do widget (≥ 6 caracteres, numa fala dele sem «?»)
+  const provaSemPergunta = fraseProva(sug.frase, falas);
   if (MOTIVOS_DE_SUMICO.has(normalizar(sug.motivo)) || provaSemPergunta) return { motivo: sug.motivo, frase: sug.frase, rebaixado: false };
   const generico = casar(doPaciente >= 2 ? 'Não deu continuidade ao atendimento' : 'Não interagiu', opcoes);
   return generico ? { motivo: generico, frase: '', rebaixado: true } : null;

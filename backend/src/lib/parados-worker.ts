@@ -244,6 +244,9 @@ async function franquiaSegura(unit: Unit, leadId: number, nome: string | null, a
   return { conhecido: f.conhecido, segura: false };
 }
 
+/** PERDIDO no Kommo (o 143 existe em todo funil). */
+const PERDIDO_ID = 143;
+
 const pausa = () => new Promise((r) => setTimeout(r, PAUSA_ENTRE_ESCRITAS_MS));
 
 /** Como a trava é chamada: onde o cartão está, se é papel, e — no portão — com que mãos agir. */
@@ -323,7 +326,8 @@ export async function fecharComoPerdido(
 
 /**
  * O mesmo fecho, dizendo o que houve: `fechou`, `travado` (a trava da perda automática segurou — NÃO é recusa do Kommo, quem
- * chama não deve tentar de novo como se fosse erro) ou `nada` (no papel, ou o cartão mudou de etapa no meio).
+ * chama não deve tentar de novo como se fosse erro), `sem-etiqueta` (a etiqueta de não contatar, exigida pela decisão, não entrou: nada foi
+ * movido nem escrito; pode tentar de novo) ou `nada` (no papel, ou o cartão mudou de etapa no meio).
  */
 export async function fecharOuSegurar(
   unit: Unit,
@@ -335,7 +339,7 @@ export async function fecharOuSegurar(
   seco: boolean,
   automacao: string = 'parados',
   cartaoDaLista?: KommoLead | null,
-): Promise<'fechou' | 'travado' | 'nada'> {
+): Promise<'fechou' | 'travado' | 'nada' | 'sem-etiqueta'> {
   const base = { unit: unit.slug, leadId, de: etapaAtual, regra: d.regra, motivo: d.motivoPerda };
   // Este é o portão de TODO PERDIDO de código (parados, estoques, franquia-move): a trava tem de valer aqui, no papel também.
   if (seco) {
@@ -356,7 +360,7 @@ export async function fecharOuSegurar(
   if (!etiquetou && d.etiquetaObrigatoria) {
     // a etiqueta é o que segura a régua de PERDIDO: sem ela o paciente que recusou receberia "sentimos sua falta"
     logger.warn({ ...base, automacao }, 'parados: a etiqueta de não contatar não entrou — NÃO movi o cartão');
-    return 'nada';
+    return 'sem-etiqueta';
   }
   const motivoDaSdr = d.campo ? motivoDaSdrNoCartao(lead.custom_fields_values) : null;
   if (motivoDaSdr) {
@@ -366,7 +370,27 @@ export async function fecharOuSegurar(
       logger.warn({ err: String(err), ...base, campo: d.campo?.nome, opcao: d.campo?.opcao }, 'parados: falha ao gravar o motivo no cartão (a opção existe no campo desta conta?)'),
     );
   }
-  await kommo.setLeadStatus(leadId, { won: false, lossReasonId: lossId ?? undefined });
+  try {
+    await kommo.setLeadStatus(leadId, { won: false, lossReasonId: lossId ?? undefined });
+  } catch (err) {
+    // só quando a etiqueta era CONDIÇÃO do fecho (perda-ia): o cartão ficaria aberto com NO_FOLLOW_UP, calado e fora das varreduras.
+    // O `parados` de sempre segue como era (a falha sobe e o cartão fica como estava).
+    if (d.etiquetaObrigatoria) {
+      // só tira o que ESTA tentativa pôs, e só se o cartão NÃO foi movido: timeout depois de o Kommo aplicar o PATCH deixaria o cartão
+      // em PERDIDO sem a etiqueta que segura a régua. Estado desconhecido = mantém as etiquetas e avisa.
+      const atual = await kommo.getLead(leadId).catch(() => null);
+      const tinhaAntes = new Set((lead._embedded?.tags ?? []).map((t) => normalizarNome(t.name ?? '')));
+      if (!atual || atual.status_id === PERDIDO_ID) {
+        logger.error({ err: String(err), ...base, automacao }, 'parados: o status deu erro mas o cartão pode ter sido movido — mantive as etiquetas, conferir à mão');
+      } else {
+        for (const t of (d.etiquetas ?? []).filter((x) => !tinhaAntes.has(normalizarNome(x)))) {
+          await kommo.removeTag(leadId, t).catch((e) => logger.error({ err: String(e), ...base, automacao, etiqueta: t }, 'parados: o status falhou e NÃO consegui tirar a etiqueta — o cartão está aberto e etiquetado, conferir à mão'));
+        }
+        logger.warn({ err: String(err), ...base, automacao }, 'parados: o status falhou depois da etiqueta — desfiz as etiquetas que pus');
+      }
+    }
+    throw err;
+  }
   invalidarEtapa(unit.id, leadId);
   // regra de 16/10: foi um ROBÔ que pôs em PERDIDO — "a franquia manda" não confunde isto com a equipe insistindo
   await anotarRoboPos(unit, leadId, ETAPA.PERDIDO).catch(() => undefined);

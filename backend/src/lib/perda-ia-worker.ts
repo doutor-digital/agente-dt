@@ -22,7 +22,7 @@ import { createKommoClient, type KommoClient, type KommoLead } from '../services
 import { estadoDaAutomacao } from './automacoes-estado.js';
 import { registrarSimulacao } from './so-no-papel.js';
 import { carregarFunis, type Funis } from './franquia-sync-worker.js';
-import { normalizarNome } from './kommo-schema.js';
+import { contaTemEtiqueta } from './sofia-fecha-quente-morno.js';
 import { ETAPA } from './franquia-move.js';
 import { CAMPO, TAG_SEM_REGUA } from './parados.js';
 import type { DecisaoParado } from './parados.js';
@@ -155,21 +155,13 @@ export function decisaoDeFecho(d: Extract<DecisaoDaPerda, { tipo: 'mover' }>, et
   };
 }
 
-/** A conta tem a etiqueta que os gatilhos de PERDIDO leem? Sem ela (Rio Verde) não há como segurar a régua. Erro de leitura = não tem. */
-const temNoFollowUp = new Map<string, { em: number; tem: boolean }>();
-async function contaTemNoFollowUp(unit: Unit, kommo: KommoClient): Promise<boolean> {
-  const hit = temNoFollowUp.get(unit.id);
-  // quem NÃO tem a etiqueta é relido logo (alguém pode criá-la); quem tem, vale por 1 h
-  if (hit && Date.now() - hit.em < (hit.tem ? 60 * 60_000 : 10 * 60_000)) return hit.tem;
-  let tem = false;
-  try {
-    tem = (await kommo.listLeadTags(25)).some((t) => normalizarNome(t.name ?? '') === normalizarNome(TAG_SEM_REGUA));
-  } catch (err) {
-    logger.warn({ err: String(err), unit: unit.slug }, 'perda-ia: não li as etiquetas da conta — tratei como sem NO_FOLLOW_UP');
-    return false; // não guarda: tenta de novo na próxima
-  }
-  temNoFollowUp.set(unit.id, { em: Date.now(), tem });
-  return tem;
+/**
+ * A conta tem a etiqueta que os gatilhos de PERDIDO leem? Sem ela (Rio Verde) não há como segurar a régua e o motivo definitivo não
+ * move. Rio Verde fica de fora até os gatilhos de PERDIDO da conta serem conferidos (ela tem NAO_PERTURBAR, mas não se sabe se os
+ * gatilhos a leem). Usa o cache de etiquetas de `etiquetaDeNaoContatar`; leitura que falhou = «não tem».
+ */
+function contaTemNoFollowUp(unit: Unit, kommo: KommoClient): Promise<boolean> {
+  return contaTemEtiqueta(unit, kommo, TAG_SEM_REGUA);
 }
 
 const ETAPAS_DA_PERDA = [ETAPA.QUALIFICACAO, ETAPA.ESPERA] as const;
@@ -303,7 +295,7 @@ export async function varrerPerda(ctx: CtxPerda, resumo: Resumo): Promise<void> 
       }
       const d = decisaoDeFecho(decisao, etapa);
       const r = await fecharOuSegurar(unit, kommo, funis, lead.id, etapa, d, seco, ID_PERDA_IA, lead);
-      if (!seco && r === 'nada') vistoAte.delete(`${unit.id}:${ID_PERDA_IA}:${lead.id}`); // a etiqueta não entrou (ou o cartão mudou): tenta na próxima varredura
+      if (!seco && r === 'sem-etiqueta') vistoAte.delete(`${unit.id}:${ID_PERDA_IA}:${lead.id}`); // só a falha da etiqueta é transitória: tenta na próxima varredura
       if (seco ? r !== 'travado' : r === 'fechou') {
         resumo.moveria++;
         if (!seco) await pausa();
@@ -311,6 +303,7 @@ export async function varrerPerda(ctx: CtxPerda, resumo: Resumo): Promise<void> 
     } catch (err) {
       resumo.erros++;
       if (erroPermanente(err)) marcarVisto(unit, ID_PERDA_IA, lead.id);
+      else vistoAte.delete(`${unit.id}:${ID_PERDA_IA}:${lead.id}`); // erro transitório (inclusive o do status): tenta na próxima varredura
       logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id }, 'perda-ia: erro num cartão — pulei');
     }
   }

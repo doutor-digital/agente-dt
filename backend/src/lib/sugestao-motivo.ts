@@ -70,12 +70,29 @@ export function montarPrompt(falas: FalaDaConversa[], opcoes: string[]): string 
   );
 }
 
-/** A frase do paciente que justifica um motivo específico: existe no que ELE escreveu e não é pergunta. */
-export function fraseProva(frase: string, falas: FalaDaConversa[]): boolean {
-  const f = frase.trim();
-  if (f.length === 0 || f.endsWith('?')) return false;
-  const doPaciente = normalizar(falas.filter((x) => x.autor === 'PACIENTE').map((x) => x.texto).join(' '));
-  return doPaciente.includes(normalizar(f).slice(0, 40));
+/** Menos que isto (já normalizada) não prova nada: «oi», «...», «ok» estão em qualquer conversa. */
+export const MIN_CHARS_DA_PROVA = 6;
+
+export type ProvaDaFrase = { ok: true; fala: FalaDaConversa } | { ok: false; porque: 'curta' | 'pergunta' | 'ausente' };
+
+
+/**
+ * A ÚNICA regra de prova de um motivo (widget, motivo-perdido-ia e perda-ia usam esta): a frase que a IA cita tem de ter pelo
+ * menos 6 caracteres (normalizada), estar contida numa fala do PACIENTE — a mais recente que a traz — e essa fala inteira não
+ * pode ter pergunta («não quero cirurgia. vocês atendem?» é dúvida). `doPaciente` são só as falas dele, na ordem em que valem.
+ */
+export function provaDaFrase(frase: string, doPaciente: readonly FalaDaConversa[]): ProvaDaFrase {
+  const alvo = normalizar(frase).slice(0, 40);
+  if (frase.trim().endsWith('?')) return { ok: false, porque: 'pergunta' };
+  if (alvo.length < MIN_CHARS_DA_PROVA) return { ok: false, porque: 'curta' };
+  const fala = [...doPaciente].reverse().find((f) => normalizar(f.texto).includes(alvo));
+  if (!fala) return { ok: false, porque: 'ausente' };
+  if (fala.texto.includes('?')) return { ok: false, porque: 'pergunta' };
+  return { ok: true, fala };
+}
+
+export function fraseProva(frase: string, falas: readonly FalaDaConversa[]): boolean {
+  return provaDaFrase(frase, falas.filter((f) => f.autor === 'PACIENTE')).ok;
 }
 
 export interface Sugestao {
