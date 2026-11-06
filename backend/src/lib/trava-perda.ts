@@ -65,7 +65,7 @@ function temTag(c: CartaoParaTrava, ...nomes: string[]): boolean {
   return (c._embedded?.tags ?? []).some((t) => alvos.has(normalizarNome(t.name ?? '')));
 }
 
-function comConsultaFutura(c: CartaoParaTrava, agoraEpoch: number): boolean {
+export function comConsultaFutura(c: CartaoParaTrava, agoraEpoch: number): boolean {
   const data = epochDoValor(valorDoCampo(c.custom_fields_values, CAMPOS_SYNC.DATA_CONSULTA));
   if (data === null || data <= agoraEpoch) return false;
   const situacao = normalizarNome(String(valorDoCampo(c.custom_fields_values, CAMPOS_SYNC.SITUACAO) ?? ''));
