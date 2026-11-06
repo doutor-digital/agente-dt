@@ -121,6 +121,34 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/perda-ia-worker.ts',
   },
   {
+    id: 'entrada-automatica',
+    chave: 'ENTRADA_AUTOMATICA_SLUGS',
+    nome: 'Leads de entrada: vincular e aceitar sozinho',
+    oQueFaz:
+      'A cada 3 minutos olha a caixa «Leads de entrada» (só conversas de chat) e trata o lead RECENTE (com mais de 3 e menos de 120 minutos): se o telefone (últimos 8 dígitos) bate com UM cartão aberto, vincula a conversa a esse cartão; se não bate com nenhum cartão aberto, aceita o lead na primeira etapa de trabalho do funil onde ele entrou (nas Doutor Hérnia, EM QUALIFICAÇÃO). Com 2 ou mais cartões abertos no mesmo telefone não faz nada: deixa na caixa, à vista, para a recepção decidir.',
+    pegadinha:
+      'ACEITAR é uma mudança de etapa: os robôs de «entra na etapa» da primeira etapa (boas-vindas, primeiro contato) podem disparar. Por isso só o lead de menos de 2 horas é aceito (ENTRADA_JANELA_MIN); conversa mais velha nunca é aceita por aqui. Vincular não muda a etapa de ninguém nem dispara robô. Cartão só FECHADO (ALTA, PERDIDO, GANHO) não segura o aceite: quem volta depois da alta é cartão novo. Se a busca por telefone falha, o lead fica na caixa (nunca vira «sem cartão»). Formulário, ligação e e-mail não são tocados. Teto por rodada: 30 leads olhados e 15 escritas; erro do Kommo faz a conta descansar 5 minutos. O token precisa ser de administrador (vincular é só admin). Em «Só no papel» a tela mostra «vincularia», «aceitaria» e «pularia» (ambíguo) por lead, sem escrever nada. Junto com a Sofia: se ela já tirou o lead da caixa, o aceite dá 404 e é ignorado.',
+    risco: 'move-cartao',
+    temSeco: true,
+    exigeSecoAntes: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/entrada-automatica.ts',
+  },
+  {
+    id: 'entrada-estoque',
+    chave: 'ENTRADA_ESTOQUE_SLUGS',
+    nome: 'Leads de entrada: escoar o estoque antigo',
+    oQueFaz:
+      'Para os leads de entrada com mais de 120 minutos (setembro, outubro…): se o telefone bate com UM cartão aberto, vincula a conversa a ele (como foi feito à mão em Timbó em 05/11: 274 vinculados, nenhum robô). Quem não tem cartão NÃO é aceito: fica na caixa e aparece na tela «Só no papel» como «pularia», para uma pessoa decidir. Ambíguo (2+ cartões abertos) também fica.',
+    pegadinha:
+      'Vincular consome o lead de entrada e não tem volta: por isso exige «Só no papel» antes. Não muda etapa, não cria cartão, não une os contatos (isso é na tela do Kommo: Contatos, Duplicados). Teto de 15 vínculos por rodada (3 em 3 minutos): um estoque de 600 leva algumas horas, sem rajada. Não depende da chave irmã «Leads de entrada: vincular e aceitar sozinho»; as duas podem ficar em estados diferentes.',
+    risco: 'move-cartao',
+    temSeco: true,
+    exigeSecoAntes: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/entrada-automatica.ts',
+  },
+  {
     id: 'franquia-move',
     chave: 'FRANQUIA_MOVE_SLUGS',
     nome: 'A franquia move a etapa',
