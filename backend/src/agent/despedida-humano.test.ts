@@ -5,7 +5,7 @@ import type { Unit } from '@prisma/client';
 
 import { _semearParaTeste } from '../lib/automacoes-estado.js';
 import { AUTOMACOES } from '../lib/automacoes.js';
-import { REGRA_DESPEDIDA } from '../lib/sem-resposta-worker.js';
+import { REGRA_DESPEDIDA } from '../lib/aviso-dedupe.js';
 import type { KommoTarefa } from '../services/kommo.service.js';
 import type { Fala } from './repeticao.js';
 import { pacienteEncerrou, renderPacienteEncerrou, empurraHorario, semEmpurrarHorario, DESPEDIDA_CURTA } from './paciente-encerrou.js';
@@ -109,6 +109,38 @@ test('pergunta ou pedido junto com o adiamento é conversa, não despedida', () 
   assert.equal(detectarDespedida([...base, pac('Agora não consigo, pode ser quinta às 14h')]), null);
   assert.equal(detectarDespedida([...base, pac('Vou pensar, me passa o endereço')]), null);
   assert.equal(detectarDespedida([...base, pac('Obrigada. Tem estacionamento?')]), null);
+});
+
+test('depois que a Sofia se calou, a mensagem NOVA do paciente não herda o adiamento antigo: ela responde', () => {
+  const calada = [pac('oi'), ia('A consulta é R$ 250,00. Posso ver um horário pra você?'), pac('Obrigada, entro em contato para agendar logo mais')];
+  assert.equal(detectarDespedida(calada)?.tipo, 'adiou');
+  // uma hora depois, sem a Sofia ter falado: as duas falas seguem no mesmo bloco sem resposta
+  assert.equal(detectarDespedida([...calada, pac('Quero marcar sexta de manhã')]), null);
+  assert.equal(detectarDespedida([...calada, pac('Qual o endereço da clínica')]), null);
+  // e dois "obrigada" seguidos continuam sendo só despedida
+  assert.equal(detectarDespedida([...calada, pac('ok obrigada 🙏')])?.tipo, 'adiou');
+});
+
+test('pergunta de um turno que falhou (sem resposta) + "obrigada": a pergunta ainda deve ser respondida', () => {
+  assert.equal(detectarDespedida([pac('oi'), ia('A consulta é R$ 250,00.'), pac('Aceita convênio'), pac('obrigada')]), null);
+});
+
+test('"agora não" respondendo a pergunta da Sofia, ou fala longa, é informação — não adiamento', () => {
+  assert.equal(detectarDespedida([pac('oi'), ia('Você está com dor agora?'), pac('Agora não')]), null);
+  assert.equal(detectarDespedida([pac('oi'), ia('Você tem exames recentes?'), pac('Agora não tenho em mãos, mas fiz ressonância')]), null);
+  assert.equal(detectarDespedida([pac('oi'), ia('Você pretende operar?'), pac('Não vou fazer cirurgia, só tratar')]), null);
+  // mas o adiamento inequívoco vale mesmo depois de uma pergunta dela
+  assert.equal(detectarDespedida([pac('oi'), ia('Posso ver um horário?'), pac('Agora não vou querer')])?.tipo, 'adiou');
+});
+
+test('a Sofia tinha PEDIDO algo (sem "?"): "ok obrigada" é resposta, não despedida', () => {
+  assert.equal(detectarDespedida([pac('oi'), ia('Me envie o comprovante do Pix por aqui, por favor.'), pac('Ok obrigada')]), null);
+  assert.equal(detectarDespedida([pac('oi'), ia('Vou confirmar com a equipe e já te retorno.'), pac('Ok obrigada')]), null);
+});
+
+test('negociar horário sem "h" ("só posso às 9") é conversa', () => {
+  assert.equal(detectarDespedida([pac('oi'), ia('A consulta é R$ 250,00.'), pac('Depois eu vejo, só posso às 9')]), null);
+  assert.equal(detectarDespedida([pac('oi'), ia('A consulta é R$ 250,00.'), pac('Agora não consigo de manhã, só às 14')]), null);
 });
 
 test('irritação ("para de me mandar mensagem") é outro caso: não aciona aqui', () => {
@@ -312,6 +344,15 @@ test('já há tarefa aberta da equipe no cartão: não empilha, a Sofia fica em 
 test('tarefa aberta mas vencida há mais de 3 dias é lixo antigo: não segura o aviso', async () => {
   const velha: KommoTarefa = { id: 2, is_completed: false, complete_till: Math.floor((AGORA.getTime() - TAREFA_VELHA_MS - 3600_000) / 1000) };
   const { c, deps, recorder } = montar({}, { abertas: [velha] });
+  const r = await decidirDespedida(entrada(recorder), deps);
+  assert.equal(r.acao, 'silenciar');
+  assert.equal(c.tarefas.length, 1);
+});
+
+test('lembrete de robô com prazo longe ("ligar em 7 dias") ou sem prazo NÃO é a equipe cuidando: o aviso sai', async () => {
+  const longe: KommoTarefa = { id: 3, is_completed: false, complete_till: Math.floor(AGORA.getTime() / 1000) + 7 * 86400 };
+  const semPrazo: KommoTarefa = { id: 4, is_completed: false, complete_till: null };
+  const { c, deps, recorder } = montar({}, { abertas: [longe, semPrazo] });
   const r = await decidirDespedida(entrada(recorder), deps);
   assert.equal(r.acao, 'silenciar');
   assert.equal(c.tarefas.length, 1);

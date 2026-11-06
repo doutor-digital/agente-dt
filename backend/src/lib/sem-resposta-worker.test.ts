@@ -509,3 +509,13 @@ test('despedida-humano: o aviso da despedida é de uma espera ANTERIOR (a equipe
   const r = await verificarUnidadeSemResposta(unidade, 'ligado', c.deps);
   assert.equal(r.tarefas, 1);
 });
+
+test('despedida-humano: pergunta NOVA do paciente depois do aviso da despedida (ninguém respondeu) não é coberta pelo aviso — o "sem resposta" alerta', async () => {
+  const c = cenario({
+    oficiais: [msg('entrada', T0, 'Obrigada, entro em contato logo mais'), msg('entrada', depois(10 * 60_000), 'Na verdade queria saber o endereço')],
+    agora: depois(16 * 60_000),
+    despedidaAvisouEm: depois(10_000),
+  });
+  const r = await verificarUnidadeSemResposta(unidade, 'ligado', c.deps);
+  assert.equal(r.tarefas, 1);
+});

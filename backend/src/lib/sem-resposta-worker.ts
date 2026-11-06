@@ -34,7 +34,7 @@ import { ehEncerramento } from './encerramento.js';
 import { mascararPii } from './pii.js';
 import { registrarSimulacao, type Simulacao } from './so-no-papel.js';
 import { esquemaDaUnidade } from './kommo-schema.js';
-import { marcarAviso, marcadoEm } from './aviso-dedupe.js';
+import { marcarAviso, marcadoEm, REGRA_DESPEDIDA } from './aviso-dedupe.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { mensagensOficiais, type MensagemOficial } from '../services/kommo-talks.service.js';
 
@@ -61,11 +61,6 @@ export const REGRA_SEM_RESPOSTA_TAREFA = 'sem_resposta_tarefa';
  * para a mesma espera são um só para a recepção: cada um confere a marca do outro antes de abrir a sua.
  */
 export const REGRA_TAREFA_TURNO_PERDIDO = 'turno_perdido_tarefa';
-/**
- * A marca do aviso da despedida (agent/despedida-humano.ts): a Sofia se calou porque o paciente se despediu ou adiou e a equipe
- * recebeu a tarefa dela. Mora aqui pelo mesmo motivo da de cima: este worker confere a marca antes de abrir o seu.
- */
-export const REGRA_DESPEDIDA = 'despedida_humano';
 /** Espera que segue sem resposta há mais que isto ganha UM lembrete novo (e cobre a conversa nova de quem volta semanas depois). */
 export const REALERTA_MS = 12 * 3600_000;
 /** Quantas mensagens da conversa oficial se leem: folga para ver a resposta mesmo com o paciente escrevendo muito. */
@@ -385,7 +380,9 @@ export async function verificarUnidadeSemResposta(
       }
       if (!deveAlertar(espera, agora)) continue;
       // A Sofia se calou porque o paciente se despediu/adiou e a equipe já recebeu a tarefa dela: mesma espera, um aviso só.
-      if (deps.despedidaAvisouEm && mesmaEsperaJaAlertada(msgs, await deps.despedidaAvisouEm(unit, c.leadId), agora)) {
+      // Só cobre a espera se o aviso veio DEPOIS da última mensagem dele: pergunta nova depois do aviso é espera nova.
+      const avisoDaDespedida = deps.despedidaAvisouEm ? await deps.despedidaAvisouEm(unit, c.leadId) : null;
+      if (avisoDaDespedida && avisoDaDespedida.getTime() >= espera.ultimaEm.getTime() && mesmaEsperaJaAlertada(msgs, avisoDaDespedida, agora)) {
         resumo.respondidas++;
         lembrarConferida(chaveConferida, agora.getTime());
         continue;
