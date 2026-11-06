@@ -50,6 +50,7 @@ import { startPerdaIaWorker, stopPerdaIaWorker } from './lib/perda-ia-worker.js'
 import { startEntradaAutomaticaWorker, stopEntradaAutomaticaWorker } from './lib/entrada-automatica-worker.js';
 import { startRotinaEtapasWorker, stopRotinaEtapasWorker } from './lib/rotina-etapas-worker.js';
 import { startNaoLidasWorker, stopNaoLidasWorker } from './lib/nao-lidas-worker.js';
+import { startRotinaAniversarioWorker, stopRotinaAniversarioWorker } from './lib/rotina-aniversario-worker.js';
 import { startCampanhaWorker, stopCampanhaWorker } from './lib/campanha-worker.js';
 import { startResumoDiarioIaWorker, stopResumoDiarioIaWorker } from './lib/resumo-diario-ia-worker.js';
 import { startDisparoWorker, stopDisparoWorker } from './lib/disparo-worker.js';
@@ -240,6 +241,7 @@ async function main(): Promise<void> {
       startTipoLeadChegadaWorker();
       startLigacaoWhatsappWorker();
       startNaoLidasWorker();
+      startRotinaAniversarioWorker();
       startCampanhaWorker();
       startResumoDiarioIaWorker();
       startDisparoWorker();
@@ -260,6 +262,7 @@ async function main(): Promise<void> {
       stopTipoLeadChegadaWorker();
       stopLigacaoWhatsappWorker();
       stopNaoLidasWorker();
+      stopRotinaAniversarioWorker();
       stopCampanhaWorker();
       stopResumoDiarioIaWorker();
       stopDisparoWorker();
