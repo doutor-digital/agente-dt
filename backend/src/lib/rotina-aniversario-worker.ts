@@ -15,7 +15,7 @@
  *
  * Uma por ano por PESSOA (a marca é do contato: dois cartões da mesma pessoa não recebem dois), nunca no mesmo dia de outro toque
  * (da rotina ou do `etiquetas-auto`; as réguas por etapa cedem o cartão de quem faz anos quando esta está LIGADA). Fim de semana ou
- * feriado: cumprimenta no 1º dia útil (até 2 dias de atraso). Nunca para NO_FOLLOW_UP, NAO_PERTURBAR, opt-out, CURRÍCULO nem motivo
+ * feriado: cumprimenta no 1º dia útil (até 3 dias de atraso: sábado + segunda feriado = terça). NO DIA EM QUE A RÉGUA É LIGADA, quem fez anos nos 3 dias anteriores também recebe (uma vez): é o mesmo atraso, e a marca de «1 por ano» impede o repique. Nunca para NO_FOLLOW_UP, NAO_PERTURBAR, opt-out, CURRÍCULO nem motivo
  * de perda encerrado. Pausar IA, ◷ Retomar em e consulta futura NÃO impedem um parabéns. Sem a etiqueta ▶ Aniversário tratamento na
  * conta, quem está em tratamento não recebe nada (o convite não vale para quem já se trata).
  */
