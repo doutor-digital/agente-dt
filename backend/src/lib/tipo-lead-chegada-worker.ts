@@ -11,7 +11,9 @@
  *  do contato ganhar telefone e nome). Mesmo molde do `renomear-lead-worker` e do `unidade-no-cartao-worker`.
  *
  * O que lê, por cartão, SÓ UMA VEZ (a decisão fica guardada neste processo): o contato (telefone e nome), os outros
- * cartões do contato (1º contato antigo) e — só se isso não bastou para Resgate — a franquia (uma busca por cartão).
+ * cartões do contato (1º contato antigo) e — só se isso não bastou para Resgate — o ÍNDICE DE TELEFONES da franquia
+ * (`franquia-indice-telefones.ts`, montado 1×/dia por unidade ativa; a franquia ignora filtro de telefone) mais uma busca
+ * por nome de reforço.
  * Franquia ou Kommo com erro, sem telefone ou sem nome para buscar = NÃO grava e tenta de novo (10, 20, 30… até 60 min, enquanto
  * o cartão estiver na janela de 6 h); nunca vira "Cadastro" por erro.
  *
@@ -36,11 +38,15 @@ import {
   franquiaConhece,
   opcaoDaConta,
   resgatePelaIdade,
-  valorDoCampo,
+  cartoesCriadosEmLote,
   type OutroCartao,
   type RespostaDaFranquia,
   type TipoDeLead,
 } from './tipo-lead-chegada.js';
+import { agendarIndice } from './franquia-indice-telefones.js';
+import { algumaChaveAtiva, contatoPrincipal } from './renomear-lead-worker.js';
+import { valorDoCampo } from './unidade-no-cartao-worker.js';
+import { PREFIXO_PACIENTE_EXISTENTE } from '../services/paciente-existente.js';
 
 const SWEEP_MS = 3 * 60_000;
 const PRIMEIRA_VARREDURA_MS = 100_000;
@@ -68,6 +74,7 @@ export interface Resumo {
   semUnidade: number;
   adiados: number;
   semOpcao: number;
+  emLote: number;
   erros: number;
 }
 
@@ -84,7 +91,9 @@ export interface DepsDoTipo {
    * franquia o acharia e isso não é "já existia". Daí em diante quem decide é o `campos-sdr`. Lança se o banco falhar.
    */
   pacienteCriadoPorNos(unitId: string, leadId: number): Promise<boolean>;
-  franquiaConhece(unit: Unit, e: { titulo: string; nomeDoContato: string | null; telefone: string | null }): Promise<RespostaDaFranquia>;
+  franquiaConhece(unit: Unit, e: { titulo: string; nomeDoContato: string | null; telefone: string | null; chegadaEpoch: number | null }): Promise<RespostaDaFranquia>;
+  /** Pede a carga (em segundo plano) do índice de telefones desta unidade, se for hora. Só para unidade ativa. */
+  garantirIndice(unit: Unit): void;
   registrar: typeof registrarSimulacao;
 }
 
@@ -95,6 +104,8 @@ export interface ContextoDaConta {
   deps: DepsDoTipo;
   /** epoch em segundos */
   agora: number;
+  /** As unidades da conta (Petrópolis × Caxias: as duas). Sem isto, só `unit`. */
+  unidadesDaConta?: ReadonlyArray<Unit>;
   /** pausa entre escritas (o teste zera) */
   pausaMs?: number;
 }
@@ -102,6 +113,8 @@ export interface ContextoDaConta {
 interface Decidido {
   tipo: TipoDeLead;
   motivo: string;
+  /** a prova foi a franquia (índice ou busca por nome), não a idade: reconferir o vínculo antes de gravar */
+  viaFranquia: boolean;
 }
 
 // ── memória do processo: reiniciar só custa uma leitura a mais por cartão ──────────────────────────────────
@@ -128,21 +141,10 @@ function avisarUmaVez(slug: string, msg: string): void {
   logger.warn({ unit: slug }, `${ID}: ${msg}`);
 }
 
-const contatoPrincipal = (lead: KommoLead): number | null => {
-  const contatos = lead._embedded?.contacts ?? [];
-  return (contatos.find((c) => c.is_main) ?? contatos[0])?.id ?? null;
-};
-
 const dataDoCampo = (v: string | null): number | null => {
   const n = Number(v);
   return v !== null && Number.isFinite(n) && n > 0 ? n : null;
 };
-
-/** Alguma unidade da conta (ela mesma, ou o grupo Petrópolis + Caxias) está em seco ou ligada? */
-function algumaChaveAtiva(unit: { slug: string }, membros: ReadonlyArray<MembroDoCrm> | null, estadoDe: (slug: string) => Estado): boolean {
-  const slugs = membros?.length ? membros.map((m) => m.slug).filter((s): s is string => !!s) : [unit.slug];
-  return slugs.some((s) => estadoDe(s) !== 'desligado');
-}
 
 /** Os outros cartões do contato; `null` = não deu para ler (não é "nenhum"). */
 async function outrosCartoesDoContato(kommo: KommoDoTipo, contatoId: number, leadId: number): Promise<OutroCartao[] | null> {
@@ -166,6 +168,10 @@ export async function tipoNaChegadaConta(ctx: ContextoDaConta): Promise<Resumo |
   const { unit, membros, kommo, deps, agora } = ctx;
   if (!algumaChaveAtiva(unit, membros, deps.estadoDe)) return null;
 
+  // O índice de telefones da franquia leva minutos para montar: pede já, mesmo sem cartão novo na janela. Só unidade com a
+  // chave em seco ou ligada (as outras nunca gastam uma chamada da franquia por causa desta automação).
+  for (const u of ctx.unidadesDaConta ?? [unit]) if (deps.estadoDe(u.slug) !== 'desligado') deps.garantirIndice(u);
+
   const { leads, truncado } = await kommo.listLeadsNaJanela('created_at', agora - JANELA_S, agora - IDADE_MINIMA_S, MAX_PAGINAS, true);
   if (truncado) logger.warn({ unit: unit.slug, leads: leads.length }, `${ID}: lista de cartões novos cortada — trato os mais recentes e o resto fica para quem agendar (campos-sdr)`);
   const candidatos = leads.filter((l) => !FECHADOS.has(l.status_id)).sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0) || a.id - b.id);
@@ -184,26 +190,25 @@ export async function tipoNaChegadaConta(ctx: ContextoDaConta): Promise<Resumo |
   }
   const campoPrimeiro = acharCampo(campos, CAMPO_PRIMEIRO_CONTATO);
 
-  const resumo: Resumo = { candidatos: 0, gravados: 0, simulados: 0, desligados: 0, jaPreenchidos: 0, semUnidade: 0, adiados: 0, semOpcao: 0, erros: 0 };
+  const resumo: Resumo = { candidatos: 0, gravados: 0, simulados: 0, desligados: 0, jaPreenchidos: 0, semUnidade: 0, adiados: 0, semOpcao: 0, emLote: 0, erros: 0 };
   // vazios de verdade: preenchido (qualquer valor, inclusive "Transferido de outra unidade") não é tocado
   const vazios = candidatos.filter((l) => {
     if (valorDoCampo(l, campo.id) === null) return true;
     resumo.jaPreenchidos++;
     return false;
   });
-  resumo.candidatos = vazios.length;
-  if (vazios.length === 0) return resumo;
+  // Importação em massa (carga da franquia, planilha) cria centenas de cartões "novos" de uma vez: não é chegada de lead.
+  const emLote = cartoesCriadosEmLote(vazios);
+  const doDia = vazios.filter((l) => !emLote.has(l.id));
+  resumo.emLote = vazios.length - doDia.length;
+  if (resumo.emLote > 0) avisarUmaVez(unit.slug, `${resumo.emLote} cartões criados em lote (importação) ficaram de fora — o campos-sdr os alcança no agendamento`);
+  resumo.candidatos = doDia.length;
+  if (doDia.length === 0) return resumo;
 
-  // telefone e nome do contato, em lote — só dos que ainda precisam de decisão. Falhou: lança (quem chama registra e tenta de novo).
-  const precisam = vazios.filter((l) => !decididos.has(`${unit.id}|${l.id}`));  // id do cartão é único na conta do Kommo
-  const contatos: Map<number, { nome: string | null; telefone: string | null }> = precisam.length
-    ? await kommo.contatosBasicos(precisam.map(contatoPrincipal).filter((n): n is number => n !== null))
-    : new Map();
-
-  let avaliacoes = 0;
-  let gravacoes = 0;
-  let falhasSeguidas = 0;
-  for (const lead of vazios) {
+  // A unidade DONA de cada cartão (Petrópolis × Caxias: a ⌂ Unidade de atendimento; as outras, a própria). A decisão é guardada por
+  // unidade+cartão: se a SDR corrigir a unidade, a decisão da outra franquia não vale.
+  const alvos: Array<{ lead: KommoLead; donoUnit: Unit; estado: Estado; chave: string }> = [];
+  for (const lead of doDia) {
     const dono = await deps.donoDoCartao(unit, lead).catch((err) => {
       logger.warn({ err: String(err), leadId: lead.id, unit: unit.slug }, `${ID}: não consegui saber a unidade do cartão`);
       return null;
@@ -219,7 +224,28 @@ export async function tipoNaChegadaConta(ctx: ContextoDaConta): Promise<Resumo |
       resumo.desligados++;
       continue;
     }
-    const chave = `${unit.id}|${lead.id}`;
+    alvos.push({ lead, donoUnit, estado, chave: `${donoUnit.id}|${lead.id}` });
+  }
+
+  // telefone e nome do contato, em lote — só dos que ainda precisam de decisão. Falhou: lança (quem chama registra e tenta de novo).
+  const precisam = alvos.filter((a) => !decididos.has(a.chave)).map((a) => a.lead);
+  const contatos: Map<number, { nome: string | null; telefone: string | null }> = precisam.length
+    ? await kommo.contatosBasicos(precisam.map(contatoPrincipal).filter((n): n is number => n !== null))
+    : new Map();
+
+  // O paciente deste cartão foi criado por NÓS (Sofia ao agendar, widget "só cadastrar")? A busca na franquia o acharia e isso não é
+  // "já existia". Erro ao conferir = adia (nunca decide às cegas): um Resgate por engano é permanente.
+  const criadoPorNos = (a: { donoUnit: Unit; lead: KommoLead }) =>
+    deps.pacienteCriadoPorNos(a.donoUnit.id, a.lead.id).catch((err) => {
+      logger.warn({ err: String(err), leadId: a.lead.id, unit: a.donoUnit.slug }, `${ID}: não consegui conferir o vínculo do cartão — adio`);
+      return true;
+    });
+
+  let avaliacoes = 0;
+  let gravacoes = 0;
+  let falhasSeguidas = 0;
+  for (const alvo of alvos) {
+    const { lead, donoUnit, estado, chave } = alvo;
 
     let decisao: Decidido | null | undefined = decididos.get(chave);
     if (!decisao) {
@@ -232,19 +258,14 @@ export async function tipoNaChegadaConta(ctx: ContextoDaConta): Promise<Resumo |
         resumo.adiados++;
         continue;
       }
-      // quem já tem consulta marcada passa pelo campos-sdr (no agendamento): a busca na franquia acharia o paciente que a
-      // própria Sofia acabou de cadastrar, e isso não é "já existia".
-      // Erro ao conferir = adia (nunca decide às cegas): um Resgate por engano é permanente.
-      const deixa = await deps.pacienteCriadoPorNos(donoUnit.id, lead.id).catch((err) => {
-        logger.warn({ err: String(err), leadId: lead.id, unit: donoUnit.slug }, `${ID}: não consegui conferir o vínculo do cartão — adio`);
-        return true;
-      });
-      if (deixa) {
+      if (await criadoPorNos(alvo)) {
         resumo.adiados++;
         continue;
       }
       avaliacoes++;
       decisao = await avaliar({ kommo, deps, unit: donoUnit, lead, contatos, campoPrimeiro, agora });
+      // a Sofia pode ter cadastrado o paciente enquanto a franquia era consultada: reconfere ANTES de aceitar a prova da franquia
+      if (decisao?.viaFranquia && (await criadoPorNos(alvo))) decisao = null;
       if (!decisao) {
         const n = (tentativas.get(chave)?.n ?? 0) + 1;
         aparar(tentativas);
@@ -281,6 +302,12 @@ export async function tipoNaChegadaConta(ctx: ContextoDaConta): Promise<Resumo |
     }
     gravacoes++;
     try {
+      // decisão guardada de uma rodada anterior: a Sofia pode ter cadastrado o paciente desde então
+      if (decisao.viaFranquia && (await criadoPorNos(alvo))) {
+        decididos.delete(chave);
+        resumo.adiados++;
+        continue;
+      }
       // a SDR pode ter escolhido enquanto líamos: relê antes de gravar. Vale o que já estiver lá.
       const atual = await kommo.getLead(lead.id);
       if (valorDoCampo(atual, campo.id) !== null) {
@@ -338,7 +365,7 @@ async function avaliar(a: {
   // 3. a franquia: uma busca, só se a idade não bastou
   let franquia: RespostaDaFranquia | null = null;
   if (!pelaIdade) {
-    franquia = await deps.franquiaConhece(unit, { titulo: lead.name, nomeDoContato: contato?.nome ?? null, telefone: contato?.telefone ?? null }).catch(
+    franquia = await deps.franquiaConhece(unit, { titulo: lead.name, nomeDoContato: contato?.nome ?? null, telefone: contato?.telefone ?? null, chegadaEpoch: lead.created_at ?? null }).catch(
       (err): RespostaDaFranquia => ({ resultado: 'desconhecido', motivo: `a franquia não respondeu (${String(err).slice(0, 120)})` }),
     );
   }
@@ -347,7 +374,7 @@ async function avaliar(a: {
     logger.info({ unit: unit.slug, leadId: lead.id, motivo: v.motivo }, `${ID}: ainda não decido — ${v.motivo}`);
     return null;
   }
-  return { tipo: v.tipo, motivo: v.motivo };
+  return { tipo: v.tipo, motivo: v.motivo, viaFranquia: !pelaIdade && franquia?.resultado === 'sim' };
 }
 
 export const depsPadrao: DepsDoTipo = {
@@ -362,9 +389,10 @@ export const depsPadrao: DepsDoTipo = {
     if (l.spineIdSchedule || l.agendadoPara) return true;
     // vínculo com paciente: se foi o casamento (achou quem JÁ existia) é prova de Resgate e segue para a busca; qualquer outro
     // (widget "só cadastrar", agendamento) pode ser o paciente recém-criado
-    return !!l.spineIdClient && !/^paciente já existe/i.test(l.motivo ?? '');
+    return !!l.spineIdClient && !(l.motivo ?? '').startsWith(PREFIXO_PACIENTE_EXISTENTE);
   },
   franquiaConhece: (unit, e) => franquiaConhece(unit, e),
+  garantirIndice: (unit) => agendarIndice(unit),
   registrar: registrarSimulacao,
 };
 
@@ -382,7 +410,8 @@ async function varrerConta(daConta: Unit): Promise<void> {
   const membros = grupo?.membros ?? null;
   // olha as chaves ANTES de abrir o cliente do Kommo: conta com tudo desligado não custa nada
   if (!algumaChaveAtiva(unit, membros, depsPadrao.estadoDe)) return;
-  await tipoNaChegadaConta({ unit, membros, kommo: createKommoClient(unit), deps: depsPadrao, agora: Math.floor(Date.now() / 1000) });
+  const unidadesDaConta = membros?.length ? await prisma.unit.findMany({ where: { id: { in: [...new Set(membros.map((m) => m.unitId))] } } }) : [unit];
+  await tipoNaChegadaConta({ unit, membros, kommo: createKommoClient(unit), deps: depsPadrao, unidadesDaConta, agora: Math.floor(Date.now() / 1000) });
 }
 
 async function varrer(): Promise<void> {

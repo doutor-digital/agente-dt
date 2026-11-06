@@ -71,7 +71,7 @@ function avisarUmaVez(slug: string, msg: string): void {
   logger.warn({ unit: slug }, `${ID}: ${msg}`);
 }
 
-function valorDoCampo(lead: KommoLead, fieldId: number): string | null {
+export function valorDoCampo(lead: KommoLead, fieldId: number): string | null {
   const v = lead.custom_fields_values?.find((f) => f.field_id === fieldId)?.values?.[0]?.value;
   return v === undefined || v === null || String(v).trim() === '' ? null : String(v).trim();
 }

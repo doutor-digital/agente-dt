@@ -54,7 +54,7 @@ const anunciados = new Set<number>();
 
 const estadoDe = (slug: string): EstadoDaChave => estadoDaAutomacao(slug, ID, process.env.RENOMEAR_LEAD_SLUGS);
 
-function contatoPrincipal(lead: KommoLead): number | null {
+export function contatoPrincipal(lead: KommoLead): number | null {
   const contatos = lead._embedded?.contacts ?? [];
   return (contatos.find((c) => c.is_main) ?? contatos[0])?.id ?? null;
 }
@@ -83,7 +83,7 @@ export interface ContextoDaConta {
 }
 
 /** Alguma unidade da conta (ela mesma, ou o grupo Petrópolis + Caxias) está em seco ou ligada? */
-function algumaChaveAtiva(unit: { slug: string }, membros: ReadonlyArray<MembroDoCrm> | null, estado: (slug: string) => EstadoDaChave): boolean {
+export function algumaChaveAtiva(unit: { slug: string }, membros: ReadonlyArray<MembroDoCrm> | null, estado: (slug: string) => EstadoDaChave): boolean {
   const slugs = membros?.length ? membros.map((m) => m.slug).filter((s): s is string => !!s) : [unit.slug];
   return slugs.some((s) => estado(s) !== 'desligado');
 }

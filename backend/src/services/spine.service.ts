@@ -871,6 +871,69 @@ export async function searchLeads(
   }
 }
 
+/** Um cadastro da franquia visto só pelo telefone: o que o índice de telefones (`franquia-indice-telefones.ts`) precisa. */
+export interface SpineItemTelefone {
+  /** idClient (paciente) ou idLead */
+  id: number | null;
+  whatsapp: string | null;
+  /** quando foi cadastrado lá (como a franquia devolve: ISO em UTC); null se não disse */
+  created: string | null;
+}
+
+export interface SpinePaginaTelefones {
+  itens: SpineItemTelefone[];
+  totalPages: number | null;
+  total: number | null;
+}
+
+/**
+ * UMA página de pacientes (`/api/clients/search`, sem filtro: a franquia devolve do mais ANTIGO ao mais novo, 100 por página)
+ * ou de leads (`/api/leads/search`, janela de datas de no máximo 100 dias). A franquia ignora filtro de telefone, então o
+ * índice lê tudo, página a página, e guarda do nosso lado. Quem chama decide teto e pausa; aqui é uma chamada só.
+ */
+export async function paginaDeTelefones(
+  unit: SpineUnit,
+  e: { tipo: 'paciente' } | { tipo: 'lead'; initialDate: string; endDate: string },
+  page: number,
+): Promise<SpineResult<SpinePaginaTelefones>> {
+  const http = client(unit);
+  if (!http) return { ok: false, error: 'unidade sem token da API Spine' };
+  const paciente = e.tipo === 'paciente';
+  try {
+    const { data } = await http.post<{
+      data?: {
+        data?: Array<Record<string, unknown>>;
+        totalPages?: number;
+        total?: number;
+      };
+    }>(
+      paciente ? '/api/clients/search' : '/api/leads/search',
+      { ...(paciente ? {} : { initialDate: e.initialDate, endDate: e.endDate }), pagination: { page, rowsPerPage: 100 } },
+    );
+    const corpo = data?.data;
+    const itens = (corpo?.data ?? []).map((r) => {
+      const id = Number(paciente ? r.idClient : r.idLead);
+      return {
+        id: Number.isInteger(id) && id > 0 ? id : null,
+        whatsapp: typeof r.whatsapp === 'string' ? r.whatsapp : null,
+        created: typeof r.created === 'string' && r.created ? r.created : null,
+      };
+    });
+    const totalPages = Number(corpo?.totalPages);
+    const total = Number(corpo?.total);
+    return {
+      ok: true,
+      data: {
+        itens,
+        totalPages: Number.isFinite(totalPages) && totalPages > 0 ? totalPages : null,
+        total: Number.isFinite(total) && total >= 0 ? total : null,
+      },
+    };
+  } catch (err) {
+    return { ok: false, ...describe(err) };
+  }
+}
+
 export async function ping(unit: SpineUnit): Promise<SpineResult<{ total: number }>> {
   const http = client(unit);
   if (!http) return { ok: false, error: 'unidade sem token da API Spine' };

@@ -356,6 +356,8 @@ model Unit {
   changeLog         UnitChangeLog[]
   lessons           UnitLesson[]
   automacoes        UnitAutomacao[]
+  franquiaTelefones FranquiaTelefone[]
+  franquiaIndiceStatus FranquiaIndiceStatus?
   passosWidget      WidgetPasso[]
   /// Esta unidade divide o Kommo de outra (Caxias usa o de Petrópolis) — ver `UnitCrmCompartilhado`.
   crmCompartilhado  UnitCrmCompartilhado? @relation("CrmCompartilhadoUnidade")
@@ -2443,4 +2445,53 @@ model ComprovantePixUsado {
 
   @@index([unitId, kommoLeadId])
   @@map("comprovantes_pix_usados")
+}
+
+/// Índice de TELEFONES da franquia, por unidade (06/11/2026). A franquia ignora filtro de telefone (`/api/clients/search` só filtra
+/// `name`; leads só por data), então o ⬢ Tipo de lead da chegada (`tipo-lead-chegada`) pergunta "este telefone já existia?" aqui.
+/// Uma linha por (unidade, últimos 8 dígitos, origem); guarda o cadastro MAIS ANTIGO daquele telefone, para provar que veio
+/// ANTES do cartão. Só cresce (cache reconstruível: pode esvaziar a tabela que ela se refaz em até um dia).
+model FranquiaTelefone {
+  id               String    @id @default(cuid())
+  unitId           String    @map("unit_id")
+  /// últimos 8 dígitos do telefone (imune ao +55 e ao nono dígito) — `chaveTelefone`
+  chave            String
+  /// "paciente" | "lead"
+  origem           String
+  /// idClient ou idLead na franquia
+  idNaFranquia     Int?      @map("id_na_franquia")
+  /// quando foi cadastrado na franquia (UTC). Nulo = a franquia não disse.
+  criadoNaFranquia DateTime? @map("criado_na_franquia")
+  atualizadoEm     DateTime  @default(now()) @map("atualizado_em")
+
+  unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@unique([unitId, chave, origem])
+  @@map("franquia_telefones")
+}
+
+/// Estado da carga do índice acima, por unidade. `completoEm` só avança quando a carga terminou SEM corte e SEM erro: é o
+/// que autoriza "este telefone não está em lugar nenhum" (= Cadastro). Índice ausente/velho/cortado nunca autoriza.
+model FranquiaIndiceStatus {
+  unitId          String    @id @map("unit_id")
+  /// última carga (completa ou incremental) que terminou inteira
+  completoEm      DateTime? @map("completo_em")
+  /// última carga COMPLETA (base-zero) inteira; a incremental só vale depois dela
+  cargaCompletaEm DateTime? @map("carga_completa_em")
+  /// última tentativa (qualquer resultado): espaça as novas tentativas
+  tentativaEm     DateTime? @map("tentativa_em")
+  /// total de pacientes que a franquia informou na última carga inteira (a incremental lê a partir dele)
+  clientesTotal   Int?      @map("clientes_total")
+  /// até que dia (AAAA-MM-DD) os leads foram lidos
+  leadsAte        String?   @map("leads_ate")
+  pacientes       Int       @default(0)
+  leads           Int       @default(0)
+  /// "ok" | "erro" | "cortado"
+  resultado       String?
+  erro            String?   @db.Text
+  atualizadoEm    DateTime  @updatedAt @map("atualizado_em")
+
+  unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@map("franquia_indice_status")
 }
