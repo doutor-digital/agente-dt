@@ -15,6 +15,7 @@ import { logger } from './logger.js';
 import { createKommoClientSemFreio } from '../services/kommo.service.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import { registrarSimulacao } from './so-no-papel.js';
+import { contaDividida } from './crm-compartilhado.js';
 import { ID_ENTRADA, ID_ESTOQUE, configDoAmbiente, memoriaNova, rodarConta, type MemoriaDaConta } from './entrada-automatica.js';
 
 const SWEEP_MS = Number(process.env.ENTRADA_SWEEP_MS) || 3 * 60_000;
@@ -33,12 +34,12 @@ export function estadoDaConta(estados: readonly Estado[]): Estado {
   return ligadas.every((e) => e === 'ligado') ? 'ligado' : 'seco';
 }
 
-/** As unidades por conta Kommo (subdomínio), por slug. Sem subdomínio ou sem token não entra. */
-export function agruparPorConta<T extends { slug: string; kommoSubdomain: string | null; kommoAccessToken: string | null }>(units: readonly T[]): Map<string, T[]> {
+/** As unidades por conta Kommo (subdomínio), por slug — COM e sem token: o estado de quem não guarda credencial também vale. */
+export function agruparPorConta<T extends { slug: string; kommoSubdomain: string | null }>(units: readonly T[]): Map<string, T[]> {
   const contas = new Map<string, T[]>();
   for (const u of [...units].sort((a, b) => a.slug.localeCompare(b.slug))) {
     const conta = u.kommoSubdomain?.trim().toLowerCase();
-    if (!conta || !u.kommoAccessToken) continue;
+    if (!conta) continue;
     contas.set(conta, [...(contas.get(conta) ?? []), u]);
   }
   return contas;
@@ -46,6 +47,15 @@ export function agruparPorConta<T extends { slug: string; kommoSubdomain: string
 
 const memorias = new Map<string, MemoriaDaConta>();
 let rodando = false;
+/** O worker foi parado (perdeu a liderança, SIGTERM): a rodada em andamento não escreve mais. */
+let parado = false;
+
+const avisados = new Set<string>();
+function avisarUmaVez(conta: string, texto: string): void {
+  if (avisados.has(`${conta}:${texto}`)) return;
+  avisados.add(`${conta}:${texto}`);
+  logger.warn({ conta }, `entrada-automatica: ${texto}`);
+}
 
 export async function varrerEntrada(): Promise<void> {
   if (rodando) return;
@@ -57,7 +67,20 @@ export async function varrerEntrada(): Promise<void> {
       const recente = estadoDaConta(membros.map((u) => estadoRecente(u.slug)));
       const estoque = estadoDaConta(membros.map((u) => estadoEstoque(u.slug)));
       if (recente === 'desligado' && estoque === 'desligado') continue;
-      const dona: Unit = membros.find((u) => estadoRecente(u.slug) !== 'desligado' || estadoEstoque(u.slug) !== 'desligado') ?? membros[0];
+      // quem fala com o Kommo: a unidade que ligou alguma das duas e guarda o token (senão, qualquer uma com token)
+      const comToken = membros.filter((u) => !!u.kommoAccessToken);
+      const dona: Unit | undefined =
+        comToken.find((u) => estadoRecente(u.slug) !== 'desligado' || estadoEstoque(u.slug) !== 'desligado') ?? comToken[0];
+      if (!dona) {
+        avisarUmaVez(conta, 'ligada, mas nenhuma unidade da conta guarda o token do Kommo');
+        continue;
+      }
+      // Kommo dividido entre clínicas (Petrópolis × Caxias antes da separação): a caixa não diz de qual unidade é o lead, e
+      // vincular/aceitar no cartão da outra clínica não tem volta. Não mexe.
+      if (await contaDividida(membros).catch(() => null)) {
+        avisarUmaVez(conta, 'o Kommo é dividido entre unidades (unit_crm_compartilhado): a caixa não diz de quem é o lead — não mexo');
+        continue;
+      }
       const memoria = memorias.get(conta) ?? memoriaNova();
       memorias.set(conta, memoria);
       try {
@@ -69,6 +92,7 @@ export async function varrerEntrada(): Promise<void> {
           cfg,
           memoria,
           registrar: ({ automacao, ...s }) => registrarSimulacao(dona, automacao, s),
+          cancelado: () => parado,
         });
         const mexeu = resumo.vinculados + resumo.aceitos + resumo.vincularia + resumo.aceitaria + resumo.ambiguos + resumo.erros;
         logger.info({ conta, recente, estoque, ...resumo }, mexeu > 0 ? 'entrada-automatica: rodada' : 'entrada-automatica: rodada sem novidade');
@@ -89,6 +113,7 @@ let primeira: NodeJS.Timeout | null = null;
 
 export function startEntradaAutomaticaWorker(): void {
   if (timer) return;
+  parado = false;
   primeira = setTimeout(() => void varrerEntrada(), PRIMEIRA_VARREDURA_MS);
   timer = setInterval(() => void varrerEntrada(), SWEEP_MS);
   const cfg = configDoAmbiente();
@@ -96,6 +121,7 @@ export function startEntradaAutomaticaWorker(): void {
 }
 
 export function stopEntradaAutomaticaWorker(): void {
+  parado = true;
   if (timer) clearInterval(timer);
   if (primeira) clearTimeout(primeira);
   timer = null;

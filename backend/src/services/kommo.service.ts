@@ -1223,11 +1223,6 @@ export class KommoClient {
           break;
         }
       } catch (err) {
-        // 204 = caixa vazia (corpo vazio); o Axios não trata como erro, mas por garantia
-        if ((err as { response?: { status?: number } })?.response?.status === 204) {
-          completa = true;
-          break;
-        }
         wrapAxiosError(err, `listarEntrada(${page})`);
       }
     }

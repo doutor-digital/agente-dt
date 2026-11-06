@@ -54,6 +54,7 @@ export interface ConfigEntrada {
 }
 
 const inteiro = (v: string | undefined, padrao: number, min: number): number => {
+  if (v === undefined || v.trim() === '') return padrao; // `Number('')` é 0: variável declarada e vazia não pode zerar a espera
   const n = Number(v);
   return Number.isFinite(n) && n >= min ? Math.floor(n) : padrao;
 };
@@ -72,10 +73,11 @@ export function configDoAmbiente(env: NodeJS.ProcessEnv = process.env): ConfigEn
 
 const soDigitos = (t: string) => t.replace(/\D+/g, '');
 
-/** Sem o +55, se for o caso: 10 ou 11 dígitos (DDD + número). */
+/** Sem o +55 e sem o zero de tronco ("011 98765-4321"): fica DDD + número (10 ou 11 dígitos) ou, se não der, o que sobrar. */
 function nacional(t: string): string {
-  const d = soDigitos(t);
-  return d.length >= 12 && d.startsWith('55') ? d.slice(2) : d;
+  let d = soDigitos(t);
+  if (d.length >= 12 && d.startsWith('55')) d = d.slice(2);
+  return d.replace(/^0+/, '');
 }
 
 /** Os últimos 8 dígitos (imunes ao nono dígito e ao +55), ou `null` se não há 8 para comparar. */
@@ -93,7 +95,10 @@ export function mesmoTelefone(a: string, b: string): boolean {
   if (!ka || ka !== chaveFone(b)) return false;
   const na = nacional(a);
   const nb = nacional(b);
-  if (na.length >= 10 && nb.length >= 10) return na.slice(0, 2) === nb.slice(0, 2);
+  // só compara o DDD quando os DOIS lados têm a forma de DDD + número (10 ou 11 dígitos). Na dúvida são o mesmo número:
+  // o erro caro é achar que são pessoas diferentes e ACEITAR um cartão duplicado.
+  const comDdd = (n: string) => n.length === 10 || n.length === 11;
+  if (comDdd(na) && comDdd(nb)) return na.slice(0, 2) === nb.slice(0, 2);
   return true;
 }
 
@@ -164,6 +169,10 @@ export const memoriaNova = (): MemoriaDaConta => ({ vistoAte: new Map(), bloquea
 
 /** Lead olhado e deixado como está (ambíguo, sem par, seco) não é buscado de novo por este tempo. */
 export const VISTO_MS = 3 * 60 * 60_000;
+/** O estoque sem par ou ambíguo muda devagar (e são centenas): olhar de novo a cada 12 h, não a cada 3 h. */
+export const VISTO_ESTOQUE_MS = 12 * 60 * 60_000;
+/** Lead que deu erro que passa (Kommo fora, busca que falha): sai da frente por 15 min, para um lead com defeito não travar a fila atrás dele. */
+export const VISTO_FALHA_MS = 15 * 60_000;
 /** Erro que não passa sozinho (token sem direito de admin): a conta descansa. */
 export const BLOQUEIO_MS = 60 * 60_000;
 /** Falha que pode passar (429, 5xx, rede, busca): a conta descansa um pouco em vez de bater de novo na rodada seguinte. */
@@ -182,6 +191,8 @@ export interface ContextoDaRodada {
   registrar: (s: Simulacao & { automacao: string }) => void;
   /** só o teste troca (a pausa entre escritas) */
   pausa?: () => Promise<void>;
+  /** o worker foi parado (perdeu a liderança, SIGTERM): a rodada para antes da próxima escrita */
+  cancelado?: () => boolean;
 }
 
 export interface ResumoDaRodada {
@@ -273,6 +284,10 @@ export async function rodarConta(kommo: PortaKommo, ctx: ContextoDaRodada): Prom
 
     for (const { i, modo } of fila) {
       if (resumo.avaliados >= cfg.maxAvaliacoes || escritas >= cfg.maxEscritas) break;
+      if (ctx.cancelado?.()) {
+        resumo.encerrouCedo = 'o worker foi parado no meio da rodada';
+        return resumo;
+      }
       const estado = modo === 'recente' ? ctx.recente : ctx.estoque;
       const automacao = modo === 'recente' ? ID_ENTRADA : ID_ESTOQUE;
       const chaveVisto = `${estado}:${i.uid}`;
@@ -282,7 +297,7 @@ export async function rodarConta(kommo: PortaKommo, ctx: ContextoDaRodada): Prom
         continue;
       }
       if (ate) memoria.vistoAte.delete(chaveVisto);
-      const visto = (ms = VISTO_MS) => {
+      const visto = (ms = modo === 'estoque' ? VISTO_ESTOQUE_MS : VISTO_MS) => {
         if (memoria.vistoAte.size > 20_000) for (const [k, t] of memoria.vistoAte) if (t <= Date.now()) memoria.vistoAte.delete(k);
         memoria.vistoAte.set(chaveVisto, Date.now() + ms);
       };
@@ -290,6 +305,8 @@ export async function rodarConta(kommo: PortaKommo, ctx: ContextoDaRodada): Prom
         if (i.leadId) ctx.registrar({ automacao, leadId: i.leadId, acao, alvo, valor, motivo });
       };
 
+      // onde estamos: 404 numa LEITURA é contato apagado; 404 numa ESCRITA é "o lead já saiu da caixa"
+      let fase: 'ler' | 'escrever' = 'ler';
       try {
         // 1. quem é: os telefones do contato do lead de entrada
         if (!i.contatoId) {
@@ -331,6 +348,11 @@ export async function rodarConta(kommo: PortaKommo, ctx: ContextoDaRodada): Prom
         const d = decidir(modo, { temTelefone: chaves.length > 0, buscaCheia }, abertos);
 
         // 4. o que fazer
+        if (ctx.cancelado?.()) {
+          resumo.encerrouCedo = 'o worker foi parado no meio da rodada';
+          return resumo;
+        }
+        fase = 'escrever';
         if (d.tipo === 'nada') {
           if (d.motivo === 'ambiguo') resumo.ambiguos++;
           else if (d.motivo === 'sem-par-velho') resumo.semParVelho++;
@@ -348,6 +370,7 @@ export async function rodarConta(kommo: PortaKommo, ctx: ContextoDaRodada): Prom
             visto();
             simular('gravaria', `vincular ao cartão ${d.cartaoId}`, d.cartaoId, 'o telefone bate com um cartão aberto: a conversa cairia nele');
             logger.info({ unit: unit.slug, uid: i.uid, leadId: i.leadId, cartaoId: d.cartaoId, modo }, `${automacao} [seco]: vincularia`);
+            chaves.forEach((k) => telefonesDaRodada.add(k));
             continue;
           }
           await kommo.vincularEntrada(i.uid, d.cartaoId);
@@ -394,19 +417,28 @@ export async function rodarConta(kommo: PortaKommo, ctx: ContextoDaRodada): Prom
       } catch (err) {
         if (err instanceof RodadaEncerrada) {
           resumo.erros++;
+          visto(VISTO_FALHA_MS);
           memoria.bloqueadaAte = Date.now() + DESCANSO_CURTO_MS;
           resumo.encerrouCedo = err.message;
           return resumo;
         }
         const classe = classeDoErro(err);
+        if (classe === 'ja-resolvido' && fase === 'ler') {
+          // 404 ao ler o contato: contato apagado ou unido. Não é "alguém tratou": o lead continua na caixa, sem como ser avaliado
+          resumo.erros++;
+          visto(VISTO_ESTOQUE_MS);
+          logger.warn({ err: String(err), unit: unit.slug, uid: i.uid, leadId: i.leadId, modo }, `${automacao}: o contato do lead de entrada não existe mais — deixei na caixa`);
+          continue;
+        }
         if (classe === 'ja-resolvido') {
           resumo.jaResolvidos++; // alguém (a recepção, a Sofia) foi mais rápido: a caixa já está certa
-          visto(); // ...ou o 404 é do contato apagado: não insiste a cada rodada
+          logger.info({ unit: unit.slug, uid: i.uid, leadId: i.leadId, modo }, `${automacao}: o lead de entrada já saiu da caixa (404) — nada a fazer`);
           continue;
         }
         resumo.erros++;
         logger.warn({ err: String(err), unit: unit.slug, uid: i.uid, leadId: i.leadId, modo }, `${automacao}: erro num lead de entrada — ele fica na caixa`);
         if (classe === 'transitorio') {
+          visto(VISTO_FALHA_MS);
           memoria.bloqueadaAte = Date.now() + DESCANSO_CURTO_MS;
           resumo.encerrouCedo = 'o Kommo falhou (429, 5xx ou rede): a conta descansa 5 minutos e tento de novo';
           return resumo;

@@ -164,6 +164,11 @@ test('telefone: últimos 8 dígitos atravessam o nono dígito e o +55; DDD difer
   assert.ok(mesmoTelefone('47999172442', '99172442'), 'sem DDD de um dos lados vale o final');
   assert.ok(!mesmoTelefone('47999172442', '11999172442'), 'mesmos 8 dígitos em outro DDD é outra pessoa');
   assert.ok(!mesmoTelefone(FONE, '47 99917-2443'));
+  // zero de tronco e formas que não parecem DDD + número: na dúvida é o mesmo número (o erro caro é ACEITAR em duplicidade)
+  assert.ok(mesmoTelefone('011987654321', '+5511987654321'), '0 de tronco');
+  assert.ok(mesmoTelefone('0 11 98765-4321', '11987654321'));
+  assert.ok(!mesmoTelefone('011987654321', '+5521987654321'), 'DDD de verdade diferente continua diferente');
+  assert.ok(mesmoTelefone('+55 11 98765-4321', '987654321'), 'um lado sem DDD: só o final decide');
 });
 
 test('primeira etapa do funil: pula a de entrada (type 1) e GANHO/PERDIDO, pela ordem (sort), não pela posição na lista', () => {
@@ -211,6 +216,9 @@ test('config: padrões 3 min / 120 min / 30 / 15, e lixo no ambiente cai no padr
   const q = configDoAmbiente({ ENTRADA_JANELA_MIN: '30', ENTRADA_MAX_ESCRITAS: '2', ENTRADA_ESPERA_MIN: '0' } as never);
   assert.deepEqual([q.janelaS, q.maxEscritas, q.esperaS], [1800, 2, 0]);
   assert.equal(configDoAmbiente({ ENTRADA_JANELA_MIN: 'abc', ENTRADA_MAX_AVALIACOES: '-4' } as never).janelaS, 7200);
+  // variável declarada e VAZIA (`ENTRADA_ESPERA_MIN=`) não pode zerar a espera de segurança
+  assert.equal(configDoAmbiente({ ENTRADA_ESPERA_MIN: '' } as never).esperaS, 180);
+  assert.equal(configDoAmbiente({ ENTRADA_ESPERA_MIN: '  ' } as never).esperaS, 180);
 });
 
 // ─── a rodada ─────────────────────────────────────────────────────────────────────────────────────
@@ -376,8 +384,9 @@ test('FALHA DA API não perde nada: busca que falha NÃO vira "sem cartão" (nã
   const r2 = await rodarConta(k.porta, c);
   assert.match(String(r2.encerrouCedo), /descanso/);
   assert.equal(k.chamadas.length, antes);
-  // passado o descanso, o lead ainda está lá e é tratado
+  // passado o descanso (e os 15 min do lead), o lead ainda está lá e é tratado
   m.bloqueadaAte = 0;
+  m.vistoAte.clear();
   const r3 = await rodarConta(k.porta, c);
   assert.equal(r3.aceitos, 1);
 });
@@ -395,8 +404,10 @@ test('FALHA ao vincular (500): o lead fica na caixa, a rodada para; na rodada se
   assert.equal(r.vinculados, 0);
   assert.equal(r.erros, 1);
   assert.deepEqual(k.escritas, []);
-  assert.equal(m.vistoAte.size, 0, 'erro que passa NÃO marca o lead como visto: tenta de novo');
+  const fora = (m.vistoAte.get('ligado:u-a') ?? 0) - Date.now();
+  assert.ok(fora > 0 && fora <= 15 * 60_000, 'erro que passa tira o lead da frente por 15 min (não para sempre)');
   m.bloqueadaAte = 0;
+  m.vistoAte.clear();
   const r2 = await rodarConta(k.porta, c);
   assert.equal(r2.vinculados, 1);
 });
@@ -514,6 +525,71 @@ test('tudo desligado: nem lê a caixa', async () => {
   assert.deepEqual(k.chamadas, []);
 });
 
+test('LEAD COM DEFEITO não trava a fila: erro que passa tira só aquele lead da frente por 15 min, e o seguinte é tratado na rodada seguinte', async () => {
+  const k = kommoFalso({
+    caixa: [lead('u-ruim', 30, 1), lead('u-bom', 20, 2)],
+    contatos: [{ id: 1, telefones: ['47 90000-0001'], leadIds: [] }, { id: 2, telefones: ['47 90000-0002'], leadIds: [] }],
+    cartoes: [],
+  });
+  k.falhar.telefonesDoContato = [new KommoApiError('contato', 500, {})];
+  const m = memoriaNova();
+  const r1 = await rodarConta(k.porta, ctx({ memoria: m }).c);
+  assert.equal(r1.aceitos, 0);
+  assert.ok((m.vistoAte.get('ligado:u-ruim') ?? 0) > Date.now(), 'o lead com defeito saiu da frente');
+  m.bloqueadaAte = 0; // passou o descanso da conta
+  const r2 = await rodarConta(k.porta, ctx({ memoria: m }).c);
+  assert.equal(r2.jaVistos, 1);
+  assert.deepEqual(k.escritas.filter((e) => e.tipo === 'aceitar').map((e) => e.args[0]), ['u-bom']);
+});
+
+test('404 ao LER o contato não é "alguém já tratou": é erro (contato apagado), o lead fica na caixa e não é repetido a cada rodada', async () => {
+  const k = kommoFalso({ caixa: [lead('u-a', 10, 1)], contatos: [], cartoes: [] });
+  k.falhar.telefonesDoContato = [new KommoApiError('contato', 404, {})];
+  const m = memoriaNova();
+  const r = await rodarConta(k.porta, ctx({ memoria: m }).c);
+  assert.equal(r.jaResolvidos, 0);
+  assert.equal(r.erros, 1);
+  assert.deepEqual(k.escritas, []);
+  assert.ok((m.vistoAte.get('ligado:u-a') ?? 0) > Date.now() + 11 * 3600_000);
+  assert.equal(m.bloqueadaAte, 0, 'contato apagado não é problema de token: a conta não descansa');
+});
+
+test('worker parado no meio da rodada (perdeu a liderança): não escreve mais nada', async () => {
+  const caixa = [1, 2, 3].map((n) => lead(`u-${n}`, 10 + n, n));
+  const contatos = [1, 2, 3].map((n) => ({ id: n, telefones: [`47 9000${n}-0000`], leadIds: [] as number[] }));
+  const k = kommoFalso({ caixa, contatos, cartoes: [] });
+  const r = await rodarConta(k.porta, ctx({ cancelado: () => k.escritas.some((e) => e.tipo === 'aceitar') }).c);
+  assert.equal(k.escritas.filter((e) => e.tipo === 'aceitar').length, 1, 'parou depois do primeiro aceite');
+  assert.match(String(r.encerrouCedo), /parado/);
+});
+
+test('seco e ligado se comportam igual: dois leads do mesmo telefone vinculam uma vez e adiam a outra, nos dois modos', async () => {
+  for (const estado of ['seco', 'ligado'] as const) {
+    const k = kommoFalso({
+      caixa: [lead('u-a', 20, 1), lead('u-b', 10, 2)],
+      contatos: [{ id: 1, telefones: [FONE], leadIds: [5_000_001] }, { id: 2, telefones: [FONE], leadIds: [5_000_002] }, { id: 3, telefones: [FONE], leadIds: [321] }],
+      cartoes: [cartao(321)],
+    });
+    const r = await rodarConta(k.porta, ctx({ recente: estado }).c);
+    assert.equal(r.adiados, 1, estado);
+    assert.equal(r.vincularia + r.vinculados, 1, estado);
+  }
+});
+
+test('estoque sem par volta a ser olhado só depois de 12 h (são centenas), o recente em 3 h', async () => {
+  const k = kommoFalso({
+    caixa: [lead('u-velho', 60 * 24, 1), lead('u-novo', 10, 2)],
+    contatos: [{ id: 1, telefones: ['47 90000-0001'], leadIds: [] }, { id: 2, telefones: [FONE], leadIds: [5_000_002] }, { id: 3, telefones: [FONE], leadIds: [321, 322] }],
+    cartoes: [cartao(321), cartao(322)],
+  });
+  const m = memoriaNova();
+  await rodarConta(k.porta, ctx({ recente: 'ligado', estoque: 'ligado', memoria: m }).c);
+  const velho = (m.vistoAte.get('ligado:u-velho') ?? 0) - Date.now();
+  const novo = (m.vistoAte.get('ligado:u-novo') ?? 0) - Date.now();
+  assert.ok(velho > 11 * 3600_000, 'estoque: 12 h');
+  assert.ok(novo > 2 * 3600_000 && novo <= 3 * 3600_000, 'recente: 3 h');
+});
+
 // ─── o worker e o catálogo ────────────────────────────────────────────────────────────────────────
 
 test('estado da conta: quem está desligado não conta; qualquer "só no papel" entre os que ligaram segura a conta no papel', () => {
@@ -524,11 +600,11 @@ test('estado da conta: quem está desligado não conta; qualquer "só no papel" 
   assert.equal(estadoDaConta(['seco']), 'seco');
 });
 
-test('agrupar por conta: o subdomínio manda (maiúscula não separa); unidade sem token não entra', () => {
+test('agrupar por conta: o subdomínio manda (maiúscula não separa); unidade sem subdomínio não entra', () => {
   const u = (slug: string, sub: string | null, token: string | null) => ({ slug, kommoSubdomain: sub, kommoAccessToken: token });
   const g = agruparPorConta([u('b', 'Timbosc', 't'), u('a', 'timbosc', 't'), u('c', 'outra', 't'), u('d', 'timbosc', null), u('e', null, 't')]);
   assert.deepEqual([...g.keys()].sort(), ['outra', 'timbosc']);
-  assert.deepEqual(g.get('timbosc')?.map((x) => x.slug), ['a', 'b']);
+  assert.deepEqual(g.get('timbosc')?.map((x) => x.slug), ['a', 'b', 'd'], 'a unidade sem token também conta para o ESTADO da conta (uma irmã em "só no papel" segura a conta)');
 });
 
 test('catálogo: as duas chaves existem, nascem desligadas, têm modo seco e exigem o seco antes', () => {
