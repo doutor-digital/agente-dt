@@ -89,6 +89,16 @@ async function travasDaReativacao(ctx: Ctx, lead: KommoLead, toque: number) {
   return null;
 }
 
+/**
+ * 1º degrau, com o cartão RELIDO: se o `etiquetas-auto` já pôs a ▶ Reativação NESTA perda (marca `etiqueta-<unidade>-reativacao:<id>:<closed_at>`),
+ * não põe de novo — o remove+add dispararia o robô outra vez. A marca é lida do banco agora, não do começo da varredura.
+ */
+async function reativacaoJaPostaPeloEtiquetasAuto(ctx: Ctx, fresco: KommoLead, toque: number): Promise<string | null> {
+  if (toque !== 1 || fresco.status_id !== 143 || !fresco.closed_at) return null;
+  const marca = await prisma.executionTrace.findFirst({ where: { id: `etiqueta-${ctx.unit.id}-reativacao:${fresco.id}:${fresco.closed_at}` }, select: { id: true } });
+  return marca ? 'o etiquetas-auto já pôs a ▶ Reativação nesta perda' : null;
+}
+
 /** Ex-lead que nunca agendou, hoje em PERDIDO ou EM ESPERA. */
 export async function varrerExLead(ctx: Ctx, seco: boolean, resumo: Record<string, ResumoDaRegua>): Promise<void> {
   const r = (resumo[CHAVE_EXLEAD] = resumoNovo());
@@ -123,6 +133,7 @@ export async function varrerExLead(ctx: Ctx, seco: boolean, resumo: Record<strin
         ancorarNaEntrada: etapa === ETAPA.ESPERA,
         marcasExtras: marcasDaReativacaoAntiga,
         travaExtra: travasDaReativacao,
+        travaNaEscrita: reativacaoJaPostaPeloEtiquetasAuto,
       },
       await cartoesDaEtapa(ctx.kommo, alvo),
       r,

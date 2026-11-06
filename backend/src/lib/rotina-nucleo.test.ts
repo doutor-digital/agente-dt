@@ -22,6 +22,7 @@ import {
   tracos,
   zerar,
 } from './rotina-teste-util.js';
+import { marcasDaUnidade } from './rotina-nucleo.js';
 import {
   anoDoAniversario,
   aniversarioHoje,
@@ -46,6 +47,11 @@ import {
 
 const TZ = 'America/Sao_Paulo';
 beforeEach(zerar);
+
+/** Carrega a leitura das marcas do COMEÇO da varredura (a que o `tocar` usa antes de gravar). */
+async function marcasDaUnidadeParaOTeste(c: ReturnType<typeof ctx>): Promise<void> {
+  await marcasDaUnidade(c);
+}
 
 const carta = (tags: string[] = [], campos: Record<string, unknown> = {}): Pick<KommoLead, 'custom_fields_values' | '_embedded'> => ({
   custom_fields_values: Object.entries(campos).map(([nome, value], i) => ({ field_id: 9000 + i, field_name: nome, values: [{ value }] })) as KommoLead['custom_fields_values'],
@@ -473,4 +479,76 @@ test('tocar: lista de motivos nativos que não lê + cartão com motivo nativo =
   assert.equal(r.seguradas['motivo-nativo-desconhecido'], 1);
   assert.ok(simulacoes.some((s) => s.acao === 'pularia' && /não pôde ser lido/.test(s.motivo ?? '')));
   assert.equal(escritas().length, 0);
+});
+
+// ─── corrida com o etiquetas-auto (outro worker) no meio da varredura ─────────────────────────────
+
+/** Faz o `getLead` (a releitura do `tocar`, logo antes de escrever) acontecer DEPOIS de o outro robô gravar a marca dele. */
+async function comOutroRoboNoMeio(durante: () => void, run: () => Promise<void>): Promise<void> {
+  const original = kommo.getLead;
+  (kommo as { getLead: unknown }).getLead = async (id: number) => {
+    const lido = await original(id);
+    durante();
+    return lido;
+  };
+  try {
+    await run();
+  } finally {
+    (kommo as { getLead: unknown }).getLead = original;
+  }
+}
+
+test('CORRIDA: o etiquetas-auto põe a ▶ Reativação entre a leitura e a escrita — a rotina vê a marca dele (relida do banco) e NÃO faz remove+add (o robô dispararia de novo)', async () => {
+  const x = novo({ etapa: [1, 143], closed: AGORA - 31 * DIA, tags: [] });
+  const c = ctx();
+  await marcasDaUnidadeParaOTeste(c); // a leitura do COMEÇO da varredura: ainda sem a marca do outro robô
+  await comOutroRoboNoMeio(
+    () => {
+      poeMarca(`etiqueta-${c.unit.id}-reativacao:${x.lead.id}:${AGORA - 31 * DIA}`, c.unit.id, x.lead.id, 0);
+      tagsNoKommo.set(x.lead.id, ['▶ Reativação']);
+    },
+    async () => {
+      const r = resumoNovo();
+      assert.equal(await tocar(c, false, toque(x, { chave: 'exlead', etiqueta: '▶ Reativação' }), r), 'segurou');
+      assert.equal(escritas().length, 0, 'nem removeTag, nem addTag, nem nota');
+      assert.equal([...tracos.keys()].filter((k) => k.startsWith('rotina-')).length, 0, 'e não gravou a marca dela');
+      assert.equal(r.seguradas['mesma-pessoa-hoje'], 1);
+    },
+  );
+});
+
+test('CORRIDA: outro processo gravou uma marca da rotina para a MESMA pessoa no meio da varredura — segura', async () => {
+  const x = novo({ contato: 6006 });
+  const c = ctx();
+  await marcasDaUnidadeParaOTeste(c);
+  await comOutroRoboNoMeio(
+    () => poeMarca(`rotina-${c.unit.id}-c6006-negociacao-1-9`, c.unit.id, 77, 0),
+    async () => {
+      assert.equal(await tocar(c, false, toque(x), resumoNovo()), 'segurou');
+      assert.equal(escritas().length, 0);
+    },
+  );
+});
+
+test('a releitura do banco só olha marcas de HOJE: a de ontem não segura', async () => {
+  const x = novo({ contato: 6007 });
+  const c = ctx();
+  poeMarca(`rotina-${c.unit.id}-c6007-negociacao-1-9`, c.unit.id, 77, 30);
+  poeMarca(`etiqueta-${c.unit.id}-boas-vindas:${x.lead.id}:1`, c.unit.id, x.lead.id, 30);
+  assert.equal(await tocar(c, false, toque(x), resumoNovo()), 'ok');
+});
+
+test('se a releitura do banco falha, lança: «não consegui ler» não é «ninguém tocou» (nada é escrito)', async () => {
+  const x = novo();
+  const c = ctx();
+  const original = (await import('./prisma.js')).prisma.executionTrace.findMany;
+  await marcasDaUnidadeParaOTeste(c);
+  const util = await import('./prisma.js');
+  (util.prisma.executionTrace as { findMany: unknown }).findMany = async () => { throw new Error('banco fora'); };
+  try {
+    await assert.rejects(tocar(c, false, toque(x), resumoNovo()));
+    assert.equal(escritas().length, 0);
+  } finally {
+    (util.prisma.executionTrace as { findMany: unknown }).findMany = original;
+  }
 });

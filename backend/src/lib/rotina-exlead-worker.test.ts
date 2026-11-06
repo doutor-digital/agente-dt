@@ -205,3 +205,24 @@ test('a lista de motivos nativos não lê: o cartão com motivo nativo fica, o s
   assert.deepEqual(leadsComTag(), [semMotivo.lead.id]);
   assert.ok(comMotivo);
 });
+
+test('CORRIDA 1º degrau: o etiquetas-auto põe a ▶ Reativação desta perda entre a leitura e a escrita (marca de dias atrás, não de hoje) — a rotina relê o cartão e NÃO repete', async () => {
+  extrasDoKommo.modelos = COM_V2;
+  const x = novo({ etapa: PERDIDO, silencioDias: 40, campos: RESP, closed: AGORA - 40 * DIA });
+  const c = ctx();
+  const original = (await import('./rotina-teste-util.js')).kommo.getLead;
+  const util = await import('./rotina-teste-util.js');
+  (util.kommo as { getLead: unknown }).getLead = async (id: number) => {
+    const lido = await original(id);
+    // o etiquetas-auto acaba de pôr (a marca dele leva o closed_at da perda)
+    poeMarca(`etiqueta-${c.unit.id}-reativacao:${x.lead.id}:${AGORA - 40 * DIA}`, c.unit.id, x.lead.id, 72);
+    return lido;
+  };
+  try {
+    const r = await exlead(c, false);
+    assert.equal(escritas().length, 0);
+    assert.equal(r.exlead.seguradas['mudou-antes-de-escrever'], 1);
+  } finally {
+    (util.kommo as { getLead: unknown }).getLead = original;
+  }
+});

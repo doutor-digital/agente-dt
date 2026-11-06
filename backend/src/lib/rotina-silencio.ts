@@ -166,6 +166,8 @@ export interface ParamsDoSilencio {
   /** marcas de outras fontes que valem como degrau já enviado (a Reativação do `etiquetas-auto`), por cartão */
   marcasExtras?: (ctx: Ctx, leads: KommoLead[]) => Promise<Map<number, Array<Omit<MarcaLida, 'pessoa'>>>>;
   /** a última trava da régua, depois da franquia (ex-lead: as do `etiquetas-auto`); devolve o porquê de segurar */
+  /** a última conferência, com o cartão RELIDO, logo antes de escrever (ex-lead: o `etiquetas-auto` já pôs a ▶ Reativação desta perda?) */
+  travaNaEscrita?: (ctx: Ctx, fresco: KommoLead, toque: number) => Promise<string | null>;
   travaExtra?: (ctx: Ctx, lead: KommoLead, toque: number) => Promise<(RazaoDeFicar & { horas?: number }) | null>;
 }
 
@@ -371,10 +373,11 @@ export async function varrerSilencio(ctx: Ctx, seco: boolean, p: ParamsDoSilenci
         continue;
       }
 
-      const aindaVale = (fresco: KommoLead): string | null => {
+      const aindaVale = async (fresco: KommoLead): Promise<string | null> => {
         if (fresco.status_id !== lead.status_id || fresco.pipeline_id !== lead.pipeline_id) return 'mudou de etapa';
         const razao = porQueNaoTocar(fresco, { ...opcoes, agora: Math.floor(Date.now() / 1000) });
-        return razao ? razao.texto : null;
+        if (razao) return razao.texto;
+        return p.travaNaEscrita ? p.travaNaEscrita(ctx, fresco, d.toque) : null;
       };
       const motivo = d.atrasado
         ? `${d.silencioDias} dias sem o paciente escrever (pelo calendário já passou do prazo; entra pelo ${d.toque}º degrau)`

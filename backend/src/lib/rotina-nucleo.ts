@@ -509,6 +509,22 @@ export function motivosNativosDaConta(ctx: Ctx): Promise<MotivosNativos | null> 
   })());
 }
 
+/**
+ * Relê do BANCO, agora, se esta pessoa (marca da rotina) ou este cartão (marca do `etiquetas-auto`, que é por cartão) já recebeu um
+ * toque HOJE. Devolve o id da marca achada, ou null. Erro de leitura lança: "não consegui ler" não é "ninguém tocou".
+ */
+export async function tocadaHojeNoBanco(ctx: Ctx, leadId: number, pessoa: string): Promise<string | null> {
+  const { unit, agora, tz } = ctx;
+  const desde = new Date((agora - 48 * HORA_S) * 1000);
+  const hoje = hojeNaUnidade(agora, tz);
+  const doDia = (d: Date) => hojeNaUnidade(Math.floor(d.getTime() / 1000), tz) === hoje;
+  const dela = await prisma.executionTrace.findMany({ where: { unitId: unit.id, id: { startsWith: `${PREFIXO_DA_MARCA}${unit.id}-${pessoa}-` }, createdAt: { gte: desde } }, select: { id: true, createdAt: true } });
+  const achadaDaRotina = dela.find((x) => doDia(x.createdAt));
+  if (achadaDaRotina) return achadaDaRotina.id;
+  const doAuto = await prisma.executionTrace.findMany({ where: { unitId: unit.id, leadId: { in: [String(leadId)] }, id: { startsWith: 'etiqueta-' }, createdAt: { gte: desde } }, select: { id: true, createdAt: true } });
+  return doAuto.find((x) => doDia(x.createdAt))?.id ?? null;
+}
+
 /** Esta pessoa já recebeu um toque hoje (rotina, `etiquetas-auto`, ou nesta varredura)? */
 export async function jaRecebeuHoje(ctx: Ctx, pessoa: string): Promise<boolean> {
   return (await marcasDaUnidade(ctx)).pessoasHoje.has(pessoa) || (ctx.tocados?.has(pessoa) ?? false);
@@ -555,7 +571,7 @@ export interface Toque {
   etapa: string;
   motivo: string;
   /** depois de reler o cartão, ainda vale? `null` = sim */
-  aindaVale: (fresco: KommoLead) => string | null;
+  aindaVale: (fresco: KommoLead) => string | null | Promise<string | null>;
 }
 
 export type Resultado = 'ok' | 'teto' | 'sem-etiqueta' | 'segurou' | 'falhou' | 'incerto';
@@ -645,10 +661,18 @@ export async function tocar(ctx: Ctx, seco: boolean, t: Toque, r: ResumoDaRegua)
 
   // a conversa levou segundos: relê o cartão e confere de novo antes de escrever
   const fresco = await kommo.getLead(t.lead.id);
-  const razao = t.aindaVale(fresco);
+  const razao = await t.aindaVale(fresco);
   if (razao) {
     conta(r.seguradas, 'mudou-antes-de-escrever');
     logger.info({ unit: unit.slug, leadId: t.lead.id, razao }, 'rotina: o cartão mudou enquanto eu conferia — não pus');
+    return 'segurou';
+  }
+  // A leitura das marcas é do COMEÇO da varredura e a escrita vem minutos depois: o `etiquetas-auto` (outro worker, 15 em 15 min) pode
+  // ter posto a etiqueta nesse intervalo — e aí o remove+add abaixo dispararia o robô de NOVO. Relê do banco, logo antes de gravar.
+  const dobro = await tocadaHojeNoBanco(ctx, t.lead.id, pessoa);
+  if (dobro) {
+    conta(r.seguradas, 'mesma-pessoa-hoje');
+    logger.info({ unit: unit.slug, leadId: t.lead.id, marca: dobro }, 'rotina: outro robô tocou esta pessoa enquanto eu conferia — não pus');
     return 'segurou';
   }
   if (!(await gravarMarca(unit, t, pessoa))) return 'falhou';

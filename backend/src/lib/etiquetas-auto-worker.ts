@@ -168,7 +168,9 @@ export async function pularSeARotinaJaCuidou(
 }
 
 async function rotinaExLeadJaTocou(unitId: string, pessoa: string): Promise<boolean> {
-  const achada = await prisma.executionTrace.findFirst({ where: { unitId, id: { startsWith: `rotina-${unitId}-${pessoa}-exlead-` } }, select: { id: true } });
+  // últimos 200 dias, como diz o comentário acima (a leitura das marcas da rotina também é de 200)
+  const desde = new Date(Date.now() - 200 * DIA_S * 1000);
+  const achada = await prisma.executionTrace.findFirst({ where: { unitId, id: { startsWith: `rotina-${unitId}-${pessoa}-exlead-` }, createdAt: { gte: desde } }, select: { id: true } });
   return achada !== null;
 }
 

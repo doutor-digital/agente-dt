@@ -32,6 +32,7 @@ const bate = (t: Traco, where: Record<string, unknown>): boolean => {
   const lead = where.leadId as { in?: string[] } | undefined;
   if (lead?.in && !lead.in.includes(t.leadId)) return false;
   const id = where.id as { startsWith?: string; in?: string[] } | string | undefined;
+  if (typeof id === 'string' && t.id !== id) return false;
   if (typeof id === 'object' && id?.startsWith && !t.id.startsWith(id.startsWith)) return false;
   if (typeof id === 'object' && id?.in && !id.in.includes(t.id)) return false;
   const quando = where.createdAt as { gte?: Date } | undefined;
@@ -41,6 +42,7 @@ const bate = (t: Traco, where: Record<string, unknown>): boolean => {
 Object.defineProperty(prisma, 'executionTrace', {
   value: {
     findMany: async (a: { where: Record<string, unknown> }) => [...tracos.values()].filter((t) => bate(t, a.where)),
+    findFirst: async (a: { where: Record<string, unknown> }) => [...tracos.values()].find((t) => bate(t, a.where)) ?? null,
     create: async (a: { data: { id: string; unitId: string; leadId: string } }) => {
       if (tracos.has(a.data.id)) throw new Error('Unique constraint failed');
       tracos.set(a.data.id, { id: a.data.id, unitId: a.data.unitId, leadId: a.data.leadId, createdAt: new Date(AGORA * 1000) });
