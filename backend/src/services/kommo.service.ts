@@ -47,6 +47,18 @@ export interface KommoLead {
   };
 }
 
+/** Um lead da caixa "Leads de entrada" (unsorted). `uid` é a chave de aceitar/vincular; `leadId` é o cartão provisório. */
+export interface EntradaDoKommo {
+  uid: string;
+  pipelineId: number;
+  /** chats, forms, sip, mail */
+  categoria: string;
+  /** epoch em segundos */
+  criadoEm: number;
+  leadId: number | null;
+  contatoId: number | null;
+}
+
 /** Transmissão do WhatsApp (tela "Transmissões"). `filter.tag` traz os ids das etiquetas do segmento. */
 export interface KommoTransmissao {
   id: number;
@@ -1158,6 +1170,110 @@ export class KommoClient {
       return data?._embedded?.contacts ?? [];
     } catch (err) {
       wrapAxiosError(err, `buscarContatosPorTexto(${texto})`);
+    }
+  }
+
+  // ─── "Leads de entrada" (unsorted) ─────────────────────────────────────────────────────────────────────────────
+  // Ver `lib/entrada-automatica.ts`. Aqui só a rede: nenhuma regra mora neste bloco.
+
+  /**
+   * A caixa "Leads de entrada" (`GET /leads/unsorted`), do mais novo ao mais velho. Só o que a API devolve: `uid` (chave de
+   * `aceitar`/`vincular`), o funil onde o lead está, a categoria (chats, forms, sip, mail), quando entrou, e o cartão e o
+   * contato embutidos. Erro do Kommo LANÇA: "não consegui ler" nunca pode virar "a caixa está vazia".
+   * `completa: false` = parou no teto de páginas e ainda havia mais.
+   */
+  async listarEntrada(opcoes: { categoria?: string; maxPaginas?: number } = {}): Promise<{ itens: EntradaDoKommo[]; completa: boolean }> {
+    const maxPaginas = opcoes.maxPaginas ?? 4;
+    const itens: EntradaDoKommo[] = [];
+    let completa = false;
+    for (let page = 1; page <= maxPaginas; page++) {
+      try {
+        const { data, status } = await this.http.get<{
+          _embedded?: {
+            unsorted?: Array<{
+              uid?: string;
+              pipeline_id?: number;
+              category?: string;
+              created_at?: number;
+              _embedded?: { leads?: Array<{ id?: number }>; contacts?: Array<{ id?: number }> };
+            }>;
+          };
+        }>('/leads/unsorted', {
+          params: {
+            limit: 250,
+            page,
+            ...(opcoes.categoria ? { 'filter[category][]': opcoes.categoria } : {}),
+            'order[created_at]': 'desc',
+          },
+        });
+        const lote = status === 204 ? [] : (data?._embedded?.unsorted ?? []);
+        for (const u of lote) {
+          if (typeof u.uid !== 'string' || !u.uid || typeof u.created_at !== 'number') continue;
+          itens.push({
+            uid: u.uid,
+            pipelineId: typeof u.pipeline_id === 'number' ? u.pipeline_id : 0,
+            categoria: typeof u.category === 'string' ? u.category : '',
+            criadoEm: u.created_at,
+            leadId: u._embedded?.leads?.[0]?.id ?? null,
+            contatoId: u._embedded?.contacts?.[0]?.id ?? null,
+          });
+        }
+        if (lote.length < 250) {
+          completa = true;
+          break;
+        }
+      } catch (err) {
+        // 204 = caixa vazia (corpo vazio); o Axios não trata como erro, mas por garantia
+        if ((err as { response?: { status?: number } })?.response?.status === 204) {
+          completa = true;
+          break;
+        }
+        wrapAxiosError(err, `listarEntrada(${page})`);
+      }
+    }
+    return { itens, completa };
+  }
+
+  /** Os telefones do contato (campo PHONE), na forma como estão gravados. Erro do Kommo LANÇA (contato sem telefone = `[]`). */
+  async telefonesDoContato(contactId: number): Promise<string[]> {
+    try {
+      const { data } = await this.http.get<{ custom_fields_values?: Array<{ field_code?: string; values?: Array<{ value?: unknown }> }> | null } | ''>(
+        `/contacts/${contactId}`,
+      );
+      if (!data) return [];
+      const campo = data.custom_fields_values?.find((f) => f.field_code === 'PHONE');
+      return (campo?.values ?? []).map((v) => (typeof v.value === 'string' ? v.value.trim() : '')).filter(Boolean);
+    } catch (err) {
+      wrapAxiosError(err, `telefonesDoContato(${contactId})`);
+    }
+  }
+
+  /**
+   * Vincula o lead de entrada (chat) a um cartão que já existe: o mesmo botão "vincular" da tela. A conversa passa a cair
+   * no cartão e o lead de entrada some. NÃO muda a etapa do cartão, NÃO cria cartão, NÃO une os contatos. Só chats; só admin.
+   * Erro do Kommo LANÇA (o chamador decide se tenta de novo).
+   */
+  async vincularEntrada(uid: string, leadId: number): Promise<void> {
+    try {
+      await this.http.post(`/leads/unsorted/${encodeURIComponent(uid)}/link`, { link: { entity_id: leadId, entity_type: 'leads' } });
+    } catch (err) {
+      wrapAxiosError(err, `vincularEntrada(${leadId})`);
+    }
+  }
+
+  /**
+   * Aceita o lead de entrada: vira um cartão de verdade, na etapa `statusId`. ATENÇÃO: é uma mudança de etapa — os robôs de
+   * "entra na etapa" do destino (boas-vindas, primeiro contato) podem disparar. Devolve o id do cartão criado (ou `null`).
+   */
+  async aceitarEntrada(uid: string, statusId: number): Promise<{ leadId: number | null }> {
+    try {
+      const { data } = await this.http.post<{ _embedded?: { leads?: Array<{ id?: number }> } } | ''>(
+        `/leads/unsorted/${encodeURIComponent(uid)}/accept`,
+        { status_id: statusId },
+      );
+      return { leadId: (data && data._embedded?.leads?.[0]?.id) || null };
+    } catch (err) {
+      wrapAxiosError(err, `aceitarEntrada(${statusId})`);
     }
   }
 
