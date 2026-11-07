@@ -11,6 +11,7 @@
  * status, código, corpo da resposta (cortado) e a pilha. `config`, `request` e `response` — onde mora o
  * cabeçalho — não chegam ao log. De quebra, a linha de um 401 cai de ~12 KB para menos de 1 KB.
  * Texto solto com `Bearer …` e chave com nome de segredo (`authorization`, `token`…) também são mascarados.
+ * `?k=` (segredo do webhook do menu de suporte) e `?segredo=` idem: a URL de cada requisição vai para o log em nível debug.
  */
 
 export const MASCARA = '[redigido]';
@@ -36,7 +37,7 @@ function chaveSecreta(chave: string): boolean {
 export function mascararTexto(s: string): string {
   return s
     .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, `$1 ${MASCARA}`)
-    .replace(/([?&](?:access_token|token|apikey|api_key|key|secret|client_secret)=)[^&#\s"']*/gi, `$1${MASCARA}`);
+    .replace(/([?&](?:access_token|token|apikey|api_key|key|secret|client_secret|segredo|k)=)[^&#\s"']*/gi, `$1${MASCARA}`);
 }
 
 type Obj = Record<string, unknown>;

@@ -137,3 +137,13 @@ test('erro comum com segredo na mensagem continua com o tipo certo', () => {
   assert.ok(!linha.includes(SEGREDO));
   assert.equal(JSON.parse(linha).err.type, 'KommoApiError');
 });
+
+test('URL com o segredo do webhook (?k=) e (?segredo=) é mascarada; parâmetro comum passa', () => {
+  const url = '/api/webhooks/suporte-menu?k=0123456789abcdef0123456789abcdef0123456789abcdef';
+  assert.equal(mascararTexto(url), `/api/webhooks/suporte-menu?k=${MASCARA}`);
+  assert.equal(mascararTexto('/x?a=1&k=abc123&b=2'), `/x?a=1&k=${MASCARA}&b=2`);
+  assert.equal(mascararTexto('/x?segredo=abc'), `/x?segredo=${MASCARA}`);
+  assert.equal(mascararTexto('/x?kind=1&key2=3&unidade=timbo'), '/x?kind=1&key2=3&unidade=timbo');
+  const linha = linhaDoLogger({ method: 'POST', url }, 'http');
+  assert.ok(!linha.includes('0123456789ab'), 'a linha que o servidor escreve não carrega o segredo');
+});
