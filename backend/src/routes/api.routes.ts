@@ -225,6 +225,7 @@ import {
   simulacoesHandler,
 } from '../controllers/automacoes.controller.js';
 import { digitandoHandler } from '../controllers/whatsapp-meta.controller.js';
+import { suporteMenuWebhookHandler } from '../controllers/suporte-menu.controller.js';
 import {
   ligacaoCombinarHandler,
   ligacaoDesligarHandler,
@@ -256,6 +257,9 @@ apiRouter.post('/webhooks/salesbot', handleSalesbotWebhook);
 // Ligação pelo WhatsApp: webhook `calls` da Meta (repassado pelo n8n com X-DD-Token, ou direto com a assinatura).
 apiRouter.get('/webhooks/whatsapp/ligacoes', webhookLigacoesVerifyHandler);
 apiRouter.post('/webhooks/whatsapp/ligacoes', webhookLigacoesHandler);
+// Menu de suporte no WhatsApp (instância analista-dt do Evolution). Também aceita o caminho com o nome do evento, caso o webhook por evento esteja ligado.
+apiRouter.post('/webhooks/suporte-menu', suporteMenuWebhookHandler);
+apiRouter.post('/webhooks/suporte-menu/:evento', suporteMenuWebhookHandler);
 
 apiRouter.get('/integrations/:unitSlug/session-stats/:leadId', sessionStatsHandler);
 apiRouter.get('/integrations/sla-report', slaReportHandler);

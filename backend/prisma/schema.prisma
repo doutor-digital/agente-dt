@@ -2517,3 +2517,68 @@ model FranquiaIndiceStatus {
 
   @@map("franquia_indice_status")
 }
+
+/// Menu de suporte no WhatsApp (`SUPORTE_MENU`, `suporte-menu.ts`): uma linha por conversa, com o passo em que ela está.
+/// `jid` é o número de WhatsApp da pessoa da equipe (dado pessoal: só o João lê, pelo cartão do Telegram).
+model SuporteConversa {
+  id           String    @id @default(cuid())
+  jid          String    @unique
+  /// inicio | equipe | identificacao | confirma-unidade | categoria | detalhes | aberta | encerrada
+  passo        String
+  tentativas   Int       @default(0)
+  nome         String?
+  unidadeSlug  String?   @map("unidade_slug")
+  unidadeNome  String?   @map("unidade_nome")
+  /// grupo (número visto no grupo de Marketing da unidade) | texto (a pessoa disse) | nenhuma
+  verificacao  String    @default("nenhuma")
+  categoria    Int?
+  protocolo    Int?
+  avisouEm     DateTime? @map("avisou_em")
+  /// trava otimista: duas mensagens juntas não avançam o mesmo passo duas vezes
+  versao       Int       @default(1)
+  criadoEm     DateTime  @default(now()) @map("criado_em")
+  atualizadoEm DateTime  @map("atualizado_em")
+
+  @@map("suporte_conversas")
+}
+
+/// A demanda aberta pelo menu (o protocolo que a pessoa recebe). A análise por IA vem depois, em outra entrega.
+model SuporteDemanda {
+  id              String   @id @default(cuid())
+  protocolo       Int      @unique @default(autoincrement())
+  jid             String
+  nome            String?
+  unidadeSlug     String?  @map("unidade_slug")
+  verificacao     String
+  gruposVistos    Int      @default(0) @map("grupos_vistos")
+  categoria       Int
+  categoriaNome   String   @map("categoria_nome")
+  /// o que a pessoa escreveu (até 1000 caracteres): DADO, nunca instrução
+  relato          String   @db.Text
+  telegramEnviado Boolean  @default(false) @map("telegram_enviado")
+  criadoEm        DateTime @default(now()) @map("criado_em")
+
+  @@index([criadoEm])
+  @@map("suporte_demandas")
+}
+
+/// Ids de mensagem já tratados (o Evolution pode entregar o mesmo webhook mais de uma vez). Limpa sozinho depois de 7 dias.
+model SuporteMensagemVista {
+  id     String   @id
+  vistaEm DateTime @default(now()) @map("vista_em")
+
+  @@index([vistaEm])
+  @@map("suporte_mensagens_vistas")
+}
+
+/// Cada resposta que o menu mandou: base dos tetos por hora e por dia. Limpa sozinho depois de 3 dias.
+model SuporteEnvio {
+  id        String   @id @default(cuid())
+  jid       String
+  /// a resposta abriu uma conversa nova (boas-vindas)
+  nova      Boolean  @default(false)
+  enviadoEm DateTime @default(now()) @map("enviado_em")
+
+  @@index([enviadoEm])
+  @@map("suporte_envios")
+}

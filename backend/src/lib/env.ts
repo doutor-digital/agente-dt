@@ -124,6 +124,21 @@ const schema = z.object({
   CARTAO_ENXUTO_SLUGS: z.string().optional(),
   /** Resumo diário da qualidade da Sofia no Telegram do João (global, não por unidade): `seco` (padrão; só loga) | `ligado` | `desligado`. */
   RESUMO_DIARIO_IA: z.string().optional(),
+  /** Menu de suporte no WhatsApp (global): `desligado` (padrão) | `seco` (registra o que responderia, não envia nem grava) | `ligado`. Ver `suporte-menu.ts`. */
+  SUPORTE_MENU: z.string().optional(),
+  /** Segredo do webhook do menu (`?k=`). Sem ele o webhook recusa tudo. */
+  SUPORTE_MENU_SEGREDO: z.string().optional(),
+  /** Evolution do agente de suporte: URL https, nome da instância (padrão `analista-dt`) e a chave DA INSTÂNCIA. */
+  SUPORTE_EVO_URL: z.string().optional(),
+  SUPORTE_EVO_INSTANCIA: z.string().optional(),
+  SUPORTE_EVO_APIKEY: z.string().optional(),
+  /** Onde LER os grupos "Mkt | Dr Hérnia …" (padrão: a mesma instância acima; só leitura). */
+  SUPORTE_GRUPOS_URL: z.string().optional(),
+  SUPORTE_GRUPOS_INSTANCIA: z.string().optional(),
+  SUPORTE_GRUPOS_APIKEY: z.string().optional(),
+  /** Tetos anti-ban: conversas novas por hora (10) e respostas por dia (150). */
+  SUPORTE_MENU_NOVAS_POR_HORA: z.string().optional(),
+  SUPORTE_MENU_RESPOSTAS_POR_DIA: z.string().optional(),
 });
 
 const parsed = schema.safeParse(process.env);
