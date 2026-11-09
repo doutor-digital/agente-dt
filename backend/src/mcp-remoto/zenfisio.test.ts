@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   agendamentoNormalizado,
   criarContextoZenfisio,
+  desfecho,
   hojeNoFuso,
   resolverContaZenfisio,
   zenfisioAgenda,
@@ -167,4 +168,40 @@ test('listar_integracoes marca a unidade com ZenFisio', () => {
   assert.equal(r.comZenfisio, 1);
   assert.equal(r.unidades[0]!.zenfisio, true);
   assert.ok(r.unidades[0]!.ferramentas.some((f) => f.startsWith('zenfisio_*')));
+});
+
+test('desfecho: os status reais do Instituto Trauma (medido em 06/11/2026)', () => {
+  assert.equal(desfecho('Atendido'), 'atendido');
+  assert.equal(desfecho('Faltou'), 'falta');
+  assert.equal(desfecho('Faltou (com aviso prévio)'), 'falta');
+  assert.equal(desfecho('Faltou (sem aviso prévio)'), 'falta');
+  assert.equal(desfecho('Cancelado'), 'cancelado');
+  assert.equal(desfecho('Não atendido'), 'naoAtendido');
+  assert.equal(desfecho('Agendado'), 'emAberto');
+  assert.equal(desfecho('Remarcado pelo paciente'), 'outro');
+});
+
+test('agenda: a distribuição real do Trauma dá 27,7% de falta, não 6,9%', async () => {
+  const lote = (n: number, status: string, ini: number) => Array.from({ length: n }, (_, i) => ag(ini + i, '2026-10-28', status));
+  const regs = [
+    ...lote(94, 'Atendido', 1), ...lote(25, 'Faltou (com aviso prévio)', 200), ...lote(16, 'Não atendido', 300),
+    ...lote(11, 'Cancelado', 400), ...lote(7, 'Faltou', 500), ...lote(4, 'Faltou (sem aviso prévio)', 600), ...lote(2, 'Agendado', 700),
+  ];
+  const { c } = conta(regs);
+  const r = await zenfisioAgenda(ctxCom(c), { inicio: '2026-10-27', fim: '2026-11-05', maxItens: 0 });
+  assert.equal(r.resumo.agendamentos, 159);
+  assert.equal(r.resumo.atendidos, 94);
+  assert.equal(r.resumo.faltas, 36);
+  assert.deepEqual(r.resumo.faltasPorTipo, { comAviso: 25, semAviso: 4, semDetalhe: 7 });
+  assert.equal(r.resumo.cancelados, 11);
+  assert.equal(r.resumo.naoAtendidos, 16);
+  assert.equal(r.resumo.taxaDeFalta, 27.7);
+  assert.equal(r.resumo.passadosSemDesfecho, 2);
+  assert.equal('outrosStatus' in r.resumo, false);
+});
+
+test('agenda: status desconhecido aparece em outrosStatus em vez de sumir', async () => {
+  const { c } = conta([ag(1, '2026-11-03', 'Atendido'), ag(2, '2026-11-03', 'Remarcado')]);
+  const r = await zenfisioAgenda(ctxCom(c), { inicio: '2026-11-01', fim: '2026-11-05' });
+  assert.deepEqual((r.resumo as Record<string, unknown>).outrosStatus, { Remarcado: 1 });
 });
