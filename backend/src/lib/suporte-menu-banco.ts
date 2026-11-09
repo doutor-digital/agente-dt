@@ -5,6 +5,7 @@
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { enviarTelegramChamados } from './telegram.js';
+import { dispararAnalise } from './suporte-analise-banco.js';
 import {
   atualizarIndiceSeVelho,
   indiceAtual,
@@ -130,6 +131,9 @@ export function efeitosReais(config: ConfigSuporte): Efeitos {
       );
     },
     sorteio: Math.random,
+    analisar: (protocolo) => {
+      void dispararAnalise(protocolo);
+    },
   };
 }
 

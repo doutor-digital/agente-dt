@@ -144,6 +144,13 @@ const schema = z.object({
   TELEGRAM_CHAMADOS_CHAT: z.string().optional(),
   TELEGRAM_SOFIA_TOKEN: z.string().optional(),
   TELEGRAM_SOFIA_CHAT: z.string().optional(),
+  /** Análise automática das demandas do menu de suporte (global): `desligado` (padrão) | `seco` (só Telegram) | `ligado` (também responde o prazo). */
+  SUPORTE_ANALISE: z.string().optional(),
+  /** Chave da OpenAI SÓ do suporte (separada da da Sofia), o modelo (padrão gpt-4o-mini) e o teto de análises em 24 h (padrão 40). */
+  SUPORTE_OPENAI_KEY: z.string().optional(),
+  SUPORTE_IA_MODELO: z.string().optional(),
+  SUPORTE_ANALISE_POR_DIA: z.string().optional(),
+  SUPORTE_OPENAI_API: z.string().optional(),
 });
 
 const parsed = schema.safeParse(process.env);
