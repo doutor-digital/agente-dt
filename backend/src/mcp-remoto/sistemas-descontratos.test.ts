@@ -162,7 +162,6 @@ test('toda ferramenta do RH recusa a conta do Descontratos SEM falar com o servi
     ['sistemas_usuarios', {}],
     ['sistemas_log', {}],
     ['sistemas_simular', { usuario: 'u-1', sql: 'select 1' }],
-    ['sistemas_preparar_alteracao', { operacao: 'apagar', tabela: 'dsc_docs', filtro: { col: 'cancelamentos' } }],
     ['sistemas_usuario', { acao: 'ativo', usuario: 'u-1', valor: false }],
     ['sistemas_convite', { nome: 'X', login: 'x', papel: 'gestao' }],
     ['sistemas_preparar_tabela', { nome: 'nova_tabela', colunas: [{ nome: 'campo', tipo: 'text' }], motivo: 'teste do portão' }],
@@ -180,6 +179,53 @@ test('toda ferramenta do RH recusa a conta do Descontratos SEM falar com o servi
     assert.match(r.texto, /só existe no RH\/Caixa|RH\/Caixa/, nome);
   }
   assert.equal(dsc.chamadas.length, 0, 'nenhuma dessas ferramentas chegou ao servidor do Descontratos');
+  await k.fechar();
+});
+
+// ---------------------------------------------------------------- Descontratos: alteração genérica (09/11)
+
+test('alteração no Descontratos: só com sistema="descontratos", só nas 3 tabelas; vai ao servidor DELE e o registro explica que não entra no histórico da tela', async () => {
+  const { rh, dsc, ctx } = doisSistemas();
+  const k = await cliente(ctx);
+  // tabela fora da lista: recusa ANTES de falar com o servidor
+  for (const tabela of ['dsc_site', 'fichas', 'site_parts', 'admin_backup', 'dsc_crm']) {
+    const r = await k.chamar('sistemas_preparar_alteracao', { sistema: 'descontratos', operacao: 'atualizar', tabela, filtro: { id: 'x' }, dados: { a: 1 } });
+    assert.equal(r.erro, true, tabela);
+    assert.match(r.texto, /só em dsc_docs, dsc_usuarios, notif_fila/, tabela);
+  }
+  assert.equal(dsc.chamadas.length, 0);
+  const p = await k.chamar('sistemas_preparar_alteracao', { sistema: 'descontratos', operacao: 'apagar', tabela: 'dsc_docs', filtro: { col: 'cancelamentos', id: 'rascunho-1' } });
+  assert.equal(p.erro, false, p.texto);
+  assert.equal(p.json.sistema, 'descontratos');
+  assert.match(p.json.instrucao, /Nada foi gravado ainda/);
+  const corpo = dsc.chamadas.find((c) => c.caminho === '/admin/v1/preparar')!;
+  assert.deepEqual(corpo.corpo, { op: 'apagar', tabela: 'dsc_docs', filtro: { col: 'cancelamentos', id: 'rascunho-1' }, quem: QUEM.nome });
+  assert.equal(corpo.chave, CHAVE_DSC_FALSA);
+  const ok = await k.chamar('sistemas_confirmar_alteracao', { confirmacao: p.json.confirmacao });
+  assert.equal(ok.erro, false, ok.texto);
+  assert.equal(ok.json.sistema, 'descontratos');
+  assert.match(ok.json.registro, /admin_log.*admin_backup/);
+  assert.match(ok.json.registro, /NÃO entra no histórico/);
+  assert.equal(rh.chamadas.length, 0, 'nada foi ao RH');
+  await k.fechar();
+});
+
+test('alteração no Descontratos: a recusa de domínio do servidor (apagar descontrato pago) chega com o motivo e nada fica para confirmar', async () => {
+  const { dsc, ctx } = doisSistemas();
+  const k = await cliente(ctx);
+  const r = await k.chamar('sistemas_preparar_alteracao', { sistema: 'dsc', operacao: 'apagar', tabela: 'dsc_docs', filtro: { col: 'cancelamentos', id: 'pago-1' } });
+  assert.equal(r.erro, true);
+  assert.match(r.texto, /só se apaga descontrato em rascunho/);
+  assert.equal(dsc.gravados.length, 0);
+  await k.fechar();
+});
+
+test('alteração SEM "sistema" continua no RH mesmo com nome de tabela do Descontratos (não cai no Descontratos em silêncio)', async () => {
+  const { rh, dsc, ctx } = doisSistemas();
+  const k = await cliente(ctx);
+  await k.chamar('sistemas_preparar_alteracao', { operacao: 'apagar', tabela: 'dsc_docs', filtro: { col: 'cancelamentos', id: 'x' } });
+  assert.equal(dsc.chamadas.length, 0);
+  assert.equal(rh.chamadas.filter((c) => c.caminho === '/admin/v1/preparar').length, 1);
   await k.fechar();
 });
 

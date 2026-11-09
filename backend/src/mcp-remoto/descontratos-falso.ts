@@ -1,6 +1,6 @@
 /**
- * O servidor do DESCONTRATOS (`/admin/v1` do sistema `dsc`) de mentira, para os testes do conector. Só tem as 4 rotas que o servidor de verdade tem
- * (esquema, consulta, descontrato/preparar, confirmar) e responde 404 "não existe no Descontratos" a todo o resto, como o real. Chave própria, diferente da do RH.
+ * O servidor do DESCONTRATOS (`/admin/v1` do sistema `dsc`) de mentira, para os testes do conector. Só tem as 5 rotas que o servidor de verdade tem
+ * (esquema, consulta, descontrato/preparar, preparar, confirmar) e responde 404 "não existe no Descontratos" a todo o resto, como o real. Chave própria, diferente da do RH.
  */
 export const CHAVE_DSC_FALSA = 'ADMIN-KEY-do-descontratos-9876543210abcd';
 export const CONFIG_DSC_FALSA = { api: 'http://api-dsc:8080', chave: CHAVE_DSC_FALSA };
@@ -32,6 +32,13 @@ export function servidorDescontratosFalso(o: { agora?: () => number } = {}) {
         const id = `dc-${++n}`;
         previas.set(id, { corpo, em: agora() });
         return json(200, { id, resumo: `Registrar o pagamento de R$ ${corpo.valor_pago} ...`, afetadas: 1, descontrato: { id: corpo.id ?? 'd-1', protocolo: corpo.protocolo ?? 'ARA-2026-001', unidade: 'ARA', paciente: 'Fulana', status_atual: 'Pronto para pagamento' }, avisos: [], antes: [{ status: 'pronto_pagamento' }], depois: [{ status: 'pago' }] });
+      }
+      case 'POST /admin/v1/preparar': {
+        // a alteração genérica (09/11), com a recusa de domínio que o servidor real faz (apagar só rascunho)
+        if (corpo.tabela === 'dsc_docs' && corpo.op === 'apagar' && corpo.filtro?.id === 'pago-1') return json(400, { erro: 'só se apaga descontrato em rascunho por aqui (este está "pago"): o que já andou é histórico financeiro' });
+        const id = `dg-${++n}`;
+        previas.set(id, { corpo, em: agora() });
+        return json(200, { id, resumo: `${corpo.op === 'apagar' ? 'APAGAR' : 'Atualizar'} 1 linha(s) em ${corpo.tabela}`, afetadas: 1, antes: [{ id: corpo.filtro?.id }], depois: [] });
       }
       case 'POST /admin/v1/confirmar': {
         const p = previas.get(corpo.id);
