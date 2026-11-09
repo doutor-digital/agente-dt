@@ -15,7 +15,7 @@
 import { Prisma } from '@prisma/client';
 import { logger } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
-import { enviarTelegram } from '../lib/telegram.js';
+import { enviarTelegramSofia } from '../lib/telegram.js';
 import { brl, RESPOSTA_QUE_MARCA, resumoDaLeitura } from '../lib/comprovante-pix.js';
 import { recusaCertaDaFranquia } from '../services/spine.service.js';
 import type { KommoClient } from '../services/kommo.service.js';
@@ -226,7 +226,7 @@ const TEXTO_PARA_EQUIPE = (motivo: string) =>
 export function criarGanchosDaTaxa(ctx: ContextoDosGanchos): GanchosDoComprovante {
   const registro = ctx.registro ?? registroNoBanco;
   const abrir = ctx.abrirTarefa ?? abrirTarefaParaEquipe;
-  const alertar = ctx.alertar ?? ((t: string) => enviarTelegram(t));
+  const alertar = ctx.alertar ?? ((t: string) => enviarTelegramSofia(t));
 
   const recusado = (
     aceito: ComprovanteAceito,

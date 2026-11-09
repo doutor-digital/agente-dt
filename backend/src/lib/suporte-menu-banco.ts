@@ -4,7 +4,7 @@
  */
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
-import { enviarTelegram } from './telegram.js';
+import { enviarTelegramChamados } from './telegram.js';
 import {
   atualizarIndiceSeVelho,
   indiceAtual,
@@ -119,7 +119,7 @@ export function efeitosReais(config: ConfigSuporte): Efeitos {
   const enviarWhatsApp = criarEnviadorEvolution(config);
   return {
     enviarWhatsApp,
-    enviarTelegram: (texto) => enviarTelegram(texto),
+    enviarTelegram: (texto) => enviarTelegramChamados(texto),
     agora: () => new Date(),
     unidadesDoGrupo: (jid, jidAlt) => unidadesDoNumero(indiceAtual(), jid, jidAlt),
     garantirIndice: () => {

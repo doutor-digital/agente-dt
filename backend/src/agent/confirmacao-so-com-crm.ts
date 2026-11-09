@@ -21,7 +21,7 @@
 import type { DynamicStructuredTool } from '@langchain/core/tools';
 import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
 import { logger } from '../lib/logger.js';
-import { enviarTelegram } from '../lib/telegram.js';
+import { enviarTelegramSofia } from '../lib/telegram.js';
 import { ehTranscricaoDeComprovante } from '../lib/pagamento-antecipado.js';
 import { brl, carimboDoSegmento, RESPOSTA_QUE_MARCA, resumoDaLeitura, type Aceito, type AnaliseDoComprovante, type DadosDoComprovante, type Rejeicao } from '../lib/comprovante-pix.js';
 import { normalizar, trechos, type Promessa } from '../lib/prometeu-sem-marcar.js';
@@ -588,7 +588,7 @@ export async function abrirTarefaParaEquipe(args: {
       comprovante_recusado: `a tarefa «ver comprovante» (comprovante NÃO aceito pela IA) não saiu (lead ${leadId}): ${erro}. O paciente foi convidado a mandar outro comprovante e a equipe não sabe do motivo: avisar à mão se ele insistir.`,
       conferir_extrato: `a IA MARCOU uma consulta pelo comprovante de Pix (lead ${leadId}) e a tarefa «conferir no extrato» NÃO saiu: ${erro}. Ninguém foi avisado de conferir o pagamento: conferir à mão.`,
     };
-    await (args.alertar ?? enviarTelegram)(
+    await (args.alertar ?? enviarTelegramSofia)(
       `⚠️ ${slug} — ` +
         (textoDaFalha[motivo] ??
           `a IA disse ao paciente (lead ${leadId}) que a equipe confirma em até 1 hora, mas a tarefa NÃO saiu (${motivo}): ${erro}. Avisar a equipe à mão.`),

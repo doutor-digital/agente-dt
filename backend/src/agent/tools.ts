@@ -27,7 +27,7 @@ import { recusaDoFunilTratamento, type DestinoDaSofia } from '../lib/guarda-funi
 import { decidirFechamentoDaSofia } from '../lib/trava-perda.js';
 import { RETOMAR_EM_DIAS, etiquetarNaoContatar, falasDoUltimoTurno, levarParaEsperaComRetomada } from '../lib/sofia-fecha-quente-morno.js';
 import { orientacaoAoTransferir, retornoDaEquipe, type RetornoDaEquipe } from '../lib/retorno-da-equipe.js';
-import { enviarTelegram } from '../lib/telegram.js';
+import { enviarTelegramSofia } from '../lib/telegram.js';
 import {
   CHAVE_DO_AVISO,
   comLigarAgora,
@@ -268,7 +268,7 @@ export function buildTools({
     // resultado no rastro: se não chegou, quem olhar o trace sabe que o João não foi avisado.
     // `pausar_ia` espera este resultado DEPOIS da pausa: se a tarefa e o Telegram falharem, ninguém foi avisado e o
     // paciente não pode ouvir "avisei a equipe".
-    const telegram = enviarTelegram(
+    const telegram = enviarTelegramSofia(
       textoTelegramSinalDeAlerta({ unidade: unit.name, subdominio: unit.kommoSubdomain, leadId, nome, motivo }),
     )
       .catch(() => false)

@@ -139,6 +139,11 @@ const schema = z.object({
   /** Tetos anti-ban: conversas novas por hora (10) e respostas por dia (150). */
   SUPORTE_MENU_NOVAS_POR_HORA: z.string().optional(),
   SUPORTE_MENU_RESPOSTAS_POR_DIA: z.string().optional(),
+  /** Bots do Telegram por canal (além do DD-Avisos, `TELEGRAM_BOT_TOKEN`). Sem token próprio o canal cai no DD-Avisos. Ver `telegram.ts`. */
+  TELEGRAM_CHAMADOS_TOKEN: z.string().optional(),
+  TELEGRAM_CHAMADOS_CHAT: z.string().optional(),
+  TELEGRAM_SOFIA_TOKEN: z.string().optional(),
+  TELEGRAM_SOFIA_CHAT: z.string().optional(),
 });
 
 const parsed = schema.safeParse(process.env);

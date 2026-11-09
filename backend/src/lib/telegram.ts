@@ -5,6 +5,14 @@
  * `.env` do servidor e nunca é escrito no código. O destino padrão é o chat do João; quando os alertas
  * forem para os grupos das unidades (decisão de 16/10: "depois"), quem chama passa o `chat`.
  *
+ * TRÊS CANAIS, cada um com o seu bot (07/11/2026, pedido do João: "juntar o DD-Avisos com chamados fica bagunçado"):
+ *   - `avisos`   (padrão) → `TELEGRAM_BOT_TOKEN`: o DD-Avisos, alertas do sistema (faxina, sem resposta, disparos, Asaas…);
+ *   - `chamados` → `TELEGRAM_CHAMADOS_TOKEN` (+ `TELEGRAM_CHAMADOS_CHAT`): só chamados e o menu de suporte do WhatsApp;
+ *   - `sofia`    → `TELEGRAM_SOFIA_TOKEN` (+ `TELEGRAM_SOFIA_CHAT`): o que a Sofia gera (sinal de alerta clínico, taxa de
+ *     reserva, comprovante, agendamento perdido, resumo diário de qualidade).
+ * Canal SEM token próprio cai no DD-Avisos: ninguém deixa de ser avisado enquanto o bot novo não é criado. O chat próprio só vale
+ * junto do token próprio (o id de um grupo não serve para outro bot).
+ *
  * Regras de segurança:
  *  - a URL da API carrega o token, então NADA desta chamada vai para o log além do código HTTP e do tipo
  *    do erro — e mesmo isso passa por `semSegredo`;
@@ -19,24 +27,48 @@ export const CHAT_JOAO_PADRAO = '7822226023';
 /** O Telegram corta em 4096; folga para os acentos e o link. */
 const TETO_TEXTO = 3500;
 
+export type CanalTelegram = 'avisos' | 'chamados' | 'sofia';
+
+/** Prefixo das variáveis do canal (`<PREFIXO>_TOKEN` e `<PREFIXO>_CHAT`); o `avisos` é o bot de sempre. */
+const PREFIXO_DO_CANAL: Readonly<Record<CanalTelegram, string | null>> = {
+  avisos: null,
+  chamados: 'TELEGRAM_CHAMADOS',
+  sofia: 'TELEGRAM_SOFIA',
+};
+
 export interface ConfigTelegram {
   token: string;
   chat: string;
   api: string;
+  /** de onde saiu: o bot do canal pedido ou, na falta dele, o DD-Avisos */
+  canal: CanalTelegram;
 }
 
-export function configTelegram(env: NodeJS.ProcessEnv = process.env): ConfigTelegram | null {
+export function configTelegram(env: NodeJS.ProcessEnv = process.env, canal: CanalTelegram = 'avisos'): ConfigTelegram | null {
+  const api = (env.TELEGRAM_API || 'https://api.telegram.org').replace(/\/+$/, '');
+  const prefixo = PREFIXO_DO_CANAL[canal];
+  const tokenProprio = prefixo ? (env[`${prefixo}_TOKEN`] ?? '').trim() : '';
+  if (prefixo && tokenProprio) {
+    const chatProprio = (env[`${prefixo}_CHAT`] ?? '').trim();
+    return {
+      token: tokenProprio,
+      chat: chatProprio || String(env.TELEGRAM_CHAT_JOAO || env.TELEGRAM_CHAT_ID || CHAT_JOAO_PADRAO).trim(),
+      api,
+      canal,
+    };
+  }
   const token = (env.TELEGRAM_BOT_TOKEN ?? '').trim();
   if (!token) return null;
   return {
     token,
     chat: String(env.TELEGRAM_CHAT_JOAO || env.TELEGRAM_CHAT_ID || CHAT_JOAO_PADRAO).trim(),
-    api: (env.TELEGRAM_API || 'https://api.telegram.org').replace(/\/+$/, ''),
+    api,
+    canal: 'avisos',
   };
 }
 
-export function telegramConfigurado(env: NodeJS.ProcessEnv = process.env): boolean {
-  return configTelegram(env) !== null;
+export function telegramConfigurado(env: NodeJS.ProcessEnv = process.env, canal: CanalTelegram = 'avisos'): boolean {
+  return configTelegram(env, canal) !== null;
 }
 
 /** Troca o token por *** em qualquer texto que vá para o log. */
@@ -46,8 +78,10 @@ export function semSegredo(texto: string, token: string | null | undefined): str
 }
 
 export interface OpcoesTelegram {
-  /** Outro destino (grupo da unidade, no futuro). Padrão: o chat do João. */
+  /** Outro destino (grupo da unidade, no futuro). Padrão: o chat do canal (ou o do João). */
   chat?: string;
+  /** Qual bot manda: `avisos` (padrão), `chamados` ou `sofia`. Sem token próprio, cai no DD-Avisos. */
+  canal?: CanalTelegram;
   env?: NodeJS.ProcessEnv;
   /** Injetável para teste — o padrão é o `fetch` do Node. */
   fetch?: typeof fetch;
@@ -55,9 +89,9 @@ export interface OpcoesTelegram {
 
 /** true = o Telegram aceitou; false = sem configuração ou falhou (já registrado, sem segredo). */
 export async function enviarTelegram(texto: string, opcoes: OpcoesTelegram = {}): Promise<boolean> {
-  const cfg = configTelegram(opcoes.env);
+  const cfg = configTelegram(opcoes.env, opcoes.canal);
   if (!cfg) {
-    logger.warn('telegram: sem TELEGRAM_BOT_TOKEN — alerta não enviado (só log)');
+    logger.warn({ canal: opcoes.canal ?? 'avisos' }, 'telegram: sem token configurado — alerta não enviado (só log)');
     return false;
   }
   const buscar = opcoes.fetch ?? globalThis.fetch;
@@ -84,3 +118,10 @@ export async function enviarTelegram(texto: string, opcoes: OpcoesTelegram = {})
     return false;
   }
 }
+
+/** Atalho por canal: quem chama passa o texto e, se quiser, as opções de sempre (o canal já vem escolhido). */
+export const enviarTelegramChamados = (texto: string, opcoes: Omit<OpcoesTelegram, 'canal'> = {}): Promise<boolean> =>
+  enviarTelegram(texto, { ...opcoes, canal: 'chamados' });
+
+export const enviarTelegramSofia = (texto: string, opcoes: Omit<OpcoesTelegram, 'canal'> = {}): Promise<boolean> =>
+  enviarTelegram(texto, { ...opcoes, canal: 'sofia' });
