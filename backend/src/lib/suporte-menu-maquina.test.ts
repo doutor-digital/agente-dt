@@ -13,8 +13,11 @@ import {
   acharUnidade,
   avancar,
   categoriaEscolhida,
+  funcionouOuNao,
   normalizar,
   simOuNao,
+  unidadesCitadas,
+  EXPIRA_RESOLVIDA_H,
   type Contexto,
   type Entrada,
   type Estado,
@@ -220,4 +223,44 @@ test('conversa parada além do prazo volta ao começo (e esta mensagem já receb
 test('o menu lista as 7 categorias', () => {
   for (let n = 1; n <= 7; n++) assert.ok(TEXTOS.menu.includes(`${n} - ${CATEGORIAS[n]}`));
   assert.equal(Object.keys(CATEGORIAS).length, 7);
+});
+
+test('funcionouOuNao: 1/2 e o jeito comum de falar', () => {
+  for (const t of ['1', 'sim', 'funcionou', 'Deu certo!', 'resolveu', 'tudo certo', 'obrigada']) assert.equal(funcionouOuNao(t), 'sim', t);
+  for (const t of ['2', 'não', 'ainda não', 'não funcionou', 'continua o mesmo erro', 'não resolveu nada']) assert.equal(funcionouOuNao(t), 'nao', t);
+  assert.equal(funcionouOuNao('como assim?'), null);
+});
+
+test('resolvida: 1 conclui (silêncio depois); 2 reabre a MESMA demanda; inválida repete uma vez e depois fica quieta (não abre demanda nova)', () => {
+  const r = em({ passo: 'resolvida', protocolo: 9, nome: 'Maria' });
+  const ok = avancar(r, msg('1'), ctx());
+  assert.equal(ok.estado.passo, 'concluida');
+  assert.deepEqual(ok.respostas, [TEXTOS.funcionou]);
+  assert.equal(ok.reabrir, undefined);
+  assert.equal(avancar(ok.estado, msg('valeu!'), ctx({ agora: min(10) })).silencio, true);
+  const nao = avancar(r, msg('2'), ctx());
+  assert.equal(nao.estado.passo, 'aberta');
+  assert.equal(nao.reabrir, 9);
+  assert.deepEqual(nao.respostas, [TEXTOS.reaberta(9)]);
+  assert.equal(nao.abrir, undefined);
+  const inv = avancar(r, msg('hã?'), ctx());
+  assert.deepEqual(inv.respostas, [TEXTOS.repeteResolvida]);
+  const inv2 = avancar(inv.estado, msg('???'), ctx());
+  assert.equal(inv2.silencio, true);
+  assert.equal(inv2.abrir, undefined);
+  // passadas 72 h esperando, a próxima mensagem começa do zero
+  assert.deepEqual(avancar(r, msg('oi'), ctx({ agora: new Date(T0.getTime() + (EXPIRA_RESOLVIDA_H * 60 + 1) * 60_000) })).respostas, [TEXTOS.boasVindas]);
+});
+
+test('texto da resolução: com e sem nota, sempre com a pergunta 1/2', () => {
+  assert.equal(TEXTOS.resolvida(4, null), 'Sua demanda 4 foi resolvida. ✅\n\nPode testar? Responda 1 se funcionou ou 2 se ainda não.');
+  assert.match(TEXTOS.resolvida(4, 'Liguei o robô de novo.'), /✅\n\nLiguei o robô de novo\.\n\nPode testar\?/);
+});
+
+test('unidadesCitadas: todas as citadas, sem a que é pedaço de outra, no máximo 5', () => {
+  const us = [TIMBO, RIO, LUCAS, { slug: 'salto', nome: 'Salto' }, { slug: 'tatui', nome: 'Tatuí' }, { slug: 'bv', nome: 'Boa Vista' }, { slug: 'x', nome: 'Olímpia' }];
+  assert.deepEqual(unidadesCitadas('Tatuí, Boa Vista e Salto sem rastreio', us).map((u) => u.slug), ['salto', 'tatui', 'bv']);
+  assert.deepEqual(unidadesCitadas('Lucas do Rio Verde parou', us).map((u) => u.slug), ['lucas-do-rio-verde']);
+  assert.equal(unidadesCitadas('Timbó Rio Verde Salto Tatuí Boa Vista Olímpia', us).length, 5);
+  assert.deepEqual(unidadesCitadas('nada aqui', us), []);
 });

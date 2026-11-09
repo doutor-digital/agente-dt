@@ -1102,3 +1102,81 @@ export const api = {
     return data;
   },
 };
+
+// ─── Painel do suporte (suporte.doutordigitalconsultoria.com) — só administrador geral ─────────────────
+
+export type StatusDemandaSuporte = 'aberta' | 'resolvida' | 'reaberta';
+
+export interface AnaliseSuporte {
+  resumo: string;
+  prioridade: 'urgente' | 'hoje' | 'pode_esperar';
+  hipoteses: Array<{ causa: string; evidencia: string; confianca: 'alta' | 'media' | 'baixa' }>;
+  conferir: string[];
+  precisaHumano: boolean;
+}
+
+export interface DemandaSuporte {
+  protocolo: number;
+  criadoEm: string;
+  numero: string | null;
+  nome: string | null;
+  unidadeSlug: string | null;
+  verificacao: 'grupo' | 'texto' | 'nenhuma';
+  gruposVistos: number;
+  categoria: string;
+  relato: string;
+  status: StatusDemandaSuporte;
+  prioridade: AnaliseSuporte['prioridade'] | null;
+  prazoEm: string | null;
+  analise: AnaliseSuporte | null;
+  analiseFalha: string | null;
+  resolvidaEm: string | null;
+  resolvidaPor: string | null;
+  notaResolucao: string | null;
+  vezesReaberta: number;
+}
+
+export interface ItemConhecimento {
+  id: string;
+  titulo: string;
+  texto: string;
+  ativo: boolean;
+  autor: string | null;
+  atualizadoEm: string;
+}
+
+export const apiSuporte = {
+  async demandas(status?: StatusDemandaSuporte): Promise<{ demandas: DemandaSuporte[]; contagem: Partial<Record<StatusDemandaSuporte, number>> }> {
+    const { data } = await http.get('/suporte/demandas', { params: status ? { status, limite: 100 } : { limite: 100 } });
+    return data;
+  },
+  async resolver(protocolo: number, nota: string): Promise<{ ok: true; perguntou: boolean; whatsapp: boolean }> {
+    const { data } = await http.post(`/suporte/demandas/${protocolo}/resolver`, { nota });
+    return data;
+  },
+  async reabrir(protocolo: number): Promise<{ ok: true }> {
+    const { data } = await http.post(`/suporte/demandas/${protocolo}/reabrir`);
+    return data;
+  },
+  async conhecimento(): Promise<ItemConhecimento[]> {
+    const { data } = await http.get<{ itens: ItemConhecimento[] }>('/suporte/conhecimento');
+    return data.itens;
+  },
+  async criarConhecimento(item: { titulo: string; texto: string }): Promise<ItemConhecimento> {
+    const { data } = await http.post<{ item: ItemConhecimento }>('/suporte/conhecimento', item);
+    return data.item;
+  },
+  async editarConhecimento(id: string, item: Partial<Pick<ItemConhecimento, 'titulo' | 'texto' | 'ativo'>>): Promise<ItemConhecimento> {
+    const { data } = await http.put<{ item: ItemConhecimento }>(`/suporte/conhecimento/${id}`, item);
+    return data.item;
+  },
+  async apagarConhecimento(id: string): Promise<void> {
+    await http.delete(`/suporte/conhecimento/${id}`);
+  },
+};
+
+/** Mensagem de erro legível de uma chamada à API (o backend responde `{ error }`). */
+export function erroDaApi(err: unknown): string {
+  const e = err as { response?: { data?: { error?: string }; status?: number }; message?: string };
+  return e.response?.data?.error ?? (e.response?.status ? `erro ${e.response.status}` : e.message ?? 'erro');
+}

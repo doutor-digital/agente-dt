@@ -22,36 +22,62 @@ import {
   type DepsAnalise,
   type DesfechoAnalise,
 } from './suporte-analise.js';
-import type { Verificacao } from './suporte-menu-maquina.js';
+import { unidadesCitadas, type Verificacao } from './suporte-menu-maquina.js';
 
 const H = 60 * 60_000;
 const MAX_CAMPOS = 30;
+const MAX_BASE_CHARS = 8_000;
+
+function automacoesDa(slug: string): { ligadas: string[]; noPapel: string[] } {
+  const ligadas: string[] = [];
+  const noPapel: string[] = [];
+  for (const a of AUTOMACOES) {
+    const e = estadoDaAutomacao(slug, a.id, process.env[a.chave]);
+    if (e === 'ligado') ligadas.push(a.nome);
+    else if (e === 'seco') noPapel.push(a.nome);
+  }
+  return { ligadas, noPapel };
+}
+
+async function errosDa(unitId: string | null, agora: Date, take: number) {
+  const grupos = await prisma.systemLog.groupBy({
+    by: ['level', 'msg'],
+    where: { createdAt: { gte: new Date(agora.getTime() - 48 * H) }, ...(unitId ? { unitId } : {}) },
+    _count: { _all: true },
+    orderBy: { _count: { msg: 'desc' } },
+    take,
+  });
+  return grupos.map((g) => ({ nivel: String(g.level), msg: mascararPii(g.msg).slice(0, 200), vezes: g._count._all }));
+}
 
 async function coletar(d: DemandaParaAnalise, agora: Date): Promise<Contexto> {
-  const ctx: Contexto = { unidade: null, automacoes: null, erros: [], cartoes: [] };
+  const ctx: Contexto = { unidade: null, automacoes: null, erros: [], cartoes: [], conhecimento: [], unidadesCitadas: [] };
+
+  // base de conhecimento (editada no painel), até ~8 mil caracteres
+  let total = 0;
+  for (const k of await prisma.suporteConhecimento.findMany({ where: { ativo: true }, orderBy: { atualizadoEm: 'desc' } })) {
+    const texto = k.texto.slice(0, 2_000);
+    if (total + texto.length > MAX_BASE_CHARS) break;
+    total += texto.length;
+    ctx.conhecimento!.push({ titulo: k.titulo, texto });
+  }
 
   const unit = d.unidadeSlug ? await prisma.unit.findUnique({ where: { slug: d.unidadeSlug } }) : null;
   if (unit) {
     ctx.unidade = { slug: unit.slug, nome: unit.name, ativa: unit.isActive, temKommo: Boolean(unit.kommoSubdomain && unit.kommoAccessToken) };
-    const ligadas: string[] = [];
-    const noPapel: string[] = [];
-    for (const a of AUTOMACOES) {
-      const e = estadoDaAutomacao(unit.slug, a.id, process.env[a.chave]);
-      if (e === 'ligado') ligadas.push(a.nome);
-      else if (e === 'seco') noPapel.push(a.nome);
-    }
-    ctx.automacoes = { ligadas, noPapel };
+    ctx.automacoes = automacoesDa(unit.slug);
   }
 
   // erros das últimas 48 h (da unidade, se conhecida; senão da rede), agrupados pela mensagem
-  const grupos = await prisma.systemLog.groupBy({
-    by: ['level', 'msg'],
-    where: { createdAt: { gte: new Date(agora.getTime() - 48 * H) }, ...(unit ? { unitId: unit.id } : {}) },
-    _count: { _all: true },
-    orderBy: { _count: { msg: 'desc' } },
-    take: 12,
-  });
-  ctx.erros = grupos.map((g) => ({ nivel: String(g.level), msg: mascararPii(g.msg).slice(0, 200), vezes: g._count._all }));
+  ctx.erros = await errosDa(unit?.id ?? null, agora, 12);
+
+  // outras unidades citadas no relato ("Tatuí, Boa Vista e Salto"): automações e erros de cada uma
+  const ativas = await prisma.unit.findMany({ where: { isActive: true }, select: { id: true, slug: true, name: true } });
+  const citadas = unidadesCitadas(d.relato, ativas.map((u) => ({ slug: u.slug, nome: u.name }))).filter((u) => u.slug !== unit?.slug);
+  for (const c of citadas) {
+    const id = ativas.find((u) => u.slug === c.slug)!.id;
+    ctx.unidadesCitadas!.push({ slug: c.slug, nome: c.nome, automacoes: automacoesDa(c.slug), erros: await errosDa(id, agora, 6) });
+  }
 
   // cartões citados no relato (só leitura; cliente "sem freio": um 403/429 aqui nunca trava o Kommo da Sofia)
   for (const l of linksDeCartao(d.relato)) {

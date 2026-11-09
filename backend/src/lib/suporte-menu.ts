@@ -230,6 +230,8 @@ export interface Armazem {
   salvar(a: { jid: string; versaoEsperada: number | null; estado: Estado; abrir?: Abrir }): Promise<{ ok: boolean; protocolo?: number }>;
   registrarEnvio(jid: string, nova: boolean): Promise<void>;
   marcarTelegram(protocolo: number, enviado: boolean): Promise<void>;
+  /** a pessoa disse que ainda não funcionou: a demanda volta a "reaberta" */
+  reabrir(protocolo: number): Promise<void>;
   limparAntigos(): Promise<void>;
 }
 
@@ -331,6 +333,12 @@ export async function processarMensagem(msg: Recebida, config: ConfigSuporte, ar
     if (!telegram) logger.warn({ protocolo: salvo.protocolo }, 'suporte-menu: o cartão NÃO chegou ao Telegram — a demanda está só no banco');
     // a análise roda à parte: o webhook não espera a IA (pode levar até 1 min)
     ef.analisar?.(salvo.protocolo);
+  }
+
+  // "ainda não funcionou" depois de resolvida: reabre e avisa a equipe
+  if (r.reabrir != null) {
+    await armazem.reabrir(r.reabrir);
+    await ef.enviarTelegram(`🔁 Demanda #${r.reabrir} REABERTA: a pessoa respondeu que ainda não funcionou.`);
   }
 
   if (ef.sorteio() < 0.01) await armazem.limparAntigos().catch((err: unknown) => logger.warn({ err: String(err) }, 'suporte-menu: limpeza falhou'));

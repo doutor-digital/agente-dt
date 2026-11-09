@@ -2565,10 +2565,34 @@ model SuporteDemanda {
   /// urgente | hoje | pode_esperar (escolhida pela IA numa lista fechada)
   prioridade        String?
   prazoEm           DateTime? @map("prazo_em")
+  /// aberta | resolvida | reaberta (o painel suporte.* resolve; a pessoa reabre respondendo "ainda não")
+  status            String    @default("aberta")
+  resolvidaEm       DateTime? @map("resolvida_em")
+  /// e-mail de quem marcou como resolvida no painel
+  resolvidaPor      String?   @map("resolvida_por")
+  /// o que quem resolveu escreveu para a pessoa (vai junto do "pode testar")
+  notaResolucao     String?   @map("nota_resolucao")
+  reabertaEm        DateTime? @map("reaberta_em")
+  vezesReaberta     Int       @default(0) @map("vezes_reaberta")
 
   @@index([criadoEm])
   @@index([analiseIniciadaEm])
+  @@index([status])
   @@map("suporte_demandas")
+}
+
+/// Base de conhecimento que a análise automática do suporte lê: causas conhecidas e o que fazer. Editada no painel suporte.*.
+model SuporteConhecimento {
+  id           String   @id @default(cuid())
+  titulo       String
+  /// a causa conhecida, como reconhecer e o que fazer (texto livre, até 2000 caracteres)
+  texto        String   @db.Text
+  ativo        Boolean  @default(true)
+  autor        String?
+  criadoEm     DateTime @default(now()) @map("criado_em")
+  atualizadoEm DateTime @updatedAt @map("atualizado_em")
+
+  @@map("suporte_conhecimento")
 }
 
 /// Ids de mensagem já tratados (o Evolution pode entregar o mesmo webhook mais de uma vez). Limpa sozinho depois de 7 dias.

@@ -10,7 +10,19 @@
  * Quem executa os efeitos (gravar, enviar, abrir a demanda) é `suporte-menu.ts`. Esta função só decide o próximo passo.
  */
 
-export type Passo = 'inicio' | 'equipe' | 'identificacao' | 'confirma-unidade' | 'categoria' | 'detalhes' | 'aberta' | 'encerrada';
+export type Passo =
+  | 'inicio'
+  | 'equipe'
+  | 'identificacao'
+  | 'confirma-unidade'
+  | 'categoria'
+  | 'detalhes'
+  | 'aberta'
+  | 'encerrada'
+  /** o painel marcou a demanda como resolvida e perguntou se funcionou (1 sim / 2 não) */
+  | 'resolvida'
+  /** a pessoa confirmou que funcionou: silêncio por um tempo (um "obrigada" não reabre o menu) */
+  | 'concluida';
 
 export type Verificacao = 'grupo' | 'texto' | 'nenhuma';
 
@@ -79,6 +91,8 @@ export interface Resultado {
   silencio: boolean;
   /** true = a conversa começou do zero agora (conta para o limite de conversas novas por hora) */
   nova: boolean;
+  /** a pessoa disse que AINDA NÃO funcionou: o chamador reabre esta demanda e avisa a equipe */
+  reabrir?: number;
 }
 
 export const MARCA_PROTOCOLO = '{protocolo}';
@@ -117,6 +131,12 @@ export const TEXTOS = {
   repeteMenu: 'Não entendi. Responda com um número de 1 a 7.',
   repeteIdentificacao: 'Não entendi. Escreva o seu nome e a unidade. Exemplo: Maria, Timbó.',
   emAnalise: (n: number) => `Sua demanda ${n} está em análise. Se for outro assunto, envie 0 para recomeçar.`,
+  /** o que o painel manda quando marca a demanda como resolvida (a nota, se houver, é de quem resolveu: João/Suzanne) */
+  resolvida: (n: number, nota: string | null) =>
+    `Sua demanda ${n} foi resolvida. ✅${nota ? `\n\n${nota}` : ''}\n\nPode testar? Responda 1 se funcionou ou 2 se ainda não.`,
+  funcionou: 'Que bom! Obrigado por avisar. Se precisar de novo, é só mandar uma mensagem aqui. 💙',
+  reaberta: (n: number) => `Entendi. Reabri a demanda ${n} e avisei a equipe. Te aviso aqui de novo quando estiver resolvido.`,
+  repeteResolvida: 'Não entendi. Responda 1 se funcionou ou 2 se ainda não.',
 } as const;
 
 /** Minutos parada até a conversa voltar ao começo (passos do menu). */
@@ -125,6 +145,10 @@ export const EXPIRA_MENU_MIN = 30;
 export const EXPIRA_ABERTA_H = 12;
 /** Quem respondeu "Não": silêncio até isto (não responde de novo para não virar spam). */
 export const EXPIRA_ENCERRADA_H = 24;
+/** Resolvida esperando o "funcionou?": depois disto a próxima mensagem começa um menu novo. */
+export const EXPIRA_RESOLVIDA_H = 72;
+/** Confirmou que funcionou: silêncio por este tempo. */
+export const EXPIRA_CONCLUIDA_H = 12;
 /** O aviso "em análise" sai no máximo uma vez por este intervalo. */
 export const INTERVALO_AVISO_MIN = 30;
 /** Respostas inválidas seguidas antes de chamar uma pessoa. */
@@ -156,6 +180,16 @@ export function simOuNao(texto: string): 'sim' | 'nao' | null {
   const t = normalizar(texto).replace(/[.!?,;:]+$/g, '');
   if (/^(1|sim|s|sou|faco|claro|isso|correto|certo|ok)$/.test(t)) return 'sim';
   if (/^(2|nao|n|nao sou|errado|incorreto)$/.test(t)) return 'nao';
+  return null;
+}
+
+/** Resposta ao "funcionou?": aceita 1/2 e também o jeito comum de falar ("deu certo", "ainda não", "continua o erro"). */
+export function funcionouOuNao(texto: string): 'sim' | 'nao' | null {
+  const t = normalizar(texto).replace(/[.!?,;:]+$/g, '');
+  if (/\b(nao funcionou|ainda nao|continua|nao resolveu|nao deu|mesmo erro|persiste|piorou)\b/.test(t)) return 'nao';
+  const s = simOuNao(t);
+  if (s) return s;
+  if (/^(funcionou|deu certo|resolveu|resolvido|tudo certo|agora foi|foi sim|show|perfeito|obrigad[ao])\b/.test(t)) return 'sim';
   return null;
 }
 
@@ -191,6 +225,19 @@ export function acharUnidade(texto: string, unidades: readonly UnidadeBasica[]):
   return todasContidas && !empate ? maior.u : null;
 }
 
+/**
+ * TODAS as unidades citadas num texto ("Tatuí, Boa Vista e Salto"), sem as que são pedaço de outra citada (Rio Verde dentro de
+ * Lucas do Rio Verde). No máximo `max`.
+ */
+export function unidadesCitadas(texto: string, unidades: readonly UnidadeBasica[], max = 5): UnidadeBasica[] {
+  const palavras = new Set(normalizar(texto).split(/[^a-z0-9]+/).filter(Boolean));
+  const achadas = unidades
+    .map((u) => ({ u, n: palavrasDistintas(u) }))
+    .filter(({ n }) => n.length > 0 && n.every((p) => palavras.has(p)));
+  const fora = achadas.filter((a) => achadas.some((b) => b !== a && b.n.length > a.n.length && a.n.every((p) => b.n.includes(p))));
+  return achadas.filter((a) => !fora.includes(a)).slice(0, max).map(({ u }) => u);
+}
+
 export interface Contexto {
   agora: Date;
   unidades: readonly UnidadeBasica[];
@@ -205,6 +252,8 @@ function expirou(e: Estado, agora: Date): boolean {
   const parado = agora.getTime() - e.atualizadoEm.getTime();
   if (e.passo === 'aberta') return parado > EXPIRA_ABERTA_H * H;
   if (e.passo === 'encerrada') return parado > EXPIRA_ENCERRADA_H * H;
+  if (e.passo === 'resolvida') return parado > EXPIRA_RESOLVIDA_H * H;
+  if (e.passo === 'concluida') return parado > EXPIRA_CONCLUIDA_H * H;
   if (e.passo === 'inicio') return false;
   return parado > EXPIRA_MENU_MIN * MIN;
 }
@@ -278,8 +327,28 @@ export function avancar(estadoAtual: Estado, entrada: Entrada, ctx: Contexto): R
       return comoNova(agora);
 
     case 'encerrada':
-      // disse "Não": fica em silêncio até expirar (ou até mandar 0)
+    case 'concluida':
+      // disse "Não" (ou já confirmou que funcionou): fica em silêncio até expirar (ou até mandar 0)
       return { estado: e, respostas: [], silencio: true, nova: false };
+
+    case 'resolvida': {
+      const r = funcionouOuNao(texto);
+      if (r === 'sim') {
+        return { estado: { ...e, passo: 'concluida', tentativas: 0, atualizadoEm: agora }, respostas: [TEXTOS.funcionou], silencio: false, nova: false };
+      }
+      if (r === 'nao' && e.protocolo != null) {
+        return {
+          estado: { ...e, passo: 'aberta', tentativas: 0, atualizadoEm: agora, avisouEm: agora },
+          respostas: [TEXTOS.reaberta(e.protocolo)],
+          silencio: false,
+          nova: false,
+          reabrir: e.protocolo,
+        };
+      }
+      // aqui a resposta inválida NÃO abre demanda nova: repete uma vez e depois fica quieto
+      if (e.tentativas >= 1) return { estado: e, respostas: [], silencio: true, nova: false };
+      return { estado: { ...e, tentativas: 1, atualizadoEm: agora }, respostas: [TEXTOS.repeteResolvida], silencio: false, nova: false };
+    }
 
     case 'aberta': {
       const aviso = e.avisouEm ? agora.getTime() - e.avisouEm.getTime() : Infinity;

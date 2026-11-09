@@ -5,6 +5,7 @@ import {
   MODELO_PADRAO,
   PRAZO_HORAS,
   analisarDemanda,
+  confiancaHonesta,
   horaBrasil,
   lerAnalise,
   lerConfigAnalise,
@@ -253,4 +254,32 @@ test('contexto que falha não derruba: analisa só com o relato', async () => {
   const r = await analisarDemanda(7, cfg(), d);
   assert.equal(r.acao, 'analisada');
   assert.deepEqual(ctxUsado, { unidade: null, automacoes: null, erros: [], cartoes: [] });
+});
+
+test('confiança honesta: sem erro no log nem cartão lido, "alta" vira "media"; com evidência do sistema, fica', () => {
+  const alta: Analise = { ...ANALISE, hipoteses: [{ causa: 'c', evidencia: 'e', confianca: 'alta' }, { causa: 'd', evidencia: '', confianca: 'baixa' }] };
+  assert.deepEqual(confiancaHonesta(alta, CTX).hipoteses.map((h) => h.confianca), ['media', 'baixa']);
+  const comErro: Contexto = { ...CTX, erros: [{ nivel: 'ERROR', msg: '402', vezes: 3 }] };
+  assert.equal(confiancaHonesta(alta, comErro).hipoteses[0]!.confianca, 'alta');
+  const erroNaCitada: Contexto = { ...CTX, unidadesCitadas: [{ slug: 's', nome: 'Salto', automacoes: { ligadas: [], noPapel: [] }, erros: [{ nivel: 'ERROR', msg: '402', vezes: 1 }] }] };
+  assert.equal(confiancaHonesta(alta, erroNaCitada).hipoteses[0]!.confianca, 'alta');
+  const cartaoComErro: Contexto = { ...CTX, cartoes: [{ link: 'x', erro: '403' }] };
+  assert.equal(confiancaHonesta(alta, cartaoComErro).hipoteses[0]!.confianca, 'media', 'cartão que NÃO foi lido não conta como evidência');
+});
+
+test('pedido à IA leva a BASE DE CONHECIMENTO (fora do JSON do contexto) e a regra "hipótese é causa, não sintoma"', () => {
+  const ctx: Contexto = { ...CTX, conhecimento: [{ titulo: 'Kommo em modo só leitura (erro 402)', texto: 'pagamento vencido' }] };
+  const m = montarMensagens(demanda(), ctx);
+  assert.match(m[0]!.content, /Hipótese é CAUSA, não o sintoma/);
+  assert.match(m[0]!.content, /Confiança "alta" SÓ com evidência do sistema/);
+  assert.match(m[1]!.content, /BASE DE CONHECIMENTO[\s\S]*## Kommo em modo só leitura \(erro 402\)\npagamento vencido/);
+  const json = m[1]!.content.split('CONTEXTO (lido do sistema agora):\n')[1]!;
+  assert.ok(!json.includes('pagamento vencido'), 'a base não vai repetida dentro do JSON');
+});
+
+test('perguntarIa aplica a confiança honesta na resposta da IA', async () => {
+  const f = (async () =>
+    new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ resumo: 'r', prioridade: 'hoje', hipoteses: [{ causa: 'c', confianca: 'alta' }] }) } }] }))) as unknown as typeof fetch;
+  const r = await perguntarIa(demanda(), CTX, cfg(), f);
+  assert.equal(r.ok && r.analise.hipoteses[0]!.confianca, 'media');
 });

@@ -55,6 +55,7 @@ const FollowUpPanel = lazy(() => import('./components/FollowUpPanel'));
 const CrmFranquiaPanel = lazy(() => import('./components/CrmFranquiaPanel'));
 const ImplantacaoPanel = lazy(() => import('./components/ImplantacaoPanel'));
 const AutomacoesPanel = lazy(() => import('./components/AutomacoesPanel'));
+const SuportePanel = lazy(() => import('./components/SuportePanel'));
 const ResultadosPanel = lazy(() =>
   import('./components/ResultadosPanel').then((m) => ({ default: m.ResultadosPanel })),
 );
@@ -130,6 +131,17 @@ function AppEntry() {
     );
   }
 
+  // suporte.doutordigitalconsultoria.com abre direto no painel do suporte (só administrador geral; os outros veem o de sempre)
+  if (user?.role === 'SUPER_ADMIN' && window.location.hostname.startsWith('suporte.')) {
+    return (
+      <Suspense fallback={<PanelSkeleton />}>
+        <div className="flex h-screen flex-col overflow-hidden bg-zinc-950 text-zinc-100">
+          <SuportePanel />
+        </div>
+      </Suspense>
+    );
+  }
+
   const showHub = user?.role === 'SUPER_ADMIN' && !selectedUnitId && !viewAll;
   if (showHub) {
     return <UnitHub onViewAll={() => setViewAll(true)} />;
@@ -195,6 +207,7 @@ function Shell({ onBackToHub }: { onBackToHub?: () => void }) {
             {tab === 'config' && <AgentConfigPanel />}
             {tab === 'units' && <UnitsPanel />}
             {tab === 'users' && <UsersPanel />}
+            {tab === 'suporte' && <SuportePanel />}
           </Suspense>
         </div>
       </main>

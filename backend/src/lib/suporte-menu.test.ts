@@ -212,6 +212,7 @@ interface Mundo {
   grupo: UnidadeBasica[];
   relogio: { agora: Date };
   analisadas: number[];
+  reabertas: number[];
 }
 
 function criarMundo(): Mundo {
@@ -226,6 +227,7 @@ function criarMundo(): Mundo {
     grupo: [TIMBO],
     relogio: { agora: AGORA },
     analisadas: [],
+    reabertas: [],
     armazem: undefined as unknown as Armazem,
     efeitos: undefined as unknown as Efeitos,
   };
@@ -275,6 +277,10 @@ function criarMundo(): Mundo {
     },
     async marcarTelegram() {
       conta('marcarTelegram');
+    },
+    async reabrir(protocolo) {
+      conta('reabrir');
+      m.reabertas.push(protocolo);
     },
     async limparAntigos() {
       conta('limparAntigos');
@@ -521,4 +527,28 @@ test('emFila: tarefas da mesma conversa rodam em ordem, uma de cada vez; convers
   assert.ok(ordem.indexOf('b') < ordem.indexOf('a1-fim')); // B não esperou A
   await assert.rejects(emFila('C', async () => Promise.reject(new Error('falhou'))));
   assert.equal(await emFila('C', async () => 'seguiu'), 'seguiu');
+});
+
+test('LIGADO: depois de resolvida, "ainda não" reabre a demanda e avisa a equipe; "funcionou" agradece e fica quieto', async () => {
+  const m = criarMundo();
+  const c = config();
+  const jid = '556391039464@s.whatsapp.net';
+  for (const t of ['oi', '1', '2', 'o cartão não anda']) await processarMensagem(recebida(t), c, m.armazem, m.efeitos);
+  // o painel marcou como resolvida (passo "resolvida", mesma demanda)
+  const linha = m.conversas.get(jid)!;
+  m.conversas.set(jid, { estado: { ...linha.estado, passo: 'resolvida', tentativas: 0, atualizadoEm: AGORA }, versao: linha.versao + 1 });
+  await processarMensagem(recebida('ainda não funcionou'), c, m.armazem, m.efeitos);
+  assert.deepEqual(m.reabertas, [1]);
+  assert.equal(m.whatsapp.at(-1)!.texto, TEXTOS.reaberta(1));
+  assert.match(m.telegram.at(-1)!, /Demanda #1 REABERTA/);
+  assert.equal(m.conversas.get(jid)!.estado.passo, 'aberta');
+  // outra vez resolvida, agora "deu certo"
+  const l2 = m.conversas.get(jid)!;
+  m.conversas.set(jid, { estado: { ...l2.estado, passo: 'resolvida', tentativas: 0, atualizadoEm: AGORA }, versao: l2.versao + 1 });
+  await processarMensagem(recebida('deu certo, obrigada!'), c, m.armazem, m.efeitos);
+  assert.equal(m.whatsapp.at(-1)!.texto, TEXTOS.funcionou);
+  assert.equal(m.conversas.get(jid)!.estado.passo, 'concluida');
+  assert.deepEqual(m.reabertas, [1]); // não reabriu de novo
+  const d = await processarMensagem(recebida('valeu'), c, m.armazem, m.efeitos);
+  assert.deepEqual(d, { acao: 'silencio' }); // um "valeu" não reabre o menu
 });
