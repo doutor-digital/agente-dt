@@ -13,7 +13,7 @@
  *
  * DESCONTRATOS (provisório, até o banco dele migrar para o do RH): uma segunda conta, `tipo: 'dsc'`, slug `descontratos` (provedor `descontratos` do painel).
  * Nela só valem `sistemas_esquema`, `sistemas_consultar` (leitura), `sistemas_preparar_descontrato` (concluir descontrato) e, desde 09/11 (pedido da Lia/Suzanne),
- * `sistemas_preparar_alteracao` em dsc_docs, dsc_usuarios e notif_fila — os dois com `sistemas_confirmar_alteracao`. As travas de domínio (1 documento por vez,
+ * `sistemas_preparar_alteracao` em todas as tabelas menos admin_log/admin_backup (a tela, dsc_site/site_*, liberada pelo João à tarde) — os dois com `sistemas_confirmar_alteracao`. As travas de domínio (1 documento por vez,
  * apagar só rascunho, JSON sem perder chave, papel dono fechado) são do servidor do Descontratos. Todas as outras ferramentas são do RH/Caixa e recusam a
  * conta do Descontratos (o servidor do Descontratos também as recusa: lista fechada de rotas).
  * Sem `sistema`, as ferramentas continuam caindo no RH, como antes de existir a segunda conta.
@@ -75,7 +75,8 @@ const COMO_CONFERIR: Record<TipoSistema, string> = {
 };
 const APELIDOS_DSC = /^(dsc|descontratos?|ficha|fichas)$/i;
 /** as tabelas do Descontratos que a alteração genérica aceita (o servidor confere de novo, com as travas de domínio) */
-export const TABELAS_ESCRITA_DSC = ['dsc_docs', 'dsc_usuarios', 'notif_fila'] as const;
+/** as tabelas do Descontratos que a alteração genérica NÃO aceita (o registro e as cópias; o servidor recusa de novo) */
+export const TABELAS_FECHADAS_DSC = ['admin_log', 'admin_backup'] as const;
 
 /**
  * A conta que atende o pedido. `exigir` diz de que sistema é a ferramenta: `rh` (o padrão — qualquer ferramenta nova nasce fechada para o Descontratos),
@@ -100,7 +101,7 @@ export function resolverSistema(ctx: ContextoSistemas, pedido?: string, exigir: 
   if (exigir !== 'qualquer' && tipoDaConta(conta) !== exigir) {
     throw new ErroDeEntrada(
       exigir === 'rh'
-        ? `"${conta.slug}" é o ${NOME_DO_TIPO[tipoDaConta(conta)]}: esta ferramenta só existe no RH/Caixa. No Descontratos use sistemas_esquema, sistemas_consultar, sistemas_preparar_descontrato e sistemas_preparar_alteracao (em ${TABELAS_ESCRITA_DSC.join(', ')}), com sistemas_confirmar_alteracao`
+        ? `"${conta.slug}" é o ${NOME_DO_TIPO[tipoDaConta(conta)]}: esta ferramenta só existe no RH/Caixa. No Descontratos use sistemas_esquema, sistemas_consultar, sistemas_preparar_descontrato e sistemas_preparar_alteracao (qualquer tabela menos ${TABELAS_FECHADAS_DSC.join(', ')}), com sistemas_confirmar_alteracao`
         : `"${conta.slug}" é o ${NOME_DO_TIPO[tipoDaConta(conta)]}, não o Descontratos`,
     );
   }
@@ -377,10 +378,10 @@ export async function prepararAlteracao(
   if (a.operacao !== 'inserir' && !Object.keys(filtro).length) throw new ErroDeEntrada(`${a.operacao} precisa de "filtro" (coluna = valor): não mexo na tabela inteira`);
   if (a.operacao === 'apagar' && Object.keys(dados).length) throw new ErroDeEntrada('apagar não leva "dados"');
   if (tabela.toLowerCase() === 'rh_usuarios') throw new ErroDeEntrada('rh_usuarios só muda por sistemas_usuario (papel, unidade, ativo)');
-  // sem `sistema` continua o RH; o Descontratos só quando pedido, e só nas tabelas dele que aceitam alteração
+  // sem `sistema` continua o RH; o Descontratos só quando pedido (todas as tabelas dele menos o registro e as cópias)
   const c = a.sistema?.trim() ? resolverSistema(ctx, a.sistema, 'qualquer') : resolverSistema(ctx, undefined);
-  if (tipoDaConta(c) === 'dsc' && !(TABELAS_ESCRITA_DSC as readonly string[]).includes(tabela)) {
-    throw new ErroDeEntrada(`no Descontratos a alteração vale só em ${TABELAS_ESCRITA_DSC.join(', ')} (${tabela} não); para concluir um descontrato use sistemas_preparar_descontrato`);
+  if (tipoDaConta(c) === 'dsc' && (TABELAS_FECHADAS_DSC as readonly string[]).includes(tabela.toLowerCase())) {
+    throw new ErroDeEntrada(`no Descontratos ${tabela} é o registro/cópia das alterações: não se altera por aqui (leia com sistemas_consultar)`);
   }
   const r = resposta(
     await c.fonte.chamar('POST', '/admin/v1/preparar', {
@@ -604,7 +605,7 @@ export function registrarLeituraSistemas(server: McpServer, ctx: ContextoSistema
         'dados bancários): peça só as colunas de que precisa. Para alterar dados use sistemas_preparar_alteracao. DESCONTRATOS: com sistema="descontratos" a consulta ' +
         'roda no banco do Descontratos/Ficha; os descontratos são as linhas de dsc_docs com col = \'cancelamentos\' (o campo data é um JSON: status, protocolo, paciente, contrato, ' +
         'diretoria, anexos, pagamento, historico…), notif_fila é a fila de avisos e dsc_usuarios quem acessa a tela. Para concluir um descontrato: sistemas_preparar_descontrato; ' +
-        'para alterar dsc_docs, dsc_usuarios ou notif_fila: sistemas_preparar_alteracao com sistema="descontratos".',
+        'a tela fica em dsc_site (part, content) e site_parts/site_assets (Ficha). Para alterar: sistemas_preparar_alteracao com sistema="descontratos".',
       inputSchema: { sistema: SISTEMA, sql: z.string().min(6).max(20_000).describe('um SELECT, ex.: select unidade, sum(valor) from caixa_lancamentos group by 1') },
       annotations: ro,
     },
@@ -674,12 +675,12 @@ export function registrarEscritaSistemas(
         'filtro (igualdade, até 500 linhas) e devolve o resumo, quantas linhas mudam e o antes → depois (até 20 linhas). Mostre isso à pessoa e ' +
         'só chame sistemas_confirmar_alteracao se ela aprovar. "filtro" é {coluna: valor} (obrigatório em atualizar e apagar); "dados" são as ' +
         'colunas novas. Apagar não vale em rh_docs, fin_* e caixa_*; rh_usuarios só muda por sistemas_usuario. ' +
-        'DESCONTRATOS: com sistema="descontratos" vale em dsc_docs, dsc_usuarios e notif_fila. Em dsc_docs: UM documento por vez (filtro {"col":"cancelamentos","id":"<id>"}); ' +
+        'DESCONTRATOS: com sistema="descontratos" vale em todas as tabelas menos admin_log e admin_backup, inclusive a TELA (dsc_site; site_parts/site_assets da Ficha: muda na hora para quem abre; o antes fica em admin_backup). Em dsc_docs: UM documento por vez (filtro {"col":"cancelamentos","id":"<id>"}); ' +
         'apagar só RASCUNHO; atualizar só a coluna data, mandando o JSON INTEIRO (leia antes com sistemas_consultar, mude o que precisa e mande tudo: chave que faltar ' +
         'é recusada; para esvaziar mande null; se a mudança deve aparecer na tela, acrescente a linha no "historico"). Em dsc_usuarios o papel dono não é dado por aqui. ' +
         'O antes fica em admin_backup e o registro em admin_log (os dois legíveis com sistemas_consultar).',
       inputSchema: {
-        sistema: z.string().optional().describe('qual sistema: o RH/Caixa (padrão; pode omitir) ou "descontratos" (só dsc_docs, dsc_usuarios e notif_fila)'),
+        sistema: z.string().optional().describe('qual sistema: o RH/Caixa (padrão; pode omitir) ou "descontratos" (todas as tabelas menos admin_log/admin_backup)'),
         operacao: z.enum(['inserir', 'atualizar', 'apagar']),
         tabela: z.string().min(1).max(63),
         filtro: z.record(z.string(), escalar).optional().describe('{ "coluna": valor } — igualdade; as linhas afetadas'),

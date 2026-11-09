@@ -184,14 +184,14 @@ test('toda ferramenta do RH recusa a conta do Descontratos SEM falar com o servi
 
 // ---------------------------------------------------------------- Descontratos: alteração genérica (09/11)
 
-test('alteração no Descontratos: só com sistema="descontratos", só nas 3 tabelas; vai ao servidor DELE e o registro explica que não entra no histórico da tela', async () => {
+test('alteração no Descontratos: só com sistema="descontratos", menos admin_log/admin_backup; vai ao servidor DELE e o registro explica que não entra no histórico da tela', async () => {
   const { rh, dsc, ctx } = doisSistemas();
   const k = await cliente(ctx);
-  // tabela fora da lista: recusa ANTES de falar com o servidor
-  for (const tabela of ['dsc_site', 'fichas', 'site_parts', 'admin_backup', 'dsc_crm']) {
+  // o registro e as cópias: recusa ANTES de falar com o servidor (a tela e o resto passam desde 09/11 à tarde)
+  for (const tabela of ['admin_log', 'admin_backup', 'ADMIN_LOG']) {
     const r = await k.chamar('sistemas_preparar_alteracao', { sistema: 'descontratos', operacao: 'atualizar', tabela, filtro: { id: 'x' }, dados: { a: 1 } });
     assert.equal(r.erro, true, tabela);
-    assert.match(r.texto, /só em dsc_docs, dsc_usuarios, notif_fila/, tabela);
+    assert.match(r.texto, /registro\/cópia/, tabela);
   }
   assert.equal(dsc.chamadas.length, 0);
   const p = await k.chamar('sistemas_preparar_alteracao', { sistema: 'descontratos', operacao: 'apagar', tabela: 'dsc_docs', filtro: { col: 'cancelamentos', id: 'rascunho-1' } });
@@ -206,6 +206,10 @@ test('alteração no Descontratos: só com sistema="descontratos", só nas 3 tab
   assert.equal(ok.json.sistema, 'descontratos');
   assert.match(ok.json.registro, /admin_log.*admin_backup/);
   assert.match(ok.json.registro, /NÃO entra no histórico/);
+  // a tela (liberada em 09/11 à tarde) vai ao servidor do Descontratos como qualquer tabela
+  const tela = await k.chamar('sistemas_preparar_alteracao', { sistema: 'descontratos', operacao: 'atualizar', tabela: 'dsc_site', filtro: { part: 1 }, dados: { content: 'x' } });
+  assert.equal(tela.erro, false, tela.texto);
+  assert.deepEqual(dsc.chamadas.at(-1)!.corpo, { op: 'atualizar', tabela: 'dsc_site', filtro: { part: 1 }, dados: { content: 'x' }, quem: QUEM.nome });
   assert.equal(rh.chamadas.length, 0, 'nada foi ao RH');
   await k.fechar();
 });
