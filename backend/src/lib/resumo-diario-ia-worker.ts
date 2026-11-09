@@ -12,7 +12,7 @@
  */
 import { logger } from './logger.js';
 import { reivindicarLease, liberarLease } from './worker-lease.js';
-import { enviarTelegram, telegramConfigurado } from './telegram.js';
+import { enviarTelegramSofia, telegramConfigurado } from './telegram.js';
 import { somarDias } from './qualidade-ia/dias.js';
 import { avaliarDia } from './qualidade-ia/texto.js';
 import { avaliacoesPorDia, faixasDeNota, noPeriodo, piorAvaliacao, unidadesPiores } from './qualidade-ia/agregar.js';
@@ -72,8 +72,8 @@ export async function coletarSemanal(hoje: Dia): Promise<DadosSemanais> {
 const dependenciasReais: Dependencias = {
   coletarDiario,
   coletarSemanal,
-  enviar: (texto) => enviarTelegram(texto),
-  telegramConfigurado: () => telegramConfigurado(),
+  enviar: (texto) => enviarTelegramSofia(texto),
+  telegramConfigurado: () => telegramConfigurado(process.env, 'sofia'),
   reivindicar: (nome, ttlMs) => reivindicarLease(nome, undefined, ttlMs),
   liberar: (nome) => liberarLease(nome),
   registrar: (nivel, dados, mensagem) => logger[nivel](dados, mensagem),

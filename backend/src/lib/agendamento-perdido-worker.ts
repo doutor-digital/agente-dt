@@ -4,7 +4,7 @@ import { createKommoClient, type KommoLead } from '../services/kommo.service.js'
 import { normalizarNome } from './kommo-schema.js';
 import { CAMPOS_SYNC } from './franquia-sync.js';
 import { fusoDaUnidade } from './fuso.js';
-import { enviarTelegram } from './telegram.js';
+import { enviarTelegramSofia } from './telegram.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import { registrarSimulacao } from './so-no-papel.js';
 
@@ -376,7 +376,7 @@ async function varrer(): Promise<void> {
 
           // Sem esperar: Telegram lento não pode segurar a varredura (até 10 s por alerta). Nunca lança;
           // sem token, só registra no log.
-          void enviarTelegram(
+          void enviarTelegramSofia(
             textoTelegramPerdido({
               unidade: unit.name,
               subdominio: unit.kommoSubdomain,

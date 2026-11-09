@@ -12,7 +12,7 @@ import { logger } from '../lib/logger.js';
 import { retornoDaEquipe } from '../lib/retorno-da-equipe.js';
 import { withTimeout } from './llm-policy.js';
 import { pacienteFalouDePs } from './sem-pronto-socorro.js';
-import { enviarTelegram } from '../lib/telegram.js';
+import { enviarTelegramSofia } from '../lib/telegram.js';
 import { chamadasDoTurno, ehClinicaParaSinalDeAlerta, fraseDoPasse, pausaDoTurno, SEM_AVISO_NA_PAUSA, sinalNaFala } from './sinal-de-alerta.js';
 
 /** O resumo é útil a quem vai ligar, mas não segura a resposta: prazo curto. */
@@ -94,7 +94,7 @@ export async function passarPorSinalNoTurno(e: PasseEntrada): Promise<PasseResul
   const falouDePs = pacienteFalouDePs(e.falasDoPaciente);
   if (!pegou) {
     // Alerta direto ao João: a pausa é o que segura a IA, e o aviso do cartão pode não ter saído.
-    await enviarTelegram(
+    await enviarTelegramSofia(
       `⚠️ Sinal de alerta SEM pausa · ${e.unit.name} · lead ${leadId}: ${sinal}. A pausa falhou duas vezes (${resultadoPausa.slice(0, 120)}). Olhar o cartão agora.`,
     ).catch(() => false);
     // A resposta do modelo não sai como se nada fosse: ele não viu o sinal. Sai a frase do passe, sem dizer que a equipe

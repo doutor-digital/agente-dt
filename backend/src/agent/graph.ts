@@ -105,7 +105,7 @@ import { dadosDaTaxa, insistenciaJaTratada, pacienteJaMandouComprovante, promptD
 import { aplicarTaxaDeReservaNaSaida, decidirATaxa } from './taxa-de-reserva-saida.js';
 import { pagouOAntecipado } from '../lib/follow-up-worker.js';
 import { unidadeSemAntecipado } from './pagamento-da-unidade.js';
-import { enviarTelegram } from '../lib/telegram.js';
+import { enviarTelegramSofia } from '../lib/telegram.js';
 import {
   withTimeout,
   AGENT_NODE_TIMEOUT_MS,
@@ -1424,7 +1424,7 @@ export async function buildAgentGraph(
                   })
               : undefined,
           slug: unit.slug,
-          alertar: (texto) => enviarTelegram(texto),
+          alertar: (texto) => enviarTelegramSofia(texto),
         });
         if (saidaDaTaxa.troca) {
           respostaFixa = true;
