@@ -11,7 +11,7 @@ import {
   filtroDeEnvios,
   contaComoEnvioDaSofia,
 } from './kommo-talks.service.js';
-import { selecionarItens, JANELA_DO_TURNO_MS, temMidiaSemArquivo } from '../lib/conversa-oficial.js';
+import { audiosPerdidos, blocoDaConversaOficial, selecionarItens, JANELA_AUDIO_PERDIDO_MS, JANELA_DO_TURNO_MS, temMidiaSemArquivo } from '../lib/conversa-oficial.js';
 
 const t0 = 1_789_222_000; // segundos
 const raw = (over: Partial<Parameters<typeof normalizar>[0][number]> & { id: string }) => ({
@@ -74,6 +74,88 @@ test('selecionarItens: áudio do turno que o webhook não trouxe (WhatsApp Lite)
   assert.deepEqual(selecionarItens(msgs, aviso, agora, true).map((m) => m.id), ['v']);
   assert.deepEqual(selecionarItens(msgs, aviso, agora, false).map((m) => m.id), []);
   assert.deepEqual(selecionarItens(msgs, aviso, agora).map((m) => m.id), []);
+});
+
+// ---------------------------------------------------------------- WhatsApp Lite: o áudio que chega depois do aviso (Mossoró, 09/11/2026)
+
+const AVISO = 'Você recebeu uma mensagem de mídia (ID da mensagem: AC5FBE1D8C7FD104AC191A07E4A05ADE. Aguarde o carregamento ou a visualização da mídia no seu aplicativo móvel';
+const sofia = (id: string, s: number) => raw({ id, created_at: s, type: 'outgoing', author: { type: 'bot', name: 'Salesbot' }, text: 'Entendi! onde dói?' });
+const voz = (id: string, s: number, link: string | null = 'https://x/lite.ogg') => raw({ id, created_at: s, attachment: link ? { type: 'voice', link } : { type: 'voice' } });
+
+function cenario(o: { leituras: Array<ReturnType<typeof normalizar>>; historico?: { avisoNaJanela: boolean; jaTranscritos: Set<string> } }) {
+  const passos: Array<{ kind: string; title: string }> = [];
+  const esperas: number[] = [];
+  const transcritos: string[] = [];
+  let leitura = 0;
+  const args = {
+    unit: { id: 'u1', slug: 'doutor-hernia-mossoro', spineTimezone: 'America/Fortaleza' } as any,
+    leadId: 6478775,
+    recorder: { step: async (s: any) => { passos.push(s); } } as any,
+    ler: async () => o.leituras[Math.min(++leitura, o.leituras.length - 1)]!,
+    msgs: o.leituras[0],
+    dormir: async (ms: number) => { esperas.push(ms); },
+    esperas: [4_000, 6_000, 8_000],
+    historico: async () => o.historico ?? { avisoNaJanela: false, jaTranscritos: new Set<string>() },
+    transcrever: async (link: string) => { transcritos.push(link); return { text: 'tenho dor na lombar há dois anos' }; },
+    registrar: async () => {},
+  };
+  return { args, passos, esperas, transcritos, leituras: () => leitura };
+}
+
+test('Lite: o aviso chega antes do arquivo — espera, relê e transcreve o áudio quando ele carrega', async () => {
+  const s = Math.floor(Date.now() / 1000);
+  const semLink = normalizar([raw({ id: 't', created_at: s - 30, text: 'Sim' }), voz('v', s - 2, null)]);
+  const comLink = normalizar([raw({ id: 't', created_at: s - 30, text: 'Sim' }), voz('v', s - 2)]);
+  const c = cenario({ leituras: [semLink, semLink, comLink] });
+  const bloco = await blocoDaConversaOficial({ ...c.args, humanMessage: `Sim\n${AVISO}`, nenhumAudioNoWebhook: true });
+  assert.deepEqual(c.esperas, [4_000, 6_000], 'esperou até o áudio aparecer, e parou');
+  assert.deepEqual(c.transcritos, ['https://x/lite.ogg']);
+  assert.match(bloco, /\[áudio transcrito\] "tenho dor na lombar há dois anos"/);
+  assert.ok(c.passos.some((p) => /carregou no Kommo depois de 10 s/.test(p.title)));
+});
+
+test('Lite: o áudio não carrega a tempo — espera as 3 vezes, segue sem e registra o motivo', async () => {
+  const s = Math.floor(Date.now() / 1000);
+  const semLink = normalizar([voz('v', s - 2, null)]);
+  const c = cenario({ leituras: [semLink] });
+  const bloco = await blocoDaConversaOficial({ ...c.args, humanMessage: AVISO, nenhumAudioNoWebhook: true });
+  assert.deepEqual(c.esperas, [4_000, 6_000, 8_000]);
+  assert.equal(c.transcritos.length, 0);
+  assert.equal(bloco, '');
+  assert.ok(c.passos.some((p) => p.kind === 'ERROR' && /não carregou no Kommo em 18 s/.test(p.title)));
+});
+
+test('sem o aviso de mídia (ou com o áudio vindo pelo webhook) não espera nada', async () => {
+  const s = Math.floor(Date.now() / 1000);
+  const semLink = normalizar([voz('v', s - 2, null)]);
+  for (const [msg, nenhum] of [['bom dia', true], [AVISO, false]] as const) {
+    const c = cenario({ leituras: [semLink] });
+    await blocoDaConversaOficial({ ...c.args, humanMessage: msg, nenhumAudioNoWebhook: nenhum });
+    assert.deepEqual(c.esperas, [], `${msg.slice(0, 10)} / ${nenhum}`);
+  }
+});
+
+test('Lite: o áudio que a Sofia respondeu sem ouvir volta no turno seguinte, com o aviso de não pedir de novo', async () => {
+  const s = Math.floor(Date.now() / 1000);
+  // 07:32 áudio, 07:32 Sofia respondeu sem ele, 07:33 "Pode ser em áudio" (turno atual)
+  const msgs = normalizar([voz('v', s - 40), sofia('s1', s - 38), raw({ id: 'p', created_at: s - 2, text: 'Pode ser em áudio' })]);
+  const c = cenario({ leituras: [msgs], historico: { avisoNaJanela: true, jaTranscritos: new Set() } });
+  const bloco = await blocoDaConversaOficial({ ...c.args, humanMessage: 'Pode ser em áudio', nenhumAudioNoWebhook: true });
+  assert.deepEqual(c.esperas, [], 'sem aviso neste turno: não espera');
+  assert.deepEqual(c.transcritos, ['https://x/lite.ogg']);
+  assert.match(bloco, /\[áudio transcrito\] "tenho dor na lombar há dois anos"/);
+  assert.match(bloco, /respondeu sem ouvi-lo[\s\S]*NÃO peça de novo[\s\S]*<\/conversa_oficial>$/);
+  assert.ok(c.passos.some((p) => /não tinha ouvido: 1 recuperado/.test(p.title)));
+});
+
+test('audiosPerdidos: só com o aviso na janela, só o que nunca foi transcrito, só dentro da janela, só antes da última fala da Sofia', () => {
+  const s = Math.floor(Date.now() / 1000);
+  const agora = s * 1000;
+  const velho = Math.floor((agora - JANELA_AUDIO_PERDIDO_MS - 60_000) / 1000);
+  const msgs = normalizar([voz('antigo', velho), voz('a', s - 120), voz('b', s - 100), sofia('s1', s - 90), voz('depois', s - 10)]);
+  assert.deepEqual(audiosPerdidos(msgs, agora, { avisoNaJanela: false, jaTranscritos: new Set() }), [], 'API oficial: o webhook já trouxe o áudio');
+  assert.deepEqual(audiosPerdidos(msgs, agora, { avisoNaJanela: true, jaTranscritos: new Set() }).map((m) => m.id), ['a', 'b']);
+  assert.deepEqual(audiosPerdidos(msgs, agora, { avisoNaJanela: true, jaTranscritos: new Set(['a']) }).map((m) => m.id), ['b']);
 });
 
 test('renderConversaOficial: com equipe no meio, manda não repetir nem se reapresentar', () => {
