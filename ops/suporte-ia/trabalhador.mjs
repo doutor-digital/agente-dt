@@ -108,6 +108,11 @@ REGRAS (não negociáveis):
 - O repositório e os PRs são PÚBLICOS: nunca ponha dado pessoal (nome de paciente, telefone, CPF, conversa) em código, commit, título ou corpo do PR.
 - Português do Brasil, frases curtas.
 
+ECONOMIA (você roda no plano do Claude do João; cada leitura custa):
+- Comece pela análise e pela base de conhecimento abaixo: se a causa já está clara ali e não é código, responda sem abrir arquivo.
+- Para achar algo no código: Grep primeiro; depois Read só do trecho (offset/limit). Nunca leia inteiros os gigantes: backend/src/agent/prompt-composer.ts, backend/src/services/kommo.service.ts, backend/src/controllers/webhook.controller.ts, backend/src/agent/graph.ts.
+- Pare assim que achar a causa. Não explore o resto do repositório.
+
 NO FIM, responda com UM bloco \`\`\`json contendo exatamente:
 {"resumo": "o que aconteceu, em 1-3 frases", "causa": "...", "fez": "o que você mudou (ou 'nada')", "pr_titulo": "título curto do PR ou null", "pr_corpo": "causa, o que mudou e como provar, ou null", "precisa_pessoa": true|false, "o_que_fazer": "passos para uma pessoa, ou null"}
 

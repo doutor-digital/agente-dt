@@ -121,6 +121,6 @@ echo "   timer: $(systemctl is-active suporte-ia.timer)"
 if [ -s "$H/.claude/.credentials.json" ]; then
   echo "-- login do Claude: OK (arquivo de credencial presente)"
 else
-  echo "-- login do Claude: FALTA. Rode uma vez:  ssh -t root@89.116.214.130 'su - $U -c ~/.local/bin/claude'  e entre com /login"
+  echo "-- login do Claude: FALTA. Rode uma vez:  ssh -t root@89.116.214.130 'su - $U -c $H/.local/bin/claude'  e entre com /login"
 fi
 echo "PRONTO na VPS. O agente só trabalha quando SUPORTE_CLAUDE=ligado no backend (até lá a fila responde 'nada a fazer')."
