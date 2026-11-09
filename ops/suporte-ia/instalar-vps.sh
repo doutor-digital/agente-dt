@@ -10,6 +10,7 @@
 #   - os segredos ficam em /etc/suporte-ia.env (só root lê; o systemd entrega ao processo do trabalhador, que NÃO os passa ao Claude);
 #   - cerca: 2 GB de memória, 1 CPU, prioridade baixa; se estourar, morre o agente, nunca a Sofia.
 set -euo pipefail
+trap 'echo "!! o instalador parou na linha $LINENO (comando: $BASH_COMMAND)"' ERR
 [ "$(id -u)" = 0 ] || { echo "precisa ser root"; exit 1; }
 AQUI="$(cd "$(dirname "$0")" && pwd)"
 U=suporte-ia
@@ -30,15 +31,19 @@ if [ ! -x /opt/node-24/bin/node ]; then
   [ -x "$SRC/bin/node" ] || { echo "não achei o Node 24 em $SRC"; exit 1; }
   cp -a "$SRC" /opt/node-24
 fi
-[ -x /opt/node-24/bin/pnpm ] || /opt/node-24/bin/npm i -g pnpm@9.15.0 --prefix /opt/node-24 >/dev/null 2>&1
+# o npm/pnpm/corepack chamam `node` pelo PATH (#!/usr/bin/env node): sem isto o npm falha calado (visto em 09/11)
+export PATH=/opt/node-24/bin:$PATH
+if [ ! -x /opt/node-24/bin/pnpm ]; then
+  saida=$(npm i -g pnpm@9.15.0 --prefix /opt/node-24 2>&1) || { echo "   falhou instalar o pnpm:"; printf '%s\n' "$saida" | tail -8; exit 1; }
+fi
 chown -R root:root /opt/node-24 && chmod -R a+rX,go-w /opt/node-24
 echo "   node $(/opt/node-24/bin/node -v), pnpm $(/opt/node-24/bin/pnpm -v 2>/dev/null || echo '?')"
 
 echo "-- Claude Code para o $U"
 if [ ! -x "$H/.local/bin/claude" ]; then
-  su - "$U" -c 'curl -fsSL https://claude.ai/install.sh | bash' >/dev/null 2>&1 || true
+  saida=$(su - "$U" -c 'curl -fsSL https://claude.ai/install.sh | bash' 2>&1) || { echo "   o instalador do Claude Code falhou:"; printf '%s\n' "$saida" | tail -8; exit 1; }
 fi
-[ -x "$H/.local/bin/claude" ] && echo "   $(su - "$U" -c "$H/.local/bin/claude --version" 2>/dev/null | head -1)" || { echo "   o instalador do Claude Code falhou"; exit 1; }
+[ -x "$H/.local/bin/claude" ] && echo "   $(su - "$U" -c "$H/.local/bin/claude --version" 2>/dev/null | head -1)" || { echo "   o Claude Code não ficou em $H/.local/bin/claude"; exit 1; }
 
 echo "-- cópia do repositório (só leitura do GitHub: o push é com o token, pelo trabalhador)"
 if [ ! -d "$H/agente-dt/.git" ]; then
