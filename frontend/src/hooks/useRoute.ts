@@ -32,6 +32,7 @@ const TAB_TO_SLUG: Record<AppTab, string> = {
   resultados: 'resultados',
   disparo: 'disparo',
   'como-funciona': 'como-funciona',
+  suporte: 'suporte',
 };
 
 const SLUG_TO_TAB = Object.fromEntries(

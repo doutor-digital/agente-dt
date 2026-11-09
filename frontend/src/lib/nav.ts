@@ -23,6 +23,7 @@ import {
   PiChatsCircleBold,
   PiUsersThreeBold,
   PiGearSixBold,
+  PiLifebuoyBold,
 } from 'react-icons/pi';
 import type { ComponentType } from 'react';
 
@@ -62,7 +63,8 @@ export type AppTab =
   | 'saude-ia'
   | 'resultados'
   | 'disparo'
-  | 'como-funciona';
+  | 'como-funciona'
+  | 'suporte';
 
 export type NavSection = 'operacao' | 'agente' | 'analise' | 'plataforma';
 
@@ -278,6 +280,15 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Settings2,
     section: 'plataforma',
     keywords: ['tecnico', 'config', 'campos'],
+  },
+  {
+    id: 'suporte',
+    label: 'Suporte',
+    hint: 'Demandas da equipe pelo WhatsApp, com a análise automática; o botão Resolvido avisa a pessoa para testar.',
+    icon: PiLifebuoyBold,
+    section: 'plataforma',
+    superOnly: true,
+    keywords: ['suporte', 'chamado', 'demanda', 'protocolo', 'whatsapp', 'resolvido', 'base de conhecimento', 'analise'],
   },
   {
     id: 'users',

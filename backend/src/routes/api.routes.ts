@@ -227,6 +227,15 @@ import {
 import { digitandoHandler } from '../controllers/whatsapp-meta.controller.js';
 import { suporteMenuWebhookHandler } from '../controllers/suporte-menu.controller.js';
 import {
+  apagarConhecimentoHandler,
+  criarConhecimentoHandler,
+  editarConhecimentoHandler,
+  listarConhecimentoHandler,
+  listarDemandasHandler,
+  reabrirHandler,
+  resolverHandler,
+} from '../controllers/suporte-painel.controller.js';
+import {
   ligacaoCombinarHandler,
   ligacaoDesligarHandler,
   ligacaoEstadoHandler,
@@ -260,6 +269,14 @@ apiRouter.post('/webhooks/whatsapp/ligacoes', webhookLigacoesHandler);
 // Menu de suporte no WhatsApp (instância analista-dt do Evolution). Também aceita o caminho com o nome do evento, caso o webhook por evento esteja ligado.
 apiRouter.post('/webhooks/suporte-menu', suporteMenuWebhookHandler);
 apiRouter.post('/webhooks/suporte-menu/:evento', suporteMenuWebhookHandler);
+// Painel do suporte (suporte.doutordigitalconsultoria.com): só administrador geral.
+apiRouter.get('/suporte/demandas', requireAuth, requireSuperAdmin, listarDemandasHandler);
+apiRouter.post('/suporte/demandas/:protocolo/resolver', requireAuth, requireSuperAdmin, resolverHandler);
+apiRouter.post('/suporte/demandas/:protocolo/reabrir', requireAuth, requireSuperAdmin, reabrirHandler);
+apiRouter.get('/suporte/conhecimento', requireAuth, requireSuperAdmin, listarConhecimentoHandler);
+apiRouter.post('/suporte/conhecimento', requireAuth, requireSuperAdmin, criarConhecimentoHandler);
+apiRouter.put('/suporte/conhecimento/:id', requireAuth, requireSuperAdmin, editarConhecimentoHandler);
+apiRouter.delete('/suporte/conhecimento/:id', requireAuth, requireSuperAdmin, apagarConhecimentoHandler);
 
 apiRouter.get('/integrations/:unitSlug/session-stats/:leadId', sessionStatsHandler);
 apiRouter.get('/integrations/sla-report', slaReportHandler);

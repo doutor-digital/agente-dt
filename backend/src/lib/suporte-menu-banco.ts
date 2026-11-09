@@ -104,6 +104,13 @@ export const armazemPrisma: Armazem = {
     await prisma.suporteEnvio.create({ data: { jid, nova } });
   },
 
+  async reabrir(protocolo) {
+    await prisma.suporteDemanda.update({
+      where: { protocolo },
+      data: { status: 'reaberta', reabertaEm: new Date(), vezesReaberta: { increment: 1 } },
+    });
+  },
+
   async marcarTelegram(protocolo, enviado) {
     await prisma.suporteDemanda.update({ where: { protocolo }, data: { telegramEnviado: enviado } });
   },
