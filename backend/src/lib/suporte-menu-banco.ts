@@ -6,6 +6,7 @@ import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { enviarTelegramChamados } from './telegram.js';
 import { dispararAnalise } from './suporte-analise-banco.js';
+import { enfileirarSeVerificada } from './suporte-claude-banco.js';
 import {
   atualizarIndiceSeVelho,
   indiceAtual,
@@ -139,7 +140,8 @@ export function efeitosReais(config: ConfigSuporte): Efeitos {
     },
     sorteio: Math.random,
     analisar: (protocolo) => {
-      void dispararAnalise(protocolo);
+      // a análise primeiro (o agente lê o que ela achou); com ou sem análise, a demanda verificada entra na fila do agente
+      void dispararAnalise(protocolo).finally(() => void enfileirarSeVerificada(protocolo));
     },
   };
 }

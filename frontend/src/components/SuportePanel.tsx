@@ -10,6 +10,8 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  PiArrowSquareOutBold,
+  PiRobotBold,
   PiArrowCounterClockwiseBold,
   PiBookOpenTextBold,
   PiCheckCircleBold,
@@ -229,6 +231,8 @@ function CartaoDemanda({ d, aoMudar }: { d: DemandaSuporte; aoMudar: () => Promi
         <p className="mt-3 text-xs text-zinc-500">Sem análise automática (desligada ou ainda rodando).</p>
       )}
 
+      <BlocoDoAgente d={d} aoMudar={aoMudar} />
+
       <div className="mt-4 border-t border-zinc-800 pt-3">
         {d.status === 'resolvida' ? (
           <div className="flex flex-wrap items-center gap-3 text-xs text-zinc-400">
@@ -264,6 +268,64 @@ function CartaoDemanda({ d, aoMudar }: { d: DemandaSuporte; aoMudar: () => Promi
         {resultado && <p className="mt-2 text-xs text-zinc-400">{resultado}</p>}
       </div>
     </article>
+  );
+}
+
+// ─── o agente (Claude Code 24 h na VPS) ──────────────────────────────────────────────────────────────
+
+const NOME_STATUS_AGENTE: Record<string, string> = {
+  fila: 'na fila do agente',
+  trabalhando: 'o agente está trabalhando',
+  feito: 'o agente terminou',
+  falhou: 'o agente não concluiu',
+};
+
+function BlocoDoAgente({ d, aoMudar }: { d: DemandaSuporte; aoMudar: () => Promise<void> }) {
+  const [enviando, setEnviando] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+  const c = d.claude;
+  const podeMandar = d.status !== 'resolvida' && (!c || c.status === 'feito' || c.status === 'falhou');
+
+  async function mandar() {
+    setEnviando(true);
+    setErro(null);
+    try {
+      await apiSuporte.mandarParaClaude(d.protocolo);
+      await aoMudar();
+    } catch (e) {
+      setErro(erroDaApi(e));
+    } finally {
+      setEnviando(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 rounded-lg bg-violet-500/5 p-3 ring-1 ring-violet-500/20">
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <PiRobotBold className="h-4 w-4 text-violet-300" />
+        <span className="text-violet-100">{c ? NOME_STATUS_AGENTE[c.status] : 'O agente ainda não pegou esta demanda.'}</span>
+        {c?.status === 'trabalhando' && <PiSpinnerGapBold className="h-4 w-4 animate-spin text-violet-300" />}
+        {c?.autorizadoPor && <span className="text-xs text-zinc-500">({c.autorizadoPor === 'grupo' ? 'entrou sozinha: número verificado' : `mandada por ${c.autorizadoPor}`})</span>}
+        {podeMandar && (
+          <button onClick={() => void mandar()} disabled={enviando} className="ml-auto flex items-center gap-1 rounded-md px-2 py-1 text-xs text-violet-200 ring-1 ring-violet-500/40 hover:bg-violet-500/10 disabled:opacity-50">
+            {enviando ? <PiSpinnerGapBold className="h-3.5 w-3.5 animate-spin" /> : <PiRobotBold className="h-3.5 w-3.5" />}
+            {c ? 'Mandar de novo para o Claude' : 'Mandar para o Claude'}
+          </button>
+        )}
+      </div>
+      {c?.resumo && <p className="mt-2 whitespace-pre-wrap text-sm text-zinc-300">{c.resumo}</p>}
+      {c?.prUrl && (
+        <a href={c.prUrl} target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 text-sm text-sky-300 hover:underline">
+          <PiArrowSquareOutBold className="h-4 w-4" /> PR para revisar e mesclar
+        </a>
+      )}
+      {c?.oQueFazer && (
+        <p className="mt-2 text-sm text-amber-200">
+          <span className="font-medium">O que uma pessoa precisa fazer:</span> {c.oQueFazer}
+        </p>
+      )}
+      {erro && <p className="mt-2 text-xs text-red-300">{erro}</p>}
+    </div>
   );
 }
 

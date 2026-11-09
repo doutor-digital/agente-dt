@@ -2574,10 +2574,23 @@ model SuporteDemanda {
   notaResolucao     String?   @map("nota_resolucao")
   reabertaEm        DateTime? @map("reaberta_em")
   vezesReaberta     Int       @default(0) @map("vezes_reaberta")
+  /// agente de suporte (Claude Code 24 h na VPS, usuário isolado): fila | trabalhando | feito | falhou
+  claudeStatus        String?   @map("claude_status")
+  /// "grupo" (entrou sozinha: número verificado pelo grupo) ou o e-mail de quem mandou pelo painel
+  claudeAutorizadoPor String?   @map("claude_autorizado_por")
+  claudeIniciadoEm    DateTime? @map("claude_iniciado_em")
+  claudeTerminadoEm   DateTime? @map("claude_terminado_em")
+  claudeResumo        String?   @map("claude_resumo") @db.Text
+  /// o PR que ele abriu (nunca mescla: o merge é do João)
+  claudePrUrl         String?   @map("claude_pr_url")
+  claudePrecisaPessoa Boolean?  @map("claude_precisa_pessoa")
+  /// o que uma pessoa tem de fazer (quando a causa não é código)
+  claudeOQueFazer     String?   @map("claude_o_que_fazer") @db.Text
 
   @@index([criadoEm])
   @@index([analiseIniciadaEm])
   @@index([status])
+  @@index([claudeStatus])
   @@map("suporte_demandas")
 }
 

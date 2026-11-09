@@ -235,6 +235,7 @@ import {
   reabrirHandler,
   resolverHandler,
 } from '../controllers/suporte-painel.controller.js';
+import { mandarParaClaudeHandler, proximaHandler, resultadoHandler } from '../controllers/suporte-claude.controller.js';
 import {
   ligacaoCombinarHandler,
   ligacaoDesligarHandler,
@@ -277,6 +278,10 @@ apiRouter.get('/suporte/conhecimento', requireAuth, requireSuperAdmin, listarCon
 apiRouter.post('/suporte/conhecimento', requireAuth, requireSuperAdmin, criarConhecimentoHandler);
 apiRouter.put('/suporte/conhecimento/:id', requireAuth, requireSuperAdmin, editarConhecimentoHandler);
 apiRouter.delete('/suporte/conhecimento/:id', requireAuth, requireSuperAdmin, apagarConhecimentoHandler);
+apiRouter.post('/suporte/demandas/:protocolo/claude', requireAuth, requireSuperAdmin, mandarParaClaudeHandler);
+// Trabalhador do agente de suporte (Claude Code na VPS, usuário isolado): só com a chave de serviço SUPORTE_CLAUDE_CHAVE.
+apiRouter.post('/suporte/claude/proxima', proximaHandler);
+apiRouter.post('/suporte/claude/:protocolo/resultado', resultadoHandler);
 
 apiRouter.get('/integrations/:unitSlug/session-stats/:leadId', sessionStatsHandler);
 apiRouter.get('/integrations/sla-report', slaReportHandler);

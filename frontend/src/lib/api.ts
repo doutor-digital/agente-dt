@@ -1134,6 +1134,17 @@ export interface DemandaSuporte {
   resolvidaPor: string | null;
   notaResolucao: string | null;
   vezesReaberta: number;
+  /** o agente de suporte (Claude Code 24 h na VPS) */
+  claude: {
+    status: 'fila' | 'trabalhando' | 'feito' | 'falhou';
+    autorizadoPor: string | null;
+    iniciadoEm: string | null;
+    terminadoEm: string | null;
+    resumo: string | null;
+    prUrl: string | null;
+    precisaPessoa: boolean | null;
+    oQueFazer: string | null;
+  } | null;
 }
 
 export interface ItemConhecimento {
@@ -1152,6 +1163,10 @@ export const apiSuporte = {
   },
   async resolver(protocolo: number, nota: string): Promise<{ ok: true; perguntou: boolean; whatsapp: boolean }> {
     const { data } = await http.post(`/suporte/demandas/${protocolo}/resolver`, { nota });
+    return data;
+  },
+  async mandarParaClaude(protocolo: number): Promise<{ ok: true }> {
+    const { data } = await http.post(`/suporte/demandas/${protocolo}/claude`);
     return data;
   },
   async reabrir(protocolo: number): Promise<{ ok: true }> {

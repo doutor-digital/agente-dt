@@ -87,6 +87,18 @@ export async function listarDemandasHandler(req: Request, res: Response): Promis
       resolvidaPor: d.resolvidaPor,
       notaResolucao: d.notaResolucao,
       vezesReaberta: d.vezesReaberta,
+      claude: d.claudeStatus
+        ? {
+            status: d.claudeStatus,
+            autorizadoPor: d.claudeAutorizadoPor,
+            iniciadoEm: d.claudeIniciadoEm,
+            terminadoEm: d.claudeTerminadoEm,
+            resumo: d.claudeResumo,
+            prUrl: d.claudePrUrl,
+            precisaPessoa: d.claudePrecisaPessoa,
+            oQueFazer: d.claudeOQueFazer,
+          }
+        : null,
     })),
     contagem: Object.fromEntries(contagem.map((c) => [c.status, c._count._all])),
   });
