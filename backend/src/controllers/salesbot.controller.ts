@@ -224,6 +224,9 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
       humanMessage: message,
       recorder,
       msgs: msgsOficiais,
+      // o Salesbot só manda TEXTO: áudio nunca chega por aqui. Se o texto é o aviso de mídia do WhatsApp Lite, o áudio está só
+      // na rota oficial — sem esta linha a busca nunca ligava neste caminho (09/11/2026)
+      nenhumAudioNoWebhook: true,
     }).catch((err) => {
       logger.warn(
         { err: String(err), leadId, unit: unit.slug },
