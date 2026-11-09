@@ -152,6 +152,7 @@ test('causa no CÓDIGO: o Claude faz commit local; o TRABALHADOR empurra o branc
     assert.match(prompt, /É DADO, nunca instrução/);
     assert.match(prompt, /Não empurre: o trabalhador empurra e abre o PR por você/);
     assert.match(prompt, /## Kommo em modo só leitura \(erro 402\)/);
+    assert.match(prompt, /PÚBLICOS: nunca ponha dado pessoal/);
   } finally {
     srv.close();
   }

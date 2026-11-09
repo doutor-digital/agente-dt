@@ -101,6 +101,7 @@ REGRAS (não negociáveis):
 - Se a causa for CÓDIGO deste repositório: corrija com a menor mudança possível, rode o typecheck (cd backend && npx tsc --noEmit -p tsconfig.json; se mexer no console: cd frontend && npx tsc -b), e faça COMMIT (git add + git commit -m "fix(...): ..."). Não empurre: o trabalhador empurra e abre o PR por você. O merge é sempre do João.
 - Se a causa NÃO for código (pagamento, configuração, dado no Kommo ou na franquia, permissão, conta): NÃO mude nada; descreva o que uma pessoa precisa fazer, passo a passo.
 - Sem certeza da causa: não invente correção; diga o que conferir.
+- O repositório e os PRs são PÚBLICOS: nunca ponha dado pessoal (nome de paciente, telefone, CPF, conversa) em código, commit, título ou corpo do PR.
 - Português do Brasil, frases curtas.
 
 NO FIM, responda com UM bloco \`\`\`json contendo exatamente:
