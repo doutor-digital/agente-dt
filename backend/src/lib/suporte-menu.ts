@@ -242,6 +242,8 @@ export interface Efeitos {
   garantirIndice(): void;
   /** sorteio 0..1 (limpeza ocasional) */
   sorteio(): number;
+  /** dispara (sem esperar) a análise automática da demanda recém-aberta (`suporte-analise.ts`) */
+  analisar?(protocolo: number): void;
 }
 
 export type Desfecho =
@@ -327,6 +329,8 @@ export async function processarMensagem(msg: Recebida, config: ConfigSuporte, ar
     telegram = await ef.enviarTelegram(montarCartao({ protocolo: salvo.protocolo, jid: msg.jid, abrir: r.abrir, quando: agora }));
     await armazem.marcarTelegram(salvo.protocolo, telegram);
     if (!telegram) logger.warn({ protocolo: salvo.protocolo }, 'suporte-menu: o cartão NÃO chegou ao Telegram — a demanda está só no banco');
+    // a análise roda à parte: o webhook não espera a IA (pode levar até 1 min)
+    ef.analisar?.(salvo.protocolo);
   }
 
   if (ef.sorteio() < 0.01) await armazem.limparAntigos().catch((err: unknown) => logger.warn({ err: String(err) }, 'suporte-menu: limpeza falhou'));

@@ -2557,8 +2557,17 @@ model SuporteDemanda {
   relato          String   @db.Text
   telegramEnviado Boolean  @default(false) @map("telegram_enviado")
   criadoEm        DateTime @default(now()) @map("criado_em")
+  /// análise automática (SUPORTE_ANALISE): quando começou (trava: só uma análise por demanda) e o que a IA devolveu
+  analiseIniciadaEm DateTime? @map("analise_iniciada_em")
+  analise           Json?
+  /// por que a análise não saiu (sem chave, erro da OpenAI, JSON inútil)
+  analiseFalha      String?   @map("analise_falha")
+  /// urgente | hoje | pode_esperar (escolhida pela IA numa lista fechada)
+  prioridade        String?
+  prazoEm           DateTime? @map("prazo_em")
 
   @@index([criadoEm])
+  @@index([analiseIniciadaEm])
   @@map("suporte_demandas")
 }
 

@@ -211,6 +211,7 @@ interface Mundo {
   falhas: { whatsapp: boolean; telegram: boolean; salvar: boolean };
   grupo: UnidadeBasica[];
   relogio: { agora: Date };
+  analisadas: number[];
 }
 
 function criarMundo(): Mundo {
@@ -224,6 +225,7 @@ function criarMundo(): Mundo {
     falhas: { whatsapp: false, telegram: false, salvar: false },
     grupo: [TIMBO],
     relogio: { agora: AGORA },
+    analisadas: [],
     armazem: undefined as unknown as Armazem,
     efeitos: undefined as unknown as Efeitos,
   };
@@ -295,6 +297,9 @@ function criarMundo(): Mundo {
     unidadesDoGrupo: () => m.grupo,
     garantirIndice: () => conta('garantirIndice'),
     sorteio: () => 0.5,
+    analisar: (p) => {
+      m.analisadas.push(p);
+    },
   };
   return m;
 }
@@ -352,6 +357,7 @@ test('LIGADO, caminho feliz com número no grupo: boas-vindas → menu (já reco
   assert.match(m.telegram[0]!, /Suporte #1/);
   assert.match(m.telegram[0]!, /A Sofia não respondeu a paciente Joana/);
   assert.equal(m.chamadas.marcarTelegram, 1);
+  assert.deepEqual(m.analisadas, [1]); // a análise automática foi disparada para o protocolo aberto
   assert.equal(m.conversas.get(jid)?.estado.passo, 'aberta');
   assert.ok(m.chamadas.garantirIndice! >= 4);
   // só a PRIMEIRA resposta (boas-vindas) conta como conversa nova
