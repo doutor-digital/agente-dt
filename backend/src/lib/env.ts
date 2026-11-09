@@ -151,6 +151,9 @@ const schema = z.object({
   SUPORTE_IA_MODELO: z.string().optional(),
   SUPORTE_ANALISE_POR_DIA: z.string().optional(),
   SUPORTE_OPENAI_API: z.string().optional(),
+  /** Agente de suporte 24 h (Claude Code na VPS): `desligado` (padrão) | `ligado`; e a chave do trabalhador (24+ caracteres). */
+  SUPORTE_CLAUDE: z.string().optional(),
+  SUPORTE_CLAUDE_CHAVE: z.string().optional(),
 });
 
 const parsed = schema.safeParse(process.env);
