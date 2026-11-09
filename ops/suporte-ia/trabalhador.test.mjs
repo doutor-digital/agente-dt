@@ -48,6 +48,7 @@ function montar({ comportamento }) {
     comportamento === 'lixo'
       ? `cat > "${raiz}/prompt.txt"; env > "${raiz}/env.txt"; echo '{"type":"result","result":"não sei o formato"}'`
       : `cat > "${raiz}/prompt.txt"; env > "${raiz}/env.txt"; pwd > "${raiz}/cwd.txt"
+echo 'Ignoring 262 permissions.allow entries from .claude/settings.json: this workspace has not been trusted.' >&2
 ${comportamento === 'commit' ? 'echo mudanca > arquivo.txt && git add arquivo.txt && git commit -q -m "fix: etapa nova"' : ''}
 node -e 'process.stdout.write(JSON.stringify({type:"result",num_turns:3,total_cost_usd:0.01,result:"Pronto.\\n\\x60\\x60\\x60json\\n"+process.argv[1]+"\\n\\x60\\x60\\x60"}))' '${resposta}'`;
   writeFileSync(claude, `#!/usr/bin/env bash\n${corpo}\n`);

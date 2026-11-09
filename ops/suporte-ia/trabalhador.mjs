@@ -32,24 +32,28 @@ const NOME_REPO = 'agente-dt';
 
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 
-/** Roda um comando; devolve { codigo, saida }. Nunca lança. */
+/** Roda um comando; devolve { codigo, saida (stdout+stderr, para mensagens), stdout (só a saída normal) }. Nunca lança. */
 function rodar(cmd, args, { cwd, env, tempo = 600_000, entrada } = {}) {
   return new Promise((ok) => {
     const p = spawn(cmd, args, { cwd, env: env ?? E, stdio: ['pipe', 'pipe', 'pipe'] });
     let saida = '';
+    let stdout = '';
     const t = setTimeout(() => {
       saida += '\n[tempo esgotado]';
       p.kill('SIGKILL');
     }, tempo);
-    p.stdout.on('data', (d) => (saida += d));
+    p.stdout.on('data', (d) => {
+      saida += d;
+      stdout += d;
+    });
     p.stderr.on('data', (d) => (saida += d));
     p.on('error', (e) => {
       clearTimeout(t);
-      ok({ codigo: -1, saida: String(e) });
+      ok({ codigo: -1, saida: String(e), stdout: '' });
     });
     p.on('close', (codigo) => {
       clearTimeout(t);
-      ok({ codigo, saida });
+      ok({ codigo, saida, stdout });
     });
     if (entrada) p.stdin.end(entrada);
     else p.stdin.end();
@@ -174,9 +178,10 @@ async function trabalhar(d) {
       { cwd: wt, env: ambienteDoClaude(), tempo: TEMPO_MAX_MS, entrada: prompt },
     );
     rmSync(promptArq, { force: true });
-    let texto = c.saida;
+    // o JSON do CLI vem SÓ pela saída normal; avisos (ex.: "this workspace has not been trusted") vêm pela de erro (09/11)
+    let texto = c.stdout || c.saida;
     try {
-      const j = JSON.parse(c.saida);
+      const j = JSON.parse(c.stdout);
       texto = j.result ?? c.saida;
       log(`demanda #${d.protocolo}: Claude terminou (turnos ${j.num_turns ?? '?'}, custo US$ ${j.total_cost_usd ?? '?'})`);
     } catch {
