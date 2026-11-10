@@ -369,6 +369,23 @@ test('varredura: devolve só quem passou de 1 h; quem não pode voltar não é r
   assert.equal(leituras, 2);
 });
 
+// Timbó, 10/11/2026 (lead 5633928): a equipe falou pelo celular num dia, o paciente respondeu no outro e só aí a
+// pausa nasceu. Contando 1 h da fala, a volta desfazia a pausa no minuto seguinte e a Sofia falava por cima.
+test('pausa que nasce horas depois da fala da equipe segura a Sofia 1 h a partir de quando nasceu', async () => {
+  const falaOntem = new Date(em('09:35').getTime() - 24 * 3600_000);
+  const l = linha({ falaEm: falaOntem, pausadoEm: em('10:08') });
+  const msgs = [fala(falaOntem), entrada(em('10:07'), 'Bom dia')];
+  const cedo = fake(em('10:10'), {}, msgs);
+  assert.equal(await avaliarPausaAberta(l, cedo.deps), 'cedo');
+  assert.deepEqual(cedo.r.chamadas, [], 'não lê o Kommo antes de a pausa fazer 1 h');
+  assert.deepEqual(cedo.r.desmarcados, []);
+  const quase = fake(em('11:07'), {}, msgs);
+  assert.equal(await avaliarPausaAberta(l, quase.deps), 'cedo');
+  const depois = fake(em('11:08'), {}, msgs);
+  assert.equal(await avaliarPausaAberta(l, depois.deps), 'voltou');
+  assert.deepEqual(depois.r.desmarcados, [LEAD]);
+});
+
 test('equipe seguiu falando: depois de ler a conversa a linha só é relida quando a nova última fala fizer 1 h', async () => {
   const msgs = [fala(em('10:25')), fala(em('12:15'), 'Consegui o horário para você', 'Talita')];
   const { deps, r } = fake(em('12:40'), {}, msgs);

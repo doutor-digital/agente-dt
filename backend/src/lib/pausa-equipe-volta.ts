@@ -252,6 +252,12 @@ export async function avaliarPausaAberta(linha: PausaAberta, deps: DepsDaVolta):
   if (emPausa(unit, agora)) return 'unidade_pausada';
   // A última fala nunca é mais velha que a que provocou a pausa: se esta ainda não fez 1 h, nada a ler.
   if (agora.getTime() - linha.falaEm.getTime() < minutos * 60_000) return 'cedo';
+  // A pausa também segura 1 h a partir de quando NASCEU (Timbó, 10/11/2026). Ela só nasce quando o paciente volta a
+  // escrever — às vezes horas depois da fala da equipe pelo celular. Contando só da fala, a volta desfazia a pausa
+  // em 0–3 min e a Sofia respondia por cima da conversa que a equipe conduzia (16 de 86 pausas em 8 dias; lead
+  // 5633928: a Camily falou às 09:35 do dia 9, a paciente respondeu às 10:07 do dia 10, a pausa durou 2 min e a
+  // Sofia mandou 6 mensagens). Assim a equipe tem 1 h para responder ao que o paciente acabou de mandar.
+  if (agora.getTime() - linha.pausadoEm.getTime() < minutos * 60_000) return 'cedo';
 
   const doRegistro: UltimaFala = { em: linha.falaEm, autorNome: linha.falaAutor ?? '' };
   let msgs: MensagemOficial[];
