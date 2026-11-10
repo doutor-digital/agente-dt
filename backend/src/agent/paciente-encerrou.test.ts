@@ -128,3 +128,34 @@ test('despedida certa passa sem corte', () => {
     assert.equal(empurraHorario(t, '2026-10-17T18:14'), false, t);
   }
 });
+
+// Stefany (Timbó, 10/11/2026): "o paciente disse que agora não pode, [ela responde] claro, sem pressa… não, é pressa.
+// Pra que eu entenda, o que lhe fez esperar?". Chave por unidade `encerramento-pergunta-motivo`; fora dela, nada muda.
+test('chave encerramento-pergunta-motivo: quem adia sem consulta ganha UMA pergunta sobre o motivo, nunca horário', () => {
+  const adiou: Fala[] = [ia('Posso te mostrar os horários de amanhã?'), p('agora não posso, vou me organizar e te aviso depois')];
+  assert.equal(pacienteEncerrou(adiou), 'vai_se_organizar');
+
+  const comChave = renderPacienteEncerrou(adiou, { perguntarMotivo: true });
+  assert.match(comChave, /UMA pergunta curta e gentil para entender o que o faz esperar/);
+  assert.match(comChave, /NÃO feche com "sem pressa"/);
+  assert.match(comChave, /NÃO ofereça horário/);
+  assert.match(comChave, /JÁ TEM consulta marcada/);
+  assert.doesNotMatch(comChave, /NÃO faça outra pergunta/);
+
+  // sem a chave: a regra da rede (21/10) continua igual
+  assert.match(renderPacienteEncerrou(adiou), /NÃO faça outra pergunta/);
+  // "tá bom" depois de a Sofia já ter encerrado: continua sem pergunta, mesmo com a chave
+  assert.match(renderPacienteEncerrou(ANTONIA_19_10, { perguntarMotivo: true }), /NÃO faça outra pergunta/);
+
+  const antes = process.env.ENCERRAMENTO_PERGUNTA_MOTIVO_SLUGS;
+  process.env.ENCERRAMENTO_PERGUNTA_MOTIVO_SLUGS = 'doutor-hernia-timbo';
+  try {
+    const timbo = { id: 'u-tb', slug: 'doutor-hernia-timbo', name: 'Timbó', personaEmojis: [], handoffKeywords: [] } as unknown as Unit;
+    const outra = { id: 'u-ou', slug: 'doutor-hernia-outra', name: 'Outra', personaEmojis: [], handoffKeywords: [] } as unknown as Unit;
+    assert.match(composeSystemPrompt({ unit: timbo, historico: adiou }), /o que o faz esperar/);
+    assert.doesNotMatch(composeSystemPrompt({ unit: outra, historico: adiou }), /o que o faz esperar/);
+  } finally {
+    if (antes === undefined) delete process.env.ENCERRAMENTO_PERGUNTA_MOTIVO_SLUGS;
+    else process.env.ENCERRAMENTO_PERGUNTA_MOTIVO_SLUGS = antes;
+  }
+});
