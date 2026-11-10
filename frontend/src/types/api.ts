@@ -291,6 +291,7 @@ export interface Unit {
   personaCompanyName: string | null;
   personaTone: 'casual' | 'formal' | 'friendly' | null;
   personaGreeting: string | null;
+  personaAgentName?: string | null;
   personaResponseLength: 'curta' | 'normal' | 'detalhada';
   personaLanguage: 'pt-BR' | 'en-US' | 'es-ES' | 'fr-FR';
   personaResponseDelaySec: number;
