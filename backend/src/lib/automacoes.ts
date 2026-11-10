@@ -715,6 +715,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/pausa-equipe.ts',
   },
   {
+    id: 'encerramento-pergunta-motivo',
+    chave: 'ENCERRAMENTO_PERGUNTA_MOTIVO_SLUGS',
+    nome: 'Paciente adiou: a Sofia pergunta o que pesou',
+    oQueFaz:
+      'Quando o paciente diz que agora não pode, que vai se organizar ou agradece e encerra SEM consulta marcada, a Sofia não fecha com "claro, sem pressa, fico à disposição": acolhe numa frase e faz UMA pergunta curta e gentil para entender o que o faz esperar (dor, valor, agenda, falar com a família). Se o motivo é com a equipe (valor, convênio, condição de pagamento), oferece chamar a equipe. Pedido da Stefany (Timbó, 10/11/2026).',
+    pegadinha:
+      'Desligada, vale a regra da rede (21/10, auditoria de Araguaína): resposta curta e calorosa, sem pergunta. Ligada ou não, a Sofia NUNCA oferece horário nessa hora (o corte de horário continua) e quem já tem consulta marcada só recebe a despedida curta. "Tá bom"/"ok" depois de a Sofia já ter encerrado continua sem pergunta. Não tem "só no papel": é texto do prompt.',
+    risco: 'comportamento',
+    temSeco: false,
+    quandoVazio: 'desligado',
+    arquivo: 'src/agent/paciente-encerrou.ts',
+  },
+  {
     id: 'cache-agenda',
     chave: 'CACHE_AGENDA_SLUGS',
     nome: 'Cache curto dos horários da agenda',

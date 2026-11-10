@@ -1773,7 +1773,9 @@ function blocosDoHistorico(unit: Unit, historico: Fala[] | undefined): { semPedi
   const rep = renderRepeticao(repeticao);
   if (rep) blocos.push(rep);
   // Agradeceu/se despediu/vai se organizar: resposta curta, sem horário (paciente-encerrou.ts).
-  const encerrou = renderPacienteEncerrou(historico);
+  const encerrou = renderPacienteEncerrou(historico, {
+    perguntarMotivo: automacaoLigada(unit.slug, 'encerramento-pergunta-motivo', process.env.ENCERRAMENTO_PERGUNTA_MOTIVO_SLUGS),
+  });
   if (encerrou) blocos.push(encerrou);
   // Só quando a ficha dá o valor da CONSULTA sem ambiguidade (os dois valores, antecipado e no dia). Com R$ solto nas
   // fontes, mandar "dizer o valor agora" sem o número certo convidaria a inventar ou trocar o valor (achado do Codex,

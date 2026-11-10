@@ -66,10 +66,35 @@ export function pacienteEncerrou(falas: Fala[]): Encerramento {
   return null;
 }
 
-/** O bloco do turno. Vazio quando ele não encerrou. */
-export function renderPacienteEncerrou(falas: Fala[] | undefined): string {
+/**
+ * O bloco do turno. Vazio quando ele não encerrou.
+ *
+ * `perguntarMotivo` (chave `encerramento-pergunta-motivo`, pedido da Stefany, Timbó, 10/11/2026): "o paciente disse que
+ * agora não pode e ela responde 'claro, sem pressa'… não, é pressa. Ela tem que perguntar: mas pra que eu entenda, o
+ * que lhe fez esperar?". Ligada, quem adia ou encerra sem consulta recebe UMA pergunta sobre o motivo — nunca horário
+ * (o corte de horário em graph.ts continua valendo). O "tá bom" depois da despedida da Sofia segue sem pergunta.
+ */
+export function renderPacienteEncerrou(falas: Fala[] | undefined, opcoes: { perguntarMotivo?: boolean } = {}): string {
   const enc = falas ? pacienteEncerrou(falas) : null;
   if (!enc) return '';
+  if (opcoes.perguntarMotivo && enc !== 'concordou') {
+    const oQue =
+      enc === 'agradeceu'
+        ? 'Ele agradeceu / se despediu nesta mensagem.'
+        : 'Ele disse que agora não pode, que vai se organizar ou que avisa depois.';
+    return (
+      '<paciente_encerrou>\n(contado pelo sistema no histórico; vale mais que a regra da pergunta de continuidade)\n' +
+      `${oQue}\n` +
+      '- Se ele JÁ TEM consulta marcada: responda curto e caloroso, pode lembrar o dia e a hora numa frase, e NÃO pergunte nada.\n' +
+      '- Se ainda NÃO marcou: NÃO feche com "sem pressa", "fico à disposição" ou "quando puder". Acolha numa frase e faça ' +
+      'UMA pergunta curta e gentil para entender o que o faz esperar (ex.: "Claro! Só pra eu te ajudar melhor: o que ' +
+      'te faz preferir esperar agora?"). Se ele já disse o motivo, responda ao motivo em uma frase.\n' +
+      '- Se o motivo é com a equipe (valor, convênio, forma de pagamento, falar com alguém), ofereça chamar a equipe ' +
+      'para conversar com ele por aqui.\n' +
+      '- NÃO ofereça horário, NÃO pergunte "manhã ou tarde" e NÃO peça confirmação de vinda nesta mensagem.\n' +
+      '</paciente_encerrou>'
+    );
+  }
   const oQue =
     enc === 'agradeceu'
       ? 'Ele agradeceu / se despediu nesta mensagem.'
