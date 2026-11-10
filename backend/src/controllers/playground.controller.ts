@@ -33,6 +33,13 @@ const messageSchema = z.object({
 
 const runSchema = z.object({
   messages: z.array(messageSchema).min(1).max(40),
+  /**
+   * Texto-base SÓ PARA ESTE TESTE (nada é gravado). Vira a base do prompt desta chamada em qualquer unidade: entra no
+   * lugar de `units.system_prompt` E o prompt do AgentConfig sai, como se o piloto `prompt-da-unidade` estivesse ligado
+   * (sem isso, fora do piloto, o AgentConfig venceria e o teste rodaria outro texto calado — ver `escolherBase`).
+   * Só SUPER_ADMIN. Serve para testar um prompt novo antes de publicar (Sofia 2.0).
+   */
+  unitSystemPrompt: z.string().min(1).max(60_000).optional(),
 });
 
 interface SandboxAction {
@@ -345,11 +352,19 @@ export async function playgroundRunHandler(req: Request, res: Response): Promise
     return;
   }
 
-  const unit = await prisma.unit.findUnique({ where: { id: unitId } });
-  if (!unit) {
+  const promptDeTeste = parsed.data.unitSystemPrompt;
+  // troca as instruções inteiras e roda na chave do modelo da clínica: só o super admin
+  if (promptDeTeste && req.user?.role !== 'SUPER_ADMIN') {
+    res.status(403).json({ error: 'prompt_de_teste_so_admin' });
+    return;
+  }
+  const unitDoBanco = await prisma.unit.findUnique({ where: { id: unitId } });
+  if (!unitDoBanco) {
     res.status(404).json({ error: 'unit_not_found' });
     return;
   }
+  // prompt de teste: vale só para esta chamada, a unidade no banco não muda
+  const unit = promptDeTeste ? { ...unitDoBanco, systemPrompt: promptDeTeste } : unitDoBanco;
   const useAnthropic = unit.llmProvider === 'anthropic' && !!unit.anthropicApiKey;
   const useGoogle = unit.llmProvider === 'google' && !!unit.googleApiKey;
   if (!useAnthropic && !useGoogle && !resolveOpenAIApiKey(unit)) {
@@ -365,7 +380,8 @@ export async function playgroundRunHandler(req: Request, res: Response): Promise
   const isFirstTurn = userCount === 1 && assistantCount === 0;
   const systemPrompt = await composeSystemPromptForUnit({
     unit,
-    agentConfigPrompt: config.systemPrompt,
+    // com prompt de teste, o do AgentConfig sai: assim o teste é a base em qualquer unidade (dentro ou fora do piloto)
+    agentConfigPrompt: promptDeTeste ? undefined : config.systemPrompt,
     userMessage: lastUser?.content,
     isFirstTurn,
     excludeLeadFieldRules: false,
@@ -497,6 +513,8 @@ operador revisar.`;
       actions,
       timeline,
       meta: {
+        /** 'teste' = o texto-base desta chamada foi o `unitSystemPrompt` recebido; 'vivo' = o de produção */
+        base: promptDeTeste ? 'teste' : 'vivo',
         model: modelName,
         iterations,
         totalLatencyMs,
