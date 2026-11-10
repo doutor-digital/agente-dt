@@ -4,7 +4,14 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { prisma } from './prisma.js';
+import { env } from './env.js';
+import { cifrar } from './integracoes/cofre.js';
+import type { Unit } from '@prisma/client';
 import {
+  DIAS_PARA_DESISTIR,
+  unidadesComBaixaPendente,
+  varrerUnidade,
   CAMPO_PAGO,
   conciliar,
   marcarPagoNoCartao,
@@ -18,7 +25,7 @@ import {
 import type { LinhaDoSinal } from './sinal-pix.js';
 
 const linha = (over: Partial<LinhaDoSinal> = {}): LinhaDoSinal => ({
-  id: 's1', unitId: 'u1', leadId: '28000001', linkId: '725104409743', url: 'https://www.asaas.com/c/725104409743', valorCentavos: 5000,
+  id: 's1', unitId: 'u1', clinica: 'doutor-hernia-araguaina', consultaEm: '2026-11-14T09:00', leadId: '28000001', linkId: '725104409743', url: 'https://www.asaas.com/c/725104409743', valorCentavos: 5000,
   venceEm: '2026-11-13', status: 'pendente', paymentId: null, criadoEm: new Date('2026-11-10T15:00:00Z'), pagoEm: null, avisadoEm: null, ...over,
 });
 const pag = (over: Partial<PagamentoDoAsaas> = {}): PagamentoDoAsaas => ({ id: 'pay_1', paymentLink: '725104409743', status: 'RECEIVED', value: 50, billingType: 'PIX', ...over });
@@ -152,4 +159,71 @@ test('as notas dizem o que aconteceu, sem cobrar o paciente', () => {
   const venceu = notaDoVencimento(linha());
   assert.match(venceu, /venceu em 13\/11 sem pagamento/);
   assert.match(venceu, /Nada foi cobrado do paciente/);
+});
+
+// ── a varredura (prisma e Asaas falsos) ──────────────────────────────────────────────────────────────────────────────────────────
+const sinaisNoBanco: LinhaDoSinal[] = [];
+const consultasAoBanco: Array<{ model: string; where: any }> = [];
+Object.defineProperty(prisma, 'sinalPix', {
+  value: {
+    findMany: async (a: any) => {
+      consultasAoBanco.push({ model: 'sinalPix', where: a.where });
+      return a.distinct ? sinaisNoBanco.filter((l) => l.status === 'pendente').map((l) => ({ unitId: l.unitId })) : sinaisNoBanco.filter((l) => l.unitId === a.where.unitId && (l.status === 'pendente' || (l.avisadoEm === null && l.status !== 'criando'))).map((l) => ({ ...l }));
+    },
+    updateMany: async ({ where, data }: any) => {
+      const l = sinaisNoBanco.find((x) => x.id === where.id && (!where.status || x.status === where.status));
+      if (l) Object.assign(l, data);
+      return { count: l ? 1 : 0 };
+    },
+    update: async ({ where, data }: any) => Object.assign(sinaisNoBanco.find((x) => x.id === where.id)!, data),
+  },
+  configurable: true,
+});
+Object.defineProperty(prisma, 'unit', {
+  value: { findMany: async (a: any) => { consultasAoBanco.push({ model: 'unit', where: a.where }); return [UNIDADE]; }, findUnique: async () => null },
+  configurable: true,
+});
+Object.defineProperty(prisma, 'chaveDeIntegracao', {
+  value: { findUnique: async () => ({ id: 'k', unitId: 'u1', chaveCifrada: cifrar('$aact_chave_de_teste_000000000000', process.env.INTEGRACOES_CHAVE_MESTRA || env.SESSION_JWT_SECRET), unit: { slug: 'doutor-hernia-araguaina', isActive: true } }) },
+  configurable: true,
+});
+const UNIDADE = { id: 'u1', slug: 'doutor-hernia-araguaina', name: 'Araguaína', spineTimezone: 'America/Sao_Paulo', kommoAccessToken: 'tok', kommoSubdomain: 'x' } as unknown as Unit;
+const idas: string[] = [];
+let statusAsaas = 403;
+globalThis.fetch = (async (url: string) => {
+  idas.push(String(url));
+  return new Response(JSON.stringify(statusAsaas === 200 ? { data: [], hasMore: false } : { errors: [{ description: 'sem permissão' }] }), { status: statusAsaas });
+}) as typeof fetch;
+
+test('a baixa varre quem tem sinal PENDENTE mesmo com a flag da unidade desligada (a consulta ao banco não filtra por sinal_pix_centavos)', async () => {
+  sinaisNoBanco.length = 0;
+  consultasAoBanco.length = 0;
+  sinaisNoBanco.push(linha({ id: 'p1' }));
+  const units = await unidadesComBaixaPendente();
+  assert.deepEqual(units.map((u) => u.slug), ['doutor-hernia-araguaina']);
+  const q = consultasAoBanco.find((c) => c.model === 'unit')!;
+  assert.deepEqual(q.where.id.in, ['u1']);
+  assert.ok(!('sinalPixCentavos' in q.where), 'sem filtro pela flag');
+  sinaisNoBanco.length = 0;
+  assert.deepEqual(await unidadesComBaixaPendente(), []);
+});
+
+test('403 permanente do Asaas: a unidade fica 1 h sem ser relida (não bate a cada 5 min), e o pendente muito antigo sai da fila', async () => {
+  sinaisNoBanco.length = 0;
+  idas.length = 0;
+  statusAsaas = 403;
+  const hoje = new Date().toISOString().slice(0, 10);
+  sinaisNoBanco.push(linha({ id: 'p1', venceEm: hoje, criadoEm: new Date() }));
+  await varrerUnidade(UNIDADE, false);
+  const primeira = idas.length;
+  assert.ok(primeira >= 1, 'tentou ler');
+  await varrerUnidade(UNIDADE, false);
+  assert.equal(idas.length, primeira, 'segunda varredura não tentou de novo');
+  // pendente que passou de DIAS_PARA_DESISTIR do fim: expirado sem nota (avisadoEm marcado), nunca mais na fila
+  const antigo = new Date(Date.now() - (DIAS_PARA_DESISTIR + 3) * 86_400_000).toISOString().slice(0, 10);
+  sinaisNoBanco.length = 0;
+  sinaisNoBanco.push(linha({ id: 'velho', venceEm: antigo, criadoEm: new Date(Date.now() - 60 * 86_400_000) }));
+  await varrerUnidade(UNIDADE, false);
+  assert.equal(sinaisNoBanco[0]!.status, 'expirado');
+  assert.ok(sinaisNoBanco[0]!.avisadoEm);
 });

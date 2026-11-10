@@ -21,6 +21,7 @@ import { abrirTarefaParaEquipe } from './confirmacao-so-com-crm.js';
 import { fim8 } from '../lib/paciente-existente.js';
 import { fmtBRL, precosDaConsulta, sinalDaUnidade, type SinalDaUnidade } from './prompt-composer.js';
 import { buildGerarSinalPix, registrarLeadDoSinal } from './sinal-pix-tool.js';
+import { acompanharRemarcacao } from '../lib/sinal-pix.js';
 import { avisarJoao } from '../lib/alerta-whatsapp.js';
 import { avisoLigadoPara, chaveDoAviso, textoDoAviso } from '../lib/aviso-de-agendamento.js';
 import { comQuemVaiSerAtendido } from '../lib/nome-do-profissional.js';
@@ -1811,6 +1812,12 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
           })
           .catch((err) => logger.warn({ err, leadId: args.leadId }, 'agenda: falha ao gravar vínculo após agendar'));
         AgendaReconcileService.esqueceConsulta(fresca.id, args.leadId);
+        // Sofia 2.0: remarcar não é consulta nova — o sinal (pendente ou pago) acompanha a data nova. Só nas unidades com sinal.
+        if (sinal && args.remarcando) {
+          await acompanharRemarcacao(fresca, args.leadId, `${args.data}T${args.hora}`).catch((err) =>
+            logger.warn({ err: String(err), leadId: args.leadId }, 'sinal-pix: não consegui mover o sinal para a consulta remarcada'),
+          );
+        }
       }
 
       if (kommo && args.leadId) {

@@ -105,13 +105,23 @@ Object.defineProperty(prisma, 'chaveDeIntegracao', {
 });
 Object.defineProperty(prisma, 'sinalPix', {
   value: {
-    findFirst: async ({ where }: any) =>
-      sinais.filter((l) => l.unitId === where.unitId && l.leadId === where.leadId && where.status.in.includes(l.status) && l.criadoEm >= where.criadoEm.gte).sort((a, b) => b.criadoEm - a.criadoEm)[0] ?? null,
-    count: async ({ where }: any) => sinais.filter((l) => l.unitId === where.unitId && l.criadoEm >= where.criadoEm.gte).length,
+    findMany: async ({ where }: any) =>
+      sinais.filter((l) => l.clinica === where.clinica && l.leadId === where.leadId && where.status.in.includes(l.status) && l.criadoEm >= where.criadoEm.gte).sort((a, b) => b.criadoEm - a.criadoEm),
+    count: async ({ where }: any) => sinais.filter((l) => l.clinica === where.clinica && l.criadoEm >= where.criadoEm.gte).length,
     create: async ({ data }: any) => {
       const l = { id: `s${sinais.length + 1}`, status: 'pendente', paymentId: null, criadoEm: new Date(), pagoEm: null, avisadoEm: null, ...data };
       sinais.push(l);
       return l;
+    },
+    updateMany: async ({ where, data }: any) => {
+      const l = sinais.find((x) => x.id === where.id);
+      if (l) Object.assign(l, data);
+      return { count: l ? 1 : 0 };
+    },
+    deleteMany: async ({ where }: any) => {
+      const i = sinais.findIndex((x) => x.id === where.id);
+      if (i >= 0) sinais.splice(i, 1);
+      return { count: i >= 0 ? 1 : 0 };
     },
   },
   configurable: true,
@@ -244,7 +254,7 @@ test('gerar_sinal_pix SEM argumentos (o cartão é o da consulta marcada no turn
   assert.match(outra, /MESMO link/);
   assert.equal(chamadasAoAsaas.length, 1);
   assert.equal(sinais.length, 1);
-  assert.ok(travas.every((t) => t === 'sinal-pix:u-arag:28000001') && travas.length === 2, `uma trava por geração: ${travas}`);
+  assert.ok(travas.every((t) => t === 'sinal-pix:doutor-hernia-araguaina:28000001') && travas.length === 2, `a trava é da clínica+cartão (uma por checagem): ${travas}`);
 });
 
 test('sem consulta marcada no cartão a ferramenta não gera sinal', async () => {
@@ -326,7 +336,8 @@ test('o leadId que o modelo escreve NÃO troca o cartão da consulta marcada no 
 });
 
 test('link gerado mas não gravado no banco: a Sofia ainda recebe o link e a equipe ganha a tarefa de conferir o pagamento à mão', async () => {
-  (prisma as any).sinalPix.create = async () => { throw new Error('banco fora'); };
+  const updateOriginal = (prisma as any).sinalPix.updateMany;
+  (prisma as any).sinalPix.updateMany = async () => { throw new Error('banco fora'); };
   try {
     const r = await gerarSinal(atual).func({ leadId: 83 });
     assert.ok(r.includes('https://www.asaas.com/c/725104409743'));
@@ -334,8 +345,7 @@ test('link gerado mas não gravado no banco: a Sofia ainda recebe o link e a equ
     assert.match(tarefas[0]!.text, /CONFERIR O PIX DO SINAL · doutor-hernia-araguaina/);
     assert.match(tarefas[0]!.text, /a baixa automática não vai enxergar o pagamento/);
   } finally {
-    // devolve o dublê de sempre
-    (prisma as any).sinalPix.create = async ({ data }: any) => { const l = { id: `s${sinais.length + 1}`, status: 'pendente', paymentId: null, criadoEm: new Date(), pagoEm: null, avisadoEm: null, ...data }; sinais.push(l); return l; };
+    (prisma as any).sinalPix.updateMany = updateOriginal;
   }
 });
 
@@ -357,4 +367,48 @@ test('sem marcação no turno e sem conversa para o leadId do modelo: nada é ge
   const r = await gerarSinal(atual).func({ leadId: 424242 });
   assert.match(r, /Não achei esta conversa/);
   assert.equal(chamadasAoAsaas.length, 0);
+});
+
+test('consulta que JÁ PASSOU no cartão: a ferramenta recusa gerar sinal (hoje só conferia que existia data)', async () => {
+  agendadoPara = '2020-01-01T09:00';
+  const r = await gerarSinal(atual).func({ leadId: 85 });
+  assert.match(r, /A consulta marcada neste cartão já passou\. NÃO gere sinal/);
+  assert.equal(chamadasAoAsaas.length, 0);
+  assert.equal(sinais.length, 0);
+});
+
+test('Resgate e comercial no MESMO cartão: o link é um só, e o segundo lado recebe o mesmo (nada de 2º Pix pagável)', async () => {
+  const resgate = unidade({ id: 'u-arag-resgate', slug: 'araguaina-resgate', name: 'Araguaína - Resgate' });
+  unidades.set(resgate.id, resgate);
+  const a = await gerarSinal(resgate).func({ leadId: 90 });
+  assert.match(a, /Pix do sinal de R\$ 50 gerado/);
+  const b = await gerarSinal(atual).func({ leadId: 90 });
+  assert.match(b, /MESMO link/);
+  assert.equal(chamadasAoAsaas.length, 1);
+  assert.equal(sinais.length, 1);
+  assert.equal(sinais[0]!.clinica, 'doutor-hernia-araguaina');
+  // pago por um lado: o outro diz "já pago" e não gera
+  sinais[0]!.status = 'pago';
+  assert.match(await gerarSinal(resgate).func({ leadId: 90 }), /JÁ foi pago/);
+  assert.match(await gerarSinal(atual).func({ leadId: 90 }), /JÁ foi pago/);
+  assert.equal(chamadasAoAsaas.length, 1);
+});
+
+test('remarcar_consulta (o passo de criar do agendar_consulta com remarcando) move o sinal para a data nova; a consulta nova depois de uma que passou pede sinal novo', async () => {
+  // sinal pago da consulta de DIA; o paciente remarca para 5 dias depois
+  await gerarSinal(atual).func({ leadId: 91 });
+  sinais[0]!.status = 'pago';
+  const hora = await primeiroHorario(atual);
+  const outroDia = (() => { let t = Date.now() + 12 * 86_400_000; while (feriadoNacional(agoraLocalISO(TZ, new Date(t)).slice(0, 10))) t += 86_400_000; return agoraLocalISO(TZ, new Date(t)).slice(0, 10); })();
+  const r = await agendar(atual).func({ idClient: 9, data: outroDia, hora, leadId: 91, remarcando: true });
+  assert.match(r, /^Consulta marcada para /);
+  assert.equal(sinais[0]!.consultaEm, `${outroDia}T${hora}`, 'o sinal acompanha a remarcação');
+  agendadoPara = `${outroDia}T${hora}`;
+  assert.match(await gerarSinal(atual).func({ leadId: 91 }), /JÁ foi pago/);
+  // o paciente compareceu/faltou: a consulta do sinal ficou no passado; a próxima consulta pede sinal NOVO
+  sinais[0]!.consultaEm = '2020-01-01T09:00';
+  agendadoPara = `${DIA}T09:00`;
+  const nova = await gerarSinal(atual).func({ leadId: 91 });
+  assert.match(nova, /Pix do sinal de R\$ 50 gerado/);
+  assert.equal(sinais.length, 2);
 });

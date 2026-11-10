@@ -15,7 +15,7 @@ import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import type { TraceRecorder } from './trace-recorder.js';
 import type { KommoClient } from '../services/kommo.service.js';
-import { diaCurto, gerarSinalPix, ID_SINAL_PIX, type ResultadoDoSinal } from '../lib/sinal-pix.js';
+import { diaCurto, fusoDoSinal, gerarSinalPix, ID_SINAL_PIX, instanteLocal, type ResultadoDoSinal } from '../lib/sinal-pix.js';
 import { estadoDaAutomacao } from '../lib/automacoes-estado.js';
 import { abrirTarefaParaEquipe } from './confirmacao-so-com-crm.js';
 import { fmtBRL, sinalDaUnidade, type SinalDaUnidade } from './prompt-composer.js';
@@ -92,14 +92,17 @@ export function buildGerarSinalPix({ unit, recorder, kommo }: ContextoDoSinal) {
         .catch(() => null);
       const quando = vinculo?.agendadoPara ?? null;
       if (!quando) return 'Ainda não há consulta marcada neste cartão. Marque primeiro com agendar_consulta; só depois gere o sinal.';
-      const dia = quando.slice(0, 10);
+      // consulta que já passou (compareceu, faltou, ou o horário ficou para trás): sinal de consulta que não existe mais; a nova pede agendar_consulta antes
+      if (quando.slice(0, 16) < instanteLocal(new Date(), fusoDoSinal(fresca))) {
+        return 'A consulta marcada neste cartão já passou. NÃO gere sinal: marque a consulta nova com agendar_consulta e só então gere o sinal dela.';
+      }
 
       // Gerar o link sem a baixa LIGADA deixaria o paciente pagar de verdade e ninguém saber (sem webhook, quem enxerga o Pix é o worker, e em "só no
       // papel" ele não grava nada): só com a baixa ligada; senão a equipe manda o Pix.
       const r: ResultadoDoSinal =
         estadoDaAutomacao(fresca.slug, ID_SINAL_PIX, process.env.SINAL_PIX_SLUGS) !== 'ligado'
           ? { tipo: 'falhou', motivo: 'baixa-desligada', detalhe: 'a automação sinal-pix (baixa do Pix) não está ligada nesta unidade' }
-          : await gerarSinalPix(fresca, leadId, dia).catch((err: unknown): ResultadoDoSinal => {
+          : await gerarSinalPix(fresca, leadId, quando).catch((err: unknown): ResultadoDoSinal => {
               // nunca derruba a resposta: a trava do banco, o fuso ou qualquer imprevisto viram o caminho "a equipe envia o Pix"
               logger.error({ err: String(err), unit: fresca.slug, leadId }, 'sinal-pix: a geração lançou — segue como falha');
               return { tipo: 'falhou', motivo: 'asaas', detalhe: String(err).slice(0, 300) };
@@ -120,7 +123,7 @@ export function buildGerarSinalPix({ unit, recorder, kommo }: ContextoDoSinal) {
             kommo,
             recorder,
             motivo: 'sinal_pix_falhou',
-            detalhe: `Motivo: ${r.motivo === 'sem-chave' ? 'a unidade não tem a chave do Asaas no cofre' : r.motivo === 'teto' ? 'teto de links por dia atingido' : r.motivo === 'baixa-desligada' ? 'a baixa automática do sinal não está ligada nesta unidade' : 'o Asaas recusou ou não respondeu'}`,
+            detalhe: `Motivo: ${r.motivo === 'sem-chave' ? 'a unidade não tem a chave do Asaas no cofre' : r.motivo === 'teto' ? 'teto de links por dia atingido' : r.motivo === 'baixa-desligada' ? 'a baixa automática do sinal não está ligada nesta unidade' : r.motivo === 'em-andamento' ? 'outra geração do mesmo sinal não terminou' : 'o Asaas recusou ou não respondeu'}`,
           }).catch((err) => {
             logger.warn({ err: String(err), leadId }, 'sinal-pix: falha ao abrir a tarefa da equipe');
             return 'falhou' as const;

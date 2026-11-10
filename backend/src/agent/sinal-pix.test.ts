@@ -176,6 +176,34 @@ test('guardrail: "sinal antecipado de R$ 50" NÃO vira R$ 250 com a flag; sem a 
   assert.deepEqual(corrigirValorAntecipado('R$ 50 antecipado', { antecipado: 250 }).corrigiu, [50]);
 });
 
+test('guardrail: R$ 50/200 valem como EXATOS — sem a tolerância de parcela do catálogo (R$ 100 e R$ 67 de "metade/terço de R$ 200" continuam inventados)', () => {
+  for (const [texto, certo] of [
+    ['A consulta sai por R$ 100 na clínica, pode ser?', /R\$ 100/],
+    ['Fica R$ 67 no dia, pode ser?', /R\$ 67/],
+    ['O sinal de R$ 100 garante a vaga, pode ser?', /R\$ 100/],
+  ] as const) {
+    const com = aplicarGuardrail(texto, comSinal());
+    assert.equal(com.rewritten, true, texto);
+    assert.doesNotMatch(com.text, certo, texto);
+    // igual ao que acontece SEM a flag
+    assert.equal(com.text, aplicarGuardrail(texto, unidade()).text, texto);
+  }
+  // os dois valores exatos do sinal, na frase do sinal, seguem passando
+  const ok = 'Para garantir a vaga, o sinal é de R$ 50 agora e o restante, R$ 200, fica para o dia. Pode ser?';
+  assert.equal(aplicarGuardrail(ok, comSinal()).text, ok);
+});
+
+test('guardrail: "no dia" e "na clínica" SOZINHOS não tornam R$ 200 legítimo (a frase tem de falar de sinal, garantir ou restante)', () => {
+  for (const t of ['Fica R$ 200 no dia, pode ser?', 'Você paga R$ 200 na clínica, combinado?']) {
+    const r = aplicarGuardrail(t, comSinal());
+    assert.equal(r.rewritten, true, t);
+    assert.doesNotMatch(r.text, /R\$ 200/, t);
+  }
+  // R$ 200 numa frase e "sinal" em OUTRA frase: o 200 continua inventado (a checagem é por frase)
+  const r = aplicarGuardrail('Fica R$ 200 no dia. O sinal é pelo Pix. Pode ser?', comSinal());
+  assert.doesNotMatch(r.text, /R\$ 200/);
+});
+
 test('guardrail: R$ 50 / R$ 200 SOLTOS (sem falar de sinal nem do que fica no dia) continuam sendo valor inventado', () => {
   const r = aplicarGuardrail('A consulta custa R$ 200, pode ser?', comSinal());
   assert.equal(r.rewritten, true);

@@ -20,7 +20,7 @@ import { logger } from './logger.js';
 import { estadoDaAutomacao } from './automacoes-estado.js';
 import { registrarSimulacao } from './so-no-papel.js';
 import { createKommoClient, type KommoClient } from '../services/kommo.service.js';
-import { asaasGet } from './integracoes/asaas.js';
+import { asaasGet, ErroAsaas } from './integracoes/asaas.js';
 import { fusoDaUnidade } from './fuso.js';
 import { chaveDaClinica, diaCurto, diaNoFuso, ID_SINAL_PIX, somarDias, type LinhaDoSinal } from './sinal-pix.js';
 import { pagouOAntecipado } from './follow-up-worker.js';
@@ -33,6 +33,11 @@ const POR_PAGINA = 100;
 const MAX_PAGINAS = 30;
 /** Dias depois do fim do link em que ainda se espera o pagamento (um Pix gerado no último dia pode ser pago depois). */
 export const CARENCIA_DO_LINK_DIAS = 2;
+/** Link pendente que passou DISTO do fim sem que dê para ler o Asaas (chave revogada, 403 permanente) deixa de ser tentado: vira expirado, sem nota. */
+export const DIAS_PARA_DESISTIR = 30;
+/** Chave que o Asaas recusa (401/403) não adianta tentar de 5 em 5 minutos: espera isto antes de tentar de novo. */
+const ESPERA_CHAVE_RECUSADA_MS = 60 * 60_000;
+const chaveRecusadaAte = new Map<string, number>();
 export const CAMPO_PAGO = '✓ Consulta pg antecipado';
 const STATUS_QUE_PAGAM = new Set(['RECEIVED', 'CONFIRMED']);
 
@@ -147,7 +152,7 @@ let rodando = false;
 
 const estado = (slug: string) => estadoDaAutomacao(slug, ID_SINAL_PIX, process.env.SINAL_PIX_SLUGS);
 
-async function varrerUnidade(unit: Unit, seco: boolean): Promise<void> {
+export async function varrerUnidade(unit: Unit, seco: boolean): Promise<void> {
   // Pendentes + os que já mudaram de status mas ainda não deixaram a nota no cartão (o Kommo falhou na vez anterior).
   const linhas = (await prisma.sinalPix.findMany({
     where: { unitId: unit.id, OR: [{ status: 'pendente' }, { status: { in: ['pago', 'expirado'] }, avisadoEm: null }] },
@@ -157,18 +162,36 @@ async function varrerUnidade(unit: Unit, seco: boolean): Promise<void> {
   if (linhas.length === 0) return;
   const hoje = diaNoFuso(new Date(), fusoDaUnidade(unit));
 
-  const pendentes = linhas.filter((l) => l.status === 'pendente');
+  // Pendente que já passou da hora de desistir sai da fila (a leitura do Asaas pode estar falhando para sempre): expirado, sem nota.
+  const velhas = linhas.filter((l) => l.status === 'pendente' && somarDias(l.venceEm, DIAS_PARA_DESISTIR) < hoje);
+  for (const l of velhas) {
+    if (seco) continue;
+    await prisma.sinalPix.updateMany({ where: { id: l.id, status: 'pendente' }, data: { status: 'expirado', avisadoEm: new Date() } }).catch(() => undefined);
+    logger.warn({ unit: unit.slug, leadId: l.leadId, linkId: l.linkId }, `${ID_SINAL_PIX}: link pendente há mais de ${DIAS_PARA_DESISTIR} dias do fim — desisti dele`);
+  }
+  const pendentes = linhas.filter((l) => l.status === 'pendente' && !velhas.includes(l));
   let decisoes: Decisao[] = [];
   if (pendentes.length > 0) {
     const conta = await chaveDaClinica({ id: unit.id, slug: unit.slug });
     if (!conta) {
       logger.warn({ unit: unit.slug, pendentes: pendentes.length }, `${ID_SINAL_PIX}: a unidade tem sinais pendentes mas não tem chave do Asaas — nada a ler`);
+    } else if ((chaveRecusadaAte.get(conta.unitId) ?? 0) > Date.now()) {
+      // chave recusada há pouco: não insiste de 5 em 5 minutos (os cartões já pagos/vencidos abaixo seguem sendo atualizados)
     } else {
       const menor = pendentes.reduce((m, l) => (l.criadoEm < m ? l.criadoEm : m), pendentes[0]!.criadoEm);
       const desde = menor.toISOString().slice(0, 10);
-      const { pagamentos, completa } = await pagamentosDesde((caminho, query) => asaasGet(conta.unitId, conta.chave, caminho, query), somarDias(desde, -1));
-      if (!completa) logger.warn({ unit: unit.slug }, `${ID_SINAL_PIX}: leitura do Asaas cortada no teto de páginas — só dá baixa nesta varredura, não vence link`);
-      decisoes = conciliar(pendentes, pagamentos, hoje, completa);
+      let lidos: Awaited<ReturnType<typeof pagamentosDesde>> | null = null;
+      try {
+        lidos = await pagamentosDesde((caminho, query) => asaasGet(conta.unitId, conta.chave, caminho, query), somarDias(desde, -1));
+      } catch (err) {
+        if (!(err instanceof ErroAsaas && (err.status === 401 || err.status === 403))) throw err;
+        chaveRecusadaAte.set(conta.unitId, Date.now() + ESPERA_CHAVE_RECUSADA_MS);
+        logger.warn({ unit: unit.slug, status: err.status }, `${ID_SINAL_PIX}: o Asaas recusou a chave — espero 1 h antes de tentar de novo (links pendentes ficam sem baixa até lá)`);
+      }
+      if (lidos) {
+        if (!lidos.completa) logger.warn({ unit: unit.slug }, `${ID_SINAL_PIX}: leitura do Asaas cortada no teto de páginas — só dá baixa nesta varredura, não vence link`);
+        decisoes = conciliar(pendentes, lidos.pagamentos, hoje, lidos.completa);
+      }
     }
   }
 
@@ -218,11 +241,25 @@ async function varrerUnidade(unit: Unit, seco: boolean): Promise<void> {
   }
 }
 
+/**
+ * As unidades com sinal a baixar (pendente, ou pago/vencido ainda sem nota no cartão), INDEPENDENTE da flag `sinalPixCentavos`: desligar o sinal
+ * numa unidade não pode deixar um Pix já enviado sem baixa. O interruptor geral continua sendo a automação `sinal-pix` (SINAL_PIX_SLUGS / seco).
+ */
+export async function unidadesComBaixaPendente(): Promise<Unit[]> {
+  const comSinal = await prisma.sinalPix.findMany({
+    where: { OR: [{ status: 'pendente' }, { status: { in: ['pago', 'expirado'] }, avisadoEm: null }] },
+    distinct: ['unitId'],
+    select: { unitId: true },
+  });
+  if (comSinal.length === 0) return [];
+  return prisma.unit.findMany({ where: { isActive: true, id: { in: comSinal.map((l) => l.unitId) } }, orderBy: { id: 'asc' } });
+}
+
 async function varrer(): Promise<void> {
   if (rodando) return;
   rodando = true;
   try {
-    const units = await prisma.unit.findMany({ where: { isActive: true, sinalPixCentavos: { not: null } }, orderBy: { id: 'asc' } });
+    const units = await unidadesComBaixaPendente();
     for (const unit of units) {
       const e = estado(unit.slug);
       if (e === 'desligado' || !unit.kommoAccessToken) continue;

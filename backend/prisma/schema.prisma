@@ -2410,6 +2410,8 @@ model ChaveDeIntegracao {
 model SinalPix {
   id            String    @id @default(cuid())
   unitId        String    @map("unit_id")
+  /// a CLÍNICA dona do cartão e da conta Asaas (`unidadeDona`): comercial e Resgate dividem o mesmo cartão, então o sinal é da clínica, não da unidade
+  clinica       String
   /// id numérico do cartão no Kommo
   leadId        String    @map("lead_id")
   /// id do link no Asaas (o `paymentLink` que vem em cada cobrança paga por ele)
@@ -2418,6 +2420,9 @@ model SinalPix {
   valorCentavos Int       @map("valor_centavos")
   /// "AAAA-MM-DD": último dia em que o link aceita pagamento
   venceEm       String    @map("vence_em")
+  /// "AAAA-MM-DDTHH:mm" no relógio da unidade: a consulta que este sinal garante (acompanha a remarcação). Passou = consulta nova pede sinal novo
+  consultaEm    String    @map("consulta_em")
+  /// criando (reserva enquanto o Asaas responde) | pendente | pago | expirado
   status        String    @default("pendente")
   /// pay_… da cobrança que quitou o link
   paymentId     String?   @map("payment_id")
@@ -2429,7 +2434,7 @@ model SinalPix {
   unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
 
   @@unique([unitId, linkId])
-  @@index([unitId, leadId, status])
+  @@index([clinica, leadId, status])
   @@index([status, criadoEm])
   @@map("sinais_pix")
 }
