@@ -18,6 +18,8 @@
 export interface FlagsDePagamento {
   acceptsAdvancePayment?: boolean | null;
   spineBookingRequiresPayment?: boolean | null;
+  /** Sofia 2.0: centavos do sinal por Pix (5000 = R$ 50); nulo/ausente = a unidade segue como sempre. Ver `unidadeComSinal`. */
+  sinalPixCentavos?: number | null;
 }
 
 /**
@@ -33,6 +35,22 @@ export function unidadeSemAntecipado(unit: FlagsDePagamento | null | undefined):
 }
 
 /**
+ * A unidade trabalha com SINAL por Pix (Sofia 2.0, 10/11/2026)? Campo `Unit.sinalPixCentavos` (nulo = como sempre): a consulta é
+ * "R$ 350 no dia" ou "R$ 250 garantindo com sinal" (R$ 50 agora, por um Pix gerado pela Sofia no Asaas da unidade, + R$ 200 no
+ * dia). Só a FLAG; os valores saem das fontes da unidade (`sinalDaUnidade`, em prompt-composer.ts). Função PURA.
+ *
+ * Mesma regra de precedência da taxa: unidade sem antecipado (Timbó) e unidade com taxa de reserva obrigatória (Boa Vista) ignoram o
+ * sinal — o lado seguro, igual ao de `unidadeSemAntecipado`.
+ */
+export function unidadeComSinal(unit: FlagsDePagamento | null | undefined): boolean {
+  if (!unit) return false;
+  const c = unit.sinalPixCentavos;
+  if (typeof c !== 'number' || !Number.isInteger(c) || c <= 0) return false;
+  if (unit.acceptsAdvancePayment === false || unit.spineBookingRequiresPayment) return false;
+  return true;
+}
+
+/**
  * O degrau da régua de follow-up para uma unidade sem antecipado: sai a frase que vende o antecipado.
  *
  * Os degraus são texto genérico da rede (e cópias editáveis no banco). O único que fala de antecipado fora da escada do
@@ -41,7 +59,8 @@ export function unidadeSemAntecipado(unit: FlagsDePagamento | null | undefined):
  * o mesmo texto, sem tocar.
  */
 export function intencaoDoDegrauParaAUnidade(intencao: string, unit: FlagsDePagamento | null | undefined): string {
-  if (!unidadeSemAntecipado(unit)) return intencao;
+  // Sinal por Pix (Sofia 2.0): a chave e o "antecipado de R$ 150" dos degraus não existem lá; `regraDePagamento` (follow-up.ts) diz o que vale.
+  if (!unidadeSemAntecipado(unit) && !unidadeComSinal(unit)) return intencao;
   return intencao
     .split(/(?<=[.!?])\s+/)
     .filter((frase) => !/antecipad|\bpix\b/i.test(frase) || /^(?:n[ãa]o|nunca)\b/i.test(frase.trim()))

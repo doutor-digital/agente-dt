@@ -42,6 +42,11 @@ export interface OpcoesAntecipado {
   antecipado: number;
   /** Unidade com taxa de reserva obrigatória — a trava não vale lá. */
   taxaDeReserva?: boolean;
+  /**
+   * Valores que são legítimos ao lado de "antecipado" e NÃO podem ser trocados pelo antecipado: o sinal de R$ 50 e o resto de R$ 200 da
+   * unidade com sinal por Pix (Sofia 2.0). "Sinal antecipado de R$ 50" não é o R$ 250 errado no slot do antecipado.
+   */
+  valoresLegitimos?: readonly number[];
 }
 
 const fmt = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(2).replace('.', ','));
@@ -49,7 +54,7 @@ const paraNumero = (s: string) => Number(s.replace(/\./g, '').replace(',', '.'))
 
 export function corrigirValorAntecipado(
   texto: string,
-  { antecipado, taxaDeReserva = false }: OpcoesAntecipado,
+  { antecipado, taxaDeReserva = false, valoresLegitimos = [] }: OpcoesAntecipado,
 ): { texto: string; corrigiu: number[] } {
   if (!texto || !Number.isFinite(antecipado) || antecipado <= 0) return { texto, corrigiu: [] };
   if (taxaDeReserva) return { texto, corrigiu: [] };
@@ -66,7 +71,7 @@ export function corrigirValorAntecipado(
   const corrigiu: number[] = [];
   const saida = texto.replace(re, (todo, valor: string, meio: string, posicao: number) => {
     const v = paraNumero(valor);
-    if (!Number.isFinite(v) || v === antecipado) return todo;
+    if (!Number.isFinite(v) || v === antecipado || valoresLegitimos.includes(v)) return todo;
     // Parcelamento não é o valor da consulta: "3x de R$ 100" não vira "3x de R$ 280".
     // O "3x de" está ANTES do match, então tem de vir do texto original pela posição —
     // olhar dentro de `todo` não enxerga nada (ele começa no "R$").

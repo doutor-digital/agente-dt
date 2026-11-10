@@ -255,6 +255,18 @@ function buildSandboxTools(opts: {
     },
   });
 
+  // Sofia 2.0 (sinal por Pix): em produção só existe na unidade com sinal e cria um link no Asaas; aqui devolve um link de exemplo, sem chamar o Asaas.
+  const gerar_sinal_pix = new DynamicStructuredTool({
+    name: 'gerar_sinal_pix',
+    description: 'Gera o Pix do sinal (link do Asaas) depois de agendar_consulta (sandbox: link de exemplo, nada é criado).',
+    schema: zod.object({ leadId: zod.number().int().positive().optional() }),
+    func: async ({ leadId }) => {
+      const result = '[SANDBOX] gerar_sinal_pix → Pix do sinal gerado. Envie ao paciente ESTE link, copiado exatamente: https://www.asaas.com/c/exemplo-sandbox — link de exemplo, nada foi criado.';
+      opts.onCall({ tool: 'gerar_sinal_pix', args: { leadId: leadId ?? null }, result });
+      return result;
+    },
+  });
+
   const remarcar_consulta = new DynamicStructuredTool({
     name: 'remarcar_consulta',
     description: 'Move a consulta do paciente para outro horário (sandbox: simulado).',
@@ -315,6 +327,7 @@ function buildSandboxTools(opts: {
     buscar_paciente,
     cadastrar_paciente,
     agendar_consulta,
+    gerar_sinal_pix,
     remarcar_consulta,
     cancelar_consulta,
     resumir_lead_para_sdr,

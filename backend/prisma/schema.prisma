@@ -305,6 +305,12 @@ model Unit {
   /// spineBookingRequiresPayment (taxa obrigatória é pagamento antecipado): se as duas estiverem ligadas, a taxa vence e
   /// esta flag é ignorada (ver agent/pagamento-da-unidade.ts).
   acceptsAdvancePayment       Boolean   @default(true) @map("accepts_advance_payment")
+  /// SINAL por Pix (Sofia 2.0, 10/11/2026): centavos do sinal que garante a vaga ("5000" = R$ 50). Nulo = a unidade segue
+  /// como sempre (antecipado pela chave fixa `pixKey` ou no dia). Com valor: a consulta é "R$ 350 no dia" ou "R$ 250
+  /// garantindo com sinal" (R$ 50 agora por um Pix GERADO pela Sofia no Asaas da unidade + R$ 200 no dia). Ver
+  /// agent/pagamento-da-unidade.ts (`unidadeComSinal`) e lib/sinal-pix.ts. Incompatível com taxa de reserva e com
+  /// acceptsAdvancePayment=false (aí a flag é ignorada).
+  sinalPixCentavos            Int?      @map("sinal_pix_centavos")
   /// Origem que a Sofia grava na franquia ao cadastrar/converter o paciente para agendar
   /// ("IA SOFIA" = 10002 nas 10 unidades, criada pela franquia em 05/09/2026). Nulo = usa a
   /// origem do lead. A API não tem rota de atualização, então só vale na criação.
@@ -367,6 +373,7 @@ model Unit {
   /// Conexão com o Bling (ERP) — só a unidade que vende pelo Bling tem (HM Tecnologia). Ver `BlingConexao`.
   blingConexao      BlingConexao?
   chavesDeIntegracao ChaveDeIntegracao[]
+  sinaisPix          SinalPix[]
   disparoOndas      DisparoOnda[]
 
   // Prompt e configuração do agente, vivem aqui pra cada unidade ter o seu.
@@ -2395,6 +2402,36 @@ model ChaveDeIntegracao {
 
   @@unique([unitId, provedor])
   @@map("chaves_de_integracao")
+}
+
+/// Link de pagamento do SINAL da consulta (Sofia 2.0): um por lead e unidade, criado pela ferramenta `gerar_sinal_pix` no
+/// Asaas DA unidade (POST /paymentLinks, lib/sinal-pix.ts). `status`: pendente | pago | expirado. A baixa não usa webhook
+/// (os do Asaas apontam para outro sistema): o worker lib/sinal-pix-worker.ts lê /payments e casa por `linkId`.
+model SinalPix {
+  id            String    @id @default(cuid())
+  unitId        String    @map("unit_id")
+  /// id numérico do cartão no Kommo
+  leadId        String    @map("lead_id")
+  /// id do link no Asaas (o `paymentLink` que vem em cada cobrança paga por ele)
+  linkId        String    @map("link_id")
+  url           String
+  valorCentavos Int       @map("valor_centavos")
+  /// "AAAA-MM-DD": último dia em que o link aceita pagamento
+  venceEm       String    @map("vence_em")
+  status        String    @default("pendente")
+  /// pay_… da cobrança que quitou o link
+  paymentId     String?   @map("payment_id")
+  criadoEm      DateTime  @default(now()) @map("criado_em")
+  pagoEm        DateTime? @map("pago_em")
+  /// quando o worker já avisou a equipe (nota no cartão) do desfecho: pago ou expirado
+  avisadoEm     DateTime? @map("avisado_em")
+
+  unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@unique([unitId, linkId])
+  @@index([unitId, leadId, status])
+  @@index([status, criadoEm])
+  @@map("sinais_pix")
 }
 
 /// Cache curto da busca de horários da agenda (`consultar_horarios`), por unidade + dia — ver src/lib/cache-agenda.ts.

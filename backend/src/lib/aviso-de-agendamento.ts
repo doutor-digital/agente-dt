@@ -40,6 +40,7 @@ export function chaveDoAviso(slug: string, leadId: number | undefined, dia: stri
 const PAGAMENTO: Record<string, string> = {
   pix_antecipado: '💳 vai pagar por Pix antecipado',
   na_clinica: '💵 vai pagar na clínica, no dia',
+  sinal_pix: '💳 vai pagar o sinal por Pix (link do Asaas) e o resto no dia',
 };
 
 export function textoDoAviso(a: AgendamentoParaAvisar): string {

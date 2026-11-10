@@ -12,7 +12,7 @@ import { automacaoLigada } from './automacoes-estado.js';
 import { leadPausadoPorJanela } from './pausa-lead.js';
 import { enviosDeRetomadaRecentes, limiteDoDiaAtingido, LIMITE_COBRANCAS_POR_DIA, marcaDoDegrau } from './cobrancas-do-dia.js';
 import { fusoDaUnidade } from './fuso.js';
-import { unidadeSemAntecipado, type FlagsDePagamento } from '../agent/pagamento-da-unidade.js';
+import { unidadeComSinal, unidadeSemAntecipado, type FlagsDePagamento } from '../agent/pagamento-da-unidade.js';
 
 const SWEEP_MS = 60_000;
 
@@ -42,7 +42,8 @@ export function degrauDoPixNaoSeAplica(
   pagamentoEscolhido: string | null | undefined,
   unit: FlagsDePagamento,
 ): boolean {
-  return degrau.soPix === true && (pagamentoEscolhido === 'na_clinica' || unidadeSemAntecipado(unit));
+  // Sinal por Pix (Sofia 2.0): o degrau do Pix manda a CHAVE FIXA da unidade; ali o Pix é um link gerado na conversa, então a escada antiga não roda.
+  return degrau.soPix === true && (pagamentoEscolhido === 'na_clinica' || unidadeSemAntecipado(unit) || unidadeComSinal(unit));
 }
 
 const JANELA_WHATSAPP_MIN = 23 * 60;

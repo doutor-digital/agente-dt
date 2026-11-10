@@ -3,7 +3,8 @@
  *
  * PERMITIDO (método + rota): cadastrar e editar cliente; criar e editar cobrança (boleto, Pix, cartão por link, parcelado);
  * cancelar (excluir) cobrança pendente; estornar cobrança recebida; transferir (Pix/conta) — esta última só chega aqui depois
- * da lista de destinos e dos tetos de `mcp-remoto/asaas-limites.ts`.
+ * da lista de destinos e dos tetos de `mcp-remoto/asaas-limites.ts`; e CRIAR link de pagamento (só o POST: é o sinal da
+ * consulta que a Sofia manda ao paciente, `lib/sinal-pix.ts`).
  *
  * PROIBIDO SEMPRE (não existe rota, então não há o que configurar): dados bancários da clínica, chaves de API, webhooks, usuários
  * do Asaas, antecipação, empréstimo, pagamento de contas (bill payment), assinatura, exclusão de cliente. A leitura continua em
@@ -31,6 +32,8 @@ export const ROTAS_DE_ESCRITA: ReadonlyArray<{ metodo: MetodoDeEscrita; caminho:
   { metodo: 'DELETE', caminho: new RegExp(`^/payments/${COBRANCA}$`), nome: 'cancelar cobrança' },
   { metodo: 'POST', caminho: new RegExp(`^/payments/${COBRANCA}/refund$`), nome: 'estornar cobrança' },
   { metodo: 'POST', caminho: /^\/transfers$/, nome: 'transferir' },
+  // Sofia 2.0: o sinal do paciente. SÓ criar o link (lib/sinal-pix.ts); nada de editar, excluir ou ler link por aqui.
+  { metodo: 'POST', caminho: /^\/paymentLinks$/, nome: 'criar link de pagamento (sinal da consulta)' },
 ];
 
 export function rotaPermitida(metodo: string, caminho: string): boolean {

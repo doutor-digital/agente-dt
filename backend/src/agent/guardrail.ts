@@ -4,11 +4,11 @@ import { convenioDaUnidade, corrigirPrecoDoConvenio } from './preco-convenio.js'
 import { corrigirValorAntecipado } from './valor-antecipado.js';
 import { corrigirTomDaSaida } from './tom-da-saida.js';
 import { corrigirLinkDeMapa } from './link-de-mapa.js';
-import { precosDaConsulta } from './prompt-composer.js';
+import { precosDaConsulta, sinalDaUnidade } from './prompt-composer.js';
 import { semProntoSocorro } from './sem-pronto-socorro.js';
 import { ehClinicaParaSinalDeAlerta } from './sinal-de-alerta.js';
 import { sobrouVenda } from './venda-em-alerta.js';
-import { unidadeSemAntecipado } from './pagamento-da-unidade.js';
+import { unidadeComSinal, unidadeSemAntecipado } from './pagamento-da-unidade.js';
 import { semOAntecipadoNaSaida } from './sem-antecipado-saida.js';
 
 /** O que a trava de saída precisa saber além da resposta. */
@@ -87,6 +87,8 @@ function corrigirValores(
   text: string,
   aprovados: Set<number>,
   foraDoCatalogo: number[],
+  /** De onde sai o valor que entra no lugar: a ficha. R$ 50/200 do sinal valem como corretos, mas nunca viram o "mais próximo" de um valor inventado. */
+  substitutos: Set<number> = aprovados,
 ): { texto: string; trocas: string[] } | null {
   const jaNoTexto = new Set(
     [...parseAmounts(text)].filter((v) => amountApproved(v, aprovados)),
@@ -102,7 +104,7 @@ function corrigirValores(
     const v = Number(num.replace(/\./g, ''));
     if (!alvo.has(v)) return match;
 
-    const certo = [...aprovados]
+    const certo = [...substitutos]
       .filter((a) => !jaNoTexto.has(a))
       .sort((a, b) => Math.abs(a - v) - Math.abs(b - v))[0];
     if (certo === undefined) {
@@ -242,7 +244,8 @@ export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoG
   // valendo sobre o texto preenchido. O que não dá pra preencher não sai.
   const lac = preencherLacunas(texto, {
     // Unidade sem pagamento antecipado: não há chave para entregar — "[chave]" não vira a chave da clínica.
-    chavePix: unidadeSemAntecipado(unit) ? null : unit.pixKey,
+    // Com sinal por Pix também não: o Pix do sinal é o link da ferramenta, e "[chave]" não vira a chave fixa da clínica.
+    chavePix: unidadeSemAntecipado(unit) || unidadeComSinal(unit) ? null : unit.pixKey,
     titularPix: unit.pixHolder,
     valorAntecipado: precosDaConsulta(unit)?.antecipado ?? null,
   });
@@ -288,6 +291,7 @@ export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoG
 
   // O desconto do convênio não pode sair como preço do Pix — ver preco-convenio.ts.
   const p = precosDaConsulta(unit);
+  const sinal = sinalDaUnidade(unit);
   if (p) {
     const conv = convenioDaUnidade(unit, p);
     if (conv != null) {
@@ -306,6 +310,8 @@ export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoG
     const va = corrigirValorAntecipado(texto, {
       antecipado: p.antecipado,
       taxaDeReserva: unit.spineBookingRequiresPayment ?? false,
+      // Sofia 2.0: o sinal (R$ 50) e o resto no dia (R$ 200) são preços legítimos; sem a flag a lista é vazia (nada muda)
+      valoresLegitimos: sinal ? [sinal.sinal, sinal.restoNoDia] : [],
     });
     if (va.corrigiu.length > 0) {
       triggered.push(`antecipado_corrigido:${va.corrigiu.join('/')}->${p.antecipado}`);
@@ -320,13 +326,16 @@ export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoG
   // O catálogo é a ficha (com a tolerância de parcela de sempre). Os valores da oferta valem EXATOS, sem a conta de parcelas
   // (R$ 150 de oferta não aprova R$ 50 nem R$ 75), e só enquanto a ficha tem valores: unidade sem R$ na ficha não ganha
   // checagem por causa da oferta.
-  const aprovados = catalogo;
+  // Sinal por Pix (Sofia 2.0): R$ 50 e R$ 200 não estão nas fontes ("R$ 250 antecipado ou R$ 350 no dia") mas são preços da unidade.
+  // Só entram se já houver catálogo (unidade sem R$ na ficha continua sem checagem) e só com a flag ligada.
+  const aprovados = new Set(catalogo);
+  if (sinal && catalogo.size > 0) for (const v of [sinal.sinal, sinal.restoNoDia]) if (Number.isInteger(v)) aprovados.add(v);
   if (aprovados.size > 0) {
     const foraDoCatalogo = [...parseAmounts(texto)].filter(
       (v) => v >= 20 && !amountApproved(v, aprovados),
     );
     if (foraDoCatalogo.length > 0) {
-      const corrigido = corrigirValores(texto, aprovados, foraDoCatalogo);
+      const corrigido = corrigirValores(texto, aprovados, foraDoCatalogo, catalogo);
       if (corrigido) {
         triggered.push('preco_corrigido:' + corrigido.trocas.join('/'));
         return { text: mostraOferta(corrigido.texto), triggered, rewritten: true };

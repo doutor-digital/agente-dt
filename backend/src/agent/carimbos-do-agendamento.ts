@@ -230,6 +230,14 @@ export function decidirPagamentoAntecipado(s: {
   // Só a escolha `pix_antecipado` é neutralizada: sem escolha nenhuma vale o ramo 4 (não apaga o que a equipe gravou no cartão).
   const forma = s.semAntecipado && escolhida === 'pix_antecipado' ? 'na_clinica' : escolhida;
   if (forma === 'pix_antecipado') return { valor: 'Sim', porque: 'paciente escolheu Pix antecipado' };
+  // Sinal por Pix (Sofia 2.0): escolher o sinal NÃO é ter pago. O "Sim" só vem quando o Asaas confirma o Pix (lib/sinal-pix-worker.ts, que grava
+  // ✓ Consulta pg antecipado e este campo): até lá o cartão fica "Não" (Valor da Consulta = preço no dia) — e uma remarcação depois do
+  // pagamento NÃO derruba o "Sim" que o worker gravou.
+  if (forma === 'sinal_pix') {
+    return String(s.valorAtual ?? '').trim().toLowerCase() === 'sim'
+      ? { valor: null, porque: 'sinal por Pix: já consta Sim (pago); mantém' }
+      : { valor: 'Não', porque: 'sinal por Pix escolhido, ainda não pago: vira Sim quando o Asaas confirmar' };
+  }
   if (forma === 'na_clinica') return { valor: 'Não', porque: 'paciente escolheu pagar na clínica' };
 
   if (s.valorAtual === undefined) return { valor: null, porque: 'sem escolha registrada e cartão não lido; não mexe' };
