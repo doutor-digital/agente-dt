@@ -57,3 +57,28 @@ test('fato vazio conta como ausente', () => {
   const b = renderFaltaParaAgendar({ nome: '   ', queixa: 'lombar' });
   assert.match(b, /nome/);
 });
+
+test('10/11: formigamento SOZINHO não dispara a triagem (regra <sinal_de_alerta>)', () => {
+  const b = renderFaltaParaAgendar({ nome: 'Carla', queixa: 'dor lombar que desce pra perna com formigamento' });
+  assert.ok(!/ANTES DE QUALQUER COISA/.test(b));
+});
+
+test('10/11: a triagem nunca manda repetir a pergunta de segurança', () => {
+  const b = renderFaltaParaAgendar({ nome: 'Núbia', queixa: 'dor no pescoço com dormência no braço' });
+  assert.match(b, /NÃO repita a pergunta/);
+  assert.ok(!/repita a pergunta com gentileza/.test(b));
+  assert.match(b, /<sinal_de_alerta>/);
+});
+
+test('10/11: formigamento na virilha / região íntima / entre as pernas CONTINUA disparando (cauda equina)', () => {
+  for (const q of ['formigamento na virilha', 'formigamento entre as pernas', 'formigamento na região íntima', 'sinto a virilha com formigamento']) {
+    const b = renderFaltaParaAgendar({ nome: 'Ana', queixa: q });
+    assert.match(b, /ANTES DE QUALQUER COISA/, q);
+  }
+});
+
+test('10/11: a triagem continua pedindo a força E depois o xixi e o intestino', () => {
+  const b = renderFaltaParaAgendar({ nome: 'Ana', queixa: 'dormência na perna' });
+  assert.match(b, /primeiro a força, depois o xixi e o intestino/);
+  assert.match(b, /pausar_ia com sinalDeAlerta: true/);
+});
