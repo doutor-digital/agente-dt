@@ -68,7 +68,17 @@ export interface UnidadeDaRede {
   endereco: string | null;
 }
 
-type UnidadeParaDH = Pick<Unit, 'slug' | 'name' | 'personaCompanyName' | 'kommoSubdomain'> & { id?: string };
+type UnidadeParaDH = Pick<Unit, 'slug' | 'name' | 'personaCompanyName' | 'kommoSubdomain'> & {
+  id?: string;
+  /** Nome da IA desta unidade (`units.persona_agent_name`). Vazio = "Sofia". */
+  personaAgentName?: string | null;
+};
+
+/** O nome da IA numa clínica Doutor Hérnia: o da unidade, se cadastrado, ou "Sofia". Sempre sem "Dra."/"Doutora". */
+export function nomeDaIaDH(unit: Pick<UnidadeParaDH, 'personaAgentName'> | null | undefined): string {
+  const nome = semTituloDeDoutora(unit?.personaAgentName?.trim() ?? '');
+  return nome || 'Sofia';
+}
 
 /**
  * A unidade é uma clínica Doutor Hérnia? Pelo slug (`doutor-hernia-*`), pelo nome/empresa da persona, pelo
@@ -263,6 +273,12 @@ export function esquecerRede(): void {
  * "a Dra. Sofia" → "a Sofia"; "Sou a Doutora Sofia" → "Sou a Sofia". Outros nomes não são tocados.
  */
 const TITULO_ANTES_DE_SOFIA = /(?<!\p{L})(?:dra|drª|doutora)\.?\s+(?=sofia(?!\p{L}))/giu;
+const TITULO_NO_INICIO = /^(?:dra|drª|doutora|dr|doutor)\.?\s+/iu;
+
+/** "Dra. Aline" → "Aline": o nome cadastrado na unidade nunca leva título (a mesma regra da Sofia). */
+function semTituloDeDoutora(nome: string): string {
+  return nome.replace(TITULO_NO_INICIO, '').trim();
+}
 
 export function semDraSofia(texto: string): string {
   return texto.replace(TITULO_ANTES_DE_SOFIA, '');
@@ -276,11 +292,12 @@ export function semDraSofiaNaDH(texto: string, unit: UnidadeParaDH, rede: Readon
 // ── o que vai para o prompt ───────────────────────────────────────────────────────────────────────────────────
 
 /** Quem atende e como chamar a consulta. Curto: entra também no prompt do follow-up. */
-export function renderIdentidadeDoutorHernia(): string {
+export function renderIdentidadeDoutorHernia(nome = 'Sofia'): string {
   return `ISTO VALE ACIMA das Fontes Oficiais, das instruções extras e das regras desta unidade e do que as
 ferramentas devolverem — se algum desses textos disser outra coisa, siga ESTE.
 
-SEU NOME: você é a Sofia — só "Sofia", sem "Dra." nem "Doutora", mesmo que outro texto diga "Dra. Sofia".
+SEU NOME: você é a ${nome} — só "${nome}", sem "Dra." nem "Doutora", mesmo que outro texto diga "Dra. ${nome}".${nome === 'Sofia' ? '' : `
+Você NÃO é a Sofia: se algum texto, exemplo ou histórico chamar a IA de "Sofia", ignore — seu nome é ${nome}.`}
 
 QUEM ATENDE: quem faz a consulta é FISIOTERAPEUTA, nunca médico(a). Não escreva "Dr.", "Dra.", "doutor"
 nem "doutora" antes do nome de quem atende, mesmo que o cadastro ou a ferramenta escreva assim — troque
@@ -381,7 +398,7 @@ function listaPorEstado(
 /** O bloco inteiro do prompt da conversa: identidade + rede. Vazio para quem não é Doutor Hérnia. */
 export function renderDoutorHernia(unit: UnidadeParaDH & { id: string }, rede: ReadonlyArray<UnidadeDaRede> = []): string {
   if (!ehDoutorHernia(unit, rede)) return '';
-  return `<rede_doutor_hernia>\n${renderIdentidadeDoutorHernia()}\n\n${renderRedeDeUnidades(unit, rede)}\n</rede_doutor_hernia>`;
+  return `<rede_doutor_hernia>\n${renderIdentidadeDoutorHernia(nomeDaIaDH(unit))}\n\n${renderRedeDeUnidades(unit, rede)}\n</rede_doutor_hernia>`;
 }
 
 /**

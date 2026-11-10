@@ -123,6 +123,7 @@ export interface UnitInput {
   personaCompanyName?: string | null;
   personaTone?: string | null;
   personaGreeting?: string | null;
+  personaAgentName?: string | null;
   personaResponseLength?: string;
   personaLanguage?: string;
   personaResponseDelaySec?: number;

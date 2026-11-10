@@ -80,6 +80,7 @@ import {
   renderDoutorHernia,
   renderDoutorHerniaCurto,
   semDraSofia,
+  nomeDaIaDH,
   type UnidadeDaRede,
 } from './rede-doutor-hernia.js';
 
@@ -268,11 +269,15 @@ function renderPersona(unit: Unit, rede: ReadonlyArray<UnidadeDaRede> = []): str
   const dh = ehDoutorHernia(unit, rede);
   if (preset) {
     const where = company ? `da ${company}` : 'da empresa';
-    const nome = dh ? semDraSofia(preset.agentName) : preset.agentName;
+    const proprio = unit.personaAgentName?.trim();
+    const nome = dh ? nomeDaIaDH(unit) : proprio || preset.agentName;
     lines.push(
       `Você é ${nome}, quem atende o WhatsApp ${where} (${preset.vertical}), conversando com os clientes.`,
     );
     for (const f of preset.framing) lines.push(f);
+  } else if (unit.personaAgentName?.trim()) {
+    const nome = dh ? nomeDaIaDH(unit) : unit.personaAgentName.trim();
+    lines.push(`Você é ${nome}, quem atende o WhatsApp ${company ? `da ${company}` : 'da empresa'}, conversando com os clientes.`);
   } else if (company) {
     lines.push(`Você é quem atende o WhatsApp da ${company}, conversando com os clientes.`);
   } else {
@@ -1874,7 +1879,7 @@ function renderFirstTurnBoost(unit: Unit, isFirstTurn: boolean, jaConversou = fa
   lines.push('Exemplo de resposta RUIM (NUNCA faça assim):');
   lines.push('  ❌ "Olá!"');
   lines.push('  ❌ "Oi! Como posso ajudar?"');
-  lines.push('  ❌ "Oi! Eu sou a Sofia, a assistente virtual da clínica." (NUNCA anuncie que é virtual)');
+  lines.push('  ❌ "Oi! Eu sou a assistente virtual da clínica." (NUNCA anuncie que é virtual)');
   return xmlBlock('primeiro_turno', lines.join('\n'));
 }
 

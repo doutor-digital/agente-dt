@@ -154,6 +154,7 @@ const unitInputBase = {
   personaCompanyName: z.string().max(200).nullable().optional(),
   personaTone: z.enum(['casual', 'formal', 'friendly']).nullable().optional(),
   personaGreeting: z.string().max(500).nullable().optional(),
+  personaAgentName: z.string().trim().max(40).nullable().optional(),
   personaResponseLength: z.enum(['curta', 'normal', 'detalhada']).optional(),
   personaLanguage: z.enum(['pt-BR', 'en-US', 'es-ES', 'fr-FR']).optional(),
   personaResponseDelaySec: z.coerce.number().int().min(0).max(30).optional(),

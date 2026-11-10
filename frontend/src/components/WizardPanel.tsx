@@ -47,6 +47,7 @@ type WizardDraft = Pick<
   | 'personaCompanyName'
   | 'personaTone'
   | 'personaGreeting'
+  | 'personaAgentName'
   | 'personaResponseLength'
   | 'personaLanguage'
   | 'personaResponseDelaySec'
@@ -93,6 +94,7 @@ function unitToDraft(u: Unit): WizardDraft {
     personaCompanyName: u.personaCompanyName,
     personaTone: u.personaTone,
     personaGreeting: u.personaGreeting,
+    personaAgentName: u.personaAgentName ?? null,
     personaResponseLength: u.personaResponseLength,
     personaLanguage: u.personaLanguage,
     personaResponseDelaySec: u.personaResponseDelaySec,
@@ -277,6 +279,12 @@ export function WizardPanel() {
           <p className="text-[11px] text-zinc-500 -mt-1">
             A categoria dá um nome e um enquadramento à IA: Saúde → Dra. Sofia (nas clínicas Doutor Hérnia, só Sofia), Energia Solar → Dr. João.
           </p>
+          <TextField
+            label="Nome da IA (opcional)"
+            value={draft.personaAgentName ?? ''}
+            onChange={(v) => update({ personaAgentName: v || null })}
+            placeholder='Vazio = o nome da categoria (Saúde → Sofia). ex: "Aline"'
+          />
           <TextField
             label="Saudação preferida (opcional)"
             value={draft.personaGreeting ?? ''}
