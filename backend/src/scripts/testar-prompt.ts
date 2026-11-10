@@ -5,9 +5,11 @@
  *   node dist/scripts/testar-prompt.js --slug <slug> --prompt /tmp/novo.txt [--casos /tmp/casos.json]
  *
  * Cada caso é uma conversa de paciente roteirizada; a cada fala a resposta da IA é gerada pelo MESMO handler do
- * playground (`playgroundRunHandler`, com `unitSystemPrompt` = o arquivo), então: prompt montado pelo compositor da
- * produção, modelo da unidade, ferramentas de sandbox (não alteram o CRM). O guardrail de saída do grafo NÃO roda aqui:
- * o teste mede o que o modelo escreve. Sai em markdown no stdout (a conversa e as ferramentas chamadas).
+ * playground (`playgroundRunHandler`, com `unitSystemPrompt` = o arquivo como TEXTO-BASE, no lugar do AgentConfig), então:
+ * compositor da produção, modelo da unidade, ferramentas de sandbox (não alteram o CRM; a agenda é fictícia). O guardrail
+ * de saída do grafo NÃO roda: o teste mede o que o modelo escreve. Cada chamada ao modelo grava 1 linha em `llm_calls`
+ * (custo na unidade). Rode com LOG_LEVEL=fatal: o markdown sai no stdout. Sai com código 1 se algum caso deu erro ou
+ * se o prompt de teste não virou a base.
  */
 import { readFileSync } from 'node:fs';
 import type { Request, Response } from 'express';
@@ -80,7 +82,13 @@ function arg(nome: string): string | undefined {
 
 interface Saida {
   status: number;
-  corpo: { reply?: string; actions?: Array<{ tool: string; args: Record<string, unknown> }>; error?: string; message?: string };
+  corpo: {
+    reply?: string;
+    actions?: Array<{ tool: string; args: Record<string, unknown> }>;
+    meta?: { base?: string };
+    error?: string;
+    message?: string;
+  };
 }
 
 async function rodar(unitId: string, unitSystemPrompt: string, messages: Array<{ role: 'user' | 'assistant'; content: string }>): Promise<Saida> {
@@ -95,7 +103,8 @@ async function rodar(unitId: string, unitSystemPrompt: string, messages: Array<{
       return res;
     },
   } as unknown as Response;
-  const req = { params: { id: unitId }, body: { messages, unitSystemPrompt } } as unknown as Request;
+  // o script roda no contêiner, por quem tem acesso à VPS: equivale ao super admin
+  const req = { params: { id: unitId }, body: { messages, unitSystemPrompt }, user: { role: 'SUPER_ADMIN' } } as unknown as Request;
   await playgroundRunHandler(req, res);
   return out;
 }
@@ -110,6 +119,7 @@ async function main(): Promise<void> {
   if (!unit) throw new Error(`unidade ${slug} não existe`);
 
   console.log(`# Testes do prompt novo — ${unit.name} (${slug})\n\nPrompt: ${prompt.length} caracteres. Nada foi gravado.\n`);
+  let falhas = 0;
   for (const caso of casos) {
     console.log(`## ${caso.titulo}\n\n_Espera:_ ${caso.espera}\n`);
     const conversa: Array<{ role: 'user' | 'assistant'; content: string }> = [];
@@ -119,14 +129,29 @@ async function main(): Promise<void> {
       console.log(`**Paciente:** ${fala}\n`);
       if (r.status !== 200) {
         console.log(`**ERRO ${r.status}:** ${r.corpo.error ?? ''} ${r.corpo.message ?? ''}\n`);
+        falhas++;
+        break;
+      }
+      if (r.corpo.meta?.base !== 'teste') {
+        console.log('**ERRO:** o prompt de teste NÃO virou a base desta chamada — teste inválido.\n');
+        falhas++;
         break;
       }
       const resposta = r.corpo.reply ?? '';
       const ferramentas = (r.corpo.actions ?? []).map((a) => `\`${a.tool}\``).join(', ');
-      console.log(`**Sofia:** ${resposta.replace(/\n/g, '\n> ')}\n`);
+      console.log(`**Sofia:**\n> ${resposta.replace(/\n/g, '\n> ')}\n`);
       if (ferramentas) console.log(`_ferramentas:_ ${ferramentas}\n`);
+      if (resposta.startsWith('(A IA esgotou')) {
+        // o aviso do playground não é fala da Sofia: não volta para o histórico
+        falhas++;
+        break;
+      }
       conversa.push({ role: 'assistant', content: resposta || '(vazio)' });
     }
+  }
+  if (falhas) {
+    console.log(`\n**${falhas} caso(s) com erro.**`);
+    process.exitCode = 1;
   }
 }
 
