@@ -176,6 +176,15 @@ test('guardrail: "sinal antecipado de R$ 50" NÃO vira R$ 250 com a flag; sem a 
   assert.deepEqual(corrigirValorAntecipado('R$ 50 antecipado', { antecipado: 250 }).corrigiu, [50]);
 });
 
+test('guardrail: R$ 50 / R$ 200 SOLTOS (sem falar de sinal nem do que fica no dia) continuam sendo valor inventado', () => {
+  const r = aplicarGuardrail('A consulta custa R$ 200, pode ser?', comSinal());
+  assert.equal(r.rewritten, true);
+  assert.ok(r.triggered.some((t) => t.startsWith('preco_corrigido:')));
+  assert.doesNotMatch(r.text, /R\$ 200/);
+  // e o antecipado errado continua corrigido quando a frase não fala do sinal
+  assert.equal(aplicarGuardrail('Fica R$ 50 antecipado no Pix.', comSinal()).text, 'Fica R$ 250 antecipado no Pix.');
+});
+
 test('guardrail: valor inventado continua barrado com a flag (R$ 150 vira um preço da ficha, nunca R$ 50/200)', () => {
   const r = aplicarGuardrail('A consulta fica R$ 150, pode ser?', comSinal());
   assert.equal(r.rewritten, true);

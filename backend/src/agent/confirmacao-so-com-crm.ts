@@ -521,7 +521,7 @@ export async function abrirTarefaParaEquipe(args: {
   leadId: number;
   kommo: Pick<KommoClient, 'createTask' | 'getLead'>;
   recorder: Pick<TraceRecorder, 'step'>;
-  motivo: 'comprovante' | 'desmarcada' | 'insistiu_na_clinica' | 'cadastro_duplicado' | 'agenda_sem_conferir' | 'conferir_extrato' | 'comprovante_recusado' | 'anexo_nao_lido' | 'sinal_pix_falhou';
+  motivo: 'comprovante' | 'desmarcada' | 'insistiu_na_clinica' | 'cadastro_duplicado' | 'agenda_sem_conferir' | 'conferir_extrato' | 'comprovante_recusado' | 'anexo_nao_lido' | 'sinal_pix_falhou' | 'sinal_pix_sem_registro';
   dedupe?: Dedupe;
   agora?: () => number;
   /** Avisa o João quando a tarefa não saiu: o paciente já ouviu "a equipe confirma em 1 hora". */
@@ -536,7 +536,7 @@ export async function abrirTarefaParaEquipe(args: {
 }): Promise<'criada' | 'repetida' | 'falhou'> {
   const { slug, unitId, leadId, kommo, recorder, motivo } = args;
   const dedupe = args.dedupe ?? { avisoRecente, marcarAviso };
-  const chaveBase = { comprovante: 'comprovante_so_equipe', desmarcada: 'consulta_desmarcada_afirmada', insistiu_na_clinica: 'taxa_insistiu_na_clinica', cadastro_duplicado: 'cadastro_possivel_duplicado', agenda_sem_conferir: 'agenda_horario_sem_conferir', conferir_extrato: 'conferir_extrato', comprovante_recusado: 'comprovante_nao_aceito', anexo_nao_lido: 'anexo_nao_lido', sinal_pix_falhou: 'sinal_pix_falhou' }[motivo];
+  const chaveBase = { comprovante: 'comprovante_so_equipe', desmarcada: 'consulta_desmarcada_afirmada', insistiu_na_clinica: 'taxa_insistiu_na_clinica', cadastro_duplicado: 'cadastro_possivel_duplicado', agenda_sem_conferir: 'agenda_horario_sem_conferir', conferir_extrato: 'conferir_extrato', comprovante_recusado: 'comprovante_nao_aceito', anexo_nao_lido: 'anexo_nao_lido', sinal_pix_falhou: 'sinal_pix_falhou', sinal_pix_sem_registro: 'sinal_pix_sem_registro' }[motivo];
   const chave = args.chaveExtra ? `${chaveBase}:${args.chaveExtra}` : chaveBase;
   try {
     if (await dedupe.avisoRecente(unitId, leadId, chave, motivo === 'comprovante' || motivo === 'comprovante_recusado' || motivo === 'anexo_nao_lido' ? JANELA_COMPROVANTE_MS : undefined)) return 'repetida';
@@ -560,6 +560,7 @@ export async function abrirTarefaParaEquipe(args: {
       conferir_extrato: `CONFERIR NO EXTRATO · ${slug}${quem} · consulta JÁ lançada pela IA com base no comprovante.`,
       anexo_nao_lido: `VER ANEXO · ${slug}${quem} · o paciente mandou uma imagem/PDF e o servidor NÃO conseguiu ler (download, visão ou tipo de arquivo que não lê). Pode ser o comprovante da taxa: abrir o anexo no Kommo; a IA não marca consulta sem ler o comprovante.`,
       sinal_pix_falhou: `ENVIAR O PIX DO SINAL · ${slug}${quem} · o paciente escolheu garantir a vaga com o sinal e a IA NÃO conseguiu gerar o Pix (link do Asaas). Disse a ele que a equipe envia o Pix em instantes: gerar a cobrança PIX do sinal no Asaas da unidade e mandar por aqui em até 1 h. NÃO é a chave fixa da clínica.`,
+      sinal_pix_sem_registro: `CONFERIR O PIX DO SINAL · ${slug}${quem} · a IA gerou o link do sinal no Asaas e mandou ao paciente, mas o link NÃO ficou registrado no agente: a baixa automática não vai enxergar o pagamento. Conferir no Asaas da unidade se ele pagou (referência sofia-sinal:${slug}:<cartão>) e marcar «✓ Consulta pg antecipado» à mão.`,
       comprovante_recusado: `VER COMPROVANTE · ${slug}${quem} · a IA NÃO aceitou o comprovante que o paciente mandou e pediu outro; a consulta NÃO foi marcada. Se ele disser que já pagou, conferir no extrato e lançar a consulta.`,
     }[motivo];
     const agora = args.agora ?? Date.now;
@@ -587,6 +588,7 @@ export async function abrirTarefaParaEquipe(args: {
       cadastro_duplicado: `a tarefa de conferir o CADASTRO em dobro NÃO saiu (lead ${leadId}): ${erro}. A IA não prometeu nada por causa dela, mas a equipe não sabe do outro cadastro: avisar à mão.`,
       anexo_nao_lido: `a tarefa «ver anexo» (imagem/PDF que o servidor não conseguiu ler) não saiu (lead ${leadId}): ${erro}. O paciente pode ter mandado o comprovante e ninguém da equipe sabe: avisar à mão.`,
       comprovante_recusado: `a tarefa «ver comprovante» (comprovante NÃO aceito pela IA) não saiu (lead ${leadId}): ${erro}. O paciente foi convidado a mandar outro comprovante e a equipe não sabe do motivo: avisar à mão se ele insistir.`,
+      sinal_pix_sem_registro: `a IA mandou o link do sinal (lead ${leadId}) que NÃO ficou registrado E a tarefa «conferir o Pix do sinal» NÃO saiu: ${erro}. Conferir no Asaas da unidade se o paciente pagou.`,
       sinal_pix_falhou: `a IA NÃO gerou o Pix do sinal (lead ${leadId}) E a tarefa «enviar o Pix do sinal» NÃO saiu: ${erro}. O paciente escolheu o sinal e ninguém da equipe sabe: mandar o Pix à mão.`,
       conferir_extrato: `a IA MARCOU uma consulta pelo comprovante de Pix (lead ${leadId}) e a tarefa «conferir no extrato» NÃO saiu: ${erro}. Ninguém foi avisado de conferir o pagamento: conferir à mão.`,
     };

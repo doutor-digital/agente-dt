@@ -21,6 +21,7 @@ import { estadoDaAutomacao } from './automacoes-estado.js';
 import { registrarSimulacao } from './so-no-papel.js';
 import { createKommoClient, type KommoClient } from '../services/kommo.service.js';
 import { asaasGet } from './integracoes/asaas.js';
+import { fusoDaUnidade } from './fuso.js';
 import { chaveDaClinica, diaCurto, diaNoFuso, ID_SINAL_PIX, somarDias, type LinhaDoSinal } from './sinal-pix.js';
 import { pagouOAntecipado } from './follow-up-worker.js';
 import { normalizar } from './franquia-sync.js';
@@ -154,8 +155,7 @@ async function varrerUnidade(unit: Unit, seco: boolean): Promise<void> {
     take: MAX_PENDENTES_POR_UNIDADE,
   })) as LinhaDoSinal[];
   if (linhas.length === 0) return;
-  const fuso = unit.spineTimezone && unit.spineTimezone.trim() ? unit.spineTimezone : 'America/Sao_Paulo';
-  const hoje = diaNoFuso(new Date(), fuso);
+  const hoje = diaNoFuso(new Date(), fusoDaUnidade(unit));
 
   const pendentes = linhas.filter((l) => l.status === 'pendente');
   let decisoes: Decisao[] = [];
@@ -190,12 +190,15 @@ async function varrerUnidade(unit: Unit, seco: boolean): Promise<void> {
     }
     try {
       // O banco primeiro (o dinheiro entrou: isso é fato); o cartão depois, e `avisadoEm` só quando o cartão foi atualizado.
+      // O status só muda uma vez: `updateMany` condicionado a `pendente` (duas cópias do servidor no deploy não duplicam a nota).
       if (d.tipo === 'pago') {
-        await prisma.sinalPix.update({ where: { id: d.linha.id }, data: { status: 'pago', paymentId: d.paymentId, pagoEm: new Date() } });
+        const mudou = await prisma.sinalPix.updateMany({ where: { id: d.linha.id, status: 'pendente' }, data: { status: 'pago', paymentId: d.paymentId, pagoEm: new Date() } });
+        if (mudou.count !== 1) continue;
         await aplicar(d.linha, notaDoPagamento(d.linha, d.paymentId), true);
         logger.info({ unit: unit.slug, leadId, paymentId: d.paymentId }, `${ID_SINAL_PIX}: sinal pago — cartão atualizado`);
       } else {
-        await prisma.sinalPix.update({ where: { id: d.linha.id }, data: { status: 'expirado' } });
+        const mudou = await prisma.sinalPix.updateMany({ where: { id: d.linha.id, status: 'pendente' }, data: { status: 'expirado' } });
+        if (mudou.count !== 1) continue;
         await aplicar(d.linha, notaDoVencimento(d.linha), false);
         logger.info({ unit: unit.slug, leadId, linkId: d.linha.linkId }, `${ID_SINAL_PIX}: link vencido sem pagamento — nota no cartão`);
       }

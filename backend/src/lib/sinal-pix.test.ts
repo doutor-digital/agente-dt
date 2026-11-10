@@ -54,7 +54,7 @@ test('cria o link PIX de R$ 50, uso único, até a véspera da consulta, com a r
   const f = asaasFalso();
   const { banco, criados } = bancoFalso();
   const r = await gerarSinalPix(UNIT, 28000001, CONSULTA, deps({ escrever: f.escrever, banco }));
-  assert.deepEqual(r, { tipo: 'link', url: 'https://www.asaas.com/c/725104409743', novo: true, valor: 50, venceEm: '2026-11-13' });
+  assert.deepEqual(r, { tipo: 'link', url: 'https://www.asaas.com/c/725104409743', novo: true, valor: 50, venceEm: '2026-11-13', registrado: true });
   assert.equal(f.chamadas.length, 1);
   assert.equal(f.chamadas[0]!.metodo, 'POST');
   assert.equal(f.chamadas[0]!.caminho, '/paymentLinks');
@@ -148,6 +148,18 @@ test('falha do Asaas (401, 403, timeout, resposta ruim) e unidade sem chave NUNC
   // a chave nunca aparece no resultado
   const r = await gerarSinalPix(UNIT, 1, CONSULTA, deps({ escrever: asaasFalso(new ErroAsaas('erro', 500)).escrever }));
   assert.ok(!JSON.stringify(r).includes('aact'));
+});
+
+test('link criado no Asaas mas banco falhou: devolve o link (o paciente pode pagar) marcado como NÃO registrado, para a equipe conferir', async () => {
+  const banco: BancoDoSinal = { ...bancoFalso().banco, create: async () => { throw new Error('banco fora'); } };
+  const r = await gerarSinalPix(UNIT, 1, CONSULTA, deps({ banco }));
+  assert.equal(r.tipo === 'link' && r.url, 'https://www.asaas.com/c/725104409743');
+  assert.equal(r.tipo === 'link' && r.registrado, false);
+});
+
+test('fuso inválido na unidade não derruba a geração (cai no de São Paulo)', async () => {
+  const r = await gerarSinalPix({ ...UNIT, spineTimezone: 'Nao/Existe' }, 1, CONSULTA, deps());
+  assert.equal(r.tipo, 'link');
 });
 
 test('unidade sem sinal configurado nunca chama o Asaas', async () => {

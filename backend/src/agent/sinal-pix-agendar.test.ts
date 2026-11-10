@@ -325,6 +325,33 @@ test('o leadId que o modelo escreve NÃO troca o cartão da consulta marcada no 
   assert.equal(sinais[0]!.leadId, '28000001');
 });
 
+test('link gerado mas não gravado no banco: a Sofia ainda recebe o link e a equipe ganha a tarefa de conferir o pagamento à mão', async () => {
+  (prisma as any).sinalPix.create = async () => { throw new Error('banco fora'); };
+  try {
+    const r = await gerarSinal(atual).func({ leadId: 83 });
+    assert.ok(r.includes('https://www.asaas.com/c/725104409743'));
+    assert.equal(tarefas.length, 1);
+    assert.match(tarefas[0]!.text, /CONFERIR O PIX DO SINAL · doutor-hernia-araguaina/);
+    assert.match(tarefas[0]!.text, /a baixa automática não vai enxergar o pagamento/);
+  } finally {
+    // devolve o dublê de sempre
+    (prisma as any).sinalPix.create = async ({ data }: any) => { const l = { id: `s${sinais.length + 1}`, status: 'pendente', paymentId: null, criadoEm: new Date(), pagoEm: null, avisadoEm: null, ...data }; sinais.push(l); return l; };
+  }
+});
+
+test('o banco lançando dentro da trava não derruba a resposta: vira "a equipe envia o Pix" com tarefa', async () => {
+  const original = (prisma as any).$transaction;
+  Object.defineProperty(prisma, '$transaction', { value: async () => { throw new Error('P2028 transaction timeout'); }, configurable: true });
+  try {
+    const r = await gerarSinal(atual).func({ leadId: 84 });
+    assert.match(r, /NÃO consegui gerar o Pix do sinal agora/);
+    assert.doesNotMatch(r, /P2028|timeout/);
+    assert.equal(tarefas.length, 1);
+  } finally {
+    Object.defineProperty(prisma, '$transaction', { value: original, configurable: true });
+  }
+});
+
 test('sem marcação no turno e sem conversa para o leadId do modelo: nada é gerado', async () => {
   conversaExiste = false;
   const r = await gerarSinal(atual).func({ leadId: 424242 });

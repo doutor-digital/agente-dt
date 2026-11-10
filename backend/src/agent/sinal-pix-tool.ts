@@ -77,8 +77,10 @@ export function buildGerarSinalPix({ unit, recorder, kommo }: ContextoDoSinal) {
       const leadId = doTurno ?? args.leadId;
       if (!leadId) return 'Informe o leadId desta conversa: o sinal é gerado depois de a consulta estar marcada (agendar_consulta).';
       if (!doTurno) {
-        const conversa = await prisma.conversation.findFirst({ where: { unitId: unit.id, leadId: String(leadId) }, select: { id: true } }).catch(() => null);
-        if (!conversa) return 'Não achei esta conversa. Use o leadId desta conversa, depois de marcar a consulta com agendar_consulta.';
+        // a conversa em andamento: o paciente escreveu na última hora (o cartão de outro paciente, parado, não passa)
+        const recente = new Date(Date.now() - 60 * 60_000);
+        const conversa = await prisma.conversation.findFirst({ where: { unitId: unit.id, leadId: String(leadId), lastMessageAt: { gte: recente } }, select: { id: true } }).catch(() => null);
+        if (!conversa) return 'Não achei esta conversa em andamento. Use o leadId desta conversa, depois de marcar a consulta com agendar_consulta.';
       }
       const fresca = await prisma.unit.findUnique({ where: { id: unit.id } }).catch(() => null);
       const s = fresca ? sinalDaUnidade(fresca) : null;
@@ -97,7 +99,11 @@ export function buildGerarSinalPix({ unit, recorder, kommo }: ContextoDoSinal) {
       const r: ResultadoDoSinal =
         estadoDaAutomacao(fresca.slug, ID_SINAL_PIX, process.env.SINAL_PIX_SLUGS) !== 'ligado'
           ? { tipo: 'falhou', motivo: 'baixa-desligada', detalhe: 'a automação sinal-pix (baixa do Pix) não está ligada nesta unidade' }
-          : await gerarSinalPix(fresca, leadId, dia);
+          : await gerarSinalPix(fresca, leadId, dia).catch((err: unknown): ResultadoDoSinal => {
+              // nunca derruba a resposta: a trava do banco, o fuso ou qualquer imprevisto viram o caminho "a equipe envia o Pix"
+              logger.error({ err: String(err), unit: fresca.slug, leadId }, 'sinal-pix: a geração lançou — segue como falha');
+              return { tipo: 'falhou', motivo: 'asaas', detalhe: String(err).slice(0, 300) };
+            });
       await recorder.step({
         kind: r.tipo === 'falhou' ? 'ERROR' : 'TOOL_RESULT',
         title: r.tipo === 'link' ? `Sinal Pix ${r.novo ? 'gerado' : 'reaproveitado'} (lead ${leadId})` : r.tipo === 'ja-pago' ? `Sinal Pix já pago (lead ${leadId})` : `Sinal Pix NÃO gerado (lead ${leadId}): ${r.motivo}`,
@@ -121,6 +127,10 @@ export function buildGerarSinalPix({ unit, recorder, kommo }: ContextoDoSinal) {
           });
           tarefaAberta = t !== 'falhou';
         }
+      }
+      // O link existe mas não ficou gravado: a baixa automática não o enxerga. A Sofia entrega o link (o paciente pode pagar) e a equipe é avisada de conferir.
+      if (r.tipo === 'link' && r.registrado === false && kommo) {
+        await abrirTarefaParaEquipe({ slug: fresca.slug, unitId: fresca.id, leadId, kommo, recorder, motivo: 'sinal_pix_sem_registro' }).catch(() => undefined);
       }
       return textoDoSinal(r, s, tarefaAberta);
     },

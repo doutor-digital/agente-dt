@@ -292,6 +292,8 @@ export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoG
   // O desconto do convênio não pode sair como preço do Pix — ver preco-convenio.ts.
   const p = precosDaConsulta(unit);
   const sinal = sinalDaUnidade(unit);
+  // R$ 50 e R$ 200 só são "do sinal" quando a frase fala do sinal / do que fica no dia; solto no texto continua sendo valor inventado
+  const falaDoSinal = /\bsinal\b|\bno dia\b|\brestante\b|\bna cl[ií]nica\b/i.test(texto);
   if (p) {
     const conv = convenioDaUnidade(unit, p);
     if (conv != null) {
@@ -311,7 +313,7 @@ export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoG
       antecipado: p.antecipado,
       taxaDeReserva: unit.spineBookingRequiresPayment ?? false,
       // Sofia 2.0: o sinal (R$ 50) e o resto no dia (R$ 200) são preços legítimos; sem a flag a lista é vazia (nada muda)
-      valoresLegitimos: sinal ? [sinal.sinal, sinal.restoNoDia] : [],
+      valoresLegitimos: sinal && falaDoSinal ? [sinal.sinal, sinal.restoNoDia] : [],
     });
     if (va.corrigiu.length > 0) {
       triggered.push(`antecipado_corrigido:${va.corrigiu.join('/')}->${p.antecipado}`);
@@ -329,7 +331,7 @@ export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoG
   // Sinal por Pix (Sofia 2.0): R$ 50 e R$ 200 não estão nas fontes ("R$ 250 antecipado ou R$ 350 no dia") mas são preços da unidade.
   // Só entram se já houver catálogo (unidade sem R$ na ficha continua sem checagem) e só com a flag ligada.
   const aprovados = new Set(catalogo);
-  if (sinal && catalogo.size > 0) for (const v of [sinal.sinal, sinal.restoNoDia]) if (Number.isInteger(v)) aprovados.add(v);
+  if (sinal && falaDoSinal && catalogo.size > 0) for (const v of [sinal.sinal, sinal.restoNoDia]) if (Number.isInteger(v)) aprovados.add(v);
   if (aprovados.size > 0) {
     const foraDoCatalogo = [...parseAmounts(texto)].filter(
       (v) => v >= 20 && !amountApproved(v, aprovados),

@@ -20,7 +20,7 @@ import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { asaasEscrever } from './integracoes/asaas-escrita.js';
 import { chaveDaUnidade } from './integracoes/chaves.js';
-import { partesNoFuso } from './fuso.js';
+import { fusoDaUnidade, partesNoFuso } from './fuso.js';
 import { unidadeDona } from '../agent/rede-doutor-hernia.js';
 
 /** Id da automação no catálogo (tela de Automações; variável SINAL_PIX_SLUGS): liga a BAIXA do sinal (`sinal-pix-worker.ts`). */
@@ -93,7 +93,7 @@ export const depsReais = (): DepsDoSinal => ({
         return fn(tx.sinalPix as unknown as BancoDoSinal);
       },
       // o Asaas pode levar até 30 s: a trava segura a transação esse tempo (raro: um sinal por paciente)
-      { timeout: 45_000, maxWait: 10_000 },
+      { timeout: 100_000, maxWait: 10_000 },
     ),
   chave: chaveDaClinica,
   escrever: asaasEscrever,
@@ -103,7 +103,8 @@ export const depsReais = (): DepsDoSinal => ({
 export type MotivoDaFalha = 'sem-chave' | 'teto' | 'asaas' | 'baixa-desligada';
 
 export type ResultadoDoSinal =
-  | { tipo: 'link'; url: string; novo: boolean; valor: number; venceEm: string }
+  /** `registrado` = false: o link existe no Asaas mas NÃO ficou gravado no banco (a baixa automática não o enxerga) */
+  | { tipo: 'link'; url: string; novo: boolean; valor: number; venceEm: string; registrado?: boolean }
   | { tipo: 'ja-pago' }
   | { tipo: 'falhou'; motivo: MotivoDaFalha; detalhe: string };
 
@@ -113,6 +114,7 @@ export interface UnidadeDoSinal {
   name: string;
   sinalPixCentavos: number | null;
   spineTimezone?: string | null;
+  businessHoursTimezone?: string | null;
 }
 
 /** "AAAA-MM-DD" de um instante no fuso da unidade. */
@@ -177,8 +179,7 @@ export async function gerarSinalPix(
   const travar = deps.travar ?? ((chave, fn) => umPorVez(chave, () => fn(deps.banco)));
   return travar(`sinal-pix:${unit.id}:${leadId}`, async (banco) => {
     const agora = deps.agora();
-    const fuso = unit.spineTimezone && unit.spineTimezone.trim() ? unit.spineTimezone : 'America/Sao_Paulo';
-    const hoje = diaNoFuso(agora, fuso);
+    const hoje = diaNoFuso(agora, fusoDaUnidade({ spineTimezone: unit.spineTimezone ?? undefined, businessHoursTimezone: unit.businessHoursTimezone ?? undefined }));
     const venceEm = validadeDoLink(hoje, diaDaConsulta);
 
     // 1) Já existe sinal deste paciente? Pago vale mais que pendente; pendente só serve se ainda cobre a data pedida.
@@ -230,12 +231,14 @@ export async function gerarSinalPix(
     }
 
     // 5) Guarda. Se o banco falhar o link já existe no Asaas: o paciente ainda pode pagar (sem baixa automática) e o log deixa o rastro.
+    let registrado = true;
     try {
       await banco.create({ data: { unitId: unit.id, leadId: String(leadId), linkId, url: criado.url, valorCentavos: centavos as number, venceEm } });
     } catch (err) {
+      registrado = false;
       logger.error({ err: String(err), unit: unit.slug, leadId, linkId }, 'sinal-pix: link criado no Asaas mas NÃO gravado no banco — sem baixa automática');
     }
     logger.info({ unit: unit.slug, leadId, linkId, venceEm }, 'sinal-pix: link criado');
-    return { tipo: 'link', url: criado.url, novo: true, valor, venceEm };
+    return { tipo: 'link', url: criado.url, novo: true, valor, venceEm, registrado };
   });
 }

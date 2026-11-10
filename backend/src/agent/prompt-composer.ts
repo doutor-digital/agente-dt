@@ -700,8 +700,20 @@ export interface SinalDaUnidade {
   restoNoDia: number;
 }
 
+// Chamada várias vezes por turno com a mesma unidade (prompt, ferramentas, guardrail): lê as fontes uma vez enquanto nada mudou.
+const sinalGuardado = new WeakMap<object, { chave: string; r: SinalDaUnidade | null }>();
+
 export function sinalDaUnidade(unit: { sourceProdutos?: string | null; systemPrompt?: string | null } & FlagsDePagamento): SinalDaUnidade | null {
   if (!unidadeComSinal(unit)) return null;
+  const chave = [unit.sinalPixCentavos, unit.acceptsAdvancePayment, unit.spineBookingRequiresPayment, unit.sourceProdutos, unit.systemPrompt].join('\u0000');
+  const g = sinalGuardado.get(unit);
+  if (g && g.chave === chave) return g.r;
+  const r = lerSinalDaUnidade(unit);
+  sinalGuardado.set(unit, { chave, r });
+  return r;
+}
+
+function lerSinalDaUnidade(unit: { sourceProdutos?: string | null; systemPrompt?: string | null } & FlagsDePagamento): SinalDaUnidade | null {
   const p = precosDaConsulta({ ...unit, sourceProdutos: unit.sourceProdutos ?? null, systemPrompt: unit.systemPrompt ?? '' });
   if (!p) return null;
   const sinal = (unit.sinalPixCentavos as number) / 100;

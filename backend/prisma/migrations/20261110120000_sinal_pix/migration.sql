@@ -23,4 +23,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS "sinais_pix_unit_id_link_id_key" ON "sinais_pi
 CREATE INDEX IF NOT EXISTS "sinais_pix_unit_id_lead_id_status_idx" ON "sinais_pix"("unit_id", "lead_id", "status");
 CREATE INDEX IF NOT EXISTS "sinais_pix_status_criado_em_idx" ON "sinais_pix"("status", "criado_em");
 
-ALTER TABLE "sinais_pix" ADD CONSTRAINT "sinais_pix_unit_id_fkey" FOREIGN KEY ("unit_id") REFERENCES "units"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'sinais_pix_unit_id_fkey') THEN
+    ALTER TABLE "sinais_pix" ADD CONSTRAINT "sinais_pix_unit_id_fkey" FOREIGN KEY ("unit_id") REFERENCES "units"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
