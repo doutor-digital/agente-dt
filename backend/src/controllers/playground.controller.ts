@@ -33,6 +33,11 @@ const messageSchema = z.object({
 
 const runSchema = z.object({
   messages: z.array(messageSchema).min(1).max(40),
+  /**
+   * Prompt da unidade SÓ PARA ESTE TESTE (substitui `units.system_prompt` nesta chamada, nada é gravado).
+   * Serve para testar um prompt novo antes de publicar (Sofia 2.0): sem isto o playground só roda o prompt vivo.
+   */
+  unitSystemPrompt: z.string().min(1).max(60_000).optional(),
 });
 
 interface SandboxAction {
@@ -330,11 +335,13 @@ export async function playgroundRunHandler(req: Request, res: Response): Promise
     return;
   }
 
-  const unit = await prisma.unit.findUnique({ where: { id: unitId } });
-  if (!unit) {
+  const unitDoBanco = await prisma.unit.findUnique({ where: { id: unitId } });
+  if (!unitDoBanco) {
     res.status(404).json({ error: 'unit_not_found' });
     return;
   }
+  // prompt de teste: vale só para esta chamada, a unidade no banco não muda
+  const unit = parsed.data.unitSystemPrompt ? { ...unitDoBanco, systemPrompt: parsed.data.unitSystemPrompt } : unitDoBanco;
   const useAnthropic = unit.llmProvider === 'anthropic' && !!unit.anthropicApiKey;
   const useGoogle = unit.llmProvider === 'google' && !!unit.googleApiKey;
   if (!useAnthropic && !useGoogle && !resolveOpenAIApiKey(unit)) {
