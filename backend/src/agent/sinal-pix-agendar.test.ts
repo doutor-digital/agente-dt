@@ -17,6 +17,7 @@ import { agoraLocalISO } from './consulta-que-passou.js';
 import { feriadoNacional } from '../lib/feriados.js';
 import { _depsDoCacheParaTeste, depositoNaMemoria } from '../lib/cache-agenda.js';
 import { _semearParaTeste } from '../lib/automacoes-estado.js';
+import { ID_SINAL_PIX } from '../lib/sinal-pix.js';
 import { _semearCrmParaTeste } from '../lib/crm-compartilhado.js';
 import { limparCacheEsquema } from '../lib/kommo-schema.js';
 
@@ -66,6 +67,7 @@ const chavesPorUnidade = new Map<string, string>(); // unitId -> chave em texto
 const sinais: Array<Record<string, any>> = [];
 const conversaGravou: Array<{ data: { pagamentoEscolhido?: string } }> = [];
 let agendadoPara: string | null = null;
+let conversaExiste = true;
 let atual: Unit = unidade();
 
 Object.defineProperty(prisma, 'unit', {
@@ -81,7 +83,11 @@ Object.defineProperty(prisma, 'spineLeadLink', {
 Object.defineProperty(prisma, 'agendaBlock', { value: { findMany: async () => [] }, configurable: true });
 Object.defineProperty(prisma, 'cardAlert', { value: { findUnique: async () => null, upsert: async () => ({}) }, configurable: true });
 Object.defineProperty(prisma, 'conversation', {
-  value: { updateMany: async (a: { data: { pagamentoEscolhido?: string } }) => (conversaGravou.push(a), { count: 1 }), findFirst: async () => null },
+  value: {
+    updateMany: async (a: { data: { pagamentoEscolhido?: string } }) => (conversaGravou.push(a), { count: 1 }),
+    // `agendar_consulta` lê a escolha guardada (pagamentoEscolhido); a ferramenta do sinal só confere que a conversa existe
+    findFirst: async (a: { select?: { id?: boolean } }) => (a.select?.id ? (conversaExiste ? { id: 'c1' } : null) : null),
+  },
   configurable: true,
 });
 Object.defineProperty(prisma, 'chaveDeIntegracao', {
@@ -111,6 +117,13 @@ Object.defineProperty(prisma, 'sinalPix', {
   configurable: true,
 });
 
+// a trava de geração em produção é uma transação com advisory lock; aqui só confirma que o corpo roda com o `sinalPix` da transação
+const travas: string[] = [];
+Object.defineProperty(prisma, '$transaction', {
+  value: async (fn: (tx: unknown) => Promise<unknown>) => fn({ $executeRaw: async (_s: TemplateStringsArray, ...v: unknown[]) => (travas.push(String(v[0])), 1), sinalPix: (prisma as any).sinalPix }),
+  configurable: true,
+});
+
 const spine = SpineService as unknown as Record<string, unknown>;
 spine.searchSchedules = async () => ({ ok: true, data: { schedules: [], total: 0, pages: 1 } });
 spine.createSchedule = async () => ({ ok: true, data: { idSchedule: 101 } });
@@ -130,19 +143,24 @@ const kommo = {
   getLead: async () => ({ name: 'Maria Teste', responsible_user_id: 7 }),
 } as unknown as KommoClient;
 
-const recorder = { traceId: 'trace-sinal', step: async () => undefined } as unknown as TraceRecorder;
+// um traceId por teste: o cartão do turno (`agendar_consulta` → `gerar_sinal_pix`) é guardado por ele
+let n = 0;
+let recorder = { traceId: 'trace-sinal-0', step: async () => undefined } as unknown as TraceRecorder;
 
 beforeEach(() => {
+  recorder = { traceId: `trace-sinal-${++n}`, step: async () => undefined } as unknown as TraceRecorder;
   atual = unidade();
   unidades.clear();
   unidades.set(atual.id, atual);
   chavesPorUnidade.clear();
   chavesPorUnidade.set(atual.id, CHAVE_DA_CLINICA);
   sinais.length = 0;
+  travas.length = 0;
   conversaGravou.length = 0;
   chamadasAoAsaas.length = 0;
   tarefas.length = 0;
   agendadoPara = `${DIA}T09:00`;
+  conversaExiste = true;
   respostaDoAsaas = { status: 200, corpo: { id: '725104409743', url: 'https://www.asaas.com/c/725104409743' } };
   process.env.SINAL_PIX_SLUGS = '*';
   limparCacheEsquema();
@@ -226,6 +244,7 @@ test('gerar_sinal_pix SEM argumentos (o cartão é o da consulta marcada no turn
   assert.match(outra, /MESMO link/);
   assert.equal(chamadasAoAsaas.length, 1);
   assert.equal(sinais.length, 1);
+  assert.ok(travas.every((t) => t === 'sinal-pix:u-arag:28000001') && travas.length === 2, `uma trava por geração: ${travas}`);
 });
 
 test('sem consulta marcada no cartão a ferramenta não gera sinal', async () => {
@@ -285,5 +304,30 @@ test('baixa desligada (SINAL_PIX_SLUGS vazio): não gera link que ninguém vai d
   const r = await gerarSinal(atual).func({ leadId: 81 });
   assert.equal(chamadasAoAsaas.length, 0);
   assert.match(r, /NÃO consegui gerar/);
-  assert.match(tarefas[0]!.text, /a baixa automática do sinal está desligada nesta unidade/);
+  assert.match(tarefas[0]!.text, /a baixa automática do sinal não está ligada nesta unidade/);
+});
+
+test('baixa em "só no papel" (seco): o worker não grava nada, então a ferramenta também NÃO gera link real — a equipe manda o Pix', async () => {
+  _semearParaTeste([{ slug: atual.slug, automacao: ID_SINAL_PIX, estado: 'seco' }]);
+  const r = await gerarSinal(atual).func({ leadId: 82 });
+  assert.equal(chamadasAoAsaas.length, 0);
+  assert.match(r, /NÃO consegui gerar/);
+  assert.match(tarefas[0]!.text, /a baixa automática do sinal não está ligada nesta unidade/);
+  assert.equal(sinais.length, 0);
+});
+
+test('o leadId que o modelo escreve NÃO troca o cartão da consulta marcada no turno (id alucinado ou induzido não cria sinal em outro paciente)', async () => {
+  const hora = await primeiroHorario(atual);
+  await agendar(atual).func({ idClient: 9, data: DIA, hora, diaConfirmado: true, leadId: 28000001, formaPagamento: 'pix_antecipado' });
+  const r = await gerarSinal(atual).func({ leadId: 99999999 });
+  assert.match(r, /Pix do sinal de R\$ 50 gerado/);
+  assert.equal(chamadasAoAsaas[0]!.corpo.externalReference, 'sofia-sinal:doutor-hernia-araguaina:28000001');
+  assert.equal(sinais[0]!.leadId, '28000001');
+});
+
+test('sem marcação no turno e sem conversa para o leadId do modelo: nada é gerado', async () => {
+  conversaExiste = false;
+  const r = await gerarSinal(atual).func({ leadId: 424242 });
+  assert.match(r, /Não achei esta conversa/);
+  assert.equal(chamadasAoAsaas.length, 0);
 });

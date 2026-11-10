@@ -11,7 +11,7 @@ import { DynamicStructuredTool } from '@langchain/core/tools';
 import { z as zod } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { getActiveConfig } from '../agent/config.js';
-import { composeSystemPromptForUnit } from '../agent/prompt-composer.js';
+import { composeSystemPromptForUnit, sinalDaUnidade } from '../agent/prompt-composer.js';
 import { leadFieldRuleDescription, leadFieldRuleSchema } from '../agent/tools.js';
 import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.js';
 import type { LeadFieldRule } from '@prisma/client';
@@ -90,6 +90,8 @@ function buildSandboxTools(opts: {
   onCall: (a: SandboxAction) => void;
   leadFieldRules: LeadFieldRule[];
   tz: string;
+  /** a unidade usa o sinal por Pix (`sinalDaUnidade`): só então o sandbox ganha `gerar_sinal_pix`, como em produção */
+  comSinal?: boolean;
 }) {
   const aplicar_tag = new DynamicStructuredTool({
     name: 'aplicar_tag',
@@ -327,7 +329,7 @@ function buildSandboxTools(opts: {
     buscar_paciente,
     cadastrar_paciente,
     agendar_consulta,
-    gerar_sinal_pix,
+    ...(opts.comSinal ? [gerar_sinal_pix] : []),
     remarcar_consulta,
     cancelar_consulta,
     resumir_lead_para_sdr,
@@ -385,6 +387,7 @@ operador revisar.`;
   const tools = buildSandboxTools({
     leadFieldRules,
     tz: fusoDaUnidade(unit),
+    comSinal: sinalDaUnidade(unit) !== null,
     onCall: (a) => {
       actions.push(a);
       timeline.push({

@@ -15,7 +15,7 @@ import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import type { TraceRecorder } from './trace-recorder.js';
 import type { KommoClient } from '../services/kommo.service.js';
-import { gerarSinalPix, ID_SINAL_PIX, type ResultadoDoSinal } from '../lib/sinal-pix.js';
+import { diaCurto, gerarSinalPix, ID_SINAL_PIX, type ResultadoDoSinal } from '../lib/sinal-pix.js';
 import { estadoDaAutomacao } from '../lib/automacoes-estado.js';
 import { abrirTarefaParaEquipe } from './confirmacao-so-com-crm.js';
 import { fmtBRL, sinalDaUnidade, type SinalDaUnidade } from './prompt-composer.js';
@@ -32,8 +32,6 @@ export function registrarLeadDoSinal(traceId: string, leadId: number): void {
   if (leadDoTurno.size > 500) leadDoTurno.delete(leadDoTurno.keys().next().value as string);
   leadDoTurno.set(traceId, leadId);
 }
-
-const diaCurto = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
 
 /** O que a ferramenta devolve à Sofia para cada desfecho. Puro: o teste confere as frases. */
 export function textoDoSinal(r: ResultadoDoSinal, s: SinalDaUnidade, tarefaAberta: boolean): string {
@@ -73,8 +71,15 @@ export function buildGerarSinalPix({ unit, recorder, kommo }: ContextoDoSinal) {
       leadId: z.number().int().positive().optional().describe('ID do lead no Kommo — opcional: sem ele vale o da consulta que você acabou de marcar.'),
     }),
     func: async (args: { leadId?: number }) => {
-      const leadId = args.leadId ?? leadDoTurno.get(recorder.traceId);
+      // O cartão é o da consulta que `agendar_consulta` marcou NESTE turno: vale esse, e o leadId que o modelo escreve não o troca (id alucinado ou
+      // induzido por texto do paciente criaria o sinal no cartão de outra pessoa). Sem marcação no turno, vale o do modelo, mas só se a conversa existe.
+      const doTurno = leadDoTurno.get(recorder.traceId);
+      const leadId = doTurno ?? args.leadId;
       if (!leadId) return 'Informe o leadId desta conversa: o sinal é gerado depois de a consulta estar marcada (agendar_consulta).';
+      if (!doTurno) {
+        const conversa = await prisma.conversation.findFirst({ where: { unitId: unit.id, leadId: String(leadId) }, select: { id: true } }).catch(() => null);
+        if (!conversa) return 'Não achei esta conversa. Use o leadId desta conversa, depois de marcar a consulta com agendar_consulta.';
+      }
       const fresca = await prisma.unit.findUnique({ where: { id: unit.id } }).catch(() => null);
       const s = fresca ? sinalDaUnidade(fresca) : null;
       if (!fresca || !s) return 'Esta unidade não usa sinal por Pix. NÃO ofereça sinal; siga a forma de pagamento de sempre.';
@@ -87,10 +92,11 @@ export function buildGerarSinalPix({ unit, recorder, kommo }: ContextoDoSinal) {
       if (!quando) return 'Ainda não há consulta marcada neste cartão. Marque primeiro com agendar_consulta; só depois gere o sinal.';
       const dia = quando.slice(0, 10);
 
-      // Gerar o link sem a baixa ligada deixaria o paciente pagar e ninguém saber (sem webhook, quem enxerga o Pix é o worker): sem ela, a equipe manda.
+      // Gerar o link sem a baixa LIGADA deixaria o paciente pagar de verdade e ninguém saber (sem webhook, quem enxerga o Pix é o worker, e em "só no
+      // papel" ele não grava nada): só com a baixa ligada; senão a equipe manda o Pix.
       const r: ResultadoDoSinal =
-        estadoDaAutomacao(fresca.slug, ID_SINAL_PIX, process.env.SINAL_PIX_SLUGS) === 'desligado'
-          ? { tipo: 'falhou', motivo: 'baixa-desligada', detalhe: 'a automação sinal-pix (baixa do Pix) está desligada nesta unidade' }
+        estadoDaAutomacao(fresca.slug, ID_SINAL_PIX, process.env.SINAL_PIX_SLUGS) !== 'ligado'
+          ? { tipo: 'falhou', motivo: 'baixa-desligada', detalhe: 'a automação sinal-pix (baixa do Pix) não está ligada nesta unidade' }
           : await gerarSinalPix(fresca, leadId, dia);
       await recorder.step({
         kind: r.tipo === 'falhou' ? 'ERROR' : 'TOOL_RESULT',
@@ -108,7 +114,7 @@ export function buildGerarSinalPix({ unit, recorder, kommo }: ContextoDoSinal) {
             kommo,
             recorder,
             motivo: 'sinal_pix_falhou',
-            detalhe: `Motivo: ${r.motivo === 'sem-chave' ? 'a unidade não tem a chave do Asaas no cofre' : r.motivo === 'teto' ? 'teto de links por dia atingido' : r.motivo === 'baixa-desligada' ? 'a baixa automática do sinal está desligada nesta unidade' : 'o Asaas recusou ou não respondeu'}`,
+            detalhe: `Motivo: ${r.motivo === 'sem-chave' ? 'a unidade não tem a chave do Asaas no cofre' : r.motivo === 'teto' ? 'teto de links por dia atingido' : r.motivo === 'baixa-desligada' ? 'a baixa automática do sinal não está ligada nesta unidade' : 'o Asaas recusou ou não respondeu'}`,
           }).catch((err) => {
             logger.warn({ err: String(err), leadId }, 'sinal-pix: falha ao abrir a tarefa da equipe');
             return 'falhou' as const;

@@ -8,7 +8,7 @@ import { precosDaConsulta, sinalDaUnidade } from './prompt-composer.js';
 import { semProntoSocorro } from './sem-pronto-socorro.js';
 import { ehClinicaParaSinalDeAlerta } from './sinal-de-alerta.js';
 import { sobrouVenda } from './venda-em-alerta.js';
-import { unidadeComSinal, unidadeSemAntecipado } from './pagamento-da-unidade.js';
+import { unidadeSemAntecipado } from './pagamento-da-unidade.js';
 import { semOAntecipadoNaSaida } from './sem-antecipado-saida.js';
 
 /** O que a trava de saída precisa saber além da resposta. */
@@ -245,7 +245,7 @@ export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoG
   const lac = preencherLacunas(texto, {
     // Unidade sem pagamento antecipado: não há chave para entregar — "[chave]" não vira a chave da clínica.
     // Com sinal por Pix também não: o Pix do sinal é o link da ferramenta, e "[chave]" não vira a chave fixa da clínica.
-    chavePix: unidadeSemAntecipado(unit) || unidadeComSinal(unit) ? null : unit.pixKey,
+    chavePix: unidadeSemAntecipado(unit) || sinalDaUnidade(unit) ? null : unit.pixKey,
     titularPix: unit.pixHolder,
     valorAntecipado: precosDaConsulta(unit)?.antecipado ?? null,
   });

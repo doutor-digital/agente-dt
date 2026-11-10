@@ -99,15 +99,19 @@ test('sinal já pago: devolve "já pago" e não gera outro', async () => {
   assert.equal(f.chamadas.length, 0);
 });
 
-test('link pendente que já venceu, ou que acaba antes da nova consulta, não é reaproveitado', async () => {
+test('link pendente que já venceu não é reaproveitado; o que ainda vale é SEMPRE reaproveitado (o Asaas não deixa cancelar link, dois links = dois Pix pagáveis)', async () => {
   const f = asaasFalso({ id: '2', url: 'https://www.asaas.com/c/2' });
   const velho: LinhaDoSinal = { id: 'v', unitId: 'u1', leadId: '1', linkId: '1', url: 'https://www.asaas.com/c/1', valorCentavos: 5000, venceEm: '2026-11-09', status: 'pendente', paymentId: null, criadoEm: new Date('2026-11-06T12:00:00Z'), pagoEm: null, avisadoEm: null };
   const r = await gerarSinalPix(UNIT, 1, CONSULTA, deps({ escrever: f.escrever, banco: bancoFalso([velho]).banco }));
   assert.equal(r.tipo === 'link' && r.novo, true);
-  const curto: LinhaDoSinal = { ...velho, venceEm: '2026-11-11' }; // vale hoje, mas a consulta nova pede até 13/11
-  const r2 = await gerarSinalPix(UNIT, 1, CONSULTA, deps({ escrever: asaasFalso({ id: '3', url: 'https://www.asaas.com/c/3' }).escrever, banco: bancoFalso([curto]).banco }));
-  assert.equal(r2.tipo === 'link' && r2.novo, true);
-  assert.equal(r2.tipo === 'link' && r2.url, 'https://www.asaas.com/c/3');
+  // vale hoje, mas acaba antes da véspera da consulta (remarcou para mais longe): o paciente continua com o MESMO link até ele vencer
+  const curto: LinhaDoSinal = { ...velho, venceEm: '2026-11-11' };
+  const f3 = asaasFalso({ id: '3', url: 'https://www.asaas.com/c/3' });
+  const r2 = await gerarSinalPix(UNIT, 1, '2026-11-20', deps({ escrever: f3.escrever, banco: bancoFalso([curto]).banco }));
+  assert.equal(r2.tipo === 'link' && r2.novo, false);
+  assert.equal(r2.tipo === 'link' && r2.url, 'https://www.asaas.com/c/1');
+  assert.equal(r2.tipo === 'link' && r2.venceEm, '2026-11-11');
+  assert.equal(f3.chamadas.length, 0);
 });
 
 test('teto por unidade: no limite, não cria mais link e avisa que foi o teto; reaproveitar não gasta o teto', async () => {
@@ -167,6 +171,22 @@ test('urlDoAsaasValida: só https no domínio do Asaas', () => {
   assert.equal(urlDoAsaasValida('https://www.asaas.com/c/1'), true);
   assert.equal(urlDoAsaasValida('https://sandbox.asaas.com/c/1'), true);
   for (const ruim of ['http://www.asaas.com/c/1', 'https://asaas.com.evil.io/c/1', 'https://evil.io/asaas.com', 'javascript:alert(1)', '', null, 7]) assert.equal(urlDoAsaasValida(ruim), false, String(ruim));
+});
+
+test('a trava de geração (advisory lock em produção) envolve a checagem e a criação, e o banco usado dentro dela é o que ela entrega', async () => {
+  const f = asaasFalso();
+  const { banco, criados } = bancoFalso();
+  const travas: string[] = [];
+  const outroBanco = bancoFalso();
+  const r = await gerarSinalPix(UNIT, 7, CONSULTA, deps({
+    escrever: f.escrever,
+    banco, // NÃO deve ser usado: a trava entrega o dela
+    travar: async (chave, fn) => (travas.push(chave), fn(outroBanco.banco)),
+  }));
+  assert.equal(r.tipo, 'link');
+  assert.deepEqual(travas, ['sinal-pix:u1:7']);
+  assert.equal(criados.length, 0);
+  assert.equal(outroBanco.criados.length, 1);
 });
 
 test('as 6 unidades Resgate apontam para a clínica dona (a chave do Asaas é da clínica) e as outras para si mesmas', () => {

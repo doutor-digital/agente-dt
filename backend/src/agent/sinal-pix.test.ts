@@ -136,7 +136,8 @@ test('régua: o degrau que manda a CHAVE FIXA não roda na unidade com sinal; na
 test('régua: "Achou caro … antecipado de R$ 150" sai do texto na unidade com sinal, e a regra da unidade diz os preços reais', () => {
   const achouCaro = 'Reancore no custo de não tratar. Deixe ele fazer a conta. Termine oferecendo o antecipado de R$ 150.';
   assert.equal(intencaoDoDegrauParaAUnidade(achouCaro, unidade()), achouCaro);
-  const novo = intencaoDoDegrauParaAUnidade(achouCaro, comSinal());
+  assert.equal(intencaoDoDegrauParaAUnidade(achouCaro, comSinal()), achouCaro, 'sem o aviso de que a unidade tem sinal legível, o texto não muda');
+  const novo = intencaoDoDegrauParaAUnidade(achouCaro, comSinal(), true);
   assert.doesNotMatch(novo, /antecipad|150/);
   assert.equal(regraDePagamento(unidade()), '');
   const regra = regraDePagamento(comSinal());
@@ -145,6 +146,16 @@ test('régua: "Achou caro … antecipado de R$ 150" sai do texto na unidade com 
 });
 
 // ── os guardrails de saída ───────────────────────────────────────────────────────────────────────────────────────────────────
+
+test('flag ligada mas fontes sem os dois preços: NADA do sinal vale (chave fixa e botões de sempre) — a Sofia não fica sem Pix', () => {
+  const u = comSinal({ sourceProdutos: 'Consulta de avaliação.' });
+  assert.equal(sinalDaUnidade(u), null);
+  assert.match(renderFatosDaUnidade(u), new RegExp(`Chave Pix: ${CHAVE_FIXA.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}`));
+  assert.match(renderRulesGlobal(u), /"Pix antecipado" ou "Na clínica"/);
+  assert.equal(degrauDoPixNaoSeAplica({ soPix: true }, 'pix_antecipado', u), false);
+  assert.ok(aplicarGuardrail('Para garantir, o Pix é [chave]. Pode ser?', u).text.includes(CHAVE_FIXA));
+  assert.equal(regraDePagamento(u), '');
+});
 
 test('guardrail: com sinal, R$ 50 e R$ 200 e o link do Asaas passam inteiros; sem a flag o R$ 200 (fora da ficha) é corrigido como sempre', () => {
   const texto = 'Fica R$ 250 com o sinal: R$ 50 agora por este Pix https://www.asaas.com/c/725104409743 e R$ 200 no dia. Pode ser?';

@@ -179,7 +179,7 @@ VOCÊ ESTÁ RETOMANDO UMA CONVERSA QUE PAROU. O paciente não respondeu sua últ
 mensagem. Escreva UMA mensagem curta de reengajamento.
 
 O QUE ESTA MENSAGEM PRECISA FAZER:
-${intencaoDoDegrauParaAUnidade(args.intencao, unit)}
+${intencaoDoDegrauParaAUnidade(args.intencao, unit, sinalDaUnidade(unit) !== null)}
 
 REGRAS:
 - UMA mensagem só, curta. Duas ou três linhas no máximo.

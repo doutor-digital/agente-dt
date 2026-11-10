@@ -230,13 +230,14 @@ export function decidirPagamentoAntecipado(s: {
   // Só a escolha `pix_antecipado` é neutralizada: sem escolha nenhuma vale o ramo 4 (não apaga o que a equipe gravou no cartão).
   const forma = s.semAntecipado && escolhida === 'pix_antecipado' ? 'na_clinica' : escolhida;
   if (forma === 'pix_antecipado') return { valor: 'Sim', porque: 'paciente escolheu Pix antecipado' };
-  // Sinal por Pix (Sofia 2.0): escolher o sinal NÃO é ter pago. O "Sim" só vem quando o Asaas confirma o Pix (lib/sinal-pix-worker.ts, que grava
-  // ✓ Consulta pg antecipado e este campo): até lá o cartão fica "Não" (Valor da Consulta = preço no dia) — e uma remarcação depois do
-  // pagamento NÃO derruba o "Sim" que o worker gravou.
+  // Sinal por Pix (Sofia 2.0): escolher o sinal NÃO é ter pago. A prova do dinheiro é "✓ Consulta pg antecipado", que o worker do sinal
+  // (lib/sinal-pix-worker.ts) marca quando o Asaas confirma o Pix; ESTE campo ("¤", a forma escolhida) o worker não escreve (é ele que dispara
+  // os modelos de WhatsApp com a chave Pix), então fica "Não" e o Valor da Consulta começa no preço do dia — a correção para o preço com sinal
+  // vem do ✓. Se a equipe já pôs "Sim" aqui (recebeu o sinal de outro jeito), remarcar não derruba.
   if (forma === 'sinal_pix') {
     return String(s.valorAtual ?? '').trim().toLowerCase() === 'sim'
-      ? { valor: null, porque: 'sinal por Pix: já consta Sim (pago); mantém' }
-      : { valor: 'Não', porque: 'sinal por Pix escolhido, ainda não pago: vira Sim quando o Asaas confirmar' };
+      ? { valor: null, porque: 'sinal por Pix: a equipe já pôs Sim; mantém' }
+      : { valor: 'Não', porque: 'sinal por Pix escolhido, ainda não pago: a prova é o ✓ Consulta pg antecipado, marcado quando o Asaas confirma' };
   }
   if (forma === 'na_clinica') return { valor: 'Não', porque: 'paciente escolheu pagar na clínica' };
 

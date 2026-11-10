@@ -454,7 +454,7 @@ pergunte em uma frase como pode ajudar. Se a ferramenta responder RECUSADO ou ER
 Fornecedor, agência, propaganda e funcionário da clínica NÃO são tratados por esta regra: sigam as instruções da unidade.`);
 }
 
-export function renderRulesGlobal(unit?: FlagsDePagamento): string {
+export function renderRulesGlobal(unit?: FlagsDePagamento & { sourceProdutos?: string | null; systemPrompt?: string | null }): string {
   // Unidade sem pagamento antecipado (Timbó): o passo "Pix" e os botões "Pix antecipado | Na clínica" não existem.
   const semAntecipado = unidadeSemAntecipado(unit);
   // Unidade com taxa de reserva (Boa Vista, decisão do João de 03/11/2026): o comprovante é conferido pela ferramenta e libera marcar.
@@ -471,7 +471,7 @@ export function renderRulesGlobal(unit?: FlagsDePagamento): string {
     : `COMPROVANTE (foto, PDF, "paguei"): o pagamento quem confere é a EQUIPE — nunca "pagamento confirmado".
   Não confirma consulta: a equipe confirma em até 1 hora (com taxa de reserva, a ferramenta libera).`;
   // Sinal por Pix (Sofia 2.0): o último passo é o sinal (link gerado pela ferramenta), não a chave fixa.
-  const comSinal = unidadeComSinal(unit);
+  const comSinal = !!unit && sinalDaUnidade(unit) !== null;
   const passos = semAntecipado ? 'dia → horário → dados' : comSinal ? 'dia → horário → dados → sinal (Pix)' : 'dia → horário → dados → Pix';
   // Taxa de reserva OBRIGATÓRIA (Boa Vista): não existe "Na clínica" como escolha — com esse exemplo a Sofia perguntava
   // "Pix antecipado ou pagar tudo na clínica no dia?" (Mivanildo 03/11, Maiza 04/11).
@@ -1834,12 +1834,13 @@ function blocosDoHistorico(unit: Unit, historico: Fala[] | undefined): { semPedi
   // fontes, mandar "dizer o valor agora" sem o número certo convidaria a inventar ou trocar o valor (achado do Codex,
   // 21/10): essas unidades ficam com a regra de PREÇO do prompt.
   const precos = precosDaConsulta(unit);
+  const sinalDoPreco = sinalDaUnidade(unit);
   const frase = !precos
     ? null
     : unit.spineBookingRequiresPayment
       ? `R$ ${fmtBRL(precos.antecipado + precos.noDia)} no total: R$ ${fmtBRL(precos.antecipado)} antecipado no Pix (garante o horário) + R$ ${fmtBRL(precos.noDia)} no dia`
-      : sinalDaUnidade(unit)
-        ? fraseDePrecoComSinal(sinalDaUnidade(unit)!)
+      : sinalDoPreco
+        ? fraseDePrecoComSinal(sinalDoPreco)
         : `R$ ${fmtBRL(precos.noDia)} no dia, ou R$ ${fmtBRL(precos.antecipado)} pagando antes no Pix`;
   if (frase) {
     const preco = renderPrecoInsistido(historico, { frase });
@@ -2831,7 +2832,7 @@ export function renderFatosDaUnidade(unit: Unit): string {
   const semAntecipado = unidadeSemAntecipado(unit);
   // Com sinal por Pix a chave fixa NUNCA é entregue: o Pix do sinal é o link que a ferramenta gerar_sinal_pix devolve.
   const sinal = sinalDaUnidade(unit);
-  const chave = semAntecipado || unidadeComSinal(unit) ? undefined : unit.pixKey?.trim();
+  const chave = semAntecipado || sinal ? undefined : unit.pixKey?.trim();
   const titular = unit.pixHolder?.trim();
   if (chave) {
     linhas.push(`- Chave Pix: ${chave}${titular ? ` (titular: ${titular})` : ''}`);

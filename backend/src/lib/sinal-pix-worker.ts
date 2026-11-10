@@ -21,7 +21,7 @@ import { estadoDaAutomacao } from './automacoes-estado.js';
 import { registrarSimulacao } from './so-no-papel.js';
 import { createKommoClient, type KommoClient } from '../services/kommo.service.js';
 import { asaasGet } from './integracoes/asaas.js';
-import { chaveDaClinica, diaNoFuso, ID_SINAL_PIX, somarDias, type LinhaDoSinal } from './sinal-pix.js';
+import { chaveDaClinica, diaCurto, diaNoFuso, ID_SINAL_PIX, somarDias, type LinhaDoSinal } from './sinal-pix.js';
 import { pagouOAntecipado } from './follow-up-worker.js';
 import { normalizar } from './franquia-sync.js';
 
@@ -29,7 +29,7 @@ const SWEEP_MS = Number(process.env.SINAL_PIX_SWEEP_MS) || 5 * 60_000;
 const PRIMEIRA_VARREDURA_MS = 90_000;
 const MAX_PENDENTES_POR_UNIDADE = 200;
 const POR_PAGINA = 100;
-const MAX_PAGINAS = 10;
+const MAX_PAGINAS = 30;
 /** Dias depois do fim do link em que ainda se espera o pagamento (um Pix gerado no último dia pode ser pago depois). */
 export const CARENCIA_DO_LINK_DIAS = 2;
 export const CAMPO_PAGO = '✓ Consulta pg antecipado';
@@ -51,7 +51,7 @@ export type Decisao =
  * Casa os links pendentes com os pagamentos lidos. Puro. Um link só quita com cobrança DELE (`paymentLink` igual), com status de dinheiro
  * que entrou e valor pelo menos igual ao do sinal.
  */
-export function conciliar(pendentes: readonly LinhaDoSinal[], pagamentos: readonly PagamentoDoAsaas[], hoje: string): Decisao[] {
+export function conciliar(pendentes: readonly LinhaDoSinal[], pagamentos: readonly PagamentoDoAsaas[], hoje: string, leituraCompleta = true): Decisao[] {
   const porLink = new Map<string, PagamentoDoAsaas>();
   for (const p of pagamentos) {
     if (!p.paymentLink || !p.id || !STATUS_QUE_PAGAM.has(String(p.status))) continue;
@@ -64,7 +64,8 @@ export function conciliar(pendentes: readonly LinhaDoSinal[], pagamentos: readon
     const p = porLink.get(linha.linkId);
     if (p && Math.round(Number(p.value ?? 0) * 100) >= linha.valorCentavos) {
       saida.push({ tipo: 'pago', linha, paymentId: p.id });
-    } else if (somarDias(linha.venceEm, CARENCIA_DO_LINK_DIAS) < hoje) {
+    } else if (leituraCompleta && somarDias(linha.venceEm, CARENCIA_DO_LINK_DIAS) < hoje) {
+      // só vence com a leitura COMPLETA: se faltou página, o pagamento pode estar justamente nas que não vieram
       saida.push({ tipo: 'expirou', linha });
     }
   }
@@ -73,21 +74,28 @@ export function conciliar(pendentes: readonly LinhaDoSinal[], pagamentos: readon
 
 type Leitor = (caminho: string, query: Record<string, string | number | undefined>) => Promise<unknown>;
 
-/** Os pagamentos PIX com dinheiro entrado desde `desde` (AAAA-MM-DD), paginado. Só leitura. */
-export async function pagamentosDesde(ler: Leitor, desde: string): Promise<PagamentoDoAsaas[]> {
+/**
+ * Os pagamentos PIX com dinheiro entrado desde `desde` (AAAA-MM-DD), paginado. Só leitura. `completa` = false quando o teto de páginas cortou a
+ * leitura (conta muito movimentada): quem concilia então só dá baixa, nunca declara link vencido.
+ */
+export async function pagamentosDesde(ler: Leitor, desde: string): Promise<{ pagamentos: PagamentoDoAsaas[]; completa: boolean }> {
   const todos: PagamentoDoAsaas[] = [];
+  let completa = true;
   for (const status of ['RECEIVED', 'CONFIRMED']) {
-    for (let pagina = 0; pagina < MAX_PAGINAS; pagina++) {
+    for (let pagina = 0; ; pagina++) {
+      if (pagina >= MAX_PAGINAS) {
+        completa = false;
+        break;
+      }
       const r = (await ler('/payments', { billingType: 'PIX', status, 'dateCreated[ge]': desde, limit: POR_PAGINA, offset: pagina * POR_PAGINA })) as { data?: PagamentoDoAsaas[]; hasMore?: boolean } | null;
       todos.push(...(r?.data ?? []));
       if (!r?.hasMore) break;
     }
   }
-  return todos;
+  return { pagamentos: todos, completa };
 }
 
 const reais = (centavos: number) => `R$ ${(centavos / 100).toFixed(2).replace('.', ',')}`;
-const diaCurto = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
 
 export const notaDoPagamento = (l: LinhaDoSinal, paymentId: string) => `💸 Sinal de ${reais(l.valorCentavos)} pago no Asaas (${paymentId}). O restante é pago no dia da consulta.`;
 export const notaDoVencimento = (l: LinhaDoSinal) =>
@@ -158,8 +166,9 @@ async function varrerUnidade(unit: Unit, seco: boolean): Promise<void> {
     } else {
       const menor = pendentes.reduce((m, l) => (l.criadoEm < m ? l.criadoEm : m), pendentes[0]!.criadoEm);
       const desde = menor.toISOString().slice(0, 10);
-      const pagamentos = await pagamentosDesde((caminho, query) => asaasGet(conta.unitId, conta.chave, caminho, query), somarDias(desde, -1));
-      decisoes = conciliar(pendentes, pagamentos, hoje);
+      const { pagamentos, completa } = await pagamentosDesde((caminho, query) => asaasGet(conta.unitId, conta.chave, caminho, query), somarDias(desde, -1));
+      if (!completa) logger.warn({ unit: unit.slug }, `${ID_SINAL_PIX}: leitura do Asaas cortada no teto de páginas — só dá baixa nesta varredura, não vence link`);
+      decisoes = conciliar(pendentes, pagamentos, hoje, completa);
     }
   }
 

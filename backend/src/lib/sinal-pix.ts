@@ -54,6 +54,11 @@ export interface BancoDoSinal {
 
 export interface DepsDoSinal {
   banco: BancoDoSinal;
+  /**
+   * Uma geração por paciente por vez. Em produção: transação com `pg_advisory_xact_lock` (vale entre instâncias, como no rolling update);
+   * o padrão, em memória, serve ao teste. `fn` recebe o banco a usar DENTRO da trava.
+   */
+  travar?: <T>(chave: string, fn: (banco: BancoDoSinal) => Promise<T>) => Promise<T>;
   chave: (unit: { id: string; slug: string }) => Promise<{ unitId: string; slug: string; chave: string } | null>;
   escrever: typeof asaasEscrever;
   agora: () => Date;
@@ -81,6 +86,15 @@ export function nomeDaClinica(nome: string): string {
 
 export const depsReais = (): DepsDoSinal => ({
   banco: prisma.sinalPix as unknown as BancoDoSinal,
+  travar: (chave, fn) =>
+    prisma.$transaction(
+      async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${chave}))`;
+        return fn(tx.sinalPix as unknown as BancoDoSinal);
+      },
+      // o Asaas pode levar até 30 s: a trava segura a transação esse tempo (raro: um sinal por paciente)
+      { timeout: 45_000, maxWait: 10_000 },
+    ),
   chave: chaveDaClinica,
   escrever: asaasEscrever,
   agora: () => new Date(),
@@ -106,6 +120,9 @@ export function diaNoFuso(d: Date, fuso: string): string {
   const p = partesNoFuso(d, fuso);
   return `${p.ano}-${String(p.mes).padStart(2, '0')}-${String(p.dia).padStart(2, '0')}`;
 }
+
+/** "2026-11-14" → "14/11". */
+export const diaCurto = (iso: string): string => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
 
 export function somarDias(dia: string, n: number): string {
   const t = Date.parse(`${dia}T00:00:00Z`);
@@ -157,7 +174,8 @@ export async function gerarSinalPix(
 ): Promise<ResultadoDoSinal> {
   const centavos = unit.sinalPixCentavos;
   if (!Number.isInteger(centavos) || (centavos as number) <= 0) return { tipo: 'falhou', motivo: 'asaas', detalhe: 'a unidade não tem sinal configurado' };
-  return umPorVez(`${unit.id}:${leadId}`, async () => {
+  const travar = deps.travar ?? ((chave, fn) => umPorVez(chave, () => fn(deps.banco)));
+  return travar(`sinal-pix:${unit.id}:${leadId}`, async (banco) => {
     const agora = deps.agora();
     const fuso = unit.spineTimezone && unit.spineTimezone.trim() ? unit.spineTimezone : 'America/Sao_Paulo';
     const hoje = diaNoFuso(agora, fuso);
@@ -165,15 +183,17 @@ export async function gerarSinalPix(
 
     // 1) Já existe sinal deste paciente? Pago vale mais que pendente; pendente só serve se ainda cobre a data pedida.
     const desde = new Date(agora.getTime() - VALIDADE_DO_SINAL_DIAS * 86_400_000);
-    const pago = await deps.banco.findFirst({ where: { unitId: unit.id, leadId: String(leadId), status: { in: ['pago'] }, criadoEm: { gte: desde } }, orderBy: { criadoEm: 'desc' } });
+    const pago = await banco.findFirst({ where: { unitId: unit.id, leadId: String(leadId), status: { in: ['pago'] }, criadoEm: { gte: desde } }, orderBy: { criadoEm: 'desc' } });
     if (pago) return { tipo: 'ja-pago' as const };
-    const pendente = await deps.banco.findFirst({ where: { unitId: unit.id, leadId: String(leadId), status: { in: ['pendente'] }, criadoEm: { gte: desde } }, orderBy: { criadoEm: 'desc' } });
-    if (pendente && pendente.venceEm >= hoje && pendente.venceEm >= venceEm && pendente.valorCentavos === centavos) {
+    const pendente = await banco.findFirst({ where: { unitId: unit.id, leadId: String(leadId), status: { in: ['pendente'] }, criadoEm: { gte: desde } }, orderBy: { criadoEm: 'desc' } });
+    // Link pendente que ainda vale é SEMPRE reaproveitado, mesmo que acabe antes da (nova) consulta: o Asaas não deixa cancelar link por aqui
+    // (DELETE/PUT de link são rotas proibidas), então um segundo link deixaria dois Pix pagáveis para o mesmo paciente. Venceu, aí sim um novo.
+    if (pendente && pendente.venceEm >= hoje && pendente.valorCentavos === centavos) {
       return { tipo: 'link' as const, url: pendente.url, novo: false, valor: pendente.valorCentavos / 100, venceEm: pendente.venceEm };
     }
 
     // 2) Teto do dia da unidade (últimas 24 h): só conta o que é NOVO, reaproveitar não gasta.
-    const criadosHoje = await deps.banco.count({ where: { unitId: unit.id, criadoEm: { gte: new Date(agora.getTime() - 86_400_000) } } });
+    const criadosHoje = await banco.count({ where: { unitId: unit.id, criadoEm: { gte: new Date(agora.getTime() - 86_400_000) } } });
     if (criadosHoje >= TETO_LINKS_POR_UNIDADE_DIA) {
       logger.warn({ unit: unit.slug, criadosHoje, teto: TETO_LINKS_POR_UNIDADE_DIA }, 'sinal-pix: teto de links por dia atingido');
       return { tipo: 'falhou', motivo: 'teto', detalhe: `${criadosHoje} links nas últimas 24 h (teto ${TETO_LINKS_POR_UNIDADE_DIA})` };
@@ -211,7 +231,7 @@ export async function gerarSinalPix(
 
     // 5) Guarda. Se o banco falhar o link já existe no Asaas: o paciente ainda pode pagar (sem baixa automática) e o log deixa o rastro.
     try {
-      await deps.banco.create({ data: { unitId: unit.id, leadId: String(leadId), linkId, url: criado.url, valorCentavos: centavos as number, venceEm } });
+      await banco.create({ data: { unitId: unit.id, leadId: String(leadId), linkId, url: criado.url, valorCentavos: centavos as number, venceEm } });
     } catch (err) {
       logger.error({ err: String(err), unit: unit.slug, leadId, linkId }, 'sinal-pix: link criado no Asaas mas NÃO gravado no banco — sem baixa automática');
     }

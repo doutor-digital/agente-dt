@@ -74,14 +74,27 @@ test('pagamentosDesde: só GET /payments (PIX, RECEIVED e CONFIRMED, desde a dat
     if (query.status === 'RECEIVED') return { data: [pag({ id: `r${pagina}` })], hasMore: pagina < 1 };
     return { data: [pag({ id: 'c0', status: 'CONFIRMED' })], hasMore: false };
   };
-  const todos = await pagamentosDesde(ler, '2026-11-09');
+  const { pagamentos: todos, completa } = await pagamentosDesde(ler, '2026-11-09');
   assert.deepEqual(todos.map((p) => p.id), ['r0', 'r1', 'c0']);
+  assert.equal(completa, true);
   assert.equal(chamadas.length, 3);
   for (const c of chamadas) {
     assert.equal(c.caminho, '/payments');
     assert.equal(c.query.billingType, 'PIX');
     assert.equal(c.query['dateCreated[ge]'], '2026-11-09');
   }
+});
+
+test('leitura cortada no teto de páginas: avisa que não é completa e o link NÃO vence (o pagamento pode estar nas páginas que não vieram), mas a baixa continua', async () => {
+  const sempreMais = async (_c: string, q: Record<string, string | number | undefined>) => ({ data: [pag({ id: `x${q.offset}`, paymentLink: 'outro' })], hasMore: true });
+  const { pagamentos, completa } = await pagamentosDesde(sempreMais, '2026-11-09');
+  assert.equal(completa, false);
+  assert.ok(pagamentos.length > 0);
+  // vencido há dias + leitura incompleta = nada de "expirou"
+  assert.deepEqual(conciliar([linha()], pagamentos, '2026-12-01', completa), []);
+  assert.deepEqual(conciliar([linha()], [], '2026-12-01', true).map((x) => x.tipo), ['expirou']);
+  // mas se o pagamento DESTE link veio, a baixa acontece mesmo com a leitura cortada
+  assert.deepEqual(conciliar([linha()], [...pagamentos, pag()], '2026-12-01', completa).map((x) => x.tipo), ['pago']);
 });
 
 test('valoresDoSim: caixa de seleção e lista com "Sim"; outro tipo, ou lista sem "Sim", não grava', () => {

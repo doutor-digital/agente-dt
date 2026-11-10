@@ -58,9 +58,10 @@ export function unidadeComSinal(unit: FlagsDePagamento | null | undefined): bool
  * frase, ela é tirada do texto que ele recebe. Frases de PROIBIÇÃO ("NÃO fale em Pix…") ficam. Nas demais unidades:
  * o mesmo texto, sem tocar.
  */
-export function intencaoDoDegrauParaAUnidade(intencao: string, unit: FlagsDePagamento | null | undefined): string {
-  // Sinal por Pix (Sofia 2.0): a chave e o "antecipado de R$ 150" dos degraus não existem lá; `regraDePagamento` (follow-up.ts) diz o que vale.
-  if (!unidadeSemAntecipado(unit) && !unidadeComSinal(unit)) return intencao;
+export function intencaoDoDegrauParaAUnidade(intencao: string, unit: FlagsDePagamento | null | undefined, comSinal = false): string {
+  // Sinal por Pix (Sofia 2.0, `comSinal` = `sinalDaUnidade(unit) != null`, que quem chama calcula com as fontes): a chave e o "antecipado de
+  // R$ 150" dos degraus não existem lá; `regraDePagamento` (follow-up.ts) diz o que vale.
+  if (!unidadeSemAntecipado(unit) && !comSinal) return intencao;
   return intencao
     .split(/(?<=[.!?])\s+/)
     .filter((frase) => !/antecipad|\bpix\b/i.test(frase) || /^(?:n[ãa]o|nunca)\b/i.test(frase.trim()))
