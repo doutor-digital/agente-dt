@@ -21,8 +21,12 @@
 
 export type Fatos = Record<string, unknown>;
 
-/** Sinais que exigem a pergunta de triagem antes de seguir vendendo. */
-const SINAL_NEUROLOGICO = /dorm[êe]nc|formigament|fraquez|perda de for[çc]a|sem for[çc]a|n[ãa]o consegue andar/i;
+/**
+ * Sinais que exigem a pergunta de triagem antes de seguir vendendo.
+ * Formigamento SOZINHO não entra (10/11/2026): a regra <sinal_de_alerta> (decisão do João, 26/10) diz que dor que desce
+ * para a perna ou formigamento, sozinhos, NÃO são sinal de alerta — e esta lista mandava perguntar mesmo assim, a cada turno.
+ */
+const SINAL_NEUROLOGICO = /dorm[êe]nc|fraquez|perda de for[çc]a|sem for[çc]a|n[ãa]o consegue andar/i;
 
 /** Fatos que registram a resposta do paciente sobre força/bexiga/intestino. */
 const CHAVES_RED_FLAG = ['red_flag', 'redflag', 'perda_forca', 'perda_de_forca', 'bexiga', 'intestino', 'sinal_alerta'];
@@ -92,11 +96,14 @@ export function renderFaltaParaAgendar(
   const linhas: string[] = [];
   if (precisaTriagem) {
     linhas.push(
+      // 10/11/2026: antes dizia "se ele responder outra coisa, repita a pergunta — não siga sem ela", o contrário da
+      // regra <sinal_de_alerta> (26/10: "nunca repita a pergunta de segurança uma segunda vez — quem não respondeu
+      // direito vai para a equipe"). Nos testes da Sofia 2.0 ela perguntava a mesma coisa 3 vezes e travava a venda.
       '- **ANTES DE QUALQUER COISA:** ele relatou dormência ou fraqueza e você ainda NÃO tem a ' +
         'resposta sobre perda de força / controle de xixi e intestino. Pergunte UMA coisa por vez ' +
-        '(primeiro a força, depois o xixi e o intestino) e **espere a resposta**. Um "sim" solto a ' +
-        'uma pergunta com as duas coisas não confirma nada: pergunte qual. Se ele responder outra ' +
-        'coisa, repita a pergunta com gentileza — não siga sem ela.',
+        '(primeiro a força) e **espere a resposta**. Um "sim" solto a uma pergunta com as duas coisas ' +
+        'não confirma nada: pergunte qual. Se ele responder outra coisa, NÃO repita a pergunta: siga a ' +
+        'regra <sinal_de_alerta> (quem não respondeu à pergunta de segurança vai para a equipe).',
     );
   }
   if (faltando.length > 0) {

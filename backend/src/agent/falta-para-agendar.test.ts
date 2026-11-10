@@ -57,3 +57,15 @@ test('fato vazio conta como ausente', () => {
   const b = renderFaltaParaAgendar({ nome: '   ', queixa: 'lombar' });
   assert.match(b, /nome/);
 });
+
+test('10/11: formigamento SOZINHO não dispara a triagem (regra <sinal_de_alerta>)', () => {
+  const b = renderFaltaParaAgendar({ nome: 'Carla', queixa: 'dor lombar que desce pra perna com formigamento' });
+  assert.ok(!/ANTES DE QUALQUER COISA/.test(b));
+});
+
+test('10/11: a triagem nunca manda repetir a pergunta de segurança', () => {
+  const b = renderFaltaParaAgendar({ nome: 'Núbia', queixa: 'dor no pescoço com dormência no braço' });
+  assert.match(b, /NÃO repita a pergunta/);
+  assert.ok(!/repita a pergunta com gentileza/.test(b));
+  assert.match(b, /<sinal_de_alerta>/);
+});
