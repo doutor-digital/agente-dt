@@ -58,6 +58,7 @@ import { registrarEstruturaSistemas } from './sistemas-estrutura.js';
 import { criarContextoSistemas, PendentesSistemas, registrarEscritaSistemas, registrarLeituraSistemas, type ContaSistemas } from './sistemas.js';
 import { contasDoRh, montarContasSistemas } from './sistemas-contas.js';
 import { contaEvolutionDoAmbiente, criarContextoEvolution, EVENTO_DE_ENVIO, registrarFerramentasEvolution } from './evolution.js';
+import { contaChatwootDoAmbiente, criarContextoChatwoot, registrarFerramentasChatwoot } from './chatwoot.js';
 import { blingGet } from '../lib/bling/cliente.js';
 import type { Usuario } from './provedor.js';
 import { registrarRelatorio, type DepsRelatorio } from './relatorio.js';
@@ -318,6 +319,14 @@ async function idsDeUsuariosAtivos(...variaveis: string[]): Promise<Set<string>>
  */
 async function leitoresDoWhatsapp(): Promise<Set<string>> {
   return idsDeUsuariosAtivos('MCP_EVOLUTION_EMAILS');
+}
+
+/**
+ * Quem mexe no Chatwoot (chatwoot_*): quem já altera cartões (MCP_ESCRITA_EMAILS) mais os e-mails de MCP_CHATWOOT_EMAILS
+ * (11/11/2026: a Suzanne monta o atendimento novo no Chatwoot). Usuário ativo do console. Sem nenhuma das duas, ninguém.
+ */
+async function operadoresDoChatwoot(): Promise<Set<string>> {
+  return idsDeUsuariosAtivos('MCP_ESCRITA_EMAILS', 'MCP_CHATWOOT_EMAILS');
 }
 
 /**
@@ -584,6 +593,10 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   });
   let leitoresWhatsapp = new Set<string>();
   if (whatsapp.conta) manterAtualizado(leitoresDoWhatsapp, (s) => (leitoresWhatsapp = s), 'quem vê o WhatsApp');
+  // Chatwoot (atendimento novo): criar/alterar direto; apagar e mandar mensagem a cliente em dois passos; apagar avisa o João no Telegram
+  const chatwoot = criarContextoChatwoot(contaChatwootDoAmbiente(), { avisar: (texto) => enviarTelegram(texto, { canal: 'avisos' }) });
+  let operadoresChatwoot = new Set<string>();
+  if (chatwoot.conta) manterAtualizado(operadoresDoChatwoot, (s) => (operadoresChatwoot = s), 'quem mexe no Chatwoot');
   const sistemas = criarContextoSistemas();
   manterAtualizado(contasSistemasDoBanco, (contas) => (sistemas.contas = contas), 'as contas do sistema novo');
   const pendentesSistemas = new PendentesSistemas();
@@ -661,9 +674,10 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
         );
       }
       if (leitoresWhatsapp.has(quem.userId)) registrarFerramentasEvolution(server, whatsapp, quem.userId, auditar);
+      if (operadoresChatwoot.has(quem.userId)) registrarFerramentasChatwoot(server, chatwoot, quem.email || `usuario:${quem.userId}`, auditar);
       registrarVideoSePermitido(server, video, quem.userId, leitoresVideo, auditar);
       registrarTranscricaoSePermitido(server, transcritor, quem.userId, leitoresVideo, auditar);
-      registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas, convenia: convenia.contas, tiquetaque: tiquetaque.contas, tramitacao: tramitacao.contas, sistemas: contasDoRh(sistemas.contas), zenfisio: zenfisio.contas }), auditar);
+      registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas, convenia: convenia.contas, tiquetaque: tiquetaque.contas, tramitacao: tramitacao.contas, sistemas: contasDoRh(sistemas.contas), zenfisio: zenfisio.contas, gerais: chatwoot.conta && operadoresChatwoot.has(quem.userId) ? ['chatwoot_* (Chatwoot, o atendimento novo em atendimento.doutordigitalconsultoria.com: conversas, contatos, caixas, etiquetas, agentes, equipes, automações; criar e alterar direto, apagar e mandar mensagem a cliente em dois passos)'] : [] }), auditar);
       registrarCerebro(server, slugs, cacheCerebro, auditar);
       if (franquia) {
         const deps: DepsRelatorio = { franquia, kommo, telefonesDosLeads, vinculosDosLeads };

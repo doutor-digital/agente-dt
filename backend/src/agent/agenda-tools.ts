@@ -1320,7 +1320,7 @@ export function orientacaoDePagamento(
     if (forma === 'sinal_pix') {
       return (
         ' Ele escolheu o SINAL: chame gerar_sinal_pix AGORA, antes de escrever a confirmação, e use o link que ela devolver. ' +
-        `Na confirmação diga que a consulta fica R$ ${fmtBRL(sinal.comSinal)}: R$ ${fmtBRL(sinal.sinal)} de sinal pelo Pix agora (envie o link) + R$ ${fmtBRL(sinal.restoNoDia)} no dia. ` +
+        `Na confirmação diga que a consulta fica R$ ${fmtBRL(sinal.comSinal)}: R$ ${fmtBRL(sinal.sinal)} de sinal pelo Pix agora (o código do Pix copia e cola vai numa mensagem separada) + R$ ${fmtBRL(sinal.restoNoDia)} no dia. ` +
         'NUNCA envie chave Pix nem diga que a equipe envia a chave; NÃO peça comprovante. Se a ferramenta não gerar o link, siga o que ela mandar.'
       );
     }

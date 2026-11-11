@@ -18,6 +18,7 @@
 import { logger } from './logger.js';
 import { mascararPiiProfundo } from './pii.js';
 import type { Verificacao } from './suporte-menu-maquina.js';
+import { neutralizarMarcadores } from './suporte-complemento.js';
 
 // ─── configuração ───────────────────────────────────────────────────────────────────────────────────────
 
@@ -203,7 +204,8 @@ export function montarMensagens(d: DemandaParaAnalise, ctx: Contexto): Array<{ r
     `Unidade: ${d.unidadeSlug ?? 'não informada'} (identificação: ${d.verificacao})`,
     '',
     '<<<RELATO>>>',
-    d.relato,
+    // o relato (agora até 8000 caracteres, com os complementos) não pode imitar o marcador de fim e passar por CONTEXTO
+    neutralizarMarcadores(d.relato),
     '<<<FIM>>>',
     '',
     'CONTEXTO (lido do sistema agora):',

@@ -20,6 +20,7 @@ import { _semearParaTeste } from '../lib/automacoes-estado.js';
 import { ID_SINAL_PIX } from '../lib/sinal-pix.js';
 import { _semearCrmParaTeste } from '../lib/crm-compartilhado.js';
 import { limparCacheEsquema } from '../lib/kommo-schema.js';
+import { pixDoSinalDoTurno } from './sinal-pix-tool.js';
 
 const TZ = 'America/Sao_Paulo';
 const CHAVE_FIXA = '12.345.678/0001-90';
@@ -141,8 +142,15 @@ spine.cancelSchedule = async () => ({ ok: true });
 spine.getClient = async () => ({ ok: true, data: { client: { idClient: 9, name: 'Maria Teste', whatsapp: null, schedules: [] } } });
 
 const chamadasAoAsaas: Array<{ url: string; chave: string; corpo: Record<string, unknown> }> = [];
-let respostaDoAsaas: { status: number; corpo: unknown } = { status: 200, corpo: { id: '725104409743', url: 'https://www.asaas.com/c/725104409743' } };
-globalThis.fetch = (async (url: string, init: RequestInit) => {
+// Pix copia-e-cola de verdade (BR Code): nome e cidade do recebedor têm espaço
+const PIX = '00020126580014br.gov.bcb.pix0136a1b2c3d4-0000-1111-2222-333344445555520400005303986540550.005802BR5920ATTIVA CORPO E MENTE6009ARAGUAINA62290525sofiasinalaraguaina2800016304A1B2';
+const QR_OK = { id: 'qr_725104409743', payload: PIX };
+let respostaDoAsaas: { status: number; corpo: unknown } = { status: 200, corpo: QR_OK };
+globalThis.fetch = (async (url: string, init: RequestInit = {}) => {
+  // leitura da chave Pix da conta (GET /pix/addressKeys): não conta como escrita
+  if (String(url).includes('/pix/addressKeys')) {
+    return new Response(JSON.stringify({ data: [{ key: 'a1b2c3d4-0000-1111-2222-333344445555', status: 'ACTIVE', type: 'EVP' }] }), { status: 200 });
+  }
   chamadasAoAsaas.push({ url, chave: (init.headers as Record<string, string>).access_token ?? '', corpo: JSON.parse(String(init.body ?? '{}')) });
   return new Response(JSON.stringify(respostaDoAsaas.corpo), { status: respostaDoAsaas.status });
 }) as typeof fetch;
@@ -171,7 +179,7 @@ beforeEach(() => {
   tarefas.length = 0;
   agendadoPara = `${DIA}T09:00`;
   conversaExiste = true;
-  respostaDoAsaas = { status: 200, corpo: { id: '725104409743', url: 'https://www.asaas.com/c/725104409743' } };
+  respostaDoAsaas = { status: 200, corpo: QR_OK };
   process.env.SINAL_PIX_SLUGS = '*';
   limparCacheEsquema();
   _depsDoCacheParaTeste({ deposito: depositoNaMemoria(), env: {}, registrar: () => undefined });
@@ -210,7 +218,7 @@ test('com a flag: o prompt manda pix_antecipado para o sinal — a conversa guar
   const r = await agendar(atual).func({ idClient: 9, data: DIA, hora, diaConfirmado: true, leadId: 1, formaPagamento: 'pix_antecipado' });
   assert.match(r, /^Consulta marcada para /);
   assert.match(r, /Ele escolheu o SINAL: chame gerar_sinal_pix AGORA/);
-  assert.match(r, /R\$ 250: R\$ 50 de sinal pelo Pix agora \(envie o link\) \+ R\$ 200 no dia/);
+  assert.match(r, /R\$ 250: R\$ 50 de sinal pelo Pix agora \(o código do Pix copia e cola vai numa mensagem separada\) \+ R\$ 200 no dia/);
   assert.ok(!r.includes(CHAVE_FIXA), r);
   assert.doesNotMatch(r, /chave Pix é|ESCOLHEU PIX ANTECIPADO/);
   assert.equal(conversaGravou[0]!.data.pagamentoEscolhido, 'sinal_pix', 'a régua da chave fixa lê isto e não roda');
@@ -234,24 +242,24 @@ test('com a flag mas fontes sem os dois preços: tudo como sempre (chave fixa), 
   assert.equal(gerarSinal(u), undefined);
 });
 
-test('gerar_sinal_pix SEM argumentos (o cartão é o da consulta marcada no turno): cria o link PIX de R$ 50 na conta da clínica e o devolve', async () => {
+test('gerar_sinal_pix SEM argumentos (o cartão é o da consulta marcada no turno): cria o Pix copia-e-cola de R$ 50 na conta da clínica e o guarda para a mensagem à parte', async () => {
   const hora = await primeiroHorario(atual);
   await agendar(atual).func({ idClient: 9, data: DIA, hora, diaConfirmado: true, leadId: 28000001, formaPagamento: 'pix_antecipado' });
   const r = await gerarSinal(atual).func({});
-  assert.match(r, /Pix do sinal de R\$ 50 gerado/);
-  assert.ok(r.includes('https://www.asaas.com/c/725104409743'), r);
+  assert.match(r, /Pix do sinal de R\$ 50 gerado \(copia e cola\)/);
+  assert.ok(!r.includes(PIX), 'o código não passa pelo modelo');
+  assert.equal(pixDoSinalDoTurno(recorder.traceId), PIX, 'o controller manda o código numa mensagem só dele');
   assert.match(r, /NUNCA envie chave Pix/);
   assert.equal(chamadasAoAsaas.length, 1);
-  assert.match(chamadasAoAsaas[0]!.url, /\/v3\/paymentLinks$/);
+  assert.match(chamadasAoAsaas[0]!.url, /\/v3\/pix\/qrCodes\/static$/);
   assert.equal(chamadasAoAsaas[0]!.chave, CHAVE_DA_CLINICA);
   assert.equal(chamadasAoAsaas[0]!.corpo.value, 50);
-  assert.equal(chamadasAoAsaas[0]!.corpo.billingType, 'PIX');
+  assert.equal(chamadasAoAsaas[0]!.corpo.allowsMultiplePayments, false);
   assert.equal(chamadasAoAsaas[0]!.corpo.externalReference, 'sofia-sinal:doutor-hernia-araguaina:28000001');
-  assert.equal(chamadasAoAsaas[0]!.corpo.name, 'Sinal consulta Doutor Hérnia Araguaína');
-  // de novo: o MESMO link, sem nova chamada ao Asaas
+  assert.equal(chamadasAoAsaas[0]!.corpo.description, 'Sinal da consulta - Araguaína');
+  // de novo: o MESMO Pix, sem nova chamada ao Asaas
   const outra = await gerarSinal(atual).func({ leadId: 28000001 });
-  assert.ok(outra.includes('https://www.asaas.com/c/725104409743'));
-  assert.match(outra, /MESMO link/);
+  assert.match(outra, /MESMO Pix/);
   assert.equal(chamadasAoAsaas.length, 1);
   assert.equal(sinais.length, 1);
   assert.ok(travas.every((t) => t === 'sinal-pix:doutor-hernia-araguaina:28000001') && travas.length === 2, `a trava é da clínica+cartão (uma por checagem): ${travas}`);
@@ -272,7 +280,7 @@ test('Resgate: a unidade usa a chave do Asaas da CLÍNICA dona (araguaina-resgat
   assert.match(r, /Pix do sinal de R\$ 50 gerado/);
   assert.equal(chamadasAoAsaas.length, 1);
   assert.equal(chamadasAoAsaas[0]!.chave, CHAVE_DA_CLINICA);
-  assert.equal(chamadasAoAsaas[0]!.corpo.name, 'Sinal consulta Doutor Hérnia Araguaína');
+  assert.equal(chamadasAoAsaas[0]!.corpo.description, 'Sinal da consulta - Araguaína');
   assert.equal(chamadasAoAsaas[0]!.corpo.externalReference, 'sofia-sinal:araguaina-resgate:77');
   assert.equal(sinais[0]!.unitId, 'u-arag-resgate', 'o sinal é da unidade do paciente; a chave é que vem da dona');
 });
@@ -335,12 +343,13 @@ test('o leadId que o modelo escreve NÃO troca o cartão da consulta marcada no 
   assert.equal(sinais[0]!.leadId, '28000001');
 });
 
-test('link gerado mas não gravado no banco: a Sofia ainda recebe o link e a equipe ganha a tarefa de conferir o pagamento à mão', async () => {
+test('Pix gerado mas não gravado no banco: o paciente ainda recebe o código e a equipe ganha a tarefa de conferir o pagamento à mão', async () => {
   const updateOriginal = (prisma as any).sinalPix.updateMany;
   (prisma as any).sinalPix.updateMany = async () => { throw new Error('banco fora'); };
   try {
     const r = await gerarSinal(atual).func({ leadId: 83 });
-    assert.ok(r.includes('https://www.asaas.com/c/725104409743'));
+    assert.match(r, /copia e cola/);
+    assert.equal(pixDoSinalDoTurno(recorder.traceId), PIX);
     assert.equal(tarefas.length, 1);
     assert.match(tarefas[0]!.text, /CONFERIR O PIX DO SINAL · doutor-hernia-araguaina/);
     assert.match(tarefas[0]!.text, /a baixa automática não vai enxergar o pagamento/);
@@ -383,7 +392,7 @@ test('Resgate e comercial no MESMO cartão: o link é um só, e o segundo lado r
   const a = await gerarSinal(resgate).func({ leadId: 90 });
   assert.match(a, /Pix do sinal de R\$ 50 gerado/);
   const b = await gerarSinal(atual).func({ leadId: 90 });
-  assert.match(b, /MESMO link/);
+  assert.match(b, /MESMO Pix/);
   assert.equal(chamadasAoAsaas.length, 1);
   assert.equal(sinais.length, 1);
   assert.equal(sinais[0]!.clinica, 'doutor-hernia-araguaina');

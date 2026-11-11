@@ -95,6 +95,9 @@ const PROIBIDAS = [
   'Read(~/.claude/**)', 'Read(~/.config/**)', 'Read(~/.git-credentials)', 'Read(//proc/**)', 'Read(//etc/**)',
 ];
 
+/** Segunda camada (a API já entrega neutralizado): texto da pessoa não imita o marcador <<<FIM>>> e não vira instrução. */
+const neutro = (t) => String(t ?? '').replace(/<<<+/g, '‹‹‹').replace(/>>>+/g, '›››');
+
 function montarPrompt(d, ramo) {
   const base = (d.conhecimento ?? []).map((k) => `## ${k.titulo}\n${k.texto}`).join('\n\n') || '(vazia)';
   return `Você é o AGENTE DE SUPORTE da Doutor Digital, trabalhando sozinho numa VPS. Resolva a demanda abaixo.
@@ -116,9 +119,9 @@ ECONOMIA (você roda no plano do Claude do João; cada leitura custa):
 NO FIM, responda com UM bloco \`\`\`json contendo exatamente:
 {"resumo": "o que aconteceu, em 1-3 frases", "causa": "...", "fez": "o que você mudou (ou 'nada')", "pr_titulo": "título curto do PR ou null", "pr_corpo": "causa, o que mudou e como provar, ou null", "precisa_pessoa": true|false, "o_que_fazer": "passos para uma pessoa, ou null"}
 
-DEMANDA #${d.protocolo} — categoria: ${d.categoria}; unidade: ${d.unidadeSlug ?? 'não informada'} (identificação: ${d.verificacao}); quem: ${d.nome ?? '—'}
+DEMANDA #${d.protocolo} — categoria: ${d.categoria}; unidade: ${d.unidadeSlug ?? 'não informada'} (identificação: ${d.verificacao}); quem: ${neutro(d.nome ?? '—')}
 <<<RELATO>>>
-${d.relato}
+${neutro(d.relato)}
 <<<FIM>>>
 
 ANÁLISE AUTOMÁTICA FEITA ANTES (pode estar errada):

@@ -10,6 +10,7 @@ import { apiRouter } from './routes/api.routes.js';
 import { apagarCofreDeArquivos, ligarConectorRemoto } from './mcp-remoto/producao.js';
 import { paginaPausaHandler } from './controllers/pausa.controller.js';
 import { paginaAprendizadosHandler } from './controllers/aprendizados.controller.js';
+import { paginaFunilHandler } from './controllers/funil.controller.js';
 import { paginaAltaHandler } from './controllers/alta.controller.js';
 import { paginaIaHandler } from './controllers/ia-unidade.controller.js';
 import { getCheckpointer } from './agent/graph.js';
@@ -140,7 +141,7 @@ async function main(): Promise<void> {
 
   app.use((req, _res, next) => {
     // o token do cofre de arquivos viaja no caminho: nunca vai para o log
-    logger.debug({ method: req.method, url: req.url.replace(/^(\/arquivos\/(?:enviar|baixar)\/)[^/?]+/, '$1[token]') }, 'http');
+    logger.debug({ method: req.method, url: req.url.replace(/^(\/arquivos\/(?:enviar|baixar)\/)[^/?]+/, '$1[token]').replace(/([?&]k=)[^&]+/, '$1[chave]') }, 'http');
     next();
   });
 
@@ -152,6 +153,8 @@ async function main(): Promise<void> {
 
   // Página da unidade para ensinar a Sofia (aprendizados), com código da unidade e chave por unidade.
   app.get('/aprendizados/:slug', paginaAprendizadosHandler);
+  // Funil de etapas encaixado no Chatwoot (Dashboard App). A chave vem em ?k= e é mascarada no log abaixo.
+  app.get('/funil', paginaFunilHandler);
 
   // Página da recepção para aprovar alta e marcar quem parou no meio.
   app.get('/alta/:slug', paginaAltaHandler);

@@ -34,6 +34,8 @@ export const ROTAS_DE_ESCRITA: ReadonlyArray<{ metodo: MetodoDeEscrita; caminho:
   { metodo: 'POST', caminho: /^\/transfers$/, nome: 'transferir' },
   // Sofia 2.0: o sinal do paciente. SÓ criar o link (lib/sinal-pix.ts); nada de editar, excluir ou ler link por aqui.
   { metodo: 'POST', caminho: /^\/paymentLinks$/, nome: 'criar link de pagamento (sinal da consulta)' },
+  // Sofia 2.0 (11/11/2026): o sinal sai como Pix copia-e-cola de valor fixo, sem formulário (o link pedia nome, CPF, e-mail: idoso desiste)
+  { metodo: 'POST', caminho: /^\/pix\/qrCodes\/static$/, nome: 'criar Pix copia-e-cola de valor fixo (sinal da consulta)' },
 ];
 
 export function rotaPermitida(metodo: string, caminho: string): boolean {

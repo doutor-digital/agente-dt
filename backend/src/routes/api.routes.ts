@@ -142,6 +142,7 @@ import {
   publicAprendizadosPreviaHandler,
   publicAprendizadosSalvarHandler,
 } from '../controllers/aprendizados.controller.js';
+import { funilCaixasHandler, funilMoverHandler, funilQuadroHandler } from '../controllers/funil.controller.js';
 import { saudeIaHandler } from '../controllers/saude-ia.controller.js';
 import { listChangeLogHandler } from '../controllers/change-log.controller.js';
 import {
@@ -364,6 +365,10 @@ apiRouter.get('/public/aprendizados/:slug', publicAprendizadosHandler);
 apiRouter.post('/public/aprendizados/:slug', publicAprendizadosSalvarHandler);
 apiRouter.post('/public/aprendizados/:slug/previa', publicAprendizadosPreviaHandler);
 apiRouter.post('/public/aprendizados/:slug/regra/:id', publicAprendizadosLigarHandler);
+// Funil de etapas do Chatwoot (Dashboard App): chave X-Funil-Chave derivada do token do Chatwoot (sem sessão).
+apiRouter.get('/public/funil/quadro', funilQuadroHandler);
+apiRouter.get('/public/funil/caixas', funilCaixasHandler);
+apiRouter.post('/public/funil/mover', funilMoverHandler);
 
 // Widgets privados do Kommo (coluna do cartão) leem a agenda da franquia com chave por unidade (sem sessão).
 apiRouter.get('/public/widget/:slug/ping', widgetPingHandler);
