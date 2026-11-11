@@ -49,6 +49,7 @@ import { ehTranscricaoDeComprovante } from '../lib/pagamento-antecipado.js';
 import { tentarNotaDeVoz } from '../lib/resposta-em-voz.js';
 import { findUnitBySlug, ensureDefaultUnit } from '../services/units.service.js';
 import { addMessage, upsertConversation } from '../services/conversations.service.js';
+import { enviarPixDoSinal } from '../lib/pix-do-sinal-envio.js';
 import { judgeConversation } from '../services/conversation-judge.service.js';
 import { claimMessageId, TTL_REENTREGA_KOMMO_MS } from '../lib/dedup-cache.js';
 import { rememberIncomingAudio } from '../lib/pending-audio.js';
@@ -1938,6 +1939,18 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
           content: reply,
           meta: { via: sendResult.via, ...(botoes.length ? { botoes } : {}) },
         });
+        // Sinal da Sofia 2.0: o Pix copia-e-cola sai numa mensagem só com o código, depois da explicação (lib/pix-do-sinal-envio.ts).
+        if (!naoChegou) {
+          await enviarPixDoSinal({
+            unit, leadId, chatId, talkId, contactId,
+            respostaAnterior: reply,
+            viaSalesbot: sendResult.via === 'salesbot',
+            modoWidget: !!deliver,
+            recorder,
+            kommo: createKommoClient(unit),
+            registrar: (texto) => addMessage({ conversationId: conv.id, traceId, role: 'assistant', content: texto, meta: { via: 'pix_do_sinal' } }),
+          }).catch((err) => logger.warn({ err: String(err), leadId, unit: unit.slug }, 'pix do sinal falhou (segue)'));
+        }
         // Marcou consulta neste turno e a confirmação chegou → cartão de chegada
         // (foto da fachada + endereço + mapa), numa mensagem à parte, sem segurar nada.
         if (!naoChegou && marcouConsultaNoTurno) {

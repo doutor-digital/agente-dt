@@ -183,9 +183,12 @@ export function validadeDoLink(hoje: string, diaDaConsulta: string | null): stri
   return alvo > teto ? teto : alvo;
 }
 
-/** O Pix copia-e-cola (BR Code EMV): começa com "000201", tem o domínio do Pix do Banco Central e termina no CRC "6304XXXX". */
+/**
+ * O Pix copia-e-cola (BR Code EMV): começa com "000201", tem o domínio do Pix do Banco Central e termina no CRC "6304XXXX".
+ * Espaço é normal (nome e cidade do recebedor: "ATTIVA CORPO E MENTE"); quebra de linha, não.
+ */
 export function copiaEColaValido(p: unknown): p is string {
-  return typeof p === 'string' && /^000201/.test(p) && /br\.gov\.bcb\.pix/i.test(p) && /6304[0-9A-F]{4}$/i.test(p) && p.length <= 512 && !/\s/.test(p);
+  return typeof p === 'string' && /^000201/.test(p) && /br\.gov\.bcb\.pix/i.test(p) && /6304[0-9A-F]{4}$/i.test(p) && p.length <= 512 && !/[\r\n]/.test(p);
 }
 
 /** O link tem de ser https e do Asaas: é o que a Sofia manda ao paciente, então nada vindo de uma resposta estranha. */
@@ -306,7 +309,8 @@ export async function gerarSinalPix(
       pix = await deps.escrever<{ id?: unknown; payload?: unknown }>(conta.unitId, conta.chave, 'POST', '/pix/qrCodes/static', {
         addressKey: chavePix,
         value: valor,
-        description: `Sinal consulta Doutor Hérnia ${nomeDaClinica(unit.name)}`.slice(0, 37),
+        // o Asaas aceita até 37 caracteres; o nome da clínica vem sem "Doutor Hérnia" (nomeDaClinica)
+        description: `Sinal da consulta - ${nomeDaClinica(unit.name)}`.slice(0, 37),
         format: 'PAYLOAD',
         allowsMultiplePayments: false,
         // vale até o fim da véspera da consulta (horário de Brasília, o da conta)

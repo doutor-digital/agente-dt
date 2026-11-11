@@ -130,7 +130,7 @@ export function regraDePagamento(unit: Pick<Unit, 'acceptsAdvancePayment' | 'spi
   if (sinal) {
     return (
       `\n- Nesta unidade não existe chave Pix nem "pagamento antecipado". A consulta é ${fraseDePrecoComSinal(sinal)}. ` +
-      'NUNCA escreva uma chave Pix nem diga que a equipe envia a chave. Se o paciente quiser garantir a vaga com o sinal, diga que você envia o link do Pix em seguida, ' +
+      'NUNCA escreva uma chave Pix nem diga que a equipe envia a chave. Se o paciente quiser garantir a vaga com o sinal, diga que você envia o Pix do sinal em seguida, ' +
       'quando ele escolher o horário. Se o objetivo acima falar de chave Pix ou de valor antecipado, ignore essa parte.'
     );
   }
