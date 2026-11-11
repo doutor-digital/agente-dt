@@ -21,6 +21,7 @@ import { randomUUID } from 'node:crypto';
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { asaasEscrever } from './integracoes/asaas-escrita.js';
+import { asaasGet } from './integracoes/asaas.js';
 import { chaveDaUnidade } from './integracoes/chaves.js';
 import { fusoDaUnidade, partesNoFuso } from './fuso.js';
 import { unidadeDona } from '../agent/rede-doutor-hernia.js';
@@ -82,6 +83,11 @@ export interface DepsDoSinal {
   travar?: <T>(chave: string, fn: (banco: BancoDoSinal) => Promise<T>) => Promise<T>;
   chave: (unit: { id: string; slug: string }) => Promise<{ unitId: string; slug: string; chave: string } | null>;
   escrever: typeof asaasEscrever;
+  /**
+   * Leitura no Asaas (a chave Pix da conta). Com ela o sinal sai como Pix COPIA-E-COLA de valor fixo (`POST /pix/qrCodes/static`): o
+   * paciente cola no app do banco, sem formulário. Sem ela (testes antigos), o link de pagamento de antes.
+   */
+  ler?: typeof asaasGet;
   agora: () => Date;
   /** espera enquanto outra geração do mesmo paciente termina (o teste encurta) */
   esperar?: (ms: number) => Promise<void>;
@@ -120,6 +126,7 @@ export const depsReais = (): DepsDoSinal => ({
     ),
   chave: chaveDaClinica,
   escrever: asaasEscrever,
+  ler: asaasGet,
   agora: () => new Date(),
 });
 
@@ -127,7 +134,7 @@ export type MotivoDaFalha = 'sem-chave' | 'teto' | 'asaas' | 'baixa-desligada' |
 
 export type ResultadoDoSinal =
   /** `registrado` = false: o link existe no Asaas mas NÃO ficou gravado no banco (a baixa automática não o enxerga) */
-  | { tipo: 'link'; url: string; novo: boolean; valor: number; venceEm: string; registrado?: boolean }
+  | { tipo: 'link'; url: string; novo: boolean; valor: number; venceEm: string; registrado?: boolean; copiaECola?: boolean }
   | { tipo: 'ja-pago' }
   | { tipo: 'falhou'; motivo: MotivoDaFalha; detalhe: string };
 
@@ -174,6 +181,11 @@ export function validadeDoLink(hoje: string, diaDaConsulta: string | null): stri
   const alvo = diaDaConsulta && /^\d{4}-\d{2}-\d{2}$/.test(diaDaConsulta) ? somarDias(diaDaConsulta, -1) : somarDias(hoje, 3);
   if (alvo < hoje) return hoje;
   return alvo > teto ? teto : alvo;
+}
+
+/** O Pix copia-e-cola (BR Code EMV): começa com "000201", tem o domínio do Pix do Banco Central e termina no CRC "6304XXXX". */
+export function copiaEColaValido(p: unknown): p is string {
+  return typeof p === 'string' && /^000201/.test(p) && /br\.gov\.bcb\.pix/i.test(p) && /6304[0-9A-F]{4}$/i.test(p) && p.length <= 512 && !/\s/.test(p);
 }
 
 /** O link tem de ser https e do Asaas: é o que a Sofia manda ao paciente, então nada vindo de uma resposta estranha. */
@@ -245,7 +257,12 @@ export async function gerarSinalPix(
       // Link pendente que ainda vale é SEMPRE reaproveitado, mesmo que acabe antes da (nova) consulta: o Asaas não deixa cancelar link por aqui
       // (DELETE/PUT de link são rotas proibidas), então um segundo link deixaria dois Pix pagáveis para o mesmo paciente. Venceu, aí sim um novo.
       const pendente = vigentes.find((l) => l.status === 'pendente' && l.venceEm >= hoje && l.valorCentavos === centavos);
-      if (pendente) return { tipo: 'pronto', resultado: { tipo: 'link', url: pendente.url, novo: false, valor: pendente.valorCentavos / 100, venceEm: pendente.venceEm } };
+      if (pendente) {
+        return {
+          tipo: 'pronto',
+          resultado: { tipo: 'link', url: pendente.url, novo: false, valor: pendente.valorCentavos / 100, venceEm: pendente.venceEm, copiaECola: copiaEColaValido(pendente.url) },
+        };
+      }
 
       // Teto do dia da CLÍNICA (últimas 24 h): só conta o que é NOVO, reaproveitar não gasta.
       const criadosHoje = await banco.count({ where: { clinica, criadoEm: { gte: new Date(agora.getTime() - 86_400_000) } } });
@@ -278,6 +295,49 @@ export async function gerarSinalPix(
     return { tipo: 'falhou', motivo: 'sem-chave', detalhe: 'a unidade não tem chave do Asaas no cofre' };
   }
   const valor = (centavos as number) / 100;
+
+  // Pix COPIA-E-COLA de valor fixo (11/11/2026, pedido do João: "pensa num idoso"): sem formulário, cola no app do banco e paga.
+  if (deps.ler) {
+    let pix: { id?: unknown; payload?: unknown } | null;
+    try {
+      const chaves = await deps.ler<{ data?: Array<{ key?: string; status?: string; type?: string }> }>(conta.unitId, conta.chave, '/pix/addressKeys', { status: 'ACTIVE', limit: 20 });
+      const chavePix = (chaves?.data ?? []).find((k) => k.key && (!k.status || k.status === 'ACTIVE'))?.key;
+      if (!chavePix) throw new Error('a conta do Asaas não tem chave Pix ativa');
+      pix = await deps.escrever<{ id?: unknown; payload?: unknown }>(conta.unitId, conta.chave, 'POST', '/pix/qrCodes/static', {
+        addressKey: chavePix,
+        value: valor,
+        description: `Sinal consulta Doutor Hérnia ${nomeDaClinica(unit.name)}`.slice(0, 37),
+        format: 'PAYLOAD',
+        allowsMultiplePayments: false,
+        // vale até o fim da véspera da consulta (horário de Brasília, o da conta)
+        expirationDate: `${venceEm} 23:59:59`,
+        externalReference: `sofia-sinal:${unit.slug}:${leadId}`.slice(0, 100),
+      });
+    } catch (err) {
+      const detalhe = err instanceof Error ? err.message : String(err);
+      logger.warn({ unit: unit.slug, leadId, detalhe }, 'sinal-pix: o Asaas não criou o Pix copia-e-cola');
+      await largar();
+      return { tipo: 'falhou', motivo: 'asaas', detalhe: detalhe.slice(0, 300) };
+    }
+    const qrId = typeof pix?.id === 'string' || typeof pix?.id === 'number' ? String(pix.id) : '';
+    const payload = typeof pix?.payload === 'string' ? pix.payload.trim() : '';
+    if (!qrId || !copiaEColaValido(payload)) {
+      logger.warn({ unit: unit.slug, leadId, qrId: qrId || null }, 'sinal-pix: resposta do Asaas sem id ou sem copia-e-cola válido');
+      await largar();
+      return { tipo: 'falhou', motivo: 'asaas', detalhe: 'resposta do Asaas sem id ou sem copia-e-cola válido' };
+    }
+    let registradoPix = true;
+    try {
+      const r = await deps.banco.updateMany({ where: { id: reserva.id }, data: { linkId: qrId, url: payload, status: 'pendente' } });
+      if (r.count !== 1) throw new Error('a reserva sumiu');
+    } catch (err) {
+      registradoPix = false;
+      logger.error({ err: String(err), unit: unit.slug, leadId, qrId }, 'sinal-pix: Pix criado no Asaas mas NÃO gravado no banco — sem baixa automática');
+    }
+    logger.info({ unit: unit.slug, clinica, leadId, qrId, venceEm }, 'sinal-pix: Pix copia-e-cola criado');
+    return { tipo: 'link', url: payload, novo: true, valor, venceEm, registrado: registradoPix, copiaECola: true };
+  }
+
   let criado: { id?: unknown; url?: unknown } | null;
   try {
     criado = await deps.escrever<{ id?: unknown; url?: unknown }>(conta.unitId, conta.chave, 'POST', '/paymentLinks', {

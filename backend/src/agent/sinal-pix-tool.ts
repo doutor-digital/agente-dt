@@ -26,6 +26,36 @@ interface ContextoDoSinal {
   kommo?: KommoClient;
 }
 
+/**
+ * Pix copia-e-cola (~150 caracteres): o modelo NÃO o copia (um caractere errado e o Pix não paga). A ferramenta guarda o código do turno e
+ * manda o modelo escrever esta marca; `colocarPixNaResposta` troca a marca pelo código exato antes da resposta sair (graph.ts).
+ */
+export const MARCA_DO_PIX = '[[PIX_DO_SINAL]]';
+const pixDoTurno = new Map<string, string>();
+export function guardarPixDoTurno(traceId: string, copiaECola: string): void {
+  if (pixDoTurno.size > 500) pixDoTurno.delete(pixDoTurno.keys().next().value as string);
+  pixDoTurno.set(traceId, copiaECola);
+}
+/** Lê e esquece o Pix do turno. */
+export function pixDoSinalDoTurno(traceId: string): string | undefined {
+  const p = pixDoTurno.get(traceId);
+  pixDoTurno.delete(traceId);
+  return p;
+}
+/**
+ * Troca a marca pelo copia-e-cola exato. Com Pix no turno e sem marca na resposta (o modelo esqueceu), acrescenta no fim — a não ser que o
+ * código exato já esteja lá. Sem Pix no turno, a marca solta sai (nunca vai "[[PIX_DO_SINAL]]" ao paciente). Puro.
+ */
+export function colocarPixNaResposta(texto: string, pix: string | undefined): string {
+  if (!pix) return texto.includes(MARCA_DO_PIX) ? texto.split(MARCA_DO_PIX).join('').replace(/\n{3,}/g, '\n\n').trim() : texto;
+  if (texto.includes(MARCA_DO_PIX)) {
+    const [antes, ...resto] = texto.split(MARCA_DO_PIX);
+    return `${antes}${pix}${resto.join('')}`.replace(/\n{3,}/g, '\n\n').trim();
+  }
+  if (texto.includes(pix)) return texto;
+  return `${texto.trim()}\n\nPix copia e cola do sinal (copie e cole no app do banco):\n${pix}`;
+}
+
 // O cartão da consulta que `agendar_consulta` marcou neste turno: é dele o sinal quando o modelo não diz o leadId.
 const leadDoTurno = new Map<string, number>();
 export function registrarLeadDoSinal(traceId: string, leadId: number): void {
@@ -41,6 +71,15 @@ export function textoDoSinal(r: ResultadoDoSinal, s: SinalDaUnidade, tarefaAbert
     return (
       `O sinal de ${sinal} deste paciente JÁ foi pago. NÃO gere nem peça outro Pix. Diga que o sinal está confirmado e que no dia ficam ${resto}. ` +
       'NUNCA envie chave Pix.'
+    );
+  }
+  if (r.tipo === 'link' && r.copiaECola) {
+    return (
+      `Pix do sinal de ${sinal} gerado (copia e cola). NÃO escreva o código: escreva a marca ${MARCA_DO_PIX} SOZINHA numa linha, e o sistema ` +
+      'coloca ali o código exato. Antes da marca, em UMA frase simples: é só copiar o código abaixo e colar no app do banco, na opção "Pix copia e cola". ' +
+      `Diga que vale até ${diaCurto(r.venceEm)} e que, com o sinal, a consulta fica R$ ${fmtBRL(s.comSinal)} (${sinal} agora + ${resto} no dia). ` +
+      (r.novo ? '' : 'Este é o MESMO Pix já gerado antes: NÃO gere outro. ') +
+      'NUNCA envie chave Pix nem diga que a equipe envia a chave. NÃO diga que o pagamento foi confirmado: a confirmação chega sozinha depois que ele pagar.'
     );
   }
   if (r.tipo === 'link') {

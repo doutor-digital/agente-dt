@@ -44,6 +44,8 @@ const STATUS_QUE_PAGAM = new Set(['RECEIVED', 'CONFIRMED']);
 export interface PagamentoDoAsaas {
   id: string;
   paymentLink?: string | null;
+  /** o Pix copia-e-cola de valor fixo (`POST /pix/qrCodes/static`) que originou a cobrança */
+  pixQrCodeId?: string | null;
   status?: string;
   value?: number;
   billingType?: string;
@@ -60,9 +62,12 @@ export type Decisao =
 export function conciliar(pendentes: readonly LinhaDoSinal[], pagamentos: readonly PagamentoDoAsaas[], hoje: string, leituraCompleta = true): Decisao[] {
   const porLink = new Map<string, PagamentoDoAsaas>();
   for (const p of pagamentos) {
-    if (!p.paymentLink || !p.id || !STATUS_QUE_PAGAM.has(String(p.status))) continue;
+    if (!p.id || !STATUS_QUE_PAGAM.has(String(p.status))) continue;
     if (p.billingType && p.billingType !== 'PIX') continue;
-    if (!porLink.has(String(p.paymentLink))) porLink.set(String(p.paymentLink), p);
+    // o sinal é um link de pagamento (antes de 11/11) ou um Pix copia-e-cola de valor fixo: casa pelo id de quem originou a cobrança
+    for (const origem of [p.paymentLink, p.pixQrCodeId]) {
+      if (origem && !porLink.has(String(origem))) porLink.set(String(origem), p);
+    }
   }
   const saida: Decisao[] = [];
   for (const linha of pendentes) {
