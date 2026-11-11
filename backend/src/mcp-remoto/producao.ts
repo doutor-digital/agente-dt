@@ -615,6 +615,7 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
     manterAtualizado(operadoresDoBanco, (s) => (operadoresBanco = s), 'quem usa os bancos');
     const doAgente = fonteDoAgente();
     if (doAgente) fontesBanco.set('agente', () => doAgente);
+    else logger.warn('mcp-remoto: banco do agente SEM conexão para o conector (DATABASE_URL/MCP_BANCO_AGENTE_URL vazia ou ilegível); banco_* só terá rh e dsc');
     fontesBanco.set('rh', () => fonteDoSistema('rh', sistemas));
     fontesBanco.set('dsc', () => fonteDoSistema('dsc', sistemas));
   }

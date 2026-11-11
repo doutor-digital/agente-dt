@@ -27,11 +27,12 @@ describe('banco_* no Postgres de verdade', { skip: !URL_TESTE }, () => {
 
   before(async () => {
     admin = new PrismaClient({ datasourceUrl: URL_TESTE });
-    for (const d of ['drop view if exists bt_visao', 'drop table if exists bt_filha, bt_pai, bt_novo, bt_unidades, bt_msgs, bt_sem_chave, mcp_banco_alteracoes, kommo_web_sessions', 'drop function if exists bt_fn()', 'drop schema if exists outro cascade']) await sql(d);
+    for (const d of ['drop view if exists bt_visao', 'drop table if exists bt_ger, bt_filha, bt_pai, bt_novo, bt_unidades, bt_msgs, bt_sem_chave, mcp_banco_alteracoes, kommo_web_sessions', 'drop function if exists bt_fn()', 'drop schema if exists outro cascade']) await sql(d);
     await sql("create table bt_unidades (id text primary key, nome text, openai_api_key text, n int, extra jsonb, criado timestamp default now())");
     await sql('create table bt_msgs (id serial primary key, texto text, valor numeric(12,2), quando timestamptz default now())');
     await sql('create table bt_sem_chave (a int)');
     await sql('create table bt_pai (id int primary key, nome text)');
+    await sql('create table bt_ger (id int primary key, a int, b int generated always as (a * 2) stored)');
     await sql('create table bt_filha (id int primary key, pai_id int references bt_pai(id) on delete cascade, nome text)');
     await sql('create table kommo_web_sessions (id text primary key, refresh_token text)');
     await sql('create view bt_visao as select id from bt_unidades');
@@ -66,6 +67,9 @@ describe('banco_* no Postgres de verdade', { skip: !URL_TESTE }, () => {
     assert.deepEqual(cat.tabelas.get('bt_sem_chave')!.chave, []);
     assert.ok(cat.funcoes.includes('bt_fn'));
     assert.deepEqual(cat.tabelas.get('bt_pai')!.cascata, ['bt_filha']);
+    assert.deepEqual(cat.tabelas.get('bt_ger')!.geradas, ['b']);
+    assert.ok(cat.tabelas.get('bt_pai')!.linhas === null || cat.tabelas.get('bt_pai')!.linhas! >= 0, 'reltuples -1 (nunca analisada) vira null');
+    assert.ok(!cat.funcoes.includes('gen_random_uuid'));
     assert.equal(cat.tabelas.get('bt_filha')!.cascata, undefined);
     assert.ok(cat.esquemas.includes('outro'));
     assert.ok(!cat.tabelas.has('bt_x'), 'só o esquema public');
@@ -230,6 +234,34 @@ describe('banco_* no Postgres de verdade', { skip: !URL_TESTE }, () => {
     await confirmarEscrita(ctx, QUEM, { confirmacao: p.confirmacao });
     assert.equal((await ler('select count(*)::int as n from bt_pai'))[0]!.n, 1);
     await sql('delete from bt_pai');
+  });
+
+  it('desfazer um INSERT em tabela com filhas em cascata é recusado; coluna GERADA não atrapalha o desfazer de um UPDATE', async () => {
+    const p = await prepararEscrita(ctx, QUEM, { banco: 'agente', sql: "insert into bt_pai (id, nome) values (7, 'novo')", motivo: 'pai com cascata' });
+    const c = await confirmarEscrita(ctx, QUEM, { confirmacao: p.confirmacao });
+    await assert.rejects(prepararDesfazer(ctx, QUEM, { alteracao: c.registro }), /cascata/);
+    await sql('delete from bt_pai');
+    await sql('insert into bt_ger (id, a) values (1, 5)');
+    const u = await prepararEscrita(ctx, QUEM, { banco: 'agente', sql: 'update bt_ger set a = 6 where id = 1', motivo: 'coluna gerada' });
+    const cu = await confirmarEscrita(ctx, QUEM, { confirmacao: u.confirmacao });
+    assert.deepEqual(await ler('select a, b from bt_ger'), [{ a: 6, b: 12 }]);
+    const d = await prepararDesfazer(ctx, QUEM, { alteracao: cu.registro });
+    await confirmarEscrita(ctx, QUEM, { confirmacao: d.confirmacao });
+    assert.deepEqual(await ler('select a, b from bt_ger'), [{ a: 5, b: 10 }]);
+    await sql('delete from bt_ger');
+  });
+
+  it('função de extensão no esquema public não é confundida com função do banco (só as criadas à mão fecham)', async () => {
+    await sql('create extension if not exists pgcrypto');
+    try {
+      const cat = await fonte().catalogo();
+      assert.ok(!cat.funcoes.includes('digest') && cat.funcoes.includes('bt_fn'));
+      const r = await consultarBanco(ctx, QUEM, { banco: 'agente', sql: "select encode(digest('a', 'sha256'), 'hex') as h" });
+      assert.equal(r.linhasDevolvidas, 1);
+      await assert.rejects(consultarBanco(ctx, QUEM, { banco: 'agente', sql: 'select bt_fn()' }), /função do banco/);
+    } finally {
+      await sql('drop extension if exists pgcrypto');
+    }
   });
 
   it('o registro e a auditoria do conector só se leem (nem a trilha nem o backup se forjam por aqui)', async () => {

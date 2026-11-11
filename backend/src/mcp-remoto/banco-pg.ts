@@ -14,7 +14,7 @@ import { PrismaClient } from '@prisma/client';
 import { ErroDeEntrada } from '../franquia-mcp/travas.js';
 import { criarCatalogo, type Catalogo, type TabelaCat } from './banco-sql.js';
 import { ESQUEMAS_DE_SISTEMA } from './banco-segredos.js';
-import type { FonteBanco, TxBanco } from './banco.js';
+import { ErroDeBanco, type FonteBanco, type TxBanco } from './banco.js';
 import { resolverSistema, type ContextoSistemas } from './sistemas.js';
 
 export const TIMEOUT_MS = 30_000;
@@ -37,7 +37,8 @@ export interface ClienteSql {
 }
 
 export const SQL_COLUNAS = `SELECT c.relname AS tabela, c.relkind::text AS tipo, c.reltuples::bigint AS linhas, a.attname AS coluna,
-  COALESCE(i.indisprimary AND a.attnum = ANY (i.indkey), false) AS chave
+  COALESCE(i.indisprimary AND a.attnum = ANY (i.indkey), false) AS chave,
+  (a.attgenerated <> '' OR a.attidentity = 'a') AS gerada
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
 JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
@@ -64,11 +65,12 @@ export function catalogoDeLinhas(
     const nome = String(l.tabela);
     let t = por.get(nome);
     if (!t) {
-      t = { nome, colunas: [], chave: [], visao: l.tipo === 'v' || l.tipo === 'm', linhas: l.linhas === null || l.linhas === undefined ? null : Number(l.linhas) };
+      t = { nome, colunas: [], chave: [], visao: l.tipo === 'v' || l.tipo === 'm', linhas: l.linhas === null || l.linhas === undefined || Number(l.linhas) < 0 ? null : Number(l.linhas) };
       por.set(nome, t);
     }
     t.colunas.push(String(l.coluna));
     if (l.chave === true) t.chave.push(String(l.coluna));
+    if (l.gerada === true) t.geradas = [...(t.geradas ?? []), String(l.coluna)];
   }
   for (const c of cascatas) {
     const pai = por.get(String(c.pai));
@@ -98,7 +100,7 @@ export function fonteComCliente(cliente: ClienteSql): FonteBanco {
     } catch (e) {
       if (e instanceof Desfazer) return resultado as T;
       if (e instanceof ErroDeEntrada) throw e;
-      throw new ErroDeEntrada(`o banco recusou ou perdeu a conexão: ${mensagemDoBanco(e)}`);
+      throw new ErroDeBanco(`o banco recusou o comando ou perdeu a conexão: ${mensagemDoBanco(e)}`);
     }
     return resultado as T;
   }
@@ -115,7 +117,7 @@ export function fonteComCliente(cliente: ClienteSql): FonteBanco {
         catalogoDeLinhas(
           await tx.consultar(SQL_COLUNAS),
           await tx.consultar("SELECT nspname FROM pg_namespace WHERE nspname <> 'public'"),
-          await tx.consultar("SELECT DISTINCT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public'"),
+          await tx.consultar("SELECT DISTINCT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e')"),
           await tx.consultar(SQL_CASCATAS),
         ),
       ),
@@ -153,7 +155,7 @@ export function fonteDoSistema(id: 'rh' | 'dsc', ctx: ContextoSistemas): FonteBa
     id,
     escreve: false,
     linhasEmJson: false,
-    cacheCatalogoMs: 60_000,
+    cacheCatalogoMs: 0, // idem: um segredo novo no esquema do sistema ganha o invólucro na hora (custa uma chamada /esquema a mais por consulta)
     async catalogo() {
       const r = (await conta().fonte.chamar('GET', '/admin/v1/esquema')) as { tabelas?: Array<{ nome?: unknown; colunas?: Array<{ nome?: unknown }>; view?: unknown; linhas?: unknown }>; funcoes?: Array<{ nome?: unknown }> };
       const tabelas: TabelaCat[] = (r.tabelas ?? []).flatMap((t) =>

@@ -43,6 +43,12 @@ import {
 } from './banco-sql.js';
 import { executar } from './ferramenta.js';
 
+/**
+ * Falha do banco (recusou o comando, perdeu a conexão, estourou o tempo). Numa confirmação ela pode vir depois de o COMMIT sair: o resultado é INCERTO
+ * se foi a conexão. É um ErroDeEntrada para virar mensagem legível; a confirmação a reconhece para acrescentar o aviso.
+ */
+export class ErroDeBanco extends ErroDeEntrada {}
+
 export type BancoId = 'agente' | 'rh' | 'dsc';
 export const BANCOS: Record<BancoId, string> = {
   agente: 'banco do próprio agente-dt (unidades, conversas, Sofia, auditoria do conector…)',
@@ -183,12 +189,16 @@ function cortarLinhaGrande(linha: Record<string, unknown>): Record<string, unkno
   return Buffer.byteLength(t) > MAX_BYTES_LINHA ? { _linha_cortada_por_tamanho: t.slice(0, 1000) } : linha;
 }
 
-/** Corta a lista até caber em `MAX_BYTES_RESPOSTA`. */
+/** Devolve as primeiras linhas que cabem em `MAX_BYTES_RESPOSTA` (cada linha é serializada uma vez só). */
 function caberNaResposta<T>(linhas: T[]): { linhas: T[]; cortado: boolean } {
-  if (paraJson(linhas).length <= MAX_BYTES_RESPOSTA) return { linhas, cortado: false };
-  let n = linhas.length;
-  while (n > 1 && paraJson(linhas.slice(0, n)).length > MAX_BYTES_RESPOSTA) n = Math.floor(n / 2);
-  return { linhas: linhas.slice(0, n), cortado: true };
+  let total = 2;
+  let n = 0;
+  for (const l of linhas) {
+    total += Buffer.byteLength(paraJson(l)) + 1;
+    if (total > MAX_BYTES_RESPOSTA && n > 0) return { linhas: linhas.slice(0, n), cortado: true };
+    n++;
+  }
+  return { linhas, cortado: false };
 }
 
 function encurtar(v: unknown, max = 200): unknown {
@@ -436,8 +446,8 @@ export async function confirmarEscrita(ctx: ContextoBanco, quem: QuemBanco, a: {
     });
   } catch (e) {
     rastro.resultado = `recusado: ${e instanceof Error ? e.message : String(e)}`.slice(0, 300);
-    if (e instanceof ErroDeEntrada) throw e;
-    throw new ErroDeEntrada(`a gravação falhou e foi desfeita (nada mudou): ${e instanceof Error ? e.message.slice(0, 300) : String(e)}. O código foi gasto: prepare de novo. Se o erro foi de conexão, confira em mcp_banco_alteracoes se chegou a gravar antes de repetir`);
+    if (e instanceof ErroDeBanco) throw new ErroDeEntrada(`${e.message}. O código foi gasto. Se o erro foi de CONEXÃO no meio da gravação o resultado é incerto: confira em mcp_banco_alteracoes (select id, tipo, tabela, linhas, created_at from mcp_banco_alteracoes order by created_at desc limit 5) se chegou a gravar ANTES de preparar de novo (um INSERT repetido duplicaria a linha)`);
+    throw e;
   }
   rastro.resultado = 'ok';
   const avisado = await avisarSemFalhar(ctx, textoAviso(quem, p.banco, plano.tipo === 'insert' ? 'inseriu' : plano.tipo === 'update' ? 'atualizou' : 'apagou', plano.tabela.nome, r.chaves.length, p.motivo, id));
@@ -538,6 +548,8 @@ function validarRegistro(r: Registro, banco: BancoId, cat: Catalogo): void {
   if (r.desfeito) throw new ErroDeEntrada(`o registro ${r.id} já foi desfeito`);
   const t = cat.tabelas.get(r.tabela.toLowerCase());
   if (!t || tabelaFechada(t) || t.chave.length === 0 || TABELAS_SO_LEITURA.has(t.nome.toLowerCase())) throw new ErroDeEntrada(`a tabela ${r.tabela} não existe mais ou não aceita desfazer`);
+  // desfazer um INSERT apaga as linhas; se a tabela tem filhas em cascata, linhas criadas depois por outros seriam apagadas junto, sem backup
+  if (r.tipo === 'insert' && t.cascata?.length) throw new ErroDeEntrada(`desfazer um INSERT em ${t.nome} apagaria também linhas de ${t.cascata.join(', ')} (chave estrangeira em cascata), que o backup não guarda: apague as linhas à mão com banco_preparar_escrita`);
   if (t.chave.some((c) => colunaSecreta(c))) throw new ErroDeEntrada('a chave da tabela é coluna de segredo');
   const esperado = r.tipo === 'delete' ? r.antes.length : r.tipo === 'update' ? Math.min(r.antes.length, r.depois.length) : r.depois.length;
   if (r.chaves.length === 0 || esperado !== r.chaves.length) throw new ErroDeEntrada(`o registro ${r.id} está incompleto (chaves ${r.chaves.length}, linhas ${esperado}): não dá para desfazer sozinho`);
@@ -567,8 +579,8 @@ async function confirmarDesfazer(ctx: ContextoBanco, quem: QuemBanco, p: Pendent
     });
   } catch (e) {
     rastro.resultado = `recusado: ${e instanceof Error ? e.message : String(e)}`.slice(0, 300);
-    if (e instanceof ErroDeEntrada) throw e;
-    throw new ErroDeEntrada(`o desfazer falhou e foi desfeito (nada mudou): ${e instanceof Error ? e.message.slice(0, 300) : String(e)}. O código foi gasto: prepare de novo`);
+    if (e instanceof ErroDeBanco) throw new ErroDeEntrada(`${e.message}. O código foi gasto. Se o erro foi de CONEXÃO no meio do desfazer o resultado é incerto: confira o registro ${p.alteracao} em mcp_banco_alteracoes (desfeito_em) antes de preparar de novo`);
+    throw e;
   }
   rastro.operacao = `desfazer ${reg.tipo}`;
   rastro.tabela = reg.tabela;

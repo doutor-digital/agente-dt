@@ -30,6 +30,8 @@ export interface TabelaCat {
   chave: string[];
   visao: boolean;
   linhas?: number | null;
+  /** colunas que o banco preenche sozinho e não aceita valor (GENERATED / identity ALWAYS): o desfazer não as grava */
+  geradas?: string[];
   /** tabelas-filhas que o banco apaga/zera junto (FK com ON DELETE CASCADE/SET NULL/SET DEFAULT): apagar linha daqui mexeria nelas */
   cascata?: string[];
 }
@@ -268,7 +270,7 @@ function inspecionar(toks: Token[], cat: Catalogo, o: OpcoesInspecao = {}): Tabe
     const baixa = t.v.toLowerCase();
     const proximo = toks[i + 1];
     if (t.tipo === 'id' && PALAVRAS_PROIBIDAS.has(baixa) && !o.ignorar?.has(i)) {
-      recusa(`a palavra ${baixa.toUpperCase()} não é aceita aqui${baixa === 'set' || baixa === 'into' ? '' : ': leitura é só SELECT/WITH; escrita é banco_preparar_escrita (INSERT, UPDATE ou DELETE simples)'}`);
+      recusa(`a palavra ${baixa.toUpperCase()} não é aceita aqui${baixa === 'set' || baixa === 'into' ? '' : ': leitura é só SELECT/WITH; escrita é banco_preparar_escrita (INSERT, UPDATE ou DELETE simples)'}. Se é o NOME de uma coluna ou apelido, escreva-o entre aspas duplas ("${baixa}")`);
     }
     if (t.tipo === 'id' && baixa === 'for' && ['share', 'no', 'key', 'update'].includes(baixo(proximo))) recusa('FOR UPDATE/SHARE (trava de linha) não é aceito');
     if (baixa === 'information_schema' || (baixa.startsWith('pg_') && !FUNCOES_PG_LIBERADAS.has(baixa))) recusa(`"${t.v}" é do catálogo do sistema: o mapa do banco vem de banco_esquema`);
@@ -505,7 +507,7 @@ export function sqlPorChave(t: TabelaCat, linhas: number, travar = false): strin
 /** Desfazer UPDATE: devolve as colunas boas (fora da chave) ao valor do backup, uma linha por vez (parâmetros: JSON da linha, chave…). */
 export function sqlRestaurarLinha(t: TabelaCat): string {
   const sets = colunasBoas(t)
-    .filter((c) => !t.chave.some((k) => k.toLowerCase() === c.toLowerCase()))
+    .filter((c) => !t.chave.some((k) => k.toLowerCase() === c.toLowerCase()) && !t.geradas?.includes(c))
     .map((c) => `${aspas(c)} = _r.${aspas(c)}`);
   if (!sets.length) throw new ErroDeEntrada(`${t.nome} só tem colunas de chave: nada a restaurar`);
   const cols = t.chave.map((c) => `${tabelaSql(t)}.${aspas(c)}::text`).join(', ');
@@ -514,7 +516,7 @@ export function sqlRestaurarLinha(t: TabelaCat): string {
 
 /** Desfazer DELETE: reinsere as linhas do backup (parâmetro: array JSON). */
 export function sqlReinserir(t: TabelaCat): string {
-  const cols = colunasBoas(t).map(aspas).join(', ');
+  const cols = colunasBoas(t).filter((c) => !t.geradas?.includes(c)).map(aspas).join(', ');
   return `INSERT INTO ${tabelaSql(t)} (${cols}) SELECT ${cols} FROM jsonb_populate_recordset(NULL::${tabelaSql(t)}, $1::jsonb)`;
 }
 

@@ -9,6 +9,7 @@ import { criarCatalogo, type TabelaCat } from './banco-sql.js';
 import {
   confirmarEscrita,
   consultarBanco,
+  ErroDeBanco,
   criarContextoBanco,
   esquemaBanco,
   paraJson,
@@ -291,6 +292,16 @@ test('confirmar: o aviso do Telegram que falha não desfaz a escrita, mas é dit
   const ctx2 = criarContextoBanco(new Map([['agente', () => f.fonte]]), { avisar: () => Promise.reject(new Error('rede')) });
   const p2 = await prepararEscrita(ctx2, QUEM, { banco: 'agente', sql: UPDATE, motivo: 'telegram lança erro' });
   assert.match((await confirmarEscrita(ctx2, QUEM, { confirmacao: p2.confirmacao })).avisoTelegram, /NÃO consegui avisar/);
+});
+
+test('confirmar: falha do banco no meio da gravação vira aviso de resultado INCERTO e o código se gasta', async () => {
+  const f = falso({ antes: [LINHA_ANTES], tocadas: [{ __pk0: '1' }], depois: [LINHA_DEPOIS] });
+  const ctx = ctxCom({ agente: f.fonte });
+  const p = await prepararEscrita(ctx, QUEM, { banco: 'agente', sql: UPDATE, motivo: 'conexão cai' });
+  const quebrada: FonteBanco = { ...f.fonte, transacao: () => Promise.reject(new ErroDeBanco('o banco recusou o comando ou perdeu a conexão: connection terminated')) };
+  ctx.fontes.set('agente', () => quebrada);
+  await assert.rejects(confirmarEscrita(ctx, QUEM, { confirmacao: p.confirmacao }), /resultado é incerto.*mcp_banco_alteracoes/);
+  await assert.rejects(confirmarEscrita(ctx, QUEM, { confirmacao: p.confirmacao }), /desconhecido ou já usado/);
 });
 
 test('INSERT: a prévia mostra as linhas novas; o registro guarda só o depois', async () => {
