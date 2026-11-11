@@ -20,7 +20,7 @@
       "webhookId": "meta-ctwa-salto",
       "credentials": {
         "whatsAppTriggerApi": {
-          "id": "__TRIGGER__",
+          "id": "fH6W5P19DWgvkjzE",
           "name": "WhatsApp Trigger · Salto"
         }
       }
@@ -386,7 +386,7 @@
       "alwaysOutputData": true,
       "credentials": {
         "kommoLongLivedApi": {
-          "id": "__KOMMO__",
+          "id": "1Bx7H5atZuEjAotv",
           "name": "Kommo Salto"
         }
       },
@@ -463,7 +463,7 @@
       "alwaysOutputData": true,
       "credentials": {
         "kommoLongLivedApi": {
-          "id": "__KOMMO__",
+          "id": "1Bx7H5atZuEjAotv",
           "name": "Kommo Salto"
         }
       },
@@ -571,7 +571,7 @@
       "waitBetweenTries": 5000,
       "credentials": {
         "kommoLongLivedApi": {
-          "id": "__KOMMO__",
+          "id": "1Bx7H5atZuEjAotv",
           "name": "Kommo Salto"
         }
       },
@@ -604,7 +604,7 @@
       "alwaysOutputData": true,
       "credentials": {
         "kommoLongLivedApi": {
-          "id": "__KOMMO__",
+          "id": "1Bx7H5atZuEjAotv",
           "name": "Kommo Salto"
         }
       },
@@ -813,7 +813,7 @@
       "alwaysOutputData": true,
       "credentials": {
         "kommoLongLivedApi": {
-          "id": "__KOMMO__",
+          "id": "1Bx7H5atZuEjAotv",
           "name": "Kommo Salto"
         }
       },
