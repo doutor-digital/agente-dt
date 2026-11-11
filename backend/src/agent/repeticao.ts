@@ -457,8 +457,30 @@ export const INSTRUCAO_REFAZER_SEM_NOME =
 
 export type TravaDaResposta =
   | { acao: 'passar_para_equipe'; motivo: string; frase: string }
-  | { acao: 'refazer_sem_nome' }
+  | { acao: 'refazer_sem_nome'; instrucao: string }
+  | { acao: 'refazer_sem_alerta'; instrucao: string }
   | null;
+
+/**
+ * Chave `nome-na-hora-de-marcar` (conversa-direta.ts): o modelo pediu o nome antes da hora. "Nome completo" para a reserva
+ * não cai aqui (`pedeNome` não conta pedido de nome completo).
+ */
+export const INSTRUCAO_NOME_SO_AO_MARCAR =
+  '[instrução interna, não é fala do paciente] Nesta unidade o nome NÃO se pergunta na conversa. Reescreva a MESMA ' +
+  'resposta SEM pedir o nome (nem "como posso te chamar", nem "qual seu nome"): mantenha o resto e o tom. Se o paciente ' +
+  'já escolheu o horário, peça o NOME COMPLETO para deixar reservado; senão, termine com UMA pergunta que leve à ' +
+  'consulta. Responda só com a mensagem final.';
+
+/** Chave `sem-pergunta-de-alerta` (conversa-direta.ts): o modelo perguntou por sinal de alerta mesmo assim. */
+export const INSTRUCAO_SEM_PERGUNTA_DE_ALERTA =
+  '[instrução interna, não é fala do paciente] Nesta unidade você NÃO pergunta sinal de alerta (força na perna, xixi, ' +
+  'fezes, virilha, dormência). Reescreva a MESMA resposta SEM essa pergunta: acolha o que ele contou em UMA frase e ' +
+  'conduza para a consulta (ofereça os horários, ou responda o que ele perguntou). Responda só com a mensagem final.';
+
+/** A resposta faz a pergunta dos sinais de alerta, em qualquer frase com "?". */
+export function fazPerguntaDeSinalDeAlerta(resposta: string): boolean {
+  return perguntasDe(resposta).some(perguntaDeSinalDeAlerta);
+}
 
 /**
  * Depois que o modelo respondeu (sem ferramenta pendente): ele obedeceu ao bloco <repeticao>?
@@ -466,7 +488,13 @@ export type TravaDaResposta =
  *    código: chama pausar_ia e troca a resposta pela frase fixa;
  *  - já pediu o nome 2 vezes e a resposta pede de novo → refaz UMA vez sem o pedido.
  */
-export function travaDaResposta(r: Repeticao, resposta: string, ferramentas: string[]): TravaDaResposta {
+export function travaDaResposta(
+  r: Repeticao,
+  resposta: string,
+  ferramentas: string[],
+  /** As chaves de conversa curta da unidade (conversa-direta.ts). Sem elas, a trava é a de sempre. */
+  chaves: { semPerguntaDeAlerta?: boolean; nomeNaHoraDeMarcar?: boolean } = {},
+): TravaDaResposta {
   const motivo = motivoDeHandoff(r);
   if (motivo && !ferramentas.some((f) => FERRAMENTAS_DE_AVANCO.has(f))) {
     return {
@@ -475,6 +503,10 @@ export function travaDaResposta(r: Repeticao, resposta: string, ferramentas: str
       frase: r.audiosNaoOuvidos >= LIMITE_TENTATIVAS ? FRASE_HANDOFF_AUDIO : FRASE_HANDOFF_REPETICAO,
     };
   }
-  if (pararDePedirNome(r) && pedeNome(resposta)) return { acao: 'refazer_sem_nome' };
+  if (chaves.semPerguntaDeAlerta && fazPerguntaDeSinalDeAlerta(resposta)) {
+    return { acao: 'refazer_sem_alerta', instrucao: INSTRUCAO_SEM_PERGUNTA_DE_ALERTA };
+  }
+  if (pararDePedirNome(r) && pedeNome(resposta)) return { acao: 'refazer_sem_nome', instrucao: INSTRUCAO_REFAZER_SEM_NOME };
+  if (chaves.nomeNaHoraDeMarcar && pedeNome(resposta)) return { acao: 'refazer_sem_nome', instrucao: INSTRUCAO_NOME_SO_AO_MARCAR };
   return null;
 }
