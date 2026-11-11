@@ -266,5 +266,25 @@
     "utmCampaign": 136346,
     "utmContent": 136342,
     "utmTerm": 136350
+  },
+  "tatui": {
+    "campanha": 535635,
+    "conjunto": 535637,
+    "anuncio": 535639,
+    "anuncioId": 535641,
+    "headline": 535643,
+    "ctwaClid": 535645,
+    "origemUrl": 535647,
+    "plataforma": 535649,
+    "imagemAnuncio": 535651,
+    "ultimoAnuncio": 535653,
+    "cliques": 535655,
+    "primeiroContato": 535657,
+    "origemTipo": 447970,
+    "utmSource": 60702,
+    "utmMedium": 60698,
+    "utmCampaign": 60700,
+    "utmContent": 60696,
+    "utmTerm": 60704
   }
 }
