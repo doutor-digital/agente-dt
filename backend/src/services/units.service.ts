@@ -124,6 +124,7 @@ export interface UnitInput {
   personaTone?: string | null;
   personaGreeting?: string | null;
   personaAgentName?: string | null;
+  personaAgentNameSchedule?: Array<{ desde: string; nome: string }> | null;
   personaResponseLength?: string;
   personaLanguage?: string;
   personaResponseDelaySec?: number;

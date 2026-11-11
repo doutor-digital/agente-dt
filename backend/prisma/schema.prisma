@@ -400,6 +400,11 @@ model Unit {
   // Nome da IA nesta unidade (ex: "Aline"). NULL = o nome da categoria (Saúde → Sofia). Vale acima do
   // nome fixo do bloco da rede Doutor Hérnia: é a única exceção por unidade que esse bloco aceita.
   personaAgentName        String? @map("persona_agent_name")
+  // Nome da IA por HORÁRIO (Tatuí, 11/11/2026: Sara de manhã, Cíntia à tarde — as duas secretárias reais).
+  // [{"desde":"00:00","nome":"Sara"},{"desde":"13:30","nome":"Cíntia"}], hora local da unidade (spineTimezone);
+  // vale o último "desde" já passado (antes do primeiro, vale o último, da véspera). NULL = o nome fixo de
+  // `personaAgentName`, como sempre foi. Calculado a cada turno: ver nome-da-ia-por-horario.ts.
+  personaAgentNameSchedule Json?  @map("persona_agent_name_schedule")
   // Tamanho desejado da resposta — "curta" (1 frase) | "normal" (1-3 frases) | "detalhada" (parágrafo)
   personaResponseLength   String  @default("normal") @map("persona_response_length")
   // Idioma principal — usado pra forçar respostas em outro idioma quando necessário.

@@ -155,6 +155,19 @@ const unitInputBase = {
   personaTone: z.enum(['casual', 'formal', 'friendly']).nullable().optional(),
   personaGreeting: z.string().max(500).nullable().optional(),
   personaAgentName: z.string().trim().max(40).nullable().optional(),
+  /** Nome da IA por horário: [{"desde":"13:30","nome":"Cíntia"}, ...]. null apaga e volta ao nome fixo. */
+  personaAgentNameSchedule: z
+    .array(
+      z.object({
+        desde: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+        nome: z.string().trim().min(1).max(40),
+      }),
+    )
+    .min(1)
+    .max(8)
+    .refine((faixas) => new Set(faixas.map((f) => f.desde)).size === faixas.length, 'dois nomes no mesmo horário')
+    .nullable()
+    .optional(),
   personaResponseLength: z.enum(['curta', 'normal', 'detalhada']).optional(),
   personaLanguage: z.enum(['pt-BR', 'en-US', 'es-ES', 'fr-FR']).optional(),
   personaResponseDelaySec: z.coerce.number().int().min(0).max(30).optional(),
@@ -370,7 +383,7 @@ export async function cloneUnitHandler(req: Request, res: Response): Promise<voi
 
     const newName = `${source.name} (cópia)`.slice(0, 120);
 
-    const { id: _id, slug: _slug, name: _name, createdAt: _c, updatedAt: _u, pipelineIntents, spineDayHours, businessHoursByDay, spineStaffPorTurno, ...rest } = source;
+    const { id: _id, slug: _slug, name: _name, createdAt: _c, updatedAt: _u, pipelineIntents, spineDayHours, businessHoursByDay, spineStaffPorTurno, personaAgentNameSchedule, ...rest } = source;
     const cloned = await prisma.unit.create({
       data: {
         ...rest,
@@ -382,6 +395,8 @@ export async function cloneUnitHandler(req: Request, res: Response): Promise<voi
           businessHoursByDay === null ? Prisma.DbNull : (businessHoursByDay as Prisma.InputJsonValue),
         spineStaffPorTurno:
           spineStaffPorTurno === null ? Prisma.DbNull : (spineStaffPorTurno as Prisma.InputJsonValue),
+        personaAgentNameSchedule:
+          personaAgentNameSchedule === null ? Prisma.DbNull : (personaAgentNameSchedule as Prisma.InputJsonValue),
       },
     });
 
