@@ -83,6 +83,10 @@ test('valor em reais: formatos BR e número; lixo vira 0', () => {
   assert.equal(valorEmReais('R$ 1.234,50'), 1234.5);
   assert.equal(valorEmReais('350'), 350);
   assert.equal(valorEmReais(1800), 1800);
+  assert.equal(valorEmReais('1.800'), 1800);
+  assert.equal(valorEmReais('R$ 2.000'), 2000);
+  assert.equal(valorEmReais('2.000.000'), 2000000);
+  assert.equal(valorEmReais('350.5'), 350.5);
   assert.equal(valorEmReais('abc'), 0);
   assert.equal(valorEmReais(-5), 0);
   assert.equal(valorEmReais(null), 0);
@@ -138,6 +142,7 @@ test('campos: só os editáveis, lista fechada, valor em reais, vazio limpa', ()
   const defs = [{ attribute_key: 'qualificacao', attribute_values: ['Quente', 'Frio'] }];
   assert.deepEqual(valoresDoAtributo(defs, 'qualificacao'), ['Quente', 'Frio']);
   assert.deepEqual(camposParaGravar({ qualificacao: 'Quente', valor_fechado: 'R$ 350' }, defs), { ok: true, campos: { qualificacao: 'Quente', valor_fechado: 350 } });
+  assert.deepEqual(camposParaGravar({ valor_fechado: '1.800' }, defs), { ok: true, campos: { valor_fechado: 1800 } });
   assert.deepEqual(camposParaGravar({ qualificacao: '' }, defs), { ok: true, campos: { qualificacao: null } });
   assert.equal(camposParaGravar({ qualificacao: 'Morno' }, defs).ok, false);
   assert.equal(camposParaGravar({ etapa: 'Fechou' }, defs).ok, false);

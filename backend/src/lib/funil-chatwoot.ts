@@ -105,6 +105,8 @@ export function valorEmReais(v: unknown): number {
   if (typeof v !== 'string') return 0;
   let s = v.replace(/[^0-9.,-]/g, '');
   if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.');
+  // sem vírgula: "1.800" e "2.000.000" são milhar (jeito brasileiro); "350.5" segue decimal
+  else if (/^\d{1,3}(\.\d{3})+$/.test(s)) s = s.replace(/\./g, '');
   const n = Number(s);
   return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : 0;
 }

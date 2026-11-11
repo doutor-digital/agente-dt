@@ -824,7 +824,8 @@ button,select,input,textarea{font:inherit;color:inherit}
         S=nova; iniciar(); return; }
       if(!d||d.event!=='appContext') return;
       var x=d.data||{}; var cid=x.conversation&&x.conversation.id||null;
-      if(cid&&cid!==ctxConversa){ ctxConversa=cid; if(iniciado&&!aberta&&!MENU) abrirFicha(cid); }
+      // aba da conversa: outra conversa aberta no Chatwoot = a ficha passa a ser a dela (nunca fica a ficha da anterior na tela)
+      if(cid&&cid!==ctxConversa){ ctxConversa=cid; if(iniciado&&!MENU&&aberta!==cid) abrirFicha(cid); }
     }catch(e){}
   });
   function iniciar(){
@@ -837,7 +838,8 @@ button,select,input,textarea{font:inherit;color:inherit}
   }
   if(DENTRO){
     pedirSessao();
-    if(!MENU){ try{ window.parent.postMessage('chatwoot-dashboard-app:fetch-info','*'); }catch(e){} }
+    if(!MENU){ var pedirCtx=function(){ try{ window.parent.postMessage('chatwoot-dashboard-app:fetch-info','*'); }catch(e){} }; pedirCtx();
+      document.addEventListener('visibilitychange',function(){ if(!document.hidden) pedirCtx(); }); window.addEventListener('focus',pedirCtx); setInterval(pedirCtx,5000); }
     setTimeout(function(){ if(!S&&!iniciado) iniciar(); },3500);
   } else iniciar();
 })();
@@ -915,6 +917,11 @@ const MENU_JS = `(function(){
   window.addEventListener('message', function(ev){
     // a sessão vai para o quadro do menu E para a aba "Funil" da conversa (iframe que o Chatwoot cria), só se forem deste servidor
     if (ev.origin !== AGENTE || !ev.source) return;
+    // só responde a um iframe DESTA página que seja o funil (o do menu ou a aba "Funil" da conversa); nunca a janela solta
+    var doFunil = Array.prototype.some.call(document.querySelectorAll('iframe'), function(f){
+      return f.contentWindow === ev.source && String(f.src).indexOf(AGENTE + '/funil') === 0;
+    });
+    if (!doFunil) return;
     var d = ev.data;
     if (d && d.event === 'funil:pede-sessao') ev.source.postMessage({ event: 'funil-sessao', sessao: sessao() }, AGENTE);
     else if (d && d.event === 'funil:fechar' && fr && ev.source === fr.contentWindow) fechar();
