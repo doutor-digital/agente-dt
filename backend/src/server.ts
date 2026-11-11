@@ -10,7 +10,7 @@ import { apiRouter } from './routes/api.routes.js';
 import { apagarCofreDeArquivos, ligarConectorRemoto } from './mcp-remoto/producao.js';
 import { paginaPausaHandler } from './controllers/pausa.controller.js';
 import { paginaAprendizadosHandler } from './controllers/aprendizados.controller.js';
-import { paginaFunilHandler } from './controllers/funil.controller.js';
+import { menuFunilHandler, paginaFunilHandler } from './controllers/funil.controller.js';
 import { paginaAltaHandler } from './controllers/alta.controller.js';
 import { paginaIaHandler } from './controllers/ia-unidade.controller.js';
 import { getCheckpointer } from './agent/graph.js';
@@ -155,6 +155,7 @@ async function main(): Promise<void> {
   app.get('/aprendizados/:slug', paginaAprendizadosHandler);
   // Funil de etapas encaixado no Chatwoot (Dashboard App). A chave vem em ?k= e é mascarada no log abaixo.
   app.get('/funil', paginaFunilHandler);
+  app.get('/funil/menu.js', menuFunilHandler);
 
   // Página da recepção para aprovar alta e marcar quem parou no meio.
   app.get('/alta/:slug', paginaAltaHandler);

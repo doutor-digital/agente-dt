@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ETAPAS_PADRAO, cartaoDaConversa, chaveConfere, chaveDoFunil, etapasDoAtributo, montarQuadro, notaDaMudanca } from './funil-chatwoot.js';
+import { ETAPAS_PADRAO, cartaoDaConversa, chaveConfere, chaveDoFunil, etapasDoAtributo, montarQuadro, nomeSeTemConta, notaDaMudanca, sessaoDosCabecalhos } from './funil-chatwoot.js';
 
 test('chave: derivada do token, 32 hex, só confere a certa', () => {
   const k = chaveDoFunil('token-do-chatwoot');
@@ -58,4 +58,21 @@ test('quadro: junta páginas sem repetir, mais recente primeiro, colunas na orde
 test('nota da mudança diz de onde, para onde e quem', () => {
   assert.equal(notaDaMudanca('Novo', 'Agendado', 'Suzanne'), '📋 Etapa: Novo → Agendado (por Suzanne) — pelo funil');
   assert.equal(notaDaMudanca('Novo', 'Agendado', null), '📋 Etapa: Novo → Agendado — pelo funil');
+});
+
+test('login do Chatwoot: só com os 3 cabeçalhos, sem quebra de linha nem tamanho absurdo', () => {
+  const h = (o: Record<string, string>) => (n: string) => o[n];
+  assert.deepEqual(sessaoDosCabecalhos(h({ 'x-cw-token': ' t1 ', 'x-cw-client': 'c1', 'x-cw-uid': 'a@b.com' })), { token: 't1', client: 'c1', uid: 'a@b.com' });
+  assert.equal(sessaoDosCabecalhos(h({ 'x-cw-token': 't1', 'x-cw-client': 'c1' })), null);
+  assert.equal(sessaoDosCabecalhos(h({ 'x-cw-token': 't1\r\nX: y', 'x-cw-client': 'c1', 'x-cw-uid': 'u' })), null);
+  assert.equal(sessaoDosCabecalhos(h({ 'x-cw-token': 'x'.repeat(201), 'x-cw-client': 'c1', 'x-cw-uid': 'u' })), null);
+  assert.equal(sessaoDosCabecalhos(h({})), null);
+});
+
+test('perfil do Chatwoot: só passa quem tem acesso à conta do funil; o nome vem do perfil', () => {
+  assert.equal(nomeSeTemConta({ name: 'Suzanne', accounts: [{ id: 1 }] }, 1), 'Suzanne');
+  assert.equal(nomeSeTemConta({ name: 'Outra', accounts: [{ id: 7 }] }, 1), null);
+  assert.equal(nomeSeTemConta({ name: 'Sem conta' }, 1), null);
+  assert.equal(nomeSeTemConta(null, 1), null);
+  assert.equal(nomeSeTemConta({ name: '', accounts: [{ id: '1' }] }, 1), 'alguém da equipe');
 });
