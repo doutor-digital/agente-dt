@@ -739,6 +739,8 @@ export const AUTOMACOES: readonly Automacao[] = [
     temSeco: false,
     quandoVazio: 'desligado',
     arquivo: 'src/lib/exame-de-imagem.ts',
+  },
+  {
     id: 'sem-pergunta-de-alerta',
     chave: 'SEM_PERGUNTA_DE_ALERTA_SLUGS',
     nome: 'Sofia não pergunta sinal de alerta (força, xixi, fezes)',
