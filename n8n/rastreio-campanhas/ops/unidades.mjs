@@ -21,6 +21,7 @@ export const UNIDADES = [
   { slug: 'trauma',        nome: 'Instituto Trauma', subdominio: 'institutotraumakommon',  credencial: { id: 'IDrv4gZyutIINGMw', name: 'Kommo Trauma' }, tokenAdsEnv: 'META_ADS_TOKEN_TRAUMA' },
   { slug: 'timbo',         nome: 'Timbó',          subdominio: 'timbosc',                  credencial: { id: 'XeawYlyRvi6HBZUE', name: 'Kommo Timbó' }, trigger: { id: 'IS0NLrUxBtiQnYEn', name: 'WhatsApp Trigger · Timbó' }, tokenAdsEnv: 'META_ADS_TOKEN_TIMBO' },
   { slug: 'salto',         nome: 'Salto',          subdominio: 'doutorherniasalto',        credencial: { id: '1Bx7H5atZuEjAotv', name: 'Kommo Salto' }, trigger: { id: 'fH6W5P19DWgvkjzE', name: 'WhatsApp Trigger · Salto' }, tokenAdsEnv: 'META_ADS_TOKEN_SALTO' },
+  { slug: 'tatui',         nome: 'Tatuí',          subdominio: 'doutorherniatatui',        credencial: { id: 'A0HLvC7nagXQm4AC', name: 'Kommo Tatuí' }, trigger: { id: 'jCL78ejBCAa2EkMz', name: 'WhatsApp Trigger · Tatuí' }, tokenAdsEnv: 'META_ADS_TOKEN_TATUI' },
 ];
 
 /**
