@@ -27,6 +27,25 @@ export interface Anexo {
 const FUSO = 'America/Sao_Paulo';
 
 /** `11/11 14:32`, no horário de Brasília (o painel e o Telegram são lidos por gente daqui). */
+/**
+ * Texto da pessoa (relato, complementos, nome) que vai entre `<<<RELATO>>>` e `<<<FIM>>>` num prompt — o do GPT
+ * (`suporte-analise.ts`) e o do agente Claude 24h (`ops/suporte-ia/trabalhador.mjs`, que pode editar e fazer commit): não
+ * pode imitar o marcador de fim e passar por instrução do sistema. Um lugar só para os dois (achado do sênior no #266).
+ */
+export function neutralizarMarcadores(texto: string): string {
+  return texto.replace(/<<<+/g, '‹‹‹').replace(/>>>+/g, '›››');
+}
+
+/** O mesmo, em todos os textos de um objeto (a análise do GPT, que leu o relato, pode repetir o marcador). */
+export function neutralizarMarcadoresProfundo<T>(v: T): T {
+  if (typeof v === 'string') return neutralizarMarcadores(v) as T;
+  if (Array.isArray(v)) return v.map((x) => neutralizarMarcadoresProfundo(x)) as T;
+  if (v && typeof v === 'object' && !(v instanceof Date)) {
+    return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, neutralizarMarcadoresProfundo(x)])) as T;
+  }
+  return v;
+}
+
 export function marcaDeHora(quando: Date): string {
   const partes = new Intl.DateTimeFormat('pt-BR', { timeZone: FUSO, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(quando);
   const v = (t: string) => partes.find((p) => p.type === t)?.value ?? '';
