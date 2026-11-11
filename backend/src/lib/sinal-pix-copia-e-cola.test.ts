@@ -126,7 +126,7 @@ test('baixa: o pagamento que nasce do QR casa pelo pixQrCodeId; o link antigo se
 });
 
 test('texto à Sofia: o código vai em mensagem separada — ela NÃO escreve código, chave nem link', () => {
-  const s = { sinal: 50, comSinal: 250, restoNoDia: 200, semSinal: 350 } as Parameters<typeof textoDoSinal>[1];
+  const s = { sinal: 50, comSinal: 250, restoNoDia: 200, noDia: 350 } as unknown as Parameters<typeof textoDoSinal>[1];
   const t = textoDoSinal({ tipo: 'link', url: PIX, novo: true, valor: 50, venceEm: '2026-11-13', copiaECola: true }, s, false);
   assert.ok(!t.includes(PIX));
   assert.match(t, /mensagem SEPARADA/);
@@ -190,7 +190,7 @@ test('sem Pix no turno: nada sai', async () => {
 test('espera a explicação aparecer na conversa e só então manda o código, sozinho', async () => {
   const e = envio();
   const saiu = { type: 'outgoing', text: e.a.respostaAnterior, created_at: Math.floor(1_794_400_000_000 / 1000) };
-  e.a.kommo = { ...e.a.kommo, listTalkMessages: (() => { let i = 0; return async () => (i++ < 2 ? [] : [saiu]); })() } as EnvioDoPix['kommo'];
+  e.a.kommo = { ...e.a.kommo, listTalkMessages: (() => { let i = 0; return async () => (i++ < 2 ? [] : [saiu]); })() } as unknown as EnvioDoPix['kommo'];
   guardarPixDoTurno(e.a.recorder.traceId, PIX);
   assert.equal(await enviarPixDoSinal(e.a), 'enviado');
   assert.deepEqual(e.enviados, [PIX]);
