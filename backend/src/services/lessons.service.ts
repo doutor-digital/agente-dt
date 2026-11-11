@@ -6,11 +6,14 @@ export interface LessonInput {
   enabled?: boolean;
 }
 
+/** Quantas regras ligadas entram no prompt (as mais antigas primeiro). A página da unidade não deixa passar disso. */
+export const MAX_LICOES_NO_PROMPT = 40;
+
 export function listEnabledLessons(unitId: string) {
   return prisma.unitLesson.findMany({
     where: { unitId, enabled: true },
     orderBy: { createdAt: 'asc' },
-    take: 40,
+    take: MAX_LICOES_NO_PROMPT,
   });
 }
 

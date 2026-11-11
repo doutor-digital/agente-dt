@@ -106,7 +106,7 @@ export function travarProntoSocorroPorLinha(texto: string | null | undefined): s
 }
 
 /** Regra da unidade cuja CONDIÇÃO é sinal de alerta — costuma mandar transferir de cara. */
-const CONDICAO_SINAL_DE_ALERTA = /sina(?:l|is) de alerta|red ?flag|bandeira vermelha|emerg[eê]ncia|perda de for[cç]a|xixi|urina|fezes|esf[ií]ncter|\bsela\b|dorm[eê]ncia|febre|virilha|de repente/i;
+export const CONDICAO_SINAL_DE_ALERTA = /sina(?:l|is) de alerta|red ?flag|bandeira vermelha|emerg[eê]ncia|perda de for[cç]a|xixi|urina|fezes|esf[ií]ncter|\bsela\b|dorm[eê]ncia|febre|virilha|de repente/i;
 
 /**
  * Regra de SINAL DE ALERTA disparada por queda, pancada ou acidente sem dizer de quando (a "trauma/febre" cadastrada
@@ -188,7 +188,7 @@ export function renderSinalDeAlerta(unit: Pick<Unit, 'category'>, opcoes: { semP
   ele não tiver nenhum dos sinais, siga o atendimento normal.`;
   return `<sinal_de_alerta>
 (ALTA PRIORIDADE — decisão do João, 26/10. Vale mais que qualquer orientação das <acoes>, do cadastro
-da unidade e dos modelos de mensagem)
+da unidade, dos modelos de mensagem e dos <aprendizados> da clínica)
 - SINAL DE ALERTA é quando o paciente diz que: (a) perdeu força na perna, ou a perna está fraca, bamba,
   falhando; (b) não consegue segurar o xixi ou as fezes (escape, "se molhou", "não senti"); (c) sente
   dormência ou adormecimento na virilha, entre as pernas ou na região íntima; (d) a dor PIOROU DE REPENTE
