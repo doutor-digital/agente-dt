@@ -532,7 +532,7 @@ const PAGINA = `<!doctype html>
 <title>Funil · Doutor Digital</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-:root{--fundo:#f8f9fb;--painel:#ffffff;--cartao:#ffffff;--linha:#e4e7ec;--txt:#1f2d3d;--fraco:#6b7a90;--link:#1f93ff;--azul:#1f93ff;--rosa:#e5484d;--amarelo:#f5a524;--verde:#30a46c;--suave:#f1f4f8;--sombra:0 1px 2px rgba(16,24,40,.06)}
+:root{--fundo:#f8f9fb;--painel:#ffffff;--cartao:#ffffff;--linha:#e4e7ec;--txt:#1f2d3d;--fraco:#64748b;--link:#1f73d6;--azul:#1f93ff;--rosa:#d93036;--amarelo:#c27803;--verde:#1f8a54;--suave:#f1f4f8;--sombra:0 1px 2px rgba(16,24,40,.06)}
 *{box-sizing:border-box}[hidden]{display:none!important}
 html,body{height:100%}
 body{margin:0;display:flex;flex-direction:column;overflow:hidden;font:13.5px/1.45 Inter,system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--fundo);color:var(--txt)}
@@ -661,7 +661,7 @@ button,select,input,textarea{font:inherit;color:inherit}
 (function(){
   var q=new URLSearchParams(location.search), K=q.get('k')||'', MENU=q.get('menu')==='1', ORIGEM_CW=__ORIGEM_CW__, DENTRO=window.parent!==window;
   var S=null, iniciado=false, timer=null, morta=null, dados=null, caixas=[], aberta=null, ficha=null, soEsperando=false, arrastando=null, formNaColuna=null, aba='principal', modo='mensagem', ctxConversa=null;
-  var CORES=['#9aa9b8','#5aa9ff','#f2c94c','#a78bfa','#818cf8','#3ecf8e','#22c55e','#14b8a6','#ec4899','#e8507a','#b6c2d1'];
+  var CORES=['#64748b','#1f93ff','#d97706','#7c3aed','#4f46e5','#16a34a','#15803d','#0d9488','#db2777','#dc2626','#94a3b8'];
   var AV=[['#1f73d6','#e6f1ff'],['#c2410c','#fff0e6'],['#15803d','#e8f7ee'],['#7c3aed','#f1ebff'],['#be185d','#fdebf3'],['#0f766e','#e6f6f4'],['#a16207','#fdf6e3'],['#4338ca','#eceeff']];
   var vistos=null, chegou=null;
   function $(id){ return document.getElementById(id); }

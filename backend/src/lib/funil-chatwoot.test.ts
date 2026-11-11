@@ -160,3 +160,9 @@ test('cartão: aviso do sistema ("Atribuído a…") não vira a última mensagem
   assert.equal(k.ultimaMensagem, 'quero marcar');
   assert.equal(k.ultimaDela, true);
 });
+
+test('cartão: lista do Chatwoot com só o aviso do sistema cai no last_non_activity_message', () => {
+  const k = cartaoDaConversa({ id: 2, messages: [{ content: 'Atribuído a X', message_type: 2 }], last_non_activity_message: { content: 'oi doutor', message_type: 0 } }, ['Novo']);
+  assert.equal(k.ultimaMensagem, 'oi doutor');
+  assert.equal(k.ultimaDela, true);
+});
