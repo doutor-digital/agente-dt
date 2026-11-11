@@ -2084,6 +2084,34 @@ model McpAuditoria {
   @@map("mcp_auditoria")
 }
 
+/// Registro e BACKUP das escritas no banco pelo conector do claude.ai (banco_confirmar_escrita, 11/11/2026): quem, o quê, por quê, as
+/// linhas de antes e de depois (só as colunas boas: segredo nunca entra aqui) e a chave de cada uma — o que permite desfazer
+/// (banco_preparar_desfazer). Gravado na MESMA transação da escrita: sem backup não há escrita. Só INSERT; `desfeito_*` é a única coluna que muda.
+model McpBancoAlteracao {
+  id           String    @id
+  banco        String
+  usuarioId    String    @map("usuario_id")
+  usuarioEmail String    @map("usuario_email")
+  /// insert | update | delete | desfazer
+  tipo         String
+  tabela       String
+  sqlTexto     String    @map("sql_texto") @db.Text
+  motivo       String    @db.Text
+  linhas       Int
+  /// [[chave da linha 1…], [chave da linha 2…]] em texto, na mesma ordem de antes/depois
+  chaves       Json
+  antes        Json?
+  depois       Json?
+  desfazDe     String?   @map("desfaz_de")
+  desfeitoEm   DateTime? @map("desfeito_em")
+  desfeitoPor  String?   @map("desfeito_por")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@index([tabela, createdAt])
+  @@map("mcp_banco_alteracoes")
+}
+
 // ============================================================================
 // LIGAÇÃO PELO WHATSAPP (widget do Kommo, Calling API da Meta) — 08/10/2026
 // ============================================================================

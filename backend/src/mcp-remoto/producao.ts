@@ -58,6 +58,8 @@ import { registrarEstruturaSistemas } from './sistemas-estrutura.js';
 import { criarContextoSistemas, PendentesSistemas, registrarEscritaSistemas, registrarLeituraSistemas, type ContaSistemas } from './sistemas.js';
 import { contasDoRh, montarContasSistemas } from './sistemas-contas.js';
 import { contaEvolutionDoAmbiente, criarContextoEvolution, EVENTO_DE_ENVIO, registrarFerramentasEvolution } from './evolution.js';
+import { criarContextoBanco, registrarBancoSePermitido, type BancoId, type FonteBanco } from './banco.js';
+import { fonteDoAgente, fonteDoSistema } from './banco-pg.js';
 import { contaChatwootDoAmbiente, criarContextoChatwoot, registrarFerramentasChatwoot } from './chatwoot.js';
 import { blingGet } from '../lib/bling/cliente.js';
 import type { Usuario } from './provedor.js';
@@ -330,6 +332,14 @@ async function operadoresDoChatwoot(): Promise<Set<string>> {
 }
 
 /**
+ * Quem usa os bancos (banco_*): SÓ os e-mails de MCP_BANCO_EMAILS (11/11/2026: a Suzanne e quem o João puser) que existem como usuário ativo do
+ * console. NÃO soma MCP_ESCRITA_EMAILS: poder alterar cartões não dá poder sobre o banco. Sem a variável, ninguém vê a ferramenta.
+ */
+async function operadoresDoBanco(): Promise<Set<string>> {
+  return idsDeUsuariosAtivos('MCP_BANCO_EMAILS');
+}
+
+/**
  * Quem pode pedir envio de arquivo pelo conector (cofre de envio, `arquivos.ts`): quem já escreve (MCP_ESCRITA_EMAILS) mais os
  * e-mails de MCP_ARQUIVOS_EMAILS, para dar o cofre a quem só precisa dele sem dar também a escrita no Kommo/Asaas/banco.
  * Usuário ativo do console. Sem nenhuma das duas variáveis, ninguém usa.
@@ -597,7 +607,20 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   const chatwoot = criarContextoChatwoot(contaChatwootDoAmbiente(), { avisar: (texto) => enviarTelegram(texto, { canal: 'avisos' }) });
   let operadoresChatwoot = new Set<string>();
   if (chatwoot.conta) manterAtualizado(operadoresDoChatwoot, (s) => (operadoresChatwoot = s), 'quem mexe no Chatwoot');
+  // Bancos (banco_*): o do próprio agente por SQL direto; RH e Descontratos pela API do sistema. Só carrega com MCP_BANCO_EMAILS.
+  let operadoresBanco = new Set<string>();
+  const fontesBanco = new Map<BancoId, () => FonteBanco>();
   const sistemas = criarContextoSistemas();
+  if ((process.env.MCP_BANCO_EMAILS ?? '').trim()) {
+    manterAtualizado(operadoresDoBanco, (s) => (operadoresBanco = s), 'quem usa os bancos');
+    const doAgente = fonteDoAgente();
+    if (doAgente) fontesBanco.set('agente', () => doAgente);
+    else logger.warn('mcp-remoto: banco do agente SEM conexão para o conector (DATABASE_URL/MCP_BANCO_AGENTE_URL vazia ou ilegível); banco_* só terá rh e dsc');
+    fontesBanco.set('rh', () => fonteDoSistema('rh', sistemas));
+    fontesBanco.set('dsc', () => fonteDoSistema('dsc', sistemas));
+  }
+  // cada escrita confirmada (e cada desfazer) avisa o João no Telegram (canal avisos)
+  const banco = criarContextoBanco(fontesBanco, { avisar: (texto) => enviarTelegram(texto, { canal: 'avisos' }) });
   manterAtualizado(contasSistemasDoBanco, (contas) => (sistemas.contas = contas), 'as contas do sistema novo');
   const pendentesSistemas = new PendentesSistemas();
   // Vigia de vídeo: precisa de VIGIA_DIR (pasta dos pacotes, somente leitura) E de MCP_VIDEO_EMAILS; sem as duas, as ferramentas e a rota não existem.
@@ -675,6 +698,8 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
       }
       if (leitoresWhatsapp.has(quem.userId)) registrarFerramentasEvolution(server, whatsapp, quem.userId, auditar);
       if (operadoresChatwoot.has(quem.userId)) registrarFerramentasChatwoot(server, chatwoot, quem.email || `usuario:${quem.userId}`, auditar);
+      // Bancos: só quem está em MCP_BANCO_EMAILS; leitura SELECT, escrita em dois passos, segredos fechados (banco.ts)
+      registrarBancoSePermitido(server, banco, { usuario: quem.userId, email: quem.email || `usuario:${quem.userId}` }, operadoresBanco, auditar);
       registrarVideoSePermitido(server, video, quem.userId, leitoresVideo, auditar);
       registrarTranscricaoSePermitido(server, transcritor, quem.userId, leitoresVideo, auditar);
       registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas, convenia: convenia.contas, tiquetaque: tiquetaque.contas, tramitacao: tramitacao.contas, sistemas: contasDoRh(sistemas.contas), zenfisio: zenfisio.contas, gerais: chatwoot.conta && operadoresChatwoot.has(quem.userId) ? ['chatwoot_* (Chatwoot, o atendimento novo em atendimento.doutordigitalconsultoria.com: conversas, contatos, caixas, etiquetas, agentes, equipes, automações; criar e alterar direto, apagar e mandar mensagem a cliente em dois passos)'] : [] }), auditar);
