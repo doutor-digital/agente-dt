@@ -1,7 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Unit } from '@prisma/client';
-import { composeSystemPrompt, composeFlattenedPrompt, composeSystemPromptParts } from './prompt-composer.js';
+import {
+  composeSystemPrompt,
+  composeFlattenedPrompt,
+  composeSystemPromptParts,
+  tabelaDeEstadosDoInicio,
+  TROCAS_DO_CONDUZIR_DIRETO,
+} from './prompt-composer.js';
+import { renderRajada } from './rajada.js';
+import type { Fala } from './repeticao.js';
 import { renderSinalDeAlerta } from './sinal-de-alerta.js';
 import { renderFaltaParaAgendar } from './falta-para-agendar.js';
 import { CONVERSA_PADRAO, jeitoDaConversa, renderConversaDireta } from './conversa-direta.js';
@@ -75,7 +83,7 @@ test('sem-pergunta-de-alerta: some a pergunta, fica a parada quando o paciente C
   assert.doesNotMatch(b, /faça UMA pergunta com UM sinal só/);
   assert.doesNotMatch(b, /faça a pergunta de UM sinal/);
   assert.doesNotMatch(b, /fica dormente, adormecida\?/);
-  assert.match(b, /NÃO pergunte sinal nenhum/);
+  assert.match(b, /VOCÊ NÃO PERGUNTA SINAL NENHUM/);
   // o que é sinal, a parada e o pronto-socorro continuam
   assert.match(b, /CONFIRMADO O SINAL, A IA PARA NA HORA/);
   assert.match(b, /pausar_ia com sinalDeAlerta: true/);
@@ -152,4 +160,87 @@ test('o bloco entra nos três caminhos do compositor e no prompt único escrito 
     });
     assert.match(unico, /Pergunte sempre o nome primeiro\.\n\n<conversa_direta>/);
   });
+});
+
+// ── Achados do review (11/11/2026) ──────────────────────────────────────────────────────────────────────────────
+
+test('review: prompt único no caminho de produção (composeSystemPromptParts) também recebe o bloco', () => {
+  comChaves(TODAS, () => {
+    const u = unidade('doutor-hernia-timbo', { singlePromptMode: true, systemPrompt: 'Pergunte sempre o nome primeiro.' });
+    const partes = composeSystemPromptParts({ unit: u });
+    assert.match(partes.cacheable, /Pergunte sempre o nome primeiro\.\n\n<conversa_direta>/);
+  });
+  const semChave = comChaves({}, () =>
+    composeSystemPromptParts({ unit: unidade('doutor-hernia-timbo', { singlePromptMode: true, systemPrompt: 'X.' }) }),
+  );
+  assert.doesNotMatch(semChave.cacheable, /<conversa_direta>/);
+});
+
+test('review: <rajada_sem_resposta> não manda perguntar sinal com a chave; perna que falhou vira o sinal', () => {
+  const falas: Fala[] = [
+    { papel: 'ia', texto: 'Oi! Como posso ajudar?' },
+    { papel: 'paciente', texto: 'me faltou a perna ontem' },
+    { papel: 'paciente', texto: 'Boa noite' },
+  ];
+  const rede = renderRajada(falas, { clinica: true });
+  assert.match(rede, /faça a pergunta de sinais de alerta/);
+  const timbo = renderRajada(falas, { clinica: true, semPerguntaDeAlerta: true });
+  assert.doesNotMatch(timbo, /faça a pergunta de sinais de alerta/);
+  assert.doesNotMatch(timbo, /a perna ficou fraca, sem força\?/);
+  assert.match(timbo, /isso JÁ é sinal de alerta/);
+});
+
+test('review: sem a pergunta, fala do dia a dia de perna falhando conta como sinal (lado seguro)', () => {
+  const b = renderSinalDeAlerta({ category: null }, { semPerguntar: true });
+  assert.match(b, /"a perna\s+bambeou"[\s\S]*isso JÁ é o sinal \(a\): pare como acima/);
+  assert.match(b, /"travei" de dor \(sem a perna falhar\)/);
+  assert.doesNotMatch(b, /a perna ficou fraca, sem força\?"\. Se ele confirmar/);
+});
+
+test('review: primeiro turno sem nenhum pedido de nome com a chave (nem no exemplo)', () => {
+  comChaves({ NOME_NA_HORA_DE_MARCAR_SLUGS: 'doutor-hernia-timbo' }, () => {
+    const p = composeSystemPrompt({ unit: unidade('doutor-hernia-timbo'), isFirstTurn: true });
+    const primeiro = p.slice(p.lastIndexOf('<primeiro_turno>'), p.lastIndexOf('</primeiro_turno>'));
+    assert.ok(primeiro.length > 0);
+    assert.doesNotMatch(primeiro, /como posso te chamar/);
+    assert.doesNotMatch(primeiro, /ANTES de pedir o nome/);
+    assert.match(primeiro, /o que você está sentindo\?/);
+  });
+  const rede = comChaves({}, () => composeSystemPrompt({ unit: unidade('doutor-hernia-timbo'), isFirstTurn: true }));
+  assert.match(rede, /Antes de tudo, como posso te chamar\? 😊/);
+  assert.match(rede, /reconheça com empatia ANTES de pedir o nome/);
+});
+
+test('review: conduzir-direto troca TODOS os trechos que seguram o preço (convênio, sequência, etapas)', () => {
+  const rede = comChaves({}, () => composeSystemPrompt({ unit: unidade('doutor-hernia-timbo') }));
+  for (const [de] of TROCAS_DO_CONDUZIR_DIRETO) assert.ok(rede.includes(de), `o texto da rede mudou, a troca não acha: ${de.slice(0, 60)}`);
+  const timbo = comChaves({ CONDUZIR_DIRETO_SLUGS: 'doutor-hernia-timbo' }, () =>
+    composeSystemPrompt({ unit: unidade('doutor-hernia-timbo') }),
+  );
+  for (const [de, para] of TROCAS_DO_CONDUZIR_DIRETO) {
+    assert.ok(!timbo.includes(de), `sobrou: ${de.slice(0, 60)}`);
+    assert.ok(timbo.includes(para));
+  }
+  assert.doesNotMatch(timbo, /NÃO emende o valor/);
+  assert.doesNotMatch(timbo, /onde dói e há\s+quanto tempo/);
+  assert.doesNotMatch(timbo, /Não pule etapas/);
+});
+
+test('review: tabela de estados — cada chave sozinha cobre "disse só o nome"; sem cópia da tabela da rede', () => {
+  const so = (j: Partial<typeof CONVERSA_PADRAO>) => tabelaDeEstadosDoInicio({ ...CONVERSA_PADRAO, ...j });
+  assert.match(so({}), /disse o nome {17}→ {2}investigar: onde dói, há quanto tempo/);
+  assert.match(so({ conduzirDireto: true }), /disse o nome {17}→ {2}perguntar o que ele está sentindo/);
+  assert.match(so({ conduzirDireto: true }), /acolher e pedir o nome\. Só isso\./);
+  assert.doesNotMatch(so({ conduzirDireto: true, nomeNaHoraDeMarcar: true }), /disse o nome/);
+  assert.match(so({ nomeNaHoraDeMarcar: true }), /disse o que sente {12}→ {2}investigar/);
+  assert.match(so({ nomeNaHoraDeMarcar: true }), /valor construído/);
+});
+
+test('review: nome já pedido 2 vezes (semPedirNome) — a chave não volta a pedir junto do horário', () => {
+  const semNome = { queixa: 'lombar', tempo_dor: '1 ano', cidade: 'Timbó' };
+  const r = renderFaltaParaAgendar(semNome, { nomeNaHoraDeMarcar: true, semPedirNome: true });
+  assert.doesNotMatch(r, /nome completo/);
+  const tudo = renderFaltaParaAgendar({ ...semNome, horario_escolhido: 'amanhã 9h' }, { nomeNaHoraDeMarcar: true, semPedirNome: true });
+  assert.doesNotMatch(tudo, /menos o nome/);
+  assert.match(tudo, /Você já tem tudo para marcar/);
 });

@@ -745,7 +745,7 @@ export const AUTOMACOES: readonly Automacao[] = [
     oQueFaz:
       'A Sofia deixa de PERGUNTAR se a perna perdeu força, se o paciente segura o xixi ou as fezes, se a virilha está dormente. Se o paciente CONTAR um desses sinais com clareza, tudo continua: ela para, avisa a equipe, etiqueta 🔴 PRIORIDADE e tarefa LIGAR AGORA. Pedido da dona de Timbó (10/11/2026): "o lead perde o interesse nesse rodeio todo".',
     pegadinha:
-      'Só tira a PERGUNTA. A detecção do sinal no que o paciente escreve (rede de segurança em código, sinal-de-alerta.ts e passe-por-sinal.ts) e a regra de nunca sugerir pronto-socorro seguem iguais. Fala vaga ("a perna bambeou", dor que vai para a virilha) deixa de virar pergunta: a Sofia acolhe e segue para a consulta. Não tem "só no papel": é texto do prompt.',
+      'Só tira a PERGUNTA. Sem ela, a dúvida resolve para o lado seguro: perna que "faltou", "falhou", "bambeou" ou "quase não andei" passa a CONTAR como sinal (a Sofia para e avisa), em vez de virar pergunta. "Travei" de dor e dor que vai para a virilha, sozinhos, não param nem viram pergunta. A rede de segurança em código (sinal-de-alerta.ts, passe-por-sinal.ts) pega só a fala clara e não muda; a fala do dia a dia fica com a Sofia, pelo texto do prompt. Nunca sugerir pronto-socorro segue igual. Não tem "só no papel": é texto do prompt.',
     risco: 'comportamento',
     temSeco: false,
     quandoVazio: 'desligado',
