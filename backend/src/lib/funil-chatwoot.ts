@@ -126,7 +126,9 @@ export function cartaoDaConversa(c: any, etapas: string[], tarefa: SituacaoTaref
   const bruta = typeof attrs[ATRIBUTO_ETAPA] === 'string' ? attrs[ATRIBUTO_ETAPA].trim() : '';
   const etapa = etapas.includes(bruta) ? bruta : etapas[0];
   const msgs = Array.isArray(c?.messages) ? c.messages : [];
-  const ultima = msgs.length ? msgs[msgs.length - 1] : c?.last_non_activity_message;
+  // a última mensagem de verdade (avisos do sistema, tipo 2, como "Atribuído a…", não contam)
+  const reais = msgs.filter((m: any) => Number(m?.message_type) !== 2);
+  const ultima = reais.length ? reais[reais.length - 1] : c?.last_non_activity_message;
   const remetente = c?.meta?.sender ?? {};
   const avatar = typeof remetente.thumbnail === 'string' && /^https:\/\//.test(remetente.thumbnail) ? remetente.thumbnail : null;
   return {

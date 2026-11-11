@@ -154,3 +154,9 @@ test('telefone da adição rápida: com DDD vira +55; curto é recusado', () => 
   assert.equal(telefoneParaCadastro('+55 63 99999-1234'), '+5563999991234');
   assert.equal(telefoneParaCadastro('1234'), null);
 });
+
+test('cartão: aviso do sistema ("Atribuído a…") não vira a última mensagem', () => {
+  const k = cartaoDaConversa({ id: 1, messages: [{ content: 'quero marcar', message_type: 0 }, { content: 'Atribuído a Suzanne', message_type: 2 }] }, ['Novo']);
+  assert.equal(k.ultimaMensagem, 'quero marcar');
+  assert.equal(k.ultimaDela, true);
+});
