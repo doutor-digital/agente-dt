@@ -154,6 +154,10 @@ const schema = z.object({
   /** Agente de suporte 24 h (Claude Code na VPS): `desligado` (padrão) | `ligado`; e a chave do trabalhador (24+ caracteres). */
   SUPORTE_CLAUDE: z.string().optional(),
   SUPORTE_CLAUDE_CHAVE: z.string().optional(),
+  /** Lembrete das demandas abertas às 9h e 17h (SP) no @ddchamados_bot (global): `desligado` (padrão) | `seco` (só loga) | `ligado`. Ver `suporte-lembrete.ts`. */
+  SUPORTE_LEMBRETE: z.string().optional(),
+  /** Segredo do webhook do @ddchamados_bot (comandos /pausar /voltar /status): o Telegram o manda no cabeçalho X-Telegram-Bot-Api-Secret-Token. Sem ele o webhook recusa tudo. */
+  TELEGRAM_CHAMADOS_SEGREDO: z.string().optional(),
 });
 
 const parsed = schema.safeParse(process.env);

@@ -54,6 +54,7 @@ import { startNaoLidasWorker, stopNaoLidasWorker } from './lib/nao-lidas-worker.
 import { startRotinaAniversarioWorker, stopRotinaAniversarioWorker } from './lib/rotina-aniversario-worker.js';
 import { startCampanhaWorker, stopCampanhaWorker } from './lib/campanha-worker.js';
 import { startResumoDiarioIaWorker, stopResumoDiarioIaWorker } from './lib/resumo-diario-ia-worker.js';
+import { startSuporteLembreteWorker, stopSuporteLembreteWorker } from './lib/suporte-lembrete-worker.js';
 import { startDisparoWorker, stopDisparoWorker } from './lib/disparo-worker.js';
 import { startFaxinaDoMesWorker, stopFaxinaDoMesWorker } from './lib/faxina-do-mes-worker.js';
 import { startPreencheCamposWorker, stopPreencheCamposWorker } from './lib/preenche-campos-worker.js';
@@ -247,6 +248,7 @@ async function main(): Promise<void> {
       startRotinaAniversarioWorker();
       startCampanhaWorker();
       startResumoDiarioIaWorker();
+      startSuporteLembreteWorker();
       startDisparoWorker();
       startFaxinaDoMesWorker();
       startPreencheCamposWorker();
@@ -270,6 +272,7 @@ async function main(): Promise<void> {
       stopRotinaAniversarioWorker();
       stopCampanhaWorker();
       stopResumoDiarioIaWorker();
+      stopSuporteLembreteWorker();
       stopDisparoWorker();
       stopFaxinaDoMesWorker();
       stopPreencheCamposWorker();

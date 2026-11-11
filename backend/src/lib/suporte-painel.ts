@@ -36,7 +36,8 @@ export interface DepsPainel {
   marcarResolvida(protocolo: number, dados: { quem: string; nota: string | null; quando: Date }): Promise<void>;
   /** passa a conversa a "resolvida" (trava otimista pela versão); false = a conversa andou nesse meio-tempo */
   conversaParaResolvida(jid: string, versao: number, quando: Date): Promise<boolean>;
-  menuLigado(): boolean;
+  /** o menu pode falar com a pessoa agora? (`ligado` no servidor E não pausado) */
+  menuLigado(): boolean | Promise<boolean>;
   enviarWhatsApp(jid: string, texto: string): Promise<boolean>;
   telegram(texto: string): Promise<boolean>;
   reabrir(protocolo: number): Promise<void>;
@@ -60,14 +61,17 @@ export async function resolverDemanda(protocolo: number, quem: string, notaBruta
   const agora = deps.agora();
   await deps.marcarResolvida(protocolo, { quem, nota, quando: agora });
 
-  // só pergunta "funcionou?" se a conversa da pessoa ainda está nesta demanda (e consegue passá-la a "resolvida")
-  const c = await deps.conversa(d.jid);
+  // só pergunta "funcionou?" se o menu pode falar agora (ligado e não pausado) E a conversa da pessoa ainda está nesta demanda (e
+  // consegue passá-la a "resolvida"). Sem a pergunta no ar a conversa NÃO muda de passo: senão a próxima mensagem da pessoa seria lida
+  // como resposta a um "funcionou?" que ela nunca recebeu.
+  const podeFalar = await deps.menuLigado();
+  const c = podeFalar ? await deps.conversa(d.jid) : null;
   const naMesma = c != null && c.protocolo === protocolo && (c.passo === 'aberta' || c.passo === 'resolvida');
   const perguntou = naMesma ? await deps.conversaParaResolvida(d.jid, c!.versao, agora) : false;
   const texto = perguntou ? TEXTOS.resolvida(protocolo, nota) : `Sua demanda ${protocolo} foi resolvida. ✅${nota ? `\n\n${nota}` : ''}`;
 
-  const whatsapp = deps.menuLigado() ? await deps.enviarWhatsApp(d.jid, texto) : false;
-  await deps.telegram(`✅ Demanda #${protocolo} resolvida por ${quem}${nota ? ` — "${nota.slice(0, 200)}"` : ''}.${whatsapp ? ' A pessoa foi avisada para testar.' : ' (A pessoa NÃO foi avisada no WhatsApp: menu fora do modo ligado ou envio recusado.)'}`);
+  const whatsapp = podeFalar ? await deps.enviarWhatsApp(d.jid, texto) : false;
+  await deps.telegram(`✅ Demanda #${protocolo} resolvida por ${quem}${nota ? ` — "${nota.slice(0, 200)}"` : ''}.${whatsapp ? ' A pessoa foi avisada para testar.' : ' (A pessoa NÃO foi avisada no WhatsApp: menu fora do modo ligado, pausado ou envio recusado.)'}`);
   return { ok: true, perguntou, whatsapp };
 }
 

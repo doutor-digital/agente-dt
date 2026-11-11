@@ -2653,6 +2653,23 @@ model SuporteConhecimento {
   @@map("suporte_conhecimento")
 }
 
+/// Chave de pausa do menu de suporte (uma linha só, `id = 'menu'`; sem linha = não pausado). Mexem nela: o comando /pausar e /voltar
+/// do @ddchamados_bot (só o chat do João) e o botão do painel suporte.*. O webhook do menu lê a cada mensagem: pausado = não responde
+/// e não grava conversa nem demanda (só conta aqui quantas mensagens ficaram sem resposta).
+model SuporteControle {
+  id               String    @id
+  pausado          Boolean   @default(false)
+  /// quando a pausa atual começou (nulo se não está pausado)
+  pausadoEm        DateTime? @map("pausado_em")
+  /// "telegram" ou o e-mail de quem pausou pelo painel
+  pausadoPor       String?   @map("pausado_por")
+  /// mensagens que chegaram durante a pausa atual e ficaram sem resposta (zera ao pausar de novo)
+  ignoradasNaPausa Int       @default(0) @map("ignoradas_na_pausa")
+  atualizadoEm     DateTime  @updatedAt @map("atualizado_em")
+
+  @@map("suporte_controle")
+}
+
 /// Ids de mensagem já tratados (o Evolution pode entregar o mesmo webhook mais de uma vez). Limpa sozinho depois de 7 dias.
 model SuporteMensagemVista {
   id     String   @id

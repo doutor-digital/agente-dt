@@ -7,6 +7,8 @@ import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { enviarTelegramChamados } from '../lib/telegram.js';
 import { criarEnviadorEvolution, lerConfig } from '../lib/suporte-menu.js';
+import { armazemPausaPrisma, menuPausado } from '../lib/suporte-pausa-banco.js';
+import { mudarPeloPainel } from '../lib/suporte-pausa.js';
 import type { Passo } from '../lib/suporte-menu-maquina.js';
 import {
   lerItemDeConhecimento,
@@ -41,7 +43,8 @@ function depsReais(): DepsPainel {
       });
       return r.count === 1;
     },
-    menuLigado: () => menu.modo === 'ligado',
+    // pausado = o menu não fala com ninguém: marcar como resolvida NÃO manda o "pode testar?" (a resposta da pessoa seria descartada)
+    menuLigado: async () => menu.modo === 'ligado' && !(await menuPausado()),
     async enviarWhatsApp(jid, texto) {
       const ok = await enviar(jid, texto);
       if (ok) await prisma.suporteEnvio.create({ data: { jid, nova: false } });
@@ -174,4 +177,28 @@ export async function apagarConhecimentoHandler(req: Request, res: Response): Pr
     return;
   }
   res.json({ ok: true });
+}
+
+// ─── pausa do menu (botão Pausar/Retomar; a mesma chave do /pausar do @ddchamados_bot) ──────────────────────
+
+/** O que o painel mostra: a pausa e em que modo o servidor está (pausar um menu `desligado` não muda nada na prática). */
+function corpoDaPausa(estado: Awaited<ReturnType<typeof armazemPausaPrisma.ler>>) {
+  return { pausado: estado.pausado, desde: estado.desde, por: estado.por, ignoradas: estado.ignoradas, menu: lerConfig().modo };
+}
+
+export async function lerPausaHandler(_req: Request, res: Response): Promise<void> {
+  res.json(corpoDaPausa(await armazemPausaPrisma.ler()));
+}
+
+export async function mudarPausaHandler(req: Request, res: Response): Promise<void> {
+  const pausado = (req.body as { pausado?: unknown } | undefined)?.pausado;
+  if (typeof pausado !== 'boolean') {
+    res.status(400).json({ error: 'informe pausado: true ou false' });
+    return;
+  }
+  const r = await mudarPeloPainel(pausado, quem(req), { pausa: armazemPausaPrisma, agora: () => new Date(), modoDoMenu: () => lerConfig().modo });
+  logger.info({ pausado, mudou: r.mudou, por: quem(req) }, 'suporte-painel: pausa do menu');
+  // o João fica sabendo pelo Telegram também, para os dois caminhos contarem a mesma história
+  if (r.aviso) void enviarTelegramChamados(r.aviso);
+  res.json({ ...corpoDaPausa(r.estado), mudou: r.mudou });
 }

@@ -10,6 +10,7 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import { Login } from './components/Login';
 import { Splash } from './components/Splash';
 import { useRoute } from './hooks/useRoute';
+import { ehHostDoSuporte } from './lib/hostSuporte';
 
 const MinhaIaPanel = lazy(() =>
   import('./components/MinhaIaPanel').then((m) => ({ default: m.MinhaIaPanel })),
@@ -131,8 +132,8 @@ function AppEntry() {
     );
   }
 
-  // suporte.doutordigitalconsultoria.com abre direto no painel do suporte (só administrador geral; os outros veem o de sempre)
-  if (user?.role === 'SUPER_ADMIN' && window.location.hostname.startsWith('suporte.')) {
+  // suporte.* e chamados.doutordigitalconsultoria.com abrem direto no painel do suporte (só administrador geral; os outros veem o de sempre)
+  if (user?.role === 'SUPER_ADMIN' && ehHostDoSuporte(window.location.hostname)) {
     return (
       <Suspense fallback={<PanelSkeleton />}>
         <div className="flex h-screen flex-col overflow-hidden bg-zinc-950 text-zinc-100">
