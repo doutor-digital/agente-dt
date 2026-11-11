@@ -28,6 +28,7 @@ import { checkBusinessHours } from '../agent/prompt-composer.js';
 import { transcribeAudio } from '../services/transcription.service.js';
 import { deveIrParaEquipe, ehFalhaEstrutural, limparFalhasDeAudio, registrarFalhaDeAudio } from '../lib/falha-de-audio.js';
 import { describeImage } from '../services/vision.service.js';
+import { INSTRUCAO_DO_EXAME, ehLeituraDeExame, exameDeImagemLigado, grupoDoExame, linkDoCartao, mandarNoGrupo, textoDaTarefa, textoDoGrupo } from '../lib/exame-de-imagem.js';
 import { marcarRecebimento } from '../agent/confirmacao-so-com-crm.js';
 import { neutralizarMarcasDoSistema, resumoDaLeitura, semAReferencia } from '../lib/comprovante-pix.js';
 import { descricaoComReferencia, fonteDaUrl, guardarLeitura } from '../lib/comprovante-lido.js';
@@ -192,6 +193,36 @@ async function avisarEquipeDoAudio(unit: Unit, leadId: number, motivo: string): 
   } catch (err) {
     logger.warn({ err: String(err), leadId, unit: unit.slug }, 'áudio não ouvido e a tarefa pra equipe também falhou — segue');
   }
+}
+
+/**
+ * Exame de imagem (lib/exame-de-imagem.ts): mensagem no grupo da unidade, quando configurado, e tarefa no cartão — uma vez a cada
+ * 6 h por cartão (a mesma ressonância chega em 5 fotos seguidas). Nunca lança. true = este turno avisou.
+ */
+async function avisarEquipeDoExame(unit: Unit, leadId: number, leituras: string[]): Promise<boolean> {
+  if (!devoAvisar(`exame:${unit.id}:${leadId}`)) return false;
+  if (await avisoRecente(unit.id, leadId, 'exame_de_imagem', 6 * 60 * 60 * 1000)) return false;
+  let grupoOk = false;
+  const grupo = grupoDoExame(unit.slug);
+  if (grupo) {
+    grupoOk = await mandarNoGrupo(grupo, textoDoGrupo({ unidade: unit.name, leadId, link: linkDoCartao(unit, leadId), leituras }));
+  } else {
+    logger.warn({ unit: unit.slug, leadId }, 'exame-de-imagem: unidade sem grupo em EXAME_DE_IMAGEM_GRUPOS — só a tarefa');
+  }
+  let tarefaOk = false;
+  try {
+    tarefaOk = Boolean(
+      await createKommoClient(unit).createTask({
+        leadId,
+        text: textoDaTarefa(unit.slug, leituras),
+        completeAt: Math.floor(Date.now() / 1000) + 15 * 60,
+      }),
+    );
+  } catch (err) {
+    logger.warn({ err: String(err), leadId, unit: unit.slug }, 'exame-de-imagem: a tarefa no cartão falhou');
+  }
+  if (grupoOk || tarefaOk) await marcarAviso(unit.id, leadId, 'exame_de_imagem');
+  return grupoOk || tarefaOk;
 }
 
 function hasAudioAttachment(msg: MessageEvent): boolean {
@@ -1320,9 +1351,12 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
   // repetido em seguida (Bebedouro, 22/10/2026: cinco PDFs em um minuto).
   const anexos = (args.imageUrls?.length ? args.imageUrls : imageUrl ? [imageUrl] : []).slice(0, 3);
   let algumAnexoLido = false;
+  // Chave `exame-de-imagem-pausa-alerta` (Timbó, 11/11/2026): as leituras de exame de imagem deste turno.
+  const comExame = exameDeImagemLigado(unit);
+  const exames: string[] = [];
   for (const [i, url] of anexos.entries()) {
     try {
-      const d = await describeImage(unit, url, { estruturarComprovante: Boolean(unit.spineBookingRequiresPayment) });
+      const d = await describeImage(unit, url, { estruturarComprovante: Boolean(unit.spineBookingRequiresPayment), marcarExameDeImagem: comExame });
       // Unidade com taxa de reserva: texto escrito DENTRO da imagem e transcrito pela visão não pode se passar pelas marcas que só nós gravamos.
       const lido = unit.spineBookingRequiresPayment ? neutralizarMarcasDoSistema(d.text) : d.text;
       const desc = lido || `[${d.tipo} sem conteúdo legível]`;
@@ -1330,6 +1364,7 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
       // — ver confirmacao-so-com-crm.ts. Unidade com taxa de reserva: a leitura em campos (valor, favorecido, E2E…) é GUARDADA NO BANCO,
       // presa a este cartão e a esta imagem, e a fala leva só a referência a ela (lib/comprovante-lido.ts). Sem gravar, não há referência.
       const ehComprovante = ehTranscricaoDeComprovante(`[${d.tipo} do cliente]: ${desc}`);
+      if (comExame && !ehComprovante && ehLeituraDeExame(desc)) exames.push(desc);
       let naConversa = ehComprovante ? marcarRecebimento(desc) : desc;
       if (ehComprovante && unit.spineBookingRequiresPayment) {
         try {
@@ -1383,6 +1418,16 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
   if (anexos.length && !algumAnexoLido) {
     const marca = '[cliente mandou uma imagem ou um arquivo, mas não foi possível ler]';
     humanMessage = humanMessage ? `${humanMessage}\n\n${marca}` : marca;
+  }
+  // Exame de imagem: o aviso sai JÁ, antes das travas (como o do áudio); a pausa e a frase ficam com o modelo (INSTRUCAO_DO_EXAME).
+  const instrucaoDeExame = exames.length > 0 ? INSTRUCAO_DO_EXAME : null;
+  if (exames.length > 0) {
+    void avisarEquipeDoExame(unit, leadId, exames);
+    await recorder.step({
+      kind: 'THINKING',
+      title: `📄 Exame de imagem (${exames.length}) → pausar e passar ao especialista; aviso à equipe disparado (1 a cada 6 h por cartão)`,
+      payload: { exames: exames.map((e) => e.slice(0, 200)) },
+    });
   }
 
   // O Kommo entrega um aviso de erro em inglês no lugar do conteúdo quando não
@@ -1646,9 +1691,10 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
       : humanMessage;
     // SEMPRE que um áudio falhou, inclusive com texto junto: antes o áudio que falhava ao lado de um texto
     // sumia em silêncio, e a rajada só de áudios ia como espaço em branco (400 na Anthropic)
-    const mensagemParaIa = instrucaoDeAudio
+    const mensagemComAudio = instrucaoDeAudio
       ? [mensagemDoPaciente.trim() ? mensagemDoPaciente : '', AUDIO_NAO_OUVIDO, instrucaoDeAudio].filter(Boolean).join('\n\n')
       : mensagemDoPaciente;
+    const mensagemParaIa = instrucaoDeExame ? `${mensagemComAudio}\n\n${instrucaoDeExame}` : mensagemComAudio;
 
     // A conversa como o WhatsApp a vê (rota oficial): resposta da equipe e mensagem
     // do paciente que o webhook não trouxe. Só entra quando existe algo novo desde
