@@ -6,6 +6,7 @@ import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { enviarTelegramChamados } from './telegram.js';
 import { dispararAnalise } from './suporte-analise-banco.js';
+import { AgrupadorDeAvisos, JANELA_ANALISE_MS, anexarComplemento } from './suporte-complemento.js';
 import { enfileirarSeVerificada } from './suporte-claude-banco.js';
 import { contarIgnoradaNaPausa, menuPausado } from './suporte-pausa-banco.js';
 import {
@@ -63,7 +64,7 @@ export const armazemPrisma: Armazem = {
   contarNovasDesde: (desde) => prisma.suporteEnvio.count({ where: { enviadoEm: { gte: desde }, nova: true } }),
   contarRespostasDesde: (desde) => prisma.suporteEnvio.count({ where: { enviadoEm: { gte: desde } } }),
 
-  async salvar({ jid, versaoEsperada, estado, abrir }) {
+  async salvar({ jid, versaoEsperada, estado, abrir, complemento }) {
     const colunas = {
       passo: estado.passo,
       tentativas: estado.tentativas,
@@ -76,6 +77,20 @@ export const armazemPrisma: Armazem = {
       atualizadoEm: estado.atualizadoEm ?? new Date(),
     };
     return prisma.$transaction(async (tx) => {
+      // anexa o complemento ao relato. A linha da demanda fica travada (FOR UPDATE) até o fim da transação: dois balões ao mesmo
+      // tempo (outra réplica durante um deploy) não se sobrescrevem
+      const anexar = async (c: { protocolo: number; texto: string; quando: Date }) => {
+        await tx.$queryRaw`SELECT protocolo FROM suporte_demandas WHERE protocolo = ${c.protocolo} FOR UPDATE`;
+        const atual = await tx.suporteDemanda.findUnique({ where: { protocolo: c.protocolo }, select: { relato: true, status: true, jid: true } });
+        if (!atual || atual.jid !== jid) {
+          logger.warn({ protocolo: c.protocolo }, 'suporte-menu: complemento para demanda que não existe (ou não é desta pessoa) — NÃO anexado');
+          return { ok: true };
+        }
+        const anexo = anexarComplemento(atual.relato, c.texto, c.quando);
+        if (anexo.gravado) await tx.suporteDemanda.update({ where: { protocolo: c.protocolo }, data: { relato: anexo.relato } });
+        return { ok: true, complementoGravado: { gravado: anexo.gravado, cortado: anexo.cortado, status: atual.status } };
+      };
+
       if (versaoEsperada === null) {
         const criadas = await tx.suporteConversa.createMany({ data: [{ jid, ...colunas, protocolo: null }], skipDuplicates: true });
         if (criadas.count === 0) return { ok: false };
@@ -84,8 +99,10 @@ export const armazemPrisma: Armazem = {
           where: { jid, versao: versaoEsperada },
           data: { ...colunas, versao: { increment: 1 } },
         });
-        if (feitas.count === 0) return { ok: false };
+        // um complemento não muda o passo da conversa: perder a corrida da versão não pode jogar o texto da pessoa fora
+        if (feitas.count === 0) return complemento ? { ...(await anexar(complemento)), estadoNaoGravado: true } : { ok: false };
       }
+      if (complemento) return anexar(complemento);
       if (!abrir) return { ok: true };
       const d = await tx.suporteDemanda.create({
         data: {
@@ -127,6 +144,16 @@ export const armazemPrisma: Armazem = {
   },
 };
 
+/** Um só para o processo: junta os balões de cada demanda e dá o teto de avisos (o estado fica aqui, não em cada chamada). */
+const avisosDeComplemento = new AgrupadorDeAvisos({
+  agora: () => Date.now(),
+  agendar: (ms, fn) => {
+    const t = setTimeout(fn, ms);
+    t.unref?.();
+  },
+  enviar: (texto) => enviarTelegramChamados(texto),
+});
+
 /** Os efeitos reais, montados a partir da configuração do momento. */
 export function efeitosReais(config: ConfigSuporte): Efeitos {
   const enviarWhatsApp = criarEnviadorEvolution(config);
@@ -144,9 +171,14 @@ export function efeitosReais(config: ConfigSuporte): Efeitos {
     },
     sorteio: Math.random,
     analisar: (protocolo) => {
-      // a análise primeiro (o agente lê o que ela achou); com ou sem análise, a demanda verificada entra na fila do agente
-      void dispararAnalise(protocolo).finally(() => void enfileirarSeVerificada(protocolo));
+      // espera uns segundos para os balões seguintes da mesma dúvida entrarem no relato (a análise lê o relato do banco ao rodar);
+      // depois, a análise primeiro (o agente lê o que ela achou); com ou sem análise, a demanda verificada entra na fila do agente
+      const t = setTimeout(() => void dispararAnalise(protocolo).finally(() => void enfileirarSeVerificada(protocolo)), JANELA_ANALISE_MS);
+      // RISCO CONHECIDO: um reinício do servidor dentro destes segundos perde a análise E a entrada na fila do agente desta demanda
+      // (o texto e o cartão do Telegram já estão salvos; não há varredura que refaça). Antes a janela era a duração da análise.
+      t.unref?.();
     },
+    avisarComplemento: (c) => avisosDeComplemento.adicionar(c),
   };
 }
 

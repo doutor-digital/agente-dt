@@ -203,7 +203,8 @@ export function montarMensagens(d: DemandaParaAnalise, ctx: Contexto): Array<{ r
     `Unidade: ${d.unidadeSlug ?? 'não informada'} (identificação: ${d.verificacao})`,
     '',
     '<<<RELATO>>>',
-    d.relato,
+    // o relato (agora até 8000 caracteres, com os complementos) não pode imitar o marcador de fim e passar por CONTEXTO
+    d.relato.replace(/<<<+/g, '‹‹‹').replace(/>>>+/g, '›››'),
     '<<<FIM>>>',
     '',
     'CONTEXTO (lido do sistema agora):',
