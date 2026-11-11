@@ -728,6 +728,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/agent/paciente-encerrou.ts',
   },
   {
+    id: 'exame-de-imagem-pausa-alerta',
+    chave: 'EXAME_DE_IMAGEM_SLUGS',
+    nome: 'Exame de imagem no chat: Sofia pausa e avisa a equipe no grupo',
+    oQueFaz:
+      'Paciente manda foto ou PDF de ressonância, tomografia, raio-X, ultrassom ou o laudo de um desses: a Sofia diz que vai passar o exame para o especialista da equipe e pausa naquele cartão; a equipe recebe mensagem no grupo de WhatsApp da unidade (com o link do cartão e o que o exame é) e uma tarefa no cartão. Pedido da dona de Timbó (10/11/2026).',
+    pegadinha:
+      'O grupo e a instância que envia vêm do servidor: EXAME_DE_IMAGEM_GRUPOS (JSON {"slug": "...@g.us"}) e EXAME_DE_IMAGEM_EVOLUTION_URL (…/message/sendText/<instância>). Sem eles, sai só a tarefa no cartão. Um aviso a cada 6 h por cartão (a mesma ressonância chega em várias fotos). Não é sinal de alerta: sem 🔴 PRIORIDADE nem LIGAR AGORA. Comprovante Pix segue o fluxo dele; foto do corpo, print e pedido médico seguem como hoje. A pausa é a Sofia que faz (pausar_ia), como no áudio que não deu para ouvir.',
+    risco: 'comportamento',
+    temSeco: false,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/exame-de-imagem.ts',
+  },
+  {
     id: 'cache-agenda',
     chave: 'CACHE_AGENDA_SLUGS',
     nome: 'Cache curto dos horários da agenda',

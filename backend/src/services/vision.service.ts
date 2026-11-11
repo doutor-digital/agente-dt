@@ -5,6 +5,7 @@ import { env } from '../lib/env.js';
 import { resolveOpenAIApiKey } from './openai.service.js';
 import { ehTranscricaoDeComprovante } from '../lib/pagamento-antecipado.js';
 import { normalizarDados, type DadosDoComprovante } from '../lib/comprovante-pix.js';
+import { LINHA_DA_VISAO } from '../lib/exame-de-imagem.js';
 
 const CHAT_URL = 'https://api.openai.com/v1/chat/completions';
 
@@ -25,6 +26,13 @@ const PROMPT = [
   '- Figurinha/meme/foto sem relação: diga isso em uma frase.',
   'No máximo 4 frases. NÃO faça diagnóstico nem dê conselho médico.',
 ].join('\n');
+
+/** O prompt da leitura. A linha do exame de imagem entra antes da última regra só com a chave ligada; sem ela, o de sempre. */
+export function promptDaVisao(marcarExameDeImagem = false): string {
+  if (!marcarExameDeImagem) return PROMPT;
+  const linhas = PROMPT.split('\n');
+  return [...linhas.slice(0, -1), LINHA_DA_VISAO, linhas[linhas.length - 1]].join('\n');
+}
 
 export interface VisionResult {
   text: string;
@@ -119,7 +127,11 @@ function ehPdf(buf: Buffer): boolean {
 export async function describeImage(
   unit: Pick<Unit, 'kommoAccessToken' | 'openaiApiKey'>,
   imageUrl: string,
-  opcoes: { estruturarComprovante?: boolean } = {},
+  opcoes: {
+    estruturarComprovante?: boolean;
+    /** Chave `exame-de-imagem-pausa-alerta` ligada (lib/exame-de-imagem.ts): a leitura marca "EXAME DE IMAGEM:". */
+    marcarExameDeImagem?: boolean;
+  } = {},
 ): Promise<VisionResult> {
   const apiKey = resolveOpenAIApiKey(unit) || env.OPENAI_TRANSCRIPTION_API_KEY;
   if (!apiKey) {
@@ -167,7 +179,7 @@ export async function describeImage(
         {
           role: 'user',
           content: [
-            { type: 'text', text: PROMPT },
+            { type: 'text', text: promptDaVisao(opcoes.marcarExameDeImagem) },
             parte,
           ],
         },
