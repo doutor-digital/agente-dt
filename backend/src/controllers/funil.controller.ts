@@ -46,7 +46,7 @@ const SESSAO_VALE_MS = 5 * 60_000;
 const MAX_CONFERENCIAS_POR_MIN = 120;
 let conferencias = { n: 0, desde: 0 };
 
-type Conferencia = { nome: string } | 'invalida' | 'indisponivel' | 'excesso';
+type Conferencia = { nome: string } | 'invalida' | 'sem-conta' | 'indisponivel' | 'excesso';
 
 async function quemEstaLogado(c: ContextoChatwoot, s: SessaoChatwoot): Promise<Conferencia> {
   const k = createHash('sha256').update(`${s.token}|${s.client}|${s.uid}`).digest('hex');
@@ -67,7 +67,8 @@ async function quemEstaLogado(c: ContextoChatwoot, s: SessaoChatwoot): Promise<C
   if (r.status === 401 || r.status === 403) return 'invalida';
   if (!r.ok) return 'indisponivel';
   const nome = nomeSeTemConta(await r.json().catch(() => null), c.conta!.conta);
-  if (!nome) return 'invalida';
+  // login válido, mas de quem não é desta conta: não é sessão vencida ("entre de novo" nunca resolveria)
+  if (!nome) return 'sem-conta';
   if (sessoes.size > 500) sessoes.clear();
   sessoes.set(k, { nome, ate: Date.now() + SESSAO_VALE_MS });
   return { nome };
@@ -103,6 +104,7 @@ async function autorizado(req: Request, res: Response): Promise<{ c: ContextoCha
   const r = await quemEstaLogado(c, sessao);
   if (typeof r === 'object') return { c, logado: r.nome };
   if (r === 'invalida') res.status(403).json({ error: 'entre no Chatwoot de novo (sessão expirada)', sessao: 'invalida' });
+  else if (r === 'sem-conta') res.status(403).json({ error: 'seu usuário do Chatwoot não tem acesso a esta conta — peça para a Suzanne', sessao: 'sem-conta' });
   else if (r === 'excesso') res.status(429).json({ error: 'muitos acessos agora — tente em 1 minuto' });
   else res.status(502).json({ error: 'não consegui falar com o Chatwoot agora' });
   return null;
@@ -238,6 +240,7 @@ header h1{font-size:16px;margin:0 8px 0 0}select,input{font:inherit;padding:6px 
   function pedirSessao(){ try{ window.parent.postMessage({event:'funil:pede-sessao'},ORIGEM_CW); }catch(e){} }
   async function api(m,p,b){ var r=await fetch('/api/public/funil/'+p,{method:m,headers:cabecalhos(),body:b?JSON.stringify(b):undefined}); var j=await r.json().catch(function(){return {}});
     if(r.status===403&&S&&j.sessao==='invalida'){ morta=S.token; S=null; if(timer){ clearInterval(timer); timer=null; } iniciado=false; pedirSessao(); }
+    if(r.status===403&&S&&j.sessao==='sem-conta'&&timer){ clearInterval(timer); timer=null; }
     if(!r.ok) throw new Error(j.error||('erro '+r.status)); return j; }
   function cabecalhos(){ var h={'Content-Type':'application/json'}; if(K) h['X-Funil-Chave']=K; else if(S){ h['X-CW-Token']=S.token; h['X-CW-Client']=S.client; h['X-CW-Uid']=S.uid; } return h; }
   function el(t,c,x){ var e=document.createElement(t); if(c) e.className=c; if(x!=null) e.textContent=x; return e; }
@@ -387,11 +390,12 @@ const MENU_JS = `(function(){
     trocarTexto(novo);
     novo.addEventListener('click', abrir, true);
     item.parentNode.insertBefore(novo, item.nextSibling);
+    var reserva = document.querySelector('[data-funil-botao]'); if (reserva) reserva.remove();
     return true;
   }
   function botao(){
-    if (document.querySelector('[data-funil-menu]')) return;
-    var b = document.createElement('button'); b.type = 'button'; b.textContent = 'Funil'; b.setAttribute('data-funil-menu', '1');
+    if (document.querySelector('[data-funil-menu], [data-funil-botao]')) return;
+    var b = document.createElement('button'); b.type = 'button'; b.textContent = 'Funil'; b.setAttribute('data-funil-botao', '1');
     b.style.cssText = 'position:fixed;left:12px;bottom:70px;z-index:2147482999;padding:8px 14px;border-radius:18px;border:0;background:#1f93ff;color:#fff;font:600 13px system-ui,sans-serif;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.2)';
     b.onclick = abrir; document.body.appendChild(b);
   }
