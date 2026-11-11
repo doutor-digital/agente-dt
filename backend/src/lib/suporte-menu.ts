@@ -231,6 +231,11 @@ export interface Armazem {
   pausado(): Promise<boolean>;
   /** conta uma mensagem que chegou durante a pausa e ficou sem resposta (só no modo ligado; nunca lança) */
   contarIgnoradaNaPausa(): Promise<void>;
+  /**
+   * pausa só desta pessoa (Central do João, extensão do Chrome — `central-pausa.ts`): true = não responde nem grava ela; com
+   * `contar`, soma a mensagem na conta da pausa dela. Opcional: sem ela, ninguém está pausado individualmente.
+   */
+  pessoaPausada?(jid: string, jidAlt: string | null, contar: boolean): Promise<boolean>;
   /** true = primeira vez que vemos esta mensagem (dedupe atômico pelo id do WhatsApp) */
   marcarVista(id: string): Promise<boolean>;
   lerConversa(jid: string): Promise<LinhaDaConversa | null>;
@@ -279,7 +284,7 @@ export interface Efeitos {
 
 export type Desfecho =
   | { acao: 'desligado' }
-  | { acao: 'pausado' }
+  | { acao: 'pausado'; pessoa?: true }
   | { acao: 'repetida' }
   | { acao: 'silencio' }
   | { acao: 'seco'; passoDepois: Passo; respostas: string[] }
@@ -306,6 +311,11 @@ export async function processarMensagem(msg: Recebida, config: ConfigSuporte, ar
     if (ligado) await armazem.contarIgnoradaNaPausa();
     logger.info({ numero: mascarar(msg.jid), modo: config.modo }, 'suporte-menu: PAUSADO — mensagem ignorada, sem resposta');
     return { acao: 'pausado' };
+  }
+  // pausado só para esta pessoa (o João está falando com ela direto): mesmo silêncio, sem gravar
+  if (armazem.pessoaPausada && (await armazem.pessoaPausada(msg.jid, msg.jidAlt, ligado))) {
+    logger.info({ numero: mascarar(msg.jid), modo: config.modo }, 'suporte-menu: PESSOA PAUSADA — mensagem ignorada, sem resposta');
+    return { acao: 'pausado', pessoa: true };
   }
 
   ef.garantirIndice();

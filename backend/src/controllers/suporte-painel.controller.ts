@@ -8,6 +8,7 @@ import { logger } from '../lib/logger.js';
 import { enviarTelegramChamados } from '../lib/telegram.js';
 import { criarEnviadorEvolution, lerConfig } from '../lib/suporte-menu.js';
 import { armazemPausaPrisma, menuPausado } from '../lib/suporte-pausa-banco.js';
+import { pessoaPausada } from '../lib/central-pausa-banco.js';
 import { mudarPeloPainel } from '../lib/suporte-pausa.js';
 import type { Passo } from '../lib/suporte-menu-maquina.js';
 import {
@@ -43,8 +44,10 @@ function depsReais(): DepsPainel {
       });
       return r.count === 1;
     },
-    // pausado = o menu não fala com ninguém: marcar como resolvida NÃO manda o "pode testar?" (a resposta da pessoa seria descartada)
-    menuLigado: async () => menu.modo === 'ligado' && !(await menuPausado()),
+    // pausado = o menu não fala com ninguém: marcar como resolvida NÃO manda o "pode testar?" (a resposta da pessoa seria descartada).
+    // Vale também para a pausa só desta pessoa (extensão). Limite: conversa guardada só pelo id interno (@lid) não tem o número, e
+    // a pausa por pessoa (que é por número) não a alcança aqui.
+    menuLigado: async (jid) => menu.modo === 'ligado' && !(await menuPausado()) && !(await pessoaPausada(jid, null, false)),
     async enviarWhatsApp(jid, texto) {
       const ok = await enviar(jid, texto);
       if (ok) await prisma.suporteEnvio.create({ data: { jid, nova: false } });

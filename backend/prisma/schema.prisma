@@ -2690,3 +2690,17 @@ model SuporteEnvio {
   @@index([enviadoEm])
   @@map("suporte_envios")
 }
+
+/// Central do João (fase 1): pausa do agente de chamados por PESSOA, pela extensão do Chrome. Sem telefone: `chave` é o HMAC do
+/// número canônico (`central-pausa.ts`); `final` são os 4 últimos dígitos, só para mostrar. Sem linha = não pausado.
+model SuportePausaPessoa {
+  chave      String   @id
+  final      String
+  nome       String?
+  pausadoPor String   @map("pausado_por")
+  pausadoEm  DateTime @default(now()) @map("pausado_em")
+  /// mensagens dessa pessoa que chegaram durante a pausa e ficaram sem resposta
+  ignoradas  Int      @default(0)
+
+  @@map("suporte_pausa_pessoa")
+}

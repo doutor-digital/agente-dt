@@ -777,3 +777,29 @@ test('DÚVIDA INTEIRA: perdeu a corrida da versão (texto entrou, estado não) =
   assert.equal(m.whatsapp.length, antes);
   assert.match(m.relatos[0]!, /detalhe$/);
 });
+
+test('PESSOA PAUSADA (Central do João): só ela fica sem resposta e sem gravação; os outros seguem; ao retomar ela volta', async () => {
+  const m = criarMundo();
+  const pausadas = new Set<string>();
+  let contadas = 0;
+  m.armazem.pessoaPausada = async (jid, _alt, contar) => {
+    const sim = pausadas.has(jid);
+    if (sim && contar) contadas++;
+    return sim;
+  };
+  const c = config({ modo: 'ligado' });
+  const dela = recebida('oi');
+  pausadas.add(dela.jid);
+  const d = await processarMensagem(dela, c, m.armazem, m.efeitos);
+  assert.deepEqual(d, { acao: 'pausado', pessoa: true });
+  assert.equal(m.whatsapp.length, 0);
+  assert.equal(m.conversas.size, 0);
+  assert.equal(contadas, 1);
+  assert.equal(m.ignoradasNaPausa, 0, 'a pausa GERAL não conta a mensagem da pessoa');
+  const outra = { ...recebida('oi'), id: 'outra-1', jid: '5563988887777@s.whatsapp.net' };
+  await processarMensagem(outra, c, m.armazem, m.efeitos);
+  assert.equal(m.whatsapp.length, 1, 'outra pessoa é atendida');
+  pausadas.clear();
+  await processarMensagem({ ...dela, id: 'dela-2' }, c, m.armazem, m.efeitos);
+  assert.equal(m.whatsapp.length, 2, 'retomada: volta a responder');
+});

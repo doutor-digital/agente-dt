@@ -124,6 +124,10 @@ const schema = z.object({
   CARTAO_ENXUTO_SLUGS: z.string().optional(),
   /** Resumo diário da qualidade da Sofia no Telegram do João (global, não por unidade): `seco` (padrão; só loga) | `ligado` | `desligado`. */
   RESUMO_DIARIO_IA: z.string().optional(),
+  /** Central do João: chave da extensão do Chrome (cabeçalho X-Central-Chave, ≥ 32 caracteres). Sem ela, /api/public/central/* dá 404. */
+  CENTRAL_EXTENSAO_CHAVE: z.string().optional(),
+  /** Segredo do HMAC do número na pausa por pessoa (opcional; sem ele usa SESSION_JWT_SECRET). Trocar = as pausas por pessoa caem. */
+  CENTRAL_PAUSA_SEGREDO: z.string().min(16).optional(),
   /** Menu de suporte no WhatsApp (global): `desligado` (padrão) | `seco` (registra o que responderia, não envia nem grava) | `ligado`. Ver `suporte-menu.ts`. */
   SUPORTE_MENU: z.string().optional(),
   /** Segredo do webhook do menu (`?k=`). Sem ele o webhook recusa tudo. */
