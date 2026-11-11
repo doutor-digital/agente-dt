@@ -4,7 +4,7 @@ import { convenioDaUnidade, corrigirPrecoDoConvenio } from './preco-convenio.js'
 import { corrigirValorAntecipado } from './valor-antecipado.js';
 import { corrigirTomDaSaida } from './tom-da-saida.js';
 import { corrigirLinkDeMapa } from './link-de-mapa.js';
-import { precosDaConsulta } from './prompt-composer.js';
+import { precosDaConsulta, sinalDaUnidade } from './prompt-composer.js';
 import { semProntoSocorro } from './sem-pronto-socorro.js';
 import { ehClinicaParaSinalDeAlerta } from './sinal-de-alerta.js';
 import { sobrouVenda } from './venda-em-alerta.js';
@@ -66,6 +66,19 @@ function amountApproved(v: number, approved: Set<number>): boolean {
   return false;
 }
 
+/** A frase fala do sinal: sinal, garantir (a vaga), o restante/resto que fica para o dia. */
+const FRASE_DO_SINAL = /\bsinal\b|\bgarant(?:ir|e|a|indo|ia)\b|\brestante\b|\bresto\b/i;
+
+/** Dos `candidatos` (R$ 50, R$ 200), os que aparecem em alguma frase que fala do sinal. Frase = até ponto final/!/? seguido de espaço, ou quebra de linha. */
+function valoresDoSinalNaFrase(texto: string, candidatos: readonly number[]): Set<number> {
+  const achados = new Set<number>();
+  for (const frase of texto.split(/(?<=[.!?])\s+|\n+/)) {
+    if (!FRASE_DO_SINAL.test(frase)) continue;
+    for (const v of parseAmounts(frase)) if (candidatos.includes(v)) achados.add(v);
+  }
+  return achados;
+}
+
 const FALLBACK_PRECO =
   'Sobre o valor, deixa eu confirmar direito pra não te passar informação errada 🙏 ' +
   'Já te falo por aqui, tá bem?';
@@ -87,6 +100,8 @@ function corrigirValores(
   text: string,
   aprovados: Set<number>,
   foraDoCatalogo: number[],
+  /** De onde sai o valor que entra no lugar: a ficha. R$ 50/200 do sinal valem como corretos, mas nunca viram o "mais próximo" de um valor inventado. */
+  substitutos: Set<number> = aprovados,
 ): { texto: string; trocas: string[] } | null {
   const jaNoTexto = new Set(
     [...parseAmounts(text)].filter((v) => amountApproved(v, aprovados)),
@@ -102,7 +117,7 @@ function corrigirValores(
     const v = Number(num.replace(/\./g, ''));
     if (!alvo.has(v)) return match;
 
-    const certo = [...aprovados]
+    const certo = [...substitutos]
       .filter((a) => !jaNoTexto.has(a))
       .sort((a, b) => Math.abs(a - v) - Math.abs(b - v))[0];
     if (certo === undefined) {
@@ -242,7 +257,8 @@ export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoG
   // valendo sobre o texto preenchido. O que não dá pra preencher não sai.
   const lac = preencherLacunas(texto, {
     // Unidade sem pagamento antecipado: não há chave para entregar — "[chave]" não vira a chave da clínica.
-    chavePix: unidadeSemAntecipado(unit) ? null : unit.pixKey,
+    // Com sinal por Pix também não: o Pix do sinal é o link da ferramenta, e "[chave]" não vira a chave fixa da clínica.
+    chavePix: unidadeSemAntecipado(unit) || sinalDaUnidade(unit) ? null : unit.pixKey,
     titularPix: unit.pixHolder,
     valorAntecipado: precosDaConsulta(unit)?.antecipado ?? null,
   });
@@ -288,6 +304,10 @@ export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoG
 
   // O desconto do convênio não pode sair como preço do Pix — ver preco-convenio.ts.
   const p = precosDaConsulta(unit);
+  const sinal = sinalDaUnidade(unit);
+  // R$ 50 e R$ 200 só são "do sinal" quando a MESMA frase fala de sinal / garantir / restante, e só como valor EXATO (sem a tolerância de
+  // parcela do catálogo: "R$ 100" e "R$ 67" não são metade nem terço de R$ 200). Solto no texto continua sendo valor inventado.
+  const doSinal = sinal ? valoresDoSinalNaFrase(texto, [sinal.sinal, sinal.restoNoDia]) : new Set<number>();
   if (p) {
     const conv = convenioDaUnidade(unit, p);
     if (conv != null) {
@@ -306,6 +326,8 @@ export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoG
     const va = corrigirValorAntecipado(texto, {
       antecipado: p.antecipado,
       taxaDeReserva: unit.spineBookingRequiresPayment ?? false,
+      // Sofia 2.0: o sinal (R$ 50) e o resto no dia (R$ 200) são preços legítimos; sem a flag a lista é vazia (nada muda)
+      valoresLegitimos: [...doSinal],
     });
     if (va.corrigiu.length > 0) {
       triggered.push(`antecipado_corrigido:${va.corrigiu.join('/')}->${p.antecipado}`);
@@ -320,13 +342,15 @@ export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoG
   // O catálogo é a ficha (com a tolerância de parcela de sempre). Os valores da oferta valem EXATOS, sem a conta de parcelas
   // (R$ 150 de oferta não aprova R$ 50 nem R$ 75), e só enquanto a ficha tem valores: unidade sem R$ na ficha não ganha
   // checagem por causa da oferta.
+  // Sinal por Pix (Sofia 2.0): R$ 50 e R$ 200 não estão nas fontes ("R$ 250 antecipado ou R$ 350 no dia") mas são preços da unidade. Entram
+  // como valores EXATOS (`doSinal`), à parte do catálogo: o catálogo mantém a tolerância de parcela, e essa tolerância NÃO se estende a eles.
   const aprovados = catalogo;
   if (aprovados.size > 0) {
     const foraDoCatalogo = [...parseAmounts(texto)].filter(
-      (v) => v >= 20 && !amountApproved(v, aprovados),
+      (v) => v >= 20 && !amountApproved(v, aprovados) && !doSinal.has(v),
     );
     if (foraDoCatalogo.length > 0) {
-      const corrigido = corrigirValores(texto, aprovados, foraDoCatalogo);
+      const corrigido = corrigirValores(texto, aprovados, foraDoCatalogo, catalogo);
       if (corrigido) {
         triggered.push('preco_corrigido:' + corrigido.trocas.join('/'));
         return { text: mostraOferta(corrigido.texto), triggered, rewritten: true };

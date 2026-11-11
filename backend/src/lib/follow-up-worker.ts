@@ -13,6 +13,7 @@ import { leadPausadoPorJanela } from './pausa-lead.js';
 import { enviosDeRetomadaRecentes, limiteDoDiaAtingido, LIMITE_COBRANCAS_POR_DIA, marcaDoDegrau } from './cobrancas-do-dia.js';
 import { fusoDaUnidade } from './fuso.js';
 import { unidadeSemAntecipado, type FlagsDePagamento } from '../agent/pagamento-da-unidade.js';
+import { sinalDaUnidade } from '../agent/prompt-composer.js';
 
 const SWEEP_MS = 60_000;
 
@@ -40,9 +41,10 @@ interface Degrau {
 export function degrauDoPixNaoSeAplica(
   degrau: Pick<Degrau, 'soPix'>,
   pagamentoEscolhido: string | null | undefined,
-  unit: FlagsDePagamento,
+  unit: FlagsDePagamento & { sourceProdutos?: string | null; systemPrompt?: string | null },
 ): boolean {
-  return degrau.soPix === true && (pagamentoEscolhido === 'na_clinica' || unidadeSemAntecipado(unit));
+  // Sinal por Pix (Sofia 2.0): o degrau do Pix manda a CHAVE FIXA da unidade; ali o Pix é um link gerado na conversa, então a escada antiga não roda.
+  return degrau.soPix === true && (pagamentoEscolhido === 'na_clinica' || unidadeSemAntecipado(unit) || sinalDaUnidade(unit) !== null);
 }
 
 const JANELA_WHATSAPP_MIN = 23 * 60;

@@ -2,7 +2,7 @@ import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { createChatModel, invokeChatModel, resolveModelName } from '../services/openai.service.js';
-import { composeFollowUpSystemPrompt } from './prompt-composer.js';
+import { composeFollowUpSystemPrompt, fraseDePrecoComSinal, sinalDaUnidade } from './prompt-composer.js';
 import { carregarRede, semDraSofiaNaDH, type UnidadeDaRede } from './rede-doutor-hernia.js';
 import { extrairBotoes } from '../lib/botoes.js';
 import type { Unit } from '@prisma/client';
@@ -121,10 +121,20 @@ export function guardrailDaRegua(tratado: string, unit: Unit, ofertaDaCampanha: 
  * Unidade sem pagamento antecipado (Timbó): os degraus da régua são genéricos e alguns falam de Pix, de pagar antes e
  * de desconto ("oferecendo o antecipado de R$ 150"). Aqui a regra da unidade vence o degrau. Vazio nas demais.
  */
-export function regraDePagamento(unit: Pick<Unit, 'acceptsAdvancePayment' | 'spineBookingRequiresPayment'>): string {
-  return unidadeSemAntecipado(unit)
-    ? `\n- ${REGRA_SEM_ANTECIPADO} Se o objetivo acima falar de Pix, de pagar antes ou de desconto, ignore essa parte.`
-    : '';
+export function regraDePagamento(unit: Pick<Unit, 'acceptsAdvancePayment' | 'spineBookingRequiresPayment'> & { sinalPixCentavos?: number | null; sourceProdutos?: string | null; systemPrompt?: string | null }): string {
+  if (unidadeSemAntecipado(unit)) {
+    return `\n- ${REGRA_SEM_ANTECIPADO} Se o objetivo acima falar de Pix, de pagar antes ou de desconto, ignore essa parte.`;
+  }
+  // Sofia 2.0: unidade com sinal por Pix. A régua é só texto (não gera o link): nada de chave, de "antecipado" nem de valor inventado.
+  const sinal = sinalDaUnidade(unit);
+  if (sinal) {
+    return (
+      `\n- Nesta unidade não existe chave Pix nem "pagamento antecipado". A consulta é ${fraseDePrecoComSinal(sinal)}. ` +
+      'NUNCA escreva uma chave Pix nem diga que a equipe envia a chave. Se o paciente quiser garantir a vaga com o sinal, diga que você envia o link do Pix em seguida, ' +
+      'quando ele escolher o horário. Se o objetivo acima falar de chave Pix ou de valor antecipado, ignore essa parte.'
+    );
+  }
+  return '';
 }
 
 export async function runAgentFollowUp(args: FollowUpArgs): Promise<string | null> {
@@ -169,7 +179,7 @@ VOCÊ ESTÁ RETOMANDO UMA CONVERSA QUE PAROU. O paciente não respondeu sua últ
 mensagem. Escreva UMA mensagem curta de reengajamento.
 
 O QUE ESTA MENSAGEM PRECISA FAZER:
-${intencaoDoDegrauParaAUnidade(args.intencao, unit)}
+${intencaoDoDegrauParaAUnidade(args.intencao, unit, sinalDaUnidade(unit) !== null)}
 
 REGRAS:
 - UMA mensagem só, curta. Duas ou três linhas no máximo.

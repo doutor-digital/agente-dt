@@ -84,3 +84,21 @@ export async function contasComChave(provedor: Provedor): Promise<Array<{ unitId
   }
   return out;
 }
+
+/**
+ * A chave decifrada de UMA unidade (só em memória), ou null se a unidade não tem a chave deste provedor, está inativa ou a chave
+ * não decifra. Para quem age por unidade (o sinal Pix da Sofia): `contasComChave` decifra a rede inteira a cada chamada.
+ */
+export async function chaveDaUnidade(unitId: string, provedor: Provedor): Promise<{ unitId: string; slug: string; chave: string } | null> {
+  const l = await prisma.chaveDeIntegracao.findUnique({
+    where: { unitId_provedor: { unitId, provedor } },
+    include: { unit: { select: { slug: true, isActive: true } } },
+  });
+  if (!l || !l.unit.isActive) return null;
+  try {
+    return { unitId: l.unitId, slug: l.unit.slug, chave: decifrar(l.chaveCifrada, segredo()) };
+  } catch {
+    await prisma.chaveDeIntegracao.update({ where: { id: l.id }, data: { ultimoErro: 'não consegui decifrar: o segredo do servidor mudou — cole a chave de novo' } });
+    return null;
+  }
+}

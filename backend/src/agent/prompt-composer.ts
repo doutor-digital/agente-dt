@@ -71,6 +71,7 @@ import {
   PAGAMENTO_NO_DIA,
   REGRA_SEM_ANTECIPADO,
   SORRISO_DA_CONFIRMACAO,
+  unidadeComSinal,
   unidadeSemAntecipado,
   valorDaConsultaNoDia,
   type FlagsDePagamento,
@@ -454,7 +455,7 @@ pergunte em uma frase como pode ajudar. Se a ferramenta responder RECUSADO ou ER
 Fornecedor, agência, propaganda e funcionário da clínica NÃO são tratados por esta regra: sigam as instruções da unidade.`);
 }
 
-export function renderRulesGlobal(unit?: FlagsDePagamento): string {
+export function renderRulesGlobal(unit?: FlagsDePagamento & { sourceProdutos?: string | null; systemPrompt?: string | null }): string {
   // Unidade sem pagamento antecipado (Timbó): o passo "Pix" e os botões "Pix antecipado | Na clínica" não existem.
   const semAntecipado = unidadeSemAntecipado(unit);
   // Unidade com taxa de reserva (Boa Vista, decisão do João de 03/11/2026): o comprovante é conferido pela ferramenta e libera marcar.
@@ -470,12 +471,16 @@ export function renderRulesGlobal(unit?: FlagsDePagamento): string {
   vez que a taxa garante o horário e já faz parte do valor; se recusar de novo, passe para a equipe.`
     : `COMPROVANTE (foto, PDF, "paguei"): o pagamento quem confere é a EQUIPE — nunca "pagamento confirmado".
   Não confirma consulta: a equipe confirma em até 1 hora (com taxa de reserva, a ferramenta libera).`;
-  const passos = semAntecipado ? 'dia → horário → dados' : 'dia → horário → dados → Pix';
+  // Sinal por Pix (Sofia 2.0): o último passo é o sinal (link gerado pela ferramenta), não a chave fixa.
+  const comSinal = !!unit && sinalDaUnidade(unit) !== null;
+  const passos = semAntecipado ? 'dia → horário → dados' : comSinal ? 'dia → horário → dados → sinal (Pix)' : 'dia → horário → dados → Pix';
   // Taxa de reserva OBRIGATÓRIA (Boa Vista): não existe "Na clínica" como escolha — com esse exemplo a Sofia perguntava
   // "Pix antecipado ou pagar tudo na clínica no dia?" (Mivanildo 03/11, Maiza 04/11).
   const exemplosDeBotao = semAntecipado || unit?.spineBookingRequiresPayment
     ? '(escolher entre os horários que você ofereceu; '
-    : '(escolher entre os horários que você ofereceu; "Pix antecipado" ou "Na clínica";\n  ';
+    : comSinal
+      ? `(escolher entre os horários que você ofereceu; "Sinal de R$ ${fmtBRL((unit?.sinalPixCentavos ?? 0) / 100)}" ou "Pagar no dia";\n  `
+      : '(escolher entre os horários que você ofereceu; "Pix antecipado" ou "Na clínica";\n  ';
   return xmlBlock('regras_gerais', `- ANTI-ALUCINAÇÃO: nunca invente fatos sobre a clínica (preços, horários,
   procedimentos, prazos, políticas, médicos, especialidades, endereços).
   Use APENAS o que está nas Fontes Oficiais acima OU na Base de Conhecimento.
@@ -682,6 +687,46 @@ export function precosDaConsulta(
 
 export const fmtBRL = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(2).replace('.', ','));
 
+/**
+ * Os números do SINAL desta unidade (Sofia 2.0): `sinal` (R$ 50, da flag `sinalPixCentavos`), `comSinal` (R$ 250: o "antecipado"
+ * que as fontes já dão, `precosDaConsulta`), `noDia` (R$ 350) e `restoNoDia` (R$ 200 = 250 − 50). null = a unidade não usa sinal
+ * (flag desligada, taxa de reserva, sem antecipado) OU as fontes não deixam achar os dois preços OU o sinal não é menor que o preço
+ * com sinal: nesses casos tudo segue como sempre (nunca um sinal com número chutado). É a ÚNICA fonte desses números: prompt,
+ * ferramentas e guardrail perguntam aqui. Nada de valor no código além do que vem da flag da unidade e das fontes dela.
+ */
+export interface SinalDaUnidade {
+  sinal: number;
+  comSinal: number;
+  noDia: number;
+  restoNoDia: number;
+}
+
+// Chamada várias vezes por turno com a mesma unidade (prompt, ferramentas, guardrail): lê as fontes uma vez enquanto nada mudou.
+const sinalGuardado = new WeakMap<object, { chave: string; r: SinalDaUnidade | null }>();
+
+export function sinalDaUnidade(unit: { sourceProdutos?: string | null; systemPrompt?: string | null } & FlagsDePagamento): SinalDaUnidade | null {
+  if (!unidadeComSinal(unit)) return null;
+  const chave = [unit.sinalPixCentavos, unit.acceptsAdvancePayment, unit.spineBookingRequiresPayment, unit.sourceProdutos, unit.systemPrompt].join('\u0000');
+  const g = sinalGuardado.get(unit);
+  if (g && g.chave === chave) return g.r;
+  const r = lerSinalDaUnidade(unit);
+  sinalGuardado.set(unit, { chave, r });
+  return r;
+}
+
+function lerSinalDaUnidade(unit: { sourceProdutos?: string | null; systemPrompt?: string | null } & FlagsDePagamento): SinalDaUnidade | null {
+  const p = precosDaConsulta({ ...unit, sourceProdutos: unit.sourceProdutos ?? null, systemPrompt: unit.systemPrompt ?? '' });
+  if (!p) return null;
+  const sinal = (unit.sinalPixCentavos as number) / 100;
+  if (!(sinal < p.antecipado)) return null;
+  return { sinal, comSinal: p.antecipado, noDia: p.noDia, restoNoDia: Math.round((p.antecipado - sinal) * 100) / 100 };
+}
+
+/** A frase dos dois preços de uma unidade com sinal, para qualquer texto do código que antes dizia "antecipado". */
+export function fraseDePrecoComSinal(s: SinalDaUnidade): string {
+  return `R$ ${fmtBRL(s.noDia)} no dia, ou R$ ${fmtBRL(s.comSinal)} garantindo com sinal de R$ ${fmtBRL(s.sinal)} (R$ ${fmtBRL(s.sinal)} agora por Pix + R$ ${fmtBRL(s.restoNoDia)} no dia)`;
+}
+
 function linhaValorConsulta(unit: Unit): string {
   if (unidadeSemAntecipado(unit)) {
     // O valor vem das fontes da unidade (nada chumbado); a forma de pagamento mora nesta linha — não há parágrafo à parte.
@@ -696,6 +741,11 @@ function linhaValorConsulta(unit: Unit): string {
   // entender que a consulta inteira custava R$ 100 (Lindomar, 05/09/2026).
   if (p && unit.spineBookingRequiresPayment) {
     return `✨ Valor: R$ ${fmtBRL(p.antecipado + p.noDia)} no total — R$ ${fmtBRL(p.antecipado)} antecipado (já pago, garante o horário) + R$ ${fmtBRL(p.noDia)} no dia`;
+  }
+  // Sinal por Pix (Sofia 2.0): o valor da linha depende do que o paciente escolheu; os dois números já vêm prontos.
+  const sinal = sinalDaUnidade(unit);
+  if (sinal) {
+    return `✨ Valor: {se ele escolheu o SINAL: "R$ ${fmtBRL(sinal.comSinal)} — sinal de R$ ${fmtBRL(sinal.sinal)} pelo Pix agora + R$ ${fmtBRL(sinal.restoNoDia)} no dia"; se escolheu pagar tudo no dia: "R$ ${fmtBRL(sinal.noDia)} no dia"}`;
   }
   if (p) return `✨ Valor: R$ ${fmtBRL(p.antecipado)} antecipado (pago antes da consulta) ou R$ ${fmtBRL(p.noDia)} no dia`;
   return '✨ Valor: {os valores DESTA unidade, no formato "R$ X antecipado (pago antes da consulta) ou R$ Y no dia" — estão nas fontes/produtos; se não houver valor cadastrado, omita a linha e diga que a equipe informa. NUNCA "à vista"}';
@@ -751,16 +801,22 @@ function renderAgenda(unit: Unit): string {
   // então não faz sentido "a vaga é garantida com o PIX": ele já pagou.
   // Unidade sem pagamento antecipado (Timbó): só se paga no dia — nunca chave, nunca "garantir a vaga".
   const semAntecipado = unidadeSemAntecipado(unit);
+  const sinalDaConfirmacao = sinalDaUnidade(unit);
   const linhaPix = semAntecipado
     ? PAGAMENTO_NO_DIA
     : unit.spineBookingRequiresPayment
       ? 'Pagamento antecipado recebido — o horário está garantido. No dia, fica só o restante do valor.'
-      : pix
-        ? `A vaga é garantida com o pagamento antecipado no PIX: ${pix}${favorecido ? ` (${favorecido})` : ''}.`
-        : 'A equipe envia a chave do PIX para garantir a vaga.';
+      : sinalDaConfirmacao
+        ? `{SÓ se ele escolheu o sinal: "Para garantir a vaga, o sinal de R$ ${fmtBRL(sinalDaConfirmacao.sinal)} é pago por este Pix: <o link que gerar_sinal_pix devolveu, copiado exatamente>". Sem o link, diga que a equipe envia o Pix em instantes. Quem escolheu pagar tudo no dia: omita este parágrafo}`
+        : pix
+          ? `A vaga é garantida com o pagamento antecipado no PIX: ${pix}${favorecido ? ` (${favorecido})` : ''}.`
+          : 'A equipe envia a chave do PIX para garantir a vaga.';
   const regraDoValor = semAntecipado
     ? `- ${REGRA_SEM_ANTECIPADO}\n  NUNCA escreva "à vista". Não arredonde.`
-    : `- O valor menor é o ANTECIPADO (pago antes da consulta); o maior é o valor no dia.\n  NUNCA escreva "à vista". Não arredonde nem ofereça desconto.`;
+    : sinalDaConfirmacao
+      ? `- Os valores desta unidade: ${fraseDePrecoComSinal(sinalDaConfirmacao)}. NUNCA escreva "à vista". Não arredonde nem ofereça desconto.
+  O sinal é SEMPRE o link que a ferramenta gerar_sinal_pix devolveu: NUNCA envie chave Pix nem escreva que a equipe envia a chave.`
+      : `- O valor menor é o ANTECIPADO (pago antes da consulta); o maior é o valor no dia.\n  NUNCA escreva "à vista". Não arredonde nem ofereça desconto.`;
 
   // O formato da confirmação. Unidade sem antecipado (Timbó) tem o seu, pedido pelo João em 03/11/2026: data e horário em
   // negrito, data "Sexta-feira 06/11" (a tool já devolve a linha pronta), sem "Atendimento com", sem o parágrafo do pagamento
@@ -1036,22 +1092,31 @@ function renderConversao(unit: Unit): string {
   const totalComTaxa = taxa
     ? `R$ ${fmtBRL(taxa.antecipado + taxa.noDia)} no total — R$ ${fmtBRL(taxa.antecipado)} antecipados para garantir o horário (abatem do total) + R$ ${fmtBRL(taxa.noDia)} no dia`
     : '{o valor total da consulta e as duas partes (antecipada e no dia), exatamente como estão nas Fontes Oficiais}';
+  // Sinal por Pix (Sofia 2.0): nem "à vista" nem "antecipado" — a consulta é R$ 350 no dia, ou R$ 250 garantindo com o sinal.
+  const sinal = sinalDaUnidade(unit);
   const valorDaConsulta = semAntecipado
     ? '{o valor da consulta, o que está nas Fontes Oficiais}, pago no dia, na clínica'
     : comTaxa
       ? totalComTaxa
-      : `${precoAncora}, ou ${precoPix} à vista no PIX`;
+      : sinal
+        ? fraseDePrecoComSinal(sinal)
+        : `${precoAncora}, ou ${precoPix} à vista no PIX`;
   const reancoraCaro = semAntecipado
     ? `Acolha sem defender o preço e SEM oferecer desconto: a consulta é paga no dia,
   na clínica, e não existe valor menor. Devolva ao custo`
     : comTaxa
       ? `Acolha sem defender o preço e SEM oferecer desconto: a consulta é ${totalComTaxa}.
   O valor antecipado abate do total — não é preço menor. Devolva ao custo`
-      : `Acolha sem defender o preço. Reancore: o ${precoAncora} é o valor cheio;
+      : sinal
+        ? `Acolha sem defender o preço e SEM oferecer desconto: R$ ${fmtBRL(sinal.noDia)} é o valor da consulta no dia; com o sinal de R$ ${fmtBRL(sinal.sinal)}
+  ela fica R$ ${fmtBRL(sinal.comSinal)} — a diferença é dele por garantir a vaga. Depois devolva ao custo`
+        : `Acolha sem defender o preço. Reancore: o ${precoAncora} é o valor cheio;
   ${precoPix} é antecipado no PIX — a diferença é dele. Depois devolva ao custo`;
   const exemploCaro = semAntecipado || comTaxa
     ? 'A consulta é onde a gente'
-    : `A consulta é ${precoPix} antecipado e é onde a gente`;
+    : sinal
+      ? `A consulta fica R$ ${fmtBRL(sinal.comSinal)} com o sinal e é onde a gente`
+      : `A consulta é ${precoPix} antecipado e é onde a gente`;
 
   // Chaves de conversa curta (Timbó, 11/11/2026, conversa-direta.ts). Desligadas, o texto é o de sempre, letra por letra.
   const jeito = jeitoDaConversa(unit);
@@ -1898,11 +1963,14 @@ function blocosDoHistorico(unit: Unit, historico: Fala[] | undefined): { semPedi
   // fontes, mandar "dizer o valor agora" sem o número certo convidaria a inventar ou trocar o valor (achado do Codex,
   // 21/10): essas unidades ficam com a regra de PREÇO do prompt.
   const precos = precosDaConsulta(unit);
+  const sinalDoPreco = sinalDaUnidade(unit);
   const frase = !precos
     ? null
     : unit.spineBookingRequiresPayment
       ? `R$ ${fmtBRL(precos.antecipado + precos.noDia)} no total: R$ ${fmtBRL(precos.antecipado)} antecipado no Pix (garante o horário) + R$ ${fmtBRL(precos.noDia)} no dia`
-      : `R$ ${fmtBRL(precos.noDia)} no dia, ou R$ ${fmtBRL(precos.antecipado)} pagando antes no Pix`;
+      : sinalDoPreco
+        ? fraseDePrecoComSinal(sinalDoPreco)
+        : `R$ ${fmtBRL(precos.noDia)} no dia, ou R$ ${fmtBRL(precos.antecipado)} pagando antes no Pix`;
   if (frase) {
     const preco = renderPrecoInsistido(historico, { frase });
     if (preco) blocos.push(preco);
@@ -2913,7 +2981,9 @@ export function renderFatosDaUnidade(unit: Unit): string {
   const linhas: string[] = [];
   // Unidade sem pagamento antecipado (Timbó): sem chave Pix para o follow-up copiar (ela só existe para reservar vaga).
   const semAntecipado = unidadeSemAntecipado(unit);
-  const chave = semAntecipado ? undefined : unit.pixKey?.trim();
+  // Com sinal por Pix a chave fixa NUNCA é entregue: o Pix do sinal é o link que a ferramenta gerar_sinal_pix devolve.
+  const sinal = sinalDaUnidade(unit);
+  const chave = semAntecipado || sinal ? undefined : unit.pixKey?.trim();
   const titular = unit.pixHolder?.trim();
   if (chave) {
     linhas.push(`- Chave Pix: ${chave}${titular ? ` (titular: ${titular})` : ''}`);
@@ -2927,6 +2997,8 @@ export function renderFatosDaUnidade(unit: Unit): string {
         `(paga antes por Pix, garante o horário e abate do total) + R$ ${fmtBRL(p.noDia)} na clínica no dia. ` +
         'Diga sempre "taxa de agendamento" — NUNCA "promoção", "desconto" ou "valor promocional", e não invente prazo nem valor diferente depois de uma data.',
     );
+  } else if (sinal) {
+    linhas.push(`- Consulta: ${fraseDePrecoComSinal(sinal)}. O sinal é pago por um link de Pix que a ferramenta gerar_sinal_pix cria; NÃO existe chave Pix para mandar e nunca diga que a equipe envia a chave.`);
   } else if (p) {
     linhas.push(`- Consulta: R$ ${fmtBRL(p.antecipado)} antecipado (pago antes) ou R$ ${fmtBRL(p.noDia)} no dia`);
   }

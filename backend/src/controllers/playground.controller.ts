@@ -11,7 +11,7 @@ import { DynamicStructuredTool } from '@langchain/core/tools';
 import { z as zod } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { getActiveConfig } from '../agent/config.js';
-import { composeSystemPromptForUnit } from '../agent/prompt-composer.js';
+import { composeSystemPromptForUnit, sinalDaUnidade } from '../agent/prompt-composer.js';
 import { leadFieldRuleDescription, leadFieldRuleSchema } from '../agent/tools.js';
 import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.js';
 import type { LeadFieldRule } from '@prisma/client';
@@ -97,6 +97,8 @@ function buildSandboxTools(opts: {
   onCall: (a: SandboxAction) => void;
   leadFieldRules: LeadFieldRule[];
   tz: string;
+  /** a unidade usa o sinal por Pix (`sinalDaUnidade`): só então o sandbox ganha `gerar_sinal_pix`, como em produção */
+  comSinal?: boolean;
 }) {
   const aplicar_tag = new DynamicStructuredTool({
     name: 'aplicar_tag',
@@ -262,6 +264,18 @@ function buildSandboxTools(opts: {
     },
   });
 
+  // Sofia 2.0 (sinal por Pix): em produção só existe na unidade com sinal e cria um link no Asaas; aqui devolve um link de exemplo, sem chamar o Asaas.
+  const gerar_sinal_pix = new DynamicStructuredTool({
+    name: 'gerar_sinal_pix',
+    description: 'Gera o Pix do sinal (link do Asaas) depois de agendar_consulta (sandbox: link de exemplo, nada é criado).',
+    schema: zod.object({ leadId: zod.number().int().positive().optional() }),
+    func: async ({ leadId }) => {
+      const result = '[SANDBOX] gerar_sinal_pix → Pix do sinal gerado. Envie ao paciente ESTE link, copiado exatamente: https://www.asaas.com/c/exemplo-sandbox — link de exemplo, nada foi criado.';
+      opts.onCall({ tool: 'gerar_sinal_pix', args: { leadId: leadId ?? null }, result });
+      return result;
+    },
+  });
+
   const remarcar_consulta = new DynamicStructuredTool({
     name: 'remarcar_consulta',
     description: 'Move a consulta do paciente para outro horário (sandbox: simulado).',
@@ -322,6 +336,7 @@ function buildSandboxTools(opts: {
     buscar_paciente,
     cadastrar_paciente,
     agendar_consulta,
+    ...(opts.comSinal ? [gerar_sinal_pix] : []),
     remarcar_consulta,
     cancelar_consulta,
     resumir_lead_para_sdr,
@@ -388,6 +403,7 @@ operador revisar.`;
   const tools = buildSandboxTools({
     leadFieldRules,
     tz: fusoDaUnidade(unit),
+    comSinal: sinalDaUnidade(unit) !== null,
     onCall: (a) => {
       actions.push(a);
       timeline.push({

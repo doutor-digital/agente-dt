@@ -26,6 +26,8 @@ test('asaasEscrever: só as rotas da lista saem da máquina; o resto (item 6: ba
     ['POST', '/subscriptions'], ['DELETE', '/customers/cus_1'], ['POST', '/payments/pay_1/remind'], ['POST', '/pix/qrCodes/pay'], ['POST', '/pix/addressKeys'],
     // método errado para uma rota da lista, caminho com lixo, query e barra dupla
     ['DELETE', '/transfers'], ['PUT', '/payments'], ['DELETE', '/payments/pay_1/refund'], ['PUT', '/transfers/tra_1'], ['POST', '/payments/pay_1'],
+    // link de pagamento: só o POST na coleção; editar, excluir, consultar e subrotas continuam fora
+    ['PUT', '/paymentLinks/plink_1'], ['DELETE', '/paymentLinks/plink_1'], ['POST', '/paymentLinks/plink_1'], ['POST', '/paymentLinks/'], ['PUT', '/paymentLinks'], ['POST', '/paymentLinks?x=1'],
     ['POST', '/customers/'], ['POST', '//payments'], ['POST', '/payments?x=1'], ['DELETE', '/payments/pay_1/../../webhooks'], ['DELETE', '/payments/pay 1'],
   ];
   for (const [metodo, caminho] of proibidas) {
@@ -36,6 +38,7 @@ test('asaasEscrever: só as rotas da lista saem da máquina; o resto (item 6: ba
   const liberadas: Array<['POST' | 'PUT' | 'DELETE', string]> = [
     ['POST', '/customers'], ['PUT', '/customers/cus_000005401844'], ['POST', '/payments'], ['PUT', '/payments/pay_1234567890'],
     ['DELETE', '/payments/pay_1234567890'], ['POST', '/payments/pay_1234567890/refund'], ['POST', '/transfers'],
+    ['POST', '/paymentLinks'],
   ];
   for (const [metodo, caminho] of liberadas) await asaasEscrever('c1', CHAVE, metodo, caminho, metodo === 'DELETE' ? undefined : { x: 1 }, fetcher);
   assert.equal(chamadas.length, liberadas.length);

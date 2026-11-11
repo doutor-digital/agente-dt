@@ -129,9 +129,11 @@ test('SONDA 3: rotas que não podem existir continuam fora (e o id exige o prefi
     ['PUT', '/customers/myAccount'], ['DELETE', '/payments/webhook'], ['POST', '/payments/receiveInCash'], ['POST', '/payments/pay_abcdef123/receiveInCash'],
     ['POST', '/payments/pay_abc/refund'], ['PUT', '/payments/cus_000005401844'], ['PUT', '/customers/pay_000005401844'], ['DELETE', '/payments/tra_000005401844'],
     ['POST', '/payments/abcdef123456/refund'], ['POST', '/accounts'], ['POST', '/myAccount/webhook'],
+    // link de pagamento: só o POST na coleção (o sinal da Sofia); nada de editar, excluir ou subrota
+    ['PUT', '/paymentLinks/abc123'], ['DELETE', '/paymentLinks/abc123'], ['POST', '/paymentLinks/abc123'], ['POST', '/paymentLinks?x=1'],
   ];
   for (const [m, c] of nao) assert.equal(rotaPermitida(m, c), false, `${m} ${c}`);
-  const sim: Array<[string, string]> = [['POST', '/payments/pay_abcdef123/refund'], ['DELETE', '/payments/pay_080225913252'], ['PUT', '/customers/cus_000005401844'], ['POST', '/transfers']];
+  const sim: Array<[string, string]> = [['POST', '/payments/pay_abcdef123/refund'], ['DELETE', '/payments/pay_080225913252'], ['PUT', '/customers/cus_000005401844'], ['POST', '/transfers'], ['POST', '/paymentLinks']];
   for (const [m, c] of sim) assert.equal(rotaPermitida(m, c), true, `${m} ${c}`);
 });
 
