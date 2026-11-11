@@ -142,7 +142,19 @@ import {
   publicAprendizadosPreviaHandler,
   publicAprendizadosSalvarHandler,
 } from '../controllers/aprendizados.controller.js';
-import { funilCaixasHandler, funilMoverHandler, funilQuadroHandler } from '../controllers/funil.controller.js';
+import {
+  funilCaixasHandler,
+  funilCamposHandler,
+  funilConversaHandler,
+  funilMensagemHandler,
+  funilMoverHandler,
+  funilNotaHandler,
+  funilNovoHandler,
+  funilQuadroHandler,
+  funilResponsavelHandler,
+  funilTarefaFeitaHandler,
+  funilTarefaHandler,
+} from '../controllers/funil.controller.js';
 import { centralEstadoHandler, centralGeralHandler, centralPessoaHandler } from '../controllers/central.controller.js';
 import { saudeIaHandler } from '../controllers/saude-ia.controller.js';
 import { listChangeLogHandler } from '../controllers/change-log.controller.js';
@@ -373,6 +385,14 @@ apiRouter.post('/public/central/pessoa', centralPessoaHandler);
 apiRouter.get('/public/funil/quadro', funilQuadroHandler);
 apiRouter.get('/public/funil/caixas', funilCaixasHandler);
 apiRouter.post('/public/funil/mover', funilMoverHandler);
+apiRouter.get('/public/funil/conversa/:id', funilConversaHandler);
+apiRouter.post('/public/funil/campos', funilCamposHandler);
+apiRouter.post('/public/funil/responsavel', funilResponsavelHandler);
+apiRouter.post('/public/funil/nota', funilNotaHandler);
+apiRouter.post('/public/funil/mensagem', funilMensagemHandler);
+apiRouter.post('/public/funil/tarefa', funilTarefaHandler);
+apiRouter.post('/public/funil/tarefa/:id/feita', funilTarefaFeitaHandler);
+apiRouter.post('/public/funil/novo', funilNovoHandler);
 
 // Widgets privados do Kommo (coluna do cartão) leem a agenda da franquia com chave por unidade (sem sessão).
 apiRouter.get('/public/widget/:slug/ping', widgetPingHandler);

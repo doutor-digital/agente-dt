@@ -89,7 +89,19 @@ export function precisaConfirmar(metodo: Metodo, caminho: string, corpo?: Record
   return null;
 }
 
-export async function chamar(ctx: ContextoChatwoot, metodo: Metodo, caminhoBruto: string, o: { corpo?: unknown; query?: Record<string, string> } = {}): Promise<unknown> {
+/** Login de uma pessoa no Chatwoot (devise_token_auth): com ele a chamada vale com as permissões DELA (caixas, papel), não as do token. */
+export interface SessaoDoChatwoot {
+  token: string;
+  client: string;
+  uid: string;
+}
+
+export async function chamar(
+  ctx: ContextoChatwoot,
+  metodo: Metodo,
+  caminhoBruto: string,
+  o: { corpo?: unknown; query?: Record<string, string>; sessao?: SessaoDoChatwoot | null } = {},
+): Promise<unknown> {
   const conta = ctx.conta;
   if (!conta) throw new ErroDeEntrada('o Chatwoot não está ligado neste conector');
   const caminho = caminhoSeguro(caminhoBruto);
@@ -97,7 +109,9 @@ export async function chamar(ctx: ContextoChatwoot, metodo: Metodo, caminhoBruto
   const url = `${conta.url}/api/v1/accounts/${conta.conta}${caminho ? `/${caminho}` : ''}${qs}`;
   const r = await ctx.fetch(url, {
     method: metodo,
-    headers: { api_access_token: conta.token, 'Content-Type': 'application/json', Accept: 'application/json' },
+    headers: o.sessao
+      ? { 'access-token': o.sessao.token, client: o.sessao.client, uid: o.sessao.uid, 'token-type': 'Bearer', 'Content-Type': 'application/json', Accept: 'application/json' }
+      : { api_access_token: conta.token, 'Content-Type': 'application/json', Accept: 'application/json' },
     body: metodo === 'GET' || metodo === 'DELETE' ? undefined : JSON.stringify(o.corpo ?? {}),
     signal: AbortSignal.timeout(60_000),
   });
@@ -111,7 +125,11 @@ export async function chamar(ctx: ContextoChatwoot, metodo: Metodo, caminhoBruto
   if (!r.ok) {
     const d = dados as { message?: unknown; error?: unknown; errors?: unknown } | null;
     const msg = d && typeof d === 'object' ? (d.message ?? d.error ?? d.errors ?? d) : d;
-    throw new Error(`Chatwoot ${r.status} em ${metodo} ${caminho || '(conta)'}: ${JSON.stringify(msg).slice(0, 400).split(conta.token).join('***')}`);
+    let txt = JSON.stringify(msg).slice(0, 400).split(conta.token).join('***');
+    if (o.sessao) txt = txt.split(o.sessao.token).join('***');
+    const erro = new Error(`Chatwoot ${r.status} em ${metodo} ${caminho || '(conta)'}: ${txt}`) as Error & { status?: number };
+    erro.status = r.status;
+    throw erro;
   }
   return dados ?? { ok: true };
 }
