@@ -54,10 +54,23 @@ export function tabelaSecreta(nome: string): boolean {
 }
 
 /**
- * Textos que, dentro de uma consulta, indicam leitura de um segredo guardado como LINHA de uma tabela genérica (ex.: o RH guarda os
- * convites de acesso, com o token do link, em `rh_docs` com col = 'acesso_convites'). Recusa qualquer texto que os contenha.
+ * Tabelas que se LEEM mas nunca se escrevem pelo conector: o registro e o backup das escritas (senão uma escrita apagaria a própria trilha, ou
+ * forjaria um "backup" para o desfazer reinserir linhas à mão), a auditoria do conector e o controle de migrações. Minúsculas.
  */
-export const TEXTOS_SECRETOS = ['acesso_convites'];
+export const TABELAS_SO_LEITURA = new Set<string>(['mcp_banco_alteracoes', 'mcp_auditoria', '_prisma_migrations']);
+
+/**
+ * Segredo guardado como LINHA de uma tabela genérica (o RH guarda os convites de acesso, com o token do link, em `rh_docs` com col = 'acesso_convites'):
+ * a tabela é lida por um invólucro que já tira essas linhas, então nenhum truque de texto (concatenar, chr(), escape) chega nelas.
+ * `coluna` precisa existir na tabela; se não existir, a tabela fica fechada.
+ */
+export const LINHAS_FECHADAS: ReadonlyArray<{ tabela: string; coluna: string; valor: string }> = [{ tabela: 'rh_docs', coluna: 'col', valor: 'acesso_convites' }];
+
+/**
+ * Esquemas que o RH e o Descontratos (que vieram do Supabase) podem ter e que guardam segredo/credencial. A API do sistema só lê o `public`, mas o nome
+ * é recusado aqui também. Vale só para esses dois bancos (o do agente lista os esquemas de verdade).
+ */
+export const ESQUEMAS_DE_SISTEMA = ['auth', 'storage', 'extensions', 'realtime', 'vault', 'graphql', 'graphql_public', 'pgsodium', 'supabase_functions', 'supabase_migrations', 'cron', 'net', 'pgbouncer'];
 
 /** Funções que leem arquivo, executam texto como SQL, mexem em configuração/sequência ou saem do banco: proibidas em qualquer consulta e escrita. */
 export const FUNCOES_PROIBIDAS = /^(lo_\w*|dblink\w*|set_config|current_setting|nextval|setval|currval|lastval|query_to_xml\w*|table_to_xml\w*|cursor_to_xml|schema_to_xml\w*|database_to_xml\w*|ts_stat|txid_\w+|pg_\w+|\w+_fdw)$/;

@@ -1,6 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { sistemasChamar } from '../lib/integracoes/sistemas.js';
+import { fonteDoSistema } from './banco-pg.js';
+import { criarContextoSistemas } from './sistemas.js';
+import { CONFIG_FALSA, servidorAdminFalso } from './sistemas-falso.js';
 import { criarCatalogo, type TabelaCat } from './banco-sql.js';
 import {
   confirmarEscrita,
@@ -66,6 +70,7 @@ function falso(r: Roteiro = {}, o: { escreve?: boolean; json?: boolean; lidas?: 
     id: 'agente',
     escreve: o.escreve ?? true,
     linhasEmJson: o.json ?? false,
+    cacheCatalogoMs: 0,
     catalogo: async () => CAT,
     ler: async (sql) => {
       leituras.push(sql);
@@ -315,4 +320,38 @@ test('desfazer: precisa de um registro bk-… e nada acontece se ele não existe
   await assert.rejects(prepararDesfazer(ctx, QUEM, { alteracao: 'qualquer coisa' }), /bk-/);
   await assert.rejects(prepararDesfazer(ctx, QUEM, { alteracao: 'bk-abc123-def' }), /não existe em mcp_banco_alteracoes/);
   await assert.rejects(prepararDesfazer(ctxCom({ rh: falso({}, { escreve: false }).fonte }), QUEM, { alteracao: 'bk-abc123-def', banco: 'rh' }), /sistemas_preparar_alteracao/);
+});
+
+// ------------------------------------------------------------------ RH e Descontratos pela API do sistema
+
+test('RH pela API do sistema: esquema vem do servidor; a consulta é embrulhada e leva o e-mail de quem pediu; escrever por SQL é recusado', async () => {
+  const srv = servidorAdminFalso({ maisTabelas: true, linhas: [{ id: 1 }] });
+  const sistemas = criarContextoSistemas(new Map([['hm-rh', { slug: 'hm-rh', nome: 'RH', fonte: { chamar: (m, c, op) => sistemasChamar(CONFIG_FALSA, m, c, op, srv.fetch) } }]]));
+  const ctx = criarContextoBanco(new Map([['rh', () => fonteDoSistema('rh', sistemas)]]));
+  const e = await esquemaBanco(ctx, { banco: 'rh' });
+  assert.ok(e.tabelas.some((t) => t.tabela === 'rh_funcionarios'));
+  const r = await consultarBanco(ctx, QUEM, { banco: 'rh', sql: 'select id from rh_funcionarios' });
+  assert.deepEqual(r.linhas, [{ id: 1 }]);
+  const c = srv.chamadas.find((x) => x.caminho === '/admin/v1/consulta')!;
+  assert.equal(c.corpo.sql, 'SELECT * FROM (\nselect id from rh_funcionarios\n) AS _q LIMIT 501');
+  assert.equal(c.quem, 'suzanne.mychelly1@gmail.com');
+  // esquemas de segredo que um sistema vindo do Supabase pode ter, e o que o parser fecha em qualquer banco
+  for (const sql of ['select * from auth.users', 'select * from vault.secrets', 'select * from storage.objects', 'delete from rh_funcionarios', "select * from pg_authid"]) {
+    await assert.rejects(consultarBanco(ctx, QUEM, { banco: 'rh', sql }), /./, sql);
+  }
+  assert.equal(srv.chamadas.filter((x) => x.caminho === '/admin/v1/consulta').length, 1, 'o que o parser recusa nem sai para o servidor');
+  await assert.rejects(prepararEscrita(ctx, QUEM, { banco: 'rh', sql: UPDATE, motivo: 'não deve' }), /sistemas_preparar_alteracao/);
+  assert.equal(srv.chamadas.filter((x) => x.caminho === '/admin/v1/preparar').length, 0);
+});
+
+test('RH sem conta carregada: erro claro, nada vaza', async () => {
+  const ctx = criarContextoBanco(new Map([['rh', () => fonteDoSistema('rh', criarContextoSistemas())]]));
+  await assert.rejects(consultarBanco(ctx, QUEM, { banco: 'rh', sql: 'select 1' }), /sistema novo|RH/);
+});
+
+test('RH: linha enorme vinda da API é cortada aqui (50 KB), não vira resposta de MBs', async () => {
+  const f = falso({}, { lidas: [{ id: 1, texto: 'x'.repeat(5_000_000) }, { id: 2, texto: 'ok' }] });
+  const r = await consultarBanco(ctxCom({ agente: f.fonte }), QUEM, { banco: 'agente', sql: 'select id, texto from conversations' });
+  assert.deepEqual(Object.keys((r.linhas as Array<Record<string, unknown>>)[0]!), ['_linha_cortada_por_tamanho']);
+  assert.deepEqual((r.linhas as unknown[])[1], { id: 2, texto: 'ok' });
 });

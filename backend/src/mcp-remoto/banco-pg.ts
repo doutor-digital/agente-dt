@@ -13,6 +13,7 @@
 import { PrismaClient } from '@prisma/client';
 import { ErroDeEntrada } from '../franquia-mcp/travas.js';
 import { criarCatalogo, type Catalogo, type TabelaCat } from './banco-sql.js';
+import { ESQUEMAS_DE_SISTEMA } from './banco-segredos.js';
 import type { FonteBanco, TxBanco } from './banco.js';
 import { resolverSistema, type ContextoSistemas } from './sistemas.js';
 
@@ -44,10 +45,19 @@ LEFT JOIN pg_index i ON i.indrelid = c.oid AND i.indisprimary
 WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm')
 ORDER BY c.relname, a.attnum`;
 
+/** quem é filha de quem por FK que apaga/zera junto (ON DELETE CASCADE, SET NULL, SET DEFAULT) */
+export const SQL_CASCATAS = `SELECT p.relname AS pai, f.relname AS filha
+FROM pg_constraint c
+JOIN pg_class p ON p.oid = c.confrelid
+JOIN pg_class f ON f.oid = c.conrelid
+JOIN pg_namespace n ON n.oid = p.relnamespace
+WHERE c.contype = 'f' AND c.confdeltype IN ('c', 'n', 'd') AND n.nspname = 'public'`;
+
 export function catalogoDeLinhas(
   colunas: Array<Record<string, unknown>>,
   esquemas: Array<Record<string, unknown>>,
   funcoes: Array<Record<string, unknown>>,
+  cascatas: Array<Record<string, unknown>> = [],
 ): Catalogo {
   const por = new Map<string, TabelaCat>();
   for (const l of colunas) {
@@ -60,6 +70,10 @@ export function catalogoDeLinhas(
     t.colunas.push(String(l.coluna));
     if (l.chave === true) t.chave.push(String(l.coluna));
   }
+  for (const c of cascatas) {
+    const pai = por.get(String(c.pai));
+    if (pai) pai.cascata = [...new Set([...(pai.cascata ?? []), String(c.filha)])];
+  }
   return criarCatalogo([...por.values()], esquemas.map((e) => String(e.nspname)), funcoes.map((f) => String(f.proname)));
 }
 
@@ -69,12 +83,10 @@ export function fonteComCliente(cliente: ClienteSql): FonteBanco {
     try {
       await cliente.$transaction(
         async (tx) => {
-          await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = ${TIMEOUT_MS}`);
-          await tx.$executeRawUnsafe('SET LOCAL lock_timeout = 5000');
-          await tx.$executeRawUnsafe('SET LOCAL search_path = public');
-          // texto comum nunca trata a barra como escape (o analisador conta com isso)
-          await tx.$executeRawUnsafe('SET LOCAL standard_conforming_strings = on');
-          if (o.leitura) await tx.$executeRawUnsafe('SET LOCAL transaction_read_only = on');
+          // uma ida só ao banco; `true` = vale só até o fim desta transação. standard_conforming_strings: texto comum nunca trata a barra como escape (o analisador conta com isso)
+          await tx.$queryRawUnsafe(
+            `SELECT set_config('statement_timeout', '${TIMEOUT_MS}', true), set_config('lock_timeout', '5000', true), set_config('search_path', 'public', true), set_config('standard_conforming_strings', 'on', true), set_config('transaction_read_only', '${o.leitura ? 'on' : 'off'}', true)`,
+          );
           resultado = await fn({
             consultar: (sql, ...params) => tx.$queryRawUnsafe<Array<Record<string, unknown>>>(sql, ...params),
             executar: (sql, ...params) => tx.$executeRawUnsafe(sql, ...params),
@@ -96,6 +108,7 @@ export function fonteComCliente(cliente: ClienteSql): FonteBanco {
     id: 'agente',
     escreve: true,
     linhasEmJson: true,
+    cacheCatalogoMs: 0, // o catálogo é lido de novo a cada chamada: tabela nova com coluna de segredo ganha o invólucro na hora
     ler: (sql) => leitura((tx) => tx.consultar(sql)),
     catalogo: () =>
       leitura(async (tx) =>
@@ -103,6 +116,7 @@ export function fonteComCliente(cliente: ClienteSql): FonteBanco {
           await tx.consultar(SQL_COLUNAS),
           await tx.consultar("SELECT nspname FROM pg_namespace WHERE nspname <> 'public'"),
           await tx.consultar("SELECT DISTINCT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public'"),
+          await tx.consultar(SQL_CASCATAS),
         ),
       ),
     // a escrita nunca é READ ONLY; `leitura` não é pedida de fora
@@ -139,12 +153,13 @@ export function fonteDoSistema(id: 'rh' | 'dsc', ctx: ContextoSistemas): FonteBa
     id,
     escreve: false,
     linhasEmJson: false,
+    cacheCatalogoMs: 60_000,
     async catalogo() {
       const r = (await conta().fonte.chamar('GET', '/admin/v1/esquema')) as { tabelas?: Array<{ nome?: unknown; colunas?: Array<{ nome?: unknown }>; view?: unknown; linhas?: unknown }>; funcoes?: Array<{ nome?: unknown }> };
       const tabelas: TabelaCat[] = (r.tabelas ?? []).flatMap((t) =>
         typeof t.nome === 'string' ? [{ nome: t.nome, colunas: (t.colunas ?? []).map((c) => String(c.nome)), chave: [], visao: t.view === true, linhas: typeof t.linhas === 'number' ? t.linhas : null }] : [],
       );
-      return criarCatalogo(tabelas, [], (r.funcoes ?? []).map((f) => String(f.nome)));
+      return criarCatalogo(tabelas, ESQUEMAS_DE_SISTEMA, (r.funcoes ?? []).map((f) => String(f.nome)));
     },
     async ler(sql, quem) {
       const r = (await conta().fonte.chamar('POST', '/admin/v1/consulta', { corpo: { sql }, quem })) as { linhas?: Array<Record<string, unknown>> };

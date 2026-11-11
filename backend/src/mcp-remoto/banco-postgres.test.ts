@@ -27,10 +27,12 @@ describe('banco_* no Postgres de verdade', { skip: !URL_TESTE }, () => {
 
   before(async () => {
     admin = new PrismaClient({ datasourceUrl: URL_TESTE });
-    for (const d of ['drop view if exists bt_visao', 'drop table if exists bt_unidades, bt_msgs, bt_sem_chave, mcp_banco_alteracoes, kommo_web_sessions', 'drop function if exists bt_fn()', 'drop schema if exists outro cascade']) await sql(d);
+    for (const d of ['drop view if exists bt_visao', 'drop table if exists bt_filha, bt_pai, bt_novo, bt_unidades, bt_msgs, bt_sem_chave, mcp_banco_alteracoes, kommo_web_sessions', 'drop function if exists bt_fn()', 'drop schema if exists outro cascade']) await sql(d);
     await sql("create table bt_unidades (id text primary key, nome text, openai_api_key text, n int, extra jsonb, criado timestamp default now())");
     await sql('create table bt_msgs (id serial primary key, texto text, valor numeric(12,2), quando timestamptz default now())');
     await sql('create table bt_sem_chave (a int)');
+    await sql('create table bt_pai (id int primary key, nome text)');
+    await sql('create table bt_filha (id int primary key, pai_id int references bt_pai(id) on delete cascade, nome text)');
     await sql('create table kommo_web_sessions (id text primary key, refresh_token text)');
     await sql('create view bt_visao as select id from bt_unidades');
     await sql("create function bt_fn() returns int language sql as 'select 1'");
@@ -49,7 +51,7 @@ describe('banco_* no Postgres de verdade', { skip: !URL_TESTE }, () => {
   });
 
   after(async () => {
-    for (const d of ['drop view if exists bt_visao', 'drop table if exists bt_unidades, bt_msgs, bt_sem_chave, mcp_banco_alteracoes, kommo_web_sessions', 'drop function if exists bt_fn()', 'drop schema if exists outro cascade']) await sql(d);
+    for (const d of ['drop view if exists bt_visao', 'drop table if exists bt_filha, bt_pai, bt_novo, bt_unidades, bt_msgs, bt_sem_chave, mcp_banco_alteracoes, kommo_web_sessions', 'drop function if exists bt_fn()', 'drop schema if exists outro cascade']) await sql(d);
     await admin.$disconnect();
   });
 
@@ -63,6 +65,8 @@ describe('banco_* no Postgres de verdade', { skip: !URL_TESTE }, () => {
     assert.equal(cat.tabelas.get('bt_visao')!.visao, true);
     assert.deepEqual(cat.tabelas.get('bt_sem_chave')!.chave, []);
     assert.ok(cat.funcoes.includes('bt_fn'));
+    assert.deepEqual(cat.tabelas.get('bt_pai')!.cascata, ['bt_filha']);
+    assert.equal(cat.tabelas.get('bt_filha')!.cascata, undefined);
     assert.ok(cat.esquemas.includes('outro'));
     assert.ok(!cat.tabelas.has('bt_x'), 'só o esquema public');
     const e = await esquemaBanco(ctx, { banco: 'agente', tabela: 'bt_' });
@@ -216,6 +220,33 @@ describe('banco_* no Postgres de verdade', { skip: !URL_TESTE }, () => {
   it('o banco ainda recusa o que o parser deixaria passar: violação de chave volta como erro e a tabela fica como estava', async () => {
     await assert.rejects(prepararEscrita(ctx, QUEM, { banco: 'agente', sql: "insert into bt_unidades (id, nome) values ('a', 'duplicada')", motivo: 'chave repetida' }), /\(23505\)|already exists/i);
     assert.equal((await ler("select nome from bt_unidades where id = 'a'"))[0]!.nome, 'Alfa');
+  });
+
+  it('apagar em tabela com FK em cascata é recusado (o backup não guarda as filhas); apagar a filha vale', async () => {
+    await sql("insert into bt_pai values (1, 'p')");
+    await sql("insert into bt_filha values (1, 1, 'f')");
+    await assert.rejects(prepararEscrita(ctx, QUEM, { banco: 'agente', sql: 'delete from bt_pai where id = 1', motivo: 'cascata de teste' }), /cascata/);
+    const p = await prepararEscrita(ctx, QUEM, { banco: 'agente', sql: 'delete from bt_filha where id = 1', motivo: 'apagar só a filha' });
+    await confirmarEscrita(ctx, QUEM, { confirmacao: p.confirmacao });
+    assert.equal((await ler('select count(*)::int as n from bt_pai'))[0]!.n, 1);
+    await sql('delete from bt_pai');
+  });
+
+  it('o registro e a auditoria do conector só se leem (nem a trilha nem o backup se forjam por aqui)', async () => {
+    for (const s of ["update mcp_banco_alteracoes set tipo = 'delete' where id = 'x'", "delete from mcp_banco_alteracoes where id = 'x'", "insert into mcp_banco_alteracoes (id, banco, usuario_id, usuario_email, tipo, tabela, sql_texto, motivo, linhas, chaves) values ('bk-forjado', 'agente', 'u', 'e', 'delete', 'bt_msgs', 'x', 'm', 1, '[]')"]) {
+      await assert.rejects(prepararEscrita(ctx, QUEM, { banco: 'agente', sql: s, motivo: 'forjar trilha' }), /só se lê/);
+    }
+    assert.equal((await consultarBanco(ctx, QUEM, { banco: 'agente', sql: 'select count(*) as n from mcp_banco_alteracoes' })).linhasDevolvidas, 1);
+  });
+
+  it('tabela criada agora, com coluna de segredo, já é lida sem ela (o mapa é relido a cada chamada)', async () => {
+    await sql("create table bt_novo (id text primary key, nome text, api_key text, \"refreshToken\" text)");
+    await sql("insert into bt_novo values ('1', 'n', 'sk-novo', 'rt-novo')");
+    const r = await consultarBanco(ctx, QUEM, { banco: 'agente', sql: 'select * from bt_novo' });
+    assert.deepEqual(r.colunas, ['id', 'nome']);
+    assert.ok(!JSON.stringify(r).includes('sk-novo') && !JSON.stringify(r).includes('rt-novo'));
+    await assert.rejects(consultarBanco(ctx, QUEM, { banco: 'agente', sql: 'select "refreshToken" from bt_novo' }), /segredo/);
+    await assert.rejects(prepararEscrita(ctx, QUEM, { banco: 'agente', sql: "update bt_novo set \"refreshToken\" = 'x' where id = '1'", motivo: 'camelCase' }), /segredo/);
   });
 
   it('DDL, tabela sem chave, view, segredo e esquema de fora ficam fechados também na escrita', async () => {

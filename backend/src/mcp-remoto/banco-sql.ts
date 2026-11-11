@@ -13,7 +13,7 @@
  * Estas travas são a primeira camada. A segunda é do banco: a leitura roda em transação READ ONLY com `statement_timeout` (banco-pg.ts).
  */
 import { ErroDeEntrada } from '../franquia-mcp/travas.js';
-import { colunaSecreta, FUNCOES_PG_LIBERADAS, FUNCOES_PROIBIDAS, tabelaSecreta, TEXTOS_SECRETOS } from './banco-segredos.js';
+import { colunaSecreta, FUNCOES_PG_LIBERADAS, FUNCOES_PROIBIDAS, LINHAS_FECHADAS, tabelaSecreta, TABELAS_SO_LEITURA } from './banco-segredos.js';
 
 export const MAX_CARACTERES_SQL = 20_000;
 export const MAX_LINHAS_LEITURA = 500;
@@ -30,6 +30,8 @@ export interface TabelaCat {
   chave: string[];
   visao: boolean;
   linhas?: number | null;
+  /** tabelas-filhas que o banco apaga/zera junto (FK com ON DELETE CASCADE/SET NULL/SET DEFAULT): apagar linha daqui mexeria nelas */
+  cascata?: string[];
 }
 
 export interface Catalogo {
@@ -43,8 +45,16 @@ export interface Catalogo {
 
 export const colunasBoas = (t: TabelaCat): string[] => t.colunas.filter((c) => !colunaSecreta(c));
 export const colunasOcultas = (t: TabelaCat): string[] => t.colunas.filter((c) => colunaSecreta(c));
-/** tabela inteira de segredo ou sem nenhuma coluna que se possa mostrar */
-export const tabelaFechada = (t: TabelaCat): boolean => tabelaSecreta(t.nome) || colunasBoas(t).length === 0;
+/** a regra que tira linhas de segredo desta tabela (ex.: rh_docs sem os convites de acesso), se houver E a coluna do filtro existir */
+export const linhaFechadaDe = (t: TabelaCat) => {
+  const r = LINHAS_FECHADAS.find((x) => x.tabela === t.nome.toLowerCase());
+  return r && t.colunas.some((c) => c.toLowerCase() === r.coluna) ? r : undefined;
+};
+/** tabela inteira de segredo, sem nenhuma coluna que se possa mostrar, ou com regra de linha que não dá para aplicar */
+export const tabelaFechada = (t: TabelaCat): boolean =>
+  tabelaSecreta(t.nome) || colunasBoas(t).length === 0 || (LINHAS_FECHADAS.some((x) => x.tabela === t.nome.toLowerCase()) && !linhaFechadaDe(t));
+/** lida por invólucro: tem coluna de segredo ou linhas de segredo */
+export const tabelaRestrita = (t: TabelaCat): boolean => colunasOcultas(t).length > 0 || linhaFechadaDe(t) !== undefined;
 
 export function criarCatalogo(tabelas: TabelaCat[], esquemas: string[] = [], funcoes: string[] = []): Catalogo {
   return {
@@ -204,9 +214,9 @@ function profundidades(toks: Token[]): number[] {
   const d: number[] = [];
   let n = 0;
   for (const t of toks) {
-    if (ehPonto(t, ')')) n--;
+    if (ehPonto(t, ')') || ehPonto(t, ']')) n--;
     d.push(n);
-    if (ehPonto(t, '(')) n++;
+    if (ehPonto(t, '(') || ehPonto(t, '[')) n++;
   }
   return d;
 }
@@ -222,11 +232,15 @@ function prepararComando(entrada: unknown): { sql: string; toks: Token[] } {
   if (pontos.length === 1) toks.pop();
   if (!toks.length) recusa('sql vazio');
   let nivel = 0;
+  let colchetes = 0;
   for (const t of toks) {
     if (ehPonto(t, '(')) nivel++;
     if (ehPonto(t, ')') && --nivel < 0) recusa('parênteses não batem: ")" sobrando');
+    if (ehPonto(t, '[')) colchetes++;
+    if (ehPonto(t, ']') && --colchetes < 0) recusa('colchetes não batem: "]" sobrando');
   }
   if (nivel !== 0) recusa('parênteses não batem: falta fechar "("');
+  if (colchetes !== 0) recusa('colchetes não batem: falta fechar "["');
   return { sql: entrada.slice(toks[0]!.ini, toks.at(-1)!.fim), toks };
 }
 
@@ -249,11 +263,7 @@ interface OpcoesInspecao {
 function inspecionar(toks: Token[], cat: Catalogo, o: OpcoesInspecao = {}): TabelaCat[] {
   const restritas = new Map<string, TabelaCat>();
   toks.forEach((t, i) => {
-    if (t.tipo === 'str') {
-      const texto = t.v.toLowerCase();
-      for (const s of TEXTOS_SECRETOS) if (texto.includes(s)) recusa(`o texto "${s}" aponta para um dado de segredo (convite de acesso): não é lido por aqui`);
-      return;
-    }
+    if (t.tipo === 'str') return;
     if (!ehNome(t)) return;
     const baixa = t.v.toLowerCase();
     const proximo = toks[i + 1];
@@ -265,11 +275,12 @@ function inspecionar(toks: Token[], cat: Catalogo, o: OpcoesInspecao = {}): Tabe
     if (FUNCOES_PROIBIDAS.test(baixa) && !FUNCOES_PG_LIBERADAS.has(baixa)) recusa(`a função/objeto "${t.v}" não é permitido (lê arquivo, executa texto como SQL, mexe em configuração/sequência ou sai do banco)`);
     if (ehPonto(proximo, '.') && cat.esquemas.includes(baixa)) recusa(`só o esquema public é acessível (recebi "${t.v}.")`);
     if (ehPonto(proximo, '(') && cat.funcoes.includes(baixa)) recusa(`"${t.v}" é uma função do banco: não é chamada por aqui`);
-    if (tabelaSecreta(baixa)) recusa(`"${t.v}" é tabela de segredo (chaves, tokens, sessões, OAuth): fechada para leitura e escrita`);
-    if (colunaSecreta(baixa)) recusa(`"${t.v}" é coluna de segredo (senha, hash, token, chave): fechada para leitura e escrita`);
+    // o nome original (camelCase de uma coluna criada sem @map) e o minúsculo: qualquer um dos dois que pareça segredo fecha
+    if (tabelaSecreta(t.v) || tabelaSecreta(baixa)) recusa(`"${t.v}" é tabela de segredo (chaves, tokens, sessões, OAuth): fechada para leitura e escrita`);
+    if (colunaSecreta(t.v) || colunaSecreta(baixa)) recusa(`"${t.v}" é coluna de segredo (senha, hash, token, chave): fechada para leitura e escrita`);
     const tab = cat.tabelas.get(baixa);
     if (tab && tabelaFechada(tab)) recusa(`a tabela ${tab.nome} é de segredo: fechada para leitura e escrita`);
-    if (tab && colunasOcultas(tab).length > 0 && colunasBoas(tab).length > 0) {
+    if (tab && tabelaRestrita(tab)) {
       if (ehPonto(toks[i - 1], '.')) recusa(`não qualifique "${t.v}" com o esquema (public.${t.v}): escreva só ${t.v}`);
       if (o.alvo !== undefined && i !== o.alvo) {
         recusa(`a tabela ${tab.nome} tem colunas de segredo; numa escrita ela só aparece como alvo, uma vez (sem subconsulta nem "${tab.nome}.coluna" no WHERE)`);
@@ -307,7 +318,11 @@ export const MAX_BYTES_LINHA = 50_000;
  */
 export function montarLeitura(a: LeituraAnalisada, limite: number, emJson = false): string {
   const cte = a.restritas
-    .map((t) => `${aspas(t.nome)} AS NOT MATERIALIZED (SELECT ${colunasBoas(t).map(aspas).join(', ')} FROM public.${aspas(t.nome)})`)
+    .map((t) => {
+      const f = linhaFechadaDe(t);
+      const onde = f ? ` WHERE ${aspas(t.colunas.find((c) => c.toLowerCase() === f.coluna)!)} IS DISTINCT FROM '${f.valor.replace(/'/g, "''")}'` : '';
+      return `${aspas(t.nome)} AS NOT MATERIALIZED (SELECT ${colunasBoas(t).map(aspas).join(', ')} FROM public.${aspas(t.nome)}${onde})`;
+    })
     .join(', ');
   const n = Math.trunc(limite);
   const corpo = emJson
@@ -341,6 +356,7 @@ function colunaReal(t: TabelaCat, tok: Token | undefined): string {
   if (!ehNome(tok)) return recusa('esperava o nome de uma coluna');
   const c = t.colunas.find((x) => x.toLowerCase() === tok.v.toLowerCase());
   if (!c) return recusa(`a coluna "${tok.v}" não existe em ${t.nome}`);
+  if (colunaSecreta(c)) return recusa(`"${c}" é coluna de segredo: fechada para leitura e escrita`);
   return c;
 }
 
@@ -371,6 +387,8 @@ export function analisarEscrita(entrada: unknown, cat: Catalogo): PlanoEscrita {
   if (ehPonto(toks[alvo + 1], '.')) recusa('não qualifique a tabela com o esquema: escreva só o nome');
   const tabela = acharTabela(cat, toks[alvo]);
   if (tabela.visao) recusa(`${tabela.nome} é uma view: não se escreve nela`);
+  if (TABELAS_SO_LEITURA.has(tabela.nome.toLowerCase())) recusa(`${tabela.nome} é registro/controle do próprio conector: só se lê, não se escreve`);
+  if (linhaFechadaDe(tabela)) recusa(`${tabela.nome} tem linhas de segredo que o conector não enxerga: não se escreve nela por aqui`);
   if (!tabela.chave.length) recusa(`${tabela.nome} não tem chave primária: sem ela não há como guardar o backup e desfazer, então não se escreve nela por aqui`);
   if (tabela.chave.some((c) => colunaSecreta(c))) recusa(`a chave primária de ${tabela.nome} é uma coluna de segredo: não se escreve nela por aqui`);
 
@@ -379,7 +397,7 @@ export function analisarEscrita(entrada: unknown, cat: Catalogo): PlanoEscrita {
 
   // nenhum FROM/USING/JOIN no nível de cima (só dentro de parênteses, em subconsulta de leitura)
   toks.forEach((t, i) => {
-    if (prof[i] === 0 && t.tipo === 'id' && ['from', 'using', 'join'].includes(baixo(t)) && !(verbo === 'delete' && i === 1)) {
+    if (prof[i] === 0 && t.tipo === 'id' && ['from', 'using', 'join'].includes(baixo(t)) && !(verbo === 'delete' && i === 1) && !(baixo(t) === 'from' && ehPalavra(toks[i - 1], 'distinct'))) {
       recusa(`${baixo(t).toUpperCase()} no nível de cima não é aceito: faça a ligação com uma subconsulta em (SELECT …) dentro do WHERE/SET`);
     }
   });
@@ -428,6 +446,7 @@ export function analisarEscrita(entrada: unknown, cat: Catalogo): PlanoEscrita {
   if (verbo === 'delete' && ondeIdx !== alvo + 1) recusa('DELETE FROM tabela WHERE …: sem apelido, USING nem outra coisa antes do WHERE');
   const condicao = sql.slice(toks[ondeIdx]!.fim - toks[0]!.ini);
   if (verbo === 'delete') {
+    if (tabela.cascata?.length) recusa(`apagar linha de ${tabela.nome} apagaria ou zeraria também linhas de ${tabela.cascata.join(', ')} (chave estrangeira em cascata), que o backup não guarda: não se apaga por aqui`);
     if (ocultas.length) recusa(`${tabela.nome} tem colunas de segredo (${ocultas.join(', ')}): o backup não as guarda, então apagar linha dela não se desfaz — não é feito por aqui`);
     return { tipo: 'delete', tabela, sql, condicao, colunas: [] };
   }
@@ -470,11 +489,16 @@ export function sqlExecutar(p: PlanoEscrita): string {
   return `${p.sql}\nRETURNING ${chaveTexto(p.tabela)}`;
 }
 
+/** ($1, $2), ($3, $4)… — um grupo por linha, um parâmetro por coluna da chave */
+function gruposDeChave(t: TabelaCat, linhas: number): string {
+  let n = 0;
+  return Array.from({ length: linhas }, () => `(${t.chave.map(() => `$${++n}`).join(', ')})`).join(', ');
+}
+
 /** As linhas pela chave (texto), com as colunas boas. Os parâmetros vêm achatados: [pk0 da linha 1, pk1 da linha 1, pk0 da linha 2…]. */
 export function sqlPorChave(t: TabelaCat, linhas: number, travar = false): string {
   const cols = t.chave.map((c) => `${aspas(c)}::text`).join(', ');
-  let n = 0;
-  const grupos = Array.from({ length: linhas }, () => `(${t.chave.map(() => `$${++n}`).join(', ')})`).join(', ');
+  const grupos = gruposDeChave(t, linhas);
   return `SELECT ${chaveTexto(t)}, to_jsonb(${aspas(t.nome)})::text AS "__linha" FROM ${origemBoa(t)} WHERE (${cols}) IN (${grupos})${travar ? ' FOR UPDATE' : ''}`;
 }
 
@@ -497,7 +521,6 @@ export function sqlReinserir(t: TabelaCat): string {
 /** Desfazer INSERT: apaga as linhas inseridas, pela chave (mesmos parâmetros achatados de sqlPorChave). */
 export function sqlApagarPorChave(t: TabelaCat, linhas: number): string {
   const cols = t.chave.map((c) => `${aspas(c)}::text`).join(', ');
-  let n = 0;
-  const grupos = Array.from({ length: linhas }, () => `(${t.chave.map(() => `$${++n}`).join(', ')})`).join(', ');
+  const grupos = gruposDeChave(t, linhas);
   return `DELETE FROM ${tabelaSql(t)} WHERE (${cols}) IN (${grupos}) RETURNING ${chaveTexto(t)}`;
 }

@@ -31,6 +31,11 @@ const CAT = criarCatalogo(
     t('so_segredo', ['id', 'token'], ['id']),
     t('v_resumo', ['id', 'total'], [], true),
     t('rh_docs', ['id', 'col', 'data']),
+    t('mcp_banco_alteracoes', ['id', 'tabela', 'tipo', 'antes', 'depois']),
+    t('mcp_auditoria', ['id', 'ferramenta', 'argumentos']),
+    { ...t('pai', ['id', 'nome']), cascata: ['filha'] },
+    t('filha', ['id', 'pai_id', 'nome']),
+    t('camel', ['id', 'nome', 'accessToken', 'sessionToken']),
   ],
   ['public', 'outro_esquema', 'rh'],
   ['minha_funcao'],
@@ -155,10 +160,27 @@ test('leitura: coluna de segredo — por nome, apelido, entre aspas e maiúscula
   assert.ok(ok('select sum(prompt_tokens), sum(total_tokens) from llm_calls'));
 });
 
-test('leitura: texto que aponta para convite de acesso (token guardado como linha)', () => {
-  nega("select * from rh_docs where col = 'acesso_convites'");
-  nega("select * from rh_docs where col = 'ACESSO_CONVITES'");
-  assert.ok(ok("select * from rh_docs where col = 'funcionarios'"));
+test('leitura: convite de acesso (token guardado como LINHA de rh_docs) sai por um invólucro de linha — nenhum truque de texto chega nele', () => {
+  for (const s of ["select * from rh_docs where col = 'acesso_convites'", "select * from rh_docs where col = 'acesso_' || 'convites'", "select * from rh_docs where col = E'acesso\\x5fconvites'", "select * from rh_docs where col = chr(97) || 'cesso_convites'", 'select * from rh_docs']) {
+    const a = ok(s);
+    assert.deepEqual(a.restritas.map((x) => x.nome), ['rh_docs']);
+    assert.match(montarLeitura(a, 10), /^WITH "rh_docs" AS NOT MATERIALIZED \(SELECT "id", "col", "data" FROM public\."rh_docs" WHERE "col" IS DISTINCT FROM 'acesso_convites'\) SELECT/);
+  }
+  nega('select * from public.rh_docs', /não qualifique/);
+  negaW("update rh_docs set data = 'x' where id = '1'", /linhas de segredo/);
+  // sem a coluna do filtro a tabela inteira fecha (não dá para garantir)
+  const semCol = criarCatalogo([t('rh_docs', ['id', 'data'])]);
+  assert.throws(() => analisarLeitura('select * from rh_docs', semCol), /segredo/);
+});
+
+test('coluna de segredo em camelCase (criada sem @map) fecha na leitura e na escrita', () => {
+  nega('select "accessToken" from camel');
+  nega('select "sessionToken" from camel');
+  negaW("update camel set \"accessToken\" = 'x' where id = '1'", /segredo/);
+  negaW("insert into camel (id, \"sessionToken\") values ('1', 'x')", /segredo/);
+  negaW("update camel set nome = 'x' where \"accessToken\" = 'y'", /segredo/);
+  assert.match(montarLeitura(ok('select * from camel'), 5), /"camel" AS NOT MATERIALIZED \(SELECT "id", "nome" FROM/);
+  assert.ok(okW("update camel set nome = 'x' where id = '1'"));
 });
 
 test('leitura: entradas inválidas', () => {
@@ -280,6 +302,32 @@ test('escrita: tabela com coluna de segredo só aparece como alvo, uma vez', () 
   negaW("delete from units where id = '1'", /segredo/);
   negaW("delete from users where id = '1'", /segredo/);
   assert.ok(okW("update conversations set status = (select max(id) from llm_calls) where id = '1'"));
+});
+
+test('escrita: o registro e a auditoria do próprio conector só se leem', () => {
+  for (const s of ["update mcp_banco_alteracoes set tipo = 'delete' where id = 'x'", "delete from mcp_banco_alteracoes where id = 'x'", "insert into mcp_banco_alteracoes (id, tabela, tipo) values ('bk-forjado', 'conversations', 'delete')", "update mcp_auditoria set ferramenta = 'x' where id = 'x'", "delete from mcp_auditoria where id = 'x'"]) negaW(s, /só se lê/);
+  assert.ok(ok('select * from mcp_banco_alteracoes order by 1 limit 5'));
+  assert.ok(ok('select * from mcp_auditoria limit 5'));
+});
+
+test('escrita: apagar em tabela com FK em cascata é recusado (o backup não guarda as filhas); atualizar e inserir seguem', () => {
+  negaW("delete from pai where id = '1'", /cascata.*filha|filha.*cascata/);
+  assert.ok(okW("delete from filha where id = '1'"));
+  assert.ok(okW("update pai set nome = 'x' where id = '1'"));
+  assert.ok(okW("insert into pai (id, nome) values ('1', 'x')"));
+});
+
+test('escrita: IS DISTINCT FROM e ARRAY[a, b] são aceitos; FROM no nível de cima continua recusado', () => {
+  assert.ok(okW("update conversations set status = 'x' where lead_id is distinct from '1'"));
+  assert.ok(okW("delete from conversations where lead_id IS NOT DISTINCT FROM '1'"));
+  assert.ok(okW("update conversations set phone = (array['a', 'b'])[1], status = 'z' where id = '1'"));
+  assert.equal(okW("update conversations set phone = (array['a', 'b'])[1], status = 'z' where id = '1'").colunas.join(), 'phone,status');
+  assert.ok(okW("update conversations set status = 'x' where id = any(array['1', '2'])"));
+  assert.ok(okW("update conversations set status = extract(day from now())::text where id = '1'"));
+  negaW("update conversations set status = 'x' from llm_calls where conversations.id = llm_calls.id", /FROM no nível de cima/);
+  negaW("update conversations set status = 'x' where id = '1' and lead_id is distinct from from llm_calls", /./);
+  assert.throws(() => analisarEscrita("update conversations set phone = array['a' where id = '1'", CAT), /colchetes|parênteses|SET/);
+  assert.throws(() => analisarEscrita("update conversations set phone = 'a'] where id = '1'", CAT), /colchetes/);
 });
 
 test('escrita: função perigosa e palavra de sessão dentro do valor', () => {

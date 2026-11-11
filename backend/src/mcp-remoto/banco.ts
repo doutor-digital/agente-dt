@@ -19,12 +19,13 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { Auditar } from '../franquia-mcp/ferramentas.js';
 import { ErroDeEntrada } from '../franquia-mcp/travas.js';
-import { colunaSecreta, tabelaSecreta } from './banco-segredos.js';
+import { colunaSecreta, tabelaSecreta, TABELAS_SO_LEITURA } from './banco-segredos.js';
 import {
   analisarEscrita,
   analisarLeitura,
   colunasBoas,
   colunasOcultas,
+  MAX_BYTES_LINHA,
   MAX_BYTES_RESPOSTA,
   MAX_LINHAS_ESCRITA,
   MAX_LINHAS_LEITURA,
@@ -49,7 +50,6 @@ export const BANCOS: Record<BancoId, string> = {
   dsc: 'Descontratos/Ficha',
 };
 export const VALIDADE_MS = 10 * 60_000;
-const CATALOGO_MS = 5 * 60_000;
 const MAX_BYTES_BACKUP = 5_000_000;
 const AMOSTRA = 20;
 
@@ -66,6 +66,8 @@ export interface FonteBanco {
   catalogo(): Promise<Catalogo>;
   /** true = o SELECT final devolve cada linha como um json em `_linha` (cortado no banco se grande); false = linhas comuns */
   linhasEmJson: boolean;
+  /** quanto tempo o mapa das tabelas vale antes de ser lido de novo (0 = sempre lê) */
+  cacheCatalogoMs: number;
   /** roda o SELECT final (já validado e com teto) em transação READ ONLY */
   ler(sql: string, quem: string): Promise<Array<Record<string, unknown>>>;
   /** `desfazer: true` = sempre ROLLBACK ao fim (a prévia). Só existe se `escreve`. */
@@ -158,7 +160,7 @@ function fonteDe(ctx: ContextoBanco, banco: BancoId): FonteBanco {
 
 async function catalogoDe(ctx: ContextoBanco, banco: BancoId, fonte: FonteBanco): Promise<Catalogo> {
   const g = ctx.catalogos.get(banco);
-  if (g && ctx.agora() - g.em < CATALOGO_MS) return g.cat;
+  if (g && fonte.cacheCatalogoMs > 0 && ctx.agora() - g.em < fonte.cacheCatalogoMs) return g.cat;
   const cat = await fonte.catalogo();
   ctx.catalogos.set(banco, { em: ctx.agora(), cat });
   return cat;
@@ -173,6 +175,12 @@ export function paraJson(v: unknown): string {
     if (x instanceof Uint8Array) return `\\x${Buffer.from(x).toString('hex')}`;
     return x;
   });
+}
+
+/** Linha que passa de `MAX_BYTES_LINHA` vira só o começo dela (o mesmo corte que o banco direto faz). */
+function cortarLinhaGrande(linha: Record<string, unknown>): Record<string, unknown> {
+  const t = paraJson(linha);
+  return Buffer.byteLength(t) > MAX_BYTES_LINHA ? { _linha_cortada_por_tamanho: t.slice(0, 1000) } : linha;
 }
 
 /** Corta a lista até caber em `MAX_BYTES_RESPOSTA`. */
@@ -225,7 +233,8 @@ export async function consultarBanco(ctx: ContextoBanco, quem: QuemBanco, a: { b
   const cat = await catalogoDe(ctx, banco, fonte);
   const analise = analisarLeitura(a.sql, cat);
   const recebido = await fonte.ler(montarLeitura(analise, MAX_LINHAS_LEITURA + 1, fonte.linhasEmJson), quem.email);
-  const bruto = fonte.linhasEmJson ? recebido.map((r) => r._linha as Record<string, unknown>) : recebido;
+  // banco direto: o corte de linha grande já foi feito no banco; pela API do sistema, é feito aqui (uma coluna gigante não pode estourar a memória)
+  const bruto = fonte.linhasEmJson ? recebido.map((r) => r._linha as Record<string, unknown>) : recebido.map(cortarLinhaGrande);
   const cortadoPorLinhas = bruto.length > MAX_LINHAS_LEITURA;
   const { linhas, cortado: cortadoPorBytes } = caberNaResposta(bruto.slice(0, MAX_LINHAS_LEITURA));
   const cortado = cortadoPorLinhas || cortadoPorBytes;
@@ -306,7 +315,7 @@ async function registrar(
   const arr = (ls?: LinhaComChave[]) => (ls ? `[${ls.map((l) => l.json).join(',')}]` : null);
   const antes = arr(r.antes);
   const depois = arr(r.depois);
-  if ((antes?.length ?? 0) + (depois?.length ?? 0) > MAX_BYTES_BACKUP) {
+  if (Buffer.byteLength(antes ?? '') + Buffer.byteLength(depois ?? '') > MAX_BYTES_BACKUP) {
     throw new ErroDeEntrada('as linhas são grandes demais para guardar o backup (mais de 5 MB): nada foi gravado. Reduza o número de linhas ou de colunas do pedido');
   }
   await tx.executar(SQL_REGISTRO, r.id, r.banco, r.quem.usuario, r.quem.email, r.tipo, r.tabela, r.sql.slice(0, 20_000), r.motivo, r.chaves.length, JSON.stringify(r.chaves), antes, depois, r.desfazDe ?? null);
@@ -528,7 +537,7 @@ function validarRegistro(r: Registro, banco: BancoId, cat: Catalogo): void {
   if (!['insert', 'update', 'delete'].includes(r.tipo)) throw new ErroDeEntrada(`o registro ${r.id} é um ${r.tipo}: só se desfaz INSERT, UPDATE ou DELETE`);
   if (r.desfeito) throw new ErroDeEntrada(`o registro ${r.id} já foi desfeito`);
   const t = cat.tabelas.get(r.tabela.toLowerCase());
-  if (!t || tabelaFechada(t) || t.chave.length === 0) throw new ErroDeEntrada(`a tabela ${r.tabela} não existe mais ou não aceita desfazer`);
+  if (!t || tabelaFechada(t) || t.chave.length === 0 || TABELAS_SO_LEITURA.has(t.nome.toLowerCase())) throw new ErroDeEntrada(`a tabela ${r.tabela} não existe mais ou não aceita desfazer`);
   if (t.chave.some((c) => colunaSecreta(c))) throw new ErroDeEntrada('a chave da tabela é coluna de segredo');
   const esperado = r.tipo === 'delete' ? r.antes.length : r.tipo === 'update' ? Math.min(r.antes.length, r.depois.length) : r.depois.length;
   if (r.chaves.length === 0 || esperado !== r.chaves.length) throw new ErroDeEntrada(`o registro ${r.id} está incompleto (chaves ${r.chaves.length}, linhas ${esperado}): não dá para desfazer sozinho`);
@@ -607,7 +616,7 @@ export function registrarBanco(server: McpServer, ctx: ContextoBanco, quem: Quem
       description:
         'Roda UM SELECT (ou WITH … SELECT) em um dos bancos (agente, rh, dsc), em transação só-leitura, com limite de 30 s, no máximo 500 linhas e 200 KB. ' +
         'Um comando só, sem ";" no meio. Recusa: tabelas e colunas de segredo (chaves, tokens, sessões, OAuth, senhas, hashes), funções que leem arquivo ou executam texto, ' +
-        'catálogo do sistema (pg_*, information_schema), outros esquemas, SET/DDL/escrita. Tabelas com coluna de segredo são lidas sem ela (select * funciona). ' +
+        'catálogo do sistema (pg_*, information_schema), outros esquemas, SET/DDL/escrita. Tabelas com coluna de segredo são lidas sem ela (select * funciona); linha muito grande (mais de 50 KB) vem cortada. ' +
         'Dado de paciente e de RH é sensível: peça só as colunas de que precisa. Para alterar use banco_preparar_escrita.',
       inputSchema: { banco: BANCO, sql: z.string().min(6).max(20_000).describe('um SELECT, ex.: select slug, name from units order by 1 limit 20') },
       annotations: { readOnlyHint: true, openWorldHint: false },
