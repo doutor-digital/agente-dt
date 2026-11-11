@@ -125,6 +125,8 @@ const schema = z.object({
   /** Resumo diário da qualidade da Sofia no Telegram do João (global, não por unidade): `seco` (padrão; só loga) | `ligado` | `desligado`. */
   RESUMO_DIARIO_IA: z.string().optional(),
   /** Menu de suporte no WhatsApp (global): `desligado` (padrão) | `seco` (registra o que responderia, não envia nem grava) | `ligado`. Ver `suporte-menu.ts`. */
+  // Central do João: chave da extensão do Chrome (cabeçalho X-Central-Chave, ≥ 32 caracteres). Sem ela, as rotas /api/public/central/* dão 404.
+  CENTRAL_EXTENSAO_CHAVE: z.string().optional(),
   SUPORTE_MENU: z.string().optional(),
   /** Segredo do webhook do menu (`?k=`). Sem ele o webhook recusa tudo. */
   SUPORTE_MENU_SEGREDO: z.string().optional(),

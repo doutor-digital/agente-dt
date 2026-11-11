@@ -9,6 +9,7 @@ import { dispararAnalise } from './suporte-analise-banco.js';
 import { AgrupadorDeAvisos, JANELA_ANALISE_MS, anexarComplemento } from './suporte-complemento.js';
 import { enfileirarSeVerificada } from './suporte-claude-banco.js';
 import { contarIgnoradaNaPausa, menuPausado } from './suporte-pausa-banco.js';
+import { pessoaPausada } from './central-pausa-banco.js';
 import {
   atualizarIndiceSeVelho,
   indiceAtual,
@@ -35,6 +36,7 @@ const DIA_MS = 24 * 60 * 60_000;
 export const armazemPrisma: Armazem = {
   pausado: () => menuPausado(),
   contarIgnoradaNaPausa,
+  pessoaPausada,
 
   async marcarVista(id) {
     // ON CONFLICT DO NOTHING: atômico e sem erro no log quando o Evolution entrega o mesmo webhook duas vezes

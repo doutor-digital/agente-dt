@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "Central do João — pausa do agente",
+  "version": "0.1.0",
+  "description": "Pausa o agente de chamados (63 9103-9464) para todo mundo ou só para a pessoa da conversa aberta no WhatsApp Web.",
+  "permissions": ["storage"],
+  "host_permissions": ["https://web.whatsapp.com/*", "https://agente-vps.doutordigitalconsultoria.com/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [{ "matches": ["https://web.whatsapp.com/*"], "js": ["content.js"], "run_at": "document_idle" }],
+  "options_page": "options.html",
+  "action": { "default_title": "Central do João", "default_popup": "options.html" }
+}

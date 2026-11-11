@@ -137,6 +137,7 @@ import {
 import { loginHandler, logoutHandler, meHandler } from '../controllers/auth.controller.js';
 import { playgroundRunHandler } from '../controllers/playground.controller.js';
 import { funilCaixasHandler, funilMoverHandler, funilQuadroHandler } from '../controllers/funil.controller.js';
+import { centralEstadoHandler, centralGeralHandler, centralPessoaHandler } from '../controllers/central.controller.js';
 import { saudeIaHandler } from '../controllers/saude-ia.controller.js';
 import { listChangeLogHandler } from '../controllers/change-log.controller.js';
 import {
@@ -355,6 +356,9 @@ apiRouter.post('/public/pausa/:slug/lead/:leadId', publicLeadPausarHandler);
 apiRouter.delete('/public/pausa/:slug/lead/:leadId', publicLeadRetomarHandler);
 
 // Funil de etapas do Chatwoot (Dashboard App): chave X-Funil-Chave derivada do token do Chatwoot (sem sessão).
+apiRouter.post('/public/central/estado', centralEstadoHandler);
+apiRouter.post('/public/central/geral', centralGeralHandler);
+apiRouter.post('/public/central/pessoa', centralPessoaHandler);
 apiRouter.get('/public/funil/quadro', funilQuadroHandler);
 apiRouter.get('/public/funil/caixas', funilCaixasHandler);
 apiRouter.post('/public/funil/mover', funilMoverHandler);
