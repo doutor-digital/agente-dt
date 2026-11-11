@@ -29,6 +29,34 @@ export function chaveConfere(tokenChatwoot: string | undefined, recebida: unknow
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+/**
+ * Login do próprio Chatwoot (o funil aberto pelo item "Funil" do menu, sem chave na URL): o script do menu lê o cookie de
+ * sessão do Chatwoot (`cw_d_session_info`, que o painel deles já guarda legível) e passa para a página do funil, que manda
+ * nos cabeçalhos X-CW-Token / X-CW-Client / X-CW-Uid. O servidor confere no `GET /api/v1/profile` do Chatwoot — quem não
+ * está logado lá não vê nada, e a nota da mudança leva o nome de quem está logado (não o que a página diz).
+ */
+export interface SessaoChatwoot {
+  token: string;
+  client: string;
+  uid: string;
+}
+
+export function sessaoDosCabecalhos(get: (nome: string) => string | undefined): SessaoChatwoot | null {
+  const token = get('x-cw-token')?.trim() ?? '';
+  const client = get('x-cw-client')?.trim() ?? '';
+  const uid = get('x-cw-uid')?.trim() ?? '';
+  const ok = (s: string, max: number) => s.length > 0 && s.length <= max && !/[\r\n]/.test(s);
+  return ok(token, 200) && ok(client, 200) && ok(uid, 320) ? { token, client, uid } : null;
+}
+
+/** O nome de quem está logado, se o perfil do Chatwoot tem acesso à conta do funil; senão null. */
+export function nomeSeTemConta(perfil: unknown, conta: number): string | null {
+  const p = perfil as { name?: unknown; accounts?: unknown } | null;
+  const contas = Array.isArray(p?.accounts) ? (p!.accounts as Array<{ id?: unknown }>) : [];
+  if (!contas.some((a) => Number(a?.id) === conta)) return null;
+  return texto(p?.name, 80) || 'alguém da equipe';
+}
+
 /** A lista de etapas do atributo `etapa` (definições de atributo da conversa); sem ele, a padrão. */
 export function etapasDoAtributo(definicoes: unknown): string[] {
   const lista = Array.isArray(definicoes) ? definicoes : [];
