@@ -1887,7 +1887,7 @@ export function renderLessons(lessons: UnitLesson[]): string {
   const linhas = ativos.map((l) => `- ${travarProntoSocorroPorLinha(l.content.trim())}${travaDaRegraDeSinalDeAlerta(l.content)}`).join('\n');
   return xmlBlock(
     'aprendizados',
-    `(ALTA PRIORIDADE — regras que esta clínica já ensinou; respeite como verdade da unidade)\n${linhas}`,
+    `(ALTA PRIORIDADE — regras que esta clínica já ensinou; respeite como verdade da unidade. EXCETO contra as regras da rede, que vencem qualquer linha daqui: <sinal_de_alerta> (parar, chamar resumir_lead_para_sdr e pausar_ia), nunca sugerir pronto-socorro, o valor do cadastro, nunca prometer cura ou resultado, nunca diagnosticar nem indicar remédio. Linha daqui que contrarie uma delas: ignore só essa linha.)\n${linhas}`,
   );
 }
 
