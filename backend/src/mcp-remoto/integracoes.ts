@@ -17,6 +17,8 @@ export interface FontesDeIntegracao {
   tramitacao?: Map<string, { nome: string }>;
   sistemas?: Map<string, { nome: string }>;
   zenfisio?: Map<string, { nome: string }>;
+  /** Ferramentas da empresa, não de uma unidade (ex. o Chatwoot do atendimento novo), só para quem tem acesso. */
+  gerais?: string[];
 }
 
 export function listarIntegracoes(f: FontesDeIntegracao) {
@@ -56,6 +58,7 @@ export function listarIntegracoes(f: FontesDeIntegracao) {
     comTramitacao: unidades.filter((u) => u.tramitacao).length,
     comSistemas: unidades.filter((u) => u.sistemas).length,
     comZenfisio: unidades.filter((u) => u.zenfisio).length,
+    ferramentasGerais: f.gerais ?? [],
     unidades,
     observacao: 'Anúncios (Meta Ads e Google Ads) ainda não estão neste conector.',
   };
