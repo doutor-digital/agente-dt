@@ -11,6 +11,7 @@
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { logger } from '../lib/logger.js';
+import { env } from '../lib/env.js';
 import { contaChatwootDoAmbiente, criarContextoChatwoot, chamar, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 import { createHash } from 'node:crypto';
 import { ATRIBUTO_ETAPA, MAX_PAGINAS, chaveConfere, etapasDoAtributo, montarQuadro, nomeSeTemConta, notaDaMudanca, sessaoDosCabecalhos, type SessaoChatwoot } from '../lib/funil-chatwoot.js';
@@ -36,46 +37,74 @@ function errou(ip: string): void {
   else t.n += 1;
 }
 
-// login do Chatwoot já conferido: hash da sessão → nome de quem está logado (5 min)
+// Login do Chatwoot já conferido: hash da sessão → nome (5 min). Consequência aceita: quem sai do Chatwoot (ou é tirado da
+// conta) ainda vê o funil por até 5 min nesta aba.
 const sessoes = new Map<string, { nome: string; ate: number }>();
 const SESSAO_VALE_MS = 5 * 60_000;
+// Teto GLOBAL de consultas ao /profile do Chatwoot (sessão ainda não conferida). Não é por ip: sem `trust proxy`, atrás do
+// Traefik, o ip é o mesmo para todo mundo. Sessão já conferida (no cache) nunca esbarra nele.
+const MAX_CONFERENCIAS_POR_MIN = 120;
+let conferencias = { n: 0, desde: 0 };
 
-async function quemEstaLogado(c: ContextoChatwoot, s: SessaoChatwoot): Promise<string | null> {
+type Conferencia = { nome: string } | 'invalida' | 'indisponivel' | 'excesso';
+
+async function quemEstaLogado(c: ContextoChatwoot, s: SessaoChatwoot): Promise<Conferencia> {
   const k = createHash('sha256').update(`${s.token}|${s.client}|${s.uid}`).digest('hex');
   const t = sessoes.get(k);
-  if (t && t.ate > Date.now()) return t.nome;
-  const r = await c
-    .fetch(`${c.conta!.url}/api/v1/profile`, {
+  if (t && t.ate > Date.now()) return { nome: t.nome };
+  if (Date.now() - conferencias.desde > 60_000) conferencias = { n: 0, desde: Date.now() };
+  if (++conferencias.n > MAX_CONFERENCIAS_POR_MIN) return 'excesso';
+  let r: globalThis.Response;
+  try {
+    r = await c.fetch(`${c.conta!.url}/api/v1/profile`, {
       headers: { 'access-token': s.token, client: s.client, uid: s.uid, 'token-type': 'Bearer', Accept: 'application/json' },
       signal: AbortSignal.timeout(15_000),
-    })
-    .catch(() => null);
-  if (!r?.ok) return null;
+    });
+  } catch {
+    return 'indisponivel';
+  }
+  // só "o Chatwoot recusou o login" é sessão inválida; queda, timeout e 5xx não são culpa de quem está usando
+  if (r.status === 401 || r.status === 403) return 'invalida';
+  if (!r.ok) return 'indisponivel';
   const nome = nomeSeTemConta(await r.json().catch(() => null), c.conta!.conta);
-  if (!nome) return null;
+  if (!nome) return 'invalida';
   if (sessoes.size > 500) sessoes.clear();
   sessoes.set(k, { nome, ate: Date.now() + SESSAO_VALE_MS });
-  return nome;
+  return { nome };
 }
 
-/** Quem pode: a chave do funil (quem = o que a página manda) ou o login do Chatwoot (quem = o nome do perfil). */
+/**
+ * Quem pode: a chave do funil (aba da conversa; quem = o que a página manda) ou o login do Chatwoot (item do menu; quem = o
+ * nome do perfil). O limitador de 30 erros vale só para CHAVE errada — sessão recusada não trava o funil de ninguém.
+ */
 async function autorizado(req: Request, res: Response): Promise<{ c: ContextoChatwoot; logado: string | null } | null> {
   const c = contexto();
   if (!c?.conta) {
     res.status(404).json({ error: 'funil desligado (Chatwoot não configurado)' });
     return null;
   }
-  const ip = req.ip ?? '?';
-  if (bloqueado(ip)) {
-    res.status(429).json({ error: 'muitas tentativas — aguarde 10 minutos' });
+  const chave = req.get('x-funil-chave');
+  if (chave) {
+    const ip = req.ip ?? '?';
+    if (bloqueado(ip)) {
+      res.status(429).json({ error: 'muitas tentativas — aguarde 10 minutos' });
+      return null;
+    }
+    if (chaveConfere(c.conta.token, chave)) return { c, logado: null };
+    errou(ip);
+    res.status(403).json({ error: 'chave do funil inválida' });
     return null;
   }
-  if (chaveConfere(c.conta.token, req.get('x-funil-chave'))) return { c, logado: null };
   const sessao = sessaoDosCabecalhos((n) => req.get(n));
-  const nome = sessao ? await quemEstaLogado(c, sessao) : null;
-  if (nome) return { c, logado: nome };
-  errou(ip);
-  res.status(403).json({ error: sessao ? 'entre no Chatwoot de novo (sessão expirada)' : 'chave do funil inválida' });
+  if (!sessao) {
+    res.status(403).json({ error: 'abra o funil pelo Chatwoot' });
+    return null;
+  }
+  const r = await quemEstaLogado(c, sessao);
+  if (typeof r === 'object') return { c, logado: r.nome };
+  if (r === 'invalida') res.status(403).json({ error: 'entre no Chatwoot de novo (sessão expirada)', sessao: 'invalida' });
+  else if (r === 'excesso') res.status(429).json({ error: 'muitos acessos agora — tente em 1 minuto' });
+  else res.status(502).json({ error: 'não consegui falar com o Chatwoot agora' });
   return null;
 }
 
@@ -205,7 +234,11 @@ header h1{font-size:16px;margin:0 8px 0 0}select,input{font:inherit;padding:6px 
   var $=function(id){return document.getElementById(id)};
   var ctx={conversa:null,agente:null,conta:null}, dados=null, arrastando=null;
   function msg(t){ $('msg').textContent=t||''; }
-  async function api(m,p,b){ var r=await fetch('/api/public/funil/'+p,{method:m,headers:cabecalhos(),body:b?JSON.stringify(b):undefined}); var j=await r.json().catch(function(){return {}}); if(!r.ok) throw new Error(j.error||('erro '+r.status)); return j; }
+  var timer=null, morta=null;
+  function pedirSessao(){ try{ window.parent.postMessage({event:'funil:pede-sessao'},ORIGEM_CW); }catch(e){} }
+  async function api(m,p,b){ var r=await fetch('/api/public/funil/'+p,{method:m,headers:cabecalhos(),body:b?JSON.stringify(b):undefined}); var j=await r.json().catch(function(){return {}});
+    if(r.status===403&&S&&j.sessao==='invalida'){ morta=S.token; S=null; if(timer){ clearInterval(timer); timer=null; } iniciado=false; pedirSessao(); }
+    if(!r.ok) throw new Error(j.error||('erro '+r.status)); return j; }
   function cabecalhos(){ var h={'Content-Type':'application/json'}; if(K) h['X-Funil-Chave']=K; else if(S){ h['X-CW-Token']=S.token; h['X-CW-Client']=S.client; h['X-CW-Uid']=S.uid; } return h; }
   function el(t,c,x){ var e=document.createElement(t); if(c) e.className=c; if(x!=null) e.textContent=x; return e; }
   function quando(s){ if(!s) return ''; var d=new Date(s*1000), h=(Date.now()-d)/36e5; return h<24? d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}) : d.toLocaleDateString('pt-BR'); }
@@ -257,7 +290,10 @@ header h1{font-size:16px;margin:0 8px 0 0}select,input{font:inherit;padding:6px 
   window.addEventListener('message',function(ev){
     try{ var d=typeof ev.data==='string'?JSON.parse(ev.data):ev.data;
       // item "Funil" do menu: o login do Chatwoot chega só do próprio Chatwoot
-      if(d&&d.event==='funil-sessao'&&ev.origin===ORIGEM_CW&&ev.source===window.parent){ S=d.sessao&&d.sessao.token?d.sessao:null; iniciar(); return; }
+      if(d&&d.event==='funil-sessao'&&ev.origin===ORIGEM_CW&&ev.source===window.parent){
+        var nova=d.sessao&&d.sessao.token?d.sessao:null;
+        if(nova&&nova.token===morta){ msg('Sua sessão do Chatwoot venceu: saia e entre de novo.'); return; }
+        S=nova; iniciar(); return; }
       if(!d||d.event!=='appContext') return;
       var x=d.data||{}; ctx.conversa=x.conversation&&x.conversation.id||null; ctx.agente=x.currentAgent&&x.currentAgent.name||null;
       ctx.conta=(x.conversation&&x.conversation.account_id)||(x.currentAgent&&x.currentAgent.account_id)||ctx.conta;
@@ -266,11 +302,13 @@ header h1{font-size:16px;margin:0 8px 0 0}select,input{font:inherit;padding:6px 
   function iniciar(){
     if(!K && !S){ carregar(); return; }
     if(iniciado){ carregar(); return; }
+    if($('caixa').options.length>1){ iniciado=true; carregar(); if(!timer) timer=setInterval(carregar,60000); return; }
     iniciado=true; msg('Carregando…');
     api('GET','caixas').then(function(l){ l.forEach(function(c){ var o=el('option',null,c.nome); o.value=c.id; $('caixa').appendChild(o); }); }).catch(function(){});
-    carregar(); setInterval(carregar,60000);
+    carregar(); if(!timer) timer=setInterval(carregar,60000);
   }
-  if(MENU){ try{ window.parent.postMessage({event:'funil:pede-sessao'},ORIGEM_CW); }catch(e){} setTimeout(function(){ if(!S&&!K) carregar(); },4000); }
+  document.addEventListener('keydown',function(e){ if(MENU&&e.key==='Escape'){ try{ window.parent.postMessage({event:'funil:fechar'},ORIGEM_CW); }catch(x){} } });
+  if(MENU){ pedirSessao(); setTimeout(function(){ if(!S&&!K) carregar(); },4000); }
   else { try{ window.parent.postMessage('chatwoot-dashboard-app:fetch-info','*'); }catch(e){} iniciar(); }
 })();
 </script></body></html>`;
@@ -282,18 +320,24 @@ header h1{font-size:16px;margin:0 8px 0 0}select,input{font:inherit;padding:6px 
  * tela. Passa ao quadro só o login de quem já está logado no Chatwoot (o cookie da sessão dele), e só para este servidor.
  * Se um dia o Chatwoot mudar o menu e o item não achar lugar, aparece um botão "Funil" no canto (nada quebra).
  */
-export function menuFunilHandler(req: Request, res: Response): void {
+export function menuFunilHandler(_req: Request, res: Response): void {
   const c = contexto();
   if (!c?.conta) {
     res.status(404).type('application/javascript').send('/* funil desligado */');
     return;
   }
-  const host = String(req.get('host') ?? '').replace(/[^a-z0-9.:-]/gi, '');
+  // endereço FIXO (o menu entrega a sessão do Chatwoot só para ele): do .env, nunca do cabeçalho Host do pedido
+  let agente = 'https://agente-vps.doutordigitalconsultoria.com';
+  try {
+    if (env.MCP_URL_PUBLICA) agente = new URL(env.MCP_URL_PUBLICA).origin;
+  } catch {
+    /* fica o padrão */
+  }
   res
     .type('application/javascript')
     .set('Cache-Control', 'public, max-age=300')
     .set('Cross-Origin-Resource-Policy', 'cross-origin')
-    .send(MENU_JS.replace('__AGENTE__', JSON.stringify(`https://${host}`)));
+    .send(MENU_JS.replace('__AGENTE__', JSON.stringify(agente)));
 }
 
 const MENU_JS = `(function(){
@@ -303,7 +347,8 @@ const MENU_JS = `(function(){
     var m = document.cookie.match(/(?:^|; )cw_d_session_info=([^;]*)/); if (!m) return null;
     try { var j = JSON.parse(decodeURIComponent(m[1])); return j['access-token'] && j.client && j.uid ? { token: j['access-token'], client: j.client, uid: j.uid } : null; } catch (e) { return null; }
   }
-  function fechar(){ if (cam) cam.style.display = 'none'; }
+  // fechar REMOVE o quadro: nada fica consultando o Chatwoot escondido; reabrir pede o login de novo
+  function fechar(){ if (cam) { cam.remove(); cam = null; fr = null; } }
   function abrir(ev){
     if (ev) { ev.preventDefault(); ev.stopPropagation(); }
     if (!cam) {
@@ -323,7 +368,9 @@ const MENU_JS = `(function(){
   document.addEventListener('keydown', function(e){ if (e.key === 'Escape') fechar(); });
   window.addEventListener('message', function(ev){
     if (ev.origin !== AGENTE || !fr || ev.source !== fr.contentWindow) return;
-    var d = ev.data; if (d && d.event === 'funil:pede-sessao') fr.contentWindow.postMessage({ event: 'funil-sessao', sessao: sessao() }, AGENTE);
+    var d = ev.data;
+    if (d && d.event === 'funil:pede-sessao') fr.contentWindow.postMessage({ event: 'funil-sessao', sessao: sessao() }, AGENTE);
+    else if (d && d.event === 'funil:fechar') fechar();
   });
   function trocarTexto(no){
     var w = document.createTreeWalker(no, NodeFilter.SHOW_TEXT), t;
