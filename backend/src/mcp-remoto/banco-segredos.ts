@@ -1,0 +1,66 @@
+/**
+ * O que o conector NUNCA mostra nem altera nos bancos (`banco_*`): cofre de chaves, tokens, sessões, OAuth, senhas e hashes.
+ * A lista vale para leitura E escrita e é conferida contra o `schema.prisma` por teste (banco-segredos.test.ts): coluna nova
+ * que pareça segredo e não esteja classificada ali derruba o teste, em vez de vazar em silêncio.
+ *
+ * Duas camadas, de propósito:
+ *  1. TABELAS inteiras (nome na lista ou no padrão): não se lê nem se escreve; nem aparecem no esquema.
+ *  2. COLUNAS de segredo dentro de tabelas boas (ex.: `users.password_hash`, `units.openai_api_key`): o nome é recusado em qualquer
+ *     lugar da consulta e a tabela passa a ser lida por um invólucro que só tem as colunas boas (ver banco-sql.ts), de modo que
+ *     `select *` e `select row_to_json(u)` também não trazem o segredo.
+ */
+
+/** Tabelas do banco do próprio agente-dt que guardam segredo (credencial, sessão, OAuth). Minúsculas. */
+export const TABELAS_SECRETAS = new Set<string>([
+  'chaves_de_integracao', // cofre de chaves cifradas das integrações (Asaas, Convênia, Tiquetaque, sistemas…)
+  'mcp_oauth_clients', // clientes OAuth do conector
+  'mcp_oauth_codigos', // códigos de autorização (hash + code_challenge)
+  'mcp_oauth_tokens', // tokens de acesso do conector (hash)
+  'bling_conexoes', // client_secret + access/refresh token do Bling
+  'kommo_web_sessions', // sessão web do Kommo (cookie/refresh)
+  'kommo_chat_sessions', // token de chat do Kommo
+]);
+
+/** Padrão do NOME de tabela: sessão, OAuth, cofre, credencial, segredo — vale também nos bancos do RH e do Descontratos. */
+const PADRAO_TABELA = /(^|_)(oauth|sess(ao|oes|ion|ions)|cofre|credenciais?|credentials?|segredos?|secrets?)(_|$)/i;
+
+/** camelCase e maiúsculas viram snake_case minúsculo (`passwordHash` → `password_hash`) antes de comparar */
+function normalizar(nome: string): string {
+  return nome.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase();
+}
+
+/** Palavras que denunciam segredo mesmo coladas em outras (senhahash, apikeyx…). */
+const FORTES = /(password|passwd|senha|secret|apikey|api_key|cipher|cifrad|credential|private_key|access_key|admin_key|client_secret)/;
+/** Palavras ambíguas: só valem como palavra inteira entre `_` (token ≠ prompt_tokens, hash ≠ ... mas prompt_hash é liberado abaixo). */
+const INTEIRAS = /(^|_)(token|hash|salt|otp|refresh|cookie|jwt|signature|sessao|session)(_|$)/;
+
+/** Colunas que casam com o padrão mas NÃO são segredo (conferidas uma a uma). */
+export const COLUNAS_LIBERADAS = new Set<string>([
+  'prompt_hash', // hash do texto do prompt na avaliação da conversa: identifica versão, não abre nada
+]);
+
+/** Colunas de segredo por nome exato que o padrão acima não pegaria. Minúsculas. */
+export const COLUNAS_SECRETAS_EXTRAS = new Set<string>([]);
+
+export function colunaSecreta(nome: string): boolean {
+  const n = normalizar(nome);
+  if (COLUNAS_LIBERADAS.has(n)) return false;
+  return COLUNAS_SECRETAS_EXTRAS.has(n) || FORTES.test(n) || INTEIRAS.test(n);
+}
+
+export function tabelaSecreta(nome: string): boolean {
+  const n = normalizar(nome);
+  return TABELAS_SECRETAS.has(n) || PADRAO_TABELA.test(n);
+}
+
+/**
+ * Textos que, dentro de uma consulta, indicam leitura de um segredo guardado como LINHA de uma tabela genérica (ex.: o RH guarda os
+ * convites de acesso, com o token do link, em `rh_docs` com col = 'acesso_convites'). Recusa qualquer texto que os contenha.
+ */
+export const TEXTOS_SECRETOS = ['acesso_convites'];
+
+/** Funções que leem arquivo, executam texto como SQL, mexem em configuração/sequência ou saem do banco: proibidas em qualquer consulta e escrita. */
+export const FUNCOES_PROIBIDAS = /^(lo_\w*|dblink\w*|set_config|current_setting|nextval|setval|currval|lastval|query_to_xml\w*|table_to_xml\w*|cursor_to_xml|schema_to_xml\w*|database_to_xml\w*|ts_stat|txid_\w+|pg_\w+|\w+_fdw)$/;
+
+/** Funções do pg_ que são só aritmética/formatação e ficam liberadas. */
+export const FUNCOES_PG_LIBERADAS = new Set(['pg_typeof', 'pg_size_pretty']);
