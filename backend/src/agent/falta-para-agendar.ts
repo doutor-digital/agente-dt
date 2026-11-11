@@ -75,7 +75,15 @@ function jaAgendou(fatos: Fatos): boolean {
  */
 export function renderFaltaParaAgendar(
   fatos: Fatos | null | undefined,
-  opcoes: { semPedirNome?: boolean } = {},
+  opcoes: {
+    semPedirNome?: boolean;
+    /** Chave `sem-pergunta-de-alerta` (conversa-direta.ts): a lista não manda perguntar força/xixi/intestino. */
+    semPerguntaDeAlerta?: boolean;
+    /** Chave `nome-na-hora-de-marcar`: o nome sai da lista e é pedido junto da escolha do horário. */
+    nomeNaHoraDeMarcar?: boolean;
+    /** Chave `conduzir-direto`: a queixa basta — "há quanto tempo" sai da lista. */
+    conduzirDireto?: boolean;
+  } = {},
 ): string {
   const f = fatos ?? {};
   if (Object.keys(f).length === 0) return '';
@@ -83,15 +91,22 @@ export function renderFaltaParaAgendar(
 
   // Já pediu o nome 2 vezes (repeticao.ts): a lista não pode continuar mandando "pergunte como pode chamá-lo" a
   // cada turno — era isso que fazia a Sofia pedir o nome 3, 4, 5 vezes a quem ignorava a pergunta.
-  const faltando = CHECKLIST.filter((i) => !temAlgum(f, i.chaves)).filter(
-    (i) => !(opcoes.semPedirNome && i.rotulo === 'nome'),
-  );
+  const faltando = CHECKLIST.filter((i) => !temAlgum(f, i.chaves))
+    .filter((i) => !((opcoes.semPedirNome || opcoes.nomeNaHoraDeMarcar) && i.rotulo === 'nome'))
+    .filter((i) => !(opcoes.conduzirDireto && i.rotulo === 'tempo de dor'))
+    .map((i) =>
+      // Nome na hora de marcar (Timbó, 11/11/2026): o pedido do nome vai junto do horário — o cadastro precisa dele.
+      opcoes.nomeNaHoraDeMarcar && !temAlgum(f, ['nome']) && i.rotulo === 'horário escolhido'
+        ? { ...i, comoPedir: `${i.comoPedir}; quando ele escolher, peça o nome completo para deixar reservado` }
+        : i,
+    );
 
   // Sinal neurológico sem resposta registrada é o item mais urgente da lista:
   // é ele que separa "caso comum" de "emergência", e foi exatamente o que se
   // perdeu quando a paciente respondeu outra coisa e a IA seguiu em frente.
   const textoQueixa = CHECKLIST[1].chaves.map((k) => String(f[k] ?? '')).join(' ');
   const precisaTriagem =
+    !opcoes.semPerguntaDeAlerta &&
     (SINAL_NEUROLOGICO.test(textoQueixa) || FORMIGAMENTO_PERIGOSO.test(textoQueixa)) && !temAlgum(f, CHAVES_RED_FLAG);
 
   // Não há saída antecipada aqui de propósito: "já tem tudo e ainda não marcou"
@@ -114,6 +129,8 @@ export function renderFaltaParaAgendar(
   if (faltando.length > 0) {
     linhas.push('- Ainda falta, nesta ordem: ' + faltando.map((i) => i.rotulo).join(' → ') + '.');
     linhas.push(`- Próximo passo: ${faltando[0].comoPedir}. Uma pergunta por mensagem.`);
+  } else if (opcoes.nomeNaHoraDeMarcar && !temAlgum(f, ['nome'])) {
+    linhas.push('- Você já tem tudo para marcar, menos o nome: feche o horário e peça o nome completo para deixar reservado.');
   } else {
     linhas.push('- Você já tem tudo para marcar. Ofereça o horário e feche a reserva.');
   }
