@@ -85,6 +85,7 @@ import {
   nomeDaIaDH,
   type UnidadeDaRede,
 } from './rede-doutor-hernia.js';
+import { renderColegasDeRecepcao, unidadeNoTurno } from './nome-da-ia-por-horario.js';
 
 export interface BusinessHoursStatus {
   enabled: boolean;
@@ -285,6 +286,8 @@ function renderPersona(unit: Unit, rede: ReadonlyArray<UnidadeDaRede> = []): str
   } else {
     lines.push('Você é quem atende o WhatsApp da empresa, conversando com os clientes.');
   }
+  const colegas = renderColegasDeRecepcao(unit);
+  if (colegas) lines.push(colegas);
   lines.push(
     'NUNCA se apresente como "assistente virtual", "atendente virtual", "IA", "bot" ou "robô" — ' +
       'não diga isso na saudação nem em nenhuma outra mensagem por iniciativa própria. ' +
@@ -1911,6 +1914,8 @@ export interface ComposeInput {
   historico?: Fala[];
   /** A oferta do disparo de campanha que este paciente recebeu nos últimos dias (null = não recebeu). */
   ofertaDaCampanha?: OfertaVigente | null;
+  /** O instante do turno (só para o nome da IA por horário e testes); sem ele, agora. */
+  agora?: Date;
 }
 
 /**
@@ -2356,13 +2361,15 @@ export function escolherBase(
 
 export function composeFlattenedPrompt(input: ComposeInput): string {
   const {
-    unit,
+    unit: unitDoBanco,
     agentConfigPrompt,
     templates = [],
     actions = [],
     globalActions = [],
     leadFieldRules = [],
   } = input;
+  // O nome da IA pode mudar pelo horário (nome-da-ia-por-horario.ts): daqui em diante `unit` já é a unidade deste turno.
+  const unit = unidadeNoTurno(unitDoBanco, input.agora);
 
   const customBase = escolherBase(unit, agentConfigPrompt);
 
@@ -2416,7 +2423,7 @@ export function composeFlattenedPrompt(input: ComposeInput): string {
 
 export function composeSystemPrompt(input: ComposeInput): string {
   const {
-    unit,
+    unit: unitDoBanco,
     agentConfigPrompt,
     templates = [],
     flaggedExamples = [],
@@ -2433,6 +2440,8 @@ export function composeSystemPrompt(input: ComposeInput): string {
     estadoEtapa = null,
     outraSofia = [],
   } = input;
+  // O nome da IA pode mudar pelo horário (nome-da-ia-por-horario.ts): daqui em diante `unit` já é a unidade deste turno.
+  const unit = unidadeNoTurno(unitDoBanco, input.agora);
 
   const customBase = escolherBase(unit, agentConfigPrompt);
   const doHistorico = blocosDoHistorico(unit, input.historico);
@@ -2452,6 +2461,8 @@ export function composeSystemPrompt(input: ComposeInput): string {
     // Fato da rede e quem atende — valem também para quem escreveu o prompt inteiro à mão.
     const redeSingle = renderDoutorHernia(unit, input.redeDeUnidades);
     if (redeSingle) single.push(redeSingle);
+    const colegasSingle = renderColegasDeRecepcao(unit);
+    if (colegasSingle) single.push(colegasSingle);
     single.push(renderNaoPaciente());
     if (leadId && Number.isFinite(leadId) && leadId > 0) {
       single.push(renderConversationContext(leadId, telefone));
@@ -2588,7 +2599,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
   dynamic: string;
 } {
   const {
-    unit,
+    unit: unitDoBanco,
     agentConfigPrompt,
     templates = [],
     flaggedExamples = [],
@@ -2606,6 +2617,8 @@ export function composeSystemPromptParts(input: ComposeInput): {
     outraSofia = [],
     userMessage,
   } = input;
+  // O nome da IA pode mudar pelo horário (nome-da-ia-por-horario.ts): daqui em diante `unit` já é a unidade deste turno.
+  const unit = unidadeNoTurno(unitDoBanco, input.agora);
 
   const customBase = escolherBase(unit, agentConfigPrompt);
   const doHistorico = blocosDoHistorico(unit, input.historico);
@@ -2681,7 +2694,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
     const semAgenda = renderSemAgenda(unit);
     // As chaves de conversa curta (conversa-direta.ts) logo depois do prompt escrito à mão, para valerem mais que ele.
     return {
-      cacheable: [(customBase ?? '').trim(), renderConversaDiretaDaUnidade(unit), redeBlock, renderNaoPaciente()].filter(Boolean).join('\n\n'),
+      cacheable: [(customBase ?? '').trim(), renderConversaDiretaDaUnidade(unit), redeBlock, renderColegasDeRecepcao(unit), renderNaoPaciente()].filter(Boolean).join('\n\n'),
       dynamic: [...porUnidade, ...(semAgenda ? [semAgenda] : []), ...dynamic].join('\n\n'),
     };
   }
@@ -3024,10 +3037,11 @@ export function renderFatosDaUnidade(unit: Unit): string {
  * v1.68.0 porque recebe `<calendario>`; este caminho montava só persona + fatos + regras.
  */
 export function composeFollowUpSystemPrompt(
-  unit: Unit,
+  unitDoBanco: Unit,
   agora: Date = new Date(),
   rede: ReadonlyArray<UnidadeDaRede> = [],
 ): string {
+  const unit = unidadeNoTurno(unitDoBanco, agora);
   return [
     renderPersona(unit, rede),
     renderFatosDaUnidade(unit),
