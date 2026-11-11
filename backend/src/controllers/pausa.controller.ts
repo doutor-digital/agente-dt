@@ -89,7 +89,8 @@ async function retomar(unit: Unit, por: string | null): Promise<Unit> {
   return atualizada;
 }
 
-async function unidadePublica(req: Request, res: Response): Promise<Unit | null> {
+/** Confere slug + código da unidade, com a trava de tentativas por ip+unidade. Também usada pela página de aprendizados. */
+export async function unidadePublica(req: Request, res: Response): Promise<Unit | null> {
   const slug = String(req.params.slug ?? '');
   const codigo = (req.method === 'GET' ? req.query.codigo : (req.body as { codigo?: unknown })?.codigo) as unknown;
   const chave = `${req.ip}:${slug}`;
@@ -238,7 +239,7 @@ export async function paginaPausaHandler(req: Request, res: Response): Promise<v
   res.type('html').send(paginaHtml(slug, unit.name));
 }
 
-function esc(s: string): string {
+export function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);
 }
 

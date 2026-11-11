@@ -767,6 +767,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/agent/conversa-direta.ts',
   },
   {
+    id: 'aprendizados-pela-unidade',
+    chave: 'APRENDIZADOS_PELA_UNIDADE_SLUGS',
+    nome: 'A unidade ensina a Sofia pela página /aprendizados',
+    oQueFaz:
+      'Abre a página https://agente-vps.doutordigitalconsultoria.com/aprendizados/<slug> (código de 6 dígitos da unidade, o mesmo da pausa): quem está na clínica escreve "o que a Sofia deve fazer diferente", vê a resposta da Sofia antes e depois da regra em falas de exemplo (prévia, nada gravado) e salva. A regra entra no bloco de aprendizados do prompt daquela unidade, como as do painel. Cada regra salva ou desligada avisa o João. Pedido da dona de Timbó (11/11/2026).',
+    pegadinha:
+      'Desligada, a página e as rotas respondem "não encontrada". Travas que a unidade não desliga: regra que cita pronto-socorro ou sinal de alerta é recusada (só o João muda); promessa de cura, valor, desconto, parcelamento, diagnóstico e remédio são recusados, salvo frase que NEGA ("nunca prometa cura"). Até 25 regras ligadas da unidade e 10 prévias por dia (a prévia roda o modelo da clínica e custa). A unidade só desliga as regras que ela mesma escreveu; as do painel aparecem só para leitura. Não tem "só no papel".',
+    risco: 'comportamento',
+    temSeco: false,
+    quandoVazio: 'desligado',
+    arquivo: 'src/controllers/aprendizados.controller.ts',
+  },
+  {
     id: 'nome-na-hora-de-marcar',
     chave: 'NOME_NA_HORA_DE_MARCAR_SLUGS',
     nome: 'Sofia pede o nome só na hora de marcar',

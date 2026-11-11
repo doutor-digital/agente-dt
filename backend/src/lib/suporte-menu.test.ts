@@ -20,7 +20,8 @@ import {
   type LinhaDaConversa,
   type Recebida,
 } from './suporte-menu.js';
-import { CATEGORIAS, TEXTOS, type Abrir, type Estado, type UnidadeBasica } from './suporte-menu-maquina.js';
+import { anexarComplemento, type ComplementoGravado } from './suporte-complemento.js';
+import { CATEGORIAS, MAX_RELATO, TEXTOS, type Abrir, type Estado, type UnidadeBasica } from './suporte-menu-maquina.js';
 
 const TIMBO: UnidadeBasica = { slug: 'timbo', nome: 'Doutor Hérnia Timbó' };
 const AGORA = new Date('2026-11-07T15:00:00Z');
@@ -215,6 +216,13 @@ interface Mundo {
   reabertas: number[];
   pausado: boolean;
   ignoradasNaPausa: number;
+  /** relato de cada demanda (índice = protocolo - 1): a 1ª mensagem + os complementos anexados */
+  relatos: string[];
+  /** status de cada demanda no "banco" (por padrão 'aberta') */
+  statusDaDemanda: string;
+  /** simula a corrida: o texto entra, mas o estado da conversa não (outra mensagem passou na frente) */
+  estadoNaoGravado: boolean;
+  avisosDeComplemento: ComplementoGravado[];
 }
 
 function criarMundo(): Mundo {
@@ -232,6 +240,10 @@ function criarMundo(): Mundo {
     reabertas: [],
     pausado: false,
     ignoradasNaPausa: 0,
+    relatos: [],
+    statusDaDemanda: 'aberta',
+    estadoNaoGravado: false,
+    avisosDeComplemento: [],
     armazem: undefined as unknown as Armazem,
     efeitos: undefined as unknown as Efeitos,
   };
@@ -267,7 +279,7 @@ function criarMundo(): Mundo {
     async contarRespostasDesde(d) {
       return m.envios.filter((e) => e.em >= d).length;
     },
-    async salvar({ jid, versaoEsperada, estado, abrir: ab }) {
+    async salvar({ jid, versaoEsperada, estado, abrir: ab, complemento }) {
       conta('salvar');
       if (m.falhas.salvar) return { ok: false };
       const atual = m.conversas.get(jid);
@@ -277,10 +289,21 @@ function criarMundo(): Mundo {
       let est: Estado = estado;
       if (ab) {
         m.demandas.push(ab);
+        m.relatos.push(ab.relato);
         protocolo = m.demandas.length;
         est = { ...estado, protocolo };
       }
+      if (complemento && m.estadoNaoGravado) {
+        const anexo = anexarComplemento(m.relatos[complemento.protocolo - 1]!, complemento.texto, complemento.quando);
+        m.relatos[complemento.protocolo - 1] = anexo.relato;
+        return { ok: true, estadoNaoGravado: true, complementoGravado: { gravado: anexo.gravado, cortado: anexo.cortado, status: m.statusDaDemanda } };
+      }
       m.conversas.set(jid, { estado: est, versao: (atual?.versao ?? 0) + 1 });
+      if (complemento) {
+        const anexo = anexarComplemento(m.relatos[complemento.protocolo - 1]!, complemento.texto, complemento.quando);
+        m.relatos[complemento.protocolo - 1] = anexo.relato;
+        return { ok: true, complementoGravado: { gravado: anexo.gravado, cortado: anexo.cortado, status: m.statusDaDemanda } };
+      }
       return { ok: true, protocolo };
     },
     async registrarEnvio(jid, nova) {
@@ -317,6 +340,9 @@ function criarMundo(): Mundo {
     sorteio: () => 0.5,
     analisar: (p) => {
       m.analisadas.push(p);
+    },
+    avisarComplemento: (c) => {
+      m.avisosDeComplemento.push(c);
     },
   };
   return m;
@@ -605,4 +631,149 @@ test('LIGADO: depois de resolvida, "ainda não" reabre a demanda e avisa a equip
   assert.deepEqual(m.reabertas, [1]); // não reabriu de novo
   const d = await processarMensagem(recebida('valeu'), c, m.armazem, m.efeitos);
   assert.deepEqual(d, { acao: 'silencio' }); // um "valeu" não reabre o menu
+});
+
+
+// ─── a dúvida inteira (complementos) ────────────────────────────────────────────────────────────────────
+
+/** Leva a conversa até a demanda aberta (protocolo 1) com `relato` como 1ª mensagem. */
+async function abrirDemandaNoMundo(m: Mundo, relato: string): Promise<void> {
+  const c = config();
+  await processarMensagem(recebida('oi'), c, m.armazem, m.efeitos);
+  await processarMensagem(recebida('1'), c, m.armazem, m.efeitos);
+  await processarMensagem(recebida('1'), c, m.armazem, m.efeitos);
+  const d = await processarMensagem(recebida(relato), c, m.armazem, m.efeitos);
+  assert.equal(d.acao, 'respondida');
+}
+
+test('DÚVIDA INTEIRA: 2º e 3º balões da mesma dúvida (demanda aberta) são GRAVADOS no relato, sem resposta à pessoa e sem nova demanda', async () => {
+  const m = criarMundo();
+  await abrirDemandaNoMundo(m, 'A Sofia não respondeu a paciente Joana');
+  const respostasAntes = m.whatsapp.length;
+  const telegramAntes = m.telegram.length;
+
+  m.relogio.agora = new Date(AGORA.getTime() + 20_000);
+  const d2 = await processarMensagem(recebida('o cartão é https://x.kommo.com/leads/detail/123'), config(), m.armazem, m.efeitos);
+  m.relogio.agora = new Date(AGORA.getTime() + 40_000);
+  const d3 = await processarMensagem(recebida('ela mandou áudio às 14h'), config(), m.armazem, m.efeitos);
+
+  assert.equal(d2.acao, 'respondida');
+  assert.equal(d3.acao, 'respondida');
+  assert.equal(m.demandas.length, 1, 'continua UMA demanda');
+  assert.equal(m.whatsapp.length, respostasAntes, 'não responde à pessoa (o "em análise" só a cada 30 min)');
+  assert.equal(m.telegram.length, telegramAntes, 'o cartão não é reenviado: o aviso vai pelo agrupador');
+  assert.match(m.relatos[0]!, /^A Sofia não respondeu a paciente Joana\n\n— complemento \(07\/11 12:00\) —\no cartão é https:\/\/x\.kommo\.com\/leads\/detail\/123\n\n— complemento \(07\/11 12:00\) —\nela mandou áudio às 14h$/);
+  assert.deepEqual(m.avisosDeComplemento.map((a) => [a.protocolo, a.texto, a.cortado]), [
+    [1, 'o cartão é https://x.kommo.com/leads/detail/123', false],
+    [1, 'ela mandou áudio às 14h', false],
+  ]);
+  assert.deepEqual(m.analisadas, [1], 'complemento NÃO dispara análise nova');
+});
+
+test('DÚVIDA INTEIRA: relato de 2500 caracteres chega inteiro ao banco; o cartão do Telegram é cortado (e avisa), o banco não', async () => {
+  const m = criarMundo();
+  const longo = 'Sofia '.repeat(420).trim(); // ~2500
+  await abrirDemandaNoMundo(m, longo);
+  assert.equal(m.demandas[0]!.relato.length, longo.length);
+  assert.ok(longo.length > 1000);
+  const enorme = ('z'.repeat(99) + '\n').repeat(100); // 10 mil: passa do teto
+  const m2 = criarMundo();
+  await abrirDemandaNoMundo(m2, enorme);
+  assert.equal(m2.demandas[0]!.relato.length, MAX_RELATO);
+  assert.ok(m2.telegram[0]!.length <= 3500, `cartão com ${m2.telegram[0]!.length} caracteres passa do teto do Telegram`);
+  assert.match(m2.telegram[0]!, /texto inteiro está no painel/);
+});
+
+test('DÚVIDA INTEIRA: com o relato no teto, o complemento não é gravado e o aviso diz que passou do limite', async () => {
+  const m = criarMundo();
+  await abrirDemandaNoMundo(m, 'y'.repeat(MAX_RELATO - 10));
+  await processarMensagem(recebida('mais um balão que não cabe'), config(), m.armazem, m.efeitos);
+  assert.equal(m.relatos[0]!.length <= MAX_RELATO, true);
+  assert.equal(m.avisosDeComplemento.length, 1);
+  assert.equal(m.avisosDeComplemento[0]!.cortado, true);
+  assert.equal(m.avisosDeComplemento[0]!.texto, '');
+});
+
+test('DÚVIDA INTEIRA: complemento depois do "em análise" (30 min) responde o aviso E grava o texto', async () => {
+  const m = criarMundo();
+  await abrirDemandaNoMundo(m, 'problema no robô');
+  m.relogio.agora = new Date(AGORA.getTime() + 31 * 60_000);
+  const antes = m.whatsapp.length;
+  await processarMensagem(recebida('e agora?'), config(), m.armazem, m.efeitos);
+  assert.equal(m.whatsapp.length, antes + 1);
+  assert.equal(m.whatsapp.at(-1)!.texto, TEXTOS.emAnalise(1));
+  assert.match(m.relatos[0]!, /e agora\?$/);
+});
+
+test('DÚVIDA INTEIRA: PAUSADO não grava complemento (nem avisa); SECO também não', async () => {
+  const m = criarMundo();
+  await abrirDemandaNoMundo(m, 'problema no robô');
+  const relato = m.relatos[0];
+  m.pausado = true;
+  assert.deepEqual(await processarMensagem(recebida('mais um detalhe'), config(), m.armazem, m.efeitos), { acao: 'pausado' });
+  assert.equal(m.relatos[0], relato);
+  assert.equal(m.avisosDeComplemento.length, 0);
+  m.pausado = false;
+  const salvarAntes = m.chamadas.salvar;
+  const seco = await processarMensagem(recebida('mais um detalhe'), config({ modo: 'seco' }), m.armazem, m.efeitos);
+  assert.equal(seco.acao, 'seco');
+  assert.equal(m.chamadas.salvar, salvarAntes, 'seco não grava');
+  assert.equal(m.relatos[0], relato);
+  assert.equal(m.avisosDeComplemento.length, 0);
+});
+
+test('DÚVIDA INTEIRA: a mesma mensagem entregue duas vezes é anexada uma só; demanda já resolvida avisa isso', async () => {
+  const m = criarMundo();
+  await abrirDemandaNoMundo(m, 'problema no robô');
+  const msg = recebida('detalhe novo', { id: 'MESMA' });
+  await processarMensagem(msg, config(), m.armazem, m.efeitos);
+  assert.deepEqual(await processarMensagem(msg, config(), m.armazem, m.efeitos), { acao: 'repetida' });
+  assert.equal(m.relatos[0]!.split('detalhe novo').length - 1, 1);
+  m.statusDaDemanda = 'resolvida';
+  await processarMensagem(recebida('ainda com problema'), config(), m.armazem, m.efeitos);
+  assert.equal(m.avisosDeComplemento.at(-1)!.status, 'resolvida');
+});
+
+test('DÚVIDA INTEIRA: falha no aviso do complemento não derruba nada (o texto já está gravado)', async () => {
+  const m = criarMundo();
+  await abrirDemandaNoMundo(m, 'problema no robô');
+  m.efeitos.avisarComplemento = () => {
+    throw new Error('quebrou');
+  };
+  const d = await processarMensagem(recebida('detalhe'), config(), m.armazem, m.efeitos);
+  assert.equal(d.acao, 'respondida');
+  assert.match(m.relatos[0]!, /detalhe$/);
+});
+
+test('DÚVIDA INTEIRA: o teto de respostas por dia não impede de gravar o complemento (ele não gera resposta)', async () => {
+  const m = criarMundo();
+  await abrirDemandaNoMundo(m, 'problema no robô');
+  const d = await processarMensagem(recebida('detalhe'), config({ respostasPorDia: 1 }), m.armazem, m.efeitos);
+  assert.equal(d.acao, 'respondida');
+  assert.match(m.relatos[0]!, /detalhe$/);
+});
+
+test('DÚVIDA INTEIRA: teto de respostas estourado + complemento = grava o texto, não responde e não gasta o aviso "em análise"', async () => {
+  const m = criarMundo();
+  await abrirDemandaNoMundo(m, 'problema no robô');
+  m.relogio.agora = new Date(AGORA.getTime() + 31 * 60_000); // pediria o "em análise"
+  const antes = m.whatsapp.length;
+  const avisouAntes = m.conversas.get('556391039464@s.whatsapp.net')!.estado.avisouEm;
+  const d = await processarMensagem(recebida('detalhe importante'), config({ respostasPorDia: 1 }), m.armazem, m.efeitos);
+  assert.equal(d.acao, 'respondida');
+  assert.equal(m.whatsapp.length, antes, 'não respondeu');
+  assert.match(m.relatos[0]!, /detalhe importante$/);
+  assert.equal(m.conversas.get('556391039464@s.whatsapp.net')!.estado.avisouEm, avisouAntes, 'o "em análise" que não saiu pode sair na próxima');
+  assert.equal(m.avisosDeComplemento.length, 1);
+});
+
+test('DÚVIDA INTEIRA: perdeu a corrida da versão (texto entrou, estado não) = não manda o "em análise" em dobro', async () => {
+  const m = criarMundo();
+  await abrirDemandaNoMundo(m, 'problema no robô');
+  m.relogio.agora = new Date(AGORA.getTime() + 31 * 60_000);
+  const antes = m.whatsapp.length;
+  m.estadoNaoGravado = true;
+  await processarMensagem(recebida('detalhe'), config(), m.armazem, m.efeitos);
+  assert.equal(m.whatsapp.length, antes);
+  assert.match(m.relatos[0]!, /detalhe$/);
 });

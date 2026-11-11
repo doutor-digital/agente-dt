@@ -1872,13 +1872,22 @@ function renderKnowledge(entries: Array<KnowledgeBaseEntry & { score: number }>)
 ${lines.join('\n\n')}`);
 }
 
+/** Regras da prévia como `UnitLesson` em memória: entram no mesmo `renderLessons`, com a mesma trava, e nada vai ao banco. */
+function licoesDaPrevia(unitId: string, textos: string[] | undefined): UnitLesson[] {
+  const agora = new Date();
+  return (textos ?? [])
+    .filter((t) => t.trim())
+    .map((content, i) => ({ id: `previa-${i}`, unitId, content, source: 'previa', enabled: true, createdAt: agora, updatedAt: agora }));
+}
+
 export function renderLessons(lessons: UnitLesson[]): string {
   const ativos = lessons.filter((l) => l.enabled && l.content.trim());
   if (ativos.length === 0) return '';
-  const linhas = ativos.map((l) => `- ${travarProntoSocorroPorLinha(l.content.trim())}`).join('\n');
+  // a regra da clínica que fala de sinal de alerta ganha a ressalva da rede, como as regras de campo (achado do sênior no #265)
+  const linhas = ativos.map((l) => `- ${travarProntoSocorroPorLinha(l.content.trim())}${travaDaRegraDeSinalDeAlerta(l.content)}`).join('\n');
   return xmlBlock(
     'aprendizados',
-    `(ALTA PRIORIDADE — regras que esta clínica já ensinou; respeite como verdade da unidade)\n${linhas}`,
+    `(ALTA PRIORIDADE — regras que esta clínica já ensinou; respeite como verdade da unidade. EXCETO contra as regras da rede, que vencem qualquer linha daqui: <sinal_de_alerta> (parar, chamar resumir_lead_para_sdr e pausar_ia), nunca sugerir pronto-socorro, o valor do cadastro, nunca prometer cura ou resultado, nunca diagnosticar nem indicar remédio. Linha daqui que contrarie uma delas: ignore só essa linha.)\n${linhas}`,
   );
 }
 
@@ -2762,6 +2771,8 @@ export async function composeSystemPromptForUnit(input: {
   historico?: Fala[];
   /** Onde deixar a oferta que foi carregada: o grafo a lê de volta para o guardrail de preço, sem consultar duas vezes. */
   ofertaSaida?: { valor?: OfertaVigente | null };
+  /** Regras a mais SÓ nesta montagem, sem gravar: a prévia da página `/aprendizados/:slug` (aprendizados.controller.ts). */
+  aprendizadosExtras?: string[];
 }): Promise<string> {
   return composeSystemPrompt(await loadComposeInput(input));
 }
@@ -2776,6 +2787,8 @@ export async function composeSystemPromptPartsForUnit(input: {
   historico?: Fala[];
   /** Onde deixar a oferta que foi carregada: o grafo a lê de volta para o guardrail de preço, sem consultar duas vezes. */
   ofertaSaida?: { valor?: OfertaVigente | null };
+  /** Regras a mais SÓ nesta montagem, sem gravar: a prévia da página `/aprendizados/:slug` (aprendizados.controller.ts). */
+  aprendizadosExtras?: string[];
 }): Promise<{ cacheable: string; dynamic: string }> {
   return composeSystemPromptParts(await loadComposeInput(input));
 }
@@ -2790,6 +2803,8 @@ async function loadComposeInput(input: {
   historico?: Fala[];
   /** Onde deixar a oferta que foi carregada: o grafo a lê de volta para o guardrail de preço, sem consultar duas vezes. */
   ofertaSaida?: { valor?: OfertaVigente | null };
+  /** Regras a mais SÓ nesta montagem, sem gravar: a prévia da página `/aprendizados/:slug` (aprendizados.controller.ts). */
+  aprendizadosExtras?: string[];
 }): Promise<ComposeInput> {
   const shouldRunRag =
     !!input.userMessage &&
@@ -2871,10 +2886,12 @@ async function loadComposeInput(input: {
           return null;
         })
       : Promise.resolve(null),
-    listEnabledLessons(input.unit.id).catch((err) => {
-      logger.warn({ err, unitId: input.unit.id }, 'listEnabledLessons falhou — sem aprendizados no prompt');
-      return [];
-    }),
+    listEnabledLessons(input.unit.id)
+      .catch((err) => {
+        logger.warn({ err, unitId: input.unit.id }, 'listEnabledLessons falhou — sem aprendizados no prompt');
+        return [] as UnitLesson[];
+      })
+      .then((ls) => [...ls, ...licoesDaPrevia(input.unit.id, input.aprendizadosExtras)]),
     contatoDoLead,
     input.leadId
       ? conversaComOutraSofia(input.unit, input.leadId).catch((err) => {

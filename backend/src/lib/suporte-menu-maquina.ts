@@ -93,6 +93,11 @@ export interface Resultado {
   nova: boolean;
   /** a pessoa disse que AINDA NÃO funcionou: o chamador reabre esta demanda e avisa a equipe */
   reabrir?: number;
+  /**
+   * demanda já aberta e a pessoa continuou escrevendo (2º, 3º balão da MESMA dúvida): o chamador anexa o texto ao relato da
+   * demanda `protocolo` e avisa a equipe. Pode vir com `silencio: true` (não há o que responder à pessoa).
+   */
+  complementar?: { protocolo: number; texto: string };
 }
 
 export const MARCA_PROTOCOLO = '{protocolo}';
@@ -155,7 +160,8 @@ export const INTERVALO_AVISO_MIN = 30;
 export const MAX_TENTATIVAS = 2;
 
 const MAX_NOME = 120;
-const MAX_RELATO = 1000;
+/** Teto do relato INTEIRO (1ª mensagem + complementos), no banco. Era 1000 e cortava dúvida de 2500 caracteres. O Telegram tem teto menor: o corte lá é só no aviso. */
+export const MAX_RELATO = 8000;
 
 const MIN = 60_000;
 const H = 60 * MIN;
@@ -170,10 +176,16 @@ export function normalizar(texto: string): string {
     .trim();
 }
 
+/** Não termina o texto no meio de um emoji (par substituto cortado vira lixo no banco e no Telegram). */
+export function semMeioDePar(texto: string): string {
+  const c = texto.charCodeAt(texto.length - 1);
+  return c >= 0xd800 && c <= 0xdbff ? texto.slice(0, -1) : texto;
+}
+
 /** Tira caracteres de controle e corta: o texto do usuário vira DADO, nunca formatação. */
 export function limparTexto(texto: string, max: number): string {
   // eslint-disable-next-line no-control-regex
-  return String(texto ?? '').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').trim().slice(0, max);
+  return semMeioDePar(String(texto ?? '').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').trim().slice(0, max));
 }
 
 export function simOuNao(texto: string): 'sim' | 'nao' | null {
@@ -298,7 +310,8 @@ function abrirDemanda(e: Estado, categoria: number, relato: string, ctx: Context
 function invalida(e: Estado, entrada: Entrada, ctx: Contexto, repete: string): Resultado {
   const tentativas = e.tentativas + 1;
   if (tentativas >= MAX_TENTATIVAS) {
-    const relato = `(não respondeu o menu no passo "${e.passo}") ${relatoDaEntrada(entrada)}`.slice(0, MAX_RELATO);
+    const prefixado = `(não respondeu o menu no passo "${e.passo}") ${relatoDaEntrada(entrada)}`;
+    const relato = semMeioDePar(prefixado.slice(0, MAX_RELATO));
     const r = abrirDemanda(e, 7, relato, ctx);
     return { ...r, respostas: [TEXTOS.chamaPessoa] };
   }
@@ -351,13 +364,16 @@ export function avancar(estadoAtual: Estado, entrada: Entrada, ctx: Contexto): R
     }
 
     case 'aberta': {
+      // o que a pessoa escreve com a demanda aberta é a continuação da dúvida: vira complemento (nunca é descartado)
+      const complementar = e.protocolo != null ? { protocolo: e.protocolo, texto: relatoDaEntrada(entrada) } : undefined;
       const aviso = e.avisouEm ? agora.getTime() - e.avisouEm.getTime() : Infinity;
-      if (aviso < INTERVALO_AVISO_MIN * MIN || e.protocolo == null) return { estado: e, respostas: [], silencio: true, nova: false };
+      if (aviso < INTERVALO_AVISO_MIN * MIN || e.protocolo == null) return { estado: e, respostas: [], silencio: true, nova: false, complementar };
       return {
         estado: { ...e, avisouEm: agora },
         respostas: [TEXTOS.emAnalise(e.protocolo)],
         silencio: false,
         nova: false,
+        complementar,
       };
     }
 
