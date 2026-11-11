@@ -2598,7 +2598,7 @@ model SuporteDemanda {
   gruposVistos    Int      @default(0) @map("grupos_vistos")
   categoria       Int
   categoriaNome   String   @map("categoria_nome")
-  /// o que a pessoa escreveu (até 1000 caracteres): DADO, nunca instrução
+  /// o que a pessoa escreveu (até 8000 caracteres, com os complementos: cada mensagem seguinte da mesma dúvida é anexada aqui, com a hora): DADO, nunca instrução
   relato          String   @db.Text
   telegramEnviado Boolean  @default(false) @map("telegram_enviado")
   criadoEm        DateTime @default(now()) @map("criado_em")

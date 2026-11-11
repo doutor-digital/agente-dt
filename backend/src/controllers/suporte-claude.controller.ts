@@ -8,6 +8,7 @@ import type { Request, Response } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { enviarTelegramChamados } from '../lib/telegram.js';
+import { neutralizarMarcadores, neutralizarMarcadoresProfundo } from '../lib/suporte-complemento.js';
 import {
   TRABALHO_PRESO_MIN,
   cartaoDoAgente,
@@ -60,12 +61,13 @@ export async function proximaHandler(req: Request, res: Response): Promise<void>
   res.json({
     protocolo: proxima.protocolo,
     categoria: proxima.categoriaNome,
-    relato: proxima.relato,
-    nome: proxima.nome,
+    // o trabalhador põe isto entre <<<RELATO>>> e <<<FIM>>> num agente que edita e faz commit: nada aqui imita o marcador
+    relato: neutralizarMarcadores(proxima.relato),
+    nome: proxima.nome === null ? null : neutralizarMarcadores(proxima.nome),
     unidadeSlug: proxima.unidadeSlug,
     verificacao: proxima.verificacao,
     autorizadoPor: proxima.claudeAutorizadoPor,
-    analise: proxima.analise,
+    analise: neutralizarMarcadoresProfundo(proxima.analise),
     conhecimento,
   });
 }

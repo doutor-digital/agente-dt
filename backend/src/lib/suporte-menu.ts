@@ -22,10 +22,12 @@
  */
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { logger } from './logger.js';
+import type { ComplementoGravado } from './suporte-complemento.js';
 import {
   ESTADO_VAZIO,
   MARCA_PROTOCOLO,
   avancar,
+  semMeioDePar,
   type Abrir,
   type Entrada,
   type Estado,
@@ -188,6 +190,9 @@ function formatarNumero(jid: string): string {
   return jid.endsWith('@lid') || d.length < 10 ? '(número oculto pelo WhatsApp)' : `+${d}`;
 }
 
+/** Do relato, quanto cabe no cartão (o cabeçalho ocupa ~500 e o `enviarTelegram` corta em 3500). */
+export const MAX_RELATO_NO_CARTAO = 2600;
+
 /** Texto PURO (o `enviarTelegram` não usa parse_mode): nada do que a pessoa escreveu é formatação nem comando. */
 export function montarCartao(d: DadosDoCartao): string {
   const { abrir } = d;
@@ -200,7 +205,9 @@ export function montarCartao(d: DadosDoCartao): string {
   };
   const vistos =
     abrir.verificacao !== 'grupo' && abrir.gruposVistos > 1 ? `\n(o número aparece em ${abrir.gruposVistos} grupos de Marketing: provável consultoria ou agência)` : '';
-  const relato = abrir.relato.replace(/\s*\n+\s*/g, ' ⏎ ');
+  let relato = abrir.relato.replace(/\s*\n+\s*/g, ' ⏎ ');
+  // o banco guarda o relato inteiro (até MAX_RELATO); o Telegram aceita ~3500: o corte é só aqui, e diz que há mais
+  if (relato.length > MAX_RELATO_NO_CARTAO) relato = `${semMeioDePar(relato.slice(0, MAX_RELATO_NO_CARTAO))}… (cortado aqui: ${abrir.relato.length} caracteres no total, o texto inteiro está no painel)`;
   return [
     `🆘 Suporte #${d.protocolo} — ${abrir.categoriaNome}`,
     `Quem: ${quem} · ${unidade}`,
@@ -230,8 +237,24 @@ export interface Armazem {
   unidades(): Promise<readonly UnidadeBasica[]>;
   contarNovasDesde(desde: Date): Promise<number>;
   contarRespostasDesde(desde: Date): Promise<number>;
-  /** grava o novo estado (criando a conversa se `versaoEsperada` for null) e, se houver `abrir`, a demanda — numa transação só */
-  salvar(a: { jid: string; versaoEsperada: number | null; estado: Estado; abrir?: Abrir }): Promise<{ ok: boolean; protocolo?: number }>;
+  /**
+   * grava o novo estado (criando a conversa se `versaoEsperada` for null) e, se houver `abrir`, a demanda — numa transação só.
+   * Com `complemento`, anexa o texto ao relato da demanda (`anexarComplemento`, até o teto do relato) na MESMA transação e devolve
+   * o que ficou gravado; `complementoGravado` ausente = a demanda não existe mais (nada foi anexado).
+   */
+  salvar(a: {
+    jid: string;
+    versaoEsperada: number | null;
+    estado: Estado;
+    abrir?: Abrir;
+    complemento?: { protocolo: number; texto: string; quando: Date };
+  }): Promise<{
+    ok: boolean;
+    protocolo?: number;
+    complementoGravado?: { gravado: string; cortado: boolean; status: string };
+    /** true = o texto foi anexado mas o ESTADO da conversa não (outra mensagem passou na frente): não envie as respostas, quem passou já enviou */
+    estadoNaoGravado?: boolean;
+  }>;
   registrarEnvio(jid: string, nova: boolean): Promise<void>;
   marcarTelegram(protocolo: number, enviado: boolean): Promise<void>;
   /** a pessoa disse que ainda não funcionou: a demanda volta a "reaberta" */
@@ -250,6 +273,8 @@ export interface Efeitos {
   sorteio(): number;
   /** dispara (sem esperar) a análise automática da demanda recém-aberta (`suporte-analise.ts`) */
   analisar?(protocolo: number): void;
+  /** avisa a equipe (Telegram) do complemento já gravado, agrupando balões e com teto por demanda (`suporte-complemento.ts`); nunca lança */
+  avisarComplemento?(c: ComplementoGravado): void;
 }
 
 export type Desfecho =
@@ -260,7 +285,7 @@ export type Desfecho =
   | { acao: 'seco'; passoDepois: Passo; respostas: string[] }
   | { acao: 'limite'; qual: 'novas-por-hora' | 'respostas-por-dia' }
   | { acao: 'corrida' }
-  | { acao: 'respondida'; protocolo?: number; enviadas: number; telegram?: boolean };
+  | { acao: 'respondida'; protocolo?: number; enviadas: number; telegram?: boolean; complemento?: boolean };
 
 // avisa no Telegram, no máximo 1×/hora, que o teto estourou (para o João saber que está recusando gente)
 let ultimoAvisoDeLimite = 0;
@@ -299,13 +324,21 @@ export async function processarMensagem(msg: Recebida, config: ConfigSuporte, ar
 
   if (!ligado) {
     logger.info(
-      { numero: mascarar(msg.jid), passoAntes: estado.passo, passoDepois: r.estado.passo, abriria: Boolean(r.abrir), respostas: r.respostas },
+      {
+        numero: mascarar(msg.jid),
+        passoAntes: estado.passo,
+        passoDepois: r.estado.passo,
+        abriria: Boolean(r.abrir),
+        complementaria: r.complementar?.protocolo ?? null,
+        respostas: r.respostas,
+      },
       'suporte-menu (seco): responderia',
     );
     return { acao: 'seco', passoDepois: r.estado.passo, respostas: r.respostas };
   }
 
-  if (r.silencio || r.respostas.length === 0) return { acao: 'silencio' };
+  // sem resposta e sem complemento a gravar = nada a fazer; com complemento, segue (grava o texto mesmo sem responder à pessoa)
+  if ((r.silencio || r.respostas.length === 0) && !r.complementar) return { acao: 'silencio' };
 
   // tetos anti-ban: passou do limite, ignora (não avança o estado nem responde)
   const estourou = async (qual: 'novas-por-hora' | 'respostas-por-dia'): Promise<Desfecho> => {
@@ -317,9 +350,24 @@ export async function processarMensagem(msg: Recebida, config: ConfigSuporte, ar
     return { acao: 'limite', qual };
   };
   if (r.nova && (await armazem.contarNovasDesde(new Date(agora.getTime() - H))) >= config.novasPorHora) return estourou('novas-por-hora');
-  if ((await armazem.contarRespostasDesde(new Date(agora.getTime() - 24 * H))) + r.respostas.length > config.respostasPorDia) return estourou('respostas-por-dia');
+  // o teto de respostas protege o número de WhatsApp. Estourou e há complemento a gravar: grava o texto, só não responde
+  // (o estado também fica como estava, para a resposta que não saiu ser tentada de novo na próxima mensagem)
+  let respostas = r.respostas;
+  let estadoNovo = r.estado;
+  if (respostas.length > 0 && (await armazem.contarRespostasDesde(new Date(agora.getTime() - 24 * H))) + respostas.length > config.respostasPorDia) {
+    if (!r.complementar) return estourou('respostas-por-dia');
+    logger.warn({ numero: mascarar(msg.jid), qual: 'respostas-por-dia' }, 'suporte-menu: teto de respostas atingido — grava o complemento e não responde');
+    respostas = [];
+    estadoNovo = estado;
+  }
 
-  const salvo = await armazem.salvar({ jid: msg.jid, versaoEsperada: linha ? linha.versao : null, estado: r.estado, abrir: r.abrir });
+  const salvo = await armazem.salvar({
+    jid: msg.jid,
+    versaoEsperada: linha ? linha.versao : null,
+    estado: estadoNovo,
+    abrir: r.abrir,
+    complemento: r.complementar ? { ...r.complementar, quando: agora } : undefined,
+  });
   if (!salvo.ok) {
     logger.info({ numero: mascarar(msg.jid) }, 'suporte-menu: outra mensagem da mesma conversa passou na frente — ignorada');
     return { acao: 'corrida' };
@@ -327,7 +375,8 @@ export async function processarMensagem(msg: Recebida, config: ConfigSuporte, ar
 
   // responde, uma de cada vez; o 1º erro para tudo (sem retry cego)
   let enviadas = 0;
-  for (const [i, bruto] of r.respostas.entries()) {
+  if (salvo.estadoNaoGravado) respostas = [];
+  for (const [i, bruto] of respostas.entries()) {
     const textoFinal = salvo.protocolo != null ? bruto.split(MARCA_PROTOCOLO).join(String(salvo.protocolo)) : bruto;
     const ok = await ef.enviarWhatsApp(msg.jid, textoFinal);
     if (!ok) {
@@ -348,6 +397,16 @@ export async function processarMensagem(msg: Recebida, config: ConfigSuporte, ar
     ef.analisar?.(salvo.protocolo);
   }
 
+  // a continuação da dúvida já está gravada no relato: avisa a equipe (agrupado, com teto por demanda)
+  if (r.complementar && salvo.complementoGravado) {
+    const g = salvo.complementoGravado;
+    try {
+      ef.avisarComplemento?.({ protocolo: r.complementar.protocolo, nome: estado.nome, texto: g.gravado, cortado: g.cortado, status: g.status });
+    } catch (err) {
+      logger.warn({ protocolo: r.complementar.protocolo, err: String(err) }, 'suporte-menu: o aviso do complemento falhou — o texto está gravado');
+    }
+  }
+
   // "ainda não funcionou" depois de resolvida: reabre e avisa a equipe
   if (r.reabrir != null) {
     await armazem.reabrir(r.reabrir);
@@ -356,7 +415,7 @@ export async function processarMensagem(msg: Recebida, config: ConfigSuporte, ar
 
   if (ef.sorteio() < 0.01) await armazem.limparAntigos().catch((err: unknown) => logger.warn({ err: String(err) }, 'suporte-menu: limpeza falhou'));
 
-  return { acao: 'respondida', protocolo: salvo.protocolo, enviadas, telegram };
+  return { acao: 'respondida', protocolo: salvo.protocolo, enviadas, telegram, complemento: salvo.complementoGravado ? true : undefined };
 }
 
 // ─── envio pelo Evolution ───────────────────────────────────────────────────────────────────────────────
