@@ -106,7 +106,7 @@ export function travarProntoSocorroPorLinha(texto: string | null | undefined): s
 }
 
 /** Regra da unidade cuja CONDIÇÃO é sinal de alerta — costuma mandar transferir de cara. */
-const CONDICAO_SINAL_DE_ALERTA = /sina(?:l|is) de alerta|red ?flag|bandeira vermelha|emerg[eê]ncia|perda de for[cç]a|xixi|urina|fezes|esf[ií]ncter|\bsela\b|dorm[eê]ncia|febre|virilha|de repente/i;
+export const CONDICAO_SINAL_DE_ALERTA = /sina(?:l|is) de alerta|red ?flag|bandeira vermelha|emerg[eê]ncia|perda de for[cç]a|xixi|urina|fezes|esf[ií]ncter|\bsela\b|dorm[eê]ncia|febre|virilha|de repente/i;
 
 /**
  * Regra de SINAL DE ALERTA disparada por queda, pancada ou acidente sem dizer de quando (a "trauma/febre" cadastrada

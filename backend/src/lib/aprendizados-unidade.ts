@@ -9,9 +9,13 @@
  *  - promessa de cura ou de resultado;
  *  - preço, desconto, brinde, parcelamento (só a equipe muda o valor, no cadastro);
  *  - diagnóstico ou remédio.
- * Frase que NEGA o tema ("nunca prometa cura", "não dê desconto") passa: ela reforça a regra da rede.
- * Sinal de alerta e pronto-socorro não têm exceção nem com negação — qualquer ajuste ali é com o João.
+ * Frase que NEGA o tema com a negação COLADA ao termo ("nunca prometa cura", "não dê desconto") passa: reforça a regra da rede.
+ * Sinal de alerta (a lista da rede, `CONDICAO_SINAL_DE_ALERTA`, e o mesmo sinal dito de outro jeito), pronto-socorro/hospital,
+ * gratuidade e número de preço não têm exceção nem com negação — qualquer ajuste ali é com o João.
+ * É heurística (revisão do sênior no #265): na dúvida recusa, e o João recebe no Telegram cada regra salva para conferir.
  */
+
+import { CONDICAO_SINAL_DE_ALERTA, citaProntoSocorro } from '../agent/sinal-de-alerta.js';
 
 export const CHAVE_APRENDIZADOS = 'aprendizados-pela-unidade';
 export const SOURCE_DA_UNIDADE = 'unidade';
@@ -29,33 +33,72 @@ export const FALAS_DE_EXEMPLO = [
   'Vou ver com meu marido e depois te falo.',
 ] as const;
 
-const NEGACAO = /\b(?:n[aã]o|nunca|jamais|nem|evite|evitar|proibido)\b|\bsem (?:prometer|garantir|falar|dar|oferecer|indicar|citar)\b/i;
+/**
+ * Negação COLADA ao termo (até 2 palavras antes, sem vírgula no meio): "nunca prometa cura", "não dê desconto". Negação solta em
+ * outro ponto da frase não salva ("Dê 10% de desconto, nunca mais que isso"; "Se o paciente não fechar, ofereça desconto") —
+ * achado do sênior no #265. Na dúvida, recusa: o motivo explica e o ajuste vai para o João.
+ */
+const NEGACAO_COLADA = /(?:^|[\s(])(?:n[aã]o|nunca|jamais|nem|evite|evitar|proibido|sem)\s+(?:[^\s.,;:!?]+\s+){0,2}$/i;
+
+/** Algum trecho do texto casa `re` SEM negação colada antes. */
+function semNegacaoColada(texto: string, re: RegExp): boolean {
+  const g = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`);
+  for (const m of texto.matchAll(g)) {
+    const antes = texto.slice(Math.max(0, (m.index ?? 0) - 50), m.index);
+    if (!NEGACAO_COLADA.test(antes)) return true;
+  }
+  return false;
+}
+
+/** Além da lista da rede (`CONDICAO_SINAL_DE_ALERTA`): o que o paciente fala do mesmo sinal com outras palavras. */
+const ALERTA_DITO_DE_OUTRO_JEITO =
+  /formig|coc[oô]|evacua|perd\w* (?:de |a )?for[cç]a|for[cç]a (?:na|nas) pernas?|bexiga|intestino|incontin|reten[cç][aã]o|paralis|perdeu (?:o )?movimento|pernas? (?:fraca|falh|bambe|amolec|cede|n[aã]o (?:obedece|aguenta|firma))|falh(?:a|am|ou|aram|ando) (?:a |as )?pernas?|n[aã]o consegue (?:mais )?(?:andar|ficar em p[eé]|mexer|levantar)|controle (?:do|da|de) (?:xixi|urina|fezes|bexiga|intestino)/i;
+
+/** O mesmo pronto-socorro com outro nome (PS, posto, UBS). */
+const OUTRO_PRONTO_ATENDIMENTO = /posto de sa[uú]de|\bPS\b|\bUBS\b|\bpronto[\s-]*socorr/;
+
+const MANDA_AO_HOSPITAL = /\b(?:ir|v[aá]|vai|v[aã]o|procur\w*|lev\w*|mand\w*|encaminh\w*|indic\w*|orient\w*|sugir\w*|sugerir)\s+(?:[^\s.,;:!?]+\s+){0,2}hospita/i;
+
+/** Valor de graça ou "não cobra": sempre do cadastro, com ou sem negação. */
+const DE_GRACA = /sem custo|custo zero|n[aã]o (?:precisa )?pag|gr[aá]tis|gratuit|de gra[cç]a|cortesia|isent|n[aã]o cobr|sem cobrar|brinde|cupom/i;
+/** Número de preço: palavra de preço e número (dígitos ou por extenso) na mesma frase, sem ser hora/duração. */
+const PALAVRA_DE_PRECO = /consulta|valor|pre[cç]o|cust|cobr|pag|sai por|fica (?:em|por)|reais|r\$/i;
+const NUMERO_DE_PRECO =
+  /r\$\s*\d|\b\d{2,}(?:[.,]\d+)?\b(?!\s*(?:min|minutos|h\b|hs\b|horas?|dias?|semanas?|meses|anos?|km|metros|sess[oõ]es|vezes|x\b|pacientes))|\b(?:cem|cento|duzent|trezent|quatrocent|quinhent|seiscent|setecent|oitocent|novecent|vinte|trinta|quarenta|cinquenta|sessenta|setenta|oitenta|noventa|mil)\b/i;
+
+/** Regra que tenta desligar as outras (injeção de instrução). */
+const MANDA_IGNORAR = /ignor\w*\s+(?:[^\s.,;:!?]+\s+){0,2}(?:regras?|instru[cç]|orienta|anterior)|esque[cç]a\s+(?:as |todas |tudo)|desconsider|n[aã]o (?:siga|obede[cç]a|respeite) (?:as |a )?(?:regra|instru)/i;
 
 /** Temas que nem com negação passam: a regra da rede é fixa e o ajuste é com o João. */
-const SEMPRE_RECUSA: Array<{ re: RegExp; motivo: string }> = [
-  {
-    re: /pronto[\s-]*(socorro|atendimento)|\bUPA\b|\bSAMU\b|hospital/i,
-    motivo: 'Pronto-socorro e hospital são regra da rede: a Sofia nunca sugere. Esse ajuste é só com o João.',
-  },
-  {
-    re: /sina(?:l|is) de alerta|red ?flag|bandeira vermelha|emerg[eê]ncia|for[cç]a (?:na|nas) perna|perd\w* (?:de )?for[cç]a|xixi|urin|fezes|esf[ií]ncter|virilha|febre|\bsela\b/i,
-    motivo:
-      'Sinal de alerta (força na perna, xixi, fezes, virilha, febre, emergência) é regra da rede e protege o paciente. Esse ajuste é só com o João.',
-  },
-];
+function recusaSempre(texto: string): string | null {
+  if (citaProntoSocorro(texto) || MANDA_AO_HOSPITAL.test(texto) || OUTRO_PRONTO_ATENDIMENTO.test(texto)) {
+    return 'Pronto-socorro e hospital são regra da rede: a Sofia nunca sugere. Esse ajuste é só com o João.';
+  }
+  if (CONDICAO_SINAL_DE_ALERTA.test(texto) || ALERTA_DITO_DE_OUTRO_JEITO.test(texto)) {
+    return 'Sinal de alerta (força ou formigamento nas pernas, xixi, fezes, bexiga, virilha, febre, emergência) é regra da rede e protege o paciente. Esse ajuste é só com o João.';
+  }
+  if (MANDA_IGNORAR.test(texto)) return 'A regra não pode mandar a Sofia ignorar ou esquecer as outras regras. Escreva o que ela deve fazer.';
+  if (DE_GRACA.test(texto)) return 'Valor, desconto e gratuidade não mudam por aqui: a equipe muda no cadastro da unidade.';
+  for (const f of frases(texto)) {
+    if (PALAVRA_DE_PRECO.test(f) && NUMERO_DE_PRECO.test(f)) {
+      return 'Valor da consulta não muda por aqui: a equipe muda no cadastro da unidade. Escreva a regra sem número de preço.';
+    }
+  }
+  return null;
+}
 
-/** Temas que passam só quando a frase NEGA (reforça a regra da rede). */
+/** Temas que passam só com negação COLADA ("nunca prometa cura", "não dê desconto"). */
 const RECUSA_SEM_NEGACAO: Array<{ re: RegExp; motivo: string }> = [
   {
-    re: /\bcura\b|\bcurar\b|\bcuramos\b|\bsara[rm]?\b|garant\w* (?:de |a |o )?(?:cura|resultado|melhora)|resultado (?:garantido|certo)|100\s?%|resolve de vez|nunca mais (?:vai )?(?:sentir|doer)/i,
+    re: /\bcura\b|\bcurar\b|\bcuramos\b|\bcurado|garant\w* (?:de |a |o )?(?:cura|resultado|melhora)|resultado (?:garantido|certo)|100\s?%|nunca mais (?:vai )?(?:sentir|doer|ter dor)|(?:vai |v[aã]o |fica |ficar[aá]? )(?:ficar )?(?:bom|boa|curad|sem dor|novo em folha)|melhora (?:garantida|certa)|elimin\w* (?:a |sua |de vez a )?dor|(?:a dor|a h[eé]rnia|o problema|a doen[cç]a) (?:some|vai sumir|desaparece|acaba|vai acabar)|(?:resolve|trata|elimina|acaba com)\w*\s+(?:[^\s.,;:!?]+\s+){0,3}(?:definitiv|para sempre|de vez)/i,
     motivo: 'A Sofia não promete cura nem resultado. Escreva a regra sem prometer resultado.',
   },
   {
-    re: /R\$\s*\d|\d+\s*reais|descont|gr[aá]tis|gratuit|de gra[cç]a|cupom|promo[cç]|parcel|brinde|pre[cç]o (?:novo|diferente|menor)|baixar o (?:pre[cç]o|valor)/i,
+    re: /descont|promo[cç]|parcel|pre[cç]o (?:novo|diferente|menor|especial)|baixar o (?:pre[cç]o|valor)|abat/i,
     motivo: 'Valor, desconto e parcelamento não mudam por aqui: a equipe muda no cadastro da unidade.',
   },
   {
-    re: /diagnostiqu|diagnosticar|d[eê] (?:o |um )?diagn[oó]stico|receite|receitar|(?:indique|indicar|recomende|recomendar|sugira|sugerir|tome|tomar) (?:um |o |algum )?(?:rem[eé]dio|medicamento|anti)|anti-?inflamat|dipirona|relaxante muscular/i,
+    re: /(?:diga|fale|afirme|confirme|responda)\s+(?:[^\s.,;:!?]+\s+){0,3}(?:que )?(?:[eé]|tem|t[aá] com|est[aá] com)\s+(?:uma? )?(?:h[eé]rnia|ci[aá]tic|bico de papagaio|artrose|lombalgia|protus|abaulamento|estenose|escoliose|discopatia)|diagnostiqu|diagnosticar|d[eê] (?:o |um )?diagn[oó]stico|receit[ae]|receitar|(?:indique|indicar|recomende|recomendar|sugira|sugerir|tome|tomar|use|usar|aplique|passe|passar) (?:um |uma |o |a |algum |alguma )?(?:rem[eé]dio|medicamento|pomada|comprimido|inje[cç]|gel|anti|analg)|anti-?inflamat|analg[eé]sic|dipirona|novalgina|dorflex|ibuprofen|nimesulid|diclofenac|paracetamol|tylenol|torsilax|cetoprofen|naproxen|tramadol|cicloben|miosan|buscopan|neosaldina|predniso|dexametason|meloxicam|celecoxib|code[ií]na|morfina|pregabalin|gabapentin|amitriptilin|relaxante muscular/i,
     motivo: 'A Sofia não diagnostica nem indica remédio. Escreva a regra sem isso.',
   },
 ];
@@ -73,11 +116,13 @@ export function recusaDaRegra(textoBruto: string): string | null {
   const texto = textoBruto.trim();
   if (texto.length < MIN_CARACTERES) return `Escreva a regra com pelo menos ${MIN_CARACTERES} letras.`;
   if (texto.length > MAX_CARACTERES) return `Regra longa demais: até ${MAX_CARACTERES} letras. Divida em duas.`;
-  if (/<\/?[a-z_]+>/i.test(texto)) return 'Escreva só o texto da regra, sem marcações entre < >.';
-  for (const s of SEMPRE_RECUSA) if (s.re.test(texto)) return s.motivo;
+  // qualquer < ou > (a regra entra crua no prompt, entre marcações): "</ aprendizados>" e '<x a="1">' também
+  if (/[<>]/.test(texto)) return 'Escreva só o texto da regra, sem os sinais < e >.';
+  const sempre = recusaSempre(texto);
+  if (sempre) return sempre;
   for (const frase of frases(texto)) {
     for (const s of RECUSA_SEM_NEGACAO) {
-      if (s.re.test(frase) && !NEGACAO.test(frase)) return s.motivo;
+      if (semNegacaoColada(frase, s.re)) return s.motivo;
     }
   }
   return null;
@@ -111,6 +156,12 @@ export function cabePrevia(slug: string, tz: string, agora: Date = new Date()): 
   if (p.n >= MAX_PREVIAS_POR_DIA) return false;
   p.n += 1;
   return true;
+}
+
+/** Devolve a prévia que não chegou a mostrar nada (modelo falhou ou passou do prazo): erro nosso não gasta a cota dela. */
+export function devolverPrevia(slug: string, tz: string, agora: Date = new Date()): void {
+  const p = previas.get(slug);
+  if (p && p.dia === diaDe(agora, tz) && p.n > 0) p.n -= 1;
 }
 
 /** Prévias que restam hoje (para a página mostrar). */

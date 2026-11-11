@@ -15,7 +15,8 @@ import { z } from 'zod';
 import type { Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
-import { avisarJoao } from '../lib/alerta-whatsapp.js';
+import { enviarTelegram } from '../lib/telegram.js';
+import { MAX_LICOES_NO_PROMPT } from '../services/lessons.service.js';
 import { automacaoLigada } from '../lib/automacoes-estado.js';
 import {
   CHAVE_APRENDIZADOS,
@@ -25,6 +26,7 @@ import {
   MAX_REGRAS_DA_UNIDADE,
   SOURCE_DA_UNIDADE,
   cabePrevia,
+  devolverPrevia,
   normalizarRegra,
   previasRestantes,
   recusaDaRegra,
@@ -34,6 +36,21 @@ import { rodarTesteDaSofia } from './playground.controller.js';
 
 function ligadaPara(slug: string): boolean {
   return automacaoLigada(slug, CHAVE_APRENDIZADOS, process.env.APRENDIZADOS_PELA_UNIDADE_SLUGS);
+}
+
+/**
+ * Aviso ao João de cada regra salva/desligada: é o que compensa a trava ser heurística. Pelo Telegram (DD-Avisos), não pelo
+ * WhatsApp do alertas2, que está desconectado desde 09/11 (achado do sênior no #265). Falha só vai para o log.
+ */
+function avisar(texto: string): void {
+  void enviarTelegram(texto, { canal: 'avisos' }).then((ok) => {
+    if (!ok) logger.warn({ texto: texto.slice(0, 120) }, 'aprendizados: aviso ao João NÃO saiu no Telegram');
+  });
+}
+
+/** Regras ligadas da unidade (todas as origens): passar de MAX_LICOES_NO_PROMPT = a nova ficaria fora do prompt real. */
+function ligadasNoTotal(unitId: string): Promise<number> {
+  return prisma.unitLesson.count({ where: { unitId, enabled: true } });
 }
 
 function fuso(unit: Unit): string {
@@ -111,12 +128,21 @@ export async function publicAprendizadosPreviaHandler(req: Request, res: Respons
   }
   const falas = (parsed.data.falas ?? []).filter(Boolean);
   const usar = (falas.length > 0 ? falas : [...FALAS_DE_EXEMPLO]).slice(0, MAX_FALAS_DA_PREVIA);
+  if ((await ligadasNoTotal(unit.id)) >= MAX_LICOES_NO_PROMPT) {
+    res.status(422).json({ error: `A Sofia já tem ${MAX_LICOES_NO_PROMPT} regras ligadas nesta unidade, o máximo que ela lê. Desligue uma antes.` });
+    return;
+  }
   if (!cabePrevia(unit.slug, fuso(unit))) {
     res.status(429).json({ error: 'As prévias de hoje acabaram. Amanhã libera de novo — ou salve a regra e acompanhe as conversas.' });
     return;
   }
-  // "antes" e "depois" de cada fala em paralelo: a pessoa espera uma vez só
-  const rodadas = await Promise.all(
+  // "antes" e "depois" de cada fala em paralelo: a pessoa espera uma vez só; com prazo, para a página não ficar presa
+  const PRAZO_MS = 120_000;
+  let prazo: NodeJS.Timeout | undefined;
+  const estourou = new Promise<'prazo'>((ok) => {
+    prazo = setTimeout(() => ok('prazo'), PRAZO_MS);
+  });
+  const todas = Promise.all(
     usar.map(async (fala) => {
       const msgs = [{ role: 'user' as const, content: fala }];
       const [antes, depois] = await Promise.all([
@@ -126,11 +152,20 @@ export async function publicAprendizadosPreviaHandler(req: Request, res: Respons
       return { fala, antes, depois };
     }),
   );
+  const corrida = await Promise.race([todas, estourou]).finally(() => clearTimeout(prazo));
+  if (corrida === 'prazo') {
+    devolverPrevia(unit.slug, fuso(unit));
+    logger.warn({ unit: unit.slug }, 'aprendizados: a prévia passou de 2 min');
+    res.status(504).json({ error: 'A Sofia demorou demais para responder a prévia. Tente de novo em instantes (esta não contou).' });
+    return;
+  }
+  const rodadas = corrida;
   const falhou = rodadas.find((r) => !r.antes.ok || !r.depois.ok);
   if (falhou) {
+    devolverPrevia(unit.slug, fuso(unit));
     const erro = !falhou.antes.ok ? falhou.antes : !falhou.depois.ok ? falhou.depois : null;
     logger.warn({ unit: unit.slug, erro }, 'aprendizados: a prévia falhou');
-    res.status(502).json({ error: 'A Sofia não respondeu a prévia agora. Tente de novo em instantes.' });
+    res.status(502).json({ error: 'A Sofia não respondeu a prévia agora. Tente de novo em instantes (esta não contou).' });
     return;
   }
   logger.info({ unit: unit.slug, regra }, 'aprendizados: prévia rodada');
@@ -164,6 +199,11 @@ export async function publicAprendizadosSalvarHandler(req: Request, res: Respons
     res.status(422).json({ error: `Já são ${ligadas} regras ligadas. Desligue uma que não vale mais antes de criar outra.` });
     return;
   }
+  const total = await ligadasNoTotal(unit.id);
+  if (total >= MAX_LICOES_NO_PROMPT) {
+    res.status(422).json({ error: `A Sofia já tem ${total} regras ligadas nesta unidade, o máximo que ela lê. Desligue uma antes de criar outra.` });
+    return;
+  }
   const igual = await prisma.unitLesson.findFirst({ where: { unitId: unit.id, content: regra, enabled: true } });
   if (igual) {
     res.status(409).json({ error: 'Essa regra já está ligada.' });
@@ -172,7 +212,7 @@ export async function publicAprendizadosSalvarHandler(req: Request, res: Respons
   const criada = await prisma.unitLesson.create({ data: { unitId: unit.id, content: regra, source: SOURCE_DA_UNIDADE, enabled: true } });
   const por = parsed.data.por;
   logger.info({ unit: unit.slug, por, lessonId: criada.id, regra }, 'aprendizados: regra salva pela unidade');
-  void avisarJoao(`🧠 ${unit.name}: ${por} ensinou a Sofia\n"${regra}"`, `aprendizado:${criada.id}`, 1);
+  avisar(`🧠 ${unit.name}: ${por} ensinou a Sofia (página de aprendizados)\n"${regra}"`);
   res.json(await estado(unit));
 }
 
@@ -203,15 +243,20 @@ export async function publicAprendizadosLigarHandler(req: Request, res: Response
       res.status(422).json({ error: `Já são ${ligadas} regras ligadas. Desligue uma antes.` });
       return;
     }
+    if (!regra.enabled && (await ligadasNoTotal(unit.id)) >= MAX_LICOES_NO_PROMPT) {
+      res.status(422).json({ error: `A Sofia já tem ${MAX_LICOES_NO_PROMPT} regras ligadas nesta unidade, o máximo que ela lê. Desligue uma antes.` });
+      return;
+    }
+    const igual = await prisma.unitLesson.findFirst({ where: { unitId: unit.id, content: regra.content, enabled: true, NOT: { id: regra.id } } });
+    if (igual) {
+      res.status(409).json({ error: 'Essa regra já está ligada.' });
+      return;
+    }
   }
   await prisma.unitLesson.update({ where: { id: regra.id }, data: { enabled: parsed.data.enabled } });
   const por = parsed.data.por;
   logger.info({ unit: unit.slug, por, lessonId: regra.id, enabled: parsed.data.enabled }, 'aprendizados: regra ligada/desligada pela unidade');
-  void avisarJoao(
-    `🧠 ${unit.name}: ${por} ${parsed.data.enabled ? 'religou' : 'desligou'} a regra\n"${regra.content}"`,
-    `aprendizado:${regra.id}:${parsed.data.enabled}:${Date.now()}`,
-    1,
-  );
+  avisar(`🧠 ${unit.name}: ${por} ${parsed.data.enabled ? 'religou' : 'desligou'} a regra (página de aprendizados)\n"${regra.content}"`);
   res.json(await estado(unit));
 }
 
@@ -326,8 +371,11 @@ button.main.ok{background:var(--ok);color:#06210F}button:disabled{opacity:.55;cu
   function contar(){ var n=$('regra').value.trim().length; $('cnt').textContent=n+'/'+MAX; if(previaDe!==null && $('regra').value.trim()!==previaDe){ $('cardRes').hidden=true; previaDe=null; } }
   async function ligar(id,on,b){ if($('por').value.trim().length<2){ aviso('msgTopo','Escreva o seu nome antes.',false); return; } b.disabled=true; try{ mostrar(await api('POST','/regra/'+encodeURIComponent(id),{enabled:on,por:$('por').value.trim()})); }catch(e){ aviso('msgTopo',e.message,false); b.disabled=false; } }
   $('regra').addEventListener('input',contar);
-  $('codigo').addEventListener('keyup',function(){ if($('codigo').value.trim().length===6) carregar(); });
-  $('codigo').addEventListener('change',carregar);
+  // só consulta quando o código muda: cada tentativa gasta da trava de tentativas (a mesma da página de pausa)
+  var ultimoCodigo=null;
+  function tentar(){ var c=$('codigo').value.trim(); if(c.length===6 && c!==ultimoCodigo){ ultimoCodigo=c; carregar(); } }
+  $('codigo').addEventListener('keyup',tentar);
+  $('codigo').addEventListener('change',tentar);
   $('btnPrevia').addEventListener('click',async function(){
     var b=this, regra=$('regra').value.trim(); some('msgPrevia');
     if(regra.length<10){ aviso('msgPrevia','Escreva a regra primeiro.',false); return; }
@@ -350,7 +398,7 @@ button.main.ok{background:var(--ok);color:#06210F}button:disabled{opacity:.55;cu
     try{ mostrar(await api('POST','',{regra:previaDe,por:$('por').value.trim()})); aviso('msgSalvar','Pronto: a Sofia já segue essa regra nas próximas conversas.',true); $('regra').value=''; previaDe=null; contar(); }
     catch(e){ aviso('msgSalvar',e.message,false); b.disabled=false; }
   });
-  carregar();
+  ultimoCodigo=$('codigo').value.trim()||null; carregar();
 })();
 </script></body></html>`;
 }

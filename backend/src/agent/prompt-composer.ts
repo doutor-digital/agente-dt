@@ -1883,7 +1883,8 @@ function licoesDaPrevia(unitId: string, textos: string[] | undefined): UnitLesso
 export function renderLessons(lessons: UnitLesson[]): string {
   const ativos = lessons.filter((l) => l.enabled && l.content.trim());
   if (ativos.length === 0) return '';
-  const linhas = ativos.map((l) => `- ${travarProntoSocorroPorLinha(l.content.trim())}`).join('\n');
+  // a regra da clínica que fala de sinal de alerta ganha a ressalva da rede, como as regras de campo (achado do sênior no #265)
+  const linhas = ativos.map((l) => `- ${travarProntoSocorroPorLinha(l.content.trim())}${travaDaRegraDeSinalDeAlerta(l.content)}`).join('\n');
   return xmlBlock(
     'aprendizados',
     `(ALTA PRIORIDADE — regras que esta clínica já ensinou; respeite como verdade da unidade)\n${linhas}`,
