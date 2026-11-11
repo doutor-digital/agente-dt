@@ -57,7 +57,7 @@ export async function centralGeralHandler(req: Request, res: Response): Promise<
   }
   try {
     const r = await mudarPeloPainel(p.data.pausar, POR, { pausa: armazemPausaPrisma, agora: () => new Date(), modoDoMenu: () => lerConfig().modo });
-    if (r.aviso) void enviarTelegramChamados(r.aviso.replace('pelo painel', 'pela extensão'));
+    if (r.aviso) void enviarTelegramChamados(r.aviso.replace(`pelo painel (${POR})`, 'pela extensão do Chrome'));
     logger.info({ pausar: p.data.pausar, mudou: r.mudou }, 'central: pausa geral pela extensão');
     res.json({ ok: true, mudou: r.mudou, geral: r.estado });
   } catch (e) {

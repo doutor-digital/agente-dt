@@ -45,12 +45,17 @@
   document.body.appendChild(caixa);
 
   const cor = (b, pausar) => { b.style.background = pausar ? '#f15c6d' : '#00a884'; b.style.color = '#fff'; };
-  let estado = null, atual = null, ocupado = false;
+  let estado = null, atual = null, ocupado = false, pedido = 0;
+  const chaveDe = (c) => (c ? `${c.numero}|${c.grupo}|${c.nome}` : '');
 
   async function atualizar() {
     if (ocupado) return;
-    atual = conversaAberta();
-    const r = await pedir('estado', { numero: atual && atual.numero ? atual.numero : undefined });
+    const minha = ++pedido;
+    const conversa = conversaAberta();
+    const r = await pedir('estado', { numero: conversa && conversa.numero ? conversa.numero : undefined });
+    // resposta atrasada (chegou outra depois, ou a conversa mudou no meio): descarta, para nunca mostrar o estado de A no nome de B
+    if (minha !== pedido || chaveDe(conversaAberta()) !== chaveDe(conversa)) return;
+    atual = conversa;
     if (!r.ok) { linhaGeral.textContent = '⚠️ ' + r.erro; btGeral.style.display = btPessoa.style.display = 'none'; linhaPessoa.textContent = ''; return; }
     estado = r.dados;
     btGeral.style.display = '';
@@ -81,13 +86,18 @@
     await atualizar();
   }
   btGeral.onclick = () => estado && agir('geral', { pausar: !estado.geral.pausado });
-  btPessoa.onclick = () => estado && estado.pessoa && atual && atual.numero && agir('pessoa', { numero: atual.numero, nome: atual.nome, pausar: !estado.pessoa.pausada });
+  btPessoa.onclick = () => {
+    // a conversa mudou desde a última leitura: não age (pausaria a pessoa errada); só atualiza o painel
+    const agora = conversaAberta();
+    if (!estado || !estado.pessoa || !atual || !atual.numero || chaveDe(agora) !== chaveDe(atual)) { aviso.textContent = 'A conversa mudou: confira e clique de novo.'; atualizar(); return; }
+    agir('pessoa', { numero: atual.numero, nome: atual.nome, pausar: !estado.pessoa.pausada });
+  };
 
   // troca de conversa: confere a cada 2 s se mudou; o estado do servidor, a cada 60 s
   let chaveAnterior = '';
   setInterval(() => {
     const c = conversaAberta();
-    const k = c ? `${c.numero}|${c.grupo}|${c.nome}` : '';
+    const k = chaveDe(c);
     if (k !== chaveAnterior) { chaveAnterior = k; atualizar(); }
   }, 2000);
   setInterval(atualizar, 60000);

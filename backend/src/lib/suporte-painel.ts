@@ -37,7 +37,8 @@ export interface DepsPainel {
   /** passa a conversa a "resolvida" (trava otimista pela versão); false = a conversa andou nesse meio-tempo */
   conversaParaResolvida(jid: string, versao: number, quando: Date): Promise<boolean>;
   /** o menu pode falar com a pessoa agora? (`ligado` no servidor E não pausado) */
-  menuLigado(): boolean | Promise<boolean>;
+  /** o menu pode falar com ESTA pessoa agora: ligado, sem pausa geral e sem pausa só dela (Central do João) */
+  menuLigado(jid: string): boolean | Promise<boolean>;
   enviarWhatsApp(jid: string, texto: string): Promise<boolean>;
   telegram(texto: string): Promise<boolean>;
   reabrir(protocolo: number): Promise<void>;
@@ -64,7 +65,7 @@ export async function resolverDemanda(protocolo: number, quem: string, notaBruta
   // só pergunta "funcionou?" se o menu pode falar agora (ligado e não pausado) E a conversa da pessoa ainda está nesta demanda (e
   // consegue passá-la a "resolvida"). Sem a pergunta no ar a conversa NÃO muda de passo: senão a próxima mensagem da pessoa seria lida
   // como resposta a um "funcionou?" que ela nunca recebeu.
-  const podeFalar = await deps.menuLigado();
+  const podeFalar = await deps.menuLigado(d.jid);
   const c = podeFalar ? await deps.conversa(d.jid) : null;
   const naMesma = c != null && c.protocolo === protocolo && (c.passo === 'aberta' || c.passo === 'resolvida');
   const perguntou = naMesma ? await deps.conversaParaResolvida(d.jid, c!.versao, agora) : false;

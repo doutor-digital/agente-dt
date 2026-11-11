@@ -6,7 +6,9 @@ import { logger } from './logger.js';
 import { env } from './env.js';
 import { chaveDaPessoa, finalDoNumero, numeroCanonico, numerosDaMensagem } from './central-pausa.js';
 
-const segredo = () => env.SESSION_JWT_SECRET;
+// Segredo do HMAC: CENTRAL_PAUSA_SEGREDO se existir, senão SESSION_JWT_SECRET. Trocar o segredo usado faz todas as pausas por
+// pessoa caírem (as linhas antigas ficam órfãs; apague a tabela suporte_pausa_pessoa) — por isso existe o segredo próprio.
+const segredo = () => env.CENTRAL_PAUSA_SEGREDO || env.SESSION_JWT_SECRET;
 
 export interface PessoaPausada {
   final: string;
@@ -55,12 +57,13 @@ export async function mudarPessoa(
   const anterior = l ? { final: l.final, nome: l.nome, desde: l.pausadoEm, por: l.pausadoPor, ignoradas: l.ignoradas } : null;
   if (pausar) {
     if (anterior) return { mudou: false, final, anterior };
-    await prisma.suportePausaPessoa.createMany({ data: [{ chave, final, nome, pausadoPor: por }], skipDuplicates: true });
-    return { mudou: true, final, anterior };
+    // dois cliques ao mesmo tempo: só quem de fato inseriu conta como mudança (um aviso só no Telegram)
+    const r = await prisma.suportePausaPessoa.createMany({ data: [{ chave, final, nome, pausadoPor: por }], skipDuplicates: true });
+    return { mudou: r.count === 1, final, anterior };
   }
   if (!anterior) return { mudou: false, final, anterior };
-  await prisma.suportePausaPessoa.deleteMany({ where: { chave } });
-  return { mudou: true, final, anterior };
+  const r = await prisma.suportePausaPessoa.deleteMany({ where: { chave } });
+  return { mudou: r.count === 1, final, anterior };
 }
 
 export async function listarPausadas(): Promise<PessoaPausada[]> {

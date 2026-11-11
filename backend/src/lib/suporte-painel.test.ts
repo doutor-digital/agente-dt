@@ -116,3 +116,17 @@ test('item da base: título e texto obrigatórios ao criar; parcial ao editar; a
   const longo = lerItemDeConhecimento({ titulo: 't'.repeat(300), texto: 'x'.repeat(3000) });
   assert.ok(longo.ok && longo.dados.titulo!.length === 120 && longo.dados.texto!.length === 2000);
 });
+
+test('resolver: o painel pergunta se pode falar com ESTA pessoa (pausa só dela, Central do João) → pausada, não manda WhatsApp', async () => {
+  const { deps, ev } = mundo();
+  const perguntados: string[] = [];
+  deps.menuLigado = (jid: string) => {
+    perguntados.push(jid);
+    return false;
+  };
+  const r = await resolverDemanda(5, 'x', null, deps);
+  assert.equal(perguntados.length, 1);
+  assert.equal(perguntados[0], (await deps.demanda(5))!.jid);
+  assert.deepEqual(r, { ok: true, perguntou: false, whatsapp: false });
+  assert.equal(ev.whatsapp.length, 0);
+});
