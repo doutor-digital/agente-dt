@@ -23,7 +23,7 @@ import {
 } from '../services/lead-memory.service.js';
 import { listEnabledLessons } from '../services/lessons.service.js';
 import { renderFaltaParaAgendar } from './falta-para-agendar.js';
-import { renderSinalDeAlerta, travaDaRegraDeSinalDeAlerta, travaDoProntoSocorro, travarProntoSocorroPorLinha } from './sinal-de-alerta.js';
+import { ehClinicaParaSinalDeAlerta, renderSinalDeAlerta, travaDaRegraDeSinalDeAlerta, travaDoProntoSocorro, travarProntoSocorroPorLinha } from './sinal-de-alerta.js';
 import { analisarRepeticao, pararDePedirNome, renderRepeticao, type Fala } from './repeticao.js';
 import { renderPrecoDasSessoes, renderPrecoInsistido } from './preco-insistido.js';
 import { renderRajada, textoSemResposta } from './rajada.js';
@@ -64,6 +64,7 @@ import { logger } from '../lib/logger.js';
 import { capturaUnificada } from './captura-unificada.js';
 import { ehSoCumprimento } from '../lib/pediu-para-parar.js';
 import { automacaoLigada } from '../lib/automacoes-estado.js';
+import { jeitoDaConversa, renderConversaDireta } from './conversa-direta.js';
 import { sorrisoColoridoLigado } from '../lib/carinha-antiga.js';
 import {
   FORMAS_NO_DIA,
@@ -951,23 +952,18 @@ function renderConversao(unit: Unit): string {
     ? 'A consulta é onde a gente'
     : `A consulta é ${precoPix} antecipado e é onde a gente`;
 
-  return xmlBlock(
-    'conversao',
-    `SEU TRABALHO É O PACIENTE SAIR COM CONSULTA MARCADA. Objeção não é fim de
-conversa — é informação sobre o que falta pra ele decidir. Mas você nunca
-empurra: quem empurra recebe resistência de volta.
-
-A REGRA QUE MANDA EM TUDO: NÃO DISCUTA COM A OBJEÇÃO.
-Discutir faz a pessoa repetir o argumento dela — e repetir convence ela mesma.
-Faça o contrário: concorde com a parte legítima, devolva a escolha, e deixe que
-ELA diga por que quer se cuidar. Quem argumenta a favor da própria decisão não
-volta atrás.
-
-  Errado:  "Mas R$ 150 é barato perto do que você economiza!"
-  Certo:   "Entendo, é dinheiro mesmo. Deixa eu te perguntar: o que essa dor
-            já te impediu de fazer nesse tempo todo?"
-
-PREÇO NÃO SE ENTREGA DE CARA — mas também NÃO SE ESCONDE.
+  // Chaves de conversa curta (Timbó, 11/11/2026, conversa-direta.ts). Desligadas, o texto é o de sempre, letra por letra.
+  const jeito = jeitoDaConversa(unit);
+  const precoTexto = jeito.conduzirDireto
+    ? `PERGUNTOU O PREÇO, O VALOR VAI NA HORA (decisão do João para esta unidade).
+O valor da consulta é a PRIMEIRA frase da resposta, inteiro e sem rodeio, mesmo que
+você ainda não saiba a dor — nada de "antes me conta". Depois, se ainda não sabe o
+que ele sente, UMA pergunta; se já sabe, ofereça os horários:
+  > "A consulta com o especialista é ${valorDaConsulta}. É nela que se
+     descobre a causa, em vez de continuar tratando o sintoma. Quer que eu veja
+     os horários pra você?"
+`
+    : `PREÇO NÃO SE ENTREGA DE CARA — mas também NÃO SE ESCONDE.
 É assim que um bom especialista faz: antes do valor, ele entende a dor. Preço
 dito para quem ainda não sabe o que vai receber é só um número grande; o mesmo
 preço, dito depois que a pessoa contou há quanto tempo sofre e o que a dor
@@ -984,7 +980,74 @@ rodeio, ancorado no que ele acabou de contar:
   > "Entendi, {tempo} com essa dor não é pouco. A consulta com o especialista é
      ${valorDaConsulta}. É nela que se descobre a
      causa, em vez de continuar tratando o sintoma."
+`;
+  const pedirNome = jeito.nomeNaHoraDeMarcar
+    ? 'acolher e perguntar o que ele está sentindo (o nome, só na hora de marcar)'
+    : 'acolher e pedir o nome. Só isso.';
+  const tabelaInicio = jeito.conduzirDireto
+    ? `  chegou agora                 →  ${pedirNome}
+  contou a queixa              →  "entendo, é exatamente o que tratamos aqui" e
+                                  consultar horários e oferecer DUAS opções
+                                  concretas — sem mais perguntas de sintoma
+`
+    : jeito.nomeNaHoraDeMarcar
+      ? `  chegou agora                 →  ${pedirNome}
+  disse o que sente            →  investigar: onde dói, há quanto tempo
+  contou a queixa              →  aprofundar o IMPACTO (ver abaixo)
+  contou o impacto             →  identificar o objetivo dele
+  objetivo claro               →  construir valor: o que a consulta faz por
+                                  ESSE objetivo
+  valor construído             →  consultar horários e oferecer DUAS opções
+                                  concretas (nunca "manhã ou tarde?")
+`
+      : `  chegou agora                 →  acolher e pedir o nome. Só isso.
+  disse o nome                 →  investigar: onde dói, há quanto tempo
+  contou a queixa              →  aprofundar o IMPACTO (ver abaixo)
+  contou o impacto             →  identificar o objetivo dele
+  objetivo claro               →  construir valor: o que a consulta faz por
+                                  ESSE objetivo
+  valor construído             →  consultar horários e oferecer DUAS opções
+                                  concretas (nunca "manhã ou tarde?")
+`;
+  const impactoTexto = jeito.conduzirDireto
+    ? `SEM PERGUNTAS DE IMPACTO NEM DE SINTOMA depois da queixa (decisão do João para esta
+unidade): nada de "tem te tirado o sono?", "há quanto tempo?", "o que já tentou?".
+Contou a dor e é coluna, você reconhece em UMA frase e conduz para a consulta.
+`
+    : `APROFUNDAR O IMPACTO — a pergunta que muda a conversa.
+Depois que ele contar a queixa, NÃO vá direto ao horário. Faça uma pergunta
+sobre o que a dor tirou dele. É o passo que a maioria pula, e é o que
+transforma "dor nas costas" em motivo para agir:
+  > "Entendi. E essa dor tem te atrapalhado em quê no dia a dia?"
+  > "Tem te tirado o sono, ou atrapalha mais no trabalho?"
+  > "Tem alguma coisa que você deixou de fazer por causa dela?"
 
+A resposta a isso é o que você vai usar depois, com as palavras dele, quando
+for construir valor e quando for falar de preço. Sem essa resposta você está
+vendendo para um desconhecido.
+
+Uma pergunta de impacto por vez, e só depois que ele já contou a queixa.
+Perguntar isso cedo demais soa como interrogatório; perguntar duas seguidas
+cansa. Pergunte, ouça, reconheça o que ele disse, siga.
+`;
+
+  return xmlBlock(
+    'conversao',
+    `SEU TRABALHO É O PACIENTE SAIR COM CONSULTA MARCADA. Objeção não é fim de
+conversa — é informação sobre o que falta pra ele decidir. Mas você nunca
+empurra: quem empurra recebe resistência de volta.
+
+A REGRA QUE MANDA EM TUDO: NÃO DISCUTA COM A OBJEÇÃO.
+Discutir faz a pessoa repetir o argumento dela — e repetir convence ela mesma.
+Faça o contrário: concorde com a parte legítima, devolva a escolha, e deixe que
+ELA diga por que quer se cuidar. Quem argumenta a favor da própria decisão não
+volta atrás.
+
+  Errado:  "Mas R$ 150 é barato perto do que você economiza!"
+  Certo:   "Entendo, é dinheiro mesmo. Deixa eu te perguntar: o que essa dor
+            já te impediu de fazer nesse tempo todo?"
+
+${precoTexto}
 SE ELE INSISTIR, RESPONDA NA HORA. "Só me diz o valor", "não quero contar
 nada", perguntou duas vezes — acabou o adiamento. Enrolar de novo destrói mais
 confiança do que qualquer preço, e a pessoa tem direito de saber quanto custa.
@@ -1141,15 +1204,7 @@ oferecer horário para quem ainda não contou a dor perde a venda, e investigar 
 dor de quem já escolheu o horário perde a paciência dele.
 
   ESTADO                          PRÓXIMO MOVIMENTO
-  chegou agora                 →  acolher e pedir o nome. Só isso.
-  disse o nome                 →  investigar: onde dói, há quanto tempo
-  contou a queixa              →  aprofundar o IMPACTO (ver abaixo)
-  contou o impacto             →  identificar o objetivo dele
-  objetivo claro               →  construir valor: o que a consulta faz por
-                                  ESSE objetivo
-  valor construído             →  consultar horários e oferecer DUAS opções
-                                  concretas (nunca "manhã ou tarde?")
-  escolheu horário             →  buscar/cadastrar paciente e agendar
+${tabelaInicio}  escolheu horário             →  buscar/cadastrar paciente e agendar
   agendou                      →  confirmar em bloco e proteger o comparecimento
   objeção em qualquer ponto    →  acolher, reenquadrar, e VOLTAR ao movimento
                                   que estava fazendo — não recomece do zero
@@ -1160,22 +1215,7 @@ dor de quem já escolheu o horário perde a paciência dele.
 Não pule etapas para acelerar. Cada uma existe porque a seguinte não funciona
 sem ela — e pular é o que faz a conversa travar em "vou pensar".
 
-APROFUNDAR O IMPACTO — a pergunta que muda a conversa.
-Depois que ele contar a queixa, NÃO vá direto ao horário. Faça uma pergunta
-sobre o que a dor tirou dele. É o passo que a maioria pula, e é o que
-transforma "dor nas costas" em motivo para agir:
-  > "Entendi. E essa dor tem te atrapalhado em quê no dia a dia?"
-  > "Tem te tirado o sono, ou atrapalha mais no trabalho?"
-  > "Tem alguma coisa que você deixou de fazer por causa dela?"
-
-A resposta a isso é o que você vai usar depois, com as palavras dele, quando
-for construir valor e quando for falar de preço. Sem essa resposta você está
-vendendo para um desconhecido.
-
-Uma pergunta de impacto por vez, e só depois que ele já contou a queixa.
-Perguntar isso cedo demais soa como interrogatório; perguntar duas seguidas
-cansa. Pergunte, ouça, reconheça o que ele disse, siga.
-
+${impactoTexto}
 PERGUNTAS ABERTAS QUE COMEÇAM COM "COMO" E "O QUE".
 Elas fazem a pessoa elaborar em vez de responder sim ou não, e quem elabora se
 convence sozinho. Evite "por que" — soa como cobrança e coloca a pessoa na
@@ -1288,6 +1328,8 @@ Na dúvida, PREFIRA confirmar depois a inventar agora: um "vou confirmar" nunca 
 
 function renderCollectName(unit: Unit): string {
   if (!unit.collectNameEnabled) return '';
+  // Chave `nome-na-hora-de-marcar`: o pedido do nome mora no bloco <conversa_direta> (junto da escolha do horário).
+  if (jeitoDaConversa(unit).nomeNaHoraDeMarcar) return '';
   return xmlBlock('coleta_nome', `(PROATIVA — ALTA PRIORIDADE)
 - Se ainda NÃO souber o nome, sua PRIMEIRA mensagem deve abrir com saudação calorosa + 1-2 emojis + pergunta pelo nome. Ex: "Oiê! 😊 Que bom te receber! Como posso te chamar?" (varie as palavras, não soe robótico).
 - Assim que o paciente disser o nome, chame IMEDIATAMENTE atualizar_titulo_lead({ nome: "<Nome>" }) — passe SÓ o nome (o sistema adiciona a data, vira "<Nome> DD/MM/YYYY"). Silencioso, não comente.
@@ -1813,7 +1855,8 @@ function blocosDoHistorico(unit: Unit, historico: Fala[] | undefined): { semPedi
  */
 function renderFirstTurnBoost(unit: Unit, isFirstTurn: boolean, jaConversou = false): string {
   if (!isFirstTurn) return '';
-  const collectName = unit.collectNameEnabled;
+  // Chave `nome-na-hora-de-marcar` (conversa-direta.ts): a primeira mensagem não pede o nome.
+  const collectName = unit.collectNameEnabled && !jeitoDaConversa(unit).nomeNaHoraDeMarcar;
   const collectSource = unit.collectSourceEnabled;
   const palette = (unit.personaEmojis ?? []).filter(Boolean);
   const emojisHint =
@@ -2187,7 +2230,7 @@ export function composeFlattenedPrompt(input: ComposeInput): string {
     renderKnockout(unit),
     renderAutoChecagem(unit),
     renderTriage(unit),
-    renderSinalDeAlerta(unit),
+    renderSinalDeAlerta(unit, { semPerguntar: jeitoDaConversa(unit).semPerguntaDeAlerta }),
     renderHandoff(unit),
     renderPipelineIntents(unit),
     renderAgenda(unit),
@@ -2196,6 +2239,8 @@ export function composeFlattenedPrompt(input: ComposeInput): string {
     renderWelcomeCoupon(unit),
     renderBusinessHours(unit),
     renderFollowUp(unit),
+    // Chaves de conversa curta (Timbó, 11/11/2026): por último, porque vale mais que o resto (conversa-direta.ts).
+    renderConversaDireta(jeitoDaConversa(unit), { clinica: ehClinicaParaSinalDeAlerta(unit) }),
   ].filter((b) => b.trim().length > 0);
   if (featureBlocks.length > 0) {
     blocks.push(xmlBlock('comportamentos_ativados', featureBlocks.join('\n\n')));
@@ -2241,6 +2286,9 @@ export function composeSystemPrompt(input: ComposeInput): string {
   if (unit.singlePromptMode) {
     const single: string[] = [];
     if (customBase) single.push(customBase);
+    // O prompt único é escrito à mão: as chaves de conversa curta entram logo depois dele, para valer mais (conversa-direta.ts).
+    const conversaDiretaSingle = renderConversaDireta(jeitoDaConversa(unit), { clinica: ehClinicaParaSinalDeAlerta(unit) });
+    if (conversaDiretaSingle) single.push(conversaDiretaSingle);
     const memBlock = renderLeadMemory(leadMemory, fusoDaUnidade(unit), agoraLocalISO(fusoDaUnidade(unit)));
     if (memBlock) single.push(memBlock);
     const outraBlockSingle = renderConversaComOutraSofia(outraSofia, unit.spineEnabled, relogioDaUnidade(unit));
@@ -2294,7 +2342,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
     renderKnockout(unit),
     renderAutoChecagem(unit),
     renderTriage(unit),
-    renderSinalDeAlerta(unit),
+    renderSinalDeAlerta(unit, { semPerguntar: jeitoDaConversa(unit).semPerguntaDeAlerta }),
     renderHandoff(unit),
     renderPipelineIntents(unit),
     renderAgenda(unit),
@@ -2303,6 +2351,8 @@ export function composeSystemPrompt(input: ComposeInput): string {
     renderWelcomeCoupon(unit),
     renderBusinessHours(unit),
     renderFollowUp(unit),
+    // Chaves de conversa curta (Timbó, 11/11/2026): por último, porque vale mais que o resto (conversa-direta.ts).
+    renderConversaDireta(jeitoDaConversa(unit), { clinica: ehClinicaParaSinalDeAlerta(unit) }),
   ].filter((b) => b.trim().length > 0);
 
   if (featureBlocks.length > 0) {
@@ -2314,7 +2364,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
   // própria IA grava; sem isso ela sabe o que já foi dito e não o que falta.
   const faltaBlock = renderFaltaParaAgendar(
     (leadMemory?.facts as Record<string, unknown> | null) ?? null,
-    { semPedirNome: doHistorico.semPedirNome },
+    { semPedirNome: doHistorico.semPedirNome, ...jeitoDaConversa(unit) },
   );
   if (lessonsBlock) blocks.push(lessonsBlock);
   const memoryBlock = renderLeadMemory(leadMemory, fusoDaUnidade(unit), agoraLocalISO(fusoDaUnidade(unit)));
@@ -2431,7 +2481,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
   if (outraSofiaBlock) dynamic.push(outraSofiaBlock);
   const faltaBlock = renderFaltaParaAgendar(
     (leadMemory?.facts as Record<string, unknown> | null) ?? null,
-    { semPedirNome: doHistorico.semPedirNome },
+    { semPedirNome: doHistorico.semPedirNome, ...jeitoDaConversa(unit) },
   );
   if (faltaBlock) dynamic.push(faltaBlock);
   // Se a resposta anterior não chegou, ela precisa saber ANTES de responder:
@@ -2498,7 +2548,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
     renderKnockout(unit),
     renderAutoChecagem(unit),
     renderTriage(unit),
-    renderSinalDeAlerta(unit),
+    renderSinalDeAlerta(unit, { semPerguntar: jeitoDaConversa(unit).semPerguntaDeAlerta }),
     renderHandoff(unit),
     renderPipelineIntents(unit),
     renderAgenda(unit),
@@ -2507,6 +2557,8 @@ export function composeSystemPromptParts(input: ComposeInput): {
     renderWelcomeCoupon(unit),
     renderBusinessHours(unit),
     renderFollowUp(unit),
+    // Chaves de conversa curta (Timbó, 11/11/2026): por último, porque vale mais que o resto (conversa-direta.ts).
+    renderConversaDireta(jeitoDaConversa(unit), { clinica: ehClinicaParaSinalDeAlerta(unit) }),
   ].filter((b) => b.trim().length > 0);
   if (featureBlocks.length > 0) {
     cache.push(xmlBlock('comportamentos_ativados', featureBlocks.join('\n\n')));
