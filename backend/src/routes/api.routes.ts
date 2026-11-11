@@ -136,6 +136,12 @@ import {
 } from '../controllers/prompts.controller.js';
 import { loginHandler, logoutHandler, meHandler } from '../controllers/auth.controller.js';
 import { playgroundRunHandler } from '../controllers/playground.controller.js';
+import {
+  publicAprendizadosHandler,
+  publicAprendizadosLigarHandler,
+  publicAprendizadosPreviaHandler,
+  publicAprendizadosSalvarHandler,
+} from '../controllers/aprendizados.controller.js';
 import { saudeIaHandler } from '../controllers/saude-ia.controller.js';
 import { listChangeLogHandler } from '../controllers/change-log.controller.js';
 import {
@@ -352,6 +358,12 @@ apiRouter.delete('/public/pausa/:slug', publicRetomarHandler);
 apiRouter.get('/public/pausa/:slug/lead/:leadId', publicLeadStatusHandler);
 apiRouter.post('/public/pausa/:slug/lead/:leadId', publicLeadPausarHandler);
 apiRouter.delete('/public/pausa/:slug/lead/:leadId', publicLeadRetomarHandler);
+
+// A unidade ensina a Sofia pela página /aprendizados/:slug com o código da unidade (sem sessão; chave aprendizados-pela-unidade).
+apiRouter.get('/public/aprendizados/:slug', publicAprendizadosHandler);
+apiRouter.post('/public/aprendizados/:slug', publicAprendizadosSalvarHandler);
+apiRouter.post('/public/aprendizados/:slug/previa', publicAprendizadosPreviaHandler);
+apiRouter.post('/public/aprendizados/:slug/regra/:id', publicAprendizadosLigarHandler);
 
 // Widgets privados do Kommo (coluna do cartão) leem a agenda da franquia com chave por unidade (sem sessão).
 apiRouter.get('/public/widget/:slug/ping', widgetPingHandler);

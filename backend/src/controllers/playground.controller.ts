@@ -14,7 +14,7 @@ import { getActiveConfig } from '../agent/config.js';
 import { composeSystemPromptForUnit, sinalDaUnidade } from '../agent/prompt-composer.js';
 import { leadFieldRuleDescription, leadFieldRuleSchema } from '../agent/tools.js';
 import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.js';
-import type { LeadFieldRule } from '@prisma/client';
+import type { LeadFieldRule, Unit } from '@prisma/client';
 import {
   calculateCost,
   createChatModel,
@@ -344,39 +344,47 @@ function buildSandboxTools(opts: {
   ];
 }
 
-export async function playgroundRunHandler(req: Request, res: Response): Promise<void> {
-  const unitId = String(req.params.id ?? '');
-  const parsed = runSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: 'invalid_input', issues: parsed.error.flatten() });
-    return;
-  }
+export type ResultadoDoTeste =
+  | {
+      ok: true;
+      reply: string;
+      actions: SandboxAction[];
+      timeline: TimelineEvent[];
+      meta: {
+        base: 'teste' | 'vivo';
+        model: string;
+        iterations: number;
+        totalLatencyMs: number;
+        tokens: { prompt: number; completion: number; total: number } | null;
+        costUsd: number | null;
+      };
+    }
+  | { ok: false; status: number; error: string; message?: string };
 
-  const promptDeTeste = parsed.data.unitSystemPrompt;
-  // troca as instruções inteiras e roda na chave do modelo da clínica: só o super admin
-  if (promptDeTeste && req.user?.role !== 'SUPER_ADMIN') {
-    res.status(403).json({ error: 'prompt_de_teste_so_admin' });
-    return;
-  }
-  const unitDoBanco = await prisma.unit.findUnique({ where: { id: unitId } });
-  if (!unitDoBanco) {
-    res.status(404).json({ error: 'unit_not_found' });
-    return;
-  }
+/**
+ * Um turno da Sofia em sandbox (tools simuladas, nada gravado). Serve ao playground do painel e à prévia da página
+ * `/aprendizados/:slug`. `promptDeTeste` troca o texto-base (o chamador confere que é super admin);
+ * `aprendizadosExtras` soma regras ao bloco `<aprendizados>` só nesta chamada.
+ */
+export async function rodarTesteDaSofia(
+  unitDoBanco: Unit,
+  messages: Array<{ role: 'user' | 'assistant'; content: string }>,
+  opts: { promptDeTeste?: string; aprendizadosExtras?: string[] } = {},
+): Promise<ResultadoDoTeste> {
+  const promptDeTeste = opts.promptDeTeste;
   // prompt de teste: vale só para esta chamada, a unidade no banco não muda
   const unit = promptDeTeste ? { ...unitDoBanco, systemPrompt: promptDeTeste } : unitDoBanco;
   const useAnthropic = unit.llmProvider === 'anthropic' && !!unit.anthropicApiKey;
   const useGoogle = unit.llmProvider === 'google' && !!unit.googleApiKey;
   if (!useAnthropic && !useGoogle && !resolveOpenAIApiKey(unit)) {
-    res.status(400).json({ error: 'openai_not_configured' });
-    return;
+    return { ok: false, status: 400, error: 'openai_not_configured' };
   }
 
   const config = await getActiveConfig(unit.id);
 
-  const lastUser = [...parsed.data.messages].reverse().find((m) => m.role === 'user');
-  const userCount = parsed.data.messages.filter((m) => m.role === 'user').length;
-  const assistantCount = parsed.data.messages.filter((m) => m.role === 'assistant').length;
+  const lastUser = [...messages].reverse().find((m) => m.role === 'user');
+  const userCount = messages.filter((m) => m.role === 'user').length;
+  const assistantCount = messages.filter((m) => m.role === 'assistant').length;
   const isFirstTurn = userCount === 1 && assistantCount === 0;
   const systemPrompt = await composeSystemPromptForUnit({
     unit,
@@ -385,8 +393,8 @@ export async function playgroundRunHandler(req: Request, res: Response): Promise
     userMessage: lastUser?.content,
     isFirstTurn,
     excludeLeadFieldRules: false,
+    aprendizadosExtras: opts.aprendizadosExtras,
   });
-
   const sandboxPreamble = `# CONTEXTO DE TESTE
 Você está rodando em MODO SANDBOX. O leadId atual é ${SANDBOX_LEAD_ID}. Trate
 como uma conversa real e use as tools normalmente quando fizer sentido — elas
@@ -431,7 +439,7 @@ operador revisar.`;
   ).bindTools(tools) as unknown as Parameters<typeof invokeChatModel>[0]['model'];
 
   const history: BaseMessage[] = [new SystemMessage(fullSystem)];
-  for (const m of parsed.data.messages) {
+  for (const m of messages) {
     if (m.role === 'user') history.push(new HumanMessage(m.content));
     else history.push(new AIMessage(m.content));
   }
@@ -508,7 +516,8 @@ operador revisar.`;
     }
 
     const totalLatencyMs = Math.round(performance.now() - turnStart);
-    res.json({
+    return {
+      ok: true,
       reply: finalReply,
       actions,
       timeline,
@@ -528,10 +537,39 @@ operador revisar.`;
             : null,
         costUsd: totalCostUsd > 0 ? Math.round(totalCostUsd * 1_000_000) / 1_000_000 : null,
       },
-    });
+    };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    logger.error({ err, unitId }, 'playground falhou');
-    res.status(500).json({ error: 'playground_failed', message: msg });
+    logger.error({ err, unitId: unit.id }, 'playground falhou');
+    return { ok: false, status: 500, error: 'playground_failed', message: msg };
   }
+}
+
+
+export async function playgroundRunHandler(req: Request, res: Response): Promise<void> {
+  const unitId = String(req.params.id ?? '');
+  const parsed = runSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'invalid_input', issues: parsed.error.flatten() });
+    return;
+  }
+
+  const promptDeTeste = parsed.data.unitSystemPrompt;
+  // troca as instruções inteiras e roda na chave do modelo da clínica: só o super admin
+  if (promptDeTeste && req.user?.role !== 'SUPER_ADMIN') {
+    res.status(403).json({ error: 'prompt_de_teste_so_admin' });
+    return;
+  }
+  const unitDoBanco = await prisma.unit.findUnique({ where: { id: unitId } });
+  if (!unitDoBanco) {
+    res.status(404).json({ error: 'unit_not_found' });
+    return;
+  }
+  const r = await rodarTesteDaSofia(unitDoBanco, parsed.data.messages, { promptDeTeste });
+  if (!r.ok) {
+    res.status(r.status).json(r.message ? { error: r.error, message: r.message } : { error: r.error });
+    return;
+  }
+  const { ok: _ok, ...corpo } = r;
+  res.json(corpo);
 }

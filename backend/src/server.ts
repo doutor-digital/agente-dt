@@ -9,6 +9,7 @@ import { prisma } from './lib/prisma.js';
 import { apiRouter } from './routes/api.routes.js';
 import { apagarCofreDeArquivos, ligarConectorRemoto } from './mcp-remoto/producao.js';
 import { paginaPausaHandler } from './controllers/pausa.controller.js';
+import { paginaAprendizadosHandler } from './controllers/aprendizados.controller.js';
 import { paginaAltaHandler } from './controllers/alta.controller.js';
 import { paginaIaHandler } from './controllers/ia-unidade.controller.js';
 import { getCheckpointer } from './agent/graph.js';
@@ -148,6 +149,9 @@ async function main(): Promise<void> {
 
   // Página da recepção para pausar a Sofia por um tempo (protegida por código da unidade).
   app.get('/pausa/:slug', paginaPausaHandler);
+
+  // Página da unidade para ensinar a Sofia (aprendizados), com código da unidade e chave por unidade.
+  app.get('/aprendizados/:slug', paginaAprendizadosHandler);
 
   // Página da recepção para aprovar alta e marcar quem parou no meio.
   app.get('/alta/:slug', paginaAltaHandler);
