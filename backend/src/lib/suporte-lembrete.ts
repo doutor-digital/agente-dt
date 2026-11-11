@@ -14,9 +14,10 @@
  */
 import { diaLocal, relogioLocal } from './qualidade-ia/dias.js';
 import type { EstadoPausa } from './suporte-pausa.js';
-import { quandoEmSP } from './suporte-pausa.js';
+import { quandoEmSP, SEM_PAUSA } from './suporte-pausa.js';
+import { modoDoSuporte, type ModoSuporte } from './suporte-menu.js';
 
-export type ModoLembrete = 'desligado' | 'seco' | 'ligado';
+export type ModoLembrete = ModoSuporte;
 
 /** Horas cheias (SP) em que o resumo sai. Passou da hora cheia (fora dessa hora), perdeu: resumo velho não serve. */
 export const HORAS_DO_LEMBRETE: readonly number[] = [9, 17];
@@ -29,13 +30,11 @@ export const PREFIXO_DO_LEASE = 'suporte-lembrete:';
 export const TTL_DO_LEASE_MS = 3 * 60 * 60_000;
 export const PAINEL_URL = 'https://suporte.doutordigitalconsultoria.com';
 
-export function modoDoLembrete(raw: string | undefined | null): ModoLembrete {
-  const v = String(raw ?? '').trim().replace(/^['"]|['"]$/g, '').toLowerCase();
-  return v === 'seco' || v === 'ligado' ? v : 'desligado';
-}
+/** Mesma regra do `SUPORTE_MENU` (uma só para as duas chaves): vazio ou valor estranho = desligado. */
+export const modoDoLembrete: (raw: string | undefined | null) => ModoLembrete = modoDoSuporte;
 
 export function valorDoLembreteReconhecido(raw: string | undefined | null): boolean {
-  return ['', 'desligado', 'seco', 'ligado'].includes(String(raw ?? '').trim().replace(/^['"]|['"]$/g, '').toLowerCase());
+  return ['', 'desligado', 'seco', 'ligado'].includes(String(raw ?? '').trim().toLowerCase());
 }
 
 export interface Horario {
@@ -83,9 +82,9 @@ export function umaLinha(texto: string, max: number): string {
 }
 
 /** O resumo; null quando não há demanda aberta (nesse caso NÃO se manda nada). */
-export function montarLembrete(d: { demandas: readonly DemandaAberta[]; total: number; hora: number; agora: Date; pausa: EstadoPausa }): string | null {
+export function montarLembrete(d: { demandas: readonly DemandaAberta[]; total: number; reabertas: number; hora: number; agora: Date; pausa: EstadoPausa }): string | null {
   if (d.total <= 0 || d.demandas.length === 0) return null;
-  const reabertas = d.demandas.filter((x) => x.status === 'reaberta').length;
+  const reabertas = d.reabertas;
   const linhas: string[] = [`📋 Suporte — ${d.total} demanda${d.total > 1 ? 's' : ''} aberta${d.total > 1 ? 's' : ''} (resumo das ${d.hora}h)${reabertas ? ` · ${reabertas} reaberta${reabertas > 1 ? 's' : ''}` : ''}`];
   if (d.pausa.pausado) linhas.push(`⏸ Menu PAUSADO desde ${d.pausa.desde ? quandoEmSP(d.pausa.desde) : '?'} — /voltar para retomar`);
   linhas.push('');
@@ -118,8 +117,8 @@ export type DesfechoLembrete =
 export interface DepsLembrete {
   agora(): Date;
   modo(): ModoLembrete;
-  /** as abertas, da mais antiga para a mais nova, no máximo `limite`; `total` é a contagem de todas */
-  demandasAbertas(limite: number): Promise<{ demandas: DemandaAberta[]; total: number }>;
+  /** as abertas — as reabertas primeiro (já foram dadas como resolvidas), depois da mais antiga para a mais nova —, no máximo `limite`; `total` e `reabertas` contam TODAS */
+  demandasAbertas(limite: number): Promise<{ demandas: DemandaAberta[]; total: number; reabertas: number }>;
   pausa(): Promise<EstadoPausa>;
   /** 'minha' = pode enviar; 'de-outro' = outro processo já cuida deste horário; 'erro' = banco fora */
   reivindicar(nome: string, ttlMs: number): Promise<'minha' | 'de-outro' | 'erro'>;
@@ -143,8 +142,13 @@ export async function passoDoLembrete(deps: DepsLembrete, mem: MemoriaDoLembrete
   if (!h) return 'fora-do-horario';
   if (mem.resolvidos.has(h.chave)) return 'ja-feito';
 
-  const { demandas, total } = await deps.demandasAbertas(MAX_DEMANDAS_NO_TEXTO);
-  const texto = montarLembrete({ demandas, total, hora: h.hora, agora, pausa: await deps.pausa() });
+  const { demandas, total, reabertas } = await deps.demandasAbertas(MAX_DEMANDAS_NO_TEXTO);
+  // a pausa só vira uma linha informativa: se não der para ler, o resumo sai igual (o lembrete não depende do menu)
+  const pausa = await deps.pausa().catch((err: unknown) => {
+    deps.registrar('warn', { err: String(err) }, 'suporte-lembrete: não consegui ler a pausa — seguindo sem a linha de pausa');
+    return SEM_PAUSA;
+  });
+  const texto = montarLembrete({ demandas, total, reabertas, hora: h.hora, agora, pausa });
   if (texto === null) {
     // nada aberto neste horário: não manda nada. Fica resolvido, para não consultar o banco a cada minuto da hora inteira.
     mem.resolvidos.add(h.chave);

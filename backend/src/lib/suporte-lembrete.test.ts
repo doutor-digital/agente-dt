@@ -17,6 +17,7 @@ import {
   type DepsLembrete,
 } from './suporte-lembrete.js';
 import { SEM_PAUSA, type EstadoPausa } from './suporte-pausa.js';
+import { modoDoSuporte } from './suporte-menu.js';
 
 // São Paulo = UTC−3 o ano todo (sem horário de verão desde 2019)
 const as9h = new Date('2026-11-11T12:00:00Z');
@@ -36,12 +37,13 @@ const demanda = (n: number, extra: Partial<DemandaAberta> = {}): DemandaAberta =
   ...extra,
 });
 
-test('modoDoLembrete: nasce desligado; só "seco" e "ligado" ligam; aceita aspas e maiúsculas', () => {
+test('modoDoLembrete: nasce desligado; só "seco" e "ligado" ligam; mesma regra do SUPORTE_MENU (maiúsculas ok, aspas não)', () => {
   assert.equal(modoDoLembrete(undefined), 'desligado');
   assert.equal(modoDoLembrete(''), 'desligado');
   assert.equal(modoDoLembrete('qualquer coisa'), 'desligado');
   assert.equal(modoDoLembrete('seco'), 'seco');
-  assert.equal(modoDoLembrete('"LIGADO"'), 'ligado');
+  assert.equal(modoDoLembrete(' LIGADO '), 'ligado');
+  assert.equal(modoDoLembrete('"ligado"'), modoDoSuporte('"ligado"'), 'as duas chaves leem o valor do mesmo jeito');
   assert.equal(valorDoLembreteReconhecido('ligado'), true);
   assert.equal(valorDoLembreteReconhecido('talvez'), false);
 });
@@ -80,11 +82,11 @@ test('umaLinha: tira quebras e controles, junta espaços e corta com reticência
 });
 
 test('montarLembrete: sem demanda aberta não há texto (não manda nada)', () => {
-  assert.equal(montarLembrete({ demandas: [], total: 0, hora: 9, agora: as9h, pausa: SEM_PAUSA }), null);
+  assert.equal(montarLembrete({ demandas: [], total: 0, reabertas: 0, hora: 9, agora: as9h, pausa: SEM_PAUSA }), null);
 });
 
 test('montarLembrete: protocolo, quem, unidade, há quanto tempo e 1 linha do relato', () => {
-  const t = montarLembrete({ demandas: [demanda(12)], total: 1, hora: 9, agora: as9h, pausa: SEM_PAUSA })!;
+  const t = montarLembrete({ demandas: [demanda(12)], total: 1, reabertas: 0, hora: 9, agora: as9h, pausa: SEM_PAUSA })!;
   assert.match(t, /^📋 Suporte — 1 demanda aberta \(resumo das 9h\)/);
   assert.match(t, /#12 · Maria · Doutor Hérnia Timbó · há 5 h/);
   assert.match(t, /«A Sofia não respondeu a paciente Joana»/);
@@ -95,6 +97,7 @@ test('montarLembrete: sem nome e sem unidade; reaberta marcada; plural', () => {
   const t = montarLembrete({
     demandas: [demanda(1, { nome: null, unidade: null }), demanda(2, { status: 'reaberta' })],
     total: 2,
+    reabertas: 1,
     hora: 17,
     agora: as17h,
     pausa: SEM_PAUSA,
@@ -108,6 +111,7 @@ test('montarLembrete: relato com quebra de linha e texto enorme vira UMA linha c
   const t = montarLembrete({
     demandas: [demanda(3, { relato: `linha 1\nlinha 2\n${'x'.repeat(500)}` })],
     total: 1,
+    reabertas: 0,
     hora: 9,
     agora: as9h,
     pausa: SEM_PAUSA,
@@ -119,7 +123,7 @@ test('montarLembrete: relato com quebra de linha e texto enorme vira UMA linha c
 
 test('montarLembrete: passando do teto mostra só as primeiras e manda o resto para o painel; cabe no limite do Telegram (3500)', () => {
   const muitas = Array.from({ length: 40 }, (_, i) => demanda(i + 1, { relato: 'y'.repeat(400), nome: 'N'.repeat(100), unidade: 'U'.repeat(100), criadoEm: new Date(as9h.getTime() - 400 * 3_600_000) }));
-  const t = montarLembrete({ demandas: muitas.slice(0, MAX_DEMANDAS_NO_TEXTO), total: 40, hora: 9, agora: as9h, pausa: SEM_PAUSA })!;
+  const t = montarLembrete({ demandas: muitas.slice(0, MAX_DEMANDAS_NO_TEXTO), total: 40, reabertas: 0, hora: 9, agora: as9h, pausa: SEM_PAUSA })!;
   assert.match(t, /40 demandas abertas/);
   assert.match(t, new RegExp(`… e mais ${40 - MAX_DEMANDAS_NO_TEXTO} no painel`));
   assert.equal((t.match(/^#\d+/gm) ?? []).length, MAX_DEMANDAS_NO_TEXTO);
@@ -128,7 +132,7 @@ test('montarLembrete: passando do teto mostra só as primeiras e manda o resto p
 
 test('montarLembrete: lembra que o menu está pausado', () => {
   const pausa: EstadoPausa = { pausado: true, desde: new Date('2026-11-11T11:00:00Z'), por: 'telegram', ignoradas: 2 };
-  const t = montarLembrete({ demandas: [demanda(1)], total: 1, hora: 9, agora: as9h, pausa })!;
+  const t = montarLembrete({ demandas: [demanda(1)], total: 1, reabertas: 0, hora: 9, agora: as9h, pausa })!;
   assert.match(t, /⏸ Menu PAUSADO desde 11\/11 08:00 — \/voltar para retomar/);
 });
 
@@ -142,6 +146,7 @@ function mundo(opcoes: { modo?: 'desligado' | 'seco' | 'ligado'; agora?: Date; a
     total: opcoes.total ?? (opcoes.abertas ?? [demanda(1)]).length,
     lease: 'minha' as 'minha' | 'de-outro' | 'erro',
     telegramOk: true,
+    pausaQuebrada: false,
     consultas: 0,
     enviados: [] as string[],
     leases: [] as string[],
@@ -153,9 +158,12 @@ function mundo(opcoes: { modo?: 'desligado' | 'seco' | 'ligado'; agora?: Date; a
     modo: () => m.modo,
     async demandasAbertas() {
       m.consultas += 1;
-      return { demandas: m.abertas, total: m.total };
+      return { demandas: m.abertas, total: m.total, reabertas: m.abertas.filter((x) => x.status === 'reaberta').length };
     },
-    pausa: async () => SEM_PAUSA,
+    pausa: async () => {
+      if (m.pausaQuebrada) throw new Error('tabela ausente');
+      return SEM_PAUSA;
+    },
     async reivindicar(nome) {
       m.leases.push(nome);
       return m.lease;
@@ -262,4 +270,18 @@ test('passo: Telegram volta antes do teto → o resumo sai', async () => {
   m.telegramOk = true;
   assert.equal(await passoDoLembrete(deps, mem), 'enviado');
   assert.equal(m.enviados.length, 1);
+});
+
+test('montarLembrete: o número de reabertas vem da contagem geral, não só das linhas mostradas', () => {
+  const t = montarLembrete({ demandas: [demanda(1)], total: 30, reabertas: 5, hora: 9, agora: as9h, pausa: SEM_PAUSA })!;
+  assert.match(t, /30 demandas abertas \(resumo das 9h\) · 5 reabertas/);
+});
+
+test('passo: se a leitura da pausa falhar, o resumo sai igual (a pausa é só uma linha informativa)', async () => {
+  const { m, deps } = mundo();
+  m.pausaQuebrada = true;
+  assert.equal(await passoDoLembrete(deps, memoriaNova()), 'enviado');
+  assert.equal(m.enviados.length, 1);
+  assert.doesNotMatch(m.enviados[0]!, /PAUSADO/);
+  assert.ok(m.logs.some((l) => l.nivel === 'warn' && /pausa/.test(l.mensagem)));
 });

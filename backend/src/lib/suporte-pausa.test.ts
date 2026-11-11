@@ -167,7 +167,7 @@ test('/status mostra o modo do servidor, a pausa, as abertas e o lembrete', asyn
   await executarComando('pausar', depsDe(a));
   a.ignorar();
   const pausado = await executarComando('status', depsDe(a, 'desligado'));
-  assert.match(pausado, /PAUSADO desde 11\/11 12:00 pelo Telegram — 1 mensagem/);
+  assert.match(pausado, /PAUSADO desde 11\/11 12:00 pelo Telegram — cerca de 1 mensagem/);
   assert.match(pausado, /Servidor: DESLIGADO/);
 });
 

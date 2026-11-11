@@ -21,7 +21,7 @@ export interface EstadoPausa {
   /** "telegram" ou o e-mail de quem pausou pelo painel */
   por: string | null;
   /** mensagens que chegaram durante a pausa atual e ficaram sem resposta */
-  ignoradas: number;
+  ignoradas: number; // aproximado: conta reentregas do webhook e mídia sem texto
 }
 
 export const SEM_PAUSA: EstadoPausa = { pausado: false, desde: null, por: null, ignoradas: 0 };
@@ -115,9 +115,9 @@ export const TEXTOS_PAUSA = {
   pausou: (aviso: string) =>
     `⏸ Menu de suporte PAUSADO. Não responde nem grava ninguém até você mandar /voltar.${aviso}\nAs demandas já abertas e o painel seguem normais; as mensagens que chegarem agora ficam sem resposta (só são contadas).`,
   jaPausado: (e: EstadoPausa) =>
-    `⏸ Já estava pausado${e.desde ? ` desde ${quandoEmSP(e.desde)}` : ''}${quem(e.por)}.${e.ignoradas ? `\n${e.ignoradas} mensagem(ns) sem resposta até agora.` : ''}`,
+    `⏸ Já estava pausado${e.desde ? ` desde ${quandoEmSP(e.desde)}` : ''}${quem(e.por)}.${e.ignoradas ? `\nCerca de ${e.ignoradas} mensagem(ns) sem resposta até agora.` : ''}`,
   voltou: (anterior: EstadoPausa) =>
-    `▶️ Menu de suporte RETOMADO.${anterior.ignoradas > 0 ? `\n${anterior.ignoradas} mensagem(ns) chegaram durante a pausa e NÃO foram respondidas nem gravadas: quem escreveu precisa mandar de novo.` : ''}`,
+    `▶️ Menu de suporte RETOMADO.${anterior.ignoradas > 0 ? `\nCerca de ${anterior.ignoradas} mensagem(ns) chegaram durante a pausa e NÃO foram respondidas nem gravadas (a conta inclui reentregas e figurinhas): quem escreveu precisa mandar de novo.` : ''}`,
   jaAtivo: '▶️ O menu já estava ativo (não estava pausado).',
 };
 
@@ -136,7 +136,7 @@ export interface DadosDoStatus {
 
 export function montarStatus(d: DadosDoStatus): string {
   const pausa = d.pausa.pausado
-    ? `⏸ PAUSADO desde ${d.pausa.desde ? quandoEmSP(d.pausa.desde) : '?'}${quem(d.pausa.por)} — ${d.pausa.ignoradas} mensagem(ns) sem resposta`
+    ? `⏸ PAUSADO desde ${d.pausa.desde ? quandoEmSP(d.pausa.desde) : '?'}${quem(d.pausa.por)} — cerca de ${d.pausa.ignoradas} mensagem(ns) sem resposta`
     : '▶️ ativo (não pausado)';
   return [
     '📊 Menu de suporte',
@@ -194,6 +194,6 @@ export async function mudarPeloPainel(
     ? null
     : pausar
       ? `⏸ Menu de suporte PAUSADO pelo painel (${email}).${avisoDoModo(deps.modoDoMenu())}`
-      : `▶️ Menu de suporte RETOMADO pelo painel (${email}).${antes.ignoradas > 0 ? `\n${antes.ignoradas} mensagem(ns) da pausa ficaram sem resposta.` : ''}`;
+      : `▶️ Menu de suporte RETOMADO pelo painel (${email}).${antes.ignoradas > 0 ? `\nCerca de ${antes.ignoradas} mensagem(ns) da pausa ficaram sem resposta.` : ''}`;
   return { mudou, estado, aviso };
 }

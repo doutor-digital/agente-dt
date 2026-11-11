@@ -18,14 +18,16 @@ export const depsReaisDoLembrete: DepsLembrete = {
   modo: () => modoDoLembrete(process.env.SUPORTE_LEMBRETE),
   async demandasAbertas(limite) {
     const onde = { status: { in: ['aberta', 'reaberta'] } };
-    const [linhas, total] = await Promise.all([
+    const [linhas, total, reabertas] = await Promise.all([
       prisma.suporteDemanda.findMany({
         where: onde,
-        orderBy: { criadoEm: 'asc' },
+        // 'reaberta' vem depois de 'aberta' em ordem alfabética: decrescente põe as reabertas primeiro
+        orderBy: [{ status: 'desc' }, { criadoEm: 'asc' }],
         take: limite,
         select: { protocolo: true, nome: true, unidadeSlug: true, relato: true, criadoEm: true, status: true },
       }),
       prisma.suporteDemanda.count({ where: onde }),
+      prisma.suporteDemanda.count({ where: { status: 'reaberta' } }),
     ]);
     const slugs = [...new Set(linhas.map((l) => l.unidadeSlug).filter((s): s is string => Boolean(s)))];
     const unidades = slugs.length ? await prisma.unit.findMany({ where: { slug: { in: slugs } }, select: { slug: true, name: true } }) : [];
@@ -38,7 +40,7 @@ export const depsReaisDoLembrete: DepsLembrete = {
       criadoEm: l.criadoEm,
       status: l.status,
     }));
-    return { demandas, total };
+    return { demandas, total, reabertas };
   },
   pausa: () => armazemPausaPrisma.ler(),
   reivindicar: (nome, ttlMs) => reivindicarLease(nome, undefined, ttlMs),

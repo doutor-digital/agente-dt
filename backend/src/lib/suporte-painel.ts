@@ -36,7 +36,8 @@ export interface DepsPainel {
   marcarResolvida(protocolo: number, dados: { quem: string; nota: string | null; quando: Date }): Promise<void>;
   /** passa a conversa a "resolvida" (trava otimista pela versão); false = a conversa andou nesse meio-tempo */
   conversaParaResolvida(jid: string, versao: number, quando: Date): Promise<boolean>;
-  menuLigado(): boolean;
+  /** o menu pode falar com a pessoa agora? (`ligado` no servidor E não pausado) */
+  menuLigado(): boolean | Promise<boolean>;
   enviarWhatsApp(jid: string, texto: string): Promise<boolean>;
   telegram(texto: string): Promise<boolean>;
   reabrir(protocolo: number): Promise<void>;
@@ -66,7 +67,7 @@ export async function resolverDemanda(protocolo: number, quem: string, notaBruta
   const perguntou = naMesma ? await deps.conversaParaResolvida(d.jid, c!.versao, agora) : false;
   const texto = perguntou ? TEXTOS.resolvida(protocolo, nota) : `Sua demanda ${protocolo} foi resolvida. ✅${nota ? `\n\n${nota}` : ''}`;
 
-  const whatsapp = deps.menuLigado() ? await deps.enviarWhatsApp(d.jid, texto) : false;
+  const whatsapp = (await deps.menuLigado()) ? await deps.enviarWhatsApp(d.jid, texto) : false;
   await deps.telegram(`✅ Demanda #${protocolo} resolvida por ${quem}${nota ? ` — "${nota.slice(0, 200)}"` : ''}.${whatsapp ? ' A pessoa foi avisada para testar.' : ' (A pessoa NÃO foi avisada no WhatsApp: menu fora do modo ligado ou envio recusado.)'}`);
   return { ok: true, perguntou, whatsapp };
 }

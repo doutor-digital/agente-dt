@@ -130,7 +130,7 @@ function BarraDePausa() {
             <>
               <p className="font-medium text-amber-200">Menu PAUSADO desde {quando(pausa.desde)}{pausa.por ? ` (${pausa.por === 'telegram' ? 'pelo Telegram' : pausa.por})` : ''}</p>
               <p className="text-xs text-amber-200/80">
-                Não responde nem grava ninguém. {pausa.ignoradas} mensagem(ns) sem resposta até agora: quem escreveu precisa mandar de novo depois que voltar.
+                Não responde nem grava ninguém, nem manda o "pode testar?" ao marcar como resolvida. Cerca de {pausa.ignoradas} mensagem(ns) sem resposta até agora: quem escreveu precisa mandar de novo depois que voltar.
               </p>
             </>
           ) : (
@@ -238,7 +238,7 @@ function CartaoDemanda({ d, aoMudar }: { d: DemandaSuporte; aoMudar: () => Promi
     setResultado(null);
     try {
       const r = await apiSuporte.resolver(d.protocolo, nota.trim());
-      setResultado(r.whatsapp ? (r.perguntou ? 'Avisada no WhatsApp para testar (vai responder 1 ou 2).' : 'Avisada no WhatsApp (sem a pergunta: ela está em outra conversa).') : 'Marcada como resolvida, mas a pessoa NÃO foi avisada no WhatsApp (menu fora do modo ligado ou envio recusado).');
+      setResultado(r.whatsapp ? (r.perguntou ? 'Avisada no WhatsApp para testar (vai responder 1 ou 2).' : 'Avisada no WhatsApp (sem a pergunta: ela está em outra conversa).') : 'Marcada como resolvida, mas a pessoa NÃO foi avisada no WhatsApp (menu fora do modo ligado, pausado ou envio recusado).');
       setNota('');
       await aoMudar();
     } catch (e) {

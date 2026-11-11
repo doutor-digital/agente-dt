@@ -7,7 +7,7 @@ import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { enviarTelegramChamados } from '../lib/telegram.js';
 import { criarEnviadorEvolution, lerConfig } from '../lib/suporte-menu.js';
-import { armazemPausaPrisma } from '../lib/suporte-pausa-banco.js';
+import { armazemPausaPrisma, menuPausado } from '../lib/suporte-pausa-banco.js';
 import { mudarPeloPainel } from '../lib/suporte-pausa.js';
 import type { Passo } from '../lib/suporte-menu-maquina.js';
 import {
@@ -43,7 +43,8 @@ function depsReais(): DepsPainel {
       });
       return r.count === 1;
     },
-    menuLigado: () => menu.modo === 'ligado',
+    // pausado = o menu não fala com ninguém: marcar como resolvida NÃO manda o "pode testar?" (a resposta da pessoa seria descartada)
+    menuLigado: async () => menu.modo === 'ligado' && !(await menuPausado()),
     async enviarWhatsApp(jid, texto) {
       const ok = await enviar(jid, texto);
       if (ok) await prisma.suporteEnvio.create({ data: { jid, nova: false } });
