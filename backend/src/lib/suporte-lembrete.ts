@@ -27,7 +27,13 @@ export const TENTATIVAS_POR_HORARIO = 5;
 export const MAX_DEMANDAS_NO_TEXTO = 12;
 export const MAX_RELATO_NO_TEXTO = 110;
 export const PREFIXO_DO_LEASE = 'suporte-lembrete:';
-export const TTL_DO_LEASE_MS = 3 * 60 * 60_000;
+/**
+ * O lease nasce CURTO (o resumo está sendo enviado) e, depois que o Telegram aceita, é renovado para 12 h (a chave já carrega a hora;
+ * o próximo horário é outra chave). Assim, processo que morre no meio do envio não tranca o horário: em 10 min o lease vence e o
+ * próximo líder envia (se ainda estiver dentro da hora cheia). Mesmo desenho do resumo diário da Sofia.
+ */
+export const TTL_DO_LEASE_EM_ENVIO_MS = 10 * 60_000;
+export const TTL_DO_LEASE_ENVIADO_MS = 12 * 60 * 60_000;
 export const PAINEL_URL = 'https://suporte.doutordigitalconsultoria.com';
 
 /** Mesma regra do `SUPORTE_MENU` (uma só para as duas chaves): vazio ou valor estranho = desligado. */
@@ -59,7 +65,8 @@ export interface DemandaAberta {
   /** nome da unidade, se conhecido; senão o slug; senão null */
   unidade: string | null;
   relato: string;
-  criadoEm: Date;
+  /** aberta desde quando: a criação; para a reaberta, o momento em que foi reaberta (ela é pedido recente, não antigo) */
+  desde: Date;
   status: string;
 }
 
@@ -91,7 +98,7 @@ export function montarLembrete(d: { demandas: readonly DemandaAberta[]; total: n
   for (const x of d.demandas.slice(0, MAX_DEMANDAS_NO_TEXTO)) {
     const quem = x.nome ? umaLinha(x.nome, 40) : '(sem nome)';
     const unidade = x.unidade ? umaLinha(x.unidade, 40) : 'unidade não informada';
-    linhas.push(`#${x.protocolo}${x.status === 'reaberta' ? ' 🔁' : ''} · ${quem} · ${unidade} · há ${haQuanto(x.criadoEm, d.agora)}`);
+    linhas.push(`#${x.protocolo}${x.status === 'reaberta' ? ' 🔁' : ''} · ${quem} · ${unidade} · há ${haQuanto(x.desde, d.agora)}`);
     linhas.push(`«${umaLinha(x.relato, MAX_RELATO_NO_TEXTO)}»`);
   }
   const fora = d.total - Math.min(d.demandas.length, MAX_DEMANDAS_NO_TEXTO);
@@ -161,7 +168,7 @@ export async function passoDoLembrete(deps: DepsLembrete, mem: MemoriaDoLembrete
   }
 
   const nome = `${PREFIXO_DO_LEASE}${h.chave}`;
-  const lease = await deps.reivindicar(nome, TTL_DO_LEASE_MS);
+  const lease = await deps.reivindicar(nome, TTL_DO_LEASE_EM_ENVIO_MS);
   if (lease === 'erro') return 'sem-lease'; // banco fora: tenta de novo no próximo minuto (a hora cheia é o limite)
   if (lease === 'de-outro') {
     mem.resolvidos.add(h.chave);
@@ -170,6 +177,7 @@ export async function passoDoLembrete(deps: DepsLembrete, mem: MemoriaDoLembrete
   const enviou = await deps.enviar(texto);
   if (enviou) {
     mem.resolvidos.add(h.chave);
+    await deps.reivindicar(nome, TTL_DO_LEASE_ENVIADO_MS); // renova: quem já enviou continua barrando um segundo envio
     deps.registrar('info', { horario: h.chave, total }, 'suporte-lembrete: resumo enviado');
     return 'enviado';
   }

@@ -5,6 +5,8 @@ import {
   MAX_DEMANDAS_NO_TEXTO,
   PREFIXO_DO_LEASE,
   TENTATIVAS_POR_HORARIO,
+  TTL_DO_LEASE_EM_ENVIO_MS,
+  TTL_DO_LEASE_ENVIADO_MS,
   haQuanto,
   horarioDaVez,
   memoriaNova,
@@ -32,7 +34,7 @@ const demanda = (n: number, extra: Partial<DemandaAberta> = {}): DemandaAberta =
   nome: 'Maria',
   unidade: 'Doutor Hérnia Timbó',
   relato: 'A Sofia não respondeu a paciente Joana',
-  criadoEm: new Date(as9h.getTime() - 5 * 3_600_000),
+  desde: new Date(as9h.getTime() - 5 * 3_600_000),
   status: 'aberta',
   ...extra,
 });
@@ -122,7 +124,7 @@ test('montarLembrete: relato com quebra de linha e texto enorme vira UMA linha c
 });
 
 test('montarLembrete: passando do teto mostra só as primeiras e manda o resto para o painel; cabe no limite do Telegram (3500)', () => {
-  const muitas = Array.from({ length: 40 }, (_, i) => demanda(i + 1, { relato: 'y'.repeat(400), nome: 'N'.repeat(100), unidade: 'U'.repeat(100), criadoEm: new Date(as9h.getTime() - 400 * 3_600_000) }));
+  const muitas = Array.from({ length: 40 }, (_, i) => demanda(i + 1, { relato: 'y'.repeat(400), nome: 'N'.repeat(100), unidade: 'U'.repeat(100), desde: new Date(as9h.getTime() - 400 * 3_600_000) }));
   const t = montarLembrete({ demandas: muitas.slice(0, MAX_DEMANDAS_NO_TEXTO), total: 40, reabertas: 0, hora: 9, agora: as9h, pausa: SEM_PAUSA })!;
   assert.match(t, /40 demandas abertas/);
   assert.match(t, new RegExp(`… e mais ${40 - MAX_DEMANDAS_NO_TEXTO} no painel`));
@@ -150,6 +152,7 @@ function mundo(opcoes: { modo?: 'desligado' | 'seco' | 'ligado'; agora?: Date; a
     consultas: 0,
     enviados: [] as string[],
     leases: [] as string[],
+    ttls: [] as number[],
     liberados: [] as string[],
     logs: [] as Array<{ nivel: string; mensagem: string }>,
   };
@@ -164,8 +167,9 @@ function mundo(opcoes: { modo?: 'desligado' | 'seco' | 'ligado'; agora?: Date; a
       if (m.pausaQuebrada) throw new Error('tabela ausente');
       return SEM_PAUSA;
     },
-    async reivindicar(nome) {
+    async reivindicar(nome, ttlMs) {
       m.leases.push(nome);
+      m.ttls.push(ttlMs);
       return m.lease;
     },
     async liberar(nome) {
@@ -198,7 +202,9 @@ test('passo: às 9h com demanda aberta manda UM resumo, com lease do horário; o
   const mem = memoriaNova();
   assert.equal(await passoDoLembrete(deps, mem), 'enviado');
   assert.equal(m.enviados.length, 1);
-  assert.deepEqual(m.leases, [`${PREFIXO_DO_LEASE}2026-11-11:09`]);
+  assert.deepEqual(m.leases, [`${PREFIXO_DO_LEASE}2026-11-11:09`, `${PREFIXO_DO_LEASE}2026-11-11:09`]);
+  // o lease nasce curto (processo que morre no meio do envio não tranca o horário) e é renovado depois do envio
+  assert.deepEqual(m.ttls, [TTL_DO_LEASE_EM_ENVIO_MS, TTL_DO_LEASE_ENVIADO_MS]);
   m.agora = as9h59;
   assert.equal(await passoDoLembrete(deps, mem), 'ja-feito');
   assert.equal(m.enviados.length, 1);
@@ -284,4 +290,16 @@ test('passo: se a leitura da pausa falhar, o resumo sai igual (a pausa é só um
   assert.equal(m.enviados.length, 1);
   assert.doesNotMatch(m.enviados[0]!, /PAUSADO/);
   assert.ok(m.logs.some((l) => l.nivel === 'warn' && /pausa/.test(l.mensagem)));
+});
+
+test('montarLembrete: reaberta conta o tempo desde que foi reaberta, não desde a criação', () => {
+  const t = montarLembrete({
+    demandas: [demanda(10, { status: 'reaberta', desde: new Date(as9h.getTime() - 20 * 60_000) })],
+    total: 1,
+    reabertas: 1,
+    hora: 9,
+    agora: as9h,
+    pausa: SEM_PAUSA,
+  })!;
+  assert.match(t, /#10 🔁 · Maria · Doutor Hérnia Timbó · há 20 min/);
 });

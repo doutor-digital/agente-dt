@@ -63,12 +63,22 @@ test('resolver: a conversa andou no meio (trava otimista) → avisa sem a pergun
   assert.equal(ev.whatsapp[0], 'Sua demanda 5 foi resolvida. ✅');
 });
 
-test('resolver: menu fora de "ligado" → não manda WhatsApp, e o Telegram diz que a pessoa NÃO foi avisada', async () => {
+test('resolver: menu fora de "ligado" (ou PAUSADO) → não manda WhatsApp, NÃO muda a conversa de passo e o Telegram diz que a pessoa NÃO foi avisada', async () => {
   const { deps, ev } = mundo({ menuLigado: false });
   const r = await resolverDemanda(5, 'x', null, deps);
-  assert.deepEqual(r, { ok: true, perguntou: true, whatsapp: false });
+  assert.deepEqual(r, { ok: true, perguntou: false, whatsapp: false });
   assert.equal(ev.whatsapp.length, 0);
+  assert.equal(ev.conversaMudou, 0, 'sem a pergunta no ar, a próxima mensagem dela não pode ser lida como resposta ao "funcionou?"');
+  assert.deepEqual(ev.resolvida.length, 1, 'a demanda fica resolvida no painel mesmo assim');
   assert.match(ev.telegram[0]!, /NÃO foi avisada/);
+  assert.match(ev.telegram[0]!, /pausado/);
+});
+
+test('resolver: menuLigado assíncrono (a leitura da pausa no banco) também vale', async () => {
+  const { deps, ev } = mundo();
+  deps.menuLigado = async () => false;
+  assert.equal((await resolverDemanda(5, 'x', null, deps)).ok, true);
+  assert.equal(ev.whatsapp.length + ev.conversaMudou, 0);
 });
 
 test('resolver: 404 sem demanda; 409 se já resolvida (nada é enviado)', async () => {

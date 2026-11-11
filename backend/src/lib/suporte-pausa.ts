@@ -165,10 +165,9 @@ export async function executarComando(comando: Comando | 'desconhecido', deps: D
     case 'desconhecido':
       return TEXTOS_PAUSA.desconhecido;
     case 'pausar': {
-      const antes = await deps.pausa.ler();
-      if (antes.pausado) return TEXTOS_PAUSA.jaPausado(antes);
-      await deps.pausa.gravar({ pausado: true, por: 'telegram', quando: deps.agora() });
-      return TEXTOS_PAUSA.pausou(avisoDoModo(deps.modoDoMenu()));
+      // `gravar` devolve o estado ANTERIOR sob trava: quem de fato pausou é quem viu "não pausado" (o painel ao mesmo tempo não duplica a história)
+      const antes = await deps.pausa.gravar({ pausado: true, por: 'telegram', quando: deps.agora() });
+      return antes.pausado ? TEXTOS_PAUSA.jaPausado(antes) : TEXTOS_PAUSA.pausou(avisoDoModo(deps.modoDoMenu()));
     }
     case 'voltar': {
       const antes = await deps.pausa.gravar({ pausado: false, por: 'telegram', quando: deps.agora() });

@@ -24,7 +24,7 @@ export const depsReaisDoLembrete: DepsLembrete = {
         // 'reaberta' vem depois de 'aberta' em ordem alfabética: decrescente põe as reabertas primeiro
         orderBy: [{ status: 'desc' }, { criadoEm: 'asc' }],
         take: limite,
-        select: { protocolo: true, nome: true, unidadeSlug: true, relato: true, criadoEm: true, status: true },
+        select: { protocolo: true, nome: true, unidadeSlug: true, relato: true, criadoEm: true, reabertaEm: true, status: true },
       }),
       prisma.suporteDemanda.count({ where: onde }),
       prisma.suporteDemanda.count({ where: { status: 'reaberta' } }),
@@ -37,7 +37,7 @@ export const depsReaisDoLembrete: DepsLembrete = {
       nome: l.nome,
       unidade: l.unidadeSlug ? (nomeDe.get(l.unidadeSlug) ?? l.unidadeSlug) : null,
       relato: l.relato,
-      criadoEm: l.criadoEm,
+      desde: l.status === 'reaberta' && l.reabertaEm ? l.reabertaEm : l.criadoEm,
       status: l.status,
     }));
     return { demandas, total, reabertas };
