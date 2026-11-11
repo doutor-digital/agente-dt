@@ -220,6 +220,10 @@ export interface LinhaDaConversa {
 }
 
 export interface Armazem {
+  /** a chave de pausa (`suporte-pausa.ts`): true = o João pausou o menu, que não responde nem grava. Lida a cada mensagem; erro de leitura vale "pausado". */
+  pausado(): Promise<boolean>;
+  /** conta uma mensagem que chegou durante a pausa e ficou sem resposta (só no modo ligado; nunca lança) */
+  contarIgnoradaNaPausa(): Promise<void>;
   /** true = primeira vez que vemos esta mensagem (dedupe atômico pelo id do WhatsApp) */
   marcarVista(id: string): Promise<boolean>;
   lerConversa(jid: string): Promise<LinhaDaConversa | null>;
@@ -250,6 +254,7 @@ export interface Efeitos {
 
 export type Desfecho =
   | { acao: 'desligado' }
+  | { acao: 'pausado' }
   | { acao: 'repetida' }
   | { acao: 'silencio' }
   | { acao: 'seco'; passoDepois: Passo; respostas: string[] }
@@ -269,6 +274,14 @@ export async function processarMensagem(msg: Recebida, config: ConfigSuporte, ar
   if (config.modo === 'desligado') return { acao: 'desligado' };
   const agora = ef.agora();
   const ligado = config.modo === 'ligado';
+
+  // pausado pelo João (/pausar no Telegram ou botão do painel): não responde, não grava conversa, não consulta grupos.
+  // Só o contador de mensagens sem resposta anda (e só no modo ligado), para ele saber quem ficou sem retorno.
+  if (await armazem.pausado()) {
+    if (ligado) await armazem.contarIgnoradaNaPausa();
+    logger.info({ numero: mascarar(msg.jid), modo: config.modo }, 'suporte-menu: PAUSADO — mensagem ignorada, sem resposta');
+    return { acao: 'pausado' };
+  }
 
   ef.garantirIndice();
 

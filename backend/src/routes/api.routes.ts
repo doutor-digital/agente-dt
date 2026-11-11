@@ -226,12 +226,15 @@ import {
 } from '../controllers/automacoes.controller.js';
 import { digitandoHandler } from '../controllers/whatsapp-meta.controller.js';
 import { suporteMenuWebhookHandler } from '../controllers/suporte-menu.controller.js';
+import { telegramChamadosWebhookHandler } from '../controllers/suporte-bot-chamados.controller.js';
 import {
   apagarConhecimentoHandler,
   criarConhecimentoHandler,
   editarConhecimentoHandler,
   listarConhecimentoHandler,
+  lerPausaHandler,
   listarDemandasHandler,
+  mudarPausaHandler,
   reabrirHandler,
   resolverHandler,
 } from '../controllers/suporte-painel.controller.js';
@@ -270,6 +273,8 @@ apiRouter.post('/webhooks/whatsapp/ligacoes', webhookLigacoesHandler);
 // Menu de suporte no WhatsApp (instância analista-dt do Evolution). Também aceita o caminho com o nome do evento, caso o webhook por evento esteja ligado.
 apiRouter.post('/webhooks/suporte-menu', suporteMenuWebhookHandler);
 apiRouter.post('/webhooks/suporte-menu/:evento', suporteMenuWebhookHandler);
+// Comandos /pausar /voltar /status do @ddchamados_bot (Telegram). O segredo vem no cabeçalho X-Telegram-Bot-Api-Secret-Token, nunca na URL.
+apiRouter.post('/webhooks/telegram-chamados', telegramChamadosWebhookHandler);
 // Painel do suporte (suporte.doutordigitalconsultoria.com): só administrador geral.
 apiRouter.get('/suporte/demandas', requireAuth, requireSuperAdmin, listarDemandasHandler);
 apiRouter.post('/suporte/demandas/:protocolo/resolver', requireAuth, requireSuperAdmin, resolverHandler);
@@ -279,6 +284,9 @@ apiRouter.post('/suporte/conhecimento', requireAuth, requireSuperAdmin, criarCon
 apiRouter.put('/suporte/conhecimento/:id', requireAuth, requireSuperAdmin, editarConhecimentoHandler);
 apiRouter.delete('/suporte/conhecimento/:id', requireAuth, requireSuperAdmin, apagarConhecimentoHandler);
 apiRouter.post('/suporte/demandas/:protocolo/claude', requireAuth, requireSuperAdmin, mandarParaClaudeHandler);
+// Botão Pausar/Retomar do painel (a mesma chave do /pausar do Telegram).
+apiRouter.get('/suporte/pausa', requireAuth, requireSuperAdmin, lerPausaHandler);
+apiRouter.post('/suporte/pausa', requireAuth, requireSuperAdmin, mudarPausaHandler);
 // Trabalhador do agente de suporte (Claude Code na VPS, usuário isolado): só com a chave de serviço SUPORTE_CLAUDE_CHAVE.
 apiRouter.post('/suporte/claude/proxima', proximaHandler);
 apiRouter.post('/suporte/claude/:protocolo/resultado', resultadoHandler);

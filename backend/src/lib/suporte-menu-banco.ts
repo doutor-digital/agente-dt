@@ -7,6 +7,7 @@ import { logger } from './logger.js';
 import { enviarTelegramChamados } from './telegram.js';
 import { dispararAnalise } from './suporte-analise-banco.js';
 import { enfileirarSeVerificada } from './suporte-claude-banco.js';
+import { contarIgnoradaNaPausa, menuPausado } from './suporte-pausa-banco.js';
 import {
   atualizarIndiceSeVelho,
   indiceAtual,
@@ -31,6 +32,9 @@ async function unidadesAtivas(): Promise<UnidadeBasica[]> {
 const DIA_MS = 24 * 60 * 60_000;
 
 export const armazemPrisma: Armazem = {
+  pausado: () => menuPausado(),
+  contarIgnoradaNaPausa,
+
   async marcarVista(id) {
     // ON CONFLICT DO NOTHING: atômico e sem erro no log quando o Evolution entrega o mesmo webhook duas vezes
     const r = await prisma.suporteMensagemVista.createMany({ data: [{ id }], skipDuplicates: true });

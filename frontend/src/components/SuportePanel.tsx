@@ -16,13 +16,15 @@ import {
   PiBookOpenTextBold,
   PiCheckCircleBold,
   PiLifebuoyBold,
+  PiPauseBold,
+  PiPlayBold,
   PiPencilSimpleLineBold,
   PiPlusBold,
   PiSpinnerGapBold,
   PiTrashBold,
   PiWarningBold,
 } from 'react-icons/pi';
-import { apiSuporte, erroDaApi, type DemandaSuporte, type ItemConhecimento } from '../lib/api';
+import { apiSuporte, erroDaApi, type DemandaSuporte, type ItemConhecimento, type PausaSuporte } from '../lib/api';
 
 type Aba = 'demandas' | 'base';
 type Filtro = 'abertas' | 'resolvidas' | 'todas';
@@ -73,8 +75,87 @@ export default function SuportePanel() {
             ))}
           </div>
         </header>
+        <BarraDePausa />
         {aba === 'demandas' ? <Demandas /> : <Base />}
       </div>
+    </div>
+  );
+}
+
+// ─── Pausa do menu (a mesma chave do /pausar do @ddchamados_bot) ──────────────────────────────────────────
+
+function BarraDePausa() {
+  const [pausa, setPausa] = useState<PausaSuporte | null>(null);
+  const [erro, setErro] = useState<string | null>(null);
+  const [mudando, setMudando] = useState(false);
+  const [confirmar, setConfirmar] = useState(false);
+
+  const carregar = useCallback(async () => {
+    try {
+      setPausa(await apiSuporte.pausa());
+      setErro(null);
+    } catch (e) {
+      setErro(erroDaApi(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    void carregar();
+    const t = setInterval(() => void carregar(), 30_000);
+    return () => clearInterval(t);
+  }, [carregar]);
+
+  async function mudar(pausar: boolean) {
+    setMudando(true);
+    setConfirmar(false);
+    try {
+      setPausa(await apiSuporte.mudarPausa(pausar));
+      setErro(null);
+    } catch (e) {
+      setErro(erroDaApi(e));
+    } finally {
+      setMudando(false);
+    }
+  }
+
+  if (!pausa) return erro ? <Aviso texto={`Não consegui ler a pausa do menu: ${erro}`} /> : null;
+
+  const modo = pausa.menu === 'ligado' ? null : pausa.menu === 'seco' ? 'O menu está em modo seco no servidor (não responde nem grava).' : 'O menu está DESLIGADO no servidor (não responde de qualquer jeito).';
+  return (
+    <div className={`mb-5 rounded-xl p-3 ring-1 ${pausa.pausado ? 'bg-amber-500/10 ring-amber-500/30' : 'bg-zinc-900/60 ring-zinc-800'}`}>
+      <div className="flex flex-wrap items-center gap-3">
+        {pausa.pausado ? <PiPauseBold className="h-5 w-5 text-amber-300" /> : <PiPlayBold className="h-5 w-5 text-emerald-400" />}
+        <div className="min-w-0 flex-1 text-sm">
+          {pausa.pausado ? (
+            <>
+              <p className="font-medium text-amber-200">Menu PAUSADO desde {quando(pausa.desde)}{pausa.por ? ` (${pausa.por === 'telegram' ? 'pelo Telegram' : pausa.por})` : ''}</p>
+              <p className="text-xs text-amber-200/80">
+                Não responde nem grava ninguém. {pausa.ignoradas} mensagem(ns) sem resposta até agora: quem escreveu precisa mandar de novo depois que voltar.
+              </p>
+            </>
+          ) : (
+            <p className="text-zinc-200">Menu ativo. <span className="text-xs text-zinc-500">Também dá para pausar com /pausar no @ddchamados_bot.</span></p>
+          )}
+          {modo && <p className="mt-0.5 text-xs text-zinc-400">{modo}</p>}
+        </div>
+        {pausa.pausado ? (
+          <button onClick={() => void mudar(false)} disabled={mudando} className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50">
+            {mudando ? <PiSpinnerGapBold className="h-4 w-4 animate-spin" /> : <PiPlayBold className="h-4 w-4" />} Retomar
+          </button>
+        ) : confirmar ? (
+          <span className="flex items-center gap-2 text-xs">
+            <button onClick={() => void mudar(true)} disabled={mudando} className="rounded-lg bg-amber-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-500 disabled:opacity-50">
+              Pausar mesmo
+            </button>
+            <button onClick={() => setConfirmar(false)} className="text-zinc-400 hover:text-zinc-200">Cancelar</button>
+          </span>
+        ) : (
+          <button onClick={() => setConfirmar(true)} disabled={mudando} className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-amber-200 ring-1 ring-amber-500/40 hover:bg-amber-500/10 disabled:opacity-50">
+            <PiPauseBold className="h-4 w-4" /> Pausar
+          </button>
+        )}
+      </div>
+      {erro && <p className="mt-2 text-xs text-red-300">{erro}</p>}
     </div>
   );
 }

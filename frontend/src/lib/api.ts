@@ -1156,7 +1156,25 @@ export interface ItemConhecimento {
   atualizadoEm: string;
 }
 
+/** A chave de pausa do menu do suporte (a mesma do /pausar do @ddchamados_bot). `menu` = modo do servidor (desligado | seco | ligado). */
+export interface PausaSuporte {
+  pausado: boolean;
+  desde: string | null;
+  por: string | null;
+  /** mensagens que chegaram durante a pausa e ficaram sem resposta */
+  ignoradas: number;
+  menu: 'desligado' | 'seco' | 'ligado';
+}
+
 export const apiSuporte = {
+  async pausa(): Promise<PausaSuporte> {
+    const { data } = await http.get<PausaSuporte>('/suporte/pausa');
+    return data;
+  },
+  async mudarPausa(pausado: boolean): Promise<PausaSuporte & { mudou: boolean }> {
+    const { data } = await http.post<PausaSuporte & { mudou: boolean }>('/suporte/pausa', { pausado });
+    return data;
+  },
   async demandas(status?: StatusDemandaSuporte): Promise<{ demandas: DemandaSuporte[]; contagem: Partial<Record<StatusDemandaSuporte, number>> }> {
     const { data } = await http.get('/suporte/demandas', { params: status ? { status, limite: 100 } : { limite: 100 } });
     return data;

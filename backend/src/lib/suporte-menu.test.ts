@@ -213,6 +213,8 @@ interface Mundo {
   relogio: { agora: Date };
   analisadas: number[];
   reabertas: number[];
+  pausado: boolean;
+  ignoradasNaPausa: number;
 }
 
 function criarMundo(): Mundo {
@@ -228,6 +230,8 @@ function criarMundo(): Mundo {
     relogio: { agora: AGORA },
     analisadas: [],
     reabertas: [],
+    pausado: false,
+    ignoradasNaPausa: 0,
     armazem: undefined as unknown as Armazem,
     efeitos: undefined as unknown as Efeitos,
   };
@@ -236,6 +240,14 @@ function criarMundo(): Mundo {
     m.chamadas[k] = (m.chamadas[k] ?? 0) + 1;
   };
   m.armazem = {
+    async pausado() {
+      conta('pausado');
+      return m.pausado;
+    },
+    async contarIgnoradaNaPausa() {
+      conta('contarIgnoradaNaPausa');
+      m.ignoradasNaPausa += 1;
+    },
     async marcarVista(id) {
       conta('marcarVista');
       if (vistas.has(id)) return false;
@@ -325,6 +337,48 @@ beforeEach(() => _zerarAvisoDeLimiteParaTeste());
 
 test('desligado: não faz nada (nem lê o banco)', async () => {
   const m = criarMundo();
+  const d = await processarMensagem(recebida('oi'), config({ modo: 'desligado' }), m.armazem, m.efeitos);
+  assert.deepEqual(d, { acao: 'desligado' });
+  assert.deepEqual(m.chamadas, {});
+});
+test('PAUSADO (ligado): não responde, não grava conversa nem demanda, não consulta grupos; só conta a mensagem ignorada', async () => {
+  const m = criarMundo();
+  m.pausado = true;
+  const d = await processarMensagem(recebida('oi'), config({ modo: 'ligado' }), m.armazem, m.efeitos);
+  assert.deepEqual(d, { acao: 'pausado' });
+  for (const proibida of ['marcarVista', 'lerConversa', 'salvar', 'registrarEnvio', 'marcarTelegram', 'limparAntigos', 'enviarWhatsApp', 'enviarTelegram', 'garantirIndice']) {
+    assert.equal(m.chamadas[proibida] ?? 0, 0, proibida);
+  }
+  assert.equal(m.conversas.size, 0);
+  assert.equal(m.demandas.length, 0);
+  assert.equal(m.whatsapp.length + m.telegram.length, 0);
+  assert.equal(m.ignoradasNaPausa, 1);
+});
+test('PAUSADO continua valendo no meio de uma conversa e ao despausar o menu volta a responder do ponto em que estava', async () => {
+  const m = criarMundo();
+  const c = config();
+  await processarMensagem(recebida('oi'), c, m.armazem, m.efeitos);
+  assert.equal(m.whatsapp.length, 1);
+  m.pausado = true;
+  await processarMensagem(recebida('1'), c, m.armazem, m.efeitos);
+  await processarMensagem(recebida('1'), c, m.armazem, m.efeitos);
+  assert.equal(m.whatsapp.length, 1, 'pausado: nenhuma resposta nova');
+  assert.equal(m.ignoradasNaPausa, 2);
+  m.pausado = false;
+  await processarMensagem(recebida('1'), c, m.armazem, m.efeitos);
+  assert.equal(m.whatsapp.length, 2, 'voltou a responder');
+});
+test('PAUSADO em modo SECO: também não faz nada e NÃO conta (seco não escreve em lugar nenhum)', async () => {
+  const m = criarMundo();
+  m.pausado = true;
+  const d = await processarMensagem(recebida('oi'), config({ modo: 'seco' }), m.armazem, m.efeitos);
+  assert.deepEqual(d, { acao: 'pausado' });
+  assert.equal(m.ignoradasNaPausa, 0);
+  assert.equal(m.chamadas.contarIgnoradaNaPausa ?? 0, 0);
+});
+test('DESLIGADO vence a pausa: nem lê a chave', async () => {
+  const m = criarMundo();
+  m.pausado = true;
   const d = await processarMensagem(recebida('oi'), config({ modo: 'desligado' }), m.armazem, m.efeitos);
   assert.deepEqual(d, { acao: 'desligado' });
   assert.deepEqual(m.chamadas, {});
