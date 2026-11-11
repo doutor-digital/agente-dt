@@ -5,7 +5,7 @@ import { env } from '../lib/env.js';
 import { resolveOpenAIApiKey } from './openai.service.js';
 import { ehTranscricaoDeComprovante } from '../lib/pagamento-antecipado.js';
 import { normalizarDados, type DadosDoComprovante } from '../lib/comprovante-pix.js';
-import { LINHA_DA_VISAO } from '../lib/exame-de-imagem.js';
+import { LINHA_DA_VISAO } from '../lib/exame-de-imagem-texto.js';
 
 const CHAT_URL = 'https://api.openai.com/v1/chat/completions';
 
