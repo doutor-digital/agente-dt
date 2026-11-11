@@ -13,6 +13,7 @@ import { zodToJsonSchema } from 'zod-to-json-schema';
 import { TraceRecorder } from './trace-recorder.js';
 import { getActiveConfig } from './config.js';
 import { composeSystemPromptForUnit, composeSystemPromptPartsForUnit, precosDaConsulta } from './prompt-composer.js';
+import { jeitoDaConversa } from './conversa-direta.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.js';
 import { createChatModel, invokeChatModel, LlmRecusaError } from '../services/openai.service.js';
@@ -34,7 +35,7 @@ import {
   analisarRepeticao,
   falasDoHistorico,
   ferramentasDoTurno,
-  INSTRUCAO_REFAZER_SEM_NOME,
+  fazPerguntaDeSinalDeAlerta,
   marcouCandidatoNoTurno,
   pedeNome,
   travaDaResposta,
@@ -1501,7 +1502,12 @@ export async function buildAgentGraph(
       // mesma ferramenta pausar_ia; pediu o nome pela 3ª vez → refaz UMA vez sem o pedido (se a refeita não servir,
       // fica a original — um 3º pedido é ruim, mas mensagem quebrada é pior).
       // Já passou por sinal de alerta neste turno: a trava da repetição não pausa de novo nem troca a frase do passe.
-      const trava = passouPorSinal || candidatoNoTurno ? null : travaDaResposta(repeticao, textoFinal, ferramentasDoTurno(nonSystemMessages));
+      // Chaves de conversa curta (Timbó, 11/11/2026): pediu o nome fora da hora de marcar, ou fez a pergunta de sinal de
+      // alerta com a chave ligada → refaz UMA vez sem isso (o prompt sozinho não segurou: lead 6035300, 11/11 09:53).
+      const trava =
+        passouPorSinal || candidatoNoTurno
+          ? null
+          : travaDaResposta(repeticao, textoFinal, ferramentasDoTurno(nonSystemMessages), jeitoDaConversa(unit));
       if (trava?.acao === 'passar_para_equipe') {
         const pausar = tools.find((t) => t.name === 'pausar_ia');
         let resultadoPausa: string | null = null;
@@ -1526,14 +1532,15 @@ export async function buildAgentGraph(
           textoFinal = trava.frase;
           response.content = textoFinal;
         }
-      } else if (trava?.acao === 'refazer_sem_nome' && !respondeuPlanoB) {
+      } else if ((trava?.acao === 'refazer_sem_nome' || trava?.acao === 'refazer_sem_alerta') && !respondeuPlanoB) {
+        const semAlerta = trava.acao === 'refazer_sem_alerta';
         const t1 = performance.now();
         let textoRefeito = '';
         try {
           const refeita = (await withTimeout(
             invokeChatModel({
               model: modeloAtivo,
-              messages: [...finalMessages, response, new HumanMessage(INSTRUCAO_REFAZER_SEM_NOME)],
+              messages: [...finalMessages, response, new HumanMessage(trava.instrucao)],
               unitId: unit.id,
               traceId: recorder.traceId,
               modelName,
@@ -1547,16 +1554,24 @@ export async function buildAgentGraph(
         } catch (err) {
           logger.warn({ err: String(err), unit: unit.slug }, 'repetição: refeita sem o nome falhou — fica a original');
         }
-        const serve = !!textoRefeito && !pedeNome(textoRefeito) && !detectarVazamento(textoRefeito) && !(await reabreAfirmacao(textoRefeito));
+        const serve =
+          !!textoRefeito &&
+          !(semAlerta ? fazPerguntaDeSinalDeAlerta(textoRefeito) : pedeNome(textoRefeito)) &&
+          !detectarVazamento(textoRefeito) &&
+          !(await reabreAfirmacao(textoRefeito));
         if (serve) {
           textoFinal = textoRefeito;
           response.content = textoRefeito;
         }
         await recorder.step({
           kind: 'THINKING',
-          title: serve
-            ? `🔁 Pediu o nome pela ${repeticao.pedidosDeNome + 1}ª vez — refeita sem o pedido`
-            : `🔁 Pediu o nome pela ${repeticao.pedidosDeNome + 1}ª vez; a refeita não serviu — saiu a original`,
+          title: semAlerta
+            ? serve
+              ? '🔁 Perguntou sinal de alerta com a chave sem-pergunta-de-alerta — refeita sem a pergunta'
+              : '🔁 Perguntou sinal de alerta com a chave sem-pergunta-de-alerta; a refeita não serviu — saiu a original'
+            : serve
+              ? `🔁 Pediu o nome (${repeticao.pedidosDeNome + 1}º pedido) — refeita sem o pedido`
+              : `🔁 Pediu o nome (${repeticao.pedidosDeNome + 1}º pedido); a refeita não serviu — saiu a original`,
           payload: { refeita: textoRefeito || null, final: textoFinal },
           latencyMs: Math.round(performance.now() - t1),
         });
