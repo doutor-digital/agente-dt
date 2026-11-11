@@ -154,3 +154,21 @@ test('telefone da adição rápida: com DDD vira +55; curto é recusado', () => 
   assert.equal(telefoneParaCadastro('+55 63 99999-1234'), '+5563999991234');
   assert.equal(telefoneParaCadastro('1234'), null);
 });
+
+test('cartão: aviso do sistema ("Atribuído a…") não vira a última mensagem', () => {
+  const k = cartaoDaConversa({ id: 1, messages: [{ content: 'quero marcar', message_type: 0 }, { content: 'Atribuído a Suzanne', message_type: 2 }] }, ['Novo']);
+  assert.equal(k.ultimaMensagem, 'quero marcar');
+  assert.equal(k.ultimaDela, true);
+});
+
+test('cartão: lista do Chatwoot com só o aviso do sistema cai no last_non_activity_message', () => {
+  const k = cartaoDaConversa({ id: 2, messages: [{ content: 'Atribuído a X', message_type: 2 }], last_non_activity_message: { content: 'oi doutor', message_type: 0 } }, ['Novo']);
+  assert.equal(k.ultimaMensagem, 'oi doutor');
+  assert.equal(k.ultimaDela, true);
+});
+
+test('cartão: id do responsável (o filtro "Minhas" compara por id, não por nome)', () => {
+  assert.equal(cartaoDaConversa({ id: 1, meta: { assignee: { id: 7, name: 'Ana' } } }, ['Novo']).responsavelId, 7);
+  assert.equal(cartaoDaConversa({ id: 2, meta: {} }, ['Novo']).responsavelId, null);
+  assert.equal(cartaoDaConversa({ id: 3, meta: { assignee: { id: 'x' } } }, ['Novo']).responsavelId, null);
+});
