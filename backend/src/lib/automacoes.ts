@@ -739,6 +739,43 @@ export const AUTOMACOES: readonly Automacao[] = [
     temSeco: false,
     quandoVazio: 'desligado',
     arquivo: 'src/lib/exame-de-imagem.ts',
+    id: 'sem-pergunta-de-alerta',
+    chave: 'SEM_PERGUNTA_DE_ALERTA_SLUGS',
+    nome: 'Sofia não pergunta sinal de alerta (força, xixi, fezes)',
+    oQueFaz:
+      'A Sofia deixa de PERGUNTAR se a perna perdeu força, se o paciente segura o xixi ou as fezes, se a virilha está dormente. Se o paciente CONTAR um desses sinais com clareza, tudo continua: ela para, avisa a equipe, etiqueta 🔴 PRIORIDADE e tarefa LIGAR AGORA. Pedido da dona de Timbó (10/11/2026): "o lead perde o interesse nesse rodeio todo".',
+    pegadinha:
+      'Só tira a PERGUNTA. A detecção do sinal no que o paciente escreve (rede de segurança em código, sinal-de-alerta.ts e passe-por-sinal.ts) e a regra de nunca sugerir pronto-socorro seguem iguais. Fala vaga ("a perna bambeou", dor que vai para a virilha) deixa de virar pergunta: a Sofia acolhe e segue para a consulta. Não tem "só no papel": é texto do prompt.',
+    risco: 'comportamento',
+    temSeco: false,
+    quandoVazio: 'desligado',
+    arquivo: 'src/agent/conversa-direta.ts',
+  },
+  {
+    id: 'nome-na-hora-de-marcar',
+    chave: 'NOME_NA_HORA_DE_MARCAR_SLUGS',
+    nome: 'Sofia pede o nome só na hora de marcar',
+    oQueFaz:
+      'Nada de "como posso te chamar?" no começo nem no meio da conversa: a Sofia pede o nome completo uma vez, junto da escolha do horário, porque o cadastro da consulta precisa dele. Se o paciente disser o nome antes por conta própria, ela usa. Pedido da dona de Timbó (10/11/2026).',
+    pegadinha:
+      'Vale mais que a chave "coletar nome" do cadastro da unidade e que o prompt próprio da unidade. O título do cartão no Kommo só ganha o nome quando ele é dito — até lá fica o título de sempre. Não tem "só no papel": é texto do prompt.',
+    risco: 'comportamento',
+    temSeco: false,
+    quandoVazio: 'desligado',
+    arquivo: 'src/agent/conversa-direta.ts',
+  },
+  {
+    id: 'conduzir-direto',
+    chave: 'CONDUZIR_DIRETO_SLUGS',
+    nome: 'Sofia conduz direto para a consulta (sem rodeio de sintomas)',
+    oQueFaz:
+      'Se o paciente já disse a dor e é algo que tratamos, a Sofia não faz mais perguntas de sintoma (há quanto tempo, intensidade) nem de impacto (sono, trabalho): diz que entende, que é exatamente o que tratamos, e oferece horários. Perguntou o valor, o valor vai na primeira frase, na hora. Pedido da dona de Timbó (10/11/2026).',
+    pegadinha:
+      'Desligada, vale o roteiro da rede (preço depois da queixa, uma pergunta de impacto). Ligada ou não, a Sofia nunca diagnostica, nunca promete resultado e para no sinal de alerta que o paciente contar. Não tem "só no papel": é texto do prompt.',
+    risco: 'comportamento',
+    temSeco: false,
+    quandoVazio: 'desligado',
+    arquivo: 'src/agent/conversa-direta.ts',
   },
   {
     id: 'cache-agenda',

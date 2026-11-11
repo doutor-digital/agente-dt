@@ -157,8 +157,31 @@ export function ehClinicaParaSinalDeAlerta(unit: Pick<Unit, 'category'>): boolea
 }
 
 /** O bloco do prompt. Só para clínica (ver `ehClinicaParaSinalDeAlerta`). */
-export function renderSinalDeAlerta(unit: Pick<Unit, 'category'>): string {
+export function renderSinalDeAlerta(unit: Pick<Unit, 'category'>, opcoes: { semPerguntar?: boolean } = {}): string {
   if (!ehClinicaParaSinalDeAlerta(unit)) return '';
+  // Chave `sem-pergunta-de-alerta` (Timbó, 11/11/2026, conversa-direta.ts): a Sofia não PERGUNTA pelos sinais. Saem as
+  // linhas que mandam perguntar (fala vaga, linguagem do dia a dia, dor na virilha); o resto — o que é sinal, parar
+  // quando o paciente CONTA, nunca pronto-socorro — fica igual.
+  const comoPerguntar = opcoes.semPerguntar
+    ? `- QUANDO A FALA É VAGA ("a perna bambeou", "travei", "quase não andei", dor que vai para a virilha ou a região
+  íntima): NÃO pergunte sinal nenhum (decisão do João para esta unidade, 11/11). Acolha em UMA frase e siga o
+  atendimento normal — quem avalia é o especialista, na consulta. Só pare se ele CONTAR o sinal com clareza.`
+    : `- QUANDO A FALA É VAGA, acolha em UMA frase e faça UMA pergunta com UM sinal só (um "sim" solto a uma
+  pergunta com vários sinais não confirma nada): "a perna ficou fraca, sem força?". Se ele confirmar, pare
+  como acima; se negar, siga o atendimento normal. Resposta parcial a esse UM sinal ("às vezes", "um pouco",
+  "de vez em quando", "mais ou menos", "já aconteceu") CONFIRMA: pare. Nunca repita a pergunta de segurança
+  uma segunda vez — quem não respondeu direito vai para a equipe.`;
+  const linguagemEVirilha = opcoes.semPerguntar
+    ? ''
+    : `
+- LINGUAGEM DO DIA A DIA (e erro de digitação) conta igual: "me faltou/faltaram as pernas"
+  ("mim falou as pernas"), "as pernas falharam", "a perna bambeou", "quase não andei" ("quer não andei"),
+  "não consigo andar", "travei". É fala vaga: faça a pergunta de UM sinal, como acima.
+- DOR QUE VAI PARA A VIRILHA, OS TESTÍCULOS, A REGIÃO ÍNTIMA OU A BARRIGA ("irradia pra virilha", "chega
+  nos testículos", "dói o saco", "vai pra barriga"): não pule para sono e trabalho. Acolha em UMA frase e
+  pergunte UM sinal — comece pela dormência ("a virilha ou a região íntima fica dormente, adormecida?") e
+  depois o controle do xixi e das fezes. Sem diagnosticar (nada de "pode ser rim", "pode ser hérnia"). Se
+  ele não tiver nenhum dos sinais, siga o atendimento normal.`;
   return `<sinal_de_alerta>
 (ALTA PRIORIDADE — decisão do João, 26/10. Vale mais que qualquer orientação das <acoes>, do cadastro
 da unidade e dos modelos de mensagem)
@@ -177,21 +200,9 @@ da unidade e dos modelos de mensagem)
   Não chame consultar_horarios nem agendar_consulta depois de um sinal confirmado.
 - QUANDO A FALA É CLARA ("não estou segurando o xixi", "minha perna está perdendo força"), é sinal
   confirmado: não pergunte de novo, pare.
-- QUANDO A FALA É VAGA, acolha em UMA frase e faça UMA pergunta com UM sinal só (um "sim" solto a uma
-  pergunta com vários sinais não confirma nada): "a perna ficou fraca, sem força?". Se ele confirmar, pare
-  como acima; se negar, siga o atendimento normal. Resposta parcial a esse UM sinal ("às vezes", "um pouco",
-  "de vez em quando", "mais ou menos", "já aconteceu") CONFIRMA: pare. Nunca repita a pergunta de segurança
-  uma segunda vez — quem não respondeu direito vai para a equipe.
+${comoPerguntar}
 - VÁRIAS MENSAGENS SEGUIDAS: leia todas antes de responder. Se QUALQUER uma traz dor, limitação ou sinal
-  clínico, acolha ISSO primeiro — nunca responda só ao "tudo bem" ou ao "boa noite" do fim.
-- LINGUAGEM DO DIA A DIA (e erro de digitação) conta igual: "me faltou/faltaram as pernas"
-  ("mim falou as pernas"), "as pernas falharam", "a perna bambeou", "quase não andei" ("quer não andei"),
-  "não consigo andar", "travei". É fala vaga: faça a pergunta de UM sinal, como acima.
-- DOR QUE VAI PARA A VIRILHA, OS TESTÍCULOS, A REGIÃO ÍNTIMA OU A BARRIGA ("irradia pra virilha", "chega
-  nos testículos", "dói o saco", "vai pra barriga"): não pule para sono e trabalho. Acolha em UMA frase e
-  pergunte UM sinal — comece pela dormência ("a virilha ou a região íntima fica dormente, adormecida?") e
-  depois o controle do xixi e das fezes. Sem diagnosticar (nada de "pode ser rim", "pode ser hérnia"). Se
-  ele não tiver nenhum dos sinais, siga o atendimento normal.
+  clínico, acolha ISSO primeiro — nunca responda só ao "tudo bem" ou ao "boa noite" do fim.${linguagemEVirilha}
 - NÃO É sinal de alerta: dor forte, dor que piorou aos poucos ou há dias, dor que desce para a perna ou
   formigamento, sozinhos. Siga o atendimento normal.
 - ACIDENTE, FRATURA OU CIRURGIA ANTIGA (meses ou anos atrás), com dor que veio depois: NÃO é sinal de
