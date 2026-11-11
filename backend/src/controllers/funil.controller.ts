@@ -771,7 +771,7 @@ body{background:#f4f6f9}
         var esp=esperando(k), novo=!vistos||!vistos[k.id];
         var d=el('article','k'+(esp?' espera':'')+(ctxConversa===k.id?' esta':'')+(novo?' novo':'')+(chegou===k.id?' chegou':'')); d.style.setProperty('--i',String(Math.min(ordem++,24))); d.draggable=true; d.tabIndex=0; d.setAttribute('role','button'); d.setAttribute('aria-label','Abrir '+k.nome);
         d.addEventListener('dragstart',function(){ arrastando=k; setTimeout(function(){ d.classList.add('arrastando'); },0); });
-        d.addEventListener('dragend',function(){ d.classList.remove('arrastando'); });
+        d.addEventListener('dragend',function(){ d.classList.remove('arrastando'); setTimeout(function(){ arrastando=null; },0); });
         d.addEventListener('click',function(){ abrirFicha(k.id); });
         d.addEventListener('keydown',function(ev){ if(ev.key==='Enter') abrirFicha(k.id); });
         var topo=el('div','l1'), av=el('span','av'); avatar(av,k.nome,k.avatar,k.id); topo.appendChild(av);
@@ -802,7 +802,7 @@ body{background:#f4f6f9}
     try{
       dados=await api('GET','quadro'+($('caixa').value?('?caixa='+encodeURIComponent($('caixa').value)):''));
       $('novo').hidden=!dados.podeEscrever; desenhar(); if(!$('msg').textContent||/Carregando/.test($('msg').textContent)) msg(dados.total+' leads');
-    }catch(e){ msg(e.message); }
+    }catch(e){ msg(e.message); if(!dados){ var qd=$('quadro'); qd.textContent=''; qd.appendChild(el('div','vazio',e.message)); } }
   }
 
   // ── ficha do lead ─────────────────────────────────────────────────────────
