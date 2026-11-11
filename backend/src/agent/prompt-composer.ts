@@ -64,7 +64,7 @@ import { logger } from '../lib/logger.js';
 import { capturaUnificada } from './captura-unificada.js';
 import { ehSoCumprimento } from '../lib/pediu-para-parar.js';
 import { automacaoLigada } from '../lib/automacoes-estado.js';
-import { jeitoDaConversa, renderConversaDireta } from './conversa-direta.js';
+import { jeitoDaConversa, renderConversaDireta, type JeitoDaConversa } from './conversa-direta.js';
 import { sorrisoColoridoLigado } from '../lib/carinha-antiga.js';
 import {
   FORMAS_NO_DIA,
@@ -918,6 +918,107 @@ function valoresAprovados(unit: Unit): number[] {
   return [...achados].sort((a, b) => a - b);
 }
 
+/**
+ * O começo da tabela de estados do <conversao> (até "valor construído"). Uma cópia só do texto da rede; as chaves de
+ * conversa curta (conversa-direta.ts) trocam linhas, sem duplicar a tabela.
+ */
+const TABELA_DO_INICIO_DA_REDE = `  chegou agora                 →  acolher e pedir o nome. Só isso.
+  disse o nome                 →  investigar: onde dói, há quanto tempo
+  contou a queixa              →  aprofundar o IMPACTO (ver abaixo)
+  contou o impacto             →  identificar o objetivo dele
+  objetivo claro               →  construir valor: o que a consulta faz por
+                                  ESSE objetivo
+  valor construído             →  consultar horários e oferecer DUAS opções
+                                  concretas (nunca "manhã ou tarde?")
+`;
+
+export function tabelaDeEstadosDoInicio(jeito: JeitoDaConversa): string {
+  const chegou = jeito.nomeNaHoraDeMarcar
+    ? '  chegou agora                 →  acolher e perguntar o que ele está sentindo (o nome, só na hora de marcar)\n'
+    : '  chegou agora                 →  acolher e pedir o nome. Só isso.\n';
+  if (!jeito.conduzirDireto) {
+    if (!jeito.nomeNaHoraDeMarcar) return TABELA_DO_INICIO_DA_REDE;
+    return TABELA_DO_INICIO_DA_REDE.replace('  chegou agora                 →  acolher e pedir o nome. Só isso.\n', chegou).replace(
+      '  disse o nome                 →  investigar',
+      '  disse o que sente            →  investigar',
+    );
+  }
+  const disseONome = jeito.nomeNaHoraDeMarcar
+    ? ''
+    : '  disse o nome                 →  perguntar o que ele está sentindo (UMA pergunta)\n';
+  return (
+    chegou +
+    disseONome +
+    `  contou a queixa              →  "entendo, é exatamente o que tratamos aqui" e
+                                  consultar horários e oferecer DUAS opções
+                                  concretas — sem mais perguntas de sintoma
+`
+  );
+}
+
+/**
+ * Chave `conduzir-direto` (conversa-direta.ts): trechos do <conversao> que mandam segurar o preço ou investigar mais e
+ * que contradiriam a regra nova. Cada original tem de existir no texto da rede (o teste confere): se alguém reescrever
+ * o roteiro, o teste quebra em vez de a troca sumir calada.
+ */
+export const TROCAS_DO_CONDUZIR_DIRETO: ReadonlyArray<readonly [string, string]> = [
+  [
+    `  Certo:   "Entendo, é dinheiro mesmo. Deixa eu te perguntar: o que essa dor
+            já te impediu de fazer nesse tempo todo?"`,
+    `  Certo:   "Entendo, é dinheiro mesmo. A consulta é onde se descobre a causa, em
+            vez de seguir tratando o sintoma. Quer que eu veja um horário pra você?"`,
+  ],
+  [
+    `  perde confiança. Mas NÃO emende o valor: pergunta de plano não é pergunta de preço.
+  Valor dito antes da dor vira "caro e nem é pelo plano", e a conversa acaba ali.
+  Vá para a dor, com UMA pergunta:
+  > "Aqui o atendimento é particular, sem convênio. Mas me conta: onde dói e há
+     quanto tempo? Quero entender o seu caso pra te explicar direitinho."
+  2) DEPOIS QUE ELE CONTAR A DOR, a condição de quem tem plano, nesta ordem:`,
+    `  perde confiança. Se ele ainda não disse o que sente, UMA pergunta só:
+  > "Aqui o atendimento é particular, sem convênio. Mas me conta: o que você está
+     sentindo?"
+  2) Contou a dor (ou perguntou o preço), a condição de quem tem plano, nesta ordem:`,
+  ],
+  [
+    `  Se na mesma mensagem ele também perguntou o preço, vale a regra do PREÇO acima:
+  uma pergunta sobre a dor e, se ele insistir, o valor na hora.`,
+    `  Se na mesma mensagem ele também perguntou o preço, o valor vai na hora, na
+  primeira frase (regra do PREÇO acima).`,
+  ],
+  [
+    `A SEQUÊNCIA QUE CONVERTE — nesta ordem, sempre:
+  acolher e RESUMIR a queixa com as palavras dele
+  → traduzir para o que ELE quer de volta (dormir a noite, carregar o neto,
+    voltar a trabalhar) — nunca em termos técnicos
+  → conectar a consulta a esse objetivo
+  → só então preço e logística, como MEIO para o que já foi definido
+
+Preço apresentado antes do objetivo é custo. Depois do objetivo, é investimento
+no que a pessoa acabou de dizer que quer. A ordem é o que muda a percepção, não
+o número.`,
+    `A SEQUÊNCIA QUE CONVERTE AQUI (decisão do João para esta unidade):
+  acolher a queixa em UMA frase ("é exatamente o que tratamos aqui")
+  → oferecer DOIS horários concretos
+  → preço quando ele perguntar, na hora, na primeira frase
+Cada pergunta a mais é um motivo para o paciente sumir.`,
+  ],
+  [
+    `Não pule etapas para acelerar. Cada uma existe porque a seguinte não funciona
+sem ela — e pular é o que faz a conversa travar em "vou pensar".`,
+    `Aqui, depois da queixa vem a agenda: sem etapas de investigação no meio.`,
+  ],
+];
+
+export function conduzirDiretoNoRoteiro(texto: string): string {
+  return TROCAS_DO_CONDUZIR_DIRETO.reduce((t, [de, para]) => t.split(de).join(para), texto);
+}
+
+/** O bloco <conversa_direta> da unidade (as três chaves lidas aqui; vazio com todas desligadas). */
+function renderConversaDiretaDaUnidade(unit: Unit): string {
+  return renderConversaDireta(jeitoDaConversa(unit), { clinica: ehClinicaParaSinalDeAlerta(unit) });
+}
+
 function renderConversao(unit: Unit): string {
   const valores = valoresAprovados(unit);
   if (valores.length === 0) return '';
@@ -981,34 +1082,7 @@ rodeio, ancorado no que ele acabou de contar:
      ${valorDaConsulta}. É nela que se descobre a
      causa, em vez de continuar tratando o sintoma."
 `;
-  const pedirNome = jeito.nomeNaHoraDeMarcar
-    ? 'acolher e perguntar o que ele está sentindo (o nome, só na hora de marcar)'
-    : 'acolher e pedir o nome. Só isso.';
-  const tabelaInicio = jeito.conduzirDireto
-    ? `  chegou agora                 →  ${pedirNome}
-  contou a queixa              →  "entendo, é exatamente o que tratamos aqui" e
-                                  consultar horários e oferecer DUAS opções
-                                  concretas — sem mais perguntas de sintoma
-`
-    : jeito.nomeNaHoraDeMarcar
-      ? `  chegou agora                 →  ${pedirNome}
-  disse o que sente            →  investigar: onde dói, há quanto tempo
-  contou a queixa              →  aprofundar o IMPACTO (ver abaixo)
-  contou o impacto             →  identificar o objetivo dele
-  objetivo claro               →  construir valor: o que a consulta faz por
-                                  ESSE objetivo
-  valor construído             →  consultar horários e oferecer DUAS opções
-                                  concretas (nunca "manhã ou tarde?")
-`
-      : `  chegou agora                 →  acolher e pedir o nome. Só isso.
-  disse o nome                 →  investigar: onde dói, há quanto tempo
-  contou a queixa              →  aprofundar o IMPACTO (ver abaixo)
-  contou o impacto             →  identificar o objetivo dele
-  objetivo claro               →  construir valor: o que a consulta faz por
-                                  ESSE objetivo
-  valor construído             →  consultar horários e oferecer DUAS opções
-                                  concretas (nunca "manhã ou tarde?")
-`;
+  const tabelaInicio = tabelaDeEstadosDoInicio(jeito);
   const impactoTexto = jeito.conduzirDireto
     ? `SEM PERGUNTAS DE IMPACTO NEM DE SINTOMA depois da queixa (decisão do João para esta
 unidade): nada de "tem te tirado o sono?", "há quanto tempo?", "o que já tentou?".
@@ -1031,7 +1105,7 @@ Perguntar isso cedo demais soa como interrogatório; perguntar duas seguidas
 cansa. Pergunte, ouça, reconheça o que ele disse, siga.
 `;
 
-  return xmlBlock(
+  const bloco = xmlBlock(
     'conversao',
     `SEU TRABALHO É O PACIENTE SAIR COM CONSULTA MARCADA. Objeção não é fim de
 conversa — é informação sobre o que falta pra ele decidir. Mas você nunca
@@ -1241,6 +1315,7 @@ O QUE VOCÊ NUNCA FAZ, mesmo pra converter:
 - Insistir depois de um "não" claro e repetido. Agradeça e deixe a porta
   aberta — paciente pressionado não volta, e conta pros outros.`,
   );
+  return jeito.conduzirDireto ? conduzirDiretoNoRoteiro(bloco) : bloco;
 }
 
 function renderContactCollection(unit: Unit): string {
@@ -1837,7 +1912,7 @@ function blocosDoHistorico(unit: Unit, historico: Fala[] | undefined): { semPedi
   const clinica = unit.category?.trim() === 'saude';
   const sessoes = clinica ? renderPrecoDasSessoes(historico, { frase }) : '';
   if (sessoes) blocos.push(sessoes);
-  const rajada = renderRajada(historico, { clinica });
+  const rajada = renderRajada(historico, { clinica, semPerguntaDeAlerta: jeitoDaConversa(unit).semPerguntaDeAlerta });
   if (rajada) blocos.push(rajada);
   // Lista de Marabá, 21/10/2026: pergunta direta que o roteiro atropelava, e paciente em tratamento num cartão que
   // ainda não sabe disso (pergunta-do-paciente.ts, fala-de-paciente.ts).
@@ -1856,7 +1931,12 @@ function blocosDoHistorico(unit: Unit, historico: Fala[] | undefined): { semPedi
 function renderFirstTurnBoost(unit: Unit, isFirstTurn: boolean, jaConversou = false): string {
   if (!isFirstTurn) return '';
   // Chave `nome-na-hora-de-marcar` (conversa-direta.ts): a primeira mensagem não pede o nome.
-  const collectName = unit.collectNameEnabled && !jeitoDaConversa(unit).nomeNaHoraDeMarcar;
+  const nomeSoAoMarcar = jeitoDaConversa(unit).nomeNaHoraDeMarcar;
+  const collectName = unit.collectNameEnabled && !nomeSoAoMarcar;
+  // Com a chave, nenhuma linha nem exemplo do primeiro turno fala em pedir o nome (o modelo copia o exemplo).
+  const reconhecer = nomeSoAoMarcar
+    ? 'SE o paciente já trouxe um problema (dor, dúvida), reconheça com empatia. NÃO pergunte o nome (só na hora de marcar).'
+    : 'SE o paciente já trouxe um problema (dor, dúvida), reconheça com empatia ANTES de pedir o nome.';
   const collectSource = unit.collectSourceEnabled;
   const palette = (unit.personaEmojis ?? []).filter(Boolean);
   const emojisHint =
@@ -1877,14 +1957,18 @@ function renderFirstTurnBoost(unit: Unit, isFirstTurn: boolean, jaConversou = fa
       volta.push(`  ${passo}. Se o nome dela não estiver em <memoria_paciente>, pergunte de forma natural`);
       passo++;
     }
-    volta.push(`  ${passo}. SE o paciente já trouxe um problema (dor, dúvida), reconheça com empatia ANTES de pedir o nome.`);
+    volta.push(`  ${passo}. ${reconhecer}`);
     volta.push('');
     volta.push(emojisHint);
     volta.push('Tamanho-alvo: 2 a 4 frases.');
     volta.push('Escreva SÓ a mensagem que o paciente vai ler — nada de explicar o que você vai fazer.');
     volta.push('');
     volta.push('Exemplo de resposta BOA (adapte, NÃO copie literal):');
-    volta.push('  "Oiê, que bom ter você de volta por aqui! 🌷 Me conta: como posso te chamar? 😊"');
+    volta.push(
+      nomeSoAoMarcar
+        ? '  "Oiê, que bom ter você de volta por aqui! 🌷 Me conta: o que você está sentindo? 😊"'
+        : '  "Oiê, que bom ter você de volta por aqui! 🌷 Me conta: como posso te chamar? 😊"',
+    );
     volta.push('');
     volta.push('Exemplo de resposta RUIM (NUNCA faça assim):');
     volta.push('  ❌ "Reconhecendo que já houve contato, vou retomar com leveza…" (isso é o seu plano, não fala com o paciente)');
@@ -1910,15 +1994,17 @@ function renderFirstTurnBoost(unit: Unit, isFirstTurn: boolean, jaConversou = fa
     lines.push(`  ${step}. (opcional) Pode já encaixar de leve "por onde nos conheceu?"`);
     step++;
   }
-  lines.push(`  ${step}. SE o paciente já trouxe um problema (dor, dúvida), reconheça com empatia ANTES de pedir o nome.`);
+  lines.push(`  ${step}. ${reconhecer}`);
   lines.push('');
   lines.push(emojisHint);
   lines.push('Tamanho-alvo: 2 a 4 frases. Nem curto demais ("Olá!"), nem texto-livro.');
   lines.push('');
   lines.push('Exemplo de resposta BOA (adapte ao tom da sua clínica, NÃO copie literal):');
   lines.push(
-    `  "Oiê! 🌷 Que bom te receber por aqui na ${unit.personaCompanyName ?? 'clínica'}! ` +
-      'Antes de tudo, como posso te chamar? 😊"',
+    nomeSoAoMarcar
+      ? `  "Oiê! 🌷 Que bom te receber por aqui na ${unit.personaCompanyName ?? 'clínica'}! Me conta: o que você está sentindo? 😊"`
+      : `  "Oiê! 🌷 Que bom te receber por aqui na ${unit.personaCompanyName ?? 'clínica'}! ` +
+          'Antes de tudo, como posso te chamar? 😊"',
   );
   lines.push('');
   lines.push('Exemplo de resposta RUIM (NUNCA faça assim):');
@@ -2240,7 +2326,7 @@ export function composeFlattenedPrompt(input: ComposeInput): string {
     renderBusinessHours(unit),
     renderFollowUp(unit),
     // Chaves de conversa curta (Timbó, 11/11/2026): por último, porque vale mais que o resto (conversa-direta.ts).
-    renderConversaDireta(jeitoDaConversa(unit), { clinica: ehClinicaParaSinalDeAlerta(unit) }),
+    renderConversaDiretaDaUnidade(unit),
   ].filter((b) => b.trim().length > 0);
   if (featureBlocks.length > 0) {
     blocks.push(xmlBlock('comportamentos_ativados', featureBlocks.join('\n\n')));
@@ -2287,7 +2373,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
     const single: string[] = [];
     if (customBase) single.push(customBase);
     // O prompt único é escrito à mão: as chaves de conversa curta entram logo depois dele, para valer mais (conversa-direta.ts).
-    const conversaDiretaSingle = renderConversaDireta(jeitoDaConversa(unit), { clinica: ehClinicaParaSinalDeAlerta(unit) });
+    const conversaDiretaSingle = renderConversaDiretaDaUnidade(unit);
     if (conversaDiretaSingle) single.push(conversaDiretaSingle);
     const memBlock = renderLeadMemory(leadMemory, fusoDaUnidade(unit), agoraLocalISO(fusoDaUnidade(unit)));
     if (memBlock) single.push(memBlock);
@@ -2352,7 +2438,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
     renderBusinessHours(unit),
     renderFollowUp(unit),
     // Chaves de conversa curta (Timbó, 11/11/2026): por último, porque vale mais que o resto (conversa-direta.ts).
-    renderConversaDireta(jeitoDaConversa(unit), { clinica: ehClinicaParaSinalDeAlerta(unit) }),
+    renderConversaDiretaDaUnidade(unit),
   ].filter((b) => b.trim().length > 0);
 
   if (featureBlocks.length > 0) {
@@ -2525,8 +2611,9 @@ export function composeSystemPromptParts(input: ComposeInput): {
     // voltam pra parte viva, como era antes. O da rede é estável e fica no cache,
     // depois do prompt da unidade — vale também para quem escreveu o prompt inteiro.
     const semAgenda = renderSemAgenda(unit);
+    // As chaves de conversa curta (conversa-direta.ts) logo depois do prompt escrito à mão, para valerem mais que ele.
     return {
-      cacheable: [(customBase ?? '').trim(), redeBlock, renderNaoPaciente()].filter(Boolean).join('\n\n'),
+      cacheable: [(customBase ?? '').trim(), renderConversaDiretaDaUnidade(unit), redeBlock, renderNaoPaciente()].filter(Boolean).join('\n\n'),
       dynamic: [...porUnidade, ...(semAgenda ? [semAgenda] : []), ...dynamic].join('\n\n'),
     };
   }
@@ -2558,7 +2645,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
     renderBusinessHours(unit),
     renderFollowUp(unit),
     // Chaves de conversa curta (Timbó, 11/11/2026): por último, porque vale mais que o resto (conversa-direta.ts).
-    renderConversaDireta(jeitoDaConversa(unit), { clinica: ehClinicaParaSinalDeAlerta(unit) }),
+    renderConversaDiretaDaUnidade(unit),
   ].filter((b) => b.trim().length > 0);
   if (featureBlocks.length > 0) {
     cache.push(xmlBlock('comportamentos_ativados', featureBlocks.join('\n\n')));

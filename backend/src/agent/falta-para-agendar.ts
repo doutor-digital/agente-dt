@@ -91,12 +91,15 @@ export function renderFaltaParaAgendar(
 
   // Já pediu o nome 2 vezes (repeticao.ts): a lista não pode continuar mandando "pergunte como pode chamá-lo" a
   // cada turno — era isso que fazia a Sofia pedir o nome 3, 4, 5 vezes a quem ignorava a pergunta.
+  // Nome na hora de marcar, a não ser que ele já tenha sido pedido 2 vezes sem resposta (semPedirNome, repeticao.ts): aí não
+  // se pede mais, nem junto do horário.
+  const pedirNomeNoHorario = Boolean(opcoes.nomeNaHoraDeMarcar && !opcoes.semPedirNome && !temAlgum(f, ['nome']));
   const faltando = CHECKLIST.filter((i) => !temAlgum(f, i.chaves))
     .filter((i) => !((opcoes.semPedirNome || opcoes.nomeNaHoraDeMarcar) && i.rotulo === 'nome'))
     .filter((i) => !(opcoes.conduzirDireto && i.rotulo === 'tempo de dor'))
     .map((i) =>
       // Nome na hora de marcar (Timbó, 11/11/2026): o pedido do nome vai junto do horário — o cadastro precisa dele.
-      opcoes.nomeNaHoraDeMarcar && !temAlgum(f, ['nome']) && i.rotulo === 'horário escolhido'
+      pedirNomeNoHorario && i.rotulo === 'horário escolhido'
         ? { ...i, comoPedir: `${i.comoPedir}; quando ele escolher, peça o nome completo para deixar reservado` }
         : i,
     );
@@ -129,7 +132,7 @@ export function renderFaltaParaAgendar(
   if (faltando.length > 0) {
     linhas.push('- Ainda falta, nesta ordem: ' + faltando.map((i) => i.rotulo).join(' → ') + '.');
     linhas.push(`- Próximo passo: ${faltando[0].comoPedir}. Uma pergunta por mensagem.`);
-  } else if (opcoes.nomeNaHoraDeMarcar && !temAlgum(f, ['nome'])) {
+  } else if (pedirNomeNoHorario) {
     linhas.push('- Você já tem tudo para marcar, menos o nome: feche o horário e peça o nome completo para deixar reservado.');
   } else {
     linhas.push('- Você já tem tudo para marcar. Ofereça o horário e feche a reserva.');
