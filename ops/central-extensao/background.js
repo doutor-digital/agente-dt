@@ -28,7 +28,8 @@ chrome.runtime.onMessage.addListener((msg, remetente, responder) => {
   // só a página do WhatsApp Web (o content script) e a tela de opções da própria extensão
   const daExtensao = remetente.id === chrome.runtime.id;
   const doWhatsApp = remetente.url && remetente.url.startsWith('https://web.whatsapp.com/');
-  const daOpcoes = remetente.url && remetente.url.startsWith(`chrome-extension://${chrome.runtime.id}/`);
+  // getURL: chrome-extension://<id>/ no Chrome, moz-extension://<uuid>/ no Firefox
+  const daOpcoes = remetente.url && remetente.url.startsWith(chrome.runtime.getURL(''));
   if (!daExtensao || !(doWhatsApp || daOpcoes) || !msg || !ROTAS[msg.tipo]) return false;
   chamar(ROTAS[msg.tipo], msg.corpo).then(responder);
   return true; // resposta assíncrona
