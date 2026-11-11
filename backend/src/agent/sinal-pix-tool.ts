@@ -26,6 +26,25 @@ interface ContextoDoSinal {
   kommo?: KommoClient;
 }
 
+/**
+ * Pix copia-e-cola (~150 caracteres): o modelo NÃO o escreve (um caractere errado e o Pix não paga). A ferramenta guarda o código do turno e
+ * o controller o manda numa mensagem SÓ DELE logo depois da resposta (lib/pix-do-sinal-envio.ts): no WhatsApp, segurar a mensagem copia o
+ * texto inteiro, e o app do banco recusa o código com frase em volta.
+ */
+const pixDoTurno = new Map<string, { pix: string; em: number }>();
+const TTL_DO_PIX_MS = 10 * 60_000;
+export function guardarPixDoTurno(traceId: string, copiaECola: string): void {
+  const agora = Date.now();
+  for (const [k, v] of pixDoTurno) if (agora - v.em > TTL_DO_PIX_MS) pixDoTurno.delete(k);
+  pixDoTurno.set(traceId, { pix: copiaECola, em: agora });
+}
+/** Lê e esquece o Pix do turno: cada turno manda o código no máximo uma vez. */
+export function pixDoSinalDoTurno(traceId: string): string | undefined {
+  const p = pixDoTurno.get(traceId);
+  pixDoTurno.delete(traceId);
+  return p && Date.now() - p.em <= TTL_DO_PIX_MS ? p.pix : undefined;
+}
+
 // O cartão da consulta que `agendar_consulta` marcou neste turno: é dele o sinal quando o modelo não diz o leadId.
 const leadDoTurno = new Map<string, number>();
 export function registrarLeadDoSinal(traceId: string, leadId: number): void {
@@ -41,6 +60,16 @@ export function textoDoSinal(r: ResultadoDoSinal, s: SinalDaUnidade, tarefaAbert
     return (
       `O sinal de ${sinal} deste paciente JÁ foi pago. NÃO gere nem peça outro Pix. Diga que o sinal está confirmado e que no dia ficam ${resto}. ` +
       'NUNCA envie chave Pix.'
+    );
+  }
+  if (r.tipo === 'link' && r.copiaECola) {
+    return (
+      `Pix do sinal de ${sinal} gerado (copia e cola). O sistema manda o código numa mensagem SEPARADA, logo depois da sua: NÃO escreva o ` +
+      'código, nem chave, nem link. Na sua resposta, em UMA frase simples: na próxima mensagem vai o código do Pix; é só tocar e segurar nele, ' +
+      'copiar e colar no app do banco, na opção "Pix copia e cola". ' +
+      `Diga que vale até ${diaCurto(r.venceEm)} e que, com o sinal, a consulta fica R$ ${fmtBRL(s.comSinal)} (${sinal} agora + ${resto} no dia). ` +
+      (r.novo ? '' : 'Este é o MESMO Pix já gerado antes: NÃO gere outro. ') +
+      'NUNCA envie chave Pix nem diga que a equipe envia a chave. NÃO diga que o pagamento foi confirmado: a confirmação chega sozinha depois que ele pagar.'
     );
   }
   if (r.tipo === 'link') {
@@ -64,9 +93,10 @@ export function buildGerarSinalPix({ unit, recorder, kommo }: ContextoDoSinal) {
   return new DynamicStructuredTool({
     name: 'gerar_sinal_pix',
     description:
-      'Gera o Pix do SINAL (link de pagamento do Asaas da clínica) para o paciente que escolheu garantir a vaga com sinal. ' +
+      'Gera o Pix do SINAL (Pix copia e cola de valor fixo no Asaas da clínica) para o paciente que escolheu garantir a vaga com sinal. ' +
       'Chame SÓ depois de agendar_consulta dar certo e de ele ter escolhido o sinal (formaPagamento=sinal_pix). ' +
-      'Devolve o link para você enviar na confirmação. Chamar de novo devolve o MESMO link. Nunca use a chave Pix da clínica.',
+      'O sistema manda o código ao paciente numa mensagem separada. Chamar de novo devolve o MESMO Pix (e o manda de novo): use quando ele ' +
+      'disser que não recebeu o código. Nunca use a chave Pix da clínica.',
     schema: z.object({
       leadId: z.number().int().positive().optional().describe('ID do lead no Kommo — opcional: sem ele vale o da consulta que você acabou de marcar.'),
     }),
@@ -112,6 +142,9 @@ export function buildGerarSinalPix({ unit, recorder, kommo }: ContextoDoSinal) {
         title: r.tipo === 'link' ? `Sinal Pix ${r.novo ? 'gerado' : 'reaproveitado'} (lead ${leadId})` : r.tipo === 'ja-pago' ? `Sinal Pix já pago (lead ${leadId})` : `Sinal Pix NÃO gerado (lead ${leadId}): ${r.motivo}`,
         payload: r.tipo === 'falhou' ? { leadId, motivo: r.motivo, detalhe: r.detalhe } : { leadId, tipo: r.tipo },
       });
+
+      // o código exato vai numa mensagem à parte, depois da resposta (controller → lib/pix-do-sinal-envio.ts)
+      if (r.tipo === 'link' && r.copiaECola) guardarPixDoTurno(recorder.traceId, r.url);
 
       let tarefaAberta = false;
       if (r.tipo === 'falhou') {

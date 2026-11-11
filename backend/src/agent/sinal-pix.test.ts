@@ -91,7 +91,7 @@ test('orientacaoDePagamento: com sinal, NUNCA a chave fixa; sinal manda chamar g
   const u = comSinal();
   const sinal = orientacaoDePagamento('sinal_pix', u);
   assert.match(sinal, /gerar_sinal_pix/);
-  assert.match(sinal, /R\$ 250: R\$ 50 de sinal pelo Pix agora \(envie o link\) \+ R\$ 200 no dia/);
+  assert.match(sinal, /R\$ 250: R\$ 50 de sinal pelo Pix agora \(o código do Pix copia e cola vai numa mensagem separada\) \+ R\$ 200 no dia/);
   assert.match(sinal, /NUNCA envie chave Pix nem diga que a equipe envia a chave/);
   assert.ok(!sinal.includes(CHAVE_FIXA));
   const dia = orientacaoDePagamento('na_clinica', u);
