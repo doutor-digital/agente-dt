@@ -530,12 +530,11 @@ export function paginaFunilHandler(_req: Request, res: Response): void {
 const PAGINA = `<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Funil · Doutor Digital</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root{--fundo:#f8f9fb;--painel:#ffffff;--cartao:#ffffff;--linha:#e4e7ec;--txt:#1f2d3d;--fraco:#64748b;--link:#1f73d6;--azul:#1f93ff;--rosa:#d93036;--amarelo:#c27803;--verde:#1f8a54;--suave:#f1f4f8;--sombra:0 1px 2px rgba(16,24,40,.06)}
 *{box-sizing:border-box}[hidden]{display:none!important}
 html,body{height:100%}
-body{margin:0;display:flex;flex-direction:column;overflow:hidden;font:13.5px/1.45 Inter,system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--fundo);color:var(--txt)}
+body{margin:0;display:flex;flex-direction:column;overflow:hidden;font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Oxygen-Sans,Ubuntu,Cantarell,"Helvetica Neue",sans-serif;background:var(--fundo);color:var(--txt)}
 button,select,input,textarea{font:inherit;color:inherit}
 :focus-visible{outline:2px solid var(--link);outline-offset:1px}
 .topo{display:flex;align-items:center;gap:10px;min-height:56px;padding:8px 60px 8px 20px;border-bottom:1px solid var(--linha);flex-wrap:wrap;background:var(--painel)}
@@ -565,8 +564,8 @@ button,select,input,textarea{font:inherit;color:inherit}
 .k{flex:0 0 auto;position:relative;background:var(--cartao);border:1px solid var(--linha);border-radius:10px;margin-bottom:8px;padding:11px 12px 11px 54px;cursor:pointer;min-height:72px;box-shadow:var(--sombra)}
 .k{transition:transform .16s ease,box-shadow .16s ease,border-color .16s ease,opacity .16s ease}
 .k:hover{border-color:#c5cfdb;box-shadow:0 6px 16px rgba(16,24,40,.10);transform:translateY(-2px)}
-.k.novo{animation:entra .32s cubic-bezier(.2,.8,.2,1) both;animation-delay:calc(var(--i,0) * 35ms)}
-@keyframes entra{from{opacity:0;transform:translateY(10px) scale(.98)}to{opacity:1;transform:none}}
+.k.novo{animation:entra .32s cubic-bezier(.2,.8,.2,1) backwards;animation-delay:calc(var(--i,0) * 35ms)}
+@keyframes entra{from{transform:translateY(8px)}to{transform:none}}
 .k.arrastando{opacity:.55;transform:rotate(2.5deg) scale(1.02);box-shadow:0 12px 28px rgba(16,24,40,.18)}
 .k.chegou{animation:chegou 1.1s ease-out}
 @keyframes chegou{0%{box-shadow:0 0 0 0 rgba(31,147,255,.55)}70%{box-shadow:0 0 0 10px rgba(31,147,255,0)}100%{box-shadow:var(--sombra)}}
@@ -577,9 +576,7 @@ button,select,input,textarea{font:inherit;color:inherit}
 .fantasma i:first-child{height:18px;width:55%;margin-bottom:14px}
 @keyframes brilho{from{background-position:100% 0}to{background-position:0 0}}
 .lead:not([hidden]){animation:desliza .26s cubic-bezier(.2,.8,.2,1)}
-@keyframes desliza{from{opacity:0;transform:translateX(24px)}to{opacity:1;transform:none}}
-.quadro:not([hidden]){animation:aparece .2s ease}
-@keyframes aparece{from{opacity:0}to{opacity:1}}
+@keyframes desliza{from{transform:translateX(24px)}to{transform:none}}
 .k .esperando{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--rosa);margin-right:6px;vertical-align:1px;animation:pulsa 1.6s ease-in-out infinite}
 @keyframes pulsa{0%,100%{opacity:1}50%{opacity:.35}}
 .k.esta{border-color:var(--link)}
