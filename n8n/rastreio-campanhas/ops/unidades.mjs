@@ -5,6 +5,9 @@
  * Imperatriz é a canônica — é dela que sai o gabarito de campos, tags e opções.
  * Boa Vista existe no dashboard mas **não tem credencial no n8n**, então fica de fora
  * até alguém cadastrar o token dela.
+ *
+ * Salto: os ids das credenciais são marcadores (`__KOMMO__`, `__TRIGGER__`) — o `ligar-rastreio-salto.sh`
+ * cria as credenciais no n8n e troca os marcadores pelos ids reais ao importar o fluxo.
  */
 export const UNIDADES = [
   { slug: 'imperatriz',    nome: 'Imperatriz',     subdominio: 'attivacorpoementeitz',     credencial: { id: 'MnPGiOOvaSPm9HgC', name: 'Kommo Imperatriz' },      pasta: 'Imperatriz - Rastreio', canonica: true, tokenAdsEnv: 'META_ADS_TOKEN_IMPERATRIZ' },
@@ -20,6 +23,7 @@ export const UNIDADES = [
   { slug: 'taubate',       nome: 'Taubaté',        subdominio: 'doutorherniataubatedt',    credencial: { id: 'rmHbc6sqKSi9G0TG', name: 'Kommo Taubaté' }, trigger: { id: 'yPMGb4lDTckcfRt9', name: 'WhatsApp Trigger · Taubaté' }, tokenAdsEnv: 'META_ADS_TOKEN_TAUBATE' },
   { slug: 'trauma',        nome: 'Instituto Trauma', subdominio: 'institutotraumakommon',  credencial: { id: 'IDrv4gZyutIINGMw', name: 'Kommo Trauma' }, tokenAdsEnv: 'META_ADS_TOKEN_TRAUMA' },
   { slug: 'timbo',         nome: 'Timbó',          subdominio: 'timbosc',                  credencial: { id: 'XeawYlyRvi6HBZUE', name: 'Kommo Timbó' }, trigger: { id: 'IS0NLrUxBtiQnYEn', name: 'WhatsApp Trigger · Timbó' }, tokenAdsEnv: 'META_ADS_TOKEN_TIMBO' },
+  { slug: 'salto',         nome: 'Salto',          subdominio: 'doutorherniasalto',        credencial: { id: '__KOMMO__', name: 'Kommo Salto' }, trigger: { id: '__TRIGGER__', name: 'WhatsApp Trigger · Salto' }, tokenAdsEnv: 'META_ADS_TOKEN_SALTO' },
 ];
 
 /**
