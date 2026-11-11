@@ -1,10 +1,16 @@
 /**
  * Funil de etapas encaixado no Chatwoot (Dashboard App) — ver `lib/funil-chatwoot.ts`.
  *
- * Página `GET /funil` (o Chatwoot a abre numa aba da conversa, com `?k=<chave>`) e as rotas que ela chama:
- *   GET  /api/public/funil/quadro?caixa=<id>   colunas por etapa (até 200 conversas mais recentes)
+ * Página `GET /funil` (item "Funil" do menu e aba "Funil" da conversa; visual no molde do funil do Kommo) e as rotas dela:
+ *   GET  /api/public/funil/quadro?caixa=<id>   colunas por etapa (até 200 conversas), soma em R$, situação da tarefa
  *   GET  /api/public/funil/caixas              caixas de entrada (o filtro do topo)
- *   POST /api/public/funil/mover               { conversaId, etapa, quem } — grava a etapa e deixa nota interna
+ *   GET  /api/public/funil/conversa/:id        a ficha do lead (campos, contato, histórico, tarefas)
+ *   POST /api/public/funil/mover               { conversaId, etapa } — grava a etapa e deixa nota interna
+ *   POST /api/public/funil/campos              { conversaId, campos } — qualificação, valor, motivo da perda
+ *   POST /api/public/funil/responsavel         { conversaId, agenteId }
+ *   POST /api/public/funil/nota | mensagem     { conversaId, texto } — mensagem só com o login da pessoa
+ *   POST /api/public/funil/tarefa              { conversaId, texto, venceEm, responsavel? }; POST …/tarefa/:id/feita { feita }
+ *   POST /api/public/funil/novo                { nome, telefone, caixaId, etapa } — adição rápida (só com login)
  * Todas pedem OU o cabeçalho X-Funil-Chave (derivada do token do Chatwoot — a aba da conversa) OU o login do próprio Chatwoot
  * (X-CW-Token/Client/Uid — o item "Funil" do menu, ver `GET /funil/menu.js`); sem Chatwoot configurado, 404.
  */
@@ -14,7 +20,27 @@ import { logger } from '../lib/logger.js';
 import { env } from '../lib/env.js';
 import { contaChatwootDoAmbiente, criarContextoChatwoot, chamar, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 import { createHash } from 'node:crypto';
-import { ATRIBUTO_ETAPA, MAX_PAGINAS, chaveConfere, etapasDoAtributo, montarQuadro, nomeSeTemConta, notaDaMudanca, sessaoDosCabecalhos, type SessaoChatwoot } from '../lib/funil-chatwoot.js';
+import { prisma } from '../lib/prisma.js';
+import {
+  ATRIBUTO_ETAPA,
+  MAX_PAGINAS,
+  camposParaGravar,
+  cartaoDaConversa,
+  chaveConfere,
+  desdeAEtapa,
+  etapasDoAtributo,
+  historicoDasMensagens,
+  idsDasPaginas,
+  montarQuadro,
+  nomeSeTemConta,
+  notaDaMudanca,
+  sessaoDosCabecalhos,
+  situacaoDaTarefa,
+  telefoneParaCadastro,
+  valoresDoAtributo,
+  type SessaoChatwoot,
+  type SituacaoTarefa,
+} from '../lib/funil-chatwoot.js';
 
 let ctx: ContextoChatwoot | null | undefined;
 function contexto(): ContextoChatwoot | null {
@@ -78,7 +104,17 @@ async function quemEstaLogado(c: ContextoChatwoot, s: SessaoChatwoot): Promise<C
  * Quem pode: a chave do funil (aba da conversa; quem = o que a página manda) ou o login do Chatwoot (item do menu; quem = o
  * nome do perfil). O limitador de 30 erros vale só para CHAVE errada — sessão recusada não trava o funil de ninguém.
  */
-async function autorizado(req: Request, res: Response): Promise<{ c: ContextoChatwoot; logado: string | null } | null> {
+/**
+ * Quem está usando. Com o login do Chatwoot (`sessao`), TODA chamada ao Chatwoot vai com o login da pessoa: ela só vê e mexe
+ * nas caixas a que tem acesso lá (a SDR da unidade não enxerga as outras). Só o link avulso do João (chave) usa o token da conta.
+ */
+interface Acesso {
+  c: ContextoChatwoot;
+  logado: string | null;
+  sessao: SessaoChatwoot | null;
+}
+
+async function autorizado(req: Request, res: Response): Promise<Acesso | null> {
   const c = contexto();
   if (!c?.conta) {
     res.status(404).json({ error: 'funil desligado (Chatwoot não configurado)' });
@@ -91,7 +127,7 @@ async function autorizado(req: Request, res: Response): Promise<{ c: ContextoCha
       res.status(429).json({ error: 'muitas tentativas — aguarde 10 minutos' });
       return null;
     }
-    if (chaveConfere(c.conta.token, chave)) return { c, logado: null };
+    if (chaveConfere(c.conta.token, chave)) return { c, logado: null, sessao: null };
     errou(ip);
     res.status(403).json({ error: 'chave do funil inválida' });
     return null;
@@ -102,7 +138,7 @@ async function autorizado(req: Request, res: Response): Promise<{ c: ContextoCha
     return null;
   }
   const r = await quemEstaLogado(c, sessao);
-  if (typeof r === 'object') return { c, logado: r.nome };
+  if (typeof r === 'object') return { c, logado: r.nome, sessao };
   if (r === 'invalida') res.status(403).json({ error: 'entre no Chatwoot de novo (sessão expirada)', sessao: 'invalida' });
   else if (r === 'sem-conta') res.status(403).json({ error: 'seu usuário do Chatwoot não tem acesso a esta conta — peça para a Suzanne', sessao: 'sem-conta' });
   else if (r === 'excesso') res.status(429).json({ error: 'muitos acessos agora — tente em 1 minuto' });
@@ -110,46 +146,131 @@ async function autorizado(req: Request, res: Response): Promise<{ c: ContextoCha
   return null;
 }
 
-async function etapas(c: ContextoChatwoot): Promise<string[]> {
+async function definicoes(a: Acesso): Promise<unknown[]> {
   // attribute_model=0: atributo de CONVERSA
-  const defs = await chamar(c, 'GET', 'custom_attribute_definitions', { query: { attribute_model: '0' } }).catch(() => []);
-  return etapasDoAtributo(defs);
+  const d = await cw(a, 'GET', 'custom_attribute_definitions', { query: { attribute_model: '0' } }).catch(() => []);
+  return Array.isArray(d) ? d : [];
+}
+
+/** Chama o Chatwoot com o login da pessoa (menu/aba) ou, só no link avulso do João, com o token da conta. */
+function cw(a: Acesso, metodo: 'GET' | 'POST' | 'PATCH' | 'DELETE', caminho: string, o: { corpo?: unknown; query?: Record<string, string> } = {}) {
+  return chamar(a.c, metodo, caminho, { ...o, sessao: a.sessao });
+}
+
+function falhou(res: Response, e: unknown, oQue: string, extra: Record<string, unknown> = {}): void {
+  const status = (e as { status?: number })?.status;
+  logger.warn({ err: String(e), ...extra }, `funil: ${oQue} falhou`);
+  if (status === 401 || status === 403 || status === 404) {
+    res.status(404).json({ error: 'você não tem acesso a esta conversa (ou ela não existe mais)' });
+    return;
+  }
+  res.status(502).json({ error: 'não consegui falar com o Chatwoot agora' });
+}
+
+async function vencimentosAbertos(conta: number, ids: number[]): Promise<Map<number, SituacaoTarefa>> {
+  const mapa = new Map<number, SituacaoTarefa>();
+  if (!ids.length) return mapa;
+  const ts = await prisma.funilTarefa
+    .findMany({ where: { conta, conversaId: { in: ids }, feita: false }, select: { conversaId: true, venceEm: true } })
+    .catch((e: unknown) => {
+      logger.warn({ err: String(e) }, 'funil: não li as tarefas (cartões saem sem a situação)');
+      return [] as Array<{ conversaId: number; venceEm: Date }>;
+    });
+  const por = new Map<number, Date[]>();
+  for (const t of ts) por.set(t.conversaId, [...(por.get(t.conversaId) ?? []), t.venceEm]);
+  const agora = new Date();
+  for (const [id, vs] of por) mapa.set(id, situacaoDaTarefa(vs, agora));
+  return mapa;
 }
 
 export async function funilQuadroHandler(req: Request, res: Response): Promise<void> {
   const a = await autorizado(req, res);
   if (!a) return;
-  const { c } = a;
   try {
-    const lista = await etapas(c);
+    const defs = await definicoes(a);
+    const lista = etapasDoAtributo(defs);
     const caixa = Number(req.query.caixa);
     const base: Record<string, string> = { status: 'all', assignee_type: 'all' };
     if (Number.isInteger(caixa) && caixa > 0) base.inbox_id = String(caixa);
     const paginas: unknown[] = [];
     for (let p = 1; p <= MAX_PAGINAS; p++) {
-      const pg = (await chamar(c, 'GET', 'conversations', { query: { ...base, page: String(p) } })) as any;
+      const pg = (await cw(a, 'GET', 'conversations', { query: { ...base, page: String(p) } })) as any;
       paginas.push(pg);
-      const n = pg?.data?.payload?.length ?? 0;
-      if (n < 25) break;
+      if ((pg?.data?.payload?.length ?? 0) < 25) break;
     }
-    res.json({ ...montarQuadro(paginas, lista), chatwoot: c.conta!.url, conta: c.conta!.conta });
+    const tarefas = await vencimentosAbertos(a.c.conta!.conta, idsDasPaginas(paginas));
+    res.json({ ...montarQuadro(paginas, lista, tarefas), chatwoot: a.c.conta!.url, conta: a.c.conta!.conta, eu: a.logado, podeEscrever: !!a.sessao });
   } catch (e) {
-    logger.warn({ err: String(e) }, 'funil: quadro falhou');
-    res.status(502).json({ error: 'não consegui ler o Chatwoot agora' });
+    falhou(res, e, 'quadro');
   }
 }
 
 export async function funilCaixasHandler(req: Request, res: Response): Promise<void> {
   const a = await autorizado(req, res);
   if (!a) return;
-  const { c } = a;
   try {
-    const r = (await chamar(c, 'GET', 'inboxes')) as any;
+    const r = (await cw(a, 'GET', 'inboxes')) as any;
     const lista = Array.isArray(r?.payload) ? r.payload : [];
     res.json(lista.map((i: any) => ({ id: i.id, nome: String(i.name ?? `Caixa ${i.id}`) })));
   } catch (e) {
-    logger.warn({ err: String(e) }, 'funil: caixas falhou');
-    res.status(502).json({ error: 'não consegui ler o Chatwoot agora' });
+    falhou(res, e, 'caixas');
+  }
+}
+
+const idSchema = z.coerce.number().int().positive();
+
+/** A ficha do lead: conversa, contato, histórico, tarefas, listas dos campos e responsáveis possíveis. */
+export async function funilConversaHandler(req: Request, res: Response): Promise<void> {
+  const a = await autorizado(req, res);
+  if (!a) return;
+  const id = idSchema.safeParse(req.params.id);
+  if (!id.success) {
+    res.status(400).json({ error: 'conversa inválida' });
+    return;
+  }
+  try {
+    const [conv, msgs, defs, agentes] = await Promise.all([
+      cw(a, 'GET', `conversations/${id.data}`) as Promise<any>,
+      cw(a, 'GET', `conversations/${id.data}/messages`) as Promise<any>,
+      definicoes(a),
+      (cw(a, 'GET', 'agents') as Promise<any>).catch(() => []),
+    ]);
+    const lista = etapasDoAtributo(defs);
+    const cartao = cartaoDaConversa(conv, lista);
+    const historico = historicoDasMensagens(msgs);
+    const contato = conv?.meta?.sender ?? {};
+    const tarefas = await prisma.funilTarefa.findMany({
+      where: { conta: a.c.conta!.conta, conversaId: id.data },
+      orderBy: [{ feita: 'asc' }, { venceEm: 'asc' }],
+      take: 50,
+    });
+    res.json({
+      cartao,
+      etapas: lista,
+      desdeEtapa: desdeAEtapa(historico, cartao.etapa, cartao.criado),
+      atributos: conv?.custom_attributes ?? {},
+      responsavelId: Number(conv?.meta?.assignee?.id) || null,
+      caixaId: cartao.caixaId,
+      contato: {
+        nome: cartao.nome,
+        telefone: cartao.telefone,
+        email: typeof contato.email === 'string' ? contato.email : null,
+        avatar: cartao.avatar,
+        atributos: contato.custom_attributes && typeof contato.custom_attributes === 'object' ? contato.custom_attributes : {},
+      },
+      listas: {
+        qualificacao: valoresDoAtributo(defs, 'qualificacao'),
+        motivo_nao_agendamento: valoresDoAtributo(defs, 'motivo_nao_agendamento'),
+      },
+      agentes: (Array.isArray(agentes) ? agentes : []).map((g: any) => ({ id: Number(g.id), nome: String(g.available_name ?? g.name ?? g.id) })),
+      historico,
+      tarefas: tarefas.map((t) => ({ id: t.id, texto: t.texto, venceEm: t.venceEm, responsavel: t.responsavel, feita: t.feita })),
+      chatwoot: a.c.conta!.url,
+      conta: a.c.conta!.conta,
+      podeEscrever: !!a.sessao,
+    });
+  } catch (e) {
+    falhou(res, e, 'ficha', { conversa: id.data });
   }
 }
 
@@ -159,10 +280,22 @@ const moverSchema = z.object({
   quem: z.string().trim().max(80).nullable().optional(),
 });
 
+/** Lê os atributos atuais e grava a mistura (o Chatwoot troca o objeto inteiro: sem isto, os outros campos sumiam). */
+async function gravarAtributos(a: Acesso, conversaId: number, mudar: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const conv = (await cw(a, 'GET', `conversations/${conversaId}`)) as any;
+  const atuais = (conv?.custom_attributes && typeof conv.custom_attributes === 'object' ? conv.custom_attributes : {}) as Record<string, unknown>;
+  const novos: Record<string, unknown> = { ...atuais };
+  for (const [k, v] of Object.entries(mudar)) {
+    if (v === null) delete novos[k];
+    else novos[k] = v;
+  }
+  await cw(a, 'POST', `conversations/${conversaId}/custom_attributes`, { corpo: { custom_attributes: novos } });
+  return atuais;
+}
+
 export async function funilMoverHandler(req: Request, res: Response): Promise<void> {
   const a = await autorizado(req, res);
   if (!a) return;
-  const { c } = a;
   const p = moverSchema.safeParse(req.body);
   if (!p.success) {
     res.status(400).json({ error: 'pedido inválido' });
@@ -171,28 +304,218 @@ export async function funilMoverHandler(req: Request, res: Response): Promise<vo
   // logado pelo Chatwoot: vale o nome do perfil, não o que a página mandou
   const quem = a.logado ?? p.data.quem ?? null;
   try {
-    const lista = await etapas(c);
+    const lista = etapasDoAtributo(await definicoes(a));
     if (!lista.includes(p.data.etapa)) {
       res.status(400).json({ error: `etapa desconhecida: ${p.data.etapa}` });
       return;
     }
-    const conv = (await chamar(c, 'GET', `conversations/${p.data.conversaId}`)) as any;
-    const atuais = (conv?.custom_attributes && typeof conv.custom_attributes === 'object' ? conv.custom_attributes : {}) as Record<string, unknown>;
-    const de = typeof atuais[ATRIBUTO_ETAPA] === 'string' && lista.includes(atuais[ATRIBUTO_ETAPA] as string) ? (atuais[ATRIBUTO_ETAPA] as string) : lista[0];
+    const conv = (await cw(a, 'GET', `conversations/${p.data.conversaId}`)) as any;
+    const atual = conv?.custom_attributes?.[ATRIBUTO_ETAPA];
+    const de = typeof atual === 'string' && lista.includes(atual) ? atual : lista[0]!;
     if (de === p.data.etapa) {
       res.json({ ok: true, igual: true });
       return;
     }
-    // o Chatwoot troca o objeto inteiro: manda os atributos que já existem junto, para não apagar nenhum
-    await chamar(c, 'POST', `conversations/${p.data.conversaId}/custom_attributes`, { corpo: { custom_attributes: { ...atuais, [ATRIBUTO_ETAPA]: p.data.etapa } } });
-    await chamar(c, 'POST', `conversations/${p.data.conversaId}/messages`, {
+    await gravarAtributos(a, p.data.conversaId, { [ATRIBUTO_ETAPA]: p.data.etapa });
+    await cw(a, 'POST', `conversations/${p.data.conversaId}/messages`, {
       corpo: { content: notaDaMudanca(de, p.data.etapa, quem), private: true, message_type: 'outgoing' },
     }).catch((e) => logger.warn({ err: String(e), conversa: p.data.conversaId }, 'funil: a nota interna falhou (a etapa foi gravada)'));
     logger.info({ conversa: p.data.conversaId, de, para: p.data.etapa, quem }, 'funil: etapa mudada');
     res.json({ ok: true, de, para: p.data.etapa });
   } catch (e) {
-    logger.warn({ err: String(e), conversa: p.data.conversaId }, 'funil: mover falhou');
-    res.status(502).json({ error: 'não consegui gravar no Chatwoot agora' });
+    falhou(res, e, 'mover', { conversa: p.data.conversaId });
+  }
+}
+
+const camposSchema = z.object({ conversaId: z.number().int().positive(), campos: z.record(z.string(), z.unknown()) });
+
+export async function funilCamposHandler(req: Request, res: Response): Promise<void> {
+  const a = await autorizado(req, res);
+  if (!a) return;
+  const p = camposSchema.safeParse(req.body);
+  if (!p.success) {
+    res.status(400).json({ error: 'pedido inválido' });
+    return;
+  }
+  try {
+    const conf = camposParaGravar(p.data.campos, await definicoes(a));
+    if (!conf.ok) {
+      res.status(400).json({ error: conf.erro });
+      return;
+    }
+    await gravarAtributos(a, p.data.conversaId, conf.campos);
+    logger.info({ conversa: p.data.conversaId, campos: Object.keys(conf.campos), quem: a.logado }, 'funil: campos gravados');
+    res.json({ ok: true });
+  } catch (e) {
+    falhou(res, e, 'campos', { conversa: p.data.conversaId });
+  }
+}
+
+const responsavelSchema = z.object({ conversaId: z.number().int().positive(), agenteId: z.number().int().positive().nullable() });
+
+export async function funilResponsavelHandler(req: Request, res: Response): Promise<void> {
+  const a = await autorizado(req, res);
+  if (!a) return;
+  const p = responsavelSchema.safeParse(req.body);
+  if (!p.success) {
+    res.status(400).json({ error: 'pedido inválido' });
+    return;
+  }
+  try {
+    await cw(a, 'POST', `conversations/${p.data.conversaId}/assignments`, { corpo: { assignee_id: p.data.agenteId } });
+    res.json({ ok: true });
+  } catch (e) {
+    falhou(res, e, 'responsável', { conversa: p.data.conversaId });
+  }
+}
+
+const textoSchema = z.object({ conversaId: z.number().int().positive(), texto: z.string().trim().min(1).max(4000) });
+
+/** Nota interna (só a equipe vê). */
+export async function funilNotaHandler(req: Request, res: Response): Promise<void> {
+  const a = await autorizado(req, res);
+  if (!a) return;
+  const p = textoSchema.safeParse(req.body);
+  if (!p.success) {
+    res.status(400).json({ error: 'escreva a nota' });
+    return;
+  }
+  try {
+    await cw(a, 'POST', `conversations/${p.data.conversaId}/messages`, { corpo: { content: p.data.texto, private: true, message_type: 'outgoing' } });
+    res.json({ ok: true });
+  } catch (e) {
+    falhou(res, e, 'nota', { conversa: p.data.conversaId });
+  }
+}
+
+/** Mensagem para a paciente (sai pelo WhatsApp da caixa). Só com o login da pessoa (no Chatwoot fica o nome de quem mandou). */
+export async function funilMensagemHandler(req: Request, res: Response): Promise<void> {
+  const a = await autorizado(req, res);
+  if (!a) return;
+  if (!a.sessao) {
+    res.status(403).json({ error: 'para mandar mensagem, abra o funil pelo Chatwoot (com o seu login)' });
+    return;
+  }
+  const p = textoSchema.safeParse(req.body);
+  if (!p.success) {
+    res.status(400).json({ error: 'escreva a mensagem' });
+    return;
+  }
+  try {
+    await cw(a, 'POST', `conversations/${p.data.conversaId}/messages`, { corpo: { content: p.data.texto, private: false, message_type: 'outgoing' } });
+    logger.info({ conversa: p.data.conversaId, quem: a.logado }, 'funil: mensagem enviada pela ficha');
+    res.json({ ok: true });
+  } catch (e) {
+    falhou(res, e, 'mensagem', { conversa: p.data.conversaId });
+  }
+}
+
+/** Confere que a pessoa enxerga a conversa (com o login dela, o Chatwoot recusa conversa de caixa alheia). */
+async function enxerga(a: Acesso, conversaId: number): Promise<void> {
+  await cw(a, 'GET', `conversations/${conversaId}`);
+}
+
+const tarefaSchema = z.object({
+  conversaId: z.number().int().positive(),
+  texto: z.string().trim().min(1).max(300),
+  venceEm: z.coerce.date(),
+  responsavel: z.string().trim().max(80).nullable().optional(),
+});
+
+export async function funilTarefaHandler(req: Request, res: Response): Promise<void> {
+  const a = await autorizado(req, res);
+  if (!a) return;
+  const p = tarefaSchema.safeParse(req.body);
+  if (!p.success || Number.isNaN(p.data.venceEm.getTime())) {
+    res.status(400).json({ error: 'escreva a tarefa e escolha o dia e a hora' });
+    return;
+  }
+  try {
+    await enxerga(a, p.data.conversaId);
+    const t = await prisma.funilTarefa.create({
+      data: {
+        conta: a.c.conta!.conta,
+        conversaId: p.data.conversaId,
+        texto: p.data.texto,
+        venceEm: p.data.venceEm,
+        responsavel: p.data.responsavel || a.logado,
+        criadoPor: a.logado,
+      },
+    });
+    res.json({ ok: true, id: t.id });
+  } catch (e) {
+    falhou(res, e, 'tarefa', { conversa: p.data.conversaId });
+  }
+}
+
+const feitaSchema = z.object({ feita: z.boolean() });
+
+export async function funilTarefaFeitaHandler(req: Request, res: Response): Promise<void> {
+  const a = await autorizado(req, res);
+  if (!a) return;
+  const id = idSchema.safeParse(req.params.id);
+  const p = feitaSchema.safeParse(req.body);
+  if (!id.success || !p.success) {
+    res.status(400).json({ error: 'pedido inválido' });
+    return;
+  }
+  try {
+    const t = await prisma.funilTarefa.findFirst({ where: { id: id.data, conta: a.c.conta!.conta } });
+    if (!t) {
+      res.status(404).json({ error: 'tarefa não encontrada' });
+      return;
+    }
+    await enxerga(a, t.conversaId);
+    await prisma.funilTarefa.update({ where: { id: t.id }, data: { feita: p.data.feita, feitaEm: p.data.feita ? new Date() : null } });
+    res.json({ ok: true });
+  } catch (e) {
+    falhou(res, e, 'tarefa feita', { tarefa: id.data });
+  }
+}
+
+const novoSchema = z.object({
+  nome: z.string().trim().min(1).max(80),
+  telefone: z.string().trim().min(8).max(30),
+  caixaId: z.number().int().positive(),
+  etapa: z.string().trim().min(1).max(60),
+});
+
+/** Adição rápida: cria o contato e a conversa (sem mandar nada para a pessoa) já na etapa da coluna. */
+export async function funilNovoHandler(req: Request, res: Response): Promise<void> {
+  const a = await autorizado(req, res);
+  if (!a) return;
+  if (!a.sessao) {
+    res.status(403).json({ error: 'para criar lead, abra o funil pelo Chatwoot (com o seu login)' });
+    return;
+  }
+  const p = novoSchema.safeParse(req.body);
+  const telefone = p.success ? telefoneParaCadastro(p.data.telefone) : null;
+  if (!p.success || !telefone) {
+    res.status(400).json({ error: 'preencha o nome, o telefone com DDD e a caixa' });
+    return;
+  }
+  try {
+    const lista = etapasDoAtributo(await definicoes(a));
+    if (!lista.includes(p.data.etapa)) {
+      res.status(400).json({ error: `etapa desconhecida: ${p.data.etapa}` });
+      return;
+    }
+    const r = (await cw(a, 'POST', 'contacts', { corpo: { name: p.data.nome, phone_number: telefone, inbox_id: p.data.caixaId } })) as any;
+    const contato = r?.payload?.contact ?? r?.payload;
+    const origem = r?.payload?.contact_inbox?.source_id ?? contato?.contact_inboxes?.[0]?.source_id;
+    if (!contato?.id || !origem) throw new Error('o Chatwoot não devolveu o contato');
+    const conv = (await cw(a, 'POST', 'conversations', {
+      corpo: { source_id: origem, inbox_id: p.data.caixaId, contact_id: contato.id, custom_attributes: { [ATRIBUTO_ETAPA]: p.data.etapa } },
+    })) as any;
+    logger.info({ conversa: conv?.id, etapa: p.data.etapa, quem: a.logado }, 'funil: lead criado pela adição rápida');
+    res.json({ ok: true, conversaId: conv?.id ?? null });
+  } catch (e) {
+    const msg = String(e);
+    if (/phone_number|taken|already/i.test(msg)) {
+      res.status(409).json({ error: 'já existe um contato com esse telefone — procure pelo nome na busca' });
+      return;
+    }
+    falhou(res, e, 'adição rápida');
   }
 }
 
@@ -207,114 +530,321 @@ export function paginaFunilHandler(_req: Request, res: Response): void {
 const PAGINA = `<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Funil · Doutor Digital</title>
+<link href="https://fonts.googleapis.com/css2?family=PT+Sans:wght@400;700&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#f5f7fb;--card:#fff;--line:#e3e8ef;--ink:#1f2d3d;--muted:#6b7a90;--acc:#1f93ff;--ok:#44ce4b;--warn:#ffc532}
-*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-header{position:sticky;top:0;z-index:2;background:var(--card);border-bottom:1px solid var(--line);padding:10px 16px;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-header h1{font-size:16px;margin:0 8px 0 0}select,input{font:inherit;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:#fff;color:inherit}
-#esta{display:flex;gap:8px;align-items:center;background:#eaf4ff;border:1px solid #c7e1ff;border-radius:8px;padding:6px 10px}
-#msg{color:var(--muted);font-size:13px}
-.quadro{display:flex;gap:12px;padding:12px 16px 24px;overflow-x:auto;min-height:calc(100vh - 60px);align-items:flex-start}
-.col{flex:0 0 260px;background:#eef2f7;border-radius:10px;padding:8px;max-height:calc(100vh - 90px);display:flex;flex-direction:column}
-.col h2{font-size:13px;margin:4px 6px 8px;display:flex;justify-content:space-between;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
-.col .lista{overflow-y:auto;flex:1;min-height:40px;border-radius:8px}.col.alvo .lista{outline:2px dashed var(--acc)}
-.cartao{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:8px;cursor:grab}
-.cartao.esta{border-color:var(--acc);box-shadow:0 0 0 2px #c7e1ff}.cartao b{display:block;font-size:14px}
-.cartao small{color:var(--muted);display:block;margin-top:2px}.cartao p{margin:6px 0 0;color:#3c4858;font-size:13px;word-break:break-word}
-.tag{display:inline-block;background:#f0f4f8;border-radius:4px;padding:0 5px;margin:4px 4px 0 0;font-size:11px;color:var(--muted)}
-.cartao a{color:var(--acc);text-decoration:none;font-size:12px}.cartao select{margin-top:6px;width:100%;font-size:12px}
+:root{--fundo:#1b2b3c;--painel:#203246;--cartao:#243a51;--linha:#30475f;--txt:#e6edf5;--fraco:#8fa3b8;--link:#5aa9ff;--azul:#3f8cff;--rosa:#e8507a;--amarelo:#f2c94c;--verde:#3ecf8e}
+*{box-sizing:border-box}[hidden]{display:none!important}
+html,body{height:100%}
+body{margin:0;display:flex;flex-direction:column;overflow:hidden;font:14px/1.4 "PT Sans",system-ui,sans-serif;background:var(--fundo);color:var(--txt)}
+button,select,input,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--link);outline-offset:1px}
+.topo{display:flex;align-items:center;gap:12px;min-height:60px;padding:0 60px 0 20px;border-bottom:1px solid var(--linha);flex-wrap:wrap}
+.topo h1{font-size:16px;letter-spacing:.08em;margin:0;font-weight:700}
+.campo-topo{height:36px;padding:0 10px;border:1px solid var(--linha);border-radius:3px;background:var(--painel)}
+.busca{flex:1;min-width:160px;max-width:420px}
+.chip{height:36px;padding:0 12px;border:1px solid var(--linha);border-radius:3px;background:transparent;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+.chip::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--rosa)}
+.chip.on{border-color:var(--rosa);background:rgba(232,80,122,.12)}
+#msg{color:var(--fraco);font-size:13px}
+.dir{margin-left:auto;display:flex;gap:10px;align-items:center}
+.bt{height:36px;padding:0 14px;border-radius:3px;font-weight:700;font-size:12px;letter-spacing:.04em;text-transform:uppercase;border:1px solid var(--linha);background:transparent;cursor:pointer}
+.bt.azul{background:var(--azul);border-color:var(--azul);color:#fff}
+.bt:disabled{opacity:.5;cursor:default}
+.quadro{flex:1;display:flex;gap:18px;padding:0 20px 20px;overflow:auto}
+.col{flex:0 0 300px;display:flex;flex-direction:column}
+.col .cab{position:sticky;top:0;z-index:1;background:var(--fundo);padding:14px 0 8px;text-align:center}
+.col .cab b{font-size:12.5px;letter-spacing:.08em;text-transform:uppercase}
+.col .cab .ln{height:2px;background:var(--cor,#9aa9b8);margin:10px 0 8px}
+.col .cab small{color:var(--fraco);font-size:12.5px}
+.col.alvo .cab .ln{height:4px}
+.rap{flex:0 0 auto;margin:6px 0 8px;border:1px dashed var(--linha);min-height:42px;display:grid;place-items:center;cursor:pointer;background:transparent;width:100%}
+.rap:hover{border-color:var(--link)}
+.formr{display:flex;flex-direction:column;gap:6px;margin:6px 0 8px;padding:10px;border:1px solid var(--linha);background:var(--painel)}
+.formr input,.formr select{height:32px;padding:0 8px;border:1px solid var(--linha);background:var(--fundo);border-radius:3px}
+.formr div{display:flex;gap:6px}
+.k{flex:0 0 auto;position:relative;background:var(--cartao);border:1px solid var(--linha);margin-bottom:6px;padding:10px 10px 10px 54px;cursor:pointer;min-height:74px}
+.k:hover{border-color:#46617d}
+.k.esta{border-color:var(--link)}
+.k .av{position:absolute;left:10px;top:12px;width:34px;height:34px;border-radius:50%;background:var(--av,#64748b);display:grid;place-items:center;font-weight:700;font-size:12px;color:#fff;overflow:hidden}
+.k .av img,.pessoa .av img{width:100%;height:100%;object-fit:cover}
+.k .l1{display:flex;gap:8px}.k .ct{font-size:13px;color:#c8d4e2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.k .dt{margin-left:auto;color:var(--fraco);font-size:12.5px;white-space:nowrap}
+.k .dt.esp{color:var(--rosa);font-weight:700}
+.k .ld{color:var(--link);font-size:15px;margin:1px 0 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tags{display:flex;gap:4px;flex-wrap:wrap}
+.tags span{border:1px solid var(--linha);color:var(--fraco);font-size:12px;padding:0 5px;border-radius:2px}
+.k .bal{display:block;max-width:calc(100% - 26px);margin-top:7px;background:#2f4a68;border-radius:12px;padding:3px 10px;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;width:max-content}
+.k .st{position:absolute;right:9px;bottom:9px;display:flex;align-items:center;gap:4px;font-size:12px;color:var(--amarelo)}
+.k .st::after{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+.k .st.vencida{color:var(--rosa)}.k .st.hoje,.k .st.futura{color:var(--verde)}
+.vazio{color:var(--fraco);text-align:center;padding:18px 6px;font-size:13px}
+/* ficha */
+.lead{flex:1;display:flex;min-height:0}
+.esq{flex:0 0 360px;background:var(--painel);border-right:1px solid var(--linha);display:flex;flex-direction:column;overflow-y:auto}
+.esq .t{display:flex;align-items:center;gap:10px;padding:14px 20px 6px;font-size:21px;font-weight:700}
+.esq .t button{background:none;border:0;color:var(--fraco);font-size:22px;cursor:pointer;padding:0 4px}
+.esq .tags{padding:0 20px}
+.etapa{margin:12px 20px 0}.etapa small{color:var(--fraco);text-transform:uppercase;font-size:12px}
+.etapa .nm{display:flex;align-items:center;gap:8px}
+.etapa select{flex:1;background:transparent;border:0;font-weight:700;font-size:15px;padding:2px 0;cursor:pointer}
+.etapa select option{background:var(--painel)}
+.etapa em{font-style:normal;color:var(--fraco);white-space:nowrap}
+.prog{display:flex;gap:2px;margin-top:6px}.prog span{flex:1;height:4px;background:#3a5370}.prog span.f{background:var(--amarelo)}
+.abas{display:flex;gap:16px;padding:16px 20px 0;border-bottom:1px solid var(--linha)}
+.abas button{background:none;border:0;padding:0 0 8px;color:var(--fraco);font-weight:700;cursor:pointer}
+.abas button.on{color:var(--txt);border-bottom:2px solid var(--txt)}
+.cp{display:grid;grid-template-columns:120px 1fr;gap:8px 10px;padding:14px 20px;font-size:14px;align-items:center}
+.cp label{color:var(--fraco)}
+.cp select,.cp input{background:transparent;border:0;border-bottom:1px dashed var(--linha);padding:2px 0;width:100%}
+.cp select option{background:var(--painel)}
+.cp span{word-break:break-word}
+.pessoa{padding:12px 20px;border-top:1px solid var(--linha)}
+.pessoa .n{display:flex;align-items:center;gap:10px;font-weight:700}
+.pessoa .av{width:34px;height:34px;border-radius:50%;background:var(--av,#7c5cff);display:grid;place-items:center;font-size:12px;overflow:hidden}
+.pessoa .cp{padding:10px 0 0}
+.rodape{margin-top:auto;display:flex;justify-content:space-around;align-items:center;padding:12px;border-top:1px solid var(--linha);background:#1a2a3b}
+.rodape a,.rodape button{color:var(--txt);background:none;border:0;cursor:pointer;text-decoration:none;font-size:14px}
+.feed{flex:1;display:flex;flex-direction:column;min-width:0}
+.rol{flex:1;overflow-y:auto;padding:14px 22px;display:flex;flex-direction:column;gap:9px}
+.dia{align-self:center;border:1px solid var(--linha);border-radius:10px;padding:0 10px;font-size:12.5px;color:var(--fraco)}
+.m{max-width:66%;padding:7px 12px;border-radius:6px;white-space:pre-wrap;word-break:break-word}
+.m small{display:block;color:#b8c7d8;font-size:12px;margin-bottom:2px;white-space:normal}
+.m.ela{align-self:flex-start;background:#2c4560}.m.nos{align-self:flex-end;background:#2f5b9a}
+.sis{align-self:center;color:var(--fraco);font-size:12.5px;text-align:center}
+.nota{align-self:stretch;background:#3b3a24;border-left:3px solid var(--amarelo);padding:7px 12px;white-space:pre-wrap;word-break:break-word}
+.nota small{display:block;color:#d6cf9a;font-size:12px}
+.tf{align-self:stretch;display:flex;align-items:center;gap:10px;background:#2a3346;border-left:3px solid var(--verde);padding:7px 12px}
+.tf.vencida{background:#3a2530;border-left-color:var(--rosa)}
+.tf.feita{opacity:.55;text-decoration:line-through}
+.tf small{margin-left:auto;color:var(--fraco);white-space:nowrap}.tf.vencida small{color:var(--rosa);font-weight:700}
+.comp{border-top:1px solid var(--linha);padding:10px 22px 14px}
+.comp .tb{display:flex;gap:18px;margin-bottom:8px}
+.comp .tb button{background:none;border:0;color:var(--fraco);cursor:pointer;padding:0}
+.comp .tb button.on{color:var(--txt);font-weight:700}
+.comp textarea{width:100%;height:60px;background:var(--painel);border:1px solid var(--linha);padding:8px 10px;resize:vertical}
+.comp .linha2{display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap}
+.comp .linha2 input,.comp .linha2 select{height:34px;padding:0 8px;background:var(--painel);border:1px solid var(--linha);border-radius:3px}
+.comp .linha2 .bt{margin-left:auto}
+.aviso{color:var(--fraco);font-size:12.5px}
+@media (max-width:760px){.lead{flex-direction:column}.esq{flex:0 0 auto;max-height:45vh}.col{flex-basis:260px}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style></head><body>
-<header><h1>Funil</h1>
-<select id="caixa"><option value="">Todas as caixas</option></select>
-<input id="busca" placeholder="Buscar nome" size="14">
-<span id="esta" hidden>Esta conversa: <select id="estaEtapa"></select></span>
-<span id="msg"></span></header>
+<div class="topo" id="topo">
+  <h1>FUNIL</h1>
+  <select id="caixa" class="campo-topo" aria-label="Caixa de entrada"><option value="">Todas as caixas</option></select>
+  <input id="busca" class="campo-topo busca" placeholder="Buscar nome ou telefone" aria-label="Buscar">
+  <button id="esperando" class="chip" type="button" aria-pressed="false">Esperando resposta</button>
+  <span id="msg" role="status"></span>
+  <div class="dir"><button id="novo" class="bt azul" type="button" hidden>+ Novo lead</button></div>
+</div>
 <main class="quadro" id="quadro"></main>
+<section class="lead" id="lead" hidden></section>
 <script>
 (function(){
-  var q=new URLSearchParams(location.search), K=q.get('k')||'', MENU=q.get('menu')==='1', ORIGEM_CW=__ORIGEM_CW__, S=null, iniciado=false;
-  var $=function(id){return document.getElementById(id)};
-  var ctx={conversa:null,agente:null,conta:null}, dados=null, arrastando=null;
-  function msg(t){ $('msg').textContent=t||''; }
-  var timer=null, morta=null;
-  function pedirSessao(){ try{ window.parent.postMessage({event:'funil:pede-sessao'},ORIGEM_CW); }catch(e){} }
-  async function api(m,p,b){ var r=await fetch('/api/public/funil/'+p,{method:m,headers:cabecalhos(),body:b?JSON.stringify(b):undefined}); var j=await r.json().catch(function(){return {}});
-    if(r.status===403&&S&&j.sessao==='invalida'){ morta=S.token; S=null; if(timer){ clearInterval(timer); timer=null; } iniciado=false; pedirSessao(); }
-    if(r.status===403&&S&&j.sessao==='sem-conta'&&timer){ clearInterval(timer); timer=null; }
-    if(!r.ok) throw new Error(j.error||('erro '+r.status)); return j; }
-  function cabecalhos(){ var h={'Content-Type':'application/json'}; if(K) h['X-Funil-Chave']=K; else if(S){ h['X-CW-Token']=S.token; h['X-CW-Client']=S.client; h['X-CW-Uid']=S.uid; } return h; }
+  var q=new URLSearchParams(location.search), K=q.get('k')||'', MENU=q.get('menu')==='1', ORIGEM_CW=__ORIGEM_CW__, DENTRO=window.parent!==window;
+  var S=null, iniciado=false, timer=null, morta=null, dados=null, caixas=[], aberta=null, ficha=null, soEsperando=false, arrastando=null, formNaColuna=null, aba='principal', modo='mensagem', ctxConversa=null;
+  var CORES=['#9aa9b8','#5aa9ff','#f2c94c','#a78bfa','#818cf8','#3ecf8e','#22c55e','#14b8a6','#ec4899','#e8507a','#b6c2d1'];
+  var AV=['#c0844a','#f97316','#22c55e','#a855f7','#7c5cff','#ef4444','#14b8a6','#64748b','#eab308','#0d9488','#0ea5e9'];
+  function $(id){ return document.getElementById(id); }
   function el(t,c,x){ var e=document.createElement(t); if(c) e.className=c; if(x!=null) e.textContent=x; return e; }
-  function quando(s){ if(!s) return ''; var d=new Date(s*1000), h=(Date.now()-d)/36e5; return h<24? d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}) : d.toLocaleDateString('pt-BR'); }
-  function linkConversa(id){ var base=dados&&dados.chatwoot, conta=ctx.conta||(dados&&dados.conta); return base&&conta? (base+'/app/accounts/'+conta+'/conversations/'+id) : null; }
-  async function mover(id,etapa){
-    msg('Gravando…');
-    try{ await api('POST','mover',{conversaId:id,etapa:etapa,quem:ctx.agente}); msg('Movido para '+etapa+'.'); await carregar(); }
-    catch(e){ msg(e.message); }
+  function msg(t){ $('msg').textContent=t||''; }
+  function cabecalhos(){ var h={'Content-Type':'application/json'}; if(S){ h['X-CW-Token']=S.token; h['X-CW-Client']=S.client; h['X-CW-Uid']=S.uid; } else if(K) h['X-Funil-Chave']=K; return h; }
+  function pedirSessao(){ if(DENTRO){ try{ window.parent.postMessage({event:'funil:pede-sessao'},ORIGEM_CW); }catch(e){} } }
+  async function api(m,p,b){
+    var r=await fetch('/api/public/funil/'+p,{method:m,headers:cabecalhos(),body:b?JSON.stringify(b):undefined});
+    var j=await r.json().catch(function(){ return {}; });
+    if(r.status===403&&S&&j.sessao==='invalida'){ morta=S.token; S=null; parar(); iniciado=false; pedirSessao(); }
+    if(r.status===403&&S&&j.sessao==='sem-conta') parar();
+    if(!r.ok) throw new Error(j.error||('erro '+r.status));
+    return j;
+  }
+  function parar(){ if(timer){ clearInterval(timer); timer=null; } }
+  function brl(v){ return 'R$ '+Number(v||0).toLocaleString('pt-BR',{maximumFractionDigits:2}); }
+  function doisd(n){ return (n<10?'0':'')+n; }
+  function quando(s){
+    if(!s) return ''; var d=new Date(s*1000), hoje=new Date(), ontem=new Date(Date.now()-864e5);
+    var hm=doisd(d.getHours())+':'+doisd(d.getMinutes());
+    if(d.toDateString()===hoje.toDateString()) return 'Hoje '+hm;
+    if(d.toDateString()===ontem.toDateString()) return 'Ontem '+hm;
+    return doisd(d.getDate())+'/'+doisd(d.getMonth()+1)+'/'+d.getFullYear();
+  }
+  function iniciais(n){ var p=String(n||'?').trim().split(' ').filter(Boolean); return ((p[0]||'?')[0]+((p[1]||'')[0]||'')).toUpperCase(); }
+  function avatar(box,nome,url,id){ box.style.setProperty('--av',AV[id%AV.length]); if(url){ var i=el('img'); i.src=url; i.alt=''; i.onerror=function(){ i.remove(); box.textContent=iniciais(nome); }; box.appendChild(i); } else box.textContent=iniciais(nome); }
+  function linkCw(id){ return dados&&dados.chatwoot? (dados.chatwoot+'/app/accounts/'+dados.conta+'/conversations/'+id) : (ficha? ficha.chatwoot+'/app/accounts/'+ficha.conta+'/conversations/'+id : '#'); }
+  function textoTarefa(t){ return t.tipo==='vencida'? (t.dias>0? t.dias+'d':'hoje') : t.tipo==='hoje'? 'hoje' : t.tipo==='futura'? '' : ''; }
+  function tituloTarefa(t){ return t.tipo==='sem'? 'Sem tarefas' : t.tipo==='vencida'? 'Tarefa vencida' : t.tipo==='hoje'? 'Tarefa para hoje' : 'Tarefa agendada'; }
+  function esperando(k){ return k.ultimaDela && (Date.now()/1000-k.atividade)>15*60; }
+
+  // ── quadro ────────────────────────────────────────────────────────────────
+  async function mover(id,etapa){ msg('Gravando…'); try{ await api('POST','mover',{conversaId:id,etapa:etapa}); msg('Movido para '+etapa+'.'); await carregar(); }catch(e){ msg(e.message); } }
+  function formRapida(col,etapa){
+    var f=el('form','formr'); var nome=el('input'); nome.placeholder='Nome'; nome.required=true; var tel=el('input'); tel.placeholder='Telefone com DDD'; tel.required=true; tel.inputMode='tel';
+    var cx=el('select'); caixas.forEach(function(c){ var o=el('option',null,c.nome); o.value=c.id; cx.appendChild(o); }); if($('caixa').value) cx.value=$('caixa').value;
+    var lin=el('div'), ok=el('button','bt azul','Criar'), nao=el('button','bt','Cancelar'); ok.type='submit'; nao.type='button';
+    nao.onclick=function(){ formNaColuna=null; desenhar(); };
+    f.onsubmit=async function(ev){ ev.preventDefault(); ok.disabled=true; msg('Criando…'); try{ await api('POST','novo',{nome:nome.value,telefone:tel.value,caixaId:Number(cx.value),etapa:etapa}); formNaColuna=null; msg('Lead criado.'); await carregar(); }catch(e){ msg(e.message); ok.disabled=false; } };
+    lin.appendChild(ok); lin.appendChild(nao); f.appendChild(nome); f.appendChild(tel); if(caixas.length>1) f.appendChild(cx); else cx.hidden=true, f.appendChild(cx); f.appendChild(lin);
+    setTimeout(function(){ nome.focus(); },0); return f;
   }
   function desenhar(){
     var termo=$('busca').value.trim().toLowerCase(), box=$('quadro'); box.textContent='';
-    dados.colunas.forEach(function(col){
-      var c=el('section','col'), h=el('h2'), lista=el('div','lista');
-      var vis=col.cartoes.filter(function(k){ return !termo || k.nome.toLowerCase().indexOf(termo)>=0; });
-      h.appendChild(el('span',null,col.etapa)); h.appendChild(el('span',null,String(vis.length))); c.appendChild(h);
+    var nEsp=0;
+    dados.colunas.forEach(function(col,i){
+      var c=el('section','col'); c.style.setProperty('--cor',CORES[i%CORES.length]);
+      var vis=col.cartoes.filter(function(k){ if(esperando(k)) nEsp++; if(soEsperando&&!esperando(k)) return false; return !termo || k.nome.toLowerCase().indexOf(termo)>=0 || (k.telefone||'').replace(/[^0-9]/g,'').indexOf(termo.replace(/[^0-9]/g,'')||'x')>=0; });
+      var cab=el('div','cab'); cab.appendChild(el('b',null,col.etapa)); cab.appendChild(el('div','ln')); cab.appendChild(el('small',null,vis.length+(vis.length===1?' lead: ':' leads: ')+brl(col.soma))); c.appendChild(cab);
+      if(dados.podeEscrever){
+        if(formNaColuna===col.etapa) c.appendChild(formRapida(c,col.etapa));
+        else { var r=el('button','rap','Adição rápida'); r.type='button'; r.onclick=function(){ formNaColuna=col.etapa; desenhar(); }; c.appendChild(r); }
+      }
       c.addEventListener('dragover',function(ev){ ev.preventDefault(); c.classList.add('alvo'); });
       c.addEventListener('dragleave',function(){ c.classList.remove('alvo'); });
-      c.addEventListener('drop',function(ev){ ev.preventDefault(); c.classList.remove('alvo'); if(arrastando && arrastando.etapa!==col.etapa) mover(arrastando.id,col.etapa); });
+      c.addEventListener('drop',function(ev){ ev.preventDefault(); c.classList.remove('alvo'); if(arrastando&&arrastando.etapa!==col.etapa) mover(arrastando.id,col.etapa); });
       vis.forEach(function(k){
-        var d=el('article','cartao'+(ctx.conversa===k.id?' esta':'')); d.draggable=true;
+        var d=el('article','k'+(ctxConversa===k.id?' esta':'')); d.draggable=true; d.tabIndex=0; d.setAttribute('role','button'); d.setAttribute('aria-label','Abrir '+k.nome);
         d.addEventListener('dragstart',function(){ arrastando=k; });
-        d.appendChild(el('b',null,k.nome));
-        d.appendChild(el('small',null,quando(k.atividade)+(k.responsavel?(' · '+k.responsavel):'')+(k.status&&k.status!=='open'?(' · '+k.status):'')));
-        if(k.ultimaMensagem) d.appendChild(el('p',null,k.ultimaMensagem));
-        k.etiquetas.forEach(function(t){ d.appendChild(el('span','tag',t)); });
-        var s=el('select'); dados.etapas.forEach(function(e){ var o=el('option',null,e); o.value=e; if(e===k.etapa) o.selected=true; s.appendChild(o); });
-        s.addEventListener('change',function(){ mover(k.id,s.value); }); d.appendChild(s);
-        var u=linkConversa(k.id); if(u){ var a=el('a',null,'abrir conversa #'+k.id); a.href=u; a.target='_top'; d.appendChild(el('br')); d.appendChild(a); }
-        lista.appendChild(d);
+        d.addEventListener('click',function(){ abrirFicha(k.id); });
+        d.addEventListener('keydown',function(ev){ if(ev.key==='Enter') abrirFicha(k.id); });
+        var av=el('span','av'); avatar(av,k.nome,k.avatar,k.id); d.appendChild(av);
+        var l1=el('div','l1'); l1.appendChild(el('span','ct',k.telefone? 'de: '+k.telefone : (k.responsavel||'')));
+        var dt=el('span','dt'+(esperando(k)?' esp':''),quando(k.atividade)); if(esperando(k)) dt.title='A paciente está esperando resposta'; l1.appendChild(dt); d.appendChild(l1);
+        d.appendChild(el('div','ld',k.nome));
+        var tg=el('div','tags'); k.etiquetas.forEach(function(t){ tg.appendChild(el('span',null,t)); }); if(k.qualificacao) tg.appendChild(el('span',null,k.qualificacao)); if(k.valor) tg.appendChild(el('span',null,brl(k.valor))); if(tg.childNodes.length) d.appendChild(tg);
+        if(k.ultimaMensagem) d.appendChild(el('span','bal',(k.ultimaDela?'↩ ':'')+k.ultimaMensagem));
+        var st=el('span','st '+k.tarefa.tipo,textoTarefa(k.tarefa)); st.title=tituloTarefa(k.tarefa); d.appendChild(st);
+        c.appendChild(d);
       });
-      c.appendChild(lista); box.appendChild(c);
+      if(!vis.length) c.appendChild(el('div','vazio',termo||soEsperando?'Nada aqui com esse filtro.':'Nenhum lead nesta etapa.'));
+      box.appendChild(c);
     });
-    // "esta conversa" (quando aberto como aba dentro de uma conversa)
-    if(ctx.conversa){
-      var achado=null; dados.colunas.forEach(function(col){ col.cartoes.forEach(function(k){ if(k.id===ctx.conversa) achado=k; }); });
-      var s=$('estaEtapa'); s.textContent=''; dados.etapas.forEach(function(e){ var o=el('option',null,e); o.value=e; if(achado&&e===achado.etapa) o.selected=true; s.appendChild(o); });
-      $('esta').hidden=false;
-    }
+    $('esperando').textContent='Esperando resposta'+(nEsp?' · '+nEsp:'');
   }
   async function carregar(){
-    if(!K && !S){ msg(MENU? 'Entre no Chatwoot para ver o funil.' : 'Abra o funil pelo Chatwoot (falta a chave).'); return; }
-    try{ dados=await api('GET','quadro'+($('caixa').value?('?caixa='+encodeURIComponent($('caixa').value)):'')); desenhar(); if(!$('msg').textContent || /Carregando/.test($('msg').textContent)) msg(dados.total+' conversas'); }
-    catch(e){ msg(e.message); }
+    if(!S&&!K){ msg(DENTRO?'Entre no Chatwoot para ver o funil.':'Abra o funil pelo Chatwoot.'); return; }
+    try{
+      dados=await api('GET','quadro'+($('caixa').value?('?caixa='+encodeURIComponent($('caixa').value)):''));
+      $('novo').hidden=!dados.podeEscrever; desenhar(); if(!$('msg').textContent||/Carregando/.test($('msg').textContent)) msg(dados.total+' leads');
+    }catch(e){ msg(e.message); }
   }
-  $('estaEtapa').addEventListener('change',function(){ if(ctx.conversa) mover(ctx.conversa,this.value); });
+
+  // ── ficha do lead ─────────────────────────────────────────────────────────
+  function ver(lead){ $('lead').hidden=!lead; $('quadro').hidden=lead; $('topo').hidden=lead; }
+  async function abrirFicha(id){ aberta=id; aba='principal'; modo='mensagem'; ver(true); $('lead').textContent=''; $('lead').appendChild(el('div','vazio','Carregando…')); await recarregarFicha(); }
+  async function recarregarFicha(){ if(!aberta) return; try{ ficha=await api('GET','conversa/'+aberta); desenharFicha(); }catch(e){ $('lead').textContent=''; var v=el('div','vazio',e.message); $('lead').appendChild(v); var b=el('button','bt','Voltar ao funil'); b.onclick=fecharFicha; v.appendChild(el('br')); v.appendChild(b); } }
+  function fecharFicha(){ aberta=null; ficha=null; ver(false); carregar(); }
+  async function acao(m,p,b,ok){ try{ await api(m,p,b); if(ok) ok(); await recarregarFicha(); }catch(e){ alerta(e.message); } }
+  function alerta(t){ var a=document.querySelector('.comp .aviso'); if(a) a.textContent=t; else msg(t); }
+  function linhaCampo(box,rot,ctl){ box.appendChild(el('label',null,rot)); box.appendChild(ctl); }
+  function seletor(opcoes,atual,vazio,aoMudar){ var s=el('select'); if(vazio!=null){ var o0=el('option',null,vazio); o0.value=''; s.appendChild(o0); } opcoes.forEach(function(o){ var op=el('option',null,o.nome||o); op.value=o.id!=null?o.id:o; s.appendChild(op); }); s.value=atual==null?'':String(atual); s.onchange=function(){ aoMudar(s.value); }; return s; }
+  function desenharFicha(){
+    var f=ficha, k=f.cartao, L=$('lead'); L.textContent='';
+    var esq=el('div','esq'), t=el('div','t'), vt=el('button',null,'‹'); vt.type='button'; vt.title='Voltar ao funil'; vt.onclick=fecharFicha; t.appendChild(vt); t.appendChild(el('span',null,k.nome)); esq.appendChild(t);
+    var tg=el('div','tags'); k.etiquetas.forEach(function(x){ tg.appendChild(el('span',null,x)); }); esq.appendChild(tg);
+    var et=el('div','etapa'), cx=caixas.filter(function(c){ return c.id===f.caixaId; })[0]; et.appendChild(el('small',null,cx?cx.nome:'Funil'));
+    var nm=el('div','nm'), sel=seletor(f.etapas,k.etapa,null,function(v){ acao('POST','mover',{conversaId:k.id,etapa:v}); }); nm.appendChild(sel);
+    var dias=Math.max(0,Math.floor((Date.now()/1000-(f.desdeEtapa||k.criado))/86400)); nm.appendChild(el('em',null,'('+dias+(dias===1?' dia)':' dias)'))); et.appendChild(nm);
+    var pg=el('div','prog'), idx=f.etapas.indexOf(k.etapa); f.etapas.forEach(function(_,i){ pg.appendChild(el('span',i<=idx?'f':null)); }); et.appendChild(pg); esq.appendChild(et);
+    var abas=el('div','abas'); [['principal','Principal'],['paciente','Paciente'],['origem','Origem'],['estatisticas','Estatísticas']].forEach(function(a){ var b=el('button',aba===a[0]?'on':null,a[1]); b.type='button'; b.onclick=function(){ aba=a[0]; desenharFicha(); }; abas.appendChild(b); }); esq.appendChild(abas);
+    var cp=el('div','cp'), at=f.atributos||{}, ca=f.contato.atributos||{};
+    if(aba==='principal'){
+      linhaCampo(cp,'Responsável',seletor(f.agentes,f.responsavelId,'—',function(v){ acao('POST','responsavel',{conversaId:k.id,agenteId:v?Number(v):null}); }));
+      var val=el('input'); val.value=k.valor?String(k.valor).replace('.',','):''; val.placeholder='R$ 0'; val.inputMode='decimal';
+      val.onchange=function(){ acao('POST','campos',{conversaId:k.id,campos:{valor_fechado:val.value}}); }; linhaCampo(cp,'Venda',val);
+      linhaCampo(cp,'Qualificação',seletor(f.listas.qualificacao,at.qualificacao,'—',function(v){ acao('POST','campos',{conversaId:k.id,campos:{qualificacao:v||null}}); }));
+      if(/perd/i.test(k.etapa)||at.motivo_nao_agendamento) linhaCampo(cp,'Motivo da perda',seletor(f.listas.motivo_nao_agendamento,at.motivo_nao_agendamento,'—',function(v){ acao('POST','campos',{conversaId:k.id,campos:{motivo_nao_agendamento:v||null}}); }));
+      linhaCampo(cp,'Unidade',el('span',null,ca.unidade||'—'));
+    } else if(aba==='paciente'){
+      linhaCampo(cp,'Telefone',el('span',null,f.contato.telefone||'—')); linhaCampo(cp,'E-mail',el('span',null,f.contato.email||'—'));
+      Object.keys(ca).forEach(function(c){ if(['origem','campanha_codigo','campanha_nome','conjunto','criativo','unidade'].indexOf(c)<0) linhaCampo(cp,c.replace(/_/g,' '),el('span',null,String(ca[c]))); });
+    } else if(aba==='origem'){
+      [['origem','Origem'],['campanha_nome','Campanha'],['campanha_codigo','Código'],['conjunto','Conjunto'],['criativo','Criativo'],['unidade','Unidade']].forEach(function(c){ linhaCampo(cp,c[1],el('span',null,ca[c[0]]!=null&&ca[c[0]]!==''?String(ca[c[0]]):'—')); });
+    } else {
+      var abertas=f.tarefas.filter(function(x){ return !x.feita; }).length;
+      linhaCampo(cp,'Criado em',el('span',null,quando(k.criado))); linhaCampo(cp,'Dias no funil',el('span',null,String(Math.floor((Date.now()/1000-k.criado)/86400))));
+      linhaCampo(cp,'Mensagens',el('span',null,String(f.historico.filter(function(h){ return h.tipo==='ela'||h.tipo==='nos'; }).length))); linhaCampo(cp,'Tarefas abertas',el('span',null,String(abertas)));
+      linhaCampo(cp,'Responsável',el('span',null,k.responsavel||'—'));
+    }
+    esq.appendChild(cp);
+    var ps=el('div','pessoa'), n=el('div','n'), av=el('span','av'); avatar(av,k.nome,f.contato.avatar,k.id); n.appendChild(av); n.appendChild(el('span',null,k.nome)); ps.appendChild(n);
+    var cp2=el('div','cp'); linhaCampo(cp2,'Telefone',el('span',null,f.contato.telefone||'—')); ps.appendChild(cp2); esq.appendChild(ps);
+    var rod=el('div','rodape'), ab=el('a',null,'Abrir no Chatwoot'); ab.href=linkCw(k.id); ab.target='_top'; rod.appendChild(ab);
+    var perdido=f.etapas.filter(function(e){ return /perd/i.test(e); })[0];
+    if(perdido&&perdido!==k.etapa){ var bp=el('button',null,'✕ Perdido'); bp.type='button'; bp.onclick=function(){ aba='principal'; acao('POST','mover',{conversaId:k.id,etapa:perdido}); }; rod.appendChild(bp); }
+    esq.appendChild(rod); L.appendChild(esq);
+
+    var feed=el('div','feed'), rol=el('div','rol'), agora=Date.now();
+    f.tarefas.forEach(function(x){
+      var venc=!x.feita&&new Date(x.venceEm).getTime()<agora, d=el('div','tf'+(x.feita?' feita':venc?' vencida':''));
+      var cb=el('input'); cb.type='checkbox'; cb.checked=x.feita; cb.setAttribute('aria-label','Tarefa feita'); cb.onchange=function(){ acao('POST','tarefa/'+x.id+'/feita',{feita:cb.checked}); };
+      d.appendChild(cb); d.appendChild(el('span',null,x.texto+(x.responsavel?' · '+x.responsavel:'')));
+      var v=new Date(x.venceEm); d.appendChild(el('small',null,(venc?'venceu ':'')+doisd(v.getDate())+'/'+doisd(v.getMonth()+1)+' '+doisd(v.getHours())+':'+doisd(v.getMinutes())));
+      rol.appendChild(d);
+    });
+    var diaAnt='';
+    f.historico.forEach(function(h){
+      var d=new Date(h.quando*1000), dia=doisd(d.getDate())+'/'+doisd(d.getMonth()+1)+'/'+d.getFullYear(), hm=doisd(d.getHours())+':'+doisd(d.getMinutes());
+      if(dia!==diaAnt){ rol.appendChild(el('span','dia',dia)); diaAnt=dia; }
+      if(h.tipo==='sis'){ rol.appendChild(el('div','sis',hm+' '+h.texto)); return; }
+      var b=el('div',h.tipo==='nota'?'nota':'m '+h.tipo); b.appendChild(el('small',null,hm+(h.quem?' '+h.quem:'')+(h.tipo==='nota'?' · nota interna':''))); b.appendChild(document.createTextNode(h.texto)); rol.appendChild(b);
+    });
+    if(!f.historico.length&&!f.tarefas.length) rol.appendChild(el('div','vazio','Nada por aqui ainda.'));
+    feed.appendChild(rol);
+    var comp=el('div','comp'), tb=el('div','tb');
+    [['mensagem','Mensagem'],['nota','Nota'],['tarefa','Tarefa']].forEach(function(m){ var b=el('button',modo===m[0]?'on':null,m[1]); b.type='button'; b.onclick=function(){ modo=m[0]; desenharFicha(); }; tb.appendChild(b); });
+    comp.appendChild(tb);
+    var ta=el('textarea'); ta.setAttribute('aria-label','Texto'); comp.appendChild(ta);
+    var l2=el('div','linha2'), av2=el('span','aviso'), env=el('button','bt azul');
+    env.type='button';
+    if(modo==='mensagem'){ ta.placeholder='Escreva para '+k.nome+' (sai pelo WhatsApp)…'; env.textContent='Enviar'; if(!f.podeEscrever){ ta.disabled=true; env.disabled=true; av2.textContent='Para mandar mensagem, abra o funil pelo menu do Chatwoot.'; } }
+    else if(modo==='nota'){ ta.placeholder='Nota interna — só a equipe vê'; env.textContent='Salvar nota'; }
+    else {
+      ta.placeholder='O que fazer — ex.: ligar para confirmar o horário'; env.textContent='Criar tarefa';
+      var dt=el('input'); dt.type='datetime-local'; var amanha=new Date(Date.now()+864e5); amanha.setHours(9,0,0,0);
+      dt.value=amanha.getFullYear()+'-'+doisd(amanha.getMonth()+1)+'-'+doisd(amanha.getDate())+'T09:00'; dt.setAttribute('aria-label','Quando');
+      var rs=seletor(f.agentes.map(function(g){ return {id:g.nome,nome:g.nome}; }),null,'Para mim',function(){}); rs.setAttribute('aria-label','Responsável');
+      l2.appendChild(dt); l2.appendChild(rs);
+      env.onclick=function(){ if(!ta.value.trim()){ av2.textContent='Escreva a tarefa.'; return; } env.disabled=true; acao('POST','tarefa',{conversaId:k.id,texto:ta.value,venceEm:new Date(dt.value).toISOString(),responsavel:rs.value||null}); };
+    }
+    if(modo!=='tarefa') env.onclick=function(){ if(!ta.value.trim()){ av2.textContent='Escreva algo.'; return; } env.disabled=true; acao('POST',modo==='nota'?'nota':'mensagem',{conversaId:k.id,texto:ta.value}); };
+    l2.appendChild(av2); l2.appendChild(env); comp.appendChild(l2); feed.appendChild(comp); L.appendChild(feed);
+    rol.scrollTop=rol.scrollHeight;
+  }
+
+  // ── começo ────────────────────────────────────────────────────────────────
   $('caixa').addEventListener('change',carregar);
   $('busca').addEventListener('input',function(){ if(dados) desenhar(); });
-  // contexto do Chatwoot (Dashboard App): conversa aberta e quem está usando — só para a nota e o destaque
+  $('esperando').addEventListener('click',function(){ soEsperando=!soEsperando; this.classList.toggle('on',soEsperando); this.setAttribute('aria-pressed',String(soEsperando)); if(dados) desenhar(); });
+  $('novo').addEventListener('click',function(){ if(dados&&dados.etapas.length){ formNaColuna=dados.etapas[0]; desenhar(); } });
+  document.addEventListener('keydown',function(e){ if(e.key!=='Escape') return; if(aberta){ fecharFicha(); return; } if(MENU){ try{ window.parent.postMessage({event:'funil:fechar'},ORIGEM_CW); }catch(x){} } });
   window.addEventListener('message',function(ev){
     try{ var d=typeof ev.data==='string'?JSON.parse(ev.data):ev.data;
-      // item "Funil" do menu: o login do Chatwoot chega só do próprio Chatwoot
       if(d&&d.event==='funil-sessao'&&ev.origin===ORIGEM_CW&&ev.source===window.parent){
         var nova=d.sessao&&d.sessao.token?d.sessao:null;
         if(nova&&nova.token===morta){ msg('Sua sessão do Chatwoot venceu: saia e entre de novo.'); return; }
         S=nova; iniciar(); return; }
       if(!d||d.event!=='appContext') return;
-      var x=d.data||{}; ctx.conversa=x.conversation&&x.conversation.id||null; ctx.agente=x.currentAgent&&x.currentAgent.name||null;
-      ctx.conta=(x.conversation&&x.conversation.account_id)||(x.currentAgent&&x.currentAgent.account_id)||ctx.conta;
-      if(dados) desenhar(); }catch(e){}
+      var x=d.data||{}; var cid=x.conversation&&x.conversation.id||null;
+      // aba da conversa: outra conversa aberta no Chatwoot = a ficha passa a ser a dela (nunca fica a ficha da anterior na tela)
+      if(cid&&cid!==ctxConversa){ ctxConversa=cid; if(iniciado&&!MENU&&aberta!==cid) abrirFicha(cid); }
+    }catch(e){}
   });
   function iniciar(){
-    if(!K && !S){ carregar(); return; }
-    if(iniciado){ carregar(); return; }
-    if($('caixa').options.length>1){ iniciado=true; carregar(); if(!timer) timer=setInterval(carregar,60000); return; }
+    if(!S&&!K){ carregar(); return; }
+    if(iniciado){ if(aberta) recarregarFicha(); else carregar(); return; }
     iniciado=true; msg('Carregando…');
-    api('GET','caixas').then(function(l){ l.forEach(function(c){ var o=el('option',null,c.nome); o.value=c.id; $('caixa').appendChild(o); }); }).catch(function(){});
-    carregar(); if(!timer) timer=setInterval(carregar,60000);
+    api('GET','caixas').then(function(l){ caixas=l; var s=$('caixa'); while(s.options.length>1) s.remove(1); l.forEach(function(c){ var o=el('option',null,c.nome); o.value=c.id; s.appendChild(o); }); }).catch(function(){});
+    if(ctxConversa&&!MENU) abrirFicha(ctxConversa); else carregar();
+    if(!timer) timer=setInterval(function(){ if(!aberta) carregar(); },60000);
   }
-  document.addEventListener('keydown',function(e){ if(MENU&&e.key==='Escape'){ try{ window.parent.postMessage({event:'funil:fechar'},ORIGEM_CW); }catch(x){} } });
-  if(MENU){ pedirSessao(); setTimeout(function(){ if(!S&&!K) carregar(); },4000); }
-  else { try{ window.parent.postMessage('chatwoot-dashboard-app:fetch-info','*'); }catch(e){} iniciar(); }
+  if(DENTRO){
+    pedirSessao();
+    if(!MENU){ var pedirCtx=function(){ try{ window.parent.postMessage('chatwoot-dashboard-app:fetch-info','*'); }catch(e){} }; pedirCtx();
+      document.addEventListener('visibilitychange',function(){ if(!document.hidden) pedirCtx(); }); window.addEventListener('focus',pedirCtx); setInterval(pedirCtx,5000); }
+    setTimeout(function(){ if(!S&&!iniciado) iniciar(); },3500);
+  } else iniciar();
 })();
-</script></body></html>`;
+</script></body></html>
+`;
 
 /**
  * Script do item "Funil" no menu da esquerda do Chatwoot. Entra pelo DASHBOARD_SCRIPTS (Super Admin › configuração do
@@ -350,30 +880,51 @@ const MENU_JS = `(function(){
     var m = document.cookie.match(/(?:^|; )cw_d_session_info=([^;]*)/); if (!m) return null;
     try { var j = JSON.parse(decodeURIComponent(m[1])); return j['access-token'] && j.client && j.uid ? { token: j['access-token'], client: j.client, uid: j.uid } : null; } catch (e) { return null; }
   }
+  // O quadro abre AO LADO do menu da esquerda do Chatwoot (o menu continua à vista e clicável): começa onde o menu termina.
+  function margem(){
+    var a = document.querySelector('aside'), r = a && a.getBoundingClientRect();
+    return r && r.width > 0 && r.right > 0 && r.right < window.innerWidth * 0.5 ? Math.round(r.right) : 0;
+  }
+  function ajustar(){ if (cam) cam.style.left = margem() + 'px'; }
+  function marcar(ativo){
+    var item = document.querySelector('[data-funil-menu]'), link = item && (item.tagName === 'A' ? item : item.querySelector('a'));
+    if (link) link.style.background = ativo ? 'rgba(31,147,255,.12)' : '';
+  }
   // fechar REMOVE o quadro: nada fica consultando o Chatwoot escondido; reabrir pede o login de novo
-  function fechar(){ if (cam) { cam.remove(); cam = null; fr = null; } }
+  function fechar(){ if (cam) { cam.remove(); cam = null; fr = null; } marcar(false); }
   function abrir(ev){
     if (ev) { ev.preventDefault(); ev.stopPropagation(); }
     if (!cam) {
       cam = document.createElement('div');
-      cam.style.cssText = 'position:fixed;inset:0;z-index:2147483000;background:#f5f7fb;display:flex;flex-direction:column';
-      var bar = document.createElement('div');
-      bar.style.cssText = 'display:flex;justify-content:flex-end;padding:6px 10px;border-bottom:1px solid #e3e8ef;background:#fff';
-      var x = document.createElement('button'); x.type = 'button'; x.textContent = '\\u2715 Fechar funil';
-      x.style.cssText = 'font:14px system-ui,sans-serif;padding:6px 12px;border:1px solid #e3e8ef;border-radius:6px;background:#fff;color:#1f2d3d;cursor:pointer';
-      x.onclick = fechar; bar.appendChild(x);
+      cam.style.cssText = 'position:fixed;top:0;right:0;bottom:0;z-index:2147483000;background:#f5f7fb;display:flex;border-left:1px solid #e3e8ef';
+      var x = document.createElement('button'); x.type = 'button'; x.textContent = '\\u2715'; x.title = 'Fechar o funil (Esc)';
+      x.style.cssText = 'position:absolute;top:12px;right:14px;z-index:1;width:30px;height:30px;font:16px system-ui,sans-serif;border:1px solid #e3e8ef;border-radius:6px;background:#fff;color:#1f2d3d;cursor:pointer';
+      x.onclick = fechar;
       fr = document.createElement('iframe'); fr.src = AGENTE + '/funil?menu=1'; fr.title = 'Funil';
-      fr.style.cssText = 'flex:1;border:0;width:100%';
-      cam.appendChild(bar); cam.appendChild(fr); document.body.appendChild(cam);
+      fr.style.cssText = 'flex:1;border:0;width:100%;height:100%';
+      cam.appendChild(fr); cam.appendChild(x); document.body.appendChild(cam);
     }
-    cam.style.display = 'flex';
+    ajustar(); marcar(true);
   }
+  window.addEventListener('resize', ajustar);
+  // clicar em outro item do menu (Conversas, Contatos…) fecha o funil e o Chatwoot segue para onde a pessoa clicou
+  document.addEventListener('click', function(e){
+    if (!cam || !e.target || !e.target.closest) return;
+    var link = e.target.closest('aside a, nav a');
+    if (link && !link.closest('[data-funil-menu]')) fechar();
+  }, true);
   document.addEventListener('keydown', function(e){ if (e.key === 'Escape') fechar(); });
   window.addEventListener('message', function(ev){
-    if (ev.origin !== AGENTE || !fr || ev.source !== fr.contentWindow) return;
+    // a sessão vai para o quadro do menu E para a aba "Funil" da conversa (iframe que o Chatwoot cria), só se forem deste servidor
+    if (ev.origin !== AGENTE || !ev.source) return;
+    // só responde a um iframe DESTA página que seja o funil (o do menu ou a aba "Funil" da conversa); nunca a janela solta
+    var doFunil = Array.prototype.some.call(document.querySelectorAll('iframe'), function(f){
+      return f.contentWindow === ev.source && String(f.src).indexOf(AGENTE + '/funil') === 0;
+    });
+    if (!doFunil) return;
     var d = ev.data;
-    if (d && d.event === 'funil:pede-sessao') fr.contentWindow.postMessage({ event: 'funil-sessao', sessao: sessao() }, AGENTE);
-    else if (d && d.event === 'funil:fechar') fechar();
+    if (d && d.event === 'funil:pede-sessao') ev.source.postMessage({ event: 'funil-sessao', sessao: sessao() }, AGENTE);
+    else if (d && d.event === 'funil:fechar' && fr && ev.source === fr.contentWindow) fechar();
   });
   function trocarTexto(no){
     var w = document.createTreeWalker(no, NodeFilter.SHOW_TEXT), t;
@@ -387,6 +938,7 @@ const MENU_JS = `(function(){
     novo.setAttribute('data-funil-menu', '1');
     var link = novo.tagName === 'A' ? novo : novo.querySelector('a');
     if (link) { link.setAttribute('href', '#funil'); link.classList.remove('router-link-active', 'router-link-exact-active'); link.removeAttribute('aria-current'); }
+    Array.prototype.forEach.call(novo.querySelectorAll('ul, [role="group"]'), function(u){ u.remove(); });
     trocarTexto(novo);
     novo.addEventListener('click', abrir, true);
     item.parentNode.insertBefore(novo, item.nextSibling);

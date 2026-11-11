@@ -2704,3 +2704,20 @@ model SuportePausaPessoa {
 
   @@map("suporte_pausa_pessoa")
 }
+
+/// Funil do Chatwoot: tarefas do cartão (o Chatwoot não tem). Uma por linha, presa à conversa (conta + id da conversa).
+model FunilTarefa {
+  id          Int       @id @default(autoincrement())
+  conta       Int
+  conversaId  Int       @map("conversa_id")
+  texto       String
+  venceEm     DateTime  @map("vence_em")
+  responsavel String?
+  feita       Boolean   @default(false)
+  feitaEm     DateTime? @map("feita_em")
+  criadoPor   String?   @map("criado_por")
+  criadoEm    DateTime  @default(now()) @map("criado_em")
+
+  @@index([conta, conversaId, feita])
+  @@map("funil_tarefa")
+}
