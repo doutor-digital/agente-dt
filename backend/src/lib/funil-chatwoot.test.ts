@@ -166,3 +166,9 @@ test('cartão: lista do Chatwoot com só o aviso do sistema cai no last_non_acti
   assert.equal(k.ultimaMensagem, 'oi doutor');
   assert.equal(k.ultimaDela, true);
 });
+
+test('cartão: id do responsável (o filtro "Minhas" compara por id, não por nome)', () => {
+  assert.equal(cartaoDaConversa({ id: 1, meta: { assignee: { id: 7, name: 'Ana' } } }, ['Novo']).responsavelId, 7);
+  assert.equal(cartaoDaConversa({ id: 2, meta: {} }, ['Novo']).responsavelId, null);
+  assert.equal(cartaoDaConversa({ id: 3, meta: { assignee: { id: 'x' } } }, ['Novo']).responsavelId, null);
+});

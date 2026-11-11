@@ -81,6 +81,7 @@ export interface Cartao {
   etapa: string;
   status: string;
   responsavel: string | null;
+  responsavelId: number | null;
   ultimaMensagem: string;
   /** a última mensagem é da paciente (ela está esperando resposta) */
   ultimaDela: boolean;
@@ -140,6 +141,7 @@ export function cartaoDaConversa(c: any, etapas: string[], tarefa: SituacaoTaref
     etapa,
     status: String(c?.status ?? ''),
     responsavel: texto(c?.meta?.assignee?.name, 40) || null,
+    responsavelId: Number.isInteger(Number(c?.meta?.assignee?.id)) && Number(c?.meta?.assignee?.id) > 0 ? Number(c.meta.assignee.id) : null,
     ultimaMensagem: ultima?.private ? '(nota interna)' : texto(ultima?.content, 120),
     ultimaDela: !!ultima && !ultima.private && Number(ultima.message_type) === 0,
     atividade: Number(c?.last_activity_at ?? c?.timestamp ?? 0) || 0,

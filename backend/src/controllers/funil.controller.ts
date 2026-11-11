@@ -65,19 +65,19 @@ function errou(ip: string): void {
 
 // Login do Chatwoot já conferido: hash da sessão → nome (5 min). Consequência aceita: quem sai do Chatwoot (ou é tirado da
 // conta) ainda vê o funil por até 5 min nesta aba.
-const sessoes = new Map<string, { nome: string; ate: number }>();
+const sessoes = new Map<string, { nome: string; id: number | null; ate: number }>();
 const SESSAO_VALE_MS = 5 * 60_000;
 // Teto GLOBAL de consultas ao /profile do Chatwoot (sessão ainda não conferida). Não é por ip: sem `trust proxy`, atrás do
 // Traefik, o ip é o mesmo para todo mundo. Sessão já conferida (no cache) nunca esbarra nele.
 const MAX_CONFERENCIAS_POR_MIN = 120;
 let conferencias = { n: 0, desde: 0 };
 
-type Conferencia = { nome: string } | 'invalida' | 'sem-conta' | 'indisponivel' | 'excesso';
+type Conferencia = { nome: string; id: number | null } | 'invalida' | 'sem-conta' | 'indisponivel' | 'excesso';
 
 async function quemEstaLogado(c: ContextoChatwoot, s: SessaoChatwoot): Promise<Conferencia> {
   const k = createHash('sha256').update(`${s.token}|${s.client}|${s.uid}`).digest('hex');
   const t = sessoes.get(k);
-  if (t && t.ate > Date.now()) return { nome: t.nome };
+  if (t && t.ate > Date.now()) return { nome: t.nome, id: t.id };
   if (Date.now() - conferencias.desde > 60_000) conferencias = { n: 0, desde: Date.now() };
   if (++conferencias.n > MAX_CONFERENCIAS_POR_MIN) return 'excesso';
   let r: globalThis.Response;
@@ -92,12 +92,15 @@ async function quemEstaLogado(c: ContextoChatwoot, s: SessaoChatwoot): Promise<C
   // só "o Chatwoot recusou o login" é sessão inválida; queda, timeout e 5xx não são culpa de quem está usando
   if (r.status === 401 || r.status === 403) return 'invalida';
   if (!r.ok) return 'indisponivel';
-  const nome = nomeSeTemConta(await r.json().catch(() => null), c.conta!.conta);
+  const perfil = (await r.json().catch(() => null)) as { id?: unknown } | null;
+  const nome = nomeSeTemConta(perfil, c.conta!.conta);
+  const id = Number(perfil?.id);
   // login válido, mas de quem não é desta conta: não é sessão vencida ("entre de novo" nunca resolveria)
   if (!nome) return 'sem-conta';
   if (sessoes.size > 500) sessoes.clear();
-  sessoes.set(k, { nome, ate: Date.now() + SESSAO_VALE_MS });
-  return { nome };
+  const idOk = Number.isInteger(id) && id > 0 ? id : null;
+  sessoes.set(k, { nome, id: idOk, ate: Date.now() + SESSAO_VALE_MS });
+  return { nome, id: idOk };
 }
 
 /**
@@ -111,6 +114,8 @@ async function quemEstaLogado(c: ContextoChatwoot, s: SessaoChatwoot): Promise<C
 interface Acesso {
   c: ContextoChatwoot;
   logado: string | null;
+  /** id do usuário no Chatwoot (o filtro "Minhas" compara por ele, não pelo nome) */
+  logadoId: number | null;
   sessao: SessaoChatwoot | null;
 }
 
@@ -127,7 +132,7 @@ async function autorizado(req: Request, res: Response): Promise<Acesso | null> {
       res.status(429).json({ error: 'muitas tentativas — aguarde 10 minutos' });
       return null;
     }
-    if (chaveConfere(c.conta.token, chave)) return { c, logado: null, sessao: null };
+    if (chaveConfere(c.conta.token, chave)) return { c, logado: null, logadoId: null, sessao: null };
     errou(ip);
     res.status(403).json({ error: 'chave do funil inválida' });
     return null;
@@ -138,7 +143,7 @@ async function autorizado(req: Request, res: Response): Promise<Acesso | null> {
     return null;
   }
   const r = await quemEstaLogado(c, sessao);
-  if (typeof r === 'object') return { c, logado: r.nome, sessao };
+  if (typeof r === 'object') return { c, logado: r.nome, logadoId: r.id, sessao };
   if (r === 'invalida') res.status(403).json({ error: 'entre no Chatwoot de novo (sessão expirada)', sessao: 'invalida' });
   else if (r === 'sem-conta') res.status(403).json({ error: 'seu usuário do Chatwoot não tem acesso a esta conta — peça para a Suzanne', sessao: 'sem-conta' });
   else if (r === 'excesso') res.status(429).json({ error: 'muitos acessos agora — tente em 1 minuto' });
@@ -199,7 +204,7 @@ export async function funilQuadroHandler(req: Request, res: Response): Promise<v
       if ((pg?.data?.payload?.length ?? 0) < 25) break;
     }
     const tarefas = await vencimentosAbertos(a.c.conta!.conta, idsDasPaginas(paginas));
-    res.json({ ...montarQuadro(paginas, lista, tarefas), chatwoot: a.c.conta!.url, conta: a.c.conta!.conta, eu: a.logado, podeEscrever: !!a.sessao });
+    res.json({ ...montarQuadro(paginas, lista, tarefas), chatwoot: a.c.conta!.url, conta: a.c.conta!.conta, eu: a.logado, euId: a.logadoId, podeEscrever: !!a.sessao });
   } catch (e) {
     falhou(res, e, 'quadro');
   }
@@ -656,7 +661,7 @@ body{background:#f4f6f9}
 .col .mais{margin-left:auto;width:26px;height:26px;border-radius:8px;border:0;background:transparent;color:#475467;display:grid;place-items:center;cursor:pointer;transition:background .15s,color .15s}
 .col .mais:hover{background:#fff;color:var(--azul)}
 .col .soma{font-size:12px;color:var(--fraco);margin-top:2px;font-variant-numeric:tabular-nums}
-.col .lista{overflow-y:auto;padding:2px 8px 10px;display:flex;flex-direction:column;gap:8px;min-height:60px}
+.col .lista{overflow-y:auto;padding:2px 8px 10px;display:flex;flex-direction:column;gap:8px;min-height:120px}
 .col.alvo{background:#e3efff;outline:2px dashed #8cc2ff;outline-offset:-3px}
 .k{position:relative;background:#fff;border:1px solid #e4e7ec;border-radius:10px;padding:10px 12px 9px;margin:0;min-height:0;box-shadow:0 1px 2px rgba(16,24,40,.05)}
 .k.espera{box-shadow:inset 3px 0 0 var(--rosa),0 1px 2px rgba(16,24,40,.05)}
@@ -668,21 +673,21 @@ body{background:#f4f6f9}
 .k.espera .dt{color:var(--rosa);font-weight:600}
 .k .msgk{margin:6px 0 0;font-size:13px;line-height:1.4;color:#5b6676;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
 .k .msgk.dela{color:#344054}
-.k .pe{display:flex;align-items:center;gap:10px;margin-top:9px;font-size:12px;color:var(--fraco)}
+.k .pe{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin-top:9px;font-size:12px;color:var(--fraco)}
 .k .valor{color:#067647;font-weight:600;font-variant-numeric:tabular-nums}
 .k .qual{display:inline-flex;align-items:center;gap:4px}
 .k .qual::before{content:"";width:6px;height:6px;border-radius:50%;background:#94a3b8}
 .k .q-quente::before{background:#e5484d}.k .q-morno::before{background:#f59e0b}.k .q-frio::before{background:#3b82f6}
 .k .tarefa{display:inline-flex;align-items:center;gap:4px}
-.k .tarefa.sem{color:#98a2b3}.k .tarefa.vencida{color:var(--rosa);font-weight:600}.k .tarefa.hoje{color:#b54708;font-weight:600}.k .tarefa.futura{color:#067647}
+.k .tarefa.sem{color:#667085}.k .tarefa.vencida{color:var(--rosa);font-weight:600}.k .tarefa.hoje{color:#b54708;font-weight:600}.k .tarefa.futura{color:#067647}
 .k .etq{max-width:84px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .k .resp{margin-left:auto;width:22px;height:22px;border-radius:50%;background:#f2f4f7;border:1px solid #e4e7ec;color:#475467;display:grid;place-items:center;font-size:9.5px;font-weight:700}
-.vazio{border:1px dashed #d0d5dd;border-radius:10px;padding:16px 8px;color:#98a2b3;font-size:12.5px;text-align:center}
+.col .vazio{border:1px dashed #d0d5dd;border-radius:10px;padding:16px 8px;color:#667085;font-size:12.5px;text-align:center}
 .formr{margin:0;border-radius:10px}
 .fantasma{flex:0 0 288px;background:#eef1f5;border-radius:12px;padding:12px 8px}
 
 /* ── topo com resumo e filtros; ações rápidas; coluna recolhida ── */
-.topo{display:block;padding:10px 20px 10px;background:#fff}
+.topo{display:block;padding:10px 60px 10px 20px;background:#fff}
 .topo .linha-a,.topo .linha-b{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .topo .linha-b{margin-top:10px}
 .topo h1{font-size:18px;font-weight:700;letter-spacing:-.01em;margin-right:8px}
@@ -695,7 +700,7 @@ body{background:#f4f6f9}
 .resumo .num:not(:disabled):hover{border-color:#c5cfdb}
 .resumo .num.on{border-color:var(--azul);background:#eef6ff}
 .topo .dir{margin-left:auto;display:flex;align-items:center;gap:8px}
-.atual{font-size:12px;color:#98a2b3}
+.atual{font-size:12px;color:#667085}
 .ic{width:34px;height:34px;border-radius:10px;border:1px solid var(--linha);background:#fff;cursor:pointer;font-size:16px;color:#475467;transition:transform .3s}
 .ic:hover{transform:rotate(90deg)}
 .busca-c{display:flex;align-items:center;gap:6px;height:34px;padding:0 10px;border:1px solid var(--linha);border-radius:10px;background:#fff;min-width:220px;flex:0 1 280px}
@@ -719,6 +724,8 @@ body{background:#f4f6f9}
 .col.fechada .t1{flex-direction:column;gap:10px}
 .col.fechada .nomeEtapa{writing-mode:vertical-rl;transform:rotate(180deg);max-height:220px}
 .col.fechada .mais,.col.fechada .soma,.col.fechada .lista{display:none}
+
+@media (max-width:760px){.col{flex-basis:260px}.topo{padding-right:56px}}
 </style></head><body>
 <div class="topo" id="topo">
   <div class="linha-a">
@@ -775,7 +782,7 @@ body{background:#f4f6f9}
   var FILTROS=[['minhas','Minhas'],['esperando','Esperando resposta'],['atrasada','Tarefa atrasada'],['semtarefa','Sem tarefa'],['quente','Quentes']];
   function passa(k){
     if(!filtro) return true;
-    if(filtro==='minhas') return !!dados.eu && k.responsavel===dados.eu;
+    if(filtro==='minhas') return !!dados.euId && k.responsavelId===dados.euId;
     if(filtro==='esperando') return esperando(k);
     if(filtro==='atrasada') return k.tarefa.tipo==='vencida';
     if(filtro==='semtarefa') return k.tarefa.tipo==='sem';
@@ -796,7 +803,7 @@ body{background:#f4f6f9}
       r.appendChild(b);
     });
     var f=$('filtros'); f.textContent='';
-    FILTROS.forEach(function(x){ if(x[0]==='minhas'&&!dados.eu) return; var b=el('button','chip'+(filtro===x[0]?' on':''),x[1]); b.type='button'; b.setAttribute('aria-pressed',String(filtro===x[0])); b.onclick=function(){ filtro=filtro===x[0]?'':x[0]; desenhar(); }; f.appendChild(b); });
+    FILTROS.forEach(function(x){ if(x[0]==='minhas'&&!dados.euId) return; var b=el('button','chip'+(filtro===x[0]?' on':''),x[1]); b.type='button'; b.setAttribute('aria-pressed',String(filtro===x[0])); b.onclick=function(){ filtro=filtro===x[0]?'':x[0]; desenhar(); }; f.appendChild(b); });
   }
   setInterval(function(){ if(atualizadoEm) $('atual').textContent='atualizado há '+Math.max(0,Math.round((Date.now()-atualizadoEm)/1000))+' s'; },5000);
 
@@ -815,7 +822,7 @@ body{background:#f4f6f9}
     if(!s) return ''; var seg=Math.max(0,Date.now()/1000-s);
     if(seg<60) return 'agora'; if(seg<3600) return 'há '+Math.floor(seg/60)+' min'; if(seg<86400) return 'há '+Math.floor(seg/3600)+' h';
     var d=new Date(s*1000), ontem=new Date(Date.now()-864e5); if(d.toDateString()===ontem.toDateString()) return 'ontem';
-    return seg<7*86400? 'há '+Math.floor(seg/86400)+' dias' : doisd(d.getDate())+'/'+doisd(d.getMonth()+1);
+    var dd=Math.floor(seg/86400); return seg<7*86400? 'há '+dd+(dd===1?' dia':' dias') : doisd(d.getDate())+'/'+doisd(d.getMonth()+1);
   }
   var NS='http://www.w3.org/2000/svg';
   function icone(caminho){ var v=document.createElementNS(NS,'svg'); v.setAttribute('viewBox','0 0 16 16'); v.setAttribute('width','13'); v.setAttribute('height','13'); v.setAttribute('aria-hidden','true'); var p=document.createElementNS(NS,'path'); p.setAttribute('d',caminho); p.setAttribute('fill','none'); p.setAttribute('stroke','currentColor'); p.setAttribute('stroke-width','1.6'); p.setAttribute('stroke-linecap','round'); v.appendChild(p); return v; }
@@ -843,7 +850,7 @@ body{background:#f4f6f9}
         d.addEventListener('dragstart',function(){ arrastando=k; setTimeout(function(){ d.classList.add('arrastando'); },0); });
         d.addEventListener('dragend',function(){ d.classList.remove('arrastando'); setTimeout(function(){ arrastando=null; },0); });
         d.addEventListener('click',function(){ abrirFicha(k.id); });
-        d.addEventListener('keydown',function(ev){ if(ev.key==='Enter') abrirFicha(k.id); });
+        d.addEventListener('keydown',function(ev){ if(ev.key==='Enter'&&ev.target===d) abrirFicha(k.id); });
         var topo=el('div','l1'), av=el('span','av'); avatar(av,k.nome,k.avatar,k.id); topo.appendChild(av);
         topo.appendChild(el('span','ld',k.nome));
         var dt=el('time','dt',relativo(k.atividade)); dt.title=quando(k.atividade)+(esp?' · esperando resposta':''); topo.appendChild(dt); d.appendChild(topo);
@@ -857,9 +864,10 @@ body{background:#f4f6f9}
         if(k.responsavel){ var rp=el('span','resp',iniciais(k.responsavel)); rp.title='Responsável: '+k.responsavel; pe.appendChild(rp); }
         d.appendChild(pe);
         var ac=el('div','acoes'), prox=dados.etapas[dados.etapas.indexOf(k.etapa)+1];
-        if(prox&&dados.podeEscrever!==undefined){ var bp=el('button',null,'→'); bp.type='button'; bp.title='Mover para '+prox; bp.setAttribute('aria-label','Mover para '+prox); bp.onclick=function(ev){ ev.stopPropagation(); mover(k.id,prox); }; ac.appendChild(bp); }
-        var bt=el('button',null,'⏰'); bt.type='button'; bt.title='Tarefa: ligar amanhã às 9h'; bt.setAttribute('aria-label','Criar tarefa para amanhã às 9h'); bt.onclick=async function(ev){ ev.stopPropagation(); var am=new Date(Date.now()+864e5); am.setHours(9,0,0,0); msg('Criando tarefa…'); try{ await api('POST','tarefa',{conversaId:k.id,texto:'Ligar para '+k.nome,venceEm:am.toISOString()}); msg('Tarefa criada para amanhã 9h.'); carregar(); }catch(e){ msg(e.message); } }; ac.appendChild(bt);
-        var ab=el('a',null,'↗'); ab.href=linkCw(k.id); ab.target='_top'; ab.title='Abrir a conversa'; ab.setAttribute('aria-label','Abrir a conversa'); ab.onclick=function(ev){ ev.stopPropagation(); }; ac.appendChild(ab);
+        if(prox&&/perd/i.test(prox)) prox=null; // o → nunca leva para Perdido (perder é decisão, não clique sem querer)
+        if(prox&&dados.podeEscrever){ var bp=el('button',null,'→'); bp.type='button'; bp.title='Mover para '+prox; bp.setAttribute('aria-label','Mover para '+prox); bp.onclick=function(ev){ ev.stopPropagation(); mover(k.id,prox); }; ac.appendChild(bp); }
+        if(dados.podeEscrever){ var bt=el('button',null,'⏰'); bt.type='button'; bt.title='Tarefa: ligar amanhã às 9h'; bt.setAttribute('aria-label','Criar tarefa para amanhã às 9h'); bt.onclick=async function(ev){ ev.stopPropagation(); var am=new Date(Date.now()+864e5); am.setHours(9,0,0,0); if(bt.disabled) return; bt.disabled=true; msg('Criando tarefa…'); try{ await api('POST','tarefa',{conversaId:k.id,texto:'Ligar para '+k.nome,venceEm:am.toISOString()}); msg('Tarefa criada para amanhã 9h.'); carregar(); }catch(e){ msg(e.message); bt.disabled=false; } }; ac.appendChild(bt); }
+        var ab=el('a',null,'↗'); ab.href=linkCw(k.id); ab.target='_top'; ab.title='Abrir a conversa'; ab.setAttribute('aria-label','Abrir a conversa'); ab.draggable=false; ab.onclick=function(ev){ ev.stopPropagation(); }; ac.appendChild(ab);
         d.appendChild(ac);
         lista.appendChild(d);
       });
@@ -974,7 +982,7 @@ body{background:#f4f6f9}
     if(e.key==='/'){ e.preventDefault(); $('busca').focus(); }
     else if((e.key==='n'||e.key==='N')&&!$('novo').hidden){ e.preventDefault(); $('novo').click(); }
   });
-  $('novo').addEventListener('click',function(){ if(dados&&dados.etapas.length){ formNaColuna=dados.etapas[0]; desenhar(); } });
+  $('novo').addEventListener('click',function(){ if(dados&&dados.etapas.length){ formNaColuna=dados.etapas[0]; delete recolhidas[formNaColuna]; desenhar(); } });
   document.addEventListener('keydown',function(e){ if(e.key!=='Escape') return; if(aberta){ fecharFicha(); return; } if(MENU){ try{ window.parent.postMessage({event:'funil:fechar'},ORIGEM_CW); }catch(x){} } });
   window.addEventListener('message',function(ev){
     try{ var d=typeof ev.data==='string'?JSON.parse(ev.data):ev.data;
