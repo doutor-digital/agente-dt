@@ -15,7 +15,7 @@ import { createKommoClient, isLeadPaused, temPalavra } from '../services/kommo.s
 import { leadPausadoPorJanela } from '../lib/pausa-lead.js';
 import { portaDaEquipe, travaAntesDeEnviar } from '../lib/pausa-equipe.js';
 import { segurarRespostaAtropelada } from '../lib/pausa-propria.js';
-import { devoAvisar } from '../lib/paciente-insiste.js';
+import { devoAvisar, esquecerAviso } from '../lib/paciente-insiste.js';
 import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
 import { recusaDoFunilTratamento } from '../lib/guarda-funil-tratamento.js';
 import { entraPelaMeta } from '../lib/canal-de-entrada.js';
@@ -28,7 +28,20 @@ import { checkBusinessHours } from '../agent/prompt-composer.js';
 import { transcribeAudio } from '../services/transcription.service.js';
 import { deveIrParaEquipe, ehFalhaEstrutural, limparFalhasDeAudio, registrarFalhaDeAudio } from '../lib/falha-de-audio.js';
 import { describeImage } from '../services/vision.service.js';
-import { INSTRUCAO_DO_EXAME, ehLeituraDeExame, exameDeImagemLigado, grupoDoExame, linkDoCartao, mandarNoGrupo, textoDaTarefa, textoDoGrupo } from '../lib/exame-de-imagem.js';
+import {
+  INSTRUCAO_DO_EXAME,
+  JANELA_DO_AVISO_MS,
+  ehLeituraDeExame,
+  exameDeImagemLigado,
+  garantirPausaDoExame,
+  grupoDoExame,
+  linkDoCartao,
+  mandarNoGrupo,
+  marcarExameNoTurno,
+  textoDaTarefa,
+  textoDoGrupo,
+  tirarExameDoTurno,
+} from '../lib/exame-de-imagem.js';
 import { marcarRecebimento } from '../agent/confirmacao-so-com-crm.js';
 import { neutralizarMarcasDoSistema, resumoDaLeitura, semAReferencia } from '../lib/comprovante-pix.js';
 import { descricaoComReferencia, fonteDaUrl, guardarLeitura } from '../lib/comprovante-lido.js';
@@ -196,33 +209,35 @@ async function avisarEquipeDoAudio(unit: Unit, leadId: number, motivo: string): 
 }
 
 /**
- * Exame de imagem (lib/exame-de-imagem.ts): mensagem no grupo da unidade, quando configurado, e tarefa no cartão — uma vez a cada
- * 6 h por cartão (a mesma ressonância chega em 5 fotos seguidas). Nunca lança. true = este turno avisou.
+ * Exame de imagem (lib/exame-de-imagem.ts): tarefa no cartão (o roteador leva ao grupo das SDRs) ou, se a unidade tem grupo
+ * próprio para exames, mensagem direto nele e tarefa sem o prefixo do roteador. Um aviso por cartão a cada 30 min (rajada de
+ * fotos da mesma ressonância). Se nada saiu, a vaga é devolvida para o próximo turno tentar de novo. Nunca lança.
  */
-async function avisarEquipeDoExame(unit: Unit, leadId: number, leituras: string[]): Promise<boolean> {
-  if (!devoAvisar(`exame:${unit.id}:${leadId}`)) return false;
-  if (await avisoRecente(unit.id, leadId, 'exame_de_imagem', 6 * 60 * 60 * 1000)) return false;
-  let grupoOk = false;
+async function avisarEquipeDoExame(unit: Unit, leadId: number): Promise<boolean> {
+  const chave = `exame:${unit.id}:${leadId}`;
+  if (!devoAvisar(chave)) return false;
+  if (await avisoRecente(unit.id, leadId, 'exame_de_imagem', JANELA_DO_AVISO_MS)) return false;
   const grupo = grupoDoExame(unit.slug);
-  if (grupo) {
-    grupoOk = await mandarNoGrupo(grupo, textoDoGrupo({ unidade: unit.name, leadId, link: linkDoCartao(unit, leadId), leituras }));
-  } else {
-    logger.warn({ unit: unit.slug, leadId }, 'exame-de-imagem: unidade sem grupo em EXAME_DE_IMAGEM_GRUPOS — só a tarefa');
-  }
+  const grupoOk = grupo ? await mandarNoGrupo(grupo, textoDoGrupo({ unidade: unit.name, leadId, link: linkDoCartao(unit, leadId) })) : false;
   let tarefaOk = false;
   try {
     tarefaOk = Boolean(
       await createKommoClient(unit).createTask({
         leadId,
-        text: textoDaTarefa(unit.slug, leituras),
+        // Grupo próprio recebeu: sem o prefixo, o roteador não repete o aviso. Sem grupo (ou ele falhou): o roteador leva.
+        text: textoDaTarefa(unit.slug, !grupoOk),
         completeAt: Math.floor(Date.now() / 1000) + 15 * 60,
       }),
     );
   } catch (err) {
     logger.warn({ err: String(err), leadId, unit: unit.slug }, 'exame-de-imagem: a tarefa no cartão falhou');
   }
-  if (grupoOk || tarefaOk) await marcarAviso(unit.id, leadId, 'exame_de_imagem');
-  return grupoOk || tarefaOk;
+  if (grupoOk || tarefaOk) {
+    await marcarAviso(unit.id, leadId, 'exame_de_imagem');
+    return true;
+  }
+  esquecerAviso(chave);
+  return false;
 }
 
 function hasAudioAttachment(msg: MessageEvent): boolean {
@@ -1214,10 +1229,26 @@ const TURNO_PULADO = 'pulado' as const;
  * ao cadastro. Com a IA pulada o paciente continua sendo lead, e o cadastro roda aqui com as mesmas travas (ver `cadastrarLeadDoTurno`).
  */
 export async function processAgent(args: ArgsDoTurno): Promise<void> {
-  const r = await processarTurno(args);
-  // Sem `await`: a decisão pode chamar a IA de triagem e a franquia, e o turno (coalescer, desligamento gracioso) não espera por isso.
-  // `cadastrarQuandoIaPulada` nunca lança.
-  if (r === TURNO_PULADO) void cadastrarQuandoIaPulada(args);
+  try {
+    const r = await processarTurno(args);
+    // Sem `await`: a decisão pode chamar a IA de triagem e a franquia, e o turno (coalescer, desligamento gracioso) não espera por isso.
+    // `cadastrarQuandoIaPulada` nunca lança.
+    if (r === TURNO_PULADO) void cadastrarQuandoIaPulada(args);
+  } finally {
+    // Exame de imagem (lib/exame-de-imagem.ts): a pausa não fica na mão do modelo — vale também para o turno pulado (fora do
+    // horário, etapa calada) e para o que falhou no meio.
+    if (tirarExameDoTurno(args.unit.id, args.leadId)) {
+      try {
+        const kommo = createKommoClient(args.unit);
+        await garantirPausaDoExame(args.unit, args.leadId, {
+          caixinhaMarcada: (lead, campo) => kommo.isLeadFieldChecked(lead, campo),
+          marcarCaixinha: (lead, campo) => kommo.setLeadFieldFlag(lead, campo, true).then(() => undefined),
+        });
+      } catch (err) {
+        logger.error({ err: String(err), unit: args.unit.slug, leadId: args.leadId }, 'exame-de-imagem: a pausa do fim do turno falhou');
+      }
+    }
+  }
 }
 
 export async function cadastrarQuandoIaPulada(
@@ -1422,10 +1453,12 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
   // Exame de imagem: o aviso sai JÁ, antes das travas (como o do áudio); a pausa e a frase ficam com o modelo (INSTRUCAO_DO_EXAME).
   const instrucaoDeExame = exames.length > 0 ? INSTRUCAO_DO_EXAME : null;
   if (exames.length > 0) {
-    void avisarEquipeDoExame(unit, leadId, exames);
+    // A pausa é conferida no fim do turno, por qualquer caminho (processAgent → garantirPausaDoExame).
+    marcarExameNoTurno(unit.id, leadId);
+    void avisarEquipeDoExame(unit, leadId);
     await recorder.step({
       kind: 'THINKING',
-      title: `📄 Exame de imagem (${exames.length}) → pausar e passar ao especialista; aviso à equipe disparado (1 a cada 6 h por cartão)`,
+      title: `📄 Exame de imagem (${exames.length}) → pausar e passar ao especialista; aviso à equipe disparado (1 a cada 30 min por cartão)`,
       payload: { exames: exames.map((e) => e.slice(0, 200)) },
     });
   }

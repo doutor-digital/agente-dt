@@ -33,18 +33,35 @@ export async function avisarJoao(texto: string, chave: string, intervaloMs: numb
     logger.warn({ chave, texto: texto.slice(0, 200) }, 'alerta-whatsapp: sem configuração da Evolution — só log');
     return false;
   }
+  const ok = await enviarPelaEvolution({
+    url: process.env.EVOLUTION_ALERT_URL as string,
+    header: process.env.EVOLUTION_ALERT_HEADER as string,
+    valor: process.env.EVOLUTION_ALERT_VALUE as string,
+    numero: process.env.ALERTA_WHATSAPP_NUMERO as string,
+    texto,
+  });
+  if (ok) logger.info({ chave }, 'alerta-whatsapp: aviso enviado ao João');
+  else logger.warn({ chave }, 'alerta-whatsapp: falha ao enviar (segue sem aviso)');
+  return ok;
+}
+
+/**
+ * O POST de texto na Evolution (…/message/sendText/<instância>), para número ou grupo (`…@g.us`). Texto cortado em 1500,
+ * 15 s de prazo. true = enviou; false = falhou (já logado). Nunca lança. Também usado pelo aviso do exame de imagem.
+ */
+export async function enviarPelaEvolution(
+  a: { url: string; header: string; valor: string; numero: string; texto: string },
+  deps: { post?: typeof axios.post } = {},
+): Promise<boolean> {
   try {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    headers[process.env.EVOLUTION_ALERT_HEADER as string] = process.env.EVOLUTION_ALERT_VALUE as string;
-    await axios.post(
-      process.env.EVOLUTION_ALERT_URL as string,
-      { number: process.env.ALERTA_WHATSAPP_NUMERO, text: texto.slice(0, 1500) },
-      { headers, timeout: 15_000 },
+    await (deps.post ?? axios.post)(
+      a.url,
+      { number: a.numero, text: a.texto.slice(0, 1500) },
+      { headers: { 'Content-Type': 'application/json', [a.header]: a.valor }, timeout: 15_000 },
     );
-    logger.info({ chave }, 'alerta-whatsapp: aviso enviado ao João');
     return true;
   } catch (err) {
-    logger.warn({ err: String(err), chave }, 'alerta-whatsapp: falha ao enviar (segue sem aviso)');
+    logger.warn({ err: String(err) }, 'evolution: falha ao enviar texto');
     return false;
   }
 }
