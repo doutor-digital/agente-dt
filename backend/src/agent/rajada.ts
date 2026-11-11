@@ -128,7 +128,14 @@ const citar = (l: string) => `  > "${l.slice(0, 120)}"`;
  *    responder a tudo — no histórico do modelo as respostas seguradas continuam lá, parecendo enviadas;
  *  - `clinica` e a rajada terminou em cortesia com queixa no meio: manda acolher a queixa primeiro.
  */
-export function renderRajada(falas: ReadonlyArray<Fala> | undefined, opcoes: { clinica: boolean }): string {
+export function renderRajada(
+  falas: ReadonlyArray<Fala> | undefined,
+  opcoes: {
+    clinica: boolean;
+    /** Chave `sem-pergunta-de-alerta` (conversa-direta.ts): perna que faltou/falhou é o sinal, sem pergunta. */
+    semPerguntaDeAlerta?: boolean;
+  },
+): string {
   if (!falas || falas.length === 0) return '';
   const varios = turnosSemResposta(falas) >= 2;
   const queixas = opcoes.clinica ? queixasEsquecidas(falas) : [];
@@ -154,8 +161,16 @@ export function renderRajada(falas: ReadonlyArray<Fala> | undefined, opcoes: { c
     );
     if (queixas.some(temLimitacao)) {
       out.push(
-        '- Perna que faltou ou falhou, não conseguir andar ou ter travado: faça a pergunta de sinais de alerta, UM sinal',
-        '  por vez — comece pela força da perna ("a perna ficou fraca, sem força?") — e siga <sinal_de_alerta>.',
+        ...(opcoes.semPerguntaDeAlerta
+          ? [
+              // Sem a pergunta (Timbó, 11/11/2026), a dúvida resolve para o lado seguro: perna que faltou/falhou é o sinal (a).
+              '- Perna que faltou, falhou ou bambeou, ou não conseguir andar: isso JÁ é sinal de alerta (perna fraca/falhando).',
+              '  Não pergunte nada: siga <sinal_de_alerta> e pare. Só "travei" de dor, sem a perna falhar: acolha e siga.',
+            ]
+          : [
+              '- Perna que faltou ou falhou, não conseguir andar ou ter travado: faça a pergunta de sinais de alerta, UM sinal',
+              '  por vez — comece pela força da perna ("a perna ficou fraca, sem força?") — e siga <sinal_de_alerta>.',
+            ]),
       );
     }
   }

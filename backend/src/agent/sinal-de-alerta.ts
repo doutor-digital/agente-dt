@@ -163,9 +163,13 @@ export function renderSinalDeAlerta(unit: Pick<Unit, 'category'>, opcoes: { semP
   // linhas que mandam perguntar (fala vaga, linguagem do dia a dia, dor na virilha); o resto — o que é sinal, parar
   // quando o paciente CONTA, nunca pronto-socorro — fica igual.
   const comoPerguntar = opcoes.semPerguntar
-    ? `- QUANDO A FALA É VAGA ("a perna bambeou", "travei", "quase não andei", dor que vai para a virilha ou a região
-  íntima): NÃO pergunte sinal nenhum (decisão do João para esta unidade, 11/11). Acolha em UMA frase e siga o
-  atendimento normal — quem avalia é o especialista, na consulta. Só pare se ele CONTAR o sinal com clareza.`
+    ? `- NESTA UNIDADE VOCÊ NÃO PERGUNTA SINAL NENHUM (decisão do João, 11/11): nada de "a perna ficou fraca?", de
+  xixi, fezes ou dormência. Sem a pergunta, a dúvida resolve para o lado SEGURO: se o paciente CONTA a perna
+  falhando, mesmo com palavras do dia a dia ("me faltou/faltaram as pernas", "as pernas falharam", "a perna
+  bambeou", "quase não andei", "não consigo andar"), isso JÁ é o sinal (a): pare como acima.
+- Fala que NÃO é sinal sozinha e não vira pergunta: "travei" de dor (sem a perna falhar), dor que vai para a
+  virilha, os testículos ou a barriga sem dormência nem escape. Acolha em UMA frase e siga o atendimento —
+  quem avalia é o especialista, na consulta.`
     : `- QUANDO A FALA É VAGA, acolha em UMA frase e faça UMA pergunta com UM sinal só (um "sim" solto a uma
   pergunta com vários sinais não confirma nada): "a perna ficou fraca, sem força?". Se ele confirmar, pare
   como acima; se negar, siga o atendimento normal. Resposta parcial a esse UM sinal ("às vezes", "um pouco",
