@@ -1248,9 +1248,31 @@ const MENU_JS = `(function(){
     while ((t = w.nextNode())) { if (t.nodeValue.trim()) { t.nodeValue = texto; return; } }
   }
   // um item novo no menu, copiado do "Contatos" (mesmo visual), posto logo depois de \`depois\`
+  // ícones próprios (traço, no estilo do menu do Chatwoot): sem eles os itens copiados ficariam com o ícone de Contatos
+  var ICONES = {
+    hoje: '<path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/><path d="m9 16 2 2 4-4"/>',
+    funil: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M8 7v7"/><path d="M12 7v4"/><path d="M16 7v9"/>'
+  };
+  var SEL_ICONE = 'svg, [class^="i-"], [class*=" i-"]';
+  function trocarIcone(base, novo, qual){
+    var velho = novo.querySelector(SEL_ICONE), orig = base.querySelector(SEL_ICONE);
+    if (!velho) return;
+    var r = orig && orig.getBoundingClientRect ? orig.getBoundingClientRect() : null, lado = r && r.width ? Math.round(r.width) : 16;
+    var ns = 'http://www.w3.org/2000/svg', svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('width', lado); svg.setAttribute('height', lado);
+    svg.setAttribute('fill', 'none'); svg.setAttribute('stroke', 'currentColor'); svg.setAttribute('stroke-width', '2');
+    svg.setAttribute('stroke-linecap', 'round'); svg.setAttribute('stroke-linejoin', 'round'); svg.setAttribute('aria-hidden', 'true');
+    svg.style.flexShrink = '0';
+    // mantém as classes de espaçamento do ícone original, sem a classe que desenha o ícone de Contatos
+    var cls = String(velho.getAttribute('class') || '').split(/\\s+/).filter(function(c){ return c && !/^i-/.test(c); }).join(' ');
+    if (cls) svg.setAttribute('class', cls);
+    svg.innerHTML = ICONES[qual];
+    velho.parentNode.replaceChild(svg, velho);
+  }
   function item(base, depois, marca, texto, hash, aoClicar){
     var novo = base.cloneNode(true);
     novo.setAttribute(marca, '1');
+    trocarIcone(base, novo, marca === 'data-hoje-menu' ? 'hoje' : 'funil');
     var link = novo.tagName === 'A' ? novo : novo.querySelector('a');
     if (link) { link.setAttribute('href', hash); link.classList.remove('router-link-active', 'router-link-exact-active'); link.removeAttribute('aria-current'); }
     Array.prototype.forEach.call(novo.querySelectorAll('ul, [role="group"]'), function(u){ u.remove(); });
