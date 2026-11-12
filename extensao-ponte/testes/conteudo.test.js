@@ -42,7 +42,7 @@ describe('content script (conteudo.js + leitor + impressão)', () => {
     const { w, perguntar } = carregar('whatsapp-cus.html');
     try {
       const e = await perguntar();
-      assert.deepEqual(Object.keys(e).sort(), ['aberta', 'chave', 'fonteTelefone', 'impressoes', 'lid', 'nome', 'telefone', 'tipo']);
+      assert.deepEqual(Object.keys(e).sort(), ['aberta', 'chave', 'fonteTelefone', 'foto', 'impressoes', 'lid', 'nome', 'telefone', 'tipo']);
       assert.equal(e.nome, 'Maria Souza');
       assert.equal(e.telefone, '5599900000043');
       assert.equal(e.impressoes.length, 5);

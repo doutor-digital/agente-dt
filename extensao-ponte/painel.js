@@ -369,6 +369,8 @@
   function desenhar(r) {
     guiaAberto = null;
     naTela = r && r.achado && r.cartao ? r : null;
+    // 0.7.0: a foto de perfil que o WhatsApp Web mostra (fica só no painel, não vai ao servidor)
+    if (naTela && conversa && conversa.foto && !naTela.foto) naTela.foto = conversa.foto;
     if (r && r.unidadeDaConta) nomeDaUnidade(r.unidadeDaConta);
     if (naTela) {
       var no = D.cartao(document, r, acoes);
@@ -918,11 +920,96 @@
     }
   });
 
+  // ── 0.7.0: "Sofia atende todos" — a chave da unidade no topo do painel ──
+  var raizTodos = document.getElementById('todos');
+  var estadoTodos = null;
+
+  function horaCurta(d) {
+    return (d.getHours() < 10 ? '0' : '') + d.getHours() + ':' + (d.getMinutes() < 10 ? '0' : '') + d.getMinutes();
+  }
+
+  /** As saídas da chave: por 2 h, por 4 h, até amanhã 8h (sempre ≤ 24 h). */
+  function opcoesDeTodos(agora) {
+    var amanha8 = new Date(agora);
+    amanha8.setDate(amanha8.getDate() + 1);
+    amanha8.setHours(8, 0, 0, 0);
+    return [
+      { rotulo: 'Por 2 h', ate: new Date(agora.getTime() + 2 * 3600e3) },
+      { rotulo: 'Por 4 h', ate: new Date(agora.getTime() + 4 * 3600e3) },
+      { rotulo: 'Até amanhã 8h', ate: amanha8 },
+    ];
+  }
+
+  function desenharTodos(msgErro) {
+    var e = estadoTodos;
+    if (!e || !e.disponivel) {
+      raizTodos.hidden = true;
+      raizTodos.replaceChildren();
+      return;
+    }
+    raizTodos.hidden = false;
+    var ligado = !!e.ate;
+    var texto = document.createElement('p');
+    texto.className = 'todos__texto';
+    texto.textContent = ligado
+      ? '🤖 Sofia atendendo TODOS os pacientes até ' + horaCurta(new Date(e.ate))
+      : 'Sofia só no horário dela. Precisa de ajuda agora?';
+    var botoes = document.createElement('div');
+    botoes.className = 'todos__botoes';
+    function mudar(ate) {
+      Array.prototype.forEach.call(botoes.querySelectorAll('button'), function (b) { b.disabled = true; });
+      chamar('POST', '/ponte/todos', { ate: ate ? ate.toISOString() : null, por: quem() }).then(function (j) {
+        estadoTodos = j;
+        desenharTodos();
+      }, function (err) {
+        desenharTodos((err && err.message) || 'Não consegui mudar agora.');
+      });
+    }
+    if (ligado) {
+      var desl = botao('Desligar', function () { mudar(null); });
+      desl.classList.add('botao--pequeno');
+      botoes.appendChild(desl);
+    } else {
+      opcoesDeTodos(new Date()).forEach(function (o) {
+        var b = botao('Sofia atende todos · ' + o.rotulo.toLowerCase(), function () { mudar(o.ate); });
+        b.classList.add('botao--pequeno');
+        botoes.appendChild(b);
+      });
+    }
+    raizTodos.classList.toggle('todos--ligado', ligado);
+    var filhos = [texto, botoes];
+    if (msgErro) {
+      var m = document.createElement('p');
+      m.className = 'nota nota--alerta';
+      m.textContent = msgErro;
+      filhos.push(m);
+    }
+    raizTodos.replaceChildren.apply(raizTodos, filhos);
+  }
+
+  function carregarTodos() {
+    if (!config) {
+      estadoTodos = null;
+      return desenharTodos();
+    }
+    chamar('GET', '/ponte/todos').then(function (j) {
+      estadoTodos = j;
+      desenharTodos();
+    }, function () { /* servidor antigo ou fora: a barra só não aparece */ });
+  }
+  setInterval(carregarTodos, 2 * 60 * 1000);
+  chrome.storage.onChanged.addListener(function (mudou, area) {
+    if (area === 'local' && (mudou.slug || mudou.chave)) lerConfig().then(carregarTodos);
+  });
+
   var blocoAprendiz = D.aprendiz(document, A.DICAS);
   if (blocoAprendiz) blocoAprendizRaiz.appendChild(blocoAprendiz);
   // a posição da fila de ligações do dia (fechar o painel não perde)
   chrome.storage.local.get([CHAVE_DA_LIGACAO]).then(function (c) {
     estadoGuardado = (c && c[CHAVE_DA_LIGACAO]) || null;
   }, function () {});
-  lerConfig().then(pedirConversaAtual);
+  lerConfig().then(function () {
+    pedirConversaAtual();
+    carregarTodos();
+  });
 })();

@@ -82,3 +82,16 @@ test('liberadaAgora', () => {
   assert.equal(liberadaAgora(new Date('2026-11-12T14:00:00Z'), agora), false);
   assert.equal(liberadaAgora(null, agora), false);
 });
+
+test('lerPedidoDeTodos: liga até uma hora futura (máx. 24 h) ou desliga com null', async () => {
+  const { lerPedidoDeTodos } = await import('./ponte-passar-sofia.js');
+  const agora = new Date('2026-11-12T15:00:00Z');
+  const ok = lerPedidoDeTodos({ ate: '2026-11-12T21:00:00Z', por: 'Ana' }, agora);
+  assert.ok(ok.ok && ok.ate?.toISOString() === '2026-11-12T21:00:00.000Z' && ok.por === 'Ana');
+  const desliga = lerPedidoDeTodos({ ate: null }, agora);
+  assert.ok(desliga.ok && desliga.ate === null);
+  assert.equal(lerPedidoDeTodos({ ate: '2026-11-12T14:00:00Z' }, agora).ok, false);
+  assert.equal(lerPedidoDeTodos({ ate: '2026-11-14T15:00:00Z' }, agora).ok, false);
+  assert.equal(lerPedidoDeTodos({ ate: 'ontem' }, agora).ok, false);
+  assert.equal(lerPedidoDeTodos({}, agora).ok, false);
+});

@@ -217,7 +217,7 @@ import { widgetPassoEntendiHandler, widgetPassosHandler, widgetHorariosHandler, 
   widgetSugestaoMotivoHandler,
   widgetUsarMotivoHandler, widgetNumerosHandler, widgetPacienteHandler, widgetPingHandler, widgetSyncHandler } from '../controllers/widget-franquia.controller.js';
 import { widgetConflitoHandler, widgetEscolherPacienteHandler } from '../controllers/widget-conflito.controller.js';
-import { ponteCartaoHandler, pontePausarHandler, ponteResumoIaHandler, ponteRetomarHandler, pontePassarSofiaHandler } from '../controllers/ponte.controller.js';
+import { ponteCartaoHandler, pontePausarHandler, ponteResumoIaHandler, ponteRetomarHandler, pontePassarSofiaHandler, ponteTodosEstadoHandler, ponteTodosHandler } from '../controllers/ponte.controller.js';
 import { copilotoPerguntarHandler, copilotoVozSessaoHandler } from '../controllers/copiloto.controller.js';
 import { ponteContadorHandler, ponteFilaHandler } from '../controllers/ponte-fila.controller.js';
 import { ponteCamposHandler, ponteGuiaHandler, ponteMoverHandler } from '../controllers/ponte-guia.controller.js';
@@ -426,6 +426,9 @@ apiRouter.delete('/public/widget/:slug/ponte/pausa', ponteRetomarHandler);
 apiRouter.post('/public/widget/:slug/ponte/resumo-ia', ponteResumoIaHandler);
 // "🤖 Passar para a Sofia": o histórico da conversa no WhatsApp Web vira contexto e a Sofia assume este paciente (responde pelo Kommo).
 apiRouter.post('/public/widget/:slug/ponte/passar-sofia', pontePassarSofiaHandler);
+// "Sofia atende todos": fura a janela de horário da IA da unidade até uma hora (máx. 24 h).
+apiRouter.get('/public/widget/:slug/ponte/todos', ponteTodosEstadoHandler);
+apiRouter.post('/public/widget/:slug/ponte/todos', ponteTodosHandler);
 // Copiloto da recepção (v1: só lê, explica e sugere campos — nunca grava). Chave por unidade; só nas unidades de COPILOTO_UNIDADES.
 apiRouter.post('/public/widget/:slug/copiloto/perguntar', copilotoPerguntarHandler);
 // Voz em tempo real: só emite o acesso temporário; o áudio vai do navegador direto para a OpenAI.

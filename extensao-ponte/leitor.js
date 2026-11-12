@@ -125,6 +125,13 @@
       fonteTelefone = 'cabecalho';
     }
     var jidDaConversa = (jids['g.us'] || jids['c.us'] || jids.lid || {}).jid || null;
+    // 0.7.0: a foto de perfil (URL do próprio WhatsApp; só o painel usa, não vai ao servidor)
+    var foto = null;
+    var imgs = cabecalho ? cabecalho.querySelectorAll('img') : [];
+    for (var k = 0; k < imgs.length && !foto; k++) {
+      var src = imgs[k].getAttribute('src') || '';
+      if (/^https:\/\/[a-z0-9.-]+\.(whatsapp\.net|whatsapp\.com)\//i.test(src)) foto = src;
+    }
 
     return {
       aberta: true,
@@ -135,6 +142,7 @@
       lid: !!jids.lid && !jids['c.us'],
       // chave da conversa só para o painel saber que trocou; não sai do navegador
       chave: jidDaConversa || (nome ? 'nome:' + nome : null),
+      foto: foto,
       recebidas: grupo ? [] : recebidas.slice(-max),
     };
   }

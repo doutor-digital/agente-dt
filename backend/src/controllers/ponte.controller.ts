@@ -74,7 +74,7 @@ import {
   type ResumoDoLead,
 } from '../lib/ponte-resumo.js';
 import { getLeadMemoryForAgent } from '../services/lead-memory.service.js';
-import { lerPedidoDePassagem } from '../lib/ponte-passar-sofia.js';
+import { lerPedidoDePassagem, lerPedidoDeTodos, liberadaAgora } from '../lib/ponte-passar-sofia.js';
 import { passarParaASofia } from '../lib/ponte-passar-sofia-banco.js';
 import { MAX_CARTOES_DUPLICADOS, cartoesDuplicados, mesmoTelefoneCompleto, origemDoCartao, telefoneCompleto, type CartaoDuplicado } from '../lib/ponte-duplicados.js';
 import { primeiroNomeDoPaciente } from '../lib/ponte-respostas.js';
@@ -590,6 +590,56 @@ export async function pontePassarSofiaHandler(req: Request, res: Response): Prom
     const naoAchou = err instanceof KommoApiError && err.status === 404;
     logger.warn({ err: String(err), unit: unit.slug, leadId: lido.pedido.leadId }, 'ponte: falha ao passar a conversa para a Sofia');
     res.status(naoAchou ? 404 : 502).json({ error: naoAchou ? 'cartão não encontrado no Kommo' : 'não consegui passar para a Sofia agora' });
+  }
+}
+
+// ── "Sofia atende todos" (12/11/2026): fura a janela de horário da IA da unidade até uma hora ──
+
+const LIMITE_DO_TODOS = { balde: 'ponte-todos', max: 30 };
+
+function estadoDoTodos(unit: Unit) {
+  const ate = liberadaAgora(unit.iaTodosAte) ? unit.iaTodosAte!.toISOString() : null;
+  // sem janela de horário a Sofia já responde a qualquer hora: a chave não tem o que fazer
+  return { disponivel: sofiaNaUnidade(unit) && !!unit.businessHoursEnabled, janela: !!unit.businessHoursEnabled, ate };
+}
+
+/** `GET /api/public/widget/:slug/ponte/todos` */
+export async function ponteTodosEstadoHandler(req: Request, res: Response): Promise<void> {
+  const unit = await unidadeDaPonte(req, res, LIMITE_DA_PONTE);
+  if (!unit) return;
+  res.json(estadoDoTodos(unit));
+}
+
+/** `POST /api/public/widget/:slug/ponte/todos` `{ ate: ISO | null, por? }` */
+export async function ponteTodosHandler(req: Request, res: Response): Promise<void> {
+  const unit = await unidadeDaPonte(req, res, LIMITE_DO_TODOS);
+  if (!unit) return;
+  if (!sofiaNaUnidade(unit)) {
+    res.status(409).json({ error: 'a Sofia não está ligada nesta unidade' });
+    return;
+  }
+  const lido = lerPedidoDeTodos(req.body);
+  if (!lido.ok) {
+    res.status(400).json({ error: lido.erro });
+    return;
+  }
+  try {
+    const nova = await prisma.unit.update({ where: { id: unit.id }, data: { iaTodosAte: lido.ate } });
+    await prisma.unitChangeLog
+      .create({
+        data: {
+          unitId: unit.id,
+          category: 'config',
+          summary: lido.ate ? `Ponte: Sofia atende TODOS até ${lido.ate.toISOString()}` : 'Ponte: "Sofia atende todos" desligado',
+          author: `Ponte · ${lido.por ?? POR_PADRAO}`,
+        },
+      })
+      .catch(() => undefined);
+    logger.info({ unit: unit.slug, ate: lido.ate, por: lido.por }, 'ponte: "Sofia atende todos" mudou');
+    res.json(estadoDoTodos(nova));
+  } catch (err) {
+    logger.warn({ err: String(err), unit: unit.slug }, 'ponte: falha ao mudar "Sofia atende todos"');
+    res.status(502).json({ error: 'não consegui mudar agora' });
   }
 }
 

@@ -1,6 +1,6 @@
 # Ponte — o cartão do Kommo ao lado da conversa no WhatsApp Web
 
-Extensão do Chrome (e do Firefox), **versão 0.6.0 — "Passar para a Sofia"**. Com uma conversa aberta no WhatsApp Web, o
+Extensão do Chrome (e do Firefox), **versão 0.7.0 — "Sofia atende todos" e foto**. Com uma conversa aberta no WhatsApp Web, o
 painel lateral mostra o cartão do Kommo daquele paciente, mastigado para quem não conhece o Kommo:
 
 - **quem é**: nome, telefone, o selo colorido da **unidade** (o `⌂ Unidade de atendimento`; vazio na conta de duas
@@ -26,6 +26,15 @@ E, no ícone da extensão, **quantos pacientes estão esperando resposta** (0.4.
 
 Também tem um bloco "Modo aprendiz", que diz onde cada coisa fica dentro do Kommo. Por enquanto ele é fixo; uma
 fase futura vai escolher qual dica mostrar e quando.
+
+## O que há de novo na 0.7.0 (12/11/2026)
+
+- **Sofia atende todos** (barra no topo do painel): "por 2 h", "por 4 h" ou "até amanhã 8h" (máx. 24 h). Até lá a
+  Sofia responde fora do horário da IA para TODOS os pacientes da unidade (`units.ia_todos_ate`; só a trava de horário
+  cai). "Desligar" volta ao normal. Vale em até 30 s (cache da unidade). Fica no log da unidade quem ligou.
+  Só aparece na unidade com a Sofia e com janela de horário (`GET/POST …/ponte/todos`).
+- **Foto de perfil**: a foto que o WhatsApp Web mostra no cabeçalho da conversa entra no avatar do cartão. Fica só no
+  painel (não vai ao servidor nem ao Kommo — a API do Kommo não grava foto de contato).
 
 ## O que há de novo na 0.6.0 — "🤖 Passar para a Sofia" (12/11/2026)
 

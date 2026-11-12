@@ -24,6 +24,8 @@
 
     /** O cabeçalho da conversa aberta (foto, nome, "visto por último"). */
     CABECALHO: '#main header',
+    // 0.7.0: a foto de perfil no cabeçalho da conversa aberta
+    FOTO_CABECALHO: '#main header img',
 
     /**
      * O nome no cabeçalho, do mais específico para o mais genérico — o primeiro que tiver texto vale.
