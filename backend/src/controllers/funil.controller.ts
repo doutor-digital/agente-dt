@@ -535,11 +535,13 @@ export function paginaFunilHandler(_req: Request, res: Response): void {
 const PAGINA = `<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Funil · Doutor Digital</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root{--fundo:#f8f9fb;--painel:#ffffff;--cartao:#ffffff;--linha:#e4e7ec;--txt:#1f2d3d;--fraco:#64748b;--link:#1f73d6;--azul:#1f93ff;--rosa:#d93036;--amarelo:#c27803;--verde:#1f8a54;--suave:#f1f4f8;--sombra:0 1px 2px rgba(16,24,40,.06)}
 *{box-sizing:border-box}[hidden]{display:none!important}
 html,body{height:100%}
-body{margin:0;display:flex;flex-direction:column;overflow:hidden;font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Oxygen-Sans,Ubuntu,Cantarell,"Helvetica Neue",sans-serif;background:var(--fundo);color:var(--txt)}
+body{margin:0;display:flex;flex-direction:column;overflow:hidden;font:14px/1.45 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Oxygen-Sans,Ubuntu,Cantarell,"Helvetica Neue",sans-serif;background:var(--fundo);color:var(--txt)}
 button,select,input,textarea{font:inherit;color:inherit}
 :focus-visible{outline:2px solid var(--link);outline-offset:1px}
 .topo{display:flex;align-items:center;gap:10px;min-height:56px;padding:8px 60px 8px 20px;border-bottom:1px solid var(--linha);flex-wrap:wrap;background:var(--painel)}
@@ -725,6 +727,25 @@ body{background:#f4f6f9}
 .col.fechada .nomeEtapa{writing-mode:vertical-rl;transform:rotate(180deg);max-height:220px}
 .col.fechada .mais,.col.fechada .soma,.col.fechada .lista{display:none}
 
+/* ── acabamento do topo: a fonte do Chatwoot (Inter) e tudo na mesma altura (34px), mesma borda, mesmo arredondamento ── */
+.topo .linha-a,.topo .linha-b{gap:8px}
+.topo h1{font-size:18px;line-height:34px;margin-right:4px}
+.resumo{gap:8px}
+.resumo .num{align-items:center;border-radius:8px;padding:0 12px;font-family:inherit}
+.resumo .num span{font-size:12.5px}
+.campo-topo{height:34px;border-radius:8px;padding:0 32px 0 12px;font-size:13.5px;color:var(--txt);-webkit-appearance:none;appearance:none;cursor:pointer;background:#fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5l3 3 3-3' fill='none' stroke='%2364748b' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 11px center}
+.campo-topo:hover{border-color:#c5cfdb}
+.campo-topo:focus{outline:0;border-color:var(--azul);box-shadow:0 0 0 3px rgba(31,147,255,.15)}
+#caixa{min-width:200px}
+.busca-c{border-radius:8px;flex:1 1 240px;max-width:400px;min-width:200px}
+.busca-c input{font-size:13.5px}
+.busca-c input::placeholder{color:#98a2b3}
+.filtros{gap:8px}
+.filtros .chip{height:34px;border-radius:8px;padding:0 12px;font-size:13px;font-weight:500}
+.ic,.bt{border-radius:8px}
+.ic{display:grid;place-items:center}
+#msg{margin-left:auto;font-size:12.5px;color:var(--fraco);white-space:nowrap}
+
 @media (max-width:760px){.col{flex-basis:260px}.topo{padding-right:56px}}
 </style></head><body>
 <div class="topo" id="topo">
@@ -849,8 +870,8 @@ body{background:#f4f6f9}
         var d=el('article','k'+(esp?' espera':'')+(ctxConversa===k.id?' esta':'')+(novo?' novo':'')+(chegou===k.id?' chegou':'')); d.style.setProperty('--i',String(Math.min(ordem++,24))); d.draggable=true; d.tabIndex=0; d.setAttribute('role','button'); d.setAttribute('aria-label','Abrir '+k.nome);
         d.addEventListener('dragstart',function(){ arrastando=k; setTimeout(function(){ d.classList.add('arrastando'); },0); });
         d.addEventListener('dragend',function(){ d.classList.remove('arrastando'); setTimeout(function(){ arrastando=null; },0); });
-        d.addEventListener('click',function(){ abrirFicha(k.id); });
-        d.addEventListener('keydown',function(ev){ if(ev.key==='Enter'&&ev.target===d) abrirFicha(k.id); });
+        d.addEventListener('click',function(){ abrirConversa(k.id); });
+        d.addEventListener('keydown',function(ev){ if(ev.key==='Enter'&&ev.target===d) abrirConversa(k.id); });
         var topo=el('div','l1'), av=el('span','av'); avatar(av,k.nome,k.avatar,k.id); topo.appendChild(av);
         topo.appendChild(el('span','ld',k.nome));
         var dt=el('time','dt',relativo(k.atividade)); dt.title=quando(k.atividade)+(esp?' · esperando resposta':''); topo.appendChild(dt); d.appendChild(topo);
@@ -890,6 +911,13 @@ body{background:#f4f6f9}
 
   // ── ficha do lead ─────────────────────────────────────────────────────────
   function ver(lead){ $('lead').hidden=!lead; $('quadro').hidden=lead; $('topo').hidden=lead; }
+  // clicar no lead abre a CONVERSA NORMAL do Chatwoot (pedido do João, 12/11): no menu, o Chatwoot fecha o funil e navega;
+  // fora dele (aba da conversa, link avulso), abre a conversa na janela de cima
+  function abrirConversa(id){
+    if(MENU&&DENTRO){ try{ window.parent.postMessage({event:'funil:abrir-conversa',id:id},ORIGEM_CW); return; }catch(e){} }
+    var u=linkCw(id); if(u==='#'){ abrirFicha(id); return; }
+    var a=document.createElement('a'); a.href=u; a.target='_top'; a.rel='noopener'; document.body.appendChild(a); a.click(); a.remove();
+  }
   async function abrirFicha(id){ aberta=id; aba='principal'; modo='mensagem'; ver(true); $('lead').textContent=''; $('lead').appendChild(el('div','vazio','Carregando…')); await recarregarFicha(); }
   async function recarregarFicha(){ if(!aberta) return; try{ ficha=await api('GET','conversa/'+aberta); desenharFicha(); }catch(e){ $('lead').textContent=''; var v=el('div','vazio',e.message); $('lead').appendChild(v); var b=el('button','bt','Voltar ao funil'); b.onclick=fecharFicha; v.appendChild(el('br')); v.appendChild(b); } }
   function fecharFicha(){ aberta=null; ficha=null; ver(false); carregar(); }
@@ -1102,6 +1130,11 @@ const MENU_JS = `(function(){
     var d = ev.data;
     if (d && d.event === 'funil:pede-sessao') ev.source.postMessage({ event: 'funil-sessao', sessao: sessao() }, AGENTE);
     else if (d && d.event === 'funil:fechar' && fr && ev.source === fr.contentWindow) fechar();
+    else if (d && d.event === 'funil:abrir-conversa' && fr && ev.source === fr.contentWindow) {
+      // abre a conversa do lead na tela normal do Chatwoot (mesma conta da página); id só número
+      var conta = location.pathname.match(/\\/app\\/accounts\\/(\\d+)/), id = Number(d.id);
+      if (conta && Number.isInteger(id) && id > 0) { fechar(); location.assign('/app/accounts/' + conta[1] + '/conversations/' + id); }
+    }
   });
   function trocarTexto(no){
     var w = document.createTreeWalker(no, NodeFilter.SHOW_TEXT), t;
