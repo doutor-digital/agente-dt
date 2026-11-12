@@ -43,6 +43,7 @@ import {
   respostasRestantes,
   sairDeAndamento,
 } from '../lib/conversa-de-teste.js';
+import { RECUSA_DA_ENTRADA, RESPOSTA_NEUTRA, ecoDoPrompt, pedeOPrompt } from '../lib/conversa-de-teste-trava.js';
 import { esc, unidadePublica } from './pausa.controller.js';
 import { rodarTesteDaSofia } from './playground.controller.js';
 
@@ -138,6 +139,12 @@ export function criarConversaHandler(rodar: RodarTeste) {
       res.status(400).json({ error: historico.erro });
       return;
     }
+    // trava de entrada: quem pede o texto da Sofia não chega ao modelo, não gasta cota nem dinheiro (e não entra no histórico)
+    if (historico.messages.some((m) => m.role === 'user' && pedeOPrompt(m.content))) {
+      logger.warn({ unit: unit.slug }, 'aprendizados: conversa de teste barrou pedido do texto interno da Sofia');
+      res.status(422).json({ error: RECUSA_DA_ENTRADA });
+      return;
+    }
     const tz = fuso(unit);
     if (!entrarEmAndamento(unit.slug)) {
       res.status(429).json({ error: 'A Sofia ainda está respondendo outra conversa desta unidade. Espere uns segundos e envie de novo.' });
@@ -161,7 +168,8 @@ export function criarConversaHandler(rodar: RodarTeste) {
     const estourou = new Promise<'prazo'>((ok) => {
       prazo = setTimeout(() => ok('prazo'), PRAZO_MS);
     });
-    const trabalho = (async () => rodar(unit, historico.messages))().finally(liberar);
+    let promptCompleto: string | undefined;
+    const trabalho = (async () => rodar(unit, historico.messages, { aoMontarPrompt: (p) => (promptCompleto = p) }))().finally(liberar);
     try {
       const r = await Promise.race([trabalho, estourou]);
       if (r === 'prazo') {
@@ -182,6 +190,12 @@ export function criarConversaHandler(rodar: RodarTeste) {
         { unit: unit.slug, turnos: historico.messages.length, iteracoes: r.meta.iterations, tokens: r.meta.tokens, costUsd: r.meta.costUsd, ms: r.meta.totalLatencyMs },
         'aprendizados: resposta de teste',
       );
+      // trava de saída: resposta que repete o prompt (trecho literal ou marcador de bloco) vira neutra; já custou, fica na cota
+      if (ecoDoPrompt(r.reply, promptCompleto)) {
+        logger.warn({ unit: unit.slug, promptCapturado: promptCompleto !== undefined }, 'aprendizados: conversa de teste barrou resposta que repetia o prompt');
+        res.json({ reply: RESPOSTA_NEUTRA, acoes: [], restantes: respostasRestantes(unit.slug, tz) });
+        return;
+      }
       res.json({
         reply: r.reply,
         acoes: r.actions.map((a) => descreverAcao(a)),

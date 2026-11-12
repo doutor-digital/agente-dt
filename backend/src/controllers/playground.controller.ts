@@ -369,7 +369,12 @@ export type ResultadoDoTeste =
 export async function rodarTesteDaSofia(
   unitDoBanco: Unit,
   messages: Array<{ role: 'user' | 'assistant'; content: string }>,
-  opts: { promptDeTeste?: string; aprendizadosExtras?: string[] } = {},
+  opts: {
+    promptDeTeste?: string;
+    aprendizadosExtras?: string[];
+    /** Recebe o texto COMPLETO do prompt desta chamada, antes do modelo: a conversa pública da página usa para barrar eco do prompt na resposta. */
+    aoMontarPrompt?: (promptCompleto: string) => void;
+  } = {},
 ): Promise<ResultadoDoTeste> {
   const promptDeTeste = opts.promptDeTeste;
   // prompt de teste: vale só para esta chamada, a unidade no banco não muda
@@ -401,6 +406,7 @@ como uma conversa real e use as tools normalmente quando fizer sentido — elas
 não vão alterar o CRM, mas suas chamadas serão mostradas como decisões pro
 operador revisar.`;
   const fullSystem = `${systemPrompt}\n\n${sandboxPreamble}`;
+  opts.aoMontarPrompt?.(fullSystem);
 
   const actions: SandboxAction[] = [];
   const timeline: TimelineEvent[] = [];
