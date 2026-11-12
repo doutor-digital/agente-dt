@@ -103,3 +103,11 @@ test('Por usuário hoje: abertas, esperando, responderam hoje e agendaram', () =
   assert.deepEqual(h.porUsuario.find((u) => u.nome === 'Lorena'), { nome: 'Lorena', conversas: 0, esperando: 0, responderamHoje: 0, agendaram: 0 });
   assert.ok(h.porUsuario.find((u) => u.nome === 'Sem responsável'));
 });
+
+test('meta do dia: soma a meta das caixas da lista (Parauapebas = 5); caixa sem meta = null', () => {
+  const AG = Date.parse('2026-11-12T15:00:00Z');
+  assert.equal(montarHoje([{ id: 1, inbox_id: 2, created_at: 0 }], AG, new Set()).meta, 5);
+  assert.equal(montarHoje([{ id: 1, inbox_id: 2 }, { id: 2, inbox_id: 2 }], AG, new Set()).meta, 5);
+  assert.equal(montarHoje([{ id: 1, inbox_id: 1 }], AG, new Set()).meta, null);
+  assert.equal(montarHoje([], AG, new Set()).meta, null);
+});

@@ -10,11 +10,14 @@
  *  - Agendaram hoje: entraram em «Agendado» hoje (o worker da régua anota quando a etapa muda).
  *  - Hoje na agenda: `data_consulta` = hoje. Falta confirmar: consulta hoje ou amanhã ainda «Agendado».
  *  - A Lia separou: consultaram e não fecharam; alta há 60 dias ou mais (retorno); `retomar_em` vencido; faltaram (7 dias).
+ *  - Meta do dia: agendamentos por dia de cada caixa (`META_AGENDAMENTOS_POR_CAIXA`), somada nas caixas que a pessoa enxerga.
  */
 const DIA = 86_400_000;
 const UTC_MENOS_3 = 3 * 3600_000;
 const ETAPAS_QUALIFICACAO = new Set(['Novo lead', 'Sofia qualifica', 'Esperando humano']);
 export const MAX_FACA_AGORA = 8;
+/** caixa do Chatwoot → meta de agendamentos por dia (decisão 30 do João, 12/11/2026: Parauapebas = 5). */
+export const META_AGENDAMENTOS_POR_CAIXA: Readonly<Record<number, number>> = { 2: 5 };
 
 export interface ItemDoDia {
   id: number;
@@ -25,6 +28,8 @@ export interface ItemDoDia {
 export interface Hoje {
   dia: string;
   numeros: { chegaram: number; esperando: number; naoInteragiram: number; agendaram: number; naAgenda: number; faltaConfirmar: number };
+  /** meta de agendamentos do dia nas caixas da lista (null = nenhuma caixa com meta) */
+  meta: number | null;
   separou: { naoFecharam: ItemDoDia[]; retorno60: ItemDoDia[]; verDepois: ItemDoDia[]; faltaram: ItemDoDia[] };
   facaAgora: Array<ItemDoDia & { quente: boolean; esperandoMin: number }>;
   porUsuario: Array<{ nome: string; conversas: number; esperando: number; responderamHoje: number; agendaram: number }>;
@@ -73,6 +78,7 @@ export function montarHoje(conversas: any[], agora: number, agendadasHoje: Reado
   const separou: Hoje['separou'] = { naoFecharam: [], retorno60: [], verDepois: [], faltaram: [] };
   const facaAgora: Hoje['facaAgora'] = [];
   const porUsuario = new Map<string, Hoje['porUsuario'][number]>();
+  const caixas = new Set<number>();
 
   for (const c of conversas) {
     const a = c?.custom_attributes ?? {};
@@ -87,6 +93,8 @@ export function montarHoje(conversas: any[], agora: number, agendadasHoje: Reado
     const ultimaEm = Number(ultima?.created_at) * 1000;
     const quente = str(a.qualificacao) === 'Quente' || etiquetas.includes('quente');
     const responsavel = str(c?.meta?.assignee?.name) || 'Sem responsável';
+    const caixa = Number(c?.inbox_id);
+    if (Number.isInteger(caixa)) caixas.add(caixa);
 
     if (criada && diaEmBelem(criada) === dia) n.chegaram++;
     const esperando = Number.isFinite(esperandoDesde) && esperandoDesde > 0 && c?.status !== 'resolved';
@@ -118,9 +126,12 @@ export function montarHoje(conversas: any[], agora: number, agendadasHoje: Reado
   }
   // quentes primeiro, depois quem espera há mais tempo
   facaAgora.sort((x, y) => Number(y.quente) - Number(x.quente) || y.esperandoMin - x.esperandoMin);
+  let meta: number | null = null;
+  for (const cx of caixas) if (META_AGENDAMENTOS_POR_CAIXA[cx]) meta = (meta ?? 0) + META_AGENDAMENTOS_POR_CAIXA[cx]!;
   return {
     dia,
     numeros: n,
+    meta,
     separou,
     facaAgora: facaAgora.slice(0, MAX_FACA_AGORA),
     porUsuario: [...porUsuario.values()].sort((x, y) => y.conversas - x.conversas),
