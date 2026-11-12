@@ -395,7 +395,11 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
   if (feitas >= TETO_SOFIA_POR_DIA) return 'teto';
   mem.rodadas.set(chaveDia, feitas + 1);
   const r = await p.sofia(unit, falas, { conversa: m.conversa, modo, lida });
-  if (!r) return 'falhou';
+  if (!r) {
+    // o paciente ficaria sem resposta e sem aviso: no ligado a equipe é avisada (no seco o erro já está no log)
+    if (modo === 'ligado') await p.nota(m.conversa, '⚠ A Sofia não conseguiu responder agora (falha do modelo ou das ferramentas). A mensagem do paciente está sem resposta: responda por aqui.').catch(() => undefined);
+    return 'falhou';
+  }
 
   if (modo === 'seco') {
     await p.nota(m.conversa, notaDaSofia(r.resposta, r.acoes));
@@ -413,6 +417,15 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
   if (!depois || assinaturaDaConversa(depois) !== assinaturaDaConversa(mensagens) || !falasDaConversa(depois)) {
     logger.info({ conversa: m.conversa, gravou }, `${ID_IA}: a conversa mudou enquanto a Sofia pensava — resposta descartada`);
     const nota = gravou ? alerta('a conversa mudou enquanto ela pensava') : notaDoLigado(r.acoes);
+    if (nota) await p.nota(m.conversa, nota).catch(() => undefined);
+    return 'mudou';
+  }
+  // a equipe pode ter assumido a conversa (etiqueta, etapa, marca de interno) enquanto ela pensava, sem escrever nada
+  const agoraLida = await p.conversa(m.conversa).catch(() => null);
+  const calou = agoraLida ? motivoDeNaoResponder(agoraLida) : null;
+  if (calou) {
+    logger.info({ conversa: m.conversa, motivo: calou, gravou }, `${ID_IA}: a conversa passou para a equipe enquanto a Sofia pensava — resposta descartada`);
+    const nota = gravou ? alerta(`a conversa passou para a equipe (${calou}) enquanto ela pensava`) : null;
     if (nota) await p.nota(m.conversa, nota).catch(() => undefined);
     return 'mudou';
   }

@@ -50,13 +50,12 @@ import { consultaMarcadaNoTurno, legendaDoCartao } from './cartao-de-chegada.js'
 import { extrairBotoes } from './botoes.js';
 import { SpineService } from '../services/spine.service.js';
 import { AgendaReconcileService } from '../services/agenda-reconcile.service.js';
-import type { ConversaLida, PortaDoChatwoot } from './chatwoot-porta.js';
+import { texto, type ConversaLida, type PortaDoChatwoot } from './chatwoot-porta.js';
 import { leadDaConversaChatwoot } from './chatwoot-lead.js';
 import type { SandboxAction, rodarTesteDaSofia } from '../controllers/playground.controller.js';
 
 export type { ConversaLida, PortaDoChatwoot };
 
-const texto = (v: unknown): string => (typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : '');
 
 export type Fala = { role: 'user' | 'assistant'; content: string };
 export type ModoDaSofia = 'seco' | 'ligado';
@@ -66,12 +65,12 @@ export type ModoDaSofia = 'seco' | 'ligado';
 /** Etapas de quem já tem consulta de pé ou já passou por ela: a Sofia não as muda. */
 export const ETAPAS_PROTEGIDAS: ReadonlySet<string> = new Set(['Agendado', 'Confirmado', 'Compareceu', 'Pós-consulta', 'Fechou']);
 /** Etapas em que o agendamento da Sofia leva a conversa para «Agendado». */
-const ETAPAS_QUE_VIRAM_AGENDADO = new Set(['', 'Novo lead', 'Sofia qualifica', 'Esperando humano', 'Frio', 'Resgate', 'Perdido']);
+const ETAPAS_QUE_VIRAM_AGENDADO = new Set(['', 'Novo lead', 'Sofia qualifica', 'Frio', 'Resgate', 'Perdido']);
 /** O que `mover_etapa` aceita da Sofia. As outras etapas são efeito de outra ação (agendar, passar à equipe) ou da equipe. */
 export const ETAPAS_DA_SOFIA = ['Sofia qualifica', 'Frio', 'Perdido'] as const;
 export const ETIQUETA_HUMANO = 'esperando-humano';
 /** Etiquetas que DISPARAM a régua ou marcam outro processo: a Sofia não as põe. */
-const ETIQUETAS_RESERVADAS = new Set(['confirmar-retorno', 'retomada', 'reativacao', 'boas-vindas', 'aderencia-meio', 'sem-follow-up', 'pagou-antecipado', 'respondeu-pelo-celular', ETIQUETA_HUMANO, 'sem-resposta', 'pendente-de-revisao']);
+const ETIQUETAS_RESERVADAS = new Set(['confirmar-retorno', 'retomada', 'reativacao', 'boas-vindas', 'aderencia-meio', 'sem-follow-up', 'pagou-antecipado', 'respondeu-pelo-celular', ETIQUETA_HUMANO, 'interno', 'sem-resposta', 'pendente-de-revisao']);
 
 /**
  * A Sofia deve ficar calada? Contato interno, conversa já passada para a equipe, paciente em tratamento (o funil de tratamento é humano)
@@ -422,7 +421,7 @@ export function montarFerramentas(p: PedidoDasFerramentas): DynamicStructuredToo
   const pausar_ia = new DynamicStructuredTool({
     name: 'pausar_ia',
     description:
-      'Passa a conversa para a equipe humana (etiqueta esperando-humano, etapa «Esperando humano» e uma nota com o motivo) e a Sofia para de responder nela até a equipe falar. Use quando o paciente pede um atendente, quando você não sabe ou não pode resolver, ou quando uma ferramenta pedir. Termine a sua mensagem avisando o paciente que a equipe continua.',
+      'Passa a conversa para a equipe humana (etiqueta esperando-humano, etapa «Esperando humano» e uma nota com o motivo) e a Sofia para de responder nela até a equipe tirar a etiqueta e mudar a etapa. Use quando o paciente pede um atendente, quando você não sabe ou não pode resolver, ou quando uma ferramenta pedir. Termine a sua mensagem avisando o paciente que a equipe continua.',
     schema: z.object({ motivo: z.string().min(1).max(300) }),
     func: async ({ motivo }: { motivo: string }) => {
       const ok = await passarParaEquipe(motivo);

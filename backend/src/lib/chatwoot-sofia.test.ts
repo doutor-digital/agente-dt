@@ -237,6 +237,16 @@ test('LIGADO: quem já passou de Agendado (alta, pós-consulta) ganha os campos 
   }
 });
 
+test('LIGADO: a Sofia passou a conversa para a equipe e a ferramenta ainda assim marcou: os campos entram, a etapa continua «Esperando humano»', async () => {
+  const m = montar('ligado', { etapa: 'Sofia qualifica' });
+  await m.por('pausar_ia').invoke({ motivo: 'cadastro duplicado' });
+  await m.por('agendar_consulta').invoke(AGENDAR);
+  const grav = m.chat.gravados.at(-1)!;
+  assert.equal(grav.data_consulta, '2026-11-17');
+  assert.equal('etapa' in grav, false);
+  assert.equal(m.estado.etapa, 'Esperando humano');
+});
+
 test('LIGADO: agendamento recusado pela ferramenta não grava nada na conversa', async () => {
   const m = montar('ligado', { agendarDevolve: 'RECUSADO: este paciente já tem consulta em terça. NÃO marque uma segunda.' });
   await m.por('agendar_consulta').invoke(AGENDAR);
@@ -361,9 +371,9 @@ test('registrar_qualificacao e aplicar_tag: conferem a lista viva; etiqueta rese
   const m = montar('ligado');
   assert.match(await m.por('registrar_qualificacao').invoke({ qualificacao: 'Morno' }), /Qualificação → Morno/);
   assert.deepEqual(m.chat.gravados, [{ qualificacao: 'Morno' }]);
-  const r = await m.por('aplicar_tag').invoke({ tags: ['Quente', 'retomada', 'esperando-humano', 'inventada'] });
+  const r = await m.por('aplicar_tag').invoke({ tags: ['Quente', 'retomada', 'esperando-humano', 'inventada', 'interno'] });
   assert.match(r, /aplicada\(s\): quente/);
-  assert.match(r, /RECUSADO \(não é sua\): retomada, esperando-humano/);
+  assert.match(r, /RECUSADO \(não é sua\): retomada, esperando-humano, interno/);
   assert.match(r, /Não existe na conta: inventada/);
   assert.deepEqual(m.chat.etiquetas, [['quente']]);
   const s = montar('seco');

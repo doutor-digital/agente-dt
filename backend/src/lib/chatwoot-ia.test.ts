@@ -107,6 +107,8 @@ function portas(
     depois?: any[];
     falhaTranscricao?: boolean;
     lida?: Partial<ConversaLida> | null;
+    /** a conversa como está DEPOIS de a Sofia pensar (a equipe pode ter assumido sem escrever nada) */
+    lidaDepois?: Partial<ConversaLida>;
     cartao?: { leadId: number } | 'lanca' | null;
     sofia?: Partial<ResultadoDaSofia>;
     /** as consultas de pé na franquia (null = não deu para conferir) */
@@ -120,6 +122,7 @@ function portas(
   const kommo: string[] = [];
   const equipe: Array<{ conversa: number; motivo: string }> = [];
   let leituras = 0;
+  let lidas = 0;
   const p: PortasDaIa = {
     estado: () => o.estado ?? 'seco',
     unidade: async () => ({ slug: 'doutor-hernia-parauapebas' }) as Unit,
@@ -139,7 +142,7 @@ function portas(
       if (o.falhaTranscricao) throw new Error('sem chave');
       return 'dor no joelho';
     },
-    conversa: async () => (o.lida === null ? null : lidaPadrao(o.lida)),
+    conversa: async () => (o.lida === null ? null : lidaPadrao(lidas++ > 0 && o.lidaDepois ? o.lidaDepois : o.lida)),
     cartaoNoKommo: async (_u, telefone) => {
       kommo.push(telefone);
       if (o.cartao === 'lanca') throw new Error('Kommo 403');
@@ -371,6 +374,31 @@ test('LIGADO: a Sofia já gravou (consulta, Pix) e a resposta não pode sair →
   assert.equal(d.notas.length, 0);
 });
 
+test('LIGADO: a equipe assumiu a conversa (etiqueta, marca de interno) enquanto a Sofia pensava, sem escrever nada → resposta descartada, e alerta se ela já gravou', async () => {
+  const sofia = { acoes: [{ tool: 'agendar_consulta', args: { data: '2026-11-17', hora: '09:00' } }] };
+  for (const depois of [{ etiquetas: ['esperando-humano'] }, { interno: true }, { attrs: { etapa: 'Esperando humano' } }]) {
+    const a = portas({ estado: 'ligado', lidaDepois: depois, sofia });
+    assert.equal(await rodarSofia(M, a.p, novaMemoriaDaIa()), 'mudou', JSON.stringify(depois));
+    assert.equal(a.publicas.length, 0);
+    assert.match(a.notas[0]!.texto, /^⚠ A Sofia agiu mas a resposta ao paciente NÃO saiu \(a conversa passou para a equipe/);
+  }
+  const b = portas({ estado: 'ligado', lidaDepois: { interno: true } });
+  assert.equal(await rodarSofia(M, b.p, novaMemoriaDaIa()), 'mudou');
+  assert.equal(b.notas.length, 0, 'sem ferramenta que gravou, não há o que conferir');
+});
+
+test('LIGADO: o modelo/ferramentas falharam e nada foi dito ao paciente → a equipe é avisada (o seco só registra no log)', async () => {
+  const a = portas({ estado: 'ligado' });
+  a.p.sofia = async () => null;
+  assert.equal(await rodarSofia(M, a.p, novaMemoriaDaIa()), 'falhou');
+  assert.match(a.notas[0]!.texto, /^⚠ A Sofia não conseguiu responder agora/);
+  assert.equal(a.publicas.length, 0);
+  const b = portas({ estado: 'seco' });
+  b.p.sofia = async () => null;
+  assert.equal(await rodarSofia(M, b.p, novaMemoriaDaIa()), 'falhou');
+  assert.equal(b.notas.length, 0);
+});
+
 test('assinatura da conversa: conta as públicas e olha o id da última (nota privada e atividade não contam)', () => {
   const base = [msg(0, 'oi', { id: 1 }), msg(1, 'Olá', { id: 2 })];
   assert.equal(assinaturaDaConversa(base), '2|2');
@@ -401,7 +429,7 @@ test('Sofia que falha (modelo fora do ar) não deixa nada e não manda nada', as
   const a = portas({ estado: 'ligado' });
   a.p.sofia = async () => null;
   assert.equal(await rodarSofia(M, a.p, novaMemoriaDaIa()), 'falhou');
-  assert.equal(a.publicas.length + a.notas.length, 0);
+  assert.equal(a.publicas.length, 0);
 });
 
 test('Sofia: não roda se a equipe respondeu por último; teto por dia', async () => {

@@ -25,6 +25,13 @@ test('horas e dias que uma fala menciona, normalizados', () => {
   assert.deepEqual(horariosDaFala('às 8'), { horas: ['08:00'], dias: [] });
   assert.deepEqual(horariosDaFala('às 14h'), { horas: ['14:00'], dias: [] });
   assert.deepEqual(horariosDaFala('às 8 e às 10:30'), { horas: ['08:00', '10:30'], dias: [] });
+  // 12 horas: «da tarde/noite» soma 12; «da manhã», 12 em diante e meio-dia ficam certos
+  assert.deepEqual(horariosDaFala('às 3 da tarde'), { horas: ['15:00'], dias: [] });
+  assert.deepEqual(horariosDaFala('às 2h30 da tarde'), { horas: ['14:30'], dias: [] });
+  assert.deepEqual(horariosDaFala('às 8 da noite'), { horas: ['20:00'], dias: [] });
+  assert.deepEqual(horariosDaFala('às 9 da manhã'), { horas: ['09:00'], dias: [] });
+  assert.deepEqual(horariosDaFala('às 12 da tarde'), { horas: ['12:00'], dias: [] });
+  assert.deepEqual(horariosDaFala('te espero ao meio-dia'), { horas: ['12:00'], dias: [] });
   // data sozinha não vira hora; número solto também não
   assert.deepEqual(horariosDaFala('é dia 14/11, são 350 reais'), { horas: [], dias: ['11-14'] });
   assert.deepEqual(horariosDaFala('tudo bem?'), { horas: [], dias: [] });
@@ -37,6 +44,14 @@ test('o combinado é a ÚLTIMA fala de gente da equipe que fala de horário', ()
   assert.match(c!.trecho, /Corrigindo/);
   // horário solto numa frase que não é de agendamento não vale
   assert.equal(combinadoPelaEquipe([equipe('Funcionamos 7h30 até 17h30, de segunda a sexta')]), null);
+  // horário de funcionamento («das 7h às 17h») não é consulta marcada, mesmo falando de consulta e horário
+  assert.equal(combinadoPelaEquipe([equipe('Atendemos das 7h às 17h, consulta com horário marcado')]), null);
+  assert.equal(combinadoPelaEquipe([equipe('Consulta com horário marcado, de 8h até 12h')]), null);
+  // fala velha (mais de 72 h) não é o combinado de agora; sem data na mensagem, vale
+  const agora = new Date('2026-11-12T12:00:00Z');
+  const em = (iso: string) => Math.floor(new Date(iso).getTime() / 1000);
+  assert.equal(combinadoPelaEquipe([equipe('sua consulta foi às 08:00', { created_at: em('2026-11-01T12:00:00Z') })], new Set(), agora), null);
+  assert.deepEqual(combinadoPelaEquipe([equipe('sua consulta é às 08:00', { created_at: em('2026-11-11T12:00:00Z') })], new Set(), agora)?.horas, ['08:00']);
   // nota privada, fala do paciente e bot não são combinado da equipe
   assert.equal(combinadoPelaEquipe([equipe('às 08:00', { private: true }), { message_type: 0, content: 'às 09:00' }, equipe('às 07:00', { sender: { id: 1, type: 'agent_bot' } })]), null);
 });
@@ -103,7 +118,12 @@ test('a consulta de verdade: dia e hora no relógio da clínica (a franquia mand
   assert.ok(!chamadas.includes('ag 2'), 'não lê a agenda de quem tem outro telefone');
   // a franquia não respondeu = não deu para conferir; nenhum cadastro com o telefone = sem consulta
   assert.equal(await consultasReaisDoPaciente(franquia({ clientes: null }), a), null);
-  assert.deepEqual(await consultasReaisDoPaciente(franquia({ clientes: [{ idClient: 2, name: 'Maria', whatsapp: '94988887777' }] }), a), []);
+  // achou o cadastro dele e ele não tem consulta de pé = [] (verificado); NENHUM cadastro com o telefone dele = não deu para conferir (null),
+  // porque o nome do contato no WhatsApp quase nunca é o do cadastro — nunca «a franquia não tem consulta»
+  assert.deepEqual(await consultasReaisDoPaciente(franquia({ clientes: [{ idClient: 1, name: 'Maria da Silva', whatsapp: '94999990000' }], agendamentos: { 1: [] } }), a), []);
+  assert.equal(await consultasReaisDoPaciente(franquia({ clientes: [{ idClient: 2, name: 'Maria', whatsapp: '94988887777' }] }), a), null);
+  assert.equal(await consultasReaisDoPaciente(franquia({ clientes: [] }), { ...a, nome: 'Maria 🌸' }), null);
+  assert.equal(await consultasReaisDoPaciente(franquia({ clientes: [] }), { ...a, nome: '🌸' }), null);
   assert.equal(await consultasReaisDoPaciente(franquia({ clientes: [{ idClient: 1, name: 'Maria', whatsapp: '94999990000' }], agendamentos: { 1: null } }), a), null);
 });
 

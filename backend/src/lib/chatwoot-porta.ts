@@ -37,7 +37,7 @@ export interface PortaDoChatwoot {
 }
 
 const ehSim = (v: unknown): boolean => v === true || v === 1 || (typeof v === 'string' && ['true', 'sim', '1', 'yes'].includes(v.trim().toLowerCase()));
-const texto = (v: unknown): string => (typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : '');
+export const texto = (v: unknown): string => (typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : '');
 
 export function conversaLidaDoChatwoot(raw: any): ConversaLida | null {
   const id = Number(raw?.id);

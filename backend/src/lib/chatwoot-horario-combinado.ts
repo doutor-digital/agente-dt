@@ -21,6 +21,8 @@ export interface Combinado {
   trecho: string;
 }
 
+import { fim8 } from './paciente-existente.js';
+
 /** Uma consulta de pé na franquia (dia «AAAA-MM-DD», hora «HH:MM», no relógio da clínica). */
 export interface ConsultaReal {
   dia: string;
@@ -49,29 +51,47 @@ const HORA_COM_H = /(?<![\d/])([01]?\d|2[0-3])\s*h\s*([0-5]\d)?(?!\w)/gi;
 const HORA_AS_SOLTA = /(?<![\p{L}\d])[àa]s\s+([01]?\d|2[0-3])(?![\d:/]|\s*h)/giu;
 const DATA = /(?<!\d)(0?[1-9]|[12]\d|3[01])\/(0?[1-9]|1[0-2])(?:\/\d{2,4})?(?!\d)/g;
 
+/** «da tarde / da noite» logo depois da hora: 3 da tarde = 15:00. «da manhã» e hora de 12 em diante ficam como estão. */
+function em24h(hora: number, depois: string): number {
+  return hora >= 1 && hora < 12 && /^\s*(?:horas?\s+)?da\s+(?:tarde|noite)\b/i.test(depois) ? hora + 12 : hora;
+}
+
 /** Horas e dias que uma fala menciona, normalizados. */
 export function horariosDaFala(texto: string): { horas: string[]; dias: string[] } {
   const horas = new Set<string>();
-  for (const m of texto.matchAll(HORA_DOIS_PONTOS)) horas.add(`${p2(Number(m[1]))}:${m[2]}`);
-  for (const m of texto.matchAll(HORA_COM_H)) horas.add(`${p2(Number(m[1]))}:${m[2] ?? '00'}`);
-  for (const m of texto.matchAll(HORA_AS_SOLTA)) horas.add(`${p2(Number(m[1]))}:00`);
+  const anota = (m: RegExpMatchArray, minuto: string | undefined) => {
+    const h = em24h(Number(m[1]), texto.slice((m.index ?? 0) + m[0].length, (m.index ?? 0) + m[0].length + 16));
+    horas.add(`${p2(h)}:${minuto ?? '00'}`);
+  };
+  for (const m of texto.matchAll(HORA_DOIS_PONTOS)) anota(m, m[2]);
+  for (const m of texto.matchAll(HORA_COM_H)) anota(m, m[2]);
+  for (const m of texto.matchAll(HORA_AS_SOLTA)) anota(m, undefined);
+  if (/\bmeio[\s-]?dia\b/i.test(texto)) horas.add('12:00');
   const dias = new Set<string>();
   for (const m of texto.matchAll(DATA)) dias.add(`${p2(Number(m[2]))}-${p2(Number(m[1]))}`);
   return { horas: [...horas].sort(), dias: [...dias].sort() };
 }
 
+/** «das 7h às 17h», «de 8h até 12h»: é horário de funcionamento, não consulta marcada. */
+const FAIXA = /\bd(?:e|as?)\s+\d{1,2}(?:\s*(?::|h)\s*\d{0,2})?\s*(?:horas?)?\s*(?:às|as|a|até|ate)\s+\d{1,2}/iu;
+/** Quanto tempo uma fala da equipe ainda vale como «combinado». */
+export const VALIDADE_DO_COMBINADO_MS = 72 * 3600_000;
+
 /**
  * O que a equipe combinou, pela ÚLTIMA fala de gente da equipe que fala de horário. null = a equipe não falou de horário
  * (ou só a Sofia/régua falaram).
  */
-export function combinadoPelaEquipe(mensagens: any[], integracao: ReadonlySet<number> = idsDaIntegracao(mensagens)): Combinado | null {
+export function combinadoPelaEquipe(mensagens: any[], integracao: ReadonlySet<number> = idsDaIntegracao(mensagens), agora: Date = new Date()): Combinado | null {
   for (let i = mensagens.length - 1; i >= 0; i--) {
     const m = mensagens[i];
     if (Number(m?.message_type) !== 1 || m?.private === true) continue;
+    // fala velha não é o combinado de agora (sem data na mensagem, vale)
+    const criada = Number(m?.created_at) * 1000;
+    if (Number.isFinite(criada) && criada > 0 && agora.getTime() - criada > VALIDADE_DO_COMBINADO_MS) continue;
     if (String(m?.sender?.type ?? '') !== 'user') continue;
     if (integracao.has(Number(m?.sender?.id))) continue;
     const t = typeof m?.content === 'string' ? m.content.trim() : '';
-    if (!t || !GATILHO.test(t)) continue;
+    if (!t || !GATILHO.test(t) || FAIXA.test(t)) continue;
     const { horas, dias } = horariosDaFala(t);
     if (horas.length || dias.length) return { horas, dias, trecho: t.length > 160 ? `${t.slice(0, 159)}…` : t };
   }
@@ -101,10 +121,6 @@ export interface PortasDaFranquia {
   agendamentos(idClient: number): Promise<Array<{ idStatus: number | null; dateAttendanceUtc: string | null }> | null>;
 }
 
-const fim8 = (f: string | null | undefined): string | null => {
-  const d = (f ?? '').replace(/\D/g, '');
-  return d.length >= 8 ? d.slice(-8) : null;
-};
 
 /** Uma data em UTC → dia e hora no relógio da clínica. */
 export function diaEHoraNoFuso(utc: string, fuso: string): ConsultaReal | null {
@@ -119,19 +135,21 @@ const DESMARCADO = 57;
 
 /**
  * As consultas de pé deste paciente na franquia: acha o cadastro pelo nome do contato E pelo telefone (8 últimos dígitos; nome repetido
- * com outro telefone não vale) e lê os agendamentos futuros. `null` = não deu para conferir (erro da franquia). Nenhum cadastro com este
- * telefone = `[]` (a franquia não tem consulta dele).
+ * com outro telefone não vale) e lê os agendamentos futuros. `[]` = achou o cadastro dele e ele não tem consulta de pé. `null` = não deu
+ * para conferir: erro da franquia, ou nenhum cadastro com este telefone (o nome do contato no WhatsApp quase nunca é o do cadastro).
  */
 export async function consultasReaisDoPaciente(
   p: PortasDaFranquia,
   a: { nome: string; telefone: string; fuso: string; agora: Date },
 ): Promise<ConsultaReal[] | null> {
   const nome = a.nome.trim();
-  if (nome.split(/\s+/).filter((x) => x.length >= 2).length < 1) return [];
+  const alvo = fim8(a.telefone);
+  if (!alvo || nome.replace(/[^\p{L}]/gu, '').length < 3) return null;
   const achados = await p.buscarPorNome(nome);
   if (achados === null) return null;
-  const alvo = fim8(a.telefone);
-  const meus = achados.filter((c) => c.idClient && alvo && fim8(c.whatsapp) === alvo).slice(0, 3);
+  const meus = achados.filter((c) => c.idClient && fim8(c.whatsapp) === alvo).slice(0, 3);
+  // nenhum cadastro com o telefone dele (o nome do WhatsApp é outro, ou ele nunca se cadastrou): não dá para dizer que não há consulta
+  if (meus.length === 0) return null;
   const reais: ConsultaReal[] = [];
   for (const c of meus) {
     const ag = await p.agendamentos(c.idClient as number);
