@@ -967,6 +967,20 @@ export const AUTOMACOES: readonly Automacao[] = [
     quandoVazio: 'desligado',
     arquivo: 'src/lib/chatwoot-agenda.ts',
   },
+  {
+    id: 'chatwoot-duplicados',
+    chave: 'CHATWOOT_DUPLICADOS_SLUGS',
+    nome: 'Juntar contatos duplicados no Chatwoot',
+    oQueFaz:
+      'A cada 30 min procura no Chatwoot o mesmo paciente cadastrado duas vezes (com e sem o 9: mesmo DDD e mesmos 8 últimos dígitos). «Só no papel» deixa uma nota no contato mais antigo dizendo qual juntaria. Ligada, junta: as conversas do contato novo passam para o antigo, o novo some, e fica uma nota contando.',
+    pegadinha:
+      'Juntar NÃO TEM VOLTA (o contato que entra é apagado). Só número do Brasil completo (55 + DDD + 8 ou 9 dígitos). No máximo 5 junções por ciclo. Fica sempre o contato mais antigo. O liga/desliga vale pela unidade da caixa do Chatwoot (hoje Parauapebas), mas os contatos são da conta inteira.',
+    risco: 'escreve-campo',
+    temSeco: true,
+    exigeSecoAntes: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/chatwoot-duplicados.ts',
+  },
 ] as const;
 
 const PORCHAVE = new Map(AUTOMACOES.map((a) => [a.chave, a]));

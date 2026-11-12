@@ -70,6 +70,7 @@ import { startTipoLeadChegadaWorker, stopTipoLeadChegadaWorker } from './lib/tip
 import { startLigacaoWhatsappWorker, stopLigacaoWhatsappWorker } from './controllers/ligacao-whatsapp.controller.js';
 import { startChatwootReguaWorker, stopChatwootReguaWorker } from './lib/chatwoot-regua-worker.js';
 import { startChatwootAgendaWorker } from './lib/chatwoot-agenda.js';
+import { startChatwootDuplicadosWorker, stopChatwootDuplicadosWorker } from './lib/chatwoot-duplicados.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -269,6 +270,7 @@ async function main(): Promise<void> {
       startBlingRenovacaoWorker();
       startChatwootReguaWorker();
       startChatwootAgendaWorker();
+      startChatwootDuplicadosWorker();
       iniciarVigiaDeQualidade();
     },
     parar: () => {
@@ -294,6 +296,7 @@ async function main(): Promise<void> {
       stopPreencheCamposWorker();
       stopBlingRenovacaoWorker();
       stopChatwootReguaWorker();
+      stopChatwootDuplicadosWorker();
       stopFranquiaSyncWorker();
       stopFranquiaCalendarioWorker();
       stopCacheKeepaliveWorker();
