@@ -1,0 +1,41 @@
+/**
+ * Textos dos modelos de WhatsApp do Kommo de Parauapebas que a régua do Chatwoot usa (lidos AO VIVO da API do Kommo em 12/11/2026).
+ * São DADOS: o texto vale como está no Kommo (aprovado na Meta), com os campos entre {{ }} trocados em `chatwoot-regua.ts`.
+ * Ficam de fora os modelos de campanha (outubro rosa, resgate, reativação dor na coluna), que não são régua, e os da régua que
+ * dependem de campo que o Chatwoot ainda não tem (financeiro em aberto, pagamento ok, cancelamento, pendência de documento, avaliação Google).
+ */
+export const TEXTOS_PARAU: Readonly<Record<string, string>> = {
+  parau_lead_reengajamento_48h: "Olá, {{contact.name}}, aqui é da Doutor Hérnia Parauapebas.\nFiquei sem a sua resposta e não quero deixar o seu caso parado.\nComo está a sua dor hoje?",
+  parau_lead_metodo_convite_96h: "Olá, {{contact.name}}. Na Doutor Hérnia, hérnia de disco e dor na coluna são tratadas sem cirurgia.\nO primeiro passo é a consulta presencial: o nosso especialista faz os testes clínicos, físicos e neurológicos e identifica a causa real da sua dor e explica o que faz sentido para o seu caso.\nQuer que eu veja os horários desta semana?",
+  parau_lead_encerramento_120h: "Olá, {{contact.name}}. Como não tivemos retorno, o seu atendimento será encerrado no nosso sistema.\nSe quiser retomar o cuidado com a sua coluna, responda esta mensagem que eu reabro o seu cadastro.",
+  parau_consulta_prepagamento: "Olá, {{contact.name}}. A sua consulta está pré-agendada.\nData e horário: {{lead.cf.2450736}}\nPara eu reservar o horário, a consulta com pagamento antecipado é {{lead.cf.2451104}}.\nQuer que eu envie os dados para pagamento?",
+  parau_consulta_prepagamento_pendente: "Olá, {{contact.name}}. O seu horário de {{lead.cf.2450736}} ainda está reservado, mas o pagamento não foi identificado.\nConsigo segurar a vaga até amanhã. Depois disso ela volta para a agenda.\nPrecisa de ajuda com o pagamento?",
+  parau_consulta_lembrete_vespera: "Olá, {{contact.name}}. A sua consulta é amanhã.\nData e horário: {{lead.cf.2450736}}\nEndereço: Rua C, 455-A, Sala 101 e 103 — Cidade Nova, Parauapebas/PA, 68515-000\nEstá tudo certo para o seu comparecimento?\n📍 Como chegar: https://share.google/LzWt0AQhG4HWTpWOq",
+  parau_consulta_confirmacao_dia: "Bom dia, {{contact.name}}. A sua consulta de hoje está marcada para {{lead.cf.2450736}}.\nEstá tudo certo para o seu comparecimento?",
+  parau_consulta_preparo: "Olá, {{contact.name}}. Para a sua consulta, leve:\n- documento com foto;\n- exames de imagem da coluna, se tiver (raio-X, tomografia ou ressonância);\n- roupa confortável.\nFicou alguma dúvida?",
+  parau_consulta_falta_mesmo_dia: "Olá, {{contact.name}}. Você não conseguiu comparecer à consulta de hoje.\nImprevistos acontecem. Quer que eu verifique um novo horário para você?",
+  parau_consulta_falta_48h: "Olá, {{contact.name}}. O seu horário de consulta segue disponível para remarcação.\nMe avisa que eu verifico as vagas desta semana.",
+  parau_consulta_pos_atendimento: "Olá, {{contact.name}}. Foi bom te receber ontem.\nFicou alguma dúvida sobre o que o nosso especialista explicou na consulta? Posso esclarecer por aqui.",
+  parau_decisao_retomada_4d: "Olá, {{contact.name}}. Sobre a consulta que você fez com o nosso especialista: ficou alguma dúvida no plano de tratamento indicado para o seu caso? Vamos agendar seu retorno?\nPosso esclarecer por aqui.",
+  parau_decisao_encerramento_7d: "Olá, {{contact.name}}. Como não tivemos retorno sobre o plano indicado, vou encerrar o acompanhamento por aqui.\nA sua consulta e o seu plano continuam registrados no nosso sistema. Se decidir dar seguimento, é só responder esta mensagem.",
+  parau_decisao_reengajamento_30d: "Olá, {{contact.name}}. Faz cerca de um mês que conversamos sobre a sua coluna.\nComo está a sua dor hoje?",
+  parau_espera_exames: "Olá, {{contact.name}}. Aqui é da Doutor Hérnia Parauapebas.\nVocê comentou que ia fazer o exame antes de marcar a consulta. Conseguiu fazer?\nSe já estiver com o resultado, vejo um horário para o especialista analisar com você. Se ainda não saiu, sem problema — é só me dizer quando fica pronto.",
+  parau_espera_viagem: "Olá, {{contact.name}}. Aqui é da Doutor Hérnia Parauapebas.\nVocê me disse que estava viajando e que voltaríamos a falar depois. Já está de volta?\nSe quiser, vejo um horário para a sua consulta ainda nesta semana.",
+  parau_espera_decisao: "Olá, {{contact.name}}. Aqui é da Doutor Hérnia Parauapebas.\nVocê ia pensar com calma sobre a consulta, e eu prometi não insistir. Só passei para saber se ficou alguma dúvida que eu possa esclarecer — sobre o método, o valor ou como funciona a primeira consulta.",
+  parau_espera_financeiro: "Olá, {{contact.name}}. Aqui é da Doutor Hérnia Parauapebas.\nVocê comentou que este mês estava apertado e que veríamos depois. Se a situação estiver melhor, posso ver um horário e te explico os valores e as formas de pagamento. Sem pressa — só me diga como prefere.",
+  parau_espera_retomada2: "Olá, {{contact.name}}. Passando mais uma vez, da Doutor Hérnia Parauapebas.\nSe ainda fizer sentido cuidar da sua dor com a gente, é só responder aqui e eu vejo um horário. Se preferir que eu não escreva mais, também é só me dizer — vou respeitar.",
+  parau_sdr_confirmacao_retorno: "Olá, {{contact.name}}! Aqui é da Doutor Hérnia.\nSeu retorno está agendado para {{lead.cf.2450928}}, na unidade Parauapebas.\nPodemos confirmar sua presença?",
+  parau_sdr_retomada_pos_ligacao: "Oi, {{contact.name}}! Aqui é {{lead.cf.2450732}}, da Doutor Hérnia.\nTentei te ligar agora há pouco e não consegui falar com você.\nPosso continuar por aqui mesmo? Em 2 minutos eu te explico os próximos passos.",
+  parau_sdr_reativacao_lead_frio: "Oi, {{contact.name}}! Aqui é {{lead.cf.2450732}}, da Doutor Hérnia.\nFaz um tempo desde a nossa última conversa e não consegui te encontrar depois disso.\nSó pra eu saber como te ajudar: você ainda quer resolver isso agora ou prefere que eu te procure mais pra frente?",
+  parau_sdr_boas_vindas_programa: "Oi, {{contact.name}}! Sua vaga no programa {{lead.cf.2450750}} está confirmada. ✅\nNo anexo está tudo o que você precisa: próximos passos, orientações e nossos contatos.\nSeu próximo compromisso é {{lead.cf.2450928}}.\nQualquer dúvida até lá, é só responder por aqui.",
+  parau_tratamento_boas_vindas: "Olá, {{contact.name}}. Seja bem-vindo(a) ao seu tratamento na Doutor Hérnia Parauapebas.\nA partir de agora a nossa equipe acompanha cada etapa do seu plano. Qualquer dúvida entre as sessões, fale por aqui.",
+  parau_tratamento_primeira_sessao: "Olá, {{contact.name}}. A sua primeira sessão ficou assim:\nData e horário: {{lead.cf.2450928}}\nUnidade: {{lead.cf.2450798}}\nChegue 10 minutos antes.\nVenha com roupas leves",
+  parau_sessao_lembrete_vespera: "Olá, {{contact.name}}. A sua sessão é amanhã.\nData e horário: {{lead.cf.2450928}}\nEstá tudo certo?",
+  parau_sessao_confirmacao_dia: "Bom dia, {{contact.name}}. A sua sessão de hoje está marcada para {{lead.cf.2450928}}.\nEstá tudo certo?",
+  parau_sessao_aderencia_meio: "Olá, {{contact.name}}. Você já concluiu boa parte das sessões previstas no seu plano.\nMantenha a frequência: é ela que sustenta a evolução do tratamento. Qualquer dúvida, estou à disposição.",
+  parau_alta_conclusao: "Olá, {{contact.name}}. Parabéns pela conclusão do seu tratamento.\nA constância que você manteve foi decisiva no resultado. Seguimos à disposição para o seu acompanhamento.",
+  parau_alta_pesquisa_nps: "Olá, {{contact.name}}. De 0 a 10, o quanto você recomendaria a Doutor Hérnia Parauapebas a um amigo ou familiar?\nPode responder no botão abaixo. A sua resposta é usada apenas internamente.",
+  parau_alta_retorno_60d: "Olá, {{contact.name}}. Já se passaram 60 dias desde a sua alta.\nO nosso protocolo de acompanhamento prevê um retorno com o especialista para verificar como está a sua coluna.\nQuer que eu verifique um horário?",
+  parau_financeiro_vencimento_3d: "Olá, {{contact.name}}. A parcela do seu tratamento vence em {{lead.cf.2450998}}.\nValor: {{lead.cf.2451112}}\nPagamento: {{lead.cf.2451006}}\nSe já tiver pago, desconsidere esta mensagem.",
+  parau_financeiro_vencimento_hoje: "Olá, {{contact.name}}. A parcela do seu tratamento vence hoje.\nValor: {{lead.cf.2451112}}\nPagamento: {{lead.cf.2451006}}\nQualquer dúvida, é só responder aqui.",
+};

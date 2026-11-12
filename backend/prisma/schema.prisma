@@ -2721,3 +2721,38 @@ model FunilTarefa {
   @@index([conta, conversaId, feita])
   @@map("funil_tarefa")
 }
+
+/// Régua do Chatwoot (worker `chatwoot-regua`): a 1ª vez que o worker viu a conversa com aquele valor (etapa=Perdido desde X,
+/// situação=Não compareceu desde Y, etiqueta nova desde Z). Valor mudou = o mesmo registro ganha o valor e o `desde` novos.
+/// Linhas `_visto` (conversa conhecida) e `_partida` (conversa 0: quando o worker começou a olhar a caixa) são de controle.
+model ChatwootReguaVisto {
+  id             Int      @id @default(autoincrement())
+  caixa          Int
+  conversationId Int      @map("conversation_id")
+  campo          String
+  valor          String
+  desde          DateTime
+  /// já estava assim quando o worker passou a olhar: não vale como "entrou agora" para regra de entrada
+  inicial        Boolean  @default(false)
+
+  @@unique([caixa, conversationId, campo])
+  @@map("chatwoot_regua_visto")
+}
+
+/// Régua do Chatwoot: cada mensagem (ou nota do modo seco) já decidida. UNIQUE = nunca repete a mesma ocorrência.
+/// `regra` terminada em `!falta` = nota do seco "faltou campo", uma vez por chave.
+model ChatwootReguaDisparo {
+  id             Int      @id @default(autoincrement())
+  caixa          Int
+  conversationId Int      @map("conversation_id")
+  regra          String
+  chave          String
+  /// "seco" | "ligado"
+  modo           String
+  texto          String
+  criadoEm       DateTime @default(now()) @map("criado_em")
+
+  @@unique([conversationId, regra, chave])
+  @@index([caixa, criadoEm])
+  @@map("chatwoot_regua_disparo")
+}
