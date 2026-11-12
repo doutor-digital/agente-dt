@@ -16,8 +16,6 @@ export const RECUSA_DA_ENTRADA = 'No teste, escreva como o paciente escreveria.'
 export const RESPOSTA_NEUTRA = 'Não consegui responder isso aqui no teste. Escreva como o paciente escreveria.';
 /** Trecho literal do prompt que, repetido na resposta, bloqueia (depois de normalizar espaço e caixa). */
 export const JANELA_DO_ECO = 80;
-/** Passo da varredura da saída: um trecho literal de JANELA_DO_ECO + PASSO - 1 letras seguidas é sempre achado. */
-const PASSO = 4;
 
 /** Sem acento, caixa baixa, sinal vira espaço (mantém < > / para marcação), espaço único. */
 export function normalizar(texto: string): string {
@@ -115,7 +113,7 @@ export function soInstrucoes(prompt: string): string {
 const MARCADORES_FIXOS = ['SEU NOME:', '# CONTEXTO DE TESTE'];
 
 /**
- * `true` = a resposta repete o prompt: trecho literal de `JANELA_DO_ECO`+ letras (espaço e caixa não contam), marcador de
+ * `true` = a resposta repete marcador de
  * bloco do prompt ou marcador fixo. Sem prompt (nunca deve acontecer) = bloqueia: quem chama decide, aqui falha fechado.
  */
 export function ecoDoPrompt(resposta: string, prompt: string | undefined): boolean {
@@ -126,12 +124,9 @@ export function ecoDoPrompt(resposta: string, prompt: string | undefined): boole
   for (const bloco of blocosDoPrompt(prompt)) {
     if (baixa.includes(`<${bloco}`) || baixa.includes(`</${bloco}`)) return true;
   }
-  const p = colar(soInstrucoes(prompt));
-  const r = colar(resposta);
-  if (r.length < JANELA_DO_ECO) return false;
-  for (let i = 0; i + JANELA_DO_ECO <= r.length; i += PASSO) {
-    if (p.includes(r.slice(i, i + JANELA_DO_ECO))) return true;
-  }
-  // a última janela inteira (o passo pode ter pulado o fim)
-  return p.includes(r.slice(-JANELA_DO_ECO));
+  // 12/11/2026: a comparação de trecho literal (80 letras) saiu. Em produção barrou 2 de 2 respostas normais de Timbó
+  // ("Olá, sinto dor na coluna"): o prompt próprio da unidade traz o roteiro de conversa SEM aspas, e repetir o roteiro é o
+  // trabalho da Sofia. Fica a trava de entrada (pedeOPrompt) e os marcadores estruturais acima. `soInstrucoes` segue
+  // exportada para quem quiser medir.
+  return false;
 }

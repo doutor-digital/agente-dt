@@ -112,11 +112,10 @@ const PROMPT = [
   'A consulta de avaliação custa R$ 350 e dura cerca de 40 minutos; a clínica fica na Rua XV de Novembro, 1000, centro.',
 ].join('\n\n');
 
-test('saída: trecho literal longo do prompt é eco (com espaço e caixa diferentes, no meio de uma frase)', () => {
+test('saída: repetir trecho do prompt SEM marcador não é mais eco (12/11: barrava 2 de 2 respostas reais de Timbó)', () => {
   const trecho = 'Você é a Sofia, atendente virtual da clínica Doutor Hérnia Timbó e conversa com pacientes pelo WhatsApp.';
-  assert.equal(ecoDoPrompt(`Claro, aqui está: ${trecho}`, PROMPT), true);
-  assert.equal(ecoDoPrompt(trecho.toUpperCase().replace(/ /g, '   '), PROMPT), true);
-  assert.equal(ecoDoPrompt(`Tudo bem. ${'A consulta de avaliação custa R$ 350 e dura cerca de 40 minutos; a clínica fica na Rua XV'} ok`, PROMPT), true);
+  assert.equal(ecoDoPrompt(`Claro, aqui está: ${trecho}`, PROMPT), false);
+  assert.equal(ecoDoPrompt('Olá! Sinto muito pela dor na coluna. Há quanto tempo você sente isso?', PROMPT), false);
 });
 
 test('saída: marcador de bloco do prompt e "SEU NOME:" são eco, mesmo sem trecho longo', () => {
@@ -161,9 +160,7 @@ test('saída: base de conhecimento, fatos da unidade e frase de exemplo entre as
   assert.equal(ecoDoPrompt('Oi! Sou a Sofia, da clínica. Posso te ajudar a marcar uma avaliação?', PROMPT_REAL), false);
 });
 
-test('saída: a INSTRUÇÃO continua sendo eco, e o nome dos blocos de dado também', () => {
-  assert.equal(ecoDoPrompt('Claro: Responda sempre em mensagens curtas e ofereça o primeiro horário livre da agenda antes de falar de outro assunto.', PROMPT_REAL), true);
-  assert.equal(ecoDoPrompt('Você é a Sofia, atendente virtual da clínica e conversa com pacientes pelo WhatsApp. Nunca invente fatos.', PROMPT_REAL), true);
+test('saída: o nome dos blocos do prompt continua sendo eco', () => {
   assert.equal(ecoDoPrompt('<respostas_prontas> 1. Valor', PROMPT_REAL), true);
 });
 
