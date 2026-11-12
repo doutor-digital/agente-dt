@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { automacaoPorId, verificarCatalogo } from './automacoes.js';
 import { CAIXAS_REGUA } from './chatwoot-regua.js';
 import { cicloDaCaixa, MAX_ETIQUETAS_POR_CICLO, MAX_MENSAGENS_POR_CICLO, type Armazem, type Chat, type DepsDoCiclo, type LinhaVista } from './chatwoot-regua-worker.js';
-import type { DadosDaUnidade, Mudanca } from './chatwoot-regua.js';
+import type { DadosDaUnidade, MensagemResumo, Mudanca } from './chatwoot-regua.js';
 
 const U: DadosDaUnidade = { nome: 'Doutor Hérnia Parauapebas', pixKey: 'pix@parau.com', valorAntecipado: 250 };
 const unix = (s: string) => Math.floor(new Date(s).getTime() / 1000);
@@ -59,10 +59,26 @@ function armazemFalso() {
   return { armazem, vistos, disparos };
 }
 
-function chatFalso(conversas: () => unknown[], o: { falhaAoEscrever?: () => unknown; falhaAoListar?: boolean } = {}) {
+function chatFalso(
+  conversas: () => unknown[],
+  o: { falhaAoEscrever?: () => unknown; falhaAoListar?: boolean; ultimaPublica?: MensagemResumo | null } = {},
+) {
   const mensagens: Array<{ id: number; texto: string; privada: boolean }> = [];
   const etiquetas: Array<{ id: number; lista: string[] }> = [];
+  const atributos: Array<{ id: number; attrs: Record<string, unknown> }> = [];
+  const prioridades: Array<{ id: number; p: string }> = [];
+  const buscasDaUltima: number[] = [];
   const chat: Chat = {
+    async atributos(id, attrs) {
+      atributos.push({ id, attrs });
+    },
+    async prioridade(id, p) {
+      prioridades.push({ id, p });
+    },
+    async ultimaPublica(id) {
+      buscasDaUltima.push(id);
+      return o.ultimaPublica ?? null;
+    },
     async pagina(_caixa, pagina) {
       if (o.falhaAoListar) throw new Error('Chatwoot fora do ar');
       const todas = conversas();
@@ -77,7 +93,7 @@ function chatFalso(conversas: () => unknown[], o: { falhaAoEscrever?: () => unkn
       etiquetas.push({ id, lista });
     },
   };
-  return { chat, mensagens, etiquetas };
+  return { chat, mensagens, etiquetas, atributos, prioridades, buscasDaUltima };
 }
 
 const deps = (armazem: Armazem, chat: Chat): DepsDoCiclo => ({ armazem, chat, pausa: async () => undefined });
@@ -149,21 +165,21 @@ test('ligado: recusa do Chatwoot (4xx) desfaz; erro sem resposta (pode ter ido) 
 });
 
 test('campo faltando: o seco deixa UMA nota dizendo o que falta; o ligado não manda nem registra', async () => {
-  const attrs = { funil: 'Tratamento', vencimento: '2026-11-20' }; // sem valor da parcela
-  const hora = new Date('2026-11-17T12:00:00Z'); // 3 dias antes, 09:00 Belém
+  const semNome = { attrs: CONSULTA, nome: '+5594999990000' }; // contato sem nome: o texto pede o primeiro nome
+  const antes = new Date(VESPERA.getTime() - 600_000);
   const seco = armazemFalso();
-  const c1 = chatFalso(() => [bruta(1, { attrs })]);
-  await cicloDaCaixa(deps(seco.armazem, c1.chat), 2, 'x', 'seco', U, new Date('2026-11-17T11:50:00Z'));
-  await cicloDaCaixa(deps(seco.armazem, c1.chat), 2, 'x', 'seco', U, hora);
-  await cicloDaCaixa(deps(seco.armazem, c1.chat), 2, 'x', 'seco', U, new Date(hora.getTime() + 600_000));
+  const c1 = chatFalso(() => [bruta(1, semNome)]);
+  await cicloDaCaixa(deps(seco.armazem, c1.chat), 2, 'x', 'seco', U, antes);
+  await cicloDaCaixa(deps(seco.armazem, c1.chat), 2, 'x', 'seco', U, VESPERA);
+  await cicloDaCaixa(deps(seco.armazem, c1.chat), 2, 'x', 'seco', U, new Date(VESPERA.getTime() + 600_000));
   assert.equal(c1.mensagens.length, 1);
-  assert.equal(c1.mensagens[0]!.texto, '🧪 [SECO] Régua «vencimento-3d» — NÃO enviaria agora, falta: valor da parcela (valor_parcela).');
-  assert.equal(seco.disparos[0]!.regra, 'vencimento-3d!falta');
+  assert.equal(c1.mensagens[0]!.texto, '🧪 [SECO] Régua «consulta-vespera» — NÃO enviaria agora, falta: nome do contato.');
+  assert.equal(seco.disparos[0]!.regra, 'consulta-vespera!falta');
 
   const lig = armazemFalso();
-  const c2 = chatFalso(() => [bruta(1, { attrs })]);
-  await cicloDaCaixa(deps(lig.armazem, c2.chat), 2, 'x', 'ligado', U, new Date('2026-11-17T11:50:00Z'));
-  await cicloDaCaixa(deps(lig.armazem, c2.chat), 2, 'x', 'ligado', U, hora);
+  const c2 = chatFalso(() => [bruta(1, semNome)]);
+  await cicloDaCaixa(deps(lig.armazem, c2.chat), 2, 'x', 'ligado', U, antes);
+  await cicloDaCaixa(deps(lig.armazem, c2.chat), 2, 'x', 'ligado', U, VESPERA);
   assert.equal(c2.mensagens.length, 0);
   assert.equal(lig.disparos.length, 0);
 });
@@ -252,4 +268,57 @@ test('grupo e o bot do Evolution ficam de fora', async () => {
   assert.equal(r.conversas, 0);
   assert.equal(mensagens.length, 0);
   assert.deepEqual(vistos.map((v) => v.conversationId), [0]); // só a linha de partida
+});
+
+// ── regras internas (quente parado, sem resposta 24 h, pendência de «Fechou») ──────────────────────
+
+const QUALIFICA = { etapa: 'Sofia qualifica', qualificacao: 'Quente' };
+// última mensagem (nossa) em 2026-11-16 10:00 UTC; +24 h = 17/11 10:00 UTC (07:00 Belém, janela fechada) → 11:00 UTC abre
+const DEPOIS_DE_24H = new Date('2026-11-17T11:30:00Z');
+
+test('interna em seco: só nota «faria agora», nenhuma ação', async () => {
+  const { armazem } = armazemFalso();
+  const { chat, mensagens, etiquetas, atributos, prioridades } = chatFalso(() => [bruta(5, { attrs: { etapa: 'Sofia qualifica' }, ultima: { tipo: 1, autor: 2 } })]);
+  await cicloDaCaixa(deps(armazem, chat), 2, 'doutor-hernia-parauapebas', 'seco', U, new Date('2026-11-16T10:30:00Z'));
+  await cicloDaCaixa(deps(armazem, chat), 2, 'doutor-hernia-parauapebas', 'seco', U, DEPOIS_DE_24H);
+  const nota = mensagens.find((m) => m.texto.includes('sem-resposta-24h'));
+  assert.ok(nota, 'deixou a nota do seco');
+  assert.equal(nota!.privada, true);
+  assert.ok(nota!.texto.startsWith('🧪 [SECO] Régua «sem-resposta-24h» — faria agora:'));
+  assert.equal(etiquetas.length, 0);
+  assert.equal(atributos.length, 0);
+  assert.equal(prioridades.length, 0);
+});
+
+test('interna ligada: nota PRIVADA (nunca ao paciente) + etiqueta, motivo e etapa Perdido mantendo os outros atributos', async () => {
+  const { armazem } = armazemFalso();
+  const { chat, mensagens, etiquetas, atributos } = chatFalso(() => [
+    bruta(6, { attrs: { etapa: 'Esperando humano', qualificacao: 'Morno', unidade: 'x' }, labels: ['morno'], ultima: { tipo: 1, autor: 2 } }),
+  ]);
+  await cicloDaCaixa(deps(armazem, chat), 2, 'doutor-hernia-parauapebas', 'ligado', U, new Date('2026-11-16T10:30:00Z'));
+  await cicloDaCaixa(deps(armazem, chat), 2, 'doutor-hernia-parauapebas', 'ligado', U, DEPOIS_DE_24H);
+  assert.equal(mensagens.length, 1);
+  assert.equal(mensagens[0]!.privada, true);
+  assert.ok(mensagens[0]!.texto.startsWith('🤖 Régua «sem-resposta-24h»:'));
+  assert.deepEqual(etiquetas.at(-1)!.lista, ['morno', 'sem-resposta']);
+  assert.deepEqual(atributos[0]!.attrs, { etapa: 'Perdido', qualificacao: 'Morno', unidade: 'x', motivo_nao_agendamento: 'Não interagiu' });
+});
+
+test('interna: quente parado 3 h ligado sobe a prioridade para urgente', async () => {
+  const { armazem } = armazemFalso();
+  const { chat, prioridades, mensagens } = chatFalso(() => [bruta(7, { attrs: QUALIFICA, ultima: { tipo: 0, autor: 99 } })]);
+  await cicloDaCaixa(deps(armazem, chat), 2, 'doutor-hernia-parauapebas', 'ligado', U, new Date('2026-11-16T10:30:00Z'));
+  await cicloDaCaixa(deps(armazem, chat), 2, 'doutor-hernia-parauapebas', 'ligado', U, new Date('2026-11-16T13:10:00Z'));
+  assert.deepEqual(prioridades, [{ id: 7, p: 'urgent' }]);
+  assert.ok(mensagens[0]!.texto.includes('Lead QUENTE parado há 3 h'));
+});
+
+test('interna: última mensagem é NOTA → busca a última pública (a nota do seco não zera o tempo de parado)', async () => {
+  const { armazem } = armazemFalso();
+  const publica: MensagemResumo = { saida: true, privada: false, autorId: 2, autorTipo: 'user', criadaEm: new Date('2026-11-16T10:00:00Z') };
+  const { chat, buscasDaUltima, mensagens } = chatFalso(() => [bruta(8, { attrs: { etapa: 'Sofia qualifica' }, ultima: { tipo: 1, autor: 2, privada: true } })], { ultimaPublica: publica });
+  await cicloDaCaixa(deps(armazem, chat), 2, 'doutor-hernia-parauapebas', 'seco', U, new Date('2026-11-16T10:30:00Z'));
+  await cicloDaCaixa(deps(armazem, chat), 2, 'doutor-hernia-parauapebas', 'seco', U, DEPOIS_DE_24H);
+  assert.ok(buscasDaUltima.includes(8));
+  assert.ok(mensagens.some((m) => m.texto.includes('sem-resposta-24h')));
 });

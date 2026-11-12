@@ -3,7 +3,8 @@
  * em «seco» ou «ligado» e aplica `decidirRegua` (chatwoot-regua.ts, onde estão as regras e as explicações).
  *
  *  - SECO: em vez de mandar ao paciente, deixa uma NOTA PRIVADA na conversa («🧪 [SECO] Régua … — enviaria agora: …») e registra no banco.
- *  - LIGADO: manda a mensagem pública. Implementado, mas ninguém liga agora.
+ *  - LIGADO: manda a mensagem pública. Implementado, mas ninguém liga agora. Regra INTERNA (quente parado, sem resposta 24 h,
+ *    pendência de «Fechou») nunca vira mensagem: nota privada + a ação (prioridade, etiqueta, etapa).
  *  - Reaproveita o cliente do Chatwoot do conector (`mcp-remoto/chatwoot.ts`, env CHATWOOT_API_TOKEN / CHATWOOT_CONTA_ID / CHATWOOT_URL): sem env novo.
  *    Sem token, o worker nem sobe.
  *  - Nunca repete: a linha de `chatwoot_regua_disparo` é GRAVADA ANTES de agir (UNIQUE conversa+regra+chave); duas cópias do servidor
@@ -25,6 +26,10 @@ import {
   decidirEtiquetaCelular,
   decidirRegua,
   ETIQUETA_CELULAR,
+  precisaUltimaPublica,
+  resumoDaMensagem,
+  type AcaoInterna,
+  type MensagemResumo,
   ID_REGUA,
   notaDoSeco,
   SUFIXO_FALTA,
@@ -68,6 +73,11 @@ export interface Chat {
   pagina(caixa: number, pagina: number): Promise<unknown[]>;
   mensagem(conversationId: number, texto: string, privada: boolean): Promise<void>;
   etiquetas(conversationId: number, etiquetas: string[]): Promise<void>;
+  /** grava os atributos da conversa (o Chatwoot SUBSTITUI o objeto inteiro: mandar todos) */
+  atributos(conversationId: number, attrs: Record<string, unknown>): Promise<void>;
+  prioridade(conversationId: number, prioridade: 'urgent' | 'high' | 'medium' | 'low'): Promise<void>;
+  /** a última mensagem pública (não nota) da conversa; null = nenhuma */
+  ultimaPublica(conversationId: number): Promise<MensagemResumo | null>;
 }
 
 export interface DepsDoCiclo {
@@ -134,6 +144,21 @@ export function chatDoChatwoot(ctx: ContextoChatwoot): Chat {
       // o Chatwoot SUBSTITUI a lista inteira: quem chama manda a lista completa
       await chamar(ctx, 'POST', `conversations/${conversationId}/labels`, { corpo: { labels: etiquetas } });
     },
+    async atributos(conversationId, attrs) {
+      await chamar(ctx, 'POST', `conversations/${conversationId}/custom_attributes`, { corpo: { custom_attributes: attrs } });
+    },
+    async prioridade(conversationId, prioridade) {
+      await chamar(ctx, 'POST', `conversations/${conversationId}/toggle_priority`, { corpo: { priority: prioridade } });
+    },
+    async ultimaPublica(conversationId) {
+      const r = (await chamar(ctx, 'GET', `conversations/${conversationId}/messages`)) as { payload?: unknown[] } | null;
+      const lista = Array.isArray(r?.payload) ? r.payload : [];
+      for (let i = lista.length - 1; i >= 0; i--) {
+        const m = resumoDaMensagem(lista[i]);
+        if (m && !m.privada) return m;
+      }
+      return null;
+    },
   };
 }
 
@@ -164,6 +189,26 @@ async function lerConversas(chat: Chat, caixa: number): Promise<{ conversas: Con
     }
   }
   return { conversas, truncada: true };
+}
+
+/**
+ * Ligado: a ação da regra interna (o robô do Kommo fazia o mesmo). Mexe na cópia local da conversa para a etiqueta do celular,
+ * mais adiante no mesmo ciclo, não desfazer o que foi posto aqui.
+ */
+export async function executarInterna(chat: Chat, c: ConversaRegua, acao: AcaoInterna): Promise<void> {
+  if (acao === 'quente-parado') {
+    await chat.prioridade(c.id, 'urgent');
+    return;
+  }
+  const etiqueta = acao === 'sem-resposta' ? 'sem-resposta' : 'pendente-de-revisao';
+  if (!c.etiquetas.includes(etiqueta)) {
+    c.etiquetas = [...c.etiquetas, etiqueta];
+    await chat.etiquetas(c.id, c.etiquetas);
+  }
+  if (acao === 'sem-resposta') {
+    c.attrs = { ...c.attrs, motivo_nao_agendamento: 'Não interagiu', etapa: 'Perdido' };
+    await chat.atributos(c.id, c.attrs);
+  }
 }
 
 const statusDoErro = (e: unknown): number | undefined => (e as { status?: number })?.status;
@@ -212,6 +257,7 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
   let etiquetas = 0;
   for (const { c, vistos } of pendentes) {
     try {
+      if (precisaUltimaPublica(c)) c.ultima = await chat.ultimaPublica(c.id);
       const { disparos, perdidas } = decidirRegua(c, { vistos, feitos: feitosPorConversa.get(c.id) ?? new Set() }, agora, unidade);
       for (const r of perdidas) resumo.perdidas[r] = (resumo.perdidas[r] ?? 0) + 1;
       for (const d of disparos) {
@@ -221,12 +267,14 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
         // faltou campo: só o seco avisa (uma vez por chave); ligado não manda nem anota
         if (faltou && modo === 'ligado') continue;
         const nota = notaDoSeco(d);
-        const texto = modo === 'seco' ? nota : (d.texto as string);
+        // regra interna nunca fala com o paciente: no ligado também é nota privada (mais a ação)
+        const privada = modo === 'seco' || !!d.interna;
+        const texto = modo === 'seco' ? nota : d.interna ? `🤖 Régua «${d.regra}»: ${d.texto}` : (d.texto as string);
         const novo = await armazem.registrar({ caixa, conversationId: c.id, regra, chave: d.chave, modo, texto });
         if (!novo) continue;
         mensagens++;
         try {
-          await deps.chat.mensagem(c.id, texto, modo === 'seco');
+          await deps.chat.mensagem(c.id, texto, privada);
           if (faltou) resumo.faltando++;
           else resumo.disparos++;
           await deps.pausa(PAUSA_ENTRE_ESCRITAS_MS);
@@ -236,6 +284,15 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
           // seco: tenta de novo no próximo ciclo. Ligado: só desfaz se o Chatwoot RECUSOU (4xx); sem resposta pode ter ido.
           if (modo === 'seco' || (status !== undefined && status >= 400 && status < 500)) await armazem.desfazer(c.id, regra, d.chave).catch(() => undefined);
           logger.warn({ err: String(err), caixa, conversa: c.id, regra: d.regra, modo }, `${ID_REGUA}: não consegui ${modo === 'seco' ? 'deixar a nota' : 'mandar a mensagem'}`);
+          continue;
+        }
+        if (modo === 'ligado' && d.interna) {
+          try {
+            await executarInterna(deps.chat, c, d.interna);
+          } catch (err) {
+            resumo.falhas++;
+            logger.warn({ err: String(err), caixa, conversa: c.id, regra: d.regra }, `${ID_REGUA}: nota deixada, mas a ação interna falhou`);
+          }
         }
       }
       // sinal interno: não é mensagem ao paciente

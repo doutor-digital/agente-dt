@@ -4,7 +4,7 @@
  * quais mensagens da régua estão na hora. Quem fala com o Chatwoot e com o banco é `chatwoot-regua-worker.ts`.
  *
  * Como cada regra é decidida:
- *  - Regra de DATA (consulta, sessão, alta, vencimento, retomar em): o alvo sai do campo da conversa (data + hora, em UTC-3).
+ *  - Regra de DATA (consulta, sessão, alta, retorno, retomar em): o alvo sai do campo da conversa (data + hora, em UTC-3).
  *  - Regra de ENTRADA (perdido há 48 h, etapa nova, etiqueta nova): o Chatwoot não guarda "desde quando", então o worker anota
  *    a 1ª vez que viu aquele valor (`Visto`). O que já estava lá na partida do worker é marcado `inicial` e NUNCA dispara regra
  *    de entrada: sem isso, o 1º ciclo mandaria "reengajamento" a todo o estoque de perdidos de uma vez.
@@ -82,15 +82,29 @@ export interface DadosDaUnidade {
   valorAntecipado: number | null;
 }
 
+/**
+ * Regras INTERNAS: no Kommo são robôs que não falam com o paciente (criam tarefa, põem etiqueta, mudam etapa). Aqui viram nota
+ * privada para a equipe + a ação, nunca mensagem pública.
+ */
+export type AcaoInterna = 'quente-parado' | 'sem-resposta' | 'pendencia-fechou';
+export const DESCRICAO_INTERNA: Readonly<Record<AcaoInterna, string>> = {
+  'quente-parado': '⚠️ Lead QUENTE parado há 3 h — priorize! (prioridade da conversa → urgente)',
+  'sem-resposta':
+    'Paciente sem responder há 24 h: etiqueta «sem-resposta», motivo do não agendamento = «Não interagiu» e etapa → Perdido.',
+  'pendencia-fechou': 'Etapa «Fechou», mas «Fechou tratamento» está desmarcado: corrigir a conversa (etiqueta «pendente-de-revisao»).',
+};
+
 export interface Disparo {
   regra: string;
   chave: string;
-  /** nome do modelo no Kommo (rastreio) */
+  /** nome do modelo no Kommo (rastreio); regra interna = `interna:<ação>` */
   modelo: string;
   /** texto pronto; null quando falta campo */
   texto: string | null;
   faltando: string[];
   alvo: Date;
+  /** presente = regra interna (nota privada + ação, nunca mensagem ao paciente) */
+  interna?: AcaoInterna;
 }
 
 export interface Decisao {
@@ -213,30 +227,19 @@ export function primeiroNome(nome: string): string | null {
 
 export const CAMPO_VISTO_CONVERSA = '_visto';
 export const CAMPO_PARTIDA = '_partida';
-const ETIQUETAS_SDR = ['confirmar-retorno', 'retomada', 'reativacao', 'boas-vindas'] as const;
+/** Etiquetas cuja CHEGADA dispara regra: as 4 da SDR e a `aderencia-meio` (posta por outro processo, como a tag do Kommo). */
+const ETIQUETAS_OBSERVADAS = ['confirmar-retorno', 'retomada', 'reativacao', 'boas-vindas', 'aderencia-meio'] as const;
 
 /** Os valores (não vazios) que a régua acompanha na conversa. Campo ausente aqui = vazio. */
 export function camposObservados(c: ConversaRegua): Record<string, string> {
   const a = c.attrs;
   const o: Record<string, string> = {};
-  const etapa = str(a.etapa);
-  if (etapa) o.etapa = etapa;
-  const situ = str(a.situacao_consulta);
-  if (situ) o.situacao_consulta = situ;
-  if (ehSim(a.fechou_tratamento)) o.fechou_tratamento = 'sim';
-  const alta = lerData(a.data_alta);
-  if (alta) o.data_alta = alta.iso;
-  const sessao = momento(a.proxima_sessao, a.hora_sessao);
-  if (sessao) o.proxima_sessao = sessao.chave;
-  if (aderenciaNoMeio(a)) o.aderencia_meio = 'sim';
-  for (const e of ETIQUETAS_SDR) if (c.etiquetas.includes(e)) o[`etiqueta:${e}`] = 'sim';
+  for (const campo of ['etapa', 'situacao_consulta', 'etapa_tratamento', 'compareceu_ultima_sessao']) {
+    const v = str(a[campo]);
+    if (v) o[campo] = v;
+  }
+  for (const e of ETIQUETAS_OBSERVADAS) if (c.etiquetas.includes(e)) o[`etiqueta:${e}`] = 'sim';
   return o;
-}
-
-function aderenciaNoMeio(a: Record<string, unknown>): boolean {
-  const previstas = Number(a.sessoes_previstas);
-  const feitas = Number(a.sessoes_realizadas);
-  return Number.isFinite(previstas) && Number.isFinite(feitas) && previstas >= 2 && feitas >= 1 && feitas * 2 >= previstas;
 }
 
 export type Mudanca =
@@ -291,6 +294,7 @@ export function renderizar(modelo: string, c: ConversaRegua, u: DadosDaUnidade):
   const a = c.attrs;
   const consulta = momento(a.data_consulta, a.hora_consulta);
   const sessao = momento(a.proxima_sessao, a.hora_sessao);
+  const retorno = momento(a.data_retorno, null);
   const vencimento = lerData(a.vencimento);
   const valorParcela = valorEmReais(a.valor_parcela);
   const faltando: string[] = [];
@@ -305,8 +309,8 @@ export function renderizar(modelo: string, c: ConversaRegua, u: DadosDaUnidade):
       case 'lead.cf.2450736':
         return consulta ? textoDoMomento(consulta) : falta('data da consulta (data_consulta)');
       case 'lead.cf.2450928': {
-        // próxima sessão; os modelos do SDR de retorno usam o mesmo campo para o retorno agendado: sem sessão, vale a consulta
-        const m = sessao ?? consulta;
+        // próxima sessão; os modelos de retorno (SDR e cancelamento) usam o mesmo campo: sem sessão, vale o retorno e depois a consulta
+        const m = sessao ?? retorno ?? consulta;
         return m ? textoDoMomento(m) : falta('data da próxima sessão (proxima_sessao)');
       }
       case 'lead.cf.2450998':
@@ -341,9 +345,18 @@ interface Candidato {
   kind: 'antes' | 'depois';
   /** regra "antes" nunca vale depois deste instante (a própria consulta) */
   teto?: Date;
+  interna?: AcaoInterna;
 }
 
+/**
+ * De/para das etapas (Kommo de Parauapebas → atributo `etapa` da Lia), decidido em 12/11/2026:
+ * Leads de entrada→Novo lead · EM QUALIFICAÇÃO→Sofia qualifica/Esperando humano · AGENDADO→Agendado/Confirmado ·
+ * NÃO COMPARECEU→continua Agendado com situacao_consulta=Não compareceu · COMPARECEU→Compareceu · EM NEGOCIAÇÃO→Pós-consulta ·
+ * GANHO→Fechou · PERDIDO→Perdido · EM ESPERA→`retomar_em` preenchido · RETORNO PÓS-TRATAMENTO→categoria «Retorno após tratamento».
+ * Funil TRATAMENTO → atributo `etapa_tratamento` (Entrada, Em tratamento, Alta, Tratamento cancelado).
+ */
 const ETAPAS_DA_CONSULTA = new Set(['Agendado', 'Confirmado', 'Fechou']);
+const ETAPAS_DE_QUALIFICACAO = new Set(['Sofia qualifica', 'Esperando humano']);
 /** situação em que a consulta ainda está de pé */
 const SITUACOES_DE_PE = new Set(['', 'Agendado', 'Confirmado', 'Remarcado']);
 const MODELO_DA_ESPERA: Record<string, string> = {
@@ -352,11 +365,35 @@ const MODELO_DA_ESPERA: Record<string, string> = {
   'Vai decidir': 'parau_espera_decisao',
   'Financeiro agora não': 'parau_espera_financeiro',
 };
-const MODELO_DA_ETIQUETA: Record<string, { regra: string; modelo: string; respeitaSemFollowUp: boolean }> = {
-  'confirmar-retorno': { regra: 'sdr-confirmar-retorno', modelo: 'parau_sdr_confirmacao_retorno', respeitaSemFollowUp: false },
-  retomada: { regra: 'sdr-retomada', modelo: 'parau_sdr_retomada_pos_ligacao', respeitaSemFollowUp: true },
-  reativacao: { regra: 'sdr-reativacao', modelo: 'parau_sdr_reativacao_lead_frio', respeitaSemFollowUp: true },
-  'boas-vindas': { regra: 'sdr-boas-vindas', modelo: 'parau_sdr_boas_vindas_programa', respeitaSemFollowUp: false },
+/** Etiquetas da SDR: em que etapas cada uma vale (as mesmas do gatilho no Kommo, pelo de/para). */
+const MODELO_DA_ETIQUETA: Record<
+  string,
+  { regra: string; modelo: string; respeitaSemFollowUp: boolean; vale: (etapa: string, situ: string, a: Record<string, unknown>, tratamento: boolean) => boolean }
+> = {
+  'confirmar-retorno': {
+    regra: 'sdr-confirmar-retorno',
+    modelo: 'parau_sdr_confirmacao_retorno',
+    respeitaSemFollowUp: false,
+    vale: (_e, _s, a, t) => t || str(a.categoria_consulta) === 'Retorno após tratamento',
+  },
+  retomada: {
+    regra: 'sdr-retomada',
+    modelo: 'parau_sdr_retomada_pos_ligacao',
+    respeitaSemFollowUp: true,
+    vale: (e, s, _a, t) => !t && (['Novo lead', 'Sofia qualifica', 'Esperando humano', 'Agendado'].includes(e) || s === 'Não compareceu'),
+  },
+  reativacao: {
+    regra: 'sdr-reativacao',
+    modelo: 'parau_sdr_reativacao_lead_frio',
+    respeitaSemFollowUp: true,
+    vale: (e, s, _a, t) => !t && (['Sofia qualifica', 'Esperando humano', 'Perdido'].includes(e) || s === 'Não compareceu'),
+  },
+  'boas-vindas': {
+    regra: 'sdr-boas-vindas',
+    modelo: 'parau_sdr_boas_vindas_programa',
+    respeitaSemFollowUp: false,
+    vale: (e, _s, _a, t) => t || ['Compareceu', 'Pós-consulta', 'Fechou'].includes(e),
+  },
 };
 
 /** "X horas antes" de um compromisso (consulta ou sessão): sem hora, a véspera vale 09:00 do dia anterior e as outras duas não existem. */
@@ -380,7 +417,8 @@ function candidatos(c: ConversaRegua, vistos: Vistos): Candidato[] {
   const a = c.attrs;
   const etapa = str(a.etapa);
   const situ = str(a.situacao_consulta);
-  const tratamento = str(a.funil) === 'Tratamento' || ehSim(a.fechou_tratamento);
+  const etapaTratamento = str(a.etapa_tratamento);
+  const tratamento = str(a.funil) === 'Tratamento' || etapaTratamento !== '';
   const semFollowUp = c.etiquetas.includes('sem-follow-up');
   const consulta = momento(a.data_consulta, a.hora_consulta);
   const saida: Candidato[] = [];
@@ -391,7 +429,7 @@ function candidatos(c: ConversaRegua, vistos: Vistos): Candidato[] {
   };
 
   if (!tratamento) {
-    // 1–3: perdido há 48/96/120 h
+    // follow-up: perdido há 48/96/120 h (no Kommo o de 96 h está com atraso 0 — defeito; aqui 96 h)
     const perdido = etapa === 'Perdido' ? novo('etapa', 'Perdido') : null;
     if (perdido && !semFollowUp) {
       const chave = `perdido@${perdido.desde.toISOString()}`;
@@ -403,43 +441,50 @@ function candidatos(c: ConversaRegua, vistos: Vistos): Candidato[] {
         saida.push({ regra, modelo, chave, kind: 'depois', alvo: new Date(perdido.desde.getTime() + h * HORA) });
       }
     }
-    // 4–5: pré-pagamento
+    // pré-pagamento (ao entrar em Agendado e 3 h depois)
     const agendado = etapa === 'Agendado' ? novo('etapa', 'Agendado') : null;
     if (agendado && ehSim(a.pagamento_antecipado) && situ === 'Agendado' && !c.etiquetas.includes('pagou-antecipado')) {
       const chave = `agendado@${agendado.desde.toISOString()}`;
       saida.push({ regra: 'prepagamento', modelo: 'parau_consulta_prepagamento', chave, kind: 'depois', alvo: agendado.desde });
       saida.push({ regra: 'prepagamento-pendente', modelo: 'parau_consulta_prepagamento_pendente', chave, kind: 'depois', alvo: new Date(agendado.desde.getTime() + 3 * HORA) });
     }
-    // 6–8: véspera, dia, preparo
-    if (consulta && ETAPAS_DA_CONSULTA.has(etapa) && SITUACOES_DE_PE.has(situ)) {
+    // véspera (24 h), dia (3 h), preparo (1 h). Em «Fechou» o Kommo manda o texto de véspera da SESSÃO.
+    // (consulta_confirmada do Kommo dispara no mesmo horário da véspera = disparo duplo: não replicado)
+    const naConsulta = ETAPAS_DA_CONSULTA.has(etapa);
+    if (consulta && naConsulta && SITUACOES_DE_PE.has(situ)) {
       saida.push(
         ...lembretes(consulta, {
-          vespera: ['consulta-vespera', 'parau_consulta_lembrete_vespera'],
+          vespera: ['consulta-vespera', etapa === 'Fechou' ? 'parau_sessao_lembrete_vespera' : 'parau_consulta_lembrete_vespera'],
           dia: ['consulta-dia', 'parau_consulta_confirmacao_dia'],
           preparo: ['consulta-preparo', 'parau_consulta_preparo'],
         }),
       );
     }
-    // 9–10: falta
-    const faltou = situ === 'Não compareceu' ? novo('situacao_consulta', 'Não compareceu') : null;
+    // falta: na hora em que marcam «Não compareceu» e 48 h depois da consulta
+    const faltou = naConsulta && situ === 'Não compareceu' ? novo('situacao_consulta', 'Não compareceu') : null;
     // o texto diz "a consulta de hoje": só vale se a falta foi marcada no dia da consulta
     if (faltou && consulta && consulta.data.iso === diaEmBelem(faltou.desde)) {
       saida.push({ regra: 'falta-mesmo-dia', modelo: 'parau_consulta_falta_mesmo_dia', chave: `faltou@${faltou.desde.toISOString()}`, kind: 'depois', alvo: faltou.desde });
     }
-    if (situ === 'Não compareceu' && consulta && !semFollowUp) {
+    if (naConsulta && situ === 'Não compareceu' && consulta && !semFollowUp) {
       saida.push({ regra: 'falta-48h', modelo: 'parau_consulta_falta_48h', chave: consulta.chave, kind: 'depois', alvo: new Date(instante(consulta, HORA_PADRAO_DEPOIS).getTime() + 2 * DIA) });
     }
-    // 11–14: depois do atendimento
-    if (consulta && situ === 'Atendido' && (etapa === 'Compareceu' || etapa === 'Pós-consulta')) {
+    // depois do atendimento (no Kommo os de 4 e 30 dias estão "antes" da consulta — defeito; aqui DEPOIS)
+    if (consulta && situ === 'Atendido') {
       const base = instante(consulta, HORA_PADRAO_DEPOIS).getTime();
-      saida.push({ regra: 'pos-atendimento', modelo: 'parau_consulta_pos_atendimento', chave: consulta.chave, kind: 'depois', alvo: new Date(base + DIA) });
+      const posConsulta = etapa === 'Compareceu' || etapa === 'Pós-consulta';
+      if (etapa === 'Compareceu') saida.push({ regra: 'pos-atendimento', modelo: 'parau_consulta_pos_atendimento', chave: consulta.chave, kind: 'depois', alvo: new Date(base + DIA) });
       if (!semFollowUp) {
-        saida.push({ regra: 'decisao-4d', modelo: 'parau_decisao_retomada_4d', chave: consulta.chave, kind: 'depois', alvo: new Date(base + 4 * DIA) });
-        saida.push({ regra: 'decisao-7d', modelo: 'parau_decisao_encerramento_7d', chave: consulta.chave, kind: 'depois', alvo: new Date(base + 7 * DIA) });
-        saida.push({ regra: 'decisao-30d', modelo: 'parau_decisao_reengajamento_30d', chave: consulta.chave, kind: 'depois', alvo: new Date(base + 30 * DIA) });
+        if (posConsulta) {
+          saida.push({ regra: 'decisao-4d', modelo: 'parau_decisao_retomada_4d', chave: consulta.chave, kind: 'depois', alvo: new Date(base + 4 * DIA) });
+          saida.push({ regra: 'decisao-7d', modelo: 'parau_decisao_encerramento_7d', chave: consulta.chave, kind: 'depois', alvo: new Date(base + 7 * DIA) });
+        }
+        if (etapa === 'Pós-consulta' || etapa === 'Perdido') {
+          saida.push({ regra: 'decisao-30d', modelo: 'parau_decisao_reengajamento_30d', chave: consulta.chave, kind: 'depois', alvo: new Date(base + 30 * DIA) });
+        }
       }
     }
-    // 15–16: retomar em
+    // em espera: no dia de `retomar_em` às 09:00 (texto pelo motivo) e 81 h depois da meia-noite (= D+3 09:00)
     const retomar = lerData(a.retomar_em);
     if (retomar && !semFollowUp) {
       const modelo = MODELO_DA_ESPERA[str(a.motivo_espera)];
@@ -447,44 +492,73 @@ function candidatos(c: ConversaRegua, vistos: Vistos): Candidato[] {
       if (modelo) saida.push({ regra: 'espera-retomar', modelo, chave: `retomar@${retomar.iso}`, kind: 'depois', alvo: primeira });
       // a 2ª retomada não vai para quem já respondeu depois da 1ª
       const respondeu = !!c.ultima && !c.ultima.saida && !c.ultima.privada && c.ultima.criadaEm.getTime() > primeira.getTime();
-      if (!respondeu) saida.push({ regra: 'espera-retomada2', modelo: 'parau_espera_retomada2', chave: `retomar2@${retomar.iso}`, kind: 'depois', alvo: emBelem(somarDias(retomar, 3), 18) });
+      if (!respondeu) saida.push({ regra: 'espera-retomada2', modelo: 'parau_espera_retomada2', chave: `retomar2@${retomar.iso}`, kind: 'depois', alvo: emBelem(somarDias(retomar, 3), 9) });
     }
-    // 17: etiquetas da SDR (ao ver a etiqueta nova)
-    for (const [etiqueta, r] of Object.entries(MODELO_DA_ETIQUETA)) {
-      const v = c.etiquetas.includes(etiqueta) ? novo(`etiqueta:${etiqueta}`) : null;
-      if (v && !(r.respeitaSemFollowUp && semFollowUp)) saida.push({ regra: r.regra, modelo: r.modelo, chave: `${etiqueta}@${v.desde.toISOString()}`, kind: 'depois', alvo: v.desde });
+    // internas da qualificação: quente parado 3 h; sem responder 24 h. Nota privada não conta como conversa.
+    if (ETAPAS_DE_QUALIFICACAO.has(etapa)) {
+      const u = c.ultima && !c.ultima.privada ? c.ultima : null;
+      const base = u ? u.criadaEm : c.criadaEm;
+      if (str(a.qualificacao) === 'Quente') {
+        saida.push({ regra: 'lead-quente-parado', modelo: 'interna:quente-parado', interna: 'quente-parado', chave: `quente@${base.toISOString()}`, kind: 'depois', alvo: new Date(base.getTime() + 3 * HORA) });
+      }
+      if (u && u.saida) {
+        saida.push({ regra: 'sem-resposta-24h', modelo: 'interna:sem-resposta', interna: 'sem-resposta', chave: `semresp@${u.criadaEm.toISOString()}`, kind: 'depois', alvo: new Date(u.criadaEm.getTime() + DIA) });
+      }
+    }
+    // interna: entrou em «Fechou» sem «Fechou tratamento» marcado
+    const fechou = etapa === 'Fechou' ? novo('etapa', 'Fechou') : null;
+    if (fechou && !ehSim(a.fechou_tratamento)) {
+      saida.push({ regra: 'pendencia-fechou', modelo: 'interna:pendencia-fechou', interna: 'pendencia-fechou', chave: `fechou@${fechou.desde.toISOString()}`, kind: 'depois', alvo: fechou.desde });
     }
   }
 
+  // etiquetas da SDR (ao ver a etiqueta nova), cada uma nas etapas do gatilho do Kommo
+  for (const [etiqueta, r] of Object.entries(MODELO_DA_ETIQUETA)) {
+    const v = c.etiquetas.includes(etiqueta) ? novo(`etiqueta:${etiqueta}`) : null;
+    if (v && r.vale(etapa, situ, a, tratamento) && !(r.respeitaSemFollowUp && semFollowUp)) {
+      saida.push({ regra: r.regra, modelo: r.modelo, chave: `${etiqueta}@${v.desde.toISOString()}`, kind: 'depois', alvo: v.desde });
+    }
+  }
+
+  // retorno de 60 dias depois da alta (no Kommo fica no funil Comercial, etapa RETORNO PÓS-TRATAMENTO)
+  const alta = lerData(a.data_alta);
+  if (alta && str(a.categoria_consulta) === 'Retorno após tratamento') {
+    saida.push({ regra: 'alta-retorno-60d', modelo: 'parau_alta_retorno_60d', chave: `alta@${alta.iso}`, kind: 'depois', alvo: emBelem(somarDias(alta, 60), 9) });
+  }
+
   if (tratamento) {
-    // 18: boas-vindas
-    const fechou = ehSim(a.fechou_tratamento) ? novo('fechou_tratamento', 'sim') : null;
-    if (fechou) saida.push({ regra: 'tratamento-boas-vindas', modelo: 'parau_tratamento_boas_vindas', chave: `fechou@${fechou.desde.toISOString()}`, kind: 'depois', alvo: fechou.desde });
-    // 19: primeira sessão (uma vez por proxima_sessao)
-    const sessao = momento(a.proxima_sessao, a.hora_sessao);
-    const realizadas = Number(a.sessoes_realizadas);
-    if (sessao && ehSim(a.fechou_tratamento) && str(a.categoria_consulta) === 'Sessão' && !(realizadas > 0)) {
-      const v = novo('proxima_sessao', sessao.chave);
-      if (v) saida.push({ regra: 'primeira-sessao', modelo: 'parau_tratamento_primeira_sessao', chave: `primeira@${sessao.chave}`, kind: 'depois', alvo: v.desde });
+    const entrou = (valor: string) => (etapaTratamento === valor ? novo('etapa_tratamento', valor) : null);
+    // alta: na hora e, sem avaliação no Google, 48 h depois
+    const naAlta = entrou('Alta');
+    if (naAlta) {
+      const chave = `alta@${naAlta.desde.toISOString()}`;
+      saida.push({ regra: 'alta-conclusao', modelo: 'parau_alta_conclusao', chave, kind: 'depois', alvo: naAlta.desde });
+      if (!ehSim(a.deixou_avaliacao_google)) saida.push({ regra: 'alta-nps', modelo: 'parau_alta_pesquisa_nps', chave, kind: 'depois', alvo: new Date(naAlta.desde.getTime() + 48 * HORA) });
     }
-    // 20–21: véspera e dia da sessão
-    if (sessao) saida.push(...lembretes(sessao, { vespera: ['sessao-vespera', 'parau_sessao_lembrete_vespera'], dia: ['sessao-dia', 'parau_sessao_confirmacao_dia'] }));
-    // 22: metade das sessões
-    const meio = aderenciaNoMeio(a) ? novo('aderencia_meio', 'sim') : null;
-    if (meio) saida.push({ regra: 'sessao-aderencia-meio', modelo: 'parau_sessao_aderencia_meio', chave: 'meio', kind: 'depois', alvo: meio.desde });
-    // 23–25: alta
-    const alta = lerData(a.data_alta);
-    if (alta) {
-      const v = novo('data_alta', alta.iso);
-      if (v) saida.push({ regra: 'alta-conclusao', modelo: 'parau_alta_conclusao', chave: `alta@${alta.iso}`, kind: 'depois', alvo: v.desde });
-      saida.push({ regra: 'alta-nps', modelo: 'parau_alta_pesquisa_nps', chave: `alta@${alta.iso}`, kind: 'depois', alvo: emBelem(somarDias(alta, 1), 10) });
-      saida.push({ regra: 'alta-retorno-60d', modelo: 'parau_alta_retorno_60d', chave: `alta@${alta.iso}`, kind: 'depois', alvo: emBelem(somarDias(alta, 60), 9) });
+    // cancelamento: acolhimento na hora; retorno marcado → véspera às 09:00
+    const cancelou = entrou('Tratamento cancelado');
+    if (cancelou) saida.push({ regra: 'cancelamento-acolhimento', modelo: 'parau_cancelamento_acolhimento', chave: `cancelou@${cancelou.desde.toISOString()}`, kind: 'depois', alvo: cancelou.desde });
+    const retorno = lerData(a.data_retorno);
+    if (retorno && etapaTratamento === 'Tratamento cancelado') {
+      saida.push({ regra: 'cancelamento-retorno', modelo: 'parau_cancelamento_retorno_confirmado', chave: `retorno@${retorno.iso}`, kind: 'antes', teto: emBelem(retorno, 8), alvo: emBelem(somarDias(retorno, -1), 9) });
     }
-    // 26–27: vencimento da parcela
-    const venc = lerData(a.vencimento);
-    if (venc) {
-      saida.push({ regra: 'vencimento-3d', modelo: 'parau_financeiro_vencimento_3d', chave: `venc@${venc.iso}`, kind: 'depois', alvo: emBelem(somarDias(venc, -3), 9) });
-      saida.push({ regra: 'vencimento-hoje', modelo: 'parau_financeiro_vencimento_hoje', chave: `venc@${venc.iso}`, kind: 'depois', alvo: emBelem(venc, 9) });
+    if (etapaTratamento === 'Em tratamento') {
+      // sessão: 3 h antes (precisa da hora)
+      const sessao = momento(a.proxima_sessao, a.hora_sessao);
+      if (sessao?.hora) {
+        const teto = instante(sessao, 0);
+        saida.push({ regra: 'sessao-dia', modelo: 'parau_sessao_confirmacao_dia', chave: sessao.chave, kind: 'antes', teto, alvo: new Date(teto.getTime() - 3 * HORA) });
+      }
+      // metade das sessões: chegou a etiqueta `aderencia-meio`
+      const meio = c.etiquetas.includes('aderencia-meio') ? novo('etiqueta:aderencia-meio') : null;
+      if (meio) saida.push({ regra: 'sessao-aderencia-meio', modelo: 'parau_sessao_aderencia_meio', chave: `meio@${meio.desde.toISOString()}`, kind: 'depois', alvo: meio.desde });
+      // faltou à sessão: «Compareceu à última sessão» passou a Não
+      const faltouSessao = str(a.compareceu_ultima_sessao) === 'Não' ? novo('compareceu_ultima_sessao', 'Não') : null;
+      if (faltouSessao) saida.push({ regra: 'sessao-falta', modelo: 'parau_sessao_falta', chave: `faltou-sessao@${faltouSessao.desde.toISOString()}`, kind: 'depois', alvo: faltouSessao.desde });
+      // exame pedido e já avisado: cobra o documento 120 h depois da consulta
+      if (consulta && str(a.motivo_nao_fechamento) === 'Solicitado exames' && c.etiquetas.includes('pendencia-exame-avisado')) {
+        saida.push({ regra: 'pendencia-documento', modelo: 'parau_pendencia_documento', chave: consulta.chave, kind: 'depois', alvo: new Date(instante(consulta, HORA_PADRAO_DEPOIS).getTime() + 120 * HORA) });
+      }
     }
   }
   return saida;
@@ -515,6 +589,10 @@ export function decidirRegua(c: ConversaRegua, memoria: Memoria, agora: Date, un
       continue;
     }
     if (!aberta) continue;
+    if (k.interna) {
+      disparos.push({ regra: k.regra, chave: k.chave, modelo: k.modelo, texto: DESCRICAO_INTERNA[k.interna], faltando: [], alvo: k.alvo, interna: k.interna });
+      continue;
+    }
     const r = renderizar(k.modelo, c, unidade);
     if (r.faltando.length && memoria.feitos.has(`${k.regra}${SUFIXO_FALTA}|${k.chave}`)) continue;
     disparos.push({ regra: k.regra, chave: k.chave, modelo: k.modelo, texto: r.texto, faltando: r.faltando, alvo: k.alvo });
@@ -524,9 +602,31 @@ export function decidirRegua(c: ConversaRegua, memoria: Memoria, agora: Date, un
 
 /** A nota privada que o modo seco deixa na conversa. */
 export function notaDoSeco(d: Disparo): string {
+  if (d.interna) return `🧪 [SECO] Régua «${d.regra}» — faria agora: ${d.texto ?? DESCRICAO_INTERNA[d.interna]}`;
   return d.texto === null
     ? `🧪 [SECO] Régua «${d.regra}» — NÃO enviaria agora, falta: ${d.faltando.join('; ')}.`
     : `🧪 [SECO] Régua «${d.regra}» — enviaria agora:\n\n${d.texto}`;
+}
+
+/**
+ * As regras internas da qualificação medem "parado desde a última mensagem". A listagem traz a última mensagem que não é
+ * atividade — que pode ser uma NOTA (inclusive as do seco). Nesse caso o worker busca a última pública desta conversa.
+ */
+export function precisaUltimaPublica(c: ConversaRegua): boolean {
+  return ETAPAS_DE_QUALIFICACAO.has(str(c.attrs.etapa)) && !!c.ultima?.privada;
+}
+
+/** Converte uma mensagem crua do Chatwoot (listagem ou /messages). null = atividade/modelo ou inválida. */
+export function resumoDaMensagem(m: any): MensagemResumo | null {
+  const tipo = Number(m?.message_type);
+  if (!m || ![0, 1, 3].includes(tipo)) return null;
+  return {
+    saida: tipo === 1 || tipo === 3,
+    privada: m.private === true,
+    autorId: Number.isInteger(Number(m?.sender?.id)) && m?.sender?.id !== null ? Number(m.sender.id) : null,
+    autorTipo: typeof m?.sender?.type === 'string' ? m.sender.type.toLowerCase() : null,
+    criadaEm: new Date(Number(m.created_at) * 1000 || 0),
+  };
 }
 
 /** Regra 28: a etiqueta `respondeu-pelo-celular`. 'por' | 'tirar' | null (nada a fazer). */
@@ -551,18 +651,7 @@ export function conversaDoChatwoot(raw: any): ConversaRegua | null {
   const adicionais = raw?.additional_attributes ?? {};
   if (/@g\.us$/i.test(identificador) || str(adicionais.type).toLowerCase() === 'group' || adicionais.group === true) return null;
   if (str(sender.phone_number) === TELEFONE_BOT_EVOLUTION) return null;
-  const m = raw?.last_non_activity_message;
-  const tipo = Number(m?.message_type);
-  const ultima: MensagemResumo | null =
-    m && [0, 1, 3].includes(tipo)
-      ? {
-          saida: tipo === 1 || tipo === 3,
-          privada: m.private === true,
-          autorId: Number.isInteger(Number(m?.sender?.id)) && m?.sender?.id !== null ? Number(m.sender.id) : null,
-          autorTipo: typeof m?.sender?.type === 'string' ? m.sender.type.toLowerCase() : null,
-          criadaEm: new Date(Number(m.created_at) * 1000 || 0),
-        }
-      : null;
+  const ultima = resumoDaMensagem(raw?.last_non_activity_message);
   return {
     id,
     nome: str(sender.name),

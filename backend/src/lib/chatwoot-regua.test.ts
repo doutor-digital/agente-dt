@@ -231,42 +231,42 @@ test('falta-mesmo-dia: ao ver «Não compareceu» no dia da consulta', () => {
   assert.deepEqual(regras(rodar(conv({ attrs }), '2026-11-18T13:00:00Z', { situacao_consulta: visto('Não compareceu', '2026-11-18T13:00:00Z') })), []);
 });
 
-test('falta-48h: 48 h depois da consulta, sem-follow-up segura', () => {
-  const attrs = { situacao_consulta: 'Não compareceu', data_consulta: '2026-11-17', hora_consulta: '14:30' };
+test('falta-48h: 48 h depois da consulta, só nas etapas da consulta; sem-follow-up segura', () => {
+  const attrs = { etapa: 'Agendado', situacao_consulta: 'Não compareceu', data_consulta: '2026-11-17', hora_consulta: '14:30' };
   assert.deepEqual(regras(rodar(conv({ attrs }), '2026-11-19T17:29:00Z')), []);
   assert.deepEqual(regras(rodar(conv({ attrs }), '2026-11-19T17:30:00Z')), ['falta-48h']);
+  assert.deepEqual(regras(rodar(conv({ attrs: { ...attrs, etapa: 'Fechou' } }), '2026-11-19T17:30:00Z')), ['falta-48h']);
+  assert.deepEqual(regras(rodar(conv({ attrs: { ...attrs, etapa: 'Perdido' } }), '2026-11-19T17:30:00Z')), []);
   assert.deepEqual(regras(rodar(conv({ attrs, etiquetas: ['sem-follow-up'] }), '2026-11-19T17:30:00Z')), []);
   assert.deepEqual(regras(rodar(conv({ attrs }), '2026-11-19T17:30:00Z', {}, ['falta-48h|2026-11-17T14:30'])), []);
 });
 
-// ── 11–14: depois do atendimento ───────────────────────────────────────────────────────────────────
+test('véspera em «Fechou» usa o texto de véspera da SESSÃO (igual ao Kommo em GANHO)', () => {
+  const r = rodar(conv({ attrs: { ...CONSULTA, etapa: 'Fechou' } }), '2026-11-16T17:30:00Z');
+  assert.deepEqual(regras(r), ['consulta-vespera']);
+  assert.equal(r.disparos[0]!.modelo, 'parau_sessao_lembrete_vespera');
+  assert.match(r.disparos[0]!.texto!, /A sua sessão é amanhã/);
+});
+
+// ── depois do atendimento ──────────────────────────────────────────────────────────────────────────
 
 const ATENDIDO = { etapa: 'Compareceu', situacao_consulta: 'Atendido', data_consulta: '2026-11-17', hora_consulta: '14:30' };
 
-test('pós-atendimento 24 h; decisão 4, 7 e 30 dias DEPOIS da consulta', () => {
+test('pós-atendimento 24 h (só Compareceu); decisão 4 e 7 dias (Compareceu/Pós-consulta); 30 dias (Pós-consulta/Perdido)', () => {
   const c = conv({ attrs: ATENDIDO });
   assert.deepEqual(regras(rodar(c, '2026-11-18T17:29:00Z')), []);
   assert.deepEqual(regras(rodar(c, '2026-11-18T17:30:00Z')), ['pos-atendimento']);
   assert.deepEqual(regras(rodar(c, '2026-11-21T17:30:00Z')), ['decisao-4d']);
   assert.deepEqual(regras(rodar(c, '2026-11-24T17:30:00Z')), ['decisao-7d']);
-  assert.deepEqual(regras(rodar(c, '2026-12-17T17:30:00Z')), ['decisao-30d']);
+  assert.deepEqual(regras(rodar(c, '2026-12-17T17:30:00Z')), []);
+  assert.deepEqual(regras(rodar(conv({ attrs: { ...ATENDIDO, etapa: 'Pós-consulta' } }), '2026-12-17T17:30:00Z')), ['decisao-30d']);
+  assert.deepEqual(regras(rodar(conv({ attrs: { ...ATENDIDO, etapa: 'Perdido' } }), '2026-12-17T17:30:00Z')), ['decisao-30d']);
+  assert.deepEqual(regras(rodar(conv({ attrs: { ...ATENDIDO, etapa: 'Pós-consulta' } }), '2026-11-18T17:30:00Z')), []);
   assert.deepEqual(regras(rodar(c, '2026-11-21T16:30:00Z')), []);
   assert.match(rodar(c, '2026-11-21T17:30:00Z').disparos[0]!.texto!, /Vamos agendar seu retorno\?/);
 });
 
-test('decisão: etapa Pós-consulta vale; sem-follow-up segura as decisões mas não o pós-atendimento; outra situação não vale', () => {
-  assert.deepEqual(regras(rodar(conv({ attrs: { ...ATENDIDO, etapa: 'Pós-consulta' } }), '2026-11-21T17:30:00Z')), ['decisao-4d']);
-  assert.deepEqual(regras(rodar(conv({ attrs: ATENDIDO, etiquetas: ['sem-follow-up'] }), '2026-11-21T17:30:00Z')), []);
-  assert.deepEqual(regras(rodar(conv({ attrs: ATENDIDO, etiquetas: ['sem-follow-up'] }), '2026-11-18T17:30:00Z')), ['pos-atendimento']);
-  assert.deepEqual(regras(rodar(conv({ attrs: { ...ATENDIDO, situacao_consulta: 'Agendado' } }), '2026-11-18T17:30:00Z')), []);
-  assert.deepEqual(regras(rodar(conv({ attrs: { ...ATENDIDO, etapa: 'Agendado' } }), '2026-11-18T17:30:00Z')), []);
-  // consulta sem hora conta como meio-dia
-  assert.deepEqual(regras(rodar(conv({ attrs: { ...ATENDIDO, hora_consulta: '' } }), '2026-11-18T15:00:00Z')), ['pos-atendimento']);
-});
-
-// ── 15–17: espera e SDR ────────────────────────────────────────────────────────────────────────────
-
-test('espera-retomar: no dia 09:00 pelo motivo; retomada 2 três dias depois às 18:00', () => {
+test('espera-retomar: no dia 09:00 pelo motivo; retomada 2 com 81 h (D+3 09:00)', () => {
   const attrs = { retomar_em: '2026-11-18', motivo_espera: 'Exames' };
   const c = conv({ attrs });
   assert.deepEqual(regras(rodar(c, '2026-11-18T11:59:00Z')), []);
@@ -281,139 +281,156 @@ test('espera-retomar: no dia 09:00 pelo motivo; retomada 2 três dias depois às
     assert.match(rodar(conv({ attrs: { ...attrs, motivo_espera: motivo } }), '2026-11-18T12:00:00Z').disparos[0]!.texto!, trecho);
   }
   assert.deepEqual(regras(rodar(conv({ attrs: { ...attrs, motivo_espera: 'Outro' } }), '2026-11-18T12:00:00Z')), []);
-  assert.deepEqual(regras(rodar(conv({ attrs: { retomar_em: '2026-11-18' } }), '2026-11-18T12:00:00Z')), []);
   assert.deepEqual(regras(rodar(c, '2026-11-18T12:00:00Z', {}, ['espera-retomar|retomar@2026-11-18'])), []);
-  assert.deepEqual(regras(rodar(c, '2026-11-21T20:59:00Z')), []);
-  assert.deepEqual(regras(rodar(c, '2026-11-21T21:00:00Z')), ['espera-retomada2']); // sábado 18:00
+  assert.deepEqual(regras(rodar(c, '2026-11-21T11:59:00Z')), []);
+  assert.deepEqual(regras(rodar(c, '2026-11-21T12:00:00Z')), ['espera-retomada2']); // sábado 09:00
   assert.deepEqual(regras(rodar(conv({ attrs, etiquetas: ['sem-follow-up'] }), '2026-11-18T12:00:00Z')), []);
 });
 
-test('espera-retomada2: quem respondeu depois da 1ª retomada não recebe a 2ª', () => {
-  const respondeu: MensagemResumo = { saida: false, privada: false, autorId: 5, autorTipo: 'contact', criadaEm: Z('2026-11-19T14:00:00Z') };
-  const attrs = { retomar_em: '2026-11-18', motivo_espera: 'Exames' };
-  assert.deepEqual(regras(rodar(conv({ attrs, ultima: respondeu }), '2026-11-21T21:00:00Z')), []);
-  const antes: MensagemResumo = { ...respondeu, criadaEm: Z('2026-11-10T14:00:00Z') };
-  assert.deepEqual(regras(rodar(conv({ attrs, ultima: antes }), '2026-11-21T21:00:00Z')), ['espera-retomada2']);
-});
+const QUALIFICA = { etapa: 'Sofia qualifica' };
 
-test('SDR por etiqueta: ao ver a etiqueta nova; o nome de quem atende vem do assignee', () => {
+test('SDR por etiqueta: ao ver a etiqueta nova, só nas etapas do gatilho; o nome de quem atende vem do assignee', () => {
   const v = { 'etiqueta:retomada': visto('sim', T0) };
-  const r = rodar(conv({ etiquetas: ['retomada'], atendente: 'Ana' }), T0, v);
+  const r = rodar(conv({ attrs: QUALIFICA, etiquetas: ['retomada'], atendente: 'Ana' }), T0, v);
   assert.deepEqual(regras(r), ['sdr-retomada']);
   assert.match(r.disparos[0]!.texto!, /^Oi, Maria! Aqui é Ana, da Doutor Hérnia\./);
-  const sem = rodar(conv({ etiquetas: ['retomada'], atendente: null }), T0, v);
+  const sem = rodar(conv({ attrs: QUALIFICA, etiquetas: ['retomada'], atendente: null }), T0, v);
   assert.equal(sem.disparos[0]!.texto, null);
   assert.deepEqual(sem.disparos[0]!.faltando, ['atendente atribuído à conversa']);
-  assert.deepEqual(regras(rodar(conv({ etiquetas: ['retomada'] }), T0, { 'etiqueta:retomada': visto('sim', T0, true) })), []);
-  assert.deepEqual(regras(rodar(conv({ etiquetas: ['retomada', 'sem-follow-up'] }), T0, v)), []);
-  assert.deepEqual(regras(rodar(conv({ etiquetas: [] }), T0, v)), []);
-  // reativação também é «follow-up»
-  assert.deepEqual(regras(rodar(conv({ etiquetas: ['reativacao', 'sem-follow-up'] }), T0, { 'etiqueta:reativacao': visto('sim', T0) })), []);
+  assert.deepEqual(regras(rodar(conv({ attrs: QUALIFICA, etiquetas: ['retomada'] }), T0, { 'etiqueta:retomada': visto('sim', T0, true) })), []);
+  assert.deepEqual(regras(rodar(conv({ attrs: QUALIFICA, etiquetas: ['retomada', 'sem-follow-up'] }), T0, v)), []);
+  assert.deepEqual(regras(rodar(conv({ attrs: QUALIFICA, etiquetas: [] }), T0, v)), []);
+  // fora das etapas do gatilho
+  assert.deepEqual(regras(rodar(conv({ attrs: { etapa: 'Compareceu' }, etiquetas: ['retomada'] }), T0, v)), []);
+  // «Não compareceu» vale para retomada e reativação
+  assert.deepEqual(regras(rodar(conv({ attrs: { etapa: 'Agendado', situacao_consulta: 'Não compareceu' }, etiquetas: ['reativacao'] }), T0, { 'etiqueta:reativacao': visto('sim', T0) })), ['sdr-reativacao']);
+  assert.deepEqual(regras(rodar(conv({ attrs: QUALIFICA, etiquetas: ['reativacao', 'sem-follow-up'] }), T0, { 'etiqueta:reativacao': visto('sim', T0) })), []);
 });
 
-test('SDR: confirmar-retorno usa a próxima sessão (ou a consulta); boas-vindas pede o programa', () => {
+test('SDR: confirmar-retorno (retorno pós-tratamento ou funil Tratamento) e boas-vindas (Compareceu/Pós-consulta/Fechou ou Tratamento)', () => {
   const v = { 'etiqueta:confirmar-retorno': visto('sim', T0) };
-  const a = rodar(conv({ etiquetas: ['confirmar-retorno'], attrs: { proxima_sessao: '2026-11-20', hora_sessao: '10:00' } }), T0, v);
+  const RET = { categoria_consulta: 'Retorno após tratamento' };
+  const a = rodar(conv({ etiquetas: ['confirmar-retorno'], attrs: { ...RET, proxima_sessao: '2026-11-20', hora_sessao: '10:00' } }), T0, v);
   assert.match(a.disparos[0]!.texto!, /retorno está agendado para 20\/11 às 10:00, na unidade Parauapebas/);
-  const b = rodar(conv({ etiquetas: ['confirmar-retorno'], attrs: { data_consulta: '2026-11-19', hora_consulta: '09:00' } }), T0, v);
+  const b = rodar(conv({ etiquetas: ['confirmar-retorno'], attrs: { ...RET, data_consulta: '2026-11-19', hora_consulta: '09:00' } }), T0, v);
   assert.match(b.disparos[0]!.texto!, /agendado para 19\/11 às 09:00/);
-  const c = rodar(conv({ etiquetas: ['boas-vindas'], attrs: { proxima_sessao: '2026-11-20' } }), T0, { 'etiqueta:boas-vindas': visto('sim', T0) });
+  assert.deepEqual(regras(rodar(conv({ etiquetas: ['confirmar-retorno'], attrs: QUALIFICA }), T0, v)), []);
+  assert.deepEqual(regras(rodar(conv({ etiquetas: ['confirmar-retorno'], attrs: { funil: 'Tratamento', etapa_tratamento: 'Em tratamento', proxima_sessao: '2026-11-20' } }), T0, v)), ['sdr-confirmar-retorno']);
+  const vb = { 'etiqueta:boas-vindas': visto('sim', T0) };
+  const c = rodar(conv({ etiquetas: ['boas-vindas'], attrs: { etapa: 'Compareceu', proxima_sessao: '2026-11-20' } }), T0, vb);
   assert.equal(c.disparos[0]!.texto, null);
   assert.match(c.disparos[0]!.faltando.join(), /programa/);
-  const d = rodar(conv({ etiquetas: ['boas-vindas'], attrs: { proxima_sessao: '2026-11-20', programa: 'Coluna Forte' } }), T0, { 'etiqueta:boas-vindas': visto('sim', T0) });
-  assert.match(d.disparos[0]!.texto!, /programa Coluna Forte está confirmada/);
+  const d = rodar(conv({ etiquetas: ['boas-vindas'], attrs: { etapa: 'Fechou', proxima_sessao: '2026-11-20', programa: 'Coluna Forte' } }), T0, vb);
+  assert.match(d.disparos.find((x) => x.regra === 'sdr-boas-vindas')!.texto!, /programa Coluna Forte está confirmada/);
+  assert.deepEqual(regras(rodar(conv({ etiquetas: ['boas-vindas'], attrs: QUALIFICA }), T0, vb)), []);
 });
 
-// ── tratamento ─────────────────────────────────────────────────────────────────────────────────────
+// ── tratamento (atributo etapa_tratamento) ─────────────────────────────────────────────────────────
 
-const TRAT = { funil: 'Tratamento', fechou_tratamento: true };
+const TRAT = { funil: 'Tratamento', etapa_tratamento: 'Em tratamento' };
 
-test('tratamento: regra de tratamento não vale para quem está no comercial, e a comercial não vale para quem trata', () => {
-  const alta = { data_alta: '2026-11-10' };
-  assert.deepEqual(regras(rodar(conv({ attrs: alta }), '2026-11-11T13:00:00Z')), []);
+test('tratamento: a régua comercial não vale para quem trata; retorno 60 dias vale pela categoria', () => {
   assert.deepEqual(regras(rodar(conv({ attrs: { ...ATENDIDO, ...TRAT } }), '2026-11-18T17:30:00Z')), []);
-});
-
-test('tratamento-boas-vindas: quando fechou_tratamento passa a true', () => {
-  const v = { fechou_tratamento: visto('sim', T0) };
-  assert.deepEqual(regras(rodar(conv({ attrs: TRAT }), T0, v)), ['tratamento-boas-vindas']);
-  assert.deepEqual(regras(rodar(conv({ attrs: TRAT }), T0, { fechou_tratamento: visto('sim', T0, true) })), []);
-  assert.deepEqual(regras(rodar(conv({ attrs: TRAT }), T0, v, ['tratamento-boas-vindas|fechou@2026-11-16T12:00:00.000Z'])), []);
-  assert.match(rodar(conv({ attrs: TRAT }), T0, v).disparos[0]!.texto!, /^Olá, Maria\. Seja bem-vindo\(a\) ao seu tratamento/);
-});
-
-test('primeira-sessao: categoria Sessão, nenhuma realizada, uma vez por proxima_sessao', () => {
-  const attrs = { ...TRAT, categoria_consulta: 'Sessão', proxima_sessao: '2026-11-20', hora_sessao: '10:00' };
-  const v = { proxima_sessao: visto('2026-11-20T10:00', T0) };
-  const r = rodar(conv({ attrs }), T0, v);
-  assert.ok(regras(r).includes('primeira-sessao'));
-  assert.match(r.disparos.find((d) => d.regra === 'primeira-sessao')!.texto!, /Data e horário: 20\/11 às 10:00\nUnidade: Doutor Hérnia Parauapebas\nChegue 10 minutos antes/);
-  assert.ok(!regras(rodar(conv({ attrs: { ...attrs, sessoes_realizadas: 2 } }), T0, v)).includes('primeira-sessao'));
-  assert.ok(!regras(rodar(conv({ attrs: { ...attrs, categoria_consulta: 'Avaliação' } }), T0, v)).includes('primeira-sessao'));
-  assert.ok(!regras(rodar(conv({ attrs }), T0, v, ['primeira-sessao|primeira@2026-11-20T10:00'])).includes('primeira-sessao'));
-  // remarcou a sessão: outra chave
-  const remarcada = { ...attrs, proxima_sessao: '2026-11-21' };
-  assert.ok(regras(rodar(conv({ attrs: remarcada }), T0, { proxima_sessao: visto('2026-11-21T10:00', T0) }, ['primeira-sessao|primeira@2026-11-20T10:00'])).includes('primeira-sessao'));
-  assert.ok(!regras(rodar(conv({ attrs }), T0, { proxima_sessao: visto('2026-11-20T10:00', T0, true) })).includes('primeira-sessao'));
-});
-
-test('sessão: véspera 24 h, dia 3 h antes; dia precisa de hora', () => {
-  const attrs = { ...TRAT, proxima_sessao: '2026-11-20', hora_sessao: '10:00' };
-  const c = conv({ attrs });
-  assert.deepEqual(regras(rodar(c, '2026-11-19T12:59:00Z')), []);
-  assert.deepEqual(regras(rodar(c, '2026-11-19T13:00:00Z')), ['sessao-vespera']);
-  assert.match(rodar(c, '2026-11-19T13:00:00Z').disparos[0]!.texto!, /A sua sessão é amanhã\.\nData e horário: 20\/11 às 10:00/);
-  assert.deepEqual(regras(rodar(c, '2026-11-20T10:00:00Z', {}, ['sessao-vespera|2026-11-20T10:00'])), []); // 07:00 de Belém: fechado
-  assert.deepEqual(regras(rodar(c, '2026-11-20T11:00:00Z', {}, ['sessao-vespera|2026-11-20T10:00'])), ['sessao-dia']);
-  const semHora = conv({ attrs: { ...TRAT, proxima_sessao: '2026-11-20' } });
-  assert.deepEqual(regras(rodar(semHora, '2026-11-19T12:00:00Z')), ['sessao-vespera']);
-  assert.deepEqual(regras(rodar(semHora, '2026-11-20T11:00:00Z', {}, ['sessao-vespera|2026-11-20'])), []);
-});
-
-test('aderência no meio: uma vez, quando passa de metade (previstas ≥ 2)', () => {
-  const attrs = { ...TRAT, sessoes_previstas: 10, sessoes_realizadas: 5 };
-  const v = { aderencia_meio: visto('sim', T0) };
-  assert.deepEqual(regras(rodar(conv({ attrs }), T0, v)), ['sessao-aderencia-meio']);
-  assert.deepEqual(regras(rodar(conv({ attrs }), T0, v, ['sessao-aderencia-meio|meio'])), []);
-  assert.deepEqual(regras(rodar(conv({ attrs: { ...attrs, sessoes_realizadas: 4 } }), T0, v)), []);
-  assert.deepEqual(regras(rodar(conv({ attrs: { ...attrs, sessoes_previstas: 1, sessoes_realizadas: 1 } }), T0, v)), []);
-  assert.deepEqual(regras(rodar(conv({ attrs }), T0, { aderencia_meio: visto('sim', T0, true) })), []);
-});
-
-test('alta: conclusão ao ver; NPS no dia seguinte 10:00; retorno 60 dias 09:00', () => {
-  const attrs = { ...TRAT, data_alta: '2026-11-16' };
-  const v = { data_alta: visto('2026-11-16', T0) };
-  assert.deepEqual(regras(rodar(conv({ attrs }), T0, v)), ['alta-conclusao']);
-  assert.deepEqual(regras(rodar(conv({ attrs }), T0, { data_alta: visto('2026-11-16', T0, true) })), []);
-  assert.deepEqual(regras(rodar(conv({ attrs }), '2026-11-17T12:59:00Z', {}, ['alta-conclusao|alta@2026-11-16'])), []);
-  assert.deepEqual(regras(rodar(conv({ attrs }), '2026-11-17T13:00:00Z', {}, ['alta-conclusao|alta@2026-11-16'])), ['alta-nps']);
+  const alta = { categoria_consulta: 'Retorno após tratamento', data_alta: '2026-11-16' };
   // 60 dias depois de 16/11 = 15/01/2027 (sexta), 09:00 Belém
-  assert.deepEqual(regras(rodar(conv({ attrs }), '2027-01-15T11:59:00Z')), []);
-  assert.deepEqual(regras(rodar(conv({ attrs }), '2027-01-15T12:00:00Z')), ['alta-retorno-60d']);
-  assert.deepEqual(regras(rodar(conv({ attrs }), '2027-01-15T12:00:00Z', {}, ['alta-retorno-60d|alta@2026-11-16'])), []);
+  assert.deepEqual(regras(rodar(conv({ attrs: alta }), '2027-01-15T11:59:00Z')), []);
+  assert.deepEqual(regras(rodar(conv({ attrs: alta }), '2027-01-15T12:00:00Z')), ['alta-retorno-60d']);
+  assert.deepEqual(regras(rodar(conv({ attrs: alta }), '2027-01-15T12:00:00Z', {}, ['alta-retorno-60d|alta@2026-11-16'])), []);
+  assert.deepEqual(regras(rodar(conv({ attrs: { data_alta: '2026-11-16' } }), '2027-01-15T12:00:00Z')), []);
 });
 
-test('vencimento: 3 dias antes e no dia, 09:00; precisa do valor e da chave Pix', () => {
-  const attrs = { ...TRAT, vencimento: '2026-11-20', valor_parcela: 450 };
-  assert.deepEqual(regras(rodar(conv({ attrs }), '2026-11-17T11:59:00Z')), []);
-  const t3 = rodar(conv({ attrs }), '2026-11-17T12:00:00Z');
-  assert.deepEqual(regras(t3), ['vencimento-3d']);
-  assert.match(t3.disparos[0]!.texto!, /vence em 20\/11\.\nValor: R\$ 450\nPagamento: pix@parau\.com/);
-  assert.deepEqual(regras(rodar(conv({ attrs }), '2026-11-20T12:00:00Z')), ['vencimento-hoje']);
-  assert.deepEqual(regras(rodar(conv({ attrs }), '2026-11-20T12:00:00Z', {}, ['vencimento-hoje|venc@2026-11-20'])), []);
-  const semValor = rodar(conv({ attrs: { ...attrs, valor_parcela: null } }), '2026-11-17T12:00:00Z');
-  assert.equal(semValor.disparos[0]!.texto, null);
-  assert.deepEqual(semValor.disparos[0]!.faltando, ['valor da parcela (valor_parcela)']);
-  const semPix = rodar(conv({ attrs }), '2026-11-17T12:00:00Z', {}, [], { ...U, pixKey: null });
-  assert.match(semPix.disparos[0]!.faltando[0]!, /chave Pix/);
+test('sessão: 3 h antes da próxima sessão, só «Em tratamento» e com hora', () => {
+  const attrs = { ...TRAT, proxima_sessao: '2026-11-20', hora_sessao: '14:00' };
+  assert.deepEqual(regras(rodar(conv({ attrs }), '2026-11-20T13:59:00Z')), []);
+  const r = rodar(conv({ attrs }), '2026-11-20T14:00:00Z');
+  assert.deepEqual(regras(r), ['sessao-dia']);
+  assert.match(r.disparos[0]!.texto!, /20\/11 às 14:00/);
+  assert.deepEqual(regras(rodar(conv({ attrs: { ...attrs, hora_sessao: '' } }), '2026-11-20T14:00:00Z')), []);
+  assert.deepEqual(regras(rodar(conv({ attrs: { ...attrs, etapa_tratamento: 'Alta' } }), '2026-11-20T14:00:00Z')), []);
+});
+
+test('aderência no meio (chegou a etiqueta) e falta na sessão (passou a Não): uma vez', () => {
+  const vm = { 'etiqueta:aderencia-meio': visto('sim', T0) };
+  assert.deepEqual(regras(rodar(conv({ attrs: TRAT, etiquetas: ['aderencia-meio'] }), T0, vm)), ['sessao-aderencia-meio']);
+  assert.deepEqual(regras(rodar(conv({ attrs: TRAT, etiquetas: ['aderencia-meio'] }), T0, vm, ['sessao-aderencia-meio|meio@2026-11-16T12:00:00.000Z'])), []);
+  assert.deepEqual(regras(rodar(conv({ attrs: TRAT, etiquetas: ['aderencia-meio'] }), T0, { 'etiqueta:aderencia-meio': visto('sim', T0, true) })), []);
+  const falta = { ...TRAT, compareceu_ultima_sessao: 'Não' };
+  const r = rodar(conv({ attrs: falta }), T0, { compareceu_ultima_sessao: visto('Não', T0) });
+  assert.deepEqual(regras(r), ['sessao-falta']);
+  assert.match(r.disparos[0]!.texto!, /^Olá, Maria\./);
+  assert.deepEqual(regras(rodar(conv({ attrs: { ...TRAT, compareceu_ultima_sessao: 'Sim' } }), T0, { compareceu_ultima_sessao: visto('Sim', T0) })), []);
+});
+
+test('pendência de documento: exame pedido e avisado, 120 h depois da consulta', () => {
+  const attrs = { ...TRAT, motivo_nao_fechamento: 'Solicitado exames', data_consulta: '2026-11-11', hora_consulta: '14:30' };
+  // 11/11 14:30 Belém + 120 h = 16/11 17:30 UTC (segunda)
+  assert.deepEqual(regras(rodar(conv({ attrs, etiquetas: ['pendencia-exame-avisado'] }), '2026-11-16T17:29:00Z')), []);
+  assert.deepEqual(regras(rodar(conv({ attrs, etiquetas: ['pendencia-exame-avisado'] }), '2026-11-16T17:30:00Z')), ['pendencia-documento']);
+  assert.deepEqual(regras(rodar(conv({ attrs }), '2026-11-16T17:30:00Z')), []);
+});
+
+test('alta: conclusão ao entrar em Alta; NPS 48 h depois, só sem avaliação no Google', () => {
+  const attrs = { funil: 'Tratamento', etapa_tratamento: 'Alta' };
+  const v = { etapa_tratamento: visto('Alta', T0) };
+  const chave = 'alta@2026-11-16T12:00:00.000Z';
+  assert.deepEqual(regras(rodar(conv({ attrs }), T0, v)), ['alta-conclusao']);
+  assert.deepEqual(regras(rodar(conv({ attrs }), T0, { etapa_tratamento: visto('Alta', T0, true) })), []);
+  assert.deepEqual(regras(rodar(conv({ attrs }), '2026-11-18T11:59:00Z', v, [`alta-conclusao|${chave}`])), []);
+  assert.deepEqual(regras(rodar(conv({ attrs }), '2026-11-18T12:00:00Z', v, [`alta-conclusao|${chave}`])), ['alta-nps']);
+  assert.deepEqual(regras(rodar(conv({ attrs: { ...attrs, deixou_avaliacao_google: true } }), '2026-11-18T12:00:00Z', v, [`alta-conclusao|${chave}`])), []);
+});
+
+test('cancelamento: acolhimento ao entrar; retorno marcado → véspera 09:00 com a data', () => {
+  const attrs = { funil: 'Tratamento', etapa_tratamento: 'Tratamento cancelado' };
+  const v = { etapa_tratamento: visto('Tratamento cancelado', T0) };
+  assert.deepEqual(regras(rodar(conv({ attrs }), T0, v)), ['cancelamento-acolhimento']);
+  const comRetorno = { ...attrs, data_retorno: '2026-11-20' };
+  const feito = ['cancelamento-acolhimento|cancelou@2026-11-16T12:00:00.000Z'];
+  assert.deepEqual(regras(rodar(conv({ attrs: comRetorno }), '2026-11-19T11:59:00Z', v, feito)), []);
+  const r = rodar(conv({ attrs: comRetorno }), '2026-11-19T12:00:00Z', v, feito);
+  assert.deepEqual(regras(r), ['cancelamento-retorno']);
+  assert.match(r.disparos[0]!.texto!, /20\/11/);
 });
 
 test('campo faltando: depois da nota do seco (regra!falta) não repete, e a mensagem de verdade continua possível', () => {
-  const attrs = { ...TRAT, vencimento: '2026-11-20' };
-  const feitos = [`vencimento-3d${SUFIXO_FALTA}|venc@2026-11-20`];
-  assert.deepEqual(regras(rodar(conv({ attrs }), '2026-11-17T12:00:00Z', {}, feitos)), []);
-  // preencheu o valor depois: a nota de "falta" não atrapalha
-  assert.deepEqual(regras(rodar(conv({ attrs: { ...attrs, valor_parcela: 300 } }), '2026-11-17T13:00:00Z', {}, feitos)), ['vencimento-3d']);
+  const v = { 'etiqueta:retomada': visto('sim', T0) };
+  const feitos = [`sdr-retomada${SUFIXO_FALTA}|retomada@2026-11-16T12:00:00.000Z`];
+  assert.deepEqual(regras(rodar(conv({ attrs: QUALIFICA, etiquetas: ['retomada'], atendente: null }), T0, v, feitos)), []);
+  // atribuíram a conversa depois: a nota de "falta" não atrapalha
+  assert.deepEqual(regras(rodar(conv({ attrs: QUALIFICA, etiquetas: ['retomada'], atendente: 'Ana' }), T0, v, feitos)), ['sdr-retomada']);
+});
+
+// ── internas ───────────────────────────────────────────────────────────────────────────────────────
+
+test('internas: quente parado 3 h; sem resposta 24 h (última é nossa); nota privada não conta como conversa', () => {
+  const doPaciente: MensagemResumo = { saida: false, privada: false, autorId: 9, autorTipo: 'contact', criadaEm: Z(T0) };
+  const quente = conv({ attrs: { etapa: 'Esperando humano', qualificacao: 'Quente' }, ultima: doPaciente });
+  assert.deepEqual(regras(rodar(quente, '2026-11-16T14:59:00Z')), []);
+  const q = rodar(quente, '2026-11-16T15:00:00Z');
+  assert.deepEqual(regras(q), ['lead-quente-parado']);
+  assert.equal(q.disparos[0]!.interna, 'quente-parado');
+  assert.match(q.disparos[0]!.texto!, /Lead QUENTE parado há 3 h/);
+  assert.deepEqual(regras(rodar(conv({ attrs: { etapa: 'Agendado', qualificacao: 'Quente' }, ultima: doPaciente }), '2026-11-16T15:00:00Z')), []);
+
+  const nossa: MensagemResumo = { saida: true, privada: false, autorId: 2, autorTipo: 'user', criadaEm: Z(T0) };
+  const calado = conv({ attrs: QUALIFICA, ultima: nossa });
+  assert.deepEqual(regras(rodar(calado, '2026-11-17T11:59:00Z')), []);
+  const s = rodar(calado, '2026-11-17T12:00:00Z');
+  assert.deepEqual(regras(s), ['sem-resposta-24h']);
+  assert.ok(notaDoSeco(s.disparos[0]!).startsWith('🧪 [SECO] Régua «sem-resposta-24h» — faria agora: Paciente sem responder há 24 h'));
+  // paciente falou por último: não é "sem resposta"
+  assert.deepEqual(regras(rodar(conv({ attrs: QUALIFICA, ultima: doPaciente }), '2026-11-17T12:00:00Z')), []);
+  // última é nota: não sabe quem falou por último → não dispara sem resposta
+  assert.deepEqual(regras(rodar(conv({ attrs: QUALIFICA, ultima: { ...nossa, privada: true } }), '2026-11-17T12:00:00Z')), []);
+});
+
+test('interna: entrou em «Fechou» sem «Fechou tratamento» → pendência', () => {
+  const v = { etapa: visto('Fechou', T0) };
+  const r = rodar(conv({ attrs: { etapa: 'Fechou' } }), T0, v);
+  assert.deepEqual(regras(r), ['pendencia-fechou']);
+  assert.equal(r.disparos[0]!.interna, 'pendencia-fechou');
+  assert.deepEqual(regras(rodar(conv({ attrs: { etapa: 'Fechou', fechou_tratamento: true } }), T0, v)), []);
+  assert.deepEqual(regras(rodar(conv({ attrs: { etapa: 'Fechou' } }), T0, { etapa: visto('Fechou', T0, true) })), []);
 });
 
 // ── nota do seco ───────────────────────────────────────────────────────────────────────────────────
@@ -433,7 +450,7 @@ test('renderizar: modelo desconhecido não vira texto', () => {
 
 test('atualizarVistos: na partida tudo é inicial; depois, só o que muda é novo', () => {
   const agora = Z('2026-11-16T12:00:00Z');
-  const c = conv({ attrs: { etapa: 'Perdido', fechou_tratamento: true }, etiquetas: ['retomada', 'quente'] });
+  const c = conv({ attrs: { etapa: 'Perdido', compareceu_ultima_sessao: 'Não' }, etiquetas: ['retomada', 'quente'] });
   const p1 = atualizarVistos(c, new Map(), agora, { primeiraVez: true, desde: null });
   assert.equal(p1.vistos.get('etapa')!.inicial, true);
   assert.equal(p1.vistos.get('etiqueta:retomada')!.inicial, true);
@@ -446,9 +463,9 @@ test('atualizarVistos: na partida tudo é inicial; depois, só o que muda é nov
   assert.equal(p2.vistos.get('etapa')!.valor, 'Agendado');
   assert.equal(p2.vistos.get('etapa')!.inicial, false);
   assert.deepEqual(p2.vistos.get('etapa')!.desde, depois);
-  assert.equal(p2.vistos.has('fechou_tratamento'), false); // saiu
+  assert.equal(p2.vistos.has('compareceu_ultima_sessao'), false); // saiu
   assert.equal(p2.vistos.get('etiqueta:retomada')!.inicial, true); // não mudou
-  assert.deepEqual(p2.mudancas.map((m) => `${m.tipo}:${m.campo}`).sort(), ['atualizar:etapa', 'remover:fechou_tratamento']);
+  assert.deepEqual(p2.mudancas.map((m) => `${m.tipo}:${m.campo}`).sort(), ['atualizar:etapa', 'remover:compareceu_ultima_sessao']);
   // sem mudança nenhuma = nada a gravar
   assert.deepEqual(atualizarVistos(c2, p2.vistos, depois, { primeiraVez: false, desde: agora }).mudancas, []);
 });

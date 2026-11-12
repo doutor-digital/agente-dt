@@ -2,7 +2,7 @@
  * Textos dos modelos de WhatsApp do Kommo de Parauapebas que a régua do Chatwoot usa (lidos AO VIVO da API do Kommo em 12/11/2026).
  * São DADOS: o texto vale como está no Kommo (aprovado na Meta), com os campos entre {{ }} trocados em `chatwoot-regua.ts`.
  * Ficam de fora os modelos de campanha (outubro rosa, resgate, reativação dor na coluna), que não são régua, e os da régua que
- * dependem de campo que o Chatwoot ainda não tem (financeiro em aberto, pagamento ok, cancelamento, pendência de documento, avaliação Google).
+ * não estão ligados no Kommo de Parauapebas (boas-vindas e 1ª sessão do tratamento, financeiro, avaliação Google).
  */
 export const TEXTOS_PARAU: Readonly<Record<string, string>> = {
   parau_lead_reengajamento_48h: "Olá, {{contact.name}}, aqui é da Doutor Hérnia Parauapebas.\nFiquei sem a sua resposta e não quero deixar o seu caso parado.\nComo está a sua dor hoje?",
@@ -28,14 +28,14 @@ export const TEXTOS_PARAU: Readonly<Record<string, string>> = {
   parau_sdr_retomada_pos_ligacao: "Oi, {{contact.name}}! Aqui é {{lead.cf.2450732}}, da Doutor Hérnia.\nTentei te ligar agora há pouco e não consegui falar com você.\nPosso continuar por aqui mesmo? Em 2 minutos eu te explico os próximos passos.",
   parau_sdr_reativacao_lead_frio: "Oi, {{contact.name}}! Aqui é {{lead.cf.2450732}}, da Doutor Hérnia.\nFaz um tempo desde a nossa última conversa e não consegui te encontrar depois disso.\nSó pra eu saber como te ajudar: você ainda quer resolver isso agora ou prefere que eu te procure mais pra frente?",
   parau_sdr_boas_vindas_programa: "Oi, {{contact.name}}! Sua vaga no programa {{lead.cf.2450750}} está confirmada. ✅\nNo anexo está tudo o que você precisa: próximos passos, orientações e nossos contatos.\nSeu próximo compromisso é {{lead.cf.2450928}}.\nQualquer dúvida até lá, é só responder por aqui.",
-  parau_tratamento_boas_vindas: "Olá, {{contact.name}}. Seja bem-vindo(a) ao seu tratamento na Doutor Hérnia Parauapebas.\nA partir de agora a nossa equipe acompanha cada etapa do seu plano. Qualquer dúvida entre as sessões, fale por aqui.",
-  parau_tratamento_primeira_sessao: "Olá, {{contact.name}}. A sua primeira sessão ficou assim:\nData e horário: {{lead.cf.2450928}}\nUnidade: {{lead.cf.2450798}}\nChegue 10 minutos antes.\nVenha com roupas leves",
   parau_sessao_lembrete_vespera: "Olá, {{contact.name}}. A sua sessão é amanhã.\nData e horário: {{lead.cf.2450928}}\nEstá tudo certo?",
   parau_sessao_confirmacao_dia: "Bom dia, {{contact.name}}. A sua sessão de hoje está marcada para {{lead.cf.2450928}}.\nEstá tudo certo?",
   parau_sessao_aderencia_meio: "Olá, {{contact.name}}. Você já concluiu boa parte das sessões previstas no seu plano.\nMantenha a frequência: é ela que sustenta a evolução do tratamento. Qualquer dúvida, estou à disposição.",
   parau_alta_conclusao: "Olá, {{contact.name}}. Parabéns pela conclusão do seu tratamento.\nA constância que você manteve foi decisiva no resultado. Seguimos à disposição para o seu acompanhamento.",
   parau_alta_pesquisa_nps: "Olá, {{contact.name}}. De 0 a 10, o quanto você recomendaria a Doutor Hérnia Parauapebas a um amigo ou familiar?\nPode responder no botão abaixo. A sua resposta é usada apenas internamente.",
   parau_alta_retorno_60d: "Olá, {{contact.name}}. Já se passaram 60 dias desde a sua alta.\nO nosso protocolo de acompanhamento prevê um retorno com o especialista para verificar como está a sua coluna.\nQuer que eu verifique um horário?",
-  parau_financeiro_vencimento_3d: "Olá, {{contact.name}}. A parcela do seu tratamento vence em {{lead.cf.2450998}}.\nValor: {{lead.cf.2451112}}\nPagamento: {{lead.cf.2451006}}\nSe já tiver pago, desconsidere esta mensagem.",
-  parau_financeiro_vencimento_hoje: "Olá, {{contact.name}}. A parcela do seu tratamento vence hoje.\nValor: {{lead.cf.2451112}}\nPagamento: {{lead.cf.2451006}}\nQualquer dúvida, é só responder aqui.",
+  parau_cancelamento_acolhimento: "Olá, {{contact.name}}. Recebemos a sua solicitação e respeitamos a sua decisão.\nPara eu registrar corretamente no seu prontuário, o que motivou?",
+  parau_cancelamento_retorno_confirmado: "Olá, {{contact.name}}. O seu retorno está agendado.\nData e horário: {{lead.cf.2450928}}\nEndereço: Rua C, 455-A, Sala 101 e 103 — Cidade Nova, Parauapebas/PA, 68515-000\n📍 Como chegar: https://share.google/LzWt0AQhG4HWTpWOq",
+  parau_pendencia_documento: "Olá, {{contact.name}}. Gostaria de saber se realizou o exame? Se precisa de ajuda?\nVamos agendar seu retorno?",
+  parau_sessao_falta: "Olá, {{contact.name}}. Você não compareceu à sessão de hoje.\nA constância é o que sustenta o seu resultado. Quer que eu verifique um horário de reposição?",
 };
