@@ -939,6 +939,20 @@ export const AUTOMACOES: readonly Automacao[] = [
     quandoVazio: 'desligado',
     arquivo: 'src/lib/chatwoot-regua-worker.ts',
   },
+  {
+    id: 'chatwoot-ia',
+    chave: 'CHATWOOT_IA_SLUGS',
+    nome: 'Sofia e transcrição no Chatwoot',
+    oQueFaz:
+      'Para cada mensagem nova do paciente na caixa da unidade no Chatwoot: áudio vira NOTA PRIVADA com a transcrição; e, depois de 60 s sem o paciente escrever, a Sofia lê a conversa no modo de teste (nada gravado, nenhuma ferramenta de verdade) e deixa uma NOTA PRIVADA com o que ela responderia e as ações que tomaria (campos que preencheria, agendamento, etapa). Nada é enviado ao paciente.',
+    pegadinha:
+      'Hoje só a caixa da Parauapebas. «Só no papel» e «ligado» fazem a mesma coisa por enquanto: a Sofia de verdade no Chatwoot (mandando a resposta) ainda não existe. A transcrição vale nos dois. Teto de chamadas da Sofia por dia por unidade; passou, para até o dia seguinte. Não roda se alguém da equipe respondeu depois da última mensagem do paciente.',
+    risco: 'manda-mensagem',
+    temSeco: true,
+    exigeSecoAntes: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/chatwoot-ia.ts',
+  },
 ] as const;
 
 const PORCHAVE = new Map(AUTOMACOES.map((a) => [a.chave, a]));
