@@ -112,7 +112,7 @@ function montar(modo: ModoDaSofia, o: { etapa?: string; chat?: ReturnType<typeof
         cadastrar_paciente: ferramenta('cadastrar_paciente', recebidos.cadastrar_paciente!, 'Cadastrado. idClient 5555'),
         agendar_consulta: ferramenta('agendar_consulta', recebidos.agendar_consulta!, o.agendarDevolve ?? 'Consulta marcada para terça-feira, 17 de novembro às 09:00.'),
         remarcar_consulta: ferramenta('remarcar_consulta', recebidos.remarcar_consulta!, 'Consulta remarcada'),
-        cancelar_consulta: ferramenta('cancelar_consulta', recebidos.cancelar_consulta!, 'Consulta cancelada'),
+        cancelar_consulta: ferramenta('cancelar_consulta', recebidos.cancelar_consulta!, 'Consulta de terça-feira, 17 de novembro às 09:00 cancelada. Confirme ao paciente.'),
         ...(o.sinal === false
           ? {}
           : {
@@ -250,6 +250,37 @@ test('LIGADO: se gravar nos atributos falhar, a resposta da ferramenta (consulta
     throw new Error('Chatwoot 500');
   };
   assert.match(await m.por('agendar_consulta').invoke(AGENDAR), /^Consulta marcada para/);
+});
+
+test('LIGADO: remarcar e cancelar também atualizam a conversa (a véspera não pode sair para o dia velho nem para consulta desmarcada)', async () => {
+  const r = montar('ligado', { etapa: 'Agendado', consulta: async () => ({ quando: '2026-11-18T10:00' }) });
+  await r.por('remarcar_consulta').invoke({ idClient: 5555, data: '2026-11-18', hora: '10:00' });
+  assert.deepEqual(r.chat.gravados, [{ data_consulta: '2026-11-18', hora_consulta: '10:00', situacao_consulta: 'Agendado' }]);
+  // a franquia NÃO mostra o horário novo (remarcação recusada): nada é gravado
+  const n = montar('ligado', { etapa: 'Agendado', consulta: async () => ({ quando: '2026-11-17T09:00' }) });
+  await n.por('remarcar_consulta').invoke({ idClient: 5555, data: '2026-11-18', hora: '10:00' });
+  assert.equal(n.chat.gravados.length, 0);
+  const c = montar('ligado', { etapa: 'Agendado' });
+  await c.por('cancelar_consulta').invoke({ confirmado: true });
+  assert.deepEqual(c.chat.gravados, [{ situacao_consulta: 'Desmarcado' }]);
+  assert.equal(c.estado.etapa, 'Agendado', 'etapa não muda');
+});
+
+test('SECO: consultar_horarios avisa nas ações que é só a grade (sem a sondagem do ligado)', async () => {
+  const m = montar('seco');
+  await m.por('consultar_horarios').invoke({ data: '2026-11-17' });
+  assert.match(String(m.acoes[0]!.args.observacao), /sem a sondagem/);
+  const l = montar('ligado');
+  await l.por('consultar_horarios').invoke({ data: '2026-11-17' });
+  assert.equal('observacao' in l.acoes[0]!.args, false);
+});
+
+test('sem Kommo, os avisos da agenda (cadastro duplicado, agenda sem conferir, vaga presa) viram etiqueta + nota na conversa', async () => {
+  const m = montar('ligado', { etapa: 'Sofia qualifica' });
+  const aviso = (m.contextos[0] as { avisoSemKommo: (motivo: string, detalhe: string) => Promise<boolean> }).avisoSemKommo;
+  assert.equal(await aviso('cadastro_duplicado', 'Cadastro usado pela IA: 55'), true);
+  assert.deepEqual(m.chat.etiquetas, [['esperando-humano']]);
+  assert.match(m.chat.notas[0]!, /cadastro duplicado — Cadastro usado pela IA: 55/);
 });
 
 test('o que a Sofia grava ao agendar é IGUAL ao que a varredura da agenda (chatwoot-agenda) grava: não há briga entre os dois escritores', () => {
@@ -515,4 +546,33 @@ test('com as ferramentas REAIS montadas (sem Kommo): o conjunto, o sinal só em 
   const agendar = com.find((t) => t.name === 'agendar_consulta') as unknown as { invoke: (a: unknown) => Promise<string> };
   assert.match(await agendar.invoke({ idClient: 1, data: '2026-11-17', hora: '09:00', diaConfirmado: true, formaPagamento: 'na_clinica' }), /^Consulta marcada para/);
   await assert.rejects(() => agendar.invoke({ idClient: 1, data: '17/11', hora: '9h' }));
+});
+
+test('cartão ativo no Kommo: casa pelo telefone, ignora ganho/perdido, olha TODOS os cartões numa leitura só e não cai se um foi apagado', async () => {
+  const { cartaoNoKommoDaUnidade } = await import('./chatwoot-cartao-kommo.js');
+  const lidos: number[][] = [];
+  const kommo = (contatos: Array<{ id: number; telefones: string[]; leadIds: number[] }>, leads: Array<{ id: number; status_id: number }>) =>
+    ({
+      buscarContatosPorTelefone: async () => contatos,
+      listLeadsPorIds: async (ids: number[]) => {
+        lidos.push(ids);
+        return leads.filter((l) => ids.includes(l.id));
+      },
+    }) as never;
+  const U = unidade() as never;
+  const muitos = Array.from({ length: 12 }, (_, i) => 100 + i);
+  // o ativo é o 12º: com a leitura em lote ele aparece
+  const a = cartaoNoKommoDaUnidade(U, kommo([{ id: 1, telefones: ['+55 94 99999-0000'], leadIds: muitos }], muitos.map((id) => ({ id, status_id: id === 111 ? 77 : 142 }))));
+  assert.deepEqual(await a('+5594999990000'), { leadId: 111 });
+  assert.deepEqual(lidos[0], muitos);
+  // só ganhos/perdidos, ou cartão apagado (não volta na leitura): nenhum
+  const b = cartaoNoKommoDaUnidade(U, kommo([{ id: 1, telefones: ['94999990000'], leadIds: [1, 2, 3] }], [{ id: 1, status_id: 143 }, { id: 2, status_id: 142 }]));
+  assert.equal(await b('+5594999990000'), null);
+  // contato de OUTRO telefone não vale; telefone curto não consulta nada
+  const c = cartaoNoKommoDaUnidade(U, kommo([{ id: 1, telefones: ['94911112222'], leadIds: [5] }], [{ id: 5, status_id: 77 }]));
+  assert.equal(await c('+5594999990000'), null);
+  assert.equal(await c('123'), null);
+  // Kommo fora do ar lança (quem chama não responde)
+  const d = cartaoNoKommoDaUnidade(U, { buscarContatosPorTelefone: async () => { throw new Error('403'); }, listLeadsPorIds: async () => [] } as never);
+  await assert.rejects(() => d('+5594999990000'), /403/);
 });

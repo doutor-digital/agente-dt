@@ -50,18 +50,16 @@ import { consultaMarcadaNoTurno, legendaDoCartao } from './cartao-de-chegada.js'
 import { extrairBotoes } from './botoes.js';
 import { SpineService } from '../services/spine.service.js';
 import { AgendaReconcileService } from '../services/agenda-reconcile.service.js';
-import { type ConversaLida, type PortaDoChatwoot } from './chatwoot-porta.js';
+import type { ConversaLida, PortaDoChatwoot } from './chatwoot-porta.js';
+import { leadDaConversaChatwoot } from './chatwoot-lead.js';
+import type { SandboxAction, rodarTesteDaSofia } from '../controllers/playground.controller.js';
 
 export type { ConversaLida, PortaDoChatwoot };
 
 const texto = (v: unknown): string => (typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : '');
-import { leadDaConversaChatwoot } from './chatwoot-lead.js';
-import type { SandboxAction, rodarTesteDaSofia } from '../controllers/playground.controller.js';
 
 export type Fala = { role: 'user' | 'assistant'; content: string };
 export type ModoDaSofia = 'seco' | 'ligado';
-
-// ── o Chatwoot, como a Sofia o enxerga: ver chatwoot-porta.ts ──
 
 // ── regras da conversa (puras) ─────────────────────────────────────────────────────────────────────
 
@@ -129,6 +127,7 @@ export interface ContextoDaAgenda {
   telefoneDaConversa?: string;
   semSondagem?: boolean;
   semGravar?: boolean;
+  avisoSemKommo?: (motivo: string, detalhe: string) => Promise<boolean>;
 }
 
 export interface FerramentasDaAgenda {
@@ -229,7 +228,15 @@ export function montarFerramentas(p: PedidoDasFerramentas): DynamicStructuredToo
 
   // ── o conjunto da agenda ──
   const agenda = deps.construirAgenda(
-    { unit, recorder, telefoneDaConversa: p.telefone ?? undefined, semSondagem: seco, semGravar: seco },
+    {
+      unit,
+      recorder,
+      telefoneDaConversa: p.telefone ?? undefined,
+      semSondagem: seco,
+      semGravar: seco,
+      // cadastro duplicado, agenda sem conferir, cadastro recusado, vaga presa: sem tarefa no Kommo, a equipe fica sabendo pela conversa
+      avisoSemKommo: (motivo, detalhe) => passarParaEquipe(`${motivo.replace(/_/g, ' ')} — ${detalhe}`),
+    },
     { avisarEquipe: (motivo, detalhe) => passarParaEquipe(motivo === 'sinal_pix_falhou' ? `o Pix do sinal não saiu. ${detalhe}` : `Pix do sinal gerado mas sem registro. ${detalhe}`) },
   );
 
@@ -322,6 +329,25 @@ export function montarFerramentas(p: PedidoDasFerramentas): DynamicStructuredToo
     }
   };
 
+  /** grava atributos da consulta na conversa; falhar não desfaz a franquia (a varredura da agenda completa) */
+  const gravarSituacao = async (attrs: Record<string, string>): Promise<void> => {
+    try {
+      if (!seco) await chat.gravarAtributos(conversa, attrs);
+      onCall({ tool: 'gravar_no_chatwoot', args: attrs, result: seco ? '[SECO] gravaria estes atributos na conversa — simulado.' : 'atributos gravados na conversa.' });
+    } catch (err) {
+      logger.warn({ err: String(err), conversa }, 'chatwoot-sofia: a franquia mudou, mas não consegui gravar os campos na conversa');
+    }
+  };
+  /** remarcou: a conversa passa a mostrar o dia novo (sem isto a véspera sairia para o dia velho). Confere na franquia, não no texto da ferramenta. */
+  const depoisDeRemarcar = async (a: { data: string; hora: string }, resposta: string): Promise<void> => {
+    if (seco) {
+      if (/^Consulta remarcada de /.test(resposta)) await gravarSituacao({ data_consulta: a.data, hora_consulta: a.hora, situacao_consulta: 'Agendado' });
+      return;
+    }
+    const atual = await deps.consulta(unit, lead).catch(() => null);
+    if (atual && atual.quando.slice(0, 16) === `${a.data}T${a.hora}`) await gravarSituacao({ data_consulta: a.data, hora_consulta: a.hora, situacao_consulta: 'Agendado' });
+  };
+
   // ── as que são só do Chatwoot (no lugar das do Kommo) ──
   const aplicar_tag = new DynamicStructuredTool({
     name: 'aplicar_tag',
@@ -401,11 +427,14 @@ export function montarFerramentas(p: PedidoDasFerramentas): DynamicStructuredToo
     const interno = t.func.bind(t);
     t.func = async (args: unknown, ...resto: unknown[]) => {
       const res = String(await interno(args as never, ...(resto as never[])));
-      onCall({ tool: t.name, args: sem(args), result: res });
+      // no seco a leitura é só a grade, sem a sondagem que o ligado faz na franquia: quem avalia o seco precisa saber
+      onCall({ tool: t.name, args: seco && t.name === 'consultar_horarios' ? { ...sem(args), observacao: 'seco: só a grade, sem a sondagem — o ligado pode oferecer menos horários' } : sem(args), result: res });
       if (t.name === 'agendar_consulta' && agendamentoDeuCerto(res)) {
         const a = args as { data: string; hora: string };
         await depoisDeAgendar(a);
       }
+      if (t.name === 'remarcar_consulta') await depoisDeRemarcar(args as { data: string; hora: string }, res);
+      if (t.name === 'cancelar_consulta' && /^Consulta de .+ cancelada\./.test(res)) await gravarSituacao({ situacao_consulta: 'Desmarcado' });
       return res;
     };
   }

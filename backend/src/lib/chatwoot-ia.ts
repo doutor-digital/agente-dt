@@ -264,22 +264,20 @@ export function assinaturaDaConversa(mensagens: any[]): string {
 const FERRAMENTAS_QUE_GRAVAM = new Set(['cadastrar_paciente', 'agendar_consulta', 'remarcar_consulta', 'cancelar_consulta', 'gerar_sinal_pix']);
 
 export async function rodarSofia(m: MensagemDoPaciente, p: PortasDaIa, mem: MemoriaDaIa): Promise<Desfecho> {
-  if (p.estado(m.slug) === 'desligado') return 'desligado';
+  const modo = p.estado(m.slug);
+  if (modo === 'desligado') return 'desligado';
   if (mem.emAndamento.has(m.conversa)) return 'ocupada';
   mem.emAndamento.add(m.conversa);
   try {
-    return await rodarSofiaDessaConversa(m, p, mem);
+    return await rodarSofiaDessaConversa(m, p, mem, modo);
   } finally {
     mem.emAndamento.delete(m.conversa);
   }
 }
 
-async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem: MemoriaDaIa): Promise<Desfecho> {
-  const modo = p.estado(m.slug);
-  if (modo === 'desligado') return 'desligado';
+async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem: MemoriaDaIa, modo: ModoDaSofia): Promise<Desfecho> {
   const chaveDia = `${m.slug}|${p.hoje()}`;
-  const feitas = mem.rodadas.get(chaveDia) ?? 0;
-  if (feitas >= TETO_SOFIA_POR_DIA) return 'teto';
+  if ((mem.rodadas.get(chaveDia) ?? 0) >= TETO_SOFIA_POR_DIA) return 'teto';
   const mensagens = await p.mensagens(m.conversa);
   const falas = falasDaConversa(mensagens);
   if (!falas) return 'equipe-respondeu';
@@ -319,6 +317,9 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
     return 'cartao-no-kommo';
   }
 
+  // confere e conta num passo só (sem await no meio): duas conversas rodando juntas não perdem incremento nem passam do teto
+  const feitas = mem.rodadas.get(chaveDia) ?? 0;
+  if (feitas >= TETO_SOFIA_POR_DIA) return 'teto';
   mem.rodadas.set(chaveDia, feitas + 1);
   const r = await p.sofia(unit, falas, { conversa: m.conversa, modo, lida });
   if (!r) return 'falhou';
@@ -332,15 +333,18 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
   const gravou = r.acoes.some((a) => FERRAMENTAS_QUE_GRAVAM.has(a.tool));
   const alerta = (porque: string) =>
     [`⚠ A Sofia agiu mas a resposta ao paciente NÃO saiu (${porque}). Confira com ele o que foi feito:`, ...(notaDoLigado(r.acoes)?.split('\n').slice(1) ?? [])].join('\n');
-  const depois = await p.mensagens(m.conversa);
-  if (assinaturaDaConversa(depois) !== assinaturaDaConversa(mensagens) || !falasDaConversa(depois)) {
+  const depois = await p.mensagens(m.conversa).catch((err) => {
+    logger.warn({ err: String(err), conversa: m.conversa }, `${ID_IA}: não consegui reler a conversa antes de responder`);
+    return null;
+  });
+  if (!depois || assinaturaDaConversa(depois) !== assinaturaDaConversa(mensagens) || !falasDaConversa(depois)) {
     logger.info({ conversa: m.conversa, gravou }, `${ID_IA}: a conversa mudou enquanto a Sofia pensava — resposta descartada`);
     const nota = gravou ? alerta('a conversa mudou enquanto ela pensava') : notaDoLigado(r.acoes);
     if (nota) await p.nota(m.conversa, nota).catch(() => undefined);
     return 'mudou';
   }
   if (!r.resposta || r.semResposta) {
-    if (r.acoes.length) await p.nota(m.conversa, alerta('o modelo não escreveu a resposta')).catch(() => undefined);
+    if (gravou) await p.nota(m.conversa, alerta('o modelo não escreveu a resposta')).catch(() => undefined);
     return 'sem-texto';
   }
   try {
@@ -348,7 +352,7 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
   } catch (err) {
     // as ferramentas já gravaram: sem resposta o paciente fica sem saber. A equipe é avisada (nota) e a exceção sobe para o log.
     logger.error({ err: String(err), conversa: m.conversa, gravou }, `${ID_IA}: não consegui mandar a resposta da Sofia`);
-    if (r.acoes.length) await p.nota(m.conversa, alerta('o Chatwoot recusou a mensagem')).catch(() => undefined);
+    if (gravou) await p.nota(m.conversa, alerta('o Chatwoot recusou a mensagem')).catch(() => undefined);
     throw err;
   }
   // o Pix e o endereço são mensagens à parte: falhar nelas não desfaz o que já foi
