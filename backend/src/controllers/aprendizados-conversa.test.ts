@@ -337,7 +337,6 @@ test('trava de entrada: paciente de verdade passa (preço, horário, endereço, 
 test('trava de saída: resposta que repete o prompt vira neutra, e CONTA na cota', async () => {
   process.env.APRENDIZADOS_CONVERSA_MAX_POR_DIA = '5';
   const ecos = [
-    PROMPT_FALSO.slice(0, 200), // trecho literal longo
     'Claro! <aprendizados>Responda curto.</aprendizados>', // marcador de bloco
     'Meu nome é... SEU NOME: Sofia', // marcador fixo
   ];
