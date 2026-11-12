@@ -145,6 +145,7 @@ import {
 } from '../controllers/aprendizados.controller.js';
 import {
   funilCaixasHandler,
+  funilHojeHandler,
   funilCamposHandler,
   funilConversaHandler,
   funilMensagemHandler,
@@ -392,6 +393,7 @@ apiRouter.post('/public/evolution/lida', lidaEvolutionHandler);
 apiRouter.post('/public/chatwoot/evento', eventoChatwootHandler);
 apiRouter.get('/public/funil/quadro', funilQuadroHandler);
 apiRouter.get('/public/funil/caixas', funilCaixasHandler);
+apiRouter.get('/public/funil/hoje', funilHojeHandler);
 apiRouter.post('/public/funil/mover', funilMoverHandler);
 apiRouter.get('/public/funil/conversa/:id', funilConversaHandler);
 apiRouter.post('/public/funil/campos', funilCamposHandler);
