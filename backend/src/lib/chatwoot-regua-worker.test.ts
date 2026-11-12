@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { automacaoPorId, verificarCatalogo } from './automacoes.js';
 import { CAIXAS_REGUA } from './chatwoot-regua.js';
-import { cicloDaCaixa, finalDoTelefone, MAX_ETIQUETAS_POR_CICLO, MAX_MENSAGENS_POR_CICLO, type Armazem, type Chat, type DepsDoCiclo, type LinhaVista } from './chatwoot-regua-worker.js';
+import { cicloDaCaixa, finalDoTelefone, numeroDaGerente, MAX_ETIQUETAS_POR_CICLO, MAX_MENSAGENS_POR_CICLO, type Armazem, type Chat, type DepsDoCiclo, type LinhaVista } from './chatwoot-regua-worker.js';
 import type { DadosDaUnidade, MensagemResumo, Mudanca } from './chatwoot-regua.js';
 
 const U: DadosDaUnidade = { nome: 'Doutor Hérnia Parauapebas', pixKey: 'pix@parau.com', valorAntecipado: 250 };
@@ -67,8 +67,12 @@ function chatFalso(
   const etiquetas: Array<{ id: number; lista: string[] }> = [];
   const atributos: Array<{ id: number; attrs: Record<string, unknown> }> = [];
   const prioridades: Array<{ id: number; p: string }> = [];
+  const atribuicoes: Array<{ id: number; agente: number }> = [];
   const buscasDaUltima: number[] = [];
   const chat: Chat = {
+    async atribuir(id, agente) {
+      atribuicoes.push({ id, agente });
+    },
     async atributos(id, attrs) {
       atributos.push({ id, attrs });
     },
@@ -93,7 +97,7 @@ function chatFalso(
       etiquetas.push({ id, lista });
     },
   };
-  return { chat, mensagens, etiquetas, atributos, prioridades, buscasDaUltima };
+  return { chat, mensagens, etiquetas, atributos, prioridades, atribuicoes, buscasDaUltima };
 }
 
 const deps = (armazem: Armazem, chat: Chat): DepsDoCiclo => ({ armazem, chat, pausa: async () => undefined });
@@ -372,6 +376,27 @@ test('interna: quente parado 3 h ligado sobe a prioridade para urgente', async (
   await cicloDaCaixa(deps(armazem, chat), 2, 'doutor-hernia-parauapebas', 'ligado', U, new Date('2026-11-16T13:10:00Z'));
   assert.deepEqual(prioridades, [{ id: 7, p: 'urgent' }]);
   assert.ok(mensagens[0]!.texto.includes('Lead QUENTE parado há 3 h'));
+});
+
+test('interna: quente parado vai para a GERENTE da caixa e avisa no WhatsApp dela (quando configurado)', async () => {
+  const { armazem } = armazemFalso();
+  const { chat, atribuicoes } = chatFalso(() => [bruta(7, { attrs: QUALIFICA, ultima: { tipo: 0, autor: 99 } })]);
+  const avisos: Array<{ texto: string; chave: string }> = [];
+  const d: DepsDoCiclo = { ...deps(armazem, chat), avisarGerente: async (texto, chave) => avisos.push({ texto, chave }) };
+  await cicloDaCaixa(d, 2, 'doutor-hernia-parauapebas', 'ligado', U, new Date('2026-11-16T10:30:00Z'));
+  await cicloDaCaixa(d, 2, 'doutor-hernia-parauapebas', 'ligado', U, new Date('2026-11-16T13:10:00Z'));
+  assert.deepEqual(atribuicoes, [{ id: 7, agente: 4 }]);
+  assert.equal(avisos.length, 1);
+  assert.ok(avisos[0]!.texto.startsWith('🔥 Lead QUENTE parado há 3 h (Doutor Hérnia Parauapebas): Maria da Silva.'));
+  assert.equal(avisos[0]!.chave, 'quente-7');
+});
+
+test('numeroDaGerente: lê o par slug=número da env; número inválido ou slug ausente = null', () => {
+  const env = 'doutor-hernia-parauapebas=5594999990000, outra=abc';
+  assert.equal(numeroDaGerente('doutor-hernia-parauapebas', env), '5594999990000');
+  assert.equal(numeroDaGerente('outra', env), null);
+  assert.equal(numeroDaGerente('x', env), null);
+  assert.equal(numeroDaGerente('x', undefined), null);
 });
 
 test('interna: última mensagem é NOTA → busca a última pública (a nota do seco não zera o tempo de parado)', async () => {

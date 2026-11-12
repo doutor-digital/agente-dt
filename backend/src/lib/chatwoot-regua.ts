@@ -19,6 +19,8 @@ import { TEXTOS_PARAU } from './chatwoot-regua-textos.js';
 export const ID_REGUA = 'chatwoot-regua';
 /** caixa do Chatwoot → slug da unidade. Uma unidade por enquanto. */
 export const CAIXAS_REGUA: Readonly<Record<number, string>> = { 2: 'doutor-hernia-parauapebas' };
+/** caixa → agente gerente no Chatwoot (lead quente parado vai para ela; decisão 26 do João). Parauapebas: Cleia (id 4). */
+export const GERENTE_DA_CAIXA: Readonly<Record<number, number>> = { 2: 4 };
 /** O usuário "📱 Celular da unidade": autor das mensagens que a equipe manda pelo celular (o Evolution usa o token dele). */
 export const USUARIO_CELULAR = 7;
 export const ETIQUETA_CELULAR = 'respondeu-pelo-celular';
@@ -90,7 +92,7 @@ export interface DadosDaUnidade {
  */
 export type AcaoInterna = 'quente-parado' | 'sem-resposta' | 'pendencia-fechou';
 export const DESCRICAO_INTERNA: Readonly<Record<AcaoInterna, string>> = {
-  'quente-parado': '⚠️ Lead QUENTE parado há 3 h — priorize! (prioridade da conversa → urgente)',
+  'quente-parado': '⚠️ Lead QUENTE parado há 3 h — priorize! (prioridade → urgente e a conversa vai para a gerente)',
   'sem-resposta':
     'Paciente sem responder há 24 h: etiqueta «sem-resposta», motivo do não agendamento = «Não interagiu» e etapa → Perdido.',
   'pendencia-fechou': 'Etapa «Fechou», mas «Fechou tratamento» está desmarcado: corrigir a conversa (etiqueta «pendente-de-revisao»).',
