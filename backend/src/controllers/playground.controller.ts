@@ -23,6 +23,7 @@ import {
 } from '../services/openai.service.js';
 import { logger } from '../lib/logger.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
+import { textoDe } from '../agent/nome-na-resposta.js';
 
 const SANDBOX_LEAD_ID = 999_000_001;
 
@@ -493,7 +494,7 @@ operador revisar.`;
       const toolCalls = ai.tool_calls ?? [];
 
       if (toolCalls.length === 0) {
-        finalReply = typeof ai.content === 'string' ? ai.content : JSON.stringify(ai.content);
+        finalReply = textoDe(ai.content);
         timeline.push({ kind: 'assistant_message', ts: Date.now(), content: finalReply });
         break;
       }

@@ -15,8 +15,13 @@ export const MAX_RESPOSTAS_TESTE_PADRAO = 60;
 /** Mensagens (paciente + Sofia) que a conversa leva: 20 turnos. O navegador guarda o mesmo tanto. */
 export const MAX_MENSAGENS_DA_CONVERSA = 40;
 export const MAX_CARACTERES_DA_FALA = 600;
-/** Uma fala da Sofia devolvida pelo navegador entra cortada neste tamanho (só impede lixo enorme). */
-const MAX_CARACTERES_DA_RESPOSTA = 4000;
+/** Uma fala da Sofia devolvida pelo navegador entra cortada neste tamanho: o histórico é contexto, e resposta de WhatsApp é curta. */
+export const MAX_CARACTERES_DA_RESPOSTA = 1500;
+/**
+ * Teto do histórico INTEIRO que vem do navegador (letras somadas): sem ele, 40 mensagens de 600 + 1500 letras seriam ~42 mil
+ * letras reenviadas ao modelo a cada resposta. Estourou, saem os turnos mais antigos (a última fala do paciente fica sempre).
+ */
+export const MAX_TOTAL_DO_HISTORICO = 14_000;
 export const MAX_EM_ANDAMENTO = 2;
 
 /** Teto diário por unidade. Lido a cada chamada: a env muda sem recompilar (e o teste troca). */
@@ -47,6 +52,8 @@ export function prepararHistorico(bruto: ReadonlyArray<{ role: string; content: 
     falas.push({ role: m.role, content: m.role === 'user' ? content : content.slice(0, MAX_CARACTERES_DA_RESPOSTA) });
   }
   const fim = falas.slice(-MAX_MENSAGENS_DA_CONVERSA);
+  let total = fim.reduce((n, f) => n + f.content.length, 0);
+  while (fim.length > 1 && total > MAX_TOTAL_DO_HISTORICO) total -= fim.shift()!.content.length;
   while (fim.length > 0 && fim[0].role !== 'user') fim.shift();
   if (fim.length === 0 || fim[fim.length - 1].role !== 'user') return { ok: false, erro: 'Escreva uma fala de paciente para a Sofia responder.' };
   return { ok: true, messages: fim };

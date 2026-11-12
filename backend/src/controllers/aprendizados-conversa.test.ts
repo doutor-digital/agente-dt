@@ -130,7 +130,7 @@ test('conversa: teto diário por unidade (env) — passou, 429 e o modelo não r
   assert.equal(rodou, 2);
 });
 
-test('conversa: falha DEPOIS de chamar o modelo conta no teto (pode ter custado); sem chave de IA (400) devolve', async () => {
+test('conversa: falha DEPOIS de montar o prompt (modelo chamado) conta no teto; antes disso (sem chave de IA) devolve', async () => {
   process.env.APRENDIZADOS_CONVERSA_MAX_POR_DIA = '2';
   let resultado: ResultadoDoTeste = { ok: false, status: 500, error: 'playground_failed' };
   const h = criar(async () => resultado);
@@ -139,13 +139,53 @@ test('conversa: falha DEPOIS de chamar o modelo conta no teto (pode ter custado)
   assert.equal((await chamar(h, { codigo: '482913', messages: FALA })).status, 429, 'falha repetida não gasta dinheiro de graça');
   zerarConversasDeTeste();
   resultado = { ok: false, status: 400, error: 'openai_not_configured' };
-  for (let i = 0; i < 5; i++) assert.equal((await chamar(h, { codigo: '482913', messages: FALA })).status, 502, 'o modelo nem foi chamado: não gasta o teto');
-  // exceção solta: 500, e também conta
-  zerarConversasDeTeste();
-  const quebra = criar(async () => {
+  const semPrompt = criar(async () => resultado, null); // nunca chegou a montar o prompt
+  for (let i = 0; i < 5; i++) assert.equal((await chamar(semPrompt, { codigo: '482913', messages: FALA })).status, 502, 'o modelo nem foi chamado: não gasta o teto');
+});
+
+test('conversa: exceção ANTES do modelo (prompt não montado) devolve a cota e libera a vaga de "respondendo"; depois do prompt conta', async () => {
+  process.env.APRENDIZADOS_CONVERSA_MAX_POR_DIA = '10';
+  const quebraAntes = criar(async () => {
     throw new Error('banco caiu');
+  }, null);
+  // 4 quebras seguidas: se a vaga vazasse, a 3ª já seria 429 (limite de 2 ao mesmo tempo)
+  for (let i = 0; i < 4; i++) assert.equal((await chamar(quebraAntes, { codigo: '482913', messages: FALA })).status, 500, `quebra ${i + 1}`);
+  const ok1 = criar(async () => ok('oi'));
+  assert.equal((await chamar(ok1, { codigo: '482913', messages: FALA })).body.restantes, 9, 'as quebras antes do modelo não gastaram o teto');
+  const quebraDepois = criar(async () => {
+    throw new Error('modelo caiu');
   });
-  assert.equal((await chamar(quebra, { codigo: '482913', messages: FALA })).status, 500);
+  const r = await chamar(quebraDepois, { codigo: '482913', messages: FALA });
+  assert.equal(r.status, 500);
+  assert.equal(r.body.restantes, 8, 'depois do prompt montado pode ter custado: conta');
+});
+
+test('conversa: as recusas de teto e de "respondendo" dizem quantas respostas restam (a página atualiza o contador)', async () => {
+  process.env.APRENDIZADOS_CONVERSA_MAX_POR_DIA = '1';
+  const h = criar(async () => ok('x'));
+  assert.equal((await chamar(h, { codigo: '482913', messages: FALA })).status, 200);
+  const r = await chamar(h, { codigo: '482913', messages: FALA });
+  assert.equal(r.status, 429);
+  assert.equal(r.body.restantes, 0);
+});
+
+test('conversa: resposta enorme da Sofia no histórico não dá 400 (corta em 1500) e o histórico todo respeita o teto de letras', async () => {
+  const vistas: Array<Array<{ role: string; content: string }>> = [];
+  const h = criar(async (_u, messages) => (vistas.push(messages as never), ok('ok')));
+  const gigante = [
+    { role: 'user', content: 'oi' },
+    { role: 'assistant', content: 'z'.repeat(20_000) },
+    { role: 'user', content: 'e agora?' },
+  ];
+  assert.equal((await chamar(h, { codigo: '482913', messages: gigante })).status, 200);
+  assert.equal(vistas[0][1].content.length, 1500);
+  const cheio = Array.from({ length: 40 }, (_, i) => ({ role: i % 2 === 0 ? 'user' : 'assistant', content: 'k'.repeat(i % 2 === 0 ? 600 : 1500) }));
+  cheio.push({ role: 'user', content: 'última' });
+  assert.equal((await chamar(h, { codigo: '482913', messages: cheio })).status, 200);
+  const total = vistas[1].reduce((n, m) => n + m.content.length, 0);
+  assert.ok(total <= 14_000, `o modelo recebeu ${total} letras de histórico`);
+  assert.equal(vistas[1][vistas[1].length - 1].content, 'última');
+  assert.equal(vistas[1][0].role, 'user');
 });
 
 test('conversa: pedidos ao mesmo tempo — a terceira espera (429) e a vaga volta quando a chamada termina', async () => {

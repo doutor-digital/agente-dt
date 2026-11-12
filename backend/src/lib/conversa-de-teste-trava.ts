@@ -32,9 +32,10 @@ export function normalizar(texto: string): string {
 const ALVO_INTERNO = [
   /\b(?:system|sistema)\s*(?:prompt|message|mensagem)\b/,
   /\bprompts?\b/,
-  /\b(?:suas?|seus?|tuas?|teus?)\s+(?:\w+\s+)?(?:instrucoes|instrucao|regras|diretrizes|configuracoes|ordens|comandos|prompts?|treinamento|programacao|base de conhecimento)\b/,
+  // "suas regras de cancelamento" é pergunta de paciente: só pega quando não vem "de/para/sobre <assunto>" (ou o assunto é a própria Sofia)
+  /\b(?:suas?|seus?|tuas?|teus?)\s+(?:\w+\s+)?(?:instrucoes|instrucao|regras|diretrizes|configuracoes|ordens|comandos|treinamento|programacao|base de conhecimento)\b(?!\s+(?:de|do|da|dos|das|para|pra|sobre|em|no|na)\s+(?!sistema\b|rede\b|ia\b|sofia\b|voce\b|vc\b|seguranca\b))/,
   /\b(?:instrucoes|instrucao|regras|diretrizes|orientacoes|configuracoes|ordens|comandos|treinamento|programacao)\s+(?:internas?|iniciais|ocultas?|secretas?|do sistema|de sistema|da rede|da ia|da sofia|que (?:voce|vc|te|lhe) (?:recebeu|deram|passaram|mandaram|foram dadas))\b/,
-  /\bo que (?:te|lhe|voce|vc) (?:disseram|falaram|pediram|mandaram|programaram|passaram|foi dito|foi pedido|recebeu|configuraram|ensinaram)\b/,
+  /\bo que (?:te|lhe|voce|vc) (?:disseram|falaram|pediram|mandaram|programaram|passaram|foi dito|foi pedido|recebeu|configuraram|ensinaram)\b(?!\s+(?:sobre|a respeito|do|da|dos|das|no|na|nos|nas|de|ao|em|meu|minha|com)\b)/,
   /\b(?:texto|tudo|conteudo)\s+(?:que esta\s+)?(?:acima|do inicio da conversa)\b/,
   /\b(?:repita|repete|mostre|mostra|copie|cole|reproduza|transcreva|diga|escreva|liste|exiba)\s+(?:\w+\s+){0,4}(?:inicio|comeco|primeira mensagem)\s+(?:da|desta|dessa|de)\s+(?:conversa|chat|sessao|contexto)\b/,
   /\b(?:como|de que jeito|por que|porque|quem)\s+(?:voce|vc)\s+(?:foi|e|esta)\s+(?:programad|configurad|instruid|treinad|criad)/,
@@ -44,7 +45,8 @@ const ALVO_INTERNO = [
 
 /** "ignore as regras", "esqueça tudo", "a partir de agora você é…", modos especiais. */
 const INJECAO = [
-  /\b(?:ignore|ignora|ignorar|ignorem|desconsidere|desconsiderar|esqueca|descarte|abandone|desobedeca|burle|contorne)\s+(?:\w+\s+){0,3}(?:regras?|instrucoes|instrucao|orientacoes|diretrizes|anterior|anteriores|acima|tudo|prompt|restricoes|limites|filtros?|treinamento)\b/,
+  // só instrução/regra/sistema/prompt é alvo: "ignore a mensagem anterior" e "esqueça tudo que eu falei" são fala de paciente
+  /\b(?:ignore|ignora|ignorar|ignorem|desconsidere|desconsiderar|esqueca|descarte|abandone|desobedeca|burle|contorne)\s+(?:(?:(?!mensagem|mensagens|fala|falas|resposta|pergunta|horario|data|nome|erro|pedido)\w+)\s+){0,3}(?:regras?|instrucoes?|orientacoes|diretrizes|prompt|restricoes|filtros?|treinamento|sistema|tudo acima|tudo que (?:esta|vem) acima|tudo (?:o )?que (?:voce|vc) (?:sabe|recebeu|leu|aprendeu)|tudo (?:o )?que te (?:disseram|falaram|pediram|mandaram))\b/,
   /\b(?:a partir (?:de )?agora|de agora em diante)\s+(?:voce|vc)\s+(?:e|sera|vai ser|deve|nao|obedece|age|atua|responde|fala)\b/,
   /\b(?:finja|simule|aja|atue|interprete|incorpore|assuma o papel)\s+(?:como|de|que)\s+(?:se\s+)?(?:voce\s+)?(?:fosse|e|sendo)?\s*(?:um|uma|o|a)?\s*(?:ia|assistente|programador|desenvolvedor|administrador|admin|dev|hacker|sistema|outro|outra|robo sem|chatbot sem)\b/,
   /\bmodo\s+(?:desenvolvedor|dev|admin|administrador|debug|deus|livre|sem filtro|manutencao|teste interno)\b/,
@@ -53,7 +55,8 @@ const INJECAO = [
 ];
 
 /** Marcação de bloco ou de papel digitada: `<aprendizados>`, `</x>`, `[system]`, `### system`. */
-const MARCACAO = [/<\/?\s*[a-z_][a-z0-9_-]*\s*>?/];
+// só tag de verdade (<palavra>, </palavra>); "<" solto ("tenho < de 30 anos", "<3") não conta
+const MARCACAO = [/<\/?[a-z_][a-z0-9_-]{2,}(?:\s|>|\/|$)/];
 const MARCACAO_BRUTA = /\[\s*(?:system|sistema|assistant|inst)\s*\]|#{1,6}\s*(?:system|sistema|instru)/i;
 
 /** `true` = a fala quer o texto interno da Sofia (ou desligar as regras): recusar antes do modelo. */
@@ -65,7 +68,7 @@ export function pedeOPrompt(fala: string): boolean {
   if (MARCACAO.some((re) => re.test(n)) || MARCACAO_BRUTA.test(fala)) return true;
   // letras separadas ("p r o m p t", "s.y.s.t.e.m"): confere de novo sem nenhum espaço, só para as palavras mais óbvias
   const colado = n.replace(/[^a-z]/g, '');
-  if (/systemprompt|systemmessage|promptdosistema|meuprompt|seuprompt|ignoreasregras|ignoretudo/.test(colado)) return true;
+  if (/systemprompt|systemmessage|promptdosistema|meuprompt|seuprompt|ignoreasregras/.test(colado)) return true;
   // sequência de 4+ letras soltas ("p r o m p t"): cola só ela e procura a palavra
   for (const m of n.matchAll(/(?:^| )((?:[a-z](?: |$)){4,})/g)) {
     if (/prompt|system|instrucoes|regras|ignore/.test(m[1].replace(/ /g, ''))) return true;
@@ -86,6 +89,23 @@ function blocosDoPrompt(prompt: string): string[] {
   return [...nomes];
 }
 
+/**
+ * Blocos do prompt que são DADO que a Sofia diz ao paciente, não instrução: mensagens prontas (o prompt manda mantê-las iguais),
+ * exemplos, base de conhecimento, endereço e fatos da unidade. Repetir esses trechos é o trabalho dela (no Timbó, 51 de 805
+ * respostas em 7 dias repetiam as respostas prontas): ficam fora da comparação de trecho literal.
+ */
+const BLOCOS_DE_DADO = [
+  'respostas_prontas', 'exemplos_ruins', 'conhecimento', 'fontes', 'onde_fica', 'dados_da_clinica', 'calendario',
+  'consulta_do_paciente', 'consulta_que_ja_passou', 'memoria_paciente', 'etapa_do_lead', 'horario_comercial', 'cupom_boas_vindas',
+];
+
+/** O prompt sem os blocos de dado e sem frases entre aspas (falas de exemplo, mensagens prontas citadas): o que sobra é instrução. */
+export function soInstrucoes(prompt: string): string {
+  let t = prompt;
+  for (const b of BLOCOS_DE_DADO) t = t.replace(new RegExp(`<${b}>[\\s\\S]*?</${b}>`, 'gi'), ' ');
+  return t.replace(/"[^"\n]{12,}"|“[^”\n]{12,}”/g, ' ');
+}
+
 /** Marcadores fixos que só existem no prompt (caixa exata: "SEU NOME:" em maiúsculas). */
 const MARCADORES_FIXOS = ['SEU NOME:', '# CONTEXTO DE TESTE'];
 
@@ -101,7 +121,7 @@ export function ecoDoPrompt(resposta: string, prompt: string | undefined): boole
   for (const bloco of blocosDoPrompt(prompt)) {
     if (baixa.includes(`<${bloco}`) || baixa.includes(`</${bloco}`)) return true;
   }
-  const p = colar(prompt);
+  const p = colar(soInstrucoes(prompt));
   const r = colar(resposta);
   if (r.length < JANELA_DO_ECO) return false;
   for (let i = 0; i + JANELA_DO_ECO <= r.length; i += PASSO) {

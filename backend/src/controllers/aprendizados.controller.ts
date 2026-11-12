@@ -111,7 +111,8 @@ async function estado(unit: Unit) {
 
 const conversaSchema = z.object({
   messages: z
-    .array(z.object({ role: z.enum(['user', 'assistant']), content: z.string().max(5000) }))
+    // folga grande de propósito: o corte (fala da Sofia) e a recusa (fala do paciente) são de `prepararHistorico`, com mensagem própria
+    .array(z.object({ role: z.enum(['user', 'assistant']), content: z.string().max(30_000) }))
     .min(1)
     .max(200),
 });
@@ -147,10 +148,12 @@ export function criarConversaHandler(rodar: RodarTeste) {
     }
     const tz = fuso(unit);
     if (!entrarEmAndamento(unit.slug)) {
-      res.status(429).json({ error: 'A Sofia ainda está respondendo outra conversa desta unidade. Espere uns segundos e envie de novo.' });
+      res.status(429).json({ error: 'A Sofia ainda está respondendo outra conversa desta unidade. Espere uns segundos e envie de novo.', restantes: respostasRestantes(unit.slug, tz) });
       return;
     }
-    // quem libera a vaga é a chamada ao modelo terminar (não o prazo da página): senão o prazo deixaria acumular chamadas
+    // a vaga de "respondendo" é liberada no `finally`, a não ser que a chamada ao modelo fique pendurada depois do prazo: aí quem
+    // libera é ela terminar (senão o prazo deixaria acumular chamadas). Qualquer erro no caminho libera.
+    let vagaComAChamada = false;
     let liberada = false;
     const liberar = () => {
       if (!liberada) {
@@ -158,32 +161,37 @@ export function criarConversaHandler(rodar: RodarTeste) {
         sairDeAndamento(unit.slug);
       }
     };
-    if (!cabeResposta(unit.slug, tz)) {
-      liberar();
-      res.status(429).json({ error: `As ${maxRespostasTeste()} respostas de teste de hoje acabaram. Amanhã libera de novo.` });
-      return;
-    }
-    const PRAZO_MS = 90_000;
-    let prazo: NodeJS.Timeout | undefined;
-    const estourou = new Promise<'prazo'>((ok) => {
-      prazo = setTimeout(() => ok('prazo'), PRAZO_MS);
-    });
+    let cobrada = false;
     let promptCompleto: string | undefined;
-    const trabalho = (async () => rodar(unit, historico.messages, { aoMontarPrompt: (p) => (promptCompleto = p) }))().finally(liberar);
+    // o modelo só é chamado depois que o prompt é montado: antes disso, nenhum custo — a resposta volta para o teto
+    const devolverSeNaoCustou = () => {
+      if (cobrada && promptCompleto === undefined) devolverResposta(unit.slug, tz);
+    };
+    let prazo: NodeJS.Timeout | undefined;
     try {
+      if (!cabeResposta(unit.slug, tz)) {
+        res.status(429).json({ error: `As ${maxRespostasTeste()} respostas de teste de hoje acabaram. Amanhã libera de novo.`, restantes: 0 });
+        return;
+      }
+      cobrada = true;
+      const PRAZO_MS = 90_000;
+      const estourou = new Promise<'prazo'>((ok) => {
+        prazo = setTimeout(() => ok('prazo'), PRAZO_MS);
+      });
+      vagaComAChamada = true;
+      const trabalho = (async () => rodar(unit, historico.messages, { aoMontarPrompt: (p) => (promptCompleto = p) }))().finally(liberar);
       const r = await Promise.race([trabalho, estourou]);
       if (r === 'prazo') {
         // a chamada pode terminar e custar: não devolve a resposta ao teto
         logger.warn({ unit: unit.slug }, 'aprendizados: a conversa de teste passou do prazo');
-        res.status(504).json({ error: 'A Sofia demorou demais para responder. Espere um pouco e tente de novo (esta resposta pode ter contado no limite de hoje).' });
+        res.status(504).json({ error: 'A Sofia demorou demais para responder. Espere um pouco e tente de novo (esta resposta pode ter contado no limite de hoje).', restantes: respostasRestantes(unit.slug, tz) });
         return;
       }
       if (!r.ok) {
-        // só devolve se o modelo nem chegou a ser chamado (400 = sem chave de IA). Falha DEPOIS de chamar pode ter custado até
-        // 5 iterações: devolver aqui deixaria uma falha repetida gastar dinheiro sem gastar o teto.
-        if (r.status === 400) devolverResposta(unit.slug, tz);
+        // falha DEPOIS de montar o prompt pode ter custado até 5 iterações: não devolve (falha repetida não gasta dinheiro de graça)
+        devolverSeNaoCustou();
         logger.warn({ unit: unit.slug, erro: r.error, status: r.status }, 'aprendizados: a conversa de teste falhou');
-        res.status(502).json({ error: 'A Sofia não respondeu agora. Tente de novo em instantes.' });
+        res.status(502).json({ error: 'A Sofia não respondeu agora. Tente de novo em instantes.', restantes: respostasRestantes(unit.slug, tz) });
         return;
       }
       logger.info(
@@ -202,10 +210,12 @@ export function criarConversaHandler(rodar: RodarTeste) {
         restantes: respostasRestantes(unit.slug, tz),
       });
     } catch (err) {
+      devolverSeNaoCustou();
       logger.error({ err, unit: unit.slug }, 'aprendizados: a conversa de teste quebrou');
-      res.status(500).json({ error: 'A Sofia não respondeu agora. Tente de novo em instantes.' });
+      if (!res.headersSent) res.status(500).json({ error: 'A Sofia não respondeu agora. Tente de novo em instantes.', restantes: respostasRestantes(unit.slug, tz) });
     } finally {
       clearTimeout(prazo);
+      if (!vagaComAChamada) liberar();
     }
   };
 }
@@ -501,7 +511,7 @@ button.sec{min-height:46px;padding:10px 14px;border:1px solid var(--line);backgr
   function aviso(id,txt,ok){ var m=$(id); m.textContent=txt; m.className='msg '+(ok?'ok':'err'); m.hidden=false; }
   function some(id){ $(id).hidden=true; }
   function codigo(){ var c=$('codigo').value.trim(); try{ localStorage.setItem(KC,c); localStorage.setItem(KN,$('por').value.trim()); }catch(e){} return c; }
-  async function api(method,path,body){ var url=API+(path||'')+(method==='GET'?('?codigo='+encodeURIComponent(codigo())):''); var r=await fetch(url,{method:method,headers:{'Content-Type':'application/json'},body:method==='GET'?undefined:JSON.stringify(Object.assign({codigo:codigo()},body||{}))}); var j=await r.json().catch(function(){return {}}); if(!r.ok) throw new Error(j.error||('erro '+r.status)); return j; }
+  async function api(method,path,body){ var url=API+(path||'')+(method==='GET'?('?codigo='+encodeURIComponent(codigo())):''); var r=await fetch(url,{method:method,headers:{'Content-Type':'application/json'},body:method==='GET'?undefined:JSON.stringify(Object.assign({codigo:codigo()},body||{}))}); var j=await r.json().catch(function(){return {}}); if(!r.ok){ var er=new Error(j.error||('erro '+r.status)); er.dados=j; throw er; } return j; }
   function el(tag,cls,txt){ var e=document.createElement(tag); if(cls) e.className=cls; if(txt!=null) e.textContent=txt; return e; }
   function quando(iso){ var d=new Date(iso); return d.toLocaleDateString('pt-BR'); }
   function mostrar(e){
@@ -518,7 +528,12 @@ button.sec{min-height:46px;padding:10px 14px;border:1px solid var(--line);backgr
       l.appendChild(row);
     });
     $('btnPrevia').textContent='Ver prévia'+(e.previasRestantes!=null?(' ('+e.previasRestantes+' hoje)'):'');
-    if(e.conversa){ conv=e.conversa; restaConversa(conv.restantes); renderChat(aguardando); }
+    if(e.conversa){
+      conv=e.conversa; restaConversa(conv.restantes); renderChat(aguardando);
+      // conversa desligada (teto 0): a aba nem aparece
+      $('abaConversa').hidden=(conv.maximo===0);
+      if(conv.maximo===0 && !$('paneConversa').hidden) aba('ensinar');
+    }
   }
   async function carregar(){ if(codigo().length!==6){ $('corpo').hidden=true; return; } try{ mostrar(await api('GET')); }catch(e){ $('corpo').hidden=true; aviso('msgTopo',e.message,false); } }
   function contar(){ var n=$('regra').value.trim().length; $('cnt').textContent=n+'/'+MAX; if(previaDe!==null && $('regra').value.trim()!==previaDe){ $('cardRes').hidden=true; previaDe=null; } }
@@ -573,6 +588,13 @@ button.sec{min-height:46px;padding:10px 14px;border:1px solid var(--line);backgr
   }
   $('abaEnsinar').addEventListener('click',function(){ aba('ensinar'); });
   $('abaConversa').addEventListener('click',function(){ aba('conversa'); });
+  // o que vai ao servidor: respostas da Sofia curtas (1500 letras) e no máximo 14 mil letras no total, saindo as mais antigas
+  function paraEnviar(){
+    var l=historico.map(function(m){return {role:m.role,content:m.role==='assistant'?m.content.slice(0,1500):m.content}});
+    var tot=0; l.forEach(function(m){tot+=m.content.length});
+    while(l.length>1 && tot>14000){ tot-=l.shift().content.length; }
+    return l;
+  }
   async function enviar(){
     var t=$('fala').value.trim(); some('msgChat');
     if(aguardando) return;
@@ -580,10 +602,12 @@ button.sec{min-height:46px;padding:10px 14px;border:1px solid var(--line);backgr
     aguardando=true; $('btnEnviar').disabled=true;
     historico.push({role:'user',content:t}); $('fala').value=''; renderChat(true);
     try{
-      var r=await api('POST','/conversa',{messages:historico.map(function(m){return {role:m.role,content:m.content}})});
+      var r=await api('POST','/conversa',{messages:paraEnviar()});
       historico.push({role:'assistant',content:r.reply,a:r.acoes||[]}); guardar(); aguardando=false; renderChat(); restaConversa(r.restantes);
     }catch(e){
-      historico.pop(); $('fala').value=t; aguardando=false; renderChat(); aviso('msgChat',e.message,false); restaConversa(restam);
+      historico.pop(); $('fala').value=t; aguardando=false; renderChat(); aviso('msgChat',e.message,false);
+      // o servidor diz quantas restam também quando recusa (teto do dia, outra resposta em andamento)
+      restaConversa(e.dados && e.dados.restantes!=null ? e.dados.restantes : restam);
     }
     guardar();
   }
@@ -599,7 +623,8 @@ button.sec{min-height:46px;padding:10px 14px;border:1px solid var(--line);backgr
     var r=$('regra'), novo=r.value.trim()?(r.value.trim()+'\\n'+modelo):modelo;
     if(novo.length>MAX){ aviso('msgChat','A regra que você já começou na outra aba está grande: salve ou apague antes de transformar isto em regra.',false); return; }
     r.value=novo;
-    $('f0').value=fala.slice(0,500);
+    // a fala de teste só troca se ainda é a de exemplo (ou está vazia): o que a pessoa escreveu ali fica
+    if(!$('f0').value || $('f0').value===falasPadrao[0]) $('f0').value=fala.slice(0,500);
     aba('ensinar'); contar(); r.focus(); r.setSelectionRange(r.value.length,r.value.length);
   });
   ultimoCodigo=$('codigo').value.trim()||null; carregar();
