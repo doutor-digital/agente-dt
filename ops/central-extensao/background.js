@@ -1,6 +1,6 @@
 // Central do João — fala com o servidor (a chave mora só aqui, no chrome.storage.local, nunca na página do WhatsApp).
 const PADRAO = 'https://agente-vps.doutordigitalconsultoria.com';
-const ROTAS = { estado: 'estado', geral: 'geral', pessoa: 'pessoa' };
+const ROTAS = { estado: 'estado', geral: 'geral', pessoa: 'pessoa', chamados: 'chamados', feito: 'chamados/feito' };
 
 async function config() {
   const c = await chrome.storage.local.get(['servidor', 'chave']);
@@ -15,6 +15,7 @@ async function chamar(rota, corpo) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Central-Chave': chave },
       body: JSON.stringify(corpo || {}),
+      signal: AbortSignal.timeout(15000),
     });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) return { ok: false, erro: j.error || `erro ${r.status}` };
@@ -28,7 +29,8 @@ chrome.runtime.onMessage.addListener((msg, remetente, responder) => {
   // só a página do WhatsApp Web (o content script) e a tela de opções da própria extensão
   const daExtensao = remetente.id === chrome.runtime.id;
   const doWhatsApp = remetente.url && remetente.url.startsWith('https://web.whatsapp.com/');
-  const daOpcoes = remetente.url && remetente.url.startsWith(`chrome-extension://${chrome.runtime.id}/`);
+  // getURL: chrome-extension://<id>/ no Chrome, moz-extension://<uuid>/ no Firefox
+  const daOpcoes = remetente.url && remetente.url.startsWith(chrome.runtime.getURL(''));
   if (!daExtensao || !(doWhatsApp || daOpcoes) || !msg || !ROTAS[msg.tipo]) return false;
   chamar(ROTAS[msg.tipo], msg.corpo).then(responder);
   return true; // resposta assíncrona

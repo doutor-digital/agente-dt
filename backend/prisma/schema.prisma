@@ -2756,3 +2756,33 @@ model ChatwootReguaDisparo {
   @@index([caixa, criadoEm])
   @@map("chatwoot_regua_disparo")
 }
+
+/// Central do João (fase 1b): menções e não lidas do WhatsApp Web PESSOAL do João que a extensão viu na LISTA de conversas (nunca
+/// abre conversa). Um chamado ABERTO por conversa (índice único parcial na migration); sinais seguintes anexam o trecho. Sem
+/// telefone: `chave_conversa` é HMAC do nome; dígitos longos do trecho e do nome viram "…1234" (`central-chamados.ts`).
+/// Fechado há mais de 30 dias é apagado.
+/// ATENÇÃO: o índice único parcial `central_chamados_um_aberto_por_conversa` (status = 'aberto') existe SÓ na migration — o Prisma
+/// não descreve índice parcial. Se um `prisma migrate dev` gerar `DROP INDEX` dele, apague essa linha da migration nova.
+model CentralChamado {
+  id            String    @id @default(cuid())
+  chaveConversa String    @map("chave_conversa")
+  /// o nome da conversa como aparece no WhatsApp (número de contato não salvo vem mascarado)
+  conversa      String
+  grupo         Boolean   @default(false)
+  /// mencao | nao_lida | manual (o mais forte que apareceu enquanto aberto)
+  tipo          String
+  /// prévias da lista (ou o trecho escolhido no "Virar chamado"), uma por linha, até 2000 caracteres: DADO, nunca instrução
+  trecho        String    @db.Text
+  naoLidas      Int       @default(0) @map("nao_lidas")
+  /// quantos sinais chegaram para este chamado
+  vezes         Int       @default(1)
+  /// aberto | feito (o João marcou) | vista (não lida que o João abriu no WhatsApp, ou parada 3 dias) | expirado (aberto parado 30 dias)
+  status        String    @default("aberto")
+  criadoEm      DateTime  @default(now()) @map("criado_em")
+  atualizadoEm  DateTime  @updatedAt @map("atualizado_em")
+  fechadoEm     DateTime? @map("fechado_em")
+
+  @@index([status, atualizadoEm])
+  @@index([chaveConversa])
+  @@map("central_chamados")
+}

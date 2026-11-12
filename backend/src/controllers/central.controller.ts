@@ -5,9 +5,13 @@
  *                                              (POST: o número não vai na URL, que fica no log de acesso)
  *   POST /api/public/central/geral             { pausar: boolean }
  *   POST /api/public/central/pessoa            { numero, pausar: boolean, nome? }
+ *   POST /api/public/central/chamados          { sinais?: [{ conversa, tipo, grupo?, trecho?, naoLidas? }], lidas?: [conversa] }
+ *                                              (fase 1b) grava menções/não lidas que a extensão viu na lista e devolve a fila aberta
+ *   POST /api/public/central/chamados/feito    { id } — o João deu "Feito" na fila
  *
  * Todas pedem o cabeçalho X-Central-Chave = CENTRAL_EXTENSAO_CHAVE (≥ 32 caracteres) do .env; sem ela configurada, 404 (desligado).
- * A extensão chama do service worker (host_permissions), então não precisa de CORS. Toda mudança avisa o João no @ddchamados_bot.
+ * A extensão chama do service worker (host_permissions), então não precisa de CORS. Toda mudança de PAUSA avisa o João no
+ * @ddchamados_bot (os chamados da fase 1b não avisam: ficam na fila da extensão).
  */
 import type { Request, Response } from 'express';
 import { z } from 'zod';
@@ -19,6 +23,8 @@ import { armazemPausaPrisma } from '../lib/suporte-pausa-banco.js';
 import { mudarPeloPainel } from '../lib/suporte-pausa.js';
 import { TEXTOS_CENTRAL, chaveCentralConfere, chaveCentralLigada, nomeLimpo } from '../lib/central-pausa.js';
 import { estadoDaPessoa, listarPausadas, mudarPessoa } from '../lib/central-pausa-banco.js';
+import { limparSinal } from '../lib/central-chamados.js';
+import { listarAbertos, marcarFeito, registrarSinais } from '../lib/central-chamados-banco.js';
 
 const POR = 'extensão do Chrome';
 
@@ -92,6 +98,51 @@ export async function centralPessoaHandler(req: Request, res: Response): Promise
     res.json({ ok: true, mudou: r.mudou, final: r.final, pausada: p.data.pausar });
   } catch (e) {
     logger.warn({ err: String(e) }, 'central: pausa por pessoa falhou');
+    res.status(502).json({ error: 'não consegui gravar agora' });
+  }
+}
+
+// fase 1b: uma varredura da lista manda poucas dezenas de conversas; teto para não virar porta de lixo
+const chamadosSchema = z.object({
+  sinais: z.array(z.unknown()).max(40).optional(),
+  // nome comprido não derruba o pedido inteiro: é cortado (o servidor normaliza em 120, igual aos sinais)
+  lidas: z.array(z.string().transform((x) => x.slice(0, 200))).max(100).optional(),
+});
+
+export async function centralChamadosHandler(req: Request, res: Response): Promise<void> {
+  if (!autorizado(req, res)) return;
+  const p = chamadosSchema.safeParse(req.body ?? {});
+  if (!p.success) {
+    res.status(400).json({ error: 'pedido inválido' });
+    return;
+  }
+  try {
+    // mantém a posição (inválido = null) para `ids[i]` casar com o sinal i que a extensão mandou
+    const sinais = (p.data.sinais ?? []).map(limparSinal);
+    const r = sinais.length || p.data.lidas?.length ? await registrarSinais(sinais, p.data.lidas ?? []) : { novos: 0, ids: [] };
+    if (r.novos) logger.info({ novos: r.novos, sinais: sinais.length }, 'central: chamados novos pela extensão');
+    // já gravou: se só a leitura da fila falhar, responde ok com a fila vazia (senão a extensão acharia que não gravou e repetiria)
+    res.json({ ok: true, novos: r.novos, ids: r.ids, abertos: await listarAbertos().catch(() => []) });
+  } catch (e) {
+    logger.warn({ err: String(e) }, 'central: chamados falhou');
+    res.status(502).json({ error: 'não consegui gravar agora' });
+  }
+}
+
+const feitoSchema = z.object({ id: z.string().trim().min(1).max(40) });
+
+export async function centralChamadoFeitoHandler(req: Request, res: Response): Promise<void> {
+  if (!autorizado(req, res)) return;
+  const p = feitoSchema.safeParse(req.body);
+  if (!p.success) {
+    res.status(400).json({ error: 'pedido inválido' });
+    return;
+  }
+  try {
+    const fechou = await marcarFeito(p.data.id);
+    res.json({ ok: true, fechou, abertos: await listarAbertos().catch(() => []) });
+  } catch (e) {
+    logger.warn({ err: String(e) }, 'central: feito falhou');
     res.status(502).json({ error: 'não consegui gravar agora' });
   }
 }
