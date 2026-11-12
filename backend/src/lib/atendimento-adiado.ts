@@ -74,6 +74,8 @@ export interface PedidoDeTurno {
   desde: Date;
   contactId: number | null;
   telefone: string | null;
+  /** De onde veio o turno (só muda o rótulo do trace). Padrão: o cartão ganhou a unidade. */
+  via?: 'unidade_ganha' | 'ponte';
 }
 
 export type IniciaTurno = (pedido: PedidoDeTurno) => Promise<void>;
@@ -82,6 +84,10 @@ let iniciador: IniciaTurno | null = null;
 /** Registrado no boot (server.ts) com a função do controller — evita o ciclo worker → controller. */
 export function definirIniciadorDoTurno(fn: IniciaTurno | null): void {
   iniciador = fn;
+}
+/** O iniciador registrado no boot — a Ponte ("Passar para a Sofia") abre o turno pelo mesmo caminho. */
+export function iniciadorDoTurno(): IniciaTurno | null {
+  return iniciador;
 }
 
 export interface DepsDoAdiado {

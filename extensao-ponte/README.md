@@ -1,6 +1,6 @@
 # Ponte — o cartão do Kommo ao lado da conversa no WhatsApp Web
 
-Extensão do Chrome (e do Firefox), **versão 0.5.0 — visual novo**. Com uma conversa aberta no WhatsApp Web, o
+Extensão do Chrome (e do Firefox), **versão 0.6.0 — "Passar para a Sofia"**. Com uma conversa aberta no WhatsApp Web, o
 painel lateral mostra o cartão do Kommo daquele paciente, mastigado para quem não conhece o Kommo:
 
 - **quem é**: nome, telefone, o selo colorido da **unidade** (o `⌂ Unidade de atendimento`; vazio na conta de duas
@@ -26,6 +26,27 @@ E, no ícone da extensão, **quantos pacientes estão esperando resposta** (0.4.
 
 Também tem um bloco "Modo aprendiz", que diz onde cada coisa fica dentro do Kommo. Por enquanto ele é fixo; uma
 fase futura vai escolher qual dica mostrar e quando.
+
+## O que há de novo na 0.6.0 — "🤖 Passar para a Sofia" (12/11/2026)
+
+Pedido do João para Petrópolis e Caxias: as meninas atendem pelo WhatsApp Web e o Kommo (canal Lite) **não tem o
+histórico antigo sincronizado**. No bloco **Sofia (IA)** do cartão, o botão **Passar para a Sofia**:
+
+1. lê as falas de TEXTO da conversa aberta, dos dois lados, até 60 (`leitor.js` → `lerFalas`), só no clique;
+2. manda para `POST …/ponte/passar-sofia` com a chave da unidade;
+3. o servidor (`backend/src/lib/ponte-passar-sofia*.ts`): confere a etapa, tira a pausa (a do banco e a caixinha
+   "Pausar IA"), guarda o histórico na **memória do lead** (o bloco que o prompt da Sofia já lê; uma passagem nova
+   troca o bloco da anterior), **libera a Sofia neste lead por 12 h fora do horário da IA** (`conversations.liberada_ate`
+   — só a trava de horário é furada; pausa da unidade, etapa e as outras travas continuam) e, se o paciente está
+   esperando resposta, abre o turno pelo mesmo caminho do atendimento adiado;
+4. a Sofia responde **pelo Kommo**. A Ponte continua sem enviar nada pelo WhatsApp Web.
+
+Limite: paciente que nunca escreveu desde que o Lite foi conectado não tem conversa no Kommo — a Sofia não tem por
+onde responder. Grupo não passa.
+
+**Pacote já configurado**: um `unidade.json` (`{ "slug", "chave" }`) na pasta é copiado para as opções na
+instalação, se elas estiverem vazias (`fundo.js` → `preConfigurar`). Quem gera os pacotes é
+`~/Kommo-Integracao/_replicacao/gerar-pacotes-ponte.sh` (a chave é calculada na VPS e nunca impressa).
 
 ## O que há de novo na 0.5.0 (visual novo)
 

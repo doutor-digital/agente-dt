@@ -81,6 +81,7 @@ import { etapaCalada, notaSofiaCalada, REGRA_NOTA_CALADA, sofiaCaladaLiberada } 
 import { garantirTituloPadrao } from '../lib/titulo-padrao.js';
 import { telefoneDeFamiliarNoCartao } from '../lib/telefone-de-familiar.js';
 import { SpineSyncService } from '../services/spine-sync.service.js';
+import { conversaLiberadaPelaEquipe } from '../lib/ponte-passar-sofia-banco.js';
 import { z } from 'zod';
 
 const attachmentSchema = z
@@ -1150,15 +1151,18 @@ export async function iniciarTurnoAdiado(pedido: PedidoDeTurno): Promise<void> {
       threadId: buildThreadId(unit.slug, leadId),
       leadId: String(leadId),
       channel: 'kommo_chat',
-      input: { via: 'unidade_ganha', leadId, desde: pedido.desde.toISOString(), textos: pedido.textos } as object,
+      input: { via: pedido.via ?? 'unidade_ganha', leadId, desde: pedido.desde.toISOString(), textos: pedido.textos } as object,
       status: 'RUNNING',
     },
   });
   const recorder = new TraceRecorder(trace.id, unit.id);
   await recorder.step({
     kind: 'WEBHOOK_RECEIVED',
-    title: `⏱ Cartão ${leadId} ganhou a unidade depois de o paciente escrever (desde ${pedido.desde.toISOString()}): "${humanMessage.slice(0, 80)}"`,
-    payload: { leadId, via: 'unidade_ganha', textos: pedido.textos },
+    title:
+      pedido.via === 'ponte'
+        ? `🤖 A equipe passou o cartão ${leadId} para a Sofia pela Ponte: "${humanMessage.slice(0, 80)}"`
+        : `⏱ Cartão ${leadId} ganhou a unidade depois de o paciente escrever (desde ${pedido.desde.toISOString()}): "${humanMessage.slice(0, 80)}"`,
+    payload: { leadId, via: pedido.via ?? 'unidade_ganha', textos: pedido.textos },
   });
   const conv = await upsertConversation({ unitId: unit.id, leadId: String(leadId), phone: pedido.telefone ?? undefined, channel: 'kommo_chat' });
   await guardarTelefoneDoContato(unit, conv, contactId);
@@ -1475,7 +1479,8 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
   // comercial, justamente quando a equipe humana está no WhatsApp. Quem quer que a
   // unidade fique calada não deveria precisar inventar uma mensagem para isso.
   const hours = checkBusinessHours(unit);
-  if (hours.enabled && !hours.isOpen) {
+  // A equipe passou ESTE lead para a Sofia pela Ponte ("Passar para a Sofia"): fora do horário da IA ela responde só ele.
+  if (hours.enabled && !hours.isOpen && !(await conversaLiberadaPelaEquipe(unit.id, leadId))) {
     try {
       if (!hours.outOfHoursMessage) {
         // silêncio proposital: quem atende nesse horário é gente
