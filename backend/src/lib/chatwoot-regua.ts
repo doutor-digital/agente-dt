@@ -58,6 +58,8 @@ export interface ConversaRegua {
   /** nome do agente atribuído à conversa (assignee), se houver */
   atendente: string | null;
   ultima: MensagemResumo | null;
+  /** telefone do contato (`+55…`), para conferir cartão ativo no Kommo antes de falar com o paciente */
+  telefone?: string;
 }
 
 /** A 1ª vez que o worker viu a conversa com este valor neste campo. */
@@ -660,5 +662,6 @@ export function conversaDoChatwoot(raw: any): ConversaRegua | null {
     criadaEm: new Date(Number(raw?.created_at) * 1000 || 0),
     atendente: str(raw?.meta?.assignee?.name) || null,
     ultima,
+    telefone: str(sender.phone_number),
   };
 }

@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { automacaoPorId, verificarCatalogo } from './automacoes.js';
 import { CAIXAS_REGUA } from './chatwoot-regua.js';
-import { cicloDaCaixa, MAX_ETIQUETAS_POR_CICLO, MAX_MENSAGENS_POR_CICLO, type Armazem, type Chat, type DepsDoCiclo, type LinhaVista } from './chatwoot-regua-worker.js';
+import { cicloDaCaixa, finalDoTelefone, MAX_ETIQUETAS_POR_CICLO, MAX_MENSAGENS_POR_CICLO, type Armazem, type Chat, type DepsDoCiclo, type LinhaVista } from './chatwoot-regua-worker.js';
 import type { DadosDaUnidade, MensagemResumo, Mudanca } from './chatwoot-regua.js';
 
 const U: DadosDaUnidade = { nome: 'Doutor Hérnia Parauapebas', pixKey: 'pix@parau.com', valorAntecipado: 250 };
@@ -138,6 +138,67 @@ test('ligado: manda a mensagem PÚBLICA, com o texto puro', async () => {
   assert.ok(mensagens[0]!.texto.startsWith('Olá, Maria. A sua consulta é amanhã.'));
   assert.ok(!mensagens[0]!.texto.includes('SECO'));
   assert.equal(disparos[0]!.modo, 'ligado');
+});
+
+// ── item 31: sem dobrar com o Kommo ──
+const comKommo = (armazem: Armazem, chat: Chat, kommo: DepsDoCiclo['kommo']): DepsDoCiclo => ({ armazem, chat, pausa: async () => undefined, kommo });
+
+test('finalDoTelefone: 8 últimos dígitos, com e sem 9 e +55', () => {
+  assert.equal(finalDoTelefone('+5594999990000'), '99990000');
+  assert.equal(finalDoTelefone('559499990000'), '99990000');
+  assert.equal(finalDoTelefone('123'), null);
+  assert.equal(finalDoTelefone(undefined), null);
+});
+
+test('ligado + cartão ATIVO no Kommo: não manda ao paciente, só nota privada, e não tenta de novo', async () => {
+  const { armazem, disparos } = armazemFalso();
+  const { chat, mensagens } = chatFalso(() => [bruta(1, { attrs: CONSULTA })]);
+  const telefones: string[] = [];
+  const kommo = async (t: string) => (telefones.push(t), { leadId: 777 });
+  await cicloDaCaixa(comKommo(armazem, chat, kommo), 2, 'x', 'ligado', U, new Date('2026-11-16T17:20:00Z'));
+  const r = await cicloDaCaixa(comKommo(armazem, chat, kommo), 2, 'x', 'ligado', U, VESPERA);
+  assert.equal(r.disparos, 0);
+  assert.equal(r.noKommo, 1);
+  assert.equal(mensagens.length, 1);
+  assert.equal(mensagens[0]!.privada, true);
+  assert.ok(mensagens[0]!.texto.startsWith('🛑 Régua «consulta-vespera» — NÃO enviei'));
+  assert.ok(mensagens[0]!.texto.includes('lead 777'));
+  assert.deepEqual(telefones, ['+5594999990000']);
+  assert.equal(disparos.length, 1);
+  await cicloDaCaixa(comKommo(armazem, chat, kommo), 2, 'x', 'ligado', U, new Date(VESPERA.getTime() + 600_000));
+  assert.equal(mensagens.length, 1);
+});
+
+test('ligado + sem cartão ativo no Kommo: manda normal', async () => {
+  const { armazem } = armazemFalso();
+  const { chat, mensagens } = chatFalso(() => [bruta(1, { attrs: CONSULTA })]);
+  const kommo = async () => null;
+  await cicloDaCaixa(comKommo(armazem, chat, kommo), 2, 'x', 'ligado', U, new Date('2026-11-16T17:20:00Z'));
+  await cicloDaCaixa(comKommo(armazem, chat, kommo), 2, 'x', 'ligado', U, VESPERA);
+  assert.equal(mensagens.length, 1);
+  assert.equal(mensagens[0]!.privada, false);
+});
+
+test('ligado + Kommo fora do ar: NÃO manda, não registra (tenta no próximo ciclo)', async () => {
+  const { armazem, disparos } = armazemFalso();
+  const { chat, mensagens } = chatFalso(() => [bruta(1, { attrs: CONSULTA })]);
+  const kommo = async (): Promise<{ leadId: number } | null> => {
+    throw new Error('403');
+  };
+  await cicloDaCaixa(comKommo(armazem, chat, kommo), 2, 'x', 'ligado', U, new Date('2026-11-16T17:20:00Z'));
+  await cicloDaCaixa(comKommo(armazem, chat, kommo), 2, 'x', 'ligado', U, VESPERA);
+  assert.equal(mensagens.length, 0);
+  assert.equal(disparos.length, 0);
+});
+
+test('seco + cartão ativo no Kommo: a nota diz que NÃO enviaria', async () => {
+  const { armazem } = armazemFalso();
+  const { chat, mensagens } = chatFalso(() => [bruta(1, { attrs: CONSULTA })]);
+  const kommo = async () => ({ leadId: 5 });
+  await cicloDaCaixa(comKommo(armazem, chat, kommo), 2, 'x', 'seco', U, new Date('2026-11-16T17:20:00Z'));
+  await cicloDaCaixa(comKommo(armazem, chat, kommo), 2, 'x', 'seco', U, VESPERA);
+  assert.equal(mensagens.length, 1);
+  assert.ok(mensagens[0]!.texto.startsWith('🧪 [SECO] Régua «consulta-vespera» — NÃO enviaria: o paciente tem cartão ativo'));
 });
 
 test('seco que falha ao deixar a nota desfaz o registro e tenta no ciclo seguinte', async () => {
