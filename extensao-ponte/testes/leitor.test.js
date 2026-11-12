@@ -111,3 +111,32 @@ describe('leitor — só leitura', () => {
     assert.equal(w.document.documentElement.outerHTML, antes);
   });
 });
+
+describe('leitor — lerFalas ("Passar para a Sofia")', () => {
+  it('lê os dois lados, na ordem da tela, com a hora do WhatsApp', () => {
+    const r = L.lerFalas(abrir('whatsapp-cus.html'), 60);
+    assert.equal(r.aberta, true);
+    assert.equal(r.chave, '5599900000043@c.us');
+    const pacientes = r.falas.filter((f) => f.de === 'paciente').map((f) => f.texto);
+    assert.deepEqual(pacientes.slice(-2), ['R$ 250,00 no pix?', 'Pode sim']);
+    assert.ok(r.falas.some((f) => f.de === 'equipe'), 'faltou fala da clínica');
+    assert.ok(r.falas.every((f) => f.texto && (f.de === 'paciente' || f.de === 'equipe')));
+    assert.match(r.falas.find((f) => f.texto === 'Pode sim').hora, /^10:07/);
+  });
+
+  it('respeita o teto (fica com as mais recentes)', () => {
+    const r = L.lerFalas(abrir('whatsapp-cus.html'), 2);
+    assert.equal(r.falas.length, 2);
+    assert.equal(r.falas.at(-1).texto, 'Pode sim');
+  });
+
+  it('grupo não passa: lista vazia; sem conversa: aberta false', () => {
+    assert.deepEqual(L.lerFalas(abrir('whatsapp-grupo.html'), 60).falas, []);
+    assert.deepEqual(L.lerFalas(new JSDOM('<html><body></body></html>').window.document, 60), { aberta: false });
+  });
+
+  it('quandoDoPreTexto', () => {
+    assert.equal(L.quandoDoPreTexto('[10:32, 13/10/2026] Maria: '), '10:32, 13/10/2026');
+    assert.equal(L.quandoDoPreTexto('sem colchete'), null);
+  });
+});

@@ -319,6 +319,27 @@
         return res;
       });
     },
+    // 12/11/2026: lê a conversa da tela e passa para a Sofia (ela responde pelo Kommo; a Ponte não envia nada)
+    passarParaSofia: function (leadId) {
+      if (abaWhatsapp == null) return Promise.reject(new Error('Abra a conversa no WhatsApp Web.'));
+      var chaveAntes = conversa && conversa.chave;
+      return chrome.tabs.sendMessage(abaWhatsapp, { tipo: 'ponte:ler-falas' }).then(function (lido) {
+        if (!lido || !lido.aberta) throw new Error('Abra a conversa no WhatsApp Web.');
+        if (lido.tipo === 'grupo') throw new Error('Grupo não passa para a Sofia.');
+        if (chaveAntes && lido.chave && lido.chave !== chaveAntes) throw new Error('A conversa mudou na tela. Abra de novo a do paciente e tente outra vez.');
+        if (!lido.falas || !lido.falas.length) throw new Error('Não achei mensagens de texto nesta conversa.');
+        return chamar('POST', '/ponte/passar-sofia', { leadId: leadId, falas: lido.falas, por: quem() });
+      }, function () {
+        throw new Error('Não consegui ler a conversa. Recarregue o WhatsApp Web (F5) e tente de novo.');
+      }).then(function (j) {
+        aplicarPausa(leadId, null);
+        var ate = j.liberadaAte ? new Date(j.liberadaAte) : null;
+        var hora = ate ? (ate.getHours() < 10 ? '0' : '') + ate.getHours() + ':' + (ate.getMinutes() < 10 ? '0' : '') + ate.getMinutes() : null;
+        return j.turno === 'iniciado'
+          ? '✅ Passado para a Sofia. Ela está respondendo agora pelo Kommo' + (hora ? ' (pode responder este paciente até ' + hora + ')' : '') + '.'
+          : '✅ Passado para a Sofia. A última mensagem é sua: ela responde quando o paciente escrever.';
+      });
+    },
     semNome: function () {
       return !(config && config.nome);
     },

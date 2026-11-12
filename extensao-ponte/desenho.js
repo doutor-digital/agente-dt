@@ -816,6 +816,27 @@
         el(doc, 'p', { classe: 'faixa__regra' }, 'Confira se é a mesma pessoa antes de juntar. Fica o que veio do anúncio; o outro é juntado (Mesclar) no Kommo, nunca apagado.')));
   }
 
+  /** 12/11/2026: "Passar para a Sofia" — a Sofia lê a conversa da tela e continua daqui (responde pelo Kommo). */
+  function blocoDaPassagem(doc, r, acoes) {
+    if (!acoes || !acoes.passarParaSofia) return null;
+    var c = r.cartao;
+    var msg = el(doc, 'p', { classe: 'nota', dados: { papel: 'msg-passar' } });
+    var b = botaoAcao(doc, 'Passar para a Sofia', 'passar-sofia', { icone: 'robo' });
+    b.classList.add('botao--primario');
+    b.addEventListener('click', function () {
+      if (b.disabled) return;
+      b.disabled = true;
+      msg.textContent = 'Lendo a conversa e passando para a Sofia…';
+      Promise.resolve()
+        .then(function () { return acoes.passarParaSofia(c.id); })
+        .then(function (t) { b.disabled = false; msg.textContent = t || 'Passado para a Sofia.'; },
+          function (e) { b.disabled = false; msg.textContent = (e && e.message) || 'Não consegui passar agora.'; });
+    });
+    return el(doc, 'div', { classe: 'passar', dados: { bloco: 'passar' } },
+      el(doc, 'p', { classe: 'nota' }, 'A Sofia lê esta conversa e continua daqui, respondendo pelo Kommo. Nada é enviado por esta tela.'),
+      b, msg);
+  }
+
   /**
    * A Sofia neste cartão: o estado (ativa, pausada e por quê) e "Pausar a Sofia neste paciente". Some quando a unidade
    * não tem a IA (`r.sofiaNaUnidade === false`).
@@ -830,6 +851,7 @@
         rotulo(doc, 'robo', 'Sofia (IA)'),
         sofia.pausada ? pilula(doc, 'Pausada', 'atencao', 'pausa') : pilula(doc, 'Ativa', 'bom')),
       el(doc, 'p', { classe: 'sofia__estado', dados: { papel: 'estado-sofia' } }, 'Sofia ' + texto),
+      blocoDaPassagem(doc, r, acoes),
       blocoDaPausa(doc, r, acoes));
   }
 

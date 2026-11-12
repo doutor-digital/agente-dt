@@ -139,8 +139,40 @@
     };
   }
 
+  /** "[10:32, 13/10/2026] Maria: " → "10:32, 13/10/2026" (como o WhatsApp mostra; só para a Sofia se situar). */
+  function quandoDoPreTexto(pre) {
+    var m = /^\[([^\]]{3,40})\]/.exec(String(pre || ''));
+    return m ? m[1].trim() : null;
+  }
+
+  /**
+   * "🤖 Passar para a Sofia" (12/11/2026): as falas de TEXTO da conversa aberta, dos dois lados, na ordem da tela —
+   * `{ de: 'paciente'|'equipe', texto, hora }`. Só quando a atendente clica; vai para o servidor da Doutor Digital (o
+   * Kommo Lite não tem o histórico antigo). Foto/áudio sem legenda ficam de fora. Grupo: lista vazia.
+   */
+  function lerFalas(doc, maxFalas) {
+    var max = maxFalas || 60;
+    var c = lerConversa(doc, 1);
+    if (!c.aberta) return { aberta: false };
+    var painel = doc.querySelector(S.PAINEL_CONVERSA);
+    var elementos = painel ? painel.querySelectorAll(S.MENSAGEM) : [];
+    var falas = [];
+    for (var i = 0; i < elementos.length; i++) {
+      var id = lerDataId(elementos[i].getAttribute('data-id'));
+      if (!id) continue;
+      var bloco = elementos[i].matches(S.BLOCO_TEXTO) ? elementos[i] : elementos[i].querySelector(S.BLOCO_TEXTO);
+      if (!bloco) continue;
+      var texto = textoDaMensagem(bloco);
+      if (!texto) continue;
+      falas.push({ de: id.deMim ? 'equipe' : 'paciente', texto: texto, hora: quandoDoPreTexto(bloco.getAttribute(S.ATRIBUTO_PRE_TEXTO)) });
+    }
+    return { aberta: true, tipo: c.tipo, chave: c.chave, falas: c.tipo === 'grupo' ? [] : falas.slice(-max) };
+  }
+
   return Object.freeze({
     lerConversa: lerConversa,
+    lerFalas: lerFalas,
+    quandoDoPreTexto: quandoDoPreTexto,
     lerDataId: lerDataId,
     horaDoPreTexto: horaDoPreTexto,
     telefoneDoCabecalho: telefoneDoCabecalho,

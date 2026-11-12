@@ -1177,6 +1177,12 @@ model Conversation {
   reactivations Int       @default(0) @map("reactivations")
 
   /**
+   * Ponte "Passar para a Sofia" (12/11/2026): a atendente passou a conversa para a Sofia pelo WhatsApp Web. Até este
+   * instante a Sofia responde este lead mesmo fora do horário da IA da unidade (a trava de horário pula só este lead).
+   */
+  liberadaAte DateTime? @map("liberada_ate")
+
+  /**
    * SLA de resposta humana. `slaAlertAt` marca que já avisamos os SDRs de que o
    * humano não respondeu este handoff dentro do limiar (ex: 5min). Idempotência:
    * 1 alerta por handoff. Reseta pra null no próximo pausar_ia (novo handoff).

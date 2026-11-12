@@ -74,6 +74,8 @@ import {
   type ResumoDoLead,
 } from '../lib/ponte-resumo.js';
 import { getLeadMemoryForAgent } from '../services/lead-memory.service.js';
+import { lerPedidoDePassagem } from '../lib/ponte-passar-sofia.js';
+import { passarParaASofia } from '../lib/ponte-passar-sofia-banco.js';
 import { MAX_CARTOES_DUPLICADOS, cartoesDuplicados, mesmoTelefoneCompleto, origemDoCartao, telefoneCompleto, type CartaoDuplicado } from '../lib/ponte-duplicados.js';
 import { primeiroNomeDoPaciente } from '../lib/ponte-respostas.js';
 import { ehEtiquetaDeRobo, etiquetasDeRoboDaUnidade } from '../lib/ponte-etiquetas.js';
@@ -552,6 +554,42 @@ export async function ponteRetomarHandler(req: Request, res: Response): Promise<
   } catch (err) {
     logger.warn({ err: String(err), unit: unit.slug, leadId: lido.pedido.leadId }, 'ponte: falha ao retomar a Sofia');
     res.status(502).json({ error: 'não consegui retomar agora' });
+  }
+}
+
+// ── "🤖 Passar para a Sofia" (12/11/2026): o histórico da tela vira contexto e a Sofia assume este paciente ──
+
+/** Escrita que abre turno de IA: balde próprio e baixo. */
+const LIMITE_DA_PASSAGEM = { balde: 'ponte-passar', max: 30 };
+
+/** `POST /api/public/widget/:slug/ponte/passar-sofia` `{ leadId, falas: [{ de: 'paciente'|'equipe', texto, hora? }], por? }` */
+export async function pontePassarSofiaHandler(req: Request, res: Response): Promise<void> {
+  const unit = await unidadeDaPonte(req, res, LIMITE_DA_PASSAGEM);
+  if (!unit) return;
+  if (!unit.kommoSubdomain || !unit.kommoAccessToken) {
+    res.status(409).json({ error: 'unidade sem Kommo conectado' });
+    return;
+  }
+  if (!sofiaNaUnidade(unit)) {
+    res.status(409).json({ error: 'a Sofia não está ligada nesta unidade' });
+    return;
+  }
+  const lido = lerPedidoDePassagem(req.body);
+  if (!lido.ok) {
+    res.status(400).json({ error: lido.erro });
+    return;
+  }
+  try {
+    const r = await passarParaASofia(unit, lido.pedido);
+    if (!r.ok) {
+      res.status(409).json({ error: r.erro, motivo: r.motivo });
+      return;
+    }
+    res.json(r);
+  } catch (err) {
+    const naoAchou = err instanceof KommoApiError && err.status === 404;
+    logger.warn({ err: String(err), unit: unit.slug, leadId: lido.pedido.leadId }, 'ponte: falha ao passar a conversa para a Sofia');
+    res.status(naoAchou ? 404 : 502).json({ error: naoAchou ? 'cartão não encontrado no Kommo' : 'não consegui passar para a Sofia agora' });
   }
 }
 

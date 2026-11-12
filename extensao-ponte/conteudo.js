@@ -140,6 +140,15 @@
       }, function () { responder({ aberta: false, motivo: 'erro' }); });
       return true; // resposta assíncrona
     }
+    // 12/11/2026: "Passar para a Sofia" — as falas de texto da conversa aberta, só quando a atendente clica
+    if (msg && msg.tipo === 'ponte:ler-falas') {
+      try {
+        responder(L.lerFalas(document, 60));
+      } catch (e) {
+        responder({ aberta: false });
+      }
+      return false;
+    }
     if (!msg || msg.tipo !== 'ponte:qual-conversa') return false;
     montarEstado().then(function (estado) {
       ultimaAssinatura = JSON.stringify(estado);
