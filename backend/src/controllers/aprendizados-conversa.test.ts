@@ -367,5 +367,6 @@ test('trava de saída: resposta normal de paciente passa (cita preço e horário
 test('o núcleo do sandbox entrega o prompt completo ao gancho antes de chamar o modelo (sem isso a trava de saída bloquearia tudo)', () => {
   const fonte = readFileSync(new URL('./playground.controller.ts', import.meta.url), 'utf8');
   const gancho = fonte.indexOf('opts.aoMontarPrompt?.(fullSystem)');
-  assert.ok(gancho > 0 && gancho < fonte.indexOf('createChatModel(unit'), 'o gancho tem de rodar antes do modelo');
+  assert.ok(gancho > fonte.indexOf('createChatModel(unit') && gancho > fonte.indexOf('listEnabledLeadFieldRules(unit.id'), 'o gancho vem DEPOIS do que ainda pode falhar sem custo');
+  assert.ok(gancho < fonte.indexOf('await invokeChatModel({'), 'o gancho tem de rodar antes do modelo');
 });

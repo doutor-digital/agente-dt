@@ -373,7 +373,7 @@ export async function rodarTesteDaSofia(
   opts: {
     promptDeTeste?: string;
     aprendizadosExtras?: string[];
-    /** Recebe o texto COMPLETO do prompt desta chamada, antes do modelo: a conversa pública da página usa para barrar eco do prompt na resposta. */
+    /** Recebe o texto COMPLETO do prompt desta chamada, logo antes da 1ª chamada ao modelo: a conversa pública da página usa para barrar eco do prompt na resposta. */
     aoMontarPrompt?: (promptCompleto: string) => void;
   } = {},
 ): Promise<ResultadoDoTeste> {
@@ -407,7 +407,6 @@ como uma conversa real e use as tools normalmente quando fizer sentido — elas
 não vão alterar o CRM, mas suas chamadas serão mostradas como decisões pro
 operador revisar.`;
   const fullSystem = `${systemPrompt}\n\n${sandboxPreamble}`;
-  opts.aoMontarPrompt?.(fullSystem);
 
   const actions: SandboxAction[] = [];
   const timeline: TimelineEvent[] = [];
@@ -450,6 +449,9 @@ operador revisar.`;
     if (m.role === 'user') history.push(new HumanMessage(m.content));
     else history.push(new AIMessage(m.content));
   }
+
+  // O modelo é chamado a partir daqui: erro antes (regras de campo, criação do modelo) não custou nada, e quem chamou pode devolver a cota.
+  opts.aoMontarPrompt?.(fullSystem);
 
   const MAX_ITERS = 5;
   let finalReply = '';

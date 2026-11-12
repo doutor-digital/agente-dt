@@ -88,6 +88,11 @@ const LEGITIMAS = [
   'Quais são as suas regras para remarcar a consulta?',
   'Ignore tudo isso, errei o dia',
   'Desconsidere o nome que eu mandei antes, é Maria Souza',
+  // achados do sênior no 94a62fe
+  'A partir de agora você não precisa me mandar lembrete',
+  'De agora em diante você fala com meu marido, o número dele é outro',
+  'Paguei tudo acima do combinado, tem reembolso?',
+  'A partir de agora você pode me chamar de Maria',
 ];
 
 for (const fala of LEGITIMAS) {
@@ -166,4 +171,12 @@ test('soInstrucoes: tira os blocos de dado e as frases entre aspas, deixa a inst
   const t = soInstrucoes(PROMPT_REAL);
   assert.ok(!t.includes('R$ 250,00') && !t.includes('Rua das Palmeiras') && !t.includes('Posso te ajudar a marcar'));
   assert.ok(t.includes('Responda sempre em mensagens curtas'));
+});
+
+test('saída: regra da unidade (<aprendizados>) sem aspas, repetida na resposta, passa; o nome do bloco continua sendo eco', () => {
+  const regra = 'Quando o paciente disser que vai falar com a família, ofereça mandar o endereço e o valor por escrito para ele mostrar a todos.';
+  const prompt = `${PROMPT_REAL}\n\n<aprendizados>\n1. ${regra}\n</aprendizados>`;
+  assert.equal(ecoDoPrompt(`Sem problema! ${regra}`, prompt), false);
+  assert.equal(ecoDoPrompt('<aprendizados> 1. algo', prompt), true);
+  assert.ok(!soInstrucoes(prompt).includes('falar com a família'));
 });

@@ -142,7 +142,7 @@ export function criarConversaHandler(rodar: RodarTeste) {
     }
     // trava de entrada: quem pede o texto da Sofia não chega ao modelo, não gasta cota nem dinheiro (e não entra no histórico)
     if (historico.messages.some((m) => m.role === 'user' && pedeOPrompt(m.content))) {
-      logger.warn({ unit: unit.slug }, 'aprendizados: conversa de teste barrou pedido do texto interno da Sofia');
+      logger.warn({ evento: 'conversa_teste', desfecho: 'recusada_entrada', unit: unit.slug }, 'aprendizados: conversa de teste barrou pedido do texto interno da Sofia');
       res.status(422).json({ error: RECUSA_DA_ENTRADA });
       return;
     }
@@ -194,13 +194,14 @@ export function criarConversaHandler(rodar: RodarTeste) {
         res.status(502).json({ error: 'A Sofia não respondeu agora. Tente de novo em instantes.', restantes: respostasRestantes(unit.slug, tz) });
         return;
       }
+      // `evento: conversa_teste` + `desfecho` (entregue | barrada_eco): taxa de bloqueio = barrada_eco / (entregue + barrada_eco)
       logger.info(
-        { unit: unit.slug, turnos: historico.messages.length, iteracoes: r.meta.iterations, tokens: r.meta.tokens, costUsd: r.meta.costUsd, ms: r.meta.totalLatencyMs },
+        { evento: 'conversa_teste', desfecho: 'respondida', unit: unit.slug, turnos: historico.messages.length, iteracoes: r.meta.iterations, tokens: r.meta.tokens, costUsd: r.meta.costUsd, ms: r.meta.totalLatencyMs },
         'aprendizados: resposta de teste',
       );
       // trava de saída: resposta que repete o prompt (trecho literal ou marcador de bloco) vira neutra; já custou, fica na cota
       if (ecoDoPrompt(r.reply, promptCompleto)) {
-        logger.warn({ unit: unit.slug, promptCapturado: promptCompleto !== undefined }, 'aprendizados: conversa de teste barrou resposta que repetia o prompt');
+        logger.warn({ evento: 'conversa_teste', desfecho: 'barrada_eco', unit: unit.slug, promptCapturado: promptCompleto !== undefined }, 'aprendizados: conversa de teste barrou resposta que repetia o prompt');
         res.json({ reply: RESPOSTA_NEUTRA, acoes: [], restantes: respostasRestantes(unit.slug, tz) });
         return;
       }

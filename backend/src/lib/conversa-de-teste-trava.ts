@@ -7,7 +7,9 @@
  *  2. SAÍDA (`ecoDoPrompt`): se a resposta repete trecho longo do prompt (80+ letras seguidas) ou marcador de bloco do prompt,
  *     troca por resposta neutra (a chamada já custou: conta na cota).
  * Não cobre pedido disfarçado (tradução, base64, "resuma") que devolva o conteúdo com outras palavras: é redução de risco, não
- * garantia. O texto das regras que a unidade escreve não é segredo dela; o que se protege é o da rede e o da base.
+ * garantia. DE PROPÓSITO não são protegidos: respostas prontas, base de conhecimento, fatos da unidade, exemplos e as regras
+ * (`<aprendizados>`) — a Sofia deve repeti-los ao paciente, e a unidade escreve as regras. O que se protege é o texto de
+ * instrução da rede e da unidade.
  */
 
 export const RECUSA_DA_ENTRADA = 'No teste, escreva como o paciente escreveria.';
@@ -36,7 +38,8 @@ const ALVO_INTERNO = [
   /\b(?:suas?|seus?|tuas?|teus?)\s+(?:\w+\s+)?(?:instrucoes|instrucao|regras|diretrizes|configuracoes|ordens|comandos|treinamento|programacao|base de conhecimento)\b(?!\s+(?:de|do|da|dos|das|para|pra|sobre|em|no|na)\s+(?!sistema\b|rede\b|ia\b|sofia\b|voce\b|vc\b|seguranca\b))/,
   /\b(?:instrucoes|instrucao|regras|diretrizes|orientacoes|configuracoes|ordens|comandos|treinamento|programacao)\s+(?:internas?|iniciais|ocultas?|secretas?|do sistema|de sistema|da rede|da ia|da sofia|que (?:voce|vc|te|lhe) (?:recebeu|deram|passaram|mandaram|foram dadas))\b/,
   /\bo que (?:te|lhe|voce|vc) (?:disseram|falaram|pediram|mandaram|programaram|passaram|foi dito|foi pedido|recebeu|configuraram|ensinaram)\b(?!\s+(?:sobre|a respeito|do|da|dos|das|no|na|nos|nas|de|ao|em|meu|minha|com)\b)/,
-  /\b(?:texto|tudo|conteudo)\s+(?:que esta\s+)?(?:acima|do inicio da conversa)\b/,
+  // "tudo acima" sozinho é fala de paciente ("paguei tudo acima do combinado"): só com verbo de repetir/mostrar/dizer
+  /\b(?:repita|repete|repetir|mostre|mostra|mostrar|copie|copia|cole|reproduza|transcreva|diga|dizer|escreva|liste|exiba|imprima|revele)\s+(?:\w+\s+){0,3}(?:texto|tudo|conteudo)\s+(?:que esta\s+)?(?:acima|do inicio da conversa)\b/,
   /\b(?:repita|repete|mostre|mostra|copie|cole|reproduza|transcreva|diga|escreva|liste|exiba)\s+(?:\w+\s+){0,4}(?:inicio|comeco|primeira mensagem)\s+(?:da|desta|dessa|de)\s+(?:conversa|chat|sessao|contexto)\b/,
   /\b(?:como|de que jeito|por que|porque|quem)\s+(?:voce|vc)\s+(?:foi|e|esta)\s+(?:programad|configurad|instruid|treinad|criad)/,
   /\bsystem\b/,
@@ -47,7 +50,9 @@ const ALVO_INTERNO = [
 const INJECAO = [
   // só instrução/regra/sistema/prompt é alvo: "ignore a mensagem anterior" e "esqueça tudo que eu falei" são fala de paciente
   /\b(?:ignore|ignora|ignorar|ignorem|desconsidere|desconsiderar|esqueca|descarte|abandone|desobedeca|burle|contorne)\s+(?:(?:(?!mensagem|mensagens|fala|falas|resposta|pergunta|horario|data|nome|erro|pedido)\w+)\s+){0,3}(?:regras?|instrucoes?|orientacoes|diretrizes|prompt|restricoes|filtros?|treinamento|sistema|tudo acima|tudo que (?:esta|vem) acima|tudo (?:o )?que (?:voce|vc) (?:sabe|recebeu|leu|aprendeu)|tudo (?:o )?que te (?:disseram|falaram|pediram|mandaram))\b/,
-  /\b(?:a partir (?:de )?agora|de agora em diante)\s+(?:voce|vc)\s+(?:e|sera|vai ser|deve|nao|obedece|age|atua|responde|fala)\b/,
+  // "a partir de agora você não precisa me mandar lembrete" é fala de paciente: só com alvo de instrução ou de papel
+  /\b(?:a partir (?:de )?agora|de agora em diante)\s+(?:voce|vc)\s+(?:\w+\s+){0,5}(?:regras?|instrucoes?|diretrizes|restricoes|filtros?|limites|modo|sistema|prompt)\b/,
+  /\b(?:a partir (?:de )?agora|de agora em diante)\s+(?:voce|vc)\s+(?:e|sera|vai ser|passa a ser)\s+(?:um|uma)\s+(?:\w+\s+){0,2}(?:ia|assistente|robo|bot|chatbot|programador|desenvolvedor|administrador|admin|dev|hacker|sistema|modelo|agente)\b/,
   /\b(?:finja|simule|aja|atue|interprete|incorpore|assuma o papel)\s+(?:como|de|que)\s+(?:se\s+)?(?:voce\s+)?(?:fosse|e|sendo)?\s*(?:um|uma|o|a)?\s*(?:ia|assistente|programador|desenvolvedor|administrador|admin|dev|hacker|sistema|outro|outra|robo sem|chatbot sem)\b/,
   /\bmodo\s+(?:desenvolvedor|dev|admin|administrador|debug|deus|livre|sem filtro|manutencao|teste interno)\b/,
   /\b(?:jailbreak|dan mode|prompt injection|sem censura)\b/,
@@ -95,7 +100,7 @@ function blocosDoPrompt(prompt: string): string[] {
  * respostas em 7 dias repetiam as respostas prontas): ficam fora da comparação de trecho literal.
  */
 const BLOCOS_DE_DADO = [
-  'respostas_prontas', 'exemplos_ruins', 'conhecimento', 'fontes', 'onde_fica', 'dados_da_clinica', 'calendario',
+  'respostas_prontas', 'aprendizados', 'exemplos_ruins', 'conhecimento', 'fontes', 'onde_fica', 'dados_da_clinica', 'calendario',
   'consulta_do_paciente', 'consulta_que_ja_passou', 'memoria_paciente', 'etapa_do_lead', 'horario_comercial', 'cupom_boas_vindas',
 ];
 
