@@ -9,6 +9,7 @@
  *
  * Só leitura. Nada aqui escreve no Kommo nem na franquia.
  */
+import { SO_CARTAO_DO_KOMMO } from '../lib/chatwoot-lead.js';
 import type { Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { searchClients, searchSchedules, searchTreatments, type SpineUnit } from './spine.service.js';
@@ -159,7 +160,8 @@ export async function panoramaDaUnidade(
   // O lado do Kommo: o vínculo duro e o telefone da conversa.
   const [vinculos, conversas] = await Promise.all([
     prisma.spineLeadLink.findMany({
-      where: { unitId: unit.id },
+      // conversa do Chatwoot (chave sintética) não é cartão do Kommo
+      where: { unitId: unit.id, ...SO_CARTAO_DO_KOMMO },
       select: { kommoLeadId: true, nome: true, spineIdClient: true, spineIdSchedule: true, agendadoPara: true },
     }),
     prisma.conversation.findMany({

@@ -25,6 +25,9 @@ import { fusoDaUnidade } from './fuso.js';
 import { chaveDaClinica, diaCurto, diaNoFuso, ID_SINAL_PIX, somarDias, type LinhaDoSinal } from './sinal-pix.js';
 import { pagouOAntecipado } from './follow-up-worker.js';
 import { normalizar } from './franquia-sync.js';
+import { conversaDoLeadChatwoot } from './chatwoot-lead.js';
+import { contaChatwootDoAmbiente, criarContextoChatwoot } from '../mcp-remoto/chatwoot.js';
+import { portaDoChatwoot } from './chatwoot-porta.js';
 
 const SWEEP_MS = Number(process.env.SINAL_PIX_SWEEP_MS) || 5 * 60_000;
 const PRIMEIRA_VARREDURA_MS = 90_000;
@@ -147,6 +150,29 @@ export async function marcarPagoNoCartao(deps: DepsDaBaixa, leadId: number, nota
   return true;
 }
 
+/** Etiqueta que a régua do Chatwoot já lê como «pagou antes» (no lugar do «✓ Consulta pg antecipado» do Kommo). */
+export const ETIQUETA_PAGOU = 'pagou-antecipado';
+
+/** A baixa de um sinal de conversa do Chatwoot (chave sintética de `chatwoot-lead.ts`): etiqueta + nota, sem Kommo. */
+export interface BaixaNoChatwoot {
+  /** soma a etiqueta, preservando as outras (o Chatwoot substitui a lista inteira) */
+  etiqueta(conversa: number, etiqueta: string): Promise<void>;
+  nota(conversa: number, texto: string): Promise<void>;
+}
+
+export async function baixarNoChatwoot(deps: BaixaNoChatwoot, conversa: number, nota: string, pago: boolean): Promise<void> {
+  // NÃO mexe em `pagamento_antecipado` nem na etapa: é esse atributo que dispara a mensagem com a chave Pix na régua
+  if (pago) await deps.etiqueta(conversa, ETIQUETA_PAGOU);
+  await deps.nota(conversa, nota);
+}
+
+function baixaDoChatwootDoAmbiente(): BaixaNoChatwoot | null {
+  const conta = contaChatwootDoAmbiente();
+  if (!conta) return null;
+  const chat = portaDoChatwoot(criarContextoChatwoot(conta));
+  return { etiqueta: (conversa, etiqueta) => chat.adicionarEtiquetas(conversa, [etiqueta]), nota: (conversa, texto) => chat.nota(conversa, texto) };
+}
+
 export async function notaNoCartao(deps: DepsDaBaixa, leadId: number, nota: string): Promise<void> {
   await deps.kommo.addLeadNote(leadId, nota);
 }
@@ -157,7 +183,7 @@ let rodando = false;
 
 const estado = (slug: string) => estadoDaAutomacao(slug, ID_SINAL_PIX, process.env.SINAL_PIX_SLUGS);
 
-export async function varrerUnidade(unit: Unit, seco: boolean): Promise<void> {
+export async function varrerUnidade(unit: Unit, seco: boolean, chatwoot: BaixaNoChatwoot | null = baixaDoChatwootDoAmbiente()): Promise<void> {
   // Pendentes + os que já mudaram de status mas ainda não deixaram a nota no cartão (o Kommo falhou na vez anterior).
   const linhas = (await prisma.sinalPix.findMany({
     where: { unitId: unit.id, OR: [{ status: 'pendente' }, { status: { in: ['pago', 'expirado'] }, avisadoEm: null }] },
@@ -203,7 +229,12 @@ export async function varrerUnidade(unit: Unit, seco: boolean): Promise<void> {
   const kommo = createKommoClient(unit);
   const aplicar = async (linha: LinhaDoSinal, nota: string, pago: boolean) => {
     const leadId = Number(linha.leadId);
-    if (pago) await marcarPagoNoCartao({ kommo }, leadId, nota);
+    const conversa = conversaDoLeadChatwoot(leadId);
+    if (conversa !== null) {
+      // sinal de uma conversa do Chatwoot: não existe cartão no Kommo para esse id. Sem o Chatwoot no ambiente, tenta na próxima varredura.
+      if (!chatwoot) throw new Error('sinal de conversa do Chatwoot, mas o Chatwoot não está configurado neste servidor');
+      await baixarNoChatwoot(chatwoot, conversa, nota, pago);
+    } else if (pago) await marcarPagoNoCartao({ kommo }, leadId, nota);
     else await notaNoCartao({ kommo }, leadId, nota);
     await prisma.sinalPix.update({ where: { id: linha.id }, data: { avisadoEm: new Date() } });
   };

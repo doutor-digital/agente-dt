@@ -107,6 +107,21 @@ interface Contexto {
   kommo?: KommoClient;
   /** Compartilhado com o safety-net do `pausar_ia`. */
   estado?: EstadoAgenda;
+  /**
+   * Conversa do Chatwoot (sem Kommo): o telefone do WhatsApp da conversa ocupa o lugar do telefone do contato do cartão (mesma regra:
+   * o cadastro achado tem de ser de quem escreve ou de um telefone que o paciente informou). Sem isto e sem Kommo, só o telefone que
+   * o modelo escrever confere.
+   */
+  telefoneDaConversa?: string;
+  /**
+   * Sem Kommo não há tarefa nem nota no cartão: é por aqui que a equipe fica sabendo (Chatwoot: etiqueta + nota). `true` = o aviso saiu.
+   * Cobre o cadastro duplicado, a agenda sem conferir, o cadastro recusado e a vaga presa de uma remarcação.
+   */
+  avisoSemKommo?: (motivo: string, detalhe: string) => Promise<boolean>;
+  /** Não probe a franquia (a sondagem marca e desmarca de verdade): só a grade. Para o «seco» do Chatwoot. */
+  semSondagem?: boolean;
+  /** Não grave o vínculo lead↔paciente (`buscar_paciente`). Para o «seco» do Chatwoot. */
+  semGravar?: boolean;
 }
 
 const NOME_AGENDOU = '✓ Agendou';
@@ -225,7 +240,7 @@ async function clienteDeSondagem(unit: Unit): Promise<number | null> {
   return id;
 }
 
-export function buildConsultarHorarios({ unit, recorder, estado, kommo }: Contexto) {
+export function buildConsultarHorarios({ unit, recorder, estado, kommo, semSondagem }: Contexto) {
   return new DynamicStructuredTool({
     name: 'consultar_horarios',
     description:
@@ -284,7 +299,7 @@ export function buildConsultarHorarios({ unit, recorder, estado, kommo }: Contex
 
       const LOOKAHEAD_DIAS = 30;
       const MAX_DIAS_SONDADOS = 3;
-      const sonda = await clienteDeSondagem(fresca);
+      const sonda = semSondagem ? null : await clienteDeSondagem(fresca);
       let diasSondados = 0;
       let outroTurnoNoDiaPedido: string | null = null;
       let cursor = data;
@@ -383,7 +398,7 @@ export function buildConsultarHorarios({ unit, recorder, estado, kommo }: Contex
           fantasmas = r.fantasmas;
           verificado = true;
           oferecer = r.aceitos;
-        } else if (!sonda) {
+        } else if (!sonda && !semSondagem) {
           logger.warn(
             { unit: fresca.slug, data: cursor, livres: livres.length },
             'consultar_horarios: sem paciente de sondagem — horários NÃO confirmados com a franquia',
@@ -438,7 +453,7 @@ export async function telefoneDoLead(
   }
 }
 
-export function buildBuscarPaciente({ unit, recorder, kommo }: Contexto) {
+export function buildBuscarPaciente({ unit, recorder, kommo, telefoneDaConversa, semGravar }: Contexto) {
   return new DynamicStructuredTool({
     name: 'buscar_paciente',
     description:
@@ -508,7 +523,7 @@ export function buildBuscarPaciente({ unit, recorder, kommo }: Contexto) {
       }
 
       const foneInformado = args.telefone ? SpineService.normalizarWhatsapp(args.telefone) : null;
-      const fone = foneInformado ?? (await telefoneDoLead(kommo, args.leadId));
+      const fone = foneInformado ?? (await telefoneDoLead(kommo, args.leadId)) ?? SpineService.normalizarWhatsapp(telefoneDaConversa ?? '') ?? null;
       const alvo = fim8(fone);
       const batem = alvo ? achados.filter((c) => fim8(c.whatsapp) === alvo) : [];
 
@@ -537,7 +552,7 @@ export function buildBuscarPaciente({ unit, recorder, kommo }: Contexto) {
       }
 
       if (batem.length === 1) {
-        await guardarPaciente(fresca.id, args.leadId, batem[0].idClient);
+        if (!semGravar) await guardarPaciente(fresca.id, args.leadId, batem[0].idClient);
 
         // Achar o cadastro não basta: o texto antigo mandava agendar, e a Sofia
         // agendava — inclusive para quem já tinha horário marcado (caso Wilson,
@@ -615,7 +630,7 @@ export function interpretarHorarioEscolhido(
   return { ok: true, quando };
 }
 
-export function buildCadastrarPaciente({ unit, recorder, kommo }: Contexto) {
+export function buildCadastrarPaciente({ unit, recorder, kommo, avisoSemKommo }: Contexto) {
   return new DynamicStructuredTool({
     name: 'cadastrar_paciente',
     description:
@@ -731,7 +746,7 @@ export function buildCadastrarPaciente({ unit, recorder, kommo }: Contexto) {
               title: `cadastrar_paciente RECUSADO: ${motivo}`,
               payload: { nome: args.nome, idsClient: existente.ids, outroNome: existente.outroNome === true },
             });
-            await avisarCadastroRecusado(fresca, kommo, args.leadId, args.nome, existente.ids, existente.outroNome === true);
+            await avisarCadastroRecusado(fresca, kommo, args.leadId, args.nome, existente.ids, existente.outroNome === true, avisoSemKommo);
             return existente.outroNome
               ? 'NÃO cadastrei: este telefone já é de outro paciente da clínica, com outro nome (pode ser alguém da família ' +
                   'usando o mesmo WhatsApp). NÃO agende — diga que a equipe vai confirmar o cadastro e retorna em seguida.'
@@ -824,15 +839,16 @@ export function buildCadastrarPaciente({ unit, recorder, kommo }: Contexto) {
  * A Sofia recusou o cadastro por conflito (regra de 16/10, chave ligada): UMA nota no cartão para a equipe saber o que
  * conferir — a Sofia só diz ao paciente que a equipe confirma. Falha de rede não derruba a ferramenta.
  */
-async function avisarCadastroRecusado(unit: Unit, kommo: KommoClient | undefined, leadId: number, nome: string, ids: number[], outroNome: boolean): Promise<void> {
-  if (!kommo) return;
+async function avisarCadastroRecusado(unit: Unit, kommo: KommoClient | undefined, leadId: number, nome: string, ids: number[], outroNome: boolean, avisoSemKommo?: Contexto['avisoSemKommo']): Promise<void> {
+  if (!kommo && !avisoSemKommo) return;
   const chave = `cadastro-recusado:${[...new Set(ids)].sort((a, b) => a - b).join(',')}`;
   try {
     if (await avisoRecente(unit.id, leadId, chave, PARA_SEMPRE_MS)) return;
     const texto = outroNome
       ? `⚠ A Sofia NÃO cadastrou «${nome.trim()}» na franquia nem marcou consulta: o telefone (ou este cartão) é do paciente idClient ${ids.join(', ')}, com outro nome — pode ser alguém da família usando o mesmo WhatsApp. Confira com o paciente: se é outra pessoa, cadastre e marque na franquia; se é o mesmo paciente, marque no cadastro dele.`
       : `⚠ A Sofia NÃO cadastrou «${nome.trim()}» na franquia nem marcou consulta: o telefone é de mais de um paciente (idClient ${ids.join(', ')}). Escolha no widget qual é o paciente deste cartão e marque pela agenda.`;
-    await kommo.addLeadNote(leadId, texto);
+    if (kommo) await kommo.addLeadNote(leadId, texto);
+    else await avisoSemKommo!('cadastro_recusado', texto);
     await marcarAviso(unit.id, leadId, chave);
   } catch (err) {
     logger.warn({ err: String(err), unit: unit.slug, leadId }, 'agenda-tools: não consegui avisar o cadastro recusado no cartão');
@@ -1091,7 +1107,7 @@ async function consultaParaRemarcar(
 }
 
 export function buildRemarcarConsulta(ctx: Contexto) {
-  const { unit, recorder, kommo } = ctx;
+  const { unit, recorder, kommo, avisoSemKommo } = ctx;
   const agendar = buildAgendarConsulta(ctx);
   return new DynamicStructuredTool({
     name: 'remarcar_consulta',
@@ -1193,15 +1209,19 @@ export function buildRemarcarConsulta(ctx: Contexto) {
           idSchedule: desfecho.idSchedule,
           erro: c.ok ? null : c.error ?? null,
         });
-        await kommo
-          ?.createTask({
-            leadId: args.leadId,
-            text: texto,
-            completeAt: Math.floor(Date.now() / 1000) + 60 * 60,
-          })
-          .catch((err) =>
-            logger.warn({ err, leadId: args.leadId }, 'remarcar: falha ao abrir tarefa da vaga presa'),
-          );
+        if (kommo) {
+          await kommo
+            .createTask({
+              leadId: args.leadId,
+              text: texto,
+              completeAt: Math.floor(Date.now() / 1000) + 60 * 60,
+            })
+            .catch((err) =>
+              logger.warn({ err, leadId: args.leadId }, 'remarcar: falha ao abrir tarefa da vaga presa'),
+            );
+        } else if (avisoSemKommo) {
+          await avisoSemKommo('vaga_presa', texto).catch(() => false);
+        }
         void avisarJoao(
           `⚠️ *${fresca.name}* — vaga presa na agenda\n\n${texto}`,
           `vagapresa:${fresca.slug}:${desfecho.idSchedule}`,
@@ -1368,7 +1388,7 @@ export function orientacaoDePagamento(
   return '';
 }
 
-export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
+export function buildAgendarConsulta({ unit, recorder, kommo, telefoneDaConversa, avisoSemKommo }: Contexto) {
   // Decidido uma vez por turno, com a unidade do contexto: descrição, esquema e porta enxergam a mesma coisa. De propósito NÃO
   // vem de `fresca`: se a porta pedisse `formaPagamento` e o esquema já não o tivesse, a recusa se repetiria até o fim do turno.
   const semAntecipado = unidadeSemAntecipado(unit);
@@ -1553,7 +1573,7 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
       let leituraDoCadastro: Awaited<ReturnType<typeof SpineService.getClient>> | null = null;
       const lerCadastro = async () =>
         (leituraDoCadastro ??= await SpineService.getClient(fresca, args.idClient).catch((err: unknown) => ({ ok: false as const, error: String(err) })));
-      const foneLead = await telefoneDoLead(kommo, args.leadId);
+      const foneLead = (await telefoneDoLead(kommo, args.leadId)) ?? (telefoneDaConversa ? SpineService.normalizarWhatsapp(telefoneDaConversa) : null);
       const foneInformado = args.telefone ? SpineService.normalizarWhatsapp(args.telefone) : null;
       // O telefone do cadastro tem de ser o deste paciente (o do cartão ou o que ele informou); se não for, o cadastro é de outra pessoa.
       const aceitos = [fim8(foneLead), fim8(foneInformado)].filter((x): x is string => x !== null);
@@ -1565,6 +1585,8 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
       // responde ao paciente não pode prometer retorno da equipe. «Repetida» vale como saiu: já está na mão da equipe.
       const avisarEquipe = async (motivo: 'cadastro_duplicado' | 'agenda_sem_conferir', detalhe: string, chaveExtra?: string): Promise<boolean> => {
         if (!kommo || !args.leadId) {
+          // conversa do Chatwoot: o aviso vira etiqueta + nota lá (a chave extra, o horário, entra no texto)
+          if (!kommo && avisoSemKommo) return avisoSemKommo(motivo, chaveExtra ? `${detalhe} (horário ${chaveExtra})` : detalhe).catch(() => false);
           logger.warn({ unit: fresca.slug, leadId: args.leadId ?? null, motivo }, 'agendar_consulta: sem cartão/Kommo para abrir a tarefa da equipe');
           return false;
         }
