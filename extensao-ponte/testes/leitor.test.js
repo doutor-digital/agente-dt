@@ -140,3 +140,17 @@ describe('leitor — lerFalas ("Passar para a Sofia")', () => {
     assert.equal(L.quandoDoPreTexto('sem colchete'), null);
   });
 });
+
+describe('leitor — foto de perfil (0.7.0)', () => {
+  it('pega a foto do cabeçalho só quando é do WhatsApp (https)', () => {
+    const doc = abrir('whatsapp-cus.html');
+    assert.equal(L.lerConversa(doc, 5).foto, null);
+    const cab = doc.querySelector('#main header');
+    const img = doc.createElement('img');
+    img.setAttribute('src', 'https://pps.whatsapp.net/v/t61/foto.jpg?oh=1');
+    cab.appendChild(img);
+    assert.equal(L.lerConversa(doc, 5).foto, 'https://pps.whatsapp.net/v/t61/foto.jpg?oh=1');
+    img.setAttribute('src', 'https://exemplo.com/x.jpg');
+    assert.equal(L.lerConversa(doc, 5).foto, null);
+  });
+});

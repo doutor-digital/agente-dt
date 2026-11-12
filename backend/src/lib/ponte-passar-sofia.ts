@@ -93,3 +93,23 @@ export function juntarNaMemoria(resumoAtual: string | null | undefined, historic
 export function liberadaAgora(liberadaAte: Date | null | undefined, agora: Date = new Date()): boolean {
   return !!liberadaAte && liberadaAte.getTime() > agora.getTime();
 }
+
+// ── "Sofia atende todos" (12/11/2026): a chave da unidade na Ponte ──
+
+/** Teto da chave: no máximo 24 h por vez (esquecida ligada, ela desliga sozinha). */
+export const MAX_TODOS_MS = 24 * 60 * 60_000;
+
+export function lerPedidoDeTodos(
+  body: unknown,
+  agora: Date = new Date(),
+): { ok: true; ate: Date | null; por: string | null } | { ok: false; erro: string } {
+  const b = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
+  const por = limpar(b.por, 60) || null;
+  if (b.ate === null) return { ok: true, ate: null, por };
+  if (typeof b.ate !== 'string') return { ok: false, erro: 'informe até quando' };
+  const ate = new Date(b.ate);
+  if (Number.isNaN(ate.getTime())) return { ok: false, erro: 'data inválida' };
+  if (ate.getTime() <= agora.getTime()) return { ok: false, erro: 'o horário já passou' };
+  if (ate.getTime() - agora.getTime() > MAX_TODOS_MS) return { ok: false, erro: 'no máximo 24 h por vez' };
+  return { ok: true, ate, por };
+}

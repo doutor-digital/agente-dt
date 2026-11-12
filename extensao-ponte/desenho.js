@@ -128,9 +128,19 @@
     return (p[0].charAt(0) + (p.length > 1 ? p[p.length - 1].charAt(0) : '')).toUpperCase();
   }
 
-  function avatar(doc, nome, classe) {
+  function avatar(doc, nome, classe, foto) {
     var a = el(doc, 'span', { classe: 'avatar' + (classe ? ' ' + classe : '') }, iniciais(nome));
     a.setAttribute('aria-hidden', 'true');
+    // 0.7.0: com a foto do WhatsApp Web, ela cobre as iniciais; se não carregar, ficam as iniciais
+    if (foto && /^https:\/\/[a-z0-9.-]+\.(whatsapp\.net|whatsapp\.com)\//i.test(foto)) {
+      var img = el(doc, 'img', { classe: 'avatar__foto' });
+      img.setAttribute('alt', '');
+      img.setAttribute('referrerpolicy', 'no-referrer');
+      img.addEventListener('error', function () { img.remove(); });
+      img.setAttribute('src', foto);
+      a.classList.add('avatar--foto');
+      a.appendChild(img);
+    }
     return a;
   }
 
@@ -206,7 +216,7 @@
     if (c.fechado) selos.appendChild(el(doc, 'span', { classe: 'chip chip--fechado' }, 'fechado'));
     return el(doc, 'header', { classe: 'paciente', dados: { bloco: 'paciente' } },
       el(doc, 'div', { classe: 'paciente__topo' },
-        avatar(doc, c.nome),
+        avatar(doc, c.nome, null, r.foto),
         el(doc, 'div', { classe: 'paciente__quem' },
           el(doc, 'h1', { classe: 'cartao__nome' }, c.nome || 'Cartão ' + c.id),
           c.telefone ? el(doc, 'p', { classe: 'paciente__telefone', dados: { papel: 'telefone' } }, ic(doc, 'telefone'), c.telefone) : null)),

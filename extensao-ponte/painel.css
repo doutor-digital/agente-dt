@@ -975,3 +975,13 @@ h3.guia__titulo { font-size: 14px; margin-top: 10px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* 0.7.0: foto de perfil do WhatsApp no avatar */
+.avatar { position: relative; overflow: hidden; }
+.avatar__foto { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+
+/* 0.7.0: "Sofia atende todos" */
+.todos { margin: 8px 12px 0; padding: 10px 12px; border-radius: 12px; background: var(--cinza-suave); }
+.todos--ligado { background: var(--verde-suave); }
+.todos__texto { margin: 0 0 8px; font-weight: 700; font-size: 13px; }
+.todos__botoes { display: flex; flex-wrap: wrap; gap: 6px; }

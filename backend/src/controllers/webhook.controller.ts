@@ -82,6 +82,7 @@ import { garantirTituloPadrao } from '../lib/titulo-padrao.js';
 import { telefoneDeFamiliarNoCartao } from '../lib/telefone-de-familiar.js';
 import { SpineSyncService } from '../services/spine-sync.service.js';
 import { conversaLiberadaPelaEquipe } from '../lib/ponte-passar-sofia-banco.js';
+import { liberadaAgora } from '../lib/ponte-passar-sofia.js';
 import { z } from 'zod';
 
 const attachmentSchema = z
@@ -1480,7 +1481,8 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
   // unidade fique calada não deveria precisar inventar uma mensagem para isso.
   const hours = checkBusinessHours(unit);
   // A equipe passou ESTE lead para a Sofia pela Ponte ("Passar para a Sofia"): fora do horário da IA ela responde só ele.
-  if (hours.enabled && !hours.isOpen && !(await conversaLiberadaPelaEquipe(unit.id, leadId))) {
+  // E "Sofia atende todos" (Ponte): até `iaTodosAte` ela responde fora do horário para todos os pacientes da unidade.
+  if (hours.enabled && !hours.isOpen && !liberadaAgora(unit.iaTodosAte) && !(await conversaLiberadaPelaEquipe(unit.id, leadId))) {
     try {
       if (!hours.outOfHoursMessage) {
         // silêncio proposital: quem atende nesse horário é gente

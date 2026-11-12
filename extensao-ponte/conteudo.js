@@ -52,6 +52,7 @@
         telefone: c.telefone,
         fonteTelefone: c.fonteTelefone,
         lid: c.lid,
+        foto: c.foto || null,
         impressoes: hashes.filter(Boolean),
       };
     });

@@ -328,6 +328,9 @@ model Unit {
   pausaMotivo                 String?   @map("pausa_motivo")
   pausaPor                    String?   @map("pausa_por")
   pausaCodigo                 String?   @map("pausa_codigo")
+  /// Ponte "Sofia atende todos" (12/11/2026): até este instante a Sofia responde fora do horário da IA, para todos os
+  /// pacientes (só a trava de horário cai; pausa da unidade, etapa e pausa do cartão continuam). Quem ligou vai no log.
+  iaTodosAte                  DateTime? @map("ia_todos_ate")
 
   /// Cartão de chegada após o agendamento: link do mapa e foto da fachada (Drive do Kommo).
   clinicMapUrl            String? @map("clinic_map_url")
