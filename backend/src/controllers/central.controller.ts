@@ -10,7 +10,8 @@
  *   POST /api/public/central/chamados/feito    { id } — o João deu "Feito" na fila
  *
  * Todas pedem o cabeçalho X-Central-Chave = CENTRAL_EXTENSAO_CHAVE (≥ 32 caracteres) do .env; sem ela configurada, 404 (desligado).
- * A extensão chama do service worker (host_permissions), então não precisa de CORS. Toda mudança avisa o João no @ddchamados_bot.
+ * A extensão chama do service worker (host_permissions), então não precisa de CORS. Toda mudança de PAUSA avisa o João no
+ * @ddchamados_bot (os chamados da fase 1b não avisam: ficam na fila da extensão).
  */
 import type { Request, Response } from 'express';
 import { z } from 'zod';
@@ -22,7 +23,7 @@ import { armazemPausaPrisma } from '../lib/suporte-pausa-banco.js';
 import { mudarPeloPainel } from '../lib/suporte-pausa.js';
 import { TEXTOS_CENTRAL, chaveCentralConfere, chaveCentralLigada, nomeLimpo } from '../lib/central-pausa.js';
 import { estadoDaPessoa, listarPausadas, mudarPessoa } from '../lib/central-pausa-banco.js';
-import { limparSinal, type SinalLimpo } from '../lib/central-chamados.js';
+import { limparSinal } from '../lib/central-chamados.js';
 import { listarAbertos, marcarFeito, registrarSinais } from '../lib/central-chamados-banco.js';
 
 const POR = 'extensão do Chrome';
@@ -115,10 +116,11 @@ export async function centralChamadosHandler(req: Request, res: Response): Promi
     return;
   }
   try {
-    const sinais = (p.data.sinais ?? []).map(limparSinal).filter((x): x is SinalLimpo => !!x);
-    const r = sinais.length || p.data.lidas?.length ? await registrarSinais(sinais, p.data.lidas ?? []) : { novos: 0 };
+    // mantém a posição (inválido = null) para `ids[i]` casar com o sinal i que a extensão mandou
+    const sinais = (p.data.sinais ?? []).map(limparSinal);
+    const r = sinais.length || p.data.lidas?.length ? await registrarSinais(sinais, p.data.lidas ?? []) : { novos: 0, ids: [] };
     if (r.novos) logger.info({ novos: r.novos, sinais: sinais.length }, 'central: chamados novos pela extensão');
-    res.json({ ok: true, novos: r.novos, abertos: await listarAbertos() });
+    res.json({ ok: true, novos: r.novos, ids: r.ids, abertos: await listarAbertos() });
   } catch (e) {
     logger.warn({ err: String(e) }, 'central: chamados falhou');
     res.status(502).json({ error: 'não consegui gravar agora' });

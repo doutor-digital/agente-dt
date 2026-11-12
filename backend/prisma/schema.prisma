@@ -2761,6 +2761,8 @@ model ChatwootReguaDisparo {
 /// abre conversa). Um chamado ABERTO por conversa (índice único parcial na migration); sinais seguintes anexam o trecho. Sem
 /// telefone: `chave_conversa` é HMAC do nome; dígitos longos do trecho e do nome viram "…1234" (`central-chamados.ts`).
 /// Fechado há mais de 30 dias é apagado.
+/// ATENÇÃO: o índice único parcial `central_chamados_um_aberto_por_conversa` (status = 'aberto') existe SÓ na migration — o Prisma
+/// não descreve índice parcial. Se um `prisma migrate dev` gerar `DROP INDEX` dele, apague essa linha da migration nova.
 model CentralChamado {
   id            String    @id @default(cuid())
   chaveConversa String    @map("chave_conversa")
@@ -2774,7 +2776,7 @@ model CentralChamado {
   naoLidas      Int       @default(0) @map("nao_lidas")
   /// quantos sinais chegaram para este chamado
   vezes         Int       @default(1)
-  /// aberto | feito (o João marcou) | vista (não lida que o João abriu no WhatsApp)
+  /// aberto | feito (o João marcou) | vista (não lida que o João abriu no WhatsApp, ou parada 3 dias) | expirado (aberto parado 30 dias)
   status        String    @default("aberto")
   criadoEm      DateTime  @default(now()) @map("criado_em")
   atualizadoEm  DateTime  @updatedAt @map("atualizado_em")

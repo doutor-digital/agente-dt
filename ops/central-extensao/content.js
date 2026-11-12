@@ -24,7 +24,7 @@
     }
     // contato não salvo: o título é o próprio número
     if (!numero && !grupo && /^\+?[\d\s()-]{10,}$/.test(nome)) numero = nome.replace(/\D/g, '');
-    return { nome: nome.slice(0, 60), numero, grupo };
+    return { nome: nome.slice(0, 60), nomeCompleto: nome.slice(0, 120), numero, grupo };
   }
 
   // ── painel ──────────────────────────────────────────────────────────────────────────────────
@@ -138,14 +138,34 @@
     const nomes = String(cfg.nomes || '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
     const baixo = trecho.toLowerCase();
     if (naoLidas && nomes.some((n) => baixo.includes('@' + n))) mencao = true;
-    // grupo: ícone de grupo, ou prévia "Fulano: texto" (no privado, a prévia de mensagem recebida não traz quem mandou)
-    const grupo = !!el.querySelector('[data-icon*="group" i]') || /^~?\s?[^:]{1,40}:\s/.test(trecho);
+    // grupo: o que a extensão já viu ao você abrir a conversa; senão ícone de grupo, ou prévia "Fulano: texto" (no privado, a
+    // prévia de mensagem recebida não traz quem mandou) — menos quando o "Fulano" é palavra comum ("Obs: …", "Urgente: …")
+    const sabido = memo.tipos[conversa];
+    const prefixo = /^~?\s?([^:]{1,40}):\s/.exec(trecho);
+    const grupo = sabido ? sabido === 'g' : !!el.querySelector('[data-icon*="group" i]') || (!!prefixo && !PALAVRA_COMUM.test(prefixo[1].trim()));
     return { conversa, trecho, naoLidas, mencao, grupo };
   }
 
-  const enviado = new Map(); // conversa → assinatura do último sinal mandado (só manda o que mudou)
+  // memória local (só neste navegador, sobrevive a recarregar a página): o que já foi mandado, o nome real de cada chamado
+  // (o servidor guarda o nome mascarado) e quem é grupo ou privado (aprendido ao você abrir a conversa)
+  const PALAVRA_COMUM = /^(obs|ps|ok|oi|ol[aá]|bom dia|boa tarde|boa noite|aten[cç][aã]o|importante|urgente|assunto|nota|lembrete|re|fwd|pergunta|d[uú]vida|resumo|motivo|endere[cç]o|hor[aá]rio|valor|link|data|dia|hora|local|pix|cpf|nome|telefone)$/i;
+  const memo = { enviado: {}, nomes: {}, tipos: {} };
+  const MAX_MEMO = 400;
+  const aparar = (o) => { const k = Object.keys(o); for (const x of k.slice(0, Math.max(0, k.length - MAX_MEMO))) delete o[x]; };
+  let memoPronta = false;
+  try { chrome.storage.local.get(['memo1b'], (c) => { if (c && c.memo1b) Object.assign(memo, c.memo1b); memoPronta = true; }); } catch (e) { memoPronta = true; }
+  function guardarMemo() { aparar(memo.enviado); aparar(memo.nomes); aparar(memo.tipos); try { chrome.storage.local.set({ memo1b: memo }); } catch (e) { /* recarregada */ } }
+  const enviado = {
+    get: (k) => memo.enviado[k],
+    has: (k) => k in memo.enviado,
+    set: (k, v) => { delete memo.enviado[k]; memo.enviado[k] = v; },
+    delete: (k) => { delete memo.enviado[k]; },
+  };
   let diag = '';
   async function varrer() {
+    if (!memoPronta) return;
+    const aberta = conversaAberta();
+    if (aberta && aberta.nomeCompleto && (aberta.grupo || aberta.numero)) memo.tipos[aberta.nomeCompleto] = aberta.grupo ? 'g' : 'p';
     const linhas = linhasDaLista();
     const sinais = [], lidas = [];
     let nNao = 0, nMen = 0;
@@ -161,7 +181,7 @@
       else if (l.naoLidas && (l.grupo ? cfg.grupos : cfg.privado)) tipo = 'nao_lida';
       if (tipo) {
         const ass = `${tipo}|${l.naoLidas}|${l.trecho}`;
-        if (enviado.get(l.conversa) !== ass) { enviado.set(l.conversa, ass); sinais.push({ conversa: l.conversa, tipo, grupo: l.grupo, trecho: l.trecho, naoLidas: l.naoLidas }); }
+        if (enviado.get(l.conversa) !== ass) sinais.push({ ass, sinal: { conversa: l.conversa, tipo, grupo: l.grupo, trecho: l.trecho, naoLidas: l.naoLidas } });
       } else if (enviado.has(l.conversa) && !l.naoLidas) {
         // você abriu a conversa: a "não lida" vira vista no servidor (menção só sai com Feito)
         enviado.delete(l.conversa);
@@ -169,9 +189,20 @@
       }
     }
     diag = `Lista: ${vistas.size} conversas na tela · ${nNao} não lidas · ${nMen} menções`;
-    if (!sinais.length && !lidas.length && filaCarregada) { desenharFila(); return; }
-    const r = await pedir('chamados', { sinais: sinais.slice(0, 40), lidas: lidas.slice(0, 100) });
-    if (!r.ok) { for (const s of sinais) enviado.delete(s.conversa); diag += ' · ⚠️ ' + r.erro; desenharFila(); return; }
+    // o que passou do teto fica para a próxima varredura (só marca como mandado o que foi de fato)
+    const lote = sinais.slice(0, 40), loteLidas = lidas.slice(0, 100);
+    for (const n of lidas.slice(100)) enviado.set(n, 'lida-pendente');
+    if (!lote.length && !loteLidas.length && filaCarregada) { guardarMemo(); desenharFila(); return; }
+    const r = await pedir('chamados', { sinais: lote.map((x) => x.sinal), lidas: loteLidas });
+    if (!r.ok) {
+      // nada foi gravado: as lidas voltam para tentar de novo; os sinais seguem fora de `enviado`, então vão de novo
+      for (const n of loteLidas) enviado.set(n, 'lida-pendente');
+      guardarMemo();
+      diag += ' · ⚠️ ' + r.erro; desenharFila(); return;
+    }
+    const ids = r.dados.ids || [];
+    lote.forEach((x, i) => { enviado.set(x.sinal.conversa, x.ass); if (ids[i]) memo.nomes[ids[i]] = x.sinal.conversa; });
+    guardarMemo();
     abertos = r.dados.abertos || [];
     filaCarregada = true;
     desenharFila();
@@ -220,11 +251,11 @@
       const acoes = document.createElement('span');
       acoes.style.cssText = 'flex:none';
       acoes.append(
-        botaozinho('Abrir', () => { if (!abrirConversa(c.conversa)) aviso.textContent = 'Não está na lista visível: busque pelo nome.'; }),
+        botaozinho('Abrir', () => { if (!abrirConversa(memo.nomes[c.id] || c.conversa)) aviso.textContent = 'Não está na lista visível: busque pelo nome.'; }),
         botaozinho('Feito', async () => {
           const r = await pedir('feito', { id: c.id });
           if (!r.ok) { aviso.textContent = '⚠️ ' + r.erro; return; }
-          enviado.delete(c.conversa);
+          // não mexe em `enviado`: com o selo ainda na lista, o mesmo trecho não volta (e, se voltar, o servidor ignora)
           abertos = r.dados.abertos || [];
           desenharFila();
         }),
@@ -257,11 +288,12 @@
   btChamado.style.color = '#0b4f8a';
   btChamado.onclick = async () => {
     const c = conversaAberta();
-    if (!c || !c.nome) { aviso.textContent = 'Abra uma conversa.'; return; }
+    if (!c || !c.nomeCompleto) { aviso.textContent = 'Abra uma conversa.'; return; }
     const trecho = trechoDaConversa();
     aviso.textContent = 'Gravando…';
-    const r = await pedir('chamados', { sinais: [{ conversa: c.nome, tipo: 'manual', grupo: c.grupo, trecho }] });
+    const r = await pedir('chamados', { sinais: [{ conversa: c.nomeCompleto, tipo: 'manual', grupo: c.grupo, trecho }] });
     if (!r.ok) { aviso.textContent = '⚠️ ' + r.erro; return; }
+    if (r.dados.ids && r.dados.ids[0]) { memo.nomes[r.dados.ids[0]] = c.nomeCompleto; guardarMemo(); }
     abertos = r.dados.abertos || [];
     filaCarregada = true;
     aviso.textContent = trecho ? 'Virou chamado.' : 'Virou chamado (sem trecho: selecione o texto antes, se quiser).';

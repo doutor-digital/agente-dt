@@ -5,12 +5,16 @@ A cada 20 s a extensão olha a **lista de conversas** (só as que estão na tela
 - **@ menção a você** em grupo (selo de menção do WhatsApp, ou "@joão" na prévia — ajuste os nomes nas opções);
 - **💬 não lida no privado** (não lidas em grupo sem menção ficam de fora: ligue nas opções se quiser).
 
-Vai **só o nome da conversa e a prévia** que a lista já mostra (≤ 280 caracteres). Telefone, CPF e qualquer número longo viram
-"…1234" no servidor. A extensão **nunca abre conversa sozinha**.
+Vai **só o nome da conversa e a prévia** que a lista já mostra (≤ 280 caracteres). Telefone, CPF, cartão, e-mail e qualquer número longo são
+mascarados no servidor. A extensão **nunca abre conversa sozinha**.
 
 No painel aparece a fila **📥 Chamados abertos**: **Abrir** clica na conversa da lista; **Feito** tira da fila. Um chamado por
-conversa: mensagens novas da mesma conversa entram no mesmo chamado. A **não lida** sai sozinha quando você abre a conversa;
-a **menção** só sai com **Feito**. Fechado há mais de 30 dias é apagado.
+conversa: mensagens novas da mesma conversa entram no mesmo chamado. A **não lida** sai sozinha quando você abre a conversa
+(ou depois de 3 dias parada); a **menção** só sai com **Feito**. Feito é Feito: o mesmo selo não reabre o chamado; só mensagem
+nova reabre. Aberto parado 30 dias expira; fechado há mais de 30 dias é apagado.
+
+A extensão guarda **neste navegador** o que já mandou, o nome real de cada chamado (o servidor só tem o nome mascarado) e quais
+conversas são grupo (aprende quando você abre a conversa).
 
 **📌 Virar chamado**: com uma conversa aberta, grava o texto que você selecionou (ou, sem seleção, a última mensagem recebida).
 
@@ -43,6 +47,6 @@ uma chave (HMAC) e os 4 últimos dígitos. Toda mudança avisa você no @ddchama
 ## Limites conhecidos
 - Chamados: só vê as conversas que a lista mostra (as do topo). Rolar a lista faz ela ver mais.
 - Duas conversas com o mesmo nome caem no mesmo chamado.
-- Grupo × privado é adivinhado pela prévia ("Fulano: texto" = grupo).
+- Grupo × privado: até você abrir a conversa uma vez, é adivinhado pela prévia ("Fulano: texto" = grupo; "Obs: …" não conta).
 - Grupo não tem pausa por pessoa.
 - Se o WhatsApp esconder o número (contato só com id interno), o painel avisa "Não achei o número desta conversa".

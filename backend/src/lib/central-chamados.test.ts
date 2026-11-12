@@ -10,16 +10,26 @@ import {
   mascararDigitos,
   nomeParaMostrar,
   tipoMaisForte,
+  trechoJaVisto,
 } from './central-chamados.js';
 
-test('mascararDigitos: telefone em vários formatos vira …1234', () => {
-  assert.equal(mascararDigitos('liga 63 99999-1234 agora'), 'liga …1234 agora');
-  assert.equal(mascararDigitos('+55 (63) 9 9999-1234'), '…1234');
-  assert.equal(mascararDigitos('5563999991234'), '…1234');
+const SEM_DIGITO_LONGO = (s: string) => assert.ok(!/\d{5,}/.test(s.replace(/[\s().-]/g, '')), s);
+
+test('mascararDigitos: telefone em vários formatos some, fica só o final', () => {
+  for (const t of ['liga 63 99999-1234 agora', '+55 (63) 9 9999-1234', '5563999991234', '(63) 3411-1234']) {
+    const m = mascararDigitos(t);
+    assert.ok(m.includes('1234'), m);
+    assert.ok(!/9999|3411/.test(m), m);
+    SEM_DIGITO_LONGO(m);
+  }
 });
 
-test('mascararDigitos: CPF mascarado; hora, valor e data ficam', () => {
-  assert.equal(mascararDigitos('cpf 123.456.789-09'), 'cpf …8909');
+test('mascararDigitos: CPF, cartão e e-mail somem; hora, valor e data ficam', () => {
+  assert.ok(!mascararDigitos('cpf 123.456.789-09').includes('456'));
+  assert.ok(!mascararDigitos('cartão 4111 1111 1111 1111').includes('1111 1111'));
+  assert.ok(!mascararDigitos('manda pra ana.silva@gmail.com').includes('ana.silva'));
+  assert.equal(mascararDigitos('@João vê isso'), '@João vê isso');
+  assert.ok(!mascararDigitos('protocolo 1234567890123').includes('1234567890'));
   assert.equal(mascararDigitos('às 14:30, sala 12, R$ 350'), 'às 14:30, sala 12, R$ 350');
   assert.equal(mascararDigitos('dia 12/11/2026'), 'dia 12/11/2026');
 });
@@ -33,7 +43,8 @@ test('limparTrecho: tira controle, junta espaço e corta no teto', () => {
 });
 
 test('nomeParaMostrar: contato não salvo aparece mascarado', () => {
-  assert.equal(nomeParaMostrar('+55 63 99999-1234'), '…1234');
+  const n = nomeParaMostrar('+55 63 99999-1234');
+  assert.ok(n.includes('1234') && !n.includes('99999'), n);
   assert.equal(nomeParaMostrar('Mkt | Dr Hérnia Timbó'), 'Mkt | Dr Hérnia Timbó');
 });
 
@@ -72,7 +83,7 @@ test('limparSinal: aceita válido e limpa', () => {
     conversa: 'Grupo X',
     grupo: true,
     tipo: 'mencao',
-    trecho: 'Ana: @João liga …1234',
+    trecho: mascararDigitos('Ana: @João liga 63999991234'),
     naoLidas: 3,
   });
 });
@@ -88,4 +99,11 @@ test('limparSinal: grupo só com true; não lidas negativas viram 0', () => {
   const s = limparSinal({ conversa: 'X', tipo: 'nao_lida', grupo: 'sim', naoLidas: -5 });
   assert.equal(s?.grupo, false);
   assert.equal(s?.naoLidas, 0);
+});
+
+test('trechoJaVisto: mesmo selo não reabre; mensagem nova reabre; vazio nunca conta', () => {
+  assert.equal(trechoJaVisto('a\nb', 'b'), true);
+  assert.equal(trechoJaVisto('a\nb', 'c'), false);
+  assert.equal(trechoJaVisto('a', ''), false);
+  assert.equal(trechoJaVisto('', ''), false);
 });
