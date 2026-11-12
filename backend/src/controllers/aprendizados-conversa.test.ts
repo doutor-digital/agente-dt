@@ -120,21 +120,22 @@ test('conversa: teto diário por unidade (env) — passou, 429 e o modelo não r
   assert.equal(rodou, 2);
 });
 
-test('conversa: se o modelo falha, a resposta volta para o teto dela (erro nosso não gasta)', async () => {
-  process.env.APRENDIZADOS_CONVERSA_MAX_POR_DIA = '1';
-  let falhar = true;
-  const h = criarConversaHandler(async () => (falhar ? { ok: false, status: 500, error: 'playground_failed' } : ok('agora foi')));
+test('conversa: falha DEPOIS de chamar o modelo conta no teto (pode ter custado); sem chave de IA (400) devolve', async () => {
+  process.env.APRENDIZADOS_CONVERSA_MAX_POR_DIA = '2';
+  let resultado: ResultadoDoTeste = { ok: false, status: 500, error: 'playground_failed' };
+  const h = criarConversaHandler(async () => resultado);
   assert.equal((await chamar(h, { codigo: '482913', messages: FALA })).status, 502);
-  falhar = false;
-  const r = await chamar(h, { codigo: '482913', messages: FALA });
-  assert.equal(r.status, 200, 'a tentativa que falhou não consumiu o único lugar do dia');
-  // e uma exceção solta também
+  assert.equal((await chamar(h, { codigo: '482913', messages: FALA })).status, 502);
+  assert.equal((await chamar(h, { codigo: '482913', messages: FALA })).status, 429, 'falha repetida não gasta dinheiro de graça');
+  zerarConversasDeTeste();
+  resultado = { ok: false, status: 400, error: 'openai_not_configured' };
+  for (let i = 0; i < 5; i++) assert.equal((await chamar(h, { codigo: '482913', messages: FALA })).status, 502, 'o modelo nem foi chamado: não gasta o teto');
+  // exceção solta: 500, e também conta
   zerarConversasDeTeste();
   const quebra = criarConversaHandler(async () => {
     throw new Error('banco caiu');
   });
   assert.equal((await chamar(quebra, { codigo: '482913', messages: FALA })).status, 500);
-  assert.equal((await chamar(h, { codigo: '482913', messages: FALA })).status, 200);
 });
 
 test('conversa: pedidos ao mesmo tempo — a terceira espera (429) e a vaga volta quando a chamada termina', async () => {

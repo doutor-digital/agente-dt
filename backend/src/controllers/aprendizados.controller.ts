@@ -167,13 +167,15 @@ export function criarConversaHandler(rodar: RodarTeste) {
       if (r === 'prazo') {
         // a chamada pode terminar e custar: não devolve a resposta ao teto
         logger.warn({ unit: unit.slug }, 'aprendizados: a conversa de teste passou do prazo');
-        res.status(504).json({ error: 'A Sofia demorou demais para responder. Tente de novo em instantes.' });
+        res.status(504).json({ error: 'A Sofia demorou demais para responder. Espere um pouco e tente de novo (esta resposta pode ter contado no limite de hoje).' });
         return;
       }
       if (!r.ok) {
-        devolverResposta(unit.slug, tz);
-        logger.warn({ unit: unit.slug, erro: r.error }, 'aprendizados: a conversa de teste falhou');
-        res.status(502).json({ error: 'A Sofia não respondeu agora. Tente de novo em instantes (esta não contou).' });
+        // só devolve se o modelo nem chegou a ser chamado (400 = sem chave de IA). Falha DEPOIS de chamar pode ter custado até
+        // 5 iterações: devolver aqui deixaria uma falha repetida gastar dinheiro sem gastar o teto.
+        if (r.status === 400) devolverResposta(unit.slug, tz);
+        logger.warn({ unit: unit.slug, erro: r.error, status: r.status }, 'aprendizados: a conversa de teste falhou');
+        res.status(502).json({ error: 'A Sofia não respondeu agora. Tente de novo em instantes.' });
         return;
       }
       logger.info(
@@ -186,9 +188,8 @@ export function criarConversaHandler(rodar: RodarTeste) {
         restantes: respostasRestantes(unit.slug, tz),
       });
     } catch (err) {
-      devolverResposta(unit.slug, tz);
       logger.error({ err, unit: unit.slug }, 'aprendizados: a conversa de teste quebrou');
-      res.status(500).json({ error: 'A Sofia não respondeu agora. Tente de novo em instantes (esta não contou).' });
+      res.status(500).json({ error: 'A Sofia não respondeu agora. Tente de novo em instantes.' });
     } finally {
       clearTimeout(prazo);
     }
@@ -503,7 +504,7 @@ button.sec{min-height:46px;padding:10px 14px;border:1px solid var(--line);backgr
       l.appendChild(row);
     });
     $('btnPrevia').textContent='Ver prévia'+(e.previasRestantes!=null?(' ('+e.previasRestantes+' hoje)'):'');
-    if(e.conversa){ conv=e.conversa; restaConversa(conv.restantes); renderChat(); }
+    if(e.conversa){ conv=e.conversa; restaConversa(conv.restantes); renderChat(aguardando); }
   }
   async function carregar(){ if(codigo().length!==6){ $('corpo').hidden=true; return; } try{ mostrar(await api('GET')); }catch(e){ $('corpo').hidden=true; aviso('msgTopo',e.message,false); } }
   function contar(){ var n=$('regra').value.trim().length; $('cnt').textContent=n+'/'+MAX; if(previaDe!==null && $('regra').value.trim()!==previaDe){ $('cardRes').hidden=true; previaDe=null; } }
@@ -538,7 +539,8 @@ button.sec{min-height:46px;padding:10px 14px;border:1px solid var(--line);backgr
   });
   // ── conversa de teste: o histórico fica no navegador, nunca no servidor ──
   function guardar(){ historico=historico.slice(-(conv.maxMensagens||40)); while(historico.length && historico[0].role!=='user') historico.shift(); try{ localStorage.setItem(KH,JSON.stringify(historico)); }catch(e){} }
-  function restaConversa(n){ $('restaChat').textContent=(n!=null?('Restam '+n+' respostas de teste hoje nesta unidade.'):''); $('btnEnviar').disabled=aguardando||n===0; }
+  var restam=null;
+  function restaConversa(n){ restam=n; $('restaChat').textContent=(n!=null?('Restam '+n+' respostas de teste hoje nesta unidade.'):''); $('btnEnviar').disabled=aguardando||n===0; }
   function renderChat(digitando){
     var c=$('chat'); c.textContent='';
     if(!historico.length && !digitando){ c.appendChild(el('div','bm s dig','Escreva uma fala de paciente, por exemplo: “Oi, quanto custa a consulta?”')); }
@@ -567,7 +569,7 @@ button.sec{min-height:46px;padding:10px 14px;border:1px solid var(--line);backgr
       var r=await api('POST','/conversa',{messages:historico.map(function(m){return {role:m.role,content:m.content}})});
       historico.push({role:'assistant',content:r.reply,a:r.acoes||[]}); guardar(); aguardando=false; renderChat(); restaConversa(r.restantes);
     }catch(e){
-      historico.pop(); $('fala').value=t; aguardando=false; renderChat(); aviso('msgChat',e.message,false); restaConversa(null); $('btnEnviar').disabled=false;
+      historico.pop(); $('fala').value=t; aguardando=false; renderChat(); aviso('msgChat',e.message,false); restaConversa(restam);
     }
     guardar();
   }
@@ -580,7 +582,9 @@ button.sec{min-height:46px;padding:10px 14px;border:1px solid var(--line);backgr
     if(!ult){ aviso('msgChat','Converse primeiro: a regra parte de uma fala do paciente.',false); return; }
     var fala=ult.replace(/[<>]/g,'').replace(/\\s+/g,' ').trim();
     var modelo='Quando o paciente disser algo como “'+fala.slice(0,120)+'”, a Sofia deve ';
-    var r=$('regra'); r.value=r.value.trim()?(r.value.trim()+'\\n'+modelo):modelo;
+    var r=$('regra'), novo=r.value.trim()?(r.value.trim()+'\\n'+modelo):modelo;
+    if(novo.length>MAX){ aviso('msgChat','A regra que você já começou na outra aba está grande: salve ou apague antes de transformar isto em regra.',false); return; }
+    r.value=novo;
     $('f0').value=fala.slice(0,500);
     aba('ensinar'); contar(); r.focus(); r.setSelectionRange(r.value.length,r.value.length);
   });

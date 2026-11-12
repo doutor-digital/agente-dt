@@ -15,7 +15,7 @@ export const MAX_RESPOSTAS_TESTE_PADRAO = 60;
 /** Mensagens (paciente + Sofia) que a conversa leva: 20 turnos. O navegador guarda o mesmo tanto. */
 export const MAX_MENSAGENS_DA_CONVERSA = 40;
 export const MAX_CARACTERES_DA_FALA = 600;
-/** Teto de uma fala da Sofia devolvida pelo navegador (ela mesma escreve; só impede lixo enorme). */
+/** Uma fala da Sofia devolvida pelo navegador entra cortada neste tamanho (só impede lixo enorme). */
 const MAX_CARACTERES_DA_RESPOSTA = 4000;
 export const MAX_EM_ANDAMENTO = 2;
 
@@ -39,11 +39,12 @@ export function prepararHistorico(bruto: ReadonlyArray<{ role: string; content: 
     if (m.role !== 'user' && m.role !== 'assistant') return { ok: false, erro: 'pedido inválido' };
     const content = m.content.trim();
     if (!content) continue;
-    const teto = m.role === 'user' ? MAX_CARACTERES_DA_FALA : MAX_CARACTERES_DA_RESPOSTA;
-    if (content.length > teto) {
-      return { ok: false, erro: m.role === 'user' ? `Fala longa demais: até ${MAX_CARACTERES_DA_FALA} letras.` : 'pedido inválido' };
+    // fala do paciente longa demais: recusa (a página limita a digitação). Fala da Sofia longa: corta, nunca recusa — senão uma
+    // resposta grande, guardada no navegador, travaria toda a conversa até o "Recomeçar".
+    if (m.role === 'user' && content.length > MAX_CARACTERES_DA_FALA) {
+      return { ok: false, erro: `Fala longa demais: até ${MAX_CARACTERES_DA_FALA} letras.` };
     }
-    falas.push({ role: m.role, content });
+    falas.push({ role: m.role, content: m.role === 'user' ? content : content.slice(0, MAX_CARACTERES_DA_RESPOSTA) });
   }
   const fim = falas.slice(-MAX_MENSAGENS_DA_CONVERSA);
   while (fim.length > 0 && fim[0].role !== 'user') fim.shift();
@@ -81,7 +82,7 @@ export function descreverAcao(a: { tool: string; args: Record<string, unknown>; 
     case 'cancelar_consulta':
       return 'Cancelaria a consulta (de mentira)';
     default:
-      return 'Anotaria uma informação no cartão (de mentira)';
+      return `Simulou a ferramenta ${a.tool} (de mentira)`;
   }
 }
 
