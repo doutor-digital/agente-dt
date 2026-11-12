@@ -36,9 +36,10 @@ export interface ChamadoAberto {
   atualizadoEm: Date;
 }
 
-async function anexar(id: string, atual: { trecho: string; tipo: string }, s: SinalLimpo): Promise<void> {
-  // só se ainda está aberto (um Feito no meio não é desfeito); o manual não sabe as não lidas, então não mexe nelas
-  await prisma.centralChamado.updateMany({
+/** Anexa ao chamado se ele AINDA está aberto. false = fechou no meio (Feito): quem chamou abre outro, o sinal não se perde. */
+async function anexar(id: string, atual: { trecho: string; tipo: string }, s: SinalLimpo): Promise<boolean> {
+  // o manual não sabe as não lidas, então não mexe nelas
+  const r = await prisma.centralChamado.updateMany({
     where: { id, status: 'aberto' },
     data: {
       trecho: juntarTrecho(atual.trecho, s.trecho),
@@ -49,6 +50,7 @@ async function anexar(id: string, atual: { trecho: string; tipo: string }, s: Si
       vezes: { increment: 1 },
     },
   });
+  return r.count === 1;
 }
 
 /**
@@ -65,8 +67,7 @@ export async function registrarSinais(sinais: (SinalLimpo | null)[], lidas: stri
     }
     const chaveConversa = chaveDaConversa(s.normalizado, segredo());
     const aberto = await prisma.centralChamado.findFirst({ where: { chaveConversa, status: 'aberto' }, select: { id: true, trecho: true, tipo: true } });
-    if (aberto) {
-      await anexar(aberto.id, aberto, s);
+    if (aberto && (await anexar(aberto.id, aberto, s))) {
       ids.push(aberto.id);
       continue;
     }
@@ -81,8 +82,8 @@ export async function registrarSinais(sinais: (SinalLimpo | null)[], lidas: stri
       // outro sinal da mesma conversa criou no meio (índice único parcial): anexa nele
       if (!(e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002')) throw e;
       const outro = await prisma.centralChamado.findFirst({ where: { chaveConversa, status: 'aberto' }, select: { id: true, trecho: true, tipo: true } });
-      if (outro) await anexar(outro.id, outro, s);
-      ids.push(outro?.id ?? null);
+      const foi = outro ? await anexar(outro.id, outro, s) : false;
+      ids.push(foi && outro ? outro.id : null);
     }
   }
   const chaves = [...new Set(lidas.map(nomeNormalizado).filter((x): x is string => !!x))].map((n) => chaveDaConversa(n, segredo()));
@@ -106,8 +107,8 @@ const FAXINA_A_CADA = 10 * 60_000;
 export async function listarAbertos(): Promise<ChamadoAberto[]> {
   const agora = Date.now();
   if (agora - ultimaFaxina >= FAXINA_A_CADA) {
-    ultimaFaxina = agora;
     await faxina(agora);
+    ultimaFaxina = agora; // só depois de dar certo: faxina que falhou tenta de novo na próxima
   }
   const ls = await prisma.centralChamado.findMany({ where: { status: 'aberto' }, orderBy: { atualizadoEm: 'desc' }, take: 100 });
   return ls.map(paraAberto);

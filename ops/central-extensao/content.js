@@ -63,7 +63,7 @@
     // resposta atrasada (chegou outra depois, ou a conversa mudou no meio): descarta, para nunca mostrar o estado de A no nome de B
     if (minha !== pedido || chaveDe(conversaAberta()) !== chaveDe(conversa)) return;
     atual = conversa;
-    if (!r.ok) { linhaGeral.textContent = '⚠️ ' + r.erro; btGeral.style.display = btPessoa.style.display = 'none'; linhaPessoa.textContent = ''; return; }
+    if (!r.ok) { linhaGeral.textContent = '⚠️ ' + r.erro; btGeral.style.display = btPessoa.style.display = btChamado.style.display = 'none'; linhaPessoa.textContent = ''; return; }
     estado = r.dados;
     btGeral.style.display = '';
     const g = estado.geral;
@@ -224,16 +224,15 @@
   let abertos = [], filaCarregada = false;
   const ICONE = { mencao: '@', nao_lida: '💬', manual: '📌' };
 
+  function linhaDe(nome) {
+    for (const el of linhasDaLista()) if (txt(el.querySelector('span[title]')).slice(0, 120) === nome) return el;
+    return null;
+  }
   function abrirConversa(nome) {
-    for (const el of linhasDaLista()) {
-      const t = el.querySelector('span[title]');
-      if (txt(t).slice(0, 120) === nome) {
-        const alvo = t.closest('[role="listitem"],[role="row"]') || t;
-        for (const tipo of ['mousedown', 'mouseup', 'click']) alvo.dispatchEvent(new MouseEvent(tipo, { bubbles: true, cancelable: true, view: window }));
-        return true;
-      }
-    }
-    return false;
+    const el = linhaDe(nome);
+    if (!el) return false;
+    for (const tipo of ['mousedown', 'mouseup', 'click']) el.dispatchEvent(new MouseEvent(tipo, { bubbles: true, cancelable: true, view: window }));
+    return true;
   }
 
   function botaozinho(rotulo, acao) {
@@ -270,8 +269,11 @@
           if (!r.ok) { aviso.textContent = '⚠️ ' + r.erro; return; }
           // se a conversa segue com selo na lista (Feito sem abrir), cala ela até o selo sumir: senão a próxima mensagem do grupo
           // reabriria o chamado na hora
-          memo.silencio[memo.nomes[c.id] || c.conversa] = 1;
-          guardarMemo();
+          // só quando a linha está NA TELA e ainda com selo: Feito de conversa já lida (no celular, ou fora da tela) não cala nada
+          const real = memo.nomes[c.id] || c.conversa;
+          const linha = linhaDe(real);
+          const agora = linha && lerLinha(linha);
+          if (agora && (agora.naoLidas || agora.mencao)) { memo.silencio[real] = 1; guardarMemo(); }
           abertos = r.dados.abertos || [];
           desenharFila();
         }),
@@ -306,8 +308,11 @@
     const c = conversaAberta();
     if (!c || !c.nomeCompleto) { aviso.textContent = 'Abra uma conversa.'; return; }
     const trecho = trechoDaConversa();
+    if (varrendo) { aviso.textContent = 'Lendo a lista: clique de novo em 1 s.'; return; }
+    varrendo = true;
     aviso.textContent = 'Gravando…';
-    const r = await pedir('chamados', { sinais: [{ conversa: c.nomeCompleto, tipo: 'manual', grupo: c.grupo, trecho }] });
+    let r;
+    try { r = await pedir('chamados', { sinais: [{ conversa: c.nomeCompleto, tipo: 'manual', grupo: c.grupo, trecho }] }); } finally { varrendo = false; }
     if (!r.ok) { aviso.textContent = '⚠️ ' + r.erro; return; }
     if (r.dados.ids && r.dados.ids[0]) { memo.nomes[r.dados.ids[0]] = c.nomeCompleto; guardarMemo(); }
     abertos = r.dados.abertos || [];

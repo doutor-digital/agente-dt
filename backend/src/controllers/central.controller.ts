@@ -121,7 +121,8 @@ export async function centralChamadosHandler(req: Request, res: Response): Promi
     const sinais = (p.data.sinais ?? []).map(limparSinal);
     const r = sinais.length || p.data.lidas?.length ? await registrarSinais(sinais, p.data.lidas ?? []) : { novos: 0, ids: [] };
     if (r.novos) logger.info({ novos: r.novos, sinais: sinais.length }, 'central: chamados novos pela extensão');
-    res.json({ ok: true, novos: r.novos, ids: r.ids, abertos: await listarAbertos() });
+    // já gravou: se só a leitura da fila falhar, responde ok com a fila vazia (senão a extensão acharia que não gravou e repetiria)
+    res.json({ ok: true, novos: r.novos, ids: r.ids, abertos: await listarAbertos().catch(() => []) });
   } catch (e) {
     logger.warn({ err: String(e) }, 'central: chamados falhou');
     res.status(502).json({ error: 'não consegui gravar agora' });
@@ -139,7 +140,7 @@ export async function centralChamadoFeitoHandler(req: Request, res: Response): P
   }
   try {
     const fechou = await marcarFeito(p.data.id);
-    res.json({ ok: true, fechou, abertos: await listarAbertos() });
+    res.json({ ok: true, fechou, abertos: await listarAbertos().catch(() => []) });
   } catch (e) {
     logger.warn({ err: String(e) }, 'central: feito falhou');
     res.status(502).json({ error: 'não consegui gravar agora' });
