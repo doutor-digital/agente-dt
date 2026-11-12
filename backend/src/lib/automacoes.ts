@@ -953,6 +953,20 @@ export const AUTOMACOES: readonly Automacao[] = [
     quandoVazio: 'desligado',
     arquivo: 'src/lib/chatwoot-ia.ts',
   },
+  {
+    id: 'chatwoot-agenda',
+    chave: 'CHATWOOT_AGENDA_SLUGS',
+    nome: 'Agenda da franquia no Chatwoot',
+    oQueFaz:
+      'Lê a agenda da franquia da unidade (de ontem até 14 dias à frente, a cada 15 min) e preenche na conversa do Chatwoot a data, a hora, a situação (Agendado, Confirmado, Atendido, Não compareceu, Remarcado, Desmarcado) e a categoria da consulta — o que a régua usa para véspera, dia, preparo, falta e pós-consulta. «Só no papel» deixa NOTA PRIVADA com o que gravaria; ligado grava (mantendo os outros campos) e deixa nota curta.',
+    pegadinha:
+      'A agenda da franquia não traz telefone: casa pelo NOME do paciente no cadastro da franquia e pelo WhatsApp desse cadastro. Nome repetido com telefones diferentes, ou cadastro sem WhatsApp, não casa (fica como está). Por pessoa vale o próximo agendamento de pé; sem ele, o mais recente que passou. Hoje só a caixa da Parauapebas.',
+    risco: 'escreve-campo',
+    temSeco: true,
+    exigeSecoAntes: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/chatwoot-agenda.ts',
+  },
 ] as const;
 
 const PORCHAVE = new Map(AUTOMACOES.map((a) => [a.chave, a]));

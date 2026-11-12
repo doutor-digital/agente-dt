@@ -69,6 +69,7 @@ import { startRenomearLeadWorker, stopRenomearLeadWorker } from './lib/renomear-
 import { startTipoLeadChegadaWorker, stopTipoLeadChegadaWorker } from './lib/tipo-lead-chegada-worker.js';
 import { startLigacaoWhatsappWorker, stopLigacaoWhatsappWorker } from './controllers/ligacao-whatsapp.controller.js';
 import { startChatwootReguaWorker, stopChatwootReguaWorker } from './lib/chatwoot-regua-worker.js';
+import { startChatwootAgendaWorker } from './lib/chatwoot-agenda.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -267,6 +268,7 @@ async function main(): Promise<void> {
       startPreencheCamposWorker();
       startBlingRenovacaoWorker();
       startChatwootReguaWorker();
+      startChatwootAgendaWorker();
       iniciarVigiaDeQualidade();
     },
     parar: () => {
