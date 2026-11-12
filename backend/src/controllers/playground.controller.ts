@@ -23,6 +23,7 @@ import {
 } from '../services/openai.service.js';
 import { logger } from '../lib/logger.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
+import { textoDe } from '../agent/nome-na-resposta.js';
 
 const SANDBOX_LEAD_ID = 999_000_001;
 
@@ -369,7 +370,12 @@ export type ResultadoDoTeste =
 export async function rodarTesteDaSofia(
   unitDoBanco: Unit,
   messages: Array<{ role: 'user' | 'assistant'; content: string }>,
-  opts: { promptDeTeste?: string; aprendizadosExtras?: string[] } = {},
+  opts: {
+    promptDeTeste?: string;
+    aprendizadosExtras?: string[];
+    /** Recebe o texto COMPLETO do prompt desta chamada, logo antes da 1ª chamada ao modelo: a conversa pública da página usa para barrar eco do prompt na resposta. */
+    aoMontarPrompt?: (promptCompleto: string) => void;
+  } = {},
 ): Promise<ResultadoDoTeste> {
   const promptDeTeste = opts.promptDeTeste;
   // prompt de teste: vale só para esta chamada, a unidade no banco não muda
@@ -444,6 +450,9 @@ operador revisar.`;
     else history.push(new AIMessage(m.content));
   }
 
+  // O modelo é chamado a partir daqui: erro antes (regras de campo, criação do modelo) não custou nada, e quem chamou pode devolver a cota.
+  opts.aoMontarPrompt?.(fullSystem);
+
   const MAX_ITERS = 5;
   let finalReply = '';
   let iterations = 0;
@@ -487,7 +496,7 @@ operador revisar.`;
       const toolCalls = ai.tool_calls ?? [];
 
       if (toolCalls.length === 0) {
-        finalReply = typeof ai.content === 'string' ? ai.content : JSON.stringify(ai.content);
+        finalReply = textoDe(ai.content);
         timeline.push({ kind: 'assistant_message', ts: Date.now(), content: finalReply });
         break;
       }

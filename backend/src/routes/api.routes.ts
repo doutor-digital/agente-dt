@@ -137,6 +137,7 @@ import {
 import { loginHandler, logoutHandler, meHandler } from '../controllers/auth.controller.js';
 import { playgroundRunHandler } from '../controllers/playground.controller.js';
 import {
+  publicAprendizadosConversaHandler,
   publicAprendizadosHandler,
   publicAprendizadosLigarHandler,
   publicAprendizadosPreviaHandler,
@@ -378,6 +379,7 @@ apiRouter.delete('/public/pausa/:slug/lead/:leadId', publicLeadRetomarHandler);
 apiRouter.get('/public/aprendizados/:slug', publicAprendizadosHandler);
 apiRouter.post('/public/aprendizados/:slug', publicAprendizadosSalvarHandler);
 apiRouter.post('/public/aprendizados/:slug/previa', publicAprendizadosPreviaHandler);
+apiRouter.post('/public/aprendizados/:slug/conversa', publicAprendizadosConversaHandler);
 apiRouter.post('/public/aprendizados/:slug/regra/:id', publicAprendizadosLigarHandler);
 // Funil de etapas do Chatwoot (Dashboard App): chave X-Funil-Chave derivada do token do Chatwoot (sem sessão).
 apiRouter.post('/public/central/estado', centralEstadoHandler);
