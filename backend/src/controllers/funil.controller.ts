@@ -789,6 +789,9 @@ body{background:#f4f6f9}
 .hj-num small{font-size:12.5px;color:#475467}
 .hj-num b{display:block;font-size:26px;font-weight:700;line-height:1.2;font-variant-numeric:tabular-nums}
 .hj-num.azul{background:#eef4ff;border-color:#dfe8fb}.hj-num.amar{background:#fdf3e7;border-color:#f6e5cf}.hj-num.verde{background:#e9f6ee;border-color:#d4ecdd}
+.hj-meta-de{font-size:14px;font-weight:600;color:#475467}
+.hj-meta-barra{height:6px;border-radius:3px;background:#d4ecdd;margin:6px 0 4px;overflow:hidden}.hj-meta-barra i{display:block;height:100%;background:#12855a;border-radius:3px}
+.hj-num small.hj-meta-txt{display:block;font-size:11.5px}
 .hj-lia{background:#0f1a3a;color:#fff;border-radius:14px;padding:14px 16px;margin-bottom:16px}
 .hj-lia h3,.hj-box h3{margin:0 0 12px;font-size:15px;font-weight:700}
 .hj-lia-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
@@ -1102,7 +1105,16 @@ body{background:#f4f6f9}
     sd.appendChild(el('p',null,'O resumo de hoje nas caixas que você atende. Comece por aqui.')); qd.appendChild(sd);
     var nums=el('div','hj-nums');
     [['Chegaram hoje',h.numeros.chegaram,'azul','Conversas que começaram hoje'],['Esperando resposta',h.numeros.esperando,'','O paciente falou e ninguém respondeu ainda'],['Não interagiram',h.numeros.naoInteragiram,'amar','Sem responder há mais de 24 h, ou com a etiqueta sem-resposta'],['Agendaram hoje',h.numeros.agendaram,'verde','Entraram em Agendado hoje'],['Hoje na agenda',h.numeros.naAgenda,'','Consulta marcada para hoje'],['Falta confirmar',h.numeros.faltaConfirmar,'amar','Consulta hoje ou amanhã ainda como Agendado']].forEach(function(x){
-      var c=el('div','hj-num'+(x[2]?' '+x[2]:'')); c.title=x[3]; c.appendChild(el('small',null,x[0])); c.appendChild(el('b',null,String(x[1]))); nums.appendChild(c); });
+      var c=el('div','hj-num'+(x[2]?' '+x[2]:'')); c.title=x[3]; c.appendChild(el('small',null,x[0])); c.appendChild(el('b',null,String(x[1])));
+      // meta do dia (Parauapebas: 5 agendamentos): "de 5" + barra + quanto falta
+      if (x[0]==='Agendaram hoje' && h.meta){
+        var feito=Number(x[1])||0, pct=Math.min(100,Math.round(feito*100/h.meta));
+        c.querySelector('b').appendChild(el('span','hj-meta-de',' de '+h.meta));
+        var barra=el('div','hj-meta-barra'), enche=el('i'); enche.style.width=pct+'%'; barra.appendChild(enche); c.appendChild(barra);
+        c.appendChild(el('small','hj-meta-txt',feito>=h.meta?'Meta do dia batida!':'Meta: '+h.meta+' por dia · faltam '+(h.meta-feito)));
+        c.title='Entraram em Agendado hoje. Meta: '+h.meta+' por dia';
+      }
+      nums.appendChild(c); });
     qd.appendChild(nums);
     var lia=el('section','hj-lia'), lc=el('div','hj-lia-cards'), lista=el('div','hj-lista'); lista.hidden=true;
     lia.appendChild(el('h3',null,'A Lia separou para você hoje'));
