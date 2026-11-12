@@ -28,7 +28,10 @@ import { transcribeAudio } from '../services/transcription.service.js';
 import { rodarTesteDaSofia } from '../controllers/playground.controller.js';
 import { cartaoNoKommoDaUnidade } from './chatwoot-cartao-kommo.js';
 import { portaDoChatwoot, type ConversaLida, type PortaDoChatwoot } from './chatwoot-porta.js';
-import { motivoDeNaoResponder, rodarSofiaDoChatwoot, type Fala, type ModoDaSofia, type ResultadoDaSofia } from './chatwoot-sofia.js';
+import { combinadoPelaEquipe, consultaDosAtributos, consultasReaisDoPaciente, diaEHoraNoFuso, divergenciaDoCombinado, idsDaIntegracao, type ConsultaReal } from './chatwoot-horario-combinado.js';
+import { SpineService } from '../services/spine.service.js';
+import { fusoDaUnidade } from './fuso.js';
+import { motivoDeNaoResponder, passarParaEquipeNoChatwoot, rodarSofiaDoChatwoot, type Fala, type ModoDaSofia, type ResultadoDaSofia } from './chatwoot-sofia.js';
 
 export type { Fala };
 
@@ -154,8 +157,12 @@ export interface PortasDaIa {
   unidade(slug: string): Promise<Unit | null>;
   mensagens(conversa: number): Promise<any[]>;
   nota(conversa: number, texto: string): Promise<void>;
-  /** mensagem PÚBLICA (chega ao paciente) */
-  publica(conversa: number, texto: string): Promise<void>;
+  /** mensagem PÚBLICA (chega ao paciente); devolve o usuário do Chatwoot que a mandou (o da integração), se souber */
+  publica(conversa: number, texto: string): Promise<{ usuario: number | null }>;
+  /** as consultas de pé deste paciente na franquia; null = não deu para conferir */
+  agendaReal(unit: Unit, lida: ConversaLida): Promise<ConsultaReal[] | null>;
+  /** passa a conversa para a equipe (etiqueta + etapa + nota); LANÇA se o Chatwoot falhar */
+  passarParaEquipe(conversa: number, lida: ConversaLida, motivo: string): Promise<void>;
   transcrever(unit: Unit, url: string): Promise<string>;
   /** a conversa como está agora (atributos, etiquetas, telefone) */
   conversa(conversa: number): Promise<ConversaLida | null>;
@@ -178,6 +185,32 @@ export function portasReais(ctx: ContextoChatwoot): PortasDaIa {
     },
     nota: (conversa, texto) => chat.nota(conversa, texto),
     publica: (conversa, texto) => chat.publica(conversa, texto),
+    async agendaReal(unit, lida) {
+      const agora = new Date();
+      const fuso = fusoDaUnidade(unit);
+      const doAtributo = consultaDosAtributos(lida.attrs, diaEHoraNoFuso(agora.toISOString(), fuso)?.dia ?? '');
+      let franquia: ConsultaReal[] | null = null;
+      if (unit.spineEnabled && unit.spineToken && lida.telefone) {
+        franquia = await consultasReaisDoPaciente(
+          {
+            async buscarPorNome(nome) {
+              const r = await SpineService.searchClients(unit, nome);
+              return r.ok && r.data ? r.data.clients : null;
+            },
+            async agendamentos(idClient) {
+              const det = await SpineService.getClient(unit, idClient);
+              return det.ok ? (det.data?.client?.schedules ?? []).map((s) => ({ idStatus: s.idStatus ?? null, dateAttendanceUtc: s.dateAttendanceUtc ?? null })) : null;
+            },
+          },
+          { nome: lida.nome, telefone: lida.telefone, fuso, agora },
+        ).catch(() => null);
+      }
+      // a franquia, quando respondeu, é a verdade (inclusive "nenhuma"); o que o Chatwoot guardou só vale se a franquia não deu para conferir
+      return franquia ?? (doAtributo ? [doAtributo] : null);
+    },
+    async passarParaEquipe(conversa, lida, motivo) {
+      await passarParaEquipeNoChatwoot(chat, { conversa, etapa: String(lida.attrs.etapa ?? '').trim(), motivo });
+    },
     async transcrever(unit, url) {
       return (await transcribeAudio(unit, url)).text;
     },
@@ -200,8 +233,19 @@ export interface MemoriaDaIa {
   avisosDoKommo: Set<string>;
   /** conversas com a Sofia rodando agora: uma rodada por conversa por vez (a nova espera a velha acabar) */
   emAndamento: Set<number>;
+  /** `conversa|trecho`: a nota «passaria para a equipe: horário combinado diverge» do seco já foi deixada */
+  avisosDeHorario: Set<string>;
+  /** o(s) usuário(s) do Chatwoot que mandam as nossas mensagens (para não tomar a fala da Sofia por fala da equipe) */
+  usuariosDaIntegracao: Set<number>;
 }
-export const novaMemoriaDaIa = (): MemoriaDaIa => ({ esperas: new Map(), rodadas: new Map(), avisosDoKommo: new Set(), emAndamento: new Set() });
+export const novaMemoriaDaIa = (): MemoriaDaIa => ({
+  esperas: new Map(),
+  rodadas: new Map(),
+  avisosDoKommo: new Set(),
+  emAndamento: new Set(),
+  avisosDeHorario: new Set(),
+  usuariosDaIntegracao: new Set(),
+});
 /** Se a rodada anterior da mesma conversa ainda não acabou, tenta de novo depois disto. */
 export const REPETE_SE_OCUPADA_MS = 15_000;
 
@@ -247,6 +291,7 @@ export type Desfecho =
   | 'calada'
   | 'sem-telefone'
   | 'ocupada'
+  | 'horario-divergente'
   | 'cartao-no-kommo'
   | 'kommo-indisponivel';
 
@@ -317,6 +362,34 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
     return 'cartao-no-kommo';
   }
 
+  // a equipe já combinou horário na conversa e não bate com a agenda da franquia: a Sofia não afirma horário nenhum, passa para a equipe
+  const combinado = combinadoPelaEquipe(mensagens, new Set([...idsDaIntegracao(mensagens), ...mem.usuariosDaIntegracao]));
+  if (combinado) {
+    const reais = await p.agendaReal(unit, lida).catch((err) => {
+      logger.warn({ err: String(err), conversa: m.conversa }, `${ID_IA}: não consegui conferir a agenda para o horário combinado`);
+      return null;
+    });
+    const divergencia = divergenciaDoCombinado(combinado, reais);
+    if (divergencia) {
+      const motivo = `${divergencia}. A Sofia não confirma horário por conta própria: confira com o paciente.`;
+      if (modo === 'seco') {
+        const aviso = `${m.conversa}|${combinado.trecho}`;
+        if (!mem.avisosDeHorario.has(aviso)) {
+          mem.avisosDeHorario.add(aviso);
+          await p.nota(m.conversa, `🧪 [SECO] Sofia passaria esta conversa para a equipe e não responderia: ${motivo}`);
+        }
+      } else {
+        try {
+          await p.passarParaEquipe(m.conversa, lida, motivo);
+        } catch (err) {
+          logger.error({ err: String(err), conversa: m.conversa }, `${ID_IA}: horário combinado diverge da agenda, mas não consegui passar para a equipe`);
+          return 'falhou';
+        }
+      }
+      return 'horario-divergente';
+    }
+  }
+
   // confere e conta num passo só (sem await no meio): duas conversas rodando juntas não perdem incremento nem passam do teto
   const feitas = mem.rodadas.get(chaveDia) ?? 0;
   if (feitas >= TETO_SOFIA_POR_DIA) return 'teto';
@@ -348,7 +421,8 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
     return 'sem-texto';
   }
   try {
-    await p.publica(m.conversa, r.resposta);
+    const enviada = await p.publica(m.conversa, r.resposta);
+    if (enviada?.usuario) mem.usuariosDaIntegracao.add(enviada.usuario);
   } catch (err) {
     // as ferramentas já gravaram: sem resposta o paciente fica sem saber. A equipe é avisada (nota) e a exceção sobe para o log.
     logger.error({ err: String(err), conversa: m.conversa, gravou }, `${ID_IA}: não consegui mandar a resposta da Sofia`);

@@ -13,6 +13,11 @@ export interface ConversaLida {
   attrs: Record<string, unknown>;
   etiquetas: string[];
   grupo: boolean;
+  /**
+   * Contato INTERNO (a equipe falando com o número da unidade: «libera», «acabando»): a conversa tem a etiqueta `interno` ou o contato
+   * tem o atributo `interno` marcado. A Sofia não responde.
+   */
+  interno: boolean;
 }
 
 export interface PortaDoChatwoot {
@@ -23,14 +28,15 @@ export interface PortaDoChatwoot {
   adicionarEtiquetas(id: number, etiquetas: string[]): Promise<void>;
   /** Nota PRIVADA. */
   nota(id: number, texto: string): Promise<void>;
-  /** Mensagem PÚBLICA: chega ao paciente. */
-  publica(id: number, texto: string): Promise<void>;
+  /** Mensagem PÚBLICA: chega ao paciente. Devolve o usuário do Chatwoot que a enviou (o da integração), se a resposta disser. */
+  publica(id: number, texto: string): Promise<{ usuario: number | null }>;
   /** Os valores válidos de um atributo de lista (definição viva do Chatwoot); [] = não é lista ou não deu para ler. */
   valoresDoAtributo(chave: string): Promise<string[]>;
   /** As etiquetas que existem na conta. */
   etiquetasDaConta(): Promise<string[]>;
 }
 
+const ehSim = (v: unknown): boolean => v === true || v === 1 || (typeof v === 'string' && ['true', 'sim', '1', 'yes'].includes(v.trim().toLowerCase()));
 const texto = (v: unknown): string => (typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : '');
 
 export function conversaLidaDoChatwoot(raw: any): ConversaLida | null {
@@ -38,14 +44,16 @@ export function conversaLidaDoChatwoot(raw: any): ConversaLida | null {
   if (!Number.isInteger(id) || id <= 0) return null;
   const sender = raw?.meta?.sender ?? {};
   const adicionais = raw?.additional_attributes ?? {};
+  const etiquetas: string[] = Array.isArray(raw?.labels) ? raw.labels.map(String) : [];
   const grupo = /@g\.us$/i.test(texto(sender.identifier)) || texto(adicionais.type).toLowerCase() === 'group' || adicionais.group === true;
   return {
     id,
     nome: texto(sender.name),
     telefone: texto(sender.phone_number) || null,
     attrs: raw?.custom_attributes && typeof raw.custom_attributes === 'object' ? { ...raw.custom_attributes } : {},
-    etiquetas: Array.isArray(raw?.labels) ? raw.labels.map(String) : [],
+    etiquetas,
     grupo,
+    interno: etiquetas.some((e) => e.trim().toLowerCase() === 'interno') || ehSim(sender.custom_attributes?.interno),
   };
 }
 
@@ -72,7 +80,9 @@ export function portaDoChatwoot(ctx: ContextoChatwoot): PortaDoChatwoot {
       await chamar(ctx, 'POST', `conversations/${id}/messages`, { corpo: { content: t, message_type: 'outgoing', private: true } });
     },
     async publica(id, t) {
-      await chamar(ctx, 'POST', `conversations/${id}/messages`, { corpo: { content: t, message_type: 'outgoing', private: false } });
+      const r = (await chamar(ctx, 'POST', `conversations/${id}/messages`, { corpo: { content: t, message_type: 'outgoing', private: false } })) as { sender?: { id?: unknown } } | null;
+      const usuario = Number(r?.sender?.id);
+      return { usuario: Number.isInteger(usuario) && usuario > 0 ? usuario : null };
     },
     async valoresDoAtributo(chave) {
       const g = listas.get(chave);

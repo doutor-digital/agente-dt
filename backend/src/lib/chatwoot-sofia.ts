@@ -74,14 +74,32 @@ export const ETIQUETA_HUMANO = 'esperando-humano';
 const ETIQUETAS_RESERVADAS = new Set(['confirmar-retorno', 'retomada', 'reativacao', 'boas-vindas', 'aderencia-meio', 'sem-follow-up', 'pagou-antecipado', 'respondeu-pelo-celular', ETIQUETA_HUMANO, 'sem-resposta', 'pendente-de-revisao']);
 
 /**
- * A Sofia deve ficar calada? Conversa já passada para a equipe, paciente em tratamento (o funil de tratamento é humano)
+ * A Sofia deve ficar calada? Contato interno, conversa já passada para a equipe, paciente em tratamento (o funil de tratamento é humano)
  * ou grupo. Devolve o motivo, ou null para seguir.
  */
 export function motivoDeNaoResponder(c: ConversaLida): string | null {
   if (c.grupo) return 'grupo';
+  // a equipe falando com o número da unidade («libera», «acabando»): etiqueta `interno` na conversa ou atributo `interno` no contato
+  if (c.interno) return 'interno';
   if (texto(c.attrs.etapa) === 'Esperando humano' || c.etiquetas.includes(ETIQUETA_HUMANO)) return 'esperando-humano';
   if (texto(c.attrs.funil) === 'Tratamento' || texto(c.attrs.etapa_tratamento)) return 'em-tratamento';
   return null;
+}
+
+/**
+ * Passa a conversa para a equipe: etiqueta `esperando-humano`, etapa «Esperando humano» e uma nota com o motivo. Etapa não é campo: quem
+ * tem consulta de pé ou já passou por ela (`ETAPAS_PROTEGIDAS`) fica na etapa em que está — a etiqueta e a nota avisam a equipe, e a
+ * etiqueta cala a Sofia. Devolve a etapa em que a conversa ficou. LANÇA se o Chatwoot falhar.
+ */
+export async function passarParaEquipeNoChatwoot(chat: PortaDoChatwoot, a: { conversa: number; etapa: string; motivo: string }): Promise<string> {
+  let etapa = a.etapa;
+  await chat.adicionarEtiquetas(a.conversa, [ETIQUETA_HUMANO]);
+  if (!ETAPAS_PROTEGIDAS.has(etapa) && (await chat.valoresDoAtributo('etapa')).includes('Esperando humano')) {
+    await chat.gravarAtributos(a.conversa, { etapa: 'Esperando humano' });
+    etapa = 'Esperando humano';
+  }
+  await chat.nota(a.conversa, `🙋 Sofia passou esta conversa para a equipe: ${a.motivo.slice(0, 300)}`);
+  return etapa;
 }
 
 export const etiquetaNormalizada = (t: string): string =>
@@ -204,20 +222,14 @@ export function montarFerramentas(p: PedidoDasFerramentas): DynamicStructuredToo
   const seco = modo === 'seco';
   const lead = leadDaConversaChatwoot(conversa);
 
-  // ── passar à equipe (pausar_ia, e o aviso do Pix que não saiu) ──
+  // ── passar à equipe (pausar_ia, os avisos da agenda e do Pix) ──
   const passarParaEquipe = async (motivo: string): Promise<boolean> => {
     if (seco) {
       estado.passouParaEquipe = true;
       return true;
     }
     try {
-      await chat.adicionarEtiquetas(conversa, [ETIQUETA_HUMANO]);
-      // etapa não é campo: quem tem consulta de pé ou já passou por ela fica onde está (a etiqueta e a nota avisam a equipe)
-      if (!ETAPAS_PROTEGIDAS.has(estado.etapa) && (await chat.valoresDoAtributo('etapa')).includes('Esperando humano')) {
-        await chat.gravarAtributos(conversa, { etapa: 'Esperando humano' });
-        estado.etapa = 'Esperando humano';
-      }
-      await chat.nota(conversa, `🙋 Sofia passou esta conversa para a equipe: ${motivo.slice(0, 300)}`);
+      estado.etapa = await passarParaEquipeNoChatwoot(chat, { conversa, etapa: estado.etapa, motivo });
       estado.passouParaEquipe = true;
       return true;
     } catch (err) {

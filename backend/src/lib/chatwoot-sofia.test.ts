@@ -79,7 +79,7 @@ function chatFalso(o: { etiquetasDaConta?: string[]; falhaNota?: boolean } = {})
       if (o.falhaNota) throw new Error('chatwoot fora');
       notas.push(t);
     },
-    publica: async () => undefined,
+    publica: async () => ({ usuario: null }),
     valoresDoAtributo: async (c) => LISTAS[c] ?? [],
     etiquetasDaConta: async () => o.etiquetasDaConta ?? ['quente', 'indicacao', 'esperando-humano', 'retomada'],
   };
@@ -373,7 +373,7 @@ test('registrar_qualificacao e aplicar_tag: conferem a lista viva; etiqueta rese
 });
 
 test('quando não responder: espera por humano, em tratamento, grupo', () => {
-  const c = (o: Partial<ConversaLida>): ConversaLida => ({ id: 1, nome: '', telefone: '+55', attrs: {}, etiquetas: [], grupo: false, ...o });
+  const c = (o: Partial<ConversaLida>): ConversaLida => ({ id: 1, nome: '', telefone: '+55', attrs: {}, etiquetas: [], grupo: false, interno: false, ...o });
   assert.equal(motivoDeNaoResponder(c({})), null);
   assert.equal(motivoDeNaoResponder(c({ attrs: { etapa: 'Esperando humano' } })), 'esperando-humano');
   assert.equal(motivoDeNaoResponder(c({ etiquetas: ['esperando-humano'] })), 'esperando-humano');
@@ -382,7 +382,7 @@ test('quando não responder: espera por humano, em tratamento, grupo', () => {
 });
 
 function lida(o: Partial<ConversaLida> = {}): ConversaLida {
-  return { id: CONVERSA, nome: 'Maria', telefone: '+5594999990000', attrs: {}, etiquetas: [], grupo: false, ...o };
+  return { id: CONVERSA, nome: 'Maria', telefone: '+5594999990000', attrs: {}, etiquetas: [], grupo: false, interno: false, ...o };
 }
 
 /** o modelo de mentira: monta as ferramentas, chama as que o roteiro manda e devolve a resposta */

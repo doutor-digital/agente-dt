@@ -7,7 +7,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Unit } from '@prisma/client';
 import type { Estado } from './automacoes-estado.js';
-import type { ConversaLida, ResultadoDaSofia } from './chatwoot-sofia.js';
+import type { ConversaLida } from './chatwoot-porta.js';
+import type { ResultadoDaSofia } from './chatwoot-sofia.js';
+import type { ConsultaReal } from './chatwoot-horario-combinado.js';
 import {
   aoChegar,
   assinaturaDaConversa,
@@ -94,7 +96,7 @@ test('nota da Sofia: resposta e ações em português curto', () => {
   assert.equal(notaDaSofia('ok', []), '🧪 [SECO] Sofia responderia:\n\nok');
 });
 
-const lidaPadrao = (o: Partial<ConversaLida> = {}): ConversaLida => ({ id: 12, nome: 'Maria da Silva', telefone: '+5594999990000', attrs: {}, etiquetas: [], grupo: false, ...o });
+const lidaPadrao = (o: Partial<ConversaLida> = {}): ConversaLida => ({ id: 12, nome: 'Maria da Silva', telefone: '+5594999990000', attrs: {}, etiquetas: [], grupo: false, interno: false, ...o });
 const respostaPadrao = (o: Partial<ResultadoDaSofia> = {}): ResultadoDaSofia => ({ resposta: 'A consulta é R$ 350.', acoes: [], pix: null, cartao: null, passouParaEquipe: false, ...o });
 
 function portas(
@@ -107,6 +109,8 @@ function portas(
     lida?: Partial<ConversaLida> | null;
     cartao?: { leadId: number } | 'lanca' | null;
     sofia?: Partial<ResultadoDaSofia>;
+    /** as consultas de pé na franquia (null = não deu para conferir) */
+    reais?: ConsultaReal[] | null;
   } = {},
 ) {
   const notas: Array<{ conversa: number; texto: string }> = [];
@@ -114,6 +118,7 @@ function portas(
   const agendados: Array<{ fn: () => void; ms: number; cancelado: boolean }> = [];
   const sofias: Array<{ falas: Fala[]; modo: string }> = [];
   const kommo: string[] = [];
+  const equipe: Array<{ conversa: number; motivo: string }> = [];
   let leituras = 0;
   const p: PortasDaIa = {
     estado: () => o.estado ?? 'seco',
@@ -124,6 +129,11 @@ function portas(
     },
     publica: async (conversa, texto) => {
       publicas.push({ conversa, texto });
+      return { usuario: 3 };
+    },
+    agendaReal: async () => (o.reais === undefined ? [] : o.reais),
+    passarParaEquipe: async (conversa, _lida, motivo) => {
+      equipe.push({ conversa, motivo });
     },
     transcrever: async () => {
       if (o.falhaTranscricao) throw new Error('sem chave');
@@ -149,7 +159,7 @@ function portas(
     },
     hoje: () => '2026-11-12',
   };
-  return { p, notas, publicas, agendados, sofias, kommo };
+  return { p, notas, publicas, agendados, sofias, kommo, equipe };
 }
 
 const M = { conversa: 12, caixa: 2, slug: 'doutor-hernia-parauapebas', audios: [] as string[] };
@@ -262,6 +272,69 @@ test('conversa já passada à equipe, paciente em tratamento, grupo e sem telefo
     assert.equal(a.publicas.length, 0);
   }
   assert.equal(await rodarSofia(M, portas({ lida: null }).p, novaMemoriaDaIa()), 'falhou');
+});
+
+test('contato INTERNO (a equipe falando com o número da unidade — «libera», «acabando»): a Sofia não responde, nem nota', async () => {
+  for (const estado of ['seco', 'ligado'] as const) {
+    const a = portas({ estado, lida: { interno: true }, mensagens: [msg(0, 'Acabando'), msg(0, 'libera')] });
+    assert.equal(await rodarSofia(M, a.p, novaMemoriaDaIa()), 'calada');
+    assert.equal(a.sofias.length + a.publicas.length + a.notas.length, 0);
+    assert.equal(a.kommo.length, 0, 'nem consulta o Kommo');
+  }
+});
+
+const EQUIPE = { sender: { id: 9, type: 'user', name: 'Ana' } };
+const conversa19 = [msg(1, 'Oi! Sua consulta está marcada para amanhã às 08:00 😊', EQUIPE), msg(0, '👍')];
+
+test('a equipe combinou 08:00 na conversa e a franquia diz 14/11 09:30: a Sofia NÃO responde, não confirma horário — SECO só nota, LIGADO passa para a equipe', async () => {
+  const reais = [{ dia: '2026-11-14', hora: '09:30' }];
+  const seco = portas({ estado: 'seco', mensagens: conversa19, reais });
+  const mem = novaMemoriaDaIa();
+  assert.equal(await rodarSofia(M, seco.p, mem), 'horario-divergente');
+  assert.equal(await rodarSofia(M, seco.p, mem), 'horario-divergente');
+  assert.equal(seco.sofias.length, 0);
+  assert.equal(seco.publicas.length, 0);
+  assert.equal(seco.equipe.length, 0, 'o seco não escreve na conversa');
+  assert.equal(seco.notas.length, 1, 'uma nota só por combinado');
+  assert.match(seco.notas[0]!.texto, /^🧪 \[SECO\] Sofia passaria esta conversa para a equipe e não responderia: a equipe combinou «08:00» na conversa, mas a agenda da franquia diz 14\/11 09:30/);
+
+  const ligado = portas({ estado: 'ligado', mensagens: conversa19, reais });
+  assert.equal(await rodarSofia(M, ligado.p, novaMemoriaDaIa()), 'horario-divergente');
+  assert.equal(ligado.sofias.length, 0);
+  assert.equal(ligado.publicas.length, 0);
+  assert.equal(ligado.equipe.length, 1);
+  assert.match(ligado.equipe[0]!.motivo, /09:30.*não confirma horário por conta própria/);
+});
+
+test('horário combinado: se bate com a agenda a Sofia segue; se não deu para conferir a franquia (ou ela não tem consulta), NÃO afirma', async () => {
+  const bate = portas({ estado: 'ligado', mensagens: conversa19, reais: [{ dia: '2026-11-13', hora: '08:00' }] });
+  assert.equal(await rodarSofia(M, bate.p, novaMemoriaDaIa()), 'enviada');
+  const semConferir = portas({ estado: 'ligado', mensagens: conversa19, reais: null });
+  assert.equal(await rodarSofia(M, semConferir.p, novaMemoriaDaIa()), 'horario-divergente');
+  assert.match(semConferir.equipe[0]!.motivo, /não consegui conferir a agenda/);
+  const semConsulta = portas({ estado: 'ligado', mensagens: conversa19, reais: [] });
+  assert.equal(await rodarSofia(M, semConsulta.p, novaMemoriaDaIa()), 'horario-divergente');
+  assert.match(semConsulta.equipe[0]!.motivo, /não há consulta de pé/);
+  // a equipe não falou de horário: nem consulta a franquia
+  const semHorario = portas({ estado: 'ligado', mensagens: [msg(1, 'Oi, tudo bem?', EQUIPE), msg(0, 'tudo')], reais: null });
+  assert.equal(await rodarSofia(M, semHorario.p, novaMemoriaDaIa()), 'enviada');
+});
+
+test('horário combinado: os horários que a PRÓPRIA Sofia ofereceu não são combinado da equipe (nem os da régua)', async () => {
+  // a nota privada com o prefixo da integração mostra quem é o usuário da integração (id 3); a fala dele com horário não conta
+  const mensagens = [
+    msg(1, 'Tenho horário às 09:00 ou às 10:00, qual prefere?', { sender: { id: 3, type: 'user' } }),
+    msg(1, '🤖 Sofia respondeu por aqui e agiu:\n• consultar_horarios', { private: true, sender: { id: 3, type: 'user' } }),
+    msg(0, 'o das 10'),
+  ];
+  const a = portas({ estado: 'ligado', mensagens, reais: [] });
+  assert.equal(await rodarSofia(M, a.p, novaMemoriaDaIa()), 'enviada');
+  // e o usuário que acabamos de ver mandando mensagem entra na memória
+  const mem = novaMemoriaDaIa();
+  const b = portas({ estado: 'ligado', mensagens: [msg(1, 'Tenho horário às 09:00 ou às 10:00', { sender: { id: 3, type: 'user' } }), msg(0, 'o das 10')], reais: [] });
+  assert.equal(await rodarSofia(M, b.p, mem), 'horario-divergente', 'sem saber quem é a integração, a fala conta como da equipe (lado seguro)');
+  mem.usuariosDaIntegracao.add(3);
+  assert.equal(await rodarSofia(M, b.p, mem), 'enviada');
 });
 
 test('equipe respondeu depois do paciente: não roda, não escreve (seco e ligado)', async () => {
