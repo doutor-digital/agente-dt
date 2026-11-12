@@ -20,6 +20,7 @@ import { prisma } from './prisma.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import { chamar, contaChatwootDoAmbiente, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 import { CAIXAS_REGUA } from './chatwoot-regua.js';
+import { aplicarEtiqueta, eventoDeEtiqueta, portasDaPonte, type PortasDaPonte } from './chatwoot-etiquetas.js';
 import { transcribeAudio } from '../services/transcription.service.js';
 import { rodarTesteDaSofia } from '../controllers/playground.controller.js';
 
@@ -225,7 +226,17 @@ export async function rodarSofia(m: MensagemDoPaciente, p: PortasDaIa, mem: Memo
 
 // ── a rota ─────────────────────────────────────────────────────────────────────────────────────────
 
-let estado: { portas: PortasDaIa; mem: MemoriaDaIa } | null = null;
+let estado: { portas: PortasDaIa; mem: MemoriaDaIa; ponte: PortasDaPonte } | null = null;
+
+function estadoDoReceptor() {
+  if (!estado) {
+    const conta = contaChatwootDoAmbiente();
+    if (!conta) return null;
+    const ctx = criarContextoChatwoot(conta);
+    estado = { portas: portasReais(ctx), mem: novaMemoriaDaIa(), ponte: portasDaPonte(ctx) };
+  }
+  return estado;
+}
 
 export function eventoChatwootHandler(req: Request, res: Response): void {
   const token = process.env.CHATWOOT_API_TOKEN?.trim();
@@ -234,12 +245,16 @@ export function eventoChatwootHandler(req: Request, res: Response): void {
     return;
   }
   res.json({ ok: true });
+  // botão "Perdido: <motivo>" → etiqueta → etapa + motivo no cartão (chatwoot-etiquetas.ts)
+  const etq = eventoDeEtiqueta(req.body);
+  if (etq) {
+    const e = estadoDoReceptor();
+    if (e) void aplicarEtiqueta(etq, e.ponte).catch((err) => logger.warn({ err: String(err), conversa: etq.conversa }, 'chatwoot-etiquetas: falhou'));
+    return;
+  }
   const m = mensagemDoPaciente(req.body);
   if (!m) return;
-  if (!estado) {
-    const conta = contaChatwootDoAmbiente();
-    if (!conta) return;
-    estado = { portas: portasReais(criarContextoChatwoot(conta)), mem: novaMemoriaDaIa() };
-  }
-  void aoChegar(m, estado.portas, estado.mem).catch((err) => logger.warn({ err: String(err), conversa: m.conversa }, `${ID_IA}: evento falhou`));
+  const e = estadoDoReceptor();
+  if (!e) return;
+  void aoChegar(m, e.portas, e.mem).catch((err) => logger.warn({ err: String(err), conversa: m.conversa }, `${ID_IA}: evento falhou`));
 }

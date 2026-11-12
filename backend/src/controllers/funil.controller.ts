@@ -1298,8 +1298,32 @@ const MENU_JS = `(function(){
     b.style.cssText = 'position:fixed;left:12px;bottom:70px;z-index:2147482999;padding:8px 14px;border-radius:18px;border:0;background:#1f93ff;color:#fff;font:600 13px system-ui,sans-serif;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.2)';
     b.onclick = abrir; document.body.appendChild(b);
   }
+  // Menu enxuto (decisão do João, 12/11/2026): "Campanhas" some para quem não é administrador da conta (as meninas).
+  // O papel vem do perfil do próprio Chatwoot (mesma origem, sessão do cookie); sem resposta, nada some.
+  var papel = null, pedindoPapel = false;
+  function pedirPapel(){
+    if (papel !== null || pedindoPapel) return;
+    var s = sessao(), conta = location.pathname.match(/\\/app\\/accounts\\/(\\d+)/);
+    if (!s || !conta) return;
+    pedindoPapel = true;
+    fetch('/api/v1/profile', { headers: { 'access-token': s.token, client: s.client, uid: s.uid } })
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(p){
+        var a = p && Array.isArray(p.accounts) ? p.accounts.filter(function(x){ return String(x.id) === conta[1]; })[0] : null;
+        if (a && a.role) { papel = a.role; enxugar(); }
+      })
+      .catch(function(){})
+      .then(function(){ pedindoPapel = false; });
+  }
+  function enxugar(){
+    if (papel === null) { pedirPapel(); return; }
+    if (papel === 'administrator') return;
+    Array.prototype.forEach.call(document.querySelectorAll('aside .i-lucide-megaphone, nav .i-lucide-megaphone'), function(i){
+      var li = i.closest('li'); if (li && li.style.display !== 'none') li.style.display = 'none';
+    });
+  }
   var espera = null;
   // o menu do Chatwoot nasce depois do script: quando o item entra, reabre o funil se estava aberto (e acerta a margem)
-  new MutationObserver(function(){ if (espera) return; espera = setTimeout(function(){ espera = null; if (por()) { reabrir(); ajustar(); } }, 300); }).observe(document.documentElement, { childList: true, subtree: true });
+  new MutationObserver(function(){ if (espera) return; espera = setTimeout(function(){ espera = null; enxugar(); if (por()) { reabrir(); ajustar(); } }, 300); }).observe(document.documentElement, { childList: true, subtree: true });
   if (por()) reabrir(); setTimeout(function(){ if (!por() && /\\/app\\/accounts\\//.test(location.pathname)) botao(); reabrir(); }, 8000);
 })();`;
