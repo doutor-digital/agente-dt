@@ -1060,9 +1060,17 @@ const MENU_JS = `(function(){
     if (link) link.style.background = ativo ? 'rgba(31,147,255,.12)' : '';
   }
   // fechar REMOVE o quadro: nada fica consultando o Chatwoot escondido; reabrir pede o login de novo
-  function fechar(){ if (cam) { cam.remove(); cam = null; fr = null; } marcar(false); }
+  // aberto fica lembrado NESTA aba (sessionStorage): o Ctrl+R reabre o funil; fechar esquece
+  var LEMBRAR = 'funil:aberto', reaberto = false;
+  function lembrar(sim){ try { if (sim) sessionStorage.setItem(LEMBRAR, '1'); else sessionStorage.removeItem(LEMBRAR); } catch (e) {} }
+  function fechar(){ if (cam) { cam.remove(); cam = null; fr = null; } marcar(false); lembrar(false); }
+  function reabrir(){
+    if (reaberto) return; reaberto = true;
+    try { if (sessionStorage.getItem(LEMBRAR) === '1' && /\\/app\\/accounts\\//.test(location.pathname) && sessao()) abrir(); } catch (e) {}
+  }
   function abrir(ev){
     if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+    lembrar(true);
     if (!cam) {
       cam = document.createElement('div');
       cam.style.cssText = 'position:fixed;top:0;right:0;bottom:0;z-index:2147483000;background:#f5f7fb;display:flex;border-left:1px solid #e3e8ef';
@@ -1121,6 +1129,7 @@ const MENU_JS = `(function(){
     b.onclick = abrir; document.body.appendChild(b);
   }
   var espera = null;
-  new MutationObserver(function(){ if (espera) return; espera = setTimeout(function(){ espera = null; por(); }, 300); }).observe(document.documentElement, { childList: true, subtree: true });
-  por(); setTimeout(function(){ if (!por() && /\\/app\\/accounts\\//.test(location.pathname)) botao(); }, 8000);
+  // o menu do Chatwoot nasce depois do script: quando o item entra, reabre o funil se estava aberto (e acerta a margem)
+  new MutationObserver(function(){ if (espera) return; espera = setTimeout(function(){ espera = null; if (por()) { reabrir(); ajustar(); } }, 300); }).observe(document.documentElement, { childList: true, subtree: true });
+  if (por()) reabrir(); setTimeout(function(){ if (!por() && /\\/app\\/accounts\\//.test(location.pathname)) botao(); reabrir(); }, 8000);
 })();`;

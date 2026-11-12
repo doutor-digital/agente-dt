@@ -68,6 +68,7 @@ import { startUnidadeNoCartaoWorker, stopUnidadeNoCartaoWorker } from './lib/uni
 import { startRenomearLeadWorker, stopRenomearLeadWorker } from './lib/renomear-lead-worker.js';
 import { startTipoLeadChegadaWorker, stopTipoLeadChegadaWorker } from './lib/tipo-lead-chegada-worker.js';
 import { startLigacaoWhatsappWorker, stopLigacaoWhatsappWorker } from './controllers/ligacao-whatsapp.controller.js';
+import { startChatwootReguaWorker, stopChatwootReguaWorker } from './lib/chatwoot-regua-worker.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -265,6 +266,7 @@ async function main(): Promise<void> {
       startFaxinaDoMesWorker();
       startPreencheCamposWorker();
       startBlingRenovacaoWorker();
+      startChatwootReguaWorker();
       iniciarVigiaDeQualidade();
     },
     parar: () => {
@@ -289,6 +291,7 @@ async function main(): Promise<void> {
       stopFaxinaDoMesWorker();
       stopPreencheCamposWorker();
       stopBlingRenovacaoWorker();
+      stopChatwootReguaWorker();
       stopFranquiaSyncWorker();
       stopFranquiaCalendarioWorker();
       stopCacheKeepaliveWorker();
