@@ -22,8 +22,7 @@ export const DIAS_GUARDA = 30;
 export const DIAS_NAO_LIDA_ABERTA = 3;
 /** Qualquer chamado aberto sem sinal novo há mais que isso vira `expirado` (e depois é apagado como os fechados). */
 export const DIAS_ABERTO = 30;
-/** Sinal repetido de chamado fechado há menos que isso é ignorado (o Feito não "volta" enquanto a conversa segue com o selo). */
-export const DIAS_LEMBRA_FECHADO = 7;
+
 
 const CONTROLE = /[\u0000-\u0008\u000b-\u001f\u007f]/g;
 
@@ -71,11 +70,6 @@ export function juntarTrecho(acumulado: string, novo: string): string {
   const corte = junto.slice(junto.length - MAX_ACUMULADO);
   const quebra = corte.indexOf('\n');
   return quebra >= 0 ? corte.slice(quebra + 1) : corte;
-}
-
-/** O trecho novo já estava no chamado fechado há pouco? Então é o mesmo selo da lista, não mensagem nova: não reabre. */
-export function trechoJaVisto(fechado: string, novo: string): boolean {
-  return !!novo && fechado.split('\n').includes(novo);
 }
 
 /** Um chamado só por conversa aberta: o tipo fica o mais forte que já apareceu (manual > menção > não lida). */

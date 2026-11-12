@@ -15,6 +15,7 @@ async function chamar(rota, corpo) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Central-Chave': chave },
       body: JSON.stringify(corpo || {}),
+      signal: AbortSignal.timeout(15000),
     });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) return { ok: false, erro: j.error || `erro ${r.status}` };

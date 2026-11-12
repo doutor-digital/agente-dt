@@ -10,8 +10,9 @@ mascarados no servidor. A extensão **nunca abre conversa sozinha**.
 
 No painel aparece a fila **📥 Chamados abertos**: **Abrir** clica na conversa da lista; **Feito** tira da fila. Um chamado por
 conversa: mensagens novas da mesma conversa entram no mesmo chamado. A **não lida** sai sozinha quando você abre a conversa
-(ou depois de 3 dias parada); a **menção** só sai com **Feito**. Feito é Feito: o mesmo selo não reabre o chamado; só mensagem
-nova reabre. Aberto parado 30 dias expira; fechado há mais de 30 dias é apagado.
+(ou depois de 3 dias parada); a **menção** só sai com **Feito**. **Feito sem abrir a conversa** cala aquela conversa enquanto
+ela tiver selo na lista (senão a próxima mensagem do grupo reabriria na hora); quando você abre e o selo some, ela volta ao normal.
+Ou seja: depois de um Feito sem abrir, uma menção NOVA naquela conversa só vira chamado depois que você abrir uma vez. Aberto parado 30 dias expira; fechado há mais de 30 dias é apagado.
 
 A extensão guarda **neste navegador** o que já mandou, o nome real de cada chamado (o servidor só tem o nome mascarado) e quais
 conversas são grupo (aprende quando você abre a conversa).

@@ -120,7 +120,7 @@
   // uma linha da lista → { conversa, trecho, naoLidas, mencao, grupo } (só o que está na tela)
   function lerLinha(el) {
     const titulos = el.querySelectorAll('span[title]');
-    const conversa = txt(titulos[0]);
+    const conversa = txt(titulos[0]).slice(0, 120);
     if (!conversa) return null;
     let naoLidas = 0, marcada = false, mencao = false;
     for (const a of el.querySelectorAll('[aria-label]')) {
@@ -149,12 +149,13 @@
   // memória local (só neste navegador, sobrevive a recarregar a página): o que já foi mandado, o nome real de cada chamado
   // (o servidor guarda o nome mascarado) e quem é grupo ou privado (aprendido ao você abrir a conversa)
   const PALAVRA_COMUM = /^(obs|ps|ok|oi|ol[aá]|bom dia|boa tarde|boa noite|aten[cç][aã]o|importante|urgente|assunto|nota|lembrete|re|fwd|pergunta|d[uú]vida|resumo|motivo|endere[cç]o|hor[aá]rio|valor|link|data|dia|hora|local|pix|cpf|nome|telefone)$/i;
-  const memo = { enviado: {}, nomes: {}, tipos: {} };
+  // silencio: conversa que levou Feito sem ser aberta — não manda nada dela até o selo sumir da lista (você abriu)
+  const memo = { enviado: {}, nomes: {}, tipos: {}, silencio: {} };
   const MAX_MEMO = 400;
   const aparar = (o) => { const k = Object.keys(o); for (const x of k.slice(0, Math.max(0, k.length - MAX_MEMO))) delete o[x]; };
   let memoPronta = false;
   try { chrome.storage.local.get(['memo1b'], (c) => { if (c && c.memo1b) Object.assign(memo, c.memo1b); memoPronta = true; }); } catch (e) { memoPronta = true; }
-  function guardarMemo() { aparar(memo.enviado); aparar(memo.nomes); aparar(memo.tipos); try { chrome.storage.local.set({ memo1b: memo }); } catch (e) { /* recarregada */ } }
+  function guardarMemo() { aparar(memo.enviado); aparar(memo.nomes); aparar(memo.tipos); aparar(memo.silencio); try { chrome.storage.local.set({ memo1b: memo }); } catch (e) { /* recarregada */ } }
   const enviado = {
     get: (k) => memo.enviado[k],
     has: (k) => k in memo.enviado,
@@ -162,8 +163,13 @@
     delete: (k) => { delete memo.enviado[k]; },
   };
   let diag = '';
+  let varrendo = false, ociosas = 0;
   async function varrer() {
-    if (!memoPronta) return;
+    if (!memoPronta || varrendo) return;
+    varrendo = true;
+    try { await varrerAgora(); } finally { varrendo = false; }
+  }
+  async function varrerAgora() {
     const aberta = conversaAberta();
     if (aberta && aberta.nomeCompleto && (aberta.grupo || aberta.numero)) memo.tipos[aberta.nomeCompleto] = aberta.grupo ? 'g' : 'p';
     const linhas = linhasDaLista();
@@ -176,6 +182,11 @@
       vistas.add(l.conversa);
       if (l.naoLidas) nNao++;
       if (l.mencao) nMen++;
+      // Feito sem abrir: segue calada enquanto houver selo; selo sumiu (você abriu) = volta ao normal
+      if (memo.silencio[l.conversa]) {
+        if (!l.naoLidas && !l.mencao) { delete memo.silencio[l.conversa]; enviado.delete(l.conversa); }
+        continue;
+      }
       let tipo = null;
       if (l.mencao && cfg.mencoes) tipo = 'mencao';
       else if (l.naoLidas && (l.grupo ? cfg.grupos : cfg.privado)) tipo = 'nao_lida';
@@ -192,7 +203,9 @@
     // o que passou do teto fica para a próxima varredura (só marca como mandado o que foi de fato)
     const lote = sinais.slice(0, 40), loteLidas = lidas.slice(0, 100);
     for (const n of lidas.slice(100)) enviado.set(n, 'lida-pendente');
-    if (!lote.length && !loteLidas.length && filaCarregada) { guardarMemo(); desenharFila(); return; }
+    // nada mudou na tela: a cada ~2 min busca a fila mesmo assim (Feito feito em outro lugar, faxina do servidor)
+    if (!lote.length && !loteLidas.length && filaCarregada && ++ociosas < 6) { guardarMemo(); desenharFila(); return; }
+    ociosas = 0;
     const r = await pedir('chamados', { sinais: lote.map((x) => x.sinal), lidas: loteLidas });
     if (!r.ok) {
       // nada foi gravado: as lidas voltam para tentar de novo; os sinais seguem fora de `enviado`, então vão de novo
@@ -214,7 +227,7 @@
   function abrirConversa(nome) {
     for (const el of linhasDaLista()) {
       const t = el.querySelector('span[title]');
-      if (txt(t) === nome) {
+      if (txt(t).slice(0, 120) === nome) {
         const alvo = t.closest('[role="listitem"],[role="row"]') || t;
         for (const tipo of ['mousedown', 'mouseup', 'click']) alvo.dispatchEvent(new MouseEvent(tipo, { bubbles: true, cancelable: true, view: window }));
         return true;
@@ -255,7 +268,10 @@
         botaozinho('Feito', async () => {
           const r = await pedir('feito', { id: c.id });
           if (!r.ok) { aviso.textContent = '⚠️ ' + r.erro; return; }
-          // não mexe em `enviado`: com o selo ainda na lista, o mesmo trecho não volta (e, se voltar, o servidor ignora)
+          // se a conversa segue com selo na lista (Feito sem abrir), cala ela até o selo sumir: senão a próxima mensagem do grupo
+          // reabriria o chamado na hora
+          memo.silencio[memo.nomes[c.id] || c.conversa] = 1;
+          guardarMemo();
           abertos = r.dados.abertos || [];
           desenharFila();
         }),

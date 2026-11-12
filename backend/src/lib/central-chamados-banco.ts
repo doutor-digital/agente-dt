@@ -3,30 +3,26 @@
  *
  * Um chamado ABERTO por conversa (índice único parcial `status = 'aberto'` na migration): os sinais seguintes da mesma conversa
  * anexam o trecho ao mesmo chamado. "Não lida" que o João abriu no WhatsApp vira `vista` sozinha; menção e manual só saem com
- * "Feito" na extensão. Sinal com o MESMO trecho de um chamado fechado há pouco é ignorado (o Feito e a vista não "voltam" quando
- * a extensão manda de novo, ex.: depois de recarregar a página); mensagem nova (trecho novo) abre outro.
+ * "Feito" na extensão. O servidor NUNCA descarta sinal válido: quem segura o Feito (não reabrir enquanto o selo segue na lista) é a
+ * extensão, que conhece o selo; aqui, sinal sem chamado aberto sempre abre um novo.
  */
 import { Prisma } from '@prisma/client';
 import { prisma } from './prisma.js';
-import { env } from './env.js';
+import { segredoCentral as segredo } from './central-pausa-banco.js';
 import {
   DIAS_ABERTO,
   DIAS_GUARDA,
-  DIAS_LEMBRA_FECHADO,
   DIAS_NAO_LIDA_ABERTA,
   chaveDaConversa,
   juntarTrecho,
   nomeNormalizado,
   tipoMaisForte,
-  trechoJaVisto,
   type SinalLimpo,
   type TipoChamado,
 } from './central-chamados.js';
 
 const DIA = 86_400_000;
 
-// mesmo segredo da pausa por pessoa (central-pausa-banco.ts)
-const segredo = () => env.CENTRAL_PAUSA_SEGREDO || env.SESSION_JWT_SECRET;
 
 export interface ChamadoAberto {
   id: string;
@@ -41,12 +37,13 @@ export interface ChamadoAberto {
 }
 
 async function anexar(id: string, atual: { trecho: string; tipo: string }, s: SinalLimpo): Promise<void> {
-  await prisma.centralChamado.update({
-    where: { id },
+  // só se ainda está aberto (um Feito no meio não é desfeito); o manual não sabe as não lidas, então não mexe nelas
+  await prisma.centralChamado.updateMany({
+    where: { id, status: 'aberto' },
     data: {
       trecho: juntarTrecho(atual.trecho, s.trecho),
       tipo: tipoMaisForte(atual.tipo as TipoChamado, s.tipo),
-      naoLidas: s.naoLidas,
+      ...(s.tipo === 'manual' ? {} : { naoLidas: s.naoLidas }),
       grupo: s.grupo,
       conversa: s.conversa,
       vezes: { increment: 1 },
@@ -72,17 +69,6 @@ export async function registrarSinais(sinais: (SinalLimpo | null)[], lidas: stri
       await anexar(aberto.id, aberto, s);
       ids.push(aberto.id);
       continue;
-    }
-    if (s.tipo !== 'manual') {
-      const fechado = await prisma.centralChamado.findFirst({
-        where: { chaveConversa, status: { not: 'aberto' }, fechadoEm: { gte: new Date(Date.now() - DIAS_LEMBRA_FECHADO * DIA) } },
-        orderBy: { fechadoEm: 'desc' },
-        select: { trecho: true },
-      });
-      if (fechado && trechoJaVisto(fechado.trecho, s.trecho)) {
-        ids.push(null);
-        continue;
-      }
     }
     try {
       const c = await prisma.centralChamado.create({
@@ -114,8 +100,20 @@ export async function registrarSinais(sinais: (SinalLimpo | null)[], lidas: stri
  * qualquer aberto parado há DIAS_ABERTO dias vira `expirado`, e fechado há mais de DIAS_GUARDA dias é apagado — nada fica guardado
  * sem prazo.
  */
+let ultimaFaxina = 0;
+const FAXINA_A_CADA = 10 * 60_000;
+
 export async function listarAbertos(): Promise<ChamadoAberto[]> {
   const agora = Date.now();
+  if (agora - ultimaFaxina >= FAXINA_A_CADA) {
+    ultimaFaxina = agora;
+    await faxina(agora);
+  }
+  const ls = await prisma.centralChamado.findMany({ where: { status: 'aberto' }, orderBy: { atualizadoEm: 'desc' }, take: 100 });
+  return ls.map(paraAberto);
+}
+
+async function faxina(agora: number): Promise<void> {
   await prisma.centralChamado.updateMany({
     where: { status: 'aberto', tipo: 'nao_lida', atualizadoEm: { lt: new Date(agora - DIAS_NAO_LIDA_ABERTA * DIA) } },
     data: { status: 'vista', fechadoEm: new Date(agora) },
@@ -125,8 +123,20 @@ export async function listarAbertos(): Promise<ChamadoAberto[]> {
     data: { status: 'expirado', fechadoEm: new Date(agora) },
   });
   await prisma.centralChamado.deleteMany({ where: { status: { not: 'aberto' }, fechadoEm: { lt: new Date(agora - DIAS_GUARDA * DIA) } } });
-  const ls = await prisma.centralChamado.findMany({ where: { status: 'aberto' }, orderBy: { atualizadoEm: 'desc' }, take: 100 });
-  return ls.map((l) => ({
+}
+
+function paraAberto(l: {
+  id: string;
+  conversa: string;
+  grupo: boolean;
+  tipo: string;
+  trecho: string;
+  naoLidas: number;
+  vezes: number;
+  criadoEm: Date;
+  atualizadoEm: Date;
+}): ChamadoAberto {
+  return {
     id: l.id,
     conversa: l.conversa,
     grupo: l.grupo,
@@ -136,7 +146,7 @@ export async function listarAbertos(): Promise<ChamadoAberto[]> {
     vezes: l.vezes,
     criadoEm: l.criadoEm,
     atualizadoEm: l.atualizadoEm,
-  }));
+  };
 }
 
 /** "Feito" na extensão. Devolve se fechou (false = não existe ou já estava fechado). */

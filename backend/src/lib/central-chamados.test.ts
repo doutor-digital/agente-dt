@@ -10,7 +10,6 @@ import {
   mascararDigitos,
   nomeParaMostrar,
   tipoMaisForte,
-  trechoJaVisto,
 } from './central-chamados.js';
 
 const SEM_DIGITO_LONGO = (s: string) => assert.ok(!/\d{5,}/.test(s.replace(/[\s().-]/g, '')), s);
@@ -101,9 +100,3 @@ test('limparSinal: grupo só com true; não lidas negativas viram 0', () => {
   assert.equal(s?.naoLidas, 0);
 });
 
-test('trechoJaVisto: mesmo selo não reabre; mensagem nova reabre; vazio nunca conta', () => {
-  assert.equal(trechoJaVisto('a\nb', 'b'), true);
-  assert.equal(trechoJaVisto('a\nb', 'c'), false);
-  assert.equal(trechoJaVisto('a', ''), false);
-  assert.equal(trechoJaVisto('', ''), false);
-});

@@ -8,7 +8,8 @@ import { chaveDaPessoa, finalDoNumero, numeroCanonico, numerosDaMensagem } from 
 
 // Segredo do HMAC: CENTRAL_PAUSA_SEGREDO se existir, senão SESSION_JWT_SECRET. Trocar o segredo usado faz todas as pausas por
 // pessoa caírem (as linhas antigas ficam órfãs; apague a tabela suporte_pausa_pessoa) — por isso existe o segredo próprio.
-const segredo = () => env.CENTRAL_PAUSA_SEGREDO || env.SESSION_JWT_SECRET;
+export const segredoCentral = () => env.CENTRAL_PAUSA_SEGREDO || env.SESSION_JWT_SECRET;
+const segredo = segredoCentral;
 
 export interface PessoaPausada {
   final: string;

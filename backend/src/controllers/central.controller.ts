@@ -105,7 +105,8 @@ export async function centralPessoaHandler(req: Request, res: Response): Promise
 // fase 1b: uma varredura da lista manda poucas dezenas de conversas; teto para não virar porta de lixo
 const chamadosSchema = z.object({
   sinais: z.array(z.unknown()).max(40).optional(),
-  lidas: z.array(z.string().max(200)).max(100).optional(),
+  // nome comprido não derruba o pedido inteiro: é cortado (o servidor normaliza em 120, igual aos sinais)
+  lidas: z.array(z.string().transform((x) => x.slice(0, 200))).max(100).optional(),
 });
 
 export async function centralChamadosHandler(req: Request, res: Response): Promise<void> {
