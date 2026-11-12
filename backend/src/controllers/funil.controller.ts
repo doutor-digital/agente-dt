@@ -21,6 +21,7 @@ import { env } from '../lib/env.js';
 import { contaChatwootDoAmbiente, criarContextoChatwoot, chamar, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 import { createHash } from 'node:crypto';
 import { prisma } from '../lib/prisma.js';
+import { conversasDasPaginas, diaEmBelem, montarHoje } from '../lib/chatwoot-hoje.js';
 import {
   ATRIBUTO_ETAPA,
   MAX_PAGINAS,
@@ -207,6 +208,39 @@ export async function funilQuadroHandler(req: Request, res: Response): Promise<v
     res.json({ ...montarQuadro(paginas, lista, tarefas), chatwoot: a.c.conta!.url, conta: a.c.conta!.conta, eu: a.logado, euId: a.logadoId, podeEscrever: !!a.sessao });
   } catch (e) {
     falhou(res, e, 'quadro');
+  }
+}
+
+/**
+ * Tela "Hoje" (design Início do painel da Lia): números do dia, «A Lia separou», «Faça agora» e «Por usuário hoje», com o login
+ * da própria pessoa (só as caixas que ela enxerga). «Agendaram hoje» vem da memória da régua (entrou em Agendado hoje).
+ */
+export async function funilHojeHandler(req: Request, res: Response): Promise<void> {
+  const a = await autorizado(req, res);
+  if (!a) return;
+  try {
+    const caixa = Number(req.query.caixa);
+    const base: Record<string, string> = { status: 'all', assignee_type: 'all' };
+    if (Number.isInteger(caixa) && caixa > 0) base.inbox_id = String(caixa);
+    const paginas: unknown[] = [];
+    for (let p = 1; p <= MAX_PAGINAS; p++) {
+      const pg = (await cw(a, 'GET', 'conversations', { query: { ...base, page: String(p) } })) as any;
+      paginas.push(pg);
+      if ((pg?.data?.payload?.length ?? 0) < 25) break;
+    }
+    const conversas = conversasDasPaginas(paginas);
+    const agora = Date.now();
+    const inicioDoDia = new Date(Date.parse(`${diaEmBelem(agora)}T03:00:00Z`));
+    const ids = conversas.map((c) => Number(c.id));
+    const agendadas = ids.length
+      ? await prisma.chatwootReguaVisto.findMany({
+          where: { conversationId: { in: ids }, campo: 'etapa', valor: 'Agendado', inicial: false, desde: { gte: inicioDoDia } },
+          select: { conversationId: true },
+        })
+      : [];
+    res.json({ ...montarHoje(conversas, agora, new Set(agendadas.map((x) => x.conversationId))), eu: a.logado, chatwoot: a.c.conta!.url, conta: a.c.conta!.conta });
+  } catch (e) {
+    falhou(res, e, 'hoje');
   }
 }
 
@@ -746,6 +780,33 @@ body{background:#f4f6f9}
 .ic{display:grid;place-items:center}
 #msg{margin-left:auto;font-size:12.5px;color:var(--fraco);white-space:nowrap}
 
+/* ── tela HOJE (design Início do painel da Lia) ── */
+.quadro.hoje{display:block;overflow:auto;padding:22px 28px 48px}
+.hj-sauda h2{font-size:22px;font-weight:700;margin:0;letter-spacing:-.01em}
+.hj-sauda p{margin:2px 0 0;color:var(--fraco)}
+.hj-nums{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:18px 0}
+.hj-num{border-radius:12px;padding:12px 14px;background:#fff;border:1px solid var(--linha)}
+.hj-num small{font-size:12.5px;color:#475467}
+.hj-num b{display:block;font-size:26px;font-weight:700;line-height:1.2;font-variant-numeric:tabular-nums}
+.hj-num.azul{background:#eef4ff;border-color:#dfe8fb}.hj-num.amar{background:#fdf3e7;border-color:#f6e5cf}.hj-num.verde{background:#e9f6ee;border-color:#d4ecdd}
+.hj-lia{background:#0f1a3a;color:#fff;border-radius:14px;padding:14px 16px;margin-bottom:16px}
+.hj-lia h3,.hj-box h3{margin:0 0 12px;font-size:15px;font-weight:700}
+.hj-lia-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
+.hj-lia-card{background:#1d2b55;border:0;border-radius:10px;padding:12px 14px;color:#fff;text-align:left;cursor:pointer;font:inherit}
+.hj-lia-card:hover{background:#26386c}
+.hj-lia-card b{display:block;font-size:22px;font-weight:700}
+.hj-lia-card span{font-size:14px}
+.hj-lista{background:#fff;color:var(--txt);border-radius:10px;padding:4px 14px;margin-top:12px}
+.hj-box{background:#fff;border:1px solid var(--linha);border-radius:14px;padding:14px 16px;margin-bottom:16px}
+.hj-linha{display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--linha)}
+.hj-lista .hj-linha:first-child,.hj-box h3+.hj-linha{border-top:0}
+.hj-linha>div{flex:1;min-width:0}
+.hj-linha .nm{font-weight:600}
+.det{font-size:12.5px;color:var(--fraco)}
+.hj-tab{width:100%;border-collapse:collapse}
+.hj-tab th{font-size:12px;color:#475467;text-align:left;font-weight:600;padding:8px}
+.hj-tab td{padding:9px 8px;border-top:1px solid var(--linha);font-variant-numeric:tabular-nums}
+
 @media (max-width:760px){.col{flex-basis:260px}.topo{padding-right:56px}}
 </style></head><body>
 <div class="topo" id="topo">
@@ -766,7 +827,7 @@ body{background:#f4f6f9}
 <section class="lead" id="lead" hidden></section>
 <script>
 (function(){
-  var q=new URLSearchParams(location.search), K=q.get('k')||'', MENU=q.get('menu')==='1', ORIGEM_CW=__ORIGEM_CW__, DENTRO=window.parent!==window;
+  var q=new URLSearchParams(location.search), K=q.get('k')||'', MENU=q.get('menu')==='1', TELA=q.get('tela')==='hoje'?'hoje':'', ORIGEM_CW=__ORIGEM_CW__, DENTRO=window.parent!==window;
   var S=null, iniciado=false, timer=null, morta=null, dados=null, caixas=[], aberta=null, ficha=null, filtro='', recolhidas={}, atualizadoEm=0, arrastando=null, formNaColuna=null, aba='principal', modo='mensagem', ctxConversa=null;
   var CORES=['#64748b','#1f93ff','#d97706','#7c3aed','#4f46e5','#16a34a','#15803d','#0d9488','#db2777','#dc2626','#94a3b8'];
   var AV=[['#1f73d6','#e6f1ff'],['#c2410c','#fff0e6'],['#15803d','#e8f7ee'],['#7c3aed','#f1ebff'],['#be185d','#fdebf3'],['#0f766e','#e6f6f4'],['#a16207','#fdf6e3'],['#4338ca','#eceeff']];
@@ -903,6 +964,7 @@ body{background:#f4f6f9}
   }
   async function carregar(){
     if(!S&&!K){ msg(DENTRO?'Entre no Chatwoot para ver o funil.':'Abra o funil pelo Chatwoot.'); return; }
+    if(TELA){ await carregarHoje(); return; }
     try{
       dados=await api('GET','quadro'+($('caixa').value?('?caixa='+encodeURIComponent($('caixa').value)):''));
       $('novo').hidden=!dados.podeEscrever; atualizadoEm=Date.now(); $('atual').textContent='atualizado agora'; desenhar(); if(!$('msg').textContent||/Carregando/.test($('msg').textContent)) msg(dados.total+' leads');
@@ -1024,11 +1086,48 @@ body{background:#f4f6f9}
       if(cid&&cid!==ctxConversa){ ctxConversa=cid; if(iniciado&&!MENU&&aberta!==cid) abrirFicha(cid); }
     }catch(e){}
   });
+  // ── tela HOJE (design Início do painel da Lia) ─────────────────────────────
+  async function carregarHoje(){
+    try{ var h=await api('GET','hoje'+($('caixa').value?('?caixa='+encodeURIComponent($('caixa').value)):'')); atualizadoEm=Date.now(); $('atual').textContent='atualizado agora'; desenharHoje(h); msg(''); }
+    catch(e){ msg(e.message); var qd=$('quadro'); qd.textContent=''; qd.appendChild(el('div','vazio',e.message)); }
+  }
+  function linhaHoje(i,destaque){
+    var l=el('div','hj-linha'), tx=el('div'); tx.appendChild(el('div','nm',i.nome)); tx.appendChild(el('div','det',i.detalhe)); l.appendChild(tx);
+    var b=el('button','bt'+(destaque&&i.quente?' azul':''),'Abrir conversa'); b.type='button'; b.onclick=function(){ abrirConversa(i.id); }; l.appendChild(b); return l;
+  }
+  function desenharHoje(h){
+    var qd=$('quadro'); qd.className='quadro hoje'; qd.textContent='';
+    var hr=new Date().getHours(), sd=el('div','hj-sauda');
+    sd.appendChild(el('h2',null,(hr<12?'Bom dia':hr<18?'Boa tarde':'Boa noite')+(h.eu?', '+String(h.eu).split(' ')[0]:'')));
+    sd.appendChild(el('p',null,'O resumo de hoje nas caixas que você atende. Comece por aqui.')); qd.appendChild(sd);
+    var nums=el('div','hj-nums');
+    [['Chegaram hoje',h.numeros.chegaram,'azul','Conversas que começaram hoje'],['Esperando resposta',h.numeros.esperando,'','O paciente falou e ninguém respondeu ainda'],['Não interagiram',h.numeros.naoInteragiram,'amar','Sem responder há mais de 24 h, ou com a etiqueta sem-resposta'],['Agendaram hoje',h.numeros.agendaram,'verde','Entraram em Agendado hoje'],['Hoje na agenda',h.numeros.naAgenda,'','Consulta marcada para hoje'],['Falta confirmar',h.numeros.faltaConfirmar,'amar','Consulta hoje ou amanhã ainda como Agendado']].forEach(function(x){
+      var c=el('div','hj-num'+(x[2]?' '+x[2]:'')); c.title=x[3]; c.appendChild(el('small',null,x[0])); c.appendChild(el('b',null,String(x[1]))); nums.appendChild(c); });
+    qd.appendChild(nums);
+    var lia=el('section','hj-lia'), lc=el('div','hj-lia-cards'), lista=el('div','hj-lista'); lista.hidden=true;
+    lia.appendChild(el('h3',null,'A Lia separou para você hoje'));
+    [['naoFecharam','consultaram e não fecharam'],['retorno60','terminaram há 2 meses: agendar retorno'],['verDepois','ficaram de ver depois'],['faltaram','faltaram: remarcar']].forEach(function(x){
+      var itens=(h.separou&&h.separou[x[0]])||[], b=el('button','hj-lia-card'); b.type='button';
+      b.appendChild(el('b',null,String(itens.length))); b.appendChild(el('span',null,x[1]));
+      b.onclick=function(){ var ja=!lista.hidden&&lista.getAttribute('data-k')===x[0]; lista.textContent=''; lista.hidden=ja; lista.setAttribute('data-k',x[0]); if(ja) return;
+        if(!itens.length){ lista.appendChild(el('div','hj-linha det','Ninguém nesta lista agora.')); return; } itens.forEach(function(i){ lista.appendChild(linhaHoje(i)); }); };
+      lc.appendChild(b); });
+    lia.appendChild(lc); lia.appendChild(lista); qd.appendChild(lia);
+    var fa=el('section','hj-box'); fa.appendChild(el('h3',null,'Faça agora'));
+    if(!h.facaAgora.length) fa.appendChild(el('div','det','Ninguém esperando resposta agora.'));
+    h.facaAgora.forEach(function(i){ fa.appendChild(linhaHoje(i,true)); }); qd.appendChild(fa);
+    var pu=el('section','hj-box'), t=el('table','hj-tab'), cab=el('tr'); pu.appendChild(el('h3',null,'Por usuário hoje'));
+    ['Usuário','Conversas abertas','Esperando','Responderam hoje','Agendaram hoje'].forEach(function(n){ cab.appendChild(el('th',null,n)); }); t.appendChild(cab);
+    h.porUsuario.forEach(function(u){ var tr=el('tr'); [u.nome,u.conversas,u.esperando,u.responderamHoje,u.agendaram].forEach(function(v){ tr.appendChild(el('td',null,String(v))); }); t.appendChild(tr); });
+    pu.appendChild(t); qd.appendChild(pu);
+  }
+  if(TELA){ document.title='Hoje · Doutor Digital'; var h1=document.querySelector('.topo h1'); if(h1) h1.textContent='Hoje';
+    ['resumo','filtros','ordem'].forEach(function(id){ $(id).hidden=true; }); var bc=document.querySelector('.busca-c'); if(bc) bc.hidden=true; }
   function iniciar(){
     if(!S&&!K){ carregar(); return; }
     if(iniciado){ if(aberta) recarregarFicha(); else carregar(); return; }
     iniciado=true; msg('Carregando…');
-    if(!dados){ var qd=$('quadro'); qd.textContent=''; for(var f=0;f<5;f++){ var fc=el('div','fantasma'); for(var g=0;g<4-(f%3);g++) fc.appendChild(el('i')); qd.appendChild(fc); } }
+    if(!dados&&!TELA){ var qd=$('quadro'); qd.textContent=''; for(var f=0;f<5;f++){ var fc=el('div','fantasma'); for(var g=0;g<4-(f%3);g++) fc.appendChild(el('i')); qd.appendChild(fc); } }
     api('GET','caixas').then(function(l){ caixas=l; var s=$('caixa'); while(s.options.length>1) s.remove(1); l.forEach(function(c){ var o=el('option',null,c.nome); o.value=c.id; s.appendChild(o); }); }).catch(function(){});
     if(ctxConversa&&!MENU) abrirFicha(ctxConversa); else carregar();
     if(!timer) timer=setInterval(function(){ if(!aberta) carregar(); },60000);
@@ -1084,39 +1183,47 @@ const MENU_JS = `(function(){
   }
   function ajustar(){ if (cam) cam.style.left = margem() + 'px'; }
   function marcar(ativo){
-    var item = document.querySelector('[data-funil-menu]'), link = item && (item.tagName === 'A' ? item : item.querySelector('a'));
-    if (link) link.style.background = ativo ? 'rgba(31,147,255,.12)' : '';
+    // ativo: '' (funil), 'hoje' ou false (nenhum)
+    [['[data-funil-menu]', ''], ['[data-hoje-menu]', 'hoje']].forEach(function(p){
+      var item = document.querySelector(p[0]), link = item && (item.tagName === 'A' ? item : item.querySelector('a'));
+      if (link) link.style.background = ativo !== false && ativo === p[1] ? 'rgba(31,147,255,.12)' : '';
+    });
   }
   // fechar REMOVE o quadro: nada fica consultando o Chatwoot escondido; reabrir pede o login de novo
   // aberto fica lembrado NESTA aba (sessionStorage): o Ctrl+R reabre o funil; fechar esquece
-  var LEMBRAR = 'funil:aberto', reaberto = false;
-  function lembrar(sim){ try { if (sim) sessionStorage.setItem(LEMBRAR, '1'); else sessionStorage.removeItem(LEMBRAR); } catch (e) {} }
+  var LEMBRAR = 'funil:aberto', reaberto = false, tela = '';
+  function lembrar(valor){ try { if (valor === false) sessionStorage.removeItem(LEMBRAR); else sessionStorage.setItem(LEMBRAR, valor || 'funil'); } catch (e) {} }
   function fechar(){ if (cam) { cam.remove(); cam = null; fr = null; } marcar(false); lembrar(false); }
   function reabrir(){
     if (reaberto) return; reaberto = true;
-    try { if (sessionStorage.getItem(LEMBRAR) === '1' && /\\/app\\/accounts\\//.test(location.pathname) && sessao()) abrir(); } catch (e) {}
+    try { var v = sessionStorage.getItem(LEMBRAR); if (v && /\\/app\\/accounts\\//.test(location.pathname) && sessao()) abrir(null, v === 'hoje' ? 'hoje' : ''); } catch (e) {}
   }
-  function abrir(ev){
+  // qual: '' = funil, 'hoje' = tela Hoje (o mesmo quadro, outra tela)
+  function abrir(ev, qual){
     if (ev) { ev.preventDefault(); ev.stopPropagation(); }
-    lembrar(true);
+    qual = qual === 'hoje' ? 'hoje' : '';
+    lembrar(qual || 'funil');
+    var url = AGENTE + '/funil?menu=1' + (qual ? '&tela=hoje' : '');
+    if (cam && tela !== qual && fr) { fr.src = url; fr.title = qual ? 'Hoje' : 'Funil'; }
+    tela = qual;
     if (!cam) {
       cam = document.createElement('div');
       cam.style.cssText = 'position:fixed;top:0;right:0;bottom:0;z-index:2147483000;background:#f5f7fb;display:flex;border-left:1px solid #e3e8ef';
       var x = document.createElement('button'); x.type = 'button'; x.textContent = '\\u2715'; x.title = 'Fechar o funil (Esc)';
       x.style.cssText = 'position:absolute;top:12px;right:14px;z-index:1;width:30px;height:30px;font:16px system-ui,sans-serif;border:1px solid #e3e8ef;border-radius:6px;background:#fff;color:#1f2d3d;cursor:pointer';
       x.onclick = fechar;
-      fr = document.createElement('iframe'); fr.src = AGENTE + '/funil?menu=1'; fr.title = 'Funil';
+      fr = document.createElement('iframe'); fr.src = url; fr.title = qual ? 'Hoje' : 'Funil';
       fr.style.cssText = 'flex:1;border:0;width:100%;height:100%';
       cam.appendChild(fr); cam.appendChild(x); document.body.appendChild(cam);
     }
-    ajustar(); marcar(true);
+    ajustar(); marcar(qual);
   }
   window.addEventListener('resize', ajustar);
   // clicar em outro item do menu (Conversas, Contatos…) fecha o funil e o Chatwoot segue para onde a pessoa clicou
   document.addEventListener('click', function(e){
     if (!cam || !e.target || !e.target.closest) return;
     var link = e.target.closest('aside a, nav a');
-    if (link && !link.closest('[data-funil-menu]')) fechar();
+    if (link && !link.closest('[data-funil-menu], [data-hoje-menu]')) fechar();
   }, true);
   document.addEventListener('keydown', function(e){ if (e.key === 'Escape') fechar(); });
   window.addEventListener('message', function(ev){
@@ -1136,22 +1243,30 @@ const MENU_JS = `(function(){
       if (conta && Number.isInteger(id) && id > 0) { fechar(); location.assign('/app/accounts/' + conta[1] + '/conversations/' + id); }
     }
   });
-  function trocarTexto(no){
+  function trocarTexto(no, texto){
     var w = document.createTreeWalker(no, NodeFilter.SHOW_TEXT), t;
-    while ((t = w.nextNode())) { if (t.nodeValue.trim()) { t.nodeValue = 'Funil'; return; } }
+    while ((t = w.nextNode())) { if (t.nodeValue.trim()) { t.nodeValue = texto; return; } }
   }
+  // um item novo no menu, copiado do "Contatos" (mesmo visual), posto logo depois de \`depois\`
+  function item(base, depois, marca, texto, hash, aoClicar){
+    var novo = base.cloneNode(true);
+    novo.setAttribute(marca, '1');
+    var link = novo.tagName === 'A' ? novo : novo.querySelector('a');
+    if (link) { link.setAttribute('href', hash); link.classList.remove('router-link-active', 'router-link-exact-active'); link.removeAttribute('aria-current'); }
+    Array.prototype.forEach.call(novo.querySelectorAll('ul, [role="group"]'), function(u){ u.remove(); });
+    trocarTexto(novo, texto);
+    novo.addEventListener('click', aoClicar, true);
+    depois.parentNode.insertBefore(novo, depois.nextSibling);
+    return novo;
+  }
+  // Contatos → Hoje → Funil
   function por(){
-    if (document.querySelector('[data-funil-menu]')) return true;
+    if (document.querySelector('[data-funil-menu]') && document.querySelector('[data-hoje-menu]')) return true;
     var a = document.querySelector('aside a[href*="/contacts"], nav a[href*="/contacts"]');
     if (!a) return false;
-    var item = a.closest('li') || a, novo = item.cloneNode(true);
-    novo.setAttribute('data-funil-menu', '1');
-    var link = novo.tagName === 'A' ? novo : novo.querySelector('a');
-    if (link) { link.setAttribute('href', '#funil'); link.classList.remove('router-link-active', 'router-link-exact-active'); link.removeAttribute('aria-current'); }
-    Array.prototype.forEach.call(novo.querySelectorAll('ul, [role="group"]'), function(u){ u.remove(); });
-    trocarTexto(novo);
-    novo.addEventListener('click', abrir, true);
-    item.parentNode.insertBefore(novo, item.nextSibling);
+    var base = a.closest('li') || a;
+    var hoje = document.querySelector('[data-hoje-menu]') || item(base, base, 'data-hoje-menu', 'Hoje', '#hoje', function(e){ abrir(e, 'hoje'); });
+    if (!document.querySelector('[data-funil-menu]')) item(base, hoje, 'data-funil-menu', 'Funil', '#funil', function(e){ abrir(e, ''); });
     var reserva = document.querySelector('[data-funil-botao]'); if (reserva) reserva.remove();
     return true;
   }
