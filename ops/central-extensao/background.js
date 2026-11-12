@@ -1,6 +1,6 @@
 // Central do João — fala com o servidor (a chave mora só aqui, no chrome.storage.local, nunca na página do WhatsApp).
 const PADRAO = 'https://agente-vps.doutordigitalconsultoria.com';
-const ROTAS = { estado: 'estado', geral: 'geral', pessoa: 'pessoa' };
+const ROTAS = { estado: 'estado', geral: 'geral', pessoa: 'pessoa', chamados: 'chamados', feito: 'chamados/feito' };
 
 async function config() {
   const c = await chrome.storage.local.get(['servidor', 'chave']);

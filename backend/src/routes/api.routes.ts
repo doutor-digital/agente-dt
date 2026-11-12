@@ -157,7 +157,7 @@ import {
   funilTarefaFeitaHandler,
   funilTarefaHandler,
 } from '../controllers/funil.controller.js';
-import { centralEstadoHandler, centralGeralHandler, centralPessoaHandler } from '../controllers/central.controller.js';
+import { centralChamadoFeitoHandler, centralChamadosHandler, centralEstadoHandler, centralGeralHandler, centralPessoaHandler } from '../controllers/central.controller.js';
 import { lidaEvolutionHandler } from '../lib/chatwoot-lida.js';
 import { eventoChatwootHandler } from '../lib/chatwoot-ia.js';
 import { saudeIaHandler } from '../controllers/saude-ia.controller.js';
@@ -391,6 +391,8 @@ apiRouter.post('/public/central/pessoa', centralPessoaHandler);
 apiRouter.post('/public/evolution/lida', lidaEvolutionHandler);
 // Chatwoot → agente-dt: mensagem nova do paciente (transcrição do áudio + Sofia em seco). Chave em ?k= (mascarada no log).
 apiRouter.post('/public/chatwoot/evento', eventoChatwootHandler);
+apiRouter.post('/public/central/chamados', centralChamadosHandler);
+apiRouter.post('/public/central/chamados/feito', centralChamadoFeitoHandler);
 apiRouter.get('/public/funil/quadro', funilQuadroHandler);
 apiRouter.get('/public/funil/caixas', funilCaixasHandler);
 apiRouter.get('/public/funil/hoje', funilHojeHandler);

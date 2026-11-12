@@ -1,5 +1,11 @@
 const $ = (id) => document.getElementById(id);
-chrome.storage.local.get(['servidor', 'chave'], (c) => { $('servidor').value = c.servidor || ''; $('chave').value = c.chave ? '••••••••' : ''; });
+const CFG = { mencoes: true, privado: true, grupos: false, nomes: 'joão,joao' };
+chrome.storage.local.get(['servidor', 'chave', 'cfg'], (c) => {
+  $('servidor').value = c.servidor || '';
+  $('chave').value = c.chave ? '••••••••' : '';
+  const g = Object.assign({}, CFG, c.cfg || {});
+  $('mencoes').checked = !!g.mencoes; $('privado').checked = !!g.privado; $('grupos').checked = !!g.grupos; $('nomes').value = g.nomes;
+});
 const ORIGENS = ['https://web.whatsapp.com/*', 'https://agente-vps.doutordigitalconsultoria.com/*'];
 $('salvar').onclick = async () => {
   // Firefox: as permissões de site nascem desligadas; pedir aqui (precisa ser no clique). No Chrome já vêm ligadas.
@@ -9,7 +15,7 @@ $('salvar').onclick = async () => {
   const servidor = $('servidor').value.trim().replace(/\/+$/, '');
   // só o servidor da Doutor Digital (é o único que a extensão tem permissão de chamar)
   if (servidor && servidor !== 'https://agente-vps.doutordigitalconsultoria.com') { $('msg').textContent = '⚠️ Servidor inválido: deixe em branco.'; return; }
-  const novo = { servidor };
+  const novo = { servidor, cfg: { mencoes: $('mencoes').checked, privado: $('privado').checked, grupos: $('grupos').checked, nomes: $('nomes').value.trim().slice(0, 200) || CFG.nomes } };
   const campo = $('chave').value.trim();
   if (campo && campo !== '••••••••') novo.chave = campo;
   await chrome.storage.local.set(novo);

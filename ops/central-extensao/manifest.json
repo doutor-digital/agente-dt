@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Central do João — pausa do agente",
-  "version": "0.1.1",
-  "description": "Pausa o agente de chamados (63 9103-9464) para todo mundo ou só para a pessoa da conversa aberta no WhatsApp Web.",
+  "name": "Central do João",
+  "version": "0.2.0",
+  "description": "No WhatsApp Web: menções a você e não lidas do privado viram chamado numa fila; e pausa o agente de chamados (63 9103-9464).",
   "permissions": [
     "storage"
   ],

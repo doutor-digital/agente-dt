@@ -2,9 +2,15 @@
 <style>body{font:14px system-ui,sans-serif;margin:16px;width:320px;color:#111b21}label{display:block;margin:10px 0 4px;font-weight:600}input{width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid #d1d7db;border-radius:6px}button{margin-top:12px;padding:7px 14px;border:0;border-radius:6px;background:#00a884;color:#fff;font-weight:600;cursor:pointer}#msg{margin-top:10px;color:#667781}</style>
 </head><body>
 <h3 style="margin:0 0 4px">Central do João</h3>
-<div style="color:#667781">Pausa do agente de chamados (9103). A chave fica só neste Chrome.</div>
+<div style="color:#667781">Chamados do WhatsApp Web + pausa do agente (9103). A chave fica só neste navegador.</div>
 <label for="chave">Chave da extensão</label><input id="chave" type="password" autocomplete="off">
 <label for="servidor">Servidor</label><input id="servidor" placeholder="https://agente-vps.doutordigitalconsultoria.com">
+<fieldset style="margin-top:12px;border:1px solid #d1d7db;border-radius:6px"><legend>Viram chamado</legend>
+<div><input type="checkbox" id="mencoes" style="width:auto"> menções a mim (grupos)</div>
+<div><input type="checkbox" id="privado" style="width:auto"> não lidas no privado</div>
+<div><input type="checkbox" id="grupos" style="width:auto"> não lidas em grupo (muito barulho)</div>
+<label for="nomes" style="font-weight:400;margin-top:6px">Como me mencionam (separado por vírgula)</label><input id="nomes" placeholder="joão,joao">
+</fieldset>
 <button id="salvar">Salvar e testar</button>
 <div id="msg"></div>
 <script src="options.js"></script>
