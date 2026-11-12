@@ -18,6 +18,7 @@
  * ninguém lia — na Serra só 4 dos 17 pacientes receberam qualquer confirmação.
  */
 import { prisma } from './prisma.js';
+import { SO_CARTAO_DO_KOMMO } from './chatwoot-lead.js';
 import { logger } from './logger.js';
 import { createKommoClient, type KommoClient, type KommoPipeline } from '../services/kommo.service.js';
 import type { MensagemOficial } from '../services/kommo-talks-normalizar.js';
@@ -260,6 +261,8 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
   const links = await prisma.spineLeadLink.findMany({
     where: {
       unitId: unit.id,
+      // conversa do Chatwoot (chave sintética, sem cartão no Kommo): a véspera dela é da régua do Chatwoot
+      ...SO_CARTAO_DO_KOMMO,
       spineIdSchedule: { not: null },
       OR: diasAlvo.map((d) => ({ agendadoPara: { startsWith: d } })),
     },

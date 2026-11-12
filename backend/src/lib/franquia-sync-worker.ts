@@ -13,6 +13,7 @@
  * Nunca sobrescreve texto livre da SDR: só os campos listados em CAMPOS_SYNC.
  * O que a franquia não sabe, fica como está.
  */
+import { SO_CARTAO_DO_KOMMO } from './chatwoot-lead.js';
 import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { escritasDoPaciente, idadeADesencalhar } from './paciente-para-cartao.js';
@@ -420,7 +421,8 @@ export async function resolverPaciente(
   let fone: string | null = null;
   if (idsSchedule.length > 0) {
     const link = await prisma.spineLeadLink.findFirst({
-      where: { unitId: unit.id, spineIdSchedule: { in: idsSchedule } },
+      // vínculo de conversa do Chatwoot (chave sintética) não é cartão do Kommo
+      where: { unitId: unit.id, spineIdSchedule: { in: idsSchedule }, ...SO_CARTAO_DO_KOMMO },
       orderBy: { updatedAt: 'desc' },
     });
     if (link) {
@@ -429,7 +431,7 @@ export async function resolverPaciente(
     }
   }
   if (leadId === null && idClient) {
-    const link = await prisma.spineLeadLink.findFirst({ where: { unitId: unit.id, spineIdClient: idClient }, orderBy: { updatedAt: 'desc' } });
+    const link = await prisma.spineLeadLink.findFirst({ where: { unitId: unit.id, spineIdClient: idClient, ...SO_CARTAO_DO_KOMMO }, orderBy: { updatedAt: 'desc' } });
     if (link) leadId = link.kommoLeadId;
   }
   if (leadId === null) {

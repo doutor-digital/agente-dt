@@ -107,6 +107,15 @@ interface Contexto {
   kommo?: KommoClient;
   /** Compartilhado com o safety-net do `pausar_ia`. */
   estado?: EstadoAgenda;
+  /**
+   * Conversa do Chatwoot (sem Kommo): o telefone do paciente vem de lá, no lugar do contato do cartão — é a âncora que impede
+   * marcar no cadastro de outra pessoa. Sem isto e sem Kommo, só o telefone que o modelo escrever confere.
+   */
+  telefoneDaConversa?: string;
+  /** Não probe a franquia (a sondagem marca e desmarca de verdade): só a grade. Para o «seco» do Chatwoot. */
+  semSondagem?: boolean;
+  /** Não grave o vínculo lead↔paciente (`buscar_paciente`). Para o «seco» do Chatwoot. */
+  semGravar?: boolean;
 }
 
 const NOME_AGENDOU = '✓ Agendou';
@@ -225,7 +234,7 @@ async function clienteDeSondagem(unit: Unit): Promise<number | null> {
   return id;
 }
 
-export function buildConsultarHorarios({ unit, recorder, estado, kommo }: Contexto) {
+export function buildConsultarHorarios({ unit, recorder, estado, kommo, semSondagem }: Contexto) {
   return new DynamicStructuredTool({
     name: 'consultar_horarios',
     description:
@@ -284,7 +293,7 @@ export function buildConsultarHorarios({ unit, recorder, estado, kommo }: Contex
 
       const LOOKAHEAD_DIAS = 30;
       const MAX_DIAS_SONDADOS = 3;
-      const sonda = await clienteDeSondagem(fresca);
+      const sonda = semSondagem ? null : await clienteDeSondagem(fresca);
       let diasSondados = 0;
       let outroTurnoNoDiaPedido: string | null = null;
       let cursor = data;
@@ -383,7 +392,7 @@ export function buildConsultarHorarios({ unit, recorder, estado, kommo }: Contex
           fantasmas = r.fantasmas;
           verificado = true;
           oferecer = r.aceitos;
-        } else if (!sonda) {
+        } else if (!sonda && !semSondagem) {
           logger.warn(
             { unit: fresca.slug, data: cursor, livres: livres.length },
             'consultar_horarios: sem paciente de sondagem — horários NÃO confirmados com a franquia',
@@ -438,7 +447,7 @@ export async function telefoneDoLead(
   }
 }
 
-export function buildBuscarPaciente({ unit, recorder, kommo }: Contexto) {
+export function buildBuscarPaciente({ unit, recorder, kommo, telefoneDaConversa, semGravar }: Contexto) {
   return new DynamicStructuredTool({
     name: 'buscar_paciente',
     description:
@@ -508,7 +517,7 @@ export function buildBuscarPaciente({ unit, recorder, kommo }: Contexto) {
       }
 
       const foneInformado = args.telefone ? SpineService.normalizarWhatsapp(args.telefone) : null;
-      const fone = foneInformado ?? (await telefoneDoLead(kommo, args.leadId));
+      const fone = foneInformado ?? (await telefoneDoLead(kommo, args.leadId)) ?? SpineService.normalizarWhatsapp(telefoneDaConversa ?? '') ?? null;
       const alvo = fim8(fone);
       const batem = alvo ? achados.filter((c) => fim8(c.whatsapp) === alvo) : [];
 
@@ -537,7 +546,7 @@ export function buildBuscarPaciente({ unit, recorder, kommo }: Contexto) {
       }
 
       if (batem.length === 1) {
-        await guardarPaciente(fresca.id, args.leadId, batem[0].idClient);
+        if (!semGravar) await guardarPaciente(fresca.id, args.leadId, batem[0].idClient);
 
         // Achar o cadastro não basta: o texto antigo mandava agendar, e a Sofia
         // agendava — inclusive para quem já tinha horário marcado (caso Wilson,
@@ -1368,7 +1377,7 @@ export function orientacaoDePagamento(
   return '';
 }
 
-export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
+export function buildAgendarConsulta({ unit, recorder, kommo, telefoneDaConversa }: Contexto) {
   // Decidido uma vez por turno, com a unidade do contexto: descrição, esquema e porta enxergam a mesma coisa. De propósito NÃO
   // vem de `fresca`: se a porta pedisse `formaPagamento` e o esquema já não o tivesse, a recusa se repetiria até o fim do turno.
   const semAntecipado = unidadeSemAntecipado(unit);
@@ -1553,7 +1562,7 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
       let leituraDoCadastro: Awaited<ReturnType<typeof SpineService.getClient>> | null = null;
       const lerCadastro = async () =>
         (leituraDoCadastro ??= await SpineService.getClient(fresca, args.idClient).catch((err: unknown) => ({ ok: false as const, error: String(err) })));
-      const foneLead = await telefoneDoLead(kommo, args.leadId);
+      const foneLead = (await telefoneDoLead(kommo, args.leadId)) ?? (telefoneDaConversa ? SpineService.normalizarWhatsapp(telefoneDaConversa) : null);
       const foneInformado = args.telefone ? SpineService.normalizarWhatsapp(args.telefone) : null;
       // O telefone do cadastro tem de ser o deste paciente (o do cartão ou o que ele informou); se não for, o cadastro é de outra pessoa.
       const aceitos = [fim8(foneLead), fim8(foneInformado)].filter((x): x is string => x !== null);

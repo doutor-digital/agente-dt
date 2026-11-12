@@ -24,6 +24,13 @@ interface ContextoDoSinal {
   unit: Unit;
   recorder: TraceRecorder;
   kommo?: KommoClient;
+  /**
+   * Conversa do Chatwoot (sem Kommo): quem chama garante que o `leadId` é o da conversa em andamento (o grafo o fixa), então a conferência
+   * «o paciente escreveu na última hora» (tabela `conversations`, que só o Kommo preenche) não se aplica.
+   */
+  conversaGarantida?: boolean;
+  /** Sem Kommo, onde avisar a equipe quando o Pix não sai (nota/etapa no Chatwoot). `true` = o aviso saiu. */
+  avisarEquipe?: (motivo: 'sinal_pix_falhou' | 'sinal_pix_sem_registro', detalhe: string) => Promise<boolean>;
 }
 
 /**
@@ -89,7 +96,7 @@ export function textoDoSinal(r: ResultadoDoSinal, s: SinalDaUnidade, tarefaAbert
   );
 }
 
-export function buildGerarSinalPix({ unit, recorder, kommo }: ContextoDoSinal) {
+export function buildGerarSinalPix({ unit, recorder, kommo, conversaGarantida, avisarEquipe }: ContextoDoSinal) {
   return new DynamicStructuredTool({
     name: 'gerar_sinal_pix',
     description:
@@ -106,7 +113,7 @@ export function buildGerarSinalPix({ unit, recorder, kommo }: ContextoDoSinal) {
       const doTurno = leadDoTurno.get(recorder.traceId);
       const leadId = doTurno ?? args.leadId;
       if (!leadId) return 'Informe o leadId desta conversa: o sinal é gerado depois de a consulta estar marcada (agendar_consulta).';
-      if (!doTurno) {
+      if (!doTurno && !conversaGarantida) {
         // a conversa em andamento: o paciente escreveu na última hora (o cartão de outro paciente, parado, não passa)
         const recente = new Date(Date.now() - 60 * 60_000);
         const conversa = await prisma.conversation.findFirst({ where: { unitId: unit.id, leadId: String(leadId), lastMessageAt: { gte: recente } }, select: { id: true } }).catch(() => null);
@@ -148,6 +155,7 @@ export function buildGerarSinalPix({ unit, recorder, kommo }: ContextoDoSinal) {
 
       let tarefaAberta = false;
       if (r.tipo === 'falhou') {
+        const detalhe = `Motivo: ${r.motivo === 'sem-chave' ? 'a unidade não tem a chave do Asaas no cofre' : r.motivo === 'teto' ? 'teto de links por dia atingido' : r.motivo === 'baixa-desligada' ? 'a baixa automática do sinal não está ligada nesta unidade' : r.motivo === 'em-andamento' ? 'outra geração do mesmo sinal não terminou' : 'o Asaas recusou ou não respondeu'}`;
         if (kommo) {
           const t = await abrirTarefaParaEquipe({
             slug: fresca.slug,
@@ -156,17 +164,20 @@ export function buildGerarSinalPix({ unit, recorder, kommo }: ContextoDoSinal) {
             kommo,
             recorder,
             motivo: 'sinal_pix_falhou',
-            detalhe: `Motivo: ${r.motivo === 'sem-chave' ? 'a unidade não tem a chave do Asaas no cofre' : r.motivo === 'teto' ? 'teto de links por dia atingido' : r.motivo === 'baixa-desligada' ? 'a baixa automática do sinal não está ligada nesta unidade' : r.motivo === 'em-andamento' ? 'outra geração do mesmo sinal não terminou' : 'o Asaas recusou ou não respondeu'}`,
+            detalhe,
           }).catch((err) => {
             logger.warn({ err: String(err), leadId }, 'sinal-pix: falha ao abrir a tarefa da equipe');
             return 'falhou' as const;
           });
           tarefaAberta = t !== 'falhou';
+        } else if (avisarEquipe) {
+          tarefaAberta = await avisarEquipe('sinal_pix_falhou', detalhe).catch(() => false);
         }
       }
       // O link existe mas não ficou gravado: a baixa automática não o enxerga. A Sofia entrega o link (o paciente pode pagar) e a equipe é avisada de conferir.
-      if (r.tipo === 'link' && r.registrado === false && kommo) {
-        await abrirTarefaParaEquipe({ slug: fresca.slug, unitId: fresca.id, leadId, kommo, recorder, motivo: 'sinal_pix_sem_registro' }).catch(() => undefined);
+      if (r.tipo === 'link' && r.registrado === false) {
+        if (kommo) await abrirTarefaParaEquipe({ slug: fresca.slug, unitId: fresca.id, leadId, kommo, recorder, motivo: 'sinal_pix_sem_registro' }).catch(() => undefined);
+        else if (avisarEquipe) await avisarEquipe('sinal_pix_sem_registro', 'o Pix foi gerado mas não ficou gravado: a baixa automática não o enxerga').catch(() => undefined);
       }
       return textoDoSinal(r, s, tarefaAberta);
     },

@@ -43,7 +43,7 @@ const runSchema = z.object({
   unitSystemPrompt: z.string().min(1).max(60_000).optional(),
 });
 
-interface SandboxAction {
+export interface SandboxAction {
   tool: string;
   args: Record<string, unknown>;
   result: string;
@@ -375,6 +375,15 @@ export async function rodarTesteDaSofia(
     aprendizadosExtras?: string[];
     /** Recebe o texto COMPLETO do prompt desta chamada, logo antes da 1ª chamada ao modelo: a conversa pública da página usa para barrar eco do prompt na resposta. */
     aoMontarPrompt?: (promptCompleto: string) => void;
+    /**
+     * Quem chama monta as ferramentas (o Chatwoot usa as REAIS, ou simuladas por ele). Sem isto, valem as do sandbox, todas simuladas.
+     * Recebe quem registra as ações (aparecem em `actions`/`timeline`). Este módulo não importa nada de produção: a escolha é de fora.
+     */
+    ferramentas?: (base: { onCall: (a: SandboxAction) => void; tz: string }) => DynamicStructuredTool[];
+    /** Troca o aviso de «modo sandbox» que fecha o prompt (a conversa real do Chatwoot diz o que é de verdade e o que não é). */
+    preambulo?: string;
+    /** Voltas de ferramenta antes de desistir (padrão 5). */
+    maxVoltas?: number;
   } = {},
 ): Promise<ResultadoDoTeste> {
   const promptDeTeste = opts.promptDeTeste;
@@ -398,7 +407,8 @@ export async function rodarTesteDaSofia(
     agentConfigPrompt: promptDeTeste ? undefined : config.systemPrompt,
     userMessage: lastUser?.content,
     isFirstTurn,
-    excludeLeadFieldRules: false,
+    // com ferramentas de fora, as de campo do Kommo não existem: o prompt não manda chamá-las
+    excludeLeadFieldRules: !!opts.ferramentas,
     aprendizadosExtras: opts.aprendizadosExtras,
   });
   const sandboxPreamble = `# CONTEXTO DE TESTE
@@ -406,29 +416,31 @@ Você está rodando em MODO SANDBOX. O leadId atual é ${SANDBOX_LEAD_ID}. Trate
 como uma conversa real e use as tools normalmente quando fizer sentido — elas
 não vão alterar o CRM, mas suas chamadas serão mostradas como decisões pro
 operador revisar.`;
-  const fullSystem = `${systemPrompt}\n\n${sandboxPreamble}`;
+  const fullSystem = `${systemPrompt}\n\n${opts.preambulo ?? sandboxPreamble}`;
 
   const actions: SandboxAction[] = [];
   const timeline: TimelineEvent[] = [];
   if (lastUser) {
     timeline.push({ kind: 'user_message', ts: Date.now(), content: lastUser.content });
   }
-  const leadFieldRules = await listEnabledLeadFieldRules(unit.id, unit.slug);
-  const tools = buildSandboxTools({
-    leadFieldRules,
-    tz: fusoDaUnidade(unit),
-    comSinal: sinalDaUnidade(unit) !== null,
-    onCall: (a) => {
-      actions.push(a);
-      timeline.push({
-        kind: 'tool_call',
-        ts: Date.now(),
-        tool: a.tool,
-        args: a.args,
-        result: a.result,
+  const registrarChamada = (a: SandboxAction) => {
+    actions.push(a);
+    timeline.push({
+      kind: 'tool_call',
+      ts: Date.now(),
+      tool: a.tool,
+      args: a.args,
+      result: a.result,
+    });
+  };
+  const tools = opts.ferramentas
+    ? opts.ferramentas({ onCall: registrarChamada, tz: fusoDaUnidade(unit) })
+    : buildSandboxTools({
+        leadFieldRules: await listEnabledLeadFieldRules(unit.id, unit.slug),
+        tz: fusoDaUnidade(unit),
+        comSinal: sinalDaUnidade(unit) !== null,
+        onCall: registrarChamada,
       });
-    },
-  });
 
   const modelName = useAnthropic
     ? unit.anthropicModel || 'claude-opus-4-8'
@@ -453,7 +465,7 @@ operador revisar.`;
   // O modelo é chamado a partir daqui: erro antes (regras de campo, criação do modelo) não custou nada, e quem chamou pode devolver a cota.
   opts.aoMontarPrompt?.(fullSystem);
 
-  const MAX_ITERS = 5;
+  const MAX_ITERS = opts.maxVoltas ?? 5;
   let finalReply = '';
   let iterations = 0;
   let totalPromptTokens = 0;
@@ -513,14 +525,21 @@ operador revisar.`;
           continue;
         }
         const invoker = tool as unknown as { invoke: (args: unknown) => Promise<string> };
-        const result = await invoker.invoke(tc.args ?? {});
+        // ferramenta real que lança (banco, rede) não derruba o turno: o modelo recebe o erro e responde sem prometer o que não fez
+        const result = await invoker.invoke(tc.args ?? {}).catch((err: unknown) => {
+          logger.warn({ err: String(err), tool: tc.name, unitId: unit.id }, 'playground: a ferramenta lançou');
+          return `ERRO: a ferramenta ${tc.name} falhou (${String(err).slice(0, 200)}). NÃO diga que deu certo; diga que vai verificar e já retorna.`;
+        });
         history.push(new ToolMessage({ tool_call_id: tc.id ?? '', content: result }));
       }
     }
 
+    if (!finalReply && opts.ferramentas) {
+      // quem monta as ferramentas manda a resposta ao paciente de verdade: texto de depuração nunca vai no lugar dela
+      return { ok: false, status: 502, error: 'sem_resposta_final', message: `o modelo não escreveu a resposta em ${MAX_ITERS} voltas` };
+    }
     if (!finalReply) {
-      finalReply =
-        '(A IA esgotou o limite de 5 chamadas de tool sem responder em texto. Verifique o prompt.)';
+      finalReply = `(A IA esgotou o limite de ${MAX_ITERS} chamadas de tool sem responder em texto. Verifique o prompt.)`;
       timeline.push({ kind: 'assistant_message', ts: Date.now(), content: finalReply });
     }
 
