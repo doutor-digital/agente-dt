@@ -12,16 +12,22 @@
  *    Chatwoot (4xx) também desfaz; erro sem resposta (tempo esgotado: pode ter ido) NÃO desfaz — melhor uma mensagem a menos que duas.
  *  - Tetos por ciclo (mensagens e etiquetas): se um defeito soltar tudo de uma vez, vaza só um pouco por ciclo.
  *  - Sinal interno (sempre ao vivo quando a régua não está desligada): etiqueta `respondeu-pelo-celular`.
+ *  - Sem dobrar com o Kommo (decisão do João, 12/11/2026, item 31): antes de falar com o PACIENTE, confere pelo telefone se ele tem
+ *    cartão ATIVO (nem ganho nem perdido) no Kommo da unidade — lá os robôs do Kommo já mandam. Tem: não manda, só deixa nota
+ *    (e registra, para não tentar de novo). Não deu para consultar o Kommo: ligado NÃO manda e tenta no próximo ciclo.
  */
 import { logger } from './logger.js';
 import { prisma } from './prisma.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import { precosDaConsulta } from '../agent/prompt-composer.js';
+import { enviarPelaEvolution } from './alerta-whatsapp.js';
+import { createKommoClientSemFreio } from '../services/kommo.service.js';
 import { chamar, contaChatwootDoAmbiente, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 import {
   atualizarVistos,
   CAIXAS_REGUA,
   CAMPO_PARTIDA,
+  GERENTE_DA_CAIXA,
   conversaDoChatwoot,
   decidirEtiquetaCelular,
   decidirRegua,
@@ -76,14 +82,69 @@ export interface Chat {
   /** grava os atributos da conversa (o Chatwoot SUBSTITUI o objeto inteiro: mandar todos) */
   atributos(conversationId: number, attrs: Record<string, unknown>): Promise<void>;
   prioridade(conversationId: number, prioridade: 'urgent' | 'high' | 'medium' | 'low'): Promise<void>;
+  /** atribui a conversa a um agente (o app do Chatwoot avisa a pessoa) */
+  atribuir(conversationId: number, agente: number): Promise<void>;
   /** a última mensagem pública (não nota) da conversa; null = nenhuma */
   ultimaPublica(conversationId: number): Promise<MensagemResumo | null>;
 }
+
+/** Cartão ativo no Kommo da unidade para este telefone (null = nenhum). Lança se não deu para consultar. */
+export type CartaoNoKommo = (telefone: string) => Promise<{ leadId: number } | null>;
 
 export interface DepsDoCiclo {
   armazem: Armazem;
   chat: Chat;
   pausa: (ms: number) => Promise<void>;
+  /** sem ela, a régua não confere o Kommo (unidade sem Kommo) */
+  kommo?: CartaoNoKommo;
+  /** aviso no WhatsApp da gerente (lead quente parado); sem ela, só a atribuição no Chatwoot */
+  avisarGerente?: (texto: string, chave: string) => Promise<unknown>;
+}
+
+/**
+ * WhatsApp da gerente por unidade: `CHATWOOT_GERENTE_WHATSAPP="slug=5594…,slug2=55…"`, mandado pela instância dos alertas
+ * (EVOLUTION_ALERT_URL/HEADER/VALUE, a mesma do aviso ao João). Sem env: null (só a atribuição no Chatwoot).
+ */
+export function numeroDaGerente(slug: string, env: string | undefined = process.env.CHATWOOT_GERENTE_WHATSAPP): string | null {
+  for (const par of String(env ?? '').split(',')) {
+    const [s, n] = par.split('=').map((x) => x?.trim() ?? '');
+    if (s === slug && /^\d{10,15}$/.test(n ?? '')) return n!;
+  }
+  return null;
+}
+
+export function avisoDaGerente(slug: string): DepsDoCiclo['avisarGerente'] {
+  const numero = numeroDaGerente(slug);
+  const { EVOLUTION_ALERT_URL: url, EVOLUTION_ALERT_HEADER: header, EVOLUTION_ALERT_VALUE: valor } = process.env;
+  if (!numero || !url || !header || !valor) return undefined;
+  return (texto) => enviarPelaEvolution({ url, header, valor, numero, texto });
+}
+
+/** status do Kommo que fecham o cartão: 142 = ganho, 143 = perdido */
+const FECHADOS_NO_KOMMO = new Set([142, 143]);
+
+/** Os 8 últimos dígitos: casa com e sem o 9 e com e sem o +55. */
+export function finalDoTelefone(telefone: string | undefined): string | null {
+  const d = String(telefone ?? '').replace(/\D/g, '');
+  return d.length >= 8 ? d.slice(-8) : null;
+}
+
+export function cartaoNoKommoDaUnidade(unit: Parameters<typeof createKommoClientSemFreio>[0]): CartaoNoKommo {
+  const kommo = createKommoClientSemFreio(unit);
+  return async (telefone) => {
+    const fim = finalDoTelefone(telefone);
+    if (!fim) return null;
+    const contatos = await kommo.buscarContatosPorTelefone(fim, 10);
+    const leads = contatos
+      .filter((c) => c.telefones.some((t) => finalDoTelefone(t) === fim))
+      .flatMap((c) => c.leadIds)
+      .slice(0, 8);
+    for (const id of leads) {
+      const lead = await kommo.getLead(id);
+      if (lead && !FECHADOS_NO_KOMMO.has(Number(lead.status_id))) return { leadId: id };
+    }
+    return null;
+  };
 }
 
 export function armazemDoBanco(): Armazem {
@@ -147,6 +208,9 @@ export function chatDoChatwoot(ctx: ContextoChatwoot): Chat {
     async atributos(conversationId, attrs) {
       await chamar(ctx, 'POST', `conversations/${conversationId}/custom_attributes`, { corpo: { custom_attributes: attrs } });
     },
+    async atribuir(conversationId, agente) {
+      await chamar(ctx, 'POST', `conversations/${conversationId}/assignments`, { corpo: { assignee_id: agente } });
+    },
     async prioridade(conversationId, prioridade) {
       await chamar(ctx, 'POST', `conversations/${conversationId}/toggle_priority`, { corpo: { priority: prioridade } });
     },
@@ -173,6 +237,8 @@ export interface ResumoDoCiclo {
   etiquetas: number;
   falhas: number;
   primeiraVez: boolean;
+  /** mensagens ao paciente seguradas porque ele tem cartão ativo no Kommo (vira nota) */
+  noKommo: number;
 }
 
 async function lerConversas(chat: Chat, caixa: number): Promise<{ conversas: ConversaRegua[]; truncada: boolean }> {
@@ -195,9 +261,20 @@ async function lerConversas(chat: Chat, caixa: number): Promise<{ conversas: Con
  * Ligado: a ação da regra interna (o robô do Kommo fazia o mesmo). Mexe na cópia local da conversa para a etiqueta do celular,
  * mais adiante no mesmo ciclo, não desfazer o que foi posto aqui.
  */
-export async function executarInterna(chat: Chat, c: ConversaRegua, acao: AcaoInterna): Promise<void> {
+export async function executarInterna(
+  chat: Chat,
+  c: ConversaRegua,
+  acao: AcaoInterna,
+  extra: { gerente?: number; avisarGerente?: DepsDoCiclo['avisarGerente']; unidade?: string } = {},
+): Promise<void> {
   if (acao === 'quente-parado') {
     await chat.prioridade(c.id, 'urgent');
+    // decisão 26: vai para a gerente (o app avisa) e, se configurado, aviso no WhatsApp dela
+    if (extra.gerente) await chat.atribuir(c.id, extra.gerente);
+    if (extra.avisarGerente) {
+      const quem = c.nome || c.telefone || `conversa ${c.id}`;
+      await extra.avisarGerente(`🔥 Lead QUENTE parado há 3 h${extra.unidade ? ` (${extra.unidade})` : ''}: ${quem}. Abra a conversa ${c.id} no Chatwoot.`, `quente-${c.id}`);
+    }
     return;
   }
   const etiqueta = acao === 'sem-resposta' ? 'sem-resposta' : 'pendente-de-revisao';
@@ -241,7 +318,7 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
     feitosPorConversa.set(f.conversationId, s);
   }
 
-  const resumo: ResumoDoCiclo = { conversas: conversas.length, truncada, disparos: 0, faltando: 0, perdidas: {}, etiquetas: 0, falhas: 0, primeiraVez };
+  const resumo: ResumoDoCiclo = { conversas: conversas.length, truncada, disparos: 0, faltando: 0, perdidas: {}, etiquetas: 0, falhas: 0, primeiraVez, noKommo: 0 };
   const mudancas: Array<Mudanca & { conversationId: number }> = [];
   if (primeiraVez) mudancas.push({ conversationId: 0, tipo: 'criar', campo: CAMPO_PARTIDA, valor: '1', desde: agora, inicial: true });
   const pendentes: Array<{ c: ConversaRegua; vistos: ReadonlyMap<string, Visto> }> = [];
@@ -255,6 +332,17 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
 
   let mensagens = 0;
   let etiquetas = 0;
+  // uma consulta ao Kommo por conversa por ciclo (só das que vão falar com o paciente)
+  const noKommo = new Map<number, Promise<{ leadId: number } | null>>();
+  const cartaoAtivo = (c: ConversaRegua) => {
+    if (!deps.kommo || !c.telefone) return Promise.resolve(null);
+    let p = noKommo.get(c.id);
+    if (!p) {
+      p = deps.kommo(c.telefone);
+      noKommo.set(c.id, p);
+    }
+    return p;
+  };
   for (const { c, vistos } of pendentes) {
     try {
       if (precisaUltimaPublica(c)) c.ultima = await chat.ultimaPublica(c.id);
@@ -266,16 +354,37 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
         const regra = faltou ? `${d.regra}${SUFIXO_FALTA}` : d.regra;
         // faltou campo: só o seco avisa (uma vez por chave); ligado não manda nem anota
         if (faltou && modo === 'ligado') continue;
-        const nota = notaDoSeco(d);
+        let nota = notaDoSeco(d);
         // regra interna nunca fala com o paciente: no ligado também é nota privada (mais a ação)
-        const privada = modo === 'seco' || !!d.interna;
-        const texto = modo === 'seco' ? nota : d.interna ? `🤖 Régua «${d.regra}»: ${d.texto}` : (d.texto as string);
+        let privada = modo === 'seco' || !!d.interna;
+        let texto = modo === 'seco' ? nota : d.interna ? `🤖 Régua «${d.regra}»: ${d.texto}` : (d.texto as string);
+        let seguradaNoKommo = false;
+        // falaria com o paciente: cartão ativo no Kommo da unidade → não manda (os robôs de lá já falam), só nota
+        if (!faltou && !d.interna) {
+          let cartao: { leadId: number } | null;
+          try {
+            cartao = await cartaoAtivo(c);
+          } catch (err) {
+            logger.warn({ err: String(err), caixa, conversa: c.id, regra: d.regra }, `${ID_REGUA}: não consegui conferir o Kommo — não mando agora`);
+            if (modo === 'ligado') continue;
+            cartao = null;
+            nota += '\n\n⚠️ Não consegui conferir o Kommo agora (no ligado, esperaria o próximo ciclo).';
+            texto = nota;
+          }
+          if (cartao) {
+            nota = `${modo === 'seco' ? '🧪 [SECO] ' : '🛑 '}Régua «${d.regra}» — NÃO ${modo === 'seco' ? 'enviaria' : 'enviei'}: o paciente tem cartão ativo no Kommo da unidade (lead ${cartao.leadId}); os robôs de lá cuidam.`;
+            texto = nota;
+            privada = true;
+            seguradaNoKommo = true;
+          }
+        }
         const novo = await armazem.registrar({ caixa, conversationId: c.id, regra, chave: d.chave, modo, texto });
         if (!novo) continue;
         mensagens++;
         try {
           await deps.chat.mensagem(c.id, texto, privada);
           if (faltou) resumo.faltando++;
+          else if (seguradaNoKommo) resumo.noKommo++;
           else resumo.disparos++;
           await deps.pausa(PAUSA_ENTRE_ESCRITAS_MS);
         } catch (err) {
@@ -288,7 +397,7 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
         }
         if (modo === 'ligado' && d.interna) {
           try {
-            await executarInterna(deps.chat, c, d.interna);
+            await executarInterna(deps.chat, c, d.interna, { gerente: GERENTE_DA_CAIXA[caixa], avisarGerente: deps.avisarGerente, unidade: unidade.nome });
           } catch (err) {
             resumo.falhas++;
             logger.warn({ err: String(err), caixa, conversa: c.id, regra: d.regra }, `${ID_REGUA}: nota deixada, mas a ação interna falhou`);
@@ -341,7 +450,8 @@ async function varrer(ctx: ContextoChatwoot): Promise<void> {
           continue;
         }
         const unidade: DadosDaUnidade = { nome: unit.name, pixKey: unit.pixKey, valorAntecipado: precosDaConsulta(unit)?.antecipado ?? null };
-        await cicloDaCaixa(deps, Number(caixaTxt), slug, modo, unidade, new Date());
+        const kommo = unit.kommoSubdomain && unit.kommoAccessToken ? cartaoNoKommoDaUnidade(unit) : undefined;
+        await cicloDaCaixa({ ...deps, kommo, avisarGerente: avisoDaGerente(slug) }, Number(caixaTxt), slug, modo, unidade, new Date());
       } catch (err) {
         logger.warn({ err: String(err), slug }, `${ID_REGUA}: ciclo falhou — tento no próximo`);
       }
