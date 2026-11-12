@@ -31,6 +31,18 @@ import {
   previasRestantes,
   recusaDaRegra,
 } from '../lib/aprendizados-unidade.js';
+import {
+  MAX_CARACTERES_DA_FALA,
+  MAX_MENSAGENS_DA_CONVERSA,
+  cabeResposta,
+  descreverAcao,
+  devolverResposta,
+  entrarEmAndamento,
+  maxRespostasTeste,
+  prepararHistorico,
+  respostasRestantes,
+  sairDeAndamento,
+} from '../lib/conversa-de-teste.js';
 import { esc, unidadePublica } from './pausa.controller.js';
 import { rodarTesteDaSofia } from './playground.controller.js';
 
@@ -87,8 +99,103 @@ async function estado(unit: Unit) {
     previasRestantes: previasRestantes(unit.slug, fuso(unit)),
     falasDeExemplo: FALAS_DE_EXEMPLO,
     maxCaracteres: MAX_CARACTERES,
+    conversa: {
+      restantes: respostasRestantes(unit.slug, fuso(unit)),
+      maximo: maxRespostasTeste(),
+      maxFala: MAX_CARACTERES_DA_FALA,
+      maxMensagens: MAX_MENSAGENS_DA_CONVERSA,
+    },
   };
 }
+
+const conversaSchema = z.object({
+  messages: z
+    .array(z.object({ role: z.enum(['user', 'assistant']), content: z.string().max(5000) }))
+    .min(1)
+    .max(200),
+});
+
+type RodarTeste = typeof rodarTesteDaSofia;
+
+/**
+ * Conversa livre de TESTE com a Sofia (aba "Conversar com a Sofia" da página). Mesmo núcleo da prévia e do playground do
+ * painel: ferramentas simuladas, agenda fictícia, nada para Kommo/franquia/Asaas/WhatsApp, e SEM `leadId` (nenhuma leitura
+ * de cartão ou de paciente real entra no prompt). O histórico vem do navegador e não é gravado; só o custo da chamada
+ * (`llm_calls`, sem trace de conversa) fica, como na prévia. `rodar` entra por parâmetro para o teste provar que o caminho
+ * é o do sandbox.
+ */
+export function criarConversaHandler(rodar: RodarTeste) {
+  return async function conversaHandler(req: Request, res: Response): Promise<void> {
+    const unit = await unidadeComChave(req, res);
+    if (!unit) return;
+    const parsed = conversaSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'pedido inválido' });
+      return;
+    }
+    const historico = prepararHistorico(parsed.data.messages);
+    if (!historico.ok) {
+      res.status(400).json({ error: historico.erro });
+      return;
+    }
+    const tz = fuso(unit);
+    if (!entrarEmAndamento(unit.slug)) {
+      res.status(429).json({ error: 'A Sofia ainda está respondendo outra conversa desta unidade. Espere uns segundos e envie de novo.' });
+      return;
+    }
+    // quem libera a vaga é a chamada ao modelo terminar (não o prazo da página): senão o prazo deixaria acumular chamadas
+    let liberada = false;
+    const liberar = () => {
+      if (!liberada) {
+        liberada = true;
+        sairDeAndamento(unit.slug);
+      }
+    };
+    if (!cabeResposta(unit.slug, tz)) {
+      liberar();
+      res.status(429).json({ error: `As ${maxRespostasTeste()} respostas de teste de hoje acabaram. Amanhã libera de novo.` });
+      return;
+    }
+    const PRAZO_MS = 90_000;
+    let prazo: NodeJS.Timeout | undefined;
+    const estourou = new Promise<'prazo'>((ok) => {
+      prazo = setTimeout(() => ok('prazo'), PRAZO_MS);
+    });
+    const trabalho = (async () => rodar(unit, historico.messages))().finally(liberar);
+    try {
+      const r = await Promise.race([trabalho, estourou]);
+      if (r === 'prazo') {
+        // a chamada pode terminar e custar: não devolve a resposta ao teto
+        logger.warn({ unit: unit.slug }, 'aprendizados: a conversa de teste passou do prazo');
+        res.status(504).json({ error: 'A Sofia demorou demais para responder. Tente de novo em instantes.' });
+        return;
+      }
+      if (!r.ok) {
+        devolverResposta(unit.slug, tz);
+        logger.warn({ unit: unit.slug, erro: r.error }, 'aprendizados: a conversa de teste falhou');
+        res.status(502).json({ error: 'A Sofia não respondeu agora. Tente de novo em instantes (esta não contou).' });
+        return;
+      }
+      logger.info(
+        { unit: unit.slug, turnos: historico.messages.length, iteracoes: r.meta.iterations, tokens: r.meta.tokens, costUsd: r.meta.costUsd, ms: r.meta.totalLatencyMs },
+        'aprendizados: resposta de teste',
+      );
+      res.json({
+        reply: r.reply,
+        acoes: r.actions.map((a) => descreverAcao(a)),
+        restantes: respostasRestantes(unit.slug, tz),
+      });
+    } catch (err) {
+      devolverResposta(unit.slug, tz);
+      logger.error({ err, unit: unit.slug }, 'aprendizados: a conversa de teste quebrou');
+      res.status(500).json({ error: 'A Sofia não respondeu agora. Tente de novo em instantes (esta não contou).' });
+    } finally {
+      clearTimeout(prazo);
+    }
+  };
+}
+
+export const publicAprendizadosConversaHandler = criarConversaHandler(rodarTesteDaSofia);
 
 const previaSchema = z.object({
   regra: z.string().max(MAX_CARACTERES * 2),
@@ -298,6 +405,14 @@ button.main.ok{background:var(--ok);color:#06210F}button:disabled{opacity:.55;cu
 .pac{background:var(--s2)}.antes{background:rgba(138,140,151,.12);color:var(--ink2)}.depois{background:rgba(61,107,255,.16)}
 .rot{font-size:12px;color:var(--muted);margin-top:8px}
 .foot{color:var(--muted);font-size:12.5px;margin-top:18px}
+.abas{display:flex;gap:8px;margin:0 0 14px}.aba{flex:1;min-height:46px;padding:10px 8px;border:1px solid var(--line);background:var(--s1);color:var(--ink2);border-radius:12px;font:inherit;font-weight:600;cursor:pointer}.aba.on{background:var(--acc);border-color:var(--acc);color:#fff}
+.aviso{background:rgba(233,185,73,.12);color:#F3D88A;border-radius:10px;padding:10px 12px;font-size:13.5px;margin:8px 0 12px}
+.chat{display:flex;flex-direction:column;gap:6px;min-height:120px;max-height:52vh;overflow-y:auto;padding:2px;margin-bottom:10px;-webkit-overflow-scrolling:touch}
+.bm{max-width:88%;padding:10px 12px;border-radius:14px;white-space:pre-wrap;word-break:break-word;font-size:15px}
+.bm.p{align-self:flex-end;background:var(--acc);color:#fff;border-bottom-right-radius:4px}.bm.s{align-self:flex-start;background:var(--s2);border-bottom-left-radius:4px}.bm.dig{color:var(--muted);font-style:italic}
+.chip{align-self:flex-start;font-size:12px;color:var(--warn);background:rgba(233,185,73,.1);border-radius:999px;padding:3px 10px}
+button.sec{min-height:46px;padding:10px 14px;border:1px solid var(--line);background:var(--s2);color:var(--ink);border-radius:12px;font:inherit;cursor:pointer}
+.linha{display:flex;gap:8px;margin-top:10px}.linha button.main{margin-top:0;flex:2}.linha button.sec{flex:1}
 </style></head><body><main>
 <p class="sub" style="margin:0">Doutor Digital · Sofia</p>
 <h1>${esc(nome)}</h1>
@@ -312,6 +427,12 @@ button.main.ok{background:var(--ok);color:#06210F}button:disabled{opacity:.55;cu
 </div>
 
 <div id="corpo" hidden>
+<div class="abas" role="tablist">
+  <button class="aba on" id="abaEnsinar" role="tab" type="button">Ensinar a Sofia</button>
+  <button class="aba" id="abaConversa" role="tab" type="button">Conversar (teste)</button>
+</div>
+
+<div id="paneEnsinar">
 <div class="card">
   <h2>Nova regra</h2>
   <label for="regra">O que a Sofia deve fazer diferente? <span class="count" id="cnt"></span></label>
@@ -337,7 +458,21 @@ button.main.ok{background:var(--ok);color:#06210F}button:disabled{opacity:.55;cu
 </div>
 </div>
 
-<p class="foot">A regra vale na hora para as próximas conversas desta unidade. Algumas coisas não mudam por aqui e a página avisa: pronto-socorro, sinal de alerta, promessa de cura, valor e desconto, diagnóstico e remédio. A equipe da Doutor Digital é avisada de cada regra salva ou desligada.</p>
+<div id="paneConversa" hidden>
+<div class="card">
+  <h2>Conversar com a Sofia (teste)</h2>
+  <div class="aviso"><b>Teste: nada é enviado a paciente.</b> Escreva como o paciente; a Sofia responde com as regras de hoje desta unidade. Agenda e Pix são de mentira e nada vai para o Kommo, a franquia ou o WhatsApp.</div>
+  <div id="chat" class="chat" aria-live="polite"></div>
+  <div id="msgChat" class="msg" hidden></div>
+  <textarea id="fala" rows="2" maxlength="600" aria-label="Fala do paciente" placeholder="Escreva como se fosse o paciente…"></textarea>
+  <div class="linha"><button class="main" id="btnEnviar" type="button">Enviar</button><button class="sec" id="btnRecomecar" type="button">Recomeçar</button></div>
+  <button class="sec" id="btnRegra" type="button" style="width:100%;margin-top:10px">Transformar isto em regra</button>
+  <p class="sub" id="restaChat" style="margin:10px 0 0"></p>
+</div>
+</div>
+</div>
+
+<p class="foot">A regra vale na hora para as próximas conversas desta unidade. Algumas coisas não mudam por aqui e a página avisa: pronto-socorro, sinal de alerta, promessa de cura, valor e desconto, diagnóstico e remédio. A equipe da Doutor Digital é avisada de cada regra salva ou desligada. A conversa de teste fica só neste aparelho (últimas 20 trocas) e some em “Recomeçar”.</p>
 </main>
 <script>
 (function(){
@@ -345,7 +480,9 @@ button.main.ok{background:var(--ok);color:#06210F}button:disabled{opacity:.55;cu
   var $=function(id){return document.getElementById(id)};
   var KC='pausa-codigo-'+SLUG, KN='aprendizados-nome-'+SLUG;
   try{ $('codigo').value=localStorage.getItem(KC)||''; $('por').value=localStorage.getItem(KN)||localStorage.getItem('pausa-nome-'+SLUG)||''; }catch(e){}
-  var MAX=400, previaDe=null, falasPadrao=[];
+  var MAX=400, previaDe=null, falasPadrao=[], conv={maxMensagens:40,maxFala:600};
+  var KH='aprendizados-conversa-'+SLUG, KA='aprendizados-aba-'+SLUG, historico=[], aguardando=false;
+  try{ var h=JSON.parse(localStorage.getItem(KH)||'[]'); if(Array.isArray(h)) historico=h.filter(function(m){return m && (m.role==='user'||m.role==='assistant') && typeof m.content==='string'}).slice(-40); }catch(e){}
   function aviso(id,txt,ok){ var m=$(id); m.textContent=txt; m.className='msg '+(ok?'ok':'err'); m.hidden=false; }
   function some(id){ $(id).hidden=true; }
   function codigo(){ var c=$('codigo').value.trim(); try{ localStorage.setItem(KC,c); localStorage.setItem(KN,$('por').value.trim()); }catch(e){} return c; }
@@ -366,6 +503,7 @@ button.main.ok{background:var(--ok);color:#06210F}button:disabled{opacity:.55;cu
       l.appendChild(row);
     });
     $('btnPrevia').textContent='Ver prévia'+(e.previasRestantes!=null?(' ('+e.previasRestantes+' hoje)'):'');
+    if(e.conversa){ conv=e.conversa; restaConversa(conv.restantes); renderChat(); }
   }
   async function carregar(){ if(codigo().length!==6){ $('corpo').hidden=true; return; } try{ mostrar(await api('GET')); }catch(e){ $('corpo').hidden=true; aviso('msgTopo',e.message,false); } }
   function contar(){ var n=$('regra').value.trim().length; $('cnt').textContent=n+'/'+MAX; if(previaDe!==null && $('regra').value.trim()!==previaDe){ $('cardRes').hidden=true; previaDe=null; } }
@@ -398,7 +536,56 @@ button.main.ok{background:var(--ok);color:#06210F}button:disabled{opacity:.55;cu
     try{ mostrar(await api('POST','',{regra:previaDe,por:$('por').value.trim()})); aviso('msgSalvar','Pronto: a Sofia já segue essa regra nas próximas conversas.',true); $('regra').value=''; previaDe=null; contar(); }
     catch(e){ aviso('msgSalvar',e.message,false); b.disabled=false; }
   });
+  // ── conversa de teste: o histórico fica no navegador, nunca no servidor ──
+  function guardar(){ historico=historico.slice(-(conv.maxMensagens||40)); while(historico.length && historico[0].role!=='user') historico.shift(); try{ localStorage.setItem(KH,JSON.stringify(historico)); }catch(e){} }
+  function restaConversa(n){ $('restaChat').textContent=(n!=null?('Restam '+n+' respostas de teste hoje nesta unidade.'):''); $('btnEnviar').disabled=aguardando||n===0; }
+  function renderChat(digitando){
+    var c=$('chat'); c.textContent='';
+    if(!historico.length && !digitando){ c.appendChild(el('div','bm s dig','Escreva uma fala de paciente, por exemplo: “Oi, quanto custa a consulta?”')); }
+    historico.forEach(function(m){
+      c.appendChild(el('div','bm '+(m.role==='user'?'p':'s'),m.content));
+      (m.a||[]).forEach(function(t){ c.appendChild(el('div','chip','Teste: '+t)); });
+    });
+    if(digitando) c.appendChild(el('div','bm s dig','A Sofia está escrevendo…'));
+    c.scrollTop=c.scrollHeight;
+  }
+  function aba(qual){
+    var c=qual==='conversa'; $('paneEnsinar').hidden=c; $('paneConversa').hidden=!c;
+    $('abaEnsinar').className='aba'+(c?'':' on'); $('abaConversa').className='aba'+(c?' on':'');
+    try{ localStorage.setItem(KA,qual); }catch(e){}
+    if(c){ renderChat(aguardando); }
+  }
+  $('abaEnsinar').addEventListener('click',function(){ aba('ensinar'); });
+  $('abaConversa').addEventListener('click',function(){ aba('conversa'); });
+  async function enviar(){
+    var t=$('fala').value.trim(); some('msgChat');
+    if(aguardando) return;
+    if(!t){ aviso('msgChat','Escreva a fala do paciente.',false); return; }
+    aguardando=true; $('btnEnviar').disabled=true;
+    historico.push({role:'user',content:t}); $('fala').value=''; renderChat(true);
+    try{
+      var r=await api('POST','/conversa',{messages:historico.map(function(m){return {role:m.role,content:m.content}})});
+      historico.push({role:'assistant',content:r.reply,a:r.acoes||[]}); guardar(); aguardando=false; renderChat(); restaConversa(r.restantes);
+    }catch(e){
+      historico.pop(); $('fala').value=t; aguardando=false; renderChat(); aviso('msgChat',e.message,false); restaConversa(null); $('btnEnviar').disabled=false;
+    }
+    guardar();
+  }
+  $('btnEnviar').addEventListener('click',enviar);
+  $('fala').addEventListener('keydown',function(ev){ if((ev.ctrlKey||ev.metaKey) && ev.key==='Enter'){ ev.preventDefault(); enviar(); } });
+  $('btnRecomecar').addEventListener('click',function(){ if(aguardando) return; historico=[]; guardar(); some('msgChat'); renderChat(); });
+  // bônus: leva a última fala do paciente para a aba de nova regra, já como fala de teste da prévia
+  $('btnRegra').addEventListener('click',function(){
+    var ult=''; for(var i=historico.length-1;i>=0;i--){ if(historico[i].role==='user'){ ult=historico[i].content; break; } }
+    if(!ult){ aviso('msgChat','Converse primeiro: a regra parte de uma fala do paciente.',false); return; }
+    var fala=ult.replace(/[<>]/g,'').replace(/\\s+/g,' ').trim();
+    var modelo='Quando o paciente disser algo como “'+fala.slice(0,120)+'”, a Sofia deve ';
+    var r=$('regra'); r.value=r.value.trim()?(r.value.trim()+'\\n'+modelo):modelo;
+    $('f0').value=fala.slice(0,500);
+    aba('ensinar'); contar(); r.focus(); r.setSelectionRange(r.value.length,r.value.length);
+  });
   ultimoCodigo=$('codigo').value.trim()||null; carregar();
+  try{ if(localStorage.getItem(KA)==='conversa'){ aba('conversa'); } }catch(e){}
 })();
 </script></body></html>`;
 }

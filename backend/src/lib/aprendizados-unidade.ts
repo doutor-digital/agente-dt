@@ -150,7 +150,7 @@ export function normalizarRegra(texto: string): string {
 // ── teto de prévias por unidade por dia (memória do processo; reinício zera, o que só dá folga) ──
 const previas = new Map<string, { dia: string; n: number }>();
 
-function diaDe(agora: Date, tz: string): string {
+export function diaDe(agora: Date, tz: string): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(agora);
 }
 
