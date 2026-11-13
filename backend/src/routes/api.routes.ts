@@ -160,7 +160,8 @@ import {
   funilTarefaFeitaHandler,
   funilTarefaHandler,
 } from '../controllers/funil.controller.js';
-import { assistenteAvaliarHandler, assistenteEstadoHandler, assistentePausaAcaoHandler, assistentePausaEstadoHandler, assistentePerguntarHandler, assistenteSugerirHandler } from '../controllers/assistente.controller.js';
+import { assistenteAvaliarHandler, assistenteRespostasHandler, assistenteEstadoHandler, assistentePausaAcaoHandler, assistentePausaEstadoHandler, assistentePerguntarHandler, assistenteSugerirHandler } from '../controllers/assistente.controller.js';
+import { agenteAvaliacoesHandler, agenteNovoPedidoHandler, agentePedidosHandler, agenteRevisarHandler } from '../controllers/agente-chatwoot.controller.js';
 import { centralChamadoFeitoHandler, centralChamadosHandler, centralEstadoHandler, centralGeralHandler, centralPessoaHandler } from '../controllers/central.controller.js';
 import { lidaEvolutionHandler } from '../lib/chatwoot-lida.js';
 import { eventoChatwootHandler } from '../lib/chatwoot-ia.js';
@@ -391,6 +392,11 @@ apiRouter.post('/public/aprendizados/:slug/regra/:id', publicAprendizadosLigarHa
 // "Testar a IA" no menu do Chatwoot: unidades da atendente e conversas com a IA pausada (login do Chatwoot).
 apiRouter.get('/public/testar-ia/unidades', testarIaUnidadesHandler);
 apiRouter.get('/public/testar-ia/pausadas', testarIaPausadasHandler);
+// tela Agente do Chatwoot (13/11): resumo dos 👍/👎, revisar 👎 e pedidos à Doutor Digital — login do Chatwoot da atendente
+apiRouter.get('/public/agente/avaliacoes', agenteAvaliacoesHandler);
+apiRouter.post('/public/agente/avaliacoes/:id/revisar', agenteRevisarHandler);
+apiRouter.get('/public/agente/pedidos', agentePedidosHandler);
+apiRouter.post('/public/agente/pedidos', agenteNovoPedidoHandler);
 // Funil de etapas do Chatwoot (Dashboard App): chave X-Funil-Chave derivada do token do Chatwoot (sem sessão).
 apiRouter.post('/public/central/estado', centralEstadoHandler);
 apiRouter.post('/public/central/geral', centralGeralHandler);
@@ -426,6 +432,7 @@ apiRouter.post('/public/assistente/perguntar', assistentePerguntarHandler);
 apiRouter.get('/public/assistente/pausa', assistentePausaEstadoHandler);
 apiRouter.post('/public/assistente/pausa', assistentePausaAcaoHandler);
 apiRouter.post('/public/assistente/avaliar', assistenteAvaliarHandler);
+apiRouter.get('/public/assistente/respostas', assistenteRespostasHandler);
 
 // Widgets privados do Kommo (coluna do cartão) leem a agenda da franquia com chave por unidade (sem sessão).
 apiRouter.get('/public/widget/:slug/ping', widgetPingHandler);

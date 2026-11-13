@@ -1,6 +1,6 @@
 /**
- * "Testar a IA" no menu do Chatwoot: a página de ensinar a Sofia em modo Chatwoot (claro, sem código, aba "IA pausada") abre sem erro de
- * script; a página pública com código continua igual; o menu tem o item depois do Funil, abrindo /funil/testar-ia.
+ * Página de ensinar a Sofia: o modo Chatwoot antigo (claro, sem código, aba "IA pausada") e a página pública com código abrem sem erro
+ * de script; o menu tem o item «Agente» depois do Funil, abrindo /funil/agente (a tela nova: `agente-chatwoot.test.ts`).
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -30,13 +30,13 @@ test('página pública com código: igual a antes (sem cw, aba IA pausada escond
   assert.doesNotThrow(() => new Function(scriptDe(html)));
 });
 
-test('menu: "Testar a IA" depois do Funil, abrindo /funil/testar-ia', () => {
+test('menu: "Agente" depois do Funil, abrindo /funil/agente', () => {
   const js = montarMenuJs('https://agente.exemplo.test');
   assert.doesNotThrow(() => new Function(js));
   const funil = js.indexOf('data-funil-menu');
   const ia = js.indexOf('data-ia-menu');
-  assert.ok(funil > 0 && ia > funil, 'Testar a IA vem depois do Funil');
-  assert.ok(js.includes("url: '/funil/testar-ia'"));
+  assert.ok(funil > 0 && ia > funil, 'Agente vem depois do Funil');
+  assert.ok(js.includes("nome: 'Agente'") && js.includes("url: '/funil/agente'"));
   assert.ok(js.includes('a[href*="/companies"]') && js.includes('a[href*="/reports"]'), 'Empresas e Relatórios somem para quem não é admin');
 });
 

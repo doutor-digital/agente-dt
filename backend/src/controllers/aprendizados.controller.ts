@@ -14,14 +14,13 @@ import { sessaoDaAtendente } from './funil.controller.js';
 import { leituraComLogin } from './assistente.controller.js';
 import { CAIXAS_REGUA } from '../lib/chatwoot-regua.js';
 import { ETIQUETA_PAUSA } from '../lib/chatwoot-pausa.js';
-import { chamar, contaChatwootDoAmbiente } from '../mcp-remoto/chatwoot.js';
+import { chamar } from '../mcp-remoto/chatwoot.js';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import type { Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { enviarTelegram } from '../lib/telegram.js';
-import { MAX_LICOES_NO_PROMPT } from '../services/lessons.service.js';
 import { automacaoLigada } from '../lib/automacoes-estado.js';
 import {
   CHAVE_APRENDIZADOS,
@@ -66,9 +65,9 @@ function avisar(texto: string): void {
   });
 }
 
-/** Regras ligadas da unidade (todas as origens): passar de MAX_LICOES_NO_PROMPT = a nova ficaria fora do prompt real. */
-function ligadasNoTotal(unitId: string): Promise<number> {
-  return prisma.unitLesson.count({ where: { unitId, enabled: true } });
+/** Regras ligadas ESCRITAS pela unidade. Elas sempre entram no prompt (`escolherLicoesDoPrompt`); o teto é MAX_REGRAS_DA_UNIDADE. */
+function ligadasDaUnidade(unitId: string): Promise<number> {
+  return prisma.unitLesson.count({ where: { unitId, source: SOURCE_DA_UNIDADE, enabled: true } });
 }
 
 function fuso(unit: Unit): string {
@@ -80,7 +79,11 @@ function fuso(unit: Unit): string {
  * atenda uma caixa desta unidade. O nome dela vira o «por» de quem mudou (não dá para escrever outro). Não depende da chave
  * `aprendizados-pela-unidade` (ela fecha a página PÚBLICA com código; aqui o acesso é o login do Chatwoot).
  */
-async function unidadePeloChatwoot(req: Request, res: Response, slug: string): Promise<Unit | null> {
+export async function atendenteDaUnidade(
+  req: Request,
+  res: Response,
+  slug: string,
+): Promise<{ a: NonNullable<Awaited<ReturnType<typeof sessaoDaAtendente>>>; unit: Unit } | null> {
   const a = await sessaoDaAtendente(req, res);
   if (!a) return null;
   let caixas: number[];
@@ -99,8 +102,14 @@ async function unidadePeloChatwoot(req: Request, res: Response, slug: string): P
     res.status(404).json({ error: 'unidade não encontrada' });
     return null;
   }
-  if (req.body && typeof req.body === 'object') (req.body as Record<string, unknown>).por = a.nome.slice(0, 80) || 'atendente';
-  return unit;
+  return { a, unit };
+}
+
+async function unidadePeloChatwoot(req: Request, res: Response, slug: string): Promise<Unit | null> {
+  const r = await atendenteDaUnidade(req, res, slug);
+  if (!r) return null;
+  if (req.body && typeof req.body === 'object') (req.body as Record<string, unknown>).por = r.a.nome.slice(0, 80) || 'atendente';
+  return r.unit;
 }
 
 /** Chave desligada = a unidade "não existe" aqui, antes de olhar código (não dá para sondar). */
@@ -296,8 +305,8 @@ export async function publicAprendizadosPreviaHandler(req: Request, res: Respons
   }
   const falas = (parsed.data.falas ?? []).filter(Boolean);
   const usar = (falas.length > 0 ? falas : [...FALAS_DE_EXEMPLO]).slice(0, MAX_FALAS_DA_PREVIA);
-  if ((await ligadasNoTotal(unit.id)) >= MAX_LICOES_NO_PROMPT) {
-    res.status(422).json({ error: `A Sofia já tem ${MAX_LICOES_NO_PROMPT} regras ligadas nesta unidade, o máximo que ela lê. Desligue uma antes.` });
+  if ((await ligadasDaUnidade(unit.id)) >= MAX_REGRAS_DA_UNIDADE) {
+    res.status(422).json({ error: `Já são ${MAX_REGRAS_DA_UNIDADE} regras de vocês ligadas. Desligue uma que não vale mais antes de criar outra.` });
     return;
   }
   if (!cabePrevia(unit.slug, fuso(unit))) {
@@ -367,11 +376,6 @@ export async function publicAprendizadosSalvarHandler(req: Request, res: Respons
     res.status(422).json({ error: `Já são ${ligadas} regras ligadas. Desligue uma que não vale mais antes de criar outra.` });
     return;
   }
-  const total = await ligadasNoTotal(unit.id);
-  if (total >= MAX_LICOES_NO_PROMPT) {
-    res.status(422).json({ error: `A Sofia já tem ${total} regras ligadas nesta unidade, o máximo que ela lê. Desligue uma antes de criar outra.` });
-    return;
-  }
   const igual = await prisma.unitLesson.findFirst({ where: { unitId: unit.id, content: regra, enabled: true } });
   if (igual) {
     res.status(409).json({ error: 'Essa regra já está ligada.' });
@@ -409,10 +413,6 @@ export async function publicAprendizadosLigarHandler(req: Request, res: Response
     const ligadas = await prisma.unitLesson.count({ where: { unitId: unit.id, source: SOURCE_DA_UNIDADE, enabled: true } });
     if (!regra.enabled && ligadas >= MAX_REGRAS_DA_UNIDADE) {
       res.status(422).json({ error: `Já são ${ligadas} regras ligadas. Desligue uma antes.` });
-      return;
-    }
-    if (!regra.enabled && (await ligadasNoTotal(unit.id)) >= MAX_LICOES_NO_PROMPT) {
-      res.status(422).json({ error: `A Sofia já tem ${MAX_LICOES_NO_PROMPT} regras ligadas nesta unidade, o máximo que ela lê. Desligue uma antes.` });
       return;
     }
     const igual = await prisma.unitLesson.findFirst({ where: { unitId: unit.id, content: regra.content, enabled: true, NOT: { id: regra.id } } });
@@ -478,16 +478,6 @@ export async function testarIaPausadasHandler(req: Request, res: Response): Prom
     logger.warn({ err: String(e) }, 'testar-ia: pausadas falhou');
     res.status(502).json({ error: 'não consegui ler as conversas pausadas' });
   }
-}
-
-/** A página "Testar a IA" (iframe do menu do Chatwoot): a mesma página de ensinar a Sofia, em modo Chatwoot (claro, sem código). */
-export function paginaTestarIaHandler(_req: Request, res: Response): void {
-  const conta = contaChatwootDoAmbiente();
-  if (!conta) {
-    res.status(404).type('html').send('<!doctype html><meta charset="utf-8"><p style="font-family:sans-serif;padding:24px">Chatwoot não configurado.</p>');
-    return;
-  }
-  res.type('html').send(paginaHtml('', 'Testar a IA', { chatwoot: new URL(conta.url).origin }));
 }
 
 // ── a página ─────────────────────────────────────────────────────────────────

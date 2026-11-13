@@ -1656,8 +1656,8 @@ const MENU_JS = String.raw`(function(){
     { id: 'mkt', marca: 'data-mkt-menu', nome: 'Marketing', hash: '#marketing', param: 'mkt', gestao: true, pai: 'hoje' },
     { id: 'gestor', marca: 'data-gestor-menu', nome: 'Gestor', hash: '#gestor', param: 'gestor', gestao: true, pai: 'hoje' },
     { id: 'funil', marca: 'data-funil-menu', nome: 'Funil', hash: '#funil', param: '' },
-    // a equipe testa a Sofia, ensina lições e vê as conversas com a IA pausada — sem depender do João (13/11)
-    { id: 'ia', marca: 'data-ia-menu', nome: 'Testar a IA', hash: '#testar-ia', param: '', url: '/funil/testar-ia' }
+    // «Agente»: a equipe cuida da própria Sofia (avaliações, regras, teste, pausadas) e pede à Doutor Digital o que é de código (13/11)
+    { id: 'ia', marca: 'data-ia-menu', nome: 'Agente', hash: '#agente', param: '', url: '/funil/agente' }
   ];
   // o grupo Hoje aberto/fechado fica lembrado neste navegador (padrão: aberto)
   var GRUPO_HOJE = 'menu:hoje-fechado';

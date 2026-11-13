@@ -132,13 +132,120 @@ const BOTAO_JS = String.raw`(function(){
       .then(function(){ consultando = false; });
   }
 
+  // ── 👍/👎 no balão das respostas da Sofia (13/11) ─────────────────────────────────────────────────────────────
+  // O servidor diz quais mensagens da conversa aberta são respostas da Sofia (ele guarda o id de cada uma quando ela responde) e o
+  // que cada uma já recebeu. O botão entra no fim do balão (aparece ao passar o mouse; fica aceso depois de avaliado). 👎 pede
+  // "o que estava errado" num quadrinho e vai para a tela Agente › Para revisar. Nada disso chega ao paciente.
+  var AV = { conversa: null, mapa: {}, proxima: 0, buscando: false, estilo: false, pop: null };
+  var SVG_BOA = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/></svg>';
+  var SVG_RUIM = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z"/></svg>';
+  function estiloAval(){
+    if (AV.estilo) return; AV.estilo = true;
+    var st = document.createElement('style'); st.setAttribute('data-dd-aval-estilo', '1');
+    st.textContent = '[data-dd-aval]{display:flex;align-items:center;justify-content:flex-end;gap:2px;margin:6px -6px -4px 0;opacity:0;transition:opacity .15s}'
+      + '.message-bubble-container:hover [data-dd-aval],[data-dd-aval].tem{opacity:1}'
+      + '@media (hover:none){[data-dd-aval]{opacity:.85}}'
+      + '[data-dd-aval] span{font-size:10.5px;opacity:.6;margin-right:4px;white-space:nowrap}'
+      + '[data-dd-aval] button{display:inline-flex;align-items:center;justify-content:center;width:26px;height:22px;border:0;border-radius:6px;background:transparent;color:inherit;opacity:.55;cursor:pointer;padding:0}'
+      + '[data-dd-aval] button:hover{opacity:1;background:rgba(127,127,127,.16)}'
+      + '[data-dd-aval] button svg{width:14px;height:14px}'
+      + '[data-dd-aval] button.on{opacity:1}[data-dd-aval] button.on.boa{color:#12855a}[data-dd-aval] button.on.ruim{color:#e5484d}'
+      + '[data-dd-aval] button.outra{opacity:.9;color:#e5484d}'
+      + '[data-dd-aval-pop]{position:fixed;z-index:2147482500;width:300px;max-width:calc(100vw - 24px);background:#fff;color:#1f2d3d;border:1px solid #e3e8ef;border-radius:12px;box-shadow:0 12px 32px rgba(16,24,40,.24);padding:12px;font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}'
+      + '[data-dd-aval-pop] b{display:block;font-size:13.5px;margin-bottom:6px}'
+      + '[data-dd-aval-pop] textarea{width:100%;box-sizing:border-box;min-height:74px;resize:vertical;border:1px solid #cfd7e3;border-radius:8px;padding:8px;font:inherit;color:inherit;background:#fff}'
+      + '[data-dd-aval-pop] textarea:focus{outline:none;border-color:#1f93ff;box-shadow:0 0 0 3px rgba(31,147,255,.15)}'
+      + '[data-dd-aval-pop] .linha{display:flex;justify-content:flex-end;gap:6px;margin-top:8px}'
+      + '[data-dd-aval-pop] button{border:1px solid #cfd7e3;background:#fff;color:#1f2d3d;border-radius:8px;padding:6px 11px;font:600 12.5px/1.2 inherit;cursor:pointer}'
+      + '[data-dd-aval-pop] button.pri{background:#1f93ff;border-color:#1f93ff;color:#fff}[data-dd-aval-pop] button:disabled{opacity:.55;cursor:default}'
+      + '[data-dd-aval-pop] small{display:block;margin-top:8px;color:#6b7a90;font-size:11.5px}'
+      + '[data-dd-aval-pop] .erro{color:#c53030;font-size:12px;margin-top:6px}';
+    document.head.appendChild(st);
+  }
+  function lerAvaliacoes(c){
+    var s = sessao(); if (!s || AV.buscando) return;
+    AV.buscando = true;
+    fetch(AGENTE + '/api/public/assistente/respostas?conversa=' + c, { headers: { 'X-CW-Token': s.token, 'X-CW-Client': s.client, 'X-CW-Uid': s.uid } })
+      .then(function(r){ if (!r.ok) throw new Error('respostas ' + r.status); return r.json(); })
+      .then(function(j){
+        if (AV.conversa !== c) return;
+        var m = {}; (j.respostas || []).forEach(function(x){ m[String(x.id)] = x; }); AV.mapa = m;
+        Array.prototype.forEach.call(document.querySelectorAll('[data-dd-aval]'), function(b){ var x = m[b.getAttribute('data-dd-aval')]; if (x) pintarAval(b, x); });
+      })
+      .catch(function(){})
+      .then(function(){ AV.buscando = false; AV.proxima = Date.now() + 15000; });
+  }
+  function pintarAval(barra, x){
+    var boa = barra.querySelector('button.boa'), ruim = barra.querySelector('button.ruim');
+    boa.classList.toggle('on', x.minha === 'boa'); ruim.classList.toggle('on', x.minha === 'ruim');
+    ruim.classList.toggle('outra', !x.minha && !!x.ruimPor);
+    barra.classList.toggle('tem', !!x.minha || !!x.ruimPor);
+    ruim.title = x.ruimPor && !x.minha ? ('Marcada como ruim por ' + x.ruimPor + '. Clique para dar a sua opinião.') : 'Resposta ruim: conte o que estava errado';
+  }
+  function enviarAval(id, nota, texto){
+    var s = sessao(); if (!s) return Promise.reject(new Error('Entre de novo no Chatwoot.'));
+    return fetch(AGENTE + '/api/public/assistente/avaliar', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CW-Token': s.token, 'X-CW-Client': s.client, 'X-CW-Uid': s.uid }, body: JSON.stringify({ conversa: AV.conversa, mensagem: Number(id), nota: nota, texto: texto || '' }) })
+      .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(j){ if (!r.ok) throw new Error(j.error || 'não consegui registrar agora'); return j; }); })
+      .then(function(){ var x = AV.mapa[id] || { id: Number(id), minha: null, ruimPor: null }; x.minha = nota; AV.mapa[id] = x; var b = document.querySelector('[data-dd-aval="' + id + '"]'); if (b) pintarAval(b, x); });
+  }
+  function fecharPop(){ if (AV.pop) { AV.pop.remove(); AV.pop = null; } }
+  function abrirPop(id, botao){
+    fecharPop();
+    var p = document.createElement('div'); p.setAttribute('data-dd-aval-pop', '1'); p.setAttribute('role', 'dialog'); p.setAttribute('aria-label', 'Avaliar a resposta da Sofia');
+    var t = document.createElement('b'); t.textContent = 'O que a Sofia errou?';
+    var ta = document.createElement('textarea'); ta.maxLength = 600; ta.placeholder = 'Ex.: devia ter dito o valor antes de perguntar da dor';
+    var er = document.createElement('div'); er.className = 'erro'; er.hidden = true;
+    var linha = document.createElement('div'); linha.className = 'linha';
+    var cancelar = document.createElement('button'); cancelar.type = 'button'; cancelar.textContent = 'Cancelar'; cancelar.onclick = fecharPop;
+    var ok = document.createElement('button'); ok.type = 'button'; ok.className = 'pri'; ok.textContent = 'Enviar 👎';
+    var dica = document.createElement('small'); dica.textContent = 'Vai para Agente › Para revisar. O paciente não vê.';
+    ok.onclick = function(){
+      var txt = ta.value.trim(); if (txt.length < 5) { er.textContent = 'Escreva em poucas palavras o que estava errado.'; er.hidden = false; ta.focus(); return; }
+      ok.disabled = true; er.hidden = true;
+      enviarAval(id, 'ruim', txt).then(function(){ p.textContent = ''; var f = document.createElement('b'); f.textContent = 'Anotado ✓'; var d = document.createElement('small'); d.textContent = 'Aparece em Agente › Para revisar.'; p.appendChild(f); p.appendChild(d); setTimeout(fecharPop, 1600); })
+        .catch(function(e){ er.textContent = e.message; er.hidden = false; ok.disabled = false; });
+    };
+    ta.addEventListener('keydown', function(ev){ if (ev.key === 'Escape') fecharPop(); if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter') ok.click(); });
+    linha.appendChild(cancelar); linha.appendChild(ok);
+    p.appendChild(t); p.appendChild(ta); p.appendChild(er); p.appendChild(linha); p.appendChild(dica);
+    document.body.appendChild(p);
+    var r = botao.getBoundingClientRect(), alto = p.offsetHeight || 190;
+    p.style.left = Math.max(12, Math.min(r.right - 300, window.innerWidth - 312)) + 'px';
+    p.style.top = (r.bottom + 6 + alto > window.innerHeight ? Math.max(12, r.top - alto - 6) : r.bottom + 6) + 'px';
+    AV.pop = p; ta.focus();
+  }
+  document.addEventListener('mousedown', function(ev){ if (AV.pop && !AV.pop.contains(ev.target) && !(ev.target.closest && ev.target.closest('[data-dd-aval]'))) fecharPop(); }, true);
+  function barraDeAval(id){
+    var barra = document.createElement('div'); barra.setAttribute('data-dd-aval', id);
+    var rot = document.createElement('span'); rot.textContent = 'Sofia';
+    var boa = document.createElement('button'); boa.type = 'button'; boa.className = 'boa'; boa.title = 'Resposta boa'; boa.setAttribute('aria-label', 'Resposta da Sofia boa'); boa.innerHTML = SVG_BOA;
+    var ruim = document.createElement('button'); ruim.type = 'button'; ruim.className = 'ruim'; ruim.title = 'Resposta ruim: conte o que estava errado'; ruim.setAttribute('aria-label', 'Resposta da Sofia ruim'); ruim.innerHTML = SVG_RUIM;
+    boa.onclick = function(ev){ ev.stopPropagation(); fecharPop(); boa.disabled = true; enviarAval(id, 'boa', '').catch(function(){}).then(function(){ boa.disabled = false; }); };
+    ruim.onclick = function(ev){ ev.stopPropagation(); abrirPop(id, ruim); };
+    barra.appendChild(rot); barra.appendChild(boa); barra.appendChild(ruim);
+    return barra;
+  }
+  function marcarBaloes(){
+    var c = conversaDaUrl();
+    if (!ligada || !c) { if (AV.conversa) { AV.conversa = null; AV.mapa = {}; fecharPop(); } return; }
+    if (c !== AV.conversa) { AV.conversa = c; AV.mapa = {}; AV.proxima = 0; fecharPop(); }
+    if (Date.now() >= AV.proxima && document.visibilityState === 'visible') lerAvaliacoes(c);
+    estiloAval();
+    Array.prototype.forEach.call(document.querySelectorAll('.message-bubble-container[data-message-id]'), function(cont){
+      var id = cont.getAttribute('data-message-id'), x = AV.mapa[id]; if (!x) return;
+      var area = cont.querySelector('[class*="grid-area:bubble"]'), balao = area && area.lastElementChild;
+      if (!balao || balao.querySelector('[data-dd-aval]')) return;
+      var barra = barraDeAval(id); balao.appendChild(barra); pintarAval(barra, x);
+    });
+  }
+
   window.addEventListener('message', function(ev){
     if (ev.origin !== AGENTE || !fr || ev.source !== fr.contentWindow) return;
     var d = ev.data; if (!d || typeof d.event !== 'string') return;
     if (d.event === 'assistente:pede-sessao') falar({ event: 'assistente-sessao', sessao: sessao(), conversa: conversa });
     else if (d.event === 'assistente:minimizar') minimizar();
     else if (d.event === 'assistente:abrir-testar-ia') {
-      // abre a tela "Testar a IA" pelo próprio item do menu (o rascunho da lição já foi deixado no armazenamento do agente)
+      // abre a tela "Agente" pelo próprio item do menu (o rascunho da lição já foi deixado no armazenamento do agente)
       var it = document.querySelector('[data-ia-menu] a') || document.querySelector('[data-ia-menu]'); if (it) it.click();
     }
     else if (d.event === 'assistente:inserir' && typeof d.texto === 'string' && d.texto.length <= 4000) {
@@ -154,6 +261,7 @@ const BOTAO_JS = String.raw`(function(){
     var c = conversaDaUrl();
     if (c !== conversa) { conversa = c; falar({ event: 'assistente-conversa', conversa: c }); }
     posicao();
+    try { marcarBaloes(); } catch (e) {}
   }, 1000);
 })();`;
 
@@ -282,7 +390,7 @@ textarea{flex:1;resize:none;height:40px;max-height:96px;padding:8px 10px;border:
     fetch('/api/public/assistente/pausa?conversa=' + encodeURIComponent(c), { headers: cab() }).then(function(r){ return r.ok ? r.json() : null; })
       .then(function(j){ if (meu === lendoPausa && c === conversa) mostrarPausa(j); }).catch(function(){ if (meu === lendoPausa) pausaEl.hidden = true; });
   }
-  // ── avaliar a última resposta da Sofia (👍/👎); 👎 vira nota para a equipe e pode virar lição (com prévia, no Testar a IA) ──
+  // ── avaliar a última resposta da Sofia (👍/👎); 👎 vira nota para a equipe e pode virar lição (com prévia, na tela Agente) ──
   var aval = $('aval'), ruim = $('ruim');
   function mostrarAval(){ aval.hidden = !(S && conversa); if (aval.hidden) ruim.hidden = true; }
   function avaliar(nota, texto){
@@ -303,7 +411,7 @@ textarea{flex:1;resize:none;height:40px;max-height:96px;padding:8px 10px;border:
     var t = $('ruimTxt').value.trim(); if (t.length < 10) { $('ruimEst').textContent = 'Escreva como ela deveria ter respondido (pelo menos 10 letras).'; return; }
     try { localStorage.setItem('testar-ia-rascunho', t.slice(0, 400)); } catch (e) {}
     pai({ event: 'assistente:abrir-testar-ia' });
-    $('ruimEst').textContent = 'Abri o “Testar a IA” com a lição preenchida: veja a prévia e salve.';
+    $('ruimEst').textContent = 'Abri a tela “Agente” com a lição preenchida: teste e salve.';
   };
   pausaBt.onclick = function(){
     if (!S || !conversa) return;
