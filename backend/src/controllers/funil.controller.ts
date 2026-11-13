@@ -266,9 +266,9 @@ async function paginasDasCaixas(a: Acesso, caixa: number, arquivo: Arquivo = 'fo
  * Conversas de ARQUIVO (histórico unificado no canal oficial, ninguém mexeu depois — `ehArquivo`): 'fora' = some da tela
  * (Hoje, Marketing, Gestor); 'com-etapa' = só as que têm etapa (quadro do funil e Oportunidades).
  */
-type Arquivo = 'fora' | 'com-etapa';
+export type Arquivo = 'fora' | 'com-etapa';
 const MAX_PAGINAS_COM_ARQUIVO = 40;
-function semArquivo(pg: any, arquivo: Arquivo): any {
+export function semArquivo(pg: any, arquivo: Arquivo): any {
   const lista = pg?.data?.payload;
   if (!Array.isArray(lista)) return pg;
   const fica = lista.filter((c: any) => !ehArquivo(c) || (arquivo === 'com-etapa' && arquivoComEtapa(c)));

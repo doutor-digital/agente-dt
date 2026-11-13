@@ -626,3 +626,13 @@ test('paramsDoTemplate: sem variáveis não manda processed_params; as chaves s�
   assert.deepEqual(paramsDoTemplate({ nome: 'parau_x', idioma: 'pt_BR', variaveis: [] }), { name: 'parau_x', language: 'pt_BR', content_mode: 'rendered' });
   assert.deepEqual(paramsDoTemplate({ nome: 'parau_x', idioma: 'pt_BR', variaveis: ['a', 'b', 'c'] }).processed_params, { body: { '1': 'a', '2': 'b', '3': 'c' } });
 });
+
+test('UNIFICAÇÃO: conversa de arquivo (etiqueta historico, parada antes do corte) a régua não toca; mexeu depois do corte, volta a valer', async () => {
+  const { armazem } = armazemFalso();
+  const arquivo = { ...bruta(1, { attrs: CONSULTA, labels: ['historico'] }), last_activity_at: unix('2026-10-20T12:00:00Z') };
+  const voltou = { ...bruta(2, { attrs: CONSULTA, labels: ['historico'] }), last_activity_at: unix('2026-11-16T10:00:00Z') };
+  const { chat, mensagens } = chatFalso(() => [arquivo, voltou]);
+  const r = await cicloDaCaixa(deps(armazem, chat), 2, 'doutor-hernia-parauapebas', 'seco', U, VESPERA);
+  assert.equal(r.conversas, 1, 'só a que voltou a ter atividade entra no ciclo');
+  assert.ok(mensagens.every((m) => m.id !== 1), 'nada sai para a conversa de arquivo');
+});
