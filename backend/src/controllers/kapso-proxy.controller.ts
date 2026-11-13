@@ -7,6 +7,9 @@
  * tradutor recebe a chamada, troca o cabeçalho e repassa para o Kapso. A chave que o Chatwoot guarda na caixa É a chave do
  * Kapso: aqui ela só muda de cabeçalho, nunca é guardada nem logada.
  *
+ * A validação da caixa no Chatwoot manda a chave na URL (`?access_token=`), não no cabeçalho: vale também, e ela sai da URL
+ * antes de ir ao Kapso (o log do servidor mascara `access_token`).
+ *
  * Mídia: a Graph devolve a URL do arquivo e o Chatwoot baixa essa URL com o mesmo Bearer. Se a URL for do próprio Kapso,
  * ela é reescrita para passar por aqui também (`/_kapso/<caminho>`), senão o download falharia com 401.
  *
@@ -39,6 +42,17 @@ export function chaveDoBearer(auth: string | undefined): string | null {
   return m ? m[1]! : null;
 }
 
+/** A query sem `access_token` (a chave não segue na URL para o Kapso). Devolve '' ou '?…'. */
+export function querySemChave(urlOriginal: string): { query: string; chave: string | null } {
+  const i = urlOriginal.indexOf('?');
+  if (i < 0) return { query: '', chave: null };
+  const p = new URLSearchParams(urlOriginal.slice(i + 1));
+  const chave = p.get('access_token');
+  p.delete('access_token');
+  const q = p.toString();
+  return { query: q ? `?${q}` : '', chave: chave && /^[A-Za-z0-9._\-]{20,200}$/.test(chave) ? chave : null };
+}
+
 /** Troca, no JSON de resposta, toda URL do Kapso por uma que passa por este tradutor. */
 export function reescreverUrls(valor: unknown, base: string): unknown {
   if (typeof valor === 'string') return valor.startsWith(`${KAPSO_HOST}/`) ? `${base}/_kapso/${valor.slice(KAPSO_HOST.length + 1)}` : valor;
@@ -64,12 +78,12 @@ export async function kapsoProxyHandler(req: Request, res: Response, deps: { fet
     res.status(400).json({ error: 'caminho não aceito' });
     return;
   }
-  const chave = chaveDoBearer(req.get('authorization'));
+  const { query: qs, chave: chaveNaUrl } = querySemChave(req.originalUrl);
+  const chave = chaveDoBearer(req.get('authorization')) ?? chaveNaUrl;
   if (!chave) {
     res.status(401).json({ error: 'sem chave' });
     return;
   }
-  const qs = req.originalUrl.includes('?') ? req.originalUrl.slice(req.originalUrl.indexOf('?')) : '';
   const metodo = req.method.toUpperCase();
   const comCorpo = !['GET', 'HEAD', 'DELETE'].includes(metodo) && req.body !== undefined;
   const ctrl = new AbortController();
