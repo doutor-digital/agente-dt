@@ -39,7 +39,7 @@ import {
   pedeNome,
   travaDaResposta,
 } from './repeticao.js';
-import { detectarVazamento, explicarVazamento, pedidoAoReescritor, SISTEMA_REESCRITOR_BASTIDOR } from '../services/vazamento.js';
+import { cortarAberturaMetanarrativa, detectarVazamento, explicarVazamento, pedidoAoReescritor, SISTEMA_REESCRITOR_BASTIDOR } from '../services/vazamento.js';
 import { agoraLocalISO } from './consulta-que-passou.js';
 import {
   consultasDaAgenda,
@@ -1016,11 +1016,23 @@ export async function buildAgentGraph(
       // com a correção de preço/lacuna. Se a segunda tentativa vier com tool call ou vazia, fica a original.
       let textoFinal = text;
 
+      // Antes do detector: a abertura que pensa alto sobre a transcrição do áudio ("a transcrição veio genérica… vou pedir pra
+      // ele") sai SEM chamada de modelo quando o resto da resposta já fala com o paciente (Caxias, 13/11/2026).
+      const semAbertura = cortarAberturaMetanarrativa(text);
+      if (semAbertura !== text) {
+        textoFinal = semAbertura;
+        response.content = semAbertura;
+        await recorder.step({
+          kind: 'THINKING',
+          title: '🙈 Abertura sobre a transcrição do áudio cortada — ficou só a fala para o paciente',
+          payload: { original: text, final: semAbertura },
+        });
+      }
       // Bastidor na resposta (15/10/2026, Mossoró: a paciente recebeu "Registrei o acompanhamento com a
       // Zuzu — ela qualificou…"). Reescreve numa chamada SEPARADA — sem histórico e sem ferramentas — só
       // transformando o rascunho em mensagem para o paciente. Se ainda vazar, fica a original, e a barreira
       // da entrega (webhook.controller) não deixa sair: melhor o paciente sem resposta neste turno.
-      const vazou = detectarVazamento(text);
+      const vazou = detectarVazamento(textoFinal);
       if (vazou) {
         const t1 = performance.now();
         let reescrito = '';
@@ -1031,7 +1043,7 @@ export async function buildAgentGraph(
           const r = (await withTimeout(
             invokeChatModel({
               model: alvo.model as unknown as Parameters<typeof invokeChatModel>[0]['model'],
-              messages: [new SystemMessage(SISTEMA_REESCRITOR_BASTIDOR), new HumanMessage(pedidoAoReescritor(userMessage ?? null, text))],
+              messages: [new SystemMessage(SISTEMA_REESCRITOR_BASTIDOR), new HumanMessage(pedidoAoReescritor(userMessage ?? null, textoFinal))],
               unitId: unit.id,
               traceId: recorder.traceId,
               modelName: alvo.modelName,

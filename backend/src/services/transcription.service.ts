@@ -6,7 +6,7 @@ import { env } from '../lib/env.js';
 import { resolveOpenAIApiKey } from './openai.service.js';
 import { classificarErroDaOpenAI, FalhaDeTranscricao } from '../lib/falha-de-audio.js';
 import { opsAlert } from '../lib/ops-alert.js';
-import { mediaLogprob, modeloDeTranscricao } from '../lib/transcricao-modelo.js';
+import { ehEcoDeInstrucao, INSTRUCAO_ANTIGA_DE_TRANSCRICAO, mediaLogprob, modeloDeTranscricao } from '../lib/transcricao-modelo.js';
 
 const TRANSCRIBE_URL = 'https://api.openai.com/v1/audio/transcriptions';
 
@@ -65,14 +65,8 @@ export async function transcribeAudio(
   form.append('file', audioBuf, { filename: `audio.${ext}`, contentType: `audio/${ext}` });
   form.append('model', TRANSCRIBE_MODEL);
   form.append('language', language);
-  // Viés de contexto: sem isso o modelo alucina em áudio curto ou com ruído —
-  // já devolveu "Pull atəş, улыштәш." pra um áudio em português.
-  form.append(
-    'prompt',
-    'Paciente brasileiro falando com uma clínica de fisioterapia e reabilitação ortopédica. ' +
-      'Assuntos comuns: dor na coluna, lombar, ombro, joelho, quadril, hérnia de disco, ' +
-      'fisioterapia, pilates, consulta, agendamento, valor.',
-  );
+  // Sem `prompt`: em áudio mudo/curto o modelo devolve o PRÓPRIO texto de instrução como se fosse fala (Lia, 04/11; Caxias,
+  // lead 2823748, 13/11 — a Sofia respondeu "a transcrição veio genérica"). O alfabeto estranho que o prompt evitava é pego abaixo.
   form.append('response_format', 'json');
 
   let res: { data: { text: string } };
@@ -97,6 +91,11 @@ export async function transcribeAudio(
       'transcrição saiu em alfabeto estranho — tratando como áudio inaudível',
     );
     throw new Error('Transcrição ininteligível (alfabeto não-latino)');
+  }
+  // rede: se mesmo assim sair o texto de instrução antigo, não é fala do paciente — mesmo caminho do "não deu para ouvir"
+  if (text && ehEcoDeInstrucao(text, INSTRUCAO_ANTIGA_DE_TRANSCRICAO)) {
+    logger.warn({ text: text.slice(0, 120), bytes: audioBuf.byteLength, ext }, 'transcrição é eco do texto de instrução — tratando como áudio inaudível');
+    throw new Error('Transcrição ininteligível (eco do texto de instrução)');
   }
   logger.info(
     { chars: text.length, bytes: audioBuf.byteLength, ext, ms: Math.round(performance.now() - t0) },

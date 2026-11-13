@@ -36,6 +36,11 @@ export const IDIOMA_TEMPLATE = 'pt_BR';
  */
 export const JANELA_24H_MS = 24 * 3600_000;
 export const FOLGA_DA_JANELA_MS = 15 * 60_000;
+/**
+ * Caixas só de HISTÓRICO (13/11/2026): o histórico antigo do app do celular de Parauapebas, importado do Kapso, mora na caixa 4
+ * (canal API, que não envia nada). Funil e Hoje não leem estas caixas; régua, Sofia e agenda também não (não estão em CAIXAS_REGUA).
+ */
+export const CAIXAS_HISTORICO: ReadonlySet<number> = new Set([4]);
 /** caixa → agente gerente no Chatwoot (lead quente parado vai para ela; decisão 26 do João). Parauapebas: Cleia (id 4). */
 export const GERENTE_DA_CAIXA: Readonly<Record<number, number>> = { 2: 4, 3: 4 };
 /** O usuário "📱 Celular da unidade": autor das mensagens que a equipe manda pelo celular (o Evolution usa o token dele). */

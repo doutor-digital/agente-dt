@@ -22,6 +22,7 @@ import { contaChatwootDoAmbiente, criarContextoChatwoot, chamar, type ContextoCh
 import { createHash } from 'node:crypto';
 import { prisma } from '../lib/prisma.js';
 import { conversasDasPaginas, diaEmBelem, montarHoje } from '../lib/chatwoot-hoje.js';
+import { CAIXAS_HISTORICO } from '../lib/chatwoot-regua.js';
 import { assistenteJs } from '../lib/chatwoot-assistente-ui.js';
 import {
   ATRIBUTO_ETAPA,
@@ -223,21 +224,36 @@ async function vencimentosAbertos(conta: number, ids: number[]): Promise<Map<num
   return mapa;
 }
 
+/**
+ * As páginas da listagem de conversas, caixa por caixa, SEM as caixas de histórico (CAIXAS_HISTORICO: o histórico antigo do
+ * celular importado do Kapso — milhares de conversas resolvidas que encheriam o funil e o "Chegaram hoje" e deixariam tudo lento).
+ * Com ?caixa=, só ela (caixa de histórico pedida direto = nada).
+ */
+async function paginasDasCaixas(a: Acesso, caixa: number): Promise<unknown[]> {
+  let ids: number[];
+  if (Number.isInteger(caixa) && caixa > 0) ids = CAIXAS_HISTORICO.has(caixa) ? [] : [caixa];
+  else {
+    const r = (await cw(a, 'GET', 'inboxes')) as any;
+    ids = (Array.isArray(r?.payload) ? r.payload : []).map((i: any) => Number(i.id)).filter((id: number) => Number.isInteger(id) && !CAIXAS_HISTORICO.has(id));
+  }
+  const paginas: unknown[] = [];
+  for (const id of ids) {
+    for (let p = 1; p <= MAX_PAGINAS; p++) {
+      const pg = (await cw(a, 'GET', 'conversations', { query: { status: 'all', assignee_type: 'all', inbox_id: String(id), page: String(p) } })) as any;
+      paginas.push(pg);
+      if ((pg?.data?.payload?.length ?? 0) < 25) break;
+    }
+  }
+  return paginas;
+}
+
 export async function funilQuadroHandler(req: Request, res: Response): Promise<void> {
   const a = await autorizado(req, res);
   if (!a) return;
   try {
     const defs = await definicoes(a);
     const lista = etapasDoAtributo(defs);
-    const caixa = Number(req.query.caixa);
-    const base: Record<string, string> = { status: 'all', assignee_type: 'all' };
-    if (Number.isInteger(caixa) && caixa > 0) base.inbox_id = String(caixa);
-    const paginas: unknown[] = [];
-    for (let p = 1; p <= MAX_PAGINAS; p++) {
-      const pg = (await cw(a, 'GET', 'conversations', { query: { ...base, page: String(p) } })) as any;
-      paginas.push(pg);
-      if ((pg?.data?.payload?.length ?? 0) < 25) break;
-    }
+    const paginas = await paginasDasCaixas(a, Number(req.query.caixa));
     const tarefas = await vencimentosAbertos(a.c.conta!.conta, idsDasPaginas(paginas));
     res.json({ ...montarQuadro(paginas, lista, tarefas), chatwoot: a.c.conta!.url, conta: a.c.conta!.conta, eu: a.logado, euId: a.logadoId, podeEscrever: !!a.sessao });
   } catch (e) {
@@ -253,15 +269,7 @@ export async function funilHojeHandler(req: Request, res: Response): Promise<voi
   const a = await autorizado(req, res);
   if (!a) return;
   try {
-    const caixa = Number(req.query.caixa);
-    const base: Record<string, string> = { status: 'all', assignee_type: 'all' };
-    if (Number.isInteger(caixa) && caixa > 0) base.inbox_id = String(caixa);
-    const paginas: unknown[] = [];
-    for (let p = 1; p <= MAX_PAGINAS; p++) {
-      const pg = (await cw(a, 'GET', 'conversations', { query: { ...base, page: String(p) } })) as any;
-      paginas.push(pg);
-      if ((pg?.data?.payload?.length ?? 0) < 25) break;
-    }
+    const paginas = await paginasDasCaixas(a, Number(req.query.caixa));
     const conversas = conversasDasPaginas(paginas);
     const agora = Date.now();
     const inicioDoDia = new Date(Date.parse(`${diaEmBelem(agora)}T03:00:00Z`));
@@ -284,7 +292,7 @@ export async function funilCaixasHandler(req: Request, res: Response): Promise<v
   try {
     const r = (await cw(a, 'GET', 'inboxes')) as any;
     const lista = Array.isArray(r?.payload) ? r.payload : [];
-    res.json(lista.map((i: any) => ({ id: i.id, nome: String(i.name ?? `Caixa ${i.id}`) })));
+    res.json(lista.filter((i: any) => !CAIXAS_HISTORICO.has(Number(i.id))).map((i: any) => ({ id: i.id, nome: String(i.name ?? `Caixa ${i.id}`) })));
   } catch (e) {
     falhou(res, e, 'caixas');
   }
