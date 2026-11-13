@@ -216,6 +216,14 @@ export interface LinhaAnuncio {
   campanhaId: string;
   campanhaNome: string;
   gasto: number;
+  /** o que a PRÓPRIA Meta conta para o anúncio no período (13/11/2026: o Marketing mostra o resultado da Meta, não só o do Chatwoot) */
+  objetivo?: string | null;
+  /** conversas iniciadas pelo anúncio (`onsite_conversion.messaging_conversation_started_7d`) */
+  conversas?: number;
+  /** leads de formulário (`lead`) */
+  leadsMeta?: number;
+  impressoes?: number;
+  cliques?: number;
 }
 
 export interface LeadAnalisado {
@@ -454,6 +462,92 @@ export function montarMarketing(e: EntradaMarketing, agora: number): RelatorioMa
     total: acabar(total),
     quemAgendou: [...quem.entries()].map(([quemNome, agendamentos]) => ({ quem: quemNome, agendamentos })).sort((a, b) => b.agendamentos - a.agendamentos || a.quem.localeCompare(b.quem, 'pt-BR')),
     faltaramOntem,
+  };
+}
+
+// ── Anúncios na Meta (Marketing) ────────────────────────────────────────────────────────────────
+
+/**
+ * O resultado das campanhas como a PRÓPRIA Meta conta (pedido do João, 13/11/2026: "o marketing puxando da API do Meta"). Não
+ * depende de o lead estar no Chatwoot: em Parauapebas os anúncios levam para o 98442-0153, que ainda está no Kommo — sem isto o
+ * Marketing mostrava só «Sem campanha gravada» e nenhum real investido.
+ */
+export interface ResultadoMeta {
+  gasto: number;
+  conversas: number;
+  leads: number;
+  impressoes: number;
+  cliques: number;
+  custoPorConversa: number | null;
+  custoPorLead: number | null;
+}
+export interface CampanhaMeta extends ResultadoMeta {
+  id: string;
+  nome: string;
+  objetivo: string | null;
+  /** os WhatsApp para onde os conjuntos da campanha mandam (só dígitos) */
+  destinos: string[];
+  /** algum destino NÃO é número de caixa do Chatwoot: as conversas dela não aparecem aqui */
+  foraDoChatwoot: boolean;
+}
+export interface AnunciosMeta {
+  estado: EstadoDaFonte;
+  motivo: string | null;
+  moeda: string | null;
+  total: ResultadoMeta;
+  /** o período anterior do mesmo tamanho; null = a Meta não respondeu para ele */
+  anterior: ResultadoMeta | null;
+  campanhas: CampanhaMeta[];
+  /** números de destino dos anúncios que não são caixa do Chatwoot (só dígitos) */
+  numerosForaDoChatwoot: string[];
+}
+
+/** DDD + 8 últimos dígitos (o mesmo número com e sem o 9 dá a mesma chave); fora do Brasil, os 8 últimos. */
+export function chaveDoNumero(n: string): string {
+  const d = String(n ?? '').replace(/\D/g, '');
+  return d.length >= 12 && d.startsWith('55') ? d.slice(2, 4) + d.slice(-8) : d.slice(-8);
+}
+
+function resultadoDe(l: ReadonlyArray<Pick<LinhaAnuncio, 'gasto' | 'conversas' | 'leadsMeta' | 'impressoes' | 'cliques'>>): ResultadoMeta {
+  const r = { gasto: 0, conversas: 0, leads: 0, impressoes: 0, cliques: 0 };
+  for (const x of l) {
+    r.gasto += Number(x.gasto) || 0;
+    r.conversas += x.conversas ?? 0;
+    r.leads += x.leadsMeta ?? 0;
+    r.impressoes += x.impressoes ?? 0;
+    r.cliques += x.cliques ?? 0;
+  }
+  const gasto = arred2(r.gasto);
+  return { ...r, gasto, custoPorConversa: r.conversas > 0 ? arred2(gasto / r.conversas) : null, custoPorLead: r.leads > 0 ? arred2(gasto / r.leads) : null };
+}
+
+export function montarAnunciosMeta(e: {
+  investido: Investido;
+  linhas: readonly LinhaAnuncio[];
+  anterior: { investido: Investido; linhas: readonly LinhaAnuncio[] } | null;
+  destinos: ReadonlyMap<string, readonly string[]> | null;
+  numerosDoChatwoot: readonly string[];
+}): AnunciosMeta {
+  const doChatwoot = new Set(e.numerosDoChatwoot.map(chaveDoNumero).filter((k) => k.length >= 8));
+  const porCampanha = new Map<string, LinhaAnuncio[]>();
+  for (const l of e.linhas) porCampanha.set(l.campanhaId, [...(porCampanha.get(l.campanhaId) ?? []), l]);
+  const fora = new Set<string>();
+  const campanhas: CampanhaMeta[] = [...porCampanha.entries()].map(([id, ls]) => {
+    const destinos = [...(e.destinos?.get(id) ?? [])];
+    // só dá para afirmar «fora» quando a conta tem caixa de WhatsApp com número; sem isso, não acusa
+    const foraDaqui = doChatwoot.size > 0 ? destinos.filter((n) => !doChatwoot.has(chaveDoNumero(n))) : [];
+    for (const n of foraDaqui) fora.add(n);
+    return { id, nome: ls[0]!.campanhaNome || `Campanha …${id.slice(-6)}`, objetivo: ls.find((x) => x.objetivo)?.objetivo ?? null, destinos, foraDoChatwoot: foraDaqui.length > 0, ...resultadoDe(ls) };
+  });
+  campanhas.sort((x, y) => y.gasto - x.gasto || y.conversas - x.conversas || x.nome.localeCompare(y.nome, 'pt-BR'));
+  return {
+    estado: e.investido.estado,
+    motivo: e.investido.motivo,
+    moeda: e.investido.moeda,
+    total: resultadoDe(e.linhas),
+    anterior: e.anterior && e.anterior.investido.estado === 'ok' ? resultadoDe(e.anterior.linhas) : null,
+    campanhas,
+    numerosForaDoChatwoot: [...fora],
   };
 }
 

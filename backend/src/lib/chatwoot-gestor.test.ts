@@ -4,8 +4,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  chaveDoNumero,
   credenciaisDeAnuncio,
   diasDoPeriodo,
+  montarAnunciosMeta,
   emailDoPerfil,
   hashDoEmail,
   indicadores,
@@ -420,4 +422,70 @@ test('oportunidades: lista longa mostra só as primeiras, mas o total é o verda
 test('semáforo sem dado do contato e sem data de consulta usa a última atividade', () => {
   const antigo = conv(1, { last_activity_at: s('2026-11-01T12:00:00Z'), custom_attributes: { etapa: 'Compareceu' } });
   assert.equal(semaforoDe(antigo, '2026-11-13'), 'Vermelho');
+});
+
+// ── Anúncios na Meta (Marketing) ──────────────────────────────────────────────────────────────
+
+const ad = (anuncioId: string, campanhaId: string, gasto: number, extra: Partial<LinhaAnuncio> = {}): LinhaAnuncio => ({
+  anuncioId,
+  anuncioNome: `Anúncio ${anuncioId}`,
+  campanhaId,
+  campanhaNome: `Campanha ${campanhaId}`,
+  gasto,
+  ...extra,
+});
+const OK = { estado: 'ok' as const, valor: 0, moeda: 'BRL', motivo: null };
+
+test('chaveDoNumero: o mesmo número com e sem o 9 dá a mesma chave', () => {
+  assert.equal(chaveDoNumero('+55 94 98442-0153'), chaveDoNumero('559484420153'));
+  assert.notEqual(chaveDoNumero('559484420153'), chaveDoNumero('+559484325883'));
+});
+
+test('anúncios na Meta: soma por campanha, custo por conversa, maior gasto primeiro, compara com o período anterior', () => {
+  const m = montarAnunciosMeta({
+    investido: OK,
+    linhas: [
+      ad('1', 'A', 100, { conversas: 8, objetivo: 'OUTCOME_ENGAGEMENT' }),
+      ad('2', 'A', 50, { conversas: 2 }),
+      ad('3', 'B', 300, { conversas: 0, leadsMeta: 4, objetivo: 'OUTCOME_LEADS' }),
+      ad('4', 'C', 20),
+    ],
+    anterior: { investido: OK, linhas: [ad('9', 'A', 90, { conversas: 3 })] },
+    destinos: new Map([['A', ['559484420153']]]),
+    numerosDoChatwoot: ['+559484325883'],
+  });
+  assert.equal(m.estado, 'ok');
+  assert.deepEqual(m.campanhas.map((c) => [c.id, c.gasto, c.conversas, c.leads, c.custoPorConversa, c.custoPorLead]), [
+    ['B', 300, 0, 4, null, 75],
+    ['A', 150, 10, 0, 15, null],
+    ['C', 20, 0, 0, null, null],
+  ]);
+  assert.equal(m.campanhas[1]!.objetivo, 'OUTCOME_ENGAGEMENT');
+  assert.deepEqual({ gasto: m.total.gasto, conversas: m.total.conversas, leads: m.total.leads, cpc: m.total.custoPorConversa }, { gasto: 470, conversas: 10, leads: 4, cpc: 47 });
+  assert.deepEqual({ gasto: m.anterior!.gasto, conversas: m.anterior!.conversas, cpc: m.anterior!.custoPorConversa }, { gasto: 90, conversas: 3, cpc: 30 });
+  // A leva para o 98442-0153, que não é caixa do Chatwoot (lá é o 8432-5883)
+  assert.equal(m.campanhas[1]!.foraDoChatwoot, true);
+  assert.deepEqual(m.numerosForaDoChatwoot, ['559484420153']);
+});
+
+test('anúncios na Meta: destino que É caixa do Chatwoot (com ou sem o 9) não acusa; sem caixa com número, não acusa nada', () => {
+  const base = { investido: OK, linhas: [ad('1', 'A', 10, { conversas: 1 })], anterior: null, destinos: new Map([['A', ['5594984325883']]]) };
+  assert.deepEqual(montarAnunciosMeta({ ...base, numerosDoChatwoot: ['+559484325883'] }).numerosForaDoChatwoot, []);
+  assert.deepEqual(montarAnunciosMeta({ ...base, numerosDoChatwoot: [] }).numerosForaDoChatwoot, []);
+  assert.equal(montarAnunciosMeta({ ...base, numerosDoChatwoot: [] }).anterior, null);
+});
+
+test('anúncios na Meta: conta não ligada ou erro passam o estado e o motivo; período anterior com erro = sem comparação', () => {
+  const m = montarAnunciosMeta({
+    investido: { estado: 'conectar', valor: null, moeda: null, motivo: 'Falta ligar a conta' },
+    linhas: [],
+    anterior: { investido: { estado: 'erro', valor: null, moeda: null, motivo: 'x' }, linhas: [] },
+    destinos: null,
+    numerosDoChatwoot: [],
+  });
+  assert.equal(m.estado, 'conectar');
+  assert.equal(m.motivo, 'Falta ligar a conta');
+  assert.equal(m.anterior, null);
+  assert.deepEqual(m.campanhas, []);
+  assert.equal(m.total.custoPorConversa, null);
 });
