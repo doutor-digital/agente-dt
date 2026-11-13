@@ -19,6 +19,7 @@
  * Etapa não é campo: quem já está em Agendado/Confirmado/Compareceu/Pós-consulta/Fechou NÃO muda de etapa por ação da Sofia
  * (a régua lê a etapa; mover quem está em alta dispara mensagem de meses depois). Campo sim, etapa não.
  */
+import { ETIQUETA_PAUSA } from './chatwoot-pausa.js';
 import { z } from 'zod';
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import type { Unit } from '@prisma/client';
@@ -81,6 +82,8 @@ export function motivoDeNaoResponder(c: ConversaLida): string | null {
   // a equipe falando com o número da unidade («libera», «acabando»): etiqueta `interno` na conversa ou atributo `interno` no contato
   if (c.interno) return 'interno';
   if (texto(c.attrs.etapa) === 'Esperando humano' || c.etiquetas.includes(ETIQUETA_HUMANO)) return 'esperando-humano';
+  // pausa da IA nesta conversa (uma pessoa assumiu, ou respondeu pelo celular): fica calada até reativar ou resolver
+  if (c.etiquetas.includes(ETIQUETA_PAUSA)) return 'ia-pausada';
   if (texto(c.attrs.funil) === 'Tratamento' || texto(c.attrs.etapa_tratamento)) return 'em-tratamento';
   return null;
 }

@@ -161,7 +161,7 @@ import {
   funilTarefaFeitaHandler,
   funilTarefaHandler,
 } from '../controllers/funil.controller.js';
-import { assistenteEstadoHandler, assistentePerguntarHandler, assistenteSugerirHandler } from '../controllers/assistente.controller.js';
+import { assistenteEstadoHandler, assistentePausaAcaoHandler, assistentePausaEstadoHandler, assistentePerguntarHandler, assistenteSugerirHandler } from '../controllers/assistente.controller.js';
 import { centralChamadoFeitoHandler, centralChamadosHandler, centralEstadoHandler, centralGeralHandler, centralPessoaHandler } from '../controllers/central.controller.js';
 import { lidaEvolutionHandler } from '../lib/chatwoot-lida.js';
 import { eventoChatwootHandler } from '../lib/chatwoot-ia.js';
@@ -421,6 +421,8 @@ apiRouter.post('/public/funil/novo', funilNovoHandler);
 apiRouter.get('/public/assistente/estado', assistenteEstadoHandler);
 apiRouter.post('/public/assistente/sugerir', assistenteSugerirHandler);
 apiRouter.post('/public/assistente/perguntar', assistentePerguntarHandler);
+apiRouter.get('/public/assistente/pausa', assistentePausaEstadoHandler);
+apiRouter.post('/public/assistente/pausa', assistentePausaAcaoHandler);
 
 // Widgets privados do Kommo (coluna do cartão) leem a agenda da franquia com chave por unidade (sem sessão).
 apiRouter.get('/public/widget/:slug/ping', widgetPingHandler);

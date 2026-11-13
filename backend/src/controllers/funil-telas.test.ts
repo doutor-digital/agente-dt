@@ -222,9 +222,11 @@ test('menu.js: PARSEIA, tem os cinco itens na ordem, sem lista de e-mails nem ha
   assert.ok(!js.includes('__AGENTE__') && !js.includes('__GESTORES__'));
   assert.ok(!js.includes('ana@dd.com'));
   assert.ok(!/[0-9a-f]{64}/.test(js), 'nenhum hash de e-mail no arquivo público');
-  const ordem = ['data-hoje-menu', 'data-funil-menu', 'data-oport-menu', 'data-mkt-menu', 'data-gestor-menu'].map((m) => js.indexOf(m));
+  // Oportunidades, Marketing e Gestor são submenu de Hoje (pedido do João, 13/11); o Funil vem depois do grupo
+  const ordem = ['data-hoje-menu', 'data-oport-menu', 'data-mkt-menu', 'data-gestor-menu', 'data-funil-menu'].map((m) => js.indexOf(m));
   assert.ok(ordem.every((i) => i > 0));
-  assert.deepEqual([...ordem].sort((a, b) => a - b), ordem, 'a ordem do menu é Hoje, Funil, Oportunidades, Marketing, Gestor');
+  assert.deepEqual([...ordem].sort((a, b) => a - b), ordem, 'a ordem do menu é Hoje (Oportunidades, Marketing, Gestor dentro) e depois Funil');
+  assert.ok(js.includes("pai: 'hoje'") && js.includes('data-hoje-seta'), 'submenu de Hoje com a setinha de abrir e fechar');
   assert.match(js, /gestao: true/);
   assert.match(js, /e\.key === 'Escape'/);
   assert.match(js, /sessionStorage/); // Ctrl+R reabre
