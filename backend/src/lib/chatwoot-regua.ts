@@ -22,6 +22,11 @@ export const CAIXAS_REGUA: Readonly<Record<number, string>> = {
   2: 'doutor-hernia-parauapebas', // Evolution (desconectado desde 13/11: o número entrou no Kapso em coexistência)
   3: 'doutor-hernia-parauapebas', // WhatsApp Cloud via Kapso (13/11/2026)
 };
+/**
+ * Caixas só de HISTÓRICO (13/11/2026): o histórico antigo do app do celular de Parauapebas, importado do Kapso, mora na caixa 4
+ * (canal API, que não envia nada). Funil e Hoje não leem estas caixas; régua, Sofia e agenda também não (não estão em CAIXAS_REGUA).
+ */
+export const CAIXAS_HISTORICO: ReadonlySet<number> = new Set([4]);
 /** caixa → agente gerente no Chatwoot (lead quente parado vai para ela; decisão 26 do João). Parauapebas: Cleia (id 4). */
 export const GERENTE_DA_CAIXA: Readonly<Record<number, number>> = { 2: 4, 3: 4 };
 /** O usuário "📱 Celular da unidade": autor das mensagens que a equipe manda pelo celular (o Evolution usa o token dele). */
