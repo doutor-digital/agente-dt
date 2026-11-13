@@ -59,6 +59,28 @@ export interface EntradaDoKommo {
   contatoId: number | null;
 }
 
+/**
+ * Uma conversa da caixa "Leads de entrada" como o conector a LÊ: com nome, telefone e canal (o `metadata` do Kommo).
+ * Nada de texto da mensagem: isso é dado de saúde e só sai pela leitura de UM cartão.
+ */
+export interface ConversaNaEntrada {
+  uid: string;
+  /** o cartão provisório da conversa */
+  leadId: number | null;
+  contatoId: number | null;
+  pipelineId: number;
+  /** chats, forms, sip, mail */
+  categoria: string;
+  /** epoch em segundos */
+  criadoEm: number;
+  nome: string | null;
+  telefone: string | null;
+  /** `metadata.source_name` (ou o `source_name` da raiz) */
+  origem: string | null;
+  /** `metadata.service`: o canal (whatsapp, waba…) */
+  canal: string | null;
+}
+
 /** Transmissão do WhatsApp (tela "Transmissões"). `filter.tag` traz os ids das etiquetas do segmento. */
 export interface KommoTransmissao {
   id: number;
@@ -1229,6 +1251,57 @@ export class KommoClient {
       }
     }
     return { itens, completa };
+  }
+
+  /**
+   * A caixa "Leads de entrada" para LEITURA do conector: do mais novo ao mais velho, só o que cai em [`deUnix`, `ateUnix`]
+   * (o Kommo não filtra a caixa por data, então a leitura pára assim que uma página passa do início da janela).
+   * `truncado` = bateu no teto de páginas sem chegar ao início da janela: o que ficou de fora é o mais ANTIGO, e o total é um mínimo.
+   * Erro do Kommo LANÇA. Não escreve nada.
+   */
+  async lerEntrada(deUnix: number, ateUnix: number, maxPaginas = 4): Promise<{ itens: ConversaNaEntrada[]; truncado: boolean }> {
+    type Bruto = {
+      uid?: string;
+      pipeline_id?: number;
+      category?: string;
+      created_at?: number;
+      source_name?: unknown;
+      metadata?: { from?: unknown; service?: unknown; source_name?: unknown; client?: { name?: unknown } | null } | null;
+      _embedded?: { leads?: Array<{ id?: number }>; contacts?: Array<{ id?: number }> };
+    };
+    const texto = (v: unknown): string | null => (typeof v === 'string' ? v.trim() || null : typeof v === 'number' ? String(v) : null);
+    const itens: ConversaNaEntrada[] = [];
+    for (let page = 1; page <= maxPaginas; page++) {
+      try {
+        const { data, status } = await this.http.get<{ _embedded?: { unsorted?: Bruto[] } } | ''>('/leads/unsorted', {
+          params: { limit: 250, page, 'order[created_at]': 'desc' },
+        });
+        const lote = status === 204 || !data ? [] : (data._embedded?.unsorted ?? []);
+        let maisAntigo = Infinity;
+        for (const u of lote) {
+          if (typeof u.uid !== 'string' || !u.uid || typeof u.created_at !== 'number') continue;
+          maisAntigo = Math.min(maisAntigo, u.created_at);
+          if (u.created_at < deUnix || u.created_at > ateUnix) continue;
+          itens.push({
+            uid: u.uid,
+            leadId: u._embedded?.leads?.[0]?.id ?? null,
+            contatoId: u._embedded?.contacts?.[0]?.id ?? null,
+            pipelineId: typeof u.pipeline_id === 'number' ? u.pipeline_id : 0,
+            categoria: typeof u.category === 'string' ? u.category : '',
+            criadoEm: u.created_at,
+            nome: texto(u.metadata?.client?.name),
+            telefone: texto(u.metadata?.from),
+            origem: texto(u.metadata?.source_name) ?? texto(u.source_name),
+            canal: texto(u.metadata?.service),
+          });
+        }
+        if (lote.length < 250) return { itens, truncado: false };
+        if (maisAntigo < deUnix) return { itens, truncado: false };
+      } catch (err) {
+        wrapAxiosError(err, `lerEntrada(p${page})`);
+      }
+    }
+    return { itens, truncado: true };
   }
 
   /** Os telefones do contato (campo PHONE), na forma como estão gravados. Erro do Kommo LANÇA (contato sem telefone = `[]`). */

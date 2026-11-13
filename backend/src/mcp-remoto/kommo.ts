@@ -8,7 +8,7 @@
  */
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { eh403DeEscopo, type KommoLead, type KommoPipeline, type NotaKommo } from '../services/kommo.service.js';
+import { eh403DeEscopo, type ConversaNaEntrada, type KommoLead, type KommoPipeline, type NotaKommo } from '../services/kommo.service.js';
 import { TETO_HISTORICO, type MensagemOficial } from '../services/kommo-talks-normalizar.js';
 import type { Auditar } from '../franquia-mcp/ferramentas.js';
 import { instanteNoFuso } from '../franquia-mcp/normalizar.js';
@@ -30,6 +30,13 @@ export interface FonteKommo {
   conversa?(leadId: number, limite: number, periodo?: { desde?: number; ate?: number }): Promise<{ mensagens: MensagemOficial[]; conversas: number; total?: number; truncado?: boolean }>;
   /** notas do cartão, das mais recentes; opcional para as fontes de teste antigas */
   notas?(leadId: number, limite: number, periodo?: { desde?: number; ate?: number }): Promise<{ notas: NotaKommo[]; truncado: boolean }>;
+  /**
+   * as conversas da caixa «Leads de entrada» (unsorted) criadas entre `de` e `ate` (epoch s), do mais novo ao mais velho;
+   * `truncado` = parou no teto de páginas antes de chegar ao início da janela. Só leitura; opcional para as fontes de teste antigas
+   */
+  entrada?(de: number, ate: number, maxPaginas: number): Promise<{ itens: ConversaNaEntrada[]; truncado: boolean }>;
+  /** subdomínio da conta no Kommo (monta o link do cartão); opcional */
+  subdominio?: string;
 }
 
 /**
@@ -392,6 +399,18 @@ function semUnidadeDaRede(us: UnidadeKommo[], res: Record<string, Record<string,
 
 // ── as consultas ──
 
+/** A soma da caixa de entrada na rede: só das unidades que a leram; uma que não leu avisa que o número é um mínimo. */
+function naEntradaDaRede(ok: Array<Record<string, unknown>>): Record<string, unknown> {
+  const lidas = ok.filter((v) => typeof v.naEntrada === 'number');
+  if (!lidas.length) return {};
+  const semLeitura = ok.filter((v) => 'naEntrada' in v && typeof v.naEntrada !== 'number').length;
+  return {
+    naEntrada: lidas.reduce((s, v) => s + Number(v.naEntrada), 0),
+    ...(semLeitura || lidas.some((v) => v.naEntradaTruncado) ? { naEntradaIncompleta: true } : {}),
+    avisoEntrada: 'naEntrada = conversas na caixa «Leads de entrada», NÃO aceitas, que não entram em total: veja kommo_entrada.',
+  };
+}
+
 export async function kommoLeads(
   ctx: ContextoKommo,
   a: { unidade: string | string[]; inicio: string; fim: string; data?: 'criacao' | 'atualizacao'; agruparPor?: string; maxItens?: number; comCampos?: boolean },
@@ -402,16 +421,19 @@ export async function kommoLeads(
   const us = resolverUnidadesKommo(ctx, a.unidade, MAX_UNIDADES_KOMMO);
   const max = a.maxItens ?? (us.length === 1 ? 30 : 0);
   const res = await porUnidade(ctx, us, async (u) => {
-    const [{ leads, truncado, semUnidade }, etapas, usuarios] = await Promise.all([
+    const [{ leads, truncado, semUnidade }, etapas, usuarios, entrada] = await Promise.all([
       leadsDoPeriodo(ctx, u, a.inicio, a.fim, a.data === 'atualizacao' ? 'updated_at' : 'created_at'),
       nomesDasEtapas(ctx, u),
       nomesDosUsuarios(ctx, u),
+      // a caixa de entrada só tem data de entrada: com data="atualizacao" a conta não casa com o período e fica de fora
+      a.data === 'atualizacao' ? Promise.resolve({}) : naEntradaDaUnidade(ctx, u, a.inicio, a.fim),
     ]);
     // agrupar por campo do cartão precisa dos campos; a resposta só os leva com comCampos
     const completos = leads.map((l) => legivel(l, u.fuso, etapas, usuarios, true));
     const itens = a.comCampos ? completos : leads.map((l) => legivel(l, u.fuso, etapas, usuarios, false));
     return {
       total: itens.length,
+      ...entrada,
       ...(truncado ? { truncado: true, aviso: `INCOMPLETO: parou em ${ctx.maxPaginas * 250} leads. O total é um mínimo.` } : {}),
       ...(u.divisao ? { semUnidade: semUnidade ?? 0, avisoUnidade: avisoDaDivisao(u, semUnidade ?? 0) } : {}),
       porSituacao: contar(completos, 'situacao'),
@@ -432,10 +454,194 @@ export async function kommoLeads(
       ...(ok.length < us.length ? { unidadesForaDoTotal: Object.entries(res).filter(([, v]) => !v.ok).map(([k]) => k) } : {}),
       ...(ok.some(([, v]) => v.truncado) ? { unidadesIncompletas: ok.filter(([, v]) => v.truncado).map(([k]) => k) } : {}),
       ...semUnidadeDaRede(us, res),
+      ...naEntradaDaRede(ok.map(([, v]) => v)),
     };
   }
   r.porUnidade = res;
   return r;
+}
+
+// ── a caixa «Leads de entrada» (unsorted) ──
+
+const AGRUPAMENTOS_DA_ENTRADA = ['dia', 'mes', 'origem', 'canal', 'funil'] as const;
+
+/**
+ * 403 na caixa de entrada: a rota pede token de administrador (a mesma razão pela qual o robô da entrada lê sem o freio global).
+ * Em português e dizendo de quem é o conserto, não "Request failed with status code 403".
+ */
+export function explicar403DaEntrada(e: unknown, unidade: string): unknown {
+  const status = e instanceof Error && e.name === 'KommoApiError' ? (e as { status?: number }).status : undefined;
+  if (status !== 403) return e;
+  return new Error(
+    `O Kommo de ${unidade} recusou a leitura da caixa «Leads de entrada» (403): essa rota pede um token de administrador da conta. ` +
+      'Não é erro do seu pedido e repetir não adianta; quem resolve é o João, gerando um token novo. O resto do Kommo (kommo_leads, kommo_lead…) segue funcionando. ' +
+      `[Kommo: ${(e as Error).message}]`,
+    { cause: e },
+  );
+}
+
+/**
+ * As conversas da entrada no período (dia local da unidade, pela data em que ENTRARAM). Conta dividida é recusada: a conversa
+ * ainda não tem «⌂ Unidade de atendimento», então a caixa não se separa por unidade e mostrá-la entregaria pacientes da irmã.
+ * A janela vai pro cache pela CONTA (kommo_leads e kommo_entrada leem a mesma, uma vez só).
+ */
+export async function entradaDoPeriodo(ctx: ContextoKommo, u: UnidadeKommo, inicio: string, fim: string): Promise<{ itens: ConversaNaEntrada[]; truncado: boolean }> {
+  if (!u.fonte.entrada) throw new ErroDeEntrada('esta conta do Kommo não tem a leitura da caixa de entrada ligada');
+  if (u.divisao) {
+    throw new ErroDeEntrada(
+      `${u.slug} divide o Kommo com outra unidade (${rotulosDaDivisao(u.divisao)}) e a caixa «Leads de entrada» é da conta inteira: ` +
+        'a conversa ainda não tem «⌂ Unidade de atendimento», então não dá para separar o que é desta unidade.',
+    );
+  }
+  const de = epochDoDiaLocal(inicio, u.fuso);
+  const ate = epochDoDiaLocal(fim, u.fuso, true);
+  const ler = u.fonte.entrada.bind(u.fonte);
+  const bruto = await comCache(ctx, `entrada|${contaDe(u)}|${de}|${ate}`, TTL.busca, () => ler(de, ate, ctx.maxPaginas).catch((e: unknown) => { throw explicar403DaEntrada(e, u.slug); }));
+  return { itens: [...bruto.itens].sort((a, b) => b.criadoEm - a.criadoEm), truncado: bruto.truncado };
+}
+
+function linkDoCartao(u: UnidadeKommo, leadId: number | null): string | null {
+  const sub = u.fonte.subdominio?.trim();
+  return sub && leadId ? `https://${sub}.kommo.com/leads/detail/${leadId}` : null;
+}
+
+async function nomesDosFunis(ctx: ContextoKommo, u: UnidadeKommo): Promise<Map<number, string>> {
+  try {
+    const funis = await comCache(ctx, `funis-lista|${contaDe(u)}`, HORA, () => u.fonte.funis());
+    return new Map(funis.map((f) => [f.id, f.name]));
+  } catch {
+    return new Map(); // sem os nomes, o funil sai pelo id
+  }
+}
+
+type ItemDaEntrada = ReturnType<typeof itemDaEntrada>;
+
+function itemDaEntrada(c: ConversaNaEntrada, u: UnidadeKommo, funis: Map<number, string>) {
+  return {
+    leadId: c.leadId,
+    contatoId: c.contatoId,
+    nome: c.nome,
+    telefone: c.telefone,
+    canal: c.canal,
+    origem: c.origem,
+    recebidoEm: instanteNoFuso(new Date(c.criadoEm * 1000), u.fuso),
+    funil: c.pipelineId ? (funis.get(c.pipelineId) ?? String(c.pipelineId)) : '(sem funil)',
+    link: linkDoCartao(u, c.leadId),
+  };
+}
+
+function grupoDaEntrada(i: ItemDaEntrada, por: (typeof AGRUPAMENTOS_DA_ENTRADA)[number]): string {
+  switch (por) {
+    case 'dia':
+      return i.recebidoEm.slice(0, 10);
+    case 'mes':
+      return i.recebidoEm.slice(0, 7);
+    case 'origem':
+      return i.origem ?? '(sem origem)';
+    case 'canal':
+      return i.canal ?? '(sem canal)';
+    case 'funil':
+      return i.funil;
+  }
+}
+
+function agruparEntrada(por: string): (typeof AGRUPAMENTOS_DA_ENTRADA)[number] {
+  const p = semMarcas(por);
+  const apelido: Record<string, (typeof AGRUPAMENTOS_DA_ENTRADA)[number]> = { dia: 'dia', mes: 'mes', origem: 'origem', 'source name': 'origem', canal: 'canal', service: 'canal', funil: 'funil' };
+  const achado = apelido[p];
+  if (!achado) throw new ErroDeEntrada(`agruparPor "${por}" não existe na entrada. Use: ${AGRUPAMENTOS_DA_ENTRADA.join(', ')}`);
+  return achado;
+}
+
+export async function kommoEntrada(
+  ctx: ContextoKommo,
+  a: { unidade: string | string[]; inicio: string; fim: string; agruparPor?: string; maxItens?: number; pular?: number },
+) {
+  validarData(a.inicio, 'inicio');
+  validarData(a.fim, 'fim');
+  if (a.inicio > a.fim) throw new ErroDeEntrada('inicio é depois do fim');
+  const por = a.agruparPor ? agruparEntrada(a.agruparPor) : undefined;
+  const us = resolverUnidadesKommo(ctx, a.unidade, MAX_UNIDADES_KOMMO);
+  const max = a.maxItens ?? (us.length === 1 ? 30 : 0);
+  const pular = a.pular ?? 0;
+  const res = await porUnidade(ctx, us, async (u) => {
+    const [{ itens: brutos, truncado }, funis] = await Promise.all([entradaDoPeriodo(ctx, u, a.inicio, a.fim), nomesDosFunis(ctx, u)]);
+    const itens = brutos.map((c) => itemDaEntrada(c, u, funis));
+    let agrupado: Record<string, number> | undefined;
+    if (por) {
+      const m: Record<string, number> = {};
+      for (const i of itens) m[grupoDaEntrada(i, por)] = (m[grupoDaEntrada(i, por)] ?? 0) + 1;
+      const pares = Object.entries(m);
+      // dia e mês em ordem de calendário; o resto, do maior para o menor
+      pares.sort(por === 'dia' || por === 'mes' ? (x, y) => x[0].localeCompare(y[0]) : (x, y) => y[1] - x[1] || x[0].localeCompare(y[0]));
+      agrupado = Object.fromEntries(pares);
+    }
+    const mostrados = itens.slice(pular, pular + max);
+    const omitidos = itens.length - pular - mostrados.length;
+    return {
+      total: itens.length,
+      ...(truncado
+        ? {
+            truncado: true,
+            aviso: `INCOMPLETO: o Kommo não filtra a caixa por data; li do mais novo para o mais velho e parei em ${ctx.maxPaginas * 250} conversas sem chegar ao início do período. O total é um mínimo e o que falta é o mais antigo.`,
+          }
+        : {}),
+      ...(agrupado ? { agrupado } : {}),
+      itens: mostrados,
+      ...(omitidos > 0 ? { itensOmitidos: omitidos } : {}),
+    };
+  });
+  const r: Record<string, unknown> = {
+    consultadoEm: new Date().toISOString(),
+    periodo: { inicio: a.inicio, fim: a.fim, data: 'entrada na caixa' },
+    aviso:
+      'São conversas NÃO aceitas da caixa «Leads de entrada» do Kommo: ninguém as aceitou, então NÃO aparecem em kommo_leads (nem no funil). ' +
+      'Cada uma já tem um cartão provisório (leadId) e um contato. Telefone e nome são dado de paciente: use só para acompanhar o atendimento.',
+  };
+  if (us.length > 1) {
+    const ok = Object.entries(res).filter(([, v]) => v.ok);
+    const agrupado: Record<string, number> = {};
+    for (const [, v] of ok) for (const [k, n] of Object.entries((v.agrupado as Record<string, number>) ?? {})) agrupado[k] = (agrupado[k] ?? 0) + n;
+    r.rede = {
+      total: ok.reduce((s, [, v]) => s + Number(v.total), 0),
+      unidadesSomadas: ok.map(([k]) => k),
+      ...(Object.keys(agrupado).length
+        ? { agrupado: Object.fromEntries(Object.entries(agrupado).sort(por === 'dia' || por === 'mes' ? (x, y) => x[0].localeCompare(y[0]) : (x, y) => y[1] - x[1])) }
+        : {}),
+      ...(ok.length < us.length ? { unidadesForaDoTotal: Object.entries(res).filter(([, v]) => !v.ok).map(([k]) => k) } : {}),
+      ...(ok.some(([, v]) => v.truncado) ? { unidadesIncompletas: ok.filter(([, v]) => v.truncado).map(([k]) => k) } : {}),
+    };
+  }
+  r.porUnidade = res;
+  return r;
+}
+
+/**
+ * O que `kommo_leads` acrescenta por unidade: quantas conversas estão na caixa de entrada no período. Nunca derruba o `kommo_leads`:
+ * se a caixa não puder ser lida, diz isso em vez de calar (calar parece «não tem nada na entrada»).
+ */
+async function naEntradaDaUnidade(ctx: ContextoKommo, u: UnidadeKommo, inicio: string, fim: string): Promise<Record<string, unknown>> {
+  if (!u.fonte.entrada) return {};
+  if (u.divisao) {
+    return { naEntrada: null, avisoEntrada: 'Conta dividida entre unidades: a caixa «Leads de entrada» é da conta toda e não se separa por unidade, então não foi contada.' };
+  }
+  try {
+    const { itens, truncado } = await entradaDoPeriodo(ctx, u, inicio, fim);
+    const n = itens.length;
+    return {
+      naEntrada: n,
+      ...(truncado ? { naEntradaTruncado: true } : {}),
+      ...(n || truncado
+        ? {
+            avisoEntrada:
+              `${truncado ? 'No mínimo ' : ''}${n} conversa(s) do período estão na caixa «Leads de entrada», NÃO aceitas: não entram em total nem em itens acima. ` +
+              'Lead que ninguém aceitou continua sendo lead — use kommo_entrada para listá-las antes de concluir que «quase não entra lead».',
+          }
+        : {}),
+    };
+  } catch (e) {
+    return { naEntrada: null, avisoEntrada: `Não consegui ler a caixa «Leads de entrada» agora (${e instanceof Error ? e.message : String(e)}): o total acima NÃO inclui as conversas não aceitas.` };
+  }
 }
 
 export async function kommoFunis(ctx: ContextoKommo, a: { unidade: string | string[] }) {
@@ -655,7 +861,8 @@ export function registrarFerramentasKommo(server: McpServer, ctx: ContextoKommo,
         'funil, etapa, situação (aberto/ganho/perdido), origem, responsável, etiquetas e campos. Use agruparPor pra contar: ' +
         '"etapa", "funil", "situacao", "origem", "responsavel", "tag", "dia" ou o nome de um campo do cartão. ' +
         `Até ${MAX_UNIDADES_KOMMO} unidades por chamada (o Kommo divide a fila com o atendimento da Sofia). "rede" soma só as que responderam. ` +
-        '"truncado" = passou de 1.000 leads na unidade, o total é um mínimo. Os campos do cartão (queixa, resumo…) só vêm com comCampos=true.',
+        '"truncado" = passou de 1.000 leads na unidade, o total é um mínimo. Os campos do cartão (queixa, resumo…) só vêm com comCampos=true. ' +
+        '"naEntrada" = conversas do período paradas na caixa «Leads de entrada», NÃO aceitas: não entram no total — veja kommo_entrada.',
       inputSchema: {
         unidade,
         inicio: data('início do período'),
@@ -668,6 +875,33 @@ export function registrarFerramentasKommo(server: McpServer, ctx: ContextoKommo,
       annotations: ro,
     },
     (args) => executar('kommo_leads', args, auditar, () => kommoLeads(ctx, args)),
+  );
+  server.registerTool(
+    'kommo_entrada',
+    {
+      title: 'Kommo: caixa «Leads de entrada» (conversas não aceitas)',
+      description:
+        'As conversas que estão na caixa «Leads de entrada» do Kommo (unsorted) e NINGUÉM aceitou ainda. Elas NÃO aparecem em kommo_leads ' +
+        '(a API de leads não devolve os não aceitos): numa conta com a entrada parada, kommo_leads mostra poucos leads e esta ferramenta mostra o resto. ' +
+        'Só leitura: nada é aceito, recusado ou movido. Período pela data em que a conversa ENTROU na caixa (dia local da unidade). ' +
+        'Cada item: leadId (o cartão provisório da conversa), contatoId, nome, telefone, canal (whatsapp, waba…), origem (nome da fonte no Kommo, ex. o WhatsApp conectado), ' +
+        'recebidoEm (hora local), funil e link do cartão. agruparPor: "dia", "mes", "origem", "canal" ou "funil". ' +
+        'O texto das mensagens não vem aqui: para ler a conversa de um item use kommo_conversa com o leadId (e kommo_lead / kommo_notas no mesmo número); ' +
+        'esses três leem pelo número do cartão — se o Kommo recusar um cartão ainda não aceito, o nome, o telefone e a data desta lista são o que há. ' +
+        `Até ${MAX_UNIDADES_KOMMO} unidades por chamada (o Kommo divide a fila com a Sofia); "rede" soma só as que responderam. ` +
+        `O Kommo não filtra a caixa por data: a leitura vai do mais novo ao mais velho e "truncado" = parou em ${250 * 4} conversas antes do início do período (o total é um mínimo). ` +
+        'Contas divididas entre duas unidades (Petrópolis/Caxias) são recusadas: a caixa é da conta toda. maxItens (padrão 30 com uma unidade, 0 com várias) e pular paginam a lista.',
+      inputSchema: {
+        unidade,
+        inicio: data('início do período'),
+        fim: data('fim do período, incluso'),
+        agruparPor: z.enum(AGRUPAMENTOS_DA_ENTRADA).optional().describe('conta por dia, mes, origem, canal ou funil'),
+        maxItens: z.number().int().min(0).max(100).optional().describe('conversas devolvidas por unidade (padrão 30 com uma unidade, 0 com várias)'),
+        pular: z.number().int().min(0).optional().describe('quantas conversas pular antes de listar (para ver a próxima página)'),
+      },
+      annotations: ro,
+    },
+    (args) => executar('kommo_entrada', args, auditar, () => kommoEntrada(ctx, args)),
   );
   server.registerTool(
     'kommo_funis',
