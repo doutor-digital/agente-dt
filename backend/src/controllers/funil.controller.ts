@@ -22,6 +22,7 @@ import { contaChatwootDoAmbiente, criarContextoChatwoot, chamar, type ContextoCh
 import { createHash } from 'node:crypto';
 import { prisma } from '../lib/prisma.js';
 import { conversasDasPaginas, diaEmBelem, montarHoje } from '../lib/chatwoot-hoje.js';
+import { assistenteJs } from '../lib/chatwoot-assistente-ui.js';
 import {
   ATRIBUTO_ETAPA,
   MAX_PAGINAS,
@@ -145,10 +146,43 @@ async function autorizado(req: Request, res: Response): Promise<Acesso | null> {
   }
   const r = await quemEstaLogado(c, sessao);
   if (typeof r === 'object') return { c, logado: r.nome, logadoId: r.id, sessao };
-  if (r === 'invalida') res.status(403).json({ error: 'entre no Chatwoot de novo (sessão expirada)', sessao: 'invalida' });
+  recusarSessao(res, r, 403);
+  return null;
+}
+
+/** A resposta para uma sessão que não passou. O funil recusa login inválido com 403; a assistente, com 401. */
+function recusarSessao(res: Response, r: Exclude<Conferencia, object>, statusInvalida: 401 | 403): void {
+  if (r === 'invalida') res.status(statusInvalida).json({ error: 'entre no Chatwoot de novo (sessão expirada)', sessao: 'invalida' });
   else if (r === 'sem-conta') res.status(403).json({ error: 'seu usuário do Chatwoot não tem acesso a esta conta — peça para a Suzanne', sessao: 'sem-conta' });
   else if (r === 'excesso') res.status(429).json({ error: 'muitos acessos agora — tente em 1 minuto' });
   else res.status(502).json({ error: 'não consegui falar com o Chatwoot agora' });
+}
+
+/**
+ * Só o login do Chatwoot (nunca a chave do funil): quem mexe com conversa pelo login da PRÓPRIA pessoa. Serve à assistente da
+ * atendente, que precisa saber quem é e que caixas ela vê. Sem login = 401 (o funil usa 403; aqui a página tenta pedir de novo).
+ */
+export interface Atendente {
+  c: ContextoChatwoot;
+  sessao: SessaoChatwoot;
+  nome: string;
+  id: number | null;
+}
+
+export async function sessaoDaAtendente(req: Request, res: Response): Promise<Atendente | null> {
+  const c = contexto();
+  if (!c?.conta) {
+    res.status(404).json({ error: 'assistente desligada (Chatwoot não configurado)' });
+    return null;
+  }
+  const sessao = sessaoDosCabecalhos((n) => req.get(n));
+  if (!sessao) {
+    res.status(401).json({ error: 'abra a assistente pelo Chatwoot (entre no Chatwoot de novo)', sessao: 'invalida' });
+    return null;
+  }
+  const r = await quemEstaLogado(c, sessao);
+  if (typeof r === 'object') return { c, sessao, nome: r.nome, id: r.id };
+  recusarSessao(res, r, 401);
   return null;
 }
 
@@ -1178,7 +1212,17 @@ export function menuFunilHandler(_req: Request, res: Response): void {
     .type('application/javascript')
     .set('Cache-Control', 'public, max-age=300')
     .set('Cross-Origin-Resource-Policy', 'cross-origin')
-    .send(MENU_JS.replace('__AGENTE__', JSON.stringify(agente)));
+    .send(montarMenuJs(agente));
+}
+
+/**
+ * O que o Chatwoot carrega em `GET /funil/menu.js`: o menu (Hoje/Funil) e o botão da assistente da atendente. Dois blocos
+ * independentes no MESMO arquivo, porque o DASHBOARD_SCRIPTS da produção carrega só este endereço. Erro de EXECUÇÃO do botão
+ * não derruba o menu (o `try`); erro de SINTAXE derrubaria o arquivo todo, por isso o teste `menu.js … PARSEIAM` é obrigatório.
+ */
+export function montarMenuJs(agente: string): string {
+  const origem = JSON.stringify(agente);
+  return `${MENU_JS.split('__AGENTE__').join(origem)}\n;try{\n${assistenteJs().split('__AGENTE__').join(origem)}\n}catch(e){}\n`;
 }
 
 const MENU_JS = `(function(){

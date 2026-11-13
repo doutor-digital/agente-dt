@@ -157,6 +157,7 @@ import {
   funilTarefaFeitaHandler,
   funilTarefaHandler,
 } from '../controllers/funil.controller.js';
+import { assistenteEstadoHandler, assistentePerguntarHandler, assistenteSugerirHandler } from '../controllers/assistente.controller.js';
 import { centralChamadoFeitoHandler, centralChamadosHandler, centralEstadoHandler, centralGeralHandler, centralPessoaHandler } from '../controllers/central.controller.js';
 import { lidaEvolutionHandler } from '../lib/chatwoot-lida.js';
 import { eventoChatwootHandler } from '../lib/chatwoot-ia.js';
@@ -408,6 +409,10 @@ apiRouter.post('/public/funil/mensagem', funilMensagemHandler);
 apiRouter.post('/public/funil/tarefa', funilTarefaHandler);
 apiRouter.post('/public/funil/tarefa/:id/feita', funilTarefaFeitaHandler);
 apiRouter.post('/public/funil/novo', funilNovoHandler);
+// Assistente da atendente no Chatwoot (v1: só lê e sugere). Login do Chatwoot da própria pessoa; desligada sem CHATWOOT_ASSISTENTE_SLUGS.
+apiRouter.get('/public/assistente/estado', assistenteEstadoHandler);
+apiRouter.post('/public/assistente/sugerir', assistenteSugerirHandler);
+apiRouter.post('/public/assistente/perguntar', assistentePerguntarHandler);
 
 // Widgets privados do Kommo (coluna do cartão) leem a agenda da franquia com chave por unidade (sem sessão).
 apiRouter.get('/public/widget/:slug/ping', widgetPingHandler);
