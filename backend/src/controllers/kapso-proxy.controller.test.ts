@@ -4,7 +4,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chaveDoBearer, destinoNoKapso, kapsoProxyHandler, reescreverUrls } from './kapso-proxy.controller.js';
+import { chaveDoBearer, destinoNoKapso, kapsoProxyHandler, querySemChave, reescreverUrls } from './kapso-proxy.controller.js';
 
 const CHAVE = '1dfff777aaaabbbbccccddddeeeeffff00001111';
 
@@ -87,4 +87,20 @@ test('mídia: repassa bytes e tipo', async () => {
   assert.equal(res.statusCode, 200);
   assert.equal(res.cab['content-type'], 'audio/ogg');
   assert.deepEqual([...(res.corpo as Buffer)], [1, 2, 3]);
+});
+
+test('chave na URL (?access_token=, validação do Chatwoot): vale e NÃO segue para o Kapso', async () => {
+  assert.deepEqual(querySemChave(`/x?access_token=${CHAVE}&fields=id&limit=100`), { query: '?fields=id&limit=100', chave: CHAVE });
+  assert.deepEqual(querySemChave('/x'), { query: '', chave: null });
+  assert.deepEqual(querySemChave('/x?access_token=curta'), { query: '', chave: null });
+  const chamadas: Array<{ url: string; init: any }> = [];
+  const f = (async (url: string, init: any) => {
+    chamadas.push({ url, init });
+    return new Response('{"data":[]}', { status: 200, headers: { 'content-type': 'application/json' } });
+  }) as unknown as typeof fetch;
+  const res = resFalso();
+  await kapsoProxyHandler(reqFalso({ metodo: 'GET', caminho: 'v14.0/2146/message_templates', url: `/api/public/kapso-meta/v14.0/2146/message_templates?access_token=${CHAVE}` }), res, { fetch: f });
+  assert.equal(res.statusCode, 200);
+  assert.equal(chamadas[0]!.url, 'https://api.kapso.ai/meta/whatsapp/v14.0/2146/message_templates');
+  assert.equal(chamadas[0]!.init.headers['X-API-Key'], CHAVE);
 });

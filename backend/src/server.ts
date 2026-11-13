@@ -148,7 +148,7 @@ async function main(): Promise<void> {
 
   app.use((req, _res, next) => {
     // o token do cofre de arquivos viaja no caminho: nunca vai para o log
-    logger.debug({ method: req.method, url: req.url.replace(/^(\/arquivos\/(?:enviar|baixar)\/)[^/?]+/, '$1[token]').replace(/([?&]k=)[^&]+/, '$1[chave]') }, 'http');
+    logger.debug({ method: req.method, url: req.url.replace(/^(\/arquivos\/(?:enviar|baixar)\/)[^/?]+/, '$1[token]').replace(/([?&]k=)[^&]+/, '$1[chave]').replace(/([?&]access_token=)[^&]+/, '$1[chave]') }, 'http');
     next();
   });
 
