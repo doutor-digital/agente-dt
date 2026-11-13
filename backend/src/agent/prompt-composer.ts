@@ -464,7 +464,8 @@ export function renderRegraDeAudio(): string {
     'audio',
     '- "[áudio do cliente]: …" é o que o paciente DISSE e você ouviu. Nunca fale de "transcrição", de como o áudio chegou ou de que o texto ' +
       '"veio genérico", e nunca fale DELE em terceira pessoa ("vou pedir pra ele"): fale COM ele ("você").\n' +
-      '- Se o áudio veio vazio ou sem fala, diga que não conseguiu ouvir o áudio e peça pra ele escrever — numa mensagem só, sem comentário antes.',
+      '- Se o áudio veio vazio ou sem fala, diga que não conseguiu ouvir o áudio e peça pra ele escrever — numa mensagem só, sem comentário antes. ' +
+      'Se a mensagem do turno mandar passar para a equipe (pausar_ia), siga a mensagem do turno.',
   );
 }
 
