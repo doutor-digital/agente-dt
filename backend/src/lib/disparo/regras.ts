@@ -150,6 +150,16 @@ export interface ContextoDoPublico {
    * cairia como "repetido". Na franquia a conferência é da pessoa e isto fica desligado.
    */
   conferirCartoesRepetidos?: boolean;
+  /**
+   * A campanha usa o primeiro nome em alguma variável? Ausente = sim (o padrão seguro). Só então "nome que não serve para
+   * saudação" exclui: modelo sem variável de nome não tem saudação para estragar (o `coluna_trabalho_pesado` perdeu 28 de 250).
+   */
+  exigeNome?: boolean;
+}
+
+/** A campanha precisa do primeiro nome da pessoa? (alguma variável do modelo é `primeiroNome`) */
+export function campanhaUsaPrimeiroNome(variaveis: readonly unknown[]): boolean {
+  return variaveis.some((v) => v === 'primeiroNome');
 }
 
 export interface ResultadoDaTriagem {
@@ -208,8 +218,9 @@ export async function triar(candidatos: Candidato[], ctx: ContextoDoPublico): Pr
       nega('pediu-sair');
       continue;
     }
-    const nome = primeiroNomeSeguro(c.nome);
-    if (!nome) {
+    // Sem variável de nome no modelo o nome nem é usado: fica vazio em vez de excluir a pessoa.
+    const nome = primeiroNomeSeguro(c.nome) ?? '';
+    if (!nome && ctx.exigeNome !== false) {
       nega('nome-invalido');
       continue;
     }

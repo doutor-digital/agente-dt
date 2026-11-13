@@ -20,7 +20,7 @@ import { z } from 'zod';
 import type { Auditar } from '../franquia-mcp/ferramentas.js';
 import { ErroDeEntrada } from '../franquia-mcp/travas.js';
 import { executar } from './ferramenta.js';
-import { OFERTA_MAX, ROTULO_DA_EXCLUSAO, textoFinal, valoresDasVariaveis, type MotivoDeExclusao } from '../lib/disparo/regras.js';
+import { OFERTA_MAX, rotuloDaExclusao, textoFinal, valoresDasVariaveis } from '../lib/disparo/regras.js';
 import type { DadosDoPainel } from '../lib/disparo/painel.js';
 import type { CampanhaNaLista } from '../lib/disparo/campanha.js';
 import { camposDaCampanha, slugDaCampanha, type CampanhaEntrada } from '../lib/disparo/campanha-schema.js';
@@ -118,7 +118,7 @@ export function resumoDaOnda(d: DadosDoPainel, base: string | null) {
     etiqueta: d.onda.etiqueta,
     pessoas: d.onda.total,
     cartoesNaEtiqueta: d.resumo.candidatos ?? null,
-    foraDaLista: Object.fromEntries(Object.entries(d.resumo.fora ?? {}).filter(([, n]) => n).map(([m, n]) => [ROTULO_DA_EXCLUSAO[m as MotivoDeExclusao] ?? m, n])),
+    foraDaLista: Object.fromEntries(Object.entries(d.resumo.fora ?? {}).filter(([, n]) => n).map(([m, n]) => [rotuloDaExclusao(m, d.unidade.confereNoKommo), n])),
     modoDaUnidade: d.modo,
     avisoDoModo:
       d.modo === 'seco' ? 'MODO SECO: aprovar NÃO manda nada, só grava quem receberia.' : d.modo === 'desligado' ? 'Automação DESLIGADA nesta unidade: nada sai.' : 'Unidade LIGADA: aprovada, a onda sai sozinha dentro dos freios.',

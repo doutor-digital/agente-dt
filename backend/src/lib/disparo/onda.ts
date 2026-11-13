@@ -13,7 +13,7 @@ import { chaveDoLimite } from './limite.js';
 import { BATIDA_DA_MONTAGEM_MS } from './montagem.js';
 import { lerPublico, reaproveitarDeOndaCancelada, type PublicoLido } from './publico.js';
 import { conferirModeloNaMeta, definicaoParaAUnidade, impressaoDaOnda, podeAprovar, type Definicao } from './modelo.js';
-import { problemaNoModelo, triar } from './regras.js';
+import { campanhaUsaPrimeiroNome, problemaNoModelo, triar } from './regras.js';
 import { freiosDoAmbiente } from './freios.js';
 import { contarSairam } from './saidas.js';
 import { unidadeConfere } from './conferencia.js';
@@ -97,7 +97,7 @@ export async function concluirMontagem(ondaId: string, ler: (unit: Unit, etiquet
   batida.unref();
   try {
     const { candidatos, foraDoKommoDividido, jaNaCampanha, pediramSair, franquia, conferirCartoesRepetidos } = await ler(unit, onda.etiqueta, onda.campanhaId);
-    const { elegiveis, fora } = await triar(candidatos, { jaNaCampanha, pediramSair, franquia, conferirCartoesRepetidos });
+    const { elegiveis, fora } = await triar(candidatos, { jaNaCampanha, pediramSair, franquia, conferirCartoesRepetidos, exigeNome: campanhaUsaPrimeiroNome(definicaoDaOnda(onda).variaveis) });
 
     // Linhas de ondas canceladas que nunca enviaram nada voltam para esta; o resto é criado.
     const reaproveitadas = await reaproveitarDeOndaCancelada(onda.campanhaId, unit.id, ondaId, elegiveis);

@@ -12,7 +12,7 @@ import {
   type PortaDoKommo,
 } from './disparo/conferencia.js';
 import { alertaSemAndar } from './disparo/alerta.js';
-import { ROTULO_DA_EXCLUSAO, rotuloDaExclusao, triar } from './disparo/regras.js';
+import { ROTULO_DA_EXCLUSAO, campanhaUsaPrimeiroNome, rotuloDaExclusao, triar } from './disparo/regras.js';
 import type { FranquiaPorta } from './disparo/franquia.js';
 import { KommoApiError } from '../services/kommo.service.js';
 import { SPINE_STATUS } from '../services/spine.service.js';
@@ -39,9 +39,11 @@ type Cartao = { pipeline_id?: number; status_id?: number; contatos?: number[] };
 function kommoFalso(
   cartoes: Record<number, Cartao>,
   contatos: Record<number, number[]> = {},
-  falha: { lead?: 'lanca' | '404' | '204'; contato?: 'null' | 'lanca'; lista?: 'lanca' | 'corta' } = {},
+  falha: { lead?: 'lanca' | '404' | '204'; contato?: 'null' | 'lanca'; lista?: 'lanca' | 'corta'; telefone?: 'lanca' | 'cheia' } = {},
+  /** os contatos que a BUSCA POR TELEFONE devolve (os de fora do cartão: contato duplicado) */
+  porTelefone: Array<{ id: number; telefones: string[]; leadIds: number[] }> = [],
 ) {
-  const chamadas = { getLead: 0, contato: 0, lista: 0 };
+  const chamadas: { getLead: number; contato: number; lista: number; telefone: number; final8?: string } = { getLead: 0, contato: 0, lista: 0, telefone: 0 };
   const porta: PortaDoKommo = {
     getLead: async (id) => {
       chamadas.getLead++;
@@ -57,6 +59,13 @@ function kommoFalso(
       if (falha.contato === 'null') return null;
       if (falha.contato === 'lanca') throw new Error('boom');
       return contatos[id] ?? [];
+    },
+    contatosPorTelefone: async (final8) => {
+      chamadas.telefone++;
+      chamadas.final8 = final8;
+      if (falha.telefone === 'lanca') throw new Error('kommo 403');
+      if (falha.telefone === 'cheia') return Array.from({ length: 50 }, (_, i) => ({ id: 1000 + i, telefones: ['+55 63 98888-0000'], leadIds: [] }));
+      return porTelefone;
     },
     listLeadsPorIds: async (ids) => {
       chamadas.lista++;
@@ -127,13 +136,43 @@ test('escritório: QUALQUER leitura que falha no caminho = indisponivel, NUNCA l
   assert.equal(await confere(ESCRITORIO, env(REGRA), sozinho(COMERCIAL, 5), { ...PESSOA, leadId: null }), 'indisponivel', 'sem cartão não há o que olhar');
 });
 
-test('escritório: cartão que não existe mais (204 ou 404: apagado/mesclado) = lead-inexistente, não adiado para sempre', async () => {
-  assert.equal(await confere(ESCRITORIO, env(REGRA), kommoFalso({}, {}, { lead: '404' })), 'lead-inexistente');
+test('escritório: cartão que não existe mais (204/vazio: apagado/mesclado) = lead-inexistente; 404 ADIA (pode ser conta errada)', async () => {
+  assert.equal(await confere(ESCRITORIO, env(REGRA), kommoFalso({}, {}, { lead: '404' })), 'indisponivel', '404 não descarta ninguém');
   assert.equal(await confere(ESCRITORIO, env(REGRA), kommoFalso({}, {}, { lead: '204' })), 'lead-inexistente');
   assert.equal(await confere(ESCRITORIO, env(REGRA), kommoFalso({})), 'lead-inexistente', 'lead desconhecido do Kommo falso volta vazio');
   // 500 NÃO é "sumiu": continua indisponível
   const quebra: PortaDoKommo = { ...kommoFalso({}).porta, getLead: async () => { throw new KommoApiError('x', 500, null); } };
   assert.equal(await conferenciaDaUnidade(ESCRITORIO, { env: env(REGRA), kommo: quebra })(PESSOA), 'indisponivel');
+});
+
+test('escritório: CONTATO DUPLICADO com o mesmo telefone e sem etiqueta — o cartão do Jurídico dele conta (ja-cliente)', async () => {
+  // contato 1 (do cartão etiquetado, perdido) e contato 2 (outro contato, MESMO telefone, cartão 20 no Jurídico). O 2 não está no cartão 10.
+  const mundo = { 10: { pipeline_id: COMERCIAL, status_id: PERDIDO, contatos: [1] }, 20: { pipeline_id: JURIDICO, status_id: 3, contatos: [2] } };
+  const dupla = [{ id: 2, telefones: ['+55 63 99102-1043'], leadIds: [20] }];
+  const k = kommoFalso(mundo, { 1: [10] }, {}, dupla);
+  assert.equal(await confere(ESCRITORIO, env(REGRA), k), 'ja-cliente');
+  assert.equal(k.chamadas.final8, '91021043', 'a busca é pelos 8 últimos dígitos');
+  // sem o contato duplicado no resultado, a mesma pessoa é livre (prova que o que decide é a busca por telefone)
+  assert.equal(await confere(ESCRITORIO, env(REGRA), kommoFalso(mundo, { 1: [10] })), 'livre');
+});
+
+test('escritório: busca por telefone confere o NÚMERO — mesmo telefone sem o 9 vale; mesmos 8 dígitos em OUTRO DDD não; lixo da busca difusa não', async () => {
+  const mundo = { 10: { pipeline_id: COMERCIAL, status_id: PERDIDO, contatos: [1] }, 20: { pipeline_id: JURIDICO, status_id: 3 } };
+  const com = (telefones: string[]) => kommoFalso(mundo, { 1: [10] }, {}, [{ id: 2, telefones, leadIds: [20] }]);
+  assert.equal(await confere(ESCRITORIO, env(REGRA), com(['(63) 9102-1043'])), 'ja-cliente', 'sem DDI e sem o nono dígito (12 dígitos com 55)');
+  assert.equal(await confere(ESCRITORIO, env(REGRA), com(['556391021043'])), 'ja-cliente');
+  assert.equal(await confere(ESCRITORIO, env(REGRA), com(['+55 11 99102-1043'])), 'livre', 'outro DDD é outra pessoa');
+  assert.equal(await confere(ESCRITORIO, env(REGRA), com(['+55 63 98888-0000'])), 'livre', 'a busca difusa trouxe quem não é');
+  assert.equal(await confere(ESCRITORIO, env(REGRA), com(['91021043'])), 'ja-cliente', 'número sem DDD: casa pelos 8 últimos (lado seguro)');
+});
+
+test('escritório: busca por telefone que falha ou volta CHEIA (teto) = indisponivel, nunca livre', async () => {
+  const mundo = { 10: { pipeline_id: COMERCIAL, status_id: PERDIDO, contatos: [1] } };
+  assert.equal(await confere(ESCRITORIO, env(REGRA), kommoFalso(mundo, { 1: [10] }, { telefone: 'lanca' })), 'indisponivel');
+  assert.equal(await confere(ESCRITORIO, env(REGRA), kommoFalso(mundo, { 1: [10] }, { telefone: 'cheia' })), 'indisponivel');
+  // cartão do contato duplicado que o Kommo não devolve em filter[id] também não prova nada
+  const k = kommoFalso(mundo, { 1: [10] }, {}, [{ id: 2, telefones: ['+55 63 99102-1043'], leadIds: [77] }]);
+  assert.equal(await confere(ESCRITORIO, env(REGRA), k), 'indisponivel');
 });
 
 test('sem franquia e SEM regra = indisponivel para todos (como hoje); regra de outra unidade não vale; regra inválida não vale', async () => {
@@ -142,7 +181,7 @@ test('sem franquia e SEM regra = indisponivel para todos (como hoje); regra de o
   assert.equal(await confere(ESCRITORIO, env(`outra-unidade=${JURIDICO}`), k), 'indisponivel');
   assert.equal(await confere(ESCRITORIO, env(`magalhaes-advocacia=${JURIDICO},abc`), k), 'indisponivel', 'item ruim invalida a entrada toda');
   assert.equal(await confere(ESCRITORIO, env(`${JURIDICO}`), k), 'indisponivel', 'formato global/antigo: ninguém');
-  assert.deepEqual(k.chamadas, { getLead: 0, contato: 0, lista: 0 }, 'sem regra nem toca no Kommo');
+  assert.deepEqual(k.chamadas, { getLead: 0, contato: 0, lista: 0, telefone: 0 }, 'sem regra nem toca no Kommo');
   assert.equal(unidadeConfere(ESCRITORIO, {} as NodeJS.ProcessEnv), false);
   assert.equal(unidadeConfere(ESCRITORIO, env(REGRA)), true);
   assert.equal(usaRegraDeCliente(ESCRITORIO, env(REGRA)), true);
@@ -163,7 +202,7 @@ test('COM franquia o comportamento é o de sempre: a franquia responde, o Kommo 
   assert.equal(await c(franquia([])), 'livre', 'franquia livre = livre, mesmo o cartão estando no funil da regra');
   assert.equal(await c(franquia([{ clientName: 'Maria da Silva', dateAttendanceUtc: amanha, idStatus: SPINE_STATUS.AGENDADO }])), 'consulta-futura');
   assert.equal(await c(franquia('falha')), 'indisponivel');
-  assert.deepEqual(k.chamadas, { getLead: 0, contato: 0, lista: 0 });
+  assert.deepEqual(k.chamadas, { getLead: 0, contato: 0, lista: 0, telefone: 0 });
   assert.equal(unidadeConfere(CLINICA, {} as NodeJS.ProcessEnv), true);
   assert.equal(usaRegraDeCliente(CLINICA, comRegra), false, 'a triagem de cartões repetidos fica desligada na franquia');
 });
@@ -243,6 +282,24 @@ test('triagem: sem a regra de cartão (franquia) o repetido continua só repetid
   assert.deepEqual(r.elegiveis.map((e) => e.leadId), [1]);
   assert.deepEqual(r.fora, { 'repetido-na-lista': 1 });
   assert.equal(k.chamadas.getLead, 1);
+});
+
+test('nome: a exclusão por "nome que não serve para saudação" só vale se a campanha usa primeiroNome', async () => {
+  const franquia = () => 'livre' as const;
+  const gente = [cand(1, 'Maria Souza', '5563991021043'), cand(2, '28/04/25 facebook', '5563992021043'), cand(3, null as unknown as string, '5563993021043')];
+  const ctx = { jaNaCampanha: new Set<string>(), pediramSair: new Set<string>(), franquia };
+  // campanha SEM nome no modelo (coluna_trabalho_pesado: variaveis = []): ninguém sai por nome
+  const sem = await triar(gente, { ...ctx, exigeNome: campanhaUsaPrimeiroNome([]) });
+  assert.deepEqual(sem.elegiveis.map((e) => [e.leadId, e.nome]), [[1, 'Maria'], [2, ''], [3, '']]);
+  assert.deepEqual(sem.fora, {});
+  // texto fixo e unidade também não precisam de nome
+  assert.equal(campanhaUsaPrimeiroNome(['unidade', 'texto:oi']), false);
+  // campanha COM primeiroNome: segue excluindo
+  const com = await triar(gente, { ...ctx, exigeNome: campanhaUsaPrimeiroNome(['primeiroNome']) });
+  assert.deepEqual(com.elegiveis.map((e) => e.leadId), [1]);
+  assert.deepEqual(com.fora, { 'nome-invalido': 2 });
+  // ausente = exige (o padrão seguro)
+  assert.deepEqual((await triar(gente, ctx)).fora, { 'nome-invalido': 2 });
 });
 
 test('textos: sem franquia fala em Kommo (painel e alerta de onda parada); com franquia o texto é o de sempre', () => {
