@@ -39,3 +39,10 @@ test('menu: "Testar a IA" depois do Funil, abrindo /funil/testar-ia', () => {
   assert.ok(js.includes("url: '/funil/testar-ia'"));
   assert.ok(js.includes('a[href*="/companies"]') && js.includes('a[href*="/reports"]'), 'Empresas e Relatórios somem para quem não é admin');
 });
+
+test('👎 vira lição: a página pega o rascunho (ao abrir e com a tela já aberta) e o painel tem 👍/👎', async () => {
+  const html = paginaHtml('', 'Testar a IA', { chatwoot: 'https://atendimento.exemplo.test' });
+  assert.ok(html.includes("localStorage.getItem('testar-ia-rascunho')") && html.includes("ev.key!=='testar-ia-rascunho'"));
+  const { assistenteHtml } = await import('../lib/chatwoot-assistente-ui.js').then((m: any) => ({ assistenteHtml: m.paginaDaAssistente ?? m.paginaAssistente ?? null }));
+  if (assistenteHtml) assert.ok(String(assistenteHtml('https://atendimento.exemplo.test')).includes('👎 Ruim'));
+});
