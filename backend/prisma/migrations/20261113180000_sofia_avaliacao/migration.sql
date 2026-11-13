@@ -5,10 +5,12 @@ CREATE TABLE "sofia_mensagem" (
     "unit_slug" TEXT NOT NULL,
     "texto" TEXT NOT NULL,
     "fala" TEXT,
+    "acoes" TEXT[] DEFAULT ARRAY[]::TEXT[],
     "criado_em" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "sofia_mensagem_pkey" PRIMARY KEY ("message_id")
 );
 CREATE INDEX "sofia_mensagem_conversa_idx" ON "sofia_mensagem"("conversa");
+CREATE INDEX "sofia_mensagem_unit_slug_criado_em_idx" ON "sofia_mensagem"("unit_slug", "criado_em");
 
 CREATE TABLE "sofia_avaliacao" (
     "id" TEXT NOT NULL,

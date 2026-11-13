@@ -1,284 +1,279 @@
 /**
- * A tela "Agente" do menu do Chatwoot (pedido do João, 13/11/2026): a equipe da clínica cuida da própria Sofia, sem depender da
+ * A tela "Agente" do menu do Chatwoot (pedido do João, 13/11/2026): a equipe da clínica cuida da própria Sofia sem depender da
  * Doutor Digital — e o que precisa de código vira pedido para a gente.
  *
- *   Início    → como a Sofia está indo (👍/👎 da semana) e as respostas marcadas 👎 esperando alguém (ensinar, pedir, dar ok)
- *   Ensinar   → escrever o que ela deve fazer diferente, testar (antes × depois) e salvar; ligar/desligar as regras da unidade
+ *   Painel    → quantas pessoas a Sofia respondeu, quantas consultas marcou, conversão, quantas passou para a equipe, Pix, à noite
+ *               e no fim de semana, avaliações; por dia; as consultas que ela marcou; as respostas marcadas como ruins
+ *   Ensinar   → escrever o que ela deve fazer diferente, testar (hoje × com a regra) e salvar; ligar/desligar as regras da unidade
  *   Testar    → conversar com a Sofia como se fosse o paciente (nada vai a paciente)
- *   Pausadas  → conversas em que a equipe assumiu; reativar a Sofia
+ *   Pausadas  → conversas em que a equipe assumiu; devolver para a Sofia
  *   Pedir     → pedido à Doutor Digital (valor, horário, erro…): vira demanda no painel do suporte e avisa o bot de chamados
  *
- * Visual: o mesmo da tela "Minha IA" do agente.doutordigitalconsultoria.com (`frontend/src/components/unidade/estilos.ts`): noite
- * azul, cartões com fio de luz, Bricolage Grotesque nos números e títulos, Public Sans no texto.
+ * Desenho: o MESMO das telas Oportunidades/Marketing/Gestor (`chatwoot-telas-ui.ts`), que o João aprovou depois de reclamar de «cara
+ * de IA»: cores, bordas e fonte do próprio Chatwoot (escala slate, azul #2781f6 como única cor de destaque; verde/vermelho só para
+ * bom/ruim), números numa faixa com divisórias finas e a variação contra o período anterior, abas sublinhadas, listas densas, um
+ * gráfico só, sem sombra, sem gradiente, sem emoji nos controles. A definição de cada número fica no `title` do rótulo e em «Como
+ * cada número é contado», nunca embaixo do número.
  *
- * A sessão chega do menu do Chatwoot por postMessage (`funil:pede-sessao` → `funil-sessao`, com checagem de origem), igual às
- * outras telas do menu. Todo texto que vem do servidor entra por textContent (nunca innerHTML). O JavaScript não usa crase nem
- * `${`: o texto inteiro é um String.raw e só `__ORIGEM_CW__` é trocado.
+ * A sessão chega do menu do Chatwoot por postMessage (`funil:pede-sessao` → `funil-sessao`, com checagem de origem). Todo texto que
+ * vem do servidor entra por textContent (nunca innerHTML). O JavaScript não usa crase nem `${`: o texto é um String.raw e só
+ * `__ORIGEM_CW__` é trocado.
  */
 
 const PAGINA = String.raw`<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Agente · Sofia</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600..800&family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-:root{--noite:#070D18;--placa:#0E1728;--linha:rgba(255,255,255,.08);--linha2:rgba(255,255,255,.14);--osso:#EAF0F9;--nevoa:#B7C4D9;--bruma:#7E93B4;--vida:#4C9EFF;--carne:#2FBF71;--alerta:#FF6B3D;--sol:#F5B544}
+:root{--txt:#1c2024;--sec:#60646c;--mut:#8b8d98;--b:#e8e8ec;--b2:#d9d9e0;--suave:#f9f9fb;--azul:#2781f6;--azul-txt:#086de0;--azul-claro:#cfe3fd;--bom:#218358;--ruim:#ca244d;--amarelo:#c77700}
 *{box-sizing:border-box}html,body{margin:0}
-body{min-height:100vh;color:var(--osso);font:14.5px/1.5 "Public Sans",system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased;
-  background:radial-gradient(1100px 520px at 12% -12%,rgba(76,158,255,.13),transparent 62%),radial-gradient(760px 420px at 96% 4%,rgba(47,191,113,.08),transparent 60%),var(--noite);background-attachment:fixed}
+body{background:#fff;color:var(--txt);font:14px/1.45 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;-webkit-font-smoothing:antialiased}
 [hidden]{display:none!important}
-.display{font-family:"Bricolage Grotesque",system-ui,sans-serif;letter-spacing:-.025em}
-main{max-width:1180px;margin:0 auto;padding:22px 28px 56px}
-button{font:inherit}
-:focus-visible{outline:2px solid var(--vida);outline-offset:2px}
-.cartao{position:relative;overflow:hidden;border-radius:16px;border:1px solid var(--linha);background:linear-gradient(180deg,rgba(255,255,255,.055),rgba(255,255,255,.018))}
-.cartao::before{content:"";position:absolute;inset:0 0 auto;height:1px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.2),transparent);pointer-events:none}
-.viva{transition:transform .25s cubic-bezier(.16,1,.3,1),border-color .25s,box-shadow .25s}
-.viva:hover{transform:translateY(-2px);border-color:rgba(76,158,255,.35);box-shadow:0 10px 34px -18px rgba(76,158,255,.55)}
+button,select,input,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--azul);outline-offset:2px}
+main{max-width:1120px;margin:0 auto;padding:20px 24px 56px}
+h1{margin:0;font-size:16px;font-weight:600}
+h3{margin:0 0 4px;font-size:14px;font-weight:600;display:flex;align-items:baseline;gap:8px}
+h3 .c{color:var(--mut);font-weight:500;font-variant-numeric:tabular-nums}
+.meta{color:var(--sec);font-size:13px}
+.mut{color:var(--mut)}
+.cab{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 16px;margin-bottom:12px}
+.cab .eu{display:flex;align-items:center;gap:10px;color:var(--sec);font-size:13px}
+.topo{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:8px 16px;border-bottom:1px solid var(--b)}
+.abas{display:flex;gap:4px;flex-wrap:wrap}
+.abas button{position:relative;min-height:40px;padding:0 12px;border:0;background:transparent;color:var(--sec);font-weight:500;font-size:14px;cursor:pointer;border-radius:6px 6px 0 0}
+.abas button:hover{color:var(--txt)}
+.abas button[aria-selected=true]{color:var(--azul-txt);font-weight:600}
+.abas button[aria-selected=true]::after{content:"";position:absolute;left:8px;right:8px;bottom:-1px;height:2px;background:var(--azul);border-radius:2px}
+.abas .c{margin-left:6px;color:var(--mut);font-weight:500;font-variant-numeric:tabular-nums}
+.abas button[aria-selected=true] .c{color:var(--azul-txt)}
+.lado{display:flex;align-items:center;gap:10px;padding-bottom:6px}
+.sel{min-height:32px;padding:0 8px;border:1px solid var(--b2);border-radius:6px;background:#fff;font-size:13px;cursor:pointer}
+.bt{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:32px;padding:0 12px;border-radius:6px;border:1px solid var(--b2);background:#fff;color:var(--txt);font-weight:500;font-size:13px;cursor:pointer;white-space:nowrap;transition:background .12s,border-color .12s}
+.bt:hover{background:var(--suave);border-color:#cdced6}
+.bt.pri{background:var(--azul);border-color:var(--azul);color:#fff}
+.bt.pri:hover{background:#1073e9}
+.bt.link{border-color:transparent;background:transparent;color:var(--azul-txt);padding:0 6px}
+.bt.link:hover{background:#f5f9ff}
+.bt.leve{border-color:transparent;background:transparent;color:var(--sec)}
+.bt.leve:hover{background:var(--suave);color:var(--txt)}
+.bt:disabled{opacity:.5;cursor:default}
+.pane{padding-top:20px}
+.pane>*+*{margin-top:28px}
+.aviso{padding:9px 12px;border:1px solid #f0e2b6;border-radius:8px;background:#fffbeb;color:#6b4e00;font-size:13px;white-space:pre-wrap}
+.aviso.erro{border-color:#f4d0d8;background:#fff5f7;color:#8f1d3a}
 
-/* topo */
-.topo{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:14px;padding:16px 20px}
-.marca{display:flex;align-items:center;gap:14px}
-.pulso{position:relative;width:12px;height:12px;border-radius:50%;background:var(--vida);flex:none;margin:0 6px}
-.pulso::after{content:"";position:absolute;inset:-6px;border-radius:50%;border:2px solid var(--vida);opacity:0;animation:onda 2.4s cubic-bezier(.16,1,.3,1) infinite}
-@keyframes onda{0%{transform:scale(.4);opacity:.7}100%{transform:scale(1.6);opacity:0}}
-.sobre{font-size:10.5px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:var(--bruma)}
-.topo h1{margin:0;font-size:24px;font-weight:700;line-height:1.1}
-.topo h1 small{font:500 14px "Public Sans",sans-serif;color:var(--bruma);letter-spacing:0;margin-left:6px}
-.eu{display:flex;align-items:center;gap:10px;color:var(--bruma);font-size:12.5px}
-.eu select{width:auto;padding:7px 10px;border-radius:10px}
-.av{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;flex:none;font-weight:700;font-size:13px;background:rgba(76,158,255,.16);color:var(--vida)}
+/* números: uma faixa com divisórias finas */
+.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border:1px solid var(--b);border-radius:8px;overflow:hidden}
+.kpi{padding:14px 16px 12px;min-width:0;box-shadow:1px 0 0 var(--b),0 1px 0 var(--b)}
+.kpi .r{display:block;font-size:13px;color:var(--sec);cursor:help}
+.kpi .v{display:block;margin:4px 0 2px;font-size:24px;line-height:1.2;font-weight:600;letter-spacing:-.01em;font-variant-numeric:tabular-nums}
+.kpi .v.nulo{color:var(--mut)}
+.kpi .d{display:block;min-height:18px;font-size:12.5px;color:var(--mut);font-variant-numeric:tabular-nums}
+.kpi .d.bom{color:var(--bom)}.kpi .d.ruim{color:var(--ruim)}
 
-/* abas */
-.abas{display:flex;gap:4px;padding:6px;margin:14px 0 18px;overflow-x:auto;scrollbar-width:none}
-.aba{display:inline-flex;align-items:center;gap:8px;padding:9px 14px;border-radius:11px;border:0;background:transparent;color:var(--bruma);font-weight:600;font-size:13.5px;cursor:pointer;white-space:nowrap;transition:color .18s,background .18s}
-.aba svg{width:16px;height:16px;flex:none}
-.aba:hover{color:var(--osso);background:rgba(255,255,255,.045)}
-.aba[aria-selected="true"]{color:var(--osso);background:rgba(76,158,255,.14);box-shadow:inset 0 0 0 1px rgba(76,158,255,.38)}
-.conta{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:var(--alerta);color:#1d0b04;font-size:11px;font-weight:800}
-.conta.azul{background:var(--vida);color:#06101f}
+/* gráfico */
+.graf svg{display:block;width:100%;height:auto;overflow:visible;margin-top:8px}
+.graf text{font-family:inherit;font-size:11px;fill:var(--sec)}
+.leg{display:flex;flex-wrap:wrap;gap:4px 18px;margin:6px 0 0;padding:0;list-style:none;font-size:13px;color:var(--sec)}
+.leg li{display:flex;align-items:center;gap:6px}
+.leg i{width:10px;height:10px;border-radius:2px;flex:none}
+details.def{font-size:13px;color:var(--sec)}
+details.def summary{cursor:pointer;min-height:28px;display:inline-flex;align-items:center;gap:6px;list-style:none}
+details.def summary::-webkit-details-marker{display:none}
+details.def summary::before{content:"";width:6px;height:6px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(-45deg);transition:transform .15s}
+details.def[open]>summary::before{transform:rotate(45deg)}
+details.def summary:hover{color:var(--txt)}
+details.def ul{margin:6px 0 0;padding-left:18px}
+details.def li{margin:3px 0}
+.tabdia{width:100%;max-width:520px;margin-top:6px;border-collapse:collapse;font-variant-numeric:tabular-nums;font-size:13px}
+.tabdia th,.tabdia td{padding:5px 8px;border-bottom:1px solid var(--b);text-align:right}
+.tabdia th{color:var(--sec);font-weight:500}
+.tabdia th:first-child,.tabdia td:first-child{text-align:left;padding-left:0}
 
-/* números */
-.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
-.kpi{padding:18px 20px}
-.kpi .num{display:block;font-size:44px;font-weight:700;line-height:.95}
-.kpi .rot{margin-top:8px;font-size:12.5px;line-height:1.35;color:var(--bruma)}
-.kpi .rod{margin-top:6px;font-size:11.5px;font-weight:700}
-.bom{color:var(--carne)}.ruim{color:var(--alerta)}.calmo{color:var(--bruma)}
-.duas{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(0,1fr);gap:14px;margin-top:14px;align-items:start}
-.sec{padding:18px 20px}
-.sec h2{margin:0;font-family:"Bricolage Grotesque",system-ui,sans-serif;font-size:17px;font-weight:700;letter-spacing:-.02em}
-.sec .sub{margin:4px 0 14px;color:var(--bruma);font-size:12.5px;line-height:1.45}
-.vazio{padding:22px 4px;color:var(--bruma);font-size:13.5px;line-height:1.5}
-.vazio b{color:var(--osso)}
+/* duas colunas */
+.duas{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:32px;align-items:start}
+.duas.larga{grid-template-columns:minmax(0,1.35fr) minmax(0,1fr)}
 
-/* casos para revisar */
-.caso{border:1px solid var(--linha);border-radius:14px;padding:14px;background:rgba(255,255,255,.025);margin-top:10px}
-.caso:first-child{margin-top:0}
-.caso-topo{display:flex;justify-content:space-between;gap:10px;font-size:12px;color:var(--bruma);margin-bottom:8px}
-.caso-topo b{color:var(--osso)}
-.bolha{border-radius:14px;padding:9px 12px;font-size:13.5px;line-height:1.45;white-space:pre-wrap;word-break:break-word;margin-top:6px}
-.bolha small{display:block;font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--bruma);margin-bottom:3px}
-.bolha.pac{background:rgba(255,255,255,.06)}
-.bolha.sofia{background:rgba(76,158,255,.15)}
-.bolha.nova{background:rgba(47,191,113,.13);box-shadow:inset 0 0 0 1px rgba(47,191,113,.38)}
-.errado{margin:10px 0 0;padding:9px 12px;border-radius:12px;background:rgba(255,107,61,.09);color:#FFD2C2;font-size:13px;line-height:1.45;white-space:pre-wrap;word-break:break-word}
-.errado b{color:var(--alerta)}
-.acoes{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+/* listas densas */
+.lin{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 16px;align-items:center;padding:10px 0;border-top:1px solid var(--b)}
+.lin .nm{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lin .det{display:block;margin-top:1px;font-size:13px;color:var(--sec);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-variant-numeric:tabular-nums}
+.lin .btns{display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap}
+.vazio{margin:0;padding:12px 0;border-top:1px solid var(--b);color:var(--sec)}
+.vazio b{color:var(--txt);font-weight:600}
 
-/* botões e campos */
-.bt{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:36px;padding:8px 13px;border-radius:10px;border:1px solid var(--linha2);background:rgba(255,255,255,.04);color:var(--osso);font-weight:600;font-size:13px;line-height:1.1;cursor:pointer;transition:border-color .18s,background .18s,filter .18s;white-space:nowrap}
-.bt svg{width:15px;height:15px;flex:none}
-.bt:hover{border-color:rgba(76,158,255,.5);background:rgba(76,158,255,.08)}
-.bt.primario{background:var(--vida);border-color:var(--vida);color:#06101f}
-.bt.verde{background:var(--carne);border-color:var(--carne);color:#04140b}
-.bt.primario:hover,.bt.verde:hover{filter:brightness(1.08)}
-.bt.fantasma{border-color:transparent;background:transparent;color:var(--bruma)}
-.bt.fantasma:hover{color:var(--osso);background:rgba(255,255,255,.05)}
-.bt.grande{min-height:44px;padding:11px 18px;font-size:14px;border-radius:12px}
-.bt:disabled{opacity:.5;cursor:default;filter:none}
-textarea,input,select{width:100%;background:rgba(5,10,20,.55);border:1px solid var(--linha2);border-radius:12px;color:var(--osso);font:inherit;padding:12px 14px;transition:border-color .18s,box-shadow .18s}
-textarea{min-height:112px;resize:vertical;line-height:1.5}
-textarea::placeholder,input::placeholder{color:#5E7193}
-textarea:focus,input:focus,select:focus{outline:none;border-color:var(--vida);box-shadow:0 0 0 3px rgba(76,158,255,.18)}
-label.rot{display:flex;justify-content:space-between;gap:10px;font-size:13px;font-weight:600;color:var(--nevoa);margin:0 0 8px}
-label.rot span{font-weight:500;color:var(--bruma);font-size:12px}
-.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
-.chip{display:inline-flex;align-items:center;padding:6px 11px;border-radius:999px;border:1px dashed var(--linha2);background:transparent;color:var(--nevoa);font-size:12.5px;cursor:pointer;text-align:left;transition:border-color .18s,color .18s}
-.chip:hover{border-style:solid;border-color:var(--vida);color:var(--osso)}
-details.falas{margin-top:12px}
-details.falas summary{cursor:pointer;color:var(--bruma);font-size:12.5px;list-style:none}
-details.falas summary::before{content:"▸ ";}
-details.falas[open] summary::before{content:"▾ ";}
-details.falas input{margin-top:8px}
-.rodape-form{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;margin-top:14px}
-.nota{color:var(--bruma);font-size:12px}
-.aviso{padding:10px 12px;border-radius:12px;font-size:13px;line-height:1.45;margin-top:12px;white-space:pre-wrap}
-.aviso.erro{background:rgba(255,107,61,.1);color:#FFD2C2}
-.aviso.ok{background:rgba(47,191,113,.1);color:#BDF2D4}
+/* resposta para revisar */
+.caso{padding:12px 0;border-top:1px solid var(--b)}
+.caso .q{display:flex;justify-content:space-between;gap:8px;font-size:12.5px;color:var(--sec)}
+.caso .q b{color:var(--txt);font-weight:600}
+.caso dl{display:grid;grid-template-columns:62px minmax(0,1fr);gap:4px 10px;margin:8px 0 0;font-size:13.5px}
+.caso dt{color:var(--mut);font-size:12.5px;padding-top:1px}
+.caso dd{margin:0;white-space:pre-wrap;word-break:break-word}
+.caso dd.errado{color:var(--ruim)}
+.caso .btns{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
 
-/* prévia antes × depois */
-.previa-item{border-top:1px solid var(--linha);padding-top:14px;margin-top:14px}
-.previa-item:first-child{border-top:0;padding-top:0;margin-top:0}
-.lado{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px}
+/* ensinar */
+label.rot{display:flex;justify-content:space-between;gap:10px;font-size:13px;font-weight:500;color:var(--txt);margin:14px 0 6px}
+label.rot span{font-weight:400;color:var(--mut);font-variant-numeric:tabular-nums}
+textarea,input[type=text]{width:100%;border:1px solid var(--b2);border-radius:6px;background:#fff;padding:9px 11px;line-height:1.45;transition:border-color .12s,box-shadow .12s}
+textarea{min-height:96px;resize:vertical}
+textarea:focus,input[type=text]:focus{outline:none;border-color:var(--azul);box-shadow:0 0 0 3px rgba(39,129,246,.15)}
+textarea::placeholder,input::placeholder{color:var(--mut)}
+.exemplos{list-style:none;padding:0!important}
+.exemplos button{border:0;background:transparent;padding:2px 0;color:var(--azul-txt);cursor:pointer;text-align:left}
+.exemplos button:hover{text-decoration:underline}
+.falas input{margin-top:6px}
+.acoes{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;margin-top:12px}
+.antes-depois{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px}
+.antes-depois>div{border:1px solid var(--b);border-radius:8px;padding:9px 11px;font-size:13.5px;white-space:pre-wrap;word-break:break-word}
+.antes-depois>div.nova{border-color:#a9cdfb;background:#f5f9ff}
+.antes-depois small{display:block;margin-bottom:3px;color:var(--sec);font-size:12px;font-weight:500}
+.previa-item{padding:12px 0;border-top:1px solid var(--b)}
+.previa-item .fala{font-size:13px;color:var(--sec)}
+.previa-item .fala b{color:var(--txt);font-weight:500}
+.regra{display:flex;gap:12px;align-items:flex-start;padding:10px 0;border-top:1px solid var(--b)}
+.regra p{margin:0;flex:1;min-width:0;font-size:13.5px;white-space:pre-wrap;word-break:break-word}
+.regra small{display:block;margin-top:2px;color:var(--mut);font-size:12px}
+.regra.off p{color:var(--mut)}
+.sw{position:relative;width:32px;height:18px;margin-top:2px;border-radius:999px;border:0;background:#d9d9e0;cursor:pointer;flex:none;transition:background .15s}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.2);transition:transform .15s}
+.sw[aria-checked=true]{background:var(--azul)}
+.sw[aria-checked=true]::after{transform:translateX(14px)}
+details.equipe{margin-top:12px}
 
-/* regras */
-.regra{display:flex;gap:12px;align-items:flex-start;padding:12px 2px;border-top:1px solid var(--linha)}
-.regra:first-child{border-top:0}
-.regra p{margin:0;flex:1;min-width:0;font-size:13.5px;line-height:1.45;white-space:pre-wrap;word-break:break-word}
-.regra small{display:block;margin-top:3px;color:var(--bruma);font-size:11.5px}
-.regra.off p{color:var(--bruma)}
-.sw{position:relative;width:38px;height:22px;border-radius:999px;border:0;background:rgba(255,255,255,.14);cursor:pointer;flex:none;margin-top:1px;transition:background .2s}
-.sw::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;transition:transform .2s cubic-bezier(.16,1,.3,1)}
-.sw[aria-checked="true"]{background:var(--carne)}
-.sw[aria-checked="true"]::after{transform:translateX(16px)}
-details.equipe{margin-top:14px;border-top:1px solid var(--linha);padding-top:12px}
-details.equipe summary{cursor:pointer;color:var(--nevoa);font-size:13px;font-weight:600}
-details.equipe ul{margin:10px 0 0;padding-left:18px;color:var(--bruma);font-size:12.5px;line-height:1.55}
-details.equipe li{margin:3px 0}
-details.equipe li span{color:#5E7193}
+/* testar: a conversa com o desenho do Chatwoot (paciente à esquerda, Sofia à direita) */
+.chatbox{border:1px solid var(--b);border-radius:8px;overflow:hidden}
+.chatbox .cabc{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--b);font-size:13px;color:var(--sec)}
+.chatbox .cabc b{color:var(--txt);font-weight:600;font-size:14px}
+.chat{display:flex;flex-direction:column;gap:6px;height:min(56vh,520px);overflow-y:auto;padding:14px;background:#fcfcfd}
+.msg{max-width:76%;padding:8px 12px;border-radius:12px;font-size:14px;white-space:pre-wrap;word-break:break-word}
+.msg.pac{align-self:flex-start;background:#f0f0f3}
+.msg.sofia{align-self:flex-end;background:#dbe8fe}
+.msg.acao{align-self:flex-end;background:transparent;color:var(--amarelo);font-size:12px;padding:0 4px}
+.msg.dica{align-self:center;background:transparent;color:var(--sec);font-size:13px;text-align:center}
+.msg.dig{color:var(--sec)}
+.escrever{display:flex;gap:8px;padding:10px;border-top:1px solid var(--b)}
+.escrever textarea{min-height:40px;height:40px;resize:none}
+.lista-falas{margin:6px 0 0;padding:0;list-style:none}
+.lista-falas li{border-top:1px solid var(--b)}
+.lista-falas button{width:100%;border:0;background:transparent;text-align:left;padding:8px 0;cursor:pointer;color:var(--txt)}
+.lista-falas button:hover{color:var(--azul-txt)}
 
-/* passos */
-.passos{list-style:none;margin:0;padding:0}
-.passos li{display:flex;gap:12px;padding:11px 8px;border-radius:12px;cursor:pointer;transition:background .18s}
-.passos li:hover{background:rgba(255,255,255,.045)}
-.passos .n{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;flex:none;font:700 12.5px "Bricolage Grotesque",sans-serif;background:rgba(76,158,255,.16);color:var(--vida)}
-.passos b{display:block;font-size:13.5px}
-.passos span{display:block;color:var(--bruma);font-size:12.5px;line-height:1.4;margin-top:1px}
+/* tabela */
+.rolar{overflow-x:auto}
+table.tab{width:100%;border-collapse:collapse;font-size:14px}
+.tab th{padding:8px 12px;text-align:left;font-size:12px;font-weight:500;color:var(--sec);white-space:nowrap;border-bottom:1px solid var(--b2)}
+.tab td{padding:10px 12px;border-bottom:1px solid var(--b);vertical-align:middle}
+.tab th:first-child,.tab td:first-child{padding-left:0}
+.tab th:last-child,.tab td:last-child{padding-right:0;text-align:right;white-space:nowrap}
+.sem{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--sec);white-space:nowrap}
+.sem::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--ponto,#b9bbc6)}
+.sem.a{--ponto:#e5a100}.sem.g{--ponto:#30a46c}.sem.v{--ponto:#d9304f}
 
-/* conversa de teste */
-.teste{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:14px;align-items:start}
-.chat-topo{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 18px;border-bottom:1px solid var(--linha)}
-.chat-topo b{display:block;font-size:14px}
-.chat-topo span{font-size:12px;color:var(--bruma)}
-.selo{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;background:rgba(245,181,68,.12);color:var(--sol);font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;white-space:nowrap}
-.chat{display:flex;flex-direction:column;gap:8px;height:min(54vh,520px);overflow-y:auto;padding:18px}
-.msg{max-width:78%;padding:9px 13px;border-radius:16px;font-size:14px;line-height:1.45;white-space:pre-wrap;word-break:break-word;animation:entra .35s cubic-bezier(.16,1,.3,1) both}
-.msg.pac{align-self:flex-end;background:var(--vida);color:#06101f;border-bottom-right-radius:5px}
-.msg.sofia{align-self:flex-start;background:rgba(255,255,255,.075);border-bottom-left-radius:5px}
-.msg.acao{align-self:flex-start;font-size:11.5px;color:var(--sol);background:rgba(245,181,68,.1);border-radius:999px;padding:3px 10px}
-.msg.dica{align-self:center;color:var(--bruma);background:transparent;font-size:13px;text-align:center;max-width:90%}
-.pontos{display:inline-flex;gap:4px}.pontos i{width:6px;height:6px;border-radius:50%;background:var(--bruma);animation:pula 1.2s infinite}
-.pontos i:nth-child(2){animation-delay:.15s}.pontos i:nth-child(3){animation-delay:.3s}
-@keyframes pula{0%,60%,100%{opacity:.3;transform:none}30%{opacity:1;transform:translateY(-3px)}}
-.escrever{display:flex;gap:8px;padding:12px;border-top:1px solid var(--linha)}
-.escrever textarea{min-height:46px;height:46px;resize:none;border-radius:12px;padding:12px 14px}
+/* pedir */
+.tipos{display:flex;flex-direction:column;gap:2px;margin-top:10px}
+.tipos label{display:flex;align-items:center;gap:8px;padding:5px 0;cursor:pointer;font-size:14px}
+.tipos input{width:16px;height:16px;margin:0;accent-color:var(--azul)}
+.pedido{padding:10px 0;border-top:1px solid var(--b)}
+.pedido .l1{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.pedido .l1 b{font-weight:600}
+.pedido p{margin:4px 0 0;font-size:13.5px;white-space:pre-wrap;word-break:break-word;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.pedido .det{margin-top:2px;font-size:12.5px;color:var(--sec)}
+.pedido .resp{margin-top:6px;padding-left:10px;border-left:2px solid #a9d9bd;color:#185c3c;font-size:13px;white-space:pre-wrap}
 
-/* listas (pausadas e pedidos) */
-.item{display:flex;align-items:center;gap:12px;padding:12px 2px;border-top:1px solid var(--linha)}
-.item:first-child{border-top:0}
-.item .meio{flex:1;min-width:0}
-.item .meio b{display:block;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.item .meio small{display:block;color:var(--bruma);font-size:12px;margin-top:1px}
-.item .botoes{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
-.pedido{padding:12px 2px;border-top:1px solid var(--linha)}
-.pedido:first-child{border-top:0}
-.pedido .cab{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--bruma)}
-.pedido .cab b{color:var(--osso);font-size:13px}
-.pedido p{margin:6px 0 0;font-size:13px;line-height:1.45;color:var(--nevoa);white-space:pre-wrap;word-break:break-word;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
-.pedido .resp{margin-top:8px;padding:8px 10px;border-radius:10px;background:rgba(47,191,113,.08);color:#BDF2D4;font-size:12.5px;white-space:pre-wrap}
-.pil{display:inline-flex;align-items:center;padding:3px 9px;border-radius:999px;font-size:10.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase}
-.pil.fila{background:rgba(245,181,68,.14);color:var(--sol)}
-.pil.ok{background:rgba(47,191,113,.14);color:var(--carne)}
-.pil.reaberto{background:rgba(255,107,61,.14);color:var(--alerta)}
-.tipos{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px;margin-bottom:14px}
-.tipo{display:flex;gap:10px;align-items:center;padding:12px 13px;border-radius:12px;border:1px solid var(--linha2);background:rgba(255,255,255,.03);cursor:pointer;text-align:left;color:var(--osso);font-weight:600;font-size:13px;line-height:1.3;transition:border-color .18s,background .18s}
-.tipo:hover{border-color:rgba(76,158,255,.5)}
-.tipo[aria-checked="true"]{border-color:var(--vida);background:rgba(76,158,255,.11)}
-.tipo i{width:9px;height:9px;border-radius:50%;border:2px solid var(--bruma);flex:none}
-.tipo[aria-checked="true"] i{border-color:var(--vida);background:var(--vida);box-shadow:0 0 0 3px rgba(76,158,255,.2)}
-
-/* esqueleto, entrada, aviso flutuante */
-.osso{background:linear-gradient(90deg,rgba(255,255,255,.05) 25%,rgba(255,255,255,.1) 37%,rgba(255,255,255,.05) 63%);background-size:400% 100%;animation:brilha 1.5s ease infinite;border-radius:10px}
-@keyframes brilha{from{background-position:100% 0}to{background-position:-100% 0}}
-.entra{animation:entra .55s cubic-bezier(.16,1,.3,1) both}
-@keyframes entra{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
-.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);max-width:min(560px,calc(100vw - 32px));padding:11px 16px;border-radius:12px;background:#0F1B31;border:1px solid var(--linha2);box-shadow:0 18px 40px -12px rgba(0,0,0,.7);font-weight:600;font-size:13.5px;z-index:20;animation:entra .3s cubic-bezier(.16,1,.3,1) both}
-.toast.ok{box-shadow:inset 3px 0 0 var(--carne),0 18px 40px -12px rgba(0,0,0,.7)}
-.toast.erro{box-shadow:inset 3px 0 0 var(--alerta),0 18px 40px -12px rgba(0,0,0,.7)}
-.fim{margin-top:22px;color:#5E7193;font-size:12px;line-height:1.5;text-align:center}
-@media (max-width:980px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.duas,.teste{grid-template-columns:1fr}}
-@media (max-width:560px){main{padding:16px 16px 40px}.kpis{grid-template-columns:1fr}.lado{grid-template-columns:1fr}.kpi .num{font-size:38px}}
-@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+/* esqueleto e aviso flutuante */
+.sk{display:block;border-radius:6px;background:linear-gradient(90deg,#f0f0f3 0,#f9f9fb 40%,#f0f0f3 80%);background-size:300% 100%;animation:brilho 1.2s ease-in-out infinite}
+@keyframes brilho{from{background-position:100% 0}to{background-position:0 0}}
+.toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);max-width:min(560px,calc(100vw - 32px));padding:10px 14px;border-radius:8px;background:#1c2024;color:#fff;font-size:13.5px;z-index:20}
+.toast.erro{background:#8f1d3a}
+.rodape{margin-top:32px;color:var(--mut);font-size:12.5px}
+@media (max-width:900px){.duas,.duas.larga{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:560px){main{padding:16px 16px 40px}.antes-depois{grid-template-columns:1fr}.lin{grid-template-columns:1fr}.lin .btns{justify-content:flex-start}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style></head>
 <body><main>
-<header class="cartao topo entra">
-  <div class="marca">
-    <span class="pulso" aria-hidden="true"></span>
-    <div><div class="sobre" id="unidadeNome">Carregando…</div><h1 class="display">Sofia <small>a agente de vocês</small></h1></div>
-  </div>
-  <div class="eu"><select id="unidadeSel" aria-label="Unidade" hidden></select><span id="euNome"></span><span class="av" id="euAv" aria-hidden="true">·</span></div>
-</header>
-
+<div class="cab">
+  <div><h1>Agente</h1><div class="meta" id="unidadeNome">Carregando…</div></div>
+  <div class="eu"><select class="sel" id="unidadeSel" aria-label="Unidade" hidden></select><span id="euNome"></span></div>
+</div>
 <div id="erroTopo" class="aviso erro" hidden></div>
 
 <div id="corpo" hidden>
-<nav class="cartao abas" role="tablist" aria-label="Seções">
-  <button class="aba" role="tab" id="aba-inicio" data-aba="inicio" aria-selected="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg>Início<span class="conta" id="contaRevisar" hidden></span></button>
-  <button class="aba" role="tab" id="aba-ensinar" data-aba="ensinar" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 0 1 8.91 14"/></svg>Ensinar</button>
-  <button class="aba" role="tab" id="aba-testar" data-aba="testar" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg>Testar</button>
-  <button class="aba" role="tab" id="aba-pausadas" data-aba="pausadas" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M10 15V9"/><path d="M14 15V9"/></svg>Pausadas<span class="conta azul" id="contaPausadas" hidden></span></button>
-  <button class="aba" role="tab" id="aba-pedir" data-aba="pedir" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4"/><path d="m4.93 4.93 4.24 4.24"/><path d="m14.83 9.17 4.24-4.24"/><path d="m14.83 14.83 4.24 4.24"/><path d="m9.17 14.83-4.24 4.24"/></svg>Pedir à Doutor Digital<span class="conta azul" id="contaPedidos" hidden></span></button>
-</nav>
+<div class="topo">
+  <nav class="abas" role="tablist" aria-label="Seções">
+    <button role="tab" id="aba-painel" data-aba="painel" aria-selected="true">Painel</button>
+    <button role="tab" id="aba-ensinar" data-aba="ensinar" aria-selected="false">Ensinar</button>
+    <button role="tab" id="aba-testar" data-aba="testar" aria-selected="false">Testar</button>
+    <button role="tab" id="aba-pausadas" data-aba="pausadas" aria-selected="false">Pausadas<span class="c" id="contaPausadas"></span></button>
+    <button role="tab" id="aba-pedir" data-aba="pedir" aria-selected="false">Pedir à Doutor Digital<span class="c" id="contaPedidos"></span></button>
+  </nav>
+  <div class="lado" id="ladoPainel"><select class="sel" id="periodo" aria-label="Período"><option value="hoje">Hoje</option><option value="7">Últimos 7 dias</option><option value="30">Últimos 30 dias</option></select></div>
+</div>
 
-<!-- INÍCIO -->
-<section id="pane-inicio" role="tabpanel" aria-labelledby="aba-inicio">
-  <div class="kpis">
-    <div class="cartao kpi viva entra"><span class="num display" id="kBoas">—</span><div class="rot">das respostas avaliadas foram boas, nos últimos 7 dias</div><div class="rod" id="kBoasRod"></div></div>
-    <div class="cartao kpi viva entra" style="animation-delay:60ms"><span class="num display" id="kRevisar">—</span><div class="rot">respostas marcadas 👎 esperando alguém olhar</div></div>
-    <div class="cartao kpi viva entra" style="animation-delay:120ms"><span class="num display" id="kPausadas">—</span><div class="rot">conversas abertas em que a equipe assumiu (Sofia calada)</div></div>
-    <div class="cartao kpi viva entra" style="animation-delay:180ms"><span class="num display" id="kRegras">—</span><div class="rot">regras que vocês ensinaram, ligadas agora</div></div>
-  </div>
-  <div class="duas">
-    <section class="cartao sec entra" style="animation-delay:220ms">
-      <h2>Para revisar</h2>
-      <p class="sub">Respostas da Sofia que alguém da equipe marcou 👎. Ensine o jeito certo, peça para a gente ajustar ou dê ok.</p>
-      <div id="listaRevisar"><div class="osso" style="height:120px"></div></div>
+<!-- PAINEL -->
+<section class="pane" id="pane-painel" role="tabpanel" aria-labelledby="aba-painel">
+  <div class="kpis" id="kpis"><span class="sk" style="height:84px"></span></div>
+  <section class="graf">
+    <h3>Por dia <span class="c">últimos 14 dias</span></h3>
+    <div id="grafico"><span class="sk" style="height:150px;margin-top:8px"></span></div>
+    <ul class="leg"><li><i style="background:var(--azul-claro)"></i>Pessoas respondidas</li><li><i style="background:var(--azul)"></i>Consultas marcadas</li></ul>
+    <details class="def" style="margin-top:4px"><summary>Ver como tabela</summary><div class="rolar"><table class="tabdia" id="tabDia"></table></div></details>
+  </section>
+  <div class="duas larga">
+    <section>
+      <h3>Respostas marcadas como ruins <span class="c" id="cRevisar"></span></h3>
+      <div class="meta">Ficam aqui até alguém ensinar a Sofia, pedir ajuste ou dar ok.</div>
+      <div id="listaRevisar" style="margin-top:8px"><span class="sk" style="height:60px"></span></div>
     </section>
-    <section class="cartao sec entra" style="animation-delay:280ms">
-      <h2>Como cuidar da Sofia</h2>
-      <p class="sub">Vocês mesmas deixam a Sofia do jeito da clínica.</p>
-      <ol class="passos">
-        <li data-ir="inicio"><span class="n">1</span><div><b>Marque 👍 ou 👎 nas respostas dela</b><span>Na conversa, passe o mouse no balão da Sofia. O 👎 aparece aqui em “Para revisar”.</span></div></li>
-        <li data-ir="ensinar"><span class="n">2</span><div><b>Ensine o que fazer diferente</b><span>Escreva a regra, veja a Sofia antes e depois, e salve. Vale na hora.</span></div></li>
-        <li data-ir="testar"><span class="n">3</span><div><b>Teste como se fosse paciente</b><span>Converse com ela aqui. Nada vai para paciente.</span></div></li>
-        <li data-ir="pedir"><span class="n">4</span><div><b>O resto, peça para a gente</b><span>Valor, horários, médicos, informação da clínica ou um erro: a Doutor Digital ajusta.</span></div></li>
-      </ol>
+    <section>
+      <h3>Consultas que a Sofia marcou <span class="c" id="cMarcadas"></span></h3>
+      <div class="meta">No período escolhido.</div>
+      <div id="listaMarcadas" style="margin-top:8px"><span class="sk" style="height:60px"></span></div>
     </section>
   </div>
+  <details class="def"><summary>Como cada número é contado</summary><ul>
+    <li><b>Pessoas respondidas</b>: conversas em que a Sofia mandou pelo menos uma resposta no período.</li>
+    <li><b>Consultas marcadas</b>: consultas que a Sofia marcou na agenda da franquia por uma conversa do Chatwoot.</li>
+    <li><b>Marcaram</b>: consultas marcadas ÷ pessoas respondidas.</li>
+    <li><b>Passou para a equipe</b>: conversas em que ela chamou alguém da equipe (paciente pediu uma pessoa, assunto que ela não resolve).</li>
+    <li><b>Pix do sinal gerado</b>: conversas em que ela gerou o Pix do sinal.</li>
+    <li><b>Para revisar</b>: respostas marcadas como ruins que ninguém revisou ainda.</li>
+    <li><b>À noite ou no fim de semana</b>: respostas antes das 8h, a partir das 18h, sábado e domingo.</li>
+    <li><b>Avaliadas como boas</b>: das avaliações que a equipe deu nos balões da Sofia, quantas foram positivas.</li>
+    <li>Cada número compara com o período anterior do mesmo tamanho (hoje com ontem até a mesma hora).</li>
+  </ul></details>
 </section>
 
 <!-- ENSINAR -->
-<section id="pane-ensinar" role="tabpanel" aria-labelledby="aba-ensinar" hidden>
+<section class="pane" id="pane-ensinar" role="tabpanel" aria-labelledby="aba-ensinar" hidden>
   <div class="duas">
-    <div>
-      <section class="cartao sec">
-        <h2>Ensinar a Sofia</h2>
-        <p class="sub" id="ensinarSub">Uma regra por vez, curta e direta. Antes de salvar, você vê como ela responde hoje e como vai responder com a regra.</p>
-        <label class="rot" for="regra">O que a Sofia deve fazer diferente? <span id="cnt">0/400</span></label>
-        <textarea id="regra" maxlength="800" placeholder="Ex.: Quando o paciente perguntar o valor, diga o valor da consulta antes de perguntar sobre a dor."></textarea>
-        <p class="nota" style="margin:12px 0 0">Ideias para começar:</p>
-        <div class="chips" id="ideias" aria-label="Ideias de regra" style="margin-top:6px"></div>
-        <details class="falas"><summary>Falas de paciente usadas no teste (pode trocar)</summary>
-          <input id="f0" maxlength="500" aria-label="Fala 1"><input id="f1" maxlength="500" aria-label="Fala 2"><input id="f2" maxlength="500" aria-label="Fala 3">
-        </details>
-        <div class="rodape-form"><span class="nota" id="previasNota"></span><button class="bt primario grande" id="btPrevia" type="button">Testar antes de salvar</button></div>
-        <div id="avisoPrevia" class="aviso erro" hidden></div>
-      </section>
-      <section class="cartao sec" id="cardPrevia" hidden style="margin-top:14px">
-        <h2>Como a Sofia responde</h2>
-        <p class="sub">Nada foi salvo ainda. Gostou da coluna verde? Salve.</p>
-        <div id="previa"></div>
-        <div class="rodape-form"><button class="bt fantasma" id="btAjustar" type="button">Ajustar o texto</button><button class="bt verde grande" id="btSalvar" type="button">Salvar regra</button></div>
-        <div id="avisoSalvar" class="aviso erro" hidden></div>
-      </section>
-    </div>
-    <section class="cartao sec">
-      <h2>Regras de vocês</h2>
-      <p class="sub">A Sofia segue as ligadas em toda conversa desta unidade. Desligue a que não vale mais.</p>
-      <div id="listaRegras"><div class="osso" style="height:80px"></div></div>
-      <details class="equipe" id="equipe" hidden><summary id="equipeResumo"></summary>
-        <p class="nota" style="margin:8px 0 0">Quem cuida destas é a equipe da Doutor Digital. Se alguma estiver atrapalhando, peça para a gente.</p>
+    <section>
+      <h3>Ensinar a Sofia</h3>
+      <div class="meta">Uma regra por vez, curta e direta. Antes de salvar você vê como ela responde hoje e como vai responder com a regra.</div>
+      <label class="rot" for="regra">O que a Sofia deve fazer diferente? <span id="cnt">0/400</span></label>
+      <textarea id="regra" maxlength="800" placeholder="Quando o paciente perguntar o valor, diga o valor da consulta antes de perguntar sobre a dor."></textarea>
+      <details class="def" style="margin-top:6px"><summary>Exemplos</summary><ul class="exemplos" id="exemplos"></ul></details>
+      <details class="def falas"><summary>Falas de paciente usadas no teste</summary>
+        <input type="text" id="f0" maxlength="500" aria-label="Fala 1"><input type="text" id="f1" maxlength="500" aria-label="Fala 2"><input type="text" id="f2" maxlength="500" aria-label="Fala 3">
+      </details>
+      <div class="acoes"><span class="meta" id="previasNota"></span><button class="bt pri" id="btPrevia" type="button">Testar antes de salvar</button></div>
+      <div id="avisoPrevia" class="aviso erro" hidden style="margin-top:10px"></div>
+      <div id="cardPrevia" hidden style="margin-top:20px">
+        <h3>Como a Sofia responde</h3>
+        <div class="meta">Nada foi salvo ainda.</div>
+        <div id="previa" style="margin-top:6px"></div>
+        <div class="acoes"><button class="bt leve" id="btAjustar" type="button">Ajustar o texto</button><button class="bt pri" id="btSalvar" type="button">Salvar regra</button></div>
+        <div id="avisoSalvar" class="aviso erro" hidden style="margin-top:10px"></div>
+      </div>
+    </section>
+    <section>
+      <h3>Regras de vocês <span class="c" id="cRegras"></span></h3>
+      <div class="meta">A Sofia segue as ligadas em toda conversa desta unidade.</div>
+      <div id="listaRegras" style="margin-top:8px"><span class="sk" style="height:60px"></span></div>
+      <details class="def equipe" id="equipe" hidden><summary id="equipeResumo"></summary>
+        <div class="meta" style="margin-top:4px">Quem cuida destas é a Doutor Digital. Se alguma atrapalha, faça um pedido.</div>
         <ul id="listaEquipe"></ul>
       </details>
     </section>
@@ -286,55 +281,52 @@ details.equipe li span{color:#5E7193}
 </section>
 
 <!-- TESTAR -->
-<section id="pane-testar" role="tabpanel" aria-labelledby="aba-testar" hidden>
-  <div class="teste">
-    <section class="cartao">
-      <div class="chat-topo"><div><b>Conversa de teste com a Sofia</b><span>Escreva como se fosse o paciente</span></div><span class="selo">nada vai para paciente</span></div>
+<section class="pane" id="pane-testar" role="tabpanel" aria-labelledby="aba-testar" hidden>
+  <div class="duas larga">
+    <div class="chatbox">
+      <div class="cabc"><b>Conversa de teste</b><span>nada é enviado ao paciente</span></div>
       <div class="chat" id="chat" aria-live="polite"></div>
-      <div class="escrever"><textarea id="fala" maxlength="600" aria-label="Fala do paciente" placeholder="Escreva como o paciente… (Ctrl+Enter envia)"></textarea><button class="bt primario" id="btEnviar" type="button">Enviar</button></div>
-    </section>
-    <section class="cartao sec">
-      <h2>Experimente perguntar</h2>
-      <p class="sub">Toque numa fala para usar.</p>
-      <div class="chips" id="sugestoes" style="margin-top:0"></div>
-      <p class="nota" id="restam" style="margin:14px 0 0"></p>
-      <div class="acoes"><button class="bt" id="btRegraDaqui" type="button">A Sofia errou aqui? Ensinar</button><button class="bt fantasma" id="btRecomecar" type="button">Recomeçar</button></div>
-      <div id="avisoChat" class="aviso erro" hidden></div>
-      <p class="nota" style="margin-top:14px">Agenda e Pix aqui são de mentira: nada vai para a franquia, o Kommo ou o WhatsApp. A conversa fica só neste computador.</p>
+      <div class="escrever"><textarea id="fala" maxlength="600" aria-label="Fala do paciente" placeholder="Escreva como o paciente (Ctrl+Enter envia)"></textarea><button class="bt pri" id="btEnviar" type="button">Enviar</button></div>
+    </div>
+    <section>
+      <h3>Falas para testar</h3>
+      <ul class="lista-falas" id="sugestoes"></ul>
+      <div class="acoes"><span class="meta" id="restam"></span></div>
+      <div class="acoes" style="justify-content:flex-start"><button class="bt" id="btRegraDaqui" type="button">Ela errou? Ensinar</button><button class="bt leve" id="btRecomecar" type="button">Recomeçar</button></div>
+      <div id="avisoChat" class="aviso erro" hidden style="margin-top:10px"></div>
+      <p class="meta" style="margin-top:16px">Agenda e Pix aqui são de mentira: nada vai para a franquia, o Kommo ou o WhatsApp. A conversa fica só neste computador.</p>
     </section>
   </div>
 </section>
 
 <!-- PAUSADAS -->
-<section id="pane-pausadas" role="tabpanel" aria-labelledby="aba-pausadas" hidden>
-  <section class="cartao sec">
-    <h2>Conversas com a Sofia pausada</h2>
-    <p class="sub">A Sofia sai da frente sozinha quando alguém da equipe responde (pelo Chatwoot ou pelo celular) e volta quando a conversa é resolvida. Aqui você devolve a conversa para ela antes, se quiser.</p>
-    <div id="listaPausadas"><div class="osso" style="height:80px"></div></div>
+<section class="pane" id="pane-pausadas" role="tabpanel" aria-labelledby="aba-pausadas" hidden>
+  <section>
+    <h3>Conversas com a Sofia pausada <span class="c" id="cPausadas"></span></h3>
+    <div class="meta">A Sofia sai da frente quando alguém da equipe responde (pelo Chatwoot ou pelo celular) e volta quando a conversa é resolvida. Aqui dá para devolver antes.</div>
+    <div class="rolar" style="margin-top:8px"><table class="tab"><thead><tr><th>Paciente</th><th>Pausada por</th><th>Desde</th><th>Com</th><th></th></tr></thead><tbody id="listaPausadas"></tbody></table></div>
   </section>
 </section>
 
 <!-- PEDIR -->
-<section id="pane-pedir" role="tabpanel" aria-labelledby="aba-pedir" hidden>
+<section class="pane" id="pane-pedir" role="tabpanel" aria-labelledby="aba-pedir" hidden>
   <div class="duas">
-    <section class="cartao sec">
-      <h2>Pedir à Doutor Digital</h2>
-      <p class="sub">O que não dá para mudar por aqui — valor, horários, médicos, informação da clínica ou um erro da Sofia — a nossa equipe ajusta. A gente recebe na hora e a resposta aparece ao lado.</p>
+    <section>
+      <h3>Pedir à Doutor Digital</h3>
+      <div class="meta">Valor, horários, médicos, informação da clínica ou um erro da Sofia: isso a nossa equipe ajusta. A resposta aparece na lista ao lado.</div>
       <div class="tipos" id="tipos" role="radiogroup" aria-label="Tipo do pedido"></div>
-      <label class="rot" for="pedidoTexto">Explique o que precisa <span id="cntPedido">0/1500</span></label>
-      <textarea id="pedidoTexto" maxlength="1500" placeholder="Ex.: A partir de 1º de dezembro a consulta passa a custar R$ 380 (com sinal, R$ 280)."></textarea>
-      <div class="rodape-form"><span class="nota">Quem pede: <b id="pedidoQuem"></b></span><button class="bt primario grande" id="btPedir" type="button">Enviar pedido</button></div>
-      <div id="avisoPedido" class="aviso erro" hidden></div>
+      <label class="rot" for="pedidoTexto">O que precisa? <span id="cntPedido">0/1500</span></label>
+      <textarea id="pedidoTexto" maxlength="1500" placeholder="A partir de 1º de dezembro a consulta passa a custar R$ 380 (com sinal, R$ 280)."></textarea>
+      <div class="acoes"><span class="meta">Em nome de <b id="pedidoQuem"></b></span><button class="bt pri" id="btPedir" type="button">Enviar pedido</button></div>
+      <div id="avisoPedido" class="aviso erro" hidden style="margin-top:10px"></div>
     </section>
-    <section class="cartao sec">
-      <h2>Pedidos da unidade</h2>
-      <p class="sub">Dos últimos 60 dias.</p>
-      <div id="listaPedidos"><div class="osso" style="height:80px"></div></div>
+    <section>
+      <h3>Pedidos da unidade <span class="c">últimos 60 dias</span></h3>
+      <div id="listaPedidos" style="margin-top:4px"><span class="sk" style="height:60px"></span></div>
     </section>
   </div>
 </section>
-
-<p class="fim" id="fim">Tudo aqui vale só para a unidade escolhida. A equipe da Doutor Digital é avisada de cada regra nova e de cada pedido.</p>
+<p class="rodape">Vale só para a unidade escolhida. A Doutor Digital é avisada de cada regra nova e de cada pedido.</p>
 </div>
 </main>
 <div id="toast" class="toast" role="status" hidden></div>
@@ -345,176 +337,227 @@ details.equipe li span{color:#5E7193}
   function el(tag, cls, txt){ var e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; }
   function guardar(k, v){ try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) {} }
   function lerGuardado(k){ try { return localStorage.getItem(k); } catch (e) { return null; } }
-
-  // ── aviso flutuante ──
   var tToast = null;
-  function toast(txt, ok){ var t = $('toast'); t.textContent = txt; t.className = 'toast ' + (ok === false ? 'erro' : 'ok'); t.hidden = false; clearTimeout(tToast); tToast = setTimeout(function(){ t.hidden = true; }, 4200); }
+  function toast(txt, erro){ var t = $('toast'); t.textContent = txt; t.className = 'toast' + (erro ? ' erro' : ''); t.hidden = false; clearTimeout(tToast); tToast = setTimeout(function(){ t.hidden = true; }, 4000); }
   function aviso(id, txt){ var a = $(id); a.textContent = txt; a.hidden = false; }
   function some(id){ $(id).hidden = true; }
+  function erroEm(box, msg){ box.textContent = ''; box.appendChild(el('div', 'aviso erro', msg)); }
 
   // ── servidor (com o login do Chatwoot de quem está usando) ──
   function cab(){ var h = { 'Content-Type': 'application/json' }; if (S) { h['X-CW-Token'] = S.token; h['X-CW-Client'] = S.client; h['X-CW-Uid'] = S.uid; } return h; }
   async function api(method, path, body){
     var r = await fetch(path, { method: method, headers: cab(), body: method === 'GET' ? undefined : JSON.stringify(body || {}) });
     var j = await r.json().catch(function(){ return {}; });
-    if (!r.ok) { var er = new Error(j.error || ('erro ' + r.status)); er.dados = j; er.status = r.status; if (r.status === 401) { S = null; pedirSessao(); } throw er; }
+    if (!r.ok) { var er = new Error(j.error || ('erro ' + r.status)); er.dados = j; if (r.status === 401) { S = null; pedirSessao(); } throw er; }
     return j;
   }
-  function apiUnidade(){ return '/api/public/aprendizados/' + encodeURIComponent(U.slug); }
+  function enc(x){ return encodeURIComponent(x); }
+  function apiUnidade(){ return '/api/public/aprendizados/' + enc(U.slug); }
 
-  // ── datas ──
+  // ── datas e números ──
   function ha(iso){
     var d = new Date(iso), s = (Date.now() - d.getTime()) / 1000; if (isNaN(s)) return '';
     if (s < 60) return 'agora'; if (s < 3600) return 'há ' + Math.floor(s / 60) + ' min'; if (s < 86400) return 'há ' + Math.floor(s / 3600) + ' h';
     var dias = Math.floor(s / 86400); if (dias === 1) return 'ontem'; if (dias < 7) return 'há ' + dias + ' dias';
     return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
   }
-  function iniciais(nome){ var p = String(nome || '').trim().split(/\s+/); return ((p[0] || '·')[0] + (p.length > 1 ? p[p.length - 1][0] : '')).toUpperCase(); }
+  function diaMes(d){ var p = String(d).split('-'); return p.length === 3 ? p[2] + '/' + p[1] : d; }
+  function consultaEm(s){ var m = String(s || '').match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/); return m ? (m[3] + '/' + m[2] + ' às ' + m[4] + 'h' + (m[5] !== '00' ? m[5] : '')) : ''; }
+  function plural(n, um, varios){ return n + ' ' + (n === 1 ? um : varios); }
 
   // ── abas ──
-  var ABAS = ['inicio', 'ensinar', 'testar', 'pausadas', 'pedir'], abaAtual = 'inicio';
+  var ABAS = ['painel', 'ensinar', 'testar', 'pausadas', 'pedir'], abaAtual = 'painel';
   function ir(qual){
-    if (ABAS.indexOf(qual) < 0 || $('aba-' + qual).hidden) qual = 'inicio';
+    if (ABAS.indexOf(qual) < 0 || $('aba-' + qual).hidden) qual = 'painel';
     abaAtual = qual;
     ABAS.forEach(function(a){ $('pane-' + a).hidden = a !== qual; $('aba-' + a).setAttribute('aria-selected', a === qual ? 'true' : 'false'); });
+    $('ladoPainel').hidden = qual !== 'painel';
     guardar('agente:aba', qual);
-    if (qual === 'inicio') carregarInicio();
+    if (qual === 'painel') carregarPainel();
     if (qual === 'ensinar') carregarRegras();
     if (qual === 'testar') { desenharChat(false); setTimeout(function(){ $('fala').focus(); }, 50); }
     if (qual === 'pausadas') carregarPausadas();
     if (qual === 'pedir') carregarPedidos();
-    window.scrollTo(0, 0);
   }
   ABAS.forEach(function(a){ $('aba-' + a).addEventListener('click', function(){ ir(a); }); });
-  Array.prototype.forEach.call(document.querySelectorAll('[data-ir]'), function(li){ li.addEventListener('click', function(){ ir(li.getAttribute('data-ir')); }); });
 
-  // ── estado da unidade (regras, prévias, conversa de teste) ──
+  // ── estado da unidade (regras, testes de regra, conversa de teste) ──
   var EST = null, MAX = 400, falasPadrao = [];
   async function lerEstado(){
     EST = await api('GET', apiUnidade());
     MAX = EST.maxCaracteres || 400; falasPadrao = EST.falasDeExemplo || [];
     ['f0', 'f1', 'f2'].forEach(function(id, i){ if (!$(id).value) $(id).value = falasPadrao[i] || ''; });
-    var minhas = EST.regras.filter(function(r){ return r.daUnidade && r.enabled; }).length;
-    $('kRegras').textContent = String(minhas);
-    var conv = EST.conversa || {};
-    $('aba-testar').hidden = conv.maximo === 0;
-    $('previasNota').textContent = EST.previasRestantes != null ? ('Restam ' + EST.previasRestantes + ' testes de regra hoje.') : '';
+    $('aba-testar').hidden = !!(EST.conversa && EST.conversa.maximo === 0);
+    $('previasNota').textContent = EST.previasRestantes != null ? ('Restam ' + EST.previasRestantes + ' testes de regra hoje') : '';
     contar();
     return EST;
   }
 
-  // ── INÍCIO ──
-  var revisando = null; // a 👎 que virou regra/pedido: marcada como revisada quando a regra é salva ou o pedido sai
-  async function carregarInicio(){
-    lerEstado().catch(function(){});
-    contarPausadas();
-    var box = $('listaRevisar');
+  // ── PAINEL ──
+  var PERIODO = lerGuardado('agente:periodo') || '7';
+  $('periodo').value = PERIODO;
+  $('periodo').addEventListener('change', function(){ PERIODO = $('periodo').value; guardar('agente:periodo', PERIODO); carregarPainel(); });
+  var COMPARA = { hoje: 'ontem', '7': '7 dias antes', '30': '30 dias antes' };
+  function variacao(agora, antes, pontos){
+    if (agora == null || antes == null) return { t: '', c: '' };
+    var d = agora - antes;
+    if (d === 0) return { t: PERIODO === 'hoje' ? 'igual a ontem' : 'igual ao período anterior', c: '' };
+    return { t: (d > 0 ? '+' : '−') + Math.abs(d) + (pontos ? ' pts' : '') + ' vs. ' + COMPARA[PERIODO], c: d > 0 ? 'bom' : 'ruim' };
+  }
+  function kpi(rotulo, definicao, valor, v){
+    var k = el('div', 'kpi'), r = el('span', 'r', rotulo); r.title = definicao; k.appendChild(r);
+    k.appendChild(el('span', 'v' + (valor === '—' ? ' nulo' : ''), valor));
+    k.appendChild(el('span', 'd' + (v && v.c ? ' ' + v.c : ''), v ? v.t : ''));
+    return k;
+  }
+  var revisando = null, pedidoConversa = null;
+  async function carregarPainel(){
     try {
-      var r = await api('GET', '/api/public/agente/avaliacoes?slug=' + encodeURIComponent(U.slug));
-      var tot = r.semana.boas + r.semana.ruins, ant = r.anterior.boas + r.anterior.ruins;
-      if (tot > 0) {
-        var pct = Math.round(100 * r.semana.boas / tot);
-        $('kBoas').textContent = pct + '%'; $('kBoas').className = 'num display ' + (pct >= 80 ? 'bom' : pct >= 60 ? '' : 'ruim');
-        var rod = tot + (tot === 1 ? ' avaliação' : ' avaliações');
-        if (ant > 0) { var d = pct - Math.round(100 * r.anterior.boas / ant); rod += d === 0 ? ' · igual à semana passada' : (' · ' + (d > 0 ? '▲ ' : '▼ ') + Math.abs(d) + ' pts vs. semana passada'); }
-        var antes = ant > 0 ? Math.round(100 * r.anterior.boas / ant) : null;
-        $('kBoasRod').textContent = rod; $('kBoasRod').className = 'rod ' + (antes == null || antes === pct ? 'calmo' : pct > antes ? 'bom' : 'ruim');
-      } else { $('kBoas').textContent = '—'; $('kBoas').className = 'num display calmo'; $('kBoasRod').textContent = 'ninguém avaliou nesta semana'; $('kBoasRod').className = 'rod calmo'; }
-      var n = r.paraRevisar.length;
-      $('kRevisar').textContent = String(n); $('kRevisar').className = 'num display ' + (n ? 'ruim' : 'bom');
-      var c = $('contaRevisar'); c.textContent = String(n); c.hidden = !n;
-      box.textContent = '';
-      if (!n) {
-        var v = el('div', 'vazio'); v.appendChild(el('b', null, 'Nada para revisar. '));
-        v.appendChild(document.createTextNode('Quando uma resposta da Sofia não ficar boa, passe o mouse no balão dela dentro da conversa e clique 👎 — ela aparece aqui.'));
-        box.appendChild(v); return;
-      }
-      r.paraRevisar.forEach(function(a){ box.appendChild(cartaoDoCaso(a)); });
-    } catch (e) { box.textContent = ''; box.appendChild(el('div', 'aviso erro', e.message)); }
+      var p = await api('GET', '/api/public/agente/painel?slug=' + enc(U.slug) + '&periodo=' + enc(PERIODO));
+      var k = $('kpis'); k.textContent = '';
+      k.appendChild(kpi('Pessoas respondidas', 'Conversas em que a Sofia mandou pelo menos uma resposta no período', String(p.respondidas.agora), variacao(p.respondidas.agora, p.respondidas.antes)));
+      k.appendChild(kpi('Consultas marcadas', 'Consultas que a Sofia marcou na agenda da franquia por uma conversa do Chatwoot', String(p.marcadas.agora), variacao(p.marcadas.agora, p.marcadas.antes)));
+      k.appendChild(kpi('Marcaram', 'Consultas marcadas ÷ pessoas respondidas', p.conversao.agora == null ? '—' : p.conversao.agora + '%', variacao(p.conversao.agora, p.conversao.antes, true)));
+      k.appendChild(kpi('Pix do sinal gerado', 'Conversas em que ela gerou o Pix do sinal', String(p.pix.agora), variacao(p.pix.agora, p.pix.antes)));
+      var eq = variacao(p.equipe.agora, p.equipe.antes); eq.c = '';
+      k.appendChild(kpi('Passou para a equipe', 'Conversas em que ela chamou alguém da equipe', String(p.equipe.agora), eq));
+      k.appendChild(kpi('À noite ou fim de semana', 'Respostas antes das 8h, a partir das 18h, sábado e domingo', p.foraDoHorario.pct == null ? '—' : p.foraDoHorario.pct + '%', { t: p.respostas ? (p.foraDoHorario.respostas + ' de ' + plural(p.respostas, 'resposta', 'respostas')) : '', c: '' }));
+      k.appendChild(kpi('Avaliadas como boas', 'Das avaliações que a equipe deu nos balões da Sofia, quantas foram positivas', p.avaliacoes.pct == null ? '—' : p.avaliacoes.pct + '%', p.avaliacoes.pct == null ? { t: 'ninguém avaliou', c: '' } : variacao(p.avaliacoes.pct, p.avaliacoes.pctAntes, true)));
+      var nr = (p.paraRevisar || []).length;
+      k.appendChild(kpi('Para revisar', 'Respostas marcadas como ruins que ninguém revisou ainda', String(nr), { t: nr ? 'veja abaixo' : 'nada pendente', c: '' }));
+      desenharGrafico(p.porDia || []);
+      desenharMarcadas(p.ultimasMarcadas || []);
+      desenharRevisar(p.paraRevisar || []);
+    } catch (e) { erroEm($('kpis'), e.message); }
+    contarPausadas();
   }
-  function cartaoDoCaso(a){
-    var c = el('article', 'caso');
-    var t = el('div', 'caso-topo'), quem = el('span'); quem.appendChild(document.createTextNode('👎 ')); quem.appendChild(el('b', null, a.quemNome));
-    t.appendChild(quem); t.appendChild(el('span', null, ha(a.criadoEm))); c.appendChild(t);
-    if (a.fala) { var p = el('div', 'bolha pac'); p.appendChild(el('small', null, 'Paciente')); p.appendChild(document.createTextNode(a.fala)); c.appendChild(p); }
-    if (a.resposta) { var s = el('div', 'bolha sofia'); s.appendChild(el('small', null, 'Sofia')); s.appendChild(document.createTextNode(a.resposta)); c.appendChild(s); }
-    if (a.texto) { var e = el('p', 'errado'); e.appendChild(el('b', null, 'O que estava errado: ')); e.appendChild(document.createTextNode(a.texto)); c.appendChild(e); }
-    var ac = el('div', 'acoes');
-    var b1 = el('button', 'bt primario', 'Ensinar a Sofia'); b1.type = 'button';
-    b1.onclick = function(){ revisando = a.id; $('regra').value = (a.texto || '').slice(0, MAX); if (a.fala) $('f0').value = a.fala.slice(0, 500); ir('ensinar'); contar(); $('regra').focus(); };
-    var b2 = el('button', 'bt', 'Pedir à Doutor Digital'); b2.type = 'button';
-    b2.onclick = function(){
-      revisando = a.id; escolherTipo('erro');
-      var txt = (a.fala ? 'O paciente disse: “' + a.fala.slice(0, 300) + '”\n' : '') + (a.resposta ? 'A Sofia respondeu: “' + a.resposta.slice(0, 500) + '”\n' : '') + (a.texto ? 'O que estava errado: ' + a.texto : '');
-      $('pedidoTexto').value = txt.slice(0, 1500); pedidoConversa = a.conversa; ir('pedir'); contarPedido(); $('pedidoTexto').focus();
-    };
-    var b3 = el('button', 'bt', 'Abrir conversa'); b3.type = 'button'; b3.onclick = function(){ abrirConversa(a.conversa); };
-    var b4 = el('button', 'bt fantasma', 'Já resolvido'); b4.type = 'button';
-    b4.onclick = async function(){ b4.disabled = true; try { await revisar(a.id, 'ok'); c.remove(); carregarInicio(); toast('Marcado como resolvido.'); } catch (er) { b4.disabled = false; toast(er.message, false); } };
-    ac.appendChild(b1); ac.appendChild(b2); ac.appendChild(b3); ac.appendChild(b4); c.appendChild(ac);
-    return c;
+  var NS = 'http://www.w3.org/2000/svg';
+  function svg(tag, attrs){ var e = document.createElementNS(NS, tag); for (var k in attrs) e.setAttribute(k, attrs[k]); return e; }
+  var diasDoGrafico = null, tRedesenho = null;
+  window.addEventListener('resize', function(){ clearTimeout(tRedesenho); tRedesenho = setTimeout(function(){ if (diasDoGrafico && abaAtual === 'painel') desenharGrafico(diasDoGrafico); }, 150); });
+  function desenharGrafico(dias){
+    diasDoGrafico = dias;
+    var box = $('grafico'); box.textContent = '';
+    var W = Math.max(320, Math.round(box.clientWidth || 720)), H = 166, base = 140, topo = 14, n = dias.length || 1, passo = W / n, larg = Math.min(28, passo * 0.56);
+    var max = 1; dias.forEach(function(d){ max = Math.max(max, d.respondidas, d.marcadas); });
+    var g = svg('svg', { viewBox: '0 0 ' + W + ' ' + H, role: 'img', 'aria-label': 'Pessoas respondidas e consultas marcadas por dia' });
+    g.appendChild(svg('line', { x1: 0, x2: W, y1: base + 0.5, y2: base + 0.5, stroke: '#d9d9e0' }));
+    g.appendChild(svg('line', { x1: 0, x2: W, y1: topo + 0.5, y2: topo + 0.5, stroke: '#f0f0f3' }));
+    var tm = svg('text', { x: 0, y: topo - 3 }); tm.textContent = String(max); g.appendChild(tm);
+    dias.forEach(function(d, i){
+      var x = i * passo + (passo - larg) / 2, alt = function(v){ return v > 0 ? Math.max(2, (base - topo) * v / max) : 0; };
+      var gr = svg('g', {}), t = svg('title', {}); t.textContent = diaMes(d.dia) + ': ' + plural(d.respondidas, 'pessoa respondida', 'pessoas respondidas') + ', ' + plural(d.marcadas, 'consulta marcada', 'consultas marcadas'); gr.appendChild(t);
+      gr.appendChild(svg('rect', { x: i * passo, y: 0, width: passo, height: H, fill: 'transparent' }));
+      gr.appendChild(svg('rect', { x: x, y: base - alt(d.respondidas), width: larg, height: alt(d.respondidas), rx: 2, fill: '#cfe3fd' }));
+      if (d.marcadas) gr.appendChild(svg('rect', { x: x + larg * 0.22, y: base - alt(d.marcadas), width: larg * 0.56, height: alt(d.marcadas), rx: 2, fill: '#2781f6' }));
+      if (i % 2 === (n - 1) % 2) { var tx = svg('text', { x: x + larg / 2, y: base + 16, 'text-anchor': 'middle' }); tx.textContent = diaMes(d.dia); gr.appendChild(tx); }
+      g.appendChild(gr);
+    });
+    box.appendChild(g);
+    var tab = $('tabDia'); tab.textContent = '';
+    var cabT = el('tr'); ['Dia', 'Pessoas respondidas', 'Consultas marcadas'].forEach(function(t){ cabT.appendChild(el('th', null, t)); }); tab.appendChild(cabT);
+    dias.slice().reverse().forEach(function(d){ var tr = el('tr'); tr.appendChild(el('td', null, diaMes(d.dia))); tr.appendChild(el('td', null, String(d.respondidas))); tr.appendChild(el('td', null, String(d.marcadas))); tab.appendChild(tr); });
   }
-  function revisar(id, como){ return api('POST', '/api/public/agente/avaliacoes/' + encodeURIComponent(id) + '/revisar', { slug: U.slug, como: como }); }
+  function desenharMarcadas(l){
+    var box = $('listaMarcadas'); box.textContent = ''; $('cMarcadas').textContent = l.length ? String(l.length) : '';
+    if (!l.length) { var v = el('p', 'vazio'); v.appendChild(el('b', null, 'Nenhuma no período. ')); v.appendChild(document.createTextNode('Quando a Sofia marcar uma consulta, ela aparece aqui com o dia e a hora.')); box.appendChild(v); return; }
+    l.forEach(function(m){
+      var row = el('div', 'lin'), q = el('div');
+      q.appendChild(el('div', 'nm', m.nome || ('Conversa ' + m.conversa)));
+      q.appendChild(el('span', 'det', (m.agendadoPara ? 'Consulta ' + consultaEm(m.agendadoPara) : 'Consulta marcada') + ' · marcada ' + ha(m.criadoEm)));
+      var bs = el('div', 'btns'), ab = el('button', 'bt', 'Abrir conversa'); ab.type = 'button'; ab.onclick = function(){ abrirConversa(m.conversa); }; bs.appendChild(ab);
+      row.appendChild(q); row.appendChild(bs); box.appendChild(row);
+    });
+  }
+  function desenharRevisar(l){
+    var box = $('listaRevisar'); box.textContent = ''; $('cRevisar').textContent = l.length ? String(l.length) : '';
+    if (!l.length) { var v = el('p', 'vazio'); v.appendChild(el('b', null, 'Nada para revisar. ')); v.appendChild(document.createTextNode('Para marcar uma resposta ruim, passe o mouse no balão da Sofia dentro da conversa.')); box.appendChild(v); return; }
+    l.forEach(function(a){
+      var c = el('div', 'caso'), q = el('div', 'q'), quem = el('span'); quem.appendChild(el('b', null, a.quemNome)); quem.appendChild(document.createTextNode(' marcou como ruim'));
+      q.appendChild(quem); q.appendChild(el('span', null, ha(a.criadoEm))); c.appendChild(q);
+      var dl = el('dl');
+      if (a.fala) { dl.appendChild(el('dt', null, 'Paciente')); dl.appendChild(el('dd', null, a.fala)); }
+      if (a.resposta) { dl.appendChild(el('dt', null, 'Sofia')); dl.appendChild(el('dd', null, a.resposta)); }
+      if (a.texto) { dl.appendChild(el('dt', null, 'Errado')); dl.appendChild(el('dd', 'errado', a.texto)); }
+      c.appendChild(dl);
+      var bs = el('div', 'btns');
+      var b1 = el('button', 'bt pri', 'Ensinar a Sofia'); b1.type = 'button';
+      b1.onclick = function(){ revisando = a.id; $('regra').value = (a.texto || '').slice(0, MAX); if (a.fala) $('f0').value = a.fala.slice(0, 500); ir('ensinar'); contar(); $('regra').focus(); };
+      var b2 = el('button', 'bt', 'Pedir ajuste'); b2.type = 'button';
+      b2.onclick = function(){
+        revisando = a.id; escolherTipo('erro');
+        var txt = (a.fala ? 'O paciente disse: "' + a.fala.slice(0, 300) + '"\n' : '') + (a.resposta ? 'A Sofia respondeu: "' + a.resposta.slice(0, 500) + '"\n' : '') + (a.texto ? 'O que estava errado: ' + a.texto : '');
+        $('pedidoTexto').value = txt.slice(0, 1500); pedidoConversa = a.conversa; ir('pedir'); contarPedido(); $('pedidoTexto').focus();
+      };
+      var b3 = el('button', 'bt', 'Abrir conversa'); b3.type = 'button'; b3.onclick = function(){ abrirConversa(a.conversa); };
+      var b4 = el('button', 'bt leve', 'Já resolvido'); b4.type = 'button';
+      b4.onclick = async function(){ b4.disabled = true; try { await revisar(a.id, 'ok'); toast('Marcado como resolvido.'); carregarPainel(); } catch (er) { b4.disabled = false; toast(er.message, true); } };
+      bs.appendChild(b1); bs.appendChild(b2); bs.appendChild(b3); bs.appendChild(b4); c.appendChild(bs);
+      box.appendChild(c);
+    });
+  }
+  function revisar(id, como){ return api('POST', '/api/public/agente/avaliacoes/' + enc(id) + '/revisar', { slug: U.slug, como: como }); }
   function abrirConversa(id){ try { window.parent.postMessage({ event: 'funil:abrir-conversa', id: id }, CW); } catch (e) {} }
 
   // ── ENSINAR ──
-  var IDEIAS = [
+  var EXEMPLOS = [
     'Quando o paciente perguntar o valor, diga o valor da consulta antes de perguntar sobre a dor.',
     'Se o paciente disser que vai pensar ou falar com a família, ofereça mandar o endereço e o valor por escrito.',
     'Quando o paciente mandar exame, agradeça e diga que o doutor vai olhar na consulta.'
   ];
-  IDEIAS.forEach(function(t){ var b = el('button', 'chip', t); b.type = 'button'; b.onclick = function(){ $('regra').value = t; contar(); $('regra').focus(); }; $('ideias').appendChild(b); });
+  EXEMPLOS.forEach(function(t){ var li = el('li'), b = el('button', null, t); b.type = 'button'; b.onclick = function(){ $('regra').value = t; contar(); $('regra').focus(); }; li.appendChild(b); $('exemplos').appendChild(li); });
   var previaDe = null;
   function contar(){
-    var n = $('regra').value.trim().length; $('cnt').textContent = n + '/' + MAX; $('cnt').className = n > MAX ? 'ruim' : '';
+    var n = $('regra').value.trim().length; $('cnt').textContent = n + '/' + MAX; $('cnt').style.color = n > MAX ? 'var(--ruim)' : '';
     if (previaDe !== null && $('regra').value.trim() !== previaDe) { $('cardPrevia').hidden = true; previaDe = null; }
   }
   $('regra').addEventListener('input', contar);
   function primeiraFrase(t){ var m = String(t).match(/^[\s\S]*?[.!?](\s|$)/); return (m ? m[0] : String(t)).trim(); }
   async function carregarRegras(){
     var l = $('listaRegras');
-    try { await lerEstado(); } catch (e) { l.textContent = ''; l.appendChild(el('div', 'aviso erro', e.message)); return; }
+    try { await lerEstado(); } catch (e) { erroEm(l, e.message); return; }
     l.textContent = '';
     var minhas = EST.regras.filter(function(r){ return r.daUnidade; });
-    if (!minhas.length) l.appendChild(el('div', 'vazio', 'Nenhuma regra de vocês ainda. A primeira que você salvar aparece aqui.'));
+    $('cRegras').textContent = minhas.length ? (minhas.filter(function(r){ return r.enabled; }).length + ' ligadas') : '';
+    if (!minhas.length) l.appendChild(el('p', 'vazio', 'Nenhuma regra de vocês ainda. A primeira que você salvar aparece aqui.'));
     minhas.forEach(function(r){
       var row = el('div', 'regra' + (r.enabled ? '' : ' off'));
       var sw = el('button', 'sw'); sw.type = 'button'; sw.setAttribute('role', 'switch'); sw.setAttribute('aria-checked', r.enabled ? 'true' : 'false'); sw.setAttribute('aria-label', r.enabled ? 'Desligar regra' : 'Ligar regra');
-      sw.onclick = async function(){ sw.disabled = true; try { await api('POST', apiUnidade() + '/regra/' + encodeURIComponent(r.id), { enabled: !r.enabled }); toast(r.enabled ? 'Regra desligada.' : 'Regra ligada.'); carregarRegras(); } catch (e) { sw.disabled = false; toast(e.message, false); } };
-      var p = el('p', null, r.content); p.appendChild(el('small', null, (r.enabled ? 'ligada' : 'desligada') + ' · ' + ha(r.createdAt)));
+      sw.onclick = async function(){ sw.disabled = true; try { await api('POST', apiUnidade() + '/regra/' + enc(r.id), { enabled: !r.enabled }); toast(r.enabled ? 'Regra desligada.' : 'Regra ligada.'); carregarRegras(); } catch (e) { sw.disabled = false; toast(e.message, true); } };
+      var p = el('p', null, r.content); p.appendChild(el('small', null, (r.enabled ? 'Ligada' : 'Desligada') + ' · ' + ha(r.createdAt)));
       row.appendChild(sw); row.appendChild(p); l.appendChild(row);
     });
     // as da Doutor Digital (painel e reflexão semanal): só leitura, sem repetição
     var vistas = {}, unicas = [];
-    EST.regras.filter(function(r){ return !r.daUnidade && r.enabled; }).forEach(function(r){ var k = primeiraFrase(r.content).toLowerCase(); if (vistas[k]) { vistas[k].n++; return; } vistas[k] = { t: primeiraFrase(r.content), n: 1 }; unicas.push(vistas[k]); });
+    EST.regras.filter(function(r){ return !r.daUnidade && r.enabled; }).forEach(function(r){ var t = primeiraFrase(r.content), k = t.toLowerCase(); if (vistas[k]) return; vistas[k] = 1; unicas.push(t); });
     $('equipe').hidden = !unicas.length;
-    $('equipeResumo').textContent = 'A Doutor Digital também ensinou ' + unicas.length + (unicas.length === 1 ? ' coisa' : ' coisas') + ' à Sofia';
+    $('equipeResumo').textContent = 'Regras da Doutor Digital (' + unicas.length + ')';
     var ul = $('listaEquipe'); ul.textContent = '';
-    unicas.forEach(function(u){ var li = el('li', null, u.t); if (u.n > 1) li.appendChild(el('span', null, ' ×' + u.n)); ul.appendChild(li); });
+    unicas.forEach(function(t){ ul.appendChild(el('li', null, t)); });
   }
   $('btPrevia').addEventListener('click', async function(){
     var b = this, regra = $('regra').value.trim(); some('avisoPrevia');
     if (regra.length < 10) { aviso('avisoPrevia', 'Escreva a regra primeiro (uma frase).'); $('regra').focus(); return; }
     if (regra.length > MAX) { aviso('avisoPrevia', 'A regra passou de ' + MAX + ' letras. Resuma um pouco.'); return; }
-    b.disabled = true; var txt = b.textContent; b.textContent = 'A Sofia está respondendo… (até 1 min)';
+    b.disabled = true; var txt = b.textContent; b.textContent = 'A Sofia está respondendo…';
     try {
       var falas = ['f0', 'f1', 'f2'].map(function(id){ return $(id).value.trim(); }).filter(Boolean);
       var r = await api('POST', apiUnidade() + '/previa', { regra: regra, falas: falas });
       var box = $('previa'); box.textContent = '';
       r.resultados.forEach(function(x){
-        var d = el('div', 'previa-item'), p = el('div', 'bolha pac'); p.appendChild(el('small', null, 'Paciente')); p.appendChild(document.createTextNode(x.fala)); d.appendChild(p);
-        var lado = el('div', 'lado'), a = el('div', 'bolha sofia'), n = el('div', 'bolha nova');
-        a.appendChild(el('small', null, 'Hoje ela responde')); a.appendChild(document.createTextNode(x.antes));
-        n.appendChild(el('small', null, 'Com a regra nova')); n.appendChild(document.createTextNode(x.depois));
-        lado.appendChild(a); lado.appendChild(n); d.appendChild(lado); box.appendChild(d);
+        var d = el('div', 'previa-item'), f = el('div', 'fala'); f.appendChild(document.createTextNode('Paciente: ')); f.appendChild(el('b', null, x.fala)); d.appendChild(f);
+        var ad = el('div', 'antes-depois'), a = el('div'), n = el('div', 'nova');
+        a.appendChild(el('small', null, 'Hoje')); a.appendChild(document.createTextNode(x.antes));
+        n.appendChild(el('small', null, 'Com a regra')); n.appendChild(document.createTextNode(x.depois));
+        ad.appendChild(a); ad.appendChild(n); d.appendChild(ad); box.appendChild(d);
       });
       previaDe = regra; $('cardPrevia').hidden = false; some('avisoSalvar'); $('btSalvar').disabled = false;
-      $('previasNota').textContent = 'Restam ' + r.previasRestantes + ' testes de regra hoje.';
+      $('previasNota').textContent = 'Restam ' + r.previasRestantes + ' testes de regra hoje';
       $('cardPrevia').scrollIntoView({ behavior: 'smooth', block: 'start' });
     } catch (e) { aviso('avisoPrevia', e.message); }
     finally { b.disabled = false; b.textContent = txt; }
   });
-  $('btAjustar').addEventListener('click', function(){ $('regra').focus(); $('regra').scrollIntoView({ behavior: 'smooth', block: 'center' }); });
+  $('btAjustar').addEventListener('click', function(){ $('regra').focus(); });
   $('btSalvar').addEventListener('click', async function(){
     var b = this; some('avisoSalvar');
     if (previaDe === null || $('regra').value.trim() !== previaDe) { aviso('avisoSalvar', 'O texto mudou: teste de novo antes de salvar.'); return; }
@@ -523,25 +566,25 @@ details.equipe li span{color:#5E7193}
       await api('POST', apiUnidade(), { regra: previaDe });
       if (revisando) { await revisar(revisando, 'regra').catch(function(){}); revisando = null; }
       $('regra').value = ''; previaDe = null; $('cardPrevia').hidden = true; contar();
-      toast('Pronto! A Sofia já segue essa regra nas próximas conversas.');
+      toast('Regra salva. A Sofia já segue nas próximas conversas.');
       carregarRegras();
     } catch (e) { aviso('avisoSalvar', e.message); b.disabled = false; }
   });
 
   // ── TESTAR (o histórico fica neste navegador) ──
   var SUGESTOES = ['Oi, quanto custa a consulta?', 'Tenho hérnia de disco, tem cura?', 'Vocês atendem por convênio?', 'Qual o endereço da clínica?', 'Tem horário amanhã de manhã?', 'Vou pensar e te aviso'];
-  SUGESTOES.forEach(function(t){ var b = el('button', 'chip', t); b.type = 'button'; b.onclick = function(){ $('fala').value = t; $('fala').focus(); }; $('sugestoes').appendChild(b); });
+  SUGESTOES.forEach(function(t){ var li = el('li'), b = el('button', null, t); b.type = 'button'; b.onclick = function(){ $('fala').value = t; $('fala').focus(); }; li.appendChild(b); $('sugestoes').appendChild(li); });
   var historico = [], aguardando = false, restam = null;
   function chaveChat(){ return 'agente:conversa:' + (U ? U.slug : ''); }
   function lerChat(){ try { var h = JSON.parse(lerGuardado(chaveChat()) || '[]'); historico = Array.isArray(h) ? h.filter(function(m){ return m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string'; }).slice(-40) : []; } catch (e) { historico = []; } }
   function salvarChat(){ historico = historico.slice(-40); while (historico.length && historico[0].role !== 'user') historico.shift(); guardar(chaveChat(), JSON.stringify(historico)); }
   function desenharChat(digitando){
     var c = $('chat'); c.textContent = '';
-    if (!historico.length && !digitando) c.appendChild(el('div', 'msg dica', 'Escreva uma fala de paciente — por exemplo, “Oi, quanto custa a consulta?” — e veja o que a Sofia responde.'));
+    if (!historico.length && !digitando) c.appendChild(el('div', 'msg dica', 'Escreva uma fala de paciente e veja o que a Sofia responde.'));
     historico.forEach(function(m){ c.appendChild(el('div', 'msg ' + (m.role === 'user' ? 'pac' : 'sofia'), m.content)); (m.a || []).forEach(function(t){ c.appendChild(el('div', 'msg acao', 'no teste: ' + t)); }); });
-    if (digitando) { var d = el('div', 'msg sofia'), p = el('span', 'pontos'); p.appendChild(el('i')); p.appendChild(el('i')); p.appendChild(el('i')); d.appendChild(p); d.setAttribute('aria-label', 'A Sofia está escrevendo'); c.appendChild(d); }
+    if (digitando) c.appendChild(el('div', 'msg sofia dig', 'Sofia está escrevendo…'));
     c.scrollTop = c.scrollHeight;
-    $('restam').textContent = restam != null ? ('Restam ' + restam + ' respostas de teste hoje.') : '';
+    $('restam').textContent = restam != null ? ('Restam ' + restam + ' respostas de teste hoje') : '';
     $('btEnviar').disabled = aguardando || restam === 0;
   }
   function paraEnviar(){
@@ -570,58 +613,60 @@ details.equipe li span{color:#5E7193}
     var ult = ''; for (var i = historico.length - 1; i >= 0; i--) { if (historico[i].role === 'user') { ult = historico[i].content; break; } }
     if (!ult) { aviso('avisoChat', 'Converse primeiro: a regra parte de uma fala do paciente.'); return; }
     var fala = ult.replace(/[<>]/g, '').replace(/\s+/g, ' ').trim();
-    $('regra').value = ('Quando o paciente disser algo como “' + fala.slice(0, 120) + '”, a Sofia deve ').slice(0, MAX);
+    $('regra').value = ('Quando o paciente disser algo como "' + fala.slice(0, 120) + '", a Sofia deve ').slice(0, MAX);
     $('f0').value = fala.slice(0, 500); ir('ensinar'); contar(); var r = $('regra'); r.focus(); r.setSelectionRange(r.value.length, r.value.length);
   });
 
   // ── PAUSADAS ──
-  async function contarPausadas(){
-    try { var r = await api('GET', '/api/public/testar-ia/pausadas'); mostrarContaPausadas(r.conversas.length); return r; } catch (e) { return null; }
-  }
-  function mostrarContaPausadas(n){ $('kPausadas').textContent = String(n); var c = $('contaPausadas'); c.textContent = String(n); c.hidden = !n; }
+  function mostrarContaPausadas(n){ $('contaPausadas').textContent = n ? String(n) : ''; $('cPausadas').textContent = n ? String(n) : ''; }
+  async function contarPausadas(){ try { var r = await api('GET', '/api/public/testar-ia/pausadas'); mostrarContaPausadas(r.conversas.length); } catch (e) {} }
+  function linhaUnica(tb, conteudo){ var tr = el('tr'), td = el('td'); td.colSpan = 5; td.style.textAlign = 'left'; td.appendChild(conteudo); tr.appendChild(td); tb.appendChild(tr); }
   async function carregarPausadas(){
-    var l = $('listaPausadas');
+    var tb = $('listaPausadas'); tb.textContent = '';
+    var sk = el('span', 'sk'); sk.style.height = '40px'; linhaUnica(tb, sk);
     try {
-      var r = await api('GET', '/api/public/testar-ia/pausadas'); mostrarContaPausadas(r.conversas.length); l.textContent = '';
-      if (!r.conversas.length) { l.appendChild(el('div', 'vazio', 'Nenhuma conversa com a Sofia pausada agora.')); return; }
+      var r = await api('GET', '/api/public/testar-ia/pausadas'); mostrarContaPausadas(r.conversas.length); tb.textContent = '';
+      if (!r.conversas.length) { linhaUnica(tb, el('span', 'mut', 'Nenhuma conversa com a Sofia pausada agora.')); return; }
       r.conversas.forEach(function(c){
-        var row = el('div', 'item'), av = el('span', 'av', iniciais(c.nome)), meio = el('div', 'meio');
-        meio.appendChild(el('b', null, c.nome));
-        meio.appendChild(el('small', null, 'Pausada' + (c.por ? ' por ' + c.por : '') + (c.em ? ' · ' + ha(c.em) : '') + (c.atendente ? ' · com ' + c.atendente : '')));
-        var bs = el('div', 'botoes'), ab = el('button', 'bt', 'Abrir conversa'), re = el('button', 'bt primario', 'Devolver para a Sofia');
+        var tr = el('tr');
+        tr.appendChild(el('td', null, c.nome));
+        tr.appendChild(el('td', null, c.por || '—'));
+        tr.appendChild(el('td', null, c.em ? ha(c.em) : '—'));
+        tr.appendChild(el('td', null, c.atendente || '—'));
+        var td = el('td'), ab = el('button', 'bt link', 'Abrir'), re = el('button', 'bt', 'Devolver para a Sofia');
         ab.type = re.type = 'button'; ab.onclick = function(){ abrirConversa(c.id); };
-        re.onclick = async function(){ re.disabled = true; try { await api('POST', '/api/public/assistente/pausa', { conversa: c.id, acao: 'reativar' }); row.remove(); toast('A Sofia voltou a responder nesta conversa.'); carregarPausadas(); } catch (e) { re.disabled = false; toast(e.message, false); } };
-        bs.appendChild(ab); bs.appendChild(re); row.appendChild(av); row.appendChild(meio); row.appendChild(bs); l.appendChild(row);
+        re.onclick = async function(){ re.disabled = true; try { await api('POST', '/api/public/assistente/pausa', { conversa: c.id, acao: 'reativar' }); toast('A Sofia voltou a responder nesta conversa.'); carregarPausadas(); } catch (e) { re.disabled = false; toast(e.message, true); } };
+        td.appendChild(ab); td.appendChild(re); tr.appendChild(td); tb.appendChild(tr);
       });
-    } catch (e) { l.textContent = ''; l.appendChild(el('div', 'aviso erro', e.message)); }
+    } catch (e) { tb.textContent = ''; linhaUnica(tb, el('div', 'aviso erro', e.message)); }
   }
 
   // ── PEDIR ──
-  var tipoPedido = null, pedidoConversa = null, TIPOS = [];
-  function escolherTipo(id){ tipoPedido = id; Array.prototype.forEach.call(document.querySelectorAll('.tipo'), function(b){ b.setAttribute('aria-checked', b.getAttribute('data-tipo') === id ? 'true' : 'false'); }); }
+  var tipoPedido = null, TIPOS = [];
+  function escolherTipo(id){ tipoPedido = id; Array.prototype.forEach.call(document.querySelectorAll('#tipos input'), function(i){ i.checked = i.value === id; }); }
   function contarPedido(){ $('cntPedido').textContent = $('pedidoTexto').value.trim().length + '/1500'; }
   $('pedidoTexto').addEventListener('input', contarPedido);
   function desenharTipos(){
     var box = $('tipos'); if (box.children.length || !TIPOS.length) return;
-    TIPOS.forEach(function(t){ var b = el('button', 'tipo'); b.type = 'button'; b.setAttribute('role', 'radio'); b.setAttribute('aria-checked', 'false'); b.setAttribute('data-tipo', t.id); b.appendChild(el('i')); b.appendChild(document.createTextNode(t.rotulo)); b.onclick = function(){ escolherTipo(t.id); }; box.appendChild(b); });
+    TIPOS.forEach(function(t){ var l = el('label'), i = el('input'); i.type = 'radio'; i.name = 'tipo'; i.value = t.id; i.onchange = function(){ tipoPedido = t.id; }; l.appendChild(i); l.appendChild(document.createTextNode(t.rotulo)); box.appendChild(l); });
     if (tipoPedido) escolherTipo(tipoPedido);
   }
-  var SITUACAO = { 'na-fila': ['fila', 'Na fila'], resolvido: ['ok', 'Resolvido'], reaberto: ['reaberto', 'Reaberto'] };
+  var SITUACAO = { 'na-fila': ['a', 'Na fila'], resolvido: ['g', 'Resolvido'], reaberto: ['v', 'Reaberto'] };
   function desenharPedidos(lista){
     var l = $('listaPedidos'); l.textContent = '';
-    var abertos = lista.filter(function(p){ return p.situacao !== 'resolvido'; }).length, c = $('contaPedidos'); c.textContent = String(abertos); c.hidden = !abertos;
-    if (!lista.length) { l.appendChild(el('div', 'vazio', 'Nenhum pedido ainda. O que vocês pedirem aparece aqui, com a resposta da equipe.')); return; }
+    var abertos = lista.filter(function(p){ return p.situacao !== 'resolvido'; }).length; $('contaPedidos').textContent = abertos ? String(abertos) : '';
+    if (!lista.length) { l.appendChild(el('p', 'vazio', 'Nenhum pedido ainda. O que vocês pedirem aparece aqui, com a resposta da Doutor Digital.')); return; }
     lista.forEach(function(p){
-      var d = el('div', 'pedido'), cab = el('div', 'cab'), s = SITUACAO[p.situacao] || SITUACAO['na-fila'];
-      cab.appendChild(el('b', null, '#' + p.protocolo)); cab.appendChild(el('span', 'pil ' + s[0], s[1])); cab.appendChild(el('span', null, p.tipo + ' · ' + (p.nome || '') + ' · ' + ha(p.criadoEm)));
-      d.appendChild(cab); d.appendChild(el('p', null, p.texto));
-      if (p.resposta) d.appendChild(el('div', 'resp', 'Resposta da Doutor Digital: ' + p.resposta));
+      var d = el('div', 'pedido'), l1 = el('div', 'l1'), s = SITUACAO[p.situacao] || SITUACAO['na-fila'];
+      l1.appendChild(el('b', null, '#' + p.protocolo + ' · ' + p.tipo)); l1.appendChild(el('span', 'sem ' + s[0], s[1]));
+      d.appendChild(l1); d.appendChild(el('p', null, p.texto)); d.appendChild(el('div', 'det', (p.nome || '') + ' · ' + ha(p.criadoEm)));
+      if (p.resposta) d.appendChild(el('div', 'resp', p.resposta));
       l.appendChild(d);
     });
   }
   async function carregarPedidos(){
-    try { var r = await api('GET', '/api/public/agente/pedidos?slug=' + encodeURIComponent(U.slug)); TIPOS = r.tipos || []; desenharTipos(); desenharPedidos(r.pedidos || []); }
-    catch (e) { var l = $('listaPedidos'); l.textContent = ''; l.appendChild(el('div', 'aviso erro', e.message)); }
+    try { var r = await api('GET', '/api/public/agente/pedidos?slug=' + enc(U.slug)); TIPOS = r.tipos || []; desenharTipos(); desenharPedidos(r.pedidos || []); }
+    catch (e) { erroEm($('listaPedidos'), e.message); }
   }
   $('btPedir').addEventListener('click', async function(){
     var b = this, texto = $('pedidoTexto').value.trim(); some('avisoPedido');
@@ -632,7 +677,7 @@ details.equipe li span{color:#5E7193}
       var r = await api('POST', '/api/public/agente/pedidos', { slug: U.slug, tipo: tipoPedido, texto: texto, conversa: pedidoConversa });
       if (revisando) { await revisar(revisando, 'pedido').catch(function(){}); revisando = null; }
       $('pedidoTexto').value = ''; pedidoConversa = null; contarPedido(); desenharPedidos(r.pedidos || []);
-      toast('Pedido #' + r.protocolo + ' enviado. A equipe da Doutor Digital já foi avisada.');
+      toast('Pedido #' + r.protocolo + ' enviado. A Doutor Digital já foi avisada.');
     } catch (e) { aviso('avisoPedido', e.message); }
     b.disabled = false;
   });
@@ -648,7 +693,7 @@ details.equipe li span{color:#5E7193}
     try {
       var r = await api('GET', '/api/public/testar-ia/unidades');
       UNIDADES = r.unidades || []; EU = r.eu || '';
-      $('euNome').textContent = EU; $('euAv').textContent = iniciais(EU); $('pedidoQuem').textContent = EU || 'você';
+      $('euNome').textContent = EU; $('pedidoQuem').textContent = EU || 'você';
       if (!UNIDADES.length) { aviso('erroTopo', 'Você não atende nenhuma caixa com a Sofia. Peça para a Suzanne liberar a caixa da sua unidade.'); $('unidadeNome').textContent = 'Sem unidade'; return; }
       var guardada = lerGuardado('agente:unidade'), u = UNIDADES.filter(function(x){ return x.slug === guardada; })[0] || UNIDADES[0];
       if (UNIDADES.length > 1) {
@@ -657,12 +702,12 @@ details.equipe li span{color:#5E7193}
         sel.value = u.slug; sel.onchange = function(){ var x = UNIDADES.filter(function(y){ return y.slug === sel.value; })[0]; if (x) { escolherUnidade(x); ir(abaAtual); } };
       }
       escolherUnidade(u); some('erroTopo'); $('corpo').hidden = false;
-      // veio do 👎 do painel da assistente: o texto já vira a regra nova (o teste continua obrigatório antes de salvar)
+      // veio do polegar para baixo do painel da assistente: o texto já vira a regra nova (o teste continua obrigatório antes de salvar)
       var rasc = lerGuardado('testar-ia-rascunho'); guardar('testar-ia-rascunho', null);
       if (rasc) { $('regra').value = rasc.slice(0, 800); ir('ensinar'); contar(); $('regra').focus(); }
-      else ir(lerGuardado('agente:aba') || 'inicio');
-      // os contadores das abas (para revisar, pausadas, pedidos em aberto) aparecem já na entrada, qualquer que seja a aba
-      if (abaAtual !== 'inicio') carregarInicio();
+      else ir(lerGuardado('agente:aba') || 'painel');
+      // os números das abas aparecem já na entrada, qualquer que seja a aba
+      if (abaAtual !== 'pausadas' && abaAtual !== 'painel') contarPausadas();
       if (abaAtual !== 'pedir') carregarPedidos();
     } catch (e) { aviso('erroTopo', e.message); }
   }

@@ -22,10 +22,10 @@ function scriptDe(html: string): string {
   return html.slice(i + '<script>'.length, f);
 }
 
-test('a página do Agente parseia, tem as 5 abas e só aceita a origem do Chatwoot', () => {
+test('a página do Agente parseia, tem as 5 abas (Painel primeiro) e só aceita a origem do Chatwoot', () => {
   const html = paginaDoAgente(CW);
   assert.doesNotThrow(() => new Function(scriptDe(html)));
-  for (const aba of ['inicio', 'ensinar', 'testar', 'pausadas', 'pedir']) assert.ok(html.includes(`id="aba-${aba}"`) && html.includes(`id="pane-${aba}"`), aba);
+  for (const aba of ['painel', 'ensinar', 'testar', 'pausadas', 'pedir']) assert.ok(html.includes(`id="aba-${aba}"`) && html.includes(`id="pane-${aba}"`), aba);
   assert.ok(html.includes(`var CW = "${CW}"`));
   assert.ok(html.includes('ev.origin !== CW || ev.source !== window.parent'));
   assert.ok(!html.includes('__ORIGEM_CW__'));
@@ -38,7 +38,7 @@ test('nenhum dado do servidor entra por innerHTML (só textContent)', () => {
 
 test('a página usa as rotas certas (regras, prévia, conversa, pausadas, avaliações, pedidos)', () => {
   const js = scriptDe(paginaDoAgente(CW));
-  for (const rota of ["'/api/public/aprendizados/'", "'/previa'", "'/conversa'", "'/regra/'", "'/api/public/testar-ia/pausadas'", "'/api/public/testar-ia/unidades'", "'/api/public/agente/avaliacoes?slug='", "'/api/public/agente/pedidos'", "'/api/public/assistente/pausa'"])
+  for (const rota of ["'/api/public/aprendizados/'", "'/previa'", "'/conversa'", "'/regra/'", "'/api/public/testar-ia/pausadas'", "'/api/public/testar-ia/unidades'", "'/api/public/agente/painel?slug='", "'/api/public/agente/avaliacoes/'", "'/api/public/agente/pedidos'", "'/api/public/assistente/pausa'"])
     assert.ok(js.includes(rota), rota);
 });
 

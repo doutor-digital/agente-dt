@@ -3,6 +3,7 @@
  * código fonte envolve a gente"). A página é `lib/agente-pagina.ts`; aqui ficam as rotas que só ela usa. Todas pedem o LOGIN do
  * Chatwoot da atendente (cabeçalhos X-CW-*) e que ela atenda uma caixa da unidade pedida (`atendenteDaUnidade`).
  *
+ *   GET  /api/public/agente/painel?slug=&periodo=   painel da Sofia (hoje | 7 | 30 dias) + as 👎 para revisar
  *   GET  /api/public/agente/avaliacoes?slug=        resumo dos 👍/👎 e as 👎 para revisar
  *   POST /api/public/agente/avaliacoes/:id/revisar  { slug, como: regra | pedido | ok }
  *   GET  /api/public/agente/pedidos?slug=           pedidos à Doutor Digital feitos pela unidade
@@ -18,6 +19,7 @@ import { atendenteDaUnidade } from './aprendizados.controller.js';
 import { COMO_REVISOU, marcarRevisada, resumoDaUnidade, type ComoRevisou } from '../lib/sofia-avaliacoes.js';
 import { MAX_PEDIDOS_POR_DIA, avisoDoPedido, criarPedido, lerPedido, marcarAvisado, pedidosDaUnidade, pedidosHoje, TIPOS_DE_PEDIDO } from '../lib/agente-pedidos.js';
 import { paginaDoAgente } from '../lib/agente-pagina.js';
+import { lerPeriodo, painelDaUnidade } from '../lib/agente-painel.js';
 
 const slugDe = (v: unknown): string => (typeof v === 'string' ? v.trim().slice(0, 80) : '');
 
@@ -29,6 +31,19 @@ export function paginaAgenteHandler(_req: Request, res: Response): void {
     return;
   }
   res.type('html').set('Cache-Control', 'no-store').send(paginaDoAgente(new URL(conta.url).origin));
+}
+
+/** O painel da Sofia (Início): respondidas, marcadas, conversão, equipe, Pix, fora do horário, avaliações, por dia + 👎 para revisar. */
+export async function agentePainelHandler(req: Request, res: Response): Promise<void> {
+  const r = await atendenteDaUnidade(req, res, slugDe(req.query.slug));
+  if (!r) return;
+  try {
+    const [painel, resumo] = await Promise.all([painelDaUnidade(r.unit, lerPeriodo(req.query.periodo)), resumoDaUnidade(r.unit.slug)]);
+    res.set('Cache-Control', 'no-store').json({ ...painel, paraRevisar: resumo.paraRevisar });
+  } catch (e) {
+    logger.warn({ err: String(e), unit: r.unit.slug }, 'agente: painel falhou');
+    res.status(502).json({ error: 'não consegui montar o painel agora' });
+  }
 }
 
 export async function agenteAvaliacoesHandler(req: Request, res: Response): Promise<void> {

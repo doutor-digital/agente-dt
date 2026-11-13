@@ -163,7 +163,7 @@ export interface PortasDaIa {
   /** mensagem PÚBLICA (chega ao paciente); devolve o usuário do Chatwoot que a mandou (o da integração) e o id da mensagem, se souber */
   publica(conversa: number, texto: string): Promise<{ usuario: number | null; mensagem?: number | null }>;
   /** guarda a resposta da Sofia (id da mensagem no Chatwoot) para os 👍/👎 do balão; opcional (os testes não precisam) */
-  registrarResposta?(r: { mensagem: number; conversa: number; slug: string; texto: string; fala: string | null }): Promise<void>;
+  registrarResposta?(r: { mensagem: number; conversa: number; slug: string; texto: string; fala: string | null; acoes: string[] }): Promise<void>;
   /** as consultas de pé deste paciente na franquia; null = não deu para conferir */
   agendaReal(unit: Unit, lida: ConversaLida): Promise<ConsultaReal[] | null>;
   /** passa a conversa para a equipe (etiqueta + etapa + nota); LANÇA se o Chatwoot falhar */
@@ -445,7 +445,7 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
     // a resposta ganha 👍/👎 no balão do Chatwoot (tela Agente); falhar aqui não atrapalha o paciente
     if (enviada?.mensagem && p.registrarResposta)
       await p
-        .registrarResposta({ mensagem: enviada.mensagem, conversa: m.conversa, slug: m.slug, texto: r.resposta, fala: ultimaFalaDoPaciente(falas) })
+        .registrarResposta({ mensagem: enviada.mensagem, conversa: m.conversa, slug: m.slug, texto: r.resposta, fala: ultimaFalaDoPaciente(falas), acoes: r.acoes.map((a) => a.tool) })
         .catch((err) => logger.warn({ err: String(err), conversa: m.conversa }, `${ID_IA}: não consegui guardar a resposta para a avaliação`));
   } catch (err) {
     // as ferramentas já gravaram: sem resposta o paciente fica sem saber. A equipe é avisada (nota) e a exceção sobe para o log.

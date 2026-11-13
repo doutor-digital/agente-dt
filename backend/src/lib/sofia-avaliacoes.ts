@@ -30,10 +30,18 @@ export function ultimaFalaDoPaciente(falas: ReadonlyArray<{ role: string; conten
 }
 
 /** Guarda a resposta que a Sofia acabou de mandar (idempotente: o mesmo id não duplica). */
-export async function registrarRespostaDaSofia(r: { mensagem: number; conversa: number; slug: string; texto: string; fala: string | null }): Promise<void> {
+export async function registrarRespostaDaSofia(r: {
+  mensagem: number;
+  conversa: number;
+  slug: string;
+  texto: string;
+  fala: string | null;
+  acoes?: readonly string[];
+}): Promise<void> {
+  const acoes = [...new Set((r.acoes ?? []).map((a) => String(a).slice(0, 60)))].slice(0, 20);
   await prisma.sofiaMensagem.upsert({
     where: { messageId: r.mensagem },
-    create: { messageId: r.mensagem, conversa: r.conversa, unitSlug: r.slug, texto: r.texto.slice(0, MAX_RESPOSTA), fala: r.fala?.slice(0, MAX_FALA) ?? null },
+    create: { messageId: r.mensagem, conversa: r.conversa, unitSlug: r.slug, texto: r.texto.slice(0, MAX_RESPOSTA), fala: r.fala?.slice(0, MAX_FALA) ?? null, acoes },
     update: {},
   });
 }
