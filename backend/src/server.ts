@@ -9,7 +9,8 @@ import { prisma } from './lib/prisma.js';
 import { apiRouter } from './routes/api.routes.js';
 import { apagarCofreDeArquivos, ligarConectorRemoto } from './mcp-remoto/producao.js';
 import { paginaPausaHandler } from './controllers/pausa.controller.js';
-import { paginaAprendizadosHandler, paginaTestarIaHandler } from './controllers/aprendizados.controller.js';
+import { paginaAprendizadosHandler } from './controllers/aprendizados.controller.js';
+import { paginaAgenteHandler } from './controllers/agente-chatwoot.controller.js';
 import { menuFunilHandler, paginaFunilHandler } from './controllers/funil.controller.js';
 import { corsDoAssistente, paginaAssistenteHandler } from './controllers/assistente.controller.js';
 import { contaChatwootDoAmbiente } from './mcp-remoto/chatwoot.js';
@@ -169,8 +170,10 @@ async function main(): Promise<void> {
   // Funil de etapas encaixado no Chatwoot (Dashboard App). A chave vem em ?k= e é mascarada no log abaixo.
   app.get('/funil', paginaFunilHandler);
   app.get('/funil/menu.js', menuFunilHandler);
-  // "Testar a IA" (menu do Chatwoot): a página de ensinar a Sofia em modo Chatwoot, sob /funil para o menu entregar a sessão.
-  app.get('/funil/testar-ia', paginaTestarIaHandler);
+  // "Agente" (menu do Chatwoot, 13/11): a equipe cuida da própria Sofia — avaliações, regras, teste, pausadas e pedidos à Doutor
+  // Digital. Sob /funil para o menu entregar a sessão. /funil/testar-ia é o endereço antigo (menu.js em cache no navegador).
+  app.get('/funil/agente', paginaAgenteHandler);
+  app.get('/funil/testar-ia', paginaAgenteHandler);
   // Assistente da atendente: a página do painel (iframe do botão que entra pelo menu.js).
   app.get('/assistente', paginaAssistenteHandler);
 

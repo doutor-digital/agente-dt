@@ -2795,3 +2795,60 @@ model CentralChamado {
   @@index([chaveConversa])
   @@map("central_chamados")
 }
+
+/// Respostas públicas que a SOFIA mandou no Chatwoot (id da mensagem do Chatwoot), 13/11/2026: só elas ganham 👍/👎 no balão.
+/// A régua e as atendentes também mandam pelo Chatwoot; sem esta lista não dá para saber qual resposta é da Sofia.
+/// `texto` (a resposta) e `fala` (a última fala do paciente antes dela) mostram o caso na aba "Para revisar" do Agente.
+model SofiaMensagem {
+  messageId Int      @id @map("message_id")
+  conversa  Int
+  unitSlug  String   @map("unit_slug")
+  texto     String   @db.Text
+  fala      String?  @db.Text
+  criadoEm  DateTime @default(now()) @map("criado_em")
+
+  @@index([conversa])
+  @@index([unitSlug, criadoEm])
+  @@map("sofia_mensagem")
+}
+
+/// Avaliação de uma resposta da Sofia pela equipe (👍 boa / 👎 ruim + o que estava errado). Uma por pessoa e mensagem (mudar
+/// de ideia troca a nota, não a data). As 👎 ficam "para revisar" no Agente até alguém ensinar a Sofia, pedir à Doutor Digital ou dar ok.
+model SofiaAvaliacao {
+  id           String    @id @default(cuid())
+  unitSlug     String    @map("unit_slug")
+  conversa     Int
+  messageId    Int?      @map("message_id")
+  nota         String
+  texto        String?
+  quemId       Int?      @map("quem_id")
+  quemNome     String    @map("quem_nome")
+  /// a 1ª avaliação desta pessoa nesta mensagem: mudar de ideia NÃO muda a data (o voto fica na semana em que foi dado)
+  criadoEm     DateTime  @default(now()) @map("criado_em")
+  atualizadoEm DateTime  @updatedAt @map("atualizado_em")
+  /// revisada: quando, por quem e como (regra | pedido | ok)
+  revisadaEm   DateTime? @map("revisada_em")
+  revisadaPor  String?   @map("revisada_por")
+  revisadaComo String?   @map("revisada_como")
+
+  @@unique([messageId, quemId])
+  @@index([unitSlug, criadoEm])
+  @@index([unitSlug, nota, revisadaEm])
+  @@map("sofia_avaliacao")
+}
+
+/// O que a Sofia FEZ no Chatwoot e o painel do Agente conta (13/11/2026), gravado na hora, só no modo ligado (tentativa recusada não
+/// entra): `marcou` = consulta marcada na franquia (nome do contato + "AAAA-MM-DDTHH:mm" em detalhe); `equipe` = passou a conversa
+/// para a equipe; `pix` = o Pix do sinal SAIU para o paciente.
+model SofiaEvento {
+  id       String   @id @default(cuid())
+  unitSlug String   @map("unit_slug")
+  conversa Int
+  tipo     String
+  nome     String?
+  detalhe  String?
+  criadoEm DateTime @default(now()) @map("criado_em")
+
+  @@index([unitSlug, criadoEm])
+  @@map("sofia_evento")
+}

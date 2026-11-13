@@ -12,6 +12,7 @@
  * Desligada por padrão: só vale para as unidades de `CHATWOOT_ASSISTENTE_SLUGS` (lista separada por vírgula, ou `*`).
  */
 import { estadoDaPausa, pausar, portaDaPausaDoChatwoot, reativar } from '../lib/chatwoot-pausa.js';
+import { avaliacaoMuda, bancoDeAvaliacoes, ehNota, limparTextoDaAvaliacao } from '../lib/sofia-avaliacoes.js';
 import type { Request, Response } from 'express';
 import type { Unit } from '@prisma/client';
 import { z } from 'zod';
@@ -384,19 +385,36 @@ export function paginaAssistenteHandler(_req: Request, res: Response): void {
 }
 
 /**
- * CORS do botão: ele roda na página do Chatwoot e pergunta `GET /api/public/assistente/estado` com o login da pessoa em
- * cabeçalhos próprios. Só essa rota, só GET, só desta origem (a do Chatwoot), sem credenciais. O painel e as demais rotas
- * são chamados de dentro do iframe, na mesma origem do servidor: não precisam de CORS. `null` = não é com este módulo.
+ * CORS do botão: ele roda na página do Chatwoot e chama poucas rotas com o login da pessoa em cabeçalhos próprios. Só estas rotas,
+ * só desta origem (a do Chatwoot), sem credenciais. O painel e as demais rotas são chamados de dentro do iframe, na mesma origem
+ * do servidor: não precisam de CORS. `null` = não é com este módulo.
+ *  - GET  /api/public/assistente/estado    — o botão aparece?
+ *  - GET  /api/public/funil/gestao         — o menu mostra «Marketing» e «Gestor»?
+ *  - GET  /api/public/assistente/respostas — quais balões da conversa são da Sofia (👍/👎 no balão, 13/11)
+ *  - POST /api/public/assistente/avaliar   — o 👍/👎 do balão
  */
+const ROTAS_DO_BOTAO: Readonly<Record<string, readonly string[]>> = {
+  '/api/public/assistente/estado': ['GET'],
+  '/api/public/funil/gestao': ['GET'],
+  '/api/public/assistente/respostas': ['GET'],
+  '/api/public/assistente/avaliar': ['POST'],
+};
+
 export function corsDoAssistente(path: string, origem: string, urlChatwoot: string | undefined): { origin: true; credentials: false; allowedHeaders: string[]; methods: string[] } | null {
-  // /funil/gestao: o menu pergunta se mostra «Marketing» e «Gestor» (mesma origem do Chatwoot, mesmos cabeçalhos de login)
-  if ((path !== '/api/public/assistente/estado' && path !== '/api/public/funil/gestao') || !urlChatwoot) return null;
+  const metodos = ROTAS_DO_BOTAO[path];
+  if (!metodos || !urlChatwoot) return null;
   try {
     if (new URL(urlChatwoot).origin !== origem) return null;
   } catch {
     return null;
   }
-  return { origin: true, credentials: false, allowedHeaders: ['X-CW-Token', 'X-CW-Client', 'X-CW-Uid'], methods: ['GET', 'OPTIONS'] };
+  const comCorpo = metodos.includes('POST');
+  return {
+    origin: true,
+    credentials: false,
+    allowedHeaders: comCorpo ? ['X-CW-Token', 'X-CW-Client', 'X-CW-Uid', 'Content-Type'] : ['X-CW-Token', 'X-CW-Client', 'X-CW-Uid'],
+    methods: [...metodos, 'OPTIONS'],
+  };
 }
 
 // ── pausa da IA na conversa (painel da assistente): estado, «Pausar IA (eu assumo)», «Reativar IA» ─────────────────────
@@ -410,18 +428,21 @@ async function conversaDaAtendente(req: Request, res: Response, idBruto: unknown
     res.status(400).json({ error: 'conversa inválida' });
     return null;
   }
+  let slug: string;
   try {
     const { caixa } = await leituraComLogin(a.c, a.sessao).conversa(conversa);
-    if (!caixa || !CAIXAS_REGUA[caixa]) {
+    const daCaixa = caixa ? CAIXAS_REGUA[caixa] : undefined;
+    if (!daCaixa) {
       res.status(422).json({ error: 'esta conversa não é de uma caixa com IA' });
       return null;
     }
+    slug = daCaixa;
   } catch (e) {
     const status = (e as { status?: number })?.status;
     res.status(status === 401 || status === 403 || status === 404 ? 404 : 502).json({ error: 'não consegui abrir esta conversa' });
     return null;
   }
-  return { a, conversa, porta: portaDaPausaDoChatwoot(a.c, a.sessao) };
+  return { a, conversa, slug, porta: portaDaPausaDoChatwoot(a.c, a.sessao) };
 }
 
 export async function assistentePausaEstadoHandler(req: Request, res: Response): Promise<void> {
@@ -461,32 +482,68 @@ export async function assistentePausaAcaoHandler(req: Request, res: Response): P
   }
 }
 
-// ── avaliar a última resposta da Sofia (👍/👎) ──────────────────────────────────────────────────────────────
-// 👍: só registra (log). 👎: registra e deixa NOTA PRIVADA na conversa (no nome de quem avaliou), para a equipe e para virar lição.
+// ── avaliar uma resposta da Sofia (👍/👎) ─────────────────────────────────────────────────────────────────
+// Pelo balão da mensagem (com `mensagem` = id da resposta) ou pelo painel (sem ela: a ÚLTIMA resposta gravada da Sofia na conversa).
+// Grava em `sofia_avaliacao` (uma por pessoa e mensagem) e alimenta a tela Agente. 👎 nova (ou que mudou) deixa NOTA PRIVADA na
+// conversa no nome de quem avaliou — ANTES de gravar: se a nota falhar, nada fica gravado e a nova tentativa manda de novo.
 export async function assistenteAvaliarHandler(req: Request, res: Response): Promise<void> {
-  const corpo = (req.body ?? {}) as { conversa?: unknown; nota?: unknown; texto?: unknown };
-  const nota = String(corpo.nota ?? '');
-  const texto = typeof corpo.texto === 'string' ? corpo.texto.trim().slice(0, 600) : '';
-  if (nota !== 'boa' && nota !== 'ruim') {
+  const corpo = (req.body ?? {}) as { conversa?: unknown; nota?: unknown; texto?: unknown; mensagem?: unknown };
+  const nota = corpo.nota;
+  const texto = limparTextoDaAvaliacao(typeof corpo.texto === 'string' ? corpo.texto : '');
+  if (!ehNota(nota)) {
     res.status(400).json({ error: 'avaliação inválida' });
     return;
   }
-  if (nota === 'ruim' && texto.length < 5) {
+  if (nota === 'ruim' && (texto ?? '').length < 5) {
     res.status(400).json({ error: 'escreva o que estava errado' });
+    return;
+  }
+  const idPedido = corpo.mensagem == null ? null : Number(corpo.mensagem);
+  if (idPedido !== null && !(Number.isInteger(idPedido) && idPedido > 0)) {
+    res.status(400).json({ error: 'mensagem inválida' });
     return;
   }
   const r = await conversaDaAtendente(req, res, corpo.conversa);
   if (!r) return;
-  logger.info({ conversa: r.conversa, nota, quem: r.a.id, tam: texto.length }, 'assistente: avaliação da Sofia');
-  if (nota === 'boa') {
-    res.json({ ok: true });
-    return;
-  }
   try {
-    await r.porta.nota(r.conversa, `👎 Resposta da Sofia avaliada como ruim por ${r.a.nome}: ${texto}`);
+    let mensagem = idPedido;
+    if (mensagem !== null) {
+      if (!(await bancoDeAvaliacoes.respostaDaSofia(mensagem, r.conversa))) {
+        res.status(404).json({ error: 'esta mensagem não é uma resposta da Sofia nesta conversa' });
+        return;
+      }
+    } else mensagem = await bancoDeAvaliacoes.ultimaRespostaDaSofia(r.conversa);
+    const quemId = r.a.id ?? null;
+    if (mensagem === null && nota === 'boa') {
+      // 👍 do painel sem resposta da Sofia gravada (conversa de antes do registro): não há o que juntar, só o log
+      logger.info({ conversa: r.conversa, nota, quem: quemId }, 'assistente: 👍 sem resposta gravada — só no log');
+      res.json({ ok: true });
+      return;
+    }
+    const ja = !quemId
+      ? null
+      : mensagem !== null
+        ? await bancoDeAvaliacoes.minhaAvaliacao(mensagem, quemId)
+        : await bancoDeAvaliacoes.minhaRuimSemMensagem(r.conversa, quemId); // 👎 do painel sem resposta gravada: junta com a aberta
+    const muda = avaliacaoMuda(ja, nota, texto);
+    if (nota === 'ruim' && muda) await r.porta.nota(r.conversa, `👎 Resposta da Sofia avaliada como ruim por ${r.a.nome}: ${texto}`);
+    if (muda) await bancoDeAvaliacoes.gravarAvaliacao({ slug: r.slug, conversa: r.conversa, mensagem, nota, texto, quemId, quemNome: r.a.nome || 'atendente' }, ja);
+    logger.info({ conversa: r.conversa, mensagem, nota, quem: quemId, tam: (texto ?? '').length, muda }, 'assistente: avaliação da Sofia');
     res.json({ ok: true });
   } catch (e) {
     logger.warn({ err: String(e), conversa: r.conversa }, 'assistente: não consegui gravar a avaliação');
     res.status(502).json({ error: 'não consegui registrar agora' });
+  }
+}
+
+/** As respostas da Sofia na conversa aberta (ids dos balões) e o que cada uma já recebeu — para o 👍/👎 no balão. */
+export async function assistenteRespostasHandler(req: Request, res: Response): Promise<void> {
+  const r = await conversaDaAtendente(req, res, req.query.conversa);
+  if (!r) return;
+  try {
+    res.set('Cache-Control', 'no-store').json({ respostas: await bancoDeAvaliacoes.respostasDaSofiaNaConversa(r.conversa, r.a.id ?? null) });
+  } catch (e) {
+    logger.warn({ err: String(e), conversa: r.conversa }, 'assistente: não consegui ler as respostas da Sofia');
+    res.status(502).json({ error: 'não consegui ler agora' });
   }
 }

@@ -493,6 +493,8 @@ export interface ResultadoDaSofia {
   /** endereço e mapa, depois de marcar (só no ligado) */
   cartao: string | null;
   passouParaEquipe: boolean;
+  /** a consulta que ela marcou nesta rodada (no ligado, depois de a franquia aceitar); null/ausente = não marcou */
+  agendou?: { data: string; hora: string } | null;
   /** o modelo falhou ou não escreveu resposta, mas as ferramentas já tinham agido: nada a enviar, equipe avisada */
   semResposta?: boolean;
 }
@@ -535,6 +537,7 @@ export async function rodarSofiaDoChatwoot(p: PedidoDaSofia, deps: DepsDaRodada)
       pix: null,
       cartao: null,
       passouParaEquipe: estado.passouParaEquipe,
+      agendou: p.modo === 'ligado' ? estado.agendou : null,
       semResposta: true,
     };
   }
@@ -566,5 +569,6 @@ export async function rodarSofiaDoChatwoot(p: PedidoDaSofia, deps: DepsDaRodada)
     pix: ligado ? (pixDoSinalDoTurno(recorder.traceId) ?? null) : null,
     cartao: ligado && consultaMarcadaNoTurno(recorder.traceId) ? legendaDoCartao(p.unit) : null,
     passouParaEquipe: estado.passouParaEquipe,
+    agendou: ligado ? estado.agendou : null,
   };
 }

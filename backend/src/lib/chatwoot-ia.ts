@@ -27,6 +27,7 @@ import { CAIXAS_REGUA } from './chatwoot-regua.js';
 import { aplicarEtiqueta, eventoDeEtiqueta, portasDaPonte, type PortasDaPonte } from './chatwoot-etiquetas.js';
 import { eventoDePausa, eventoDeReativacao, pausar, portaDaPausaDoChatwoot, reativar, type PortaDaPausa } from './chatwoot-pausa.js';
 import { transcribeAudio } from '../services/transcription.service.js';
+import { registrarEventoDaSofia, registrarRespostaDaSofia, ultimaFalaDoPaciente, type EventoDaSofia } from './sofia-avaliacoes.js';
 import { rodarTesteDaSofia } from '../controllers/playground.controller.js';
 import { cartaoNoKommoDaUnidade } from './chatwoot-cartao-kommo.js';
 import { portaDoChatwoot, type ConversaLida, type PortaDoChatwoot } from './chatwoot-porta.js';
@@ -159,8 +160,12 @@ export interface PortasDaIa {
   unidade(slug: string): Promise<Unit | null>;
   mensagens(conversa: number): Promise<any[]>;
   nota(conversa: number, texto: string): Promise<void>;
-  /** mensagem PÚBLICA (chega ao paciente); devolve o usuário do Chatwoot que a mandou (o da integração), se souber */
-  publica(conversa: number, texto: string): Promise<{ usuario: number | null }>;
+  /** mensagem PÚBLICA (chega ao paciente); devolve o usuário do Chatwoot que a mandou (o da integração) e o id da mensagem, se souber */
+  publica(conversa: number, texto: string): Promise<{ usuario: number | null; mensagem?: number | null }>;
+  /** guarda a resposta da Sofia (id da mensagem no Chatwoot) para os 👍/👎 do balão; opcional (os testes não precisam) */
+  registrarResposta?(r: { mensagem: number; conversa: number; slug: string; texto: string; fala: string | null }): Promise<void>;
+  /** guarda o que a Sofia FEZ e o painel do Agente conta (marcou, passou para a equipe, Pix que saiu); opcional (os testes não precisam) */
+  registrarEvento?(e: EventoDaSofia): Promise<void>;
   /** as consultas de pé deste paciente na franquia; null = não deu para conferir */
   agendaReal(unit: Unit, lida: ConversaLida): Promise<ConsultaReal[] | null>;
   /** passa a conversa para a equipe (etiqueta + etapa + nota); LANÇA se o Chatwoot falhar */
@@ -187,6 +192,8 @@ export function portasReais(ctx: ContextoChatwoot): PortasDaIa {
     },
     nota: (conversa, texto) => chat.nota(conversa, texto),
     publica: (conversa, texto) => chat.publica(conversa, texto),
+    registrarResposta: (r) => registrarRespostaDaSofia(r),
+    registrarEvento: (e) => registrarEventoDaSofia(e),
     async agendaReal(unit, lida) {
       const agora = new Date();
       const fuso = fusoDaUnidade(unit);
@@ -324,6 +331,10 @@ export async function rodarSofia(m: MensagemDoPaciente, p: PortasDaIa, mem: Memo
 
 async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem: MemoriaDaIa, modo: ModoDaSofia): Promise<Desfecho> {
   const chaveDia = `${m.slug}|${p.hoje()}`;
+  // o painel do Agente conta daqui; falhar ao gravar não atrapalha o paciente
+  const evento = async (tipo: EventoDaSofia['tipo'], extra: { nome?: string | null; detalhe?: string | null } = {}) => {
+    await p.registrarEvento?.({ slug: m.slug, conversa: m.conversa, tipo, ...extra }).catch((err) => logger.warn({ err: String(err), conversa: m.conversa, tipo }, `${ID_IA}: não consegui gravar o evento para o painel`));
+  };
   if ((mem.rodadas.get(chaveDia) ?? 0) >= TETO_SOFIA_POR_DIA) return 'teto';
   const mensagens = await p.mensagens(m.conversa);
   const falas = falasDaConversa(mensagens);
@@ -387,6 +398,7 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
           logger.error({ err: String(err), conversa: m.conversa }, `${ID_IA}: horário combinado diverge da agenda, mas não consegui passar para a equipe`);
           return 'falhou';
         }
+        await evento('equipe');
       }
       return 'horario-divergente';
     }
@@ -407,6 +419,9 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
     await p.nota(m.conversa, notaDaSofia(r.resposta, r.acoes));
     return 'nota';
   }
+  // o que ela FEZ conta agora (a resposta pode ser descartada logo abaixo): consulta marcada na franquia, passagem para a equipe
+  if (r.agendou) await evento('marcou', { nome: lida.nome || null, detalhe: `${r.agendou.data}T${r.agendou.hora}` });
+  if (r.passouParaEquipe) await evento('equipe');
 
   // ligado: o paciente pode ter escrito de novo (ou a equipe respondido, ou outra cópia do servidor) enquanto a Sofia pensava
   const gravou = r.acoes.some((a) => FERRAMENTAS_QUE_GRAVAM.has(a.tool));
@@ -438,6 +453,11 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
   try {
     const enviada = await p.publica(m.conversa, r.resposta);
     if (enviada?.usuario) mem.usuariosDaIntegracao.add(enviada.usuario);
+    // a resposta ganha 👍/👎 no balão do Chatwoot (tela Agente); falhar aqui não atrapalha o paciente
+    if (enviada?.mensagem && p.registrarResposta)
+      await p
+        .registrarResposta({ mensagem: enviada.mensagem, conversa: m.conversa, slug: m.slug, texto: r.resposta, fala: ultimaFalaDoPaciente(falas) })
+        .catch((err) => logger.warn({ err: String(err), conversa: m.conversa }, `${ID_IA}: não consegui guardar a resposta para a avaliação`));
   } catch (err) {
     // as ferramentas já gravaram: sem resposta o paciente fica sem saber. A equipe é avisada (nota) e a exceção sobe para o log.
     logger.error({ err: String(err), conversa: m.conversa, gravou }, `${ID_IA}: não consegui mandar a resposta da Sofia`);
@@ -447,7 +467,14 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
   // o Pix e o endereço são mensagens à parte: falhar nelas não desfaz o que já foi
   for (const extra of [r.pix, r.cartao]) {
     if (!extra) continue;
-    await p.publica(m.conversa, extra).catch((err) => logger.warn({ err: String(err), conversa: m.conversa }, `${ID_IA}: não consegui mandar a mensagem extra (Pix/endereço)`));
+    const saiu = await p
+      .publica(m.conversa, extra)
+      .then(() => true)
+      .catch((err) => {
+        logger.warn({ err: String(err), conversa: m.conversa }, `${ID_IA}: não consegui mandar a mensagem extra (Pix/endereço)`);
+        return false;
+      });
+    if (saiu && extra === r.pix) await evento('pix');
   }
   const nota = notaDoLigado(r.acoes);
   if (nota) await p.nota(m.conversa, nota).catch(() => undefined);

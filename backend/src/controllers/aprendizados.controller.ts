@@ -14,7 +14,7 @@ import { sessaoDaAtendente } from './funil.controller.js';
 import { leituraComLogin } from './assistente.controller.js';
 import { CAIXAS_REGUA } from '../lib/chatwoot-regua.js';
 import { ETIQUETA_PAUSA } from '../lib/chatwoot-pausa.js';
-import { chamar, contaChatwootDoAmbiente } from '../mcp-remoto/chatwoot.js';
+import { chamar } from '../mcp-remoto/chatwoot.js';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import type { Unit } from '@prisma/client';
@@ -79,7 +79,11 @@ function fuso(unit: Unit): string {
  * atenda uma caixa desta unidade. O nome dela vira o «por» de quem mudou (não dá para escrever outro). Não depende da chave
  * `aprendizados-pela-unidade` (ela fecha a página PÚBLICA com código; aqui o acesso é o login do Chatwoot).
  */
-async function unidadePeloChatwoot(req: Request, res: Response, slug: string): Promise<Unit | null> {
+export async function atendenteDaUnidade(
+  req: Request,
+  res: Response,
+  slug: string,
+): Promise<{ a: NonNullable<Awaited<ReturnType<typeof sessaoDaAtendente>>>; unit: Unit } | null> {
   const a = await sessaoDaAtendente(req, res);
   if (!a) return null;
   let caixas: number[];
@@ -98,8 +102,14 @@ async function unidadePeloChatwoot(req: Request, res: Response, slug: string): P
     res.status(404).json({ error: 'unidade não encontrada' });
     return null;
   }
-  if (req.body && typeof req.body === 'object') (req.body as Record<string, unknown>).por = a.nome.slice(0, 80) || 'atendente';
-  return unit;
+  return { a, unit };
+}
+
+async function unidadePeloChatwoot(req: Request, res: Response, slug: string): Promise<Unit | null> {
+  const r = await atendenteDaUnidade(req, res, slug);
+  if (!r) return null;
+  if (req.body && typeof req.body === 'object') (req.body as Record<string, unknown>).por = r.a.nome.slice(0, 80) || 'atendente';
+  return r.unit;
 }
 
 /** Chave desligada = a unidade "não existe" aqui, antes de olhar código (não dá para sondar). */
@@ -468,16 +478,6 @@ export async function testarIaPausadasHandler(req: Request, res: Response): Prom
     logger.warn({ err: String(e) }, 'testar-ia: pausadas falhou');
     res.status(502).json({ error: 'não consegui ler as conversas pausadas' });
   }
-}
-
-/** A página "Testar a IA" (iframe do menu do Chatwoot): a mesma página de ensinar a Sofia, em modo Chatwoot (claro, sem código). */
-export function paginaTestarIaHandler(_req: Request, res: Response): void {
-  const conta = contaChatwootDoAmbiente();
-  if (!conta) {
-    res.status(404).type('html').send('<!doctype html><meta charset="utf-8"><p style="font-family:sans-serif;padding:24px">Chatwoot não configurado.</p>');
-    return;
-  }
-  res.type('html').send(paginaHtml('', 'Testar a IA', { chatwoot: new URL(conta.url).origin }));
 }
 
 // ── a página ─────────────────────────────────────────────────────────────────

@@ -28,8 +28,8 @@ export interface PortaDoChatwoot {
   adicionarEtiquetas(id: number, etiquetas: string[]): Promise<void>;
   /** Nota PRIVADA. */
   nota(id: number, texto: string): Promise<void>;
-  /** Mensagem PÚBLICA: chega ao paciente. Devolve o usuário do Chatwoot que a enviou (o da integração), se a resposta disser. */
-  publica(id: number, texto: string): Promise<{ usuario: number | null }>;
+  /** Mensagem PÚBLICA: chega ao paciente. Devolve o usuário do Chatwoot que a enviou (o da integração) e o id da mensagem, se a resposta disser. */
+  publica(id: number, texto: string): Promise<{ usuario: number | null; mensagem?: number | null }>;
   /** Os valores válidos de um atributo de lista (definição viva do Chatwoot); [] = não é lista ou não deu para ler. */
   valoresDoAtributo(chave: string): Promise<string[]>;
   /** As etiquetas que existem na conta. */
@@ -80,9 +80,13 @@ export function portaDoChatwoot(ctx: ContextoChatwoot): PortaDoChatwoot {
       await chamar(ctx, 'POST', `conversations/${id}/messages`, { corpo: { content: t, message_type: 'outgoing', private: true } });
     },
     async publica(id, t) {
-      const r = (await chamar(ctx, 'POST', `conversations/${id}/messages`, { corpo: { content: t, message_type: 'outgoing', private: false } })) as { sender?: { id?: unknown } } | null;
+      const r = (await chamar(ctx, 'POST', `conversations/${id}/messages`, { corpo: { content: t, message_type: 'outgoing', private: false } })) as {
+        id?: unknown;
+        sender?: { id?: unknown };
+      } | null;
       const usuario = Number(r?.sender?.id);
-      return { usuario: Number.isInteger(usuario) && usuario > 0 ? usuario : null };
+      const mensagem = Number(r?.id);
+      return { usuario: Number.isInteger(usuario) && usuario > 0 ? usuario : null, mensagem: Number.isInteger(mensagem) && mensagem > 0 ? mensagem : null };
     },
     async valoresDoAtributo(chave) {
       const g = listas.get(chave);
