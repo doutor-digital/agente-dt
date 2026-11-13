@@ -5,6 +5,7 @@
  * CUIDADO COM A SOFIA: o limitador do Kommo é UM só pro processo (uma chamada a cada 180 ms, todas
  * as contas). Cada chamada daqui entra na mesma fila das respostas dela. Por isso: no máximo
  * MAX_UNIDADES_KOMMO contas por chamada, 4 páginas (1.000 leads) por conta, telefones em lote e cache.
+ * A caixa de entrada: kommo_entrada lê até as mesmas 4 páginas; a contagem `naEntrada` do kommo_leads lê só 1 (250 conversas) por conta.
  */
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
@@ -465,29 +466,38 @@ export async function kommoLeads(
 
 // ── a caixa «Leads de entrada» (unsorted) ──
 
+/** a contagem `naEntrada` do kommo_leads lê só a página mais nova da caixa (250 conversas): um kommo_leads frio não vira 4 leituras por conta */
+const PAGINAS_NA_CONTAGEM = 1;
+
 const AGRUPAMENTOS_DA_ENTRADA = ['dia', 'mes', 'origem', 'canal', 'funil'] as const;
 
 /**
- * 403 na caixa de entrada: a rota pede token de administrador (a mesma razão pela qual o robô da entrada lê sem o freio global).
- * Em português e dizendo de quem é o conserto, não "Request failed with status code 403".
+ * 403 na caixa de entrada. Só o corpo do erro separa as causas (mesma regra de `explicar403DaConversa` e do freio em `kommo.service`):
+ * - "Invalid scope": o token da conta não tem a permissão dessa rota; repetir não adianta e o conserto é um token novo, do João.
+ * - sem a marca: pode ser bloqueio temporário por excesso de chamadas OU um token sem poder sobre a caixa de entrada (a rota é mais
+ *   restrita que a de leads). Não se promete nada nem se culpa o token.
+ * Em português, não "Request failed with status code 403"; a exceção original segue em `cause` e o status e a rota vão no fim do texto.
  */
 export function explicar403DaEntrada(e: unknown, unidade: string): unknown {
   const status = e instanceof Error && e.name === 'KommoApiError' ? (e as { status?: number }).status : undefined;
   if (status !== 403) return e;
-  return new Error(
-    `O Kommo de ${unidade} recusou a leitura da caixa «Leads de entrada» (403): essa rota pede um token de administrador da conta. ` +
-      'Não é erro do seu pedido e repetir não adianta; quem resolve é o João, gerando um token novo. O resto do Kommo (kommo_leads, kommo_lead…) segue funcionando. ' +
-      `[Kommo: ${(e as Error).message}]`,
-    { cause: e },
-  );
+  const detalhe = `[Kommo: ${(e as Error).message}]`;
+  const texto = eh403DeEscopo((e as { responseBody?: unknown }).responseBody)
+    ? `O Kommo de ${unidade} recusou a leitura da caixa «Leads de entrada» (403): o token dessa conta não tem a permissão dessa rota. ` +
+      'Não é erro do seu pedido e repetir não adianta; quem resolve é o João, gerando um token novo da conta. ' +
+      'O resto do Kommo (kommo_leads, kommo_lead…) segue funcionando.'
+    : `O Kommo de ${unidade} recusou a leitura da caixa «Leads de entrada» (403) e o conector não identificou a causa: o corpo da resposta não diz que falta permissão, ` +
+      'então pode ser bloqueio temporário por excesso de chamadas (tente de novo em alguns minutos) ou um token sem acesso à caixa de entrada. ' +
+      'O resto do Kommo (kommo_leads, kommo_lead…) segue funcionando.';
+  return new Error(`${texto} ${detalhe}`, { cause: e });
 }
 
 /**
  * As conversas da entrada no período (dia local da unidade, pela data em que ENTRARAM). Conta dividida é recusada: a conversa
  * ainda não tem «⌂ Unidade de atendimento», então a caixa não se separa por unidade e mostrá-la entregaria pacientes da irmã.
- * A janela vai pro cache pela CONTA (kommo_leads e kommo_entrada leem a mesma, uma vez só).
+ * A janela vai pro cache pela CONTA e pelo teto de páginas.
  */
-export async function entradaDoPeriodo(ctx: ContextoKommo, u: UnidadeKommo, inicio: string, fim: string): Promise<{ itens: ConversaNaEntrada[]; truncado: boolean }> {
+export async function entradaDoPeriodo(ctx: ContextoKommo, u: UnidadeKommo, inicio: string, fim: string, maxPaginas = ctx.maxPaginas): Promise<{ itens: ConversaNaEntrada[]; truncado: boolean }> {
   if (!u.fonte.entrada) throw new ErroDeEntrada('esta conta do Kommo não tem a leitura da caixa de entrada ligada');
   if (u.divisao) {
     throw new ErroDeEntrada(
@@ -498,7 +508,7 @@ export async function entradaDoPeriodo(ctx: ContextoKommo, u: UnidadeKommo, inic
   const de = epochDoDiaLocal(inicio, u.fuso);
   const ate = epochDoDiaLocal(fim, u.fuso, true);
   const ler = u.fonte.entrada.bind(u.fonte);
-  const bruto = await comCache(ctx, `entrada|${contaDe(u)}|${de}|${ate}`, TTL.busca, () => ler(de, ate, ctx.maxPaginas).catch((e: unknown) => { throw explicar403DaEntrada(e, u.slug); }));
+  const bruto = await comCache(ctx, `entrada|${contaDe(u)}|${de}|${ate}|${maxPaginas}`, TTL.busca, () => ler(de, ate, maxPaginas).catch((e: unknown) => { throw explicar403DaEntrada(e, u.slug); }));
   return { itens: [...bruto.itens].sort((a, b) => b.criadoEm - a.criadoEm), truncado: bruto.truncado };
 }
 
@@ -627,14 +637,14 @@ async function naEntradaDaUnidade(ctx: ContextoKommo, u: UnidadeKommo, inicio: s
   if (u.divisao) {
     return { naEntrada: null, avisoEntrada: 'Conta dividida entre unidades: a caixa «Leads de entrada» é da conta toda e não se separa por unidade, então não foi contada.' };
   }
-  // o RESULTADO é que vai pro cache (leitura truncada ou com erro também): senão cada kommo_leads refaria até 4 páginas que falham ou que não terminam
+  // o RESULTADO é que vai pro cache (leitura truncada ou com erro também): senão cada kommo_leads refaria a página que falha ou que não termina
   const chave = `na-entrada|${contaDe(u)}|${inicio}|${fim}`;
   const guardado = ctx.cache.pegar<Record<string, unknown>>(chave);
   if (guardado !== undefined) return guardado;
   let r: Record<string, unknown>;
   let ttl: number = TTL.busca;
   try {
-    const { itens, truncado } = await entradaDoPeriodo(ctx, u, inicio, fim);
+    const { itens, truncado } = await entradaDoPeriodo(ctx, u, inicio, fim, PAGINAS_NA_CONTAGEM);
     const n = itens.length;
     r = {
       naEntrada: n,
@@ -643,6 +653,7 @@ async function naEntradaDaUnidade(ctx: ContextoKommo, u: UnidadeKommo, inicio: s
         ? {
             avisoEntrada:
               `${truncado ? 'No mínimo ' : ''}${n} conversa(s) do período estão na caixa «Leads de entrada», NÃO aceitas: não entram em total nem em itens acima. ` +
+              (truncado ? `Li só as ${PAGINAS_NA_CONTAGEM * 250} mais recentes da caixa. ` : '') +
               'Lead que ninguém aceitou continua sendo lead — use kommo_entrada para listá-las antes de concluir que «quase não entra lead».',
           }
         : {}),
@@ -901,10 +912,10 @@ export function registrarFerramentasKommo(server: McpServer, ctx: ContextoKommo,
         'Só leitura: nada é aceito, recusado ou movido. Período pela data em que a conversa ENTROU na caixa (dia local da unidade). ' +
         'Cada item: leadId (o cartão provisório da conversa), contatoId, nome, telefone, canal (whatsapp, waba…), origem (nome da fonte no Kommo, ex. o WhatsApp conectado), ' +
         'recebidoEm (hora local), funil e link do cartão. agruparPor: "dia", "mes", "origem", "canal" ou "funil". ' +
-        'O texto das mensagens não vem aqui: para ler a conversa de um item use kommo_conversa com o leadId (e kommo_lead / kommo_notas no mesmo número); ' +
-        'esses três leem pelo número do cartão — se o Kommo recusar um cartão ainda não aceito, o nome, o telefone e a data desta lista são o que há. ' +
+        'O texto das mensagens não vem aqui: para ler a conversa de um item use kommo_conversa com o leadId; kommo_lead (cartão provisório) e kommo_notas ' +
+        'funcionam no mesmo leadId (medido na Magalhães: o cartão abre na etapa «Incoming leads» e as conversas e notas leem normalmente). ' +
         `Até ${MAX_UNIDADES_KOMMO} unidades por chamada (o Kommo divide a fila com a Sofia); "rede" soma só as que responderam. ` +
-        `O Kommo não filtra a caixa por data: a leitura vai do mais novo ao mais velho e "truncado" = parou em ${250 * 4} conversas antes do início do período (o total é um mínimo). ` +
+        `O Kommo não filtra a caixa por data: a leitura vai do mais novo ao mais velho e "truncado" = parou em ${ctx.maxPaginas * 250} conversas antes do início do período (o total é um mínimo). ` +
         'Contas divididas entre duas unidades (Petrópolis/Caxias) são recusadas: a caixa é da conta toda. maxItens (padrão 30 com uma unidade, 0 com várias) e pular paginam a lista.',
       inputSchema: {
         unidade,
@@ -942,7 +953,8 @@ export function registrarFerramentasKommo(server: McpServer, ctx: ContextoKommo,
     'kommo_buscar_telefone',
     {
       title: 'Kommo: cartões de um telefone',
-      description: 'Os cartões do Kommo ligados a um telefone (com ou sem DDI/máscara). UMA unidade. Serve pra achar o cartão de um paciente da franquia.',
+      description: 'Os cartões do Kommo ligados a um telefone (com ou sem DDI/máscara). UMA unidade. Serve pra achar o cartão de um paciente da franquia. ' +
+        'ATENÇÃO: conversa que está só na caixa «Leads de entrada» (ninguém aceitou) NÃO aparece nesta busca: se o telefone não achou nada, procure também em kommo_entrada.',
       inputSchema: { unidade: z.string().min(1), telefone: z.string().min(8) },
       annotations: ro,
     },
@@ -957,7 +969,7 @@ export function registrarFerramentasKommo(server: McpServer, ctx: ContextoKommo,
         'marcada como paciente, sofia (robôs: Sofia, transmissões, régua) ou equipe, com o nome de quem enviou. Áudio/imagem aparecem como [áudio]/[imagem]. ' +
         'Padrão: as 30 mais recentes; todas=true traz o histórico inteiro (até 500); inicio/fim filtram um período. ' +
         'Um lead por chamada: é conversa de saúde, e cada consulta fica registrada com o usuário. Para achar o número do cartão, use ' +
-        'kommo_buscar_telefone ou kommo_leads.',
+        'kommo_buscar_telefone ou kommo_leads; conversa que está só na caixa «Leads de entrada» (não aceita) não aparece neles: use kommo_entrada, cujo leadId serve aqui.',
       inputSchema: {
         unidade: z.string().min(1).describe('UMA unidade: slug ou nome curto ("serra")'),
         leadId: z.number().int().positive().describe('número do cartão (lead) no Kommo'),
@@ -979,7 +991,7 @@ export function registrarFerramentasKommo(server: McpServer, ctx: ContextoKommo,
         'robôs (sinal de alerta, paciente insistiu com a IA pausada, franquia…), anotações da equipe e registros de ligação. ' +
         'Cada nota vem com quando, tipo, autor (nome do usuário, ou "robô/integração") e texto. ' +
         `Padrão: as 30 mais recentes; limite até ${TETO_NOTAS}; inicio/fim filtram um período. Um lead por chamada — é dado de saúde, ` +
-        'e cada consulta fica registrada com o usuário. Para achar o número do cartão, use kommo_buscar_telefone ou kommo_leads.',
+        'e cada consulta fica registrada com o usuário. Para achar o número do cartão, use kommo_buscar_telefone ou kommo_leads (conversa só na caixa «Leads de entrada» está em kommo_entrada).',
       inputSchema: {
         unidade: z.string().min(1).describe('UMA unidade: slug ou nome curto ("serra")'),
         leadId: z.number().int().positive().describe('número do cartão (lead) no Kommo'),

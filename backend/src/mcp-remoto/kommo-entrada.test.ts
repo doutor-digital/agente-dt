@@ -134,15 +134,22 @@ test('kommo_entrada: pedido inválido, conta sem a leitura e conta dividida são
   assert.match(d.porUnidade['doutor-hernia-caxias'].erro, /divide o Kommo/);
 });
 
-test('kommo_entrada: 403 do Kommo vira texto em português com o dono do conserto; o resto passa como veio', async () => {
-  const f403: FonteKommo = { ...comEntrada([]), entrada: async () => { throw new KommoApiError('lerEntrada(p1): Request failed with status code 403', 403, { title: 'Forbidden' }); } };
-  const r = (await kommoEntrada(ctxCom(f403), { unidade: 'magalhaes', inicio: '2026-09-01', fim: '2026-09-30' })) as Record<string, any>;
-  assert.match(r.porUnidade['magalhaes-advocacia'].erro, /token de administrador/);
-  assert.match(r.porUnidade['magalhaes-advocacia'].erro, /403/);
-  const f500: FonteKommo = { ...comEntrada([]), entrada: async () => { throw new KommoApiError('lerEntrada(p1): Request failed with status code 500', 500, undefined); } };
-  const r5 = (await kommoEntrada(ctxCom(f500), { unidade: 'magalhaes', inicio: '2026-09-01', fim: '2026-09-30' })) as Record<string, any>;
-  assert.match(r5.porUnidade['magalhaes-advocacia'].erro, /500/);
-  assert.doesNotMatch(r5.porUnidade['magalhaes-advocacia'].erro, /administrador/);
+test('kommo_entrada: 403 COM a marca de escopo culpa o token; 403 sem a marca NÃO promete nada nem culpa o token; o resto passa como veio', async () => {
+  const falha = (msg: string, status: number, corpo?: unknown): FonteKommo => ({ ...comEntrada([]), entrada: async () => { throw new KommoApiError(msg, status, corpo); } });
+  const erro = async (f: FonteKommo) =>
+    ((await kommoEntrada(ctxCom(f), { unidade: 'magalhaes', inicio: '2026-09-01', fim: '2026-09-30' })) as Record<string, any>).porUnidade['magalhaes-advocacia'].erro as string;
+  const escopo = await erro(falha('lerEntrada(p1): Request failed with status code 403', 403, { title: 'Forbidden', detail: 'Invalid scope: leads' }));
+  assert.match(escopo, /não tem a permissão dessa rota/);
+  assert.match(escopo, /João/);
+  assert.match(escopo, /403/);
+  const semMarca = await erro(falha('lerEntrada(p1): Request failed with status code 403', 403, { title: 'Forbidden' }));
+  assert.match(semMarca, /não identificou a causa/);
+  assert.match(semMarca, /excesso de chamadas/);
+  assert.doesNotMatch(semMarca, /token de administrador|repetir não adianta|quem resolve é o João/);
+  assert.match(semMarca, /403/);
+  const e500 = await erro(falha('lerEntrada(p1): Request failed with status code 500', 500));
+  assert.match(e500, /500/);
+  assert.doesNotMatch(e500, /permissão|excesso|identificou/);
 });
 
 test('kommo_leads: acrescenta naEntrada por unidade e na rede, com o aviso; entrada que falha não derruba o kommo_leads', async () => {
@@ -169,6 +176,15 @@ test('kommo_leads: acrescenta naEntrada por unidade e na rede, com o aviso; entr
   const vazia = (await kommoLeads(criarContextoKommo(new Map([['a', unidadeKommo('a', comEntrada([]))]])), { unidade: 'a', inicio: '2026-09-01', fim: '2026-09-30' })) as Record<string, any>;
   assert.equal(vazia.porUnidade.a.naEntrada, 0);
   assert.equal('avisoEntrada' in vazia.porUnidade.a, false);
+});
+
+test('kommo_leads: a contagem da entrada lê UMA página por conta; kommo_entrada continua com o teto cheio', async () => {
+  const pedidos: Array<[number, number, number]> = [];
+  const ctx = criarContextoKommo(new Map([['a', unidadeKommo('a', { ...comEntrada(CONVERSAS, pedidos), ...fonteFalsa([leadFalso(1, '2026-09-01T12:00:00Z')]), entrada: comEntrada(CONVERSAS, pedidos).entrada })]]));
+  await kommoLeads(ctx, { unidade: 'a', inicio: '2026-09-01', fim: '2026-09-30' });
+  assert.deepEqual(pedidos.map((p) => p[2]), [1]);
+  await kommoEntrada(ctx, { unidade: 'a', inicio: '2026-09-01', fim: '2026-09-30' });
+  assert.deepEqual(pedidos.map((p) => p[2]), [1, 4], 'a leitura de 1 página não vira a resposta da de 4');
 });
 
 test('kommo_leads: a contagem da entrada vai pro cache (também truncada ou com erro) e a rede avisa quando NENHUMA unidade foi lida', async () => {
@@ -209,6 +225,10 @@ test('kommo_entrada registrada: só leitura, aparece na lista, passa pela audito
   assert.equal(ferramenta.annotations?.readOnlyHint, true);
   assert.match(ferramenta.description!, /NÃO aceitas|NINGUÉM aceitou/);
   assert.match(ferramenta.description!, /kommo_conversa/);
+  assert.doesNotMatch(ferramenta.description!, /se o Kommo recusar/);
+  assert.match(ferramenta.description!, /funcionam no mesmo leadId/);
+  assert.match(ferramenta.description!, /parou em 1000 conversas/);
+  assert.match(tools.find((x) => x.name === 'kommo_buscar_telefone')!.description!, /só na caixa «Leads de entrada».*kommo_entrada/);
   const ok = await c.callTool({ name: 'kommo_entrada', arguments: { unidade: 'magalhaes', inicio: '2026-09-01', fim: '2026-09-30', agruparPor: 'mes' } });
   assert.notEqual(ok.isError, true);
   const corpo = JSON.parse((ok.content as Array<{ text: string }>)[0]!.text);
