@@ -79,6 +79,7 @@ test('atalhos na caixa de resposta: só acionam o nativo, nunca empurram o «Env
   assert.ok(bloco.includes('.i-ph-whatsapp-logo') && bloco.includes('ICONES_NATIVOS'), 'janela fechada (sem emoji/clipe) ainda acha a barra');
   assert.ok(bloco.includes('enviar.scrollWidth') && bloco.includes("classList.add('compacto')") && bloco.includes('box.hidden = true'), 'mede a sobra: nome → ícone → some');
   assert.ok(bloco.includes("document.querySelector('[data-popover-content]')") && bloco.includes("execCommand('delete')"), 'tira a "/" solta');
+  assert.ok(bloco.includes('conversaDaUrl() !== w.conversa') && bloco.includes('!w.ed.contains(ativo)'), 'desiste se trocou de conversa ou foi para outro campo');
   assert.ok(!bloco.includes('font:500') && !js.includes('/1.2 inherit'), 'sem atalho font com inherit (CSS inválido)');
   assert.equal((bloco.match(/innerHTML/g) ?? []).length, 0);
   assert.ok(js.includes('try { marcarCaixaDeResposta(); } catch (e) {}'));

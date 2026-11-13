@@ -286,13 +286,17 @@ const BOTAO_JS = String.raw`(function(){
     r.selectNodeContents(ed); r.collapse(false); sel.removeAllRanges(); sel.addRange(r);
     var token = (ed.innerText || '').trim() ? ' /' : '/';
     document.execCommand('insertText', false, token);
-    AT.esperaBarra = { ed: ed, token: token, ate: Date.now() + 120000, viuLista: false };
+    AT.esperaBarra = { ed: ed, token: token, ate: Date.now() + 120000, viuLista: false, conversa: conversaDaUrl() };
   }
   // a lista nativa abre numa camada solta com data-popover-content; se fechou e o texto ainda termina na "/" que nós
   // digitamos (a pessoa não escolheu nem digitou nada depois), tira a "/" — e só ela
   function limparBarraSolta(){
     var w = AT.esperaBarra; if (!w) return;
     if (!document.body.contains(w.ed) || Date.now() > w.ate) { AT.esperaBarra = null; return; }
+    // trocou de conversa (a caixa de resposta é a mesma, o rascunho é outro) ou foi digitar noutro campo: desiste, sem mexer
+    if (conversaDaUrl() !== w.conversa) { AT.esperaBarra = null; return; }
+    var ativo = document.activeElement;
+    if (ativo && ativo !== document.body && ativo !== w.ed && !w.ed.contains(ativo)) { AT.esperaBarra = null; return; }
     var aberta = !!document.querySelector('[data-popover-content]');
     if (aberta) { w.viuLista = true; return; }
     if (!w.viuLista && Date.now() < w.ate - 118000) return; // a lista ainda vai abrir
