@@ -22,7 +22,28 @@ import { contaChatwootDoAmbiente, criarContextoChatwoot, chamar, type ContextoCh
 import { createHash } from 'node:crypto';
 import { prisma } from '../lib/prisma.js';
 import { conversasDasPaginas, diaEmBelem, montarHoje } from '../lib/chatwoot-hoje.js';
-import { CAIXAS_HISTORICO } from '../lib/chatwoot-regua.js';
+import {
+  credenciaisDeAnuncio,
+  emailDoPerfil,
+  montarGestor,
+  montarMarketing,
+  montarOportunidades,
+  papelNaConta,
+  podeVerGestao,
+  referralDasMensagens,
+  resolverPeriodo,
+  somarFaturado,
+  criadaNaJanela,
+  type Faturado,
+  type JanelaDoPeriodo,
+  type Investido,
+  type LinhaAnuncio,
+  type Referral,
+} from '../lib/chatwoot-gestor.js';
+import { gastoDaConta, gastoDiarioDaConta } from '../lib/meta-anuncios.js';
+import { TELAS_CSS, TELAS_JS } from '../lib/chatwoot-telas-ui.js';
+import { instanteNoFuso, searchTreatments } from '../services/spine.service.js';
+import { CAIXAS_HISTORICO, CAIXAS_REGUA, CAMPO_PARTIDA } from '../lib/chatwoot-regua.js';
 import { assistenteJs } from '../lib/chatwoot-assistente-ui.js';
 import {
   ATRIBUTO_ETAPA,
@@ -68,19 +89,19 @@ function errou(ip: string): void {
 
 // Login do Chatwoot já conferido: hash da sessão → nome (5 min). Consequência aceita: quem sai do Chatwoot (ou é tirado da
 // conta) ainda vê o funil por até 5 min nesta aba.
-const sessoes = new Map<string, { nome: string; id: number | null; ate: number }>();
+const sessoes = new Map<string, { nome: string; id: number | null; papel: string | null; email: string | null; ate: number }>();
 const SESSAO_VALE_MS = 5 * 60_000;
 // Teto GLOBAL de consultas ao /profile do Chatwoot (sessão ainda não conferida). Não é por ip: sem `trust proxy`, atrás do
 // Traefik, o ip é o mesmo para todo mundo. Sessão já conferida (no cache) nunca esbarra nele.
 const MAX_CONFERENCIAS_POR_MIN = 120;
 let conferencias = { n: 0, desde: 0 };
 
-type Conferencia = { nome: string; id: number | null } | 'invalida' | 'sem-conta' | 'indisponivel' | 'excesso';
+type Conferencia = { nome: string; id: number | null; papel: string | null; email: string | null } | 'invalida' | 'sem-conta' | 'indisponivel' | 'excesso';
 
 async function quemEstaLogado(c: ContextoChatwoot, s: SessaoChatwoot): Promise<Conferencia> {
   const k = createHash('sha256').update(`${s.token}|${s.client}|${s.uid}`).digest('hex');
   const t = sessoes.get(k);
-  if (t && t.ate > Date.now()) return { nome: t.nome, id: t.id };
+  if (t && t.ate > Date.now()) return { nome: t.nome, id: t.id, papel: t.papel, email: t.email };
   if (Date.now() - conferencias.desde > 60_000) conferencias = { n: 0, desde: Date.now() };
   if (++conferencias.n > MAX_CONFERENCIAS_POR_MIN) return 'excesso';
   let r: globalThis.Response;
@@ -95,15 +116,17 @@ async function quemEstaLogado(c: ContextoChatwoot, s: SessaoChatwoot): Promise<C
   // só "o Chatwoot recusou o login" é sessão inválida; queda, timeout e 5xx não são culpa de quem está usando
   if (r.status === 401 || r.status === 403) return 'invalida';
   if (!r.ok) return 'indisponivel';
-  const perfil = (await r.json().catch(() => null)) as { id?: unknown } | null;
+  const perfil = (await r.json().catch(() => null)) as { id?: unknown; name?: unknown; email?: unknown; accounts?: unknown } | null;
   const nome = nomeSeTemConta(perfil, c.conta!.conta);
   const id = Number(perfil?.id);
   // login válido, mas de quem não é desta conta: não é sessão vencida ("entre de novo" nunca resolveria)
   if (!nome) return 'sem-conta';
   if (sessoes.size > 500) sessoes.clear();
   const idOk = Number.isInteger(id) && id > 0 ? id : null;
-  sessoes.set(k, { nome, id: idOk, ate: Date.now() + SESSAO_VALE_MS });
-  return { nome, id: idOk };
+  const papel = papelNaConta(perfil, c.conta!.conta);
+  const email = emailDoPerfil(perfil);
+  sessoes.set(k, { nome, id: idOk, papel, email, ate: Date.now() + SESSAO_VALE_MS });
+  return { nome, id: idOk, papel, email };
 }
 
 /**
@@ -120,6 +143,9 @@ interface Acesso {
   /** id do usuário no Chatwoot (o filtro "Minhas" compara por ele, não pelo nome) */
   logadoId: number | null;
   sessao: SessaoChatwoot | null;
+  /** papel nesta conta (`administrator` | `agent`) e e-mail — só com o login do Chatwoot; decidem quem vê Gestor e Marketing */
+  papel?: string | null;
+  email?: string | null;
 }
 
 async function autorizado(req: Request, res: Response): Promise<Acesso | null> {
@@ -146,7 +172,7 @@ async function autorizado(req: Request, res: Response): Promise<Acesso | null> {
     return null;
   }
   const r = await quemEstaLogado(c, sessao);
-  if (typeof r === 'object') return { c, logado: r.nome, logadoId: r.id, sessao };
+  if (typeof r === 'object') return { c, logado: r.nome, logadoId: r.id, sessao, papel: r.papel, email: r.email };
   recusarSessao(res, r, 403);
   return null;
 }
@@ -230,21 +256,36 @@ async function vencimentosAbertos(conta: number, ids: number[]): Promise<Map<num
  * Com ?caixa=, só ela (caixa de histórico pedida direto = nada).
  */
 async function paginasDasCaixas(a: Acesso, caixa: number): Promise<unknown[]> {
+  return (await lerCaixas(a, caixa, MAX_PAGINAS)).paginas;
+}
+
+/** As caixas (e as páginas de cada uma) que a pessoa lê; `cortou` = alguma caixa tinha mais conversas que o teto de páginas. */
+async function lerCaixas(a: Acesso, caixa: number, maxPaginas: number, soDeUnidades = false, lote = 1): Promise<{ paginas: unknown[]; cortou: boolean }> {
   let ids: number[];
-  if (Number.isInteger(caixa) && caixa > 0) ids = CAIXAS_HISTORICO.has(caixa) ? [] : [caixa];
+  const vale = (id: number) => Number.isInteger(id) && !CAIXAS_HISTORICO.has(id) && (!soDeUnidades || !!CAIXAS_REGUA[id]);
+  if (Number.isInteger(caixa) && caixa > 0) ids = vale(caixa) ? [caixa] : [];
   else {
     const r = (await cw(a, 'GET', 'inboxes')) as any;
-    ids = (Array.isArray(r?.payload) ? r.payload : []).map((i: any) => Number(i.id)).filter((id: number) => Number.isInteger(id) && !CAIXAS_HISTORICO.has(id));
+    ids = (Array.isArray(r?.payload) ? r.payload : []).map((i: any) => Number(i.id)).filter(vale);
   }
   const paginas: unknown[] = [];
+  let cortou = false;
   for (const id of ids) {
-    for (let p = 1; p <= MAX_PAGINAS; p++) {
-      const pg = (await cw(a, 'GET', 'conversations', { query: { status: 'all', assignee_type: 'all', inbox_id: String(id), page: String(p) } })) as any;
-      paginas.push(pg);
-      if ((pg?.data?.payload?.length ?? 0) < 25) break;
+    // `lote` páginas por vez (as telas de gestão pedem 4: as páginas não dependem umas das outras e 600 conversas em fila levariam
+    // dezenas de segundos); o quadro e o Hoje seguem uma por vez, como sempre
+    for (let p = 1; p <= maxPaginas; p += lote) {
+      const numeros = Array.from({ length: Math.min(lote, maxPaginas - p + 1) }, (_, i) => p + i);
+      const lidas = (await Promise.all(numeros.map((n) => cw(a, 'GET', 'conversations', { query: { status: 'all', assignee_type: 'all', inbox_id: String(id), page: String(n) } })))) as any[];
+      let acabou = false;
+      for (const pg of lidas) {
+        paginas.push(pg);
+        if ((pg?.data?.payload?.length ?? 0) < 25) acabou = true;
+      }
+      if (acabou) break;
+      if (p + lote - 1 >= maxPaginas) cortou = true;
     }
   }
-  return paginas;
+  return { paginas, cortou };
 }
 
 export async function funilQuadroHandler(req: Request, res: Response): Promise<void> {
@@ -284,6 +325,357 @@ export async function funilHojeHandler(req: Request, res: Response): Promise<voi
   } catch (e) {
     falhou(res, e, 'hoje');
   }
+}
+
+// ── Oportunidades · Marketing · Gestor (13/11/2026) ───────────────────────────────────────────────────────────────
+// Sempre com o login da própria pessoa (só as caixas dela). Marketing e Gestor ainda exigem ser administrador da conta ou estar
+// em CHATWOOT_GESTORES — checado AQUI, no servidor, não só no menu. Nada de dado de paciente em log.
+
+/** Resposta pronta por pessoa+tela por 45 s, e pedido igual em andamento vira um só: o botão de atualizar não vira rajada no Chatwoot. */
+const prontas = new Map<string, { ate: number; v: unknown }>();
+const emAndamento = new Map<string, Promise<unknown>>();
+async function memo<T>(chave: string, vale: number, fn: () => Promise<T>): Promise<T> {
+  const hit = prontas.get(chave);
+  if (hit && hit.ate > Date.now()) return hit.v as T;
+  const andando = emAndamento.get(chave);
+  if (andando) return (await andando) as T;
+  const p = fn();
+  emAndamento.set(chave, p);
+  try {
+    const v = await p;
+    if (prontas.size > 300) prontas.clear();
+    prontas.set(chave, { ate: Date.now() + vale, v });
+    return v;
+  } finally {
+    emAndamento.delete(chave);
+  }
+}
+const VALE_TELA_MS = 45_000;
+
+/** Só com o login do Chatwoot (a chave avulsa do funil não abre estas telas). */
+async function autorizadoComLogin(req: Request, res: Response): Promise<Acesso | null> {
+  const a = await autorizado(req, res);
+  if (!a) return null;
+  if (!a.sessao) {
+    res.status(403).json({ error: 'esta tela abre pelo menu do Chatwoot, com o seu login' });
+    return null;
+  }
+  return a;
+}
+
+async function autorizadoGestao(req: Request, res: Response): Promise<Acesso | null> {
+  const a = await autorizadoComLogin(req, res);
+  if (!a) return null;
+  if (!podeVerGestao(a.papel, a.email, process.env.CHATWOOT_GESTORES)) {
+    res.status(403).json({ error: 'esta tela é só para a gestão. Peça acesso à Suzanne.', semPermissao: true });
+    return null;
+  }
+  return a;
+}
+
+function falhouLista(res: Response, e: unknown, oQue: string): void {
+  logger.warn({ err: String(e) }, `funil: ${oQue} falhou`);
+  res.status(502).json({ error: 'não consegui falar com o Chatwoot agora — tente de novo em instantes' });
+}
+
+export async function funilOportunidadesHandler(req: Request, res: Response): Promise<void> {
+  const a = await autorizadoComLogin(req, res);
+  if (!a) return;
+  try {
+    const agora = Date.now();
+    const v = await memo(`op|${a.logadoId ?? a.logado}`, VALE_TELA_MS, async () => {
+      const conversas = conversasDasPaginas(await paginasDasCaixas(a, 0));
+      return { ...montarOportunidades(conversas, agora), eu: a.logado, chatwoot: a.c.conta!.url, conta: a.c.conta!.conta };
+    });
+    res.json(v);
+  } catch (e) {
+    falhouLista(res, e, 'oportunidades');
+  }
+}
+
+// Campanha de cada conversa: o `referral` está na 1ª mensagem do paciente e nunca muda — guarda (só ids de anúncio e título).
+// Só guarda o «não tem» quando a conversa foi lida até o começo; se faltou ler (conversa longa), não guarda: senão ela ficaria
+// «sem campanha» até o servidor reiniciar.
+const referralGuardado = new Map<number, Referral | null>();
+const MAX_LEITURAS_POR_PEDIDO = 150;
+const MAX_PAGINAS_DE_MENSAGENS = 10;
+
+async function lerReferral(a: Acesso, conversaId: number): Promise<{ ref: Referral | null; completo: boolean }> {
+  const todas: unknown[] = [];
+  let antes: number | undefined;
+  let completo = false;
+  for (let p = 0; p < MAX_PAGINAS_DE_MENSAGENS; p++) {
+    const r = (await cw(a, 'GET', `conversations/${conversaId}/messages`, { query: antes ? { before: String(antes) } : {} })) as any;
+    const lista: any[] = Array.isArray(r?.payload) ? r.payload : [];
+    todas.push(...lista);
+    if (lista.length < 20) {
+      completo = true;
+      break;
+    }
+    const menor = Math.min(...lista.map((m) => Number(m?.id)).filter((n) => Number.isFinite(n)));
+    if (!Number.isFinite(menor)) break;
+    antes = menor;
+  }
+  const ref = referralDasMensagens(todas);
+  return { ref, completo: completo || ref !== null };
+}
+
+/** Lê a campanha das conversas dadas, na ordem recebida (as mais novas primeiro), até o teto; o resto é contado para o aviso. */
+async function referralsDe(a: Acesso, ids: number[]): Promise<{ mapa: Map<number, Referral | null>; semLer: number; falhas: number }> {
+  const mapa = new Map<number, Referral | null>();
+  const faltam: number[] = [];
+  for (const id of ids) {
+    if (referralGuardado.has(id)) mapa.set(id, referralGuardado.get(id)!);
+    else faltam.push(id);
+  }
+  const alvo = faltam.slice(0, MAX_LEITURAS_POR_PEDIDO);
+  let falhas = 0;
+  let proximo = 0;
+  const trabalhador = async () => {
+    for (;;) {
+      const i = proximo++;
+      if (i >= alvo.length) return;
+      try {
+        const { ref, completo } = await lerReferral(a, alvo[i]!);
+        mapa.set(alvo[i]!, ref);
+        if (completo) {
+          if (referralGuardado.size > 5000) referralGuardado.clear();
+          referralGuardado.set(alvo[i]!, ref);
+        } else falhas++; // conversa longa demais para ler até o começo: fica sem campanha agora, e tenta de novo no próximo pedido
+      } catch {
+        falhas++;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: 6 }, trabalhador));
+  return { mapa, semLer: Math.max(0, faltam.length - alvo.length), falhas };
+}
+
+const slugDaCaixa = (c: any): string | null => CAIXAS_REGUA[Number(c?.inbox_id)] ?? null;
+
+/** As conversas das caixas de unidade que a pessoa enxerga (com o login dela), e os slugs dessas unidades. */
+async function conversasDasUnidades(a: Acesso, caixa: number): Promise<{ conversas: any[]; slugs: string[]; cortou: boolean }> {
+  const { paginas, cortou } = await lerCaixas(a, caixa, 24, true, 4);
+  const conversas = conversasDasPaginas(paginas).filter((c) => slugDaCaixa(c));
+  return { conversas, slugs: [...new Set(conversas.map(slugDaCaixa).filter((s): s is string => !!s))], cortou };
+}
+
+/** As conversas criadas na janela, as mais novas primeiro (é a ordem em que a campanha é lida). */
+const doPeriodoDe = (conversas: any[], j: JanelaDoPeriodo) =>
+  conversas.filter((c) => criadaNaJanela(c, j)).sort((x, y) => Number(y.created_at) - Number(x.created_at));
+
+/** O Gestor lida com dinheiro por dia: «Manhã» (18h de ontem até agora) não cabe nele, vira «Fim do dia». */
+const periodoDe = (req: Request, soDias = false) => {
+  const p = resolverPeriodo(typeof req.query.periodo === 'string' ? req.query.periodo : '', Date.now());
+  return soDias && p.chave === 'manha' ? resolverPeriodo('fimdia', Date.now()) : p;
+};
+const caixaDe = (req: Request) => (Number.isInteger(Number(req.query.caixa)) ? Number(req.query.caixa) : 0);
+
+function avisosDeLeitura(o: { cortou: boolean; semLer: number; falhas: number }): string[] {
+  const l: string[] = [];
+  if (o.cortou) l.push('A caixa tem mais conversas do que a tela lê de uma vez: os números podem estar abaixo do real.');
+  if (o.semLer > 0) l.push(`${o.semLer} conversa(s) do período ficaram sem leitura da campanha (limite por pedido) e entraram em «Sem campanha gravada». Atualize para ler mais.`);
+  if (o.falhas > 0) l.push(`${o.falhas} conversa(s) não puderam ser lidas até o começo agora e entraram em «Sem campanha gravada».`);
+  return l;
+}
+
+// Investido (Meta) e Faturado (franquia), por unidade. Cada fonte falha sozinha: a tela diz qual e por quê, e calcula o resto.
+async function gastosDasUnidades(slugs: string[], de: string, ate: string): Promise<{ investido: Investido; linhas: LinhaAnuncio[] }> {
+  if (!slugs.length) return { investido: { estado: 'conectar', valor: null, moeda: null, motivo: 'Nenhuma caixa com unidade ligada.' }, linhas: [] };
+  const linhas: LinhaAnuncio[] = [];
+  const faltam: string[] = [];
+  const erros: string[] = [];
+  const moedas = new Set<string>();
+  const avisos: string[] = [];
+  let leu = 0;
+  await Promise.all(
+    slugs.map(async (slug) => {
+      const cred = credenciaisDeAnuncio(slug, process.env, await tokenDeAnuncioDaUnidade(slug));
+      if ('falta' in cred) {
+        faltam.push(...cred.falta);
+        return;
+      }
+      const g = await gastoDaConta(cred.conta, cred.token, de, ate);
+      if (!g.ok) {
+        erros.push(g.motivo);
+        return;
+      }
+      leu++;
+      if (g.moeda) moedas.add(g.moeda);
+      if (g.parcial) avisos.push('a lista de anúncios passou do limite de leitura: o valor pode estar abaixo do real');
+      linhas.push(...g.linhas);
+    }),
+  );
+  if (leu === 0 && erros.length) return { investido: { estado: 'erro', valor: null, moeda: null, motivo: erros[0]! }, linhas: [] };
+  if (leu === 0) return { investido: { estado: 'conectar', valor: null, moeda: null, motivo: `Falta ligar a conta de anúncios: preencher ${[...new Set(faltam)].join(' e ')} no servidor.` }, linhas: [] };
+  // somar real com dólar daria um número sem sentido: nesse caso, não mostra
+  if (moedas.size > 1) return { investido: { estado: 'erro', valor: null, moeda: null, motivo: 'as contas de anúncios usam moedas diferentes; escolha uma caixa por vez' }, linhas: [] };
+  const total = Math.round(linhas.reduce((t, l) => t + l.gasto, 0) * 100) / 100;
+  const nota = [...(faltam.length ? [`falta ligar ${[...new Set(faltam)].join(' e ')}`] : []), ...erros, ...new Set(avisos)].join('; ');
+  return { investido: { estado: 'ok', valor: total, moeda: [...moedas][0] ?? null, motivo: nota || null }, linhas };
+}
+
+/** O token de anúncios da unidade guardado no banco (units.meta_access_token); null se não houver. Lido a cada consulta (é uma linha só). */
+async function tokenDeAnuncioDaUnidade(slug: string): Promise<string | null> {
+  const u = await prisma.unit.findUnique({ where: { slug }, select: { metaAccessToken: true } }).catch(() => null);
+  return u?.metaAccessToken?.trim() || null;
+}
+
+/** O gasto por dia da(s) conta(s) de anúncios no intervalo; null se nenhuma unidade tem a conta ligada ou a Meta não respondeu. */
+async function gastoDiarioDasUnidades(slugs: string[], de: string, ate: string): Promise<{ porDia: Record<string, number>; total: number } | null> {
+  const porDia: Record<string, number> = {};
+  let leu = 0;
+  await Promise.all(
+    slugs.map(async (slug) => {
+      const cred = credenciaisDeAnuncio(slug, process.env, await tokenDeAnuncioDaUnidade(slug));
+      if ('falta' in cred) return;
+      const g = await gastoDiarioDaConta(cred.conta, cred.token, de, ate);
+      if (!g.ok) return;
+      leu++;
+      for (const [dia, v] of Object.entries(g.porDia)) porDia[dia] = Math.round(((porDia[dia] ?? 0) + v) * 100) / 100;
+    }),
+  );
+  return leu ? { porDia, total: Math.round(Object.values(porDia).reduce((t, v) => t + v, 0) * 100) / 100 } : null;
+}
+
+const faturadoPronto = new Map<string, { ate: number; v: Faturado }>();
+async function faturadoDasUnidades(slugs: string[], de: string, ate: string): Promise<Faturado> {
+  if (!slugs.length) return { valor: null, fonte: null, motivo: 'Nenhuma caixa com unidade ligada.' };
+  const chave = `${[...slugs].sort().join(',')}|${de}|${ate}`;
+  const hit = faturadoPronto.get(chave);
+  if (hit && hit.ate > Date.now()) return hit.v;
+  let valor = 0;
+  let leu = 0;
+  const notas: string[] = [];
+  const porDia: Record<string, number> = {};
+  await Promise.all(
+    slugs.map(async (slug) => {
+      const unit = await prisma.unit.findUnique({ where: { slug } }).catch(() => null);
+      if (!unit?.spineToken) {
+        notas.push('a unidade não tem acesso à franquia');
+        return;
+      }
+      const tz = unit.spineTimezone || 'America/Belem';
+      const r = await searchTreatments(unit, { de, ate });
+      if (!r.ok) {
+        notas.push(`a franquia não respondeu (${(r.error ?? 'erro').slice(0, 60)})`);
+        return;
+      }
+      const s = somarFaturado(r.data?.treatments ?? [], de, ate, (iso) => {
+        const t = new Date(iso);
+        return Number.isNaN(t.getTime()) ? null : instanteNoFuso(t, tz).slice(0, 10);
+      });
+      valor += s.valor;
+      for (const [dia, v] of Object.entries(s.porDia)) porDia[dia] = Math.round(((porDia[dia] ?? 0) + v) * 100) / 100;
+      leu++;
+      if (r.data?.truncada) notas.push('a franquia tinha mais páginas que o limite: o valor pode estar abaixo do real');
+      if (s.semPreco > 0) notas.push(`${s.semPreco} tratamento(s) sem preço na franquia ficaram de fora`);
+    }),
+  );
+  const v: Faturado = leu ? { valor: Math.round(valor * 100) / 100, fonte: 'franquia', motivo: notas.join('; ') || null, porDia } : { valor: null, fonte: null, motivo: notas.join('; ') || 'franquia indisponível' };
+  if (leu) faturadoPronto.set(chave, { ate: Date.now() + 10 * 60_000, v });
+  if (faturadoPronto.size > 100) faturadoPronto.clear();
+  return v;
+}
+
+/** Conversas que entraram em «Agendado» na janela (memória da régua). Em fatias: a lista de ids pode passar do limite de parâmetros do banco. */
+async function agendadasNaJanela(ids: number[], j: JanelaDoPeriodo): Promise<Set<number>> {
+  const achadas = new Set<number>();
+  for (let i = 0; i < ids.length; i += 5000) {
+    const linhas = await prisma.chatwootReguaVisto.findMany({
+      where: { conversationId: { in: ids.slice(i, i + 5000) }, campo: 'etapa', valor: 'Agendado', inicial: false, desde: { gte: new Date(j.inicioMs), lte: new Date(j.fimMs) } },
+      select: { conversationId: true },
+    });
+    for (const l of linhas) achadas.add(l.conversationId);
+  }
+  return achadas;
+}
+
+export async function funilMarketingHandler(req: Request, res: Response): Promise<void> {
+  const a = await autorizadoGestao(req, res);
+  if (!a) return;
+  try {
+    const periodo = periodoDe(req);
+    const caixa = caixaDe(req);
+    const v = await memo(`mk|${a.logadoId ?? a.logado}|${periodo.chave}|${caixa}`, VALE_TELA_MS, async () => {
+      const { conversas, slugs, cortou } = await conversasDasUnidades(a, caixa);
+      const ids = conversas.map((c) => Number(c.id));
+      const [agendadas, agendadasAntes, partida, lidos, gastos] = await Promise.all([
+        agendadasNaJanela(ids, periodo),
+        agendadasNaJanela(ids, periodo.anterior),
+        prisma.chatwootReguaVisto.findFirst({ where: { conversationId: 0, campo: CAMPO_PARTIDA }, orderBy: { desde: 'asc' }, select: { desde: true } }).catch(() => null),
+        referralsDe(a, doPeriodoDe(conversas, periodo).map((c) => Number(c.id))),
+        gastosDasUnidades(slugs, periodo.de, periodo.ate),
+      ]);
+      const rel = montarMarketing(
+        {
+          conversas,
+          referrals: lidos.mapa,
+          anuncios: new Map<string, LinhaAnuncio>(gastos.linhas.map((l) => [l.anuncioId, l])),
+          periodo,
+          agendaramNoPeriodo: agendadas,
+          // leitura cortada = a janela anterior pode estar incompleta: sem comparação em vez de comparação errada
+          agendaramNoPeriodoAnterior: cortou ? null : agendadasAntes,
+        },
+        Date.now(),
+      );
+      return {
+        ...rel,
+        avisos: avisosDeLeitura({ cortou, semLer: lidos.semLer, falhas: lidos.falhas }),
+        registroDesde: partida?.desde ? diaEmBelem(partida.desde.getTime()) : null,
+        eu: a.logado,
+      };
+    });
+    res.json(v);
+  } catch (e) {
+    falhouLista(res, e, 'marketing');
+  }
+}
+
+export async function funilGestorHandler(req: Request, res: Response): Promise<void> {
+  const a = await autorizadoGestao(req, res);
+  if (!a) return;
+  try {
+    const periodo = periodoDe(req, true);
+    const caixa = caixaDe(req);
+    const v = await memo(`gs|${a.logadoId ?? a.logado}|${periodo.chave}|${caixa}`, VALE_TELA_MS, async () => {
+      const { conversas, slugs, cortou } = await conversasDasUnidades(a, caixa);
+      const [lidos, gastos, faturado, diario, gastosAntes, faturadoAntes] = await Promise.all([
+        referralsDe(a, doPeriodoDe(conversas, periodo).map((c) => Number(c.id))),
+        gastosDasUnidades(slugs, periodo.de, periodo.ate),
+        faturadoDasUnidades(slugs, periodo.de, periodo.ate),
+        periodo.de !== periodo.ate ? gastoDiarioDasUnidades(slugs, periodo.de, periodo.ate) : Promise.resolve(null),
+        gastoDiarioDasUnidades(slugs, periodo.anterior.de, periodo.anterior.ate),
+        faturadoDasUnidades(slugs, periodo.anterior.de, periodo.anterior.ate),
+      ]);
+      const investido: Investido = gastos.investido.estado === 'ok' && diario ? { ...gastos.investido, porDia: diario.porDia } : gastos.investido;
+      const painel = montarGestor({
+        anterior: cortou
+          ? null
+          : { investido: gastosAntes ? { estado: 'ok', valor: gastosAntes.total, moeda: null, motivo: null } : { estado: 'conectar', valor: null, moeda: null, motivo: null }, faturado: faturadoAntes },
+        conversas,
+        referrals: lidos.mapa,
+        gastos: gastos.investido.estado === 'ok' ? gastos.linhas : null,
+        investido,
+        faturadoFranquia: faturado,
+        periodo,
+      });
+      return { ...painel, avisos: avisosDeLeitura({ cortou, semLer: lidos.semLer, falhas: lidos.falhas }), eu: a.logado };
+    });
+    res.json(v);
+  } catch (e) {
+    falhouLista(res, e, 'gestor');
+  }
+}
+
+/**
+ * O menu pergunta aqui se mostra «Marketing» e «Gestor» (a lista de gestores nunca vai no `menu.js`, que é público). Só visibilidade:
+ * o servidor confere de novo em cada pedido de dado.
+ */
+export async function funilGestaoHandler(req: Request, res: Response): Promise<void> {
+  const a = await autorizadoComLogin(req, res);
+  if (!a) return;
+  res.set('Cache-Control', 'no-store').json({ gestao: podeVerGestao(a.papel, a.email, process.env.CHATWOOT_GESTORES) });
 }
 
 export async function funilCaixasHandler(req: Request, res: Response): Promise<void> {
@@ -605,7 +997,11 @@ export function paginaFunilHandler(_req: Request, res: Response): void {
     res.status(404).type('html').send('<!doctype html><meta charset="utf-8"><p style="font-family:sans-serif;padding:24px">Funil desligado.</p>');
     return;
   }
-  res.type('html').send(PAGINA.replace('__ORIGEM_CW__', JSON.stringify(new URL(contexto()!.conta!.url).origin)));
+  res.type('html').send(
+    PAGINA.replace('__ORIGEM_CW__', JSON.stringify(new URL(contexto()!.conta!.url).origin))
+      .split('/*__TELAS_CSS__*/').join(TELAS_CSS)
+      .split('/*__TELAS_JS__*/').join(TELAS_JS),
+  );
 }
 
 const PAGINA = `<!doctype html>
@@ -853,6 +1249,7 @@ body{background:#f4f6f9}
 .hj-tab td{padding:9px 8px;border-top:1px solid var(--linha);font-variant-numeric:tabular-nums}
 
 @media (max-width:760px){.col{flex-basis:260px}.topo{padding-right:56px}}
+/*__TELAS_CSS__*/
 </style></head><body>
 <div class="topo" id="topo">
   <div class="linha-a">
@@ -872,7 +1269,7 @@ body{background:#f4f6f9}
 <section class="lead" id="lead" hidden></section>
 <script>
 (function(){
-  var q=new URLSearchParams(location.search), K=q.get('k')||'', MENU=q.get('menu')==='1', TELA=q.get('tela')==='hoje'?'hoje':'', ORIGEM_CW=__ORIGEM_CW__, DENTRO=window.parent!==window;
+  var q=new URLSearchParams(location.search), K=q.get('k')||'', MENU=q.get('menu')==='1', TELA=['hoje','oport','mkt','gestor'].indexOf(q.get('tela'))>=0?q.get('tela'):'', ORIGEM_CW=__ORIGEM_CW__, DENTRO=window.parent!==window;
   var S=null, iniciado=false, timer=null, morta=null, dados=null, caixas=[], aberta=null, ficha=null, filtro='', recolhidas={}, atualizadoEm=0, arrastando=null, formNaColuna=null, aba='principal', modo='mensagem', ctxConversa=null;
   var CORES=['#64748b','#1f93ff','#d97706','#7c3aed','#4f46e5','#16a34a','#15803d','#0d9488','#db2777','#dc2626','#94a3b8'];
   var AV=[['#1f73d6','#e6f1ff'],['#c2410c','#fff0e6'],['#15803d','#e8f7ee'],['#7c3aed','#f1ebff'],['#be185d','#fdebf3'],['#0f766e','#e6f6f4'],['#a16207','#fdf6e3'],['#4338ca','#eceeff']];
@@ -887,7 +1284,7 @@ body{background:#f4f6f9}
     var j=await r.json().catch(function(){ return {}; });
     if(r.status===403&&S&&j.sessao==='invalida'){ morta=S.token; S=null; parar(); iniciado=false; pedirSessao(); }
     if(r.status===403&&S&&j.sessao==='sem-conta') parar();
-    if(!r.ok) throw new Error(j.error||('erro '+r.status));
+    if(!r.ok){ var er=new Error(j.error||('erro '+r.status)); er.status=r.status; er.semPermissao=!!j.semPermissao; throw er; }
     return j;
   }
   function parar(){ if(timer){ clearInterval(timer); timer=null; } }
@@ -1009,7 +1406,8 @@ body{background:#f4f6f9}
   }
   async function carregar(){
     if(!S&&!K){ msg(DENTRO?'Entre no Chatwoot para ver o funil.':'Abra o funil pelo Chatwoot.'); return; }
-    if(TELA){ await carregarHoje(); return; }
+    if(TELA==='hoje'){ await carregarHoje(); return; }
+    if(TELA){ await carregarTela(); return; }
     try{
       dados=await api('GET','quadro'+($('caixa').value?('?caixa='+encodeURIComponent($('caixa').value)):''));
       $('novo').hidden=!dados.podeEscrever; atualizadoEm=Date.now(); $('atual').textContent='atualizado agora'; desenhar(); if(!$('msg').textContent||/Carregando/.test($('msg').textContent)) msg(dados.total+' leads');
@@ -1175,16 +1573,18 @@ body{background:#f4f6f9}
     h.porUsuario.forEach(function(u){ var tr=el('tr'); [u.nome,u.conversas,u.esperando,u.responderamHoje,u.agendaram].forEach(function(v){ tr.appendChild(el('td',null,String(v))); }); t.appendChild(tr); });
     pu.appendChild(t); qd.appendChild(pu);
   }
-  if(TELA){ document.title='Hoje · Doutor Digital'; var h1=document.querySelector('.topo h1'); if(h1) h1.textContent='Hoje';
-    ['resumo','filtros','ordem'].forEach(function(id){ $(id).hidden=true; }); var bc=document.querySelector('.busca-c'); if(bc) bc.hidden=true; }
+  /*__TELAS_JS__*/
+  if(TELA){ var NOMES={hoje:'Hoje',oport:'Oportunidades',mkt:'Relatório do marketing',gestor:'Painel do gestor'}; if(TELA!=='hoje') document.body.classList.add('tg-pagina'); document.title=NOMES[TELA]+' · Doutor Digital'; var h1=document.querySelector('.topo h1'); if(h1) h1.textContent=NOMES[TELA];
+    ['resumo','filtros','ordem'].forEach(function(id){ $(id).hidden=true; }); var bc=document.querySelector('.busca-c'); if(bc) bc.hidden=true;
+    if(TELA!=='hoje'){ var lb=document.querySelector('.topo .linha-b'); if(lb) lb.hidden=true; } }
   function iniciar(){
     if(!S&&!K){ carregar(); return; }
     if(iniciado){ if(aberta) recarregarFicha(); else carregar(); return; }
     iniciado=true; msg('Carregando…');
     if(!dados&&!TELA){ var qd=$('quadro'); qd.textContent=''; for(var f=0;f<5;f++){ var fc=el('div','fantasma'); for(var g=0;g<4-(f%3);g++) fc.appendChild(el('i')); qd.appendChild(fc); } }
-    api('GET','caixas').then(function(l){ caixas=l; var s=$('caixa'); while(s.options.length>1) s.remove(1); l.forEach(function(c){ var o=el('option',null,c.nome); o.value=c.id; s.appendChild(o); }); }).catch(function(){});
+    if(!TELA||TELA==='hoje') api('GET','caixas').then(function(l){ caixas=l; var s=$('caixa'); while(s.options.length>1) s.remove(1); l.forEach(function(c){ var o=el('option',null,c.nome); o.value=c.id; s.appendChild(o); }); }).catch(function(){});
     if(ctxConversa&&!MENU) abrirFicha(ctxConversa); else carregar();
-    if(!timer) timer=setInterval(function(){ if(!aberta) carregar(); },60000);
+    if(!timer) timer=setInterval(function(){ if(!aberta) carregar(); },TELA&&TELA!=='hoje'?120000:60000);
   }
   if(DENTRO){
     pedirSessao();
@@ -1224,7 +1624,7 @@ export function menuFunilHandler(_req: Request, res: Response): void {
 }
 
 /**
- * O que o Chatwoot carrega em `GET /funil/menu.js`: o menu (Hoje/Funil) e o botão da assistente da atendente. Dois blocos
+ * O que o Chatwoot carrega em `GET /funil/menu.js`: o menu (Hoje, Funil, Oportunidades e, para a gestão, Marketing e Gestor) e o botão da assistente da atendente. Dois blocos
  * independentes no MESMO arquivo, porque o DASHBOARD_SCRIPTS da produção carrega só este endereço. Erro de EXECUÇÃO do botão
  * não derruba o menu (o `try`); erro de SINTAXE derrubaria o arquivo todo, por isso o teste `menu.js … PARSEIAM` é obrigatório.
  */
@@ -1233,7 +1633,8 @@ export function montarMenuJs(agente: string): string {
   return `${MENU_JS.split('__AGENTE__').join(origem)}\n;try{\n${assistenteJs().split('__AGENTE__').join(origem)}\n}catch(e){}\n`;
 }
 
-const MENU_JS = `(function(){
+// String.raw: o que está aqui é o JavaScript que o navegador recebe (as barras das expressões regulares ficam como estão).
+const MENU_JS = String.raw`(function(){
   if (window.__funilMenu) return; window.__funilMenu = 1;
   var AGENTE = __AGENTE__, cam = null, fr = null;
   function sessao(){
@@ -1246,48 +1647,75 @@ const MENU_JS = `(function(){
     return r && r.width > 0 && r.right > 0 && r.right < window.innerWidth * 0.5 ? Math.round(r.right) : 0;
   }
   function ajustar(){ if (cam) cam.style.left = margem() + 'px'; }
+  // As telas do menu, na ordem: Contatos → Hoje → Funil → Oportunidades → Marketing → Gestor. As marcadas «gestao» só
+  // aparecem para administrador da conta ou gestor da lista (e o servidor confere de novo a cada pedido de dados).
+  var TELAS = [
+    { id: 'hoje', marca: 'data-hoje-menu', nome: 'Hoje', hash: '#hoje', param: 'hoje' },
+    { id: 'funil', marca: 'data-funil-menu', nome: 'Funil', hash: '#funil', param: '' },
+    { id: 'oport', marca: 'data-oport-menu', nome: 'Oportunidades', hash: '#oportunidades', param: 'oport' },
+    { id: 'mkt', marca: 'data-mkt-menu', nome: 'Marketing', hash: '#marketing', param: 'mkt', gestao: true },
+    { id: 'gestor', marca: 'data-gestor-menu', nome: 'Gestor', hash: '#gestor', param: 'gestor', gestao: true }
+  ];
+  function achar(id){ for (var i = 0; i < TELAS.length; i++) if (TELAS[i].id === id) return TELAS[i]; return null; }
+  var DE_MENU = TELAS.map(function(t){ return '[' + t.marca + ']'; }).join(', ');
   function marcar(ativo){
-    // ativo: '' (funil), 'hoje' ou false (nenhum)
-    [['[data-funil-menu]', ''], ['[data-hoje-menu]', 'hoje']].forEach(function(p){
-      var item = document.querySelector(p[0]), link = item && (item.tagName === 'A' ? item : item.querySelector('a'));
-      if (link) link.style.background = ativo !== false && ativo === p[1] ? 'rgba(31,147,255,.12)' : '';
+    // ativo: id da tela aberta, ou false (nenhuma)
+    TELAS.forEach(function(t){
+      var item = document.querySelector('[' + t.marca + ']'), link = item && (item.tagName === 'A' ? item : item.querySelector('a'));
+      if (link) link.style.background = ativo === t.id ? 'rgba(31,147,255,.12)' : '';
     });
   }
   // fechar REMOVE o quadro: nada fica consultando o Chatwoot escondido; reabrir pede o login de novo
-  // aberto fica lembrado NESTA aba (sessionStorage): o Ctrl+R reabre o funil; fechar esquece
-  var LEMBRAR = 'funil:aberto', reaberto = false, tela = '';
+  // aberto fica lembrado NESTA aba (sessionStorage): o Ctrl+R reabre a tela; fechar esquece
+  var LEMBRAR = 'funil:aberto', reaberto = false, tela = null, gestao = null;
   function lembrar(valor){ try { if (valor === false) sessionStorage.removeItem(LEMBRAR); else sessionStorage.setItem(LEMBRAR, valor || 'funil'); } catch (e) {} }
-  function fechar(){ if (cam) { cam.remove(); cam = null; fr = null; } marcar(false); lembrar(false); }
+  // endereço próprio (pedido do João, 13/11): a tela aberta fica no fim do endereço (…/dashboard#funil) — dá para salvar e mandar o
+  // link; replaceState não aciona as rotas do Chatwoot nem cria passo no "voltar"
+  function porNoEndereco(t){ try { history.replaceState(history.state, '', location.pathname + location.search + (t ? t.hash : '')); } catch (e) {} }
+  function telaDoEndereco(){ for (var i = 0; i < TELAS.length; i++) if (TELAS[i].hash === location.hash) return TELAS[i]; return null; }
+  function fechar(){ if (cam) { cam.remove(); cam = null; fr = null; } tela = null; marcar(false); lembrar(false); if (telaDoEndereco()) porNoEndereco(null); }
   function reabrir(){
-    if (reaberto) return; reaberto = true;
-    try { var v = sessionStorage.getItem(LEMBRAR); if (v && /\\/app\\/accounts\\//.test(location.pathname) && sessao()) abrir(null, v === 'hoje' ? 'hoje' : ''); } catch (e) {}
+    if (reaberto) return;
+    try {
+      // o endereço (…#gestor) vence o que estava lembrado na aba
+      var doEnd = telaDoEndereco();
+      var v = doEnd ? doEnd.id : sessionStorage.getItem(LEMBRAR), t = achar(v === 'funil' || !v ? 'funil' : v);
+      // tela de gestão: espera saber se a pessoa pode (a resposta do perfil vem depois do menu)
+      if (t && t.gestao && gestao === null) return;
+      reaberto = true;
+      if (!v || !t) return;
+      if (t.gestao && gestao !== true) { lembrar(false); return; }
+      if (/\/app\/accounts\//.test(location.pathname) && sessao()) abrir(null, t.id);
+    } catch (e) { reaberto = true; }
   }
-  // qual: '' = funil, 'hoje' = tela Hoje (o mesmo quadro, outra tela)
-  function abrir(ev, qual){
+  // id: 'funil' (padrão), 'hoje', 'oport', 'mkt' ou 'gestor' (o mesmo quadro, outra tela)
+  function abrir(ev, id){
     if (ev) { ev.preventDefault(); ev.stopPropagation(); }
-    qual = qual === 'hoje' ? 'hoje' : '';
-    lembrar(qual || 'funil');
-    var url = AGENTE + '/funil?menu=1' + (qual ? '&tela=hoje' : '');
-    if (cam && tela !== qual && fr) { fr.src = url; fr.title = qual ? 'Hoje' : 'Funil'; }
-    tela = qual;
+    var t = achar(typeof id === 'string' ? id : 'funil') || achar('funil');
+    if (t.gestao && gestao !== true) return;
+    lembrar(t.id);
+    var url = AGENTE + '/funil?menu=1' + (t.param ? '&tela=' + t.param : '');
+    if (cam && tela !== t.id && fr) { fr.src = url; fr.title = t.nome; }
+    tela = t.id;
+    porNoEndereco(t);
     if (!cam) {
       cam = document.createElement('div');
       cam.style.cssText = 'position:fixed;top:0;right:0;bottom:0;z-index:2147483000;background:#f5f7fb;display:flex;border-left:1px solid #e3e8ef';
-      var x = document.createElement('button'); x.type = 'button'; x.textContent = '\\u2715'; x.title = 'Fechar o funil (Esc)';
+      var x = document.createElement('button'); x.type = 'button'; x.textContent = '✕'; x.title = 'Fechar (Esc)'; x.setAttribute('aria-label', 'Fechar (Esc)');
       x.style.cssText = 'position:absolute;top:12px;right:14px;z-index:1;width:30px;height:30px;font:16px system-ui,sans-serif;border:1px solid #e3e8ef;border-radius:6px;background:#fff;color:#1f2d3d;cursor:pointer';
       x.onclick = fechar;
-      fr = document.createElement('iframe'); fr.src = url; fr.title = qual ? 'Hoje' : 'Funil';
+      fr = document.createElement('iframe'); fr.src = url; fr.title = t.nome;
       fr.style.cssText = 'flex:1;border:0;width:100%;height:100%';
       cam.appendChild(fr); cam.appendChild(x); document.body.appendChild(cam);
     }
-    ajustar(); marcar(qual);
+    ajustar(); marcar(t.id);
   }
   window.addEventListener('resize', ajustar);
-  // clicar em outro item do menu (Conversas, Contatos…) fecha o funil e o Chatwoot segue para onde a pessoa clicou
+  // clicar em outro item do menu (Conversas, Contatos…) fecha a tela e o Chatwoot segue para onde a pessoa clicou
   document.addEventListener('click', function(e){
     if (!cam || !e.target || !e.target.closest) return;
     var link = e.target.closest('aside a, nav a');
-    if (link && !link.closest('[data-funil-menu], [data-hoje-menu]')) fechar();
+    if (link && !link.closest(DE_MENU)) fechar();
   }, true);
   document.addEventListener('keydown', function(e){ if (e.key === 'Escape') fechar(); });
   window.addEventListener('message', function(ev){
@@ -1303,7 +1731,7 @@ const MENU_JS = `(function(){
     else if (d && d.event === 'funil:fechar' && fr && ev.source === fr.contentWindow) fechar();
     else if (d && d.event === 'funil:abrir-conversa' && fr && ev.source === fr.contentWindow) {
       // abre a conversa do lead na tela normal do Chatwoot (mesma conta da página); id só número
-      var conta = location.pathname.match(/\\/app\\/accounts\\/(\\d+)/), id = Number(d.id);
+      var conta = location.pathname.match(/\/app\/accounts\/(\d+)/), id = Number(d.id);
       if (conta && Number.isInteger(id) && id > 0) { fechar(); location.assign('/app/accounts/' + conta[1] + '/conversations/' + id); }
     }
   });
@@ -1311,11 +1739,14 @@ const MENU_JS = `(function(){
     var w = document.createTreeWalker(no, NodeFilter.SHOW_TEXT), t;
     while ((t = w.nextNode())) { if (t.nodeValue.trim()) { t.nodeValue = texto; return; } }
   }
-  // um item novo no menu, copiado do "Contatos" (mesmo visual), posto logo depois de \`depois\`
+  // um item novo no menu, copiado do "Contatos" (mesmo visual), posto logo depois do item anterior
   // ícones próprios (traço, no estilo do menu do Chatwoot): sem eles os itens copiados ficariam com o ícone de Contatos
   var ICONES = {
     hoje: '<path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/><path d="m9 16 2 2 4-4"/>',
-    funil: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M8 7v7"/><path d="M12 7v4"/><path d="M16 7v9"/>'
+    funil: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M8 7v7"/><path d="M12 7v4"/><path d="M16 7v9"/>',
+    oport: '<path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/>',
+    mkt: '<path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/>',
+    gestor: '<path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>'
   };
   var SEL_ICONE = 'svg, [class^="i-"], [class*=" i-"]';
   function trocarIcone(base, novo, qual){
@@ -1328,31 +1759,35 @@ const MENU_JS = `(function(){
     svg.setAttribute('stroke-linecap', 'round'); svg.setAttribute('stroke-linejoin', 'round'); svg.setAttribute('aria-hidden', 'true');
     svg.style.flexShrink = '0';
     // mantém as classes de espaçamento do ícone original, sem a classe que desenha o ícone de Contatos
-    var cls = String(velho.getAttribute('class') || '').split(/\\s+/).filter(function(c){ return c && !/^i-/.test(c); }).join(' ');
+    var cls = String(velho.getAttribute('class') || '').split(/\s+/).filter(function(c){ return c && !/^i-/.test(c); }).join(' ');
     if (cls) svg.setAttribute('class', cls);
     svg.innerHTML = ICONES[qual];
     velho.parentNode.replaceChild(svg, velho);
   }
-  function item(base, depois, marca, texto, hash, aoClicar){
+  function item(base, depois, t){
     var novo = base.cloneNode(true);
-    novo.setAttribute(marca, '1');
-    trocarIcone(base, novo, marca === 'data-hoje-menu' ? 'hoje' : 'funil');
+    novo.setAttribute(t.marca, '1');
+    trocarIcone(base, novo, t.id);
     var link = novo.tagName === 'A' ? novo : novo.querySelector('a');
-    if (link) { link.setAttribute('href', hash); link.classList.remove('router-link-active', 'router-link-exact-active'); link.removeAttribute('aria-current'); }
+    if (link) { link.setAttribute('href', t.hash); link.classList.remove('router-link-active', 'router-link-exact-active'); link.removeAttribute('aria-current'); }
     Array.prototype.forEach.call(novo.querySelectorAll('ul, [role="group"]'), function(u){ u.remove(); });
-    trocarTexto(novo, texto);
-    novo.addEventListener('click', aoClicar, true);
+    trocarTexto(novo, t.nome);
+    novo.addEventListener('click', function(e){ abrir(e, t.id); }, true);
     depois.parentNode.insertBefore(novo, depois.nextSibling);
     return novo;
   }
-  // Contatos → Hoje → Funil
+  function visivel(t){ return !t.gestao || gestao === true; }
+  // Contatos → Hoje → Funil → Oportunidades → (Marketing → Gestor, só gestão)
   function por(){
-    if (document.querySelector('[data-funil-menu]') && document.querySelector('[data-hoje-menu]')) return true;
+    if (!TELAS.some(function(t){ return visivel(t) && !document.querySelector('[' + t.marca + ']'); })) return true;
     var a = document.querySelector('aside a[href*="/contacts"], nav a[href*="/contacts"]');
     if (!a) return false;
-    var base = a.closest('li') || a;
-    var hoje = document.querySelector('[data-hoje-menu]') || item(base, base, 'data-hoje-menu', 'Hoje', '#hoje', function(e){ abrir(e, 'hoje'); });
-    if (!document.querySelector('[data-funil-menu]')) item(base, hoje, 'data-funil-menu', 'Funil', '#funil', function(e){ abrir(e, ''); });
+    var base = a.closest('li') || a, anterior = base;
+    TELAS.forEach(function(t){
+      var ja = document.querySelector('[' + t.marca + ']');
+      if (!visivel(t)) { if (ja) ja.remove(); return; }
+      anterior = ja || item(base, anterior, t);
+    });
     var reserva = document.querySelector('[data-funil-botao]'); if (reserva) reserva.remove();
     return true;
   }
@@ -1360,21 +1795,33 @@ const MENU_JS = `(function(){
     if (document.querySelector('[data-funil-menu], [data-funil-botao]')) return;
     var b = document.createElement('button'); b.type = 'button'; b.textContent = 'Funil'; b.setAttribute('data-funil-botao', '1');
     b.style.cssText = 'position:fixed;left:12px;bottom:70px;z-index:2147482999;padding:8px 14px;border-radius:18px;border:0;background:#1f93ff;color:#fff;font:600 13px system-ui,sans-serif;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.2)';
-    b.onclick = abrir; document.body.appendChild(b);
+    b.onclick = function(ev){ abrir(ev, 'funil'); }; document.body.appendChild(b);
   }
   // Menu enxuto (decisão do João, 12/11/2026): "Campanhas" some para quem não é administrador da conta (as meninas).
   // O papel vem do perfil do próprio Chatwoot (mesma origem, sessão do cookie); sem resposta, nada some.
+  // O mesmo perfil decide Marketing e Gestor: administrador, ou e-mail na lista de gestores do servidor.
   var papel = null, pedindoPapel = false;
+  // Administrador da conta vê. Os demais: o servidor diz se o e-mail está na lista de gestores (a lista nunca vai neste arquivo, que é público).
+  function decidirGestao(p){
+    if (papel === 'administrator') return Promise.resolve(true);
+    var s = sessao(); if (!s) return Promise.resolve(false);
+    return fetch(AGENTE + '/api/public/funil/gestao', { headers: { 'X-CW-Token': s.token, 'X-CW-Client': s.client, 'X-CW-Uid': s.uid } })
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(j){ return !!(j && j.gestao === true); })
+      .catch(function(){ return false; });
+  }
   function pedirPapel(){
     if (papel !== null || pedindoPapel) return;
-    var s = sessao(), conta = location.pathname.match(/\\/app\\/accounts\\/(\\d+)/);
+    var s = sessao(), conta = location.pathname.match(/\/app\/accounts\/(\d+)/);
     if (!s || !conta) return;
     pedindoPapel = true;
     fetch('/api/v1/profile', { headers: { 'access-token': s.token, client: s.client, uid: s.uid } })
       .then(function(r){ return r.ok ? r.json() : null; })
       .then(function(p){
         var a = p && Array.isArray(p.accounts) ? p.accounts.filter(function(x){ return String(x.id) === conta[1]; })[0] : null;
-        if (a && a.role) { papel = a.role; enxugar(); }
+        if (!(a && a.role)) return;
+        papel = a.role; enxugar();
+        return decidirGestao(p).then(function(ok){ gestao = ok; if (por()) { reabrir(); ajustar(); } });
       })
       .catch(function(){})
       .then(function(){ pedindoPapel = false; });
@@ -1387,7 +1834,7 @@ const MENU_JS = `(function(){
     });
   }
   var espera = null;
-  // o menu do Chatwoot nasce depois do script: quando o item entra, reabre o funil se estava aberto (e acerta a margem)
+  // o menu do Chatwoot nasce depois do script: quando o item entra, reabre a tela se estava aberta (e acerta a margem)
   new MutationObserver(function(){ if (espera) return; espera = setTimeout(function(){ espera = null; enxugar(); if (por()) { reabrir(); ajustar(); } }, 300); }).observe(document.documentElement, { childList: true, subtree: true });
-  if (por()) reabrir(); setTimeout(function(){ if (!por() && /\\/app\\/accounts\\//.test(location.pathname)) botao(); reabrir(); }, 8000);
+  if (por()) reabrir(); setTimeout(function(){ if (!por() && /\/app\/accounts\//.test(location.pathname)) botao(); reabrir(); }, 8000);
 })();`;

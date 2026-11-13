@@ -388,7 +388,8 @@ export function paginaAssistenteHandler(_req: Request, res: Response): void {
  * são chamados de dentro do iframe, na mesma origem do servidor: não precisam de CORS. `null` = não é com este módulo.
  */
 export function corsDoAssistente(path: string, origem: string, urlChatwoot: string | undefined): { origin: true; credentials: false; allowedHeaders: string[]; methods: string[] } | null {
-  if (path !== '/api/public/assistente/estado' || !urlChatwoot) return null;
+  // /funil/gestao: o menu pergunta se mostra «Marketing» e «Gestor» (mesma origem do Chatwoot, mesmos cabeçalhos de login)
+  if ((path !== '/api/public/assistente/estado' && path !== '/api/public/funil/gestao') || !urlChatwoot) return null;
   try {
     if (new URL(urlChatwoot).origin !== origem) return null;
   } catch {
