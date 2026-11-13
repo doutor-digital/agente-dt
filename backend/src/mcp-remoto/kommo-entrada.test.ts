@@ -62,6 +62,7 @@ test('kommo_entrada: período no fuso da unidade, mais novo primeiro, com nome, 
     telefone: '5511990000003',
     canal: 'waba',
     origem: 'WhatsApp Business',
+    categoria: 'chats',
     recebidoEm: '2026-09-30T22:30:00',
     funil: 'Comercial',
     link: 'https://magalhaesadv2025.kommo.com/leads/detail/1003',
@@ -156,7 +157,8 @@ test('kommo_leads: acrescenta naEntrada por unidade e na rede, com o aviso; entr
   assert.equal(r.porUnidade.b.ok, true);
   assert.equal(r.porUnidade.b.total, 1);
   assert.equal(r.porUnidade.b.naEntrada, null);
-  assert.match(r.porUnidade.b.avisoEntrada, /boom/);
+  assert.match(r.porUnidade.b.avisoEntrada, /NÃO inclui/);
+  assert.match(r.porUnidade.b.naEntradaErro, /boom/);
   assert.equal('naEntrada' in r.porUnidade.c, false, 'fonte sem a leitura da entrada não ganha o campo');
   assert.equal(r.rede.naEntrada, 2);
   assert.equal(r.rede.naEntradaIncompleta, true); // b não leu: o número da rede é um mínimo
@@ -167,6 +169,32 @@ test('kommo_leads: acrescenta naEntrada por unidade e na rede, com o aviso; entr
   const vazia = (await kommoLeads(criarContextoKommo(new Map([['a', unidadeKommo('a', comEntrada([]))]])), { unidade: 'a', inicio: '2026-09-01', fim: '2026-09-30' })) as Record<string, any>;
   assert.equal(vazia.porUnidade.a.naEntrada, 0);
   assert.equal('avisoEntrada' in vazia.porUnidade.a, false);
+});
+
+test('kommo_leads: a contagem da entrada vai pro cache (também truncada ou com erro) e a rede avisa quando NENHUMA unidade foi lida', async () => {
+  let lidas = 0;
+  const truncada: FonteKommo = { ...fonteFalsa([]), entrada: async () => { lidas++; return { itens: [CONVERSAS[4]!], truncado: true }; } };
+  const ctx = criarContextoKommo(new Map([['a', unidadeKommo('a', truncada)]]));
+  const um = async () => ((await kommoLeads(ctx, { unidade: 'a', inicio: '2026-09-01', fim: '2026-09-30' })) as Record<string, any>).porUnidade.a;
+  const r1 = await um();
+  await um();
+  assert.equal(lidas, 1, 'a segunda consulta não refaz as páginas');
+  assert.equal(r1.naEntrada, 1);
+  assert.equal(r1.naEntradaTruncado, true);
+  assert.match(r1.avisoEntrada, /No mínimo 1/);
+
+  const quebrada: FonteKommo = { ...fonteFalsa([]), entrada: async () => { throw new Error('boom'); } };
+  const divida = { rotulo: 'Caxias', membros: [{ slug: 'caxias', rotulo: 'Caxias' }, { slug: 'petropolis', rotulo: 'Petrópolis' }] };
+  const contas = new Map<string, UnidadeKommo>([
+    ['caxias', { ...unidadeKommo('caxias', comEntrada(CONVERSAS)), conta: 'petropolis', divisao: divida }],
+    ['b', unidadeKommo('b', quebrada)],
+  ]);
+  const r = (await kommoLeads(criarContextoKommo(contas), { unidade: ['caxias', 'b'], inicio: '2026-09-01', fim: '2026-09-30' })) as Record<string, any>;
+  assert.equal(r.porUnidade.caxias.naEntrada, null);
+  assert.match(r.porUnidade.caxias.avisoEntrada, /Conta dividida/);
+  assert.equal(r.rede.naEntrada, null);
+  assert.equal(r.rede.naEntradaIncompleta, true);
+  assert.match(r.rede.avisoEntrada, /2 unidade\(s\) não tiveram a caixa lida/);
 });
 
 test('kommo_entrada registrada: só leitura, aparece na lista, passa pela auditoria e recusa agruparPor desconhecido', async () => {
@@ -250,6 +278,17 @@ test('cliente: lerEntrada pagina até a página curta e pára ao passar do iníc
   assert.equal(r2.truncado, true);
   assert.equal(r2.itens.length, 500);
   assert.equal(rede2.pedidos.length, 2);
+});
+
+test('cliente: lerEntrada — página curta com _links.next continua (o Kommo pode limitar a página abaixo de 250); sem next e curta, acabou', async () => {
+  const rede = redeFalsa((cfg) => {
+    const page = (cfg.params as { page: number }).page;
+    return { status: 200, corpo: { _embedded: { unsorted: [bruto(page, AGORA - page * 60)] }, ...(page < 3 ? { _links: { next: { href: 'x' } } } : {}) } };
+  });
+  const r = await createKommoClientSemFreio(UNIT, { adapter: rede.adapter }).lerEntrada(0, AGORA, 4);
+  assert.equal(rede.pedidos.length, 3);
+  assert.equal(r.itens.length, 3);
+  assert.equal(r.truncado, false);
 });
 
 test('cliente: lerEntrada — caixa vazia (204) é lista vazia; erro do Kommo LANÇA (nunca vira "caixa vazia")', async () => {

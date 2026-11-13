@@ -110,7 +110,8 @@ async function contasKommoDoBanco(): Promise<Map<string, UnidadeKommo>> {
   const contas = new Map<string, UnidadeKommo>();
   for (const [slug, u] of ficam) {
     const cliente = createKommoClient(u);
-    // a caixa de entrada pede token de administrador: um 403 dela é leitura acessória e não pode congelar o Kommo da Sofia (freio global)
+    // a caixa de entrada pede token de administrador: um 403 dela é leitura acessória e não pode congelar o Kommo da Sofia (freio global).
+    // Custo aceito: um 429 desta leitura também não aciona o freio (são no máximo 4 páginas por consulta, em cache, pela mesma fila de 180 ms)
     const clienteDaEntrada = createKommoClientSemFreio(u);
     clientesKommo.set(slug, cliente);
     contas.set(slug, {

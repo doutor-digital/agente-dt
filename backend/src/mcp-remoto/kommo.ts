@@ -399,15 +399,17 @@ function semUnidadeDaRede(us: UnidadeKommo[], res: Record<string, Record<string,
 
 // ── as consultas ──
 
-/** A soma da caixa de entrada na rede: só das unidades que a leram; uma que não leu avisa que o número é um mínimo. */
+/** A soma da caixa de entrada na rede: só das unidades que a leram; se alguma não leu (conta dividida, erro, sem a leitura), o número é um mínimo e o aviso vem sempre. */
 function naEntradaDaRede(ok: Array<Record<string, unknown>>): Record<string, unknown> {
+  if (!ok.some((v) => 'naEntrada' in v)) return {};
   const lidas = ok.filter((v) => typeof v.naEntrada === 'number');
-  if (!lidas.length) return {};
-  const semLeitura = ok.filter((v) => 'naEntrada' in v && typeof v.naEntrada !== 'number').length;
+  const semLeitura = ok.length - lidas.length;
   return {
-    naEntrada: lidas.reduce((s, v) => s + Number(v.naEntrada), 0),
+    ...(lidas.length ? { naEntrada: lidas.reduce((s, v) => s + Number(v.naEntrada), 0) } : { naEntrada: null }),
     ...(semLeitura || lidas.some((v) => v.naEntradaTruncado) ? { naEntradaIncompleta: true } : {}),
-    avisoEntrada: 'naEntrada = conversas na caixa «Leads de entrada», NÃO aceitas, que não entram em total: veja kommo_entrada.',
+    avisoEntrada:
+      'naEntrada = conversas na caixa «Leads de entrada», NÃO aceitas, que não entram em total: veja kommo_entrada.' +
+      (semLeitura ? ` ${semLeitura} unidade(s) não tiveram a caixa lida, então esse número é um mínimo.` : ''),
   };
 }
 
@@ -524,6 +526,8 @@ function itemDaEntrada(c: ConversaNaEntrada, u: UnidadeKommo, funis: Map<number,
     telefone: c.telefone,
     canal: c.canal,
     origem: c.origem,
+    // chats (WhatsApp…), forms, sip, mail: em formulário ou e-mail o «telefone» pode ser outra coisa
+    categoria: c.categoria || null,
     recebidoEm: instanteNoFuso(new Date(c.criadoEm * 1000), u.fuso),
     funil: c.pipelineId ? (funis.get(c.pipelineId) ?? String(c.pipelineId)) : '(sem funil)',
     link: linkDoCartao(u, c.leadId),
@@ -546,9 +550,7 @@ function grupoDaEntrada(i: ItemDaEntrada, por: (typeof AGRUPAMENTOS_DA_ENTRADA)[
 }
 
 function agruparEntrada(por: string): (typeof AGRUPAMENTOS_DA_ENTRADA)[number] {
-  const p = semMarcas(por);
-  const apelido: Record<string, (typeof AGRUPAMENTOS_DA_ENTRADA)[number]> = { dia: 'dia', mes: 'mes', origem: 'origem', 'source name': 'origem', canal: 'canal', service: 'canal', funil: 'funil' };
-  const achado = apelido[p];
+  const achado = AGRUPAMENTOS_DA_ENTRADA.find((g) => g === por.trim().toLowerCase());
   if (!achado) throw new ErroDeEntrada(`agruparPor "${por}" não existe na entrada. Use: ${AGRUPAMENTOS_DA_ENTRADA.join(', ')}`);
   return achado;
 }
@@ -606,7 +608,7 @@ export async function kommoEntrada(
       total: ok.reduce((s, [, v]) => s + Number(v.total), 0),
       unidadesSomadas: ok.map(([k]) => k),
       ...(Object.keys(agrupado).length
-        ? { agrupado: Object.fromEntries(Object.entries(agrupado).sort(por === 'dia' || por === 'mes' ? (x, y) => x[0].localeCompare(y[0]) : (x, y) => y[1] - x[1])) }
+        ? { agrupado: Object.fromEntries(Object.entries(agrupado).sort(por === 'dia' || por === 'mes' ? (x, y) => x[0].localeCompare(y[0]) : (x, y) => y[1] - x[1] || x[0].localeCompare(y[0]))) }
         : {}),
       ...(ok.length < us.length ? { unidadesForaDoTotal: Object.entries(res).filter(([, v]) => !v.ok).map(([k]) => k) } : {}),
       ...(ok.some(([, v]) => v.truncado) ? { unidadesIncompletas: ok.filter(([, v]) => v.truncado).map(([k]) => k) } : {}),
@@ -625,10 +627,16 @@ async function naEntradaDaUnidade(ctx: ContextoKommo, u: UnidadeKommo, inicio: s
   if (u.divisao) {
     return { naEntrada: null, avisoEntrada: 'Conta dividida entre unidades: a caixa «Leads de entrada» é da conta toda e não se separa por unidade, então não foi contada.' };
   }
+  // o RESULTADO é que vai pro cache (leitura truncada ou com erro também): senão cada kommo_leads refaria até 4 páginas que falham ou que não terminam
+  const chave = `na-entrada|${contaDe(u)}|${inicio}|${fim}`;
+  const guardado = ctx.cache.pegar<Record<string, unknown>>(chave);
+  if (guardado !== undefined) return guardado;
+  let r: Record<string, unknown>;
+  let ttl: number = TTL.busca;
   try {
     const { itens, truncado } = await entradaDoPeriodo(ctx, u, inicio, fim);
     const n = itens.length;
-    return {
+    r = {
       naEntrada: n,
       ...(truncado ? { naEntradaTruncado: true } : {}),
       ...(n || truncado
@@ -640,8 +648,15 @@ async function naEntradaDaUnidade(ctx: ContextoKommo, u: UnidadeKommo, inicio: s
         : {}),
     };
   } catch (e) {
-    return { naEntrada: null, avisoEntrada: `Não consegui ler a caixa «Leads de entrada» agora (${e instanceof Error ? e.message : String(e)}): o total acima NÃO inclui as conversas não aceitas.` };
+    ttl = 60_000; // erro passageiro não pode valer 10 minutos
+    r = {
+      naEntrada: null,
+      avisoEntrada: 'Não consegui ler a caixa «Leads de entrada» agora: o total acima NÃO inclui as conversas não aceitas (veja naEntradaErro).',
+      naEntradaErro: e instanceof Error ? e.message : String(e),
+    };
   }
+  ctx.cache.guardar(chave, r, ttl);
+  return r;
 }
 
 export async function kommoFunis(ctx: ContextoKommo, a: { unidade: string | string[] }) {

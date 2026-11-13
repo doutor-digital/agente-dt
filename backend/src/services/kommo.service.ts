@@ -1273,7 +1273,7 @@ export class KommoClient {
     const itens: ConversaNaEntrada[] = [];
     for (let page = 1; page <= maxPaginas; page++) {
       try {
-        const { data, status } = await this.http.get<{ _embedded?: { unsorted?: Bruto[] } } | ''>('/leads/unsorted', {
+        const { data, status } = await this.http.get<{ _embedded?: { unsorted?: Bruto[] }; _links?: { next?: unknown } } | ''>('/leads/unsorted', {
           params: { limit: 250, page, 'order[created_at]': 'desc' },
         });
         const lote = status === 204 || !data ? [] : (data._embedded?.unsorted ?? []);
@@ -1295,7 +1295,9 @@ export class KommoClient {
             canal: texto(u.metadata?.service),
           });
         }
-        if (lote.length < 250) return { itens, truncado: false };
+        // fim da lista: página vazia, ou curta e sem `_links.next` (se o Kommo limitar a página abaixo de 250, o `next` segue a leitura)
+        const temProxima = !!(data && data._links?.next);
+        if (lote.length === 0 || (lote.length < 250 && !temProxima)) return { itens, truncado: false };
         if (maisAntigo < deUnix) return { itens, truncado: false };
       } catch (err) {
         wrapAxiosError(err, `lerEntrada(p${page})`);
