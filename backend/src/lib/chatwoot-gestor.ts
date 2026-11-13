@@ -220,7 +220,7 @@ export interface LinhaAnuncio {
   objetivo?: string | null;
   /** conversas iniciadas pelo anúncio (`onsite_conversion.messaging_conversation_started_7d`) */
   conversas?: number;
-  /** leads de formulário (`lead`) */
+  /** leads como a Meta conta (`lead`: site pelo pixel, formulário ou lead marcado na conversa) */
   leadsMeta?: number;
   impressoes?: number;
   cliques?: number;

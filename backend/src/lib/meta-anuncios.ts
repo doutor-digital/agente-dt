@@ -27,7 +27,7 @@ type Buscar = (url: string, init: { headers: Record<string, string>; signal: Abo
 
 /** A «conversa iniciada» que o Gerenciador de Anúncios mostra como resultado das campanhas de WhatsApp. */
 export const ACAO_CONVERSA = 'onsite_conversion.messaging_conversation_started_7d';
-/** Lead de formulário instantâneo. */
+/** O «Leads» do Gerenciador: cadastro no site (pixel), formulário da Meta ou lead marcado na conversa. */
 export const ACAO_LEAD = 'lead';
 const inteiro = (v: unknown): number => {
   const n = Number(v);

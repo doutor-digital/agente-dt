@@ -101,7 +101,7 @@ test('gasto por dia (gráfico e período anterior)', async () => {
   assert.match(f.chamadas[0]!.url, /level=account/);
 });
 
-test('o anúncio traz o resultado da Meta: conversas iniciadas, leads de formulário, impressões e cliques', async () => {
+test('o anúncio traz o resultado da Meta: conversas iniciadas, leads (lead), impressões e cliques', async () => {
   limparCacheDeAnuncios();
   const comAcoes = {
     ...linha('111', '9001', '50'),
