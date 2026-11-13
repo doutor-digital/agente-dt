@@ -339,6 +339,39 @@ test('teto por dia: depois do limite, 429 sem chamar o modelo; falha do modelo d
   assert.equal(teto2.gastar('7', '2026-11-16').ok, true);
 });
 
+test('quem já usou tudo hoje leva 429 SEM ler a conversa no Chatwoot; modelo que lança devolve a chamada e não culpa o Chatwoot', async () => {
+  const { porta, chamadas } = leituraFalsa();
+  const teto = criarTeto(1);
+  teto.gastar('7', '2026-11-16');
+  const { h } = montar({ leitura: porta, teto });
+  const r = resp();
+  await h.sugerir(pedido({ conversaId: 31 }), asRes(r));
+  assert.equal(r.codigo, 429);
+  assert.deepEqual(chamadas, []);
+  const teto2 = criarTeto(1);
+  const { h: h2 } = montar({ leitura: porta, teto: teto2, rodar: async () => { throw new Error('banco fora'); } });
+  const f = resp();
+  await h2.sugerir(pedido({ conversaId: 31 }), asRes(f));
+  assert.equal(f.codigo, 502);
+  assert.doesNotMatch(f.corpo.error, /Chatwoot/);
+  assert.equal(teto2.esgotado('7', '2026-11-16'), false, 'a chamada voltou');
+});
+
+test('perguntar: conversa que não dá para ler (apagada, outra conta) não trava a dúvida; login vencido (401 ao ler as caixas) pede entrar de novo', async () => {
+  const { porta } = leituraFalsa({ negar: 404, caixas: [2] });
+  const { h, modelo } = montar({ leitura: porta });
+  const r = resp();
+  await h.perguntar(pedido({ pergunta: 'como marco perdido?', conversaId: 31 }), asRes(r));
+  assert.equal(r.codigo, 200);
+  assert.equal(modelo.chamadas, 1);
+  const vencida: Porta = { ...porta, caixas: async () => { throw Object.assign(new Error('vencida'), { status: 401 }); } };
+  const { h: h2 } = montar({ leitura: vencida });
+  const r2 = resp();
+  await h2.perguntar(pedido({ pergunta: 'qual o valor?' }), asRes(r2));
+  assert.equal(r2.codigo, 401);
+  assert.equal(r2.corpo.sessao, 'invalida');
+});
+
 test('ligada só nas unidades da lista (ou *); vazia = desligada', () => {
   assert.equal(assistenteLigadaPara('doutor-hernia-parauapebas', undefined), false);
   assert.equal(assistenteLigadaPara('doutor-hernia-parauapebas', ''), false);

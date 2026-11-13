@@ -83,8 +83,10 @@ test('Central de Ajuda: só artigo publicado; acha pelo título e pelo corpo; se
 
 test('teto: por pessoa e por dia; outro dia zera; chamada devolvida não conta', () => {
   const t = criarTeto(2);
+  assert.equal(t.esgotado('ana', '2026-11-16'), false);
   assert.equal(t.gastar('ana', '2026-11-16').ok, true);
   assert.equal(t.gastar('ana', '2026-11-16').ok, true);
+  assert.equal(t.esgotado('ana', '2026-11-16'), true);
   assert.equal(t.gastar('ana', '2026-11-16').ok, false);
   assert.equal(t.gastar('bia', '2026-11-16').ok, true);
   assert.equal(t.gastar('ana', '2026-11-17').ok, true);
@@ -98,9 +100,11 @@ test('teto: por pessoa e por dia; outro dia zera; chamada devolvida não conta',
 test('nota para a atendente sai do texto; aspas e horários', () => {
   assert.deepEqual(separarNota('Oi, tudo bem?\n\nNOTA: confira o convênio antes.'), { texto: 'Oi, tudo bem?', nota: 'confira o convênio antes.' });
   assert.deepEqual(separarNota('Só o texto.'), { texto: 'Só o texto.', nota: null });
-  assert.deepEqual(horariosCitados('Tenho 9h, 10h30 e 14:00. A consulta custa R$ 350 em 2026.').sort(), ['09:00', '10:30', '14:00']);
+  assert.deepEqual(horariosCitados('Tenho às 9h e 10h30, ou 14:00. A consulta custa R$ 350 em 2026.').sort(), ['09:00', '10:30', '14:00']);
   // número que não é hora de relógio não vira "horário fora da agenda"
   assert.deepEqual(horariosCitados('Operamos 3 hérnias, jejum de 2 horas, R$ 350, no 10º andar, CRM 12345, ligue 9999-1234'), []);
+  assert.deepEqual(horariosCitados('Venha com jejum de 8h; o retorno é em 48h e a observação dura 24h.'), []);
+  assert.deepEqual(horariosCitados('Tenho às 9h, 10h30 ou 11h; e também 14:30. Amanhã às 8h.').sort(), ['08:00', '09:00', '10:30', '11:00', '14:30']);
   assert.deepEqual(horariosForaDaAgenda('Pode ser às 9h ou às 15h?', new Set(['09:00'])), ['15:00']);
   assert.deepEqual(horariosForaDaAgenda('Sem horário aqui.', new Set()), []);
 });
@@ -157,10 +161,10 @@ test('buscar_na_ajuda: devolve o artigo e marca a fonte; sem artigo, manda não 
 });
 
 test('sugerir: o modelo recebe só as duas ferramentas de LEITURA, a conversa e a ordem de escrever para a atendente; a nota sai à parte', async () => {
-  let visto: { preambulo?: string; ferramentas: string[]; messages: unknown } | null = null;
+  let visto: { preambulo?: string; ferramentas: string[]; messages: unknown; contexto?: unknown } | null = null;
   const d = deps({
-    rodarTeste: (async (_u: Unit, messages: unknown, opts: { ferramentas: (b: unknown) => Array<{ name: string }>; preambulo?: string }) => {
-      visto = { preambulo: opts.preambulo, ferramentas: opts.ferramentas({ onCall: () => undefined, tz: 'x' }).map((t) => t.name), messages };
+    rodarTeste: (async (_u: Unit, messages: unknown, opts: { ferramentas: (b: unknown) => Array<{ name: string }>; preambulo?: string; contextoDoPrompt?: unknown }) => {
+      visto = { contexto: opts.contextoDoPrompt, preambulo: opts.preambulo, ferramentas: opts.ferramentas({ onCall: () => undefined, tz: 'x' }).map((t) => t.name), messages };
       return respostaDoModelo('"Oi, Maria! Temos horário sim."\n\nNOTA: confirme o convênio.');
     }) as unknown as DepsDaAssistente['rodarTeste'],
   });
@@ -170,6 +174,8 @@ test('sugerir: o modelo recebe só as duas ferramentas de LEITURA, a conversa e 
   assert.equal(r.texto, 'Oi, Maria! Temos horário sim.');
   assert.equal(r.nota, 'confirme o convênio.');
   assert.deepEqual(visto!.ferramentas, ['horarios_livres', 'buscar_na_ajuda']);
+  // a base de conhecimento é buscada pela fala do PACIENTE, e a sugestão no meio da conversa não ganha o reforço de "primeira resposta"
+  assert.deepEqual(visto!.contexto, { userMessage: 'tem horário?', isFirstTurn: false });
   assert.match(visto!.preambulo!, /ATENDENTE HUMANA/);
   assert.match(visto!.preambulo!, /Paciente: tem horário\?/);
   assert.match(visto!.preambulo!, /NÃO manda mensagem a ninguém e NÃO altera nada/);

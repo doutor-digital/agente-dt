@@ -107,14 +107,27 @@ const BOTAO_JS = String.raw`(function(){
     if (estavaAberto()) abrir();
   }
 
-  // Só aparece se a assistente estiver ligada para a unidade desta pessoa (o servidor responde por ela).
+  // Só aparece se a assistente estiver ligada para a unidade desta pessoa (o servidor responde por ela). Só uma resposta DEFINITIVA
+  // vale como "desligada" (5 min até perguntar de novo); erro de rede, 429 ou 502 tenta de novo em 1 min. Com o botão na tela,
+  // continua perguntando a cada 5 min: desligada no servidor, ou outra pessoa na mesma aba, tira o botão.
+  var uidVisto = null;
+  function tirar(){
+    if (botao) botao.remove(); if (painel) painel.remove();
+    botao = painel = fr = null;
+  }
   function conferir(){
     var s = sessao();
-    if (consultando || !s || !emConta() || Date.now() < proxima) return;
+    if (!s || !emConta()) return;
+    if (uidVisto !== null && uidVisto !== s.uid) { tirar(); proxima = 0; }
+    uidVisto = s.uid;
+    if (consultando || Date.now() < proxima) return;
     consultando = true;
     fetch(AGENTE + '/api/public/assistente/estado', { headers: { 'X-CW-Token': s.token, 'X-CW-Client': s.client, 'X-CW-Uid': s.uid } })
-      .then(function(r){ return r.ok ? r.json() : null; })
-      .then(function(j){ ligada = !!(j && j.ligada); if (!ligada) proxima = Date.now() + 5 * 60000; if (ligada && !botao) criarBotao(); })
+      .then(function(r){ if (!r.ok) throw new Error('estado ' + r.status); return r.json(); })
+      .then(function(j){
+        ligada = !!(j && j.ligada); proxima = Date.now() + 5 * 60000;
+        if (ligada && !botao) criarBotao(); else if (!ligada && botao) tirar();
+      })
       .catch(function(){ proxima = Date.now() + 60000; })
       .then(function(){ consultando = false; });
   }
@@ -132,8 +145,8 @@ const BOTAO_JS = String.raw`(function(){
   window.addEventListener('resize', posicao);
   setInterval(function(){
     if (!emConta()) { if (botao) botao.style.display = 'none'; if (painel) painel.style.display = 'none'; return; }
-    if (!botao) conferir();
-    else { botao.style.display = 'flex'; if (painel) painel.style.display = estavaAberto() ? 'block' : 'none'; }
+    conferir();
+    if (botao) { botao.style.display = 'flex'; if (painel) painel.style.display = estavaAberto() ? 'block' : 'none'; }
     var c = conversaDaUrl();
     if (c !== conversa) { conversa = c; falar({ event: 'assistente-conversa', conversa: c }); }
     posicao();

@@ -384,6 +384,11 @@ export async function rodarTesteDaSofia(
     preambulo?: string;
     /** Voltas de ferramenta antes de desistir (padrão 5). */
     maxVoltas?: number;
+    /**
+     * O que o compositor do prompt usa para escolher o que entra (busca na base de conhecimento pela última fala, reforço de
+     * "primeira resposta"), quando as `messages` não são a conversa de verdade (a assistente da atendente manda uma instrução fixa).
+     */
+    contextoDoPrompt?: { userMessage?: string; isFirstTurn?: boolean };
   } = {},
 ): Promise<ResultadoDoTeste> {
   const promptDeTeste = opts.promptDeTeste;
@@ -405,8 +410,8 @@ export async function rodarTesteDaSofia(
     unit,
     // com prompt de teste, o do AgentConfig sai: assim o teste é a base em qualquer unidade (dentro ou fora do piloto)
     agentConfigPrompt: promptDeTeste ? undefined : config.systemPrompt,
-    userMessage: lastUser?.content,
-    isFirstTurn,
+    userMessage: opts.contextoDoPrompt?.userMessage ?? lastUser?.content,
+    isFirstTurn: opts.contextoDoPrompt?.isFirstTurn ?? isFirstTurn,
     // com ferramentas de fora, as de campo do Kommo não existem: o prompt não manda chamá-las
     excludeLeadFieldRules: !!opts.ferramentas,
     aprendizadosExtras: opts.aprendizadosExtras,

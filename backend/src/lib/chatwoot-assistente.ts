@@ -121,6 +121,8 @@ export function melhoresArtigos(artigos: Artigo[], pergunta: string, n = 3): Art
 // ── teto por pessoa por dia ────────────────────────────────────────────────────────────────────────
 
 export interface Teto {
+  /** Já usou tudo hoje? (só olha; não conta) */
+  esgotado(quem: string, dia: string): boolean;
   /** Conta uma chamada. `ok:false` = a pessoa já usou tudo hoje. */
   gastar(quem: string, dia: string): { ok: boolean; usadas: number };
   /** Devolve uma chamada que não chegou a usar o modelo. */
@@ -130,8 +132,13 @@ export interface Teto {
 export function criarTeto(max = TETO_ASSISTENTE_POR_DIA): Teto {
   const uso = new Map<string, { dia: string; n: number }>();
   return {
+    esgotado(quem, dia) {
+      const u = uso.get(quem);
+      return !!u && u.dia === dia && u.n >= max;
+    },
     gastar(quem, dia) {
-      if (uso.size > 2000) uso.clear();
+      // só sai quem é de OUTRO dia: apagar tudo devolveria as 80 chamadas a quem já as gastou
+      if (uso.size > 2000) for (const [k, u] of uso) if (u.dia !== dia) uso.delete(k);
       const u = uso.get(quem);
       if (!u || u.dia !== dia) {
         uso.set(quem, { dia, n: 1 });
@@ -283,14 +290,33 @@ export function separarNota(bruto: string): { texto: string; nota: string | null
 
 const aspas = (t: string): string => t.replace(/^["“«]\s*/, '').replace(/\s*["”»]$/, '');
 
+const HORA = String.raw`(?:[01]?\d|2[0-3])(?:h(?:[0-5]\d)?|:[0-5]\d)`;
+const GATILHO = String.raw`(?:às|as|das|pelas|para as|volta das)\s+`;
+const FORA_DE_PALAVRA = String.raw`(?<![\p{L}\p{N}:])`;
+const FIM_DE_HORA = String.raw`(?![\p{L}\p{N}])`;
+
 /**
- * "9h", "9h30", "09:30" → "09:00", "09:30". Só a forma de hora de relógio: número colado no "h" (sem letra depois) ou HH:MM.
- * "3 hérnias", "2 horas de jejum" e "R$ 350" não são horário.
+ * Os horários de consulta que o texto cita, "09:30" (HH:MM). Conta como horário: "14:30" em qualquer lugar, e "9h"/"9h30" quando
+ * vêm depois de "às", "das", "pelas"… (inclusive na lista "às 9h, 10h ou 11h"). "jejum de 8h", "retorno em 48h", "3 hérnias",
+ * "2 horas" e "R$ 350" não são horário de consulta.
  */
 export function horariosCitados(texto: string): string[] {
   const achados = new Set<string>();
-  for (const m of texto.matchAll(/(?<![\p{L}\p{N}:])([01]?\d|2[0-3])(?:h([0-5]\d)?|:([0-5]\d))(?![\p{L}\p{N}])/giu)) {
-    achados.add(`${m[1]!.padStart(2, '0')}:${m[2] ?? m[3] ?? '00'}`);
+  const normalizar = (h: string) => {
+    const m = h.match(/^(\d{1,2})(?:h|:)?(\d{2})?$/);
+    return m ? `${m[1]!.padStart(2, '0')}:${m[2] ?? '00'}` : null;
+  };
+  for (const m of texto.matchAll(new RegExp(`${FORA_DE_PALAVRA}(${HORA})${FIM_DE_HORA}`, 'giu'))) {
+    if (m[1]!.includes(':')) {
+      const h = normalizar(m[1]!);
+      if (h) achados.add(h);
+    }
+  }
+  for (const g of texto.matchAll(new RegExp(`${FORA_DE_PALAVRA}${GATILHO}${HORA}(?:\\s*(?:,|e|ou)\\s*${HORA})*${FIM_DE_HORA}`, 'giu'))) {
+    for (const h of g[0].match(new RegExp(HORA, 'giu')) ?? []) {
+      const n = normalizar(h);
+      if (n) achados.add(n);
+    }
   }
   return [...achados];
 }
@@ -322,6 +348,8 @@ export async function sugerirResposta(
     ferramentas: () => ferramentasDaAssistente(p.unit, deps, rastro),
     preambulo: preambuloDeSugerir({ unitNome: p.unit.name, hoje, transcricao, nomeDoPaciente: p.nomeDoPaciente }),
     maxVoltas: 6,
+    // a base de conhecimento é buscada pela última fala do PACIENTE (não pela instrução fixa), e não é "primeira resposta"
+    contextoDoPrompt: { userMessage: [...p.linhas].reverse().find((l) => l.de === 'paciente')?.texto, isFirstTurn: false },
   });
   if (!r.ok) return falhaDoModelo(r);
   const { texto: bruto, nota } = separarNota(r.reply);
@@ -335,6 +363,7 @@ export async function sugerirResposta(
   const avisos: string[] = [];
   const fora = horariosForaDaAgenda(texto, rastro.horariosDaAgenda);
   if (fora.length) avisos.push(`A sugestão cita horário (${fora.join(', ')}) que não veio da agenda lida agora. Confira na agenda antes de enviar.`);
+  else if (horariosCitados(texto).length) avisos.push('Os horários vêm da grade da agenda, lida agora; o sistema da clínica confirma na hora de marcar.');
   return { ok: true, texto, nota, avisos, fontes: [...rastro.fontes], modelo: r.meta.model, tokens: r.meta.tokens?.total ?? null };
 }
 
@@ -352,6 +381,7 @@ export async function tirarDuvida(
     ferramentas: () => ferramentasDaAssistente(p.unit, deps, rastro),
     preambulo: preambuloDeDuvida({ unitNome: p.unit.name, hoje: deps.hoje(p.unit), transcricao: p.linhas?.length ? transcricaoDaConversa(p.linhas.slice(-8)) : undefined }),
     maxVoltas: 6,
+    contextoDoPrompt: { isFirstTurn: false },
   });
   if (!r.ok) return falhaDoModelo(r);
   const texto = extrairBotoes(r.reply).texto.trim();

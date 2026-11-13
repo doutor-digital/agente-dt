@@ -167,16 +167,18 @@ export function criarHandlersDoAssistente(d: DepsDosHandlers) {
    */
   async function resolver(quem: { leitura: PortaDeLeitura }, conversaId: number | null | undefined, modo: 'sugerir' | 'perguntar'): Promise<Resolvida> {
     if (conversaId) {
-      let c: Awaited<ReturnType<PortaDeLeitura['conversa']>>;
+      let c: Awaited<ReturnType<PortaDeLeitura['conversa']>> | null;
       try {
         c = await quem.leitura.conversa(conversaId);
       } catch (e) {
-        if ([401, 403, 404].includes(statusDoErro(e) ?? 0)) return { ok: false, status: 403, error: 'você não tem acesso a esta conversa (ou ela não existe mais)' };
-        throw e;
+        if (![401, 403, 404].includes(statusDoErro(e) ?? 0)) throw e;
+        // o Chatwoot nega com 401 (sem permissão), 403 ou 404 (não existe): para SUGERIR é recusa; a DÚVIDA não depende da conversa
+        if (modo === 'sugerir') return { ok: false, status: 403, error: 'você não tem acesso a esta conversa (ou ela não existe mais)' };
+        c = null;
       }
-      const slug = c.caixa ? CAIXAS_REGUA[c.caixa] : undefined;
-      const unit = slug && d.ligadaPara(slug) ? await d.unidade(slug) : null;
-      if (unit) {
+      const slug = c?.caixa ? CAIXAS_REGUA[c.caixa] : undefined;
+      const unit = c && slug && d.ligadaPara(slug) ? await d.unidade(slug) : null;
+      if (c && unit) {
         const linhas = !c.lida.interno && !c.lida.grupo ? linhasDaConversa(await quem.leitura.mensagens(conversaId)) : [];
         return { ok: true, unit, linhas, lida: c.lida };
       }
@@ -193,7 +195,7 @@ export function criarHandlersDoAssistente(d: DepsDosHandlers) {
     return { ok: true, unit, linhas: [], lida: null };
   }
 
-  /** Gasta uma chamada do dia da pessoa; devolve false (e responde 429) se acabou. */
+  /** Gasta uma chamada do dia da pessoa e devolve a chave dela (para devolver depois); se acabou, responde 429 e devolve null. */
   function gastar(quem: Pick<Atendente, 'id' | 'sessao'>, res: Response): string | null {
     const chave = String(quem.id ?? quem.sessao.uid);
     const dia = d.dia();
@@ -204,10 +206,19 @@ export function criarHandlersDoAssistente(d: DepsDosHandlers) {
     return chave;
   }
 
+  /** Quem já usou tudo hoje nem chega a ler a conversa no Chatwoot. */
+  function esgotou(quem: Pick<Atendente, 'id' | 'sessao'>, res: Response): boolean {
+    if (!d.teto.esgotado(String(quem.id ?? quem.sessao.uid), d.dia())) return false;
+    res.status(429).json({ error: 'você já usou todas as perguntas de hoje à assistente — volte amanhã ou peça à gerente' });
+    return true;
+  }
+
+  /** Falha ao LER o Chatwoot (antes de gastar o modelo). 401 aqui = o login dela venceu. */
   const falhaGeral = (res: Response, e: unknown, acao: string, extra: Record<string, unknown>) => {
     // nunca o conteúdo do paciente: só o erro e onde
     logger.warn({ err: String(e).slice(0, 300), acao, ...extra }, 'assistente: falhou');
-    res.status(502).json({ error: 'não consegui falar com o Chatwoot agora' });
+    if (statusDoErro(e) === 401) res.status(401).json({ error: 'entre no Chatwoot de novo (sessão expirada)', sessao: 'invalida' });
+    else res.status(502).json({ error: 'não consegui falar com o Chatwoot agora' });
   };
 
   return {
@@ -230,6 +241,7 @@ export function criarHandlersDoAssistente(d: DepsDosHandlers) {
         res.status(400).json({ error: 'conversa inválida' });
         return;
       }
+      if (esgotou(quem, res)) return;
       const t0 = Date.now();
       try {
         const r = await resolver(quem, p.data.conversaId, 'sugerir');
@@ -253,7 +265,7 @@ export function criarHandlersDoAssistente(d: DepsDosHandlers) {
         }
         const chave = gastar(quem, res);
         if (!chave) return;
-        const out = await sugerirResposta(d.assistente, { unit: r.unit, linhas: r.linhas, nomeDoPaciente: r.lida?.nome ?? '' });
+        const out = await comModelo(chave, 'sugerir', r.unit, p.data.conversaId, () => sugerirResposta(d.assistente, { unit: r.unit, linhas: r.linhas, nomeDoPaciente: r.lida?.nome ?? '' }));
         responder(res, out, chave, 'sugerir', r.unit, p.data.conversaId, t0, (o) => ({ sugestao: o.texto, nota: o.nota, avisos: o.avisos, fontes: o.fontes }));
       } catch (e) {
         falhaGeral(res, e, 'sugerir', { conversa: p.data.conversaId });
@@ -268,6 +280,7 @@ export function criarHandlersDoAssistente(d: DepsDosHandlers) {
         res.status(400).json({ error: 'escreva a sua dúvida (até 1000 letras)' });
         return;
       }
+      if (esgotou(quem, res)) return;
       const t0 = Date.now();
       try {
         const r = await resolver(quem, p.data.conversaId, 'perguntar');
@@ -280,13 +293,23 @@ export function criarHandlersDoAssistente(d: DepsDosHandlers) {
         // a conversa de antes entra de cabeça para baixo se começar por fala da assistente: o modelo exige começar pela pessoa
         const antes = (p.data.historico ?? []).slice(-8);
         while (antes.length && antes[0]!.role !== 'user') antes.shift();
-        const out = await tirarDuvida(d.assistente, { unit: r.unit, falas: [...antes, { role: 'user', content: p.data.pergunta }], linhas: r.linhas });
+        const out = await comModelo(chave, 'perguntar', r.unit, p.data.conversaId ?? null, () => tirarDuvida(d.assistente, { unit: r.unit, falas: [...antes, { role: 'user', content: p.data.pergunta }], linhas: r.linhas }));
         responder(res, out, chave, 'perguntar', r.unit, p.data.conversaId ?? null, t0, (o) => ({ resposta: o.texto, fontes: o.fontes }));
       } catch (e) {
         falhaGeral(res, e, 'perguntar', { conversa: p.data.conversaId ?? null });
       }
     },
   };
+
+  /** O modelo (ou o que ele usa: banco, base de conhecimento) lançou: a pessoa não perde a chamada e a culpa não é do Chatwoot. */
+  async function comModelo(chave: string, acao: string, unit: Unit, conversa: number | null, f: () => Promise<ResultadoDaAssistente>): Promise<ResultadoDaAssistente> {
+    try {
+      return await f();
+    } catch (e) {
+      logger.warn({ err: String(e).slice(0, 300), acao, unidade: unit.slug, conversa }, 'assistente: o modelo lançou');
+      return { ok: false, status: 502, error: 'a assistente não conseguiu responder agora — tente de novo em instantes' };
+    }
+  }
 
   function responder(
     res: Response,
