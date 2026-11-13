@@ -83,6 +83,7 @@ import { telefoneDeFamiliarNoCartao } from '../lib/telefone-de-familiar.js';
 import { SpineSyncService } from '../services/spine-sync.service.js';
 import { conversaLiberadaPelaEquipe } from '../lib/ponte-passar-sofia-banco.js';
 import { liberadaAgora } from '../lib/ponte-passar-sofia.js';
+import { historicoDoWhatsappNaMemoria } from '../lib/historico-whatsapp.js';
 import { z } from 'zod';
 
 const attachmentSchema = z
@@ -1705,6 +1706,10 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
     logger.info({ traceId, leadId, unit: unit.slug }, 'agente pulado (a equipe falou com o paciente)');
     return TURNO_PULADO;
   }
+
+  // Unidade no WhatsApp Lite com o número também no Evolution (só leitura): na 1ª resposta, a conversa antiga do
+  // paciente vai para a memória do lead. Unidade sem `HISTORICO_EVO` sai na hora; falha nunca segura o turno (≤ 4 s).
+  if (isChatMessage) await historicoDoWhatsappNaMemoria(unit, leadId);
 
   try {
     const graph = await buildAgentGraph(recorder, unit, leadId);

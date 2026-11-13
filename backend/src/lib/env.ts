@@ -134,6 +134,9 @@ const schema = z.object({
   SUPORTE_MENU_SEGREDO: z.string().optional(),
   /** Evolution do agente de suporte: URL https, nome da instância (padrão `analista-dt`) e a chave DA INSTÂNCIA. */
   SUPORTE_EVO_URL: z.string().optional(),
+  /** Histórico antigo do WhatsApp pelo Evolution, SÓ LEITURA (`historico-whatsapp.ts`): `slug=instância:chave;…` e a URL (opcional). */
+  HISTORICO_EVO: z.string().optional(),
+  HISTORICO_EVO_URL: z.string().optional(),
   SUPORTE_EVO_INSTANCIA: z.string().optional(),
   SUPORTE_EVO_APIKEY: z.string().optional(),
   /** Onde LER os grupos "Mkt | Dr Hérnia …" (padrão: a mesma instância acima; só leitura). */

@@ -69,8 +69,9 @@ export function dividirFalas(falas: readonly FalaDaTela[]): { anteriores: FalaDa
 }
 
 /** O bloco que vai para a memória do lead. `quando` = "12/11 14:30" (hora local da unidade). */
-export function montarHistorico(falas: readonly FalaDaTela[], quando: string, por: string | null): string {
-  const cab = `${MARCA_DO_HISTORICO} assumir — lida da tela pela equipe${por ? ` (${por})` : ''} em ${quando}. As falas "Equipe" são da recepção da clínica, não suas:]`;
+export function montarHistorico(falas: readonly FalaDaTela[], quando: string, por: string | null, origem: 'tela' | 'whatsapp' = 'tela'): string {
+  const fonte = origem === 'tela' ? `lida da tela pela equipe${por ? ` (${por})` : ''}` : 'lida do WhatsApp da clínica';
+  const cab = `${MARCA_DO_HISTORICO} assumir — ${fonte} em ${quando}. As falas "Equipe" são da recepção da clínica, não suas:]`;
   const linhas = falas.map((f) => `${f.de === 'paciente' ? 'Paciente' : 'Equipe'}${f.hora ? ` (${f.hora})` : ''}: ${f.texto}`);
   // guarda o FIM: tira linhas do começo até caber
   let corpo = linhas.join('\n');
