@@ -830,7 +830,7 @@
   function blocoDaPassagem(doc, r, acoes) {
     if (!acoes || !acoes.passarParaSofia) return null;
     var c = r.cartao;
-    var msg = el(doc, 'p', { classe: 'nota', dados: { papel: 'msg-passar' } });
+    var msg = el(doc, 'p', { classe: 'nota', dados: { papel: 'msg-passar' } }, (acoes.ultimaPassagem && acoes.ultimaPassagem(c.id)) || '');
     var b = botaoAcao(doc, 'Passar para a Sofia', 'passar-sofia', { icone: 'robo' });
     b.classList.add('botao--primario');
     b.addEventListener('click', function () {
