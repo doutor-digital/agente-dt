@@ -5,7 +5,7 @@
  * resolvidas, quem ficou de fora e por quê, uma amostra de destinatários, os freios e em que modo a unidade está.
  * O botão manda de volta o `total` e a `impressao` que a página mostrou: se a lista mudou no meio, a aprovação é recusada.
  */
-import { ROTULO_DA_EXCLUSAO, textoFinal, valoresDasVariaveis, type MotivoDeExclusao } from './regras.js';
+import { rotuloDaExclusao, textoFinal, valoresDasVariaveis, type MotivoDeExclusao } from './regras.js';
 import type { Freios } from './freios.js';
 import type { Modo } from './lote.js';
 import type { Definicao } from './modelo.js';
@@ -113,7 +113,8 @@ export interface DadosDoPainel {
   oferta?: string | null;
   /** por quantos dias depois do envio a Sofia sabe da oferta (DISPARO_OFERTA_DIAS) */
   ofertaDias?: number;
-  unidade: { slug: string; nome: string };
+  /** `confereNoKommo`: a unidade confere pelo Kommo (muda o texto de quem não respondeu) */
+  unidade: { slug: string; nome: string; confereNoKommo?: boolean };
   modo: Modo;
   freios: Freios;
   resumo: { candidatos?: number; fora?: Partial<Record<MotivoDeExclusao, number>>; foraDoKommoDividido?: number };
@@ -191,7 +192,7 @@ export function montarPainelDaOnda(d: DadosDoPainel): string {
   const midia = onda.cabecalho ? `<p class="mudo">Cabeçalho: ${esc(onda.cabecalho.tipo)} — ${esc(onda.cabecalho.link)}</p>` : '';
   const fora = Object.entries(d.resumo.fora ?? {}).filter(([, n]) => n);
   const tabelaFora = fora.length
-    ? `<table><tbody>${fora.map(([m, n]) => `<tr><td class="esq">${esc(ROTULO_DA_EXCLUSAO[m as MotivoDeExclusao] ?? m)}</td><td>${n}</td></tr>`).join('')}</tbody></table>`
+    ? `<table><tbody>${fora.map(([m, n]) => `<tr><td class="esq">${esc(rotuloDaExclusao(m, d.unidade.confereNoKommo))}</td><td>${n}</td></tr>`).join('')}</tbody></table>`
     : '<p class="mudo">Ninguém ficou de fora pelas regras.</p>';
   const amostra = d.amostra.length
     ? `<table><thead><tr><th class="esq">Nome na saudação</th><th>Telefone</th></tr></thead><tbody>${d.amostra.map((p) => `<tr><td class="esq">${esc(p.nome)}</td><td>${esc(telefoneMascarado(p.telefone))}</td></tr>`).join('')}</tbody></table>`
@@ -259,7 +260,7 @@ ${tabelaSaidas}
 <li>Teto desta unidade: ${f.tetoPorHora} por hora e ${f.tetoPorDia} por 24 horas.</li>
 <li>Para a unidade se mais de ${f.maxSair} pessoas responderem SAIR.</li>
 <li>Pausa a onda se ${f.falhasSeguidas} envios seguidos falharem na Meta.</li>
-<li>Reconfere a franquia (consulta marcada, tratamento aberto) e o SAIR na hora de cada envio. Nunca duas vezes para a mesma pessoa na campanha.</li></ul></section>
+<li>Reconfere a franquia (consulta marcada, tratamento aberto) — ou, em unidade sem franquia, se o cartão já virou cliente no Kommo — e o SAIR na hora de cada envio. Nunca duas vezes para a mesma pessoa na campanha.</li></ul></section>
 ${acao}
 <script>
 const id=${JSON.stringify(onda.id)},total=${JSON.stringify(onda.total)},impressao=${JSON.stringify(onda.impressao)};

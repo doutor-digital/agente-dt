@@ -14,6 +14,7 @@ import { avisosDoAmbiente, freiosDoAmbiente } from './disparo/freios.js';
 import { rodarUnidade, rodadasSemAndar, type OndaNoLote } from './disparo/lote.js';
 import { filtroDeMontagemMorta } from './disparo/montagem.js';
 import { avisosDaListaDeTeste, portoReal } from './disparo/porto.js';
+import { avisosDaRegraDeCliente, usaRegraDeCliente } from './disparo/conferencia.js';
 import { alertaSemAndar } from './disparo/alerta.js';
 import { enviarTelegram } from './telegram.js';
 import { definicaoDaOnda } from './disparo/onda.js';
@@ -89,7 +90,7 @@ export async function cancelarMontagensPresas(agora = Date.now()): Promise<numbe
  * episódio (no log continua a cada 5). O episódio acaba quando alguém anda; aí o próximo pode avisar de novo.
  */
 export async function depoisDaRodada(
-  unit: { id: string; slug: string },
+  unit: { id: string; slug: string; confereNoKommo?: boolean },
   r: Parameters<typeof rodadasSemAndar>[1],
   ctx: { avisar: (texto: string) => Promise<unknown>; contagem: Map<string, number> },
 ): Promise<void> {
@@ -99,7 +100,7 @@ export async function depoisDaRodada(
     logger.error({ unit: unit.slug, rodadas: parada, adiados: r.adiados }, 'disparo: a onda está SEM ANDAR — rodadas seguidas só com pessoas adiadas (franquia fora do ar? banco instável?)');
   }
   if (parada === SEM_ANDAR_PARA_ALERTAR) {
-    await ctx.avisar(alertaSemAndar({ unidade: unit.slug, rodadas: parada, adiados: r.adiados })).catch((err) => logger.warn({ err: String(err) }, 'disparo: não consegui avisar o João no Telegram'));
+    await ctx.avisar(alertaSemAndar({ unidade: unit.slug, rodadas: parada, adiados: r.adiados, confereNoKommo: unit.confereNoKommo })).catch((err) => logger.warn({ err: String(err) }, 'disparo: não consegui avisar o João no Telegram'));
   }
 }
 
@@ -133,7 +134,7 @@ export async function rodadaDoDisparo(): Promise<void> {
     try {
       const noLote: OndaNoLote[] = vivas.map((o) => ({ id: o.id, campanhaId: o.campanhaId, campanhaNome: o.campanha.nome, aprovadaEm: o.aprovadaEm, aprovadaModo: o.aprovadaModo, sairAceitos: o.sairAceitos, ...definicaoDaOnda(o) }));
       const r = await rodarUnidade(porto, f, { id: unit.id, slug: unit.slug, nome: unit.name, fuso: fusoDaUnidade(unit) }, noLote);
-      await depoisDaRodada(unit, r, { avisar: avisarJoao, contagem: semAndar });
+      await depoisDaRodada({ id: unit.id, slug: unit.slug, confereNoKommo: usaRegraDeCliente(unit) }, r, { avisar: avisarJoao, contagem: semAndar });
       if (r.processados > 0 || (r.parou && r.parou !== 'automação desligada nesta unidade')) logger.info({ unit: unit.slug, ...r }, 'disparo: rodada');
     } catch (err) {
       logger.error({ err: String(err), unit: unit.slug }, 'disparo: a rodada da unidade falhou');
@@ -157,7 +158,7 @@ export function startDisparoWorker(): void {
   if (timer) return;
   timer = setInterval(() => void talvezRodar(), PASSO_MS);
   logger.info({ passoMs: PASSO_MS, freios: freiosDoAmbiente() }, 'disparo de campanha: worker ligado (cada unidade nasce em modo seco)');
-  for (const aviso of [...avisosDoAmbiente(), ...avisosDaListaDeTeste()]) logger.warn(aviso);
+  for (const aviso of [...avisosDoAmbiente(), ...avisosDaListaDeTeste(), ...avisosDaRegraDeCliente()]) logger.warn(aviso);
 }
 
 export function stopDisparoWorker(): void {

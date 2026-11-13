@@ -32,11 +32,14 @@ export function alertaLimiteDeTaxa(d: DadosDoAlerta & { rodadas: number }): stri
   ].join('\n');
 }
 
-export function alertaSemAndar(d: { unidade: string; rodadas: number; adiados: number }): string {
+export function alertaSemAndar(d: { unidade: string; rodadas: number; adiados: number; confereNoKommo?: boolean }): string {
+  // Unidade sem franquia confere pelo cartão no Kommo: mandar o João olhar a franquia seria mandá-lo ao lugar errado.
+  const fonte = d.confereNoKommo ? 'no Kommo' : 'na franquia';
+  const olhar = d.confereNoKommo ? 'o Kommo da unidade' : 'a franquia (API Spine)';
   return [
     `⏳ Disparo SEM ANDAR — ${d.unidade}`,
-    `Motivo: ${d.rodadas} rodadas seguidas só com pessoas adiadas (${d.adiados} na última): não deu para conferir ninguém na franquia ou no banco, então nada sai.`,
-    'O que fazer: ver se a franquia (API Spine) e o banco estão no ar. Quando voltarem, o disparo anda sozinho; se uma pessoa específica nunca confere, cancelar a onda e montar de novo.',
+    `Motivo: ${d.rodadas} rodadas seguidas só com pessoas adiadas (${d.adiados} na última): não deu para conferir ninguém ${fonte} ou no banco, então nada sai.`,
+    `O que fazer: ver se ${olhar} e o banco estão no ar. Quando voltarem, o disparo anda sozinho; se uma pessoa específica nunca confere, cancelar a onda e montar de novo.`,
   ].join('\n');
 }
 
