@@ -157,7 +157,7 @@ const BOTAO_JS = String.raw`(function(){
       + '[data-dd-aval-pop] textarea{width:100%;box-sizing:border-box;min-height:74px;resize:vertical;border:1px solid #cfd7e3;border-radius:8px;padding:8px;font:inherit;color:inherit;background:#fff}'
       + '[data-dd-aval-pop] textarea:focus{outline:none;border-color:#1f93ff;box-shadow:0 0 0 3px rgba(31,147,255,.15)}'
       + '[data-dd-aval-pop] .linha{display:flex;justify-content:flex-end;gap:6px;margin-top:8px}'
-      + '[data-dd-aval-pop] button{border:1px solid #cfd7e3;background:#fff;color:#1f2d3d;border-radius:8px;padding:6px 11px;font:600 12.5px/1.2 inherit;cursor:pointer}'
+      + '[data-dd-aval-pop] button{border:1px solid #cfd7e3;background:#fff;color:#1f2d3d;border-radius:8px;padding:6px 11px;font-family:inherit;font-size:12.5px;font-weight:600;line-height:1.2;cursor:pointer}'
       + '[data-dd-aval-pop] button.pri{background:#1f93ff;border-color:#1f93ff;color:#fff}[data-dd-aval-pop] button:disabled{opacity:.55;cursor:default}'
       + '[data-dd-aval-pop] small{display:block;margin-top:8px;color:#6b7a90;font-size:11.5px}'
       + '[data-dd-aval-pop] .erro{color:#c53030;font-size:12px;margin-top:6px}';
@@ -248,6 +248,109 @@ const BOTAO_JS = String.raw`(function(){
     });
   }
 
+  // ── atalhos com NOME na caixa de resposta (João, 13/11/2026: "pras meninas saberem e clicarem, sem quebrar o front") ──
+  // Só acionam o que o Chatwoot já tem: «⚡ Mensagens prontas» digita "/" no editor (abre a lista nativa de respostas prontas, com
+  // busca e troca de {{contact.first_name}}); «📋 Modelos do WhatsApp» clica no botão nativo de modelos. Regras (revisão do sênior):
+  //  - nunca empurra o «Enviar»: mede a sobra da linha a cada segundo — com nome se couber, só o ícone se não, e some se nem isso;
+  //  - «⚡» só em «Responder» com o editor livre (nota privada não tem resposta pronta; janela de 24 h fechada não tem editor);
+  //  - «📋» só quando o botão nativo existe (inclusive com a janela fechada, quando o Chatwoot tira o emoji e o clipe);
+  //  - a "/" que o «⚡» digitou some sozinha se a lista fechar sem escolha (nunca vai "Bom dia /" para o paciente);
+  //  - desliga pelo servidor: CHATWOOT_ATALHOS=0 (vale no próximo carregamento da página).
+  var ATALHOS = __ATALHOS__;
+  var AT = { esperaBarra: null };
+  var ICONES_NATIVOS = '.i-ph-smiley-sticker, .i-ph-paperclip, .i-ph-microphone, .i-ph-signature, .i-ph-whatsapp-logo';
+  function estiloAtalhos(){
+    if (document.querySelector('style[data-dd-atalhos-estilo]')) return;
+    var st = document.createElement('style'); st.setAttribute('data-dd-atalhos-estilo', '1');
+    st.textContent = '[data-dd-atalhos]{display:inline-flex;align-items:center;gap:6px;margin-left:4px;flex:0 0 auto}'
+      + '[data-dd-atalhos][hidden],[data-dd-atalhos] button[hidden]{display:none!important}'
+      + '[data-dd-atalhos] button{display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 10px;border-radius:8px;border:1px solid rgba(127,127,127,.35);background:transparent;color:inherit;font-family:inherit;font-size:12.5px;font-weight:500;line-height:1;cursor:pointer;white-space:nowrap}'
+      + '[data-dd-atalhos] button:hover{background:rgba(127,127,127,.12)}'
+      + '[data-dd-atalhos].compacto .r{display:none}[data-dd-atalhos].compacto button{padding:0 7px}';
+    document.head.appendChild(st);
+  }
+  function editorLivre(wrap){
+    var caixa = wrap.closest('.reply-box');
+    var ed = caixa && caixa.querySelector('.ProseMirror[contenteditable="true"]');
+    return ed || null;
+  }
+  function botaoNativoDeModelos(wrap){
+    var n = null;
+    Array.prototype.forEach.call(wrap.querySelectorAll('button'), function(b){ if (!n && b.querySelector('.i-ph-whatsapp-logo')) n = b; });
+    return n;
+  }
+  function abrirProntas(wrap){
+    var ed = editorLivre(wrap); if (!ed || emNotaPrivada()) return;
+    ed.focus();
+    var sel = window.getSelection(), r = document.createRange();
+    r.selectNodeContents(ed); r.collapse(false); sel.removeAllRanges(); sel.addRange(r);
+    var token = (ed.innerText || '').trim() ? ' /' : '/';
+    document.execCommand('insertText', false, token);
+    AT.esperaBarra = { ed: ed, token: token, ate: Date.now() + 120000, viuLista: false, conversa: conversaDaUrl() };
+  }
+  // a lista nativa abre numa camada solta com data-popover-content; se fechou e o texto ainda termina na "/" que nós
+  // digitamos (a pessoa não escolheu nem digitou nada depois), tira a "/" — e só ela
+  function limparBarraSolta(){
+    var w = AT.esperaBarra; if (!w) return;
+    if (!document.body.contains(w.ed) || Date.now() > w.ate) { AT.esperaBarra = null; return; }
+    // trocou de conversa (a caixa de resposta é a mesma, o rascunho é outro) ou foi digitar noutro campo: desiste, sem mexer
+    if (conversaDaUrl() !== w.conversa) { AT.esperaBarra = null; return; }
+    var ativo = document.activeElement;
+    if (ativo && ativo !== document.body && ativo !== w.ed && !w.ed.contains(ativo)) { AT.esperaBarra = null; return; }
+    var aberta = !!document.querySelector('[data-popover-content]');
+    if (aberta) { w.viuLista = true; return; }
+    if (!w.viuLista && Date.now() < w.ate - 118000) return; // a lista ainda vai abrir
+    var t = w.ed.innerText || '';
+    if (/(^|\s)\/\s*$/.test(t)) {
+      w.ed.focus();
+      var sel = window.getSelection(), r = document.createRange();
+      r.selectNodeContents(w.ed); r.collapse(false); sel.removeAllRanges(); sel.addRange(r);
+      for (var i = 0; i < w.token.length && /[\s/]$/.test(w.ed.innerText || ''); i++) document.execCommand('delete');
+    }
+    AT.esperaBarra = null;
+  }
+  function botaoAtalho(icone, rotulo, titulo){
+    var b = document.createElement('button'); b.type = 'button'; b.title = titulo; b.setAttribute('aria-label', rotulo);
+    var i = document.createElement('span'); i.textContent = icone; i.setAttribute('aria-hidden', 'true');
+    var t = document.createElement('span'); t.className = 'r'; t.textContent = rotulo;
+    b.appendChild(i); b.appendChild(t); return b;
+  }
+  function caberNaLinha(box, wrap){
+    // cabe = ícones (com os atalhos) + o «Enviar» inteiro + folga ≤ largura da linha; mede com nome, depois só o ícone, e esconde
+    // se nem assim couber. Mede o «Enviar» pela largura natural (scrollWidth), para pegar até quando o flex o esprime.
+    var linha = wrap.parentElement; if (!linha) return;
+    var enviar = linha.lastElementChild !== wrap ? linha.lastElementChild : null;
+    var cabe = function(){ return wrap.scrollWidth + (enviar ? enviar.scrollWidth : 0) + 24 <= linha.clientWidth; };
+    box.hidden = false; box.classList.remove('compacto');
+    if (cabe()) return;
+    box.classList.add('compacto');
+    if (cabe()) return;
+    box.hidden = true;
+  }
+  function marcarCaixaDeResposta(){
+    if (!ATALHOS) return;
+    limparBarraSolta();
+    Array.prototype.forEach.call(document.querySelectorAll('.left-wrap'), function(wrap){
+      var box = wrap.querySelector('[data-dd-atalhos]');
+      if (!wrap.querySelector(ICONES_NATIVOS)) { if (box) box.hidden = true; return; }
+      if (!box) {
+        estiloAtalhos();
+        box = document.createElement('span'); box.setAttribute('data-dd-atalhos', '1');
+        var pr = botaoAtalho('⚡', 'Mensagens prontas', 'Abre as respostas prontas da clínica (o mesmo que digitar /)');
+        var mo = botaoAtalho('📋', 'Modelos do WhatsApp', 'Modelos aprovados pela Meta — para quando o paciente não fala há mais de 24 h');
+        pr.setAttribute('data-dd-prontas', '1'); mo.setAttribute('data-dd-modelos', '1');
+        pr.onclick = function(){ abrirProntas(wrap); };
+        mo.onclick = function(){ var n = botaoNativoDeModelos(wrap); if (n) n.click(); };
+        box.appendChild(pr); box.appendChild(mo); wrap.appendChild(box);
+      }
+      // a caixa de resposta não é recriada ao trocar de conversa: decide de novo a cada segundo
+      box.querySelector('[data-dd-prontas]').hidden = emNotaPrivada() || !editorLivre(wrap);
+      box.querySelector('[data-dd-modelos]').hidden = !botaoNativoDeModelos(wrap);
+      var nenhum = box.querySelector('[data-dd-prontas]').hidden && box.querySelector('[data-dd-modelos]').hidden;
+      if (nenhum) { box.hidden = true; return; }
+      caberNaLinha(box, wrap);
+    });
+  }
   window.addEventListener('message', function(ev){
     if (ev.origin !== AGENTE || !fr || ev.source !== fr.contentWindow) return;
     var d = ev.data; if (!d || typeof d.event !== 'string') return;
@@ -271,12 +374,14 @@ const BOTAO_JS = String.raw`(function(){
     if (c !== conversa) { conversa = c; falar({ event: 'assistente-conversa', conversa: c }); }
     posicao();
     try { marcarBaloes(); } catch (e) {}
+    try { marcarCaixaDeResposta(); } catch (e) {}
   }, 1000);
 })();`;
 
 /** O JavaScript do botão. Tem `__AGENTE__` no lugar do endereço do servidor (quem monta troca por um texto JSON). */
-export function assistenteJs(): string {
-  return BOTAO_JS;
+export function assistenteJs(env: NodeJS.ProcessEnv = process.env): string {
+  // CHATWOOT_ATALHOS=0 desliga os atalhos «⚡ Mensagens prontas» / «📋 Modelos do WhatsApp» sem novo deploy de código
+  return BOTAO_JS.split('__ATALHOS__').join(String(env.CHATWOOT_ATALHOS !== '0'));
 }
 
 /** A página do painel (iframe). `__ORIGEM_CW__` = a origem do Chatwoot (JSON). */
