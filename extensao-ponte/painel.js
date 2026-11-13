@@ -67,6 +67,8 @@
   var espera = null;
   /** A resposta do cartão que está na tela (para a pausa e o resumo atualizarem sem perguntar de novo). */
   var naTela = null;
+  /** 13/11: o resultado do último "Passar para a Sofia" por cartão (sobrevive ao redesenho do cartão). */
+  var ultimasPassagens = new Map();
   var secao = 'conversa';
   var filaGuardada = null;
   var pedidoFila = 0;
@@ -336,14 +338,21 @@
       }, function () {
         throw new Error('Não consegui ler a conversa. Recarregue o WhatsApp Web (F5) e tente de novo.');
       }).then(function (j) {
-        aplicarPausa(leadId, null);
         var ate = j.liberadaAte ? new Date(j.liberadaAte) : null;
         var hora = ate ? (ate.getHours() < 10 ? '0' : '') + ate.getHours() + ':' + (ate.getMinutes() < 10 ? '0' : '') + ate.getMinutes() : null;
         var nota = j.nota ? ' A conversa ficou salva como nota no cartão do Kommo.' : '';
-        return (j.turno === 'iniciado'
+        var texto = (j.turno === 'iniciado'
           ? '✅ Passado para a Sofia. Ela está respondendo agora pelo Kommo' + (hora ? ' (pode responder este paciente até ' + hora + ')' : '') + '.'
-          : '✅ Passado para a Sofia. A última mensagem é sua: ela responde quando o paciente escrever.') + nota;
+          : '✅ Passado para a Sofia. A última mensagem da conversa é da clínica, então ela não manda nada agora: responde quando o paciente escrever de novo' + (hora ? ' (até ' + hora + ', mesmo fora do horário)' : '') + '.') + nota;
+        // guarda ANTES de redesenhar o cartão (a pausa mudou): o cartão novo mostra o resultado, não "Lendo a conversa…"
+        if (ultimasPassagens.size > 50) ultimasPassagens.clear();
+        ultimasPassagens.set(leadId, texto);
+        aplicarPausa(leadId, null);
+        return texto;
       });
+    },
+    ultimaPassagem: function (leadId) {
+      return ultimasPassagens.get(leadId) || '';
     },
     semNome: function () {
       return !(config && config.nome);
