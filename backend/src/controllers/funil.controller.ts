@@ -25,6 +25,7 @@ import { conversasDasPaginas, diaEmBelem, montarHoje } from '../lib/chatwoot-hoj
 import {
   credenciaisDeAnuncio,
   emailDoPerfil,
+  montarAnunciosMeta,
   montarGestor,
   montarMarketing,
   montarOportunidades,
@@ -40,7 +41,7 @@ import {
   type LinhaAnuncio,
   type Referral,
 } from '../lib/chatwoot-gestor.js';
-import { gastoDaConta, gastoDiarioDaConta } from '../lib/meta-anuncios.js';
+import { destinosDaConta, gastoDaConta, gastoDiarioDaConta } from '../lib/meta-anuncios.js';
 import { TELAS_CSS, TELAS_JS } from '../lib/chatwoot-telas-ui.js';
 import { instanteNoFuso, searchTreatments } from '../services/spine.service.js';
 import { CAIXAS_HISTORICO, CAIXAS_REGUA, CAMPO_PARTIDA } from '../lib/chatwoot-regua.js';
@@ -515,6 +516,33 @@ async function gastosDasUnidades(slugs: string[], de: string, ate: string): Prom
   return { investido: { estado: 'ok', valor: total, moeda: [...moedas][0] ?? null, motivo: nota || null }, linhas };
 }
 
+/** Para qual WhatsApp cada campanha das unidades manda a pessoa (campanha → números). null = nenhuma conta respondeu. */
+async function destinosDasUnidades(slugs: string[]): Promise<Map<string, string[]> | null> {
+  const junto = new Map<string, string[]>();
+  let leu = 0;
+  await Promise.all(
+    slugs.map(async (slug) => {
+      const cred = credenciaisDeAnuncio(slug, process.env, await tokenDeAnuncioDaUnidade(slug));
+      if ('falta' in cred) return;
+      const d = await destinosDaConta(cred.conta, cred.token);
+      if (!d.ok) return;
+      leu++;
+      for (const [campanha, numeros] of d.porCampanha) junto.set(campanha, [...new Set([...(junto.get(campanha) ?? []), ...numeros])]);
+    }),
+  );
+  return leu ? junto : null;
+}
+
+/** Os números de WhatsApp das caixas do Chatwoot (só as de canal WhatsApp têm número). Falhou = lista vazia (a tela não acusa nada). */
+async function numerosDasCaixas(a: Acesso): Promise<string[]> {
+  try {
+    const r = (await cw(a, 'GET', 'inboxes')) as any;
+    return (Array.isArray(r?.payload) ? r.payload : []).map((i: any) => String(i?.phone_number ?? '')).filter((n: string) => n.replace(/\D/g, '').length >= 10);
+  } catch {
+    return [];
+  }
+}
+
 /** O token de anúncios da unidade guardado no banco (units.meta_access_token); null se não houver. Lido a cada consulta (é uma linha só). */
 async function tokenDeAnuncioDaUnidade(slug: string): Promise<string | null> {
   const u = await prisma.unit.findUnique({ where: { slug }, select: { metaAccessToken: true } }).catch(() => null);
@@ -600,12 +628,17 @@ export async function funilMarketingHandler(req: Request, res: Response): Promis
     const v = await memo(`mk|${a.logadoId ?? a.logado}|${periodo.chave}|${caixa}`, VALE_TELA_MS, async () => {
       const { conversas, slugs, cortou } = await conversasDasUnidades(a, caixa);
       const ids = conversas.map((c) => Number(c.id));
-      const [agendadas, agendadasAntes, partida, lidos, gastos] = await Promise.all([
+      const [agendadas, agendadasAntes, partida, lidos, gastos, gastosAntes, destinos, numeros] = await Promise.all([
         agendadasNaJanela(ids, periodo),
         agendadasNaJanela(ids, periodo.anterior),
         prisma.chatwootReguaVisto.findFirst({ where: { conversationId: 0, campo: CAMPO_PARTIDA }, orderBy: { desde: 'asc' }, select: { desde: true } }).catch(() => null),
         referralsDe(a, doPeriodoDe(conversas, periodo).map((c) => Number(c.id))),
         gastosDasUnidades(slugs, periodo.de, periodo.ate),
+        // a Meta só separa por DIA: em «Manhã» e «Fim do dia» o anterior seria ontem inteiro × hoje até agora (ou contaria ontem dos
+        // dois lados) — seta enganosa toda manhã. Nesses dois períodos o bloco da Meta fica sem comparação.
+        periodo.chave === 'manha' || periodo.chave === 'fimdia' ? Promise.resolve(null) : gastosDasUnidades(slugs, periodo.anterior.de, periodo.anterior.ate),
+        destinosDasUnidades(slugs),
+        numerosDasCaixas(a),
       ]);
       const rel = montarMarketing(
         {
@@ -621,6 +654,7 @@ export async function funilMarketingHandler(req: Request, res: Response): Promis
       );
       return {
         ...rel,
+        meta: montarAnunciosMeta({ investido: gastos.investido, linhas: gastos.linhas, anterior: gastosAntes, destinos, numerosDoChatwoot: numeros }),
         avisos: avisosDeLeitura({ cortou, semLer: lidos.semLer, falhas: lidos.falhas }),
         registroDesde: partida?.desde ? diaEmBelem(partida.desde.getTime()) : null,
         eu: a.logado,

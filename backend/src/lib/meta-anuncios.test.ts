@@ -4,7 +4,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { gastoDaConta, gastoDiarioDaConta, limparCacheDeAnuncios } from './meta-anuncios.js';
+import { acoesDoAnuncio, destinosDaConta, gastoDaConta, gastoDiarioDaConta, limparCacheDeAnuncios } from './meta-anuncios.js';
 
 type Chamada = { url: string; headers: Record<string, string> };
 function falso(respostas: Array<{ ok?: boolean; status?: number; corpo: unknown }>) {
@@ -99,4 +99,67 @@ test('gasto por dia (gráfico e período anterior)', async () => {
   }
   assert.match(decodeURIComponent(f.chamadas[0]!.url), /time_increment=1/);
   assert.match(f.chamadas[0]!.url, /level=account/);
+});
+
+test('o anúncio traz o resultado da Meta: conversas iniciadas, leads (lead), impressões e cliques', async () => {
+  limparCacheDeAnuncios();
+  const comAcoes = {
+    ...linha('111', '9001', '50'),
+    objective: 'OUTCOME_ENGAGEMENT',
+    impressions: '1200',
+    clicks: '33',
+    actions: [
+      { action_type: 'onsite_conversion.messaging_conversation_started_7d', value: '7' },
+      { action_type: 'onsite_conversion.messaging_first_reply', value: '5' },
+      { action_type: 'lead', value: '2' },
+    ],
+  };
+  const f = falso([{ corpo: { data: [comAcoes, linha('112', '9002', '10')] } }]);
+  const r = await gastoDaConta('12345678', 't', '2026-11-01', '2026-11-13', f.buscar as any);
+  assert.ok(r.ok);
+  if (!r.ok) return;
+  assert.deepEqual(
+    { objetivo: r.linhas[0]!.objetivo, conversas: r.linhas[0]!.conversas, leads: r.linhas[0]!.leadsMeta, imp: r.linhas[0]!.impressoes, cliques: r.linhas[0]!.cliques },
+    { objetivo: 'OUTCOME_ENGAGEMENT', conversas: 7, leads: 2, imp: 1200, cliques: 33 },
+  );
+  // anúncio sem `actions` (reconhecimento) = zero, não «undefined»
+  assert.equal(r.linhas[1]!.conversas, 0);
+  assert.equal(r.linhas[1]!.leadsMeta, 0);
+  assert.match(decodeURIComponent(f.chamadas[0]!.url), /fields=[^&]*actions/);
+});
+
+test('destinos: para qual WhatsApp cada campanha manda, só dígitos, sem repetir; token só no cabeçalho; cache', async () => {
+  limparCacheDeAnuncios();
+  const f = falso([
+    {
+      corpo: {
+        data: [
+          { campaign_id: '9001', promoted_object: { page_id: '1', whatsapp_phone_number: '559484420153' } },
+          { campaign_id: '9001', promoted_object: { page_id: '1', whatsapp_phone_number: '+55 94 8442-0153' } },
+          { campaign_id: '9002', promoted_object: { page_id: '1' } },
+          { campaign_id: 'x', promoted_object: { whatsapp_phone_number: '559400000000' } },
+        ],
+      },
+    },
+  ]);
+  const r = await destinosDaConta('12345678', 'segredo', f.buscar as any);
+  assert.ok(r.ok);
+  if (!r.ok) return;
+  assert.deepEqual([...r.porCampanha.entries()], [['9001', ['559484420153']]]);
+  assert.equal(f.chamadas[0]!.headers.Authorization, 'Bearer segredo');
+  assert.ok(!f.chamadas[0]!.url.includes('segredo'));
+  await destinosDaConta('12345678', 'segredo', f.buscar as any);
+  assert.equal(f.chamadas.length, 1);
+});
+
+test('destinos: a Meta recusa = motivo, sem quebrar a tela', async () => {
+  limparCacheDeAnuncios();
+  const f = falso([{ ok: false, status: 403, corpo: { error: { code: 200 } } }]);
+  const r = await destinosDaConta('12345678', 't', f.buscar as any);
+  assert.equal(r.ok, false);
+});
+
+test('acoesDoAnuncio ignora lixo', () => {
+  assert.deepEqual(acoesDoAnuncio(null), {});
+  assert.deepEqual(acoesDoAnuncio([{ action_type: 'lead', value: '3' }, { value: '9' }, { action_type: 'x', value: 'abc' }]), { lead: 3, x: 0 });
 });

@@ -20,9 +20,68 @@ const cache = new Map<string, { ate: number; v: GastoDaConta }>();
 export function limparCacheDeAnuncios(): void {
   cache.clear();
   cacheDiario.clear();
+  cacheDestinos.clear();
 }
 
 type Buscar = (url: string, init: { headers: Record<string, string>; signal: AbortSignal }) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
+
+/** A «conversa iniciada» que o Gerenciador de Anúncios mostra como resultado das campanhas de WhatsApp. */
+export const ACAO_CONVERSA = 'onsite_conversion.messaging_conversation_started_7d';
+/** O «Leads» do Gerenciador: cadastro no site (pixel), formulário da Meta ou lead marcado na conversa. */
+export const ACAO_LEAD = 'lead';
+const inteiro = (v: unknown): number => {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? Math.round(n) : 0;
+};
+/** `actions` do insights (`[{ action_type, value }]`) → { tipo: quantidade }. */
+export function acoesDoAnuncio(v: unknown): Record<string, number> {
+  const r: Record<string, number> = {};
+  for (const a of Array.isArray(v) ? (v as Array<{ action_type?: unknown; value?: unknown }>) : []) {
+    if (typeof a?.action_type === 'string') r[a.action_type] = inteiro(a.value);
+  }
+  return r;
+}
+
+export type DestinosDaConta = { ok: true; porCampanha: Map<string, string[]> } | { ok: false; motivo: string };
+const cacheDestinos = new Map<string, { ate: number; v: DestinosDaConta }>();
+
+/**
+ * Para qual WhatsApp cada campanha manda a pessoa (`promoted_object.whatsapp_phone_number` dos conjuntos). É o que explica, na tela,
+ * por que um lead de anúncio não aparece no Chatwoot: o anúncio leva para um número que não está numa caixa. Cache de 30 min.
+ */
+export async function destinosDaConta(conta: string, token: string, buscar: Buscar = fetch as unknown as Buscar, agora: () => number = Date.now): Promise<DestinosDaConta> {
+  const hit = cacheDestinos.get(conta);
+  if (hit && hit.ate > agora()) return hit.v;
+  const porCampanha = new Map<string, string[]>();
+  let url: string | null = `${GRAPH}/act_${conta}/adsets?${new URLSearchParams({ fields: 'campaign_id,promoted_object', limit: '200' })}`;
+  try {
+    for (let p = 0; p < MAX_PAGINAS && url; p++) {
+      const r = await buscar(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(20_000) });
+      const j = (await r.json().catch(() => null)) as { data?: unknown; paging?: { next?: unknown } } | null;
+      if (!r.ok) {
+        logger.warn({ conta, status: r.status }, 'meta-anuncios: a Meta recusou a leitura dos conjuntos');
+        return { ok: false, motivo: `a Meta não deixou ler os conjuntos (HTTP ${r.status})` };
+      }
+      for (const x of Array.isArray(j?.data) ? (j!.data as Array<{ campaign_id?: unknown; promoted_object?: { whatsapp_phone_number?: unknown } }>) : []) {
+        const campanha = String(x.campaign_id ?? '');
+        const numero = String(x.promoted_object?.whatsapp_phone_number ?? '').replace(/\D/g, '');
+        if (!/^\d+$/.test(campanha) || numero.length < 10) continue;
+        const l = porCampanha.get(campanha) ?? [];
+        if (!l.includes(numero)) l.push(numero);
+        porCampanha.set(campanha, l);
+      }
+      const prox = typeof j?.paging?.next === 'string' ? j.paging.next : null;
+      url = prox && prox.startsWith(`${new URL(GRAPH).origin}/`) ? prox : null;
+    }
+  } catch (err) {
+    logger.warn({ conta, err: String(err).replace(token, '***') }, 'meta-anuncios: falha ao ler os conjuntos');
+    return { ok: false, motivo: 'não consegui falar com a Meta agora' };
+  }
+  const v: DestinosDaConta = { ok: true, porCampanha };
+  cacheDestinos.set(conta, { ate: agora() + 30 * 60_000, v });
+  if (cacheDestinos.size > 100) cacheDestinos.clear();
+  return v;
+}
 
 export async function gastoDaConta(
   conta: string,
@@ -39,7 +98,7 @@ export async function gastoDaConta(
   let moeda: string | null = null;
   const params = new URLSearchParams({
     level: 'ad',
-    fields: 'ad_id,ad_name,campaign_id,campaign_name,spend,account_currency',
+    fields: 'ad_id,ad_name,campaign_id,campaign_name,objective,spend,impressions,clicks,actions,account_currency',
     time_range: JSON.stringify({ since: de, until: ate }),
     limit: '200',
   });
@@ -63,7 +122,19 @@ export async function gastoDaConta(
         const campanhaId = String(x.campaign_id ?? '');
         if (!/^\d+$/.test(anuncioId) || !/^\d+$/.test(campanhaId) || !Number.isFinite(gasto)) continue;
         if (typeof x.account_currency === 'string') moeda = x.account_currency;
-        linhas.push({ anuncioId, anuncioNome: String(x.ad_name ?? '').slice(0, 140), campanhaId, campanhaNome: String(x.campaign_name ?? '').slice(0, 140), gasto });
+        const acoes = acoesDoAnuncio(x.actions);
+        linhas.push({
+          anuncioId,
+          anuncioNome: String(x.ad_name ?? '').slice(0, 140),
+          campanhaId,
+          campanhaNome: String(x.campaign_name ?? '').slice(0, 140),
+          gasto,
+          objetivo: typeof x.objective === 'string' ? x.objective : null,
+          conversas: acoes[ACAO_CONVERSA] ?? 0,
+          leadsMeta: acoes[ACAO_LEAD] ?? 0,
+          impressoes: inteiro(x.impressions),
+          cliques: inteiro(x.clicks),
+        });
       }
       // a próxima página só vale se for do próprio Graph (o token vai junto)
       const prox = typeof j?.paging?.next === 'string' ? j.paging.next : null;
