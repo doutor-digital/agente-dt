@@ -73,7 +73,9 @@ export function eventosAlcancados(attrs: Record<string, unknown>): EventoCapi[] 
   const saida: EventoCapi[] = [];
   if (etapa === 'agendado' || etapa === 'confirmado') saida.push('AddToCart');
   if (etapa === 'compareceu' || situacao === 'atendido') saida.push('InitiateCheckout');
-  if (etapa === 'fechou' || ehSim(attrs.fechou_tratamento)) saida.push('Purchase');
+  // compra só com «Fechou tratamento» marcado (decisão do João, 13/11/2026): a etapa Fechou sozinha pode ser engano de
+  // arrasto no funil, e compra falsa na Meta não tem desfazer
+  if (ehSim(attrs.fechou_tratamento)) saida.push('Purchase');
   return saida;
 }
 
@@ -157,11 +159,12 @@ export function sufixoDaUnidade(slug: string): string {
   return slug.replace(/^doutor-hernia-/, '').toUpperCase().replace(/[^A-Z0-9]+/g, '_');
 }
 
-export function configDaUnidade(slug: string, env: NodeJS.ProcessEnv = process.env): ConfigDaUnidade {
+export function configDaUnidade(slug: string, env: NodeJS.ProcessEnv = process.env, tokenDaUnidade: string | null = null): ConfigDaUnidade {
   const s = sufixoDaUnidade(slug);
   const valor = Number(env.CHATWOOT_CAPI_VALOR_FECHAMENTO);
   return {
-    token: env[`META_CAPI_TOKEN_${s}`]?.trim() || env[`META_ADS_TOKEN_${s}`]?.trim() || null,
+    // env primeiro; sem env, o token de anúncios da unidade no banco (units.meta_access_token — de onde o rastreio copia para o n8n)
+    token: env[`META_CAPI_TOKEN_${s}`]?.trim() || env[`META_ADS_TOKEN_${s}`]?.trim() || tokenDaUnidade?.trim() || null,
     datasetId: /^\d+$/.test(env[`META_DATASET_ID_${s}`]?.trim() ?? '') ? env[`META_DATASET_ID_${s}`]!.trim() : null,
     valorDoFechamento: Number.isFinite(valor) && valor > 0 ? valor : VALOR_PADRAO_DO_FECHAMENTO,
   };
@@ -573,11 +576,15 @@ async function varrer(ctx: ContextoChatwoot): Promise<void> {
   if (rodando) return;
   rodando = true;
   try {
+    const slugs = [...new Set(Object.values(CAIXAS_CAPI).map((c) => c.slug))];
+    const tokens = new Map(
+      (await prisma.unit.findMany({ where: { slug: { in: slugs } }, select: { slug: true, metaAccessToken: true } })).map((u) => [u.slug, u.metaAccessToken ?? null] as const),
+    );
     const deps: DepsDoCapi = {
       armazem: armazemDoBanco(),
       chat: chatDoCapi(ctx),
       meta: (metaDoWorker ??= metaDaGraph()),
-      config: (slug) => configDaUnidade(slug),
+      config: (slug) => configDaUnidade(slug, process.env, tokens.get(slug) ?? null),
       pausa: (ms) => new Promise((r) => setTimeout(r, ms)),
     };
     for (const [caixaTxt, { slug, waba }] of Object.entries(CAIXAS_CAPI)) {

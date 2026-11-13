@@ -135,13 +135,14 @@ test('catálogo: a automação existe, tem seco, exige seco antes e a caixa é a
   assert.equal(CAIXAS_CAPI[CAIXA]!.slug, CAIXAS_REGUA[CAIXA]);
 });
 
-test('eventos: Agendado/Confirmado = AddToCart; Compareceu/Atendido = InitiateCheckout; Fechou/«Fechou tratamento» = Purchase', () => {
+test('eventos: Agendado/Confirmado = AddToCart; Compareceu/Atendido = InitiateCheckout; só «Fechou tratamento» = Purchase', () => {
   assert.deepEqual(eventosAlcancados({ etapa: 'Agendado' }), ['AddToCart']);
   assert.deepEqual(eventosAlcancados({ etapa: 'Confirmado' }), ['AddToCart']);
   assert.deepEqual(eventosAlcancados({ etapa: 'confirmado ' }), ['AddToCart']);
   assert.deepEqual(eventosAlcancados({ etapa: 'Compareceu' }), ['InitiateCheckout']);
   assert.deepEqual(eventosAlcancados({ etapa: 'Esperando humano', situacao_consulta: 'Atendido' }), ['InitiateCheckout']);
-  assert.deepEqual(eventosAlcancados({ etapa: 'Fechou' }), ['Purchase']);
+  // compra só com «Fechou tratamento» marcado (decisão do João, 13/11)
+  assert.deepEqual(eventosAlcancados({ etapa: 'Fechou' }), []);
   assert.deepEqual(eventosAlcancados({ etapa: 'Pós-consulta', fechou_tratamento: 'sim' }), ['Purchase']);
   assert.deepEqual(eventosAlcancados({ etapa: 'Pós-consulta', fechou_tratamento: true }), ['Purchase']);
   assert.deepEqual(eventosAlcancados({ etapa: 'Compareceu', fechou_tratamento: 'Sim' }), ['InitiateCheckout', 'Purchase']);
@@ -653,4 +654,10 @@ test('sem token: segue anotando a ENTRADA de cada conversa, para o evento sair c
   } finally {
     warn.mock.restore();
   }
+});
+
+test('token: env primeiro; sem env, o token de anúncios da unidade no banco', () => {
+  assert.equal(configDaUnidade('doutor-hernia-parauapebas', {}, 'TOKEN_DO_BANCO').token, 'TOKEN_DO_BANCO');
+  assert.equal(configDaUnidade('doutor-hernia-parauapebas', { META_ADS_TOKEN_PARAUAPEBAS: 'TOKEN_ENV' }, 'TOKEN_DO_BANCO').token, 'TOKEN_ENV');
+  assert.equal(configDaUnidade('doutor-hernia-parauapebas', {}, null).token, null);
 });
