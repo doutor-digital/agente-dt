@@ -11,6 +11,7 @@ import { apagarCofreDeArquivos, ligarConectorRemoto } from './mcp-remoto/produca
 import { paginaPausaHandler } from './controllers/pausa.controller.js';
 import { paginaAprendizadosHandler } from './controllers/aprendizados.controller.js';
 import { menuFunilHandler, paginaFunilHandler } from './controllers/funil.controller.js';
+import { paginaAssistenteHandler } from './controllers/assistente.controller.js';
 import { paginaAltaHandler } from './controllers/alta.controller.js';
 import { paginaIaHandler } from './controllers/ia-unidade.controller.js';
 import { getCheckpointer } from './agent/graph.js';
@@ -163,6 +164,8 @@ async function main(): Promise<void> {
   // Funil de etapas encaixado no Chatwoot (Dashboard App). A chave vem em ?k= e é mascarada no log abaixo.
   app.get('/funil', paginaFunilHandler);
   app.get('/funil/menu.js', menuFunilHandler);
+  // Assistente da atendente: a página do painel (iframe do botão que entra pelo menu.js).
+  app.get('/assistente', paginaAssistenteHandler);
 
   // Página da recepção para aprovar alta e marcar quem parou no meio.
   app.get('/alta/:slug', paginaAltaHandler);

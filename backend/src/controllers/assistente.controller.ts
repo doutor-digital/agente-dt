@@ -1,0 +1,320 @@
+/**
+ * Assistente em tempo real da atendente no Chatwoot — as rotas (a lógica está em `lib/chatwoot-assistente.ts`, a tela em
+ * `lib/chatwoot-assistente-ui.ts`). Versão 1: só LÊ e sugere. Nada é enviado ao paciente, nada é gravado no Chatwoot ou no Kommo.
+ *   GET  /assistente                              a página do painel (iframe do botão que entra pelo `menu.js`)
+ *   GET  /api/public/assistente/estado            { ligada } — o botão só aparece se for true
+ *   POST /api/public/assistente/sugerir           { conversaId } — uma resposta proposta, para a atendente revisar
+ *   POST /api/public/assistente/perguntar         { pergunta, conversaId?, historico? } — tirar dúvida
+ *
+ * Segurança (mesmo esquema do funil): só o login do Chatwoot da PRÓPRIA pessoa (X-CW-Token/Client/Uid), conferido no /profile;
+ * a conversa e as caixas são lidas COM esse login, então ela só alcança o que já vê no Chatwoot. Sem login = 401. A unidade
+ * vem da caixa da conversa (`CAIXAS_REGUA`), nunca do pedido. Teto de chamadas ao modelo por pessoa por dia, em memória.
+ * Desligada por padrão: só vale para as unidades de `CHATWOOT_ASSISTENTE_SLUGS` (lista separada por vírgula, ou `*`).
+ */
+import type { Request, Response } from 'express';
+import type { Unit } from '@prisma/client';
+import { z } from 'zod';
+import { logger } from '../lib/logger.js';
+import { prisma } from '../lib/prisma.js';
+import { chamar, contaChatwootDoAmbiente, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
+import type { SessaoChatwoot } from '../lib/funil-chatwoot.js';
+import { conversaLidaDoChatwoot, type ConversaLida } from '../lib/chatwoot-porta.js';
+import { CAIXAS_REGUA } from '../lib/chatwoot-regua.js';
+import { diaEmBelem } from '../lib/chatwoot-hoje.js';
+import { gradeDoDia, hojeLocal } from '../agent/agenda-tools.js';
+import { travaDaAgendaDaIa } from '../lib/crm-compartilhado.js';
+import { rodarTesteDaSofia } from './playground.controller.js';
+import { paginaDaAssistente } from '../lib/chatwoot-assistente-ui.js';
+import { sessaoDaAtendente, type Atendente } from './funil.controller.js';
+import {
+  artigosPublicados,
+  criarTeto,
+  linhasDaConversa,
+  sugerirResposta,
+  tirarDuvida,
+  type Artigo,
+  type DepsDaAssistente,
+  type LinhaDaConversa,
+  type ResultadoDaAssistente,
+  type Teto,
+} from '../lib/chatwoot-assistente.js';
+
+// ── o Chatwoot, SÓ LEITURA, com o login da atendente ───────────────────────────────────────────────
+
+export interface PortaDeLeitura {
+  /** A conversa e a caixa dela. LANÇA (com `status`) se o Chatwoot recusar: ela não vê esta conversa. */
+  conversa(id: number): Promise<{ lida: ConversaLida; caixa: number | null }>;
+  /** As mensagens da conversa (payload cru do Chatwoot). */
+  mensagens(id: number): Promise<unknown>;
+  /** Os ids das caixas que ELA vê. */
+  caixas(): Promise<number[]>;
+}
+
+export function leituraComLogin(c: ContextoChatwoot, sessao: SessaoChatwoot): PortaDeLeitura {
+  return {
+    async conversa(id) {
+      const raw = (await chamar(c, 'GET', `conversations/${id}`, { sessao })) as { inbox_id?: unknown } | null;
+      const lida = conversaLidaDoChatwoot(raw);
+      if (!lida) throw Object.assign(new Error('conversa não encontrada'), { status: 404 });
+      const caixa = Number(raw?.inbox_id);
+      return { lida, caixa: Number.isInteger(caixa) && caixa > 0 ? caixa : null };
+    },
+    mensagens: (id) => chamar(c, 'GET', `conversations/${id}/messages`, { sessao }),
+    async caixas() {
+      const r = (await chamar(c, 'GET', 'inboxes', { sessao })) as { payload?: unknown } | null;
+      return (Array.isArray(r?.payload) ? r!.payload : []).map((i: any) => Number(i?.id)).filter((n: number) => Number.isInteger(n) && n > 0);
+    },
+  };
+}
+
+// ── Central de Ajuda (portal `ajuda`), lida com o token da conta: é conteúdo de ajuda, não conversa de paciente ──
+
+const PORTAL_AJUDA = 'ajuda';
+const AJUDA_VALE_MS = 10 * 60_000;
+const AJUDA_MAX_PAGINAS = 4;
+
+export function ajudaDoPortal(c: ContextoChatwoot): () => Promise<Artigo[]> {
+  let cache: { em: number; artigos: Artigo[] } | null = null;
+  return async () => {
+    if (cache && Date.now() - cache.em < AJUDA_VALE_MS) return cache.artigos;
+    const vistos = new Map<number, Artigo>();
+    for (let pagina = 1; pagina <= AJUDA_MAX_PAGINAS; pagina++) {
+      const r = await chamar(c, 'GET', `portals/${PORTAL_AJUDA}/articles`, { query: { page: String(pagina) } });
+      const novos = artigosPublicados(r).filter((a) => !vistos.has(a.id));
+      if (!novos.length) break; // acabou (ou o Chatwoot repetiu a mesma página)
+      novos.forEach((a) => vistos.set(a.id, a));
+    }
+    cache = { em: Date.now(), artigos: [...vistos.values()] };
+    return cache.artigos;
+  };
+}
+
+// ── quem está ligado ───────────────────────────────────────────────────────────────────────────────
+
+export function assistenteLigadaPara(slug: string, lista = process.env.CHATWOOT_ASSISTENTE_SLUGS): boolean {
+  const slugs = (lista ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+  return slugs.includes('*') || slugs.includes(slug);
+}
+
+// ── os handlers ────────────────────────────────────────────────────────────────────────────────────
+
+export interface DepsDosHandlers {
+  autenticar: (req: Request, res: Response) => Promise<Pick<Atendente, 'nome' | 'id' | 'sessao'> & { leitura: PortaDeLeitura } | null>;
+  unidade: (slug: string) => Promise<Unit | null>;
+  assistente: DepsDaAssistente;
+  teto: Teto;
+  /** o dia (AAAA-MM-DD, Belém) em que o teto conta */
+  dia: () => string;
+  ligadaPara: (slug: string) => boolean;
+}
+
+const sugerirSchema = z.object({ conversaId: z.number().int().positive() });
+const perguntarSchema = z.object({
+  pergunta: z.string().trim().min(2).max(1000),
+  conversaId: z.number().int().positive().nullish(),
+  historico: z
+    .array(z.object({ role: z.enum(['user', 'assistant']), content: z.string().min(1).max(3000) }))
+    .max(10)
+    .optional(),
+});
+
+const statusDoErro = (e: unknown): number | undefined => (e as { status?: number })?.status;
+
+type Resolvida = { ok: true; unit: Unit; linhas: LinhaDaConversa[]; lida: ConversaLida | null } | { ok: false; status: number; error: string };
+
+export function criarHandlersDoAssistente(d: DepsDosHandlers) {
+  /** Qual unidade vale: a da caixa da conversa (lida com o login dela) ou, sem conversa, a única ligada entre as caixas que ela vê. */
+  async function resolver(quem: { leitura: PortaDeLeitura }, conversaId: number | null | undefined, comMensagens: boolean): Promise<Resolvida> {
+    let caixa: number | null = null;
+    let lida: ConversaLida | null = null;
+    if (conversaId) {
+      try {
+        const c = await quem.leitura.conversa(conversaId);
+        lida = c.lida;
+        caixa = c.caixa;
+      } catch (e) {
+        if ([401, 403, 404].includes(statusDoErro(e) ?? 0)) return { ok: false, status: 403, error: 'você não tem acesso a esta conversa (ou ela não existe mais)' };
+        throw e;
+      }
+      const slug = caixa ? CAIXAS_REGUA[caixa] : undefined;
+      if (!slug) return { ok: false, status: 422, error: 'a assistente ainda não atende a caixa desta conversa' };
+      if (!d.ligadaPara(slug)) return { ok: false, status: 422, error: 'a assistente ainda não está ligada para esta unidade' };
+      const unit = await d.unidade(slug);
+      if (!unit) return { ok: false, status: 422, error: 'não achei a unidade desta caixa' };
+      const linhas = comMensagens && !lida.interno && !lida.grupo ? linhasDaConversa(await quem.leitura.mensagens(conversaId)) : [];
+      return { ok: true, unit, linhas, lida };
+    }
+    const slugs = [...new Set((await quem.leitura.caixas()).map((c) => CAIXAS_REGUA[c]).filter((s): s is string => !!s && d.ligadaPara(s)))];
+    if (slugs.length !== 1) {
+      return { ok: false, status: 422, error: slugs.length ? 'abra uma conversa para eu saber de qual unidade você fala' : 'a assistente ainda não está ligada para as suas caixas' };
+    }
+    const unit = await d.unidade(slugs[0]!);
+    if (!unit) return { ok: false, status: 422, error: 'não achei a unidade' };
+    return { ok: true, unit, linhas: [], lida: null };
+  }
+
+  /** Gasta uma chamada do dia da pessoa; devolve false (e responde 429) se acabou. */
+  function gastar(quem: Pick<Atendente, 'id' | 'sessao'>, res: Response): string | null {
+    const chave = String(quem.id ?? quem.sessao.uid);
+    const dia = d.dia();
+    if (!d.teto.gastar(chave, dia).ok) {
+      res.status(429).json({ error: 'você já usou todas as perguntas de hoje à assistente — volte amanhã ou peça à gerente' });
+      return null;
+    }
+    return chave;
+  }
+
+  const falhaGeral = (res: Response, e: unknown, acao: string, extra: Record<string, unknown>) => {
+    // nunca o conteúdo do paciente: só o erro e onde
+    logger.warn({ err: String(e).slice(0, 300), acao, ...extra }, 'assistente: falhou');
+    res.status(502).json({ error: 'não consegui falar com o Chatwoot agora' });
+  };
+
+  return {
+    async estado(req: Request, res: Response): Promise<void> {
+      const quem = await d.autenticar(req, res);
+      if (!quem) return;
+      try {
+        const slugs = (await quem.leitura.caixas()).map((c) => CAIXAS_REGUA[c]).filter((s): s is string => !!s && d.ligadaPara(s));
+        res.json({ ligada: slugs.length > 0 });
+      } catch (e) {
+        falhaGeral(res, e, 'estado', {});
+      }
+    },
+
+    async sugerir(req: Request, res: Response): Promise<void> {
+      const quem = await d.autenticar(req, res);
+      if (!quem) return;
+      const p = sugerirSchema.safeParse(req.body);
+      if (!p.success) {
+        res.status(400).json({ error: 'conversa inválida' });
+        return;
+      }
+      const t0 = Date.now();
+      try {
+        const r = await resolver(quem, p.data.conversaId, true);
+        if (!r.ok) {
+          res.status(r.status).json({ error: r.error });
+          return;
+        }
+        // contato interno (a equipe falando com o número da unidade) e grupo não são paciente: sem sugestão, sem gastar modelo
+        if (r.lida?.interno || r.lida?.grupo) {
+          res.json({
+            semSugestao: r.lida.interno ? 'interno' : 'grupo',
+            aviso: r.lida.interno
+              ? 'Esta conversa tem a etiqueta "interno" (a equipe falando com o número da unidade). Não é um paciente, então não sugiro resposta.'
+              : 'Esta conversa é um grupo, não um paciente. Não sugiro resposta.',
+          });
+          return;
+        }
+        if (!r.linhas.length) {
+          res.json({ semSugestao: 'vazia', aviso: 'Esta conversa ainda não tem mensagens para eu ler.' });
+          return;
+        }
+        const chave = gastar(quem, res);
+        if (!chave) return;
+        const out = await sugerirResposta(d.assistente, { unit: r.unit, linhas: r.linhas, nomeDoPaciente: r.lida?.nome ?? '' });
+        responder(res, out, chave, 'sugerir', r.unit, p.data.conversaId, t0, (o) => ({ sugestao: o.texto, nota: o.nota, avisos: o.avisos, fontes: o.fontes }));
+      } catch (e) {
+        falhaGeral(res, e, 'sugerir', { conversa: p.data.conversaId });
+      }
+    },
+
+    async perguntar(req: Request, res: Response): Promise<void> {
+      const quem = await d.autenticar(req, res);
+      if (!quem) return;
+      const p = perguntarSchema.safeParse(req.body);
+      if (!p.success) {
+        res.status(400).json({ error: 'escreva a sua dúvida (até 1000 letras)' });
+        return;
+      }
+      const t0 = Date.now();
+      try {
+        const r = await resolver(quem, p.data.conversaId, true);
+        if (!r.ok) {
+          res.status(r.status).json({ error: r.error });
+          return;
+        }
+        const chave = gastar(quem, res);
+        if (!chave) return;
+        // a conversa de antes entra de cabeça para baixo se começar por fala da assistente: o modelo exige começar pela pessoa
+        const antes = (p.data.historico ?? []).slice(-8);
+        while (antes.length && antes[0]!.role !== 'user') antes.shift();
+        const out = await tirarDuvida(d.assistente, { unit: r.unit, falas: [...antes, { role: 'user', content: p.data.pergunta }], linhas: r.linhas });
+        responder(res, out, chave, 'perguntar', r.unit, p.data.conversaId ?? null, t0, (o) => ({ resposta: o.texto, fontes: o.fontes }));
+      } catch (e) {
+        falhaGeral(res, e, 'perguntar', { conversa: p.data.conversaId ?? null });
+      }
+    },
+  };
+
+  function responder(
+    res: Response,
+    out: ResultadoDaAssistente,
+    chave: string,
+    acao: string,
+    unit: Unit,
+    conversa: number | null,
+    t0: number,
+    corpo: (o: Extract<ResultadoDaAssistente, { ok: true }>) => Record<string, unknown>,
+  ): void {
+    if (!out.ok) {
+      // o modelo não foi usado: a chamada volta para a pessoa
+      d.teto.devolver(chave, d.dia());
+      logger.warn({ acao, unidade: unit.slug, conversa, quem: chave, status: out.status, erro: out.error }, 'assistente: sem resposta');
+      res.status(out.status).json({ error: out.error });
+      return;
+    }
+    // sem o texto: só quem, onde, quanto custou e de onde veio
+    logger.info({ acao, unidade: unit.slug, conversa, quem: chave, ms: Date.now() - t0, modelo: out.modelo, tokens: out.tokens, fontes: out.fontes.length, avisos: out.avisos.length }, 'assistente: respondeu');
+    res.json(corpo(out));
+  }
+}
+
+// ── a ligação com o mundo real ─────────────────────────────────────────────────────────────────────
+
+let reais: ReturnType<typeof criarHandlersDoAssistente> | null = null;
+const tetoReal = criarTeto();
+
+function handlersReais() {
+  if (reais) return reais;
+  let lerAjuda: (() => Promise<Artigo[]>) | null | undefined;
+  reais = criarHandlersDoAssistente({
+    async autenticar(req, res) {
+      const a = await sessaoDaAtendente(req, res);
+      return a ? { nome: a.nome, id: a.id, sessao: a.sessao, leitura: leituraComLogin(a.c, a.sessao) } : null;
+    },
+    unidade: (slug) => prisma.unit.findUnique({ where: { slug } }),
+    assistente: {
+      rodarTeste: rodarTesteDaSofia,
+      grade: gradeDoDia as unknown as DepsDaAssistente['grade'],
+      contaDividida: (unit) => travaDaAgendaDaIa(unit),
+      // a Central de Ajuda é lida com o token da conta (uma vez a cada 10 min), não com o login de quem perguntou
+      ajuda: async () => {
+        if (lerAjuda === undefined) {
+          const conta = contaChatwootDoAmbiente();
+          lerAjuda = conta ? ajudaDoPortal(criarContextoChatwoot(conta)) : null;
+        }
+        return lerAjuda ? lerAjuda() : [];
+      },
+      hoje: hojeLocal,
+    },
+    teto: tetoReal,
+    dia: () => diaEmBelem(Date.now()),
+    ligadaPara: (slug) => assistenteLigadaPara(slug),
+  });
+  return reais;
+}
+
+export const assistenteEstadoHandler = (req: Request, res: Response) => handlersReais().estado(req, res);
+export const assistenteSugerirHandler = (req: Request, res: Response) => handlersReais().sugerir(req, res);
+export const assistentePerguntarHandler = (req: Request, res: Response) => handlersReais().perguntar(req, res);
+
+export function paginaAssistenteHandler(_req: Request, res: Response): void {
+  const origem = contaChatwootDoAmbiente()?.url;
+  if (!origem) {
+    res.status(404).type('html').send('<!doctype html><meta charset="utf-8"><p style="font-family:sans-serif;padding:24px">Assistente desligada.</p>');
+    return;
+  }
+  res.type('html').set('Cache-Control', 'no-store').send(paginaDaAssistente(new URL(origem).origin));
+}
