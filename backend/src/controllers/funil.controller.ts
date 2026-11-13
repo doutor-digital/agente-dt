@@ -1655,7 +1655,9 @@ const MENU_JS = String.raw`(function(){
     { id: 'oport', marca: 'data-oport-menu', nome: 'Oportunidades', hash: '#oportunidades', param: 'oport', pai: 'hoje' },
     { id: 'mkt', marca: 'data-mkt-menu', nome: 'Marketing', hash: '#marketing', param: 'mkt', gestao: true, pai: 'hoje' },
     { id: 'gestor', marca: 'data-gestor-menu', nome: 'Gestor', hash: '#gestor', param: 'gestor', gestao: true, pai: 'hoje' },
-    { id: 'funil', marca: 'data-funil-menu', nome: 'Funil', hash: '#funil', param: '' }
+    { id: 'funil', marca: 'data-funil-menu', nome: 'Funil', hash: '#funil', param: '' },
+    // a equipe testa a Sofia, ensina lições e vê as conversas com a IA pausada — sem depender do João (13/11)
+    { id: 'ia', marca: 'data-ia-menu', nome: 'Testar a IA', hash: '#testar-ia', param: '', url: '/funil/testar-ia' }
   ];
   // o grupo Hoje aberto/fechado fica lembrado neste navegador (padrão: aberto)
   var GRUPO_HOJE = 'menu:hoje-fechado';
@@ -1703,7 +1705,7 @@ const MENU_JS = String.raw`(function(){
     var t = achar(typeof id === 'string' ? id : 'funil') || achar('funil');
     if (t.gestao && gestao !== true) return;
     lembrar(t.id);
-    var url = AGENTE + '/funil?menu=1' + (t.param ? '&tela=' + t.param : '');
+    var url = t.url ? AGENTE + t.url + '?menu=1' : AGENTE + '/funil?menu=1' + (t.param ? '&tela=' + t.param : '');
     if (cam && tela !== t.id && fr) { fr.src = url; fr.title = t.nome; }
     tela = t.id;
     porNoEndereco(t);
@@ -1757,6 +1759,7 @@ const MENU_JS = String.raw`(function(){
     mkt: '<path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/>',
     gestor: '<path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>'
   };
+  ICONES.ia = '<path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>';
   var SEL_ICONE = 'svg, [class^="i-"], [class*=" i-"]';
   function trocarIcone(base, novo, qual){
     var velho = novo.querySelector(SEL_ICONE), orig = base.querySelector(SEL_ICONE);
@@ -1854,6 +1857,10 @@ const MENU_JS = String.raw`(function(){
     if (papel === 'administrator') return;
     Array.prototype.forEach.call(document.querySelectorAll('aside .i-lucide-megaphone, nav .i-lucide-megaphone'), function(i){
       var li = i.closest('li'); if (li && li.style.display !== 'none') li.style.display = 'none';
+    });
+    // menu enxuto (13/11): Empresas e Relatórios do Chatwoot também somem para quem não é administrador
+    Array.prototype.forEach.call(document.querySelectorAll('aside a[href*="/companies"], aside a[href*="/reports"], nav a[href*="/companies"], nav a[href*="/reports"]'), function(a){
+      var li = a.closest('li') || a; if (li.style.display !== 'none') li.style.display = 'none';
     });
   }
   var espera = null;
