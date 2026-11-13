@@ -14,7 +14,7 @@ import { logger } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
 import { login } from '../services/auth.service.js';
 import { chaveTelefone, normalizarNome, panoramaDaUnidade, parecencaDeNome, type Panorama } from '../services/cerebro.service.js';
-import { createKommoClient } from '../services/kommo.service.js';
+import { createKommoClient, createKommoClientSemFreio } from '../services/kommo.service.js';
 import { historicoOficial } from '../services/kommo-talks.service.js';
 import type { Contexto } from '../franquia-mcp/contexto.js';
 import type { Auditar } from '../franquia-mcp/ferramentas.js';
@@ -110,6 +110,9 @@ async function contasKommoDoBanco(): Promise<Map<string, UnidadeKommo>> {
   const contas = new Map<string, UnidadeKommo>();
   for (const [slug, u] of ficam) {
     const cliente = createKommoClient(u);
+    // a caixa de entrada pede token de administrador: um 403 dela é leitura acessória e não pode congelar o Kommo da Sofia (freio global).
+    // Custo aceito: um 429 desta leitura também não aciona o freio (são no máximo 4 páginas por consulta, em cache, pela mesma fila de 180 ms)
+    const clienteDaEntrada = createKommoClientSemFreio(u);
     clientesKommo.set(slug, cliente);
     contas.set(slug, {
       slug,
@@ -125,6 +128,8 @@ async function contasKommoDoBanco(): Promise<Map<string, UnidadeKommo>> {
         usuarios: () => cliente.listUsers(),
         conversa: (leadId, limite, periodo) => historicoOficial(cliente, leadId, limite, periodo),
         notas: (leadId, limite, periodo) => cliente.listarNotasDoLead(leadId, limite, periodo),
+        entrada: (de, ate, maxPaginas) => clienteDaEntrada.lerEntrada(de, ate, maxPaginas),
+        subdominio: cliente.subdomain,
       },
     });
   }
