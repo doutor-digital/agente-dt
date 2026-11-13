@@ -75,3 +75,17 @@ test('sem nada: zeros e conversão nula (não divide por zero)', () => {
   assert.equal(p.avaliacoes.pct, null);
   assert.equal(p.foraDoHorario.pct, null);
 });
+
+test('% que marcou conta PESSOAS: duas consultas na mesma conversa não passam de 100% (achado do sênior)', () => {
+  const p = montarPainel({
+    agora, periodo: 'hoje', fuso: FUSO,
+    respostas: [{ conversa: 1, criadoEm: h(2) }],
+    marcadas: [
+      { conversa: 1, nome: 'Rosa', agendadoPara: '2026-11-18T09:00', criadoEm: h(1) },
+      { conversa: 1, nome: 'Rosa (mãe)', agendadoPara: '2026-11-18T10:00', criadoEm: h(1) },
+    ],
+    avaliacoes: [], eventos: [],
+  });
+  assert.equal(p.marcadas.agora, 2, 'consultas marcadas: as duas');
+  assert.equal(p.conversao.agora, 100, 'pessoas que marcaram: uma de uma');
+});

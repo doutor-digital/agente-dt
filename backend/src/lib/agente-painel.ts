@@ -12,7 +12,9 @@
  *  - AVALIAÇÕES: `sofia_avaliacao` (👍/👎 da equipe no balão).
  * Cada número vem com o período anterior do mesmo tamanho (hoje × ontem até a mesma hora; 7 × 7 dias antes; 30 × 30 antes).
  */
+import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
+import { fusoDaUnidade } from './fuso.js';
 
 export type Periodo = 'hoje' | '7' | '30';
 const DIA_MS = 86_400_000;
@@ -131,9 +133,9 @@ export function montarPainel(e: {
   const quemAntes = conjunto(rAntes);
   const respondidas = { agora: quemAgora.size, antes: quemAntes.size };
   const marcadas = { agora: mAgora.length, antes: mAntes.length };
-  // a conversão só conta consulta de quem ela respondeu no período: o vínculo da franquia tem histórico e a contagem de respostas
-  // começou em 13/11 — sem isso o número passava de 100% na primeira semana
-  const marcouDeQuem = (l: MarcadaDoPainel[], quem: Set<number>) => l.filter((m) => quem.has(m.conversa)).length;
+  // % que marcou = CONVERSAS respondidas no período que marcaram ÷ conversas respondidas: pessoa, não consulta (quem marca duas
+  // consultas na mesma conversa conta uma vez) e só de quem ela respondeu — nunca passa de 100%
+  const marcouDeQuem = (l: MarcadaDoPainel[], quem: Set<number>) => conjunto(l.filter((m) => quem.has(m.conversa))).size;
   const eventos = (tipo: string, filtro: (d: Date) => boolean) => conjunto(e.eventos.filter((x) => x.tipo === tipo && filtro(x.criadoEm))).size;
   const fora = rAgora.filter((r) => foraDoHorario(r.criadoEm, e.fuso)).length;
   const boas = aAgora.filter((a) => a.nota === 'boa').length;
@@ -173,8 +175,12 @@ export function montarPainel(e: {
 }
 
 /** Lê o que o painel precisa (o maior entre o período anterior e os 14 dias do gráfico) e monta. */
-export async function painelDaUnidade(unit: { id: string; slug: string; spineTimezone: string | null }, periodo: Periodo, agora = new Date()): Promise<Painel> {
-  const fuso = unit.spineTimezone ?? 'America/Sao_Paulo';
+export async function painelDaUnidade(
+  unit: Pick<Unit, 'id' | 'slug' | 'spineTimezone' | 'businessHoursTimezone'>,
+  periodo: Periodo,
+  agora = new Date(),
+): Promise<Painel> {
+  const fuso = fusoDaUnidade(unit);
   const j = janelas(agora, periodo, fuso);
   const desde = new Date(Math.min(j.antesInicio.getTime(), agora.getTime() - (DIAS_NO_GRAFICO + 1) * DIA_MS));
   const [respostas, avaliacoes, eventos] = await Promise.all([
