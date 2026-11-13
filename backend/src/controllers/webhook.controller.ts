@@ -81,7 +81,7 @@ import { etapaCalada, notaSofiaCalada, REGRA_NOTA_CALADA, sofiaCaladaLiberada } 
 import { garantirTituloPadrao } from '../lib/titulo-padrao.js';
 import { telefoneDeFamiliarNoCartao } from '../lib/telefone-de-familiar.js';
 import { SpineSyncService } from '../services/spine-sync.service.js';
-import { conversaLiberadaPelaEquipe } from '../lib/ponte-passar-sofia-banco.js';
+import { conversaLiberadaPelaEquipe, passadoPelaPonteAgora } from '../lib/ponte-passar-sofia-banco.js';
 import { liberadaAgora } from '../lib/ponte-passar-sofia.js';
 import { historicoDoWhatsappNaMemoria } from '../lib/historico-whatsapp.js';
 import { z } from 'zod';
@@ -1686,7 +1686,8 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
 
   // A EQUIPE FALOU, A SOFIA PARA (prioridade 3, 21/10/2026): pela conversa oficial, que enxerga também o
   // celular da clínica. Chave pausa-equipe; em "só no papel" só registra. Nunca derruba o atendimento.
-  const porta = isChatMessage
+  // Turno aberto pela Ponte ("Passar para a Sofia"): foi a própria equipe que passou — a trava não vale neste turno.
+  const porta = isChatMessage && !passadoPelaPonteAgora(unit.id, leadId)
     ? await portaDaEquipe({ unit, leadId, recorder }).catch((err) => {
         logger.warn({ err: String(err), leadId, unit: unit.slug }, 'pausa-equipe: porta falhou (segue)');
         return { pausou: false, msgs: null };

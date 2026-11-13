@@ -985,3 +985,5 @@ h3.guia__titulo { font-size: 14px; margin-top: 10px; }
 .todos--ligado { background: var(--verde-suave); }
 .todos__texto { margin: 0 0 8px; font-weight: 700; font-size: 13px; }
 .todos__botoes { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.todos--cartao { margin: 10px 0 0; }

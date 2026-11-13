@@ -131,3 +131,12 @@ export function lerPedidoDeTodos(
   if (ate.getTime() - agora.getTime() > MAX_TODOS_MS) return { ok: false, erro: 'no máximo 24 h por vez' };
   return { ok: true, ate, por };
 }
+
+/**
+ * Fala que abre o turno quando a ÚLTIMA mensagem é da clínica (13/11, João: "mesmo assim é pra mandar uma mensagem com
+ * base no histórico"). Vai como a fala do turno; o histórico está na memória do lead.
+ */
+export const INSTRUCAO_CONTINUAR =
+  '[Aviso interno, não é fala do paciente: a recepção passou esta conversa para você agora. A última mensagem foi da clínica e o paciente ainda não respondeu. ' +
+  'Leia o histórico na memória e mande UMA mensagem curta e natural continuando de onde a clínica parou, puxando o próximo passo. ' +
+  'Não se apresente de novo se já houve conversa e não repita o que a clínica já disse.]';

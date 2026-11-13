@@ -13,7 +13,7 @@ import { createKommoClient, type KommoClient } from '../services/kommo.service.j
 import { retomarLead } from './pausa-lead.js';
 import { iniciadorDoTurno, type IniciaTurno } from './atendimento-adiado.js';
 import { fusoDaUnidade } from './fuso.js';
-import { LIBERADA_POR_MS, dividirFalas, juntarNaMemoria, liberadaAgora, montarHistorico, notaDoHistorico, type PedidoDePassagem } from './ponte-passar-sofia.js';
+import { LIBERADA_POR_MS, dividirFalas, juntarNaMemoria, liberadaAgora, montarHistorico, notaDoHistorico, INSTRUCAO_CONTINUAR, type PedidoDePassagem } from './ponte-passar-sofia.js';
 
 /** A trava de horário pergunta isto só quando a IA está FORA do horário. Erro de banco = não liberada (fica como era). */
 export async function conversaLiberadaPelaEquipe(unitId: string, leadId: number): Promise<boolean> {
@@ -30,7 +30,7 @@ export async function conversaLiberadaPelaEquipe(unitId: string, leadId: number)
 }
 
 export type ResultadoDaPassagem =
-  | { ok: true; turno: 'iniciado' | 'aguardando'; liberadaAte: string; falasGuardadas: number; pendentes: number; nota: boolean }
+  | { ok: true; turno: 'iniciado' | 'aguardando' | 'recente'; liberadaAte: string; falasGuardadas: number; pendentes: number; nota: boolean }
   | { ok: false; motivo: 'etapa'; erro: string };
 
 export interface DepsDaPassagem {
@@ -41,6 +41,18 @@ export interface DepsDaPassagem {
 
 function quandoLocal(d: Date, tz: string): string {
   return new Intl.DateTimeFormat('pt-BR', { timeZone: tz, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).format(d).replace(',', '');
+}
+
+/**
+ * Turno aberto pela Ponte há pouco: o `processAgent` não aplica a trava "a equipe falou, a Sofia para" nele (foi a equipe
+ * que passou), e um 2º clique em seguida não abre outro turno (não manda duas mensagens). Mesmo processo: o turno
+ * adiado roda no coalescer de quem recebeu o pedido.
+ */
+const passadosAgora = new Map<string, number>();
+const JANELA_DO_TURNO_DA_PONTE_MS = 3 * 60_000;
+export function passadoPelaPonteAgora(unitId: string, leadId: number, agora = Date.now()): boolean {
+  const t = passadosAgora.get(`${unitId}:${leadId}`);
+  return !!t && agora - t < JANELA_DO_TURNO_DA_PONTE_MS;
 }
 
 /** Dois cliques seguidos (ou duas atendentes) no mesmo cartão viram UMA passagem. */
@@ -109,14 +121,21 @@ async function passar(unit: Unit, pedido: PedidoDePassagem, deps: DepsDaPassagem
   });
 
   const base = { liberadaAte: liberadaAte.toISOString(), falasGuardadas: contexto.length, pendentes: pendentes.length, nota };
-  // 4) o turno — só se o paciente está esperando resposta
-  if (!pendentes.length || !deps.iniciar) {
-    if (pendentes.length) logger.warn({ unit: unit.slug, leadId }, 'ponte: passar para a Sofia sem iniciador de turno — ela responde quando o paciente escrever');
-    logger.info({ unit: unit.slug, leadId, ...base }, 'ponte: conversa passada para a Sofia (sem turno agora)');
+  // 4) o turno: responde o que o paciente mandou; se a última fala é da clínica, a Sofia CONTINUA a conversa (13/11, João)
+  if (!deps.iniciar) {
+    logger.warn({ unit: unit.slug, leadId }, 'ponte: passar para a Sofia sem iniciador de turno — ela responde quando o paciente escrever');
     return { ok: true, turno: 'aguardando', ...base };
   }
+  const k = `${unit.id}:${leadId}`;
+  if (passadoPelaPonteAgora(unit.id, leadId, agora.getTime())) {
+    logger.info({ unit: unit.slug, leadId }, 'ponte: passado de novo em menos de 3 min — não abre outro turno');
+    return { ok: true, turno: 'recente', ...base };
+  }
+  passadosAgora.set(k, agora.getTime());
+  if (passadosAgora.size > 2_000) passadosAgora.clear();
   const contactId = lead._embedded?.contacts?.find((c) => c.is_main)?.id ?? lead._embedded?.contacts?.[0]?.id ?? null;
-  await deps.iniciar({ unit, leadId, textos: pendentes, desde: agora, contactId, telefone: null, via: 'ponte' });
+  const textos = pendentes.length ? pendentes : [INSTRUCAO_CONTINUAR];
+  await deps.iniciar({ unit, leadId, textos, desde: agora, contactId, telefone: null, via: 'ponte' });
   logger.info({ unit: unit.slug, leadId, ...base }, 'ponte: conversa passada para a Sofia — turno iniciado');
   return { ok: true, turno: 'iniciado', ...base };
 }
