@@ -16,7 +16,7 @@ import { conferirModeloNaMeta, definicaoParaAUnidade, impressaoDaOnda, podeAprov
 import { problemaNoModelo, triar } from './regras.js';
 import { freiosDoAmbiente } from './freios.js';
 import { contarSairam } from './saidas.js';
-import { unidadeConfere } from './conferencia.js';
+import { exigeNomeNaTriagem, unidadeConfere } from './conferencia.js';
 import { recusaDaRetomada } from './retomada.js';
 
 export type ResultadoDeAcao<T> = { ok: true; dados: T } | { ok: false; status: number; erro: string };
@@ -97,7 +97,7 @@ export async function concluirMontagem(ondaId: string, ler: (unit: Unit, etiquet
   batida.unref();
   try {
     const { candidatos, foraDoKommoDividido, jaNaCampanha, pediramSair, franquia, conferirCartoesRepetidos } = await ler(unit, onda.etiqueta, onda.campanhaId);
-    const { elegiveis, fora } = await triar(candidatos, { jaNaCampanha, pediramSair, franquia, conferirCartoesRepetidos });
+    const { elegiveis, fora } = await triar(candidatos, { jaNaCampanha, pediramSair, franquia, conferirCartoesRepetidos, exigeNome: exigeNomeNaTriagem(unit, definicaoDaOnda(onda).variaveis) });
 
     // Linhas de ondas canceladas que nunca enviaram nada voltam para esta; o resto é criado.
     const reaproveitadas = await reaproveitarDeOndaCancelada(onda.campanhaId, unit.id, ondaId, elegiveis);

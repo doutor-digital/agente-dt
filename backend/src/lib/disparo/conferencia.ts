@@ -16,21 +16,22 @@
  *    cliente. Unidade que não aparece, ou entrada inválida = sem regra = `indisponivel`.
  *
  * A conferência é da PESSOA, não do cartão etiquetado (como na franquia): lê o lead, os contatos dele e TODOS os cartões de
- * cada contato; UM cartão em funil/etapa de cliente basta para `ja-cliente`. Quem tem um cartão perdido etiquetado e
+ * cada contato, mais os cartões de outros contatos com o MESMO TELEFONE (contato duplicado, sem etiqueta); UM cartão em funil/etapa de cliente basta para `ja-cliente`. Quem tem um cartão perdido etiquetado e
  * outro no Jurídico sem etiqueta é cliente.
  *
  * Falha ao ler QUALQUER coisa no caminho (lead, contato, cartões do contato, cartão que sumiu da resposta) NUNCA vira
  * `livre`: vira `indisponivel`, e quem chama não manda (e adia, não descarta). Exceção deliberada: o cartão etiquetado
- * que não existe mais (204/404: apagado ou mesclado) vira `lead-inexistente`, descartado de vez — adiar para sempre uma
+ * que não existe mais (204/resposta vazia: apagado ou mesclado; o 404 NÃO conta, pode ser conta errada) vira `lead-inexistente`, descartado de vez — adiar para sempre uma
  * pessoa que não tem mais cartão só acenderia alerta falso.
  * Tudo é lido FRESCO a cada conferência (funil e etapa de agora): a reconferência da hora do envio pega quem fechou
  * contrato depois de a onda ser montada. O cliente do Kommo é o SEM FREIO: um 429 daqui não congela o Kommo da Sofia.
  */
 import type { Unit } from '@prisma/client';
 import { logger } from '../logger.js';
-import { KommoApiError, createKommoClientSemFreio, type KommoLead } from '../../services/kommo.service.js';
+import { createKommoClientSemFreio, type KommoLead } from '../../services/kommo.service.js';
 import { conferenciaDaFranquia, type FranquiaPorta, type PessoaParaConferir } from './franquia.js';
-import type { SituacaoNaFranquia } from './regras.js';
+import { campanhaUsaPrimeiroNome, chaveDaPessoa, telefoneWhatsapp, type SituacaoNaFranquia } from './regras.js';
+import { finalDoTelefone } from '../campanha/metricas.js';
 
 export interface RegraDeCliente {
   /** funis inteiros: qualquer etapa conta como cliente */
@@ -111,12 +112,42 @@ export interface LeadLido {
 
 /** As leituras do Kommo que a conferência faz. Em produção são as do Kommo da unidade; o teste troca por um Kommo falso. */
 export interface PortaDoKommo {
-  /** o cartão (com contatos). 204/vazio = não existe mais; 404 lança `KommoApiError` com status 404 */
+  /** o cartão (com contatos). 204/vazio = não existe mais. Qualquer erro, 404 inclusive, LANÇA (vira `indisponivel`: pode ser conta errada, não cartão apagado) */
   getLead(leadId: number): Promise<LeadLido | null | ''>;
   /** ids dos cartões do contato; `null` = não consegui perguntar (não é "nenhum") */
   leadsDoContato(contactId: number): Promise<number[] | null>;
   /** os cartões por id (funil e etapa de agora) */
   listLeadsPorIds(ids: number[]): Promise<LeadLido[]>;
+  /** os contatos que a busca do Kommo devolve para os 8 últimos dígitos (a busca é difusa: quem chama confere o número). Erro LANÇA */
+  contatosPorTelefone(final8: string): Promise<Array<{ id: number; telefones: string[]; leadIds: number[] }>>;
+}
+
+/** A busca de contatos por telefone devolve no máximo isto; chegar ao teto = lista possivelmente incompleta = não dá para afirmar nada. */
+const TETO_DA_BUSCA_POR_TELEFONE = 50;
+
+/**
+ * Este VALOR do campo de telefone do contato inclui o número da pessoa? O campo pode trazer mais de um número
+ * ("63 99102-1043 / 63 98888-0000"), ramal ou recado ("63 99102-1043 - 12", "(63) 99102-1043 (12)"): o valor é quebrado em
+ * TRECHOS que parecem telefone (dígitos com espaço, parêntese, ponto ou hífen; qualquer outra coisa — "/", ";", ",", letras —
+ * separa) e cada trecho é conferido, nunca os 8 últimos do texto inteiro. Antes de separar, travessões, hífens "bonitos"
+ * (U+2010 a U+2015, U+2212, U+FE58/FE63/FF0D) viram "-" e espaços estranhos (NBSP etc.) já contam como espaço; caracteres
+ * invisíveis (U+200B a U+200F, U+2060) somem.
+ *  - trecho que dá para ler como celular com DDD (`telefoneWhatsapp`): compara DDD + 8 últimos (atravessa DDI e nono dígito;
+ *    mesmos 8 dígitos em OUTRO DDD não casa);
+ *  - trecho que NÃO dá para ler como celular (ramal grudado, fixo, 10 dígitos, sem DDD, colados): casa se os 8 dígitos da pessoa
+ *    aparecem EM QUALQUER LUGAR do trecho. Pode casar a mais (DDD não conferível), e isso é o lado seguro: um cartão a mais
+ *    conferido, ninguém recebe a mais.
+ */
+export function mesmoNumero(valorDoContato: string, chaveDaPessoaConferida: string): boolean {
+  const final8 = chaveDaPessoaConferida.slice(2);
+  const limpo = valorDoContato.replace(/[\u200B-\u200F\u2060]/g, '').replace(/[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]/g, '-');
+  const trechos = limpo.match(/\+?\d[\d\s().-]{6,}\d/g) ?? [];
+  return trechos.some((t) => {
+    const digitos = t.replace(/\D/g, '');
+    const completo = digitos.length <= 13 ? telefoneWhatsapp(t) : null;
+    if (completo) return chaveDaPessoa(completo) === chaveDaPessoaConferida;
+    return digitos.includes(final8);
+  });
 }
 
 export function portaDoKommo(unit: Unit): PortaDoKommo {
@@ -126,6 +157,7 @@ export function portaDoKommo(unit: Unit): PortaDoKommo {
     getLead: (id) => k().getLead(id) as Promise<KommoLead | ''>,
     leadsDoContato: (id) => k().leadsDoContato(id),
     listLeadsPorIds: (ids) => k().listLeadsPorIds(ids) as Promise<KommoLead[]>,
+    contatosPorTelefone: (final8) => k().buscarContatosPorTelefone(final8, TETO_DA_BUSCA_POR_TELEFONE),
   };
 }
 
@@ -135,14 +167,13 @@ const temFunilEEtapa = (l: LeadLido): l is LeadLido & LeadNoKommo => typeof l.pi
 export function conferenciaPorRegraDeCliente(unit: Pick<Unit, 'slug'>, regra: RegraDeCliente, kommo: PortaDoKommo): (p: PessoaParaConferir) => Promise<SituacaoNaFranquia> {
   return async (p) => {
     if (!p.leadId) return 'indisponivel'; // sem cartão não há o que olhar
+    const chave = chaveDaPessoa(p.telefone);
+    const final8 = finalDoTelefone(p.telefone);
+    if (!final8) return 'indisponivel'; // sem 8 dígitos não há como procurar o mesmo telefone em outro contato
     try {
-      let lead: LeadLido | null | '';
-      try {
-        lead = await kommo.getLead(p.leadId);
-      } catch (err) {
-        if (err instanceof KommoApiError && err.status === 404) return 'lead-inexistente';
-        throw err;
-      }
+      // 204/vazio = o cartão não existe mais. 404 NÃO: pode ser subdomínio ou integração errada, e aí descartaria a onda toda;
+      // erro (404 inclusive) lança, cai no catch e vira `indisponivel` (adia, tenta de novo).
+      const lead = await kommo.getLead(p.leadId);
       if (!lead) return 'lead-inexistente';
       // Resposta sem funil ou sem etapa não é "lead novo": é leitura que não deu certo.
       if (!temFunilEEtapa(lead)) return 'indisponivel';
@@ -155,6 +186,20 @@ export function conferenciaPorRegraDeCliente(unit: Pick<Unit, 'slug'>, regra: Re
         const ids = await kommo.leadsDoContato(contato);
         if (ids === null) return 'indisponivel';
         for (const id of ids) if (id !== p.leadId) outros.add(id);
+      }
+      // Os cartões de OUTROS contatos com o mesmo telefone (contato duplicado, sem etiqueta): a busca do Kommo é difusa, então cada
+      // contato devolvido é conferido pelo número. Busca cheia (teto) não prova nada; erro lança e vira `indisponivel`.
+      const achados = await kommo.contatosPorTelefone(final8);
+      if (achados.length >= TETO_DA_BUSCA_POR_TELEFONE) return 'indisponivel';
+      // A busca é difusa e já falhou em silêncio antes: o contato do PRÓPRIO cartão tem de voltar nela. Se não voltou, a busca não
+      // enxerga este número (formato, token, índice atrasado) e não prova que não há duplicado: a pessoa fica de fora, com motivo claro.
+      if (contatos.length === 0 || !contatos.some((id) => achados.some((c) => c.id === id))) {
+        logger.warn({ unit: unit.slug, leadId: p.leadId, contatos, achados: achados.length }, 'disparo: a busca por telefone do Kommo não devolveu o contato do próprio cartão — pessoa fica de fora (indisponível)');
+        return 'indisponivel';
+      }
+      for (const c of achados) {
+        if (!c.telefones.some((t) => mesmoNumero(t, chave))) continue;
+        for (const id of c.leadIds) if (id !== p.leadId) outros.add(id);
       }
       if (outros.size === 0) return 'livre';
       const lidos = await kommo.listLeadsPorIds([...outros]);
@@ -178,7 +223,15 @@ export function unidadeConfere(unit: Pick<Unit, 'slug' | 'spineToken'>, env: Nod
   return Boolean(unit.spineToken) || regraDeClienteDoAmbiente(unit.slug, env) !== null;
 }
 
-/** A unidade confere pelo cartão no Kommo (sem franquia, com regra)? É o que liga a conferência dos cartões repetidos na triagem. */
+/**
+ * O nome da pessoa é exigido na triagem? Em unidade COM franquia, sempre (a franquia casa por nome e a triagem é a de antes).
+ * Só a unidade que confere pelo Kommo pode dispensar o nome, e só se a campanha não usa `primeiroNome` em nenhuma variável.
+ */
+export function exigeNomeNaTriagem(unit: Pick<Unit, 'slug' | 'spineToken'>, variaveis: readonly unknown[], env: NodeJS.ProcessEnv = process.env): boolean {
+  return !usaRegraDeCliente(unit, env) || campanhaUsaPrimeiroNome(variaveis);
+}
+
+/** A unidade confere pelo cartão no Kommo (sem franquia, com regra)? Liga a conferência direta dos cartões repetidos, decide o nome exigido na triagem e os textos "Kommo" (painel, alerta, MCP). */
 export function usaRegraDeCliente(unit: Pick<Unit, 'slug' | 'spineToken'>, env: NodeJS.ProcessEnv = process.env): boolean {
   return !unit.spineToken && regraDeClienteDoAmbiente(unit.slug, env) !== null;
 }

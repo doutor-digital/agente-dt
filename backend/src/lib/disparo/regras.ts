@@ -146,10 +146,21 @@ export interface ContextoDoPublico {
   franquia: (c: Elegivel) => SituacaoNaFranquia | Promise<SituacaoNaFranquia>;
   /**
    * Só para a regra de cliente por CARTÃO (unidade sem franquia): o mesmo telefone em outro cartão da lista também é
-   * conferido, e se ESSE cartão for de cliente a pessoa sai — senão o 1º cartão (perdido) passaria e o do Jurídico
-   * cairia como "repetido". Na franquia a conferência é da pessoa e isto fica desligado.
+   * conferido DIRETO, e se ESSE cartão for de cliente a pessoa sai — senão o 1º cartão (perdido) passaria e o do Jurídico
+   * cairia como "repetido". Fica ALÉM da busca por telefone da conferência: protege quando a busca (ou a comparação do número)
+   * falha ou o índice de busca do Kommo atrasa. Na franquia a conferência é da pessoa e isto fica desligado.
    */
   conferirCartoesRepetidos?: boolean;
+  /**
+   * A campanha usa o primeiro nome em alguma variável? Ausente = sim (o padrão seguro). Só então "nome que não serve para
+   * saudação" exclui: modelo sem variável de nome não tem saudação para estragar (o `coluna_trabalho_pesado` perdeu 28 de 250).
+   */
+  exigeNome?: boolean;
+}
+
+/** A campanha precisa do primeiro nome da pessoa? (alguma variável do modelo é `primeiroNome`) */
+export function campanhaUsaPrimeiroNome(variaveis: readonly unknown[]): boolean {
+  return variaveis.some((v) => v === 'primeiroNome');
 }
 
 export interface ResultadoDaTriagem {
@@ -208,8 +219,9 @@ export async function triar(candidatos: Candidato[], ctx: ContextoDoPublico): Pr
       nega('pediu-sair');
       continue;
     }
-    const nome = primeiroNomeSeguro(c.nome);
-    if (!nome) {
+    // Sem variável de nome no modelo o nome nem é usado: fica vazio em vez de excluir a pessoa.
+    const nome = primeiroNomeSeguro(c.nome) ?? '';
+    if (!nome && ctx.exigeNome !== false) {
       nega('nome-invalido');
       continue;
     }
