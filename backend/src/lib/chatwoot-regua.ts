@@ -18,9 +18,12 @@ import { TEXTOS_PARAU } from './chatwoot-regua-textos.js';
 
 export const ID_REGUA = 'chatwoot-regua';
 /** caixa do Chatwoot → slug da unidade. Uma unidade por enquanto. */
-export const CAIXAS_REGUA: Readonly<Record<number, string>> = { 2: 'doutor-hernia-parauapebas' };
+export const CAIXAS_REGUA: Readonly<Record<number, string>> = {
+  2: 'doutor-hernia-parauapebas', // Evolution (desconectado desde 13/11: o número entrou no Kapso em coexistência)
+  3: 'doutor-hernia-parauapebas', // WhatsApp Cloud via Kapso (13/11/2026)
+};
 /** caixa → agente gerente no Chatwoot (lead quente parado vai para ela; decisão 26 do João). Parauapebas: Cleia (id 4). */
-export const GERENTE_DA_CAIXA: Readonly<Record<number, number>> = { 2: 4 };
+export const GERENTE_DA_CAIXA: Readonly<Record<number, number>> = { 2: 4, 3: 4 };
 /** O usuário "📱 Celular da unidade": autor das mensagens que a equipe manda pelo celular (o Evolution usa o token dele). */
 export const USUARIO_CELULAR = 7;
 export const ETIQUETA_CELULAR = 'respondeu-pelo-celular';
