@@ -146,6 +146,10 @@ import {
 import {
   funilCaixasHandler,
   funilHojeHandler,
+  funilOportunidadesHandler,
+  funilMarketingHandler,
+  funilGestorHandler,
+  funilGestaoHandler,
   funilCamposHandler,
   funilConversaHandler,
   funilMensagemHandler,
@@ -400,6 +404,10 @@ apiRouter.post('/public/central/chamados/feito', centralChamadoFeitoHandler);
 apiRouter.get('/public/funil/quadro', funilQuadroHandler);
 apiRouter.get('/public/funil/caixas', funilCaixasHandler);
 apiRouter.get('/public/funil/hoje', funilHojeHandler);
+apiRouter.get('/public/funil/oportunidades', funilOportunidadesHandler);
+apiRouter.get('/public/funil/marketing', funilMarketingHandler);
+apiRouter.get('/public/funil/gestor', funilGestorHandler);
+apiRouter.get('/public/funil/gestao', funilGestaoHandler);
 apiRouter.post('/public/funil/mover', funilMoverHandler);
 apiRouter.get('/public/funil/conversa/:id', funilConversaHandler);
 apiRouter.post('/public/funil/campos', funilCamposHandler);

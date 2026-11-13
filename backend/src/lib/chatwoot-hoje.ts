@@ -13,6 +13,7 @@
  *  - Meta do dia: agendamentos por dia de cada caixa (`META_AGENDAMENTOS_POR_CAIXA`), somada nas caixas que a pessoa enxerga.
  */
 const DIA = 86_400_000;
+export const DIA_MS = DIA;
 const UTC_MENOS_3 = 3 * 3600_000;
 const ETAPAS_QUALIFICACAO = new Set(['Novo lead', 'Sofia qualifica', 'Esperando humano']);
 export const MAX_FACA_AGORA = 8;
@@ -39,16 +40,16 @@ export interface Hoje {
 export function diaEmBelem(t: number): string {
   return new Date(t - UTC_MENOS_3).toISOString().slice(0, 10);
 }
-const somar = (dia: string, n: number) => new Date(Date.parse(`${dia}T00:00:00Z`) + n * DIA).toISOString().slice(0, 10);
-const str = (v: unknown) => (typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : '');
-const sim = (v: unknown) => v === true || ['true', 'sim', '1'].includes(str(v).toLowerCase());
-const data10 = (v: unknown) => (/^\d{4}-\d{2}-\d{2}/.test(str(v)) ? str(v).slice(0, 10) : '');
+export const somar = (dia: string, n: number) => new Date(Date.parse(`${dia}T00:00:00Z`) + n * DIA).toISOString().slice(0, 10);
+export const str = (v: unknown) => (typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : '');
+export const sim = (v: unknown) => v === true || ['true', 'sim', '1'].includes(str(v).toLowerCase());
+export const data10 = (v: unknown) => (/^\d{4}-\d{2}-\d{2}/.test(str(v)) ? str(v).slice(0, 10) : '');
 
-function nomeDe(c: any): string {
+export function nomeDe(c: any): string {
   return str(c?.meta?.sender?.name) || str(c?.meta?.sender?.phone_number) || `Conversa ${c?.id}`;
 }
 
-function minutos(ms: number): string {
+export function minutos(ms: number): string {
   const m = Math.max(0, Math.round(ms / 60_000));
   if (m < 60) return `${m} min`;
   const h = Math.round(m / 60);
@@ -69,6 +70,19 @@ export function conversasDasPaginas(paginas: unknown[]): any[] {
     }
   }
   return saida;
+}
+
+/**
+ * «Não interagiram»: etiqueta `sem-resposta`, ou ainda em qualificação com a última mensagem NOSSA há mais de 24 h.
+ * (Uma só regra, usada na tela Hoje e no relatório do marketing: os dois números nunca discordam.)
+ */
+export function semInteracao(c: any, agora: number): boolean {
+  const etiquetas: string[] = Array.isArray(c?.labels) ? c.labels.map(String) : [];
+  const etapa = str(c?.custom_attributes?.etapa);
+  const ultima = c?.last_non_activity_message;
+  const ultimaNossa = ultima && Number(ultima.message_type) === 1 && ultima.private !== true;
+  const ultimaEm = Number(ultima?.created_at) * 1000;
+  return etiquetas.includes('sem-resposta') || (ETAPAS_QUALIFICACAO.has(etapa) && !!ultimaNossa && agora - ultimaEm > DIA);
 }
 
 export function montarHoje(conversas: any[], agora: number, agendadasHoje: ReadonlySet<number>): Hoje {
@@ -102,7 +116,7 @@ export function montarHoje(conversas: any[], agora: number, agendadasHoje: Reado
       n.esperando++;
       facaAgora.push({ id, nome, quente, esperandoMin: Math.round((agora - esperandoDesde) / 60_000), detalhe: `${quente ? 'Quente · ' : ''}esperando você há ${minutos(agora - esperandoDesde)}${etapa ? ` · ${etapa}` : ''}` });
     }
-    if (etiquetas.includes('sem-resposta') || (ETAPAS_QUALIFICACAO.has(etapa) && ultimaNossa && agora - ultimaEm > DIA)) n.naoInteragiram++;
+    if (semInteracao(c, agora)) n.naoInteragiram++;
     if (agendadasHoje.has(id)) n.agendaram++;
 
     const consulta = data10(a.data_consulta);
