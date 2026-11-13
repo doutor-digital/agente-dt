@@ -11,6 +11,7 @@
  * vem da caixa da conversa (`CAIXAS_REGUA`), nunca do pedido. Teto de chamadas ao modelo por pessoa por dia, em memória.
  * Desligada por padrão: só vale para as unidades de `CHATWOOT_ASSISTENTE_SLUGS` (lista separada por vírgula, ou `*`).
  */
+import { estadoDaPausa, pausar, portaDaPausaDoChatwoot, reativar } from '../lib/chatwoot-pausa.js';
 import type { Request, Response } from 'express';
 import type { Unit } from '@prisma/client';
 import { z } from 'zod';
@@ -396,4 +397,66 @@ export function corsDoAssistente(path: string, origem: string, urlChatwoot: stri
     return null;
   }
   return { origin: true, credentials: false, allowedHeaders: ['X-CW-Token', 'X-CW-Client', 'X-CW-Uid'], methods: ['GET', 'OPTIONS'] };
+}
+
+// ── pausa da IA na conversa (painel da assistente): estado, «Pausar IA (eu assumo)», «Reativar IA» ─────────────────────
+// Com o login de quem clicou: a atribuição e as notas saem no nome dela. Só conversa que ela enxerga e de caixa do mapa.
+
+async function conversaDaAtendente(req: Request, res: Response, idBruto: unknown) {
+  const a = await sessaoDaAtendente(req, res);
+  if (!a) return null;
+  const conversa = Number(idBruto);
+  if (!Number.isInteger(conversa) || conversa <= 0) {
+    res.status(400).json({ error: 'conversa inválida' });
+    return null;
+  }
+  try {
+    const { caixa } = await leituraComLogin(a.c, a.sessao).conversa(conversa);
+    if (!caixa || !CAIXAS_REGUA[caixa]) {
+      res.status(422).json({ error: 'esta conversa não é de uma caixa com IA' });
+      return null;
+    }
+  } catch (e) {
+    const status = (e as { status?: number })?.status;
+    res.status(status === 401 || status === 403 || status === 404 ? 404 : 502).json({ error: 'não consegui abrir esta conversa' });
+    return null;
+  }
+  return { a, conversa, porta: portaDaPausaDoChatwoot(a.c, a.sessao) };
+}
+
+export async function assistentePausaEstadoHandler(req: Request, res: Response): Promise<void> {
+  const r = await conversaDaAtendente(req, res, req.query.conversa);
+  if (!r) return;
+  try {
+    res.json(estadoDaPausa(await r.porta.conversa(r.conversa)));
+  } catch (e) {
+    logger.warn({ err: String(e), conversa: r.conversa }, 'assistente: estado da pausa falhou');
+    res.status(502).json({ error: 'não consegui ler a conversa' });
+  }
+}
+
+export async function assistentePausaAcaoHandler(req: Request, res: Response): Promise<void> {
+  const acao = String((req.body as { acao?: unknown })?.acao ?? '');
+  if (acao !== 'pausar' && acao !== 'reativar') {
+    res.status(400).json({ error: 'ação inválida' });
+    return;
+  }
+  const r = await conversaDaAtendente(req, res, (req.body as { conversa?: unknown })?.conversa);
+  if (!r) return;
+  const eu = r.a.id;
+  if (acao === 'pausar' && !eu) {
+    res.status(403).json({ error: 'não consegui saber quem é você no Chatwoot: entre de novo' });
+    return;
+  }
+  try {
+    const feito =
+      acao === 'pausar'
+        ? await pausar(r.conversa, { tipo: 'pessoa', id: eu!, nome: r.a.nome }, r.porta)
+        : await reativar(r.conversa, r.a.nome, r.porta);
+    logger.info({ conversa: r.conversa, acao, feito, quem: r.a.id }, 'assistente: pausa da IA');
+    res.json({ ok: true, feito, ...estadoDaPausa(await r.porta.conversa(r.conversa)) });
+  } catch (e) {
+    logger.warn({ err: String(e), conversa: r.conversa, acao }, 'assistente: pausa da IA falhou');
+    res.status(502).json({ error: 'não consegui mudar a pausa agora' });
+  }
 }

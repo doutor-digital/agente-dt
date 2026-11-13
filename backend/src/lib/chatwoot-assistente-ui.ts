@@ -180,6 +180,12 @@ button,textarea{font:inherit;color:inherit}
 .bt.azul{background:var(--azul);border-color:var(--azul);color:#fff}
 .bt:disabled{opacity:.5;cursor:default}
 .acao{padding:10px 12px;border-bottom:1px solid var(--linha);display:flex;gap:8px;align-items:center}
+.pausa{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--linha);font-size:12.5px}
+.pausa[hidden]{display:none}
+.pausa .ponto{width:8px;height:8px;border-radius:50%;background:#12855a;flex-shrink:0}
+.pausa.on .ponto{background:#b54708}
+.pausa span{flex:1;min-width:0;color:var(--txt)}
+.pausa .bt{min-height:28px;padding:3px 10px;font-size:12.5px}
 .acao small{color:var(--fraco);flex:1;min-width:0;line-height:1.3}
 .lista{flex:1;overflow:auto;padding:12px;display:flex;flex-direction:column;gap:10px;background:var(--suave)}
 .m{max-width:92%;padding:8px 11px;border-radius:12px;white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere}
@@ -197,8 +203,9 @@ form{display:flex;gap:8px;padding:10px 12px;border-top:1px solid var(--linha);ba
 textarea{flex:1;resize:none;height:40px;max-height:96px;padding:8px 10px;border:1px solid var(--linha);border-radius:8px}
 </style></head><body>
 <div class="topo"><b>Assistente</b><small id="un"></small><button class="x" id="min" type="button" title="Minimizar" aria-label="Minimizar">–</button></div>
+<div class="pausa" id="pausa" hidden><i class="ponto" aria-hidden="true"></i><span id="pausaTxt">IA ativa nesta conversa</span><button class="bt" id="pausaBt" type="button">Pausar IA (eu assumo)</button></div>
 <div class="acao"><button class="bt azul" id="sug" type="button" disabled>O que eu respondo?</button><small id="dica">Abra uma conversa para eu sugerir uma resposta.</small></div>
-<div class="lista" id="lista" aria-live="polite"><div class="m sis">Eu só leio e sugiro: não envio nada ao paciente e não mudo nada no Chatwoot. Pergunte, por exemplo: como marco perdido? qual o valor? tem horário amanhã de manhã?</div></div>
+<div class="lista" id="lista" aria-live="polite"><div class="m sis">Eu não envio nada ao paciente: sugiro respostas e tiro dúvidas. Pausar ou reativar a IA é no botão acima. Pergunte, por exemplo: como marco perdido? qual o valor? tem horário amanhã de manhã?</div></div>
 <form id="f"><textarea id="q" placeholder="Tire uma dúvida…" maxlength="1000" aria-label="Sua dúvida"></textarea><button class="bt azul" id="env" type="submit">Enviar</button></form>
 <script>
 (function(){
@@ -249,6 +256,29 @@ textarea{flex:1;resize:none;height:40px;max-height:96px;padding:8px 10px;border:
     if (j.fontes && j.fontes.length) { var f = document.createElement('div'); f.className = 'estado'; f.textContent = 'Fontes: ' + j.fontes.join(' · '); c.appendChild(f); }
     lista.appendChild(c); rolar();
   }
+  // ── pausa da IA nesta conversa ──
+  var pausaEl = $('pausa'), pausaTxt = $('pausaTxt'), pausaBt = $('pausaBt'), pausada = false, lendoPausa = 0;
+  function hora(iso){ try { var d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; } }
+  function mostrarPausa(j){
+    if (!j || typeof j.pausada !== 'boolean') { pausaEl.hidden = true; return; }
+    pausada = j.pausada; pausaEl.hidden = false; pausaEl.className = 'pausa' + (pausada ? ' on' : '');
+    pausaTxt.textContent = pausada ? 'IA pausada' + (j.por ? ' por ' + j.por : '') + (j.em ? ' · ' + hora(j.em) : '') : 'IA ativa nesta conversa';
+    pausaBt.textContent = pausada ? 'Reativar IA' : 'Pausar IA (eu assumo)';
+    pausaBt.className = pausada ? 'bt azul' : 'bt';
+  }
+  function lerPausa(){
+    if (!S || !conversa) { pausaEl.hidden = true; return; }
+    var meu = ++lendoPausa, c = conversa;
+    fetch('/api/public/assistente/pausa?conversa=' + encodeURIComponent(c), { headers: cab() }).then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(j){ if (meu === lendoPausa && c === conversa) mostrarPausa(j); }).catch(function(){ if (meu === lendoPausa) pausaEl.hidden = true; });
+  }
+  pausaBt.onclick = function(){
+    if (!S || !conversa) return;
+    pausaBt.disabled = true;
+    chamar('/api/public/assistente/pausa', { conversa: conversa, acao: pausada ? 'reativar' : 'pausar' }).then(function(r){
+      if (r.ok) mostrarPausa(r.j); else if (r.status !== 401) bolha('sis', r.j.error || 'Não consegui mudar a pausa agora.');
+    }).catch(function(){ bolha('sis', 'Sem conexão com a assistente. Tente de novo.'); }).then(function(){ pausaBt.disabled = false; });
+  };
   function sugerir(){
     if (ocupado || !S || !conversa) return;
     ocupado = true; atualizar();
@@ -284,9 +314,9 @@ textarea{flex:1;resize:none;height:40px;max-height:96px;padding:8px 10px;border:
     if (d.event === 'assistente-sessao') {
       S = d.sessao && d.sessao.token ? d.sessao : null; if (typeof d.conversa === 'number' || d.conversa === null) conversa = d.conversa;
       if (!S && pedindo < 3) { pedindo++; setTimeout(pedirSessao, 1500); }
-      atualizar();
+      atualizar(); lerPausa();
     } else if (d.event === 'assistente-conversa') {
-      conversa = typeof d.conversa === 'number' ? d.conversa : null; atualizar();
+      conversa = typeof d.conversa === 'number' ? d.conversa : null; atualizar(); lerPausa();
     } else if (d.event === 'assistente-inserido' && pendente) {
       var p = pendente; pendente = null;
       if (d.ok) { p.estado.textContent = 'Está no campo de resposta. Revise e envie você.'; return; }

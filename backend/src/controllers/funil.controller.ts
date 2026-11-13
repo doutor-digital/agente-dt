@@ -1647,15 +1647,24 @@ const MENU_JS = String.raw`(function(){
     return r && r.width > 0 && r.right > 0 && r.right < window.innerWidth * 0.5 ? Math.round(r.right) : 0;
   }
   function ajustar(){ if (cam) cam.style.left = margem() + 'px'; }
-  // As telas do menu, na ordem: Contatos → Hoje → Funil → Oportunidades → Marketing → Gestor. As marcadas «gestao» só
+  // As telas do menu, na ordem: Contatos → Hoje (com Oportunidades, Marketing e Gestor dentro) → Funil. As marcadas «gestao» só
   // aparecem para administrador da conta ou gestor da lista (e o servidor confere de novo a cada pedido de dados).
+  // Oportunidades, Marketing e Gestor ficam DENTRO de Hoje, como submenu (pedido do João, 13/11); o Funil vem depois do grupo
   var TELAS = [
     { id: 'hoje', marca: 'data-hoje-menu', nome: 'Hoje', hash: '#hoje', param: 'hoje' },
-    { id: 'funil', marca: 'data-funil-menu', nome: 'Funil', hash: '#funil', param: '' },
-    { id: 'oport', marca: 'data-oport-menu', nome: 'Oportunidades', hash: '#oportunidades', param: 'oport' },
-    { id: 'mkt', marca: 'data-mkt-menu', nome: 'Marketing', hash: '#marketing', param: 'mkt', gestao: true },
-    { id: 'gestor', marca: 'data-gestor-menu', nome: 'Gestor', hash: '#gestor', param: 'gestor', gestao: true }
+    { id: 'oport', marca: 'data-oport-menu', nome: 'Oportunidades', hash: '#oportunidades', param: 'oport', pai: 'hoje' },
+    { id: 'mkt', marca: 'data-mkt-menu', nome: 'Marketing', hash: '#marketing', param: 'mkt', gestao: true, pai: 'hoje' },
+    { id: 'gestor', marca: 'data-gestor-menu', nome: 'Gestor', hash: '#gestor', param: 'gestor', gestao: true, pai: 'hoje' },
+    { id: 'funil', marca: 'data-funil-menu', nome: 'Funil', hash: '#funil', param: '' }
   ];
+  // o grupo Hoje aberto/fechado fica lembrado neste navegador (padrão: aberto)
+  var GRUPO_HOJE = 'menu:hoje-fechado';
+  function grupoFechado(){ try { return localStorage.getItem(GRUPO_HOJE) === '1'; } catch (e) { return false; } }
+  function aplicarGrupo(){
+    var fechado = grupoFechado();
+    TELAS.forEach(function(t){ if (t.pai) { var el = document.querySelector('[' + t.marca + ']'); if (el) el.style.display = fechado ? 'none' : ''; } });
+    var seta = document.querySelector('[data-hoje-seta]'); if (seta) { seta.style.transform = fechado ? 'rotate(-90deg)' : ''; seta.setAttribute('aria-expanded', fechado ? 'false' : 'true'); }
+  }
   function achar(id){ for (var i = 0; i < TELAS.length; i++) if (TELAS[i].id === id) return TELAS[i]; return null; }
   var DE_MENU = TELAS.map(function(t){ return '[' + t.marca + ']'; }).join(', ');
   function marcar(ativo){
@@ -1772,12 +1781,25 @@ const MENU_JS = String.raw`(function(){
     if (link) { link.setAttribute('href', t.hash); link.classList.remove('router-link-active', 'router-link-exact-active'); link.removeAttribute('aria-current'); }
     Array.prototype.forEach.call(novo.querySelectorAll('ul, [role="group"]'), function(u){ u.remove(); });
     trocarTexto(novo, t.nome);
-    novo.addEventListener('click', function(e){ abrir(e, t.id); }, true);
+    if (t.pai) {
+      // submenu: recuado, sem ícone, com a linha guia à esquerda (o jeito do "Conversas" do próprio Chatwoot)
+      novo.style.marginLeft = '1.15rem'; novo.style.paddingLeft = '.35rem'; novo.style.borderLeft = '1px solid rgba(148,163,184,.35)';
+      var ic = novo.querySelector('svg'); if (ic) ic.style.display = 'none';
+      if (link) link.style.fontSize = '13px';
+    }
+    if (t.id === 'hoje' && link && !novo.querySelector('[data-hoje-seta]')) {
+      var seta = document.createElement('button'); seta.type = 'button'; seta.setAttribute('data-hoje-seta', '1'); seta.setAttribute('aria-label', 'Abrir ou fechar Oportunidades, Marketing e Gestor');
+      seta.style.cssText = 'margin-left:auto;border:0;background:transparent;color:inherit;cursor:pointer;padding:0 4px;line-height:1;opacity:.7;transition:transform .15s';
+      seta.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
+      seta.addEventListener('click', function(e){ e.preventDefault(); e.stopPropagation(); try { localStorage.setItem(GRUPO_HOJE, grupoFechado() ? '0' : '1'); } catch (x) {} aplicarGrupo(); }, true);
+      link.style.display = 'flex'; link.style.alignItems = 'center'; link.appendChild(seta);
+    }
+    novo.addEventListener('click', function(e){ if (e.target && e.target.closest && e.target.closest('[data-hoje-seta]')) return; abrir(e, t.id); }, true);
     depois.parentNode.insertBefore(novo, depois.nextSibling);
     return novo;
   }
   function visivel(t){ return !t.gestao || gestao === true; }
-  // Contatos → Hoje → Funil → Oportunidades → (Marketing → Gestor, só gestão)
+  // Contatos → Hoje → (Oportunidades → Marketing → Gestor, submenu de Hoje; os dois últimos só gestão) → Funil
   function por(){
     if (!TELAS.some(function(t){ return visivel(t) && !document.querySelector('[' + t.marca + ']'); })) return true;
     var a = document.querySelector('aside a[href*="/contacts"], nav a[href*="/contacts"]');
@@ -1789,6 +1811,7 @@ const MENU_JS = String.raw`(function(){
       anterior = ja || item(base, anterior, t);
     });
     var reserva = document.querySelector('[data-funil-botao]'); if (reserva) reserva.remove();
+    aplicarGrupo();
     return true;
   }
   function botao(){
