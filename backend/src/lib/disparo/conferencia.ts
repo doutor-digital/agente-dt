@@ -127,25 +127,26 @@ const TETO_DA_BUSCA_POR_TELEFONE = 50;
 
 /**
  * Este VALOR do campo de telefone do contato inclui o número da pessoa? O campo pode trazer mais de um número
- * ("63 99102-1043 / 63 98888-0000"), ramal ou recado ("63 99102-1043 ramal 12"): o valor é quebrado em TRECHOS que parecem
- * telefone (dígitos com espaço, parêntese, ponto ou hífen; qualquer outra coisa — "/", ";", ",", letras — separa) e cada
- * trecho é conferido, nunca os 8 últimos do texto inteiro.
+ * ("63 99102-1043 / 63 98888-0000"), ramal ou recado ("63 99102-1043 - 12", "(63) 99102-1043 (12)"): o valor é quebrado em
+ * TRECHOS que parecem telefone (dígitos com espaço, parêntese, ponto ou hífen; qualquer outra coisa — "/", ";", ",", letras —
+ * separa) e cada trecho é conferido, nunca os 8 últimos do texto inteiro. Antes de separar, travessões, hífens "bonitos"
+ * (U+2010 a U+2015, U+2212, U+FE58/FE63/FF0D) viram "-" e espaços estranhos (NBSP etc.) já contam como espaço; caracteres
+ * invisíveis (U+200B a U+200F, U+2060) somem.
  *  - trecho que dá para ler como celular com DDD (`telefoneWhatsapp`): compara DDD + 8 últimos (atravessa DDI e nono dígito;
  *    mesmos 8 dígitos em OUTRO DDD não casa);
- *  - trecho que não dá (fixo, 10 dígitos, sem DDD, estrangeiro): só os 8 últimos — pode casar a mais, e isso é o lado seguro
- *    (um cartão a mais conferido; ninguém recebe a mais);
- *  - trecho com mais dígitos que um número (dois colados, "63 98888-0000 63 99102-1043"): se os 8 dígitos da pessoa aparecem
- *    nele, conta como casou (lado seguro; o DDD aqui não dá para conferir).
+ *  - trecho que NÃO dá para ler como celular (ramal grudado, fixo, 10 dígitos, sem DDD, colados): casa se os 8 dígitos da pessoa
+ *    aparecem EM QUALQUER LUGAR do trecho. Pode casar a mais (DDD não conferível), e isso é o lado seguro: um cartão a mais
+ *    conferido, ninguém recebe a mais.
  */
 export function mesmoNumero(valorDoContato: string, chaveDaPessoaConferida: string): boolean {
   const final8 = chaveDaPessoaConferida.slice(2);
-  const trechos = valorDoContato.match(/\+?\d[\d\s().-]{6,}\d/g) ?? [];
+  const limpo = valorDoContato.replace(/[\u200B-\u200F\u2060]/g, '').replace(/[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]/g, '-');
+  const trechos = limpo.match(/\+?\d[\d\s().-]{6,}\d/g) ?? [];
   return trechos.some((t) => {
     const digitos = t.replace(/\D/g, '');
-    if (digitos.length > 13) return digitos.includes(final8);
-    const completo = telefoneWhatsapp(t);
+    const completo = digitos.length <= 13 ? telefoneWhatsapp(t) : null;
     if (completo) return chaveDaPessoa(completo) === chaveDaPessoaConferida;
-    return finalDoTelefone(t) === final8;
+    return digitos.includes(final8);
   });
 }
 
@@ -230,7 +231,7 @@ export function exigeNomeNaTriagem(unit: Pick<Unit, 'slug' | 'spineToken'>, vari
   return !usaRegraDeCliente(unit, env) || campanhaUsaPrimeiroNome(variaveis);
 }
 
-/** A unidade confere pelo cartão no Kommo (sem franquia, com regra)? Decide o nome exigido na triagem e os textos "Kommo" (painel, alerta, MCP). */
+/** A unidade confere pelo cartão no Kommo (sem franquia, com regra)? Liga a conferência direta dos cartões repetidos, decide o nome exigido na triagem e os textos "Kommo" (painel, alerta, MCP). */
 export function usaRegraDeCliente(unit: Pick<Unit, 'slug' | 'spineToken'>, env: NodeJS.ProcessEnv = process.env): boolean {
   return !unit.spineToken && regraDeClienteDoAmbiente(unit.slug, env) !== null;
 }

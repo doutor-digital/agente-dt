@@ -184,6 +184,18 @@ test('escritório: campo de telefone com DOIS números — cada um é conferido,
   assert.equal(mesmoNumero('63 98888-0000 / 63 99102-1043', '6391021043'), true);
   assert.equal(mesmoNumero('63 99102-1043', '1191021043'), false, 'um número só, outro DDD');
   assert.equal(await confere(ESCRITORIO, env(REGRA), com('63 99102-1043 ramal 12')), 'ja-cliente', 'ramal depois do número');
+  // ramal GRUDADO (12/13 dígitos): o trecho não é um celular legível, e os 8 dígitos da pessoa estão nele
+  for (const valor of ['63 99102-1043 - 12', '(63) 99102-1043 (12)', '63 9102-1043 12', '63 99102-1043 ramal 1234567']) {
+    assert.equal(await confere(ESCRITORIO, env(REGRA), com(valor)), 'ja-cliente', valor);
+    assert.equal(mesmoNumero(valor, '6391021043'), true, valor);
+  }
+  // traços e espaços que o teclado do celular produz
+  for (const valor of ['(63) 99102–1043', '(63) 99102‑1043', '(63) 99102—1043', '(63) 99102−1043', '(63)\u00A099102\u20111043', '63 99102‐1043', '(63) 99102\u200B-1043', '+55\u00A063\u00A099102–1043']) {
+    assert.equal(await confere(ESCRITORIO, env(REGRA), com(valor)), 'ja-cliente', JSON.stringify(valor));
+  }
+  assert.equal(mesmoNumero('(63) 98888–0000 / (63) 99102–1043', '6391021043'), true, 'dois números com travessão');
+  assert.equal(mesmoNumero('(11) 99102–1043', '6391021043'), false, 'com travessão, outro DDD continua não casando');
+  assert.equal(mesmoNumero('(63) 98888–0000', '6391021043'), false);
   assert.equal(await confere(ESCRITORIO, env(REGRA), com('(63) 99102-1043 (recado Maria e João)')), 'ja-cliente', 'texto em volta');
   assert.equal(await confere(ESCRITORIO, env(REGRA), com('63 98888-0000 63 99102-1043 / 63 97777-1111')), 'ja-cliente', 'colados misturados com separador');
   assert.equal(await confere(ESCRITORIO, env(REGRA), com('63 98888-0000 / 63 97777-1111')), 'livre', 'nenhum dos dois é a pessoa');
@@ -262,9 +274,9 @@ test('entrada sem "=" é lixo: UM aviso de formato, sem slug falso e sem aviso d
 });
 
 const cand = (leadId: number, nome: string, tel: string) => ({ leadId, nome, telefoneBruto: tel });
-const triarComKommo = (candidatos: ReturnType<typeof cand>[], k: ReturnType<typeof kommoFalso>) => {
+const triarComKommo = (candidatos: ReturnType<typeof cand>[], k: ReturnType<typeof kommoFalso>, conferirCartoesRepetidos = true) => {
   const franquia = conferenciaDaUnidade(ESCRITORIO, { env: env(REGRA), kommo: k.porta });
-  return triar(candidatos, { jaNaCampanha: new Set(), pediramSair: new Set(), franquia: (e) => franquia({ leadId: e.leadId, nomeCompleto: e.nomeCompleto, telefone: e.telefone }) });
+  return triar(candidatos, { jaNaCampanha: new Set(), pediramSair: new Set(), franquia: (e) => franquia({ leadId: e.leadId, nomeCompleto: e.nomeCompleto, telefone: e.telefone }), conferirCartoesRepetidos });
 };
 
 test('triagem: "ja-cliente" e "lead-inexistente" ficam de fora, contados com rótulo próprio; indisponível não entra', async () => {
@@ -285,6 +297,24 @@ test('triagem: pessoa com 2 cartões etiquetados (mesmo telefone, contatos DIFER
   assert.deepEqual(r.fora, { 'repetido-na-lista': 1, 'ja-cliente': 1 });
 });
 
+test('triagem: cartão repetido é conferido DIRETO, além da busca por telefone — a busca atrasada (não achou o contato do 2º cartão) não deixa o cliente passar', async () => {
+  const mundo = { 1: { pipeline_id: COMERCIAL, status_id: PERDIDO, contatos: [1] }, 2: { pipeline_id: JURIDICO, status_id: 3, contatos: [2] } };
+  const atrasado = () => {
+    const k = kommoFalso(mundo, { 1: [1], 2: [2] });
+    const busca = k.porta.contatosPorTelefone;
+    k.porta.contatosPorTelefone = async (f) => (await busca(f)).filter((c) => c.id === 1); // o índice do Kommo ainda não tem o contato 2
+    return k;
+  };
+  const dupla = [cand(1, 'Maria Souza', '5563991021043'), cand(2, 'Maria Souza', '5563991021043')];
+  const r = await triarComKommo(dupla, atrasado());
+  assert.deepEqual(r.elegiveis, [], 'o cartão do Jurídico, conferido direto, tira a pessoa');
+  assert.deepEqual(r.fora, { 'repetido-na-lista': 1, 'ja-cliente': 1 });
+  // sem a conferência direta (franquia) a triagem é a de antes: o repetido só é contado
+  const sem = await triarComKommo(dupla, atrasado(), false);
+  assert.deepEqual(sem.elegiveis.map((e) => e.leadId), [1]);
+  assert.deepEqual(sem.fora, { 'repetido-na-lista': 1 });
+});
+
 test('triagem: os dois cartões livres = entra UMA vez (o repetido só é contado); cartão repetido que sumiu não derruba a pessoa; leitura que falha derruba', async () => {
   const dois = { 1: { pipeline_id: COMERCIAL, status_id: PERDIDO, contatos: [1] }, 2: { pipeline_id: COMERCIAL, status_id: 4, contatos: [2] } };
   const r = await triarComKommo([cand(1, 'Maria Souza', '5563991021043'), cand(2, 'Maria Souza', '5563991021043')], kommoFalso(dois, { 1: [1], 2: [2] }));
@@ -299,6 +329,13 @@ test('triagem: os dois cartões livres = entra UMA vez (o repetido só é contad
   const r3 = await triarComKommo([cand(1, 'Maria Souza', '5563991021043'), cand(2, 'Maria Souza', '5563991021043')], k3);
   assert.deepEqual(r3.elegiveis, []);
   assert.deepEqual(r3.fora, { 'franquia-indisponivel': 1, 'repetido-na-lista': 1 });
+  // o repetido NÃO pôde ser lido (erro só nele): na dúvida a pessoa sai
+  const k4 = kommoFalso(dois, { 1: [1], 2: [2] });
+  const getLead = k4.porta.getLead;
+  k4.porta.getLead = async (id) => (id === 2 ? Promise.reject(new Error('kommo 500')) : getLead(id));
+  const r4 = await triarComKommo([cand(1, 'Maria Souza', '5563991021043'), cand(2, 'Maria Souza', '5563991021043')], k4);
+  assert.deepEqual(r4.elegiveis, []);
+  assert.deepEqual(r4.fora, { 'repetido-na-lista': 1, 'franquia-indisponivel': 1 });
 });
 
 test('triagem: 1º cartão sumiu (lead-inexistente) e o 2º, do mesmo telefone, é válido = a pessoa entra pelo 2º', async () => {
