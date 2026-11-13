@@ -31,6 +31,8 @@ export type Risco =
   | 'escreve-campo'
   /** Cria/conclui TAREFA no Kommo (calendário) — nunca toca em campo nem em etapa; o erro é tarefa a mais ou a menos, corrigível. */
   | 'cria-tarefa'
+  /** Manda dado a um sistema de fora (a Meta, por exemplo) — não tem desfazer: o que saiu, saiu. */
+  | 'manda-dado-externo'
   /** Só muda como a IA se comporta ou quanto custa — não move nem escreve nada. */
   | 'comportamento';
 
@@ -980,6 +982,20 @@ export const AUTOMACOES: readonly Automacao[] = [
     exigeSecoAntes: true,
     quandoVazio: 'desligado',
     arquivo: 'src/lib/chatwoot-duplicados.ts',
+  },
+  {
+    id: 'chatwoot-capi',
+    chave: 'CHATWOOT_CAPI_SLUGS',
+    nome: 'Conversões do Chatwoot para a Meta (CAPI)',
+    oQueFaz:
+      'A cada 10 min olha as conversas da caixa de WhatsApp oficial da unidade no Chatwoot e, quando uma conversa que veio de anúncio «Clique para o WhatsApp» ENTRA em Agendado/Confirmado, Compareceu (ou consulta Atendida) ou Fechou (ou «Fechou tratamento»), manda UM evento para a Meta (AddToCart, InitiateCheckout, Purchase — os mesmos nomes do rastreio do Kommo), para o algoritmo buscar paciente que agenda, comparece e fecha. «Só no papel» não chama a Meta: registra e loga «enviaria evento X para a conversa Y (anúncio Z)».',
+    pegadinha:
+      'Hoje só a caixa 3 da Parauapebas (WhatsApp oficial via Kapso). Sem clique de anúncio (lead orgânico, ou anúncio em Status, que não traz ctwa_clid) não manda nada. Só conta a ENTRADA no estado: o que já estava assim na 1ª varredura é ignorado, e evento com mais de 7 dias não vai (a Meta recusa). NUNCA repete a mesma conversa + evento, e a Meta não deduplica este caminho: erro de tempo esgotado sem resposta fica «incerto» e não repete. Precisa de META_ADS_TOKEN_PARAUAPEBAS no servidor do agente (o mesmo token do rastreio no n8n) e do dataset da WABA (descobre sozinho, ou META_DATASET_ID_PARAUAPEBAS); sem eles não chama a Meta e avisa no log uma vez. Se o paciente também tem cartão no Kommo da unidade, o n8n pode mandar o mesmo evento: a Meta soma os dois.',
+    risco: 'manda-dado-externo',
+    temSeco: true,
+    exigeSecoAntes: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/chatwoot-capi.ts',
   },
 ] as const;
 
