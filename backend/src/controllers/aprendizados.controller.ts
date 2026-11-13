@@ -734,7 +734,10 @@ body.cw .sw.on{color:#0b5e3b}
       if(!r.unidades.length){ aviso('msgTitulo','Você não atende nenhuma caixa com a Sofia.',false); return; }
       SLUG=r.unidades[0].slug; API='/api/public/aprendizados/'+encodeURIComponent(SLUG); $('por').value=r.eu||'atendente';
       $('titulo').textContent='Testar a IA · '+r.unidades[0].nome;
-      await carregar(); aba('conversa');
+      await carregar();
+      // veio do 👎 do painel da assistente: o texto já vira a nova lição (a prévia continua obrigatória antes de salvar)
+      var rasc=null; try{ rasc=localStorage.getItem('testar-ia-rascunho'); localStorage.removeItem('testar-ia-rascunho'); }catch(e){}
+      if(rasc){ $('regra').value=rasc; contar(); aba('ensinar'); $('regra').focus(); } else aba('conversa');
     }catch(e){ aviso('msgTitulo',e.message,false); }
   }
   if(CW){
@@ -743,6 +746,12 @@ body.cw .sw.on{color:#0b5e3b}
       var d=ev.data; if(d && d.event==='funil-sessao'){ var novo=d.sessao && d.sessao.token ? d.sessao : null; var primeira=!S && novo; S=novo; if(primeira) entrarPeloChatwoot(); }
     });
     pedirSessao(); setTimeout(function(){ if(!S) pedirSessao(); },1500);
+    // a tela já aberta recebe o rascunho do 👎 (o painel grava no mesmo armazenamento do agente)
+    window.addEventListener('storage',function(ev){
+      if(ev.key!=='testar-ia-rascunho' || !ev.newValue || !SLUG) return;
+      try{ localStorage.removeItem('testar-ia-rascunho'); }catch(e){}
+      $('regra').value=ev.newValue; contar(); aba('ensinar'); $('regra').focus();
+    });
   }
   // o que vai ao servidor: respostas da Sofia curtas (1500 letras) e no máximo 14 mil letras no total, saindo as mais antigas
   function paraEnviar(){

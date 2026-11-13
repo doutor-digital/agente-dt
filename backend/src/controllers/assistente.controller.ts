@@ -460,3 +460,33 @@ export async function assistentePausaAcaoHandler(req: Request, res: Response): P
     res.status(502).json({ error: 'não consegui mudar a pausa agora' });
   }
 }
+
+// ── avaliar a última resposta da Sofia (👍/👎) ──────────────────────────────────────────────────────────────
+// 👍: só registra (log). 👎: registra e deixa NOTA PRIVADA na conversa (no nome de quem avaliou), para a equipe e para virar lição.
+export async function assistenteAvaliarHandler(req: Request, res: Response): Promise<void> {
+  const corpo = (req.body ?? {}) as { conversa?: unknown; nota?: unknown; texto?: unknown };
+  const nota = String(corpo.nota ?? '');
+  const texto = typeof corpo.texto === 'string' ? corpo.texto.trim().slice(0, 600) : '';
+  if (nota !== 'boa' && nota !== 'ruim') {
+    res.status(400).json({ error: 'avaliação inválida' });
+    return;
+  }
+  if (nota === 'ruim' && texto.length < 5) {
+    res.status(400).json({ error: 'escreva o que estava errado' });
+    return;
+  }
+  const r = await conversaDaAtendente(req, res, corpo.conversa);
+  if (!r) return;
+  logger.info({ conversa: r.conversa, nota, quem: r.a.id, tam: texto.length }, 'assistente: avaliação da Sofia');
+  if (nota === 'boa') {
+    res.json({ ok: true });
+    return;
+  }
+  try {
+    await r.porta.nota(r.conversa, `👎 Resposta da Sofia avaliada como ruim por ${r.a.nome}: ${texto}`);
+    res.json({ ok: true });
+  } catch (e) {
+    logger.warn({ err: String(e), conversa: r.conversa }, 'assistente: não consegui gravar a avaliação');
+    res.status(502).json({ error: 'não consegui registrar agora' });
+  }
+}

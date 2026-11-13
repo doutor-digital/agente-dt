@@ -137,6 +137,10 @@ const BOTAO_JS = String.raw`(function(){
     var d = ev.data; if (!d || typeof d.event !== 'string') return;
     if (d.event === 'assistente:pede-sessao') falar({ event: 'assistente-sessao', sessao: sessao(), conversa: conversa });
     else if (d.event === 'assistente:minimizar') minimizar();
+    else if (d.event === 'assistente:abrir-testar-ia') {
+      // abre a tela "Testar a IA" pelo próprio item do menu (o rascunho da lição já foi deixado no armazenamento do agente)
+      var it = document.querySelector('[data-ia-menu] a') || document.querySelector('[data-ia-menu]'); if (it) it.click();
+    }
     else if (d.event === 'assistente:inserir' && typeof d.texto === 'string' && d.texto.length <= 4000) {
       var r = inserir(d.texto, d.substituir === true);
       falar({ event: 'assistente-inserido', ok: r.ok, motivo: r.motivo || null });
@@ -182,6 +186,10 @@ button,textarea{font:inherit;color:inherit}
 .acao{padding:10px 12px;border-bottom:1px solid var(--linha);display:flex;gap:8px;align-items:center}
 .pausa{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--linha);font-size:12.5px}
 .pausa[hidden]{display:none}
+.aval{display:flex;align-items:center;gap:6px;padding:6px 12px;border-bottom:1px solid var(--linha);font-size:12.5px;color:var(--fraco)}
+.aval[hidden]{display:none}.aval span{flex:1}.aval .bt{min-height:26px;padding:2px 9px;font-size:13px}
+.ruim{padding:8px 12px;border-bottom:1px solid var(--linha);background:#fff}.ruim[hidden]{display:none}
+.ruim textarea{width:100%;height:64px;margin:6px 0}.ruim .bts{display:flex;gap:6px;flex-wrap:wrap}
 .pausa .ponto{width:8px;height:8px;border-radius:50%;background:#12855a;flex-shrink:0}
 .pausa.on .ponto{background:#b54708}
 .pausa span{flex:1;min-width:0;color:var(--txt)}
@@ -203,6 +211,8 @@ form{display:flex;gap:8px;padding:10px 12px;border-top:1px solid var(--linha);ba
 textarea{flex:1;resize:none;height:40px;max-height:96px;padding:8px 10px;border:1px solid var(--linha);border-radius:8px}
 </style></head><body>
 <div class="topo"><b>Assistente</b><small id="un"></small><button class="x" id="min" type="button" title="Minimizar" aria-label="Minimizar">–</button></div>
+<div class="aval" id="aval" hidden><span>A última resposta da Sofia foi:</span><button class="bt" id="avBoa" type="button" title="Boa resposta">👍 Boa</button><button class="bt" id="avRuim" type="button" title="Resposta ruim">👎 Ruim</button></div>
+<div class="ruim" id="ruim" hidden><b>O que estava errado?</b><textarea id="ruimTxt" maxlength="600" placeholder="Ex.: ela não respondeu se aceita plano; devia dizer que é particular e oferecer horários."></textarea><div class="bts"><button class="bt azul" id="ruimEnv" type="button">Enviar avaliação</button><button class="bt" id="ruimLicao" type="button">Transformar em lição</button><button class="bt" id="ruimCancela" type="button">Cancelar</button></div><small id="ruimEst"></small></div>
 <div class="pausa" id="pausa" hidden><i class="ponto" aria-hidden="true"></i><span id="pausaTxt">IA ativa nesta conversa</span><button class="bt" id="pausaBt" type="button">Pausar IA (eu assumo)</button></div>
 <div class="acao"><button class="bt azul" id="sug" type="button" disabled>O que eu respondo?</button><small id="dica">Abra uma conversa para eu sugerir uma resposta.</small></div>
 <div class="lista" id="lista" aria-live="polite"><div class="m sis">Eu não envio nada ao paciente: sugiro respostas e tiro dúvidas. Pausar ou reativar a IA é no botão acima. Pergunte, por exemplo: como marco perdido? qual o valor? tem horário amanhã de manhã?</div></div>
@@ -272,6 +282,29 @@ textarea{flex:1;resize:none;height:40px;max-height:96px;padding:8px 10px;border:
     fetch('/api/public/assistente/pausa?conversa=' + encodeURIComponent(c), { headers: cab() }).then(function(r){ return r.ok ? r.json() : null; })
       .then(function(j){ if (meu === lendoPausa && c === conversa) mostrarPausa(j); }).catch(function(){ if (meu === lendoPausa) pausaEl.hidden = true; });
   }
+  // ── avaliar a última resposta da Sofia (👍/👎); 👎 vira nota para a equipe e pode virar lição (com prévia, no Testar a IA) ──
+  var aval = $('aval'), ruim = $('ruim');
+  function mostrarAval(){ aval.hidden = !(S && conversa); if (aval.hidden) ruim.hidden = true; }
+  function avaliar(nota, texto){
+    return chamar('/api/public/assistente/avaliar', { conversa: conversa, nota: nota, texto: texto || '' });
+  }
+  $('avBoa').onclick = function(){
+    var b = this; b.disabled = true;
+    avaliar('boa').then(function(r){ b.textContent = r.ok ? '👍 Obrigada!' : '👍 Boa'; setTimeout(function(){ b.textContent = '👍 Boa'; b.disabled = false; }, 2500); });
+  };
+  $('avRuim').onclick = function(){ ruim.hidden = false; $('ruimEst').textContent = ''; $('ruimTxt').focus(); };
+  $('ruimCancela').onclick = function(){ ruim.hidden = true; };
+  $('ruimEnv').onclick = function(){
+    var t = $('ruimTxt').value.trim(); if (t.length < 5) { $('ruimEst').textContent = 'Escreva o que estava errado.'; return; }
+    var b = this; b.disabled = true;
+    avaliar('ruim', t).then(function(r){ $('ruimEst').textContent = r.ok ? 'Avaliação registrada na conversa (nota para a equipe). Para a Sofia mudar de verdade, use “Transformar em lição”.' : (r.j.error || 'Não consegui registrar agora.'); }).then(function(){ b.disabled = false; });
+  };
+  $('ruimLicao').onclick = function(){
+    var t = $('ruimTxt').value.trim(); if (t.length < 10) { $('ruimEst').textContent = 'Escreva como ela deveria ter respondido (pelo menos 10 letras).'; return; }
+    try { localStorage.setItem('testar-ia-rascunho', t.slice(0, 400)); } catch (e) {}
+    pai({ event: 'assistente:abrir-testar-ia' });
+    $('ruimEst').textContent = 'Abri o “Testar a IA” com a lição preenchida: veja a prévia e salve.';
+  };
   pausaBt.onclick = function(){
     if (!S || !conversa) return;
     pausaBt.disabled = true;
@@ -314,9 +347,9 @@ textarea{flex:1;resize:none;height:40px;max-height:96px;padding:8px 10px;border:
     if (d.event === 'assistente-sessao') {
       S = d.sessao && d.sessao.token ? d.sessao : null; if (typeof d.conversa === 'number' || d.conversa === null) conversa = d.conversa;
       if (!S && pedindo < 3) { pedindo++; setTimeout(pedirSessao, 1500); }
-      atualizar(); lerPausa();
+      atualizar(); lerPausa(); mostrarAval();
     } else if (d.event === 'assistente-conversa') {
-      conversa = typeof d.conversa === 'number' ? d.conversa : null; atualizar(); lerPausa();
+      conversa = typeof d.conversa === 'number' ? d.conversa : null; atualizar(); lerPausa(); mostrarAval(); ruim.hidden = true; $('ruimTxt').value = '';
     } else if (d.event === 'assistente-inserido' && pendente) {
       var p = pendente; pendente = null;
       if (d.ok) { p.estado.textContent = 'Está no campo de resposta. Revise e envie você.'; return; }
