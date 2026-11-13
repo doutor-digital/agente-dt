@@ -291,7 +291,7 @@ test('perguntar sobre horário: usa a agenda REAL (porta falsa) e diz de onde ve
 
 test('perguntar: sem conversa usa a única unidade ligada entre as caixas dela; histórico começa pela pessoa', async () => {
   let falas: any[] = [];
-  const { porta } = leituraFalsa({ caixas: [1, 2, 3] });
+  const { porta } = leituraFalsa({ caixas: [1, 2, 99] });
   const { h } = montar({ leitura: porta, rodar: async (_u: Unit, m: any[]) => { falas = m; return ok('R$ 350.'); } });
   const r = resp();
   await h.perguntar(pedido({ pergunta: 'qual o valor?', historico: [{ role: 'assistant', content: 'solta' }, { role: 'user', content: 'oi' }, { role: 'assistant', content: 'olá' }] }), asRes(r));
@@ -299,7 +299,7 @@ test('perguntar: sem conversa usa a única unidade ligada entre as caixas dela; 
   assert.equal(r.corpo.resposta, 'R$ 350.');
   assert.deepEqual(falas.map((f) => f.role), ['user', 'assistant', 'user']);
   // sem nenhuma caixa ligada para ela
-  const { porta: nada } = leituraFalsa({ caixas: [1, 3] });
+  const { porta: nada } = leituraFalsa({ caixas: [1, 99] });
   const { h: h2, modelo } = montar({ leitura: nada });
   const r2 = resp();
   await h2.perguntar(pedido({ pergunta: 'qual o valor?' }), asRes(r2));

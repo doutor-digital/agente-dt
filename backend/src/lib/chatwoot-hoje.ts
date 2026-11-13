@@ -17,7 +17,7 @@ const UTC_MENOS_3 = 3 * 3600_000;
 const ETAPAS_QUALIFICACAO = new Set(['Novo lead', 'Sofia qualifica', 'Esperando humano']);
 export const MAX_FACA_AGORA = 8;
 /** caixa do Chatwoot → meta de agendamentos por dia (decisão 30 do João, 12/11/2026: Parauapebas = 5). */
-export const META_AGENDAMENTOS_POR_CAIXA: Readonly<Record<number, number>> = { 2: 5 };
+export const META_AGENDAMENTOS_POR_CAIXA: Readonly<Record<number, number>> = { 2: 5, 3: 5 };
 
 export interface ItemDoDia {
   id: number;
