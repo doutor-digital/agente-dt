@@ -153,6 +153,9 @@ const temFunilEEtapa = (l: LeadLido): l is LeadLido & LeadNoKommo => typeof l.pi
 export function conferenciaPorRegraDeCliente(unit: Pick<Unit, 'slug'>, regra: RegraDeCliente, kommo: PortaDoKommo): (p: PessoaParaConferir) => Promise<SituacaoNaFranquia> {
   return async (p) => {
     if (!p.leadId) return 'indisponivel'; // sem cartão não há o que olhar
+    const chave = chaveDaPessoa(p.telefone);
+    const final8 = finalDoTelefone(p.telefone);
+    if (!final8) return 'indisponivel'; // sem 8 dígitos não há como procurar o mesmo telefone em outro contato
     try {
       // 204/vazio = o cartão não existe mais. 404 NÃO: pode ser subdomínio ou integração errada, e aí descartaria a onda toda;
       // erro (404 inclusive) lança, cai no catch e vira `indisponivel` (adia, tenta de novo).
@@ -172,9 +175,6 @@ export function conferenciaPorRegraDeCliente(unit: Pick<Unit, 'slug'>, regra: Re
       }
       // Os cartões de OUTROS contatos com o mesmo telefone (contato duplicado, sem etiqueta): a busca do Kommo é difusa, então cada
       // contato devolvido é conferido pelo número. Busca cheia (teto) não prova nada; erro lança e vira `indisponivel`.
-      const chave = chaveDaPessoa(p.telefone);
-      const final8 = finalDoTelefone(p.telefone);
-      if (!final8) return 'indisponivel';
       const achados = await kommo.contatosPorTelefone(final8);
       if (achados.length >= TETO_DA_BUSCA_POR_TELEFONE) return 'indisponivel';
       for (const c of achados) {
