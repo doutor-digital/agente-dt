@@ -335,9 +335,10 @@
         aplicarPausa(leadId, null);
         var ate = j.liberadaAte ? new Date(j.liberadaAte) : null;
         var hora = ate ? (ate.getHours() < 10 ? '0' : '') + ate.getHours() + ':' + (ate.getMinutes() < 10 ? '0' : '') + ate.getMinutes() : null;
-        return j.turno === 'iniciado'
+        var nota = j.nota ? ' A conversa ficou salva como nota no cartão do Kommo.' : '';
+        return (j.turno === 'iniciado'
           ? '✅ Passado para a Sofia. Ela está respondendo agora pelo Kommo' + (hora ? ' (pode responder este paciente até ' + hora + ')' : '') + '.'
-          : '✅ Passado para a Sofia. A última mensagem é sua: ela responde quando o paciente escrever.';
+          : '✅ Passado para a Sofia. A última mensagem é sua: ela responde quando o paciente escrever.') + nota;
       });
     },
     semNome: function () {
