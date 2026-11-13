@@ -2,7 +2,7 @@
  * Funil de etapas encaixado no Chatwoot (Dashboard App) — ver `lib/funil-chatwoot.ts`.
  *
  * Página `GET /funil` (item "Funil" do menu e aba "Funil" da conversa; visual no molde do funil do Kommo) e as rotas dela:
- *   GET  /api/public/funil/quadro?caixa=<id>   colunas por etapa (até 200 conversas), soma em R$, situação da tarefa
+ *   GET  /api/public/funil/quadro?caixa=<id>   colunas por etapa (até 200 conversas vivas + arquivo com etapa, até 1.000), soma em R$, situação da tarefa
  *   GET  /api/public/funil/caixas              caixas de entrada (o filtro do topo)
  *   GET  /api/public/funil/conversa/:id        a ficha do lead (campos, contato, histórico, tarefas)
  *   POST /api/public/funil/mover               { conversaId, etapa } — grava a etapa e deixa nota interna
@@ -288,14 +288,18 @@ async function lerCaixas(a: Acesso, caixa: number, maxPaginas: number, soDeUnida
   let cortou = false;
   for (const id of ids) {
     // `lote` páginas por vez (as telas de gestão pedem 4: as páginas não dependem umas das outras e 600 conversas em fila levariam
-    // dezenas de segundos); o quadro e o Hoje seguem uma por vez, como sempre
+    // dezenas de segundos); o quadro e o Hoje também leem 4 por vez desde a unificação do histórico
     for (let p = 1; p <= maxPaginas; p += lote) {
       const numeros = Array.from({ length: Math.min(lote, maxPaginas - p + 1) }, (_, i) => p + i);
       const lidas = (await Promise.all(numeros.map((n) => cw(a, 'GET', 'conversations', { query: { status: 'all', assignee_type: 'all', inbox_id: String(id), page: String(n) } })))) as any[];
       let acabou = false;
       for (const pg of lidas) {
         // o fim da caixa se mede pela página CRUA (25 por página); o arquivo sai depois
-        if ((pg?.data?.payload?.length ?? 0) < 25) acabou = true;
+        const crua: any[] = Array.isArray((pg as any)?.data?.payload) ? (pg as any).data.payload : [];
+        if (crua.length < 25) acabou = true;
+        // a lista vem pela última atividade (mais nova primeiro) e o arquivo é sempre mais velho que as conversas vivas: página
+        // cheia só de arquivo = dali para trás é tudo arquivo — quem não mostra arquivo para de ler (sem «cortou» falso)
+        if (arquivo === 'fora' && crua.length > 0 && crua.every((c) => ehArquivo(c))) acabou = true;
         paginas.push(semArquivo(pg, arquivo));
       }
       if (acabou) break;

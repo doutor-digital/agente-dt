@@ -436,7 +436,7 @@ export async function cicloDoCapi(deps: DepsDoCapi, caixa: number, slug: string,
         // 1) a ENTRADA: a 1ª vez que o worker viu a conversa neste estado
         let visto = minhas.get(chaveDe(`capi-visto:${evento}`, 'v1'));
         if (!visto) {
-          const linha: LinhaCapi = { conversationId: c.id, regra: `capi-visto:${evento}`, chave: 'v1', modo: primeiraVez ? 'inicial' : 'novo', texto: '', criadoEm: agora };
+          const linha: LinhaCapi = { conversationId: c.id, regra: `capi-visto:${evento}`, chave: 'v1', modo: primeiraVez || c.etiquetas.includes('historico') ? 'inicial' : 'novo', texto: '', criadoEm: agora };
           if (!(await armazem.registrar({ caixa, ...linha }))) continue; // outra cópia do servidor acabou de ver
           minhas.set(chaveDe(linha.regra, linha.chave), linha);
           visto = linha;

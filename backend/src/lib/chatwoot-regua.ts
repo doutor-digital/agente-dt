@@ -47,7 +47,7 @@ export const CAIXAS_HISTORICO: ReadonlySet<number> = new Set([4]);
  * passam para a caixa do WhatsApp oficial com a etiqueta `historico` e a data real da última mensagem. Enquanto ninguém mexe
  * nelas, são ARQUIVO: ficam fora da régua, da agenda, do rastreio de conversões, do Hoje e das telas de gestão; no funil e em
  * Oportunidades só entram se tiverem etapa. Quando o paciente escreve (ou alguém responde), a atividade passa do corte e ela
- * volta a ser uma conversa como qualquer outra — o histórico fica em cima, no mesmo fio.
+ * volta a ser uma conversa como qualquer outra (na 1ª vez que a régua a vê, o estado antigo é ponto de partida, não disparo).
  */
 export const ETIQUETA_HISTORICO = 'historico';
 /** 14/11/2026 00:00 em Belém: toda conversa do histórico tem a última mensagem antes disso. */
@@ -309,7 +309,10 @@ export function atualizarVistos(
   partida: { primeiraVez: boolean; desde: Date | null },
 ): { vistos: Vistos; mudancas: Mudanca[] } {
   const conhecida = vistos.has(CAMPO_VISTO_CONVERSA);
-  const inicialNovo = conhecida ? false : partida.primeiraVez || (partida.desde !== null && c.criadaEm.getTime() < partida.desde.getTime());
+  // conversa do HISTÓRICO unificado que acordou: o que ela já mostra (etapa do Kommo, campos antigos) é ponto de partida, nunca
+  // «entrou agora» — senão a régua mandaria a sequência de Perdido, o parabéns da alta etc. por um estado de meses atrás
+  const doHistorico = c.etiquetas.includes(ETIQUETA_HISTORICO);
+  const inicialNovo = conhecida ? false : partida.primeiraVez || doHistorico || (partida.desde !== null && c.criadaEm.getTime() < partida.desde.getTime());
   const obs = camposObservados(c);
   const novo = new Map(vistos);
   const mudancas: Mudanca[] = [];
