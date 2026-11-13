@@ -248,6 +248,63 @@ const BOTAO_JS = String.raw`(function(){
     });
   }
 
+  // ── atalhos com NOME na caixa de resposta (João, 13/11/2026: "pras meninas saberem e clicarem, sem quebrar o front") ──
+  // Os dois só acionam o que o Chatwoot já tem: «⚡ Mensagens prontas» digita "/" no editor (abre a lista nativa de respostas
+  // prontas, com busca e troca das variáveis {{contact.first_name}}); «Modelos do WhatsApp» clica no botão nativo de modelos e
+  // só aparece quando ele existe. Se o Chatwoot mudar e a barra de ícones (.left-wrap) sumir, os atalhos simplesmente não aparecem.
+  function estiloAtalhos(){
+    if (document.querySelector('style[data-dd-atalhos-estilo]')) return;
+    var st = document.createElement('style'); st.setAttribute('data-dd-atalhos-estilo', '1');
+    st.textContent = '[data-dd-atalhos]{display:inline-flex;align-items:center;gap:6px;margin-left:4px;flex-wrap:nowrap}'
+      + '[data-dd-atalhos] button{display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 10px;border-radius:8px;border:1px solid rgba(127,127,127,.35);background:transparent;color:inherit;font:500 12.5px/1 inherit;cursor:pointer;white-space:nowrap}'
+      + '[data-dd-atalhos] button:hover{background:rgba(127,127,127,.12)}'
+      + '[data-dd-atalhos] button[hidden]{display:none!important}'
+      + '@media (max-width:900px){[data-dd-atalhos] .r{display:none}[data-dd-atalhos] button{padding:0 7px}}';
+    document.head.appendChild(st);
+  }
+  function editorDaCaixa(de){
+    var caixa = de.closest('.reply-box') || document;
+    return caixa.querySelector('.ProseMirror[contenteditable="true"]') || document.querySelector('.ProseMirror[contenteditable="true"]');
+  }
+  function abrirProntas(de){
+    var ed = editorDaCaixa(de); if (!ed) return;
+    ed.focus();
+    var sel = window.getSelection(), r = document.createRange();
+    r.selectNodeContents(ed); r.collapse(false); sel.removeAllRanges(); sel.addRange(r);
+    // "/" no começo (ou depois de um espaço) é o atalho do próprio Chatwoot para as respostas prontas
+    document.execCommand('insertText', false, (ed.innerText || '').trim() ? ' /' : '/');
+  }
+  function botaoAtalho(icone, rotulo, titulo){
+    var b = document.createElement('button'); b.type = 'button'; b.title = titulo; b.setAttribute('aria-label', rotulo);
+    var i = document.createElement('span'); i.textContent = icone; i.setAttribute('aria-hidden', 'true');
+    var t = document.createElement('span'); t.className = 'r'; t.textContent = rotulo;
+    b.appendChild(i); b.appendChild(t); return b;
+  }
+  function marcarCaixaDeResposta(){
+    Array.prototype.forEach.call(document.querySelectorAll('.left-wrap'), function(wrap){
+      if (!wrap.querySelector('.i-ph-smiley-sticker, .i-ph-paperclip')) return;
+      var nativo = null;
+      Array.prototype.forEach.call(wrap.querySelectorAll('button'), function(b){ if (!nativo && b.querySelector('.i-ph-whatsapp-logo')) nativo = b; });
+      var box = wrap.querySelector('[data-dd-atalhos]');
+      if (!box) {
+        estiloAtalhos();
+        box = document.createElement('span'); box.setAttribute('data-dd-atalhos', '1');
+        var pr = botaoAtalho('⚡', 'Mensagens prontas', 'Abre as respostas prontas da clínica (o mesmo que digitar /)');
+        var mo = botaoAtalho('📋', 'Modelos do WhatsApp', 'Modelos aprovados pela Meta — para quando o paciente não fala há mais de 24 h');
+        mo.setAttribute('data-dd-modelos', '1');
+        pr.onclick = function(){ abrirProntas(wrap); };
+        mo.onclick = function(){
+          var n = null;
+          Array.prototype.forEach.call(wrap.querySelectorAll('button'), function(b){ if (!n && b.querySelector('.i-ph-whatsapp-logo')) n = b; });
+          if (n) n.click();
+        };
+        box.appendChild(pr); box.appendChild(mo); wrap.appendChild(box);
+      }
+      // em «Mensagem Privada» o Chatwoot tira o botão de modelos: o nosso some junto
+      var m = box.querySelector('[data-dd-modelos]'); if (m) m.hidden = !nativo;
+    });
+  }
+
   window.addEventListener('message', function(ev){
     if (ev.origin !== AGENTE || !fr || ev.source !== fr.contentWindow) return;
     var d = ev.data; if (!d || typeof d.event !== 'string') return;
@@ -271,6 +328,7 @@ const BOTAO_JS = String.raw`(function(){
     if (c !== conversa) { conversa = c; falar({ event: 'assistente-conversa', conversa: c }); }
     posicao();
     try { marcarBaloes(); } catch (e) {}
+    try { marcarCaixaDeResposta(); } catch (e) {}
   }, 1000);
 })();`;
 

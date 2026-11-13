@@ -63,3 +63,22 @@ test('o botão do Chatwoot (menu.js) parseia e põe o 👍/👎 só nos balões 
   assert.ok(js.includes('[class*="grid-area:bubble"]'));
   assert.ok(js.includes("mensagem: Number(id)"));
 });
+
+test('atalhos na caixa de resposta: «⚡ Mensagens prontas» digita "/" (lista nativa) e «Modelos do WhatsApp» só clica no botão nativo', () => {
+  const js = assistenteJs().split('__AGENTE__').join(JSON.stringify('https://agente.exemplo.test'));
+  assert.doesNotThrow(() => new Function(js));
+  const ini = js.indexOf('function estiloAtalhos');
+  const fim = js.indexOf("window.addEventListener('message'", ini);
+  assert.ok(ini > 0 && fim > ini, 'bloco dos atalhos');
+  const bloco = js.slice(ini, fim);
+  // só aciona o que é do Chatwoot: o "/" das respostas prontas e o botão nativo de modelos (ícone do WhatsApp)
+  assert.ok(bloco.includes("document.execCommand('insertText', false, (ed.innerText || '').trim() ? ' /' : '/')"));
+  assert.ok(bloco.includes("b.querySelector('.i-ph-whatsapp-logo')") && bloco.includes('n.click()'));
+  // sem a barra nativa não põe nada; sem o botão nativo de modelos, o nosso fica escondido
+  assert.ok(bloco.includes("document.querySelectorAll('.left-wrap')") && bloco.includes('m.hidden = !nativo'));
+  // texto só por textContent, e um bloco por barra (não duplica a cada segundo)
+  assert.equal((bloco.match(/innerHTML/g) ?? []).length, 0);
+  assert.ok(bloco.includes("wrap.querySelector('[data-dd-atalhos]')"));
+  // roda no mesmo relógio de 1 s do botão, protegido por try/catch
+  assert.ok(js.includes('try { marcarCaixaDeResposta(); } catch (e) {}'));
+});
