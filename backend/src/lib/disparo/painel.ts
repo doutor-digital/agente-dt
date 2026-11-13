@@ -259,7 +259,7 @@ ${tabelaSaidas}
 <li>Teto desta unidade: ${f.tetoPorHora} por hora e ${f.tetoPorDia} por 24 horas.</li>
 <li>Para a unidade se mais de ${f.maxSair} pessoas responderem SAIR.</li>
 <li>Pausa a onda se ${f.falhasSeguidas} envios seguidos falharem na Meta.</li>
-<li>Reconfere a franquia (consulta marcada, tratamento aberto) e o SAIR na hora de cada envio. Nunca duas vezes para a mesma pessoa na campanha.</li></ul></section>
+<li>Reconfere a franquia (consulta marcada, tratamento aberto) — ou, em unidade sem franquia, se o cartão já virou cliente no Kommo — e o SAIR na hora de cada envio. Nunca duas vezes para a mesma pessoa na campanha.</li></ul></section>
 ${acao}
 <script>
 const id=${JSON.stringify(onda.id)},total=${JSON.stringify(onda.total)},impressao=${JSON.stringify(onda.impressao)};

@@ -16,6 +16,7 @@ import { conferirModeloNaMeta, definicaoParaAUnidade, impressaoDaOnda, podeAprov
 import { problemaNoModelo, triar } from './regras.js';
 import { freiosDoAmbiente } from './freios.js';
 import { contarSairam } from './saidas.js';
+import { unidadeConfere } from './conferencia.js';
 import { recusaDaRetomada } from './retomada.js';
 
 export type ResultadoDeAcao<T> = { ok: true; dados: T } | { ok: false; status: number; erro: string };
@@ -45,7 +46,7 @@ export async function abrirOnda(args: { campanha: string; unidade: string; etiqu
   const unit = await prisma.unit.findUnique({ where: { slug: args.unidade } });
   if (!unit || !unit.isActive) return falha(404, 'unidade não encontrada');
   if (!credenciaisDaUnidade(unit)) return falha(422, 'a unidade não tem phone number id e token da Meta cadastrados');
-  if (!unit.spineToken) return falha(422, 'a unidade não tem a franquia ligada: sem ela não dá para tirar quem tem consulta ou tratamento');
+  if (!unidadeConfere(unit)) return falha(422, 'a unidade não tem a franquia ligada nem a regra de cliente (DISPARO_REGRA_CLIENTE): sem uma delas não dá para tirar quem já é paciente ou cliente');
   if (!unit.kommoSubdomain || !unit.kommoAccessToken) return falha(422, 'a unidade não tem Kommo configurado');
 
   const def = definicaoParaAUnidade(campanha, unit.slug);

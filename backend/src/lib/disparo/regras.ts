@@ -21,6 +21,7 @@ export type MotivoDeExclusao =
   | 'pediu-sair'
   | 'consulta-futura'
   | 'tratamento-aberto'
+  | 'ja-cliente'
   | 'franquia-indisponivel';
 
 /** O texto de oferta que a Sofia lê: preço, prazo, condições. Curto de propósito: vira bloco do prompt em toda resposta de quem recebeu o disparo. */
@@ -46,7 +47,8 @@ export const ROTULO_DA_EXCLUSAO: Record<MotivoDeExclusao, string> = {
   'pediu-sair': 'pediu para sair (SAIR)',
   'consulta-futura': 'tem consulta marcada na franquia',
   'tratamento-aberto': 'tem tratamento aberto na franquia',
-  'franquia-indisponivel': 'a franquia não respondeu (na dúvida, não manda)',
+  'ja-cliente': 'já é cliente (está em funil ou etapa de cliente no Kommo)',
+  'franquia-indisponivel': 'a franquia (ou o cartão do Kommo, em unidade sem franquia) não respondeu (na dúvida, não manda)',
 };
 
 /**
@@ -124,8 +126,8 @@ export interface Elegivel {
   chave: string;
 }
 
-/** O que a franquia diz de uma pessoa. */
-export type SituacaoNaFranquia = 'livre' | 'consulta-futura' | 'tratamento-aberto' | 'indisponivel';
+/** O que a franquia diz de uma pessoa (em unidade sem franquia, o cartão do Kommo: `ja-cliente`). */
+export type SituacaoNaFranquia = 'livre' | 'consulta-futura' | 'tratamento-aberto' | 'ja-cliente' | 'indisponivel';
 
 export interface ContextoDoPublico {
   /** chaves já em qualquer onda desta campanha nesta unidade */
@@ -186,6 +188,7 @@ export async function triar(candidatos: Candidato[], ctx: ContextoDoPublico): Pr
     const situacao = await ctx.franquia(e);
     if (situacao === 'consulta-futura') nega('consulta-futura');
     else if (situacao === 'tratamento-aberto') nega('tratamento-aberto');
+    else if (situacao === 'ja-cliente') nega('ja-cliente');
     else if (situacao === 'indisponivel') nega('franquia-indisponivel');
     else elegiveis.push(e);
   }

@@ -171,8 +171,8 @@ async function aindaPode(porto: Porto, d: Destino): Promise<Veredito> {
   if (await porto.pediuSair(d)) return { tipo: 'barrou', estado: 'saiu', motivo: 'pediu para sair (SAIR) antes do envio' };
   const f = await porto.franquia(d);
   if (f === 'livre') return { tipo: 'pode' };
-  if (f === 'indisponivel') return { tipo: 'adiar', motivo: 'a franquia não respondeu' };
-  const motivo = f === 'consulta-futura' ? 'consulta marcada na franquia' : 'tratamento aberto na franquia';
+  if (f === 'indisponivel') return { tipo: 'adiar', motivo: 'a franquia não respondeu (ou, em unidade sem franquia, o Kommo)' };
+  const motivo = f === 'consulta-futura' ? 'consulta marcada na franquia' : f === 'ja-cliente' ? 'já é cliente (funil ou etapa de cliente no Kommo)' : 'tratamento aberto na franquia';
   return { tipo: 'barrou', estado: 'descartado', motivo: `${motivo} (conferido na hora do envio)` };
 }
 

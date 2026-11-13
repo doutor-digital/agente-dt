@@ -109,6 +109,15 @@ test('SECO: aplica as mesmas regras — consulta futura e SAIR saem da lista e n
   assert.deepEqual(t.chamadas.enviar, []);
 });
 
+test('SECO: "ja-cliente" (unidade sem franquia, regra do Kommo) é descartado na reconferência com motivo escrito; nada é enviado', async () => {
+  const t = montar({ modo: 'seco', quantos: 2, franquia: (d) => (d.id === 'd2' ? 'ja-cliente' : 'livre') });
+  const r = await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA]);
+  assert.deepEqual([r.receberia, r.descartados], [1, 1]);
+  assert.equal(t.estados.get('d2')!.estado, 'descartado');
+  assert.match(t.estados.get('d2')!.motivo ?? '', /já é cliente/);
+  assert.deepEqual(t.chamadas.enviar, []);
+});
+
 test('SECO: obedece a janela e os tetos (é assim que o seco prova os freios)', async () => {
   const noite = montar({ modo: 'seco', agora: MADRUGADA });
   const r = await rodarUnidade(noite.porto, sem_pausa, UNIDADE, [ONDA]);

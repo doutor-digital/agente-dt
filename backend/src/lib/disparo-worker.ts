@@ -14,6 +14,7 @@ import { avisosDoAmbiente, freiosDoAmbiente } from './disparo/freios.js';
 import { rodarUnidade, rodadasSemAndar, type OndaNoLote } from './disparo/lote.js';
 import { filtroDeMontagemMorta } from './disparo/montagem.js';
 import { avisosDaListaDeTeste, portoReal } from './disparo/porto.js';
+import { avisosDaRegraDeCliente } from './disparo/conferencia.js';
 import { alertaSemAndar } from './disparo/alerta.js';
 import { enviarTelegram } from './telegram.js';
 import { definicaoDaOnda } from './disparo/onda.js';
@@ -157,7 +158,7 @@ export function startDisparoWorker(): void {
   if (timer) return;
   timer = setInterval(() => void talvezRodar(), PASSO_MS);
   logger.info({ passoMs: PASSO_MS, freios: freiosDoAmbiente() }, 'disparo de campanha: worker ligado (cada unidade nasce em modo seco)');
-  for (const aviso of [...avisosDoAmbiente(), ...avisosDaListaDeTeste()]) logger.warn(aviso);
+  for (const aviso of [...avisosDoAmbiente(), ...avisosDaListaDeTeste(), ...avisosDaRegraDeCliente()]) logger.warn(aviso);
 }
 
 export function stopDisparoWorker(): void {

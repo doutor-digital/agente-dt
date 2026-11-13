@@ -9,7 +9,7 @@ import { enviarTelegram } from '../telegram.js';
 import { env } from '../env.js';
 import { createKommoClient } from '../../services/kommo.service.js';
 import { credenciaisDaUnidade, enviarTemplate } from '../whatsapp-meta.js';
-import { conferenciaDaFranquia } from './franquia.js';
+import { conferenciaDaUnidade } from './conferencia.js';
 import { leadsQuePediramSair } from './publico.js';
 import { contarSairam } from './saidas.js';
 import { telefoneWhatsapp } from './regras.js';
@@ -57,7 +57,7 @@ const paraDestino = (d: { id: string; ondaId: string; campanhaId: string; unitId
 });
 
 export function portoReal(unidades: ReadonlyMap<string, Unit>, avisarJoao: (texto: string) => Promise<unknown> = (t) => enviarTelegram(t)): Porto {
-  const franquias = new Map<string, ReturnType<typeof conferenciaDaFranquia>>();
+  const franquias = new Map<string, ReturnType<typeof conferenciaDaUnidade>>();
   const mesmoNumero = new Map<string, Promise<string[]>>();
   const unidadesDoMesmoNumero = (unitId: string): Promise<string[]> => {
     let p = mesmoNumero.get(unitId);
@@ -182,7 +182,7 @@ export function portoReal(unidades: ReadonlyMap<string, Unit>, avisarJoao: (text
     franquia: (d) => {
       const u = unidade(d.unitId);
       let conferir = franquias.get(u.id);
-      if (!conferir) franquias.set(u.id, (conferir = conferenciaDaFranquia(u)));
+      if (!conferir) franquias.set(u.id, (conferir = conferenciaDaUnidade(u)));
       return conferir({ leadId: d.kommoLeadId, nomeCompleto: d.nomeCompleto, telefone: d.telefone });
     },
 
