@@ -327,7 +327,11 @@
         if (!lido || !lido.aberta) throw new Error('Abra a conversa no WhatsApp Web.');
         if (lido.tipo === 'grupo') throw new Error('Grupo não passa para a Sofia.');
         if (chaveAntes && lido.chave && lido.chave !== chaveAntes) throw new Error('A conversa mudou na tela. Abra de novo a do paciente e tente outra vez.');
-        if (!lido.falas || !lido.falas.length) throw new Error('Não achei mensagens de texto nesta conversa.');
+        if (!lido.falas || !lido.falas.length) {
+          var d = lido.diag || {};
+          throw new Error('Não achei mensagens de texto nesta conversa. Role a conversa um pouco para cima e tente de novo. (tela: '
+            + (d.dataId || 0) + ' msg, ' + (d.blocos || 0) + ' blocos, ' + (d.bolhas || 0) + ' bolhas, ' + (d.selecionavel || 0) + ' textos — mande isto ao suporte)');
+        }
         return chamar('POST', '/ponte/passar-sofia', { leadId: leadId, falas: lido.falas, por: quem() });
       }, function () {
         throw new Error('Não consegui ler a conversa. Recarregue o WhatsApp Web (F5) e tente de novo.');
@@ -335,9 +339,10 @@
         aplicarPausa(leadId, null);
         var ate = j.liberadaAte ? new Date(j.liberadaAte) : null;
         var hora = ate ? (ate.getHours() < 10 ? '0' : '') + ate.getHours() + ':' + (ate.getMinutes() < 10 ? '0' : '') + ate.getMinutes() : null;
-        return j.turno === 'iniciado'
+        var nota = j.nota ? ' A conversa ficou salva como nota no cartão do Kommo.' : '';
+        return (j.turno === 'iniciado'
           ? '✅ Passado para a Sofia. Ela está respondendo agora pelo Kommo' + (hora ? ' (pode responder este paciente até ' + hora + ')' : '') + '.'
-          : '✅ Passado para a Sofia. A última mensagem é sua: ela responde quando o paciente escrever.';
+          : '✅ Passado para a Sofia. A última mensagem é sua: ela responde quando o paciente escrever.') + nota;
       });
     },
     semNome: function () {

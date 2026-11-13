@@ -13,7 +13,8 @@ import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { fusoDaUnidade } from './fuso.js';
-import { MARCA_DO_HISTORICO, MAX_TEXTO_DA_FALA, juntarNaMemoria, montarHistorico, type FalaDaTela } from './ponte-passar-sofia.js';
+import { MARCA_DO_HISTORICO, MAX_TEXTO_DA_FALA, juntarNaMemoria, montarHistorico, notaDoHistorico, type FalaDaTela } from './ponte-passar-sofia.js';
+import { createKommoClient } from '../services/kommo.service.js';
 
 export const URL_PADRAO = 'https://evolution.doutordigitalconsultoria.com';
 export const MAX_FALAS_DO_HISTORICO = 40;
@@ -157,6 +158,10 @@ export async function historicoDoWhatsappNaMemoria(unit: Unit, leadId: number, d
       create: { unitId: unit.id, leadId: String(leadId), summary },
       update: { summary },
     });
+    // e vira NOTA no cartão: o Kommo (Lite) não tem esse histórico e a equipe também precisa ler
+    await createKommoClient(unit)
+      .addLeadNote(leadId, notaDoHistorico(falas, quandoLocal(agora, tz), null, 'whatsapp'))
+      .catch((err) => logger.warn({ err: String(err), unit: unit.slug, leadId }, 'histórico do WhatsApp: não consegui pôr a nota no cartão (segue)'));
     logger.info({ unit: unit.slug, leadId, falas: falas.length }, 'histórico do WhatsApp (Evolution) guardado na memória do lead');
     return falas.length;
   } catch (err) {

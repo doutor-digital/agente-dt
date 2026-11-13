@@ -158,23 +158,59 @@
    * `{ de: 'paciente'|'equipe', texto, hora }`. Só quando a atendente clica; vai para o servidor da Doutor Digital (o
    * Kommo Lite não tem o histórico antigo). Foto/áudio sem legenda ficam de fora. Grupo: lista vazia.
    */
+  /**
+   * De que lado é a mensagem. Na ordem: o `data-id` (true_ = enviada), as classes `message-out`/`message-in` do
+   * WhatsApp, e por fim o nome do autor no pre-texto ("[10:32, 13/11/2026] Maria: ") comparado com o da conversa.
+   */
+  function ladoDoBloco(bloco, nomeDaConversa) {
+    var item = bloco.closest('[data-id]');
+    var id = item ? lerDataId(item.getAttribute('data-id')) : null;
+    if (id) return id.deMim ? 'equipe' : 'paciente';
+    if (bloco.closest('.message-out')) return 'equipe';
+    if (bloco.closest('.message-in')) return 'paciente';
+    var m = /\]\s*([^:]+):\s*$/.exec(bloco.getAttribute(S.ATRIBUTO_PRE_TEXTO) || '');
+    if (!m) return null;
+    return nomeDaConversa && m[1].trim().toLowerCase() === String(nomeDaConversa).trim().toLowerCase() ? 'paciente' : 'equipe';
+  }
+
+  /**
+   * "🤖 Passar para a Sofia" (12/11/2026): as falas de TEXTO da conversa aberta, dos dois lados, na ordem da tela —
+   * `{ de: 'paciente'|'equipe', texto, hora }`. Só quando a atendente clica; vai para o servidor da Doutor Digital (o
+   * Kommo Lite não tem o histórico antigo). Foto/áudio sem legenda ficam de fora. Grupo: lista vazia.
+   * 13/11: lê pelo bloco copiável (`data-pre-plain-text`) e, sem ele, pelas bolhas `message-in`/`message-out`;
+   * devolve `diag` (o que achou na tela) para o painel explicar quando não acha nada.
+   */
   function lerFalas(doc, maxFalas) {
     var max = maxFalas || 60;
     var c = lerConversa(doc, 1);
     if (!c.aberta) return { aberta: false };
     var painel = doc.querySelector(S.PAINEL_CONVERSA);
-    var elementos = painel ? painel.querySelectorAll(S.MENSAGEM) : [];
+    var blocos = painel ? painel.querySelectorAll(S.BLOCO_TEXTO) : [];
     var falas = [];
-    for (var i = 0; i < elementos.length; i++) {
-      var id = lerDataId(elementos[i].getAttribute('data-id'));
-      if (!id) continue;
-      var bloco = elementos[i].matches(S.BLOCO_TEXTO) ? elementos[i] : elementos[i].querySelector(S.BLOCO_TEXTO);
-      if (!bloco) continue;
-      var texto = textoDaMensagem(bloco);
-      if (!texto) continue;
-      falas.push({ de: id.deMim ? 'equipe' : 'paciente', texto: texto, hora: quandoDoPreTexto(bloco.getAttribute(S.ATRIBUTO_PRE_TEXTO)) });
+    for (var i = 0; i < blocos.length; i++) {
+      var lado = ladoDoBloco(blocos[i], c.nome);
+      var texto = textoDaMensagem(blocos[i]);
+      if (!lado || !texto) continue;
+      falas.push({ de: lado, texto: texto, hora: quandoDoPreTexto(blocos[i].getAttribute(S.ATRIBUTO_PRE_TEXTO)) });
     }
-    return { aberta: true, tipo: c.tipo, chave: c.chave, falas: c.tipo === 'grupo' ? [] : falas.slice(-max) };
+    var bolhas = painel ? painel.querySelectorAll('.message-in, .message-out') : [];
+    if (!falas.length) {
+      for (var k = 0; k < bolhas.length; k++) {
+        var t = '';
+        for (var n = 0; n < S.TEXTO_DA_MENSAGEM.length && !t; n++) {
+          var alvo = bolhas[k].querySelector(S.TEXTO_DA_MENSAGEM[n]);
+          if (alvo) t = textoDoElemento(alvo);
+        }
+        if (t) falas.push({ de: bolhas[k].classList.contains('message-out') ? 'equipe' : 'paciente', texto: t, hora: null });
+      }
+    }
+    var diag = {
+      dataId: painel ? painel.querySelectorAll(S.MENSAGEM).length : 0,
+      blocos: blocos.length,
+      bolhas: bolhas.length,
+      selecionavel: painel ? painel.querySelectorAll('.selectable-text').length : 0,
+    };
+    return { aberta: true, tipo: c.tipo, chave: c.chave, falas: c.tipo === 'grupo' ? [] : falas.slice(-max), diag: diag };
   }
 
   return Object.freeze({

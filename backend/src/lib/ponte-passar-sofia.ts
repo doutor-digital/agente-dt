@@ -83,6 +83,23 @@ export function montarHistorico(falas: readonly FalaDaTela[], quando: string, po
   return `${cab}\n${corpo}`;
 }
 
+/** Teto da nota no Kommo (a nota é para a equipe ler o que o Lite não trouxe; o fim da conversa é o que importa). */
+export const MAX_NOTA = 8_000;
+
+/** A nota do cartão com a conversa de antes do Kommo — o Lite não sincroniza o histórico antigo. */
+export function notaDoHistorico(falas: readonly FalaDaTela[], quando: string, por: string | null, origem: 'tela' | 'whatsapp' = 'tela'): string {
+  const fonte = origem === 'tela' ? `lida da tela do WhatsApp Web${por ? ` por ${por}` : ''}` : 'lida do WhatsApp da clínica';
+  const cab = `📜 Conversa no WhatsApp antes do Kommo (${fonte} em ${quando}). Passada para a Sofia como contexto.`;
+  const linhas = falas.map((f) => `${f.de === 'paciente' ? 'Paciente' : 'Equipe'}${f.hora ? ` (${f.hora})` : ''}: ${f.texto}`);
+  let corpo = linhas.join('\n');
+  while (corpo.length > MAX_NOTA - cab.length - 2 && linhas.length > 1) {
+    linhas.shift();
+    corpo = `…\n${linhas.join('\n')}`;
+  }
+  if (corpo.length > MAX_NOTA - cab.length - 2) corpo = `…${corpo.slice(-(MAX_NOTA - cab.length - 3))}`;
+  return `${cab}\n\n${corpo}`;
+}
+
 /** Junta ao resumo que já existe; uma passagem nova troca o bloco da anterior (não empilha). */
 export function juntarNaMemoria(resumoAtual: string | null | undefined, historico: string): string {
   const atual = (resumoAtual ?? '').trim();

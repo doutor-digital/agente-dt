@@ -95,3 +95,14 @@ test('lerPedidoDeTodos: liga até uma hora futura (máx. 24 h) ou desliga com nu
   assert.equal(lerPedidoDeTodos({ ate: 'ontem' }, agora).ok, false);
   assert.equal(lerPedidoDeTodos({}, agora).ok, false);
 });
+
+test('notaDoHistorico: cabeçalho com a origem, autores e corte pelo fim', async () => {
+  const { notaDoHistorico, MAX_NOTA } = await import('./ponte-passar-sofia.js');
+  const n = notaDoHistorico([P('oi', '10:02'), E('olá')], '13/11 10:00', 'Ana');
+  assert.match(n, /^📜 Conversa no WhatsApp antes do Kommo \(lida da tela do WhatsApp Web por Ana em 13\/11 10:00\)/);
+  assert.match(n, /Paciente \(10:02\): oi\nEquipe: olá$/);
+  assert.match(notaDoHistorico([P('x')], '13/11', null, 'whatsapp'), /lida do WhatsApp da clínica/);
+  const longa = notaDoHistorico(Array.from({ length: 200 }, (_, i) => P(`fala ${i} ${'y'.repeat(80)}`)), '13/11', null);
+  assert.ok(longa.length <= MAX_NOTA);
+  assert.match(longa, /fala 199 /);
+});

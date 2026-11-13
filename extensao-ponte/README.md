@@ -27,6 +27,10 @@ E, no ícone da extensão, **quantos pacientes estão esperando resposta** (0.4.
 Também tem um bloco "Modo aprendiz", que diz onde cada coisa fica dentro do Kommo. Por enquanto ele é fixo; uma
 fase futura vai escolher qual dica mostrar e quando.
 
+## O que há de novo na 0.7.1 (13/11/2026)
+
+- "Passar para a Sofia" também grava a conversa lida como **nota no cartão do Kommo** (o Lite não tem o histórico antigo). O histórico vindo do Evolution (`historico-whatsapp.ts`) idem.
+
 ## O que há de novo na 0.7.0 (12/11/2026)
 
 - **Sofia atende todos** (barra no topo do painel): "por 2 h", "por 4 h" ou "até amanhã 8h" (máx. 24 h). Até lá a

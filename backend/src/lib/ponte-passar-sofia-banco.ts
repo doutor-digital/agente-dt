@@ -13,7 +13,7 @@ import { createKommoClient, type KommoClient } from '../services/kommo.service.j
 import { retomarLead } from './pausa-lead.js';
 import { iniciadorDoTurno, type IniciaTurno } from './atendimento-adiado.js';
 import { fusoDaUnidade } from './fuso.js';
-import { LIBERADA_POR_MS, dividirFalas, juntarNaMemoria, liberadaAgora, montarHistorico, type PedidoDePassagem } from './ponte-passar-sofia.js';
+import { LIBERADA_POR_MS, dividirFalas, juntarNaMemoria, liberadaAgora, montarHistorico, notaDoHistorico, type PedidoDePassagem } from './ponte-passar-sofia.js';
 
 /** A trava de horário pergunta isto só quando a IA está FORA do horário. Erro de banco = não liberada (fica como era). */
 export async function conversaLiberadaPelaEquipe(unitId: string, leadId: number): Promise<boolean> {
@@ -30,7 +30,7 @@ export async function conversaLiberadaPelaEquipe(unitId: string, leadId: number)
 }
 
 export type ResultadoDaPassagem =
-  | { ok: true; turno: 'iniciado' | 'aguardando'; liberadaAte: string; falasGuardadas: number; pendentes: number }
+  | { ok: true; turno: 'iniciado' | 'aguardando'; liberadaAte: string; falasGuardadas: number; pendentes: number; nota: boolean }
   | { ok: false; motivo: 'etapa'; erro: string };
 
 export interface DepsDaPassagem {
@@ -88,6 +88,18 @@ async function passar(unit: Unit, pedido: PedidoDePassagem, deps: DepsDaPassagem
     });
   }
 
+  // 2b) a mesma conversa vira NOTA no cartão: o Kommo (Lite) não tem o histórico antigo e a equipe também precisa ler.
+  //     Falha na nota não impede a passagem.
+  let nota = false;
+  if (pedido.falas.length) {
+    nota = await deps.kommo
+      .addLeadNote(leadId, notaDoHistorico(pedido.falas, quandoLocal(agora, fusoDaUnidade(unit)), pedido.por, 'tela'))
+      .then((r) => !!r?.id, (err) => {
+        logger.warn({ err: String(err), unit: unit.slug, leadId }, 'ponte: não consegui pôr a nota do histórico no cartão (segue)');
+        return false;
+      });
+  }
+
   // 3) libera a Sofia neste lead (só fura a trava de horário)
   const liberadaAte = new Date(agora.getTime() + LIBERADA_POR_MS);
   await prisma.conversation.upsert({
@@ -96,7 +108,7 @@ async function passar(unit: Unit, pedido: PedidoDePassagem, deps: DepsDaPassagem
     update: { liberadaAte },
   });
 
-  const base = { liberadaAte: liberadaAte.toISOString(), falasGuardadas: contexto.length, pendentes: pendentes.length };
+  const base = { liberadaAte: liberadaAte.toISOString(), falasGuardadas: contexto.length, pendentes: pendentes.length, nota };
   // 4) o turno — só se o paciente está esperando resposta
   if (!pendentes.length || !deps.iniciar) {
     if (pendentes.length) logger.warn({ unit: unit.slug, leadId }, 'ponte: passar para a Sofia sem iniciador de turno — ela responde quando o paciente escrever');
