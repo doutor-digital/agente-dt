@@ -327,7 +327,11 @@
         if (!lido || !lido.aberta) throw new Error('Abra a conversa no WhatsApp Web.');
         if (lido.tipo === 'grupo') throw new Error('Grupo não passa para a Sofia.');
         if (chaveAntes && lido.chave && lido.chave !== chaveAntes) throw new Error('A conversa mudou na tela. Abra de novo a do paciente e tente outra vez.');
-        if (!lido.falas || !lido.falas.length) throw new Error('Não achei mensagens de texto nesta conversa.');
+        if (!lido.falas || !lido.falas.length) {
+          var d = lido.diag || {};
+          throw new Error('Não achei mensagens de texto nesta conversa. Role a conversa um pouco para cima e tente de novo. (tela: '
+            + (d.dataId || 0) + ' msg, ' + (d.blocos || 0) + ' blocos, ' + (d.bolhas || 0) + ' bolhas, ' + (d.selecionavel || 0) + ' textos — mande isto ao suporte)');
+        }
         return chamar('POST', '/ponte/passar-sofia', { leadId: leadId, falas: lido.falas, por: quem() });
       }, function () {
         throw new Error('Não consegui ler a conversa. Recarregue o WhatsApp Web (F5) e tente de novo.');

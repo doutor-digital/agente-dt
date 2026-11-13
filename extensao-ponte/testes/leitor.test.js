@@ -154,3 +154,24 @@ describe('leitor — foto de perfil (0.7.0)', () => {
     assert.equal(L.lerConversa(doc, 5).foto, null);
   });
 });
+
+describe('leitor — lerFalas sem data-id (WhatsApp mudou a página)', () => {
+  it('lê pelas bolhas message-in/message-out e pelo pre-texto', () => {
+    const doc = new JSDOM(`<html><body><div id="main"><header><span dir="auto" title="Maria Souza">Maria Souza</span></header>
+      <div class="message-in"><div data-pre-plain-text="[10:00, 13/11/2026] Maria Souza: "><span class="selectable-text">quanto custa?</span></div></div>
+      <div class="message-out"><div data-pre-plain-text="[10:01, 13/11/2026] Clínica: "><span class="selectable-text">R$ 200</span></div></div>
+      <div><div data-pre-plain-text="[10:02, 13/11/2026] Maria Souza: "><span class="selectable-text">tem sábado?</span></div></div>
+    </div></body></html>`).window.document;
+    const r = L.lerFalas(doc, 60);
+    assert.deepEqual(r.falas.map((f) => [f.de, f.texto]), [['paciente', 'quanto custa?'], ['equipe', 'R$ 200'], ['paciente', 'tem sábado?']]);
+    assert.equal(r.diag.blocos, 3);
+  });
+
+  it('sem bloco copiável: cai nas bolhas', () => {
+    const doc = new JSDOM(`<html><body><div id="main"><header><span dir="auto" title="Ana">Ana</span></header>
+      <div class="message-in"><span class="selectable-text">oi</span></div>
+      <div class="message-out"><span class="selectable-text">olá!</span></div>
+    </div></body></html>`).window.document;
+    assert.deepEqual(L.lerFalas(doc, 60).falas.map((f) => [f.de, f.texto]), [['paciente', 'oi'], ['equipe', 'olá!']]);
+  });
+});
