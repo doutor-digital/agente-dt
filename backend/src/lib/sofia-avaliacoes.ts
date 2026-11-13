@@ -17,6 +17,8 @@ export const MAX_TEXTO_DA_AVALIACAO = 600;
 const MAX_RESPOSTA = 4_000;
 const MAX_FALA = 1_000;
 const DIA_MS = 86_400_000;
+/** quantas 👎 abertas a lista mostra (o total vem à parte) */
+const MAX_NA_LISTA = 50;
 
 export const ehNota = (v: unknown): v is Nota => v === 'boa' || v === 'ruim';
 
@@ -78,36 +80,66 @@ export async function respostaDaSofia(mensagem: number, conversa: number): Promi
   return m && m.conversa === conversa ? { unitSlug: m.unitSlug } : null;
 }
 
-/**
- * Grava a avaliação. Com mensagem e pessoa conhecidas, a mesma pessoa avaliando de novo TROCA a nota (e uma 👎 volta a ficar para
- * revisar). Devolve se a nota é nova ou mudou (a nota privada de 👎 só sai nesse caso, para não repetir).
- */
-export async function gravarAvaliacao(a: {
-  slug: string;
-  conversa: number;
-  mensagem: number | null;
-  nota: Nota;
+/** A última resposta da Sofia na conversa (o 👍/👎 do painel da assistente avalia "a última resposta"); null = nenhuma gravada. */
+export async function ultimaRespostaDaSofia(conversa: number): Promise<number | null> {
+  const m = await prisma.sofiaMensagem.findFirst({ where: { conversa }, orderBy: { messageId: 'desc' }, select: { messageId: true } });
+  return m?.messageId ?? null;
+}
+
+export interface AvaliacaoExistente {
+  id: string;
+  nota: string;
   texto: string | null;
-  quemId: number | null;
-  quemNome: string;
-}): Promise<{ mudou: boolean }> {
-  const texto = a.texto?.trim().slice(0, MAX_TEXTO_DA_AVALIACAO) || null;
-  if (a.mensagem && a.quemId) {
-    const ja = await prisma.sofiaAvaliacao.findFirst({ where: { messageId: a.mensagem, quemId: a.quemId }, orderBy: { criadoEm: 'desc' } });
-    if (ja) {
-      const mudou = ja.nota !== a.nota || (a.nota === 'ruim' && (ja.texto ?? '') !== (texto ?? ''));
-      await prisma.sofiaAvaliacao.update({
-        where: { id: ja.id },
-        data: { nota: a.nota, texto, quemNome: a.quemNome, criadoEm: new Date(), ...(mudou ? { revisadaEm: null, revisadaPor: null, revisadaComo: null } : {}) },
-      });
-      return { mudou };
-    }
+}
+
+/** A avaliação que esta pessoa já deu nesta mensagem (única por mensagem e pessoa). */
+export async function minhaAvaliacao(mensagem: number, quemId: number): Promise<AvaliacaoExistente | null> {
+  return prisma.sofiaAvaliacao.findUnique({ where: { messageId_quemId: { messageId: mensagem, quemId } }, select: { id: true, nota: true, texto: true } });
+}
+
+/** A avaliação muda algo? (nota nova, outra nota, ou 👎 com outro texto). Só então sai a nota privada da 👎. */
+export function avaliacaoMuda(ja: AvaliacaoExistente | null, nota: Nota, texto: string | null): boolean {
+  if (!ja) return true;
+  return ja.nota !== nota || (nota === 'ruim' && (ja.texto ?? '') !== (texto ?? ''));
+}
+
+export const limparTextoDaAvaliacao = (t: string | null | undefined): string | null => (t ?? '').trim().slice(0, MAX_TEXTO_DA_AVALIACAO) || null;
+
+/**
+ * Grava a avaliação. Já existe (mesma pessoa, mesma mensagem): troca a nota e o texto, NÃO a data do voto; se mudou, uma 👎 volta a
+ * ficar para revisar. Sem mensagem ou sem pessoa conhecida: cria (não há como juntar).
+ */
+export async function gravarAvaliacao(
+  a: { slug: string; conversa: number; mensagem: number | null; nota: Nota; texto: string | null; quemId: number | null; quemNome: string },
+  ja: AvaliacaoExistente | null,
+): Promise<void> {
+  const texto = limparTextoDaAvaliacao(a.texto);
+  if (ja) {
+    const mudou = avaliacaoMuda(ja, a.nota, texto);
+    await prisma.sofiaAvaliacao.update({
+      where: { id: ja.id },
+      data: { nota: a.nota, texto, quemNome: a.quemNome, ...(mudou ? { revisadaEm: null, revisadaPor: null, revisadaComo: null } : {}) },
+    });
+    return;
   }
   await prisma.sofiaAvaliacao.create({
     data: { unitSlug: a.slug, conversa: a.conversa, messageId: a.mensagem, nota: a.nota, texto, quemId: a.quemId, quemNome: a.quemNome },
   });
-  return { mudou: true };
 }
+
+/** Grava o que a Sofia fez e o painel conta (passou para a equipe, Pix que saiu). */
+export async function registrarEventoDaSofia(e: { slug: string; conversa: number; tipo: 'equipe' | 'pix' }): Promise<void> {
+  await prisma.sofiaEvento.create({ data: { unitSlug: e.slug, conversa: e.conversa, tipo: e.tipo } });
+}
+
+/** As portas do banco que as rotas usam (trocáveis no teste de autorização). */
+export const bancoDeAvaliacoes = {
+  respostaDaSofia: (mensagem: number, conversa: number) => respostaDaSofia(mensagem, conversa),
+  ultimaRespostaDaSofia: (conversa: number) => ultimaRespostaDaSofia(conversa),
+  minhaAvaliacao: (mensagem: number, quemId: number) => minhaAvaliacao(mensagem, quemId),
+  gravarAvaliacao: (a: Parameters<typeof gravarAvaliacao>[0], ja: AvaliacaoExistente | null) => gravarAvaliacao(a, ja),
+  respostasDaSofiaNaConversa: (conversa: number, quemId: number | null) => respostasDaSofiaNaConversa(conversa, quemId),
+};
 
 export interface AvaliacaoLida {
   id: string;
@@ -128,11 +160,16 @@ export interface ResumoDasAvaliacoes {
   semana: { boas: number; ruins: number };
   anterior: { boas: number; ruins: number };
   paraRevisar: AvaliacaoLida[];
+  /** quantas 👎 estão abertas no total (a lista mostra as mais novas) */
+  totalParaRevisar: number;
   revisadas: AvaliacaoLida[];
 }
 
-/** O resumo da tela: últimos 7 dias × 7 anteriores, as 👎 em aberto (mais novas primeiro) e as últimas revisadas. */
-export function resumir(lista: readonly AvaliacaoLida[], agora: Date): ResumoDasAvaliacoes {
+/**
+ * O resumo da tela: últimos 7 dias × 7 anteriores (pela data do voto), as 👎 em aberto (mais novas primeiro) e as últimas revisadas.
+ * `abertas` = as 👎 abertas de QUALQUER data (lidas à parte: 👎 velha não some da lista); sem elas, usa as da `lista`.
+ */
+export function resumir(lista: readonly AvaliacaoLida[], agora: Date, abertas?: { lista: readonly AvaliacaoLida[]; total: number }): ResumoDasAvaliacoes {
   const t = agora.getTime();
   const idade = (a: AvaliacaoLida) => t - a.criadoEm.getTime();
   const conta = (l: AvaliacaoLida[]) => ({ boas: l.filter((a) => a.nota === 'boa').length, ruins: l.filter((a) => a.nota === 'ruim').length });
@@ -140,7 +177,8 @@ export function resumir(lista: readonly AvaliacaoLida[], agora: Date): ResumoDas
   return {
     semana: conta(lista.filter((a) => idade(a) < 7 * DIA_MS)),
     anterior: conta(lista.filter((a) => idade(a) >= 7 * DIA_MS && idade(a) < 14 * DIA_MS)),
-    paraRevisar: lista.filter((a) => a.nota === 'ruim' && !a.revisadaEm).sort(novasPrimeiro).slice(0, 40),
+    paraRevisar: (abertas ? [...abertas.lista] : lista.filter((a) => a.nota === 'ruim' && !a.revisadaEm)).sort(novasPrimeiro).slice(0, MAX_NA_LISTA),
+    totalParaRevisar: abertas ? abertas.total : lista.filter((a) => a.nota === 'ruim' && !a.revisadaEm).length,
     revisadas: lista
       .filter((a) => a.nota === 'ruim' && a.revisadaEm)
       .sort((x, y) => y.revisadaEm!.getTime() - x.revisadaEm!.getTime())
@@ -148,30 +186,33 @@ export function resumir(lista: readonly AvaliacaoLida[], agora: Date): ResumoDas
   };
 }
 
-/** Lê as avaliações da unidade (últimos 60 dias) com a resposta e a fala de cada uma, e resume. */
+/** Lê as avaliações da unidade (14 dias para a conta da semana; 👎 abertas de qualquer data) com a resposta e a fala, e resume. */
 export async function resumoDaUnidade(slug: string, agora = new Date()): Promise<ResumoDasAvaliacoes> {
-  const desde = new Date(agora.getTime() - 60 * DIA_MS);
-  const avals = await prisma.sofiaAvaliacao.findMany({ where: { unitSlug: slug, criadoEm: { gte: desde } }, orderBy: { criadoEm: 'desc' }, take: 1_000 });
-  const ids = [...new Set(avals.map((a) => a.messageId).filter((x): x is number => x != null))];
+  const desde = new Date(agora.getTime() - 14 * DIA_MS);
+  const abertasOnde = { unitSlug: slug, nota: 'ruim', revisadaEm: null };
+  const [avals, abertas, total] = await Promise.all([
+    prisma.sofiaAvaliacao.findMany({ where: { unitSlug: slug, criadoEm: { gte: desde } }, orderBy: { criadoEm: 'desc' }, take: 2_000 }),
+    prisma.sofiaAvaliacao.findMany({ where: abertasOnde, orderBy: { criadoEm: 'desc' }, take: MAX_NA_LISTA }),
+    prisma.sofiaAvaliacao.count({ where: abertasOnde }),
+  ]);
+  const ids = [...new Set([...avals, ...abertas].map((a) => a.messageId).filter((x): x is number => x != null))];
   const msgs = ids.length ? await prisma.sofiaMensagem.findMany({ where: { messageId: { in: ids } }, select: { messageId: true, texto: true, fala: true } }) : [];
   const porId = new Map(msgs.map((m) => [m.messageId, m]));
-  return resumir(
-    avals.map((a) => ({
-      id: a.id,
-      nota: a.nota,
-      texto: a.texto,
-      quemNome: a.quemNome,
-      criadoEm: a.criadoEm,
-      conversa: a.conversa,
-      messageId: a.messageId,
-      revisadaEm: a.revisadaEm,
-      revisadaPor: a.revisadaPor,
-      revisadaComo: a.revisadaComo,
-      resposta: a.messageId != null ? (porId.get(a.messageId)?.texto ?? null) : null,
-      fala: a.messageId != null ? (porId.get(a.messageId)?.fala ?? null) : null,
-    })),
-    agora,
-  );
+  const ler = (a: (typeof avals)[number]): AvaliacaoLida => ({
+    id: a.id,
+    nota: a.nota,
+    texto: a.texto,
+    quemNome: a.quemNome,
+    criadoEm: a.criadoEm,
+    conversa: a.conversa,
+    messageId: a.messageId,
+    revisadaEm: a.revisadaEm,
+    revisadaPor: a.revisadaPor,
+    revisadaComo: a.revisadaComo,
+    resposta: a.messageId != null ? (porId.get(a.messageId)?.texto ?? null) : null,
+    fala: a.messageId != null ? (porId.get(a.messageId)?.fala ?? null) : null,
+  });
+  return resumir(avals.map(ler), agora, { lista: abertas.map(ler), total });
 }
 
 /** Marca uma 👎 como revisada (só da unidade dela e só se ainda está aberta). false = não achou ou já revisada. */

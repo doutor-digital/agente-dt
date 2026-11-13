@@ -2815,7 +2815,7 @@ model SofiaMensagem {
 }
 
 /// Avaliação de uma resposta da Sofia pela equipe (👍 boa / 👎 ruim + o que estava errado). Uma por pessoa e mensagem (mudar
-/// de ideia troca a nota). As 👎 ficam "para revisar" no Agente até alguém ensinar a Sofia, pedir à Doutor Digital ou dar ok.
+/// de ideia troca a nota, não a data). As 👎 ficam "para revisar" no Agente até alguém ensinar a Sofia, pedir à Doutor Digital ou dar ok.
 model SofiaAvaliacao {
   id           String    @id @default(cuid())
   unitSlug     String    @map("unit_slug")
@@ -2825,13 +2825,29 @@ model SofiaAvaliacao {
   texto        String?
   quemId       Int?      @map("quem_id")
   quemNome     String    @map("quem_nome")
+  /// a 1ª avaliação desta pessoa nesta mensagem: mudar de ideia NÃO muda a data (o voto fica na semana em que foi dado)
   criadoEm     DateTime  @default(now()) @map("criado_em")
+  atualizadoEm DateTime  @updatedAt @map("atualizado_em")
   /// revisada: quando, por quem e como (regra | pedido | ok)
   revisadaEm   DateTime? @map("revisada_em")
   revisadaPor  String?   @map("revisada_por")
   revisadaComo String?   @map("revisada_como")
 
+  @@unique([messageId, quemId])
   @@index([unitSlug, criadoEm])
-  @@index([messageId])
+  @@index([unitSlug, nota, revisadaEm])
   @@map("sofia_avaliacao")
+}
+
+/// O que a Sofia FEZ no Chatwoot e o painel do Agente conta (13/11/2026): `equipe` = passou a conversa para a equipe;
+/// `pix` = o Pix do sinal SAIU para o paciente. Gravado na hora, só no modo ligado (tentativa recusada não entra).
+model SofiaEvento {
+  id       String   @id @default(cuid())
+  unitSlug String   @map("unit_slug")
+  conversa Int
+  tipo     String
+  criadoEm DateTime @default(now()) @map("criado_em")
+
+  @@index([unitSlug, criadoEm])
+  @@map("sofia_evento")
 }

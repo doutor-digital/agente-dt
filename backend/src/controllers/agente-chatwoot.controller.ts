@@ -39,7 +39,7 @@ export async function agentePainelHandler(req: Request, res: Response): Promise<
   if (!r) return;
   try {
     const [painel, resumo] = await Promise.all([painelDaUnidade(r.unit, lerPeriodo(req.query.periodo)), resumoDaUnidade(r.unit.slug)]);
-    res.set('Cache-Control', 'no-store').json({ ...painel, paraRevisar: resumo.paraRevisar });
+    res.set('Cache-Control', 'no-store').json({ ...painel, paraRevisar: resumo.paraRevisar, totalParaRevisar: resumo.totalParaRevisar });
   } catch (e) {
     logger.warn({ err: String(e), unit: r.unit.slug }, 'agente: painel falhou');
     res.status(502).json({ error: 'não consegui montar o painel agora' });

@@ -34,32 +34,42 @@ test('montarPainel: conta pessoas (conversas), marcadas, conversão, equipe, Pix
   const p = montarPainel({
     agora, periodo: '7', fuso: FUSO,
     respostas: [
-      { conversa: 1, criadoEm: h(2), acoes: [] },
-      { conversa: 1, criadoEm: h(1), acoes: ['agendar_consulta', 'gerar_sinal_pix'] },
-      { conversa: 2, criadoEm: h(30), acoes: ['pausar_ia'] },
-      { conversa: 3, criadoEm: new Date('2026-11-13T01:00:00Z'), acoes: [] }, // 22h de quinta: fora do horário
-      { conversa: 9, criadoEm: h(24 * 9), acoes: [] }, // período anterior
+      { conversa: 1, criadoEm: h(2) },
+      { conversa: 1, criadoEm: h(1) },
+      { conversa: 2, criadoEm: h(30) },
+      { conversa: 3, criadoEm: new Date('2026-11-13T01:00:00Z') }, // 22h de quinta: fora do horário
+      { conversa: 9, criadoEm: h(24 * 9) }, // período anterior
     ],
-    marcadas: [{ conversa: 1, nome: 'Rosa Lima', agendadoPara: '2026-11-18T09:00', criadoEm: h(1) }, { conversa: 8, nome: null, agendadoPara: null, criadoEm: h(24 * 10) }],
+    marcadas: [
+      { conversa: 1, nome: 'Rosa Lima', agendadoPara: '2026-11-18T09:00', criadoEm: h(1) },
+      { conversa: 7, nome: 'Sem resposta gravada', agendadoPara: null, criadoEm: h(5) }, // conta em marcadas, não na conversão
+      { conversa: 8, nome: null, agendadoPara: null, criadoEm: h(24 * 10) },
+    ],
     avaliacoes: [{ nota: 'boa', criadoEm: h(1) }, { nota: 'boa', criadoEm: h(3) }, { nota: 'ruim', criadoEm: h(4) }, { nota: 'ruim', criadoEm: h(24 * 8) }],
+    eventos: [
+      { conversa: 2, tipo: 'equipe', criadoEm: h(30) },
+      { conversa: 2, tipo: 'equipe', criadoEm: h(29) }, // mesma conversa: conta 1
+      { conversa: 1, tipo: 'pix', criadoEm: h(1) },
+      { conversa: 5, tipo: 'equipe', criadoEm: h(24 * 9) }, // período anterior
+    ],
   });
   assert.deepEqual(p.respondidas, { agora: 3, antes: 1 });
   assert.equal(p.respostas, 4);
-  assert.deepEqual(p.marcadas, { agora: 1, antes: 1 });
-  assert.deepEqual(p.conversao, { agora: 33, antes: 100 });
-  assert.deepEqual(p.equipe, { agora: 1, antes: 0 });
+  assert.deepEqual(p.marcadas, { agora: 2, antes: 1 });
+  assert.deepEqual(p.conversao, { agora: 33, antes: 0 }, 'só a consulta da conversa 1 (respondida) entra; nunca passa de 100%');
+  assert.deepEqual(p.equipe, { agora: 1, antes: 1 });
   assert.deepEqual(p.pix, { agora: 1, antes: 0 });
   assert.deepEqual(p.foraDoHorario, { respostas: 1, pct: 25 });
   assert.deepEqual(p.avaliacoes, { boas: 2, ruins: 1, pct: 67, pctAntes: 0 });
-  assert.equal(p.ultimasMarcadas.length, 1);
+  assert.equal(p.ultimasMarcadas.length, 2);
   assert.equal(p.ultimasMarcadas[0]!.nome, 'Rosa Lima');
   assert.equal(p.porDia.length, 14);
-  assert.deepEqual(p.porDia.at(-1), { dia: '2026-11-13', respondidas: 1, marcadas: 1 });
+  assert.deepEqual(p.porDia.at(-1), { dia: '2026-11-13', respondidas: 1, marcadas: 2 });
   assert.deepEqual(p.porDia.at(-2), { dia: '2026-11-12', respondidas: 2, marcadas: 0 }, 'conversa 2 (ontem 12h) e 3 (ontem 22h)');
 });
 
 test('sem nada: zeros e conversão nula (não divide por zero)', () => {
-  const p = montarPainel({ agora, periodo: 'hoje', fuso: FUSO, respostas: [], marcadas: [], avaliacoes: [] });
+  const p = montarPainel({ agora, periodo: 'hoje', fuso: FUSO, respostas: [], marcadas: [], avaliacoes: [], eventos: [] });
   assert.deepEqual(p.respondidas, { agora: 0, antes: 0 });
   assert.deepEqual(p.conversao, { agora: null, antes: null });
   assert.equal(p.avaliacoes.pct, null);

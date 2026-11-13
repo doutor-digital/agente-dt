@@ -4,7 +4,9 @@
  * uma DEMANDA do suporte (`suporte_demandas`, a mesma fila do painel suporte.doutordigitalconsultoria.com e do bot de chamados).
  *
  * Diferenças para o menu do WhatsApp: quem pede está logada no Chatwoot (verificação "chatwoot", nunca entra sozinha na fila do
- * agente de código, que só aceita "grupo") e o "jid" é `chatwoot:<usuário>` (não é número: o painel não manda WhatsApp para ele).
+ * agente de código, que só aceita "grupo") e o "jid" é `chatwoot:<usuário>`, que não é número: no «Resolvido» o painel do suporte
+ * TENTA o WhatsApp e o envio é recusado (ninguém recebe; o painel mostra "+chatwoot:N" no lugar do número). A resposta para a
+ * equipe da clínica é a lista «Pedidos da unidade» na tela Agente (status e nota de quem resolveu).
  */
 import { prisma } from './prisma.js';
 

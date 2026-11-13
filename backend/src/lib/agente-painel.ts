@@ -2,11 +2,14 @@
  * O painel da Sofia na tela Agente do Chatwoot (pedido do João, 13/11/2026: "um dash da IA — quantas pessoas ela respondeu, quantas
  * agendou, informações importantes").
  *
- * Fontes (nada é estimado):
+ * Fontes:
  *  - RESPONDEU: `sofia_mensagem` — cada resposta pública que a Sofia mandou no Chatwoot, gravada na hora do envio. Pessoa = conversa.
+ *    (Começa a contar no deploy de 13/11/2026; as respostas de antes foram trazidas do Chatwoot uma vez.)
  *  - MARCOU: `spine_lead_links` da unidade na faixa de chave das conversas do Chatwoot (`chatwoot-lead.ts`) com consulta na franquia
  *    (`spine_id_schedule`) e status ok. A data é a do vínculo (a Sofia cadastra e marca na mesma conversa).
- *  - PASSOU PARA A EQUIPE / GEROU PIX: as ferramentas de cada resposta (`sofia_mensagem.acoes`: pausar_ia, gerar_sinal_pix).
+ *  - % QUE MARCOU: marcadas de conversas que ela respondeu no período ÷ pessoas respondidas (nunca passa de 100%).
+ *  - PASSOU PARA A EQUIPE / PIX: `sofia_evento`, gravado onde acontece (passagem à equipe que deu certo; Pix que SAIU para o
+ *    paciente). Tentativa recusada não entra.
  *  - À NOITE OU NO FIM DE SEMANA: respostas antes das 8h, a partir das 18h, sábado e domingo — no fuso da unidade.
  *  - AVALIAÇÕES: `sofia_avaliacao` (👍/👎 da equipe no balão).
  * Cada número vem com o período anterior do mesmo tamanho (hoje × ontem até a mesma hora; 7 × 7 dias antes; 30 × 30 antes).
@@ -65,7 +68,6 @@ export function foraDoHorario(d: Date, fuso: string): boolean {
 export interface RespostaDoPainel {
   conversa: number;
   criadoEm: Date;
-  acoes: readonly string[];
 }
 export interface MarcadaDoPainel {
   conversa: number;
@@ -76,6 +78,11 @@ export interface MarcadaDoPainel {
 }
 export interface AvaliacaoDoPainel {
   nota: string;
+  criadoEm: Date;
+}
+export interface EventoDoPainel {
+  conversa: number;
+  tipo: string;
   criadoEm: Date;
 }
 
@@ -90,7 +97,7 @@ export interface Painel {
   respondidas: Par;
   respostas: number;
   marcadas: Par;
-  /** marcadas ÷ pessoas respondidas, em % (null sem ninguém respondido) */
+  /** marcadas de conversas respondidas no período ÷ pessoas respondidas, em % (null sem ninguém respondido) */
   conversao: { agora: number | null; antes: number | null };
   equipe: Par;
   pix: Par;
@@ -106,6 +113,7 @@ export function montarPainel(e: {
   respostas: readonly RespostaDoPainel[];
   marcadas: readonly MarcadaDoPainel[];
   avaliacoes: readonly AvaliacaoDoPainel[];
+  eventos: readonly EventoDoPainel[];
   agora: Date;
   periodo: Periodo;
   fuso: string;
@@ -114,7 +122,7 @@ export function montarPainel(e: {
   const t = e.agora.getTime();
   const noPeriodo = (d: Date) => d.getTime() >= j.inicio.getTime() && d.getTime() <= t;
   const noAnterior = (d: Date) => d.getTime() >= j.antesInicio.getTime() && d.getTime() < j.antesFim.getTime();
-  const conversas = (l: readonly RespostaDoPainel[], filtro: (r: RespostaDoPainel) => boolean = () => true) => new Set(l.filter(filtro).map((r) => r.conversa)).size;
+  const conjunto = (l: ReadonlyArray<{ conversa: number }>) => new Set(l.map((r) => r.conversa));
 
   const rAgora = e.respostas.filter((r) => noPeriodo(r.criadoEm));
   const rAntes = e.respostas.filter((r) => noAnterior(r.criadoEm));
@@ -122,9 +130,14 @@ export function montarPainel(e: {
   const mAntes = e.marcadas.filter((m) => noAnterior(m.criadoEm));
   const aAgora = e.avaliacoes.filter((a) => noPeriodo(a.criadoEm));
   const aAntes = e.avaliacoes.filter((a) => noAnterior(a.criadoEm));
-  const respondidas = { agora: conversas(rAgora), antes: conversas(rAntes) };
+  const quemAgora = conjunto(rAgora);
+  const quemAntes = conjunto(rAntes);
+  const respondidas = { agora: quemAgora.size, antes: quemAntes.size };
   const marcadas = { agora: mAgora.length, antes: mAntes.length };
-  const usou = (tool: string) => (r: RespostaDoPainel) => r.acoes.includes(tool);
+  // a conversão só conta consulta de quem ela respondeu no período: o vínculo da franquia tem histórico e a contagem de respostas
+  // começou em 13/11 — sem isso o número passava de 100% na primeira semana
+  const marcouDeQuem = (l: MarcadaDoPainel[], quem: Set<number>) => l.filter((m) => quem.has(m.conversa)).length;
+  const eventos = (tipo: string, filtro: (d: Date) => boolean) => conjunto(e.eventos.filter((x) => x.tipo === tipo && filtro(x.criadoEm))).size;
   const fora = rAgora.filter((r) => foraDoHorario(r.criadoEm, e.fuso)).length;
   const boas = aAgora.filter((a) => a.nota === 'boa').length;
   const ruins = aAgora.filter((a) => a.nota === 'ruim').length;
@@ -152,9 +165,9 @@ export function montarPainel(e: {
     respondidas,
     respostas: rAgora.length,
     marcadas,
-    conversao: { agora: pct(marcadas.agora, respondidas.agora), antes: pct(marcadas.antes, respondidas.antes) },
-    equipe: { agora: conversas(rAgora, usou('pausar_ia')), antes: conversas(rAntes, usou('pausar_ia')) },
-    pix: { agora: conversas(rAgora, usou('gerar_sinal_pix')), antes: conversas(rAntes, usou('gerar_sinal_pix')) },
+    conversao: { agora: pct(marcouDeQuem(mAgora, quemAgora), respondidas.agora), antes: pct(marcouDeQuem(mAntes, quemAntes), respondidas.antes) },
+    equipe: { agora: eventos('equipe', noPeriodo), antes: eventos('equipe', noAnterior) },
+    pix: { agora: eventos('pix', noPeriodo), antes: eventos('pix', noAnterior) },
     foraDoHorario: { respostas: fora, pct: pct(fora, rAgora.length) },
     avaliacoes: { boas, ruins, pct: pct(boas, boas + ruins), pctAntes: pct(aAntes.filter((a) => a.nota === 'boa').length, aAntes.length) },
     porDia: [...new Set(dias)].map((dia) => ({ dia, respondidas: porDiaR.get(dia)?.size ?? 0, marcadas: porDiaM.get(dia) ?? 0 })),
@@ -167,18 +180,20 @@ export async function painelDaUnidade(unit: { id: string; slug: string; spineTim
   const fuso = unit.spineTimezone ?? 'America/Sao_Paulo';
   const j = janelas(agora, periodo, fuso);
   const desde = new Date(Math.min(j.antesInicio.getTime(), agora.getTime() - (DIAS_NO_GRAFICO + 1) * DIA_MS));
-  const [respostas, links, avaliacoes] = await Promise.all([
-    prisma.sofiaMensagem.findMany({ where: { unitSlug: unit.slug, criadoEm: { gte: desde } }, select: { conversa: true, criadoEm: true, acoes: true } }),
+  const [respostas, links, avaliacoes, eventos] = await Promise.all([
+    prisma.sofiaMensagem.findMany({ where: { unitSlug: unit.slug, criadoEm: { gte: desde } }, select: { conversa: true, criadoEm: true } }),
     prisma.spineLeadLink.findMany({
       where: { unitId: unit.id, kommoLeadId: { gte: BASE_LEAD_CHATWOOT }, spineIdSchedule: { not: null }, status: 'ok', createdAt: { gte: desde } },
       select: { kommoLeadId: true, nome: true, agendadoPara: true, createdAt: true },
     }),
     prisma.sofiaAvaliacao.findMany({ where: { unitSlug: unit.slug, criadoEm: { gte: desde } }, select: { nota: true, criadoEm: true } }),
+    prisma.sofiaEvento.findMany({ where: { unitSlug: unit.slug, criadoEm: { gte: desde } }, select: { conversa: true, tipo: true, criadoEm: true } }),
   ]);
   return montarPainel({
     respostas,
     marcadas: links.map((l) => ({ conversa: l.kommoLeadId - BASE_LEAD_CHATWOOT, nome: l.nome, agendadoPara: l.agendadoPara, criadoEm: l.createdAt })),
     avaliacoes,
+    eventos,
     agora,
     periodo,
     fuso,

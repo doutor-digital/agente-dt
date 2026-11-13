@@ -6,37 +6,15 @@ export interface LessonInput {
   enabled?: boolean;
 }
 
-/** Quantas regras ligadas entram no prompt. */
+/** Quantas regras ligadas entram no prompt (as mais antigas primeiro). A página da unidade não deixa passar disso. */
 export const MAX_LICOES_NO_PROMPT = 40;
-/** Origem das regras escritas pela própria clínica (página /aprendizados e tela Agente do Chatwoot). Igual a `SOURCE_DA_UNIDADE`. */
-const DA_UNIDADE = 'unidade';
 
-const normalizada = (t: string) => t.trim().replace(/\s+/g, ' ').toLowerCase();
-
-/**
- * Quais regras ligadas entram no prompt (13/11/2026). As ESCRITAS PELA CLÍNICA entram sempre (a página limita a 25): antes, com as
- * regras automáticas da reflexão semanal passando de 40, a regra que a equipe acabava de ensinar ficava fora do prompt (e a página
- * recusava salvar). As demais completam as vagas, as mais antigas primeiro, como era. Texto repetido ocupa uma vaga só. No prompt
- * ficam em ordem de criação.
- */
-export function escolherLicoesDoPrompt<T extends { content: string; source: string; createdAt: Date }>(ligadas: readonly T[], max = MAX_LICOES_NO_PROMPT): T[] {
-  const porData = [...ligadas].sort((x, y) => x.createdAt.getTime() - y.createdAt.getTime());
-  const vistos = new Set<string>();
-  const unicas = porData.filter((l) => {
-    const k = normalizada(l.content);
-    if (!k || vistos.has(k)) return false;
-    vistos.add(k);
-    return true;
+export function listEnabledLessons(unitId: string) {
+  return prisma.unitLesson.findMany({
+    where: { unitId, enabled: true },
+    orderBy: { createdAt: 'asc' },
+    take: MAX_LICOES_NO_PROMPT,
   });
-  const daUnidade = unicas.filter((l) => l.source === DA_UNIDADE).slice(-max);
-  const resto = unicas.filter((l) => l.source !== DA_UNIDADE).slice(0, Math.max(0, max - daUnidade.length));
-  const escolhidas = new Set<T>([...daUnidade, ...resto]);
-  return unicas.filter((l) => escolhidas.has(l));
-}
-
-export async function listEnabledLessons(unitId: string) {
-  const ligadas = await prisma.unitLesson.findMany({ where: { unitId, enabled: true }, orderBy: { createdAt: 'asc' }, take: 300 });
-  return escolherLicoesDoPrompt(ligadas);
 }
 
 export function listLessons(unitId: string) {

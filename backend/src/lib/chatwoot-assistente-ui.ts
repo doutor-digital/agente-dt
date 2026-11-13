@@ -136,7 +136,8 @@ const BOTAO_JS = String.raw`(function(){
   // O servidor diz quais mensagens da conversa aberta são respostas da Sofia (ele guarda o id de cada uma quando ela responde) e o
   // que cada uma já recebeu. O botão entra no fim do balão (aparece ao passar o mouse; fica aceso depois de avaliado). 👎 pede
   // "o que estava errado" num quadrinho e vai para a tela Agente › Para revisar. Nada disso chega ao paciente.
-  var AV = { conversa: null, mapa: {}, proxima: 0, buscando: false, estilo: false, pop: null };
+  // Pergunta ao servidor a cada 30 s, ou antes (5 s no mínimo) quando chega mensagem nova na tela — e só com a aba visível.
+  var AV = { conversa: null, mapa: {}, proxima: 0, buscando: false, estilo: false, pop: null, qtd: -1, ultima: 0 };
   var SVG_BOA = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/></svg>';
   var SVG_RUIM = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z"/></svg>';
   function estiloAval(){
@@ -173,7 +174,11 @@ const BOTAO_JS = String.raw`(function(){
         Array.prototype.forEach.call(document.querySelectorAll('[data-dd-aval]'), function(b){ var x = m[b.getAttribute('data-dd-aval')]; if (x) pintarAval(b, x); });
       })
       .catch(function(){})
-      .then(function(){ AV.buscando = false; AV.proxima = Date.now() + 15000; });
+      .then(function(){
+        AV.buscando = false;
+        // trocou de conversa durante a busca: a nova conversa pergunta já (o prazo era da conversa antiga)
+        AV.proxima = AV.conversa === c ? Date.now() + 30000 : 0;
+      });
   }
   function pintarAval(barra, x){
     var boa = barra.querySelector('button.boa'), ruim = barra.querySelector('button.ruim');
@@ -228,8 +233,11 @@ const BOTAO_JS = String.raw`(function(){
   function marcarBaloes(){
     var c = conversaDaUrl();
     if (!ligada || !c) { if (AV.conversa) { AV.conversa = null; AV.mapa = {}; fecharPop(); } return; }
-    if (c !== AV.conversa) { AV.conversa = c; AV.mapa = {}; AV.proxima = 0; fecharPop(); }
-    if (Date.now() >= AV.proxima && document.visibilityState === 'visible') lerAvaliacoes(c);
+    if (c !== AV.conversa) { AV.conversa = c; AV.mapa = {}; AV.proxima = 0; AV.qtd = -1; fecharPop(); }
+    var qtd = document.querySelectorAll('.message-bubble-container[data-message-id]').length;
+    var chegouMensagem = AV.qtd !== -1 && qtd !== AV.qtd && Date.now() - AV.ultima > 5000;
+    AV.qtd = qtd;
+    if ((Date.now() >= AV.proxima || chegouMensagem) && document.visibilityState === 'visible') { AV.ultima = Date.now(); lerAvaliacoes(c); }
     estiloAval();
     Array.prototype.forEach.call(document.querySelectorAll('.message-bubble-container[data-message-id]'), function(cont){
       var id = cont.getAttribute('data-message-id'), x = AV.mapa[id]; if (!x) return;

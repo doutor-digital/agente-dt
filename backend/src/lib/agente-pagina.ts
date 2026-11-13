@@ -63,6 +63,7 @@ h3 .c{color:var(--mut);font-weight:500;font-variant-numeric:tabular-nums}
 .pane>*+*{margin-top:28px}
 .aviso{padding:9px 12px;border:1px solid #f0e2b6;border-radius:8px;background:#fffbeb;color:#6b4e00;font-size:13px;white-space:pre-wrap}
 .aviso.erro{border-color:#f4d0d8;background:#fff5f7;color:#8f1d3a}
+.vinculo{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:12px;padding:7px 10px;border:1px solid #d5e2fb;border-radius:6px;background:#f5f9ff;color:#1d3f87;font-size:13px}
 
 /* números: uma faixa com divisórias finas */
 .kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border:1px solid var(--b);border-radius:8px;overflow:hidden}
@@ -252,6 +253,7 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
     <section>
       <h3>Ensinar a Sofia</h3>
       <div class="meta">Uma regra por vez, curta e direta. Antes de salvar você vê como ela responde hoje e como vai responder com a regra.</div>
+      <div class="vinculo" id="vinculo-ensinar" hidden><span>Esta regra resolve a resposta marcada por <b class="vinculoQuem"></b>.</span><button class="bt link" type="button" data-desvincular>Desvincular</button></div>
       <label class="rot" for="regra">O que a Sofia deve fazer diferente? <span id="cnt">0/400</span></label>
       <textarea id="regra" maxlength="800" placeholder="Quando o paciente perguntar o valor, diga o valor da consulta antes de perguntar sobre a dor."></textarea>
       <details class="def" style="margin-top:6px"><summary>Exemplos</summary><ul class="exemplos" id="exemplos"></ul></details>
@@ -314,6 +316,7 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
     <section>
       <h3>Pedir à Doutor Digital</h3>
       <div class="meta">Valor, horários, médicos, informação da clínica ou um erro da Sofia: isso a nossa equipe ajusta. A resposta aparece na lista ao lado.</div>
+      <div class="vinculo" id="vinculo-pedir" hidden><span>Este pedido resolve a resposta marcada por <b class="vinculoQuem"></b>.</span><button class="bt link" type="button" data-desvincular>Desvincular</button></div>
       <div class="tipos" id="tipos" role="radiogroup" aria-label="Tipo do pedido"></div>
       <label class="rot" for="pedidoTexto">O que precisa? <span id="cntPedido">0/1500</span></label>
       <textarea id="pedidoTexto" maxlength="1500" placeholder="A partir de 1º de dezembro a consulta passa a custar R$ 380 (com sinal, R$ 280)."></textarea>
@@ -370,6 +373,8 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
   function ir(qual){
     if (ABAS.indexOf(qual) < 0 || $('aba-' + qual).hidden) qual = 'painel';
     abaAtual = qual;
+    // saiu da aba onde o caso foi aberto: desiste do vínculo (uma regra ou pedido qualquer não pode dar o caso por revisado)
+    if (revisando && revisando.aba !== qual) desvincular();
     ABAS.forEach(function(a){ $('pane-' + a).hidden = a !== qual; $('aba-' + a).setAttribute('aria-selected', a === qual ? 'true' : 'false'); });
     $('ladoPainel').hidden = qual !== 'painel';
     guardar('agente:aba', qual);
@@ -410,7 +415,16 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
     k.appendChild(el('span', 'd' + (v && v.c ? ' ' + v.c : ''), v ? v.t : ''));
     return k;
   }
+  // o caso (👎) que a pessoa abriu em «Ensinar a Sofia» ou «Pedir ajuste»: só a regra/o pedido feito DALI o dá por revisado
   var revisando = null, pedidoConversa = null;
+  function mostrarVinculo(){
+    ['ensinar', 'pedir'].forEach(function(a){
+      var v = $('vinculo-' + a), ativo = !!revisando && revisando.aba === a; v.hidden = !ativo;
+      if (ativo) v.querySelector('.vinculoQuem').textContent = revisando.quem;
+    });
+  }
+  function desvincular(){ revisando = null; pedidoConversa = null; mostrarVinculo(); }
+  Array.prototype.forEach.call(document.querySelectorAll('[data-desvincular]'), function(b){ b.addEventListener('click', desvincular); });
   async function carregarPainel(){
     try {
       var p = await api('GET', '/api/public/agente/painel?slug=' + enc(U.slug) + '&periodo=' + enc(PERIODO));
@@ -423,11 +437,11 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
       k.appendChild(kpi('Passou para a equipe', 'Conversas em que ela chamou alguém da equipe', String(p.equipe.agora), eq));
       k.appendChild(kpi('À noite ou fim de semana', 'Respostas antes das 8h, a partir das 18h, sábado e domingo', p.foraDoHorario.pct == null ? '—' : p.foraDoHorario.pct + '%', { t: p.respostas ? (p.foraDoHorario.respostas + ' de ' + plural(p.respostas, 'resposta', 'respostas')) : '', c: '' }));
       k.appendChild(kpi('Avaliadas como boas', 'Das avaliações que a equipe deu nos balões da Sofia, quantas foram positivas', p.avaliacoes.pct == null ? '—' : p.avaliacoes.pct + '%', p.avaliacoes.pct == null ? { t: 'ninguém avaliou', c: '' } : variacao(p.avaliacoes.pct, p.avaliacoes.pctAntes, true)));
-      var nr = (p.paraRevisar || []).length;
+      var nr = p.totalParaRevisar != null ? p.totalParaRevisar : (p.paraRevisar || []).length;
       k.appendChild(kpi('Para revisar', 'Respostas marcadas como ruins que ninguém revisou ainda', String(nr), { t: nr ? 'veja abaixo' : 'nada pendente', c: '' }));
       desenharGrafico(p.porDia || []);
       desenharMarcadas(p.ultimasMarcadas || []);
-      desenharRevisar(p.paraRevisar || []);
+      desenharRevisar(p.paraRevisar || [], nr);
     } catch (e) { erroEm($('kpis'), e.message); }
     contarPausadas();
   }
@@ -469,8 +483,8 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
       row.appendChild(q); row.appendChild(bs); box.appendChild(row);
     });
   }
-  function desenharRevisar(l){
-    var box = $('listaRevisar'); box.textContent = ''; $('cRevisar').textContent = l.length ? String(l.length) : '';
+  function desenharRevisar(l, total){
+    var box = $('listaRevisar'); box.textContent = ''; $('cRevisar').textContent = total ? (total > l.length ? (l.length + ' de ' + total) : String(total)) : '';
     if (!l.length) { var v = el('p', 'vazio'); v.appendChild(el('b', null, 'Nada para revisar. ')); v.appendChild(document.createTextNode('Para marcar uma resposta ruim, passe o mouse no balão da Sofia dentro da conversa.')); box.appendChild(v); return; }
     l.forEach(function(a){
       var c = el('div', 'caso'), q = el('div', 'q'), quem = el('span'); quem.appendChild(el('b', null, a.quemNome)); quem.appendChild(document.createTextNode(' marcou como ruim'));
@@ -482,12 +496,12 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
       c.appendChild(dl);
       var bs = el('div', 'btns');
       var b1 = el('button', 'bt pri', 'Ensinar a Sofia'); b1.type = 'button';
-      b1.onclick = function(){ revisando = a.id; $('regra').value = (a.texto || '').slice(0, MAX); if (a.fala) $('f0').value = a.fala.slice(0, 500); ir('ensinar'); contar(); $('regra').focus(); };
+      b1.onclick = function(){ revisando = { id: a.id, quem: a.quemNome, aba: 'ensinar' }; $('regra').value = (a.texto || '').slice(0, MAX); if (a.fala) $('f0').value = a.fala.slice(0, 500); ir('ensinar'); mostrarVinculo(); contar(); $('regra').focus(); };
       var b2 = el('button', 'bt', 'Pedir ajuste'); b2.type = 'button';
       b2.onclick = function(){
-        revisando = a.id; escolherTipo('erro');
+        revisando = { id: a.id, quem: a.quemNome, aba: 'pedir' }; escolherTipo('erro');
         var txt = (a.fala ? 'O paciente disse: "' + a.fala.slice(0, 300) + '"\n' : '') + (a.resposta ? 'A Sofia respondeu: "' + a.resposta.slice(0, 500) + '"\n' : '') + (a.texto ? 'O que estava errado: ' + a.texto : '');
-        $('pedidoTexto').value = txt.slice(0, 1500); pedidoConversa = a.conversa; ir('pedir'); contarPedido(); $('pedidoTexto').focus();
+        $('pedidoTexto').value = txt.slice(0, 1500); ir('pedir'); pedidoConversa = a.conversa; mostrarVinculo(); contarPedido(); $('pedidoTexto').focus();
       };
       var b3 = el('button', 'bt', 'Abrir conversa'); b3.type = 'button'; b3.onclick = function(){ abrirConversa(a.conversa); };
       var b4 = el('button', 'bt leve', 'Já resolvido'); b4.type = 'button';
@@ -564,7 +578,8 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
     b.disabled = true;
     try {
       await api('POST', apiUnidade(), { regra: previaDe });
-      if (revisando) { await revisar(revisando, 'regra').catch(function(){}); revisando = null; }
+      if (revisando && revisando.aba === 'ensinar') await revisar(revisando.id, 'regra').catch(function(){});
+      desvincular();
       $('regra').value = ''; previaDe = null; $('cardPrevia').hidden = true; contar();
       toast('Regra salva. A Sofia já segue nas próximas conversas.');
       carregarRegras();
@@ -675,8 +690,9 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
     b.disabled = true;
     try {
       var r = await api('POST', '/api/public/agente/pedidos', { slug: U.slug, tipo: tipoPedido, texto: texto, conversa: pedidoConversa });
-      if (revisando) { await revisar(revisando, 'pedido').catch(function(){}); revisando = null; }
-      $('pedidoTexto').value = ''; pedidoConversa = null; contarPedido(); desenharPedidos(r.pedidos || []);
+      if (revisando && revisando.aba === 'pedir') await revisar(revisando.id, 'pedido').catch(function(){});
+      desvincular();
+      $('pedidoTexto').value = ''; contarPedido(); desenharPedidos(r.pedidos || []);
       toast('Pedido #' + r.protocolo + ' enviado. A Doutor Digital já foi avisada.');
     } catch (e) { aviso('avisoPedido', e.message); }
     b.disabled = false;

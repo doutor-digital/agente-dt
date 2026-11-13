@@ -12,7 +12,7 @@
  * Desligada por padrão: só vale para as unidades de `CHATWOOT_ASSISTENTE_SLUGS` (lista separada por vírgula, ou `*`).
  */
 import { estadoDaPausa, pausar, portaDaPausaDoChatwoot, reativar } from '../lib/chatwoot-pausa.js';
-import { MAX_TEXTO_DA_AVALIACAO, ehNota, gravarAvaliacao, respostaDaSofia, respostasDaSofiaNaConversa } from '../lib/sofia-avaliacoes.js';
+import { avaliacaoMuda, bancoDeAvaliacoes, ehNota, limparTextoDaAvaliacao } from '../lib/sofia-avaliacoes.js';
 import type { Request, Response } from 'express';
 import type { Unit } from '@prisma/client';
 import { z } from 'zod';
@@ -483,35 +483,48 @@ export async function assistentePausaAcaoHandler(req: Request, res: Response): P
 }
 
 // ── avaliar uma resposta da Sofia (👍/👎) ─────────────────────────────────────────────────────────────────
-// Pelo balão da mensagem (com `mensagem` = id da resposta) ou pelo painel (sem ela: "a última resposta"). Grava em `sofia_avaliacao`
-// (tela Agente › Início › Para revisar). 👎 nova (ou que mudou) também deixa NOTA PRIVADA na conversa, no nome de quem avaliou.
+// Pelo balão da mensagem (com `mensagem` = id da resposta) ou pelo painel (sem ela: a ÚLTIMA resposta gravada da Sofia na conversa).
+// Grava em `sofia_avaliacao` (uma por pessoa e mensagem) e alimenta a tela Agente. 👎 nova (ou que mudou) deixa NOTA PRIVADA na
+// conversa no nome de quem avaliou — ANTES de gravar: se a nota falhar, nada fica gravado e a nova tentativa manda de novo.
 export async function assistenteAvaliarHandler(req: Request, res: Response): Promise<void> {
   const corpo = (req.body ?? {}) as { conversa?: unknown; nota?: unknown; texto?: unknown; mensagem?: unknown };
   const nota = corpo.nota;
-  const texto = typeof corpo.texto === 'string' ? corpo.texto.trim().slice(0, MAX_TEXTO_DA_AVALIACAO) : '';
+  const texto = limparTextoDaAvaliacao(typeof corpo.texto === 'string' ? corpo.texto : '');
   if (!ehNota(nota)) {
     res.status(400).json({ error: 'avaliação inválida' });
     return;
   }
-  if (nota === 'ruim' && texto.length < 5) {
+  if (nota === 'ruim' && (texto ?? '').length < 5) {
     res.status(400).json({ error: 'escreva o que estava errado' });
     return;
   }
-  const idMensagem = corpo.mensagem == null ? null : Number(corpo.mensagem);
-  if (idMensagem !== null && !(Number.isInteger(idMensagem) && idMensagem > 0)) {
+  const idPedido = corpo.mensagem == null ? null : Number(corpo.mensagem);
+  if (idPedido !== null && !(Number.isInteger(idPedido) && idPedido > 0)) {
     res.status(400).json({ error: 'mensagem inválida' });
     return;
   }
   const r = await conversaDaAtendente(req, res, corpo.conversa);
   if (!r) return;
   try {
-    if (idMensagem !== null && !(await respostaDaSofia(idMensagem, r.conversa))) {
-      res.status(404).json({ error: 'esta mensagem não é uma resposta da Sofia nesta conversa' });
+    let mensagem = idPedido;
+    if (mensagem !== null) {
+      if (!(await bancoDeAvaliacoes.respostaDaSofia(mensagem, r.conversa))) {
+        res.status(404).json({ error: 'esta mensagem não é uma resposta da Sofia nesta conversa' });
+        return;
+      }
+    } else mensagem = await bancoDeAvaliacoes.ultimaRespostaDaSofia(r.conversa);
+    const quemId = r.a.id ?? null;
+    if (mensagem === null && nota === 'boa') {
+      // 👍 do painel sem resposta da Sofia gravada (conversa de antes do registro): não há o que juntar, só o log
+      logger.info({ conversa: r.conversa, nota, quem: quemId }, 'assistente: 👍 sem resposta gravada — só no log');
+      res.json({ ok: true });
       return;
     }
-    const g = await gravarAvaliacao({ slug: r.slug, conversa: r.conversa, mensagem: idMensagem, nota, texto: texto || null, quemId: r.a.id ?? null, quemNome: r.a.nome || 'atendente' });
-    logger.info({ conversa: r.conversa, mensagem: idMensagem, nota, quem: r.a.id, tam: texto.length, mudou: g.mudou }, 'assistente: avaliação da Sofia');
-    if (nota === 'ruim' && g.mudou) await r.porta.nota(r.conversa, `👎 Resposta da Sofia avaliada como ruim por ${r.a.nome}: ${texto}`);
+    const ja = mensagem !== null && quemId ? await bancoDeAvaliacoes.minhaAvaliacao(mensagem, quemId) : null;
+    const muda = avaliacaoMuda(ja, nota, texto);
+    if (nota === 'ruim' && muda) await r.porta.nota(r.conversa, `👎 Resposta da Sofia avaliada como ruim por ${r.a.nome}: ${texto}`);
+    if (muda) await bancoDeAvaliacoes.gravarAvaliacao({ slug: r.slug, conversa: r.conversa, mensagem, nota, texto, quemId, quemNome: r.a.nome || 'atendente' }, ja);
+    logger.info({ conversa: r.conversa, mensagem, nota, quem: quemId, tam: (texto ?? '').length, muda }, 'assistente: avaliação da Sofia');
     res.json({ ok: true });
   } catch (e) {
     logger.warn({ err: String(e), conversa: r.conversa }, 'assistente: não consegui gravar a avaliação');
@@ -524,7 +537,7 @@ export async function assistenteRespostasHandler(req: Request, res: Response): P
   const r = await conversaDaAtendente(req, res, req.query.conversa);
   if (!r) return;
   try {
-    res.set('Cache-Control', 'no-store').json({ respostas: await respostasDaSofiaNaConversa(r.conversa, r.a.id ?? null) });
+    res.set('Cache-Control', 'no-store').json({ respostas: await bancoDeAvaliacoes.respostasDaSofiaNaConversa(r.conversa, r.a.id ?? null) });
   } catch (e) {
     logger.warn({ err: String(e), conversa: r.conversa }, 'assistente: não consegui ler as respostas da Sofia');
     res.status(502).json({ error: 'não consegui ler agora' });

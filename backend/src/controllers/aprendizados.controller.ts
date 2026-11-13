@@ -21,6 +21,7 @@ import type { Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { enviarTelegram } from '../lib/telegram.js';
+import { MAX_LICOES_NO_PROMPT } from '../services/lessons.service.js';
 import { automacaoLigada } from '../lib/automacoes-estado.js';
 import {
   CHAVE_APRENDIZADOS,
@@ -65,9 +66,9 @@ function avisar(texto: string): void {
   });
 }
 
-/** Regras ligadas ESCRITAS pela unidade. Elas sempre entram no prompt (`escolherLicoesDoPrompt`); o teto é MAX_REGRAS_DA_UNIDADE. */
-function ligadasDaUnidade(unitId: string): Promise<number> {
-  return prisma.unitLesson.count({ where: { unitId, source: SOURCE_DA_UNIDADE, enabled: true } });
+/** Regras ligadas da unidade (todas as origens): passar de MAX_LICOES_NO_PROMPT = a nova ficaria fora do prompt real. */
+function ligadasNoTotal(unitId: string): Promise<number> {
+  return prisma.unitLesson.count({ where: { unitId, enabled: true } });
 }
 
 function fuso(unit: Unit): string {
@@ -305,8 +306,8 @@ export async function publicAprendizadosPreviaHandler(req: Request, res: Respons
   }
   const falas = (parsed.data.falas ?? []).filter(Boolean);
   const usar = (falas.length > 0 ? falas : [...FALAS_DE_EXEMPLO]).slice(0, MAX_FALAS_DA_PREVIA);
-  if ((await ligadasDaUnidade(unit.id)) >= MAX_REGRAS_DA_UNIDADE) {
-    res.status(422).json({ error: `Já são ${MAX_REGRAS_DA_UNIDADE} regras de vocês ligadas. Desligue uma que não vale mais antes de criar outra.` });
+  if ((await ligadasNoTotal(unit.id)) >= MAX_LICOES_NO_PROMPT) {
+    res.status(422).json({ error: `A Sofia já tem ${MAX_LICOES_NO_PROMPT} regras ligadas nesta unidade, o máximo que ela lê. Desligue uma antes.` });
     return;
   }
   if (!cabePrevia(unit.slug, fuso(unit))) {
@@ -376,6 +377,11 @@ export async function publicAprendizadosSalvarHandler(req: Request, res: Respons
     res.status(422).json({ error: `Já são ${ligadas} regras ligadas. Desligue uma que não vale mais antes de criar outra.` });
     return;
   }
+  const total = await ligadasNoTotal(unit.id);
+  if (total >= MAX_LICOES_NO_PROMPT) {
+    res.status(422).json({ error: `A Sofia já tem ${total} regras ligadas nesta unidade, o máximo que ela lê. Desligue uma antes de criar outra.` });
+    return;
+  }
   const igual = await prisma.unitLesson.findFirst({ where: { unitId: unit.id, content: regra, enabled: true } });
   if (igual) {
     res.status(409).json({ error: 'Essa regra já está ligada.' });
@@ -413,6 +419,10 @@ export async function publicAprendizadosLigarHandler(req: Request, res: Response
     const ligadas = await prisma.unitLesson.count({ where: { unitId: unit.id, source: SOURCE_DA_UNIDADE, enabled: true } });
     if (!regra.enabled && ligadas >= MAX_REGRAS_DA_UNIDADE) {
       res.status(422).json({ error: `Já são ${ligadas} regras ligadas. Desligue uma antes.` });
+      return;
+    }
+    if (!regra.enabled && (await ligadasNoTotal(unit.id)) >= MAX_LICOES_NO_PROMPT) {
+      res.status(422).json({ error: `A Sofia já tem ${MAX_LICOES_NO_PROMPT} regras ligadas nesta unidade, o máximo que ela lê. Desligue uma antes.` });
       return;
     }
     const igual = await prisma.unitLesson.findFirst({ where: { unitId: unit.id, content: regra.content, enabled: true, NOT: { id: regra.id } } });
