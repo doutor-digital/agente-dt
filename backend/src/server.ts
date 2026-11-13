@@ -9,7 +9,7 @@ import { prisma } from './lib/prisma.js';
 import { apiRouter } from './routes/api.routes.js';
 import { apagarCofreDeArquivos, ligarConectorRemoto } from './mcp-remoto/producao.js';
 import { paginaPausaHandler } from './controllers/pausa.controller.js';
-import { paginaAprendizadosHandler } from './controllers/aprendizados.controller.js';
+import { paginaAprendizadosHandler, paginaTestarIaHandler } from './controllers/aprendizados.controller.js';
 import { menuFunilHandler, paginaFunilHandler } from './controllers/funil.controller.js';
 import { corsDoAssistente, paginaAssistenteHandler } from './controllers/assistente.controller.js';
 import { contaChatwootDoAmbiente } from './mcp-remoto/chatwoot.js';
@@ -169,6 +169,8 @@ async function main(): Promise<void> {
   // Funil de etapas encaixado no Chatwoot (Dashboard App). A chave vem em ?k= e é mascarada no log abaixo.
   app.get('/funil', paginaFunilHandler);
   app.get('/funil/menu.js', menuFunilHandler);
+  // "Testar a IA" (menu do Chatwoot): a página de ensinar a Sofia em modo Chatwoot, sob /funil para o menu entregar a sessão.
+  app.get('/funil/testar-ia', paginaTestarIaHandler);
   // Assistente da atendente: a página do painel (iframe do botão que entra pelo menu.js).
   app.get('/assistente', paginaAssistenteHandler);
 

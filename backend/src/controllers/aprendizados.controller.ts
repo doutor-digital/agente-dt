@@ -10,6 +10,11 @@
  * A regra entra no bloco `<aprendizados>` do prompt (`renderLessons`), com a trava de pronto-socorro de sempre.
  * As travas que a unidade não desliga moram em `lib/aprendizados-unidade.ts`. Cada regra salva ou desligada avisa o João.
  */
+import { sessaoDaAtendente } from './funil.controller.js';
+import { leituraComLogin } from './assistente.controller.js';
+import { CAIXAS_REGUA } from '../lib/chatwoot-regua.js';
+import { ETIQUETA_PAUSA } from '../lib/chatwoot-pausa.js';
+import { chamar, contaChatwootDoAmbiente } from '../mcp-remoto/chatwoot.js';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import type { Unit } from '@prisma/client';
@@ -70,9 +75,39 @@ function fuso(unit: Unit): string {
   return unit.spineTimezone ?? 'America/Sao_Paulo';
 }
 
+/**
+ * Pelo Chatwoot (tela "Testar a IA" no menu, 13/11/2026): vale o LOGIN da própria atendente no lugar do código, desde que ela
+ * atenda uma caixa desta unidade. O nome dela vira o «por» de quem mudou (não dá para escrever outro). Não depende da chave
+ * `aprendizados-pela-unidade` (ela fecha a página PÚBLICA com código; aqui o acesso é o login do Chatwoot).
+ */
+async function unidadePeloChatwoot(req: Request, res: Response, slug: string): Promise<Unit | null> {
+  const a = await sessaoDaAtendente(req, res);
+  if (!a) return null;
+  let caixas: number[];
+  try {
+    caixas = await leituraComLogin(a.c, a.sessao).caixas();
+  } catch {
+    res.status(502).json({ error: 'não consegui ler as suas caixas no Chatwoot' });
+    return null;
+  }
+  if (!caixas.some((cx) => CAIXAS_REGUA[cx] === slug)) {
+    res.status(403).json({ error: 'você não atende esta unidade' });
+    return null;
+  }
+  const unit = await prisma.unit.findUnique({ where: { slug } });
+  if (!unit || !unit.isActive) {
+    res.status(404).json({ error: 'unidade não encontrada' });
+    return null;
+  }
+  if (req.body && typeof req.body === 'object') (req.body as Record<string, unknown>).por = a.nome.slice(0, 80) || 'atendente';
+  return unit;
+}
+
 /** Chave desligada = a unidade "não existe" aqui, antes de olhar código (não dá para sondar). */
 async function unidadeComChave(req: Request, res: Response): Promise<Unit | null> {
   const slug = String(req.params.slug ?? '');
+  // login do Chatwoot (menu "Testar a IA") no lugar do código; sem o cabeçalho, segue o caminho público de sempre
+  if (typeof req.get === 'function' && req.get('X-CW-Token')) return unidadePeloChatwoot(req, res, slug);
   if (!ligadaPara(slug)) {
     res.status(404).json({ error: 'unidade não encontrada' });
     return null;
@@ -393,6 +428,68 @@ export async function publicAprendizadosLigarHandler(req: Request, res: Response
   res.json(await estado(unit));
 }
 
+// ── "Testar a IA" no menu do Chatwoot (login da atendente) ──────────────────────
+
+/** As unidades que a atendente atende (pelas caixas que ela vê no Chatwoot) e o nome dela. */
+export async function testarIaUnidadesHandler(req: Request, res: Response): Promise<void> {
+  const a = await sessaoDaAtendente(req, res);
+  if (!a) return;
+  try {
+    const slugs = [...new Set((await leituraComLogin(a.c, a.sessao).caixas()).map((cx) => CAIXAS_REGUA[cx]).filter((x): x is string => !!x))];
+    const units = slugs.length ? await prisma.unit.findMany({ where: { slug: { in: slugs }, isActive: true }, select: { slug: true, name: true } }) : [];
+    res.json({ eu: a.nome, unidades: units.map((u) => ({ slug: u.slug, nome: u.name })) });
+  } catch (e) {
+    logger.warn({ err: String(e) }, 'testar-ia: unidades falhou');
+    res.status(502).json({ error: 'não consegui ler as suas caixas no Chatwoot' });
+  }
+}
+
+/** As conversas abertas com a IA pausada, nas caixas com IA que ela vê (com o login dela). */
+export async function testarIaPausadasHandler(req: Request, res: Response): Promise<void> {
+  const a = await sessaoDaAtendente(req, res);
+  if (!a) return;
+  try {
+    const caixas = (await leituraComLogin(a.c, a.sessao).caixas()).filter((cx) => CAIXAS_REGUA[cx]);
+    const lista: Array<{ id: number; nome: string; por: string | null; em: string | null; atendente: string | null }> = [];
+    for (const cx of caixas) {
+      for (let pagina = 1; pagina <= 8; pagina++) {
+        const r = (await chamar(a.c, 'GET', 'conversations', {
+          sessao: a.sessao,
+          query: { inbox_id: String(cx), status: 'open', assignee_type: 'all', 'labels[]': ETIQUETA_PAUSA, page: String(pagina) },
+        })) as any;
+        const lote: any[] = r?.data?.payload ?? [];
+        for (const c of lote) {
+          if (!(Array.isArray(c?.labels) && c.labels.includes(ETIQUETA_PAUSA))) continue;
+          const at = c?.custom_attributes ?? {};
+          lista.push({
+            id: Number(c.id),
+            nome: String(c?.meta?.sender?.name ?? '').trim() || String(c?.meta?.sender?.phone_number ?? '') || `Conversa ${c.id}`,
+            por: typeof at.ia_pausada_por === 'string' ? at.ia_pausada_por : null,
+            em: typeof at.ia_pausada_em === 'string' ? at.ia_pausada_em : null,
+            atendente: c?.meta?.assignee?.name ?? null,
+          });
+        }
+        if (lote.length < 25) break;
+      }
+    }
+    lista.sort((x, y) => String(y.em ?? '').localeCompare(String(x.em ?? '')));
+    res.json({ conversas: lista });
+  } catch (e) {
+    logger.warn({ err: String(e) }, 'testar-ia: pausadas falhou');
+    res.status(502).json({ error: 'não consegui ler as conversas pausadas' });
+  }
+}
+
+/** A página "Testar a IA" (iframe do menu do Chatwoot): a mesma página de ensinar a Sofia, em modo Chatwoot (claro, sem código). */
+export function paginaTestarIaHandler(_req: Request, res: Response): void {
+  const conta = contaChatwootDoAmbiente();
+  if (!conta) {
+    res.status(404).type('html').send('<!doctype html><meta charset="utf-8"><p style="font-family:sans-serif;padding:24px">Chatwoot não configurado.</p>');
+    return;
+  }
+  res.type('html').send(paginaHtml('', 'Testar a IA', { chatwoot: new URL(conta.url).origin }));
+}
+
 // ── a página ─────────────────────────────────────────────────────────────────
 export async function paginaAprendizadosHandler(req: Request, res: Response): Promise<void> {
   const slug = String(req.params.slug ?? '');
@@ -404,7 +501,9 @@ export async function paginaAprendizadosHandler(req: Request, res: Response): Pr
   res.type('html').send(paginaHtml(slug, unit.name));
 }
 
-function paginaHtml(slug: string, nome: string): string {
+/** `modo.chatwoot` = origem do Chatwoot: página dentro do menu (login do Chatwoot, sem código, visual claro, aba Pausadas). */
+export function paginaHtml(slug: string, nome: string, modo: { chatwoot?: string } = {}): string {
+  const cw = !!modo.chatwoot;
   return `<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Ensinar a Sofia · ${esc(nome)}</title>
@@ -439,12 +538,22 @@ button.main.ok{background:var(--ok);color:#06210F}button:disabled{opacity:.55;cu
 .chip{align-self:flex-start;font-size:12px;color:var(--warn);background:rgba(233,185,73,.1);border-radius:999px;padding:3px 10px}
 button.sec{min-height:46px;padding:10px 14px;border:1px solid var(--line);background:var(--s2);color:var(--ink);border-radius:12px;font:inherit;cursor:pointer}
 .linha{display:flex;gap:8px;margin-top:10px}.linha button.main{margin-top:0;flex:2}.linha button.sec{flex:1}
-</style></head><body><main>
+/* modo Chatwoot (menu "Testar a IA"): claro, no visual do Chatwoot, sem o cartão do código */
+body.cw{--bg:#f8fafc;--s1:#fff;--s2:#f1f5f9;--line:#e2e8f0;--ink:#0f172a;--ink2:#334155;--muted:#64748b;--acc:#1f93ff;--ok:#12855a;--warn:#b54708;font-size:14.5px;padding:16px 20px 40px}
+body.cw main{max-width:760px}body.cw h1{font-size:18px}body.cw #cardCodigo{display:none}
+body.cw .card{border-radius:10px}body.cw .aba{min-height:38px;border-radius:8px;font-size:14px}body.cw button.main{border-radius:8px;font-size:14.5px;padding:11px}
+body.cw button.main.ok{color:#fff}body.cw .msg.ok{background:#e9f6ee;color:#0b5e3b}body.cw .msg.err{background:#fdeceb;color:#9b1c1c}
+body.cw .aviso{background:#fff7ed;color:#7c2d12}body.cw .chip{background:#fff7ed}body.cw .bm.p{color:#fff}body.cw .depois{background:#e8f2ff}
+body.cw .sw.on{color:#0b5e3b}
+.pz{display:flex;gap:10px;align-items:center;padding:10px 0;border-top:1px solid var(--line)}.pz:first-child{border-top:0}
+.pz div{flex:1;min-width:0}.pz b{display:block}.pz small{color:var(--muted)}
+</style></head><body${cw ? ' class="cw"' : ''}><main>
 <p class="sub" style="margin:0">Doutor Digital · Sofia</p>
-<h1>${esc(nome)}</h1>
-<p class="sub">Ensine a Sofia: escreva o que ela deve fazer diferente, veja a resposta dela antes e depois, e salve.</p>
+<h1 id="titulo">${esc(nome)}</h1>
+<div id="msgTitulo" class="msg" hidden></div>
+<p class="sub">${cw ? 'Converse com a Sofia como se fosse o paciente, ensine o que ela deve fazer diferente e veja as conversas em que a IA está pausada. Nada é enviado a paciente.' : 'Ensine a Sofia: escreva o que ela deve fazer diferente, veja a resposta dela antes e depois, e salve.'}</p>
 
-<div class="card">
+<div class="card" id="cardCodigo">
   <label for="codigo">Código da unidade</label>
   <input id="codigo" inputmode="numeric" maxlength="6" placeholder="6 dígitos" autocomplete="one-time-code">
   <label for="por">Seu nome</label>
@@ -456,6 +565,7 @@ button.sec{min-height:46px;padding:10px 14px;border:1px solid var(--line);backgr
 <div class="abas" role="tablist">
   <button class="aba on" id="abaEnsinar" role="tab" type="button">Ensinar a Sofia</button>
   <button class="aba" id="abaConversa" role="tab" type="button">Conversar (teste)</button>
+  <button class="aba" id="abaPausadas" role="tab" type="button"${cw ? '' : ' hidden'}>IA pausada</button>
 </div>
 
 <div id="paneEnsinar">
@@ -484,6 +594,15 @@ button.sec{min-height:46px;padding:10px 14px;border:1px solid var(--line);backgr
 </div>
 </div>
 
+<div id="panePausadas" hidden>
+<div class="card">
+  <h2>Conversas com a IA pausada</h2>
+  <p class="sub" style="margin:0 0 6px">A IA pausa sozinha quando alguém da equipe responde (pelo Chatwoot ou pelo celular) e volta quando a conversa é resolvida. Aqui você reativa antes, se quiser.</p>
+  <div id="listaPausadas"></div>
+  <div id="msgPausadas" class="msg" hidden></div>
+</div>
+</div>
+
 <div id="paneConversa" hidden>
 <div class="card">
   <h2>Conversar com a Sofia (teste)</h2>
@@ -503,6 +622,7 @@ button.sec{min-height:46px;padding:10px 14px;border:1px solid var(--line);backgr
 <script>
 (function(){
   var SLUG=${JSON.stringify(slug)}; var API='/api/public/aprendizados/'+encodeURIComponent(SLUG);
+  var CW=${JSON.stringify(modo.chatwoot ?? '')}, S=null;
   var $=function(id){return document.getElementById(id)};
   var KC='pausa-codigo-'+SLUG, KN='aprendizados-nome-'+SLUG;
   try{ $('codigo').value=localStorage.getItem(KC)||''; $('por').value=localStorage.getItem(KN)||localStorage.getItem('pausa-nome-'+SLUG)||''; }catch(e){}
@@ -512,7 +632,8 @@ button.sec{min-height:46px;padding:10px 14px;border:1px solid var(--line);backgr
   function aviso(id,txt,ok){ var m=$(id); m.textContent=txt; m.className='msg '+(ok?'ok':'err'); m.hidden=false; }
   function some(id){ $(id).hidden=true; }
   function codigo(){ var c=$('codigo').value.trim(); try{ localStorage.setItem(KC,c); localStorage.setItem(KN,$('por').value.trim()); }catch(e){} return c; }
-  async function api(method,path,body){ var url=API+(path||'')+(method==='GET'?('?codigo='+encodeURIComponent(codigo())):''); var r=await fetch(url,{method:method,headers:{'Content-Type':'application/json'},body:method==='GET'?undefined:JSON.stringify(Object.assign({codigo:codigo()},body||{}))}); var j=await r.json().catch(function(){return {}}); if(!r.ok){ var er=new Error(j.error||('erro '+r.status)); er.dados=j; throw er; } return j; }
+  function cab(){ var h={'Content-Type':'application/json'}; if(CW && S){ h['X-CW-Token']=S.token; h['X-CW-Client']=S.client; h['X-CW-Uid']=S.uid; } return h; }
+  async function api(method,path,body,base){ var raiz=base!=null?base:API; var url=raiz+(path||'')+(!CW && method==='GET'?('?codigo='+encodeURIComponent(codigo())):''); var r=await fetch(url,{method:method,headers:cab(),body:method==='GET'?undefined:JSON.stringify(CW?(body||{}):Object.assign({codigo:codigo()},body||{}))}); var j=await r.json().catch(function(){return {}}); if(!r.ok){ var er=new Error(j.error||('erro '+r.status)); er.dados=j; if(CW && r.status===401){ S=null; pedirSessao(); } throw er; } return j; }
   function el(tag,cls,txt){ var e=document.createElement(tag); if(cls) e.className=cls; if(txt!=null) e.textContent=txt; return e; }
   function quando(iso){ var d=new Date(iso); return d.toLocaleDateString('pt-BR'); }
   function mostrar(e){
@@ -536,9 +657,9 @@ button.sec{min-height:46px;padding:10px 14px;border:1px solid var(--line);backgr
       if(conv.maximo===0 && !$('paneConversa').hidden) aba('ensinar');
     }
   }
-  async function carregar(){ if(codigo().length!==6){ $('corpo').hidden=true; return; } try{ mostrar(await api('GET')); }catch(e){ $('corpo').hidden=true; aviso('msgTopo',e.message,false); } }
+  async function carregar(){ if(CW ? (!S || !SLUG) : codigo().length!==6){ $('corpo').hidden=true; return; } try{ mostrar(await api('GET')); }catch(e){ $('corpo').hidden=true; aviso(CW?'msgTitulo':'msgTopo',e.message,false); } }
   function contar(){ var n=$('regra').value.trim().length; $('cnt').textContent=n+'/'+MAX; if(previaDe!==null && $('regra').value.trim()!==previaDe){ $('cardRes').hidden=true; previaDe=null; } }
-  async function ligar(id,on,b){ if($('por').value.trim().length<2){ aviso('msgTopo','Escreva o seu nome antes.',false); return; } b.disabled=true; try{ mostrar(await api('POST','/regra/'+encodeURIComponent(id),{enabled:on,por:$('por').value.trim()})); }catch(e){ aviso('msgTopo',e.message,false); b.disabled=false; } }
+  async function ligar(id,on,b){ if($('por').value.trim().length<2){ aviso(CW?'msgTitulo':'msgTopo','Escreva o seu nome antes.',false); return; } b.disabled=true; try{ mostrar(await api('POST','/regra/'+encodeURIComponent(id),{enabled:on,por:$('por').value.trim()})); }catch(e){ aviso(CW?'msgTitulo':'msgTopo',e.message,false); b.disabled=false; } }
   $('regra').addEventListener('input',contar);
   // só consulta quando o código muda: cada tentativa gasta da trava de tentativas (a mesma da página de pausa)
   var ultimoCodigo=null;
@@ -582,13 +703,47 @@ button.sec{min-height:46px;padding:10px 14px;border:1px solid var(--line);backgr
     c.scrollTop=c.scrollHeight;
   }
   function aba(qual){
-    var c=qual==='conversa'; $('paneEnsinar').hidden=c; $('paneConversa').hidden=!c;
-    $('abaEnsinar').className='aba'+(c?'':' on'); $('abaConversa').className='aba'+(c?' on':'');
+    var c=qual==='conversa', pz=qual==='pausadas'; $('paneEnsinar').hidden=(c||pz); $('paneConversa').hidden=!c; $('panePausadas').hidden=!pz;
+    $('abaEnsinar').className='aba'+(!c&&!pz?' on':''); $('abaConversa').className='aba'+(c?' on':''); $('abaPausadas').className='aba'+(pz?' on':'');
     try{ localStorage.setItem(KA,qual); }catch(e){}
     if(c){ renderChat(aguardando); }
+    if(pz){ carregarPausadas(); }
   }
   $('abaEnsinar').addEventListener('click',function(){ aba('ensinar'); });
   $('abaConversa').addEventListener('click',function(){ aba('conversa'); });
+  $('abaPausadas').addEventListener('click',function(){ aba('pausadas'); });
+  // ── modo Chatwoot: sessão pelo menu (postMessage), unidade pelas caixas dela, aba "IA pausada" ──
+  function pedirSessao(){ if(CW){ try{ window.parent.postMessage({event:'funil:pede-sessao'},CW); }catch(e){} } }
+  function quandoHora(iso){ try{ var d=new Date(iso); return isNaN(d)?'':d.toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}); }catch(e){ return ''; } }
+  async function carregarPausadas(){
+    var l=$('listaPausadas'); l.textContent=''; some('msgPausadas');
+    try{
+      var r=await api('GET','',null,'/api/public/testar-ia/pausadas');
+      if(!r.conversas.length){ l.appendChild(el('p','sub','Nenhuma conversa aberta com a IA pausada.')); return; }
+      r.conversas.forEach(function(c){
+        var row=el('div','pz'), t=el('div'); t.appendChild(el('b',null,c.nome)); t.appendChild(el('small',null,'Pausada'+(c.por?' por '+c.por:'')+(c.em?' · '+quandoHora(c.em):'')+(c.atendente?' · com '+c.atendente:''))); row.appendChild(t);
+        var ab=el('button','sw','Abrir'); ab.type='button'; ab.addEventListener('click',function(){ try{ window.parent.postMessage({event:'funil:abrir-conversa',id:c.id},CW); }catch(e){} }); row.appendChild(ab);
+        var re=el('button','sw on','Reativar IA'); re.type='button'; re.addEventListener('click',async function(){ re.disabled=true; try{ await api('POST','',{conversa:c.id,acao:'reativar'},'/api/public/assistente/pausa'); row.remove(); if(!l.children.length) l.appendChild(el('p','sub','Nenhuma conversa aberta com a IA pausada.')); }catch(e){ aviso('msgPausadas',e.message,false); re.disabled=false; } }); row.appendChild(re);
+        l.appendChild(row);
+      });
+    }catch(e){ aviso('msgPausadas',e.message,false); }
+  }
+  async function entrarPeloChatwoot(){
+    try{
+      var r=await api('GET','',null,'/api/public/testar-ia/unidades');
+      if(!r.unidades.length){ aviso('msgTitulo','Você não atende nenhuma caixa com a Sofia.',false); return; }
+      SLUG=r.unidades[0].slug; API='/api/public/aprendizados/'+encodeURIComponent(SLUG); $('por').value=r.eu||'atendente';
+      $('titulo').textContent='Testar a IA · '+r.unidades[0].nome;
+      await carregar(); aba('conversa');
+    }catch(e){ aviso('msgTitulo',e.message,false); }
+  }
+  if(CW){
+    window.addEventListener('message',function(ev){
+      if(ev.origin!==CW || ev.source!==window.parent) return;
+      var d=ev.data; if(d && d.event==='funil-sessao'){ var novo=d.sessao && d.sessao.token ? d.sessao : null; var primeira=!S && novo; S=novo; if(primeira) entrarPeloChatwoot(); }
+    });
+    pedirSessao(); setTimeout(function(){ if(!S) pedirSessao(); },1500);
+  }
   // o que vai ao servidor: respostas da Sofia curtas (1500 letras) e no máximo 14 mil letras no total, saindo as mais antigas
   function paraEnviar(){
     var l=historico.map(function(m){return {role:m.role,content:m.role==='assistant'?m.content.slice(0,1500):m.content}});

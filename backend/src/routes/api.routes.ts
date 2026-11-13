@@ -141,8 +141,7 @@ import {
   publicAprendizadosHandler,
   publicAprendizadosLigarHandler,
   publicAprendizadosPreviaHandler,
-  publicAprendizadosSalvarHandler,
-} from '../controllers/aprendizados.controller.js';
+  publicAprendizadosSalvarHandler, testarIaPausadasHandler, testarIaUnidadesHandler } from '../controllers/aprendizados.controller.js';
 import {
   funilCaixasHandler,
   funilHojeHandler,
@@ -389,6 +388,9 @@ apiRouter.post('/public/aprendizados/:slug', publicAprendizadosSalvarHandler);
 apiRouter.post('/public/aprendizados/:slug/previa', publicAprendizadosPreviaHandler);
 apiRouter.post('/public/aprendizados/:slug/conversa', publicAprendizadosConversaHandler);
 apiRouter.post('/public/aprendizados/:slug/regra/:id', publicAprendizadosLigarHandler);
+// "Testar a IA" no menu do Chatwoot: unidades da atendente e conversas com a IA pausada (login do Chatwoot).
+apiRouter.get('/public/testar-ia/unidades', testarIaUnidadesHandler);
+apiRouter.get('/public/testar-ia/pausadas', testarIaPausadasHandler);
 // Funil de etapas do Chatwoot (Dashboard App): chave X-Funil-Chave derivada do token do Chatwoot (sem sessão).
 apiRouter.post('/public/central/estado', centralEstadoHandler);
 apiRouter.post('/public/central/geral', centralGeralHandler);
