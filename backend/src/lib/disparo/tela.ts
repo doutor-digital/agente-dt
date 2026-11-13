@@ -53,7 +53,7 @@ export async function dadosDaTela(ondaId: string, email: string | null | undefin
     campanhaNome: onda.campanha.nome,
     oferta: onda.oferta,
     ofertaDias: diasDaOferta(),
-    unidade: { slug: onda.unit.slug, nome: onda.unit.name },
+    unidade: { slug: onda.unit.slug, nome: onda.unit.name, semFranquia: !onda.unit.spineToken },
     modo: modoDaUnidade(onda.unit.slug),
     freios: freiosDoAmbiente(),
     resumo: (onda.resumo ?? {}) as DadosDoPainel['resumo'],

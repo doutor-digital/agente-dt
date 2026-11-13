@@ -22,6 +22,7 @@ export type MotivoDeExclusao =
   | 'consulta-futura'
   | 'tratamento-aberto'
   | 'ja-cliente'
+  | 'lead-inexistente'
   | 'franquia-indisponivel';
 
 /** O texto de oferta que a Sofia lê: preço, prazo, condições. Curto de propósito: vira bloco do prompt em toda resposta de quem recebeu o disparo. */
@@ -48,8 +49,15 @@ export const ROTULO_DA_EXCLUSAO: Record<MotivoDeExclusao, string> = {
   'consulta-futura': 'tem consulta marcada na franquia',
   'tratamento-aberto': 'tem tratamento aberto na franquia',
   'ja-cliente': 'já é cliente (está em funil ou etapa de cliente no Kommo)',
-  'franquia-indisponivel': 'a franquia (ou o cartão do Kommo, em unidade sem franquia) não respondeu (na dúvida, não manda)',
+  'lead-inexistente': 'o cartão não existe mais no Kommo (apagado ou mesclado)',
+  'franquia-indisponivel': 'a franquia não respondeu (na dúvida, não manda)',
 };
+
+/** O rótulo da exclusão; em unidade SEM franquia quem não respondeu foi o Kommo, e o texto diz isso. */
+export function rotuloDaExclusao(m: string, semFranquia = false): string {
+  if (m === 'franquia-indisponivel' && semFranquia) return 'o Kommo não respondeu (na dúvida, não manda)';
+  return ROTULO_DA_EXCLUSAO[m as MotivoDeExclusao] ?? m;
+}
 
 /**
  * Celular brasileiro com DDD → só dígitos com DDI e o nono dígito (5563999999999). Qualquer outra coisa → null.
@@ -127,7 +135,7 @@ export interface Elegivel {
 }
 
 /** O que a franquia diz de uma pessoa (em unidade sem franquia, o cartão do Kommo: `ja-cliente`). */
-export type SituacaoNaFranquia = 'livre' | 'consulta-futura' | 'tratamento-aberto' | 'ja-cliente' | 'indisponivel';
+export type SituacaoNaFranquia = 'livre' | 'consulta-futura' | 'tratamento-aberto' | 'ja-cliente' | 'lead-inexistente' | 'indisponivel';
 
 export interface ContextoDoPublico {
   /** chaves já em qualquer onda desta campanha nesta unidade */
@@ -136,11 +144,21 @@ export interface ContextoDoPublico {
   pediramSair: ReadonlySet<string>;
   /** a franquia, por candidato já elegível até aqui */
   franquia: (c: Elegivel) => SituacaoNaFranquia | Promise<SituacaoNaFranquia>;
+  /**
+   * Só para a regra de cliente por CARTÃO (unidade sem franquia): o mesmo telefone em outro cartão da lista também é
+   * conferido, e se ESSE cartão for de cliente a pessoa sai — senão o 1º cartão (perdido) passaria e o do Jurídico
+   * cairia como "repetido". Na franquia a conferência é da pessoa e isto fica desligado.
+   */
+  conferirCartoesRepetidos?: boolean;
 }
 
 export interface ResultadoDaTriagem {
   elegiveis: Elegivel[];
   fora: Partial<Record<MotivoDeExclusao, number>>;
+}
+
+function motivoDaSituacao(s: Exclude<SituacaoNaFranquia, 'livre'>): MotivoDeExclusao {
+  return s === 'indisponivel' ? 'franquia-indisponivel' : s;
 }
 
 /**
@@ -154,6 +172,7 @@ export async function triar(candidatos: Candidato[], ctx: ContextoDoPublico): Pr
   };
   const vistos = new Set<string>();
   const elegiveis: Elegivel[] = [];
+  const porChave = new Map<string, Elegivel>();
 
   for (const c of candidatos) {
     if (!(c.telefoneBruto ?? '').replace(/\D/g, '')) {
@@ -168,6 +187,16 @@ export async function triar(candidatos: Candidato[], ctx: ContextoDoPublico): Pr
     const chave = chaveDaPessoa(telefone);
     if (vistos.has(chave)) {
       nega('repetido-na-lista');
+      const mantido = porChave.get(chave);
+      if (ctx.conferirCartoesRepetidos && mantido && c.leadId !== null && c.leadId !== mantido.leadId) {
+        const s = await ctx.franquia({ ...mantido, leadId: c.leadId, nomeCompleto: (c.nome ?? '').trim() });
+        // Cartão repetido que sumiu do Kommo não prova nada contra a pessoa: ela segue pelo 1º cartão.
+        if (s !== 'livre' && s !== 'lead-inexistente') {
+          elegiveis.splice(elegiveis.indexOf(mantido), 1);
+          porChave.delete(chave);
+          nega(motivoDaSituacao(s));
+        }
+      }
       continue;
     }
     vistos.add(chave);
@@ -186,11 +215,10 @@ export async function triar(candidatos: Candidato[], ctx: ContextoDoPublico): Pr
     }
     const e: Elegivel = { leadId: c.leadId, nome, nomeCompleto: (c.nome ?? '').trim(), telefone, chave };
     const situacao = await ctx.franquia(e);
-    if (situacao === 'consulta-futura') nega('consulta-futura');
-    else if (situacao === 'tratamento-aberto') nega('tratamento-aberto');
-    else if (situacao === 'ja-cliente') nega('ja-cliente');
-    else if (situacao === 'indisponivel') nega('franquia-indisponivel');
-    else elegiveis.push(e);
+    if (situacao === 'livre') {
+      elegiveis.push(e);
+      porChave.set(chave, e);
+    } else nega(motivoDaSituacao(situacao));
   }
   return { elegiveis, fora };
 }

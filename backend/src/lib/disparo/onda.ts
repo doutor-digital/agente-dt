@@ -96,8 +96,8 @@ export async function concluirMontagem(ondaId: string, ler: (unit: Unit, etiquet
   const batida = setInterval(() => void prisma.disparoOnda.updateMany({ where: { id: ondaId, estado: 'montando' }, data: { atualizadoEm: new Date() } }).catch(() => undefined), BATIDA_DA_MONTAGEM_MS);
   batida.unref();
   try {
-    const { candidatos, foraDoKommoDividido, jaNaCampanha, pediramSair, franquia } = await ler(unit, onda.etiqueta, onda.campanhaId);
-    const { elegiveis, fora } = await triar(candidatos, { jaNaCampanha, pediramSair, franquia });
+    const { candidatos, foraDoKommoDividido, jaNaCampanha, pediramSair, franquia, conferirCartoesRepetidos } = await ler(unit, onda.etiqueta, onda.campanhaId);
+    const { elegiveis, fora } = await triar(candidatos, { jaNaCampanha, pediramSair, franquia, conferirCartoesRepetidos });
 
     // Linhas de ondas canceladas que nunca enviaram nada voltam para esta; o resto é criado.
     const reaproveitadas = await reaproveitarDeOndaCancelada(onda.campanhaId, unit.id, ondaId, elegiveis);
