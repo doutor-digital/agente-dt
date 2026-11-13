@@ -657,7 +657,7 @@ export function decidirRegua(c: ConversaRegua, memoria: Memoria, agora: Date, un
 /** Por onde a mensagem iria: texto livre (caixa sem janela, ou janela de 24 h aberta) ou template aprovado (janela fechada). */
 export type ViaDoEnvio =
   | { tipo: 'texto'; motivo?: string }
-  | { tipo: 'template'; nome: string; variaveis: string[]; aprovado: boolean; motivo?: string };
+  | { tipo: 'template'; nome: string; variaveis: string[]; aprovado: boolean; motivo?: string; problema?: string };
 
 /** `{{1}}=Maria, {{2}}=17/11 às 14:30` */
 export const descreverVariaveis = (v: readonly string[]): string => (v.length ? v.map((x, i) => `{{${i + 1}}}=${x}`).join(', ') : 'sem variáveis');
@@ -679,7 +679,7 @@ export function notaDoSeco(d: Disparo, via?: ViaDoEnvio): string {
   if (via.tipo === 'texto') return `🧪 [SECO] Régua «${d.regra}» — enviaria agora, como TEXTO (${via.motivo ?? 'janela de 24 h aberta'}):\n\n${d.texto}`;
   return (
     `🧪 [SECO] Régua «${d.regra}» — enviaria agora pelo template ${via.nome} com ${descreverVariaveis(via.variaveis)} (${via.motivo ?? 'janela de 24 h fechada'}):\n\n${d.texto}` +
-    (via.aprovado ? '' : `\n\n⚠️ O template ${via.nome} ainda não está aprovado na Meta: no ligado, não enviaria (deixaria uma nota).`)
+    (via.aprovado ? '' : `\n\n⚠️ O template ${via.nome} ${via.problema ?? 'ainda não está aprovado na Meta'}: no ligado, não enviaria (deixaria uma nota).`)
   );
 }
 

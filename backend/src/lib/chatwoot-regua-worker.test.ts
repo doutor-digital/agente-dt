@@ -67,8 +67,8 @@ function chatFalso(
     ultimaPublica?: MensagemResumo | null;
     /** quando o paciente escreveu por último, segundo o histórico (usado quando a listagem não traz mensagem dele) */
     ultimaDoPaciente?: Date | null;
-    /** templates aprovados na caixa; um Error = não deu para ler */
-    aprovados?: string[] | Error;
+    /** templates aprovados na caixa (lista de nomes, ou nome → quantos {{n}} o corpo tem na Meta); um Error = não deu para ler */
+    aprovados?: string[] | Record<string, number | null> | Error;
   } = {},
 ) {
   const mensagens: Array<{ id: number; texto: string; privada: boolean; template?: EnvioTemplate }> = [];
@@ -110,7 +110,8 @@ function chatFalso(
     async templatesAprovados() {
       leiturasDeTemplates++;
       if (o.aprovados instanceof Error) throw o.aprovados;
-      return new Set(o.aprovados ?? []);
+      const a = o.aprovados ?? [];
+      return new Map<string, number | null>(Array.isArray(a) ? a.map((n) => [n, null] as const) : Object.entries(a));
     },
     async etiquetas(id, lista) {
       etiquetas.push({ id, lista });
@@ -514,6 +515,16 @@ test('cloud, janela fechada e template NÃO aprovado: não manda, deixa UMA nota
   assert.equal(c.mensagens[1]!.template?.nome, VESP);
   assert.equal(c.mensagens[1]!.privada, false);
   assert.deepEqual(arm.disparos.map((d) => d.regra), [`consulta-vespera${SUFIXO_SEM_TEMPLATE}`, 'consulta-vespera']);
+});
+
+test('cloud: template aprovado na Meta com outro número de variáveis que o da régua NÃO sai (uma nota, sem mandar valor trocado)', async () => {
+  const errado = await doisCiclos('ligado', 3, { aprovados: { [VESP]: 3 }, ultimaDoPaciente: null });
+  assert.equal(errado.mensagens.length, 1);
+  assert.equal(errado.mensagens[0]!.privada, true);
+  assert.equal(errado.mensagens[0]!.template, undefined);
+  assert.equal(errado.mensagens[0]!.texto, `🤖 Régua «consulta-vespera»: template ${VESP} na Meta pede 3 variável(is) e a régua tem 2 — não enviei`);
+  const certo = await doisCiclos('ligado', 3, { aprovados: { [VESP]: 2 }, ultimaDoPaciente: null });
+  assert.equal(certo.mensagens[0]!.template?.nome, VESP);
 });
 
 test('cloud, janela fechada: nota que falha desfaz o registro (a nota sai no ciclo seguinte)', async () => {

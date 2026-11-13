@@ -99,8 +99,11 @@ export interface Chat {
   mensagem(conversationId: number, texto: string, privada: boolean, template?: EnvioTemplate): Promise<void>;
   /** Quando o PACIENTE escreveu por último nesta conversa (mensagem recebida); null = nunca. Conta a janela de 24 h. */
   ultimaDoPaciente(conversationId: number): Promise<Date | null>;
-  /** Os nomes dos templates APROVADOS (no idioma da régua) que o Chatwoot guarda na caixa. Lança se não deu para ler. */
-  templatesAprovados(caixa: number): Promise<ReadonlySet<string>>;
+  /**
+   * Os templates APROVADOS (no idioma da régua) que o Chatwoot guarda na caixa: nome → quantos {{n}} o corpo tem (null = não deu para
+   * contar). Lança se não deu para ler.
+   */
+  templatesAprovados(caixa: number): Promise<ReadonlyMap<string, number | null>>;
   etiquetas(conversationId: number, etiquetas: string[]): Promise<void>;
   /** grava os atributos da conversa (o Chatwoot SUBSTITUI o objeto inteiro: mandar todos) */
   atributos(conversationId: number, attrs: Record<string, unknown>): Promise<void>;
@@ -258,12 +261,14 @@ export function chatDoChatwoot(ctx: ContextoChatwoot): Chat {
     },
     async templatesAprovados(caixa) {
       const r = (await chamar(ctx, 'GET', `inboxes/${caixa}/message_templates`)) as { payload?: unknown[] } | null;
-      const lista = Array.isArray(r?.payload) ? (r.payload as Array<{ name?: string; language?: string; status?: string }>) : [];
-      return new Set(
-        lista
-          .filter((t) => String(t?.status ?? '').toUpperCase() === 'APPROVED' && String(t?.language ?? '').toLowerCase() === IDIOMA_TEMPLATE.toLowerCase())
-          .map((t) => String(t.name)),
-      );
+      const lista = Array.isArray(r?.payload) ? (r.payload as Array<{ name?: string; language?: string; status?: string; components?: Array<{ type?: string; text?: string }> }>) : [];
+      const aprovados = new Map<string, number | null>();
+      for (const t of lista) {
+        if (String(t?.status ?? '').toUpperCase() !== 'APPROVED' || String(t?.language ?? '').toLowerCase() !== IDIOMA_TEMPLATE.toLowerCase()) continue;
+        const corpo = (Array.isArray(t.components) ? t.components : []).find((x) => String(x?.type).toUpperCase() === 'BODY')?.text;
+        aprovados.set(String(t.name), typeof corpo === 'string' ? new Set(Array.from(corpo.matchAll(/\{\{\s*(\w+)\s*\}\}/g), (m) => m[1])).size : null);
+      }
+      return aprovados;
     },
     async etiquetas(conversationId, etiquetas) {
       // o Chatwoot SUBSTITUI a lista inteira: quem chama manda a lista completa
@@ -413,11 +418,19 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
   };
   // caixa de WhatsApp Cloud: janela de 24 h e templates (uma leitura da lista de templates por ciclo, só se precisar)
   const cloud = CAIXAS_CLOUD.has(caixa);
-  let aprovadosDoCiclo: Promise<ReadonlySet<string>> | null = null;
+  let aprovadosDoCiclo: Promise<ReadonlyMap<string, number | null>> | null = null;
   const aprovados = () => (aprovadosDoCiclo ??= deps.chat.templatesAprovados(caixa));
-  /** Quando o paciente escreveu por último: a própria última mensagem da listagem, se for dele; senão o histórico. */
-  const ultimaDoPaciente = async (c: ConversaRegua): Promise<Date | null> =>
-    c.ultima && !c.ultima.saida && !c.ultima.privada ? c.ultima.criadaEm : deps.chat.ultimaDoPaciente(c.id);
+  /** Quando o paciente escreveu por último: a própria última mensagem da listagem, se for dele; senão o histórico (uma busca por conversa por ciclo). */
+  const historicoDoPaciente = new Map<number, Promise<Date | null>>();
+  const ultimaDoPaciente = async (c: ConversaRegua): Promise<Date | null> => {
+    if (c.ultima && !c.ultima.saida && !c.ultima.privada) return c.ultima.criadaEm;
+    let p = historicoDoPaciente.get(c.id);
+    if (!p) {
+      p = deps.chat.ultimaDoPaciente(c.id);
+      historicoDoPaciente.set(c.id, p);
+    }
+    return p;
+  };
   for (const { c, vistos } of pendentes) {
     try {
       if (precisaUltimaPublica(c)) c.ultima = await chat.ultimaPublica(c.id);
@@ -465,7 +478,13 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
             if (janelaDe24hAberta(await ultimaDoPaciente(c), agora)) {
               via = { tipo: 'texto' };
             } else {
-              via = { tipo: 'template', nome: d.modelo, variaveis: d.variaveis, aprovado: (await aprovados()).has(d.modelo) };
+              const naMeta = (await aprovados()).get(d.modelo);
+              // o corpo aprovado na Meta tem de pedir exatamente as variáveis que a régua tem (senão a Meta recusa ou troca um valor por outro)
+              const problema =
+                naMeta !== undefined && naMeta !== null && naMeta !== d.variaveis.length
+                  ? `na Meta pede ${naMeta} variável(is) e a régua tem ${d.variaveis.length}`
+                  : undefined;
+              via = { tipo: 'template', nome: d.modelo, variaveis: d.variaveis, aprovado: naMeta !== undefined && !problema, problema };
             }
           } catch (err) {
             logger.warn({ err: String(err), caixa, conversa: c.id, regra: d.regra }, `${ID_REGUA}: não consegui conferir a janela de 24 h/os templates — não mando agora`);
@@ -486,7 +505,7 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
               if (feitosDaConversa.has(`${regra}|${d.chave}`)) continue;
               semTemplate = true;
               privada = true;
-              texto = `🤖 Régua «${d.regra}»: template ${d.modelo} ainda não aprovado na Meta — não enviei`;
+              texto = `🤖 Régua «${d.regra}»: template ${d.modelo} ${via.problema ?? 'ainda não aprovado na Meta'} — não enviei`;
             }
           }
         }
