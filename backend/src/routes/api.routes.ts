@@ -160,6 +160,7 @@ import {
 import { centralChamadoFeitoHandler, centralChamadosHandler, centralEstadoHandler, centralGeralHandler, centralPessoaHandler } from '../controllers/central.controller.js';
 import { lidaEvolutionHandler } from '../lib/chatwoot-lida.js';
 import { eventoChatwootHandler } from '../lib/chatwoot-ia.js';
+import { kapsoProxyHandler } from '../controllers/kapso-proxy.controller.js';
 import { saudeIaHandler } from '../controllers/saude-ia.controller.js';
 import { listChangeLogHandler } from '../controllers/change-log.controller.js';
 import {
@@ -391,6 +392,8 @@ apiRouter.post('/public/central/pessoa', centralPessoaHandler);
 apiRouter.post('/public/evolution/lida', lidaEvolutionHandler);
 // Chatwoot → agente-dt: mensagem nova do paciente (transcrição do áudio + Sofia em seco). Chave em ?k= (mascarada no log).
 apiRouter.post('/public/chatwoot/evento', eventoChatwootHandler);
+// Chatwoot (canal nativo WhatsApp Cloud) → Kapso: troca Bearer por X-API-Key e repassa (kapso-proxy.controller.ts).
+apiRouter.all(/^\/public\/kapso-meta\/(.+)$/, (req, res) => void kapsoProxyHandler(req, res));
 apiRouter.post('/public/central/chamados', centralChamadosHandler);
 apiRouter.post('/public/central/chamados/feito', centralChamadoFeitoHandler);
 apiRouter.get('/public/funil/quadro', funilQuadroHandler);
