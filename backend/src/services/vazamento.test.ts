@@ -325,3 +325,11 @@ test('parágrafo de abertura que fala com o paciente ("seu") não é cortado mes
   const m = 'A transcrição do seu áudio ficou ruim, desculpa.\n\nPode me escrever o que você sente?';
   assert.equal(cortarAberturaMetanarrativa(m), m);
 });
+
+test('acentos nas bordas: "você" no 1º parágrafo impede o corte; "está" é pego pelo detector', () => {
+  const m = 'A transcrição do áudio veio ruim, ele não explicou, mas você pode me contar?\n\nOi! Me conta o que está sentindo.';
+  assert.equal(cortarAberturaMetanarrativa(m), m);
+  assert.equal(detectarVazamento('A transcrição está genérica, vou pedir pra ele.')?.tipo, 'bastidor_em_portugues');
+  const info = 'Recebi a transcrição do áudio dela e entendi que a dor é na lombar.\n\nHá quanto tempo ela sente isso?';
+  assert.equal(cortarAberturaMetanarrativa(info), info);
+});

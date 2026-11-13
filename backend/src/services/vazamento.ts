@@ -175,7 +175,8 @@ const BASTIDOR_PT = [
   // Caxias, lead 2823748, 13/11/2026: o áudio veio mudo e a Sofia abriu com "A transcrição do áudio veio bem genérica,
   // sem contar de fato o que ele está sentindo. Vou pedir pra ele mesmo me contar…". Transcrição é do sistema; o paciente
   // não sabe que existe. "Não consegui ouvir seu áudio" (a fala certa) não tem essa palavra.
-  /\btranscri[cç][aã]o\s+(?:d[oa]s?\s+(?:seu\s+|sua\s+)?[aá]udios?\s+)?(?:veio|saiu|ficou|chegou|est[aá]|foi)\b/i,
+  // (sem `\b` no fim: em JS, sem a bandeira `u`, `á`/`ê` contam como fora de palavra e "está\b" nunca casa)
+  /\btranscri[cç][aã]o\s+(?:d[oa]s?\s+(?:seu\s+|sua\s+)?[aá]udios?\s+)?(?:veio|saiu|ficou|chegou|est[aá]|foi)(?![\p{L}])/iu,
 ];
 
 /** Marcador de template que ficou sem valor: {{nome}}, {nome}, [NOME]. */
@@ -286,9 +287,12 @@ export function pedidoAoReescritor(ultimaDoCliente: string | null, rascunho: str
  * O parágrafo de abertura é a Sofia falando CONSIGO sobre a transcrição do áudio: cita a transcrição (ou "o áudio veio")
  * e fala do paciente em terceira pessoa, sem uma palavra dirigida a ele ("você", "seu", "te").
  */
-const ABERTURA_META = /\btranscri[cç][aã]o\b|\b[aá]udio\s+(?:dele|dela)\b|\b[aá]udio\s+(?:veio|saiu|chegou|ficou)\b/i;
-const TERCEIRA_PESSOA = /\b(?:ele|ela|dele|dela|o\s+paciente|a\s+paciente)\b/i;
-const DIRIGIDO_AO_PACIENTE = /\b(?:voc[eê]|vc|seu|sua|seus|suas|te|contigo)\b/i;
+// Sem `\b`: com acento ("áudio", "você", "está") ele falha em JS — bordas por letra/número.
+const SOLTA = String.raw`(?<![\p{L}\p{N}_])`;
+const FIM = String.raw`(?![\p{L}\p{N}_])`;
+const ABERTURA_META = new RegExp(`${SOLTA}(?:transcri[cç][aã]o|[aá]udio\\s+(?:dele|dela|veio|saiu|chegou|ficou))${FIM}`, 'iu');
+const TERCEIRA_PESSOA = new RegExp(`${SOLTA}(?:ele|ela|dele|dela|o\\s+paciente|a\\s+paciente)${FIM}`, 'iu');
+const DIRIGIDO_AO_PACIENTE = new RegExp(`${SOLTA}(?:voc[eê]|vc|seu|sua|seus|suas|te|contigo)${FIM}`, 'iu');
 
 /**
  * Caxias 13/11/2026: "A transcrição do áudio veio bem genérica, sem contar de fato o que ele está sentindo 😊 Vou pedir pra
@@ -301,7 +305,8 @@ export function cortarAberturaMetanarrativa(texto: string): string {
   const partes = (texto ?? '').split(/\n\s*\n/);
   if (partes.length < 2) return texto;
   const [abertura, ...resto] = partes;
-  if (!ABERTURA_META.test(abertura) || !TERCEIRA_PESSOA.test(abertura) || DIRIGIDO_AO_PACIENTE.test(abertura)) return texto;
+  // precisa ser a fala que o detector já reconhece como bastidor: "Recebi a transcrição do áudio dela e entendi…" tem informação e fica
+  if (!ABERTURA_META.test(abertura) || !detectarVazamento(abertura) || !TERCEIRA_PESSOA.test(abertura) || DIRIGIDO_AO_PACIENTE.test(abertura)) return texto;
   const sobra = resto.join('\n\n').trim();
   if (!sobra || ABERTURA_META.test(sobra) || detectarVazamento(sobra)) return texto;
   return sobra;
