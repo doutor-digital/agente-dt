@@ -342,8 +342,10 @@
         var hora = ate ? (ate.getHours() < 10 ? '0' : '') + ate.getHours() + ':' + (ate.getMinutes() < 10 ? '0' : '') + ate.getMinutes() : null;
         var nota = j.nota ? ' A conversa ficou salva como nota no cartão do Kommo.' : '';
         var texto = (j.turno === 'iniciado'
-          ? '✅ Passado para a Sofia. Ela está respondendo agora pelo Kommo' + (hora ? ' (pode responder este paciente até ' + hora + ')' : '') + '.'
-          : '✅ Passado para a Sofia. A última mensagem da conversa é da clínica, então ela não manda nada agora: responde quando o paciente escrever de novo' + (hora ? ' (até ' + hora + ', mesmo fora do horário)' : '') + '.') + nota;
+          ? '✅ Passado para a Sofia. Ela está escrevendo agora pelo Kommo, continuando a conversa' + (hora ? ' (cuida deste paciente até ' + hora + ', mesmo fora do horário)' : '') + '.'
+          : j.turno === 'recente'
+            ? '✅ Já foi passado há menos de 3 minutos: a Sofia já está cuidando (não mandei de novo).'
+            : '✅ Passado para a Sofia. Ela responde quando o paciente escrever.') + nota;
         // guarda ANTES de redesenhar o cartão (a pausa mudou): o cartão novo mostra o resultado, não "Lendo a conversa…"
         if (ultimasPassagens.size > 50) ultimasPassagens.clear();
         ultimasPassagens.set(leadId, texto);
@@ -351,6 +353,11 @@
         return texto;
       });
     },
+    // 13/11: "Sofia atende todos" também no cartão (bloco da Sofia), onde a atendente está olhando
+    todos: function () {
+      return { estado: estadoTodos, opcoes: opcoesDeTodos(new Date()) };
+    },
+    mudarTodos: function (ate) { return mudarTodos(ate); },
     ultimaPassagem: function (leadId) {
       return ultimasPassagens.get(leadId) || '';
     },
@@ -972,12 +979,7 @@
     botoes.className = 'todos__botoes';
     function mudar(ate) {
       Array.prototype.forEach.call(botoes.querySelectorAll('button'), function (b) { b.disabled = true; });
-      chamar('POST', '/ponte/todos', { ate: ate ? ate.toISOString() : null, por: quem() }).then(function (j) {
-        estadoTodos = j;
-        desenharTodos();
-      }, function (err) {
-        desenharTodos((err && err.message) || 'Não consegui mudar agora.');
-      });
+      mudarTodos(ate).catch(function (err) { desenharTodos((err && err.message) || 'Não consegui mudar agora.'); });
     }
     if (ligado) {
       var desl = botao('Desligar', function () { mudar(null); });
@@ -1001,6 +1003,16 @@
     raizTodos.replaceChildren.apply(raizTodos, filhos);
   }
 
+  /** Liga/desliga "Sofia atende todos" e atualiza a barra do topo e o cartão da tela. */
+  function mudarTodos(ate) {
+    return chamar('POST', '/ponte/todos', { ate: ate ? ate.toISOString() : null, por: quem() }).then(function (j) {
+      estadoTodos = j;
+      desenharTodos();
+      if (naTela && naTela.cartao) redesenharSeNaTela(naTela.cartao.id);
+      return j;
+    });
+  }
+
   function carregarTodos() {
     if (!config) {
       estadoTodos = null;
@@ -1009,7 +1021,8 @@
     chamar('GET', '/ponte/todos').then(function (j) {
       estadoTodos = j;
       desenharTodos();
-    }, function () { /* servidor antigo ou fora: a barra só não aparece */ });
+      if (naTela && naTela.cartao) redesenharSeNaTela(naTela.cartao.id);
+    }, function (err) { console.warn('[Ponte] "Sofia atende todos" indisponível:', err && err.message); });
   }
   setInterval(carregarTodos, 2 * 60 * 1000);
   chrome.storage.onChanged.addListener(function (mudou, area) {

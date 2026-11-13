@@ -847,6 +847,28 @@
       b, msg);
   }
 
+  /** 13/11: "Sofia atende TODOS os pacientes" no cartão — a mesma chave da barra do topo. */
+  function blocoDeTodos(doc, acoes) {
+    if (!acoes || !acoes.todos || !acoes.mudarTodos) return null;
+    var t = acoes.todos();
+    if (!t || !t.estado || !t.estado.disponivel) return null;
+    var msg = el(doc, 'p', { classe: 'nota nota--alerta', dados: { papel: 'msg-todos' } });
+    var ligado = !!t.estado.ate;
+    var ate = ligado ? new Date(t.estado.ate) : null;
+    var texto = ligado
+      ? 'A Sofia está atendendo TODOS os pacientes até ' + (ate.getHours() < 10 ? '0' : '') + ate.getHours() + ':' + (ate.getMinutes() < 10 ? '0' : '') + ate.getMinutes() + '.'
+      : 'Sofia atender TODOS os pacientes (não só este), mesmo fora do horário dela:';
+    var botoes = el(doc, 'div', { classe: 'todos__botoes' });
+    function ligar(b, quando) {
+      aoClicar(b, msg, function () { return acoes.mudarTodos(quando); });
+      botoes.appendChild(b);
+    }
+    if (ligado) ligar(botaoAcao(doc, 'Desligar (volta ao horário dela)', 'todos-desligar', { icone: 'pausa' }), null);
+    else t.opcoes.forEach(function (o) { ligar(botaoAcao(doc, o.rotulo, 'todos-ligar', { icone: 'robo' }), o.ate); });
+    return el(doc, 'div', { classe: 'todos todos--cartao' + (ligado ? ' todos--ligado' : ''), dados: { bloco: 'todos' } },
+      el(doc, 'p', { classe: 'todos__texto' }, texto), botoes, msg);
+  }
+
   /**
    * A Sofia neste cartão: o estado (ativa, pausada e por quê) e "Pausar a Sofia neste paciente". Some quando a unidade
    * não tem a IA (`r.sofiaNaUnidade === false`).
@@ -862,6 +884,7 @@
         sofia.pausada ? pilula(doc, 'Pausada', 'atencao', 'pausa') : pilula(doc, 'Ativa', 'bom')),
       el(doc, 'p', { classe: 'sofia__estado', dados: { papel: 'estado-sofia' } }, 'Sofia ' + texto),
       blocoDaPassagem(doc, r, acoes),
+      blocoDeTodos(doc, acoes),
       blocoDaPausa(doc, r, acoes));
   }
 
