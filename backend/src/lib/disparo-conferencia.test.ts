@@ -183,6 +183,9 @@ test('escritório: campo de telefone com DOIS números — cada um é conferido,
   assert.equal(await confere(ESCRITORIO, env(REGRA), com('63 98888-0000 63 99102-1043')), 'ja-cliente', 'colados: o número da pessoa no meio dos dígitos');
   assert.equal(mesmoNumero('63 98888-0000 / 63 99102-1043', '6391021043'), true);
   assert.equal(mesmoNumero('63 99102-1043', '1191021043'), false, 'um número só, outro DDD');
+  assert.equal(await confere(ESCRITORIO, env(REGRA), com('63 99102-1043 ramal 12')), 'ja-cliente', 'ramal depois do número');
+  assert.equal(await confere(ESCRITORIO, env(REGRA), com('(63) 99102-1043 (recado Maria e João)')), 'ja-cliente', 'texto em volta');
+  assert.equal(await confere(ESCRITORIO, env(REGRA), com('63 98888-0000 63 99102-1043 / 63 97777-1111')), 'ja-cliente', 'colados misturados com separador');
   assert.equal(await confere(ESCRITORIO, env(REGRA), com('63 98888-0000 / 63 97777-1111')), 'livre', 'nenhum dos dois é a pessoa');
   assert.equal(await confere(ESCRITORIO, env(REGRA), com('11 99102-1043 / 63 97777-1111')), 'livre', 'mesmos 8 dígitos em OUTRO DDD continua não casando');
 });
