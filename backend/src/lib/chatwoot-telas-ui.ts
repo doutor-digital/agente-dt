@@ -329,7 +329,9 @@ export const TELAS_JS = String.raw`
       tgAvisos(['Os anúncios levam para o WhatsApp '+m.numerosForaDoChatwoot.map(fmtWhats).join(' e ')+', que não está no Chatwoot. As conversas desses anúncios não entram nos números de cima nem no rastreio abaixo; aqui aparecem como a Meta conta.']).forEach(function(x){ s.appendChild(x); });
     }
     if(!m.campanhas.length){ s.appendChild(tgVazio('Nenhuma campanha gastou neste período.','')); return s; }
-    var linhas=m.campanhas.map(function(cp){
+    // mesmo teto da tabela do Gestor: o total segue somando todas
+    var MAX_CAMP=30, omitidas=Math.max(0,m.campanhas.length-MAX_CAMP);
+    var linhas=m.campanhas.slice(0,MAX_CAMP).map(function(cp){
       var tr=el('tr'), nm=el('span'); nm.appendChild(document.createTextNode(cp.nome));
       var sub=[OBJETIVO[cp.objetivo]||'', cp.destinos.length?'→ '+cp.destinos.map(fmtWhats).join(', '):''].filter(Boolean).join(' · ');
       if(sub) nm.appendChild(el('span','cod','· '+sub));
@@ -339,6 +341,8 @@ export const TELAS_JS = String.raw`
     });
     var tt=el('tr','total'); celula(tt,'Campanha','Total','t'); celula(tt,'Investido',dinheiro(t.gasto,mo,true)); celula(tt,'Conversas',nbr(t.conversas)); celula(tt,'Custo/conversa',dinheiro(t.custoPorConversa,mo,true)); celula(tt,'Leads',nbr(t.leads)); linhas.push(tt);
     s.appendChild(tabela([{texto:'Campanha',t:1},{texto:'Investido'},{texto:'Conversas'},{texto:'Custo/conversa'},{texto:'Leads'}],linhas));
+    if(omitidas) s.appendChild(el('p','tg-nota','Mais '+nbr(omitidas)+' campanha(s) com menos gasto não aparecem na tabela (o total as inclui).'));
+    if(!a&&(TG.periodo.mkt==='manha'||TG.periodo.mkt==='fimdia')) s.appendChild(el('p','tg-nota','Sem comparação com ontem: a Meta só separa os números por dia inteiro, e hoje ainda não acabou.'));
     if(m.motivo) s.appendChild(el('p','tg-nota',m.motivo));
     return s;
   }
@@ -395,7 +399,7 @@ export const TELAS_JS = String.raw`
       'Amanheceram: conversas criadas dentro do período (horário de Belém). Não interagiram: mesma regra da tela Hoje.',
       'Agendaram: conversas que entraram em Agendado dentro do período (memória da régua). Pagaram antecipado: etiqueta pagou-antecipado com atividade no período.',
       'Rastreio: a campanha é lida da 1ª mensagem do paciente (referral do anúncio); sem ela, do código gravado no contato. «Agendou» e «Fechou» da tabela são o estado de hoje dos leads que chegaram no período.',
-      'Anúncios na Meta: lidos da conta de anúncios da unidade (o mesmo que o Gerenciador de Anúncios mostra). Conversas iniciadas = resultado das campanhas de WhatsApp; Leads (Meta) = o que a Meta conta como lead (cadastro no site pelo pixel, formulário da Meta ou lead marcado na conversa). A Meta separa por dia: na aba Manhã ela soma ontem e hoje inteiros. Vale mesmo quando o anúncio leva para um número que não está no Chatwoot.',
+      'Anúncios na Meta: lidos da conta de anúncios da unidade (o mesmo que o Gerenciador de Anúncios mostra). Conversas iniciadas = resultado das campanhas de WhatsApp; Leads (Meta) = o que a Meta conta como lead (cadastro no site pelo pixel, formulário da Meta ou lead marcado na conversa). A Meta separa por dia inteiro: na aba Manhã ela soma ontem e hoje; em Manhã e Fim do dia o bloco da Meta fica sem comparação (hoje ainda não acabou); em Semana, Quinzena e Mês a comparação é com os mesmos dias logo antes, com hoje ainda incompleto. Vale mesmo quando o anúncio leva para um número que não está no Chatwoot.',
       'A variação compara com o período anterior do mesmo tamanho; não aparece quando a leitura das conversas foi cortada.',
       'Só entram as caixas das unidades que o seu usuário enxerga.'
     ]));

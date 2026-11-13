@@ -634,7 +634,9 @@ export async function funilMarketingHandler(req: Request, res: Response): Promis
         prisma.chatwootReguaVisto.findFirst({ where: { conversationId: 0, campo: CAMPO_PARTIDA }, orderBy: { desde: 'asc' }, select: { desde: true } }).catch(() => null),
         referralsDe(a, doPeriodoDe(conversas, periodo).map((c) => Number(c.id))),
         gastosDasUnidades(slugs, periodo.de, periodo.ate),
-        gastosDasUnidades(slugs, periodo.anterior.de, periodo.anterior.ate),
+        // a Meta só separa por DIA: em «Manhã» e «Fim do dia» o anterior seria ontem inteiro × hoje até agora (ou contaria ontem dos
+        // dois lados) — seta enganosa toda manhã. Nesses dois períodos o bloco da Meta fica sem comparação.
+        periodo.chave === 'manha' || periodo.chave === 'fimdia' ? Promise.resolve(null) : gastosDasUnidades(slugs, periodo.anterior.de, periodo.anterior.ate),
         destinosDasUnidades(slugs),
         numerosDasCaixas(a),
       ]);
