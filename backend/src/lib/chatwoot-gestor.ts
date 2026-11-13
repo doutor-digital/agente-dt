@@ -689,11 +689,16 @@ export function sufixoDaUnidade(slug: string): string {
   return slug.replace(/^doutor-hernia-/, '').toUpperCase().replace(/[^A-Z0-9]+/g, '_');
 }
 
-export function credenciaisDeAnuncio(slug: string, env: Record<string, string | undefined>): { token: string; conta: string } | { falta: string[] } {
+export function credenciaisDeAnuncio(
+  slug: string,
+  env: Record<string, string | undefined>,
+  /** o token de anúncios da unidade no banco (units.meta_access_token, de onde o rastreio copia para o n8n): vale quando não há env */
+  tokenDaUnidade: string | null = null,
+): { token: string; conta: string } | { falta: string[] } {
   const suf = sufixoDaUnidade(slug);
   const nomeToken = `META_ADS_TOKEN_${suf}`;
   const nomeConta = `META_ADS_CONTA_${suf}`;
-  const token = (env[nomeToken] ?? '').trim();
+  const token = ((env[nomeToken] ?? '').trim() || (tokenDaUnidade ?? '').trim());
   const conta = (env[nomeConta] ?? '').trim().replace(/^act_/i, '');
   const falta: string[] = [];
   if (!token) falta.push(nomeToken);

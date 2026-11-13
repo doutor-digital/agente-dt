@@ -490,7 +490,7 @@ async function gastosDasUnidades(slugs: string[], de: string, ate: string): Prom
   let leu = 0;
   await Promise.all(
     slugs.map(async (slug) => {
-      const cred = credenciaisDeAnuncio(slug, process.env);
+      const cred = credenciaisDeAnuncio(slug, process.env, await tokenDeAnuncioDaUnidade(slug));
       if ('falta' in cred) {
         faltam.push(...cred.falta);
         return;
@@ -515,13 +515,19 @@ async function gastosDasUnidades(slugs: string[], de: string, ate: string): Prom
   return { investido: { estado: 'ok', valor: total, moeda: [...moedas][0] ?? null, motivo: nota || null }, linhas };
 }
 
+/** O token de anúncios da unidade guardado no banco (units.meta_access_token); null se não houver. Lido a cada consulta (é uma linha só). */
+async function tokenDeAnuncioDaUnidade(slug: string): Promise<string | null> {
+  const u = await prisma.unit.findUnique({ where: { slug }, select: { metaAccessToken: true } }).catch(() => null);
+  return u?.metaAccessToken?.trim() || null;
+}
+
 /** O gasto por dia da(s) conta(s) de anúncios no intervalo; null se nenhuma unidade tem a conta ligada ou a Meta não respondeu. */
 async function gastoDiarioDasUnidades(slugs: string[], de: string, ate: string): Promise<{ porDia: Record<string, number>; total: number } | null> {
   const porDia: Record<string, number> = {};
   let leu = 0;
   await Promise.all(
     slugs.map(async (slug) => {
-      const cred = credenciaisDeAnuncio(slug, process.env);
+      const cred = credenciaisDeAnuncio(slug, process.env, await tokenDeAnuncioDaUnidade(slug));
       if ('falta' in cred) return;
       const g = await gastoDiarioDaConta(cred.conta, cred.token, de, ate);
       if (!g.ok) return;
@@ -1663,11 +1669,17 @@ const MENU_JS = String.raw`(function(){
   // aberto fica lembrado NESTA aba (sessionStorage): o Ctrl+R reabre a tela; fechar esquece
   var LEMBRAR = 'funil:aberto', reaberto = false, tela = null, gestao = null;
   function lembrar(valor){ try { if (valor === false) sessionStorage.removeItem(LEMBRAR); else sessionStorage.setItem(LEMBRAR, valor || 'funil'); } catch (e) {} }
-  function fechar(){ if (cam) { cam.remove(); cam = null; fr = null; } tela = null; marcar(false); lembrar(false); }
+  // endereço próprio (pedido do João, 13/11): a tela aberta fica no fim do endereço (…/dashboard#funil) — dá para salvar e mandar o
+  // link; replaceState não aciona as rotas do Chatwoot nem cria passo no "voltar"
+  function porNoEndereco(t){ try { history.replaceState(history.state, '', location.pathname + location.search + (t ? t.hash : '')); } catch (e) {} }
+  function telaDoEndereco(){ for (var i = 0; i < TELAS.length; i++) if (TELAS[i].hash === location.hash) return TELAS[i]; return null; }
+  function fechar(){ if (cam) { cam.remove(); cam = null; fr = null; } tela = null; marcar(false); lembrar(false); if (telaDoEndereco()) porNoEndereco(null); }
   function reabrir(){
     if (reaberto) return;
     try {
-      var v = sessionStorage.getItem(LEMBRAR), t = achar(v === 'funil' || !v ? 'funil' : v);
+      // o endereço (…#gestor) vence o que estava lembrado na aba
+      var doEnd = telaDoEndereco();
+      var v = doEnd ? doEnd.id : sessionStorage.getItem(LEMBRAR), t = achar(v === 'funil' || !v ? 'funil' : v);
       // tela de gestão: espera saber se a pessoa pode (a resposta do perfil vem depois do menu)
       if (t && t.gestao && gestao === null) return;
       reaberto = true;
@@ -1685,6 +1697,7 @@ const MENU_JS = String.raw`(function(){
     var url = AGENTE + '/funil?menu=1' + (t.param ? '&tela=' + t.param : '');
     if (cam && tela !== t.id && fr) { fr.src = url; fr.title = t.nome; }
     tela = t.id;
+    porNoEndereco(t);
     if (!cam) {
       cam = document.createElement('div');
       cam.style.cssText = 'position:fixed;top:0;right:0;bottom:0;z-index:2147483000;background:#f5f7fb;display:flex;border-left:1px solid #e3e8ef';

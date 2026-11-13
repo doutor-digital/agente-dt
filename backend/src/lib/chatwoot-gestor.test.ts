@@ -369,6 +369,9 @@ test('conta de anúncios por unidade: nomes das envs e o que falta', () => {
   assert.deepEqual(credenciaisDeAnuncio('doutor-hernia-parauapebas', { META_ADS_TOKEN_PARAUAPEBAS: 'tok' }), { falta: ['META_ADS_CONTA_PARAUAPEBAS'] });
   assert.deepEqual(credenciaisDeAnuncio('doutor-hernia-parauapebas', { META_ADS_TOKEN_PARAUAPEBAS: 'tok', META_ADS_CONTA_PARAUAPEBAS: 'act_12345678' }), { token: 'tok', conta: '12345678' });
   assert.deepEqual(credenciaisDeAnuncio('doutor-hernia-parauapebas', { META_ADS_TOKEN_PARAUAPEBAS: 'tok', META_ADS_CONTA_PARAUAPEBAS: 'abc' }), { falta: ['META_ADS_CONTA_PARAUAPEBAS'] });
+  // sem env de token, vale o token da unidade no banco; env vence
+  assert.deepEqual(credenciaisDeAnuncio('doutor-hernia-parauapebas', { META_ADS_CONTA_PARAUAPEBAS: '2190377315140085' }, 'tokBanco'), { token: 'tokBanco', conta: '2190377315140085' });
+  assert.deepEqual(credenciaisDeAnuncio('doutor-hernia-parauapebas', { META_ADS_TOKEN_PARAUAPEBAS: 'tokEnv', META_ADS_CONTA_PARAUAPEBAS: '2190377315140085' }, 'tokBanco'), { token: 'tokEnv', conta: '2190377315140085' });
 });
 
 // ── Oportunidades ───────────────────────────────────────────────────────────────
