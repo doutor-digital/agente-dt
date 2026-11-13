@@ -25,7 +25,7 @@ globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
   return new Response(JSON.stringify({ payload: [] }), { status: 200 });
 }) as typeof fetch;
 
-const { criarHandlersDoAssistente, assistenteLigadaPara, assistenteEstadoHandler, assistentePerguntarHandler, assistenteSugerirHandler, leituraComLogin, paginaAssistenteHandler } = await import('./assistente.controller.js');
+const { ajudaDoPortal, corsDoAssistente, criarHandlersDoAssistente, assistenteLigadaPara, assistenteEstadoHandler, assistentePerguntarHandler, assistenteSugerirHandler, leituraComLogin, paginaAssistenteHandler } = await import('./assistente.controller.js');
 const { criarTeto } = await import('../lib/chatwoot-assistente.js');
 const { montarMenuJs } = await import('./funil.controller.js');
 const { criarContextoChatwoot } = await import('../mcp-remoto/chatwoot.js');
@@ -186,6 +186,83 @@ test('leitura com o login dela: só GET, com os cabeçalhos DELA (não o token d
   assert.equal(c.lida.interno, true);
   assert.ok(chamadas.length === 3 && chamadas.every((x) => x.metodo === 'GET'));
   assert.ok(chamadas.every((x) => x.headers['access-token'] === 'bom' && x.headers.uid === 'ana@dd.com' && !x.headers.api_access_token));
+});
+
+test('mensagens: o Chatwoot dá 20 por vez; a leitura pede as anteriores (até 40) e junta em ordem', async () => {
+  const pedidos: string[] = [];
+  const lote = (de: number, ate: number) => Array.from({ length: ate - de + 1 }, (_, i) => ({ id: de + i, message_type: 0, content: `m${de + i}` }));
+  const ctx = criarContextoChatwoot(
+    { url: 'https://chatwoot.exemplo.test', conta: 1, token: 'token-da-conta' },
+    {
+      fetch: (async (url: string | URL | Request) => {
+        pedidos.push(String(url));
+        const antes = new URL(String(url)).searchParams.get('before');
+        const payload = !antes ? lote(81, 100) : antes === '81' ? lote(61, 80) : lote(41, 60);
+        return new Response(JSON.stringify({ payload }), { status: 200 });
+      }) as typeof fetch,
+    },
+  );
+  const r = (await leituraComLogin(ctx, sessao).mensagens(31)) as { payload: Array<{ id: number }> };
+  assert.equal(r.payload.length, 40);
+  assert.deepEqual([r.payload[0]!.id, r.payload[39]!.id], [61, 100]);
+  assert.equal(pedidos.length, 2, 'duas páginas, não a conversa inteira');
+  assert.match(pedidos[1]!, /before=81/);
+});
+
+test('Central de Ajuda do portal: lê as páginas, guarda 10 min, junta leituras simultâneas e não martela o portal fora do ar', async () => {
+  let chamadas = 0;
+  let fora = false;
+  const ctx = criarContextoChatwoot(
+    { url: 'https://chatwoot.exemplo.test', conta: 1, token: 'token-da-conta' },
+    {
+      fetch: (async (url: string | URL | Request) => {
+        chamadas++;
+        await new Promise((ok) => setTimeout(ok, 5));
+        if (fora) return new Response('{}', { status: 500 });
+        const pagina = new URL(String(url)).searchParams.get('page');
+        assert.match(String(url), /portals\/ajuda\/articles/);
+        return new Response(JSON.stringify({ payload: pagina === '1' ? [{ id: 1, title: 'Marcar perdido', status: 'published', content: 'x' }, { id: 2, title: 'Rascunho', status: 'draft' }] : [] }), { status: 200 });
+      }) as typeof fetch,
+    },
+  );
+  const ajuda = ajudaDoPortal(ctx);
+  const [a, b] = await Promise.all([ajuda(), ajuda()]);
+  assert.deepEqual(a.map((x) => x.id), [1]);
+  assert.deepEqual(b, a);
+  assert.equal(chamadas, 2, 'duas páginas, uma leitura só para as duas perguntas');
+  await ajuda();
+  assert.equal(chamadas, 2, 'cache');
+  // portal fora do ar (cache novo): falha, e a próxima pergunta nem tenta de novo por 1 minuto
+  fora = true;
+  const quebrada = ajudaDoPortal(ctx);
+  await assert.rejects(quebrada());
+  const antes = chamadas;
+  await assert.rejects(quebrada());
+  assert.equal(chamadas, antes);
+});
+
+test('CORS do botão: só GET de estado, só da origem do Chatwoot, sem credenciais', () => {
+  const cw = 'https://chatwoot.exemplo.test';
+  const ok = corsDoAssistente('/api/public/assistente/estado', cw, cw);
+  assert.deepEqual(ok?.allowedHeaders, ['X-CW-Token', 'X-CW-Client', 'X-CW-Uid']);
+  assert.equal(ok?.credentials, false);
+  assert.deepEqual(ok?.methods, ['GET', 'OPTIONS']);
+  assert.equal(corsDoAssistente('/api/public/assistente/sugerir', cw, cw), null);
+  assert.equal(corsDoAssistente('/api/public/assistente/estado', 'https://outro.exemplo.test', cw), null);
+  assert.equal(corsDoAssistente('/api/public/assistente/estado', cw, undefined), null);
+});
+
+test('perguntar com conversa de caixa sem a assistente: a dúvida vale (cai para as caixas dela); sugerir não', async () => {
+  const { porta } = leituraFalsa({ caixa: 9, caixas: [2, 9] });
+  const { h, modelo } = montar({ leitura: porta });
+  const r = resp();
+  await h.perguntar(pedido({ pergunta: 'como marco perdido?', conversaId: 31 }), asRes(r));
+  assert.equal(r.codigo, 200);
+  assert.equal(modelo.chamadas, 1);
+  const r2 = resp();
+  await h.sugerir(pedido({ conversaId: 31 }), asRes(r2));
+  assert.equal(r2.codigo, 422);
+  assert.equal(modelo.chamadas, 1);
 });
 
 test('perguntar sobre horário: usa a agenda REAL (porta falsa) e diz de onde veio', async () => {

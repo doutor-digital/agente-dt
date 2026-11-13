@@ -11,7 +11,8 @@ import { apagarCofreDeArquivos, ligarConectorRemoto } from './mcp-remoto/produca
 import { paginaPausaHandler } from './controllers/pausa.controller.js';
 import { paginaAprendizadosHandler } from './controllers/aprendizados.controller.js';
 import { menuFunilHandler, paginaFunilHandler } from './controllers/funil.controller.js';
-import { paginaAssistenteHandler } from './controllers/assistente.controller.js';
+import { corsDoAssistente, paginaAssistenteHandler } from './controllers/assistente.controller.js';
+import { contaChatwootDoAmbiente } from './mcp-remoto/chatwoot.js';
 import { paginaAltaHandler } from './controllers/alta.controller.js';
 import { paginaIaHandler } from './controllers/ia-unidade.controller.js';
 import { getCheckpointer } from './agent/graph.js';
@@ -105,6 +106,9 @@ async function main(): Promise<void> {
     cors((req, cb) => {
       const origin = req.header('Origin');
       if (!origin) return cb(null, { origin: true, credentials: true });
+      // o botão da assistente (na página do Chatwoot) pergunta se está ligada; antes da regra geral do dashboard, que não libera X-CW-*
+      const doAssistente = corsDoAssistente(req.path, origin, contaChatwootDoAmbiente()?.url);
+      if (doAssistente) return cb(null, doAssistente);
       if (req.path.startsWith('/api/public/') && (ORIGEM_KOMMO.test(origin) || ORIGEM_DASHBOARD.test(origin))) {
         return cb(null, { origin: true, credentials: false, allowedHeaders: ['Content-Type', 'X-Widget-Key', 'X-Requested-With'], methods: ['GET', 'POST', 'DELETE', 'OPTIONS'] });
       }

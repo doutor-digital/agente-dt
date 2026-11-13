@@ -50,6 +50,9 @@ export interface PortaDeLeitura {
   caixas(): Promise<number[]>;
 }
 
+const MENSAGENS_POR_PAGINA = 20;
+const MENSAGENS_PAGINAS = 2;
+
 export function leituraComLogin(c: ContextoChatwoot, sessao: SessaoChatwoot): PortaDeLeitura {
   return {
     async conversa(id) {
@@ -59,7 +62,21 @@ export function leituraComLogin(c: ContextoChatwoot, sessao: SessaoChatwoot): Po
       const caixa = Number(raw?.inbox_id);
       return { lida, caixa: Number.isInteger(caixa) && caixa > 0 ? caixa : null };
     },
-    mensagens: (id) => chamar(c, 'GET', `conversations/${id}/messages`, { sessao }),
+    // O Chatwoot devolve as 20 mais recentes por vez; `before` pede as anteriores a uma mensagem. Até 2 páginas (40), para a
+    // queixa, a cidade e o horário que o paciente deu no começo não ficarem de fora numa conversa longa.
+    async mensagens(id) {
+      let todas: unknown[] = [];
+      let antes: string | undefined;
+      for (let pagina = 0; pagina < MENSAGENS_PAGINAS; pagina++) {
+        const r = (await chamar(c, 'GET', `conversations/${id}/messages`, { sessao, query: antes ? { before: antes } : {} })) as { payload?: unknown } | null;
+        const lote = Array.isArray(r?.payload) ? r!.payload : [];
+        todas = [...lote, ...todas];
+        const menor = Math.min(...lote.map((m: any) => Number(m?.id)).filter((n: number) => Number.isInteger(n) && n > 0));
+        if (lote.length < MENSAGENS_POR_PAGINA || !Number.isFinite(menor)) break;
+        antes = String(menor);
+      }
+      return { payload: todas };
+    },
     async caixas() {
       const r = (await chamar(c, 'GET', 'inboxes', { sessao })) as { payload?: unknown } | null;
       return (Array.isArray(r?.payload) ? r!.payload : []).map((i: any) => Number(i?.id)).filter((n: number) => Number.isInteger(n) && n > 0);
@@ -72,11 +89,13 @@ export function leituraComLogin(c: ContextoChatwoot, sessao: SessaoChatwoot): Po
 const PORTAL_AJUDA = 'ajuda';
 const AJUDA_VALE_MS = 10 * 60_000;
 const AJUDA_MAX_PAGINAS = 4;
+const AJUDA_FALHA_VALE_MS = 60_000;
 
 export function ajudaDoPortal(c: ContextoChatwoot): () => Promise<Artigo[]> {
   let cache: { em: number; artigos: Artigo[] } | null = null;
-  return async () => {
-    if (cache && Date.now() - cache.em < AJUDA_VALE_MS) return cache.artigos;
+  let lendo: Promise<Artigo[]> | null = null;
+  let falhou: { em: number; erro: unknown } | null = null;
+  const ler = async (): Promise<Artigo[]> => {
     const vistos = new Map<number, Artigo>();
     for (let pagina = 1; pagina <= AJUDA_MAX_PAGINAS; pagina++) {
       const r = await chamar(c, 'GET', `portals/${PORTAL_AJUDA}/articles`, { query: { page: String(pagina) } });
@@ -84,8 +103,26 @@ export function ajudaDoPortal(c: ContextoChatwoot): () => Promise<Artigo[]> {
       if (!novos.length) break; // acabou (ou o Chatwoot repetiu a mesma página)
       novos.forEach((a) => vistos.set(a.id, a));
     }
-    cache = { em: Date.now(), artigos: [...vistos.values()] };
-    return cache.artigos;
+    return [...vistos.values()];
+  };
+  return async () => {
+    if (cache && Date.now() - cache.em < AJUDA_VALE_MS) return cache.artigos;
+    // portal fora do ar: não refaz 4 chamadas de 60 s a cada pergunta; a falha vale por 1 minuto (e a pergunta SABE que falhou)
+    if (falhou && Date.now() - falhou.em < AJUDA_FALHA_VALE_MS) throw falhou.erro;
+    lendo ??= ler()
+      .then((artigos) => {
+        cache = { em: Date.now(), artigos };
+        falhou = null;
+        return artigos;
+      })
+      .catch((erro) => {
+        falhou = { em: Date.now(), erro };
+        throw erro;
+      })
+      .finally(() => {
+        lendo = null;
+      });
+    return lendo;
   };
 }
 
@@ -123,26 +160,29 @@ const statusDoErro = (e: unknown): number | undefined => (e as { status?: number
 type Resolvida = { ok: true; unit: Unit; linhas: LinhaDaConversa[]; lida: ConversaLida | null } | { ok: false; status: number; error: string };
 
 export function criarHandlersDoAssistente(d: DepsDosHandlers) {
-  /** Qual unidade vale: a da caixa da conversa (lida com o login dela) ou, sem conversa, a única ligada entre as caixas que ela vê. */
-  async function resolver(quem: { leitura: PortaDeLeitura }, conversaId: number | null | undefined, comMensagens: boolean): Promise<Resolvida> {
-    let caixa: number | null = null;
-    let lida: ConversaLida | null = null;
+  /**
+   * Qual unidade vale: a da caixa da conversa (lida com o login dela) ou, sem conversa, a única ligada entre as caixas que ela vê.
+   * `sugerir` PRECISA da conversa (e da unidade dela). `perguntar` usa a conversa só como contexto: se a caixa dela não tem a
+   * assistente, a dúvida ("como marco perdido?") ainda vale, e cai para as caixas que ela vê.
+   */
+  async function resolver(quem: { leitura: PortaDeLeitura }, conversaId: number | null | undefined, modo: 'sugerir' | 'perguntar'): Promise<Resolvida> {
     if (conversaId) {
+      let c: Awaited<ReturnType<PortaDeLeitura['conversa']>>;
       try {
-        const c = await quem.leitura.conversa(conversaId);
-        lida = c.lida;
-        caixa = c.caixa;
+        c = await quem.leitura.conversa(conversaId);
       } catch (e) {
         if ([401, 403, 404].includes(statusDoErro(e) ?? 0)) return { ok: false, status: 403, error: 'você não tem acesso a esta conversa (ou ela não existe mais)' };
         throw e;
       }
-      const slug = caixa ? CAIXAS_REGUA[caixa] : undefined;
-      if (!slug) return { ok: false, status: 422, error: 'a assistente ainda não atende a caixa desta conversa' };
-      if (!d.ligadaPara(slug)) return { ok: false, status: 422, error: 'a assistente ainda não está ligada para esta unidade' };
-      const unit = await d.unidade(slug);
-      if (!unit) return { ok: false, status: 422, error: 'não achei a unidade desta caixa' };
-      const linhas = comMensagens && !lida.interno && !lida.grupo ? linhasDaConversa(await quem.leitura.mensagens(conversaId)) : [];
-      return { ok: true, unit, linhas, lida };
+      const slug = c.caixa ? CAIXAS_REGUA[c.caixa] : undefined;
+      const unit = slug && d.ligadaPara(slug) ? await d.unidade(slug) : null;
+      if (unit) {
+        const linhas = !c.lida.interno && !c.lida.grupo ? linhasDaConversa(await quem.leitura.mensagens(conversaId)) : [];
+        return { ok: true, unit, linhas, lida: c.lida };
+      }
+      if (modo === 'sugerir') {
+        return { ok: false, status: 422, error: slug ? 'a assistente ainda não está ligada para esta unidade' : 'a assistente ainda não atende a caixa desta conversa' };
+      }
     }
     const slugs = [...new Set((await quem.leitura.caixas()).map((c) => CAIXAS_REGUA[c]).filter((s): s is string => !!s && d.ligadaPara(s)))];
     if (slugs.length !== 1) {
@@ -192,7 +232,7 @@ export function criarHandlersDoAssistente(d: DepsDosHandlers) {
       }
       const t0 = Date.now();
       try {
-        const r = await resolver(quem, p.data.conversaId, true);
+        const r = await resolver(quem, p.data.conversaId, 'sugerir');
         if (!r.ok) {
           res.status(r.status).json({ error: r.error });
           return;
@@ -230,7 +270,7 @@ export function criarHandlersDoAssistente(d: DepsDosHandlers) {
       }
       const t0 = Date.now();
       try {
-        const r = await resolver(quem, p.data.conversaId, true);
+        const r = await resolver(quem, p.data.conversaId, 'perguntar');
         if (!r.ok) {
           res.status(r.status).json({ error: r.error });
           return;
@@ -317,4 +357,19 @@ export function paginaAssistenteHandler(_req: Request, res: Response): void {
     return;
   }
   res.type('html').set('Cache-Control', 'no-store').send(paginaDaAssistente(new URL(origem).origin));
+}
+
+/**
+ * CORS do botão: ele roda na página do Chatwoot e pergunta `GET /api/public/assistente/estado` com o login da pessoa em
+ * cabeçalhos próprios. Só essa rota, só GET, só desta origem (a do Chatwoot), sem credenciais. O painel e as demais rotas
+ * são chamados de dentro do iframe, na mesma origem do servidor: não precisam de CORS. `null` = não é com este módulo.
+ */
+export function corsDoAssistente(path: string, origem: string, urlChatwoot: string | undefined): { origin: true; credentials: false; allowedHeaders: string[]; methods: string[] } | null {
+  if (path !== '/api/public/assistente/estado' || !urlChatwoot) return null;
+  try {
+    if (new URL(urlChatwoot).origin !== origem) return null;
+  } catch {
+    return null;
+  }
+  return { origin: true, credentials: false, allowedHeaders: ['X-CW-Token', 'X-CW-Client', 'X-CW-Uid'], methods: ['GET', 'OPTIONS'] };
 }

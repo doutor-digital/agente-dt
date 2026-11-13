@@ -146,11 +146,16 @@ async function autorizado(req: Request, res: Response): Promise<Acesso | null> {
   }
   const r = await quemEstaLogado(c, sessao);
   if (typeof r === 'object') return { c, logado: r.nome, logadoId: r.id, sessao };
-  if (r === 'invalida') res.status(403).json({ error: 'entre no Chatwoot de novo (sessão expirada)', sessao: 'invalida' });
+  recusarSessao(res, r, 403);
+  return null;
+}
+
+/** A resposta para uma sessão que não passou. O funil recusa login inválido com 403; a assistente, com 401. */
+function recusarSessao(res: Response, r: Exclude<Conferencia, object>, statusInvalida: 401 | 403): void {
+  if (r === 'invalida') res.status(statusInvalida).json({ error: 'entre no Chatwoot de novo (sessão expirada)', sessao: 'invalida' });
   else if (r === 'sem-conta') res.status(403).json({ error: 'seu usuário do Chatwoot não tem acesso a esta conta — peça para a Suzanne', sessao: 'sem-conta' });
   else if (r === 'excesso') res.status(429).json({ error: 'muitos acessos agora — tente em 1 minuto' });
   else res.status(502).json({ error: 'não consegui falar com o Chatwoot agora' });
-  return null;
 }
 
 /**
@@ -177,10 +182,7 @@ export async function sessaoDaAtendente(req: Request, res: Response): Promise<At
   }
   const r = await quemEstaLogado(c, sessao);
   if (typeof r === 'object') return { c, sessao, nome: r.nome, id: r.id };
-  if (r === 'invalida') res.status(401).json({ error: 'entre no Chatwoot de novo (sessão expirada)', sessao: 'invalida' });
-  else if (r === 'sem-conta') res.status(403).json({ error: 'seu usuário do Chatwoot não tem acesso a esta conta — peça para a Suzanne', sessao: 'sem-conta' });
-  else if (r === 'excesso') res.status(429).json({ error: 'muitos acessos agora — tente em 1 minuto' });
-  else res.status(502).json({ error: 'não consegui falar com o Chatwoot agora' });
+  recusarSessao(res, r, 401);
   return null;
 }
 
@@ -1215,8 +1217,8 @@ export function menuFunilHandler(_req: Request, res: Response): void {
 
 /**
  * O que o Chatwoot carrega em `GET /funil/menu.js`: o menu (Hoje/Funil) e o botão da assistente da atendente. Dois blocos
- * independentes (um não depende do outro, um erro num não derruba o outro) no MESMO arquivo, porque o DASHBOARD_SCRIPTS da
- * produção carrega só este endereço.
+ * independentes no MESMO arquivo, porque o DASHBOARD_SCRIPTS da produção carrega só este endereço. Erro de EXECUÇÃO do botão
+ * não derruba o menu (o `try`); erro de SINTAXE derrubaria o arquivo todo, por isso o teste `menu.js … PARSEIAM` é obrigatório.
  */
 export function montarMenuJs(agente: string): string {
   const origem = JSON.stringify(agente);
