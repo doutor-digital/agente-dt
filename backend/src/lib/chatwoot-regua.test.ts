@@ -8,6 +8,9 @@ import assert from 'node:assert/strict';
 import {
   atualizarVistos,
   brl,
+  camposDoModelo,
+  janelaDe24hAberta,
+  paraParametro,
   conversaDoChatwoot,
   decidirEtiquetaCelular,
   decidirRegua,
@@ -531,4 +534,62 @@ test('conversaDoChatwoot: lê a listagem; ignora grupo e o bot do Evolution', ()
   assert.equal(conversaDoChatwoot({ nada: 1 }), null);
   assert.equal(conversaDoChatwoot({ ...raw, last_non_activity_message: { message_type: 2 } })!.ultima, null);
   assert.equal(conversaDoChatwoot({ ...raw, last_non_activity_message: null })!.ultima, null);
+});
+
+// ── caixa de WhatsApp Cloud: janela de 24 h e variáveis do template ─────────────────────────────────
+
+test('camposDoModelo: cada campo distinto, na ordem em que aparece (a ordem de {{1}}, {{2}}… do template)', () => {
+  assert.deepEqual(camposDoModelo('parau_lead_reengajamento_48h'), ['contact.name']);
+  assert.deepEqual(camposDoModelo('parau_consulta_prepagamento'), ['contact.name', 'lead.cf.2450736', 'lead.cf.2451104']);
+  assert.deepEqual(camposDoModelo('parau_sdr_boas_vindas_programa'), ['contact.name', 'lead.cf.2450750', 'lead.cf.2450928']);
+  assert.deepEqual(camposDoModelo('parau_sdr_reativacao_lead_frio'), ['contact.name', 'lead.cf.2450732']);
+  assert.deepEqual(camposDoModelo('nao_existe'), []);
+  // todo campo de todo modelo tem valor na régua (nenhum cai no «sem correspondente»)
+  for (const nome of Object.keys(TEXTOS_PARAU)) {
+    const r = renderizar(nome, conv({ attrs: { programa: 'Coluna Forte' } }), U);
+    assert.ok(!r.faltando.some((f) => f.includes('sem correspondente')), nome);
+  }
+});
+
+test('renderizar: as variáveis saem na ordem do template e com os mesmos valores do texto', () => {
+  const r = renderizar('parau_consulta_prepagamento', conv({ attrs: { data_consulta: '2026-11-17', hora_consulta: '14:30' } }), U);
+  assert.deepEqual(r.variaveis, ['Maria', '17/11 às 14:30', 'R$ 250']);
+  assert.ok(r.texto!.includes('Data e horário: 17/11 às 14:30') && r.texto!.includes('é R$ 250.'));
+  // falta campo: nem texto nem variáveis
+  const sem = renderizar('parau_consulta_prepagamento', conv({ attrs: {} }), U);
+  assert.equal(sem.texto, null);
+  assert.equal(sem.variaveis, null);
+  assert.deepEqual(sem.faltando, ['data da consulta (data_consulta)']);
+  // modelo só com o nome
+  assert.deepEqual(renderizar('parau_consulta_pos_atendimento', conv(), U).variaveis, ['Maria']);
+});
+
+test('paraParametro: uma linha, sem aspas nem < > (o Chatwoot os apagaria), no máximo 1000 caracteres', () => {
+  assert.equal(paraParametro("D'Ávila\nSilva"), 'D’Ávila Silva');
+  assert.equal(paraParametro('a   b\t"c" <d>'), 'a b ”c” d');
+  assert.equal(paraParametro('x'.repeat(2000)).length, 1000);
+  assert.equal(paraParametro('<>'), '');
+});
+
+test('janelaDe24hAberta: conta da última mensagem do paciente, com 15 min de folga; nunca escreveu = fechada', () => {
+  const agora = Z('2026-11-16T12:00:00Z');
+  assert.equal(janelaDe24hAberta(Z('2026-11-16T10:00:00Z'), agora), true);
+  assert.equal(janelaDe24hAberta(Z('2026-11-15T12:30:00Z'), agora), true); // 23 h 30
+  assert.equal(janelaDe24hAberta(Z('2026-11-15T12:10:00Z'), agora), false); // 23 h 50: dentro da folga
+  assert.equal(janelaDe24hAberta(Z('2026-11-15T11:59:00Z'), agora), false); // 24 h 01
+  assert.equal(janelaDe24hAberta(null, agora), false);
+  assert.equal(janelaDe24hAberta(new Date('lixo'), agora), false);
+});
+
+test('notaDoSeco com via: diz se iria como texto ou como template, com {{1}}=…', () => {
+  const attrs = { etapa: 'Agendado', situacao_consulta: 'Confirmado', data_consulta: '2026-11-17', hora_consulta: '14:30' };
+  const d = decidirRegua(conv({ attrs }), { vistos: new Map(), feitos: new Set() }, Z('2026-11-16T17:30:00Z'), U).disparos[0]!;
+  assert.equal(d.modelo, 'parau_consulta_lembrete_vespera');
+  assert.ok(notaDoSeco(d, { tipo: 'texto' }).startsWith('🧪 [SECO] Régua «consulta-vespera» — enviaria agora, como TEXTO (janela de 24 h aberta):\n\nOlá, Maria.'));
+  const t = notaDoSeco(d, { tipo: 'template', nome: d.modelo, variaveis: d.variaveis!, aprovado: true });
+  assert.ok(t.startsWith('🧪 [SECO] Régua «consulta-vespera» — enviaria agora pelo template parau_consulta_lembrete_vespera com {{1}}=Maria, {{2}}=17/11 às 14:30 (janela de 24 h fechada):\n\nOlá, Maria.'));
+  assert.ok(!t.includes('não está aprovado'));
+  assert.ok(notaDoSeco(d, { tipo: 'template', nome: d.modelo, variaveis: d.variaveis!, aprovado: false }).includes('ainda não está aprovado na Meta'));
+  // sem via (caixa sem janela): a nota de sempre
+  assert.ok(notaDoSeco(d).startsWith('🧪 [SECO] Régua «consulta-vespera» — enviaria agora:\n\nOlá, Maria.'));
 });

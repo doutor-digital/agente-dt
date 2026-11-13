@@ -22,6 +22,20 @@ export const CAIXAS_REGUA: Readonly<Record<number, string>> = {
   2: 'doutor-hernia-parauapebas', // Evolution (desconectado desde 13/11: o número entrou no Kapso em coexistência)
   3: 'doutor-hernia-parauapebas', // WhatsApp Cloud via Kapso (13/11/2026)
 };
+/**
+ * Caixas de canal WhatsApp Cloud (oficial, via Kapso): fora da janela de 24 h só vai TEMPLATE aprovado. A caixa 2 (Evolution/API)
+ * não tem janela: segue com texto.
+ */
+export const CAIXAS_CLOUD: ReadonlySet<number> = new Set([3]);
+/** O idioma em que os 33 templates `parau_*` foram criados na Meta. */
+export const IDIOMA_TEMPLATE = 'pt_BR';
+/**
+ * Janela de 24 h do WhatsApp: conta da ÚLTIMA mensagem RECEBIDA do paciente (a mesma conta do Chatwoot, `MessageWindowService`).
+ * Folga de 15 min: o ciclo roda a cada 10 min e o Chatwoot manda depois, em segundo plano; no limite é melhor o template (vale sempre)
+ * do que um texto que o Chatwoot marca como falhou ao chegar a hora.
+ */
+export const JANELA_24H_MS = 24 * 3600_000;
+export const FOLGA_DA_JANELA_MS = 15 * 60_000;
 /** caixa → agente gerente no Chatwoot (lead quente parado vai para ela; decisão 26 do João). Parauapebas: Cleia (id 4). */
 export const GERENTE_DA_CAIXA: Readonly<Record<number, number>> = { 2: 4, 3: 4 };
 /** O usuário "📱 Celular da unidade": autor das mensagens que a equipe manda pelo celular (o Evolution usa o token dele). */
@@ -108,6 +122,8 @@ export interface Disparo {
   modelo: string;
   /** texto pronto; null quando falta campo */
   texto: string | null;
+  /** valores de {{1}}, {{2}}… do template de mesmo nome na Meta (já limpos); null quando falta campo */
+  variaveis: string[] | null;
   faltando: string[];
   alvo: Date;
   /** presente = regra interna (nota privada + ação, nunca mensagem ao paciente) */
@@ -294,10 +310,37 @@ export function atualizarVistos(
 
 // ── o texto ────────────────────────────────────────────────────────────────────────────────────────
 
-/** Troca os campos {{…}} do modelo do Kommo pelos dados da conversa e da unidade. Campo sem valor entra em `faltando`. */
-export function renderizar(modelo: string, c: ConversaRegua, u: DadosDaUnidade): { texto: string | null; faltando: string[] } {
+/** Os campos {{…}} do modelo, sem repetir, na ordem em que aparecem pela primeira vez: é a ordem de {{1}}, {{2}}… do template na Meta. */
+export function camposDoModelo(modelo: string): string[] {
   const bruto = TEXTOS_PARAU[modelo];
-  if (bruto === undefined) return { texto: null, faltando: [`texto do modelo ${modelo}`] };
+  if (bruto === undefined) return [];
+  const campos: string[] = [];
+  for (const m of bruto.matchAll(/\{\{\s*([^}]+?)\s*\}\}/g)) if (!campos.includes(m[1]!)) campos.push(m[1]!);
+  return campos;
+}
+
+/**
+ * O que o Chatwoot manda à Meta como parâmetro: uma linha só (a Meta recusa quebra de linha e tabulação), e sem aspas simples/duplas
+ * e sinais < > (o Chatwoot os apaga; trocar por aspas curvas mantém «D'Ávila» legível).
+ */
+export function paraParametro(v: string): string {
+  return v
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/ {2,}/g, ' ')
+    .replace(/'/g, '’')
+    .replace(/"/g, '”')
+    .replace(/[<>]/g, '')
+    .trim()
+    .slice(0, 1000);
+}
+
+/**
+ * Troca os campos {{…}} do modelo do Kommo pelos dados da conversa e da unidade. Campo sem valor entra em `faltando`.
+ * `variaveis` são os mesmos valores, um por campo distinto, na ordem de {{1}}, {{2}}… do template; null se faltou alguma coisa.
+ */
+export function renderizar(modelo: string, c: ConversaRegua, u: DadosDaUnidade): { texto: string | null; variaveis: string[] | null; faltando: string[] } {
+  const bruto = TEXTOS_PARAU[modelo];
+  if (bruto === undefined) return { texto: null, variaveis: null, faltando: [`texto do modelo ${modelo}`] };
   const a = c.attrs;
   const consulta = momento(a.data_consulta, a.hora_consulta);
   const sessao = momento(a.proxima_sessao, a.hora_sessao);
@@ -309,7 +352,7 @@ export function renderizar(modelo: string, c: ConversaRegua, u: DadosDaUnidade):
     if (!faltando.includes(o)) faltando.push(o);
     return '';
   };
-  const texto = bruto.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_todo, nome: string) => {
+  const valorDoCampo = (nome: string): string => {
     switch (nome) {
       case 'contact.name':
         return primeiroNome(c.nome) ?? falta('nome do contato');
@@ -338,8 +381,12 @@ export function renderizar(modelo: string, c: ConversaRegua, u: DadosDaUnidade):
       default:
         return falta(`campo {{${nome}}} sem correspondente no Chatwoot`);
     }
-  });
-  return faltando.length ? { texto: null, faltando } : { texto, faltando: [] };
+  };
+  const texto = bruto.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_todo, nome: string) => valorDoCampo(nome));
+  const variaveis = camposDoModelo(modelo).map((nome) => paraParametro(valorDoCampo(nome)));
+  // o Chatwoot descarta parâmetro vazio e a Meta recusa o template com a conta errada: vazio é o mesmo que faltar
+  if (!faltando.length && variaveis.some((v) => !v)) falta('um valor do template ficou vazio');
+  return faltando.length ? { texto: null, variaveis: null, faltando } : { texto, variaveis, faltando: [] };
 }
 
 // ── as regras ──────────────────────────────────────────────────────────────────────────────────────
@@ -597,22 +644,43 @@ export function decidirRegua(c: ConversaRegua, memoria: Memoria, agora: Date, un
     }
     if (!aberta) continue;
     if (k.interna) {
-      disparos.push({ regra: k.regra, chave: k.chave, modelo: k.modelo, texto: DESCRICAO_INTERNA[k.interna], faltando: [], alvo: k.alvo, interna: k.interna });
+      disparos.push({ regra: k.regra, chave: k.chave, modelo: k.modelo, texto: DESCRICAO_INTERNA[k.interna], variaveis: null, faltando: [], alvo: k.alvo, interna: k.interna });
       continue;
     }
     const r = renderizar(k.modelo, c, unidade);
     if (r.faltando.length && memoria.feitos.has(`${k.regra}${SUFIXO_FALTA}|${k.chave}`)) continue;
-    disparos.push({ regra: k.regra, chave: k.chave, modelo: k.modelo, texto: r.texto, faltando: r.faltando, alvo: k.alvo });
+    disparos.push({ regra: k.regra, chave: k.chave, modelo: k.modelo, texto: r.texto, variaveis: r.variaveis, faltando: r.faltando, alvo: k.alvo });
   }
   return { disparos, perdidas };
 }
 
-/** A nota privada que o modo seco deixa na conversa. */
-export function notaDoSeco(d: Disparo): string {
+/** Por onde a mensagem iria: texto livre (caixa sem janela, ou janela de 24 h aberta) ou template aprovado (janela fechada). */
+export type ViaDoEnvio =
+  | { tipo: 'texto'; motivo?: string }
+  | { tipo: 'template'; nome: string; variaveis: string[]; aprovado: boolean; motivo?: string };
+
+/** `{{1}}=Maria, {{2}}=17/11 às 14:30` */
+export const descreverVariaveis = (v: readonly string[]): string => (v.length ? v.map((x, i) => `{{${i + 1}}}=${x}`).join(', ') : 'sem variáveis');
+
+/**
+ * A janela de 24 h está aberta? `ultimaDoPaciente` = quando o paciente escreveu por último (null = nunca escreveu: fechada).
+ * Fecha com folga (FOLGA_DA_JANELA_MS) para o texto não chegar ao Chatwoot depois do prazo.
+ */
+export function janelaDe24hAberta(ultimaDoPaciente: Date | null, agora: Date): boolean {
+  if (!ultimaDoPaciente || !Number.isFinite(ultimaDoPaciente.getTime())) return false;
+  return agora.getTime() - ultimaDoPaciente.getTime() < JANELA_24H_MS - FOLGA_DA_JANELA_MS;
+}
+
+/** A nota privada que o modo seco deixa na conversa. `via` só existe em caixa de WhatsApp Cloud (nas outras a nota fica como sempre foi). */
+export function notaDoSeco(d: Disparo, via?: ViaDoEnvio): string {
   if (d.interna) return `🧪 [SECO] Régua «${d.regra}» — faria agora: ${d.texto ?? DESCRICAO_INTERNA[d.interna]}`;
-  return d.texto === null
-    ? `🧪 [SECO] Régua «${d.regra}» — NÃO enviaria agora, falta: ${d.faltando.join('; ')}.`
-    : `🧪 [SECO] Régua «${d.regra}» — enviaria agora:\n\n${d.texto}`;
+  if (d.texto === null) return `🧪 [SECO] Régua «${d.regra}» — NÃO enviaria agora, falta: ${d.faltando.join('; ')}.`;
+  if (!via) return `🧪 [SECO] Régua «${d.regra}» — enviaria agora:\n\n${d.texto}`;
+  if (via.tipo === 'texto') return `🧪 [SECO] Régua «${d.regra}» — enviaria agora, como TEXTO (${via.motivo ?? 'janela de 24 h aberta'}):\n\n${d.texto}`;
+  return (
+    `🧪 [SECO] Régua «${d.regra}» — enviaria agora pelo template ${via.nome} com ${descreverVariaveis(via.variaveis)} (${via.motivo ?? 'janela de 24 h fechada'}):\n\n${d.texto}` +
+    (via.aprovado ? '' : `\n\n⚠️ O template ${via.nome} ainda não está aprovado na Meta: no ligado, não enviaria (deixaria uma nota).`)
+  );
 }
 
 /**
