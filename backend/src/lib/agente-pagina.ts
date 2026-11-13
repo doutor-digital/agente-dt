@@ -701,7 +701,7 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
   // ── entrada: sessão do Chatwoot pelo menu, unidade pelas caixas da pessoa ──
   function pedirSessao(){ try { window.parent.postMessage({ event: 'funil:pede-sessao' }, CW); } catch (e) {} }
   function escolherUnidade(u){
-    U = u; guardar('agente:unidade', u.slug); $('unidadeNome').textContent = u.nome;
+    U = u; guardar('agente:unidade', u.slug); $('unidadeNome').textContent = u.nome; desvincular();
     EST = null; previaDe = null; $('cardPrevia').hidden = true; lerChat(); restam = null;
     lerEstado().then(function(){ restam = EST && EST.conversa ? EST.conversa.restantes : null; if (abaAtual === 'testar') desenharChat(false); }).catch(function(e){ aviso('erroTopo', e.message); });
   }

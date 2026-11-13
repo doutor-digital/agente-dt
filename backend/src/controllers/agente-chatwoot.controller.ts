@@ -4,7 +4,6 @@
  * Chatwoot da atendente (cabeçalhos X-CW-*) e que ela atenda uma caixa da unidade pedida (`atendenteDaUnidade`).
  *
  *   GET  /api/public/agente/painel?slug=&periodo=   painel da Sofia (hoje | 7 | 30 dias) + as 👎 para revisar
- *   GET  /api/public/agente/avaliacoes?slug=        resumo dos 👍/👎 e as 👎 para revisar
  *   POST /api/public/agente/avaliacoes/:id/revisar  { slug, como: regra | pedido | ok }
  *   GET  /api/public/agente/pedidos?slug=           pedidos à Doutor Digital feitos pela unidade
  *   POST /api/public/agente/pedidos                 { slug, tipo, texto, conversa? } → demanda no suporte + aviso no bot de chamados
@@ -43,17 +42,6 @@ export async function agentePainelHandler(req: Request, res: Response): Promise<
   } catch (e) {
     logger.warn({ err: String(e), unit: r.unit.slug }, 'agente: painel falhou');
     res.status(502).json({ error: 'não consegui montar o painel agora' });
-  }
-}
-
-export async function agenteAvaliacoesHandler(req: Request, res: Response): Promise<void> {
-  const r = await atendenteDaUnidade(req, res, slugDe(req.query.slug));
-  if (!r) return;
-  try {
-    res.set('Cache-Control', 'no-store').json(await resumoDaUnidade(r.unit.slug));
-  } catch (e) {
-    logger.warn({ err: String(e), unit: r.unit.slug }, 'agente: resumo das avaliações falhou');
-    res.status(502).json({ error: 'não consegui ler as avaliações agora' });
   }
 }
 

@@ -4,18 +4,15 @@
  *
  * Fontes:
  *  - RESPONDEU: `sofia_mensagem` — cada resposta pública que a Sofia mandou no Chatwoot, gravada na hora do envio. Pessoa = conversa.
- *    (Começa a contar no deploy de 13/11/2026; as respostas de antes foram trazidas do Chatwoot uma vez.)
- *  - MARCOU: `spine_lead_links` da unidade na faixa de chave das conversas do Chatwoot (`chatwoot-lead.ts`) com consulta na franquia
- *    (`spine_id_schedule`) e status ok. A data é a do vínculo (a Sofia cadastra e marca na mesma conversa).
- *  - % QUE MARCOU: marcadas de conversas que ela respondeu no período ÷ pessoas respondidas (nunca passa de 100%).
- *  - PASSOU PARA A EQUIPE / PIX: `sofia_evento`, gravado onde acontece (passagem à equipe que deu certo; Pix que SAIU para o
- *    paciente). Tentativa recusada não entra.
+ *    Conta a partir do deploy desta tela (13/11/2026).
+ *  - MARCOU / PASSOU PARA A EQUIPE / PIX: `sofia_evento`, gravado onde acontece e na hora (consulta que a franquia aceitou; passagem à
+ *    equipe que deu certo; Pix que SAIU para o paciente). Tentativa recusada não entra; desmarcar depois não apaga o que ela marcou.
+ *  - % QUE MARCOU: marcações de conversas que ela respondeu no período ÷ pessoas respondidas (nunca passa de 100%).
  *  - À NOITE OU NO FIM DE SEMANA: respostas antes das 8h, a partir das 18h, sábado e domingo — no fuso da unidade.
  *  - AVALIAÇÕES: `sofia_avaliacao` (👍/👎 da equipe no balão).
  * Cada número vem com o período anterior do mesmo tamanho (hoje × ontem até a mesma hora; 7 × 7 dias antes; 30 × 30 antes).
  */
 import { prisma } from './prisma.js';
-import { BASE_LEAD_CHATWOOT } from './chatwoot-lead.js';
 
 export type Periodo = 'hoje' | '7' | '30';
 const DIA_MS = 86_400_000;
@@ -180,18 +177,14 @@ export async function painelDaUnidade(unit: { id: string; slug: string; spineTim
   const fuso = unit.spineTimezone ?? 'America/Sao_Paulo';
   const j = janelas(agora, periodo, fuso);
   const desde = new Date(Math.min(j.antesInicio.getTime(), agora.getTime() - (DIAS_NO_GRAFICO + 1) * DIA_MS));
-  const [respostas, links, avaliacoes, eventos] = await Promise.all([
+  const [respostas, avaliacoes, eventos] = await Promise.all([
     prisma.sofiaMensagem.findMany({ where: { unitSlug: unit.slug, criadoEm: { gte: desde } }, select: { conversa: true, criadoEm: true } }),
-    prisma.spineLeadLink.findMany({
-      where: { unitId: unit.id, kommoLeadId: { gte: BASE_LEAD_CHATWOOT }, spineIdSchedule: { not: null }, status: 'ok', createdAt: { gte: desde } },
-      select: { kommoLeadId: true, nome: true, agendadoPara: true, createdAt: true },
-    }),
     prisma.sofiaAvaliacao.findMany({ where: { unitSlug: unit.slug, criadoEm: { gte: desde } }, select: { nota: true, criadoEm: true } }),
-    prisma.sofiaEvento.findMany({ where: { unitSlug: unit.slug, criadoEm: { gte: desde } }, select: { conversa: true, tipo: true, criadoEm: true } }),
+    prisma.sofiaEvento.findMany({ where: { unitSlug: unit.slug, criadoEm: { gte: desde } }, select: { conversa: true, tipo: true, nome: true, detalhe: true, criadoEm: true } }),
   ]);
   return montarPainel({
     respostas,
-    marcadas: links.map((l) => ({ conversa: l.kommoLeadId - BASE_LEAD_CHATWOOT, nome: l.nome, agendadoPara: l.agendadoPara, criadoEm: l.createdAt })),
+    marcadas: eventos.filter((e) => e.tipo === 'marcou').map((e) => ({ conversa: e.conversa, nome: e.nome, agendadoPara: e.detalhe, criadoEm: e.criadoEm })),
     avaliacoes,
     eventos,
     agora,

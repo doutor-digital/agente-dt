@@ -235,9 +235,10 @@ const BOTAO_JS = String.raw`(function(){
     if (!ligada || !c) { if (AV.conversa) { AV.conversa = null; AV.mapa = {}; fecharPop(); } return; }
     if (c !== AV.conversa) { AV.conversa = c; AV.mapa = {}; AV.proxima = 0; AV.qtd = -1; fecharPop(); }
     var qtd = document.querySelectorAll('.message-bubble-container[data-message-id]').length;
-    var chegouMensagem = AV.qtd !== -1 && qtd !== AV.qtd && Date.now() - AV.ultima > 5000;
+    // mensagem nova na tela: pergunta logo (ou quando completar 5 s da última pergunta) — não espera os 30 s
+    if (AV.qtd !== -1 && qtd !== AV.qtd) AV.proxima = Math.min(AV.proxima, AV.ultima + 5000);
     AV.qtd = qtd;
-    if ((Date.now() >= AV.proxima || chegouMensagem) && document.visibilityState === 'visible') { AV.ultima = Date.now(); lerAvaliacoes(c); }
+    if (Date.now() >= AV.proxima && document.visibilityState === 'visible') { AV.ultima = Date.now(); lerAvaliacoes(c); }
     estiloAval();
     Array.prototype.forEach.call(document.querySelectorAll('.message-bubble-container[data-message-id]'), function(cont){
       var id = cont.getAttribute('data-message-id'), x = AV.mapa[id]; if (!x) return;

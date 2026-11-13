@@ -2805,8 +2805,6 @@ model SofiaMensagem {
   unitSlug  String   @map("unit_slug")
   texto     String   @db.Text
   fala      String?  @db.Text
-  /// ferramentas que ela usou nesta rodada (agendar_consulta, pausar_ia, gerar_sinal_pix…): o painel do Agente conta daqui
-  acoes     String[] @default([])
   criadoEm  DateTime @default(now()) @map("criado_em")
 
   @@index([conversa])
@@ -2839,13 +2837,16 @@ model SofiaAvaliacao {
   @@map("sofia_avaliacao")
 }
 
-/// O que a Sofia FEZ no Chatwoot e o painel do Agente conta (13/11/2026): `equipe` = passou a conversa para a equipe;
-/// `pix` = o Pix do sinal SAIU para o paciente. Gravado na hora, só no modo ligado (tentativa recusada não entra).
+/// O que a Sofia FEZ no Chatwoot e o painel do Agente conta (13/11/2026), gravado na hora, só no modo ligado (tentativa recusada não
+/// entra): `marcou` = consulta marcada na franquia (nome do contato + "AAAA-MM-DDTHH:mm" em detalhe); `equipe` = passou a conversa
+/// para a equipe; `pix` = o Pix do sinal SAIU para o paciente.
 model SofiaEvento {
   id       String   @id @default(cuid())
   unitSlug String   @map("unit_slug")
   conversa Int
   tipo     String
+  nome     String?
+  detalhe  String?
   criadoEm DateTime @default(now()) @map("criado_em")
 
   @@index([unitSlug, criadoEm])

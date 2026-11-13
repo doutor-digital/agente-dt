@@ -444,3 +444,53 @@ test('Sofia: não roda se a equipe respondeu por último; teto por dia', async (
   mem.rodadas.set('doutor-hernia-parauapebas|2026-11-12', TETO_SOFIA_POR_DIA - 1);
   assert.equal(await rodarSofia(M, b.p, mem), 'nota');
 });
+
+// ── painel do Agente (13/11): o que a Sofia FEZ é gravado na hora, só no ligado e só quando dá certo ──
+test('LIGADO: grava marcou (nome e dia) e Pix que saiu; a resposta com id vira registro para o 👍/👎', async () => {
+  const eventos: Array<{ tipo: string; detalhe?: string | null }> = [];
+  const respostas: Array<{ mensagem: number }> = [];
+  const a = portas({ estado: 'ligado', sofia: { resposta: 'Marquei para terça às 9h.', pix: 'PIX-COPIA-E-COLA', agendou: { data: '2026-11-17', hora: '09:00' } } });
+  a.p.registrarEvento = async (e) => {
+    eventos.push(e);
+  };
+  a.p.registrarResposta = async (r) => {
+    respostas.push(r);
+  };
+  a.p.publica = async (_c, texto) => ({ usuario: 3, mensagem: texto === 'PIX-COPIA-E-COLA' ? 501 : 500 });
+  assert.equal(await rodarSofia(M, a.p, novaMemoriaDaIa()), 'enviada');
+  assert.deepEqual(eventos.map((e) => e.tipo), ['marcou', 'pix']);
+  assert.equal(eventos[0]!.detalhe, '2026-11-17T09:00');
+  assert.deepEqual(respostas.map((r) => r.mensagem), [500], 'só a resposta da Sofia, não o Pix');
+});
+
+test('LIGADO: passou para a equipe conta mesmo com a resposta descartada; Pix recusado pelo Chatwoot não conta', async () => {
+  const eventos: string[] = [];
+  const a = portas({ estado: 'ligado', sofia: { passouParaEquipe: true }, lidaDepois: { etiquetas: ['esperando-humano'] } });
+  a.p.registrarEvento = async (e) => {
+    eventos.push(e.tipo);
+  };
+  assert.equal(await rodarSofia(M, a.p, novaMemoriaDaIa()), 'mudou');
+  assert.deepEqual(eventos, ['equipe']);
+
+  const b = portas({ estado: 'ligado', sofia: { pix: 'PIX' } });
+  const deB: string[] = [];
+  b.p.registrarEvento = async (e) => {
+    deB.push(e.tipo);
+  };
+  b.p.publica = async (_c, texto) => {
+    if (texto === 'PIX') throw new Error('Chatwoot 422');
+    return { usuario: 3, mensagem: 600 };
+  };
+  assert.equal(await rodarSofia(M, b.p, novaMemoriaDaIa()), 'enviada');
+  assert.deepEqual(deB, [], 'Pix que não saiu não conta');
+});
+
+test('SECO: nenhum evento (nada aconteceu de verdade)', async () => {
+  const eventos: string[] = [];
+  const a = portas({ sofia: { agendou: { data: '2026-11-17', hora: '09:00' }, passouParaEquipe: true, pix: 'PIX' } });
+  a.p.registrarEvento = async (e) => {
+    eventos.push(e.tipo);
+  };
+  assert.equal(await rodarSofia(M, a.p, novaMemoriaDaIa()), 'nota');
+  assert.deepEqual(eventos, []);
+});

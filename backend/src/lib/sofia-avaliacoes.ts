@@ -32,18 +32,10 @@ export function ultimaFalaDoPaciente(falas: ReadonlyArray<{ role: string; conten
 }
 
 /** Guarda a resposta que a Sofia acabou de mandar (idempotente: o mesmo id não duplica). */
-export async function registrarRespostaDaSofia(r: {
-  mensagem: number;
-  conversa: number;
-  slug: string;
-  texto: string;
-  fala: string | null;
-  acoes?: readonly string[];
-}): Promise<void> {
-  const acoes = [...new Set((r.acoes ?? []).map((a) => String(a).slice(0, 60)))].slice(0, 20);
+export async function registrarRespostaDaSofia(r: { mensagem: number; conversa: number; slug: string; texto: string; fala: string | null }): Promise<void> {
   await prisma.sofiaMensagem.upsert({
     where: { messageId: r.mensagem },
-    create: { messageId: r.mensagem, conversa: r.conversa, unitSlug: r.slug, texto: r.texto.slice(0, MAX_RESPOSTA), fala: r.fala?.slice(0, MAX_FALA) ?? null, acoes },
+    create: { messageId: r.mensagem, conversa: r.conversa, unitSlug: r.slug, texto: r.texto.slice(0, MAX_RESPOSTA), fala: r.fala?.slice(0, MAX_FALA) ?? null },
     update: {},
   });
 }
@@ -97,6 +89,15 @@ export async function minhaAvaliacao(mensagem: number, quemId: number): Promise<
   return prisma.sofiaAvaliacao.findUnique({ where: { messageId_quemId: { messageId: mensagem, quemId } }, select: { id: true, nota: true, texto: true } });
 }
 
+/** 👎 do painel numa conversa sem resposta da Sofia gravada: a 👎 ainda aberta desta pessoa nesta conversa (para não repetir a cada clique). */
+export async function minhaRuimSemMensagem(conversa: number, quemId: number): Promise<AvaliacaoExistente | null> {
+  return prisma.sofiaAvaliacao.findFirst({
+    where: { conversa, quemId, messageId: null, nota: 'ruim', revisadaEm: null },
+    orderBy: { criadoEm: 'desc' },
+    select: { id: true, nota: true, texto: true },
+  });
+}
+
 /** A avaliação muda algo? (nota nova, outra nota, ou 👎 com outro texto). Só então sai a nota privada da 👎. */
 export function avaliacaoMuda(ja: AvaliacaoExistente | null, nota: Nota, texto: string | null): boolean {
   if (!ja) return true;
@@ -122,14 +123,33 @@ export async function gravarAvaliacao(
     });
     return;
   }
-  await prisma.sofiaAvaliacao.create({
-    data: { unitSlug: a.slug, conversa: a.conversa, messageId: a.mensagem, nota: a.nota, texto, quemId: a.quemId, quemNome: a.quemNome },
-  });
+  const dados = { unitSlug: a.slug, conversa: a.conversa, messageId: a.mensagem, nota: a.nota, texto, quemId: a.quemId, quemNome: a.quemNome };
+  if (a.mensagem && a.quemId) {
+    // dois cliques ao mesmo tempo no 1º voto: o segundo vira atualização, não erro de chave única
+    await prisma.sofiaAvaliacao.upsert({
+      where: { messageId_quemId: { messageId: a.mensagem, quemId: a.quemId } },
+      create: dados,
+      update: { nota: a.nota, texto, quemNome: a.quemNome, revisadaEm: null, revisadaPor: null, revisadaComo: null },
+    });
+    return;
+  }
+  await prisma.sofiaAvaliacao.create({ data: dados });
 }
 
-/** Grava o que a Sofia fez e o painel conta (passou para a equipe, Pix que saiu). */
-export async function registrarEventoDaSofia(e: { slug: string; conversa: number; tipo: 'equipe' | 'pix' }): Promise<void> {
-  await prisma.sofiaEvento.create({ data: { unitSlug: e.slug, conversa: e.conversa, tipo: e.tipo } });
+export interface EventoDaSofia {
+  slug: string;
+  conversa: number;
+  /** marcou = consulta marcada na franquia; equipe = passou a conversa para a equipe; pix = o Pix do sinal saiu */
+  tipo: 'marcou' | 'equipe' | 'pix';
+  /** marcou: o nome do contato no Chatwoot */
+  nome?: string | null;
+  /** marcou: "AAAA-MM-DDTHH:mm" da consulta, no fuso da clínica */
+  detalhe?: string | null;
+}
+
+/** Grava o que a Sofia fez e o painel conta, na hora em que acontece. */
+export async function registrarEventoDaSofia(e: EventoDaSofia): Promise<void> {
+  await prisma.sofiaEvento.create({ data: { unitSlug: e.slug, conversa: e.conversa, tipo: e.tipo, nome: e.nome?.slice(0, 120) ?? null, detalhe: e.detalhe?.slice(0, 60) ?? null } });
 }
 
 /** As portas do banco que as rotas usam (trocáveis no teste de autorização). */
@@ -137,6 +157,7 @@ export const bancoDeAvaliacoes = {
   respostaDaSofia: (mensagem: number, conversa: number) => respostaDaSofia(mensagem, conversa),
   ultimaRespostaDaSofia: (conversa: number) => ultimaRespostaDaSofia(conversa),
   minhaAvaliacao: (mensagem: number, quemId: number) => minhaAvaliacao(mensagem, quemId),
+  minhaRuimSemMensagem: (conversa: number, quemId: number) => minhaRuimSemMensagem(conversa, quemId),
   gravarAvaliacao: (a: Parameters<typeof gravarAvaliacao>[0], ja: AvaliacaoExistente | null) => gravarAvaliacao(a, ja),
   respostasDaSofiaNaConversa: (conversa: number, quemId: number | null) => respostasDaSofiaNaConversa(conversa, quemId),
 };

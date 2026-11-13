@@ -520,7 +520,11 @@ export async function assistenteAvaliarHandler(req: Request, res: Response): Pro
       res.json({ ok: true });
       return;
     }
-    const ja = mensagem !== null && quemId ? await bancoDeAvaliacoes.minhaAvaliacao(mensagem, quemId) : null;
+    const ja = !quemId
+      ? null
+      : mensagem !== null
+        ? await bancoDeAvaliacoes.minhaAvaliacao(mensagem, quemId)
+        : await bancoDeAvaliacoes.minhaRuimSemMensagem(r.conversa, quemId); // 👎 do painel sem resposta gravada: junta com a aberta
     const muda = avaliacaoMuda(ja, nota, texto);
     if (nota === 'ruim' && muda) await r.porta.nota(r.conversa, `👎 Resposta da Sofia avaliada como ruim por ${r.a.nome}: ${texto}`);
     if (muda) await bancoDeAvaliacoes.gravarAvaliacao({ slug: r.slug, conversa: r.conversa, mensagem, nota, texto, quemId, quemNome: r.a.nome || 'atendente' }, ja);

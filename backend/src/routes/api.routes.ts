@@ -161,7 +161,7 @@ import {
   funilTarefaHandler,
 } from '../controllers/funil.controller.js';
 import { assistenteAvaliarHandler, assistenteRespostasHandler, assistenteEstadoHandler, assistentePausaAcaoHandler, assistentePausaEstadoHandler, assistentePerguntarHandler, assistenteSugerirHandler } from '../controllers/assistente.controller.js';
-import { agenteAvaliacoesHandler, agenteNovoPedidoHandler, agentePainelHandler, agentePedidosHandler, agenteRevisarHandler } from '../controllers/agente-chatwoot.controller.js';
+import { agenteNovoPedidoHandler, agentePainelHandler, agentePedidosHandler, agenteRevisarHandler } from '../controllers/agente-chatwoot.controller.js';
 import { centralChamadoFeitoHandler, centralChamadosHandler, centralEstadoHandler, centralGeralHandler, centralPessoaHandler } from '../controllers/central.controller.js';
 import { lidaEvolutionHandler } from '../lib/chatwoot-lida.js';
 import { eventoChatwootHandler } from '../lib/chatwoot-ia.js';
@@ -394,7 +394,6 @@ apiRouter.get('/public/testar-ia/unidades', testarIaUnidadesHandler);
 apiRouter.get('/public/testar-ia/pausadas', testarIaPausadasHandler);
 // tela Agente do Chatwoot (13/11): resumo dos 👍/👎, revisar 👎 e pedidos à Doutor Digital — login do Chatwoot da atendente
 apiRouter.get('/public/agente/painel', agentePainelHandler);
-apiRouter.get('/public/agente/avaliacoes', agenteAvaliacoesHandler);
 apiRouter.post('/public/agente/avaliacoes/:id/revisar', agenteRevisarHandler);
 apiRouter.get('/public/agente/pedidos', agentePedidosHandler);
 apiRouter.post('/public/agente/pedidos', agenteNovoPedidoHandler);
