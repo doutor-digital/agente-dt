@@ -25,6 +25,7 @@ import {
   PiChatCircleDotsBold,
   PiClipboardTextBold,
   PiGearSixBold,
+  PiShareNetworkBold,
   PiPencilSimpleLineBold,
   PiSpinnerGapBold,
   PiWarningBold,
@@ -56,6 +57,12 @@ const GRUPOS: Array<{ risco: RiscoAutomacao; titulo: string; explica: string; Ic
     titulo: 'Criam tarefas no Kommo',
     explica: 'Põem e concluem tarefas no Calendário. Não mexem em campo nem em etapa: o erro é uma tarefa a mais ou a menos — corrigível.',
     Icone: PiClipboardTextBold,
+  },
+  {
+    risco: 'manda-dado-externo',
+    titulo: 'Mandam dado para fora (Meta)',
+    explica: 'Enviam conversões para a Meta (anúncios). O que saiu não tem como desfazer, e a Meta não avisa se veio repetido.',
+    Icone: PiShareNetworkBold,
   },
   {
     risco: 'comportamento',
