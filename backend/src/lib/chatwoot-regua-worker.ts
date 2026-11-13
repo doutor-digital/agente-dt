@@ -35,6 +35,7 @@ import {
   GERENTE_DA_CAIXA,
   conversaDoChatwoot,
   decidirEtiquetaCelular,
+  ehArquivo,
   decidirRegua,
   ETIQUETA_CELULAR,
   IDIOMA_TEMPLATE,
@@ -322,7 +323,8 @@ async function lerConversas(chat: Chat, caixa: number): Promise<{ conversas: Con
     if (pagina.length === 0) return { conversas, truncada: false };
     for (const raw of pagina) {
       const c = conversaDoChatwoot(raw);
-      if (!c || vistas.has(c.id)) continue;
+      // conversa de arquivo (histórico unificado, ninguém mexeu depois): a régua não toca
+      if (!c || vistas.has(c.id) || ehArquivo(raw)) continue;
       vistas.add(c.id);
       conversas.push(c);
     }

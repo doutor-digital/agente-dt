@@ -41,6 +41,28 @@ export const FOLGA_DA_JANELA_MS = 15 * 60_000;
  * (canal API, que não envia nada). Funil e Hoje não leem estas caixas; régua, Sofia e agenda também não (não estão em CAIXAS_REGUA).
  */
 export const CAIXAS_HISTORICO: ReadonlySet<number> = new Set([4]);
+
+/**
+ * UNIFICAÇÃO (pedido do João, 13/11/2026: "o histórico é pra subir no zap oficial, unificar"): as conversas da caixa de histórico
+ * passam para a caixa do WhatsApp oficial com a etiqueta `historico` e a data real da última mensagem. Enquanto ninguém mexe
+ * nelas, são ARQUIVO: ficam fora da régua, da agenda, do rastreio de conversões, do Hoje e das telas de gestão; no funil e em
+ * Oportunidades só entram se tiverem etapa. Quando o paciente escreve (ou alguém responde), a atividade passa do corte e ela
+ * volta a ser uma conversa como qualquer outra — o histórico fica em cima, no mesmo fio.
+ */
+export const ETIQUETA_HISTORICO = 'historico';
+/** 14/11/2026 00:00 em Belém: toda conversa do histórico tem a última mensagem antes disso. */
+export const CORTE_DO_HISTORICO_MS = Date.parse('2026-11-14T03:00:00Z');
+export function ehArquivo(raw: any): boolean {
+  const etiquetas: unknown[] = Array.isArray(raw?.labels) ? raw.labels : [];
+  if (!etiquetas.some((e) => String(e) === ETIQUETA_HISTORICO)) return false;
+  const t = Number(raw?.last_activity_at) * 1000;
+  return !Number.isFinite(t) || t <= 0 || t < CORTE_DO_HISTORICO_MS;
+}
+/** Arquivo que mesmo assim vale no funil: tem etapa (a do Kommo, gravada na unificação). */
+export function arquivoComEtapa(raw: any): boolean {
+  const etapa = raw?.custom_attributes?.etapa;
+  return ehArquivo(raw) && typeof etapa === 'string' && etapa.trim() !== '';
+}
 /** caixa → agente gerente no Chatwoot (lead quente parado vai para ela; decisão 26 do João). Parauapebas: Cleia (id 4). */
 export const GERENTE_DA_CAIXA: Readonly<Record<number, number>> = { 2: 4, 3: 4 };
 /** O usuário "📱 Celular da unidade": autor das mensagens que a equipe manda pelo celular (o Evolution usa o token dele). */

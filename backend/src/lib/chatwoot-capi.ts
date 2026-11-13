@@ -31,7 +31,7 @@ import { logger } from './logger.js';
 import { prisma } from './prisma.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import { chamar, contaChatwootDoAmbiente, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
-import { conversaDoChatwoot, ehSim, type ConversaRegua } from './chatwoot-regua.js';
+import { conversaDoChatwoot, ehArquivo, ehSim, type ConversaRegua } from './chatwoot-regua.js';
 
 export const ID_CAPI = 'chatwoot-capi';
 
@@ -386,7 +386,8 @@ async function lerConversas(chat: ChatDoCapi, caixa: number): Promise<ConversaRe
     if (pagina.length === 0) break;
     for (const raw of pagina) {
       const c = conversaDoChatwoot(raw);
-      if (!c || vistas.has(c.id)) continue;
+      // arquivo do histórico não vira evento de conversão para a Meta
+      if (!c || vistas.has(c.id) || ehArquivo(raw)) continue;
       vistas.add(c.id);
       conversas.push(c);
     }

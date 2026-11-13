@@ -18,7 +18,7 @@ import { logger } from './logger.js';
 import { prisma } from './prisma.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import { chamar, contaChatwootDoAmbiente, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
-import { CAIXAS_REGUA } from './chatwoot-regua.js';
+import { CAIXAS_REGUA, ehArquivo } from './chatwoot-regua.js';
 import { mesmoTelefone } from './chatwoot-lida.js';
 import { normalizar } from './franquia-sync.js';
 import { desfechoDaAgenda } from './franquia-calendario.js';
@@ -156,7 +156,8 @@ async function conversasDaCaixa(ctx: ContextoChatwoot, caixa: number): Promise<C
     if (!lista.length) break;
     for (const c of lista) {
       const tel = String(c?.meta?.sender?.phone_number ?? '');
-      if (!tel || /@g\.us$/i.test(String(c?.meta?.sender?.identifier ?? ''))) continue;
+      // arquivo do histórico (unificado, parado): a agenda não grava nele — a consulta vai para a conversa viva
+      if (!tel || /@g\.us$/i.test(String(c?.meta?.sender?.identifier ?? '')) || ehArquivo(c)) continue;
       saida.push({ id: Number(c.id), telefone: tel, attrs: c?.custom_attributes ?? {}, atividade: Number(c?.last_activity_at) || 0 });
     }
   }
