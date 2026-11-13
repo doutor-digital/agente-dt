@@ -230,6 +230,13 @@ test('triagem: os dois cartões livres = entra UMA vez (o repetido só é contad
   assert.deepEqual(r3.fora, { 'repetido-na-lista': 1, 'franquia-indisponivel': 1 });
 });
 
+test('triagem: 1º cartão sumiu (lead-inexistente) e o 2º, do mesmo telefone, é válido = a pessoa entra pelo 2º', async () => {
+  const k = kommoFalso({ 2: { pipeline_id: COMERCIAL, status_id: 4, contatos: [2] } }, { 2: [2] });
+  const r = await triarComKommo([cand(1, 'Maria Souza', '5563991021043'), cand(2, 'Maria Souza', '5563991021043')], k);
+  assert.deepEqual(r.elegiveis.map((e) => e.leadId), [2]);
+  assert.deepEqual(r.fora, { 'lead-inexistente': 1 });
+});
+
 test('triagem: sem a regra de cartão (franquia) o repetido continua só repetido, sem conferência extra', async () => {
   const k = kommoFalso({ 1: { pipeline_id: COMERCIAL, status_id: PERDIDO, contatos: [1] }, 2: { pipeline_id: JURIDICO, status_id: 3, contatos: [2] } }, { 1: [1], 2: [2] });
   const r = await triarComKommo([cand(1, 'Maria Souza', '5563991021043'), cand(2, 'Maria Souza', '5563991021043')], k, false);
@@ -243,7 +250,7 @@ test('textos: sem franquia fala em Kommo (painel e alerta de onda parada); com f
   assert.equal(rotuloDaExclusao('franquia-indisponivel'), ROTULO_DA_EXCLUSAO['franquia-indisponivel']);
   assert.match(ROTULO_DA_EXCLUSAO['franquia-indisponivel'], /franquia/);
   assert.equal(rotuloDaExclusao('motivo-novo-qualquer', true), 'motivo-novo-qualquer');
-  const sem = alertaSemAndar({ unidade: 'magalhaes-advocacia', rodadas: 5, adiados: 3, semFranquia: true });
+  const sem = alertaSemAndar({ unidade: 'magalhaes-advocacia', rodadas: 5, adiados: 3, confereNoKommo: true });
   assert.match(sem, /Kommo/);
   assert.doesNotMatch(sem, /franquia|Spine/);
   assert.match(alertaSemAndar({ unidade: 'doutor-hernia-canaa', rodadas: 5, adiados: 3 }), /franquia \(API Spine\)/);

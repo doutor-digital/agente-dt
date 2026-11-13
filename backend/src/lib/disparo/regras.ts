@@ -54,8 +54,8 @@ export const ROTULO_DA_EXCLUSAO: Record<MotivoDeExclusao, string> = {
 };
 
 /** O rótulo da exclusão; em unidade SEM franquia quem não respondeu foi o Kommo, e o texto diz isso. */
-export function rotuloDaExclusao(m: string, semFranquia = false): string {
-  if (m === 'franquia-indisponivel' && semFranquia) return 'o Kommo não respondeu (na dúvida, não manda)';
+export function rotuloDaExclusao(m: string, confereNoKommo = false): string {
+  if (m === 'franquia-indisponivel' && confereNoKommo) return 'o Kommo não respondeu (na dúvida, não manda)';
   return ROTULO_DA_EXCLUSAO[m as MotivoDeExclusao] ?? m;
 }
 
@@ -218,7 +218,11 @@ export async function triar(candidatos: Candidato[], ctx: ContextoDoPublico): Pr
     if (situacao === 'livre') {
       elegiveis.push(e);
       porChave.set(chave, e);
-    } else nega(motivoDaSituacao(situacao));
+    } else {
+      nega(motivoDaSituacao(situacao));
+      // Cartão que sumiu não é a pessoa: outro cartão com o mesmo telefone mais adiante ainda pode ser conferido.
+      if (situacao === 'lead-inexistente') vistos.delete(chave);
+    }
   }
   return { elegiveis, fora };
 }

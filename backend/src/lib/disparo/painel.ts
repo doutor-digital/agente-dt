@@ -113,8 +113,8 @@ export interface DadosDoPainel {
   oferta?: string | null;
   /** por quantos dias depois do envio a Sofia sabe da oferta (DISPARO_OFERTA_DIAS) */
   ofertaDias?: number;
-  /** `semFranquia`: a unidade confere pelo Kommo (muda o texto de quem não respondeu) */
-  unidade: { slug: string; nome: string; semFranquia?: boolean };
+  /** `confereNoKommo`: a unidade confere pelo Kommo (muda o texto de quem não respondeu) */
+  unidade: { slug: string; nome: string; confereNoKommo?: boolean };
   modo: Modo;
   freios: Freios;
   resumo: { candidatos?: number; fora?: Partial<Record<MotivoDeExclusao, number>>; foraDoKommoDividido?: number };
@@ -192,7 +192,7 @@ export function montarPainelDaOnda(d: DadosDoPainel): string {
   const midia = onda.cabecalho ? `<p class="mudo">Cabeçalho: ${esc(onda.cabecalho.tipo)} — ${esc(onda.cabecalho.link)}</p>` : '';
   const fora = Object.entries(d.resumo.fora ?? {}).filter(([, n]) => n);
   const tabelaFora = fora.length
-    ? `<table><tbody>${fora.map(([m, n]) => `<tr><td class="esq">${esc(rotuloDaExclusao(m, d.unidade.semFranquia))}</td><td>${n}</td></tr>`).join('')}</tbody></table>`
+    ? `<table><tbody>${fora.map(([m, n]) => `<tr><td class="esq">${esc(rotuloDaExclusao(m, d.unidade.confereNoKommo))}</td><td>${n}</td></tr>`).join('')}</tbody></table>`
     : '<p class="mudo">Ninguém ficou de fora pelas regras.</p>';
   const amostra = d.amostra.length
     ? `<table><thead><tr><th class="esq">Nome na saudação</th><th>Telefone</th></tr></thead><tbody>${d.amostra.map((p) => `<tr><td class="esq">${esc(p.nome)}</td><td>${esc(telefoneMascarado(p.telefone))}</td></tr>`).join('')}</tbody></table>`
