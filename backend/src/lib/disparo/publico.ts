@@ -8,7 +8,7 @@ import type { Unit } from '@prisma/client';
 import { prisma } from '../prisma.js';
 import { createKommoClient, type KommoLead } from '../../services/kommo.service.js';
 import { grupoDaUnidade, pularCartao } from '../crm-compartilhado.js';
-import { conferenciaDaUnidade, usaRegraDeCliente } from './conferencia.js';
+import { conferenciaDaUnidade } from './conferencia.js';
 import { chaveDaPessoa, pediuParaSair, telefoneWhatsapp, type Candidato, type ContextoDoPublico } from './regras.js';
 
 /** Os cartões com a etiqueta, com o nome e o telefone do contato principal. */
@@ -146,6 +146,5 @@ export async function lerPublico(unit: Unit, etiqueta: string, campanhaId: strin
     pediramSair: new Set([...sairamNasConversas, ...(await chavesQueSairamAntes(unit.id))]),
     jaNaCampanha: await chavesJaNaCampanha(campanhaId, unit.id),
     franquia: conferenciaDaUnidade(unit),
-    conferirCartoesRepetidos: usaRegraDeCliente(unit),
   };
 }

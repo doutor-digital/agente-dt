@@ -145,12 +145,6 @@ export interface ContextoDoPublico {
   /** a franquia, por candidato já elegível até aqui */
   franquia: (c: Elegivel) => SituacaoNaFranquia | Promise<SituacaoNaFranquia>;
   /**
-   * Só para a regra de cliente por CARTÃO (unidade sem franquia): o mesmo telefone em outro cartão da lista também é
-   * conferido, e se ESSE cartão for de cliente a pessoa sai — senão o 1º cartão (perdido) passaria e o do Jurídico
-   * cairia como "repetido". Na franquia a conferência é da pessoa e isto fica desligado.
-   */
-  conferirCartoesRepetidos?: boolean;
-  /**
    * A campanha usa o primeiro nome em alguma variável? Ausente = sim (o padrão seguro). Só então "nome que não serve para
    * saudação" exclui: modelo sem variável de nome não tem saudação para estragar (o `coluna_trabalho_pesado` perdeu 28 de 250).
    */
@@ -182,7 +176,6 @@ export async function triar(candidatos: Candidato[], ctx: ContextoDoPublico): Pr
   };
   const vistos = new Set<string>();
   const elegiveis: Elegivel[] = [];
-  const porChave = new Map<string, Elegivel>();
 
   for (const c of candidatos) {
     if (!(c.telefoneBruto ?? '').replace(/\D/g, '')) {
@@ -197,16 +190,6 @@ export async function triar(candidatos: Candidato[], ctx: ContextoDoPublico): Pr
     const chave = chaveDaPessoa(telefone);
     if (vistos.has(chave)) {
       nega('repetido-na-lista');
-      const mantido = porChave.get(chave);
-      if (ctx.conferirCartoesRepetidos && mantido && c.leadId !== null && c.leadId !== mantido.leadId) {
-        const s = await ctx.franquia({ ...mantido, leadId: c.leadId, nomeCompleto: (c.nome ?? '').trim() });
-        // Cartão repetido que sumiu do Kommo não prova nada contra a pessoa: ela segue pelo 1º cartão.
-        if (s !== 'livre' && s !== 'lead-inexistente') {
-          elegiveis.splice(elegiveis.indexOf(mantido), 1);
-          porChave.delete(chave);
-          nega(motivoDaSituacao(s));
-        }
-      }
       continue;
     }
     vistos.add(chave);
@@ -228,7 +211,6 @@ export async function triar(candidatos: Candidato[], ctx: ContextoDoPublico): Pr
     const situacao = await ctx.franquia(e);
     if (situacao === 'livre') {
       elegiveis.push(e);
-      porChave.set(chave, e);
     } else {
       nega(motivoDaSituacao(situacao));
       // Cartão que sumiu não é a pessoa: outro cartão com o mesmo telefone mais adiante ainda pode ser conferido.

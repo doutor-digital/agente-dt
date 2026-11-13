@@ -30,7 +30,7 @@ import type { Unit } from '@prisma/client';
 import { logger } from '../logger.js';
 import { createKommoClientSemFreio, type KommoLead } from '../../services/kommo.service.js';
 import { conferenciaDaFranquia, type FranquiaPorta, type PessoaParaConferir } from './franquia.js';
-import { chaveDaPessoa, telefoneWhatsapp, type SituacaoNaFranquia } from './regras.js';
+import { campanhaUsaPrimeiroNome, chaveDaPessoa, telefoneWhatsapp, type SituacaoNaFranquia } from './regras.js';
 import { finalDoTelefone } from '../campanha/metricas.js';
 
 export interface RegraDeCliente {
@@ -126,14 +126,27 @@ export interface PortaDoKommo {
 const TETO_DA_BUSCA_POR_TELEFONE = 50;
 
 /**
- * Este número do contato é o da pessoa? Compara DDD + 8 últimos (a mesma chave do disparo, que atravessa o nono dígito e
- * o DDI). Número do contato sem DDD que dê para ler só casa pelos 8 últimos: errar aqui é pelo lado seguro (cartão a mais
- * conferido), e dois DDDs diferentes com os mesmos 8 dígitos NÃO se confundem quando o contato tem DDD.
+ * Este VALOR do campo de telefone do contato inclui o número da pessoa? O campo pode trazer mais de um número
+ * ("63 99102-1043 / 63 98888-0000"): cada um é conferido, nunca os 8 últimos do texto inteiro.
+ *  - número que dá para ler como celular com DDD (`telefoneWhatsapp`): compara DDD + 8 últimos (atravessa DDI e nono dígito;
+ *    mesmos 8 dígitos em OUTRO DDD não casa);
+ *  - número que não dá (fixo, sem DDD, estrangeiro, 10 dígitos): só os 8 últimos — pode casar a mais, e isso é o lado seguro
+ *    (um cartão a mais conferido; ninguém recebe a mais);
+ *  - valor sem separador reconhecível mas com mais dígitos que um número (dois colados): se os 8 dígitos da pessoa aparecem no
+ *    meio, conta como casou (lado seguro; aqui o DDD não dá para conferir).
  */
-function mesmoNumero(doContato: string, chaveDaPessoaConferida: string): boolean {
-  const completo = telefoneWhatsapp(doContato);
-  if (completo) return chaveDaPessoa(completo) === chaveDaPessoaConferida;
-  return finalDoTelefone(doContato) === chaveDaPessoaConferida.slice(2);
+export function mesmoNumero(valorDoContato: string, chaveDaPessoaConferida: string): boolean {
+  const final8 = chaveDaPessoaConferida.slice(2);
+  const partes = valorDoContato.split(/[\/;,|\n]| ou | e /i).map((x) => x.trim()).filter(Boolean);
+  const casa = (n: string): boolean => {
+    const completo = telefoneWhatsapp(n);
+    if (completo) return chaveDaPessoa(completo) === chaveDaPessoaConferida;
+    return finalDoTelefone(n) === final8;
+  };
+  if (partes.some(casa)) return true;
+  // Só quando NÃO houve como separar: com separador, cada parte já foi conferida e o DDD vale.
+  const digitos = valorDoContato.replace(/\D/g, '');
+  return partes.length <= 1 && digitos.length > 13 && digitos.includes(final8);
 }
 
 export function portaDoKommo(unit: Unit): PortaDoKommo {
@@ -177,6 +190,12 @@ export function conferenciaPorRegraDeCliente(unit: Pick<Unit, 'slug'>, regra: Re
       // contato devolvido é conferido pelo número. Busca cheia (teto) não prova nada; erro lança e vira `indisponivel`.
       const achados = await kommo.contatosPorTelefone(final8);
       if (achados.length >= TETO_DA_BUSCA_POR_TELEFONE) return 'indisponivel';
+      // A busca é difusa e já falhou em silêncio antes: o contato do PRÓPRIO cartão tem de voltar nela. Se não voltou, a busca não
+      // enxerga este número (formato, token, índice atrasado) e não prova que não há duplicado: a pessoa fica de fora, com motivo claro.
+      if (contatos.length === 0 || !contatos.some((id) => achados.some((c) => c.id === id))) {
+        logger.warn({ unit: unit.slug, leadId: p.leadId, contatos, achados: achados.length }, 'disparo: a busca por telefone do Kommo não devolveu o contato do próprio cartão — pessoa fica de fora (indisponível)');
+        return 'indisponivel';
+      }
       for (const c of achados) {
         if (!c.telefones.some((t) => mesmoNumero(t, chave))) continue;
         for (const id of c.leadIds) if (id !== p.leadId) outros.add(id);
@@ -201,6 +220,14 @@ export function conferenciaPorRegraDeCliente(unit: Pick<Unit, 'slug'>, regra: Re
 /** Pode conferir "já é nosso?" nesta unidade? Sem franquia e sem regra, não: a onda nem abre. */
 export function unidadeConfere(unit: Pick<Unit, 'slug' | 'spineToken'>, env: NodeJS.ProcessEnv = process.env): boolean {
   return Boolean(unit.spineToken) || regraDeClienteDoAmbiente(unit.slug, env) !== null;
+}
+
+/**
+ * O nome da pessoa é exigido na triagem? Em unidade COM franquia, sempre (a franquia casa por nome e a triagem é a de antes).
+ * Só a unidade que confere pelo Kommo pode dispensar o nome, e só se a campanha não usa `primeiroNome` em nenhuma variável.
+ */
+export function exigeNomeNaTriagem(unit: Pick<Unit, 'slug' | 'spineToken'>, variaveis: readonly unknown[], env: NodeJS.ProcessEnv = process.env): boolean {
+  return !usaRegraDeCliente(unit, env) || campanhaUsaPrimeiroNome(variaveis);
 }
 
 /** A unidade confere pelo cartão no Kommo (sem franquia, com regra)? É o que liga a conferência dos cartões repetidos na triagem. */
