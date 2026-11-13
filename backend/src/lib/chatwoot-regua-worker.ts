@@ -12,6 +12,10 @@
  *    Chatwoot (4xx) também desfaz; erro sem resposta (tempo esgotado: pode ter ido) NÃO desfaz — melhor uma mensagem a menos que duas.
  *  - Tetos por ciclo (mensagens e etiquetas): se um defeito soltar tudo de uma vez, vaza só um pouco por ciclo.
  *  - Sinal interno (sempre ao vivo quando a régua não está desligada): etiqueta `respondeu-pelo-celular`.
+ *  - Caixa de WhatsApp Cloud (CAIXAS_CLOUD): a Meta só aceita texto livre com a janela de 24 h aberta (a última mensagem RECEBIDA do
+ *    paciente, com folga de 15 min). Janela fechada → manda o TEMPLATE de mesmo nome do modelo (`parau_*`, criado na Meta com os
+ *    mesmos campos na ordem {{1}}, {{2}}…) se ele estiver aprovado na lista da caixa; não aprovado → nota privada, uma vez por chave
+ *    (regra `<regra>!template`), e o envio continua possível nos ciclos seguintes. Caixa 2 (Evolution) não tem janela: só texto.
  *  - Sem dobrar com o Kommo (decisão do João, 12/11/2026, item 31): antes de falar com o PACIENTE, confere pelo telefone se ele tem
  *    cartão ATIVO (nem ganho nem perdido) no Kommo da unidade — lá os robôs do Kommo já mandam. Tem: não manda, só deixa nota
  *    (e registra, para não tentar de novo). Não deu para consultar o Kommo: ligado NÃO manda e tenta no próximo ciclo.
@@ -25,6 +29,7 @@ import { createKommoClientSemFreio } from '../services/kommo.service.js';
 import { chamar, contaChatwootDoAmbiente, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 import {
   atualizarVistos,
+  CAIXAS_CLOUD,
   CAIXAS_REGUA,
   CAMPO_PARTIDA,
   GERENTE_DA_CAIXA,
@@ -32,10 +37,13 @@ import {
   decidirEtiquetaCelular,
   decidirRegua,
   ETIQUETA_CELULAR,
+  IDIOMA_TEMPLATE,
+  janelaDe24hAberta,
   precisaUltimaPublica,
   resumoDaMensagem,
   type AcaoInterna,
   type MensagemResumo,
+  type ViaDoEnvio,
   ID_REGUA,
   notaDoSeco,
   SUFIXO_FALTA,
@@ -51,6 +59,8 @@ const PRIMEIRA_VARREDURA_MS = 150_000;
 const MAX_PAGINAS = 200;
 export const MAX_MENSAGENS_POR_CICLO = 60;
 export const MAX_ETIQUETAS_POR_CICLO = 100;
+/** Sufixo da regra quando o que se registra é «template ainda não aprovado» (a nota sai uma vez por chave; o envio continua possível). */
+export const SUFIXO_SEM_TEMPLATE = '!template';
 /** Quanto do histórico de disparos o ciclo carrega para conferir repetição (a UNIQUE do banco vale para sempre). */
 const DIAS_DE_FEITOS = 130;
 const PAUSA_ENTRE_ESCRITAS_MS = 120;
@@ -74,10 +84,26 @@ export interface Armazem {
   desfazer(conversationId: number, regra: string, chave: string): Promise<void>;
 }
 
+/** Template da Meta a mandar no lugar do texto livre (caixa de WhatsApp Cloud com a janela de 24 h fechada). */
+export interface EnvioTemplate {
+  nome: string;
+  idioma: string;
+  /** valores de {{1}}, {{2}}… na ordem */
+  variaveis: string[];
+}
+
 export interface Chat {
   /** uma página (25) da listagem da caixa; vazia = acabou */
   pagina(caixa: number, pagina: number): Promise<unknown[]>;
-  mensagem(conversationId: number, texto: string, privada: boolean): Promise<void>;
+  /** Com `template`, vai o template (o `texto` é o que aparece na conversa); sem ele, texto livre. */
+  mensagem(conversationId: number, texto: string, privada: boolean, template?: EnvioTemplate): Promise<void>;
+  /** Quando o PACIENTE escreveu por último nesta conversa (mensagem recebida); null = nunca. Conta a janela de 24 h. */
+  ultimaDoPaciente(conversationId: number): Promise<Date | null>;
+  /**
+   * Os templates APROVADOS (no idioma da régua) que o Chatwoot guarda na caixa: nome → quantos {{n}} o corpo tem (null = não deu para
+   * contar). Lança se não deu para ler.
+   */
+  templatesAprovados(caixa: number): Promise<ReadonlyMap<string, number | null>>;
   etiquetas(conversationId: number, etiquetas: string[]): Promise<void>;
   /** grava os atributos da conversa (o Chatwoot SUBSTITUI o objeto inteiro: mandar todos) */
   atributos(conversationId: number, attrs: Record<string, unknown>): Promise<void>;
@@ -189,6 +215,19 @@ export function armazemDoBanco(): Armazem {
   };
 }
 
+/** Quantas páginas (20 mensagens) de histórico a busca da última mensagem do paciente percorre antes de dizer «nunca escreveu». */
+const PAGINAS_PARA_ACHAR_O_PACIENTE = 5;
+
+/**
+ * O `template_params` que o Chatwoot 4.19.1 aceita em POST conversations/:id/messages (Whatsapp::TemplateProcessorService):
+ * `name` + `language` + `processed_params: { body: { "1": "…", "2": "…" } }`. `content_mode: 'rendered'` impede o Chatwoot de passar os
+ * valores pelo Liquid. O modelo só sai se estiver `approved` e no mesmo idioma na lista de templates da caixa.
+ */
+export function paramsDoTemplate(t: EnvioTemplate): Record<string, unknown> {
+  const body = Object.fromEntries(t.variaveis.map((v, i) => [String(i + 1), v]));
+  return { name: t.nome, language: t.idioma, content_mode: 'rendered', ...(t.variaveis.length ? { processed_params: { body } } : {}) };
+}
+
 export function chatDoChatwoot(ctx: ContextoChatwoot): Chat {
   return {
     async pagina(caixa, pagina) {
@@ -198,8 +237,38 @@ export function chatDoChatwoot(ctx: ContextoChatwoot): Chat {
       const lista = r?.data?.payload ?? r?.payload ?? [];
       return Array.isArray(lista) ? lista : [];
     },
-    async mensagem(conversationId, texto, privada) {
-      await chamar(ctx, 'POST', `conversations/${conversationId}/messages`, { corpo: { content: texto, message_type: 'outgoing', private: privada } });
+    async mensagem(conversationId, texto, privada, template) {
+      await chamar(ctx, 'POST', `conversations/${conversationId}/messages`, {
+        corpo: { content: texto, message_type: 'outgoing', private: privada, ...(template ? { template_params: paramsDoTemplate(template) } : {}) },
+      });
+    },
+    async ultimaDoPaciente(conversationId) {
+      // o Chatwoot devolve as 20 mais novas em ordem crescente; `before=<id>` traz as 20 anteriores
+      let antes: number | undefined;
+      for (let i = 0; i < PAGINAS_PARA_ACHAR_O_PACIENTE; i++) {
+        const r = (await chamar(ctx, 'GET', `conversations/${conversationId}/messages`, { query: antes ? { before: String(antes) } : {} })) as { payload?: unknown[] } | null;
+        const lista = Array.isArray(r?.payload) ? (r.payload as Array<{ id?: number; message_type?: number; created_at?: number }>) : [];
+        if (lista.length === 0) return null;
+        for (let j = lista.length - 1; j >= 0; j--) {
+          const m = lista[j]!;
+          if (Number(m.message_type) === 0 && Number(m.created_at) > 0) return new Date(Number(m.created_at) * 1000);
+        }
+        const primeiro = Number(lista[0]?.id);
+        if (!Number.isInteger(primeiro) || primeiro <= 0) return null;
+        antes = primeiro;
+      }
+      return null;
+    },
+    async templatesAprovados(caixa) {
+      const r = (await chamar(ctx, 'GET', `inboxes/${caixa}/message_templates`)) as { payload?: unknown[] } | null;
+      const lista = Array.isArray(r?.payload) ? (r.payload as Array<{ name?: string; language?: string; status?: string; components?: Array<{ type?: string; text?: string }> }>) : [];
+      const aprovados = new Map<string, number | null>();
+      for (const t of lista) {
+        if (String(t?.status ?? '').toUpperCase() !== 'APPROVED' || String(t?.language ?? '').toLowerCase() !== IDIOMA_TEMPLATE.toLowerCase()) continue;
+        const corpo = (Array.isArray(t.components) ? t.components : []).find((x) => String(x?.type).toUpperCase() === 'BODY')?.text;
+        aprovados.set(String(t.name), typeof corpo === 'string' ? new Set(Array.from(corpo.matchAll(/\{\{\s*(\w+)\s*\}\}/g), (m) => m[1])).size : null);
+      }
+      return aprovados;
     },
     async etiquetas(conversationId, etiquetas) {
       // o Chatwoot SUBSTITUI a lista inteira: quem chama manda a lista completa
@@ -239,6 +308,10 @@ export interface ResumoDoCiclo {
   primeiraVez: boolean;
   /** mensagens ao paciente seguradas porque ele tem cartão ativo no Kommo (vira nota) */
   noKommo: number;
+  /** das `disparos`, quantas foram pelo template (janela de 24 h fechada) */
+  comTemplate: number;
+  /** seguradas porque o template ainda não está aprovado na Meta (vira nota) */
+  semTemplate: number;
 }
 
 async function lerConversas(chat: Chat, caixa: number): Promise<{ conversas: ConversaRegua[]; truncada: boolean }> {
@@ -318,7 +391,7 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
     feitosPorConversa.set(f.conversationId, s);
   }
 
-  const resumo: ResumoDoCiclo = { conversas: conversas.length, truncada, disparos: 0, faltando: 0, perdidas: {}, etiquetas: 0, falhas: 0, primeiraVez, noKommo: 0 };
+  const resumo: ResumoDoCiclo = { conversas: conversas.length, truncada, disparos: 0, faltando: 0, perdidas: {}, etiquetas: 0, falhas: 0, primeiraVez, noKommo: 0, comTemplate: 0, semTemplate: 0 };
   const mudancas: Array<Mudanca & { conversationId: number }> = [];
   if (primeiraVez) mudancas.push({ conversationId: 0, tipo: 'criar', campo: CAMPO_PARTIDA, valor: '1', desde: agora, inicial: true });
   const pendentes: Array<{ c: ConversaRegua; vistos: ReadonlyMap<string, Visto> }> = [];
@@ -343,22 +416,41 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
     }
     return p;
   };
+  // caixa de WhatsApp Cloud: janela de 24 h e templates (uma leitura da lista de templates por ciclo, só se precisar)
+  const cloud = CAIXAS_CLOUD.has(caixa);
+  let aprovadosDoCiclo: Promise<ReadonlyMap<string, number | null>> | null = null;
+  const aprovados = () => (aprovadosDoCiclo ??= deps.chat.templatesAprovados(caixa));
+  /** Quando o paciente escreveu por último: a própria última mensagem da listagem, se for dele; senão o histórico (uma busca por conversa por ciclo). */
+  const historicoDoPaciente = new Map<number, Promise<Date | null>>();
+  const ultimaDoPaciente = async (c: ConversaRegua): Promise<Date | null> => {
+    if (c.ultima && !c.ultima.saida && !c.ultima.privada) return c.ultima.criadaEm;
+    let p = historicoDoPaciente.get(c.id);
+    if (!p) {
+      p = deps.chat.ultimaDoPaciente(c.id);
+      historicoDoPaciente.set(c.id, p);
+    }
+    return p;
+  };
   for (const { c, vistos } of pendentes) {
     try {
       if (precisaUltimaPublica(c)) c.ultima = await chat.ultimaPublica(c.id);
-      const { disparos, perdidas } = decidirRegua(c, { vistos, feitos: feitosPorConversa.get(c.id) ?? new Set() }, agora, unidade);
+      const feitosDaConversa = feitosPorConversa.get(c.id) ?? new Set<string>();
+      const { disparos, perdidas } = decidirRegua(c, { vistos, feitos: feitosDaConversa }, agora, unidade);
       for (const r of perdidas) resumo.perdidas[r] = (resumo.perdidas[r] ?? 0) + 1;
       for (const d of disparos) {
         if (mensagens >= MAX_MENSAGENS_POR_CICLO) break;
         const faltou = d.texto === null;
-        const regra = faltou ? `${d.regra}${SUFIXO_FALTA}` : d.regra;
+        let regra = faltou ? `${d.regra}${SUFIXO_FALTA}` : d.regra;
         // faltou campo: só o seco avisa (uma vez por chave); ligado não manda nem anota
         if (faltou && modo === 'ligado') continue;
         let nota = notaDoSeco(d);
+        let avisos = '';
         // regra interna nunca fala com o paciente: no ligado também é nota privada (mais a ação)
         let privada = modo === 'seco' || !!d.interna;
         let texto = modo === 'seco' ? nota : d.interna ? `🤖 Régua «${d.regra}»: ${d.texto}` : (d.texto as string);
         let seguradaNoKommo = false;
+        let semTemplate = false;
+        let template: EnvioTemplate | undefined;
         // falaria com o paciente: cartão ativo no Kommo da unidade → não manda (os robôs de lá já falam), só nota
         if (!faltou && !d.interna) {
           let cartao: { leadId: number } | null;
@@ -368,7 +460,8 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
             logger.warn({ err: String(err), caixa, conversa: c.id, regra: d.regra }, `${ID_REGUA}: não consegui conferir o Kommo — não mando agora`);
             if (modo === 'ligado') continue;
             cartao = null;
-            nota += '\n\n⚠️ Não consegui conferir o Kommo agora (no ligado, esperaria o próximo ciclo).';
+            avisos += '\n\n⚠️ Não consegui conferir o Kommo agora (no ligado, esperaria o próximo ciclo).';
+            nota += avisos;
             texto = nota;
           }
           if (cartao) {
@@ -378,21 +471,63 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
             seguradaNoKommo = true;
           }
         }
-        const novo = await armazem.registrar({ caixa, conversationId: c.id, regra, chave: d.chave, modo, texto });
+        // caixa de WhatsApp Cloud: janela de 24 h aberta → texto; fechada → template aprovado (a Meta recusa texto livre)
+        if (cloud && !faltou && !d.interna && !seguradaNoKommo && d.variaveis) {
+          let via: ViaDoEnvio | undefined;
+          try {
+            if (janelaDe24hAberta(await ultimaDoPaciente(c), agora)) {
+              via = { tipo: 'texto' };
+            } else {
+              const naMeta = (await aprovados()).get(d.modelo);
+              // o corpo aprovado na Meta tem de pedir exatamente as variáveis que a régua tem (senão a Meta recusa ou troca um valor por outro)
+              const problema =
+                naMeta !== undefined && naMeta !== null && naMeta !== d.variaveis.length
+                  ? `na Meta pede ${naMeta} variável(is) e a régua tem ${d.variaveis.length}`
+                  : undefined;
+              via = { tipo: 'template', nome: d.modelo, variaveis: d.variaveis, aprovado: naMeta !== undefined && !problema, problema };
+            }
+          } catch (err) {
+            logger.warn({ err: String(err), caixa, conversa: c.id, regra: d.regra }, `${ID_REGUA}: não consegui conferir a janela de 24 h/os templates — não mando agora`);
+            if (modo === 'ligado') continue;
+            avisos += '\n\n⚠️ Não consegui conferir a janela de 24 h/os templates agora (no ligado, esperaria o próximo ciclo).';
+            nota = notaDoSeco(d) + avisos;
+            texto = nota;
+          }
+          if (via && modo === 'seco') {
+            nota = notaDoSeco(d, via) + avisos;
+            texto = nota;
+          } else if (via?.tipo === 'template') {
+            if (via.aprovado) {
+              template = { nome: via.nome, idioma: IDIOMA_TEMPLATE, variaveis: via.variaveis };
+            } else {
+              // sem template aprovado não há o que mandar: uma nota por chave (o envio segue possível nos próximos ciclos, quando aprovar)
+              regra = `${d.regra}${SUFIXO_SEM_TEMPLATE}`;
+              if (feitosDaConversa.has(`${regra}|${d.chave}`)) continue;
+              semTemplate = true;
+              privada = true;
+              texto = `🤖 Régua «${d.regra}»: template ${d.modelo} ${via.problema ?? 'ainda não aprovado na Meta'} — não enviei`;
+            }
+          }
+        }
+        const novo = await armazem.registrar({ caixa, conversationId: c.id, regra, chave: d.chave, modo, texto: template ? `[template ${template.nome}] ${texto}` : texto });
         if (!novo) continue;
         mensagens++;
         try {
-          await deps.chat.mensagem(c.id, texto, privada);
+          await deps.chat.mensagem(c.id, texto, privada, template);
           if (faltou) resumo.faltando++;
           else if (seguradaNoKommo) resumo.noKommo++;
-          else resumo.disparos++;
+          else if (semTemplate) resumo.semTemplate++;
+          else {
+            resumo.disparos++;
+            if (template) resumo.comTemplate++;
+          }
           await deps.pausa(PAUSA_ENTRE_ESCRITAS_MS);
         } catch (err) {
           resumo.falhas++;
           const status = statusDoErro(err);
-          // seco: tenta de novo no próximo ciclo. Ligado: só desfaz se o Chatwoot RECUSOU (4xx); sem resposta pode ter ido.
-          if (modo === 'seco' || (status !== undefined && status >= 400 && status < 500)) await armazem.desfazer(c.id, regra, d.chave).catch(() => undefined);
-          logger.warn({ err: String(err), caixa, conversa: c.id, regra: d.regra, modo }, `${ID_REGUA}: não consegui ${modo === 'seco' ? 'deixar a nota' : 'mandar a mensagem'}`);
+          // seco e nota: tenta de novo no próximo ciclo. Ligado: só desfaz se o Chatwoot RECUSOU (4xx); sem resposta pode ter ido.
+          if (modo === 'seco' || semTemplate || (status !== undefined && status >= 400 && status < 500)) await armazem.desfazer(c.id, regra, d.chave).catch(() => undefined);
+          logger.warn({ err: String(err), caixa, conversa: c.id, regra: d.regra, modo, template: template?.nome }, `${ID_REGUA}: não consegui ${privada ? 'deixar a nota' : 'mandar a mensagem'}`);
           continue;
         }
         if (modo === 'ligado' && d.interna) {

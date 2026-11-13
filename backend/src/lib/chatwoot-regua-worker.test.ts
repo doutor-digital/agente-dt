@@ -7,20 +7,20 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { automacaoPorId, verificarCatalogo } from './automacoes.js';
 import { CAIXAS_REGUA } from './chatwoot-regua.js';
-import { cicloDaCaixa, finalDoTelefone, numeroDaGerente, MAX_ETIQUETAS_POR_CICLO, MAX_MENSAGENS_POR_CICLO, type Armazem, type Chat, type DepsDoCiclo, type LinhaVista } from './chatwoot-regua-worker.js';
+import { cicloDaCaixa, finalDoTelefone, paramsDoTemplate, SUFIXO_SEM_TEMPLATE, type EnvioTemplate, numeroDaGerente, MAX_ETIQUETAS_POR_CICLO, MAX_MENSAGENS_POR_CICLO, type Armazem, type Chat, type DepsDoCiclo, type LinhaVista } from './chatwoot-regua-worker.js';
 import type { DadosDaUnidade, MensagemResumo, Mudanca } from './chatwoot-regua.js';
 
 const U: DadosDaUnidade = { nome: 'Doutor Hérnia Parauapebas', pixKey: 'pix@parau.com', valorAntecipado: 250 };
 const unix = (s: string) => Math.floor(new Date(s).getTime() / 1000);
 
-function bruta(id: number, o: { attrs?: Record<string, unknown>; labels?: string[]; ultima?: { tipo: number; autor: number; privada?: boolean }; nome?: string } = {}) {
+function bruta(id: number, o: { attrs?: Record<string, unknown>; labels?: string[]; ultima?: { tipo: number; autor: number; privada?: boolean; quando?: string }; nome?: string } = {}) {
   return {
     id,
     created_at: unix('2026-10-01T12:00:00Z'),
     labels: o.labels ?? [],
     custom_attributes: o.attrs ?? {},
     meta: { sender: { name: o.nome ?? 'Maria da Silva', phone_number: '+5594999990000' }, assignee: { name: 'Ana' } },
-    last_non_activity_message: o.ultima ? { message_type: o.ultima.tipo, private: o.ultima.privada ?? false, created_at: unix('2026-11-16T10:00:00Z'), sender: { id: o.ultima.autor, type: 'user' } } : null,
+    last_non_activity_message: o.ultima ? { message_type: o.ultima.tipo, private: o.ultima.privada ?? false, created_at: unix(o.ultima.quando ?? '2026-11-16T10:00:00Z'), sender: { id: o.ultima.autor, type: 'user' } } : null,
   };
 }
 
@@ -61,9 +61,19 @@ function armazemFalso() {
 
 function chatFalso(
   conversas: () => unknown[],
-  o: { falhaAoEscrever?: () => unknown; falhaAoListar?: boolean; ultimaPublica?: MensagemResumo | null } = {},
+  o: {
+    falhaAoEscrever?: () => unknown;
+    falhaAoListar?: boolean;
+    ultimaPublica?: MensagemResumo | null;
+    /** quando o paciente escreveu por último, segundo o histórico (usado quando a listagem não traz mensagem dele) */
+    ultimaDoPaciente?: Date | null;
+    /** templates aprovados na caixa (lista de nomes, ou nome → quantos {{n}} o corpo tem na Meta); um Error = não deu para ler */
+    aprovados?: string[] | Record<string, number | null> | Error;
+  } = {},
 ) {
-  const mensagens: Array<{ id: number; texto: string; privada: boolean }> = [];
+  const mensagens: Array<{ id: number; texto: string; privada: boolean; template?: EnvioTemplate }> = [];
+  const buscasDoPaciente: number[] = [];
+  let leiturasDeTemplates = 0;
   const etiquetas: Array<{ id: number; lista: string[] }> = [];
   const atributos: Array<{ id: number; attrs: Record<string, unknown> }> = [];
   const prioridades: Array<{ id: number; p: string }> = [];
@@ -88,16 +98,26 @@ function chatFalso(
       const todas = conversas();
       return todas.slice((pagina - 1) * 25, pagina * 25);
     },
-    async mensagem(id, texto, privada) {
+    async mensagem(id, texto, privada, template) {
       const f = o.falhaAoEscrever?.();
       if (f) throw f;
-      mensagens.push({ id, texto, privada });
+      mensagens.push({ id, texto, privada, template });
+    },
+    async ultimaDoPaciente(id) {
+      buscasDoPaciente.push(id);
+      return o.ultimaDoPaciente ?? null;
+    },
+    async templatesAprovados() {
+      leiturasDeTemplates++;
+      if (o.aprovados instanceof Error) throw o.aprovados;
+      const a = o.aprovados ?? [];
+      return new Map<string, number | null>(Array.isArray(a) ? a.map((n) => [n, null] as const) : Object.entries(a));
     },
     async etiquetas(id, lista) {
       etiquetas.push({ id, lista });
     },
   };
-  return { chat, mensagens, etiquetas, atributos, prioridades, atribuicoes, buscasDaUltima };
+  return { chat, mensagens, etiquetas, atributos, prioridades, atribuicoes, buscasDaUltima, buscasDoPaciente, leituras: () => leiturasDeTemplates };
 }
 
 const deps = (armazem: Armazem, chat: Chat): DepsDoCiclo => ({ armazem, chat, pausa: async () => undefined });
@@ -407,4 +427,202 @@ test('interna: última mensagem é NOTA → busca a última pública (a nota do 
   await cicloDaCaixa(deps(armazem, chat), 2, 'doutor-hernia-parauapebas', 'seco', U, DEPOIS_DE_24H);
   assert.ok(buscasDaUltima.includes(8));
   assert.ok(mensagens.some((m) => m.texto.includes('sem-resposta-24h')));
+});
+
+// ── caixa 3 (WhatsApp Cloud): texto com a janela de 24 h aberta, template com ela fechada ──────────────
+// Véspera da consulta de 17/11 14:30 (Belém): o ciclo roda 16/11 17:30Z. O modelo é parau_consulta_lembrete_vespera: {{1}} nome, {{2}} data e hora.
+const VESP = 'parau_consulta_lembrete_vespera';
+const ANTES_DA_VESPERA = new Date('2026-11-16T17:20:00Z');
+const MARIA = { nome: 'Maria', quando: '17/11 às 14:30' };
+const SLUG = 'doutor-hernia-parauapebas';
+/** a última mensagem da listagem é do paciente, de 16/11 10:00Z (7 h 30 antes do ciclo): janela aberta */
+const PACIENTE_HOJE = { tipo: 0, autor: 55 };
+/** a última mensagem da listagem é da clínica: a janela depende do histórico (`ultimaDoPaciente`) */
+const CLINICA = { tipo: 1, autor: 2 };
+
+async function doisCiclos(modo: 'seco' | 'ligado', caixa: number, chatO: Parameters<typeof chatFalso>[1], conversa: Parameters<typeof bruta>[1] = { attrs: CONSULTA, ultima: CLINICA }) {
+  const arm = armazemFalso();
+  const c = chatFalso(() => [bruta(1, conversa)], chatO);
+  await cicloDaCaixa(deps(arm.armazem, c.chat), caixa, SLUG, modo, U, ANTES_DA_VESPERA);
+  const resumo = await cicloDaCaixa(deps(arm.armazem, c.chat), caixa, SLUG, modo, U, VESPERA);
+  return { ...arm, ...c, resumo };
+}
+
+test('cloud, janela ABERTA (o paciente escreveu há 7 h): vai o TEXTO, sem olhar template nenhum', async () => {
+  const { mensagens, leituras, buscasDoPaciente, resumo, disparos } = await doisCiclos('ligado', 3, { aprovados: [VESP] }, { attrs: CONSULTA, ultima: PACIENTE_HOJE });
+  assert.equal(mensagens.length, 1);
+  assert.equal(mensagens[0]!.privada, false);
+  assert.equal(mensagens[0]!.template, undefined);
+  assert.ok(mensagens[0]!.texto.startsWith('Olá, Maria. A sua consulta é amanhã.'));
+  assert.equal(leituras(), 0);
+  assert.deepEqual(buscasDoPaciente, []); // a própria listagem já dizia quando o paciente escreveu
+  assert.equal(resumo.disparos, 1);
+  assert.equal(resumo.comTemplate, 0);
+  assert.equal(disparos[0]!.regra, 'consulta-vespera');
+});
+
+test('cloud, janela FECHADA (último recado do paciente há 2 dias): vai o TEMPLATE com {{1}}=nome e {{2}}=data e hora', async () => {
+  const { mensagens, resumo, disparos, buscasDoPaciente, leituras } = await doisCiclos('ligado', 3, { aprovados: [VESP, 'outro'], ultimaDoPaciente: new Date('2026-11-14T10:00:00Z') });
+  assert.equal(mensagens.length, 1);
+  assert.equal(mensagens[0]!.privada, false);
+  assert.deepEqual(mensagens[0]!.template, { nome: VESP, idioma: 'pt_BR', variaveis: [MARIA.nome, MARIA.quando] });
+  assert.ok(mensagens[0]!.texto.startsWith('Olá, Maria. A sua consulta é amanhã.')); // o que aparece na conversa
+  assert.deepEqual(buscasDoPaciente, [1]);
+  assert.equal(leituras(), 1);
+  assert.equal(resumo.disparos, 1);
+  assert.equal(resumo.comTemplate, 1);
+  assert.equal(disparos[0]!.regra, 'consulta-vespera');
+  assert.ok(disparos[0]!.texto.startsWith(`[template ${VESP}] Olá, Maria.`));
+  // o que o Chatwoot 4.19.1 recebe
+  assert.deepEqual(paramsDoTemplate(mensagens[0]!.template!), {
+    name: VESP,
+    language: 'pt_BR',
+    content_mode: 'rendered',
+    processed_params: { body: { '1': 'Maria', '2': '17/11 às 14:30' } },
+  });
+});
+
+test('cloud: paciente que NUNCA escreveu, ou escreveu há mais de 24 h na própria listagem, também recebe o template', async () => {
+  const nunca = await doisCiclos('ligado', 3, { aprovados: [VESP], ultimaDoPaciente: null });
+  assert.equal(nunca.mensagens[0]!.template?.nome, VESP);
+  const velha = await doisCiclos('ligado', 3, { aprovados: [VESP] }, { attrs: CONSULTA, ultima: { tipo: 0, autor: 55, quando: '2026-11-14T10:00:00Z' } });
+  assert.equal(velha.mensagens[0]!.template?.nome, VESP);
+  assert.deepEqual(velha.buscasDoPaciente, []);
+});
+
+test('cloud, janela fechada e template NÃO aprovado: não manda, deixa UMA nota por chave e, aprovado, manda no ciclo seguinte', async () => {
+  const opcoes = { aprovados: ['outro'] as string[], ultimaDoPaciente: new Date('2026-11-14T10:00:00Z') };
+  const arm = armazemFalso();
+  const c = chatFalso(() => [bruta(1, { attrs: CONSULTA, ultima: CLINICA })], opcoes);
+  await cicloDaCaixa(deps(arm.armazem, c.chat), 3, SLUG, 'ligado', U, ANTES_DA_VESPERA);
+  const r1 = await cicloDaCaixa(deps(arm.armazem, c.chat), 3, SLUG, 'ligado', U, VESPERA);
+  assert.equal(c.mensagens.length, 1);
+  assert.equal(c.mensagens[0]!.privada, true);
+  assert.equal(c.mensagens[0]!.template, undefined);
+  assert.equal(c.mensagens[0]!.texto, `🤖 Régua «consulta-vespera»: template ${VESP} ainda não aprovado na Meta — não enviei`);
+  assert.equal(arm.disparos[0]!.regra, `consulta-vespera${SUFIXO_SEM_TEMPLATE}`);
+  assert.equal(r1.semTemplate, 1);
+  assert.equal(r1.disparos, 0);
+  // não repete a nota
+  const r2 = await cicloDaCaixa(deps(arm.armazem, c.chat), 3, SLUG, 'ligado', U, new Date(VESPERA.getTime() + 600_000));
+  assert.equal(c.mensagens.length, 1);
+  assert.equal(r2.semTemplate, 0);
+  // aprovou na Meta (e o Chatwoot sincronizou): vai o template, dentro do atraso máximo da regra
+  opcoes.aprovados = [VESP];
+  const r3 = await cicloDaCaixa(deps(arm.armazem, c.chat), 3, SLUG, 'ligado', U, new Date(VESPERA.getTime() + 1_200_000));
+  assert.equal(r3.comTemplate, 1);
+  assert.equal(c.mensagens.length, 2);
+  assert.equal(c.mensagens[1]!.template?.nome, VESP);
+  assert.equal(c.mensagens[1]!.privada, false);
+  assert.deepEqual(arm.disparos.map((d) => d.regra), [`consulta-vespera${SUFIXO_SEM_TEMPLATE}`, 'consulta-vespera']);
+});
+
+test('cloud: template aprovado na Meta com outro número de variáveis que o da régua NÃO sai (uma nota, sem mandar valor trocado)', async () => {
+  const errado = await doisCiclos('ligado', 3, { aprovados: { [VESP]: 3 }, ultimaDoPaciente: null });
+  assert.equal(errado.mensagens.length, 1);
+  assert.equal(errado.mensagens[0]!.privada, true);
+  assert.equal(errado.mensagens[0]!.template, undefined);
+  assert.equal(errado.mensagens[0]!.texto, `🤖 Régua «consulta-vespera»: template ${VESP} na Meta pede 3 variável(is) e a régua tem 2 — não enviei`);
+  const certo = await doisCiclos('ligado', 3, { aprovados: { [VESP]: 2 }, ultimaDoPaciente: null });
+  assert.equal(certo.mensagens[0]!.template?.nome, VESP);
+});
+
+test('cloud, janela fechada: nota que falha desfaz o registro (a nota sai no ciclo seguinte)', async () => {
+  let quebrar = true;
+  const arm = armazemFalso();
+  const c = chatFalso(() => [bruta(1, { attrs: CONSULTA, ultima: CLINICA })], { aprovados: [], ultimaDoPaciente: null, falhaAoEscrever: () => (quebrar ? new Error('timeout') : null) });
+  await cicloDaCaixa(deps(arm.armazem, c.chat), 3, SLUG, 'ligado', U, ANTES_DA_VESPERA);
+  const r1 = await cicloDaCaixa(deps(arm.armazem, c.chat), 3, SLUG, 'ligado', U, VESPERA);
+  assert.equal(r1.falhas, 1);
+  assert.equal(arm.disparos.length, 0);
+  quebrar = false;
+  await cicloDaCaixa(deps(arm.armazem, c.chat), 3, SLUG, 'ligado', U, new Date(VESPERA.getTime() + 600_000));
+  assert.equal(c.mensagens.length, 1);
+});
+
+test('cloud, campo faltando: ligado não manda nada (nem texto nem template) e nem consulta janela ou template', async () => {
+  const semNome = { attrs: CONSULTA, nome: '+5594999990000', ultima: CLINICA };
+  const { mensagens, disparos, leituras, buscasDoPaciente } = await doisCiclos('ligado', 3, { aprovados: [VESP], ultimaDoPaciente: null }, semNome);
+  assert.equal(mensagens.length, 0);
+  assert.equal(disparos.length, 0);
+  assert.equal(leituras(), 0);
+  assert.deepEqual(buscasDoPaciente, []);
+  // seco: a nota de sempre dizendo o que falta
+  const seco = await doisCiclos('seco', 3, { aprovados: [VESP], ultimaDoPaciente: null }, semNome);
+  assert.equal(seco.mensagens[0]!.texto, '🧪 [SECO] Régua «consulta-vespera» — NÃO enviaria agora, falta: nome do contato.');
+});
+
+test('cloud, SECO: a nota diz se iria como TEXTO ou como TEMPLATE (com {{1}}=…), e avisa se o template não está aprovado', async () => {
+  const aberta = await doisCiclos('seco', 3, { aprovados: [], ultimaDoPaciente: null }, { attrs: CONSULTA, ultima: PACIENTE_HOJE });
+  assert.equal(aberta.mensagens[0]!.privada, true);
+  assert.ok(aberta.mensagens[0]!.texto.startsWith('🧪 [SECO] Régua «consulta-vespera» — enviaria agora, como TEXTO (janela de 24 h aberta):\n\nOlá, Maria.'));
+
+  const fechada = await doisCiclos('seco', 3, { aprovados: [VESP], ultimaDoPaciente: new Date('2026-11-14T10:00:00Z') });
+  assert.equal(fechada.mensagens.length, 1);
+  assert.equal(fechada.mensagens[0]!.privada, true);
+  assert.equal(fechada.mensagens[0]!.template, undefined); // seco nunca manda template
+  assert.ok(
+    fechada.mensagens[0]!.texto.startsWith(`🧪 [SECO] Régua «consulta-vespera» — enviaria agora pelo template ${VESP} com {{1}}=Maria, {{2}}=17/11 às 14:30 (janela de 24 h fechada):\n\nOlá, Maria.`),
+  );
+  assert.ok(!fechada.mensagens[0]!.texto.includes('não está aprovado'));
+  assert.equal(fechada.disparos[0]!.regra, 'consulta-vespera'); // registra a regra normal: o seco não repete
+
+  const semAprovar = await doisCiclos('seco', 3, { aprovados: [], ultimaDoPaciente: null });
+  assert.ok(semAprovar.mensagens[0]!.texto.includes(`pelo template ${VESP}`));
+  assert.ok(semAprovar.mensagens[0]!.texto.includes(`⚠️ O template ${VESP} ainda não está aprovado na Meta`));
+});
+
+test('caixa que NÃO é WhatsApp Cloud (2, Evolution): sempre texto, mesmo com o paciente sem escrever há dias; não olha janela nem template', async () => {
+  const { mensagens, leituras, buscasDoPaciente, resumo } = await doisCiclos('ligado', 2, { aprovados: [], ultimaDoPaciente: null });
+  assert.equal(mensagens.length, 1);
+  assert.equal(mensagens[0]!.privada, false);
+  assert.equal(mensagens[0]!.template, undefined);
+  assert.ok(mensagens[0]!.texto.startsWith('Olá, Maria. A sua consulta é amanhã.'));
+  assert.equal(leituras(), 0);
+  assert.deepEqual(buscasDoPaciente, []);
+  assert.equal(resumo.comTemplate, 0);
+  // e o seco da caixa 2 segue com a nota de sempre
+  const seco = await doisCiclos('seco', 2, { aprovados: [], ultimaDoPaciente: null });
+  assert.ok(seco.mensagens[0]!.texto.startsWith('🧪 [SECO] Régua «consulta-vespera» — enviaria agora:\n\nOlá, Maria.'));
+});
+
+test('cloud: não deu para ler a janela ou a lista de templates → ligado não manda e não registra; tenta no ciclo seguinte', async () => {
+  const opcoes: Parameters<typeof chatFalso>[1] = { aprovados: new Error('Kapso 502'), ultimaDoPaciente: null };
+  const arm = armazemFalso();
+  const c = chatFalso(() => [bruta(1, { attrs: CONSULTA, ultima: CLINICA })], opcoes);
+  await cicloDaCaixa(deps(arm.armazem, c.chat), 3, SLUG, 'ligado', U, ANTES_DA_VESPERA);
+  await cicloDaCaixa(deps(arm.armazem, c.chat), 3, SLUG, 'ligado', U, VESPERA);
+  assert.equal(c.mensagens.length, 0);
+  assert.equal(arm.disparos.length, 0);
+  opcoes.aprovados = [VESP];
+  const r = await cicloDaCaixa(deps(arm.armazem, c.chat), 3, SLUG, 'ligado', U, new Date(VESPERA.getTime() + 600_000));
+  assert.equal(r.comTemplate, 1);
+  assert.equal(c.mensagens.length, 1);
+});
+
+test('cloud: cartão ativo no Kommo continua mandando na frente (só nota) e nem chega a olhar template', async () => {
+  const arm = armazemFalso();
+  const c = chatFalso(() => [bruta(1, { attrs: CONSULTA, ultima: CLINICA })], { aprovados: [VESP], ultimaDoPaciente: null });
+  const kommo = async () => ({ leadId: 9 });
+  await cicloDaCaixa(comKommo(arm.armazem, c.chat, kommo), 3, SLUG, 'ligado', U, ANTES_DA_VESPERA);
+  const r = await cicloDaCaixa(comKommo(arm.armazem, c.chat, kommo), 3, SLUG, 'ligado', U, VESPERA);
+  assert.equal(r.noKommo, 1);
+  assert.equal(c.mensagens[0]!.privada, true);
+  assert.equal(c.mensagens[0]!.template, undefined);
+  assert.equal(c.leituras(), 0);
+});
+
+test('cloud: o Chatwoot recusar o template (4xx) desfaz o registro; erro sem resposta (pode ter ido) NÃO desfaz', async () => {
+  for (const [erro, ficou] of [[Object.assign(new Error('422'), { status: 422 }), 0], [new Error('timeout'), 1]] as const) {
+    const arm = armazemFalso();
+    const c = chatFalso(() => [bruta(1, { attrs: CONSULTA, ultima: CLINICA })], { aprovados: [VESP], ultimaDoPaciente: null, falhaAoEscrever: () => erro });
+    await cicloDaCaixa(deps(arm.armazem, c.chat), 3, SLUG, 'ligado', U, ANTES_DA_VESPERA);
+    await cicloDaCaixa(deps(arm.armazem, c.chat), 3, SLUG, 'ligado', U, VESPERA);
+    assert.equal(arm.disparos.length, ficou);
+  }
+});
+
+test('paramsDoTemplate: sem variáveis não manda processed_params; as chaves são "1", "2"… como texto', () => {
+  assert.deepEqual(paramsDoTemplate({ nome: 'parau_x', idioma: 'pt_BR', variaveis: [] }), { name: 'parau_x', language: 'pt_BR', content_mode: 'rendered' });
+  assert.deepEqual(paramsDoTemplate({ nome: 'parau_x', idioma: 'pt_BR', variaveis: ['a', 'b', 'c'] }).processed_params, { body: { '1': 'a', '2': 'b', '3': 'c' } });
 });

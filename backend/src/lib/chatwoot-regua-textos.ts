@@ -32,7 +32,7 @@ export const TEXTOS_PARAU: Readonly<Record<string, string>> = {
   parau_sessao_confirmacao_dia: "Bom dia, {{contact.name}}. A sua sessão de hoje está marcada para {{lead.cf.2450928}}.\nEstá tudo certo?",
   parau_sessao_aderencia_meio: "Olá, {{contact.name}}. Você já concluiu boa parte das sessões previstas no seu plano.\nMantenha a frequência: é ela que sustenta a evolução do tratamento. Qualquer dúvida, estou à disposição.",
   parau_alta_conclusao: "Olá, {{contact.name}}. Parabéns pela conclusão do seu tratamento.\nA constância que você manteve foi decisiva no resultado. Seguimos à disposição para o seu acompanhamento.",
-  parau_alta_pesquisa_nps: "Olá, {{contact.name}}. De 0 a 10, o quanto você recomendaria a Doutor Hérnia Parauapebas a um amigo ou familiar?\nPode responder no botão abaixo. A sua resposta é usada apenas internamente.",
+  parau_alta_pesquisa_nps: "Olá, {{contact.name}}. De 0 a 10, o quanto você recomendaria a Doutor Hérnia Parauapebas a um amigo ou familiar?\nResponda com um número de 0 a 10. A sua resposta é usada apenas internamente.",
   parau_alta_retorno_60d: "Olá, {{contact.name}}. Já se passaram 60 dias desde a sua alta.\nO nosso protocolo de acompanhamento prevê um retorno com o especialista para verificar como está a sua coluna.\nQuer que eu verifique um horário?",
   parau_cancelamento_acolhimento: "Olá, {{contact.name}}. Recebemos a sua solicitação e respeitamos a sua decisão.\nPara eu registrar corretamente no seu prontuário, o que motivou?",
   parau_cancelamento_retorno_confirmado: "Olá, {{contact.name}}. O seu retorno está agendado.\nData e horário: {{lead.cf.2450928}}\nEndereço: Rua C, 455-A, Sala 101 e 103 — Cidade Nova, Parauapebas/PA, 68515-000\n📍 Como chegar: https://share.google/LzWt0AQhG4HWTpWOq",
