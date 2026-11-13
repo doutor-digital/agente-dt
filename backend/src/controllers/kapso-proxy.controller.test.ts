@@ -4,7 +4,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chaveDoBearer, destinoNoKapso, kapsoProxyHandler, querySemChave, reescreverUrls } from './kapso-proxy.controller.js';
+import { chaveDoBearer, comCopiaDoKapso, destinoNoKapso, kapsoProxyHandler, numerosDoKapso, querySemChave, reescreverUrls } from './kapso-proxy.controller.js';
 
 const CHAVE = '1dfff777aaaabbbbccccddddeeeeffff00001111';
 
@@ -103,4 +103,64 @@ test('chave na URL (?access_token=, validação do Chatwoot): vale e NÃO segue 
   assert.equal(res.statusCode, 200);
   assert.equal(chamadas[0]!.url, 'https://api.kapso.ai/meta/whatsapp/v14.0/2146/message_templates');
   assert.equal(chamadas[0]!.init.headers['X-API-Key'], CHAVE);
+});
+
+// ── mídia que chega (13/11/2026): o Chatwoot pede GET /v13.0/<id> SEM o número; o Kapso dá 404 sem ele, e a `url` que ele
+// devolve é da Meta (401 com a chave do Kapso). Resultado medido: todo áudio/foto/documento entrava VAZIO no Chatwoot.
+
+const DL = 'https://api.kapso.ai/meta/whatsapp/media_download?token=eyJabc.def';
+const META = 'https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=1490552776272792&hash=x';
+
+test('URL de mídia: acrescenta o número, tenta o próximo no 404 e entrega o download do Kapso no lugar do da Meta', async () => {
+  const chamadas: string[] = [];
+  const f = (async (url: string) => {
+    chamadas.push(url);
+    if (url.endsWith('phone_number_id=111111')) return new Response(JSON.stringify({ error: 'WhatsApp configuration not found' }), { status: 404, headers: { 'content-type': 'application/json' } });
+    return new Response(JSON.stringify({ id: '1490552776272792', url: META, mime_type: 'audio/ogg', download_url: DL }), { status: 200, headers: { 'content-type': 'application/json' } });
+  }) as unknown as typeof fetch;
+  const antes = process.env.KAPSO_PHONE_NUMBER_IDS;
+  process.env.KAPSO_PHONE_NUMBER_IDS = '111111, 1212928641906230';
+  try {
+    const res = resFalso();
+    await kapsoProxyHandler(reqFalso({ metodo: 'GET', caminho: 'v13.0/1490552776272792', auth: `Bearer ${CHAVE}` }), res, { fetch: f });
+    assert.deepEqual(chamadas, [
+      'https://api.kapso.ai/meta/whatsapp/v13.0/1490552776272792?phone_number_id=111111',
+      'https://api.kapso.ai/meta/whatsapp/v13.0/1490552776272792?phone_number_id=1212928641906230',
+    ]);
+    assert.equal(res.statusCode, 200);
+    // o link assinado do Kapso vai como `url` e NÃO é reescrito para dar a volta pelo tradutor
+    assert.equal((res.corpo as any).url, DL);
+    assert.equal((res.corpo as any).download_url, DL);
+  } finally {
+    if (antes === undefined) delete process.env.KAPSO_PHONE_NUMBER_IDS;
+    else process.env.KAPSO_PHONE_NUMBER_IDS = antes;
+  }
+});
+
+test('URL de mídia que já traz o número: não mexe na query; outros GET não ganham número', async () => {
+  const chamadas: string[] = [];
+  const f = (async (url: string) => {
+    chamadas.push(url);
+    return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } });
+  }) as unknown as typeof fetch;
+  await kapsoProxyHandler(reqFalso({ metodo: 'GET', caminho: 'v13.0/1490552776272792', auth: `Bearer ${CHAVE}`, url: '/api/public/kapso-meta/v13.0/1490552776272792?phone_number_id=999999' }), resFalso(), { fetch: f });
+  await kapsoProxyHandler(reqFalso({ metodo: 'GET', caminho: 'v14.0/2146287749563217/message_templates', auth: `Bearer ${CHAVE}` }), resFalso(), { fetch: f });
+  await kapsoProxyHandler(reqFalso({ metodo: 'POST', caminho: 'v13.0/1490552776272792', auth: `Bearer ${CHAVE}`, corpo: {} }), resFalso(), { fetch: f });
+  assert.deepEqual(chamadas, [
+    'https://api.kapso.ai/meta/whatsapp/v13.0/1490552776272792?phone_number_id=999999',
+    'https://api.kapso.ai/meta/whatsapp/v14.0/2146287749563217/message_templates',
+    'https://api.kapso.ai/meta/whatsapp/v13.0/1490552776272792',
+  ]);
+});
+
+test('comCopiaDoKapso só troca quando o download é do Kapso; numerosDoKapso tem padrão e ignora lixo', () => {
+  assert.deepEqual(comCopiaDoKapso({ url: META, download_url: DL }), { url: DL, download_url: DL });
+  assert.deepEqual(comCopiaDoKapso({ url: META, download_url: 'https://evil.com/x' }), { url: META, download_url: 'https://evil.com/x' });
+  assert.deepEqual(comCopiaDoKapso({ url: META }), { url: META });
+  assert.equal(comCopiaDoKapso(null), null);
+  assert.deepEqual(numerosDoKapso({}), ['1212928641906230']);
+  assert.deepEqual(numerosDoKapso({ KAPSO_PHONE_NUMBER_IDS: '123456,abc, 987654 ' }), ['123456', '987654']);
+  // o link assinado não é reescrito; o resto do Kapso continua passando pelo tradutor
+  assert.equal(reescreverUrls(DL, 'https://ag/api/public/kapso-meta'), DL);
+  assert.equal(reescreverUrls('https://api.kapso.ai/meta/whatsapp/media/9', 'https://ag/b'), 'https://ag/b/_kapso/meta/whatsapp/media/9');
 });
