@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { detectarVazamento, explicarVazamento } from './vazamento.js';
+import { cortarAberturaMetanarrativa, detectarVazamento, explicarVazamento } from './vazamento.js';
 
 // ── Os dois casos reais que motivaram a barreira ────────────────────────────
 
@@ -285,4 +285,43 @@ test('fala normal com o paciente sobre marcar, registrar e mover não é bastido
     'Quer que eu veja os horários disponíveis pra você? 😊',
     'Se você se mudou para outra cidade, me avisa que eu te passo a unidade mais perto.',
   ]) assert.equal(detectarVazamento(ok), null, ok);
+});
+
+// ── Caxias, lead 2823748, 13/11/2026: a Sofia pensou alto sobre a transcrição do áudio ──────────────
+
+const CASO_CAXIAS =
+  'A transcrição do áudio veio bem genérica, sem contar de fato o que ele está sentindo 😊 Vou pedir pra ele mesmo me contar, com as próprias palavras.\n\n' +
+  'Oi! 👋 Que bom ter você por aqui. Me conta, o que você está sentindo? 🤗';
+
+test('caso de Caxias: o detector acusa a abertura sobre a transcrição', () => {
+  assert.equal(detectarVazamento(CASO_CAXIAS)?.tipo, 'bastidor_em_portugues');
+  assert.equal(detectarVazamento('A transcrição do áudio veio bem genérica, sem contar o que ele sente.')?.tipo, 'bastidor_em_portugues');
+});
+
+test('caso de Caxias: corta o parágrafo de abertura e fica só a fala para o paciente', () => {
+  const r = cortarAberturaMetanarrativa(CASO_CAXIAS);
+  assert.equal(r, 'Oi! 👋 Que bom ter você por aqui. Me conta, o que você está sentindo? 🤗');
+  assert.equal(detectarVazamento(r), null);
+});
+
+test('abertura metanarrativa: sem outro parágrafo para o paciente, não corta (o reescritor decide)', () => {
+  const so = 'A transcrição do áudio veio bem genérica, sem contar o que ele sente. Vou pedir pra ele me contar.';
+  assert.equal(cortarAberturaMetanarrativa(so), so);
+});
+
+test('fala legítima sobre áudio que não deu para ouvir passa intacta', () => {
+  for (const m of [
+    'Não consegui ouvir seu áudio 😊 Pode me escrever o que você está sentindo?',
+    'Não consegui ouvir seu áudio.\n\nPode escrever pra mim o que está acontecendo?',
+    'Recebi seu áudio! Entendi que a dor é na lombar.\n\nHá quanto tempo você sente isso?',
+    'Ouvi o áudio dela, obrigada por explicar.\n\nQual o nome da sua filha?',
+  ]) {
+    assert.equal(detectarVazamento(m), null, m);
+    assert.equal(cortarAberturaMetanarrativa(m), m, m);
+  }
+});
+
+test('parágrafo de abertura que fala com o paciente ("seu") não é cortado mesmo citando a transcrição', () => {
+  const m = 'A transcrição do seu áudio ficou ruim, desculpa.\n\nPode me escrever o que você sente?';
+  assert.equal(cortarAberturaMetanarrativa(m), m);
 });
