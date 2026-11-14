@@ -40,6 +40,8 @@ test('evento: resolvida sem etapa → pôr; completou depois → tirar; aberta s
   assert.equal(eventoDeResolucao(conv({ labels: ['historico'] }), CAIXAS), null);
   assert.equal(eventoDeResolucao(conv({ inbox: 9 }), CAIXAS), null);
   assert.equal(eventoDeResolucao(conv({ event: 'message_created' }), CAIXAS), null);
+  const { labels: _sem, ...semEtiquetas } = conv();
+  assert.equal(eventoDeResolucao(semEtiquetas, CAIXAS), null, 'sem a lista de etiquetas no aviso: não mexe (não apaga as outras)');
 });
 
 test('aplicar: manda a lista COMPLETA de etiquetas; interruptor desliga; falha não lança', async () => {

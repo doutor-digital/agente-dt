@@ -29,6 +29,7 @@ import { eventoDePausa, eventoDeReativacao, pausar, portaDaPausaDoChatwoot, reat
 import { aplicarResolucao, eventoDeResolucao, portasDoResolver, type PortasDoResolver } from './chatwoot-resolver.js';
 import { transcribeAudio } from '../services/transcription.service.js';
 import { registrarEventoDaSofia, registrarRespostaDaSofia, ultimaFalaDoPaciente, type EventoDaSofia } from './sofia-avaliacoes.js';
+import { portaDoRobo, tokenDoRobo } from './chatwoot-sofia-bot.js';
 import { rodarTesteDaSofia } from '../controllers/playground.controller.js';
 import { cartaoNoKommoDaUnidade } from './chatwoot-cartao-kommo.js';
 import { portaDoChatwoot, type ConversaLida, type PortaDoChatwoot } from './chatwoot-porta.js';
@@ -184,6 +185,10 @@ export interface PortasDaIa {
 
 export function portasReais(ctx: ContextoChatwoot): PortasDaIa {
   const chat: PortaDoChatwoot = portaDoChatwoot(ctx);
+  // Sofia como ROBÔ do Chatwoot (chatwoot-sofia-bot.ts): só com CHATWOOT_SOFIA_COMO_BOT=1 + CHATWOOT_SOFIA_BOT_TOKEN; senão, null
+  const tokenRobo = tokenDoRobo();
+  const robo = tokenRobo ? portaDoRobo(ctx, tokenRobo) : null;
+  if (robo) logger.info(`${ID_IA}: a Sofia responde como ROBÔ do Chatwoot`);
   return {
     estado: (slug) => estadoDaAutomacao(slug, ID_IA, process.env.CHATWOOT_IA_SLUGS),
     unidade: (slug) => prisma.unit.findUnique({ where: { slug } }),
@@ -192,7 +197,7 @@ export function portasReais(ctx: ContextoChatwoot): PortasDaIa {
       return Array.isArray(r?.payload) ? r.payload : [];
     },
     nota: (conversa, texto) => chat.nota(conversa, texto),
-    publica: (conversa, texto) => chat.publica(conversa, texto),
+    publica: (conversa, texto) => (robo ? robo.publica(conversa, texto) : chat.publica(conversa, texto)),
     registrarResposta: (r) => registrarRespostaDaSofia(r),
     registrarEvento: (e) => registrarEventoDaSofia(e),
     async agendaReal(unit, lida) {
@@ -220,6 +225,8 @@ export function portasReais(ctx: ContextoChatwoot): PortasDaIa {
     },
     async passarParaEquipe(conversa, lida, motivo) {
       await passarParaEquipeNoChatwoot(chat, { conversa, etapa: String(lida.attrs.etapa ?? '').trim(), motivo });
+      // robô → equipe: tira de «Pendentes» (a etiqueta e a nota já avisaram; falhar aqui não desfaz a passagem)
+      if (robo) await robo.abrirParaEquipe(conversa).catch((err) => logger.warn({ err: String(err), conversa }, `${ID_IA}: não consegui abrir a conversa para a equipe (robô)`));
     },
     async transcrever(unit, url) {
       return (await transcribeAudio(unit, url)).text;

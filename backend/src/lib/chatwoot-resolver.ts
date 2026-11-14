@@ -38,7 +38,9 @@ export function eventoDeResolucao(corpo: any, caixas: Readonly<Record<number, st
   if (ev !== 'conversation_status_changed' && ev !== 'conversation_updated') return null;
   const conversa = Number(corpo?.id);
   if (!Number.isInteger(conversa) || conversa <= 0 || !caixas[Number(corpo?.inbox_id)]) return null;
-  const etiquetas: string[] = Array.isArray(corpo?.labels) ? corpo.labels.map(String) : [];
+  // sem a lista de etiquetas no aviso não mexe: regravar a lista a partir de nada apagaria as outras etiquetas
+  if (!Array.isArray(corpo?.labels)) return null;
+  const etiquetas: string[] = corpo.labels.map(String);
   if (etiquetas.includes(ETIQUETA_HISTORICO)) return null;
   const tem = etiquetas.includes(ETIQUETA_FALTA);
   const falta = camposFaltandoAoResolver(corpo?.custom_attributes);
