@@ -34,7 +34,18 @@ test('qual mensagem consultar: paciente, caixa oficial, com wamid e SEM referral
 
 test('referral da mensagem do Kapso: anúncio com ctwa_clid; publicação sem id de anúncio; sem referral = null', () => {
   const r = referralDaMensagemDoKapso({ timestamp: '1794557921', referral: { source_type: 'ad', source_id: '120253955239410514', ctwa_clid: 'Afd123', headline: 'Dor na coluna?', source_url: 'https://fb.me/x' } });
-  assert.deepEqual(r, { anuncio: '120253955239410514', ctwaClid: 'Afd123', tipo: 'ad', titulo: 'Dor na coluna?', url: 'https://fb.me/x', quando: 1794557921000 });
+  assert.deepEqual(r, {
+    anuncio: '120253955239410514',
+    ctwaClid: 'Afd123',
+    tipo: 'ad',
+    titulo: 'Dor na coluna?',
+    url: 'https://fb.me/x',
+    quando: 1794557921000,
+    corpo: null,
+    midia: null,
+    tipoMidia: null,
+    video: null,
+  });
   assert.equal(referralDaMensagemDoKapso({ referral: { source_type: 'post', source_id: '9' } })!.anuncio, null);
   assert.equal(referralDaMensagemDoKapso({ text: { body: 'oi' } }), null);
 });

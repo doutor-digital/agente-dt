@@ -129,7 +129,14 @@ export function cartaoDaConversa(c: any, etapas: string[], tarefa: SituacaoTaref
   const msgs = Array.isArray(c?.messages) ? c.messages : [];
   // a última mensagem de verdade (avisos do sistema, tipo 2, como "Atribuído a…", não contam)
   const reais = msgs.filter((m: any) => Number(m?.message_type) !== 2);
-  const ultima = reais.length ? reais[reais.length - 1] : c?.last_non_activity_message;
+  // nota interna NÃO é conversa: a última que conta é a última PÚBLICA. A nota «Veio do anúncio» (chatwoot-anuncio.ts) nasce logo
+  // depois da 1ª mensagem do paciente e não pode tirar o lead de «Esperando resposta» (achado do sênior no #334).
+  const publicas = reais.filter((m: any) => !m?.private);
+  const lna = c?.last_non_activity_message;
+  const ultima = publicas.length ? publicas[publicas.length - 1] : lna && !lna.private ? lna : null;
+  // só veio nota (a listagem traz só a última mensagem quando a conversa já foi vista): quem diz se o paciente espera é o
+  // `waiting_since` do Chatwoot (> 0 = mensagem do cliente sem resposta da equipe)
+  const soNota = !ultima && (reais.length > 0 || !!lna);
   const remetente = c?.meta?.sender ?? {};
   const avatar = typeof remetente.thumbnail === 'string' && /^https:\/\//.test(remetente.thumbnail) ? remetente.thumbnail : null;
   return {
@@ -142,8 +149,8 @@ export function cartaoDaConversa(c: any, etapas: string[], tarefa: SituacaoTaref
     status: String(c?.status ?? ''),
     responsavel: texto(c?.meta?.assignee?.name, 40) || null,
     responsavelId: Number.isInteger(Number(c?.meta?.assignee?.id)) && Number(c?.meta?.assignee?.id) > 0 ? Number(c.meta.assignee.id) : null,
-    ultimaMensagem: ultima?.private ? '(nota interna)' : texto(ultima?.content, 120),
-    ultimaDela: !!ultima && !ultima.private && Number(ultima.message_type) === 0,
+    ultimaMensagem: ultima ? texto(ultima.content, 120) : soNota ? '(nota interna)' : texto(undefined, 120),
+    ultimaDela: ultima ? Number(ultima.message_type) === 0 : Number(c?.waiting_since ?? 0) > 0,
     atividade: Number(c?.last_activity_at ?? c?.timestamp ?? 0) || 0,
     criado: Number(c?.created_at ?? 0) || 0,
     etiquetas: Array.isArray(c?.labels) ? c.labels.map(String).slice(0, 5) : [],
