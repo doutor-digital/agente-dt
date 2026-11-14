@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { SpineSchedule } from '../services/spine.service.js';
-import { agendamentoQueVale, casar, categoriaDoChatwoot, descricao, desejadoDe, mudancas, situacaoDoChatwoot, whatsDoCadastro, type ConversaDaCaixa } from './chatwoot-agenda.js';
+import { agendamentoQueVale, casar, categoriaDoChatwoot, descricao, desejadoDe, etapaDaConsulta, mudancas, situacaoDoChatwoot, whatsDoCadastro, type ConversaDaCaixa } from './chatwoot-agenda.js';
 
 const ag = (o: Partial<SpineSchedule>): SpineSchedule => ({
   idSchedule: 1,
@@ -79,7 +79,7 @@ test('WhatsApp do cadastro: só nome igual; põe o 55; telefones distintos ficam
 test('casar: pelo telefone do cadastro (com e sem o 9); nome ambíguo ou sem cadastro não casa; nada a mudar fica de fora', () => {
   const conversas: ConversaDaCaixa[] = [
     { id: 14, telefone: '+559499745062', attrs: {}, atividade: 10 },
-    { id: 20, telefone: '+5594988887777', attrs: { data_consulta: '2026-11-13', hora_consulta: '14:30', situacao_consulta: 'Agendado', categoria_consulta: 'Avaliação' }, atividade: 5 },
+    { id: 20, telefone: '+5594988887777', attrs: { data_consulta: '2026-11-13', hora_consulta: '14:30', situacao_consulta: 'Agendado', categoria_consulta: 'Avaliação', etapa: 'Agendado' }, atividade: 5 },
   ];
   const agenda = [ag({ clientName: 'Maria da Silva' }), ag({ clientName: 'Ana Souza' }), ag({ clientName: 'Duas Pessoas' }), ag({ clientName: 'Sem Cadastro' })];
   const fones: Record<string, string[] | null> = {
@@ -92,4 +92,52 @@ test('casar: pelo telefone do cadastro (com e sem o 9); nome ambíguo ou sem cad
   assert.equal(r.length, 1);
   assert.equal(r[0]!.conversa.id, 14);
   assert.equal(r[0]!.muda.situacao_consulta, 'Agendado');
+  assert.equal(r[0]!.muda.etapa, 'Agendado'); // conversa sem etapa + consulta de pé
+});
+
+// ── a etapa da consulta de pé (sem ela a régua não monta véspera/dia/preparo) ──
+
+const HOJE = '2026-11-14';
+const dePe = (o: Partial<{ data_consulta: string; situacao_consulta: string }> = {}) => ({ data_consulta: '2026-11-16', hora_consulta: '13:30', situacao_consulta: 'Agendado', categoria_consulta: 'Avaliação', ...o });
+
+test('etapa: vazia, Novo lead, Sofia qualifica, Esperando humano e Resgate com consulta de pé viram Agendado (Confirmado se confirmada)', () => {
+  for (const etapa of [undefined, '', '  ', 'Novo lead', 'Sofia qualifica', 'Esperando humano', 'Resgate']) {
+    assert.deepEqual(etapaDaConsulta({ etapa }, dePe(), HOJE), { etapa: 'Agendado' }, String(etapa));
+    assert.deepEqual(etapaDaConsulta({ etapa }, dePe({ situacao_consulta: 'Confirmado' }), HOJE), { etapa: 'Confirmado' }, String(etapa));
+  }
+  assert.deepEqual(etapaDaConsulta({}, dePe({ situacao_consulta: 'Remarcado' }), HOJE), { etapa: 'Agendado' });
+  assert.deepEqual(etapaDaConsulta({}, dePe({ data_consulta: HOJE }), HOJE), { etapa: 'Agendado' }, 'hoje conta');
+});
+
+test('etapa: nunca rebaixa nem sobrescreve; Perdido/Frio ficam como estão (só registro); consulta que não está de pé não mexe', () => {
+  for (const etapa of ['Agendado', 'Confirmado', 'Compareceu', 'Fechou', 'Pós-consulta']) {
+    assert.deepEqual(etapaDaConsulta({ etapa }, dePe({ situacao_consulta: 'Confirmado' }), HOJE), {}, etapa);
+  }
+  assert.deepEqual(etapaDaConsulta({ etapa: 'Perdido' }, dePe(), HOJE), { segurada: 'Perdido' });
+  assert.deepEqual(etapaDaConsulta({ etapa: 'Frio' }, dePe(), HOJE), { segurada: 'Frio' });
+  // não está de pé: passada, atendida, faltou, desmarcada
+  assert.deepEqual(etapaDaConsulta({}, dePe({ data_consulta: '2026-11-13' }), HOJE), {});
+  for (const situacao_consulta of ['Atendido', 'Não compareceu', 'Desmarcado']) assert.deepEqual(etapaDaConsulta({}, dePe({ situacao_consulta }), HOJE), {}, situacao_consulta);
+  assert.deepEqual(etapaDaConsulta({ etapa: 'Perdido' }, dePe({ data_consulta: '2026-11-13' }), HOJE), {}, 'Perdido com consulta passada: nem registro');
+  // quem está no funil de Tratamento não vai para o comercial
+  assert.deepEqual(etapaDaConsulta({ funil: 'Tratamento' }, dePe(), HOJE), {});
+  assert.deepEqual(etapaDaConsulta({ etapa_tratamento: 'Em tratamento' }, dePe(), HOJE), {});
+});
+
+test('mudancas: a etapa só entra com `hoje`; casar devolve a etapa segurada (Perdido/Frio) sem gravar etapa', () => {
+  const d = desejadoDe(ag({ dayLocal: '2026-11-16', statusName: 'Confirmado' }))!;
+  assert.equal(mudancas({}, d).etapa, undefined, 'sem hoje, como era');
+  assert.equal(mudancas({}, d, HOJE).etapa, 'Confirmado');
+  assert.match(descricao(mudancas({}, d, HOJE)), /etapa = Confirmado/);
+  const cheia = { data_consulta: '2026-11-16', hora_consulta: '14:30', situacao_consulta: 'Confirmado', categoria_consulta: 'Avaliação' };
+  // só a etapa faltava: a mudança é só ela
+  assert.deepEqual(mudancas({ ...cheia, etapa: 'Sofia qualifica' }, d, HOJE), { etapa: 'Confirmado' });
+  assert.deepEqual(mudancas({ ...cheia, etapa: 'Confirmado' }, d, HOJE), {});
+  const conversas: ConversaDaCaixa[] = [{ id: 1, telefone: '+5594999745062', attrs: { ...cheia, etapa: 'Perdido' }, atividade: 1 }];
+  const r = casar([ag({ dayLocal: '2026-11-16', statusName: 'Confirmado' })], conversas, () => ['5594999745062'], HOJE);
+  assert.equal(r.length, 1);
+  assert.deepEqual(r[0]!.muda, {});
+  assert.equal(r[0]!.segurada, 'Perdido');
+  // nada a fazer e nada segurado: fora do plano
+  assert.equal(casar([ag({ dayLocal: '2026-11-16', statusName: 'Confirmado' })], [{ ...conversas[0]!, attrs: { ...cheia, etapa: 'Fechou' } }], () => ['5594999745062'], HOJE).length, 0);
 });

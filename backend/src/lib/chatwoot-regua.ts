@@ -52,11 +52,19 @@ export const CAIXAS_HISTORICO: ReadonlySet<number> = new Set([4]);
 export const ETIQUETA_HISTORICO = 'historico';
 /** 14/11/2026 00:00 em Belém: toda conversa do histórico tem a última mensagem antes disso. */
 export const CORTE_DO_HISTORICO_MS = Date.parse('2026-11-14T03:00:00Z');
-export function ehArquivo(raw: any): boolean {
+/**
+ * Paciente com consulta de pé (data de hoje em diante em Belém, situação Agendado/Confirmado/Remarcado) NÃO é arquivo, mesmo parado:
+ * está marcado, então a régua manda véspera/dia/preparo e a agenda continua a acompanhar. O que ela já mostra segue «inicial» na
+ * 1ª vista (etiqueta `historico`, ver `atualizarVistos`): lembrete é por horário e sai; regra de «entrou em tal etapa» não dispara.
+ */
+export function ehArquivo(raw: any, agora: Date = new Date()): boolean {
   const etiquetas: unknown[] = Array.isArray(raw?.labels) ? raw.labels : [];
   if (!etiquetas.some((e) => String(e) === ETIQUETA_HISTORICO)) return false;
   const t = Number(raw?.last_activity_at) * 1000;
-  return !Number.isFinite(t) || t <= 0 || t < CORTE_DO_HISTORICO_MS;
+  if (Number.isFinite(t) && t > 0 && t >= CORTE_DO_HISTORICO_MS) return false;
+  const a = raw?.custom_attributes;
+  const dia = lerData(a?.data_consulta);
+  return !(dia && dia.iso >= diaEmBelem(agora) && SITUACOES_DE_PE.has(str(a?.situacao_consulta)));
 }
 /** Arquivo que mesmo assim vale no funil: tem etapa (a do Kommo, gravada na unificação). */
 export function arquivoComEtapa(raw: any): boolean {

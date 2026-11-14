@@ -75,18 +75,40 @@ export function desejadoDe(s: SpineSchedule): Desejado | null {
   return { data_consulta: s.dayLocal, hora_consulta: hora, situacao_consulta: situacaoDoChatwoot(s), categoria_consulta: categoriaDoChatwoot(s.categoryName) };
 }
 
-/** O que muda nos atributos da conversa (só chaves com valor novo). Vazio = nada a fazer. */
-export function mudancas(atual: Record<string, unknown>, d: Desejado): Record<string, string> {
+/** Etapas em que a conversa ainda não é «paciente marcado»: com consulta de pé na agenda, a etapa passa a Agendado/Confirmado (como a sincronização franquia → Kommo move para AGENDADO). */
+const ETAPAS_QUE_VIRAM_AGENDADO: ReadonlySet<string> = new Set(['', 'Novo lead', 'Sofia qualifica', 'Esperando humano', 'Resgate']);
+/** Etapas de quem desistiu: consulta nova de pé NÃO as mexe (decisão humana); só vai para o log. */
+const ETAPAS_SEGURADAS: ReadonlySet<string> = new Set(['Perdido', 'Frio']);
+const SITUACOES_DE_PE: ReadonlySet<string> = new Set(['Agendado', 'Confirmado', 'Remarcado']);
+
+/**
+ * A etapa que a consulta de pé pede, ou a etapa que ficou SEGURADA (Perdido/Frio). Nunca rebaixa nem sobrescreve Compareceu, Fechou,
+ * Pós-consulta, Agendado/Confirmado já gravados, nem mexe em quem está no funil de Tratamento. {} = nada a fazer.
+ * Sem esta etapa a régua não monta véspera/dia/preparo (ela só olha Agendado, Confirmado e Fechou).
+ */
+export function etapaDaConsulta(atual: Record<string, unknown>, d: Desejado, hoje: string): { etapa?: string; segurada?: string } {
+  if (!SITUACOES_DE_PE.has(d.situacao_consulta) || d.data_consulta < hoje) return {};
+  if (String(atual.funil ?? '').trim() === 'Tratamento' || String(atual.etapa_tratamento ?? '').trim() !== '') return {};
+  const etapa = String(atual.etapa ?? '').trim();
+  if (ETAPAS_SEGURADAS.has(etapa)) return { segurada: etapa };
+  if (!ETAPAS_QUE_VIRAM_AGENDADO.has(etapa)) return {};
+  return { etapa: d.situacao_consulta === 'Confirmado' ? 'Confirmado' : 'Agendado' };
+}
+
+/** O que muda nos atributos da conversa (só chaves com valor novo). Vazio = nada a fazer. `hoje` (AAAA-MM-DD) liga a etapa da consulta de pé. */
+export function mudancas(atual: Record<string, unknown>, d: Desejado, hoje?: string): Record<string, string> {
   const o: Record<string, string> = {};
   const dataAtual = String(atual.data_consulta ?? '').slice(0, 10);
   if (dataAtual !== d.data_consulta) o.data_consulta = d.data_consulta;
   if (d.hora_consulta && String(atual.hora_consulta ?? '') !== d.hora_consulta) o.hora_consulta = d.hora_consulta;
   if (String(atual.situacao_consulta ?? '') !== d.situacao_consulta) o.situacao_consulta = d.situacao_consulta;
   if (d.categoria_consulta && String(atual.categoria_consulta ?? '') !== d.categoria_consulta) o.categoria_consulta = d.categoria_consulta;
+  const e = hoje ? etapaDaConsulta(atual, d, hoje) : {};
+  if (e.etapa) o.etapa = e.etapa;
   return o;
 }
 
-const NOMES: Record<string, string> = { data_consulta: 'data', hora_consulta: 'hora', situacao_consulta: 'situação', categoria_consulta: 'categoria' };
+const NOMES: Record<string, string> = { data_consulta: 'data', hora_consulta: 'hora', situacao_consulta: 'situação', categoria_consulta: 'categoria', etapa: 'etapa' };
 export function descricao(m: Record<string, string>): string {
   return Object.entries(m)
     .map(([k, v]) => `${NOMES[k] ?? k} = ${k === 'data_consulta' ? v.split('-').reverse().join('/') : v}`)
@@ -106,14 +128,14 @@ export function casar(
   conversas: ConversaDaCaixa[],
   whatsDoNome: (nome: string) => string[] | null,
   hoje: string,
-): Array<{ conversa: ConversaDaCaixa; muda: Record<string, string>; nome: string }> {
+): Array<{ conversa: ConversaDaCaixa; muda: Record<string, string>; nome: string; segurada?: string }> {
   const porNome = new Map<string, SpineSchedule[]>();
   for (const s of agenda) {
     const n = normalizar(s.clientName);
     if (!n) continue;
     porNome.set(n, [...(porNome.get(n) ?? []), s]);
   }
-  const saida: Array<{ conversa: ConversaDaCaixa; muda: Record<string, string>; nome: string }> = [];
+  const saida: Array<{ conversa: ConversaDaCaixa; muda: Record<string, string>; nome: string; segurada?: string }> = [];
   for (const [nome, lista] of porNome) {
     const whats = whatsDoNome(nome);
     // sem cadastro, ou o mesmo nome com telefones diferentes: não dá para saber quem é
@@ -123,8 +145,9 @@ export function casar(
     const s = agendamentoQueVale(lista, hoje);
     const d = s ? desejadoDe(s) : null;
     if (!d) continue;
-    const muda = mudancas(alvo.attrs, d);
-    if (Object.keys(muda).length) saida.push({ conversa: alvo, muda, nome: lista[0]!.clientName ?? nome });
+    const muda = mudancas(alvo.attrs, d, hoje);
+    const segurada = etapaDaConsulta(alvo.attrs, d, hoje).segurada;
+    if (Object.keys(muda).length || segurada) saida.push({ conversa: alvo, muda, nome: lista[0]!.clientName ?? nome, ...(segurada ? { segurada } : {}) });
   }
   return saida;
 }
@@ -145,6 +168,7 @@ export function whatsDoCadastro(clientes: Array<{ name: string | null; whatsapp:
 
 const cacheNome = new Map<string, { fones: string[]; ate: number }>();
 const notasFeitas = new Set<string>();
+const seguradasLogadas = new Set<string>();
 
 async function conversasDaCaixa(ctx: ContextoChatwoot, caixa: number): Promise<ConversaDaCaixa[]> {
   const saida: ConversaDaCaixa[] = [];
@@ -200,7 +224,16 @@ export async function cicloDaAgenda(ctx: ContextoChatwoot, caixa: number, slug: 
   const conversas = await conversasDaCaixa(ctx, caixa);
   const plano = casar(agenda, conversas, (n) => fonesDe.get(n) ?? null, hoje);
   let gravadas = 0;
-  for (const { conversa, muda, nome } of plano) {
+  for (const { conversa, muda, nome, segurada } of plano) {
+    // Perdido/Frio com consulta nova de pé: a etapa fica como está (decisão humana) — só registra no log, uma vez
+    if (segurada) {
+      const k = `${conversa.id}|${segurada}|${muda.data_consulta ?? conversa.attrs.data_consulta ?? ''}`;
+      if (!seguradasLogadas.has(k)) {
+        seguradasLogadas.add(k);
+        logger.info({ slug, conversa: conversa.id, etapa: segurada, nome }, `${ID_AGENDA}: consulta de pé em conversa ${segurada} — etapa não mexida (decisão da equipe)`);
+      }
+    }
+    if (!Object.keys(muda).length) continue;
     const chave = `${conversa.id}|${JSON.stringify(muda)}`;
     try {
       if (modo === 'seco') {

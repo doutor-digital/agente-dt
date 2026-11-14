@@ -608,3 +608,44 @@ test('ehArquivo / arquivoComEtapa: só etiqueta historico + atividade antes do c
   assert.equal(arquivoComEtapa({ labels: ['historico'], last_activity_at: antes, custom_attributes: { etapa: ' ' } }), false);
   assert.equal(arquivoComEtapa({ labels: ['historico'], last_activity_at: depois, custom_attributes: { etapa: 'Perdido' } }), false, 'viva não é arquivo');
 });
+
+// ── arquivo com consulta de pé é paciente vivo ──
+
+test('ehArquivo: historico parado COM consulta de pé (hoje ou futura, em Belém) não é arquivo; passada, atendida ou desmarcada continua', () => {
+  const antes = Math.floor(Date.parse('2026-11-12T12:00:00Z') / 1000);
+  const agora = Z('2026-11-15T02:30:00Z'); // sábado 14/11 23:30 em Belém (domingo em UTC)
+  const h = (attrs: Record<string, unknown>) => ({ labels: ['historico'], last_activity_at: antes, custom_attributes: attrs });
+  assert.equal(ehArquivo(h({}), agora), true);
+  assert.equal(ehArquivo(h({ data_consulta: '2026-11-16', situacao_consulta: 'Confirmado' }), agora), false);
+  assert.equal(ehArquivo(h({ data_consulta: '2026-11-16T03:00:00.000Z', situacao_consulta: 'Agendado' }), agora), false);
+  assert.equal(ehArquivo(h({ data_consulta: '2026-11-14', situacao_consulta: 'Agendado' }), agora), false, 'hoje em Belém (14/11) conta, embora em UTC já seja dia 15');
+  assert.equal(ehArquivo(h({ data_consulta: '2026-11-13', situacao_consulta: 'Agendado' }), agora), true, 'ontem');
+  for (const s of ['Atendido', 'Não compareceu', 'Desmarcado']) assert.equal(ehArquivo(h({ data_consulta: '2026-11-16', situacao_consulta: s }), agora), true, s);
+  assert.equal(ehArquivo(h({ data_consulta: 'lixo', situacao_consulta: 'Agendado' }), agora), true);
+  // sem a etiqueta não era arquivo; com atividade nova continua não sendo
+  assert.equal(ehArquivo({ labels: [], last_activity_at: antes, custom_attributes: {} }, agora), false);
+  assert.equal(arquivoComEtapa({ ...h({ data_consulta: '2026-11-16', situacao_consulta: 'Agendado', etapa: 'Agendado' }) }), false, 'vivo não é arquivo (nem «com etapa»)');
+});
+
+test('historico com consulta de pé: lembretes de horário saem; o que a conversa já mostra é inicial e NÃO dispara regra de «entrou em etapa»', () => {
+  const partida = Z('2026-11-14T23:00:00Z');
+  const hist = {
+    ...conv({ attrs: { etapa: 'Agendado', situacao_consulta: 'Agendado', data_consulta: '2026-11-16', hora_consulta: '13:30', pagamento_antecipado: 'sim' }, etiquetas: ['historico', 'retomada'] }),
+    criadaEm: Z('2026-10-01T12:00:00Z'),
+  };
+  const primeira = Z('2026-11-15T12:00:00Z');
+  const k = atualizarVistos(hist, new Map(), primeira, { primeiraVez: false, desde: partida });
+  assert.equal(k.vistos.get('etapa')!.inicial, true);
+  assert.equal(k.vistos.get('etiqueta:retomada')!.inicial, true);
+  // segunda 16/11, consulta 13:30 Belém: dia = 10:30 (13:30Z), preparo = 12:30 (15:30Z); véspera de domingo já passou
+  const d1 = decidirRegua(hist, { vistos: k.vistos, feitos: new Set() }, Z('2026-11-16T13:35:00Z'), U);
+  assert.deepEqual(regras(d1), ['consulta-dia']);
+  const d2 = decidirRegua(hist, { vistos: k.vistos, feitos: new Set() }, Z('2026-11-16T15:35:00Z'), U);
+  assert.deepEqual(regras(d2), ['consulta-preparo']);
+  // nada de prepagamento (entrou em Agendado), SDR por etiqueta nem outras regras «ao entrar»
+  assert.equal(d1.disparos.some((x) => ['prepagamento', 'prepagamento-pendente', 'sdr-retomada'].includes(x.regra)), false);
+  // o mesmo paciente com consulta amanhã: a véspera (24 h antes) sai
+  const amanha = { ...hist, attrs: { ...hist.attrs, data_consulta: '2026-11-17' } };
+  const ka = atualizarVistos(amanha, new Map(), primeira, { primeiraVez: false, desde: partida });
+  assert.deepEqual(regras(decidirRegua(amanha, { vistos: ka.vistos, feitos: new Set() }, Z('2026-11-16T16:35:00Z'), U)), ['consulta-vespera']);
+});

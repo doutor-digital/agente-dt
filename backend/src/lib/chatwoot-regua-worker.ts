@@ -315,7 +315,7 @@ export interface ResumoDoCiclo {
   semTemplate: number;
 }
 
-async function lerConversas(chat: Chat, caixa: number): Promise<{ conversas: ConversaRegua[]; truncada: boolean }> {
+async function lerConversas(chat: Chat, caixa: number, agora: Date): Promise<{ conversas: ConversaRegua[]; truncada: boolean }> {
   const vistas = new Set<number>();
   const conversas: ConversaRegua[] = [];
   for (let p = 1; p <= MAX_PAGINAS; p++) {
@@ -323,8 +323,8 @@ async function lerConversas(chat: Chat, caixa: number): Promise<{ conversas: Con
     if (pagina.length === 0) return { conversas, truncada: false };
     for (const raw of pagina) {
       const c = conversaDoChatwoot(raw);
-      // conversa de arquivo (histórico unificado, ninguém mexeu depois): a régua não toca
-      if (!c || vistas.has(c.id) || ehArquivo(raw)) continue;
+      // conversa de arquivo (histórico unificado, ninguém mexeu depois, sem consulta de pé): a régua não toca
+      if (!c || vistas.has(c.id) || ehArquivo(raw, agora)) continue;
       vistas.add(c.id);
       conversas.push(c);
     }
@@ -371,7 +371,7 @@ const statusDoErro = (e: unknown): number | undefined => (e as { status?: number
  */
 export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: string, modo: 'seco' | 'ligado', unidade: DadosDaUnidade, agora: Date): Promise<ResumoDoCiclo> {
   const { armazem, chat } = deps;
-  const { conversas, truncada } = await lerConversas(chat, caixa);
+  const { conversas, truncada } = await lerConversas(chat, caixa, agora);
 
   // memória: o que já foi visto e o que já foi decidido
   const linhas = await armazem.vistos(caixa);
