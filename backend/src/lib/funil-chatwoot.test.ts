@@ -43,6 +43,25 @@ test('cartão: etapa vazia ou fora da lista cai na 1ª; nota interna não vaza c
   assert.equal(cartaoDaConversa(conv(5, { messages: [{ content: 'segredo da equipe', private: true }] }), etapas).ultimaMensagem, '(nota interna)');
 });
 
+test('cartão: nota interna depois da mensagem do paciente NÃO tira o lead de «Esperando resposta» (nota «Veio do anúncio», #334)', () => {
+  const etapas = ['Novo', 'Agendado'];
+  const k = cartaoDaConversa(conv(6, { messages: [
+    { content: 'Olá! Tenho interesse', message_type: 0 },
+    { content: '📣 Veio do anúncio «AGENDAR AVALIAÇÃO!»', message_type: 1, private: true },
+  ] }), etapas);
+  assert.equal(k.ultimaDela, true);
+  assert.equal(k.ultimaMensagem, 'Olá! Tenho interesse');
+  // a listagem só trouxe a nota (conversa já vista): o waiting_since do Chatwoot decide
+  const so = (w: number) => cartaoDaConversa(conv(7, { messages: [{ content: 'nota', message_type: 1, private: true }], last_non_activity_message: { content: 'nota', private: true }, waiting_since: w }), etapas);
+  assert.equal(so(1794631315).ultimaDela, true);
+  assert.equal(so(0).ultimaDela, false);
+  assert.equal(so(0).ultimaMensagem, '(nota interna)');
+  // a equipe respondeu depois do paciente: não está esperando
+  const r = cartaoDaConversa(conv(8, { messages: [{ content: 'oi', message_type: 0 }, { content: 'Olá!', message_type: 1 }, { content: 'nota', message_type: 1, private: true }] }), etapas);
+  assert.equal(r.ultimaDela, false);
+  assert.equal(r.ultimaMensagem, 'Olá!');
+});
+
 test('quadro: junta páginas sem repetir, mais recente primeiro, colunas na ordem das etapas', () => {
   const etapas = ['Novo', 'Agendado', 'Perdido'];
   const p1 = { data: { payload: [conv(1), conv(2, { custom_attributes: { etapa: 'Agendado' } })] } };
