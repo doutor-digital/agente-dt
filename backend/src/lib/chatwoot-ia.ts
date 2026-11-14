@@ -26,6 +26,7 @@ import { chamar, contaChatwootDoAmbiente, criarContextoChatwoot, type ContextoCh
 import { CAIXAS_REGUA } from './chatwoot-regua.js';
 import { aplicarEtiqueta, eventoDeEtiqueta, portasDaPonte, type PortasDaPonte } from './chatwoot-etiquetas.js';
 import { eventoDePausa, eventoDeReativacao, pausar, portaDaPausaDoChatwoot, reativar, type PortaDaPausa } from './chatwoot-pausa.js';
+import { aplicarOrigem, eventoDeOrigem, portasDaOrigem, type PortasDaOrigem } from './chatwoot-origem.js';
 import { transcribeAudio } from '../services/transcription.service.js';
 import { registrarEventoDaSofia, registrarRespostaDaSofia, ultimaFalaDoPaciente, type EventoDaSofia } from './sofia-avaliacoes.js';
 import { rodarTesteDaSofia } from '../controllers/playground.controller.js';
@@ -483,14 +484,14 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
 
 // ── a rota ─────────────────────────────────────────────────────────────────────────────────────────
 
-let estado: { portas: PortasDaIa; mem: MemoriaDaIa; ponte: PortasDaPonte; pausa: PortaDaPausa } | null = null;
+let estado: { portas: PortasDaIa; mem: MemoriaDaIa; ponte: PortasDaPonte; pausa: PortaDaPausa; origem: PortasDaOrigem } | null = null;
 
 function estadoDoReceptor() {
   if (!estado) {
     const conta = contaChatwootDoAmbiente();
     if (!conta) return null;
     const ctx = criarContextoChatwoot(conta);
-    estado = { portas: portasReais(ctx), mem: novaMemoriaDaIa(), ponte: portasDaPonte(ctx), pausa: portaDaPausaDoChatwoot(ctx) };
+    estado = { portas: portasReais(ctx), mem: novaMemoriaDaIa(), ponte: portasDaPonte(ctx), pausa: portaDaPausaDoChatwoot(ctx), origem: portasDaOrigem(ctx) };
   }
   return estado;
 }
@@ -520,6 +521,12 @@ export function eventoChatwootHandler(req: Request, res: Response): void {
     const e = estadoDoReceptor();
     if (e) void aplicarEtiqueta(etq, e.ponte).catch((err) => logger.warn({ err: String(err), conversa: etq.conversa }, 'chatwoot-etiquetas: falhou'));
     return;
+  }
+  // origem e campanha no CONTATO (chatwoot-origem.ts): independente da Sofia, não atrasa a resposta
+  const origem = eventoDeOrigem(req.body);
+  if (origem) {
+    const r = estadoDoReceptor();
+    if (r) void aplicarOrigem(origem, r.origem).catch((err) => logger.warn({ err: String(err), conversa: origem.conversa }, 'chatwoot-origem: falhou'));
   }
   const m = mensagemDoPaciente(req.body);
   if (!m) return;
