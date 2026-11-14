@@ -689,6 +689,12 @@ function candidatos(c: ConversaRegua, vistos: Vistos): Candidato[] {
   return saida;
 }
 
+/** «15/11 21:00 (Belém)» */
+export function horaEmBelem(t: Date): string {
+  const l = new Date(t.getTime() - UTC_MENOS_3).toISOString(); // YYYY-MM-DDTHH:mm…
+  return `${l.slice(8, 10)}/${l.slice(5, 7)} ${l.slice(11, 16)} (Belém)`;
+}
+
 /** O instante em que a janela de horário está aberta: o próprio `de`, ou a abertura seguinte (hora cheia, pois o fuso é de horas inteiras). */
 export function proximaAbertura(de: Date): Date {
   if (janelaAberta(de)) return de;
@@ -697,9 +703,13 @@ export function proximaAbertura(de: Date): Date {
   return t;
 }
 
-/** A nota que o pedido por etiqueta deixa quando NÃO vai sair: uma por chave, sempre dizendo como pedir de novo. */
+/**
+ * A nota que o pedido por etiqueta deixa quando NÃO vai sair: uma por chave, sempre dizendo como pedir de novo. «Espere 15 minutos» porque
+ * a chegada nova só existe se o worker (varredura de 10 min) chegar a ver a etiqueta sumir; tirar e pôr antes disso não muda a chave.
+ * O worker NÃO tira a etiqueta sozinho (uma regra da Automação que a repõe viraria laço de notas).
+ */
 export function notaDePedidoNaoEnviado(modelo: string, motivo: string): string {
-  return `🛑 ${etiquetaDoModelo(modelo)} NÃO enviado: ${motivo}. Tire e ponha a etiqueta de novo.`;
+  return `🛑 ${etiquetaDoModelo(modelo)} NÃO enviado: ${motivo}. Para tentar de novo: tire a etiqueta, espere 15 minutos e ponha de novo.`;
 }
 
 /** Até quando a regra ainda vale. */
@@ -728,8 +738,14 @@ export function decidirRegua(c: ConversaRegua, memoria: Memoria, agora: Date, un
     if (agora.getTime() > limite.getTime()) {
       if (agora.getTime() - limite.getTime() <= JANELA_DO_LOG_PERDIDA_MS) perdidas.push(k.regra);
       // o pedido de uma pessoa que se perdeu não pode sumir calado: uma nota por chave (registrada com o sufixo, não repete)
-      if (k.pedido && agora.getTime() - limite.getTime() <= JANELA_DA_NOTA_PERDIDA_MS && !memoria.feitos.has(`${k.regra}${SUFIXO_PERDIDA}|${k.chave}`)) {
-        const motivo = `passou do prazo (a etiqueta chegou em ${k.alvo.toISOString().slice(0, 16).replace('T', ' ')} UTC e o envio vale até 2 h depois da próxima abertura da janela de horário)`;
+      // (já existe a nota de «falta campo» desta chave = já foi dito por que não saiu: não duplica)
+      if (
+        k.pedido &&
+        agora.getTime() - limite.getTime() <= JANELA_DA_NOTA_PERDIDA_MS &&
+        !memoria.feitos.has(`${k.regra}${SUFIXO_PERDIDA}|${k.chave}`) &&
+        !memoria.feitos.has(`${k.regra}${SUFIXO_FALTA}|${k.chave}`)
+      ) {
+        const motivo = `passou do prazo (a etiqueta chegou em ${horaEmBelem(k.alvo)} e o envio vale até 2 h depois da próxima abertura da janela de horário)`;
         disparos.push({ regra: `${k.regra}${SUFIXO_PERDIDA}`, chave: k.chave, modelo: k.modelo, texto: null, variaveis: null, faltando: [], alvo: k.alvo, soNota: notaDePedidoNaoEnviado(k.modelo, motivo) });
       }
       continue;

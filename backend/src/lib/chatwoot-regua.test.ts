@@ -21,6 +21,7 @@ import {
   MODELO_POR_ETIQUETA,
   MODELOS_SEM_ETIQUETA,
   notaDePedidoNaoEnviado,
+  horaEmBelem,
   proximaAbertura,
   REGRA_MODELO_ETIQUETA,
   SUFIXO_PERDIDA,
@@ -678,7 +679,7 @@ test('modelo-*: ainda não chegou na hora, fora da janela espera, e passou do at
   // não manda, mas também não cala: uma nota privada, dizendo como pedir de novo
   assert.deepEqual(regras(antiga), [`${REGRA_MODELO_ETIQUETA}${SUFIXO_PERDIDA}`]);
   assert.equal(antiga.disparos[0]!.texto, null);
-  assert.match(antiga.disparos[0]!.soNota!, /^🛑 modelo-consulta-lembrete-vespera NÃO enviado: passou do prazo .*\. Tire e ponha a etiqueta de novo\.$/);
+  assert.match(antiga.disparos[0]!.soNota!, /^🛑 modelo-consulta-lembrete-vespera NÃO enviado: passou do prazo .*\. Para tentar de novo: tire a etiqueta, espere 15 minutos e ponha de novo\.$/);
   // a nota é uma por chave, e continua uma só em qualquer ciclo depois
   const feitosNota = [`${REGRA_MODELO_ETIQUETA}${SUFIXO_PERDIDA}|${antiga.disparos[0]!.chave}`];
   assert.deepEqual(regras(rodar(c, '2026-11-17T00:20:00Z', v, feitosNota)), []);
@@ -757,7 +758,7 @@ test('modelo-*: campo faltando segue o caminho de sempre (texto nulo + o que fal
   // tirou e pôs de novo (chave nova, campo preenchido): sai
   const novaChegada = { [`etiqueta:${VESPERA}`]: visto('sim', '2026-11-16T12:30:00Z') };
   assert.deepEqual(regras(rodar(conv({ attrs: ATTRS_CONSULTA, etiquetas: [VESPERA] }), '2026-11-16T12:30:00Z', novaChegada, feitos)), ['modelo-etiqueta']);
-  assert.equal(notaDePedidoNaoEnviado('parau_consulta_lembrete_vespera', 'falta a data'), '🛑 modelo-consulta-lembrete-vespera NÃO enviado: falta a data. Tire e ponha a etiqueta de novo.');
+  assert.equal(notaDePedidoNaoEnviado('parau_consulta_lembrete_vespera', 'falta a data'), '🛑 modelo-consulta-lembrete-vespera NÃO enviado: falta a data. Para tentar de novo: tire a etiqueta, espere 15 minutos e ponha de novo.');
 });
 
 test('modelo-*: etiqueta posta no sábado à noite sai na segunda de manhã (limite = próxima abertura + 2 h); depois disso, nota', () => {
@@ -771,6 +772,14 @@ test('modelo-*: etiqueta posta no sábado à noite sai na segunda de manhã (lim
   assert.deepEqual(regras(rodar(c, '2026-11-16T12:59:00Z', v)), ['modelo-etiqueta'], 'até 2 h depois da abertura');
   const tarde = rodar(c, '2026-11-16T13:01:00Z', v);
   assert.deepEqual(regras(tarde), [`${REGRA_MODELO_ETIQUETA}${SUFIXO_PERDIDA}`], 'passou: só a nota');
+  // a hora na nota é a de Belém (sábado 21:00), não UTC (00:00 de domingo)
+  assert.match(tarde.disparos[0]!.soNota!, /a etiqueta chegou em 14\/11 21:00 \(Belém\) e/);
+  assert.doesNotMatch(tarde.disparos[0]!.soNota!, /UTC|15\/11|00:00/);
+  assert.equal(horaEmBelem(Z('2026-11-16T02:05:00Z')), '15/11 23:05 (Belém)');
+  assert.equal(horaEmBelem(Z('2026-12-01T01:00:00Z')), '30/11 22:00 (Belém)');
+  // já existe a nota de «falta campo» desta chave: não vem uma 2ª nota dizendo «passou do prazo»
+  const comFalta = rodar(c, '2026-11-16T13:01:00Z', v, [`${REGRA_MODELO_ETIQUETA}${SUFIXO_FALTA}|${VESPERA}@2026-11-15T00:00:00.000Z`]);
+  assert.deepEqual(regras(comFalta), []);
   // as regras de sempre continuam nas 12 h: a véspera dentro da janela não ganhou prazo extra
   assert.equal(proximaAbertura(Z('2026-11-15T00:00:00Z')).toISOString(), '2026-11-16T11:00:00.000Z');
   assert.equal(proximaAbertura(Z('2026-11-16T12:07:00Z')).toISOString(), '2026-11-16T12:07:00.000Z', 'já aberta: o próprio instante');

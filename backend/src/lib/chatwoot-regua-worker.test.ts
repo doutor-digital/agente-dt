@@ -690,7 +690,7 @@ test('modelo-etiqueta, ligado, campo faltando: nota privada (uma só) dizendo o 
   assert.equal(c.mensagens.length, 1);
   assert.equal(c.mensagens[0]!.privada, true);
   assert.equal(c.mensagens[0]!.template, undefined);
-  assert.match(c.mensagens[0]!.texto, /^🛑 modelo-consulta-lembrete-vespera NÃO enviado: falta data da consulta \(data_consulta\)\. Tire e ponha a etiqueta de novo\.$/);
+  assert.match(c.mensagens[0]!.texto, /^🛑 modelo-consulta-lembrete-vespera NÃO enviado: falta data da consulta \(data_consulta\)\. Para tentar de novo: tire a etiqueta, espere 15 minutos e ponha de novo\.$/);
   assert.deepEqual(f.disparos.map((x) => x.regra), ['modelo-etiqueta!falta']);
   // ciclos seguintes: nada de nota repetida
   await ciclo(new Date(T_ETIQUETA.getTime() + 600_000));
@@ -715,7 +715,7 @@ test('modelo-etiqueta, ligado + cartão ativo no Kommo: UMA nota por chave, no f
   await ciclo(new Date(T_ETIQUETA.getTime() + 1_200_000));
   assert.equal(c.mensagens.length, 1);
   assert.equal(c.mensagens[0]!.privada, true);
-  assert.match(c.mensagens[0]!.texto, /^🛑 modelo-consulta-lembrete-vespera NÃO enviado: o paciente tem cartão ativo no Kommo da unidade \(lead 777\); os robôs de lá cuidam\. Tire e ponha a etiqueta de novo\.$/);
+  assert.match(c.mensagens[0]!.texto, /^🛑 modelo-consulta-lembrete-vespera NÃO enviado: o paciente tem cartão ativo no Kommo da unidade \(lead 777\); os robôs de lá cuidam\. Para tentar de novo: tire a etiqueta, espere 15 minutos e ponha de novo\.$/);
   assert.equal(f.disparos.length, 1);
 });
 
@@ -730,7 +730,7 @@ test('modelo-etiqueta, ligado: sem conseguir conferir o Kommo até passar do pra
   assert.equal(r.pedidosPerdidos, 1);
   assert.equal(c.mensagens.length, 1);
   assert.equal(c.mensagens[0]!.privada, true);
-  assert.match(c.mensagens[0]!.texto, /^🛑 modelo-consulta-lembrete-vespera NÃO enviado: passou do prazo .*\. Tire e ponha a etiqueta de novo\.$/);
+  assert.match(c.mensagens[0]!.texto, /^🛑 modelo-consulta-lembrete-vespera NÃO enviado: passou do prazo .*\. Para tentar de novo: tire a etiqueta, espere 15 minutos e ponha de novo\.$/);
   await ciclo(new Date('2026-11-17T00:40:00Z'));
   await ciclo(new Date('2026-11-18T12:00:00Z'));
   assert.equal(c.mensagens.length, 1);

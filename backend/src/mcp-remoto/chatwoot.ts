@@ -263,7 +263,9 @@ export function registrarFerramentasChatwoot(server: McpServer, ctx: ContextoCha
       '{labels:[…]}, POST "conversations/5/assignments" {assignee_id}, POST "conversations/5/toggle_status" {status}, POST "canned_responses", ' +
       'POST "custom_attribute_definitions", POST "agents", POST "teams", POST "conversations/5/messages" {content, private:true} para NOTA ' +
       'interna). Criar e alterar é direto. APAGAR e o que manda mensagem ao cliente (mensagem pública, conversa nova com mensagem, campanha) ' +
-      'é recusado aqui: use chatwoot_preparar.',
+      'é recusado aqui: use chatwoot_preparar. Etiqueta "modelo-*" (ex. modelo-consulta-lembrete-vespera) também MANDA mensagem: a régua envia o modelo de ' +
+      'WhatsApp ao paciente quando ela chega. Pô-la numa conversa (POST "conversations/5/labels"), em lote (POST "bulk_actions") ou numa ' +
+      'automação/macro (add_label) pede os dois passos: chatwoot_preparar e, com o ok da pessoa, chatwoot_confirmar.',
     { metodo, caminho: z.string(), corpo, query },
     escrever,
     (a) => chamarDireto(ctx, a.metodo, a.caminho, a.corpo, a.query),

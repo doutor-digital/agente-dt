@@ -61,10 +61,11 @@ const SWEEP_MS = Number(process.env.CHATWOOT_REGUA_SWEEP_MS) || 10 * 60_000;
 const PRIMEIRA_VARREDURA_MS = 150_000;
 /** 25 conversas por página. */
 const MAX_PAGINAS = 200;
-export const MAX_MENSAGENS_POR_CICLO = 60;
+/** Total por ciclo continua 60: 40 das regras de sempre + 20 dos pedidos por etiqueta. */
+export const MAX_MENSAGENS_POR_CICLO = 40;
 export const MAX_ETIQUETAS_POR_CICLO = 100;
 /** Teto próprio do modelo pedido por etiqueta (e da nota de pedido perdido): não divide o teto da véspera e das outras regras. */
-export const MAX_PEDIDOS_POR_CICLO = 30;
+export const MAX_PEDIDOS_POR_CICLO = 20;
 /** Sufixo da regra quando o que se registra é «template ainda não aprovado» (a nota sai uma vez por chave; o envio continua possível). */
 export const SUFIXO_SEM_TEMPLATE = '!template';
 /** Quanto do histórico de disparos o ciclo carrega para conferir repetição (a UNIQUE do banco vale para sempre). */
