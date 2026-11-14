@@ -28,6 +28,7 @@ import { aplicarEtiqueta, eventoDeEtiqueta, portasDaPonte, type PortasDaPonte } 
 import { eventoDePausa, eventoDeReativacao, pausar, portaDaPausaDoChatwoot, reativar, type PortaDaPausa } from './chatwoot-pausa.js';
 import { aplicarResolucao, eventoDeResolucao, portasDoResolver, type PortasDoResolver } from './chatwoot-resolver.js';
 import { aplicarReferralDoKapso, mensagemParaConsultar } from './kapso-referral.js';
+import { portasDaOrigem, preencherOrigem, type PortasDaOrigem } from './chatwoot-origem.js';
 import { transcribeAudio } from '../services/transcription.service.js';
 import { registrarEventoDaSofia, registrarRespostaDaSofia, ultimaFalaDoPaciente, type EventoDaSofia } from './sofia-avaliacoes.js';
 import { portaDoRobo, tokenDoRobo } from './chatwoot-sofia-bot.js';
@@ -536,14 +537,14 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
 
 // ── a rota ─────────────────────────────────────────────────────────────────────────────────────────
 
-let estado: { portas: PortasDaIa; mem: MemoriaDaIa; ponte: PortasDaPonte; pausa: PortaDaPausa; resolver: PortasDoResolver } | null = null;
+let estado: { portas: PortasDaIa; mem: MemoriaDaIa; ponte: PortasDaPonte; pausa: PortaDaPausa; resolver: PortasDoResolver; origem: PortasDaOrigem } | null = null;
 
 function estadoDoReceptor() {
   if (!estado) {
     const conta = contaChatwootDoAmbiente();
     if (!conta) return null;
     const ctx = criarContextoChatwoot(conta);
-    estado = { portas: portasReais(ctx), mem: novaMemoriaDaIa(), ponte: portasDaPonte(ctx), pausa: portaDaPausaDoChatwoot(ctx), resolver: portasDoResolver(ctx) };
+    estado = { portas: portasReais(ctx), mem: novaMemoriaDaIa(), ponte: portasDaPonte(ctx), pausa: portaDaPausaDoChatwoot(ctx), resolver: portasDoResolver(ctx), origem: portasDaOrigem(ctx) };
   }
   return estado;
 }
@@ -582,7 +583,15 @@ export function eventoChatwootHandler(req: Request, res: Response): void {
   }
   // o código do anúncio que o Chatwoot perde no caminho do Kapso: pergunta ao Kapso e guarda (kapso-referral.ts)
   const consultar = mensagemParaConsultar(req.body);
-  if (consultar) void aplicarReferralDoKapso(consultar).catch(() => undefined);
+  if (consultar) {
+    const r = estadoDoReceptor();
+    void aplicarReferralDoKapso(consultar, {
+      aoAchar: async (m, ref) => {
+        const slug = CAIXAS_REGUA[m.caixa];
+        if (r && slug && m.contato) await preencherOrigem({ slug, contato: m.contato, conversa: m.conversa, ref }, r.origem);
+      },
+    }).catch(() => undefined);
+  }
   const m = mensagemDoPaciente(req.body);
   if (!m) return;
   const e = estadoDoReceptor();
