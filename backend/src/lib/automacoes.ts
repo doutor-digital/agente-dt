@@ -717,6 +717,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/sofia-calada.ts',
   },
   {
+    id: 'calar-paciente-em-tratamento',
+    chave: 'CALAR_PACIENTE_EM_TRATAMENTO_SLUGS',
+    nome: 'Sofia calada para paciente em tratamento e número interno',
+    oQueFaz:
+      'Cartão novo e vazio no funil COMERCIAL cujo telefone é de PACIENTE da franquia com tratamento ativo ou sessão futura (ex.: "Confirmado" em resposta ao lembrete de sessão): a Sofia não responde e deixa uma nota no cartão, 1 vez por dia. Telefone da lista de números internos também fica sem resposta.',
+    pegadinha:
+      'Só pergunta à franquia quando o cartão está no COMERCIAL e ainda sem vínculo com a franquia; franquia fora do ar ou lenta (mais de 3 s) = a Sofia responde como sempre. Paciente que só fez avaliação, ou já terminou, continua sendo atendido. O índice de telefones da franquia guarda 1 cadastro por telefone: mãe e filha no mesmo WhatsApp não aparecem como ambíguo. Atenção: os números de teste da equipe em NUMEROS_INTERNOS ficam MUDOS nas unidades onde isto estiver ligado. Em "só no papel" decide e registra no histórico da execução e no log, sem calar e sem nota.',
+    risco: 'comportamento',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/paciente-em-tratamento.ts',
+  },
+  {
     id: 'pausa-equipe',
     chave: 'PAUSA_EQUIPE_SLUGS',
     nome: 'A equipe falou, a Sofia para',

@@ -78,6 +78,7 @@ import { contaDoKommo, grupoDaUnidade, sofiaPodeAtenderOCartao, unidadeDonaPeloC
 import { esquemaDaUnidade as esquemaKommoDaUnidade } from '../lib/kommo-schema.js';
 import { etapaPermitida, precisaDoFunil, type FunisDaConta } from '../lib/etapa-permitida.js';
 import { etapaCalada, notaSofiaCalada, REGRA_NOTA_CALADA, sofiaCaladaLiberada } from '../lib/sofia-calada.js';
+import { portaPacienteEmTratamento } from '../lib/paciente-em-tratamento-porta.js';
 import { garantirTituloPadrao } from '../lib/titulo-padrao.js';
 import { telefoneDeFamiliarNoCartao } from '../lib/telefone-de-familiar.js';
 import { SpineSyncService } from '../services/spine-sync.service.js';
@@ -1682,6 +1683,37 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
     }
   } catch (err) {
     logger.warn({ err, leadId, unit: unit.slug }, 'falha no guard de etapa (allowlist/pause_in_stages) — seguindo');
+  }
+
+  // PACIENTE EM TRATAMENTO num cartão novo e vazio (14/11/2026) e NÚMERO INTERNO: a Sofia não responde. Chave
+  // `calar-paciente-em-tratamento`; em "só no papel" só registra. Desligada, não lê nem o cartão. Nunca derruba o atendimento.
+  if (isChatMessage && humanMessage.trim()) {
+    const calar = await portaPacienteEmTratamento({ unit, leadId, contactId, humanMessage: semAReferencia(humanMessage) });
+    if (calar?.decisao.calar) {
+      const d = calar.decisao;
+      const rotulo = d.motivo === 'numero_interno' ? 'número interno' : 'paciente em tratamento na franquia';
+      if (calar.estado === 'seco') {
+        await recorder.step({
+          kind: 'THINKING',
+          title: `🧪 (só no papel) a Sofia ficaria calada — ${rotulo}`,
+          payload: { leadId, motivo: d.motivo, detalhe: d.detalhe, reason: 'calar_paciente_em_tratamento_seco' },
+        });
+        logger.info({ traceId, leadId, unit: unit.slug, motivo: d.motivo, detalhe: d.detalhe }, 'calar-paciente-em-tratamento (seco): calaria — segue respondendo');
+      } else {
+        await finishWidgetSilently();
+        const totalLatency = Math.round(performance.now() - requestStart);
+        await recorder.step({
+          kind: 'COMPLETED',
+          title: `Sofia calada — ${rotulo}${calar.anotou ? ' (nota deixada no cartão)' : ''}`,
+          payload: { leadId, motivo: d.motivo, detalhe: d.detalhe, anotou: calar.anotou, reason: 'calar_paciente_em_tratamento' },
+          latencyMs: totalLatency,
+        });
+        await recorder.finalize({ status: 'SUCCESS', latencyMs: totalLatency, iaDecision: '__paciente_em_tratamento__' });
+        logger.info({ traceId, leadId, unit: unit.slug, motivo: d.motivo, detalhe: d.detalhe, anotou: calar.anotou }, 'agente pulado (paciente em tratamento / número interno)');
+        // Como na etapa calada: cartão de paciente, não lead novo — sem cadastro de lead na franquia por aqui.
+        return;
+      }
+    }
   }
 
   // A EQUIPE FALOU, A SOFIA PARA (prioridade 3, 21/10/2026): pela conversa oficial, que enxerga também o
