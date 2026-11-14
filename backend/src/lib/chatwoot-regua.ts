@@ -531,8 +531,8 @@ function candidatos(c: ConversaRegua, vistos: Vistos): Candidato[] {
    * Conversa que já existia quando a régua a viu pela 1ª vez (partida, histórico que acordou): consulta de ANTES desse dia é passado, não
    * gatilho — falta 48 h, pós-atendimento e decisão não valem para ela, senão a 1ª vista mandaria o que a Kommo mandou (ou não) dias atrás.
    */
-  const primeira = vistos.get(CAMPO_VISTO_CONVERSA);
-  const consultaAnteriorAVista = (m: Momento): boolean => !!primeira?.inicial && m.data.iso < diaEmBelem(primeira.desde);
+  const vistaDaConversa = vistos.get(CAMPO_VISTO_CONVERSA);
+  const consultaAnteriorAVista = (m: Momento): boolean => !!vistaDaConversa?.inicial && m.data.iso < diaEmBelem(vistaDaConversa.desde);
 
   if (!tratamento) {
     // follow-up: perdido há 48/96/120 h (no Kommo o de 96 h está com atraso 0 — defeito; aqui 96 h)

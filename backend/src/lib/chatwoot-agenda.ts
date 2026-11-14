@@ -79,7 +79,8 @@ export function desejadoDe(s: SpineSchedule): Desejado | null {
 const ETAPAS_QUE_VIRAM_AGENDADO: ReadonlySet<string> = new Set(['', 'Novo lead', 'Sofia qualifica', 'Esperando humano', 'Resgate']);
 /** Etapas de quem desistiu: consulta nova de pé NÃO as mexe (decisão humana); só vai para o log. */
 const ETAPAS_SEGURADAS: ReadonlySet<string> = new Set(['Perdido', 'Frio']);
-const SITUACOES_DE_PE: ReadonlySet<string> = new Set(['Agendado', 'Confirmado', 'Remarcado']);
+/** Só estas duas (igual a `agendamentoQueVale`): Remarcado é horário que NÃO vale mais, a data nova pode estar fora da janela lida. */
+const SITUACOES_DE_PE: ReadonlySet<string> = new Set(['Agendado', 'Confirmado']);
 
 /**
  * A etapa que a consulta de pé pede, ou a etapa que ficou SEGURADA (Perdido/Frio). Nunca rebaixa nem sobrescreve Compareceu, Fechou,
@@ -229,6 +230,7 @@ export async function cicloDaAgenda(ctx: ContextoChatwoot, caixa: number, slug: 
     if (segurada) {
       const k = `${conversa.id}|${segurada}|${muda.data_consulta ?? conversa.attrs.data_consulta ?? ''}`;
       if (!seguradasLogadas.has(k)) {
+        if (seguradasLogadas.size >= 5000) seguradasLogadas.clear(); // teto: o log pode repetir uma vez, a memória não cresce sem fim
         seguradasLogadas.add(k);
         logger.info({ slug, conversa: conversa.id, etapa: segurada, nome }, `${ID_AGENDA}: consulta de pé em conversa ${segurada} — etapa não mexida (decisão da equipe)`);
       }

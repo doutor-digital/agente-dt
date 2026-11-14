@@ -105,7 +105,9 @@ test('etapa: vazia, Novo lead, Sofia qualifica, Esperando humano e Resgate com c
     assert.deepEqual(etapaDaConsulta({ etapa }, dePe(), HOJE), { etapa: 'Agendado' }, String(etapa));
     assert.deepEqual(etapaDaConsulta({ etapa }, dePe({ situacao_consulta: 'Confirmado' }), HOJE), { etapa: 'Confirmado' }, String(etapa));
   }
-  assert.deepEqual(etapaDaConsulta({}, dePe({ situacao_consulta: 'Remarcado' }), HOJE), { etapa: 'Agendado' });
+  // Remarcado NÃO é de pé: o horário não vale mais (a data nova pode estar fora da janela lida) — nada de gravar Agendado
+  assert.deepEqual(etapaDaConsulta({}, dePe({ situacao_consulta: 'Remarcado' }), HOJE), {});
+  assert.deepEqual(etapaDaConsulta({}, dePe({ situacao_consulta: 'Remarcado', data_consulta: HOJE }), HOJE), {});
   assert.deepEqual(etapaDaConsulta({}, dePe({ data_consulta: HOJE }), HOJE), { etapa: 'Agendado' }, 'hoje conta');
 });
 
@@ -154,4 +156,15 @@ test('consulta que passou: a agenda grava Atendido / Não compareceu (sem mexer 
   const agora = new Date('2026-11-14T22:00:00Z');
   assert.equal(ehArquivo(hist('2026-11-13'), agora), false);
   assert.equal(ehArquivo(hist('2026-09-13'), agora), true);
+});
+
+test('consulta de HOJE marcada Remarcado (data nova fora dos 14 dias lidos): a agenda não grava Agendado nem etapa', () => {
+  const conversas: ConversaDaCaixa[] = [{ id: 1, telefone: '+5594999745062', attrs: { etapa: 'Sofia qualifica' }, atividade: 1 }];
+  const r = casar([ag({ dayLocal: HOJE, statusName: 'Remarcado' })], conversas, () => ['5594999745062'], HOJE);
+  for (const x of r) {
+    assert.equal(x.muda.etapa, undefined);
+    assert.notEqual(x.muda.situacao_consulta, 'Agendado');
+  }
+  // contraste: a mesma consulta de hoje Agendada grava a etapa
+  assert.equal(casar([ag({ dayLocal: HOJE, statusName: 'Agendado' })], conversas, () => ['5594999745062'], HOJE)[0]!.muda.etapa, 'Agendado');
 });

@@ -315,21 +315,44 @@ export interface ResumoDoCiclo {
   semTemplate: number;
 }
 
+/**
+ * Por telefone, só a conversa de atividade MAIS RECENTE fala com o paciente (a mesma regra da agenda): a do histórico (com data velha) e a
+ * viva (com data nova) do mesmo número não mandam lembrete em dobro nem o da data velha. A outra fica fora do ciclo. Sem telefone, fica.
+ * Empate de atividade: a de id maior.
+ */
+export function soAMaisRecentePorTelefone<T extends { c: ConversaRegua; atividade: number }>(lista: readonly T[]): T[] {
+  const melhor = new Map<string, T>();
+  for (const x of lista) {
+    const fim = finalDoTelefone(x.c.telefone);
+    if (!fim) continue;
+    const atual = melhor.get(fim);
+    if (!atual || x.atividade > atual.atividade || (x.atividade === atual.atividade && x.c.id > atual.c.id)) melhor.set(fim, x);
+  }
+  return lista.filter((x) => {
+    const fim = finalDoTelefone(x.c.telefone);
+    return !fim || melhor.get(fim) === x;
+  });
+}
+
 async function lerConversas(chat: Chat, caixa: number, agora: Date): Promise<{ conversas: ConversaRegua[]; truncada: boolean }> {
   const vistas = new Set<number>();
-  const conversas: ConversaRegua[] = [];
+  const lidas: Array<{ c: ConversaRegua; atividade: number }> = [];
+  let truncada = true;
   for (let p = 1; p <= MAX_PAGINAS; p++) {
     const pagina = await chat.pagina(caixa, p);
-    if (pagina.length === 0) return { conversas, truncada: false };
+    if (pagina.length === 0) {
+      truncada = false;
+      break;
+    }
     for (const raw of pagina) {
       const c = conversaDoChatwoot(raw);
       // conversa de arquivo (histórico unificado, ninguém mexeu depois, sem consulta de pé): a régua não toca
       if (!c || vistas.has(c.id) || ehArquivo(raw, agora)) continue;
       vistas.add(c.id);
-      conversas.push(c);
+      lidas.push({ c, atividade: Number((raw as { last_activity_at?: unknown })?.last_activity_at) || 0 });
     }
   }
-  return { conversas, truncada: true };
+  return { conversas: soAMaisRecentePorTelefone(lidas).map((x) => x.c), truncada };
 }
 
 /**
