@@ -615,9 +615,12 @@ export function eventoChatwootHandler(req: Request, res: Response): void {
         // etiqueta «anuncio» na conversa (informação: vale com a origem desligada) — chatwoot-origem.ts
         if (r) await etiquetarAnuncio(m.conversa, ref, (c, e) => r.chat.adicionarEtiquetas(c, e));
         const slug = CAIXAS_REGUA[m.caixa];
-        // o «cartão» do anúncio (título, texto, imagem, link) numa nota interna, só na 1ª vez — chatwoot-anuncio.ts
-        if (r && novo) await notaDoAnuncio({ conversa: m.conversa, slug, ref }, r.nota);
-        if (r && slug && m.contato) await preencherOrigem({ slug, contato: m.contato, conversa: m.conversa, ref }, r.origem);
+        // juntas (nenhuma das duas lança): a origem é dado e não espera o download/envio da imagem da nota
+        await Promise.all([
+          // o «cartão» do anúncio (título, texto, imagem, link) numa nota interna, só na 1ª vez — chatwoot-anuncio.ts
+          r && novo ? notaDoAnuncio({ conversa: m.conversa, slug, ref }, r.nota) : null,
+          r && slug && m.contato ? preencherOrigem({ slug, contato: m.contato, conversa: m.conversa, ref }, r.origem) : null,
+        ]);
       },
     }).catch(() => undefined);
   }

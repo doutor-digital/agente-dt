@@ -45,7 +45,38 @@ export function hostDaMeta(u: string): boolean {
   }
 }
 
-type Baixar = (url: string, init: { signal: AbortSignal; redirect: 'error' }) => Promise<{ ok: boolean; headers: { get(n: string): string | null }; arrayBuffer(): Promise<ArrayBuffer> }>;
+type Corpo = { getReader(): { read(): Promise<{ done: boolean; value?: Uint8Array }>; cancel(): Promise<unknown> } };
+type RespostaDaImagem = { ok: boolean; headers: { get(n: string): string | null }; arrayBuffer(): Promise<ArrayBuffer>; body?: Corpo | null };
+type Baixar = (url: string, init: { signal: AbortSignal; redirect: 'error' }) => Promise<RespostaDaImagem>;
+
+/** Lê o corpo aos poucos e PARA no teto (sem content-length, não carrega um arquivo enorme inteiro). null = passou do teto. */
+async function lerAteOTeto(r: RespostaDaImagem): Promise<Uint8Array | null> {
+  if (!r.body?.getReader) {
+    const b = new Uint8Array(await r.arrayBuffer());
+    return b.byteLength > LIMITE_IMAGEM ? null : b;
+  }
+  const leitor = r.body.getReader();
+  const partes: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await leitor.read();
+    if (done) break;
+    if (!value) continue;
+    total += value.byteLength;
+    if (total > LIMITE_IMAGEM) {
+      await leitor.cancel().catch(() => undefined);
+      return null;
+    }
+    partes.push(value);
+  }
+  const saida = new Uint8Array(total);
+  let i = 0;
+  for (const p of partes) {
+    saida.set(p, i);
+    i += p.byteLength;
+  }
+  return saida;
+}
 
 /** A imagem do anúncio, ou null (host fora da Meta, link vencido, não é imagem, grande demais, fora do ar). */
 export async function baixarImagem(url: string, baixar: Baixar = fetch as unknown as Baixar): Promise<Imagem | null> {
@@ -56,8 +87,8 @@ export async function baixarImagem(url: string, baixar: Baixar = fetch as unknow
     const tipo = (r.headers.get('content-type') ?? '').split(';')[0]!.trim().toLowerCase();
     if (!EXTENSAO[tipo]) return null;
     if (Number(r.headers.get('content-length') ?? 0) > LIMITE_IMAGEM) return null;
-    const bytes = new Uint8Array(await r.arrayBuffer());
-    if (bytes.byteLength === 0 || bytes.byteLength > LIMITE_IMAGEM) return null;
+    const bytes = await lerAteOTeto(r);
+    if (!bytes || bytes.byteLength === 0) return null;
     return { bytes, tipo };
   } catch {
     return null;
@@ -114,18 +145,21 @@ export function portasDaNota(ctx: ContextoChatwoot, origem: Pick<PortasDaOrigem,
       fd.append('message_type', 'outgoing');
       fd.append('private', 'true');
       fd.append('attachments[]', new Blob([anexo.bytes], { type: anexo.tipo }), anexo.nome);
-      const r = await ctx
-        .fetch(`${conta.url}/api/v1/accounts/${conta.conta}/conversations/${conversa}/messages`, {
-          method: 'POST',
-          headers: { api_access_token: conta.token, Accept: 'application/json' },
-          body: fd,
-          signal: AbortSignal.timeout(60_000),
-        })
-        .catch(() => null);
-      if (r?.ok) return;
-      // o anexo foi recusado (ou caiu no meio): o texto ainda vale
-      logger.warn({ conversa, status: r?.status ?? null }, 'chatwoot-anuncio: o Chatwoot recusou a imagem; vai só o texto');
-      await soTexto(conversa, texto);
+      // conexão caiu / tempo esgotou: NÃO manda o texto de reserva — o Chatwoot pode ter gravado a nota com a imagem (2 notas)
+      const r = await ctx.fetch(`${conta.url}/api/v1/accounts/${conta.conta}/conversations/${conversa}/messages`, {
+        method: 'POST',
+        headers: { api_access_token: conta.token, Accept: 'application/json' },
+        body: fd,
+        signal: AbortSignal.timeout(60_000),
+      });
+      if (r.ok) return;
+      if (r.status >= 400 && r.status < 500) {
+        // o Chatwoot RECUSOU o anexo (nada gravado): o texto ainda vale
+        logger.warn({ conversa, status: r.status }, 'chatwoot-anuncio: o Chatwoot recusou a imagem; vai só o texto');
+        await soTexto(conversa, texto);
+        return;
+      }
+      throw new Error(`Chatwoot ${r.status} ao publicar a nota do anúncio`);
     },
   };
 }
