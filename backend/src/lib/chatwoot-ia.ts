@@ -183,6 +183,8 @@ export interface PortasDaIa {
   agendar(fn: () => void, ms: number): unknown;
   cancelar(t: unknown): void;
   hoje(): string;
+  /** só com o robô ligado: tira a conversa de «Pendentes» (a Sofia não respondeu; a equipe precisa ver) */
+  abrirParaEquipe?(conversa: number): Promise<void>;
 }
 
 export function portasReais(ctx: ContextoChatwoot): PortasDaIa {
@@ -225,6 +227,8 @@ export function portasReais(ctx: ContextoChatwoot): PortasDaIa {
       // a franquia, quando respondeu, é a verdade (inclusive "nenhuma"); o que o Chatwoot guardou só vale se a franquia não deu para conferir
       return franquia ?? (doAtributo ? [doAtributo] : null);
     },
+    // robô ligado: conversa em que a Sofia NÃO respondeu vai para «Abertas» (senão ficaria escondida em «Pendentes»)
+    abrirParaEquipe: robo ? (conversa) => robo.abrirParaEquipe(conversa) : undefined,
     async passarParaEquipe(conversa, lida, motivo) {
       await passarParaEquipeNoChatwoot(chat, { conversa, etapa: String(lida.attrs.etapa ?? '').trim(), motivo });
       // robô → equipe: tira de «Pendentes» (a etiqueta e a nota já avisaram; falhar aqui não desfaz a passagem)
@@ -281,6 +285,7 @@ export async function aoChegar(m: MensagemDoPaciente, p: PortasDaIa, mem: Memori
       if (mem.registrosDeDesligada.size > 5000) mem.registrosDeDesligada.clear();
       await p.registrarEvento({ slug: m.slug, conversa: m.conversa, tipo: 'decisao', nome: 'unidade-pausada' }).catch(() => undefined);
     }
+    if (p.abrirParaEquipe) await p.abrirParaEquipe(m.conversa).catch(() => undefined);
     return;
   }
   if (m.audios.length) {
@@ -351,6 +356,10 @@ export async function rodarSofia(m: MensagemDoPaciente, p: PortasDaIa, mem: Memo
     return desfecho;
   } finally {
     mem.emAndamento.delete(m.conversa);
+    // robô ligado: a Sofia não respondeu o paciente nesta rodada → a equipe precisa ver a conversa em «Abertas»
+    if (p.abrirParaEquipe && desfecho !== 'enviada' && desfecho !== 'ocupada') {
+      await p.abrirParaEquipe(m.conversa).catch((err: unknown) => logger.warn({ err: String(err), conversa: m.conversa }, `${ID_IA}: não consegui abrir a conversa para a equipe`));
+    }
     // aba Registro: a rodada em que ela NÃO respondeu ao paciente, e por quê (a resposta enviada já fica em sofia_mensagem)
     if (DESFECHOS_DO_REGISTRO.has(desfecho) && p.registrarEvento) {
       await p
@@ -560,7 +569,12 @@ export function eventoChatwootHandler(req: Request, res: Response): void {
   const pausa = eventoDePausa(req.body);
   if (pausa) {
     const e = estadoDoReceptor();
-    if (e) void pausar(pausa.conversa, pausa.autor, e.pausa).catch((err) => logger.warn({ err: String(err), conversa: pausa.conversa }, 'chatwoot-pausa: não consegui pausar'));
+    if (e) {
+      void pausar(pausa.conversa, pausa.autor, e.pausa)
+        // robô ligado: quem respondeu (inclusive pelo celular) está atendendo — a conversa sai de «Pendentes»
+        .then(() => e.portas.abrirParaEquipe?.(pausa.conversa))
+        .catch((err) => logger.warn({ err: String(err), conversa: pausa.conversa }, 'chatwoot-pausa: não consegui pausar'));
+    }
     return;
   }
   const reativa = eventoDeReativacao(req.body);

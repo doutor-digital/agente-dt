@@ -541,3 +541,31 @@ test('REGISTRO: unidade desligada anota «unidade-pausada» uma vez por hora por
   assert.deepEqual(ev.map((e) => [e.tipo, e.nome]), [['decisao', 'unidade-pausada']]);
   assert.equal(mem.esperas.size, 0, 'não agenda rodada');
 });
+
+test('ROBÔ ligado: rodada em que a Sofia NÃO respondeu tira a conversa de «Pendentes»; quando respondeu, não mexe', async () => {
+  const abertas: number[] = [];
+  const comRobo = (o: Parameters<typeof portas>[0]) => {
+    const a = portas(o);
+    a.p.abrirParaEquipe = async (c) => { abertas.push(c); };
+    return a;
+  };
+  // calada (passada à equipe), cartão no Kommo, falha de leitura: abre
+  assert.equal(await rodarSofia(M, comRobo({ estado: 'ligado', lida: { etiquetas: ['esperando-humano'] } }).p, novaMemoriaDaIa()), 'calada');
+  assert.equal(await rodarSofia(M, comRobo({ estado: 'ligado', cartao: { leadId: 1 } }).p, novaMemoriaDaIa()), 'cartao-no-kommo');
+  assert.equal(await rodarSofia(M, comRobo({ estado: 'ligado', lida: null }).p, novaMemoriaDaIa()), 'falhou');
+  assert.deepEqual(abertas, [12, 12, 12]);
+  // respondeu: a conversa segue com o robô
+  abertas.length = 0;
+  assert.equal(await rodarSofia(M, comRobo({ estado: 'ligado', sofia: { resposta: 'Oi!' } }).p, novaMemoriaDaIa()), 'enviada');
+  assert.deepEqual(abertas, []);
+  // sem o robô (porta ausente): nada muda
+  assert.equal(await rodarSofia(M, portas({ estado: 'ligado', lida: { etiquetas: ['esperando-humano'] } }).p, novaMemoriaDaIa()), 'calada');
+});
+
+test('ROBÔ ligado: unidade com a Sofia desligada também abre a conversa', async () => {
+  const abertas: number[] = [];
+  const a = portas({ estado: 'desligado' });
+  a.p.abrirParaEquipe = async (c) => { abertas.push(c); };
+  await aoChegar(M, a.p, novaMemoriaDaIa());
+  assert.deepEqual(abertas, [12]);
+});
