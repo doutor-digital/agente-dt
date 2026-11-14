@@ -27,6 +27,7 @@ import { CAIXAS_REGUA } from './chatwoot-regua.js';
 import { aplicarEtiqueta, eventoDeEtiqueta, portasDaPonte, type PortasDaPonte } from './chatwoot-etiquetas.js';
 import { eventoDePausa, eventoDeReativacao, pausar, portaDaPausaDoChatwoot, reativar, type PortaDaPausa } from './chatwoot-pausa.js';
 import { aplicarResolucao, eventoDeResolucao, portasDoResolver, type PortasDoResolver } from './chatwoot-resolver.js';
+import { aplicarReferralDoKapso, mensagemParaConsultar } from './kapso-referral.js';
 import { transcribeAudio } from '../services/transcription.service.js';
 import { registrarEventoDaSofia, registrarRespostaDaSofia, ultimaFalaDoPaciente, type EventoDaSofia } from './sofia-avaliacoes.js';
 import { rodarTesteDaSofia } from '../controllers/playground.controller.js';
@@ -528,6 +529,9 @@ export function eventoChatwootHandler(req: Request, res: Response): void {
     if (e) void aplicarEtiqueta(etq, e.ponte).catch((err) => logger.warn({ err: String(err), conversa: etq.conversa }, 'chatwoot-etiquetas: falhou'));
     return;
   }
+  // o código do anúncio que o Chatwoot perde no caminho do Kapso: pergunta ao Kapso e guarda (kapso-referral.ts)
+  const consultar = mensagemParaConsultar(req.body);
+  if (consultar) void aplicarReferralDoKapso(consultar).catch(() => undefined);
   const m = mensagemDoPaciente(req.body);
   if (!m) return;
   const e = estadoDoReceptor();

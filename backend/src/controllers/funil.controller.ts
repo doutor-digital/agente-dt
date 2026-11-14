@@ -42,6 +42,7 @@ import {
   type Referral,
 } from '../lib/chatwoot-gestor.js';
 import { destinosDaConta, gastoDaConta, gastoDiarioDaConta } from '../lib/meta-anuncios.js';
+import { referraisGuardados } from '../lib/kapso-referral.js';
 import { TELAS_CSS, TELAS_JS } from '../lib/chatwoot-telas-ui.js';
 import { instanteNoFuso, searchTreatments } from '../services/spine.service.js';
 import { arquivoComEtapa, CAIXAS_HISTORICO, CAIXAS_REGUA, CAMPO_PARTIDA, ehArquivo } from '../lib/chatwoot-regua.js';
@@ -440,7 +441,12 @@ async function lerReferral(a: Acesso, conversaId: number): Promise<{ ref: Referr
     if (!Number.isFinite(menor)) break;
     antes = menor;
   }
-  const ref = referralDasMensagens(todas);
+  let ref = referralDasMensagens(todas);
+  // o Chatwoot perde o referral no caminho do Kapso: usa o que o servidor guardou do Kapso (o 1º clique)
+  if (!ref) {
+    const k = (await referraisGuardados(conversaId))[0];
+    if (k) ref = { anuncioId: k.anuncio, tipo: k.tipo, url: k.url, titulo: k.titulo };
+  }
   return { ref, completo: completo || ref !== null };
 }
 

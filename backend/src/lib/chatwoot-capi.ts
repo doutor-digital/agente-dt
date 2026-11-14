@@ -32,6 +32,7 @@ import { prisma } from './prisma.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import { chamar, contaChatwootDoAmbiente, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 import { conversaDoChatwoot, ehArquivo, ehSim, type ConversaRegua } from './chatwoot-regua.js';
+import { referraisGuardados } from './kapso-referral.js';
 
 export const ID_CAPI = 'chatwoot-capi';
 
@@ -270,7 +271,12 @@ export function chatDoCapi(ctx: ContextoChatwoot): ChatDoCapi {
         }
         antes = menor;
       }
-      const clique = cliqueDasMensagens(todas);
+      let clique = cliqueDasMensagens(todas);
+      // o Chatwoot perde o referral no caminho do Kapso: usa o que o servidor guardou do Kapso (o 1º clique com ctwa_clid)
+      if (!clique) {
+        const doKapso = (await referraisGuardados(conversationId)).find((r) => r.ctwaClid);
+        if (doKapso) clique = { ctwaClid: doKapso.ctwaClid!, anuncio: doKapso.anuncio };
+      }
       // não chegou na 1ª mensagem e não achou o clique: o «sem clique» que vai ficar gravado pode estar errado
       if (!clique && !chegouAoInicio) logger.warn({ conversa: conversationId, lidas: todas.length }, `${ID_CAPI}: conversa ${conversationId} tem mais de ${todas.length} mensagens — não achei o clique de anúncio e não cheguei à primeira; fica como «sem clique»`);
       return clique;
@@ -448,6 +454,11 @@ export async function cicloDoCapi(deps: DepsDoCapi, caixa: number, slug: string,
           const guardado = minhas.get(chaveDe(REGRA_CLIQUE, 'v1'));
           if (guardado) {
             clique = cliqueGuardado(guardado.texto);
+            // «sem clique» gravado antes de o servidor guardar o referral do Kapso (o Chatwoot o perde): confere a linha do Kapso
+            if (!clique) {
+              const doKapso = (await referraisGuardados(c.id)).find((r) => r.ctwaClid);
+              if (doKapso) clique = { ctwaClid: doKapso.ctwaClid!, anuncio: doKapso.anuncio };
+            }
           } else {
             if (buscas >= MAX_BUSCAS_DE_CLIQUE_POR_CICLO) break; // o resto fica para o próximo ciclo
             buscas++;
