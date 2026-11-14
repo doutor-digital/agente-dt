@@ -1,4 +1,5 @@
 import express from 'express';
+import { PAGINA_PRIVACIDADE, PAGINA_TERMOS } from './lib/paginas-legais.js';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import path from 'node:path';
@@ -162,6 +163,9 @@ async function main(): Promise<void> {
   // Conector remoto do claude.ai (/mcp + OAuth). Desligado sem MCP_URL_PUBLICA no .env.
   await ligarConectorRemoto(app);
 
+  // Termos de Uso e Política de Privacidade do «Doutor Digital Atende» (o Chatwoot aponta TERMS_URL/PRIVACY_URL para cá), 14/11/2026.
+  app.get('/termos', (_req, res) => { res.set('Cache-Control', 'public, max-age=3600').type('html').send(PAGINA_TERMOS); });
+  app.get('/privacidade', (_req, res) => { res.set('Cache-Control', 'public, max-age=3600').type('html').send(PAGINA_PRIVACIDADE); });
   // Página da recepção para pausar a Sofia por um tempo (protegida por código da unidade).
   app.get('/pausa/:slug', paginaPausaHandler);
 
