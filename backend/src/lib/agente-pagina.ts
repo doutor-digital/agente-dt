@@ -104,6 +104,18 @@ details.def li{margin:3px 0}
 .lin .btns{display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap}
 .vazio{margin:0;padding:12px 0;border-top:1px solid var(--b);color:var(--sec)}
 .vazio b{color:var(--txt);font-weight:600}
+.reg-filtros{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.reg-filtros input.sel{width:150px}
+.reg{border-top:1px solid var(--b);padding:10px 0}
+.reg-cab{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+.reg-cab .bt{margin-left:auto}
+.reg-it{display:grid;grid-template-columns:92px 1fr;gap:10px;padding:4px 0 4px 10px;border-left:2px solid var(--b)}
+.reg-it.reg-nao-respondeu{border-left-color:#e5484d}
+.reg-it.reg-marcou,.reg-it.reg-pix{border-left-color:#12855a}
+.reg-it.reg-resposta,.reg-it.reg-equipe{border-left-color:var(--azul,#2781f6)}
+.reg-q{color:var(--sec);font-variant-numeric:tabular-nums;font-size:12.5px}
+.reg-tx{min-width:0;overflow-wrap:anywhere}
+@media (max-width:520px){.reg-it{grid-template-columns:1fr}.reg-filtros input.sel{width:100%}}
 
 /* resposta para revisar */
 .caso{padding:12px 0;border-top:1px solid var(--b)}
@@ -208,6 +220,7 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
     <button role="tab" id="aba-ensinar" data-aba="ensinar" aria-selected="false">Ensinar</button>
     <button role="tab" id="aba-testar" data-aba="testar" aria-selected="false">Testar</button>
     <button role="tab" id="aba-pausadas" data-aba="pausadas" aria-selected="false">Pausadas<span class="c" id="contaPausadas"></span></button>
+    <button role="tab" id="aba-registro" data-aba="registro" aria-selected="false">Registro</button>
     <button role="tab" id="aba-pedir" data-aba="pedir" aria-selected="false">Pedir à Doutor Digital<span class="c" id="contaPedidos"></span></button>
   </nav>
   <div class="lado" id="ladoPainel"><select class="sel" id="periodo" aria-label="Período"><option value="hoje">Hoje</option><option value="7">Últimos 7 dias</option><option value="30">Últimos 30 dias</option></select></div>
@@ -310,6 +323,20 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
   </section>
 </section>
 
+<!-- REGISTRO -->
+<section class="pane" id="pane-registro" role="tabpanel" aria-labelledby="aba-registro" hidden>
+  <section>
+    <h3>O que a Sofia fez <span class="c" id="cRegistro"></span></h3>
+    <div class="meta">Últimos 7 dias, por conversa, o mais recente primeiro: o que ela respondeu, marcou, passou para a equipe, o Pix que mandou, as avaliações de vocês e, quando ela não respondeu, o motivo.</div>
+    <div class="reg-filtros">
+      <select class="sel" id="regTipo" aria-label="Tipo"><option value="">Tudo</option><option value="resposta">Respostas</option><option value="marcou">Consultas marcadas</option><option value="equipe">Passou para a equipe</option><option value="pix">Pix do sinal</option><option value="nao-respondeu">Não respondeu</option><option value="avaliacao">Avaliações</option></select>
+      <input class="sel" id="regConversa" inputmode="numeric" placeholder="Nº da conversa" aria-label="Número da conversa" maxlength="9">
+      <button class="bt" id="btRegFiltrar" type="button">Filtrar</button>
+    </div>
+    <div id="listaRegistro" style="margin-top:8px"><span class="sk" style="height:60px"></span></div>
+  </section>
+</section>
+
 <!-- PEDIR -->
 <section class="pane" id="pane-pedir" role="tabpanel" aria-labelledby="aba-pedir" hidden>
   <div class="duas">
@@ -369,7 +396,7 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
   function plural(n, um, varios){ return n + ' ' + (n === 1 ? um : varios); }
 
   // ── abas ──
-  var ABAS = ['painel', 'ensinar', 'testar', 'pausadas', 'pedir'], abaAtual = 'painel';
+  var ABAS = ['painel', 'ensinar', 'testar', 'pausadas', 'registro', 'pedir'], abaAtual = 'painel';
   function ir(qual){
     if (ABAS.indexOf(qual) < 0 || $('aba-' + qual).hidden) qual = 'painel';
     abaAtual = qual;
@@ -382,6 +409,7 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
     if (qual === 'ensinar') carregarRegras();
     if (qual === 'testar') { desenharChat(false); setTimeout(function(){ $('fala').focus(); }, 50); }
     if (qual === 'pausadas') carregarPausadas();
+    if (qual === 'registro') carregarRegistro();
     if (qual === 'pedir') carregarPedidos();
   }
   ABAS.forEach(function(a){ $('aba-' + a).addEventListener('click', function(){ ir(a); }); });
@@ -655,6 +683,39 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
       });
     } catch (e) { tb.textContent = ''; linhaUnica(tb, el('div', 'aviso erro', e.message)); }
   }
+
+  // ── REGISTRO ──
+  function dataHora(iso){ var d = new Date(iso); if (isNaN(d.getTime())) return ''; return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }); }
+  async function carregarRegistro(){
+    var box = $('listaRegistro'); box.textContent = '';
+    var sk = el('span', 'sk'); sk.style.height = '60px'; box.appendChild(sk);
+    var tipo = $('regTipo').value, conv = $('regConversa').value.trim();
+    var q = '/api/public/agente/registro?slug=' + enc(U.slug) + (tipo ? '&tipo=' + enc(tipo) : '') + (/^\d{1,9}$/.test(conv) ? '&conversa=' + conv : '');
+    try {
+      var r = await api('GET', q); box.textContent = '';
+      $('cRegistro').textContent = r.total ? String(r.total) : '';
+      if (!r.conversas.length) { box.appendChild(tgVazioReg('Nada registrado nos últimos ' + r.dias + ' dias' + (tipo || conv ? ' com esse filtro.' : '.'))); return; }
+      r.conversas.forEach(function(g){
+        var bloco = el('div', 'reg'), cab = el('div', 'reg-cab');
+        cab.appendChild(el('b', null, 'Conversa ' + g.conversa));
+        cab.appendChild(el('span', 'meta', dataHora(g.ultima)));
+        var ab = el('button', 'bt link', 'Abrir conversa'); ab.type = 'button'; ab.onclick = function(){ abrirConversa(g.conversa); }; cab.appendChild(ab);
+        bloco.appendChild(cab);
+        g.itens.forEach(function(i){
+          var li = el('div', 'reg-it reg-' + i.tipo), tx = el('div', 'reg-tx');
+          li.appendChild(el('span', 'reg-q', dataHora(i.quando)));
+          tx.appendChild(el('div', null, i.titulo)); if (i.detalhe) tx.appendChild(el('div', 'meta', i.detalhe));
+          li.appendChild(tx); bloco.appendChild(li);
+        });
+        box.appendChild(bloco);
+      });
+      if (r.cortado) box.appendChild(el('p', 'meta', 'Mostrando os mais recentes. Filtre por conversa ou por tipo para ver o resto.'));
+    } catch (e) { box.textContent = ''; box.appendChild(el('div', 'aviso erro', e.message)); }
+  }
+  function tgVazioReg(txt){ return el('p', 'vazio', txt); }
+  $('btRegFiltrar').addEventListener('click', carregarRegistro);
+  $('regTipo').addEventListener('change', carregarRegistro);
+  $('regConversa').addEventListener('keydown', function(ev){ if (ev.key === 'Enter') carregarRegistro(); });
 
   // ── PEDIR ──
   var tipoPedido = null, TIPOS = [];

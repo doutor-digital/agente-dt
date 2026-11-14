@@ -139,8 +139,12 @@ export async function gravarAvaliacao(
 export interface EventoDaSofia {
   slug: string;
   conversa: number;
-  /** marcou = consulta marcada na franquia; equipe = passou a conversa para a equipe; pix = o Pix do sinal saiu */
-  tipo: 'marcou' | 'equipe' | 'pix';
+  /**
+   * marcou = consulta marcada na franquia; equipe = passou a conversa para a equipe; pix = o Pix do sinal saiu;
+   * decisao = rodada em que ela NÃO respondeu ao paciente (nome = desfecho, detalhe = motivo) — só para a aba Registro, o painel
+   * não conta
+   */
+  tipo: 'marcou' | 'equipe' | 'pix' | 'decisao';
   /** marcou: o nome do contato no Chatwoot */
   nome?: string | null;
   /** marcou: "AAAA-MM-DDTHH:mm" da consulta, no fuso da clínica */
