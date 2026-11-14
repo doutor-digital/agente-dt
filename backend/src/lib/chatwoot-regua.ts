@@ -280,6 +280,17 @@ export const CAMPO_PARTIDA = '_partida';
 /** Etiquetas cuja CHEGADA dispara regra: as 4 da SDR e a `aderencia-meio` (posta por outro processo, como a tag do Kommo). */
 const ETIQUETAS_OBSERVADAS = ['confirmar-retorno', 'retomada', 'reativacao', 'boas-vindas', 'aderencia-meio'] as const;
 
+/**
+ * Um modelo, uma etiqueta: `modelo-` + o nome sem `parau_`, com `_` → `-` (parau_consulta_lembrete_vespera → `modelo-consulta-lembrete-vespera`).
+ * A equipe (ou uma regra da tela «Automação» do Chatwoot) põe a etiqueta e a régua manda aquele modelo, no texto/template de sempre.
+ * Etiqueta do Chatwoot só aceita minúscula, número, `-` e `_`: o nome gerado cabe.
+ */
+export const PREFIXO_ETIQUETA_MODELO = 'modelo-';
+export const etiquetaDoModelo = (modelo: string): string => `${PREFIXO_ETIQUETA_MODELO}${modelo.replace(/^parau_/, '').replace(/_/g, '-')}`;
+/** etiqueta → nome do modelo, gerado de `TEXTOS_PARAU` (nunca escrito à mão: modelo novo ganha a etiqueta sozinho). */
+export const MODELO_POR_ETIQUETA: Readonly<Record<string, string>> = Object.freeze(Object.fromEntries(Object.keys(TEXTOS_PARAU).map((m) => [etiquetaDoModelo(m), m])));
+const modeloDaEtiqueta = (e: string): string | null => (Object.hasOwn(MODELO_POR_ETIQUETA, e) ? MODELO_POR_ETIQUETA[e]! : null);
+
 /** Os valores (não vazios) que a régua acompanha na conversa. Campo ausente aqui = vazio. */
 export function camposObservados(c: ConversaRegua): Record<string, string> {
   const a = c.attrs;
@@ -289,6 +300,8 @@ export function camposObservados(c: ConversaRegua): Record<string, string> {
     if (v) o[campo] = v;
   }
   for (const e of ETIQUETAS_OBSERVADAS) if (c.etiquetas.includes(e)) o[`etiqueta:${e}`] = 'sim';
+  // `modelo-*`: só as 33 que existem (etiqueta `modelo-qualquer-coisa` não dispara nada)
+  for (const e of c.etiquetas) if (modeloDaEtiqueta(e)) o[`etiqueta:${e}`] = 'sim';
   return o;
 }
 
@@ -601,6 +614,19 @@ function candidatos(c: ConversaRegua, vistos: Vistos): Candidato[] {
     const v = c.etiquetas.includes(etiqueta) ? novo(`etiqueta:${etiqueta}`) : null;
     if (v && r.vale(etapa, situ, a, tratamento) && !(r.respeitaSemFollowUp && semFollowUp)) {
       saida.push({ regra: r.regra, modelo: r.modelo, chave: `${etiqueta}@${v.desde.toISOString()}`, kind: 'depois', alvo: v.desde });
+    }
+  }
+
+  // etiqueta `modelo-*`: quem pôs a etiqueta escolheu o modelo — vale em qualquer etapa e funil. Só `sem-follow-up` (o paciente pediu
+  // para parar) segura. A etiqueta FICA na conversa depois do envio, de propósito: se uma regra da «Automação» do Chatwoot a
+  // repõe a cada atualização, repor etiqueta que já está é nada (a chegada só conta uma vez) e não vira laço de mensagens.
+  // Para mandar de novo: tirar a etiqueta e pôr outra vez (a chegada nova tem `desde` novo = chave nova). Tirar e repor entre
+  // duas varreduras (o worker nunca viu a etiqueta sumir) não conta como chegada nova.
+  if (!semFollowUp) {
+    for (const etiqueta of c.etiquetas) {
+      const modelo = modeloDaEtiqueta(etiqueta);
+      const v = modelo ? novo(`etiqueta:${etiqueta}`) : null;
+      if (modelo && v) saida.push({ regra: 'modelo-etiqueta', modelo, chave: `${etiqueta}@${v.desde.toISOString()}`, kind: 'depois', alvo: v.desde });
     }
   }
 

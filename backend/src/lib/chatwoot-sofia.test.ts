@@ -389,6 +389,19 @@ test('aplicar_tag: «anuncio» é só do servidor (anúncio comprovado no Kapso)
   assert.deepEqual(m.chat.etiquetas, [['quente']]);
 });
 
+test('aplicar_tag: etiqueta modelo-* (dispara template pela régua) é RECUSADA, mesmo existindo na conta', async () => {
+  const chat = chatFalso({ etiquetasDaConta: ['quente', 'modelo-consulta-lembrete-vespera', 'modelo-alta-conclusao'] });
+  const m = montar('ligado', { chat });
+  const r = await m.por('aplicar_tag').invoke({ tags: ['modelo-consulta-lembrete-vespera', 'Modelo Alta Conclusao', 'quente'] });
+  assert.match(r, /aplicada\(s\): quente/);
+  assert.match(r, /RECUSADO \(não é sua\): modelo-consulta-lembrete-vespera, modelo-alta-conclusao/);
+  assert.doesNotMatch(r, /Não existe na conta/);
+  assert.deepEqual(chat.etiquetas, [['quente']]);
+  // sozinha: nada é gravado
+  const so = await montar('ligado', { chat: chatFalso({ etiquetasDaConta: ['modelo-consulta-lembrete-vespera'] }) }).por('aplicar_tag').invoke({ tag: 'modelo-consulta-lembrete-vespera' });
+  assert.match(so, /^RECUSADO \(não é sua\): modelo-consulta-lembrete-vespera\.$/);
+});
+
 test('quando não responder: espera por humano, em tratamento, grupo', () => {
   const c = (o: Partial<ConversaLida>): ConversaLida => ({ id: 1, nome: '', telefone: '+55', attrs: {}, etiquetas: [], grupo: false, interno: false, ...o });
   assert.equal(motivoDeNaoResponder(c({})), null);
