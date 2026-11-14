@@ -83,6 +83,11 @@ const HORA_PADRAO_DEPOIS = 12;
 export const JANELA_DO_LOG_PERDIDA_MS = 25 * 60_000;
 /** Sufixo da regra quando o que se registra é "faltou campo" (não a mensagem). */
 export const SUFIXO_FALTA = '!falta';
+/** Regra do modelo pedido por etiqueta (`modelo-*`), e o sufixo da nota «NÃO enviado: passou do atraso máximo» (uma por chave). */
+export const REGRA_MODELO_ETIQUETA = 'modelo-etiqueta';
+export const SUFIXO_PERDIDA = '!perdida';
+/** Depois do limite, a nota de «perdido» ainda é deixada até este prazo (bem menos que os dias de memória do worker: não reaparece para o que foi enviado). */
+const JANELA_DA_NOTA_PERDIDA_MS = 30 * 24 * HORA;
 
 // ── tipos ──────────────────────────────────────────────────────────────────────────────────────────
 
@@ -155,6 +160,8 @@ export interface Disparo {
   alvo: Date;
   /** presente = regra interna (nota privada + ação, nunca mensagem ao paciente) */
   interna?: AcaoInterna;
+  /** presente = só a nota privada com este texto (o pedido por etiqueta não vai sair e a equipe precisa saber); nada vai ao paciente */
+  soNota?: string;
 }
 
 export interface Decisao {
@@ -287,8 +294,14 @@ const ETIQUETAS_OBSERVADAS = ['confirmar-retorno', 'retomada', 'reativacao', 'bo
  */
 export const PREFIXO_ETIQUETA_MODELO = 'modelo-';
 export const etiquetaDoModelo = (modelo: string): string => `${PREFIXO_ETIQUETA_MODELO}${modelo.replace(/^parau_/, '').replace(/_/g, '-')}`;
+/** Campos {{…}} do modelo que o Chatwoot NÃO tem (hoje só o nome do programa, `lead.cf.2450750`): o modelo que os usa nunca sairia por etiqueta. */
+const CAMPOS_QUE_O_CHATWOOT_NAO_TEM: ReadonlySet<string> = new Set(['lead.cf.2450750']);
+/** Modelos que ficam SEM etiqueta, porque a etiqueta só geraria nota de «campo faltando» (gerado: depende dos campos do texto). */
+export const MODELOS_SEM_ETIQUETA: readonly string[] = Object.freeze(Object.keys(TEXTOS_PARAU).filter((m) => camposDoModelo(m).some((c) => CAMPOS_QUE_O_CHATWOOT_NAO_TEM.has(c))));
 /** etiqueta → nome do modelo, gerado de `TEXTOS_PARAU` (nunca escrito à mão: modelo novo ganha a etiqueta sozinho). */
-export const MODELO_POR_ETIQUETA: Readonly<Record<string, string>> = Object.freeze(Object.fromEntries(Object.keys(TEXTOS_PARAU).map((m) => [etiquetaDoModelo(m), m])));
+export const MODELO_POR_ETIQUETA: Readonly<Record<string, string>> = Object.freeze(
+  Object.fromEntries(Object.keys(TEXTOS_PARAU).filter((m) => !MODELOS_SEM_ETIQUETA.includes(m)).map((m) => [etiquetaDoModelo(m), m])),
+);
 const modeloDaEtiqueta = (e: string): string | null => (Object.hasOwn(MODELO_POR_ETIQUETA, e) ? MODELO_POR_ETIQUETA[e]! : null);
 
 /** Os valores (não vazios) que a régua acompanha na conversa. Campo ausente aqui = vazio. */
@@ -443,6 +456,8 @@ interface Candidato {
   /** regra "antes" nunca vale depois deste instante (a própria consulta) */
   teto?: Date;
   interna?: AcaoInterna;
+  /** pedido por etiqueta: ordem de uma pessoa, não da régua — quando não sai, deixa nota (nunca cala) */
+  pedido?: boolean;
 }
 
 /**
@@ -626,7 +641,7 @@ function candidatos(c: ConversaRegua, vistos: Vistos): Candidato[] {
     for (const etiqueta of c.etiquetas) {
       const modelo = modeloDaEtiqueta(etiqueta);
       const v = modelo ? novo(`etiqueta:${etiqueta}`) : null;
-      if (modelo && v) saida.push({ regra: 'modelo-etiqueta', modelo, chave: `${etiqueta}@${v.desde.toISOString()}`, kind: 'depois', alvo: v.desde });
+      if (modelo && v) saida.push({ regra: REGRA_MODELO_ETIQUETA, modelo, chave: `${etiqueta}@${v.desde.toISOString()}`, kind: 'depois', alvo: v.desde, pedido: true });
     }
   }
 
@@ -674,8 +689,24 @@ function candidatos(c: ConversaRegua, vistos: Vistos): Candidato[] {
   return saida;
 }
 
+/** O instante em que a janela de horário está aberta: o próprio `de`, ou a abertura seguinte (hora cheia, pois o fuso é de horas inteiras). */
+export function proximaAbertura(de: Date): Date {
+  if (janelaAberta(de)) return de;
+  let t = new Date(Math.ceil(de.getTime() / HORA) * HORA);
+  for (let i = 0; i < 24 * 8 && !janelaAberta(t); i++) t = new Date(t.getTime() + HORA);
+  return t;
+}
+
+/** A nota que o pedido por etiqueta deixa quando NÃO vai sair: uma por chave, sempre dizendo como pedir de novo. */
+export function notaDePedidoNaoEnviado(modelo: string, motivo: string): string {
+  return `🛑 ${etiquetaDoModelo(modelo)} NÃO enviado: ${motivo}. Tire e ponha a etiqueta de novo.`;
+}
+
 /** Até quando a regra ainda vale. */
 function limiteDe(k: Candidato): Date {
+  // pedido por etiqueta: a pessoa pediu agora, então vale até 2 h depois da próxima abertura da janela de horário (etiqueta posta
+  // no sábado à noite sai na segunda de manhã), nunca menos que as 12 h de sempre
+  if (k.pedido) return new Date(Math.max(k.alvo.getTime() + ATRASO_MAX_DEPOIS_MS, proximaAbertura(k.alvo).getTime() + 2 * HORA));
   if (k.kind === 'depois') return new Date(k.alvo.getTime() + ATRASO_MAX_DEPOIS_MS);
   const ate = k.alvo.getTime() + ATRASO_MAX_ANTES_MS;
   // exclusivo: na hora da própria consulta o lembrete já não faz sentido
@@ -696,6 +727,11 @@ export function decidirRegua(c: ConversaRegua, memoria: Memoria, agora: Date, un
     const limite = limiteDe(k);
     if (agora.getTime() > limite.getTime()) {
       if (agora.getTime() - limite.getTime() <= JANELA_DO_LOG_PERDIDA_MS) perdidas.push(k.regra);
+      // o pedido de uma pessoa que se perdeu não pode sumir calado: uma nota por chave (registrada com o sufixo, não repete)
+      if (k.pedido && agora.getTime() - limite.getTime() <= JANELA_DA_NOTA_PERDIDA_MS && !memoria.feitos.has(`${k.regra}${SUFIXO_PERDIDA}|${k.chave}`)) {
+        const motivo = `passou do prazo (a etiqueta chegou em ${k.alvo.toISOString().slice(0, 16).replace('T', ' ')} UTC e o envio vale até 2 h depois da próxima abertura da janela de horário)`;
+        disparos.push({ regra: `${k.regra}${SUFIXO_PERDIDA}`, chave: k.chave, modelo: k.modelo, texto: null, variaveis: null, faltando: [], alvo: k.alvo, soNota: notaDePedidoNaoEnviado(k.modelo, motivo) });
+      }
       continue;
     }
     if (!aberta) continue;
@@ -703,6 +739,8 @@ export function decidirRegua(c: ConversaRegua, memoria: Memoria, agora: Date, un
       disparos.push({ regra: k.regra, chave: k.chave, modelo: k.modelo, texto: DESCRICAO_INTERNA[k.interna], variaveis: null, faltando: [], alvo: k.alvo, interna: k.interna });
       continue;
     }
+    // pedido que já deixou a nota de «falta campo» é definitivo para esta chave (a nota manda tirar e pôr a etiqueta): não sai sozinho depois
+    if (k.pedido && memoria.feitos.has(`${k.regra}${SUFIXO_FALTA}|${k.chave}`)) continue;
     const r = renderizar(k.modelo, c, unidade);
     if (r.faltando.length && memoria.feitos.has(`${k.regra}${SUFIXO_FALTA}|${k.chave}`)) continue;
     disparos.push({ regra: k.regra, chave: k.chave, modelo: k.modelo, texto: r.texto, variaveis: r.variaveis, faltando: r.faltando, alvo: k.alvo });

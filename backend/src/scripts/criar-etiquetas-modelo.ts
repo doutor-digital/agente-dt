@@ -1,12 +1,13 @@
 /**
- * Cria no Chatwoot as 33 etiquetas `modelo-*` (uma por modelo de WhatsApp de Parauapebas): quem põe a etiqueta numa conversa
+ * Cria no Chatwoot as etiquetas `modelo-*` (uma por modelo de WhatsApp de Parauapebas, 32 dos 33: o de boas-vindas ao programa fica de fora,
+ * porque pede o nome do programa e o Chatwoot não tem esse campo): quem põe a etiqueta numa conversa
  * manda aquele modelo pela régua (`chatwoot-regua.ts`, regra `modelo-etiqueta`). Só cria as que ainda não existem (lê `labels` antes).
  * Por padrão NÃO escreve nada: só lista o que criaria. `--aplicar` cria.
  *
  *   CHATWOOT_API_TOKEN=… CHATWOOT_CONTA_ID=… [CHATWOOT_URL=…] node dist/scripts/criar-etiquetas-modelo.js            # seco
  *   CHATWOOT_API_TOKEN=… CHATWOOT_CONTA_ID=… [CHATWOOT_URL=…] node dist/scripts/criar-etiquetas-modelo.js --aplicar  # cria
  */
-import { MODELO_POR_ETIQUETA } from '../lib/chatwoot-regua.js';
+import { MODELO_POR_ETIQUETA, MODELOS_SEM_ETIQUETA } from '../lib/chatwoot-regua.js';
 import { TEXTOS_PARAU } from '../lib/chatwoot-regua-textos.js';
 import { chamar, contaChatwootDoAmbiente, criarContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 
@@ -26,6 +27,7 @@ function descricaoDo(modelo: string): string {
   return linha.length <= 120 ? linha : `${linha.slice(0, 119).trimEnd()}…`;
 }
 
+if (MODELOS_SEM_ETIQUETA.length) console.log(`Sem etiqueta (campo que o Chatwoot não tem): ${MODELOS_SEM_ETIQUETA.join(', ')}.`);
 const resposta = (await chamar(ctx, 'GET', 'labels')) as { payload?: unknown } | null;
 const existentes = new Set((Array.isArray(resposta?.payload) ? resposta.payload : []).map((l: any) => String(l?.title ?? '').toLowerCase()));
 
