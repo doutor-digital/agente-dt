@@ -23,7 +23,7 @@ const msg = (o: { tipo?: unknown; caixa?: number; ref?: unknown; source?: string
 const CAIXAS = new Set([3]);
 
 test('qual mensagem consultar: paciente, caixa oficial, com wamid e SEM referral', () => {
-  assert.deepEqual(mensagemParaConsultar(msg(), CAIXAS), { conversa: 900, caixa: 3, wamid: WAMID });
+  assert.deepEqual(mensagemParaConsultar(msg(), CAIXAS), { conversa: 900, caixa: 3, wamid: WAMID, contato: null });
   assert.equal(mensagemParaConsultar(msg({ tipo: 'outgoing' }), CAIXAS), null);
   assert.equal(mensagemParaConsultar(msg({ privada: true }), CAIXAS), null);
   assert.equal(mensagemParaConsultar(msg({ caixa: 2 }), CAIXAS), null, 'caixa sem Kapso');
@@ -65,8 +65,11 @@ test('aplicar: guarda só quando veio de anúncio; não lança', async () => {
   const m = { conversa: 900, caixa: 3, wamid: WAMID };
   assert.equal(await aplicarReferralDoKapso(m, { consultar: (async () => ({ achou: true, ref: { anuncio: '1', ctwaClid: 'C', tipo: 'ad', titulo: null, url: null, quando: 1 } })) as any, guardar }), 'guardado');
   assert.equal(guardados.length, 1);
+  const achados: unknown[] = [];
+  await aplicarReferralDoKapso({ ...m, contato: 77 }, { consultar: (async () => ({ achou: true, ref: { anuncio: '1', ctwaClid: 'C', tipo: 'ad', titulo: null, url: null, quando: 1 } })) as any, guardar, aoAchar: async (x: unknown) => { achados.push(x); } });
+  assert.deepEqual(achados, [{ conversa: 900, caixa: 3, contato: 77 }], 'avisa quem preenche a origem');
   assert.equal(await aplicarReferralDoKapso(m, { consultar: (async () => ({ achou: true, ref: null })) as any, guardar }), 'sem-anuncio');
   assert.equal(await aplicarReferralDoKapso(m, { consultar: (async () => null) as any, guardar }), 'sem-chave');
   assert.equal(await aplicarReferralDoKapso(m, { consultar: (async () => { throw new Error('x'); }) as any, guardar }), 'falhou');
-  assert.equal(guardados.length, 1);
+  assert.equal(guardados.length, 2, 'só as duas vezes que veio de anúncio');
 });

@@ -35,7 +35,7 @@ export function numerosDoKapso(env: NodeJS.ProcessEnv = process.env): string[] {
 }
 
 /** Webhook do Chatwoot → mensagem de paciente na caixa oficial, SEM referral, com o wamid; ou null. */
-export function mensagemParaConsultar(corpo: any, caixas: ReadonlySet<number> = CAIXAS_CLOUD): { conversa: number; caixa: number; wamid: string } | null {
+export function mensagemParaConsultar(corpo: any, caixas: ReadonlySet<number> = CAIXAS_CLOUD): { conversa: number; caixa: number; wamid: string; contato: number | null } | null {
   if (corpo?.event !== 'message_created') return null;
   const tipo = corpo?.message_type;
   if (!(tipo === 'incoming' || tipo === 0) || corpo?.private === true) return null;
@@ -45,7 +45,8 @@ export function mensagemParaConsultar(corpo: any, caixas: ReadonlySet<number> = 
   if (!caixas.has(caixa) || !Number.isInteger(conversa) || conversa <= 0 || !/^wamid\.[A-Za-z0-9_=+/-]{10,400}$/.test(wamid)) return null;
   const ref = corpo?.content_attributes?.referral;
   if (ref && typeof ref === 'object' && Object.keys(ref).length) return null; // o Chatwoot já tem: nada a buscar
-  return { conversa, caixa, wamid };
+  const contato = Number(corpo?.sender?.id);
+  return { conversa, caixa, wamid, contato: Number.isInteger(contato) && contato > 0 ? contato : null };
 }
 
 /** O referral normalizado de uma mensagem do Kapso, ou null (não veio de anúncio). */
@@ -106,12 +107,17 @@ export async function referraisGuardados(conversa: number): Promise<ReferralDoKa
 }
 
 /** Roda para uma mensagem de paciente da caixa oficial. Não lança. */
-export async function aplicarReferralDoKapso(m: { conversa: number; caixa: number; wamid: string }, deps: { consultar?: typeof consultarKapso; guardar?: typeof guardarReferral } = {}): Promise<'sem-chave' | 'sem-anuncio' | 'guardado' | 'falhou'> {
+export async function aplicarReferralDoKapso(
+  m: { conversa: number; caixa: number; wamid: string; contato?: number | null },
+  deps: { consultar?: typeof consultarKapso; guardar?: typeof guardarReferral; aoAchar?: (m: { conversa: number; caixa: number; contato: number | null }, ref: ReferralDoKapso) => Promise<unknown> } = {},
+): Promise<'sem-chave' | 'sem-anuncio' | 'guardado' | 'falhou'> {
   try {
     const r = await (deps.consultar ?? consultarKapso)(m.wamid);
     if (!r) return 'sem-chave';
     if (!r.ref) return 'sem-anuncio';
     await (deps.guardar ?? guardarReferral)(m.caixa, m.conversa, m.wamid, r.ref);
+    // origem e campanha no contato (chatwoot-origem): falhar aqui não desfaz o que foi guardado
+    if (deps.aoAchar) await deps.aoAchar({ conversa: m.conversa, caixa: m.caixa, contato: m.contato ?? null }, r.ref).catch(() => undefined);
     logger.info({ conversa: m.conversa, anuncio: r.ref.anuncio, temClid: !!r.ref.ctwaClid }, 'kapso-referral: mensagem veio de anúncio — guardado');
     return 'guardado';
   } catch (err) {

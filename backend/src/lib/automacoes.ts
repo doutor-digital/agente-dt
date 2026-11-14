@@ -997,6 +997,20 @@ export const AUTOMACOES: readonly Automacao[] = [
     quandoVazio: 'desligado',
     arquivo: 'src/lib/chatwoot-capi.ts',
   },
+  {
+    id: 'chatwoot-origem',
+    chave: 'CHATWOOT_ORIGEM_SLUGS',
+    nome: 'Origem e campanha no contato do Chatwoot',
+    oQueFaz:
+      'Quando uma mensagem de paciente comprovadamente veio de anúncio «Clique para o WhatsApp» (o servidor acha o código do anúncio no Kapso, porque o Chatwoot o perde), preenche no CONTATO Origem = «Meta Ads» e os nomes da Campanha e do Conjunto de anúncios (lidos na Meta pelo id do anúncio). Igual ao rastreio do Kommo, que preenche o cartão. Não marca «Orgânico» por dedução. «Só no papel» não grava: loga «preencheria no contato N: …».',
+    pegadinha:
+      'Só grava campo VAZIO e relê o contato antes de gravar: o que a equipe preencheu à mão nunca é trocado. Precisa do token de anúncios da unidade (o mesmo do Marketing) para os nomes; sem ele, ou se a Meta não responder, grava só a Origem. Anúncio em Status não traz o id do anúncio: fica só a Origem. Não manda nada ao paciente nem escreve na conversa.',
+    risco: 'escreve-campo',
+    temSeco: true,
+    exigeSecoAntes: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/chatwoot-origem.ts',
+  },
 ] as const;
 
 const PORCHAVE = new Map(AUTOMACOES.map((a) => [a.chave, a]));
