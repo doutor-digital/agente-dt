@@ -351,6 +351,115 @@ const BOTAO_JS = String.raw`(function(){
       caberNaLinha(box, wrap);
     });
   }
+  // ── campos obrigatórios ao «Resolver» (João, 14/11/2026: "a gente consegue fazer um trem desse? faça do melhor jeito pra evitar erros")
+  // O «Fluxos de Conversa» do Chatwoot que faz isso é do plano pago; este é o nosso, no mesmo lugar. Antes de resolver: Etapa sempre;
+  // Perdido → Motivo do não agendamento; Fechou → Valor fechado. As opções vêm das definições do próprio Chatwoot. Qualquer falha
+  // (sem sessão, rede, Chatwoot fora) DEIXA resolver — nunca trava o trabalho; o servidor marca «falta-etapa» no que escapar.
+  // Desliga pelo servidor: CHATWOOT_RESOLVER_OBRIGATORIO=0.
+  var OBRIGATORIOS = __OBRIGATORIOS__;
+  var RS = { liberar: false, aberto: null, defs: null };
+  var ROTULO_RESOLVER = /^(Resolver|Resolve)$/i;
+  function contaDaUrl(){ var m = location.pathname.match(/\/accounts\/(\d+)/); return m ? m[1] : null; }
+  function cwApi(metodo, caminho, corpo){
+    var s = sessao(), conta = contaDaUrl();
+    if (!s || !conta) return Promise.reject(new Error('sem sessão'));
+    return fetch('/api/v1/accounts/' + conta + '/' + caminho, {
+      method: metodo,
+      headers: { 'Content-Type': 'application/json', 'access-token': s.token, client: s.client, uid: s.uid },
+      body: corpo ? JSON.stringify(corpo) : undefined
+    }).then(function(r){ if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+  }
+  function faltandoAoResolver(a){
+    var f = [], etapa = String((a && a.etapa) || '').trim();
+    if (!etapa) f.push('etapa');
+    if (etapa === 'Perdido' && !String(a.motivo_nao_agendamento || '').trim()) f.push('motivo_nao_agendamento');
+    if (etapa === 'Fechou' && !(Number(a.valor_fechado) > 0)) f.push('valor_fechado');
+    return f;
+  }
+  function botaoResolver(){
+    var achado = null;
+    Array.prototype.forEach.call(document.querySelectorAll('.resolve-actions button'), function(b){ if (!achado && ROTULO_RESOLVER.test((b.innerText || '').trim())) achado = b; });
+    return achado;
+  }
+  function liberarResolver(){
+    var b = botaoResolver(); if (!b) return;
+    RS.liberar = true;
+    try { b.click(); } finally { setTimeout(function(){ RS.liberar = false; }, 0); }
+  }
+  function definicoesDaConversa(){
+    if (RS.defs) return Promise.resolve(RS.defs);
+    return cwApi('GET', 'custom_attribute_definitions?attribute_model=0').then(function(l){
+      var m = {}; (Array.isArray(l) ? l : (l && l.payload) || []).forEach(function(d){ if (d && d.attribute_key) m[d.attribute_key] = d; });
+      RS.defs = m; return m;
+    });
+  }
+  function fecharJanelaResolver(){ if (RS.aberto) { RS.aberto.remove(); RS.aberto = null; } }
+  function abrirJanelaResolver(conversa, atual, defs){
+    fecharJanelaResolver();
+    var fundo = document.createElement('div'); fundo.setAttribute('data-dd-resolver', '1');
+    fundo.style.cssText = 'position:fixed;inset:0;z-index:2147482600;background:rgba(15,23,42,.35);display:flex;align-items:center;justify-content:center;padding:16px';
+    var cx = document.createElement('div'); cx.setAttribute('role', 'dialog'); cx.setAttribute('aria-modal', 'true'); cx.setAttribute('aria-label', 'Antes de resolver');
+    cx.style.cssText = 'width:380px;max-width:100%;background:#fff;color:#1c2024;border-radius:12px;box-shadow:0 16px 40px rgba(16,24,40,.25);padding:18px;font-family:inherit;font-size:13.5px;line-height:1.45';
+    var t = document.createElement('b'); t.textContent = 'Antes de resolver'; t.style.cssText = 'display:block;font-size:15px;margin-bottom:4px';
+    var sub = document.createElement('div'); sub.textContent = 'Preencha para o funil e os relatórios ficarem certos.'; sub.style.cssText = 'color:#60646c;margin-bottom:12px';
+    cx.appendChild(t); cx.appendChild(sub);
+    function linha(rotulo, el){ var w = document.createElement('label'); w.style.cssText = 'display:block;margin:0 0 10px'; var r = document.createElement('span'); r.textContent = rotulo; r.style.cssText = 'display:block;font-weight:600;margin-bottom:4px'; el.style.cssText = 'width:100%;box-sizing:border-box;height:34px;border:1px solid #d9d9e0;border-radius:8px;padding:0 8px;font:inherit;color:inherit;background:#fff'; w.appendChild(r); w.appendChild(el); return w; }
+    function lista(chave, valor){
+      var sel = document.createElement('select'), o0 = document.createElement('option'); o0.value = ''; o0.textContent = 'Escolha…'; sel.appendChild(o0);
+      var vs = (defs[chave] && Array.isArray(defs[chave].attribute_values)) ? defs[chave].attribute_values : [];
+      vs.forEach(function(v){ var o = document.createElement('option'); o.value = String(v); o.textContent = String(v); sel.appendChild(o); });
+      sel.value = valor || ''; return sel;
+    }
+    var etapa = lista('etapa', String(atual.etapa || ''));
+    var motivo = lista('motivo_nao_agendamento', String(atual.motivo_nao_agendamento || ''));
+    var valor = document.createElement('input'); valor.type = 'number'; valor.min = '0'; valor.step = '0.01'; valor.placeholder = 'R$'; if (Number(atual.valor_fechado) > 0) valor.value = String(atual.valor_fechado);
+    var lEtapa = linha('Etapa', etapa), lMotivo = linha('Motivo do não agendamento', motivo), lValor = linha('Valor fechado (R$)', valor);
+    cx.appendChild(lEtapa); cx.appendChild(lMotivo); cx.appendChild(lValor);
+    var erro = document.createElement('div'); erro.setAttribute('role', 'alert'); erro.style.cssText = 'color:#c53030;font-size:12.5px;min-height:16px;margin-bottom:6px'; cx.appendChild(erro);
+    function mostrar(){ lMotivo.style.display = etapa.value === 'Perdido' ? 'block' : 'none'; lValor.style.display = etapa.value === 'Fechou' ? 'block' : 'none'; }
+    etapa.onchange = mostrar; mostrar();
+    var bs = document.createElement('div'); bs.style.cssText = 'display:flex;justify-content:flex-end;gap:8px;margin-top:4px';
+    var cancelar = document.createElement('button'); cancelar.type = 'button'; cancelar.textContent = 'Cancelar';
+    var ok = document.createElement('button'); ok.type = 'button'; ok.textContent = 'Salvar e resolver';
+    cancelar.style.cssText = 'height:32px;padding:0 12px;border-radius:8px;border:1px solid #d9d9e0;background:#fff;color:#1c2024;font:inherit;cursor:pointer';
+    ok.style.cssText = 'height:32px;padding:0 12px;border-radius:8px;border:0;background:#2781f6;color:#fff;font:inherit;font-weight:600;cursor:pointer';
+    bs.appendChild(cancelar); bs.appendChild(ok); cx.appendChild(bs);
+    cancelar.onclick = fecharJanelaResolver;
+    fundo.addEventListener('mousedown', function(ev){ if (ev.target === fundo) fecharJanelaResolver(); });
+    cx.addEventListener('keydown', function(ev){ if (ev.key === 'Escape') fecharJanelaResolver(); });
+    ok.onclick = function(){
+      var novos = { etapa: etapa.value };
+      if (etapa.value === 'Perdido') novos.motivo_nao_agendamento = motivo.value;
+      if (etapa.value === 'Fechou') novos.valor_fechado = Number(valor.value);
+      var falta = faltandoAoResolver(Object.assign({}, atual, novos));
+      if (falta.length) { erro.textContent = falta[0] === 'etapa' ? 'Escolha a etapa.' : falta[0] === 'valor_fechado' ? 'Informe o valor fechado.' : 'Escolha o motivo.'; return; }
+      ok.disabled = true; ok.textContent = 'Salvando…'; erro.textContent = '';
+      // o Chatwoot TROCA o conjunto inteiro de atributos: relê a conversa agora e manda tudo junto
+      cwApi('GET', 'conversations/' + conversa).then(function(j){
+        var base = (j && j.custom_attributes) || {};
+        return cwApi('POST', 'conversations/' + conversa + '/custom_attributes', { custom_attributes: Object.assign({}, base, novos) });
+      }).then(function(){ fecharJanelaResolver(); liberarResolver(); })
+        .catch(function(){ ok.disabled = false; ok.textContent = 'Salvar e resolver'; erro.textContent = 'Não consegui salvar agora. Tente de novo.'; });
+    };
+    fundo.appendChild(cx); document.body.appendChild(fundo); RS.aberto = fundo;
+    setTimeout(function(){ try { etapa.focus(); } catch (e) {} }, 0);
+  }
+  function conferirAntesDeResolver(conversa){
+    Promise.all([cwApi('GET', 'conversations/' + conversa), definicoesDaConversa()]).then(function(r){
+      var atual = (r[0] && r[0].custom_attributes) || {};
+      if (!faltandoAoResolver(atual).length) { liberarResolver(); return; }
+      abrirJanelaResolver(conversa, atual, r[1]);
+    }).catch(function(){ liberarResolver(); }); // falhou ler: deixa resolver (o servidor marca «falta-etapa»)
+  }
+  document.addEventListener('click', function(ev){
+    if (!OBRIGATORIOS || RS.liberar) return;
+    var b = ev.target && ev.target.closest ? ev.target.closest('.resolve-actions button') : null;
+    if (!b || !ROTULO_RESOLVER.test((b.innerText || '').trim())) return; // só o botão «Resolver» (não o menu ao lado, nem «Reabrir»)
+    var c = conversaDaUrl(); if (!c) return;
+    ev.preventDefault(); ev.stopImmediatePropagation();
+    if (!RS.aberto) conferirAntesDeResolver(c);
+  }, true);
+
   window.addEventListener('message', function(ev){
     if (ev.origin !== AGENTE || !fr || ev.source !== fr.contentWindow) return;
     var d = ev.data; if (!d || typeof d.event !== 'string') return;
@@ -381,7 +490,9 @@ const BOTAO_JS = String.raw`(function(){
 /** O JavaScript do botão. Tem `__AGENTE__` no lugar do endereço do servidor (quem monta troca por um texto JSON). */
 export function assistenteJs(env: NodeJS.ProcessEnv = process.env): string {
   // CHATWOOT_ATALHOS=0 desliga os atalhos «⚡ Mensagens prontas» / «📋 Modelos do WhatsApp» sem novo deploy de código
-  return BOTAO_JS.split('__ATALHOS__').join(String(env.CHATWOOT_ATALHOS !== '0'));
+  return BOTAO_JS.split('__ATALHOS__').join(String(env.CHATWOOT_ATALHOS !== '0'))
+    // CHATWOOT_RESOLVER_OBRIGATORIO=0 desliga a janela de campos obrigatórios ao «Resolver»
+    .split('__OBRIGATORIOS__').join(String(env.CHATWOOT_RESOLVER_OBRIGATORIO !== '0'));
 }
 
 /** A página do painel (iframe). `__ORIGEM_CW__` = a origem do Chatwoot (JSON). */

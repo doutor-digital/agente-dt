@@ -26,6 +26,7 @@ import { chamar, contaChatwootDoAmbiente, criarContextoChatwoot, type ContextoCh
 import { CAIXAS_REGUA } from './chatwoot-regua.js';
 import { aplicarEtiqueta, eventoDeEtiqueta, portasDaPonte, type PortasDaPonte } from './chatwoot-etiquetas.js';
 import { eventoDePausa, eventoDeReativacao, pausar, portaDaPausaDoChatwoot, reativar, type PortaDaPausa } from './chatwoot-pausa.js';
+import { aplicarResolucao, eventoDeResolucao, portasDoResolver, type PortasDoResolver } from './chatwoot-resolver.js';
 import { transcribeAudio } from '../services/transcription.service.js';
 import { registrarEventoDaSofia, registrarRespostaDaSofia, ultimaFalaDoPaciente, type EventoDaSofia } from './sofia-avaliacoes.js';
 import { rodarTesteDaSofia } from '../controllers/playground.controller.js';
@@ -483,14 +484,14 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
 
 // ── a rota ─────────────────────────────────────────────────────────────────────────────────────────
 
-let estado: { portas: PortasDaIa; mem: MemoriaDaIa; ponte: PortasDaPonte; pausa: PortaDaPausa } | null = null;
+let estado: { portas: PortasDaIa; mem: MemoriaDaIa; ponte: PortasDaPonte; pausa: PortaDaPausa; resolver: PortasDoResolver } | null = null;
 
 function estadoDoReceptor() {
   if (!estado) {
     const conta = contaChatwootDoAmbiente();
     if (!conta) return null;
     const ctx = criarContextoChatwoot(conta);
-    estado = { portas: portasReais(ctx), mem: novaMemoriaDaIa(), ponte: portasDaPonte(ctx), pausa: portaDaPausaDoChatwoot(ctx) };
+    estado = { portas: portasReais(ctx), mem: novaMemoriaDaIa(), ponte: portasDaPonte(ctx), pausa: portaDaPausaDoChatwoot(ctx), resolver: portasDoResolver(ctx) };
   }
   return estado;
 }
@@ -513,6 +514,12 @@ export function eventoChatwootHandler(req: Request, res: Response): void {
   if (reativa) {
     const e = estadoDoReceptor();
     if (e) void reativar(reativa.conversa, null, e.pausa).catch((err) => logger.warn({ err: String(err), conversa: reativa.conversa }, 'chatwoot-pausa: não consegui reativar'));
+  }
+  // resolvida sem os campos obrigatórios → etiqueta falta-etapa; completou depois → tira (chatwoot-resolver.ts)
+  const resol = eventoDeResolucao(req.body);
+  if (resol?.acao) {
+    const e = estadoDoReceptor();
+    if (e) void aplicarResolucao(resol, e.resolver).catch((err) => logger.warn({ err: String(err), conversa: resol.conversa }, 'chatwoot-resolver: falhou'));
   }
   // botão "Perdido: <motivo>" → etiqueta → etapa + motivo no cartão (chatwoot-etiquetas.ts)
   const etq = eventoDeEtiqueta(req.body);
