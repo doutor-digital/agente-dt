@@ -6,6 +6,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  arquivoComEtapa,
+  ehArquivo,
   atualizarVistos,
   brl,
   camposDoModelo,
@@ -592,4 +594,17 @@ test('notaDoSeco com via: diz se iria como texto ou como template, com {{1}}=…
   assert.ok(notaDoSeco(d, { tipo: 'template', nome: d.modelo, variaveis: d.variaveis!, aprovado: false }).includes('ainda não está aprovado na Meta'));
   // sem via (caixa sem janela): a nota de sempre
   assert.ok(notaDoSeco(d).startsWith('🧪 [SECO] Régua «consulta-vespera» — enviaria agora:\n\nOlá, Maria.'));
+});
+
+test('ehArquivo / arquivoComEtapa: só etiqueta historico + atividade antes do corte; etapa faz entrar no funil', () => {
+  const antes = Math.floor(Date.parse('2026-11-12T12:00:00Z') / 1000);
+  const depois = Math.floor(Date.parse('2026-11-14T12:00:00Z') / 1000);
+  assert.equal(ehArquivo({ labels: ['historico'], last_activity_at: antes }), true);
+  assert.equal(ehArquivo({ labels: ['historico'], last_activity_at: depois }), false, 'paciente escreveu de novo: viva');
+  assert.equal(ehArquivo({ labels: ['outra'], last_activity_at: antes }), false, 'sem a etiqueta não é arquivo');
+  assert.equal(ehArquivo({ labels: ['historico'] }), true, 'sem data conta como arquivo');
+  assert.equal(ehArquivo(null), false);
+  assert.equal(arquivoComEtapa({ labels: ['historico'], last_activity_at: antes, custom_attributes: { etapa: 'Perdido' } }), true);
+  assert.equal(arquivoComEtapa({ labels: ['historico'], last_activity_at: antes, custom_attributes: { etapa: ' ' } }), false);
+  assert.equal(arquivoComEtapa({ labels: ['historico'], last_activity_at: depois, custom_attributes: { etapa: 'Perdido' } }), false, 'viva não é arquivo');
 });

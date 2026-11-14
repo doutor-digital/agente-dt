@@ -626,3 +626,43 @@ test('paramsDoTemplate: sem variáveis não manda processed_params; as chaves s�
   assert.deepEqual(paramsDoTemplate({ nome: 'parau_x', idioma: 'pt_BR', variaveis: [] }), { name: 'parau_x', language: 'pt_BR', content_mode: 'rendered' });
   assert.deepEqual(paramsDoTemplate({ nome: 'parau_x', idioma: 'pt_BR', variaveis: ['a', 'b', 'c'] }).processed_params, { body: { '1': 'a', '2': 'b', '3': 'c' } });
 });
+
+test('UNIFICAÇÃO: conversa de arquivo (etiqueta historico, parada antes do corte) a régua não toca; mexeu depois do corte, volta a valer', async () => {
+  const { armazem } = armazemFalso();
+  const arquivo = { ...bruta(1, { attrs: CONSULTA, labels: ['historico'] }), last_activity_at: unix('2026-10-20T12:00:00Z') };
+  const voltou = { ...bruta(2, { attrs: CONSULTA, labels: ['historico'] }), last_activity_at: unix('2026-11-16T10:00:00Z') };
+  const { chat, mensagens } = chatFalso(() => [arquivo, voltou]);
+  const r = await cicloDaCaixa(deps(armazem, chat), 2, 'doutor-hernia-parauapebas', 'seco', U, VESPERA);
+  assert.equal(r.conversas, 1, 'só a que voltou a ter atividade entra no ciclo');
+  assert.ok(mensagens.every((m) => m.id !== 1), 'nada sai para a conversa de arquivo');
+});
+
+test('UNIFICAÇÃO: conversa do histórico que ACORDA com etapa antiga (Perdido) não dispara nada — o estado antigo é ponto de partida', async () => {
+  const { armazem, disparos } = armazemFalso();
+  // a régua já tinha partida antes (não é a 1ª vez da caixa)
+  const viva = bruta(9, { attrs: CONSULTA });
+  const { chat, mensagens } = chatFalso(() => [viva]);
+  await cicloDaCaixa(deps(armazem, chat), 2, 'x', 'seco', U, new Date('2026-11-16T13:00:00Z'));
+  const antes = mensagens.length;
+  const acordou = { ...bruta(10, { attrs: { etapa: 'Perdido', motivo_perda: 'Sem retorno' }, labels: ['historico'] }), created_at: unix('2026-11-20T12:00:00Z'), last_activity_at: unix('2026-11-20T12:00:00Z') };
+  const { chat: chat2, mensagens: m2 } = chatFalso(() => [viva, acordou]);
+  for (const quando of ['2026-11-20T13:00:00Z', '2026-11-22T13:00:00Z', '2026-11-25T13:00:00Z']) {
+    await cicloDaCaixa(deps(armazem, chat2), 2, 'x', 'seco', U, new Date(quando));
+  }
+  assert.ok(m2.every((m) => m.id !== 10), 'nada (nem nota de seco) para a conversa do histórico que acordou');
+  assert.ok(disparos.every((d) => d.conversationId !== 10));
+  assert.ok(antes >= 0);
+});
+
+test('UNIFICAÇÃO (controle): a MESMA conversa sem a etiqueta historico, nascida depois da partida, dispara a sequência de Perdido', async () => {
+  const { armazem } = armazemFalso();
+  const viva = bruta(9, { attrs: CONSULTA });
+  const { chat } = chatFalso(() => [viva]);
+  await cicloDaCaixa(deps(armazem, chat), 2, 'x', 'seco', U, new Date('2026-11-16T13:00:00Z'));
+  const nova = { ...bruta(11, { attrs: { etapa: 'Perdido', motivo_perda: 'Sem retorno' } }), created_at: unix('2026-11-20T12:00:00Z'), last_activity_at: unix('2026-11-20T12:00:00Z') };
+  const { chat: chat2, mensagens: m2 } = chatFalso(() => [viva, nova]);
+  for (const quando of ['2026-11-20T13:00:00Z', '2026-11-22T13:00:00Z', '2026-11-25T13:00:00Z']) {
+    await cicloDaCaixa(deps(armazem, chat2), 2, 'x', 'seco', U, new Date(quando));
+  }
+  assert.ok(m2.some((m) => m.id === 11), 'sem a etiqueta, a régua age (prova que o teste de cima não passa à toa)');
+});

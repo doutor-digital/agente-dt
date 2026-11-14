@@ -2,7 +2,7 @@
  * Funil de etapas encaixado no Chatwoot (Dashboard App) — ver `lib/funil-chatwoot.ts`.
  *
  * Página `GET /funil` (item "Funil" do menu e aba "Funil" da conversa; visual no molde do funil do Kommo) e as rotas dela:
- *   GET  /api/public/funil/quadro?caixa=<id>   colunas por etapa (até 200 conversas), soma em R$, situação da tarefa
+ *   GET  /api/public/funil/quadro?caixa=<id>   colunas por etapa (até 200 conversas vivas + arquivo com etapa, até 1.000), soma em R$, situação da tarefa
  *   GET  /api/public/funil/caixas              caixas de entrada (o filtro do topo)
  *   GET  /api/public/funil/conversa/:id        a ficha do lead (campos, contato, histórico, tarefas)
  *   POST /api/public/funil/mover               { conversaId, etapa } — grava a etapa e deixa nota interna
@@ -44,7 +44,7 @@ import {
 import { destinosDaConta, gastoDaConta, gastoDiarioDaConta } from '../lib/meta-anuncios.js';
 import { TELAS_CSS, TELAS_JS } from '../lib/chatwoot-telas-ui.js';
 import { instanteNoFuso, searchTreatments } from '../services/spine.service.js';
-import { CAIXAS_HISTORICO, CAIXAS_REGUA, CAMPO_PARTIDA } from '../lib/chatwoot-regua.js';
+import { arquivoComEtapa, CAIXAS_HISTORICO, CAIXAS_REGUA, CAMPO_PARTIDA, ehArquivo } from '../lib/chatwoot-regua.js';
 import { assistenteJs } from '../lib/chatwoot-assistente-ui.js';
 import {
   ATRIBUTO_ETAPA,
@@ -256,12 +256,27 @@ async function vencimentosAbertos(conta: number, ids: number[]): Promise<Map<num
  * celular importado do Kapso — milhares de conversas resolvidas que encheriam o funil e o "Chegaram hoje" e deixariam tudo lento).
  * Com ?caixa=, só ela (caixa de histórico pedida direto = nada).
  */
-async function paginasDasCaixas(a: Acesso, caixa: number): Promise<unknown[]> {
-  return (await lerCaixas(a, caixa, MAX_PAGINAS)).paginas;
+async function paginasDasCaixas(a: Acesso, caixa: number, arquivo: Arquivo = 'fora'): Promise<unknown[]> {
+  // com o histórico unificado o canal oficial passa de 800 conversas: as vivas vêm primeiro (ordem da última atividade), mas o
+  // arquivo com etapa pode estar mais para trás — o quadro e Oportunidades leem até 40 páginas (4 por vez)
+  return (await lerCaixas(a, caixa, arquivo === 'com-etapa' ? MAX_PAGINAS_COM_ARQUIVO : MAX_PAGINAS, false, 4, arquivo)).paginas;
+}
+
+/**
+ * Conversas de ARQUIVO (histórico unificado no canal oficial, ninguém mexeu depois — `ehArquivo`): 'fora' = some da tela
+ * (Hoje, Marketing, Gestor); 'com-etapa' = só as que têm etapa (quadro do funil e Oportunidades).
+ */
+export type Arquivo = 'fora' | 'com-etapa';
+const MAX_PAGINAS_COM_ARQUIVO = 40;
+export function semArquivo(pg: any, arquivo: Arquivo): any {
+  const lista = pg?.data?.payload;
+  if (!Array.isArray(lista)) return pg;
+  const fica = lista.filter((c: any) => !ehArquivo(c) || (arquivo === 'com-etapa' && arquivoComEtapa(c)));
+  return fica.length === lista.length ? pg : { ...pg, data: { ...pg.data, payload: fica } };
 }
 
 /** As caixas (e as páginas de cada uma) que a pessoa lê; `cortou` = alguma caixa tinha mais conversas que o teto de páginas. */
-async function lerCaixas(a: Acesso, caixa: number, maxPaginas: number, soDeUnidades = false, lote = 1): Promise<{ paginas: unknown[]; cortou: boolean }> {
+async function lerCaixas(a: Acesso, caixa: number, maxPaginas: number, soDeUnidades = false, lote = 1, arquivo: Arquivo = 'fora'): Promise<{ paginas: unknown[]; cortou: boolean }> {
   let ids: number[];
   const vale = (id: number) => Number.isInteger(id) && !CAIXAS_HISTORICO.has(id) && (!soDeUnidades || !!CAIXAS_REGUA[id]);
   if (Number.isInteger(caixa) && caixa > 0) ids = vale(caixa) ? [caixa] : [];
@@ -273,14 +288,19 @@ async function lerCaixas(a: Acesso, caixa: number, maxPaginas: number, soDeUnida
   let cortou = false;
   for (const id of ids) {
     // `lote` páginas por vez (as telas de gestão pedem 4: as páginas não dependem umas das outras e 600 conversas em fila levariam
-    // dezenas de segundos); o quadro e o Hoje seguem uma por vez, como sempre
+    // dezenas de segundos); o quadro e o Hoje também leem 4 por vez desde a unificação do histórico
     for (let p = 1; p <= maxPaginas; p += lote) {
       const numeros = Array.from({ length: Math.min(lote, maxPaginas - p + 1) }, (_, i) => p + i);
       const lidas = (await Promise.all(numeros.map((n) => cw(a, 'GET', 'conversations', { query: { status: 'all', assignee_type: 'all', inbox_id: String(id), page: String(n) } })))) as any[];
       let acabou = false;
       for (const pg of lidas) {
-        paginas.push(pg);
-        if ((pg?.data?.payload?.length ?? 0) < 25) acabou = true;
+        // o fim da caixa se mede pela página CRUA (25 por página); o arquivo sai depois
+        const crua: any[] = Array.isArray((pg as any)?.data?.payload) ? (pg as any).data.payload : [];
+        if (crua.length < 25) acabou = true;
+        // a lista vem pela última atividade (mais nova primeiro) e o arquivo é sempre mais velho que as conversas vivas: página
+        // cheia só de arquivo = dali para trás é tudo arquivo — quem não mostra arquivo para de ler (sem «cortou» falso)
+        if (arquivo === 'fora' && crua.length > 0 && crua.every((c) => ehArquivo(c))) acabou = true;
+        paginas.push(semArquivo(pg, arquivo));
       }
       if (acabou) break;
       if (p + lote - 1 >= maxPaginas) cortou = true;
@@ -295,7 +315,7 @@ export async function funilQuadroHandler(req: Request, res: Response): Promise<v
   try {
     const defs = await definicoes(a);
     const lista = etapasDoAtributo(defs);
-    const paginas = await paginasDasCaixas(a, Number(req.query.caixa));
+    const paginas = await paginasDasCaixas(a, Number(req.query.caixa), 'com-etapa');
     const tarefas = await vencimentosAbertos(a.c.conta!.conta, idsDasPaginas(paginas));
     res.json({ ...montarQuadro(paginas, lista, tarefas), chatwoot: a.c.conta!.url, conta: a.c.conta!.conta, eu: a.logado, euId: a.logadoId, podeEscrever: !!a.sessao });
   } catch (e) {
@@ -385,7 +405,7 @@ export async function funilOportunidadesHandler(req: Request, res: Response): Pr
   try {
     const agora = Date.now();
     const v = await memo(`op|${a.logadoId ?? a.logado}`, VALE_TELA_MS, async () => {
-      const conversas = conversasDasPaginas(await paginasDasCaixas(a, 0));
+      const conversas = conversasDasPaginas(await paginasDasCaixas(a, 0, 'com-etapa'));
       return { ...montarOportunidades(conversas, agora), eu: a.logado, chatwoot: a.c.conta!.url, conta: a.c.conta!.conta };
     });
     res.json(v);

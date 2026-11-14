@@ -31,7 +31,7 @@ import { logger } from './logger.js';
 import { prisma } from './prisma.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import { chamar, contaChatwootDoAmbiente, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
-import { conversaDoChatwoot, ehSim, type ConversaRegua } from './chatwoot-regua.js';
+import { conversaDoChatwoot, ehArquivo, ehSim, type ConversaRegua } from './chatwoot-regua.js';
 
 export const ID_CAPI = 'chatwoot-capi';
 
@@ -386,7 +386,8 @@ async function lerConversas(chat: ChatDoCapi, caixa: number): Promise<ConversaRe
     if (pagina.length === 0) break;
     for (const raw of pagina) {
       const c = conversaDoChatwoot(raw);
-      if (!c || vistas.has(c.id)) continue;
+      // arquivo do histórico não vira evento de conversão para a Meta
+      if (!c || vistas.has(c.id) || ehArquivo(raw)) continue;
       vistas.add(c.id);
       conversas.push(c);
     }
@@ -435,7 +436,7 @@ export async function cicloDoCapi(deps: DepsDoCapi, caixa: number, slug: string,
         // 1) a ENTRADA: a 1ª vez que o worker viu a conversa neste estado
         let visto = minhas.get(chaveDe(`capi-visto:${evento}`, 'v1'));
         if (!visto) {
-          const linha: LinhaCapi = { conversationId: c.id, regra: `capi-visto:${evento}`, chave: 'v1', modo: primeiraVez ? 'inicial' : 'novo', texto: '', criadoEm: agora };
+          const linha: LinhaCapi = { conversationId: c.id, regra: `capi-visto:${evento}`, chave: 'v1', modo: primeiraVez || c.etiquetas.includes('historico') ? 'inicial' : 'novo', texto: '', criadoEm: agora };
           if (!(await armazem.registrar({ caixa, ...linha }))) continue; // outra cópia do servidor acabou de ver
           minhas.set(chaveDe(linha.regra, linha.chave), linha);
           visto = linha;

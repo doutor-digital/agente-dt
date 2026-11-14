@@ -64,7 +64,7 @@ const falsoPrisma = {
 };
 for (const [k, v] of Object.entries(falsoPrisma)) Object.defineProperty(prisma, k, { value: v, configurable: true });
 
-const { funilOportunidadesHandler, funilMarketingHandler, funilGestorHandler, funilGestaoHandler, paginaFunilHandler, montarMenuJs } = await import('./funil.controller.js');
+const { semArquivo, funilOportunidadesHandler, funilMarketingHandler, funilGestorHandler, funilGestaoHandler, paginaFunilHandler, montarMenuJs } = await import('./funil.controller.js');
 const { corsDoAssistente } = await import('./assistente.controller.js');
 
 function resp() {
@@ -275,4 +275,24 @@ test('página (todas as telas) PARSEIA, sem marcador sobrando; as novas só fala
   const novo = script!.slice(script!.indexOf('Oportunidades · Marketing · Gestor'));
   assert.doesNotMatch(novo.slice(0, novo.indexOf('function iniciar')), /api\('POST'/);
   assert.match(novo, /abrirConversa\(i\.id\)/);
+});
+
+test('UNIFICAÇÃO: o filtro do funil tira o arquivo do histórico (Hoje/gestão) e deixa só o com etapa no quadro e em Oportunidades', () => {
+  const antes = Math.floor(Date.parse('2026-11-12T12:00:00Z') / 1000);
+  const depois = Math.floor(Date.parse('2026-11-14T12:00:00Z') / 1000);
+  const pg = {
+    data: {
+      meta: { all_count: 4 },
+      payload: [
+        { id: 1, labels: [], last_activity_at: depois },
+        { id: 2, labels: ['historico'], last_activity_at: antes },
+        { id: 3, labels: ['historico'], last_activity_at: antes, custom_attributes: { etapa: 'Perdido' } },
+        { id: 4, labels: ['historico'], last_activity_at: depois },
+      ],
+    },
+  };
+  assert.deepEqual(semArquivo(pg, 'fora').data.payload.map((c: any) => c.id), [1, 4]);
+  assert.deepEqual(semArquivo(pg, 'com-etapa').data.payload.map((c: any) => c.id), [1, 3, 4]);
+  assert.equal(semArquivo(pg, 'fora').data.meta.all_count, 4, 'não mexe no resto da página');
+  assert.equal(semArquivo({ data: { payload: [{ id: 9, labels: [] }] } }, 'fora').data.payload.length, 1);
 });
