@@ -7,7 +7,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { automacaoPorId, verificarCatalogo } from './automacoes.js';
 import { CAIXAS_REGUA } from './chatwoot-regua.js';
-import { cicloDaCaixa, finalDoTelefone, paramsDoTemplate, SUFIXO_SEM_TEMPLATE, type EnvioTemplate, numeroDaGerente, MAX_ETIQUETAS_POR_CICLO, MAX_MENSAGENS_POR_CICLO, soAMaisRecentePorTelefone, type Armazem, type Chat, type DepsDoCiclo, type LinhaVista } from './chatwoot-regua-worker.js';
+import { chaveDoTelefone, mesmoTelefone } from './chatwoot-lida.js';
+import { cicloDaCaixa, finalDoTelefone, paramsDoTemplate, SUFIXO_SEM_TEMPLATE, type EnvioTemplate, numeroDaGerente, MAX_ETIQUETAS_POR_CICLO, MAX_MENSAGENS_POR_CICLO, quemFalaPorTelefone, type Armazem, type Chat, type DepsDoCiclo, type LinhaVista } from './chatwoot-regua-worker.js';
 import type { DadosDaUnidade, MensagemResumo, Mudanca } from './chatwoot-regua.js';
 
 const U: DadosDaUnidade = { nome: 'Doutor Hérnia Parauapebas', pixKey: 'pix@parau.com', valorAntecipado: 250 };
@@ -707,13 +708,78 @@ test('mesmo telefone: histórico (data velha) + viva (data nova) → só a viva 
     const c = chatFalso(() => [hist(atvHist), viva(atvViva)]);
     await cicloDaCaixa(deps(f.armazem, c.chat), 2, 'x', 'ligado', U, new Date('2026-11-16T17:20:00Z'));
     const r = await cicloDaCaixa(deps(f.armazem, c.chat), 2, 'x', 'ligado', U, VESPERA);
-    assert.equal(r.conversas, 1);
-    assert.deepEqual(c.mensagens.map((m) => m.id), [quem]);
+    assert.equal(r.conversas, 2, 'as duas seguem no ciclo (memória em dia)');
+    assert.deepEqual(c.mensagens.map((m) => m.id), [quem], 'mas só a mais recente fala');
   }
 });
 
-test('soAMaisRecentePorTelefone: com e sem o 9 é a mesma pessoa; empate fica com o id maior; sem telefone não se mexe; telefones diferentes ficam', () => {
+test('quemFalaPorTelefone: com e sem o 9 é a mesma pessoa; empate fica com o id maior; sem telefone fala; telefones diferentes falam; irmãs listadas', () => {
   const x = (id: number, telefone: string, atividade: number) => ({ c: { id, telefone } as any, atividade });
-  const r = soAMaisRecentePorTelefone([x(1, '+5594999745062', 5), x(2, '+559499745062', 9), x(3, '+5594988887777', 1), x(4, '', 1), x(5, '', 1), x(6, '+5594999745062', 9)]);
-  assert.deepEqual(r.map((y) => y.c.id), [3, 4, 5, 6]);
+  const r = quemFalaPorTelefone([x(1, '+5594999745062', 5), x(2, '+559499745062', 9), x(3, '+5594988887777', 1), x(4, '', 1), x(5, '', 1), x(6, '+5594999745062', 9)]);
+  assert.deepEqual([...r.entries()].filter(([, v]) => v.fala).map(([id]) => id).sort(), [3, 4, 5, 6]);
+  assert.deepEqual(r.get(6)!.irmas.sort(), [1, 2]);
+  assert.deepEqual(r.get(3)!.irmas, []);
+});
+
+test('chaveDoTelefone agrupa exatamente como mesmoTelefone da agenda (DDI+DDD e 8 últimos dígitos)', () => {
+  const t = ['+5594999745062', '+559499745062', '559499745062', '+5594988887777', '+5511999745062', '123', '', '+55949997450'];
+  for (const a of t) for (const b of t) {
+    const k = chaveDoTelefone(a);
+    const l = chaveDoTelefone(b);
+    assert.equal(mesmoTelefone(a, b), k !== null && l !== null && k === l, `${a} x ${b}`);
+  }
+});
+
+test('troca de A para B (mesmo telefone, mesma consulta): A mandou a véspera; B vira a mais recente e NÃO manda de novo', async () => {
+  const tel = '+5594999990000';
+  const f = armazemFalso();
+  let comB = false;
+  const A = () => ({ ...bruta(1, { attrs: CONSULTA, telefone: tel }), last_activity_at: unix('2026-11-16T10:00:00Z') });
+  const B = () => ({ ...bruta(2, { attrs: CONSULTA, telefone: tel }), last_activity_at: unix('2026-11-16T17:31:00Z') });
+  const c = chatFalso(() => (comB ? [A(), B()] : [A()]));
+  await cicloDaCaixa(deps(f.armazem, c.chat), 2, 'x', 'ligado', U, new Date('2026-11-16T17:20:00Z'));
+  await cicloDaCaixa(deps(f.armazem, c.chat), 2, 'x', 'ligado', U, VESPERA);
+  assert.deepEqual(c.mensagens.map((m) => m.id), [1]);
+  comB = true;
+  for (const min of [10, 20, 30]) await cicloDaCaixa(deps(f.armazem, c.chat), 2, 'x', 'ligado', U, new Date(VESPERA.getTime() + min * 60_000));
+  assert.deepEqual(c.mensagens.map((m) => m.id), [1], 'B não repete o que A já mandou');
+  assert.ok(f.vistos.some((v) => v.conversationId === 2), 'B tem memória própria desde o 1º ciclo em que apareceu');
+});
+
+test('conversa fora da fala continua com a memória em dia: Perdido que ela ganhou semanas atrás NÃO vira «novo» quando ela volta a ser a mais recente', async () => {
+  const tel = '+5594999990000';
+  const f = armazemFalso();
+  let fase = 1;
+  const A = () => ({
+    ...bruta(1, { attrs: fase === 1 ? { etapa: 'Agendado' } : { etapa: 'Perdido', motivo_nao_agendamento: 'Sem interesse' }, telefone: tel }),
+    last_activity_at: unix(fase === 3 ? '2026-12-10T11:00:00Z' : '2026-11-10T10:00:00Z'),
+  });
+  const B = () => ({ ...bruta(2, { attrs: {}, telefone: tel }), last_activity_at: unix(fase === 3 ? '2026-11-20T10:00:00Z' : '2026-11-15T10:00:00Z') });
+  const c = chatFalso(() => [A(), B()]);
+  const ciclo = (q: string) => cicloDaCaixa(deps(f.armazem, c.chat), 2, 'x', 'ligado', U, new Date(q));
+  await ciclo('2026-11-16T12:00:00Z'); // partida
+  fase = 2;
+  await ciclo('2026-11-17T12:00:00Z'); // A ganha Perdido, mas B é quem fala
+  const etapaA = f.vistos.find((v) => v.conversationId === 1 && v.campo === 'etapa')!;
+  assert.equal(etapaA.valor, 'Perdido');
+  assert.equal(etapaA.desde.toISOString(), '2026-11-17T12:00:00.000Z', 'a memória registrou QUANDO ela virou Perdido, mesmo sem falar');
+  assert.equal(c.mensagens.length, 0);
+  fase = 3; // semanas depois A volta a ser a mais recente
+  await ciclo('2026-12-10T12:00:00Z');
+  await ciclo('2026-12-12T13:00:00Z'); // 48 h depois da volta
+  assert.equal(c.mensagens.length, 0, 'não dispara o reengajamento de 48 h por um estado de semanas atrás');
+});
+
+test('conversa que não fala (mesmo telefone) ainda roda a regra interna', async () => {
+  const tel = '+5594999990000';
+  const f = armazemFalso();
+  const quente = { etapa: 'Sofia qualifica', qualificacao: 'Quente' };
+  const A = () => ({ ...bruta(1, { attrs: quente, telefone: tel, ultima: { tipo: 0, autor: 9, quando: '2026-11-16T10:00:00Z' } }), last_activity_at: unix('2026-11-10T10:00:00Z') });
+  const B = () => ({ ...bruta(2, { attrs: { etapa: 'Novo lead' }, telefone: tel }), last_activity_at: unix('2026-11-16T09:00:00Z') });
+  const c = chatFalso(() => [A(), B()]);
+  await cicloDaCaixa(deps(f.armazem, c.chat), 2, 'x', 'ligado', U, new Date('2026-11-16T11:00:00Z'));
+  const r = await cicloDaCaixa(deps(f.armazem, c.chat), 2, 'x', 'ligado', U, new Date('2026-11-16T13:10:00Z')); // 3 h depois da última mensagem do paciente
+  assert.ok(c.mensagens.some((m) => m.id === 1 && m.privada && /lead-quente-parado/.test(m.texto)), 'a interna roda na conversa que não fala');
+  assert.equal(c.mensagens.filter((m) => !m.privada).length, 0);
+  assert.ok(r.conversas === 2);
 });

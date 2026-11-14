@@ -458,7 +458,8 @@ interface Candidato {
 const ETAPAS_DA_CONSULTA = new Set(['Agendado', 'Confirmado', 'Fechou']);
 const ETAPAS_DE_QUALIFICACAO = new Set(['Sofia qualifica', 'Esperando humano']);
 /** situação em que a consulta ainda está de pé */
-const SITUACOES_DE_PE = new Set(['', 'Agendado', 'Confirmado', 'Remarcado']);
+// sem «Remarcado»: só a agenda grava essa situação, e com a data VELHA (a Sofia grava Agendado com a data nova ao remarcar)
+const SITUACOES_DE_PE = new Set(['', 'Agendado', 'Confirmado']);
 const MODELO_DA_ESPERA: Record<string, string> = {
   Exames: 'parau_espera_exames',
   Viajando: 'parau_espera_viagem',
