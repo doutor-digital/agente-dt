@@ -258,8 +258,10 @@ async function vencimentosAbertos(conta: number, ids: number[]): Promise<Map<num
  */
 async function paginasDasCaixas(a: Acesso, caixa: number, arquivo: Arquivo = 'fora'): Promise<unknown[]> {
   // com o histórico unificado o canal oficial passa de 900 conversas: as vivas vêm primeiro (ordem da última atividade) e a leitura
-  // para na 1ª página só de histórico (4 páginas por vez, até MAX_PAGINAS)
-  return (await lerCaixas(a, caixa, MAX_PAGINAS, false, 4, arquivo)).paginas;
+  // para na 1ª página só de histórico (até MAX_PAGINAS)
+  // UMA página por vez (14/11, medido): o Chatwoot atende os pedidos em fila — 4 páginas juntas levam 4,3 s, uma a uma ~0,8 s
+  // cada; lendo em fila a leitura para logo na 1ª página só de histórico (3 páginas ≈ 2,4 s em vez de 4,3 s)
+  return (await lerCaixas(a, caixa, MAX_PAGINAS, false, 1, arquivo)).paginas;
 }
 
 /**
@@ -287,7 +289,7 @@ async function lerCaixas(a: Acesso, caixa: number, maxPaginas: number, soDeUnida
   let cortou = false;
   for (const id of ids) {
     // `lote` páginas por vez (as telas de gestão pedem 4: as páginas não dependem umas das outras e 600 conversas em fila levariam
-    // dezenas de segundos); o quadro e o Hoje também leem 4 por vez desde a unificação do histórico
+    // dezenas de segundos); o quadro e o Hoje leem uma por vez (o Chatwoot atende em fila; ver paginasDasCaixas)
     for (let p = 1; p <= maxPaginas; p += lote) {
       const numeros = Array.from({ length: Math.min(lote, maxPaginas - p + 1) }, (_, i) => p + i);
       const lidas = (await Promise.all(numeros.map((n) => cw(a, 'GET', 'conversations', { query: { status: 'all', assignee_type: 'all', inbox_id: String(id), page: String(n) } })))) as any[];
