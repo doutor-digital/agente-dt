@@ -29,7 +29,6 @@ import { eventoDePausa, eventoDeReativacao, pausar, portaDaPausaDoChatwoot, reat
 import { aplicarResolucao, eventoDeResolucao, portasDoResolver, type PortasDoResolver } from './chatwoot-resolver.js';
 import { transcribeAudio } from '../services/transcription.service.js';
 import { registrarEventoDaSofia, registrarRespostaDaSofia, ultimaFalaDoPaciente, type EventoDaSofia } from './sofia-avaliacoes.js';
-import { portaDoRobo, tokenDoRobo } from './chatwoot-sofia-bot.js';
 import { rodarTesteDaSofia } from '../controllers/playground.controller.js';
 import { cartaoNoKommoDaUnidade } from './chatwoot-cartao-kommo.js';
 import { portaDoChatwoot, type ConversaLida, type PortaDoChatwoot } from './chatwoot-porta.js';
@@ -185,10 +184,6 @@ export interface PortasDaIa {
 
 export function portasReais(ctx: ContextoChatwoot): PortasDaIa {
   const chat: PortaDoChatwoot = portaDoChatwoot(ctx);
-  // Sofia como ROBÔ do Chatwoot (chatwoot-sofia-bot.ts): só com CHATWOOT_SOFIA_COMO_BOT=1 + CHATWOOT_SOFIA_BOT_TOKEN; senão, null
-  const tokenRobo = tokenDoRobo();
-  const robo = tokenRobo ? portaDoRobo(ctx, tokenRobo) : null;
-  if (robo) logger.info(`${ID_IA}: a Sofia responde como ROBÔ do Chatwoot`);
   return {
     estado: (slug) => estadoDaAutomacao(slug, ID_IA, process.env.CHATWOOT_IA_SLUGS),
     unidade: (slug) => prisma.unit.findUnique({ where: { slug } }),
@@ -197,7 +192,7 @@ export function portasReais(ctx: ContextoChatwoot): PortasDaIa {
       return Array.isArray(r?.payload) ? r.payload : [];
     },
     nota: (conversa, texto) => chat.nota(conversa, texto),
-    publica: (conversa, texto) => (robo ? robo.publica(conversa, texto) : chat.publica(conversa, texto)),
+    publica: (conversa, texto) => chat.publica(conversa, texto),
     registrarResposta: (r) => registrarRespostaDaSofia(r),
     registrarEvento: (e) => registrarEventoDaSofia(e),
     async agendaReal(unit, lida) {
@@ -225,8 +220,6 @@ export function portasReais(ctx: ContextoChatwoot): PortasDaIa {
     },
     async passarParaEquipe(conversa, lida, motivo) {
       await passarParaEquipeNoChatwoot(chat, { conversa, etapa: String(lida.attrs.etapa ?? '').trim(), motivo });
-      // robô → equipe: tira de «Pendentes» (a etiqueta e a nota já avisaram; falhar aqui não desfaz a passagem)
-      if (robo) await robo.abrirParaEquipe(conversa).catch((err) => logger.warn({ err: String(err), conversa }, `${ID_IA}: não consegui abrir a conversa para a equipe (robô)`));
     },
     async transcrever(unit, url) {
       return (await transcribeAudio(unit, url)).text;
@@ -254,8 +247,6 @@ export interface MemoriaDaIa {
   avisosDeHorario: Set<string>;
   /** o(s) usuário(s) do Chatwoot que mandam as nossas mensagens (para não tomar a fala da Sofia por fala da equipe) */
   usuariosDaIntegracao: Set<number>;
-  /** conversa → quando o Registro anotou «Sofia desligada nesta unidade» (uma vez por hora por conversa) */
-  registrosDeDesligada: Map<number, number>;
 }
 export const novaMemoriaDaIa = (): MemoriaDaIa => ({
   esperas: new Map(),
@@ -264,23 +255,13 @@ export const novaMemoriaDaIa = (): MemoriaDaIa => ({
   emAndamento: new Set(),
   avisosDeHorario: new Set(),
   usuariosDaIntegracao: new Set(),
-  registrosDeDesligada: new Map(),
 });
 /** Se a rodada anterior da mesma conversa ainda não acabou, tenta de novo depois disto. */
 export const REPETE_SE_OCUPADA_MS = 15_000;
 
 /** Uma mensagem do paciente chegou: transcreve o áudio agora; a Sofia, só depois de 60 s quieto (reagenda a cada fala). */
 export async function aoChegar(m: MensagemDoPaciente, p: PortasDaIa, mem: MemoriaDaIa): Promise<void> {
-  if (p.estado(m.slug) === 'desligado') {
-    // aba Registro: «por que ela não respondeu?» — uma linha por conversa por hora, sem tocar em mais nada
-    const antes = mem.registrosDeDesligada.get(m.conversa) ?? 0;
-    if (Date.now() - antes >= 3_600_000 && p.registrarEvento) {
-      mem.registrosDeDesligada.set(m.conversa, Date.now());
-      if (mem.registrosDeDesligada.size > 5000) mem.registrosDeDesligada.clear();
-      await p.registrarEvento({ slug: m.slug, conversa: m.conversa, tipo: 'decisao', nome: 'unidade-pausada' }).catch(() => undefined);
-    }
-    return;
-  }
+  if (p.estado(m.slug) === 'desligado') return;
   if (m.audios.length) {
     const unit = await p.unidade(m.slug);
     if (unit) {
@@ -342,43 +323,14 @@ export async function rodarSofia(m: MensagemDoPaciente, p: PortasDaIa, mem: Memo
   if (modo === 'desligado') return 'desligado';
   if (mem.emAndamento.has(m.conversa)) return 'ocupada';
   mem.emAndamento.add(m.conversa);
-  const info: InfoDaRodada = {};
-  let desfecho: Desfecho = 'falhou';
   try {
-    desfecho = await rodarSofiaDessaConversa(m, p, mem, modo, info);
-    return desfecho;
+    return await rodarSofiaDessaConversa(m, p, mem, modo);
   } finally {
     mem.emAndamento.delete(m.conversa);
-    // aba Registro: a rodada em que ela NÃO respondeu ao paciente, e por quê (a resposta enviada já fica em sofia_mensagem)
-    if (DESFECHOS_DO_REGISTRO.has(desfecho) && p.registrarEvento) {
-      await p
-        .registrarEvento({ slug: m.slug, conversa: m.conversa, tipo: 'decisao', nome: desfecho, detalhe: info.motivo ?? null })
-        .catch((err) => logger.warn({ err: String(err), conversa: m.conversa }, `${ID_IA}: não consegui gravar a decisão no Registro`));
-    }
   }
 }
 
-/** O que a rodada conta para o Registro além do desfecho (ex.: por que ficou calada). */
-interface InfoDaRodada {
-  motivo?: string;
-}
-/** Desfechos que viram linha «não respondeu» no Registro (enviada já está em sofia_mensagem; ocupada é só uma nova tentativa). */
-export const DESFECHOS_DO_REGISTRO: ReadonlySet<Desfecho> = new Set<Desfecho>([
-  'nota',
-  'sem-texto',
-  'equipe-respondeu',
-  'mudou',
-  'teto',
-  'sem-unidade',
-  'falhou',
-  'calada',
-  'sem-telefone',
-  'horario-divergente',
-  'cartao-no-kommo',
-  'kommo-indisponivel',
-]);
-
-async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem: MemoriaDaIa, modo: ModoDaSofia, info: InfoDaRodada = {}): Promise<Desfecho> {
+async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem: MemoriaDaIa, modo: ModoDaSofia): Promise<Desfecho> {
   const chaveDia = `${m.slug}|${p.hoje()}`;
   // o painel do Agente conta daqui; falhar ao gravar não atrapalha o paciente
   const evento = async (tipo: EventoDaSofia['tipo'], extra: { nome?: string | null; detalhe?: string | null } = {}) => {
@@ -397,7 +349,6 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
   const calar = motivoDeNaoResponder(lida);
   if (calar) {
     logger.info({ conversa: m.conversa, motivo: calar }, `${ID_IA}: a Sofia fica calada`);
-    info.motivo = calar;
     return 'calada';
   }
   if (!lida.telefone) {
@@ -414,7 +365,6 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
     return 'kommo-indisponivel';
   }
   if (cartao) {
-    info.motivo = `lead ${cartao.leadId} no Kommo`;
     const aviso = `${m.conversa}|${cartao.leadId}`;
     if (!mem.avisosDoKommo.has(aviso)) {
       mem.avisosDoKommo.add(aviso);
@@ -492,7 +442,6 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
   const agoraLida = await p.conversa(m.conversa).catch(() => null);
   const calou = agoraLida ? motivoDeNaoResponder(agoraLida) : null;
   if (calou) {
-    info.motivo = calou;
     logger.info({ conversa: m.conversa, motivo: calou, gravou }, `${ID_IA}: a conversa passou para a equipe enquanto a Sofia pensava — resposta descartada`);
     const nota = gravou ? alerta(`a conversa passou para a equipe (${calou}) enquanto ela pensava`) : null;
     if (nota) await p.nota(m.conversa, nota).catch(() => undefined);
