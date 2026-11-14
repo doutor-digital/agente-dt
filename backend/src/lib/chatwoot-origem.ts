@@ -100,6 +100,30 @@ export function portasDaOrigem(ctx: ContextoChatwoot): PortasDaOrigem {
   };
 }
 
+export const ETIQUETA_ANUNCIO = 'anuncio';
+
+/**
+ * Etiqueta «anuncio» na CONVERSA que comprovadamente veio de anúncio (João, 14/11/2026: "onde vejo essas conversas que veio de
+ * anúncio?"). É informação, não ação: vale mesmo com `chatwoot-origem` desligada ou no papel. ACRESCENTA (relê as etiquetas e
+ * manda a lista inteira; nunca tira as outras). Publicação impulsionada que não é anúncio (tipo «post») não ganha.
+ * CHATWOOT_ETIQUETA_ANUNCIO=0 desliga. Não lança.
+ */
+export async function etiquetarAnuncio(
+  conversa: number,
+  ref: ReferralDoKapso,
+  adicionar: (conversa: number, etiquetas: string[]) => Promise<void>,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<boolean> {
+  if (env.CHATWOOT_ETIQUETA_ANUNCIO === '0' || ref.tipo !== 'ad') return false;
+  try {
+    await adicionar(conversa, [ETIQUETA_ANUNCIO]);
+    return true;
+  } catch (err) {
+    logger.warn({ conversa, err: String(err) }, `${ID_ORIGEM}: não consegui pôr a etiqueta ${ETIQUETA_ANUNCIO}`);
+    return false;
+  }
+}
+
 /** Roda quando o servidor achou o referral de anúncio de uma mensagem. Não lança. */
 export async function preencherOrigem(
   e: { slug: string; contato: number; conversa: number; ref: ReferralDoKapso },
