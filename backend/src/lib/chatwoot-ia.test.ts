@@ -470,7 +470,9 @@ test('LIGADO: passou para a equipe conta mesmo com a resposta descartada; Pix re
     eventos.push(e.tipo);
   };
   assert.equal(await rodarSofia(M, a.p, novaMemoriaDaIa()), 'mudou');
-  assert.deepEqual(eventos, ['equipe']);
+  // o painel só conta marcou/equipe/pix; «decisao» é linha da aba Registro (a resposta foi descartada)
+  assert.deepEqual(eventos.filter((t) => t !== 'decisao'), ['equipe']);
+  assert.deepEqual(eventos.filter((t) => t === 'decisao'), ['decisao']);
 
   const b = portas({ estado: 'ligado', sofia: { pix: 'PIX' } });
   const deB: string[] = [];
@@ -492,5 +494,50 @@ test('SECO: nenhum evento (nada aconteceu de verdade)', async () => {
     eventos.push(e.tipo);
   };
   assert.equal(await rodarSofia(M, a.p, novaMemoriaDaIa()), 'nota');
-  assert.deepEqual(eventos, []);
+  // nada aconteceu de verdade: nenhum evento do painel; só a linha «só no papel» do Registro
+  assert.deepEqual(eventos.filter((t) => t !== 'decisao'), []);
+  assert.deepEqual(eventos, ['decisao']);
+});
+
+// ── aba Registro (14/11): a rodada em que ela NÃO respondeu fica gravada com o motivo; a que respondeu, não (já está em sofia_mensagem) ──
+test('REGISTRO: calada grava «decisao» com o motivo; enviada não grava decisão; ocupada não grava', async () => {
+  const ev: Array<{ tipo: string; nome?: string | null; detalhe?: string | null }> = [];
+  const a = portas({ estado: 'ligado', lida: { etiquetas: ['ia-pausada'] } });
+  a.p.registrarEvento = async (e) => {
+    ev.push(e);
+  };
+  assert.equal(await rodarSofia(M, a.p, novaMemoriaDaIa()), 'calada');
+  assert.deepEqual(ev.map((e) => [e.tipo, e.nome, e.detalhe]), [['decisao', 'calada', 'ia-pausada']]);
+
+  const b = portas({ estado: 'ligado', sofia: { resposta: 'Oi!' } });
+  const evB: string[] = [];
+  b.p.registrarEvento = async (e) => {
+    evB.push(e.tipo);
+  };
+  b.p.publica = async () => ({ usuario: 3, mensagem: 700 });
+  assert.equal(await rodarSofia(M, b.p, novaMemoriaDaIa()), 'enviada');
+  assert.deepEqual(evB, []);
+
+  const mem = novaMemoriaDaIa();
+  mem.emAndamento.add(M.conversa);
+  const evC: string[] = [];
+  const c = portas({ estado: 'ligado' });
+  c.p.registrarEvento = async (e) => {
+    evC.push(e.tipo);
+  };
+  assert.equal(await rodarSofia(M, c.p, mem), 'ocupada');
+  assert.deepEqual(evC, []);
+});
+
+test('REGISTRO: unidade desligada anota «unidade-pausada» uma vez por hora por conversa e não roda a Sofia', async () => {
+  const ev: Array<{ tipo: string; nome?: string | null }> = [];
+  const a = portas({ estado: 'desligado' });
+  a.p.registrarEvento = async (e) => {
+    ev.push(e);
+  };
+  const mem = novaMemoriaDaIa();
+  await aoChegar(M, a.p, mem);
+  await aoChegar(M, a.p, mem);
+  assert.deepEqual(ev.map((e) => [e.tipo, e.nome]), [['decisao', 'unidade-pausada']]);
+  assert.equal(mem.esperas.size, 0, 'não agenda rodada');
 });

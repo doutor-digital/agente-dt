@@ -7,6 +7,7 @@
  *   POST /api/public/agente/avaliacoes/:id/revisar  { slug, como: regra | pedido | ok }
  *   GET  /api/public/agente/pedidos?slug=           pedidos à Doutor Digital feitos pela unidade
  *   POST /api/public/agente/pedidos                 { slug, tipo, texto, conversa? } → demanda no suporte + aviso no bot de chamados
+ *   GET  /api/public/agente/registro?slug=&conversa=&tipo=   o que a Sofia fez (e não fez) nos últimos 7 dias, por conversa
  *
  * As regras, a conversa de teste e as pausadas usam as rotas de /aprendizados e /testar-ia, que já aceitam o login do Chatwoot.
  */
@@ -19,6 +20,7 @@ import { COMO_REVISOU, marcarRevisada, resumoDaUnidade, type ComoRevisou } from 
 import { MAX_PEDIDOS_POR_DIA, avisoDoPedido, criarPedido, lerPedido, marcarAvisado, pedidosDaUnidade, pedidosHoje, TIPOS_DE_PEDIDO } from '../lib/agente-pedidos.js';
 import { paginaDoAgente } from '../lib/agente-pagina.js';
 import { lerPeriodo, painelDaUnidade } from '../lib/agente-painel.js';
+import { lerTipoDoRegistro, registroDaUnidade } from '../lib/sofia-registro.js';
 
 const slugDe = (v: unknown): string => (typeof v === 'string' ? v.trim().slice(0, 80) : '');
 
@@ -105,5 +107,19 @@ export async function agenteNovoPedidoHandler(req: Request, res: Response): Prom
   } catch (e) {
     logger.warn({ err: String(e), unit: r.unit.slug }, 'agente: pedido falhou');
     res.status(502).json({ error: 'não consegui registrar o pedido agora. Tente de novo em instantes.' });
+  }
+}
+
+/** Aba «Registro»: o que a Sofia fez e por quê (respostas, marcou, equipe, Pix, avaliações, e quando NÃO respondeu). */
+export async function agenteRegistroHandler(req: Request, res: Response): Promise<void> {
+  const r = await atendenteDaUnidade(req, res, slugDe(req.query.slug));
+  if (!r) return;
+  const n = Number(req.query.conversa);
+  const conversa = Number.isInteger(n) && n > 0 ? n : null;
+  try {
+    res.set('Cache-Control', 'no-store').json(await registroDaUnidade(r.unit.slug, { conversa, tipo: lerTipoDoRegistro(req.query.tipo) }));
+  } catch (e) {
+    logger.warn({ err: String(e), unit: r.unit.slug }, 'agente: registro falhou');
+    res.status(502).json({ error: 'não consegui ler o registro agora' });
   }
 }

@@ -161,7 +161,7 @@ import {
   funilTarefaHandler,
 } from '../controllers/funil.controller.js';
 import { assistenteAvaliarHandler, assistenteRespostasHandler, assistenteEstadoHandler, assistentePausaAcaoHandler, assistentePausaEstadoHandler, assistentePerguntarHandler, assistenteSugerirHandler } from '../controllers/assistente.controller.js';
-import { agenteNovoPedidoHandler, agentePainelHandler, agentePedidosHandler, agenteRevisarHandler } from '../controllers/agente-chatwoot.controller.js';
+import { agenteNovoPedidoHandler, agentePainelHandler, agentePedidosHandler, agenteRegistroHandler, agenteRevisarHandler } from '../controllers/agente-chatwoot.controller.js';
 import { centralChamadoFeitoHandler, centralChamadosHandler, centralEstadoHandler, centralGeralHandler, centralPessoaHandler } from '../controllers/central.controller.js';
 import { lidaEvolutionHandler } from '../lib/chatwoot-lida.js';
 import { eventoChatwootHandler } from '../lib/chatwoot-ia.js';
@@ -397,6 +397,7 @@ apiRouter.get('/public/agente/painel', agentePainelHandler);
 apiRouter.post('/public/agente/avaliacoes/:id/revisar', agenteRevisarHandler);
 apiRouter.get('/public/agente/pedidos', agentePedidosHandler);
 apiRouter.post('/public/agente/pedidos', agenteNovoPedidoHandler);
+apiRouter.get('/public/agente/registro', agenteRegistroHandler);
 // Funil de etapas do Chatwoot (Dashboard App): chave X-Funil-Chave derivada do token do Chatwoot (sem sessão).
 apiRouter.post('/public/central/estado', centralEstadoHandler);
 apiRouter.post('/public/central/geral', centralGeralHandler);
