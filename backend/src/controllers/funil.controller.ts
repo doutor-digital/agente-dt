@@ -2,7 +2,7 @@
  * Funil de etapas encaixado no Chatwoot (Dashboard App) — ver `lib/funil-chatwoot.ts`.
  *
  * Página `GET /funil` (item "Funil" do menu e aba "Funil" da conversa; visual no molde do funil do Kommo) e as rotas dela:
- *   GET  /api/public/funil/quadro?caixa=<id>   colunas por etapa (até 200 conversas vivas + arquivo com etapa, até 1.000), soma em R$, situação da tarefa
+ *   GET  /api/public/funil/quadro?caixa=<id>   colunas por etapa (até 200 conversas; para nas páginas só de histórico), soma em R$, situação da tarefa
  *   GET  /api/public/funil/caixas              caixas de entrada (o filtro do topo)
  *   GET  /api/public/funil/conversa/:id        a ficha do lead (campos, contato, histórico, tarefas)
  *   POST /api/public/funil/mover               { conversaId, etapa } — grava a etapa e deixa nota interna
@@ -257,9 +257,9 @@ async function vencimentosAbertos(conta: number, ids: number[]): Promise<Map<num
  * Com ?caixa=, só ela (caixa de histórico pedida direto = nada).
  */
 async function paginasDasCaixas(a: Acesso, caixa: number, arquivo: Arquivo = 'fora'): Promise<unknown[]> {
-  // com o histórico unificado o canal oficial passa de 800 conversas: as vivas vêm primeiro (ordem da última atividade), mas o
-  // arquivo com etapa pode estar mais para trás — o quadro e Oportunidades leem até 40 páginas (4 por vez)
-  return (await lerCaixas(a, caixa, arquivo === 'com-etapa' ? MAX_PAGINAS_COM_ARQUIVO : MAX_PAGINAS, false, 4, arquivo)).paginas;
+  // com o histórico unificado o canal oficial passa de 900 conversas: as vivas vêm primeiro (ordem da última atividade) e a leitura
+  // para na 1ª página só de histórico (4 páginas por vez, até MAX_PAGINAS)
+  return (await lerCaixas(a, caixa, MAX_PAGINAS, false, 4, arquivo)).paginas;
 }
 
 /**
@@ -267,7 +267,6 @@ async function paginasDasCaixas(a: Acesso, caixa: number, arquivo: Arquivo = 'fo
  * (Hoje, Marketing, Gestor); 'com-etapa' = só as que têm etapa (quadro do funil e Oportunidades).
  */
 export type Arquivo = 'fora' | 'com-etapa';
-const MAX_PAGINAS_COM_ARQUIVO = 40;
 export function semArquivo(pg: any, arquivo: Arquivo): any {
   const lista = pg?.data?.payload;
   if (!Array.isArray(lista)) return pg;
@@ -299,7 +298,9 @@ async function lerCaixas(a: Acesso, caixa: number, maxPaginas: number, soDeUnida
         if (crua.length < 25) acabou = true;
         // a lista vem pela última atividade (mais nova primeiro) e o arquivo é sempre mais velho que as conversas vivas: página
         // cheia só de arquivo = dali para trás é tudo arquivo — quem não mostra arquivo para de ler (sem «cortou» falso)
-        if (arquivo === 'fora' && crua.length > 0 && crua.every((c) => ehArquivo(c))) acabou = true;
+        // vale para os dois modos (14/11: o quadro lia até 40 páginas e ficou lento com as 919 conversas do canal oficial; nenhum
+        // arquivo tem etapa ainda) — o arquivo com etapa que estiver nessa página ainda entra
+        if (crua.length > 0 && crua.every((c) => ehArquivo(c))) acabou = true;
         paginas.push(semArquivo(pg, arquivo));
       }
       if (acabou) break;
