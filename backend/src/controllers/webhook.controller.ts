@@ -79,6 +79,7 @@ import { esquemaDaUnidade as esquemaKommoDaUnidade } from '../lib/kommo-schema.j
 import { etapaPermitida, precisaDoFunil, type FunisDaConta } from '../lib/etapa-permitida.js';
 import { etapaCalada, notaSofiaCalada, REGRA_NOTA_CALADA, sofiaCaladaLiberada } from '../lib/sofia-calada.js';
 import { portaPacienteEmTratamento } from '../lib/paciente-em-tratamento-porta.js';
+import { portaRodaNoTurno } from '../lib/paciente-em-tratamento.js';
 import { garantirTituloPadrao } from '../lib/titulo-padrao.js';
 import { telefoneDeFamiliarNoCartao } from '../lib/telefone-de-familiar.js';
 import { SpineSyncService } from '../services/spine-sync.service.js';
@@ -1687,7 +1688,8 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
 
   // PACIENTE EM TRATAMENTO num cartão novo e vazio (14/11/2026) e NÚMERO INTERNO: a Sofia não responde. Chave
   // `calar-paciente-em-tratamento`; em "só no papel" só registra. Desligada, não lê nem o cartão. Nunca derruba o atendimento.
-  if (isChatMessage && humanMessage.trim()) {
+  // Turno aberto pela Ponte ("Passar para a Sofia"): a equipe mandou a Sofia falar — a porta não vale neste turno.
+  if (portaRodaNoTurno({ isChatMessage, humanMessage, passadoPelaPonte: passadoPelaPonteAgora(unit.id, leadId) })) {
     const calar = await portaPacienteEmTratamento({ unit, leadId, contactId, humanMessage: semAReferencia(humanMessage) });
     if (calar?.decisao.calar) {
       const d = calar.decisao;

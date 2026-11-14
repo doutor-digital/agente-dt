@@ -8,6 +8,7 @@ import {
   entradaDoIndice,
   notaNumeroInterno,
   notaPacienteEmTratamento,
+  portaRodaNoTurno,
   precisaConsultarFranquia,
   sinalDaFicha,
   TIMEOUT_FRANQUIA_MS,
@@ -161,4 +162,11 @@ test('a chave no catálogo: id estável, nasce desligada, tem modo seco, e o est
   _semearParaTeste([{ slug: 'doutor-hernia-caxias', automacao: 'calar-paciente-em-tratamento', estado: 'seco' }]);
   assert.equal(estadoDaAutomacao('doutor-hernia-caxias', 'calar-paciente-em-tratamento', undefined), 'seco');
   _semearParaTeste([]);
+});
+
+test('porta: turno aberto pela Ponte ("Passar para a Sofia") NUNCA cala — a equipe mandou a Sofia falar', () => {
+  assert.equal(portaRodaNoTurno({ isChatMessage: true, humanMessage: 'Confirmado', passadoPelaPonte: true }), false);
+  assert.equal(portaRodaNoTurno({ isChatMessage: true, humanMessage: 'Confirmado', passadoPelaPonte: false }), true);
+  assert.equal(portaRodaNoTurno({ isChatMessage: true, humanMessage: '   ', passadoPelaPonte: false }), false);
+  assert.equal(portaRodaNoTurno({ isChatMessage: false, humanMessage: 'Confirmado', passadoPelaPonte: false }), false);
 });

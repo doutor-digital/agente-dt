@@ -69,6 +69,14 @@ export function ehFunilComercial(funil: string | null | undefined): boolean {
   return normalizarNome(funil ?? '').includes('comercial');
 }
 
+/**
+ * Puro: a porta roda neste turno? Só em mensagem de chat com texto, e NUNCA em turno aberto pela Ponte ("Passar para a
+ * Sofia"): foi a própria equipe que mandou a Sofia falar — calar ali contraria a ordem da menina (mesma regra da pausa-equipe).
+ */
+export function portaRodaNoTurno(t: { isChatMessage: boolean; humanMessage: string; passadoPelaPonte: boolean }): boolean {
+  return t.isChatMessage && t.humanMessage.trim().length > 0 && !t.passadoPelaPonte;
+}
+
 /** Puro. Quando a decisão precisa da franquia: interno decide sozinho; cartão sem idClient no COMERCIAL consulta. */
 export function precisaConsultarFranquia(e: Pick<EntradaDaDecisao, 'interno' | 'temIdClient' | 'funil'>): boolean {
   return !e.interno && !e.temIdClient && ehFunilComercial(e.funil);
