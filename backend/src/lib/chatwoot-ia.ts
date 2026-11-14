@@ -28,7 +28,7 @@ import { aplicarEtiqueta, eventoDeEtiqueta, portasDaPonte, type PortasDaPonte } 
 import { eventoDePausa, eventoDeReativacao, pausar, portaDaPausaDoChatwoot, reativar, type PortaDaPausa } from './chatwoot-pausa.js';
 import { aplicarResolucao, eventoDeResolucao, portasDoResolver, type PortasDoResolver } from './chatwoot-resolver.js';
 import { aplicarReferralDoKapso, mensagemParaConsultar } from './kapso-referral.js';
-import { portasDaOrigem, preencherOrigem, type PortasDaOrigem } from './chatwoot-origem.js';
+import { etiquetarAnuncio, portasDaOrigem, preencherOrigem, type PortasDaOrigem } from './chatwoot-origem.js';
 import { transcribeAudio } from '../services/transcription.service.js';
 import { registrarEventoDaSofia, registrarRespostaDaSofia, ultimaFalaDoPaciente, type EventoDaSofia } from './sofia-avaliacoes.js';
 import { portaDoRobo, tokenDoRobo } from './chatwoot-sofia-bot.js';
@@ -546,14 +546,14 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
 
 // ── a rota ─────────────────────────────────────────────────────────────────────────────────────────
 
-let estado: { portas: PortasDaIa; mem: MemoriaDaIa; ponte: PortasDaPonte; pausa: PortaDaPausa; resolver: PortasDoResolver; origem: PortasDaOrigem } | null = null;
+let estado: { portas: PortasDaIa; mem: MemoriaDaIa; ponte: PortasDaPonte; pausa: PortaDaPausa; resolver: PortasDoResolver; origem: PortasDaOrigem; chat: PortaDoChatwoot } | null = null;
 
 function estadoDoReceptor() {
   if (!estado) {
     const conta = contaChatwootDoAmbiente();
     if (!conta) return null;
     const ctx = criarContextoChatwoot(conta);
-    estado = { portas: portasReais(ctx), mem: novaMemoriaDaIa(), ponte: portasDaPonte(ctx), pausa: portaDaPausaDoChatwoot(ctx), resolver: portasDoResolver(ctx), origem: portasDaOrigem(ctx) };
+    estado = { portas: portasReais(ctx), mem: novaMemoriaDaIa(), ponte: portasDaPonte(ctx), pausa: portaDaPausaDoChatwoot(ctx), resolver: portasDoResolver(ctx), origem: portasDaOrigem(ctx), chat: portaDoChatwoot(ctx) };
   }
   return estado;
 }
@@ -601,6 +601,8 @@ export function eventoChatwootHandler(req: Request, res: Response): void {
     const r = estadoDoReceptor();
     void aplicarReferralDoKapso(consultar, {
       aoAchar: async (m, ref) => {
+        // etiqueta «anuncio» na conversa (informação: vale com a origem desligada) — chatwoot-origem.ts
+        if (r) await etiquetarAnuncio(m.conversa, ref, (c, e) => r.chat.adicionarEtiquetas(c, e));
         const slug = CAIXAS_REGUA[m.caixa];
         if (r && slug && m.contato) await preencherOrigem({ slug, contato: m.contato, conversa: m.conversa, ref }, r.origem);
       },

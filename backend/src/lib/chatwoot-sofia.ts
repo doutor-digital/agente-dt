@@ -71,7 +71,9 @@ const ETAPAS_QUE_VIRAM_AGENDADO = new Set(['', 'Novo lead', 'Sofia qualifica', '
 export const ETAPAS_DA_SOFIA = ['Sofia qualifica', 'Frio', 'Perdido'] as const;
 export const ETIQUETA_HUMANO = 'esperando-humano';
 /** Etiquetas que DISPARAM a régua ou marcam outro processo: a Sofia não as põe. */
-const ETIQUETAS_RESERVADAS = new Set(['confirmar-retorno', 'retomada', 'reativacao', 'boas-vindas', 'aderencia-meio', 'sem-follow-up', 'pagou-antecipado', 'respondeu-pelo-celular', ETIQUETA_HUMANO, 'interno', 'sem-resposta', 'pendente-de-revisao']);
+const ETIQUETAS_RESERVADAS = new Set(['confirmar-retorno', 'retomada', 'reativacao', 'boas-vindas', 'aderencia-meio', 'sem-follow-up', 'pagou-antecipado', 'respondeu-pelo-celular', ETIQUETA_HUMANO, 'interno', 'sem-resposta', 'pendente-de-revisao',
+  // «anuncio» = veio de anúncio COMPROVADO pelo Kapso (chatwoot-origem.ts); palpite da Sofia ("vi o anúncio") misturaria a pasta
+  'anuncio']);
 
 /**
  * A Sofia deve ficar calada? Contato interno, conversa já passada para a equipe, paciente em tratamento (o funil de tratamento é humano)

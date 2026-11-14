@@ -94,3 +94,27 @@ test('nomes do anúncio: token só no cabeçalho, cache, recusa da Meta = null',
   limparCacheDaOrigem();
   assert.equal(await nomesDoAnuncio('999999', 't', (async () => ({ ok: false, status: 400, json: async () => ({ error: { code: 100 } }) })) as any), null);
 });
+
+// ── etiqueta «anuncio» na conversa (14/11/2026) ──────────────────────────────
+const { etiquetarAnuncio, ETIQUETA_ANUNCIO } = await import('./chatwoot-origem.js');
+
+test('etiquetarAnuncio: anúncio comprovado → acrescenta «anuncio» na conversa', async () => {
+  const chamadas: Array<[number, string[]]> = [];
+  const ok = await etiquetarAnuncio(900, REF, async (c, e) => { chamadas.push([c, e]); }, {});
+  assert.equal(ok, true);
+  assert.deepEqual(chamadas, [[900, [ETIQUETA_ANUNCIO]]]);
+  assert.equal(ETIQUETA_ANUNCIO, 'anuncio');
+});
+
+test('etiquetarAnuncio: publicação (tipo post) não ganha; CHATWOOT_ETIQUETA_ANUNCIO=0 desliga', async () => {
+  let n = 0;
+  const conta = async () => { n++; };
+  assert.equal(await etiquetarAnuncio(900, { ...REF, tipo: 'post', anuncio: null }, conta, {}), false);
+  assert.equal(await etiquetarAnuncio(900, REF, conta, { CHATWOOT_ETIQUETA_ANUNCIO: '0' }), false);
+  assert.equal(n, 0);
+});
+
+test('etiquetarAnuncio: Chatwoot falhou → não lança (o referral já foi guardado)', async () => {
+  const ok = await etiquetarAnuncio(900, REF, async () => { throw new Error('Chatwoot 500'); }, {});
+  assert.equal(ok, false);
+});

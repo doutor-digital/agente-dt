@@ -382,6 +382,13 @@ test('registrar_qualificacao e aplicar_tag: conferem a lista viva; etiqueta rese
   assert.equal(etiquetaNormalizada('  Indicação  Médica '), 'indicacao-medica');
 });
 
+test('aplicar_tag: «anuncio» é só do servidor (anúncio comprovado no Kapso); a Sofia é recusada mesmo com acento e a etiqueta existindo', async () => {
+  const m = montar('ligado', { chat: chatFalso({ etiquetasDaConta: ['quente', 'anuncio'] }) });
+  const r = await m.por('aplicar_tag').invoke({ tags: ['Anúncio', 'quente'] });
+  assert.match(r, /RECUSADO \(não é sua\): anuncio/);
+  assert.deepEqual(m.chat.etiquetas, [['quente']]);
+});
+
 test('quando não responder: espera por humano, em tratamento, grupo', () => {
   const c = (o: Partial<ConversaLida>): ConversaLida => ({ id: 1, nome: '', telefone: '+55', attrs: {}, etiquetas: [], grupo: false, interno: false, ...o });
   assert.equal(motivoDeNaoResponder(c({})), null);
