@@ -26,6 +26,7 @@ import { chamar, contaChatwootDoAmbiente, criarContextoChatwoot, type ContextoCh
 import { CAIXAS_REGUA } from './chatwoot-regua.js';
 import { aplicarEtiqueta, eventoDeEtiqueta, portasDaPonte, type PortasDaPonte } from './chatwoot-etiquetas.js';
 import { eventoDePausa, eventoDeReativacao, pausar, portaDaPausaDoChatwoot, reativar, type PortaDaPausa } from './chatwoot-pausa.js';
+import { aplicarResolucao, eventoDeResolucao, portasDoResolver, type PortasDoResolver } from './chatwoot-resolver.js';
 import { transcribeAudio } from '../services/transcription.service.js';
 import { registrarEventoDaSofia, registrarRespostaDaSofia, ultimaFalaDoPaciente, type EventoDaSofia } from './sofia-avaliacoes.js';
 import { rodarTesteDaSofia } from '../controllers/playground.controller.js';
@@ -246,6 +247,8 @@ export interface MemoriaDaIa {
   avisosDeHorario: Set<string>;
   /** o(s) usuário(s) do Chatwoot que mandam as nossas mensagens (para não tomar a fala da Sofia por fala da equipe) */
   usuariosDaIntegracao: Set<number>;
+  /** conversa → quando o Registro anotou «Sofia desligada nesta unidade» (uma vez por hora por conversa) */
+  registrosDeDesligada: Map<number, number>;
 }
 export const novaMemoriaDaIa = (): MemoriaDaIa => ({
   esperas: new Map(),
@@ -254,13 +257,23 @@ export const novaMemoriaDaIa = (): MemoriaDaIa => ({
   emAndamento: new Set(),
   avisosDeHorario: new Set(),
   usuariosDaIntegracao: new Set(),
+  registrosDeDesligada: new Map(),
 });
 /** Se a rodada anterior da mesma conversa ainda não acabou, tenta de novo depois disto. */
 export const REPETE_SE_OCUPADA_MS = 15_000;
 
 /** Uma mensagem do paciente chegou: transcreve o áudio agora; a Sofia, só depois de 60 s quieto (reagenda a cada fala). */
 export async function aoChegar(m: MensagemDoPaciente, p: PortasDaIa, mem: MemoriaDaIa): Promise<void> {
-  if (p.estado(m.slug) === 'desligado') return;
+  if (p.estado(m.slug) === 'desligado') {
+    // aba Registro: «por que ela não respondeu?» — uma linha por conversa por hora, sem tocar em mais nada
+    const antes = mem.registrosDeDesligada.get(m.conversa) ?? 0;
+    if (Date.now() - antes >= 3_600_000 && p.registrarEvento) {
+      mem.registrosDeDesligada.set(m.conversa, Date.now());
+      if (mem.registrosDeDesligada.size > 5000) mem.registrosDeDesligada.clear();
+      await p.registrarEvento({ slug: m.slug, conversa: m.conversa, tipo: 'decisao', nome: 'unidade-pausada' }).catch(() => undefined);
+    }
+    return;
+  }
   if (m.audios.length) {
     const unit = await p.unidade(m.slug);
     if (unit) {
@@ -322,14 +335,43 @@ export async function rodarSofia(m: MensagemDoPaciente, p: PortasDaIa, mem: Memo
   if (modo === 'desligado') return 'desligado';
   if (mem.emAndamento.has(m.conversa)) return 'ocupada';
   mem.emAndamento.add(m.conversa);
+  const info: InfoDaRodada = {};
+  let desfecho: Desfecho = 'falhou';
   try {
-    return await rodarSofiaDessaConversa(m, p, mem, modo);
+    desfecho = await rodarSofiaDessaConversa(m, p, mem, modo, info);
+    return desfecho;
   } finally {
     mem.emAndamento.delete(m.conversa);
+    // aba Registro: a rodada em que ela NÃO respondeu ao paciente, e por quê (a resposta enviada já fica em sofia_mensagem)
+    if (DESFECHOS_DO_REGISTRO.has(desfecho) && p.registrarEvento) {
+      await p
+        .registrarEvento({ slug: m.slug, conversa: m.conversa, tipo: 'decisao', nome: desfecho, detalhe: info.motivo ?? null })
+        .catch((err) => logger.warn({ err: String(err), conversa: m.conversa }, `${ID_IA}: não consegui gravar a decisão no Registro`));
+    }
   }
 }
 
-async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem: MemoriaDaIa, modo: ModoDaSofia): Promise<Desfecho> {
+/** O que a rodada conta para o Registro além do desfecho (ex.: por que ficou calada). */
+interface InfoDaRodada {
+  motivo?: string;
+}
+/** Desfechos que viram linha «não respondeu» no Registro (enviada já está em sofia_mensagem; ocupada é só uma nova tentativa). */
+export const DESFECHOS_DO_REGISTRO: ReadonlySet<Desfecho> = new Set<Desfecho>([
+  'nota',
+  'sem-texto',
+  'equipe-respondeu',
+  'mudou',
+  'teto',
+  'sem-unidade',
+  'falhou',
+  'calada',
+  'sem-telefone',
+  'horario-divergente',
+  'cartao-no-kommo',
+  'kommo-indisponivel',
+]);
+
+async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem: MemoriaDaIa, modo: ModoDaSofia, info: InfoDaRodada = {}): Promise<Desfecho> {
   const chaveDia = `${m.slug}|${p.hoje()}`;
   // o painel do Agente conta daqui; falhar ao gravar não atrapalha o paciente
   const evento = async (tipo: EventoDaSofia['tipo'], extra: { nome?: string | null; detalhe?: string | null } = {}) => {
@@ -348,6 +390,7 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
   const calar = motivoDeNaoResponder(lida);
   if (calar) {
     logger.info({ conversa: m.conversa, motivo: calar }, `${ID_IA}: a Sofia fica calada`);
+    info.motivo = calar;
     return 'calada';
   }
   if (!lida.telefone) {
@@ -364,6 +407,7 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
     return 'kommo-indisponivel';
   }
   if (cartao) {
+    info.motivo = `lead ${cartao.leadId} no Kommo`;
     const aviso = `${m.conversa}|${cartao.leadId}`;
     if (!mem.avisosDoKommo.has(aviso)) {
       mem.avisosDoKommo.add(aviso);
@@ -441,6 +485,7 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
   const agoraLida = await p.conversa(m.conversa).catch(() => null);
   const calou = agoraLida ? motivoDeNaoResponder(agoraLida) : null;
   if (calou) {
+    info.motivo = calou;
     logger.info({ conversa: m.conversa, motivo: calou, gravou }, `${ID_IA}: a conversa passou para a equipe enquanto a Sofia pensava — resposta descartada`);
     const nota = gravou ? alerta(`a conversa passou para a equipe (${calou}) enquanto ela pensava`) : null;
     if (nota) await p.nota(m.conversa, nota).catch(() => undefined);
@@ -483,14 +528,14 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
 
 // ── a rota ─────────────────────────────────────────────────────────────────────────────────────────
 
-let estado: { portas: PortasDaIa; mem: MemoriaDaIa; ponte: PortasDaPonte; pausa: PortaDaPausa } | null = null;
+let estado: { portas: PortasDaIa; mem: MemoriaDaIa; ponte: PortasDaPonte; pausa: PortaDaPausa; resolver: PortasDoResolver } | null = null;
 
 function estadoDoReceptor() {
   if (!estado) {
     const conta = contaChatwootDoAmbiente();
     if (!conta) return null;
     const ctx = criarContextoChatwoot(conta);
-    estado = { portas: portasReais(ctx), mem: novaMemoriaDaIa(), ponte: portasDaPonte(ctx), pausa: portaDaPausaDoChatwoot(ctx) };
+    estado = { portas: portasReais(ctx), mem: novaMemoriaDaIa(), ponte: portasDaPonte(ctx), pausa: portaDaPausaDoChatwoot(ctx), resolver: portasDoResolver(ctx) };
   }
   return estado;
 }
@@ -513,6 +558,12 @@ export function eventoChatwootHandler(req: Request, res: Response): void {
   if (reativa) {
     const e = estadoDoReceptor();
     if (e) void reativar(reativa.conversa, null, e.pausa).catch((err) => logger.warn({ err: String(err), conversa: reativa.conversa }, 'chatwoot-pausa: não consegui reativar'));
+  }
+  // resolvida sem os campos obrigatórios → etiqueta falta-etapa; completou depois → tira (chatwoot-resolver.ts)
+  const resol = eventoDeResolucao(req.body);
+  if (resol?.acao) {
+    const e = estadoDoReceptor();
+    if (e) void aplicarResolucao(resol, e.resolver).catch((err) => logger.warn({ err: String(err), conversa: resol.conversa }, 'chatwoot-resolver: falhou'));
   }
   // botão "Perdido: <motivo>" → etiqueta → etapa + motivo no cartão (chatwoot-etiquetas.ts)
   const etq = eventoDeEtiqueta(req.body);
