@@ -16,7 +16,15 @@ import {
   conversaDoChatwoot,
   decidirEtiquetaCelular,
   decidirRegua,
+  etiquetaDoModelo,
   janelaAberta,
+  MODELO_POR_ETIQUETA,
+  MODELOS_SEM_ETIQUETA,
+  notaDePedidoNaoEnviado,
+  horaEmBelem,
+  proximaAbertura,
+  REGRA_MODELO_ETIQUETA,
+  SUFIXO_PERDIDA,
   lerData,
   lerHora,
   notaDoSeco,
@@ -607,4 +615,174 @@ test('ehArquivo / arquivoComEtapa: só etiqueta historico + atividade antes do c
   assert.equal(arquivoComEtapa({ labels: ['historico'], last_activity_at: antes, custom_attributes: { etapa: 'Perdido' } }), true);
   assert.equal(arquivoComEtapa({ labels: ['historico'], last_activity_at: antes, custom_attributes: { etapa: ' ' } }), false);
   assert.equal(arquivoComEtapa({ labels: ['historico'], last_activity_at: depois, custom_attributes: { etapa: 'Perdido' } }), false, 'viva não é arquivo');
+});
+
+// ── etiqueta `modelo-*`: a equipe escolhe o modelo pondo a etiqueta ──────────────────────────────────
+
+const VESPERA = 'modelo-consulta-lembrete-vespera';
+const ATTRS_CONSULTA = { etapa: 'Agendado', situacao_consulta: 'Agendado', data_consulta: '2026-11-17', hora_consulta: '14:30' };
+
+test('modelo-*: as etiquetas saem de TEXTOS_PARAU, são válidas no Chatwoot e voltam ao modelo; o modelo que usa campo que o Chatwoot não tem fica sem', () => {
+  const todos = Object.keys(TEXTOS_PARAU);
+  assert.equal(todos.length, 33);
+  // o único que pede o nome do programa (campo que o Chatwoot não tem) nunca sairia: não ganha etiqueta
+  assert.deepEqual([...MODELOS_SEM_ETIQUETA], ['parau_sdr_boas_vindas_programa']);
+  const modelos = todos.filter((m) => !MODELOS_SEM_ETIQUETA.includes(m));
+  assert.equal(modelos.length, 32);
+  const etiquetas = modelos.map(etiquetaDoModelo);
+  assert.equal(new Set(etiquetas).size, 32, 'sem colisão');
+  for (const [i, e] of etiquetas.entries()) {
+    assert.match(e, /^modelo-[a-z0-9_-]+$/, e); // o Chatwoot só aceita letra minúscula, número, - e _
+    assert.ok(e.length <= 60, e);
+    assert.equal(MODELO_POR_ETIQUETA[e], modelos[i]);
+  }
+  assert.equal(Object.keys(MODELO_POR_ETIQUETA).length, 32);
+  assert.equal(MODELO_POR_ETIQUETA[etiquetaDoModelo('parau_sdr_boas_vindas_programa')], undefined);
+  assert.equal(etiquetaDoModelo('parau_consulta_lembrete_vespera'), VESPERA);
+  assert.equal(MODELO_POR_ETIQUETA['modelo-toString'], undefined);
+  // todo campo que sobrou nos 32 o Chatwoot sabe preencher (nenhum cai em «campo sem correspondente»)
+  for (const m of modelos) {
+    const r = renderizar(m, conv({ attrs: { data_consulta: '2026-11-17', hora_consulta: '14:30', proxima_sessao: '2026-11-20' }, atendente: 'Ana' }), U);
+    assert.deepEqual(r.faltando.filter((f) => /sem correspondente|programa/.test(f)), [], m);
+  }
+});
+
+test('modelo-*: etiqueta nova dispara o modelo certo, uma vez, em qualquer etapa', () => {
+  const v = { [`etiqueta:${VESPERA}`]: visto('sim', T0) };
+  const c = conv({ attrs: ATTRS_CONSULTA, etiquetas: [VESPERA] });
+  const r = rodar(c, T0, v);
+  assert.deepEqual(regras(r), ['modelo-etiqueta']);
+  assert.equal(r.disparos[0]!.modelo, 'parau_consulta_lembrete_vespera');
+  assert.equal(r.disparos[0]!.chave, `${VESPERA}@2026-11-16T12:00:00.000Z`);
+  assert.match(r.disparos[0]!.texto!, /^Olá, Maria\. A sua consulta é amanhã\./);
+  // uma vez: depois de feito, nem na varredura seguinte
+  assert.deepEqual(regras(rodar(c, '2026-11-16T12:10:00Z', v, [`modelo-etiqueta|${r.disparos[0]!.chave}`])), []);
+  // sem condição de etapa: Perdido, funil Tratamento, sem nada
+  for (const attrs of [{ etapa: 'Perdido' }, { funil: 'Tratamento', etapa_tratamento: 'Alta' }, {}]) {
+    assert.deepEqual(regras(rodar(conv({ attrs: { ...ATTRS_CONSULTA, ...attrs }, etiquetas: [VESPERA] }), T0, v)), ['modelo-etiqueta']);
+  }
+  // cada etiqueta, o seu modelo (e só ele)
+  const outra = 'modelo-alta-conclusao';
+  const dois = rodar(conv({ attrs: ATTRS_CONSULTA, etiquetas: [outra] }), T0, { [`etiqueta:${outra}`]: visto('sim', T0) });
+  assert.deepEqual(dois.disparos.map((d) => d.modelo), ['parau_alta_conclusao']);
+});
+
+test('modelo-*: ainda não chegou na hora, fora da janela espera, e passou do atraso máximo perde', () => {
+  const v = { [`etiqueta:${VESPERA}`]: visto('sim', T0) };
+  const c = conv({ attrs: ATTRS_CONSULTA, etiquetas: [VESPERA] });
+  assert.deepEqual(regras(rodar(c, '2026-11-16T11:59:00Z', v)), []); // antes de ser vista
+  const cedo = visto('sim', '2026-11-16T10:30:00Z'); // segunda 07:30 em Belém: janela fechada
+  assert.deepEqual(regras(rodar(c, '2026-11-16T10:30:00Z', { [`etiqueta:${VESPERA}`]: cedo })), []);
+  assert.deepEqual(regras(rodar(c, '2026-11-16T11:00:00Z', { [`etiqueta:${VESPERA}`]: cedo })), ['modelo-etiqueta']); // 08:00 abriu
+  const antiga = rodar(c, '2026-11-17T00:10:00Z', v); // 12 h e 10 min depois: passou do atraso máximo (12 h)
+  assert.deepEqual(antiga.perdidas, ['modelo-etiqueta']);
+  // não manda, mas também não cala: uma nota privada, dizendo como pedir de novo
+  assert.deepEqual(regras(antiga), [`${REGRA_MODELO_ETIQUETA}${SUFIXO_PERDIDA}`]);
+  assert.equal(antiga.disparos[0]!.texto, null);
+  assert.match(antiga.disparos[0]!.soNota!, /^🛑 modelo-consulta-lembrete-vespera NÃO enviado: passou do prazo .*\. Para tentar de novo: tire a etiqueta, espere 15 minutos e ponha de novo\.$/);
+  // a nota é uma por chave, e continua uma só em qualquer ciclo depois
+  const feitosNota = [`${REGRA_MODELO_ETIQUETA}${SUFIXO_PERDIDA}|${antiga.disparos[0]!.chave}`];
+  assert.deepEqual(regras(rodar(c, '2026-11-17T00:20:00Z', v, feitosNota)), []);
+  assert.deepEqual(regras(rodar(c, '2026-11-20T12:00:00Z', v, feitosNota)), []);
+  // o que já foi enviado nunca ganha nota de «perdido»
+  assert.deepEqual(regras(rodar(c, '2026-11-20T12:00:00Z', v, [`modelo-etiqueta|${antiga.disparos[0]!.chave}`])), []);
+  // outras regras seguem só com o log (sem nota)
+  assert.deepEqual(regras(rodar(conv({ attrs: PERDIDO }), '2026-11-18T12:00:00Z', { etapa: visto('Perdido', '2026-11-16T12:00:00Z') }, ['followup-48h|perdido@2026-11-16T12:00:00.000Z'])).filter((r) => r.endsWith(SUFIXO_PERDIDA)), []);
+});
+
+test('modelo-*: etiqueta que já estava na 1ª vista, ou em conversa do histórico, não dispara', () => {
+  const c = conv({ attrs: ATTRS_CONSULTA, etiquetas: [VESPERA] });
+  assert.deepEqual(regras(rodar(c, T0, { [`etiqueta:${VESPERA}`]: visto('sim', T0, true) })), []);
+  // 1ª vista com o worker já no ar: conversa nova (criada depois da partida) mostra a etiqueta como nova; do histórico, nunca
+  const partida = Z('2026-11-16T12:00:00Z');
+  const agora = Z('2026-11-16T12:10:00Z');
+  const nova = { ...conv({ attrs: ATTRS_CONSULTA, etiquetas: [VESPERA] }), criadaEm: Z('2026-11-16T12:05:00Z') };
+  const k = atualizarVistos(nova, new Map(), agora, { primeiraVez: false, desde: partida });
+  assert.equal(k.vistos.get(`etiqueta:${VESPERA}`)!.inicial, false);
+  assert.deepEqual(regras(decidirRegua(nova, { vistos: k.vistos, feitos: new Set() }, agora, U)), ['modelo-etiqueta']);
+  const antiga = { ...conv({ attrs: ATTRS_CONSULTA, etiquetas: [VESPERA, 'historico'] }), criadaEm: Z('2026-11-16T12:05:00Z') };
+  const h = atualizarVistos(antiga, new Map(), agora, { primeiraVez: false, desde: partida });
+  assert.equal(h.vistos.get(`etiqueta:${VESPERA}`)!.inicial, true);
+  assert.deepEqual(regras(decidirRegua(antiga, { vistos: h.vistos, feitos: new Set() }, agora, U)), []);
+  // etiqueta `modelo-*` que não é um dos 33 não é observada nem dispara
+  const estranha = conv({ attrs: ATTRS_CONSULTA, etiquetas: ['modelo-inventado'] });
+  assert.equal(atualizarVistos(estranha, new Map(), agora, { primeiraVez: false, desde: partida }).vistos.has('etiqueta:modelo-inventado'), false);
+  assert.equal(atualizarVistos(c, new Map(), agora, { primeiraVez: false, desde: partida }).vistos.has(`etiqueta:${VESPERA}`), true, 'a mesma checagem enxerga uma etiqueta real');
+  // o modelo sem etiqueta (precisa de campo que o Chatwoot não tem) também não é observado
+  const semEtiqueta = conv({ attrs: ATTRS_CONSULTA, etiquetas: [etiquetaDoModelo('parau_sdr_boas_vindas_programa')] });
+  assert.equal(atualizarVistos(semEtiqueta, new Map(), agora, { primeiraVez: false, desde: partida }).vistos.has(`etiqueta:${etiquetaDoModelo('parau_sdr_boas_vindas_programa')}`), false);
+  assert.deepEqual(regras(rodar(estranha, T0, { 'etiqueta:modelo-inventado': visto('sim', T0) })), []);
+});
+
+test('modelo-*: sem-follow-up segura (o paciente pediu para parar), sempre', () => {
+  const v = { [`etiqueta:${VESPERA}`]: visto('sim', T0) };
+  assert.deepEqual(regras(rodar(conv({ attrs: ATTRS_CONSULTA, etiquetas: [VESPERA, 'sem-follow-up'] }), T0, v)), []);
+  assert.deepEqual(regras(rodar(conv({ attrs: ATTRS_CONSULTA, etiquetas: [VESPERA] }), T0, v)), ['modelo-etiqueta']);
+});
+
+test('modelo-*: a etiqueta fica depois de mandar — segue presente, não repete; tirar e pôr de novo manda de novo', () => {
+  const partida = Z('2026-11-16T09:00:00Z');
+  const base = { ...conv({ attrs: ATTRS_CONSULTA }), criadaEm: Z('2026-10-01T00:00:00Z') };
+  const feitos = new Set<string>();
+  let vistosAgora = atualizarVistos(base, new Map(), partida, { primeiraVez: true, desde: null }).vistos;
+  const varrer = (c: ConversaRegua, quando: string) => {
+    const agora = Z(quando);
+    vistosAgora = atualizarVistos(c, vistosAgora, agora, { primeiraVez: false, desde: partida }).vistos;
+    const d = decidirRegua(c, { vistos: vistosAgora, feitos }, agora, U);
+    for (const x of d.disparos) feitos.add(`${x.regra}|${x.chave}`);
+    return d.disparos;
+  };
+  const com = { ...base, etiquetas: [VESPERA] };
+  assert.equal(varrer(com, '2026-11-16T12:00:00Z').length, 1); // pôs a etiqueta: manda
+  assert.equal(varrer(com, '2026-11-16T12:10:00Z').length, 0); // a etiqueta ficou: não repete
+  assert.equal(varrer(com, '2026-11-16T12:20:00Z').length, 0); // regra da Automação repondo etiqueta que já está = nada
+  assert.equal(varrer(base, '2026-11-16T12:30:00Z').length, 0); // tirou
+  const de_novo = varrer(com, '2026-11-16T12:40:00Z'); // pôs outra vez: nova chegada, chave nova
+  assert.equal(de_novo.length, 1);
+  assert.equal(de_novo[0]!.chave, `${VESPERA}@2026-11-16T12:40:00.000Z`);
+  assert.equal(varrer(com, '2026-11-16T12:50:00Z').length, 0);
+});
+
+test('modelo-*: campo faltando segue o caminho de sempre (texto nulo + o que falta; a nota do seco não repete)', () => {
+  const v = { [`etiqueta:${VESPERA}`]: visto('sim', T0) };
+  const c = conv({ attrs: { etapa: 'Agendado' }, etiquetas: [VESPERA] }); // sem data_consulta
+  const r = rodar(c, T0, v);
+  assert.deepEqual(regras(r), ['modelo-etiqueta']);
+  assert.equal(r.disparos[0]!.texto, null);
+  assert.ok(r.disparos[0]!.faltando.some((f) => /data da consulta/.test(f)));
+  assert.match(notaDoSeco(r.disparos[0]!), /NÃO enviaria agora, falta: data da consulta/);
+  const feitos = [`modelo-etiqueta${SUFIXO_FALTA}|${VESPERA}@2026-11-16T12:00:00.000Z`];
+  assert.deepEqual(regras(rodar(c, T0, v, feitos)), []);
+  // a nota mandou tirar e pôr a etiqueta: preencher o campo depois NÃO manda sozinho (senão tirar e pôr mandaria duas vezes)
+  assert.deepEqual(regras(rodar(conv({ attrs: ATTRS_CONSULTA, etiquetas: [VESPERA] }), T0, v, feitos)), []);
+  // tirou e pôs de novo (chave nova, campo preenchido): sai
+  const novaChegada = { [`etiqueta:${VESPERA}`]: visto('sim', '2026-11-16T12:30:00Z') };
+  assert.deepEqual(regras(rodar(conv({ attrs: ATTRS_CONSULTA, etiquetas: [VESPERA] }), '2026-11-16T12:30:00Z', novaChegada, feitos)), ['modelo-etiqueta']);
+  assert.equal(notaDePedidoNaoEnviado('parau_consulta_lembrete_vespera', 'falta a data'), '🛑 modelo-consulta-lembrete-vespera NÃO enviado: falta a data. Para tentar de novo: tire a etiqueta, espere 15 minutos e ponha de novo.');
+});
+
+test('modelo-*: etiqueta posta no sábado à noite sai na segunda de manhã (limite = próxima abertura + 2 h); depois disso, nota', () => {
+  // sábado 14/11 21:00 em Belém = domingo 15/11 00:00Z; a janela abre segunda 08:00 Belém = 11:00Z
+  const posta = visto('sim', '2026-11-15T00:00:00Z');
+  const v = { [`etiqueta:${VESPERA}`]: posta };
+  const c = conv({ attrs: ATTRS_CONSULTA, etiquetas: [VESPERA] });
+  assert.deepEqual(regras(rodar(c, '2026-11-15T15:00:00Z', v)), [], 'domingo: janela fechada, espera');
+  assert.deepEqual(rodar(c, '2026-11-15T15:00:00Z', v).perdidas, []);
+  assert.deepEqual(regras(rodar(c, '2026-11-16T11:00:00Z', v)), ['modelo-etiqueta'], 'segunda 08:00: sai');
+  assert.deepEqual(regras(rodar(c, '2026-11-16T12:59:00Z', v)), ['modelo-etiqueta'], 'até 2 h depois da abertura');
+  const tarde = rodar(c, '2026-11-16T13:01:00Z', v);
+  assert.deepEqual(regras(tarde), [`${REGRA_MODELO_ETIQUETA}${SUFIXO_PERDIDA}`], 'passou: só a nota');
+  // a hora na nota é a de Belém (sábado 21:00), não UTC (00:00 de domingo)
+  assert.match(tarde.disparos[0]!.soNota!, /a etiqueta chegou em 14\/11 21:00 \(Belém\) e/);
+  assert.doesNotMatch(tarde.disparos[0]!.soNota!, /UTC|15\/11|00:00/);
+  assert.equal(horaEmBelem(Z('2026-11-16T02:05:00Z')), '15/11 23:05 (Belém)');
+  assert.equal(horaEmBelem(Z('2026-12-01T01:00:00Z')), '30/11 22:00 (Belém)');
+  // já existe a nota de «falta campo» desta chave: não vem uma 2ª nota dizendo «passou do prazo»
+  const comFalta = rodar(c, '2026-11-16T13:01:00Z', v, [`${REGRA_MODELO_ETIQUETA}${SUFIXO_FALTA}|${VESPERA}@2026-11-15T00:00:00.000Z`]);
+  assert.deepEqual(regras(comFalta), []);
+  // as regras de sempre continuam nas 12 h: a véspera dentro da janela não ganhou prazo extra
+  assert.equal(proximaAbertura(Z('2026-11-15T00:00:00Z')).toISOString(), '2026-11-16T11:00:00.000Z');
+  assert.equal(proximaAbertura(Z('2026-11-16T12:07:00Z')).toISOString(), '2026-11-16T12:07:00.000Z', 'já aberta: o próprio instante');
+  assert.equal(proximaAbertura(Z('2026-11-16T23:30:00Z')).toISOString(), '2026-11-17T11:00:00.000Z', 'segunda 20:30 → terça 08:00');
+  assert.equal(proximaAbertura(Z('2026-11-14T23:00:00Z')).toISOString(), '2026-11-16T11:00:00.000Z', 'sábado 20:00 → segunda 08:00 (domingo não abre)');
 });

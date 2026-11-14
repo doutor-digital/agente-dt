@@ -20,6 +20,7 @@
  * (a régua lê a etapa; mover quem está em alta dispara mensagem de meses depois). Campo sim, etapa não.
  */
 import { ETIQUETA_PAUSA } from './chatwoot-pausa.js';
+import { PREFIXO_ETIQUETA_MODELO } from './chatwoot-regua.js';
 import { z } from 'zod';
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import type { Unit } from '@prisma/client';
@@ -105,6 +106,9 @@ export async function passarParaEquipeNoChatwoot(chat: PortaDoChatwoot, a: { con
   await chat.nota(a.conversa, `🙋 Sofia passou esta conversa para a equipe: ${a.motivo.slice(0, 300)}`);
   return etapa;
 }
+
+/** `modelo-*` dispara um modelo de WhatsApp pela régua (quem põe é a equipe): nunca é da Sofia, existam ou não na conta. */
+const ehReservada = (t: string): boolean => ETIQUETAS_RESERVADAS.has(t) || t.startsWith(PREFIXO_ETIQUETA_MODELO);
 
 export const etiquetaNormalizada = (t: string): string =>
   t
@@ -368,17 +372,17 @@ export function montarFerramentas(p: PedidoDasFerramentas): DynamicStructuredToo
   const aplicar_tag = new DynamicStructuredTool({
     name: 'aplicar_tag',
     description:
-      'Põe uma ou mais etiquetas na conversa. Só vale etiqueta que já existe na conta; as que disparam mensagens ou passam a conversa à equipe (confirmar-retorno, retomada, reativacao, boas-vindas, sem-follow-up, esperando-humano…) NÃO são suas. Para passar à equipe use pausar_ia.',
+      'Põe uma ou mais etiquetas na conversa. Só vale etiqueta que já existe na conta; as que disparam mensagens ou passam a conversa à equipe (confirmar-retorno, retomada, reativacao, boas-vindas, modelo-*, sem-follow-up, esperando-humano…) NÃO são suas. Para passar à equipe use pausar_ia.',
     schema: z.object({ tag: z.string().min(1).max(50).optional(), tags: z.array(z.string().min(1).max(50)).min(1).max(10).optional() }),
     func: async ({ tag, tags }: { tag?: string; tags?: string[] }) => {
       const pedidas = [...new Set([...(tag ? [tag] : []), ...(tags ?? [])].map(etiquetaNormalizada).filter(Boolean))];
       if (!pedidas.length) return 'Nenhuma etiqueta informada.';
-      const reservadas = pedidas.filter((t) => ETIQUETAS_RESERVADAS.has(t));
+      const reservadas = pedidas.filter(ehReservada);
       const daConta = await chat.etiquetasDaConta();
       const existentes = new Set(daConta.map(etiquetaNormalizada));
       const nomes = new Map(daConta.map((e) => [etiquetaNormalizada(e), e]));
-      const validas = pedidas.filter((t) => existentes.has(t) && !ETIQUETAS_RESERVADAS.has(t));
-      const inexistentes = pedidas.filter((t) => !existentes.has(t) && !ETIQUETAS_RESERVADAS.has(t));
+      const validas = pedidas.filter((t) => existentes.has(t) && !ehReservada(t));
+      const inexistentes = pedidas.filter((t) => !existentes.has(t) && !ehReservada(t));
       if (validas.length && !seco) await chat.adicionarEtiquetas(conversa, validas.map((t) => nomes.get(t) ?? t));
       return (
         (validas.length ? `${seco ? '[SECO] ' : ''}Etiqueta(s) aplicada(s): ${validas.join(', ')}. ` : '') +

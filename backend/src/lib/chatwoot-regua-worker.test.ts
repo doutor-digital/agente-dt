@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { automacaoPorId, verificarCatalogo } from './automacoes.js';
 import { CAIXAS_REGUA } from './chatwoot-regua.js';
-import { cicloDaCaixa, finalDoTelefone, paramsDoTemplate, SUFIXO_SEM_TEMPLATE, type EnvioTemplate, numeroDaGerente, MAX_ETIQUETAS_POR_CICLO, MAX_MENSAGENS_POR_CICLO, type Armazem, type Chat, type DepsDoCiclo, type LinhaVista } from './chatwoot-regua-worker.js';
+import { cicloDaCaixa, finalDoTelefone, paramsDoTemplate, SUFIXO_SEM_TEMPLATE, type EnvioTemplate, numeroDaGerente, MAX_ETIQUETAS_POR_CICLO, MAX_MENSAGENS_POR_CICLO, MAX_PEDIDOS_POR_CICLO, type Armazem, type Chat, type DepsDoCiclo, type LinhaVista } from './chatwoot-regua-worker.js';
 import type { DadosDaUnidade, MensagemResumo, Mudanca } from './chatwoot-regua.js';
 
 const U: DadosDaUnidade = { nome: 'Doutor Hérnia Parauapebas', pixKey: 'pix@parau.com', valorAntecipado: 250 };
@@ -665,4 +665,101 @@ test('UNIFICAÇÃO (controle): a MESMA conversa sem a etiqueta historico, nascid
     await cicloDaCaixa(deps(armazem, chat2), 2, 'x', 'seco', U, new Date(quando));
   }
   assert.ok(m2.some((m) => m.id === 11), 'sem a etiqueta, a régua age (prova que o teste de cima não passa à toa)');
+});
+
+// ── etiqueta modelo-*: o pedido de uma pessoa nunca se perde calado ──
+const MODELO_VESPERA = 'modelo-consulta-lembrete-vespera';
+const T_PARTIDA = new Date('2026-11-16T12:00:00Z');
+const T_ETIQUETA = new Date('2026-11-16T12:10:00Z');
+
+/** Conversa que não tinha a etiqueta no 1º ciclo (partida) e ganha no 2º. */
+async function comEtiquetaNova(modo: 'seco' | 'ligado', attrs: Record<string, unknown>, kommo?: DepsDoCiclo['kommo']) {
+  const f = armazemFalso();
+  let labels: string[] = [];
+  const c = chatFalso(() => [bruta(1, { attrs, labels })]);
+  const d = comKommo(f.armazem, c.chat, kommo);
+  await cicloDaCaixa(d, 2, 'x', modo, U, T_PARTIDA);
+  labels = [MODELO_VESPERA];
+  return { f, c, d, ciclo: (quando: Date) => cicloDaCaixa(d, 2, 'x', modo, U, quando) };
+}
+
+test('modelo-etiqueta, ligado, campo faltando: nota privada (uma só) dizendo o que falta e como pedir de novo; nada vai ao paciente', async () => {
+  const { f, c, ciclo } = await comEtiquetaNova('ligado', { etapa: 'Agendado' }); // sem data_consulta
+  const r = await ciclo(T_ETIQUETA);
+  assert.equal(r.faltando, 1);
+  assert.equal(c.mensagens.length, 1);
+  assert.equal(c.mensagens[0]!.privada, true);
+  assert.equal(c.mensagens[0]!.template, undefined);
+  assert.match(c.mensagens[0]!.texto, /^🛑 modelo-consulta-lembrete-vespera NÃO enviado: falta data da consulta \(data_consulta\)\. Para tentar de novo: tire a etiqueta, espere 15 minutos e ponha de novo\.$/);
+  assert.deepEqual(f.disparos.map((x) => x.regra), ['modelo-etiqueta!falta']);
+  // ciclos seguintes: nada de nota repetida
+  await ciclo(new Date(T_ETIQUETA.getTime() + 600_000));
+  await ciclo(new Date(T_ETIQUETA.getTime() + 1_200_000));
+  assert.equal(c.mensagens.length, 1);
+});
+
+test('modelo-etiqueta, ligado, outras regras com campo faltando seguem caladas (só o pedido por etiqueta avisa)', async () => {
+  const f = armazemFalso();
+  // véspera sem nome do contato (só telefone): continua sem nota no ligado
+  const c = chatFalso(() => [bruta(1, { attrs: CONSULTA, nome: '+55 94 99999-0000' })]);
+  await cicloDaCaixa(deps(f.armazem, c.chat), 2, 'x', 'ligado', U, new Date('2026-11-16T17:20:00Z'));
+  await cicloDaCaixa(deps(f.armazem, c.chat), 2, 'x', 'ligado', U, VESPERA);
+  assert.equal(c.mensagens.length, 0);
+  assert.equal(f.disparos.length, 0);
+});
+
+test('modelo-etiqueta, ligado + cartão ativo no Kommo: UMA nota por chave, no formato do pedido; o modelo não vai ao paciente', async () => {
+  const { f, c, ciclo } = await comEtiquetaNova('ligado', CONSULTA, async () => ({ leadId: 777 }));
+  await ciclo(T_ETIQUETA);
+  await ciclo(new Date(T_ETIQUETA.getTime() + 600_000));
+  await ciclo(new Date(T_ETIQUETA.getTime() + 1_200_000));
+  assert.equal(c.mensagens.length, 1);
+  assert.equal(c.mensagens[0]!.privada, true);
+  assert.match(c.mensagens[0]!.texto, /^🛑 modelo-consulta-lembrete-vespera NÃO enviado: o paciente tem cartão ativo no Kommo da unidade \(lead 777\); os robôs de lá cuidam\. Para tentar de novo: tire a etiqueta, espere 15 minutos e ponha de novo\.$/);
+  assert.equal(f.disparos.length, 1);
+});
+
+test('modelo-etiqueta, ligado: sem conseguir conferir o Kommo até passar do prazo, deixa UMA nota de «passou do prazo» (não cala)', async () => {
+  const kommoFora = async (): Promise<{ leadId: number } | null> => {
+    throw new Error('Kommo fora do ar');
+  };
+  const { f, c, ciclo } = await comEtiquetaNova('ligado', CONSULTA, kommoFora);
+  await ciclo(T_ETIQUETA);
+  assert.equal(c.mensagens.length, 0, 'dentro do prazo: tenta de novo no próximo ciclo');
+  const r = await ciclo(new Date('2026-11-17T00:30:00Z')); // 12 h 20 min depois da etiqueta
+  assert.equal(r.pedidosPerdidos, 1);
+  assert.equal(c.mensagens.length, 1);
+  assert.equal(c.mensagens[0]!.privada, true);
+  assert.match(c.mensagens[0]!.texto, /^🛑 modelo-consulta-lembrete-vespera NÃO enviado: passou do prazo .*\. Para tentar de novo: tire a etiqueta, espere 15 minutos e ponha de novo\.$/);
+  await ciclo(new Date('2026-11-17T00:40:00Z'));
+  await ciclo(new Date('2026-11-18T12:00:00Z'));
+  assert.equal(c.mensagens.length, 1);
+  assert.deepEqual(f.disparos.map((x) => x.regra), ['modelo-etiqueta!perdida']);
+});
+
+test('modelo-etiqueta, ligado: manda de verdade uma vez; ciclos seguintes não repetem', async () => {
+  const { c, ciclo } = await comEtiquetaNova('ligado', CONSULTA);
+  await ciclo(T_ETIQUETA);
+  await ciclo(new Date(T_ETIQUETA.getTime() + 600_000));
+  assert.equal(c.mensagens.length, 1);
+  assert.equal(c.mensagens[0]!.privada, false);
+  assert.match(c.mensagens[0]!.texto, /^Olá, Maria\. A sua consulta é amanhã\./);
+});
+
+test('modelo-etiqueta tem teto próprio por ciclo: uma enxurrada de etiquetas não tira a vez da véspera', async () => {
+  const f = armazemFalso();
+  let rotulo = false;
+  const muitas = Array.from({ length: MAX_MENSAGENS_POR_CICLO + 1 }, (_, i) => i + 1);
+  const c = chatFalso(() => [...muitas.map((id) => bruta(id, { attrs: {}, labels: rotulo ? ['modelo-alta-conclusao'] : [] })), bruta(500, { attrs: CONSULTA })]);
+  const d = deps(f.armazem, c.chat);
+  await cicloDaCaixa(d, 2, 'x', 'ligado', U, new Date('2026-11-16T17:20:00Z'));
+  rotulo = true;
+  const r = await cicloDaCaixa(d, 2, 'x', 'ligado', U, VESPERA);
+  const dosPedidos = c.mensagens.filter((m) => m.id !== 500);
+  assert.equal(dosPedidos.length, MAX_PEDIDOS_POR_CICLO);
+  assert.ok(c.mensagens.some((m) => m.id === 500 && /A sua consulta é amanhã/.test(m.texto)), 'a véspera saiu');
+  assert.equal(r.disparos, MAX_PEDIDOS_POR_CICLO + 1);
+  // o resto dos pedidos sai nos ciclos seguintes
+  await cicloDaCaixa(d, 2, 'x', 'ligado', U, new Date(VESPERA.getTime() + 600_000));
+  assert.equal(c.mensagens.filter((m) => m.id !== 500).length, Math.min(MAX_MENSAGENS_POR_CICLO + 1, 2 * MAX_PEDIDOS_POR_CICLO));
 });

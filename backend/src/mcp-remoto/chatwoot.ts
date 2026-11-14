@@ -9,7 +9,8 @@
  *
  * Criar e alterar é DIRETO (caixas, contatos, etiquetas, agentes, equipes, respostas prontas, atributos, automações, conversas).
  * Em DOIS passos, como a escrita do Kommo e o envio do WhatsApp: APAGAR qualquer coisa e tudo que MANDA mensagem a cliente
- * (mensagem pública numa conversa, conversa nova com mensagem, campanha). `chatwoot_preparar` mostra e devolve um código preso a
+ * (mensagem pública numa conversa, conversa nova com mensagem, campanha, etiqueta `modelo-*` — que a régua transforma em modelo de WhatsApp —
+ * posta numa conversa, em lote, ou numa automação/macro). `chatwoot_preparar` mostra e devolve um código preso a
  * quem pediu; `chatwoot_confirmar` executa. Cada apagamento confirmado avisa o João no Telegram.
  */
 import { randomBytes } from 'node:crypto';
@@ -18,6 +19,7 @@ import { z } from 'zod';
 import type { Auditar } from '../franquia-mcp/ferramentas.js';
 import { ErroDeEntrada } from '../franquia-mcp/travas.js';
 import { executar } from './ferramenta.js';
+import { PREFIXO_ETIQUETA_MODELO } from '../lib/chatwoot-regua.js';
 
 export interface ContaChatwoot {
   url: string;
@@ -78,8 +80,29 @@ export function caminhoSeguro(bruto: unknown): string {
 }
 
 /** Por que esta chamada precisa de dois passos, ou null (é direta). */
+/** Mesma normalização da Sofia (`etiquetaNormalizada`): minúscula, sem acento, qualquer separador vira `-`. */
+const etiquetaNormalizada = (t: string): string =>
+  t
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+
+/** Alguma etiqueta `modelo-*` em qualquer lugar do corpo (lista de etiquetas, `labels.add` do lote, `action_params` da automação/macro). */
+function temEtiquetaDeModelo(v: unknown, fundo = 0): boolean {
+  if (typeof v === 'string') return etiquetaNormalizada(v).startsWith(PREFIXO_ETIQUETA_MODELO);
+  if (fundo >= 6 || v === null || typeof v !== 'object') return false;
+  return Object.values(v).some((x) => temEtiquetaDeModelo(x, fundo + 1));
+}
+
 export function precisaConfirmar(metodo: Metodo, caminho: string, corpo?: Record<string, unknown>): string | null {
   if (metodo === 'DELETE') return 'apaga';
+  // etiqueta `modelo-*` MANDA mensagem ao paciente (a régua do Chatwoot manda o modelo de WhatsApp quando ela chega): pôr numa
+  // conversa, em lote ou numa regra de automação/macro é o mesmo que mandar
+  const poeEtiqueta = metodo === 'POST' && (/^conversations\/\d+\/labels$/.test(caminho) || caminho === 'bulk_actions');
+  const montaRegra = /^(automation_rules|macros)(\/\d+)?$/.test(caminho) && (metodo === 'POST' || metodo === 'PATCH' || metodo === 'PUT');
+  if ((poeEtiqueta || montaRegra) && temEtiquetaDeModelo(corpo)) return 'manda modelo de WhatsApp ao cliente';
   if (metodo !== 'POST') return null;
   // mensagem numa conversa: só a nota privada (private: true) é direta; a pública chega ao cliente
   if (/^conversations\/\d+\/messages$/.test(caminho) && corpo?.private !== true) return 'manda mensagem ao cliente';
@@ -240,7 +263,9 @@ export function registrarFerramentasChatwoot(server: McpServer, ctx: ContextoCha
       '{labels:[…]}, POST "conversations/5/assignments" {assignee_id}, POST "conversations/5/toggle_status" {status}, POST "canned_responses", ' +
       'POST "custom_attribute_definitions", POST "agents", POST "teams", POST "conversations/5/messages" {content, private:true} para NOTA ' +
       'interna). Criar e alterar é direto. APAGAR e o que manda mensagem ao cliente (mensagem pública, conversa nova com mensagem, campanha) ' +
-      'é recusado aqui: use chatwoot_preparar.',
+      'é recusado aqui: use chatwoot_preparar. Etiqueta "modelo-*" (ex. modelo-consulta-lembrete-vespera) também MANDA mensagem: a régua envia o modelo de ' +
+      'WhatsApp ao paciente quando ela chega. Pô-la numa conversa (POST "conversations/5/labels"), em lote (POST "bulk_actions") ou numa ' +
+      'automação/macro (add_label) pede os dois passos: chatwoot_preparar e, com o ok da pessoa, chatwoot_confirmar.',
     { metodo, caminho: z.string(), corpo, query },
     escrever,
     (a) => chamarDireto(ctx, a.metodo, a.caminho, a.corpo, a.query),

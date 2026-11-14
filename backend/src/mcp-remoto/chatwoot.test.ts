@@ -79,6 +79,45 @@ test('o que precisa de dois passos: apagar, mensagem pública, conversa nova com
   }
 });
 
+test('etiqueta modelo-* manda mensagem: pôr na conversa, em lote ou em automação/macro exige os dois passos', () => {
+  const MOTIVO = 'manda modelo de WhatsApp ao cliente';
+  // na conversa (qualquer grafia que a régua reconhece)
+  for (const e of ['modelo-consulta-lembrete-vespera', 'Modelo_Consulta_Lembrete_Vespera', ' MODELO consulta', 'Modêlo-alta-conclusao']) {
+    assert.equal(precisaConfirmar('POST', 'conversations/5/labels', { labels: ['quente', e] }), MOTIVO, e);
+  }
+  assert.equal(precisaConfirmar('POST', 'conversations/5/labels', { labels: ['quente', 'retorno'] }), null);
+  assert.equal(precisaConfirmar('POST', 'conversations/5/labels', { labels: [] }), null);
+  assert.equal(precisaConfirmar('POST', 'conversations/5/labels', {}), null);
+  // em lote
+  assert.equal(precisaConfirmar('POST', 'bulk_actions', { type: 'Conversation', ids: [1, 2], labels: { add: ['modelo-alta-conclusao'] } }), MOTIVO);
+  assert.equal(precisaConfirmar('POST', 'bulk_actions', { type: 'Conversation', ids: [1], labels: { add: ['quente'] } }), null);
+  // automação e macro: criar ou alterar com add_label modelo-*
+  const acoes = (p: string) => ({ name: 'x', event_name: 'conversation_updated', actions: [{ action_name: 'add_label', action_params: [p] }] });
+  for (const [m, c] of [['POST', 'automation_rules'], ['PATCH', 'automation_rules/7'], ['PUT', 'automation_rules/7'], ['POST', 'macros'], ['PATCH', 'macros/3']] as const) {
+    assert.equal(precisaConfirmar(m, c, acoes('modelo-sessao-falta')), MOTIVO, `${m} ${c}`);
+    assert.equal(precisaConfirmar(m, c, acoes('quente')), null, `${m} ${c} sem modelo`);
+  }
+  // criar a etiqueta (o cadastro, sem pôr em ninguém) segue direto; ler também
+  assert.equal(precisaConfirmar('POST', 'labels', { title: 'modelo-alta-conclusao' }), null);
+  assert.equal(precisaConfirmar('GET', 'automation_rules', {}), null);
+});
+
+test('modelo-* pelo conector: direto é recusado sem chamar a API; preparar mostra o motivo; confirmar executa', async () => {
+  const { f, chamadas } = falso();
+  const ctx = criarContextoChatwoot(CONTA, { fetch: f });
+  assert.throws(() => chamarDireto(ctx, 'POST', 'conversations/5/labels', { labels: ['modelo-alta-conclusao'] }), /chatwoot_preparar/);
+  assert.throws(() => chamarDireto(ctx, 'POST', 'automation_rules', { actions: [{ action_name: 'add_label', action_params: ['modelo-alta-conclusao'] }] }), /chatwoot_preparar/);
+  assert.equal(chamadas.length, 0);
+  const p = preparar(ctx, 'ana', { metodo: 'POST', caminho: 'conversations/5/labels', corpo: { labels: ['modelo-alta-conclusao'] } });
+  assert.match(p.vaiFazer, /manda modelo de WhatsApp ao cliente/);
+  assert.equal(chamadas.length, 0);
+  await confirmar(ctx, 'ana', p.codigo);
+  assert.equal(chamadas.length, 1);
+  // etiqueta comum continua direta
+  await chamarDireto(ctx, 'POST', 'conversations/5/labels', { labels: ['quente'] });
+  assert.equal(chamadas.length, 2);
+});
+
 test('chatwoot_api direto: cria e altera; recusa apagar e mandar mensagem sem chamar a API', async () => {
   const { f, chamadas } = falso();
   const ctx = criarContextoChatwoot(CONTA, { fetch: f });

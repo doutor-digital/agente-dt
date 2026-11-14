@@ -46,8 +46,11 @@ import {
   type MensagemResumo,
   type ViaDoEnvio,
   ID_REGUA,
+  notaDePedidoNaoEnviado,
   notaDoSeco,
+  REGRA_MODELO_ETIQUETA,
   SUFIXO_FALTA,
+  SUFIXO_PERDIDA,
   type ConversaRegua,
   type DadosDaUnidade,
   type Mudanca,
@@ -58,8 +61,11 @@ const SWEEP_MS = Number(process.env.CHATWOOT_REGUA_SWEEP_MS) || 10 * 60_000;
 const PRIMEIRA_VARREDURA_MS = 150_000;
 /** 25 conversas por página. */
 const MAX_PAGINAS = 200;
-export const MAX_MENSAGENS_POR_CICLO = 60;
+/** Total por ciclo continua 60: 40 das regras de sempre + 20 dos pedidos por etiqueta. */
+export const MAX_MENSAGENS_POR_CICLO = 40;
 export const MAX_ETIQUETAS_POR_CICLO = 100;
+/** Teto próprio do modelo pedido por etiqueta (e da nota de pedido perdido): não divide o teto da véspera e das outras regras. */
+export const MAX_PEDIDOS_POR_CICLO = 20;
 /** Sufixo da regra quando o que se registra é «template ainda não aprovado» (a nota sai uma vez por chave; o envio continua possível). */
 export const SUFIXO_SEM_TEMPLATE = '!template';
 /** Quanto do histórico de disparos o ciclo carrega para conferir repetição (a UNIQUE do banco vale para sempre). */
@@ -313,6 +319,8 @@ export interface ResumoDoCiclo {
   comTemplate: number;
   /** seguradas porque o template ainda não está aprovado na Meta (vira nota) */
   semTemplate: number;
+  /** pedidos por etiqueta que não saíram por terem passado do prazo (uma nota por chave) */
+  pedidosPerdidos: number;
 }
 
 async function lerConversas(chat: Chat, caixa: number): Promise<{ conversas: ConversaRegua[]; truncada: boolean }> {
@@ -393,7 +401,7 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
     feitosPorConversa.set(f.conversationId, s);
   }
 
-  const resumo: ResumoDoCiclo = { conversas: conversas.length, truncada, disparos: 0, faltando: 0, perdidas: {}, etiquetas: 0, falhas: 0, primeiraVez, noKommo: 0, comTemplate: 0, semTemplate: 0 };
+  const resumo: ResumoDoCiclo = { conversas: conversas.length, truncada, disparos: 0, faltando: 0, perdidas: {}, etiquetas: 0, falhas: 0, primeiraVez, noKommo: 0, comTemplate: 0, semTemplate: 0, pedidosPerdidos: 0 };
   const mudancas: Array<Mudanca & { conversationId: number }> = [];
   if (primeiraVez) mudancas.push({ conversationId: 0, tipo: 'criar', campo: CAMPO_PARTIDA, valor: '1', desde: agora, inicial: true });
   const pendentes: Array<{ c: ConversaRegua; vistos: ReadonlyMap<string, Visto> }> = [];
@@ -406,6 +414,7 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
   await armazem.salvar(caixa, mudancas);
 
   let mensagens = 0;
+  let pedidos = 0;
   let etiquetas = 0;
   // uma consulta ao Kommo por conversa por ciclo (só das que vão falar com o paciente)
   const noKommo = new Map<number, Promise<{ leadId: number } | null>>();
@@ -440,16 +449,36 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
       const { disparos, perdidas } = decidirRegua(c, { vistos, feitos: feitosDaConversa }, agora, unidade);
       for (const r of perdidas) resumo.perdidas[r] = (resumo.perdidas[r] ?? 0) + 1;
       for (const d of disparos) {
-        if (mensagens >= MAX_MENSAGENS_POR_CICLO) break;
+        // o pedido por etiqueta tem teto próprio: uma enxurrada de etiquetas não tira a vez da véspera, nem o contrário
+        const pedido = d.regra === REGRA_MODELO_ETIQUETA || d.regra === `${REGRA_MODELO_ETIQUETA}${SUFIXO_PERDIDA}`;
+        if (pedido ? pedidos >= MAX_PEDIDOS_POR_CICLO : mensagens >= MAX_MENSAGENS_POR_CICLO) continue;
+        // pedido que se perdeu (passou do prazo): só a nota, uma por chave
+        if (d.soNota !== undefined) {
+          const novaNota = await armazem.registrar({ caixa, conversationId: c.id, regra: d.regra, chave: d.chave, modo, texto: d.soNota });
+          if (!novaNota) continue;
+          pedidos++;
+          try {
+            await deps.chat.mensagem(c.id, modo === 'seco' ? `🧪 [SECO] ${d.soNota}` : d.soNota, true);
+            resumo.pedidosPerdidos++;
+            await deps.pausa(PAUSA_ENTRE_ESCRITAS_MS);
+          } catch (err) {
+            resumo.falhas++;
+            await armazem.desfazer(c.id, d.regra, d.chave).catch(() => undefined);
+            logger.warn({ err: String(err), caixa, conversa: c.id, regra: d.regra }, `${ID_REGUA}: não consegui deixar a nota do pedido que se perdeu`);
+          }
+          continue;
+        }
         const faltou = d.texto === null;
         let regra = faltou ? `${d.regra}${SUFIXO_FALTA}` : d.regra;
-        // faltou campo: só o seco avisa (uma vez por chave); ligado não manda nem anota
-        if (faltou && modo === 'ligado') continue;
-        let nota = notaDoSeco(d);
+        // faltou campo: só o seco avisa (uma vez por chave); ligado não manda nem anota — exceto o pedido por etiqueta, que a pessoa
+        // fez de propósito: ele deixa a nota (uma por chave, pelo mesmo sufixo) dizendo o que falta
+        if (faltou && modo === 'ligado' && !pedido) continue;
+        const pedidoSemEnvio = faltou && modo === 'ligado'; // (só chega aqui se for pedido)
+        let nota = pedidoSemEnvio ? notaDePedidoNaoEnviado(d.modelo, `falta ${d.faltando.join('; ')}`) : notaDoSeco(d);
         let avisos = '';
         // regra interna nunca fala com o paciente: no ligado também é nota privada (mais a ação)
-        let privada = modo === 'seco' || !!d.interna;
-        let texto = modo === 'seco' ? nota : d.interna ? `🤖 Régua «${d.regra}»: ${d.texto}` : (d.texto as string);
+        let privada = modo === 'seco' || !!d.interna || pedidoSemEnvio;
+        let texto = modo === 'seco' || pedidoSemEnvio ? nota : d.interna ? `🤖 Régua «${d.regra}»: ${d.texto}` : (d.texto as string);
         let seguradaNoKommo = false;
         let semTemplate = false;
         let template: EnvioTemplate | undefined;
@@ -467,7 +496,10 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
             texto = nota;
           }
           if (cartao) {
-            nota = `${modo === 'seco' ? '🧪 [SECO] ' : '🛑 '}Régua «${d.regra}» — NÃO ${modo === 'seco' ? 'enviaria' : 'enviei'}: o paciente tem cartão ativo no Kommo da unidade (lead ${cartao.leadId}); os robôs de lá cuidam.`;
+            nota =
+              pedido && modo === 'ligado'
+                ? notaDePedidoNaoEnviado(d.modelo, `o paciente tem cartão ativo no Kommo da unidade (lead ${cartao.leadId}); os robôs de lá cuidam`)
+                : `${modo === 'seco' ? '🧪 [SECO] ' : '🛑 '}Régua «${d.regra}» — NÃO ${modo === 'seco' ? 'enviaria' : 'enviei'}: o paciente tem cartão ativo no Kommo da unidade (lead ${cartao.leadId}); os robôs de lá cuidam.`;
             texto = nota;
             privada = true;
             seguradaNoKommo = true;
@@ -513,7 +545,8 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
         }
         const novo = await armazem.registrar({ caixa, conversationId: c.id, regra, chave: d.chave, modo, texto: template ? `[template ${template.nome}] ${texto}` : texto });
         if (!novo) continue;
-        mensagens++;
+        if (pedido) pedidos++;
+        else mensagens++;
         try {
           await deps.chat.mensagem(c.id, texto, privada, template);
           if (faltou) resumo.faltando++;
