@@ -141,3 +141,17 @@ test('mudancas: a etapa só entra com `hoje`; casar devolve a etapa segurada (Pe
   // nada a fazer e nada segurado: fora do plano
   assert.equal(casar([ag({ dayLocal: '2026-11-16', statusName: 'Confirmado' })], [{ ...conversas[0]!, attrs: { ...cheia, etapa: 'Fechou' } }], () => ['5594999745062'], HOJE).length, 0);
 });
+
+test('consulta que passou: a agenda grava Atendido / Não compareceu (sem mexer na etapa); a conversa do histórico com consulta recente chega até aqui por ehArquivo', async () => {
+  const { ehArquivo } = await import('./chatwoot-regua.js');
+  const ontem = { data_consulta: '2026-11-13', hora_consulta: '14:30', situacao_consulta: 'Agendado', categoria_consulta: 'Avaliação', etapa: 'Sofia qualifica' };
+  const r1 = casar([ag({ dayLocal: '2026-11-13', statusName: 'Atendido' })], [{ id: 1, telefone: '+5594999745062', attrs: ontem, atividade: 1 }], () => ['5594999745062'], '2026-11-14');
+  assert.deepEqual(r1[0]!.muda, { situacao_consulta: 'Atendido' });
+  const r2 = casar([ag({ dayLocal: '2026-11-13', statusName: 'Não compareceu' })], [{ id: 1, telefone: '+5594999745062', attrs: ontem, atividade: 1 }], () => ['5594999745062'], '2026-11-14');
+  assert.deepEqual(r2[0]!.muda, { situacao_consulta: 'Não compareceu' });
+  // a lista de conversas da agenda pula arquivo: a de 13/11 (historico, parada) entra; a de dois meses atrás não
+  const hist = (data: string) => ({ labels: ['historico'], last_activity_at: Math.floor(Date.parse('2026-11-12T12:00:00Z') / 1000), custom_attributes: { data_consulta: data, situacao_consulta: 'Agendado' } });
+  const agora = new Date('2026-11-14T22:00:00Z');
+  assert.equal(ehArquivo(hist('2026-11-13'), agora), false);
+  assert.equal(ehArquivo(hist('2026-09-13'), agora), true);
+});

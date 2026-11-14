@@ -629,7 +629,7 @@ test('paramsDoTemplate: sem variáveis não manda processed_params; as chaves s�
 
 test('UNIFICAÇÃO: conversa de arquivo (etiqueta historico, parada antes do corte) a régua não toca; mexeu depois do corte, volta a valer', async () => {
   const { armazem } = armazemFalso();
-  const arquivo = { ...bruta(1, { attrs: { ...CONSULTA, data_consulta: '2026-10-21' }, labels: ['historico'] }), last_activity_at: unix('2026-10-20T12:00:00Z') };
+  const arquivo = { ...bruta(1, { attrs: { ...CONSULTA, data_consulta: '2026-09-21' }, labels: ['historico'] }), last_activity_at: unix('2026-10-20T12:00:00Z') };
   const voltou = { ...bruta(2, { attrs: CONSULTA, labels: ['historico'] }), last_activity_at: unix('2026-11-16T10:00:00Z') };
   const { chat, mensagens } = chatFalso(() => [arquivo, voltou]);
   const r = await cicloDaCaixa(deps(armazem, chat), 2, 'doutor-hernia-parauapebas', 'seco', U, VESPERA);
@@ -671,9 +671,9 @@ test('UNIFICAÇÃO (controle): a MESMA conversa sem a etiqueta historico, nascid
 
 const HIST_CONSULTA = { etapa: 'Agendado', situacao_consulta: 'Confirmado', data_consulta: '2026-11-17', hora_consulta: '14:30' };
 
-test('conversa do histórico parada, mas com consulta de pé: lembrete sai (ligado); sem consulta de pé segue fora', async () => {
+test('conversa do histórico parada, mas com consulta de pé: lembrete sai (ligado); com consulta velha (mais de 35 dias) segue fora', async () => {
   const f = armazemFalso();
-  const c = chatFalso(() => [bruta(1, { attrs: HIST_CONSULTA, labels: ['historico'] }), bruta(2, { attrs: { ...HIST_CONSULTA, data_consulta: '2026-11-10' }, labels: ['historico'] })]);
+  const c = chatFalso(() => [bruta(1, { attrs: HIST_CONSULTA, labels: ['historico'] }), bruta(2, { attrs: { ...HIST_CONSULTA, data_consulta: '2026-10-10' }, labels: ['historico'] })]);
   await cicloDaCaixa(deps(f.armazem, c.chat), 2, 'x', 'ligado', U, new Date('2026-11-16T17:20:00Z'));
   const r = await cicloDaCaixa(deps(f.armazem, c.chat), 2, 'x', 'ligado', U, VESPERA);
   assert.equal(r.conversas, 1);

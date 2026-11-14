@@ -52,10 +52,16 @@ export const CAIXAS_HISTORICO: ReadonlySet<number> = new Set([4]);
 export const ETIQUETA_HISTORICO = 'historico';
 /** 14/11/2026 00:00 em Belém: toda conversa do histórico tem a última mensagem antes disso. */
 export const CORTE_DO_HISTORICO_MS = Date.parse('2026-11-14T03:00:00Z');
+/** Situações da consulta que mantêm a conversa viva: de pé (a régua manda os lembretes) ou recém-encerrada (falta, pós-atendimento, decisão). Desmarcado e vazio não. */
+const SITUACOES_QUE_TIRAM_DO_ARQUIVO: ReadonlySet<string> = new Set(['Agendado', 'Confirmado', 'Remarcado', 'Atendido', 'Não compareceu']);
+/** Depois de quantos dias da consulta a conversa do histórico volta a ser arquivo (as sequências da régua vão até 30 dias). */
+export const DIAS_DA_CONSULTA_VIVA = 35;
 /**
- * Paciente com consulta de pé (data de hoje em diante em Belém, situação Agendado/Confirmado/Remarcado) NÃO é arquivo, mesmo parado:
- * está marcado, então a régua manda véspera/dia/preparo e a agenda continua a acompanhar. O que ela já mostra segue «inicial» na
- * 1ª vista (etiqueta `historico`, ver `atualizarVistos`): lembrete é por horário e sai; regra de «entrou em tal etapa» não dispara.
+ * Paciente com consulta marcada não é arquivo, mesmo parado: a consulta de hoje em diante (Belém) ou de até 35 dias atrás, com situação
+ * Agendado/Confirmado/Remarcado/Atendido/Não compareceu. É paciente vivo: a régua manda véspera/dia/preparo e depois falta,
+ * pós-atendimento e decisão, e a agenda pode gravar Atendido/Não compareceu. Desmarcado, sem situação ou consulta mais velha: arquivo.
+ * O que ela já mostra segue «inicial» na 1ª vista (etiqueta `historico`, ver `atualizarVistos`), e as sequências que olham para trás
+ * (falta 48 h, pós-atendimento, decisão) só valem para consulta do dia em que a régua a viu pela 1ª vez em diante (ver `candidatos`).
  */
 export function ehArquivo(raw: any, agora: Date = new Date()): boolean {
   const etiquetas: unknown[] = Array.isArray(raw?.labels) ? raw.labels : [];
@@ -64,7 +70,9 @@ export function ehArquivo(raw: any, agora: Date = new Date()): boolean {
   if (Number.isFinite(t) && t > 0 && t >= CORTE_DO_HISTORICO_MS) return false;
   const a = raw?.custom_attributes;
   const dia = lerData(a?.data_consulta);
-  return !(dia && dia.iso >= diaEmBelem(agora) && SITUACOES_DE_PE.has(str(a?.situacao_consulta)));
+  const hoje = lerData(diaEmBelem(agora));
+  if (!dia || !hoje) return true;
+  return !(dia.iso >= somarDias(hoje, -DIAS_DA_CONSULTA_VIVA).iso && SITUACOES_QUE_TIRAM_DO_ARQUIVO.has(str(a?.situacao_consulta)));
 }
 /** Arquivo que mesmo assim vale no funil: tem etapa (a do Kommo, gravada na unificação). */
 export function arquivoComEtapa(raw: any): boolean {
@@ -519,6 +527,12 @@ function candidatos(c: ConversaRegua, vistos: Vistos): Candidato[] {
     const v = vistos.get(campo);
     return v && !v.inicial && (valor === undefined || v.valor === valor) ? v : null;
   };
+  /**
+   * Conversa que já existia quando a régua a viu pela 1ª vez (partida, histórico que acordou): consulta de ANTES desse dia é passado, não
+   * gatilho — falta 48 h, pós-atendimento e decisão não valem para ela, senão a 1ª vista mandaria o que a Kommo mandou (ou não) dias atrás.
+   */
+  const primeira = vistos.get(CAMPO_VISTO_CONVERSA);
+  const consultaAnteriorAVista = (m: Momento): boolean => !!primeira?.inicial && m.data.iso < diaEmBelem(primeira.desde);
 
   if (!tratamento) {
     // follow-up: perdido há 48/96/120 h (no Kommo o de 96 h está com atraso 0 — defeito; aqui 96 h)
@@ -558,11 +572,11 @@ function candidatos(c: ConversaRegua, vistos: Vistos): Candidato[] {
     if (faltou && consulta && consulta.data.iso === diaEmBelem(faltou.desde)) {
       saida.push({ regra: 'falta-mesmo-dia', modelo: 'parau_consulta_falta_mesmo_dia', chave: `faltou@${faltou.desde.toISOString()}`, kind: 'depois', alvo: faltou.desde });
     }
-    if (naConsulta && situ === 'Não compareceu' && consulta && !semFollowUp) {
+    if (naConsulta && situ === 'Não compareceu' && consulta && !semFollowUp && !consultaAnteriorAVista(consulta)) {
       saida.push({ regra: 'falta-48h', modelo: 'parau_consulta_falta_48h', chave: consulta.chave, kind: 'depois', alvo: new Date(instante(consulta, HORA_PADRAO_DEPOIS).getTime() + 2 * DIA) });
     }
     // depois do atendimento (no Kommo os de 4 e 30 dias estão "antes" da consulta — defeito; aqui DEPOIS)
-    if (consulta && situ === 'Atendido') {
+    if (consulta && situ === 'Atendido' && !consultaAnteriorAVista(consulta)) {
       const base = instante(consulta, HORA_PADRAO_DEPOIS).getTime();
       const posConsulta = etapa === 'Compareceu' || etapa === 'Pós-consulta';
       if (etapa === 'Compareceu') saida.push({ regra: 'pos-atendimento', modelo: 'parau_consulta_pos_atendimento', chave: consulta.chave, kind: 'depois', alvo: new Date(base + DIA) });
@@ -648,7 +662,7 @@ function candidatos(c: ConversaRegua, vistos: Vistos): Candidato[] {
       const faltouSessao = str(a.compareceu_ultima_sessao) === 'Não' ? novo('compareceu_ultima_sessao', 'Não') : null;
       if (faltouSessao) saida.push({ regra: 'sessao-falta', modelo: 'parau_sessao_falta', chave: `faltou-sessao@${faltouSessao.desde.toISOString()}`, kind: 'depois', alvo: faltouSessao.desde });
       // exame pedido e já avisado: cobra o documento 120 h depois da consulta
-      if (consulta && str(a.motivo_nao_fechamento) === 'Solicitado exames' && c.etiquetas.includes('pendencia-exame-avisado')) {
+      if (consulta && str(a.motivo_nao_fechamento) === 'Solicitado exames' && c.etiquetas.includes('pendencia-exame-avisado') && !consultaAnteriorAVista(consulta)) {
         saida.push({ regra: 'pendencia-documento', modelo: 'parau_pendencia_documento', chave: consulta.chave, kind: 'depois', alvo: new Date(instante(consulta, HORA_PADRAO_DEPOIS).getTime() + 120 * HORA) });
       }
     }
