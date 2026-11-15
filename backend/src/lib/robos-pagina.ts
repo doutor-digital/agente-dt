@@ -17,9 +17,11 @@ import { LOGO_DD_PNG } from './marca-dd.js';
 const PAGINA = String.raw`<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Robôs</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;500;600;700&display=swap" rel="stylesheet">
 <style>
-:root{--app:#f7f7f7;--side:#fff;--canvas:#f0f0f3;--dot:#cdced6;--node:#fff;--ink:#1c2024;--ink-2:#60646c;--line:#e2e3e7;--wire:#b9bbc6;--brand:#2781f6;--brand-soft:#e9f3ff;--trig:#f76b15;--wait:#8e4ec6;--cond:#2781f6;--send:#29a71a;--stop:#8b8d98;--sticky:#fff7c2;--sticky-ink:#4f3422;--bubble:#d9fdd3;--bubble-ink:#10261a;--chat:#efeae2;--shadow:0 1px 2px rgba(28,32,36,.06),0 6px 18px rgba(28,32,36,.08);--f-ui:Inter,-apple-system,system-ui,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Tahoma,Arial,sans-serif;--f-head:InterDisplay,Inter,-apple-system,system-ui,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Tahoma,Arial,sans-serif;--f-mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace}
-@media (prefers-color-scheme:dark){:root{color-scheme:dark;--app:#1c1d20;--side:#17171a;--canvas:#18191b;--dot:#363a3f;--node:#1d1e24;--ink:#edeef0;--ink-2:#b0b4ba;--line:#2e2d32;--wire:#5a6169;--brand:#2781f6;--brand-soft:#0f2748;--sticky:#302008;--sticky-ink:#ffe7b3;--bubble:#005c4b;--bubble-ink:#e9fff6;--chat:#0b141a;--shadow:0 1px 2px rgba(0,0,0,.4),0 8px 22px rgba(0,0,0,.35)}}
+:root{--app:#f7f7f7;--side:#fff;--canvas:#f0f0f3;--dot:#cdced6;--node:#fff;--ink:#1c2024;--ink-2:#60646c;--line:#e2e3e7;--wire:#b9bbc6;--brand:#2781f6;--brand-soft:#e9f3ff;--trig:#f76b15;--wait:#8e4ec6;--cond:#2781f6;--send:#29a71a;--stop:#8b8d98;--aviso:#ab6400;--aviso-forte:#ffb224;--sticky:#fff7c2;--sticky-ink:#4f3422;--bubble:#d9fdd3;--bubble-ink:#10261a;--chat:#efeae2;--shadow:0 1px 2px rgba(28,32,36,.06),0 6px 18px rgba(28,32,36,.08);--f-ui:Inter,-apple-system,system-ui,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Tahoma,Arial,sans-serif;--f-head:Inter,-apple-system,system-ui,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Tahoma,Arial,sans-serif;--f-mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace}
+@media (prefers-color-scheme:dark){:root{color-scheme:dark;--app:#1c1d20;--side:#17171a;--canvas:#18191b;--dot:#363a3f;--node:#1d1e24;--ink:#edeef0;--ink-2:#b0b4ba;--line:#2e2d32;--wire:#5a6169;--brand:#2781f6;--brand-soft:#0f2748;--aviso:#ffca16;--sticky:#302008;--sticky-ink:#ffe7b3;--bubble:#005c4b;--bubble-ink:#e9fff6;--chat:#0b141a;--shadow:0 1px 2px rgba(0,0,0,.4),0 8px 22px rgba(0,0,0,.35)}}
 *{box-sizing:border-box}html,body{height:100%}
 body{margin:0;background:var(--app);color:var(--ink);font:14px/1.45 var(--f-ui);display:grid;grid-template-rows:auto 1fr;min-height:100%;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
 [hidden]{display:none!important}
@@ -116,7 +118,7 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
 .modo:focus-visible,.tri button:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
 .est{font:600 11px var(--f-ui);padding:2px 8px;border-radius:999px;white-space:nowrap}
 .est.ligada{background:color-mix(in srgb,var(--send) 16%,transparent);color:var(--send)}
-.est.papel{background:color-mix(in srgb,var(--wait) 18%,transparent);color:var(--wait)}
+.est.papel{background:color-mix(in srgb,var(--aviso-forte) 22%,transparent);color:var(--aviso)}
 .est.desligada{background:color-mix(in srgb,var(--stop) 18%,transparent);color:var(--stop)}
 .est.sempre{background:color-mix(in srgb,var(--cond) 14%,transparent);color:var(--cond)}
 .auto{padding:22px;display:grid;gap:16px;align-content:start;max-width:860px}
@@ -124,12 +126,12 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
 .auto-card h2{margin:0;font:700 20px var(--f-head);display:flex;gap:10px;align-items:center}
 .auto-card h2 .ic{width:34px;height:34px;display:grid;place-items:center;flex:none}.auto-card h2 .ic svg{width:34px;height:34px}
 .auto-card p{margin:0;color:var(--ink-2);max-width:70ch}
-.cuidado{background:color-mix(in srgb,var(--wait) 12%,transparent);border-radius:10px;padding:10px 12px;font-size:13px;color:var(--ink)}
-.cuidado b{display:block;font:600 11px var(--f-ui);letter-spacing:.08em;text-transform:uppercase;color:var(--wait);margin-bottom:3px}
+.cuidado{background:color-mix(in srgb,var(--aviso-forte) 16%,transparent);border-radius:10px;padding:10px 12px;font-size:13px;color:var(--ink)}
+.cuidado b{display:block;font:600 11px var(--f-ui);letter-spacing:.08em;text-transform:uppercase;color:var(--aviso);margin-bottom:3px}
 .tri{display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;width:fit-content;max-width:100%;flex-wrap:wrap}
 .tri button{appearance:none;border:0;background:var(--node);color:var(--ink-2);font:600 13px var(--f-ui);padding:9px 14px;cursor:pointer}
 .tri button+button{border-left:1px solid var(--line)}.tri button:disabled{opacity:.6;cursor:not-allowed}
-.tri button[aria-pressed=true].ligada{background:var(--send);color:#fff}.tri button[aria-pressed=true].papel{background:var(--wait);color:#fff}.tri button[aria-pressed=true].desligada{background:var(--stop);color:#fff}
+.tri button[aria-pressed=true].ligada{background:var(--send);color:#fff}.tri button[aria-pressed=true].papel{background:var(--aviso-forte);color:#1c2024}.tri button[aria-pressed=true].desligada{background:var(--stop);color:#fff}
 .tri-ajuda{font-size:12.5px;color:var(--ink-2)}
 .acoes24{display:grid;gap:8px}.acoes24 h3{margin:0;font:600 11px var(--f-ui);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2)}
 .acao{display:grid;grid-template-columns:96px minmax(0,1fr);gap:10px;font-size:13px;padding:8px 10px;background:var(--app);border-radius:8px}
@@ -261,12 +263,12 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
     if (temCond) {
       mundo.appendChild(no('cond', 'i-cond', 'Só se', r.condicoes.join(' · '), xs.c, Y, function(){ painel('cond'); }));
       fio(svg, cx(xs.w) + W + 7, mid(Y), cx(xs.c) - 7, mid(Y));
-      mundo.appendChild(no('send fim', 'i-send', fimTipo, fimDet, xs.s, Y - 70, function(){ painel('send'); }, selo));
+      mundo.appendChild(no('send fim', r.interna ? 'i-stop' : 'i-send', fimTipo, fimDet, xs.s, Y - 70, function(){ painel('send'); }, selo));
       fio(svg, cx(xs.c) + W + 7, mid(Y), cx(xs.s) - 7, mid(Y - 70), '', 'sim');
       mundo.appendChild(no('stop fim', 'i-stop', 'Não envia', 'deixa nota para a equipe', xs.n, Y + 110, function(){ painel('stop'); }));
       fio(svg, cx(xs.c) + W + 7, mid(Y), cx(xs.n) - 7, mid(Y + 110), 'nao', 'não');
     } else {
-      mundo.appendChild(no('send fim', 'i-send', fimTipo, fimDet, xs.s, Y, function(){ painel('send'); }, selo));
+      mundo.appendChild(no('send fim', r.interna ? 'i-stop' : 'i-send', fimTipo, fimDet, xs.s, Y, function(){ painel('send'); }, selo));
       fio(svg, cx(xs.w) + W + 7, mid(Y), cx(xs.s) - 7, mid(Y));
     }
     var post = el('div', 'post'); post.style.left = '920px'; post.style.top = '40px';
@@ -421,8 +423,8 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
   var ROT_ESTADO = { ligado: 'Ligada', seco: 'Só no papel', desligado: 'Desligada', sempre: 'Sempre ligada' };
   var CLS_ESTADO = { ligado: 'ligada', seco: 'papel', desligado: 'desligada', sempre: 'sempre' };
   // um ícone (e uma cor) por grupo: o mesmo quadradinho dos blocos, com o símbolo do que a automação mexe
-  var ICONE_GRUPO = { 'Sofia': ['i-chat', '#5b5bd6'], 'Agenda': ['i-cal', '#2781f6'], 'Mensagens': ['i-send', ''], 'Rastreio': ['i-alvo', '#f76b15'], 'Organização': ['i-tag', '#12a594'], 'Avisos para a equipe': ['i-sino', '#e5484d'], 'Regras nativas do Chatwoot': ['i-fluxo', '#8b8d98'] };
-  function icAuto(a){ var d = ICONE_GRUPO[a.grupoRotulo] || ['i-fluxo', '#8b8d98'], s = ic(d[0]); if (d[1]) s.style.color = d[1]; return s; }
+  var ICONE_GRUPO = { sofia: ['i-chat', '#5b5bd6'], agenda: ['i-cal', '#2781f6'], mensagens: ['i-send', ''], rastreio: ['i-alvo', '#f76b15'], organizacao: ['i-tag', '#12a594'], avisos: ['i-sino', '#e5484d'], nativas: ['i-fluxo', '#8b8d98'] };
+  function icAuto(a){ var d = ICONE_GRUPO[a.grupo] || ['i-fluxo', '#8b8d98'], s = ic(d[0]); if (d[1]) s.style.color = d[1]; return s; }
   var ORDEM_GRUPOS = ['Sofia', 'Agenda', 'Mensagens', 'Rastreio', 'Organização', 'Avisos para a equipe', 'Regras nativas do Chatwoot'];
   function itensDeAuto(){
     if (!AUTO) return [];

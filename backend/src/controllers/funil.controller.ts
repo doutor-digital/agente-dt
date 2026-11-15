@@ -1738,11 +1738,15 @@ const MENU_JS = String.raw`(function(){
   var DE_MENU = TELAS.map(function(t){ return '[' + t.marca + ']'; }).join(', ');
   // Item aberto = as MESMAS classes que o CRM usa no item ativo (azul do CRM, fundo leve). Com uma tela nossa aberta, o item que o CRM
   // ainda marca (ex. «Todas as conversas») perde o destaque: antes ficavam DOIS selecionados (João, 15/11) — e o clique não deixa contorno.
-  var ATIVO_CW = ['text-n-blue-text', 'bg-n-alpha-2', 'font-medium'];
+  // classes do item ativo no Chatwoot 4.19.1 (SidebarGroupHeader/Leaf: text-n-slate-12 bg-n-alpha-2 font-medium)
+  var ATIVO_CW = ['text-n-slate-12', 'bg-n-alpha-2', 'font-medium'];
   function estiloDoMenu(){
     if (document.querySelector('style[data-dd-menu-estilo]')) return;
     var st = document.createElement('style'); st.setAttribute('data-dd-menu-estilo', '1');
-    st.textContent = 'html.dd-tela-aberta aside li > a.bg-n-alpha-2:not([data-dd-ativo]){background-color:transparent!important;color:rgb(var(--slate-11))!important}';
+    // com tela nossa aberta: o item ativo do CRM e o cabeçalho do grupo dele («Conversas») voltam ao cinza; e o clique do mouse não deixa
+    // contorno nos nossos itens (o teclado continua com o contorno: :focus-visible)
+    st.textContent = 'html.dd-tela-aberta aside li > a.bg-n-alpha-2:not([data-dd-ativo]),html.dd-tela-aberta aside li > a.text-n-slate-12:not([data-dd-ativo]){background-color:transparent!important;color:rgb(var(--slate-11))!important}' +
+      TELAS.map(function(t){ return '[' + t.marca + '] a:focus:not(:focus-visible),a[' + t.marca + ']:focus:not(:focus-visible)'; }).join(',') + '{outline:none!important;box-shadow:none!important}';
     (document.head || document.documentElement).appendChild(st);
   }
   function marcar(ativo){
@@ -1757,7 +1761,6 @@ const MENU_JS = String.raw`(function(){
       ATIVO_CW.forEach(function(c){ link.classList.toggle(c, sim); });
       link.classList.toggle('text-n-slate-11', !sim);
       if (sim) link.setAttribute('data-dd-ativo', '1'); else link.removeAttribute('data-dd-ativo');
-      if (item.contains(document.activeElement) && document.activeElement.blur) document.activeElement.blur();
     });
   }
   // fechar REMOVE o quadro: nada fica consultando o Chatwoot escondido; reabrir pede o login de novo
@@ -1869,7 +1872,7 @@ const MENU_JS = String.raw`(function(){
     var link = novo.tagName === 'A' ? novo : novo.querySelector('a');
     if (link) { link.setAttribute('href', t.hash); link.classList.remove('router-link-active', 'router-link-exact-active'); link.removeAttribute('aria-current'); }
     // o «Contatos» copiado pode estar ativo na hora da cópia: o item novo nasce sem destaque (quem marca é o marcar())
-    if (link) { ATIVO_CW.forEach(function(c){ link.classList.remove(c); }); link.classList.add('text-n-slate-11'); }
+    if (link) { ATIVO_CW.forEach(function(c){ link.classList.remove(c); }); link.removeAttribute('data-dd-ativo'); link.classList.add('text-n-slate-11'); }
     Array.prototype.forEach.call(novo.querySelectorAll('ul, [role="group"]'), function(u){ u.remove(); });
     trocarTexto(novo, t.nome);
     if (t.pai) {
@@ -1903,6 +1906,8 @@ const MENU_JS = String.raw`(function(){
     });
     var reserva = document.querySelector('[data-funil-botao]'); if (reserva) reserva.remove();
     aplicarGrupo();
+    // o CRM redesenhou o menu com uma tela nossa aberta: os itens recriados voltam a marcar a tela aberta
+    if (tela) marcar(tela);
     return true;
   }
   function botao(){
