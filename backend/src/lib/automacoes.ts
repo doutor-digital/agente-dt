@@ -1024,6 +1024,99 @@ export const AUTOMACOES: readonly Automacao[] = [
     quandoVazio: 'desligado',
     arquivo: 'src/lib/chatwoot-origem.ts',
   },
+  // ── rotinas e alertas da Kommo, trazidos para o CRM (Chatwoot) em 14/11/2026 — todos nascem «só no papel» ──
+  {
+    id: 'chatwoot-rotina-esquecidos',
+    chave: 'CHATWOOT_ROTINA_ESQUECIDOS_SLUGS',
+    nome: 'Rotina no Chatwoot: esquecidos por etapa',
+    oQueFaz:
+      'A rotina «esquecidos» da Kommo dentro do CRM, em degraus (sem repetir e sem pular): NÃO COMPARECEU com 1, 3 e 6 dias e EM NEGOCIAÇÃO (Pós-consulta) com 2, 5 e 9 dias sem o paciente responder (contados da falta ou da entrada na etapa, ou da última mensagem do paciente, o que for mais recente). Qualquer mensagem do paciente zera a escada. O 1º degrau da qualificação (2 dias) é da «retomada automática» da SDR, não desta.',
+    pegadinha:
+      'Roda DENTRO da régua do Chatwoot: precisa de «Régua no Chatwoot» ligada ou «só no papel». Nunca manda para quem tem sem-follow-up, IA pausada pela equipe, «Retomar em», motivo de perda encerrado, currículo, funil de tratamento, ou se alguém da equipe falou nas últimas 24 h. Um telefone, uma conversa que fala; cartão ativo no Kommo = só nota. Usa os modelos já aprovados (reengajamento 48 h, convite ao método e encerramento): se quiser textos próprios de «não compareceu» e de «pós-consulta», é só criar e trocar na tela Robôs.',
+    risco: 'manda-mensagem',
+    temSeco: true,
+    exigeSecoAntes: true,
+    quandoVazio: 'seco',
+    arquivo: 'src/lib/chatwoot-regua.ts',
+  },
+  {
+    id: 'chatwoot-rotina-exlead',
+    chave: 'CHATWOOT_ROTINA_EXLEAD_SLUGS',
+    nome: 'Rotina no Chatwoot: ex-lead que nunca agendou (30/60/90 dias)',
+    oQueFaz:
+      'Quem nunca teve consulta e hoje está PERDIDO ou EM ESPERA (tem «Retomar em») recebe a reativação 30 dias depois (da entrada na etapa, ou da última mensagem se o paciente escreveu depois), a 2ª aos 60 e a 3ª aos 90. Só quem a régua viu ENTRAR na etapa leva os três degraus; o estoque antigo, sem data de entrada, só o 1º (contado da última mensagem).',
+    pegadinha:
+      'Roda DENTRO da régua do Chatwoot. O 1º degrau é o mesmo da reativação automática da SDR (mesma regra e mesma chave: não dobra). «Nunca agendou» aqui é: sem data de consulta no cartão (a franquia não é consultada). Nunca manda para sem-follow-up, IA pausada, motivo de perda encerrado (Outra cidade, Clicou por engano, Outra patologia, Plano de saúde, Sem interesse, Bandeira vermelha, Assinou contrato), currículo ou tratamento. Modelos: reativação do lead frio (30), convite ao método (60) e encerramento (90).',
+    risco: 'manda-mensagem',
+    temSeco: true,
+    exigeSecoAntes: true,
+    quandoVazio: 'seco',
+    arquivo: 'src/lib/chatwoot-regua.ts',
+  },
+  {
+    id: 'chatwoot-rotina-aniversario',
+    chave: 'CHATWOOT_ROTINA_ANIVERSARIO_SLUGS',
+    nome: 'Rotina no Chatwoot: aniversário',
+    oQueFaz:
+      'No dia do aniversário (entre 9h e 12h, horário de Belém) manda os parabéns; quem está em tratamento ativo recebe a versão só de parabéns, sem convite. Fim de semana ou feriado: cumprimenta no 1º dia útil, com até 3 dias de atraso. Uma vez por ano por pessoa.',
+    pegadinha:
+      'A DATA É DA FRANQUIA e só vale com casamento seguro: o nome COMPLETO do contato igual ao da ficha E o WhatsApp da ficha igual ao da conversa, e uma única ficha assim; senão não manda (nunca por busca solta de nome). Os modelos `parau_rotina_aniversario` e `parau_rotina_aniversario_tratamento` ainda precisam ser criados e aprovados na Meta: até lá fica só a nota «modelo não aprovado». A trava de paciente falecido lê o status da ficha, mas SEM PROVA (só se viu «ATIVO»). Nunca manda para sem-follow-up, motivo de perda encerrado ou currículo.',
+    risco: 'manda-mensagem',
+    temSeco: true,
+    exigeSecoAntes: true,
+    quandoVazio: 'seco',
+    arquivo: 'src/lib/chatwoot-aniversario.ts',
+  },
+  {
+    id: 'chatwoot-alerta-sem-resposta',
+    chave: 'CHATWOOT_ALERTA_SEM_RESPOSTA_SLUGS',
+    nome: 'Alerta no Chatwoot: paciente sem resposta',
+    oQueFaz:
+      'Quando a última mensagem da conversa é do paciente e ninguém respondeu (nem a equipe, nem a Sofia, nem robô) há 5 minutos, deixa uma NOTA PRIVADA («Paciente sem resposta há N min») com a prioridade da conversa em Alta e avisa no Telegram do João. Uma vez por espera. Nunca escreve ao paciente.',
+    pegadinha:
+      'Só entre 8h e 20h (seg–sáb) e só para mensagem dos últimos 60 minutos (a volta de uma queda não vira rajada). Agradecimento («ok», «obrigada», 👍) não alerta. Contato com a etiqueta «interno» não alerta. A régua olha a cada 10 minutos, então o alerta chega entre 5 e 15 minutos depois. Se a última mensagem for uma nota privada, a régua não enxerga a espera. Os grupos das unidades no Telegram ainda não existem: o aviso vai só para o João.',
+    risco: 'escreve-campo',
+    temSeco: true,
+    quandoVazio: 'seco',
+    arquivo: 'src/lib/chatwoot-regua.ts',
+  },
+  {
+    id: 'chatwoot-prometeu-sem-marcar',
+    chave: 'CHATWOOT_PROMETEU_SEM_MARCAR_SLUGS',
+    nome: 'Alerta no Chatwoot: a Sofia disse que marcou e não marcou',
+    oQueFaz:
+      'Quando a Sofia diz ao paciente que a consulta está marcada, reservada ou confirmada («fica reservado sexta às 9h», «te espero amanhã») e não há consulta — nem marcada por ela, nem no cartão (a agenda da franquia grava a data na conversa) —, deixa uma NOTA PRIVADA para a equipe ligar e marcar e avisa o João. Um alerta por conversa por dia.',
+    pegadinha:
+      'Usa o mesmo detector de frases da Kommo (pergunta, oferta e condição não contam). Confere 10 minutos depois da fala, para o caso de o paciente responder e a Sofia marcar em seguida. Paciente em tratamento não alerta. Diferente da Kommo, a franquia é consultada só pela agenda que já preenche a conversa (janela de ontem a 14 dias): marcação da recepção fora dessa janela ainda pode gerar alerta.',
+    risco: 'escreve-campo',
+    temSeco: true,
+    quandoVazio: 'seco',
+    arquivo: 'src/lib/chatwoot-regua.ts',
+  },
+  {
+    id: 'chatwoot-agendamento-perdido',
+    chave: 'CHATWOOT_AGENDAMENTO_PERDIDO_SLUGS',
+    nome: 'Alerta no Chatwoot: agendamento perdido (sem alarme falso)',
+    oQueFaz:
+      'Quando a Sofia ofereceu horários e a consulta não foi marcada, 90 minutos depois deixa uma NOTA PRIVADA «agendamento perdido» e avisa o João — só se o paciente RESPONDEU depois da oferta, não adiou (sem «Retomar em»/motivo de espera) e a equipe ainda pode agir (entre 8h e 20h). Um por conversa por dia.',
+    pegadinha:
+      'Já nasce com o filtro da Kommo embutido (adiou, nunca respondeu, madrugada). A oferta é gravada pela Sofia no ligado a partir de agora: não existe histórico de antes. Marcação feita pela recepção fora da janela da agenda (ontem a 14 dias) ainda pode gerar alerta.',
+    risco: 'escreve-campo',
+    temSeco: true,
+    quandoVazio: 'seco',
+    arquivo: 'src/lib/chatwoot-regua.ts',
+  },
+  {
+    id: 'chatwoot-aviso-agendamento',
+    chave: 'CHATWOOT_AVISO_AGENDAMENTO_SLUGS',
+    nome: 'Aviso no WhatsApp quando a Sofia marca (Chatwoot)',
+    oQueFaz: 'Avisa no WhatsApp do João, no instante, toda vez que a Sofia marca uma consulta pelo Chatwoot — e para quando. «Só no papel» deixa uma nota privada na conversa com o aviso que mandaria.',
+    pegadinha: 'É por unidade de propósito: ligar na rede toda vira metralhadora. Vale nos primeiros dias de uma unidade nova.',
+    risco: 'manda-mensagem',
+    temSeco: true,
+    quandoVazio: 'seco',
+    arquivo: 'src/lib/chatwoot-ia.ts',
+  },
 ] as const;
 
 const PORCHAVE = new Map(AUTOMACOES.map((a) => [a.chave, a]));

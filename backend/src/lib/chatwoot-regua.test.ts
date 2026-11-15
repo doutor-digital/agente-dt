@@ -871,3 +871,227 @@ test('falta de sessão: agenda e «compareceu_ultima_sessao» são o MESMO envio
     assert.deepEqual(regras(decidirRegua(conv({ attrs: { ...base, etapa_tratamento } }), { vistos: vistos(v1), feitos: new Set() }, Z('2026-11-19T13:05:00Z'), U)), [], etapa_tratamento);
   }
 });
+
+// ── ROTINAS E ALERTAS TRAZIDOS DA KOMMO (14/11/2026) ──────────────────────────────────────────────────
+
+const pub = (quando: string, saida = false, privada = false, texto?: string): MensagemResumo => ({ saida, privada, autorId: saida ? 7 : null, autorTipo: saida ? 'user' : 'contact', criadaEm: Z(quando), ...(texto ? { texto } : {}) });
+/** varre de 10 em 10 min acumulando o «feitos» (como o worker): regra → quando saiu */
+function varrerRotina(c: ConversaRegua, de: string, ate: string, v: Record<string, Visto> = {}, feitos: string[] = []) {
+  const f = new Set(feitos);
+  const saiu: Array<{ regra: string; modelo: string; quando: string; texto: string | null }> = [];
+  for (let t = Z(de).getTime(); t <= Z(ate).getTime(); t += 10 * 60_000) {
+    for (const x of decidirRegua(c, { vistos: vistos(v), feitos: f }, new Date(t), U).disparos) {
+      f.add(`${x.regra}|${x.chave}`);
+      saiu.push({ regra: x.regra, modelo: x.modelo, quando: new Date(t).toISOString(), texto: x.texto });
+    }
+  }
+  return saiu;
+}
+
+test('esquecidos — NÃO COMPARECEU: 1, 3 e 6 dias depois da falta, um degrau por vez, com os modelos aprovados', () => {
+  const attrs = { etapa: 'Agendado', situacao_consulta: 'Não compareceu', data_consulta: '2026-11-03', hora_consulta: '09:00' }; // falta ter 03/11 09:00 Belém
+  const v = { situacao_consulta: visto('Não compareceu', '2026-11-03T14:00:00Z') };
+  const r = varrerRotina(conv({ attrs }), '2026-11-03T14:10:00Z', '2026-11-20T12:00:00Z', v).filter((x) => x.regra.startsWith('esquecido'));
+  assert.deepEqual(r.map((x) => x.regra), ['esquecido-nc-1', 'esquecido-nc-2', 'esquecido-nc-3']);
+  assert.deepEqual(r.map((x) => x.modelo), ['parau_lead_reengajamento_48h', 'parau_lead_metodo_convite_96h', 'parau_lead_encerramento_120h']);
+  // falta marcada 03/11 14:00Z: + 1 d = 04/11, + 3 d = 06/11, + 6 d = 09/11 (segunda)
+  assert.deepEqual(r.map((x) => x.quando.slice(0, 10)), ['2026-11-04', '2026-11-06', '2026-11-09']);
+  // um degrau por vez: sem o 1º, o 2º não sai (não pula)
+  assert.deepEqual(varrerRotina(conv({ attrs }), '2026-11-06T14:00:00Z', '2026-11-06T15:00:00Z', v).map((x) => x.regra).filter((x) => x.startsWith('esquecido')), []);
+  const chave = `esquecido-nc@2026-11-03T14:00:00.000Z`;
+  assert.deepEqual(varrerRotina(conv({ attrs }), '2026-11-06T14:00:00Z', '2026-11-06T15:00:00Z', v, [`esquecido-nc-1|${chave}`]).map((x) => x.regra), ['esquecido-nc-2']);
+});
+
+test('esquecidos — NÃO COMPARECEU: NÃO manda com sem-follow-up, IA pausada, «Retomar em», motivo encerrado, currículo, tratamento, resposta, equipe falando ou entrada inicial', () => {
+  const attrs = { etapa: 'Agendado', situacao_consulta: 'Não compareceu', data_consulta: '2026-11-03', hora_consulta: '09:00' };
+  const v = { situacao_consulta: visto('Não compareceu', '2026-11-03T14:00:00Z') };
+  const nenhum = (c: ConversaRegua, vv = v) => assert.deepEqual(varrerRotina(c, '2026-11-03T14:10:00Z', '2026-11-12T12:00:00Z', vv).filter((x) => x.regra.startsWith('esquecido')), []);
+  nenhum(conv({ attrs, etiquetas: ['sem-follow-up'] }));
+  nenhum(conv({ attrs, etiquetas: ['ia-pausada'] }));
+  nenhum(conv({ attrs, etiquetas: ['curriculo'] }));
+  nenhum(conv({ attrs: { ...attrs, retomar_em: '2026-12-01' } }));
+  nenhum(conv({ attrs: { ...attrs, motivo_nao_agendamento: 'Plano de saúde' } }));
+  nenhum(conv({ attrs: { ...attrs, funil: 'Tratamento' } }));
+  nenhum(conv({ attrs: { ...attrs, categoria_consulta: 'Sessão' } }));
+  nenhum(conv({ attrs: { ...attrs, etapa: 'Perdido' } }));
+  // a equipe falou há menos de 24 h do degrau: espera (a última mensagem é nossa, de ontem)
+  nenhum(conv({ attrs, ultima: pub('2026-11-04T11:00:00Z', true) }));
+  // paciente respondeu: a escada ZERA e recomeça da resposta (1 dia depois dela)
+  const respondeu = varrerRotina(conv({ attrs, ultima: pub('2026-11-04T15:00:00Z') }), '2026-11-04T15:10:00Z', '2026-11-20T12:00:00Z', v).filter((x) => x.regra.startsWith('esquecido'));
+  assert.equal(respondeu[0]!.quando.slice(0, 10), '2026-11-05');
+  assert.equal(respondeu[0]!.regra, 'esquecido-nc-1', 'recomeça do degrau 1');
+  // entrada inicial (já era «Não compareceu» quando o worker passou a olhar) com consulta de antes da 1ª vista: sem disparo em massa
+  const velha = conv({ attrs });
+  const k = atualizarVistos(velha, new Map(), Z('2026-11-10T12:00:00Z'), { primeiraVez: true, desde: null });
+  assert.deepEqual(decidirRegua(velha, { vistos: k.vistos, feitos: new Set() }, Z('2026-11-12T12:00:00Z'), U).disparos.filter((x) => x.regra.startsWith('esquecido')), []);
+});
+
+test('esquecidos — EM NEGOCIAÇÃO (Pós-consulta): 2, 5 e 9 dias depois de entrar na etapa; só Pós-consulta; uma resposta zera', () => {
+  const attrs = { etapa: 'Pós-consulta' };
+  const v = { etapa: visto('Pós-consulta', '2026-11-02T12:00:00Z') };
+  const r = varrerRotina(conv({ attrs }), '2026-11-02T12:10:00Z', '2026-11-20T12:00:00Z', v).filter((x) => x.regra.startsWith('esquecido'));
+  assert.deepEqual(r.map((x) => x.regra), ['esquecido-neg-1', 'esquecido-neg-2', 'esquecido-neg-3']);
+  assert.deepEqual(r.map((x) => x.quando.slice(0, 10)), ['2026-11-04', '2026-11-07', '2026-11-11']);
+  assert.deepEqual(varrerRotina(conv({ attrs: { etapa: 'Compareceu' } }), '2026-11-02T12:10:00Z', '2026-11-20T12:00:00Z', { etapa: visto('Compareceu', '2026-11-02T12:00:00Z') }).filter((x) => x.regra.startsWith('esquecido')), []);
+  assert.deepEqual(varrerRotina(conv({ attrs }), '2026-11-02T12:10:00Z', '2026-11-20T12:00:00Z', { etapa: visto('Pós-consulta', '2026-11-02T12:00:00Z', true) }).filter((x) => x.regra.startsWith('esquecido')), [], 'já estava assim: não é entrada');
+  // sem memória da entrada, vale a data da consulta atendida (19/10 + 2, 5 e 9 dias)
+  const atendida = varrerRotina(conv({ attrs: { ...attrs, situacao_consulta: 'Atendido', data_consulta: '2026-10-19', hora_consulta: '12:00' } }), '2026-10-19T18:10:00Z', '2026-11-03T12:00:00Z').filter((x) => x.regra.startsWith('esquecido'));
+  assert.deepEqual(atendida.map((x) => x.quando.slice(0, 10)), ['2026-10-21', '2026-10-24', '2026-10-28']);
+  const respondeu = varrerRotina(conv({ attrs, ultima: pub('2026-11-05T15:00:00Z') }), '2026-11-05T15:10:00Z', '2026-11-20T12:00:00Z', v).filter((x) => x.regra.startsWith('esquecido'));
+  assert.equal(respondeu[0]!.quando.slice(0, 10), '2026-11-07');
+});
+
+test('ex-lead 30/60/90: quem nunca agendou, PERDIDO (entrada vista) ou EM ESPERA, três degraus em ordem; o 1º é a MESMA regra e chave da reativação da SDR', () => {
+  const v = { etapa: visto('Perdido', '2026-10-01T12:00:00Z') };
+  const r = varrerRotina(conv({ attrs: { etapa: 'Perdido' }, atendente: 'Ana Souza' }), '2026-10-01T12:10:00Z', '2027-01-20T12:00:00Z', v).filter((x) => x.modelo !== 'parau_lead_reengajamento_48h' || true).filter((x) => ['rotina-reativacao', 'exlead-60', 'exlead-90'].includes(x.regra));
+  assert.deepEqual(r.map((x) => x.regra), ['rotina-reativacao', 'exlead-60', 'exlead-90']);
+  assert.deepEqual(r.map((x) => x.modelo), ['parau_sdr_reativacao_lead_frio', 'parau_lead_metodo_convite_96h', 'parau_lead_encerramento_120h']);
+  assert.deepEqual(r.map((x) => x.quando.slice(0, 10)), ['2026-10-31', '2026-11-30', '2026-12-30']);
+  assert.match(r[0]!.texto!, /^Oi, Maria! Aqui é Ana, da Doutor Hérnia\./);
+  const sem = varrerRotina(conv({ attrs: { etapa: 'Perdido' }, atendente: null }), '2026-10-31T11:00:00Z', '2026-10-31T13:00:00Z', v);
+  assert.match(sem.find((x) => x.regra === 'rotina-reativacao')!.texto!, /Aqui é a equipe,/);
+  // chave igual à da SDR automática: reativacao@perdido@<desde>
+  const d = decidirRegua(conv({ attrs: { etapa: 'Perdido' }, atendente: 'Ana' }), { vistos: vistos(v), feitos: new Set() }, Z('2026-10-31T12:00:00Z'), U).disparos.find((x) => x.regra === 'rotina-reativacao')!;
+  assert.equal(d.chave, 'reativacao@perdido@2026-10-01T12:00:00.000Z');
+  // sem o 1º, o 2º não sai; EM ESPERA conta do dia de «Retomar em»
+  assert.deepEqual(varrerRotina(conv({ attrs: { etapa: 'Perdido' } }), '2026-11-30T12:00:00Z', '2026-11-30T13:00:00Z', v).filter((x) => x.regra === 'exlead-60'), []);
+  const espera = varrerRotina(conv({ attrs: { etapa: 'Sofia qualifica', retomar_em: '2026-10-17' }, atendente: 'Ana' }), '2026-10-17T12:10:00Z', '2027-01-20T12:00:00Z').filter((x) => ['rotina-reativacao', 'exlead-60', 'exlead-90'].includes(x.regra));
+  assert.deepEqual(espera.map((x) => x.quando.slice(0, 10)), ['2026-11-16', '2026-12-16', '2027-01-15']);
+});
+
+test('ex-lead: NÃO manda para quem já teve consulta, sem-follow-up, IA pausada, motivo de perda encerrado, currículo, resposta ou o estoque sem entrada além do 1º degrau', () => {
+  const v = { etapa: visto('Perdido', '2026-10-01T12:00:00Z') };
+  const todos = (c: ConversaRegua, vv = v) => varrerRotina(c, '2026-10-01T12:10:00Z', '2027-01-20T12:00:00Z', vv).filter((x) => ['rotina-reativacao', 'exlead-60', 'exlead-90'].includes(x.regra));
+  assert.deepEqual(todos(conv({ attrs: { etapa: 'Perdido', data_consulta: '2026-10-05', situacao_consulta: 'Atendido' } })), []);
+  assert.deepEqual(todos(conv({ attrs: { etapa: 'Perdido', situacao_consulta: 'Agendado' } })), []);
+  assert.deepEqual(todos(conv({ attrs: { etapa: 'Perdido' }, etiquetas: ['sem-follow-up'] })), []);
+  assert.deepEqual(todos(conv({ attrs: { etapa: 'Perdido' }, etiquetas: ['ia-pausada'] })), []);
+  assert.deepEqual(todos(conv({ attrs: { etapa: 'Perdido' }, etiquetas: ['curriculo'] })), []);
+  for (const motivo_nao_agendamento of ['Outra cidade', 'Clicou por engano', 'Sem interesse', 'Plano de saúde', 'Bandeira vermelha']) assert.deepEqual(todos(conv({ attrs: { etapa: 'Perdido', motivo_nao_agendamento } })), [], motivo_nao_agendamento);
+  assert.equal(todos(conv({ attrs: { etapa: 'Perdido', motivo_nao_agendamento: 'Não deu continuidade' } })).length, 3, 'motivo que não encerra o contato segue valendo');
+  // o paciente respondeu em 05/10: a escada recomeça dele (30 d depois = 04/11)
+  assert.equal(todos(conv({ attrs: { etapa: 'Perdido' }, ultima: pub('2026-10-05T12:00:00Z') }))[0]!.quando.slice(0, 10), '2026-11-04');
+  // estoque antigo (já era Perdido): só o 1º degrau, contado da última mensagem
+  const estoque = varrerRotina(conv({ attrs: { etapa: 'Perdido' }, ultima: pub('2026-10-01T12:00:00Z') }), '2026-10-01T12:10:00Z', '2027-01-20T12:00:00Z', { etapa: visto('Perdido', '2026-09-01T12:00:00Z', true) }).filter((x) => ['rotina-reativacao', 'exlead-60', 'exlead-90'].includes(x.regra));
+  assert.deepEqual(estoque.map((x) => x.regra), ['rotina-reativacao']);
+  // Em espera com o paciente andando (Agendado/Fechou) não recebe
+  assert.deepEqual(varrerRotina(conv({ attrs: { etapa: 'Agendado', retomar_em: '2026-10-17' } }), '2026-10-17T12:10:00Z', '2027-01-20T12:00:00Z').filter((x) => x.regra === 'rotina-reativacao'), []);
+});
+
+test('aniversário: confirmado pela franquia → parabéns 9–12 h, até 3 dias de atraso, uma vez por ano; em tratamento a versão sem convite', () => {
+  const comAniversario = (attrs: Record<string, unknown> = {}, dia = '2026-11-17') => ({ ...conv({ attrs }), aniversarioEm: dia });
+  const hoje = decidirRegua(comAniversario(), { vistos: new Map(), feitos: new Set() }, Z('2026-11-17T12:30:00Z'), U); // terça 09:30
+  assert.deepEqual(regras(hoje), ['aniversario']);
+  assert.equal(hoje.disparos[0]!.modelo, 'parau_rotina_aniversario');
+  assert.equal(hoje.disparos[0]!.chave, 'aniversario@2026');
+  assert.match(hoje.disparos[0]!.texto!, /^Oi, Maria! Aqui é da Doutor Hérnia Parauapebas\.\nHoje é o seu dia/);
+  const trat = decidirRegua(comAniversario({ funil: 'Tratamento', etapa_tratamento: 'Em tratamento' }), { vistos: new Map(), feitos: new Set() }, Z('2026-11-17T12:30:00Z'), U);
+  assert.deepEqual(regras(trat), ['aniversario-tratamento']);
+  assert.equal(trat.disparos[0]!.modelo, 'parau_rotina_aniversario_tratamento');
+  // fora de 9–12 h não sai (nem às 08:30 nem à tarde), mesmo com a janela da régua aberta
+  for (const hora of ['11:30:00Z', '15:00:00Z', '16:30:00Z']) assert.deepEqual(regras(decidirRegua(comAniversario(), { vistos: new Map(), feitos: new Set() }, Z(`2026-11-17T${hora}`), U)), [], hora);
+  // fim de semana: faz anos no sábado 14/11, a régua cumprimenta na segunda 16/11 (dentro de 3 dias), e não depois
+  assert.deepEqual(regras(decidirRegua(comAniversario({}, '2026-11-14'), { vistos: new Map(), feitos: new Set() }, Z('2026-11-16T12:30:00Z'), U)), ['aniversario']);
+  assert.deepEqual(regras(decidirRegua(comAniversario({}, '2026-11-14'), { vistos: new Map(), feitos: new Set() }, Z('2026-11-18T12:30:00Z'), U)), [], 'passou de 3 dias');
+  // uma vez por ano; sem a confirmação da franquia não há aniversário
+  assert.deepEqual(regras(decidirRegua(comAniversario(), { vistos: new Map(), feitos: new Set(['aniversario|aniversario@2026']) }, Z('2026-11-17T12:30:00Z'), U)), []);
+  assert.deepEqual(regras(rodar(conv({}), '2026-11-17T12:30:00Z')), []);
+  // sem-follow-up, motivo encerrado e currículo seguram; a equipe pausar a IA NÃO segura um parabéns
+  for (const c of [{ ...conv({ etiquetas: ['sem-follow-up'] }), aniversarioEm: '2026-11-17' }, comAniversario({ motivo_nao_agendamento: 'Sem interesse' }), { ...conv({ etiquetas: ['curriculo'] }), aniversarioEm: '2026-11-17' }]) {
+    assert.deepEqual(regras(decidirRegua(c, { vistos: new Map(), feitos: new Set() }, Z('2026-11-17T12:30:00Z'), U)), []);
+  }
+  assert.deepEqual(regras(decidirRegua({ ...conv({ etiquetas: ['ia-pausada'] }), aniversarioEm: '2026-11-17' }, { vistos: new Map(), feitos: new Set() }, Z('2026-11-17T12:30:00Z'), U)), ['aniversario']);
+  // quem faz anos cede o dia: o degrau da escada que cairia nele espera
+  const v = { situacao_consulta: visto('Não compareceu', '2026-11-16T14:00:00Z') };
+  const nc = { etapa: 'Agendado', situacao_consulta: 'Não compareceu', data_consulta: '2026-11-16', hora_consulta: '09:00' };
+  assert.deepEqual(decidirRegua({ ...conv({ attrs: nc }), aniversarioEm: '2026-11-17' }, { vistos: vistos(v), feitos: new Set(['esquecido-nc-1|x']) }, Z('2026-11-17T14:30:00Z'), U).disparos.filter((x) => x.regra.startsWith('esquecido')), []);
+});
+
+test('alerta sem resposta: 5 min da última mensagem do paciente, só dentro de 1 h e do horário; agradecimento e contato interno não alertam; uma vez por espera', () => {
+  const ultima = pub('2026-11-16T12:00:00Z', false, false, 'Boa tarde, quero marcar uma consulta');
+  const r = rodar(conv({ attrs: { etapa: 'Novo lead' }, ultima }), '2026-11-16T12:05:00Z');
+  const a = r.disparos.find((x) => x.regra === 'alerta-sem-resposta')!;
+  assert.ok(a);
+  assert.equal(a.interna, 'alerta-sem-resposta');
+  assert.equal(a.chave, 'semresp5@2026-11-16T12:00:00.000Z');
+  assert.match(a.texto!, /Paciente sem resposta: a última mensagem dele \(«Boa tarde, quero marcar uma consulta»\) está há mais de 5 minutos sem resposta/);
+  const em = (min: number, c = conv({ attrs: {}, ultima })) => rodar(c, new Date(Z('2026-11-16T12:00:00Z').getTime() + min * 60_000).toISOString()).disparos.some((x) => x.regra === 'alerta-sem-resposta');
+  assert.equal(em(4), false);
+  assert.equal(em(5), true);
+  assert.equal(em(59), true);
+  assert.equal(em(66), false, 'passou de 1 h: a volta de uma queda não vira rajada');
+  assert.equal(em(10, conv({ attrs: {}, ultima: pub('2026-11-16T12:00:00Z', true) })), false, 'a última é da equipe/Sofia: respondida');
+  assert.equal(em(10, conv({ attrs: {}, ultima: pub('2026-11-16T12:00:00Z', false, true) })), false, 'nota privada não é mensagem do paciente');
+  assert.equal(em(10, conv({ attrs: {}, etiquetas: ['interno'], ultima })), false, 'contato interno');
+  assert.equal(em(10, conv({ attrs: {}, ultima: pub('2026-11-16T12:00:00Z', false, false, 'ok, obrigada 🙏') })), false, 'só agradecimento');
+  assert.equal(em(10, conv({ attrs: {}, ultima: pub('2026-11-16T12:00:00Z', false, false, 'obrigada, mas qual o valor?') })), true, 'agradecimento com pergunta pede resposta');
+  assert.equal(em(10, conv({ attrs: {}, ultima: pub('2026-11-16T12:00:00Z') })), true, 'áudio/imagem (sem texto) pede resposta');
+  // uma vez por espera e fora do horário não alerta (sábado à noite → só se ainda valer na manhã, o que já passou de 1 h)
+  assert.equal(rodar(conv({ attrs: {}, ultima }), '2026-11-16T12:10:00Z', {}, ['alerta-sem-resposta|semresp5@2026-11-16T12:00:00.000Z']).disparos.some((x) => x.regra === 'alerta-sem-resposta'), false);
+  assert.equal(rodar(conv({ attrs: {}, ultima: pub('2026-11-16T22:55:00Z', false, false, 'oi') }), '2026-11-16T23:05:00Z').disparos.some((x) => x.regra === 'alerta-sem-resposta'), false, '20:05 em Belém: fora do horário');
+});
+
+const SOFIA_FALOU = (texto: string, em: string) => ({ texto, em: Z(em) });
+const comFatos = (attrs: Record<string, unknown>, fatos: { falas?: Array<{ texto: string; em: Date }>; eventos?: Array<{ tipo: string; detalhe: string | null; em: Date }> }, o: { ultima?: MensagemResumo | null; etiquetas?: string[] } = {}): ConversaRegua => ({
+  ...conv({ attrs, etiquetas: o.etiquetas ?? [], ultima: o.ultima ?? null }),
+  fatos: { falasDaSofia: fatos.falas ?? [], eventos: fatos.eventos ?? [] },
+});
+
+test('alerta «a Sofia disse que marcou e não marcou»: 10 min depois da fala, sem consulta nem evento «marcou»; oferta/pergunta não conta; uma por conversa por dia', () => {
+  const falou = SOFIA_FALOU('Pronto, Maria! Sua consulta está marcada para quinta às 14h.', '2026-11-16T12:00:00Z');
+  const a = rodar(comFatos({ etapa: 'Sofia qualifica' }, { falas: [falou] }), '2026-11-16T12:10:00Z').disparos.find((x) => x.regra === 'alerta-prometeu-sem-marcar')!;
+  assert.ok(a);
+  assert.equal(a.interna, 'prometeu-sem-marcar');
+  assert.equal(a.chave, 'prometeu@2026-11-16');
+  assert.match(a.texto!, /A Sofia disse ao paciente «Sua consulta está marcada para quinta às 14h\.».*mas não há consulta marcada/);
+  const sai = (c: ConversaRegua, q = '2026-11-16T12:10:00Z', feitos: string[] = []) => rodar(c, q, {}, feitos).disparos.some((x) => x.regra === 'alerta-prometeu-sem-marcar');
+  assert.equal(sai(comFatos({}, { falas: [falou] }), '2026-11-16T12:09:00Z'), false, 'espera 10 min: o paciente pode responder e a Sofia marcar');
+  assert.equal(sai(comFatos({}, { falas: [SOFIA_FALOU('Quer que eu deixe reservado para quinta às 14h?', '2026-11-16T12:00:00Z')] })), false, 'pergunta não é promessa');
+  assert.equal(sai(comFatos({}, { falas: [SOFIA_FALOU('Tenho quinta às 9h ou às 10h, qual prefere?', '2026-11-16T12:00:00Z')] })), false, 'oferta não é promessa');
+  assert.equal(sai(comFatos({}, { falas: [falou], eventos: [{ tipo: 'marcou', detalhe: '2026-11-19T14:00', em: Z('2026-11-16T11:59:00Z') }] })), false, 'ela marcou de verdade');
+  assert.equal(sai(comFatos({ etapa: 'Agendado', situacao_consulta: 'Agendado', data_consulta: '2026-11-19', hora_consulta: '14:00' }, { falas: [falou] })), false, 'a agenda da franquia já gravou a consulta no cartão');
+  assert.equal(sai(comFatos({ data_consulta: '2026-11-01', situacao_consulta: 'Atendido' }, { falas: [falou] })), true, 'consulta antiga não vale');
+  assert.equal(sai(comFatos({ funil: 'Tratamento', etapa_tratamento: 'Em tratamento' }, { falas: [falou] })), false, 'paciente em tratamento');
+  assert.equal(sai({ ...conv({}) }), false, 'sem os fatos do banco nada é alertado');
+  assert.equal(sai(comFatos({}, { falas: [falou] }), '2026-11-16T12:10:00Z', ['alerta-prometeu-sem-marcar|prometeu@2026-11-16']), false, 'um por dia');
+  assert.equal(sai(comFatos({}, { falas: [falou] }), '2026-11-16T19:10:00Z'), false, 'depois de 6 h, perdeu');
+});
+
+test('alerta «agendamento perdido» sem alarme falso: 90 min depois da oferta, só se o paciente respondeu, não adiou e não marcou; de madrugada espera a manhã', () => {
+  const ofereceu = { tipo: 'ofereceu', detalhe: null, em: Z('2026-11-16T12:00:00Z') };
+  const respondeu = SOFIA_FALOU('Perfeito, vou ver com meu marido e te aviso.', '2026-11-16T12:20:00Z');
+  const sai = (c: ConversaRegua, q = '2026-11-16T13:35:00Z', feitos: string[] = []) => rodar(c, q, {}, feitos).disparos.find((x) => x.regra === 'alerta-agendamento-perdido');
+  const a = sai(comFatos({}, { eventos: [ofereceu], falas: [respondeu] }))!;
+  assert.ok(a);
+  assert.equal(a.interna, 'agendamento-perdido');
+  assert.equal(a.chave, 'perdido@2026-11-16');
+  assert.match(a.texto!, /Agendamento perdido: a Sofia ofereceu horários \(09:00\) e a consulta não foi marcada, mas o paciente respondeu/);
+  assert.equal(sai(comFatos({}, { eventos: [ofereceu], falas: [respondeu] }), '2026-11-16T13:29:00Z'), undefined, 'antes de 90 min');
+  assert.equal(sai(comFatos({}, { eventos: [ofereceu], falas: [] })), undefined, 'nunca respondeu: a régua de follow-up cuida');
+  assert.equal(sai(comFatos({}, { eventos: [ofereceu], falas: [], }, { ultima: pub('2026-11-16T12:30:00Z') })) !== undefined, true, 'a última mensagem dele depois da oferta também prova que respondeu');
+  assert.equal(sai(comFatos({ retomar_em: '2026-12-10', motivo_espera: 'Vai decidir' }, { eventos: [ofereceu], falas: [respondeu] })), undefined, 'adiou: a retomada cuida');
+  assert.equal(sai(comFatos({}, { eventos: [ofereceu, { tipo: 'marcou', detalhe: null, em: Z('2026-11-16T12:30:00Z') }], falas: [respondeu] })), undefined, 'marcou depois');
+  assert.equal(sai(comFatos({ data_consulta: '2026-11-19', hora_consulta: '14:00', situacao_consulta: 'Agendado' }, { eventos: [ofereceu], falas: [respondeu] })), undefined, 'a recepção marcou (a agenda gravou no cartão)');
+  assert.equal(sai(comFatos({ funil: 'Tratamento' }, { eventos: [ofereceu], falas: [respondeu] })), undefined);
+  assert.equal(sai(comFatos({}, { eventos: [ofereceu], falas: [respondeu] }), '2026-11-16T13:35:00Z', ['alerta-agendamento-perdido|perdido@2026-11-16']), undefined, 'uma por dia');
+  // oferta às 18:30 (21:30Z): os 90 min caem às 20:00 (fechado); sai de manhã (08:00 = 11:00Z do dia seguinte), dentro das 14 h de tolerância
+  const tarde = { tipo: 'ofereceu', detalhe: null, em: Z('2026-11-16T21:30:00Z') };
+  const fala = SOFIA_FALOU('Tudo bem, me avise.', '2026-11-16T21:40:00Z');
+  assert.equal(sai(comFatos({}, { eventos: [tarde], falas: [fala] }), '2026-11-16T23:05:00Z'), undefined, 'madrugada/fora do horário não avisa');
+  assert.ok(sai(comFatos({}, { eventos: [tarde], falas: [fala] }), '2026-11-17T11:10:00Z'), 'na manhã seguinte avisa, se ainda valer');
+});
+
+test('todas as regras novas têm automação própria no catálogo, que nasce «só no papel»', async () => {
+  const { automacaoPorId, verificarCatalogo } = await import('./automacoes.js');
+  const { AUTOMACAO_DA_REGRA, AUTOMACOES_DAS_ROTINAS } = await import('./chatwoot-regua.js');
+  assert.deepEqual(verificarCatalogo(), []);
+  assert.equal(AUTOMACOES_DAS_ROTINAS.length, 6, 'as 7ª (aviso de agendamento) não é uma regra da régua');
+  for (const id of [...AUTOMACOES_DAS_ROTINAS, 'chatwoot-aviso-agendamento']) {
+    const a = automacaoPorId(id)!;
+    assert.ok(a, id);
+    assert.equal(a.quandoVazio, 'seco', `${id} nasce em seco`);
+    assert.equal(a.temSeco, true, id);
+    assert.ok(id.startsWith('chatwoot-'));
+  }
+  for (const [regra, id] of Object.entries(AUTOMACAO_DA_REGRA)) assert.ok(automacaoPorId(id), `${regra} → ${id}`);
+});

@@ -38,6 +38,9 @@ import { cartaoNoKommoDaUnidade } from './chatwoot-cartao-kommo.js';
 import { portaDoChatwoot, type ConversaLida, type PortaDoChatwoot } from './chatwoot-porta.js';
 import { combinadoPelaEquipe, consultaDosAtributos, consultasReaisDoPaciente, diaEHoraNoFuso, divergenciaDoCombinado, idsDaIntegracao, type ConsultaReal } from './chatwoot-horario-combinado.js';
 import { SpineService } from '../services/spine.service.js';
+import { avisarJoao } from './alerta-whatsapp.js';
+import { chaveDoAviso, textoDoAviso } from './aviso-de-agendamento.js';
+import { dataPorExtenso } from './feriados.js';
 import { fusoDaUnidade } from './fuso.js';
 import { motivoDeNaoResponder, passarParaEquipeNoChatwoot, rodarSofiaDoChatwoot, type Fala, type ModoDaSofia, type ResultadoDaSofia } from './chatwoot-sofia.js';
 
@@ -184,6 +187,8 @@ export interface PortasDaIa {
   agendar(fn: () => void, ms: number): unknown;
   cancelar(t: unknown): void;
   hoje(): string;
+  /** a Sofia marcou uma consulta (só no ligado): o aviso no WhatsApp do João, se a automação «chatwoot-aviso-agendamento» está ligada (no papel, só uma nota privada) */
+  avisarAgendamento?(a: { slug: string; unidade: string; conversa: number; paciente: string | null; data: string; hora: string }): Promise<void>;
   /** só com o robô ligado: tira a conversa de «Pendentes» (a Sofia não respondeu; a equipe precisa ver) */
   abrirParaEquipe?(conversa: number): Promise<void>;
 }
@@ -197,6 +202,16 @@ export function portasReais(ctx: ContextoChatwoot): PortasDaIa {
   return {
     estado: (slug) => estadoDaAutomacao(slug, ID_IA, process.env.CHATWOOT_IA_SLUGS),
     unidade: (slug) => prisma.unit.findUnique({ where: { slug } }),
+    async avisarAgendamento(a) {
+      const e = estadoDaAutomacao(a.slug, 'chatwoot-aviso-agendamento', process.env.CHATWOOT_AVISO_AGENDAMENTO_SLUGS);
+      if (e === 'desligado') return;
+      const texto = textoDoAviso({ unidade: a.unidade, paciente: a.paciente, dia: dataPorExtenso(a.data), hora: a.hora });
+      if (e === 'seco') {
+        await chat.nota(a.conversa, `🧪 [SECO] Aviso que iria para o WhatsApp do João:\n\n${texto}`);
+        return;
+      }
+      await avisarJoao(texto, chaveDoAviso(a.slug, a.conversa, a.data, a.hora), 6 * 60 * 60_000);
+    },
     async mensagens(conversa) {
       const r = (await chamar(ctx, 'GET', `conversations/${conversa}/messages`)) as { payload?: unknown[] } | null;
       return Array.isArray(r?.payload) ? r.payload : [];
@@ -483,7 +498,13 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
     return 'nota';
   }
   // o que ela FEZ conta agora (a resposta pode ser descartada logo abaixo): consulta marcada na franquia, passagem para a equipe
-  if (r.agendou) await evento('marcou', { nome: lida.nome || null, detalhe: `${r.agendou.data}T${r.agendou.hora}` });
+  if (r.agendou) {
+    await evento('marcou', { nome: lida.nome || null, detalhe: `${r.agendou.data}T${r.agendou.hora}` });
+    await p.avisarAgendamento?.({ slug: m.slug, unidade: unit.name, conversa: m.conversa, paciente: lida.nome || null, data: r.agendou.data, hora: r.agendou.hora }).catch((err) => logger.warn({ err: String(err), conversa: m.conversa }, `${ID_IA}: o aviso do agendamento não saiu`));
+  } else if (!r.passouParaEquipe && r.acoes.some((a) => a.tool === 'consultar_horarios')) {
+    // ofereceu horários e não marcou: é o que o alerta de «agendamento perdido» vigia (só o ligado grava)
+    await evento('ofereceu');
+  }
   if (r.passouParaEquipe) await evento('equipe');
 
   // ligado: o paciente pode ter escrito de novo (ou a equipe respondido, ou outra cópia do servidor) enquanto a Sofia pensava

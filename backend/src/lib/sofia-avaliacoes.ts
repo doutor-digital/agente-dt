@@ -142,9 +142,9 @@ export interface EventoDaSofia {
   /**
    * marcou = consulta marcada na franquia; equipe = passou a conversa para a equipe; pix = o Pix do sinal saiu;
    * decisao = rodada em que ela NÃO respondeu ao paciente (nome = desfecho, detalhe = motivo) — só para a aba Registro, o painel
-   * não conta
+   * não conta; ofereceu = ofereceu horários e não marcou na rodada (só alimenta o alerta de agendamento perdido, nem o painel nem a aba Registro mostram)
    */
-  tipo: 'marcou' | 'equipe' | 'pix' | 'decisao';
+  tipo: 'marcou' | 'equipe' | 'pix' | 'decisao' | 'ofereceu';
   /** marcou: o nome do contato no Chatwoot */
   nome?: string | null;
   /** marcou: "AAAA-MM-DDTHH:mm" da consulta, no fuso da clínica */
