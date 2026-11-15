@@ -299,7 +299,7 @@ export const TELAS_JS = String.raw`
       }
       qd.appendChild(sec);
     });
-    qd.appendChild(definicoes(SEC_OP.map(function(s){ return s[1]+': '+s[2]; }).concat(['Só aparecem as conversas das caixas que o seu usuário enxerga. «Ligar» usa o telefone do contato; «Mensagem», «Agendar retorno», «Abrir conversa» e «Confirmar» abrem a conversa no Chatwoot. Nada daqui manda mensagem para paciente.']),'Como cada lista é montada'));
+    qd.appendChild(definicoes(SEC_OP.map(function(s){ return s[1]+': '+s[2]; }).concat(['Só aparecem as conversas das caixas que o seu usuário enxerga. «Ligar» usa o telefone do contato; «Mensagem», «Agendar retorno», «Abrir conversa» e «Confirmar» abrem a conversa no CRM. Nada daqui manda mensagem para paciente.']),'Como cada lista é montada'));
   }
 
   // ── tabelas ───────────────────────────────────────────────────────────────
@@ -326,7 +326,7 @@ export const TELAS_JS = String.raw`
     k.appendChild(tgKpi('Leads (Meta)',nbr(t.leads),'O que a Meta conta como lead: cadastro no site pelo pixel, formulário da Meta ou lead marcado na conversa do WhatsApp.',a?variacao(t.leads,a.leads,'subir',rot):null));
     s.appendChild(k);
     if(m.numerosForaDoChatwoot&&m.numerosForaDoChatwoot.length){
-      tgAvisos(['Os anúncios levam para o WhatsApp '+m.numerosForaDoChatwoot.map(fmtWhats).join(' e ')+', que não está no Chatwoot. As conversas desses anúncios não entram nos números de cima nem no rastreio abaixo; aqui aparecem como a Meta conta.']).forEach(function(x){ s.appendChild(x); });
+      tgAvisos(['Os anúncios levam para o WhatsApp '+m.numerosForaDoChatwoot.map(fmtWhats).join(' e ')+', que não está no CRM. As conversas desses anúncios não entram nos números de cima nem no rastreio abaixo; aqui aparecem como a Meta conta.']).forEach(function(x){ s.appendChild(x); });
     }
     if(!m.campanhas.length){ s.appendChild(tgVazio('Nenhuma campanha gastou neste período.','')); return s; }
     // mesmo teto da tabela do Gestor: o total segue somando todas
@@ -335,7 +335,7 @@ export const TELAS_JS = String.raw`
       var tr=el('tr'), nm=el('span'); nm.appendChild(document.createTextNode(cp.nome));
       var sub=[OBJETIVO[cp.objetivo]||'', cp.destinos.length?'→ '+cp.destinos.map(fmtWhats).join(', '):''].filter(Boolean).join(' · ');
       if(sub) nm.appendChild(el('span','cod','· '+sub));
-      if(cp.foraDoChatwoot){ var f=el('span','cod',' · fora do Chatwoot'); f.title='O número de destino não é uma caixa do Chatwoot.'; nm.appendChild(f); }
+      if(cp.foraDoChatwoot){ var f=el('span','cod',' · fora do CRM'); f.title='O número de destino não é uma caixa do CRM.'; nm.appendChild(f); }
       celula(tr,'Campanha',nm,'t'); celula(tr,'Investido',dinheiro(cp.gasto,mo,true)); celula(tr,'Conversas',nbr(cp.conversas)); celula(tr,'Custo/conversa',dinheiro(cp.custoPorConversa,mo,true)); celula(tr,'Leads',nbr(cp.leads));
       return tr;
     });
@@ -399,7 +399,7 @@ export const TELAS_JS = String.raw`
       'Amanheceram: conversas criadas dentro do período (horário de Belém). Não interagiram: mesma regra da tela Hoje.',
       'Agendaram: conversas que entraram em Agendado dentro do período (memória da régua). Pagaram antecipado: etiqueta pagou-antecipado com atividade no período.',
       'Rastreio: a campanha é lida da 1ª mensagem do paciente (referral do anúncio); sem ela, do código gravado no contato. «Agendou» e «Fechou» da tabela são o estado de hoje dos leads que chegaram no período.',
-      'Anúncios na Meta: lidos da conta de anúncios da unidade (o mesmo que o Gerenciador de Anúncios mostra). Conversas iniciadas = resultado das campanhas de WhatsApp; Leads (Meta) = o que a Meta conta como lead (cadastro no site pelo pixel, formulário da Meta ou lead marcado na conversa). A Meta separa por dia inteiro: na aba Manhã ela soma ontem e hoje; em Manhã e Fim do dia o bloco da Meta fica sem comparação (hoje ainda não acabou); em Semana, Quinzena e Mês a comparação é com os mesmos dias logo antes, com hoje ainda incompleto. Vale mesmo quando o anúncio leva para um número que não está no Chatwoot.',
+      'Anúncios na Meta: lidos da conta de anúncios da unidade (o mesmo que o Gerenciador de Anúncios mostra). Conversas iniciadas = resultado das campanhas de WhatsApp; Leads (Meta) = o que a Meta conta como lead (cadastro no site pelo pixel, formulário da Meta ou lead marcado na conversa). A Meta separa por dia inteiro: na aba Manhã ela soma ontem e hoje; em Manhã e Fim do dia o bloco da Meta fica sem comparação (hoje ainda não acabou); em Semana, Quinzena e Mês a comparação é com os mesmos dias logo antes, com hoje ainda incompleto. Vale mesmo quando o anúncio leva para um número que não está no CRM.',
       'A variação compara com o período anterior do mesmo tamanho; não aparece quando a leitura das conversas foi cortada.',
       'Só entram as caixas das unidades que o seu usuário enxerga.'
     ]));

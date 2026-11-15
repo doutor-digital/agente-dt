@@ -162,7 +162,7 @@ test('o nome do modelo na Meta: Parauapebas não muda; outra unidade troca só o
 });
 
 test('o seed da migration tem os mesmos valores que a semente do código', () => {
-  const sql = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../prisma/migrations/20261114120000_unit_chatwoot/migration.sql'), 'utf8');
+  const sql = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../prisma/migrations/20261114190100_unit_chatwoot/migration.sql'), 'utf8');
   const s = SEMENTE_PARAUAPEBAS;
   for (const trecho of [
     `'${s.prefixoModelos}', ${s.usuarioCelularId}, ${s.gerenteId}, ${s.metaAgendamentosDia}, '${s.kapsoPhoneNumberId}', '${s.wabaId}', '${s.envSufixo}'`,
@@ -295,7 +295,7 @@ test('duplicados: com mais de uma unidade, vale o estado MAIS RESTRITO (junção
 });
 
 test('a migration pode rodar de novo sem quebrar (chaves estrangeiras protegidas)', () => {
-  const sql = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../prisma/migrations/20261114120000_unit_chatwoot/migration.sql'), 'utf8');
+  const sql = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../prisma/migrations/20261114190100_unit_chatwoot/migration.sql'), 'utf8');
   assert.equal((sql.match(/duplicate_object/g) ?? []).length, 2);
   assert.ok(!/^ALTER TABLE .* ADD CONSTRAINT/m.test(sql), 'ADD CONSTRAINT solto (fora de DO) quebra na segunda execução');
 });

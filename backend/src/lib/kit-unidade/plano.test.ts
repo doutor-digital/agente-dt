@@ -107,13 +107,30 @@ test('só o que falta: uma etiqueta e um atributo ausentes viram exatamente isso
   assert.equal(passo(p, 'caixa').acao, 'nada');
 });
 
-test('unidade que já existe com campo diferente: ALTERAR dizendo qual campo', () => {
+test('unidade que já existe: campo VAZIO é preenchido (ALTERAR dizendo qual); campo já preenchido e diferente FICA (aviso) e só --sobrescrever troca', () => {
   const qq = q();
   const e = estadoCompleto(qq);
+  // diferente mas preenchido: fica como está
   e.banco!.unidade!.campos = { ...e.banco!.unidade!.campos, clinicAddress: 'Outro lugar', spineSlotMinutes: 20 };
   const p = montarPlano(qq, e, { molde: MOLDE });
-  assert.equal(passo(p, 'unidade').acao, 'alterar');
-  assert.match(passo(p, 'unidade').itens[0]!, /clinicAddress, spineSlotMinutes/);
+  assert.equal(passo(p, 'unidade').acao, 'nada');
+  assert.ok(passo(p, 'unidade').avisos.some((a) => /clinicAddress, spineSlotMinutes/.test(a) && /--sobrescrever/.test(a)));
+  // com --sobrescrever: troca, dizendo quais
+  const so = montarPlano(qq, e, { molde: MOLDE, sobrescrever: true });
+  assert.equal(passo(so, 'unidade').acao, 'alterar');
+  assert.match(passo(so, 'unidade').itens[0]!, /clinicAddress, spineSlotMinutes/);
+  // vazio: preenche sem flag nenhuma
+  const e2 = estadoCompleto(qq);
+  e2.banco!.unidade!.campos = { ...e2.banco!.unidade!.campos, clinicAddress: null, spineLunchStart: '' };
+  const p2 = montarPlano(qq, e2, { molde: MOLDE });
+  assert.equal(passo(p2, 'unidade').acao, 'alterar');
+  assert.match(passo(p2, 'unidade').itens[0]!, /clinicAddress/);
+  // unidade ATIVA: bloqueada sem a flag
+  const e3 = estadoCompleto(qq);
+  e3.banco!.unidade!.campos = { ...e3.banco!.unidade!.campos, isActive: true };
+  assert.equal(passo(montarPlano(qq, e3, { molde: MOLDE }), 'unidade').acao, 'bloqueado');
+  assert.ok(passo(montarPlano(qq, e3, { molde: MOLDE }), 'unidade').avisos.some((a) => /ATIVA/.test(a)));
+  assert.notEqual(passo(montarPlano(qq, e3, { molde: MOLDE, sobrescrever: true }), 'unidade').acao, 'bloqueado');
 });
 
 test('o seco mostra os 33 modelos prontos para a Meta, sem nada que a Meta recuse, e marca os de categoria não conferida', () => {
@@ -195,8 +212,13 @@ test('idempotência não depende da ORDEM das chaves do JSON (o jsonb do Postgre
   e.banco!.configChatwoot = { ...g, dadosModelos: Object.fromEntries(Object.entries(g.dadosModelos).reverse()) };
   assert.equal(passo(montarPlano(qq, e, { molde: MOLDE }), 'config-chatwoot').acao, 'nada');
   assert.equal(canonico({ b: 1, a: { d: [2, { y: 1, x: 2 }], c: 3 } }), canonico({ a: { c: 3, d: [2, { x: 2, y: 1 }] }, b: 1 }));
-  // e mudança de verdade continua sendo mudança
+  // mudança de verdade: o que já está preenchido FICA (aviso); só --sobrescrever troca
   e.banco!.configChatwoot = { ...g, dadosModelos: { ...g.dadosModelos, mapa: 'https://outro' } };
+  assert.equal(passo(montarPlano(qq, e, { molde: MOLDE }), 'config-chatwoot').acao, 'nada');
+  assert.ok(passo(montarPlano(qq, e, { molde: MOLDE }), 'config-chatwoot').avisos.some((a) => /dadosModelos\.mapa/.test(a)));
+  assert.equal(passo(montarPlano(qq, e, { molde: MOLDE, sobrescrever: true }), 'config-chatwoot').acao, 'alterar');
+  // campo vazio (número do Kapso, WABA) é preenchido sem flag
+  e.banco!.configChatwoot = { ...g, kapsoPhoneNumberId: null, wabaId: null };
   assert.equal(passo(montarPlano(qq, e, { molde: MOLDE }), 'config-chatwoot').acao, 'alterar');
 });
 

@@ -15,6 +15,7 @@ import { iniciarFaxinaSobDemanda } from '../lib/faxina-do-mes-worker.js';
 import { ACOES_SIMULADAS, resumirSimulacoes } from '../lib/so-no-papel.js';
 import {
   ehEstado,
+  gravarEstadoDaAutomacao,
   invalidarAutomacoes,
   panoramaDaUnidade,
   recarregarAutomacoes,
@@ -79,15 +80,7 @@ export async function definirAutomacaoHandler(req: Request, res: Response): Prom
   }
 
   const quem = (req as { user?: { email?: string } }).user?.email ?? null;
-  await prisma.unitAutomacao.upsert({
-    where: { unitId_automacao: { unitId: unit.id, automacao: idAutomacao } },
-    create: { unitId: unit.id, automacao: idAutomacao, estado, atualizadoPor: quem },
-    update: { estado, atualizadoPor: quem },
-  });
-
-  // Vale já na próxima pergunta, sem esperar os 30 s do cache — é o que faz a tela parecer instantânea.
-  invalidarAutomacoes();
-  await recarregarAutomacoes();
+  await gravarEstadoDaAutomacao(unit, idAutomacao, estado, quem);
 
   logger.warn(
     { unit: unit.slug, automacao: idAutomacao, estado, risco: catalogo.risco, por: quem },
