@@ -449,19 +449,24 @@ function auditarClipe(a: AcessoAoClipe): void {
 }
 
 /** Recarrega em segundo plano: na subida e a cada 10 min; se falhar, tenta de novo em 30 s. */
-function manterAtualizado<T>(carregar: () => Promise<T>, aplicar: (v: T) => void, nome: string): void {
+function manterAtualizado<T>(carregar: () => Promise<T>, aplicar: (v: T) => void, nome: string): Promise<void> {
+  let primeira: () => void = () => undefined;
+  const aPrimeiraCarga = new Promise<void>((r) => (primeira = r));
   const rodar = () => {
     carregar()
       .then((v) => {
         aplicar(v);
+        primeira();
         setTimeout(rodar, 10 * 60_000).unref();
       })
       .catch((err) => {
         logger.warn({ err }, `mcp-remoto: não consegui ler ${nome}; tento de novo`);
+        primeira(); // a tentativa terminou (mesmo falhando): quem espera não fica preso
         setTimeout(rodar, 30_000).unref();
       });
   };
   rodar();
+  return aPrimeiraCarga;
 }
 
 /**
@@ -610,9 +615,10 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   // Chatwoot (atendimento novo): criar/alterar direto; apagar e mandar mensagem a cliente em dois passos; apagar avisa o João no Telegram
   const chatwoot = criarContextoChatwoot(contaChatwootDoAmbiente(), { avisar: (texto) => enviarTelegram(texto, { canal: 'avisos' }) });
   let operadoresChatwoot = new Set<string>();
-  if (chatwoot.conta) manterAtualizado(operadoresDoChatwoot, (s) => (operadoresChatwoot = s), 'quem mexe no Chatwoot');
+  const primeirasCargas: Array<Promise<void>> = [];
+  if (chatwoot.conta) primeirasCargas.push(manterAtualizado(operadoresDoChatwoot, (s) => (operadoresChatwoot = s), 'quem mexe no Chatwoot'));
   let escolhedoresDeConta = new Set<string>();
-  if (chatwoot.conta) manterAtualizado(escolhedoresDeContaDoChatwoot, (s) => (escolhedoresDeConta = s), 'quem escolhe a conta do Chatwoot');
+  if (chatwoot.conta) primeirasCargas.push(manterAtualizado(escolhedoresDeContaDoChatwoot, (s) => (escolhedoresDeConta = s), 'quem escolhe a conta do Chatwoot'));
   const sistemas = criarContextoSistemas();
   manterAtualizado(contasSistemasDoBanco, (contas) => (sistemas.contas = contas), 'as contas do sistema novo');
   const pendentesSistemas = new PendentesSistemas();
@@ -653,6 +659,8 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
     carregarUnidades: unidadesDoBanco,
     franquia: { cliente: { log: (linha) => logger.info({ franquia: linha }, 'mcp-remoto: franquia') } },
     log: logger,
+    // quem conecta logo após um reinício espera (no máximo 3 s) a 1ª carga das listas do Chatwoot: sem isto a sessão sairia sem as ferramentas/o parâmetro `conta`
+    aguardar: () => Promise.race([Promise.all(primeirasCargas), new Promise((r) => setTimeout(r, 3000).unref())]),
     extras: (server, auditar, quem) => {
       registrarFerramentasKommo(server, kommo, auditar);
       registrarFerramentasBling(server, bling, kommo, auditar);

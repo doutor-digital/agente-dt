@@ -156,6 +156,8 @@ export function pedacosDoObjeto(corpo: string): string[] {
 }
 
 const NOMES_DE_CHAVE = new Set(['leadId', 'kommoLeadId', 'conversa', 'conversaId', 'conversationId']);
+/** Nas tabelas com cuid de Conversation, `conversationId` é o cuid (já da unidade) — mas `kommoLeadId`/`leadId` nelas continuam sendo chave que exige escopo. */
+const SEM_CUID = new Set(['leadId', 'kommoLeadId', 'conversa', 'conversaId']);
 const ESCOPOS = new Set(['unitId', 'unitSlug', 'clinica', 'caixa', 'conta']);
 /** Único spread aceito como escopo: o helper conhecido, chamado direto (nunca dentro de condicional). */
 const SPREAD_CONHECIDO = /^\.\.\.filtroDeCaixas\(/;
@@ -198,14 +200,14 @@ function objetosDoValor(valor: string): string[] {
  * Algum objeto do `where` usa uma chave de lead/conversa SEM escopo nele nem em quem o contém? (`conversation: { unitId, leadId }` e
  * `where: { unitId, OR: [{ leadId }] }` estão escopados; `{ id: conversationId }` não usa a chave: conversationId ali é VALOR.)
  */
-export function usaChaveSemEscopo(corpo: string, herdado = false): boolean {
+export function usaChaveSemEscopo(corpo: string, herdado = false, chaves: ReadonlySet<string> = NOMES_DE_CHAVE): boolean {
   const tem = herdado || temEscopo(corpo);
   for (const p of pedacosDoObjeto(corpo)) {
     const chave = nomeDaChave(p);
-    if (chave && NOMES_DE_CHAVE.has(chave) && !tem) return true;
+    if (chave && chaves.has(chave) && !tem) return true;
     const dois = p.indexOf(':');
     if (dois < 0 || p.startsWith('...')) continue;
-    for (const filho of objetosDoValor(p.slice(dois + 1))) if (usaChaveSemEscopo(filho, tem)) return true;
+    for (const filho of objetosDoValor(p.slice(dois + 1))) if (usaChaveSemEscopo(filho, tem, chaves)) return true;
   }
   return false;
 }
@@ -217,27 +219,33 @@ export function usaChaveSemEscopo(corpo: string, herdado = false): boolean {
 /** Tabelas cuja «chave de conversa» é o cuid de `Conversation` (que já é da unidade), não o id do Chatwoot: revisadas e liberadas POR TABELA. */
 export const TABELAS_COM_CUID = new Set(['message', 'conversationEvaluation', 'conversationOutcome']);
 
+/** `prisma.tabela.op(` ou `tx.tabela.op(` — com espaço e quebra de linha entre as partes — e `aggregate` além das demais. */
+export const CHAMADA_AO_BANCO = /\b(?:prisma|tx)\s*\.\s*(\w+)\s*\.\s*(findMany|findFirst|findUnique|findFirstOrThrow|findUniqueOrThrow|update|updateMany|delete|deleteMany|count|upsert|groupBy|aggregate)\s*\(/g;
+
 export function consultasPorChave(codigo: string): Array<{ tabela: string; linha: number; corpo: string; semEscopo: boolean }> {
-  const chamada = /prisma\.(\w+)\.(findMany|findFirst|findUnique|findFirstOrThrow|findUniqueOrThrow|update|updateMany|delete|deleteMany|count|upsert|groupBy)\(/g;
   const achadas: Array<{ tabela: string; linha: number; corpo: string; semEscopo: boolean }> = [];
-  for (const m of codigo.matchAll(chamada)) {
+  for (const m of codigo.matchAll(new RegExp(CHAMADA_AO_BANCO.source, 'g'))) {
     const fim = m.index! + m[0].length;
     const w = codigo.indexOf('where:', fim);
-    if (w < 0 || w > fim + 600 || TABELAS_COM_CUID.has(m[1]!)) continue;
+    if (w < 0 || w > fim + 600) continue;
     const corpo = corpoBalanceado(codigo, codigo.indexOf('{', w));
-    if (!pedacosComChave(corpo)) continue;
-    achadas.push({ tabela: m[1]!, linha: codigo.slice(0, m.index).split('\n').length, corpo: corpo.slice(0, 90), semEscopo: usaChaveSemEscopo(corpo) });
+    const chaves = TABELAS_COM_CUID.has(m[1]!) ? SEM_CUID : NOMES_DE_CHAVE;
+    if (!pedacosComChave(corpo, chaves)) continue;
+    achadas.push({ tabela: m[1]!, linha: codigo.slice(0, m.index).split('\n').length, corpo: corpo.slice(0, 90), semEscopo: usaChaveSemEscopo(corpo, false, chaves) });
   }
   return achadas;
 }
 
+/** Quantas chamadas `prisma.<tabela>.<op>(` / `tx.<tabela>.<op>(` o texto tem (com ou sem `where`): o denominador do teste de sanidade. */
+export const totalDeChamadasAoBanco = (codigo: string): number => [...codigo.matchAll(new RegExp(CHAMADA_AO_BANCO.source, 'g'))].length;
+
 /** O `where` usa alguma chave de lead/conversa (em qualquer nível)? */
-function pedacosComChave(corpo: string): boolean {
+function pedacosComChave(corpo: string, chaves: ReadonlySet<string> = NOMES_DE_CHAVE): boolean {
   return pedacosDoObjeto(corpo).some((p) => {
     const chave = nomeDaChave(p);
-    if (chave && NOMES_DE_CHAVE.has(chave)) return true;
+    if (chave && chaves.has(chave)) return true;
     const dois = p.indexOf(':');
-    return dois >= 0 && !p.startsWith('...') && objetosDoValor(p.slice(dois + 1)).some(pedacosComChave);
+    return dois >= 0 && !p.startsWith('...') && objetosDoValor(p.slice(dois + 1)).some((o) => pedacosComChave(o, chaves));
   });
 }
 
@@ -253,24 +261,32 @@ const REVISADAS: Array<{ arquivo: RegExp; tabela: string; motivo: string }> = [
   { arquivo: /lib\/disparo-worker\.ts$/, tabela: 'disparoDestinatario', motivo: 'disparo do Kommo, sem relação com o Chatwoot' },
 ];
 
-function soltasDoCodigo(): { achadas: number; soltas: string[] } {
+/** As consultas sem escopo de UM arquivo que a lista de revisadas NÃO libera (a liberação é por arquivo E tabela). */
+export function soltasDoArquivo(arquivo: string, codigo: string): string[] {
+  return consultasPorChave(codigo)
+    .filter((c) => c.semEscopo && !REVISADAS.some((r) => r.arquivo.test(arquivo) && r.tabela === c.tabela))
+    .map((c) => `${arquivo}:${c.linha} prisma.${c.tabela} ${c.corpo}`);
+}
+
+function soltasDoCodigo(): { achadas: number; chamadas: number; soltas: string[] } {
   const raiz = fileURLToPath(new URL('..', import.meta.url));
   let achadas = 0;
+  let chamadas = 0;
   const soltas: string[] = [];
   for (const arq of arquivosDeCodigo(raiz)) {
     const t = readFileSync(arq, 'utf8');
-    for (const c of consultasPorChave(t)) {
-      achadas++;
-      if (!c.semEscopo) continue;
-      if (!REVISADAS.some((r) => r.arquivo.test(arq) && r.tabela === c.tabela)) soltas.push(`${arq.slice(raiz.length)}:${c.linha} prisma.${c.tabela} ${c.corpo}`);
-    }
+    chamadas += totalDeChamadasAoBanco(t);
+    achadas += consultasPorChave(t).length;
+    soltas.push(...soltasDoArquivo(arq.slice(raiz.length), t));
   }
-  return { achadas, soltas };
+  return { achadas, chamadas, soltas };
 }
 
 test('o código não consulta tabela por chave de lead/conversa SEM escopo (unidade, clínica, caixa ou conta como CHAVE do where)', () => {
-  const { achadas, soltas } = soltasDoCodigo();
+  const { achadas, chamadas, soltas } = soltasDoCodigo();
   assert.ok(achadas > 30, `a varredura achou só ${achadas} consultas por chave de lead/conversa: o regex quebrou?`);
+  // o denominador conta TUDO (espaço/quebra de linha entre as partes, tx.<tabela>, aggregate): 884 chamadas com o regex antigo + as ~72 que ele não via
+  assert.ok(chamadas >= 940, `a varredura viu só ${chamadas} chamadas ao banco: o regex voltou a perder as multilinha/tx/aggregate?`);
   assert.deepEqual(soltas, [], 'consulta por chave de lead/conversa sem escopo: a conversa 5 de uma clínica colidiria com a da outra');
   // cada exceção revisada ainda existe (não vira lixo)
   const raiz = fileURLToPath(new URL('..', import.meta.url));
@@ -311,10 +327,57 @@ test('a varredura ACEITA o que tem escopo de verdade (chave, atalho, helper conh
   for (const c of ruim) assert.equal(consultasSemEscopo(c).length, 1, c);
 });
 
-test('exceção revisada vale para a TABELA, não para o arquivo: consulta nova de outra tabela num arquivo liberado é pega', () => {
+test('exceção revisada vale para ARQUIVO + TABELA: com um arquivo que está DE FATO na lista, a consulta nova de outra tabela é pega (quebra se a liberação voltar a ser por arquivo)', () => {
   const raiz = fileURLToPath(new URL('..', import.meta.url));
-  const arquivo = join(raiz, 'agent/follow-up.ts');
-  const novo = consultasSemEscopo('prisma.sofiaMensagem.findMany({ where: { conversa: 5 } })');
-  assert.equal(novo.length, 1);
-  assert.ok(!REVISADAS.some((r) => r.arquivo.test(arquivo) && r.tabela === novo[0]!.tabela));
+  const alvo = REVISADAS[0]!; // uma exceção real da lista
+  const arquivo = arquivosDeCodigo(raiz).find((a) => alvo.arquivo.test(a));
+  assert.ok(arquivo, `o arquivo da exceção «${alvo.arquivo}» não existe`);
+  const rel = arquivo!.slice(raiz.length);
+  const real = readFileSync(arquivo!, 'utf8');
+  assert.deepEqual(soltasDoArquivo(rel, real), [], 'o arquivo, como está, passa (a exceção da tabela dele vale)');
+  const comNova = `${real}\nexport const zz = () => prisma.sofiaMensagem.findMany({ where: { conversa: 5 } });\n`;
+  const pegas = soltasDoArquivo(rel, comNova);
+  assert.equal(pegas.length, 1, 'consulta nova de OUTRA tabela no arquivo liberado tem de ser pega');
+  assert.match(pegas[0]!, /sofiaMensagem/);
+  // e a MESMA tabela da exceção, no mesmo arquivo, continua liberada
+  const mesma = `${real}\nexport const zz = () => prisma.${alvo.tabela}.findMany({ where: { conversa: 5 } });\n`;
+  assert.deepEqual(soltasDoArquivo(rel, mesma), []);
+});
+
+test('a varredura enxerga chamada com espaço/quebra de linha, tx.<tabela> e aggregate', () => {
+  const casos = [
+    'prisma\n  .sofiaMensagem\n  .findMany({ where: { conversa: 5 } })',
+    'prisma . sofiaMensagem . findMany ( { where: { conversa: 5 } } )',
+    'await tx.sofiaMensagem.findMany({ where: { conversa: 5 } })',
+    'tx\n.funilTarefa\n.aggregate({ _count: true, where: { conversaId: 5 } })',
+    'prisma.funilTarefa.aggregate({ where: { conversaId: 5 } })',
+  ];
+  for (const c of casos) {
+    assert.equal(totalDeChamadasAoBanco(c), 1, c);
+    assert.equal(consultasSemEscopo(c).length, 1, `não pegou: ${c}`);
+  }
+  assert.equal(consultasSemEscopo('tx.funilTarefa.aggregate({ where: { conta: 1, conversaId: 5 } })').length, 0);
+});
+
+test('conversationOutcome (e as tabelas de cuid): conversationId é o cuid, mas `kommoLeadId` nelas EXIGE escopo', () => {
+  assert.equal(consultasSemEscopo('prisma.conversationOutcome.findMany({ where: { conversationId: x } })').length, 0);
+  assert.equal(consultasSemEscopo('prisma.conversationOutcome.findMany({ where: { kommoLeadId: 5 } })').length, 1);
+  assert.equal(consultasSemEscopo('prisma.conversationOutcome.findMany({ where: { unitId, kommoLeadId: 5 } })').length, 0);
+  assert.equal(consultasSemEscopo('prisma.message.findMany({ where: { conversationId: c.id } })').length, 0);
+});
+
+/**
+ * LIMITE REGISTRADO: a varredura é por TEXTO. Ela não vê o VALOR em tempo de execução — `where: { caixa: x }` com `x === undefined` o Prisma trata como
+ * «sem filtro» (o furo que o #351 fechou com `caixa` obrigatório no tipo). Por isso, além da varredura, NENHUMA assinatura do código pode declarar `caixa?:`
+ * (opcional) — exceto o retorno do helper `filtroDeCaixas`, que devolve `{}` de propósito para a conta do ambiente quando não há clínica de conta própria.
+ */
+test('nenhuma assinatura declara `caixa?:` opcional (o escopo com valor undefined some sem erro); só o helper filtroDeCaixas', () => {
+  const raiz = fileURLToPath(new URL('..', import.meta.url));
+  const achadas: string[] = [];
+  for (const arq of arquivosDeCodigo(raiz)) {
+    const t = readFileSync(arq, 'utf8');
+    for (const m of t.matchAll(/\bcaixa\s*\?\s*:/g)) achadas.push(`${arq.slice(raiz.length)}:${t.slice(0, m.index).split('\n').length}`);
+    for (const m of t.matchAll(/\bcaixa\s*:\s*undefined\b/g)) achadas.push(`${arq.slice(raiz.length)}:${t.slice(0, m.index).split('\n').length} (caixa: undefined)`);
+  }
+  assert.deepEqual(achadas.filter((x) => !/lib\/conta-da-requisicao\.ts/.test(x)), [], 'caixa opcional em assinatura: torne obrigatória no tipo');
 });
