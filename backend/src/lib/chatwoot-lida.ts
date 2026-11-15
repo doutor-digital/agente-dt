@@ -15,7 +15,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { Request, Response } from 'express';
 import { logger } from './logger.js';
 import { INSTANCIA_CAIXA } from './chatwoot-unidades.js';
-import { chamar, contaChatwootDoAmbiente, contextoDaCaixa, contextoDoAmbiente, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
+import { chamar, contextoDaCaixa, contextoDoAmbiente, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 
 /** instância do Evolution → caixa do Chatwoot */
 export { INSTANCIA_CAIXA };

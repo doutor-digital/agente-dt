@@ -132,10 +132,10 @@ test('autorizado: conta=2 vai na conta 2 com o token DELA (nunca o do ambiente);
 test('autorizado: `chatwoot_contas` lista as contas e as unidades de cada uma, sem token', async () => {
   const t = montar(true);
   const r = await t.chamar('chatwoot_contas');
-  const lista = JSON.parse(r.content[0]!.text) as Array<{ conta: number; padrao: boolean; unidades: string[] }>;
+  const lista = JSON.parse(r.content[0]!.text) as Array<{ conta: number; padrao: boolean; usavel: boolean; unidades: string[] }>;
   assert.deepEqual(lista, [
-    { conta: 1, padrao: true, unidades: [U.SEMENTE_PARAUAPEBAS.slug] },
-    { conta: 2, padrao: false, unidades: ['clinica-demonstracao'] },
+    { conta: 1, padrao: true, usavel: true, unidades: [U.SEMENTE_PARAUAPEBAS.slug] },
+    { conta: 2, padrao: false, usavel: true, unidades: ['clinica-demonstracao'] },
   ]);
   assert.doesNotMatch(r.content[0]!.text, /tk-/);
   assert.deepEqual(t.chamadas, []);
@@ -191,4 +191,26 @@ test('unidade que declara a mesma conta do ambiente: conta=1 continua sendo a pa
   const p = JSON.parse((await t.chamar('chatwoot_preparar', { metodo: 'DELETE', caminho: 'labels/3' })).content[0]!.text) as { codigo: string };
   const r = await t.chamar('chatwoot_confirmar', { codigo: p.codigo, conta: 1 });
   assert.equal(r.isError, undefined, 'o código preparado sem conta confirma com conta=1');
+});
+
+test('duas clínicas na MESMA conta, só a segunda com token próprio: a conta é usável (não depende de qual vem primeiro)', async () => {
+  const t = montar(true, 'joao@example.com');
+  const a = { ...DEMO, slug: 'a-clinica', envSufixo: 'AAA', caixas: [{ id: 30, tipo: 'cloud' as const }] };
+  const b = { ...DEMO, slug: 'b-clinica', envSufixo: 'BBB', caixas: [{ id: 31, tipo: 'cloud' as const }] };
+  U.aplicarConfigs([U.SEMENTE_PARAUAPEBAS, a as never, b as never]);
+  process.env.CHATWOOT_API_TOKEN_BBB = 'tk-da-bbb';
+  const r = await t.chamar('chatwoot_caixas', { conta: 2 });
+  assert.equal(r.isError, undefined);
+  const feitas = [...(t.chamadas as Array<{ token?: string }>)];
+  assert.equal(feitas[0]!.token, 'tk-da-bbb');
+  const lista = JSON.parse((await t.chamar('chatwoot_contas')).content[0]!.text) as Array<{ conta: number; usavel: boolean }>;
+  assert.equal(lista.find((x) => x.conta === 2)!.usavel, true);
+});
+
+test('chatwoot_contas marca como NÃO usável a conta sem token próprio', async () => {
+  const t = montar(true);
+  delete process.env.CHATWOOT_API_TOKEN_DEMO;
+  const lista = JSON.parse((await t.chamar('chatwoot_contas')).content[0]!.text) as Array<{ conta: number; usavel: boolean }>;
+  assert.equal(lista.find((x) => x.conta === 2)!.usavel, false);
+  assert.equal(lista.find((x) => x.conta === 1)!.usavel, true);
 });
