@@ -235,7 +235,9 @@ export function unidadesConfiguradas(): ConfigChatwootUnidade[] {
  */
 export function contaDaUnidade(slug: string): number | null | undefined {
   const c = configs.get(slug);
-  return c ? (c.contaId ?? null) : undefined;
+  if (!c) return undefined;
+  if (c.contaId === null || c.contaId === undefined) return null;
+  return Number.isInteger(c.contaId) && c.contaId > 0 ? c.contaId : undefined; // conta_id inválido nunca vira «conta do ambiente»
 }
 
 /** A unidade dona da caixa (qualquer tipo, inclusive histórico), ou `undefined`. */
