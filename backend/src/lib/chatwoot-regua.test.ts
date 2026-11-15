@@ -145,6 +145,21 @@ test('prepagamento: ao entrar em Agendado com pagamento antecipado; pendente 3 h
   assert.deepEqual(regras(rodar(conv({ attrs: AGENDADO }), '2026-11-16T14:59:00Z', v, ['prepagamento|agendado@2026-11-16T12:00:00.000Z'])), []);
 });
 
+test('prepagamento pendente tem teto: nunca sai a menos de 1 h da consulta (nem depois dela); o recado inicial não é afetado', () => {
+  const v = { etapa: visto('Agendado', T0) };
+  const feitos = ['prepagamento|agendado@2026-11-16T12:00:00.000Z'];
+  const hoje = (hora: string) => ({ ...AGENDADO, data_consulta: '2026-11-16', hora_consulta: hora });
+  const pend = (hora: string) => regras(rodar(conv({ attrs: hoje(hora) }), '2026-11-16T15:00:00Z', v, feitos)).includes('prepagamento-pendente');
+  // consulta às 13:30 (16:30Z): o pendente das 12:00 (15:00Z) cabe com 1 h de sobra
+  assert.equal(pend('13:30'), true);
+  // consulta às 12:30 (15:30Z): o pendente cairia 30 min antes dela — não sai
+  assert.equal(pend('12:30'), false);
+  // consulta às 11:00: o pendente cairia depois dela — não sai
+  assert.equal(pend('11:00'), false);
+  // e o primeiro recado do pré-pagamento sai igual
+  assert.ok(regras(rodar(conv({ attrs: hoje('12:30') }), T0, v)).includes('prepagamento'));
+});
+
 test('prepagamento: já pagou, sem antecipado, outra situação ou valor desconhecido', () => {
   const v = { etapa: visto('Agendado', T0) };
   assert.deepEqual(regras(rodar(conv({ attrs: AGENDADO, etiquetas: ['pagou-antecipado'] }), T0, v)), []);

@@ -126,7 +126,8 @@ export async function ajustesDaUnidade(banco: BancoDosRobos, slug: string): Prom
     // valor guardado que hoje não passa nos limites (mudaram) volta ao de fábrica: nunca um horário absurdo
     if (l.tempoMin !== null && tempoDentroDosLimites(l.regra, l.tempoMin)) tempoMin.set(l.regra, l.tempoMin);
     for (const [padrao, novo] of Object.entries(l.modelos)) {
-      if (robo.modelos.some((m) => m.modelo === padrao) && modeloCompativel(padrao, novo)) modelos.set(`${l.regra}|${padrao}`, novo);
+      const irmaos = robo.modelos.map((m) => m.modelo);
+      if (irmaos.includes(padrao) && modeloCompativel(padrao, novo, irmaos)) modelos.set(`${l.regra}|${padrao}`, novo);
     }
   }
   return { desligados, regua: { tempoMin, modelos } };
@@ -142,7 +143,13 @@ function tipoDaVariavel(campo: string): string {
 }
 const formaDoModelo = (modelo: string): string[] => camposDoModelo(modelo).map(tipoDaVariavel);
 
-export function modeloCompativel(padrao: string, novo: string): boolean {
+/**
+ * `novo` pode mandar no lugar de `padrao`? Só entre os modelos DE FÁBRICA do próprio robô (`irmaos`: o que o código do robô já monta, por
+ * exemplo véspera de consulta × véspera de sessão) e com as mesmas variáveis. Nunca o modelo de OUTRO robô: a véspera virando «a sua consulta é
+ * HOJE» tem a mesma forma (nome + data) e mentiria ao paciente.
+ */
+export function modeloCompativel(padrao: string, novo: string, irmaos: readonly string[]): boolean {
+  if (!irmaos.includes(padrao) || !irmaos.includes(novo)) return false;
   if (!(padrao in TEXTOS_PARAU) || !(novo in TEXTOS_PARAU)) return false;
   const a = formaDoModelo(padrao);
   const b = formaDoModelo(novo);
@@ -158,8 +165,8 @@ export interface OpcaoDeModelo {
 }
 
 /** Os modelos que podem mandar no lugar de `padrao`: aprovados na caixa, com as mesmas variáveis e que a régua sabe preencher. */
-export function opcoesDeModelo(padrao: string, aprovados: Aprovados | null): OpcaoDeModelo[] {
-  const lista = Object.keys(TEXTOS_PARAU).filter((m) => m === padrao || (modeloCompativel(padrao, m) && aprovados !== null && aprovados.has(m) && [null, camposDoModelo(m).length].includes(aprovados.get(m) ?? null)));
+export function opcoesDeModelo(padrao: string, aprovados: Aprovados | null, irmaos: readonly string[]): OpcaoDeModelo[] {
+  const lista = Object.keys(TEXTOS_PARAU).filter((m) => m === padrao || (modeloCompativel(padrao, m, irmaos) && aprovados !== null && aprovados.has(m) && [null, camposDoModelo(m).length].includes(aprovados.get(m) ?? null)));
   return lista.sort((a, b) => (a === padrao ? -1 : b === padrao ? 1 : a.localeCompare(b))).map((modelo) => ({ modelo, texto: textoDeExemplo(modelo) }));
 }
 
@@ -279,8 +286,9 @@ export async function visaoDosRobos(banco: BancoDosRobos, slug: string, o: { ago
         modelosDaTela: r.interna
           ? []
           : r.modelos.map((m) => {
-              const atual = e?.modelos[m.modelo] && modeloCompativel(m.modelo, e.modelos[m.modelo]!) ? e.modelos[m.modelo]! : m.modelo;
-              const opcoes = opcoesDeModelo(m.modelo, o.aprovados);
+              const irmaos = r.modelos.map((x) => x.modelo);
+              const atual = e?.modelos[m.modelo] && modeloCompativel(m.modelo, e.modelos[m.modelo]!, irmaos) ? e.modelos[m.modelo]! : m.modelo;
+              const opcoes = opcoesDeModelo(m.modelo, o.aprovados, irmaos);
               if (!opcoes.some((x) => x.modelo === atual)) opcoes.push({ modelo: atual, texto: textoDeExemplo(atual) });
               return { padrao: m.modelo, atual, texto: textoDeExemplo(atual), personalizado: atual !== m.modelo, opcoes };
             }),
@@ -343,7 +351,7 @@ export async function mudarRobo(banco: BancoDosRobos, p: PedidoDeMudanca): Promi
     const m = p.modelo as { padrao?: unknown; novo?: unknown };
     if (robo.interna || typeof m?.padrao !== 'string' || typeof m?.novo !== 'string' || !robo.modelos.some((x) => x.modelo === m.padrao)) return { ok: false, status: 400, erro: 'pedido inválido' };
     if (p.aprovados === null && m.novo !== m.padrao) return { ok: false, status: 409, erro: 'não consegui ler os modelos aprovados no Chatwoot agora — tente de novo em instantes' };
-    if (!opcoesDeModelo(m.padrao, p.aprovados).some((o) => o.modelo === m.novo)) return { ok: false, status: 400, erro: 'esse modelo não está aprovado nesta caixa ou pede variáveis diferentes das que o robô sabe preencher' };
+    if (!opcoesDeModelo(m.padrao, p.aprovados, robo.modelos.map((x) => x.modelo)).some((o) => o.modelo === m.novo)) return { ok: false, status: 400, erro: 'esse modelo não é um dos modelos deste robô, não está aprovado nesta caixa ou pede variáveis diferentes das que o robô sabe preencher' };
     const atual = (await banco.linhas(p.slug)).find((l) => l.regra === robo.regra)?.modelos ?? {};
     const novo = { ...atual };
     if (m.novo === m.padrao) delete novo[m.padrao];

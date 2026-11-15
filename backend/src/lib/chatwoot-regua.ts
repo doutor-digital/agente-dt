@@ -581,7 +581,9 @@ export function candidatos(c: ConversaRegua, vistos: Vistos, ajustes?: AjustesDa
     if (agendado && ehSim(a.pagamento_antecipado) && situ === 'Agendado' && !c.etiquetas.includes('pagou-antecipado')) {
       const chave = `agendado@${agendado.desde.toISOString()}`;
       saida.push({ regra: 'prepagamento', modelo: 'parau_consulta_prepagamento', chave, kind: 'depois', alvo: agendado.desde });
-      saida.push({ regra: 'prepagamento-pendente', modelo: 'parau_consulta_prepagamento_pendente', chave, kind: 'depois', alvo: new Date(agendado.desde.getTime() + tempo('prepagamento-pendente')) });
+      // «consigo segurar a vaga até amanhã»: o recado de pendência só faz sentido bem ANTES da consulta (pelo menos 1 h); mais perto que isso, não sai
+      const alvoPendente = new Date(agendado.desde.getTime() + tempo('prepagamento-pendente'));
+      if (!consulta || alvoPendente.getTime() + HORA <= instante(consulta, 8).getTime()) saida.push({ regra: 'prepagamento-pendente', modelo: 'parau_consulta_prepagamento_pendente', chave, kind: 'depois', alvo: alvoPendente });
     }
     // véspera (24 h), dia (3 h), preparo (1 h). Em «Fechou» o Kommo manda o texto de véspera da SESSÃO.
     // (consulta_confirmada do Kommo dispara no mesmo horário da véspera = disparo duplo: não replicado)
@@ -678,7 +680,7 @@ export function candidatos(c: ConversaRegua, vistos: Vistos, ajustes?: AjustesDa
   // retorno de 60 dias depois da alta (no Kommo fica no funil Comercial, etapa RETORNO PÓS-TRATAMENTO)
   const alta = lerData(a.data_alta);
   if (alta && str(a.categoria_consulta) === 'Retorno após tratamento') {
-    saida.push({ regra: 'alta-retorno-60d', modelo: 'parau_alta_retorno_60d', chave: `alta@${alta.iso}`, kind: 'depois', alvo: emBelem(somarDias(alta, Math.round(tempo('alta-retorno-60d') / DIA)), 9) });
+    saida.push({ regra: 'alta-retorno-60d', modelo: 'parau_alta_retorno_60d', chave: `alta@${alta.iso}`, kind: 'depois', alvo: emBelem(somarDias(alta, 60), 9) });
   }
 
   if (tratamento) {

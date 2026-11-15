@@ -99,7 +99,6 @@ const CENARIOS: Record<string, { c: ReturnType<typeof conv>; v: Map<string, Retu
   'falta-48h': { c: conv({ etapa: 'Agendado', situacao_consulta: 'Não compareceu', data_consulta: '2026-11-14', hora_consulta: '09:00' }), v: new Map() },
   'espera-retomada2': { c: conv({ etapa: 'Sofia qualifica', retomar_em: '2026-11-18', motivo_espera: 'Exames' }), v: new Map() },
   'alta-nps': { c: conv({ funil: 'Tratamento', etapa_tratamento: 'Alta' }), v: new Map([['etapa_tratamento', visto('Alta')]]) },
-  'alta-retorno-60d': { c: conv({ categoria_consulta: 'Retorno após tratamento', data_alta: '2026-10-01' }), v: new Map() },
   'pendencia-documento': { c: conv({ funil: 'Tratamento', etapa_tratamento: 'Em tratamento', motivo_nao_fechamento: 'Solicitado exames', data_consulta: '2026-11-10', hora_consulta: '10:00' }, ['pendencia-exame-avisado']), v: new Map() },
   'lead-quente-parado': { c: conv({ etapa: 'Sofia qualifica', qualificacao: 'Quente' }, [], saiuNaoCliente), v: new Map() },
   'sem-resposta-24h': { c: conv({ etapa: 'Sofia qualifica' }, [], saiuNaoCliente), v: new Map() },
@@ -145,18 +144,20 @@ test('validação do tempo: mesma direção, unidade do robô, inteiro, dentro d
   assert.equal(ok('consulta-vespera', 16, 'horas', 'antes').ok, true);
   assert.equal(ok('consulta-vespera', 32, 'horas', 'antes').ok, true);
   assert.equal(ok('consulta-vespera', 33, 'horas', 'antes').ok, false);
-  // «Foi bom te receber ontem»: 16 h a 32 h; «faz cerca de um mês»: 21 a 45 dias; «já se passaram 60 dias»: 55 a 65 dias
+  // «Foi bom te receber ontem»: 16 h a 24 h (a régua tolera 12 h de atraso: com 32 h + 12 h o "ontem" já seria anteontem); «faz cerca de um mês»: 21 a 45 dias
   assert.equal(ok('pos-atendimento', 12, 'horas', 'depois').ok, false);
   assert.equal(ok('pos-atendimento', 3, 'dias', 'depois').ok, false);
-  assert.equal(ok('pos-atendimento', 28, 'horas', 'depois').ok, true);
+  assert.equal(ok('pos-atendimento', 28, 'horas', 'depois').ok, false);
+  assert.equal(ok('pos-atendimento', 25, 'horas', 'depois').ok, false);
+  assert.equal(ok('pos-atendimento', 24, 'horas', 'depois').ok, true);
+  assert.equal(ok('pos-atendimento', 16, 'horas', 'depois').ok, true);
   assert.equal(ok('decisao-30d', 20, 'dias', 'depois').ok, false);
   assert.equal(ok('decisao-30d', 46, 'dias', 'depois').ok, false);
   assert.equal(ok('decisao-30d', 21, 'dias', 'depois').ok, true);
   assert.equal(ok('decisao-30d', 45, 'dias', 'depois').ok, true);
-  assert.equal(ok('alta-retorno-60d', 54, 'dias', 'depois').ok, false);
-  assert.equal(ok('alta-retorno-60d', 66, 'dias', 'depois').ok, false);
-  assert.equal(ok('alta-retorno-60d', 55, 'dias', 'depois').ok, true);
-  assert.equal(ok('alta-retorno-60d', 65, 'dias', 'depois').ok, true);
+  // «já se passaram 60 dias»: o número está no texto — fixo, sem edição
+  assert.equal(ok('alta-retorno-60d', 60, 'dias', 'depois').ok, false);
+  assert.equal(ok('alta-retorno-60d', 55, 'dias', 'depois').ok, false);
   // «de hoje» / «até amanhã»
   assert.equal(ok('consulta-dia', 7, 'horas', 'antes').ok, false);
   assert.equal(ok('prepagamento-pendente', 2, 'dias', 'depois').ok, false);
@@ -205,6 +206,15 @@ test('a ordem das sequências nunca se inverte: followup 48 h < 96 h < 120 h; p�
   assert.match(ordemQuebrada('decisao-4d', 8 * 1440, efetivo()) ?? '', /ANTES de «decisao-7d»/);
   assert.match(ordemQuebrada('decisao-7d', 4 * 1440, efetivo()) ?? '', /DEPOIS de «decisao-4d»/);
   assert.match(ordemQuebrada('decisao-4d', 1 * 1440, efetivo({ 'pos-atendimento': 30 * 60 })) ?? '', /DEPOIS de «pos-atendimento»/);
+  // folga mínima de 12 h entre robôs «depois» da mesma sequência (dois recados do mesmo assunto no mesmo dia parecem spam)
+  assert.match(ordemQuebrada('followup-96h', 48 * 60 + 11 * 60, efetivo()) ?? '', /DEPOIS de «followup-48h».*12 h de folga/);
+  assert.equal(ordemQuebrada('followup-96h', 48 * 60 + 12 * 60, efetivo()), null);
+  assert.match(ordemQuebrada('followup-48h', 96 * 60 - 11 * 60, efetivo()) ?? '', /ANTES de «followup-96h».*12 h de folga/);
+  assert.equal(ordemQuebrada('followup-48h', 96 * 60 - 12 * 60, efetivo()), null);
+  assert.match(ordemQuebrada('decisao-4d', 1 * 1440, efetivo({ 'pos-atendimento': 16 * 60 })) ?? '', /DEPOIS de «pos-atendimento»/, '24 h depois de 16 h: só 8 h de folga');
+  assert.equal(ordemQuebrada('decisao-4d', 2 * 1440, efetivo({ 'pos-atendimento': 16 * 60 })), null);
+  // os lembretes «antes» seguem só a ordem (1 h, 3 h, 24 h)
+  assert.equal(ordemQuebrada('consulta-dia', 2 * 60 + 1, efetivo()), null);
   assert.match(ordemQuebrada('consulta-dia', 30, efetivo()) ?? '', /DEPOIS de «consulta-preparo»/);
   assert.match(ordemQuebrada('consulta-preparo', 4 * 60, efetivo()) ?? '', /ANTES de «consulta-dia»/);
   assert.equal(ordemQuebrada('alta-nps', 1, efetivo()), null, 'robô fora de sequência');

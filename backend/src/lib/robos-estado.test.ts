@@ -99,49 +99,58 @@ test('tempo: valida, grava em minutos, igual ao de fábrica volta ao de fábrica
 
 // ── modelo ─────────────────────────────────────────────────────────────────────────────────────────
 
-test('modelo: só entra o aprovado na caixa e com as mesmas variáveis; o de fábrica volta ao padrão; sem a lista da Meta não troca', async () => {
+test('modelo: só entra o IRMÃO de fábrica do próprio robô, aprovado na caixa e com as mesmas variáveis; o de fábrica volta ao padrão; sem a lista da Meta não troca', async () => {
   const { banco, gravacoes } = bancoFalso();
-  const base = { slug: 's', papel: ADMIN, por: 'Su', regra: 'followup-48h' };
-  const padrao = 'parau_lead_reengajamento_48h'; // pede só o nome
-  const outro = 'parau_consulta_pos_atendimento'; // também só o nome
-  const comData = 'parau_consulta_lembrete_vespera'; // nome + data: forma diferente
-  const aprovados = new Map<string, number | null>([[padrao, 1], [outro, 1], [comData, 2]]);
-  assert.deepEqual(await E.mudarRobo(banco, { ...base, modelo: { padrao, novo: outro }, aprovados }), { ok: true, regra: 'followup-48h' });
-  assert.deepEqual(gravacoes[0]!.m, { modelos: { [padrao]: outro } });
+  const base = { slug: 's', papel: ADMIN, por: 'Su', regra: 'consulta-vespera' };
+  const padrao = 'parau_consulta_lembrete_vespera';
+  const irmao = 'parau_sessao_lembrete_vespera'; // o outro modelo de fábrica da mesma véspera (sessão)
+  const deOutroRobo = 'parau_consulta_confirmacao_dia'; // mesma forma (nome + data), mas é o «a sua consulta é HOJE» do robô consulta-dia
+  const semData = 'parau_lead_reengajamento_48h';
+  const aprovados = new Map<string, number | null>([[padrao, 2], [irmao, 2], [deOutroRobo, 2], [semData, 1]]);
+  assert.deepEqual(await E.mudarRobo(banco, { ...base, modelo: { padrao, novo: irmao }, aprovados }), { ok: true, regra: 'consulta-vespera' });
+  assert.deepEqual(gravacoes[0]!.m, { modelos: { [padrao]: irmao } });
+  const n = gravacoes.length;
+  // modelo de OUTRO robô, mesmo aprovado e com a mesma forma: recusa (a véspera viraria «a sua consulta é hoje»)
+  const r0 = await E.mudarRobo(banco, { ...base, modelo: { padrao, novo: deOutroRobo }, aprovados });
+  assert.equal(r0.ok, false);
+  assert.match(!r0.ok ? r0.erro : '', /não é um dos modelos deste robô/);
   // variáveis diferentes: recusa
-  const r1 = await E.mudarRobo(banco, { ...base, modelo: { padrao, novo: comData }, aprovados });
-  assert.equal(r1.ok, false);
+  assert.equal((await E.mudarRobo(banco, { ...base, modelo: { padrao, novo: semData }, aprovados })).ok, false);
   // não aprovado na caixa: recusa
-  const r2 = await E.mudarRobo(banco, { ...base, modelo: { padrao, novo: 'parau_alta_conclusao' }, aprovados });
-  assert.equal(r2.ok, false);
+  assert.equal((await E.mudarRobo(banco, { ...base, modelo: { padrao, novo: irmao }, aprovados: new Map([[padrao, 2]]) })).ok, false);
   // aprovado, mas a Meta diz que o corpo tem outro número de variáveis: recusa
-  const r3 = await E.mudarRobo(banco, { ...base, modelo: { padrao, novo: outro }, aprovados: new Map([[padrao, 1], [outro, 3]]) });
-  assert.equal(r3.ok, false);
+  assert.equal((await E.mudarRobo(banco, { ...base, modelo: { padrao, novo: irmao }, aprovados: new Map([[padrao, 2], [irmao, 3]]) })).ok, false);
   // modelo que a régua não conhece
   assert.equal((await E.mudarRobo(banco, { ...base, modelo: { padrao, novo: 'qualquer_coisa' }, aprovados })).ok, false);
   // o padrão não é um dos modelos deste robô
-  assert.equal((await E.mudarRobo(banco, { ...base, modelo: { padrao: 'parau_alta_conclusao', novo: outro }, aprovados })).ok, false);
+  assert.equal((await E.mudarRobo(banco, { ...base, modelo: { padrao: 'parau_alta_conclusao', novo: irmao }, aprovados })).ok, false);
+  // robô de um modelo só não tem com quem trocar
+  assert.equal((await E.mudarRobo(banco, { ...base, regra: 'consulta-dia', modelo: { padrao: deOutroRobo, novo: padrao }, aprovados })).ok, false);
   // robô interno não troca modelo
-  assert.equal((await E.mudarRobo(banco, { ...base, regra: 'lead-quente-parado', modelo: { padrao: 'interna:quente-parado', novo: outro }, aprovados })).ok, false);
+  assert.equal((await E.mudarRobo(banco, { ...base, regra: 'lead-quente-parado', modelo: { padrao: 'interna:quente-parado', novo: irmao }, aprovados })).ok, false);
+  assert.equal(gravacoes.length, n, 'nada recusado foi gravado');
   // lista da Meta indisponível: 409
-  const r4 = await E.mudarRobo(banco, { ...base, modelo: { padrao, novo: outro }, aprovados: null });
+  const r4 = await E.mudarRobo(banco, { ...base, modelo: { padrao, novo: irmao }, aprovados: null });
   assert.equal(!r4.ok && r4.status, 409);
   // voltar ao de fábrica (novo = padrão) tira a troca
   await E.mudarRobo(banco, { ...base, modelo: { padrao, novo: padrao }, aprovados });
   assert.deepEqual(gravacoes[gravacoes.length - 1]!.m, { modelos: {} });
 });
 
-test('opções de modelo: o de fábrica sempre vem primeiro; só aprovados e compatíveis; consulta-vespera tem uma troca por modelo de fábrica', () => {
-  const padrao = 'parau_lead_reengajamento_48h';
-  assert.deepEqual(E.opcoesDeModelo(padrao, null).map((o) => o.modelo), [padrao]);
-  const op = E.opcoesDeModelo(padrao, todosAprovados());
-  assert.equal(op[0]!.modelo, padrao);
-  for (const o of op) assert.ok(E.modeloCompativel(padrao, o.modelo) && o.texto, o.modelo);
-  assert.ok(!op.some((o) => o.modelo === 'parau_consulta_lembrete_vespera'), 'forma diferente não entra');
-  assert.equal(E.modeloCompativel(padrao, padrao), true);
-  assert.equal(E.modeloCompativel(padrao, 'nao_existe'), false);
-  // nome + data (consulta × sessão) é a mesma forma
-  assert.equal(E.modeloCompativel('parau_consulta_lembrete_vespera', 'parau_sessao_lembrete_vespera'), true);
+test('opções de modelo: o de fábrica sempre vem primeiro; só os irmãos do robô, aprovados e compatíveis', () => {
+  const vespera = ['parau_consulta_lembrete_vespera', 'parau_sessao_lembrete_vespera'];
+  const padrao = vespera[0]!;
+  assert.deepEqual(E.opcoesDeModelo(padrao, null, vespera).map((o) => o.modelo), [padrao]);
+  const op = E.opcoesDeModelo(padrao, todosAprovados(), vespera);
+  assert.deepEqual(op.map((o) => o.modelo), vespera, 'só ele e o irmão — nenhum modelo de outro robô, mesmo da mesma forma');
+  for (const o of op) assert.ok(E.modeloCompativel(padrao, o.modelo, vespera) && o.texto, o.modelo);
+  // robô de modelo único: só o dele
+  assert.deepEqual(E.opcoesDeModelo('parau_lead_reengajamento_48h', todosAprovados(), ['parau_lead_reengajamento_48h']).map((o) => o.modelo), ['parau_lead_reengajamento_48h']);
+  assert.equal(E.modeloCompativel(padrao, padrao, vespera), true);
+  assert.equal(E.modeloCompativel(padrao, 'nao_existe', [...vespera, 'nao_existe']), false);
+  assert.equal(E.modeloCompativel(padrao, 'parau_consulta_confirmacao_dia', vespera), false, 'fora dos irmãos');
+  assert.equal(E.modeloCompativel(padrao, 'parau_consulta_confirmacao_dia', [...vespera, 'parau_consulta_confirmacao_dia']), true, 'a forma é a mesma — por isso a trava é a lista de irmãos');
+  assert.equal(E.modeloCompativel(vespera[1]!, padrao, vespera), true);
 });
 
 // ── o que o worker lê ───────────────────────────────────────────────────────────────────────────────
@@ -151,8 +160,8 @@ test('ajustesDaUnidade: desligados, tempo e modelo; lixo antigo é ignorado', as
   const { banco } = bancoFalso({
     linhas: {
       u: [
-        { regra: 'consulta-vespera', ligado: false, tempoMin: 1800, modelos: { parau_consulta_lembrete_vespera: 'parau_consulta_confirmacao_dia' }, por: 'Su', em },
-        { regra: 'followup-48h', ligado: true, tempoMin: 99999999, modelos: { parau_lead_reengajamento_48h: 'parau_consulta_pos_atendimento', inventado: 'x' }, por: 'Su', em },
+        { regra: 'consulta-vespera', ligado: false, tempoMin: 1800, modelos: { parau_consulta_lembrete_vespera: 'parau_sessao_lembrete_vespera' }, por: 'Su', em },
+        { regra: 'followup-48h', ligado: true, tempoMin: 99999999, modelos: { parau_lead_reengajamento_48h: 'parau_consulta_pos_atendimento', inventado: 'x' }, por: 'Su', em }, // a troca por modelo de OUTRO robô gravada antes é ignorada
         { regra: 'robo-que-nao-existe-mais', ligado: false, tempoMin: null, modelos: {}, por: 'Su', em },
         { regra: 'alta-conclusao', ligado: true, tempoMin: 5, modelos: {}, por: 'Su', em },
       ],
@@ -163,10 +172,10 @@ test('ajustesDaUnidade: desligados, tempo e modelo; lixo antigo é ignorado', as
   assert.equal(a.regua.tempoMin!.get('consulta-vespera'), 1800);
   assert.equal(a.regua.tempoMin!.has('followup-48h'), false, 'valor fora dos limites volta ao de fábrica');
   assert.equal(a.regua.tempoMin!.has('alta-conclusao'), false, 'robô sem tempo ignora o valor');
-  // modelo de forma diferente (consulta-dia: nome + data, vespera pede nome + data → compatível) entra; o inventado não
-  assert.equal(a.regua.modelos!.get('consulta-vespera|parau_consulta_lembrete_vespera'), 'parau_consulta_confirmacao_dia');
-  assert.equal(a.regua.modelos!.get('followup-48h|parau_lead_reengajamento_48h'), 'parau_consulta_pos_atendimento');
-  assert.equal(a.regua.modelos!.size, 2);
+  // o irmão de fábrica entra; a troca por modelo de outro robô e o inventado não
+  assert.equal(a.regua.modelos!.get('consulta-vespera|parau_consulta_lembrete_vespera'), 'parau_sessao_lembrete_vespera');
+  assert.equal(a.regua.modelos!.has('followup-48h|parau_lead_reengajamento_48h'), false);
+  assert.equal(a.regua.modelos!.size, 1);
   // unidade sem nada: tudo de fábrica
   const v = await E.ajustesDaUnidade(banco, 'outra');
   assert.equal(v.desligados.size, 0);
@@ -266,7 +275,9 @@ test('mudarRobo recusa valor que inverta a ordem das sequências (followup, pós
   const r1 = await E.mudarRobo(banco, { ...p, regra: 'followup-48h', tempo: { numero: 72, unidade: 'horas', direcao: 'depois' } });
   assert.equal(!r1.ok && r1.status, 400);
   assert.match(!r1.ok ? r1.erro : '', /ANTES de «followup-96h»/);
-  assert.equal((await E.mudarRobo(banco, { ...p, regra: 'followup-48h', tempo: { numero: 59, unidade: 'horas', direcao: 'depois' } })).ok, true);
+  assert.equal((await E.mudarRobo(banco, { ...p, regra: 'followup-48h', tempo: { numero: 47, unidade: 'horas', direcao: 'depois' } })).ok, true);
+  // folga: o 48 h a menos de 12 h do 96 h (60 h) também é recusado
+  assert.equal((await E.mudarRobo(banco, { ...p, regra: 'followup-48h', tempo: { numero: 49, unidade: 'horas', direcao: 'depois' } })).ok, false);
   // followup-120h para 50 h ficaria antes do 96 h (60 h)
   assert.match(((await E.mudarRobo(banco, { ...p, regra: 'followup-120h', tempo: { numero: 50, unidade: 'horas', direcao: 'depois' } })) as { erro?: string }).erro ?? '', /DEPOIS de «followup-96h»/);
   // voltar o 96 h ao de fábrica (96 h) está certo; mas o 48 h já foi para 59 h, e o 120 h segue acima: ok
@@ -275,8 +286,8 @@ test('mudarRobo recusa valor que inverta a ordem das sequências (followup, pós
   assert.equal((await E.mudarRobo(banco, { ...p, regra: 'decisao-4d', tempo: { numero: 8, unidade: 'dias', direcao: 'depois' } })).ok, false);
   assert.equal((await E.mudarRobo(banco, { ...p, regra: 'decisao-7d', tempo: { numero: 3, unidade: 'dias', direcao: 'depois' } })).ok, false);
   assert.equal((await E.mudarRobo(banco, { ...p, regra: 'decisao-4d', tempo: { numero: 5, unidade: 'dias', direcao: 'depois' } })).ok, true);
-  // pós-atendimento em 30 h; a decisão de 4 d não pode descer para 1 d (24 h) por baixo dele
-  assert.equal((await E.mudarRobo(banco, { ...p, regra: 'pos-atendimento', tempo: { numero: 30, unidade: 'horas', direcao: 'depois' } })).ok, true);
+  // pós-atendimento em 20 h; a decisão de 4 d não pode descer para 1 d (24 h) por baixo dele (precisa de 12 h de folga)
+  assert.equal((await E.mudarRobo(banco, { ...p, regra: 'pos-atendimento', tempo: { numero: 20, unidade: 'horas', direcao: 'depois' } })).ok, true);
   const baixo = await E.mudarRobo(banco, { ...p, regra: 'decisao-4d', tempo: { numero: 1, unidade: 'dias', direcao: 'depois' } });
   assert.match(!baixo.ok ? baixo.erro : '', /DEPOIS de «pos-atendimento»/);
   // lembretes: «hoje» não pode ficar abaixo do preparo nem acima da véspera
