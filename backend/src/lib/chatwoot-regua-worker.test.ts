@@ -828,3 +828,163 @@ test('sessão da agenda: duas conversas do mesmo telefone → só a mais recente
   assert.deepEqual(c.mensagens.map((m) => m.id), [2]);
   assert.match(c.mensagens[0]!.texto, /A sua sessão é amanhã/);
 });
+
+// ── rotinas e alertas trazidos da Kommo: cada uma com o próprio estado (nasce em SECO), alertas só para a equipe ──
+const MSG_5MIN = { tipo: 0, autor: 99, quando: '2026-11-16T12:00:00Z' }; // o paciente escreveu 09:00 em Belém
+const comRotinas = (armazem: Armazem, chat: Chat, estados: Record<string, 'seco' | 'ligado' | 'desligado'>, extra: Partial<DepsDoCiclo> = {}): DepsDoCiclo => ({
+  ...deps(armazem, chat),
+  estadoDaRotina: (_slug, id) => estados[id] ?? 'desligado',
+  ...extra,
+});
+const rodarAlerta = async (d: DepsDoCiclo, modoDaCaixa: 'seco' | 'ligado' = 'ligado') => {
+  await cicloDaCaixa(d, 2, 'doutor-hernia-parauapebas', modoDaCaixa, U, new Date('2026-11-16T12:01:00Z'));
+  return cicloDaCaixa(d, 2, 'doutor-hernia-parauapebas', modoDaCaixa, U, new Date('2026-11-16T12:07:00Z'));
+};
+const soDoAlerta = (mensagens: Array<{ texto: string }>) => mensagens.filter((m) => m.texto.includes('alerta-sem-resposta'));
+
+test('alerta sem resposta, SECO: só a nota «faria agora»; nenhuma prioridade, nenhum Telegram — mesmo com a caixa ligada', async () => {
+  const f = armazemFalso();
+  const c = chatFalso(() => [bruta(9, { attrs: {}, ultima: MSG_5MIN })]);
+  const telegram: string[] = [];
+  const d = comRotinas(f.armazem, c.chat, { 'chatwoot-alerta-sem-resposta': 'seco' }, { avisarTelegram: async (t) => void telegram.push(t) });
+  await rodarAlerta(d, 'ligado');
+  const notas = soDoAlerta(c.mensagens);
+  assert.equal(notas.length, 1);
+  assert.equal(c.mensagens.find((m) => m.texto.includes('alerta-sem-resposta'))!.privada, true);
+  assert.ok(notas[0]!.texto.startsWith('🧪 [SECO] Régua «alerta-sem-resposta» — faria agora:'));
+  assert.deepEqual(c.prioridades, []);
+  assert.deepEqual(telegram, []);
+  assert.equal(f.disparos.find((x) => x.regra === 'alerta-sem-resposta')!.modo, 'seco');
+});
+
+test('alerta sem resposta, LIGADO: nota privada + prioridade ALTA + UM aviso no Telegram; no ciclo seguinte não repete', async () => {
+  const f = armazemFalso();
+  const c = chatFalso(() => [bruta(9, { attrs: {}, ultima: MSG_5MIN })]);
+  const telegram: Array<{ texto: string; chave: string }> = [];
+  const d = comRotinas(f.armazem, c.chat, { 'chatwoot-alerta-sem-resposta': 'ligado' }, { avisarTelegram: async (texto, chave) => void telegram.push({ texto, chave }) });
+  await rodarAlerta(d, 'ligado');
+  await cicloDaCaixa(d, 2, 'doutor-hernia-parauapebas', 'ligado', U, new Date('2026-11-16T12:17:00Z'));
+  const notas = c.mensagens.filter((m) => m.texto.startsWith('🤖 Régua «alerta-sem-resposta»'));
+  assert.equal(notas.length, 1);
+  assert.equal(notas[0]!.privada, true);
+  assert.ok(c.mensagens.every((m) => m.privada), 'nada vai ao paciente');
+  assert.deepEqual(c.prioridades, [{ id: 9, p: 'high' }]);
+  assert.equal(telegram.length, 1);
+  assert.match(telegram[0]!.texto, /Doutor Hérnia Parauapebas · Maria da Silva \(conversa 9\)\n⏰ Paciente sem resposta/);
+});
+
+test('alerta sem resposta: rotina LIGADA com a caixa em SECO continua em seco (a caixa segura o que está no ar)', async () => {
+  const f = armazemFalso();
+  const c = chatFalso(() => [bruta(9, { attrs: {}, ultima: MSG_5MIN })]);
+  const telegram: string[] = [];
+  const d = comRotinas(f.armazem, c.chat, { 'chatwoot-alerta-sem-resposta': 'ligado' }, { avisarTelegram: async (t) => void telegram.push(t) });
+  await rodarAlerta(d, 'seco');
+  assert.equal(soDoAlerta(c.mensagens).length, 1);
+  assert.ok(soDoAlerta(c.mensagens)[0]!.texto.startsWith('🧪 [SECO]'));
+  assert.deepEqual(c.prioridades, []);
+  assert.deepEqual(telegram, []);
+});
+
+test('alerta sem resposta, DESLIGADO: nada — nem nota, nem prioridade, nem Telegram, nem registro', async () => {
+  const f = armazemFalso();
+  const c = chatFalso(() => [bruta(9, { attrs: {}, ultima: MSG_5MIN })]);
+  const telegram: string[] = [];
+  const d = comRotinas(f.armazem, c.chat, { 'chatwoot-alerta-sem-resposta': 'desligado' }, { avisarTelegram: async (t) => void telegram.push(t) });
+  await rodarAlerta(d, 'ligado');
+  assert.deepEqual(soDoAlerta(c.mensagens), []);
+  assert.deepEqual(c.prioridades, []);
+  assert.deepEqual(telegram, []);
+  assert.equal(f.disparos.some((x) => x.regra === 'alerta-sem-resposta'), false);
+});
+
+test('alerta sem resposta, LIGADO: o Telegram fora do ar não derruba o ciclo (a nota e a prioridade ficam)', async () => {
+  const f = armazemFalso();
+  const c = chatFalso(() => [bruta(9, { attrs: {}, ultima: MSG_5MIN })]);
+  const d = comRotinas(f.armazem, c.chat, { 'chatwoot-alerta-sem-resposta': 'ligado' }, { avisarTelegram: async () => { throw new Error('Telegram fora'); } });
+  const r = await rodarAlerta(d);
+  assert.ok(r.conversas === 1);
+  assert.equal(c.mensagens.filter((m) => m.texto.startsWith('🤖 Régua «alerta-sem-resposta»')).length, 1);
+});
+
+test('alerta sem resposta: cartão ATIVO no Kommo continua sendo só aviso interno (nunca mensagem ao paciente) — e o alerta sai', async () => {
+  const f = armazemFalso();
+  const c = chatFalso(() => [bruta(9, { attrs: {}, ultima: MSG_5MIN })]);
+  const d = comRotinas(f.armazem, c.chat, { 'chatwoot-alerta-sem-resposta': 'ligado' }, { kommo: async () => ({ leadId: 77 }) });
+  await rodarAlerta(d);
+  assert.ok(c.mensagens.every((m) => m.privada));
+  assert.deepEqual(c.prioridades, [{ id: 9, p: 'high' }]);
+});
+
+test('alerta «a Sofia disse que marcou e não marcou»: lê os fatos UMA vez por ciclo e só se a rotina não está desligada; ligado avisa o Telegram', async () => {
+  const falou = { texto: 'Pronto, Maria! Sua consulta está marcada para quinta às 14h.', em: new Date('2026-11-16T12:00:00Z') };
+  let lidas = 0;
+  const fatos = async (_s: string, ids: number[]) => {
+    lidas++;
+    return new Map(ids.map((id) => [id, { falasDaSofia: [falou], eventos: [] }]));
+  };
+  const montar = (estado: 'seco' | 'ligado' | 'desligado') => {
+    const f = armazemFalso();
+    const c = chatFalso(() => [bruta(9, { attrs: { etapa: 'Sofia qualifica' } })]);
+    const telegram: string[] = [];
+    return { f, c, telegram, d: comRotinas(f.armazem, c.chat, { 'chatwoot-prometeu-sem-marcar': estado }, { fatos, avisarTelegram: async (t) => void telegram.push(t) }) };
+  };
+  const ciclos = async (m: ReturnType<typeof montar>) => {
+    await cicloDaCaixa(m.d, 2, 'x', 'ligado', U, new Date('2026-11-16T12:05:00Z'));
+    await cicloDaCaixa(m.d, 2, 'x', 'ligado', U, new Date('2026-11-16T12:15:00Z'));
+  };
+  lidas = 0;
+  const off = montar('desligado');
+  await ciclos(off);
+  assert.equal(lidas, 0, 'desligada: nem consulta o banco');
+  assert.equal(off.c.mensagens.length, 0);
+  const seco = montar('seco');
+  await ciclos(seco);
+  assert.equal(lidas, 2, 'um por ciclo');
+  const notaSeca = seco.c.mensagens.filter((m) => m.texto.includes('prometeu-sem-marcar'));
+  assert.equal(notaSeca.length, 1);
+  assert.ok(notaSeca[0]!.texto.startsWith('🧪 [SECO]'));
+  assert.deepEqual(seco.telegram, []);
+  const on = montar('ligado');
+  await ciclos(on);
+  assert.equal(on.c.mensagens.filter((m) => m.texto.startsWith('🤖 Régua «alerta-prometeu-sem-marcar»')).length, 1);
+  assert.equal(on.telegram.length, 1);
+  assert.match(on.telegram[0]!, /A Sofia disse ao paciente «Sua consulta está marcada para quinta às 14h\.»/);
+  assert.deepEqual(on.c.prioridades, [], 'só o «sem resposta» sobe a prioridade');
+});
+
+test('fatos que falham não derrubam o ciclo: os alertas da Sofia esperam o próximo e o resto da régua segue', async () => {
+  const f = armazemFalso();
+  const c = chatFalso(() => [bruta(1, { attrs: CONSULTA })]);
+  const d = comRotinas(f.armazem, c.chat, { 'chatwoot-prometeu-sem-marcar': 'ligado' }, { fatos: async () => { throw new Error('banco fora'); } });
+  await cicloDaCaixa(d, 2, 'x', 'ligado', U, new Date('2026-11-16T17:20:00Z'));
+  const r = await cicloDaCaixa(d, 2, 'x', 'ligado', U, VESPERA);
+  assert.equal(r.disparos, 1);
+  assert.match(c.mensagens[0]!.texto, /^Olá, Maria\. A sua consulta é amanhã\./);
+});
+
+test('aniversariantes: só consulta a franquia se a rotina não está desligada; o casamento chega à régua como aniversarioEm', async () => {
+  let chamadas = 0;
+  const aniversariantes = async (_s: string, conversas: Array<{ id: number }>) => {
+    chamadas++;
+    return new Map(conversas.map((c) => [c.id, '2026-11-16']));
+  };
+  const manha = new Date('2026-11-16T12:30:00Z'); // 09:30 em Belém
+  const rodar = async (estado: 'seco' | 'ligado' | 'desligado') => {
+    const f = armazemFalso();
+    const c = chatFalso(() => [bruta(9, { attrs: { etapa: 'Esperando humano' } })], { aprovados: ['parau_rotina_aniversario'] });
+    const d = comRotinas(f.armazem, c.chat, { 'chatwoot-rotina-aniversario': estado }, { aniversariantes });
+    await cicloDaCaixa(d, 2, 'x', 'ligado', U, new Date('2026-11-16T12:20:00Z'));
+    await cicloDaCaixa(d, 2, 'x', 'ligado', U, manha);
+    return { f, c };
+  };
+  chamadas = 0;
+  const off = await rodar('desligado');
+  assert.equal(chamadas, 0);
+  assert.equal(off.f.disparos.some((x) => x.regra === 'aniversario'), false);
+  const seco = await rodar('seco');
+  assert.ok(chamadas >= 1);
+  const d = seco.f.disparos.find((x) => x.regra === 'aniversario');
+  assert.ok(d, 'a régua enxergou o aniversariante');
+  assert.equal(d!.modo, 'seco');
+  assert.ok(seco.c.mensagens.every((m) => m.privada), 'em seco só nota');
+});

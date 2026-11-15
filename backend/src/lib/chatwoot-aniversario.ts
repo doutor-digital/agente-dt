@@ -99,6 +99,7 @@ export async function aniversariantesDaFranquia(deps: DepsDoAniversario, slug: s
   let novas = 0;
   for (const c of conversas) {
     if (!c.telefone || !c.nome.trim() || c.etiquetas.includes('interno')) continue;
+    if (semAcento(c.nome).split(' ').length < 2) continue; // só o primeiro nome: nem gasta a busca
     const k = `${slug}|${semAcento(c.nome)}|${c.telefone.replace(/\D/g, '')}`;
     let achado = buscasFeitas.get(k);
     if (!achado || achado.ate < agora.getTime()) {

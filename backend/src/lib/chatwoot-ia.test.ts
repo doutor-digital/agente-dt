@@ -569,3 +569,47 @@ test('ROBÔ ligado: unidade com a Sofia desligada também abre a conversa', asyn
   await aoChegar(M, a.p, novaMemoriaDaIa());
   assert.deepEqual(abertas, [12]);
 });
+
+// ── rotinas e alertas trazidos da Kommo: o aviso do agendamento e a oferta de horários (alimenta o alerta de agendamento perdido) ──
+test('LIGADO: quando a Sofia marca, o aviso do agendamento sai (paciente, dia e hora); falha do aviso não derruba a resposta; no SECO nada', async () => {
+  const avisos: Array<{ conversa: number; paciente: string | null; data: string; hora: string; slug: string }> = [];
+  const a = portas({ estado: 'ligado', sofia: { resposta: 'Marquei para terça às 9h.', agendou: { data: '2026-11-17', hora: '09:00' } } });
+  a.p.avisarAgendamento = async (x) => {
+    avisos.push(x);
+  };
+  assert.equal(await rodarSofia(M, a.p, novaMemoriaDaIa()), 'enviada');
+  assert.equal(avisos.length, 1);
+  assert.deepEqual({ ...avisos[0]!, unidade: undefined }, { slug: 'doutor-hernia-parauapebas', unidade: undefined, conversa: 12, paciente: avisos[0]!.paciente, data: '2026-11-17', hora: '09:00' });
+  // o aviso lança: a resposta ao paciente sai do mesmo jeito
+  const b = portas({ estado: 'ligado', sofia: { resposta: 'Marquei para terça às 9h.', agendou: { data: '2026-11-17', hora: '09:00' } } });
+  b.p.avisarAgendamento = async () => {
+    throw new Error('WhatsApp fora');
+  };
+  assert.equal(await rodarSofia(M, b.p, novaMemoriaDaIa()), 'enviada');
+  assert.equal(b.publicas.length, 1);
+  // seco: não marcou de verdade, não avisa
+  const c = portas({ estado: 'seco', sofia: { agendou: { data: '2026-11-17', hora: '09:00' } } });
+  let chamou = false;
+  c.p.avisarAgendamento = async () => {
+    chamou = true;
+  };
+  await rodarSofia(M, c.p, novaMemoriaDaIa());
+  assert.equal(chamou, false);
+});
+
+test('LIGADO: ofereceu horários e não marcou grava o evento «ofereceu» (o alerta de agendamento perdido); marcar, passar para a equipe ou não consultar horários não grava', async () => {
+  const tipos = async (sofia: Partial<ResultadoDaSofia>) => {
+    const eventos: string[] = [];
+    const a = portas({ estado: 'ligado', sofia: { resposta: 'Tenho terça às 9h ou 10h.', ...sofia } });
+    a.p.registrarEvento = async (e) => {
+      eventos.push(e.tipo);
+    };
+    await rodarSofia(M, a.p, novaMemoriaDaIa());
+    return eventos;
+  };
+  const consultou = [{ tool: 'consultar_horarios', args: { data: '2026-11-17' } }];
+  assert.deepEqual(await tipos({ acoes: consultou }), ['ofereceu']);
+  assert.deepEqual(await tipos({ acoes: consultou, agendou: { data: '2026-11-17', hora: '09:00' } }), ['marcou']);
+  assert.deepEqual(await tipos({ acoes: consultou, passouParaEquipe: true }), ['equipe']);
+  assert.deepEqual(await tipos({ acoes: [] }), []);
+});

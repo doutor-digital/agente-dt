@@ -899,12 +899,12 @@ function candidatos(c: ConversaRegua, vistos: Vistos): Candidato[] {
   });
 }
 
-/** Até quando a regra ainda vale. */
 /** O que o texto da reativação mostra em «Aqui é {{2}}»: o primeiro nome de quem atende, ou «a equipe» (a reativação por etiqueta exige atendente). */
 function paraRenderizar(regra: string, c: ConversaRegua): ConversaRegua {
   return regra === 'rotina-reativacao' ? { ...c, atendente: primeiroNome(c.atendente ?? '') ?? 'a equipe' } : c;
 }
 
+/** Até quando a regra ainda vale. */
 function limiteDe(k: Candidato): Date {
   if (k.limiteMs !== undefined) return new Date(k.alvo.getTime() + k.limiteMs);
   if (k.kind === 'depois') return new Date(k.alvo.getTime() + ATRASO_MAX_DEPOIS_MS);
