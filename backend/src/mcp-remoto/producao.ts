@@ -335,6 +335,15 @@ async function operadoresDoChatwoot(): Promise<Set<string>> {
 }
 
 /**
+ * Quem pode ESCOLHER a conta do Chatwoot (parâmetro `conta` das chatwoot_*): SÓ os e-mails de MCP_CHATWOOT_CONTAS_EMAILS (usuário ativo do console).
+ * É à parte da lista de quem opera o Chatwoot (que inclui toda a escrita do Kommo): quem não está aqui fica na conta padrão (Parauapebas).
+ * Sem a variável, ninguém escolhe — o conector se comporta como sempre.
+ */
+async function escolhedoresDeContaDoChatwoot(): Promise<Set<string>> {
+  return idsDeUsuariosAtivos('MCP_CHATWOOT_CONTAS_EMAILS');
+}
+
+/**
  * Quem pode pedir envio de arquivo pelo conector (cofre de envio, `arquivos.ts`): quem já escreve (MCP_ESCRITA_EMAILS) mais os
  * e-mails de MCP_ARQUIVOS_EMAILS, para dar o cofre a quem só precisa dele sem dar também a escrita no Kommo/Asaas/banco.
  * Usuário ativo do console. Sem nenhuma das duas variáveis, ninguém usa.
@@ -602,6 +611,8 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   const chatwoot = criarContextoChatwoot(contaChatwootDoAmbiente(), { avisar: (texto) => enviarTelegram(texto, { canal: 'avisos' }) });
   let operadoresChatwoot = new Set<string>();
   if (chatwoot.conta) manterAtualizado(operadoresDoChatwoot, (s) => (operadoresChatwoot = s), 'quem mexe no Chatwoot');
+  let escolhedoresDeConta = new Set<string>();
+  if (chatwoot.conta) manterAtualizado(escolhedoresDeContaDoChatwoot, (s) => (escolhedoresDeConta = s), 'quem escolhe a conta do Chatwoot');
   const sistemas = criarContextoSistemas();
   manterAtualizado(contasSistemasDoBanco, (contas) => (sistemas.contas = contas), 'as contas do sistema novo');
   const pendentesSistemas = new PendentesSistemas();
@@ -679,7 +690,7 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
         );
       }
       if (leitoresWhatsapp.has(quem.userId)) registrarFerramentasEvolution(server, whatsapp, quem.userId, auditar);
-      if (operadoresChatwoot.has(quem.userId)) registrarFerramentasChatwoot(server, chatwoot, quem.email || `usuario:${quem.userId}`, auditar);
+      if (operadoresChatwoot.has(quem.userId)) registrarFerramentasChatwoot(server, chatwoot, quem.email || `usuario:${quem.userId}`, auditar, escolhedoresDeConta.has(quem.userId));
       registrarVideoSePermitido(server, video, quem.userId, leitoresVideo, auditar);
       registrarTranscricaoSePermitido(server, transcritor, quem.userId, leitoresVideo, auditar);
       registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas, convenia: convenia.contas, tiquetaque: tiquetaque.contas, tramitacao: tramitacao.contas, sistemas: contasDoRh(sistemas.contas), zenfisio: zenfisio.contas, gerais: chatwoot.conta && operadoresChatwoot.has(quem.userId) ? ['chatwoot_* (Chatwoot, o atendimento novo em atendimento.doutordigitalconsultoria.com: conversas, contatos, caixas, etiquetas, agentes, equipes, automações; criar e alterar direto, apagar e mandar mensagem a cliente em dois passos)'] : [] }), auditar);

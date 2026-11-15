@@ -278,6 +278,11 @@ export function caixasDeContasProprias(): number[] {
   return l;
 }
 
+/** As unidades SEM conta própria (as da conta do ambiente), em ordem alfabética. */
+export function unidadesSemConta(): string[] {
+  return [...configs.values()].filter((c) => c.contaId === null || c.contaId === undefined).map((c) => c.slug).sort();
+}
+
 /** As unidades que moram na conta própria `contaId`, em ordem ALFABÉTICA do slug (a mesma em toda chamada: quem pega a primeira pega sempre a mesma). */
 export function unidadesDaConta(contaId: number): string[] {
   return [...configs.values()].filter((c) => c.contaId === contaId).map((c) => c.slug).sort();
