@@ -153,6 +153,8 @@ const metaPorCaixa: Record<number, number> = {};
 const instanciaCaixa: Record<string, number> = {};
 const caixasCapi: Record<number, { slug: string; waba: string }> = {};
 const usuariosCelular: Set<number> = new Set();
+/** caixa → unidade dona (TODAS as caixas, inclusive as de histórico): quem diz de que conta é a caixa. */
+const donoDaCaixa: Record<number, string> = {};
 
 /** caixa → slug da unidade (só caixas que falam com paciente: cloud e evolution). */
 export const CAIXAS_REGUA: Readonly<Record<number, string>> = caixasRegua;
@@ -185,6 +187,7 @@ export function aplicarConfigs(lista: readonly ConfigChatwootUnidade[]): void {
   esvaziar(metaPorCaixa);
   esvaziar(instanciaCaixa);
   esvaziar(caixasCapi);
+  esvaziar(donoDaCaixa);
   caixasCloud.clear();
   caixasHistorico.clear();
   usuariosCelular.clear();
@@ -193,6 +196,7 @@ export function aplicarConfigs(lista: readonly ConfigChatwootUnidade[]): void {
     porSlug.set(c.slug, c);
     if (c.usuarioCelularId) usuariosCelular.add(c.usuarioCelularId);
     for (const cx of c.caixas) {
+      donoDaCaixa[cx.id] = c.slug;
       if (cx.tipo === 'historico') {
         caixasHistorico.add(cx.id);
         continue;
@@ -223,17 +227,26 @@ export function unidadesConfiguradas(): ConfigChatwootUnidade[] {
 }
 
 /**
- * A conta do Chatwoot da unidade: o id gravado, ou `null` = a conta do ambiente (quem monta o contexto troca `null` por `CHATWOOT_CONTA_ID`).
- * Unidade desconhecida também devolve `null` — o comportamento de sempre (uma conta só).
+ * A conta do Chatwoot da unidade. TRÊS respostas, e a diferença importa:
+ *  - um número: a conta própria da unidade;
+ *  - `null`: a unidade existe e mora na conta do AMBIENTE (`CHATWOOT_CONTA_ID`, a 1) — Parauapebas;
+ *  - `undefined`: unidade DESCONHECIDA (ou cuja configuração foi descartada por `conta_id` inválido, caixa ou prefixo repetido). Quem recebe
+ *    `undefined` RECUSA e não chama o Chatwoot: tratar como «conta do ambiente» faria a escrita de uma clínica cair na conta de outra.
  */
-export function contaDaUnidade(slug: string): number | null {
-  return configs.get(slug)?.contaId ?? null;
+export function contaDaUnidade(slug: string): number | null | undefined {
+  const c = configs.get(slug);
+  return c ? (c.contaId ?? null) : undefined;
 }
 
-/** A conta do Chatwoot da caixa (pela unidade dona da caixa). `null` = a do ambiente. */
-export function contaDaCaixa(caixa: number): number | null {
-  const slug = caixasRegua[caixa];
-  return slug ? contaDaUnidade(slug) : null;
+/** A unidade dona da caixa (qualquer tipo, inclusive histórico), ou `undefined`. */
+export function unidadeDaCaixa(caixa: number): string | undefined {
+  return donoDaCaixa[caixa];
+}
+
+/** A conta da CAIXA (pela unidade dona): número, `null` = a do ambiente, `undefined` = caixa que nenhuma unidade configurada tem (recusar). */
+export function contaDaCaixa(caixa: number): number | null | undefined {
+  const slug = donoDaCaixa[caixa];
+  return slug ? contaDaUnidade(slug) : undefined;
 }
 
 /**
