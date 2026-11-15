@@ -28,7 +28,7 @@ import { precosDaConsulta } from '../agent/prompt-composer.js';
 import { chaveDoTelefone } from './chatwoot-lida.js';
 import { enviarPelaEvolution } from './alerta-whatsapp.js';
 import { createKommoClientSemFreio } from '../services/kommo.service.js';
-import { chamar, contaChatwootDoAmbiente, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
+import { chamar, contaChatwootDoAmbiente, contextoDaCaixa, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 import {
   atualizarVistos,
   CAIXAS_CLOUD,
@@ -629,14 +629,22 @@ let timer: NodeJS.Timeout | null = null;
 let primeira: NodeJS.Timeout | null = null;
 let rodando = false;
 
+/**
+ * O Chatwoot da CAIXA: cada clínica tem a sua conta, e a caixa sabe de que conta é. Caixa sem conta própria (Parauapebas, e toda caixa que mora
+ * na conta de sempre) usa o contexto que veio — o mesmo objeto, as mesmas chamadas, na mesma ordem.
+ */
+export function chatDaCaixa(ctx: ContextoChatwoot, caixa: number): Chat | null {
+  const c = contextoDaCaixa(ctx, caixa);
+  return c ? chatDoChatwoot(c) : null; // null = caixa de nenhuma unidade configurada ou unidade sem conta válida: RECUSA, não chama o Chatwoot
+}
+
 async function varrer(ctx: ContextoChatwoot): Promise<void> {
   if (rodando) return;
   rodando = true;
   try {
     const banco = bancoDosRobos();
-    const deps: DepsDoCiclo = {
+    const deps: Omit<DepsDoCiclo, 'chat'> = {
       armazem: armazemDoBanco(),
-      chat: chatDoChatwoot(ctx),
       pausa: (ms) => new Promise((r) => setTimeout(r, ms)),
       ajustes: (slug) => ajustesDaUnidade(banco, slug),
     };
@@ -658,7 +666,12 @@ async function varrer(ctx: ContextoChatwoot): Promise<void> {
           prefixoModelos: configDaUnidade(slug)?.prefixoModelos,
         };
         const kommo = unit.kommoSubdomain && unit.kommoAccessToken ? cartaoNoKommoDaUnidade(unit) : undefined;
-        await cicloDaCaixa({ ...deps, kommo, avisarGerente: avisoDaGerente(slug) }, Number(caixaTxt), slug, modo, unidade, new Date());
+        const chat = chatDaCaixa(ctx, Number(caixaTxt));
+        if (!chat) {
+          logger.warn({ slug, caixa: caixaTxt }, `${ID_REGUA}: a caixa ${caixaTxt} não tem conta do Chatwoot válida (unidade desconhecida ou token ausente) — pulo, sem chamar o Chatwoot`);
+          continue;
+        }
+        await cicloDaCaixa({ ...deps, chat, kommo, avisarGerente: avisoDaGerente(slug) }, Number(caixaTxt), slug, modo, unidade, new Date());
       } catch (err) {
         logger.warn({ err: String(err), slug }, `${ID_REGUA}: ciclo falhou — tento no próximo`);
       }

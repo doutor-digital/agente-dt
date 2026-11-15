@@ -19,6 +19,7 @@
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { AUTOMACOES, automacaoPorId, type Automacao } from './automacoes.js';
+import { contaDaUnidade } from './chatwoot-unidades.js';
 
 export type Estado = 'ligado' | 'seco' | 'desligado';
 
@@ -100,13 +101,17 @@ export function estadoDaAutomacao(slug: string, id: string, raw: string | undefi
 }
 
 /**
- * O estado quando a tela nunca falou nada: na lista do `.env` = ligado; fora dela, o padrão do catálogo —
+ * O estado quando a tela nunca falou nada: na lista do `.env` = ligado; fora dela, o padrão do catálogo (clínica de conta própria: seco nas do CRM) —
  * desligado, ou "só no papel" para quem nasce em seco (`quandoVazio: 'seco'`).
  */
 export function estadoDoAmbiente(slug: string, raw: string | undefined, id?: string): Estado {
   if (naListaDoAmbiente(slug, raw, id)) return 'ligado';
   const a = id ? automacaoPorId(id) : undefined;
-  return a?.quandoVazio === 'seco' && a.temSeco ? 'seco' : 'desligado';
+  if (a?.quandoVazio === 'seco' && a.temSeco) return 'seco';
+  // CLÍNICA NOVA (conta própria no Chatwoot): as automações do CRM que têm modo seco nascem em SECO, sem ninguém ter gravado nada — decidem e
+  // anotam, não escrevem em ninguém. Unidade sem conta própria (Parauapebas) segue exatamente como antes: desligado.
+  if (id && a?.temSeco && id.startsWith('chatwoot-') && typeof contaDaUnidade(slug) === 'number') return 'seco';
+  return 'desligado';
 }
 
 /**
