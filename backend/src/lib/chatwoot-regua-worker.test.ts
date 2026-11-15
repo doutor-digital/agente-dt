@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { automacaoPorId, verificarCatalogo } from './automacoes.js';
 import { CAIXAS_REGUA } from './chatwoot-regua.js';
 import { chaveDoTelefone, mesmoTelefone } from './chatwoot-lida.js';
-import { cicloDaCaixa, finalDoTelefone, paramsDoTemplate, SUFIXO_SEM_TEMPLATE, type EnvioTemplate, numeroDaGerente, MAX_ETIQUETAS_POR_CICLO, MAX_MENSAGENS_POR_CICLO, quemFalaPorTelefone, type Armazem, type Chat, type DepsDoCiclo, type LinhaVista } from './chatwoot-regua-worker.js';
+import { cicloDaCaixa, finalDoTelefone, paramsDoTemplate, SUFIXO_SEM_TEMPLATE, type EnvioTemplate, numeroDaGerente, MAX_ETIQUETAS_POR_CICLO, MAX_MENSAGENS_POR_CICLO, REGRAS_COM_NOTA_DE_FALTA_NO_LIGADO, quemFalaPorTelefone, type Armazem, type Chat, type DepsDoCiclo, type LinhaVista } from './chatwoot-regua-worker.js';
 import type { DadosDaUnidade, MensagemResumo, Mudanca } from './chatwoot-regua.js';
 
 const U: DadosDaUnidade = { nome: 'Doutor Hérnia Parauapebas', pixKey: 'pix@parau.com', valorAntecipado: 250 };
@@ -827,4 +827,86 @@ test('sessão da agenda: duas conversas do mesmo telefone → só a mais recente
   await cicloDaCaixa(deps(f.armazem, c.chat), 2, 'x', 'ligado', U, VESPERA);
   assert.deepEqual(c.mensagens.map((m) => m.id), [2]);
   assert.match(c.mensagens[0]!.texto, /A sua sessão é amanhã/);
+});
+
+// ── SDR automática no worker: Kommo, modelo sem aprovação, nota de falta, um telefone ──
+
+const ULTIMA_PARADA = { tipo: 0, autor: 9, quando: '2026-11-14T12:00:00Z' }; // paciente, sábado 09:00 em Belém
+const SEG_9H = new Date('2026-11-16T12:00:00Z');
+
+test('retomada automática (ligado, caixa de texto): manda 1 vez e não repete a cada ciclo', async () => {
+  const f = armazemFalso();
+  const c = chatFalso(() => [bruta(1, { attrs: { etapa: 'Novo lead' }, ultima: ULTIMA_PARADA })]);
+  await cicloDaCaixa(deps(f.armazem, c.chat), 2, 'x', 'ligado', U, new Date('2026-11-16T11:00:00Z'));
+  await cicloDaCaixa(deps(f.armazem, c.chat), 2, 'x', 'ligado', U, SEG_9H);
+  await cicloDaCaixa(deps(f.armazem, c.chat), 2, 'x', 'ligado', U, new Date(SEG_9H.getTime() + 600_000));
+  assert.equal(c.mensagens.length, 1);
+  assert.equal(c.mensagens[0]!.privada, false);
+  assert.match(c.mensagens[0]!.texto, /^Oi, Maria! Aqui é da Doutor Hérnia Parauapebas\./);
+  assert.deepEqual(f.disparos.map((d) => d.regra), ['rotina-retomada']);
+});
+
+test('retomada automática com cartão ATIVO no Kommo: só a nota, nada ao paciente; um telefone, uma conversa que fala', async () => {
+  const f = armazemFalso();
+  const c = chatFalso(() => [bruta(1, { attrs: { etapa: 'Novo lead' }, ultima: ULTIMA_PARADA })]);
+  const kommo = async () => ({ leadId: 88 });
+  await cicloDaCaixa(comKommo(f.armazem, c.chat, kommo), 2, 'x', 'ligado', U, new Date('2026-11-16T11:00:00Z'));
+  const r = await cicloDaCaixa(comKommo(f.armazem, c.chat, kommo), 2, 'x', 'ligado', U, SEG_9H);
+  assert.equal(r.noKommo, 1);
+  assert.equal(c.mensagens.length, 1);
+  assert.equal(c.mensagens[0]!.privada, true);
+  assert.match(c.mensagens[0]!.texto, /cartão ativo no Kommo da unidade \(lead 88\)/);
+
+  // duas conversas do mesmo telefone: só a mais recente fala
+  const g = armazemFalso();
+  const tel = '+5594999990000';
+  const A = () => ({ ...bruta(1, { attrs: { etapa: 'Novo lead' }, ultima: ULTIMA_PARADA, telefone: tel }), last_activity_at: unix('2026-11-10T10:00:00Z') });
+  const B = () => ({ ...bruta(2, { attrs: { etapa: 'Novo lead' }, ultima: ULTIMA_PARADA, telefone: tel }), last_activity_at: unix('2026-11-14T12:00:00Z') });
+  const c2 = chatFalso(() => [A(), B()]);
+  await cicloDaCaixa(deps(g.armazem, c2.chat), 2, 'x', 'ligado', U, new Date('2026-11-16T11:00:00Z'));
+  await cicloDaCaixa(deps(g.armazem, c2.chat), 2, 'x', 'ligado', U, SEG_9H);
+  assert.deepEqual(c2.mensagens.map((m) => m.id), [2]);
+});
+
+test('retomada automática na caixa do WhatsApp oficial: modelo ainda PENDENTE na Meta → só uma nota «não aprovado», uma vez; aprovado → manda pelo modelo', async () => {
+  const f = armazemFalso();
+  const pendente = chatFalso(() => [bruta(1, { attrs: { etapa: 'Novo lead' }, ultima: ULTIMA_PARADA })], { aprovados: [] });
+  await cicloDaCaixa(deps(f.armazem, pendente.chat), 3, 'x', 'ligado', U, new Date('2026-11-16T11:00:00Z'));
+  const r = await cicloDaCaixa(deps(f.armazem, pendente.chat), 3, 'x', 'ligado', U, SEG_9H);
+  await cicloDaCaixa(deps(f.armazem, pendente.chat), 3, 'x', 'ligado', U, new Date(SEG_9H.getTime() + 600_000));
+  assert.equal(r.semTemplate, 1);
+  assert.equal(pendente.mensagens.length, 1);
+  assert.equal(pendente.mensagens[0]!.privada, true);
+  assert.match(pendente.mensagens[0]!.texto, /template parau_rotina_retomada .*não enviei/);
+  const g = armazemFalso();
+  const aprovado = chatFalso(() => [bruta(1, { attrs: { etapa: 'Novo lead' }, ultima: ULTIMA_PARADA })], { aprovados: { parau_rotina_retomada: 1 } });
+  await cicloDaCaixa(deps(g.armazem, aprovado.chat), 3, 'x', 'ligado', U, new Date('2026-11-16T11:00:00Z'));
+  await cicloDaCaixa(deps(g.armazem, aprovado.chat), 3, 'x', 'ligado', U, SEG_9H);
+  assert.equal(aprovado.mensagens.length, 1);
+  assert.equal(aprovado.mensagens[0]!.privada, false);
+  assert.equal(aprovado.mensagens[0]!.template?.nome, 'parau_rotina_retomada');
+  assert.deepEqual(aprovado.mensagens[0]!.template?.variaveis, ['Maria']);
+});
+
+test('boas-vindas automática (ligado): sem o «Programa» deixa UMA nota privada dizendo o que falta; com o campo preenchido depois, a mensagem sai', async () => {
+  const f = armazemFalso();
+  let attrs: Record<string, unknown> = { etapa: 'Compareceu', proxima_sessao: '2026-11-20', hora_sessao: '10:00' };
+  const c = chatFalso(() => [bruta(1, { attrs })]);
+  await cicloDaCaixa(deps(f.armazem, c.chat), 2, 'x', 'ligado', U, new Date('2026-11-16T11:00:00Z'));
+  attrs = { ...attrs, etapa: 'Fechou', fechou_tratamento: 'sim' }; // entrou em Fechou agora, sem o programa
+  const r = await cicloDaCaixa(deps(f.armazem, c.chat), 2, 'x', 'ligado', U, SEG_9H);
+  await cicloDaCaixa(deps(f.armazem, c.chat), 2, 'x', 'ligado', U, new Date(SEG_9H.getTime() + 600_000));
+  assert.equal(r.faltando, 1);
+  assert.equal(c.mensagens.length, 1);
+  assert.equal(c.mensagens[0]!.privada, true);
+  assert.match(c.mensagens[0]!.texto, /^🛑 Régua «rotina-boas-vindas» — NÃO enviei: falta nome do programa \(campo «Programa» do cartão\)\./);
+  assert.deepEqual(f.disparos.map((d) => d.regra), ['rotina-boas-vindas!falta']);
+  // a Gestora preenche o programa: sai a mensagem de verdade
+  attrs = { ...attrs, programa: 'Coluna Forte' };
+  await cicloDaCaixa(deps(f.armazem, c.chat), 2, 'x', 'ligado', U, new Date(SEG_9H.getTime() + 1_200_000));
+  assert.equal(c.mensagens.length, 2);
+  assert.equal(c.mensagens[1]!.privada, false);
+  assert.match(c.mensagens[1]!.texto, /programa Coluna Forte está confirmada/);
+  // as outras regras com campo faltando seguem caladas no ligado
+  assert.deepEqual([...REGRAS_COM_NOTA_DE_FALTA_NO_LIGADO], ['rotina-boas-vindas']);
 });

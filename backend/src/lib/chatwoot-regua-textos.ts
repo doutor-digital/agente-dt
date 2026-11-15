@@ -1,6 +1,7 @@
 /**
  * Textos dos modelos de WhatsApp do Kommo de Parauapebas que a régua do Chatwoot usa (lidos AO VIVO da API do Kommo em 12/11/2026).
  * São DADOS: o texto vale como está no Kommo (aprovado na Meta), com os campos entre {{ }} trocados em `chatwoot-regua.ts`.
+ * (`parau_rotina_retomada`, de 14/11/2026, é da retomada automática e nasce PENDENTE na Meta.)
  * Ficam de fora os modelos de campanha (outubro rosa, resgate, reativação dor na coluna), que não são régua, e os da régua que
  * não estão ligados no Kommo de Parauapebas (boas-vindas e 1ª sessão do tratamento, financeiro, avaliação Google).
  */
@@ -28,6 +29,7 @@ export const TEXTOS_PARAU: Readonly<Record<string, string>> = {
   parau_sdr_retomada_pos_ligacao: "Oi, {{contact.name}}! Aqui é {{lead.cf.2450732}}, da Doutor Hérnia.\nTentei te ligar agora há pouco e não consegui falar com você.\nPosso continuar por aqui mesmo? Em 2 minutos eu te explico os próximos passos.",
   parau_sdr_reativacao_lead_frio: "Oi, {{contact.name}}! Aqui é {{lead.cf.2450732}}, da Doutor Hérnia.\nFaz um tempo desde a nossa última conversa e não consegui te encontrar depois disso.\nSó pra eu saber como te ajudar: você ainda quer resolver isso agora ou prefere que eu te procure mais pra frente?",
   parau_sdr_boas_vindas_programa: "Oi, {{contact.name}}! Sua vaga no programa {{lead.cf.2450750}} está confirmada. ✅\nNo anexo está tudo o que você precisa: próximos passos, orientações e nossos contatos.\nSeu próximo compromisso é {{lead.cf.2450928}}.\nQualquer dúvida até lá, é só responder por aqui.",
+  parau_rotina_retomada: "Oi, {{contact.name}}! Aqui é da Doutor Hérnia Parauapebas.\nVocê conversou com a gente sobre a sua coluna e ficou faltando escolher um horário para a sua consulta.\nPosso ver os horários desta semana para você?\n\nPara não receber mais mensagens, responda SAIR.",
   parau_sessao_lembrete_vespera: "Olá, {{contact.name}}. A sua sessão é amanhã.\nData e horário: {{lead.cf.2450928}}\nEstá tudo certo?",
   parau_sessao_confirmacao_dia: "Bom dia, {{contact.name}}. A sua sessão de hoje está marcada para {{lead.cf.2450928}}.\nEstá tudo certo?",
   parau_sessao_aderencia_meio: "Olá, {{contact.name}}. Você já concluiu boa parte das sessões previstas no seu plano.\nMantenha a frequência: é ela que sustenta a evolução do tratamento. Qualquer dúvida, estou à disposição.",

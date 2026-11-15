@@ -61,6 +61,8 @@ const PRIMEIRA_VARREDURA_MS = 150_000;
 const MAX_PAGINAS = 200;
 export const MAX_MENSAGENS_POR_CICLO = 60;
 export const MAX_ETIQUETAS_POR_CICLO = 100;
+/** Regras que, no LIGADO, deixam uma nota privada quando falta campo (as outras só avisam no seco). */
+export const REGRAS_COM_NOTA_DE_FALTA_NO_LIGADO: ReadonlySet<string> = new Set(['rotina-boas-vindas']);
 /** Sufixo da regra quando o que se registra é «template ainda não aprovado» (a nota sai uma vez por chave; o envio continua possível). */
 export const SUFIXO_SEM_TEMPLATE = '!template';
 /** Quanto do histórico de disparos o ciclo carrega para conferir repetição (a UNIQUE do banco vale para sempre). */
@@ -481,13 +483,22 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
         if (mensagens >= MAX_MENSAGENS_POR_CICLO) break;
         const faltou = d.texto === null;
         let regra = faltou ? `${d.regra}${SUFIXO_FALTA}` : d.regra;
-        // faltou campo: só o seco avisa (uma vez por chave); ligado não manda nem anota
-        if (faltou && modo === 'ligado') continue;
+        // faltou campo: só o seco avisa (uma vez por chave); ligado não manda nem anota — exceto as boas-vindas automáticas, que deixam a nota
+        // (o dado que falta é o «Programa» do cartão, e quem fechou precisa que alguém complete)
+        const notaDeFaltaNoLigado = faltou && modo === 'ligado' && REGRAS_COM_NOTA_DE_FALTA_NO_LIGADO.has(d.regra);
+        if (faltou && modo === 'ligado' && !notaDeFaltaNoLigado) continue;
         let nota = notaDoSeco(d);
         let avisos = '';
         // regra interna nunca fala com o paciente: no ligado também é nota privada (mais a ação)
-        let privada = modo === 'seco' || !!d.interna;
-        let texto = modo === 'seco' ? nota : d.interna ? `🤖 Régua «${d.regra}»: ${d.texto}` : (d.texto as string);
+        let privada = modo === 'seco' || !!d.interna || notaDeFaltaNoLigado;
+        let texto =
+          modo === 'seco'
+            ? nota
+            : notaDeFaltaNoLigado
+              ? `🛑 Régua «${d.regra}» — NÃO enviei: falta ${d.faltando.join('; ')}. Complete o cartão; o envio sai sozinho enquanto estiver no prazo.`
+              : d.interna
+                ? `🤖 Régua «${d.regra}»: ${d.texto}`
+                : (d.texto as string);
         let seguradaNoKommo = false;
         let semTemplate = false;
         let template: EnvioTemplate | undefined;
