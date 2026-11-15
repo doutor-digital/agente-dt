@@ -194,15 +194,17 @@ test('ATAQUE (inverso): sessão que só é da conta 2 não abre a conta 1 — ne
   }
 });
 
-test('ATAQUE: o «já conferi» da conta 1 NÃO vale para a conta 2 (o cache da sessão leva a conta)', async () => {
+test('ATAQUE: o «já conferi» da conta 1 NÃO vale para a conta 2 (o perfil guardado é da pessoa; a conta é conferida a cada pedido)', async () => {
   preparar();
   const r = { metodo: 'get' as const, caminho: '/public/funil/caixas' };
   const um = montar(r, '');
-  assert.equal((await fetchReal(um.url, um.init)).status, 200, 'conta 1 (padrão): abre e guarda a conferência');
+  assert.equal((await fetchReal(um.url, um.init)).status, 200, 'conta 1 (padrão): abre e guarda o perfil');
   const dois = montar(r, 'conta=2');
   chamadas = [];
-  assert.equal((await fetchReal(dois.url, dois.init)).status, 403);
-  assert.ok(chamadas.some((c) => c.startsWith('GET /api/v1/profile')), 'conferiu de novo no Chatwoot, em vez de reaproveitar a conferência da conta 1');
+  const res = await fetchReal(dois.url, dois.init);
+  assert.equal(res.status, 403);
+  assert.deepEqual(chamadas.filter((c) => /\/accounts\//.test(c)), [], 'nada foi lido na conta 2');
+  assert.doesNotMatch(await res.text(), /SEGREDO/);
 });
 
 test('ATAQUE: link avulso (chave do funil) — a chave de Parauapebas não abre a conta 2; conta sem token próprio não abre por chave nenhuma', async () => {
@@ -217,6 +219,9 @@ test('ATAQUE: link avulso (chave do funil) — a chave de Parauapebas não abre 
   assert.equal((await comChave(deParau, '')).status, 200, 'controle: a chave de Parauapebas abre Parauapebas, como sempre');
   assert.equal((await comChave(deParau, 'conta=2')).status, 403);
   assert.equal((await comChave(chaveDoFunil(AMBIENTE.CHATWOOT_API_TOKEN_DEMO), 'conta=2')).status, 200, 'a chave da própria conta 2 abre a conta 2');
+  const recusaA = await comChave(deParau, 'conta=2');
+  const recusaB = await comChave(deParau, 'conta=99');
+  assert.deepEqual([recusaA.status, await recusaA.json()], [recusaB.status, await recusaB.json()], 'chave errada em conta que existe e em conta que não existe: a mesma resposta');
   // a clínica sem token próprio cairia no token global: a chave global NÃO abre a conta dela
   delete process.env.CHATWOOT_API_TOKEN_DEMO;
   const sem = await comChave(deParau, 'conta=2');
@@ -341,4 +346,59 @@ test('«Testar a IA»: a lista de unidades da conta 2 só traz unidades que mora
     if (original) Object.defineProperty(prisma, 'unit', original);
     else delete (prisma as unknown as Record<string, unknown>).unit;
   }
+});
+
+test('SEM CREDENCIAL VÁLIDA, conta que existe (2) e conta que não existe (99) dão a MESMA resposta (status e corpo), em todas as rotas com login', async () => {
+  preparar();
+  const casos: Array<[string, (init: RequestInit) => void]> = [
+    ['sem nenhum cabeçalho', (i) => { i.headers = { 'content-type': 'application/json' }; }],
+    ['login que o Chatwoot recusa', (i) => { (i.headers as Record<string, string>)['X-CW-Token'] = 'tok-ruim'; }],
+  ];
+  const diferentes: string[] = [];
+  for (const [nome, ajusta] of casos) {
+    for (const r of comLogin()) {
+      const lido: Array<[number, string]> = [];
+      for (const conta of ['conta=2', 'conta=99']) {
+        const { url, init } = montar(r, conta);
+        ajusta(init);
+        const res = await fetchReal(url, init);
+        lido.push([res.status, await res.text()]);
+      }
+      if (lido[0]![0] !== lido[1]![0] || lido[0]![1] !== lido[1]![1]) diferentes.push(`${nome}: ${r.metodo} ${r.caminho}: ${lido[0]![0]} ${lido[0]![1].slice(0, 60)} × ${lido[1]![0]} ${lido[1]![1].slice(0, 60)}`);
+    }
+  }
+  assert.deepEqual(diferentes, []);
+});
+
+test('SEM CREDENCIAL: a resposta também é a de quando não se pede conta nenhuma (a conta pedida não muda nada antes da credencial)', async () => {
+  preparar();
+  const r = { metodo: 'get' as const, caminho: '/public/funil/caixas' };
+  const corpo = async (q: string) => {
+    const { url, init } = montar(r, q);
+    init.headers = { 'content-type': 'application/json' };
+    const res = await fetchReal(url, init);
+    return [res.status, await res.text()];
+  };
+  assert.deepEqual(await corpo('conta=2'), await corpo(''));
+  assert.deepEqual(await corpo('conta=99'), await corpo(''));
+});
+
+test('LIMITE de tentativas: chave errada conta como erro em conta que existe, conta que não existe e conta sem token próprio — e bloqueia igual', async () => {
+  preparar();
+  const r = { metodo: 'get' as const, caminho: '/public/funil/caixas' };
+  const tenta = async (q: string) => {
+    const { url, init } = montar(r, q);
+    init.headers = { 'X-Funil-Chave': 'x'.repeat(32) };
+    return (await fetchReal(url, init)).status;
+  };
+  delete process.env.CHATWOOT_API_TOKEN_DEMO; // a conta 2 cai no token global: «sem token próprio»
+  const alternadas = ['conta=2', 'conta=99', 'conta=2', ''];
+  const status: number[] = [];
+  for (let i = 0; i < 34; i++) status.push(await tenta(alternadas[i % alternadas.length]!));
+  // o limite é de 30 erros por IP; este arquivo já gastou alguns antes. Se conta inexistente ou sem token próprio NÃO contasse, só 1 em cada 4 tentativas
+  // valeria e o bloqueio não chegaria em 34 tentativas.
+  const primeiro429 = status.indexOf(429);
+  assert.ok(primeiro429 >= 20 && primeiro429 <= 30, `bloqueou na tentativa ${primeiro429 + 1}`);
+  assert.ok(status.slice(0, primeiro429).every((x) => x === 403));
+  assert.ok(status.slice(primeiro429).every((x) => x === 429), 'depois de bloqueado, TODAS as contas dão 429');
 });

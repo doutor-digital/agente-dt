@@ -12,7 +12,7 @@
  */
 import type { Request } from 'express';
 import { caixasDaConta, caixasDeContasProprias, contaDaUnidade, contasExplicitas } from './chatwoot-unidades.js';
-import { contaChatwootDoAmbiente, contextoDaContaPorId, contextoDoAmbiente, ehContaDoAmbiente, esquecerContextoDoAmbiente, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
+import { contaChatwootDoAmbiente, contextoDoAmbiente, donaDaConta, ehContaDoAmbiente, esquecerContextoDoAmbiente, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 
 export { esquecerContextoDoAmbiente };
 
@@ -42,9 +42,9 @@ export function contextoDaRequisicao(req: Pick<Request, 'query'>, e: NodeJS.Proc
   // a conta do ambiente pedida pelo número é a mesma coisa que não pedir (o link e a chave não mudam de comportamento conforme a página manda ou não)
   if (pedida === amb.conta.conta) return { ctx: amb, propria: true };
   if (!contasExplicitas().includes(pedida)) return recusa; // nenhuma unidade usa essa conta
-  const ctx = contextoDaContaPorId(amb, pedida, e);
-  if (!ctx?.conta) return recusa; // falta o token da conta
-  return { ctx, propria: ctx.conta.token !== amb.conta.token };
+  const dona = donaDaConta(amb, pedida, e);
+  if (!dona?.ctx.conta) return recusa; // falta o token da conta
+  return { ctx: dona.ctx, propria: dona.propria };
 }
 
 /** O contexto é o da conta do ambiente (a de Parauapebas)? Só nela valem as listas globais (gestores por e-mail). */

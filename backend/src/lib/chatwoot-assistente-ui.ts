@@ -10,6 +10,8 @@
  * Os dois textos usam `String.raw`: o que está aqui é o JavaScript que o navegador recebe, sem crase nem interpolação.
  */
 
+import { comContaNaPagina } from './conta-no-navegador.js';
+
 const BOTAO_JS = String.raw`(function(){
   if (window.top !== window || window.__assistenteDD) return; window.__assistenteDD = 1;
   var AGENTE = __AGENTE__, LEMBRAR = 'assistente:aberto';
@@ -506,7 +508,7 @@ export function assistenteJs(env: NodeJS.ProcessEnv = process.env): string {
 
 /** A página do painel (iframe). `__ORIGEM_CW__` = a origem do Chatwoot (JSON). */
 export function paginaDaAssistente(origemChatwoot: string): string {
-  return PAGINA.split('__ORIGEM_CW__').join(JSON.stringify(origemChatwoot));
+  return comContaNaPagina(PAGINA.split('__ORIGEM_CW__').join(JSON.stringify(origemChatwoot)));
 }
 
 const PAGINA = String.raw`<!doctype html>
@@ -577,9 +579,7 @@ textarea{flex:1;resize:none;height:40px;max-height:96px;padding:8px 10px;border:
     dica.textContent = !S ? 'Entrando…' : conversa ? 'Leio a conversa aberta e escrevo uma proposta para você revisar.' : 'Abra uma conversa para eu sugerir uma resposta.';
   }
   function cab(){ return { 'Content-Type': 'application/json', 'X-CW-Token': S.token, 'X-CW-Client': S.client, 'X-CW-Uid': S.uid }; }
-  // a conta vem no endereço do painel (?conta=N, posta pelo botão); o servidor confere se a pessoa é membro dela
-  var CONTA_Q = (function(){ var c = new URLSearchParams(location.search).get('conta'); return /^[1-9][0-9]{0,9}$/.test(c || '') ? c : ''; })();
-  function comConta(caminho){ return CONTA_Q ? caminho + (caminho.indexOf('?') < 0 ? '?' : '&') + 'conta=' + CONTA_Q : caminho; }
+  /*__CONTA_JS__*/
   function chamar(caminho, corpo){
     return fetch(comConta(caminho), { method: 'POST', headers: cab(), body: JSON.stringify(corpo) }).then(function(r){
       return r.json().catch(function(){ return {}; }).then(function(j){
