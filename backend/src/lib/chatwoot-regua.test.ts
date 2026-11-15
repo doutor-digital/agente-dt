@@ -145,6 +145,24 @@ test('prepagamento: ao entrar em Agendado com pagamento antecipado; pendente 3 h
   assert.deepEqual(regras(rodar(conv({ attrs: AGENDADO }), '2026-11-16T14:59:00Z', v, ['prepagamento|agendado@2026-11-16T12:00:00.000Z'])), []);
 });
 
+test('prepagamento pendente: «até amanhã» só para consulta de OUTRO dia, e confere a hora em que SAI; consulta no mesmo dia não recebe; o recado inicial não é afetado', () => {
+  const v = { etapa: visto('Agendado', T0) };
+  const feitos = ['prepagamento|agendado@2026-11-16T12:00:00.000Z'];
+  const consultaEm = (dia: string, hora: string) => ({ ...AGENDADO, data_consulta: dia, hora_consulta: hora });
+  const pend = (attrs: Record<string, unknown>, agora = '2026-11-16T15:00:00Z') => regras(rodar(conv({ attrs }), agora, v, feitos)).includes('prepagamento-pendente');
+  // consulta amanhã: sai (o texto «até amanhã» é verdade)
+  assert.equal(pend(consultaEm('2026-11-17', '14:30')), true);
+  assert.equal(pend(consultaEm('2026-11-17', '08:00')), true);
+  // consulta HOJE, não importa a hora: «até amanhã» seria mentira — não sai
+  for (const hora of ['18:00', '13:30', '12:30', '11:00']) assert.equal(pend(consultaEm('2026-11-16', hora)), false, `hoje às ${hora}`);
+  // sem hora e hoje: idem
+  assert.equal(pend({ ...AGENDADO, data_consulta: '2026-11-16', hora_consulta: '' }), false);
+  // o primeiro recado do pré-pagamento sai igual
+  assert.ok(regras(rodar(conv({ attrs: consultaEm('2026-11-16', '12:30') }), T0, v)).includes('prepagamento'));
+  // enviado mais tarde (ainda dentro dos 12 h de tolerância) para consulta de hoje: também não
+  assert.equal(pend(consultaEm('2026-11-16', '23:00'), '2026-11-16T22:00:00Z'), false);
+});
+
 test('prepagamento: já pagou, sem antecipado, outra situação ou valor desconhecido', () => {
   const v = { etapa: visto('Agendado', T0) };
   assert.deepEqual(regras(rodar(conv({ attrs: AGENDADO, etiquetas: ['pagou-antecipado'] }), T0, v)), []);
@@ -870,4 +888,27 @@ test('falta de sessão: agenda e «compareceu_ultima_sessao» são o MESMO envio
   for (const etapa_tratamento of ['Alta', 'Tratamento cancelado']) {
     assert.deepEqual(regras(decidirRegua(conv({ attrs: { ...base, etapa_tratamento } }), { vistos: vistos(v1), feitos: new Set() }, Z('2026-11-19T13:05:00Z'), U)), [], etapa_tratamento);
   }
+});
+
+test('trocar o modelo na tela Robôs não faz o texto perder a data do envio (vale para QUALQUER modelo do robô, não só os de sessão pelo nome)', () => {
+  // consulta de 18/11 14:30, com uma «próxima sessão» velha no cartão; a véspera sai 24 h antes (17/11 14:30 Belém = 17:30Z)
+  const attrs = { etapa: 'Agendado', situacao_consulta: 'Agendado', data_consulta: '2026-11-18', hora_consulta: '14:30', proxima_sessao: '2026-10-01', hora_sessao: '08:00' };
+  const trocas = [
+    ['parau_consulta_lembrete_vespera', 'parau_sessao_lembrete_vespera'], // consulta → texto de sessão (usa o campo da sessão)
+    ['parau_consulta_lembrete_vespera', 'parau_consulta_lembrete_vespera'], // sem troca
+  ] as const;
+  for (const [de, para] of trocas) {
+    const ajustes = { modelos: new Map([[`consulta-vespera|${de}`, para]]) };
+    const d = decidirRegua(conv({ attrs }), { vistos: new Map(), feitos: new Set() }, Z('2026-11-17T17:35:00Z'), U, ajustes).disparos.find((x) => x.regra === 'consulta-vespera')!;
+    assert.equal(d.modelo, para);
+    assert.match(d.texto!, /18\/11 às 14:30/, para);
+    assert.doesNotMatch(d.texto!, /01\/10/, para);
+  }
+  // o inverso: o robô de sessão (Em tratamento, a próxima sessão da equipe) com um modelo de consulta mostra a data da SESSÃO
+  const sessao = { funil: 'Tratamento', etapa_tratamento: 'Em tratamento', proxima_sessao: '2026-11-18', hora_sessao: '10:00', data_consulta: '2026-09-01', hora_consulta: '08:00' };
+  const aj = { modelos: new Map([['sessao-dia|parau_sessao_confirmacao_dia', 'parau_consulta_confirmacao_dia']]) };
+  const s2 = decidirRegua(conv({ attrs: sessao }), { vistos: new Map(), feitos: new Set() }, Z('2026-11-18T11:05:00Z'), U, aj).disparos.find((x) => x.regra === 'sessao-dia')!;
+  assert.equal(s2.modelo, 'parau_consulta_confirmacao_dia');
+  assert.match(s2.texto!, /18\/11 às 10:00/);
+  assert.doesNotMatch(s2.texto!, /01\/09/);
 });

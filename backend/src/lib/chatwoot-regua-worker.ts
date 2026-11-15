@@ -23,6 +23,7 @@
 import { logger } from './logger.js';
 import { prisma } from './prisma.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
+import { ajustesDaUnidade, bancoDosRobos, SEM_AJUSTES, type AjustesDaUnidade } from './robos-estado.js';
 import { precosDaConsulta } from '../agent/prompt-composer.js';
 import { chaveDoTelefone } from './chatwoot-lida.js';
 import { enviarPelaEvolution } from './alerta-whatsapp.js';
@@ -129,6 +130,11 @@ export interface DepsDoCiclo {
   kommo?: CartaoNoKommo;
   /** aviso no WhatsApp da gerente (lead quente parado); sem ela, só a atribuição no Chatwoot */
   avisarGerente?: (texto: string, chave: string) => Promise<unknown>;
+  /**
+   * O que a Gestora configurou na tela «Robôs» para esta unidade: robôs desligados (sem envio, sem nota, sem registro), tempo e modelo.
+   * Sem ela, tudo de fábrica. Se LANÇAR, o ciclo da caixa não roda (nunca mandar achando que está ligado o que foi desligado).
+   */
+  ajustes?: (slug: string) => Promise<AjustesDaUnidade>;
 }
 
 /**
@@ -316,6 +322,8 @@ export interface ResumoDoCiclo {
   comTemplate: number;
   /** seguradas porque o template ainda não está aprovado na Meta (vira nota) */
   semTemplate: number;
+  /** disparos pulados porque o robô está desligado na tela «Robôs» (sem envio e sem nota) */
+  desligados: number;
 }
 
 /**
@@ -404,6 +412,8 @@ const statusDoErro = (e: unknown): number | undefined => (e as { status?: number
  */
 export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: string, modo: 'seco' | 'ligado', unidade: DadosDaUnidade, agora: Date): Promise<ResumoDoCiclo> {
   const { armazem, chat } = deps;
+  // a configuração da tela «Robôs» (lida ANTES de qualquer escrita: se falhar, o ciclo não roda)
+  const ajustes = deps.ajustes ? await deps.ajustes(slug) : SEM_AJUSTES;
   const { conversas, atividades, truncada } = await lerConversas(chat, caixa, agora);
   const quemFala = quemFalaPorTelefone(conversas.map((c) => ({ c, atividade: atividades.get(c.id) ?? 0 })));
 
@@ -427,7 +437,7 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
     feitosPorConversa.set(f.conversationId, s);
   }
 
-  const resumo: ResumoDoCiclo = { conversas: conversas.length, truncada, disparos: 0, faltando: 0, perdidas: {}, etiquetas: 0, falhas: 0, primeiraVez, noKommo: 0, comTemplate: 0, semTemplate: 0 };
+  const resumo: ResumoDoCiclo = { conversas: conversas.length, truncada, disparos: 0, faltando: 0, perdidas: {}, etiquetas: 0, falhas: 0, primeiraVez, noKommo: 0, comTemplate: 0, semTemplate: 0, desligados: 0 };
   const mudancas: Array<Mudanca & { conversationId: number }> = [];
   if (primeiraVez) mudancas.push({ conversationId: 0, tipo: 'criar', campo: CAMPO_PARTIDA, valor: '1', desde: agora, inicial: true });
   const pendentes: Array<{ c: ConversaRegua; vistos: ReadonlyMap<string, Visto> }> = [];
@@ -477,9 +487,14 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
       // a que fala junta o que TODAS as conversas do mesmo telefone já mandaram (mesma regra|chave): conversa nova não repete a véspera
       const feitosDaConversa = new Set<string>(feitosPorConversa.get(c.id) ?? []);
       for (const id of irmas) for (const f of feitosPorConversa.get(id) ?? []) feitosDaConversa.add(f);
-      const { disparos, perdidas } = decidirRegua(c, { vistos, feitos: feitosDaConversa }, agora, unidade);
+      const { disparos, perdidas } = decidirRegua(c, { vistos, feitos: feitosDaConversa }, agora, unidade, ajustes.regua);
       for (const r of perdidas) resumo.perdidas[r] = (resumo.perdidas[r] ?? 0) + 1;
       for (const d of disparos) {
+        // robô desligado na tela «Robôs»: nem envia, nem deixa nota, nem registra (se religarem, ainda dentro do prazo, sai)
+        if (ajustes.desligados.has(d.regra)) {
+          resumo.desligados++;
+          continue;
+        }
         if (mensagens >= MAX_MENSAGENS_POR_CICLO) break;
         const faltou = d.texto === null;
         let regra = faltou ? `${d.regra}${SUFIXO_FALTA}` : d.regra;
@@ -617,7 +632,13 @@ async function varrer(ctx: ContextoChatwoot): Promise<void> {
   if (rodando) return;
   rodando = true;
   try {
-    const deps: DepsDoCiclo = { armazem: armazemDoBanco(), chat: chatDoChatwoot(ctx), pausa: (ms) => new Promise((r) => setTimeout(r, ms)) };
+    const banco = bancoDosRobos();
+    const deps: DepsDoCiclo = {
+      armazem: armazemDoBanco(),
+      chat: chatDoChatwoot(ctx),
+      pausa: (ms) => new Promise((r) => setTimeout(r, ms)),
+      ajustes: (slug) => ajustesDaUnidade(banco, slug),
+    };
     for (const [caixaTxt, slug] of Object.entries(CAIXAS_REGUA)) {
       const modo = estadoDaRegua(slug);
       if (modo === 'desligado') continue;
