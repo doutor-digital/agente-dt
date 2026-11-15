@@ -221,9 +221,10 @@ export const sufixoDoQuestionario = (q: Questionario): string => q.meta.token_en
 const brl = (v: number) => `R$ ${Number.isInteger(v) ? String(v) : v.toFixed(2).replace('.', ',')}`;
 
 /** A configuração do CRM que vai para `unit_chatwoot` (sem caixas: elas só existem depois que a caixa é criada no Chatwoot). */
-export function configChatwootDoQuestionario(q: Questionario, extras: { gerenteId?: number | null; usuarioCelularId?: number | null; caixas?: ConfigChatwootUnidade['caixas'] } = {}): ConfigChatwootUnidade {
+export function configChatwootDoQuestionario(q: Questionario, extras: { gerenteId?: number | null; usuarioCelularId?: number | null; caixas?: ConfigChatwootUnidade['caixas']; contaId?: number | null } = {}): ConfigChatwootUnidade {
   return {
     slug: q.unidade.slug,
+    contaId: extras.contaId ?? null,
     prefixoModelos: q.whatsapp.prefixo_modelos,
     usuarioCelularId: extras.usuarioCelularId ?? null,
     gerenteId: extras.gerenteId ?? null,

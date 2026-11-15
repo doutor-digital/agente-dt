@@ -47,6 +47,11 @@ export interface DadosDosModelos {
 
 export interface ConfigChatwootUnidade {
   slug: string;
+  /**
+   * Conta do Chatwoot da unidade (1 conta por clínica vendida). `null` = a conta do ambiente (`CHATWOOT_CONTA_ID`, a 1): Parauapebas e qualquer
+   * unidade que ainda mora na conta de sempre. A URL e o token são os mesmos para todas; só o id da conta muda.
+   */
+  contaId: number | null;
   /** prefixo dos modelos na Meta, com o "_" no fim ("parau_") */
   prefixoModelos: string;
   usuarioCelularId: number | null;
@@ -63,6 +68,7 @@ export interface ConfigChatwootUnidade {
 /** O que estava escrito no código antes desta mudança. Não editar para "ajustar": o teste compara com o comportamento antigo. */
 export const SEMENTE_PARAUAPEBAS: ConfigChatwootUnidade = {
   slug: 'doutor-hernia-parauapebas',
+  contaId: null,
   prefixoModelos: 'parau_',
   usuarioCelularId: 7,
   gerenteId: 4,
@@ -89,6 +95,7 @@ export const SEMENTE_PARAUAPEBAS: ConfigChatwootUnidade = {
 export function problemasDaConfig(c: ConfigChatwootUnidade): string[] {
   const p: string[] = [];
   if (!/^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$/.test(c.slug)) p.push(`slug inválido (${c.slug})`);
+  if (c.contaId !== null && c.contaId !== undefined && (!Number.isInteger(c.contaId) || c.contaId <= 0)) p.push(`conta do Chatwoot inválida (${String(c.contaId)})`);
   if (!/^[a-z][a-z0-9]{1,15}_$/.test(c.prefixoModelos)) p.push(`prefixo dos modelos inválido (${c.prefixoModelos}): minúsculas/dígitos terminando em "_"`);
   if (!/^[A-Z][A-Z0-9_]*$/.test(c.envSufixo)) p.push(`sufixo das variáveis inválido (${c.envSufixo}): maiúsculas, dígitos e "_"`);
   if (!c.caixas.length) p.push('sem nenhuma caixa');
@@ -215,6 +222,30 @@ export function unidadesConfiguradas(): ConfigChatwootUnidade[] {
   return [...configs.values()];
 }
 
+/**
+ * A conta do Chatwoot da unidade: o id gravado, ou `null` = a conta do ambiente (quem monta o contexto troca `null` por `CHATWOOT_CONTA_ID`).
+ * Unidade desconhecida também devolve `null` — o comportamento de sempre (uma conta só).
+ */
+export function contaDaUnidade(slug: string): number | null {
+  return configs.get(slug)?.contaId ?? null;
+}
+
+/** A conta do Chatwoot da caixa (pela unidade dona da caixa). `null` = a do ambiente. */
+export function contaDaCaixa(caixa: number): number | null {
+  const slug = caixasRegua[caixa];
+  return slug ? contaDaUnidade(slug) : null;
+}
+
+/**
+ * As contas EXPLÍCITAS (as que têm unidade apontando para elas), sem repetir. Quem precisa da lista completa soma a do ambiente
+ * (`contaChatwootDoAmbiente`): `contasDoChatwoot` em `mcp-remoto/chatwoot.ts`.
+ */
+export function contasExplicitas(): number[] {
+  const l: number[] = [];
+  for (const c of configs.values()) if (c.contaId && !l.includes(c.contaId)) l.push(c.contaId);
+  return l;
+}
+
 /** O usuário é um "📱 Celular da unidade" de alguma unidade? */
 export function ehUsuarioCelular(id: number | null | undefined): boolean {
   return typeof id === 'number' && usuariosCelular.has(id);
@@ -253,6 +284,8 @@ export function nomeDoModeloNaMeta(nomeBase: string, prefixoDaUnidade: string | 
 
 export type LinhaDoBanco = {
   unitId: string;
+  /** coluna nova (passo 1): linha lida antes dela existir vem sem o campo */
+  contaId?: number | null;
   prefixoModelos: string;
   usuarioCelularId: number | null;
   gerenteId: number | null;
@@ -269,6 +302,7 @@ export function configDaLinha(l: LinhaDoBanco): ConfigChatwootUnidade {
   const d = (l.dadosModelos && typeof l.dadosModelos === 'object' ? l.dadosModelos : {}) as Partial<DadosDosModelos>;
   return {
     slug: l.unit.slug,
+    contaId: l.contaId ?? null,
     prefixoModelos: l.prefixoModelos,
     usuarioCelularId: l.usuarioCelularId,
     gerenteId: l.gerenteId,
