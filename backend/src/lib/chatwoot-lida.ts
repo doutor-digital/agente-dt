@@ -68,6 +68,12 @@ export function mesmoTelefone(a: string, b: string): boolean {
   return x.slice(0, 4) === y.slice(0, 4) && x.slice(-8) === y.slice(-8);
 }
 
+/** A mesma regra de `mesmoTelefone` como chave de agrupamento (DDI+DDD e 8 últimos dígitos): telefones «iguais» dão a mesma chave. null = curto demais. */
+export function chaveDoTelefone(t: string | undefined | null): string | null {
+  const d = String(t ?? '').replace(/\D/g, '');
+  return d.length < 10 ? null : `${d.slice(0, 4)}|${d.slice(-8)}`;
+}
+
 export interface Alvo {
   conversa: number;
   sourceId: string;

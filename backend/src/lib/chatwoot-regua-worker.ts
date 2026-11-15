@@ -24,6 +24,7 @@ import { logger } from './logger.js';
 import { prisma } from './prisma.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import { precosDaConsulta } from '../agent/prompt-composer.js';
+import { chaveDoTelefone } from './chatwoot-lida.js';
 import { enviarPelaEvolution } from './alerta-whatsapp.js';
 import { createKommoClientSemFreio } from '../services/kommo.service.js';
 import { chamar, contaChatwootDoAmbiente, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
@@ -315,21 +316,51 @@ export interface ResumoDoCiclo {
   semTemplate: number;
 }
 
-async function lerConversas(chat: Chat, caixa: number): Promise<{ conversas: ConversaRegua[]; truncada: boolean }> {
+/**
+ * Um telefone, uma conversa que FALA com o paciente (a de atividade MAIS RECENTE, a mesma regra da agenda, com a mesma chave de
+ * telefone). As outras do mesmo número continuam no ciclo SÓ para a memória (`atualizarVistos`): não escrevem nada (nem mensagem, nem nota,
+ * nem etiqueta), porque qualquer escrita é atividade e faria a irmã velha virar a mais recente. `irmas` = as outras conversas do mesmo telefone: o que elas já mandaram conta como
+ * feito para quem fala (senão a conversa nova repetiria véspera/dia/preparo). Empate de atividade: a de id maior. Sem telefone: fala.
+ */
+export function quemFalaPorTelefone(lista: ReadonlyArray<{ c: ConversaRegua; atividade: number }>): Map<number, { fala: boolean; irmas: number[] }> {
+  const grupos = new Map<string, Array<{ c: ConversaRegua; atividade: number }>>();
+  const saida = new Map<number, { fala: boolean; irmas: number[] }>();
+  for (const x of lista) {
+    const k = chaveDoTelefone(x.c.telefone);
+    if (!k) {
+      saida.set(x.c.id, { fala: true, irmas: [] });
+      continue;
+    }
+    grupos.set(k, [...(grupos.get(k) ?? []), x]);
+  }
+  for (const g of grupos.values()) {
+    const melhor = g.reduce((a, b) => (b.atividade > a.atividade || (b.atividade === a.atividade && b.c.id > a.c.id) ? b : a));
+    for (const x of g) saida.set(x.c.id, { fala: x === melhor, irmas: g.filter((y) => y !== x).map((y) => y.c.id) });
+  }
+  return saida;
+}
+
+async function lerConversas(chat: Chat, caixa: number, agora: Date): Promise<{ conversas: ConversaRegua[]; atividades: Map<number, number>; truncada: boolean }> {
   const vistas = new Set<number>();
   const conversas: ConversaRegua[] = [];
+  const atividades = new Map<number, number>();
+  let truncada = true;
   for (let p = 1; p <= MAX_PAGINAS; p++) {
     const pagina = await chat.pagina(caixa, p);
-    if (pagina.length === 0) return { conversas, truncada: false };
+    if (pagina.length === 0) {
+      truncada = false;
+      break;
+    }
     for (const raw of pagina) {
       const c = conversaDoChatwoot(raw);
-      // conversa de arquivo (histórico unificado, ninguém mexeu depois): a régua não toca
-      if (!c || vistas.has(c.id) || ehArquivo(raw)) continue;
+      // conversa de arquivo (histórico unificado, ninguém mexeu depois, sem consulta marcada): a régua não toca
+      if (!c || vistas.has(c.id) || ehArquivo(raw, agora)) continue;
       vistas.add(c.id);
       conversas.push(c);
+      atividades.set(c.id, Number((raw as { last_activity_at?: unknown })?.last_activity_at) || 0);
     }
   }
-  return { conversas, truncada: true };
+  return { conversas, atividades, truncada };
 }
 
 /**
@@ -371,7 +402,8 @@ const statusDoErro = (e: unknown): number | undefined => (e as { status?: number
  */
 export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: string, modo: 'seco' | 'ligado', unidade: DadosDaUnidade, agora: Date): Promise<ResumoDoCiclo> {
   const { armazem, chat } = deps;
-  const { conversas, truncada } = await lerConversas(chat, caixa);
+  const { conversas, atividades, truncada } = await lerConversas(chat, caixa, agora);
+  const quemFala = quemFalaPorTelefone(conversas.map((c) => ({ c, atividade: atividades.get(c.id) ?? 0 })));
 
   // memória: o que já foi visto e o que já foi decidido
   const linhas = await armazem.vistos(caixa);
@@ -435,8 +467,14 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
   };
   for (const { c, vistos } of pendentes) {
     try {
+      const { fala, irmas } = quemFala.get(c.id) ?? { fala: true, irmas: [] };
+      // as outras conversas do mesmo telefone SÓ têm a memória atualizada (acima): nada de mensagem, nota, etiqueta, prioridade nem
+      // atribuição — qualquer escrita conta como atividade no Chatwoot e faria a irmã velha virar «a que fala»
+      if (!fala) continue;
       if (precisaUltimaPublica(c)) c.ultima = await chat.ultimaPublica(c.id);
-      const feitosDaConversa = feitosPorConversa.get(c.id) ?? new Set<string>();
+      // a que fala junta o que TODAS as conversas do mesmo telefone já mandaram (mesma regra|chave): conversa nova não repete a véspera
+      const feitosDaConversa = new Set<string>(feitosPorConversa.get(c.id) ?? []);
+      for (const id of irmas) for (const f of feitosPorConversa.get(id) ?? []) feitosDaConversa.add(f);
       const { disparos, perdidas } = decidirRegua(c, { vistos, feitos: feitosDaConversa }, agora, unidade);
       for (const r of perdidas) resumo.perdidas[r] = (resumo.perdidas[r] ?? 0) + 1;
       for (const d of disparos) {
