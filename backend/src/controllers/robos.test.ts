@@ -88,3 +88,16 @@ test('aba Automações: seletor «Robôs de mensagem | Automações», cartão c
   assert.ok(rotas.includes("apiRouter.get('/public/robos/automacoes', robosAutomacoesHandler)"));
   assert.ok(rotas.includes("apiRouter.post('/public/robos/automacoes/:id', robosAutomacaoMudarHandler)"));
 });
+
+test('a tela salva TODOS os seletores alterados, um pedido por vez, e só diz «Salvo» depois que o servidor confirmou; o texto de ajuda diz a verdade sobre a janela', () => {
+  const js = scriptDe(paginaDosRobos(CW));
+  assert.ok(js.includes('mud.map(function(z){ return { modelo:'), 'um pedido por seletor alterado');
+  assert.ok(js.includes('async function enviar(partes, botao, fecha)') && js.includes('for (var i = 0; i < partes.length; i++)'));
+  // o toast de sucesso vem DEPOIS do await do POST (e uma falha no meio avisa quantas foram salvas)
+  const i = js.indexOf('async function enviar(partes');
+  const bloco = js.slice(i, js.indexOf('async function ligarDesligar', i));
+  assert.ok(bloco.indexOf("await api('POST'") < bloco.indexOf("toast('Salvo."), 'Salvo só depois da resposta');
+  assert.ok(bloco.includes('alterações foram salvas'));
+  assert.ok(js.includes('só se for em até 2 horas depois do horário') && js.includes('até 12 horas depois do horário'));
+  assert.equal(js.includes('sai na próxima abertura'), false, 'o texto antigo, que prometia o que o lembrete «antes» não faz');
+});

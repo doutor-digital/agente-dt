@@ -20,7 +20,7 @@ import { prisma } from './prisma.js';
 import { CAIXAS_CLOUD, CAIXAS_REGUA, camposDoModelo, type AjustesDaRegua } from './chatwoot-regua.js';
 import { TEXTOS_PARAU } from './chatwoot-regua-textos.js';
 import { catalogo, regraDoCatalogo, textoDeExemplo, type Robo } from './robos-catalogo.js';
-import { TEMPO, descreverMinutos, emUnidade, etiquetaDoTempo, tempoDentroDosLimites, validarTempo, type EspecDeTempo, type UnidadeDeTempo } from './robos-tempo.js';
+import { TEMPO, descreverMinutos, emUnidade, etiquetaDoTempo, ordemQuebrada, tempoDentroDosLimites, validarTempo, type EspecDeTempo, type UnidadeDeTempo } from './robos-tempo.js';
 
 /** As caixas do Chatwoot que pertencem a esta unidade (a unidade nunca enxerga disparo de outra). */
 export function caixasDaUnidade(slug: string, mapa: Readonly<Record<number, string>> = CAIXAS_REGUA): number[] {
@@ -320,11 +320,21 @@ export async function mudarRobo(banco: BancoDosRobos, p: PedidoDeMudanca): Promi
     mudanca.ligado = p.ligado;
   }
   if (p.tempo !== undefined) {
-    if (p.tempo === null) mudanca.tempoMin = null;
-    else {
+    if (p.tempo === null) {
+      // voltar ao de fábrica também não pode inverter a sequência (o vizinho pode ter sido mexido)
+      const linhasDaUnidade = await banco.linhas(p.slug);
+      const efetivoDe = (r: string) => (r === robo.regra ? (TEMPO[r]?.padraoMin ?? 0) : (linhasDaUnidade.find((l) => l.regra === r)?.tempoMin ?? TEMPO[r]?.padraoMin ?? 0));
+      const quebrou = TEMPO[robo.regra] ? ordemQuebrada(robo.regra, TEMPO[robo.regra]!.padraoMin, efetivoDe) : null;
+      if (quebrou) return { ok: false, status: 400, erro: quebrou };
+      mudanca.tempoMin = null;
+    } else {
       const t = p.tempo as { numero?: unknown; unidade?: unknown; direcao?: unknown };
       const v = validarTempo(robo.regra, { numero: t?.numero, unidade: t?.unidade, direcao: t?.direcao });
       if (!v.ok) return { ok: false, status: 400, erro: v.erro };
+      const linhasDaUnidade = await banco.linhas(p.slug);
+      const efetivoDe = (r: string) => (r === robo.regra ? v.minutos : (linhasDaUnidade.find((l) => l.regra === r)?.tempoMin ?? TEMPO[r]?.padraoMin ?? 0));
+      const quebrou = ordemQuebrada(robo.regra, v.minutos, efetivoDe);
+      if (quebrou) return { ok: false, status: 400, erro: quebrou };
       // igual ao de fábrica = volta ao de fábrica (não deixa um «personalizado» que não muda nada)
       mudanca.tempoMin = v.minutos === TEMPO[robo.regra]!.padraoMin ? null : v.minutos;
     }

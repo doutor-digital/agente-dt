@@ -137,16 +137,36 @@ test('o tempo configurado desloca o horário EXATAMENTE isso, na direção do ro
 
 test('validação do tempo: mesma direção, unidade do robô, inteiro, dentro do mínimo e do máximo, dias inteiros onde o robô age às 09:00', () => {
   const ok = (r: string, numero: unknown, unidade: unknown, direcao: unknown) => validarTempo(r, { numero, unidade, direcao });
-  assert.deepEqual(ok('consulta-vespera', 48, 'horas', 'antes'), { ok: true, minutos: 2880 });
-  assert.deepEqual(ok('consulta-vespera', 2, 'dias', 'antes'), { ok: true, minutos: 2880 });
+  assert.deepEqual(ok('consulta-vespera', 30, 'horas', 'antes'), { ok: true, minutos: 1800 });
+  // o texto diz «amanhã»: a véspera só vale de 16 h a 32 h antes (48 h e 2 dias seriam mentira)
+  assert.equal(ok('consulta-vespera', 48, 'horas', 'antes').ok, false);
+  assert.equal(ok('consulta-vespera', 2, 'dias', 'antes').ok, false, 'a véspera é em horas');
+  assert.equal(ok('consulta-vespera', 15, 'horas', 'antes').ok, false);
+  assert.equal(ok('consulta-vespera', 16, 'horas', 'antes').ok, true);
+  assert.equal(ok('consulta-vespera', 32, 'horas', 'antes').ok, true);
+  assert.equal(ok('consulta-vespera', 33, 'horas', 'antes').ok, false);
+  // «Foi bom te receber ontem»: 16 h a 32 h; «faz cerca de um mês»: 21 a 45 dias; «já se passaram 60 dias»: 55 a 65 dias
+  assert.equal(ok('pos-atendimento', 12, 'horas', 'depois').ok, false);
+  assert.equal(ok('pos-atendimento', 3, 'dias', 'depois').ok, false);
+  assert.equal(ok('pos-atendimento', 28, 'horas', 'depois').ok, true);
+  assert.equal(ok('decisao-30d', 20, 'dias', 'depois').ok, false);
+  assert.equal(ok('decisao-30d', 46, 'dias', 'depois').ok, false);
+  assert.equal(ok('decisao-30d', 21, 'dias', 'depois').ok, true);
+  assert.equal(ok('decisao-30d', 45, 'dias', 'depois').ok, true);
+  assert.equal(ok('alta-retorno-60d', 54, 'dias', 'depois').ok, false);
+  assert.equal(ok('alta-retorno-60d', 66, 'dias', 'depois').ok, false);
+  assert.equal(ok('alta-retorno-60d', 55, 'dias', 'depois').ok, true);
+  assert.equal(ok('alta-retorno-60d', 65, 'dias', 'depois').ok, true);
+  // «de hoje» / «até amanhã»
+  assert.equal(ok('consulta-dia', 7, 'horas', 'antes').ok, false);
+  assert.equal(ok('prepagamento-pendente', 2, 'dias', 'depois').ok, false);
   // «antes» não pode virar «depois» (e vice-versa)
   assert.equal(ok('consulta-vespera', 24, 'horas', 'depois').ok, false);
   assert.equal(ok('followup-48h', 48, 'horas', 'antes').ok, false);
   // limites
-  assert.equal(ok('consulta-vespera', 1, 'horas', 'antes').ok, false); // abaixo de 6 h
-  assert.equal(ok('consulta-vespera', 10, 'dias', 'antes').ok, false); // acima de 3 dias
+  assert.equal(ok('consulta-vespera', 1, 'horas', 'antes').ok, false);
   assert.equal(ok('consulta-dia', 20, 'minutos', 'antes').ok, false); // abaixo de 30 min
-  assert.equal(ok('consulta-dia', 12, 'horas', 'antes').ok, true);
+  assert.equal(ok('consulta-dia', 6, 'horas', 'antes').ok, true);
   assert.equal(ok('followup-48h', 11, 'dias', 'depois').ok, false);
   // unidade que o robô não aceita, número quebrado, negativo, texto
   assert.equal(ok('decisao-4d', 96, 'horas', 'depois').ok, false);
@@ -169,4 +189,23 @@ test('como a tela escreve o tempo', () => {
   assert.deepEqual(emUnidade('consulta-dia', 180), { numero: 3, unidade: 'horas' });
   assert.deepEqual(emUnidade('consulta-dia', 45), { numero: 45, unidade: 'minutos' });
   assert.deepEqual(emUnidade('decisao-4d', 5760), { numero: 4, unidade: 'dias' });
+});
+
+test('a ordem das sequências nunca se inverte: followup 48 h < 96 h < 120 h; pós-atendimento < decisão 4 d < 7 d < 30 d; preparo < hoje < véspera', async () => {
+  const { ordemQuebrada, SEQUENCIAS, TEMPO: T2 } = await import('./robos-tempo.js');
+  const efetivo = (o: Record<string, number> = {}) => (r: string) => o[r] ?? T2[r]!.padraoMin;
+  // valores de fábrica respeitam a ordem
+  for (const seq of SEQUENCIAS) for (let i = 1; i < seq.length; i++) assert.ok(T2[seq[i - 1]!]!.padraoMin < T2[seq[i]!]!.padraoMin, `${seq[i - 1]} < ${seq[i]}`);
+  // as regras de cada sequência existem
+  for (const seq of SEQUENCIAS) for (const r of seq) assert.ok(T2[r], r);
+  assert.equal(ordemQuebrada('followup-96h', 100 * 60, efetivo()), null);
+  assert.match(ordemQuebrada('followup-96h', 48 * 60, efetivo()) ?? '', /DEPOIS de «followup-48h»/);
+  assert.match(ordemQuebrada('followup-96h', 120 * 60, efetivo()) ?? '', /ANTES de «followup-120h»/);
+  assert.match(ordemQuebrada('followup-48h', 97 * 60, efetivo()) ?? '', /ANTES de «followup-96h»/);
+  assert.match(ordemQuebrada('decisao-4d', 8 * 1440, efetivo()) ?? '', /ANTES de «decisao-7d»/);
+  assert.match(ordemQuebrada('decisao-7d', 4 * 1440, efetivo()) ?? '', /DEPOIS de «decisao-4d»/);
+  assert.match(ordemQuebrada('decisao-4d', 1 * 1440, efetivo({ 'pos-atendimento': 30 * 60 })) ?? '', /DEPOIS de «pos-atendimento»/);
+  assert.match(ordemQuebrada('consulta-dia', 30, efetivo()) ?? '', /DEPOIS de «consulta-preparo»/);
+  assert.match(ordemQuebrada('consulta-preparo', 4 * 60, efetivo()) ?? '', /ANTES de «consulta-dia»/);
+  assert.equal(ordemQuebrada('alta-nps', 1, efetivo()), null, 'robô fora de sequência');
 });

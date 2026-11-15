@@ -333,10 +333,13 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
         var j = el('div', 'junto'); j.appendChild(n); j.appendChild(u); j.appendChild(el('span', 'dir', t.direcao + ' ' + t.ancora));
         a.appendChild(campo('Esperar', j, el('span', 'ajuda', 'A direção (' + t.direcao + ') e a âncora são do robô e não mudam. Vai de ' + t.minRotulo + ' a ' + t.maxRotulo + '. De fábrica: ' + t.rotuloPadrao + '.' + (t.nota ? ' ' + t.nota : ''))));
         editavel = PODE;
-        aplicar = function(){ return { tempo: { numero: Number(n.value), unidade: u.value, direcao: t.direcao } }; };
-        if (t.personalizado) voltar = function(){ return { tempo: null }; };
+        aplicar = function(){ return [{ tempo: { numero: Number(n.value), unidade: u.value, direcao: t.direcao } }]; };
+        if (t.personalizado) voltar = function(){ return [{ tempo: null }]; };
       }
-      b.appendChild(el('p', null, 'Se o horário cair fora das 8h às 20h ou num domingo, a mensagem sai na próxima abertura (nos lembretes, com até 2 h de tolerância depois da abertura).'));
+      // o que acontece quando o horário do robô cai fora das 8h–20h (seg–sáb): depende da direção
+      b.appendChild(el('p', null, r.tempo && r.tempo.direcao === 'antes'
+        ? 'Só sai das 8h às 20h, de segunda a sábado. Se o horário do lembrete cair fora disso, ele ainda sai quando a janela abrir, mas só se for em até 2 horas depois do horário; passou disso, esse lembrete se perde.'
+        : 'Só sai das 8h às 20h, de segunda a sábado. Se o horário cair fora disso, sai quando a janela abrir, desde que seja em até 12 horas depois do horário; passou disso, essa mensagem se perde.'));
     } else if (tipo === 'cond') {
       r.condicoes.forEach(function(c){ a.appendChild(el('div', 'so-leitura', '✓ ' + c)); });
       a.appendChild(el('p', 'ajuda', 'Somente leitura: as condições são a regra do robô no código. Na próxima versão dá para editar por aqui.'));
@@ -359,8 +362,9 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
         a.appendChild(el('p', 'ajuda', DADOS.aprovadosLidos ? 'Só aparecem modelos já aprovados nesta caixa e com as mesmas variáveis que o robô preenche. Texto novo: peça à Doutor Digital (a Meta aprova em até 48 h).' : 'Não consegui ler os modelos aprovados no Chatwoot agora; a troca de modelo está indisponível.'));
         b.appendChild(previa);
         editavel = PODE && DADOS.aprovadosLidos;
-        aplicar = function(){ var mud = seletores.filter(function(z){ return z.s.value !== z.m.atual; })[0]; return mud ? { modelo: { padrao: mud.m.padrao, novo: mud.s.value } } : null; };
-        if (r.modelosDaTela.some(function(m){ return m.personalizado; })) voltar = function(){ var p = r.modelosDaTela.filter(function(m){ return m.personalizado; })[0]; return { modelo: { padrao: p.padrao, novo: p.padrao } }; };
+        // TODOS os seletores que mudaram (um pedido por modelo de fábrica); «voltar ao de fábrica» desfaz todos os trocados
+        aplicar = function(){ var mud = seletores.filter(function(z){ return z.s.value !== z.m.atual; }); return mud.length ? mud.map(function(z){ return { modelo: { padrao: z.m.padrao, novo: z.s.value } }; }) : null; };
+        if (r.modelosDaTela.some(function(m){ return m.personalizado; })) voltar = function(){ return r.modelosDaTela.filter(function(m){ return m.personalizado; }).map(function(m){ return { modelo: { padrao: m.padrao, novo: m.padrao } }; }); };
       }
     } else {
       a.appendChild(el('p', null, 'Quando uma condição não bate, ou o paciente tem cartão ativo na Kommo, nada vai para o paciente. Fica uma nota privada na conversa dizendo por quê, por exemplo: «Não enviado: o paciente tem cartão ativo no Kommo».'));
@@ -378,19 +382,34 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
     pe.appendChild(fim); nd.appendChild(pe); veu.appendChild(nd); raiz.appendChild(veu);
     x.addEventListener('click', fecha); veu.addEventListener('click', function(ev){ if (ev.target === veu) fecha(); });
   }
-  async function enviar(parte, botao, fecha){
+  // grava cada parte (um pedido por vez) e SÓ diz «Salvo» depois que o servidor confirmou todas; se uma falhar, o painel fica aberto com o erro
+  async function enviar(partes, botao, fecha){
     botao.disabled = true;
+    var gravou = 0;
     try {
-      var corpo = { slug: U.slug }; Object.keys(parte).forEach(function(k){ corpo[k] = parte[k]; });
-      await api('POST', '/api/public/robos/' + enc(atual.regra), corpo);
-      fecha(); await carregar(); toast('Salvo. Vale na próxima volta do robô (até 10 minutos).');
-    } catch (e) { toast(e.message, true); }
+      for (var i = 0; i < partes.length; i++) {
+        var corpo = { slug: U.slug }; Object.keys(partes[i]).forEach(function(k){ corpo[k] = partes[i][k]; });
+        await api('POST', '/api/public/robos/' + enc(atual.regra), corpo);
+        gravou++;
+      }
+    } catch (e) {
+      botao.disabled = false;
+      if (gravou) { try { await carregar(); } catch (x) {} }
+      toast((gravou ? gravou + ' de ' + partes.length + ' alterações foram salvas; a próxima não: ' : 'Não salvou: ') + e.message, true);
+      return;
+    }
+    fecha();
+    try { await carregar(); toast('Salvo. Vale na próxima volta do robô (até 10 minutos).'); }
+    catch (e) { toast('Salvo no servidor, mas não consegui recarregar a tela: atualize a página.', true); }
     botao.disabled = false;
   }
   async function ligarDesligar(r){
     if (!PODE) return;
-    try { await api('POST', '/api/public/robos/' + enc(r.regra), { slug: U.slug, ligado: !r.ligado }); await carregar(); toast('«' + r.nome + '» ' + (r.ligado ? 'desligado' : 'ligado') + '. Vale na próxima volta do robô (até 10 minutos).'); }
-    catch (e) { toast(e.message, true); }
+    var alvo = !r.ligado;
+    try { await api('POST', '/api/public/robos/' + enc(r.regra), { slug: U.slug, ligado: alvo }); }
+    catch (e) { toast(e.message, true); return; }
+    try { await carregar(); toast('«' + r.nome + '» ' + (alvo ? 'ligado' : 'desligado') + '. Vale na próxima volta do robô (até 10 minutos).'); }
+    catch (e) { toast('Salvo no servidor, mas não consegui recarregar a tela: atualize a página.', true); }
   }
 
 

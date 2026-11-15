@@ -78,10 +78,10 @@ test('pedido inválido: robô que não existe, ligado que não é booleano, nada
 test('tempo: valida, grava em minutos, igual ao de fábrica volta ao de fábrica, e nunca troca antes por depois', async () => {
   const { banco, gravacoes } = bancoFalso();
   const p = { slug: 's', papel: ADMIN, por: 'Su', aprovados: null, regra: 'consulta-vespera' };
-  assert.deepEqual(await E.mudarRobo(banco, { ...p, tempo: { numero: 48, unidade: 'horas', direcao: 'antes' } }), { ok: true, regra: 'consulta-vespera' });
-  assert.deepEqual(gravacoes[0]!.m, { tempoMin: 2880 });
+  assert.deepEqual(await E.mudarRobo(banco, { ...p, tempo: { numero: 30, unidade: 'horas', direcao: 'antes' } }), { ok: true, regra: 'consulta-vespera' });
+  assert.deepEqual(gravacoes[0]!.m, { tempoMin: 1800 });
   // o mesmo valor de fábrica (24 h) não deixa «personalizado» à toa
-  await E.mudarRobo(banco, { ...p, tempo: { numero: 1, unidade: 'dias', direcao: 'antes' } });
+  await E.mudarRobo(banco, { ...p, tempo: { numero: 24, unidade: 'horas', direcao: 'antes' } });
   assert.deepEqual(gravacoes[1]!.m, { tempoMin: null });
   // voltar ao de fábrica
   await E.mudarRobo(banco, { ...p, tempo: null });
@@ -151,7 +151,7 @@ test('ajustesDaUnidade: desligados, tempo e modelo; lixo antigo é ignorado', as
   const { banco } = bancoFalso({
     linhas: {
       u: [
-        { regra: 'consulta-vespera', ligado: false, tempoMin: 2880, modelos: { parau_consulta_lembrete_vespera: 'parau_consulta_confirmacao_dia' }, por: 'Su', em },
+        { regra: 'consulta-vespera', ligado: false, tempoMin: 1800, modelos: { parau_consulta_lembrete_vespera: 'parau_consulta_confirmacao_dia' }, por: 'Su', em },
         { regra: 'followup-48h', ligado: true, tempoMin: 99999999, modelos: { parau_lead_reengajamento_48h: 'parau_consulta_pos_atendimento', inventado: 'x' }, por: 'Su', em },
         { regra: 'robo-que-nao-existe-mais', ligado: false, tempoMin: null, modelos: {}, por: 'Su', em },
         { regra: 'alta-conclusao', ligado: true, tempoMin: 5, modelos: {}, por: 'Su', em },
@@ -160,7 +160,7 @@ test('ajustesDaUnidade: desligados, tempo e modelo; lixo antigo é ignorado', as
   });
   const a = await E.ajustesDaUnidade(banco, 'u');
   assert.deepEqual([...a.desligados], ['consulta-vespera']);
-  assert.equal(a.regua.tempoMin!.get('consulta-vespera'), 2880);
+  assert.equal(a.regua.tempoMin!.get('consulta-vespera'), 1800);
   assert.equal(a.regua.tempoMin!.has('followup-48h'), false, 'valor fora dos limites volta ao de fábrica');
   assert.equal(a.regua.tempoMin!.has('alta-conclusao'), false, 'robô sem tempo ignora o valor');
   // modelo de forma diferente (consulta-dia: nome + data, vespera pede nome + data → compatível) entra; o inventado não
@@ -256,4 +256,31 @@ test('situacaoDoRegistro: o que cada linha da tabela de disparos quer dizer', ()
   assert.equal(E.baseDaRegra('consulta-dia!falta'), 'consulta-dia');
   assert.equal(E.baseDaRegra('consulta-dia'), 'consulta-dia');
   assert.deepEqual(E.caixasDaUnidade('a', { 2: 'a', 3: 'a', 4: 'b' }).sort(), [2, 3]);
+});
+
+test('mudarRobo recusa valor que inverta a ordem das sequências (followup, pós-atendimento/decisão, lembretes), também ao voltar ao de fábrica', async () => {
+  const em = new Date();
+  const { banco, gravacoes } = bancoFalso({ linhas: { s: [{ regra: 'followup-96h', ligado: true, tempoMin: 60 * 60, modelos: {}, por: 'Su', em }] } }); // 96 h mexido para 60 h
+  const p = { slug: 's', papel: ADMIN, por: 'Su', aprovados: null };
+  // followup-48h para 72 h passaria do vizinho (60 h)
+  const r1 = await E.mudarRobo(banco, { ...p, regra: 'followup-48h', tempo: { numero: 72, unidade: 'horas', direcao: 'depois' } });
+  assert.equal(!r1.ok && r1.status, 400);
+  assert.match(!r1.ok ? r1.erro : '', /ANTES de «followup-96h»/);
+  assert.equal((await E.mudarRobo(banco, { ...p, regra: 'followup-48h', tempo: { numero: 59, unidade: 'horas', direcao: 'depois' } })).ok, true);
+  // followup-120h para 50 h ficaria antes do 96 h (60 h)
+  assert.match(((await E.mudarRobo(banco, { ...p, regra: 'followup-120h', tempo: { numero: 50, unidade: 'horas', direcao: 'depois' } })) as { erro?: string }).erro ?? '', /DEPOIS de «followup-96h»/);
+  // voltar o 96 h ao de fábrica (96 h) está certo; mas o 48 h já foi para 59 h, e o 120 h segue acima: ok
+  assert.equal((await E.mudarRobo(banco, { ...p, regra: 'followup-96h', tempo: null })).ok, true);
+  // decisão: 4 d não pode passar do 7 d; pós-atendimento não pode passar do 4 d
+  assert.equal((await E.mudarRobo(banco, { ...p, regra: 'decisao-4d', tempo: { numero: 8, unidade: 'dias', direcao: 'depois' } })).ok, false);
+  assert.equal((await E.mudarRobo(banco, { ...p, regra: 'decisao-7d', tempo: { numero: 3, unidade: 'dias', direcao: 'depois' } })).ok, false);
+  assert.equal((await E.mudarRobo(banco, { ...p, regra: 'decisao-4d', tempo: { numero: 5, unidade: 'dias', direcao: 'depois' } })).ok, true);
+  // pós-atendimento em 30 h; a decisão de 4 d não pode descer para 1 d (24 h) por baixo dele
+  assert.equal((await E.mudarRobo(banco, { ...p, regra: 'pos-atendimento', tempo: { numero: 30, unidade: 'horas', direcao: 'depois' } })).ok, true);
+  const baixo = await E.mudarRobo(banco, { ...p, regra: 'decisao-4d', tempo: { numero: 1, unidade: 'dias', direcao: 'depois' } });
+  assert.match(!baixo.ok ? baixo.erro : '', /DEPOIS de «pos-atendimento»/);
+  // lembretes: «hoje» não pode ficar abaixo do preparo nem acima da véspera
+  assert.equal((await E.mudarRobo(banco, { ...p, regra: 'consulta-dia', tempo: { numero: 30, unidade: 'minutos', direcao: 'antes' } })).ok, false, 'preparo é 1 h: o «hoje» tem de ser maior');
+  assert.equal((await E.mudarRobo(banco, { ...p, regra: 'consulta-preparo', tempo: { numero: 4, unidade: 'horas', direcao: 'antes' } })).ok, false);
+  assert.equal(gravacoes.length >= 3, true);
 });

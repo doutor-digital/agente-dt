@@ -871,3 +871,26 @@ test('falta de sessão: agenda e «compareceu_ultima_sessao» são o MESMO envio
     assert.deepEqual(regras(decidirRegua(conv({ attrs: { ...base, etapa_tratamento } }), { vistos: vistos(v1), feitos: new Set() }, Z('2026-11-19T13:05:00Z'), U)), [], etapa_tratamento);
   }
 });
+
+test('trocar o modelo na tela Robôs não faz o texto perder a data do envio (vale para QUALQUER modelo do robô, não só os de sessão pelo nome)', () => {
+  // consulta de 18/11 14:30, com uma «próxima sessão» velha no cartão; a véspera sai 24 h antes (17/11 14:30 Belém = 17:30Z)
+  const attrs = { etapa: 'Agendado', situacao_consulta: 'Agendado', data_consulta: '2026-11-18', hora_consulta: '14:30', proxima_sessao: '2026-10-01', hora_sessao: '08:00' };
+  const trocas = [
+    ['parau_consulta_lembrete_vespera', 'parau_sessao_lembrete_vespera'], // consulta → texto de sessão (usa o campo da sessão)
+    ['parau_consulta_lembrete_vespera', 'parau_consulta_lembrete_vespera'], // sem troca
+  ] as const;
+  for (const [de, para] of trocas) {
+    const ajustes = { modelos: new Map([[`consulta-vespera|${de}`, para]]) };
+    const d = decidirRegua(conv({ attrs }), { vistos: new Map(), feitos: new Set() }, Z('2026-11-17T17:35:00Z'), U, ajustes).disparos.find((x) => x.regra === 'consulta-vespera')!;
+    assert.equal(d.modelo, para);
+    assert.match(d.texto!, /18\/11 às 14:30/, para);
+    assert.doesNotMatch(d.texto!, /01\/10/, para);
+  }
+  // o inverso: o robô de sessão (Em tratamento, a próxima sessão da equipe) com um modelo de consulta mostra a data da SESSÃO
+  const sessao = { funil: 'Tratamento', etapa_tratamento: 'Em tratamento', proxima_sessao: '2026-11-18', hora_sessao: '10:00', data_consulta: '2026-09-01', hora_consulta: '08:00' };
+  const aj = { modelos: new Map([['sessao-dia|parau_sessao_confirmacao_dia', 'parau_consulta_confirmacao_dia']]) };
+  const s2 = decidirRegua(conv({ attrs: sessao }), { vistos: new Map(), feitos: new Set() }, Z('2026-11-18T11:05:00Z'), U, aj).disparos.find((x) => x.regra === 'sessao-dia')!;
+  assert.equal(s2.modelo, 'parau_consulta_confirmacao_dia');
+  assert.match(s2.texto!, /18\/11 às 10:00/);
+  assert.doesNotMatch(s2.texto!, /01\/09/);
+});

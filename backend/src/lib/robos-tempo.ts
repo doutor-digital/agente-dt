@@ -28,26 +28,53 @@ const H = 60;
 const D = 1440;
 
 export const TEMPO: Readonly<Record<string, EspecDeTempo>> = {
-  'consulta-vespera': { direcao: 'antes', ancora: 'da consulta ou da sessão', padraoMin: 24 * H, minMin: 6 * H, maxMin: 3 * D, unidades: ['horas', 'dias'], nota: 'Vale para consulta com hora marcada. Sem hora, o aviso sai 09:00 do dia anterior.' },
-  'consulta-dia': { direcao: 'antes', ancora: 'da consulta', padraoMin: 3 * H, minMin: 30 * M, maxMin: 12 * H, unidades: ['minutos', 'horas'] },
+  'consulta-vespera': { direcao: 'antes', ancora: 'da consulta ou da sessão', padraoMin: 24 * H, minMin: 16 * H, maxMin: 32 * H, unidades: ['horas'], nota: 'Vale para consulta com hora marcada. Sem hora, o aviso sai 09:00 do dia anterior.' },
+  'consulta-dia': { direcao: 'antes', ancora: 'da consulta', padraoMin: 3 * H, minMin: 30 * M, maxMin: 6 * H, unidades: ['minutos', 'horas'] },
   'consulta-preparo': { direcao: 'antes', ancora: 'da consulta', padraoMin: 1 * H, minMin: 15 * M, maxMin: 6 * H, unidades: ['minutos', 'horas'] },
-  'sessao-dia': { direcao: 'antes', ancora: 'da sessão', padraoMin: 3 * H, minMin: 30 * M, maxMin: 12 * H, unidades: ['minutos', 'horas'] },
-  'prepagamento-pendente': { direcao: 'depois', ancora: 'do pré-pagamento', padraoMin: 3 * H, minMin: 30 * M, maxMin: 2 * D, unidades: ['minutos', 'horas', 'dias'] },
-  'pos-atendimento': { direcao: 'depois', ancora: 'da consulta', padraoMin: 1 * D, minMin: 1 * H, maxMin: 7 * D, unidades: ['horas', 'dias'] },
+  'sessao-dia': { direcao: 'antes', ancora: 'da sessão', padraoMin: 3 * H, minMin: 30 * M, maxMin: 6 * H, unidades: ['minutos', 'horas'] },
+  'prepagamento-pendente': { direcao: 'depois', ancora: 'do pré-pagamento', padraoMin: 3 * H, minMin: 30 * M, maxMin: 1 * D, unidades: ['minutos', 'horas'] },
+  'pos-atendimento': { direcao: 'depois', ancora: 'da consulta', padraoMin: 1 * D, minMin: 16 * H, maxMin: 32 * H, unidades: ['horas'] },
   'decisao-4d': { direcao: 'depois', ancora: 'da consulta', padraoMin: 4 * D, minMin: 1 * D, maxMin: 30 * D, unidades: ['dias'], diasInteiros: true },
   'decisao-7d': { direcao: 'depois', ancora: 'da consulta', padraoMin: 7 * D, minMin: 1 * D, maxMin: 60 * D, unidades: ['dias'], diasInteiros: true },
-  'decisao-30d': { direcao: 'depois', ancora: 'da consulta', padraoMin: 30 * D, minMin: 7 * D, maxMin: 120 * D, unidades: ['dias'], diasInteiros: true },
+  'decisao-30d': { direcao: 'depois', ancora: 'da consulta', padraoMin: 30 * D, minMin: 21 * D, maxMin: 45 * D, unidades: ['dias'], diasInteiros: true },
   'followup-48h': { direcao: 'depois', ancora: 'de virar Perdido', padraoMin: 48 * H, minMin: 1 * H, maxMin: 10 * D, unidades: ['horas', 'dias'] },
   'followup-96h': { direcao: 'depois', ancora: 'de virar Perdido', padraoMin: 96 * H, minMin: 1 * H, maxMin: 10 * D, unidades: ['horas', 'dias'] },
   'followup-120h': { direcao: 'depois', ancora: 'de virar Perdido', padraoMin: 120 * H, minMin: 1 * H, maxMin: 10 * D, unidades: ['horas', 'dias'] },
   'falta-48h': { direcao: 'depois', ancora: 'da consulta perdida', padraoMin: 2 * D, minMin: 1 * H, maxMin: 14 * D, unidades: ['horas', 'dias'] },
   'espera-retomada2': { direcao: 'depois', ancora: 'do dia de «Retomar em» (às 09:00)', padraoMin: 3 * D, minMin: 1 * D, maxMin: 14 * D, unidades: ['dias'], diasInteiros: true },
   'alta-nps': { direcao: 'depois', ancora: 'da alta', padraoMin: 48 * H, minMin: 1 * H, maxMin: 30 * D, unidades: ['horas', 'dias'] },
-  'alta-retorno-60d': { direcao: 'depois', ancora: 'da alta (às 09:00)', padraoMin: 60 * D, minMin: 30 * D, maxMin: 365 * D, unidades: ['dias'], diasInteiros: true },
+  'alta-retorno-60d': { direcao: 'depois', ancora: 'da alta (às 09:00)', padraoMin: 60 * D, minMin: 55 * D, maxMin: 65 * D, unidades: ['dias'], diasInteiros: true },
   'pendencia-documento': { direcao: 'depois', ancora: 'da consulta', padraoMin: 120 * H, minMin: 1 * D, maxMin: 30 * D, unidades: ['horas', 'dias'] },
   'lead-quente-parado': { direcao: 'depois', ancora: 'da última mensagem do paciente', padraoMin: 3 * H, minMin: 30 * M, maxMin: 2 * D, unidades: ['minutos', 'horas'] },
   'sem-resposta-24h': { direcao: 'depois', ancora: 'da nossa última mensagem', padraoMin: 24 * H, minMin: 1 * H, maxMin: 7 * D, unidades: ['horas', 'dias'] },
 };
+
+/**
+ * Sequências em ordem CRESCENTE de tempo: o robô seguinte nunca pode sair antes do anterior (o texto de um depende de o outro ter vindo antes:
+ * «encerrar o acompanhamento» não pode chegar antes de «ficou alguma dúvida?»). Os lembretes «antes» são do menor para o maior deslocamento
+ * (preparo 1 h < hoje 3 h < véspera 24 h), que é a ordem em que SAEM.
+ */
+export const SEQUENCIAS: ReadonlyArray<readonly string[]> = [
+  ['followup-48h', 'followup-96h', 'followup-120h'],
+  ['pos-atendimento', 'decisao-4d', 'decisao-7d', 'decisao-30d'],
+  ['consulta-preparo', 'consulta-dia', 'consulta-vespera'],
+];
+
+/**
+ * O novo valor de `regra` (em minutos) mantém a ordem das sequências? `efetivoDe` devolve o que vale hoje para as outras (o configurado ou o de
+ * fábrica). Devolve a mensagem do problema, ou null.
+ */
+export function ordemQuebrada(regra: string, minutos: number, efetivoDe: (regra: string) => number): string | null {
+  for (const seq of SEQUENCIAS) {
+    const i = seq.indexOf(regra);
+    if (i < 0) continue;
+    const antes = i > 0 ? seq[i - 1]! : null;
+    const depois = i < seq.length - 1 ? seq[i + 1]! : null;
+    if (antes && minutos <= efetivoDe(antes)) return `este robô precisa sair DEPOIS de «${antes}» (hoje ${descreverMinutos(efetivoDe(antes))}): escolha mais que isso`;
+    if (depois && minutos >= efetivoDe(depois)) return `este robô precisa sair ANTES de «${depois}» (hoje ${descreverMinutos(efetivoDe(depois))}): escolha menos que isso`;
+  }
+  return null;
+}
 
 /** O valor de fábrica em minutos (a régua usa isto). */
 export function padraoMin(regra: string): number {

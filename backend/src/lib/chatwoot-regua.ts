@@ -385,12 +385,10 @@ export function paraParametro(v: string): string {
  * Troca os campos {{…}} do modelo do Kommo pelos dados da conversa e da unidade. Campo sem valor entra em `faltando`.
  * `variaveis` são os mesmos valores, um por campo distinto, na ordem de {{1}}, {{2}}… do template; null se faltou alguma coisa.
  */
-/** Os dois modelos de sessão que a régua monta a partir da sessão que `candidatos()` escolheu (a da agenda ou a da equipe). */
-const MODELOS_DE_SESSAO_DO_ENVIO: ReadonlySet<string> = new Set(['parau_sessao_lembrete_vespera', 'parau_sessao_confirmacao_dia']);
-
 /**
- * `momentoDoEnvio` = a data+hora que `candidatos()` usou para decidir o envio; só os dois modelos de lembrete de sessão o usam no campo
- * {{lead.cf.2450928}} (os outros — retorno, boas-vindas… — seguem sessão → retorno → consulta, como sempre).
+ * `momentoDoEnvio` = a data+hora que `candidatos()` usou para decidir o envio (os lembretes de consulta e de sessão o trazem). Vale para
+ * QUALQUER modelo que esteja nesse robô — inclusive um que a Gestora trocou na tela Robôs —, nos dois campos de data. Os robôs que não trazem
+ * momento (retorno, boas-vindas…) seguem sessão → retorno → consulta, como sempre.
  */
 export function renderizar(modelo: string, c: ConversaRegua, u: DadosDaUnidade, momentoDoEnvio?: Momento): { texto: string | null; variaveis: string[] | null; faltando: string[] } {
   const bruto = TEXTOS_PARAU[modelo];
@@ -411,10 +409,10 @@ export function renderizar(modelo: string, c: ConversaRegua, u: DadosDaUnidade, 
       case 'contact.name':
         return primeiroNome(c.nome) ?? falta('nome do contato');
       case 'lead.cf.2450736':
-        return consulta ? textoDoMomento(consulta) : falta('data da consulta (data_consulta)');
+        return (momentoDoEnvio ?? consulta) ? textoDoMomento((momentoDoEnvio ?? consulta)!) : falta('data da consulta (data_consulta)');
       case 'lead.cf.2450928': {
         // próxima sessão; os modelos de retorno (SDR e cancelamento) usam o mesmo campo: sem sessão, vale o retorno e depois a consulta
-        const m = (momentoDoEnvio && MODELOS_DE_SESSAO_DO_ENVIO.has(modelo) ? momentoDoEnvio : null) ?? sessao ?? retorno ?? consulta;
+        const m = momentoDoEnvio ?? sessao ?? retorno ?? consulta;
         return m ? textoDoMomento(m) : falta('data da próxima sessão (proxima_sessao)');
       }
       case 'lead.cf.2450998':
