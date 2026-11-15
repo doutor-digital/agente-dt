@@ -40,7 +40,7 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 INSERT INTO "unit_chatwoot" ("unit_id", "prefixo_modelos", "usuario_celular_id", "gerente_id", "meta_agendamentos_dia", "kapso_phone_number_id", "waba_id", "env_sufixo", "dados_modelos", "atualizado_por", "atualizado_em")
 SELECT u."id", 'parau_', 7, 4, 5, '1212928641906230', '2146287749563217', 'PARAUAPEBAS',
        '{"nome":"Doutor Hérnia Parauapebas","cidade":"Parauapebas","endereco":"Rua C, 455-A, Sala 101 e 103 — Cidade Nova, Parauapebas/PA, 68515-000","mapa":"https://share.google/LzWt0AQhG4HWTpWOq"}'::jsonb,
-       'migration 20261114120000', CURRENT_TIMESTAMP
+       'migration 20261114190100', CURRENT_TIMESTAMP
 FROM "units" u WHERE u."slug" = 'doutor-hernia-parauapebas'
 ON CONFLICT ("unit_id") DO NOTHING;
 

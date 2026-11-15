@@ -8,6 +8,10 @@ import assert from 'node:assert/strict';
 process.env.KOMMO_SUBDOMAIN ??= 'teste';
 process.env.KOMMO_ACCESS_TOKEN ??= 'token-de-teste-123';
 process.env.OPENAI_API_KEY ??= 'sk-teste-1234567890';
+// o ambiente do Chatwoot do servidor (o contexto de cada caixa nasce DELE): mesmo token, mesma URL, conta 1
+process.env.CHATWOOT_API_TOKEN = 'tk-do-ambiente';
+process.env.CHATWOOT_CONTA_ID = '1';
+process.env.CHATWOOT_URL = 'https://crm.exemplo.test';
 
 const W = await import('./chatwoot-regua-worker.js');
 const U = await import('./chatwoot-unidades.js');
@@ -86,7 +90,7 @@ async function rodar(total: number, caixa: number, slug: string, contaDoAmbiente
 test('IDENTIDADE: com Parauapebas na conta do ambiente, a régua faz as MESMAS chamadas e gravações, na mesma ordem e com o mesmo teto (60 mensagens por ciclo)', async () => {
   const total = W.MAX_MENSAGENS_POR_CICLO + 10;
   const antes = await rodar(total, 2, SLUG_PARAU, 1, (ctx) => W.chatDoChatwoot(ctx)); // como era: um contexto só
-  const depois = await rodar(total, 2, SLUG_PARAU, 1, (ctx) => W.chatDaCaixa(ctx, 2)); // como é: o Chatwoot da caixa
+  const depois = await rodar(total, 2, SLUG_PARAU, 1, (ctx) => W.chatDaCaixa(ctx, 2)!); // como é: o Chatwoot da caixa
   assert.deepEqual(depois, antes);
   const mensagens = depois.filter((l) => l.startsWith('POST') && l.includes('/messages'));
   assert.equal(mensagens.length, W.MAX_MENSAGENS_POR_CICLO, 'o teto de mensagens por ciclo é o de sempre');
@@ -99,7 +103,7 @@ test('a caixa de Parauapebas continua na conta do ambiente mesmo com outra clín
   U.aplicarConfigs([U.SEMENTE_PARAUAPEBAS, DEMO]);
   const antes = await rodar(12, 2, SLUG_PARAU, 1, (ctx) => W.chatDoChatwoot(ctx));
   U.aplicarConfigs([U.SEMENTE_PARAUAPEBAS, DEMO]);
-  const depois = await rodar(12, 2, SLUG_PARAU, 1, (ctx) => W.chatDaCaixa(ctx, 2));
+  const depois = await rodar(12, 2, SLUG_PARAU, 1, (ctx) => W.chatDaCaixa(ctx, 2)!);
   assert.deepEqual(depois, antes);
 });
 
@@ -120,7 +124,7 @@ const DEMO: import('./chatwoot-unidades.js').ConfigChatwootUnidade = {
 test('clínica de conta própria: a régua dela lê e escreve NA CONTA 2 (nunca na 1), com os mesmos tetos, e grava o registro com a caixa dela', async () => {
   U.aplicarConfigs([U.SEMENTE_PARAUAPEBAS, DEMO]);
   const total = W.MAX_MENSAGENS_POR_CICLO + 10;
-  const log = await rodar(total, 20, 'clinica-demonstracao', 1, (ctx) => W.chatDaCaixa(ctx, 20));
+  const log = await rodar(total, 20, 'clinica-demonstracao', 1, (ctx) => W.chatDaCaixa(ctx, 20)!);
   const http = log.filter((l) => /^(GET|POST) /.test(l));
   assert.ok(http.length > 0 && http.every((l) => l.includes('/accounts/2/')), 'toda chamada ao Chatwoot foi na conta 2');
   assert.ok(log.filter((l) => l.startsWith('POST') && l.includes('/messages')).length === W.MAX_MENSAGENS_POR_CICLO);
@@ -140,4 +144,12 @@ test('clínica NOVA (conta própria, nada gravado): a régua nasce em SECO — d
   assert.equal(estadoDoAmbiente('unidade-sem-config', undefined, 'chatwoot-regua'), 'desligado');
   assert.equal(estadoDoAmbiente('clinica-demonstracao', 'clinica-demonstracao', 'chatwoot-regua'), 'ligado', 'quem está na lista do ambiente continua ligado');
   assert.equal(estadoDoAmbiente('clinica-demonstracao', undefined, 'asaas-qualquer'), 'desligado', 'só as automações do CRM com modo seco');
+});
+
+test('caixa que nenhuma unidade configurada tem (ou unidade sem conta válida): RECUSA — sem Chat, sem chamada ao Chatwoot', () => {
+  const ctx = C.criarContextoChatwoot({ url: 'https://crm.exemplo.test', conta: 1, token: 'tk-do-ambiente' }, { fetch: (async () => { throw new Error('não podia chamar o Chatwoot'); }) as unknown as typeof fetch });
+  assert.equal(W.chatDaCaixa(ctx, 999), null);
+  U.aplicarConfigs([U.SEMENTE_PARAUAPEBAS, { ...DEMO, contaId: -1 } as never]);
+  assert.equal(W.chatDaCaixa(ctx, 20), null, 'conta inválida: não cai na conta 1');
+  assert.notEqual(W.chatDaCaixa(ctx, 3), null);
 });

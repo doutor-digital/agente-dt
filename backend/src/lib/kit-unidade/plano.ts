@@ -20,6 +20,7 @@ import {
   SERVICO_DO_PROXY,
 } from './catalogo.js';
 import { camposDaSofia, camposDaUnidade } from './molde-sofia.js';
+import { aGravar, dadosDosModelosAGravar } from './protecao.js';
 import { configChatwootDoQuestionario, type Questionario } from './questionario.js';
 
 export type Sistema = 'banco' | 'chatwoot' | 'meta' | 'vps' | 'sofia';
@@ -93,9 +94,20 @@ const NAO_CONSULTADO = 'estado atual não consultado — assumindo que não exis
 const lc = (s: string) => s.toLowerCase();
 const faltantes = (precisa: readonly string[], tem: readonly string[]) => precisa.filter((x) => !tem.includes(x));
 
+/** O que o passo «config-chatwoot» escreveria numa configuração que JÁ existe (só campo vazio; `--sobrescrever` troca o resto). */
+function configAEscrever(hoje: NonNullable<EstadoAtual['banco']>['configChatwoot'] & object, config: ConfigChatwootUnidade, sobrescrever: boolean): { escrever: boolean; preservados: string[] } {
+  const novos = configGravavel(config);
+  const { dadosModelos, ...resto } = novos;
+  const a = aGravar(hoje as unknown as Record<string, unknown>, resto as unknown as Record<string, unknown>, sobrescrever);
+  const d = dadosDosModelosAGravar(hoje.dadosModelos, dadosModelos as Record<string, unknown>, sobrescrever);
+  return { escrever: Object.keys(a.gravar).length > 0 || Object.keys(d.gravar).length > 0, preservados: [...a.preservados, ...d.preservados.map((k) => `dadosModelos.${k}`)] };
+}
+
 export interface OpcoesDoPlano {
   /** texto do molde da Sofia (ops/kit-unidade/molde-sofia/bloco-conversa.md); null = não achei o arquivo */
   molde: string | null;
+  /** `--sobrescrever`: troca também o que já está preenchido e deixa tocar numa unidade ATIVA */
+  sobrescrever?: boolean;
 }
 
 export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: OpcoesDoPlano): Plano {
@@ -108,23 +120,34 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
 
   // ── 1. BANCO: a unidade, a configuração do CRM e as automações em seco ──────────────────────────
   const campos = camposDaUnidade(q);
-  const hoje = b?.unidade?.campos ?? {};
-  const mudou = Object.keys(campos).filter((k) => canonico((hoje as Record<string, unknown>)[k] ?? null) !== canonico(campos[k] ?? null));
+  const sobrescrever = !!opcoes.sobrescrever;
+  const existente = b?.unidade ?? null;
+  // unidade que já existe: só se PREENCHE campo vazio (ver protecao.ts); a ATIVA só com --sobrescrever
+  const { gravar: aEscrever, preservados } = aGravar(existente?.campos ?? null, campos, sobrescrever);
+  const ativa = existente?.campos.isActive === true;
   add({
     id: 'unidade',
     sistema: 'banco',
     titulo: `Unidade «${q.unidade.nome}» em units (identidade, agenda, pagamento — sem segredo)`,
-    acao: !b ? 'criar' : !b.unidade ? 'criar' : mudou.length ? 'alterar' : 'nada',
-    itens: !b?.unidade ? [`slug ${slug}`, `${Object.keys(campos).length} campos: ${Object.keys(campos).join(', ')}`, 'nasce INATIVA (isActive=false) até a equipe confirmar'] : mudou.length ? [`campos que mudam: ${mudou.join(', ')}`] : ['já está como o questionário'],
+    acao: !b ? 'criar' : !existente ? 'criar' : ativa && !sobrescrever ? 'bloqueado' : Object.keys(aEscrever).length ? 'alterar' : 'nada',
+    itens: !existente
+      ? [`slug ${slug}`, `${Object.keys(campos).length} campos: ${Object.keys(campos).join(', ')}`, 'nasce INATIVA (isActive=false) até a equipe confirmar']
+      : Object.keys(aEscrever).length
+        ? [`campos vazios que o questionário preenche: ${Object.keys(aEscrever).join(', ')}`]
+        : ['já está preenchida (nada vazio a preencher)'],
     execucao: 'sim',
-    avisos: b ? [] : [NAO_CONSULTADO],
+    avisos: [
+      ...(b ? [] : [NAO_CONSULTADO]),
+      ...(ativa && !sobrescrever ? [`a unidade ${slug} está ATIVA (no ar): o script NÃO mexe nela sem --sobrescrever — nenhum passo de banco roda`] : []),
+      ...(preservados.length && !(ativa && !sobrescrever) ? [`já preenchidos e diferentes do questionário (ficam como estão; --sobrescrever troca): ${preservados.join(', ')}`] : []),
+    ],
   });
   const problemasCfg = problemasDaConfig({ ...config, caixas: [{ id: 1, tipo: 'cloud' }] });
   add({
     id: 'config-chatwoot',
     sistema: 'banco',
     titulo: 'Configuração do CRM da unidade (unit_chatwoot): prefixo dos modelos, gerente, usuário do celular, número do Kapso, WABA, sufixo da Meta, dados dos modelos',
-    acao: !b ? 'criar' : !b.configChatwoot ? 'criar' : canonico(configGravavel(config)) === canonico(b.configChatwoot) ? 'nada' : 'alterar',
+    acao: !b ? 'criar' : !b.configChatwoot ? 'criar' : configAEscrever(b.configChatwoot, config, sobrescrever).escrever ? 'alterar' : 'nada',
     itens: [
       `prefixo dos modelos ${config.prefixoModelos}`,
       `sufixo das variáveis da Meta ${config.envSufixo}`,
@@ -132,7 +155,11 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
       'gerente e usuário do celular: o id do Chatwoot só existe depois do convite — gravados no passo «registrar-caixa»',
     ],
     execucao: 'sim',
-    avisos: [...(b ? [] : [NAO_CONSULTADO]), ...problemasCfg.map((p) => `configuração inválida: ${p}`)],
+    avisos: [
+      ...(b ? [] : [NAO_CONSULTADO]),
+      ...problemasCfg.map((p) => `configuração inválida: ${p}`),
+      ...(b?.configChatwoot && configAEscrever(b.configChatwoot, config, sobrescrever).preservados.length ? [`já preenchidos e diferentes do questionário (ficam como estão; --sobrescrever troca): ${configAEscrever(b.configChatwoot, config, sobrescrever).preservados.join(', ')}`] : []),
+    ],
     depende: ['unidade'],
   });
   const chatwootAutomacoes = AUTOMACOES.filter((a) => a.id.startsWith('chatwoot-') && a.temSeco);
@@ -299,7 +326,8 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
 
   // ── 4. A SOFIA da unidade ───────────────────────────────────────────────────────────────────────
   const sofia = camposDaSofia(q, opcoes.molde);
-  const mudouSofia = Object.keys(sofia.campos).filter((k) => canonico(b?.sofia[k] ?? null) !== canonico(sofia.campos[k] ?? null));
+  const { gravar: sofiaAEscrever, preservados: sofiaPreservados } = aGravar(b?.sofia ?? null, sofia.campos, sobrescrever);
+  const mudouSofia = Object.keys(sofiaAEscrever);
   add({
     id: 'sofia',
     sistema: 'sofia',
@@ -307,7 +335,7 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
     acao: !b ? 'criar' : mudouSofia.length ? 'alterar' : 'nada',
     itens: [...Object.keys(sofia.campos).map((k) => (k === 'systemPrompt' ? `systemPrompt (${String(sofia.campos[k]).length} caracteres, do molde)` : k)), 'automação prompt-da-unidade: NÃO ligo — antes roda `testar-prompt.ts --slug` e o dono lê as respostas'],
     execucao: 'sim',
-    avisos: [...(b ? [] : [NAO_CONSULTADO]), ...sofia.avisos, 'a Sofia só atende com agenda: falta o token da franquia (passo «franquia») e os turnos por profissional (spine_staff_por_turno)'],
+    avisos: [...(b ? [] : [NAO_CONSULTADO]), ...sofia.avisos, ...(sofiaPreservados.length ? [`já preenchidos e diferentes do questionário (ficam como estão; --sobrescrever troca): ${sofiaPreservados.filter((k) => k !== 'systemPrompt').join(', ')}${sofiaPreservados.includes('systemPrompt') ? ' (o systemPrompt só troca com --sobrescrever-prompt)' : ''}`] : []), 'a Sofia só atende com agenda: falta o token da franquia (passo «franquia») e os turnos por profissional (spine_staff_por_turno)'],
     depende: ['unidade'],
   });
 

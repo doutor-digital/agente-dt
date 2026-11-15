@@ -110,7 +110,7 @@ export function estadoDoAmbiente(slug: string, raw: string | undefined, id?: str
   if (a?.quandoVazio === 'seco' && a.temSeco) return 'seco';
   // CLÍNICA NOVA (conta própria no Chatwoot): as automações do CRM que têm modo seco nascem em SECO, sem ninguém ter gravado nada — decidem e
   // anotam, não escrevem em ninguém. Unidade sem conta própria (Parauapebas) segue exatamente como antes: desligado.
-  if (id && a?.temSeco && id.startsWith('chatwoot-') && contaDaUnidade(slug) !== null) return 'seco';
+  if (id && a?.temSeco && id.startsWith('chatwoot-') && typeof contaDaUnidade(slug) === 'number') return 'seco';
   return 'desligado';
 }
 
@@ -166,6 +166,21 @@ export function panoramaDaUnidade(slug: string, ambiente: NodeJS.ProcessEnv = pr
       ambiente: (raw ?? '').trim(),
     };
   });
+}
+
+/**
+ * Grava o que a tela escolheu para uma automação numa unidade (e quem escolheu) e já vale na próxima pergunta. É o MESMO caminho para o
+ * console (super admin) e para a tela «Robôs» do Chatwoot (administrador do Chatwoot): um só registro de «quem mudou e quando».
+ */
+export async function gravarEstadoDaAutomacao(unit: { id: string }, automacao: string, estado: Estado, por: string | null): Promise<void> {
+  await prisma.unitAutomacao.upsert({
+    where: { unitId_automacao: { unitId: unit.id, automacao } },
+    create: { unitId: unit.id, automacao, estado, atualizadoPor: por },
+    update: { estado, atualizadoPor: por },
+  });
+  // Vale já na próxima pergunta, sem esperar os 30 s do cache — é o que faz a tela parecer instantânea.
+  invalidarAutomacoes();
+  await recarregarAutomacoes();
 }
 
 /** Carrega uma vez no boot, pra primeira pergunta já ver o banco em vez de cair no `.env`. */

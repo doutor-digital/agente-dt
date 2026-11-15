@@ -194,7 +194,7 @@ export interface ChatDoCapi {
   /** uma página (25) da listagem da caixa; vazia = acabou */
   pagina(caixa: number, pagina: number): Promise<unknown[]>;
   /** o clique de anúncio da conversa (lê as mensagens até a primeira); null = não veio de anúncio */
-  clique(conversationId: number, caixa?: number): Promise<CliqueDoAnuncio | null>;
+  clique(conversationId: number, caixa: number): Promise<CliqueDoAnuncio | null>;
 }
 
 /** ok · config (token/permissão: não adianta tentar de novo) · transitorio (Meta fora, limite, rede) · recusou (este evento) · incerto (sem resposta: pode ter ido) */
