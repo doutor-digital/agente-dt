@@ -791,3 +791,40 @@ test('conversa que NÃO fala (mesmo telefone) não escreve nada — nem regra in
   assert.ok(f.vistos.some((v) => v.conversationId === 1), 'a memória de A segue atualizada');
   assert.equal(r2.disparos, 0, 'B não repete');
 });
+
+// ── sessão da agenda no worker: Kommo e um telefone, uma conversa ──
+
+const SESSAO_AMANHA = { categoria_consulta: 'Sessão', data_consulta: '2026-11-17', hora_consulta: '14:30', situacao_consulta: 'Agendado' };
+
+test('sessão da agenda (ligado): manda o texto de sessão, uma vez; com cartão ativo no Kommo só deixa a nota', async () => {
+  const f1 = armazemFalso();
+  const c1 = chatFalso(() => [bruta(1, { attrs: SESSAO_AMANHA })]);
+  await cicloDaCaixa(deps(f1.armazem, c1.chat), 2, 'x', 'ligado', U, new Date('2026-11-16T17:20:00Z'));
+  await cicloDaCaixa(deps(f1.armazem, c1.chat), 2, 'x', 'ligado', U, VESPERA);
+  await cicloDaCaixa(deps(f1.armazem, c1.chat), 2, 'x', 'ligado', U, new Date(VESPERA.getTime() + 600_000));
+  assert.equal(c1.mensagens.length, 1);
+  assert.equal(c1.mensagens[0]!.privada, false);
+  assert.match(c1.mensagens[0]!.texto, /^Olá, Maria\. A sua sessão é amanhã\./);
+
+  const f2 = armazemFalso();
+  const c2 = chatFalso(() => [bruta(1, { attrs: SESSAO_AMANHA })]);
+  const kommo = async () => ({ leadId: 55 });
+  await cicloDaCaixa(comKommo(f2.armazem, c2.chat, kommo), 2, 'x', 'ligado', U, new Date('2026-11-16T17:20:00Z'));
+  const r = await cicloDaCaixa(comKommo(f2.armazem, c2.chat, kommo), 2, 'x', 'ligado', U, VESPERA);
+  assert.equal(r.noKommo, 1);
+  assert.equal(c2.mensagens.length, 1);
+  assert.equal(c2.mensagens[0]!.privada, true);
+  assert.match(c2.mensagens[0]!.texto, /cartão ativo no Kommo da unidade \(lead 55\)/);
+});
+
+test('sessão da agenda: duas conversas do mesmo telefone → só a mais recente fala, e a outra não escreve nada', async () => {
+  const tel = '+5594999990000';
+  const f = armazemFalso();
+  const A = () => ({ ...bruta(1, { attrs: SESSAO_AMANHA, telefone: tel, labels: ['historico'] }), last_activity_at: unix('2026-11-12T10:00:00Z') });
+  const B = () => ({ ...bruta(2, { attrs: SESSAO_AMANHA, telefone: tel }), last_activity_at: unix('2026-11-16T10:00:00Z') });
+  const c = chatFalso(() => [A(), B()]);
+  await cicloDaCaixa(deps(f.armazem, c.chat), 2, 'x', 'ligado', U, new Date('2026-11-16T17:20:00Z'));
+  await cicloDaCaixa(deps(f.armazem, c.chat), 2, 'x', 'ligado', U, VESPERA);
+  assert.deepEqual(c.mensagens.map((m) => m.id), [2]);
+  assert.match(c.mensagens[0]!.texto, /A sua sessão é amanhã/);
+});
