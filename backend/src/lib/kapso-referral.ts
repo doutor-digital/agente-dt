@@ -12,7 +12,7 @@
 import { logger } from './logger.js';
 import { prisma } from './prisma.js';
 import { CAIXAS_CLOUD } from './chatwoot-regua.js';
-import { numerosDoKapsoConfigurados, numerosForaDaLista } from './chatwoot-unidades.js';
+import { configDaUnidade, numerosDoKapsoConfigurados, numerosForaDaLista, unidadeDaCaixa } from './chatwoot-unidades.js';
 
 export const REGRA_KAPSO_REFERRAL = 'kapso-referral';
 const KAPSO = 'https://api.kapso.ai/meta/whatsapp/v24.0';
@@ -93,26 +93,39 @@ export function referralDaMensagemDoKapso(m: any): ReferralDoKapso | null {
 
 type Buscar = (url: string, init: { headers: Record<string, string>; signal: AbortSignal }) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
 
-/** Pergunta ao Kapso por uma mensagem (tenta cada número). null = sem chave / Kapso não achou / fora do ar. Chave só no cabeçalho. */
-export async function consultarKapso(wamid: string, env: NodeJS.ProcessEnv = process.env, buscar: Buscar = fetch as unknown as Buscar): Promise<{ achou: boolean; ref: ReferralDoKapso | null } | null> {
+/**
+ * Pergunta ao Kapso por uma mensagem — NO NÚMERO DA CAIXA em que ela chegou (o `phone_number_id` da unidade dona da caixa), uma consulta só.
+ * Antes era um laço sobre TODOS os números (que parava no primeiro erro): com várias clínicas, um erro no número de uma impedia achar a mensagem
+ * de outra, e a mensagem de uma clínica era perguntada ao Kapso pelos números das outras. Caixa de unidade sem número do Kapso, ou número que
+ * a variável `KAPSO_PHONE_NUMBER_IDS` (quando existe, ela manda) não inclui: não consulta e avisa. null = sem chave / sem número / Kapso fora
+ * do ar ou recusou. Chave só no cabeçalho.
+ */
+export async function consultarKapso(wamid: string, caixa: number, env: NodeJS.ProcessEnv = process.env, buscar: Buscar = fetch as unknown as Buscar): Promise<{ achou: boolean; ref: ReferralDoKapso | null } | null> {
   const chave = (env.KAPSO_API_KEY ?? '').trim();
   if (!chave) return null;
-  for (const n of numerosDoKapso(env)) {
-    try {
-      const r = await buscar(`${KAPSO}/${n}/messages/${encodeURIComponent(wamid)}`, { headers: { 'X-API-Key': chave }, signal: AbortSignal.timeout(15_000) });
-      if (r.status === 404) continue;
-      if (!r.ok) {
-        logger.warn({ status: r.status }, 'kapso-referral: o Kapso recusou a consulta da mensagem');
-        return null;
-      }
-      const j = (await r.json().catch(() => null)) as any;
-      return { achou: true, ref: referralDaMensagemDoKapso(j?.data ?? j) };
-    } catch (err) {
-      logger.warn({ err: String(err).replace(chave, '***') }, 'kapso-referral: não consegui falar com o Kapso');
+  const slug = unidadeDaCaixa(caixa);
+  const n = slug ? configDaUnidade(slug)?.kapsoPhoneNumberId : null;
+  if (!n) {
+    logger.warn({ caixa }, 'kapso-referral: a unidade desta caixa não tem número do Kapso configurado — não consulto');
+    return null;
+  }
+  if (!numerosDoKapso(env).includes(n)) {
+    logger.warn({ caixa }, 'kapso-referral: o número do Kapso desta caixa não está em KAPSO_PHONE_NUMBER_IDS — não consulto');
+    return null;
+  }
+  try {
+    const r = await buscar(`${KAPSO}/${n}/messages/${encodeURIComponent(wamid)}`, { headers: { 'X-API-Key': chave }, signal: AbortSignal.timeout(15_000) });
+    if (r.status === 404) return { achou: false, ref: null };
+    if (!r.ok) {
+      logger.warn({ status: r.status, caixa }, 'kapso-referral: o Kapso recusou a consulta da mensagem');
       return null;
     }
+    const j = (await r.json().catch(() => null)) as any;
+    return { achou: true, ref: referralDaMensagemDoKapso(j?.data ?? j) };
+  } catch (err) {
+    logger.warn({ err: String(err).replace(chave, '***'), caixa }, 'kapso-referral: não consegui falar com o Kapso');
+    return null;
   }
-  return { achou: false, ref: null };
 }
 
 /** Guarda o referral da conversa (uma linha por mensagem; repetir não duplica). true = guardou agora; false = já estava guardado. */
@@ -153,7 +166,7 @@ export async function aplicarReferralDoKapso(
   } = {},
 ): Promise<'sem-chave' | 'sem-anuncio' | 'guardado' | 'falhou'> {
   try {
-    const r = await (deps.consultar ?? consultarKapso)(m.wamid);
+    const r = await (deps.consultar ?? consultarKapso)(m.wamid, m.caixa);
     if (!r) return 'sem-chave';
     if (!r.ref) return 'sem-anuncio';
     const novo = (await (deps.guardar ?? guardarReferral)(m.caixa, m.conversa, m.wamid, r.ref)) !== false;

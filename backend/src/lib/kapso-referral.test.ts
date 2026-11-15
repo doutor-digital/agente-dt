@@ -50,24 +50,56 @@ test('referral da mensagem do Kapso: anúncio com ctwa_clid; publicação sem id
   assert.equal(referralDaMensagemDoKapso({ text: { body: 'oi' } }), null);
 });
 
-test('consultar o Kapso: chave só no cabeçalho, 404 tenta o próximo número, sem chave = null, recusa = null', async () => {
+test('consultarKapso: UMA consulta, no número da CAIXA da mensagem (Parauapebas: o mesmo número de sempre); 404 = não veio de anúncio; chave só no cabeçalho', async () => {
   const urls: string[] = [];
   const cabs: string[] = [];
   const f = (async (url: string, init: { headers: Record<string, string> }) => {
     urls.push(url);
     cabs.push(init.headers['X-API-Key']!);
-    if (url.includes('/111111/')) return { ok: false, status: 404, json: async () => ({ error: 'not found' }) };
+    if (url.includes('/404404404404/')) return { ok: false, status: 404, json: async () => ({ error: 'not found' }) };
     return { ok: true, status: 200, json: async () => ({ data: { timestamp: '1', referral: { source_type: 'ad', source_id: '55555', ctwa_clid: 'C1' } } }) };
   }) as any;
-  const r = await consultarKapso(WAMID, { KAPSO_API_KEY: 'chave-secreta-kapso', KAPSO_PHONE_NUMBER_IDS: '111111,222222' }, f);
+  const r = await consultarKapso(WAMID, 3, { KAPSO_API_KEY: 'chave-secreta-kapso' }, f);
   assert.equal(r?.ref?.ctwaClid, 'C1');
-  assert.deepEqual(urls.map((u) => u.split('/v24.0/')[1]!.split('/')[0]), ['111111', '222222']);
+  assert.deepEqual(urls.map((u) => u.split('/v24.0/')[1]!.split('/')[0]), ['1212928641906230'], 'um número só: o de Parauapebas, como sempre');
   assert.ok(urls.every((u) => !u.includes('chave-secreta-kapso')) && cabs.every((c) => c === 'chave-secreta-kapso'));
-  assert.equal(await consultarKapso(WAMID, {}, f), null, 'sem chave');
+  assert.equal(await consultarKapso(WAMID, 3, {}, f), null, 'sem chave');
   const recusa = (async () => ({ ok: false, status: 401, json: async () => ({}) })) as any;
-  assert.equal(await consultarKapso(WAMID, { KAPSO_API_KEY: 'k' }, recusa), null);
+  assert.equal(await consultarKapso(WAMID, 3, { KAPSO_API_KEY: 'k' }, recusa), null);
   const quebra = (async () => { throw new Error('rede'); }) as any;
-  assert.equal(await consultarKapso(WAMID, { KAPSO_API_KEY: 'k' }, quebra), null);
+  assert.equal(await consultarKapso(WAMID, 3, { KAPSO_API_KEY: 'k' }, quebra), null);
+});
+
+test('consultarKapso com várias clínicas: cada mensagem vai ao número DA SUA CAIXA; erro no número de uma não impede a outra; caixa sem número ou fora da lista do ambiente não consulta', async () => {
+  const { aplicarConfigs, SEMENTE_PARAUAPEBAS } = await import('./chatwoot-unidades.js');
+  const demo = { ...SEMENTE_PARAUAPEBAS, slug: 'clinica-demonstracao', contaId: 2, prefixoModelos: 'demo_', envSufixo: 'DEMO', kapsoPhoneNumberId: '404404404404', wabaId: '999888777666555', caixas: [{ id: 20, tipo: 'cloud' as const }], usuarioCelularId: null, gerenteId: null };
+  const semNumero = { ...demo, slug: 'sem-numero', prefixoModelos: 'semn_', envSufixo: 'SEMN', kapsoPhoneNumberId: null, wabaId: null, caixas: [{ id: 30, tipo: 'cloud' as const }] };
+  aplicarConfigs([SEMENTE_PARAUAPEBAS, demo, semNumero]);
+  try {
+    const urls: string[] = [];
+    const f = (async (url: string) => {
+      urls.push(url);
+      if (url.includes('/1212928641906230/')) return { ok: false, status: 500, json: async () => ({}) }; // o número de Parauapebas está com erro
+      return { ok: true, status: 200, json: async () => ({ data: { timestamp: '1', referral: { source_type: 'ad', source_id: '77777', ctwa_clid: 'D1' } } }) };
+    }) as any;
+    const env = { KAPSO_API_KEY: 'k' };
+    // a clínica demo acha a mensagem dela mesmo com o número de Parauapebas quebrado (antes o laço parava no 1º erro)
+    assert.equal((await consultarKapso(WAMID, 20, env, f))?.ref?.ctwaClid, 'D1');
+    assert.deepEqual(urls.map((u) => u.split('/v24.0/')[1]!.split('/')[0]), ['404404404404']);
+    // e a mensagem de Parauapebas NÃO é perguntada pelo número da demo
+    urls.length = 0;
+    assert.equal(await consultarKapso(WAMID, 3, env, f), null);
+    assert.deepEqual(urls.map((u) => u.split('/v24.0/')[1]!.split('/')[0]), ['1212928641906230']);
+    // caixa sem número, caixa desconhecida: nenhuma consulta
+    urls.length = 0;
+    assert.equal(await consultarKapso(WAMID, 30, env, f), null);
+    assert.equal(await consultarKapso(WAMID, 999, env, f), null);
+    // a lista do ambiente manda: número que ela não inclui não é consultado
+    assert.equal(await consultarKapso(WAMID, 20, { ...env, KAPSO_PHONE_NUMBER_IDS: '1212928641906230' }, f), null);
+    assert.deepEqual(urls, []);
+  } finally {
+    aplicarConfigs([SEMENTE_PARAUAPEBAS]);
+  }
 });
 
 test('aplicar: guarda só quando veio de anúncio; não lança', async () => {

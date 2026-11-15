@@ -599,7 +599,7 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
         }
       }
       // sinal interno: não é mensagem ao paciente
-      const et = etiquetas < MAX_ETIQUETAS_POR_CICLO ? decidirEtiquetaCelular(c) : null;
+      const et = etiquetas < MAX_ETIQUETAS_POR_CICLO ? decidirEtiquetaCelular(c, slug) : null;
       if (et) {
         const lista = et === 'por' ? [...c.etiquetas, ETIQUETA_CELULAR] : c.etiquetas.filter((x) => x !== ETIQUETA_CELULAR);
         etiquetas++;

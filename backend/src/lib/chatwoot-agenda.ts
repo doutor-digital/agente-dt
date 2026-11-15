@@ -17,7 +17,7 @@
 import { logger } from './logger.js';
 import { prisma } from './prisma.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
-import { chamar, contaChatwootDoAmbiente, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
+import { chamar, contaChatwootDoAmbiente, contextoDaCaixa, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 import { CAIXAS_REGUA, ehArquivo } from './chatwoot-regua.js';
 import { mesmoTelefone } from './chatwoot-lida.js';
 import { normalizar } from './franquia-sync.js';
@@ -199,6 +199,9 @@ async function conversasDaCaixa(ctx: ContextoChatwoot, caixa: number): Promise<C
 
 const hojeEm = (tz: string) => new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 
+/** A memória das notas do seco (uma por conversa e mudança). A CAIXA entra na chave: o id da conversa é por conta do Chatwoot. */
+export const chaveDaNota = (caixa: number, conversa: number, muda: unknown): string => `${caixa}|${conversa}|${JSON.stringify(muda)}`;
+
 export async function cicloDaAgenda(ctx: ContextoChatwoot, caixa: number, slug: string, modo: Exclude<Estado, 'desligado'>): Promise<{ agenda: number; casadas: number; gravadas: number }> {
   const unit = await prisma.unit.findUnique({ where: { slug } });
   if (!unit?.spineToken) return { agenda: 0, casadas: 0, gravadas: 0 };
@@ -235,7 +238,7 @@ export async function cicloDaAgenda(ctx: ContextoChatwoot, caixa: number, slug: 
   let gravadas = 0;
   for (const { conversa, muda, nome, segurada, porCategoria } of plano) {
     if (porCategoria) {
-      const k = `${conversa.id}|cat:${porCategoria}|${muda.data_consulta ?? conversa.attrs.data_consulta ?? ''}`;
+      const k = `${caixa}|${conversa.id}|cat:${porCategoria}|${muda.data_consulta ?? conversa.attrs.data_consulta ?? ''}`;
       if (!seguradasLogadas.has(k)) {
         if (seguradasLogadas.size >= 5000) seguradasLogadas.clear();
         seguradasLogadas.add(k);
@@ -244,7 +247,7 @@ export async function cicloDaAgenda(ctx: ContextoChatwoot, caixa: number, slug: 
     }
     // Perdido/Frio com consulta nova de pé: a etapa fica como está (decisão humana) — só registra no log, uma vez
     if (segurada) {
-      const k = `${conversa.id}|${segurada}|${muda.data_consulta ?? conversa.attrs.data_consulta ?? ''}`;
+      const k = `${caixa}|${conversa.id}|${segurada}|${muda.data_consulta ?? conversa.attrs.data_consulta ?? ''}`;
       if (!seguradasLogadas.has(k)) {
         if (seguradasLogadas.size >= 5000) seguradasLogadas.clear(); // teto: o log pode repetir uma vez, a memória não cresce sem fim
         seguradasLogadas.add(k);
@@ -252,7 +255,7 @@ export async function cicloDaAgenda(ctx: ContextoChatwoot, caixa: number, slug: 
       }
     }
     if (!Object.keys(muda).length) continue;
-    const chave = `${conversa.id}|${JSON.stringify(muda)}`;
+    const chave = chaveDaNota(caixa, conversa.id, muda); // a caixa na chave: a conversa 5 de uma conta não é a conversa 5 de outra
     try {
       if (modo === 'seco') {
         if (notasFeitas.has(chave)) continue;
@@ -278,19 +281,32 @@ export async function cicloDaAgenda(ctx: ContextoChatwoot, caixa: number, slug: 
 let timer: NodeJS.Timeout | null = null;
 let rodando = false;
 
+/**
+ * Um ciclo por caixa, no Chatwoot da CONTA da caixa (cada clínica tem a sua). Caixa de unidade sem conta válida é pulada, sem chamar o Chatwoot.
+ * `ciclo` é injetável para o teste de identidade: com só Parauapebas, as chamadas são as de sempre — mesmas caixas, mesma ordem, o MESMO contexto.
+ */
+export async function varrerAgenda(ctx: ContextoChatwoot, ciclo: typeof cicloDaAgenda = cicloDaAgenda, e: NodeJS.ProcessEnv = process.env): Promise<void> {
+  for (const [caixaTxt, slug] of Object.entries(CAIXAS_REGUA)) {
+    const modo = estadoDaAutomacao(slug, ID_AGENDA, e.CHATWOOT_AGENDA_SLUGS);
+    if (modo === 'desligado') continue;
+    const c = contextoDaCaixa(ctx, Number(caixaTxt), e);
+    if (!c) {
+      logger.warn({ slug, caixa: caixaTxt }, `${ID_AGENDA}: a caixa ${caixaTxt} não tem conta do Chatwoot válida — pulo, sem chamar o Chatwoot`);
+      continue;
+    }
+    try {
+      await ciclo(c, Number(caixaTxt), slug, modo);
+    } catch (err) {
+      logger.warn({ err: String(err), slug }, `${ID_AGENDA}: ciclo falhou`);
+    }
+  }
+}
+
 async function varrer(ctx: ContextoChatwoot): Promise<void> {
   if (rodando) return;
   rodando = true;
   try {
-    for (const [caixaTxt, slug] of Object.entries(CAIXAS_REGUA)) {
-      const modo = estadoDaAutomacao(slug, ID_AGENDA, process.env.CHATWOOT_AGENDA_SLUGS);
-      if (modo === 'desligado') continue;
-      try {
-        await cicloDaAgenda(ctx, Number(caixaTxt), slug, modo);
-      } catch (err) {
-        logger.warn({ err: String(err), slug }, `${ID_AGENDA}: ciclo falhou`);
-      }
-    }
+    await varrerAgenda(ctx);
   } finally {
     rodando = false;
   }

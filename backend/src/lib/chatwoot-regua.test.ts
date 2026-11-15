@@ -519,15 +519,15 @@ test('integração: o ciclo de uma conversa que entra em Perdido depois da parti
 const msg = (o: Partial<MensagemResumo>): MensagemResumo => ({ saida: true, privada: false, autorId: 7, autorTipo: 'user', criadaEm: Z('2026-11-16T12:00:00Z'), ...o });
 
 test('respondeu-pelo-celular: põe quando a última saída é do usuário 7, tira quando é de outro agente', () => {
-  assert.equal(decidirEtiquetaCelular(conv({ ultima: msg({}) })), 'por');
-  assert.equal(decidirEtiquetaCelular(conv({ ultima: msg({}), etiquetas: ['respondeu-pelo-celular'] })), null);
-  assert.equal(decidirEtiquetaCelular(conv({ ultima: msg({ autorId: 2 }), etiquetas: ['respondeu-pelo-celular'] })), 'tirar');
-  assert.equal(decidirEtiquetaCelular(conv({ ultima: msg({ autorId: 2 }) })), null);
+  assert.equal(decidirEtiquetaCelular(conv({ ultima: msg({}) }), 'doutor-hernia-parauapebas'), 'por');
+  assert.equal(decidirEtiquetaCelular(conv({ ultima: msg({}), etiquetas: ['respondeu-pelo-celular'] }), 'doutor-hernia-parauapebas'), null);
+  assert.equal(decidirEtiquetaCelular(conv({ ultima: msg({ autorId: 2 }), etiquetas: ['respondeu-pelo-celular'] }), 'doutor-hernia-parauapebas'), 'tirar');
+  assert.equal(decidirEtiquetaCelular(conv({ ultima: msg({ autorId: 2 }) }), 'doutor-hernia-parauapebas'), null);
   // paciente escreveu por último, nota privada (as do seco) ou bot: não muda nada
-  assert.equal(decidirEtiquetaCelular(conv({ ultima: msg({ saida: false, autorId: 3, autorTipo: 'contact' }), etiquetas: ['respondeu-pelo-celular'] })), null);
-  assert.equal(decidirEtiquetaCelular(conv({ ultima: msg({ privada: true, autorId: 2 }), etiquetas: ['respondeu-pelo-celular'] })), null);
-  assert.equal(decidirEtiquetaCelular(conv({ ultima: msg({ autorTipo: 'agent_bot' }) })), null);
-  assert.equal(decidirEtiquetaCelular(conv({ ultima: null })), null);
+  assert.equal(decidirEtiquetaCelular(conv({ ultima: msg({ saida: false, autorId: 3, autorTipo: 'contact' }), etiquetas: ['respondeu-pelo-celular'] }), 'doutor-hernia-parauapebas'), null);
+  assert.equal(decidirEtiquetaCelular(conv({ ultima: msg({ privada: true, autorId: 2 }), etiquetas: ['respondeu-pelo-celular'] }), 'doutor-hernia-parauapebas'), null);
+  assert.equal(decidirEtiquetaCelular(conv({ ultima: msg({ autorTipo: 'agent_bot' }) }), 'doutor-hernia-parauapebas'), null);
+  assert.equal(decidirEtiquetaCelular(conv({ ultima: null }), 'doutor-hernia-parauapebas'), null);
 });
 
 // ── a conversa do Chatwoot ─────────────────────────────────────────────────────────────────────────

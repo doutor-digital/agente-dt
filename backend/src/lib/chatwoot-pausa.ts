@@ -53,7 +53,7 @@ export function eventoDePausa(corpo: any, caixas: Readonly<Record<number, string
   const id = numero(sender.id);
   const ehUsuario = String(sender.type ?? '').toLowerCase() === 'user';
   if (!ehUsuario || !id || id === USUARIO_ROBO) return null;
-  if (ehUsuarioCelular(id)) return { conversa, slug, autor: { tipo: 'celular' } };
+  if (ehUsuarioCelular(id, slug)) return { conversa, slug, autor: { tipo: 'celular' } };
   return { conversa, slug, autor: { tipo: 'pessoa', id, nome: String(sender.name ?? '').trim() || `usuário ${id}` } };
 }
 
