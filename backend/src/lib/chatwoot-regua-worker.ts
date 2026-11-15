@@ -27,7 +27,7 @@ import { precosDaConsulta } from '../agent/prompt-composer.js';
 import { chaveDoTelefone } from './chatwoot-lida.js';
 import { enviarPelaEvolution } from './alerta-whatsapp.js';
 import { createKommoClientSemFreio } from '../services/kommo.service.js';
-import { chamar, contaChatwootDoAmbiente, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
+import { chamar, contaChatwootDoAmbiente, contextoDaCaixa, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 import {
   atualizarVistos,
   CAIXAS_CLOUD,
@@ -614,11 +614,17 @@ let timer: NodeJS.Timeout | null = null;
 let primeira: NodeJS.Timeout | null = null;
 let rodando = false;
 
+/**
+ * O Chatwoot da CAIXA: cada clínica tem a sua conta, e a caixa sabe de que conta é. Caixa sem conta própria (Parauapebas, e toda caixa que mora
+ * na conta de sempre) usa o contexto que veio — o mesmo objeto, as mesmas chamadas, na mesma ordem.
+ */
+export const chatDaCaixa = (ctx: ContextoChatwoot, caixa: number): Chat => chatDoChatwoot(contextoDaCaixa(ctx, caixa));
+
 async function varrer(ctx: ContextoChatwoot): Promise<void> {
   if (rodando) return;
   rodando = true;
   try {
-    const deps: DepsDoCiclo = { armazem: armazemDoBanco(), chat: chatDoChatwoot(ctx), pausa: (ms) => new Promise((r) => setTimeout(r, ms)) };
+    const deps: Omit<DepsDoCiclo, 'chat'> = { armazem: armazemDoBanco(), pausa: (ms) => new Promise((r) => setTimeout(r, ms)) };
     for (const [caixaTxt, slug] of Object.entries(CAIXAS_REGUA)) {
       const modo = estadoDaRegua(slug);
       if (modo === 'desligado') continue;
@@ -637,7 +643,7 @@ async function varrer(ctx: ContextoChatwoot): Promise<void> {
           prefixoModelos: configDaUnidade(slug)?.prefixoModelos,
         };
         const kommo = unit.kommoSubdomain && unit.kommoAccessToken ? cartaoNoKommoDaUnidade(unit) : undefined;
-        await cicloDaCaixa({ ...deps, kommo, avisarGerente: avisoDaGerente(slug) }, Number(caixaTxt), slug, modo, unidade, new Date());
+        await cicloDaCaixa({ ...deps, chat: chatDaCaixa(ctx, Number(caixaTxt)), kommo, avisarGerente: avisoDaGerente(slug) }, Number(caixaTxt), slug, modo, unidade, new Date());
       } catch (err) {
         logger.warn({ err: String(err), slug }, `${ID_REGUA}: ciclo falhou — tento no próximo`);
       }
