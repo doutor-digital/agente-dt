@@ -10,8 +10,8 @@
  */
 import { logger } from './logger.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
-import { chamar, contaChatwootDoAmbiente, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
-import { CAIXAS_REGUA } from './chatwoot-regua.js';
+import { chamar, contaChatwootDoAmbiente, contextoDaUnidade, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
+import { contaDaUnidade, unidadesConfiguradas } from './chatwoot-unidades.js';
 
 export const ID_DUPLICADOS = 'chatwoot-duplicados';
 export const MAX_JUNCOES_POR_CICLO = 5;
@@ -118,28 +118,57 @@ export async function cicloDuplicados(p: PortasDuplicados, modo: 'seco' | 'ligad
 }
 
 /**
- * O ciclo varre a CONTA inteira do Chatwoot (todas as caixas), não uma unidade: com mais de uma unidade configurada, só roda tão solto
- * quanto a MAIS RESTRITA delas permitir (uma em «seco» ou «desligado» segura as outras — junção não tem volta). Com uma só, é o estado dela.
+ * O ciclo varre a CONTA inteira do Chatwoot (todas as caixas dela), não uma unidade. Cada clínica vendida tem a SUA conta: o estado de uma
+ * conta vem só das unidades QUE MORAM nela — uma clínica nova em «seco» nunca segura a junção de Parauapebas (e a junção de uma nunca
+ * toca os contatos da outra). Dentro de uma conta com mais de uma unidade (as que moram na conta do ambiente), vale o estado MAIS RESTRITO:
+ * uma em «seco» ou «desligado» segura as outras — junção não tem volta.
+ * `conta`: `null` = a conta do ambiente (Parauapebas e as unidades sem conta própria); número = a conta própria.
  */
 const RIGOR: Readonly<Record<Estado, number>> = { desligado: 0, seco: 1, ligado: 2 };
-export const estadoDuplicados = (): Estado => {
-  const slugs = [...new Set(Object.values(CAIXAS_REGUA))];
+const slugsDaConta = (conta: number | null): string[] => unidadesConfiguradas().filter((c) => contaDaUnidade(c.slug) === conta).map((c) => c.slug);
+export const estadoDuplicados = (conta: number | null = null): Estado => {
+  const slugs = [...new Set(slugsDaConta(conta))];
   if (!slugs.length) return 'desligado';
   return slugs.map((slug) => estadoDaAutomacao(slug, ID_DUPLICADOS, process.env.CHATWOOT_DUPLICADOS_SLUGS)).reduce((a, b) => (RIGOR[b] < RIGOR[a] ? b : a));
 };
 
+/** As contas a varrer: a do ambiente primeiro (se alguma unidade mora nela), depois as próprias, com uma unidade de cada para escolher o token. */
+export function contasParaDuplicados(): Array<{ conta: number | null; slug: string }> {
+  const l: Array<{ conta: number | null; slug: string }> = [];
+  for (const c of unidadesConfiguradas()) {
+    const conta = contaDaUnidade(c.slug);
+    if (conta === undefined) continue; // configuração inválida: não varre
+    if (!l.some((x) => x.conta === conta)) l.push({ conta, slug: c.slug });
+  }
+  return l.sort((x, y) => (x.conta === null ? -1 : y.conta === null ? 1 : x.conta - y.conta));
+}
+
 let timer: NodeJS.Timeout | null = null;
 let rodando = false;
 
+/** Um ciclo em cada conta, cada uma com o contexto, o token e o estado DELA. */
+export async function varrerContasDeDuplicados(ctx: ContextoChatwoot, e: NodeJS.ProcessEnv = process.env): Promise<void> {
+  for (const { conta, slug } of contasParaDuplicados()) {
+    const modo = estadoDuplicados(conta);
+    if (modo === 'desligado') continue;
+    const c = contextoDaUnidade(ctx, slug, e);
+    if (!c) {
+      logger.warn({ conta }, `${ID_DUPLICADOS}: a conta ${conta ?? '(do ambiente)'} não tem token/URL válidos — pulo`);
+      continue;
+    }
+    try {
+      await cicloDuplicados(portasDoChatwoot(c), modo);
+    } catch (err) {
+      logger.warn({ err: String(err), conta }, `${ID_DUPLICADOS}: ciclo falhou — tento no próximo`);
+    }
+  }
+}
+
 async function varrer(ctx: ContextoChatwoot): Promise<void> {
   if (rodando) return;
-  const modo = estadoDuplicados();
-  if (modo === 'desligado') return;
   rodando = true;
   try {
-    await cicloDuplicados(portasDoChatwoot(ctx), modo);
-  } catch (err) {
-    logger.warn({ err: String(err) }, `${ID_DUPLICADOS}: ciclo falhou — tento no próximo`);
+    await varrerContasDeDuplicados(ctx);
   } finally {
     rodando = false;
   }

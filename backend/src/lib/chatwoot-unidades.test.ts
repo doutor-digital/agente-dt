@@ -70,9 +70,9 @@ test('semente de Parauapebas: os mapas derivados são exatamente os que estavam 
   assert.deepEqual({ ...INSTANCIA_CAIXA }, { 'parauapebas-unidade': 2 });
   assert.deepEqual({ ...CAIXAS_CAPI }, { 3: { slug: SLUG_PARAU, waba: '2146287749563217' } });
   assert.equal(USUARIO_CELULAR, 7);
-  assert.equal(ehUsuarioCelular(7), true);
-  assert.equal(ehUsuarioCelular(8), false);
-  assert.equal(ehUsuarioCelular(null), false);
+  assert.equal(ehUsuarioCelular(7, SLUG_PARAU), true);
+  assert.equal(ehUsuarioCelular(8, SLUG_PARAU), false);
+  assert.equal(ehUsuarioCelular(null, SLUG_PARAU), false);
   assert.equal(sufixoEnvDaUnidade(SLUG_PARAU), 'PARAUAPEBAS');
   assert.deepEqual(problemasDaConfig(SEMENTE_PARAUAPEBAS), []);
 });
@@ -185,15 +185,15 @@ test('uma segunda unidade entra sem mexer na primeira, e cada mapa aponta para a
   assert.deepEqual({ ...GERENTE_DA_CAIXA }, { 2: 4, 3: 4, 12: 14 });
   assert.deepEqual({ ...META_AGENDAMENTOS_POR_CAIXA }, { 2: 5, 3: 5, 12: 8 });
   assert.deepEqual({ ...CAIXAS_CAPI }, { 3: { slug: SLUG_PARAU, waba: '2146287749563217' }, 12: { slug: 'doutor-hernia-serra', waba: '111222333444555' } });
-  assert.equal(ehUsuarioCelular(17), true);
-  assert.equal(ehUsuarioCelular(7), true);
+  assert.equal(ehUsuarioCelular(17, 'doutor-hernia-serra'), true);
+  assert.equal(ehUsuarioCelular(7, SLUG_PARAU), true);
   assert.deepEqual(numerosDoKapsoConfigurados(), ['1212928641906230', '999888777666555']);
   // a pausa e a etiqueta do celular enxergam o usuário da outra unidade
   const evento = eventoDePausa({ event: 'message_created', message_type: 'outgoing', conversation: { id: 5, inbox_id: 12 }, sender: { id: 17, type: 'user' } });
   assert.deepEqual(evento?.autor, { tipo: 'celular' });
   assert.equal(evento?.slug, 'doutor-hernia-serra');
   const c: ConversaRegua = { id: 1, nome: 'x', etiquetas: [], attrs: {}, criadaEm: new Date(), atendente: null, ultima: { saida: true, privada: false, autorId: 17, autorTipo: 'user', criadaEm: new Date(), texto: 'oi' } as never };
-  assert.equal(decidirEtiquetaCelular(c), 'por');
+  assert.equal(decidirEtiquetaCelular(c, 'doutor-hernia-serra'), 'por');
 });
 
 test('a unidade nova usa o prefixo e o texto dela, e nada de Parauapebas', () => {

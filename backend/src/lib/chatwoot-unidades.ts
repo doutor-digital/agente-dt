@@ -261,9 +261,13 @@ export function contasExplicitas(): number[] {
   return l;
 }
 
-/** O usuário é um "📱 Celular da unidade" de alguma unidade? */
-export function ehUsuarioCelular(id: number | null | undefined): boolean {
-  return typeof id === 'number' && usuariosCelular.has(id);
+/**
+ * O usuário é o "📱 Celular da unidade" DESTA unidade? Cada clínica tem o seu usuário (na conta dela): o do celular de uma não é «celular» na
+ * conversa de outra, mesmo que alguém configure o mesmo id nas duas por engano. Unidade desconhecida: nunca é celular.
+ */
+export function ehUsuarioCelular(id: number | null | undefined, slug: string): boolean {
+  const u = configs.get(slug)?.usuarioCelularId;
+  return typeof id === 'number' && typeof u === 'number' && u === id;
 }
 
 /**

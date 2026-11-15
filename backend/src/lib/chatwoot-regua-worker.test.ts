@@ -332,7 +332,7 @@ test('etiqueta respondeu-pelo-celular: põe com a lista completa, tira, e respei
     bruta(4, { labels: ['respondeu-pelo-celular'], ultima: { tipo: 1, autor: 2, privada: true } }), // nota do seco → fica
   ];
   const { chat, etiquetas } = chatFalso(() => lista);
-  const r = await cicloDaCaixa(deps(armazem, chat), 2, 'x', 'seco', U, new Date('2026-11-16T17:20:00Z'));
+  const r = await cicloDaCaixa(deps(armazem, chat), 2, 'doutor-hernia-parauapebas', 'seco', U, new Date('2026-11-16T17:20:00Z')); // o usuário «celular» é DA UNIDADE: o slug é o dela
   assert.equal(r.etiquetas, 2);
   assert.deepEqual(etiquetas, [
     { id: 1, lista: ['quente', 'respondeu-pelo-celular'] },
@@ -341,7 +341,7 @@ test('etiqueta respondeu-pelo-celular: põe com a lista completa, tira, e respei
 
   const muitas = Array.from({ length: MAX_ETIQUETAS_POR_CICLO + 7 }, (_, i) => bruta(500 + i, { ultima: { tipo: 1, autor: 7 } }));
   const m = chatFalso(() => muitas);
-  const r2 = await cicloDaCaixa(deps(armazemFalso().armazem, m.chat), 2, 'x', 'seco', U, new Date('2026-11-16T17:20:00Z'));
+  const r2 = await cicloDaCaixa(deps(armazemFalso().armazem, m.chat), 2, 'doutor-hernia-parauapebas', 'seco', U, new Date('2026-11-16T17:20:00Z'));
   assert.equal(r2.etiquetas, MAX_ETIQUETAS_POR_CICLO);
 });
 

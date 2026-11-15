@@ -30,7 +30,7 @@ import { createHash } from 'node:crypto';
 import { logger } from './logger.js';
 import { prisma } from './prisma.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
-import { chamar, contaChatwootDoAmbiente, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
+import { chamar, contaChatwootDoAmbiente, contextoDaCaixa, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 import { conversaDoChatwoot, ehArquivo, ehSim, type ConversaRegua } from './chatwoot-regua.js';
 import { referraisGuardados } from './kapso-referral.js';
 import { CAIXAS_CAPI, sufixoEnvDaUnidade } from './chatwoot-unidades.js';
@@ -583,30 +583,47 @@ let rodando = false;
 /** uma só porta da Meta para o worker todo (guarda o dataset entre ciclos) */
 let metaDoWorker: PortaDaMeta | null = null;
 
+/**
+ * Um ciclo por caixa oficial, no Chatwoot da CONTA da caixa e com a configuração da Meta da unidade dela. Caixa sem conta válida é pulada.
+ * As portas (`armazem`, `meta`, tokens, `ciclo`) são injetáveis para o teste de identidade: com só Parauapebas, mesmas caixas, mesma ordem,
+ * o MESMO contexto do Chatwoot.
+ */
+export async function varrerCapi(
+  ctx: ContextoChatwoot,
+  o: { armazem?: ArmazemCapi; meta?: PortaDaMeta; tokens?: ReadonlyMap<string, string | null>; ciclo?: typeof cicloDoCapi; e?: NodeJS.ProcessEnv } = {},
+): Promise<void> {
+  const e = o.e ?? process.env;
+  const slugs = [...new Set(Object.values(CAIXAS_CAPI).map((c) => c.slug))];
+  const tokens =
+    o.tokens ??
+    new Map((await prisma.unit.findMany({ where: { slug: { in: slugs } }, select: { slug: true, metaAccessToken: true } })).map((u) => [u.slug, u.metaAccessToken ?? null] as const));
+  const base = {
+    armazem: o.armazem ?? armazemDoBanco(),
+    meta: o.meta ?? (metaDoWorker ??= metaDaGraph()),
+    config: (slug: string) => configDaUnidade(slug, e, tokens.get(slug) ?? null),
+    pausa: (ms: number) => new Promise<void>((r) => setTimeout(r, ms)),
+  };
+  for (const [caixaTxt, { slug, waba }] of Object.entries(CAIXAS_CAPI)) {
+    const modo = estadoDoCapi(slug);
+    if (modo === 'desligado') continue;
+    const c = contextoDaCaixa(ctx, Number(caixaTxt), e);
+    if (!c) {
+      logger.warn({ slug, caixa: caixaTxt }, `${ID_CAPI}: a caixa ${caixaTxt} não tem conta do Chatwoot válida — pulo, sem chamar o Chatwoot`);
+      continue;
+    }
+    try {
+      await (o.ciclo ?? cicloDoCapi)({ ...base, chat: chatDoCapi(c) } as DepsDoCapi, Number(caixaTxt), slug, waba, modo, new Date());
+    } catch (err) {
+      logger.warn({ err: String(err), slug }, `${ID_CAPI}: ciclo falhou — tento no próximo`);
+    }
+  }
+}
+
 async function varrer(ctx: ContextoChatwoot): Promise<void> {
   if (rodando) return;
   rodando = true;
   try {
-    const slugs = [...new Set(Object.values(CAIXAS_CAPI).map((c) => c.slug))];
-    const tokens = new Map(
-      (await prisma.unit.findMany({ where: { slug: { in: slugs } }, select: { slug: true, metaAccessToken: true } })).map((u) => [u.slug, u.metaAccessToken ?? null] as const),
-    );
-    const deps: DepsDoCapi = {
-      armazem: armazemDoBanco(),
-      chat: chatDoCapi(ctx),
-      meta: (metaDoWorker ??= metaDaGraph()),
-      config: (slug) => configDaUnidade(slug, process.env, tokens.get(slug) ?? null),
-      pausa: (ms) => new Promise((r) => setTimeout(r, ms)),
-    };
-    for (const [caixaTxt, { slug, waba }] of Object.entries(CAIXAS_CAPI)) {
-      const modo = estadoDoCapi(slug);
-      if (modo === 'desligado') continue;
-      try {
-        await cicloDoCapi(deps, Number(caixaTxt), slug, waba, modo, new Date());
-      } catch (err) {
-        logger.warn({ err: String(err), slug }, `${ID_CAPI}: ciclo falhou — tento no próximo`);
-      }
-    }
+    await varrerCapi(ctx);
   } finally {
     rodando = false;
   }

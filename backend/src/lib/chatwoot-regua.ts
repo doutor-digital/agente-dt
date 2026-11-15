@@ -78,7 +78,7 @@ export function arquivoComEtapa(raw: any): boolean {
 /* GERENTE_DA_CAIXA (re-exportada acima): caixa → agente gerente (lead quente parado vai para ela; decisão 26 do João). Parauapebas: Cleia (id 4). */
 /**
  * O usuário "📱 Celular da unidade": autor das mensagens que a equipe manda pelo celular (o Evolution usa o token dele). LEGADO: o valor de
- * Parauapebas; o código novo pergunta `ehUsuarioCelular(id)` (cada unidade tem o seu usuário, na configuração).
+ * Parauapebas; o código novo pergunta `ehUsuarioCelular(id, slug)` (cada unidade tem o seu usuário, na configuração).
  * @deprecated comparar com ela vale só para Parauapebas.
  */
 export const USUARIO_CELULAR = SEMENTE_PARAUAPEBAS.usuarioCelularId as number;
@@ -837,12 +837,12 @@ export function resumoDaMensagem(m: any): MensagemResumo | null {
 }
 
 /** Regra 28: a etiqueta `respondeu-pelo-celular`. 'por' | 'tirar' | null (nada a fazer). */
-export function decidirEtiquetaCelular(c: ConversaRegua): 'por' | 'tirar' | null {
+export function decidirEtiquetaCelular(c: ConversaRegua, slug: string): 'por' | 'tirar' | null {
   const u = c.ultima;
   // nota privada (inclusive as do seco) não diz quem respondeu por último; mensagem do paciente não muda a etiqueta
   if (!u || u.privada || !u.saida || u.autorTipo !== 'user') return null;
   const tem = c.etiquetas.includes(ETIQUETA_CELULAR);
-  if (ehUsuarioCelular(u.autorId)) return tem ? null : 'por';
+  if (ehUsuarioCelular(u.autorId, slug)) return tem ? null : 'por';
   return tem ? 'tirar' : null;
 }
 
