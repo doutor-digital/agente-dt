@@ -15,7 +15,7 @@ import { TEXTOS_PARAU } from '../lib/chatwoot-regua-textos.js';
 import { chatDoChatwoot } from '../lib/chatwoot-regua-worker.js';
 import { paginaDosRobos } from '../lib/robos-pagina.js';
 import { atendenteDaUnidade } from './aprendizados.controller.js';
-import { automacoesDaUnidade, bancoDasAutomacoes, mudarAutomacao } from '../lib/robos-automacoes.js';
+import { automacoesDaUnidade, bancoDasAutomacoes, comTeto, mudarAutomacao } from '../lib/robos-automacoes.js';
 import { estadoGravado, panoramaDaUnidade, recarregarAutomacoes } from '../lib/automacoes-estado.js';
 import { bancoDosRobos, caixasDaUnidade, enviadosDaUnidade, mudarRobo, podeMexerNosRobos, visaoDosRobos, type Aprovados } from '../lib/robos-estado.js';
 
@@ -152,6 +152,9 @@ interface RegraNativa {
   evento: string;
 }
 
+/** Teto de cada parte da aba «Automações»: estourou, a parte aparece vazia (regras nativas: só o link) e a aba abre. */
+const TETO_DA_ABA_MS = 5000;
+
 /** As regras nativas do Chatwoot (Configurações → Automação), só leitura. Falhou ao ler: lista vazia + o link. */
 async function regrasNativas(): Promise<{ regras: RegraNativa[]; lidas: boolean }> {
   const c = ctx();
@@ -170,12 +173,22 @@ async function regrasNativas(): Promise<{ regras: RegraNativa[]; lidas: boolean 
 }
 
 export async function robosAutomacoesHandler(req: Request, res: Response): Promise<void> {
+  const inicio = Date.now();
   const r = await atendenteDaUnidade(req, res, slugDe(req.query.slug));
   if (!r) return;
+  const msLogin = Date.now() - inicio;
   try {
     // a única chamada rara o bastante para pagar a releitura: quem abriu a aba quer ver o estado agora
-    await recarregarAutomacoes();
-    const [automacoes, nativas] = await Promise.all([automacoesDaUnidade(bancoDasAutomacoes(), r.unit.slug), regrasNativas()]);
+    // A aba ficou 60 s em «Carregando…» (15/11): cada parte tem teto e o tempo de cada uma vai para o log, para achar a lenta.
+    const t0 = Date.now();
+    const ms: Record<string, number> = {};
+    const medir = <T>(nome: string, p: Promise<T>): Promise<T> => p.finally(() => { ms[nome] = Date.now() - t0; });
+    await medir('recarregar', comTeto(recarregarAutomacoes(), TETO_DA_ABA_MS, undefined));
+    const [automacoes, nativas] = await Promise.all([
+      medir('automacoes', automacoesDaUnidade(bancoDasAutomacoes(), r.unit.slug)),
+      medir('nativas', comTeto(regrasNativas(), TETO_DA_ABA_MS, { regras: [] as RegraNativa[], lidas: false })),
+    ]);
+    if (Date.now() - inicio > 2000) logger.warn({ unit: r.unit.slug, ms: { login: msLogin, ...ms } }, 'robos: aba Automações demorou');
     const conta = contaChatwootDoAmbiente();
     res.set('Cache-Control', 'no-store').json({
       unidade: { slug: r.unit.slug, nome: r.unit.name },

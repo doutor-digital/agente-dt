@@ -135,7 +135,7 @@ const NOTA_FIXA = 'Controlado pela Doutor Digital: não tem chave por unidade ne
  */
 export const DIAS_DO_HISTORICO = 14;
 export const TETO_DO_HISTORICO_MS = 3000;
-function comTeto<T>(p: Promise<T>, ms: number, padrao: T): Promise<T> {
+export function comTeto<T>(p: Promise<T>, ms: number, padrao: T): Promise<T> {
   return new Promise((ok) => {
     const t = setTimeout(() => ok(padrao), ms);
     p.then(
