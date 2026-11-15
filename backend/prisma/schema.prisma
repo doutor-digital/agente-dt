@@ -2812,6 +2812,26 @@ model SofiaMensagem {
   @@map("sofia_mensagem")
 }
 
+/// Tela «Robôs» do Chatwoot (14/11/2026): o que a Gestora configurou em cada robô da régua (`chatwoot-regua.ts`) POR UNIDADE. Sem linha =
+/// o padrão do código (ligado, tempo e modelo de sempre). `regra` = o nome da regra (`consulta-vespera`, `followup-48h`…).
+/// `tempoMin`: o deslocamento em MINUTOS (a âncora e a direção «antes/depois» são as do robô e não mudam); null = o do código.
+/// `modelos`: { "<modelo do código>": "<modelo aprovado que passa a mandar>" } (só modelos aprovados e com as mesmas variáveis).
+/// Quem mexeu por último e quando ficam aqui (`atualizadoPor`/`atualizadoEm`). O worker relê a cada ciclo.
+model ChatwootReguaRobo {
+  id            String   @id @default(cuid())
+  unitSlug      String   @map("unit_slug")
+  regra         String
+  ligado        Boolean  @default(true)
+  tempoMin      Int?     @map("tempo_min")
+  modelos       Json     @default("{}")
+  atualizadoPor String?  @map("atualizado_por")
+  criadoEm      DateTime @default(now()) @map("criado_em")
+  atualizadoEm  DateTime @updatedAt @map("atualizado_em")
+
+  @@unique([unitSlug, regra])
+  @@map("chatwoot_regua_robo")
+}
+
 /// Avaliação de uma resposta da Sofia pela equipe (👍 boa / 👎 ruim + o que estava errado). Uma por pessoa e mensagem (mudar
 /// de ideia troca a nota, não a data). As 👎 ficam "para revisar" no Agente até alguém ensinar a Sofia, pedir à Doutor Digital ou dar ok.
 model SofiaAvaliacao {

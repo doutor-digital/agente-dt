@@ -196,6 +196,8 @@ export interface Atendente {
   sessao: SessaoChatwoot;
   nome: string;
   id: number | null;
+  /** papel nesta conta (`administrator` | `agent`): a tela «Robôs» só deixa o administrador configurar */
+  papel?: string | null;
 }
 
 export async function sessaoDaAtendente(req: Request, res: Response): Promise<Atendente | null> {
@@ -210,7 +212,7 @@ export async function sessaoDaAtendente(req: Request, res: Response): Promise<At
     return null;
   }
   const r = await quemEstaLogado(c, sessao);
-  if (typeof r === 'object') return { c, sessao, nome: r.nome, id: r.id };
+  if (typeof r === 'object') return { c, sessao, nome: r.nome, id: r.id, papel: r.papel };
   recusarSessao(res, r, 401);
   return null;
 }
@@ -1720,7 +1722,9 @@ const MENU_JS = String.raw`(function(){
     { id: 'gestor', marca: 'data-gestor-menu', nome: 'Gestor', hash: '#gestor', param: 'gestor', gestao: true, pai: 'hoje' },
     { id: 'funil', marca: 'data-funil-menu', nome: 'Funil', hash: '#funil', param: '' },
     // «Agente»: a equipe cuida da própria Sofia (avaliações, regras, teste, pausadas) e pede à Doutor Digital o que é de código (13/11)
-    { id: 'ia', marca: 'data-ia-menu', nome: 'Agente', hash: '#agente', param: '', url: '/funil/agente' }
+    { id: 'ia', marca: 'data-ia-menu', nome: 'Agente', hash: '#agente', param: '', url: '/funil/agente' },
+    // «Robôs» (14/11): os robôs da régua por unidade — ver, ligar/desligar, mudar tempo e modelo (só administrador) e o que foi enviado
+    { id: 'robos', marca: 'data-robos-menu', nome: 'Robôs', hash: '#robos', param: '', url: '/funil/robos' }
   ];
   // o grupo Hoje aberto/fechado fica lembrado neste navegador (padrão: aberto)
   var GRUPO_HOJE = 'menu:hoje-fechado';
@@ -1822,6 +1826,7 @@ const MENU_JS = String.raw`(function(){
     mkt: '<path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/>',
     gestor: '<path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>'
   };
+  ICONES.robos = '<rect width="18" height="11" x="3" y="11" rx="2"/><path d="M12 11V7"/><circle cx="12" cy="5" r="2"/><path d="M8 16h.01"/><path d="M16 16h.01"/>';
   ICONES.ia = '<path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>';
   var SEL_ICONE = 'svg, [class^="i-"], [class*=" i-"]';
   function trocarIcone(base, novo, qual){

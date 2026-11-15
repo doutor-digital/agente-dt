@@ -828,3 +828,73 @@ test('sessão da agenda: duas conversas do mesmo telefone → só a mais recente
   assert.deepEqual(c.mensagens.map((m) => m.id), [2]);
   assert.match(c.mensagens[0]!.texto, /A sua sessão é amanhã/);
 });
+
+// ── tela «Robôs»: robô desligado, tempo e modelo configurados ──
+
+const ajustesDe = (o: { desligados?: string[]; tempoMin?: Record<string, number>; modelos?: Record<string, string> }): DepsDoCiclo['ajustes'] => async () => ({
+  desligados: new Set(o.desligados ?? []),
+  regua: { tempoMin: new Map(Object.entries(o.tempoMin ?? {})), modelos: new Map(Object.entries(o.modelos ?? {})) },
+});
+const comAjustes = (armazem: Armazem, chat: Chat, ajustes: DepsDoCiclo['ajustes']): DepsDoCiclo => ({ armazem, chat, pausa: async () => undefined, ajustes });
+
+test('robô DESLIGADO na tela: não envia, não deixa nota, não registra, conta em «desligados»; ligado de novo (dentro do prazo) sai', async () => {
+  const f = armazemFalso();
+  const c = chatFalso(() => [bruta(1, { attrs: CONSULTA })]);
+  const desligado = comAjustes(f.armazem, c.chat, ajustesDe({ desligados: ['consulta-vespera'] }));
+  await cicloDaCaixa(desligado, 2, 'x', 'ligado', U, new Date('2026-11-16T17:20:00Z'));
+  const r = await cicloDaCaixa(desligado, 2, 'x', 'ligado', U, VESPERA);
+  assert.equal(r.desligados, 1);
+  assert.equal(r.disparos, 0);
+  assert.equal(c.mensagens.length, 0, 'nem mensagem nem nota');
+  assert.equal(f.disparos.length, 0, 'nada registrado');
+  // outro robô da mesma conversa segue normal (consulta-dia não está desligado)
+  const r2 = await cicloDaCaixa(desligado, 2, 'x', 'ligado', U, new Date('2026-11-17T14:35:00Z')); // 3 h antes das 14:30 de Belém
+  assert.equal(r2.disparos, 1);
+  assert.match(c.mensagens[0]!.texto, /Bom dia/);
+  // religou: a véspera ainda estava dentro do prazo? (2 h) — aqui já passou, então não sai atrasada
+  const ligado = comAjustes(f.armazem, c.chat, ajustesDe({}));
+  const r3 = await cicloDaCaixa(ligado, 2, 'x', 'ligado', U, new Date('2026-11-16T17:40:00Z'));
+  assert.equal(r3.desligados, 0);
+  assert.equal(c.mensagens.filter((m) => /é amanhã/.test(m.texto)).length, 1, 'religado dentro do prazo: sai');
+});
+
+test('robô desligado também vale no SECO (nenhuma nota) e para as regras internas', async () => {
+  const f = armazemFalso();
+  const c = chatFalso(() => [bruta(1, { attrs: CONSULTA })]);
+  const d = comAjustes(f.armazem, c.chat, ajustesDe({ desligados: ['consulta-vespera'] }));
+  await cicloDaCaixa(d, 2, 'x', 'seco', U, new Date('2026-11-16T17:20:00Z'));
+  await cicloDaCaixa(d, 2, 'x', 'seco', U, VESPERA);
+  assert.equal(c.mensagens.length, 0);
+});
+
+test('tempo configurado: o lembrete sai no novo horário, não no de fábrica', async () => {
+  const f = armazemFalso();
+  const c = chatFalso(() => [bruta(1, { attrs: CONSULTA })]);
+  // véspera de 48 h em vez de 24 h: 17/11 14:30 Belém menos 48 h = 15/11 14:30 (domingo, janela fechada); 12 h antes = 17/11 02:30 (fechada) — usa 6 h
+  const d = comAjustes(f.armazem, c.chat, ajustesDe({ tempoMin: { 'consulta-vespera': 6 * 60 } }));
+  await cicloDaCaixa(d, 2, 'x', 'ligado', U, new Date('2026-11-16T17:20:00Z'));
+  await cicloDaCaixa(d, 2, 'x', 'ligado', U, VESPERA); // no horário de fábrica (24 h antes): NÃO sai
+  assert.equal(c.mensagens.length, 0);
+  await cicloDaCaixa(d, 2, 'x', 'ligado', U, new Date('2026-11-17T11:35:00Z')); // 6 h antes das 14:30 Belém = 08:30 Belém = 11:30Z
+  assert.equal(c.mensagens.length, 1);
+  assert.match(c.mensagens[0]!.texto, /A sua consulta é amanhã/);
+});
+
+test('modelo trocado na tela: o worker manda o texto do modelo novo (e continua exigindo o template aprovado na Meta)', async () => {
+  const f = armazemFalso();
+  const c = chatFalso(() => [bruta(1, { attrs: CONSULTA })]);
+  const d = comAjustes(f.armazem, c.chat, ajustesDe({ modelos: { 'consulta-vespera|parau_consulta_lembrete_vespera': 'parau_sessao_lembrete_vespera' } }));
+  await cicloDaCaixa(d, 2, 'x', 'ligado', U, new Date('2026-11-16T17:20:00Z'));
+  await cicloDaCaixa(d, 2, 'x', 'ligado', U, VESPERA);
+  assert.equal(c.mensagens.length, 1);
+  assert.match(c.mensagens[0]!.texto, /^Olá, Maria\. A sua sessão é amanhã/);
+});
+
+test('se a configuração não puder ser lida, o ciclo NÃO roda (nunca mandar achando que está ligado o que foi desligado)', async () => {
+  const f = armazemFalso();
+  const c = chatFalso(() => [bruta(1, { attrs: CONSULTA })]);
+  const quebrado: DepsDoCiclo['ajustes'] = async () => { throw new Error('banco fora'); };
+  await assert.rejects(cicloDaCaixa(comAjustes(f.armazem, c.chat, quebrado), 2, 'x', 'ligado', U, VESPERA), /banco fora/);
+  assert.equal(c.mensagens.length, 0);
+  assert.equal(f.vistos.length, 0, 'nem a memória foi tocada');
+});

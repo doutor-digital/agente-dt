@@ -161,6 +161,7 @@ import {
   funilTarefaHandler,
 } from '../controllers/funil.controller.js';
 import { assistenteAvaliarHandler, assistenteRespostasHandler, assistenteEstadoHandler, assistentePausaAcaoHandler, assistentePausaEstadoHandler, assistentePerguntarHandler, assistenteSugerirHandler } from '../controllers/assistente.controller.js';
+import { robosAutomacaoMudarHandler, robosAutomacoesHandler, robosEnviadosHandler, robosHandler, robosMudarHandler } from '../controllers/robos.controller.js';
 import { agenteNovoPedidoHandler, agentePainelHandler, agentePedidosHandler, agenteRegistroHandler, agenteRevisarHandler } from '../controllers/agente-chatwoot.controller.js';
 import { centralChamadoFeitoHandler, centralChamadosHandler, centralEstadoHandler, centralGeralHandler, centralPessoaHandler } from '../controllers/central.controller.js';
 import { lidaEvolutionHandler } from '../lib/chatwoot-lida.js';
@@ -398,6 +399,12 @@ apiRouter.post('/public/agente/avaliacoes/:id/revisar', agenteRevisarHandler);
 apiRouter.get('/public/agente/pedidos', agentePedidosHandler);
 apiRouter.post('/public/agente/pedidos', agenteNovoPedidoHandler);
 apiRouter.get('/public/agente/registro', agenteRegistroHandler);
+// tela Robôs do Chatwoot (14/11): lista, enviados e configuração por robô — login do Chatwoot; só administrador altera
+apiRouter.get('/public/robos', robosHandler);
+apiRouter.get('/public/robos/enviados', robosEnviadosHandler);
+apiRouter.get('/public/robos/automacoes', robosAutomacoesHandler);
+apiRouter.post('/public/robos/automacoes/:id', robosAutomacaoMudarHandler);
+apiRouter.post('/public/robos/:regra', robosMudarHandler);
 // Funil de etapas do Chatwoot (Dashboard App): chave X-Funil-Chave derivada do token do Chatwoot (sem sessão).
 apiRouter.post('/public/central/estado', centralEstadoHandler);
 apiRouter.post('/public/central/geral', centralGeralHandler);
