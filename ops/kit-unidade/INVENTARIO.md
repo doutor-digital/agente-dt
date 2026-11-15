@@ -56,4 +56,11 @@ Env do serviço `ddagent_agent` (`CHATWOOT_API_TOKEN`, `CHATWOOT_CONTA_ID`, `KAP
 
 * Uma tabela por unidade (`unit_chatwoot` + `unit_chatwoot_caixa`), lida no boot com semente de Parauapebas (ver `chatwoot-unidades.ts`).
 * Um questionário (`questionario.schema.json` / `questionario.exemplo.yaml`) com só o que é da unidade ou sensível.
-* O script `backend/src/scripts/nova-unidade.ts`: seco mostra o plano dos blocos A.22, B, C e D; `--aplicar` executa hoje só o banco.
+* O script `backend/src/scripts/nova-unidade.ts`: seco mostra o plano dos blocos A.22, B, C e D; `--aplicar` executa o **banco** (fase 1) e, na **fase 2**, o
+  **Chatwoot** (conta própria da clínica pela API de plataforma, etiquetas/atributos/automações copiados da conta de referência, mensagens prontas, caixa,
+  time, atendentes, robô, webhook com a chave DA CONTA, aba «Funil» com `?conta=N`) e os **modelos da Meta via Kapso** (em seco na clínica de demonstração).
+  Continua MANUAL: número no Kapso, subdomínio (`regra-traefik-joao.sh`), segredos gerados (cofre → env do serviço + reinício), pastas por atendente,
+  token e turnos da franquia, dataset da CAPI. Roteiro do João: `nova-unidade-joao.sh`, `criar-platform-app-joao.sh`, `unidades/<slug>-joao.sh`;
+  entrevista: skill `/nova-unidade` (`.claude/skills/nova-unidade/SKILL.md`). A «Clínica Demonstração» (`unidades/clinica-demonstracao.yaml`) é a prova.
+* **Webhook por conta (fase 2):** a chave `?k=` do webhook do Chatwoot e da lida do Evolution é derivada do token DA CONTA (`tokenParaChaveDaConta`): a chave de
+  uma conta não forja evento de outra. Conta própria sem `CHATWOOT_API_TOKEN_<SUFIXO>` não tem chave que valha.

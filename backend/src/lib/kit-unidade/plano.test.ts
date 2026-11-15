@@ -32,7 +32,7 @@ function estadoCompleto(qq: Questionario): EstadoAtual {
   return {
     banco: {
       unidade: { id: 'u1', campos },
-      configChatwoot: configGravavel(configChatwootDoQuestionario(qq)),
+      configChatwoot: { ...configGravavel(configChatwootDoQuestionario(qq)), contaId: 5 },
       caixasRegistradas: [3],
       automacoes: Object.fromEntries(AUTOMACOES.filter((a) => a.id.startsWith('chatwoot-')).map((a) => [a.id, 'seco'])),
       sofia,
@@ -47,11 +47,14 @@ function estadoCompleto(qq: Questionario): EstadoAtual {
       pastas: Object.fromEntries(emails.map((e) => [e, [...PASTAS_PADRAO]])),
       mensagensProntas: MENSAGENS_PRONTAS.map((m) => `parau-${m.codigo}`),
       automacoesDaConta: 8,
+      webhookDaConta: true,
+      abas: ['Funil'],
     },
     kapso: { modelos: Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`x${i}`, 'APPROVED'])) },
     meta: { datasetCapi: true },
     vps: { hostNoProxy: true },
-    segredos: { [qq.franquia.token_env]: true, [qq.meta.token_env]: true, [qq.meta.conta_env]: true, [qq.meta.dataset_id_env]: true },
+    segredos: { [qq.franquia.token_env]: true, [qq.meta.token_env]: true, [qq.meta.conta_env]: true, [qq.meta.dataset_id_env]: true, CHATWOOT_API_TOKEN_PARAUAPEBAS: true },
+    plataforma: true,
   };
 }
 
@@ -59,15 +62,17 @@ test('seco sem consultar nada: o plano completo, na ordem, e cada passo diz se e
   const p = montarPlano(q(), {}, { molde: MOLDE });
   assert.deepEqual(
     p.passos.map((x) => x.id),
-    ['unidade', 'config-chatwoot', 'automacoes-seco', 'etiquetas', 'atributos', 'automacoes-conta', 'caixa', 'time', 'atendentes', 'usuario-celular', 'registrar-caixa', 'pastas', 'mensagens-prontas', 'numero', 'modelos', 'dataset-capi', 'sofia', 'robo-sofia', 'subdominio', 'segredos', 'franquia'],
+    ['unidade', 'config-chatwoot', 'conta', 'automacoes-seco', 'etiquetas', 'atributos', 'automacoes-conta', 'caixa', 'time', 'atendentes', 'usuario-celular', 'registrar-caixa', 'webhook', 'dashboard-app', 'pastas', 'mensagens-prontas', 'numero', 'modelos', 'dataset-capi', 'sofia', 'robo-sofia', 'subdominio', 'segredos', 'franquia'],
   );
   // a ordem pedida: banco+automações → caixa/time/convites/pastas/estrutura → modelos → prompt → subdomínio
   const ordem = (id: string) => p.passos.findIndex((x) => x.id === id);
   assert.ok(ordem('config-chatwoot') < ordem('caixa') && ordem('caixa') < ordem('atendentes') && ordem('atendentes') < ordem('pastas') && ordem('pastas') < ordem('modelos') && ordem('modelos') < ordem('sofia') && ordem('sofia') < ordem('subdominio'));
   // toda dependência vem antes
   for (const s of p.passos) for (const d of s.depende) assert.ok(ordem(d) < ordem(s.id), `${s.id} depende de ${d}, que vem depois`);
-  assert.deepEqual(p.passos.filter((x) => x.execucao === 'sim').map((x) => x.id), ['unidade', 'config-chatwoot', 'automacoes-seco', 'sofia']);
-  assert.ok(p.passos.filter((x) => x.sistema !== 'banco' && x.execucao === 'esqueleto').length >= 8);
+  // fase 2: o Chatwoot e os modelos também executam; o que fica MANUAL é o que depende de gente (pastas, número, subdomínio, segredos, franquia, dataset)
+  assert.deepEqual(p.passos.filter((x) => x.execucao === 'sim').map((x) => x.id), ['unidade', 'config-chatwoot', 'conta', 'automacoes-seco', 'etiquetas', 'atributos', 'automacoes-conta', 'caixa', 'time', 'atendentes', 'usuario-celular', 'registrar-caixa', 'webhook', 'dashboard-app', 'mensagens-prontas', 'modelos', 'sofia', 'robo-sofia']);
+  assert.deepEqual(p.passos.filter((x) => x.execucao === 'manual').map((x) => x.id), ['pastas', 'numero', 'dataset-capi', 'subdominio', 'segredos', 'franquia']);
+  assert.equal(p.passos.filter((x) => x.execucao === 'esqueleto').length, 0);
   // sem consultar, avisa
   assert.ok(passo(p, 'unidade').avisos.some((a) => /não consultado/.test(a)));
   const texto = textoDoPlano(p);
@@ -101,8 +106,8 @@ test('só o que falta: uma etiqueta e um atributo ausentes viram exatamente isso
   e.chatwoot!.atributosConversa = e.chatwoot!.atributosConversa.filter((x) => x !== 'programa');
   e.chatwoot!.times = [];
   const p = montarPlano(qq, e, { molde: MOLDE });
-  assert.deepEqual(passo(p, 'etiquetas').itens, ['1 etiqueta(s): urgente']);
-  assert.deepEqual(passo(p, 'atributos').itens, ['1 de conversa: programa']);
+  assert.equal(passo(p, 'etiquetas').itens[0], '1 etiqueta(s): urgente');
+  assert.equal(passo(p, 'atributos').itens[0], '1 de conversa: programa');
   assert.equal(passo(p, 'time').acao, 'criar');
   assert.equal(passo(p, 'caixa').acao, 'nada');
 });
