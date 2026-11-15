@@ -690,7 +690,7 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
         );
       }
       if (leitoresWhatsapp.has(quem.userId)) registrarFerramentasEvolution(server, whatsapp, quem.userId, auditar);
-      if (operadoresChatwoot.has(quem.userId)) registrarFerramentasChatwoot(server, chatwoot, quem.email || `usuario:${quem.userId}`, auditar, escolhedoresDeConta.has(quem.userId));
+      if (operadoresChatwoot.has(quem.userId)) registrarFerramentasChatwoot(server, chatwoot, quem.email || `usuario:${quem.userId}`, auditar, () => escolhedoresDeConta.has(quem.userId));
       registrarVideoSePermitido(server, video, quem.userId, leitoresVideo, auditar);
       registrarTranscricaoSePermitido(server, transcritor, quem.userId, leitoresVideo, auditar);
       registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas, convenia: convenia.contas, tiquetaque: tiquetaque.contas, tramitacao: tramitacao.contas, sistemas: contasDoRh(sistemas.contas), zenfisio: zenfisio.contas, gerais: chatwoot.conta && operadoresChatwoot.has(quem.userId) ? ['chatwoot_* (Chatwoot, o atendimento novo em atendimento.doutordigitalconsultoria.com: conversas, contatos, caixas, etiquetas, agentes, equipes, automações; criar e alterar direto, apagar e mandar mensagem a cliente em dois passos)'] : [] }), auditar);
