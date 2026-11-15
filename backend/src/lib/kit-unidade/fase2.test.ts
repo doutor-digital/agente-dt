@@ -517,3 +517,27 @@ test('administradores da DD: o questionário troca a lista; lista vazia não faz
   const r3 = await rodar(DEMO, b3, { ...vazia.externas, adminsDD: [] });
   assert.match(r3.resultados.find((x) => x.id === 'conta')!.notas.join(' '), /nenhum na lista/);
 });
+
+test('e-mail inexistente na conta 1 NÃO tira o passo «conta» do «nada» a cada rodada: com o plano dizendo «nada» não pergunta nem escreve (só avisa)', async () => {
+  const { falso, externas } = montar();
+  const b = bancoFalso();
+  const q2 = { ...DEMO, chatwoot: { ...DEMO.chatwoot, admins_dd: ['suzanne.mychelly1@gmail.com', 'fantasma@exemplo.com'] } } as typeof DEMO;
+  await rodar(q2, b, externas);
+  const plano = montarPlano(q2, estadoLido(falso, b), { molde: MOLDE });
+  assert.equal(plano.passos.find((p) => p.id === 'conta')!.acao, 'nada');
+  assert.match(plano.passos.find((p) => p.id === 'conta')!.itens.join(' '), /vai pôr os que ainda não estão na conta/, 'o plano seco avisa o que vai fazer pelos administradores');
+  const perguntou: string[] = [];
+  const antes = posts(falso).length;
+  const resultados = await executarPlano(plano, q2, { banco: b.banco, molde: MOLDE, externas, dizer: () => undefined, confirmar: async (p) => (perguntou.push(p.id), true) });
+  assert.ok(!perguntou.includes('conta'), 'não perguntou por «conta»');
+  assert.equal(sit(resultados, 'conta'), 'nada-a-fazer');
+  assert.match(resultados.find((r) => r.id === 'conta')!.notas.join(' '), /AVISO: fantasma/);
+  assert.equal(posts(falso).length, antes);
+  // e quando falta um administrador que EXISTE na conta 1, aí sim o passo pergunta e põe
+  const conta = falso.contas.get(b.e.config!.contaId!)!;
+  conta.agents = conta.agents.filter((a) => a.email !== 'suzanne.mychelly1@gmail.com');
+  const perguntou2: string[] = [];
+  await executarPlano(montarPlano(q2, estadoLido(falso, b), { molde: MOLDE }), q2, { banco: b.banco, molde: MOLDE, externas, dizer: () => undefined, confirmar: async (p) => (perguntou2.push(p.id), true) });
+  assert.ok(perguntou2.includes('conta'));
+  assert.ok(conta.agents.some((a) => a.email === 'suzanne.mychelly1@gmail.com'));
+});

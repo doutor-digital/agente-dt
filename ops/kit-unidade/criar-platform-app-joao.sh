@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# CRIA O «PLATFORM APP» DO CHATWOOT (uma vez) — o token que deixa o kit criar contas e usuários. Roda na VPS, no host do Swarm, como você
-# (sem sudo, sem colar nada). O token vai DIRETO para um arquivo modo 600 e NUNCA é impresso nem passa por /tmp.
+# CRIA O «PLATFORM APP» DO CHATWOOT (uma vez) — o token que deixa o kit criar contas e usuários. Roda na VPS, no host do Swarm, como root
+# (sem colar nada). O token vai DIRETO para um arquivo modo 600 e NUNCA é impresso nem passa por /tmp.
 #
 #   chmod +x ops/kit-unidade/criar-platform-app-joao.sh
 #   bash ops/kit-unidade/criar-platform-app-joao.sh                 # cria (ou confere) o Platform App
@@ -22,7 +22,13 @@ URL="${CHATWOOT_URL:-https://atendimento.doutordigitalconsultoria.com}"
 ARQUIVO="${ARQUIVO_DO_TOKEN:-/root/segredos/chatwoot-platform.token}"
 NOME="${NOME_DO_APP:-Kit de unidade}"
 SO_CONFERIR=0
-[ "${1:-}" = "--so-conferir" ] && SO_CONFERIR=1
+# --so-conferir vale em QUALQUER posição; argumento desconhecido (inclusive uma conferência mal digitada) é RECUSADO antes de qualquer coisa — senão ela criaria o app de verdade
+for arg in "$@"; do
+  case "$arg" in
+    --so-conferir) SO_CONFERIR=1 ;;
+    *) echo "argumento desconhecido: $arg (use só --so-conferir)"; exit 2 ;;
+  esac
+done
 
 # O contêiner MAIS NOVO do chatwoot_rails (no rolling update `head -1` pegaria o antigo)
 container() { docker ps --filter "name=chatwoot_rails" --format '{{.CreatedAt}}|{{.ID}}' | sort -r | head -1 | cut -d'|' -f2; }

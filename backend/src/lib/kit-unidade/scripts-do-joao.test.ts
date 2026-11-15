@@ -199,7 +199,7 @@ test('nova-unidade-joao: roda o kit DENTRO do contêiner (node dist/scripts/nova
   const r = a.rodar(['clinica-demonstracao']);
   assert.equal(r.status, 0, r.stdout + r.stderr);
   const log = a.log();
-  assert.match(log, /docker exec .*-e CHATWOOT_PLATFORM_TOKEN -e KIT_SEGREDOS_DIR=\/run\/kit-segredos -w \/repo\/backend novo111aaaabbbb node dist\/scripts\/nova-unidade\.js \/repo\/ops\/kit-unidade\/unidades\/clinica-demonstracao\.yaml/);
+  assert.match(log, /docker exec .*-e CHATWOOT_PLATFORM_TOKEN -e KIT_ADMINS_DD -e KIT_SEGREDOS_DIR=\/run\/kit-segredos -w \/repo\/backend novo111aaaabbbb node dist\/scripts\/nova-unidade\.js \/repo\/ops\/kit-unidade\/unidades\/clinica-demonstracao\.yaml/);
   assert.ok(!log.includes('TOKEN-DA-PLATAFORMA-9z'), 'o valor do token não aparece na linha de comando');
   assert.ok(!(r.stdout + r.stderr).includes('TOKEN-DA-PLATAFORMA-9z'));
   assert.match(log, /docker cp .*molde-sofia novo111aaaabbbb:\/repo\/ops\/kit-unidade\//);
@@ -247,6 +247,7 @@ function repositorioDeMentira() {
   sh(dir, 'git', 'clone', '-q', origin, clone);
   spawnSync('mkdir', ['-p', join(clone, 'ops')]);
   spawnSync('cp', ['-r', OPS, join(clone, 'ops', 'kit-unidade')]);
+  writeFileSync(join(clone, '.gitignore'), readFileSync(join(OPS, '../../.gitignore'), 'utf8'));
   for (const c of [['config', 'user.email', 't@t'], ['config', 'user.name', 't'], ['add', '-A'], ['commit', '-q', '-m', 'kit'], ['push', '-q', 'origin', 'HEAD:main']]) sh(clone, 'git', ...c);
   const bin = join(dir, 'bin');
   spawnSync('mkdir', ['-p', bin]);
@@ -329,4 +330,104 @@ test('README: documenta como levar o kit (a VPS não tem cópia do repositório)
   assert.match(readme, /KIT_ADMINS_DD/);
   assert.match(readme, /\/home\/joaoof\/agente-dt/);
   assert.match(readme, /\/opt\/doutordigital\/agente-dt/);
+});
+
+// ── pedidos do sênior no #360 ───────────────────────────────────────────────────────────────────────────────────────
+
+test('nova-unidade-joao: a lista KIT_ADMINS_DD do João CHEGA ao contêiner (docker exec -e KIT_ADMINS_DD), sem o valor na linha de comando', () => {
+  const a = ambienteDoKit();
+  const r = spawnSync('bash', [join(OPS, 'nova-unidade-joao.sh'), 'clinica-demonstracao', '--so-conferir'], { env: { PATH: `${join(a.dir, 'bin')}:${process.env.PATH}`, HOME: a.dir, KIT_ADMINS_DD: 'suzanne.mychelly1@gmail.com' }, encoding: 'utf8' });
+  assert.equal(r.status, 0);
+  const real = a.rodar(['clinica-demonstracao']);
+  assert.equal(real.status, 0, real.stdout + real.stderr);
+  assert.match(a.log(), /-e CHATWOOT_PLATFORM_TOKEN -e KIT_ADMINS_DD -e KIT_SEGREDOS_DIR=/);
+  assert.ok(!a.log().includes('suzanne.mychelly1@gmail.com'), 'o valor não aparece na linha de comando');
+});
+
+test('Platform App: --so-conferir vale em qualquer posição e argumento desconhecido é RECUSADO (exit 2) antes de criar qualquer coisa', () => {
+  const a = ambiente();
+  const arquivo = join(a.dir, 'segredos', 'chatwoot-platform.token');
+  const env = { ARQUIVO_DO_TOKEN: arquivo, CHATWOOT_URL: 'https://crm.exemplo.test' };
+  for (const ruim of [['--so-conferr'], ['--conferir'], ['-n'], ['--so-conferir', '--criar'], ['qualquer-coisa', '--so-conferir']]) {
+    const r = a.rodar('criar-platform-app-joao.sh', ruim, env);
+    assert.equal(r.status, 2, ruim.join(' '));
+    assert.match(r.stdout, /argumento desconhecido/);
+  }
+  assert.ok(!existsSync(arquivo), 'nada foi criado');
+  assert.ok(!/docker/.test(a.log()), 'nem o docker foi chamado');
+  const certo = a.rodar('criar-platform-app-joao.sh', ['--so-conferir'], env);
+  assert.equal(certo.status, 0);
+  assert.ok(!existsSync(arquivo), '--so-conferir não cria');
+});
+
+test('o cabeçalho do criar-platform diz «como root» (não «como você (sem sudo)»)', () => {
+  const sh = readFileSync(join(OPS, 'criar-platform-app-joao.sh'), 'utf8');
+  assert.match(sh, /no host do Swarm, como root/);
+  assert.doesNotMatch(sh, /como você/);
+});
+
+test('questionário de clínica REAL: unidades/privado/ está no .gitignore (e o da demonstração continua versionado)', () => {
+  const raiz = join(OPS, '../..');
+  assert.equal(spawnSync('git', ['check-ignore', '-q', 'ops/kit-unidade/unidades/privado/clinica-x.yaml'], { cwd: raiz }).status, 0, 'o privado é ignorado');
+  assert.equal(spawnSync('git', ['check-ignore', '-q', 'ops/kit-unidade/unidades/clinica-demonstracao.yaml'], { cwd: raiz }).status, 1, 'a demonstração NÃO é ignorada');
+});
+
+test('nova-unidade-joao procura o questionário em unidades/ e DEPOIS em unidades/privado/ (e o apaga do contêiner ao fim)', () => {
+  const copia = mkdtempSync(join(tmpdir(), 'kit-priv-'));
+  spawnSync('cp', ['-r', OPS, join(copia, 'kit-unidade')]);
+  spawnSync('mkdir', ['-p', join(copia, 'kit-unidade/unidades/privado')]);
+  writeFileSync(join(copia, 'kit-unidade/unidades/privado/clinica-real.yaml'), 'versao: 1\n');
+  const a = ambienteDoKit();
+  const env = { PATH: `${join(a.dir, 'bin')}:${process.env.PATH}`, HOME: a.dir, ARQUIVO_PLATAFORMA: join(a.dir, 'plataforma.token'), KIT_SEGREDOS_DIR: join(a.dir, 'cofre') };
+  const conferir = spawnSync('bash', [join(copia, 'kit-unidade/nova-unidade-joao.sh'), 'clinica-real', '--so-conferir'], { env, encoding: 'utf8' });
+  assert.equal(conferir.status, 0, conferir.stdout + conferir.stderr);
+  const rodar = spawnSync('bash', [join(copia, 'kit-unidade/nova-unidade-joao.sh'), 'clinica-real'], { env, encoding: 'utf8', input: '' });
+  assert.equal(rodar.status, 0, rodar.stdout + rodar.stderr);
+  assert.match(a.log(), new RegExp(`docker cp ${copia.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}/kit-unidade/unidades/privado/clinica-real\\.yaml .*:/repo/ops/kit-unidade/unidades/clinica-real\\.yaml`));
+  assert.match(a.log(), /docker exec \S+ rm -f \/repo\/ops\/kit-unidade\/unidades\/clinica-real\.yaml/);
+  // o da demonstração (em unidades/) vence se existir nos dois
+  writeFileSync(join(copia, 'kit-unidade/unidades/privado/clinica-demonstracao.yaml'), 'versao: 1\n');
+  const a2 = ambienteDoKit();
+  const env2 = { ...env, PATH: `${join(a2.dir, 'bin')}:${process.env.PATH}` };
+  spawnSync('bash', [join(copia, 'kit-unidade/nova-unidade-joao.sh'), 'clinica-demonstracao'], { env: env2, encoding: 'utf8', input: '' });
+  assert.match(a2.log(), /unidades\/clinica-demonstracao\.yaml novo/);
+  assert.doesNotMatch(a2.log(), /privado\/clinica-demonstracao/);
+  const nada = spawnSync('bash', [join(copia, 'kit-unidade/nova-unidade-joao.sh'), 'clinica-que-nao-existe', '--so-conferir'], { env, encoding: 'utf8' });
+  assert.notEqual(nada.status, 0);
+  assert.match(nada.stdout, /unidades\/privado\/clinica-que-nao-existe\.yaml/);
+});
+
+test('levar-kit-para-vps --questionario: manda SÓ o arquivo privado (modo 600, pasta 700), não imprime o conteúdo, recusa arquivo não ignorado e argumento desconhecido', () => {
+  const r = repositorioDeMentira();
+  spawnSync('mkdir', ['-p', join(r.clone, 'ops/kit-unidade/unidades/privado')]);
+  const origem = join(r.clone, 'ops/kit-unidade/unidades/privado/clinica-real.yaml');
+  writeFileSync(origem, 'atendente: maria.secreta@pessoal.com.br\npix: 12345678900\n');
+  const seco = r.rodar(['--questionario', 'clinica-real', '--so-conferir']);
+  assert.equal(seco.status, 0, seco.stdout + seco.stderr);
+  assert.match(seco.stdout, /SÓ CONFERIR: nada foi enviado/);
+  assert.ok(!(seco.stdout + seco.stderr).includes('maria.secreta'), 'o conteúdo não é impresso');
+  assert.equal(r.sshLog(), '');
+  const env = r.rodar(['--questionario', 'clinica-real']);
+  assert.equal(env.status, 0, env.stdout + env.stderr);
+  const dest = join(r.destino, 'ops/kit-unidade/unidades/privado/clinica-real.yaml');
+  assert.equal(readFileSync(dest, 'utf8'), readFileSync(origem, 'utf8'));
+  assert.equal(statSync(dest).mode & 0o777, 0o600);
+  assert.equal(statSync(join(r.destino, 'ops/kit-unidade/unidades/privado')).mode & 0o777, 0o700);
+  assert.ok(!existsSync(join(r.destino, 'ops/kit-unidade/nova-unidade-joao.sh')), 'só o questionário foi (o kit não)');
+  assert.ok(!(env.stdout + env.stderr).includes('maria.secreta'));
+  // o kit, depois, troca a pasta MAS preserva o privado que já está na VPS
+  assert.equal(r.rodar().status, 0);
+  assert.ok(existsSync(join(r.destino, 'ops/kit-unidade/nova-unidade-joao.sh')));
+  assert.equal(readFileSync(dest, 'utf8'), readFileSync(origem, 'utf8'), 'o questionário privado sobreviveu à troca da pasta');
+  // o privado nunca vai no tar do git (não está em origin/main)
+  const lista = r.rodar(['--so-conferir']);
+  assert.ok(!lista.stdout.includes('privado/clinica-real'));
+  // recusas
+  assert.notEqual(r.rodar(['--questionario', 'nao-existe']).status, 0);
+  assert.notEqual(r.rodar(['--questionario', '../x']).status, 0);
+  assert.equal(r.rodar(['--questionaro', 'x']).status, 2);
+  writeFileSync(join(r.clone, '.gitignore'), '');
+  const solto = r.rodar(['--questionario', 'clinica-real']);
+  assert.equal(solto.status, 1);
+  assert.match(solto.stdout, /NÃO está ignorado pelo git/);
 });

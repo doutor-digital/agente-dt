@@ -9,6 +9,7 @@ Você monta a **clínica nova no CRM** (uma conta própria no Chatwoot por clín
 
 ## Regras que não mudam
 - **Segredo nunca entra no questionário nem na conversa.** Onde há token, pergunte o **nome da variável** (`META_ADS_TOKEN_<SUFIXO>`), nunca o valor. Se a pessoa colar um token, não repita: peça para apagar e siga.
+- **Questionário de clínica REAL tem dado pessoal** (e-mail das atendentes, chave Pix, telefone) e **NÃO vai para o GitHub**: grave em `ops/kit-unidade/unidades/privado/<slug>.yaml` (pasta no `.gitignore`; `mkdir -p` se não existir) e NUNCA em `unidades/<slug>.yaml`. Confirme com `git check-ignore` que o arquivo está ignorado e não faça `git add` dele. Só a demonstração (`@example.com`, sem dado de verdade) fica versionada em `unidades/`.
 - **Não rode `--aplicar`.** Você roda só o seco (`--offline`, sem tocar em banco nem Chatwoot).
 - **Não invente dado de clínica.** Endereço, link do mapa, preços e horários viram frase dita ao paciente e texto de modelo aprovado na Meta. Pergunte; se a pessoa não sabe, anote como pendência (não preencha "de exemplo" numa clínica real).
 - Demonstração: `whatsapp.modo: demonstracao` (sem número, sem WABA; modelos da Meta em seco; caixa do tipo API) e e-mails `@example.com`. A «Clínica Demonstração» já existe em `ops/kit-unidade/unidades/clinica-demonstracao.yaml` (slug `clinica-demonstracao`, subdomínio `demo`).
@@ -28,13 +29,13 @@ Você monta a **clínica nova no CRM** (uma conta própria no Chatwoot por clín
 12. **Sofia**: nome da IA e tom (`friendly` padrão).
 
 ## O que você produz
-1. `ops/kit-unidade/unidades/<slug>.yaml` — copie a forma de `ops/kit-unidade/unidades/clinica-demonstracao.yaml` (clínica real: use `ops/kit-unidade/questionario.exemplo.yaml` como molde).
+1. O questionário: clínica real → `ops/kit-unidade/unidades/privado/<slug>.yaml` (fora do git); demonstração → `ops/kit-unidade/unidades/<slug>.yaml`. Forma: `ops/kit-unidade/unidades/clinica-demonstracao.yaml` / `ops/kit-unidade/questionario.exemplo.yaml`.
 2. `ops/kit-unidade/unidades/<slug>-joao.sh` — uma linha: `exec bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../nova-unidade-joao.sh" <slug> "$@"` (copie `clinica-demonstracao-joao.sh` e troque o slug; `chmod +x`).
 3. **Confira em seco**, de dentro de `backend/`:
-   `pnpm exec tsx src/scripts/nova-unidade.ts ../ops/kit-unidade/unidades/<slug>.yaml --offline`
+   `pnpm exec tsx src/scripts/nova-unidade.ts ../ops/kit-unidade/unidades/privado/<slug>.yaml --offline`   (demonstração: `…/unidades/<slug>.yaml`)
    Se o questionário for inválido, corrija com a pessoa (as mensagens dizem o campo). Mostre o plano **resumido**: o que cria em cada sistema.
 
 ## O que você entrega no fim (curto)
 - O plano em seco e **o que fica MANUAL**: Platform App (1ª vez), `KIT_SEGREDOS_DIR`, número/Kapso (clínica real), subdomínio (`regra-traefik-joao.sh <sub>`), cofre → env do serviço `ddagent_agent` + reinício, pastas de cada atendente, token e turnos da franquia, ativar a unidade.
-- Os comandos **do João**, na ordem (copie do `clinica-demonstracao-joao.sh`): `criar-platform-app-joao.sh` (uma vez) → `<slug>-joao.sh` (seco) → `<slug>-joao.sh --aplicar` → `regra-traefik-joao.sh <sub>` → cofre/reinício → teste da Sofia → `--ligar-robo` (só depois).
+- Os comandos **do João**, na ordem (copie do `clinica-demonstracao-joao.sh`; a VPS não tem cópia do repositório, então primeiro `levar-kit-para-vps.sh`, e **clínica real** também `levar-kit-para-vps.sh --questionario <slug>`, que manda só o arquivo privado para a VPS em modo 600; os scripts rodam de `/root/kit`): `criar-platform-app-joao.sh` (uma vez) → `<slug>-joao.sh` (seco) → `<slug>-joao.sh --aplicar` → `regra-traefik-joao.sh <sub>` → cofre/reinício → teste da Sofia → `--ligar-robo` (só depois).
 - O que **não foi provado**: nada foi aplicado; a prova contra o Chatwoot/Kapso de verdade só vem do primeiro `--aplicar`.

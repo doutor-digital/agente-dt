@@ -12,8 +12,17 @@ onde mora o stack, não tem cópia — lá só existe o `docker-compose.yml`. O 
     bash ops/kit-unidade/levar-kit-para-vps.sh                 # envia para /root/kit na VPS
 
 (é o mesmo que `git archive origin/main ops/kit-unidade | ssh -i ~/.ssh/doutordigital_vps root@89.116.214.130 …`, rodado da raiz do repositório, com a extração numa pasta
-temporária e a troca da pasta inteira: o que foi apagado ou renomeado no repositório não sobra na VPS). Repita sempre que o kit mudar. Os scripts acham as pastas pelo
+temporária e a troca da pasta inteira: o que foi apagado ou renomeado no repositório não sobra na VPS). Repita sempre que o kit mudar (a troca da pasta preserva `unidades/privado/` da VPS). Os scripts acham as pastas pelo
 próprio endereço, então funcionam de `/root/kit/ops/kit-unidade`.
+
+## Questionário de clínica REAL: NÃO vai para o GitHub
+Ele tem dado pessoal (e-mail das atendentes, chave Pix, telefone). A skill `/nova-unidade` grava a clínica real em `ops/kit-unidade/unidades/privado/<slug>.yaml` na SUA máquina
+(pasta no `.gitignore`); só a demonstração (`unidades/clinica-demonstracao.yaml`, `@example.com`) é versionada. Para levar à VPS:
+
+    bash ops/kit-unidade/levar-kit-para-vps.sh --questionario <slug> --so-conferir   # confere (não imprime o conteúdo)
+    bash ops/kit-unidade/levar-kit-para-vps.sh --questionario <slug>                 # manda SÓ esse arquivo, modo 600, para /root/kit/ops/kit-unidade/unidades/privado/
+
+O `nova-unidade-joao.sh <slug>` procura primeiro em `unidades/` e depois em `unidades/privado/`; o questionário também é apagado do contêiner ao fim.
 
 ## Roteiro do João (NA VPS, como root, de `/root/kit`, com `bash arquivo` no seu terminal)
 0. `cd /root/kit`
@@ -32,4 +41,5 @@ próprio endereço, então funcionam de `/root/kit/ops/kit-unidade`.
 - O contêiner precisa já ter o kit (deploy do PR da fase 2) — o script recusa, dizendo o motivo, se não tiver.
 - Nunca `ssh … 'bash -s' < script`: o `docker exec -i` engole o resto do script. Rode o arquivo.
 - Clínica de demonstração: a caixa API fica registrada como `cloud`; não ligue as automações do Chatwoot nela.
+- A lista dos administradores da Doutor Digital que entram em toda conta nova vem de `KIT_ADMINS_DD` (exportada na VPS antes de rodar o `nova-unidade-joao.sh`, que a repassa ao contêiner sem imprimir) ou de `chatwoot.admins_dd` no questionário.
 - Quem aplica em produção é o João. Nada aqui foi rodado na VPS por quem escreveu; a primeira vez é sempre `--so-conferir`.

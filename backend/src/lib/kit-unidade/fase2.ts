@@ -146,11 +146,13 @@ async function passoAdminsDD(q: Questionario, x: PortasExternas, e: EstadoDaExec
   const jaNaConta = new Set(listaDaResposta(await conta.get('agents')).map((a) => lc(String(a.email))));
   const faltam = desejados.filter((m) => !jaNaConta.has(m));
   if (!faltam.length) return [`administradores da Doutor Digital já estão na conta (${desejados.length})`];
-  if (e.somenteLeitura) throw new ErroSoLeitura('pôr os administradores da Doutor Digital na conta');
   if (!x.referencia) return [`AVISO: sem a conta de referência não sei o id de ${faltam.join(', ')}: não pus os administradores da Doutor Digital (ponha-os à mão no Super Admin)`];
-  const plataforma = x.plataforma;
-  if (!plataforma) return [`AVISO: sem o Platform App não dá para pôr ${faltam.join(', ')} na conta`];
   const naReferencia = new Map(listaDaResposta(await x.referencia.get('agents')).map((a) => [lc(String(a.email)), Number(a.id)] as const));
+  const resolviveis = faltam.filter((m) => naReferencia.has(m));
+  // só LER (o plano dizia «nada»): e-mail que não existe na conta 1 não é nada a fazer — só aviso, a cada rodada, sem tirar o passo do «nada»
+  if (e.somenteLeitura && resolviveis.length) throw new ErroSoLeitura('pôr os administradores da Doutor Digital na conta');
+  const plataforma = x.plataforma;
+  if (!plataforma && resolviveis.length) return [`AVISO: sem o Platform App não dá para pôr ${resolviveis.join(', ')} na conta`];
   const notas: string[] = [];
   for (const m of faltam) {
     const id = naReferencia.get(m);
@@ -158,7 +160,7 @@ async function passoAdminsDD(q: Questionario, x: PortasExternas, e: EstadoDaExec
       notas.push(`AVISO: ${m} não está na conta de referência (conta 1): não pus na conta ${contaId} — confira o e-mail`);
       continue;
     }
-    await plataforma.vincular(contaId, id, 'administrator');
+    await plataforma!.vincular(contaId, id, 'administrator');
     notas.push(`${m} (usuário ${id}) posto(a) como administrador(a) da conta ${contaId}`);
   }
   return notas;

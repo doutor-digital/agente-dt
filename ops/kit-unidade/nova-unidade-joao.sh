@@ -37,8 +37,11 @@ for a in "$@"; do
 done
 
 AQUI="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# O questionário de clínica REAL tem dado pessoal (e-mail das atendentes, chave Pix, telefone) e NÃO vai para o GitHub: fica em unidades/privado/ (fora do git; chega à VPS
+# por `levar-kit-para-vps.sh --questionario <slug>`). Procura primeiro em unidades/ (a demonstração, versionada) e depois em unidades/privado/.
 QUESTIONARIO="$AQUI/unidades/$SLUG.yaml"
-[ -f "$QUESTIONARIO" ] || { echo "ERRO: não achei $QUESTIONARIO (a skill /nova-unidade cria esse arquivo)."; exit 1; }
+[ -f "$QUESTIONARIO" ] || QUESTIONARIO="$AQUI/unidades/privado/$SLUG.yaml"
+[ -f "$QUESTIONARIO" ] || { echo "ERRO: não achei o questionário de $SLUG em $AQUI/unidades/$SLUG.yaml nem em $AQUI/unidades/privado/$SLUG.yaml (a skill /nova-unidade cria o arquivo; clínica real chega por levar-kit-para-vps.sh --questionario $SLUG)."; exit 1; }
 PLATAFORMA="${ARQUIVO_PLATAFORMA:-/root/segredos/chatwoot-platform.token}"
 COFRE_DO_HOST="${KIT_SEGREDOS_DIR:-/root/segredos/kit}"
 COFRE_NO_CONTEINER="/run/kit-segredos"
@@ -79,6 +82,8 @@ mkdir -p "$COFRE_DO_HOST"; chmod 700 "$COFRE_DO_HOST"
 conteiner sh -c "mkdir -p $COFRE_NO_CONTEINER && chmod 700 $COFRE_NO_CONTEINER"
 if [ -n "$(ls -A "$COFRE_DO_HOST" 2>/dev/null)" ]; then docker cp "$COFRE_DO_HOST/." "$AGENTE:$COFRE_NO_CONTEINER/" >/dev/null; fi
 voltar() {
+  # o questionário (pode ter dado pessoal) também não fica no contêiner
+  docker exec "$AGENTE" rm -f "$RAIZ_NO_CONTEINER/ops/kit-unidade/unidades/$SLUG.yaml" </dev/null >/dev/null 2>&1 || true
   docker cp "$AGENTE:$COFRE_NO_CONTEINER/." "$COFRE_DO_HOST/" >/dev/null 2>&1 || true
   chmod 700 "$COFRE_DO_HOST"; chmod 600 "$COFRE_DO_HOST"/* 2>/dev/null || true
   docker exec "$AGENTE" rm -rf "$COFRE_NO_CONTEINER" </dev/null >/dev/null 2>&1 || true
@@ -87,5 +92,5 @@ trap voltar EXIT
 
 if [ -r "$PLATAFORMA" ]; then CHATWOOT_PLATFORM_TOKEN="$(cat "$PLATAFORMA")"; export CHATWOOT_PLATFORM_TOKEN; fi
 # `-e NOME` (sem valor): o docker pega do ambiente deste processo; o valor não aparece na linha de comando nem no ps
-docker exec ${TTY[@]+"${TTY[@]}"} -e CHATWOOT_PLATFORM_TOKEN -e "KIT_SEGREDOS_DIR=$COFRE_NO_CONTEINER" -w "$RAIZ_NO_CONTEINER/backend" "$AGENTE" \
+docker exec ${TTY[@]+"${TTY[@]}"} -e CHATWOOT_PLATFORM_TOKEN -e KIT_ADMINS_DD -e "KIT_SEGREDOS_DIR=$COFRE_NO_CONTEINER" -w "$RAIZ_NO_CONTEINER/backend" "$AGENTE" \
   node dist/scripts/nova-unidade.js "$RAIZ_NO_CONTEINER/ops/kit-unidade/unidades/$SLUG.yaml" ${ARGS[@]+"${ARGS[@]}"}
