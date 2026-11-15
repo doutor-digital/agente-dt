@@ -159,7 +159,8 @@ export async function automacoesDaUnidade(
       semVolta: semVolta(a),
       exigeSecoAntes: !!a.exigeSecoAntes,
       risco: a.risco,
-      mudou: m ? { por: m.por, em: m.em.toISOString() } : null,
+      // o dado gravado fica «(Chatwoot)» (a trilha de auditoria tem um formato só); a tela mostra «(CRM)», para as linhas antigas e as novas
+      mudou: m ? { por: m.por === null ? null : m.por.replace(/\(Chatwoot\)$/, '(CRM)'), em: m.em.toISOString() } : null,
       ultimas,
       semRegistro: ultimas.length === 0,
       nota: null,
@@ -215,7 +216,7 @@ export async function mudarAutomacao(
   }
   const unit = await banco.unidade(p.slug);
   if (!unit) return { ok: false, status: 404, erro: 'unidade não encontrada' };
-  await banco.gravar(unit, id, p.estado, `${p.por.slice(0, 70) || 'administrador'} (CRM)`);
+  await banco.gravar(unit, id, p.estado, `${p.por.slice(0, 70) || 'administrador'} (Chatwoot)`);
   return { ok: true, id, estado: p.estado };
 }
 

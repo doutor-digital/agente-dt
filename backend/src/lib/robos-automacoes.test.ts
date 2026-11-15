@@ -96,14 +96,14 @@ test('as fixas leem o estado do MESMO ambiente que o código lê; sem interrupto
 test('«últimas ações»: o que o log guardou; sem log, «sem registro» (nada inventado); quem mexeu por último', async () => {
   const em = new Date('2026-11-16T10:00:00Z');
   const { banco } = bancoFalso({
-    mudancas: [{ automacao: 'chatwoot-agenda', por: 'Suzanne (CRM)', em }],
+    mudancas: [{ automacao: 'chatwoot-agenda', por: 'Suzanne (Chatwoot)', em }],
     ultimas: { 'chatwoot-agenda': [{ em: '2026-11-16T12:00:00.000Z', nivel: 'info', texto: 'chatwoot-agenda: ciclo', resumo: 'agenda 12 · gravadas 3' }] },
   });
   const l = await A.automacoesDaUnidade(banco, SLUG, { env: {} });
   const ag = l.find((x) => x.id === 'chatwoot-agenda')!;
   assert.equal(ag.semRegistro, false);
   assert.equal(ag.ultimas[0]!.resumo, 'agenda 12 · gravadas 3');
-  assert.deepEqual(ag.mudou, { por: 'Suzanne (CRM)', em: em.toISOString() });
+  assert.deepEqual(ag.mudou, { por: 'Suzanne (CRM)', em: em.toISOString() }, 'a tela mostra «(CRM)» mesmo para o que foi gravado como «(Chatwoot)»');
   const ia = l.find((x) => x.id === 'chatwoot-ia')!;
   assert.equal(ia.semRegistro, true);
   assert.deepEqual(ia.ultimas, []);
@@ -124,7 +124,7 @@ const pedir = (o: Partial<Parameters<typeof A.mudarAutomacao>[1]> & { hoje?: 'li
   ...o,
 });
 
-test('só administrador do CRM muda; atendente (agent/sem papel) é recusada e nada é gravado; o registro leva o nome e «(CRM)»', async () => {
+test('só administrador do CRM muda; atendente (agent/sem papel) é recusada e nada é gravado; o registro leva o nome e «(Chatwoot)» (a tela mostra «(CRM)»)', async () => {
   const { banco, gravacoes } = bancoFalso();
   for (const papel of ['agent', null, undefined, '']) {
     const r = await A.mudarAutomacao(banco, pedir({ papel }));
@@ -134,7 +134,7 @@ test('só administrador do CRM muda; atendente (agent/sem papel) é recusada e n
   assert.equal(gravacoes.length, 0);
   const ok = await A.mudarAutomacao(banco, pedir());
   assert.deepEqual(ok, { ok: true, id: 'chatwoot-agenda', estado: 'seco' });
-  assert.deepEqual(gravacoes, [{ unit: { id: 'u1', slug: SLUG }, automacao: 'chatwoot-agenda', estado: 'seco', por: 'Suzanne (CRM)' }]);
+  assert.deepEqual(gravacoes, [{ unit: { id: 'u1', slug: SLUG }, automacao: 'chatwoot-agenda', estado: 'seco', por: 'Suzanne (Chatwoot)' }]);
 });
 
 test('só as automações da tela: o resto do catálogo, as fixas e id inventado são 404; estado inválido e seco sem modo seco são 400', async () => {

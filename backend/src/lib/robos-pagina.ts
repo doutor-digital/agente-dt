@@ -425,13 +425,14 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
   // um ícone (e uma cor) por grupo: o mesmo quadradinho dos blocos, com o símbolo do que a automação mexe
   var ICONE_GRUPO = { sofia: ['i-chat', '#5b5bd6'], agenda: ['i-cal', '#2781f6'], mensagens: ['i-send', ''], rastreio: ['i-alvo', '#f76b15'], organizacao: ['i-tag', '#12a594'], avisos: ['i-sino', '#e5484d'], nativas: ['i-fluxo', '#8b8d98'] };
   function icAuto(a){ var d = ICONE_GRUPO[a.grupo] || ['i-fluxo', '#8b8d98'], s = ic(d[0]); if (d[1]) s.style.color = d[1]; return s; }
-  var ORDEM_GRUPOS = ['Sofia', 'Agenda', 'Mensagens', 'Rastreio', 'Organização', 'Avisos para a equipe', 'Regras automáticas do CRM'];
+  var ROTULO_NATIVAS = 'Regras automáticas do CRM'; // um texto só para o grupo das regras nativas (tem de bater com o do servidor)
+  var ORDEM_GRUPOS = ['Sofia', 'Agenda', 'Mensagens', 'Rastreio', 'Organização', 'Avisos para a equipe', ROTULO_NATIVAS];
   function itensDeAuto(){
     if (!AUTO) return [];
     var itens = AUTO.automacoes.slice();
     var nat = AUTO.nativas || { regras: [], lidas: false, link: null };
-    if (nat.lidas && nat.regras.length) nat.regras.forEach(function(r){ itens.push({ id: 'nativa-' + r.id, grupoRotulo: 'Regras automáticas do CRM', nome: r.nome || ('Regra ' + r.id), oQueFaz: r.descricao || 'Regra criada em Configurações > Automação.', estado: r.ativa ? 'ligado' : 'desligado', editavel: false, estados: [], origem: 'nativa', evento: r.evento, cuidado: null, ultimas: [], semRegistro: true, mudou: null, semVolta: false, nota: null }); });
-    else itens.push({ id: 'nativa-link', grupoRotulo: 'Regras automáticas do CRM', nome: 'Regras automáticas do CRM', oQueFaz: nat.lidas ? 'Nenhuma regra automática do CRM criada.' : 'Não consegui ler as regras automáticas do CRM agora. Elas ficam em Configurações > Automação.', estado: 'sempre', editavel: false, estados: [], origem: 'nativa', cuidado: null, ultimas: [], semRegistro: true, mudou: null, semVolta: false, nota: null });
+    if (nat.lidas && nat.regras.length) nat.regras.forEach(function(r){ itens.push({ id: 'nativa-' + r.id, grupoRotulo: ROTULO_NATIVAS, nome: r.nome || ('Regra ' + r.id), oQueFaz: r.descricao || 'Regra criada em Configurações > Automação.', estado: r.ativa ? 'ligado' : 'desligado', editavel: false, estados: [], origem: 'nativa', evento: r.evento, cuidado: null, ultimas: [], semRegistro: true, mudou: null, semVolta: false, nota: null }); });
+    else itens.push({ id: 'nativa-link', grupoRotulo: ROTULO_NATIVAS, nome: ROTULO_NATIVAS, oQueFaz: nat.lidas ? 'Nenhuma regra automática do CRM criada.' : 'Não consegui ler as regras automáticas do CRM agora. Elas ficam em Configurações > Automação.', estado: 'sempre', editavel: false, estados: [], origem: 'nativa', cuidado: null, ultimas: [], semRegistro: true, mudou: null, semVolta: false, nota: null });
     return itens.filter(function(a){ return !busca || (a.nome + ' ' + a.grupoRotulo).toLowerCase().indexOf(busca) >= 0; });
   }
   function listaAuto(){
