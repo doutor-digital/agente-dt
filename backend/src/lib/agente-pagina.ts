@@ -17,10 +17,10 @@
  *
  * A sessão chega do menu do Chatwoot por postMessage (`funil:pede-sessao` → `funil-sessao`, com checagem de origem). Todo texto que
  * vem do servidor entra por textContent (nunca innerHTML). O JavaScript não usa crase nem `${`: o texto é um String.raw e só
- * `__ORIGEM_CW__` é trocado.
+ * `__ORIGEM_CW__` (a origem do Chatwoot) e `__GUIA_LIGADO__` (true/false: o «?» do cabeçalho só aparece com o guia da etapa ligado) são trocados
+ * por `paginaDoAgente`; página servida sem trocar os dois quebra o script.
  */
 import { guiaDaEtapaLigado } from './chatwoot-guia-etapas.js';
-
 
 const PAGINA = String.raw`<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">

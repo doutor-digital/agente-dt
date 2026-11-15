@@ -137,7 +137,7 @@ const GUIA_JS = String.raw`(function(){
   if (window.top !== window || window.__guiaEtapaDD) return; window.__guiaEtapaDD = 1;
   var AGENTE = __AGENTE__, CFG = __GUIA__;
   var ST = { conversa: null, etapa: undefined, buscando: false, ultimaBusca: 0, host: null, raiz: null, feitos: {} };
-  var MD = { host: null, voltarPara: null };
+  var MD = { host: null, voltarPara: null, paraVideo: true };
   // o modal precisa ficar ACIMA do painel das telas do menu (Hoje, Funil…; z-index 2147483000 em funil.controller.ts), senão o «?» abre o vídeo por baixo da tela
   var Z_CARTAO = 1, Z_MODAL = 2147483200;
 
@@ -200,12 +200,19 @@ const GUIA_JS = String.raw`(function(){
     try { if (volta && volta.isConnected) volta.focus(); } catch (e) {}
   }
   function teclaDoModal(ev){
-    if (ev.key === 'Escape' || ev.key === 'Esc') { ev.stopPropagation(); ev.preventDefault(); fecharModal(); }
+    if (ev.key === 'Escape' || ev.key === 'Esc') { ev.stopImmediatePropagation(); ev.preventDefault(); fecharModal(); return; }
+    // o modal é «modal» de verdade: o Tab não escapa para a conversa por baixo (alterna entre o botão de fechar e o vídeo)
+    if (ev.key === 'Tab' && MD.host) {
+      ev.preventDefault();
+      var r = MD.host.shadowRoot, alvo = MD.paraVideo ? r.querySelector('video') : r.querySelector('.fechar');
+      MD.paraVideo = !MD.paraVideo;
+      try { if (alvo) alvo.focus(); } catch (e) {}
+    }
   }
   function abrirAula(a, origem){
     if (!a || typeof a.slug !== 'string' || !/^[a-z0-9-]+$/.test(a.slug)) return;
     fecharModal();
-    MD.voltarPara = origem || null;
+    MD.voltarPara = origem || null; MD.paraVideo = true;
     var host = el('div'); host.setAttribute('data-guia-modal', '1');
     host.style.cssText = 'position:fixed;inset:0;z-index:' + Z_MODAL;
     var raiz = host.attachShadow({ mode: 'open' });
@@ -316,7 +323,7 @@ const GUIA_JS = String.raw`(function(){
     var logada = !!sessao() && /\/app\/accounts\//.test(location.pathname);
     var c = logada ? conversaDaUrl() : null;
     if (!c) { tirarCartao(); ST.conversa = null; ST.etapa = undefined; return; }
-    if (c !== ST.conversa) { ST.conversa = c; ST.etapa = undefined; ST.ultimaBusca = 0; tirarCartao(); }
+    if (c !== ST.conversa) { ST.conversa = c; ST.etapa = undefined; ST.ultimaBusca = 0; ST.feitos = {}; tirarCartao(); }
     if (ST.etapa !== undefined) garantirCartao();
     if (document.visibilityState === 'visible' && Date.now() - ST.ultimaBusca >= 4000) buscarEtapa();
   }, 1000);

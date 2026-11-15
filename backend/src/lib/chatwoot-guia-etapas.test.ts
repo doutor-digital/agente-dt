@@ -50,6 +50,7 @@ test('o script: ligado por padrão, «0» desliga; parseia; nada de dado vira HT
   assert.equal(G.guiaDaEtapaLigado({ CHATWOOT_GUIA_ETAPA: '0' } as NodeJS.ProcessEnv), false);
   const js = G.guiaJs(JSON.stringify(AGENTE), {} as NodeJS.ProcessEnv);
   assert.doesNotThrow(() => new Function(js));
+  assert.match(js, /stopImmediatePropagation/);
   assert.doesNotMatch(js, /innerHTML|outerHTML|insertAdjacentHTML|document\.write|\beval\(|new Function|setAttribute\('on/i);
   assert.doesNotMatch(js, /__AGENTE__|__GUIA__/);
   assert.ok(js.includes(JSON.stringify(AGENTE)));
@@ -173,6 +174,8 @@ class No {
   }
 }
 
+let ultimoImpedido = false;
+
 function montar(opcoes: { etapa?: () => string; painel?: boolean; logado?: boolean } = {}) {
   const intervalos: Array<() => void> = [];
   const pedidos: Array<{ url: string; metodo: string }> = [];
@@ -246,7 +249,9 @@ function montar(opcoes: { etapa?: () => string; painel?: boolean; logado?: boole
     modal: () => body.children.find((c) => c.attrs['data-guia-modal']) ?? null,
     tecla: (key: string) => {
       let parou = false;
-      for (const f of doc.ouvintes.keydown ?? []) f({ key, stopPropagation: () => (parou = true), preventDefault() {} });
+      let impediu = false;
+      for (const f of doc.ouvintes.keydown ?? []) f({ key, stopPropagation: () => (parou = true), stopImmediatePropagation: () => (parou = true), preventDefault: () => (impediu = true) });
+      ultimoImpedido = impediu;
       return parou;
     },
   };
@@ -349,6 +354,10 @@ test('modal: o botão da aula abre o vídeo por cima da conversa; Esc, o X e o c
   assert.match(m!.shadowRoot!.textContent, /Aula 3\.5 · Compareceu e fechou/);
   // outra tecla não fecha
   t.tecla('a');
+  assert.ok(t.modal());
+  // o Tab fica dentro do modal (não vai para a conversa por baixo)
+  t.tecla('Tab');
+  assert.equal(ultimoImpedido, true, 'o Tab é segurado enquanto o modal está aberto');
   assert.ok(t.modal());
   // Esc fecha, para o vídeo e não deixa o Esc seguir para o Chatwoot
   assert.equal(t.tecla('Escape'), true);

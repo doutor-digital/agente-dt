@@ -1065,7 +1065,7 @@ export function paginaFunilHandler(_req: Request, res: Response): void {
   }
   res.type('html').send(
     PAGINA.replace('__ORIGEM_CW__', JSON.stringify(new URL(contexto()!.conta!.url).origin))
-      .replace('__GUIA_LIGADO__', String(guiaDaEtapaLigado()))
+      .split('__GUIA_LIGADO__').join(String(guiaDaEtapaLigado()))
       .split('/*__TELAS_CSS__*/').join(TELAS_CSS)
       .split('/*__TELAS_JS__*/').join(TELAS_JS),
   );
