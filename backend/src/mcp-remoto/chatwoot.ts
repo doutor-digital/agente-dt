@@ -264,7 +264,7 @@ export function preparar(ctx: ContextoChatwoot, usuario: string, a: { metodo: Me
   return {
     codigo,
     validoPor: `${VALIDADE_MS / 60_000} min`,
-    vaiFazer: `${a.metodo} ${caminho || '(conta)'} — ${motivo} (conta ${ctx.conta?.conta ?? '?'})`,
+    vaiFazer: `${a.metodo} ${caminho || '(conta)'} — ${motivo} (conta ${ctx.conta?.conta ?? '?'}${ctx.conta ? ` · ${unidadesDaContaDoChatwoot(ctx.conta.conta).join(', ') || 'sem unidade'}` : ''})`,
     dados: { ...(a.corpo ?? {}), ...(a.query ?? {}) },
     proximoPasso: 'mostre isto à pessoa; só com o ok dela chame chatwoot_confirmar com o código',
   };
@@ -280,7 +280,7 @@ export async function confirmar(ctx: ContextoChatwoot, usuario: string, codigoBr
   const r = await chamar(ctx, p.acao.metodo, p.acao.caminho, { corpo: p.acao.corpo, query: p.acao.query });
   if (p.acao.metodo === 'DELETE') {
     try {
-      await ctx.avisar(`🗑️ Chatwoot (conta ${ctx.conta?.conta ?? '?'}): ${usuario} apagou ${p.acao.caminho} pelo conector do claude.ai`);
+      await ctx.avisar(`🗑️ Chatwoot (conta ${ctx.conta?.conta ?? '?'}${ctx.conta ? ` · ${unidadesDaContaDoChatwoot(ctx.conta.conta).join(', ') || 'sem unidade'}` : ''}): ${usuario} apagou ${p.acao.caminho} pelo conector do claude.ai`);
     } catch {
       // aviso que falha não desfaz nem esconde o que foi feito
     }
@@ -296,26 +296,33 @@ const corpo = z.record(z.string(), z.unknown()).optional();
 const query = z.record(z.string(), z.string()).optional();
 
 /** Por que esta pessoa não pode escolher a conta: o conector atende a conta do ambiente (Parauapebas) e só quem a Doutor Digital autorizou escolhe outra. */
-export const RECUSA_DE_CONTA = 'esta pessoa não está autorizada a escolher outra conta do Chatwoot: o conector atende só a conta padrão (a de Parauapebas)';
+export const RECUSA_DE_CONTA = 'esta pessoa não está autorizada a escolher outra conta do Chatwoot: o conector atende só a conta padrão (a de Parauapebas). Se a autorização é recente ou o servidor acabou de reiniciar, reconecte o conector e tente de novo';
+
+/** As unidades que moram na conta `contaId` (a do ambiente inclui as sem conta própria), em ordem alfabética: para dizer ONDE a ação foi feita. */
+export function unidadesDaContaDoChatwoot(contaId: number, e: NodeJS.ProcessEnv = process.env): string[] {
+  const doAmbiente = contaChatwootDoAmbiente(e)?.conta === contaId;
+  return [...new Set([...(doAmbiente ? unidadesSemConta() : []), ...unidadesDaConta(contaId)])].sort();
+}
 
 /**
  * A conta pedida na chamada → o contexto dela, ou erro. Sem `conta` (ou a conta do ambiente) é SEMPRE o contexto de sempre. Outra conta só para
  * quem `escolheConta` (a lista MCP_CHATWOOT_CONTAS_EMAILS); conta que nenhuma unidade usa é recusada. Nunca cai na conta 1 por engano.
  */
 export function contextoDaChamada(ctx: ContextoChatwoot, conta: number | undefined, escolheConta: boolean, e: NodeJS.ProcessEnv = process.env): ContextoChatwoot {
-  if (conta === undefined || (ctx.conta && ehContaDoAmbiente(conta, e) && ctx.conta.conta === conta)) return ctx;
+  // a conta do ambiente pedida pelo número é a mesma coisa que não pedir (o próprio contexto, as mesmas confirmações pendentes)
+  if (conta === undefined || ctx.conta?.conta === conta) return ctx;
   if (!escolheConta) throw new ErroDeEntrada(RECUSA_DE_CONTA);
   const c = contextoDaContaPorId(ctx, conta, e);
-  if (!c) throw new ErroDeEntrada(`conta ${conta} desconhecida: nenhuma unidade usa essa conta do Chatwoot (veja chatwoot_contas)`);
+  if (!c?.conta) throw new ErroDeEntrada(`conta ${conta} desconhecida: nenhuma unidade usa essa conta do Chatwoot (veja chatwoot_contas)`);
+  // sem o token PRÓPRIO da clínica o servidor cairia no global (o de Parauapebas): pelo conector isso nunca vale — um token que vaza abre UMA clínica
+  if (ctx.conta && c.conta.token === ctx.conta.token) throw new ErroDeEntrada(`a conta ${conta} ainda não tem token próprio no servidor (CHATWOOT_API_TOKEN_<SUFIXO> da clínica): peça ao João para configurar`);
   return c;
 }
 
 /** As contas do Chatwoot que o servidor conhece e as unidades de cada uma (só para quem pode escolher a conta). */
 export function contasParaListar(ctx: ContextoChatwoot, e: NodeJS.ProcessEnv = process.env): Array<{ conta: number; padrao: boolean; unidades: string[] }> {
   return contasDoChatwoot(e).map((conta) => {
-    const padrao = ehContaDoAmbiente(conta, e);
-    const unidades = padrao ? unidadesSemConta() : unidadesDaConta(conta);
-    return { conta, padrao, unidades };
+    return { conta, padrao: contaChatwootDoAmbiente(e)?.conta === conta, unidades: unidadesDaContaDoChatwoot(conta, e) };
   });
 }
 

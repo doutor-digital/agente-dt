@@ -145,7 +145,7 @@ test('dois passos: o código preparado na conta 2 só confirma na conta 2 (e mos
   const t = montar(true, 'joao@example.com');
   const p = await t.chamar('chatwoot_preparar', { metodo: 'DELETE', caminho: 'labels/3', conta: 2 });
   const prep = JSON.parse(p.content[0]!.text) as { codigo: string; vaiFazer: string };
-  assert.match(prep.vaiFazer, /\(conta 2\)/);
+  assert.match(prep.vaiFazer, /\(conta 2 · clinica-demonstracao\)/);
   assert.deepEqual(t.chamadas, [], 'preparar não executa');
   const errado = await t.chamar('chatwoot_confirmar', { codigo: prep.codigo });
   assert.equal(errado.isError, true);
@@ -174,4 +174,21 @@ test('o caminho continua preso à conta: `../2/…` e afins são recusados mesmo
     assert.equal(r.isError, true, caminho);
   }
   assert.deepEqual(t.chamadas, []);
+});
+
+test('autorizado, mas a clínica ainda NÃO tem token próprio: recusa (nunca usa o token de Parauapebas em outra conta)', async () => {
+  const t = montar(true, 'joao@example.com');
+  delete process.env.CHATWOOT_API_TOKEN_DEMO;
+  const r = await t.chamar('chatwoot_caixas', { conta: 2 });
+  assert.equal(r.isError, true);
+  assert.match(r.content[0]!.text, /ainda não tem token próprio/);
+  assert.deepEqual(t.chamadas, []);
+});
+
+test('unidade que declara a mesma conta do ambiente: conta=1 continua sendo a padrão (mesmo contexto, mesmas confirmações pendentes)', async () => {
+  const t = montar(false);
+  U.aplicarConfigs([{ ...U.SEMENTE_PARAUAPEBAS, contaId: undefined } as never, { ...DEMO, contaId: 1, slug: 'outra-na-conta-1', caixas: [{ id: 21, tipo: 'cloud' as const }] } as never]);
+  const p = JSON.parse((await t.chamar('chatwoot_preparar', { metodo: 'DELETE', caminho: 'labels/3' })).content[0]!.text) as { codigo: string };
+  const r = await t.chamar('chatwoot_confirmar', { codigo: p.codigo, conta: 1 });
+  assert.equal(r.isError, undefined, 'o código preparado sem conta confirma com conta=1');
 });
