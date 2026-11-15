@@ -85,7 +85,8 @@ export interface Armazem {
   feitos(caixa: number, desde: Date): Promise<Array<{ conversationId: number; regra: string; chave: string }>>;
   /** false = já existia (outra cópia do servidor ou ciclo anterior) */
   registrar(l: { caixa: number; conversationId: number; regra: string; chave: string; modo: string; texto: string }): Promise<boolean>;
-  desfazer(conversationId: number, regra: string, chave: string): Promise<void>;
+  /** `caixa` (a última): o id da conversa é por conta; sem a caixa o delete pegaria a conversa de outra conta */
+  desfazer(conversationId: number, regra: string, chave: string, caixa: number): Promise<void>;
 }
 
 /** Template da Meta a mandar no lugar do texto livre (caixa de WhatsApp Cloud com a janela de 24 h fechada). */
@@ -213,8 +214,8 @@ export function armazemDoBanco(): Armazem {
         throw err;
       }
     },
-    async desfazer(conversationId, regra, chave) {
-      await prisma.chatwootReguaDisparo.deleteMany({ where: { conversationId, regra, chave } });
+    async desfazer(conversationId, regra, chave, caixa) {
+      await prisma.chatwootReguaDisparo.deleteMany({ where: { caixa, conversationId, regra, chave } });
     },
   };
 }
@@ -569,7 +570,7 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
           resumo.falhas++;
           const status = statusDoErro(err);
           // seco e nota: tenta de novo no próximo ciclo. Ligado: só desfaz se o Chatwoot RECUSOU (4xx); sem resposta pode ter ido.
-          if (modo === 'seco' || semTemplate || (status !== undefined && status >= 400 && status < 500)) await armazem.desfazer(c.id, regra, d.chave).catch(() => undefined);
+          if (modo === 'seco' || semTemplate || (status !== undefined && status >= 400 && status < 500)) await armazem.desfazer(c.id, regra, d.chave, caixa).catch(() => undefined);
           logger.warn({ err: String(err), caixa, conversa: c.id, regra: d.regra, modo, template: template?.nome }, `${ID_REGUA}: não consegui ${privada ? 'deixar a nota' : 'mandar a mensagem'}`);
           continue;
         }

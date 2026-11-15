@@ -127,8 +127,9 @@ export async function guardarReferral(caixa: number, conversa: number, wamid: st
 }
 
 /** Os referrais guardados da conversa, do mais antigo ao mais novo. */
-export async function referraisGuardados(conversa: number): Promise<ReferralDoKapso[]> {
-  const l = await prisma.chatwootReguaDisparo.findMany({ where: { conversationId: conversa, regra: REGRA_KAPSO_REFERRAL }, select: { texto: true } }).catch(() => []);
+/** `caixa` (quando se sabe): o id da conversa é por conta do Chatwoot; com a caixa a leitura não mistura a conversa de outra conta. */
+export async function referraisGuardados(conversa: number, caixa?: number): Promise<ReferralDoKapso[]> {
+  const l = await prisma.chatwootReguaDisparo.findMany({ where: { ...(caixa !== undefined ? { caixa } : {}), conversationId: conversa, regra: REGRA_KAPSO_REFERRAL }, select: { texto: true } }).catch(() => []);
   const saida: ReferralDoKapso[] = [];
   for (const x of l) {
     try {
