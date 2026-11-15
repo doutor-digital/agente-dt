@@ -13,6 +13,7 @@
  * `__ORIGEM_CW__` (e `__LOGO_DD__`, a marca da Doutor Digital) são trocados.
  */
 import { LOGO_DD_PNG } from './marca-dd.js';
+import { comContaNaPagina } from './conta-no-navegador.js';
 
 const PAGINA = String.raw`<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -189,9 +190,7 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
   function aviso(txt, erro){ var a = $('avisos'); a.textContent = ''; if (txt) a.appendChild(el('div', 'aviso' + (erro ? ' erro' : ''), txt)); }
 
   // ── servidor (com o login do Chatwoot de quem está usando) ──
-  // a conta do Chatwoot em que a pessoa está (?conta=N, posta pelo menu); o servidor confere se ela é membro dela
-  var CONTA_Q = (function(){ var c = new URLSearchParams(location.search).get('conta'); return /^[1-9][0-9]{0,9}$/.test(c || '') ? c : ''; })();
-  function comConta(path){ return CONTA_Q ? path + (path.indexOf('?') < 0 ? '?' : '&') + 'conta=' + CONTA_Q : path; }
+  /*__CONTA_JS__*/
   function cab(){ var h = { 'Content-Type': 'application/json' }; if (S) { h['X-CW-Token'] = S.token; h['X-CW-Client'] = S.client; h['X-CW-Uid'] = S.uid; } return h; }
   function pedirSessao(){ try { window.parent.postMessage({ event: 'funil:pede-sessao' }, CW); } catch (e) {} }
   async function api(method, path, body){
@@ -583,5 +582,5 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
 
 /** A página. `origemChatwoot` = a origem do Chatwoot (só ela fala com a página por postMessage). */
 export function paginaDosRobos(origemChatwoot: string): string {
-  return PAGINA.split('__ORIGEM_CW__').join(JSON.stringify(origemChatwoot)).split('__LOGO_DD__').join(LOGO_DD_PNG);
+  return comContaNaPagina(PAGINA.split('__ORIGEM_CW__').join(JSON.stringify(origemChatwoot)).split('__LOGO_DD__').join(LOGO_DD_PNG));
 }

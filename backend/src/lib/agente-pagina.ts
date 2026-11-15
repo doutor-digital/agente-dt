@@ -21,6 +21,7 @@
  * por `paginaDoAgente`; página servida sem trocar os dois quebra o script.
  */
 import { guiaDaEtapaLigado } from './chatwoot-guia-etapas.js';
+import { comContaNaPagina } from './conta-no-navegador.js';
 
 const PAGINA = String.raw`<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -378,9 +379,7 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
   function erroEm(box, msg){ box.textContent = ''; box.appendChild(el('div', 'aviso erro', msg)); }
 
   // ── servidor (com o login do Chatwoot de quem está usando) ──
-  // a conta do Chatwoot em que a pessoa está (?conta=N, posta pelo menu); o servidor confere se ela é membro dela
-  var CONTA_Q = (function(){ var c = new URLSearchParams(location.search).get('conta'); return /^[1-9][0-9]{0,9}$/.test(c || '') ? c : ''; })();
-  function comConta(path){ return CONTA_Q ? path + (path.indexOf('?') < 0 ? '?' : '&') + 'conta=' + CONTA_Q : path; }
+  /*__CONTA_JS__*/
   function cab(){ var h = { 'Content-Type': 'application/json' }; if (S) { h['X-CW-Token'] = S.token; h['X-CW-Client'] = S.client; h['X-CW-Uid'] = S.uid; } return h; }
   async function api(method, path, body){
     var r = await fetch(comConta(path), { method: method, headers: cab(), body: method === 'GET' ? undefined : JSON.stringify(body || {}) });
@@ -817,5 +816,5 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
 
 /** A página. `origemChatwoot` = a origem do Chatwoot (só ela fala com a página por postMessage). */
 export function paginaDoAgente(origemChatwoot: string, env: NodeJS.ProcessEnv = process.env): string {
-  return PAGINA.split('__ORIGEM_CW__').join(JSON.stringify(origemChatwoot)).split('__GUIA_LIGADO__').join(String(guiaDaEtapaLigado(env)));
+  return comContaNaPagina(PAGINA.split('__ORIGEM_CW__').join(JSON.stringify(origemChatwoot)).split('__GUIA_LIGADO__').join(String(guiaDaEtapaLigado(env))));
 }

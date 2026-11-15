@@ -18,8 +18,9 @@ import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { logger } from '../lib/logger.js';
 import { env } from '../lib/env.js';
-import { contaChatwootDoAmbiente, chamar, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
-import { MENSAGEM_SEM_CONTA, contextoDaRequisicao, ctxEhDoAmbiente, filtroDeCaixas } from '../lib/conta-da-requisicao.js';
+import { contaChatwootDoAmbiente, chamar, contextoDoAmbiente, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
+import { comContaNaPagina } from '../lib/conta-no-navegador.js';
+import { MENSAGEM_SEM_CONTA, contaPedida, contextoDaRequisicao, ctxEhDoAmbiente, filtroDeCaixas } from '../lib/conta-da-requisicao.js';
 import { createHash } from 'node:crypto';
 import { prisma } from '../lib/prisma.js';
 import { conversasDasPaginas, diaEmBelem, montarHoje } from '../lib/chatwoot-hoje.js';
@@ -90,20 +91,24 @@ function errou(ip: string): void {
 
 // Login do Chatwoot já conferido: hash da sessão → nome (5 min). Consequência aceita: quem sai do Chatwoot (ou é tirado da
 // conta) ainda vê o funil por até 5 min nesta aba.
-const sessoes = new Map<string, { nome: string; id: number | null; papel: string | null; email: string | null; ate: number }>();
+type PerfilDoChatwoot = { id?: unknown; name?: unknown; email?: unknown; accounts?: unknown };
+// O PERFIL da sessão (não «é membro da conta X»): o /profile é da pessoa, vale para todas as contas dela. A conta entra DEPOIS (`naConta`),
+// a cada pedido, sobre o perfil guardado — assim «é da conta 1» nunca vale para a conta 2.
+const sessoes = new Map<string, { perfil: PerfilDoChatwoot; ate: number }>();
 const SESSAO_VALE_MS = 5 * 60_000;
 // Teto GLOBAL de consultas ao /profile do Chatwoot (sessão ainda não conferida). Não é por ip: sem `trust proxy`, atrás do
 // Traefik, o ip é o mesmo para todo mundo. Sessão já conferida (no cache) nunca esbarra nele.
 const MAX_CONFERENCIAS_POR_MIN = 120;
 let conferencias = { n: 0, desde: 0 };
 
-type Conferencia = { nome: string; id: number | null; papel: string | null; email: string | null } | 'invalida' | 'sem-conta' | 'indisponivel' | 'excesso';
+type QuemEsta = { nome: string; id: number | null; papel: string | null; email: string | null };
+type Conferencia = QuemEsta | 'invalida' | 'sem-conta' | 'indisponivel' | 'excesso';
 
-async function quemEstaLogado(c: ContextoChatwoot, s: SessaoChatwoot): Promise<Conferencia> {
-  // a conta entra na chave: «é membro da conta 1» guardado NÃO vale para a conta 2
-  const k = createHash('sha256').update(`${c.conta!.conta}|${s.token}|${s.client}|${s.uid}`).digest('hex');
+/** O perfil do login no Chatwoot (independe da conta pedida), ou o motivo de não valer. */
+async function perfilDaSessao(c: ContextoChatwoot, s: SessaoChatwoot): Promise<PerfilDoChatwoot | Exclude<Conferencia, QuemEsta | 'sem-conta'>> {
+  const k = createHash('sha256').update(`${s.token}|${s.client}|${s.uid}`).digest('hex');
   const t = sessoes.get(k);
-  if (t && t.ate > Date.now()) return { nome: t.nome, id: t.id, papel: t.papel, email: t.email };
+  if (t && t.ate > Date.now()) return t.perfil;
   if (Date.now() - conferencias.desde > 60_000) conferencias = { n: 0, desde: Date.now() };
   if (++conferencias.n > MAX_CONFERENCIAS_POR_MIN) return 'excesso';
   let r: globalThis.Response;
@@ -118,17 +123,41 @@ async function quemEstaLogado(c: ContextoChatwoot, s: SessaoChatwoot): Promise<C
   // só "o Chatwoot recusou o login" é sessão inválida; queda, timeout e 5xx não são culpa de quem está usando
   if (r.status === 401 || r.status === 403) return 'invalida';
   if (!r.ok) return 'indisponivel';
-  const perfil = (await r.json().catch(() => null)) as { id?: unknown; name?: unknown; email?: unknown; accounts?: unknown } | null;
-  const nome = nomeSeTemConta(perfil, c.conta!.conta);
-  const id = Number(perfil?.id);
+  const perfil = (await r.json().catch(() => null)) as PerfilDoChatwoot | null;
+  if (!perfil || typeof perfil !== 'object') return 'indisponivel';
+  if (sessoes.size > 500) sessoes.clear();
+  sessoes.set(k, { perfil, ate: Date.now() + SESSAO_VALE_MS });
+  return perfil;
+}
+
+/** O perfil visto desta conta: quem é, o papel DELA nesta conta; 'sem-conta' se a pessoa não é membro dela. */
+function naConta(perfil: PerfilDoChatwoot, conta: number): QuemEsta | 'sem-conta' {
+  const nome = nomeSeTemConta(perfil, conta);
   // login válido, mas de quem não é desta conta: não é sessão vencida ("entre de novo" nunca resolveria)
   if (!nome) return 'sem-conta';
-  if (sessoes.size > 500) sessoes.clear();
-  const idOk = Number.isInteger(id) && id > 0 ? id : null;
-  const papel = papelNaConta(perfil, c.conta!.conta);
-  const email = emailDoPerfil(perfil);
-  sessoes.set(k, { nome, id: idOk, papel, email, ate: Date.now() + SESSAO_VALE_MS });
-  return { nome, id: idOk, papel, email };
+  const id = Number(perfil.id);
+  return { nome, id: Number.isInteger(id) && id > 0 ? id : null, papel: papelNaConta(perfil, conta), email: emailDoPerfil(perfil) };
+}
+
+/**
+ * Confere a sessão (login do Chatwoot) E a conta pedida, NESTA ordem: primeiro a credencial, que não depende da conta; só depois a conta.
+ * Conta que não existe e conta de que a pessoa não é membro dão a MESMA resposta (e sessão sem credencial válida dá a mesma resposta para
+ * qualquer `conta`): ninguém descobre quais contas são clínicas sem uma credencial válida.
+ */
+async function conferirSessao(req: Request, res: Response, sessao: SessaoChatwoot, statusInvalida: 401 | 403): Promise<{ ctx: ContextoChatwoot; quem: QuemEsta } | null> {
+  const base = contextoDoAmbiente();
+  const perfil = base ? await perfilDaSessao(base, sessao) : 'indisponivel';
+  if (typeof perfil === 'string') {
+    recusarSessao(res, perfil, statusInvalida);
+    return null;
+  }
+  const alvo = contextoDaRequisicao(req);
+  const quem = 'ctx' in alvo && alvo.ctx.conta ? naConta(perfil, alvo.ctx.conta.conta) : 'sem-conta';
+  if (typeof quem === 'string' || !('ctx' in alvo)) {
+    recusarSessao(res, 'sem-conta', statusInvalida);
+    return null;
+  }
+  return { ctx: alvo.ctx, quem };
 }
 
 /**
@@ -151,12 +180,15 @@ export interface Acesso {
 }
 
 async function autorizado(req: Request, res: Response): Promise<Acesso | null> {
-  const alvo = contextoDaRequisicao(req);
-  if (!('ctx' in alvo)) {
-    res.status(alvo.status).json({ error: alvo.status === 404 ? 'funil desligado (CRM não configurado)' : alvo.erro, ...(alvo.sessao ? { sessao: alvo.sessao } : {}) });
+  const desligado = contextoDaRequisicao({ query: {} });
+  if (!('ctx' in desligado)) {
+    res.status(desligado.status).json({ error: 'funil desligado (CRM não configurado)' });
     return null;
   }
-  const c = alvo.ctx;
+  if (contaPedida(req) === undefined) {
+    res.status(400).json({ error: 'conta inválida' });
+    return null;
+  }
   const chave = req.get('x-funil-chave');
   if (chave) {
     const ip = req.ip ?? '?';
@@ -164,12 +196,10 @@ async function autorizado(req: Request, res: Response): Promise<Acesso | null> {
       res.status(429).json({ error: 'muitas tentativas — aguarde 10 minutos' });
       return null;
     }
-    // o link avulso só abre a conta que tem token próprio (o global é o de Parauapebas)
-    if (!alvo.propria) {
-      res.status(403).json({ error: MENSAGEM_SEM_CONTA, sessao: 'sem-conta' });
-      return null;
-    }
-    if (chaveConfere(c.conta!.token, chave)) return { c, logado: null, logadoId: null, sessao: null };
+    // a chave abre SÓ a conta que tem token próprio (o global é o de Parauapebas). Conta que não existe, conta sem token próprio e chave errada
+    // são a MESMA resposta e todas contam como erro (o limite de tentativas vale para quem tenta adivinhar contas).
+    const alvo = contextoDaRequisicao(req);
+    if ('ctx' in alvo && alvo.propria && alvo.ctx.conta && chaveConfere(alvo.ctx.conta.token, chave)) return { c: alvo.ctx, logado: null, logadoId: null, sessao: null };
     errou(ip);
     res.status(403).json({ error: 'chave do funil inválida' });
     return null;
@@ -179,16 +209,15 @@ async function autorizado(req: Request, res: Response): Promise<Acesso | null> {
     res.status(403).json({ error: 'abra o funil pelo CRM' });
     return null;
   }
-  const r = await quemEstaLogado(c, sessao);
-  if (typeof r === 'object') return { c, logado: r.nome, logadoId: r.id, sessao, papel: r.papel, email: r.email };
-  recusarSessao(res, r, 403);
-  return null;
+  const r = await conferirSessao(req, res, sessao, 403);
+  if (!r) return null;
+  return { c: r.ctx, logado: r.quem.nome, logadoId: r.quem.id, sessao, papel: r.quem.papel, email: r.quem.email };
 }
 
 /** A resposta para uma sessão que não passou. O funil recusa login inválido com 403; a assistente, com 401. */
 function recusarSessao(res: Response, r: Exclude<Conferencia, object>, statusInvalida: 401 | 403): void {
   if (r === 'invalida') res.status(statusInvalida).json({ error: 'entre no CRM de novo (sessão expirada)', sessao: 'invalida' });
-  else if (r === 'sem-conta') res.status(403).json({ error: 'seu usuário do CRM não tem acesso a esta conta — peça para a Suzanne', sessao: 'sem-conta' });
+  else if (r === 'sem-conta') res.status(403).json({ error: MENSAGEM_SEM_CONTA, sessao: 'sem-conta' });
   else if (r === 'excesso') res.status(429).json({ error: 'muitos acessos agora — tente em 1 minuto' });
   else res.status(502).json({ error: 'não consegui falar com o CRM agora' });
 }
@@ -207,21 +236,23 @@ export interface Atendente {
 }
 
 export async function sessaoDaAtendente(req: Request, res: Response): Promise<Atendente | null> {
-  const alvo = contextoDaRequisicao(req);
-  if (!('ctx' in alvo)) {
-    res.status(alvo.status).json({ error: alvo.status === 404 ? 'assistente desligada (CRM não configurado)' : alvo.erro, ...(alvo.sessao ? { sessao: alvo.sessao } : {}) });
+  const desligado = contextoDaRequisicao({ query: {} });
+  if (!('ctx' in desligado)) {
+    res.status(desligado.status).json({ error: 'assistente desligada (CRM não configurado)' });
     return null;
   }
-  const c = alvo.ctx;
+  if (contaPedida(req) === undefined) {
+    res.status(400).json({ error: 'conta inválida' });
+    return null;
+  }
   const sessao = sessaoDosCabecalhos((n) => req.get(n));
   if (!sessao) {
     res.status(401).json({ error: 'abra a assistente pelo CRM (entre no CRM de novo)', sessao: 'invalida' });
     return null;
   }
-  const r = await quemEstaLogado(c, sessao);
-  if (typeof r === 'object') return { c, sessao, nome: r.nome, id: r.id, papel: r.papel };
-  recusarSessao(res, r, 401);
-  return null;
+  const r = await conferirSessao(req, res, sessao, 401);
+  if (!r) return null;
+  return { c: r.ctx, sessao, nome: r.quem.nome, id: r.quem.id, papel: r.quem.papel };
 }
 
 async function definicoes(a: Acesso): Promise<unknown[]> {
@@ -1075,10 +1106,12 @@ export function paginaFunilHandler(_req: Request, res: Response): void {
     return;
   }
   res.type('html').send(
-    PAGINA.replace('__ORIGEM_CW__', JSON.stringify(origem))
-      .split('__GUIA_LIGADO__').join(String(guiaDaEtapaLigado()))
-      .split('/*__TELAS_CSS__*/').join(TELAS_CSS)
-      .split('/*__TELAS_JS__*/').join(TELAS_JS),
+    comContaNaPagina(
+      PAGINA.replace('__ORIGEM_CW__', JSON.stringify(origem))
+        .split('__GUIA_LIGADO__').join(String(guiaDaEtapaLigado()))
+        .split('/*__TELAS_CSS__*/').join(TELAS_CSS)
+        .split('/*__TELAS_JS__*/').join(TELAS_JS),
+    ),
   );
 }
 
@@ -1348,7 +1381,8 @@ body{background:#f4f6f9}
 <section class="lead" id="lead" hidden></section>
 <script>
 (function(){
-  var q=new URLSearchParams(location.search), K=q.get('k')||'', CONTA=/^[1-9][0-9]{0,9}$/.test(q.get('conta')||'')?q.get('conta'):'', MENU=q.get('menu')==='1', TELA=['hoje','oport','mkt','gestor'].indexOf(q.get('tela'))>=0?q.get('tela'):'', ORIGEM_CW=__ORIGEM_CW__, DENTRO=window.parent!==window;
+  var q=new URLSearchParams(location.search), K=q.get('k')||'', MENU=q.get('menu')==='1', TELA=['hoje','oport','mkt','gestor'].indexOf(q.get('tela'))>=0?q.get('tela'):'', ORIGEM_CW=__ORIGEM_CW__, DENTRO=window.parent!==window;
+  /*__CONTA_JS__*/
   var S=null, iniciado=false, timer=null, morta=null, dados=null, caixas=[], aberta=null, ficha=null, filtro='', recolhidas={}, atualizadoEm=0, arrastando=null, formNaColuna=null, aba='principal', modo='mensagem', ctxConversa=null;
   var CORES=['#64748b','#1f93ff','#d97706','#7c3aed','#4f46e5','#16a34a','#15803d','#0d9488','#db2777','#dc2626','#94a3b8'];
   var AV=[['#1f73d6','#e6f1ff'],['#c2410c','#fff0e6'],['#15803d','#e8f7ee'],['#7c3aed','#f1ebff'],['#be185d','#fdebf3'],['#0f766e','#e6f6f4'],['#a16207','#fdf6e3'],['#4338ca','#eceeff']];
@@ -1359,7 +1393,7 @@ body{background:#f4f6f9}
   function cabecalhos(){ var h={'Content-Type':'application/json'}; if(S){ h['X-CW-Token']=S.token; h['X-CW-Client']=S.client; h['X-CW-Uid']=S.uid; } else if(K) h['X-Funil-Chave']=K; return h; }
   function pedirSessao(){ if(DENTRO){ try{ window.parent.postMessage({event:'funil:pede-sessao'},ORIGEM_CW); }catch(e){} } }
   async function api(m,p,b){
-    var r=await fetch('/api/public/funil/'+p+(CONTA?(p.indexOf('?')<0?'?':'&')+'conta='+CONTA:''),{method:m,headers:cabecalhos(),body:b?JSON.stringify(b):undefined});
+    var r=await fetch(comConta('/api/public/funil/'+p),{method:m,headers:cabecalhos(),body:b?JSON.stringify(b):undefined});
     var j=await r.json().catch(function(){ return {}; });
     if(r.status===403&&S&&j.sessao==='invalida'){ morta=S.token; S=null; parar(); iniciado=false; pedirSessao(); }
     if(r.status===403&&S&&j.sessao==='sem-conta') parar();

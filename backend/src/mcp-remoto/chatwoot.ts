@@ -148,18 +148,29 @@ export function contextoDaUnidade(ctx: ContextoChatwoot, slug: string, e: NodeJS
   return conta ? contextoDaContaChatwoot(ctx, conta) : null;
 }
 
+/** A unidade tem o token PRÓPRIO configurado (`CHATWOOT_API_TOKEN_<SUFIXO>`), em vez de cair no global? */
+export function temTokenProprio(slug: string, e: NodeJS.ProcessEnv = process.env): boolean {
+  const sufixo = configDaUnidade(slug)?.envSufixo;
+  return !!sufixo && !!e[`CHATWOOT_API_TOKEN_${sufixo}`]?.trim();
+}
+
 /**
- * A unidade que «dona» da conta `contaId` e o contexto dela: a primeira (ordem alfabética do slug) cujo token está disponível — o
- * `CHATWOOT_API_TOKEN_<SUFIXO>` dela ou, sem ele, o global (por isso, na prática, é a primeira). A conta do ambiente devolve o próprio `ctx`
- * (sem unidade). `null` = nenhuma unidade configurada usa essa conta: RECUSAR.
+ * A unidade «dona» da conta `contaId` e o contexto dela. Entre as unidades da conta (ordem alfabética do slug) vale a primeira COM token próprio;
+ * se nenhuma tem, a primeira com o token global como reserva (`propria: false`). Assim o resultado não depende de qual unidade vem primeiro, e
+ * `propria` diz se a conta tem credencial só dela. A conta do ambiente devolve o próprio `ctx` (sem unidade, `propria: true`). `null` = nenhuma
+ * unidade configurada usa essa conta: RECUSAR.
  */
-export function donaDaConta(ctx: ContextoChatwoot, contaId: number, e: NodeJS.ProcessEnv = process.env): { slug: string | null; ctx: ContextoChatwoot } | null {
-  if (ctx.conta && ehContaDoAmbiente(contaId, e) && ctx.conta.conta === contaId) return { slug: null, ctx };
+export function donaDaConta(ctx: ContextoChatwoot, contaId: number, e: NodeJS.ProcessEnv = process.env): { slug: string | null; ctx: ContextoChatwoot; propria: boolean } | null {
+  if (ctx.conta && ehContaDoAmbiente(contaId, e) && ctx.conta.conta === contaId) return { slug: null, ctx, propria: true };
+  let reserva: { slug: string; ctx: ContextoChatwoot; propria: boolean } | null = null;
   for (const slug of unidadesDaConta(contaId)) {
     const c = contextoDaUnidade(ctx, slug, e);
-    if (c) return { slug, ctx: c };
+    if (!c) continue;
+    const propria = temTokenProprio(slug, e);
+    if (propria) return { slug, ctx: c, propria };
+    reserva ??= { slug, ctx: c, propria };
   }
-  return null;
+  return reserva;
 }
 
 /** O contexto de uma CONTA pelo id (o do evento que chegou). `null` = nenhuma unidade configurada usa essa conta (RECUSAR). */

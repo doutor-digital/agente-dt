@@ -22,7 +22,7 @@ import type { Unit } from '@prisma/client';
 import { logger } from './logger.js';
 import { prisma } from './prisma.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
-import { chamar, contaChatwootDoAmbiente, contasDoChatwoot, contextoDoAmbiente, criarContextoChatwoot, donaDaConta, ehContaDoAmbiente, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
+import { chamar, contaChatwootDoAmbiente, contasDoChatwoot, contextoDoAmbiente, donaDaConta, ehContaDoAmbiente, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 import { configDaUnidade, contaDaCaixa, unidadeDaCaixa } from './chatwoot-unidades.js';
 import { CAIXAS_REGUA } from './chatwoot-regua.js';
 import { aplicarEtiqueta, eventoDeEtiqueta, portasDaPonte, type PortasDaPonte } from './chatwoot-etiquetas.js';
