@@ -9,7 +9,7 @@
  */
 import type { Request, Response } from 'express';
 import { logger } from '../lib/logger.js';
-import { chamar, contaChatwootDaUnidade, contaChatwootDoAmbiente, contextoDaUnidade, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
+import { chamar, contaChatwootDaUnidade, contaChatwootDoAmbiente, contextoDaUnidade, contextoDoAmbiente, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 import { CAIXAS_CLOUD } from '../lib/chatwoot-regua.js';
 import { TEXTOS_PARAU } from '../lib/chatwoot-regua-textos.js';
 import { chatDoChatwoot } from '../lib/chatwoot-regua-worker.js';
@@ -21,14 +21,10 @@ import { bancoDosRobos, caixasDaUnidade, enviadosDaUnidade, mudarRobo, podeMexer
 
 const slugDe = (v: unknown): string => (typeof v === 'string' ? v.trim().slice(0, 80) : '');
 
-let contexto: ContextoChatwoot | null | undefined;
 /** O contexto da CONTA da unidade (cada clínica tem a sua): Parauapebas = o do ambiente, como sempre. null = unidade sem conta/token válidos (não chama o Chatwoot). */
 function ctx(slug: string): ContextoChatwoot | null {
-  if (contexto === undefined) {
-    const conta = contaChatwootDoAmbiente();
-    contexto = conta ? criarContextoChatwoot(conta) : null;
-  }
-  return contexto ? contextoDaUnidade(contexto, slug) : null;
+  const base = contextoDoAmbiente();
+  return base ? contextoDaUnidade(base, slug) : null;
 }
 
 /** A página (iframe do menu do Chatwoot). */

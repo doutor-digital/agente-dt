@@ -123,19 +123,21 @@ const BOTAO_JS = String.raw`(function(){
     if (!s || !emConta()) return;
     if (uidVisto !== null && uidVisto !== s.uid) { tirar(); proxima = 0; }
     // trocou de clínica (outra conta) na mesma aba: o painel é refeito com a conta nova (a conversa 5 de uma conta não é a da outra)
-    if (contaVista !== null && contaVista !== contaAtual()) { tirar(); proxima = 0; ligada = false; AV.conversa = null; AV.mapa = {}; AV.qtd = -1; AV.proxima = 0; }
+    if (contaVista !== null && contaVista !== contaAtual()) { tirar(); proxima = 0; ligada = false; consultando = false; AV.conversa = null; AV.mapa = {}; AV.qtd = -1; AV.proxima = 0; AV.buscando = false; }
     contaVista = contaAtual();
     uidVisto = s.uid;
     if (consultando || Date.now() < proxima) return;
     consultando = true;
+    var contaDaConsulta = contaAtual();
     fetch(AGENTE + '/api/public/assistente/estado' + pConta('?'), { headers: { 'X-CW-Token': s.token, 'X-CW-Client': s.client, 'X-CW-Uid': s.uid } })
       .then(function(r){ if (!r.ok) throw new Error('estado ' + r.status); return r.json(); })
       .then(function(j){
+        if (contaDaConsulta !== contaAtual()) return; // a resposta é da conta de antes da troca: não vale para esta
         ligada = !!(j && j.ligada); proxima = Date.now() + 5 * 60000;
         if (ligada && !botao) criarBotao(); else if (!ligada && botao) tirar();
       })
-      .catch(function(){ proxima = Date.now() + 60000; })
-      .then(function(){ consultando = false; });
+      .catch(function(){ if (contaDaConsulta === contaAtual()) proxima = Date.now() + 60000; })
+      .then(function(){ if (contaDaConsulta === contaAtual()) consultando = false; });
   }
 
   // ── 👍/👎 no balão das respostas da Sofia (13/11) ─────────────────────────────────────────────────────────────
@@ -172,10 +174,11 @@ const BOTAO_JS = String.raw`(function(){
   function lerAvaliacoes(c){
     var s = sessao(); if (!s || AV.buscando) return;
     AV.buscando = true;
+    var contaDaBusca = contaAtual();
     fetch(AGENTE + '/api/public/assistente/respostas?conversa=' + c + pConta('&'), { headers: { 'X-CW-Token': s.token, 'X-CW-Client': s.client, 'X-CW-Uid': s.uid } })
       .then(function(r){ if (!r.ok) throw new Error('respostas ' + r.status); return r.json(); })
       .then(function(j){
-        if (AV.conversa !== c) return;
+        if (AV.conversa !== c || contaDaBusca !== contaAtual()) return;
         var m = {}; (j.respostas || []).forEach(function(x){ m[String(x.id)] = x; }); AV.mapa = m;
         Array.prototype.forEach.call(document.querySelectorAll('[data-dd-aval]'), function(b){ var x = m[b.getAttribute('data-dd-aval')]; if (x) pintarAval(b, x); });
       })

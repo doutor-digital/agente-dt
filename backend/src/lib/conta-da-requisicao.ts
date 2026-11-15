@@ -39,7 +39,8 @@ export function contextoDaRequisicao(req: Pick<Request, 'query'>, e: NodeJS.Proc
   if (pedida === undefined) return { status: 400, erro: 'conta inválida' };
   const recusa: ContextoDaRequisicao = { status: 403, erro: MENSAGEM_SEM_CONTA, sessao: 'sem-conta' };
   if (pedida === null) return { ctx: amb, propria: true };
-  if (ehContaDoAmbiente(pedida, e)) return { ctx: amb, propria: true };
+  // a conta do ambiente pedida pelo número é a mesma coisa que não pedir (o link e a chave não mudam de comportamento conforme a página manda ou não)
+  if (pedida === amb.conta.conta) return { ctx: amb, propria: true };
   if (!contasExplicitas().includes(pedida)) return recusa; // nenhuma unidade usa essa conta
   const ctx = contextoDaContaPorId(amb, pedida, e);
   if (!ctx?.conta) return recusa; // falta o token da conta

@@ -58,7 +58,8 @@ function chatwootDeMentira() {
     }
     const conta = /\/accounts\/(\d+)\//.exec(u.pathname)?.[1];
     const marca = conta === '2' ? 'SEGREDO-DA-CONTA-2' : 'dado-da-conta-1';
-    if (/\/inboxes$/.test(u.pathname)) return resp(200, { payload: [{ id: conta === '2' ? 20 : 3, name: marca }] });
+    // a conta 2 «enxerga» também uma caixa de Parauapebas (3): configuração torta — a tela não pode listar a unidade dela
+    if (/\/inboxes$/.test(u.pathname)) return resp(200, { payload: conta === '2' ? [{ id: 20, name: marca }, { id: 3, name: marca }] : [{ id: 3, name: marca }] });
     if (/\/conversations$/.test(u.pathname)) {
       const agora = Math.floor(Date.now() / 1000);
       const c = { id: 5, inbox_id: conta === '2' ? 20 : 3, status: 'open', labels: [], custom_attributes: { etapa: 'Novo lead' }, meta: { sender: { name: marca } }, timestamp: agora, last_activity_at: agora, created_at: agora - 60, unread_count: 0 };
@@ -322,4 +323,22 @@ test('IDENTIDADE do filtro: sem nenhuma clínica de conta própria, a conta do a
   const c = R.contextoDaRequisicao({ query: {} } as never);
   assert.ok('ctx' in c);
   if ('ctx' in c) assert.deepEqual(R.filtroDeCaixas(c.ctx), {});
+});
+
+test('«Testar a IA»: a lista de unidades da conta 2 só traz unidades que moram na conta 2 (mesmo que ela liste uma caixa de outra)', async () => {
+  preparar();
+  const pedidos: unknown[] = [];
+  const original = Object.getOwnPropertyDescriptor(prisma, 'unit');
+  Object.defineProperty(prisma, 'unit', { value: { findMany: async (o: { where: { slug: { in: string[] } } }) => (pedidos.push(o.where.slug.in), o.where.slug.in.map((slug) => ({ slug, name: slug }))) }, configurable: true });
+  try {
+    const { url, init } = montar({ metodo: 'get', caminho: '/public/testar-ia/unidades' }, 'conta=2');
+    (init.headers as Record<string, string>)['X-CW-Token'] = 'tok-as-duas';
+    const res = await fetchReal(url, init);
+    assert.equal(res.status, 200);
+    assert.deepEqual(pedidos, [['clinica-demonstracao']]);
+    assert.deepEqual(((await res.json()) as { unidades: Array<{ slug: string }> }).unidades.map((u) => u.slug), ['clinica-demonstracao']);
+  } finally {
+    if (original) Object.defineProperty(prisma, 'unit', original);
+    else delete (prisma as unknown as Record<string, unknown>).unit;
+  }
 });

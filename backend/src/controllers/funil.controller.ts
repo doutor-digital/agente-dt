@@ -1737,7 +1737,7 @@ const MENU_JS = String.raw`(function(){
   // trocou de clínica (outra conta do Chatwoot) com a tela aberta: fecha — a conversa 5 de uma conta não é a da outra
   var contaAberta = null;
   function contaDaUrlDoMenu(){ var m = location.pathname.match(/\/accounts\/(\d+)/); return m ? m[1] : null; }
-  function ajustar(){ if (cam && contaAberta !== null && contaAberta !== contaDaUrlDoMenu()) { fechar(); return; } if (cam) cam.style.left = margem() + 'px'; }
+  function ajustar(){ var ca = contaDaUrlDoMenu(); if (cam && contaAberta !== null && ca !== null && contaAberta !== ca) { contaAberta = null; fechar(); return; } if (cam) cam.style.left = margem() + 'px'; }
   // As telas do menu, na ordem: Contatos → Hoje (com Oportunidades, Marketing e Gestor dentro) → Funil. As marcadas «gestao» só
   // aparecem para administrador da conta ou gestor da lista (e o servidor confere de novo a cada pedido de dados).
   // Oportunidades, Marketing e Gestor ficam DENTRO de Hoje, como submenu (pedido do João, 13/11); o Funil vem depois do grupo
@@ -1948,12 +1948,12 @@ const MENU_JS = String.raw`(function(){
   // Menu enxuto (decisão do João, 12/11/2026): "Campanhas" some para quem não é administrador da conta (as meninas).
   // O papel vem do perfil do próprio Chatwoot (mesma origem, sessão do cookie); sem resposta, nada some.
   // O mesmo perfil decide Marketing e Gestor: administrador, ou e-mail na lista de gestores do servidor.
-  var papel = null, pedindoPapel = false, contaDoPapel = null, ocultos = [];
+  var papel = null, pedindoPapel = false, contaDoPapel = null, ocultos = [], geracaoDoPapel = 0;
   // trocou de clínica (outra conta) na mesma aba: o papel e a gestão eram da conta anterior — esquece e devolve ao menu o que foi escondido
   function conferirConta(){
     var c = contaDaUrlDoMenu();
     if (contaDoPapel === c) return;
-    contaDoPapel = c; papel = null; gestao = null; pedindoPapel = false; reaberto = false;
+    contaDoPapel = c; papel = null; gestao = null; pedindoPapel = false; reaberto = false; geracaoDoPapel++;
     ocultos.forEach(function(el){ el.style.display = ''; }); ocultos = [];
   }
   // Administrador da conta vê. Os demais: o servidor diz se o e-mail está na lista de gestores (a lista nunca vai neste arquivo, que é público).
@@ -1972,16 +1972,17 @@ const MENU_JS = String.raw`(function(){
     var s = sessao(), conta = location.pathname.match(/\/app\/accounts\/(\d+)/);
     if (!s || !conta) return;
     pedindoPapel = true;
+    var g = geracaoDoPapel; // respostas de antes da troca de conta não valem
     fetch('/api/v1/profile', { headers: { 'access-token': s.token, client: s.client, uid: s.uid } })
       .then(function(r){ return r.ok ? r.json() : null; })
       .then(function(p){
         var a = p && Array.isArray(p.accounts) ? p.accounts.filter(function(x){ return String(x.id) === conta[1]; })[0] : null;
-        if (!(a && a.role) || contaDaUrlDoMenu() !== conta[1]) return; // trocou de conta enquanto a resposta vinha: não vale
+        if (!(a && a.role) || g !== geracaoDoPapel) return; // trocou de conta enquanto a resposta vinha: não vale
         papel = a.role; enxugar();
-        return decidirGestao(p).then(function(ok){ gestao = ok; if (por()) { reabrir(); ajustar(); } });
+        return decidirGestao(p).then(function(ok){ if (g !== geracaoDoPapel) return; gestao = ok; if (por()) { reabrir(); ajustar(); } });
       })
       .catch(function(){})
-      .then(function(){ pedindoPapel = false; });
+      .then(function(){ if (g === geracaoDoPapel) pedindoPapel = false; });
   }
   function enxugar(){
     conferirConta();

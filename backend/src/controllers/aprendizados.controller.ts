@@ -441,7 +441,7 @@ export async function testarIaUnidadesHandler(req: Request, res: Response): Prom
   const a = await sessaoDaAtendente(req, res);
   if (!a) return;
   try {
-    const slugs = [...new Set((await leituraComLogin(a.c, a.sessao).caixas()).map((cx) => CAIXAS_REGUA[cx]).filter((x): x is string => !!x))];
+    const slugs = [...new Set((await leituraComLogin(a.c, a.sessao).caixas()).map((cx) => CAIXAS_REGUA[cx]).filter((x): x is string => !!x && unidadeEDaConta(x, a.c)))];
     const units = slugs.length ? await prisma.unit.findMany({ where: { slug: { in: slugs }, isActive: true }, select: { slug: true, name: true } }) : [];
     res.json({ eu: a.nome, unidades: units.map((u) => ({ slug: u.slug, nome: u.name })) });
   } catch (e) {
@@ -455,7 +455,7 @@ export async function testarIaPausadasHandler(req: Request, res: Response): Prom
   const a = await sessaoDaAtendente(req, res);
   if (!a) return;
   try {
-    const caixas = (await leituraComLogin(a.c, a.sessao).caixas()).filter((cx) => CAIXAS_REGUA[cx]);
+    const caixas = (await leituraComLogin(a.c, a.sessao).caixas()).filter((cx) => CAIXAS_REGUA[cx] && unidadeEDaConta(CAIXAS_REGUA[cx]!, a.c));
     const lista: Array<{ id: number; nome: string; por: string | null; em: string | null; atendente: string | null }> = [];
     for (const cx of caixas) {
       for (let pagina = 1; pagina <= 8; pagina++) {
