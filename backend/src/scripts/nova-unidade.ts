@@ -38,6 +38,12 @@ const RAIZ_DO_REPO = resolve(AQUI, '../../..');
 const CAMINHO_SCHEMA = join(RAIZ_DO_REPO, 'ops/kit-unidade/questionario.schema.json');
 const CAMINHO_MOLDE = join(RAIZ_DO_REPO, 'ops/kit-unidade/molde-sofia/bloco-conversa.md');
 
+/** A lista EFETIVA dos administradores da Doutor Digital: KIT_ADMINS_DD (csv) ou o padrão. */
+function adminsDDEfetivos(): string[] {
+  const v = process.env.KIT_ADMINS_DD?.trim();
+  return v ? v.split(',').map((m) => m.trim()).filter(Boolean) : ADMINS_DD_PADRAO;
+}
+
 /** O endereço do agente (de onde o Chatwoot da clínica chama): a origem de MCP_URL_PUBLICA, ou o padrão. */
 function urlDoAgente(): string {
   try {
@@ -192,7 +198,7 @@ async function portasExternas(): Promise<PortasExternas> {
     abrirConta: (conta, token) => contaHttp(url, conta, token),
     referencia: ambiente ? contaHttpSoLeitura(ambiente.url, ambiente.conta, ambiente.token) : null,
     contaDoAmbiente: ambiente?.conta ?? null,
-    adminsDD: (process.env.KIT_ADMINS_DD?.trim() ? process.env.KIT_ADMINS_DD.split(',').map((m) => m.trim()).filter(Boolean) : ADMINS_DD_PADRAO),
+    adminsDD: adminsDDEfetivos(),
     kapso: kapso ? kapsoHttp(kapso) : null,
     segredos: segredosEmArquivo(PASTA_DO_COFRE),
     urlDoAgente: agente,
@@ -224,7 +230,7 @@ async function main(): Promise<void> {
   console.log('');
   const estado: EstadoAtual = flags.has('--offline') ? {} : await lerEstado(q);
   const molde = lerMolde();
-  const plano = montarPlano(q, estado, { molde, sobrescrever: flags.has('--sobrescrever') });
+  const plano = montarPlano(q, estado, { molde, sobrescrever: flags.has('--sobrescrever'), adminsDD: adminsDDEfetivos() });
   console.log(textoDoPlano(plano));
   if (!flags.has('--aplicar')) {
     console.log('\n(SECO: nada foi gravado. Para executar: --aplicar)');

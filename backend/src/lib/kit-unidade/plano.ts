@@ -112,6 +112,8 @@ function configAEscrever(hoje: NonNullable<EstadoAtual['banco']>['configChatwoot
 export interface OpcoesDoPlano {
   /** texto do molde da Sofia (ops/kit-unidade/molde-sofia/bloco-conversa.md); null = não achei o arquivo */
   molde: string | null;
+  /** a lista EFETIVA dos administradores da Doutor Digital (KIT_ADMINS_DD ou o padrão), para o plano mostrar quem vai entrar; o questionário (`chatwoot.admins_dd`) vence */
+  adminsDD?: string[];
   /** `--sobrescrever`: troca também o que já está preenchido e deixa tocar numa unidade ATIVA */
   sobrescrever?: boolean;
 }
@@ -178,8 +180,8 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
     titulo: `Conta própria da clínica no Chatwoot (API de plataforma) e o usuário conector dela`,
     acao: !b ? 'criar' : contaId !== null && temToken ? 'nada' : contaId === null && (!estado.plataforma || b.caixasRegistradas.length > 0) ? 'bloqueado' : 'criar',
     itens: contaId !== null
-      ? [`conta ${contaId} já gravada em unit_chatwoot.conta_id`, temToken ? `${nomeToken} já está no cofre/ambiente` : `${nomeToken} NÃO está no cofre/ambiente: cria outro usuário conector (precisa do Platform App)`, `administradores da Doutor Digital: ${(q.chatwoot.admins_dd ?? ['KIT_ADMINS_DD (padrão: a Suzanne)']).join(', ')} — vai pôr os que ainda não estão na conta (pelo id na conta de referência; sem permissão sobre usuário)`]
-      : [`criar a conta «${q.unidade.nome}»`, `pôr os administradores da Doutor Digital na conta nova: ${(q.chatwoot.admins_dd ?? ['KIT_ADMINS_DD (padrão: a Suzanne)']).join(', ')}`, `usuário conector administrador (${`conector+${slug}@…`}); o token dele vai para o cofre como ${nomeToken} (nunca impresso)`, 'o id da conta é gravado em unit_chatwoot.conta_id NA HORA (uma queda não deixa conta órfã)'],
+      ? [`conta ${contaId} já gravada em unit_chatwoot.conta_id`, temToken ? `${nomeToken} já está no cofre/ambiente` : `${nomeToken} NÃO está no cofre/ambiente: cria outro usuário conector (precisa do Platform App)`, `administradores da Doutor Digital: ${(q.chatwoot.admins_dd ?? opcoes.adminsDD ?? ['KIT_ADMINS_DD (padrão: a Suzanne)']).join(', ')} — vai pôr os que ainda não estão na conta (pelo id na conta de referência; sem permissão sobre usuário)`]
+      : [`criar a conta «${q.unidade.nome}»`, `pôr os administradores da Doutor Digital na conta nova: ${(q.chatwoot.admins_dd ?? opcoes.adminsDD ?? ['KIT_ADMINS_DD (padrão: a Suzanne)']).join(', ')}`, `usuário conector administrador (${`conector+${slug}@…`}); o token dele vai para o cofre como ${nomeToken} (nunca impresso)`, 'o id da conta é gravado em unit_chatwoot.conta_id NA HORA (uma queda não deixa conta órfã)'],
     execucao: 'sim',
     avisos: [
       ...(b ? [] : [NAO_CONSULTADO]),

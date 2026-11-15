@@ -9,7 +9,7 @@ Você monta a **clínica nova no CRM** (uma conta própria no Chatwoot por clín
 
 ## Regras que não mudam
 - **Segredo nunca entra no questionário nem na conversa.** Onde há token, pergunte o **nome da variável** (`META_ADS_TOKEN_<SUFIXO>`), nunca o valor. Se a pessoa colar um token, não repita: peça para apagar e siga.
-- **Questionário de clínica REAL tem dado pessoal** (e-mail das atendentes, chave Pix, telefone) e **NÃO vai para o GitHub**: grave em `ops/kit-unidade/unidades/privado/<slug>.yaml` (pasta no `.gitignore`; `mkdir -p` se não existir) e NUNCA em `unidades/<slug>.yaml`. Confirme com `git check-ignore` que o arquivo está ignorado e não faça `git add` dele. Só a demonstração (`@example.com`, sem dado de verdade) fica versionada em `unidades/`.
+- **Questionário de clínica REAL tem dado pessoal** (e-mail das atendentes, chave Pix, telefone) e **NÃO vai para o GitHub**: grave em **`~/Kommo-Integracao/_replicacao/kit-unidade/privado/<slug>.yaml`** — um caminho FIXO **fora do repositório** (a sessão trabalha num worktree descartável: dentro do checkout a única cópia sumiria; fora, ela nem passa pelo git). Crie a pasta com `mkdir -p -m 700 ~/Kommo-Integracao/_replicacao/kit-unidade/privado` e o arquivo com modo 600 (`chmod 600`); o `levar-kit-para-vps.sh --questionario` recusa pasta/arquivo mais abertos. NUNCA em `unidades/<slug>.yaml` nem dentro do repositório (se o slug existir nos dois lugares o kit recusa). Só a demonstração (`@example.com`, sem dado de verdade) fica versionada em `unidades/`.
 - **Não rode `--aplicar`.** Você roda só o seco (`--offline`, sem tocar em banco nem Chatwoot).
 - **Não invente dado de clínica.** Endereço, link do mapa, preços e horários viram frase dita ao paciente e texto de modelo aprovado na Meta. Pergunte; se a pessoa não sabe, anote como pendência (não preencha "de exemplo" numa clínica real).
 - Demonstração: `whatsapp.modo: demonstracao` (sem número, sem WABA; modelos da Meta em seco; caixa do tipo API) e e-mails `@example.com`. A «Clínica Demonstração» já existe em `ops/kit-unidade/unidades/clinica-demonstracao.yaml` (slug `clinica-demonstracao`, subdomínio `demo`).
@@ -29,10 +29,10 @@ Você monta a **clínica nova no CRM** (uma conta própria no Chatwoot por clín
 12. **Sofia**: nome da IA e tom (`friendly` padrão).
 
 ## O que você produz
-1. O questionário: clínica real → `ops/kit-unidade/unidades/privado/<slug>.yaml` (fora do git); demonstração → `ops/kit-unidade/unidades/<slug>.yaml`. Forma: `ops/kit-unidade/unidades/clinica-demonstracao.yaml` / `ops/kit-unidade/questionario.exemplo.yaml`.
+1. O questionário: clínica real → `~/Kommo-Integracao/_replicacao/kit-unidade/privado/<slug>.yaml` (fora do repositório); demonstração → `ops/kit-unidade/unidades/<slug>.yaml`. Forma: `ops/kit-unidade/unidades/clinica-demonstracao.yaml` / `ops/kit-unidade/questionario.exemplo.yaml`.
 2. `ops/kit-unidade/unidades/<slug>-joao.sh` — uma linha: `exec bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../nova-unidade-joao.sh" <slug> "$@"` (copie `clinica-demonstracao-joao.sh` e troque o slug; `chmod +x`).
 3. **Confira em seco**, de dentro de `backend/`:
-   `pnpm exec tsx src/scripts/nova-unidade.ts ../ops/kit-unidade/unidades/privado/<slug>.yaml --offline`   (demonstração: `…/unidades/<slug>.yaml`)
+   `pnpm exec tsx src/scripts/nova-unidade.ts $HOME/Kommo-Integracao/_replicacao/kit-unidade/privado/<slug>.yaml --offline`   (demonstração: `…/unidades/<slug>.yaml`)
    Se o questionário for inválido, corrija com a pessoa (as mensagens dizem o campo). Mostre o plano **resumido**: o que cria em cada sistema.
 
 ## O que você entrega no fim (curto)

@@ -242,3 +242,16 @@ test('ids em dígitos sem aspas no YAML valem (viram texto), de qualquer tamanho
     if (r.ok) assert.equal(r.q.whatsapp.kapso_phone_number_id, id);
   }
 });
+
+test('o plano seco mostra a lista EFETIVA dos administradores da Doutor Digital (conta nova e conta já existente); o questionário vence a lista do ambiente', () => {
+  const qq = q();
+  const nova = montarPlano(qq, {}, { molde: MOLDE, adminsDD: ['suzanne.mychelly1@gmail.com', 'joao@dd.test'] });
+  assert.ok(passo(nova, 'conta').itens.some((i) => /pôr os administradores da Doutor Digital na conta nova: suzanne\.mychelly1@gmail\.com, joao@dd\.test/.test(i)));
+  const existente = montarPlano(qq, estadoCompleto(qq), { molde: MOLDE, adminsDD: ['suzanne.mychelly1@gmail.com'] });
+  assert.equal(passo(existente, 'conta').acao, 'nada');
+  assert.ok(passo(existente, 'conta').itens.some((i) => /administradores da Doutor Digital: suzanne\.mychelly1@gmail\.com — vai pôr os que ainda não estão na conta/.test(i)));
+  const doQuestionario = montarPlano(q((o) => (o.chatwoot.admins_dd = ['so-esta@dd.test'])), {}, { molde: MOLDE, adminsDD: ['suzanne.mychelly1@gmail.com'] });
+  assert.ok(passo(doQuestionario, 'conta').itens.some((i) => i.includes('so-esta@dd.test') && !i.includes('suzanne')));
+  const semInfo = montarPlano(qq, {}, { molde: MOLDE });
+  assert.ok(passo(semInfo, 'conta').itens.some((i) => /KIT_ADMINS_DD \(padrão: a Suzanne\)/.test(i)));
+});

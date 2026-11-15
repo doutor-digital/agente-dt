@@ -16,15 +16,18 @@
 # Variáveis: VPS (padrão root@89.116.214.130), CHAVE_SSH (padrão ~/.ssh/doutordigital_vps), DESTINO (padrão /root/kit), REF (padrão origin/main).
 # Nada de segredo passa por aqui: o kit são scripts, molde da Sofia e questionários.
 #
-# QUESTIONÁRIO DE CLÍNICA REAL (e-mail das atendentes, chave Pix, telefone = dado pessoal) NÃO está no GitHub: fica em ops/kit-unidade/unidades/privado/<slug>.yaml na SUA máquina
-# (pasta no .gitignore). `--questionario <slug>` manda SÓ esse arquivo para DESTINO/ops/kit-unidade/unidades/privado/ na VPS, modo 600 (não troca a pasta do kit). A troca da
-# pasta do kit preserva o que já está em unidades/privado/ na VPS.
+# QUESTIONÁRIO DE CLÍNICA REAL (e-mail das atendentes, chave Pix, telefone = dado pessoal) NÃO passa pelo git: fica num caminho FIXO FORA do repositório, na SUA máquina:
+#   $KIT_PRIVADO_DIR/<slug>.yaml   (padrão KIT_PRIVADO_DIR=~/Kommo-Integracao/_replicacao/kit-unidade/privado; pasta 700, arquivo 600)
+# (a sessão do agente trabalha num worktree descartável: guardar dentro do checkout perderia a única cópia). `--questionario <slug>` manda SÓ esse arquivo para
+# DESTINO/ops/kit-unidade/unidades/privado/ na VPS, modo 600 (não troca a pasta do kit). A troca da pasta do kit preserva o que já está em unidades/privado/ na VPS
+# (e recupera o privado/ de um /root/kit/.chegando.* deixado por uma troca anterior que caiu no meio). O .gitignore de unidades/privado/ é só rede de segurança.
 set -euo pipefail
 
 VPS="${VPS:-root@89.116.214.130}"
 CHAVE="${CHAVE_SSH:-$HOME/.ssh/doutordigital_vps}"
 DESTINO="${DESTINO:-/root/kit}"
 REF="${REF:-origin/main}"
+PRIVADO_DIR="${KIT_PRIVADO_DIR:-$HOME/Kommo-Integracao/_replicacao/kit-unidade/privado}"
 SO_CONFERIR=0
 QUESTIONARIO=""
 # argumento desconhecido é RECUSADO (nada de enviar o que não era para enviar por causa de um erro de digitação)
@@ -44,12 +47,22 @@ cd "$(git rev-parse --show-toplevel)"
 git fetch -q origin
 git rev-parse --verify -q "$REF" >/dev/null || { echo "ERRO: $REF não existe (git fetch origin)."; exit 1; }
 
-# ── só o QUESTIONÁRIO de uma clínica REAL (dado pessoal: não está no git; vai pela sua máquina para a VPS, modo 600) ──
+# ── só o QUESTIONÁRIO de uma clínica REAL (dado pessoal: não passa pelo git; vai da SUA máquina para a VPS, modo 600) ──
 if [ -n "$QUESTIONARIO" ]; then
   [[ "$QUESTIONARIO" =~ ^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$ ]] || { echo "slug inválido: $QUESTIONARIO"; exit 2; }
-  ORIGEM="ops/kit-unidade/unidades/privado/$QUESTIONARIO.yaml"
-  [ -f "$ORIGEM" ] || { echo "ERRO: não achei $ORIGEM (a skill /nova-unidade grava a clínica real aí)."; exit 1; }
-  git check-ignore -q "$ORIGEM" || { echo "ERRO: $ORIGEM NÃO está ignorado pelo git (unidades/privado/ no .gitignore): não vou mexer com dado pessoal fora do lugar combinado."; exit 1; }
+  ORIGEM="$PRIVADO_DIR/$QUESTIONARIO.yaml"
+  PUBLICO="ops/kit-unidade/unidades/$QUESTIONARIO.yaml"
+  [ -f "$ORIGEM" ] || { echo "ERRO: não achei $ORIGEM (a skill /nova-unidade grava a clínica real aí; KIT_PRIVADO_DIR muda a pasta)."; exit 1; }
+  if [ -f "$PUBLICO" ]; then
+    echo "ERRO: o slug $QUESTIONARIO existe nos DOIS lugares — não sei qual vale:"; echo "  $ORIGEM"; echo "  $(pwd)/$PUBLICO"; echo "Apague um deles (a clínica real fica só no privado)."; exit 1
+  fi
+  # dado pessoal: só o dono lê (pasta 700, arquivo 600)
+  [ "$(stat -c '%a' "$PRIVADO_DIR")" = "700" ] || { echo "ERRO: $PRIVADO_DIR precisa estar em modo 700 (chmod 700 '$PRIVADO_DIR')."; exit 1; }
+  [ "$(stat -c '%a' "$ORIGEM")" = "600" ] || { echo "ERRO: $ORIGEM precisa estar em modo 600 (chmod 600 '$ORIGEM')."; exit 1; }
+  # se alguém apontou KIT_PRIVADO_DIR para DENTRO do repositório, o arquivo tem de estar ignorado pelo git (rede de segurança)
+  case "$(cd "$PRIVADO_DIR" && pwd)/" in
+    "$(pwd)"/*) git check-ignore -q "$ORIGEM" || { echo "ERRO: $ORIGEM está dentro do repositório e NÃO está ignorado pelo git."; exit 1; } ;;
+  esac
   echo "enviando SÓ o questionário $QUESTIONARIO ($(wc -c < "$ORIGEM") bytes; o conteúdo não é impresso) para $VPS:$DESTINO/ops/kit-unidade/unidades/privado/ (modo 600)"
   if [ "$SO_CONFERIR" = "1" ]; then echo "SÓ CONFERIR: nada foi enviado."; exit 0; fi
   [ -r "$CHAVE" ] || { echo "ERRO: não achei a chave ssh $CHAVE (CHAVE_SSH)."; exit 1; }
@@ -68,9 +81,29 @@ if [ "$SO_CONFERIR" = "1" ]; then
 fi
 [ -r "$CHAVE" ] || { echo "ERRO: não achei a chave ssh $CHAVE (CHAVE_SSH)."; exit 1; }
 
-# `tar` sobre ssh: sem `docker exec -i` nem `bash -s` no meio (que engoliriam o stdin)
-# O tar chega numa pasta TEMPORÁRIA ao lado e a pasta do kit é trocada por inteiro (nada de arquivo velho sobrando)
-git archive "$REF" ops/kit-unidade | ssh -i "$CHAVE" "$VPS" "set -e; D='$DESTINO'; T=\"\$D/.chegando.\$\$\"; rm -rf \"\$T\"; mkdir -p \"\$T\" \"\$D/ops\"; tar -x -C \"\$T\"; if [ -d \"\$D/ops/kit-unidade/unidades/privado\" ]; then mkdir -p \"\$T/ops/kit-unidade/unidades\"; mv \"\$D/ops/kit-unidade/unidades/privado\" \"\$T/ops/kit-unidade/unidades/privado\"; fi; rm -rf \"\$D/ops/kit-unidade\"; mv \"\$T/ops/kit-unidade\" \"\$D/ops/kit-unidade\"; rm -rf \"\$T\""
+# `tar` sobre ssh: sem `docker exec -i` nem `bash -s` no meio (que engoliriam o stdin).
+# O tar chega numa pasta TEMPORÁRIA ao lado e a pasta do kit é trocada por inteiro (nada de arquivo velho sobrando); o unidades/privado/ que já está na VPS é PRESERVADO — e, se uma
+# troca anterior caiu no meio (o privado/ ficou numa .chegando.*), ele é recuperado de lá antes.
+read -r -d '' REMOTO <<'EOS' || true
+set -e
+mkdir -p "$D/ops"
+if [ ! -d "$D/ops/kit-unidade/unidades/privado" ]; then
+  R="$(ls -dt "$D"/.chegando.*/ops/kit-unidade/unidades/privado 2>/dev/null | head -1 || true)"
+  if [ -n "$R" ]; then mkdir -p "$D/ops/kit-unidade/unidades"; mv "$R" "$D/ops/kit-unidade/unidades/privado"; fi
+fi
+rm -rf "$D"/.chegando.*
+T="$D/.chegando.$$"
+mkdir -p "$T"
+tar -x -C "$T"
+if [ -d "$D/ops/kit-unidade/unidades/privado" ]; then
+  mkdir -p "$T/ops/kit-unidade/unidades"
+  mv "$D/ops/kit-unidade/unidades/privado" "$T/ops/kit-unidade/unidades/privado"
+fi
+rm -rf "$D/ops/kit-unidade"
+mv "$T/ops/kit-unidade" "$D/ops/kit-unidade"
+rm -rf "$T"
+EOS
+git archive "$REF" ops/kit-unidade | ssh -i "$CHAVE" "$VPS" "D='$DESTINO'; $REMOTO"
 ssh -i "$CHAVE" "$VPS" "ls '$DESTINO/ops/kit-unidade' | head -20" </dev/null
 echo "PRONTO: o kit está em $DESTINO/ops/kit-unidade na VPS."
 echo "PRÓXIMO (na VPS, como root):  cd $DESTINO && bash ops/kit-unidade/criar-platform-app-joao.sh --so-conferir"

@@ -16,13 +16,13 @@ temporária e a troca da pasta inteira: o que foi apagado ou renomeado no reposi
 próprio endereço, então funcionam de `/root/kit/ops/kit-unidade`.
 
 ## Questionário de clínica REAL: NÃO vai para o GitHub
-Ele tem dado pessoal (e-mail das atendentes, chave Pix, telefone). A skill `/nova-unidade` grava a clínica real em `ops/kit-unidade/unidades/privado/<slug>.yaml` na SUA máquina
-(pasta no `.gitignore`); só a demonstração (`unidades/clinica-demonstracao.yaml`, `@example.com`) é versionada. Para levar à VPS:
+Ele tem dado pessoal (e-mail das atendentes, chave Pix, telefone). A skill `/nova-unidade` grava a clínica real em `~/Kommo-Integracao/_replicacao/kit-unidade/privado/<slug>.yaml` na SUA máquina (`KIT_PRIVADO_DIR`;
+caminho FIXO fora do repositório — a sessão do agente usa um worktree descartável —, pasta 700 e arquivo 600, e o `.gitignore` de `unidades/privado/` fica só como rede de segurança); só a demonstração (`unidades/clinica-demonstracao.yaml`, `@example.com`) é versionada. Para levar à VPS:
 
     bash ops/kit-unidade/levar-kit-para-vps.sh --questionario <slug> --so-conferir   # confere (não imprime o conteúdo)
     bash ops/kit-unidade/levar-kit-para-vps.sh --questionario <slug>                 # manda SÓ esse arquivo, modo 600, para /root/kit/ops/kit-unidade/unidades/privado/
 
-O `nova-unidade-joao.sh <slug>` procura primeiro em `unidades/` e depois em `unidades/privado/`; o questionário também é apagado do contêiner ao fim.
+Na VPS o `nova-unidade-joao.sh <slug>` procura em `unidades/` e em `unidades/privado/` — se o slug existir nos DOIS, recusa e mostra os dois caminhos —, e o questionário é apagado do contêiner ao fim (mesmo se o script falhar no meio).
 
 ## Roteiro do João (NA VPS, como root, de `/root/kit`, com `bash arquivo` no seu terminal)
 0. `cd /root/kit`
