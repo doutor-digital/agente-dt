@@ -46,6 +46,8 @@ export interface OpcoesConector {
   /** ferramentas além das da franquia (Kommo, cérebro, relatório cruzado), registradas a cada requisição */
   /** `quem.userId` é o usuário do console que fez login no conector (para liberar a escrita só a quem pode). */
   extras?: (server: McpServer, auditar: Auditar, quem: { userId: string; email?: string; clientId?: string }) => void;
+  /** espera antes de montar as ferramentas extras de CADA requisição (a 1ª carga das listas de quem pode o quê: sem isto quem conecta logo após um reinício fica sem as ferramentas/parâmetros que as listas liberam) */
+  aguardar?: () => Promise<unknown>;
   cimd?: BuscadorCimd;
   agora?: () => number;
   log?: { info(o: object, m?: string): void; warn(o: object, m?: string): void };
@@ -182,6 +184,7 @@ export async function montarConectorRemoto(
     // Sem sessão: um servidor por requisição. Barato (só registra ferramentas) e não guarda estado entre chamadas.
     const server = new McpServer({ name: 'doutor-digital', version: '1.0.0' }, { instructions: INSTRUCOES });
     const auditar: Auditar = criarAuditor(o.armazem, { userId, clientId }, o.log);
+    await o.aguardar?.().catch(() => undefined);
     registrarFerramentas(server, contexto, { auditar });
     o.extras?.(server, auditar, { userId, email: String(auth?.extra?.email ?? '') || undefined, clientId: clientId || undefined });
     const transporte = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });

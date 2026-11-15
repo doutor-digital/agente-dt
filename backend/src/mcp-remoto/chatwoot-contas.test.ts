@@ -4,7 +4,9 @@
  */
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
 process.env.KOMMO_SUBDOMAIN ??= 'teste';
 process.env.KOMMO_ACCESS_TOKEN ??= 'token-de-teste-123';
@@ -44,7 +46,16 @@ function montar(escolheConta: boolean | (() => boolean), usuario = 'pessoa@examp
   const server = { registerTool: (id: string, def: { inputSchema: Record<string, unknown>; description: string }, cb: never) => void ferramentas.set(id, { schema: def.inputSchema, descricao: def.description, cb }) } as unknown as McpServer;
   C.registrarFerramentasChatwoot(server, ctx, usuario, (r) => auditoria.push(r as never), escolheConta);
   const chamar = (id: string, args: Record<string, unknown> = {}) => ferramentas.get(id)!.cb(args);
-  return { chamadas, ferramentas, chamar, auditoria };
+  /** o caminho de VERDADE: um McpServer e um Client do SDK ligados em memória (a validação do schema acontece aqui, não na função da ferramenta) */
+  const viaSdk = async (escolhe: boolean | (() => boolean), quem = usuario) => {
+    const srv = new McpServer({ name: 'teste', version: '1.0.0' });
+    C.registrarFerramentasChatwoot(srv, ctx, quem, (r) => auditoria.push(r as never), escolhe);
+    const cliente = new Client({ name: 'cliente', version: '1.0.0' });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await Promise.all([srv.connect(a), cliente.connect(b)]);
+    return cliente;
+  };
+  return { chamadas, ferramentas, chamar, auditoria, viaSdk };
 }
 afterEach(() => {
   for (const k of Object.keys(process.env)) if (!(k in SALVO)) delete process.env[k];
@@ -127,7 +138,9 @@ test('PERMISSÃO CONFERIDA A CADA CHAMADA: tirar o e-mail da lista corta a escol
   assert.equal((await t.chamar('chatwoot_caixas', { conta: 2 })).isError, undefined);
 });
 
-test('ATAQUE: quem NÃO foi autorizado pedindo conta=2 (ou 99) em QUALQUER ferramenta é recusado, sem falar com o Chatwoot e sem vazar dado', async () => {
+// DEFESA EM PROFUNDIDADE: chama a função da ferramenta DIRETO (sem o SDK). No servidor de verdade o SDK já descarta o `conta` de quem não tem o parâmetro no
+// schema (ver os testes «SDK» abaixo); esta recusa é a segunda barreira, para o caso de a função ser chamada por outro caminho.
+test('defesa em profundidade: chamada DIRETA à função de quem NÃO foi autorizado, com conta=2 (ou 99), é recusada, sem falar com o Chatwoot e sem vazar dado', async () => {
   const t = montar(false, 'lia@example.com');
   for (const conta of [2, 99]) {
     for (const [id, args] of PEDIDOS) {
@@ -243,4 +256,62 @@ test('chatwoot_contas marca como NÃO usável a conta sem token próprio', async
   const lista = JSON.parse((await t.chamar('chatwoot_contas')).content[0]!.text) as Array<{ conta: number; usavel: boolean }>;
   assert.equal(lista.find((x) => x.conta === 2)!.usavel, false);
   assert.equal(lista.find((x) => x.conta === 1)!.usavel, true);
+});
+
+// ── pelo caminho do SDK de verdade (McpServer + Client em memória) ─────────────────────────────────────────
+
+test('SDK (o que acontece DE FATO): sem permissão o `conta` é APAGADO pelo schema antes de chegar à função — a chamada cai em Parauapebas, sem erro, exatamente como era antes deste PR', async () => {
+  const t = montar(false, 'lia@example.com');
+  const cliente = await t.viaSdk(false);
+  const tools = (await cliente.listTools()).tools;
+  assert.ok(tools.length >= 9);
+  for (const f of tools) assert.ok(!('conta' in ((f.inputSchema.properties ?? {}) as object)), `${f.name} não anuncia conta`);
+  assert.ok(!tools.some((f) => f.name === 'chatwoot_contas'));
+  const r = await cliente.callTool({ name: 'chatwoot_caixas', arguments: { conta: 2 } });
+  assert.notEqual(r.isError, true, 'sem erro: o parâmetro desconhecido é descartado, não recusado');
+  assert.equal(t.chamadas.length, 1);
+  assert.match(t.chamadas[0]!.url, /\/accounts\/1\/inboxes$/, 'foi para a conta 1 (Parauapebas), nunca para a 2');
+  assert.equal(t.chamadas[0]!.token, 'tk-do-ambiente');
+  assert.doesNotMatch(JSON.stringify(r.content), /SEGREDO/);
+  assert.ok(t.auditoria.every((a) => !('conta' in (a.argumentos ?? {}))), 'a auditoria nem vê o parâmetro (já foi descartado)');
+});
+
+test('SDK: com permissão o `conta` é anunciado e vale; tirar a permissão no meio da sessão recusa na hora', async () => {
+  let pode = true;
+  const t = montar(() => pode, 'joao@example.com');
+  const cliente = await t.viaSdk(() => pode);
+  const tools = (await cliente.listTools()).tools;
+  assert.ok(tools.find((f) => f.name === 'chatwoot_caixas')!.inputSchema.properties!.conta);
+  assert.ok(tools.some((f) => f.name === 'chatwoot_contas'));
+  const ok = await cliente.callTool({ name: 'chatwoot_caixas', arguments: { conta: 2 } });
+  assert.notEqual(ok.isError, true);
+  assert.match(t.chamadas.at(-1)!.url, /\/accounts\/2\/inboxes$/);
+  pode = false;
+  const negado = await cliente.callTool({ name: 'chatwoot_caixas', arguments: { conta: 2 } });
+  assert.equal(negado.isError, true);
+  assert.match(JSON.stringify(negado.content), /não está autorizada/);
+  assert.equal(t.chamadas.length, 1, 'nenhuma chamada nova depois de perder a permissão');
+});
+
+test('Telegram: envio a paciente numa clínica de OUTRA conta também avisa o João (como o apagar); em Parauapebas, nada muda', async () => {
+  const avisos: string[] = [];
+  const montarComAviso = (escolhe: boolean) => {
+    Object.assign(process.env, ENV);
+    U.aplicarConfigs([U.SEMENTE_PARAUAPEBAS, DEMO as never]);
+    const f = (async () => new Response(JSON.stringify({ ok: true }), { status: 200 })) as unknown as typeof fetch;
+    const ctx = C.criarContextoChatwoot(C.contaChatwootDoAmbiente(), { fetch: f, avisar: (t) => void avisos.push(t) });
+    const srv = new McpServer({ name: 't', version: '1' });
+    C.registrarFerramentasChatwoot(srv, ctx, 'joao@example.com', () => undefined, escolhe);
+    return ctx;
+  };
+  const ctx = montarComAviso(true);
+  const corpo = { content: 'oi paciente' };
+  const dona = C.contextoDaChamada(ctx, 2, true);
+  const prep = C.preparar(dona, 'joao@example.com', { metodo: 'POST', caminho: 'conversations/5/messages', corpo });
+  await C.confirmar(dona, 'joao@example.com', prep.codigo, true);
+  assert.equal(avisos.length, 1);
+  assert.match(avisos[0]!, /✉️ Chatwoot \(conta 2 · clinica-demonstracao\): joao@example.com mandou/);
+  const p1 = C.preparar(ctx, 'joao@example.com', { metodo: 'POST', caminho: 'conversations/5/messages', corpo });
+  await C.confirmar(ctx, 'joao@example.com', p1.codigo);
+  assert.equal(avisos.length, 1, 'em Parauapebas não há aviso novo (como era)');
 });
