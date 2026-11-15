@@ -12,6 +12,7 @@
 import { logger } from './logger.js';
 import { prisma } from './prisma.js';
 import { CAIXAS_CLOUD } from './chatwoot-regua.js';
+import { numerosDoKapsoConfigurados, numerosForaDaLista } from './chatwoot-unidades.js';
 
 export const REGRA_KAPSO_REFERRAL = 'kapso-referral';
 const KAPSO = 'https://api.kapso.ai/meta/whatsapp/v24.0';
@@ -38,9 +39,21 @@ export interface ReferralDoKapso {
 const txt = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim().slice(0, 300) : null);
 const longo = (v: unknown, max: number): string | null => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : null);
 
+const avisadosForaDaLista = new Set<string>();
 export function numerosDoKapso(env: NodeJS.ProcessEnv = process.env): string[] {
   const l = String(env.KAPSO_PHONE_NUMBER_IDS ?? '').split(/[\s,]+/).filter((x) => /^\d{5,25}$/.test(x));
-  return l.length ? l : ['1212928641906230'];
+  // a variável de ambiente, SE existir, manda (como sempre); sem ela valem os números das unidades configuradas (Parauapebas é a semente,
+  // que era o padrão). Atenção ao ligar unidade nova: com KAPSO_PHONE_NUMBER_IDS definida, o número dela precisa entrar nela também.
+  if (l.length) {
+    // a variável manda (como sempre), mas número de unidade configurada que ficou de fora dela é mídia/referral perdido SEM erro: avisa uma vez
+    for (const n of numerosForaDaLista(l)) {
+      if (avisadosForaDaLista.has(n)) continue;
+      avisadosForaDaLista.add(n);
+      logger.warn({ numero: n }, 'kapso: KAPSO_PHONE_NUMBER_IDS não inclui o número de uma unidade configurada — mídia e referral dela não passam por aqui');
+    }
+    return l;
+  }
+  return numerosDoKapsoConfigurados();
 }
 
 /** Webhook do Chatwoot → mensagem de paciente na caixa oficial, SEM referral, com o wamid; ou null. */

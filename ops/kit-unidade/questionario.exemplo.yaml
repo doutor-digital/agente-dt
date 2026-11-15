@@ -1,0 +1,87 @@
+# QUESTIONÁRIO DE UNIDADE NOVA — exemplo preenchido com Parauapebas.
+#
+# Só entra aqui o que é específico da unidade ou sensível. Todo o resto (caixa, time, etiquetas, modelos, prompt, subdomínio) o script monta:
+#   npx tsx backend/src/scripts/nova-unidade.ts ops/kit-unidade/questionario.exemplo.yaml            # plano, em SECO (não grava nada)
+#   npx tsx backend/src/scripts/nova-unidade.ts ops/kit-unidade/questionario.exemplo.yaml --aplicar  # executa, etapa por etapa, com confirmação
+#
+# SEGREDO NUNCA ENTRA NESTE ARQUIVO. Onde há token, a resposta é o NOME da variável de ambiente (o valor mora no env do serviço
+# ddagent_agent / no arquivo de segredos da VPS). E-mails abaixo são FICTÍCIOS (@example.com). Valores de consulta são ILUSTRATIVOS:
+# na unidade real, quem responde é o dono da franquia.
+#
+# Campos marcados [SENSÍVEL] aparecem mascarados no plano; [IMPORTANTE] viram frase dita ao paciente e devem ser confirmados pelo dono.
+
+versao: 1
+
+unidade:
+  nome: Doutor Hérnia Parauapebas
+  slug: doutor-hernia-parauapebas
+  cidade: Parauapebas
+  uf: PA
+  # [IMPORTANTE] entra NO TEXTO dos modelos aprovados na Meta: trocar depois exige modelo novo
+  endereco: Rua C, 455-A, Sala 101 e 103 — Cidade Nova, Parauapebas/PA, 68515-000
+  # [IMPORTANTE] o "Como chegar" dos modelos
+  mapa_url: https://share.google/LzWt0AQhG4HWTpWOq
+  telefone: "(94) 98442-0153"   # [SENSÍVEL]
+  fuso: America/Belem
+
+horarios:                       # [IMPORTANTE] a Sofia só oferece horário dentro disto (0 = domingo … 6 = sábado)
+  dias: [1, 2, 3, 4, 5]
+  inicio: "08:00"
+  fim: "18:00"
+  almoco_inicio: "12:00"
+  almoco_fim: "13:00"
+  duracao_min: 30
+
+profissionais:                  # [IMPORTANTE] a Sofia cita o nome
+  - nome: Dra. Exemplo da Silva
+    funcao: fisioterapeuta       # na rede Doutor Hérnia quem atende é fisioterapeuta ("medico" existe para outros negócios)
+    franquia_staff_id: 536      # id da pessoa na franquia (idStaff); sem ele a franquia escolhe a primeira da lista
+  - nome: Dr. Exemplo Souza
+    funcao: fisioterapeuta
+
+valores:                        # [IMPORTANTE] a Sofia fala estes preços ao paciente (valores ilustrativos)
+  consulta_no_dia: 350
+  consulta_antecipada: 250
+  sinal_pix: 50                 # opcional: sinal por Pix gerado pela Sofia no Asaas da unidade (R$ 50 agora + o resto no dia)
+  aceita_antecipado: true
+  chave_pix: pix@example.com    # [SENSÍVEL] opcional (chave fixa; com sinal a Sofia gera o Pix)
+  favorecido: Clínica Exemplo Ltda   # [SENSÍVEL]
+
+whatsapp:
+  numero_oficial: "+5594984420153"          # [SENSÍVEL]
+  kapso_phone_number_id: "1212928641906230" # [SENSÍVEL] está no painel do Kapso, em Números
+  waba_id: "2146287749563217"               # [SENSÍVEL] está no Meta Business, em Contas do WhatsApp
+  prefixo_modelos: parau_                   # nome dos modelos na Meta: parau_consulta_preparo…
+  conexao: coexistencia                     # coexistencia (número segue no celular) | numero-novo
+
+chatwoot:
+  subdominio: drherniaparauapebas           # drherniaparauapebas.doutordigitalconsultoria.com
+  caixa_nome: Parauapebas · WhatsApp oficial
+  time_nome: Parauapebas
+  meta_agendamentos_dia: 5
+  atendentes:                               # [SENSÍVEL] e-mail de cada uma (recebe o convite)
+    - nome: Cleia Exemplo
+      email: gerente@example.com
+      funcao: gerente                       # exatamente 1 gerente: para ela vai o lead quente parado
+    - nome: Maria Heloisa Exemplo
+      email: secretaria@example.com
+      funcao: secretaria
+    - nome: Lorena Exemplo
+      email: sdr@example.com
+      funcao: sdr
+  usuario_celular_email: celular-parauapebas@example.com   # [SENSÍVEL] opcional: o usuário "📱 Celular da unidade"
+
+franquia:
+  id_company: 131                           # [SENSÍVEL] no seletor de unidade de app.doutorhernia.com.br
+  token_env: FRANQUIA_TOKEN_PARAUAPEBAS     # NOME da variável com o token da API da franquia
+
+meta:
+  ad_account: act_1234567890                # [SENSÍVEL] conta de anúncios (exemplo)
+  business_manager_id: "1122334455667788"   # [SENSÍVEL] (exemplo)
+  token_env: META_ADS_TOKEN_PARAUAPEBAS     # NOME da variável (o rastreio e a CAPI já leem este nome)
+  conta_env: META_ADS_CONTA_PARAUAPEBAS
+  dataset_id_env: META_DATASET_ID_PARAUAPEBAS
+
+sofia:
+  nome_ia: Sofia
+  tom: friendly

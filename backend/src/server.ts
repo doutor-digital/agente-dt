@@ -40,6 +40,7 @@ import { startStaleReplyMonitor } from './lib/stale-reply-monitor.js';
 import { startJudgeWorker, stopJudgeWorker } from './lib/judge-worker.js';
 import { startResultadosWorker, stopResultadosWorker } from './lib/resultados-worker.js';
 import { iniciarAutomacoes } from './lib/automacoes-estado.js';
+import { iniciarConfigChatwoot } from './lib/chatwoot-unidades-banco.js';
 import { iniciarCrmCompartilhado } from './lib/crm-compartilhado.js';
 import { iniciarSupervisorDosWorkers, encerrarSupervisorDosWorkers, estadoDosWorkers } from './lib/worker-lease.js';
 import { agendarRecuperacao, posseDaLideranca } from './lib/recuperar-turnos.js';
@@ -235,6 +236,9 @@ async function main(): Promise<void> {
   } catch (err) {
     logger.warn({ err }, 'falha ao carregar as automações — vale o .env até a próxima releitura');
   }
+  // Configuração do CRM por unidade (caixas, gerente, prefixo dos modelos…): antes dos workers do Chatwoot. Nunca lança; sem banco vale a
+  // semente de Parauapebas (o que estava escrito no código).
+  await iniciarConfigChatwoot();
   // Kommo dividido entre duas unidades (Petrópolis + Caxias): carrega antes de qualquer escrita na franquia e
   // registra o carregador da trava de escrita. Não lança: se o banco falhar, a trava tenta de novo na 1ª escrita.
   await iniciarCrmCompartilhado();

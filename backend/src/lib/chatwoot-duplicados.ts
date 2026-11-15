@@ -117,10 +117,15 @@ export async function cicloDuplicados(p: PortasDuplicados, modo: 'seco' | 'ligad
   return r;
 }
 
-/** O estado vem da unidade da caixa do mapa (a conta do Chatwoot hoje é de uma unidade só). */
+/**
+ * O ciclo varre a CONTA inteira do Chatwoot (todas as caixas), não uma unidade: com mais de uma unidade configurada, só roda tão solto
+ * quanto a MAIS RESTRITA delas permitir (uma em «seco» ou «desligado» segura as outras — junção não tem volta). Com uma só, é o estado dela.
+ */
+const RIGOR: Readonly<Record<Estado, number>> = { desligado: 0, seco: 1, ligado: 2 };
 export const estadoDuplicados = (): Estado => {
-  const slug = Object.values(CAIXAS_REGUA)[0];
-  return slug ? estadoDaAutomacao(slug, ID_DUPLICADOS, process.env.CHATWOOT_DUPLICADOS_SLUGS) : 'desligado';
+  const slugs = [...new Set(Object.values(CAIXAS_REGUA))];
+  if (!slugs.length) return 'desligado';
+  return slugs.map((slug) => estadoDaAutomacao(slug, ID_DUPLICADOS, process.env.CHATWOOT_DUPLICADOS_SLUGS)).reduce((a, b) => (RIGOR[b] < RIGOR[a] ? b : a));
 };
 
 let timer: NodeJS.Timeout | null = null;
