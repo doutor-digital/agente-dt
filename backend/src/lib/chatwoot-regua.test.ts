@@ -735,7 +735,7 @@ test('sessão da agenda: véspera (texto de sessão) e «hoje» 3 h antes, sem p
   assert.equal(r.some((x) => x.regra === 'consulta-preparo' || /consulta/.test(x.modelo)), false);
 });
 
-test('sessão da agenda: Remarcado/Atendido/Desmarcado não lembram; Perdido, Frio, Alta e cancelado não recebem; consulta que não é Sessão segue a régua de consulta', () => {
+test('sessão da agenda: Atendido/Desmarcado não lembram (Remarcado é igual ao main: de pé); Perdido, Frio, Alta e cancelado não recebem; consulta que não é Sessão segue a régua de consulta', () => {
   const sem = (attrs: Record<string, unknown>) => varrerSessao(conv({ attrs: { ...SESSAO, ...attrs } }), '2026-11-17T00:00:00Z', '2026-11-19T23:00:00Z').map((x) => x.regra);
   assert.deepEqual(sem({ situacao_consulta: 'Desmarcado' }), []);
   assert.deepEqual(sem({ situacao_consulta: 'Atendido' }), []);
@@ -765,12 +765,12 @@ test('sessão da agenda NÃO monta falta/pós/decisão de consulta', () => {
   assert.deepEqual(todas({ ...SESSAO, situacao_consulta: 'Não compareceu', etapa: 'Agendado' }, v), ['sessao-falta']);
 });
 
-test('sessão da agenda: falta marcada no dia → parau_sessao_falta (chave da sessão); outro dia, inicial, sem-follow-up não muda a regra', () => {
+test('sessão da agenda: falta marcada no dia → parau_sessao_falta (chave = o dia da falta); outro dia, inicial, sem-follow-up não muda a regra', () => {
   const attrs = { ...SESSAO, situacao_consulta: 'Não compareceu' };
   const hoje = rodar(conv({ attrs }), '2026-11-19T20:05:00Z', { situacao_consulta: visto('Não compareceu', '2026-11-19T20:00:00Z') });
   assert.deepEqual(regras(hoje), ['sessao-falta']);
   assert.equal(hoje.disparos[0]!.modelo, 'parau_sessao_falta');
-  assert.equal(hoje.disparos[0]!.chave, `faltou-sessao@${CHAVE_SESSAO}`);
+  assert.equal(hoje.disparos[0]!.chave, 'faltou-sessao@2026-11-19'); // o dia da falta em Belém
   assert.match(hoje.disparos[0]!.texto!, /^Olá, Maria\. Você não compareceu à sessão de hoje\./);
   // marcada no dia seguinte: o texto diz «hoje», não vale
   assert.deepEqual(regras(rodar(conv({ attrs }), '2026-11-20T15:00:00Z', { situacao_consulta: visto('Não compareceu', '2026-11-20T14:55:00Z') })), []);
@@ -818,4 +818,56 @@ test('sessão da agenda: {{1}} nome e {{2}} «data às hora» saem de data_consu
   assert.equal(d.disparos[0]!.texto, null);
   // em tratamento, a proxima_sessao da equipe continua mandando no texto
   assert.deepEqual(renderizar('parau_sessao_lembrete_vespera', conv({ attrs: { ...SESSAO, etapa_tratamento: 'Em tratamento', proxima_sessao: '2026-11-26', hora_sessao: '10:00' } }), U).variaveis, ['Maria', '26/11 às 10:00']);
+});
+
+test('texto de sessão: o {{2}} é a data+hora que DECIDIU o envio; os outros modelos que usam o mesmo campo seguem como no main', () => {
+  // Em tratamento SEM proxima_sessao, com data_retorno velho: o lembrete da agenda mostra a data da agenda
+  const emTrat = conv({ attrs: { ...SESSAO, etapa_tratamento: 'Em tratamento', data_retorno: '2026-10-01' } });
+  const v = decidirRegua(emTrat, { vistos: new Map(), feitos: new Set() }, Z('2026-11-18T12:40:00Z'), U);
+  assert.deepEqual(regras(v), ['consulta-vespera']);
+  assert.match(v.disparos[0]!.texto!, /Data e horário: 19\/11 às 09:30/);
+  assert.doesNotMatch(v.disparos[0]!.texto!, /01\/10/);
+  assert.deepEqual(v.disparos[0]!.variaveis, ['Maria', '19/11 às 09:30']);
+  // cancelado com categoria Sessão: o retorno do cancelamento mostra data_retorno, não a data da sessão
+  const canc = { ...SESSAO, etapa_tratamento: 'Tratamento cancelado', data_retorno: '2026-11-25' };
+  const r = renderizar('parau_cancelamento_retorno_confirmado', conv({ attrs: canc }), U);
+  assert.match(r.texto!, /Data e horário: 25\/11\n/);
+  assert.deepEqual(r.variaveis, ['Maria', '25/11']);
+  // confirmação de retorno da SDR (categoria Sessão, sem proxima_sessao): data_retorno, depois consulta — como no main
+  assert.match(renderizar('parau_sdr_confirmacao_retorno', conv({ attrs: { ...SESSAO, data_retorno: '2026-11-25' } }), U).texto!, /agendado para 25\/11,/);
+  assert.match(renderizar('parau_sdr_confirmacao_retorno', conv({ attrs: SESSAO }), U).texto!, /agendado para 19\/11 às 09:30,/);
+  // «Em tratamento» com proxima_sessao igual à consulta da agenda: o texto do sessao-dia é a sessão da equipe
+  const igual = conv({ attrs: { ...SESSAO, etapa_tratamento: 'Em tratamento', proxima_sessao: '2026-11-19', hora_sessao: '09:30' } });
+  const d = decidirRegua(igual, { vistos: new Map(), feitos: new Set() }, Z('2026-11-19T11:05:00Z'), U);
+  assert.match(d.disparos[0]!.texto!, /19\/11 às 09:30/);
+  // renderizar sem o momento do envio (chamada direta) = comportamento do main
+  assert.deepEqual(renderizar('parau_sessao_lembrete_vespera', conv({ attrs: { ...SESSAO, data_retorno: '2026-11-25' } }), U).variaveis, ['Maria', '25/11']);
+});
+
+test('falta de sessão: agenda e «compareceu_ultima_sessao» são o MESMO envio (regra e chave do dia da falta); falta de outro dia não cala a de hoje; Alta/cancelado não', () => {
+  const base = { ...SESSAO, situacao_consulta: 'Não compareceu', etapa_tratamento: 'Em tratamento', proxima_sessao: '2026-11-19', hora_sessao: '09:30' };
+  // 10:00 a agenda marca Não compareceu → manda
+  const v1 = { situacao_consulta: visto('Não compareceu', '2026-11-19T13:00:00Z') };
+  const a = decidirRegua(conv({ attrs: base }), { vistos: vistos(v1), feitos: new Set() }, Z('2026-11-19T13:05:00Z'), U);
+  assert.deepEqual(regras(a), ['sessao-falta']);
+  const feitos = new Set([`sessao-falta|${a.disparos[0]!.chave}`]);
+  // 15:00 a equipe marca compareceu_ultima_sessao = Não no mesmo dia → não manda de novo
+  const v2 = { ...v1, compareceu_ultima_sessao: visto('Não', '2026-11-19T18:00:00Z') };
+  const b = decidirRegua(conv({ attrs: { ...base, compareceu_ultima_sessao: 'Não' } }), { vistos: vistos(v2), feitos }, Z('2026-11-19T18:05:00Z'), U);
+  assert.deepEqual(regras(b), []);
+  // a ordem inversa (equipe primeiro, agenda depois): idem
+  const c1 = decidirRegua(conv({ attrs: { ...base, compareceu_ultima_sessao: 'Não' } }), { vistos: vistos({ compareceu_ultima_sessao: visto('Não', '2026-11-19T13:00:00Z') }), feitos: new Set() }, Z('2026-11-19T13:05:00Z'), U);
+  assert.deepEqual(regras(c1), ['sessao-falta']);
+  assert.equal(c1.disparos[0]!.chave, a.disparos[0]!.chave);
+  assert.deepEqual(regras(decidirRegua(conv({ attrs: { ...base, compareceu_ultima_sessao: 'Não' } }), { vistos: vistos(v2), feitos: new Set([`sessao-falta|${c1.disparos[0]!.chave}`]) }, Z('2026-11-19T18:05:00Z'), U)), []);
+  // dois caminhos no MESMO ciclo: um só disparo
+  assert.equal(decidirRegua(conv({ attrs: { ...base, compareceu_ultima_sessao: 'Não' } }), { vistos: vistos({ ...v1, compareceu_ultima_sessao: visto('Não', '2026-11-19T13:00:00Z') }), feitos: new Set() }, Z('2026-11-19T13:05:00Z'), U).disparos.length, 1);
+  // uma falta ANTERIOR (outro dia) com compareceu_ultima_sessao «Não» não cala a falta de hoje
+  const ontem = `sessao-falta|faltou-sessao@2026-11-12`;
+  assert.deepEqual(regras(decidirRegua(conv({ attrs: base }), { vistos: vistos(v1), feitos: new Set([ontem]) }, Z('2026-11-19T13:05:00Z'), U)), ['sessao-falta']);
+  assert.deepEqual(regras(decidirRegua(conv({ attrs: { ...base, compareceu_ultima_sessao: 'Não' } }), { vistos: vistos({ ...v1, compareceu_ultima_sessao: visto('Não', '2026-11-12T13:00:00Z') }), feitos: new Set([ontem]) }, Z('2026-11-19T13:05:00Z'), U)), ['sessao-falta']);
+  // Alta e tratamento cancelado: a falta da agenda também não vale
+  for (const etapa_tratamento of ['Alta', 'Tratamento cancelado']) {
+    assert.deepEqual(regras(decidirRegua(conv({ attrs: { ...base, etapa_tratamento } }), { vistos: vistos(v1), feitos: new Set() }, Z('2026-11-19T13:05:00Z'), U)), [], etapa_tratamento);
+  }
 });
