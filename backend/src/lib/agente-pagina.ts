@@ -378,9 +378,12 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
   function erroEm(box, msg){ box.textContent = ''; box.appendChild(el('div', 'aviso erro', msg)); }
 
   // ── servidor (com o login do Chatwoot de quem está usando) ──
+  // a conta do Chatwoot em que a pessoa está (?conta=N, posta pelo menu); o servidor confere se ela é membro dela
+  var CONTA_Q = (function(){ var c = new URLSearchParams(location.search).get('conta'); return /^[1-9][0-9]{0,9}$/.test(c || '') ? c : ''; })();
+  function comConta(path){ return CONTA_Q ? path + (path.indexOf('?') < 0 ? '?' : '&') + 'conta=' + CONTA_Q : path; }
   function cab(){ var h = { 'Content-Type': 'application/json' }; if (S) { h['X-CW-Token'] = S.token; h['X-CW-Client'] = S.client; h['X-CW-Uid'] = S.uid; } return h; }
   async function api(method, path, body){
-    var r = await fetch(path, { method: method, headers: cab(), body: method === 'GET' ? undefined : JSON.stringify(body || {}) });
+    var r = await fetch(comConta(path), { method: method, headers: cab(), body: method === 'GET' ? undefined : JSON.stringify(body || {}) });
     var j = await r.json().catch(function(){ return {}; });
     if (!r.ok) { var er = new Error(j.error || ('erro ' + r.status)); er.dados = j; if (r.status === 401) { S = null; pedirSessao(); } throw er; }
     return j;

@@ -9,7 +9,7 @@
  */
 import type { Request, Response } from 'express';
 import { logger } from '../lib/logger.js';
-import { chamar, contaChatwootDoAmbiente, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
+import { chamar, contaChatwootDaUnidade, contaChatwootDoAmbiente, contextoDaUnidade, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 import { CAIXAS_CLOUD } from '../lib/chatwoot-regua.js';
 import { TEXTOS_PARAU } from '../lib/chatwoot-regua-textos.js';
 import { chatDoChatwoot } from '../lib/chatwoot-regua-worker.js';
@@ -22,12 +22,13 @@ import { bancoDosRobos, caixasDaUnidade, enviadosDaUnidade, mudarRobo, podeMexer
 const slugDe = (v: unknown): string => (typeof v === 'string' ? v.trim().slice(0, 80) : '');
 
 let contexto: ContextoChatwoot | null | undefined;
-function ctx(): ContextoChatwoot | null {
+/** O contexto da CONTA da unidade (cada clínica tem a sua): Parauapebas = o do ambiente, como sempre. null = unidade sem conta/token válidos (não chama o Chatwoot). */
+function ctx(slug: string): ContextoChatwoot | null {
   if (contexto === undefined) {
     const conta = contaChatwootDoAmbiente();
     contexto = conta ? criarContextoChatwoot(conta) : null;
   }
-  return contexto;
+  return contexto ? contextoDaUnidade(contexto, slug) : null;
 }
 
 /** A página (iframe do menu do Chatwoot). */
@@ -52,7 +53,7 @@ const cacheAprovados = new Map<string, { ate: number; valor: Aprovados | null }>
 async function aprovadosDaUnidade(slug: string): Promise<Aprovados | null> {
   const feito = cacheAprovados.get(slug);
   if (feito && feito.ate > Date.now()) return feito.valor;
-  const c = ctx();
+  const c = ctx(slug);
   let valor: Aprovados | null = null;
   if (c) {
     const cloud = caixasDaUnidade(slug).filter((x) => CAIXAS_CLOUD.has(x));
@@ -74,17 +75,19 @@ async function aprovadosDaUnidade(slug: string): Promise<Aprovados | null> {
 
 // ── nome do paciente (uma busca por conversa, guardada por 10 min) ──────────────────────────────────
 
-const cacheNomes = new Map<number, { ate: number; nome: string | null }>();
+const cacheNomes = new Map<string, { ate: number; nome: string | null }>();
 
-async function nomeDaConversa(id: number): Promise<string | null> {
-  const feito = cacheNomes.get(id);
+/** O id da conversa é POR CONTA: a chave leva a unidade (a conta dela), senão a conversa 5 de uma clínica serviria o nome da 5 de outra. */
+async function nomeDaConversa(slug: string, id: number): Promise<string | null> {
+  const chave = `${slug}|${id}`;
+  const feito = cacheNomes.get(chave);
   if (feito && feito.ate > Date.now()) return feito.nome;
-  const c = ctx();
+  const c = ctx(slug);
   if (!c) return null;
   const r = (await chamar(c, 'GET', `conversations/${id}`)) as { meta?: { sender?: { name?: unknown } } } | null;
   const n = typeof r?.meta?.sender?.name === 'string' && r.meta.sender.name.trim() ? r.meta.sender.name.trim().slice(0, 80) : null;
   if (cacheNomes.size > 2000) cacheNomes.clear();
-  cacheNomes.set(id, { ate: Date.now() + 10 * 60_000, nome: n });
+  cacheNomes.set(chave, { ate: Date.now() + 10 * 60_000, nome: n });
   return n;
 }
 
@@ -106,7 +109,7 @@ export async function robosEnviadosHandler(req: Request, res: Response): Promise
   const r = await atendenteDaUnidade(req, res, slugDe(req.query.slug));
   if (!r) return;
   try {
-    res.set('Cache-Control', 'no-store').json(await enviadosDaUnidade(bancoDosRobos(), r.unit.slug, nomeDaConversa));
+    res.set('Cache-Control', 'no-store').json(await enviadosDaUnidade(bancoDosRobos(), r.unit.slug, (id) => nomeDaConversa(r.unit.slug, id)));
   } catch (e) {
     logger.warn({ err: String(e), unit: r.unit.slug }, 'robos: enviados falhou');
     res.status(502).json({ error: 'não consegui ler os envios agora' });
@@ -156,8 +159,8 @@ interface RegraNativa {
 const TETO_DA_ABA_MS = 5000;
 
 /** As regras nativas do Chatwoot (Configurações → Automação), só leitura. Falhou ao ler: lista vazia + o link. */
-async function regrasNativas(): Promise<{ regras: RegraNativa[]; lidas: boolean }> {
-  const c = ctx();
+async function regrasNativas(slug: string): Promise<{ regras: RegraNativa[]; lidas: boolean }> {
+  const c = ctx(slug);
   if (!c) return { regras: [], lidas: false };
   try {
     const r = (await chamar(c, 'GET', 'automation_rules')) as { payload?: unknown[] } | null;
@@ -186,10 +189,10 @@ export async function robosAutomacoesHandler(req: Request, res: Response): Promi
     await medir('recarregar', comTeto(recarregarAutomacoes(), TETO_DA_ABA_MS, undefined));
     const [automacoes, nativas] = await Promise.all([
       medir('automacoes', automacoesDaUnidade(bancoDasAutomacoes(), r.unit.slug)),
-      medir('nativas', comTeto(regrasNativas(), TETO_DA_ABA_MS, { regras: [] as RegraNativa[], lidas: false })),
+      medir('nativas', comTeto(regrasNativas(r.unit.slug), TETO_DA_ABA_MS, { regras: [] as RegraNativa[], lidas: false })),
     ]);
     if (Date.now() - inicio > 2000) logger.warn({ unit: r.unit.slug, ms: { login: msLogin, ...ms } }, 'robos: aba Automações demorou');
-    const conta = contaChatwootDoAmbiente();
+    const conta = contaChatwootDaUnidade(r.unit.slug);
     res.set('Cache-Control', 'no-store').json({
       unidade: { slug: r.unit.slug, nome: r.unit.name },
       pode: podeMexerNosRobos(r.a.papel),

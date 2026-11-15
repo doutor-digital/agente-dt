@@ -19,6 +19,9 @@ const BOTAO_JS = String.raw`(function(){
     try { var j = JSON.parse(decodeURIComponent(m[1])); return j['access-token'] && j.client && j.uid ? { token: j['access-token'], client: j.client, uid: j.uid } : null; } catch (e) { return null; }
   }
   function emConta(){ return /\/app\/accounts\//.test(location.pathname); }
+  // a conta em que a pessoa está (…/app/accounts/<N>/…): o servidor trata como PEDIDO e confere se ela é membro dela
+  function pConta(sep){ var m = location.pathname.match(/\/accounts\/(\d+)/); return m ? sep + 'conta=' + m[1] : ''; }
+  function contaAtual(){ var m = location.pathname.match(/\/accounts\/(\d+)/); return m ? m[1] : null; }
   function conversaDaUrl(){ var m = location.pathname.match(/\/conversations\/(\d+)/); return m ? Number(m[1]) : null; }
 
   // O campo de resposta do Chatwoot: o editor (ProseMirror) ou, no modo simples, uma caixa de texto.
@@ -86,7 +89,7 @@ const BOTAO_JS = String.raw`(function(){
       painel.setAttribute('data-assistente-painel', '1');
       painel.style.cssText = 'position:fixed;right:16px;width:380px;max-width:calc(100vw - 32px);z-index:2147482000;background:#fff;border:1px solid #e3e8ef;border-radius:14px;box-shadow:0 8px 32px rgba(16,24,40,.22);overflow:hidden;display:none';
       fr = document.createElement('iframe');
-      fr.src = AGENTE + '/assistente'; fr.title = 'Assistente'; fr.setAttribute('allow', 'clipboard-write');
+      fr.src = AGENTE + '/assistente' + pConta('?'); fr.title = 'Assistente'; fr.setAttribute('allow', 'clipboard-write');
       fr.style.cssText = 'border:0;width:100%;height:100%;display:block';
       painel.appendChild(fr); document.body.appendChild(painel);
     }
@@ -110,7 +113,7 @@ const BOTAO_JS = String.raw`(function(){
   // Só aparece se a assistente estiver ligada para a unidade desta pessoa (o servidor responde por ela). Só uma resposta DEFINITIVA
   // vale como "desligada" (5 min até perguntar de novo); erro de rede, 429 ou 502 tenta de novo em 1 min. Com o botão na tela,
   // continua perguntando a cada 5 min: desligada no servidor, ou outra pessoa na mesma aba, tira o botão.
-  var uidVisto = null;
+  var uidVisto = null, contaVista = null;
   function tirar(){
     if (botao) botao.remove(); if (painel) painel.remove();
     botao = painel = fr = null;
@@ -119,10 +122,13 @@ const BOTAO_JS = String.raw`(function(){
     var s = sessao();
     if (!s || !emConta()) return;
     if (uidVisto !== null && uidVisto !== s.uid) { tirar(); proxima = 0; }
+    // trocou de clínica (outra conta) na mesma aba: o painel é refeito com a conta nova (a conversa 5 de uma conta não é a da outra)
+    if (contaVista !== null && contaVista !== contaAtual()) { tirar(); proxima = 0; }
+    contaVista = contaAtual();
     uidVisto = s.uid;
     if (consultando || Date.now() < proxima) return;
     consultando = true;
-    fetch(AGENTE + '/api/public/assistente/estado', { headers: { 'X-CW-Token': s.token, 'X-CW-Client': s.client, 'X-CW-Uid': s.uid } })
+    fetch(AGENTE + '/api/public/assistente/estado' + pConta('?'), { headers: { 'X-CW-Token': s.token, 'X-CW-Client': s.client, 'X-CW-Uid': s.uid } })
       .then(function(r){ if (!r.ok) throw new Error('estado ' + r.status); return r.json(); })
       .then(function(j){
         ligada = !!(j && j.ligada); proxima = Date.now() + 5 * 60000;
@@ -166,7 +172,7 @@ const BOTAO_JS = String.raw`(function(){
   function lerAvaliacoes(c){
     var s = sessao(); if (!s || AV.buscando) return;
     AV.buscando = true;
-    fetch(AGENTE + '/api/public/assistente/respostas?conversa=' + c, { headers: { 'X-CW-Token': s.token, 'X-CW-Client': s.client, 'X-CW-Uid': s.uid } })
+    fetch(AGENTE + '/api/public/assistente/respostas?conversa=' + c + pConta('&'), { headers: { 'X-CW-Token': s.token, 'X-CW-Client': s.client, 'X-CW-Uid': s.uid } })
       .then(function(r){ if (!r.ok) throw new Error('respostas ' + r.status); return r.json(); })
       .then(function(j){
         if (AV.conversa !== c) return;
@@ -189,7 +195,7 @@ const BOTAO_JS = String.raw`(function(){
   }
   function enviarAval(id, nota, texto){
     var s = sessao(); if (!s) return Promise.reject(new Error('Entre de novo no CRM.'));
-    return fetch(AGENTE + '/api/public/assistente/avaliar', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CW-Token': s.token, 'X-CW-Client': s.client, 'X-CW-Uid': s.uid }, body: JSON.stringify({ conversa: AV.conversa, mensagem: Number(id), nota: nota, texto: texto || '' }) })
+    return fetch(AGENTE + '/api/public/assistente/avaliar' + pConta('?'), { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CW-Token': s.token, 'X-CW-Client': s.client, 'X-CW-Uid': s.uid }, body: JSON.stringify({ conversa: AV.conversa, mensagem: Number(id), nota: nota, texto: texto || '' }) })
       .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(j){ if (!r.ok) throw new Error(j.error || 'não consegui registrar agora'); return j; }); })
       .then(function(){ var x = AV.mapa[id] || { id: Number(id), minha: null, ruimPor: null }; x.minha = nota; AV.mapa[id] = x; var b = document.querySelector('[data-dd-aval="' + id + '"]'); if (b) pintarAval(b, x); });
   }
@@ -568,8 +574,11 @@ textarea{flex:1;resize:none;height:40px;max-height:96px;padding:8px 10px;border:
     dica.textContent = !S ? 'Entrando…' : conversa ? 'Leio a conversa aberta e escrevo uma proposta para você revisar.' : 'Abra uma conversa para eu sugerir uma resposta.';
   }
   function cab(){ return { 'Content-Type': 'application/json', 'X-CW-Token': S.token, 'X-CW-Client': S.client, 'X-CW-Uid': S.uid }; }
+  // a conta vem no endereço do painel (?conta=N, posta pelo botão); o servidor confere se a pessoa é membro dela
+  var CONTA_Q = (function(){ var c = new URLSearchParams(location.search).get('conta'); return /^[1-9][0-9]{0,9}$/.test(c || '') ? c : ''; })();
+  function comConta(caminho){ return CONTA_Q ? caminho + (caminho.indexOf('?') < 0 ? '?' : '&') + 'conta=' + CONTA_Q : caminho; }
   function chamar(caminho, corpo){
-    return fetch(caminho, { method: 'POST', headers: cab(), body: JSON.stringify(corpo) }).then(function(r){
+    return fetch(comConta(caminho), { method: 'POST', headers: cab(), body: JSON.stringify(corpo) }).then(function(r){
       return r.json().catch(function(){ return {}; }).then(function(j){
         if (r.status === 401) { S = null; atualizar(); pedirSessao(); }
         return { ok: r.ok, status: r.status, j: j };
@@ -612,7 +621,7 @@ textarea{flex:1;resize:none;height:40px;max-height:96px;padding:8px 10px;border:
   function lerPausa(){
     if (!S || !conversa) { pausaEl.hidden = true; return; }
     var meu = ++lendoPausa, c = conversa;
-    fetch('/api/public/assistente/pausa?conversa=' + encodeURIComponent(c), { headers: cab() }).then(function(r){ return r.ok ? r.json() : null; })
+    fetch(comConta('/api/public/assistente/pausa?conversa=' + encodeURIComponent(c)), { headers: cab() }).then(function(r){ return r.ok ? r.json() : null; })
       .then(function(j){ if (meu === lendoPausa && c === conversa) mostrarPausa(j); }).catch(function(){ if (meu === lendoPausa) pausaEl.hidden = true; });
   }
   // ── avaliar a última resposta da Sofia (👍/👎); 👎 vira nota para a equipe e pode virar lição (com prévia, na tela Agente) ──

@@ -18,7 +18,8 @@ import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { logger } from '../lib/logger.js';
 import { env } from '../lib/env.js';
-import { contaChatwootDoAmbiente, criarContextoChatwoot, chamar, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
+import { contaChatwootDoAmbiente, chamar, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
+import { MENSAGEM_SEM_CONTA, contextoDaRequisicao, ehContaDoAmbiente } from '../lib/conta-da-requisicao.js';
 import { createHash } from 'node:crypto';
 import { prisma } from '../lib/prisma.js';
 import { conversasDasPaginas, diaEmBelem, montarHoje } from '../lib/chatwoot-hoje.js';
@@ -69,14 +70,11 @@ import {
   type SituacaoTarefa,
 } from '../lib/funil-chatwoot.js';
 
-let ctx: ContextoChatwoot | null | undefined;
-function contexto(): ContextoChatwoot | null {
-  if (ctx === undefined) {
-    const conta = contaChatwootDoAmbiente();
-    ctx = conta ? criarContextoChatwoot(conta) : null;
-  }
-  return ctx;
-}
+/** Só para as páginas estáticas (a origem do Chatwoot é a mesma para todas as contas). Os DADOS vêm de `contextoDaRequisicao`. */
+const origemDoCrm = (): string | null => {
+  const c = contaChatwootDoAmbiente();
+  return c ? new URL(c.url).origin : null;
+};
 
 // 30 chaves erradas por ip a cada 10 min
 const erros = new Map<string, { n: number; desde: number }>();
@@ -102,7 +100,8 @@ let conferencias = { n: 0, desde: 0 };
 type Conferencia = { nome: string; id: number | null; papel: string | null; email: string | null } | 'invalida' | 'sem-conta' | 'indisponivel' | 'excesso';
 
 async function quemEstaLogado(c: ContextoChatwoot, s: SessaoChatwoot): Promise<Conferencia> {
-  const k = createHash('sha256').update(`${s.token}|${s.client}|${s.uid}`).digest('hex');
+  // a conta entra na chave: «é membro da conta 1» guardado NÃO vale para a conta 2
+  const k = createHash('sha256').update(`${c.conta!.conta}|${s.token}|${s.client}|${s.uid}`).digest('hex');
   const t = sessoes.get(k);
   if (t && t.ate > Date.now()) return { nome: t.nome, id: t.id, papel: t.papel, email: t.email };
   if (Date.now() - conferencias.desde > 60_000) conferencias = { n: 0, desde: Date.now() };
@@ -152,11 +151,12 @@ export interface Acesso {
 }
 
 async function autorizado(req: Request, res: Response): Promise<Acesso | null> {
-  const c = contexto();
-  if (!c?.conta) {
-    res.status(404).json({ error: 'funil desligado (CRM não configurado)' });
+  const alvo = contextoDaRequisicao(req);
+  if (!('ctx' in alvo)) {
+    res.status(alvo.status).json({ error: alvo.status === 404 ? 'funil desligado (CRM não configurado)' : alvo.erro, ...(alvo.sessao ? { sessao: alvo.sessao } : {}) });
     return null;
   }
+  const c = alvo.ctx;
   const chave = req.get('x-funil-chave');
   if (chave) {
     const ip = req.ip ?? '?';
@@ -164,7 +164,12 @@ async function autorizado(req: Request, res: Response): Promise<Acesso | null> {
       res.status(429).json({ error: 'muitas tentativas — aguarde 10 minutos' });
       return null;
     }
-    if (chaveConfere(c.conta.token, chave)) return { c, logado: null, logadoId: null, sessao: null };
+    // o link avulso só abre a conta que tem token próprio (o global é o de Parauapebas)
+    if (!alvo.propria) {
+      res.status(403).json({ error: MENSAGEM_SEM_CONTA, sessao: 'sem-conta' });
+      return null;
+    }
+    if (chaveConfere(c.conta!.token, chave)) return { c, logado: null, logadoId: null, sessao: null };
     errou(ip);
     res.status(403).json({ error: 'chave do funil inválida' });
     return null;
@@ -202,11 +207,12 @@ export interface Atendente {
 }
 
 export async function sessaoDaAtendente(req: Request, res: Response): Promise<Atendente | null> {
-  const c = contexto();
-  if (!c?.conta) {
-    res.status(404).json({ error: 'assistente desligada (CRM não configurado)' });
+  const alvo = contextoDaRequisicao(req);
+  if (!('ctx' in alvo)) {
+    res.status(alvo.status).json({ error: alvo.status === 404 ? 'assistente desligada (CRM não configurado)' : alvo.erro, ...(alvo.sessao ? { sessao: alvo.sessao } : {}) });
     return null;
   }
+  const c = alvo.ctx;
   const sessao = sessaoDosCabecalhos((n) => req.get(n));
   if (!sessao) {
     res.status(401).json({ error: 'abra a assistente pelo CRM (entre no CRM de novo)', sessao: 'invalida' });
@@ -394,7 +400,8 @@ async function autorizadoComLogin(req: Request, res: Response): Promise<Acesso |
 async function autorizadoGestao(req: Request, res: Response): Promise<Acesso | null> {
   const a = await autorizadoComLogin(req, res);
   if (!a) return null;
-  if (!podeVerGestao(a.papel, a.email, process.env.CHATWOOT_GESTORES)) {
+  // a lista de gestores por e-mail é a de Parauapebas: noutra conta só vale o papel de administrador DELA
+  if (!podeVerGestao(a.papel, a.email, ehContaDoAmbiente(a.c) ? process.env.CHATWOOT_GESTORES : undefined)) {
     res.status(403).json({ error: 'esta tela é só para a gestão. Peça acesso à Suzanne.', semPermissao: true });
     return null;
   }
@@ -411,7 +418,7 @@ export async function funilOportunidadesHandler(req: Request, res: Response): Pr
   if (!a) return;
   try {
     const agora = Date.now();
-    const v = await memo(`op|${a.logadoId ?? a.logado}`, VALE_TELA_MS, async () => {
+    const v = await memo(`op|${a.c.conta!.conta}|${a.logadoId ?? a.logado}`, VALE_TELA_MS, async () => {
       const conversas = conversasDasPaginas(await paginasDasCaixas(a, 0, 'com-etapa'));
       return { ...montarOportunidades(conversas, agora), eu: a.logado, chatwoot: a.c.conta!.url, conta: a.c.conta!.conta };
     });
@@ -660,7 +667,7 @@ export async function funilMarketingHandler(req: Request, res: Response): Promis
   try {
     const periodo = periodoDe(req);
     const caixa = caixaDe(req);
-    const v = await memo(`mk|${a.logadoId ?? a.logado}|${periodo.chave}|${caixa}`, VALE_TELA_MS, async () => {
+    const v = await memo(`mk|${a.c.conta!.conta}|${a.logadoId ?? a.logado}|${periodo.chave}|${caixa}`, VALE_TELA_MS, async () => {
       const { conversas, slugs, cortou } = await conversasDasUnidades(a, caixa);
       const ids = conversas.map((c) => Number(c.id));
       const [agendadas, agendadasAntes, partida, lidos, gastos, gastosAntes, destinos, numeros] = await Promise.all([
@@ -707,7 +714,7 @@ export async function funilGestorHandler(req: Request, res: Response): Promise<v
   try {
     const periodo = periodoDe(req, true);
     const caixa = caixaDe(req);
-    const v = await memo(`gs|${a.logadoId ?? a.logado}|${periodo.chave}|${caixa}`, VALE_TELA_MS, async () => {
+    const v = await memo(`gs|${a.c.conta!.conta}|${a.logadoId ?? a.logado}|${periodo.chave}|${caixa}`, VALE_TELA_MS, async () => {
       const { conversas, slugs, cortou } = await conversasDasUnidades(a, caixa);
       const [lidos, gastos, faturado, diario, gastosAntes, faturadoAntes] = await Promise.all([
         referralsDe(a, doPeriodoDe(conversas, periodo).map((c) => ({ id: Number(c.id), caixa: Number(c.inbox_id) }))),
@@ -744,7 +751,7 @@ export async function funilGestorHandler(req: Request, res: Response): Promise<v
 export async function funilGestaoHandler(req: Request, res: Response): Promise<void> {
   const a = await autorizadoComLogin(req, res);
   if (!a) return;
-  res.set('Cache-Control', 'no-store').json({ gestao: podeVerGestao(a.papel, a.email, process.env.CHATWOOT_GESTORES) });
+  res.set('Cache-Control', 'no-store').json({ gestao: podeVerGestao(a.papel, a.email, ehContaDoAmbiente(a.c) ? process.env.CHATWOOT_GESTORES : undefined) });
 }
 
 export async function funilCaixasHandler(req: Request, res: Response): Promise<void> {
@@ -1062,12 +1069,13 @@ export async function funilNovoHandler(req: Request, res: Response): Promise<voi
 }
 
 export function paginaFunilHandler(_req: Request, res: Response): void {
-  if (!contexto()?.conta) {
+  const origem = origemDoCrm();
+  if (!origem) {
     res.status(404).type('html').send('<!doctype html><meta charset="utf-8"><p style="font-family:sans-serif;padding:24px">Funil desligado.</p>');
     return;
   }
   res.type('html').send(
-    PAGINA.replace('__ORIGEM_CW__', JSON.stringify(new URL(contexto()!.conta!.url).origin))
+    PAGINA.replace('__ORIGEM_CW__', JSON.stringify(origem))
       .split('__GUIA_LIGADO__').join(String(guiaDaEtapaLigado()))
       .split('/*__TELAS_CSS__*/').join(TELAS_CSS)
       .split('/*__TELAS_JS__*/').join(TELAS_JS),
@@ -1340,7 +1348,7 @@ body{background:#f4f6f9}
 <section class="lead" id="lead" hidden></section>
 <script>
 (function(){
-  var q=new URLSearchParams(location.search), K=q.get('k')||'', MENU=q.get('menu')==='1', TELA=['hoje','oport','mkt','gestor'].indexOf(q.get('tela'))>=0?q.get('tela'):'', ORIGEM_CW=__ORIGEM_CW__, DENTRO=window.parent!==window;
+  var q=new URLSearchParams(location.search), K=q.get('k')||'', CONTA=/^[1-9][0-9]{0,9}$/.test(q.get('conta')||'')?q.get('conta'):'', MENU=q.get('menu')==='1', TELA=['hoje','oport','mkt','gestor'].indexOf(q.get('tela'))>=0?q.get('tela'):'', ORIGEM_CW=__ORIGEM_CW__, DENTRO=window.parent!==window;
   var S=null, iniciado=false, timer=null, morta=null, dados=null, caixas=[], aberta=null, ficha=null, filtro='', recolhidas={}, atualizadoEm=0, arrastando=null, formNaColuna=null, aba='principal', modo='mensagem', ctxConversa=null;
   var CORES=['#64748b','#1f93ff','#d97706','#7c3aed','#4f46e5','#16a34a','#15803d','#0d9488','#db2777','#dc2626','#94a3b8'];
   var AV=[['#1f73d6','#e6f1ff'],['#c2410c','#fff0e6'],['#15803d','#e8f7ee'],['#7c3aed','#f1ebff'],['#be185d','#fdebf3'],['#0f766e','#e6f6f4'],['#a16207','#fdf6e3'],['#4338ca','#eceeff']];
@@ -1351,7 +1359,7 @@ body{background:#f4f6f9}
   function cabecalhos(){ var h={'Content-Type':'application/json'}; if(S){ h['X-CW-Token']=S.token; h['X-CW-Client']=S.client; h['X-CW-Uid']=S.uid; } else if(K) h['X-Funil-Chave']=K; return h; }
   function pedirSessao(){ if(DENTRO){ try{ window.parent.postMessage({event:'funil:pede-sessao'},ORIGEM_CW); }catch(e){} } }
   async function api(m,p,b){
-    var r=await fetch('/api/public/funil/'+p,{method:m,headers:cabecalhos(),body:b?JSON.stringify(b):undefined});
+    var r=await fetch('/api/public/funil/'+p+(CONTA?(p.indexOf('?')<0?'?':'&')+'conta='+CONTA:''),{method:m,headers:cabecalhos(),body:b?JSON.stringify(b):undefined});
     var j=await r.json().catch(function(){ return {}; });
     if(r.status===403&&S&&j.sessao==='invalida'){ morta=S.token; S=null; parar(); iniciado=false; pedirSessao(); }
     if(r.status===403&&S&&j.sessao==='sem-conta') parar();
@@ -1683,8 +1691,7 @@ body{background:#f4f6f9}
  * Se um dia o Chatwoot mudar o menu e o item não achar lugar, aparece um botão "Funil" no canto (nada quebra).
  */
 export function menuFunilHandler(_req: Request, res: Response): void {
-  const c = contexto();
-  if (!c?.conta) {
+  if (!origemDoCrm()) {
     res.status(404).type('application/javascript').send('/* funil desligado */');
     return;
   }
@@ -1727,7 +1734,10 @@ const MENU_JS = String.raw`(function(){
     var a = document.querySelector('aside'), r = a && a.getBoundingClientRect();
     return r && r.width > 0 && r.right > 0 && r.right < window.innerWidth * 0.5 ? Math.round(r.right) : 0;
   }
-  function ajustar(){ if (cam) cam.style.left = margem() + 'px'; }
+  // trocou de clínica (outra conta do Chatwoot) com a tela aberta: fecha — a conversa 5 de uma conta não é a da outra
+  var contaAberta = null;
+  function contaDaUrlDoMenu(){ var m = location.pathname.match(/\/accounts\/(\d+)/); return m ? m[1] : null; }
+  function ajustar(){ if (cam && contaAberta !== null && contaAberta !== contaDaUrlDoMenu()) { fechar(); return; } if (cam) cam.style.left = margem() + 'px'; }
   // As telas do menu, na ordem: Contatos → Hoje (com Oportunidades, Marketing e Gestor dentro) → Funil. As marcadas «gestao» só
   // aparecem para administrador da conta ou gestor da lista (e o servidor confere de novo a cada pedido de dados).
   // Oportunidades, Marketing e Gestor ficam DENTRO de Hoje, como submenu (pedido do João, 13/11); o Funil vem depois do grupo
@@ -1808,7 +1818,10 @@ const MENU_JS = String.raw`(function(){
     var t = achar(typeof id === 'string' ? id : 'funil') || achar('funil');
     if (t.gestao && gestao !== true) return;
     lembrar(t.id);
-    var url = t.url ? AGENTE + t.url + '?menu=1' : AGENTE + '/funil?menu=1' + (t.param ? '&tela=' + t.param : '');
+    // a conta em que a pessoa está (…/app/accounts/<N>/…): é só o PEDIDO; o servidor confere se ela é membro dessa conta
+    var cm = location.pathname.match(/\/accounts\/(\d+)/), pc = cm ? '&conta=' + cm[1] : '';
+    contaAberta = cm ? cm[1] : null;
+    var url = t.url ? AGENTE + t.url + '?menu=1' + pc : AGENTE + '/funil?menu=1' + (t.param ? '&tela=' + t.param : '') + pc;
     if (cam && tela !== t.id && fr) { fr.src = url; fr.title = t.nome; }
     tela = t.id;
     porNoEndereco(t);
@@ -1940,7 +1953,8 @@ const MENU_JS = String.raw`(function(){
   function decidirGestao(p){
     if (papel === 'administrator') return Promise.resolve(true);
     var s = sessao(); if (!s) return Promise.resolve(false);
-    return fetch(AGENTE + '/api/public/funil/gestao', { headers: { 'X-CW-Token': s.token, 'X-CW-Client': s.client, 'X-CW-Uid': s.uid } })
+    var cm = location.pathname.match(/\/accounts\/(\d+)/);
+    return fetch(AGENTE + '/api/public/funil/gestao' + (cm ? '?conta=' + cm[1] : ''), { headers: { 'X-CW-Token': s.token, 'X-CW-Client': s.client, 'X-CW-Uid': s.uid } })
       .then(function(r){ return r.ok ? r.json() : null; })
       .then(function(j){ return !!(j && j.gestao === true); })
       .catch(function(){ return false; });

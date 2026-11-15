@@ -10,6 +10,7 @@
  * A regra entra no bloco `<aprendizados>` do prompt (`renderLessons`), com a trava de pronto-socorro de sempre.
  * As travas que a unidade não desliga moram em `lib/aprendizados-unidade.ts`. Cada regra salva ou desligada avisa o João.
  */
+import { unidadeEDaConta } from '../lib/conta-da-requisicao.js';
 import { sessaoDaAtendente } from './funil.controller.js';
 import { leituraComLogin } from './assistente.controller.js';
 import { CAIXAS_REGUA } from '../lib/chatwoot-regua.js';
@@ -86,6 +87,11 @@ export async function atendenteDaUnidade(
 ): Promise<{ a: NonNullable<Awaited<ReturnType<typeof sessaoDaAtendente>>>; unit: Unit } | null> {
   const a = await sessaoDaAtendente(req, res);
   if (!a) return null;
+  // a unidade tem que morar na conta da sessão: antes de qualquer leitura no Chatwoot
+  if (!unidadeEDaConta(slug, a.c)) {
+    res.status(403).json({ error: 'você não atende esta unidade' });
+    return null;
+  }
   let caixas: number[];
   try {
     caixas = await leituraComLogin(a.c, a.sessao).caixas();
