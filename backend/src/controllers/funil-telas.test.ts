@@ -270,6 +270,10 @@ test('página (todas as telas) PARSEIA, sem marcador sobrando; as novas só fala
   assert.match(script!, /oportunidades/);
   assert.match(script!, /tel:/);
   assert.match(script!, /window\.print\(\)/);
+  // o «?» do cabeçalho pede a aula da tela ao menu do CRM (só dentro do CRM): funil, hoje e oportunidades; marketing e gestor não têm aula
+  assert.match(html, /id="ajuda"/);
+  assert.match(script!, /event:'guia:tela',tela:aula/);
+  assert.match(script!, /TELA===''\?'funil':TELA==='hoje'\?'hoje':TELA==='oport'\?'oportunidades':''/);
   assert.match(html, /@media print/);
   // «Mensagem» / «Agendar retorno» / «Confirmar» só abrem a conversa (função existente), nunca chamam a rota de mensagem
   const novo = script!.slice(script!.indexOf('Oportunidades · Marketing · Gestor'));

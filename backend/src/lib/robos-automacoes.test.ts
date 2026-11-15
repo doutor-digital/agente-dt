@@ -76,6 +76,7 @@ test('as fixas leem o estado do MESMO ambiente que o código lê; sem interrupto
   const padrao = await estado({});
   assert.equal(padrao['fixa-atalhos'], 'ligado');
   assert.equal(padrao['fixa-resolver'], 'ligado');
+  assert.equal(padrao['fixa-guia-etapa'], 'ligado', 'o guia da etapa vem ligado');
   assert.equal(padrao['fixa-etiqueta-anuncio'], 'ligado');
   assert.equal(padrao['fixa-nota-anuncio'], 'ligado');
   assert.equal(padrao['fixa-sofia-robo'], 'desligado', 'a Sofia como robô só liga com CHATWOOT_SOFIA_COMO_BOT=1');
@@ -85,11 +86,12 @@ test('as fixas leem o estado do MESMO ambiente que o código lê; sem interrupto
   const desl = await estado({ CHATWOOT_ATALHOS: '0', CHATWOOT_RESOLVER_OBRIGATORIO: '0', CHATWOOT_ETIQUETA_ANUNCIO: '0', CHATWOOT_NOTA_ANUNCIO: '0', CHATWOOT_SOFIA_COMO_BOT: '1' });
   assert.equal(desl['fixa-atalhos'], 'desligado');
   assert.equal(desl['fixa-resolver'], 'desligado');
+  assert.equal((await estado({ CHATWOOT_GUIA_ETAPA: '0' }))['fixa-guia-etapa'], 'desligado', '«0» desliga o guia da etapa');
   assert.equal(desl['fixa-etiqueta-anuncio'], 'desligado');
   assert.equal(desl['fixa-nota-anuncio'], 'desligado');
   assert.equal(desl['fixa-sofia-robo'], 'ligado');
   // e as variáveis citadas existem de verdade no código que as lê
-  const codigo = ['chatwoot-assistente-ui.ts', 'chatwoot-origem.ts', 'chatwoot-anuncio.ts', 'chatwoot-sofia-bot.ts'].map((f) => fonte(`./${f}`)).join('\n');
+  const codigo = ['chatwoot-assistente-ui.ts', 'chatwoot-guia-etapas.ts', 'chatwoot-origem.ts', 'chatwoot-anuncio.ts', 'chatwoot-sofia-bot.ts'].map((f) => fonte(`./${f}`)).join('\n');
   for (const f of A.FIXAS.filter((x) => x.variavel)) assert.ok(codigo.includes(f.variavel!), `${f.variavel} não está mais no código`);
 });
 
