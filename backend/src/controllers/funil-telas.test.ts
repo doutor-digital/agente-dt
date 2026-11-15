@@ -3,7 +3,7 @@
  * (mesmo chamando a URL direto); os dados saem sempre com o login da própria pessoa; fonte não ligada vira estado, não número inventado;
  * e o `menu.js` e a página PARSEIAM como JavaScript.
  */
-import { test } from 'node:test';
+import { mock, test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Request, Response } from 'express';
 
@@ -11,6 +11,11 @@ process.env.CHATWOOT_API_TOKEN = 'token-da-conta';
 process.env.CHATWOOT_CONTA_ID = '1';
 process.env.CHATWOOT_URL = 'https://chatwoot.exemplo.test';
 process.env.CHATWOOT_GESTORES = 'ana@dd.com';
+
+// O RELÓGIO É FIXO: as telas contam «hoje», «manhã» e «semana» em Belém a partir de Date.now(), e as conversas do teste nascem «1 hora atrás». Com o
+// relógio de verdade o resultado dependia da hora do dia em que a suíte rodava (de madrugada, «1 hora atrás» caía em ontem e o período «manhã» ficava
+// vazio). Quarta 18/11/2026, 11:00 em Belém; só o Date é simulado (timers e rede seguem reais).
+mock.timers.enable({ apis: ['Date'], now: new Date('2026-11-18T14:00:00Z') });
 
 const AGORA_S = Math.floor(Date.now() / 1000);
 const conversa = (id: number, o: Record<string, any> = {}) => ({

@@ -124,7 +124,7 @@ const pedir = (o: Partial<Parameters<typeof A.mudarAutomacao>[1]> & { hoje?: 'li
   ...o,
 });
 
-test('só administrador do Chatwoot muda; atendente (agent/sem papel) é recusada e nada é gravado; o registro leva o nome e «(Chatwoot)»', async () => {
+test('só administrador do CRM muda; atendente (agent/sem papel) é recusada e nada é gravado; o registro leva o nome e «(CRM)»', async () => {
   const { banco, gravacoes } = bancoFalso();
   for (const papel of ['agent', null, undefined, '']) {
     const r = await A.mudarAutomacao(banco, pedir({ papel }));

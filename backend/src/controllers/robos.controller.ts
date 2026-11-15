@@ -34,7 +34,7 @@ function ctx(): ContextoChatwoot | null {
 export function paginaRobosHandler(_req: Request, res: Response): void {
   const conta = contaChatwootDoAmbiente();
   if (!conta) {
-    res.status(404).type('html').send('<!doctype html><meta charset="utf-8"><p style="font-family:sans-serif;padding:24px">Chatwoot não configurado.</p>');
+    res.status(404).type('html').send('<!doctype html><meta charset="utf-8"><p style="font-family:sans-serif;padding:24px">CRM não configurado.</p>');
     return;
   }
   res.type('html').set('Cache-Control', 'no-store').send(paginaDosRobos(new URL(conta.url).origin));

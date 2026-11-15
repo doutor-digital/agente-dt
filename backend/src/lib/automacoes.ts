@@ -943,9 +943,9 @@ export const AUTOMACOES: readonly Automacao[] = [
   {
     id: 'chatwoot-regua',
     chave: 'CHATWOOT_REGUA_SLUGS',
-    nome: 'Régua no Chatwoot',
+    nome: 'Régua no CRM',
     oQueFaz:
-      'A régua de mensagens do Kommo da unidade (os mesmos gatilhos ligados lá: follow-up do perdido, pré-pagamento, véspera/dia/preparo da consulta, falta, pós-consulta e decisão, em espera, etiquetas da SDR, sessão, alta, cancelamento) rodando no Chatwoot. «Só no papel» não manda nada ao paciente: deixa uma NOTA PRIVADA na conversa com o que faria. Ligada, manda a mensagem de verdade. Os robôs internos do Kommo (lead quente parado 3 h, 24 h sem responder, «Fechou» sem «Fechou tratamento») viram nota privada para a equipe + ação (prioridade, etiqueta, etapa Perdido) — nunca mensagem ao paciente. Em qualquer modo ligado ou no papel, também põe/tira a etiqueta «respondeu pelo celular».',
+      'A régua de mensagens do Kommo da unidade (os mesmos gatilhos ligados lá: follow-up do perdido, pré-pagamento, véspera/dia/preparo da consulta, falta, pós-consulta e decisão, em espera, etiquetas da SDR, sessão, alta, cancelamento) rodando no CRM. «Só no papel» não manda nada ao paciente: deixa uma NOTA PRIVADA na conversa com o que faria. Ligada, manda a mensagem de verdade. Os robôs internos do Kommo (lead quente parado 3 h, 24 h sem responder, «Fechou» sem «Fechou tratamento») viram nota privada para a equipe + ação (prioridade, etiqueta, etapa Perdido) — nunca mensagem ao paciente. Em qualquer modo ligado ou no papel, também põe/tira a etiqueta «respondeu pelo celular».',
     pegadinha:
       'Hoje só a caixa da Parauapebas. Só dispara entre 8h e 20h (Belém), de segunda a sábado; regra «antes» vale até 2 h depois do horário e as «depois» até 12 h, passou disso não manda (não dispara atrasado em massa). O que a conversa já tinha antes do worker começar a olhar não conta como «entrou agora». Nunca repete a mesma ocorrência; consulta remarcada avisa de novo. Campo faltando no texto (data, valor da parcela, chave Pix, atendente) = não manda, e no papel a nota diz o que falta. Ligar depois do papel NÃO reenvia o que o papel já «enviou». Os modelos não têm botões (WhatsApp não oficial): vai só o texto.',
     risco: 'manda-mensagem',
@@ -957,11 +957,11 @@ export const AUTOMACOES: readonly Automacao[] = [
   {
     id: 'chatwoot-ia',
     chave: 'CHATWOOT_IA_SLUGS',
-    nome: 'Sofia e transcrição no Chatwoot',
+    nome: 'Sofia e transcrição no CRM',
     oQueFaz:
-      'Para cada mensagem nova do paciente na caixa da unidade no Chatwoot: áudio vira NOTA PRIVADA com a transcrição; e, depois de 60 s sem o paciente escrever, a Sofia lê a conversa e responde com as ferramentas REAIS (horários da agenda da franquia, cadastro, agendamento, sinal Pix, e campos/etiquetas/etapa na própria conversa). «Só no papel»: lê os horários de verdade, mas o que escreve (cadastrar, agendar, sinal, etiqueta, etapa) é simulado, e ela deixa uma NOTA PRIVADA com o que responderia e as ações que tomaria — nada vai ao paciente. Ligada: manda a resposta como mensagem pública (o Pix do sinal numa mensagem só dele, o endereço depois de marcar) e grava de verdade; depois de agendar, grava data, hora, situação «Agendado» e a etapa.',
+      'Para cada mensagem nova do paciente na caixa da unidade no CRM: áudio vira NOTA PRIVADA com a transcrição; e, depois de 60 s sem o paciente escrever, a Sofia lê a conversa e responde com as ferramentas REAIS (horários da agenda da franquia, cadastro, agendamento, sinal Pix, e campos/etiquetas/etapa na própria conversa). «Só no papel»: lê os horários de verdade, mas o que escreve (cadastrar, agendar, sinal, etiqueta, etapa) é simulado, e ela deixa uma NOTA PRIVADA com o que responderia e as ações que tomaria — nada vai ao paciente. Ligada: manda a resposta como mensagem pública (o Pix do sinal numa mensagem só dele, o endereço depois de marcar) e grava de verdade; depois de agendar, grava data, hora, situação «Agendado» e a etapa.',
     pegadinha:
-      'Hoje só a caixa da Parauapebas. NÃO responde contato INTERNO: o número da unidade também recebe recado da própria equipe («libera», «acabando»), e a equipe marca esses contatos com a etiqueta «interno» na conversa (a etiqueta precisa existir em Configurações > Etiquetas) ou com o atributo «interno» = sim no contato — sem marca, a Sofia responde. Se a EQUIPE já combinou horário na conversa («às 08:00») e a agenda da franquia diz outro (ou não há consulta, ou a franquia não respondeu), a Sofia NÃO confirma horário nenhum: passa a conversa para a equipe (etiqueta «esperando-humano» + nota; no papel, só a nota). NÃO responde paciente com cartão ativo no Kommo da unidade (só deixa nota), nem se não conseguir conferir o Kommo, nem conversa já passada à equipe («Esperando humano»), paciente em tratamento, grupo ou sem telefone. Não roda se alguém da equipe respondeu depois da última mensagem do paciente (conferido de novo na hora de mandar). Teto de chamadas da Sofia por dia por unidade; passou, para até o dia seguinte. A conversa do Chatwoot usa uma chave de lead própria (2 bilhões + id da conversa) nas tabelas de vínculo e de sinal: não é cartão do Kommo e o lembrete do Kommo a ignora. Ligar sem ter visto o papel: a primeira marcação real é de paciente de verdade. O Pix do sinal só sai se a automação «sinal-pix» (baixa) estiver ligada na unidade; senão a Sofia passa para a equipe.',
+      'Hoje só a caixa da Parauapebas. NÃO responde contato INTERNO: o número da unidade também recebe recado da própria equipe («libera», «acabando»), e a equipe marca esses contatos com a etiqueta «interno» na conversa (a etiqueta precisa existir em Configurações > Etiquetas) ou com o atributo «interno» = sim no contato — sem marca, a Sofia responde. Se a EQUIPE já combinou horário na conversa («às 08:00») e a agenda da franquia diz outro (ou não há consulta, ou a franquia não respondeu), a Sofia NÃO confirma horário nenhum: passa a conversa para a equipe (etiqueta «esperando-humano» + nota; no papel, só a nota). NÃO responde paciente com cartão ativo no Kommo da unidade (só deixa nota), nem se não conseguir conferir o Kommo, nem conversa já passada à equipe («Esperando humano»), paciente em tratamento, grupo ou sem telefone. Não roda se alguém da equipe respondeu depois da última mensagem do paciente (conferido de novo na hora de mandar). Teto de chamadas da Sofia por dia por unidade; passou, para até o dia seguinte. A conversa do CRM usa uma chave de lead própria (2 bilhões + id da conversa) nas tabelas de vínculo e de sinal: não é cartão do Kommo e o lembrete do Kommo a ignora. Ligar sem ter visto o papel: a primeira marcação real é de paciente de verdade. O Pix do sinal só sai se a automação «sinal-pix» (baixa) estiver ligada na unidade; senão a Sofia passa para a equipe.',
     risco: 'manda-mensagem',
     temSeco: true,
     exigeSecoAntes: true,
@@ -971,9 +971,9 @@ export const AUTOMACOES: readonly Automacao[] = [
   {
     id: 'chatwoot-agenda',
     chave: 'CHATWOOT_AGENDA_SLUGS',
-    nome: 'Agenda da franquia no Chatwoot',
+    nome: 'Agenda da franquia no CRM',
     oQueFaz:
-      'Lê a agenda da franquia da unidade (de ontem até 14 dias à frente, a cada 15 min) e preenche na conversa do Chatwoot a data, a hora, a situação (Agendado, Confirmado, Atendido, Não compareceu, Remarcado, Desmarcado) e a categoria da consulta — o que a régua usa para véspera, dia, preparo, falta e pós-consulta. «Só no papel» deixa NOTA PRIVADA com o que gravaria; ligado grava (mantendo os outros campos) e deixa nota curta.',
+      'Lê a agenda da franquia da unidade (de ontem até 14 dias à frente, a cada 15 min) e preenche na conversa do CRM a data, a hora, a situação (Agendado, Confirmado, Atendido, Não compareceu, Remarcado, Desmarcado) e a categoria da consulta — o que a régua usa para véspera, dia, preparo, falta e pós-consulta. «Só no papel» deixa NOTA PRIVADA com o que gravaria; ligado grava (mantendo os outros campos) e deixa nota curta.',
     pegadinha:
       'A agenda da franquia não traz telefone: casa pelo NOME do paciente no cadastro da franquia e pelo WhatsApp desse cadastro. Nome repetido com telefones diferentes, ou cadastro sem WhatsApp, não casa (fica como está). Por pessoa vale o próximo agendamento de pé; sem ele, o mais recente que passou. Hoje só a caixa da Parauapebas.',
     risco: 'escreve-campo',
@@ -985,11 +985,11 @@ export const AUTOMACOES: readonly Automacao[] = [
   {
     id: 'chatwoot-duplicados',
     chave: 'CHATWOOT_DUPLICADOS_SLUGS',
-    nome: 'Juntar contatos duplicados no Chatwoot',
+    nome: 'Juntar contatos duplicados no CRM',
     oQueFaz:
-      'A cada 30 min procura no Chatwoot o mesmo paciente cadastrado duas vezes (com e sem o 9: mesmo DDD e mesmos 8 últimos dígitos). «Só no papel» deixa uma nota no contato mais antigo dizendo qual juntaria. Ligada, junta: as conversas do contato novo passam para o antigo, o novo some, e fica uma nota contando.',
+      'A cada 30 min procura no CRM o mesmo paciente cadastrado duas vezes (com e sem o 9: mesmo DDD e mesmos 8 últimos dígitos). «Só no papel» deixa uma nota no contato mais antigo dizendo qual juntaria. Ligada, junta: as conversas do contato novo passam para o antigo, o novo some, e fica uma nota contando.',
     pegadinha:
-      'Juntar NÃO TEM VOLTA (o contato que entra é apagado). Só número do Brasil completo (55 + DDD + 8 ou 9 dígitos). No máximo 5 junções por ciclo. Fica sempre o contato mais antigo. O liga/desliga vale pela unidade da caixa do Chatwoot (hoje Parauapebas), mas os contatos são da conta inteira.',
+      'Juntar NÃO TEM VOLTA (o contato que entra é apagado). Só número do Brasil completo (55 + DDD + 8 ou 9 dígitos). No máximo 5 junções por ciclo. Fica sempre o contato mais antigo. O liga/desliga vale pela unidade da caixa do CRM (hoje Parauapebas), mas os contatos são da conta inteira.',
     risco: 'escreve-campo',
     temSeco: true,
     exigeSecoAntes: true,
@@ -999,9 +999,9 @@ export const AUTOMACOES: readonly Automacao[] = [
   {
     id: 'chatwoot-capi',
     chave: 'CHATWOOT_CAPI_SLUGS',
-    nome: 'Conversões do Chatwoot para a Meta (CAPI)',
+    nome: 'Conversões do CRM para a Meta (CAPI)',
     oQueFaz:
-      'A cada 10 min olha as conversas da caixa de WhatsApp oficial da unidade no Chatwoot e, quando uma conversa que veio de anúncio «Clique para o WhatsApp» ENTRA em Agendado/Confirmado, Compareceu (ou consulta Atendida) ou Fechou (ou «Fechou tratamento»), manda UM evento para a Meta (AddToCart, InitiateCheckout, Purchase — os mesmos nomes do rastreio do Kommo), para o algoritmo buscar paciente que agenda, comparece e fecha. «Só no papel» não chama a Meta: registra e loga «enviaria evento X para a conversa Y (anúncio Z)».',
+      'A cada 10 min olha as conversas da caixa de WhatsApp oficial da unidade no CRM e, quando uma conversa que veio de anúncio «Clique para o WhatsApp» ENTRA em Agendado/Confirmado, Compareceu (ou consulta Atendida) ou Fechou (ou «Fechou tratamento»), manda UM evento para a Meta (AddToCart, InitiateCheckout, Purchase — os mesmos nomes do rastreio do Kommo), para o algoritmo buscar paciente que agenda, comparece e fecha. «Só no papel» não chama a Meta: registra e loga «enviaria evento X para a conversa Y (anúncio Z)».',
     pegadinha:
       'Hoje só a caixa 3 da Parauapebas (WhatsApp oficial via Kapso). Sem clique de anúncio (lead orgânico, ou anúncio em Status, que não traz ctwa_clid) não manda nada. Só conta a ENTRADA no estado: o que já estava assim na 1ª varredura é ignorado, e evento com mais de 7 dias não vai (a Meta recusa). NUNCA repete a mesma conversa + evento, e a Meta não deduplica este caminho: erro de tempo esgotado sem resposta fica «incerto» e não repete. Precisa de META_ADS_TOKEN_PARAUAPEBAS no servidor do agente (o mesmo token do rastreio no n8n) e do dataset da WABA (descobre sozinho, ou META_DATASET_ID_PARAUAPEBAS); sem eles não chama a Meta e avisa no log uma vez. Se o paciente também tem cartão no Kommo da unidade, o n8n pode mandar o mesmo evento: a Meta soma os dois.',
     risco: 'manda-dado-externo',
@@ -1013,9 +1013,9 @@ export const AUTOMACOES: readonly Automacao[] = [
   {
     id: 'chatwoot-origem',
     chave: 'CHATWOOT_ORIGEM_SLUGS',
-    nome: 'Origem e campanha no contato do Chatwoot',
+    nome: 'Origem e campanha no contato do CRM',
     oQueFaz:
-      'Quando uma mensagem de paciente comprovadamente veio de anúncio «Clique para o WhatsApp» (o servidor acha o código do anúncio no Kapso, porque o Chatwoot o perde), preenche no CONTATO Origem = «Meta Ads» e os nomes da Campanha e do Conjunto de anúncios (lidos na Meta pelo id do anúncio). Igual ao rastreio do Kommo, que preenche o cartão. Não marca «Orgânico» por dedução. «Só no papel» não grava: loga «preencheria no contato N: …».',
+      'Quando uma mensagem de paciente comprovadamente veio de anúncio «Clique para o WhatsApp» (o servidor acha o código do anúncio no Kapso, porque o CRM o perde), preenche no CONTATO Origem = «Meta Ads» e os nomes da Campanha e do Conjunto de anúncios (lidos na Meta pelo id do anúncio). Igual ao rastreio do Kommo, que preenche o cartão. Não marca «Orgânico» por dedução. «Só no papel» não grava: loga «preencheria no contato N: …».',
     pegadinha:
       'Só grava campo VAZIO e relê o contato antes de gravar: o que a equipe preencheu à mão nunca é trocado. Precisa do token de anúncios da unidade (o mesmo do Marketing) para os nomes; sem ele, ou se a Meta não responder, grava só a Origem. Anúncio em Status não traz o id do anúncio: fica só a Origem. Não manda nada ao paciente nem escreve na conversa.',
     risco: 'escreve-campo',

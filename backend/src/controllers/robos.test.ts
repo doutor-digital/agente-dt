@@ -28,6 +28,10 @@ test('a página dos Robôs parseia, só aceita a origem do Chatwoot e tem o mold
   assert.ok(html.includes(`var CW = "${CW}"`));
   assert.ok(html.includes('ev.origin !== CW || ev.source !== window.parent'));
   assert.ok(!html.includes('__ORIGEM_CW__'));
+  // a logo da Doutor Digital entra embutida (sem placeholder sobrando) e todo ícone usado existe como símbolo
+  assert.ok(!html.includes('__LOGO_DD__'));
+  assert.ok(html.includes('src="data:image/png;base64,'), 'logo DD embutida');
+  for (const usado of new Set(Array.from(html.matchAll(/'(i-[a-z]+)'/g), (m) => m[1]))) assert.ok(html.includes(`<symbol id="${usado}"`), `símbolo ${usado}`);
   for (const id of ['id="lista"', 'id="tela"', 'id="abEd"', 'id="abEx"', 'id="swAtivo"', 'id="busca"']) assert.ok(html.includes(id), id);
   for (const bloco of ["'Gatilho'", "'Esperar'", "'Só se'", "'Não envia'", 'Proteções de todo robô']) assert.ok(html.includes(bloco), bloco);
   assert.ok(html.includes('radial-gradient(var(--dot)'), 'prancheta pontilhada');
