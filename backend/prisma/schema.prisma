@@ -1950,6 +1950,8 @@ model UnitChatwoot {
   wabaId String? @map("waba_id")
   /// Sufixo das variáveis de ambiente da Meta desta unidade ("PARAUAPEBAS" → META_ADS_TOKEN_PARAUAPEBAS).
   envSufixo String @map("env_sufixo")
+  /// Conta do Chatwoot desta unidade (1 conta por clínica vendida). Null = a conta do ambiente (CHATWOOT_CONTA_ID): é o caso de Parauapebas.
+  contaId Int? @map("conta_id")
   /// Dados que entram NO TEXTO dos modelos: { nome, cidade, endereco, mapa, telefone?, valorConsulta?, valorComSinal? }.
   dadosModelos Json @map("dados_modelos")
   atualizadoPor String?  @map("atualizado_por")
@@ -2814,7 +2816,9 @@ model ChatwootReguaDisparo {
   texto          String
   criadoEm       DateTime @default(now()) @map("criado_em")
 
-  @@unique([conversationId, regra, chave])
+  /// A caixa (inbox) é única na INSTALAÇÃO do Chatwoot; o `conversation_id` da API é por CONTA (display_id). Com uma conta por clínica,
+  /// a conversa 5 da conta 1 e a conversa 5 da conta 2 têm o mesmo id: a chave precisa incluir a caixa.
+  @@unique([caixa, conversationId, regra, chave])
   @@index([caixa, criadoEm])
   @@map("chatwoot_regua_disparo")
 }

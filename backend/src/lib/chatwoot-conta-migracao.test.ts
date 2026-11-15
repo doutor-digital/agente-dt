@@ -1,0 +1,105 @@
+/**
+ * Passo 1 do «uma conta do Chatwoot por clínica»: o banco. A chave do registro da régua passa a incluir a CAIXA (o id da conversa é por conta),
+ * e as escritas de «desfazer» e «marcar» passam a levar a caixa. Para Parauapebas (uma conta só) nada muda: a caixa já era gravada em toda linha.
+ */
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+
+process.env.KOMMO_SUBDOMAIN ??= 'teste';
+process.env.KOMMO_ACCESS_TOKEN ??= 'token-de-teste-123';
+process.env.OPENAI_API_KEY ??= 'sk-teste-1234567890';
+
+const { prisma } = await import('./prisma.js');
+const { armazemDoBanco } = await import('./chatwoot-regua-worker.js');
+const { armazemDoBanco: armazemDoCapi } = await import('./chatwoot-capi.js');
+
+/** Troca o delegate `chatwootReguaDisparo` do prisma por um falso que anota as chamadas; devolve como desfazer. */
+function falsoDoDisparo(metodos: Record<string, (args: unknown) => unknown>) {
+  const chamadas: Array<{ metodo: string; args: unknown }> = [];
+  const falso = Object.fromEntries(Object.entries(metodos).map(([m, f]) => [m, async (args: unknown) => (chamadas.push({ metodo: m, args }), f(args))]));
+  const original = Object.getOwnPropertyDescriptor(prisma, 'chatwootReguaDisparo');
+  Object.defineProperty(prisma, 'chatwootReguaDisparo', { value: falso, configurable: true, writable: true });
+  return {
+    chamadas,
+    restaurar: () => {
+      if (original) Object.defineProperty(prisma, 'chatwootReguaDisparo', original);
+      else delete (prisma as unknown as Record<string, unknown>).chatwootReguaDisparo;
+    },
+  };
+}
+
+const lerAqui = (rel: string) => readFileSync(new URL(rel, import.meta.url), 'utf8');
+
+test('migration: o índice NOVO nasce antes de o antigo cair, a coluna conta_id é nula e sem valor padrão, e nada é apagado', () => {
+  const sql = lerAqui('../../prisma/migrations/20261115120000_chatwoot_conta_por_unidade/migration.sql');
+  const sem = sql.split('\n').filter((l) => !l.trim().startsWith('--')).join('\n');
+  const novo = sem.indexOf('CREATE UNIQUE INDEX IF NOT EXISTS "chatwoot_regua_disparo_caixa_conversation_id_regra_chave_key"');
+  const antigo = sem.indexOf('DROP INDEX IF EXISTS "chatwoot_regua_disparo_conversation_id_regra_chave_key"');
+  assert.ok(novo >= 0 && antigo > novo, 'cria o novo e só depois derruba o antigo (nunca fica sem proteção)');
+  assert.match(sem, /ALTER TABLE "unit_chatwoot" ADD COLUMN IF NOT EXISTS "conta_id" INTEGER;/);
+  assert.doesNotMatch(sem, /DEFAULT|NOT NULL|DROP TABLE|DROP COLUMN|DELETE|TRUNCATE|UPDATE/i, 'só aditivo: sem valor padrão, sem apagar nem reescrever dado');
+  assert.match(sem, /"caixa", "conversation_id", "regra", "chave"/);
+});
+
+test('schema: a chave única inclui a caixa e unit_chatwoot tem conta_id opcional', () => {
+  const s = lerAqui('../../prisma/schema.prisma');
+  assert.match(s, /@@unique\(\[caixa, conversationId, regra, chave\]\)\n\s+@@index\(\[caixa, criadoEm\]\)\n\s+@@map\("chatwoot_regua_disparo"\)/);
+  assert.doesNotMatch(s, /@@unique\(\[conversationId, regra, chave\]\)/);
+  assert.match(s, /contaId Int\? @map\("conta_id"\)/);
+});
+
+test('régua: desfazer só apaga a linha DA CAIXA (a conversa de mesmo id em outra conta fica)', async () => {
+  const f = falsoDoDisparo({ deleteMany: () => ({ count: 1 }) });
+  try {
+    await armazemDoBanco().desfazer(5, 'consulta-vespera', '2026-11-17T14:30', 3);
+    assert.deepEqual(f.chamadas, [{ metodo: 'deleteMany', args: { where: { caixa: 3, conversationId: 5, regra: 'consulta-vespera', chave: '2026-11-17T14:30' } } }]);
+  } finally {
+    f.restaurar();
+  }
+});
+
+test('CAPI: desfazer e marcar também levam a caixa', async () => {
+  const f = falsoDoDisparo({ deleteMany: () => ({ count: 1 }), updateMany: () => ({ count: 1 }) });
+  try {
+    const a = armazemDoCapi();
+    await a.desfazer(5, 'capi:AddToCart', 'v1', 3);
+    await a.marcar(5, 'capi:AddToCart', 'v1', 'incerto', 3);
+    assert.deepEqual(f.chamadas, [
+      { metodo: 'deleteMany', args: { where: { caixa: 3, conversationId: 5, regra: 'capi:AddToCart', chave: 'v1' } } },
+      { metodo: 'updateMany', args: { where: { caixa: 3, conversationId: 5, regra: 'capi:AddToCart', chave: 'v1' }, data: { modo: 'incerto' } } },
+    ]);
+  } finally {
+    f.restaurar();
+  }
+});
+
+test('referrais do Kapso: a caixa é obrigatória e entra na consulta (a conversa 7 da caixa 3 não é a conversa 7 da caixa 12)', async () => {
+  const { referraisGuardados } = await import('./kapso-referral.js');
+  const f = falsoDoDisparo({ findMany: () => [] });
+  try {
+    await referraisGuardados(7, 3);
+    await referraisGuardados(7, 12);
+    assert.deepEqual((f.chamadas[0]!.args as { where: unknown }).where, { caixa: 3, conversationId: 7, regra: 'kapso-referral' });
+    assert.deepEqual((f.chamadas[1]!.args as { where: unknown }).where, { caixa: 12, conversationId: 7, regra: 'kapso-referral' });
+  } finally {
+    f.restaurar();
+  }
+});
+
+test('funil: o cache da campanha da conversa leva a CONTA (a conversa 5 da conta 1 não responde pela conversa 5 da conta 2)', async () => {
+  const { referralsDe, chaveDoReferral } = await import('../controllers/funil.controller.js');
+  const { criarContextoChatwoot } = await import('../mcp-remoto/chatwoot.js');
+  const mensagens = (anuncio: string) => ({ payload: [{ id: 1, message_type: 0, created_at: 1, content_attributes: { referral: { source_id: anuncio, source_type: 'ad', headline: `anúncio ${anuncio}` } } }] });
+  const acesso = (conta: number, anuncio: string) => ({ c: criarContextoChatwoot({ url: 'https://crm.exemplo.test', conta, token: 'tk' }, { fetch: (async () => ({ ok: true, status: 200, text: async () => JSON.stringify(mensagens(anuncio)) })) as unknown as typeof fetch }), logado: null, logadoId: null, sessao: null });
+  const a1 = acesso(1, '111111');
+  const a2 = acesso(2, '222222');
+  assert.notEqual(chaveDoReferral(a1, 5), chaveDoReferral(a2, 5));
+  const r1 = await referralsDe(a1, [{ id: 5, caixa: 3 }]);
+  const r2 = await referralsDe(a2, [{ id: 5, caixa: 20 }]);
+  assert.equal(r1.mapa.get(5)?.anuncioId, '111111');
+  assert.equal(r2.mapa.get(5)?.anuncioId, '222222', 'a conta 2 lê a conversa dela, não o cache da conta 1');
+  // e a segunda leitura da conta 1 vem do cache da conta 1
+  const outra = acesso(1, '999999');
+  assert.equal((await referralsDe(outra, [{ id: 5, caixa: 3 }])).mapa.get(5)?.anuncioId, '111111');
+});

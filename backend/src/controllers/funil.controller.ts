@@ -140,7 +140,7 @@ async function quemEstaLogado(c: ContextoChatwoot, s: SessaoChatwoot): Promise<C
  * Quem está usando. Com o login do Chatwoot (`sessao`), TODA chamada ao Chatwoot vai com o login da pessoa: ela só vê e mexe
  * nas caixas a que tem acesso lá (a SDR da unidade não enxerga as outras). Só o link avulso do João (chave) usa o token da conta.
  */
-interface Acesso {
+export interface Acesso {
   c: ContextoChatwoot;
   logado: string | null;
   /** id do usuário no Chatwoot (o filtro "Minhas" compara por ele, não pelo nome) */
@@ -424,11 +424,13 @@ export async function funilOportunidadesHandler(req: Request, res: Response): Pr
 // Campanha de cada conversa: o `referral` está na 1ª mensagem do paciente e nunca muda — guarda (só ids de anúncio e título).
 // Só guarda o «não tem» quando a conversa foi lida até o começo; se faltou ler (conversa longa), não guarda: senão ela ficaria
 // «sem campanha» até o servidor reiniciar.
-const referralGuardado = new Map<number, Referral | null>();
+// A chave leva a CONTA: o id da conversa é por conta do Chatwoot (a conversa 5 da conta 1 não é a conversa 5 da conta 2).
+const referralGuardado = new Map<string, Referral | null>();
+export const chaveDoReferral = (a: Acesso, id: number): string => `${a.c.conta!.conta}|${id}`;
 const MAX_LEITURAS_POR_PEDIDO = 150;
 const MAX_PAGINAS_DE_MENSAGENS = 10;
 
-async function lerReferral(a: Acesso, conversaId: number): Promise<{ ref: Referral | null; completo: boolean }> {
+async function lerReferral(a: Acesso, conversaId: number, caixa: number): Promise<{ ref: Referral | null; completo: boolean }> {
   const todas: unknown[] = [];
   let antes: number | undefined;
   let completo = false;
@@ -447,18 +449,19 @@ async function lerReferral(a: Acesso, conversaId: number): Promise<{ ref: Referr
   let ref = referralDasMensagens(todas);
   // o Chatwoot perde o referral no caminho do Kapso: usa o que o servidor guardou do Kapso (o 1º clique)
   if (!ref) {
-    const k = (await referraisGuardados(conversaId))[0];
+    const k = (await referraisGuardados(conversaId, caixa))[0];
     if (k) ref = { anuncioId: k.anuncio, tipo: k.tipo, url: k.url, titulo: k.titulo };
   }
   return { ref, completo: completo || ref !== null };
 }
 
 /** Lê a campanha das conversas dadas, na ordem recebida (as mais novas primeiro), até o teto; o resto é contado para o aviso. */
-async function referralsDe(a: Acesso, ids: number[]): Promise<{ mapa: Map<number, Referral | null>; semLer: number; falhas: number }> {
+export async function referralsDe(a: Acesso, conversas: Array<{ id: number; caixa: number }>): Promise<{ mapa: Map<number, Referral | null>; semLer: number; falhas: number }> {
   const mapa = new Map<number, Referral | null>();
   const faltam: number[] = [];
-  for (const id of ids) {
-    if (referralGuardado.has(id)) mapa.set(id, referralGuardado.get(id)!);
+  const caixaDe = new Map(conversas.map((c) => [c.id, c.caixa]));
+  for (const { id } of conversas) {
+    if (referralGuardado.has(chaveDoReferral(a, id))) mapa.set(id, referralGuardado.get(chaveDoReferral(a, id))!);
     else faltam.push(id);
   }
   const alvo = faltam.slice(0, MAX_LEITURAS_POR_PEDIDO);
@@ -469,11 +472,11 @@ async function referralsDe(a: Acesso, ids: number[]): Promise<{ mapa: Map<number
       const i = proximo++;
       if (i >= alvo.length) return;
       try {
-        const { ref, completo } = await lerReferral(a, alvo[i]!);
+        const { ref, completo } = await lerReferral(a, alvo[i]!, caixaDe.get(alvo[i]!)!);
         mapa.set(alvo[i]!, ref);
         if (completo) {
           if (referralGuardado.size > 5000) referralGuardado.clear();
-          referralGuardado.set(alvo[i]!, ref);
+          referralGuardado.set(chaveDoReferral(a, alvo[i]!), ref);
         } else falhas++; // conversa longa demais para ler até o começo: fica sem campanha agora, e tenta de novo no próximo pedido
       } catch {
         falhas++;
@@ -664,7 +667,7 @@ export async function funilMarketingHandler(req: Request, res: Response): Promis
         agendadasNaJanela(ids, periodo),
         agendadasNaJanela(ids, periodo.anterior),
         prisma.chatwootReguaVisto.findFirst({ where: { conversationId: 0, campo: CAMPO_PARTIDA }, orderBy: { desde: 'asc' }, select: { desde: true } }).catch(() => null),
-        referralsDe(a, doPeriodoDe(conversas, periodo).map((c) => Number(c.id))),
+        referralsDe(a, doPeriodoDe(conversas, periodo).map((c) => ({ id: Number(c.id), caixa: Number(c.inbox_id) }))),
         gastosDasUnidades(slugs, periodo.de, periodo.ate),
         // a Meta só separa por DIA: em «Manhã» e «Fim do dia» o anterior seria ontem inteiro × hoje até agora (ou contaria ontem dos
         // dois lados) — seta enganosa toda manhã. Nesses dois períodos o bloco da Meta fica sem comparação.
@@ -707,7 +710,7 @@ export async function funilGestorHandler(req: Request, res: Response): Promise<v
     const v = await memo(`gs|${a.logadoId ?? a.logado}|${periodo.chave}|${caixa}`, VALE_TELA_MS, async () => {
       const { conversas, slugs, cortou } = await conversasDasUnidades(a, caixa);
       const [lidos, gastos, faturado, diario, gastosAntes, faturadoAntes] = await Promise.all([
-        referralsDe(a, doPeriodoDe(conversas, periodo).map((c) => Number(c.id))),
+        referralsDe(a, doPeriodoDe(conversas, periodo).map((c) => ({ id: Number(c.id), caixa: Number(c.inbox_id) }))),
         gastosDasUnidades(slugs, periodo.de, periodo.ate),
         faturadoDasUnidades(slugs, periodo.de, periodo.ate),
         periodo.de !== periodo.ate ? gastoDiarioDasUnidades(slugs, periodo.de, periodo.ate) : Promise.resolve(null),
