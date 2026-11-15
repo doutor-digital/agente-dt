@@ -64,10 +64,14 @@ export const Questionario = z
       favorecido: z.string().min(3).max(120).optional(),
     }),
     whatsapp: obj({
-      numero_oficial: z.string().regex(/^\+\d{12,14}$/, 'formato +5594984420153'),
-      /** phone_number_id do número no Kapso */
-      kapso_phone_number_id: digitos(),
-      waba_id: digitos(),
+      /** `real`: a clínica tem número e WABA. `demonstracao`: clínica de vitrine SEM número nem WABA — a caixa é do tipo API, os modelos da Meta ficam em SECO (nada vai à Meta) */
+      modo: z.enum(['real', 'demonstracao']).default('real'),
+      /** obrigatório no modo real */
+      numero_oficial: z.string().regex(/^\+\d{12,14}$/, 'formato +5594984420153').optional(),
+      /** phone_number_id do número no Kapso (obrigatório no modo real) */
+      kapso_phone_number_id: digitos().optional(),
+      /** obrigatório no modo real */
+      waba_id: digitos().optional(),
       /** prefixo dos modelos na Meta, com "_" no fim */
       prefixo_modelos: z.string().regex(/^[a-z][a-z0-9]{1,15}_$/, 'minúsculas/dígitos e "_" no fim (ex.: parau_)'),
       conexao: z.enum(['coexistencia', 'numero-novo']),
@@ -137,6 +141,11 @@ export const Questionario = z
       if (suf(q.meta.dataset_id_env, 'META_DATASET_ID_') !== sufixo) aviso(['meta', 'dataset_id_env'], `precisa ser META_DATASET_ID_${sufixo}`);
     }
     if (q.unidade.slug.includes('--')) aviso(['unidade', 'slug'], 'slug com "--"');
+    if (q.whatsapp.modo === 'real') {
+      for (const campo of ['numero_oficial', 'kapso_phone_number_id', 'waba_id'] as const) if (!q.whatsapp[campo]) aviso(['whatsapp', campo], 'obrigatório quando a clínica tem número de verdade (modo: real); a demonstração não precisa');
+    } else if (q.whatsapp.numero_oficial || q.whatsapp.kapso_phone_number_id || q.whatsapp.waba_id) {
+      aviso(['whatsapp', 'modo'], 'modo demonstracao não tem número nem WABA: tire os campos (ou passe para modo: real)');
+    }
   });
 
 export type Questionario = z.infer<typeof Questionario>;
@@ -225,12 +234,13 @@ export function configChatwootDoQuestionario(q: Questionario, extras: { gerenteI
   return {
     slug: q.unidade.slug,
     contaId: extras.contaId ?? null,
+    subdominio: q.chatwoot.subdominio,
     prefixoModelos: q.whatsapp.prefixo_modelos,
     usuarioCelularId: extras.usuarioCelularId ?? null,
     gerenteId: extras.gerenteId ?? null,
     metaAgendamentosDia: q.chatwoot.meta_agendamentos_dia,
-    kapsoPhoneNumberId: q.whatsapp.kapso_phone_number_id,
-    wabaId: q.whatsapp.waba_id,
+    kapsoPhoneNumberId: q.whatsapp.kapso_phone_number_id ?? null,
+    wabaId: q.whatsapp.waba_id ?? null,
     envSufixo: sufixoDoQuestionario(q),
     dadosModelos: {
       nome: q.unidade.nome,

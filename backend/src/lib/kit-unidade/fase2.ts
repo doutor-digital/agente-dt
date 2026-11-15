@@ -1,0 +1,387 @@
+/**
+ * OS PASSOS DE FORA DO BANCO do `--aplicar` (kit de unidade, fase 2): a conta do Chatwoot da clínica (API de plataforma), o que vai dentro dela
+ * (etiquetas, atributos, automações, mensagens prontas, caixa, time, atendentes, robô, webhook, aba do Funil) e os modelos na Meta via Kapso.
+ *
+ * Cada passo é IDEMPOTENTE POR LEITURA: lê o que a conta já tem e só cria o que falta (o Chatwoot recusa nome repetido com 422; aqui nem se tenta).
+ * A conta de REFERÊNCIA (Parauapebas, a conta do ambiente) só é lida: etiquetas, atributos e automações da conta nova nascem do molde dela.
+ * Segredo gerado (token do usuário conector, token do robô) vai direto para o cofre (`SegredosPorta`) e nunca para o texto que sai daqui.
+ */
+import { chaveDoEvento } from '../chatwoot-ia.js';
+import { comDadosDaUnidade, modelosDaUnidade } from '../chatwoot-modelos.js';
+import { ATRIBUTOS_DE_CONTATO, ATRIBUTOS_DE_CONVERSA, ETIQUETAS_DO_CODIGO, MENSAGENS_PRONTAS } from './catalogo.js';
+import { ErroDaPorta, ErroSoLeitura, type ContaPorta, type PortasExternas } from './portas.js';
+import { configChatwootDoQuestionario, sufixoDoQuestionario, type Questionario } from './questionario.js';
+
+/** O que um passo deixa para os seguintes (só em memória, nunca impresso). */
+export interface EstadoDaExecucao {
+  contaId?: number;
+  /** o token do usuário conector — vive só na memória desta execução (e no cofre) */
+  tokenDaConta?: string;
+  conta?: ContaPorta;
+  caixaId?: number;
+  timeId?: number;
+  /** e-mail em minúsculas → id do agente na conta */
+  agentes: Map<string, number>;
+  celularId?: number;
+  botId?: number;
+  /** o passo foi tentado só LENDO (o plano dizia «nada»): qualquer escrita lança `ErroSoLeitura` e o executor pergunta e roda de novo */
+  somenteLeitura?: boolean;
+}
+
+export const novoEstado = (): EstadoDaExecucao => ({ agentes: new Map() });
+
+const lc = (s: string) => s.toLowerCase();
+export const nomeDoSegredoDaConta = (q: Questionario) => `CHATWOOT_API_TOKEN_${sufixoDoQuestionario(q)}`;
+export const nomeDoSegredoDoRobo = (q: Questionario) => `CHATWOOT_SOFIA_BOT_TOKEN_${sufixoDoQuestionario(q)}`;
+/** o id (não secreto) do usuário conector: permite refazer o vínculo com a conta se ele falhou depois de o usuário nascer */
+export const nomeDoSegredoDoUsuario = (q: Questionario) => `CHATWOOT_CONECTOR_USUARIO_${sufixoDoQuestionario(q)}`;
+export const EMAIL_DO_CONECTOR = (q: Questionario) => `conector+${q.unidade.slug}@doutordigitalconsultoria.com`;
+
+/** `[…]` ou `{payload:[…]}` ou `{payload:{<chave>:[…]}}` → a lista. */
+export function listaDaResposta(r: unknown, chave?: string): any[] {
+  if (Array.isArray(r)) return r;
+  const p = (r as { payload?: unknown } | null)?.payload;
+  if (Array.isArray(p)) return p;
+  if (chave && p && typeof p === 'object' && Array.isArray((p as Record<string, unknown>)[chave])) return (p as Record<string, any[]>)[chave]!;
+  return [];
+}
+
+function precisa<T>(v: T | null | undefined, porque: string): T {
+  if (v === null || v === undefined) throw new ErroDaPorta(porque);
+  return v;
+}
+/** POST na conta — a única porta de escrita dos passos de dentro da conta: no modo só-leitura lança em vez de escrever. */
+function postar(e: EstadoDaExecucao, conta: ContaPorta, caminho: string, corpo?: Record<string, unknown>): Promise<unknown> {
+  if (e.somenteLeitura) throw new ErroSoLeitura(`POST ${caminho}`);
+  return conta.post(caminho, corpo);
+}
+const daConta = (e: EstadoDaExecucao): ContaPorta => precisa(e.conta, 'a conta da clínica no Chatwoot ainda não está pronta (passo «conta»)');
+
+// ── 1. a conta ───────────────────────────────────────────────────────────────────────────────────────
+
+export interface DoBancoParaAConta {
+  /** `unit_chatwoot.conta_id` hoje */
+  contaId: number | null;
+  /** caixas já registradas para a unidade (em qualquer conta): quem já atende pacientes numa conta não ganha uma conta nova vazia */
+  caixasRegistradas: number[];
+  /** grava o id da conta NA HORA em que ela nasce (antes de qualquer outra coisa): sem isto uma queda deixaria uma conta órfã e a próxima rodada criaria outra */
+  gravarContaId(id: number): Promise<void>;
+}
+
+export async function passoConta(q: Questionario, x: PortasExternas, estado: EstadoDaExecucao, banco: DoBancoParaAConta): Promise<string[]> {
+  const nomeToken = nomeDoSegredoDaConta(q);
+  const nomeUsuario = nomeDoSegredoDoUsuario(q);
+  const notas: string[] = [];
+  let contaId = banco.contaId;
+  // PROTEÇÃO DA CONTA DO AMBIENTE (Parauapebas): nunca criar conta nova para unidade que já está em uso lá, nem apontar uma clínica para a conta 1.
+  // Com --sobrescrever isto não muda: criar conta e trocar o conta_id levaria a unidade inteira (caixas, conversas, régua) para uma conta vazia.
+  if (contaId !== null && x.contaDoAmbiente !== null && contaId === x.contaDoAmbiente) {
+    throw new ErroDaPorta(`o conta_id gravado (${contaId}) é o da conta do ambiente (CHATWOOT_CONTA_ID): o kit não monta clínica nessa conta`);
+  }
+  if (contaId === null && banco.caixasRegistradas.length > 0) {
+    throw new ErroDaPorta(`a unidade já tem ${banco.caixasRegistradas.length} caixa(s) registrada(s) na conta do ambiente (já está em uso): criar uma conta nova e mudar o conta_id levaria tudo para uma conta vazia — o kit recusa, mesmo com --sobrescrever`);
+  }
+  if (contaId !== null) {
+    if (x.plataforma && !(await x.plataforma.contaExiste(contaId))) throw new ErroDaPorta(`a conta ${contaId} (gravada no banco) não existe mais no Chatwoot: confira antes de criar outra`);
+    notas.push(`conta ${contaId} já existia`);
+  } else {
+    if (estado.somenteLeitura) throw new ErroSoLeitura('criar a conta');
+    const plataforma = precisa(x.plataforma, 'sem o token do Platform App (CHATWOOT_PLATFORM_TOKEN) não dá para criar a conta: o João roda ops/kit-unidade/criar-platform-app-joao.sh');
+    // o Chatwoot entrega o token do usuário conector UMA vez: antes de criar qualquer coisa, o cofre precisa ter onde guardá-lo
+    await x.segredos.pronto();
+    // antes de criar: o cofre não pode já ter um token para esta clínica (seria de uma conta que o banco esqueceu)
+    if (await x.segredos.tem(nomeToken)) throw new ErroDaPorta(`já existe ${nomeToken} no cofre/ambiente mas o banco não conhece a conta: confira antes de criar outra conta`);
+    contaId = (await plataforma.criarConta(q.unidade.nome)).id;
+    await banco.gravarContaId(contaId);
+    notas.push(`conta ${contaId} criada e gravada em unit_chatwoot.conta_id`);
+  }
+  estado.contaId = contaId;
+  let token = await x.segredos.ler(nomeToken);
+  if (!token) {
+    if (estado.somenteLeitura) throw new ErroSoLeitura('criar o usuário conector');
+    const plataforma = precisa(x.plataforma, `a conta ${contaId} existe mas ${nomeToken} não está no cofre nem no ambiente, e sem o Platform App não dá para criar outro conector`);
+    await x.segredos.pronto();
+    const u = await plataforma.criarUsuario({ nome: `Conector ${q.unidade.slug}`, email: EMAIL_DO_CONECTOR(q), senha: x.gerarSenha() });
+    // token e id do usuário vão para o cofre ANTES de qualquer outra coisa: o token só é entregue esta vez, e o id permite refazer o vínculo se ele falhar
+    await x.segredos.guardar(nomeToken, u.tokenDeAcesso);
+    await x.segredos.guardar(nomeUsuario, String(u.id));
+    await plataforma.vincular(contaId, u.id, 'administrator');
+    token = u.tokenDeAcesso;
+    notas.push(`usuário conector ${u.id} criado como administrador; token guardado no cofre como ${nomeToken} (valor não impresso)`);
+  } else notas.push(`${nomeToken} já está no cofre/ambiente`);
+  estado.tokenDaConta = token;
+  estado.conta = x.abrirConta(contaId, token);
+  // o token tem acesso à conta? (o vínculo do conector pode ter falhado numa rodada anterior)
+  try {
+    await estado.conta.get('labels');
+  } catch (err) {
+    if ((err as { status?: number }).status !== 401 && (err as { status?: number }).status !== 403) throw err;
+    if (estado.somenteLeitura) throw new ErroSoLeitura('refazer o vínculo do conector');
+    const guardado = await x.segredos.ler(nomeUsuario);
+    const plataforma = x.plataforma;
+    if (!plataforma || !guardado || !/^\d+$/.test(guardado)) {
+      throw new ErroDaPorta(`o token ${nomeToken} não tem acesso à conta ${contaId} (o vínculo do conector não chegou a ser feito) e não há como refazê-lo daqui: no Super Admin do Chatwoot, ponha o usuário conector como administrador da conta ${contaId}`);
+    }
+    await plataforma.vincular(contaId, Number(guardado), 'administrator');
+    await estado.conta.get('labels');
+    notas.push(`vínculo do conector ${guardado} com a conta ${contaId} refeito`);
+  }
+  return notas;
+}
+
+// ── 2. o que vai dentro da conta ─────────────────────────────────────────────────────────────────────
+
+export async function passoEtiquetas(x: PortasExternas, e: EstadoDaExecucao): Promise<string[]> {
+  const conta = daConta(e);
+  const tem = new Set(listaDaResposta(await conta.get('labels')).map((l) => String(l.title)));
+  const molde = x.referencia ? listaDaResposta(await x.referencia.get('labels')) : [];
+  const porTitulo = new Map(molde.map((l) => [String(l.title), l]));
+  // as que o código lê + as «perdido-*» (uma por motivo) da conta de referência
+  const querer = [...new Set([...ETIQUETAS_DO_CODIGO, ...molde.map((l) => String(l.title)).filter((t) => /^perdido-/.test(t))])];
+  const criadas: string[] = [];
+  for (const titulo of querer) {
+    if (tem.has(titulo)) continue;
+    const m = porTitulo.get(titulo);
+    await postar(e, conta, 'labels', { title: titulo, description: m?.description ?? '', color: m?.color ?? '#1f93ff', show_on_sidebar: m?.show_on_sidebar ?? true });
+    criadas.push(titulo);
+  }
+  return [criadas.length ? `${criadas.length} etiqueta(s) criada(s)${x.referencia ? '' : ' (sem conta de referência: cor e descrição padrão)'}` : 'todas já existiam'];
+}
+
+export async function passoAtributos(x: PortasExternas, e: EstadoDaExecucao): Promise<string[]> {
+  const conta = daConta(e);
+  const notas: string[] = [];
+  for (const [modelo, chaves, rotulo] of [[0, ATRIBUTOS_DE_CONVERSA, 'conversa'], [1, ATRIBUTOS_DE_CONTATO, 'contato']] as const) {
+    const tem = new Set(listaDaResposta(await conta.get('custom_attribute_definitions', { attribute_model: String(modelo) })).map((a) => String(a.attribute_key)));
+    const molde = x.referencia ? listaDaResposta(await x.referencia.get('custom_attribute_definitions', { attribute_model: String(modelo) })) : [];
+    const porChave = new Map(molde.map((a) => [String(a.attribute_key), a]));
+    let criados = 0;
+    for (const chave of chaves) {
+      if (tem.has(chave)) continue;
+      const m = porChave.get(chave);
+      await postar(e, conta, 'custom_attribute_definitions', {
+        attribute_key: chave,
+        attribute_display_name: m?.attribute_display_name ?? chave,
+        attribute_display_type: m?.attribute_display_type ?? 0,
+        attribute_description: m?.attribute_description ?? '',
+        attribute_values: m?.attribute_values ?? [],
+        attribute_model: modelo,
+      });
+      criados++;
+    }
+    notas.push(criados ? `${criados} atributo(s) de ${rotulo} criado(s)` : `atributos de ${rotulo}: já existiam`);
+  }
+  if (!x.referencia) notas.push('sem conta de referência: criados como texto simples (a lista de opções da etapa precisa ser conferida)');
+  return notas;
+}
+
+/** Condições ou ações que apontam para um id da conta de referência (caixa, time, agente): não servem em outra conta. */
+const ATRIBUTOS_COM_ID = new Set(['inbox_id', 'team_id', 'assignee_id']);
+const ACOES_COM_ID = new Set(['assign_agent', 'assign_team', 'send_email_to_team', 'send_webhook_event', 'send_message', 'send_attachment']);
+
+export async function passoAutomacoesDaConta(x: PortasExternas, e: EstadoDaExecucao): Promise<string[]> {
+  const conta = daConta(e);
+  const ref = x.referencia;
+  if (!ref) return ['SEM a conta de referência (Parauapebas) não há de onde copiar as automações nativas: refazer à mão na conta (as 8 estão no catálogo do kit)'];
+  const tem = new Set(listaDaResposta(await conta.get('automation_rules')).map((r) => String(r.name)));
+  const copiadas: string[] = [];
+  const puladas: string[] = [];
+  for (const r of listaDaResposta(await ref.get('automation_rules'))) {
+    const nome = String(r.name);
+    if (tem.has(nome)) continue;
+    const condicoes = Array.isArray(r.conditions) ? r.conditions : [];
+    const acoes = Array.isArray(r.actions) ? r.actions : [];
+    if (condicoes.some((c: any) => ATRIBUTOS_COM_ID.has(String(c.attribute_key))) || acoes.some((a: any) => ACOES_COM_ID.has(String(a.action_name)))) {
+      puladas.push(nome);
+      continue;
+    }
+    await postar(e, conta, 'automation_rules', { name: nome, description: r.description ?? '', event_name: r.event_name, active: r.active !== false, conditions: condicoes, actions: acoes });
+    copiadas.push(nome);
+  }
+  return [copiadas.length ? `${copiadas.length} automação(ões) copiada(s) da conta de referência` : 'nada a copiar (já existiam)', ...(puladas.length ? [`NÃO copiei (apontam para caixa, time ou agente da outra conta — refazer à mão): ${puladas.join('; ')}`] : [])];
+}
+
+export async function passoMensagensProntas(q: Questionario, e: EstadoDaExecucao): Promise<string[]> {
+  const conta = daConta(e);
+  const config = configChatwootDoQuestionario(q);
+  const tem = new Set(listaDaResposta(await conta.get('canned_responses')).map((r) => String(r.short_code)));
+  let criadas = 0;
+  const sem: string[] = [];
+  for (const m of MENSAGENS_PRONTAS) {
+    const codigo = `${q.whatsapp.prefixo_modelos.replace(/_$/, '')}-${m.codigo}`;
+    if (tem.has(codigo)) continue;
+    const { texto, faltando } = comDadosDaUnidade(m.texto, config.dadosModelos);
+    if (faltando.length) {
+      sem.push(`/${codigo} (falta ${faltando.join(', ')})`);
+      continue;
+    }
+    await postar(e, conta, 'canned_responses', { short_code: codigo, content: texto });
+    criadas++;
+  }
+  return [criadas ? `${criadas} mensagem(ns) pronta(s) criada(s)` : 'já existiam', ...(sem.length ? [`NÃO criei por falta de dado da unidade: ${sem.join(', ')}`] : [])];
+}
+
+// ── 3. caixa, time, atendentes ───────────────────────────────────────────────────────────────────────
+
+export async function passoCaixa(q: Questionario, x: PortasExternas, e: EstadoDaExecucao): Promise<string[]> {
+  const conta = daConta(e);
+  const nome = q.chatwoot.caixa_nome;
+  const ja = listaDaResposta(await conta.get('inboxes')).find((i) => String(i.name) === nome);
+  if (ja) {
+    e.caixaId = Number(ja.id);
+    return [`caixa ${ja.id} já existia`];
+  }
+  if (q.whatsapp.modo === 'demonstracao') {
+    const nova = (await postar(e, conta, 'inboxes', { name: nome, channel: { type: 'api' } })) as { id?: number };
+    e.caixaId = Number(nova.id);
+    return [`caixa ${nova.id} criada como canal API (demonstração: não há número de WhatsApp nem Kapso)`];
+  }
+  const chave = precisa(await x.segredos.ler('KAPSO_API_KEY'), 'falta KAPSO_API_KEY (a chave do Kapso) no cofre/ambiente: a caixa de WhatsApp Cloud usa o Kapso');
+  const nova = (await postar(e, conta, 'inboxes', {
+    name: nome,
+    channel: { type: 'whatsapp', phone_number: q.whatsapp.numero_oficial, provider: 'whatsapp_cloud', provider_config: { api_key: chave, phone_number_id: q.whatsapp.kapso_phone_number_id, business_account_id: q.whatsapp.waba_id } },
+  })) as { id?: number };
+  e.caixaId = Number(nova.id);
+  return [`caixa ${nova.id} criada (WhatsApp Cloud pelo Kapso; chave não impressa)`];
+}
+
+export async function passoTime(q: Questionario, e: EstadoDaExecucao): Promise<string[]> {
+  const conta = daConta(e);
+  const ja = listaDaResposta(await conta.get('teams')).find((t) => String(t.name) === q.chatwoot.time_nome);
+  if (ja) {
+    e.timeId = Number(ja.id);
+    return [`time ${ja.id} já existia`];
+  }
+  const novo = (await postar(e, conta, 'teams', { name: q.chatwoot.time_nome, description: q.unidade.nome, allow_auto_assign: true })) as { id?: number };
+  e.timeId = Number(novo.id);
+  return [`time ${novo.id} criado`];
+}
+
+const membrosDaCaixa = async (conta: ContaPorta, caixa: number): Promise<Set<number>> => new Set(listaDaResposta(await conta.get(`inbox_members/${caixa}`)).map((m) => Number(m.id)));
+const membrosDoTime = async (conta: ContaPorta, time: number): Promise<Set<number>> => new Set(listaDaResposta(await conta.get(`teams/${time}/team_members`)).map((m) => Number(m.id)));
+
+/** Acha (ou convida) um agente por e-mail e devolve o id. */
+async function agente(conta: ContaPorta, e: EstadoDaExecucao, nome: string, email: string, papel: 'agent' | 'administrator'): Promise<{ id: number; novo: boolean }> {
+  const mapa = e.agentes.get(lc(email));
+  if (mapa) return { id: mapa, novo: false };
+  const ja = listaDaResposta(await conta.get('agents')).find((a) => lc(String(a.email)) === lc(email));
+  if (ja) {
+    e.agentes.set(lc(email), Number(ja.id));
+    return { id: Number(ja.id), novo: false };
+  }
+  const novo = (await postar(e, conta, 'agents', { name: nome, email, role: papel })) as { id?: number };
+  e.agentes.set(lc(email), Number(novo.id));
+  return { id: Number(novo.id), novo: true };
+}
+
+export async function passoAtendentes(q: Questionario, e: EstadoDaExecucao): Promise<string[]> {
+  const conta = daConta(e);
+  const caixa = precisa(e.caixaId, 'a caixa ainda não existe (passo «caixa»)');
+  const time = precisa(e.timeId, 'o time ainda não existe (passo «time»)');
+  const convidados: string[] = [];
+  const ids: number[] = [];
+  for (const a of q.chatwoot.atendentes) {
+    const r = await agente(conta, e, a.nome, a.email, 'agent');
+    ids.push(r.id);
+    if (r.novo) convidados.push(a.nome);
+  }
+  const naCaixa = await membrosDaCaixa(conta, caixa);
+  const noTime = await membrosDoTime(conta, time);
+  const faltamNaCaixa = ids.filter((i) => !naCaixa.has(i));
+  const faltamNoTime = ids.filter((i) => !noTime.has(i));
+  if (faltamNaCaixa.length) await postar(e, conta, 'inbox_members', { inbox_id: caixa, user_ids: faltamNaCaixa });
+  if (faltamNoTime.length) await postar(e, conta, `teams/${time}/team_members`, { user_ids: faltamNoTime });
+  return [convidados.length ? `${convidados.length} convite(s) enviado(s): ${convidados.join(', ')}` : 'todas já eram agentes', faltamNaCaixa.length || faltamNoTime.length ? `${faltamNaCaixa.length} entraram na caixa ${caixa} e ${faltamNoTime.length} no time ${time}` : `já estavam na caixa ${caixa} e no time ${time}`];
+}
+
+export async function passoUsuarioCelular(q: Questionario, e: EstadoDaExecucao): Promise<string[]> {
+  const conta = daConta(e);
+  const email = precisa(q.chatwoot.usuario_celular_email, 'o questionário não tem usuario_celular_email');
+  const caixa = precisa(e.caixaId, 'a caixa ainda não existe (passo «caixa»)');
+  const r = await agente(conta, e, '📱 Celular da unidade', email, 'agent');
+  e.celularId = r.id;
+  if (!(await membrosDaCaixa(conta, caixa)).has(r.id)) await postar(e, conta, 'inbox_members', { inbox_id: caixa, user_ids: [r.id] });
+  return [r.novo ? `usuário do celular ${r.id} criado` : `usuário do celular ${r.id} já existia`];
+}
+
+/** O id do gerente (a atendente com função «gerente») na conta. */
+export const gerenteDaConta = (q: Questionario, e: EstadoDaExecucao): number | null => {
+  const g = q.chatwoot.atendentes.find((a) => a.funcao === 'gerente');
+  return g ? (e.agentes.get(lc(g.email)) ?? null) : null;
+};
+
+// ── 4. webhook, aba do Funil, robô ───────────────────────────────────────────────────────────────────
+
+/** O endereço que o Chatwoot desta conta chama: a chave `k` é derivada do token DA CONTA — a de outra conta não vale. */
+export const urlDoWebhook = (x: PortasExternas, token: string): string => `${x.urlDoAgente}/api/public/chatwoot/evento?k=${chaveDoEvento(token)}`;
+export const EVENTOS_DO_WEBHOOK = ['message_created', 'message_updated', 'conversation_created', 'conversation_updated', 'conversation_status_changed'];
+
+export async function passoWebhook(x: PortasExternas, e: EstadoDaExecucao): Promise<string[]> {
+  const conta = daConta(e);
+  const token = precisa(e.tokenDaConta, 'sem o token da conta');
+  const url = urlDoWebhook(x, token);
+  const existentes = listaDaResposta(await conta.get('webhooks'), 'webhooks');
+  if (existentes.some((w) => String(w.url) === url)) return ['webhook da conta já existia (com a chave desta conta)'];
+  const antigos = existentes.filter((w) => String(w.url).startsWith(`${x.urlDoAgente}/api/public/chatwoot/evento`));
+  await postar(e, conta, 'webhooks', { url, subscriptions: EVENTOS_DO_WEBHOOK });
+  return ['webhook da conta criado (a chave é derivada do token DESTA conta; endereço não impresso)', ...(antigos.length ? [`há ${antigos.length} webhook(s) antigo(s) para o agente com outra chave: apague pela tela do Chatwoot`] : [])];
+}
+
+export async function passoDashboardApp(x: PortasExternas, e: EstadoDaExecucao): Promise<string[]> {
+  const conta = daConta(e);
+  const contaId = precisa(e.contaId, 'sem o id da conta');
+  const existentes = listaDaResposta(await conta.get('dashboard_apps'));
+  if (existentes.some((a) => String(a.title) === 'Funil')) return ['aba «Funil» já existia'];
+  // a aba usa o LOGIN da pessoa (o menu do Chatwoot entrega a sessão): a chave do token da conta NÃO vai na URL, que qualquer agente vê no iframe
+  await postar(e, conta, 'dashboard_apps', { title: 'Funil', content: [{ type: 'frame', url: `${x.urlDoAgente}/funil?conta=${contaId}` }] });
+  return [`aba «Funil» criada nesta conta, apontando para ${x.urlDoAgente}/funil?conta=${contaId}`];
+}
+
+export async function passoRobo(q: Questionario, x: PortasExternas, e: EstadoDaExecucao, ligar: boolean): Promise<string[]> {
+  const conta = daConta(e);
+  const token = precisa(e.tokenDaConta, 'sem o token da conta');
+  const notas: string[] = [];
+  const ja = listaDaResposta(await conta.get('agent_bots')).find((b) => String(b.name) === 'Sofia');
+  if (ja) {
+    e.botId = Number(ja.id);
+    notas.push(`robô Sofia ${ja.id} já existia`);
+  } else {
+    const novo = (await postar(e, conta, 'agent_bots', { name: 'Sofia', description: `Sofia de ${q.unidade.nome}`, outgoing_url: urlDoWebhook(x, token) })) as { id?: number; access_token?: string };
+    e.botId = Number(novo.id);
+    if (novo.access_token) {
+      await x.segredos.guardar(nomeDoSegredoDoRobo(q), novo.access_token);
+      notas.push(`robô Sofia ${novo.id} criado; token guardado no cofre como ${nomeDoSegredoDoRobo(q)} (valor não impresso)`);
+    } else notas.push(`robô Sofia ${novo.id} criado, mas o Chatwoot NÃO devolveu o token dele: pegue no painel do Chatwoot (Configurações › Robôs) e guarde como ${nomeDoSegredoDoRobo(q)}`);
+  }
+  if (ligar) {
+    const caixa = precisa(e.caixaId, 'a caixa ainda não existe');
+    const atual = (await conta.get(`inboxes/${caixa}/agent_bot`)) as { agent_bot?: { id?: number } | null; id?: number } | null;
+    const idAtual = Number(atual?.agent_bot?.id ?? atual?.id);
+    if (Number.isInteger(idAtual) && idAtual > 0 && idAtual !== e.botId) notas.push(`a caixa ${caixa} JÁ tem outro robô (${idAtual}): não troquei — confira no Chatwoot antes`);
+    else if (idAtual === e.botId) notas.push(`robô já estava ligado na caixa ${caixa}`);
+    else {
+      await postar(e, conta, `inboxes/${caixa}/set_agent_bot`, { agent_bot: e.botId });
+      notas.push(`robô ligado na caixa ${caixa}`);
+    }
+  } else notas.push('NÃO liguei o robô na caixa: só depois do teste da Sofia e de ligar a automação chatwoot-ia (rode com --ligar-robo)');
+  return notas;
+}
+
+// ── 5. modelos na Meta (via Kapso) ───────────────────────────────────────────────────────────────────
+
+export async function passoModelos(q: Questionario, x: PortasExternas): Promise<string[]> {
+  const config = configChatwootDoQuestionario(q);
+  const { modelos } = modelosDaUnidade(config.dadosModelos, config.prefixoModelos);
+  const validos = modelos.filter((m) => !m.problemas.length);
+  const recusados = modelos.filter((m) => m.problemas.length);
+  const avisoRecusados = recusados.length ? [`${recusados.length} modelo(s) com problema NÃO foram enviados: ${recusados.map((m) => `${m.meta.name} (${m.problemas.join('; ')})`).join(' | ')}`] : [];
+  if (q.whatsapp.modo === 'demonstracao') {
+    return [`SECO (demonstração, sem WABA): ${validos.length} modelo(s) iriam à Meta e NENHUM foi enviado. Exemplo: ${validos.slice(0, 3).map((m) => m.meta.name).join(', ')}…`, ...avisoRecusados];
+  }
+  const kapso = precisa(x.kapso, 'sem a chave do Kapso (KAPSO_API_KEY) não dá para enviar os modelos');
+  const waba = precisa(q.whatsapp.waba_id, 'sem waba_id');
+  const ja = await kapso.modelos(waba);
+  const faltam = validos.filter((m) => !(m.meta.name in ja));
+  for (const m of faltam) await kapso.criarModelo(waba, m.meta as unknown as Record<string, unknown>);
+  return [faltam.length ? `${faltam.length} modelo(s) enviado(s) à Meta (ficam PENDENTES de aprovação)` : 'todos os modelos já estavam na Meta', ...avisoRecusados];
+}

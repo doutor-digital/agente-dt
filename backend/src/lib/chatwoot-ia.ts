@@ -22,7 +22,7 @@ import type { Unit } from '@prisma/client';
 import { logger } from './logger.js';
 import { prisma } from './prisma.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
-import { chamar, contaChatwootDoAmbiente, contasDoChatwoot, contextoDoAmbiente, donaDaConta, ehContaDoAmbiente, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
+import { chamar, contaChatwootDoAmbiente, contasDoChatwoot, contextoDoAmbiente, donaDaConta, ehContaDoAmbiente, tokenParaChaveDaConta, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 import { configDaUnidade, contaDaCaixa, unidadeDaCaixa } from './chatwoot-unidades.js';
 import { CAIXAS_REGUA } from './chatwoot-regua.js';
 import { aplicarEtiqueta, eventoDeEtiqueta, portasDaPonte, type PortasDaPonte } from './chatwoot-etiquetas.js';
@@ -643,13 +643,15 @@ function avisarIgnorado(motivo: string, corpo: any): void {
 }
 
 export function eventoChatwootHandler(req: Request, res: Response): void {
-  const token = process.env.CHATWOOT_API_TOKEN?.trim();
+  // A chave é DA CONTA a que o evento diz pertencer (derivada do token dela): a chave de Parauapebas não forja evento de outra clínica e vice-versa.
+  // Evento que não é de conta nenhuma que o servidor conheça só passa com a chave do ambiente (e é ignorado com aviso logo abaixo).
+  const alvo = contaDoEvento(req.body);
+  const token = 'conta' in alvo ? tokenParaChaveDaConta(alvo.conta) : process.env.CHATWOOT_API_TOKEN?.trim();
   if (!chaveDoEventoConfere(token, req.query.k)) {
     res.status(401).json({ error: 'chave inválida' });
     return;
   }
   res.json({ ok: true });
-  const alvo = contaDoEvento(req.body);
   if ('ignorar' in alvo) {
     avisarIgnorado(alvo.ignorar, req.body);
     return;

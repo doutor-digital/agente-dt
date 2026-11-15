@@ -9,8 +9,12 @@
  *     (sem a flag: numa unidade que existe só se preenche campo VAZIO, e a ATIVA é recusada)
  *   npx tsx src/scripts/nova-unidade.ts --gerar-schema                          # regrava ops/kit-unidade/questionario.schema.json
  *
- * Fase 1: o seco está completo; o --aplicar executa os passos de BANCO e deixa como ESQUELETO os que dependem de API externa
- * (caixa/atendentes/pastas no Chatwoot, modelos na Meta/Kapso, subdomínio na VPS) — o plano diz quais são.
+ * Fase 2: o --aplicar executa o banco E o Chatwoot (conta própria da clínica pela API de plataforma, etiquetas, atributos, automações, mensagens
+ * prontas, caixa, time, atendentes, robô, webhook e aba do Funil) E os modelos na Meta via Kapso. Fica MANUAL: número, subdomínio, segredos da VPS,
+ * franquia, pastas. Com `whatsapp.modo: demonstracao` (clínica de vitrine) a caixa é API e os modelos ficam em SECO.
+ *   ... --ligar-robo       liga o robô Sofia na caixa (só depois do teste da Sofia)
+ * Variáveis: CHATWOOT_URL/CHATWOOT_API_TOKEN/CHATWOOT_CONTA_ID (a conta de REFERÊNCIA, só leitura), CHATWOOT_PLATFORM_TOKEN (criar conta e usuário),
+ * KAPSO_API_KEY (caixa e modelos), KIT_SEGREDOS_DIR (o cofre dos segredos gerados), MCP_URL_PUBLICA (o endereço do agente).
  * O seco só LÊ (SELECT / GET). Segredo nunca é lido nem impresso: do ambiente só se confere se a variável EXISTE.
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -19,6 +23,12 @@ import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline/promises';
 import { AUTOMACOES } from '../lib/automacoes.js';
 import { executarPlano, relatorioFinal, type BancoPorta } from '../lib/kit-unidade/executar.js';
+import { contaHttp, contaHttpSoLeitura, plataformaHttp } from '../lib/kit-unidade/chatwoot-http.js';
+import { kapsoHttp } from '../lib/kit-unidade/kapso-http.js';
+import type { PortasExternas } from '../lib/kit-unidade/portas.js';
+import { segredosEmArquivo } from '../lib/kit-unidade/segredos.js';
+import { listaDaResposta, urlDoWebhook } from '../lib/kit-unidade/fase2.js';
+import { sufixoDoQuestionario } from '../lib/kit-unidade/questionario.js';
 import { montarPlano, textoDoPlano, type EstadoAtual } from '../lib/kit-unidade/plano.js';
 import { lerQuestionario, questionarioMascarado, type Questionario } from '../lib/kit-unidade/questionario.js';
 import { esquemaJson } from '../lib/kit-unidade/schema-json.js';
@@ -27,6 +37,18 @@ const AQUI = dirname(fileURLToPath(import.meta.url));
 const RAIZ_DO_REPO = resolve(AQUI, '../../..');
 const CAMINHO_SCHEMA = join(RAIZ_DO_REPO, 'ops/kit-unidade/questionario.schema.json');
 const CAMINHO_MOLDE = join(RAIZ_DO_REPO, 'ops/kit-unidade/molde-sofia/bloco-conversa.md');
+
+/** O endereço do agente (de onde o Chatwoot da clínica chama): a origem de MCP_URL_PUBLICA, ou o padrão. */
+function urlDoAgente(): string {
+  try {
+    return process.env.MCP_URL_PUBLICA ? new URL(process.env.MCP_URL_PUBLICA).origin : 'https://agente-vps.doutordigitalconsultoria.com';
+  } catch {
+    return 'https://agente-vps.doutordigitalconsultoria.com';
+  }
+}
+
+const PASTA_DO_COFRE = process.env.KIT_SEGREDOS_DIR?.trim() || null;
+const noCofre = (nome: string): boolean => !!PASTA_DO_COFRE && existsSync(join(PASTA_DO_COFRE, nome));
 
 function argumentos(argv: string[]) {
   const flags = new Set(argv.filter((a) => a.startsWith('--')));
@@ -40,7 +62,10 @@ export function lerMolde(caminho = CAMINHO_MOLDE): string | null {
 /** O estado atual, SÓ LEITURA. Parte que falha ou não está configurada fica `undefined` (= não consultado). */
 async function lerEstado(q: Questionario): Promise<EstadoAtual> {
   const estado: EstadoAtual = {
-    segredos: Object.fromEntries([q.franquia.token_env, q.meta.token_env, q.meta.conta_env, q.meta.dataset_id_env].map((v) => [v, !!process.env[v]?.trim()])),
+    segredos: Object.fromEntries(
+      [q.franquia.token_env, q.meta.token_env, q.meta.conta_env, q.meta.dataset_id_env, `CHATWOOT_API_TOKEN_${sufixoDoQuestionario(q)}`, 'KAPSO_API_KEY'].map((v) => [v, !!process.env[v]?.trim() || noCofre(v)]),
+    ),
+    plataforma: !!process.env.CHATWOOT_PLATFORM_TOKEN?.trim(),
   };
   if (process.env.DATABASE_URL) {
     try {
@@ -49,7 +74,7 @@ async function lerEstado(q: Questionario): Promise<EstadoAtual> {
       estado.banco = {
         unidade: u ? { id: u.id, campos: u as unknown as Record<string, unknown> } : null,
         configChatwoot: u?.chatwoot
-          ? { prefixoModelos: u.chatwoot.prefixoModelos, metaAgendamentosDia: u.chatwoot.metaAgendamentosDia, kapsoPhoneNumberId: u.chatwoot.kapsoPhoneNumberId, wabaId: u.chatwoot.wabaId, envSufixo: u.chatwoot.envSufixo, dadosModelos: (u.chatwoot.dadosModelos ?? {}) as Record<string, unknown> }
+          ? { subdominio: u.chatwoot.subdominio, prefixoModelos: u.chatwoot.prefixoModelos, metaAgendamentosDia: u.chatwoot.metaAgendamentosDia, kapsoPhoneNumberId: u.chatwoot.kapsoPhoneNumberId, wabaId: u.chatwoot.wabaId, envSufixo: u.chatwoot.envSufixo, dadosModelos: (u.chatwoot.dadosModelos ?? {}) as Record<string, unknown>, contaId: u.chatwoot.contaId }
           : null,
         caixasRegistradas: u?.chatwoot?.caixas.map((c) => c.caixaId) ?? [],
         automacoes: Object.fromEntries((u?.automacoes ?? []).map((a) => [a.automacao, a.estado])),
@@ -59,16 +84,21 @@ async function lerEstado(q: Questionario): Promise<EstadoAtual> {
       console.error(`(não consegui ler o banco: ${(err as Error).message} — o plano assume que nada existe)`);
     }
   }
-  const { contaChatwootDoAmbiente, criarContextoChatwoot, chamar } = await import('../mcp-remoto/chatwoot.js');
-  const conta = contaChatwootDoAmbiente();
-  if (conta) {
+  // O que a conta da CLÍNICA já tem (não a de referência): conta ainda sem id = conta que vai nascer vazia
+  const contaDaClinica = estado.banco?.configChatwoot?.contaId ?? null;
+  const urlDoChatwoot = (process.env.CHATWOOT_URL?.trim() || 'https://atendimento.doutordigitalconsultoria.com').replace(/\/+$/, '');
+  const nomeToken = `CHATWOOT_API_TOKEN_${sufixoDoQuestionario(q)}`;
+  const token = process.env[nomeToken]?.trim() || (PASTA_DO_COFRE && noCofre(nomeToken) ? readFileSync(join(PASTA_DO_COFRE, nomeToken), 'utf8').trim() : '');
+  if (estado.banco && contaDaClinica === null) {
+    estado.chatwoot = { etiquetas: [], atributosConversa: [], atributosContato: [], caixas: [], times: [], agentes: {}, pastas: {}, mensagensProntas: [], automacoesDaConta: 0 };
+  } else if (contaDaClinica !== null && token) {
     try {
-      const ctx = criarContextoChatwoot(conta);
+      const conta = contaHttp(urlDoChatwoot, contaDaClinica, token);
       const lista = async (caminho: string, query?: Record<string, string>): Promise<any[]> => {
-        const r = (await chamar(ctx, 'GET', caminho, { query })) as any;
+        const r = (await conta.get(caminho, query)) as any;
         return Array.isArray(r) ? r : Array.isArray(r?.payload) ? r.payload : [];
       };
-      const [etiquetas, atrC, atrK, caixas, times, agentes, prontas, regras] = await Promise.all([
+      const [etiquetas, atrC, atrK, caixas, times, agentes, prontas, regras, webhooks, abas] = await Promise.all([
         lista('labels'),
         lista('custom_attribute_definitions', { attribute_model: '0' }),
         lista('custom_attribute_definitions', { attribute_model: '1' }),
@@ -77,20 +107,24 @@ async function lerEstado(q: Questionario): Promise<EstadoAtual> {
         lista('agents'),
         lista('canned_responses'),
         lista('automation_rules'),
+        conta.get('webhooks').then((r) => listaDaResposta(r, 'webhooks')),
+        lista('dashboard_apps'),
       ]);
       estado.chatwoot = {
         etiquetas: etiquetas.map((e) => String(e.title)),
         atributosConversa: atrC.map((a) => String(a.attribute_key)),
         atributosContato: atrK.map((a) => String(a.attribute_key)),
-        caixas: caixas.map((c) => ({ id: Number(c.id), nome: String(c.name) })),
+        caixas: caixas.map((c) => ({ id: Number(c.id), nome: String(c.name), robo: !!c.agent_bot })),
         times: times.map((t) => String(t.name)),
         agentes: Object.fromEntries(agentes.map((a) => [String(a.email).toLowerCase(), { id: Number(a.id), nome: String(a.name) }])),
         pastas: {}, // a pasta é da pessoa: com o token de administração não dá para listar a dela
         mensagensProntas: prontas.map((p) => String(p.short_code)),
         automacoesDaConta: regras.length,
+        webhookDaConta: (webhooks as any[]).some((w) => String(w.url) === urlDoWebhook({ urlDoAgente: urlDoAgente() } as never, token)),
+        abas: (abas as any[]).map((a) => String(a.title)),
       };
     } catch (err) {
-      console.error(`(não consegui ler o Chatwoot: ${(err as Error).message} — o plano assume que nada existe)`);
+      console.error(`(não consegui ler a conta ${contaDaClinica} do Chatwoot: ${(err as Error).message} — o plano assume que nada existe)`);
     }
   }
   return estado;
@@ -115,7 +149,7 @@ async function bancoReal(): Promise<BancoPorta> {
     },
     async lerConfigChatwoot(unitId) {
       const c = await prisma.unitChatwoot.findUnique({ where: { unitId } });
-      return c ? { prefixoModelos: c.prefixoModelos, metaAgendamentosDia: c.metaAgendamentosDia, kapsoPhoneNumberId: c.kapsoPhoneNumberId, wabaId: c.wabaId, envSufixo: c.envSufixo, dadosModelos: (c.dadosModelos ?? {}) as Record<string, unknown> } : null;
+      return c ? { subdominio: c.subdominio, prefixoModelos: c.prefixoModelos, metaAgendamentosDia: c.metaAgendamentosDia, kapsoPhoneNumberId: c.kapsoPhoneNumberId, wabaId: c.wabaId, envSufixo: c.envSufixo, dadosModelos: (c.dadosModelos ?? {}) as Record<string, unknown>, contaId: c.contaId, gerenteId: c.gerenteId, usuarioCelularId: c.usuarioCelularId } : null;
     },
     async gravarConfigChatwoot(unitId, c, criar) {
       const dados = { ...c, ...(c.dadosModelos ? { dadosModelos: c.dadosModelos as never } : {}), atualizadoPor: 'nova-unidade' };
@@ -135,6 +169,34 @@ async function bancoReal(): Promise<BancoPorta> {
     async gravarSofia(unitId, campos) {
       await prisma.unit.update({ where: { id: unitId }, data: campos as never });
     },
+    async caixasRegistradas(unitId) {
+      return (await prisma.unitChatwootCaixa.findMany({ where: { unitId }, select: { caixaId: true } })).map((c) => c.caixaId);
+    },
+    async registrarCaixa(unitId, caixa) {
+      await prisma.unitChatwootCaixa.upsert({ where: { caixaId: caixa.id }, update: {}, create: { caixaId: caixa.id, unitId, tipo: caixa.tipo } });
+    },
+  };
+}
+
+/** As portas do mundo de fora, com o que o ambiente tem. Parte que falta fica `null` (o passo que precisa dela fica BLOQUEADO, nunca finge). */
+async function portasExternas(): Promise<PortasExternas> {
+  const { contaChatwootDoAmbiente } = await import('../mcp-remoto/chatwoot.js');
+  const ambiente = contaChatwootDoAmbiente();
+  const url = (process.env.CHATWOOT_URL?.trim() || 'https://atendimento.doutordigitalconsultoria.com').replace(/\/+$/, '');
+  const platform = process.env.CHATWOOT_PLATFORM_TOKEN?.trim();
+  const kapso = process.env.KAPSO_API_KEY?.trim();
+  const { randomBytes } = await import('node:crypto');
+  const agente = urlDoAgente();
+  return {
+    plataforma: platform ? plataformaHttp(url, platform) : null,
+    abrirConta: (conta, token) => contaHttp(url, conta, token),
+    referencia: ambiente ? contaHttpSoLeitura(ambiente.url, ambiente.conta, ambiente.token) : null,
+    contaDoAmbiente: ambiente?.conta ?? null,
+    kapso: kapso ? kapsoHttp(kapso) : null,
+    segredos: segredosEmArquivo(PASTA_DO_COFRE),
+    urlDoAgente: agente,
+    urlDoChatwoot: url,
+    gerarSenha: () => `Aa1!${randomBytes(18).toString('base64url')}`,
   };
 }
 
@@ -146,7 +208,7 @@ async function main(): Promise<void> {
     return;
   }
   if (!arquivo) {
-    console.error('uso: nova-unidade.ts <questionario.yaml> [--aplicar] [--sim] [--offline] [--sobrescrever] [--sobrescrever-prompt]   |   --gerar-schema');
+    console.error('uso: nova-unidade.ts <questionario.yaml> [--aplicar] [--sim] [--offline] [--sobrescrever] [--sobrescrever-prompt] [--ligar-robo]   |   --gerar-schema');
     process.exit(2);
   }
   const lido = lerQuestionario(readFileSync(resolve(arquivo), 'utf8'));
@@ -178,6 +240,8 @@ async function main(): Promise<void> {
     molde,
     sobrescreverPrompt: flags.has('--sobrescrever-prompt'),
     sobrescrever: flags.has('--sobrescrever'),
+    externas: await portasExternas(),
+    ligarRobo: flags.has('--ligar-robo'),
     dizer: (l) => console.log(l),
     confirmar: async (p) => (sim ? true : /^s(im)?$/i.test((await rl.question(`  Aplicar esta etapa (${p.id})? [s/N] `)).trim())),
   });

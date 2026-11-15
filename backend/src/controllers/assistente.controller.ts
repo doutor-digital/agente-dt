@@ -400,14 +400,20 @@ const ROTAS_DO_BOTAO: Readonly<Record<string, readonly string[]>> = {
   '/api/public/assistente/avaliar': ['POST'],
 };
 
-export function corsDoAssistente(path: string, origem: string, urlChatwoot: string | undefined): { origin: true; credentials: false; allowedHeaders: string[]; methods: string[] } | null {
+/**
+ * `chatwoot`: a URL do Chatwoot OU a lista de origens aceitas (a principal + o subdomínio de cada clínica cadastrada: `origensDoChatwoot()`). Sem a lista, o botão
+ * e a consulta de gestão do menu param de funcionar na página do subdomínio da clínica.
+ */
+export function corsDoAssistente(path: string, origem: string, chatwoot: string | string[] | undefined): { origin: true; credentials: false; allowedHeaders: string[]; methods: string[] } | null {
   const metodos = ROTAS_DO_BOTAO[path];
-  if (!metodos || !urlChatwoot) return null;
-  try {
-    if (new URL(urlChatwoot).origin !== origem) return null;
-  } catch {
-    return null;
-  }
+  const aceitas = (Array.isArray(chatwoot) ? chatwoot : chatwoot ? [chatwoot] : []).flatMap((u) => {
+    try {
+      return [new URL(u).origin];
+    } catch {
+      return [];
+    }
+  });
+  if (!metodos || !aceitas.includes(origem)) return null;
   const comCorpo = metodos.includes('POST');
   return {
     origin: true,

@@ -26,6 +26,7 @@ function bancoFalso(init: { automacoes?: string[]; sofia?: Record<string, unknow
     config: init.config ?? null,
     automacoes: [...(init.automacoes ?? [])],
     sofia: { ...(init.sofia ?? {}) } as Record<string, unknown>,
+    caixas: [] as number[],
   };
   const banco: BancoPorta = {
     async lerUnidade() {
@@ -60,6 +61,13 @@ function bancoFalso(init: { automacoes?: string[]; sofia?: Record<string, unknow
       chamadas.push(['gravarSofia', { unitId, campos }]);
       estado.sofia = { ...estado.sofia, ...campos };
       if (estado.unidade) estado.unidade.campos = { ...estado.unidade.campos, ...campos };
+    },
+    async caixasRegistradas() {
+      return [...estado.caixas];
+    },
+    async registrarCaixa(unitId, caixa) {
+      chamadas.push(['registrarCaixa', { unitId, caixa }]);
+      if (!estado.caixas.includes(caixa.id)) estado.caixas.push(caixa.id);
     },
   };
   return { banco, chamadas, estado };
@@ -97,16 +105,15 @@ test('--aplicar: os passos de banco rodam NA ORDEM, cada um com confirmação, e
   assert.equal(sit(resultados, 'automacoes-seco'), 'feito');
 });
 
-test('passos que dependem de API externa PARAM no esqueleto (e dizem isso); os manuais ficam como manual', async () => {
+test('SEM as portas do Chatwoot/Kapso (sem token), os passos de fora do banco ficam BLOQUEADOS — nunca fingem que fizeram; os manuais ficam como manual', async () => {
   const { banco, chamadas } = bancoFalso();
   const { resultados, plano, linhas } = await rodar(banco);
-  for (const id of ['etiquetas', 'atributos', 'caixa', 'time', 'atendentes', 'pastas', 'mensagens-prontas', 'modelos', 'dataset-capi', 'subdominio']) assert.equal(sit(resultados, id), 'esqueleto', id);
-  for (const id of ['automacoes-conta', 'numero', 'segredos', 'franquia']) assert.equal(sit(resultados, id), 'manual', id);
-  // os que dependem de um passo de esqueleto também são esqueleto (não rodam), não «feito»
-  for (const id of ['registrar-caixa', 'robo-sofia', 'usuario-celular']) assert.equal(sit(resultados, id), 'esqueleto', id);
-  assert.ok(linhas.some((l) => /não implementado nesta fase/.test(l)));
+  for (const id of ['conta', 'etiquetas', 'atributos', 'automacoes-conta', 'caixa', 'time', 'atendentes', 'mensagens-prontas', 'modelos', 'webhook', 'dashboard-app']) assert.equal(sit(resultados, id), 'bloqueado', id);
+  for (const id of ['pastas', 'numero', 'dataset-capi', 'subdominio', 'segredos', 'franquia']) assert.equal(sit(resultados, id), 'manual', id);
+  for (const id of ['registrar-caixa', 'robo-sofia', 'usuario-celular']) assert.equal(sit(resultados, id), 'bloqueado', id);
+  assert.ok(linhas.some((l) => /sem acesso ao Chatwoot/.test(l)));
   const rel = relatorioFinal(plano, resultados);
-  assert.match(rel, /PENDENTE \(esqueleto, Fase 2\)/);
+  assert.match(rel, /BLOQUEADO/);
   assert.match(rel, /O QUE FALTA:/);
   assert.equal(chamadas.length, 4);
 });
@@ -232,7 +239,7 @@ test('unidade existente INATIVA com valores diferentes: só preenche campo vazio
   if (cfg) {
     const parcial = (cfg[1] as { cfg: Record<string, unknown>; criar: boolean });
     assert.equal(parcial.criar, false);
-    assert.deepEqual(Object.keys(parcial.cfg), ['dadosModelos']);
+    assert.deepEqual(Object.keys(parcial.cfg), ['subdominio', 'dadosModelos']);
     assert.equal((parcial.cfg.dadosModelos as Record<string, unknown>).endereco, 'Endereço editado nos modelos', 'o endereço dos modelos fica');
   }
   const depois = JSON.parse(p.snapshot()) as typeof antes;
@@ -249,7 +256,7 @@ test('config existente com Kapso/WABA vazios: preenche só eles, sem apagar o pr
   await rodar(f.banco);
   const c = f.chamadas.find((x) => x[0] === 'gravarConfigChatwoot')![1] as { cfg: Record<string, unknown>; criar: boolean };
   assert.equal(c.criar, false);
-  assert.deepEqual(Object.keys(c.cfg).sort(), ['dadosModelos', 'kapsoPhoneNumberId', 'wabaId']);
+  assert.deepEqual(Object.keys(c.cfg).sort(), ['dadosModelos', 'kapsoPhoneNumberId', 'subdominio', 'wabaId']);
   assert.equal(f.estado.config!.prefixoModelos, 'parau_');
   assert.equal(f.estado.config!.metaAgendamentosDia, 8, 'a meta que já estava fica');
   assert.equal(f.estado.config!.dadosModelos.endereco, 'Endereço editado', 'o endereço já escrito nos modelos fica');

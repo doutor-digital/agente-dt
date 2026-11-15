@@ -1107,7 +1107,7 @@ export function paginaFunilHandler(_req: Request, res: Response): void {
   }
   res.type('html').send(
     comContaNaPagina(
-      PAGINA.replace('__ORIGEM_CW__', JSON.stringify(origem))
+      PAGINA.replace('__ORIGEM_CW__', `origemDoPai(${JSON.stringify(origem)})`)
         .split('__GUIA_LIGADO__').join(String(guiaDaEtapaLigado()))
         .split('/*__TELAS_CSS__*/').join(TELAS_CSS)
         .split('/*__TELAS_JS__*/').join(TELAS_JS),
@@ -1640,7 +1640,7 @@ body{background:#f4f6f9}
   document.addEventListener('keydown',function(e){ if(e.key!=='Escape') return; if(aberta){ fecharFicha(); return; } if(MENU){ try{ window.parent.postMessage({event:'funil:fechar'},ORIGEM_CW); }catch(x){} } });
   window.addEventListener('message',function(ev){
     try{ var d=typeof ev.data==='string'?JSON.parse(ev.data):ev.data;
-      if(d&&d.event==='funil-sessao'&&ev.origin===ORIGEM_CW&&ev.source===window.parent){
+      if(d&&d.event==='funil-sessao'&&origemDoCrm(ev.origin)&&ev.source===window.parent){
         var nova=d.sessao&&d.sessao.token?d.sessao:null;
         if(nova&&nova.token===morta){ msg('Sua sessão do CRM venceu: saia e entre de novo.'); return; }
         S=nova; iniciar(); return; }

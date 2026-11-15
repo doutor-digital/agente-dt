@@ -192,6 +192,13 @@
     "whatsapp": {
       "type": "object",
       "properties": {
+        "modo": {
+          "type": "string",
+          "enum": [
+            "real",
+            "demonstracao"
+          ]
+        },
         "numero_oficial": {
           "type": "string",
           "pattern": "^\\+\\d{12,14}$",
@@ -223,9 +230,6 @@
         }
       },
       "required": [
-        "numero_oficial",
-        "kapso_phone_number_id",
-        "waba_id",
         "prefixo_modelos",
         "conexao"
       ],

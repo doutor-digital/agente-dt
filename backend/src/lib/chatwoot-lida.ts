@@ -14,8 +14,8 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { Request, Response } from 'express';
 import { logger } from './logger.js';
-import { INSTANCIA_CAIXA } from './chatwoot-unidades.js';
-import { chamar, contextoDaCaixa, contextoDoAmbiente, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
+import { INSTANCIA_CAIXA, contaDaCaixa } from './chatwoot-unidades.js';
+import { chamar, contextoDaCaixa, contextoDoAmbiente, tokenParaChaveDaConta, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 
 /** instância do Evolution → caixa do Chatwoot */
 export { INSTANCIA_CAIXA };
@@ -191,16 +191,22 @@ export function portaDaLidaDaCaixa(caixa: number, e: NodeJS.ProcessEnv = process
 
 /** POST /api/public/evolution/lida?k=<chave> — webhook `messages.update` do Evolution. Responde na hora; o trabalho segue depois. */
 export function lidaEvolutionHandler(req: Request, res: Response): void {
-  const token = process.env.CHATWOOT_API_TOKEN?.trim();
+  // A chave é da CONTA da caixa que a instância alimenta (derivada do token dela): a de Parauapebas não vale para a caixa de outra clínica.
+  // a instância vem do corpo (qualquer evento dela, não só o de leitura): o Evolution manda outros e eles também precisam passar com a chave certa
+  const instancia = String((req.body as { instance?: unknown } | undefined)?.instance ?? '').trim();
+  const caixa = instancia ? INSTANCIA_CAIXA[instancia] : undefined;
+  const aviso = avisoDaLeitura(req.body);
+  let token: string | undefined = process.env.CHATWOOT_API_TOKEN?.trim(); // instância desconhecida ou aviso torto: só a chave do ambiente
+  if (caixa) {
+    const conta = contaDaCaixa(caixa); // número = conta própria; null = a do ambiente; undefined = clínica sem conta válida (nenhuma chave vale)
+    token = typeof conta === 'number' ? tokenParaChaveDaConta(conta) : conta === null ? token : undefined;
+  }
   if (!chaveDaLidaConfere(token, req.query.k)) {
     res.status(401).json({ error: 'chave inválida' });
     return;
   }
   res.json({ ok: true });
-  const aviso = avisoDaLeitura(req.body);
-  if (!aviso) return;
-  const caixa = INSTANCIA_CAIXA[aviso.instancia];
-  if (!caixa) return; // instância que nenhuma unidade tem: ignorada, como sempre
+  if (!aviso || !caixa) return; // instância que nenhuma unidade tem: ignorada, como sempre
   const porta = portaDaLidaDaCaixa(caixa);
   if (!porta) {
     logger.warn({ instancia: aviso.instancia, caixa }, 'evolution-lida: a caixa não tem conta do Chatwoot válida — ignorado, sem chamar o Chatwoot');

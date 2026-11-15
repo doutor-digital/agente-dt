@@ -173,6 +173,18 @@ export function donaDaConta(ctx: ContextoChatwoot, contaId: number, e: NodeJS.Pr
   return reserva;
 }
 
+/**
+ * O token que AUTENTICA os webhooks que dizem ser da conta `contaId` (a chave `?k=` é derivada dele): o do ambiente para a conta do ambiente; para
+ * uma conta própria, o token PRÓPRIO da clínica — sem ele (cairia no global) não há chave que valha: `undefined` = recusar. Assim a chave de uma
+ * conta não forja evento de outra.
+ */
+export function tokenParaChaveDaConta(contaId: number, e: NodeJS.ProcessEnv = process.env): string | undefined {
+  const base = contextoDoAmbiente(e);
+  if (!base?.conta) return undefined;
+  const dona = donaDaConta(base, contaId, e);
+  return dona?.propria ? dona.ctx.conta?.token : undefined;
+}
+
 /** O contexto de uma CONTA pelo id (o do evento que chegou). `null` = nenhuma unidade configurada usa essa conta (RECUSAR). */
 export function contextoDaContaPorId(ctx: ContextoChatwoot, contaId: number, e: NodeJS.ProcessEnv = process.env): ContextoChatwoot | null {
   return donaDaConta(ctx, contaId, e)?.ctx ?? null;

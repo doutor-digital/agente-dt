@@ -1,11 +1,13 @@
 /**
- * Executa o plano (`--aplicar`), ETAPA POR ETAPA e com confirmação. Só os passos de BANCO estão implementados nesta fase; os que
- * dependem de API externa (Chatwoot, Kapso/Meta, VPS) ficam como ESQUELETO: o plano mostra o que fariam, a execução PARA no passo
- * e o relatório final o lista como pendente. Nada de segredo passa por aqui.
+ * Executa o plano (`--aplicar`), ETAPA POR ETAPA e com confirmação: banco (fase 1) e, na fase 2, o Chatwoot (conta, etiquetas, atributos,
+ * automações, caixa, time, atendentes, robô, webhook, aba do Funil) e os modelos na Meta via Kapso (`fase2.ts`). O que não dá para automatizar
+ * (número, subdomínio, segredos da VPS, franquia, pastas) fica MANUAL e vai para o relatório. Nada de segredo passa por aqui.
  *
  * Idempotente: rodar de novo recalcula o plano com o estado atual e só mexe no que falta. Portas injetáveis (teste não toca em banco).
  */
 import { AUTOMACOES } from '../automacoes.js';
+import { gerenteDaConta, novoEstado, passoAtendentes, passoAutomacoesDaConta, passoAtributos, passoCaixa, passoConta, passoDashboardApp, passoEtiquetas, passoMensagensProntas, passoModelos, passoRobo, passoTime, passoUsuarioCelular, passoWebhook, type EstadoDaExecucao } from './fase2.js';
+import { ErroSoLeitura, type PortasExternas } from './portas.js';
 import { CAMPOS_SO_NA_CRIACAO, camposDaSofia, camposDaUnidade } from './molde-sofia.js';
 import { aGravar, dadosDosModelosAGravar } from './protecao.js';
 import type { Passo, Plano } from './plano.js';
@@ -19,6 +21,12 @@ export interface ConfigGravada {
   wabaId: string | null;
   envSufixo: string;
   dadosModelos: Record<string, unknown>;
+  /** a conta do Chatwoot da clínica (null = ainda não criada, ou a do ambiente) */
+  contaId?: number | null;
+  /** subdomínio do CRM da clínica: a origem que as telas por iframe aceitam */
+  subdominio?: string | null;
+  gerenteId?: number | null;
+  usuarioCelularId?: number | null;
 }
 
 export interface BancoPorta {
@@ -35,6 +43,10 @@ export interface BancoPorta {
   /** persona/fontes/prompt hoje */
   sofiaDaUnidade(unitId: string): Promise<Record<string, unknown>>;
   gravarSofia(unitId: string, campos: Record<string, unknown>): Promise<void>;
+  /** ids das caixas já registradas para a unidade */
+  caixasRegistradas(unitId: string): Promise<number[]>;
+  /** registra a caixa (idempotente: a mesma caixa não duplica) */
+  registrarCaixa(unitId: string, caixa: { id: number; tipo: 'cloud' | 'evolution' | 'historico' }): Promise<void>;
 }
 
 export interface OpcoesDeExecucao {
@@ -48,9 +60,16 @@ export interface OpcoesDeExecucao {
   sobrescrever?: boolean;
   /** escreve uma linha para quem está acompanhando */
   dizer: (linha: string) => void;
+  /** as portas do Chatwoot, do Kapso e do cofre; sem elas os passos de fora do banco ficam bloqueados */
+  externas?: PortasExternas | null;
+  /** liga o robô Sofia na caixa (só depois do teste da Sofia) */
+  ligarRobo?: boolean;
 }
 
 export type SituacaoDoPasso = 'feito' | 'nada-a-fazer' | 'recusado' | 'esqueleto' | 'manual' | 'bloqueado' | 'falhou';
+
+/** Passos de fora do banco que o executor roda (e que, quando o plano diz «nada», rodam só para LER o que existe e passar os ids adiante). */
+const PASSOS_EXTERNOS = new Set(['conta', 'etiquetas', 'atributos', 'automacoes-conta', 'mensagens-prontas', 'caixa', 'time', 'atendentes', 'usuario-celular', 'webhook', 'dashboard-app', 'robo-sofia', 'modelos']);
 
 export interface Resultado {
   id: string;
@@ -62,6 +81,7 @@ export async function executarPlano(plano: Plano, q: Questionario, o: OpcoesDeEx
   const resultados: Resultado[] = [];
   const deu = new Map<string, SituacaoDoPasso>();
   let unitId: string | null = null;
+  const execucao = novoEstado();
   for (const p of plano.passos) {
     const registrar = (situacao: SituacaoDoPasso, notas: string[] = []) => {
       resultados.push({ id: p.id, situacao, notas });
@@ -69,7 +89,9 @@ export async function executarPlano(plano: Plano, q: Questionario, o: OpcoesDeEx
       o.dizer(`  → ${p.id}: ${situacao}${notas.length ? ` — ${notas.join(' | ')}` : ''}`);
     };
     o.dizer(`\n[${p.sistema}] ${p.titulo}`);
-    if (p.acao === 'nada') {
+    // passo de Chatwoot que o plano deu como «nada»: roda sem perguntar só para achar os ids que os seguintes precisam (não cria nada: já existe)
+    const soLer = p.acao === 'nada' && p.sistema === 'chatwoot' && PASSOS_EXTERNOS.has(p.id) && !!o.externas;
+    if (p.acao === 'nada' && !soLer) {
       registrar('nada-a-fazer');
       continue;
     }
@@ -80,9 +102,10 @@ export async function executarPlano(plano: Plano, q: Questionario, o: OpcoesDeEx
     const travado = p.depende.filter((d) => {
       const s = deu.get(d);
       const passo = plano.passos.find((x) => x.id === d);
-      return !(s === 'feito' || s === 'nada-a-fazer' || (passo?.acao === 'nada'));
+      // o «nada» do plano só vale para quem NÃO rodou; passo que rodou e foi recusado, bloqueado ou falhou (inclusive na leitura) trava os que dependem dele
+      return !(s === 'feito' || s === 'nada-a-fazer' || (s === undefined && passo?.acao === 'nada'));
     });
-    if (travado.length && p.execucao === 'sim') {
+    if (travado.length && (p.execucao === 'sim' || soLer)) {
       registrar('bloqueado', [`depende de: ${travado.join(', ')}`]);
       continue;
     }
@@ -91,15 +114,40 @@ export async function executarPlano(plano: Plano, q: Questionario, o: OpcoesDeEx
       continue;
     }
     if (p.execucao === 'esqueleto') {
-      registrar('esqueleto', ['não implementado nesta fase (depende de API externa) — está no relatório final']);
+      registrar('esqueleto', ['não implementado (depende de API externa) — está no relatório final']);
       continue;
     }
+    if (PASSOS_EXTERNOS.has(p.id) && !o.externas) {
+      registrar('bloqueado', ['sem acesso ao Chatwoot/Kapso neste ambiente (CHATWOOT_URL, CHATWOOT_API_TOKEN ou o cofre KIT_SEGREDOS_DIR faltando)']);
+      continue;
+    }
+    let leu = false;
+    if (soLer) {
+      // tenta SÓ LENDO; se o passo precisar escrever (o plano achava que estava pronto, mas não está), cai no caminho normal: pergunta e roda
+      try {
+        execucao.somenteLeitura = true;
+        const notas = await aplicarPasso(p, q, o, () => unitId, (id) => (unitId = id), execucao);
+        registrar('nada-a-fazer', notas);
+        leu = true;
+      } catch (err) {
+        if (!(err instanceof ErroSoLeitura)) {
+          registrar('falhou', [String((err as Error).message ?? err)]);
+          o.dizer('  (parei aqui: nada depois deste passo roda)');
+          break;
+        }
+        o.dizer(`  (o plano achava que «${p.id}» estava pronto, mas falta algo: ${err.o_que})`);
+      } finally {
+        execucao.somenteLeitura = false;
+      }
+    }
+    if (leu) continue;
     if (!(await o.confirmar(p))) {
       registrar('recusado');
       continue;
     }
     try {
-      registrar('feito', await aplicarPasso(p, q, o, () => unitId, (id) => (unitId = id)));
+      const notas = await aplicarPasso(p, q, o, () => unitId, (id) => (unitId = id), execucao);
+      registrar('feito', notas);
     } catch (err) {
       registrar('falhou', [String((err as Error).message ?? err)]);
       o.dizer('  (parei aqui: nada depois deste passo roda)');
@@ -109,15 +157,22 @@ export async function executarPlano(plano: Plano, q: Questionario, o: OpcoesDeEx
   return resultados;
 }
 
-async function aplicarPasso(p: Passo, q: Questionario, o: OpcoesDeExecucao, unitIdAtual: () => string | null, definirUnitId: (id: string) => void): Promise<string[]> {
+async function aplicarPasso(p: Passo, q: Questionario, o: OpcoesDeExecucao, unitIdAtual: () => string | null, definirUnitId: (id: string) => void, execucao: EstadoDaExecucao): Promise<string[]> {
   const { banco } = o;
+  const x = o.externas as PortasExternas;
+  const garantirUnidade = async (): Promise<string> => {
+    const id = unitIdAtual() ?? (await banco.lerUnidade(q.unidade.slug))?.id ?? (await banco.gravarUnidade(q.unidade.slug, q.unidade.nome, {})).id;
+    definirUnitId(id);
+    return id;
+  };
   switch (p.id) {
     case 'unidade': {
       const atual = await banco.lerUnidade(q.unidade.slug);
       if (atual?.ativa && !o.sobrescrever) throw new Error(`a unidade ${q.unidade.slug} já está ATIVA: o script não mexe numa unidade no ar sem --sobrescrever`);
       const novos = camposDaUnidade(q);
       const { gravar, preservados } = atual ? aGravar(atual.campos, novos, !!o.sobrescrever) : { gravar: novos, preservados: [] as string[] };
-      const r = await banco.gravarUnidade(q.unidade.slug, q.unidade.nome, gravar, CAMPOS_SO_NA_CRIACAO);
+      // unidade que existe e não tem campo vazio a preencher: nem chama o banco (segunda rodada não escreve nada)
+      const r = atual && !Object.keys(gravar).length ? { id: atual.id, criada: false } : await banco.gravarUnidade(q.unidade.slug, q.unidade.nome, gravar, CAMPOS_SO_NA_CRIACAO);
       definirUnitId(r.id);
       return [
         r.criada ? `unidade criada (inativa): ${r.id}` : `unidade já existia (${r.id}): preenchi ${Object.keys(gravar).length} campo(s) vazio(s)${Object.keys(gravar).length ? `: ${Object.keys(gravar).join(', ')}` : ''}`,
@@ -125,10 +180,9 @@ async function aplicarPasso(p: Passo, q: Questionario, o: OpcoesDeExecucao, unit
       ];
     }
     case 'config-chatwoot': {
-      const id = unitIdAtual() ?? (await banco.gravarUnidade(q.unidade.slug, q.unidade.nome, {})).id;
-      definirUnitId(id);
+      const id = await garantirUnidade();
       const c = configChatwootDoQuestionario(q);
-      const novos: ConfigGravada = { prefixoModelos: c.prefixoModelos, metaAgendamentosDia: c.metaAgendamentosDia, kapsoPhoneNumberId: c.kapsoPhoneNumberId, wabaId: c.wabaId, envSufixo: c.envSufixo, dadosModelos: { ...c.dadosModelos } };
+      const novos: ConfigGravada = { subdominio: c.subdominio ?? null, prefixoModelos: c.prefixoModelos, metaAgendamentosDia: c.metaAgendamentosDia, kapsoPhoneNumberId: c.kapsoPhoneNumberId, wabaId: c.wabaId, envSufixo: c.envSufixo, dadosModelos: { ...c.dadosModelos } };
       const atual = await banco.lerConfigChatwoot(id);
       if (!atual) {
         await banco.gravarConfigChatwoot(id, novos, true);
@@ -146,16 +200,14 @@ async function aplicarPasso(p: Passo, q: Questionario, o: OpcoesDeExecucao, unit
       ];
     }
     case 'automacoes-seco': {
-      const id = unitIdAtual() ?? (await banco.gravarUnidade(q.unidade.slug, q.unidade.nome, {})).id;
-      definirUnitId(id);
+      const id = await garantirUnidade();
       const ja = new Set(await banco.automacoesDaUnidade(id));
       const novas = AUTOMACOES.filter((a) => a.id.startsWith('chatwoot-') && a.temSeco && !ja.has(a.id)).map((a) => a.id);
       if (novas.length) await banco.criarAutomacoesEmSeco(id, novas);
       return [novas.length ? `em seco: ${novas.join(', ')}` : 'nenhuma a criar'];
     }
     case 'sofia': {
-      const id = unitIdAtual() ?? (await banco.gravarUnidade(q.unidade.slug, q.unidade.nome, {})).id;
-      definirUnitId(id);
+      const id = await garantirUnidade();
       const { campos, avisos } = camposDaSofia(q, o.molde);
       const hoje = await banco.sofiaDaUnidade(id);
       const notas = [...avisos];
@@ -172,6 +224,50 @@ async function aplicarPasso(p: Passo, q: Questionario, o: OpcoesDeExecucao, unit
       if (ficaram.length) notas.push(`ficaram como estão (já preenchidos, diferem do questionário; --sobrescrever troca): ${ficaram.join(', ')}`);
       return notas;
     }
+    case 'conta': {
+      const unitId = await garantirUnidade();
+      const cfg = await banco.lerConfigChatwoot(unitId);
+      return passoConta(q, x, execucao, { contaId: cfg?.contaId ?? null, caixasRegistradas: await banco.caixasRegistradas(unitId), gravarContaId: (id) => banco.gravarConfigChatwoot(unitId, { contaId: id }, false) });
+    }
+    case 'etiquetas':
+      return passoEtiquetas(x, execucao);
+    case 'atributos':
+      return passoAtributos(x, execucao);
+    case 'automacoes-conta':
+      return passoAutomacoesDaConta(x, execucao);
+    case 'mensagens-prontas':
+      return passoMensagensProntas(q, execucao);
+    case 'caixa':
+      return passoCaixa(q, x, execucao);
+    case 'time':
+      return passoTime(q, execucao);
+    case 'atendentes':
+      return passoAtendentes(q, execucao);
+    case 'usuario-celular':
+      return passoUsuarioCelular(q, execucao);
+    case 'registrar-caixa': {
+      const unitId = await garantirUnidade();
+      const caixa = execucao.caixaId;
+      if (!caixa) throw new Error('a caixa ainda não existe (passo «caixa»)');
+      const ja = await banco.caixasRegistradas(unitId);
+      if (!ja.includes(caixa)) await banco.registrarCaixa(unitId, { id: caixa, tipo: 'cloud' });
+      // gerente e usuário do celular: só se ainda não estão gravados (nunca troco um que a equipe já definiu)
+      const cfg = await banco.lerConfigChatwoot(unitId);
+      const parcial: Partial<ConfigGravada> = {};
+      const gerente = gerenteDaConta(q, execucao);
+      if (gerente && (cfg?.gerenteId == null || o.sobrescrever)) parcial.gerenteId = gerente;
+      if (execucao.celularId && (cfg?.usuarioCelularId == null || o.sobrescrever)) parcial.usuarioCelularId = execucao.celularId;
+      if (Object.keys(parcial).length) await banco.gravarConfigChatwoot(unitId, parcial, false);
+      return [ja.includes(caixa) ? `caixa ${caixa} já estava registrada` : `caixa ${caixa} registrada (tipo cloud)`, ...(q.whatsapp.modo === 'demonstracao' ? ['ATENÇÃO: a caixa da demonstração é canal API mas fica registrada como «cloud» (não existe tipo «api»): NÃO ligue as automações do Chatwoot nesta clínica — a régua tentaria mandar modelo por um canal que não é WhatsApp'] : []), Object.keys(parcial).length ? `gravei ${Object.keys(parcial).join(' e ')}` : 'gerente e usuário do celular já estavam gravados', 'a unidade passa a valer para o servidor quando ele relê a configuração (reinício do serviço)'];
+    }
+    case 'webhook':
+      return passoWebhook(x, execucao);
+    case 'dashboard-app':
+      return passoDashboardApp(x, execucao);
+    case 'robo-sofia':
+      return passoRobo(q, x, execucao, !!o.ligarRobo);
+    case 'modelos':
+      return passoModelos(q, x);
     default:
       throw new Error(`passo sem executor: ${p.id}`);
   }
