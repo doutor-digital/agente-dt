@@ -15,6 +15,8 @@
  *  - Campo faltando no texto → não manda; o seco deixa UMA nota dizendo o que falta (por chave).
  */
 import { TEXTOS_PARAU } from './chatwoot-regua-textos.js';
+import { detectarPromessa } from './prometeu-sem-marcar.js';
+import { ehEncerramento } from './encerramento.js';
 
 export const ID_REGUA = 'chatwoot-regua';
 /** caixa do Chatwoot → slug da unidade. Uma unidade por enquanto. */
@@ -109,6 +111,14 @@ export interface MensagemResumo {
   /** 'user' (agente do Chatwoot), 'contact', 'agent_bot'… */
   autorTipo: string | null;
   criadaEm: Date;
+  /** o texto (até 300 caracteres), quando a listagem o traz: o alerta de «sem resposta» não chama agradecimento de pergunta */
+  texto?: string;
+}
+
+/** O que o banco sabe da conversa e a listagem do Chatwoot não: as falas da Sofia e o que ela fez nas últimas 24 h. */
+export interface FatosDaConversa {
+  falasDaSofia: Array<{ texto: string; em: Date }>;
+  eventos: Array<{ tipo: string; detalhe: string | null; em: Date }>;
 }
 
 export interface ConversaRegua {
@@ -122,6 +132,10 @@ export interface ConversaRegua {
   ultima: MensagemResumo | null;
   /** telefone do contato (`+55…`), para conferir cartão ativo no Kommo antes de falar com o paciente */
   telefone?: string;
+  /** só preenchido pelo worker quando a automação que precisa deles está ligada ou no papel */
+  fatos?: FatosDaConversa;
+  /** AAAA-MM-DD do aniversário (de hoje ou dos 3 dias anteriores) confirmado pela franquia com casamento seguro; null/ausente = não */
+  aniversarioEm?: string | null;
 }
 
 /** A 1ª vez que o worker viu a conversa com este valor neste campo. */
@@ -150,12 +164,15 @@ export interface DadosDaUnidade {
  * Regras INTERNAS: no Kommo são robôs que não falam com o paciente (criam tarefa, põem etiqueta, mudam etapa). Aqui viram nota
  * privada para a equipe + a ação, nunca mensagem pública.
  */
-export type AcaoInterna = 'quente-parado' | 'sem-resposta' | 'pendencia-fechou';
+export type AcaoInterna = 'quente-parado' | 'sem-resposta' | 'pendencia-fechou' | 'alerta-sem-resposta' | 'prometeu-sem-marcar' | 'agendamento-perdido';
 export const DESCRICAO_INTERNA: Readonly<Record<AcaoInterna, string>> = {
   'quente-parado': '⚠️ Lead QUENTE parado há 3 h — priorize! (prioridade → urgente e a conversa vai para a gerente)',
   'sem-resposta':
     'Paciente sem responder há 24 h: etiqueta «sem-resposta», motivo do não agendamento = «Não interagiu» e etapa → Perdido.',
   'pendencia-fechou': 'Etapa «Fechou», mas «Fechou tratamento» está desmarcado: corrigir a conversa (etiqueta «pendente-de-revisao»).',
+  'alerta-sem-resposta': '⏰ Paciente sem resposta: ninguém respondeu a última mensagem dele. Responda agora (prioridade → alta).',
+  'prometeu-sem-marcar': '⚠️ A Sofia disse que a consulta estava marcada, mas não há consulta marcada: ligue para o paciente e marque.',
+  'agendamento-perdido': '⚠️ A Sofia ofereceu horários e a consulta não foi marcada: vale retomar antes que esfrie.',
 };
 
 export interface Disparo {
@@ -455,7 +472,37 @@ interface Candidato {
   interna?: AcaoInterna;
   /** a data+hora (consulta, sessão) que decidiu o envio: é a que o texto de sessão mostra */
   momento?: Momento;
+  /** prazo próprio, em ms depois do alvo, no lugar das 12 h de sempre (alerta de sem resposta: 1 h; aniversário: 3 dias e 3 h) */
+  limiteMs?: number;
+  /** horas de Belém [de, até) em que este robô pode falar, além da janela de sempre (aniversário: 9–12) */
+  janela?: readonly [number, number];
+  /** a regra (mesma chave) que precisa ter saído antes: «um degrau por vez, sem pular» */
+  requer?: string;
+  /** texto da nota interna, no lugar da descrição genérica da ação */
+  textoInterno?: string;
 }
+
+/**
+ * Qual automação do catálogo (`automacoes.ts`) governa cada regra nova. A régua toda roda sob «chatwoot-regua»; estas regras têm o estado
+ * PRÓPRIO (nascem «só no papel»): desligada = não faz nada, no papel = só a nota «faria», ligada = faz (se a régua também estiver ligada).
+ */
+export const AUTOMACAO_DA_REGRA: Readonly<Record<string, string>> = {
+  'esquecido-nc-1': 'chatwoot-rotina-esquecidos',
+  'esquecido-nc-2': 'chatwoot-rotina-esquecidos',
+  'esquecido-nc-3': 'chatwoot-rotina-esquecidos',
+  'esquecido-neg-1': 'chatwoot-rotina-esquecidos',
+  'esquecido-neg-2': 'chatwoot-rotina-esquecidos',
+  'esquecido-neg-3': 'chatwoot-rotina-esquecidos',
+  'rotina-reativacao': 'chatwoot-rotina-exlead',
+  'exlead-60': 'chatwoot-rotina-exlead',
+  'exlead-90': 'chatwoot-rotina-exlead',
+  aniversario: 'chatwoot-rotina-aniversario',
+  'aniversario-tratamento': 'chatwoot-rotina-aniversario',
+  'alerta-sem-resposta': 'chatwoot-alerta-sem-resposta',
+  'alerta-prometeu-sem-marcar': 'chatwoot-prometeu-sem-marcar',
+  'alerta-agendamento-perdido': 'chatwoot-agendamento-perdido',
+};
+export const AUTOMACOES_DAS_ROTINAS: readonly string[] = [...new Set(Object.values(AUTOMACAO_DA_REGRA))];
 
 /**
  * De/para das etapas (Kommo de Parauapebas → atributo `etapa` da Lia), decidido em 12/11/2026:
@@ -468,6 +515,19 @@ const ETAPAS_DA_CONSULTA = new Set(['Agendado', 'Confirmado', 'Fechou']);
 const ETAPAS_DE_QUALIFICACAO = new Set(['Sofia qualifica', 'Esperando humano']);
 /** situação em que a consulta ainda está de pé */
 const SITUACOES_DE_PE = new Set(['', 'Agendado', 'Confirmado', 'Remarcado']);
+/** Motivos de perda que encerram o contato (os mesmos que a Kommo respeita): nunca recebem rotina nem reativação. */
+const MOTIVOS_DE_PERDA_ENCERRADA = new Set(['outra cidade', 'clicou por engano', 'outra patologia', 'plano de saúde', 'sem interesse', 'bandeira vermelha', 'assinou contrato']);
+/** Etapas em que o paciente já está marcado, atendido ou fechado: a reativação de «Em espera» não vale. */
+const ETAPAS_COM_PACIENTE_ANDANDO = new Set(['Agendado', 'Confirmado', 'Compareceu', 'Pós-consulta', 'Fechou']);
+const ETIQUETAS_QUE_ENCERRAM_O_CONTATO = ['curriculo', 'currículo', 'fora-do-escopo', 'nao-perturbar', 'não-perturbar'];
+const PEDE_RESPOSTA = /\b(oi|ol[aá]|bom dia|boa tarde|boa noite|sim|n[aã]o)\b/i;
+/** Agradecimento sem pergunta («ok», «obrigada 🙏»): ninguém precisa responder. */
+const soAgradecimento = (t: string): boolean => t.trim() !== '' && ehEncerramento(t) && !PEDE_RESPOSTA.test(t);
+/** Escadas da rotina de esquecidos (dias depois do início) e os modelos já aprovados que servem: reengajamento, convite ao método, encerramento. */
+const DEGRAUS_DOS_ESQUECIDOS = { nc: [1, 3, 6], neg: [2, 5, 9] } as const;
+const MODELOS_DA_ESCADA = ['parau_lead_reengajamento_48h', 'parau_lead_metodo_convite_96h', 'parau_lead_encerramento_120h'] as const;
+const DEGRAUS_DO_EXLEAD = [30, 60, 90] as const;
+const MODELOS_DO_EXLEAD = ['parau_sdr_reativacao_lead_frio', 'parau_lead_metodo_convite_96h', 'parau_lead_encerramento_120h'] as const;
 const MODELO_DA_ESPERA: Record<string, string> = {
   Exames: 'parau_espera_exames',
   Viajando: 'parau_espera_viagem',
@@ -658,6 +718,136 @@ function candidatos(c: ConversaRegua, vistos: Vistos): Candidato[] {
     }
   }
 
+  // ── ROTINAS E ALERTAS TRAZIDOS DA KOMMO (14/11/2026): cada uma tem a automação própria (`AUTOMACAO_DA_REGRA`), que nasce «só no papel» ──
+  const publicaUlt = c.ultima && !c.ultima.privada ? c.ultima : null;
+  const doPaciente = publicaUlt && !publicaUlt.saida ? publicaUlt : null;
+  const pausadaPelaEquipe = c.etiquetas.includes('ia-pausada');
+  const semContato =
+    semFollowUp || pausadaPelaEquipe || MOTIVOS_DE_PERDA_ENCERRADA.has(str(a.motivo_nao_agendamento).toLowerCase()) || c.etiquetas.some((e) => ETIQUETAS_QUE_ENCERRAM_O_CONTATO.includes(e.toLowerCase()));
+  const retomarFuturo = (quando: Date) => {
+    const r = lerData(a.retomar_em);
+    return !!r && r.iso >= diaEmBelem(quando);
+  };
+  // quem faz anos nesta janela recebe só o parabéns: os degraus que cairiam nestes dias esperam (a Kommo faz o mesmo quando a rotina está ligada)
+  const aniversarioDia = lerData(c.aniversarioEm);
+  const noDiaDoAniversario = (quando: Date) => !!aniversarioDia && diaEmBelem(quando) >= aniversarioDia.iso && diaEmBelem(quando) <= somarDias(aniversarioDia, 3).iso;
+  /** Uma escada de degraus a partir de `inicio` (qualquer mensagem do paciente depois da base zera: o início passa a ser ela). */
+  const escada = (o: { chavePrefixo: string; base: Date; dias: readonly number[]; regras: readonly string[]; modelos: readonly string[] }) => {
+    const inicio = doPaciente && doPaciente.criadaEm.getTime() > o.base.getTime() ? doPaciente.criadaEm : o.base;
+    const chave = `${o.chavePrefixo}@${inicio.toISOString()}`;
+    o.dias.forEach((d, i) => {
+      const alvo = new Date(inicio.getTime() + d * DIA);
+      // equipe (ou a própria rotina) falou nas últimas 24 h antes deste degrau: espera; «Retomar em» futuro e aniversário também seguram
+      if (publicaUlt?.saida && alvo.getTime() - publicaUlt.criadaEm.getTime() < DIA) return;
+      if (retomarFuturo(alvo) || noDiaDoAniversario(alvo)) return;
+      saida.push({ regra: o.regras[i]!, modelo: o.modelos[i]!, chave, kind: 'depois', alvo, ...(i > 0 ? { requer: o.regras[i - 1]! } : {}) });
+    });
+  };
+  // 1) Esquecidos: NÃO COMPARECEU 1/3/6 dias (da falta) e EM NEGOCIAÇÃO (Pós-consulta) 2/5/9 dias (da entrada na etapa)
+  if (!tratamento && !semContato && !ehSessao) {
+    const faltou = ETAPAS_DA_CONSULTA.has(etapa) && situ === 'Não compareceu' && consulta && !consultaAnteriorAVista(consulta) ? consulta : null;
+    if (faltou) {
+      const marcada = novo('situacao_consulta', 'Não compareceu');
+      const daFalta = instante(faltou, HORA_PADRAO_DEPOIS);
+      escada({ chavePrefixo: 'esquecido-nc', base: marcada && marcada.desde.getTime() > daFalta.getTime() ? marcada.desde : daFalta, dias: DEGRAUS_DOS_ESQUECIDOS.nc, regras: ['esquecido-nc-1', 'esquecido-nc-2', 'esquecido-nc-3'], modelos: MODELOS_DA_ESCADA });
+    }
+    if (etapa === 'Pós-consulta') {
+      const entrou = novo('etapa', 'Pós-consulta')?.desde ?? (consulta && situ === 'Atendido' && !consultaAnteriorAVista(consulta) ? instante(consulta, HORA_PADRAO_DEPOIS) : null);
+      if (entrou) escada({ chavePrefixo: 'esquecido-neg', base: entrou, dias: DEGRAUS_DOS_ESQUECIDOS.neg, regras: ['esquecido-neg-1', 'esquecido-neg-2', 'esquecido-neg-3'], modelos: MODELOS_DA_ESCADA });
+    }
+  }
+  // 2) Ex-lead que nunca agendou, PERDIDO ou EM ESPERA (Retomar em): 30/60/90 dias. O 1º degrau é a mesma regra e a mesma chave da reativação da SDR.
+  if (!tratamento && !semContato && !consulta && str(situ) === '') {
+    const diaDaEspera = lerData(a.retomar_em);
+    let anel: { prefixo: string; base: Date; completo: boolean } | null = null;
+    if (etapa === 'Perdido') {
+      const entrou = novo('etapa', 'Perdido');
+      if (entrou) anel = { prefixo: `reativacao@perdido`, base: entrou.desde, completo: true };
+      // estoque antigo (sem data de entrada): só o 1º degrau, contado da última mensagem
+      else if (publicaUlt) anel = { prefixo: `reativacao@estoque`, base: publicaUlt.criadaEm, completo: false };
+    } else if (diaDaEspera && !ETAPAS_COM_PACIENTE_ANDANDO.has(etapa)) {
+      anel = { prefixo: `reativacao@espera`, base: emBelem(diaDaEspera, 9), completo: true };
+    }
+    if (anel) {
+      const inicio = doPaciente && doPaciente.criadaEm.getTime() > anel.base.getTime() ? doPaciente.criadaEm : anel.base;
+      const chave = `${anel.prefixo}@${anel.prefixo === 'reativacao@espera' ? diaDaEspera!.iso : anel.base.toISOString()}`;
+      DEGRAUS_DO_EXLEAD.forEach((d, i) => {
+        if (i > 0 && !anel!.completo) return;
+        const alvo = new Date(inicio.getTime() + d * DIA);
+        if (publicaUlt?.saida && alvo.getTime() - publicaUlt.criadaEm.getTime() < DIA) return;
+        if (retomarFuturo(alvo) || noDiaDoAniversario(alvo)) return;
+        const regra = i === 0 ? 'rotina-reativacao' : i === 1 ? 'exlead-60' : 'exlead-90';
+        saida.push({ regra, modelo: MODELOS_DO_EXLEAD[i]!, chave, kind: 'depois', alvo, ...(i > 0 ? { requer: i === 1 ? 'rotina-reativacao' : 'exlead-60' } : {}) });
+      });
+    }
+  }
+  // 3) Aniversário: a data veio da franquia com casamento seguro (o worker preencheu `aniversarioEm`); 9–12 h, até 3 dias de atraso, 1 por ano
+  if (c.aniversarioEm && !semFollowUp && !MOTIVOS_DE_PERDA_ENCERRADA.has(str(a.motivo_nao_agendamento).toLowerCase()) && !c.etiquetas.some((e) => ETIQUETAS_QUE_ENCERRAM_O_CONTATO.includes(e.toLowerCase()))) {
+    const dia = lerData(c.aniversarioEm);
+    if (dia) {
+      const emTratamento = etapaTratamento === 'Em tratamento';
+      saida.push({
+        regra: emTratamento ? 'aniversario-tratamento' : 'aniversario',
+        modelo: emTratamento ? 'parau_rotina_aniversario_tratamento' : 'parau_rotina_aniversario',
+        chave: `aniversario@${dia.y}`,
+        kind: 'depois',
+        alvo: emBelem(dia, 9),
+        limiteMs: 3 * DIA + 3 * HORA,
+        janela: [9, 12],
+      });
+    }
+  }
+  // 4) Alerta: paciente sem resposta há 5 min (só mensagem da última hora, agradecimento não conta, contato interno não conta)
+  if (doPaciente && !c.etiquetas.includes('interno') && !(doPaciente.texto && soAgradecimento(doPaciente.texto))) {
+    const ultimaDele = (doPaciente.texto ?? '').replace(/\s+/g, ' ').slice(0, 160) || '(sem texto: áudio, imagem ou figurinha)';
+    saida.push({
+      regra: 'alerta-sem-resposta',
+      modelo: 'interna:alerta-sem-resposta',
+      interna: 'alerta-sem-resposta',
+      chave: `semresp5@${doPaciente.criadaEm.toISOString()}`,
+      kind: 'depois',
+      alvo: new Date(doPaciente.criadaEm.getTime() + 5 * 60_000),
+      limiteMs: 60 * 60_000,
+      textoInterno: `⏰ Paciente sem resposta: a última mensagem dele («${ultimaDele}») está há mais de 5 minutos sem resposta de ninguém. Responda agora (prioridade → alta).`,
+    });
+  }
+  // 5) Alertas da Sofia (precisam dos fatos do banco): «disse que marcou e não marcou» e «agendamento perdido»
+  if (c.fatos && !tratamento) {
+    const marcou = c.fatos.eventos.filter((e) => e.tipo === 'marcou');
+    const consultaDePeEm = (em: Date) => !!consulta && SITUACOES_DE_PE.has(situ) && consulta.data.iso >= diaEmBelem(em);
+    const promessa = c.fatos.falasDaSofia.map((f) => ({ f, p: detectarPromessa(f.texto) })).find((x) => x.p);
+    if (promessa?.p && !marcou.length && !consultaDePeEm(promessa.f.em)) {
+      saida.push({
+        regra: 'alerta-prometeu-sem-marcar',
+        modelo: 'interna:prometeu-sem-marcar',
+        interna: 'prometeu-sem-marcar',
+        chave: `prometeu@${diaEmBelem(promessa.f.em)}`,
+        kind: 'depois',
+        alvo: new Date(promessa.f.em.getTime() + 10 * 60_000),
+        limiteMs: 6 * HORA,
+        textoInterno: `⚠️ A Sofia disse ao paciente «${promessa.p.trecho.replace(/\s+/g, ' ').slice(0, 160)}»${promessa.p.quando ? ` (${promessa.p.quando})` : ''}, mas não há consulta marcada. Ligue para o paciente e marque.`,
+      });
+    }
+    const oferta = c.fatos.eventos.filter((e) => e.tipo === 'ofereceu').sort((x, y) => y.em.getTime() - x.em.getTime())[0];
+    if (oferta && !marcou.some((e) => e.em.getTime() >= oferta.em.getTime() - 60_000) && !consultaDePeEm(oferta.em)) {
+      const adiou = lerData(a.retomar_em) !== null && str(a.motivo_espera) !== '';
+      const respondeu = c.fatos.falasDaSofia.some((f) => f.em.getTime() > oferta.em.getTime() + 60_000) || (!!doPaciente && doPaciente.criadaEm.getTime() > oferta.em.getTime());
+      // adiou (a retomada cuida) e nunca respondeu (a régua de follow-up cuida) não são venda perdida: sem alarme falso
+      if (!adiou && respondeu) {
+        saida.push({
+          regra: 'alerta-agendamento-perdido',
+          modelo: 'interna:agendamento-perdido',
+          interna: 'agendamento-perdido',
+          chave: `perdido@${diaEmBelem(oferta.em)}`,
+          kind: 'depois',
+          alvo: new Date(oferta.em.getTime() + 90 * 60_000),
+          limiteMs: 14 * HORA,
+          textoInterno: `⚠️ Agendamento perdido: a Sofia ofereceu horários (${new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Belem', hour: '2-digit', minute: '2-digit' }).format(oferta.em)}) e a consulta não foi marcada, mas o paciente respondeu. Vale retomar antes que esfrie.`,
+        });
+      }
+    }
+  }
+
   // retorno de 60 dias depois da alta (no Kommo fica no funil Comercial, etapa RETORNO PÓS-TRATAMENTO)
   const alta = lerData(a.data_alta);
   if (alta && str(a.categoria_consulta) === 'Retorno após tratamento') {
@@ -709,8 +899,14 @@ function candidatos(c: ConversaRegua, vistos: Vistos): Candidato[] {
   });
 }
 
+/** O que o texto da reativação mostra em «Aqui é {{2}}»: o primeiro nome de quem atende, ou «a equipe» (a reativação por etiqueta exige atendente). */
+function paraRenderizar(regra: string, c: ConversaRegua): ConversaRegua {
+  return regra === 'rotina-reativacao' ? { ...c, atendente: primeiroNome(c.atendente ?? '') ?? 'a equipe' } : c;
+}
+
 /** Até quando a regra ainda vale. */
 function limiteDe(k: Candidato): Date {
+  if (k.limiteMs !== undefined) return new Date(k.alvo.getTime() + k.limiteMs);
   if (k.kind === 'depois') return new Date(k.alvo.getTime() + ATRASO_MAX_DEPOIS_MS);
   const ate = k.alvo.getTime() + ATRASO_MAX_ANTES_MS;
   // exclusivo: na hora da própria consulta o lembrete já não faz sentido
@@ -728,17 +924,24 @@ export function decidirRegua(c: ConversaRegua, memoria: Memoria, agora: Date, un
   for (const k of candidatos(c, memoria.vistos)) {
     if (agora.getTime() < k.alvo.getTime()) continue;
     if (memoria.feitos.has(`${k.regra}|${k.chave}`)) continue;
+    // «um degrau por vez, sem pular»: o degrau anterior (mesma chave) precisa ter saído (no papel também conta)
+    if (k.requer && !memoria.feitos.has(`${k.requer}|${k.chave}`)) continue;
     const limite = limiteDe(k);
     if (agora.getTime() > limite.getTime()) {
       if (agora.getTime() - limite.getTime() <= JANELA_DO_LOG_PERDIDA_MS) perdidas.push(k.regra);
       continue;
     }
     if (!aberta) continue;
+    // horário próprio do robô (aniversário: 9–12 h de Belém), além da janela de sempre
+    if (k.janela) {
+      const h = new Date(agora.getTime() - UTC_MENOS_3).getUTCHours();
+      if (h < k.janela[0] || h >= k.janela[1]) continue;
+    }
     if (k.interna) {
-      disparos.push({ regra: k.regra, chave: k.chave, modelo: k.modelo, texto: DESCRICAO_INTERNA[k.interna], variaveis: null, faltando: [], alvo: k.alvo, interna: k.interna });
+      disparos.push({ regra: k.regra, chave: k.chave, modelo: k.modelo, texto: k.textoInterno ?? DESCRICAO_INTERNA[k.interna], variaveis: null, faltando: [], alvo: k.alvo, interna: k.interna });
       continue;
     }
-    const r = renderizar(k.modelo, c, unidade, k.momento);
+    const r = renderizar(k.modelo, paraRenderizar(k.regra, c), unidade, k.momento);
     if (r.faltando.length && memoria.feitos.has(`${k.regra}${SUFIXO_FALTA}|${k.chave}`)) continue;
     disparos.push({ regra: k.regra, chave: k.chave, modelo: k.modelo, texto: r.texto, variaveis: r.variaveis, faltando: r.faltando, alvo: k.alvo });
   }
@@ -792,6 +995,7 @@ export function resumoDaMensagem(m: any): MensagemResumo | null {
     autorId: Number.isInteger(Number(m?.sender?.id)) && m?.sender?.id !== null ? Number(m.sender.id) : null,
     autorTipo: typeof m?.sender?.type === 'string' ? m.sender.type.toLowerCase() : null,
     criadaEm: new Date(Number(m.created_at) * 1000 || 0),
+    ...(typeof m.content === 'string' && m.content.trim() ? { texto: m.content.trim().slice(0, 300) } : {}),
   };
 }
 

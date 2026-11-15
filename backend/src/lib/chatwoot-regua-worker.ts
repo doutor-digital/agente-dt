@@ -23,9 +23,14 @@
 import { logger } from './logger.js';
 import { prisma } from './prisma.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
+import { automacaoPorId } from './automacoes.js';
 import { precosDaConsulta } from '../agent/prompt-composer.js';
 import { chaveDoTelefone } from './chatwoot-lida.js';
 import { enviarPelaEvolution } from './alerta-whatsapp.js';
+import { enviarTelegram } from './telegram.js';
+import { fatosDoBanco } from './chatwoot-rotinas-dados.js';
+import { aniversariantesDaFranquia, type DepsDoAniversario } from './chatwoot-aniversario.js';
+import { fichaDoPaciente, searchClients } from '../services/spine.service.js';
 import { createKommoClientSemFreio } from '../services/kommo.service.js';
 import { chamar, contaChatwootDoAmbiente, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 import {
@@ -47,7 +52,10 @@ import {
   type MensagemResumo,
   type ViaDoEnvio,
   ID_REGUA,
+  DESCRICAO_INTERNA,
   notaDoSeco,
+  AUTOMACAO_DA_REGRA,
+  type FatosDaConversa,
   SUFIXO_FALTA,
   type ConversaRegua,
   type DadosDaUnidade,
@@ -127,6 +135,17 @@ export interface DepsDoCiclo {
   kommo?: CartaoNoKommo;
   /** aviso no WhatsApp da gerente (lead quente parado); sem ela, só a atribuição no Chatwoot */
   avisarGerente?: (texto: string, chave: string) => Promise<unknown>;
+  /**
+   * O estado de uma automação NOVA (rotinas e alertas da Kommo trazidos para o CRM, `AUTOMACAO_DA_REGRA`): desligada = a regra não roda; no papel =
+   * só a nota «faria»; ligada = faz (a régua também precisa estar ligada). Sem ela, valem como a régua (o comportamento de antes dos robôs novos).
+   */
+  estadoDaRotina?: (slug: string, automacao: string) => Estado;
+  /** o que o banco sabe das conversas (falas da Sofia, o que ela fez): só consultado se um alerta que precisa disso não está desligado */
+  fatos?: (slug: string, conversas: number[], agora: Date) => Promise<Map<number, FatosDaConversa>>;
+  /** conversa → AAAA-MM-DD do aniversário (de hoje ou dos 3 dias anteriores) CONFIRMADO pela franquia; só consultado com a rotina de aniversário ligada/no papel */
+  aniversariantes?: (slug: string, conversas: ConversaRegua[], agora: Date) => Promise<Map<number, string>>;
+  /** aviso da equipe no Telegram (os alertas «sem resposta», «prometeu» e «agendamento perdido»); sem ela, só a nota e a prioridade */
+  avisarTelegram?: (texto: string, chave: string) => Promise<unknown>;
 }
 
 /**
@@ -371,8 +390,17 @@ export async function executarInterna(
   chat: Chat,
   c: ConversaRegua,
   acao: AcaoInterna,
-  extra: { gerente?: number; avisarGerente?: DepsDoCiclo['avisarGerente']; unidade?: string } = {},
+  extra: { gerente?: number; avisarGerente?: DepsDoCiclo['avisarGerente']; unidade?: string; avisarTelegram?: DepsDoCiclo['avisarTelegram']; texto?: string; chave?: string } = {},
 ): Promise<void> {
+  // alertas para a equipe (nada vai ao paciente): a nota privada já foi deixada pelo ciclo; aqui a prioridade e o aviso no Telegram
+  if (acao === 'alerta-sem-resposta' || acao === 'prometeu-sem-marcar' || acao === 'agendamento-perdido') {
+    if (acao === 'alerta-sem-resposta') await chat.prioridade(c.id, 'high');
+    if (extra.avisarTelegram) {
+      const quem = c.nome || c.telefone || `conversa ${c.id}`;
+      await extra.avisarTelegram(`${extra.unidade ? `${extra.unidade} · ` : ''}${quem} (conversa ${c.id})\n${extra.texto ?? DESCRICAO_INTERNA[acao]}`, `${acao}-${c.id}-${extra.chave ?? ''}`);
+    }
+    return;
+  }
   if (acao === 'quente-parado') {
     await chat.prioridade(c.id, 'urgent');
     // decisão 26: vai para a gerente (o app avisa) e, se configurado, aviso no WhatsApp dela
@@ -400,7 +428,7 @@ const statusDoErro = (e: unknown): number | undefined => (e as { status?: number
  * Um ciclo de uma caixa. `modo` nunca é «desligado» aqui. Não lança por causa de UMA conversa: a falha dela vira log e conta em `falhas`.
  * Falha ao LISTAR as conversas aborta o ciclo (a memória não é tocada).
  */
-export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: string, modo: 'seco' | 'ligado', unidade: DadosDaUnidade, agora: Date): Promise<ResumoDoCiclo> {
+export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: string, modoDaCaixa: 'seco' | 'ligado', unidade: DadosDaUnidade, agora: Date): Promise<ResumoDoCiclo> {
   const { armazem, chat } = deps;
   const { conversas, atividades, truncada } = await lerConversas(chat, caixa, agora);
   const quemFala = quemFalaPorTelefone(conversas.map((c) => ({ c, atividade: atividades.get(c.id) ?? 0 })));
@@ -465,6 +493,23 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
     }
     return p;
   };
+  // as rotinas e alertas novos: estado próprio de cada uma e os fatos que só o banco tem (lidos uma vez por ciclo, só se alguma está ligada ou no papel)
+  const estadoDaRotina = (id: string): Estado => (deps.estadoDaRotina ? deps.estadoDaRotina(slug, id) : modoDaCaixa);
+  const precisa = (...ids: string[]) => ids.some((id) => estadoDaRotina(id) !== 'desligado');
+  if (deps.fatos && precisa('chatwoot-prometeu-sem-marcar', 'chatwoot-agendamento-perdido')) {
+    const fatos = await deps.fatos(slug, pendentes.map((p) => p.c.id), agora).catch((err) => {
+      logger.warn({ err: String(err), caixa }, `${ID_REGUA}: não li os fatos da Sofia — os alertas dela esperam o próximo ciclo`);
+      return new Map<number, FatosDaConversa>();
+    });
+    for (const { c } of pendentes) c.fatos = fatos.get(c.id);
+  }
+  if (deps.aniversariantes && precisa('chatwoot-rotina-aniversario')) {
+    const aniv = await deps.aniversariantes(slug, pendentes.map((p) => p.c), agora).catch((err) => {
+      logger.warn({ err: String(err), caixa }, `${ID_REGUA}: não consegui conferir os aniversariantes na franquia — espero o próximo ciclo`);
+      return new Map<number, string>();
+    });
+    for (const { c } of pendentes) c.aniversarioEm = aniv.get(c.id) ?? null;
+  }
   for (const { c, vistos } of pendentes) {
     try {
       const { fala, irmas } = quemFala.get(c.id) ?? { fala: true, irmas: [] };
@@ -478,6 +523,11 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
       const { disparos, perdidas } = decidirRegua(c, { vistos, feitos: feitosDaConversa }, agora, unidade);
       for (const r of perdidas) resumo.perdidas[r] = (resumo.perdidas[r] ?? 0) + 1;
       for (const d of disparos) {
+        // regra de uma automação nova: ela tem o estado dela (nasce «só no papel»); desligada não faz nada, no papel só deixa a nota
+        const idAutomacao = AUTOMACAO_DA_REGRA[d.regra];
+        const estadoDaRegra = idAutomacao ? estadoDaRotina(idAutomacao) : modoDaCaixa;
+        if (estadoDaRegra === 'desligado') continue;
+        const modo: 'seco' | 'ligado' = estadoDaRegra === 'seco' ? 'seco' : modoDaCaixa;
         if (mensagens >= MAX_MENSAGENS_POR_CICLO) break;
         const faltou = d.texto === null;
         let regra = faltou ? `${d.regra}${SUFIXO_FALTA}` : d.regra;
@@ -572,7 +622,7 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
         }
         if (modo === 'ligado' && d.interna) {
           try {
-            await executarInterna(deps.chat, c, d.interna, { gerente: GERENTE_DA_CAIXA[caixa], avisarGerente: deps.avisarGerente, unidade: unidade.nome });
+            await executarInterna(deps.chat, c, d.interna, { gerente: GERENTE_DA_CAIXA[caixa], avisarGerente: deps.avisarGerente, unidade: unidade.nome, avisarTelegram: deps.avisarTelegram, texto: d.texto ?? undefined, chave: d.chave });
           } catch (err) {
             resumo.falhas++;
             logger.warn({ err: String(err), caixa, conversa: c.id, regra: d.regra }, `${ID_REGUA}: nota deixada, mas a ação interna falhou`);
@@ -598,11 +648,26 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
       logger.warn({ err: String(err), caixa, conversa: c.id }, `${ID_REGUA}: falhou numa conversa — sigo com as outras`);
     }
   }
-  logger.info({ slug, caixa, modo, ...resumo }, `${ID_REGUA}: ciclo`);
+  logger.info({ slug, caixa, modo: modoDaCaixa, ...resumo }, `${ID_REGUA}: ciclo`);
   return resumo;
 }
 
 // ── liga/desliga ───────────────────────────────────────────────────────────────────────────────────
+
+/** As portas da franquia (Spine) da unidade para a rotina de aniversário. */
+function depsDaFranquia(unit: Parameters<typeof searchClients>[0]): DepsDoAniversario {
+  return {
+    async buscar(nome) {
+      const r = await searchClients(unit, nome, 20);
+      return r.ok && r.data ? r.data.clients : null;
+    },
+    async ficha(id) {
+      const r = await fichaDoPaciente(unit, id);
+      return r.ok && r.data ? { birthdate: r.data.ficha.birthdate, status: r.data.ficha.status } : null;
+    },
+    dormir: (ms) => new Promise((ok) => setTimeout(ok, ms)),
+  };
+}
 
 export const estadoDaRegua = (slug: string): Estado => estadoDaAutomacao(slug, ID_REGUA, process.env.CHATWOOT_REGUA_SLUGS);
 
@@ -614,7 +679,14 @@ async function varrer(ctx: ContextoChatwoot): Promise<void> {
   if (rodando) return;
   rodando = true;
   try {
-    const deps: DepsDoCiclo = { armazem: armazemDoBanco(), chat: chatDoChatwoot(ctx), pausa: (ms) => new Promise((r) => setTimeout(r, ms)) };
+    const deps: DepsDoCiclo = {
+      armazem: armazemDoBanco(),
+      chat: chatDoChatwoot(ctx),
+      pausa: (ms) => new Promise((r) => setTimeout(r, ms)),
+      estadoDaRotina: (slug, id) => estadoDaAutomacao(slug, id, process.env[automacaoPorId(id)?.chave ?? '']),
+      fatos: (slug, ids, agora) => fatosDoBanco(slug, ids, agora),
+      avisarTelegram: (texto) => enviarTelegram(texto),
+    };
     for (const [caixaTxt, slug] of Object.entries(CAIXAS_REGUA)) {
       const modo = estadoDaRegua(slug);
       if (modo === 'desligado') continue;
@@ -626,7 +698,8 @@ async function varrer(ctx: ContextoChatwoot): Promise<void> {
         }
         const unidade: DadosDaUnidade = { nome: unit.name, pixKey: unit.pixKey, valorAntecipado: precosDaConsulta(unit)?.antecipado ?? null };
         const kommo = unit.kommoSubdomain && unit.kommoAccessToken ? cartaoNoKommoDaUnidade(unit) : undefined;
-        await cicloDaCaixa({ ...deps, kommo, avisarGerente: avisoDaGerente(slug) }, Number(caixaTxt), slug, modo, unidade, new Date());
+        const aniversariantes = unit.spineEnabled && unit.spineToken ? (s: string, conversas: ConversaRegua[], agora: Date) => aniversariantesDaFranquia(depsDaFranquia(unit), s, conversas, agora) : undefined;
+        await cicloDaCaixa({ ...deps, kommo, avisarGerente: avisoDaGerente(slug), aniversariantes }, Number(caixaTxt), slug, modo, unidade, new Date());
       } catch (err) {
         logger.warn({ err: String(err), slug }, `${ID_REGUA}: ciclo falhou — tento no próximo`);
       }
