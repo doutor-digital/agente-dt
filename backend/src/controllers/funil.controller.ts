@@ -1745,7 +1745,7 @@ const MENU_JS = String.raw`(function(){
     var st = document.createElement('style'); st.setAttribute('data-dd-menu-estilo', '1');
     // com tela nossa aberta: o item ativo do CRM e o cabeçalho do grupo dele («Conversas») voltam ao cinza; e o clique do mouse não deixa
     // contorno nos nossos itens (o teclado continua com o contorno: :focus-visible)
-    st.textContent = 'html.dd-tela-aberta aside li > a.bg-n-alpha-2:not([data-dd-ativo]),html.dd-tela-aberta aside li > a.text-n-slate-12:not([data-dd-ativo]){background-color:transparent!important;color:rgb(var(--slate-11))!important}' +
+    st.textContent = 'html.dd-tela-aberta aside li a.bg-n-alpha-2:not([data-dd-ativo]),html.dd-tela-aberta aside li a.text-n-slate-12:not([data-dd-ativo]){background-color:transparent!important;color:rgb(var(--slate-11))!important}' +
       TELAS.map(function(t){ return '[' + t.marca + '] a:focus:not(:focus-visible),a[' + t.marca + ']:focus:not(:focus-visible)'; }).join(',') + '{outline:none!important;box-shadow:none!important}';
     (document.head || document.documentElement).appendChild(st);
   }
