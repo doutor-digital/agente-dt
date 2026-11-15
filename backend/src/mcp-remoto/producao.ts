@@ -11,6 +11,7 @@ import type { User } from '@prisma/client';
 import { z } from 'zod';
 import { env } from '../lib/env.js';
 import { logger } from '../lib/logger.js';
+import { esperaDaPrimeiraCarga, manterAtualizado as manterAtualizadoBase } from './manter-atualizado.js';
 import { prisma } from '../lib/prisma.js';
 import { login } from '../services/auth.service.js';
 import { chaveTelefone, normalizarNome, panoramaDaUnidade, parecencaDeNome, type Panorama } from '../services/cerebro.service.js';
@@ -448,26 +449,8 @@ function auditarClipe(a: AcessoAoClipe): void {
     .catch((err) => logger.warn({ err }, 'mcp-remoto: auditoria do clipe não gravou'));
 }
 
-/** Recarrega em segundo plano: na subida e a cada 10 min; se falhar, tenta de novo em 30 s. */
-function manterAtualizado<T>(carregar: () => Promise<T>, aplicar: (v: T) => void, nome: string): Promise<void> {
-  let primeira: () => void = () => undefined;
-  const aPrimeiraCarga = new Promise<void>((r) => (primeira = r));
-  const rodar = () => {
-    carregar()
-      .then((v) => {
-        aplicar(v);
-        primeira();
-        setTimeout(rodar, 10 * 60_000).unref();
-      })
-      .catch((err) => {
-        logger.warn({ err }, `mcp-remoto: não consegui ler ${nome}; tento de novo`);
-        primeira(); // a tentativa terminou (mesmo falhando): quem espera não fica preso
-        setTimeout(rodar, 30_000).unref();
-      });
-  };
-  rodar();
-  return aPrimeiraCarga;
-}
+/** Recarrega em segundo plano: na subida e a cada 10 min; se falhar (ou passar de 20 s), tenta de novo em 30 s. Devolve a promessa da 1ª carga. */
+const manterAtualizado = <T>(carregar: () => Promise<T>, aplicar: (v: T) => void, nome: string): Promise<void> => manterAtualizadoBase(carregar, aplicar, nome, { log: logger });
 
 /**
  * O cérebro: franquia × Kommo conferidos por unidade (quem está sem cartão, ambíguo, sumindo).
@@ -660,7 +643,7 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
     franquia: { cliente: { log: (linha) => logger.info({ franquia: linha }, 'mcp-remoto: franquia') } },
     log: logger,
     // quem conecta logo após um reinício espera (no máximo 3 s) a 1ª carga das listas do Chatwoot: sem isto a sessão sairia sem as ferramentas/o parâmetro `conta`
-    aguardar: () => Promise.race([Promise.all(primeirasCargas), new Promise((r) => setTimeout(r, 3000).unref())]),
+    aguardar: esperaDaPrimeiraCarga(primeirasCargas, 3000),
     extras: (server, auditar, quem) => {
       registrarFerramentasKommo(server, kommo, auditar);
       registrarFerramentasBling(server, bling, kommo, auditar);

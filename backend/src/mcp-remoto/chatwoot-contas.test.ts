@@ -43,7 +43,7 @@ function montar(escolheConta: boolean | (() => boolean), usuario = 'pessoa@examp
   const ctx = C.criarContextoChatwoot(C.contaChatwootDoAmbiente(), { fetch: f });
   const ferramentas = new Map<string, { schema: Record<string, unknown>; descricao: string; cb: (a: any) => Promise<{ isError?: boolean; content: Array<{ text: string }> }> }>();
   const auditoria: Array<{ ferramenta: string; argumentos: any; ok: boolean }> = [];
-  const server = { registerTool: (id: string, def: { inputSchema: Record<string, unknown>; description: string }, cb: never) => void ferramentas.set(id, { schema: def.inputSchema, descricao: def.description, cb }) } as unknown as McpServer;
+  const server = { registerTool: (id: string, def: { inputSchema: Record<string, unknown>; description: string }, cb: never) => void ferramentas.set(id, { schema: ((def.inputSchema as { shape?: Record<string, unknown> }).shape ?? def.inputSchema) as Record<string, unknown>, descricao: def.description, cb }) } as unknown as McpServer;
   C.registrarFerramentasChatwoot(server, ctx, usuario, (r) => auditoria.push(r as never), escolheConta);
   const chamar = (id: string, args: Record<string, unknown> = {}) => ferramentas.get(id)!.cb(args);
   /** o caminho de VERDADE: um McpServer e um Client do SDK ligados em memória (a validação do schema acontece aqui, não na função da ferramenta) */
@@ -260,20 +260,55 @@ test('chatwoot_contas marca como NÃO usável a conta sem token próprio', async
 
 // ── pelo caminho do SDK de verdade (McpServer + Client em memória) ─────────────────────────────────────────
 
-test('SDK (o que acontece DE FATO): sem permissão o `conta` é APAGADO pelo schema antes de chegar à função — a chamada cai em Parauapebas, sem erro, exatamente como era antes deste PR', async () => {
+/** O que o cliente vê numa chamada: `isError` OU a rejeição (erro JSON-RPC de validação) — nunca um resultado normal. */
+async function chamarPeloSdk(cliente: Client, name: string, args: Record<string, unknown>): Promise<{ erro: boolean; texto: string }> {
+  try {
+    const r = await cliente.callTool({ name, arguments: args });
+    return { erro: r.isError === true, texto: JSON.stringify(r.content) };
+  } catch (e) {
+    return { erro: true, texto: String((e as Error).message) };
+  }
+}
+
+test('SDK: quem NÃO tem permissão vê o conector como era (sem `conta` no schema), mas o schema é ESTRITO (additionalProperties:false) e `conta` vira ERRO — nunca é apagado em silêncio', async () => {
   const t = montar(false, 'lia@example.com');
   const cliente = await t.viaSdk(false);
   const tools = (await cliente.listTools()).tools;
   assert.ok(tools.length >= 9);
-  for (const f of tools) assert.ok(!('conta' in ((f.inputSchema.properties ?? {}) as object)), `${f.name} não anuncia conta`);
+  for (const f of tools) {
+    assert.ok(!('conta' in ((f.inputSchema.properties ?? {}) as object)), `${f.name} não anuncia conta`);
+    assert.equal((f.inputSchema as { additionalProperties?: unknown }).additionalProperties, false, `${f.name}: o schema só ganhou additionalProperties:false`);
+  }
   assert.ok(!tools.some((f) => f.name === 'chatwoot_contas'));
-  const r = await cliente.callTool({ name: 'chatwoot_caixas', arguments: { conta: 2 } });
-  assert.notEqual(r.isError, true, 'sem erro: o parâmetro desconhecido é descartado, não recusado');
-  assert.equal(t.chamadas.length, 1);
-  assert.match(t.chamadas[0]!.url, /\/accounts\/1\/inboxes$/, 'foi para a conta 1 (Parauapebas), nunca para a 2');
-  assert.equal(t.chamadas[0]!.token, 'tk-do-ambiente');
-  assert.doesNotMatch(JSON.stringify(r.content), /SEGREDO/);
-  assert.ok(t.auditoria.every((a) => !('conta' in (a.argumentos ?? {}))), 'a auditoria nem vê o parâmetro (já foi descartado)');
+  const r = await chamarPeloSdk(cliente, 'chatwoot_caixas', { conta: 2 });
+  assert.equal(r.erro, true, `conta sem permissão tem de dar erro, não cair em Parauapebas: ${r.texto}`);
+  assert.match(r.texto, /conta|Unrecognized|unrecognized/);
+  assert.equal(t.chamadas.length, 0, 'ZERO chamadas ao Chatwoot');
+  // sem `conta`, tudo como sempre: conta 1, token do ambiente
+  const ok = await chamarPeloSdk(cliente, 'chatwoot_caixas', {});
+  assert.equal(ok.erro, false);
+  assert.match(t.chamadas[0]!.url, /\/accounts\/1\/inboxes$/);
+});
+
+test('PRODUÇÃO: servidor NOVO por pedido, com o schema que o claude.ai guardou (com `conta`) — a permissão caiu, ou a lista ainda não carregou: o pedido com conta=2 dá ERRO e ZERO chamadas (nunca cai em Parauapebas)', async () => {
+  // pedido 1 (com permissão): o claude.ai lê o schema e GUARDA (com `conta`)
+  const comPermissao = montar(true, 'joao@example.com');
+  const guardado = (await (await comPermissao.viaSdk(true)).listTools()).tools;
+  assert.ok(guardado.find((f) => f.name === 'chatwoot_api')!.inputSchema.properties!.conta);
+  // pedidos seguintes: cada um é um servidor NOVO; agora sem permissão (saiu da lista / primeira carga falhou / 1ªs segundos do reinício)
+  const casos: Array<[string, Record<string, unknown>]> = [
+    ['chatwoot_api', { metodo: 'POST', caminho: 'conversations/5/messages', corpo: { content: 'oi', private: true }, conta: 2 }],
+    ['chatwoot_preparar', { metodo: 'POST', caminho: 'conversations/5/messages', corpo: { content: 'oi' }, conta: 2 }],
+    ['chatwoot_conversas', { conta: 2 }],
+    ['chatwoot_confirmar', { codigo: 'ABCDEF123456', conta: 2 }],
+  ];
+  for (const [nome, args] of casos) {
+    const semPermissao = montar(false, 'joao@example.com');
+    const novoServidor = await semPermissao.viaSdk(() => false);
+    const r = await chamarPeloSdk(novoServidor, nome, args);
+    assert.equal(r.erro, true, `${nome}: tem de dar erro`);
+    assert.equal(semPermissao.chamadas.length, 0, `${nome}: ZERO chamadas ao Chatwoot (nada caiu em Parauapebas)`);
+  }
 });
 
 test('SDK: com permissão o `conta` é anunciado e vale; tirar a permissão no meio da sessão recusa na hora', async () => {
@@ -311,6 +346,10 @@ test('Telegram: envio a paciente numa clínica de OUTRA conta também avisa o Jo
   await C.confirmar(dona, 'joao@example.com', prep.codigo, true);
   assert.equal(avisos.length, 1);
   assert.match(avisos[0]!, /✉️ Chatwoot \(conta 2 · clinica-demonstracao\): joao@example.com mandou/);
+  // PATCH de etiqueta (a «confirmação pedida» genérica) não é envio a paciente: sem aviso de envio
+  const etiqueta = C.preparar(dona, 'joao@example.com', { metodo: 'PATCH', caminho: 'contacts/12', corpo: { name: 'x' } });
+  await C.confirmar(dona, 'joao@example.com', etiqueta.codigo, true);
+  assert.equal(avisos.length, 1, 'PATCH não gera o aviso de envio');
   const p1 = C.preparar(ctx, 'joao@example.com', { metodo: 'POST', caminho: 'conversations/5/messages', corpo });
   await C.confirmar(ctx, 'joao@example.com', p1.codigo);
   assert.equal(avisos.length, 1, 'em Parauapebas não há aviso novo (como era)');
