@@ -184,18 +184,30 @@ export async function montarConectorRemoto(
     // Sem sessão: um servidor por requisição. Barato (só registra ferramentas) e não guarda estado entre chamadas.
     const server = new McpServer({ name: 'doutor-digital', version: '1.0.0' }, { instructions: INSTRUCOES });
     const auditar: Auditar = criarAuditor(o.armazem, { userId, clientId }, o.log);
-    await o.aguardar?.().catch(() => undefined);
-    registrarFerramentas(server, contexto, { auditar });
-    o.extras?.(server, auditar, { userId, email: String(auth?.extra?.email ?? '') || undefined, clientId: clientId || undefined });
     const transporte = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+    // Os fechamentos (transporte, servidor e VAGA) ficam registrados ANTES de qualquer espera (a 1ª carga das listas, a fila do semáforo): o cliente que desiste
+    // no meio dela não pode deixar a vaga pega para sempre.
+    let sair: (() => void) | undefined;
+    let fechou = false;
     res.on('close', () => {
+      fechou = true;
       void transporte.close();
       void server.close();
+      sair?.();
     });
-    let sair: (() => void) | undefined;
+    await o.aguardar?.().catch(() => undefined);
+    if (fechou) return;
+    registrarFerramentas(server, contexto, { auditar });
+    o.extras?.(server, auditar, { userId, email: String(auth?.extra?.email ?? '') || undefined, clientId: clientId || undefined });
     try {
-      if (req.body?.method === 'tools/call') sair = await vagas.entrar();
-      res.on('close', () => sair?.());
+      if (req.body?.method === 'tools/call') {
+        sair = await vagas.entrar();
+        if (fechou) {
+          // desistiu enquanto esperava a vaga: devolve na hora
+          sair();
+          return;
+        }
+      }
       await server.connect(transporte);
       await transporte.handleRequest(req, res, req.body);
     } catch (err) {
