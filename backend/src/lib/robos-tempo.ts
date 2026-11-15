@@ -33,7 +33,7 @@ export const TEMPO: Readonly<Record<string, EspecDeTempo>> = {
   'consulta-preparo': { direcao: 'antes', ancora: 'da consulta', padraoMin: 1 * H, minMin: 15 * M, maxMin: 6 * H, unidades: ['minutos', 'horas'] },
   'sessao-dia': { direcao: 'antes', ancora: 'da sessão', padraoMin: 3 * H, minMin: 30 * M, maxMin: 6 * H, unidades: ['minutos', 'horas'] },
   'prepagamento-pendente': { direcao: 'depois', ancora: 'do pré-pagamento', padraoMin: 3 * H, minMin: 30 * M, maxMin: 1 * D, unidades: ['minutos', 'horas'] },
-  'pos-atendimento': { direcao: 'depois', ancora: 'da consulta', padraoMin: 1 * D, minMin: 16 * H, maxMin: 32 * H, unidades: ['horas'] },
+  'pos-atendimento': { direcao: 'depois', ancora: 'da consulta', padraoMin: 1 * D, minMin: 16 * H, maxMin: 24 * H, unidades: ['horas'], nota: '«Foi bom te receber ontem»: a régua tolera 12 h de atraso, então acima de 24 h o «ontem» passaria a mentir.' },
   'decisao-4d': { direcao: 'depois', ancora: 'da consulta', padraoMin: 4 * D, minMin: 1 * D, maxMin: 30 * D, unidades: ['dias'], diasInteiros: true },
   'decisao-7d': { direcao: 'depois', ancora: 'da consulta', padraoMin: 7 * D, minMin: 1 * D, maxMin: 60 * D, unidades: ['dias'], diasInteiros: true },
   'decisao-30d': { direcao: 'depois', ancora: 'da consulta', padraoMin: 30 * D, minMin: 21 * D, maxMin: 45 * D, unidades: ['dias'], diasInteiros: true },
@@ -43,7 +43,6 @@ export const TEMPO: Readonly<Record<string, EspecDeTempo>> = {
   'falta-48h': { direcao: 'depois', ancora: 'da consulta perdida', padraoMin: 2 * D, minMin: 1 * H, maxMin: 14 * D, unidades: ['horas', 'dias'] },
   'espera-retomada2': { direcao: 'depois', ancora: 'do dia de «Retomar em» (às 09:00)', padraoMin: 3 * D, minMin: 1 * D, maxMin: 14 * D, unidades: ['dias'], diasInteiros: true },
   'alta-nps': { direcao: 'depois', ancora: 'da alta', padraoMin: 48 * H, minMin: 1 * H, maxMin: 30 * D, unidades: ['horas', 'dias'] },
-  'alta-retorno-60d': { direcao: 'depois', ancora: 'da alta (às 09:00)', padraoMin: 60 * D, minMin: 55 * D, maxMin: 65 * D, unidades: ['dias'], diasInteiros: true },
   'pendencia-documento': { direcao: 'depois', ancora: 'da consulta', padraoMin: 120 * H, minMin: 1 * D, maxMin: 30 * D, unidades: ['horas', 'dias'] },
   'lead-quente-parado': { direcao: 'depois', ancora: 'da última mensagem do paciente', padraoMin: 3 * H, minMin: 30 * M, maxMin: 2 * D, unidades: ['minutos', 'horas'] },
   'sem-resposta-24h': { direcao: 'depois', ancora: 'da nossa última mensagem', padraoMin: 24 * H, minMin: 1 * H, maxMin: 7 * D, unidades: ['horas', 'dias'] },
@@ -64,14 +63,19 @@ export const SEQUENCIAS: ReadonlyArray<readonly string[]> = [
  * O novo valor de `regra` (em minutos) mantém a ordem das sequências? `efetivoDe` devolve o que vale hoje para as outras (o configurado ou o de
  * fábrica). Devolve a mensagem do problema, ou null.
  */
+/** Entre dois robôs «depois» da mesma sequência, no mínimo isto: dois recados do mesmo assunto no mesmo dia parecem spam. */
+export const FOLGA_MINIMA_ENTRE_ROBOS_MIN = 12 * H;
+
 export function ordemQuebrada(regra: string, minutos: number, efetivoDe: (regra: string) => number): string | null {
   for (const seq of SEQUENCIAS) {
     const i = seq.indexOf(regra);
     if (i < 0) continue;
     const antes = i > 0 ? seq[i - 1]! : null;
     const depois = i < seq.length - 1 ? seq[i + 1]! : null;
-    if (antes && minutos <= efetivoDe(antes)) return `este robô precisa sair DEPOIS de «${antes}» (hoje ${descreverMinutos(efetivoDe(antes))}): escolha mais que isso`;
-    if (depois && minutos >= efetivoDe(depois)) return `este robô precisa sair ANTES de «${depois}» (hoje ${descreverMinutos(efetivoDe(depois))}): escolha menos que isso`;
+    const folga = TEMPO[regra]?.direcao === 'depois' ? FOLGA_MINIMA_ENTRE_ROBOS_MIN : 0;
+    const comFolga = folga ? ` (com pelo menos ${descreverMinutos(folga)} de folga)` : '';
+    if (antes && minutos < efetivoDe(antes) + Math.max(folga, 1)) return `este robô precisa sair DEPOIS de «${antes}» (hoje ${descreverMinutos(efetivoDe(antes))}): escolha mais que isso${comFolga}`;
+    if (depois && minutos + Math.max(folga, 1) > efetivoDe(depois)) return `este robô precisa sair ANTES de «${depois}» (hoje ${descreverMinutos(efetivoDe(depois))}): escolha menos que isso${comFolga}`;
   }
   return null;
 }
