@@ -34,20 +34,6 @@ case "$1 $2" in
       *) exit 0;;
     esac;;
   "service update") printf '%s' "\${4#*=}" > "${dir}/regra";;
-  "exec -e")
-    # permissões do Platform App: lê os e-mails e o modo do AMBIENTE do exec (nunca do código Ruby)
-    emails="$(printf '%s\n' "$@" | sed -n 's/^KIT_EMAILS=//p')"
-    modo="$(printf '%s\n' "$@" | sed -n 's/^KIT_MODO=//p')"
-    echo "aviso do rails: deprecated"
-    if [ -z "$emails" ]; then echo "ADMIN:suzanne@exemplo.com"; echo "ADMIN:joao@exemplo.com"; exit 0; fi
-    IFS=',' read -ra L <<< "$emails"
-    for e in "\${L[@]}"; do
-      case "$e" in *fantasma*) echo "PERM:$e:usuario-inexistente"; continue;; esac
-      if [ ! -f "${dir}/app" ]; then echo "PERM:$e:app-ausente"; continue; fi
-      if grep -qx "$e" "${dir}/perms" 2>/dev/null; then echo "PERM:$e:ja-tem"
-      elif [ "$modo" = aplicar ]; then echo "$e" >> "${dir}/perms"; echo "PERM:$e:criada"
-      else echo "PERM:$e:faltaria"; fi
-    done;;
   "exec abc123") touch "${dir}/app"; echo "aviso do rails: deprecated"; echo "TOKEN:${TOKEN}";;
   *) echo "docker de mentira: $*" >&2; exit 1;;
 esac
@@ -70,7 +56,7 @@ if printf '%s' "$cab" | grep -q "api_access_token: ${TOKEN}"; then printf '404';
   chmodSync(join(bin, 'curl'), 0o755);
   const rodar = (script: string, args: string[], extra: Record<string, string> = {}) =>
     spawnSync('bash', [join(OPS, script), ...args], { env: { PATH: `${bin}:${process.env.PATH}`, HOME: dir, ...extra }, encoding: 'utf8' });
-  return { dir, rodar, log: () => readFileSync(join(dir, 'log'), 'utf8'), regra: () => readFileSync(join(dir, 'regra'), 'utf8'), perms: () => (existsSync(join(dir, 'perms')) ? readFileSync(join(dir, 'perms'), 'utf8').split('\n').filter(Boolean) : []) };
+  return { dir, rodar, log: () => readFileSync(join(dir, 'log'), 'utf8'), regra: () => readFileSync(join(dir, 'regra'), 'utf8') };
 }
 
 test('regra do Traefik: só ACRESCENTA o Host; a segunda vez não muda nada; --so-conferir não altera', () => {
@@ -105,13 +91,12 @@ test('Platform App: cria uma vez, o token vai para o arquivo (modo 600) e NÃO a
   const a = ambiente();
   const arquivo = join(a.dir, 'segredos', 'chatwoot-platform.token');
   const env = { ARQUIVO_DO_TOKEN: arquivo, CHATWOOT_URL: 'https://crm.exemplo.test' };
-  const EMAILS = ['--emails', 'suzanne@exemplo.com,joao@exemplo.com'];
-  const seco = a.rodar('criar-platform-app-joao.sh', ['--so-conferir', ...EMAILS], env);
+  const seco = a.rodar('criar-platform-app-joao.sh', ['--so-conferir'], env);
   assert.equal(seco.status, 0, seco.stderr);
   assert.ok(!existsSync(arquivo));
   assert.ok(!/PlatformApp\.find_or_create_by/.test(a.log()), 'o app não foi criado em --so-conferir');
 
-  const r1 = a.rodar('criar-platform-app-joao.sh', EMAILS, env);
+  const r1 = a.rodar('criar-platform-app-joao.sh', [], env);
   assert.equal(r1.status, 0, r1.stdout + r1.stderr);
   assert.equal(readFileSync(arquivo, 'utf8').trim(), TOKEN);
   assert.equal(statSync(arquivo).mode & 0o777, 0o600);
@@ -124,65 +109,35 @@ test('Platform App: cria uma vez, o token vai para o arquivo (modo 600) e NÃO a
 
   const criacoes = (a.log().match(/PlatformApp\.find_or_create_by/g) ?? []).length;
   assert.equal(criacoes, 1);
-  const r2 = a.rodar('criar-platform-app-joao.sh', EMAILS, env);
+  const r2 = a.rodar('criar-platform-app-joao.sh', [], env);
   assert.equal(r2.status, 0, r2.stdout);
   assert.match(r2.stdout, /já existe e o Chatwoot aceita/);
   assert.equal((a.log().match(/PlatformApp\.find_or_create_by/g) ?? []).length, criacoes, '2ª rodada não cria o app de novo');
-  assert.match(r2.stdout, /suzanne@exemplo\.com: o app já tem acesso/);
 });
 
-const ADMINS = ['--emails', 'suzanne@exemplo.com,joao@exemplo.com'];
+test('Platform App: NUNCA cria permissão sobre usuário existente (PlatformAppPermissible daria ao token do app o poder de entrar como a Suzanne) e não precisa de e-mail nenhum', () => {
+  const sh = readFileSync(join(OPS, 'criar-platform-app-joao.sh'), 'utf8');
+  assert.doesNotMatch(sh.replace(/^#.*$/gm, ''), /PlatformAppPermissible|--emails|EMAILS_DOS_ADMINISTRADORES/, 'o código do script não toca em permissão de usuário');
+  const a = ambiente();
+  const env = { ARQUIVO_DO_TOKEN: join(a.dir, 'segredos', 'chatwoot-platform.token'), CHATWOOT_URL: 'https://crm.exemplo.test' };
+  assert.equal(a.rodar('criar-platform-app-joao.sh', [], env).status, 0, 'sem lista de e-mails: nada de erro');
+  assert.doesNotMatch(a.log(), /Permissible/);
+});
 
-test('Platform App: dá acesso aos usuários que já existem (PlatformAppPermissible) — idempotente, e roda também quando o app já existia', () => {
+test('Platform App: com o token já aceito, a conferência NÃO falha mesmo sem o contêiner chatwoot_rails neste host (nem chama o docker)', () => {
   const a = ambiente();
   const arquivo = join(a.dir, 'segredos', 'chatwoot-platform.token');
-  const env = { ARQUIVO_DO_TOKEN: arquivo, CHATWOOT_URL: 'https://crm.exemplo.test' };
-  // o app existe, mas só o João tem acesso
-  assert.equal(a.rodar('criar-platform-app-joao.sh', ['--emails', 'joao@exemplo.com'], env).status, 0);
-  assert.deepEqual(a.perms(), ['joao@exemplo.com']);
-  // --so-conferir mostra o que faltaria e NÃO cria
-  const seco = a.rodar('criar-platform-app-joao.sh', ['--so-conferir', ...ADMINS], env);
-  assert.equal(seco.status, 0, seco.stdout);
-  assert.match(seco.stdout, /suzanne@exemplo\.com: FALTA o acesso/);
-  assert.match(seco.stdout, /joao@exemplo\.com: o app já tem acesso/);
-  assert.deepEqual(a.perms(), ['joao@exemplo.com']);
-  // aplicar: o app já existia (token aceito) e mesmo assim cria só o que falta
-  const r = a.rodar('criar-platform-app-joao.sh', ADMINS, env);
-  assert.equal(r.status, 0, r.stdout);
-  assert.match(r.stdout, /suzanne@exemplo\.com: acesso CRIADO/);
-  assert.deepEqual(a.perms(), ['joao@exemplo.com', 'suzanne@exemplo.com']);
-  const r3 = a.rodar('criar-platform-app-joao.sh', ADMINS, env);
-  assert.equal(r3.status, 0);
-  assert.doesNotMatch(r3.stdout, /CRIADO/);
-  assert.deepEqual(a.perms(), ['joao@exemplo.com', 'suzanne@exemplo.com'], 'a 2ª rodada não repete nada');
-  // nenhum token em lugar nenhum
-  assert.ok(![r.stdout, r.stderr, r3.stdout, a.log()].some((t) => t.includes(TOKEN)));
-});
-
-test('Platform App: e-mail que não existe no Chatwoot é apontado (exit 1); e-mail malformado/com injeção é recusado ANTES de qualquer docker', () => {
-  const a = ambiente();
-  const env = { ARQUIVO_DO_TOKEN: join(a.dir, 'segredos', 'chatwoot-platform.token'), CHATWOOT_URL: 'https://crm.exemplo.test' };
-  const r = a.rodar('criar-platform-app-joao.sh', ['--emails', 'joao@exemplo.com,fantasma@exemplo.com'], env);
-  assert.equal(r.status, 1);
-  assert.match(r.stdout, /fantasma@exemplo\.com: NÃO existe usuário/);
-  const antes = a.log();
-  for (const ruim of ['a@b.com;rm -rf /', "x'y@b.com", 'sem-arroba', '$(id)@b.com', 'a@b']) {
-    const q = a.rodar('criar-platform-app-joao.sh', ['--emails', ruim], env);
-    assert.notEqual(q.status, 0, ruim);
+  spawnSync('mkdir', ['-p', join(a.dir, 'segredos')]);
+  writeFileSync(arquivo, `${TOKEN}\n`, { mode: 0o600 });
+  // docker que NÃO acha o contêiner (ps vazio)
+  writeFileSync(join(a.dir, 'bin', 'docker'), `#!/usr/bin/env bash\necho "docker $*" >> "${a.dir}/log"\nexit 0\n`);
+  for (const args of [[], ['--so-conferir']]) {
+    const r = a.rodar('criar-platform-app-joao.sh', args, { ARQUIVO_DO_TOKEN: arquivo, CHATWOOT_URL: 'https://crm.exemplo.test' });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /já existe e o Chatwoot aceita/);
+    assert.match(r.stdout, /PRÓXIMO: cd \/root\/kit/);
   }
-  assert.equal(a.log().split('\n').length, antes.split('\n').length, 'nada foi ao docker com e-mail ruim');
-});
-
-test('Platform App: sem lista de e-mails, --so-conferir mostra os administradores da conta 1 para copiar; aplicar sem lista é recusado', () => {
-  const a = ambiente();
-  const env = { ARQUIVO_DO_TOKEN: join(a.dir, 'segredos', 'chatwoot-platform.token'), CHATWOOT_URL: 'https://crm.exemplo.test' };
-  const seco = a.rodar('criar-platform-app-joao.sh', ['--so-conferir'], env);
-  assert.equal(seco.status, 0, seco.stdout);
-  assert.match(seco.stdout, /nenhuma lista de e-mails/);
-  assert.match(seco.stdout, /- suzanne@exemplo\.com/);
-  const aplicar = a.rodar('criar-platform-app-joao.sh', [], env);
-  assert.equal(aplicar.status, 1);
-  assert.match(aplicar.stdout, /SEM essa lista/);
+  assert.ok(!/docker/.test(a.log()), 'o docker nem foi chamado');
 });
 
 test('Platform App: arquivo com token que o Chatwoot RECUSA → para e não cria outro por cima', () => {
@@ -334,6 +289,21 @@ test('levar-kit-para-vps: envia por tar sobre ssh o que está em origin/main (n�
   assert.notEqual(r.rodar([], { CHAVE_SSH: join(r.dir, 'nao-existe') }).status, 0);
 });
 
+test('levar-kit-para-vps: a pasta da VPS é SUBSTITUÍDA (script apagado/renomeado no repositório não sobra lá) e funciona rodando de uma subpasta do repositório', () => {
+  const r = repositorioDeMentira();
+  assert.equal(r.rodar().status, 0);
+  // sobras da VPS: um script que já não existe no repositório, e um arquivo de fora do kit que NÃO pode ser tocado
+  writeFileSync(join(r.destino, 'ops/kit-unidade/script-apagado-no-repo.sh'), '#!/bin/bash\n');
+  writeFileSync(join(r.destino, 'outra-coisa.txt'), 'não é do kit');
+  // rodando de DENTRO de ops/kit-unidade (git archive relativo precisaria da raiz)
+  const sub = spawnSync('bash', [join(r.clone, 'ops/kit-unidade/levar-kit-para-vps.sh')], { cwd: join(r.clone, 'ops/kit-unidade'), env: { PATH: `${join(r.dir, 'bin')}:${process.env.PATH}`, HOME: r.dir, CHAVE_SSH: join(r.dir, 'chave'), DESTINO: r.destino }, encoding: 'utf8' });
+  assert.equal(sub.status, 0, sub.stdout + sub.stderr);
+  assert.ok(!existsSync(join(r.destino, 'ops/kit-unidade/script-apagado-no-repo.sh')), 'o script que não existe mais no repositório sumiu da VPS');
+  assert.ok(existsSync(join(r.destino, 'ops/kit-unidade/levar-kit-para-vps.sh')));
+  assert.ok(existsSync(join(r.destino, 'outra-coisa.txt')), 'o que não é do kit não é tocado');
+  assert.deepEqual(spawnSync('ls', ['-A', r.destino], { encoding: 'utf8' }).stdout.split('\n').filter((x) => x.startsWith('.chegando')), [], 'a pasta temporária foi embora');
+});
+
 test('os .sh funcionam a partir da cópia em /root/kit/ops/kit-unidade (AQUI = dirname): nova-unidade-joao --so-conferir acha o questionário e o molde pela cópia', () => {
   const r = repositorioDeMentira();
   assert.equal(r.rodar().status, 0);
@@ -356,5 +326,7 @@ test('README: documenta como levar o kit (a VPS não tem cópia do repositório)
   assert.match(readme, /levar-kit-para-vps\.sh/);
   assert.match(readme, /git archive origin\/main ops\/kit-unidade \| ssh -i ~\/\.ssh\/doutordigital_vps root@89\.116\.214\.130/);
   assert.match(readme, /cd \/root\/kit/);
-  assert.match(readme, /acesso aos usuários que\s+já existem/);
+  assert.match(readme, /KIT_ADMINS_DD/);
+  assert.match(readme, /\/home\/joaoof\/agente-dt/);
+  assert.match(readme, /\/opt\/doutordigital\/agente-dt/);
 });

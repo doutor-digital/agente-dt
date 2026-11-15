@@ -34,6 +34,8 @@ export interface OpcoesDoFalso {
   semPlataforma?: boolean;
   /** quantas vezes o vínculo do usuário à conta falha com 500 (para provar a recuperação) */
   falharVinculo?: number;
+  /** usuários que JÁ existem (e são agentes da conta de referência): a Suzanne, o João… */
+  existentes?: Array<{ id: number; name: string; email: string }>;
 }
 
 export interface ChamadaFalsa { metodo: string; caminho: string; corpo: unknown; conta: number | 'plataforma' | 'kapso' | null }
@@ -45,16 +47,20 @@ export function chatwootFalso(o: OpcoesDoFalso = {}) {
   const tokenDaPlataforma = o.tokenDaPlataforma ?? 'plat-secreto';
   const tokenDeReferencia = o.tokenDeReferencia ?? 'ref-secreto';
   let vinculosAFalhar = o.falharVinculo ?? 0;
+  const existentes0 = o.existentes ?? [];
   const contas = new Map<number, ContaFalsa>();
   const usuarios = new Map<number, { id: number; name: string; email: string; access_token: string; contas: Map<number, string> }>();
   const kapso = new Map<string, Map<string, { name: string; status: string; corpo: unknown }>>();
+  for (const u of existentes0) usuarios.set(u.id, { id: u.id, name: u.name, email: u.email, access_token: `tok-existente-${u.id}`, contas: new Map([[1, 'administrator']]) });
   const chamadas: ChamadaFalsa[] = [];
   const conta = (n: number, name: string, extra: Partial<ContaFalsa> = {}): ContaFalsa => {
     const c: ContaFalsa = { id: n, name, labels: [], attrs: [], rules: [], canned: [], inboxes: [], teams: [], agents: [], bots: [], webhooks: [], apps: [], ...extra };
     contas.set(n, c);
     return c;
   };
+  const existentes = o.existentes ?? [];
   conta(1, 'Parauapebas (referência)', {
+    agents: existentes.map((u) => ({ id: u.id, name: u.name, email: u.email, role: 'administrator' })),
     labels: o.referencia?.labels ?? [],
     attrs: o.referencia?.attrs ?? [],
     rules: o.referencia?.rules ?? [],

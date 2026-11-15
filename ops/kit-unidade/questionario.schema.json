@@ -293,6 +293,17 @@
           },
           "minItems": 1
         },
+        "admins_dd": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "email",
+            "maxLength": 120
+          },
+          "maxItems": 10,
+          "x-sensivel": true,
+          "x-motivo": "e-mails de administradores da Doutor Digital"
+        },
         "usuario_celular_email": {
           "type": "string",
           "format": "email",

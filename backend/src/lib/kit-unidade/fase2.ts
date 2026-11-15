@@ -126,6 +126,41 @@ export async function passoConta(q: Questionario, x: PortasExternas, estado: Est
     await estado.conta.get('labels');
     notas.push(`vínculo do conector ${guardado} com a conta ${contaId} refeito`);
   }
+  notas.push(...(await passoAdminsDD(q, x, estado, contaId)));
+  return notas;
+}
+
+/** O padrão: a Suzanne. Troca por KIT_ADMINS_DD (csv) ou por `chatwoot.admins_dd` do questionário. */
+export const ADMINS_DD_PADRAO = ['suzanne.mychelly1@gmail.com'];
+
+/**
+ * Põe os administradores da Doutor Digital na conta nova. O id deles vem da conta de REFERÊNCIA (`GET agents` da conta 1, só leitura) filtrado pela lista; a
+ * entrada na conta é `account_users` (role administrator), que na plataforma só confere a permissão sobre a CONTA que o app criou. NUNCA se cria permissão do
+ * app sobre usuário existente (daria ao token do app o poder de entrar como a pessoa). Idempotente: quem já é agente da conta nova não gera chamada.
+ * E-mail que não está na conta 1 só gera aviso.
+ */
+async function passoAdminsDD(q: Questionario, x: PortasExternas, e: EstadoDaExecucao, contaId: number): Promise<string[]> {
+  const desejados = [...new Set((q.chatwoot.admins_dd ?? x.adminsDD).map(lc))];
+  if (!desejados.length) return ['administradores da Doutor Digital: nenhum na lista (KIT_ADMINS_DD vazio)'];
+  const conta = daConta(e);
+  const jaNaConta = new Set(listaDaResposta(await conta.get('agents')).map((a) => lc(String(a.email))));
+  const faltam = desejados.filter((m) => !jaNaConta.has(m));
+  if (!faltam.length) return [`administradores da Doutor Digital já estão na conta (${desejados.length})`];
+  if (e.somenteLeitura) throw new ErroSoLeitura('pôr os administradores da Doutor Digital na conta');
+  if (!x.referencia) return [`AVISO: sem a conta de referência não sei o id de ${faltam.join(', ')}: não pus os administradores da Doutor Digital (ponha-os à mão no Super Admin)`];
+  const plataforma = x.plataforma;
+  if (!plataforma) return [`AVISO: sem o Platform App não dá para pôr ${faltam.join(', ')} na conta`];
+  const naReferencia = new Map(listaDaResposta(await x.referencia.get('agents')).map((a) => [lc(String(a.email)), Number(a.id)] as const));
+  const notas: string[] = [];
+  for (const m of faltam) {
+    const id = naReferencia.get(m);
+    if (!id) {
+      notas.push(`AVISO: ${m} não está na conta de referência (conta 1): não pus na conta ${contaId} — confira o e-mail`);
+      continue;
+    }
+    await plataforma.vincular(contaId, id, 'administrator');
+    notas.push(`${m} (usuário ${id}) posto(a) como administrador(a) da conta ${contaId}`);
+  }
   return notas;
 }
 

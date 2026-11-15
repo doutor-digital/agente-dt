@@ -27,7 +27,7 @@ import { contaHttp, contaHttpSoLeitura, plataformaHttp } from '../lib/kit-unidad
 import { kapsoHttp } from '../lib/kit-unidade/kapso-http.js';
 import type { PortasExternas } from '../lib/kit-unidade/portas.js';
 import { segredosEmArquivo } from '../lib/kit-unidade/segredos.js';
-import { listaDaResposta, urlDoWebhook } from '../lib/kit-unidade/fase2.js';
+import { ADMINS_DD_PADRAO, listaDaResposta, urlDoWebhook } from '../lib/kit-unidade/fase2.js';
 import { sufixoDoQuestionario } from '../lib/kit-unidade/questionario.js';
 import { montarPlano, textoDoPlano, type EstadoAtual } from '../lib/kit-unidade/plano.js';
 import { lerQuestionario, questionarioMascarado, type Questionario } from '../lib/kit-unidade/questionario.js';
@@ -192,6 +192,7 @@ async function portasExternas(): Promise<PortasExternas> {
     abrirConta: (conta, token) => contaHttp(url, conta, token),
     referencia: ambiente ? contaHttpSoLeitura(ambiente.url, ambiente.conta, ambiente.token) : null,
     contaDoAmbiente: ambiente?.conta ?? null,
+    adminsDD: (process.env.KIT_ADMINS_DD?.trim() ? process.env.KIT_ADMINS_DD.split(',').map((m) => m.trim()).filter(Boolean) : ADMINS_DD_PADRAO),
     kapso: kapso ? kapsoHttp(kapso) : null,
     segredos: segredosEmArquivo(PASTA_DO_COFRE),
     urlDoAgente: agente,
