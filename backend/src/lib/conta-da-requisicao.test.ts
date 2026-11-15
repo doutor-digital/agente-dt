@@ -15,6 +15,7 @@ process.env.OPENAI_API_KEY ??= 'sk-teste-1234567890';
 process.env.DATABASE_URL ??= 'postgresql://x:y@127.0.0.1:1/z';
 process.env.SESSION_JWT_SECRET ??= 'segredo-de-teste-com-mais-de-32-caracteres-ok';
 
+const { prisma } = await import('./prisma.js');
 const U = await import('./chatwoot-unidades.js');
 const R = await import('./conta-da-requisicao.js');
 const { chaveDoFunil } = await import('./funil-chatwoot.js');
@@ -58,6 +59,11 @@ function chatwootDeMentira() {
     const conta = /\/accounts\/(\d+)\//.exec(u.pathname)?.[1];
     const marca = conta === '2' ? 'SEGREDO-DA-CONTA-2' : 'dado-da-conta-1';
     if (/\/inboxes$/.test(u.pathname)) return resp(200, { payload: [{ id: conta === '2' ? 20 : 3, name: marca }] });
+    if (/\/conversations$/.test(u.pathname)) {
+      const agora = Math.floor(Date.now() / 1000);
+      const c = { id: 5, inbox_id: conta === '2' ? 20 : 3, status: 'open', labels: [], custom_attributes: { etapa: 'Novo lead' }, meta: { sender: { name: marca } }, timestamp: agora, last_activity_at: agora, created_at: agora - 60, unread_count: 0 };
+      return resp(200, { data: { payload: u.searchParams.get('page') === '1' || !u.searchParams.get('page') ? [c] : [], meta: { all_count: 1 } } });
+    }
     return resp(200, { payload: [], data: { payload: [], meta: { all_count: 0 } }, meta: { all_count: 0 }, name: marca });
   }) as unknown as typeof fetch;
 }
@@ -282,4 +288,38 @@ test('IDENTIDADE: sem `conta` tudo segue como antes — a conta do ambiente, o m
   assert.ok('ctx' in c && c.ctx.conta?.conta === 2 && c.ctx.conta.token === 'tk-so-da-demo');
   for (const k of Object.keys(AMBIENTE)) delete process.env[k];
   assert.deepEqual(R.contextoDaRequisicao({ query: {} } as never), { status: 404, erro: 'desligado (CRM não configurado)' });
+});
+
+test('«agendou hoje»: a leitura da memória da régua leva o filtro de CAIXAS da conta — a conversa 5 de uma clínica não conta na outra', async () => {
+  preparar();
+  const wheres: Array<Record<string, any>> = [];
+  const original = Object.getOwnPropertyDescriptor(prisma, 'chatwootReguaVisto');
+  Object.defineProperty(prisma, 'chatwootReguaVisto', { value: { findMany: async (o: { where: Record<string, any> }) => (wheres.push(o.where), []), findFirst: async () => null }, configurable: true });
+  try {
+    const hoje = async (q: string) => {
+      const { url, init } = montar({ metodo: 'get', caminho: '/public/funil/hoje' }, q);
+      (init.headers as Record<string, string>)['X-CW-Token'] = 'tok-as-duas';
+      return fetchReal(url, init);
+    };
+    wheres.length = 0;
+    assert.equal((await hoje('conta=2')).status, 200);
+    assert.ok(wheres.length > 0, 'leu a memória da régua');
+    assert.deepEqual(wheres.map((w) => w.caixa), wheres.map(() => ({ in: [20, 21] })), 'conta 2: só as caixas dela');
+    wheres.length = 0;
+    assert.equal((await hoje('')).status, 200);
+    assert.ok(wheres.length > 0);
+    assert.deepEqual(wheres.map((w) => w.caixa), wheres.map(() => ({ notIn: [20, 21] })), 'conta 1: tudo menos as caixas de contas próprias');
+  } finally {
+    if (original) Object.defineProperty(prisma, 'chatwootReguaVisto', original);
+    else delete (prisma as unknown as Record<string, unknown>).chatwootReguaVisto;
+  }
+});
+
+test('IDENTIDADE do filtro: sem nenhuma clínica de conta própria, a conta do ambiente NÃO ganha filtro nenhum (a consulta é a de sempre)', () => {
+  Object.assign(process.env, AMBIENTE);
+  U.aplicarConfigs([U.SEMENTE_PARAUAPEBAS]);
+  R.esquecerContextoDoAmbiente();
+  const c = R.contextoDaRequisicao({ query: {} } as never);
+  assert.ok('ctx' in c);
+  if ('ctx' in c) assert.deepEqual(R.filtroDeCaixas(c.ctx), {});
 });

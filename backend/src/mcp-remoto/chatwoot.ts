@@ -86,6 +86,33 @@ export function contaChatwootDaUnidade(slug: string, e: NodeJS.ProcessEnv = proc
   return { url: base.url, conta: id ?? base.conta, token };
 }
 
+/**
+ * Esta conta (id) é a do AMBIENTE (a de Parauapebas)? É a regra única: a conta do ambiente é a de `CHATWOOT_CONTA_ID`, desde que nenhuma
+ * unidade a use explicitamente. Nunca copie esta conta em outro lugar.
+ */
+export function ehContaDoAmbiente(contaId: number, e: NodeJS.ProcessEnv = process.env): boolean {
+  const amb = contaChatwootDoAmbiente(e);
+  return !!amb && amb.conta === contaId && !contasExplicitas().includes(contaId);
+}
+
+let ambienteGuardado: { chave: string; ctx: ContextoChatwoot } | null = null;
+/**
+ * O contexto da conta do ambiente, UM só (cada evento do webhook e cada recibo de leitura reaproveitam; o cache por conta depende de ser o
+ * mesmo objeto). Usa o `fetch` do momento da chamada (não o do momento em que foi criado). Refeito se URL, conta ou token do ambiente mudarem.
+ */
+export function contextoDoAmbiente(e: NodeJS.ProcessEnv = process.env): ContextoChatwoot | null {
+  const conta = contaChatwootDoAmbiente(e);
+  if (!conta) return null;
+  const chave = `${conta.url}\u0000${conta.conta}\u0000${conta.token}`;
+  if (!ambienteGuardado || ambienteGuardado.chave !== chave) ambienteGuardado = { chave, ctx: criarContextoChatwoot(conta, { fetch: ((u: Parameters<typeof fetch>[0], o?: RequestInit) => globalThis.fetch(u, o)) as typeof fetch }) };
+  return ambienteGuardado.ctx;
+}
+
+/** Só para os testes. */
+export const esquecerContextoDoAmbiente = (): void => {
+  ambienteGuardado = null;
+};
+
 /** Todas as contas que o servidor conhece: a do ambiente primeiro, depois as das unidades (sem repetir). */
 export function contasDoChatwoot(e: NodeJS.ProcessEnv = process.env): number[] {
   const base = contaChatwootDoAmbiente(e);
@@ -127,7 +154,7 @@ export function contextoDaUnidade(ctx: ContextoChatwoot, slug: string, e: NodeJS
  * (sem unidade). `null` = nenhuma unidade configurada usa essa conta: RECUSAR.
  */
 export function donaDaConta(ctx: ContextoChatwoot, contaId: number, e: NodeJS.ProcessEnv = process.env): { slug: string | null; ctx: ContextoChatwoot } | null {
-  if (ctx.conta && ctx.conta.conta === contaId && !contasExplicitas().includes(contaId)) return { slug: null, ctx };
+  if (ctx.conta && ehContaDoAmbiente(contaId, e) && ctx.conta.conta === contaId) return { slug: null, ctx };
   for (const slug of unidadesDaConta(contaId)) {
     const c = contextoDaUnidade(ctx, slug, e);
     if (c) return { slug, ctx: c };

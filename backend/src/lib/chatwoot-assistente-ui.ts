@@ -123,7 +123,7 @@ const BOTAO_JS = String.raw`(function(){
     if (!s || !emConta()) return;
     if (uidVisto !== null && uidVisto !== s.uid) { tirar(); proxima = 0; }
     // trocou de clínica (outra conta) na mesma aba: o painel é refeito com a conta nova (a conversa 5 de uma conta não é a da outra)
-    if (contaVista !== null && contaVista !== contaAtual()) { tirar(); proxima = 0; }
+    if (contaVista !== null && contaVista !== contaAtual()) { tirar(); proxima = 0; ligada = false; AV.conversa = null; AV.mapa = {}; AV.qtd = -1; AV.proxima = 0; }
     contaVista = contaAtual();
     uidVisto = s.uid;
     if (consultando || Date.now() < proxima) return;

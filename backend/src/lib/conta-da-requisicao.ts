@@ -11,8 +11,10 @@
  * Link avulso (chave do funil) só abre a conta que tem token PRÓPRIO: o token global é o de Parauapebas e não vale em outra conta.
  */
 import type { Request } from 'express';
-import { contaDaUnidade, contasExplicitas } from './chatwoot-unidades.js';
-import { contaChatwootDoAmbiente, contextoDaContaPorId, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
+import { caixasDaConta, caixasDeContasProprias, contaDaUnidade, contasExplicitas } from './chatwoot-unidades.js';
+import { contaChatwootDoAmbiente, contextoDaContaPorId, contextoDoAmbiente, ehContaDoAmbiente, esquecerContextoDoAmbiente, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
+
+export { esquecerContextoDoAmbiente };
 
 export const MENSAGEM_SEM_CONTA = 'seu usuário do CRM não tem acesso a esta conta — peça para a Suzanne';
 
@@ -26,21 +28,6 @@ export function contaPedida(req: Pick<Request, 'query'>): number | null | undefi
   return Number(v);
 }
 
-let base: { chave: string; ctx: ContextoChatwoot } | null = null;
-/** O contexto do ambiente, um só (identidade: Parauapebas segue com o mesmo objeto de sempre). Refeito se o ambiente mudar. */
-function contextoDoAmbiente(e: NodeJS.ProcessEnv): ContextoChatwoot | null {
-  const conta = contaChatwootDoAmbiente(e);
-  if (!conta) return null;
-  const chave = `${conta.url}\u0000${conta.conta}\u0000${conta.token}`;
-  if (!base || base.chave !== chave) base = { chave, ctx: criarContextoChatwoot(conta) };
-  return base.ctx;
-}
-
-/** Só para os testes. */
-export const esquecerContextoDoAmbiente = (): void => {
-  base = null;
-};
-
 /**
  * O contexto da conta pedida, ou o motivo de recusar. `propria` = a conta tem token próprio (o link avulso só vale assim; na do ambiente é sempre true).
  * Nunca fala com o Chatwoot.
@@ -52,18 +39,29 @@ export function contextoDaRequisicao(req: Pick<Request, 'query'>, e: NodeJS.Proc
   if (pedida === undefined) return { status: 400, erro: 'conta inválida' };
   const recusa: ContextoDaRequisicao = { status: 403, erro: MENSAGEM_SEM_CONTA, sessao: 'sem-conta' };
   if (pedida === null) return { ctx: amb, propria: true };
-  if (pedida === amb.conta.conta && !contasExplicitas().includes(pedida)) return { ctx: amb, propria: true };
+  if (ehContaDoAmbiente(pedida, e)) return { ctx: amb, propria: true };
   if (!contasExplicitas().includes(pedida)) return recusa; // nenhuma unidade usa essa conta
   const ctx = contextoDaContaPorId(amb, pedida, e);
   if (!ctx?.conta) return recusa; // falta o token da conta
   return { ctx, propria: ctx.conta.token !== amb.conta.token };
 }
 
-/** A conta pedida é a do ambiente (a de Parauapebas)? Só nela valem as listas globais (gestores por e-mail). */
-export const ehContaDoAmbiente = (ctx: ContextoChatwoot, e: NodeJS.ProcessEnv = process.env): boolean => {
-  const amb = contaChatwootDoAmbiente(e);
-  return !!amb && !!ctx.conta && ctx.conta.conta === amb.conta && !contasExplicitas().includes(amb.conta);
-};
+/** O contexto é o da conta do ambiente (a de Parauapebas)? Só nela valem as listas globais (gestores por e-mail). */
+export const ctxEhDoAmbiente = (ctx: ContextoChatwoot, e: NodeJS.ProcessEnv = process.env): boolean => !!ctx.conta && ehContaDoAmbiente(ctx.conta.conta, e);
+
+/**
+ * O filtro de `caixa` para tabelas guardadas por (caixa, conversa) — o id da conversa é por conta, a caixa é única. Conta própria: só as
+ * caixas dela. Conta do ambiente: tudo MENOS as caixas de contas próprias (sem clínica de conta própria, não filtra nada: o mesmo de sempre).
+ */
+export function filtroDeCaixas(ctx: ContextoChatwoot, e: NodeJS.ProcessEnv = process.env): { caixa?: { in: number[] } | { notIn: number[] } } {
+  const conta = ctx.conta?.conta;
+  if (!conta) return { caixa: { in: [] } };
+  if (ehContaDoAmbiente(conta, e)) {
+    const outras = caixasDeContasProprias();
+    return outras.length ? { caixa: { notIn: outras } } : {};
+  }
+  return { caixa: { in: caixasDaConta(conta, contaChatwootDoAmbiente(e)?.conta ?? null) } };
+}
 
 /**
  * A unidade `slug` mora na conta deste contexto? Cinto e suspensório de «você atende uma caixa dela»: uma sessão que é membro da conta 2 e

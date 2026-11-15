@@ -19,7 +19,7 @@ import { z } from 'zod';
 import { logger } from '../lib/logger.js';
 import { env } from '../lib/env.js';
 import { contaChatwootDoAmbiente, chamar, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
-import { MENSAGEM_SEM_CONTA, contextoDaRequisicao, ehContaDoAmbiente } from '../lib/conta-da-requisicao.js';
+import { MENSAGEM_SEM_CONTA, contextoDaRequisicao, ctxEhDoAmbiente, filtroDeCaixas } from '../lib/conta-da-requisicao.js';
 import { createHash } from 'node:crypto';
 import { prisma } from '../lib/prisma.js';
 import { conversasDasPaginas, diaEmBelem, montarHoje } from '../lib/chatwoot-hoje.js';
@@ -351,7 +351,7 @@ export async function funilHojeHandler(req: Request, res: Response): Promise<voi
     const ids = conversas.map((c) => Number(c.id));
     const agendadas = ids.length
       ? await prisma.chatwootReguaVisto.findMany({
-          where: { conversationId: { in: ids }, campo: 'etapa', valor: 'Agendado', inicial: false, desde: { gte: inicioDoDia } },
+          where: { ...filtroDeCaixas(a.c), conversationId: { in: ids }, campo: 'etapa', valor: 'Agendado', inicial: false, desde: { gte: inicioDoDia } },
           select: { conversationId: true },
         })
       : [];
@@ -401,7 +401,7 @@ async function autorizadoGestao(req: Request, res: Response): Promise<Acesso | n
   const a = await autorizadoComLogin(req, res);
   if (!a) return null;
   // a lista de gestores por e-mail é a de Parauapebas: noutra conta só vale o papel de administrador DELA
-  if (!podeVerGestao(a.papel, a.email, ehContaDoAmbiente(a.c) ? process.env.CHATWOOT_GESTORES : undefined)) {
+  if (!podeVerGestao(a.papel, a.email, ctxEhDoAmbiente(a.c) ? process.env.CHATWOOT_GESTORES : undefined)) {
     res.status(403).json({ error: 'esta tela é só para a gestão. Peça acesso à Suzanne.', semPermissao: true });
     return null;
   }
@@ -649,11 +649,11 @@ async function faturadoDasUnidades(slugs: string[], de: string, ate: string): Pr
 }
 
 /** Conversas que entraram em «Agendado» na janela (memória da régua). Em fatias: a lista de ids pode passar do limite de parâmetros do banco. */
-async function agendadasNaJanela(ids: number[], j: JanelaDoPeriodo): Promise<Set<number>> {
+async function agendadasNaJanela(a: Acesso, ids: number[], j: JanelaDoPeriodo): Promise<Set<number>> {
   const achadas = new Set<number>();
   for (let i = 0; i < ids.length; i += 5000) {
     const linhas = await prisma.chatwootReguaVisto.findMany({
-      where: { conversationId: { in: ids.slice(i, i + 5000) }, campo: 'etapa', valor: 'Agendado', inicial: false, desde: { gte: new Date(j.inicioMs), lte: new Date(j.fimMs) } },
+      where: { ...filtroDeCaixas(a.c), conversationId: { in: ids.slice(i, i + 5000) }, campo: 'etapa', valor: 'Agendado', inicial: false, desde: { gte: new Date(j.inicioMs), lte: new Date(j.fimMs) } },
       select: { conversationId: true },
     });
     for (const l of linhas) achadas.add(l.conversationId);
@@ -671,9 +671,9 @@ export async function funilMarketingHandler(req: Request, res: Response): Promis
       const { conversas, slugs, cortou } = await conversasDasUnidades(a, caixa);
       const ids = conversas.map((c) => Number(c.id));
       const [agendadas, agendadasAntes, partida, lidos, gastos, gastosAntes, destinos, numeros] = await Promise.all([
-        agendadasNaJanela(ids, periodo),
-        agendadasNaJanela(ids, periodo.anterior),
-        prisma.chatwootReguaVisto.findFirst({ where: { conversationId: 0, campo: CAMPO_PARTIDA }, orderBy: { desde: 'asc' }, select: { desde: true } }).catch(() => null),
+        agendadasNaJanela(a, ids, periodo),
+        agendadasNaJanela(a, ids, periodo.anterior),
+        prisma.chatwootReguaVisto.findFirst({ where: { ...filtroDeCaixas(a.c), conversationId: 0, campo: CAMPO_PARTIDA }, orderBy: { desde: 'asc' }, select: { desde: true } }).catch(() => null),
         referralsDe(a, doPeriodoDe(conversas, periodo).map((c) => ({ id: Number(c.id), caixa: Number(c.inbox_id) }))),
         gastosDasUnidades(slugs, periodo.de, periodo.ate),
         // a Meta só separa por DIA: em «Manhã» e «Fim do dia» o anterior seria ontem inteiro × hoje até agora (ou contaria ontem dos
@@ -751,7 +751,7 @@ export async function funilGestorHandler(req: Request, res: Response): Promise<v
 export async function funilGestaoHandler(req: Request, res: Response): Promise<void> {
   const a = await autorizadoComLogin(req, res);
   if (!a) return;
-  res.set('Cache-Control', 'no-store').json({ gestao: podeVerGestao(a.papel, a.email, ehContaDoAmbiente(a.c) ? process.env.CHATWOOT_GESTORES : undefined) });
+  res.set('Cache-Control', 'no-store').json({ gestao: podeVerGestao(a.papel, a.email, ctxEhDoAmbiente(a.c) ? process.env.CHATWOOT_GESTORES : undefined) });
 }
 
 export async function funilCaixasHandler(req: Request, res: Response): Promise<void> {
@@ -1948,7 +1948,14 @@ const MENU_JS = String.raw`(function(){
   // Menu enxuto (decisão do João, 12/11/2026): "Campanhas" some para quem não é administrador da conta (as meninas).
   // O papel vem do perfil do próprio Chatwoot (mesma origem, sessão do cookie); sem resposta, nada some.
   // O mesmo perfil decide Marketing e Gestor: administrador, ou e-mail na lista de gestores do servidor.
-  var papel = null, pedindoPapel = false;
+  var papel = null, pedindoPapel = false, contaDoPapel = null, ocultos = [];
+  // trocou de clínica (outra conta) na mesma aba: o papel e a gestão eram da conta anterior — esquece e devolve ao menu o que foi escondido
+  function conferirConta(){
+    var c = contaDaUrlDoMenu();
+    if (contaDoPapel === c) return;
+    contaDoPapel = c; papel = null; gestao = null; pedindoPapel = false; reaberto = false;
+    ocultos.forEach(function(el){ el.style.display = ''; }); ocultos = [];
+  }
   // Administrador da conta vê. Os demais: o servidor diz se o e-mail está na lista de gestores (a lista nunca vai neste arquivo, que é público).
   function decidirGestao(p){
     if (papel === 'administrator') return Promise.resolve(true);
@@ -1960,6 +1967,7 @@ const MENU_JS = String.raw`(function(){
       .catch(function(){ return false; });
   }
   function pedirPapel(){
+    conferirConta();
     if (papel !== null || pedindoPapel) return;
     var s = sessao(), conta = location.pathname.match(/\/app\/accounts\/(\d+)/);
     if (!s || !conta) return;
@@ -1968,7 +1976,7 @@ const MENU_JS = String.raw`(function(){
       .then(function(r){ return r.ok ? r.json() : null; })
       .then(function(p){
         var a = p && Array.isArray(p.accounts) ? p.accounts.filter(function(x){ return String(x.id) === conta[1]; })[0] : null;
-        if (!(a && a.role)) return;
+        if (!(a && a.role) || contaDaUrlDoMenu() !== conta[1]) return; // trocou de conta enquanto a resposta vinha: não vale
         papel = a.role; enxugar();
         return decidirGestao(p).then(function(ok){ gestao = ok; if (por()) { reabrir(); ajustar(); } });
       })
@@ -1976,14 +1984,15 @@ const MENU_JS = String.raw`(function(){
       .then(function(){ pedindoPapel = false; });
   }
   function enxugar(){
+    conferirConta();
     if (papel === null) { pedirPapel(); return; }
     if (papel === 'administrator') return;
     Array.prototype.forEach.call(document.querySelectorAll('aside .i-lucide-megaphone, nav .i-lucide-megaphone'), function(i){
-      var li = i.closest('li'); if (li && li.style.display !== 'none') li.style.display = 'none';
+      var li = i.closest('li'); if (li && li.style.display !== 'none') { li.style.display = 'none'; ocultos.push(li); }
     });
     // menu enxuto (13/11): Empresas e Relatórios do Chatwoot também somem para quem não é administrador
     Array.prototype.forEach.call(document.querySelectorAll('aside a[href*="/companies"], aside a[href*="/reports"], nav a[href*="/companies"], nav a[href*="/reports"]'), function(a){
-      var li = a.closest('li') || a; if (li.style.display !== 'none') li.style.display = 'none';
+      var li = a.closest('li') || a; if (li.style.display !== 'none') { li.style.display = 'none'; ocultos.push(li); }
     });
   }
   var espera = null;
