@@ -10,22 +10,23 @@
  *
  * A sessão chega do menu do Chatwoot por postMessage (`funil:pede-sessao` → `funil-sessao`, com checagem de origem), como na tela Agente.
  * Todo texto que vem do servidor entra por textContent (nunca innerHTML). O JavaScript não usa crase nem `${`: a página é um String.raw e só
- * `__ORIGEM_CW__` é trocado.
+ * `__ORIGEM_CW__` (e `__LOGO_DD__`, a marca da Doutor Digital) são trocados.
  */
+import { LOGO_DD_PNG } from './marca-dd.js';
 
 const PAGINA = String.raw`<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Robôs</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400..700&display=swap" rel="stylesheet">
 <style>
-:root{--app:#f3f5fa;--side:#fff;--canvas:#eceff6;--dot:#c7cedd;--node:#fff;--ink:#131a2e;--ink-2:#4c5672;--line:#d9dfeb;--wire:#9aa5bd;--brand:#1f4fd1;--brand-soft:#e7edff;--trig:#e8590c;--wait:#c08400;--cond:#2f6fdd;--send:#128c4f;--stop:#8a93a8;--sticky:#fff3b0;--sticky-ink:#4a3d00;--bubble:#d9fdd3;--bubble-ink:#10261a;--chat:#efeae2;--shadow:0 1px 2px rgba(19,26,46,.08),0 10px 28px rgba(19,26,46,.10);--f-ui:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;--f-head:"Space Grotesk","Inter",system-ui,sans-serif;--f-mono:"JetBrains Mono",ui-monospace,Menlo,monospace}
-@media (prefers-color-scheme:dark){:root{color-scheme:dark;--app:#0e1322;--side:#141b2e;--canvas:#101728;--dot:#263150;--node:#1a2238;--ink:#e8ecf7;--ink-2:#a1abc6;--line:#2a3555;--wire:#56648a;--brand:#86a3ff;--brand-soft:#1d2a56;--trig:#ff8a4c;--wait:#ffc24d;--cond:#7fa8ff;--send:#4fd393;--stop:#6b7591;--sticky:#3d3714;--sticky-ink:#ffe98a;--bubble:#005c4b;--bubble-ink:#e9fff6;--chat:#0b141a;--shadow:0 1px 2px rgba(0,0,0,.4),0 12px 30px rgba(0,0,0,.4)}}
+:root{--app:#f7f7f7;--side:#fff;--canvas:#f0f0f3;--dot:#cdced6;--node:#fff;--ink:#1c2024;--ink-2:#60646c;--line:#e2e3e7;--wire:#b9bbc6;--brand:#2781f6;--brand-soft:#e9f3ff;--trig:#f76b15;--wait:#8e4ec6;--cond:#2781f6;--send:#29a71a;--stop:#8b8d98;--aviso:#8f5300;--aviso-forte:#ffb224;--sticky:#fff7c2;--sticky-ink:#4f3422;--bubble:#d9fdd3;--bubble-ink:#10261a;--chat:#efeae2;--shadow:0 1px 2px rgba(28,32,36,.06),0 6px 18px rgba(28,32,36,.08);--f-ui:Inter,-apple-system,system-ui,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Tahoma,Arial,sans-serif;--f-head:Inter,-apple-system,system-ui,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Tahoma,Arial,sans-serif;--f-mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace}
+@media (prefers-color-scheme:dark){:root{color-scheme:dark;--app:#1c1d20;--side:#17171a;--canvas:#18191b;--dot:#363a3f;--node:#1d1e24;--ink:#edeef0;--ink-2:#b0b4ba;--line:#2e2d32;--wire:#5a6169;--brand:#2781f6;--brand-soft:#0f2748;--aviso:#ffca16;--sticky:#302008;--sticky-ink:#ffe7b3;--bubble:#005c4b;--bubble-ink:#e9fff6;--chat:#0b141a;--shadow:0 1px 2px rgba(0,0,0,.4),0 8px 22px rgba(0,0,0,.35)}}
 *{box-sizing:border-box}html,body{height:100%}
 body{margin:0;background:var(--app);color:var(--ink);font:14px/1.45 var(--f-ui);display:grid;grid-template-rows:auto 1fr;min-height:100%;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
 [hidden]{display:none!important}
 .topo{display:flex;align-items:center;gap:10px;padding-block:12px;flex-wrap:wrap}
-.logo{width:24px;height:24px;border-radius:7px;background:var(--brand);color:#fff;display:grid;place-items:center;font:700 12px var(--f-head)}
+.logo{width:28px;height:28px;display:block;flex:none}
 .topo .mig{color:var(--ink-2);font-size:13px}.topo b{font:600 15px var(--f-head)}
 .topo .un{margin-left:auto;display:flex;align-items:center;gap:10px;color:var(--ink-2);font-size:13px}
 .topo select{font:500 13px var(--f-ui);color:var(--ink);background:var(--node);border:1px solid var(--line);border-radius:8px;padding:5px 8px}
@@ -45,10 +46,10 @@ body{margin:0;background:var(--app);color:var(--ink);font:14px/1.45 var(--f-ui);
 .grupo{margin:10px 6px 4px;font:600 11px var(--f-ui);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2);display:flex;justify-content:space-between}
 .item{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center;padding:8px;border-radius:9px;cursor:pointer}
 .item:hover{background:var(--app)}.item[aria-current=true]{background:var(--brand-soft)}
-.item .mini{width:26px;height:26px;border-radius:7px;display:grid;place-items:center;color:#fff;background:var(--send)}.item .mini svg{width:14px;height:14px}
+.item .mini{width:26px;height:26px;display:grid;place-items:center;flex:none;color:var(--stop)}.item .mini svg{width:26px;height:26px}
 .item b{font:600 13px var(--f-ui);display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .item small{color:var(--ink-2);font-size:12px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.item.desl .mini{background:var(--stop)}.item.desl b,.item.desl small{opacity:.6}
+.item.desl .mini{opacity:.45}.item.desl b,.item.desl small{opacity:.6}
 .sw{appearance:none;width:34px;height:20px;border-radius:999px;border:0;background:var(--stop);position:relative;cursor:pointer;flex:none}
 .sw::after{content:"";position:absolute;top:3px;left:3px;width:14px;height:14px;border-radius:50%;background:#fff;transition:transform .15s}
 .sw[aria-checked=true]{background:var(--send)}.sw[aria-checked=true]::after{transform:translateX(14px)}.sw:disabled{opacity:.55;cursor:not-allowed}
@@ -68,7 +69,7 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
 .no{position:absolute;width:112px;display:grid;justify-items:center;gap:8px;cursor:pointer;background:none;border:0;padding:0;color:var(--ink);font:inherit}
 .no .caixa{width:92px;height:92px;background:var(--node);border:2px solid var(--line);border-radius:14px;display:grid;place-items:center;box-shadow:var(--shadow);position:relative;transition:border-color .15s,transform .15s}
 .no.trig .caixa{border-radius:46px 14px 14px 46px}.no:hover .caixa{border-color:var(--cor);transform:translateY(-2px)}
-.no .caixa svg{width:40px;height:40px;color:var(--cor)}
+.no .caixa svg{width:44px;height:44px;color:var(--cor)}
 .no .caixa::after,.no .caixa::before{content:"";position:absolute;top:50%;width:10px;height:10px;border-radius:50%;background:var(--node);border:2px solid var(--wire);transform:translateY(-50%)}
 .no .caixa::after{right:-7px}.no .caixa::before{left:-7px}.no.trig .caixa::before{display:none}.no.fim .caixa::after{display:none}
 .no .rot{font:600 12.5px var(--f-ui);text-align:center;line-height:1.25}
@@ -83,7 +84,7 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
 .ndv-veu{position:fixed;inset:0;background:rgba(9,13,25,.45);z-index:40;display:grid;place-items:center;padding:16px}
 .ndv{width:min(900px,100%);max-height:min(640px,100%);background:var(--side);border-radius:14px;box-shadow:var(--shadow);display:grid;grid-template-rows:auto 1fr auto;overflow:hidden}
 .ndv-cab{display:flex;gap:10px;align-items:center;padding:14px 16px;border-bottom:1px solid var(--line)}
-.ndv-cab .ic{width:34px;height:34px;border-radius:9px;display:grid;place-items:center;color:#fff;background:var(--cor)}.ndv-cab .ic svg{width:18px;height:18px}
+.ndv-cab .ic{width:32px;height:32px;display:grid;place-items:center;flex:none;color:var(--cor)}.ndv-cab .ic svg{width:32px;height:32px}
 .ndv-cab h2{margin:0;font:600 16px var(--f-head);flex:1}
 .ndv-corpo{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);min-height:0;overflow:auto}
 @media (max-width:720px){.ndv-corpo{grid-template-columns:1fr}}
@@ -117,20 +118,20 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
 .modo:focus-visible,.tri button:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
 .est{font:600 11px var(--f-ui);padding:2px 8px;border-radius:999px;white-space:nowrap}
 .est.ligada{background:color-mix(in srgb,var(--send) 16%,transparent);color:var(--send)}
-.est.papel{background:color-mix(in srgb,var(--wait) 18%,transparent);color:var(--wait)}
+.est.papel{background:color-mix(in srgb,var(--aviso-forte) 22%,transparent);color:var(--aviso)}
 .est.desligada{background:color-mix(in srgb,var(--stop) 18%,transparent);color:var(--stop)}
 .est.sempre{background:color-mix(in srgb,var(--cond) 14%,transparent);color:var(--cond)}
 .auto{padding:22px;display:grid;gap:16px;align-content:start;max-width:860px}
 .auto-card{background:var(--node);border:1px solid var(--line);border-radius:14px;padding:18px;display:grid;gap:12px;box-shadow:var(--shadow)}
 .auto-card h2{margin:0;font:700 20px var(--f-head);display:flex;gap:10px;align-items:center}
-.auto-card h2 .ic{width:36px;height:36px;border-radius:10px;background:var(--brand);color:#fff;display:grid;place-items:center;flex:none}.auto-card h2 .ic svg{width:20px;height:20px}
+.auto-card h2 .ic{width:34px;height:34px;display:grid;place-items:center;flex:none}.auto-card h2 .ic svg{width:34px;height:34px}
 .auto-card p{margin:0;color:var(--ink-2);max-width:70ch}
-.cuidado{background:color-mix(in srgb,var(--wait) 12%,transparent);border-radius:10px;padding:10px 12px;font-size:13px;color:var(--ink)}
-.cuidado b{display:block;font:600 11px var(--f-ui);letter-spacing:.08em;text-transform:uppercase;color:var(--wait);margin-bottom:3px}
+.cuidado{background:color-mix(in srgb,var(--aviso-forte) 16%,transparent);border-radius:10px;padding:10px 12px;font-size:13px;color:var(--ink)}
+.cuidado b{display:block;font:600 11px var(--f-ui);letter-spacing:.08em;text-transform:uppercase;color:var(--aviso);margin-bottom:3px}
 .tri{display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;width:fit-content;max-width:100%;flex-wrap:wrap}
 .tri button{appearance:none;border:0;background:var(--node);color:var(--ink-2);font:600 13px var(--f-ui);padding:9px 14px;cursor:pointer}
 .tri button+button{border-left:1px solid var(--line)}.tri button:disabled{opacity:.6;cursor:not-allowed}
-.tri button[aria-pressed=true].ligada{background:var(--send);color:#fff}.tri button[aria-pressed=true].papel{background:var(--wait);color:#fff}.tri button[aria-pressed=true].desligada{background:var(--stop);color:#fff}
+.tri button[aria-pressed=true].ligada{background:var(--send);color:#fff}.tri button[aria-pressed=true].papel{background:var(--aviso-forte);color:#1c2024}.tri button[aria-pressed=true].desligada{background:var(--stop);color:#fff}
 .tri-ajuda{font-size:12.5px;color:var(--ink-2)}
 .acoes24{display:grid;gap:8px}.acoes24 h3{margin:0;font:600 11px var(--f-ui);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2)}
 .acao{display:grid;grid-template-columns:96px minmax(0,1fr);gap:10px;font-size:13px;padding:8px 10px;background:var(--app);border-radius:8px}
@@ -141,14 +142,19 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
 @media (prefers-reduced-motion:reduce){.sw::after,.no .caixa{transition:none}}
 </style></head><body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
-  <symbol id="i-bot" viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="12" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 4v4M9 13h.01M15 13h.01M9.5 17h5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="3.5" r="1.5" fill="currentColor"/></symbol>
-  <symbol id="i-trig" viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7z" fill="currentColor"/></symbol>
-  <symbol id="i-wait" viewBox="0 0 24 24"><circle cx="12" cy="13" r="8" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M12 9v4l3 2M9 2h6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
-  <symbol id="i-cond" viewBox="0 0 24 24"><path d="M6 4v6a4 4 0 0 0 4 4h8M18 14l-3-3M18 14l-3 3M6 20v-4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-  <symbol id="i-send" viewBox="0 0 24 24"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8.5 7.5c-.6 1.6.4 4 2.3 5.8 1.9 1.8 4.3 2.7 5.7 2 .5-.3.9-.9.7-1.4l-1.2-1.2c-.4-.3-1-.2-1.3.2l-.4.4c-1.3-.6-2.4-1.7-3-3l.4-.4c.4-.3.5-.9.2-1.3L10.7 7.4c-.5-.3-1.4 0-2.2.1z" fill="currentColor"/></symbol>
-  <symbol id="i-stop" viewBox="0 0 24 24"><path d="M5 4h11l3 3v13H5z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 10h8M8 14h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><rect width="24" height="24" rx="5.5" fill="#29A71A"/><g transform="translate(4.2 4.2) scale(.65)"><path fill="#fff" d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 0 1-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 0 1-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 0 1 2.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0 0 12.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 0 0 5.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 0 0-3.48-8.413Z"/></g></symbol>
+  <symbol id="i-trig" viewBox="0 0 24 24"><rect width="24" height="24" rx="5.5" fill="currentColor"/><g transform="translate(4.8 4.8) scale(.6)" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path fill="#fff" stroke="none" d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></g></symbol>
+  <symbol id="i-wait" viewBox="0 0 24 24"><rect width="24" height="24" rx="5.5" fill="currentColor"/><g transform="translate(4.8 4.8) scale(.6)" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/></g></symbol>
+  <symbol id="i-cond" viewBox="0 0 24 24"><rect width="24" height="24" rx="5.5" fill="currentColor"/><g transform="translate(4.8 4.8) scale(.6)" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path fill="#fff" stroke="none" d="M10 20a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341L21.74 4.67A1 1 0 0 0 21 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14z"/></g></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect width="24" height="24" rx="5.5" fill="currentColor"/><g transform="translate(4.8 4.8) scale(.6)" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8Z"/><path d="M15 3v4a2 2 0 0 0 2 2h4"/></g></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24"><rect width="24" height="24" rx="5.5" fill="currentColor"/><g transform="translate(4.8 4.8) scale(.6)" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path fill="#fff" stroke="none" d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/><g fill="currentColor" stroke="none"><circle cx="8" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="16" cy="12" r="1.3"/></g></g></symbol>
+  <symbol id="i-cal" viewBox="0 0 24 24"><rect width="24" height="24" rx="5.5" fill="currentColor"/><g transform="translate(4.8 4.8) scale(.6)" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/><path d="m9 16 2 2 4-4"/></g></symbol>
+  <symbol id="i-alvo" viewBox="0 0 24 24"><rect width="24" height="24" rx="5.5" fill="currentColor"/><g transform="translate(4.8 4.8) scale(.6)" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></g></symbol>
+  <symbol id="i-tag" viewBox="0 0 24 24"><rect width="24" height="24" rx="5.5" fill="currentColor"/><g transform="translate(4.8 4.8) scale(.6)" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z"/><circle cx="7.5" cy="7.5" r="1" fill="#fff"/></g></symbol>
+  <symbol id="i-sino" viewBox="0 0 24 24"><rect width="24" height="24" rx="5.5" fill="currentColor"/><g transform="translate(4.8 4.8) scale(.6)" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/></g></symbol>
+  <symbol id="i-fluxo" viewBox="0 0 24 24"><rect width="24" height="24" rx="5.5" fill="currentColor"/><g transform="translate(4.8 4.8) scale(.6)" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="8" x="3" y="3" rx="2"/><path d="M7 11v4a2 2 0 0 0 2 2h4"/><rect width="8" height="8" x="13" y="13" rx="2"/></g></symbol>
 </svg>
-<div class="topo"><span class="logo">D</span><span class="mig">Doutor Digital Atende ›</span><b>Robôs</b>
+<div class="topo"><img class="logo" src="__LOGO_DD__" alt="Doutor Digital" width="28" height="28"><span class="mig">Doutor Digital Atende ›</span><b>Robôs</b>
   <span class="un"><span id="papel" class="pill so-ver" hidden></span><select id="unidadeSel" hidden aria-label="Unidade"></select><span id="unidadeNome"></span></span></div>
 <div id="avisos"></div>
 <div class="app" id="corpo" hidden>
@@ -257,12 +263,12 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
     if (temCond) {
       mundo.appendChild(no('cond', 'i-cond', 'Só se', r.condicoes.join(' · '), xs.c, Y, function(){ painel('cond'); }));
       fio(svg, cx(xs.w) + W + 7, mid(Y), cx(xs.c) - 7, mid(Y));
-      mundo.appendChild(no('send fim', 'i-send', fimTipo, fimDet, xs.s, Y - 70, function(){ painel('send'); }, selo));
+      mundo.appendChild(no('send fim', r.interna ? 'i-stop' : 'i-send', fimTipo, fimDet, xs.s, Y - 70, function(){ painel('send'); }, selo));
       fio(svg, cx(xs.c) + W + 7, mid(Y), cx(xs.s) - 7, mid(Y - 70), '', 'sim');
       mundo.appendChild(no('stop fim', 'i-stop', 'Não envia', 'deixa nota para a equipe', xs.n, Y + 110, function(){ painel('stop'); }));
       fio(svg, cx(xs.c) + W + 7, mid(Y), cx(xs.n) - 7, mid(Y + 110), 'nao', 'não');
     } else {
-      mundo.appendChild(no('send fim', 'i-send', fimTipo, fimDet, xs.s, Y, function(){ painel('send'); }, selo));
+      mundo.appendChild(no('send fim', r.interna ? 'i-stop' : 'i-send', fimTipo, fimDet, xs.s, Y, function(){ painel('send'); }, selo));
       fio(svg, cx(xs.w) + W + 7, mid(Y), cx(xs.s) - 7, mid(Y));
     }
     var post = el('div', 'post'); post.style.left = '920px'; post.style.top = '40px';
@@ -416,6 +422,9 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
   // ── aba «Automações»: tudo que roda no CRM, por grupo; o estado da unidade; o seletor de 3 estados só para o administrador ──
   var ROT_ESTADO = { ligado: 'Ligada', seco: 'Só no papel', desligado: 'Desligada', sempre: 'Sempre ligada' };
   var CLS_ESTADO = { ligado: 'ligada', seco: 'papel', desligado: 'desligada', sempre: 'sempre' };
+  // um ícone (e uma cor) por grupo: o mesmo quadradinho dos blocos, com o símbolo do que a automação mexe
+  var ICONE_GRUPO = { sofia: ['i-chat', '#5b5bd6'], agenda: ['i-cal', '#2781f6'], mensagens: ['i-send', ''], rastreio: ['i-alvo', '#f76b15'], organizacao: ['i-tag', '#12a594'], avisos: ['i-sino', '#e5484d'], nativas: ['i-fluxo', '#8b8d98'] };
+  function icAuto(a){ var d = ICONE_GRUPO[a.grupo] || ['i-fluxo', '#8b8d98'], s = ic(d[0]); if (d[1]) s.style.color = d[1]; return s; }
   var ORDEM_GRUPOS = ['Sofia', 'Agenda', 'Mensagens', 'Rastreio', 'Organização', 'Avisos para a equipe', 'Regras nativas do Chatwoot'];
   function itensDeAuto(){
     if (!AUTO) return [];
@@ -434,7 +443,7 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
       var h = el('div', 'grupo'); h.appendChild(el('span', null, g)); h.appendChild(el('span', null, String(rs.length))); L.appendChild(h);
       rs.forEach(function(a){
         var it = el('div', 'item' + (a.estado === 'desligado' ? ' desl' : '')); it.tabIndex = 0; it.setAttribute('role', 'button'); it.setAttribute('aria-current', String(autoAtual && autoAtual.id === a.id));
-        var m = el('span', 'mini'); m.appendChild(ic('i-bot')); it.appendChild(m);
+        var m = el('span', 'mini'); m.appendChild(icAuto(a)); it.appendChild(m);
         var tx = el('div'); tx.appendChild(el('b', null, a.nome)); tx.appendChild(el('small', null, a.origem === 'catalogo' ? (a.vemDoAmbiente ? 'padrão do servidor' : 'escolhida na tela') : a.origem === 'nativa' ? 'nativa do Chatwoot' : 'somente leitura')); it.appendChild(tx);
         it.appendChild(el('span', 'est ' + CLS_ESTADO[a.estado], ROT_ESTADO[a.estado]));
         var abre = function(){ autoAtual = a; guardar('robos:auto', a.id); tudoAuto(); };
@@ -450,7 +459,7 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
     var a = autoAtual;
     if (!a) { tela.appendChild(el('div', 'vazio', 'Escolha uma automação na lista.')); return; }
     var box = el('div', 'auto'), card = el('div', 'auto-card');
-    var h = el('h2'); var i = el('span', 'ic'); i.appendChild(ic('i-bot')); h.appendChild(i); h.appendChild(document.createTextNode(a.nome)); h.appendChild(el('span', 'est ' + CLS_ESTADO[a.estado], ROT_ESTADO[a.estado])); card.appendChild(h);
+    var h = el('h2'); var i = el('span', 'ic'); i.appendChild(icAuto(a)); h.appendChild(i); h.appendChild(document.createTextNode(a.nome)); h.appendChild(el('span', 'est ' + CLS_ESTADO[a.estado], ROT_ESTADO[a.estado])); card.appendChild(h);
     card.appendChild(el('p', null, a.oQueFaz));
     if (a.cuidado) { var c = el('div', 'cuidado'); c.appendChild(el('b', null, 'Cuidado')); c.appendChild(document.createTextNode(a.cuidado)); card.appendChild(c); }
     if (a.semVolta) { var sv = el('div', 'cuidado'); sv.appendChild(el('b', null, 'Não tem volta')); sv.appendChild(document.createTextNode('Depois de ligada, o que ela faz não se desfaz. A tela pede a sua confirmação antes de ligar.')); card.appendChild(sv); }
@@ -570,5 +579,5 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
 
 /** A página. `origemChatwoot` = a origem do Chatwoot (só ela fala com a página por postMessage). */
 export function paginaDosRobos(origemChatwoot: string): string {
-  return PAGINA.split('__ORIGEM_CW__').join(JSON.stringify(origemChatwoot));
+  return PAGINA.split('__ORIGEM_CW__').join(JSON.stringify(origemChatwoot)).split('__LOGO_DD__').join(LOGO_DD_PNG);
 }
