@@ -21,9 +21,11 @@ export interface PortaDoRobo {
 }
 
 /** O token do robô, se o modo robô estiver ligado; senão null. Lido a cada chamada (mudou o ambiente, vale no próximo reinício). */
-export function tokenDoRobo(env: NodeJS.ProcessEnv = process.env): string | null {
+export function tokenDoRobo(env: NodeJS.ProcessEnv = process.env, sufixo?: string): string | null {
   if (String(env.CHATWOOT_SOFIA_COMO_BOT ?? '').trim() !== '1') return null;
-  const t = String(env.CHATWOOT_SOFIA_BOT_TOKEN ?? '').trim();
+  // conta PRÓPRIA de uma clínica: o robô dela tem o token dele (`CHATWOOT_SOFIA_BOT_TOKEN_<SUFIXO>`); o token do robô de Parauapebas
+  // NUNCA vale em outra conta (o robô é da conta onde foi criado)
+  const t = String((sufixo ? env[`CHATWOOT_SOFIA_BOT_TOKEN_${sufixo}`] : env.CHATWOOT_SOFIA_BOT_TOKEN) ?? '').trim();
   return /^[A-Za-z0-9_-]{10,200}$/.test(t) ? t : null;
 }
 

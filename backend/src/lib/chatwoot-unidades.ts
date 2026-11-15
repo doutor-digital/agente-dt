@@ -261,6 +261,11 @@ export function contasExplicitas(): number[] {
   return l;
 }
 
+/** As unidades que moram na conta própria `contaId` (a ordem da configuração). */
+export function unidadesDaConta(contaId: number): string[] {
+  return [...configs.values()].filter((c) => c.contaId === contaId).map((c) => c.slug);
+}
+
 /**
  * O usuário é o "📱 Celular da unidade" DESTA unidade? Cada clínica tem o seu usuário (na conta dela): o do celular de uma não é «celular» na
  * conversa de outra, mesmo que alguém configure o mesmo id nas duas por engano. Unidade desconhecida: nunca é celular.

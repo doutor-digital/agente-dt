@@ -12,7 +12,7 @@
  * (mensagem pública numa conversa, conversa nova com mensagem, campanha). `chatwoot_preparar` mostra e devolve um código preso a
  * quem pediu; `chatwoot_confirmar` executa. Cada apagamento confirmado avisa o João no Telegram.
  */
-import { configDaUnidade, contaDaUnidade, contasExplicitas, unidadeDaCaixa } from '../lib/chatwoot-unidades.js';
+import { configDaUnidade, contaDaUnidade, contasExplicitas, unidadeDaCaixa, unidadesDaConta } from '../lib/chatwoot-unidades.js';
 import { randomBytes } from 'node:crypto';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
@@ -119,6 +119,16 @@ export function contextoDaContaChatwoot(ctx: ContextoChatwoot, conta: ContaChatw
 export function contextoDaUnidade(ctx: ContextoChatwoot, slug: string, e: NodeJS.ProcessEnv = process.env): ContextoChatwoot | null {
   const conta = contaChatwootDaUnidade(slug, e);
   return conta ? contextoDaContaChatwoot(ctx, conta) : null;
+}
+
+/**
+ * O contexto de uma CONTA pelo id (o do evento que chegou): a do ambiente devolve o próprio `ctx`; uma conta própria usa o token da primeira
+ * unidade que mora nela. `null` = nenhuma unidade configurada tem essa conta, ou falta o token: RECUSAR.
+ */
+export function contextoDaContaPorId(ctx: ContextoChatwoot, contaId: number, e: NodeJS.ProcessEnv = process.env): ContextoChatwoot | null {
+  if (ctx.conta && ctx.conta.conta === contaId && !contasExplicitas().includes(contaId)) return ctx;
+  const slug = unidadesDaConta(contaId)[0];
+  return slug ? contextoDaUnidade(ctx, slug, e) : null;
 }
 
 /** O contexto da conta da CAIXA (pela unidade dona), ou `null` para caixa que nenhuma unidade configurada tem (RECUSAR). */

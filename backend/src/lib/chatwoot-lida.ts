@@ -15,7 +15,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { Request, Response } from 'express';
 import { logger } from './logger.js';
 import { INSTANCIA_CAIXA } from './chatwoot-unidades.js';
-import { chamar, contaChatwootDoAmbiente, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
+import { chamar, contaChatwootDoAmbiente, contextoDaCaixa, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 
 /** instância do Evolution → caixa do Chatwoot */
 export { INSTANCIA_CAIXA };
@@ -164,7 +164,27 @@ export async function processarLeitura(aviso: AvisoDeLeitura, porta: PortaDaLida
 
 // ── a rota ─────────────────────────────────────────────────────────────────────────────────────────
 
-let estado: { porta: PortaDaLida; mem: MemoriaDaLida } | null = null;
+/** A memória é uma só (as chaves já levam a caixa, que é única na instalação); a PORTA é uma por conta do Chatwoot. */
+const memoriaDaLida = novaMemoriaDaLida();
+const portasDaLida = new Map<number, PortaDaLida>();
+
+/** Só para os testes. */
+export const esquecerPortasDaLida = (): void => portasDaLida.clear();
+
+/**
+ * A porta do Chatwoot da CONTA da caixa. null = caixa de unidade sem conta válida (ou Chatwoot não configurado): RECUSA, nunca a conta 1.
+ * Parauapebas: o contexto do ambiente, como sempre.
+ */
+export function portaDaLidaDaCaixa(caixa: number, e: NodeJS.ProcessEnv = process.env): PortaDaLida | null {
+  const base = contaChatwootDoAmbiente(e);
+  if (!base) return null;
+  const ctx = contextoDaCaixa(criarContextoChatwoot(base), caixa, e);
+  if (!ctx) return null;
+  const conta = ctx.conta!.conta;
+  let porta = portasDaLida.get(conta);
+  if (!porta) portasDaLida.set(conta, (porta = portaDoChatwoot(ctx)));
+  return porta;
+}
 
 /** POST /api/public/evolution/lida?k=<chave> — webhook `messages.update` do Evolution. Responde na hora; o trabalho segue depois. */
 export function lidaEvolutionHandler(req: Request, res: Response): void {
@@ -176,13 +196,14 @@ export function lidaEvolutionHandler(req: Request, res: Response): void {
   res.json({ ok: true });
   const aviso = avisoDaLeitura(req.body);
   if (!aviso) return;
-  if (!estado) {
-    const conta = contaChatwootDoAmbiente();
-    if (!conta) return;
-    estado = { porta: portaDoChatwoot(criarContextoChatwoot(conta)), mem: novaMemoriaDaLida() };
+  const caixa = INSTANCIA_CAIXA[aviso.instancia];
+  if (!caixa) return; // instância que nenhuma unidade tem: ignorada, como sempre
+  const porta = portaDaLidaDaCaixa(caixa);
+  if (!porta) {
+    logger.warn({ instancia: aviso.instancia, caixa }, 'evolution-lida: a caixa não tem conta do Chatwoot válida — ignorado, sem chamar o Chatwoot');
+    return;
   }
-  const { porta, mem } = estado;
-  processarLeitura(aviso, porta, mem, Date.now())
+  processarLeitura(aviso, porta, memoriaDaLida, Date.now())
     .then((r) => {
       if (r === 'marcada' || r === 'sem-conversa') logger.debug({ instancia: aviso.instancia, final: aviso.telefone.slice(-4), r }, 'evolution-lida');
     })
