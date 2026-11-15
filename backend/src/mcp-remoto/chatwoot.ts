@@ -275,23 +275,23 @@ export function preparar(ctx: ContextoChatwoot, usuario: string, a: { metodo: Me
   return {
     codigo,
     validoPor: `${VALIDADE_MS / 60_000} min`,
-    vaiFazer: `${a.metodo} ${caminho || '(conta)'} — ${motivo} (${descreverConta(ctx)})`,
+    vaiFazer: `${a.metodo} ${caminho || '(conta)'} — ${motivo}${descreverConta(ctx)}`,
     dados: { ...(a.corpo ?? {}), ...(a.query ?? {}) },
     proximoPasso: 'mostre isto à pessoa; só com o ok dela chame chatwoot_confirmar com o código',
   };
 }
 
-export async function confirmar(ctx: ContextoChatwoot, usuario: string, codigoBruto: string): Promise<unknown> {
+export async function confirmar(ctx: ContextoChatwoot, usuario: string, codigoBruto: string, comEscolhaDeConta = false): Promise<unknown> {
   const codigo = codigoBruto.trim().toUpperCase();
   const p = ctx.pendentes.get(codigo);
-  if (!p) throw new ErroDeEntrada('código desconhecido ou já usado nesta conta — se foi preparado em outra conta, passe a MESMA "conta" do chatwoot_preparar; senão, prepare de novo');
+  if (!p) throw new ErroDeEntrada(comEscolhaDeConta ? 'código desconhecido ou já usado nesta conta — se foi preparado em outra conta, passe a MESMA "conta" do chatwoot_preparar; senão, prepare de novo' : 'código desconhecido ou já usado — prepare de novo');
   if (p.usuario !== usuario) throw new ErroDeEntrada('este código foi gerado por outro usuário');
   ctx.pendentes.delete(codigo);
   if (ctx.agora() - p.criadoEm > VALIDADE_MS) throw new ErroDeEntrada(`o código venceu (${VALIDADE_MS / 60_000} min) — prepare de novo`);
   const r = await chamar(ctx, p.acao.metodo, p.acao.caminho, { corpo: p.acao.corpo, query: p.acao.query });
   if (p.acao.metodo === 'DELETE') {
     try {
-      await ctx.avisar(`🗑️ Chatwoot (${descreverConta(ctx)}): ${usuario} apagou ${p.acao.caminho} pelo conector do claude.ai`);
+      await ctx.avisar(`🗑️ Chatwoot${descreverConta(ctx)}: ${usuario} apagou ${p.acao.caminho} pelo conector do claude.ai`);
     } catch {
       // aviso que falha não desfaz nem esconde o que foi feito
     }
@@ -309,14 +309,17 @@ const query = z.record(z.string(), z.string()).optional();
 /** Por que esta pessoa não pode escolher a conta: o conector atende a conta do ambiente (Parauapebas) e só quem a Doutor Digital autorizou escolhe outra. */
 export const RECUSA_DE_CONTA = 'esta pessoa não está autorizada a escolher outra conta do Chatwoot: o conector atende só a conta padrão (a de Parauapebas). Se a autorização é recente ou o servidor acabou de reiniciar, reconecte o conector e tente de novo';
 
-/** As unidades que moram na conta `contaId` (a do ambiente inclui as sem conta própria), em ordem alfabética: para dizer ONDE a ação foi feita. */
-/** «conta 2 · clinica-x» — onde a ação foi feita, para o resumo do dois passos e o aviso do Telegram. */
+/**
+ * « (conta 2 · clinica-x)» — onde a ação foi feita, para o resumo do dois passos e o aviso do Telegram. Na conta do ambiente (Parauapebas) é VAZIO:
+ * os textos de quem só conhece essa conta ficam exatamente como eram.
+ */
 export function descreverConta(ctx: ContextoChatwoot, e: NodeJS.ProcessEnv = process.env): string {
-  if (!ctx.conta) return 'conta ?';
+  if (!ctx.conta || ehContaDoAmbiente(ctx.conta.conta, e)) return '';
   const un = unidadesDaContaDoChatwoot(ctx.conta.conta, e);
-  return `conta ${ctx.conta.conta} · ${un.length > 4 ? `${un.slice(0, 4).join(', ')} e mais ${un.length - 4}` : un.join(', ') || 'sem unidade'}`;
+  return ` (conta ${ctx.conta.conta} · ${un.length > 4 ? `${un.slice(0, 4).join(', ')} e mais ${un.length - 4}` : un.join(', ') || 'sem unidade'})`;
 }
 
+/** As unidades que moram na conta `contaId` (a do ambiente inclui as sem conta própria), em ordem alfabética: para dizer ONDE a ação foi feita. */
 export function unidadesDaContaDoChatwoot(contaId: number, e: NodeJS.ProcessEnv = process.env): string[] {
   const doAmbiente = contaChatwootDoAmbiente(e)?.conta === contaId;
   return [...new Set([...(doAmbiente ? unidadesSemConta() : []), ...unidadesDaConta(contaId)])].sort();
@@ -346,25 +349,38 @@ export function contasParaListar(ctx: ContextoChatwoot, e: NodeJS.ProcessEnv = p
   });
 }
 
-export function registrarFerramentasChatwoot(server: McpServer, ctx: ContextoChatwoot, usuario: string, auditar: Auditar, escolheConta = false): void {
+/**
+ * `escolheConta`: quem pode escolher a conta (MCP_CHATWOOT_CONTAS_EMAILS). Uma FUNÇÃO é consultada a CADA chamada (tirar o e-mail da lista corta o
+ * acesso na hora); um valor fixo serve ao teste. O parâmetro `conta`, `chatwoot_contas` e os textos «use a mesma conta» só EXISTEM para quem pode
+ * escolher no momento em que a sessão abre — para os demais o conector fica EXATAMENTE como era.
+ */
+export function registrarFerramentasChatwoot(server: McpServer, ctx: ContextoChatwoot, usuario: string, auditar: Auditar, escolheConta: boolean | (() => boolean) = false): void {
   if (!ctx.conta) return;
-  const contaArg = z.number().int().positive().optional().describe('Id da conta do Chatwoot. Vazio = a conta padrão (Parauapebas). Outra conta só para quem a Doutor Digital autorizou.');
+  const pode = (): boolean => (typeof escolheConta === 'function' ? escolheConta() : escolheConta);
+  const comConta = pode();
+  const contaArg = z.number().int().positive().optional().describe('Id da conta do Chatwoot (veja chatwoot_contas). Vazio = a conta padrão (Parauapebas).');
   const reg = <S extends z.ZodRawShape>(id: string, titulo: string, descricao: string, schema: S, anot: object, fn: (a: z.objectOutputType<S, z.ZodTypeAny>, c: ContextoChatwoot) => unknown) =>
     server.registerTool(
       id,
-      { title: titulo, description: descricao, inputSchema: { ...schema, conta: contaArg }, annotations: anot },
+      { title: titulo, description: descricao, inputSchema: comConta ? { ...schema, conta: contaArg } : schema, annotations: anot },
       ((a: any) =>
         executar(id, a, auditar, () => {
-          const c = contextoDaChamada(ctx, a.conta, escolheConta);
+          // a permissão é conferida AGORA, não quando a sessão abriu
+          const c = contextoDaChamada(ctx, a?.conta, pode());
           return fn(a, c);
         })) as any,
     );
+  const outraConta = (texto: string): string => (comConta ? texto : '');
 
-  if (escolheConta) {
+  if (comConta) {
     server.registerTool(
       'chatwoot_contas',
       { title: 'Chatwoot: contas', description: 'As contas do Chatwoot (uma por clínica) e as unidades de cada uma. Use o id em "conta" nas outras ferramentas chatwoot_*; sem "conta", vale a padrão (Parauapebas).', inputSchema: {}, annotations: ler },
-      (() => executar('chatwoot_contas', {}, auditar, () => contasParaListar(ctx))) as any,
+      (() =>
+        executar('chatwoot_contas', {}, auditar, () => {
+          if (!pode()) throw new ErroDeEntrada(RECUSA_DE_CONTA);
+          return contasParaListar(ctx);
+        })) as any,
     );
   }
 
@@ -391,7 +407,7 @@ export function registrarFerramentasChatwoot(server: McpServer, ctx: ContextoCha
   reg(
     'chatwoot_mensagens',
     'Chatwoot: mensagens de uma conversa',
-    'Mensagens de UMA conversa (id da conversa em chatwoot_conversas). O id da conversa é por conta: use a mesma "conta" de chatwoot_conversas.',
+    'Mensagens de UMA conversa (id da conversa em chatwoot_conversas).' + outraConta(' O id da conversa é por conta: use a mesma "conta" de chatwoot_conversas.'),
     { conversaId: z.number().int().positive() },
     ler,
     (a, c) => chamar(c, 'GET', `conversations/${a.conversaId}/messages`),
@@ -428,8 +444,8 @@ export function registrarFerramentasChatwoot(server: McpServer, ctx: ContextoCha
     'chatwoot_preparar',
     'Chatwoot: preparar ação sensível',
     'PASSO 1 de 2 para APAGAR algo ou MANDAR mensagem a cliente no Chatwoot: NÃO executa nada — devolve o resumo e um código. ' +
-      'Mostre o resumo à pessoa e só chame chatwoot_confirmar se ela aprovar. Mesmo formato de chatwoot_api (metodo, caminho relativo à conta, corpo, query). ' +
-      'Na confirmação, use a MESMA "conta".',
+      'Mostre o resumo à pessoa e só chame chatwoot_confirmar se ela aprovar. Mesmo formato de chatwoot_api (metodo, caminho relativo à conta, corpo, query).' +
+      outraConta(' Na confirmação, use a MESMA "conta".'),
     { metodo, caminho: z.string(), corpo, query },
     { readOnlyHint: true, openWorldHint: false },
     (a, c) => preparar(c, usuario, a),
@@ -437,9 +453,9 @@ export function registrarFerramentasChatwoot(server: McpServer, ctx: ContextoCha
   reg(
     'chatwoot_confirmar',
     'Chatwoot: confirmar ação sensível',
-    'PASSO 2 de 2: executa o que chatwoot_preparar montou. Só chame com o ok explícito da pessoa. O código vale 10 minutos e uma vez, e só na conta em que foi preparado (passe a mesma "conta").',
+    'PASSO 2 de 2: executa o que chatwoot_preparar montou. Só chame com o ok explícito da pessoa. O código vale 10 minutos e uma vez.' + outraConta(' Vale só na conta em que foi preparado (passe a mesma "conta").'),
     { codigo: z.string().min(6).max(16) },
     { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
-    (a, c) => confirmar(c, usuario, a.codigo),
+    (a, c) => confirmar(c, usuario, a.codigo, comConta),
   );
 }
