@@ -12,7 +12,7 @@
  * (mensagem pública numa conversa, conversa nova com mensagem, campanha). `chatwoot_preparar` mostra e devolve um código preso a
  * quem pediu; `chatwoot_confirmar` executa. Cada apagamento confirmado avisa o João no Telegram.
  */
-import { configDaUnidade, contaDaUnidade, contasExplicitas, unidadeDaCaixa, unidadesDaConta } from '../lib/chatwoot-unidades.js';
+import { configDaUnidade, contaDaUnidade, contasExplicitas, unidadeDaCaixa, unidadesDaConta, unidadesSemConta } from '../lib/chatwoot-unidades.js';
 import { randomBytes } from 'node:crypto';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
@@ -275,23 +275,30 @@ export function preparar(ctx: ContextoChatwoot, usuario: string, a: { metodo: Me
   return {
     codigo,
     validoPor: `${VALIDADE_MS / 60_000} min`,
-    vaiFazer: `${a.metodo} ${caminho || '(conta)'} — ${motivo}`,
+    vaiFazer: `${a.metodo} ${caminho || '(conta)'} — ${motivo}${descreverConta(ctx)}`,
     dados: { ...(a.corpo ?? {}), ...(a.query ?? {}) },
     proximoPasso: 'mostre isto à pessoa; só com o ok dela chame chatwoot_confirmar com o código',
   };
 }
 
-export async function confirmar(ctx: ContextoChatwoot, usuario: string, codigoBruto: string): Promise<unknown> {
+export async function confirmar(ctx: ContextoChatwoot, usuario: string, codigoBruto: string, comEscolhaDeConta = false): Promise<unknown> {
   const codigo = codigoBruto.trim().toUpperCase();
   const p = ctx.pendentes.get(codigo);
-  if (!p) throw new ErroDeEntrada('código desconhecido ou já usado — prepare de novo');
+  if (!p) throw new ErroDeEntrada(comEscolhaDeConta ? 'código desconhecido ou já usado nesta conta — se foi preparado em outra conta, passe a MESMA "conta" do chatwoot_preparar; senão, prepare de novo' : 'código desconhecido ou já usado — prepare de novo');
   if (p.usuario !== usuario) throw new ErroDeEntrada('este código foi gerado por outro usuário');
   ctx.pendentes.delete(codigo);
   if (ctx.agora() - p.criadoEm > VALIDADE_MS) throw new ErroDeEntrada(`o código venceu (${VALIDADE_MS / 60_000} min) — prepare de novo`);
   const r = await chamar(ctx, p.acao.metodo, p.acao.caminho, { corpo: p.acao.corpo, query: p.acao.query });
   if (p.acao.metodo === 'DELETE') {
     try {
-      await ctx.avisar(`🗑️ Chatwoot: ${usuario} apagou ${p.acao.caminho} pelo conector do claude.ai`);
+      await ctx.avisar(`🗑️ Chatwoot${descreverConta(ctx)}: ${usuario} apagou ${p.acao.caminho} pelo conector do claude.ai`);
+    } catch {
+      // aviso que falha não desfaz nem esconde o que foi feito
+    }
+  } else if (descreverConta(ctx) && p.acao.motivo !== 'confirmação pedida') {
+    // envio a paciente (mensagem, conversa com mensagem, campanha — o que `precisaConfirmar` reconhece; PATCH de etiqueta e afins não) numa clínica que NÃO é a de Parauapebas: o João fica sabendo, como no apagar
+    try {
+      await ctx.avisar(`✉️ Chatwoot${descreverConta(ctx)}: ${usuario} mandou pelo conector do claude.ai (${p.acao.motivo}): ${p.acao.metodo} ${p.acao.caminho}`);
     } catch {
       // aviso que falha não desfaz nem esconde o que foi feito
     }
@@ -306,12 +313,94 @@ const metodo = z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
 const corpo = z.record(z.string(), z.unknown()).optional();
 const query = z.record(z.string(), z.string()).optional();
 
-export function registrarFerramentasChatwoot(server: McpServer, ctx: ContextoChatwoot, usuario: string, auditar: Auditar): void {
-  if (!ctx.conta) return;
-  const reg = <S extends z.ZodRawShape>(id: string, titulo: string, descricao: string, schema: S, anot: object, fn: (a: z.objectOutputType<S, z.ZodTypeAny>) => unknown) =>
-    server.registerTool(id, { title: titulo, description: descricao, inputSchema: schema, annotations: anot }, ((a: any) => executar(id, a, auditar, () => fn(a))) as any);
+/** Por que esta pessoa não pode escolher a conta: o conector atende a conta do ambiente (Parauapebas) e só quem a Doutor Digital autorizou escolhe outra. */
+export const RECUSA_DE_CONTA = 'esta pessoa não está autorizada a escolher outra conta do Chatwoot: o conector atende só a conta padrão (a de Parauapebas). Se a autorização é recente ou o servidor acabou de reiniciar, reconecte o conector e tente de novo';
 
-  reg('chatwoot_conta', 'Chatwoot: a conta', 'Dados da conta do Chatwoot (atendimento.doutordigitalconsultoria.com): nome, idioma, recursos ligados.', {}, ler, () => chamar(ctx, 'GET', ''));
+/**
+ * « (conta 2 · clinica-x)» — onde a ação foi feita, para o resumo do dois passos e o aviso do Telegram. Na conta do ambiente (Parauapebas) é VAZIO:
+ * os textos de quem só conhece essa conta ficam exatamente como eram.
+ */
+export function descreverConta(ctx: ContextoChatwoot, e: NodeJS.ProcessEnv = process.env): string {
+  // só conta PRÓPRIA de clínica (alguma unidade aponta para ela) é descrita; a de Parauapebas fica vazia, como sempre foi
+  if (!ctx.conta || ehContaDoAmbiente(ctx.conta.conta, e) || !contasExplicitas().includes(ctx.conta.conta)) return '';
+  const un = unidadesDaContaDoChatwoot(ctx.conta.conta, e);
+  return ` (conta ${ctx.conta.conta} · ${un.length > 4 ? `${un.slice(0, 4).join(', ')} e mais ${un.length - 4}` : un.join(', ') || 'sem unidade'})`;
+}
+
+/** As unidades que moram na conta `contaId` (a do ambiente inclui as sem conta própria), em ordem alfabética: para dizer ONDE a ação foi feita. */
+export function unidadesDaContaDoChatwoot(contaId: number, e: NodeJS.ProcessEnv = process.env): string[] {
+  const doAmbiente = contaChatwootDoAmbiente(e)?.conta === contaId;
+  return [...new Set([...(doAmbiente ? unidadesSemConta() : []), ...unidadesDaConta(contaId)])].sort();
+}
+
+/**
+ * A conta pedida na chamada → o contexto dela, ou erro. Sem `conta` (ou a conta do ambiente) é SEMPRE o contexto de sempre. Outra conta só para
+ * quem `escolheConta` (a lista MCP_CHATWOOT_CONTAS_EMAILS); conta que nenhuma unidade usa é recusada. Nunca cai na conta 1 por engano.
+ */
+export function contextoDaChamada(ctx: ContextoChatwoot, conta: number | undefined, escolheConta: boolean, e: NodeJS.ProcessEnv = process.env): ContextoChatwoot {
+  // a conta do ambiente pedida pelo número é a mesma coisa que não pedir (o próprio contexto, as mesmas confirmações pendentes)
+  if (conta === undefined || ctx.conta?.conta === conta) return ctx;
+  if (!escolheConta) throw new ErroDeEntrada(RECUSA_DE_CONTA);
+  const dona = donaDaConta(ctx, conta, e);
+  if (!dona?.ctx.conta) throw new ErroDeEntrada(`conta ${conta} desconhecida: nenhuma unidade usa essa conta do Chatwoot (veja chatwoot_contas)`);
+  // sem o token PRÓPRIO de nenhuma clínica da conta o servidor cairia no global (o de Parauapebas): pelo conector isso nunca vale — um token que vaza abre UMA clínica
+  if (!dona.propria) throw new ErroDeEntrada(`a conta ${conta} ainda não tem token próprio no servidor (CHATWOOT_API_TOKEN_<SUFIXO> de uma clínica dela): peça ao João para configurar`);
+  return dona.ctx;
+}
+
+/** As contas do Chatwoot que o servidor conhece e as unidades de cada uma (só para quem pode escolher a conta). */
+export function contasParaListar(ctx: ContextoChatwoot, e: NodeJS.ProcessEnv = process.env): Array<{ conta: number; padrao: boolean; usavel: boolean; unidades: string[] }> {
+  return contasDoChatwoot(e).map((conta) => {
+    const dona = donaDaConta(ctx, conta, e);
+    // `usavel`: a conta tem credencial só dela neste servidor (o conector recusa as que não têm)
+    return { conta, padrao: contaChatwootDoAmbiente(e)?.conta === conta, usavel: !!dona?.propria, unidades: unidadesDaContaDoChatwoot(conta, e) };
+  });
+}
+
+/**
+ * `escolheConta`: quem pode escolher a conta (MCP_CHATWOOT_CONTAS_EMAILS). Uma FUNÇÃO é consultada a CADA chamada (tirar o e-mail da lista corta o
+ * acesso na hora); um valor fixo serve ao teste. O parâmetro `conta`, `chatwoot_contas` e os textos «use a mesma conta» só EXISTEM para quem pode
+ * escolher no momento em que a sessão abre — para os demais o conector fica EXATAMENTE como era.
+ *
+ * SCHEMA ESTRITO (provado em `chatwoot-contas.test.ts › produção`): o SDK (1.30.1) APAGA em silêncio o campo que o schema não conhece, e a chamada cairia em
+ * Parauapebas sem erro — foi o furo apontado na revisão (a mensagem iria para OUTRO paciente). Em produção cada pedido monta um servidor novo e o claude.ai manda o
+ * schema que guardou, então quem perdeu a permissão, ou chegou antes de a lista carregar, ainda manda `conta`. Por isso o schema é `.strict()` (no JSON só ganha
+ * `additionalProperties: false`): `conta` sem permissão é ERRO claro e nenhuma chamada sai. A recusa de `contextoDaChamada` é a segunda barreira (função chamada direto,
+ * ou quem TEM o parâmetro e perdeu a permissão no meio do pedido).
+ */
+export function registrarFerramentasChatwoot(server: McpServer, ctx: ContextoChatwoot, usuario: string, auditar: Auditar, escolheConta: boolean | (() => boolean) = false): void {
+  if (!ctx.conta) return;
+  const pode = (): boolean => (typeof escolheConta === 'function' ? escolheConta() : escolheConta);
+  const comConta = pode();
+  const contaArg = z.number().int().positive().optional().describe('Id da conta do Chatwoot (veja chatwoot_contas). Vazio = a conta padrão (Parauapebas).');
+  const reg = <S extends z.ZodRawShape>(id: string, titulo: string, descricao: string, schema: S, anot: object, fn: (a: z.objectOutputType<S, z.ZodTypeAny>, c: ContextoChatwoot) => unknown) =>
+    server.registerTool(
+      id,
+      // ESTRITO: campo desconhecido dá ERRO (nunca é apagado em silêncio). O servidor MCP é montado de novo a cada pedido e o claude.ai manda o schema que guardou:
+      // quem perdeu a permissão (ou chegou antes de a lista carregar) e ainda manda `conta: 2` recebe um erro claro — não uma chamada que cai em Parauapebas.
+      { title: titulo, description: descricao, inputSchema: z.object(comConta ? { ...schema, conta: contaArg } : schema).strict(), annotations: anot },
+      ((a: any) =>
+        executar(id, a, auditar, () => {
+          // a permissão é conferida AGORA, não quando a sessão abriu
+          const c = contextoDaChamada(ctx, a?.conta, pode());
+          return fn(a, c);
+        })) as any,
+    );
+  const outraConta = (texto: string): string => (comConta ? texto : '');
+
+  if (comConta) {
+    server.registerTool(
+      'chatwoot_contas',
+      { title: 'Chatwoot: contas', description: 'As contas do Chatwoot (uma por clínica) e as unidades de cada uma. Use o id em "conta" nas outras ferramentas chatwoot_*; sem "conta", vale a padrão (Parauapebas).', inputSchema: z.object({}).strict(), annotations: ler },
+      (() =>
+        executar('chatwoot_contas', {}, auditar, () => {
+          if (!pode()) throw new ErroDeEntrada(RECUSA_DE_CONTA);
+          return contasParaListar(ctx);
+        })) as any,
+    );
+  }
+
+  reg('chatwoot_conta', 'Chatwoot: a conta', 'Dados da conta do Chatwoot (atendimento.doutordigitalconsultoria.com): nome, idioma, recursos ligados.', {}, ler, (_a, c) => chamar(c, 'GET', ''));
   reg(
     'chatwoot_conversas',
     'Chatwoot: conversas',
@@ -324,20 +413,20 @@ export function registrarFerramentasChatwoot(server: McpServer, ctx: ContextoCha
       pagina,
     },
     ler,
-    (a) => {
+    (a, c) => {
       const q: Record<string, string> = { status: a.status ?? 'open', assignee_type: a.assigneeType ?? 'all', page: String(a.pagina ?? 1) };
       if (a.inboxId) q.inbox_id = String(a.inboxId);
       if (a.etiqueta) q['labels[]'] = a.etiqueta;
-      return chamar(ctx, 'GET', 'conversations', { query: q });
+      return chamar(c, 'GET', 'conversations', { query: q });
     },
   );
   reg(
     'chatwoot_mensagens',
     'Chatwoot: mensagens de uma conversa',
-    'Mensagens de UMA conversa (id da conversa em chatwoot_conversas).',
+    'Mensagens de UMA conversa (id da conversa em chatwoot_conversas).' + outraConta(' O id da conversa é por conta: use a mesma "conta" de chatwoot_conversas.'),
     { conversaId: z.number().int().positive() },
     ler,
-    (a) => chamar(ctx, 'GET', `conversations/${a.conversaId}/messages`),
+    (a, c) => chamar(c, 'GET', `conversations/${a.conversaId}/messages`),
   );
   reg(
     'chatwoot_contatos',
@@ -345,15 +434,15 @@ export function registrarFerramentasChatwoot(server: McpServer, ctx: ContextoCha
     'Contatos. Com "busca", procura por nome, e-mail ou telefone; sem, lista por página.',
     { busca: z.string().optional(), pagina },
     ler,
-    (a) =>
+    (a, c) =>
       a.busca?.trim()
-        ? chamar(ctx, 'GET', 'contacts/search', { query: { q: a.busca.trim(), page: String(a.pagina ?? 1) } })
-        : chamar(ctx, 'GET', 'contacts', { query: { page: String(a.pagina ?? 1) } }),
+        ? chamar(c, 'GET', 'contacts/search', { query: { q: a.busca.trim(), page: String(a.pagina ?? 1) } })
+        : chamar(c, 'GET', 'contacts', { query: { page: String(a.pagina ?? 1) } }),
   );
-  reg('chatwoot_caixas', 'Chatwoot: caixas de entrada', 'Caixas de entrada (WhatsApp, site, e-mail, API) com id e canal.', {}, ler, () => chamar(ctx, 'GET', 'inboxes'));
-  reg('chatwoot_etiquetas', 'Chatwoot: etiquetas', 'Etiquetas da conta.', {}, ler, () => chamar(ctx, 'GET', 'labels'));
-  reg('chatwoot_agentes', 'Chatwoot: agentes', 'Agentes (pessoas da equipe) com papel e disponibilidade.', {}, ler, () => chamar(ctx, 'GET', 'agents'));
-  reg('chatwoot_equipes', 'Chatwoot: equipes', 'Equipes da conta.', {}, ler, () => chamar(ctx, 'GET', 'teams'));
+  reg('chatwoot_caixas', 'Chatwoot: caixas de entrada', 'Caixas de entrada (WhatsApp, site, e-mail, API) com id e canal.', {}, ler, (_a, c) => chamar(c, 'GET', 'inboxes'));
+  reg('chatwoot_etiquetas', 'Chatwoot: etiquetas', 'Etiquetas da conta.', {}, ler, (_a, c) => chamar(c, 'GET', 'labels'));
+  reg('chatwoot_agentes', 'Chatwoot: agentes', 'Agentes (pessoas da equipe) com papel e disponibilidade.', {}, ler, (_a, c) => chamar(c, 'GET', 'agents'));
+  reg('chatwoot_equipes', 'Chatwoot: equipes', 'Equipes da conta.', {}, ler, (_a, c) => chamar(c, 'GET', 'teams'));
   reg(
     'chatwoot_api',
     'Chatwoot: qualquer rota da conta',
@@ -365,23 +454,24 @@ export function registrarFerramentasChatwoot(server: McpServer, ctx: ContextoCha
       'é recusado aqui: use chatwoot_preparar.',
     { metodo, caminho: z.string(), corpo, query },
     escrever,
-    (a) => chamarDireto(ctx, a.metodo, a.caminho, a.corpo, a.query),
+    (a, c) => chamarDireto(c, a.metodo, a.caminho, a.corpo, a.query),
   );
   reg(
     'chatwoot_preparar',
     'Chatwoot: preparar ação sensível',
     'PASSO 1 de 2 para APAGAR algo ou MANDAR mensagem a cliente no Chatwoot: NÃO executa nada — devolve o resumo e um código. ' +
-      'Mostre o resumo à pessoa e só chame chatwoot_confirmar se ela aprovar. Mesmo formato de chatwoot_api (metodo, caminho relativo à conta, corpo, query).',
+      'Mostre o resumo à pessoa e só chame chatwoot_confirmar se ela aprovar. Mesmo formato de chatwoot_api (metodo, caminho relativo à conta, corpo, query).' +
+      outraConta(' Na confirmação, use a MESMA "conta".'),
     { metodo, caminho: z.string(), corpo, query },
     { readOnlyHint: true, openWorldHint: false },
-    (a) => preparar(ctx, usuario, a),
+    (a, c) => preparar(c, usuario, a),
   );
   reg(
     'chatwoot_confirmar',
     'Chatwoot: confirmar ação sensível',
-    'PASSO 2 de 2: executa o que chatwoot_preparar montou. Só chame com o ok explícito da pessoa. O código vale 10 minutos e uma vez.',
+    'PASSO 2 de 2: executa o que chatwoot_preparar montou. Só chame com o ok explícito da pessoa. O código vale 10 minutos e uma vez.' + outraConta(' Vale só na conta em que foi preparado (passe a mesma "conta").'),
     { codigo: z.string().min(6).max(16) },
     { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
-    (a) => confirmar(ctx, usuario, a.codigo),
+    (a, c) => confirmar(c, usuario, a.codigo, comConta),
   );
 }

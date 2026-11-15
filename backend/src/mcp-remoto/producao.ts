@@ -11,6 +11,7 @@ import type { User } from '@prisma/client';
 import { z } from 'zod';
 import { env } from '../lib/env.js';
 import { logger } from '../lib/logger.js';
+import { esperaDaPrimeiraCarga, manterAtualizado as manterAtualizadoBase } from './manter-atualizado.js';
 import { prisma } from '../lib/prisma.js';
 import { login } from '../services/auth.service.js';
 import { chaveTelefone, normalizarNome, panoramaDaUnidade, parecencaDeNome, type Panorama } from '../services/cerebro.service.js';
@@ -335,6 +336,15 @@ async function operadoresDoChatwoot(): Promise<Set<string>> {
 }
 
 /**
+ * Quem pode ESCOLHER a conta do Chatwoot (parâmetro `conta` das chatwoot_*): SÓ os e-mails de MCP_CHATWOOT_CONTAS_EMAILS (usuário ativo do console).
+ * É à parte da lista de quem opera o Chatwoot (que inclui toda a escrita do Kommo): quem não está aqui fica na conta padrão (Parauapebas).
+ * Sem a variável, ninguém escolhe — o conector se comporta como sempre.
+ */
+async function escolhedoresDeContaDoChatwoot(): Promise<Set<string>> {
+  return idsDeUsuariosAtivos('MCP_CHATWOOT_CONTAS_EMAILS');
+}
+
+/**
  * Quem pode pedir envio de arquivo pelo conector (cofre de envio, `arquivos.ts`): quem já escreve (MCP_ESCRITA_EMAILS) mais os
  * e-mails de MCP_ARQUIVOS_EMAILS, para dar o cofre a quem só precisa dele sem dar também a escrita no Kommo/Asaas/banco.
  * Usuário ativo do console. Sem nenhuma das duas variáveis, ninguém usa.
@@ -439,21 +449,8 @@ function auditarClipe(a: AcessoAoClipe): void {
     .catch((err) => logger.warn({ err }, 'mcp-remoto: auditoria do clipe não gravou'));
 }
 
-/** Recarrega em segundo plano: na subida e a cada 10 min; se falhar, tenta de novo em 30 s. */
-function manterAtualizado<T>(carregar: () => Promise<T>, aplicar: (v: T) => void, nome: string): void {
-  const rodar = () => {
-    carregar()
-      .then((v) => {
-        aplicar(v);
-        setTimeout(rodar, 10 * 60_000).unref();
-      })
-      .catch((err) => {
-        logger.warn({ err }, `mcp-remoto: não consegui ler ${nome}; tento de novo`);
-        setTimeout(rodar, 30_000).unref();
-      });
-  };
-  rodar();
-}
+/** Recarrega em segundo plano: na subida e a cada 10 min; se falhar (ou passar de 20 s), tenta de novo em 30 s. Devolve a promessa da 1ª carga. */
+const manterAtualizado = <T>(carregar: () => Promise<T>, aplicar: (v: T) => void, nome: string): Promise<void> => manterAtualizadoBase(carregar, aplicar, nome, { log: logger });
 
 /**
  * O cérebro: franquia × Kommo conferidos por unidade (quem está sem cartão, ambíguo, sumindo).
@@ -601,7 +598,10 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   // Chatwoot (atendimento novo): criar/alterar direto; apagar e mandar mensagem a cliente em dois passos; apagar avisa o João no Telegram
   const chatwoot = criarContextoChatwoot(contaChatwootDoAmbiente(), { avisar: (texto) => enviarTelegram(texto, { canal: 'avisos' }) });
   let operadoresChatwoot = new Set<string>();
-  if (chatwoot.conta) manterAtualizado(operadoresDoChatwoot, (s) => (operadoresChatwoot = s), 'quem mexe no Chatwoot');
+  const primeirasCargas: Array<Promise<void>> = [];
+  if (chatwoot.conta) primeirasCargas.push(manterAtualizado(operadoresDoChatwoot, (s) => (operadoresChatwoot = s), 'quem mexe no Chatwoot'));
+  let escolhedoresDeConta = new Set<string>();
+  if (chatwoot.conta) primeirasCargas.push(manterAtualizado(escolhedoresDeContaDoChatwoot, (s) => (escolhedoresDeConta = s), 'quem escolhe a conta do Chatwoot'));
   const sistemas = criarContextoSistemas();
   manterAtualizado(contasSistemasDoBanco, (contas) => (sistemas.contas = contas), 'as contas do sistema novo');
   const pendentesSistemas = new PendentesSistemas();
@@ -642,6 +642,8 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
     carregarUnidades: unidadesDoBanco,
     franquia: { cliente: { log: (linha) => logger.info({ franquia: linha }, 'mcp-remoto: franquia') } },
     log: logger,
+    // quem conecta logo após um reinício espera (no máximo 3 s) a 1ª carga das listas do Chatwoot: sem isto a sessão sairia sem as ferramentas/o parâmetro `conta`
+    aguardar: esperaDaPrimeiraCarga(primeirasCargas, 3000),
     extras: (server, auditar, quem) => {
       registrarFerramentasKommo(server, kommo, auditar);
       registrarFerramentasBling(server, bling, kommo, auditar);
@@ -679,7 +681,7 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
         );
       }
       if (leitoresWhatsapp.has(quem.userId)) registrarFerramentasEvolution(server, whatsapp, quem.userId, auditar);
-      if (operadoresChatwoot.has(quem.userId)) registrarFerramentasChatwoot(server, chatwoot, quem.email || `usuario:${quem.userId}`, auditar);
+      if (operadoresChatwoot.has(quem.userId)) registrarFerramentasChatwoot(server, chatwoot, quem.email || `usuario:${quem.userId}`, auditar, () => escolhedoresDeConta.has(quem.userId));
       registrarVideoSePermitido(server, video, quem.userId, leitoresVideo, auditar);
       registrarTranscricaoSePermitido(server, transcritor, quem.userId, leitoresVideo, auditar);
       registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas, convenia: convenia.contas, tiquetaque: tiquetaque.contas, tramitacao: tramitacao.contas, sistemas: contasDoRh(sistemas.contas), zenfisio: zenfisio.contas, gerais: chatwoot.conta && operadoresChatwoot.has(quem.userId) ? ['chatwoot_* (Chatwoot, o atendimento novo em atendimento.doutordigitalconsultoria.com: conversas, contatos, caixas, etiquetas, agentes, equipes, automações; criar e alterar direto, apagar e mandar mensagem a cliente em dois passos)'] : [] }), auditar);
