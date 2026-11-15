@@ -198,3 +198,13 @@ test('nova-unidade-joao: sem terminal, --aplicar exige --sim; e contêiner sem o
   assert.match(r.stdout, /ainda não tem o kit/);
   assert.ok(!/docker cp/.test(b.log()));
 });
+
+test('nova-unidade-joao e README avisam: não publique deploy enquanto o kit roda (/run/kit-segredos, token entregue uma vez)', () => {
+  const sh = readFileSync(join(OPS, 'nova-unidade-joao.sh'), 'utf8');
+  const readme = readFileSync(join(OPS, 'README.md'), 'utf8');
+  for (const t of [sh, readme]) {
+    assert.match(t, /NÃO PUBLIQUE DEPLOY ENQUANTO O KIT RODA/);
+    assert.match(t, /\/run\/kit-segredos/);
+    assert.match(t, /UMA vez/);
+  }
+});

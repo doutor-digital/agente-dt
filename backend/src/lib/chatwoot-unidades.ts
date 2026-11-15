@@ -71,6 +71,8 @@ export interface ConfigChatwootUnidade {
 export const SEMENTE_PARAUAPEBAS: ConfigChatwootUnidade = {
   slug: 'doutor-hernia-parauapebas',
   contaId: null,
+  // este endereço já existe e a equipe pode estar usando: a origem dele é aceita pelas telas por iframe (migration 20261115150000 grava o mesmo no banco, só se estiver nulo)
+  subdominio: 'drherniaparauapebas',
   prefixoModelos: 'parau_',
   usuarioCelularId: 7,
   gerenteId: 4,

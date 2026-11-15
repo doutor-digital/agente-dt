@@ -398,6 +398,22 @@ test('--ligar-robo não TROCA um robô que a caixa já tem (outro); e rodar de n
   assert.match(r3.resultados.find((r) => r.id === 'robo-sofia')!.notas.join(' '), /JÁ tem outro robô/);
 });
 
+test('passo RECUSADO (ou com leitura que precisa escrever e foi negada) trava os que dependem dele — o «nada» do plano não destrava', async () => {
+  const { falso, externas } = montar();
+  const b = bancoFalso();
+  await rodar(DEMO, b, externas);
+  const estado = estadoLido(falso, b);
+  falso.contas.get(b.e.config!.contaId!)!.teams.length = 0; // o plano acha que o time existe; alguém apagou
+  const plano = montarPlano(DEMO, estado, { molde: MOLDE });
+  const posts0 = posts(falso).length;
+  const resultados = await executarPlano(plano, DEMO, { banco: b.banco, molde: MOLDE, externas, dizer: () => undefined, confirmar: async (p) => p.id !== 'time' });
+  assert.equal(sit(resultados, 'time'), 'recusado');
+  assert.equal(sit(resultados, 'atendentes'), 'bloqueado', 'depende de «time», que foi recusado');
+  assert.match(resultados.find((r) => r.id === 'atendentes')!.notas.join(' '), /depende de: .*time/);
+  assert.notEqual(sit(resultados, 'registrar-caixa'), 'feito', 'nada que dependa deles roda');
+  assert.equal(posts(falso).length, posts0, 'nada foi criado');
+});
+
 test('PARAUAPEBAS PROTEGIDA: unidade que já tem caixa na conta do ambiente NÃO ganha conta nova — nem com --sobrescrever (a unidade inteira iria para uma conta vazia)', async () => {
   const { falso, externas } = montar();
   const b = bancoFalso();

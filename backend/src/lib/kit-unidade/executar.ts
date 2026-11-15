@@ -102,7 +102,8 @@ export async function executarPlano(plano: Plano, q: Questionario, o: OpcoesDeEx
     const travado = p.depende.filter((d) => {
       const s = deu.get(d);
       const passo = plano.passos.find((x) => x.id === d);
-      return !(s === 'feito' || s === 'nada-a-fazer' || (passo?.acao === 'nada'));
+      // o «nada» do plano só vale para quem NÃO rodou; passo que rodou e foi recusado, bloqueado ou falhou (inclusive na leitura) trava os que dependem dele
+      return !(s === 'feito' || s === 'nada-a-fazer' || (s === undefined && passo?.acao === 'nada'));
     });
     if (travado.length && (p.execucao === 'sim' || soLer)) {
       registrar('bloqueado', [`depende de: ${travado.join(', ')}`]);

@@ -21,6 +21,7 @@ const { paginaDaAssistente } = await import('./chatwoot-assistente-ui.js');
 const F = await import('../controllers/funil.controller.js');
 
 const PRINCIPAL = 'https://atendimento.doutordigitalconsultoria.com';
+const PARAU = 'https://drherniaparauapebas.doutordigitalconsultoria.com';
 const DEMO = {
   slug: 'clinica-demonstracao', contaId: 2, subdominio: 'demo', prefixoModelos: 'demo_', usuarioCelularId: 77, gerenteId: 51, metaAgendamentosDia: 5, kapsoPhoneNumberId: null, wabaId: null, envSufixo: 'DEMO',
   dadosModelos: { nome: 'Clínica Demonstração', cidade: 'Demonstração', endereco: 'Rua Exemplo, 100 — Centro, Demonstração/PA', mapa: 'https://maps.example/demo' },
@@ -48,11 +49,11 @@ function trecho(origens: string[], pai: { ancestor?: string; referrer?: string }
 
 test('a lista de origens: a principal mais o subdomínio das clínicas CADASTRADAS (e só)', () => {
   preparar();
-  assert.deepEqual(origensDoChatwoot(), [PRINCIPAL, 'https://demo.doutordigitalconsultoria.com']);
+  assert.deepEqual(origensDoChatwoot(), [PRINCIPAL, 'https://demo.doutordigitalconsultoria.com', PARAU]);
   U.aplicarConfigs([U.SEMENTE_PARAUAPEBAS]);
-  assert.deepEqual(origensDoChatwoot(), [PRINCIPAL], 'sem clínica cadastrada: como sempre, só a principal');
-  U.aplicarConfigs([U.SEMENTE_PARAUAPEBAS, { ...DEMO, subdominio: null } as never]);
-  assert.deepEqual(origensDoChatwoot(), [PRINCIPAL], 'clínica sem subdomínio gravado não entra');
+  assert.deepEqual(origensDoChatwoot(), [PRINCIPAL, PARAU], 'sem clínica nova: a principal e o endereço que Parauapebas já tem');
+  U.aplicarConfigs([{ ...U.SEMENTE_PARAUAPEBAS, subdominio: null }, { ...DEMO, subdominio: null } as never]);
+  assert.deepEqual(origensDoChatwoot(), [PRINCIPAL], 'unidade sem subdomínio gravado não entra');
 });
 
 test('subdomínio torto na configuração é recusado (a configuração inteira é ignorada com aviso)', () => {
@@ -98,4 +99,17 @@ test('as 4 páginas usam a lista: nenhuma compara a origem com uma string fixa e
     assert.ok(!html.includes('__ORIGENS_CW__') && !html.includes('__ORIGEM_CW__') && !html.includes('/*__CONTA_JS__*/'), `${nome}: marcador sem trocar`);
     assert.ok(html.includes(`origemDoPai("${PRINCIPAL}")`), `${nome}: endereça ao pai real, com a principal de reserva`);
   }
+});
+
+test('CORS do botão da assistente e de /funil/gestao: aceita a origem do subdomínio da clínica (e a de Parauapebas), recusa o resto', async () => {
+  preparar();
+  const { corsDoAssistente } = await import('../controllers/assistente.controller.js');
+  const origens = origensDoChatwoot();
+  for (const o of origens) {
+    assert.ok(corsDoAssistente('/api/public/assistente/estado', o, origens), o);
+    assert.ok(corsDoAssistente('/api/public/funil/gestao', o, origens), o);
+  }
+  for (const ruim of ['https://evil.example', 'https://outra.doutordigitalconsultoria.com', 'http://demo.doutordigitalconsultoria.com']) assert.equal(corsDoAssistente('/api/public/funil/gestao', ruim, origens), null, ruim);
+  assert.equal(corsDoAssistente('/api/public/assistente/estado', 'https://demo.doutordigitalconsultoria.com', origens.filter((x) => !x.includes('demo'))), null, 'clínica NÃO cadastrada: sem CORS');
+  assert.ok(corsDoAssistente('/api/public/assistente/estado', PRINCIPAL, PRINCIPAL), 'o formato antigo (uma URL) continua valendo');
 });
