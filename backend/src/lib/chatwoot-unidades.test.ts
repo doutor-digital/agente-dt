@@ -41,6 +41,7 @@ import { estadoDuplicados } from './chatwoot-duplicados.js';
 const SLUG_PARAU = 'doutor-hernia-parauapebas';
 
 const SERRA: ConfigChatwootUnidade = {
+  contaId: null,
   slug: 'doutor-hernia-serra',
   prefixoModelos: 'serra_',
   usuarioCelularId: 17,

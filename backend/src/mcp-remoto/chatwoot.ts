@@ -12,6 +12,7 @@
  * (mensagem pública numa conversa, conversa nova com mensagem, campanha). `chatwoot_preparar` mostra e devolve um código preso a
  * quem pediu; `chatwoot_confirmar` executa. Cada apagamento confirmado avisa o João no Telegram.
  */
+import { configDaUnidade, contaDaUnidade, contasExplicitas, unidadeDaCaixa } from '../lib/chatwoot-unidades.js';
 import { randomBytes } from 'node:crypto';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
@@ -60,6 +61,70 @@ export function contaChatwootDoAmbiente(e: NodeJS.ProcessEnv = process.env): Con
   if (!token || !Number.isInteger(conta) || conta <= 0) return null;
   const url = (e.CHATWOOT_URL?.trim() || 'https://atendimento.doutordigitalconsultoria.com').replace(/\/+$/, '');
   return { url, conta, token };
+}
+
+/**
+ * O token do Chatwoot DESTA unidade: `CHATWOOT_API_TOKEN_<SUFIXO>` (o usuário «Conector» criado na conta dela), ou, sem ele, o global
+ * (`CHATWOOT_API_TOKEN`, o de Parauapebas). Assim um token que vaze abre UMA clínica só. O valor nunca é impresso nem logado.
+ */
+function tokenDaUnidade(slug: string, e: NodeJS.ProcessEnv): string | undefined {
+  const sufixo = configDaUnidade(slug)?.envSufixo;
+  return (sufixo ? e[`CHATWOOT_API_TOKEN_${sufixo}`]?.trim() : undefined) || e.CHATWOOT_API_TOKEN?.trim() || undefined;
+}
+
+/**
+ * A conta do Chatwoot de uma UNIDADE: a URL do ambiente, o id da conta da unidade e o token dela (`tokenDaUnidade`). Unidade sem conta
+ * própria (Parauapebas) fica na conta do ambiente. Unidade DESCONHECIDA ou com configuração descartada devolve `null`: quem chama RECUSA,
+ * sem falar com o Chatwoot — `null` aqui nunca quer dizer «conta 1».
+ */
+export function contaChatwootDaUnidade(slug: string, e: NodeJS.ProcessEnv = process.env): ContaChatwoot | null {
+  const base = contaChatwootDoAmbiente(e);
+  const id = contaDaUnidade(slug);
+  if (!base || id === undefined) return null;
+  const token = tokenDaUnidade(slug, e);
+  if (!token) return null;
+  return { url: base.url, conta: id ?? base.conta, token };
+}
+
+/** Todas as contas que o servidor conhece: a do ambiente primeiro, depois as das unidades (sem repetir). */
+export function contasDoChatwoot(e: NodeJS.ProcessEnv = process.env): number[] {
+  const base = contaChatwootDoAmbiente(e);
+  const l: number[] = base ? [base.conta] : [];
+  for (const c of contasExplicitas()) if (!l.includes(c)) l.push(c);
+  return l;
+}
+
+const contextosPorConta = new WeakMap<ContextoChatwoot, Map<string, ContextoChatwoot>>();
+
+/**
+ * O contexto para uma conta (e token) diferentes dentro da mesma instalação: mesmo `fetch`, mesmo relógio. Se a conta pedida é EXATAMENTE a que
+ * o contexto já tem (mesma URL, conta e token) devolve o PRÓPRIO contexto (identidade: Parauapebas continua com o mesmo objeto). O clone
+ * tem as próprias confirmações pendentes: uma ação preparada numa conta nunca pode ser confirmada em outra.
+ */
+export function contextoDaContaChatwoot(ctx: ContextoChatwoot, conta: ContaChatwoot): ContextoChatwoot {
+  const atual = ctx.conta;
+  if (atual && atual.url === conta.url && atual.conta === conta.conta && atual.token === conta.token) return ctx;
+  let por = contextosPorConta.get(ctx);
+  if (!por) contextosPorConta.set(ctx, (por = new Map()));
+  const chave = `${conta.url}\u0000${conta.conta}\u0000${conta.token}`;
+  let c = por.get(chave);
+  if (!c) por.set(chave, (c = { ...ctx, conta: { ...conta }, pendentes: new Map() }));
+  return c;
+}
+
+/**
+ * O contexto da conta da UNIDADE, ou `null` se a unidade é desconhecida/inválida (RECUSAR: não chamar o Chatwoot). O `ambiente` só entra para
+ * a URL e o token: o `ctx` pode ser o de qualquer conta da mesma instalação.
+ */
+export function contextoDaUnidade(ctx: ContextoChatwoot, slug: string, e: NodeJS.ProcessEnv = process.env): ContextoChatwoot | null {
+  const conta = contaChatwootDaUnidade(slug, e);
+  return conta ? contextoDaContaChatwoot(ctx, conta) : null;
+}
+
+/** O contexto da conta da CAIXA (pela unidade dona), ou `null` para caixa que nenhuma unidade configurada tem (RECUSAR). */
+export function contextoDaCaixa(ctx: ContextoChatwoot, caixa: number, e: NodeJS.ProcessEnv = process.env): ContextoChatwoot | null {
+  const slug = unidadeDaCaixa(caixa);
+  return slug ? contextoDaUnidade(ctx, slug, e) : null;
 }
 
 /**
