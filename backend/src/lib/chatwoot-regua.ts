@@ -456,6 +456,10 @@ export interface Candidato {
   interna?: AcaoInterna;
   /** regra automática par deste robô manual: se ela já foi feita nesta conversa (qualquer chave), este não sai */
   pularSeFeito?: string;
+  /** o último instante em que pode SAIR (conferido com o `agora` do envio, não com o horário previsto) */
+  saiAte?: Date;
+  /** só sai em um dia (Belém) ANTERIOR a este (AAAA-MM-DD) */
+  saiAntesDoDia?: string;
   /** a data+hora (consulta, sessão) que decidiu o envio: é a que o texto de sessão mostra */
   momento?: Momento;
 }
@@ -620,9 +624,16 @@ export function candidatos(c: ConversaRegua, vistos: Vistos, ajustes?: AjustesDa
     if (agendado && ehSim(a.pagamento_antecipado) && situ === 'Agendado' && !c.etiquetas.includes('pagou-antecipado')) {
       const chave = `agendado@${agendado.desde.toISOString()}`;
       saida.push({ regra: 'prepagamento', modelo: 'parau_consulta_prepagamento', chave, kind: 'depois', alvo: agendado.desde });
-      // «consigo segurar a vaga até amanhã»: o recado de pendência só faz sentido bem ANTES da consulta (pelo menos 1 h); mais perto que isso, não sai
-      const alvoPendente = new Date(agendado.desde.getTime() + tempo('prepagamento-pendente'));
-      if (!consulta || alvoPendente.getTime() + HORA <= instante(consulta, 8).getTime()) saida.push({ regra: 'prepagamento-pendente', modelo: 'parau_consulta_prepagamento_pendente', chave, kind: 'depois', alvo: alvoPendente });
+      // «consigo segurar a vaga até amanhã»: o recado de pendência só sai se, NA HORA EM QUE SAI (não só na hora prevista), faltar pelo menos 1 h
+      // para a consulta e ela não for no mesmo dia («até amanhã» seria mentira); decidirRegua confere isso com o `agora`
+      saida.push({
+        regra: 'prepagamento-pendente',
+        modelo: 'parau_consulta_prepagamento_pendente',
+        chave,
+        kind: 'depois',
+        alvo: new Date(agendado.desde.getTime() + tempo('prepagamento-pendente')),
+        ...(consulta ? { saiAte: new Date(instante(consulta, 8).getTime() - HORA), saiAntesDoDia: consulta.data.iso } : {}),
+      });
     }
     // véspera (24 h), dia (3 h), preparo (1 h). Em «Fechou» o Kommo manda o texto de véspera da SESSÃO.
     // (consulta_confirmada do Kommo dispara no mesmo horário da véspera = disparo duplo: não replicado)
@@ -907,6 +918,9 @@ export function decidirRegua(c: ConversaRegua, memoria: Memoria, agora: Date, un
     if (k.regra === 'rotina-retomada' && ecoDaPropriaRetomada(k.chave, memoria.feitos)) continue;
     if (memoria.feitos.has(`${k.regra}|${k.chave}`)) continue;
     if (k.pularSeFeito && [...(memoria.enviados ?? memoria.feitos)].some((f) => f.startsWith(`${k.pularSeFeito}|`))) continue;
+    // a hora em que SAI (agora), não a prevista: depois do último instante ou no dia da consulta, esta mensagem perdeu o sentido
+    if (k.saiAte && agora.getTime() > k.saiAte.getTime()) continue;
+    if (k.saiAntesDoDia && diaEmBelem(agora) >= k.saiAntesDoDia) continue;
     const limite = limiteDe(k);
     if (agora.getTime() > limite.getTime()) {
       if (agora.getTime() - limite.getTime() <= JANELA_DO_LOG_PERDIDA_MS) perdidas.push(k.regra);

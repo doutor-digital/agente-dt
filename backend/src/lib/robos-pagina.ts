@@ -352,22 +352,22 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
         var seletores = [];
         var previa = el('div');
         r.modelosDaTela.forEach(function(m){
-          var s = sel(m.opcoes.map(function(o){ return { valor: o.modelo }; }), m.atual); s.disabled = !PODE || !DADOS.aprovadosLidos;
-          var dica = m.padrao !== m.atual ? 'De fábrica: ' + m.padrao : (r.modelosDaTela.length > 1 ? 'De fábrica: ' + m.padrao : '');
+          var s = sel(m.opcoes.map(function(o){ return { valor: o.modelo }; }), m.atual); var temAlternativa = m.opcoes.length > 1; s.disabled = !PODE || !DADOS.aprovadosLidos || !temAlternativa;
+          var dica = !temAlternativa ? 'Sem alternativa aprovada para este modelo' : (m.padrao !== m.atual ? 'De fábrica: ' + m.padrao : (r.modelosDaTela.length > 1 ? 'De fábrica: ' + m.padrao : ''));
           a.appendChild(campo(r.modelosDaTela.length > 1 ? 'Modelo (' + m.padrao + ')' : 'Modelo aprovado pela Meta', s, dica ? el('span', 'ajuda', dica) : null));
           var pv = el('div'); pv.appendChild(bolha(m.texto)); previa.appendChild(pv);
           s.addEventListener('change', function(){ var o = m.opcoes.filter(function(y){ return y.modelo === s.value; })[0]; pv.textContent = ''; pv.appendChild(bolha(o ? o.texto : '')); });
           seletores.push({ m: m, s: s });
         });
-        a.appendChild(el('p', 'ajuda', DADOS.aprovadosLidos ? 'Só aparecem modelos já aprovados nesta caixa e com as mesmas variáveis que o robô preenche. Texto novo: peça à Doutor Digital (a Meta aprova em até 48 h).' : 'Não consegui ler os modelos aprovados no Chatwoot agora; a troca de modelo está indisponível.'));
+        a.appendChild(el('p', 'ajuda', DADOS.aprovadosLidos ? 'Só aparecem as alternativas que a equipe técnica liberou para este modelo e que já estão aprovadas nesta caixa. Texto novo: peça à Doutor Digital (a Meta aprova em até 48 h).' : 'Não consegui ler os modelos aprovados no Chatwoot agora; a troca de modelo está indisponível.'));
         b.appendChild(previa);
-        editavel = PODE && DADOS.aprovadosLidos;
+        editavel = PODE && DADOS.aprovadosLidos && seletores.some(function(z){ return z.m.opcoes.length > 1; });
         // TODOS os seletores que mudaram (um pedido por modelo de fábrica); «voltar ao de fábrica» desfaz todos os trocados
         aplicar = function(){ var mud = seletores.filter(function(z){ return z.s.value !== z.m.atual; }); return mud.length ? mud.map(function(z){ return { modelo: { padrao: z.m.padrao, novo: z.s.value } }; }) : null; };
         if (r.modelosDaTela.some(function(m){ return m.personalizado; })) voltar = function(){ return r.modelosDaTela.filter(function(m){ return m.personalizado; }).map(function(m){ return { modelo: { padrao: m.padrao, novo: m.padrao } }; }); };
       }
     } else {
-      a.appendChild(el('p', null, 'Quando uma condição não bate, ou o paciente tem cartão ativo no CRM antigo, nada vai para o paciente. Fica uma nota privada na conversa dizendo por quê, por exemplo: «Não enviado: o paciente tem cartão ativo no Kommo».'));
+      a.appendChild(el('p', null, 'Quando uma condição não bate, ou o paciente tem cartão ativo no CRM antigo, nada vai para o paciente. Fica uma nota privada na conversa dizendo por quê, por exemplo: «Não enviado: o paciente tem cartão ativo no CRM antigo».'));
       b.appendChild(el('p', null, 'Assim a equipe sempre sabe por que um paciente não recebeu.'));
     }
     corpo.appendChild(a); corpo.appendChild(b); nd.appendChild(corpo);

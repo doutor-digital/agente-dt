@@ -149,19 +149,22 @@ test('prepagamento: ao entrar em Agendado com pagamento antecipado; pendente 3 h
   assert.deepEqual(regras(rodar(conv({ attrs: AGENDADO }), '2026-11-16T14:59:00Z', v, ['prepagamento|agendado@2026-11-16T12:00:00.000Z'])), []);
 });
 
-test('prepagamento pendente tem teto: nunca sai a menos de 1 h da consulta (nem depois dela); o recado inicial não é afetado', () => {
+test('prepagamento pendente: «até amanhã» só para consulta de OUTRO dia, e confere a hora em que SAI; consulta no mesmo dia não recebe; o recado inicial não é afetado', () => {
   const v = { etapa: visto('Agendado', T0) };
   const feitos = ['prepagamento|agendado@2026-11-16T12:00:00.000Z'];
-  const hoje = (hora: string) => ({ ...AGENDADO, data_consulta: '2026-11-16', hora_consulta: hora });
-  const pend = (hora: string) => regras(rodar(conv({ attrs: hoje(hora) }), '2026-11-16T15:00:00Z', v, feitos)).includes('prepagamento-pendente');
-  // consulta às 13:30 (16:30Z): o pendente das 12:00 (15:00Z) cabe com 1 h de sobra
-  assert.equal(pend('13:30'), true);
-  // consulta às 12:30 (15:30Z): o pendente cairia 30 min antes dela — não sai
-  assert.equal(pend('12:30'), false);
-  // consulta às 11:00: o pendente cairia depois dela — não sai
-  assert.equal(pend('11:00'), false);
-  // e o primeiro recado do pré-pagamento sai igual
-  assert.ok(regras(rodar(conv({ attrs: hoje('12:30') }), T0, v)).includes('prepagamento'));
+  const consultaEm = (dia: string, hora: string) => ({ ...AGENDADO, data_consulta: dia, hora_consulta: hora });
+  const pend = (attrs: Record<string, unknown>, agora = '2026-11-16T15:00:00Z') => regras(rodar(conv({ attrs }), agora, v, feitos)).includes('prepagamento-pendente');
+  // consulta amanhã: sai (o texto «até amanhã» é verdade)
+  assert.equal(pend(consultaEm('2026-11-17', '14:30')), true);
+  assert.equal(pend(consultaEm('2026-11-17', '08:00')), true);
+  // consulta HOJE, não importa a hora: «até amanhã» seria mentira — não sai
+  for (const hora of ['18:00', '13:30', '12:30', '11:00']) assert.equal(pend(consultaEm('2026-11-16', hora)), false, `hoje às ${hora}`);
+  // sem hora e hoje: idem
+  assert.equal(pend({ ...AGENDADO, data_consulta: '2026-11-16', hora_consulta: '' }), false);
+  // o primeiro recado do pré-pagamento sai igual
+  assert.ok(regras(rodar(conv({ attrs: consultaEm('2026-11-16', '12:30') }), T0, v)).includes('prepagamento'));
+  // enviado mais tarde (ainda dentro dos 12 h de tolerância) para consulta de hoje: também não
+  assert.equal(pend(consultaEm('2026-11-16', '23:00'), '2026-11-16T22:00:00Z'), false);
 });
 
 test('prepagamento: já pagou, sem antecipado, outra situação ou valor desconhecido', () => {
