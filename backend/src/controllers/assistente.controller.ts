@@ -508,11 +508,11 @@ export async function assistenteAvaliarHandler(req: Request, res: Response): Pro
   try {
     let mensagem = idPedido;
     if (mensagem !== null) {
-      if (!(await bancoDeAvaliacoes.respostaDaSofia(mensagem, r.conversa))) {
+      if (!(await bancoDeAvaliacoes.respostaDaSofia(mensagem, r.conversa, r.slug))) {
         res.status(404).json({ error: 'esta mensagem não é uma resposta da Sofia nesta conversa' });
         return;
       }
-    } else mensagem = await bancoDeAvaliacoes.ultimaRespostaDaSofia(r.conversa);
+    } else mensagem = await bancoDeAvaliacoes.ultimaRespostaDaSofia(r.slug, r.conversa);
     const quemId = r.a.id ?? null;
     if (mensagem === null && nota === 'boa') {
       // 👍 do painel sem resposta da Sofia gravada (conversa de antes do registro): não há o que juntar, só o log
@@ -524,7 +524,7 @@ export async function assistenteAvaliarHandler(req: Request, res: Response): Pro
       ? null
       : mensagem !== null
         ? await bancoDeAvaliacoes.minhaAvaliacao(mensagem, quemId)
-        : await bancoDeAvaliacoes.minhaRuimSemMensagem(r.conversa, quemId); // 👎 do painel sem resposta gravada: junta com a aberta
+        : await bancoDeAvaliacoes.minhaRuimSemMensagem(r.slug, r.conversa, quemId); // 👎 do painel sem resposta gravada: junta com a aberta
     const muda = avaliacaoMuda(ja, nota, texto);
     if (nota === 'ruim' && muda) await r.porta.nota(r.conversa, `👎 Resposta da Sofia avaliada como ruim por ${r.a.nome}: ${texto}`);
     if (muda) await bancoDeAvaliacoes.gravarAvaliacao({ slug: r.slug, conversa: r.conversa, mensagem, nota, texto, quemId, quemNome: r.a.nome || 'atendente' }, ja);
@@ -541,7 +541,7 @@ export async function assistenteRespostasHandler(req: Request, res: Response): P
   const r = await conversaDaAtendente(req, res, req.query.conversa);
   if (!r) return;
   try {
-    res.set('Cache-Control', 'no-store').json({ respostas: await bancoDeAvaliacoes.respostasDaSofiaNaConversa(r.conversa, r.a.id ?? null) });
+    res.set('Cache-Control', 'no-store').json({ respostas: await bancoDeAvaliacoes.respostasDaSofiaNaConversa(r.slug, r.conversa, r.a.id ?? null) });
   } catch (e) {
     logger.warn({ err: String(e), conversa: r.conversa }, 'assistente: não consegui ler as respostas da Sofia');
     res.status(502).json({ error: 'não consegui ler agora' });

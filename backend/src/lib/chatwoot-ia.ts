@@ -22,8 +22,8 @@ import type { Unit } from '@prisma/client';
 import { logger } from './logger.js';
 import { prisma } from './prisma.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
-import { chamar, contaChatwootDoAmbiente, contasDoChatwoot, contextoDaContaPorId, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
-import { configDaUnidade, contaDaCaixa, unidadeDaCaixa, unidadesDaConta } from './chatwoot-unidades.js';
+import { chamar, contaChatwootDoAmbiente, contasDoChatwoot, criarContextoChatwoot, donaDaConta, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
+import { configDaUnidade, contaDaCaixa, contasExplicitas, unidadeDaCaixa } from './chatwoot-unidades.js';
 import { CAIXAS_REGUA } from './chatwoot-regua.js';
 import { aplicarEtiqueta, eventoDeEtiqueta, portasDaPonte, type PortasDaPonte } from './chatwoot-etiquetas.js';
 import { eventoDePausa, eventoDeReativacao, pausar, portaDaPausaDoChatwoot, reativar, type PortaDaPausa } from './chatwoot-pausa.js';
@@ -563,7 +563,7 @@ export interface EstadoDaConta {
   trava: Set<number>;
 }
 
-const estados = new Map<number, EstadoDaConta>();
+const estados = new Map<number, { assinatura: string; estado: EstadoDaConta }>();
 
 /** Só para os testes: esquece os estados guardados. */
 export const esquecerEstadosDaIa = (): void => estados.clear();
@@ -574,26 +574,37 @@ export const esquecerEstadosDaIa = (): void => estados.clear();
  * nunca é compartilhada, porque a conversa 5 de uma conta não é a conversa 5 de outra. `null` = conta sem unidade/token: não responde.
  */
 export function estadoDoReceptor(conta: number, e: NodeJS.ProcessEnv = process.env): EstadoDaConta | null {
-  const guardado = estados.get(conta);
-  if (guardado) return guardado;
   const amb = contaChatwootDoAmbiente(e);
   if (!amb) return null;
-  const ctx = conta === amb.conta ? criarContextoChatwoot(amb) : contextoDaContaPorId(criarContextoChatwoot(amb), conta, e);
-  if (!ctx) return null;
-  const sufixo = conta === amb.conta ? undefined : configDaUnidade(unidadesDaConta(conta)[0] ?? '')?.envSufixo;
+  const ehAmbiente = conta === amb.conta && !contasExplicitas().includes(conta);
+  const base = criarContextoChatwoot(amb);
+  const dona = ehAmbiente ? { slug: null, ctx: base } : donaDaConta(base, conta, e);
+  const contaDoCtx = dona?.ctx.conta;
+  if (!dona || !contaDoCtx) {
+    estados.delete(conta); // a configuração recarregou e nenhuma unidade usa mais essa conta
+    return null;
+  }
+  const ctx = dona.ctx;
+  const sufixo = dona.slug ? configDaUnidade(dona.slug)?.envSufixo : undefined;
+  const tokenRobo = ehAmbiente ? tokenDoRobo(e) : tokenDoRobo(e, sufixo);
+  // o que alimenta as portas: se a configuração recarregou e algo disso mudou (conta, token, robô), as portas são refeitas — a MEMÓRIA e a trava
+  // ficam (uma rodada em andamento não pode ser esquecida, senão a Sofia responderia duas vezes)
+  const assinatura = [contaDoCtx.url, contaDoCtx.conta, contaDoCtx.token, tokenRobo ?? ''].join('\u0000');
+  const guardado = estados.get(conta);
+  if (guardado && guardado.assinatura === assinatura) return guardado.estado;
   const origem = portasDaOrigem(ctx);
   const novo: EstadoDaConta = {
-    portas: portasReais(ctx, conta === amb.conta ? {} : { tokenRobo: tokenDoRobo(e, sufixo) }),
-    mem: novaMemoriaDaIa(),
+    portas: portasReais(ctx, ehAmbiente ? {} : { tokenRobo }),
+    mem: guardado?.estado.mem ?? novaMemoriaDaIa(),
     ponte: portasDaPonte(ctx),
     pausa: portaDaPausaDoChatwoot(ctx),
     resolver: portasDoResolver(ctx),
     origem,
     chat: portaDoChatwoot(ctx),
     nota: portasDaNota(ctx, origem),
-    trava: new Set(),
+    trava: guardado?.estado.trava ?? new Set(),
   };
-  estados.set(conta, novo);
+  estados.set(conta, { assinatura, estado: novo });
   return novo;
 }
 

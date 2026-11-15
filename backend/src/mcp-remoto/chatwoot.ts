@@ -122,13 +122,22 @@ export function contextoDaUnidade(ctx: ContextoChatwoot, slug: string, e: NodeJS
 }
 
 /**
- * O contexto de uma CONTA pelo id (o do evento que chegou): a do ambiente devolve o próprio `ctx`; uma conta própria usa o token da primeira
- * unidade que mora nela. `null` = nenhuma unidade configurada tem essa conta, ou falta o token: RECUSAR.
+ * A unidade que «dona» da conta `contaId` e o contexto dela: a primeira (ordem alfabética do slug) cujo token está disponível — o
+ * `CHATWOOT_API_TOKEN_<SUFIXO>` dela ou, sem ele, o global (por isso, na prática, é a primeira). A conta do ambiente devolve o próprio `ctx`
+ * (sem unidade). `null` = nenhuma unidade configurada usa essa conta: RECUSAR.
  */
+export function donaDaConta(ctx: ContextoChatwoot, contaId: number, e: NodeJS.ProcessEnv = process.env): { slug: string | null; ctx: ContextoChatwoot } | null {
+  if (ctx.conta && ctx.conta.conta === contaId && !contasExplicitas().includes(contaId)) return { slug: null, ctx };
+  for (const slug of unidadesDaConta(contaId)) {
+    const c = contextoDaUnidade(ctx, slug, e);
+    if (c) return { slug, ctx: c };
+  }
+  return null;
+}
+
+/** O contexto de uma CONTA pelo id (o do evento que chegou). `null` = nenhuma unidade configurada usa essa conta (RECUSAR). */
 export function contextoDaContaPorId(ctx: ContextoChatwoot, contaId: number, e: NodeJS.ProcessEnv = process.env): ContextoChatwoot | null {
-  if (ctx.conta && ctx.conta.conta === contaId && !contasExplicitas().includes(contaId)) return ctx;
-  const slug = unidadesDaConta(contaId)[0];
-  return slug ? contextoDaUnidade(ctx, slug, e) : null;
+  return donaDaConta(ctx, contaId, e)?.ctx ?? null;
 }
 
 /** O contexto da conta da CAIXA (pela unidade dona), ou `null` para caixa que nenhuma unidade configurada tem (RECUSAR). */
