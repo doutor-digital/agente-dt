@@ -318,8 +318,8 @@ export interface ResumoDoCiclo {
 
 /**
  * Um telefone, uma conversa que FALA com o paciente (a de atividade MAIS RECENTE, a mesma regra da agenda, com a mesma chave de
- * telefone). As outras do mesmo número continuam no ciclo — memória (`atualizarVistos`), regras internas e a etiqueta do celular seguem
- * valendo para todas —, mas não mandam mensagem. `irmas` = as outras conversas do mesmo telefone: o que elas já mandaram conta como
+ * telefone). As outras do mesmo número continuam no ciclo SÓ para a memória (`atualizarVistos`): não escrevem nada (nem mensagem, nem nota,
+ * nem etiqueta), porque qualquer escrita é atividade e faria a irmã velha virar a mais recente. `irmas` = as outras conversas do mesmo telefone: o que elas já mandaram conta como
  * feito para quem fala (senão a conversa nova repetiria véspera/dia/preparo). Empate de atividade: a de id maior. Sem telefone: fala.
  */
 export function quemFalaPorTelefone(lista: ReadonlyArray<{ c: ConversaRegua; atividade: number }>): Map<number, { fala: boolean; irmas: number[] }> {
@@ -467,16 +467,17 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
   };
   for (const { c, vistos } of pendentes) {
     try {
-      if (precisaUltimaPublica(c)) c.ultima = await chat.ultimaPublica(c.id);
       const { fala, irmas } = quemFala.get(c.id) ?? { fala: true, irmas: [] };
+      // as outras conversas do mesmo telefone SÓ têm a memória atualizada (acima): nada de mensagem, nota, etiqueta, prioridade nem
+      // atribuição — qualquer escrita conta como atividade no Chatwoot e faria a irmã velha virar «a que fala»
+      if (!fala) continue;
+      if (precisaUltimaPublica(c)) c.ultima = await chat.ultimaPublica(c.id);
       // a que fala junta o que TODAS as conversas do mesmo telefone já mandaram (mesma regra|chave): conversa nova não repete a véspera
       const feitosDaConversa = new Set<string>(feitosPorConversa.get(c.id) ?? []);
-      if (fala) for (const id of irmas) for (const f of feitosPorConversa.get(id) ?? []) feitosDaConversa.add(f);
+      for (const id of irmas) for (const f of feitosPorConversa.get(id) ?? []) feitosDaConversa.add(f);
       const { disparos, perdidas } = decidirRegua(c, { vistos, feitos: feitosDaConversa }, agora, unidade);
-      if (fala) for (const r of perdidas) resumo.perdidas[r] = (resumo.perdidas[r] ?? 0) + 1;
+      for (const r of perdidas) resumo.perdidas[r] = (resumo.perdidas[r] ?? 0) + 1;
       for (const d of disparos) {
-        // as outras conversas do mesmo telefone não falam com o paciente (só regra interna, memória e etiqueta do celular)
-        if (!fala && !d.interna) continue;
         if (mensagens >= MAX_MENSAGENS_POR_CICLO) break;
         const faltou = d.texto === null;
         let regra = faltou ? `${d.regra}${SUFIXO_FALTA}` : d.regra;

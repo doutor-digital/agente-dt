@@ -693,12 +693,12 @@ test('historico com consulta JÁ PASSADA vista pela 1ª vez: nada de falta, pós
   assert.ok(decidirRegua(nova, { vistos: kn.vistos, feitos: new Set() }, Z('2026-11-14T20:30:00Z'), U).disparos.some((x) => x.regra === 'pos-atendimento'));
 });
 
-test('Remarcado não é consulta de pé para a régua: Agendado → Remarcado hoje não manda dia nem preparo (a agenda grava Remarcado com a data VELHA)', () => {
-  const attrs = { etapa: 'Agendado', data_consulta: '2026-11-16', hora_consulta: '13:30' };
-  // dia = 10:30 Belém (13:30Z), preparo = 12:30 (15:30Z)
-  assert.deepEqual(regras(rodar(conv({ attrs: { ...attrs, situacao_consulta: 'Agendado' } }), '2026-11-16T13:35:00Z')), ['consulta-dia']);
-  assert.deepEqual(regras(rodar(conv({ attrs: { ...attrs, situacao_consulta: 'Agendado' } }), '2026-11-16T15:35:00Z')), ['consulta-preparo']);
-  for (const quando of ['2026-11-15T16:35:00Z', '2026-11-16T13:35:00Z', '2026-11-16T15:35:00Z']) {
-    assert.deepEqual(regras(rodar(conv({ attrs: { ...attrs, situacao_consulta: 'Remarcado' } }), quando)), [], quando);
-  }
+test('falta no mesmo dia: a chave é a da consulta — marcar «Não compareceu», desfazer e marcar de novo não manda duas vezes', () => {
+  const attrs = { etapa: 'Agendado', situacao_consulta: 'Não compareceu', data_consulta: '2026-11-16', hora_consulta: '13:30' };
+  const a = rodar(conv({ attrs }), '2026-11-16T20:00:00Z', { situacao_consulta: visto('Não compareceu', '2026-11-16T19:00:00Z') });
+  assert.deepEqual(regras(a), ['falta-mesmo-dia']);
+  // marcou de novo meia hora depois (desde novo): a mesma chave, já feita
+  const b = rodar(conv({ attrs }), '2026-11-16T20:00:00Z', { situacao_consulta: visto('Não compareceu', '2026-11-16T19:30:00Z') }, [`falta-mesmo-dia|${a.disparos[0]!.chave}`]);
+  assert.deepEqual(regras(b), []);
+  assert.match(a.disparos[0]!.chave, /^faltou@2026-11-16/);
 });

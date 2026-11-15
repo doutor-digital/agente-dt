@@ -770,16 +770,24 @@ test('conversa fora da fala continua com a memória em dia: Perdido que ela ganh
   assert.equal(c.mensagens.length, 0, 'não dispara o reengajamento de 48 h por um estado de semanas atrás');
 });
 
-test('conversa que não fala (mesmo telefone) ainda roda a regra interna', async () => {
+test('conversa que NÃO fala (mesmo telefone) não escreve nada — nem regra interna vencida, nem etiqueta do celular; a viva continua falando', async () => {
   const tel = '+5594999990000';
   const f = armazemFalso();
   const quente = { etapa: 'Sofia qualifica', qualificacao: 'Quente' };
-  const A = () => ({ ...bruta(1, { attrs: quente, telefone: tel, ultima: { tipo: 0, autor: 9, quando: '2026-11-16T10:00:00Z' } }), last_activity_at: unix('2026-11-10T10:00:00Z') });
-  const B = () => ({ ...bruta(2, { attrs: { etapa: 'Novo lead' }, telefone: tel }), last_activity_at: unix('2026-11-16T09:00:00Z') });
+  // A (velha) tem quente-parado vencido, sem-resposta de 24 h e uma saída do celular (etiqueta); B (viva) é a que fala e tem o mesmo quente-parado
+  const A = () => ({ ...bruta(1, { attrs: quente, telefone: tel, ultima: { tipo: 1, autor: 7, quando: '2026-11-15T09:00:00Z' } }), last_activity_at: unix('2026-11-10T10:00:00Z') });
+  const B = () => ({ ...bruta(2, { attrs: quente, telefone: tel, ultima: { tipo: 0, autor: 9, quando: '2026-11-16T10:00:00Z' } }), last_activity_at: unix('2026-11-16T10:00:00Z') });
   const c = chatFalso(() => [A(), B()]);
   await cicloDaCaixa(deps(f.armazem, c.chat), 2, 'x', 'ligado', U, new Date('2026-11-16T11:00:00Z'));
-  const r = await cicloDaCaixa(deps(f.armazem, c.chat), 2, 'x', 'ligado', U, new Date('2026-11-16T13:10:00Z')); // 3 h depois da última mensagem do paciente
-  assert.ok(c.mensagens.some((m) => m.id === 1 && m.privada && /lead-quente-parado/.test(m.texto)), 'a interna roda na conversa que não fala');
-  assert.equal(c.mensagens.filter((m) => !m.privada).length, 0);
-  assert.ok(r.conversas === 2);
+  const r1 = await cicloDaCaixa(deps(f.armazem, c.chat), 2, 'x', 'ligado', U, new Date('2026-11-16T13:10:00Z'));
+  const r2 = await cicloDaCaixa(deps(f.armazem, c.chat), 2, 'x', 'ligado', U, new Date('2026-11-16T13:20:00Z'));
+  assert.equal(r1.conversas, 2, 'as duas seguem no ciclo (memória)');
+  assert.ok(c.mensagens.every((m) => m.id === 2), 'A não escreve nenhuma mensagem/nota');
+  assert.ok(c.mensagens.some((m) => m.id === 2 && /lead-quente-parado/.test(m.texto)), 'B, que fala, roda a interna');
+  assert.ok(c.etiquetas.every((e) => e.id !== 1), 'nenhuma etiqueta em A');
+  assert.ok(c.atributos.every((a) => a.id !== 1) && c.prioridades.every((p) => p.id !== 1) && c.atribuicoes.every((a) => a.id !== 1), 'nem atributos, prioridade ou atribuição em A');
+  assert.equal(c.buscasDaUltima.includes(1), false, 'nem leituras extras de A');
+  assert.ok(f.disparos.every((d) => d.conversationId === 2));
+  assert.ok(f.vistos.some((v) => v.conversationId === 1), 'a memória de A segue atualizada');
+  assert.equal(r2.disparos, 0, 'B não repete');
 });

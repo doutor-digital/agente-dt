@@ -458,8 +458,7 @@ interface Candidato {
 const ETAPAS_DA_CONSULTA = new Set(['Agendado', 'Confirmado', 'Fechou']);
 const ETAPAS_DE_QUALIFICACAO = new Set(['Sofia qualifica', 'Esperando humano']);
 /** situação em que a consulta ainda está de pé */
-// sem «Remarcado»: só a agenda grava essa situação, e com a data VELHA (a Sofia grava Agendado com a data nova ao remarcar)
-const SITUACOES_DE_PE = new Set(['', 'Agendado', 'Confirmado']);
+const SITUACOES_DE_PE = new Set(['', 'Agendado', 'Confirmado', 'Remarcado']);
 const MODELO_DA_ESPERA: Record<string, string> = {
   Exames: 'parau_espera_exames',
   Viajando: 'parau_espera_viagem',
@@ -571,7 +570,7 @@ function candidatos(c: ConversaRegua, vistos: Vistos): Candidato[] {
     const faltou = naConsulta && situ === 'Não compareceu' ? novo('situacao_consulta', 'Não compareceu') : null;
     // o texto diz "a consulta de hoje": só vale se a falta foi marcada no dia da consulta
     if (faltou && consulta && consulta.data.iso === diaEmBelem(faltou.desde)) {
-      saida.push({ regra: 'falta-mesmo-dia', modelo: 'parau_consulta_falta_mesmo_dia', chave: `faltou@${faltou.desde.toISOString()}`, kind: 'depois', alvo: faltou.desde });
+      saida.push({ regra: 'falta-mesmo-dia', modelo: 'parau_consulta_falta_mesmo_dia', chave: `faltou@${consulta.chave}`, kind: 'depois', alvo: faltou.desde });
     }
     if (naConsulta && situ === 'Não compareceu' && consulta && !semFollowUp && !consultaAnteriorAVista(consulta)) {
       saida.push({ regra: 'falta-48h', modelo: 'parau_consulta_falta_48h', chave: consulta.chave, kind: 'depois', alvo: new Date(instante(consulta, HORA_PADRAO_DEPOIS).getTime() + 2 * DIA) });
