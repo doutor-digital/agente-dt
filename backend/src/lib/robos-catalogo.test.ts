@@ -199,18 +199,20 @@ test('a ordem das sequências nunca se inverte: followup 48 h < 96 h < 120 h; p�
   for (const seq of SEQUENCIAS) for (let i = 1; i < seq.length; i++) assert.ok(T2[seq[i - 1]!]!.padraoMin < T2[seq[i]!]!.padraoMin, `${seq[i - 1]} < ${seq[i]}`);
   // as regras de cada sequência existem
   for (const seq of SEQUENCIAS) for (const r of seq) assert.ok(T2[r], r);
-  assert.equal(ordemQuebrada('followup-96h', 100 * 60, efetivo()), null);
+  assert.equal(ordemQuebrada('followup-96h', 90 * 60, efetivo()), null);
+  assert.equal(ordemQuebrada('followup-96h', 96 * 60, efetivo()), null, 'o de fábrica passa');
   assert.match(ordemQuebrada('followup-96h', 48 * 60, efetivo()) ?? '', /DEPOIS de «followup-48h»/);
   assert.match(ordemQuebrada('followup-96h', 120 * 60, efetivo()) ?? '', /ANTES de «followup-120h»/);
   assert.match(ordemQuebrada('followup-48h', 97 * 60, efetivo()) ?? '', /ANTES de «followup-96h»/);
   assert.match(ordemQuebrada('decisao-4d', 8 * 1440, efetivo()) ?? '', /ANTES de «decisao-7d»/);
   assert.match(ordemQuebrada('decisao-7d', 4 * 1440, efetivo()) ?? '', /DEPOIS de «decisao-4d»/);
   assert.match(ordemQuebrada('decisao-4d', 1 * 1440, efetivo({ 'pos-atendimento': 30 * 60 })) ?? '', /DEPOIS de «pos-atendimento»/);
-  // folga mínima de 12 h entre robôs «depois» da mesma sequência (dois recados do mesmo assunto no mesmo dia parecem spam)
-  assert.match(ordemQuebrada('followup-96h', 48 * 60 + 11 * 60, efetivo()) ?? '', /DEPOIS de «followup-48h».*12 h de folga/);
-  assert.equal(ordemQuebrada('followup-96h', 48 * 60 + 12 * 60, efetivo()), null);
-  assert.match(ordemQuebrada('followup-48h', 96 * 60 - 11 * 60, efetivo()) ?? '', /ANTES de «followup-96h».*12 h de folga/);
-  assert.equal(ordemQuebrada('followup-48h', 96 * 60 - 12 * 60, efetivo()), null);
+  // folga mínima de 24 h entre robôs «depois» da mesma sequência (dois recados do mesmo assunto no mesmo dia parecem spam)
+  assert.match(ordemQuebrada('followup-96h', (48 + 23) * 60, efetivo()) ?? '', /DEPOIS de «followup-48h».*1 dia de folga/);
+  assert.equal(ordemQuebrada('followup-96h', (48 + 24) * 60, efetivo()), null);
+  assert.match(ordemQuebrada('followup-48h', (96 - 23) * 60, efetivo()) ?? '', /ANTES de «followup-96h».*1 dia de folga/);
+  assert.equal(ordemQuebrada('followup-48h', (96 - 24) * 60, efetivo()), null);
+  assert.match(ordemQuebrada('followup-120h', (96 + 12) * 60, efetivo()) ?? '', /DEPOIS de «followup-96h»/, '12 h depois do 96 h já é spam');
   assert.match(ordemQuebrada('decisao-4d', 1 * 1440, efetivo({ 'pos-atendimento': 16 * 60 })) ?? '', /DEPOIS de «pos-atendimento»/, '24 h depois de 16 h: só 8 h de folga');
   assert.equal(ordemQuebrada('decisao-4d', 2 * 1440, efetivo({ 'pos-atendimento': 16 * 60 })), null);
   // os lembretes «antes» seguem só a ordem (1 h, 3 h, 24 h)

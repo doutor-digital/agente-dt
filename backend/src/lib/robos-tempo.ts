@@ -63,8 +63,8 @@ export const SEQUENCIAS: ReadonlyArray<readonly string[]> = [
  * O novo valor de `regra` (em minutos) mantém a ordem das sequências? `efetivoDe` devolve o que vale hoje para as outras (o configurado ou o de
  * fábrica). Devolve a mensagem do problema, ou null.
  */
-/** Entre dois robôs «depois» da mesma sequência, no mínimo isto: dois recados do mesmo assunto no mesmo dia parecem spam. */
-export const FOLGA_MINIMA_ENTRE_ROBOS_MIN = 12 * H;
+/** Entre dois robôs «depois» da mesma sequência, no mínimo isto (24 h): dois recados do mesmo assunto no mesmo dia parecem spam. */
+export const FOLGA_MINIMA_ENTRE_ROBOS_MIN = 24 * H;
 
 export function ordemQuebrada(regra: string, minutos: number, efetivoDe: (regra: string) => number): string | null {
   for (const seq of SEQUENCIAS) {

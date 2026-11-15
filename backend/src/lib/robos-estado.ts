@@ -114,7 +114,7 @@ export interface AjustesDaUnidade {
 export const SEM_AJUSTES: AjustesDaUnidade = { desligados: new Set(), regua: {} };
 
 /** Lança se o banco falhar: o worker NÃO roda o ciclo (melhor calar um ciclo do que mandar de um robô que a Gestora desligou). */
-export async function ajustesDaUnidade(banco: BancoDosRobos, slug: string): Promise<AjustesDaUnidade> {
+export async function ajustesDaUnidade(banco: BancoDosRobos, slug: string, alternativas: Readonly<Record<string, readonly string[]>> = ALTERNATIVAS_DE_MODELO): Promise<AjustesDaUnidade> {
   const linhas = await banco.linhas(slug);
   const desligados = new Set<string>();
   const tempoMin = new Map<string, number>();
@@ -126,8 +126,7 @@ export async function ajustesDaUnidade(banco: BancoDosRobos, slug: string): Prom
     // valor guardado que hoje não passa nos limites (mudaram) volta ao de fábrica: nunca um horário absurdo
     if (l.tempoMin !== null && tempoDentroDosLimites(l.regra, l.tempoMin)) tempoMin.set(l.regra, l.tempoMin);
     for (const [padrao, novo] of Object.entries(l.modelos)) {
-      const irmaos = robo.modelos.map((m) => m.modelo);
-      if (irmaos.includes(padrao) && modeloCompativel(padrao, novo, irmaos)) modelos.set(`${l.regra}|${padrao}`, novo);
+      if (robo.modelos.some((m) => m.modelo === padrao) && modeloCompativel(padrao, novo, alternativas)) modelos.set(`${l.regra}|${padrao}`, novo);
     }
   }
   return { desligados, regua: { tempoMin, modelos } };
@@ -144,12 +143,16 @@ function tipoDaVariavel(campo: string): string {
 const formaDoModelo = (modelo: string): string[] => camposDoModelo(modelo).map(tipoDaVariavel);
 
 /**
- * `novo` pode mandar no lugar de `padrao`? Só entre os modelos DE FÁBRICA do próprio robô (`irmaos`: o que o código do robô já monta, por
- * exemplo véspera de consulta × véspera de sessão) e com as mesmas variáveis. Nunca o modelo de OUTRO robô: a véspera virando «a sua consulta é
- * HOJE» tem a mesma forma (nome + data) e mentiria ao paciente.
+ * As ALTERNATIVAS que cada modelo de fábrica aceita, declaradas UMA a UMA (modelo de fábrica → modelos que podem mandar no lugar dele). Hoje a lista
+ * é VAZIA de propósito: dois modelos com as mesmas variáveis (nome + data) podem dizer coisas diferentes — «sua consulta é amanhã» × «sua sessão é
+ * amanhã», «estou esperando os exames» × «você está viajando» — e a troca mandaria ao paciente o texto da condição errada. A tela mostra «sem
+ * alternativa aprovada» e o seletor fica desabilitado. Para liberar uma troca, declare aqui o par (e o teste confere que a forma bate).
  */
-export function modeloCompativel(padrao: string, novo: string, irmaos: readonly string[]): boolean {
-  if (!irmaos.includes(padrao) || !irmaos.includes(novo)) return false;
+export const ALTERNATIVAS_DE_MODELO: Readonly<Record<string, readonly string[]>> = {};
+
+/** `novo` pode mandar no lugar de `padrao`? Só se foi DECLARADO em `ALTERNATIVAS_DE_MODELO` para `padrao` e pede as mesmas variáveis. */
+export function modeloCompativel(padrao: string, novo: string, alternativas: Readonly<Record<string, readonly string[]>> = ALTERNATIVAS_DE_MODELO): boolean {
+  if (!(alternativas[padrao] ?? []).includes(novo)) return false;
   if (!(padrao in TEXTOS_PARAU) || !(novo in TEXTOS_PARAU)) return false;
   const a = formaDoModelo(padrao);
   const b = formaDoModelo(novo);
@@ -164,9 +167,9 @@ export interface OpcaoDeModelo {
   texto: string | null;
 }
 
-/** Os modelos que podem mandar no lugar de `padrao`: aprovados na caixa, com as mesmas variáveis e que a régua sabe preencher. */
-export function opcoesDeModelo(padrao: string, aprovados: Aprovados | null, irmaos: readonly string[]): OpcaoDeModelo[] {
-  const lista = Object.keys(TEXTOS_PARAU).filter((m) => m === padrao || (modeloCompativel(padrao, m, irmaos) && aprovados !== null && aprovados.has(m) && [null, camposDoModelo(m).length].includes(aprovados.get(m) ?? null)));
+/** Os modelos que podem mandar no lugar de `padrao`: o de fábrica e as alternativas DECLARADAS, aprovadas na caixa, com as mesmas variáveis. */
+export function opcoesDeModelo(padrao: string, aprovados: Aprovados | null, alternativas: Readonly<Record<string, readonly string[]>> = ALTERNATIVAS_DE_MODELO): OpcaoDeModelo[] {
+  const lista = Object.keys(TEXTOS_PARAU).filter((m) => m === padrao || (modeloCompativel(padrao, m, alternativas) && aprovados !== null && aprovados.has(m) && [null, camposDoModelo(m).length].includes(aprovados.get(m) ?? null)));
   return lista.sort((a, b) => (a === padrao ? -1 : b === padrao ? 1 : a.localeCompare(b))).map((modelo) => ({ modelo, texto: textoDeExemplo(modelo) }));
 }
 
@@ -192,7 +195,7 @@ export function situacaoDoRegistro(l: Pick<LinhaDeDisparo, 'regra' | 'modo' | 't
   if (sufixo === '!template') return { codigo: 'sem-template', rotulo: 'Modelo ainda não aprovado — só nota', enviado: false };
   if (sufixo === '!perdida') return { codigo: 'perdida', rotulo: 'Perdida por horário — não enviou', enviado: false };
   if (l.modo === 'seco') return { codigo: 'seco', rotulo: 'Seco — só nota, nada foi enviado', enviado: false };
-  if (l.texto.startsWith('🛑') && /Kommo/.test(l.texto)) return { codigo: 'kommo', rotulo: 'Só nota: o paciente tem cartão ativo no Kommo', enviado: false };
+  if (l.texto.startsWith('🛑') && /Kommo/.test(l.texto)) return { codigo: 'kommo', rotulo: 'Só nota: o paciente tem cartão ativo no CRM antigo', enviado: false };
   if (interna) return { codigo: 'interna', rotulo: 'Ação interna (nota para a equipe)', enviado: false };
   if (l.texto.startsWith('[template ')) return { codigo: 'template', rotulo: 'Enviado (modelo da Meta)', enviado: true };
   return { codigo: 'texto', rotulo: 'Enviado (texto)', enviado: true };
@@ -286,9 +289,8 @@ export async function visaoDosRobos(banco: BancoDosRobos, slug: string, o: { ago
         modelosDaTela: r.interna
           ? []
           : r.modelos.map((m) => {
-              const irmaos = r.modelos.map((x) => x.modelo);
-              const atual = e?.modelos[m.modelo] && modeloCompativel(m.modelo, e.modelos[m.modelo]!, irmaos) ? e.modelos[m.modelo]! : m.modelo;
-              const opcoes = opcoesDeModelo(m.modelo, o.aprovados, irmaos);
+              const atual = e?.modelos[m.modelo] && modeloCompativel(m.modelo, e.modelos[m.modelo]!) ? e.modelos[m.modelo]! : m.modelo;
+              const opcoes = opcoesDeModelo(m.modelo, o.aprovados);
               if (!opcoes.some((x) => x.modelo === atual)) opcoes.push({ modelo: atual, texto: textoDeExemplo(atual) });
               return { padrao: m.modelo, atual, texto: textoDeExemplo(atual), personalizado: atual !== m.modelo, opcoes };
             }),
@@ -314,6 +316,8 @@ export interface PedidoDeMudanca {
   modelo?: unknown;
   /** o que a caixa tem aprovado agora (null = não deu para ler) */
   aprovados: Aprovados | null;
+  /** só os testes: outras alternativas declaradas no lugar de `ALTERNATIVAS_DE_MODELO` */
+  alternativas?: Readonly<Record<string, readonly string[]>>;
 }
 
 export type ResultadoDaMudanca = { ok: true; regra: string } | { ok: false; status: 400 | 403 | 404 | 409; erro: string };
@@ -351,7 +355,7 @@ export async function mudarRobo(banco: BancoDosRobos, p: PedidoDeMudanca): Promi
     const m = p.modelo as { padrao?: unknown; novo?: unknown };
     if (robo.interna || typeof m?.padrao !== 'string' || typeof m?.novo !== 'string' || !robo.modelos.some((x) => x.modelo === m.padrao)) return { ok: false, status: 400, erro: 'pedido inválido' };
     if (p.aprovados === null && m.novo !== m.padrao) return { ok: false, status: 409, erro: 'não consegui ler os modelos aprovados no Chatwoot agora — tente de novo em instantes' };
-    if (!opcoesDeModelo(m.padrao, p.aprovados, robo.modelos.map((x) => x.modelo)).some((o) => o.modelo === m.novo)) return { ok: false, status: 400, erro: 'esse modelo não é um dos modelos deste robô, não está aprovado nesta caixa ou pede variáveis diferentes das que o robô sabe preencher' };
+    if (!opcoesDeModelo(m.padrao, p.aprovados, p.alternativas).some((o) => o.modelo === m.novo)) return { ok: false, status: 400, erro: 'não há essa alternativa aprovada para este modelo (ou ela não está aprovada nesta caixa)' };
     const atual = (await banco.linhas(p.slug)).find((l) => l.regra === robo.regra)?.modelos ?? {};
     const novo = { ...atual };
     if (m.novo === m.padrao) delete novo[m.padrao];
