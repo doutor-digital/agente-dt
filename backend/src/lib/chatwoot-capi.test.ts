@@ -471,9 +471,9 @@ test('falha ao ler as mensagens de UMA conversa: as outras seguem e nada fica ma
     await t.ciclo('ligado', T0);
     const lerOriginal = t.deps.chat.clique;
     let quebra = true;
-    t.deps.chat.clique = async (id) => {
+    t.deps.chat.clique = async (id, caixa) => {
       if (id === 10 && quebra) throw new Error('timeout');
-      return lerOriginal(id);
+      return lerOriginal(id, caixa);
     };
     t.estado.conversas = [bruta(10, { etapa: 'Agendado' }), bruta(11, { etapa: 'Agendado' })];
     const r = await t.ciclo('ligado', min(10));
@@ -558,7 +558,7 @@ test('Chatwoot: lê as mensagens para trás (before) até a primeira e acha o cl
       }) as unknown as typeof fetch,
     },
   );
-  const clique = await chatDoCapi(ctx).clique(9);
+  const clique = await chatDoCapi(ctx).clique(9, 3);
   assert.deepEqual(clique, { ctwaClid: 'LA-NO-INICIO', anuncio: '777' });
   assert.equal(pedidos.length, 3);
 });
