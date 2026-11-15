@@ -97,13 +97,13 @@ async function lerEstado(q: Questionario): Promise<EstadoAtual> {
 async function bancoReal(): Promise<BancoPorta> {
   const { prisma } = await import('../lib/prisma.js');
   return {
-    async gravarUnidade(slug, nome, campos) {
+    async gravarUnidade(slug, nome, campos, soNaCriacao = {}) {
       const ja = await prisma.unit.findUnique({ where: { slug }, select: { id: true } });
       if (ja) {
         if (Object.keys(campos).length) await prisma.unit.update({ where: { slug }, data: campos as never });
         return { id: ja.id, criada: false };
       }
-      const nova = await prisma.unit.create({ data: { slug, name: nome, isActive: false, ...campos } as never, select: { id: true } });
+      const nova = await prisma.unit.create({ data: { slug, name: nome, isActive: false, ...soNaCriacao, ...campos } as never, select: { id: true } });
       return { id: nova.id, criada: true };
     },
     async gravarConfigChatwoot(unitId, c) {

@@ -17,7 +17,7 @@
  */
 import type { Request, Response } from 'express';
 import { logger } from '../lib/logger.js';
-import { numerosDoKapsoConfigurados } from '../lib/chatwoot-unidades.js';
+import { numerosDoKapsoConfigurados, numerosForaDaLista } from '../lib/chatwoot-unidades.js';
 
 export const KAPSO_HOST = 'https://api.kapso.ai';
 export const KAPSO_META = `${KAPSO_HOST}/meta/whatsapp`;
@@ -35,13 +35,23 @@ export const DOWNLOAD_KAPSO = `${KAPSO_HOST}/meta/whatsapp/media_download`;
  * (`GET /v13.0/<id>`) e o Kapso responde 404 «WhatsApp configuration not found» sem ele (medido 13/11/2026): por isso
  * todo áudio, foto e documento chegava VAZIO no Chatwoot. Tenta cada número até um não dar 404. Padrão: Parauapebas.
  */
+const avisadosForaDaLista = new Set<string>();
 export function numerosDoKapso(env: NodeJS.ProcessEnv = process.env): string[] {
   const l = String(env.KAPSO_PHONE_NUMBER_IDS ?? '')
     .split(/[\s,]+/)
     .filter((x) => /^\d{5,25}$/.test(x));
   // a variável de ambiente, SE existir, manda (como sempre); sem ela valem os números das unidades configuradas (Parauapebas é a semente,
   // que era o padrão). Atenção ao ligar unidade nova: com KAPSO_PHONE_NUMBER_IDS definida, o número dela precisa entrar nela também.
-  return l.length ? l : numerosDoKapsoConfigurados();
+  if (l.length) {
+    // a variável manda (como sempre), mas número de unidade configurada que ficou de fora dela é mídia/referral perdido SEM erro: avisa uma vez
+    for (const n of numerosForaDaLista(l)) {
+      if (avisadosForaDaLista.has(n)) continue;
+      avisadosForaDaLista.add(n);
+      logger.warn({ numero: n }, 'kapso: KAPSO_PHONE_NUMBER_IDS não inclui o número de uma unidade configurada — mídia e referral dela não passam por aqui');
+    }
+    return l;
+  }
+  return numerosDoKapsoConfigurados();
 }
 
 /**

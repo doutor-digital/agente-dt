@@ -106,20 +106,31 @@ export function problemasDaConfig(c: ConfigChatwootUnidade): string[] {
   return p;
 }
 
-/** Problemas ENTRE unidades: a mesma caixa ou o mesmo prefixo em duas unidades. Devolve os slugs que devem ser descartados (os últimos). */
+/**
+ * Problemas ENTRE unidades: a mesma caixa ou o mesmo prefixo em duas unidades. Vale a ORDEM da lista (quem vem antes fica; quem vem
+ * depois é descartado) e unidade descartada não segura caixa nem prefixo de ninguém. Devolve slug → motivo dos descartados.
+ */
 export function conflitosEntreUnidades(lista: readonly ConfigChatwootUnidade[]): Map<string, string> {
   const ruins = new Map<string, string>();
   const caixaDe = new Map<number, string>();
   const prefixoDe = new Map<string, string>();
   for (const c of lista) {
+    let motivo: string | null = null;
     for (const cx of c.caixas) {
       const dono = caixaDe.get(cx.id);
-      if (dono && dono !== c.slug) ruins.set(c.slug, `a caixa ${cx.id} já é de ${dono}`);
-      else caixaDe.set(cx.id, c.slug);
+      if (dono && dono !== c.slug) {
+        motivo = `a caixa ${cx.id} já é de ${dono}`;
+        break;
+      }
     }
-    const dono = prefixoDe.get(c.prefixoModelos);
-    if (dono && dono !== c.slug) ruins.set(c.slug, `o prefixo ${c.prefixoModelos} já é de ${dono}`);
-    else prefixoDe.set(c.prefixoModelos, c.slug);
+    const donoDoPrefixo = prefixoDe.get(c.prefixoModelos);
+    if (!motivo && donoDoPrefixo && donoDoPrefixo !== c.slug) motivo = `o prefixo ${c.prefixoModelos} já é de ${donoDoPrefixo}`;
+    if (motivo) {
+      ruins.set(c.slug, motivo);
+      continue; // descartada: não reserva caixa nem prefixo
+    }
+    for (const cx of c.caixas) caixaDe.set(cx.id, c.slug);
+    prefixoDe.set(c.prefixoModelos, c.slug);
   }
   return ruins;
 }
@@ -226,6 +237,11 @@ export function numerosDoKapsoConfigurados(): string[] {
   return l;
 }
 
+/** Dos números das unidades configuradas, os que NÃO estão na lista dada (a variável de ambiente que manda sobre a configuração). */
+export function numerosForaDaLista(lista: readonly string[]): string[] {
+  return numerosDoKapsoConfigurados().filter((n) => !lista.includes(n));
+}
+
 /** O nome do modelo na Meta: o nome base da régua (`parau_x`) com o prefixo da unidade. */
 export const PREFIXO_BASE_DOS_MODELOS = 'parau_';
 export function nomeDoModeloNaMeta(nomeBase: string, prefixoDaUnidade: string | undefined | null): string {
@@ -281,8 +297,11 @@ export function mesclarComSemente(doBanco: readonly ConfigChatwootUnidade[], avi
     if (p.length) aviso(`configuração ignorada: ${p.join('; ')}`, c.slug);
     else validas.push(c);
   }
-  // a semente entra primeiro na checagem de conflito só se não houver linha válida para ela
-  const lista = validas.some((c) => c.slug === SEMENTE_PARAUAPEBAS.slug) ? validas : [SEMENTE_PARAUAPEBAS, ...validas];
+  // ORDEM FIXA (o `findMany` não tem ordem): Parauapebas primeiro (a linha do banco, se for válida; senão a semente), depois as outras por slug.
+  // Assim uma linha nova nunca derruba a unidade que já está no ar por causa de um conflito de caixa ou de prefixo.
+  const propria = validas.find((c) => c.slug === SEMENTE_PARAUAPEBAS.slug) ?? SEMENTE_PARAUAPEBAS;
+  const outras = validas.filter((c) => c.slug !== SEMENTE_PARAUAPEBAS.slug).sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
+  const lista = [propria, ...outras];
   const ruins = conflitosEntreUnidades(lista);
   for (const [slug, motivo] of ruins) aviso(`configuração ignorada: ${motivo}`, slug);
   return lista.filter((c) => !ruins.has(c.slug));

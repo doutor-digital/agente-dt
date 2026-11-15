@@ -36,6 +36,7 @@ import { numerosDoKapso as numerosDoKapsoReferral } from './kapso-referral.js';
 import { sufixoDaUnidade } from './chatwoot-capi.js';
 import { sufixoDaUnidade as sufixoDoGestor } from './chatwoot-gestor.js';
 import { eventoDePausa } from './chatwoot-pausa.js';
+import { estadoDuplicados } from './chatwoot-duplicados.js';
 
 const SLUG_PARAU = 'doutor-hernia-parauapebas';
 
@@ -216,7 +217,7 @@ test('linha ruim ou conflitante é ignorada com aviso e NUNCA tira Parauapebas',
   const avisos: string[] = [];
   const aviso = (m: string, s: string) => avisos.push(`${s}: ${m}`);
   const roubaCaixa: ConfigChatwootUnidade = { ...SERRA, slug: 'doutor-hernia-ladra', prefixoModelos: 'ladra_', envSufixo: 'LADRA', caixas: [{ id: 3, tipo: 'cloud' }] };
-  const mesmoPrefixo: ConfigChatwootUnidade = { ...SERRA, slug: 'doutor-hernia-copia', caixas: [{ id: 30, tipo: 'cloud' }] };
+  const mesmoPrefixo: ConfigChatwootUnidade = { ...SERRA, slug: 'doutor-hernia-zcopia', caixas: [{ id: 30, tipo: 'cloud' }] };
   const semCaixa: ConfigChatwootUnidade = { ...SERRA, slug: 'doutor-hernia-vazia', prefixoModelos: 'vazia_', caixas: [] };
   const lista = mesclarComSemente([SERRA, roubaCaixa, mesmoPrefixo, semCaixa], aviso);
   assert.deepEqual(lista.map((c) => c.slug), [SLUG_PARAU, 'doutor-hernia-serra']);
@@ -263,4 +264,38 @@ test('da linha do banco para a configuração (campos do JSON que faltam viram v
   assert.equal(c.slug, 'doutor-hernia-serra');
   assert.deepEqual(c.caixas, [{ id: 12, tipo: 'cloud', instanciaEvolution: null }]);
   assert.match(problemasDaConfig(c).join('|'), /falta endereco/);
+});
+
+test('conflito é decidido por ORDEM FIXA (Parauapebas primeiro, depois por slug) e unidade descartada não segura caixa de ninguém', () => {
+  const ladra: ConfigChatwootUnidade = { ...SERRA, slug: 'doutor-hernia-aaa', prefixoModelos: 'aaa_', envSufixo: 'AAA', caixas: [{ id: 12, tipo: 'cloud' }, { id: 3, tipo: 'cloud' }] };
+  const legitima: ConfigChatwootUnidade = { ...SERRA, slug: 'doutor-hernia-zzz', prefixoModelos: 'zzz_', envSufixo: 'ZZZ', caixas: [{ id: 12, tipo: 'cloud' }] };
+  // qualquer ordem de chegada do banco dá o mesmo resultado
+  for (const entrada of [[ladra, legitima], [legitima, ladra]]) {
+    const lista = mesclarComSemente(entrada);
+    assert.deepEqual(lista.map((c) => c.slug), [SLUG_PARAU, 'doutor-hernia-zzz']);
+  }
+  // a descartada (que queria a 3 de Parauapebas) não ficou dona da caixa 12: a «zzz» entra
+  const ruins = conflitosEntreUnidades([SEMENTE_PARAUAPEBAS, ladra, legitima]);
+  assert.deepEqual([...ruins.keys()], ['doutor-hernia-aaa']);
+});
+
+test('duplicados: com mais de uma unidade, vale o estado MAIS RESTRITO (junção não tem volta)', () => {
+  const antes = process.env.CHATWOOT_DUPLICADOS_SLUGS;
+  try {
+    process.env.CHATWOOT_DUPLICADOS_SLUGS = SLUG_PARAU;
+    assert.equal(estadoDuplicados(), 'ligado', 'só Parauapebas: o estado dela, como sempre');
+    aplicarConfigs(mesclarComSemente([SERRA]));
+    assert.equal(estadoDuplicados(), 'desligado', 'a unidade nova não está na lista: segura as duas');
+    process.env.CHATWOOT_DUPLICADOS_SLUGS = `${SLUG_PARAU},doutor-hernia-serra`;
+    assert.equal(estadoDuplicados(), 'ligado');
+  } finally {
+    if (antes === undefined) delete process.env.CHATWOOT_DUPLICADOS_SLUGS;
+    else process.env.CHATWOOT_DUPLICADOS_SLUGS = antes;
+  }
+});
+
+test('a migration pode rodar de novo sem quebrar (chaves estrangeiras protegidas)', () => {
+  const sql = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../prisma/migrations/20261114120000_unit_chatwoot/migration.sql'), 'utf8');
+  assert.equal((sql.match(/duplicate_object/g) ?? []).length, 2);
+  assert.ok(!/^ALTER TABLE .* ADD CONSTRAINT/m.test(sql), 'ADD CONSTRAINT solto (fora de DO) quebra na segunda execução');
 });

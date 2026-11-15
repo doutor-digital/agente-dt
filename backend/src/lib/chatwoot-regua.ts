@@ -78,6 +78,7 @@ export function arquivoComEtapa(raw: any): boolean {
 /**
  * O usuário "📱 Celular da unidade": autor das mensagens que a equipe manda pelo celular (o Evolution usa o token dele). LEGADO: o valor de
  * Parauapebas; o código novo pergunta `ehUsuarioCelular(id)` (cada unidade tem o seu usuário, na configuração).
+ * @deprecated comparar com ela vale só para Parauapebas.
  */
 export const USUARIO_CELULAR = SEMENTE_PARAUAPEBAS.usuarioCelularId as number;
 export const ETIQUETA_CELULAR = 'respondeu-pelo-celular';

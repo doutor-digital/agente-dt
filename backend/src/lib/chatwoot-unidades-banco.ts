@@ -9,8 +9,8 @@ import { aplicarConfigs, configDaLinha, mesclarComSemente, type LinhaDoBanco } f
 
 const avisados = new Set<string>();
 let carregando: Promise<void> | null = null;
-let carregadoEm = 0;
-const VALIDADE_MS = 60_000;
+let ultimoErro: string | null = null;
+const RELEITURA_MS = 60_000;
 
 /** Relê o banco. Nunca lança: banco fora do ar mantém o que já estava carregado (a semente, no primeiro boot). */
 export async function recarregarConfigChatwoot(): Promise<void> {
@@ -28,9 +28,12 @@ export async function recarregarConfigChatwoot(): Promise<void> {
         logger.warn({ slug }, `chatwoot-unidades: ${msg}`);
       });
       aplicarConfigs(lista);
-      carregadoEm = Date.now();
+      ultimoErro = null;
     } catch (err) {
-      logger.warn({ err: String(err) }, 'chatwoot-unidades: não consegui ler o banco — segue valendo o que já estava carregado');
+      // uma vez por erro diferente (banco fora do ar ou tabela ainda não migrada não pode virar uma linha de log por minuto)
+      const msg = String(err);
+      if (msg !== ultimoErro) logger.warn({ err: msg }, 'chatwoot-unidades: não consegui ler o banco — segue valendo o que já estava carregado');
+      ultimoErro = msg;
     } finally {
       carregando = null;
     }
@@ -44,9 +47,7 @@ let timer: NodeJS.Timeout | null = null;
 export async function iniciarConfigChatwoot(): Promise<void> {
   await recarregarConfigChatwoot();
   if (timer) return;
-  timer = setInterval(() => {
-    if (Date.now() - carregadoEm >= VALIDADE_MS) void recarregarConfigChatwoot();
-  }, VALIDADE_MS);
+  timer = setInterval(() => void recarregarConfigChatwoot(), RELEITURA_MS);
   timer.unref?.();
 }
 

@@ -73,23 +73,29 @@ export function renderizarMolde(molde: string, q: Questionario): { texto: string
 /** O molde da Sofia 2.0 é de unidade COM sinal. Sem sinal o `systemPrompt` fica como está e a unidade usa o prompt em camadas do composer. */
 export const moldeServe = (q: Questionario): boolean => q.valores.sinal_pix !== undefined && q.valores.aceita_antecipado && q.valores.consulta_antecipada !== undefined;
 
-/** Os campos de `units` que NÃO são segredo (nenhum token passa por aqui). */
+/** Só na CRIAÇÃO da unidade: uma unidade que já existe mantém a categoria que tem. */
+export const CAMPOS_SO_NA_CRIACAO: Readonly<Record<string, unknown>> = { category: 'saude' };
+
+/**
+ * Os campos de `units` que NÃO são segredo (nenhum token passa por aqui). Campo opcional que o questionário não preencheu é OMITIDO
+ * (não vira `null`): rodar o script sobre uma unidade que já existe nunca apaga chave Pix, sinal ou almoço que ela já tem.
+ */
 export function camposDaUnidade(q: Questionario): Record<string, unknown> {
   const h = q.horarios;
   const v = q.valores;
+  const so = <T>(valor: T | undefined, chave: string): Record<string, T> => (valor === undefined ? {} : { [chave]: valor });
   return {
     name: q.unidade.nome,
-    category: 'saude',
     clinicAddress: q.unidade.endereco,
     clinicMapUrl: q.unidade.mapa_url,
-    pixKey: v.chave_pix ?? null,
-    pixHolder: v.favorecido ?? null,
+    ...so(v.chave_pix, 'pixKey'),
+    ...so(v.favorecido, 'pixHolder'),
     acceptsAdvancePayment: v.aceita_antecipado,
-    sinalPixCentavos: v.sinal_pix !== undefined ? Math.round(v.sinal_pix * 100) : null,
+    ...so(v.sinal_pix !== undefined ? Math.round(v.sinal_pix * 100) : undefined, 'sinalPixCentavos'),
     spineAgendaStart: h.inicio,
     spineAgendaEnd: h.fim,
-    spineLunchStart: h.almoco_inicio ?? null,
-    spineLunchEnd: h.almoco_fim ?? null,
+    ...so(h.almoco_inicio, 'spineLunchStart'),
+    ...so(h.almoco_fim, 'spineLunchEnd'),
     spineAgendaDays: [...h.dias],
     spineSlotMinutes: h.duracao_min,
     spineTimezone: q.unidade.fuso,

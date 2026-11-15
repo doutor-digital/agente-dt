@@ -14,7 +14,8 @@ import { lerYamlOuJson } from './yaml-minimo.js';
 
 const hora = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'use HH:MM (24 h)');
 const nomeDeVariavel = z.string().regex(/^[A-Z][A-Z0-9_]{2,60}$/, 'é o NOME da variável de ambiente (MAIÚSCULAS e _), nunca o valor');
-const digitos = (min = 5, max = 25) => z.string().regex(new RegExp(`^\\d{${min},${max}}$`), `só dígitos (${min} a ${max})`);
+/** Identificador só de dígitos. No YAML sem aspas ele vira número: aceita e guarda como texto (o schema pede texto; entre aspas é o jeito certo). */
+const digitos = (min = 5, max = 25) => z.preprocess((v) => (typeof v === 'number' && Number.isSafeInteger(v) ? String(v) : v), z.string().regex(new RegExp(`^\\d{${min},${max}}$`), `só dígitos (${min} a ${max})`));
 /** Objeto que recusa campo desconhecido (typo ou token colado no lugar errado vira erro, não é ignorado). */
 const obj = <T extends z.ZodRawShape>(shape: T) => z.object(shape).strict();
 const email = z.string().email().max(120);

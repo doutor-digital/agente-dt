@@ -6,14 +6,14 @@
  * Idempotente: rodar de novo recalcula o plano com o estado atual e só mexe no que falta. Portas injetáveis (teste não toca em banco).
  */
 import { AUTOMACOES } from '../automacoes.js';
-import { camposDaSofia, camposDaUnidade } from './molde-sofia.js';
+import { CAMPOS_SO_NA_CRIACAO, camposDaSofia, camposDaUnidade } from './molde-sofia.js';
 import type { Passo, Plano } from './plano.js';
 import { configChatwootDoQuestionario, type Questionario } from './questionario.js';
 
 /** O banco, como o executor o enxerga. A implementação real (prisma) está em `scripts/nova-unidade.ts`. */
 export interface BancoPorta {
   /** cria a unidade (inativa) ou atualiza os campos; devolve o id */
-  gravarUnidade(slug: string, nome: string, campos: Record<string, unknown>): Promise<{ id: string; criada: boolean }>;
+  gravarUnidade(slug: string, nome: string, campos: Record<string, unknown>, soNaCriacao?: Record<string, unknown>): Promise<{ id: string; criada: boolean }>;
   gravarConfigChatwoot(unitId: string, cfg: { prefixoModelos: string; metaAgendamentosDia: number | null; kapsoPhoneNumberId: string | null; wabaId: string | null; envSufixo: string; dadosModelos: Record<string, unknown> }): Promise<void>;
   /** ids das automações que a unidade já tem linha */
   automacoesDaUnidade(unitId: string): Promise<string[]>;
@@ -93,7 +93,7 @@ async function aplicarPasso(p: Passo, q: Questionario, o: OpcoesDeExecucao, unit
   const { banco } = o;
   switch (p.id) {
     case 'unidade': {
-      const r = await banco.gravarUnidade(q.unidade.slug, q.unidade.nome, camposDaUnidade(q));
+      const r = await banco.gravarUnidade(q.unidade.slug, q.unidade.nome, camposDaUnidade(q), CAMPOS_SO_NA_CRIACAO);
       definirUnitId(r.id);
       return [r.criada ? `unidade criada (inativa): ${r.id}` : `unidade atualizada: ${r.id}`];
     }

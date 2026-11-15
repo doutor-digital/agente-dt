@@ -22,9 +22,9 @@ function bancoFalso(init: { automacoes?: string[]; sofia?: Record<string, unknow
     if (init.falhaEm === nome) throw new Error(`banco caiu em ${nome}`);
   };
   const banco: BancoPorta = {
-    async gravarUnidade(slug, nome, campos) {
+    async gravarUnidade(slug, nome, campos, soNaCriacao) {
       quebra('gravarUnidade');
-      chamadas.push(['gravarUnidade', { slug, nome, campos }]);
+      chamadas.push(['gravarUnidade', { slug, nome, campos, soNaCriacao }]);
       return { id: 'u1', criada: !init.existe };
     },
     async gravarConfigChatwoot(unitId, cfg) {
@@ -149,4 +149,12 @@ test('segredo do ambiente nunca chega ao banco, ao log nem ao relatório', async
     delete process.env.META_ADS_TOKEN_PARAUAPEBAS;
     delete process.env.FRANQUIA_TOKEN_PARAUAPEBAS;
   }
+});
+
+test('a categoria da unidade só é mandada para a CRIAÇÃO, nunca misturada nos campos do update', async () => {
+  const { banco, chamadas } = bancoFalso();
+  await rodar(banco);
+  const u = chamadas[0]![1] as { campos: Record<string, unknown>; soNaCriacao: Record<string, unknown> };
+  assert.deepEqual(u.soNaCriacao, { category: 'saude' });
+  assert.ok(!('category' in u.campos));
 });

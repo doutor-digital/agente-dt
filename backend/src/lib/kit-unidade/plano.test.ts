@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { configGravavel, montarPlano, textoDoPlano, type EstadoAtual } from './plano.js';
+import { canonico, configGravavel, montarPlano, textoDoPlano, type EstadoAtual } from './plano.js';
 import { configChatwootDoQuestionario, lerQuestionario, type Questionario } from './questionario.js';
 import { AUTOMACOES } from '../automacoes.js';
 import { ATRIBUTOS_DE_CONTATO, ATRIBUTOS_DE_CONVERSA, ETIQUETAS_DO_CODIGO, PASTAS_PADRAO, MENSAGENS_PRONTAS } from './catalogo.js';
@@ -185,5 +185,33 @@ test('o relatório final lista o que falta, e o plano nunca imprime o valor de u
     assert.ok(p.relatorio.some((r) => /^UNIDADE: nasce inativa/.test(r)));
   } finally {
     delete process.env.META_ADS_TOKEN_PARAUAPEBAS;
+  }
+});
+
+test('idempotência não depende da ORDEM das chaves do JSON (o jsonb do Postgres devolve em outra ordem)', () => {
+  const qq = q();
+  const e = estadoCompleto(qq);
+  const g = e.banco!.configChatwoot!;
+  e.banco!.configChatwoot = { ...g, dadosModelos: Object.fromEntries(Object.entries(g.dadosModelos).reverse()) };
+  assert.equal(passo(montarPlano(qq, e, { molde: MOLDE }), 'config-chatwoot').acao, 'nada');
+  assert.equal(canonico({ b: 1, a: { d: [2, { y: 1, x: 2 }], c: 3 } }), canonico({ a: { c: 3, d: [2, { x: 2, y: 1 }] }, b: 1 }));
+  // e mudança de verdade continua sendo mudança
+  e.banco!.configChatwoot = { ...g, dadosModelos: { ...g.dadosModelos, mapa: 'https://outro' } };
+  assert.equal(passo(montarPlano(qq, e, { molde: MOLDE }), 'config-chatwoot').acao, 'alterar');
+});
+
+test('campo opcional que o questionário não preencheu é OMITIDO do update (nunca apaga o que a unidade já tem)', () => {
+  const sem = q((o) => { delete o.valores.chave_pix; delete o.valores.favorecido; delete o.valores.sinal_pix; delete o.horarios.almoco_inicio; delete o.horarios.almoco_fim; });
+  const c = camposDaUnidade(sem);
+  for (const k of ['pixKey', 'pixHolder', 'sinalPixCentavos', 'spineLunchStart', 'spineLunchEnd']) assert.ok(!(k in c), `${k} não pode ir no update`);
+  assert.ok(!('category' in c), 'a categoria só vale na criação');
+  assert.ok(Object.values(c).every((v) => v !== null && v !== undefined));
+});
+
+test('ids em dígitos sem aspas no YAML valem (viram texto), de qualquer tamanho', () => {
+  for (const id of ['1212928641906230', '12345678901234567890']) {
+    const r = lerQuestionario(TEXTO.replace('kapso_phone_number_id: "1212928641906230"', `kapso_phone_number_id: ${id}`));
+    assert.ok(r.ok, r.ok ? '' : r.erros.join('; '));
+    if (r.ok) assert.equal(r.q.whatsapp.kapso_phone_number_id, id);
   }
 });

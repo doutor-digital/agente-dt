@@ -83,6 +83,12 @@ export interface Plano {
 /** O que `unit_chatwoot` guarda (sem as caixas, o gerente e o usuário do celular, que só existem depois do convite). */
 export const configGravavel = (c: ConfigChatwootUnidade) => ({ prefixoModelos: c.prefixoModelos, metaAgendamentosDia: c.metaAgendamentosDia, kapsoPhoneNumberId: c.kapsoPhoneNumberId, wabaId: c.wabaId, envSufixo: c.envSufixo, dadosModelos: { ...c.dadosModelos } });
 
+/** JSON com as chaves em ordem (o jsonb do Postgres devolve as chaves em outra ordem que a gravada). */
+export function canonico(v: unknown): string {
+  const ordenar = (x: unknown): unknown => (Array.isArray(x) ? x.map(ordenar) : x && typeof x === 'object' ? Object.fromEntries(Object.entries(x as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([k, y]) => [k, ordenar(y)])) : x);
+  return JSON.stringify(ordenar(v));
+}
+
 const NAO_CONSULTADO = 'estado atual não consultado — assumindo que não existe';
 const lc = (s: string) => s.toLowerCase();
 const faltantes = (precisa: readonly string[], tem: readonly string[]) => precisa.filter((x) => !tem.includes(x));
@@ -103,7 +109,7 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
   // ── 1. BANCO: a unidade, a configuração do CRM e as automações em seco ──────────────────────────
   const campos = camposDaUnidade(q);
   const hoje = b?.unidade?.campos ?? {};
-  const mudou = Object.keys(campos).filter((k) => JSON.stringify((hoje as Record<string, unknown>)[k] ?? null) !== JSON.stringify(campos[k] ?? null));
+  const mudou = Object.keys(campos).filter((k) => canonico((hoje as Record<string, unknown>)[k] ?? null) !== canonico(campos[k] ?? null));
   add({
     id: 'unidade',
     sistema: 'banco',
@@ -118,7 +124,7 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
     id: 'config-chatwoot',
     sistema: 'banco',
     titulo: 'Configuração do CRM da unidade (unit_chatwoot): prefixo dos modelos, gerente, usuário do celular, número do Kapso, WABA, sufixo da Meta, dados dos modelos',
-    acao: !b ? 'criar' : !b.configChatwoot ? 'criar' : JSON.stringify(configGravavel(config)) === JSON.stringify(b.configChatwoot) ? 'nada' : 'alterar',
+    acao: !b ? 'criar' : !b.configChatwoot ? 'criar' : canonico(configGravavel(config)) === canonico(b.configChatwoot) ? 'nada' : 'alterar',
     itens: [
       `prefixo dos modelos ${config.prefixoModelos}`,
       `sufixo das variáveis da Meta ${config.envSufixo}`,
@@ -293,7 +299,7 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
 
   // ── 4. A SOFIA da unidade ───────────────────────────────────────────────────────────────────────
   const sofia = camposDaSofia(q, opcoes.molde);
-  const mudouSofia = Object.keys(sofia.campos).filter((k) => JSON.stringify(b?.sofia[k] ?? null) !== JSON.stringify(sofia.campos[k] ?? null));
+  const mudouSofia = Object.keys(sofia.campos).filter((k) => canonico(b?.sofia[k] ?? null) !== canonico(sofia.campos[k] ?? null));
   add({
     id: 'sofia',
     sistema: 'sofia',

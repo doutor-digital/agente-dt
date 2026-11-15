@@ -28,8 +28,12 @@ CREATE TABLE IF NOT EXISTS "unit_chatwoot_caixa" (
 
 CREATE INDEX IF NOT EXISTS "unit_chatwoot_caixa_unit_id_idx" ON "unit_chatwoot_caixa"("unit_id");
 
-ALTER TABLE "unit_chatwoot" ADD CONSTRAINT "unit_chatwoot_unit_id_fkey" FOREIGN KEY ("unit_id") REFERENCES "units"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-ALTER TABLE "unit_chatwoot_caixa" ADD CONSTRAINT "unit_chatwoot_caixa_unit_id_fkey" FOREIGN KEY ("unit_id") REFERENCES "unit_chatwoot"("unit_id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$ BEGIN
+    ALTER TABLE "unit_chatwoot" ADD CONSTRAINT "unit_chatwoot_unit_id_fkey" FOREIGN KEY ("unit_id") REFERENCES "units"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+    ALTER TABLE "unit_chatwoot_caixa" ADD CONSTRAINT "unit_chatwoot_caixa_unit_id_fkey" FOREIGN KEY ("unit_id") REFERENCES "unit_chatwoot"("unit_id") ON DELETE CASCADE ON UPDATE CASCADE;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- SEMENTE: Parauapebas, com exatamente os valores que estavam escritos no código (ids da conta 1 do Chatwoot).
 -- Só entra se a unidade existe; se já houver linha, não mexe (ON CONFLICT DO NOTHING).
