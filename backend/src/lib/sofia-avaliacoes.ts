@@ -48,9 +48,12 @@ export interface RespostaNoBalao {
   ruimPor: string | null;
 }
 
-/** As respostas da Sofia numa conversa, com o que cada uma já recebeu (para os botões do balão). */
-export async function respostasDaSofiaNaConversa(conversa: number, quemId: number | null): Promise<RespostaNoBalao[]> {
-  const msgs = await prisma.sofiaMensagem.findMany({ where: { conversa }, select: { messageId: true }, orderBy: { messageId: 'desc' }, take: 300 });
+/**
+ * As respostas da Sofia numa conversa, com o que cada uma já recebeu (para os botões do balão). O id da conversa é POR CONTA do Chatwoot
+ * (a conversa 5 da conta 1 não é a 5 da conta 2): sempre junto com a unidade.
+ */
+export async function respostasDaSofiaNaConversa(slug: string, conversa: number, quemId: number | null): Promise<RespostaNoBalao[]> {
+  const msgs = await prisma.sofiaMensagem.findMany({ where: { unitSlug: slug, conversa }, select: { messageId: true }, orderBy: { messageId: 'desc' }, take: 300 });
   if (!msgs.length) return [];
   const ids = msgs.map((m) => m.messageId);
   const avals = await prisma.sofiaAvaliacao.findMany({
@@ -66,15 +69,15 @@ export async function respostasDaSofiaNaConversa(conversa: number, quemId: numbe
   });
 }
 
-/** A mensagem é resposta da Sofia NESTA conversa? (o botão do balão não pode avaliar mensagem de outra conversa) */
-export async function respostaDaSofia(mensagem: number, conversa: number): Promise<{ unitSlug: string } | null> {
+/** A mensagem é resposta da Sofia NESTA conversa DESTA unidade? (o botão do balão não pode avaliar mensagem de outra conversa nem de outra clínica) */
+export async function respostaDaSofia(mensagem: number, conversa: number, slug: string): Promise<{ unitSlug: string } | null> {
   const m = await prisma.sofiaMensagem.findUnique({ where: { messageId: mensagem }, select: { conversa: true, unitSlug: true } });
-  return m && m.conversa === conversa ? { unitSlug: m.unitSlug } : null;
+  return m && m.conversa === conversa && m.unitSlug === slug ? { unitSlug: m.unitSlug } : null;
 }
 
 /** A última resposta da Sofia na conversa (o 👍/👎 do painel da assistente avalia "a última resposta"); null = nenhuma gravada. */
-export async function ultimaRespostaDaSofia(conversa: number): Promise<number | null> {
-  const m = await prisma.sofiaMensagem.findFirst({ where: { conversa }, orderBy: { messageId: 'desc' }, select: { messageId: true } });
+export async function ultimaRespostaDaSofia(slug: string, conversa: number): Promise<number | null> {
+  const m = await prisma.sofiaMensagem.findFirst({ where: { unitSlug: slug, conversa }, orderBy: { messageId: 'desc' }, select: { messageId: true } });
   return m?.messageId ?? null;
 }
 
@@ -90,9 +93,9 @@ export async function minhaAvaliacao(mensagem: number, quemId: number): Promise<
 }
 
 /** 👎 do painel numa conversa sem resposta da Sofia gravada: a 👎 ainda aberta desta pessoa nesta conversa (para não repetir a cada clique). */
-export async function minhaRuimSemMensagem(conversa: number, quemId: number): Promise<AvaliacaoExistente | null> {
+export async function minhaRuimSemMensagem(slug: string, conversa: number, quemId: number): Promise<AvaliacaoExistente | null> {
   return prisma.sofiaAvaliacao.findFirst({
-    where: { conversa, quemId, messageId: null, nota: 'ruim', revisadaEm: null },
+    where: { unitSlug: slug, conversa, quemId, messageId: null, nota: 'ruim', revisadaEm: null },
     orderBy: { criadoEm: 'desc' },
     select: { id: true, nota: true, texto: true },
   });
@@ -158,12 +161,12 @@ export async function registrarEventoDaSofia(e: EventoDaSofia): Promise<void> {
 
 /** As portas do banco que as rotas usam (trocáveis no teste de autorização). */
 export const bancoDeAvaliacoes = {
-  respostaDaSofia: (mensagem: number, conversa: number) => respostaDaSofia(mensagem, conversa),
-  ultimaRespostaDaSofia: (conversa: number) => ultimaRespostaDaSofia(conversa),
+  respostaDaSofia: (mensagem: number, conversa: number, slug: string) => respostaDaSofia(mensagem, conversa, slug),
+  ultimaRespostaDaSofia: (slug: string, conversa: number) => ultimaRespostaDaSofia(slug, conversa),
   minhaAvaliacao: (mensagem: number, quemId: number) => minhaAvaliacao(mensagem, quemId),
-  minhaRuimSemMensagem: (conversa: number, quemId: number) => minhaRuimSemMensagem(conversa, quemId),
+  minhaRuimSemMensagem: (slug: string, conversa: number, quemId: number) => minhaRuimSemMensagem(slug, conversa, quemId),
   gravarAvaliacao: (a: Parameters<typeof gravarAvaliacao>[0], ja: AvaliacaoExistente | null) => gravarAvaliacao(a, ja),
-  respostasDaSofiaNaConversa: (conversa: number, quemId: number | null) => respostasDaSofiaNaConversa(conversa, quemId),
+  respostasDaSofiaNaConversa: (slug: string, conversa: number, quemId: number | null) => respostasDaSofiaNaConversa(slug, conversa, quemId),
 };
 
 export interface AvaliacaoLida {

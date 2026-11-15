@@ -166,23 +166,26 @@ export async function processarLeitura(aviso: AvisoDeLeitura, porta: PortaDaLida
 
 /** A memória é uma só (as chaves já levam a caixa, que é única na instalação); a PORTA é uma por conta do Chatwoot. */
 const memoriaDaLida = novaMemoriaDaLida();
-const portasDaLida = new Map<number, PortaDaLida>();
+const portasDaLida = new Map<number, { assinatura: string; porta: PortaDaLida }>();
 
 /** Só para os testes. */
 export const esquecerPortasDaLida = (): void => portasDaLida.clear();
 
 /**
  * A porta do Chatwoot da CONTA da caixa. null = caixa de unidade sem conta válida (ou Chatwoot não configurado): RECUSA, nunca a conta 1.
- * Parauapebas: o contexto do ambiente, como sempre.
+ * Parauapebas: o contexto do ambiente, como sempre. A porta guardada vale enquanto a conta, o endereço e o token forem os mesmos: se a
+ * configuração recarregou e algum mudou, a porta é refeita (a memória não tem nada da conta, então não se perde).
  */
 export function portaDaLidaDaCaixa(caixa: number, e: NodeJS.ProcessEnv = process.env): PortaDaLida | null {
   const base = contaChatwootDoAmbiente(e);
   if (!base) return null;
   const ctx = contextoDaCaixa(criarContextoChatwoot(base), caixa, e);
-  if (!ctx) return null;
-  const conta = ctx.conta!.conta;
-  let porta = portasDaLida.get(conta);
-  if (!porta) portasDaLida.set(conta, (porta = portaDoChatwoot(ctx)));
+  if (!ctx?.conta) return null;
+  const assinatura = [ctx.conta.url, ctx.conta.conta, ctx.conta.token].join('\u0000');
+  const guardada = portasDaLida.get(ctx.conta.conta);
+  if (guardada && guardada.assinatura === assinatura) return guardada.porta;
+  const porta = portaDoChatwoot(ctx);
+  portasDaLida.set(ctx.conta.conta, { assinatura, porta });
   return porta;
 }
 

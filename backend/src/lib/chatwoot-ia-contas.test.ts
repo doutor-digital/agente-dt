@@ -71,6 +71,7 @@ test('contaDoEvento: clínica de conta 2 — pela caixa ou pelo payload; conta d
 // ── o handler: evento de conta desconhecida é ignorado com aviso, nunca respondido ───────────────
 
 test('handler: evento de conta DESCONHECIDA é ignorado com UM aviso no log e NENHUMA chamada ao Chatwoot; o de Parauapebas segue', async () => {
+  const salvo = { ...process.env };
   Object.assign(process.env, ENV);
   const chamadas: string[] = [];
   const f = mock.method(globalThis, 'fetch', (async (url: string) => (chamadas.push(String(url)), { ok: true, status: 200, text: async () => '{}' } as Response)) as never);
@@ -90,7 +91,11 @@ test('handler: evento de conta DESCONHECIDA é ignorado com UM aviso no log e NE
   } finally {
     f.mock.restore();
     w.mock.restore();
-    for (const k of Object.keys(ENV)) delete process.env[k];
+    // desfaz EXATAMENTE o que o teste pôs: o que não existia antes sai, o que existia volta ao valor de antes
+    for (const k of Object.keys(ENV)) {
+      if (k in salvo) process.env[k] = salvo[k];
+      else delete process.env[k];
+    }
   }
 });
 
@@ -168,7 +173,7 @@ test('o estado da conta 1 é o mesmo de sempre (um por conta, guardado) e a cont
   assert.notEqual(e1.trava, e2.trava);
   assert.notEqual(e1.portas, e2.portas);
   assert.equal(IA.estadoDoReceptor(3, env), null, 'conta que nenhuma unidade tem: sem estado');
-  assert.equal(IA.estadoDoReceptor(2, { ...ENV, CHATWOOT_API_TOKEN: undefined } as NodeJS.ProcessEnv), e2, 'já guardado');
+  assert.equal(IA.estadoDoReceptor(2, { ...ENV, CHATWOOT_API_TOKEN: undefined } as NodeJS.ProcessEnv), null, 'sem Chatwoot configurado no ambiente: não responde, mesmo com o estado guardado');
 });
 
 test('a conversa 5 da conta 1 e a conversa 5 da conta 2 NÃO dividem a memória (a rodada de uma não é «ocupada» pela da outra); a resposta da conta 2 sai na conta 2 com o token dela', async () => {
@@ -234,4 +239,45 @@ test('SINAL PIX: a baixa vai na conta da UNIDADE (Parauapebas: a do ambiente); u
   } finally {
     f.mock.restore();
   }
+});
+
+// ── configuração recarregada ─────────────────────────────────────────────────────────────────────
+
+test('RECARGA da configuração: o estado da IA e a porta da lida acompanham a conta/token; a MEMÓRIA da conversa em andamento fica', () => {
+  U.aplicarConfigs([U.SEMENTE_PARAUAPEBAS, DEMO]);
+  const env1 = { ...ENV, CHATWOOT_API_TOKEN_DEMO: 'token-velho' } as NodeJS.ProcessEnv;
+  const antes = IA.estadoDoReceptor(2, env1)!;
+  antes.mem.emAndamento.add(5);
+  assert.equal(IA.estadoDoReceptor(2, env1), antes, 'nada mudou: o mesmo estado');
+  const portaAntes = Lida.portaDaLidaDaCaixa(21, env1)!;
+  assert.equal(Lida.portaDaLidaDaCaixa(21, env1), portaAntes);
+  // o token da clínica foi trocado: as portas são refeitas…
+  const env2 = { ...ENV, CHATWOOT_API_TOKEN_DEMO: 'token-novo' } as NodeJS.ProcessEnv;
+  const depois = IA.estadoDoReceptor(2, env2)!;
+  assert.notEqual(depois, antes);
+  assert.notEqual(depois.portas, antes.portas);
+  assert.notEqual(Lida.portaDaLidaDaCaixa(21, env2), portaAntes);
+  // …mas a rodada em andamento da conversa 5 não é esquecida (senão a Sofia responderia duas vezes)
+  assert.equal(depois.mem, antes.mem);
+  assert.ok(depois.mem.emAndamento.has(5));
+  // a clínica saiu da configuração: ninguém mais usa a conta 2
+  U.aplicarConfigs([U.SEMENTE_PARAUAPEBAS]);
+  assert.equal(IA.estadoDoReceptor(2, env2), null);
+  assert.equal(Lida.portaDaLidaDaCaixa(21, env2), null);
+  // Parauapebas não foi mexida por nada disso
+  const p1 = IA.estadoDoReceptor(1, env2)!;
+  assert.equal(IA.estadoDoReceptor(1, env2), p1);
+});
+
+test('duas clínicas na MESMA conta: a «dona» da conta é sempre a primeira em ordem alfabética (não depende da ordem da configuração)', () => {
+  const b = { ...DEMO, slug: 'zeta-clinica', envSufixo: 'ZETA', caixas: [{ id: 30, tipo: 'cloud' as const }] };
+  const a = { ...DEMO, slug: 'alfa-clinica', envSufixo: 'ALFA', caixas: [{ id: 31, tipo: 'cloud' as const }] };
+  U.aplicarConfigs([U.SEMENTE_PARAUAPEBAS, b, a]);
+  assert.deepEqual(U.unidadesDaConta(2), ['alfa-clinica', 'zeta-clinica']);
+  const env = { ...ENV, CHATWOOT_API_TOKEN_ALFA: 'token-da-alfa', CHATWOOT_API_TOKEN_ZETA: 'token-da-zeta' } as NodeJS.ProcessEnv;
+  const dona = C.donaDaConta(C.criarContextoChatwoot(C.contaChatwootDoAmbiente(env)), 2, env);
+  assert.equal(dona?.slug, 'alfa-clinica');
+  assert.equal(dona?.ctx.conta?.token, 'token-da-alfa');
+  U.aplicarConfigs([U.SEMENTE_PARAUAPEBAS, a, b]);
+  assert.equal(C.donaDaConta(C.criarContextoChatwoot(C.contaChatwootDoAmbiente(env)), 2, env)?.slug, 'alfa-clinica');
 });

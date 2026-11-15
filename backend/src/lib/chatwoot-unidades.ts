@@ -261,9 +261,9 @@ export function contasExplicitas(): number[] {
   return l;
 }
 
-/** As unidades que moram na conta própria `contaId` (a ordem da configuração). */
+/** As unidades que moram na conta própria `contaId`, em ordem ALFABÉTICA do slug (a mesma em toda chamada: quem pega a primeira pega sempre a mesma). */
 export function unidadesDaConta(contaId: number): string[] {
-  return [...configs.values()].filter((c) => c.contaId === contaId).map((c) => c.slug);
+  return [...configs.values()].filter((c) => c.contaId === contaId).map((c) => c.slug).sort();
 }
 
 /**
