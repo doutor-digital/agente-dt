@@ -153,7 +153,7 @@ interface Acesso {
 async function autorizado(req: Request, res: Response): Promise<Acesso | null> {
   const c = contexto();
   if (!c?.conta) {
-    res.status(404).json({ error: 'funil desligado (Chatwoot não configurado)' });
+    res.status(404).json({ error: 'funil desligado (CRM não configurado)' });
     return null;
   }
   const chave = req.get('x-funil-chave');
@@ -201,7 +201,7 @@ export interface Atendente {
 export async function sessaoDaAtendente(req: Request, res: Response): Promise<Atendente | null> {
   const c = contexto();
   if (!c?.conta) {
-    res.status(404).json({ error: 'assistente desligada (Chatwoot não configurado)' });
+    res.status(404).json({ error: 'assistente desligada (CRM não configurado)' });
     return null;
   }
   const sessao = sessaoDosCabecalhos((n) => req.get(n));
@@ -1039,7 +1039,7 @@ export async function funilNovoHandler(req: Request, res: Response): Promise<voi
     const r = (await cw(a, 'POST', 'contacts', { corpo: { name: p.data.nome, phone_number: telefone, inbox_id: p.data.caixaId } })) as any;
     const contato = r?.payload?.contact ?? r?.payload;
     const origem = r?.payload?.contact_inbox?.source_id ?? contato?.contact_inboxes?.[0]?.source_id;
-    if (!contato?.id || !origem) throw new Error('o Chatwoot não devolveu o contato');
+    if (!contato?.id || !origem) throw new Error('o CRM não devolveu o contato');
     const conv = (await cw(a, 'POST', 'conversations', {
       corpo: { source_id: origem, inbox_id: p.data.caixaId, contact_id: contato.id, custom_attributes: { [ATRIBUTO_ETAPA]: p.data.etapa } },
     })) as any;
@@ -1468,7 +1468,7 @@ body{background:#f4f6f9}
     setTimeout(function(){ Array.prototype.forEach.call(document.querySelectorAll('.k.novo'),function(x){ x.classList.remove('novo'); }); },1500);
   }
   async function carregar(){
-    if(!S&&!K){ msg(DENTRO?'Entre no Chatwoot para ver o funil.':'Abra o funil pelo Chatwoot.'); return; }
+    if(!S&&!K){ msg(DENTRO?'Entre no CRM para ver o funil.':'Abra o funil pelo CRM.'); return; }
     if(TELA==='hoje'){ await carregarHoje(); return; }
     if(TELA){ await carregarTela(); return; }
     try{
@@ -1524,7 +1524,7 @@ body{background:#f4f6f9}
     esq.appendChild(cp);
     var ps=el('div','pessoa'), n=el('div','n'), av=el('span','av'); avatar(av,k.nome,f.contato.avatar,k.id); n.appendChild(av); n.appendChild(el('span',null,k.nome)); ps.appendChild(n);
     var cp2=el('div','cp'); linhaCampo(cp2,'Telefone',el('span',null,f.contato.telefone||'—')); ps.appendChild(cp2); esq.appendChild(ps);
-    var rod=el('div','rodape'), ab=el('a',null,'Abrir no Chatwoot'); ab.href=linkCw(k.id); ab.target='_top'; rod.appendChild(ab);
+    var rod=el('div','rodape'), ab=el('a',null,'Abrir no CRM'); ab.href=linkCw(k.id); ab.target='_top'; rod.appendChild(ab);
     var perdido=f.etapas.filter(function(e){ return /perd/i.test(e); })[0];
     if(perdido&&perdido!==k.etapa){ var bp=el('button',null,'✕ Perdido'); bp.type='button'; bp.onclick=function(){ aba='principal'; acao('POST','mover',{conversaId:k.id,etapa:perdido}); }; rod.appendChild(bp); }
     esq.appendChild(rod); L.appendChild(esq);
@@ -1584,7 +1584,7 @@ body{background:#f4f6f9}
     try{ var d=typeof ev.data==='string'?JSON.parse(ev.data):ev.data;
       if(d&&d.event==='funil-sessao'&&ev.origin===ORIGEM_CW&&ev.source===window.parent){
         var nova=d.sessao&&d.sessao.token?d.sessao:null;
-        if(nova&&nova.token===morta){ msg('Sua sessão do Chatwoot venceu: saia e entre de novo.'); return; }
+        if(nova&&nova.token===morta){ msg('Sua sessão do CRM venceu: saia e entre de novo.'); return; }
         S=nova; iniciar(); return; }
       if(!d||d.event!=='appContext') return;
       var x=d.data||{}; var cid=x.conversation&&x.conversation.id||null;
