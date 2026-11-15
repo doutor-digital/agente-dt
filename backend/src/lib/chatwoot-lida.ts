@@ -15,7 +15,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { Request, Response } from 'express';
 import { logger } from './logger.js';
 import { INSTANCIA_CAIXA } from './chatwoot-unidades.js';
-import { chamar, contaChatwootDoAmbiente, contextoDaCaixa, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
+import { chamar, contextoDaCaixa, contextoDoAmbiente, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 
 /** instância do Evolution → caixa do Chatwoot */
 export { INSTANCIA_CAIXA };
@@ -177,9 +177,9 @@ export const esquecerPortasDaLida = (): void => portasDaLida.clear();
  * configuração recarregou e algum mudou, a porta é refeita (a memória não tem nada da conta, então não se perde).
  */
 export function portaDaLidaDaCaixa(caixa: number, e: NodeJS.ProcessEnv = process.env): PortaDaLida | null {
-  const base = contaChatwootDoAmbiente(e);
+  const base = contextoDoAmbiente(e);
   if (!base) return null;
-  const ctx = contextoDaCaixa(criarContextoChatwoot(base), caixa, e);
+  const ctx = contextoDaCaixa(base, caixa, e);
   if (!ctx?.conta) return null;
   const assinatura = [ctx.conta.url, ctx.conta.conta, ctx.conta.token].join('\u0000');
   const guardada = portasDaLida.get(ctx.conta.conta);

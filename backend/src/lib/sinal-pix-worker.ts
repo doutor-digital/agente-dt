@@ -26,7 +26,7 @@ import { chaveDaClinica, diaCurto, diaNoFuso, ID_SINAL_PIX, somarDias, type Linh
 import { pagouOAntecipado } from './follow-up-worker.js';
 import { normalizar } from './franquia-sync.js';
 import { conversaDoLeadChatwoot } from './chatwoot-lead.js';
-import { contaChatwootDoAmbiente, contextoDaUnidade, criarContextoChatwoot } from '../mcp-remoto/chatwoot.js';
+import { contextoDaUnidade, contextoDoAmbiente } from '../mcp-remoto/chatwoot.js';
 import { portaDoChatwoot } from './chatwoot-porta.js';
 
 const SWEEP_MS = Number(process.env.SINAL_PIX_SWEEP_MS) || 5 * 60_000;
@@ -168,9 +168,9 @@ export async function baixarNoChatwoot(deps: BaixaNoChatwoot, conversa: number, 
 
 /** A baixa no Chatwoot da CONTA da unidade (cada clínica tem a sua). null = unidade desconhecida/sem conta válida/sem token: RECUSA (nunca cai na conta 1). */
 export function baixaDoChatwootDaUnidade(slug: string, e: NodeJS.ProcessEnv = process.env): BaixaNoChatwoot | null {
-  const base = contaChatwootDoAmbiente(e);
+  const base = contextoDoAmbiente(e);
   if (!base) return null;
-  const ctx = contextoDaUnidade(criarContextoChatwoot(base), slug, e);
+  const ctx = contextoDaUnidade(base, slug, e);
   if (!ctx) return null;
   const chat = portaDoChatwoot(ctx);
   return { etiqueta: (conversa, etiqueta) => chat.adicionarEtiquetas(conversa, [etiqueta]), nota: (conversa, texto) => chat.nota(conversa, texto) };

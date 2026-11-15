@@ -10,6 +10,7 @@
  * A regra entra no bloco `<aprendizados>` do prompt (`renderLessons`), com a trava de pronto-socorro de sempre.
  * As travas que a unidade não desliga moram em `lib/aprendizados-unidade.ts`. Cada regra salva ou desligada avisa o João.
  */
+import { unidadeEDaConta } from '../lib/conta-da-requisicao.js';
 import { sessaoDaAtendente } from './funil.controller.js';
 import { leituraComLogin } from './assistente.controller.js';
 import { CAIXAS_REGUA } from '../lib/chatwoot-regua.js';
@@ -86,6 +87,11 @@ export async function atendenteDaUnidade(
 ): Promise<{ a: NonNullable<Awaited<ReturnType<typeof sessaoDaAtendente>>>; unit: Unit } | null> {
   const a = await sessaoDaAtendente(req, res);
   if (!a) return null;
+  // a unidade tem que morar na conta da sessão: antes de qualquer leitura no Chatwoot
+  if (!unidadeEDaConta(slug, a.c)) {
+    res.status(403).json({ error: 'você não atende esta unidade' });
+    return null;
+  }
   let caixas: number[];
   try {
     caixas = await leituraComLogin(a.c, a.sessao).caixas();
@@ -435,7 +441,7 @@ export async function testarIaUnidadesHandler(req: Request, res: Response): Prom
   const a = await sessaoDaAtendente(req, res);
   if (!a) return;
   try {
-    const slugs = [...new Set((await leituraComLogin(a.c, a.sessao).caixas()).map((cx) => CAIXAS_REGUA[cx]).filter((x): x is string => !!x))];
+    const slugs = [...new Set((await leituraComLogin(a.c, a.sessao).caixas()).map((cx) => CAIXAS_REGUA[cx]).filter((x): x is string => !!x && unidadeEDaConta(x, a.c)))];
     const units = slugs.length ? await prisma.unit.findMany({ where: { slug: { in: slugs }, isActive: true }, select: { slug: true, name: true } }) : [];
     res.json({ eu: a.nome, unidades: units.map((u) => ({ slug: u.slug, nome: u.name })) });
   } catch (e) {
@@ -449,7 +455,7 @@ export async function testarIaPausadasHandler(req: Request, res: Response): Prom
   const a = await sessaoDaAtendente(req, res);
   if (!a) return;
   try {
-    const caixas = (await leituraComLogin(a.c, a.sessao).caixas()).filter((cx) => CAIXAS_REGUA[cx]);
+    const caixas = (await leituraComLogin(a.c, a.sessao).caixas()).filter((cx) => CAIXAS_REGUA[cx] && unidadeEDaConta(CAIXAS_REGUA[cx]!, a.c));
     const lista: Array<{ id: number; nome: string; por: string | null; em: string | null; atendente: string | null }> = [];
     for (const cx of caixas) {
       for (let pagina = 1; pagina <= 8; pagina++) {

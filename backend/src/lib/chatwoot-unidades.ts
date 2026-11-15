@@ -261,6 +261,23 @@ export function contasExplicitas(): number[] {
   return l;
 }
 
+/**
+ * As caixas das unidades que moram na conta `contaId` (`contaDoAmbiente` = o número da conta do ambiente, que é a das unidades sem conta
+ * própria). Serve a quem guarda dado por (caixa, conversa): o id da conversa é POR CONTA, a caixa é única na instalação.
+ */
+export function caixasDaConta(contaId: number, contaDoAmbiente: number | null): number[] {
+  const l: number[] = [];
+  for (const c of configs.values()) if ((c.contaId ?? contaDoAmbiente) === contaId) for (const x of c.caixas) if (!l.includes(x.id)) l.push(x.id);
+  return l;
+}
+
+/** As caixas das unidades que NÃO moram na conta do ambiente (de contas próprias). */
+export function caixasDeContasProprias(): number[] {
+  const l: number[] = [];
+  for (const c of configs.values()) if (c.contaId) for (const x of c.caixas) if (!l.includes(x.id)) l.push(x.id);
+  return l;
+}
+
 /** As unidades que moram na conta própria `contaId`, em ordem ALFABÉTICA do slug (a mesma em toda chamada: quem pega a primeira pega sempre a mesma). */
 export function unidadesDaConta(contaId: number): string[] {
   return [...configs.values()].filter((c) => c.contaId === contaId).map((c) => c.slug).sort();

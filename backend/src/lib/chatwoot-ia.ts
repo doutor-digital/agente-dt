@@ -22,8 +22,8 @@ import type { Unit } from '@prisma/client';
 import { logger } from './logger.js';
 import { prisma } from './prisma.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
-import { chamar, contaChatwootDoAmbiente, contasDoChatwoot, criarContextoChatwoot, donaDaConta, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
-import { configDaUnidade, contaDaCaixa, contasExplicitas, unidadeDaCaixa } from './chatwoot-unidades.js';
+import { chamar, contaChatwootDoAmbiente, contasDoChatwoot, contextoDoAmbiente, donaDaConta, ehContaDoAmbiente, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
+import { configDaUnidade, contaDaCaixa, unidadeDaCaixa } from './chatwoot-unidades.js';
 import { CAIXAS_REGUA } from './chatwoot-regua.js';
 import { aplicarEtiqueta, eventoDeEtiqueta, portasDaPonte, type PortasDaPonte } from './chatwoot-etiquetas.js';
 import { eventoDePausa, eventoDeReativacao, pausar, portaDaPausaDoChatwoot, reativar, type PortaDaPausa } from './chatwoot-pausa.js';
@@ -574,10 +574,9 @@ export const esquecerEstadosDaIa = (): void => estados.clear();
  * nunca é compartilhada, porque a conversa 5 de uma conta não é a conversa 5 de outra. `null` = conta sem unidade/token: não responde.
  */
 export function estadoDoReceptor(conta: number, e: NodeJS.ProcessEnv = process.env): EstadoDaConta | null {
-  const amb = contaChatwootDoAmbiente(e);
-  if (!amb) return null;
-  const ehAmbiente = conta === amb.conta && !contasExplicitas().includes(conta);
-  const base = criarContextoChatwoot(amb);
+  const base = contextoDoAmbiente(e);
+  if (!base) return null;
+  const ehAmbiente = ehContaDoAmbiente(conta, e);
   const dona = ehAmbiente ? { slug: null, ctx: base } : donaDaConta(base, conta, e);
   const contaDoCtx = dona?.ctx.conta;
   if (!dona || !contaDoCtx) {

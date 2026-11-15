@@ -21,6 +21,7 @@
  * por `paginaDoAgente`; página servida sem trocar os dois quebra o script.
  */
 import { guiaDaEtapaLigado } from './chatwoot-guia-etapas.js';
+import { comContaNaPagina } from './conta-no-navegador.js';
 
 const PAGINA = String.raw`<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -378,9 +379,10 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
   function erroEm(box, msg){ box.textContent = ''; box.appendChild(el('div', 'aviso erro', msg)); }
 
   // ── servidor (com o login do Chatwoot de quem está usando) ──
+  /*__CONTA_JS__*/
   function cab(){ var h = { 'Content-Type': 'application/json' }; if (S) { h['X-CW-Token'] = S.token; h['X-CW-Client'] = S.client; h['X-CW-Uid'] = S.uid; } return h; }
   async function api(method, path, body){
-    var r = await fetch(path, { method: method, headers: cab(), body: method === 'GET' ? undefined : JSON.stringify(body || {}) });
+    var r = await fetch(comConta(path), { method: method, headers: cab(), body: method === 'GET' ? undefined : JSON.stringify(body || {}) });
     var j = await r.json().catch(function(){ return {}; });
     if (!r.ok) { var er = new Error(j.error || ('erro ' + r.status)); er.dados = j; if (r.status === 401) { S = null; pedirSessao(); } throw er; }
     return j;
@@ -814,5 +816,5 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
 
 /** A página. `origemChatwoot` = a origem do Chatwoot (só ela fala com a página por postMessage). */
 export function paginaDoAgente(origemChatwoot: string, env: NodeJS.ProcessEnv = process.env): string {
-  return PAGINA.split('__ORIGEM_CW__').join(JSON.stringify(origemChatwoot)).split('__GUIA_LIGADO__').join(String(guiaDaEtapaLigado(env)));
+  return comContaNaPagina(PAGINA.split('__ORIGEM_CW__').join(JSON.stringify(origemChatwoot)).split('__GUIA_LIGADO__').join(String(guiaDaEtapaLigado(env))));
 }
