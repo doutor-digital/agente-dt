@@ -321,7 +321,8 @@ export const RECUSA_DE_CONTA = 'esta pessoa não está autorizada a escolher out
  * os textos de quem só conhece essa conta ficam exatamente como eram.
  */
 export function descreverConta(ctx: ContextoChatwoot, e: NodeJS.ProcessEnv = process.env): string {
-  if (!ctx.conta || ehContaDoAmbiente(ctx.conta.conta, e)) return '';
+  // só conta PRÓPRIA de clínica (alguma unidade aponta para ela) é descrita; a de Parauapebas fica vazia, como sempre foi
+  if (!ctx.conta || ehContaDoAmbiente(ctx.conta.conta, e) || !contasExplicitas().includes(ctx.conta.conta)) return '';
   const un = unidadesDaContaDoChatwoot(ctx.conta.conta, e);
   return ` (conta ${ctx.conta.conta} · ${un.length > 4 ? `${un.slice(0, 4).join(', ')} e mais ${un.length - 4}` : un.join(', ') || 'sem unidade'})`;
 }
