@@ -243,7 +243,7 @@ export function janelaAberta(agora: Date): boolean {
   return l.getUTCDay() !== 0 && h >= 8 && h < 20;
 }
 
-interface Momento {
+export interface Momento {
   data: DataCivil;
   hora: { hh: number; mm: number } | null;
   /** data + hora, o que identifica a ocorrência (remarcou = outra) */
@@ -384,7 +384,14 @@ export function paraParametro(v: string): string {
  * Troca os campos {{…}} do modelo do Kommo pelos dados da conversa e da unidade. Campo sem valor entra em `faltando`.
  * `variaveis` são os mesmos valores, um por campo distinto, na ordem de {{1}}, {{2}}… do template; null se faltou alguma coisa.
  */
-export function renderizar(modelo: string, c: ConversaRegua, u: DadosDaUnidade): { texto: string | null; variaveis: string[] | null; faltando: string[] } {
+/** Os dois modelos de sessão que a régua monta a partir da sessão que `candidatos()` escolheu (a da agenda ou a da equipe). */
+const MODELOS_DE_SESSAO_DO_ENVIO: ReadonlySet<string> = new Set(['parau_sessao_lembrete_vespera', 'parau_sessao_confirmacao_dia']);
+
+/**
+ * `momentoDoEnvio` = a data+hora que `candidatos()` usou para decidir o envio; só os dois modelos de lembrete de sessão o usam no campo
+ * {{lead.cf.2450928}} (os outros — retorno, boas-vindas… — seguem sessão → retorno → consulta, como sempre).
+ */
+export function renderizar(modelo: string, c: ConversaRegua, u: DadosDaUnidade, momentoDoEnvio?: Momento): { texto: string | null; variaveis: string[] | null; faltando: string[] } {
   const bruto = TEXTOS_PARAU[modelo];
   if (bruto === undefined) return { texto: null, variaveis: null, faltando: [`texto do modelo ${modelo}`] };
   const a = c.attrs;
@@ -406,7 +413,7 @@ export function renderizar(modelo: string, c: ConversaRegua, u: DadosDaUnidade):
         return consulta ? textoDoMomento(consulta) : falta('data da consulta (data_consulta)');
       case 'lead.cf.2450928': {
         // próxima sessão; os modelos de retorno (SDR e cancelamento) usam o mesmo campo: sem sessão, vale o retorno e depois a consulta
-        const m = sessao ?? retorno ?? consulta;
+        const m = (momentoDoEnvio && MODELOS_DE_SESSAO_DO_ENVIO.has(modelo) ? momentoDoEnvio : null) ?? sessao ?? retorno ?? consulta;
         return m ? textoDoMomento(m) : falta('data da próxima sessão (proxima_sessao)');
       }
       case 'lead.cf.2450998':
@@ -446,6 +453,8 @@ interface Candidato {
   /** regra "antes" nunca vale depois deste instante (a própria consulta) */
   teto?: Date;
   interna?: AcaoInterna;
+  /** a data+hora (consulta, sessão) que decidiu o envio: é a que o texto de sessão mostra */
+  momento?: Momento;
 }
 
 /**
@@ -507,9 +516,10 @@ function lembretes(m: Momento, regras: { vespera: [string, string]; dia?: [strin
     kind: 'antes',
     teto,
     alvo: m.hora ? new Date(instante(m, 0).getTime() - DIA) : emBelem(somarDias(m.data, -1), 9),
+    momento: m,
   });
-  if (m.hora && regras.dia) saida.push({ regra: regras.dia[0], modelo: regras.dia[1], chave: m.chave, kind: 'antes', teto, alvo: new Date(teto.getTime() - 3 * HORA) });
-  if (m.hora && regras.preparo) saida.push({ regra: regras.preparo[0], modelo: regras.preparo[1], chave: m.chave, kind: 'antes', teto, alvo: new Date(teto.getTime() - HORA) });
+  if (m.hora && regras.dia) saida.push({ regra: regras.dia[0], modelo: regras.dia[1], chave: m.chave, kind: 'antes', teto, alvo: new Date(teto.getTime() - 3 * HORA), momento: m });
+  if (m.hora && regras.preparo) saida.push({ regra: regras.preparo[0], modelo: regras.preparo[1], chave: m.chave, kind: 'antes', teto, alvo: new Date(teto.getTime() - HORA), momento: m });
   return saida;
 }
 
@@ -521,6 +531,8 @@ function candidatos(c: ConversaRegua, vistos: Vistos): Candidato[] {
   const tratamento = str(a.funil) === 'Tratamento' || etapaTratamento !== '';
   const semFollowUp = c.etiquetas.includes('sem-follow-up');
   const consulta = momento(a.data_consulta, a.hora_consulta);
+  /** consulta da agenda que é SESSÃO de tratamento: tem os lembretes de sessão (mais abaixo), não os de consulta comercial */
+  const ehSessao = str(a.categoria_consulta) === 'Sessão';
   const saida: Candidato[] = [];
   /** o valor visto agora (não o que já estava na partida) */
   const novo = (campo: string, valor?: string): Visto | null => {
@@ -557,7 +569,7 @@ function candidatos(c: ConversaRegua, vistos: Vistos): Candidato[] {
     // véspera (24 h), dia (3 h), preparo (1 h). Em «Fechou» o Kommo manda o texto de véspera da SESSÃO.
     // (consulta_confirmada do Kommo dispara no mesmo horário da véspera = disparo duplo: não replicado)
     const naConsulta = ETAPAS_DA_CONSULTA.has(etapa);
-    if (consulta && naConsulta && SITUACOES_DE_PE.has(situ)) {
+    if (consulta && naConsulta && !ehSessao && SITUACOES_DE_PE.has(situ)) {
       saida.push(
         ...lembretes(consulta, {
           vespera: ['consulta-vespera', etapa === 'Fechou' ? 'parau_sessao_lembrete_vespera' : 'parau_consulta_lembrete_vespera'],
@@ -567,16 +579,16 @@ function candidatos(c: ConversaRegua, vistos: Vistos): Candidato[] {
       );
     }
     // falta: na hora em que marcam «Não compareceu» e 48 h depois da consulta
-    const faltou = naConsulta && situ === 'Não compareceu' ? novo('situacao_consulta', 'Não compareceu') : null;
+    const faltou = naConsulta && !ehSessao && situ === 'Não compareceu' ? novo('situacao_consulta', 'Não compareceu') : null;
     // o texto diz "a consulta de hoje": só vale se a falta foi marcada no dia da consulta
     if (faltou && consulta && consulta.data.iso === diaEmBelem(faltou.desde)) {
       saida.push({ regra: 'falta-mesmo-dia', modelo: 'parau_consulta_falta_mesmo_dia', chave: `faltou@${consulta.chave}`, kind: 'depois', alvo: faltou.desde });
     }
-    if (naConsulta && situ === 'Não compareceu' && consulta && !semFollowUp && !consultaAnteriorAVista(consulta)) {
+    if (naConsulta && !ehSessao && situ === 'Não compareceu' && consulta && !semFollowUp && !consultaAnteriorAVista(consulta)) {
       saida.push({ regra: 'falta-48h', modelo: 'parau_consulta_falta_48h', chave: consulta.chave, kind: 'depois', alvo: new Date(instante(consulta, HORA_PADRAO_DEPOIS).getTime() + 2 * DIA) });
     }
     // depois do atendimento (no Kommo os de 4 e 30 dias estão "antes" da consulta — defeito; aqui DEPOIS)
-    if (consulta && situ === 'Atendido' && !consultaAnteriorAVista(consulta)) {
+    if (consulta && !ehSessao && situ === 'Atendido' && !consultaAnteriorAVista(consulta)) {
       const base = instante(consulta, HORA_PADRAO_DEPOIS).getTime();
       const posConsulta = etapa === 'Compareceu' || etapa === 'Pós-consulta';
       if (etapa === 'Compareceu') saida.push({ regra: 'pos-atendimento', modelo: 'parau_consulta_pos_atendimento', chave: consulta.chave, kind: 'depois', alvo: new Date(base + DIA) });
@@ -626,6 +638,26 @@ function candidatos(c: ConversaRegua, vistos: Vistos): Candidato[] {
     }
   }
 
+  // SESSÃO vinda da agenda (categoria Sessão): véspera e «hoje» como os robôs do funil TRATAMENTO da Kommo, SEM preparo, qualquer que seja a
+  // etapa comercial (a agenda não a muda para Sessão). Perdido/Frio e tratamento encerrado (Alta/cancelado) não recebem. Mesmos nomes de regra
+  // e mesma chave (data+hora) dos caminhos que já existem (véspera de «Fechou», `sessao-dia` de «Em tratamento»): o «feitos» impede o 2º envio.
+  if (ehSessao && consulta && SITUACOES_DE_PE.has(situ) && etapa !== 'Perdido' && etapa !== 'Frio' && !['Alta', 'Tratamento cancelado'].includes(etapaTratamento)) {
+    const dele = etapaTratamento === 'Em tratamento' ? momento(a.proxima_sessao, a.hora_sessao) : null;
+    // «Em tratamento» com a próxima sessão preenchida e DIFERENTE da consulta da agenda: vale o campo que a equipe mantém (sessao-dia, abaixo)
+    if (!dele || dele.chave === consulta.chave) {
+      saida.push(...lembretes(consulta, { vespera: ['consulta-vespera', 'parau_sessao_lembrete_vespera'], dia: ['sessao-dia', 'parau_sessao_confirmacao_dia'] }));
+    }
+  }
+  // falta numa sessão da agenda: marcada «Não compareceu» no dia da sessão (o texto diz «hoje»); não usa os textos de falta de consulta.
+  // MESMA regra e MESMA chave (o dia da falta, em Belém) do caminho de «Em tratamento» (`compareceu_ultima_sessao` → Não): a falta de um
+  // dia sai uma vez, venha de onde vier; uma falta de outro dia não cala a de hoje.
+  if (ehSessao && consulta && situ === 'Não compareceu' && etapa !== 'Perdido' && etapa !== 'Frio' && !['Alta', 'Tratamento cancelado'].includes(etapaTratamento)) {
+    const faltou = novo('situacao_consulta', 'Não compareceu');
+    if (faltou && consulta.data.iso === diaEmBelem(faltou.desde)) {
+      saida.push({ regra: 'sessao-falta', modelo: 'parau_sessao_falta', chave: `faltou-sessao@${diaEmBelem(faltou.desde)}`, kind: 'depois', alvo: faltou.desde });
+    }
+  }
+
   // retorno de 60 dias depois da alta (no Kommo fica no funil Comercial, etapa RETORNO PÓS-TRATAMENTO)
   const alta = lerData(a.data_alta);
   if (alta && str(a.categoria_consulta) === 'Retorno após tratamento') {
@@ -653,21 +685,28 @@ function candidatos(c: ConversaRegua, vistos: Vistos): Candidato[] {
       const sessao = momento(a.proxima_sessao, a.hora_sessao);
       if (sessao?.hora) {
         const teto = instante(sessao, 0);
-        saida.push({ regra: 'sessao-dia', modelo: 'parau_sessao_confirmacao_dia', chave: sessao.chave, kind: 'antes', teto, alvo: new Date(teto.getTime() - 3 * HORA) });
+        saida.push({ regra: 'sessao-dia', modelo: 'parau_sessao_confirmacao_dia', chave: sessao.chave, kind: 'antes', teto, alvo: new Date(teto.getTime() - 3 * HORA), momento: sessao });
       }
       // metade das sessões: chegou a etiqueta `aderencia-meio`
       const meio = c.etiquetas.includes('aderencia-meio') ? novo('etiqueta:aderencia-meio') : null;
       if (meio) saida.push({ regra: 'sessao-aderencia-meio', modelo: 'parau_sessao_aderencia_meio', chave: `meio@${meio.desde.toISOString()}`, kind: 'depois', alvo: meio.desde });
       // faltou à sessão: «Compareceu à última sessão» passou a Não
       const faltouSessao = str(a.compareceu_ultima_sessao) === 'Não' ? novo('compareceu_ultima_sessao', 'Não') : null;
-      if (faltouSessao) saida.push({ regra: 'sessao-falta', modelo: 'parau_sessao_falta', chave: `faltou-sessao@${faltouSessao.desde.toISOString()}`, kind: 'depois', alvo: faltouSessao.desde });
+      if (faltouSessao) saida.push({ regra: 'sessao-falta', modelo: 'parau_sessao_falta', chave: `faltou-sessao@${diaEmBelem(faltouSessao.desde)}`, kind: 'depois', alvo: faltouSessao.desde });
       // exame pedido e já avisado: cobra o documento 120 h depois da consulta
       if (consulta && str(a.motivo_nao_fechamento) === 'Solicitado exames' && c.etiquetas.includes('pendencia-exame-avisado') && !consultaAnteriorAVista(consulta)) {
         saida.push({ regra: 'pendencia-documento', modelo: 'parau_pendencia_documento', chave: consulta.chave, kind: 'depois', alvo: new Date(instante(consulta, HORA_PADRAO_DEPOIS).getTime() + 120 * HORA) });
       }
     }
   }
-  return saida;
+  // a mesma regra com a mesma chave é o MESMO envio, venha de qual caminho vier (o «feitos» também vale entre ciclos)
+  const vistosNoCiclo = new Set<string>();
+  return saida.filter((k) => {
+    const id = `${k.regra}|${k.chave}`;
+    if (vistosNoCiclo.has(id)) return false;
+    vistosNoCiclo.add(id);
+    return true;
+  });
 }
 
 /** Até quando a regra ainda vale. */
@@ -699,7 +738,7 @@ export function decidirRegua(c: ConversaRegua, memoria: Memoria, agora: Date, un
       disparos.push({ regra: k.regra, chave: k.chave, modelo: k.modelo, texto: DESCRICAO_INTERNA[k.interna], variaveis: null, faltando: [], alvo: k.alvo, interna: k.interna });
       continue;
     }
-    const r = renderizar(k.modelo, c, unidade);
+    const r = renderizar(k.modelo, c, unidade, k.momento);
     if (r.faltando.length && memoria.feitos.has(`${k.regra}${SUFIXO_FALTA}|${k.chave}`)) continue;
     disparos.push({ regra: k.regra, chave: k.chave, modelo: k.modelo, texto: r.texto, variaveis: r.variaveis, faltando: r.faltando, alvo: k.alvo });
   }
