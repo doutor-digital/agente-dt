@@ -15,19 +15,13 @@
  *  - Campo faltando no texto → não manda; o seco deixa UMA nota dizendo o que falta (por chave).
  */
 import { TEXTOS_PARAU } from './chatwoot-regua-textos.js';
+import { SEMENTE_PARAUAPEBAS, ehUsuarioCelular } from './chatwoot-unidades.js';
+// Caixa→unidade, caixas de nuvem/histórico, gerente: agora vêm da configuração por unidade (`chatwoot-unidades.ts`, tabela
+// `unit_chatwoot`); os nomes e o formato antigos continuam aqui para quem já importava deles daqui.
+export { CAIXAS_REGUA, CAIXAS_CLOUD, CAIXAS_HISTORICO, GERENTE_DA_CAIXA } from './chatwoot-unidades.js';
 
 export const ID_REGUA = 'chatwoot-regua';
-/** caixa do Chatwoot → slug da unidade. Uma unidade por enquanto. */
-export const CAIXAS_REGUA: Readonly<Record<number, string>> = {
-  2: 'doutor-hernia-parauapebas', // Evolution (desconectado desde 13/11: o número entrou no Kapso em coexistência)
-  3: 'doutor-hernia-parauapebas', // WhatsApp Cloud via Kapso (13/11/2026)
-};
-/**
- * Caixas de canal WhatsApp Cloud (oficial, via Kapso): fora da janela de 24 h só vai TEMPLATE aprovado. A caixa 2 (Evolution/API)
- * não tem janela: segue com texto.
- */
-export const CAIXAS_CLOUD: ReadonlySet<number> = new Set([3]);
-/** O idioma em que os 33 templates `parau_*` foram criados na Meta. */
+/** O idioma em que os 33 templates `parau_*` foram criados na Meta (o mesmo das outras unidades). */
 export const IDIOMA_TEMPLATE = 'pt_BR';
 /**
  * Janela de 24 h do WhatsApp: conta da ÚLTIMA mensagem RECEBIDA do paciente (a mesma conta do Chatwoot, `MessageWindowService`).
@@ -36,11 +30,12 @@ export const IDIOMA_TEMPLATE = 'pt_BR';
  */
 export const JANELA_24H_MS = 24 * 3600_000;
 export const FOLGA_DA_JANELA_MS = 15 * 60_000;
-/**
- * Caixas só de HISTÓRICO (13/11/2026): o histórico antigo do app do celular de Parauapebas, importado do Kapso, mora na caixa 4
- * (canal API, que não envia nada). Funil e Hoje não leem estas caixas; régua, Sofia e agenda também não (não estão em CAIXAS_REGUA).
+/*
+ * CAIXAS_REGUA / CAIXAS_CLOUD / CAIXAS_HISTORICO (re-exportadas acima): quem é de quem mora em `unit_chatwoot_caixa`.
+ * - CAIXAS_CLOUD: canal WhatsApp Cloud (oficial, via Kapso): fora da janela de 24 h só vai TEMPLATE aprovado; a Evolution não tem janela.
+ * - CAIXAS_HISTORICO (13/11/2026): o histórico antigo do app do celular de Parauapebas, importado do Kapso, mora na caixa 4 (canal API,
+ *   que não envia nada). Funil e Hoje não leem estas caixas; régua, Sofia e agenda também não (não estão em CAIXAS_REGUA).
  */
-export const CAIXAS_HISTORICO: ReadonlySet<number> = new Set([4]);
 
 /**
  * UNIFICAÇÃO (pedido do João, 13/11/2026: "o histórico é pra subir no zap oficial, unificar"): as conversas da caixa de histórico
@@ -79,10 +74,12 @@ export function arquivoComEtapa(raw: any): boolean {
   const etapa = raw?.custom_attributes?.etapa;
   return ehArquivo(raw) && typeof etapa === 'string' && etapa.trim() !== '';
 }
-/** caixa → agente gerente no Chatwoot (lead quente parado vai para ela; decisão 26 do João). Parauapebas: Cleia (id 4). */
-export const GERENTE_DA_CAIXA: Readonly<Record<number, number>> = { 2: 4, 3: 4 };
-/** O usuário "📱 Celular da unidade": autor das mensagens que a equipe manda pelo celular (o Evolution usa o token dele). */
-export const USUARIO_CELULAR = 7;
+/* GERENTE_DA_CAIXA (re-exportada acima): caixa → agente gerente (lead quente parado vai para ela; decisão 26 do João). Parauapebas: Cleia (id 4). */
+/**
+ * O usuário "📱 Celular da unidade": autor das mensagens que a equipe manda pelo celular (o Evolution usa o token dele). LEGADO: o valor de
+ * Parauapebas; o código novo pergunta `ehUsuarioCelular(id)` (cada unidade tem o seu usuário, na configuração).
+ */
+export const USUARIO_CELULAR = SEMENTE_PARAUAPEBAS.usuarioCelularId as number;
 export const ETIQUETA_CELULAR = 'respondeu-pelo-celular';
 /** O contato do bot do Evolution (não é paciente). */
 export const TELEFONE_BOT_EVOLUTION = '+123456';
@@ -144,6 +141,10 @@ export interface DadosDaUnidade {
   pixKey: string | null;
   /** valor da consulta com pagamento antecipado, em reais */
   valorAntecipado: number | null;
+  /** os textos dos modelos COM os dados desta unidade (`textosDoSlug`); sem isto vale `TEXTOS_PARAU` (Parauapebas, como sempre) */
+  textos?: Readonly<Record<string, string>>;
+  /** prefixo dos modelos desta unidade na Meta ("parau_"); sem isto o nome na Meta é o nome base */
+  prefixoModelos?: string;
 }
 
 /**
@@ -357,8 +358,8 @@ export function atualizarVistos(
 // ── o texto ────────────────────────────────────────────────────────────────────────────────────────
 
 /** Os campos {{…}} do modelo, sem repetir, na ordem em que aparecem pela primeira vez: é a ordem de {{1}}, {{2}}… do template na Meta. */
-export function camposDoModelo(modelo: string): string[] {
-  const bruto = TEXTOS_PARAU[modelo];
+export function camposDoModelo(modelo: string, textos: Readonly<Record<string, string>> = TEXTOS_PARAU): string[] {
+  const bruto = textos[modelo];
   if (bruto === undefined) return [];
   const campos: string[] = [];
   for (const m of bruto.matchAll(/\{\{\s*([^}]+?)\s*\}\}/g)) if (!campos.includes(m[1]!)) campos.push(m[1]!);
@@ -392,7 +393,7 @@ const MODELOS_DE_SESSAO_DO_ENVIO: ReadonlySet<string> = new Set(['parau_sessao_l
  * {{lead.cf.2450928}} (os outros — retorno, boas-vindas… — seguem sessão → retorno → consulta, como sempre).
  */
 export function renderizar(modelo: string, c: ConversaRegua, u: DadosDaUnidade, momentoDoEnvio?: Momento): { texto: string | null; variaveis: string[] | null; faltando: string[] } {
-  const bruto = TEXTOS_PARAU[modelo];
+  const bruto = (u.textos ?? TEXTOS_PARAU)[modelo];
   if (bruto === undefined) return { texto: null, variaveis: null, faltando: [`texto do modelo ${modelo}`] };
   const a = c.attrs;
   const consulta = momento(a.data_consulta, a.hora_consulta);
@@ -436,7 +437,7 @@ export function renderizar(modelo: string, c: ConversaRegua, u: DadosDaUnidade, 
     }
   };
   const texto = bruto.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_todo, nome: string) => valorDoCampo(nome));
-  const variaveis = camposDoModelo(modelo).map((nome) => paraParametro(valorDoCampo(nome)));
+  const variaveis = camposDoModelo(modelo, u.textos).map((nome) => paraParametro(valorDoCampo(nome)));
   // o Chatwoot descarta parâmetro vazio e a Meta recusa o template com a conta errada: vazio é o mesmo que faltar
   if (!faltando.length && variaveis.some((v) => !v)) falta('um valor do template ficou vazio');
   return faltando.length ? { texto: null, variaveis: null, faltando } : { texto, variaveis, faltando: [] };
@@ -801,7 +802,7 @@ export function decidirEtiquetaCelular(c: ConversaRegua): 'por' | 'tirar' | null
   // nota privada (inclusive as do seco) não diz quem respondeu por último; mensagem do paciente não muda a etiqueta
   if (!u || u.privada || !u.saida || u.autorTipo !== 'user') return null;
   const tem = c.etiquetas.includes(ETIQUETA_CELULAR);
-  if (u.autorId === USUARIO_CELULAR) return tem ? null : 'por';
+  if (ehUsuarioCelular(u.autorId)) return tem ? null : 'por';
   return tem ? 'tirar' : null;
 }
 

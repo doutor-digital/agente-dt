@@ -17,6 +17,7 @@
  */
 import type { Request, Response } from 'express';
 import { logger } from '../lib/logger.js';
+import { numerosDoKapsoConfigurados } from '../lib/chatwoot-unidades.js';
 
 export const KAPSO_HOST = 'https://api.kapso.ai';
 export const KAPSO_META = `${KAPSO_HOST}/meta/whatsapp`;
@@ -38,7 +39,9 @@ export function numerosDoKapso(env: NodeJS.ProcessEnv = process.env): string[] {
   const l = String(env.KAPSO_PHONE_NUMBER_IDS ?? '')
     .split(/[\s,]+/)
     .filter((x) => /^\d{5,25}$/.test(x));
-  return l.length ? l : ['1212928641906230'];
+  // a variável de ambiente, SE existir, manda (como sempre); sem ela valem os números das unidades configuradas (Parauapebas é a semente,
+  // que era o padrão). Atenção ao ligar unidade nova: com KAPSO_PHONE_NUMBER_IDS definida, o número dela precisa entrar nela também.
+  return l.length ? l : numerosDoKapsoConfigurados();
 }
 
 /**

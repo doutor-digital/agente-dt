@@ -12,6 +12,7 @@
 import { logger } from './logger.js';
 import { prisma } from './prisma.js';
 import { CAIXAS_CLOUD } from './chatwoot-regua.js';
+import { numerosDoKapsoConfigurados } from './chatwoot-unidades.js';
 
 export const REGRA_KAPSO_REFERRAL = 'kapso-referral';
 const KAPSO = 'https://api.kapso.ai/meta/whatsapp/v24.0';
@@ -40,7 +41,9 @@ const longo = (v: unknown, max: number): string | null => (typeof v === 'string'
 
 export function numerosDoKapso(env: NodeJS.ProcessEnv = process.env): string[] {
   const l = String(env.KAPSO_PHONE_NUMBER_IDS ?? '').split(/[\s,]+/).filter((x) => /^\d{5,25}$/.test(x));
-  return l.length ? l : ['1212928641906230'];
+  // a variável de ambiente, SE existir, manda (como sempre); sem ela valem os números das unidades configuradas (Parauapebas é a semente,
+  // que era o padrão). Atenção ao ligar unidade nova: com KAPSO_PHONE_NUMBER_IDS definida, o número dela precisa entrar nela também.
+  return l.length ? l : numerosDoKapsoConfigurados();
 }
 
 /** Webhook do Chatwoot → mensagem de paciente na caixa oficial, SEM referral, com o wamid; ou null. */

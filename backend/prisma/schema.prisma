@@ -366,6 +366,8 @@ model Unit {
   changeLog         UnitChangeLog[]
   lessons           UnitLesson[]
   automacoes        UnitAutomacao[]
+  /// Configuração do CRM (Chatwoot) desta unidade — ver `UnitChatwoot`.
+  chatwoot          UnitChatwoot?
   franquiaTelefones FranquiaTelefone[]
   franquiaIndiceStatus FranquiaIndiceStatus?
   passosWidget      WidgetPasso[]
@@ -1923,6 +1925,57 @@ model UnitCrmCompartilhado {
 
   @@unique([contaUnitId, rotulo])
   @@map("unit_crm_compartilhado")
+}
+
+/// CONFIGURAÇÃO DO CRM (CHATWOOT) POR UNIDADE (kit de unidade nova, 14/11/2026). Antes, caixa→unidade, gerente, usuário do
+/// celular, prefixo dos modelos e os textos com endereço/mapa estavam escritos no código só para Parauapebas. Agora cada
+/// unidade tem a sua linha aqui, lida no boot e revalidada (`lib/chatwoot-unidades.ts`); o código de Parauapebas continua
+/// como semente de segurança (sem linha aqui, a unidade se comporta como sempre se comportou).
+/// SEGREDO NUNCA MORA AQUI: o token da Meta e o dataset ficam no ambiente (`META_ADS_TOKEN_<SUFIXO>`,
+/// `META_DATASET_ID_<SUFIXO>`); aqui só o SUFIXO (o nome da variável).
+model UnitChatwoot {
+  unitId String @id @map("unit_id")
+  /// Prefixo dos modelos do WhatsApp desta unidade na Meta ("parau_"). Os modelos têm o nome base da régua
+  /// (`<prefixo>consulta_lembrete_vespera`).
+  prefixoModelos String @map("prefixo_modelos")
+  /// Usuário do Chatwoot "📱 Celular da unidade" (autor das mensagens que a equipe manda pelo aparelho).
+  usuarioCelularId Int? @map("usuario_celular_id")
+  /// Agente gerente (lead quente parado vai para ela).
+  gerenteId Int? @map("gerente_id")
+  /// Meta de agendamentos por dia (tela Hoje).
+  metaAgendamentosDia Int? @map("meta_agendamentos_dia")
+  /// phone_number_id do número oficial no Kapso (tradutor de mídia e resgate de referral).
+  kapsoPhoneNumberId String? @map("kapso_phone_number_id")
+  /// WABA da caixa oficial (conversões CAPI).
+  wabaId String? @map("waba_id")
+  /// Sufixo das variáveis de ambiente da Meta desta unidade ("PARAUAPEBAS" → META_ADS_TOKEN_PARAUAPEBAS).
+  envSufixo String @map("env_sufixo")
+  /// Dados que entram NO TEXTO dos modelos: { nome, cidade, endereco, mapa, telefone?, valorConsulta?, valorComSinal? }.
+  dadosModelos Json @map("dados_modelos")
+  atualizadoPor String?  @map("atualizado_por")
+  criadoEm      DateTime @default(now()) @map("criado_em")
+  atualizadoEm  DateTime @updatedAt @map("atualizado_em")
+
+  unit   Unit                @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  caixas UnitChatwootCaixa[]
+
+  @@map("unit_chatwoot")
+}
+
+/// Uma caixa (inbox) do Chatwoot de uma unidade. O id da caixa é único na conta do Chatwoot: duas unidades nunca dividem caixa.
+/// tipo: "cloud" (WhatsApp oficial via Kapso: fora da janela de 24 h só vai modelo aprovado) | "evolution" (API não oficial,
+/// sem janela) | "historico" (só arquivo: fora da régua, do funil e do Hoje).
+model UnitChatwootCaixa {
+  caixaId            Int     @id @map("caixa_id")
+  unitId             String  @map("unit_id")
+  tipo               String
+  /// Instância do Evolution que alimenta esta caixa (só tipo "evolution").
+  instanciaEvolution String? @map("instancia_evolution")
+
+  config UnitChatwoot @relation(fields: [unitId], references: [unitId], onDelete: Cascade)
+
+  @@index([unitId])
+  @@map("unit_chatwoot_caixa")
 }
 
 model UnitAutomacao {

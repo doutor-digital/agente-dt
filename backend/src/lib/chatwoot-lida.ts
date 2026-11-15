@@ -14,10 +14,11 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { Request, Response } from 'express';
 import { logger } from './logger.js';
+import { INSTANCIA_CAIXA } from './chatwoot-unidades.js';
 import { chamar, contaChatwootDoAmbiente, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 
 /** instância do Evolution → caixa do Chatwoot */
-export const INSTANCIA_CAIXA: Readonly<Record<string, number>> = { 'parauapebas-unidade': 2 };
+export { INSTANCIA_CAIXA };
 export const INTERVALO_MESMO_TELEFONE_MS = 20_000;
 const VALIDADE_DO_ALVO_MS = 30 * 60_000;
 

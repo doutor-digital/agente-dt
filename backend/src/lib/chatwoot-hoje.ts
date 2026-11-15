@@ -12,13 +12,15 @@
  *  - A Lia separou: consultaram e não fecharam; alta há 60 dias ou mais (retorno); `retomar_em` vencido; faltaram (7 dias).
  *  - Meta do dia: agendamentos por dia de cada caixa (`META_AGENDAMENTOS_POR_CAIXA`), somada nas caixas que a pessoa enxerga.
  */
+import { META_AGENDAMENTOS_POR_CAIXA } from './chatwoot-unidades.js';
+
 const DIA = 86_400_000;
 export const DIA_MS = DIA;
 const UTC_MENOS_3 = 3 * 3600_000;
 const ETAPAS_QUALIFICACAO = new Set(['Novo lead', 'Sofia qualifica', 'Esperando humano']);
 export const MAX_FACA_AGORA = 8;
 /** caixa do Chatwoot → meta de agendamentos por dia (decisão 30 do João, 12/11/2026: Parauapebas = 5). */
-export const META_AGENDAMENTOS_POR_CAIXA: Readonly<Record<number, number>> = { 2: 5, 3: 5 };
+export { META_AGENDAMENTOS_POR_CAIXA };
 
 export interface ItemDoDia {
   id: number;

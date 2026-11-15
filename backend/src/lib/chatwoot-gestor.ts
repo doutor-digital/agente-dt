@@ -18,6 +18,7 @@
  *    que fecharam. Custo por consulta = investido ÷ consultas agendadas (dos leads do período).
  */
 import { createHash } from 'node:crypto';
+import { sufixoEnvDaUnidade } from './chatwoot-unidades.js';
 import { DIA_MS, data10, diaEmBelem, nomeDe, semInteracao, somar, str, sim } from './chatwoot-hoje.js';
 
 const UTC_MENOS_3 = 3 * 3600_000;
@@ -780,7 +781,7 @@ export function montarOportunidades(conversas: any[], agora: number): Oportunida
 
 /** `doutor-hernia-parauapebas` → `PARAUAPEBAS` (o mesmo nome que o rastreio de campanhas usa em `META_ADS_TOKEN_<UNIDADE>`). */
 export function sufixoDaUnidade(slug: string): string {
-  return slug.replace(/^doutor-hernia-/, '').toUpperCase().replace(/[^A-Z0-9]+/g, '_');
+  return sufixoEnvDaUnidade(slug); // a configuração da unidade manda; sem ela, a regra de sempre
 }
 
 export function credenciaisDeAnuncio(

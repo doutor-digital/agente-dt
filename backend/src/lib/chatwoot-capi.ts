@@ -33,13 +33,12 @@ import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import { chamar, contaChatwootDoAmbiente, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 import { conversaDoChatwoot, ehArquivo, ehSim, type ConversaRegua } from './chatwoot-regua.js';
 import { referraisGuardados } from './kapso-referral.js';
+import { CAIXAS_CAPI, sufixoEnvDaUnidade } from './chatwoot-unidades.js';
 
 export const ID_CAPI = 'chatwoot-capi';
 
 /** caixa → unidade e a WABA da caixa. Só caixa de WhatsApp OFICIAL (a do Evolution não tem anúncio nem WABA). */
-export const CAIXAS_CAPI: Readonly<Record<number, { slug: string; waba: string }>> = {
-  3: { slug: 'doutor-hernia-parauapebas', waba: '2146287749563217' },
-};
+export { CAIXAS_CAPI } from './chatwoot-unidades.js';
 
 const SWEEP_MS = Number(process.env.CHATWOOT_CAPI_SWEEP_MS) || 10 * 60_000;
 const PRIMEIRA_VARREDURA_MS = 240_000;
@@ -157,7 +156,7 @@ export interface ConfigDaUnidade {
 
 /** `doutor-hernia-parauapebas` → `PARAUAPEBAS` (o sufixo das variáveis do n8n). */
 export function sufixoDaUnidade(slug: string): string {
-  return slug.replace(/^doutor-hernia-/, '').toUpperCase().replace(/[^A-Z0-9]+/g, '_');
+  return sufixoEnvDaUnidade(slug); // a configuração da unidade manda; sem ela, a regra de sempre
 }
 
 export function configDaUnidade(slug: string, env: NodeJS.ProcessEnv = process.env, tokenDaUnidade: string | null = null): ConfigDaUnidade {

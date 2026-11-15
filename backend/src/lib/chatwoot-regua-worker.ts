@@ -54,6 +54,8 @@ import {
   type Mudanca,
   type Visto,
 } from './chatwoot-regua.js';
+import { configDaUnidade, nomeDoModeloNaMeta } from './chatwoot-unidades.js';
+import { textosDoSlug } from './chatwoot-modelos.js';
 
 const SWEEP_MS = Number(process.env.CHATWOOT_REGUA_SWEEP_MS) || 10 * 60_000;
 const PRIMEIRA_VARREDURA_MS = 150_000;
@@ -518,13 +520,14 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
             if (janelaDe24hAberta(await ultimaDoPaciente(c), agora)) {
               via = { tipo: 'texto' };
             } else {
-              const naMeta = (await aprovados()).get(d.modelo);
+              const nomeNaMeta = nomeDoModeloNaMeta(d.modelo, unidade.prefixoModelos);
+              const naMeta = (await aprovados()).get(nomeNaMeta);
               // o corpo aprovado na Meta tem de pedir exatamente as variáveis que a régua tem (senão a Meta recusa ou troca um valor por outro)
               const problema =
                 naMeta !== undefined && naMeta !== null && naMeta !== d.variaveis.length
                   ? `na Meta pede ${naMeta} variável(is) e a régua tem ${d.variaveis.length}`
                   : undefined;
-              via = { tipo: 'template', nome: d.modelo, variaveis: d.variaveis, aprovado: naMeta !== undefined && !problema, problema };
+              via = { tipo: 'template', nome: nomeNaMeta, variaveis: d.variaveis, aprovado: naMeta !== undefined && !problema, problema };
             }
           } catch (err) {
             logger.warn({ err: String(err), caixa, conversa: c.id, regra: d.regra }, `${ID_REGUA}: não consegui conferir a janela de 24 h/os templates — não mando agora`);
@@ -545,7 +548,7 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
               if (feitosDaConversa.has(`${regra}|${d.chave}`)) continue;
               semTemplate = true;
               privada = true;
-              texto = `🤖 Régua «${d.regra}»: template ${d.modelo} ${via.problema ?? 'ainda não aprovado na Meta'} — não enviei`;
+              texto = `🤖 Régua «${d.regra}»: template ${nomeDoModeloNaMeta(d.modelo, unidade.prefixoModelos)} ${via.problema ?? 'ainda não aprovado na Meta'} — não enviei`;
             }
           }
         }
@@ -624,7 +627,14 @@ async function varrer(ctx: ContextoChatwoot): Promise<void> {
           logger.warn({ slug }, `${ID_REGUA}: unidade não encontrada`);
           continue;
         }
-        const unidade: DadosDaUnidade = { nome: unit.name, pixKey: unit.pixKey, valorAntecipado: precosDaConsulta(unit)?.antecipado ?? null };
+        const unidade: DadosDaUnidade = {
+          nome: unit.name,
+          pixKey: unit.pixKey,
+          valorAntecipado: precosDaConsulta(unit)?.antecipado ?? null,
+          // textos e prefixo dos modelos DESTA unidade (configuração por unidade); Parauapebas: idênticos aos de sempre
+          textos: textosDoSlug(slug),
+          prefixoModelos: configDaUnidade(slug)?.prefixoModelos,
+        };
         const kommo = unit.kommoSubdomain && unit.kommoAccessToken ? cartaoNoKommoDaUnidade(unit) : undefined;
         await cicloDaCaixa({ ...deps, kommo, avisarGerente: avisoDaGerente(slug) }, Number(caixaTxt), slug, modo, unidade, new Date());
       } catch (err) {
