@@ -1747,11 +1747,31 @@ const MENU_JS = String.raw`(function(){
   }
   function achar(id){ for (var i = 0; i < TELAS.length; i++) if (TELAS[i].id === id) return TELAS[i]; return null; }
   var DE_MENU = TELAS.map(function(t){ return '[' + t.marca + ']'; }).join(', ');
+  // Item aberto = as MESMAS classes que o CRM usa no item ativo (azul do CRM, fundo leve). Com uma tela nossa aberta, o item que o CRM
+  // ainda marca (ex. «Todas as conversas») perde o destaque: antes ficavam DOIS selecionados (João, 15/11) — e o clique não deixa contorno.
+  // classes do item ativo no Chatwoot 4.19.1 (SidebarGroupHeader/Leaf: text-n-slate-12 bg-n-alpha-2 font-medium)
+  var ATIVO_CW = ['text-n-slate-12', 'bg-n-alpha-2', 'font-medium'];
+  function estiloDoMenu(){
+    if (document.querySelector('style[data-dd-menu-estilo]')) return;
+    var st = document.createElement('style'); st.setAttribute('data-dd-menu-estilo', '1');
+    // com tela nossa aberta: o item ativo do CRM e o cabeçalho do grupo dele («Conversas») voltam ao cinza; e o clique do mouse não deixa
+    // contorno nos nossos itens (o teclado continua com o contorno: :focus-visible)
+    st.textContent = 'html.dd-tela-aberta aside li a.bg-n-alpha-2:not([data-dd-ativo]),html.dd-tela-aberta aside li a.text-n-slate-12:not([data-dd-ativo]){background-color:transparent!important;color:rgb(var(--slate-11))!important}' +
+      TELAS.map(function(t){ return '[' + t.marca + '] a:focus:not(:focus-visible),a[' + t.marca + ']:focus:not(:focus-visible)'; }).join(',') + '{outline:none!important;box-shadow:none!important}';
+    (document.head || document.documentElement).appendChild(st);
+  }
   function marcar(ativo){
     // ativo: id da tela aberta, ou false (nenhuma)
+    estiloDoMenu();
+    document.documentElement.classList.toggle('dd-tela-aberta', !!ativo);
     TELAS.forEach(function(t){
       var item = document.querySelector('[' + t.marca + ']'), link = item && (item.tagName === 'A' ? item : item.querySelector('a'));
-      if (link) link.style.background = ativo === t.id ? 'rgba(31,147,255,.12)' : '';
+      if (!link) return;
+      var sim = ativo === t.id;
+      link.style.background = '';
+      ATIVO_CW.forEach(function(c){ link.classList.toggle(c, sim); });
+      link.classList.toggle('text-n-slate-11', !sim);
+      if (sim) link.setAttribute('data-dd-ativo', '1'); else link.removeAttribute('data-dd-ativo');
     });
   }
   // fechar REMOVE o quadro: nada fica consultando o Chatwoot escondido; reabrir pede o login de novo
@@ -1837,7 +1857,8 @@ const MENU_JS = String.raw`(function(){
     mkt: '<path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/>',
     gestor: '<path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>'
   };
-  ICONES.robos = '<rect width="18" height="11" x="3" y="11" rx="2"/><path d="M12 11V7"/><circle cx="12" cy="5" r="2"/><path d="M8 16h.01"/><path d="M16 16h.01"/>';
+  // Robôs: o desenho de fluxo (dois blocos ligados), não a cabeça de robô (João, 15/11: «cara de IA»)
+  ICONES.robos = '<rect width="8" height="8" x="3" y="3" rx="2"/><path d="M7 11v4a2 2 0 0 0 2 2h4"/><rect width="8" height="8" x="13" y="13" rx="2"/>';
   ICONES.ia = '<path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>';
   var SEL_ICONE = 'svg, [class^="i-"], [class*=" i-"]';
   function trocarIcone(base, novo, qual){
@@ -1861,6 +1882,8 @@ const MENU_JS = String.raw`(function(){
     trocarIcone(base, novo, t.id);
     var link = novo.tagName === 'A' ? novo : novo.querySelector('a');
     if (link) { link.setAttribute('href', t.hash); link.classList.remove('router-link-active', 'router-link-exact-active'); link.removeAttribute('aria-current'); }
+    // o «Contatos» copiado pode estar ativo na hora da cópia: o item novo nasce sem destaque (quem marca é o marcar())
+    if (link) { ATIVO_CW.forEach(function(c){ link.classList.remove(c); }); link.removeAttribute('data-dd-ativo'); link.classList.add('text-n-slate-11'); }
     Array.prototype.forEach.call(novo.querySelectorAll('ul, [role="group"]'), function(u){ u.remove(); });
     trocarTexto(novo, t.nome);
     if (t.pai) {
@@ -1894,6 +1917,8 @@ const MENU_JS = String.raw`(function(){
     });
     var reserva = document.querySelector('[data-funil-botao]'); if (reserva) reserva.remove();
     aplicarGrupo();
+    // o CRM redesenhou o menu com uma tela nossa aberta: os itens recriados voltam a marcar a tela aberta
+    if (tela) marcar(tela);
     return true;
   }
   function botao(){
