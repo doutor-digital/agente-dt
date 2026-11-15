@@ -17,8 +17,10 @@
  *
  * A sessão chega do menu do Chatwoot por postMessage (`funil:pede-sessao` → `funil-sessao`, com checagem de origem). Todo texto que
  * vem do servidor entra por textContent (nunca innerHTML). O JavaScript não usa crase nem `${`: o texto é um String.raw e só
- * `__ORIGEM_CW__` é trocado.
+ * `__ORIGEM_CW__` (a origem do Chatwoot) e `__GUIA_LIGADO__` (true/false: o «?» do cabeçalho só aparece com o guia da etapa ligado) são trocados
+ * por `paginaDoAgente`; página servida sem trocar os dois quebra o script.
  */
+import { guiaDaEtapaLigado } from './chatwoot-guia-etapas.js';
 
 const PAGINA = String.raw`<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -40,6 +42,7 @@ h3 .c{color:var(--mut);font-weight:500;font-variant-numeric:tabular-nums}
 .mut{color:var(--mut)}
 .cab{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 16px;margin-bottom:12px}
 .cab .eu{display:flex;align-items:center;gap:10px;color:var(--sec);font-size:13px}
+.cab .aj{width:30px;height:30px;border-radius:50%;border:1px solid var(--b);background:transparent;color:var(--sec);font-weight:700;font-size:14px;cursor:pointer}.cab .aj:hover{color:var(--azul-txt);border-color:var(--azul)}
 .topo{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:8px 16px;border-bottom:1px solid var(--b)}
 .abas{display:flex;gap:4px;flex-wrap:wrap}
 .abas button{position:relative;min-height:40px;padding:0 12px;border:0;background:transparent;color:var(--sec);font-weight:500;font-size:14px;cursor:pointer;border-radius:6px 6px 0 0}
@@ -209,7 +212,7 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
 <body><main>
 <div class="cab">
   <div><h1>Agente</h1><div class="meta" id="unidadeNome">Carregando…</div></div>
-  <div class="eu"><select class="sel" id="unidadeSel" aria-label="Unidade" hidden></select><span id="euNome"></span></div>
+  <div class="eu"><button class="aj" id="ajuda" type="button" hidden title="Ver a aula desta tela" aria-label="Ver a aula em vídeo desta tela">?</button><select class="sel" id="unidadeSel" aria-label="Unidade" hidden></select><span id="euNome"></span></div>
 </div>
 <div id="erroTopo" class="aviso erro" hidden></div>
 
@@ -362,6 +365,7 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
 <div id="toast" class="toast" role="status" hidden></div>
 <script>
 (function(){
+  var GUIA_LIGADO = __GUIA_LIGADO__;
   var CW = __ORIGEM_CW__, S = null, U = null, EU = '', UNIDADES = [];
   var $ = function(id){ return document.getElementById(id); };
   function el(tag, cls, txt){ var e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; }
@@ -798,12 +802,17 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
     if (ev.key !== 'testar-ia-rascunho' || !ev.newValue || !U) return;
     guardar('testar-ia-rascunho', null); $('regra').value = ev.newValue.slice(0, 800); ir('ensinar'); contar(); $('regra').focus();
   });
+  // «?» do cabeçalho: abre a aula desta tela em vídeo por cima da conversa (o menu do CRM mostra o modal; aqui só se pede). Só dentro do CRM.
+  if (window.parent !== window && GUIA_LIGADO) {
+    $('ajuda').hidden = false;
+    $('ajuda').addEventListener('click', function(){ try { window.parent.postMessage({ event: 'guia:tela', tela: 'agente' }, CW); } catch (e) {} });
+  }
   pedirSessao(); setTimeout(function(){ if (!S) pedirSessao(); }, 1500);
   setTimeout(function(){ if (!S) aviso('erroTopo', 'Abra esta tela pelo menu do CRM (Agente), já logada.'); }, 6000);
 })();
 </script></body></html>`;
 
 /** A página. `origemChatwoot` = a origem do Chatwoot (só ela fala com a página por postMessage). */
-export function paginaDoAgente(origemChatwoot: string): string {
-  return PAGINA.split('__ORIGEM_CW__').join(JSON.stringify(origemChatwoot));
+export function paginaDoAgente(origemChatwoot: string, env: NodeJS.ProcessEnv = process.env): string {
+  return PAGINA.split('__ORIGEM_CW__').join(JSON.stringify(origemChatwoot)).split('__GUIA_LIGADO__').join(String(guiaDaEtapaLigado(env)));
 }

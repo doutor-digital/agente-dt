@@ -47,6 +47,7 @@ import { TELAS_CSS, TELAS_JS } from '../lib/chatwoot-telas-ui.js';
 import { instanteNoFuso, searchTreatments } from '../services/spine.service.js';
 import { arquivoComEtapa, CAIXAS_HISTORICO, CAIXAS_REGUA, CAMPO_PARTIDA, ehArquivo } from '../lib/chatwoot-regua.js';
 import { assistenteJs } from '../lib/chatwoot-assistente-ui.js';
+import { guiaJs, guiaDaEtapaLigado } from '../lib/chatwoot-guia-etapas.js';
 import {
   ATRIBUTO_ETAPA,
   MAX_PAGINAS,
@@ -1064,6 +1065,7 @@ export function paginaFunilHandler(_req: Request, res: Response): void {
   }
   res.type('html').send(
     PAGINA.replace('__ORIGEM_CW__', JSON.stringify(new URL(contexto()!.conta!.url).origin))
+      .split('__GUIA_LIGADO__').join(String(guiaDaEtapaLigado()))
       .split('/*__TELAS_CSS__*/').join(TELAS_CSS)
       .split('/*__TELAS_JS__*/').join(TELAS_JS),
   );
@@ -1242,6 +1244,7 @@ body{background:#f4f6f9}
 .atual{font-size:12px;color:#667085}
 .ic{width:34px;height:34px;border-radius:10px;border:1px solid var(--linha);background:#fff;cursor:pointer;font-size:16px;color:#475467;transition:transform .3s}
 .ic:hover{transform:rotate(90deg)}
+.ic.ajuda{font-weight:700;font-size:15px}.ic.ajuda:hover{transform:none;background:#eef4ff}
 .busca-c{display:flex;align-items:center;gap:6px;height:34px;padding:0 10px;border:1px solid var(--linha);border-radius:10px;background:#fff;min-width:220px;flex:0 1 280px}
 .busca-c span{color:#98a2b3;font-size:15px}
 .busca-c input{border:0;outline:0;flex:1;min-width:0;background:transparent;height:30px}
@@ -1320,7 +1323,7 @@ body{background:#f4f6f9}
   <div class="linha-a">
     <h1>Funil</h1>
     <div class="resumo" id="resumo"></div>
-    <div class="dir"><span id="atual" class="atual"></span><button id="recarregar" class="ic" type="button" title="Atualizar agora" aria-label="Atualizar agora">↻</button><button id="novo" class="bt azul" type="button" hidden title="Novo lead (N)">+ Novo lead</button></div>
+    <div class="dir"><span id="atual" class="atual"></span><button id="ajuda" class="ic ajuda" type="button" hidden title="Ver a aula desta tela" aria-label="Ver a aula em vídeo desta tela">?</button><button id="recarregar" class="ic" type="button" title="Atualizar agora" aria-label="Atualizar agora">↻</button><button id="novo" class="bt azul" type="button" hidden title="Novo lead (N)">+ Novo lead</button></div>
   </div>
   <div class="linha-b">
     <select id="caixa" class="campo-topo" aria-label="Caixa de entrada"><option value="">Todas as caixas</option></select>
@@ -1574,6 +1577,14 @@ body{background:#f4f6f9}
   $('busca').addEventListener('input',function(){ if(dados) desenhar(); });
   $('ordem').addEventListener('change',function(){ guardar(); if(dados) desenhar(); });
   $('recarregar').addEventListener('click',function(){ carregar(); });
+  // «?» do cabeçalho: abre a aula em vídeo desta tela por cima da conversa (o menu do CRM mostra o modal; aqui só se pede). Só dentro do CRM.
+  var GUIA_LIGADO=__GUIA_LIGADO__;
+  (function(){
+    var aula=TELA===''?'funil':TELA==='hoje'?'hoje':TELA==='oport'?'oportunidades':'';
+    if(!aula||!DENTRO||!GUIA_LIGADO) return;
+    var b=$('ajuda'); b.hidden=false;
+    b.addEventListener('click',function(){ try{ window.parent.postMessage({event:'guia:tela',tela:aula},ORIGEM_CW); }catch(e){} });
+  })();
   document.addEventListener('keydown',function(e){
     var t=e.target, digitando=t&&(t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.tagName==='SELECT');
     if(digitando||aberta||e.ctrlKey||e.metaKey||e.altKey) return;
@@ -1689,13 +1700,15 @@ export function menuFunilHandler(_req: Request, res: Response): void {
 }
 
 /**
- * O que o Chatwoot carrega em `GET /funil/menu.js`: o menu (Hoje, Funil, Oportunidades e, para a gestão, Marketing e Gestor) e o botão da assistente da atendente. Dois blocos
+ * O que o Chatwoot carrega em `GET /funil/menu.js`: o menu (Hoje, Funil, Oportunidades e, para a gestão, Marketing e Gestor), o botão da assistente da atendente e o guia da etapa. Blocos
  * independentes no MESMO arquivo, porque o DASHBOARD_SCRIPTS da produção carrega só este endereço. Erro de EXECUÇÃO do botão
  * não derruba o menu (o `try`); erro de SINTAXE derrubaria o arquivo todo, por isso o teste `menu.js … PARSEIAM` é obrigatório.
  */
 export function montarMenuJs(agente: string): string {
   const origem = JSON.stringify(agente);
-  return `${MENU_JS.split('__AGENTE__').join(origem)}\n;try{\n${assistenteJs().split('__AGENTE__').join(origem)}\n}catch(e){}\n`;
+  // o guia da etapa («O que fazer agora») é um terceiro bloco independente: se falhar ao executar, o menu e a assistente seguem
+  const guia = guiaJs(origem);
+  return `${MENU_JS.split('__AGENTE__').join(origem)}\n;try{\n${assistenteJs().split('__AGENTE__').join(origem)}\n}catch(e){}\n${guia ? `;try{\n${guia}\n}catch(e){}\n` : ''}`;
 }
 
 // String.raw: o que está aqui é o JavaScript que o navegador recebe (as barras das expressões regulares ficam como estão).
