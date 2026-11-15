@@ -295,6 +295,13 @@ export async function confirmar(ctx: ContextoChatwoot, usuario: string, codigoBr
     } catch {
       // aviso que falha não desfaz nem esconde o que foi feito
     }
+  } else if (descreverConta(ctx)) {
+    // envio a paciente (mensagem, conversa com mensagem, campanha) numa clínica que NÃO é a de Parauapebas: o João fica sabendo, como no apagar
+    try {
+      await ctx.avisar(`✉️ Chatwoot${descreverConta(ctx)}: ${usuario} mandou pelo conector do claude.ai (${p.acao.motivo}): ${p.acao.metodo} ${p.acao.caminho}`);
+    } catch {
+      // aviso que falha não desfaz nem esconde o que foi feito
+    }
   }
   return r;
 }
@@ -314,7 +321,8 @@ export const RECUSA_DE_CONTA = 'esta pessoa não está autorizada a escolher out
  * os textos de quem só conhece essa conta ficam exatamente como eram.
  */
 export function descreverConta(ctx: ContextoChatwoot, e: NodeJS.ProcessEnv = process.env): string {
-  if (!ctx.conta || ehContaDoAmbiente(ctx.conta.conta, e)) return '';
+  // só conta PRÓPRIA de clínica (alguma unidade aponta para ela) é descrita; a de Parauapebas fica vazia, como sempre foi
+  if (!ctx.conta || ehContaDoAmbiente(ctx.conta.conta, e) || !contasExplicitas().includes(ctx.conta.conta)) return '';
   const un = unidadesDaContaDoChatwoot(ctx.conta.conta, e);
   return ` (conta ${ctx.conta.conta} · ${un.length > 4 ? `${un.slice(0, 4).join(', ')} e mais ${un.length - 4}` : un.join(', ') || 'sem unidade'})`;
 }
@@ -353,6 +361,10 @@ export function contasParaListar(ctx: ContextoChatwoot, e: NodeJS.ProcessEnv = p
  * `escolheConta`: quem pode escolher a conta (MCP_CHATWOOT_CONTAS_EMAILS). Uma FUNÇÃO é consultada a CADA chamada (tirar o e-mail da lista corta o
  * acesso na hora); um valor fixo serve ao teste. O parâmetro `conta`, `chatwoot_contas` e os textos «use a mesma conta» só EXISTEM para quem pode
  * escolher no momento em que a sessão abre — para os demais o conector fica EXATAMENTE como era.
+ *
+ * COMPORTAMENTO DO SDK (1.30.1, provado em `chatwoot-contas.test.ts › SDK`): quem NÃO tem o parâmetro no schema e manda `conta: 2` NÃO leva recusa — o schema
+ * descarta o campo desconhecido antes de a função rodar, e a chamada vai para Parauapebas, sem erro (igual ao que sempre foi). A recusa de `contextoDaChamada` é
+ * a segunda barreira (função chamada direto) e a que vale para quem TEM o parâmetro e perdeu a permissão no meio da sessão.
  */
 export function registrarFerramentasChatwoot(server: McpServer, ctx: ContextoChatwoot, usuario: string, auditar: Auditar, escolheConta: boolean | (() => boolean) = false): void {
   if (!ctx.conta) return;
