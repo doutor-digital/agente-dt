@@ -31,7 +31,7 @@ export const ROTULO_DO_GRUPO_AUTO: Readonly<Record<GrupoDaAutomacao, string>> = 
   rastreio: 'Rastreio',
   organizacao: 'Organização',
   avisos: 'Avisos para a equipe',
-  nativas: 'Regras nativas do Chatwoot',
+  nativas: 'Regras automáticas do CRM',
 };
 export const ORDEM_DOS_GRUPOS: readonly GrupoDaAutomacao[] = ['sofia', 'agenda', 'mensagens', 'rastreio', 'organizacao', 'avisos', 'nativas'];
 
@@ -74,9 +74,9 @@ export interface FixaSomenteLeitura {
 }
 
 export const FIXAS: readonly FixaSomenteLeitura[] = [
-  { id: 'fixa-sofia-robo', grupo: 'sofia', nome: 'Sofia como robô do Chatwoot (aba Pendentes)', oQueFaz: 'A Sofia responde como o robô (bot) do Chatwoot: a conversa em que ela não respondeu sai de «Pendentes» e a atendente vê quem é o robô.', estado: (e) => String(e.CHATWOOT_SOFIA_COMO_BOT ?? '').trim() === '1', variavel: 'CHATWOOT_SOFIA_COMO_BOT' },
+  { id: 'fixa-sofia-robo', grupo: 'sofia', nome: 'Sofia como robô do CRM (aba Pendentes)', oQueFaz: 'A Sofia responde como o robô (bot) do CRM: a conversa em que ela não respondeu sai de «Pendentes» e a atendente vê quem é o robô.', estado: (e) => String(e.CHATWOOT_SOFIA_COMO_BOT ?? '').trim() === '1', variavel: 'CHATWOOT_SOFIA_COMO_BOT' },
   { id: 'fixa-pausa-celular', grupo: 'sofia', nome: 'A Sofia cala quando a equipe responde (inclusive pelo celular)', oQueFaz: 'Se alguém da equipe respondeu depois da última mensagem do paciente, a Sofia não responde por cima. A resposta pelo celular da unidade recebe a etiqueta «respondeu-pelo-celular».', estado: null },
-  { id: 'fixa-resolver', grupo: 'organizacao', nome: 'Campos obrigatórios ao resolver a conversa', oQueFaz: 'Ao clicar em «Resolver», o Chatwoot pede os campos que faltam no cartão (motivo, etapa…) antes de fechar a conversa.', estado: (e) => e.CHATWOOT_RESOLVER_OBRIGATORIO !== '0', variavel: 'CHATWOOT_RESOLVER_OBRIGATORIO' },
+  { id: 'fixa-resolver', grupo: 'organizacao', nome: 'Campos obrigatórios ao resolver a conversa', oQueFaz: 'Ao clicar em «Resolver», o CRM pede os campos que faltam no cartão (motivo, etapa…) antes de fechar a conversa.', estado: (e) => e.CHATWOOT_RESOLVER_OBRIGATORIO !== '0', variavel: 'CHATWOOT_RESOLVER_OBRIGATORIO' },
   { id: 'fixa-atalhos', grupo: 'organizacao', nome: 'Atalhos ⚡ Mensagens prontas e 📋 Modelos do WhatsApp', oQueFaz: 'Botões na caixa de resposta para chamar as mensagens prontas e os modelos do WhatsApp sem sair da conversa.', estado: (e) => e.CHATWOOT_ATALHOS !== '0', variavel: 'CHATWOOT_ATALHOS' },
   { id: 'fixa-perdido-motivo', grupo: 'organizacao', nome: 'Botões «Perdido: motivo» (etiqueta vira etapa)', oQueFaz: 'A macro «Perdido: motivo» põe uma etiqueta e o servidor grava Etapa = Perdido e o motivo no cartão, tirando a etiqueta.', estado: null },
   { id: 'fixa-etiqueta-anuncio', grupo: 'rastreio', nome: 'Etiqueta «anuncio» na conversa que veio de anúncio', oQueFaz: 'Quando o anúncio «Clique para o WhatsApp» é comprovado, a conversa recebe a etiqueta «anuncio».', estado: (e) => e.CHATWOOT_ETIQUETA_ANUNCIO !== '0', variavel: 'CHATWOOT_ETIQUETA_ANUNCIO' },
@@ -215,7 +215,7 @@ export async function mudarAutomacao(
   }
   const unit = await banco.unidade(p.slug);
   if (!unit) return { ok: false, status: 404, erro: 'unidade não encontrada' };
-  await banco.gravar(unit, id, p.estado, `${p.por.slice(0, 70) || 'administrador'} (Chatwoot)`);
+  await banco.gravar(unit, id, p.estado, `${p.por.slice(0, 70) || 'administrador'} (CRM)`);
   return { ok: true, id, estado: p.estado };
 }
 

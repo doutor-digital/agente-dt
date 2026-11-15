@@ -77,7 +77,7 @@ test('aba Automações: seletor «Robôs de mensagem | Automações», cartão c
   const html = paginaDosRobos(CW);
   const js = scriptDe(html);
   assert.ok(html.includes('id="mRobos"') && html.includes('id="mAuto"') && html.includes('Robôs de mensagem') && html.includes('Automações'));
-  for (const g of ['Sofia', 'Agenda', 'Mensagens', 'Rastreio', 'Organização', 'Avisos para a equipe', 'Regras nativas do Chatwoot']) assert.ok(js.includes(`'${g}'`), g);
+  for (const g of ['Sofia', 'Agenda', 'Mensagens', 'Rastreio', 'Organização', 'Avisos para a equipe', 'Regras automáticas do CRM']) assert.ok(js.includes(`'${g}'`), g);
   for (const r of ["'/api/public/robos/automacoes?slug='", "'/api/public/robos/automacoes/'"]) assert.ok(js.includes(r), r);
   assert.ok(js.includes('Entendi, ligar mesmo') && js.includes('NÃO TEM VOLTA'), 'confirmação explícita');
   assert.ok(js.includes("a.semVolta && alvo === 'ligado'"));
