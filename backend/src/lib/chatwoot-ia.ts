@@ -22,7 +22,8 @@ import type { Unit } from '@prisma/client';
 import { logger } from './logger.js';
 import { prisma } from './prisma.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
-import { chamar, contaChatwootDoAmbiente, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
+import { chamar, contaChatwootDoAmbiente, contasDoChatwoot, criarContextoChatwoot, donaDaConta, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
+import { configDaUnidade, contaDaCaixa, contasExplicitas, unidadeDaCaixa } from './chatwoot-unidades.js';
 import { CAIXAS_REGUA } from './chatwoot-regua.js';
 import { aplicarEtiqueta, eventoDeEtiqueta, portasDaPonte, type PortasDaPonte } from './chatwoot-etiquetas.js';
 import { eventoDePausa, eventoDeReativacao, pausar, portaDaPausaDoChatwoot, reativar, type PortaDaPausa } from './chatwoot-pausa.js';
@@ -188,10 +189,11 @@ export interface PortasDaIa {
   abrirParaEquipe?(conversa: number): Promise<void>;
 }
 
-export function portasReais(ctx: ContextoChatwoot): PortasDaIa {
+/** `tokenRobo`: o token do robô DESTA conta (undefined = o de Parauapebas, `CHATWOOT_SOFIA_BOT_TOKEN`; null = sem robô; texto = o da clínica de conta própria). */
+export function portasReais(ctx: ContextoChatwoot, opcoes: { tokenRobo?: string | null } = {}): PortasDaIa {
   const chat: PortaDoChatwoot = portaDoChatwoot(ctx);
   // Sofia como ROBÔ do Chatwoot (chatwoot-sofia-bot.ts): só com CHATWOOT_SOFIA_COMO_BOT=1 + CHATWOOT_SOFIA_BOT_TOKEN; senão, null
-  const tokenRobo = tokenDoRobo();
+  const tokenRobo = opcoes.tokenRobo === undefined ? tokenDoRobo() : opcoes.tokenRobo;
   const robo = tokenRobo ? portaDoRobo(ctx, tokenRobo) : null;
   if (robo) logger.info(`${ID_IA}: a Sofia responde como ROBÔ do Chatwoot`);
   return {
@@ -547,7 +549,8 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
 
 // ── a rota ─────────────────────────────────────────────────────────────────────────────────────────
 
-let estado: {
+/** Tudo o que a IA precisa DE UMA CONTA do Chatwoot: as portas, a memória (debounce, rodadas, avisos) e a trava das etiquetas. Uma por conta. */
+export interface EstadoDaConta {
   portas: PortasDaIa;
   mem: MemoriaDaIa;
   ponte: PortasDaPonte;
@@ -556,17 +559,88 @@ let estado: {
   origem: PortasDaOrigem;
   chat: PortaDoChatwoot;
   nota: PortasDaNota;
-} | null = null;
+  /** a trava de «Perdido: motivo» por conversa — o id da conversa é POR CONTA, então a trava também */
+  trava: Set<number>;
+}
 
-function estadoDoReceptor() {
-  if (!estado) {
-    const conta = contaChatwootDoAmbiente();
-    if (!conta) return null;
-    const ctx = criarContextoChatwoot(conta);
-    const origem = portasDaOrigem(ctx);
-    estado = { portas: portasReais(ctx), mem: novaMemoriaDaIa(), ponte: portasDaPonte(ctx), pausa: portaDaPausaDoChatwoot(ctx), resolver: portasDoResolver(ctx), origem, chat: portaDoChatwoot(ctx), nota: portasDaNota(ctx, origem) };
+const estados = new Map<number, { assinatura: string; estado: EstadoDaConta }>();
+
+/** Só para os testes: esquece os estados guardados. */
+export const esquecerEstadosDaIa = (): void => estados.clear();
+
+/**
+ * O estado da IA da CONTA `conta` (id no Chatwoot). A conta do ambiente (Parauapebas) monta exatamente o que sempre montou: o mesmo contexto,
+ * o robô do `CHATWOOT_SOFIA_BOT_TOKEN` e uma memória nova. Uma conta própria usa o contexto/token dela e o robô DELA (ou nenhum): a memória
+ * nunca é compartilhada, porque a conversa 5 de uma conta não é a conversa 5 de outra. `null` = conta sem unidade/token: não responde.
+ */
+export function estadoDoReceptor(conta: number, e: NodeJS.ProcessEnv = process.env): EstadoDaConta | null {
+  const amb = contaChatwootDoAmbiente(e);
+  if (!amb) return null;
+  const ehAmbiente = conta === amb.conta && !contasExplicitas().includes(conta);
+  const base = criarContextoChatwoot(amb);
+  const dona = ehAmbiente ? { slug: null, ctx: base } : donaDaConta(base, conta, e);
+  const contaDoCtx = dona?.ctx.conta;
+  if (!dona || !contaDoCtx) {
+    estados.delete(conta); // a configuração recarregou e nenhuma unidade usa mais essa conta
+    return null;
   }
-  return estado;
+  const ctx = dona.ctx;
+  const sufixo = dona.slug ? configDaUnidade(dona.slug)?.envSufixo : undefined;
+  const tokenRobo = ehAmbiente ? tokenDoRobo(e) : tokenDoRobo(e, sufixo);
+  // o que alimenta as portas: se a configuração recarregou e algo disso mudou (conta, token, robô), as portas são refeitas — a MEMÓRIA e a trava
+  // ficam (uma rodada em andamento não pode ser esquecida, senão a Sofia responderia duas vezes)
+  const assinatura = [contaDoCtx.url, contaDoCtx.conta, contaDoCtx.token, tokenRobo ?? ''].join('\u0000');
+  const guardado = estados.get(conta);
+  if (guardado && guardado.assinatura === assinatura) return guardado.estado;
+  const origem = portasDaOrigem(ctx);
+  const novo: EstadoDaConta = {
+    portas: portasReais(ctx, ehAmbiente ? {} : { tokenRobo }),
+    mem: guardado?.estado.mem ?? novaMemoriaDaIa(),
+    ponte: portasDaPonte(ctx),
+    pausa: portaDaPausaDoChatwoot(ctx),
+    resolver: portasDoResolver(ctx),
+    origem,
+    chat: portaDoChatwoot(ctx),
+    nota: portasDaNota(ctx, origem),
+    trava: guardado?.estado.trava ?? new Set(),
+  };
+  estados.set(conta, { assinatura, estado: novo });
+  return novo;
+}
+
+/**
+ * De que conta é este evento? Do `account.id` do payload, conferido com a caixa; sem `account` no payload, pela caixa; sem nenhum dos dois, a
+ * conta do ambiente (como sempre foi). Conta que o servidor não conhece, caixa de OUTRA conta que a do payload, ou clínica sem conta válida:
+ * IGNORA (o chamador avisa no log) — nunca cai na conta 1.
+ */
+export function contaDoEvento(corpo: any, e: NodeJS.ProcessEnv = process.env): { conta: number } | { ignorar: string } {
+  const amb = contaChatwootDoAmbiente(e);
+  if (!amb) return { ignorar: 'o Chatwoot não está configurado neste servidor' };
+  const idDoPayload = Number(corpo?.account?.id);
+  const noPayload = Number.isInteger(idDoPayload) && idDoPayload > 0 ? idDoPayload : null;
+  const caixa = Number(corpo?.conversation?.inbox_id ?? corpo?.inbox?.id ?? corpo?.inbox_id);
+  let daCaixa: number | null = null;
+  if (Number.isInteger(caixa) && caixa > 0 && unidadeDaCaixa(caixa)) {
+    const c = contaDaCaixa(caixa);
+    if (c === undefined) return { ignorar: `a caixa ${caixa} é de uma unidade sem conta válida` };
+    daCaixa = c ?? amb.conta;
+  }
+  if (noPayload !== null) {
+    if (!contasDoChatwoot(e).includes(noPayload)) return { ignorar: `conta ${noPayload} desconhecida` };
+    if (daCaixa !== null && daCaixa !== noPayload) return { ignorar: `a caixa ${caixa} é da conta ${daCaixa}, mas o evento veio da conta ${noPayload}` };
+    return { conta: noPayload };
+  }
+  return { conta: daCaixa ?? amb.conta };
+}
+
+const ignoradosAvisados = new Map<string, number>();
+/** Um aviso por motivo a cada 10 min (conta errada pode mandar milhares de eventos). */
+function avisarIgnorado(motivo: string, corpo: any): void {
+  const agora = Date.now();
+  if ((ignoradosAvisados.get(motivo) ?? 0) > agora - 600_000) return;
+  if (ignoradosAvisados.size > 200) ignoradosAvisados.clear();
+  ignoradosAvisados.set(motivo, agora);
+  logger.warn({ motivo, evento: String(corpo?.event ?? '') }, `${ID_IA}: evento do Chatwoot IGNORADO — ${motivo}`);
 }
 
 export function eventoChatwootHandler(req: Request, res: Response): void {
@@ -576,10 +650,16 @@ export function eventoChatwootHandler(req: Request, res: Response): void {
     return;
   }
   res.json({ ok: true });
+  const alvo = contaDoEvento(req.body);
+  if ('ignorar' in alvo) {
+    avisarIgnorado(alvo.ignorar, req.body);
+    return;
+  }
+  const conta = alvo.conta;
   // pessoa respondeu (pelo Chatwoot ou pelo celular) → pausa a IA nesta conversa; conversa resolvida → reativa (chatwoot-pausa.ts)
   const pausa = eventoDePausa(req.body);
   if (pausa) {
-    const e = estadoDoReceptor();
+    const e = estadoDoReceptor(conta);
     if (e) {
       void pausar(pausa.conversa, pausa.autor, e.pausa)
         // robô ligado: quem respondeu (inclusive pelo celular) está atendendo — a conversa sai de «Pendentes»
@@ -590,26 +670,26 @@ export function eventoChatwootHandler(req: Request, res: Response): void {
   }
   const reativa = eventoDeReativacao(req.body);
   if (reativa) {
-    const e = estadoDoReceptor();
+    const e = estadoDoReceptor(conta);
     if (e) void reativar(reativa.conversa, null, e.pausa).catch((err) => logger.warn({ err: String(err), conversa: reativa.conversa }, 'chatwoot-pausa: não consegui reativar'));
   }
   // resolvida sem os campos obrigatórios → etiqueta falta-etapa; completou depois → tira (chatwoot-resolver.ts)
   const resol = eventoDeResolucao(req.body);
   if (resol?.acao) {
-    const e = estadoDoReceptor();
+    const e = estadoDoReceptor(conta);
     if (e) void aplicarResolucao(resol, e.resolver).catch((err) => logger.warn({ err: String(err), conversa: resol.conversa }, 'chatwoot-resolver: falhou'));
   }
   // botão "Perdido: <motivo>" → etiqueta → etapa + motivo no cartão (chatwoot-etiquetas.ts)
   const etq = eventoDeEtiqueta(req.body);
   if (etq) {
-    const e = estadoDoReceptor();
-    if (e) void aplicarEtiqueta(etq, e.ponte).catch((err) => logger.warn({ err: String(err), conversa: etq.conversa }, 'chatwoot-etiquetas: falhou'));
+    const e = estadoDoReceptor(conta);
+    if (e) void aplicarEtiqueta(etq, e.ponte, e.trava).catch((err) => logger.warn({ err: String(err), conversa: etq.conversa }, 'chatwoot-etiquetas: falhou'));
     return;
   }
   // o código do anúncio que o Chatwoot perde no caminho do Kapso: pergunta ao Kapso e guarda (kapso-referral.ts)
   const consultar = mensagemParaConsultar(req.body);
   if (consultar) {
-    const r = estadoDoReceptor();
+    const r = estadoDoReceptor(conta);
     void aplicarReferralDoKapso(consultar, {
       aoAchar: async (m, ref, novo) => {
         // etiqueta «anuncio» na conversa (informação: vale com a origem desligada) — chatwoot-origem.ts
@@ -626,7 +706,7 @@ export function eventoChatwootHandler(req: Request, res: Response): void {
   }
   const m = mensagemDoPaciente(req.body);
   if (!m) return;
-  const e = estadoDoReceptor();
+  const e = estadoDoReceptor(conta);
   if (!e) return;
   void aoChegar(m, e.portas, e.mem).catch((err) => logger.warn({ err: String(err), conversa: m.conversa }, `${ID_IA}: evento falhou`));
 }

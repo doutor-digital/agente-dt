@@ -12,7 +12,7 @@
  * (mensagem pública numa conversa, conversa nova com mensagem, campanha). `chatwoot_preparar` mostra e devolve um código preso a
  * quem pediu; `chatwoot_confirmar` executa. Cada apagamento confirmado avisa o João no Telegram.
  */
-import { configDaUnidade, contaDaUnidade, contasExplicitas, unidadeDaCaixa } from '../lib/chatwoot-unidades.js';
+import { configDaUnidade, contaDaUnidade, contasExplicitas, unidadeDaCaixa, unidadesDaConta } from '../lib/chatwoot-unidades.js';
 import { randomBytes } from 'node:crypto';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
@@ -119,6 +119,25 @@ export function contextoDaContaChatwoot(ctx: ContextoChatwoot, conta: ContaChatw
 export function contextoDaUnidade(ctx: ContextoChatwoot, slug: string, e: NodeJS.ProcessEnv = process.env): ContextoChatwoot | null {
   const conta = contaChatwootDaUnidade(slug, e);
   return conta ? contextoDaContaChatwoot(ctx, conta) : null;
+}
+
+/**
+ * A unidade que «dona» da conta `contaId` e o contexto dela: a primeira (ordem alfabética do slug) cujo token está disponível — o
+ * `CHATWOOT_API_TOKEN_<SUFIXO>` dela ou, sem ele, o global (por isso, na prática, é a primeira). A conta do ambiente devolve o próprio `ctx`
+ * (sem unidade). `null` = nenhuma unidade configurada usa essa conta: RECUSAR.
+ */
+export function donaDaConta(ctx: ContextoChatwoot, contaId: number, e: NodeJS.ProcessEnv = process.env): { slug: string | null; ctx: ContextoChatwoot } | null {
+  if (ctx.conta && ctx.conta.conta === contaId && !contasExplicitas().includes(contaId)) return { slug: null, ctx };
+  for (const slug of unidadesDaConta(contaId)) {
+    const c = contextoDaUnidade(ctx, slug, e);
+    if (c) return { slug, ctx: c };
+  }
+  return null;
+}
+
+/** O contexto de uma CONTA pelo id (o do evento que chegou). `null` = nenhuma unidade configurada usa essa conta (RECUSAR). */
+export function contextoDaContaPorId(ctx: ContextoChatwoot, contaId: number, e: NodeJS.ProcessEnv = process.env): ContextoChatwoot | null {
+  return donaDaConta(ctx, contaId, e)?.ctx ?? null;
 }
 
 /** O contexto da conta da CAIXA (pela unidade dona), ou `null` para caixa que nenhuma unidade configurada tem (RECUSAR). */
