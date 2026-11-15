@@ -295,8 +295,8 @@ export async function confirmar(ctx: ContextoChatwoot, usuario: string, codigoBr
     } catch {
       // aviso que falha não desfaz nem esconde o que foi feito
     }
-  } else if (descreverConta(ctx)) {
-    // envio a paciente (mensagem, conversa com mensagem, campanha) numa clínica que NÃO é a de Parauapebas: o João fica sabendo, como no apagar
+  } else if (descreverConta(ctx) && p.acao.motivo !== 'confirmação pedida') {
+    // envio a paciente (mensagem, conversa com mensagem, campanha — o que `precisaConfirmar` reconhece; PATCH de etiqueta e afins não) numa clínica que NÃO é a de Parauapebas: o João fica sabendo, como no apagar
     try {
       await ctx.avisar(`✉️ Chatwoot${descreverConta(ctx)}: ${usuario} mandou pelo conector do claude.ai (${p.acao.motivo}): ${p.acao.metodo} ${p.acao.caminho}`);
     } catch {
@@ -362,9 +362,11 @@ export function contasParaListar(ctx: ContextoChatwoot, e: NodeJS.ProcessEnv = p
  * acesso na hora); um valor fixo serve ao teste. O parâmetro `conta`, `chatwoot_contas` e os textos «use a mesma conta» só EXISTEM para quem pode
  * escolher no momento em que a sessão abre — para os demais o conector fica EXATAMENTE como era.
  *
- * COMPORTAMENTO DO SDK (1.30.1, provado em `chatwoot-contas.test.ts › SDK`): quem NÃO tem o parâmetro no schema e manda `conta: 2` NÃO leva recusa — o schema
- * descarta o campo desconhecido antes de a função rodar, e a chamada vai para Parauapebas, sem erro (igual ao que sempre foi). A recusa de `contextoDaChamada` é
- * a segunda barreira (função chamada direto) e a que vale para quem TEM o parâmetro e perdeu a permissão no meio da sessão.
+ * SCHEMA ESTRITO (provado em `chatwoot-contas.test.ts › produção`): o SDK (1.30.1) APAGA em silêncio o campo que o schema não conhece, e a chamada cairia em
+ * Parauapebas sem erro — foi o furo apontado na revisão (a mensagem iria para OUTRO paciente). Em produção cada pedido monta um servidor novo e o claude.ai manda o
+ * schema que guardou, então quem perdeu a permissão, ou chegou antes de a lista carregar, ainda manda `conta`. Por isso o schema é `.strict()` (no JSON só ganha
+ * `additionalProperties: false`): `conta` sem permissão é ERRO claro e nenhuma chamada sai. A recusa de `contextoDaChamada` é a segunda barreira (função chamada direto,
+ * ou quem TEM o parâmetro e perdeu a permissão no meio do pedido).
  */
 export function registrarFerramentasChatwoot(server: McpServer, ctx: ContextoChatwoot, usuario: string, auditar: Auditar, escolheConta: boolean | (() => boolean) = false): void {
   if (!ctx.conta) return;
@@ -374,7 +376,9 @@ export function registrarFerramentasChatwoot(server: McpServer, ctx: ContextoCha
   const reg = <S extends z.ZodRawShape>(id: string, titulo: string, descricao: string, schema: S, anot: object, fn: (a: z.objectOutputType<S, z.ZodTypeAny>, c: ContextoChatwoot) => unknown) =>
     server.registerTool(
       id,
-      { title: titulo, description: descricao, inputSchema: comConta ? { ...schema, conta: contaArg } : schema, annotations: anot },
+      // ESTRITO: campo desconhecido dá ERRO (nunca é apagado em silêncio). O servidor MCP é montado de novo a cada pedido e o claude.ai manda o schema que guardou:
+      // quem perdeu a permissão (ou chegou antes de a lista carregar) e ainda manda `conta: 2` recebe um erro claro — não uma chamada que cai em Parauapebas.
+      { title: titulo, description: descricao, inputSchema: z.object(comConta ? { ...schema, conta: contaArg } : schema).strict(), annotations: anot },
       ((a: any) =>
         executar(id, a, auditar, () => {
           // a permissão é conferida AGORA, não quando a sessão abriu
@@ -387,7 +391,7 @@ export function registrarFerramentasChatwoot(server: McpServer, ctx: ContextoCha
   if (comConta) {
     server.registerTool(
       'chatwoot_contas',
-      { title: 'Chatwoot: contas', description: 'As contas do Chatwoot (uma por clínica) e as unidades de cada uma. Use o id em "conta" nas outras ferramentas chatwoot_*; sem "conta", vale a padrão (Parauapebas).', inputSchema: {}, annotations: ler },
+      { title: 'Chatwoot: contas', description: 'As contas do Chatwoot (uma por clínica) e as unidades de cada uma. Use o id em "conta" nas outras ferramentas chatwoot_*; sem "conta", vale a padrão (Parauapebas).', inputSchema: z.object({}).strict(), annotations: ler },
       (() =>
         executar('chatwoot_contas', {}, auditar, () => {
           if (!pode()) throw new ErroDeEntrada(RECUSA_DE_CONTA);
