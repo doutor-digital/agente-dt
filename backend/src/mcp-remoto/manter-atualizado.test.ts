@@ -1,33 +1,52 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { comLimiteDeTempo, esperaDaPrimeiraCarga, manterAtualizado } from './manter-atualizado.js';
+import { esperaDaPrimeiraCarga, manterAtualizado } from './manter-atualizado.js';
 
 const dormir = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-test('banco PENDURADO: a carga estoura o tempo, a 1ª carga conta como terminada e a nova tentativa É agendada (e acaba funcionando)', async () => {
+test('banco PENDURADO por 3 ciclos: UMA consulta em curso, nunca mais; a 1ª carga é liberada pelo limite; quando a pendurada termina, aplica e o ciclo segue', async () => {
   let chamadas = 0;
   let aplicado: string | null = null;
+  let terminar: (v: string) => void = () => undefined;
   const avisos: string[] = [];
   const primeira = manterAtualizado(
     () => {
       chamadas++;
-      return chamadas === 1 ? new Promise<string>(() => undefined) : Promise.resolve('lista');
+      return chamadas === 1 ? new Promise<string>((r) => (terminar = r)) : Promise.resolve(`lista-${chamadas}`);
     },
     (v) => (aplicado = v),
     'quem escolhe a conta',
-    { limiteMs: 40, tentarDeNovoMs: 40, renovarMs: 10_000, log: { warn: (_o, m) => void avisos.push(String(m)) } },
+    { limiteMs: 30, tentarDeNovoMs: 30, renovarMs: 10_000, log: { warn: (_o, m) => void avisos.push(String(m)) } },
   );
-  await primeira; // não fica preso: a 1ª carga termina (por tempo) mesmo com o banco pendurado
+  await primeira; // não fica preso: o limite libera quem espera
+  await dormir(30 * 3 * 3); // bem mais que 3 ciclos de limite + retentativa
+  assert.equal(chamadas, 1, 'com a consulta presa, NENHUMA consulta nova é iniciada (1 em curso, nunca mais)');
   assert.equal(aplicado, null);
-  await dormir(150);
-  assert.ok(chamadas >= 2, 'a nova tentativa foi agendada');
-  assert.equal(aplicado, 'lista');
-  assert.ok(avisos.some((a) => /não consegui ler quem escolhe a conta/.test(a)));
+  assert.ok(avisos.some((a) => /passou de 30 ms/.test(a)));
+  terminar('tarde'); // a pendurada finalmente responde: aplica o resultado e o ciclo continua
+  await dormir(20);
+  assert.equal(aplicado, 'tarde');
 });
 
-test('sem o limite de tempo o banco pendurado não agendaria nada: comLimiteDeTempo rejeita e libera o timer', async () => {
-  await assert.rejects(comLimiteDeTempo(new Promise(() => undefined), 30, 'lista'), /passou de 30 ms/);
-  assert.equal(await comLimiteDeTempo(Promise.resolve(7), 1000, 'x'), 7);
+test('consulta pendurada que acaba em ERRO: depois do erro, a nova tentativa é agendada (e só uma por vez)', async () => {
+  let chamadas = 0;
+  let falhar: (e: Error) => void = () => undefined;
+  let aplicado: string | null = null;
+  await manterAtualizado(
+    () => {
+      chamadas++;
+      return chamadas === 1 ? new Promise<string>((_r, rej) => (falhar = rej)) : Promise.resolve('ok');
+    },
+    (v) => (aplicado = v),
+    'lista',
+    { limiteMs: 30, tentarDeNovoMs: 30, renovarMs: 10_000, log: { warn: () => undefined } },
+  );
+  await dormir(120);
+  assert.equal(chamadas, 1);
+  falhar(new Error('banco caiu'));
+  await dormir(150);
+  assert.equal(chamadas, 2, 'só depois de a presa terminar é que a nova começa');
+  assert.equal(aplicado, 'ok');
 });
 
 test('a espera da 1ª carga acontece UMA vez: depois do prazo, os pedidos seguintes não esperam mais (banco pendurado)', async () => {

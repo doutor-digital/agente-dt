@@ -28,6 +28,8 @@ let parar: () => void;
 let liberar: () => void = () => undefined;
 let esperando: Promise<void> = Promise.resolve();
 const tentativas = { aguardou: 0 };
+let fechados = 0;
+let saiuDaEspera = 0;
 
 before(async () => {
   falsa = await subirFranquiaFalsa({ 'token-franquia-serra-0123456789abcdef': { agendamentos: [] } });
@@ -35,6 +37,7 @@ before(async () => {
   app.use(express.urlencoded({ extended: true }));
   app.use(express.json());
   http = app.listen(0, '127.0.0.1');
+  http.on('connection', (sock) => sock.on('close', () => void fechados++)); // o cliente que desiste fecha o soquete
   await new Promise((r) => http.once('listening', r));
   base = `http://127.0.0.1:${(http.address() as AddressInfo).port}`;
   const unidades = new Map<string, Unidade>([['serra', { slug: 'serra', nome: 'Serra', token: 'token-franquia-serra-0123456789abcdef', fuso: 'America/Sao_Paulo', baseUrl: falsa.url }]]);
@@ -56,7 +59,7 @@ before(async () => {
     // a espera de que o teste manda: enquanto `liberar` não for chamado, todo pedido fica parado aqui
     aguardar: () => {
       tentativas.aguardou++;
-      return esperando;
+      return esperando.then(() => void saiuDaEspera++);
     },
   });
   parar = r.parar;
@@ -81,6 +84,14 @@ async function acesso(): Promise<string> {
 }
 
 const dormir = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** Espera uma CONDIÇÃO (não um tempo fixo): confere a cada 10 ms até o limite. */
+async function ate(condicao: () => boolean, descricao: string, limiteMs = 5000): Promise<void> {
+  const t0 = Date.now();
+  while (!condicao()) {
+    if (Date.now() - t0 > limiteMs) assert.fail(`condição não veio: ${descricao}`);
+    await dormir(10);
+  }
+}
 
 test('o cliente DESISTE durante a espera da 1ª carga: a vaga do semáforo (só 1) não vaza — o pedido seguinte passa', async () => {
   const token = await acesso();
@@ -93,12 +104,13 @@ test('o cliente DESISTE durante a espera da 1ª carga: a vaga do semáforo (só 
     headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: `Bearer ${token}` },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'buscar_agendamentos', arguments: { unidade: 'serra', inicio: '2026-06-01', fim: '2026-06-30' } } }),
   }).catch(() => 'desistiu');
-  await dormir(150);
+  await ate(() => tentativas.aguardou >= 1, 'o pedido A chegou na espera');
   aborta.abort();
   assert.equal(await a, 'desistiu');
-  await dormir(150);
+  await ate(() => fechados >= 1, 'o servidor viu o cliente desistir (close)');
   liberar(); // a espera acaba; o pedido A (já fechado) segue o caminho e NÃO pode ficar com a vaga
-  await dormir(150);
+  await ate(() => saiuDaEspera >= 1, 'o pedido A saiu da espera');
+  await dormir(20); // um respiro para o pedido A terminar o que lhe resta (não há nada a esperar: não pega vaga)
   // pedido B: um cliente de verdade faz uma chamada de ferramenta; com a vaga vazada ela esperaria 60 s e daria 503
   const c = new Client({ name: 'teste', version: '0' });
   await c.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }));
