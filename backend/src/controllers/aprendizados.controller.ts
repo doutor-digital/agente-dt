@@ -90,7 +90,7 @@ export async function atendenteDaUnidade(
   try {
     caixas = await leituraComLogin(a.c, a.sessao).caixas();
   } catch {
-    res.status(502).json({ error: 'não consegui ler as suas caixas no Chatwoot' });
+    res.status(502).json({ error: 'não consegui ler as suas caixas no CRM' });
     return null;
   }
   if (!caixas.some((cx) => CAIXAS_REGUA[cx] === slug)) {
@@ -440,7 +440,7 @@ export async function testarIaUnidadesHandler(req: Request, res: Response): Prom
     res.json({ eu: a.nome, unidades: units.map((u) => ({ slug: u.slug, nome: u.name })) });
   } catch (e) {
     logger.warn({ err: String(e) }, 'testar-ia: unidades falhou');
-    res.status(502).json({ error: 'não consegui ler as suas caixas no Chatwoot' });
+    res.status(502).json({ error: 'não consegui ler as suas caixas no CRM' });
   }
 }
 
@@ -596,7 +596,7 @@ body.cw .sw.on{color:#0b5e3b}
 <div id="paneConversa" hidden>
 <div class="card">
   <h2>Conversar com a Sofia (teste)</h2>
-  <div class="aviso"><b>Teste: nada é enviado a paciente.</b> Escreva como o paciente; a Sofia responde com as regras de hoje desta unidade. Agenda e Pix são de mentira e nada vai para o Kommo, a franquia ou o WhatsApp.</div>
+  <div class="aviso"><b>Teste: nada é enviado a paciente.</b> Escreva como o paciente; a Sofia responde com as regras de hoje desta unidade. Agenda e Pix são de mentira e nada vai para o CRM antigo, a franquia ou o WhatsApp.</div>
   <div id="chat" class="chat" aria-live="polite"></div>
   <div id="msgChat" class="msg" hidden></div>
   <textarea id="fala" rows="2" maxlength="600" aria-label="Fala do paciente" placeholder="Escreva como se fosse o paciente…"></textarea>
