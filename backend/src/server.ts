@@ -12,6 +12,7 @@ import { apagarCofreDeArquivos, ligarConectorRemoto } from './mcp-remoto/produca
 import { paginaPausaHandler } from './controllers/pausa.controller.js';
 import { paginaAprendizadosHandler } from './controllers/aprendizados.controller.js';
 import { paginaAgenteHandler } from './controllers/agente-chatwoot.controller.js';
+import { paginaRobosHandler } from './controllers/robos.controller.js';
 import { menuFunilHandler, paginaFunilHandler } from './controllers/funil.controller.js';
 import { corsDoAssistente, paginaAssistenteHandler } from './controllers/assistente.controller.js';
 import { contaChatwootDoAmbiente } from './mcp-remoto/chatwoot.js';
@@ -178,6 +179,8 @@ async function main(): Promise<void> {
   // Digital. Sob /funil para o menu entregar a sessão. /funil/testar-ia é o endereço antigo (menu.js em cache no navegador).
   app.get('/funil/agente', paginaAgenteHandler);
   app.get('/funil/testar-ia', paginaAgenteHandler);
+  // «Robôs» (14/11): os robôs da régua por unidade (ver, ligar/desligar, tempo, modelo, enviados). Mesmo caminho do Agente: o menu entrega a sessão.
+  app.get('/funil/robos', paginaRobosHandler);
   // Assistente da atendente: a página do painel (iframe do botão que entra pelo menu.js).
   app.get('/assistente', paginaAssistenteHandler);
 
