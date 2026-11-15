@@ -80,19 +80,25 @@ const ETAPAS_QUE_VIRAM_AGENDADO: ReadonlySet<string> = new Set(['', 'Novo lead',
 /** Etapas de quem desistiu: consulta nova de pé NÃO as mexe (decisão humana); só vai para o log. */
 const ETAPAS_SEGURADAS: ReadonlySet<string> = new Set(['Perdido', 'Frio']);
 /** Só estas duas (igual a `agendamentoQueVale`): Remarcado é horário que NÃO vale mais, a data nova pode estar fora da janela lida. */
+/** Categorias da agenda que são consulta COMERCIAL (lead que vira paciente). Sessão e Retorno após tratamento são paciente em tratamento: não vão para a etapa comercial. */
+const CATEGORIAS_COMERCIAIS: ReadonlySet<string> = new Set(['Avaliação', 'Retorno', 'Retorno com exames']);
 const SITUACOES_DE_PE: ReadonlySet<string> = new Set(['Agendado', 'Confirmado']);
 
 /**
  * A etapa que a consulta de pé pede, ou a etapa que ficou SEGURADA (Perdido/Frio). Nunca rebaixa nem sobrescreve Compareceu, Fechou,
- * Pós-consulta, Agendado/Confirmado já gravados, nem mexe em quem está no funil de Tratamento. {} = nada a fazer.
+ * Pós-consulta, Agendado/Confirmado já gravados, nem mexe em quem está no funil de Tratamento nem em consulta de Sessão/Retorno após
+ * tratamento (só promove Avaliação, Retorno e Retorno com exames). {} = nada a fazer.
  * Sem esta etapa a régua não monta véspera/dia/preparo (ela só olha Agendado, Confirmado e Fechou).
  */
-export function etapaDaConsulta(atual: Record<string, unknown>, d: Desejado, hoje: string): { etapa?: string; segurada?: string } {
+export function etapaDaConsulta(atual: Record<string, unknown>, d: Desejado, hoje: string): { etapa?: string; segurada?: string; porCategoria?: string } {
   if (!SITUACOES_DE_PE.has(d.situacao_consulta) || d.data_consulta < hoje) return {};
   if (String(atual.funil ?? '').trim() === 'Tratamento' || String(atual.etapa_tratamento ?? '').trim() !== '') return {};
   const etapa = String(atual.etapa ?? '').trim();
   if (ETAPAS_SEGURADAS.has(etapa)) return { segurada: etapa };
   if (!ETAPAS_QUE_VIRAM_AGENDADO.has(etapa)) return {};
+  // Sessão / Retorno após tratamento = paciente em TRATAMENTO (o cartão nem sempre diz): a etapa comercial não é dele, e a régua comercial
+  // (preparo «leve documento, exames…») não fala com ele. Só registro no log, como Perdido/Frio. Categoria desconhecida também não promove.
+  if (!d.categoria_consulta || !CATEGORIAS_COMERCIAIS.has(d.categoria_consulta)) return { porCategoria: d.categoria_consulta ?? '(sem categoria)' };
   return { etapa: d.situacao_consulta === 'Confirmado' ? 'Confirmado' : 'Agendado' };
 }
 
@@ -129,14 +135,14 @@ export function casar(
   conversas: ConversaDaCaixa[],
   whatsDoNome: (nome: string) => string[] | null,
   hoje: string,
-): Array<{ conversa: ConversaDaCaixa; muda: Record<string, string>; nome: string; segurada?: string }> {
+): Array<{ conversa: ConversaDaCaixa; muda: Record<string, string>; nome: string; segurada?: string; porCategoria?: string }> {
   const porNome = new Map<string, SpineSchedule[]>();
   for (const s of agenda) {
     const n = normalizar(s.clientName);
     if (!n) continue;
     porNome.set(n, [...(porNome.get(n) ?? []), s]);
   }
-  const saida: Array<{ conversa: ConversaDaCaixa; muda: Record<string, string>; nome: string; segurada?: string }> = [];
+  const saida: Array<{ conversa: ConversaDaCaixa; muda: Record<string, string>; nome: string; segurada?: string; porCategoria?: string }> = [];
   for (const [nome, lista] of porNome) {
     const whats = whatsDoNome(nome);
     // sem cadastro, ou o mesmo nome com telefones diferentes: não dá para saber quem é
@@ -147,8 +153,10 @@ export function casar(
     const d = s ? desejadoDe(s) : null;
     if (!d) continue;
     const muda = mudancas(alvo.attrs, d, hoje);
-    const segurada = etapaDaConsulta(alvo.attrs, d, hoje).segurada;
-    if (Object.keys(muda).length || segurada) saida.push({ conversa: alvo, muda, nome: lista[0]!.clientName ?? nome, ...(segurada ? { segurada } : {}) });
+    const { segurada, porCategoria } = etapaDaConsulta(alvo.attrs, d, hoje);
+    if (Object.keys(muda).length || segurada || porCategoria) {
+      saida.push({ conversa: alvo, muda, nome: lista[0]!.clientName ?? nome, ...(segurada ? { segurada } : {}), ...(porCategoria ? { porCategoria } : {}) });
+    }
   }
   return saida;
 }
@@ -225,7 +233,15 @@ export async function cicloDaAgenda(ctx: ContextoChatwoot, caixa: number, slug: 
   const conversas = await conversasDaCaixa(ctx, caixa);
   const plano = casar(agenda, conversas, (n) => fonesDe.get(n) ?? null, hoje);
   let gravadas = 0;
-  for (const { conversa, muda, nome, segurada } of plano) {
+  for (const { conversa, muda, nome, segurada, porCategoria } of plano) {
+    if (porCategoria) {
+      const k = `${conversa.id}|cat:${porCategoria}|${muda.data_consulta ?? conversa.attrs.data_consulta ?? ''}`;
+      if (!seguradasLogadas.has(k)) {
+        if (seguradasLogadas.size >= 5000) seguradasLogadas.clear();
+        seguradasLogadas.add(k);
+        logger.info({ slug, conversa: conversa.id, categoria: porCategoria, nome }, `${ID_AGENDA}: consulta de pé de categoria ${porCategoria} — etapa comercial não mexida (paciente em tratamento)`);
+      }
+    }
     // Perdido/Frio com consulta nova de pé: a etapa fica como está (decisão humana) — só registra no log, uma vez
     if (segurada) {
       const k = `${conversa.id}|${segurada}|${muda.data_consulta ?? conversa.attrs.data_consulta ?? ''}`;

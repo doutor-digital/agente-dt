@@ -98,7 +98,7 @@ test('casar: pelo telefone do cadastro (com e sem o 9); nome ambíguo ou sem cad
 // ── a etapa da consulta de pé (sem ela a régua não monta véspera/dia/preparo) ──
 
 const HOJE = '2026-11-14';
-const dePe = (o: Partial<{ data_consulta: string; situacao_consulta: string }> = {}) => ({ data_consulta: '2026-11-16', hora_consulta: '13:30', situacao_consulta: 'Agendado', categoria_consulta: 'Avaliação', ...o });
+const dePe = (o: Partial<{ data_consulta: string; situacao_consulta: string; categoria_consulta: string | null }> = {}) => ({ data_consulta: '2026-11-16', hora_consulta: '13:30', situacao_consulta: 'Agendado', categoria_consulta: 'Avaliação', ...o });
 
 test('etapa: vazia, Novo lead, Sofia qualifica, Esperando humano e Resgate com consulta de pé viram Agendado (Confirmado se confirmada)', () => {
   for (const etapa of [undefined, '', '  ', 'Novo lead', 'Sofia qualifica', 'Esperando humano', 'Resgate']) {
@@ -167,4 +167,31 @@ test('consulta de HOJE marcada Remarcado (data nova fora dos 14 dias lidos): a a
   }
   // contraste: a mesma consulta de hoje Agendada grava a etapa
   assert.equal(casar([ag({ dayLocal: HOJE, statusName: 'Agendado' })], conversas, () => ['5594999745062'], HOJE)[0]!.muda.etapa, 'Agendado');
+});
+
+test('etapa só para consulta COMERCIAL: Avaliação, Retorno e Retorno com exames promovem; Sessão e Retorno após tratamento (paciente em tratamento) não', () => {
+  for (const categoria_consulta of ['Avaliação', 'Retorno', 'Retorno com exames']) {
+    assert.deepEqual(etapaDaConsulta({ etapa: 'Sofia qualifica' }, dePe({ categoria_consulta }), HOJE), { etapa: 'Agendado' }, categoria_consulta);
+  }
+  for (const categoria_consulta of ['Sessão', 'Retorno após tratamento']) {
+    assert.deepEqual(etapaDaConsulta({}, dePe({ categoria_consulta }), HOJE), { porCategoria: categoria_consulta }, categoria_consulta);
+    assert.deepEqual(etapaDaConsulta({ etapa: 'Novo lead' }, dePe({ categoria_consulta, situacao_consulta: 'Confirmado' }), HOJE), { porCategoria: categoria_consulta });
+  }
+  // categoria desconhecida também não promove (palpite não vira etapa)
+  assert.deepEqual(etapaDaConsulta({}, dePe({ categoria_consulta: null }), HOJE), { porCategoria: '(sem categoria)' });
+  // quem já está numa etapa que a agenda não mexe, ou desistiu, segue como antes (sem ruído de categoria)
+  assert.deepEqual(etapaDaConsulta({ etapa: 'Compareceu' }, dePe({ categoria_consulta: 'Sessão' }), HOJE), {});
+  assert.deepEqual(etapaDaConsulta({ etapa: 'Perdido' }, dePe({ categoria_consulta: 'Sessão' }), HOJE), { segurada: 'Perdido' });
+});
+
+test('casar: SESSÃO de pé (paciente em tratamento, funil vazio) não ganha etapa comercial — só data/situação/categoria; Avaliação ganha', () => {
+  const sessao = casar([ag({ dayLocal: '2026-11-27', timeLocal: '09:00:00', categoryName: 'Sessão' })], [{ id: 17, telefone: '+5594999745062', attrs: {}, atividade: 1 }], () => ['5594999745062'], HOJE);
+  assert.equal(sessao.length, 1);
+  assert.equal(sessao[0]!.muda.etapa, undefined);
+  assert.equal(sessao[0]!.muda.categoria_consulta, 'Sessão');
+  assert.equal(sessao[0]!.muda.data_consulta, '2026-11-27');
+  assert.equal(sessao[0]!.porCategoria, 'Sessão');
+  const avaliacao = casar([ag({ dayLocal: '2026-11-27', categoryName: 'Avaliação' })], [{ id: 18, telefone: '+5594999745062', attrs: {}, atividade: 1 }], () => ['5594999745062'], HOJE);
+  assert.equal(avaliacao[0]!.muda.etapa, 'Agendado');
+  assert.equal(avaliacao[0]!.porCategoria, undefined);
 });
