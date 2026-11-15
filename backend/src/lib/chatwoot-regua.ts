@@ -15,6 +15,7 @@
  *  - Campo faltando no texto → não manda; o seco deixa UMA nota dizendo o que falta (por chave).
  */
 import { TEXTOS_PARAU } from './chatwoot-regua-textos.js';
+import { padraoMin } from './robos-tempo.js';
 
 export const ID_REGUA = 'chatwoot-regua';
 /** caixa do Chatwoot → slug da unidade. Uma unidade por enquanto. */
@@ -384,12 +385,10 @@ export function paraParametro(v: string): string {
  * Troca os campos {{…}} do modelo do Kommo pelos dados da conversa e da unidade. Campo sem valor entra em `faltando`.
  * `variaveis` são os mesmos valores, um por campo distinto, na ordem de {{1}}, {{2}}… do template; null se faltou alguma coisa.
  */
-/** Os dois modelos de sessão que a régua monta a partir da sessão que `candidatos()` escolheu (a da agenda ou a da equipe). */
-const MODELOS_DE_SESSAO_DO_ENVIO: ReadonlySet<string> = new Set(['parau_sessao_lembrete_vespera', 'parau_sessao_confirmacao_dia']);
-
 /**
- * `momentoDoEnvio` = a data+hora que `candidatos()` usou para decidir o envio; só os dois modelos de lembrete de sessão o usam no campo
- * {{lead.cf.2450928}} (os outros — retorno, boas-vindas… — seguem sessão → retorno → consulta, como sempre).
+ * `momentoDoEnvio` = a data+hora que `candidatos()` usou para decidir o envio (os lembretes de consulta e de sessão o trazem). Vale para
+ * QUALQUER modelo que esteja nesse robô — inclusive um que a Gestora trocou na tela Robôs —, nos dois campos de data. Os robôs que não trazem
+ * momento (retorno, boas-vindas…) seguem sessão → retorno → consulta, como sempre.
  */
 export function renderizar(modelo: string, c: ConversaRegua, u: DadosDaUnidade, momentoDoEnvio?: Momento): { texto: string | null; variaveis: string[] | null; faltando: string[] } {
   const bruto = TEXTOS_PARAU[modelo];
@@ -410,10 +409,10 @@ export function renderizar(modelo: string, c: ConversaRegua, u: DadosDaUnidade, 
       case 'contact.name':
         return primeiroNome(c.nome) ?? falta('nome do contato');
       case 'lead.cf.2450736':
-        return consulta ? textoDoMomento(consulta) : falta('data da consulta (data_consulta)');
+        return (momentoDoEnvio ?? consulta) ? textoDoMomento((momentoDoEnvio ?? consulta)!) : falta('data da consulta (data_consulta)');
       case 'lead.cf.2450928': {
         // próxima sessão; os modelos de retorno (SDR e cancelamento) usam o mesmo campo: sem sessão, vale o retorno e depois a consulta
-        const m = (momentoDoEnvio && MODELOS_DE_SESSAO_DO_ENVIO.has(modelo) ? momentoDoEnvio : null) ?? sessao ?? retorno ?? consulta;
+        const m = momentoDoEnvio ?? sessao ?? retorno ?? consulta;
         return m ? textoDoMomento(m) : falta('data da próxima sessão (proxima_sessao)');
       }
       case 'lead.cf.2450998':
@@ -444,7 +443,7 @@ export function renderizar(modelo: string, c: ConversaRegua, u: DadosDaUnidade, 
 
 // ── as regras ──────────────────────────────────────────────────────────────────────────────────────
 
-interface Candidato {
+export interface Candidato {
   regra: string;
   chave: string;
   modelo: string;
@@ -474,9 +473,28 @@ export const ETIQUETA_DA_PAUSA_DA_EQUIPE = 'ia-pausada';
 const ETAPAS_DA_RETOMADA_AUTOMATICA = new Set(['Novo lead', 'Sofia qualifica', 'Esperando humano']);
 /** Etapas em que o paciente já está marcado, atendido ou fechado: a reativação de «Em espera» não vale. */
 const ETAPAS_COM_PACIENTE_ANDANDO = new Set(['Agendado', 'Confirmado', 'Compareceu', 'Pós-consulta', 'Fechou']);
+/**
+ * O estado PRÓPRIO da SDR automática: a chave `chatwoot-sdr-auto` do catálogo (nasce «só no papel»). Vale só para as regras `rotina-*`: desligada = não
+ * rodam; no papel = só a nota «enviaria…»; ligada = mandam (a régua também precisa estar ligada). As etiquetas manuais seguem na régua.
+ */
+export const AUTOMACAO_DA_REGRA: Readonly<Record<string, string>> = {
+  'rotina-retomada': 'chatwoot-sdr-auto',
+  'rotina-reativacao': 'chatwoot-sdr-auto',
+  'rotina-confirmar-retorno': 'chatwoot-sdr-auto',
+  'rotina-boas-vindas': 'chatwoot-sdr-auto',
+};
+/** A etiqueta manual de cada robô automático: com ela na conversa o automático não roda (a equipe já decidiu; não manda os dois). */
+export const ETIQUETA_MANUAL_DA_ROTINA: Readonly<Record<string, string>> = {
+  'rotina-retomada': 'retomada',
+  'rotina-reativacao': 'reativacao',
+  'rotina-confirmar-retorno': 'confirmar-retorno',
+  'rotina-boas-vindas': 'boas-vindas',
+};
 /** Dias parada até a retomada (2) e até a reativação do lead frio (30). */
 const DIAS_DA_RETOMADA_AUTOMATICA = 2;
 const DIAS_DA_REATIVACAO_AUTOMATICA = 30;
+/** A reativação só sai se NINGUÉM falou na conversa (de nenhum lado) nesta janela antes do envio. */
+const DIAS_DE_SILENCIO_DA_REATIVACAO = 7;
 const MODELO_DA_ESPERA: Record<string, string> = {
   Exames: 'parau_espera_exames',
   Viajando: 'parau_espera_viagem',
@@ -514,8 +532,23 @@ const MODELO_DA_ETIQUETA: Record<
   },
 };
 
+/**
+ * O que a Gestora configurou na tela «Robôs» para ESTA unidade (ver `robos-estado.ts`). Vazio = os valores de fábrica do código.
+ * `tempoMin`: regra → minutos (a âncora e a direção são as do robô, `robos-tempo.ts`). `modelos`: `"<regra>|<modelo do código>"` → modelo
+ * aprovado que passa a mandar no lugar (só com as mesmas variáveis; o worker confere a aprovação na hora de enviar).
+ */
+export interface AjustesDaRegua {
+  tempoMin?: ReadonlyMap<string, number>;
+  modelos?: ReadonlyMap<string, string>;
+}
+
 /** "X horas antes" de um compromisso (consulta ou sessão): sem hora, a véspera vale 09:00 do dia anterior e as outras duas não existem. */
-function lembretes(m: Momento, regras: { vespera: [string, string]; dia?: [string, string]; preparo?: [string, string] }): Candidato[] {
+function lembretes(
+  m: Momento,
+  regras: { vespera: [string, string]; dia?: [string, string]; preparo?: [string, string] },
+  /** quanto ANTES de cada um, em ms (padrão: 24 h, 3 h e 1 h) */
+  antes: { vespera?: number; dia?: number; preparo?: number } = {},
+): Candidato[] {
   const saida: Candidato[] = [];
   const teto = m.hora ? instante(m, 0) : emBelem(m.data, 8);
   saida.push({
@@ -524,15 +557,18 @@ function lembretes(m: Momento, regras: { vespera: [string, string]; dia?: [strin
     chave: m.chave,
     kind: 'antes',
     teto,
-    alvo: m.hora ? new Date(instante(m, 0).getTime() - DIA) : emBelem(somarDias(m.data, -1), 9),
+    alvo: m.hora ? new Date(instante(m, 0).getTime() - (antes.vespera ?? DIA)) : emBelem(somarDias(m.data, -1), 9),
     momento: m,
   });
-  if (m.hora && regras.dia) saida.push({ regra: regras.dia[0], modelo: regras.dia[1], chave: m.chave, kind: 'antes', teto, alvo: new Date(teto.getTime() - 3 * HORA), momento: m });
-  if (m.hora && regras.preparo) saida.push({ regra: regras.preparo[0], modelo: regras.preparo[1], chave: m.chave, kind: 'antes', teto, alvo: new Date(teto.getTime() - HORA), momento: m });
+  if (m.hora && regras.dia) saida.push({ regra: regras.dia[0], modelo: regras.dia[1], chave: m.chave, kind: 'antes', teto, alvo: new Date(teto.getTime() - (antes.dia ?? 3 * HORA)), momento: m });
+  if (m.hora && regras.preparo) saida.push({ regra: regras.preparo[0], modelo: regras.preparo[1], chave: m.chave, kind: 'antes', teto, alvo: new Date(teto.getTime() - (antes.preparo ?? HORA)), momento: m });
   return saida;
 }
 
-function candidatos(c: ConversaRegua, vistos: Vistos): Candidato[] {
+/** Tudo que a régua PODERIA mandar a esta conversa, antes do horário e do «feitos» (exportada para o catálogo da tela «Robôs»). */
+export function candidatos(c: ConversaRegua, vistos: Vistos, ajustes?: AjustesDaRegua): Candidato[] {
+  /** o tempo do robô em ms: o que a Gestora pôs na tela, ou o de fábrica */
+  const tempo = (regra: string): number => (ajustes?.tempoMin?.get(regra) ?? padraoMin(regra)) * 60_000;
   const a = c.attrs;
   const etapa = str(a.etapa);
   const situ = str(a.situacao_consulta);
@@ -560,12 +596,12 @@ function candidatos(c: ConversaRegua, vistos: Vistos): Candidato[] {
     const perdido = etapa === 'Perdido' ? novo('etapa', 'Perdido') : null;
     if (perdido && !semFollowUp) {
       const chave = `perdido@${perdido.desde.toISOString()}`;
-      for (const [h, regra, modelo] of [
-        [48, 'followup-48h', 'parau_lead_reengajamento_48h'],
-        [96, 'followup-96h', 'parau_lead_metodo_convite_96h'],
-        [120, 'followup-120h', 'parau_lead_encerramento_120h'],
+      for (const [regra, modelo] of [
+        ['followup-48h', 'parau_lead_reengajamento_48h'],
+        ['followup-96h', 'parau_lead_metodo_convite_96h'],
+        ['followup-120h', 'parau_lead_encerramento_120h'],
       ] as const) {
-        saida.push({ regra, modelo, chave, kind: 'depois', alvo: new Date(perdido.desde.getTime() + h * HORA) });
+        saida.push({ regra, modelo, chave, kind: 'depois', alvo: new Date(perdido.desde.getTime() + tempo(regra)) });
       }
     }
     // pré-pagamento (ao entrar em Agendado e 3 h depois)
@@ -573,7 +609,7 @@ function candidatos(c: ConversaRegua, vistos: Vistos): Candidato[] {
     if (agendado && ehSim(a.pagamento_antecipado) && situ === 'Agendado' && !c.etiquetas.includes('pagou-antecipado')) {
       const chave = `agendado@${agendado.desde.toISOString()}`;
       saida.push({ regra: 'prepagamento', modelo: 'parau_consulta_prepagamento', chave, kind: 'depois', alvo: agendado.desde });
-      saida.push({ regra: 'prepagamento-pendente', modelo: 'parau_consulta_prepagamento_pendente', chave, kind: 'depois', alvo: new Date(agendado.desde.getTime() + 3 * HORA) });
+      saida.push({ regra: 'prepagamento-pendente', modelo: 'parau_consulta_prepagamento_pendente', chave, kind: 'depois', alvo: new Date(agendado.desde.getTime() + tempo('prepagamento-pendente')) });
     }
     // véspera (24 h), dia (3 h), preparo (1 h). Em «Fechou» o Kommo manda o texto de véspera da SESSÃO.
     // (consulta_confirmada do Kommo dispara no mesmo horário da véspera = disparo duplo: não replicado)
@@ -584,7 +620,7 @@ function candidatos(c: ConversaRegua, vistos: Vistos): Candidato[] {
           vespera: ['consulta-vespera', etapa === 'Fechou' ? 'parau_sessao_lembrete_vespera' : 'parau_consulta_lembrete_vespera'],
           dia: ['consulta-dia', 'parau_consulta_confirmacao_dia'],
           preparo: ['consulta-preparo', 'parau_consulta_preparo'],
-        }),
+        }, { vespera: tempo('consulta-vespera'), dia: tempo('consulta-dia'), preparo: tempo('consulta-preparo') }),
       );
     }
     // falta: na hora em que marcam «Não compareceu» e 48 h depois da consulta
@@ -594,20 +630,20 @@ function candidatos(c: ConversaRegua, vistos: Vistos): Candidato[] {
       saida.push({ regra: 'falta-mesmo-dia', modelo: 'parau_consulta_falta_mesmo_dia', chave: `faltou@${consulta.chave}`, kind: 'depois', alvo: faltou.desde });
     }
     if (naConsulta && !ehSessao && situ === 'Não compareceu' && consulta && !semFollowUp && !consultaAnteriorAVista(consulta)) {
-      saida.push({ regra: 'falta-48h', modelo: 'parau_consulta_falta_48h', chave: consulta.chave, kind: 'depois', alvo: new Date(instante(consulta, HORA_PADRAO_DEPOIS).getTime() + 2 * DIA) });
+      saida.push({ regra: 'falta-48h', modelo: 'parau_consulta_falta_48h', chave: consulta.chave, kind: 'depois', alvo: new Date(instante(consulta, HORA_PADRAO_DEPOIS).getTime() + tempo('falta-48h')) });
     }
     // depois do atendimento (no Kommo os de 4 e 30 dias estão "antes" da consulta — defeito; aqui DEPOIS)
     if (consulta && !ehSessao && situ === 'Atendido' && !consultaAnteriorAVista(consulta)) {
       const base = instante(consulta, HORA_PADRAO_DEPOIS).getTime();
       const posConsulta = etapa === 'Compareceu' || etapa === 'Pós-consulta';
-      if (etapa === 'Compareceu') saida.push({ regra: 'pos-atendimento', modelo: 'parau_consulta_pos_atendimento', chave: consulta.chave, kind: 'depois', alvo: new Date(base + DIA) });
+      if (etapa === 'Compareceu') saida.push({ regra: 'pos-atendimento', modelo: 'parau_consulta_pos_atendimento', chave: consulta.chave, kind: 'depois', alvo: new Date(base + tempo('pos-atendimento')) });
       if (!semFollowUp) {
         if (posConsulta) {
-          saida.push({ regra: 'decisao-4d', modelo: 'parau_decisao_retomada_4d', chave: consulta.chave, kind: 'depois', alvo: new Date(base + 4 * DIA) });
-          saida.push({ regra: 'decisao-7d', modelo: 'parau_decisao_encerramento_7d', chave: consulta.chave, kind: 'depois', alvo: new Date(base + 7 * DIA) });
+          saida.push({ regra: 'decisao-4d', modelo: 'parau_decisao_retomada_4d', chave: consulta.chave, kind: 'depois', alvo: new Date(base + tempo('decisao-4d')) });
+          saida.push({ regra: 'decisao-7d', modelo: 'parau_decisao_encerramento_7d', chave: consulta.chave, kind: 'depois', alvo: new Date(base + tempo('decisao-7d')) });
         }
         if (etapa === 'Pós-consulta' || etapa === 'Perdido') {
-          saida.push({ regra: 'decisao-30d', modelo: 'parau_decisao_reengajamento_30d', chave: consulta.chave, kind: 'depois', alvo: new Date(base + 30 * DIA) });
+          saida.push({ regra: 'decisao-30d', modelo: 'parau_decisao_reengajamento_30d', chave: consulta.chave, kind: 'depois', alvo: new Date(base + tempo('decisao-30d')) });
         }
       }
     }
@@ -619,17 +655,17 @@ function candidatos(c: ConversaRegua, vistos: Vistos): Candidato[] {
       if (modelo) saida.push({ regra: 'espera-retomar', modelo, chave: `retomar@${retomar.iso}`, kind: 'depois', alvo: primeira });
       // a 2ª retomada não vai para quem já respondeu depois da 1ª
       const respondeu = !!c.ultima && !c.ultima.saida && !c.ultima.privada && c.ultima.criadaEm.getTime() > primeira.getTime();
-      if (!respondeu) saida.push({ regra: 'espera-retomada2', modelo: 'parau_espera_retomada2', chave: `retomar2@${retomar.iso}`, kind: 'depois', alvo: emBelem(somarDias(retomar, 3), 9) });
+      if (!respondeu) saida.push({ regra: 'espera-retomada2', modelo: 'parau_espera_retomada2', chave: `retomar2@${retomar.iso}`, kind: 'depois', alvo: emBelem(somarDias(retomar, Math.round(tempo('espera-retomada2') / DIA)), 9) });
     }
     // internas da qualificação: quente parado 3 h; sem responder 24 h. Nota privada não conta como conversa.
     if (ETAPAS_DE_QUALIFICACAO.has(etapa)) {
       const u = c.ultima && !c.ultima.privada ? c.ultima : null;
       const base = u ? u.criadaEm : c.criadaEm;
       if (str(a.qualificacao) === 'Quente') {
-        saida.push({ regra: 'lead-quente-parado', modelo: 'interna:quente-parado', interna: 'quente-parado', chave: `quente@${base.toISOString()}`, kind: 'depois', alvo: new Date(base.getTime() + 3 * HORA) });
+        saida.push({ regra: 'lead-quente-parado', modelo: 'interna:quente-parado', interna: 'quente-parado', chave: `quente@${base.toISOString()}`, kind: 'depois', alvo: new Date(base.getTime() + tempo('lead-quente-parado')) });
       }
       if (u && u.saida) {
-        saida.push({ regra: 'sem-resposta-24h', modelo: 'interna:sem-resposta', interna: 'sem-resposta', chave: `semresp@${u.criadaEm.toISOString()}`, kind: 'depois', alvo: new Date(u.criadaEm.getTime() + DIA) });
+        saida.push({ regra: 'sem-resposta-24h', modelo: 'interna:sem-resposta', interna: 'sem-resposta', chave: `semresp@${u.criadaEm.toISOString()}`, kind: 'depois', alvo: new Date(u.criadaEm.getTime() + tempo('sem-resposta-24h')) });
       }
     }
     // ── SDR AUTOMÁTICA (14/11/2026): o que a SDR fazia por etiqueta agora também sai sozinho (a etiqueta manual continua valendo) ──
@@ -637,36 +673,40 @@ function candidatos(c: ConversaRegua, vistos: Vistos): Candidato[] {
     // 1) Retomada: Novo lead / qualificação / esperando humano, 2 dias sem NENHUMA mensagem pública (de qualquer lado), sem consulta de pé,
     //    sem «Retomar em» futuro, sem sem-follow-up e sem a equipe ter assumido (etiqueta ia-pausada). Uma vez por período parado.
     const publica = c.ultima && !c.ultima.privada ? c.ultima : null;
-    if (ETAPAS_DA_RETOMADA_AUTOMATICA.has(etapa) && publica && !semFollowUp && !c.etiquetas.includes(ETIQUETA_DA_PAUSA_DA_EQUIPE)) {
+    const manual = (regra: string) => c.etiquetas.includes(ETIQUETA_MANUAL_DA_ROTINA[regra]!);
+    if (ETAPAS_DA_RETOMADA_AUTOMATICA.has(etapa) && publica && !semFollowUp && !c.etiquetas.includes(ETIQUETA_DA_PAUSA_DA_EQUIPE) && !manual('rotina-retomada')) {
       const alvoDaRetomada = new Date(publica.criadaEm.getTime() + DIAS_DA_RETOMADA_AUTOMATICA * DIA);
       const diaDoAlvo = diaEmBelem(alvoDaRetomada);
       const consultaDePe = !!consulta && SITUACOES_DE_PE.has(situ) && consulta.data.iso >= diaDoAlvo;
-      const retomarEm = lerData(a.retomar_em);
-      const voltaDepois = !!retomarEm && retomarEm.iso >= diaDoAlvo;
-      if (!consultaDePe && !voltaDepois) {
+      // «Retomar em» preenchido (qualquer data, passada ou futura) = a equipe já decidiu quando voltar: a retomada automática não entra
+      const comRetomarEm = lerData(a.retomar_em) !== null;
+      if (!consultaDePe && !comRetomarEm) {
         saida.push({ regra: 'rotina-retomada', modelo: 'parau_rotina_retomada', chave: `retomada@${publica.criadaEm.toISOString()}`, kind: 'depois', alvo: alvoDaRetomada });
       }
     }
     // 2) Reativação do lead frio: 30 dias depois de virar Perdido (memória `desde` da etapa) OU 30 dias depois do dia de «Retomar em» (Em espera),
     //    se o paciente não respondeu desde então. Quem foi atendido na consulta fica com a decisão de 30 dias (não dobra).
-    if (!semFollowUp && !(consulta && situ === 'Atendido')) {
+    if (!semFollowUp && !c.etiquetas.includes(ETIQUETA_DA_PAUSA_DA_EQUIPE) && !manual('rotina-reativacao') && !(consulta && situ === 'Atendido')) {
+      // NINGUÉM falou (de nenhum lado) nos 7 dias antes do envio: conversa viva não é lead frio
+      const falouPerto = (alvo: Date) => !!publica && alvo.getTime() - publica.criadaEm.getTime() < DIAS_DE_SILENCIO_DA_REATIVACAO * DIA;
       const perdidoAuto = etapa === 'Perdido' ? novo('etapa', 'Perdido') : null;
-      if (perdidoAuto && !aindaRespondeu(perdidoAuto.desde)) {
-        saida.push({ regra: 'rotina-reativacao', modelo: 'parau_sdr_reativacao_lead_frio', chave: `reativacao@perdido@${perdidoAuto.desde.toISOString()}`, kind: 'depois', alvo: new Date(perdidoAuto.desde.getTime() + DIAS_DA_REATIVACAO_AUTOMATICA * DIA) });
+      const alvoPerdido = perdidoAuto ? new Date(perdidoAuto.desde.getTime() + DIAS_DA_REATIVACAO_AUTOMATICA * DIA) : null;
+      if (perdidoAuto && alvoPerdido && !aindaRespondeu(perdidoAuto.desde) && !falouPerto(alvoPerdido)) {
+        saida.push({ regra: 'rotina-reativacao', modelo: 'parau_sdr_reativacao_lead_frio', chave: `reativacao@perdido@${perdidoAuto.desde.toISOString()}`, kind: 'depois', alvo: alvoPerdido });
       }
       const diaDaEspera = lerData(a.retomar_em);
       if (diaDaEspera && etapa !== 'Perdido' && !ETAPAS_COM_PACIENTE_ANDANDO.has(etapa)) {
         const base = emBelem(diaDaEspera, 9);
         const alvoDaReativacao = new Date(base.getTime() + DIAS_DA_REATIVACAO_AUTOMATICA * DIA);
         const consultaDePe = !!consulta && SITUACOES_DE_PE.has(situ) && consulta.data.iso >= diaEmBelem(alvoDaReativacao);
-        if (!aindaRespondeu(base) && !consultaDePe) {
+        if (!aindaRespondeu(base) && !consultaDePe && !falouPerto(alvoDaReativacao)) {
           saida.push({ regra: 'rotina-reativacao', modelo: 'parau_sdr_reativacao_lead_frio', chave: `reativacao@espera@${diaDaEspera.iso}`, kind: 'depois', alvo: alvoDaReativacao });
         }
       }
     }
     // 4) Boas-vindas: a conversa ENTROU em «Fechou» agora (não o que já estava assim); {{2}} = o programa do cartão, {{3}} = o próximo compromisso
     const entrouEmFechou = etapa === 'Fechou' ? novo('etapa', 'Fechou') : null;
-    if (entrouEmFechou) {
+    if (entrouEmFechou && !manual('rotina-boas-vindas')) {
       saida.push({ regra: 'rotina-boas-vindas', modelo: 'parau_sdr_boas_vindas_programa', chave: `boasvindas@${entrouEmFechou.desde.toISOString()}`, kind: 'depois', alvo: entrouEmFechou.desde });
     }
     // interna: entrou em «Fechou» sem «Fechou tratamento» marcado
@@ -691,7 +731,7 @@ function candidatos(c: ConversaRegua, vistos: Vistos): Candidato[] {
     const dele = etapaTratamento === 'Em tratamento' ? momento(a.proxima_sessao, a.hora_sessao) : null;
     // «Em tratamento» com a próxima sessão preenchida e DIFERENTE da consulta da agenda: vale o campo que a equipe mantém (sessao-dia, abaixo)
     if (!dele || dele.chave === consulta.chave) {
-      saida.push(...lembretes(consulta, { vespera: ['consulta-vespera', 'parau_sessao_lembrete_vespera'], dia: ['sessao-dia', 'parau_sessao_confirmacao_dia'] }));
+      saida.push(...lembretes(consulta, { vespera: ['consulta-vespera', 'parau_sessao_lembrete_vespera'], dia: ['sessao-dia', 'parau_sessao_confirmacao_dia'] }, { vespera: tempo('consulta-vespera'), dia: tempo('sessao-dia') }));
     }
   }
   // falta numa sessão da agenda: marcada «Não compareceu» no dia da sessão (o texto diz «hoje»); não usa os textos de falta de consulta.
@@ -706,21 +746,24 @@ function candidatos(c: ConversaRegua, vistos: Vistos): Candidato[] {
 
   // 3) Confirmar retorno automático: consulta de «Retorno após tratamento» de pé → 2 dias antes, às 09:00 (as outras categorias de retorno já têm
   //    véspera/dia/preparo). Não vale para tratamento cancelado.
-  if (consulta && str(a.categoria_consulta) === 'Retorno após tratamento' && SITUACOES_DE_PE.has(situ) && etapaTratamento !== 'Tratamento cancelado') {
+  if (consulta && str(a.categoria_consulta) === 'Retorno após tratamento' && SITUACOES_DE_PE.has(situ) && etapaTratamento !== 'Tratamento cancelado' && !c.etiquetas.includes(ETIQUETA_MANUAL_DA_ROTINA['rotina-confirmar-retorno']!)) {
+    // 2 dias antes, 09:00; se esse dia cai no DOMINGO (a régua não fala aos domingos), vale o sábado
+    let diaDoAviso = somarDias(consulta.data, -2);
+    if (new Date(Date.UTC(diaDoAviso.y, diaDoAviso.m - 1, diaDoAviso.d)).getUTCDay() === 0) diaDoAviso = somarDias(diaDoAviso, -1);
     saida.push({
       regra: 'rotina-confirmar-retorno',
       modelo: 'parau_sdr_confirmacao_retorno',
       chave: consulta.chave,
       kind: 'antes',
       teto: consulta.hora ? instante(consulta, 0) : emBelem(consulta.data, 8),
-      alvo: emBelem(somarDias(consulta.data, -2), 9),
+      alvo: emBelem(diaDoAviso, 9),
     });
   }
 
   // retorno de 60 dias depois da alta (no Kommo fica no funil Comercial, etapa RETORNO PÓS-TRATAMENTO)
   const alta = lerData(a.data_alta);
   if (alta && str(a.categoria_consulta) === 'Retorno após tratamento') {
-    saida.push({ regra: 'alta-retorno-60d', modelo: 'parau_alta_retorno_60d', chave: `alta@${alta.iso}`, kind: 'depois', alvo: emBelem(somarDias(alta, 60), 9) });
+    saida.push({ regra: 'alta-retorno-60d', modelo: 'parau_alta_retorno_60d', chave: `alta@${alta.iso}`, kind: 'depois', alvo: emBelem(somarDias(alta, Math.round(tempo('alta-retorno-60d') / DIA)), 9) });
   }
 
   if (tratamento) {
@@ -730,7 +773,7 @@ function candidatos(c: ConversaRegua, vistos: Vistos): Candidato[] {
     if (naAlta) {
       const chave = `alta@${naAlta.desde.toISOString()}`;
       saida.push({ regra: 'alta-conclusao', modelo: 'parau_alta_conclusao', chave, kind: 'depois', alvo: naAlta.desde });
-      if (!ehSim(a.deixou_avaliacao_google)) saida.push({ regra: 'alta-nps', modelo: 'parau_alta_pesquisa_nps', chave, kind: 'depois', alvo: new Date(naAlta.desde.getTime() + 48 * HORA) });
+      if (!ehSim(a.deixou_avaliacao_google)) saida.push({ regra: 'alta-nps', modelo: 'parau_alta_pesquisa_nps', chave, kind: 'depois', alvo: new Date(naAlta.desde.getTime() + tempo('alta-nps')) });
     }
     // cancelamento: acolhimento na hora; retorno marcado → véspera às 09:00
     const cancelou = entrou('Tratamento cancelado');
@@ -744,7 +787,7 @@ function candidatos(c: ConversaRegua, vistos: Vistos): Candidato[] {
       const sessao = momento(a.proxima_sessao, a.hora_sessao);
       if (sessao?.hora) {
         const teto = instante(sessao, 0);
-        saida.push({ regra: 'sessao-dia', modelo: 'parau_sessao_confirmacao_dia', chave: sessao.chave, kind: 'antes', teto, alvo: new Date(teto.getTime() - 3 * HORA), momento: sessao });
+        saida.push({ regra: 'sessao-dia', modelo: 'parau_sessao_confirmacao_dia', chave: sessao.chave, kind: 'antes', teto, alvo: new Date(teto.getTime() - tempo('sessao-dia')), momento: sessao });
       }
       // metade das sessões: chegou a etiqueta `aderencia-meio`
       const meio = c.etiquetas.includes('aderencia-meio') ? novo('etiqueta:aderencia-meio') : null;
@@ -754,18 +797,24 @@ function candidatos(c: ConversaRegua, vistos: Vistos): Candidato[] {
       if (faltouSessao) saida.push({ regra: 'sessao-falta', modelo: 'parau_sessao_falta', chave: `faltou-sessao@${diaEmBelem(faltouSessao.desde)}`, kind: 'depois', alvo: faltouSessao.desde });
       // exame pedido e já avisado: cobra o documento 120 h depois da consulta
       if (consulta && str(a.motivo_nao_fechamento) === 'Solicitado exames' && c.etiquetas.includes('pendencia-exame-avisado') && !consultaAnteriorAVista(consulta)) {
-        saida.push({ regra: 'pendencia-documento', modelo: 'parau_pendencia_documento', chave: consulta.chave, kind: 'depois', alvo: new Date(instante(consulta, HORA_PADRAO_DEPOIS).getTime() + 120 * HORA) });
+        saida.push({ regra: 'pendencia-documento', modelo: 'parau_pendencia_documento', chave: consulta.chave, kind: 'depois', alvo: new Date(instante(consulta, HORA_PADRAO_DEPOIS).getTime() + tempo('pendencia-documento')) });
       }
     }
   }
   // a mesma regra com a mesma chave é o MESMO envio, venha de qual caminho vier (o «feitos» também vale entre ciclos)
   const vistosNoCiclo = new Set<string>();
-  return saida.filter((k) => {
-    const id = `${k.regra}|${k.chave}`;
-    if (vistosNoCiclo.has(id)) return false;
-    vistosNoCiclo.add(id);
-    return true;
-  });
+  return saida
+    .filter((k) => {
+      const id = `${k.regra}|${k.chave}`;
+      if (vistosNoCiclo.has(id)) return false;
+      vistosNoCiclo.add(id);
+      return true;
+    })
+    // modelo trocado na tela «Robôs» (só vale para quem fala com o paciente; a aprovação na Meta o worker confere na hora de enviar)
+    .map((k) => {
+      const novo = k.interna ? undefined : ajustes?.modelos?.get(`${k.regra}|${k.modelo}`);
+      return novo ? { ...k, modelo: novo } : k;
+    });
 }
 
 /**
@@ -790,8 +839,28 @@ export function ecoDaPropriaRetomada(chave: string, feitos: ReadonlySet<string>)
  * O que a SDR automática mostra no texto: a reativação diz «Aqui é {{2}}» com o primeiro nome de quem atende ou «a equipe» (a por etiqueta
  * continua exigindo atendente); a confirmação de retorno mostra a data da CONSULTA (não uma sessão ou retorno antigos do cartão).
  */
-function paraRenderizar(regra: string, c: ConversaRegua): ConversaRegua {
+function paraRenderizar(regra: string, c: ConversaRegua, agora: Date): ConversaRegua {
   if (regra === 'rotina-reativacao') return { ...c, atendente: primeiroNome(c.atendente ?? '') ?? 'a equipe' };
+  if (regra === 'rotina-boas-vindas') {
+    // o «próximo compromisso» é um compromisso FUTURO: data de hoje em diante; sessão, retorno e consulta de antes de hoje não entram no texto
+    // (sem nenhuma data futura o texto fica sem o campo e a régua deixa a nota de falta)
+    const hoje = diaEmBelem(agora);
+    const futura = (v: unknown) => {
+      const d = lerData(v);
+      return !!d && d.iso >= hoje;
+    };
+    const attrs = { ...c.attrs };
+    if (!futura(attrs.proxima_sessao)) {
+      attrs.proxima_sessao = '';
+      attrs.hora_sessao = '';
+    }
+    if (!futura(attrs.data_retorno)) attrs.data_retorno = '';
+    if (!futura(attrs.data_consulta)) {
+      attrs.data_consulta = '';
+      attrs.hora_consulta = '';
+    }
+    return { ...c, attrs };
+  }
   if (regra === 'rotina-confirmar-retorno') return { ...c, attrs: { ...c.attrs, proxima_sessao: '', hora_sessao: '', data_retorno: '' } };
   return c;
 }
@@ -808,11 +877,11 @@ function limiteDe(k: Candidato): Date {
  * Função PURA: o que está na hora de mandar para esta conversa. `memoria.vistos` já deve conter a observação de agora
  * (`atualizarVistos`). Remarcar muda a chave; repetir não acontece (`memoria.feitos`).
  */
-export function decidirRegua(c: ConversaRegua, memoria: Memoria, agora: Date, unidade: DadosDaUnidade): Decisao {
+export function decidirRegua(c: ConversaRegua, memoria: Memoria, agora: Date, unidade: DadosDaUnidade, ajustes?: AjustesDaRegua): Decisao {
   const disparos: Disparo[] = [];
   const perdidas: string[] = [];
   const aberta = janelaAberta(agora);
-  for (const k of candidatos(c, memoria.vistos)) {
+  for (const k of candidatos(c, memoria.vistos, ajustes)) {
     if (agora.getTime() < k.alvo.getTime()) continue;
     // a mensagem da própria retomada vira a «última mensagem pública»: sem isto ela se repetiria a cada 2 dias (ver `ecoDaPropriaRetomada`)
     if (k.regra === 'rotina-retomada' && ecoDaPropriaRetomada(k.chave, memoria.feitos)) continue;
@@ -827,7 +896,7 @@ export function decidirRegua(c: ConversaRegua, memoria: Memoria, agora: Date, un
       disparos.push({ regra: k.regra, chave: k.chave, modelo: k.modelo, texto: DESCRICAO_INTERNA[k.interna], variaveis: null, faltando: [], alvo: k.alvo, interna: k.interna });
       continue;
     }
-    const r = renderizar(k.modelo, paraRenderizar(k.regra, c), unidade, k.momento);
+    const r = renderizar(k.modelo, paraRenderizar(k.regra, c, agora), unidade, k.momento);
     if (r.faltando.length && memoria.feitos.has(`${k.regra}${SUFIXO_FALTA}|${k.chave}`)) continue;
     disparos.push({ regra: k.regra, chave: k.chave, modelo: k.modelo, texto: r.texto, variaveis: r.variaveis, faltando: r.faltando, alvo: k.alvo });
   }

@@ -163,6 +163,21 @@ export function panoramaDaUnidade(slug: string, ambiente: NodeJS.ProcessEnv = pr
   });
 }
 
+/**
+ * Grava o que a tela escolheu para uma automação numa unidade (e quem escolheu) e já vale na próxima pergunta. É o MESMO caminho para o
+ * console (super admin) e para a tela «Robôs» do Chatwoot (administrador do Chatwoot): um só registro de «quem mudou e quando».
+ */
+export async function gravarEstadoDaAutomacao(unit: { id: string }, automacao: string, estado: Estado, por: string | null): Promise<void> {
+  await prisma.unitAutomacao.upsert({
+    where: { unitId_automacao: { unitId: unit.id, automacao } },
+    create: { unitId: unit.id, automacao, estado, atualizadoPor: por },
+    update: { estado, atualizadoPor: por },
+  });
+  // Vale já na próxima pergunta, sem esperar os 30 s do cache — é o que faz a tela parecer instantânea.
+  invalidarAutomacoes();
+  await recarregarAutomacoes();
+}
+
 /** Carrega uma vez no boot, pra primeira pergunta já ver o banco em vez de cair no `.env`. */
 export async function iniciarAutomacoes(): Promise<void> {
   await recarregarAutomacoes();

@@ -7,6 +7,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   arquivoComEtapa,
+  AUTOMACAO_DA_REGRA,
+  ETIQUETA_MANUAL_DA_ROTINA,
   ecoDaPropriaRetomada,
   ETIQUETA_DA_PAUSA_DA_EQUIPE,
   ehArquivo,
@@ -916,10 +918,11 @@ test('SDR automática — retomada: NÃO manda com consulta de pé, «Retomar em
   for (const etapa of ['Agendado', 'Confirmado', 'Compareceu', 'Pós-consulta', 'Fechou', 'Perdido', '']) nao(conv({ attrs: { etapa }, ultima }));
   nao(conv({ attrs: { ...base, funil: 'Tratamento' }, ultima }));
   nao(conv({ attrs: { ...base, etapa_tratamento: 'Em tratamento' }, ultima }));
-  // controle: consulta passada, desmarcada ou retomar_em vencido NÃO seguram
+  // «Retomar em» preenchido, ainda que JÁ VENCIDO: a equipe decidiu quando voltar, a retomada automática não entra
+  nao(conv({ attrs: { ...base, retomar_em: '2026-11-10' }, ultima }));
+  // controle: consulta passada ou desmarcada NÃO seguram
   assert.deepEqual(regras(rodar(conv({ attrs: { ...base, data_consulta: '2026-11-10', situacao_consulta: 'Não compareceu' }, ultima }), quando)), ['rotina-retomada']);
   assert.deepEqual(regras(rodar(conv({ attrs: { ...base, data_consulta: '2026-11-20', situacao_consulta: 'Desmarcado' }, ultima }), quando)), ['rotina-retomada']);
-  assert.deepEqual(regras(rodar(conv({ attrs: { ...base, retomar_em: '2026-11-10' }, ultima }), quando)), ['rotina-retomada']);
   assert.equal(ETIQUETA_DA_PAUSA_DA_EQUIPE, 'ia-pausada');
 });
 
@@ -1026,5 +1029,91 @@ test('SDR automática — boas-vindas: entrou em Fechou AGORA → modelo do prog
   assert.deepEqual(regras(rodar(conv({ attrs: { etapa: 'Fechou', proxima_sessao: '2026-11-20' } }), T0, v, [`rotina-boas-vindas${SUFIXO_FALTA}|boasvindas@2026-11-16T12:00:00.000Z`])).includes('rotina-boas-vindas'), false);
   // vale mesmo com sem-follow-up (é a confirmação de uma vaga) e a etiqueta manual «boas-vindas» segue com a regra dela
   assert.deepEqual(regras(rodar(conv({ attrs, etiquetas: ['sem-follow-up'] }), T0, v)).includes('rotina-boas-vindas'), true);
-  assert.deepEqual(regras(rodar(conv({ attrs, etiquetas: ['boas-vindas'] }), T0, { ...v, 'etiqueta:boas-vindas': visto('sim', T0) })).filter((x) => x.includes('boas-vindas')), ['rotina-boas-vindas', 'sdr-boas-vindas']);
+  assert.deepEqual(regras(rodar(conv({ attrs, etiquetas: ['boas-vindas'] }), T0, { ...v, 'etiqueta:boas-vindas': visto('sim', T0) })).filter((x) => x.includes('boas-vindas')), ['sdr-boas-vindas'], 'com a etiqueta manual na conversa o automático não roda: só a regra da etiqueta');
+});
+
+test('trocar o modelo na tela Robôs não faz o texto perder a data do envio (vale para QUALQUER modelo do robô, não só os de sessão pelo nome)', () => {
+  // consulta de 18/11 14:30, com uma «próxima sessão» velha no cartão; a véspera sai 24 h antes (17/11 14:30 Belém = 17:30Z)
+  const attrs = { etapa: 'Agendado', situacao_consulta: 'Agendado', data_consulta: '2026-11-18', hora_consulta: '14:30', proxima_sessao: '2026-10-01', hora_sessao: '08:00' };
+  const trocas = [
+    ['parau_consulta_lembrete_vespera', 'parau_sessao_lembrete_vespera'], // consulta → texto de sessão (usa o campo da sessão)
+    ['parau_consulta_lembrete_vespera', 'parau_consulta_lembrete_vespera'], // sem troca
+  ] as const;
+  for (const [de, para] of trocas) {
+    const ajustes = { modelos: new Map([[`consulta-vespera|${de}`, para]]) };
+    const d = decidirRegua(conv({ attrs }), { vistos: new Map(), feitos: new Set() }, Z('2026-11-17T17:35:00Z'), U, ajustes).disparos.find((x) => x.regra === 'consulta-vespera')!;
+    assert.equal(d.modelo, para);
+    assert.match(d.texto!, /18\/11 às 14:30/, para);
+    assert.doesNotMatch(d.texto!, /01\/10/, para);
+  }
+  // o inverso: o robô de sessão (Em tratamento, a próxima sessão da equipe) com um modelo de consulta mostra a data da SESSÃO
+  const sessao = { funil: 'Tratamento', etapa_tratamento: 'Em tratamento', proxima_sessao: '2026-11-18', hora_sessao: '10:00', data_consulta: '2026-09-01', hora_consulta: '08:00' };
+  const aj = { modelos: new Map([['sessao-dia|parau_sessao_confirmacao_dia', 'parau_consulta_confirmacao_dia']]) };
+  const s2 = decidirRegua(conv({ attrs: sessao }), { vistos: new Map(), feitos: new Set() }, Z('2026-11-18T11:05:00Z'), U, aj).disparos.find((x) => x.regra === 'sessao-dia')!;
+  assert.equal(s2.modelo, 'parau_consulta_confirmacao_dia');
+  assert.match(s2.texto!, /18\/11 às 10:00/);
+  assert.doesNotMatch(s2.texto!, /01\/09/);
+});
+
+test('SDR automática: com a etiqueta MANUAL correspondente na conversa o automático NÃO roda (nunca os dois)', () => {
+  const v = (etiqueta: string) => ({ [`etiqueta:${etiqueta}`]: visto('sim', T0) });
+  // retomada: parada há 2 dias em Novo lead; a etiqueta «retomada» (que a equipe pôs) assume
+  const parada = conv({ attrs: { etapa: 'Novo lead' }, etiquetas: ['retomada'], ultima: pub('2026-11-14T12:00:00Z') });
+  assert.deepEqual(regras(rodar(parada, '2026-11-16T12:00:00Z', v('retomada'))), ['sdr-retomada']);
+  // reativação: Perdido há 30 dias com a etiqueta «reativacao»
+  const perdida = conv({ attrs: { etapa: 'Perdido' }, etiquetas: ['reativacao'], atendente: 'Ana' });
+  assert.equal(rodar(perdida, '2026-11-16T12:00:00Z', { etapa: visto('Perdido', '2026-10-17T12:00:00Z'), ...v('reativacao') }).disparos.some((x) => x.regra === 'rotina-reativacao'), false);
+  // confirmar retorno e boas-vindas
+  const ret = { categoria_consulta: 'Retorno após tratamento', data_consulta: '2026-11-20', hora_consulta: '14:30', situacao_consulta: 'Agendado' };
+  assert.deepEqual(regras(rodar(conv({ attrs: ret, etiquetas: ['confirmar-retorno'] }), '2026-11-18T12:00:00Z')), []);
+  assert.deepEqual(regras(rodar(conv({ attrs: ret }), '2026-11-18T12:00:00Z')), ['rotina-confirmar-retorno']);
+  assert.equal(rodar(conv({ attrs: { etapa: 'Fechou', programa: 'X', proxima_sessao: '2026-11-20' }, etiquetas: ['boas-vindas'] }), T0, { etapa: visto('Fechou', T0), ...v('boas-vindas') }).disparos.some((x) => x.regra === 'rotina-boas-vindas'), false);
+  // cada automático tem a SUA etiqueta e só ela
+  assert.deepEqual(Object.keys(ETIQUETA_MANUAL_DA_ROTINA).sort(), ['rotina-boas-vindas', 'rotina-confirmar-retorno', 'rotina-reativacao', 'rotina-retomada']);
+  assert.deepEqual(Object.keys(AUTOMACAO_DA_REGRA).sort(), Object.keys(ETIQUETA_MANUAL_DA_ROTINA).sort());
+});
+
+test('SDR automática — reativação: NENHUMA mensagem pública (de qualquer lado) nos 7 dias antes do envio, e respeita ia-pausada', () => {
+  const v = { etapa: visto('Perdido', '2026-10-17T12:00:00Z') };
+  const alvo = '2026-11-16T12:00:00Z';
+  const perdido = (o: Parameters<typeof conv>[0] = {}) => conv({ attrs: { etapa: 'Perdido' }, atendente: 'Ana', ...o });
+  assert.deepEqual(regras(rodar(perdido(), alvo, v)), ['rotina-reativacao']);
+  // a equipe (ou o paciente) falou há 5 dias: conversa viva, não é lead frio
+  assert.deepEqual(regras(rodar(perdido({ ultima: pub('2026-11-11T12:00:00Z', true) }), alvo, v)), []);
+  assert.deepEqual(regras(rodar(perdido({ ultima: pub('2026-11-11T12:00:00Z') }), alvo, v)), []);
+  // falou há 8 dias (nossa): passou da janela de silêncio, segue valendo
+  assert.deepEqual(regras(rodar(perdido({ ultima: pub('2026-11-08T12:00:00Z', true) }), alvo, v)), ['rotina-reativacao']);
+  // IA pausada pela equipe
+  assert.deepEqual(regras(rodar(perdido({ etiquetas: ['ia-pausada'] }), alvo, v)), []);
+  // Em espera: mesmas travas
+  const espera = { etapa: 'Sofia qualifica', retomar_em: '2026-10-17' };
+  assert.deepEqual(regras(rodar(conv({ attrs: espera, atendente: 'Ana' }), alvo)), ['rotina-reativacao']);
+  assert.deepEqual(regras(rodar(conv({ attrs: espera, ultima: pub('2026-11-12T12:00:00Z', true) }), alvo)), []);
+  assert.deepEqual(regras(rodar(conv({ attrs: espera, etiquetas: ['ia-pausada'] }), alvo)), []);
+});
+
+test('SDR automática — boas-vindas: data anterior a hoje (sessão, retorno, consulta) não vira «próximo compromisso»; sem data futura, vai para a nota de falta', () => {
+  const v = { etapa: visto('Fechou', T0) }; // hoje = 16/11 (segunda)
+  const base = { etapa: 'Fechou', programa: 'Coluna Forte' };
+  const texto = (extra: Record<string, unknown>) => rodar(conv({ attrs: { ...base, ...extra } }), T0, v).disparos.find((x) => x.regra === 'rotina-boas-vindas')!;
+  // só datas velhas: o campo do compromisso fica faltando (nota), não mostra «10/11»
+  for (const velha of [{ proxima_sessao: '2026-11-10', hora_sessao: '10:00' }, { data_retorno: '2026-11-10' }, { data_consulta: '2026-11-10', hora_consulta: '09:00' }, { proxima_sessao: '2026-11-10', data_consulta: '2026-11-09' }]) {
+    const d = texto(velha);
+    assert.equal(d.texto, null, JSON.stringify(velha));
+    assert.deepEqual(d.faltando, ['data da próxima sessão (proxima_sessao)'], JSON.stringify(velha));
+  }
+  // hoje e depois valem; a futura vence a velha
+  assert.match(texto({ proxima_sessao: '2026-11-16', hora_sessao: '15:00' }).texto!, /compromisso é 16\/11 às 15:00/);
+  assert.match(texto({ proxima_sessao: '2026-11-10', data_retorno: '2026-11-25' }).texto!, /compromisso é 25\/11\./);
+  assert.match(texto({ proxima_sessao: '2026-11-10', data_consulta: '2026-11-20', hora_consulta: '09:30' }).texto!, /compromisso é 20\/11 às 09:30/);
+});
+
+test('SDR automática — confirmar retorno: quando 2 dias antes cai no DOMINGO, vale o sábado às 09:00', () => {
+  const attrs = (dia: string) => ({ categoria_consulta: 'Retorno após tratamento', data_consulta: dia, hora_consulta: '14:30', situacao_consulta: 'Agendado' });
+  // consulta terça 24/11: 2 dias antes = domingo 22/11 → sábado 21/11 09:00 (12:00Z)
+  assert.deepEqual(regras(rodar(conv({ attrs: attrs('2026-11-24') }), '2026-11-21T12:00:00Z')), ['rotina-confirmar-retorno']);
+  assert.deepEqual(regras(rodar(conv({ attrs: attrs('2026-11-24') }), '2026-11-22T12:00:00Z')), []);
+  // consulta quarta 25/11: 2 dias antes = segunda 23/11, como sempre
+  assert.deepEqual(regras(rodar(conv({ attrs: attrs('2026-11-25') }), '2026-11-23T12:00:00Z')), ['rotina-confirmar-retorno']);
+  assert.deepEqual(regras(rodar(conv({ attrs: attrs('2026-11-25') }), '2026-11-21T12:00:00Z')), []);
 });

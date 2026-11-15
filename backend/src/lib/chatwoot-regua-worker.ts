@@ -23,6 +23,8 @@
 import { logger } from './logger.js';
 import { prisma } from './prisma.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
+import { automacaoPorId } from './automacoes.js';
+import { ajustesDaUnidade, bancoDosRobos, SEM_AJUSTES, type AjustesDaUnidade } from './robos-estado.js';
 import { precosDaConsulta } from '../agent/prompt-composer.js';
 import { chaveDoTelefone } from './chatwoot-lida.js';
 import { enviarPelaEvolution } from './alerta-whatsapp.js';
@@ -47,6 +49,7 @@ import {
   type MensagemResumo,
   type ViaDoEnvio,
   ID_REGUA,
+  AUTOMACAO_DA_REGRA,
   notaDoSeco,
   SUFIXO_FALTA,
   type ConversaRegua,
@@ -61,6 +64,8 @@ const PRIMEIRA_VARREDURA_MS = 150_000;
 const MAX_PAGINAS = 200;
 export const MAX_MENSAGENS_POR_CICLO = 60;
 export const MAX_ETIQUETAS_POR_CICLO = 100;
+/** Teto das buscas extras da última mensagem pública por ciclo (as conversas além dele esperam o próximo ciclo). */
+export const MAX_BUSCAS_DA_ULTIMA_PUBLICA_POR_CICLO = 40;
 /** Regras que, no LIGADO, deixam uma nota privada quando falta campo (as outras só avisam no seco). */
 export const REGRAS_COM_NOTA_DE_FALTA_NO_LIGADO: ReadonlySet<string> = new Set(['rotina-boas-vindas']);
 /** Sufixo da regra quando o que se registra é «template ainda não aprovado» (a nota sai uma vez por chave; o envio continua possível). */
@@ -129,6 +134,17 @@ export interface DepsDoCiclo {
   kommo?: CartaoNoKommo;
   /** aviso no WhatsApp da gerente (lead quente parado); sem ela, só a atribuição no Chatwoot */
   avisarGerente?: (texto: string, chave: string) => Promise<unknown>;
+  /**
+   * O que a Gestora configurou na tela «Robôs» para esta unidade: robôs desligados (sem envio, sem nota, sem registro), tempo e modelo.
+   * Sem ela, tudo de fábrica. Se LANÇAR, o ciclo da caixa não roda (nunca mandar achando que está ligado o que foi desligado).
+   */
+  ajustes?: (slug: string) => Promise<AjustesDaUnidade>;
+  /**
+   * O estado de uma automação com chave PRÓPRIA no catálogo, para as regras de `AUTOMACAO_DA_REGRA` (a SDR automática: `chatwoot-sdr-auto`, que nasce
+   * «só no papel»): desligada = a regra não roda; no papel = só a nota «enviaria…»; ligada = manda (a régua também precisa estar ligada).
+   * Sem ela, a regra segue o modo da caixa.
+   */
+  estadoDaRotina?: (slug: string, automacao: string) => Estado;
 }
 
 /**
@@ -316,6 +332,10 @@ export interface ResumoDoCiclo {
   comTemplate: number;
   /** seguradas porque o template ainda não está aprovado na Meta (vira nota) */
   semTemplate: number;
+  /** disparos pulados porque o robô está desligado na tela «Robôs» (sem envio e sem nota) */
+  desligados: number;
+  /** buscas a mais da última mensagem pública (quando a última é uma nota): custo do ciclo, com teto */
+  buscasDaUltimaPublica: number;
 }
 
 /**
@@ -402,8 +422,10 @@ const statusDoErro = (e: unknown): number | undefined => (e as { status?: number
  * Um ciclo de uma caixa. `modo` nunca é «desligado» aqui. Não lança por causa de UMA conversa: a falha dela vira log e conta em `falhas`.
  * Falha ao LISTAR as conversas aborta o ciclo (a memória não é tocada).
  */
-export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: string, modo: 'seco' | 'ligado', unidade: DadosDaUnidade, agora: Date): Promise<ResumoDoCiclo> {
+export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: string, modoDaCaixa: 'seco' | 'ligado', unidade: DadosDaUnidade, agora: Date): Promise<ResumoDoCiclo> {
   const { armazem, chat } = deps;
+  // a configuração da tela «Robôs» (lida ANTES de qualquer escrita: se falhar, o ciclo não roda)
+  const ajustes = deps.ajustes ? await deps.ajustes(slug) : SEM_AJUSTES;
   const { conversas, atividades, truncada } = await lerConversas(chat, caixa, agora);
   const quemFala = quemFalaPorTelefone(conversas.map((c) => ({ c, atividade: atividades.get(c.id) ?? 0 })));
 
@@ -427,7 +449,7 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
     feitosPorConversa.set(f.conversationId, s);
   }
 
-  const resumo: ResumoDoCiclo = { conversas: conversas.length, truncada, disparos: 0, faltando: 0, perdidas: {}, etiquetas: 0, falhas: 0, primeiraVez, noKommo: 0, comTemplate: 0, semTemplate: 0 };
+  const resumo: ResumoDoCiclo = { conversas: conversas.length, truncada, disparos: 0, faltando: 0, perdidas: {}, etiquetas: 0, falhas: 0, primeiraVez, noKommo: 0, comTemplate: 0, semTemplate: 0, desligados: 0, buscasDaUltimaPublica: 0 };
   const mudancas: Array<Mudanca & { conversationId: number }> = [];
   if (primeiraVez) mudancas.push({ conversationId: 0, tipo: 'criar', campo: CAMPO_PARTIDA, valor: '1', desde: agora, inicial: true });
   const pendentes: Array<{ c: ConversaRegua; vistos: ReadonlyMap<string, Visto> }> = [];
@@ -473,13 +495,27 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
       // as outras conversas do mesmo telefone SÓ têm a memória atualizada (acima): nada de mensagem, nota, etiqueta, prioridade nem
       // atribuição — qualquer escrita conta como atividade no Chatwoot e faria a irmã velha virar «a que fala»
       if (!fala) continue;
-      if (precisaUltimaPublica(c)) c.ultima = await chat.ultimaPublica(c.id);
+      // a última mensagem PÚBLICA quando a última é uma nota: uma busca a mais por conversa, com teto por ciclo (as rotinas olham quem está parado)
+      if (precisaUltimaPublica(c) && resumo.buscasDaUltimaPublica < MAX_BUSCAS_DA_ULTIMA_PUBLICA_POR_CICLO) {
+        resumo.buscasDaUltimaPublica++;
+        c.ultima = await chat.ultimaPublica(c.id);
+      }
       // a que fala junta o que TODAS as conversas do mesmo telefone já mandaram (mesma regra|chave): conversa nova não repete a véspera
       const feitosDaConversa = new Set<string>(feitosPorConversa.get(c.id) ?? []);
       for (const id of irmas) for (const f of feitosPorConversa.get(id) ?? []) feitosDaConversa.add(f);
-      const { disparos, perdidas } = decidirRegua(c, { vistos, feitos: feitosDaConversa }, agora, unidade);
+      const { disparos, perdidas } = decidirRegua(c, { vistos, feitos: feitosDaConversa }, agora, unidade, ajustes.regua);
       for (const r of perdidas) resumo.perdidas[r] = (resumo.perdidas[r] ?? 0) + 1;
       for (const d of disparos) {
+        // regra de automação com chave própria (a SDR automática): desligada não roda; no papel só deixa a nota
+        const idRotina = AUTOMACAO_DA_REGRA[d.regra];
+        const estadoDaRegra = idRotina && deps.estadoDaRotina ? deps.estadoDaRotina(slug, idRotina) : modoDaCaixa;
+        if (estadoDaRegra === 'desligado') continue;
+        const modo: 'seco' | 'ligado' = estadoDaRegra === 'seco' ? 'seco' : modoDaCaixa;
+        // robô desligado na tela «Robôs»: nem envia, nem deixa nota, nem registra (se religarem, ainda dentro do prazo, sai)
+        if (ajustes.desligados.has(d.regra)) {
+          resumo.desligados++;
+          continue;
+        }
         if (mensagens >= MAX_MENSAGENS_POR_CICLO) break;
         const faltou = d.texto === null;
         let regra = faltou ? `${d.regra}${SUFIXO_FALTA}` : d.regra;
@@ -609,7 +645,7 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
       logger.warn({ err: String(err), caixa, conversa: c.id }, `${ID_REGUA}: falhou numa conversa — sigo com as outras`);
     }
   }
-  logger.info({ slug, caixa, modo, ...resumo }, `${ID_REGUA}: ciclo`);
+  logger.info({ slug, caixa, modo: modoDaCaixa, ...resumo }, `${ID_REGUA}: ciclo`);
   return resumo;
 }
 
@@ -625,7 +661,14 @@ async function varrer(ctx: ContextoChatwoot): Promise<void> {
   if (rodando) return;
   rodando = true;
   try {
-    const deps: DepsDoCiclo = { armazem: armazemDoBanco(), chat: chatDoChatwoot(ctx), pausa: (ms) => new Promise((r) => setTimeout(r, ms)) };
+    const banco = bancoDosRobos();
+    const deps: DepsDoCiclo = {
+      armazem: armazemDoBanco(),
+      chat: chatDoChatwoot(ctx),
+      pausa: (ms) => new Promise((r) => setTimeout(r, ms)),
+      ajustes: (slug) => ajustesDaUnidade(banco, slug),
+      estadoDaRotina: (slug, id) => estadoDaAutomacao(slug, id, process.env[automacaoPorId(id)?.chave ?? '']),
+    };
     for (const [caixaTxt, slug] of Object.entries(CAIXAS_REGUA)) {
       const modo = estadoDaRegua(slug);
       if (modo === 'desligado') continue;
