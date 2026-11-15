@@ -354,7 +354,7 @@ export async function mudarRobo(banco: BancoDosRobos, p: PedidoDeMudanca): Promi
   if (p.modelo !== undefined) {
     const m = p.modelo as { padrao?: unknown; novo?: unknown };
     if (robo.interna || typeof m?.padrao !== 'string' || typeof m?.novo !== 'string' || !robo.modelos.some((x) => x.modelo === m.padrao)) return { ok: false, status: 400, erro: 'pedido inválido' };
-    if (p.aprovados === null && m.novo !== m.padrao) return { ok: false, status: 409, erro: 'não consegui ler os modelos aprovados no Chatwoot agora — tente de novo em instantes' };
+    if (p.aprovados === null && m.novo !== m.padrao) return { ok: false, status: 409, erro: 'não consegui ler os modelos aprovados no CRM agora — tente de novo em instantes' };
     if (!opcoesDeModelo(m.padrao, p.aprovados, p.alternativas).some((o) => o.modelo === m.novo)) return { ok: false, status: 400, erro: 'não há essa alternativa aprovada para este modelo (ou ela não está aprovada nesta caixa)' };
     const atual = (await banco.linhas(p.slug)).find((l) => l.regra === robo.regra)?.modelos ?? {};
     const novo = { ...atual };

@@ -365,7 +365,7 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
           s.addEventListener('change', function(){ var o = m.opcoes.filter(function(y){ return y.modelo === s.value; })[0]; pv.textContent = ''; pv.appendChild(bolha(o ? o.texto : '')); });
           seletores.push({ m: m, s: s });
         });
-        a.appendChild(el('p', 'ajuda', DADOS.aprovadosLidos ? 'Só aparecem as alternativas que a equipe técnica liberou para este modelo e que já estão aprovadas nesta caixa. Texto novo: peça à Doutor Digital (a Meta aprova em até 48 h).' : 'Não consegui ler os modelos aprovados no Chatwoot agora; a troca de modelo está indisponível.'));
+        a.appendChild(el('p', 'ajuda', DADOS.aprovadosLidos ? 'Só aparecem as alternativas que a equipe técnica liberou para este modelo e que já estão aprovadas nesta caixa. Texto novo: peça à Doutor Digital (a Meta aprova em até 48 h).' : 'Não consegui ler os modelos aprovados no CRM agora; a troca de modelo está indisponível.'));
         b.appendChild(previa);
         editavel = PODE && DADOS.aprovadosLidos && seletores.some(function(z){ return z.m.opcoes.length > 1; });
         // TODOS os seletores que mudaram (um pedido por modelo de fábrica); «voltar ao de fábrica» desfaz todos os trocados
@@ -425,13 +425,14 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
   // um ícone (e uma cor) por grupo: o mesmo quadradinho dos blocos, com o símbolo do que a automação mexe
   var ICONE_GRUPO = { sofia: ['i-chat', '#5b5bd6'], agenda: ['i-cal', '#2781f6'], mensagens: ['i-send', ''], rastreio: ['i-alvo', '#f76b15'], organizacao: ['i-tag', '#12a594'], avisos: ['i-sino', '#e5484d'], nativas: ['i-fluxo', '#8b8d98'] };
   function icAuto(a){ var d = ICONE_GRUPO[a.grupo] || ['i-fluxo', '#8b8d98'], s = ic(d[0]); if (d[1]) s.style.color = d[1]; return s; }
-  var ORDEM_GRUPOS = ['Sofia', 'Agenda', 'Mensagens', 'Rastreio', 'Organização', 'Avisos para a equipe', 'Regras nativas do Chatwoot'];
+  var ROTULO_NATIVAS = 'Regras automáticas do CRM'; // um texto só para o grupo das regras nativas (tem de bater com o do servidor)
+  var ORDEM_GRUPOS = ['Sofia', 'Agenda', 'Mensagens', 'Rastreio', 'Organização', 'Avisos para a equipe', ROTULO_NATIVAS];
   function itensDeAuto(){
     if (!AUTO) return [];
     var itens = AUTO.automacoes.slice();
     var nat = AUTO.nativas || { regras: [], lidas: false, link: null };
-    if (nat.lidas && nat.regras.length) nat.regras.forEach(function(r){ itens.push({ id: 'nativa-' + r.id, grupoRotulo: 'Regras nativas do Chatwoot', nome: r.nome || ('Regra ' + r.id), oQueFaz: r.descricao || 'Regra criada em Configurações > Automação do Chatwoot.', estado: r.ativa ? 'ligado' : 'desligado', editavel: false, estados: [], origem: 'nativa', evento: r.evento, cuidado: null, ultimas: [], semRegistro: true, mudou: null, semVolta: false, nota: null }); });
-    else itens.push({ id: 'nativa-link', grupoRotulo: 'Regras nativas do Chatwoot', nome: 'Regras nativas do Chatwoot', oQueFaz: nat.lidas ? 'Nenhuma regra nativa criada.' : 'Não consegui ler as regras nativas agora. Elas ficam em Configurações > Automação do Chatwoot.', estado: 'sempre', editavel: false, estados: [], origem: 'nativa', cuidado: null, ultimas: [], semRegistro: true, mudou: null, semVolta: false, nota: null });
+    if (nat.lidas && nat.regras.length) nat.regras.forEach(function(r){ itens.push({ id: 'nativa-' + r.id, grupoRotulo: ROTULO_NATIVAS, nome: r.nome || ('Regra ' + r.id), oQueFaz: r.descricao || 'Regra criada em Configurações > Automação.', estado: r.ativa ? 'ligado' : 'desligado', editavel: false, estados: [], origem: 'nativa', evento: r.evento, cuidado: null, ultimas: [], semRegistro: true, mudou: null, semVolta: false, nota: null }); });
+    else itens.push({ id: 'nativa-link', grupoRotulo: ROTULO_NATIVAS, nome: ROTULO_NATIVAS, oQueFaz: nat.lidas ? 'Nenhuma regra automática do CRM criada.' : 'Não consegui ler as regras automáticas do CRM agora. Elas ficam em Configurações > Automação.', estado: 'sempre', editavel: false, estados: [], origem: 'nativa', cuidado: null, ultimas: [], semRegistro: true, mudou: null, semVolta: false, nota: null });
     return itens.filter(function(a){ return !busca || (a.nome + ' ' + a.grupoRotulo).toLowerCase().indexOf(busca) >= 0; });
   }
   function listaAuto(){
@@ -444,7 +445,7 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
       rs.forEach(function(a){
         var it = el('div', 'item' + (a.estado === 'desligado' ? ' desl' : '')); it.tabIndex = 0; it.setAttribute('role', 'button'); it.setAttribute('aria-current', String(autoAtual && autoAtual.id === a.id));
         var m = el('span', 'mini'); m.appendChild(icAuto(a)); it.appendChild(m);
-        var tx = el('div'); tx.appendChild(el('b', null, a.nome)); tx.appendChild(el('small', null, a.origem === 'catalogo' ? (a.vemDoAmbiente ? 'padrão do servidor' : 'escolhida na tela') : a.origem === 'nativa' ? 'nativa do Chatwoot' : 'somente leitura')); it.appendChild(tx);
+        var tx = el('div'); tx.appendChild(el('b', null, a.nome)); tx.appendChild(el('small', null, a.origem === 'catalogo' ? (a.vemDoAmbiente ? 'padrão do servidor' : 'escolhida na tela') : a.origem === 'nativa' ? 'regra automática do CRM' : 'somente leitura')); it.appendChild(tx);
         it.appendChild(el('span', 'est ' + CLS_ESTADO[a.estado], ROT_ESTADO[a.estado]));
         var abre = function(){ autoAtual = a; guardar('robos:auto', a.id); tudoAuto(); };
         it.addEventListener('click', abre); it.addEventListener('keydown', function(ev){ if (ev.key === 'Enter') abre(); });
@@ -475,8 +476,8 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
       card.appendChild(el('div', 'tri-ajuda', 'Ligada: faz de verdade. Só no papel: decide e deixa registro, sem mexer em nada. Desligada: não faz nada.' + (a.exigeSecoAntes ? ' Para ligar, ela precisa ter rodado antes em «Só no papel».' : '') + (PODE ? '' : ' Você pode ver; só quem administra o CRM muda.')));
       card.appendChild(el('div', 'tri-ajuda', a.mudou ? 'Última alteração pela tela: ' + (a.mudou.por || 'alguém') + ', ' + quando(a.mudou.em) + '.' : 'Ninguém mexeu pela tela: vale o padrão do servidor.'));
     } else if (a.origem === 'nativa') {
-      card.appendChild(el('div', 'tri-ajuda', 'Regra do próprio Chatwoot' + (a.evento ? ' (evento: ' + a.evento + ')' : '') + '. Para mudar, use Configurações > Automação do Chatwoot.'));
-      if (AUTO.nativas && AUTO.nativas.link) { var ab = el('button', 'bt sec', 'Abrir a tela nativa do Chatwoot'); ab.type = 'button'; ab.addEventListener('click', function(){ window.open(AUTO.nativas.link, '_blank', 'noopener'); }); card.appendChild(ab); }
+      card.appendChild(el('div', 'tri-ajuda', 'Regra automática do CRM' + (a.evento ? ' (evento: ' + a.evento + ')' : '') + '. Para mudar, use Configurações > Automação.'));
+      if (AUTO.nativas && AUTO.nativas.link) { var ab = el('button', 'bt sec', 'Abrir a tela de Automação'); ab.type = 'button'; ab.addEventListener('click', function(){ window.open(AUTO.nativas.link, '_blank', 'noopener'); }); card.appendChild(ab); }
     } else {
       card.appendChild(el('div', 'tri-ajuda', a.nota || 'Somente leitura.'));
     }

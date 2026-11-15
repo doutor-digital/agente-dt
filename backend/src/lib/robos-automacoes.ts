@@ -31,7 +31,7 @@ export const ROTULO_DO_GRUPO_AUTO: Readonly<Record<GrupoDaAutomacao, string>> = 
   rastreio: 'Rastreio',
   organizacao: 'Organização',
   avisos: 'Avisos para a equipe',
-  nativas: 'Regras nativas do Chatwoot',
+  nativas: 'Regras automáticas do CRM',
 };
 export const ORDEM_DOS_GRUPOS: readonly GrupoDaAutomacao[] = ['sofia', 'agenda', 'mensagens', 'rastreio', 'organizacao', 'avisos', 'nativas'];
 
@@ -74,9 +74,9 @@ export interface FixaSomenteLeitura {
 }
 
 export const FIXAS: readonly FixaSomenteLeitura[] = [
-  { id: 'fixa-sofia-robo', grupo: 'sofia', nome: 'Sofia como robô do Chatwoot (aba Pendentes)', oQueFaz: 'A Sofia responde como o robô (bot) do Chatwoot: a conversa em que ela não respondeu sai de «Pendentes» e a atendente vê quem é o robô.', estado: (e) => String(e.CHATWOOT_SOFIA_COMO_BOT ?? '').trim() === '1', variavel: 'CHATWOOT_SOFIA_COMO_BOT' },
+  { id: 'fixa-sofia-robo', grupo: 'sofia', nome: 'Sofia como robô do CRM (aba Pendentes)', oQueFaz: 'A Sofia responde como o robô (bot) do CRM: a conversa em que ela não respondeu sai de «Pendentes» e a atendente vê quem é o robô.', estado: (e) => String(e.CHATWOOT_SOFIA_COMO_BOT ?? '').trim() === '1', variavel: 'CHATWOOT_SOFIA_COMO_BOT' },
   { id: 'fixa-pausa-celular', grupo: 'sofia', nome: 'A Sofia cala quando a equipe responde (inclusive pelo celular)', oQueFaz: 'Se alguém da equipe respondeu depois da última mensagem do paciente, a Sofia não responde por cima. A resposta pelo celular da unidade recebe a etiqueta «respondeu-pelo-celular».', estado: null },
-  { id: 'fixa-resolver', grupo: 'organizacao', nome: 'Campos obrigatórios ao resolver a conversa', oQueFaz: 'Ao clicar em «Resolver», o Chatwoot pede os campos que faltam no cartão (motivo, etapa…) antes de fechar a conversa.', estado: (e) => e.CHATWOOT_RESOLVER_OBRIGATORIO !== '0', variavel: 'CHATWOOT_RESOLVER_OBRIGATORIO' },
+  { id: 'fixa-resolver', grupo: 'organizacao', nome: 'Campos obrigatórios ao resolver a conversa', oQueFaz: 'Ao clicar em «Resolver», o CRM pede os campos que faltam no cartão (motivo, etapa…) antes de fechar a conversa.', estado: (e) => e.CHATWOOT_RESOLVER_OBRIGATORIO !== '0', variavel: 'CHATWOOT_RESOLVER_OBRIGATORIO' },
   { id: 'fixa-guia-etapa', grupo: 'organizacao', nome: 'Guia «O que fazer agora» na conversa (com a aula em vídeo)', oQueFaz: 'No painel da direita da conversa, os passos da Etapa atual e o botão da aula, que abre o vídeo por cima da conversa sem sair do CRM. As caixinhas dos passos são só visuais: não gravam nada.', estado: (e) => e.CHATWOOT_GUIA_ETAPA !== '0', variavel: 'CHATWOOT_GUIA_ETAPA' },
   { id: 'fixa-atalhos', grupo: 'organizacao', nome: 'Atalhos ⚡ Mensagens prontas e 📋 Modelos do WhatsApp', oQueFaz: 'Botões na caixa de resposta para chamar as mensagens prontas e os modelos do WhatsApp sem sair da conversa.', estado: (e) => e.CHATWOOT_ATALHOS !== '0', variavel: 'CHATWOOT_ATALHOS' },
   { id: 'fixa-perdido-motivo', grupo: 'organizacao', nome: 'Botões «Perdido: motivo» (etiqueta vira etapa)', oQueFaz: 'A macro «Perdido: motivo» põe uma etiqueta e o servidor grava Etapa = Perdido e o motivo no cartão, tirando a etiqueta.', estado: null },
@@ -129,21 +129,41 @@ export interface BancoDasAutomacoes {
 
 const NOTA_FIXA = 'Controlado pela Doutor Digital: não tem chave por unidade nesta tela.';
 
+/**
+ * O histórico de cada automação sai de system_logs, que só tem índice por data: para uma automação que quase não
+ * escreve log, a busca varria a tabela inteira (≈9 s cada, ≈60 s a aba «Automações», 15/11/2026). Agora as buscas
+ * correm juntas, olham só os últimos dias e têm teto: estourou, a automação aparece sem as últimas ações.
+ */
+export const DIAS_DO_HISTORICO = 14;
+export const TETO_DO_HISTORICO_MS = 3000;
+export function comTeto<T>(p: Promise<T>, ms: number, padrao: T): Promise<T> {
+  return new Promise((ok) => {
+    const t = setTimeout(() => ok(padrao), ms);
+    p.then(
+      (v) => { clearTimeout(t); ok(v); },
+      () => { clearTimeout(t); ok(padrao); },
+    );
+  });
+}
+
 export async function automacoesDaUnidade(
   banco: BancoDasAutomacoes,
   slug: string,
-  o: { env?: NodeJS.ProcessEnv; panorama?: ReturnType<typeof panoramaDaUnidade> } = {},
+  o: { env?: NodeJS.ProcessEnv; panorama?: ReturnType<typeof panoramaDaUnidade>; tetoMs?: number } = {},
 ): Promise<AutomacaoNaTela[]> {
   const env = o.env ?? process.env;
   const panorama = o.panorama ?? panoramaDaUnidade(slug, env);
   const ids = Object.keys(DO_CATALOGO);
+  const ultimasDe = new Map(
+    await Promise.all(ids.map(async (id) => [id, await comTeto(banco.ultimas(id, slug, 5), o.tetoMs ?? TETO_DO_HISTORICO_MS, [] as UltimaAcao[])] as const)),
+  );
   const mudancas = new Map((await banco.mudancas(slug, ids)).map((m) => [m.automacao, m]));
   const saida: AutomacaoNaTela[] = [];
   for (const id of ids) {
     const a = automacaoPorId(id);
     const linha = panorama.find((p) => p.id === id);
     if (!a || !linha) continue;
-    const ultimas = await banco.ultimas(id, slug, 5).catch(() => []);
+    const ultimas = ultimasDe.get(id) ?? [];
     const m = mudancas.get(id);
     saida.push({
       id,
@@ -160,7 +180,8 @@ export async function automacoesDaUnidade(
       semVolta: semVolta(a),
       exigeSecoAntes: !!a.exigeSecoAntes,
       risco: a.risco,
-      mudou: m ? { por: m.por, em: m.em.toISOString() } : null,
+      // o dado gravado fica «(Chatwoot)» (a trilha de auditoria tem um formato só); a tela mostra «(CRM)», para as linhas antigas e as novas
+      mudou: m ? { por: m.por === null ? null : m.por.replace(/\(Chatwoot\)$/, '(CRM)'), em: m.em.toISOString() } : null,
       ultimas,
       semRegistro: ultimas.length === 0,
       nota: null,
@@ -240,7 +261,7 @@ export function bancoDasAutomacoes(): BancoDasAutomacoes {
     },
     async ultimas(id, slug, quantas) {
       const l = await prisma.systemLog.findMany({
-        where: { msg: { startsWith: `${id}:` }, context: { path: ['slug'], equals: slug } },
+        where: { createdAt: { gte: new Date(Date.now() - DIAS_DO_HISTORICO * 86_400_000) }, msg: { startsWith: `${id}:` }, context: { path: ['slug'], equals: slug } },
         orderBy: { createdAt: 'desc' },
         take: quantas,
         select: { createdAt: true, level: true, msg: true, context: true },
