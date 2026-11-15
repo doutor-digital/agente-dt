@@ -52,7 +52,7 @@ test('só administrador do Chatwoot muda robô; atendente é recusada e nada é 
   const { banco, gravacoes } = bancoFalso();
   for (const papel of ['agent', null, undefined, '', 'Administrator ']) {
     const r = await E.mudarRobo(banco, { slug: 'doutor-hernia-parauapebas', regra: 'consulta-vespera', papel, por: 'Ana', ligado: false, aprovados: null });
-    assert.deepEqual(r, { ok: false, status: 403, erro: 'só quem administra o Chatwoot configura os robôs — peça para a Suzanne ou para o João' }, String(papel));
+    assert.deepEqual(r, { ok: false, status: 403, erro: 'só quem administra o CRM configura os robôs — peça para a Suzanne ou para o João' }, String(papel));
   }
   assert.equal(gravacoes.length, 0);
   assert.equal(E.podeMexerNosRobos('administrator'), true);

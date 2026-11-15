@@ -216,7 +216,7 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
         var m = el('span', 'mini'); m.appendChild(ic(r.interna ? 'i-stop' : 'i-send')); it.appendChild(m);
         var tx = el('div'); tx.appendChild(el('b', null, r.nome)); tx.appendChild(el('small', null, r.etapa + ' · ' + resumoTempo(r))); it.appendChild(tx);
         var s = el('button', 'sw'); s.type = 'button'; s.setAttribute('role', 'switch'); s.setAttribute('aria-checked', String(r.ligado)); s.disabled = !PODE;
-        s.setAttribute('aria-label', (r.ligado ? 'Desligar ' : 'Ligar ') + r.nome); if (!PODE) s.title = 'Só quem administra o Chatwoot liga e desliga os robôs';
+        s.setAttribute('aria-label', (r.ligado ? 'Desligar ' : 'Ligar ') + r.nome); if (!PODE) s.title = 'Só quem administra o CRM liga e desliga os robôs';
         s.addEventListener('click', function(ev){ ev.stopPropagation(); ligarDesligar(r); });
         it.appendChild(s);
         var abre = function(){ atual = r; aba = 'ed'; guardar('robos:robo', r.regra); tudo(); };
@@ -267,10 +267,10 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
     }
     var post = el('div', 'post'); post.style.left = '920px'; post.style.top = '40px';
     post.appendChild(el('b', null, 'Proteções de todo robô'));
-    post.appendChild(document.createTextNode('Só manda das 8h às 20h, de segunda a sábado. Nunca manda a mesma mensagem duas vezes ao mesmo paciente. Se o paciente tem cartão ativo na Kommo, deixa só uma nota. Só usa modelos aprovados pela Meta. Estas proteções não mudam por robô.'));
+    post.appendChild(document.createTextNode('Só manda das 8h às 20h, de segunda a sábado. Nunca manda a mesma mensagem duas vezes ao mesmo paciente. Se o paciente tem cartão ativo no CRM antigo, deixa só uma nota. Só usa modelos aprovados pela Meta. Estas proteções não mudam por robô.'));
     mundo.appendChild(post);
     if (!r.ligado) mundo.appendChild(el('div', 'alerta', 'Robô desligado: não envia e não deixa nota.'));
-    mundo.appendChild(el('div', 'dica', PODE ? 'Clique num bloco para ver ou configurar.' : 'Você pode ver os blocos; só quem administra o Chatwoot configura.'));
+    mundo.appendChild(el('div', 'dica', PODE ? 'Clique num bloco para ver ou configurar.' : 'Você pode ver os blocos; só quem administra o CRM configura.'));
   }
 
   // ── execuções ──
@@ -367,7 +367,7 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
         if (r.modelosDaTela.some(function(m){ return m.personalizado; })) voltar = function(){ return r.modelosDaTela.filter(function(m){ return m.personalizado; }).map(function(m){ return { modelo: { padrao: m.padrao, novo: m.padrao } }; }); };
       }
     } else {
-      a.appendChild(el('p', null, 'Quando uma condição não bate, ou o paciente tem cartão ativo na Kommo, nada vai para o paciente. Fica uma nota privada na conversa dizendo por quê, por exemplo: «Não enviado: o paciente tem cartão ativo no Kommo».'));
+      a.appendChild(el('p', null, 'Quando uma condição não bate, ou o paciente tem cartão ativo no CRM antigo, nada vai para o paciente. Fica uma nota privada na conversa dizendo por quê, por exemplo: «Não enviado: o paciente tem cartão ativo no Kommo».'));
       b.appendChild(el('p', null, 'Assim a equipe sempre sabe por que um paciente não recebeu.'));
     }
     corpo.appendChild(a); corpo.appendChild(b); nd.appendChild(corpo);
@@ -458,12 +458,12 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
       var tri = el('div', 'tri'); tri.setAttribute('role', 'group'); tri.setAttribute('aria-label', 'Estado');
       a.estados.forEach(function(e){
         var b = el('button', CLS_ESTADO[e], ROT_ESTADO[e]); b.type = 'button'; b.setAttribute('aria-pressed', String(a.estado === e)); b.disabled = !PODE;
-        if (!PODE) b.title = 'Só quem administra o Chatwoot muda as automações';
+        if (!PODE) b.title = 'Só quem administra o CRM muda as automações';
         b.addEventListener('click', function(){ if (a.estado !== e) mudarAuto(a, e); });
         tri.appendChild(b);
       });
       card.appendChild(tri);
-      card.appendChild(el('div', 'tri-ajuda', 'Ligada: faz de verdade. Só no papel: decide e deixa registro, sem mexer em nada. Desligada: não faz nada.' + (a.exigeSecoAntes ? ' Para ligar, ela precisa ter rodado antes em «Só no papel».' : '') + (PODE ? '' : ' Você pode ver; só quem administra o Chatwoot muda.')));
+      card.appendChild(el('div', 'tri-ajuda', 'Ligada: faz de verdade. Só no papel: decide e deixa registro, sem mexer em nada. Desligada: não faz nada.' + (a.exigeSecoAntes ? ' Para ligar, ela precisa ter rodado antes em «Só no papel».' : '') + (PODE ? '' : ' Você pode ver; só quem administra o CRM muda.')));
       card.appendChild(el('div', 'tri-ajuda', a.mudou ? 'Última alteração pela tela: ' + (a.mudou.por || 'alguém') + ', ' + quando(a.mudou.em) + '.' : 'Ninguém mexeu pela tela: vale o padrão do servidor.'));
     } else if (a.origem === 'nativa') {
       card.appendChild(el('div', 'tri-ajuda', 'Regra do próprio Chatwoot' + (a.evento ? ' (evento: ' + a.evento + ')' : '') + '. Para mudar, use Configurações > Automação do Chatwoot.'));
@@ -564,7 +564,7 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
     if (primeira) entrar();
   });
   pedirSessao(); setTimeout(function(){ if (!S) pedirSessao(); }, 1500);
-  setTimeout(function(){ if (!S) aviso('Abra esta tela pelo menu do Chatwoot (Robôs), já logada.', true); }, 6000);
+  setTimeout(function(){ if (!S) aviso('Abra esta tela pelo menu do CRM (Robôs), já logada.', true); }, 6000);
 })();
 </script></body></html>`;
 
