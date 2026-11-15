@@ -219,8 +219,8 @@ export function criarHandlersDoAssistente(d: DepsDosHandlers) {
   const falhaGeral = (res: Response, e: unknown, acao: string, extra: Record<string, unknown>) => {
     // nunca o conteúdo do paciente: só o erro e onde
     logger.warn({ err: String(e).slice(0, 300), acao, ...extra }, 'assistente: falhou');
-    if (statusDoErro(e) === 401) res.status(401).json({ error: 'entre no Chatwoot de novo (sessão expirada)', sessao: 'invalida' });
-    else res.status(502).json({ error: 'não consegui falar com o Chatwoot agora' });
+    if (statusDoErro(e) === 401) res.status(401).json({ error: 'entre no CRM de novo (sessão expirada)', sessao: 'invalida' });
+    else res.status(502).json({ error: 'não consegui falar com o CRM agora' });
   };
 
   return {
@@ -466,7 +466,7 @@ export async function assistentePausaAcaoHandler(req: Request, res: Response): P
   if (!r) return;
   const eu = r.a.id;
   if (acao === 'pausar' && !eu) {
-    res.status(403).json({ error: 'não consegui saber quem é você no Chatwoot: entre de novo' });
+    res.status(403).json({ error: 'não consegui saber quem é você no CRM: entre de novo' });
     return;
   }
   try {
