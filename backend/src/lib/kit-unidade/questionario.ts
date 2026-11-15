@@ -91,6 +91,8 @@ export const Questionario = z
           }),
         )
         .min(1),
+      /** administradores da Doutor Digital que entram na conta nova (e-mails de usuários que JÁ existem na conta de referência); sem isto vale KIT_ADMINS_DD ou o padrão */
+      admins_dd: z.array(email).max(10).optional(),
       /** e-mail do usuário "📱 Celular da unidade" (autor do que a equipe manda pelo aparelho); sem ele a unidade não tem esse usuário */
       usuario_celular_email: email.optional(),
     }),
@@ -160,6 +162,7 @@ export const CAMPOS_SENSIVEIS: Readonly<Record<string, string>> = {
   'whatsapp.waba_id': 'identificador da conta do WhatsApp Business',
   'chatwoot.atendentes[].email': 'e-mail pessoal da atendente (LGPD)',
   'chatwoot.usuario_celular_email': 'e-mail de acesso',
+  'chatwoot.admins_dd': 'e-mails de administradores da Doutor Digital',
   'franquia.id_company': 'identificador da unidade na franquia',
   'meta.ad_account': 'conta de anúncios',
   'meta.business_manager_id': 'Business Manager',
@@ -256,7 +259,7 @@ export function configChatwootDoQuestionario(q: Questionario, extras: { gerenteI
 }
 
 /** `a.b[].c` → valor(es) no objeto, para a máscara. */
-function mascarar(valor: unknown, motivo: string): string {
+export function mascarar(valor: unknown, motivo: string): string {
   const s = String(valor);
   if (/mail/.test(motivo) || s.includes('@')) {
     const [u, d] = s.split('@');
@@ -266,6 +269,11 @@ function mascarar(valor: unknown, motivo: string): string {
   if (s.length <= 4) return '***';
   return `${s.slice(0, 2)}***${s.slice(-2)}`;
 }
+
+/** Mascara SÓ o que é e-mail (o resto da lista — um aviso, um nome de variável — passa como está). Para tudo que o plano/relatório imprime. */
+export const mascararEmails = (lista: readonly string[]): string[] => lista.map((v) => (v.includes('@') ? mascarar(v, 'e-mail') : v));
+/** Mascara um valor sensível que NÃO é e-mail (número, identificador); ausente vira «—». */
+export const mascararCampo = (valor: unknown): string => (valor === undefined || valor === null || valor === '' ? '—' : mascarar(valor, 'campo'));
 
 /** Cópia do questionário com os campos sensíveis mascarados, para imprimir. */
 export function questionarioMascarado(q: Questionario): unknown {
@@ -279,7 +287,8 @@ export function questionarioMascarado(q: Questionario): unknown {
       const chave = lista ? p.slice(0, -2) : p;
       if (i === partes.length - 1) {
         if (lista) return;
-        if (obj[chave] !== undefined) obj[chave] = mascarar(obj[chave], motivo);
+        if (Array.isArray(obj[chave])) obj[chave] = (obj[chave] as unknown[]).map((v) => mascarar(v, motivo));
+        else if (obj[chave] !== undefined) obj[chave] = mascarar(obj[chave], motivo);
         return;
       }
       const filho = obj[chave];

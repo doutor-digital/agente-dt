@@ -57,6 +57,8 @@ export interface PortasExternas {
   urlDoAgente: string;
   /** a URL do Chatwoot (https://atendimento…) — para o link do Funil e das notas */
   urlDoChatwoot: string;
+  /** e-mails dos administradores da Doutor Digital que entram em toda conta nova (KIT_ADMINS_DD; o questionário pode trocar a lista) */
+  adminsDD: string[];
   /** gera a senha do usuário conector (aleatória); injetável para o teste */
   gerarSenha: () => string;
 }

@@ -10,6 +10,7 @@ import {
   configChatwootDoQuestionario,
   lerQuestionario,
   questionarioMascarado,
+  validarQuestionario,
   VARIAVEIS_DE_SEGREDO,
   type Questionario,
 } from './questionario.js';
@@ -105,4 +106,14 @@ test('segredo no lugar do nome da variável é recusado, e campo desconhecido ta
 test('arquivo ilegível vira erro legível, não exceção', () => {
   assert.match(erros(lerQuestionario('a: 1\n\tb: 2\n')), /não consegui ler/);
   assert.match(erros(lerQuestionario('versao: 2\n')), /versao/);
+});
+
+test('admins_dd (e-mails da Doutor Digital) é opcional, valida e-mail e sai MASCARADO no plano', () => {
+  const base = lerYamlOuJson(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../../../ops/kit-unidade/questionario.exemplo.yaml'), 'utf8')) as any;
+  base.chatwoot.admins_dd = ['suzanne.mychelly1@gmail.com'];
+  const ok = validarQuestionario(base);
+  assert.ok(ok.ok);
+  if (ok.ok) assert.deepEqual((questionarioMascarado(ok.q) as any).chatwoot.admins_dd, ['s***@gmail.com']);
+  base.chatwoot.admins_dd = ['nao-e-email'];
+  assert.equal(validarQuestionario(base).ok, false);
 });

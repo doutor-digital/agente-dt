@@ -8,8 +8,11 @@
 #   bash ops/kit-unidade/nova-unidade-joao.sh <slug> --aplicar              # 2) executa etapa por etapa, perguntando antes de cada uma
 #   bash ops/kit-unidade/nova-unidade-joao.sh <slug> --aplicar --ligar-robo # 3) (só depois do teste da Sofia) liga o robô na caixa
 #
+# ONDE RODAR: na VPS, de /root/kit (a VPS não tem cópia do repositório: leve a pasta com ops/kit-unidade/levar-kit-para-vps.sh, na sua máquina). Os caminhos
+# vêm do endereço deste arquivo, então funciona de /root/kit/ops/kit-unidade.
+#
 # NÃO PUBLIQUE DEPLOY ENQUANTO O KIT RODA: os segredos gerados (o token do conector da clínica, que o Chatwoot entrega UMA vez só, e o do robô) ficam em
-# /run/kit-segredos DENTRO do contêiner até o fim; trocar o contêiner (deploy, rolling update, reinício) no meio os perderia. Só saem dali quando o script termina.
+# /run/kit-segredos.<pid> DENTRO do contêiner até o fim; trocar o contêiner (deploy, rolling update, reinício) no meio os perderia. Só saem dali quando o script termina.
 # Se o contêiner foi trocado no meio: o usuário conector da clínica ficou criado sem token guardado — apague-o no Super Admin do Chatwoot e rode de novo.
 #
 # RODE COM `bash arquivo` NO SEU TERMINAL — nunca `ssh … 'bash -s' < este-arquivo`: o `docker exec -i` lê o stdin e engoliria o resto do script.
@@ -34,11 +37,19 @@ for a in "$@"; do
 done
 
 AQUI="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-QUESTIONARIO="$AQUI/unidades/$SLUG.yaml"
-[ -f "$QUESTIONARIO" ] || { echo "ERRO: não achei $QUESTIONARIO (a skill /nova-unidade cria esse arquivo)."; exit 1; }
+# O questionário de clínica REAL tem dado pessoal (e-mail das atendentes, chave Pix, telefone) e NÃO vai para o GitHub: fica em unidades/privado/ (fora do git; chega à VPS
+# por `levar-kit-para-vps.sh --questionario <slug>`). Procura primeiro em unidades/ (a demonstração, versionada) e depois em unidades/privado/.
+PUBLICO="$AQUI/unidades/$SLUG.yaml"
+PRIVADO="$AQUI/unidades/privado/$SLUG.yaml"
+if [ -f "$PUBLICO" ] && [ -f "$PRIVADO" ]; then
+  echo "ERRO: o slug $SLUG existe nos DOIS lugares — não sei qual vale:"; echo "  $PUBLICO"; echo "  $PRIVADO"; echo "Apague um deles (a clínica real fica só em privado/)."; exit 1
+fi
+QUESTIONARIO="$PUBLICO"; [ -f "$QUESTIONARIO" ] || QUESTIONARIO="$PRIVADO"
+[ -f "$QUESTIONARIO" ] || { echo "ERRO: não achei o questionário de $SLUG em $PUBLICO nem em $PRIVADO (a skill /nova-unidade cria o arquivo; clínica real chega por levar-kit-para-vps.sh --questionario $SLUG)."; exit 1; }
 PLATAFORMA="${ARQUIVO_PLATAFORMA:-/root/segredos/chatwoot-platform.token}"
 COFRE_DO_HOST="${KIT_SEGREDOS_DIR:-/root/segredos/kit}"
-COFRE_NO_CONTEINER="/run/kit-segredos"
+# um cofre POR RODADA ($$ = o pid deste script): duas rodadas ao mesmo tempo (duas clínicas) não se apagam nem misturam segredos
+COFRE_NO_CONTEINER="/run/kit-segredos.$$"
 RAIZ_NO_CONTEINER="/repo"
 
 # o contêiner MAIS NOVO do agente (no rolling update `head -1` pegaria o antigo)
@@ -66,23 +77,28 @@ elif [ "$TEM_APLICAR" = "1" ] && [ "$TEM_SIM" = "0" ]; then
   echo "ERRO: sem terminal só dá para aplicar com --sim (sem perguntas), depois de ler o plano."; exit 2
 fi
 
-# questionário e molde da Sofia (não são segredo) para dentro do contêiner
-conteiner mkdir -p "$RAIZ_NO_CONTEINER/ops/kit-unidade/unidades"
-docker cp "$AQUI/molde-sofia" "$AGENTE:$RAIZ_NO_CONTEINER/ops/kit-unidade/" >/dev/null
-docker cp "$QUESTIONARIO" "$AGENTE:$RAIZ_NO_CONTEINER/ops/kit-unidade/unidades/$SLUG.yaml" >/dev/null
-
-# o cofre: ida (o que já foi gerado antes, para a 2ª rodada reaproveitar) e volta (sempre, mesmo com erro)
-mkdir -p "$COFRE_DO_HOST"; chmod 700 "$COFRE_DO_HOST"
-conteiner sh -c "mkdir -p $COFRE_NO_CONTEINER && chmod 700 $COFRE_NO_CONTEINER"
-if [ -n "$(ls -A "$COFRE_DO_HOST" 2>/dev/null)" ]; then docker cp "$COFRE_DO_HOST/." "$AGENTE:$COFRE_NO_CONTEINER/" >/dev/null; fi
+# A LIMPEZA vem ANTES da primeira cópia: se qualquer passo falhar depois de o questionário (e-mails, Pix, telefone) entrar no contêiner do serviço, ele sai de lá, e os
+# segredos gerados voltam ao host. Os `docker cp`/`exec` da limpeza toleram o que ainda não existe.
 voltar() {
+  # o questionário (pode ter dado pessoal) também não fica no contêiner
+  docker exec "$AGENTE" rm -f "$RAIZ_NO_CONTEINER/ops/kit-unidade/unidades/$SLUG.yaml" </dev/null >/dev/null 2>&1 || true
   docker cp "$AGENTE:$COFRE_NO_CONTEINER/." "$COFRE_DO_HOST/" >/dev/null 2>&1 || true
-  chmod 700 "$COFRE_DO_HOST"; chmod 600 "$COFRE_DO_HOST"/* 2>/dev/null || true
+  if [ -d "$COFRE_DO_HOST" ]; then chmod 700 "$COFRE_DO_HOST"; chmod 600 "$COFRE_DO_HOST"/* 2>/dev/null || true; fi
   docker exec "$AGENTE" rm -rf "$COFRE_NO_CONTEINER" </dev/null >/dev/null 2>&1 || true
 }
 trap voltar EXIT
 
+# questionário e molde da Sofia para dentro do contêiner (o questionário de clínica real tem dado pessoal: sai de lá no EXIT)
+conteiner mkdir -p "$RAIZ_NO_CONTEINER/ops/kit-unidade/unidades"
+docker cp "$AQUI/molde-sofia" "$AGENTE:$RAIZ_NO_CONTEINER/ops/kit-unidade/" >/dev/null
+docker cp "$QUESTIONARIO" "$AGENTE:$RAIZ_NO_CONTEINER/ops/kit-unidade/unidades/$SLUG.yaml" >/dev/null
+
+# o cofre: ida (o que já foi gerado antes, para a 2ª rodada reaproveitar); a volta é o `voltar` acima (sempre, mesmo com erro)
+mkdir -p "$COFRE_DO_HOST"; chmod 700 "$COFRE_DO_HOST"
+conteiner sh -c "mkdir -p $COFRE_NO_CONTEINER && chmod 700 $COFRE_NO_CONTEINER"
+if [ -n "$(ls -A "$COFRE_DO_HOST" 2>/dev/null)" ]; then docker cp "$COFRE_DO_HOST/." "$AGENTE:$COFRE_NO_CONTEINER/" >/dev/null; fi
+
 if [ -r "$PLATAFORMA" ]; then CHATWOOT_PLATFORM_TOKEN="$(cat "$PLATAFORMA")"; export CHATWOOT_PLATFORM_TOKEN; fi
 # `-e NOME` (sem valor): o docker pega do ambiente deste processo; o valor não aparece na linha de comando nem no ps
-docker exec ${TTY[@]+"${TTY[@]}"} -e CHATWOOT_PLATFORM_TOKEN -e "KIT_SEGREDOS_DIR=$COFRE_NO_CONTEINER" -w "$RAIZ_NO_CONTEINER/backend" "$AGENTE" \
+docker exec ${TTY[@]+"${TTY[@]}"} -e CHATWOOT_PLATFORM_TOKEN -e KIT_ADMINS_DD -e "KIT_SEGREDOS_DIR=$COFRE_NO_CONTEINER" -w "$RAIZ_NO_CONTEINER/backend" "$AGENTE" \
   node dist/scripts/nova-unidade.js "$RAIZ_NO_CONTEINER/ops/kit-unidade/unidades/$SLUG.yaml" ${ARGS[@]+"${ARGS[@]}"}

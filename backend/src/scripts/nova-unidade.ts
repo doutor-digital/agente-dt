@@ -27,7 +27,7 @@ import { contaHttp, contaHttpSoLeitura, plataformaHttp } from '../lib/kit-unidad
 import { kapsoHttp } from '../lib/kit-unidade/kapso-http.js';
 import type { PortasExternas } from '../lib/kit-unidade/portas.js';
 import { segredosEmArquivo } from '../lib/kit-unidade/segredos.js';
-import { listaDaResposta, urlDoWebhook } from '../lib/kit-unidade/fase2.js';
+import { lerAdminsDD, listaDaResposta, urlDoWebhook } from '../lib/kit-unidade/fase2.js';
 import { sufixoDoQuestionario } from '../lib/kit-unidade/questionario.js';
 import { montarPlano, textoDoPlano, type EstadoAtual } from '../lib/kit-unidade/plano.js';
 import { lerQuestionario, questionarioMascarado, type Questionario } from '../lib/kit-unidade/questionario.js';
@@ -37,6 +37,14 @@ const AQUI = dirname(fileURLToPath(import.meta.url));
 const RAIZ_DO_REPO = resolve(AQUI, '../../..');
 const CAMINHO_SCHEMA = join(RAIZ_DO_REPO, 'ops/kit-unidade/questionario.schema.json');
 const CAMINHO_MOLDE = join(RAIZ_DO_REPO, 'ops/kit-unidade/molde-sofia/bloco-conversa.md');
+
+/** A lista EFETIVA dos administradores da Doutor Digital: KIT_ADMINS_DD (csv) ou o padrão. */
+function adminsDDEfetivos(): string[] {
+  const { lista, avisos } = lerAdminsDD(process.env.KIT_ADMINS_DD);
+  for (const a of avisos) if (!avisadosDosAdmins.has(a)) (avisadosDosAdmins.add(a), console.error(`aviso: ${a}`));
+  return lista;
+}
+const avisadosDosAdmins = new Set<string>();
 
 /** O endereço do agente (de onde o Chatwoot da clínica chama): a origem de MCP_URL_PUBLICA, ou o padrão. */
 function urlDoAgente(): string {
@@ -192,6 +200,7 @@ async function portasExternas(): Promise<PortasExternas> {
     abrirConta: (conta, token) => contaHttp(url, conta, token),
     referencia: ambiente ? contaHttpSoLeitura(ambiente.url, ambiente.conta, ambiente.token) : null,
     contaDoAmbiente: ambiente?.conta ?? null,
+    adminsDD: adminsDDEfetivos(),
     kapso: kapso ? kapsoHttp(kapso) : null,
     segredos: segredosEmArquivo(PASTA_DO_COFRE),
     urlDoAgente: agente,
@@ -223,7 +232,7 @@ async function main(): Promise<void> {
   console.log('');
   const estado: EstadoAtual = flags.has('--offline') ? {} : await lerEstado(q);
   const molde = lerMolde();
-  const plano = montarPlano(q, estado, { molde, sobrescrever: flags.has('--sobrescrever') });
+  const plano = montarPlano(q, estado, { molde, sobrescrever: flags.has('--sobrescrever'), adminsDD: adminsDDEfetivos() });
   console.log(textoDoPlano(plano));
   if (!flags.has('--aplicar')) {
     console.log('\n(SECO: nada foi gravado. Para executar: --aplicar)');

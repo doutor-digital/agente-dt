@@ -3,9 +3,9 @@
  * Demonstração». Prova: cada passo cria o que falta, a segunda rodada não cria NADA, nenhum segredo sai no texto, e o que é Meta/Kapso fica em seco.
  * O Chatwoot de mentira recusa nome repetido (422) como o de verdade: passo que não fosse idempotente derrubaria o teste.
  */
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, readFileSync, statSync, existsSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, statSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +20,7 @@ const { executarPlano, relatorioFinal } = await import('./executar.js');
 type BancoPorta = import('./executar.js').BancoPorta;
 type ConfigGravada = import('./executar.js').ConfigGravada;
 const { montarPlano } = await import('./plano.js');
+const { lerAdminsDD, ADMINS_DD_PADRAO } = await import('./fase2.js');
 const { lerQuestionario } = await import('./questionario.js');
 const { chatwootFalso } = await import('./chatwoot-falso.js');
 const { contaHttp, contaHttpSoLeitura, plataformaHttp } = await import('./chatwoot-http.js');
@@ -87,7 +88,7 @@ function bancoFalso() {
 }
 
 function montar(opcoes: { semPlataforma?: boolean; senha?: string; semKapso?: boolean; falharVinculo?: number } = {}) {
-  const falso = chatwootFalso({ semPlataforma: opcoes.semPlataforma, falharVinculo: opcoes.falharVinculo });
+  const falso = chatwootFalso({ semPlataforma: opcoes.semPlataforma, falharVinculo: opcoes.falharVinculo, existentes: [{ id: 5, name: 'Suzanne', email: 'suzanne.mychelly1@gmail.com' }, { id: 6, name: 'João', email: 'joao@doutordigital.test' }] });
   falso.semear({
     labels: [
       { id: 1, title: 'quente', description: 'lead quente', color: '#ff0000', show_on_sidebar: true },
@@ -101,12 +102,14 @@ function montar(opcoes: { semPlataforma?: boolean; senha?: string; semKapso?: bo
     ],
   });
   const dir = mkdtempSync(join(tmpdir(), 'kit-cofre-'));
+  cofres.push(dir);
   const segredos = segredosEmArquivo(dir, {});
   const externas = {
     plataforma: opcoes.semPlataforma ? null : plataformaHttp(URL_CW, falso.tokenDaPlataforma, falso.fetch),
     abrirConta: (conta: number, token: string) => contaHttp(URL_CW, conta, token, falso.fetch),
     referencia: contaHttpSoLeitura(URL_CW, 1, falso.tokenDeReferencia, falso.fetch),
     contaDoAmbiente: 1,
+    adminsDD: ['suzanne.mychelly1@gmail.com'],
     kapso: opcoes.semKapso ? null : kapsoHttp('kapso-chave-secreta', falso.fetch),
     segredos,
     urlDoAgente: URL_AGENTE,
@@ -116,6 +119,10 @@ function montar(opcoes: { semPlataforma?: boolean; senha?: string; semKapso?: bo
   return { falso, dir, segredos, externas };
 }
 
+/** as pastas de cofre que os testes criaram: apagadas no fim (segredo falso, mas lixo em /tmp não fica) */
+const cofres: string[] = [];
+after(() => { for (const d of cofres) rmSync(d, { recursive: true, force: true }); });
+
 async function rodar(q: typeof DEMO, b: ReturnType<typeof bancoFalso>, externas: ReturnType<typeof montar>['externas'] | null, o: { ligarRobo?: boolean; estado?: import('./plano.js').EstadoAtual } = {}) {
   const plano = montarPlano(q, o.estado ?? {}, { molde: MOLDE });
   const linhas: string[] = [];
@@ -123,6 +130,8 @@ async function rodar(q: typeof DEMO, b: ReturnType<typeof bancoFalso>, externas:
   return { plano, resultados, linhas, relatorio: relatorioFinal(plano, resultados) };
 }
 const sit = (res: Array<{ id: string; situacao: string }>, id: string) => res.find((x) => x.id === id)?.situacao;
+/** quantos usuários CONECTOR a plataforma criou (os usuários que já existiam — Suzanne, João — não contam) */
+const conectores = (falso: ReturnType<typeof chatwootFalso>): number => [...falso.usuarios.values()].filter((u) => u.email.startsWith('conector+')).length;
 const posts = (falso: ReturnType<typeof chatwootFalso>) => falso.chamadas.filter((c) => c.metodo === 'POST');
 
 test('CLÍNICA DEMONSTRAÇÃO: o --aplicar monta tudo na conta própria dela; Meta/Kapso em seco; segredo no cofre e nunca no texto', async () => {
@@ -213,7 +222,7 @@ test('SEGUNDA RODADA: não cria NADA (nenhum POST no Chatwoot, nenhuma escrita n
   assert.equal(posts(falso).length, postsAntes, 'nenhum POST novo (nem na plataforma)');
   assert.equal(JSON.stringify([...falso.contas.values()]), estadoAntes, 'o Chatwoot ficou exatamente igual');
   assert.deepEqual(b.escritas.slice(escritasAntes), [], 'nenhuma escrita nova no banco');
-  assert.equal(falso.usuarios.size, 1 + 0, 'um usuário conector só');
+  assert.equal(conectores(falso), 1, 'um usuário conector só');
   for (const r of resultados.filter((x) => x.situacao === 'falhou')) assert.fail(`${r.id} falhou na 2ª rodada: ${r.notas.join('|')}`);
   assert.equal(falso.contas.size, 2, 'a referência e UMA conta da clínica');
 });
@@ -261,7 +270,7 @@ test('sem cofre (KIT_SEGREDOS_DIR) o token gerado se perderia: o passo RECUSA an
   const { resultados } = await rodar(DEMO, b, semCofre);
   assert.equal(sit(resultados, 'conta'), 'falhou');
   assert.match(resultados.find((r) => r.id === 'conta')!.notas.join(' '), /KIT_SEGREDOS_DIR/);
-  assert.equal(falso.usuarios.size, 0, 'nenhum usuário conector criado sem ter onde guardar o token');
+  assert.equal(conectores(falso), 0, 'nenhum usuário conector criado sem ter onde guardar o token');
 });
 
 test('o cofre não sobrescreve um segredo que já existe com outro valor', async () => {
@@ -309,18 +318,18 @@ test('o vínculo do conector falhou DEPOIS de o usuário nascer: a rodada seguin
   const b = bancoFalso();
   const r1 = await rodar(DEMO, b, externas);
   assert.equal(sit(r1.resultados, 'conta'), 'falhou');
-  assert.equal(falso.usuarios.size, 1, 'o usuário nasceu, o token está no cofre');
+  assert.equal(conectores(falso), 1, 'o usuário nasceu, o token está no cofre');
   const r2 = await rodar(DEMO, b, externas);
   assert.equal(sit(r2.resultados, 'conta'), 'feito', JSON.stringify(r2.resultados.find((r) => r.id === 'conta')));
   assert.match(r2.resultados.find((r) => r.id === 'conta')!.notas.join(' '), /vínculo do conector .* refeito/);
-  assert.equal(falso.usuarios.size, 1, 'não criou um segundo usuário');
+  assert.equal(conectores(falso), 1, 'não criou um segundo usuário');
   assert.equal(sit(r2.resultados, 'registrar-caixa'), 'feito');
 });
 
 /** O que o `lerEstado` do script veria na conta da clínica: lido do Chatwoot de mentira + do banco de mentira. */
 function estadoLido(falso: ReturnType<typeof montar>['falso'], b: ReturnType<typeof bancoFalso>) {
   const c = falso.contas.get(b.e.config!.contaId!)!;
-  const conector = [...falso.usuarios.values()][0]!;
+  const conector = [...falso.usuarios.values()].find((u) => u.email.startsWith('conector+'))!;
   return {
     banco: {
       unidade: { id: 'u1', campos: b.e.unidade!.campos },
@@ -458,4 +467,97 @@ test('o cofre fecha a pasta em 700 mesmo quando ela já existia aberta (755)', a
   chmodSync(dir, 0o755);
   await c.guardar('CHATWOOT_API_TOKEN_Z', 'v');
   assert.equal(statSync(dir).mode & 0o777, 0o700);
+});
+
+test('ADMINISTRADORES DA DOUTOR DIGITAL: a Suzanne entra na conta nova como administradora (id pela conta de referência, só leitura) — e NENHUMA permissão é criada sobre usuário existente', async () => {
+  const { falso, externas } = montar();
+  const b = bancoFalso();
+  const { resultados } = await rodar(DEMO, b, externas);
+  const conta = falso.contas.get(b.e.config!.contaId!)!;
+  const suzanne = conta.agents.find((a) => a.email === 'suzanne.mychelly1@gmail.com');
+  assert.ok(suzanne, 'a Suzanne é agente da conta nova');
+  assert.equal(suzanne!.role, 'administrator');
+  assert.equal(suzanne!.id, 5, 'o id veio da conta de referência');
+  assert.ok(!conta.agents.some((a) => a.email === 'joao@doutordigital.test'), 'só quem está na lista entra');
+  assert.match(resultados.find((r) => r.id === 'conta')!.notas.join(' '), /s\*\*\*@gmail\.com .*administrador\(a\) da conta/);
+  // a plataforma só foi usada para: criar a conta, criar o conector, e account_users (conector + Suzanne). Nunca permissão sobre usuário, login ou token de usuário existente.
+  const plataforma = falso.chamadas.filter((c) => c.conta === 'plataforma').map((c) => `${c.metodo} ${c.caminho.replace(/\/\d+/g, '/N')}`);
+  assert.deepEqual([...new Set(plataforma)].sort(), ['POST /platform/api/v1/accounts', 'POST /platform/api/v1/accounts/N/account_users', 'POST /platform/api/v1/users']);
+  assert.ok(!falso.chamadas.some((c) => /permissib|\/login|users\/5|users\/6/.test(c.caminho)));
+  // a referência só foi LIDA
+  assert.ok(falso.chamadas.filter((c) => c.conta === 1).every((c) => c.metodo === 'GET'));
+});
+
+test('administradores da DD: a 2ª rodada dá zero POST (a Suzanne já é agente da conta); e-mail que não está na conta 1 só gera AVISO (o passo não falha, ninguém entra)', async () => {
+  const { falso, externas } = montar();
+  const b = bancoFalso();
+  const q2 = { ...DEMO, chatwoot: { ...DEMO.chatwoot, admins_dd: ['suzanne.mychelly1@gmail.com', 'fantasma@exemplo.com'] } } as typeof DEMO;
+  const r1 = await rodar(q2, b, externas);
+  assert.equal(sit(r1.resultados, 'conta'), 'feito');
+  const notas = r1.resultados.find((r) => r.id === 'conta')!.notas.join(' | ');
+  assert.match(notas, /AVISO: f\*\*\*@exemplo\.com não está na conta de referência/);
+  const conta = falso.contas.get(b.e.config!.contaId!)!;
+  assert.ok(!conta.agents.some((a) => a.email === 'fantasma@exemplo.com'));
+  const antes = posts(falso).length;
+  const r2 = await rodar(q2, b, externas);
+  assert.equal(sit(r2.resultados, 'conta'), 'feito');
+  assert.equal(posts(falso).length, antes, 'zero POST na 2ª rodada, nem para o e-mail ausente');
+  assert.match(r2.resultados.find((r) => r.id === 'conta')!.notas.join(' '), /AVISO: f\*\*\*@exemplo/);
+});
+
+test('administradores da DD: o questionário troca a lista; lista vazia não faz nada; sem a conta de referência só avisa', async () => {
+  const { falso, externas } = montar();
+  const b = bancoFalso();
+  const soJoao = { ...DEMO, chatwoot: { ...DEMO.chatwoot, admins_dd: ['joao@doutordigital.test'] } } as typeof DEMO;
+  await rodar(soJoao, b, externas);
+  const conta = falso.contas.get(b.e.config!.contaId!)!;
+  assert.ok(conta.agents.some((a) => a.email === 'joao@doutordigital.test'));
+  assert.ok(!conta.agents.some((a) => a.email === 'suzanne.mychelly1@gmail.com'), 'a lista do questionário VENCE o padrão');
+  const sem = montar();
+  const b2 = bancoFalso();
+  const r = await rodar(DEMO, b2, ({ ...sem.externas, referencia: null } as unknown as typeof sem.externas));
+  assert.equal(sit(r.resultados, 'conta'), 'feito');
+  assert.match(r.resultados.find((x) => x.id === 'conta')!.notas.join(' '), /AVISO: sem a conta de referência/);
+  const vazia = montar();
+  const b3 = bancoFalso();
+  const r3 = await rodar(DEMO, b3, { ...vazia.externas, adminsDD: [] });
+  assert.match(r3.resultados.find((x) => x.id === 'conta')!.notas.join(' '), /nenhum na lista/);
+});
+
+test('e-mail inexistente na conta 1 NÃO tira o passo «conta» do «nada» a cada rodada: com o plano dizendo «nada» não pergunta nem escreve (só avisa)', async () => {
+  const { falso, externas } = montar();
+  const b = bancoFalso();
+  const q2 = { ...DEMO, chatwoot: { ...DEMO.chatwoot, admins_dd: ['suzanne.mychelly1@gmail.com', 'fantasma@exemplo.com'] } } as typeof DEMO;
+  await rodar(q2, b, externas);
+  const plano = montarPlano(q2, estadoLido(falso, b), { molde: MOLDE });
+  assert.equal(plano.passos.find((p) => p.id === 'conta')!.acao, 'nada');
+  assert.match(plano.passos.find((p) => p.id === 'conta')!.itens.join(' '), /vai pôr os que ainda não estão na conta/, 'o plano seco avisa o que vai fazer pelos administradores');
+  const perguntou: string[] = [];
+  const antes = posts(falso).length;
+  const resultados = await executarPlano(plano, q2, { banco: b.banco, molde: MOLDE, externas, dizer: () => undefined, confirmar: async (p) => (perguntou.push(p.id), true) });
+  assert.ok(!perguntou.includes('conta'), 'não perguntou por «conta»');
+  assert.equal(sit(resultados, 'conta'), 'nada-a-fazer');
+  assert.match(resultados.find((r) => r.id === 'conta')!.notas.join(' '), /AVISO: f\*\*\*@exemplo/);
+  assert.equal(posts(falso).length, antes);
+  // e quando falta um administrador que EXISTE na conta 1, aí sim o passo pergunta e põe
+  const conta = falso.contas.get(b.e.config!.contaId!)!;
+  conta.agents = conta.agents.filter((a) => a.email !== 'suzanne.mychelly1@gmail.com');
+  const perguntou2: string[] = [];
+  await executarPlano(montarPlano(q2, estadoLido(falso, b), { molde: MOLDE }), q2, { banco: b.banco, molde: MOLDE, externas, dizer: () => undefined, confirmar: async (p) => (perguntou2.push(p.id), true) });
+  assert.ok(perguntou2.includes('conta'));
+  assert.ok(conta.agents.some((a) => a.email === 'suzanne.mychelly1@gmail.com'));
+});
+
+test('KIT_ADMINS_DD: vazia/ausente = padrão sem aviso; só "," ou lixo = padrão COM aviso (nunca lista vazia em silêncio); e-mails válidos entram, o resto é avisado', () => {
+  assert.deepEqual(lerAdminsDD(undefined), { lista: ADMINS_DD_PADRAO, avisos: [] });
+  assert.deepEqual(lerAdminsDD('  '), { lista: ADMINS_DD_PADRAO, avisos: [] });
+  for (const lixo of [',', ' , , ', 'nao-e-email', 'a@b']) {
+    const r = lerAdminsDD(lixo);
+    assert.deepEqual(r.lista, ADMINS_DD_PADRAO, `"${lixo}" cai no padrão`);
+    assert.ok(r.avisos.some((a) => /nenhum e-mail válido/.test(a)), `"${lixo}" avisa: ${JSON.stringify(r.avisos)}`);
+  }
+  const misto = lerAdminsDD('a@dd.test, lixo ,b@dd.test,');
+  assert.deepEqual(misto.lista, ['a@dd.test', 'b@dd.test']);
+  assert.equal(misto.avisos.length, 1);
+  assert.ok(!misto.avisos.join(' ').includes('a@dd.test'), 'o aviso não repete e-mail');
 });
