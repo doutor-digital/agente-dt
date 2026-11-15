@@ -28,7 +28,7 @@ const slugDe = (v: unknown): string => (typeof v === 'string' ? v.trim().slice(0
 export function paginaAgenteHandler(_req: Request, res: Response): void {
   const conta = contaChatwootDoAmbiente();
   if (!conta) {
-    res.status(404).type('html').send('<!doctype html><meta charset="utf-8"><p style="font-family:sans-serif;padding:24px">Chatwoot não configurado.</p>');
+    res.status(404).type('html').send('<!doctype html><meta charset="utf-8"><p style="font-family:sans-serif;padding:24px">CRM não configurado.</p>');
     return;
   }
   res.type('html').set('Cache-Control', 'no-store').send(paginaDoAgente(new URL(conta.url).origin));
