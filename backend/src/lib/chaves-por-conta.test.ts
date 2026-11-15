@@ -6,11 +6,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { readdirSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 process.env.KOMMO_SUBDOMAIN ??= 'teste';
 process.env.KOMMO_ACCESS_TOKEN ??= 'token-de-teste-123';
 process.env.OPENAI_API_KEY ??= 'sk-teste-1234567890';
+process.env.DATABASE_URL ??= 'postgresql://x:y@127.0.0.1:1/z';
+process.env.SESSION_JWT_SECRET ??= 'segredo-de-teste-com-mais-de-32-caracteres-ok';
 
 const { leadDaConversaChatwoot, conversaDoLeadChatwoot } = await import('./chatwoot-lead.js');
 const { acompanharRemarcacao } = await import('./sinal-pix.js');
@@ -96,4 +100,66 @@ test('remarcação do sinal: o pedido de uma clínica lê e mexe SÓ nas linhas 
   assert.equal(n, 1);
   assert.deepEqual(mexidas, ['b1'], 'a linha de Parauapebas com a MESMA chave não foi tocada');
   assert.equal(consultas[0]!.clinica, 'clinica-demonstracao');
+});
+
+// ── @id / @@id: a chave PRIMÁRIA também não pode ser só de lead/conversa ──────────────────────────────────────────
+
+test('nenhuma chave PRIMÁRIA é só de lead/conversa (@id / @@id)', () => {
+  const soltas: string[] = [];
+  for (const { nome, corpo } of MODELOS) {
+    for (const m of corpo.matchAll(/^\s+(\w+)\s+\S+.*@id\b/gm)) if (GUARDA.test(m[1]!) && !(nome in REVISADAS_SEM_ESCOPO)) soltas.push(`${nome}.${m[1]} @id`);
+    for (const m of corpo.matchAll(/@@id\(\[([^\]]*)\]/g)) {
+      const cols = m[1]!.split(',').map((c) => c.trim());
+      if (cols.some((c) => GUARDA.test(c)) && !cols.some((c) => ESCOPO.has(c))) soltas.push(`${nome} @@id([${cols.join(', ')}])`);
+    }
+  }
+  // `sofia_mensagem.message_id` é a chave primária: id de MENSAGEM do Chatwoot, que é global da instalação (não por conta)
+  assert.deepEqual(soltas.filter((x) => !/^SofiaMensagem\./.test(x)), []);
+});
+
+// ── o código: nenhuma consulta por chave de lead/conversa sem unidade ──────────────────────────────────────────
+
+function arquivosDeCodigo(dir: string): string[] {
+  const l: string[] = [];
+  for (const n of readdirSync(dir)) {
+    const p = join(dir, n);
+    if (statSync(p).isDirectory()) l.push(...arquivosDeCodigo(p));
+    else if (n.endsWith('.ts') && !n.endsWith('.test.ts')) l.push(p);
+  }
+  return l;
+}
+function corpoBalanceado(t: string, i: number): string {
+  let d = 0;
+  for (let j = i; j < t.length; j++) {
+    if (t[j] === '{') d++;
+    else if (t[j] === '}' && --d === 0) return t.slice(i, j + 1);
+  }
+  return '';
+}
+/**
+ * Consultas que o varredor encontrou com chave de conversa/lead no `where` e sem unidade — todas revisadas: apontam para o cuid de `Conversation`
+ * (que já é da unidade) ou são do disparo do Kommo (sem relação com o Chatwoot).
+ */
+const CONSULTAS_REVISADAS = [/conversation-judge\.service\.ts/, /webhook\.controller\.ts/, /prompts\.controller\.ts/, /agent\/follow-up\.ts/, /telefone-de-familiar\.ts/, /sem-resposta-worker\.ts/, /prometeu-sem-marcar-worker\.ts/, /disparo-worker\.ts/];
+
+test('o código não consulta tabela por chave de lead/conversa SEM unidade (varredura do `where` de cada prisma.<tabela>.<consulta>)', () => {
+  const raiz = fileURLToPath(new URL('..', import.meta.url));
+  const chave = /\b(leadId|kommoLeadId|conversa|conversaId|conversationId)\b/;
+  const escopo = /\b(unitId|unitSlug|clinica|caixa|conta|unit|id)\b\s*[:,}]|unitId_|\.\.\./;
+  const chamada = /prisma\.(\w+)\.(findMany|findFirst|findUnique|findFirstOrThrow|findUniqueOrThrow|update|updateMany|delete|deleteMany|count|upsert|groupBy)\(/g;
+  const soltas: string[] = [];
+  let achadas = 0;
+  for (const arq of arquivosDeCodigo(raiz)) {
+    const t = readFileSync(arq, 'utf8');
+    for (const m of t.matchAll(chamada)) {
+      const w = t.indexOf('where:', m.index! + m[0].length);
+      if (w < 0 || w > m.index! + m[0].length + 600) continue;
+      const corpo = corpoBalanceado(t, t.indexOf('{', w));
+      if (!chave.test(corpo)) continue;
+      achadas++;
+      if (!escopo.test(corpo) && !CONSULTAS_REVISADAS.some((r) => r.test(arq))) soltas.push(`${arq.slice(raiz.length)}:${t.slice(0, m.index).split('\n').length} ${m[1]}.${m[2]} ${corpo.slice(0, 80)}`);
+    }
+  }
+  assert.ok(achadas > 40, `a varredura achou só ${achadas} consultas: o regex quebrou?`);
+  assert.deepEqual(soltas, [], 'consulta por chave de lead/conversa sem unidade/clínica/caixa/conta: a conversa 5 de uma clínica colidiria com a da outra');
 });
