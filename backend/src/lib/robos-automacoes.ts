@@ -201,7 +201,7 @@ export async function mudarAutomacao(
   banco: BancoDasAutomacoes,
   p: { slug: string; id: unknown; estado: unknown; confirmar?: unknown; papel: string | null | undefined; por: string; estadoAtual: (id: string) => Estado | null },
 ): Promise<ResultadoDaAutomacao> {
-  if (!podeMexerNosRobos(p.papel)) return { ok: false, status: 403, erro: 'só quem administra o Chatwoot muda as automações — peça para a Suzanne ou para o João' };
+  if (!podeMexerNosRobos(p.papel)) return { ok: false, status: 403, erro: 'só quem administra o CRM muda as automações — peça para a Suzanne ou para o João' };
   const id = typeof p.id === 'string' ? p.id : '';
   const a = id in DO_CATALOGO ? automacaoPorId(id) : undefined;
   if (!a) return { ok: false, status: 404, erro: 'automação não encontrada' };

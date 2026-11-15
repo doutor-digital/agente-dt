@@ -319,7 +319,7 @@ export interface PedidoDeMudanca {
 export type ResultadoDaMudanca = { ok: true; regra: string } | { ok: false; status: 400 | 403 | 404 | 409; erro: string };
 
 export async function mudarRobo(banco: BancoDosRobos, p: PedidoDeMudanca): Promise<ResultadoDaMudanca> {
-  if (!podeMexerNosRobos(p.papel)) return { ok: false, status: 403, erro: 'só quem administra o Chatwoot configura os robôs — peça para a Suzanne ou para o João' };
+  if (!podeMexerNosRobos(p.papel)) return { ok: false, status: 403, erro: 'só quem administra o CRM configura os robôs — peça para a Suzanne ou para o João' };
   const robo = typeof p.regra === 'string' ? regraDoCatalogo(p.regra) : undefined;
   if (!robo) return { ok: false, status: 404, erro: 'robô não encontrado' };
   const mudanca: MudancaDoRobo = {};
