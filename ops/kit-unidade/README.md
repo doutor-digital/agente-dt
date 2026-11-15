@@ -4,8 +4,21 @@ Monta uma clínica nova no CRM: conta própria no Chatwoot, caixa, time, atenden
 da conta, aba «Funil», modelos da Meta (via Kapso) e a Sofia da unidade. Inventário do que é específico de Parauapebas: `INVENTARIO.md`.
 Entrevista: skill `/nova-unidade` (`.claude/skills/nova-unidade/SKILL.md`). Demonstração: `unidades/clinica-demonstracao.yaml`.
 
-## Roteiro do João (no host da VPS, como root, com `bash arquivo` no seu terminal)
-1. Uma vez: `bash ops/kit-unidade/criar-platform-app-joao.sh --so-conferir`, depois sem a flag (cria o Platform App; o token vai para um arquivo 600).
+## Como levar o kit para a VPS (a VPS NÃO tem cópia do repositório)
+Em `/opt/doutordigital/agente-dt` da VPS só existe o `docker-compose.yml`: não dá para rodar `bash ops/kit-unidade/...` lá sem antes levar a pasta. Na SUA máquina,
+dentro do repositório:
+
+    bash ops/kit-unidade/levar-kit-para-vps.sh --so-conferir   # lista o que seria enviado
+    bash ops/kit-unidade/levar-kit-para-vps.sh                 # envia para /root/kit na VPS
+
+(é o mesmo que `git archive origin/main ops/kit-unidade | ssh -i ~/.ssh/doutordigital_vps root@89.116.214.130 'mkdir -p /root/kit && tar -x -C /root/kit'`).
+Repita sempre que o kit mudar. Os scripts acham as pastas pelo próprio endereço, então funcionam de `/root/kit/ops/kit-unidade`.
+
+## Roteiro do João (NA VPS, como root, de `/root/kit`, com `bash arquivo` no seu terminal)
+0. `cd /root/kit`
+1. Uma vez: `bash ops/kit-unidade/criar-platform-app-joao.sh --so-conferir`, depois sem a flag. Cria o Platform App (token em arquivo 600) **e dá a ele acesso aos usuários que
+   já existem** (Suzanne, João, Conector Claude: preencha `EMAILS_DOS_ADMINISTRADORES` no topo do script, ou use `--emails a@x,b@x`) — sem isso o kit não consegue
+   pôr a Doutor Digital como administradora da conta nova.
 2. `bash ops/kit-unidade/nova-unidade-joao.sh <slug> --so-conferir`, depois sem a flag (SECO: mostra o plano) e com `--aplicar` (pergunta antes de cada etapa).
 3. `bash ops/kit-unidade/regra-traefik-joao.sh <subdominio> --so-conferir`, depois sem a flag.
 4. Copiar os tokens do cofre (`/root/segredos/kit`) para o env do serviço `ddagent_agent` e reiniciar (o servidor só conhece a conta nova depois).

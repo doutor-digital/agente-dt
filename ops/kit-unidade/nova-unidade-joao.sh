@@ -8,6 +8,9 @@
 #   bash ops/kit-unidade/nova-unidade-joao.sh <slug> --aplicar              # 2) executa etapa por etapa, perguntando antes de cada uma
 #   bash ops/kit-unidade/nova-unidade-joao.sh <slug> --aplicar --ligar-robo # 3) (só depois do teste da Sofia) liga o robô na caixa
 #
+# ONDE RODAR: na VPS, de /root/kit (a VPS não tem cópia do repositório: leve a pasta com ops/kit-unidade/levar-kit-para-vps.sh, na sua máquina). Os caminhos
+# vêm do endereço deste arquivo, então funciona de /root/kit/ops/kit-unidade.
+#
 # NÃO PUBLIQUE DEPLOY ENQUANTO O KIT RODA: os segredos gerados (o token do conector da clínica, que o Chatwoot entrega UMA vez só, e o do robô) ficam em
 # /run/kit-segredos DENTRO do contêiner até o fim; trocar o contêiner (deploy, rolling update, reinício) no meio os perderia. Só saem dali quando o script termina.
 # Se o contêiner foi trocado no meio: o usuário conector da clínica ficou criado sem token guardado — apague-o no Super Admin do Chatwoot e rode de novo.
