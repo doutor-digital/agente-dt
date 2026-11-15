@@ -1025,7 +1025,8 @@ test('SDR automática — boas-vindas: entrou em Fechou AGORA → modelo do prog
   const r = rodar(conv({ attrs }), T0, v);
   assert.deepEqual(regras(r), ['pendencia-fechou', 'rotina-boas-vindas']);
   const d = r.disparos.find((x) => x.regra === 'rotina-boas-vindas')!;
-  assert.equal(d.modelo, 'parau_sdr_boas_vindas_programa');
+  assert.equal(d.modelo, 'parau_rotina_boas_vindas', 'o modelo NOVO, sem «anexo» (o manual segue com o antigo)');
+  assert.doesNotMatch(d.texto!, /anexo/i);
   assert.equal(d.chave, 'boasvindas@2026-11-16T12:00:00.000Z');
   assert.match(d.texto!, /^Oi, Maria! Sua vaga no programa Coluna Forte está confirmada\./);
   assert.match(d.texto!, /Seu próximo compromisso é 20\/11 às 10:00\./);
@@ -1121,6 +1122,46 @@ test('SDR automática — boas-vindas: data anterior a hoje (sessão, retorno, c
   assert.match(texto({ proxima_sessao: '2026-11-16', hora_sessao: '15:00' }).texto!, /compromisso é 16\/11 às 15:00/);
   assert.match(texto({ proxima_sessao: '2026-11-10', data_retorno: '2026-11-25' }).texto!, /compromisso é 25\/11\./);
   assert.match(texto({ proxima_sessao: '2026-11-10', data_consulta: '2026-11-20', hora_consulta: '09:30' }).texto!, /compromisso é 20\/11 às 09:30/);
+});
+
+test('SDR automática — boas-vindas: {{3}} é a data FUTURA MAIS PRÓXIMA entre sessão, retorno e consulta (não a primeira na ordem dos campos)', () => {
+  const v = { etapa: visto('Fechou', T0) }; // hoje = 16/11
+  const base = { etapa: 'Fechou', programa: 'Coluna Forte' };
+  const d = (extra: Record<string, unknown>) => rodar(conv({ attrs: { ...base, ...extra } }), T0, v).disparos.find((x) => x.regra === 'rotina-boas-vindas')!;
+  assert.match(d({ proxima_sessao: '2026-11-25', hora_sessao: '10:00', data_retorno: '2026-11-20', data_consulta: '2026-11-30', hora_consulta: '08:00' }).texto!, /compromisso é 20\/11\./, 'retorno é o mais próximo');
+  assert.match(d({ proxima_sessao: '2026-11-25', hora_sessao: '10:00', data_consulta: '2026-11-18', hora_consulta: '08:30' }).texto!, /compromisso é 18\/11 às 08:30/, 'consulta é a mais próxima');
+  assert.match(d({ proxima_sessao: '2026-11-18', hora_sessao: '10:00', data_retorno: '2026-11-20' }).texto!, /compromisso é 18\/11 às 10:00/, 'sessão é a mais próxima');
+  // no mesmo dia vale a hora (sem hora conta como meio-dia)
+  assert.match(d({ proxima_sessao: '2026-11-18', hora_sessao: '15:00', data_consulta: '2026-11-18', hora_consulta: '09:00' }).texto!, /compromisso é 18\/11 às 09:00/);
+  // as velhas não entram nem na comparação
+  assert.match(d({ proxima_sessao: '2026-11-10', hora_sessao: '10:00', data_retorno: '2026-11-27', data_consulta: '2026-11-12' }).texto!, /compromisso é 27\/11\./);
+});
+
+test('SDR automática — a retomada e a reativação NÃO rodam sobre uma nota que o worker não buscou (última mensagem ainda privada); com a pública buscada, rodam', () => {
+  const nota = { saida: true, privada: true, autorId: 1, autorTipo: 'user', criadaEm: Z('2026-11-01T12:00:00Z') };
+  const publica = { ...nota, privada: false, criadaEm: Z('2026-11-14T12:00:00Z') };
+  const agora = '2026-11-16T12:00:00Z'; // 2 dias depois da última pública (sáb 14/11): a retomada vence nesta segunda
+  const retomada = (ultima: typeof nota) => regras(rodar(conv({ attrs: { etapa: 'Novo lead' }, ultima: ultima as never }), agora)).includes('rotina-retomada');
+  assert.equal(retomada(publica), true);
+  assert.equal(retomada(nota), false, 'nota não buscada: não sabe se alguém falou depois');
+  const v = { etapa: visto('Perdido', '2026-10-17T12:00:00Z') };
+  const reativacao = (ultima: typeof nota | null) => regras(rodar(conv({ attrs: { etapa: 'Perdido' }, ultima: ultima as never }), '2026-11-16T12:00:00Z', v)).includes('rotina-reativacao'); // 30 dias depois de 17/10, segunda 09:00
+  assert.equal(reativacao({ ...publica, criadaEm: Z('2026-10-18T12:00:00Z') }), true);
+  assert.equal(reativacao({ ...nota, criadaEm: Z('2026-10-18T12:00:00Z') }), false);
+});
+
+test('SDR por etiqueta (manual): se o par AUTOMÁTICO já mandou de verdade nesta conversa, o manual não repete; o automático só no papel (seco) não cala o manual', () => {
+  const attrs = { etapa: 'Fechou', programa: 'Coluna Forte', proxima_sessao: '2026-11-20', hora_sessao: '10:00', fechou_tratamento: 'sim' };
+  const v = { etapa: visto('Fechou', T0), 'etiqueta:boas-vindas': visto('sim', T0) };
+  const c = () => conv({ attrs, etiquetas: ['boas-vindas'] });
+  const manual = (memoria: { feitos: string[]; enviados?: string[] }) => decidirRegua(c(), { vistos: vistos(v), feitos: new Set(memoria.feitos), enviados: memoria.enviados ? new Set(memoria.enviados) : undefined }, Z(T0), U).disparos.some((x) => x.regra === 'sdr-boas-vindas');
+  assert.equal(manual({ feitos: [], enviados: [] }), true);
+  // o automático saiu de verdade (qualquer chave): o manual não repete
+  assert.equal(manual({ feitos: ['rotina-boas-vindas|boasvindas@2026-11-01T12:00:00.000Z'], enviados: ['rotina-boas-vindas|boasvindas@2026-11-01T12:00:00.000Z'] }), false);
+  // o automático só deixou a nota do seco: o manual segue valendo
+  assert.equal(manual({ feitos: ['rotina-boas-vindas|boasvindas@2026-11-01T12:00:00.000Z'], enviados: [] }), true);
+  // e a nota de «faltou campo» do automático também não conta como enviado
+  assert.equal(manual({ feitos: [`rotina-boas-vindas${SUFIXO_FALTA}|boasvindas@2026-11-01T12:00:00.000Z`], enviados: [`rotina-boas-vindas${SUFIXO_FALTA}|boasvindas@2026-11-01T12:00:00.000Z`] }), true);
 });
 
 test('SDR automática — confirmar retorno: quando 2 dias antes cai no DOMINGO, vale o sábado às 09:00', () => {
