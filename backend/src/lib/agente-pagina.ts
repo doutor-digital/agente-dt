@@ -249,7 +249,7 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
   </div>
   <details class="def"><summary>Como cada número é contado</summary><ul>
     <li><b>Pessoas respondidas</b>: conversas em que a Sofia mandou pelo menos uma resposta no período.</li>
-    <li><b>Consultas marcadas</b>: consultas que a Sofia marcou na agenda da franquia por uma conversa do Chatwoot.</li>
+    <li><b>Consultas marcadas</b>: consultas que a Sofia marcou na agenda da franquia por uma conversa do CRM.</li>
     <li><b>Marcaram</b>: consultas marcadas ÷ pessoas respondidas.</li>
     <li><b>Passou para a equipe</b>: conversas em que ela chamou alguém da equipe (paciente pediu uma pessoa, assunto que ela não resolve).</li>
     <li><b>Pix do sinal gerado</b>: conversas em que ela gerou o Pix do sinal.</li>
@@ -309,7 +309,7 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
       <div class="acoes"><span class="meta" id="restam"></span></div>
       <div class="acoes" style="justify-content:flex-start"><button class="bt" id="btRegraDaqui" type="button">Ela errou? Ensinar</button><button class="bt leve" id="btRecomecar" type="button">Recomeçar</button></div>
       <div id="avisoChat" class="aviso erro" hidden style="margin-top:10px"></div>
-      <p class="meta" style="margin-top:16px">Agenda e Pix aqui são de mentira: nada vai para a franquia, o Kommo ou o WhatsApp. A conversa fica só neste computador.</p>
+      <p class="meta" style="margin-top:16px">Agenda e Pix aqui são de mentira: nada vai para a franquia, o CRM ou o WhatsApp. A conversa fica só neste computador.</p>
     </section>
   </div>
 </section>
@@ -318,7 +318,7 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
 <section class="pane" id="pane-pausadas" role="tabpanel" aria-labelledby="aba-pausadas" hidden>
   <section>
     <h3>Conversas com a Sofia pausada <span class="c" id="cPausadas"></span></h3>
-    <div class="meta">A Sofia sai da frente quando alguém da equipe responde (pelo Chatwoot ou pelo celular) e volta quando a conversa é resolvida. Aqui dá para devolver antes.</div>
+    <div class="meta">A Sofia sai da frente quando alguém da equipe responde (pelo CRM ou pelo celular) e volta quando a conversa é resolvida. Aqui dá para devolver antes.</div>
     <div class="rolar" style="margin-top:8px"><table class="tab"><thead><tr><th>Paciente</th><th>Pausada por</th><th>Desde</th><th>Com</th><th></th></tr></thead><tbody id="listaPausadas"></tbody></table></div>
   </section>
 </section>
@@ -458,7 +458,7 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
       var p = await api('GET', '/api/public/agente/painel?slug=' + enc(U.slug) + '&periodo=' + enc(PERIODO));
       var k = $('kpis'); k.textContent = '';
       k.appendChild(kpi('Pessoas respondidas', 'Conversas em que a Sofia mandou pelo menos uma resposta no período', String(p.respondidas.agora), variacao(p.respondidas.agora, p.respondidas.antes)));
-      k.appendChild(kpi('Consultas marcadas', 'Consultas que a Sofia marcou na agenda da franquia por uma conversa do Chatwoot', String(p.marcadas.agora), variacao(p.marcadas.agora, p.marcadas.antes)));
+      k.appendChild(kpi('Consultas marcadas', 'Consultas que a Sofia marcou na agenda da franquia por uma conversa do CRM', String(p.marcadas.agora), variacao(p.marcadas.agora, p.marcadas.antes)));
       k.appendChild(kpi('Marcaram', 'Consultas marcadas ÷ pessoas respondidas', p.conversao.agora == null ? '—' : p.conversao.agora + '%', variacao(p.conversao.agora, p.conversao.antes, true)));
       k.appendChild(kpi('Pix do sinal gerado', 'Conversas em que ela gerou o Pix do sinal', String(p.pix.agora), variacao(p.pix.agora, p.pix.antes)));
       var eq = variacao(p.equipe.agora, p.equipe.antes); eq.c = '';
@@ -799,7 +799,7 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
     guardar('testar-ia-rascunho', null); $('regra').value = ev.newValue.slice(0, 800); ir('ensinar'); contar(); $('regra').focus();
   });
   pedirSessao(); setTimeout(function(){ if (!S) pedirSessao(); }, 1500);
-  setTimeout(function(){ if (!S) aviso('erroTopo', 'Abra esta tela pelo menu do Chatwoot (Agente), já logada.'); }, 6000);
+  setTimeout(function(){ if (!S) aviso('erroTopo', 'Abra esta tela pelo menu do CRM (Agente), já logada.'); }, 6000);
 })();
 </script></body></html>`;
 

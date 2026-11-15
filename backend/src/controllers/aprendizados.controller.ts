@@ -587,7 +587,7 @@ body.cw .sw.on{color:#0b5e3b}
 <div id="panePausadas" hidden>
 <div class="card">
   <h2>Conversas com a IA pausada</h2>
-  <p class="sub" style="margin:0 0 6px">A IA pausa sozinha quando alguém da equipe responde (pelo Chatwoot ou pelo celular) e volta quando a conversa é resolvida. Aqui você reativa antes, se quiser.</p>
+  <p class="sub" style="margin:0 0 6px">A IA pausa sozinha quando alguém da equipe responde (pelo CRM ou pelo celular) e volta quando a conversa é resolvida. Aqui você reativa antes, se quiser.</p>
   <div id="listaPausadas"></div>
   <div id="msgPausadas" class="msg" hidden></div>
 </div>

@@ -188,7 +188,7 @@ const BOTAO_JS = String.raw`(function(){
     ruim.title = x.ruimPor && !x.minha ? ('Marcada como ruim por ' + x.ruimPor + '. Clique para dar a sua opinião.') : 'Resposta ruim: conte o que estava errado';
   }
   function enviarAval(id, nota, texto){
-    var s = sessao(); if (!s) return Promise.reject(new Error('Entre de novo no Chatwoot.'));
+    var s = sessao(); if (!s) return Promise.reject(new Error('Entre de novo no CRM.'));
     return fetch(AGENTE + '/api/public/assistente/avaliar', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CW-Token': s.token, 'X-CW-Client': s.client, 'X-CW-Uid': s.uid }, body: JSON.stringify({ conversa: AV.conversa, mensagem: Number(id), nota: nota, texto: texto || '' }) })
       .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(j){ if (!r.ok) throw new Error(j.error || 'não consegui registrar agora'); return j; }); })
       .then(function(){ var x = AV.mapa[id] || { id: Number(id), minha: null, ruimPor: null }; x.minha = nota; AV.mapa[id] = x; var b = document.querySelector('[data-dd-aval="' + id + '"]'); if (b) pintarAval(b, x); });

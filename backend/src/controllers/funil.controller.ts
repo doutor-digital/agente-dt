@@ -170,7 +170,7 @@ async function autorizado(req: Request, res: Response): Promise<Acesso | null> {
   }
   const sessao = sessaoDosCabecalhos((n) => req.get(n));
   if (!sessao) {
-    res.status(403).json({ error: 'abra o funil pelo Chatwoot' });
+    res.status(403).json({ error: 'abra o funil pelo CRM' });
     return null;
   }
   const r = await quemEstaLogado(c, sessao);
@@ -181,10 +181,10 @@ async function autorizado(req: Request, res: Response): Promise<Acesso | null> {
 
 /** A resposta para uma sessão que não passou. O funil recusa login inválido com 403; a assistente, com 401. */
 function recusarSessao(res: Response, r: Exclude<Conferencia, object>, statusInvalida: 401 | 403): void {
-  if (r === 'invalida') res.status(statusInvalida).json({ error: 'entre no Chatwoot de novo (sessão expirada)', sessao: 'invalida' });
-  else if (r === 'sem-conta') res.status(403).json({ error: 'seu usuário do Chatwoot não tem acesso a esta conta — peça para a Suzanne', sessao: 'sem-conta' });
+  if (r === 'invalida') res.status(statusInvalida).json({ error: 'entre no CRM de novo (sessão expirada)', sessao: 'invalida' });
+  else if (r === 'sem-conta') res.status(403).json({ error: 'seu usuário do CRM não tem acesso a esta conta — peça para a Suzanne', sessao: 'sem-conta' });
   else if (r === 'excesso') res.status(429).json({ error: 'muitos acessos agora — tente em 1 minuto' });
-  else res.status(502).json({ error: 'não consegui falar com o Chatwoot agora' });
+  else res.status(502).json({ error: 'não consegui falar com o CRM agora' });
 }
 
 /**
@@ -208,7 +208,7 @@ export async function sessaoDaAtendente(req: Request, res: Response): Promise<At
   }
   const sessao = sessaoDosCabecalhos((n) => req.get(n));
   if (!sessao) {
-    res.status(401).json({ error: 'abra a assistente pelo Chatwoot (entre no Chatwoot de novo)', sessao: 'invalida' });
+    res.status(401).json({ error: 'abra a assistente pelo CRM (entre no CRM de novo)', sessao: 'invalida' });
     return null;
   }
   const r = await quemEstaLogado(c, sessao);
@@ -235,7 +235,7 @@ function falhou(res: Response, e: unknown, oQue: string, extra: Record<string, u
     res.status(404).json({ error: 'você não tem acesso a esta conversa (ou ela não existe mais)' });
     return;
   }
-  res.status(502).json({ error: 'não consegui falar com o Chatwoot agora' });
+  res.status(502).json({ error: 'não consegui falar com o CRM agora' });
 }
 
 async function vencimentosAbertos(conta: number, ids: number[]): Promise<Map<number, SituacaoTarefa>> {
@@ -384,7 +384,7 @@ async function autorizadoComLogin(req: Request, res: Response): Promise<Acesso |
   const a = await autorizado(req, res);
   if (!a) return null;
   if (!a.sessao) {
-    res.status(403).json({ error: 'esta tela abre pelo menu do Chatwoot, com o seu login' });
+    res.status(403).json({ error: 'esta tela abre pelo menu do CRM, com o seu login' });
     return null;
   }
   return a;
@@ -402,7 +402,7 @@ async function autorizadoGestao(req: Request, res: Response): Promise<Acesso | n
 
 function falhouLista(res: Response, e: unknown, oQue: string): void {
   logger.warn({ err: String(e) }, `funil: ${oQue} falhou`);
-  res.status(502).json({ error: 'não consegui falar com o Chatwoot agora — tente de novo em instantes' });
+  res.status(502).json({ error: 'não consegui falar com o CRM agora — tente de novo em instantes' });
 }
 
 export async function funilOportunidadesHandler(req: Request, res: Response): Promise<void> {
@@ -931,7 +931,7 @@ export async function funilMensagemHandler(req: Request, res: Response): Promise
   const a = await autorizado(req, res);
   if (!a) return;
   if (!a.sessao) {
-    res.status(403).json({ error: 'para mandar mensagem, abra o funil pelo Chatwoot (com o seu login)' });
+    res.status(403).json({ error: 'para mandar mensagem, abra o funil pelo CRM (com o seu login)' });
     return;
   }
   const p = textoSchema.safeParse(req.body);
@@ -1023,7 +1023,7 @@ export async function funilNovoHandler(req: Request, res: Response): Promise<voi
   const a = await autorizado(req, res);
   if (!a) return;
   if (!a.sessao) {
-    res.status(403).json({ error: 'para criar lead, abra o funil pelo Chatwoot (com o seu login)' });
+    res.status(403).json({ error: 'para criar lead, abra o funil pelo CRM (com o seu login)' });
     return;
   }
   const p = novoSchema.safeParse(req.body);
