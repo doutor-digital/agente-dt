@@ -128,21 +128,41 @@ export interface BancoDasAutomacoes {
 
 const NOTA_FIXA = 'Controlado pela Doutor Digital: não tem chave por unidade nesta tela.';
 
+/**
+ * O histórico de cada automação sai de system_logs, que só tem índice por data: para uma automação que quase não
+ * escreve log, a busca varria a tabela inteira (≈9 s cada, ≈60 s a aba «Automações», 15/11/2026). Agora as buscas
+ * correm juntas, olham só os últimos dias e têm teto: estourou, a automação aparece sem as últimas ações.
+ */
+export const DIAS_DO_HISTORICO = 14;
+export const TETO_DO_HISTORICO_MS = 3000;
+function comTeto<T>(p: Promise<T>, ms: number, padrao: T): Promise<T> {
+  return new Promise((ok) => {
+    const t = setTimeout(() => ok(padrao), ms);
+    p.then(
+      (v) => { clearTimeout(t); ok(v); },
+      () => { clearTimeout(t); ok(padrao); },
+    );
+  });
+}
+
 export async function automacoesDaUnidade(
   banco: BancoDasAutomacoes,
   slug: string,
-  o: { env?: NodeJS.ProcessEnv; panorama?: ReturnType<typeof panoramaDaUnidade> } = {},
+  o: { env?: NodeJS.ProcessEnv; panorama?: ReturnType<typeof panoramaDaUnidade>; tetoMs?: number } = {},
 ): Promise<AutomacaoNaTela[]> {
   const env = o.env ?? process.env;
   const panorama = o.panorama ?? panoramaDaUnidade(slug, env);
   const ids = Object.keys(DO_CATALOGO);
+  const ultimasDe = new Map(
+    await Promise.all(ids.map(async (id) => [id, await comTeto(banco.ultimas(id, slug, 5), o.tetoMs ?? TETO_DO_HISTORICO_MS, [] as UltimaAcao[])] as const)),
+  );
   const mudancas = new Map((await banco.mudancas(slug, ids)).map((m) => [m.automacao, m]));
   const saida: AutomacaoNaTela[] = [];
   for (const id of ids) {
     const a = automacaoPorId(id);
     const linha = panorama.find((p) => p.id === id);
     if (!a || !linha) continue;
-    const ultimas = await banco.ultimas(id, slug, 5).catch(() => []);
+    const ultimas = ultimasDe.get(id) ?? [];
     const m = mudancas.get(id);
     saida.push({
       id,
@@ -239,7 +259,7 @@ export function bancoDasAutomacoes(): BancoDasAutomacoes {
     },
     async ultimas(id, slug, quantas) {
       const l = await prisma.systemLog.findMany({
-        where: { msg: { startsWith: `${id}:` }, context: { path: ['slug'], equals: slug } },
+        where: { createdAt: { gte: new Date(Date.now() - DIAS_DO_HISTORICO * 86_400_000) }, msg: { startsWith: `${id}:` }, context: { path: ['slug'], equals: slug } },
         orderBy: { createdAt: 'desc' },
         take: quantas,
         select: { createdAt: true, level: true, msg: true, context: true },

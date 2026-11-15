@@ -93,6 +93,25 @@ test('as fixas leem o estado do MESMO ambiente que o código lê; sem interrupto
   for (const f of A.FIXAS.filter((x) => x.variavel)) assert.ok(codigo.includes(f.variavel!), `${f.variavel} não está mais no código`);
 });
 
+test('aba «Automações» não espera o histórico lento: buscas juntas, com teto (15/11: a aba ficava 60 s em «Carregando…»)', async () => {
+  const { banco } = bancoFalso({});
+  let chamadas = 0;
+  banco.ultimas = async (id) => {
+    chamadas++;
+    if (id === 'chatwoot-agenda') return new Promise(() => {}); // nunca responde
+    await new Promise((r) => setTimeout(r, 40));
+    return [{ em: '2026-11-15T12:00:00.000Z', nivel: 'info', texto: `${id}: ciclo`, resumo: '' }];
+  };
+  const t0 = Date.now();
+  const l = await A.automacoesDaUnidade(banco, SLUG, { env: {}, tetoMs: 150 });
+  const ms = Date.now() - t0;
+  assert.ok(ms < 600, `levou ${ms} ms — as buscas precisam correr juntas e respeitar o teto`);
+  assert.equal(chamadas, l.filter((x) => x.origem === 'catalogo').length);
+  assert.deepEqual(l.find((x) => x.id === 'chatwoot-agenda')!.ultimas, [], 'a que travou aparece sem histórico');
+  assert.equal(l.find((x) => x.id === 'chatwoot-ia')!.ultimas.length, 1);
+  assert.match(fonte('./robos-automacoes.ts'), /createdAt: \{ gte: new Date\(Date\.now\(\) - DIAS_DO_HISTORICO/, 'a busca no log olha só os últimos dias');
+});
+
 test('«últimas ações»: o que o log guardou; sem log, «sem registro» (nada inventado); quem mexeu por último', async () => {
   const em = new Date('2026-11-16T10:00:00Z');
   const { banco } = bancoFalso({
