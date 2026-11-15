@@ -19,6 +19,8 @@
  * vem do servidor entra por textContent (nunca innerHTML). O JavaScript não usa crase nem `${`: o texto é um String.raw e só
  * `__ORIGEM_CW__` é trocado.
  */
+import { guiaDaEtapaLigado } from './chatwoot-guia-etapas.js';
+
 
 const PAGINA = String.raw`<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -363,6 +365,7 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
 <div id="toast" class="toast" role="status" hidden></div>
 <script>
 (function(){
+  var GUIA_LIGADO = __GUIA_LIGADO__;
   var CW = __ORIGEM_CW__, S = null, U = null, EU = '', UNIDADES = [];
   var $ = function(id){ return document.getElementById(id); };
   function el(tag, cls, txt){ var e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; }
@@ -800,7 +803,7 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
     guardar('testar-ia-rascunho', null); $('regra').value = ev.newValue.slice(0, 800); ir('ensinar'); contar(); $('regra').focus();
   });
   // «?» do cabeçalho: abre a aula desta tela em vídeo por cima da conversa (o menu do CRM mostra o modal; aqui só se pede). Só dentro do CRM.
-  if (window.parent !== window) {
+  if (window.parent !== window && GUIA_LIGADO) {
     $('ajuda').hidden = false;
     $('ajuda').addEventListener('click', function(){ try { window.parent.postMessage({ event: 'guia:tela', tela: 'agente' }, CW); } catch (e) {} });
   }
@@ -810,6 +813,6 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
 </script></body></html>`;
 
 /** A página. `origemChatwoot` = a origem do Chatwoot (só ela fala com a página por postMessage). */
-export function paginaDoAgente(origemChatwoot: string): string {
-  return PAGINA.split('__ORIGEM_CW__').join(JSON.stringify(origemChatwoot));
+export function paginaDoAgente(origemChatwoot: string, env: NodeJS.ProcessEnv = process.env): string {
+  return PAGINA.split('__ORIGEM_CW__').join(JSON.stringify(origemChatwoot)).split('__GUIA_LIGADO__').join(String(guiaDaEtapaLigado(env)));
 }

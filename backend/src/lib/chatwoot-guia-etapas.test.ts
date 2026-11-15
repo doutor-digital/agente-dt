@@ -4,6 +4,7 @@
  */
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 process.env.KOMMO_SUBDOMAIN ??= 'teste';
 process.env.KOMMO_ACCESS_TOKEN ??= 'token-de-teste-123';
@@ -89,6 +90,10 @@ class No {
   get parentNode() {
     return this.parentElement;
   }
+  get isConnected() {
+    for (let p: No | null = this; p; p = p.parentElement) if (p.tag === 'body') return true;
+    return false;
+  }
   get textContent(): string {
     return this.texto + this.children.map((c) => c.textContent).join('');
   }
@@ -157,6 +162,7 @@ class No {
   }
   querySelectorAll(sel: string): No[] {
     if (sel.startsWith('.')) return this.procura((n) => n.className.split(' ').includes(sel.slice(1)));
+    if (sel === 'a') return this.procura((n) => n.tag === 'a');
     if (sel === 'video') return this.procura((n) => n.tag === 'video');
     if (sel === 'input[type=checkbox]') return this.procura((n) => n.tag === 'input');
     if (sel === 'label') return this.procura((n) => n.tag === 'label');
@@ -258,6 +264,8 @@ test('no DOM: entra logo abaixo de «Informação da conversa», mostra os passo
   assert.match(txt, /Aula 3\.2 · Marcar a consulta/);
   assert.match(txt, /1:17/);
   assert.match(txt, /Ver o curso inteiro/);
+  assert.equal(G.URL_DO_CURSO, 'https://treinamento.doutordigitalconsultoria.com/kommo-duvidas/#crm-01');
+  assert.equal(t.cartao()!.shadowRoot!.querySelector('a')?.href, G.URL_DO_CURSO);
   assert.deepEqual(t.pedidos.map((p) => p.metodo), ['GET']);
   assert.match(t.pedidos[0]!.url, /^\/api\/v1\/accounts\/1\/conversations\/5$/);
 });
@@ -329,7 +337,12 @@ test('modal: o botão da aula abre o vídeo por cima da conversa; Esc, o X e o c
   aula.dispara('click');
   const m = t.modal();
   assert.ok(m, 'o modal abriu no body');
-  assert.equal(m!.style.cssText.includes('z-index:2147482700'), true);
+  // acima do painel das telas do menu (z-index 2147483000): o «?» não pode abrir o vídeo por baixo da tela
+  const z = Number(/z-index:(\d+)/.exec(m!.style.cssText)?.[1]);
+  assert.ok(z > 2147483000 && z <= 2147483647, `z-index do modal (${z}) tem de passar o do painel do menu`);
+  // e passa o painel REAL do menu, lido do código dele (se alguém subir o painel, este teste avisa)
+  const painelDoMenu = Number(/cam\.style\.cssText = '[^']*z-index:(\d+)/.exec(readFileSync(new URL('../controllers/funil.controller.ts', import.meta.url), 'utf8'))?.[1]);
+  assert.ok(painelDoMenu > 0 && z > painelDoMenu, `o modal (${z}) tem de ficar acima do painel das telas (${painelDoMenu})`);
   const v = m!.shadowRoot!.querySelector('video')!;
   assert.equal(v.src, `${G.BASE_DOS_VIDEOS}c35-compareceu-fechou.mp4`);
   assert.equal(v.controls, true);
@@ -393,7 +406,11 @@ test('a tela Agente tem o «?» no cabeçalho, escondido fora do CRM, e pede a a
   const html = paginaDoAgente('https://crm.exemplo.test');
   assert.match(html, /<button class="aj" id="ajuda" type="button" hidden/);
   assert.match(html, /window\.parent\.postMessage\(\{ event: 'guia:tela', tela: 'agente' \}, CW\)/);
-  assert.match(html, /if \(window\.parent !== window\) \{\s*\$\('ajuda'\)\.hidden = false;/);
+  assert.match(html, /if \(window\.parent !== window && GUIA_LIGADO\) \{\s*\$\('ajuda'\)\.hidden = false;/);
+  assert.match(html, /var GUIA_LIGADO = true;/);
+  assert.doesNotMatch(html, /__GUIA_LIGADO__/);
+  // com CHATWOOT_GUIA_ETAPA=0 a página sai com o guia desligado: o «?» nunca aparece
+  assert.match(paginaDoAgente('https://crm.exemplo.test', { CHATWOOT_GUIA_ETAPA: '0' } as NodeJS.ProcessEnv), /var GUIA_LIGADO = false;/);
 });
 
 test('o menu.js leva o guia como um bloco independente (um erro dele não derruba o menu) e some com CHATWOOT_GUIA_ETAPA=0', async () => {
@@ -407,6 +424,32 @@ test('o menu.js leva o guia como um bloco independente (um erro dele não derrub
     const desligado = montarMenuJs(AGENTE);
     assert.ok(!desligado.includes('__guiaEtapaDD'));
     assert.doesNotThrow(() => new Function(desligado));
+  } finally {
+    if (antes === undefined) delete process.env.CHATWOOT_GUIA_ETAPA;
+    else process.env.CHATWOOT_GUIA_ETAPA = antes;
+  }
+});
+
+test('com CHATWOOT_GUIA_ETAPA=0 o «?» do Funil/Hoje/Oportunidades também some (a página sai com GUIA_LIGADO=false)', async () => {
+  const { paginaFunilHandler } = await import('../controllers/funil.controller.js');
+  process.env.CHATWOOT_API_TOKEN = 'x';
+  process.env.CHATWOOT_CONTA_ID = '1';
+  process.env.CHATWOOT_URL = 'https://chatwoot.exemplo.test';
+  const pagina = () => {
+    let corpo = '';
+    const res: any = { status: () => res, type: () => res, send: (h: string) => (corpo = h) };
+    paginaFunilHandler({} as never, res);
+    return corpo;
+  };
+  const antes = process.env.CHATWOOT_GUIA_ETAPA;
+  try {
+    delete process.env.CHATWOOT_GUIA_ETAPA;
+    const ligada = pagina();
+    assert.match(ligada, /var GUIA_LIGADO=true;/);
+    assert.match(ligada, /if\(!aula\|\|!DENTRO\|\|!GUIA_LIGADO\) return;/);
+    process.env.CHATWOOT_GUIA_ETAPA = '0';
+    assert.match(pagina(), /var GUIA_LIGADO=false;/);
+    assert.ok(!pagina().includes('__GUIA_LIGADO__'));
   } finally {
     if (antes === undefined) delete process.env.CHATWOOT_GUIA_ETAPA;
     else process.env.CHATWOOT_GUIA_ETAPA = antes;

@@ -10,7 +10,7 @@
  *    ele recebe o conteúdo já pronto, junto com o `menu.js` (`GET /funil/menu.js`, o mesmo arquivo do menu e da assistente).
  *  - O SCRIPT (`GUIA_JS`) roda na página do Chatwoot, no mesmo molde da assistente: monta tudo com textContent (nenhum conteúdo de dado entra como
  *    HTML), guarda o cartão e o modal em Shadow DOM (o CSS do Chatwoot não os atinge, nem o nosso o dele) e nunca fala com o paciente.
- *  - O interruptor é `CHATWOOT_GUIA_ETAPA` (padrão ligado; «0» desliga no próximo carregamento da página). Aparece na aba Automações da tela
+ *  - O interruptor é `CHATWOOT_GUIA_ETAPA` (padrão ligado; «0» desliga em até 5 min — o tempo do cache do `menu.js` no navegador —, o cartão e o «?» das telas). Aparece na aba Automações da tela
  *    Robôs como somente leitura.
  *
  * Por que o cartão fica DENTRO do item «Informação da conversa» e não como um item novo da lista do painel: os itens do painel são arrastáveis
@@ -28,7 +28,8 @@ export const ETAPA_PADRAO_DO_GUIA: EtapaDoCrm = 'Novo lead';
 
 /** Onde os vídeos moram (um .mp4 por aula). */
 export const BASE_DOS_VIDEOS = 'https://treinamento.doutordigitalconsultoria.com/crmdoutordigital-duvidas/videos/';
-export const URL_DO_CURSO = 'https://treinamento.doutordigitalconsultoria.com/crmdoutordigital-duvidas/';
+/** O curso foi para dentro do «kommo-duvidas» (14/11/2026); os vídeos continuam em /crmdoutordigital-duvidas/videos/. */
+export const URL_DO_CURSO = 'https://treinamento.doutordigitalconsultoria.com/kommo-duvidas/#crm-01';
 
 export interface AulaDoGuia {
   /** «3.2» */
@@ -137,7 +138,8 @@ const GUIA_JS = String.raw`(function(){
   var AGENTE = __AGENTE__, CFG = __GUIA__;
   var ST = { conversa: null, etapa: undefined, buscando: false, ultimaBusca: 0, host: null, raiz: null, feitos: {} };
   var MD = { host: null, voltarPara: null };
-  var Z_CARTAO = 1, Z_MODAL = 2147482700;
+  // o modal precisa ficar ACIMA do painel das telas do menu (Hoje, Funil…; z-index 2147483000 em funil.controller.ts), senão o «?» abre o vídeo por baixo da tela
+  var Z_CARTAO = 1, Z_MODAL = 2147483200;
 
   function sessao(){
     var m = document.cookie.match(/(?:^|; )cw_d_session_info=([^;]*)/); if (!m) return null;
@@ -195,7 +197,7 @@ const GUIA_JS = String.raw`(function(){
     MD.host.remove(); MD.host = null;
     document.removeEventListener('keydown', teclaDoModal, true);
     var volta = MD.voltarPara; MD.voltarPara = null;
-    try { if (volta && document.contains(volta)) volta.focus(); } catch (e) {}
+    try { if (volta && volta.isConnected) volta.focus(); } catch (e) {}
   }
   function teclaDoModal(ev){
     if (ev.key === 'Escape' || ev.key === 'Esc') { ev.stopPropagation(); ev.preventDefault(); fecharModal(); }

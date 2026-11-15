@@ -47,7 +47,7 @@ import { TELAS_CSS, TELAS_JS } from '../lib/chatwoot-telas-ui.js';
 import { instanteNoFuso, searchTreatments } from '../services/spine.service.js';
 import { arquivoComEtapa, CAIXAS_HISTORICO, CAIXAS_REGUA, CAMPO_PARTIDA, ehArquivo } from '../lib/chatwoot-regua.js';
 import { assistenteJs } from '../lib/chatwoot-assistente-ui.js';
-import { guiaJs } from '../lib/chatwoot-guia-etapas.js';
+import { guiaJs, guiaDaEtapaLigado } from '../lib/chatwoot-guia-etapas.js';
 import {
   ATRIBUTO_ETAPA,
   MAX_PAGINAS,
@@ -1065,6 +1065,7 @@ export function paginaFunilHandler(_req: Request, res: Response): void {
   }
   res.type('html').send(
     PAGINA.replace('__ORIGEM_CW__', JSON.stringify(new URL(contexto()!.conta!.url).origin))
+      .replace('__GUIA_LIGADO__', String(guiaDaEtapaLigado()))
       .split('/*__TELAS_CSS__*/').join(TELAS_CSS)
       .split('/*__TELAS_JS__*/').join(TELAS_JS),
   );
@@ -1577,9 +1578,10 @@ body{background:#f4f6f9}
   $('ordem').addEventListener('change',function(){ guardar(); if(dados) desenhar(); });
   $('recarregar').addEventListener('click',function(){ carregar(); });
   // «?» do cabeçalho: abre a aula em vídeo desta tela por cima da conversa (o menu do CRM mostra o modal; aqui só se pede). Só dentro do CRM.
+  var GUIA_LIGADO=__GUIA_LIGADO__;
   (function(){
     var aula=TELA===''?'funil':TELA==='hoje'?'hoje':TELA==='oport'?'oportunidades':'';
-    if(!aula||!DENTRO) return;
+    if(!aula||!DENTRO||!GUIA_LIGADO) return;
     var b=$('ajuda'); b.hidden=false;
     b.addEventListener('click',function(){ try{ window.parent.postMessage({event:'guia:tela',tela:aula},ORIGEM_CW); }catch(e){} });
   })();
