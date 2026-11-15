@@ -7,7 +7,7 @@
  */
 import { AUTOMACOES } from '../automacoes.js';
 import { gerenteDaConta, novoEstado, passoAtendentes, passoAutomacoesDaConta, passoAtributos, passoCaixa, passoConta, passoDashboardApp, passoEtiquetas, passoMensagensProntas, passoModelos, passoRobo, passoTime, passoUsuarioCelular, passoWebhook, type EstadoDaExecucao } from './fase2.js';
-import type { PortasExternas } from './portas.js';
+import { ErroSoLeitura, type PortasExternas } from './portas.js';
 import { CAMPOS_SO_NA_CRIACAO, camposDaSofia, camposDaUnidade } from './molde-sofia.js';
 import { aGravar, dadosDosModelosAGravar } from './protecao.js';
 import type { Passo, Plano } from './plano.js';
@@ -118,13 +118,33 @@ export async function executarPlano(plano: Plano, q: Questionario, o: OpcoesDeEx
       registrar('bloqueado', ['sem acesso ao Chatwoot/Kapso neste ambiente (CHATWOOT_URL, CHATWOOT_API_TOKEN ou o cofre KIT_SEGREDOS_DIR faltando)']);
       continue;
     }
-    if (!soLer && !(await o.confirmar(p))) {
+    let leu = false;
+    if (soLer) {
+      // tenta SÓ LENDO; se o passo precisar escrever (o plano achava que estava pronto, mas não está), cai no caminho normal: pergunta e roda
+      try {
+        execucao.somenteLeitura = true;
+        const notas = await aplicarPasso(p, q, o, () => unitId, (id) => (unitId = id), execucao);
+        registrar('nada-a-fazer', notas);
+        leu = true;
+      } catch (err) {
+        if (!(err instanceof ErroSoLeitura)) {
+          registrar('falhou', [String((err as Error).message ?? err)]);
+          o.dizer('  (parei aqui: nada depois deste passo roda)');
+          break;
+        }
+        o.dizer(`  (o plano achava que «${p.id}» estava pronto, mas falta algo: ${err.o_que})`);
+      } finally {
+        execucao.somenteLeitura = false;
+      }
+    }
+    if (leu) continue;
+    if (!(await o.confirmar(p))) {
       registrar('recusado');
       continue;
     }
     try {
       const notas = await aplicarPasso(p, q, o, () => unitId, (id) => (unitId = id), execucao);
-      registrar(soLer ? 'nada-a-fazer' : 'feito', notas);
+      registrar('feito', notas);
     } catch (err) {
       registrar('falhou', [String((err as Error).message ?? err)]);
       o.dizer('  (parei aqui: nada depois deste passo roda)');
@@ -138,7 +158,7 @@ async function aplicarPasso(p: Passo, q: Questionario, o: OpcoesDeExecucao, unit
   const { banco } = o;
   const x = o.externas as PortasExternas;
   const garantirUnidade = async (): Promise<string> => {
-    const id = unitIdAtual() ?? (await banco.gravarUnidade(q.unidade.slug, q.unidade.nome, {})).id;
+    const id = unitIdAtual() ?? (await banco.lerUnidade(q.unidade.slug))?.id ?? (await banco.gravarUnidade(q.unidade.slug, q.unidade.nome, {})).id;
     definirUnitId(id);
     return id;
   };
@@ -157,8 +177,7 @@ async function aplicarPasso(p: Passo, q: Questionario, o: OpcoesDeExecucao, unit
       ];
     }
     case 'config-chatwoot': {
-      const id = unitIdAtual() ?? (await banco.gravarUnidade(q.unidade.slug, q.unidade.nome, {})).id;
-      definirUnitId(id);
+      const id = await garantirUnidade();
       const c = configChatwootDoQuestionario(q);
       const novos: ConfigGravada = { prefixoModelos: c.prefixoModelos, metaAgendamentosDia: c.metaAgendamentosDia, kapsoPhoneNumberId: c.kapsoPhoneNumberId, wabaId: c.wabaId, envSufixo: c.envSufixo, dadosModelos: { ...c.dadosModelos } };
       const atual = await banco.lerConfigChatwoot(id);
@@ -178,16 +197,14 @@ async function aplicarPasso(p: Passo, q: Questionario, o: OpcoesDeExecucao, unit
       ];
     }
     case 'automacoes-seco': {
-      const id = unitIdAtual() ?? (await banco.gravarUnidade(q.unidade.slug, q.unidade.nome, {})).id;
-      definirUnitId(id);
+      const id = await garantirUnidade();
       const ja = new Set(await banco.automacoesDaUnidade(id));
       const novas = AUTOMACOES.filter((a) => a.id.startsWith('chatwoot-') && a.temSeco && !ja.has(a.id)).map((a) => a.id);
       if (novas.length) await banco.criarAutomacoesEmSeco(id, novas);
       return [novas.length ? `em seco: ${novas.join(', ')}` : 'nenhuma a criar'];
     }
     case 'sofia': {
-      const id = unitIdAtual() ?? (await banco.gravarUnidade(q.unidade.slug, q.unidade.nome, {})).id;
-      definirUnitId(id);
+      const id = await garantirUnidade();
       const { campos, avisos } = camposDaSofia(q, o.molde);
       const hoje = await banco.sofiaDaUnidade(id);
       const notas = [...avisos];
@@ -238,7 +255,7 @@ async function aplicarPasso(p: Passo, q: Questionario, o: OpcoesDeExecucao, unit
       if (gerente && (cfg?.gerenteId == null || o.sobrescrever)) parcial.gerenteId = gerente;
       if (execucao.celularId && (cfg?.usuarioCelularId == null || o.sobrescrever)) parcial.usuarioCelularId = execucao.celularId;
       if (Object.keys(parcial).length) await banco.gravarConfigChatwoot(unitId, parcial, false);
-      return [ja.includes(caixa) ? `caixa ${caixa} já estava registrada` : `caixa ${caixa} registrada (tipo cloud)`, Object.keys(parcial).length ? `gravei ${Object.keys(parcial).join(' e ')}` : 'gerente e usuário do celular já estavam gravados', 'a unidade passa a valer para o servidor quando ele relê a configuração (reinício do serviço)'];
+      return [ja.includes(caixa) ? `caixa ${caixa} já estava registrada` : `caixa ${caixa} registrada (tipo cloud)`, ...(q.whatsapp.modo === 'demonstracao' ? ['ATENÇÃO: a caixa da demonstração é canal API mas fica registrada como «cloud» (não existe tipo «api»): NÃO ligue as automações do Chatwoot nesta clínica — a régua tentaria mandar modelo por um canal que não é WhatsApp'] : []), Object.keys(parcial).length ? `gravei ${Object.keys(parcial).join(' e ')}` : 'gerente e usuário do celular já estavam gravados', 'a unidade passa a valer para o servidor quando ele relê a configuração (reinício do serviço)'];
     }
     case 'webhook':
       return passoWebhook(x, execucao);

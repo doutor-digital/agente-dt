@@ -86,8 +86,8 @@ function bancoFalso() {
   return { banco, escritas, e };
 }
 
-function montar(opcoes: { semPlataforma?: boolean; senha?: string; semKapso?: boolean } = {}) {
-  const falso = chatwootFalso({ semPlataforma: opcoes.semPlataforma });
+function montar(opcoes: { semPlataforma?: boolean; senha?: string; semKapso?: boolean; falharVinculo?: number } = {}) {
+  const falso = chatwootFalso({ semPlataforma: opcoes.semPlataforma, falharVinculo: opcoes.falharVinculo });
   falso.semear({
     labels: [
       { id: 1, title: 'quente', description: 'lead quente', color: '#ff0000', show_on_sidebar: true },
@@ -300,4 +300,98 @@ test('modo real sem a chave do Kapso: a caixa NÃO é criada (nada de caixa pela
   const { resultados } = await rodar(real, b, externas);
   assert.equal(sit(resultados, 'caixa'), 'falhou');
   assert.equal(falso.contas.get(b.e.config!.contaId!)!.inboxes.length, 0);
+});
+
+test('o vínculo do conector falhou DEPOIS de o usuário nascer: a rodada seguinte refaz o vínculo (pelo id guardado no cofre) em vez de ficar com uma conta inacessível', async () => {
+  const { falso, externas } = montar({ falharVinculo: 1 });
+  const b = bancoFalso();
+  const r1 = await rodar(DEMO, b, externas);
+  assert.equal(sit(r1.resultados, 'conta'), 'falhou');
+  assert.equal(falso.usuarios.size, 1, 'o usuário nasceu, o token está no cofre');
+  const r2 = await rodar(DEMO, b, externas);
+  assert.equal(sit(r2.resultados, 'conta'), 'feito', JSON.stringify(r2.resultados.find((r) => r.id === 'conta')));
+  assert.match(r2.resultados.find((r) => r.id === 'conta')!.notas.join(' '), /vínculo do conector .* refeito/);
+  assert.equal(falso.usuarios.size, 1, 'não criou um segundo usuário');
+  assert.equal(sit(r2.resultados, 'registrar-caixa'), 'feito');
+});
+
+/** O que o `lerEstado` do script veria na conta da clínica: lido do Chatwoot de mentira + do banco de mentira. */
+function estadoLido(falso: ReturnType<typeof montar>['falso'], b: ReturnType<typeof bancoFalso>) {
+  const c = falso.contas.get(b.e.config!.contaId!)!;
+  const conector = [...falso.usuarios.values()][0]!;
+  return {
+    banco: {
+      unidade: { id: 'u1', campos: b.e.unidade!.campos },
+      configChatwoot: { ...b.e.config! },
+      caixasRegistradas: [...b.e.caixas],
+      automacoes: Object.fromEntries(b.e.automacoes.map((a) => [a, 'seco'])),
+      sofia: b.e.sofia,
+    },
+    chatwoot: {
+      etiquetas: c.labels.map((l) => l.title),
+      atributosConversa: c.attrs.filter((a) => a.attribute_model === 0).map((a) => a.attribute_key),
+      atributosContato: c.attrs.filter((a) => a.attribute_model === 1).map((a) => a.attribute_key),
+      caixas: c.inboxes.map((i) => ({ id: i.id, nome: i.name, robo: i.agent_bot !== null })),
+      times: c.teams.map((t) => t.name),
+      agentes: Object.fromEntries(c.agents.map((a) => [a.email.toLowerCase(), { id: a.id, nome: a.name }])),
+      pastas: {},
+      mensagensProntas: c.canned.map((x) => x.short_code),
+      automacoesDaConta: Math.max(c.rules.length, 8),
+      webhookDaConta: c.webhooks.some((w) => w.url.includes(chaveDoEvento(conector.access_token))),
+      abas: c.apps.map((a) => a.title),
+    },
+    segredos: { CHATWOOT_API_TOKEN_DEMO: true, KAPSO_API_KEY: false },
+    plataforma: true,
+  } as import('./plano.js').EstadoAtual;
+}
+
+test('com o estado REAL lido (o plano diz «nada»), os passos do Chatwoot só LÊEM — sem perguntar e sem escrever — e passam os ids adiante', async () => {
+  const { falso, externas } = montar();
+  const b = bancoFalso();
+  await rodar(DEMO, b, externas);
+  const estado = estadoLido(falso, b);
+  const plano = montarPlano(DEMO, estado, { molde: MOLDE });
+  const perguntou: string[] = [];
+  const antes = posts(falso).length;
+  const escritasAntes = b.escritas.length;
+  const resultados = await executarPlano(plano, DEMO, { banco: b.banco, molde: MOLDE, externas, dizer: () => undefined, confirmar: async (p) => (perguntou.push(p.id), true) });
+  assert.deepEqual(perguntou.filter((id) => !['unidade', 'config-chatwoot', 'sofia', 'robo-sofia', 'modelos', 'mensagens-prontas'].includes(id)), [], `perguntou por passo que já estava pronto: ${perguntou.join(', ')}`);
+  assert.equal(posts(falso).length, antes, 'nenhum POST');
+  assert.deepEqual(b.escritas.slice(escritasAntes), []);
+  for (const id of ['conta', 'caixa', 'time', 'atendentes', 'usuario-celular', 'webhook', 'dashboard-app']) assert.equal(sit(resultados, id), 'nada-a-fazer', id);
+  assert.equal(sit(resultados, 'registrar-caixa'), 'nada-a-fazer');
+});
+
+test('plano DEFASADO (diz «nada», mas falta o time): o passo tenta só ler, vê que precisa escrever, PERGUNTA e cria', async () => {
+  const { falso, externas } = montar();
+  const b = bancoFalso();
+  await rodar(DEMO, b, externas);
+  const estado = estadoLido(falso, b); // o plano acha que o time existe…
+  const conta = falso.contas.get(b.e.config!.contaId!)!;
+  conta.teams.length = 0; // …mas alguém apagou
+  const plano = montarPlano(DEMO, estado, { molde: MOLDE });
+  const perguntou: string[] = [];
+  const resultados = await executarPlano(plano, DEMO, { banco: b.banco, molde: MOLDE, externas, dizer: () => undefined, confirmar: async (p) => (perguntou.push(p.id), true) });
+  assert.ok(perguntou.includes('time'), 'perguntou antes de criar');
+  assert.equal(sit(resultados, 'time'), 'feito');
+  assert.equal(conta.teams.length, 1);
+});
+
+test('--ligar-robo não TROCA um robô que a caixa já tem (outro); e rodar de novo com o mesmo robô não repete', async () => {
+  const { falso, externas } = montar();
+  const b = bancoFalso();
+  await rodar(DEMO, b, externas, { ligarRobo: true });
+  const conta = falso.contas.get(b.e.config!.contaId!)!;
+  const robo = conta.bots[0]!.id;
+  const posts1 = posts(falso).length;
+  const r2 = await rodar(DEMO, b, externas, { ligarRobo: true });
+  assert.equal(posts(falso).length, posts1);
+  assert.match(r2.resultados.find((r) => r.id === 'robo-sofia')!.notas.join(' '), /já estava ligado/);
+  // outro robô na caixa: não troca
+  conta.bots.push({ id: 7777, name: 'Outro', outgoing_url: '', access_token: 'x' });
+  conta.inboxes[0]!.agent_bot = 7777;
+  const r3 = await rodar(DEMO, b, externas, { ligarRobo: true });
+  assert.equal(conta.inboxes[0]!.agent_bot, 7777, 'o robô que já estava na caixa continua');
+  assert.notEqual(robo, 7777);
+  assert.match(r3.resultados.find((r) => r.id === 'robo-sofia')!.notas.join(' '), /JÁ tem outro robô/);
 });

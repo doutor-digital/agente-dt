@@ -27,7 +27,7 @@ import { contaHttp, plataformaHttp } from '../lib/kit-unidade/chatwoot-http.js';
 import { kapsoHttp } from '../lib/kit-unidade/kapso-http.js';
 import type { PortasExternas } from '../lib/kit-unidade/portas.js';
 import { segredosEmArquivo } from '../lib/kit-unidade/segredos.js';
-import { urlDoWebhook } from '../lib/kit-unidade/fase2.js';
+import { listaDaResposta, urlDoWebhook } from '../lib/kit-unidade/fase2.js';
 import { sufixoDoQuestionario } from '../lib/kit-unidade/questionario.js';
 import { montarPlano, textoDoPlano, type EstadoAtual } from '../lib/kit-unidade/plano.js';
 import { lerQuestionario, questionarioMascarado, type Questionario } from '../lib/kit-unidade/questionario.js';
@@ -107,7 +107,7 @@ async function lerEstado(q: Questionario): Promise<EstadoAtual> {
         lista('agents'),
         lista('canned_responses'),
         lista('automation_rules'),
-        ((await conta.get('webhooks')) as any)?.payload?.webhooks ?? [],
+        conta.get('webhooks').then((r) => listaDaResposta(r, 'webhooks')),
         lista('dashboard_apps'),
       ]);
       estado.chatwoot = {

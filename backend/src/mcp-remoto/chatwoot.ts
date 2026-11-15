@@ -181,7 +181,6 @@ export function donaDaConta(ctx: ContextoChatwoot, contaId: number, e: NodeJS.Pr
 export function tokenParaChaveDaConta(contaId: number, e: NodeJS.ProcessEnv = process.env): string | undefined {
   const base = contextoDoAmbiente(e);
   if (!base?.conta) return undefined;
-  if (ehContaDoAmbiente(contaId, e) && base.conta.conta === contaId) return base.conta.token;
   const dona = donaDaConta(base, contaId, e);
   return dona?.propria ? dona.ctx.conta?.token : undefined;
 }

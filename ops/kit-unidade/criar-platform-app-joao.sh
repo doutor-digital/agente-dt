@@ -52,7 +52,8 @@ fi
 
 mkdir -p "$(dirname "$ARQUIVO")"
 # o token sai do rails direto para o arquivo — nunca para a tela. (sem -t: a saída é só o token).
-docker exec "$C" bundle exec rails runner "app = PlatformApp.find_or_create_by!(name: '${NOME//\'/}'); puts app.access_token.token" > "$ARQUIVO"
+# a linha com o token leva o marcador TOKEN: (o rails pode imprimir avisos antes); só ela vai para o arquivo
+docker exec "$C" bundle exec rails runner "app = PlatformApp.find_or_create_by!(name: '${NOME//\'/}'); puts 'TOKEN:' + app.access_token.token" | sed -n 's/^TOKEN://p' | tail -n1 > "$ARQUIVO"
 chmod 600 "$ARQUIVO"
 if [ ! -s "$ARQUIVO" ]; then rm -f "$ARQUIVO"; echo "ERRO: o rails não devolveu token."; exit 1; fi
 if aceita; then

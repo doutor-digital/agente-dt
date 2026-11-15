@@ -34,7 +34,7 @@ case "$1 $2" in
       *) exit 0;;
     esac;;
   "service update") printf '%s' "\${4#*=}" > "${dir}/regra";;
-  "exec abc123") echo "${TOKEN}";;
+  "exec abc123") echo "aviso do rails: deprecated"; echo "TOKEN:${TOKEN}";;
   *) echo "docker de mentira: $*" >&2; exit 1;;
 esac
 `,

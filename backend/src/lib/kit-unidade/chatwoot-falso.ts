@@ -32,6 +32,8 @@ export interface OpcoesDoFalso {
   referencia?: Partial<Pick<ContaFalsa, 'labels' | 'attrs' | 'rules'>>;
   /** liga/desliga a plataforma (conta que o João ainda não criou o Platform App) */
   semPlataforma?: boolean;
+  /** quantas vezes o vínculo do usuário à conta falha com 500 (para provar a recuperação) */
+  falharVinculo?: number;
 }
 
 export interface ChamadaFalsa { metodo: string; caminho: string; corpo: unknown; conta: number | 'plataforma' | 'kapso' | null }
@@ -42,6 +44,7 @@ const id = () => ++proximoId;
 export function chatwootFalso(o: OpcoesDoFalso = {}) {
   const tokenDaPlataforma = o.tokenDaPlataforma ?? 'plat-secreto';
   const tokenDeReferencia = o.tokenDeReferencia ?? 'ref-secreto';
+  let vinculosAFalhar = o.falharVinculo ?? 0;
   const contas = new Map<number, ContaFalsa>();
   const usuarios = new Map<number, { id: number; name: string; email: string; access_token: string; contas: Map<number, string> }>();
   const kapso = new Map<string, Map<string, { name: string; status: string; corpo: unknown }>>();
@@ -103,6 +106,10 @@ export function chatwootFalso(o: OpcoesDoFalso = {}) {
         return resposta(200, { id: uid, name: usuario.name, email: usuario.email, access_token: usuario.access_token });
       }
       if (metodo === 'POST' && (m = /^accounts\/(\d+)\/account_users$/.exec(rota))) {
+        if (vinculosAFalhar > 0) {
+          vinculosAFalhar--;
+          return resposta(500, { error: 'falha de teste' });
+        }
         const c = contas.get(Number(m[1]));
         const usuario = usuarios.get(Number(corpo.user_id));
         if (!c || !usuario) return resposta(404, { error: 'Resource could not be found' });
@@ -163,6 +170,12 @@ export function chatwootFalso(o: OpcoesDoFalso = {}) {
       const nova = { id: id(), name: corpo.name, channel_type: tipo, channel: corpo.channel ?? {}, agent_bot: null as number | null, membros: [] as number[] };
       c2.inboxes.push(nova);
       return resposta(200, { id: nova.id, name: nova.name, channel_type: tipo });
+    }
+    if (metodo === 'GET' && (m = /^inboxes\/(\d+)\/agent_bot$/.exec(rota))) {
+      const i = c2.inboxes.find((x) => x.id === Number(m![1]));
+      if (!i) return resposta(404, { error: 'Resource could not be found' });
+      const bot = c2.bots.find((b) => b.id === i.agent_bot);
+      return resposta(200, { agent_bot: bot ? { id: bot.id, name: bot.name } : null });
     }
     if (metodo === 'POST' && (m = /^inboxes\/(\d+)\/set_agent_bot$/.exec(rota))) {
       const i = c2.inboxes.find((x) => x.id === Number(m![1]));

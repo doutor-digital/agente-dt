@@ -56,6 +56,13 @@ export interface PortasExternas {
   gerarSenha: () => string;
 }
 
+/** Um passo que só podia LER tentou escrever (o plano achava que já estava pronto): o executor pergunta e roda de novo com escrita. */
+export class ErroSoLeitura extends Error {
+  constructor(readonly o_que: string) {
+    super(`passo em modo só-leitura tentou escrever (${o_que})`);
+  }
+}
+
 /** O erro de uma porta, sem segredo no texto. */
 export class ErroDaPorta extends Error {
   constructor(
