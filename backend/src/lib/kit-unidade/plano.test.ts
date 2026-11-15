@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { canonico, configGravavel, montarPlano, textoDoPlano, type EstadoAtual } from './plano.js';
-import { configChatwootDoQuestionario, lerQuestionario, type Questionario } from './questionario.js';
+import { CAMPOS_SENSIVEIS, configChatwootDoQuestionario, lerQuestionario, type Questionario } from './questionario.js';
 import { AUTOMACOES } from '../automacoes.js';
 import { ATRIBUTOS_DE_CONTATO, ATRIBUTOS_DE_CONVERSA, ETIQUETAS_DO_CODIGO, PASTAS_PADRAO, MENSAGENS_PRONTAS } from './catalogo.js';
 import { camposDaSofia, camposDaUnidade, fonteProdutos, renderizarMolde, textoDosDias } from './molde-sofia.js';
@@ -246,12 +246,44 @@ test('ids em dígitos sem aspas no YAML valem (viram texto), de qualquer tamanho
 test('o plano seco mostra a lista EFETIVA dos administradores da Doutor Digital (conta nova e conta já existente); o questionário vence a lista do ambiente', () => {
   const qq = q();
   const nova = montarPlano(qq, {}, { molde: MOLDE, adminsDD: ['suzanne.mychelly1@gmail.com', 'joao@dd.test'] });
-  assert.ok(passo(nova, 'conta').itens.some((i) => /pôr os administradores da Doutor Digital na conta nova: suzanne\.mychelly1@gmail\.com, joao@dd\.test/.test(i)));
+  assert.ok(passo(nova, 'conta').itens.some((i) => /pôr os administradores da Doutor Digital na conta nova: s\*\*\*@gmail\.com, j\*\*\*@dd\.test/.test(i)));
   const existente = montarPlano(qq, estadoCompleto(qq), { molde: MOLDE, adminsDD: ['suzanne.mychelly1@gmail.com'] });
   assert.equal(passo(existente, 'conta').acao, 'nada');
-  assert.ok(passo(existente, 'conta').itens.some((i) => /administradores da Doutor Digital: suzanne\.mychelly1@gmail\.com — vai pôr os que ainda não estão na conta/.test(i)));
+  assert.ok(passo(existente, 'conta').itens.some((i) => /administradores da Doutor Digital: s\*\*\*@gmail\.com — vai pôr os que ainda não estão na conta/.test(i)));
   const doQuestionario = montarPlano(q((o) => (o.chatwoot.admins_dd = ['so-esta@dd.test'])), {}, { molde: MOLDE, adminsDD: ['suzanne.mychelly1@gmail.com'] });
-  assert.ok(passo(doQuestionario, 'conta').itens.some((i) => i.includes('so-esta@dd.test') && !i.includes('suzanne')));
+  assert.ok(passo(doQuestionario, 'conta').itens.some((i) => i.includes('s***@dd.test') && !i.includes('suzanne') && !i.includes('so-esta')));
   const semInfo = montarPlano(qq, {}, { molde: MOLDE });
   assert.ok(passo(semInfo, 'conta').itens.some((i) => /KIT_ADMINS_DD \(padrão: a Suzanne\)/.test(i)));
+});
+
+test('PRIVACIDADE: o texto REAL do plano (seco, com tudo já existente e sem nada) NÃO tem nenhum valor sensível em claro — número, phone_number_id, WABA, id_company, e-mails', () => {
+  const qq = q((o) => {
+    o.chatwoot.admins_dd = ['suzanne.mychelly1@gmail.com', 'joao.dd@doutordigital.test'];
+    o.valores.chave_pix = 'pix-privado@pessoal.com.br';
+    o.unidade.telefone = '(94) 98888-7777';
+  });
+  const textos = [
+    textoDoPlano(montarPlano(qq, {}, { molde: MOLDE, adminsDD: ['outro.admin@dd.test'] })),
+    textoDoPlano(montarPlano(qq, estadoCompleto(qq), { molde: MOLDE })),
+    textoDoPlano(montarPlano(q(), {}, { molde: MOLDE, adminsDD: ['outro.admin@dd.test', 'suzanne.mychelly1@gmail.com'] })),
+  ].join('\n');
+  // todos os campos de CAMPOS_SENSIVEIS: o valor real de cada um, lido do questionário
+  const valores = (obj: any, caminho: string): string[] => {
+    const [p, ...resto] = caminho.split('.');
+    const lista = p!.endsWith('[]');
+    const chave = lista ? p!.slice(0, -2) : p!;
+    const v = obj?.[chave];
+    if (v === undefined || v === null) return [];
+    if (!resto.length) return (Array.isArray(v) ? v : [v]).map(String);
+    return (lista || Array.isArray(v) ? (v as unknown[]) : [v]).flatMap((x) => valores(x, resto.join('.')));
+  };
+  const sensiveis = Object.keys(CAMPOS_SENSIVEIS).flatMap((c) => valores(qq, c));
+  assert.ok(sensiveis.length > 8, 'achei os valores sensíveis do questionário');
+  for (const v of [...sensiveis, 'outro.admin@dd.test', 'suzanne.mychelly1@gmail.com']) {
+    if (String(v).length < 5) continue;
+    assert.ok(!textos.includes(String(v)), `valor sensível em claro no plano: ${String(v).slice(0, 3)}…`);
+  }
+  // e o mascarado aparece (o plano continua dizendo o que vai fazer)
+  assert.match(textos, /s\*\*\*@gmail\.com/);
+  assert.match(textos, /número \+5\*\*\*53/);
 });

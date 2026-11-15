@@ -3,9 +3,9 @@
  * Demonstração». Prova: cada passo cria o que falta, a segunda rodada não cria NADA, nenhum segredo sai no texto, e o que é Meta/Kapso fica em seco.
  * O Chatwoot de mentira recusa nome repetido (422) como o de verdade: passo que não fosse idempotente derrubaria o teste.
  */
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, readFileSync, statSync, existsSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, statSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +20,7 @@ const { executarPlano, relatorioFinal } = await import('./executar.js');
 type BancoPorta = import('./executar.js').BancoPorta;
 type ConfigGravada = import('./executar.js').ConfigGravada;
 const { montarPlano } = await import('./plano.js');
+const { lerAdminsDD, ADMINS_DD_PADRAO } = await import('./fase2.js');
 const { lerQuestionario } = await import('./questionario.js');
 const { chatwootFalso } = await import('./chatwoot-falso.js');
 const { contaHttp, contaHttpSoLeitura, plataformaHttp } = await import('./chatwoot-http.js');
@@ -101,6 +102,7 @@ function montar(opcoes: { semPlataforma?: boolean; senha?: string; semKapso?: bo
     ],
   });
   const dir = mkdtempSync(join(tmpdir(), 'kit-cofre-'));
+  cofres.push(dir);
   const segredos = segredosEmArquivo(dir, {});
   const externas = {
     plataforma: opcoes.semPlataforma ? null : plataformaHttp(URL_CW, falso.tokenDaPlataforma, falso.fetch),
@@ -116,6 +118,10 @@ function montar(opcoes: { semPlataforma?: boolean; senha?: string; semKapso?: bo
   };
   return { falso, dir, segredos, externas };
 }
+
+/** as pastas de cofre que os testes criaram: apagadas no fim (segredo falso, mas lixo em /tmp não fica) */
+const cofres: string[] = [];
+after(() => { for (const d of cofres) rmSync(d, { recursive: true, force: true }); });
 
 async function rodar(q: typeof DEMO, b: ReturnType<typeof bancoFalso>, externas: ReturnType<typeof montar>['externas'] | null, o: { ligarRobo?: boolean; estado?: import('./plano.js').EstadoAtual } = {}) {
   const plano = montarPlano(q, o.estado ?? {}, { molde: MOLDE });
@@ -473,7 +479,7 @@ test('ADMINISTRADORES DA DOUTOR DIGITAL: a Suzanne entra na conta nova como admi
   assert.equal(suzanne!.role, 'administrator');
   assert.equal(suzanne!.id, 5, 'o id veio da conta de referência');
   assert.ok(!conta.agents.some((a) => a.email === 'joao@doutordigital.test'), 'só quem está na lista entra');
-  assert.match(resultados.find((r) => r.id === 'conta')!.notas.join(' '), /suzanne\.mychelly1@gmail\.com .*administrador\(a\) da conta/);
+  assert.match(resultados.find((r) => r.id === 'conta')!.notas.join(' '), /s\*\*\*@gmail\.com .*administrador\(a\) da conta/);
   // a plataforma só foi usada para: criar a conta, criar o conector, e account_users (conector + Suzanne). Nunca permissão sobre usuário, login ou token de usuário existente.
   const plataforma = falso.chamadas.filter((c) => c.conta === 'plataforma').map((c) => `${c.metodo} ${c.caminho.replace(/\/\d+/g, '/N')}`);
   assert.deepEqual([...new Set(plataforma)].sort(), ['POST /platform/api/v1/accounts', 'POST /platform/api/v1/accounts/N/account_users', 'POST /platform/api/v1/users']);
@@ -489,14 +495,14 @@ test('administradores da DD: a 2ª rodada dá zero POST (a Suzanne já é agente
   const r1 = await rodar(q2, b, externas);
   assert.equal(sit(r1.resultados, 'conta'), 'feito');
   const notas = r1.resultados.find((r) => r.id === 'conta')!.notas.join(' | ');
-  assert.match(notas, /AVISO: fantasma@exemplo\.com não está na conta de referência/);
+  assert.match(notas, /AVISO: f\*\*\*@exemplo\.com não está na conta de referência/);
   const conta = falso.contas.get(b.e.config!.contaId!)!;
   assert.ok(!conta.agents.some((a) => a.email === 'fantasma@exemplo.com'));
   const antes = posts(falso).length;
   const r2 = await rodar(q2, b, externas);
   assert.equal(sit(r2.resultados, 'conta'), 'feito');
   assert.equal(posts(falso).length, antes, 'zero POST na 2ª rodada, nem para o e-mail ausente');
-  assert.match(r2.resultados.find((r) => r.id === 'conta')!.notas.join(' '), /AVISO: fantasma/);
+  assert.match(r2.resultados.find((r) => r.id === 'conta')!.notas.join(' '), /AVISO: f\*\*\*@exemplo/);
 });
 
 test('administradores da DD: o questionário troca a lista; lista vazia não faz nada; sem a conta de referência só avisa', async () => {
@@ -531,7 +537,7 @@ test('e-mail inexistente na conta 1 NÃO tira o passo «conta» do «nada» a ca
   const resultados = await executarPlano(plano, q2, { banco: b.banco, molde: MOLDE, externas, dizer: () => undefined, confirmar: async (p) => (perguntou.push(p.id), true) });
   assert.ok(!perguntou.includes('conta'), 'não perguntou por «conta»');
   assert.equal(sit(resultados, 'conta'), 'nada-a-fazer');
-  assert.match(resultados.find((r) => r.id === 'conta')!.notas.join(' '), /AVISO: fantasma/);
+  assert.match(resultados.find((r) => r.id === 'conta')!.notas.join(' '), /AVISO: f\*\*\*@exemplo/);
   assert.equal(posts(falso).length, antes);
   // e quando falta um administrador que EXISTE na conta 1, aí sim o passo pergunta e põe
   const conta = falso.contas.get(b.e.config!.contaId!)!;
@@ -540,4 +546,18 @@ test('e-mail inexistente na conta 1 NÃO tira o passo «conta» do «nada» a ca
   await executarPlano(montarPlano(q2, estadoLido(falso, b), { molde: MOLDE }), q2, { banco: b.banco, molde: MOLDE, externas, dizer: () => undefined, confirmar: async (p) => (perguntou2.push(p.id), true) });
   assert.ok(perguntou2.includes('conta'));
   assert.ok(conta.agents.some((a) => a.email === 'suzanne.mychelly1@gmail.com'));
+});
+
+test('KIT_ADMINS_DD: vazia/ausente = padrão sem aviso; só "," ou lixo = padrão COM aviso (nunca lista vazia em silêncio); e-mails válidos entram, o resto é avisado', () => {
+  assert.deepEqual(lerAdminsDD(undefined), { lista: ADMINS_DD_PADRAO, avisos: [] });
+  assert.deepEqual(lerAdminsDD('  '), { lista: ADMINS_DD_PADRAO, avisos: [] });
+  for (const lixo of [',', ' , , ', 'nao-e-email', 'a@b']) {
+    const r = lerAdminsDD(lixo);
+    assert.deepEqual(r.lista, ADMINS_DD_PADRAO, `"${lixo}" cai no padrão`);
+    assert.ok(r.avisos.some((a) => /nenhum e-mail válido/.test(a)), `"${lixo}" avisa: ${JSON.stringify(r.avisos)}`);
+  }
+  const misto = lerAdminsDD('a@dd.test, lixo ,b@dd.test,');
+  assert.deepEqual(misto.lista, ['a@dd.test', 'b@dd.test']);
+  assert.equal(misto.avisos.length, 1);
+  assert.ok(!misto.avisos.join(' ').includes('a@dd.test'), 'o aviso não repete e-mail');
 });

@@ -190,7 +190,7 @@ case "$1" in
     esac;;
   cp)
     # volta do cofre: o contêiner "gerou" um segredo
-    case "$2" in novo111aaaabbbb:/run/kit-segredos/.) printf 'segredo-gerado' > "$3/CHATWOOT_API_TOKEN_DEMO";; esac;;
+    case "$2" in novo111aaaabbbb:/run/kit-segredos.*/.) printf 'segredo-gerado' > "$3/CHATWOOT_API_TOKEN_DEMO";; esac;;
   *) exit 0;;
 esac
 `,
@@ -218,7 +218,7 @@ test('nova-unidade-joao: roda o kit DENTRO do contêiner (node dist/scripts/nova
   const r = a.rodar(['clinica-demonstracao']);
   assert.equal(r.status, 0, r.stdout + r.stderr);
   const log = a.log();
-  assert.match(log, /docker exec .*-e CHATWOOT_PLATFORM_TOKEN -e KIT_ADMINS_DD -e KIT_SEGREDOS_DIR=\/run\/kit-segredos -w \/repo\/backend novo111aaaabbbb node dist\/scripts\/nova-unidade\.js \/repo\/ops\/kit-unidade\/unidades\/clinica-demonstracao\.yaml/);
+  assert.match(log, /docker exec .*-e CHATWOOT_PLATFORM_TOKEN -e KIT_ADMINS_DD -e KIT_SEGREDOS_DIR=\/run\/kit-segredos\.\d+ -w \/repo\/backend novo111aaaabbbb node dist\/scripts\/nova-unidade\.js \/repo\/ops\/kit-unidade\/unidades\/clinica-demonstracao\.yaml/);
   assert.ok(!log.includes('TOKEN-DA-PLATAFORMA-9z'), 'o valor do token não aparece na linha de comando');
   assert.ok(!(r.stdout + r.stderr).includes('TOKEN-DA-PLATAFORMA-9z'));
   assert.match(log, /docker cp .*molde-sofia novo111aaaabbbb:\/repo\/ops\/kit-unidade\//);
@@ -437,7 +437,7 @@ test('PRIVACIDADE: falha logo DEPOIS de copiar o questionário para o contêiner
   const limpeza = log.indexOf('rm -f /repo/ops/kit-unidade/unidades/clinica-demonstracao.yaml');
   assert.ok(copia >= 0, 'o questionário foi copiado');
   assert.ok(limpeza > copia, 'e foi APAGADO do contêiner depois, mesmo com a falha');
-  assert.match(log.slice(limpeza), /docker exec \S+ rm -rf \/run\/kit-segredos/);
+  assert.match(log.slice(limpeza), /docker exec \S+ rm -rf \/run\/kit-segredos\.\d+/);
   // falha ANTES da primeira cópia (contêiner sem o kit): a limpeza nem precisa, e não quebra
   const b = ambienteDoKit({ semKit: true });
   assert.notEqual(b.rodar(['clinica-demonstracao']).status, 0);
@@ -513,4 +513,22 @@ test('levar-kit-para-vps: se uma troca anterior CAIU no meio (privado/ ficou num
   assert.equal(readFileSync(join(r.destino, 'ops/kit-unidade/unidades/privado/clinica-real.yaml'), 'utf8'), 'guardado: sim\n', 'recuperado de .chegando.999');
   assert.ok(existsSync(join(r.destino, 'ops/kit-unidade/nova-unidade-joao.sh')));
   assert.deepEqual(spawnSync('ls', ['-A', r.destino], { encoding: 'utf8' }).stdout.split('\n').filter((x) => x.startsWith('.chegando')), [], 'as .chegando.* velhas foram limpas');
+});
+
+test('levar-kit-para-vps --questionario: também recupera o privado/ de uma .chegando.* deixada por troca que caiu, e só então limpa as .chegando.*', () => {
+  const r = repositorioDeMentira();
+  const { pasta } = privadoDeMentira();
+  const velho = join(r.destino, '.chegando.999/ops/kit-unidade/unidades/privado');
+  mkdirSync(velho, { recursive: true });
+  writeFileSync(join(velho, 'outra-clinica.yaml'), 'guardado: sim\n');
+  assert.ok(!existsSync(join(r.destino, 'ops/kit-unidade')), 'a pasta do kit sumiu (a troca caiu depois do rm)');
+  const env = r.rodar(['--questionario', 'clinica-real'], { KIT_PRIVADO_DIR: pasta });
+  assert.equal(env.status, 0, env.stdout + env.stderr);
+  const priv = join(r.destino, 'ops/kit-unidade/unidades/privado');
+  assert.equal(readFileSync(join(priv, 'outra-clinica.yaml'), 'utf8'), 'guardado: sim\n', 'o que estava na .chegando.999 não se perdeu');
+  assert.ok(existsSync(join(priv, 'clinica-real.yaml')), 'e o novo chegou');
+  // a próxima troca do kit leva os dois e limpa as .chegando.*
+  assert.equal(r.rodar([]).status, 0);
+  assert.ok(existsSync(join(priv, 'outra-clinica.yaml')) && existsSync(join(priv, 'clinica-real.yaml')));
+  assert.deepEqual(spawnSync('ls', ['-A', r.destino], { encoding: 'utf8' }).stdout.split('\n').filter((x) => x.startsWith('.chegando')), []);
 });

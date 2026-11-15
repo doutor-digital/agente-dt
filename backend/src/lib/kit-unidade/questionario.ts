@@ -259,7 +259,7 @@ export function configChatwootDoQuestionario(q: Questionario, extras: { gerenteI
 }
 
 /** `a.b[].c` → valor(es) no objeto, para a máscara. */
-function mascarar(valor: unknown, motivo: string): string {
+export function mascarar(valor: unknown, motivo: string): string {
   const s = String(valor);
   if (/mail/.test(motivo) || s.includes('@')) {
     const [u, d] = s.split('@');
@@ -269,6 +269,11 @@ function mascarar(valor: unknown, motivo: string): string {
   if (s.length <= 4) return '***';
   return `${s.slice(0, 2)}***${s.slice(-2)}`;
 }
+
+/** Mascara SÓ o que é e-mail (o resto da lista — um aviso, um nome de variável — passa como está). Para tudo que o plano/relatório imprime. */
+export const mascararEmails = (lista: readonly string[]): string[] => lista.map((v) => (v.includes('@') ? mascarar(v, 'e-mail') : v));
+/** Mascara um valor sensível que NÃO é e-mail (número, identificador); ausente vira «—». */
+export const mascararCampo = (valor: unknown): string => (valor === undefined || valor === null || valor === '' ? '—' : mascarar(valor, 'campo'));
 
 /** Cópia do questionário com os campos sensíveis mascarados, para imprimir. */
 export function questionarioMascarado(q: Questionario): unknown {

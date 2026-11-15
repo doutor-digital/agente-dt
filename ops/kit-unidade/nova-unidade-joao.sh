@@ -12,7 +12,7 @@
 # vêm do endereço deste arquivo, então funciona de /root/kit/ops/kit-unidade.
 #
 # NÃO PUBLIQUE DEPLOY ENQUANTO O KIT RODA: os segredos gerados (o token do conector da clínica, que o Chatwoot entrega UMA vez só, e o do robô) ficam em
-# /run/kit-segredos DENTRO do contêiner até o fim; trocar o contêiner (deploy, rolling update, reinício) no meio os perderia. Só saem dali quando o script termina.
+# /run/kit-segredos.<pid> DENTRO do contêiner até o fim; trocar o contêiner (deploy, rolling update, reinício) no meio os perderia. Só saem dali quando o script termina.
 # Se o contêiner foi trocado no meio: o usuário conector da clínica ficou criado sem token guardado — apague-o no Super Admin do Chatwoot e rode de novo.
 #
 # RODE COM `bash arquivo` NO SEU TERMINAL — nunca `ssh … 'bash -s' < este-arquivo`: o `docker exec -i` lê o stdin e engoliria o resto do script.
@@ -48,7 +48,8 @@ QUESTIONARIO="$PUBLICO"; [ -f "$QUESTIONARIO" ] || QUESTIONARIO="$PRIVADO"
 [ -f "$QUESTIONARIO" ] || { echo "ERRO: não achei o questionário de $SLUG em $PUBLICO nem em $PRIVADO (a skill /nova-unidade cria o arquivo; clínica real chega por levar-kit-para-vps.sh --questionario $SLUG)."; exit 1; }
 PLATAFORMA="${ARQUIVO_PLATAFORMA:-/root/segredos/chatwoot-platform.token}"
 COFRE_DO_HOST="${KIT_SEGREDOS_DIR:-/root/segredos/kit}"
-COFRE_NO_CONTEINER="/run/kit-segredos"
+# um cofre POR RODADA ($$ = o pid deste script): duas rodadas ao mesmo tempo (duas clínicas) não se apagam nem misturam segredos
+COFRE_NO_CONTEINER="/run/kit-segredos.$$"
 RAIZ_NO_CONTEINER="/repo"
 
 # o contêiner MAIS NOVO do agente (no rolling update `head -1` pegaria o antigo)

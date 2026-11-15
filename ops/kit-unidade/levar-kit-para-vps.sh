@@ -47,6 +47,15 @@ cd "$(git rev-parse --show-toplevel)"
 git fetch -q origin
 git rev-parse --verify -q "$REF" >/dev/null || { echo "ERRO: $REF não existe (git fetch origin)."; exit 1; }
 
+# Recupera o privado/ de uma troca anterior que caiu no meio (ele ficou numa .chegando.*): vem ANTES de qualquer limpeza de .chegando.*. Vale também para --questionario.
+read -r -d '' RECUPERA <<'EOS' || true
+set -e
+mkdir -p "$D/ops"
+if [ ! -d "$D/ops/kit-unidade/unidades/privado" ]; then
+  R="$(ls -dt "$D"/.chegando.*/ops/kit-unidade/unidades/privado 2>/dev/null | head -1 || true)"
+  if [ -n "$R" ]; then mkdir -p "$D/ops/kit-unidade/unidades"; mv "$R" "$D/ops/kit-unidade/unidades/privado"; fi
+fi
+EOS
 # ── só o QUESTIONÁRIO de uma clínica REAL (dado pessoal: não passa pelo git; vai da SUA máquina para a VPS, modo 600) ──
 if [ -n "$QUESTIONARIO" ]; then
   [[ "$QUESTIONARIO" =~ ^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$ ]] || { echo "slug inválido: $QUESTIONARIO"; exit 2; }
@@ -67,7 +76,8 @@ if [ -n "$QUESTIONARIO" ]; then
   if [ "$SO_CONFERIR" = "1" ]; then echo "SÓ CONFERIR: nada foi enviado."; exit 0; fi
   [ -r "$CHAVE" ] || { echo "ERRO: não achei a chave ssh $CHAVE (CHAVE_SSH)."; exit 1; }
   P="$DESTINO/ops/kit-unidade/unidades/privado"
-  ssh -i "$CHAVE" "$VPS" "set -e; umask 077; mkdir -p '$P'; chmod 700 '$P'; cat > '$P/$QUESTIONARIO.yaml.chegando'; chmod 600 '$P/$QUESTIONARIO.yaml.chegando'; mv '$P/$QUESTIONARIO.yaml.chegando' '$P/$QUESTIONARIO.yaml'" < "$ORIGEM"
+  ssh -i "$CHAVE" "$VPS" "D='$DESTINO'; $RECUPERA
+set -e; umask 077; mkdir -p '$P'; chmod 700 '$P'; cat > '$P/$QUESTIONARIO.yaml.chegando'; chmod 600 '$P/$QUESTIONARIO.yaml.chegando'; mv '$P/$QUESTIONARIO.yaml.chegando' '$P/$QUESTIONARIO.yaml'" < "$ORIGEM"
   echo "PRONTO: $P/$QUESTIONARIO.yaml na VPS (modo 600)."
   echo "PRÓXIMO (na VPS, como root):  cd $DESTINO && bash ops/kit-unidade/nova-unidade-joao.sh $QUESTIONARIO --so-conferir"
   exit 0
@@ -85,12 +95,6 @@ fi
 # O tar chega numa pasta TEMPORÁRIA ao lado e a pasta do kit é trocada por inteiro (nada de arquivo velho sobrando); o unidades/privado/ que já está na VPS é PRESERVADO — e, se uma
 # troca anterior caiu no meio (o privado/ ficou numa .chegando.*), ele é recuperado de lá antes.
 read -r -d '' REMOTO <<'EOS' || true
-set -e
-mkdir -p "$D/ops"
-if [ ! -d "$D/ops/kit-unidade/unidades/privado" ]; then
-  R="$(ls -dt "$D"/.chegando.*/ops/kit-unidade/unidades/privado 2>/dev/null | head -1 || true)"
-  if [ -n "$R" ]; then mkdir -p "$D/ops/kit-unidade/unidades"; mv "$R" "$D/ops/kit-unidade/unidades/privado"; fi
-fi
 rm -rf "$D"/.chegando.*
 T="$D/.chegando.$$"
 mkdir -p "$T"
@@ -103,7 +107,8 @@ rm -rf "$D/ops/kit-unidade"
 mv "$T/ops/kit-unidade" "$D/ops/kit-unidade"
 rm -rf "$T"
 EOS
-git archive "$REF" ops/kit-unidade | ssh -i "$CHAVE" "$VPS" "D='$DESTINO'; $REMOTO"
+git archive "$REF" ops/kit-unidade | ssh -i "$CHAVE" "$VPS" "D='$DESTINO'; $RECUPERA
+$REMOTO"
 ssh -i "$CHAVE" "$VPS" "ls '$DESTINO/ops/kit-unidade' | head -20" </dev/null
 echo "PRONTO: o kit está em $DESTINO/ops/kit-unidade na VPS."
 echo "PRÓXIMO (na VPS, como root):  cd $DESTINO && bash ops/kit-unidade/criar-platform-app-joao.sh --so-conferir"

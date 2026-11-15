@@ -21,7 +21,7 @@ import {
 } from './catalogo.js';
 import { camposDaSofia, camposDaUnidade } from './molde-sofia.js';
 import { aGravar, dadosDosModelosAGravar } from './protecao.js';
-import { configChatwootDoQuestionario, sufixoDoQuestionario, type Questionario } from './questionario.js';
+import { configChatwootDoQuestionario, mascararCampo, mascararEmails, sufixoDoQuestionario, type Questionario } from './questionario.js';
 
 export type Sistema = 'banco' | 'chatwoot' | 'meta' | 'vps' | 'sofia';
 export type Acao = 'criar' | 'alterar' | 'nada' | 'manual' | 'bloqueado';
@@ -180,8 +180,8 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
     titulo: `Conta própria da clínica no Chatwoot (API de plataforma) e o usuário conector dela`,
     acao: !b ? 'criar' : contaId !== null && temToken ? 'nada' : contaId === null && (!estado.plataforma || b.caixasRegistradas.length > 0) ? 'bloqueado' : 'criar',
     itens: contaId !== null
-      ? [`conta ${contaId} já gravada em unit_chatwoot.conta_id`, temToken ? `${nomeToken} já está no cofre/ambiente` : `${nomeToken} NÃO está no cofre/ambiente: cria outro usuário conector (precisa do Platform App)`, `administradores da Doutor Digital: ${(q.chatwoot.admins_dd ?? opcoes.adminsDD ?? ['KIT_ADMINS_DD (padrão: a Suzanne)']).join(', ')} — vai pôr os que ainda não estão na conta (pelo id na conta de referência; sem permissão sobre usuário)`]
-      : [`criar a conta «${q.unidade.nome}»`, `pôr os administradores da Doutor Digital na conta nova: ${(q.chatwoot.admins_dd ?? opcoes.adminsDD ?? ['KIT_ADMINS_DD (padrão: a Suzanne)']).join(', ')}`, `usuário conector administrador (${`conector+${slug}@…`}); o token dele vai para o cofre como ${nomeToken} (nunca impresso)`, 'o id da conta é gravado em unit_chatwoot.conta_id NA HORA (uma queda não deixa conta órfã)'],
+      ? [`conta ${contaId} já gravada em unit_chatwoot.conta_id`, temToken ? `${nomeToken} já está no cofre/ambiente` : `${nomeToken} NÃO está no cofre/ambiente: cria outro usuário conector (precisa do Platform App)`, `administradores da Doutor Digital: ${mascararEmails(q.chatwoot.admins_dd ?? opcoes.adminsDD ?? ['KIT_ADMINS_DD (padrão: a Suzanne)']).join(', ')} — vai pôr os que ainda não estão na conta (pelo id na conta de referência; sem permissão sobre usuário)`]
+      : [`criar a conta «${q.unidade.nome}»`, `pôr os administradores da Doutor Digital na conta nova: ${mascararEmails(q.chatwoot.admins_dd ?? opcoes.adminsDD ?? ['KIT_ADMINS_DD (padrão: a Suzanne)']).join(', ')}`, `usuário conector administrador (${`conector+${slug}@…`}); o token dele vai para o cofre como ${nomeToken} (nunca impresso)`, 'o id da conta é gravado em unit_chatwoot.conta_id NA HORA (uma queda não deixa conta órfã)'],
     execucao: 'sim',
     avisos: [
       ...(b ? [] : [NAO_CONSULTADO]),
@@ -248,7 +248,7 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
       ? [`caixa ${caixaExiste.id} já existe`]
       : q.whatsapp.modo === 'demonstracao'
         ? ['DEMONSTRAÇÃO: canal API (não há número de WhatsApp nem Kapso)']
-        : [`canal whatsapp_cloud, número ${q.whatsapp.numero_oficial}`, `phone_number_id ${q.whatsapp.kapso_phone_number_id} e WABA ${q.whatsapp.waba_id} (Kapso)`, 'chave do Kapso: KAPSO_API_KEY do ambiente (nunca impressa)'],
+        : [`canal whatsapp_cloud, número ${mascararCampo(q.whatsapp.numero_oficial)}`, `phone_number_id ${mascararCampo(q.whatsapp.kapso_phone_number_id)} e WABA ${mascararCampo(q.whatsapp.waba_id)} (Kapso)`, 'chave do Kapso: KAPSO_API_KEY do ambiente (nunca impressa)'],
     execucao: 'sim',
     avisos: cw ? [] : [NAO_CONSULTADO],
     depende: ['conta'],
@@ -344,7 +344,7 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
   add({
     id: 'numero',
     sistema: 'meta',
-    titulo: q.whatsapp.modo === 'demonstracao' ? 'Número de WhatsApp: DEMONSTRAÇÃO, não há número nem WABA' : `Número ${q.whatsapp.numero_oficial} conectado ao Kapso (${q.whatsapp.conexao === 'coexistencia' ? 'coexistência: o número segue no celular' : 'número novo'})`,
+    titulo: q.whatsapp.modo === 'demonstracao' ? 'Número de WhatsApp: DEMONSTRAÇÃO, não há número nem WABA' : `Número ${mascararCampo(q.whatsapp.numero_oficial)} conectado ao Kapso (${q.whatsapp.conexao === 'coexistencia' ? 'coexistência: o número segue no celular' : 'número novo'})`,
     acao: q.whatsapp.modo === 'demonstracao' ? 'nada' : 'manual',
     itens: q.whatsapp.modo === 'demonstracao' ? ['a demonstração não usa WhatsApp de verdade'] : [q.whatsapp.conexao === 'coexistencia' ? 'quem tem o celular da unidade lê o QR/aceita a coexistência no app do WhatsApp Business' : 'verificar o número na Meta (código por SMS/ligação)'],
     execucao: 'manual',
@@ -378,7 +378,7 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
     sistema: 'meta',
     titulo: 'Dataset da CAPI (conversões do WhatsApp para a Meta)',
     acao: q.whatsapp.modo === 'demonstracao' || estado.meta?.datasetCapi || estado.segredos?.[q.meta.dataset_id_env] ? 'nada' : 'manual',
-    itens: q.whatsapp.modo === 'demonstracao' ? ['DEMONSTRAÇÃO: sem WABA, sem CAPI'] : [`POST /${q.whatsapp.waba_id}/dataset (ou usar ${q.meta.dataset_id_env} se o dataset já existe)`, `token: ${q.meta.token_env} (do ambiente)`],
+    itens: q.whatsapp.modo === 'demonstracao' ? ['DEMONSTRAÇÃO: sem WABA, sem CAPI'] : [`POST /${mascararCampo(q.whatsapp.waba_id)}/dataset (ou usar ${q.meta.dataset_id_env} se o dataset já existe)`, `token: ${q.meta.token_env} (do ambiente)`],
     execucao: 'manual',
     avisos: estado.meta ? [] : [NAO_CONSULTADO, 'a criação do dataset usa o token da Meta da clínica: o script não faz (conferir a tela do Business Manager)'],
   });
@@ -435,9 +435,9 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
   add({
     id: 'franquia',
     sistema: 'banco',
-    titulo: `Franquia: id_company ${q.franquia.id_company} e token da API (units.spine_token)`,
+    titulo: `Franquia: id_company ${mascararCampo(q.franquia.id_company)} e token da API (units.spine_token)`,
     acao: 'manual',
-    itens: ['o token da franquia fica em units.spine_token (como nas outras unidades) e NÃO passa pelo questionário nem pelo script', `id_company ${q.franquia.id_company} entra em ID_COMPANY_POR_SLUG (lib/franquia-tela.ts, hoje no código — Fase 2)`, 'depois: spine_enabled=true e a automação chatwoot-agenda em seco'],
+    itens: ['o token da franquia fica em units.spine_token (como nas outras unidades) e NÃO passa pelo questionário nem pelo script', `id_company ${mascararCampo(q.franquia.id_company)} entra em ID_COMPANY_POR_SLUG (lib/franquia-tela.ts, hoje no código — Fase 2)`, 'depois: spine_enabled=true e a automação chatwoot-agenda em seco'],
     execucao: 'manual',
     avisos: [],
   });
@@ -450,7 +450,7 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
 function montarRelatorio(q: Questionario, passos: Passo[], x: { aEnviar: number; ausentes: string[]; inferidos: number }): string[] {
   const r: string[] = [];
   const tem = (id: string) => passos.find((p) => p.id === id)?.acao !== 'nada';
-  if (tem('numero')) r.push(`NÚMERO: conectar ${q.whatsapp.numero_oficial} ao Kapso (${q.whatsapp.conexao}) — quem tem o celular da unidade`);
+  if (tem('numero')) r.push(`NÚMERO: conectar ${mascararCampo(q.whatsapp.numero_oficial)} ao Kapso (${q.whatsapp.conexao}) — quem tem o celular da unidade`);
   if (q.whatsapp.modo === 'demonstracao') r.push('DEMONSTRAÇÃO: os modelos ficaram em SECO e a caixa é API. Para virar clínica de verdade: modo: real, número e WABA no questionário, e rodar de novo');
   r.push(`COFRE: o token do usuário conector (CHATWOOT_API_TOKEN_${sufixoDoQuestionario(q)}) e o do robô (CHATWOOT_SOFIA_BOT_TOKEN_${sufixoDoQuestionario(q)}) ficam na pasta KIT_SEGREDOS_DIR: o João os coloca no arquivo de segredos da VPS e no env do serviço ddagent_agent e REINICIA o serviço (é quando o servidor passa a conhecer a conta)`);
   r.push('PASTAS: cada atendente cria as 10 pastas dela depois do primeiro login (a pasta é da pessoa; o script não consegue)');

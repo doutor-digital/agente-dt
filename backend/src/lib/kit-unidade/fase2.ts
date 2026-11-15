@@ -10,7 +10,7 @@ import { chaveDoEvento } from '../chatwoot-ia.js';
 import { comDadosDaUnidade, modelosDaUnidade } from '../chatwoot-modelos.js';
 import { ATRIBUTOS_DE_CONTATO, ATRIBUTOS_DE_CONVERSA, ETIQUETAS_DO_CODIGO, MENSAGENS_PRONTAS } from './catalogo.js';
 import { ErroDaPorta, ErroSoLeitura, type ContaPorta, type PortasExternas } from './portas.js';
-import { configChatwootDoQuestionario, sufixoDoQuestionario, type Questionario } from './questionario.js';
+import { configChatwootDoQuestionario, mascararEmails, sufixoDoQuestionario, type Questionario } from './questionario.js';
 
 /** O que um passo deixa para os seguintes (só em memória, nunca impresso). */
 export interface EstadoDaExecucao {
@@ -130,6 +130,20 @@ export async function passoConta(q: Questionario, x: PortasExternas, estado: Est
   return notas;
 }
 
+/**
+ * A lista de `KIT_ADMINS_DD` (csv): só e-mail de verdade entra. Variável definida mas sem nenhum e-mail (`,`, vazia de fato, lixo) dá AVISO e vale o padrão —
+ * nunca uma lista vazia em silêncio (a conta nova ficaria sem a Doutor Digital).
+ */
+export function lerAdminsDD(valor: string | undefined): { lista: string[]; avisos: string[] } {
+  if (valor === undefined || !valor.trim()) return { lista: ADMINS_DD_PADRAO, avisos: [] };
+  const partes = valor.split(',').map((m) => m.trim()).filter(Boolean);
+  const bons = partes.filter((m) => /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(m));
+  const avisos: string[] = [];
+  if (partes.length > bons.length) avisos.push(`KIT_ADMINS_DD: ${partes.length - bons.length} item(ns) não são e-mail e foram ignorados`);
+  if (!bons.length) avisos.push('KIT_ADMINS_DD está definida mas não tem nenhum e-mail válido: usando o padrão');
+  return { lista: bons.length ? bons : ADMINS_DD_PADRAO, avisos };
+}
+
 /** O padrão: a Suzanne. Troca por KIT_ADMINS_DD (csv) ou por `chatwoot.admins_dd` do questionário. */
 export const ADMINS_DD_PADRAO = ['suzanne.mychelly1@gmail.com'];
 
@@ -146,22 +160,22 @@ async function passoAdminsDD(q: Questionario, x: PortasExternas, e: EstadoDaExec
   const jaNaConta = new Set(listaDaResposta(await conta.get('agents')).map((a) => lc(String(a.email))));
   const faltam = desejados.filter((m) => !jaNaConta.has(m));
   if (!faltam.length) return [`administradores da Doutor Digital já estão na conta (${desejados.length})`];
-  if (!x.referencia) return [`AVISO: sem a conta de referência não sei o id de ${faltam.join(', ')}: não pus os administradores da Doutor Digital (ponha-os à mão no Super Admin)`];
+  if (!x.referencia) return [`AVISO: sem a conta de referência não sei o id de ${mascararEmails(faltam).join(', ')}: não pus os administradores da Doutor Digital (ponha-os à mão no Super Admin)`];
   const naReferencia = new Map(listaDaResposta(await x.referencia.get('agents')).map((a) => [lc(String(a.email)), Number(a.id)] as const));
   const resolviveis = faltam.filter((m) => naReferencia.has(m));
   // só LER (o plano dizia «nada»): e-mail que não existe na conta 1 não é nada a fazer — só aviso, a cada rodada, sem tirar o passo do «nada»
   if (e.somenteLeitura && resolviveis.length) throw new ErroSoLeitura('pôr os administradores da Doutor Digital na conta');
   const plataforma = x.plataforma;
-  if (!plataforma && resolviveis.length) return [`AVISO: sem o Platform App não dá para pôr ${resolviveis.join(', ')} na conta`];
+  if (!plataforma && resolviveis.length) return [`AVISO: sem o Platform App não dá para pôr ${mascararEmails(resolviveis).join(', ')} na conta`];
   const notas: string[] = [];
   for (const m of faltam) {
     const id = naReferencia.get(m);
     if (!id) {
-      notas.push(`AVISO: ${m} não está na conta de referência (conta 1): não pus na conta ${contaId} — confira o e-mail`);
+      notas.push(`AVISO: ${mascararEmails([m])[0]} não está na conta de referência (conta 1): não pus na conta ${contaId} — confira o e-mail`);
       continue;
     }
     await plataforma!.vincular(contaId, id, 'administrator');
-    notas.push(`${m} (usuário ${id}) posto(a) como administrador(a) da conta ${contaId}`);
+    notas.push(`${mascararEmails([m])[0]} (usuário ${id}) posto(a) como administrador(a) da conta ${contaId}`);
   }
   return notas;
 }
