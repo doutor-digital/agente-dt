@@ -47,6 +47,7 @@ import { TELAS_CSS, TELAS_JS } from '../lib/chatwoot-telas-ui.js';
 import { instanteNoFuso, searchTreatments } from '../services/spine.service.js';
 import { arquivoComEtapa, CAIXAS_HISTORICO, CAIXAS_REGUA, CAMPO_PARTIDA, ehArquivo } from '../lib/chatwoot-regua.js';
 import { assistenteJs } from '../lib/chatwoot-assistente-ui.js';
+import { guiaJs, guiaDaEtapaLigado } from '../lib/chatwoot-guia-etapas.js';
 import {
   ATRIBUTO_ETAPA,
   MAX_PAGINAS,
@@ -139,7 +140,7 @@ async function quemEstaLogado(c: ContextoChatwoot, s: SessaoChatwoot): Promise<C
  * Quem está usando. Com o login do Chatwoot (`sessao`), TODA chamada ao Chatwoot vai com o login da pessoa: ela só vê e mexe
  * nas caixas a que tem acesso lá (a SDR da unidade não enxerga as outras). Só o link avulso do João (chave) usa o token da conta.
  */
-interface Acesso {
+export interface Acesso {
   c: ContextoChatwoot;
   logado: string | null;
   /** id do usuário no Chatwoot (o filtro "Minhas" compara por ele, não pelo nome) */
@@ -153,7 +154,7 @@ interface Acesso {
 async function autorizado(req: Request, res: Response): Promise<Acesso | null> {
   const c = contexto();
   if (!c?.conta) {
-    res.status(404).json({ error: 'funil desligado (Chatwoot não configurado)' });
+    res.status(404).json({ error: 'funil desligado (CRM não configurado)' });
     return null;
   }
   const chave = req.get('x-funil-chave');
@@ -170,7 +171,7 @@ async function autorizado(req: Request, res: Response): Promise<Acesso | null> {
   }
   const sessao = sessaoDosCabecalhos((n) => req.get(n));
   if (!sessao) {
-    res.status(403).json({ error: 'abra o funil pelo Chatwoot' });
+    res.status(403).json({ error: 'abra o funil pelo CRM' });
     return null;
   }
   const r = await quemEstaLogado(c, sessao);
@@ -181,10 +182,10 @@ async function autorizado(req: Request, res: Response): Promise<Acesso | null> {
 
 /** A resposta para uma sessão que não passou. O funil recusa login inválido com 403; a assistente, com 401. */
 function recusarSessao(res: Response, r: Exclude<Conferencia, object>, statusInvalida: 401 | 403): void {
-  if (r === 'invalida') res.status(statusInvalida).json({ error: 'entre no Chatwoot de novo (sessão expirada)', sessao: 'invalida' });
-  else if (r === 'sem-conta') res.status(403).json({ error: 'seu usuário do Chatwoot não tem acesso a esta conta — peça para a Suzanne', sessao: 'sem-conta' });
+  if (r === 'invalida') res.status(statusInvalida).json({ error: 'entre no CRM de novo (sessão expirada)', sessao: 'invalida' });
+  else if (r === 'sem-conta') res.status(403).json({ error: 'seu usuário do CRM não tem acesso a esta conta — peça para a Suzanne', sessao: 'sem-conta' });
   else if (r === 'excesso') res.status(429).json({ error: 'muitos acessos agora — tente em 1 minuto' });
-  else res.status(502).json({ error: 'não consegui falar com o Chatwoot agora' });
+  else res.status(502).json({ error: 'não consegui falar com o CRM agora' });
 }
 
 /**
@@ -196,21 +197,23 @@ export interface Atendente {
   sessao: SessaoChatwoot;
   nome: string;
   id: number | null;
+  /** papel nesta conta (`administrator` | `agent`): a tela «Robôs» só deixa o administrador configurar */
+  papel?: string | null;
 }
 
 export async function sessaoDaAtendente(req: Request, res: Response): Promise<Atendente | null> {
   const c = contexto();
   if (!c?.conta) {
-    res.status(404).json({ error: 'assistente desligada (Chatwoot não configurado)' });
+    res.status(404).json({ error: 'assistente desligada (CRM não configurado)' });
     return null;
   }
   const sessao = sessaoDosCabecalhos((n) => req.get(n));
   if (!sessao) {
-    res.status(401).json({ error: 'abra a assistente pelo Chatwoot (entre no Chatwoot de novo)', sessao: 'invalida' });
+    res.status(401).json({ error: 'abra a assistente pelo CRM (entre no CRM de novo)', sessao: 'invalida' });
     return null;
   }
   const r = await quemEstaLogado(c, sessao);
-  if (typeof r === 'object') return { c, sessao, nome: r.nome, id: r.id };
+  if (typeof r === 'object') return { c, sessao, nome: r.nome, id: r.id, papel: r.papel };
   recusarSessao(res, r, 401);
   return null;
 }
@@ -233,7 +236,7 @@ function falhou(res: Response, e: unknown, oQue: string, extra: Record<string, u
     res.status(404).json({ error: 'você não tem acesso a esta conversa (ou ela não existe mais)' });
     return;
   }
-  res.status(502).json({ error: 'não consegui falar com o Chatwoot agora' });
+  res.status(502).json({ error: 'não consegui falar com o CRM agora' });
 }
 
 async function vencimentosAbertos(conta: number, ids: number[]): Promise<Map<number, SituacaoTarefa>> {
@@ -382,7 +385,7 @@ async function autorizadoComLogin(req: Request, res: Response): Promise<Acesso |
   const a = await autorizado(req, res);
   if (!a) return null;
   if (!a.sessao) {
-    res.status(403).json({ error: 'esta tela abre pelo menu do Chatwoot, com o seu login' });
+    res.status(403).json({ error: 'esta tela abre pelo menu do CRM, com o seu login' });
     return null;
   }
   return a;
@@ -400,7 +403,7 @@ async function autorizadoGestao(req: Request, res: Response): Promise<Acesso | n
 
 function falhouLista(res: Response, e: unknown, oQue: string): void {
   logger.warn({ err: String(e) }, `funil: ${oQue} falhou`);
-  res.status(502).json({ error: 'não consegui falar com o Chatwoot agora — tente de novo em instantes' });
+  res.status(502).json({ error: 'não consegui falar com o CRM agora — tente de novo em instantes' });
 }
 
 export async function funilOportunidadesHandler(req: Request, res: Response): Promise<void> {
@@ -421,11 +424,13 @@ export async function funilOportunidadesHandler(req: Request, res: Response): Pr
 // Campanha de cada conversa: o `referral` está na 1ª mensagem do paciente e nunca muda — guarda (só ids de anúncio e título).
 // Só guarda o «não tem» quando a conversa foi lida até o começo; se faltou ler (conversa longa), não guarda: senão ela ficaria
 // «sem campanha» até o servidor reiniciar.
-const referralGuardado = new Map<number, Referral | null>();
+// A chave leva a CONTA: o id da conversa é por conta do Chatwoot (a conversa 5 da conta 1 não é a conversa 5 da conta 2).
+const referralGuardado = new Map<string, Referral | null>();
+export const chaveDoReferral = (a: Acesso, id: number): string => `${a.c.conta!.conta}|${id}`;
 const MAX_LEITURAS_POR_PEDIDO = 150;
 const MAX_PAGINAS_DE_MENSAGENS = 10;
 
-async function lerReferral(a: Acesso, conversaId: number): Promise<{ ref: Referral | null; completo: boolean }> {
+async function lerReferral(a: Acesso, conversaId: number, caixa: number): Promise<{ ref: Referral | null; completo: boolean }> {
   const todas: unknown[] = [];
   let antes: number | undefined;
   let completo = false;
@@ -444,18 +449,19 @@ async function lerReferral(a: Acesso, conversaId: number): Promise<{ ref: Referr
   let ref = referralDasMensagens(todas);
   // o Chatwoot perde o referral no caminho do Kapso: usa o que o servidor guardou do Kapso (o 1º clique)
   if (!ref) {
-    const k = (await referraisGuardados(conversaId))[0];
+    const k = (await referraisGuardados(conversaId, caixa))[0];
     if (k) ref = { anuncioId: k.anuncio, tipo: k.tipo, url: k.url, titulo: k.titulo };
   }
   return { ref, completo: completo || ref !== null };
 }
 
 /** Lê a campanha das conversas dadas, na ordem recebida (as mais novas primeiro), até o teto; o resto é contado para o aviso. */
-async function referralsDe(a: Acesso, ids: number[]): Promise<{ mapa: Map<number, Referral | null>; semLer: number; falhas: number }> {
+export async function referralsDe(a: Acesso, conversas: Array<{ id: number; caixa: number }>): Promise<{ mapa: Map<number, Referral | null>; semLer: number; falhas: number }> {
   const mapa = new Map<number, Referral | null>();
   const faltam: number[] = [];
-  for (const id of ids) {
-    if (referralGuardado.has(id)) mapa.set(id, referralGuardado.get(id)!);
+  const caixaDe = new Map(conversas.map((c) => [c.id, c.caixa]));
+  for (const { id } of conversas) {
+    if (referralGuardado.has(chaveDoReferral(a, id))) mapa.set(id, referralGuardado.get(chaveDoReferral(a, id))!);
     else faltam.push(id);
   }
   const alvo = faltam.slice(0, MAX_LEITURAS_POR_PEDIDO);
@@ -466,11 +472,11 @@ async function referralsDe(a: Acesso, ids: number[]): Promise<{ mapa: Map<number
       const i = proximo++;
       if (i >= alvo.length) return;
       try {
-        const { ref, completo } = await lerReferral(a, alvo[i]!);
+        const { ref, completo } = await lerReferral(a, alvo[i]!, caixaDe.get(alvo[i]!)!);
         mapa.set(alvo[i]!, ref);
         if (completo) {
           if (referralGuardado.size > 5000) referralGuardado.clear();
-          referralGuardado.set(alvo[i]!, ref);
+          referralGuardado.set(chaveDoReferral(a, alvo[i]!), ref);
         } else falhas++; // conversa longa demais para ler até o começo: fica sem campanha agora, e tenta de novo no próximo pedido
       } catch {
         falhas++;
@@ -661,7 +667,7 @@ export async function funilMarketingHandler(req: Request, res: Response): Promis
         agendadasNaJanela(ids, periodo),
         agendadasNaJanela(ids, periodo.anterior),
         prisma.chatwootReguaVisto.findFirst({ where: { conversationId: 0, campo: CAMPO_PARTIDA }, orderBy: { desde: 'asc' }, select: { desde: true } }).catch(() => null),
-        referralsDe(a, doPeriodoDe(conversas, periodo).map((c) => Number(c.id))),
+        referralsDe(a, doPeriodoDe(conversas, periodo).map((c) => ({ id: Number(c.id), caixa: Number(c.inbox_id) }))),
         gastosDasUnidades(slugs, periodo.de, periodo.ate),
         // a Meta só separa por DIA: em «Manhã» e «Fim do dia» o anterior seria ontem inteiro × hoje até agora (ou contaria ontem dos
         // dois lados) — seta enganosa toda manhã. Nesses dois períodos o bloco da Meta fica sem comparação.
@@ -704,7 +710,7 @@ export async function funilGestorHandler(req: Request, res: Response): Promise<v
     const v = await memo(`gs|${a.logadoId ?? a.logado}|${periodo.chave}|${caixa}`, VALE_TELA_MS, async () => {
       const { conversas, slugs, cortou } = await conversasDasUnidades(a, caixa);
       const [lidos, gastos, faturado, diario, gastosAntes, faturadoAntes] = await Promise.all([
-        referralsDe(a, doPeriodoDe(conversas, periodo).map((c) => Number(c.id))),
+        referralsDe(a, doPeriodoDe(conversas, periodo).map((c) => ({ id: Number(c.id), caixa: Number(c.inbox_id) }))),
         gastosDasUnidades(slugs, periodo.de, periodo.ate),
         faturadoDasUnidades(slugs, periodo.de, periodo.ate),
         periodo.de !== periodo.ate ? gastoDiarioDasUnidades(slugs, periodo.de, periodo.ate) : Promise.resolve(null),
@@ -929,7 +935,7 @@ export async function funilMensagemHandler(req: Request, res: Response): Promise
   const a = await autorizado(req, res);
   if (!a) return;
   if (!a.sessao) {
-    res.status(403).json({ error: 'para mandar mensagem, abra o funil pelo Chatwoot (com o seu login)' });
+    res.status(403).json({ error: 'para mandar mensagem, abra o funil pelo CRM (com o seu login)' });
     return;
   }
   const p = textoSchema.safeParse(req.body);
@@ -1021,7 +1027,7 @@ export async function funilNovoHandler(req: Request, res: Response): Promise<voi
   const a = await autorizado(req, res);
   if (!a) return;
   if (!a.sessao) {
-    res.status(403).json({ error: 'para criar lead, abra o funil pelo Chatwoot (com o seu login)' });
+    res.status(403).json({ error: 'para criar lead, abra o funil pelo CRM (com o seu login)' });
     return;
   }
   const p = novoSchema.safeParse(req.body);
@@ -1039,7 +1045,7 @@ export async function funilNovoHandler(req: Request, res: Response): Promise<voi
     const r = (await cw(a, 'POST', 'contacts', { corpo: { name: p.data.nome, phone_number: telefone, inbox_id: p.data.caixaId } })) as any;
     const contato = r?.payload?.contact ?? r?.payload;
     const origem = r?.payload?.contact_inbox?.source_id ?? contato?.contact_inboxes?.[0]?.source_id;
-    if (!contato?.id || !origem) throw new Error('o Chatwoot não devolveu o contato');
+    if (!contato?.id || !origem) throw new Error('o CRM não devolveu o contato');
     const conv = (await cw(a, 'POST', 'conversations', {
       corpo: { source_id: origem, inbox_id: p.data.caixaId, contact_id: contato.id, custom_attributes: { [ATRIBUTO_ETAPA]: p.data.etapa } },
     })) as any;
@@ -1062,6 +1068,7 @@ export function paginaFunilHandler(_req: Request, res: Response): void {
   }
   res.type('html').send(
     PAGINA.replace('__ORIGEM_CW__', JSON.stringify(new URL(contexto()!.conta!.url).origin))
+      .split('__GUIA_LIGADO__').join(String(guiaDaEtapaLigado()))
       .split('/*__TELAS_CSS__*/').join(TELAS_CSS)
       .split('/*__TELAS_JS__*/').join(TELAS_JS),
   );
@@ -1240,6 +1247,7 @@ body{background:#f4f6f9}
 .atual{font-size:12px;color:#667085}
 .ic{width:34px;height:34px;border-radius:10px;border:1px solid var(--linha);background:#fff;cursor:pointer;font-size:16px;color:#475467;transition:transform .3s}
 .ic:hover{transform:rotate(90deg)}
+.ic.ajuda{font-weight:700;font-size:15px}.ic.ajuda:hover{transform:none;background:#eef4ff}
 .busca-c{display:flex;align-items:center;gap:6px;height:34px;padding:0 10px;border:1px solid var(--linha);border-radius:10px;background:#fff;min-width:220px;flex:0 1 280px}
 .busca-c span{color:#98a2b3;font-size:15px}
 .busca-c input{border:0;outline:0;flex:1;min-width:0;background:transparent;height:30px}
@@ -1318,7 +1326,7 @@ body{background:#f4f6f9}
   <div class="linha-a">
     <h1>Funil</h1>
     <div class="resumo" id="resumo"></div>
-    <div class="dir"><span id="atual" class="atual"></span><button id="recarregar" class="ic" type="button" title="Atualizar agora" aria-label="Atualizar agora">↻</button><button id="novo" class="bt azul" type="button" hidden title="Novo lead (N)">+ Novo lead</button></div>
+    <div class="dir"><span id="atual" class="atual"></span><button id="ajuda" class="ic ajuda" type="button" hidden title="Ver a aula desta tela" aria-label="Ver a aula em vídeo desta tela">?</button><button id="recarregar" class="ic" type="button" title="Atualizar agora" aria-label="Atualizar agora">↻</button><button id="novo" class="bt azul" type="button" hidden title="Novo lead (N)">+ Novo lead</button></div>
   </div>
   <div class="linha-b">
     <select id="caixa" class="campo-topo" aria-label="Caixa de entrada"><option value="">Todas as caixas</option></select>
@@ -1468,7 +1476,7 @@ body{background:#f4f6f9}
     setTimeout(function(){ Array.prototype.forEach.call(document.querySelectorAll('.k.novo'),function(x){ x.classList.remove('novo'); }); },1500);
   }
   async function carregar(){
-    if(!S&&!K){ msg(DENTRO?'Entre no Chatwoot para ver o funil.':'Abra o funil pelo Chatwoot.'); return; }
+    if(!S&&!K){ msg(DENTRO?'Entre no CRM para ver o funil.':'Abra o funil pelo CRM.'); return; }
     if(TELA==='hoje'){ await carregarHoje(); return; }
     if(TELA){ await carregarTela(); return; }
     try{
@@ -1524,7 +1532,7 @@ body{background:#f4f6f9}
     esq.appendChild(cp);
     var ps=el('div','pessoa'), n=el('div','n'), av=el('span','av'); avatar(av,k.nome,f.contato.avatar,k.id); n.appendChild(av); n.appendChild(el('span',null,k.nome)); ps.appendChild(n);
     var cp2=el('div','cp'); linhaCampo(cp2,'Telefone',el('span',null,f.contato.telefone||'—')); ps.appendChild(cp2); esq.appendChild(ps);
-    var rod=el('div','rodape'), ab=el('a',null,'Abrir no Chatwoot'); ab.href=linkCw(k.id); ab.target='_top'; rod.appendChild(ab);
+    var rod=el('div','rodape'), ab=el('a',null,'Abrir no CRM'); ab.href=linkCw(k.id); ab.target='_top'; rod.appendChild(ab);
     var perdido=f.etapas.filter(function(e){ return /perd/i.test(e); })[0];
     if(perdido&&perdido!==k.etapa){ var bp=el('button',null,'✕ Perdido'); bp.type='button'; bp.onclick=function(){ aba='principal'; acao('POST','mover',{conversaId:k.id,etapa:perdido}); }; rod.appendChild(bp); }
     esq.appendChild(rod); L.appendChild(esq);
@@ -1552,7 +1560,7 @@ body{background:#f4f6f9}
     var ta=el('textarea'); ta.setAttribute('aria-label','Texto'); comp.appendChild(ta);
     var l2=el('div','linha2'), av2=el('span','aviso'), env=el('button','bt azul');
     env.type='button';
-    if(modo==='mensagem'){ ta.placeholder='Escreva para '+k.nome+' (sai pelo WhatsApp)…'; env.textContent='Enviar'; if(!f.podeEscrever){ ta.disabled=true; env.disabled=true; av2.textContent='Para mandar mensagem, abra o funil pelo menu do Chatwoot.'; } }
+    if(modo==='mensagem'){ ta.placeholder='Escreva para '+k.nome+' (sai pelo WhatsApp)…'; env.textContent='Enviar'; if(!f.podeEscrever){ ta.disabled=true; env.disabled=true; av2.textContent='Para mandar mensagem, abra o funil pelo menu do CRM.'; } }
     else if(modo==='nota'){ ta.placeholder='Nota interna — só a equipe vê'; env.textContent='Salvar nota'; }
     else {
       ta.placeholder='O que fazer — ex.: ligar para confirmar o horário'; env.textContent='Criar tarefa';
@@ -1572,6 +1580,14 @@ body{background:#f4f6f9}
   $('busca').addEventListener('input',function(){ if(dados) desenhar(); });
   $('ordem').addEventListener('change',function(){ guardar(); if(dados) desenhar(); });
   $('recarregar').addEventListener('click',function(){ carregar(); });
+  // «?» do cabeçalho: abre a aula em vídeo desta tela por cima da conversa (o menu do CRM mostra o modal; aqui só se pede). Só dentro do CRM.
+  var GUIA_LIGADO=__GUIA_LIGADO__;
+  (function(){
+    var aula=TELA===''?'funil':TELA==='hoje'?'hoje':TELA==='oport'?'oportunidades':'';
+    if(!aula||!DENTRO||!GUIA_LIGADO) return;
+    var b=$('ajuda'); b.hidden=false;
+    b.addEventListener('click',function(){ try{ window.parent.postMessage({event:'guia:tela',tela:aula},ORIGEM_CW); }catch(e){} });
+  })();
   document.addEventListener('keydown',function(e){
     var t=e.target, digitando=t&&(t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.tagName==='SELECT');
     if(digitando||aberta||e.ctrlKey||e.metaKey||e.altKey) return;
@@ -1584,7 +1600,7 @@ body{background:#f4f6f9}
     try{ var d=typeof ev.data==='string'?JSON.parse(ev.data):ev.data;
       if(d&&d.event==='funil-sessao'&&ev.origin===ORIGEM_CW&&ev.source===window.parent){
         var nova=d.sessao&&d.sessao.token?d.sessao:null;
-        if(nova&&nova.token===morta){ msg('Sua sessão do Chatwoot venceu: saia e entre de novo.'); return; }
+        if(nova&&nova.token===morta){ msg('Sua sessão do CRM venceu: saia e entre de novo.'); return; }
         S=nova; iniciar(); return; }
       if(!d||d.event!=='appContext') return;
       var x=d.data||{}; var cid=x.conversation&&x.conversation.id||null;
@@ -1687,13 +1703,15 @@ export function menuFunilHandler(_req: Request, res: Response): void {
 }
 
 /**
- * O que o Chatwoot carrega em `GET /funil/menu.js`: o menu (Hoje, Funil, Oportunidades e, para a gestão, Marketing e Gestor) e o botão da assistente da atendente. Dois blocos
+ * O que o Chatwoot carrega em `GET /funil/menu.js`: o menu (Hoje, Funil, Oportunidades e, para a gestão, Marketing e Gestor), o botão da assistente da atendente e o guia da etapa. Blocos
  * independentes no MESMO arquivo, porque o DASHBOARD_SCRIPTS da produção carrega só este endereço. Erro de EXECUÇÃO do botão
  * não derruba o menu (o `try`); erro de SINTAXE derrubaria o arquivo todo, por isso o teste `menu.js … PARSEIAM` é obrigatório.
  */
 export function montarMenuJs(agente: string): string {
   const origem = JSON.stringify(agente);
-  return `${MENU_JS.split('__AGENTE__').join(origem)}\n;try{\n${assistenteJs().split('__AGENTE__').join(origem)}\n}catch(e){}\n`;
+  // o guia da etapa («O que fazer agora») é um terceiro bloco independente: se falhar ao executar, o menu e a assistente seguem
+  const guia = guiaJs(origem);
+  return `${MENU_JS.split('__AGENTE__').join(origem)}\n;try{\n${assistenteJs().split('__AGENTE__').join(origem)}\n}catch(e){}\n${guia ? `;try{\n${guia}\n}catch(e){}\n` : ''}`;
 }
 
 // String.raw: o que está aqui é o JavaScript que o navegador recebe (as barras das expressões regulares ficam como estão).
@@ -1720,7 +1738,9 @@ const MENU_JS = String.raw`(function(){
     { id: 'gestor', marca: 'data-gestor-menu', nome: 'Gestor', hash: '#gestor', param: 'gestor', gestao: true, pai: 'hoje' },
     { id: 'funil', marca: 'data-funil-menu', nome: 'Funil', hash: '#funil', param: '' },
     // «Agente»: a equipe cuida da própria Sofia (avaliações, regras, teste, pausadas) e pede à Doutor Digital o que é de código (13/11)
-    { id: 'ia', marca: 'data-ia-menu', nome: 'Agente', hash: '#agente', param: '', url: '/funil/agente' }
+    { id: 'ia', marca: 'data-ia-menu', nome: 'Agente', hash: '#agente', param: '', url: '/funil/agente' },
+    // «Robôs» (14/11): os robôs da régua por unidade — ver, ligar/desligar, mudar tempo e modelo (só administrador) e o que foi enviado
+    { id: 'robos', marca: 'data-robos-menu', nome: 'Robôs', hash: '#robos', param: '', url: '/funil/robos' }
   ];
   // o grupo Hoje aberto/fechado fica lembrado neste navegador (padrão: aberto)
   var GRUPO_HOJE = 'menu:hoje-fechado';
@@ -1732,11 +1752,31 @@ const MENU_JS = String.raw`(function(){
   }
   function achar(id){ for (var i = 0; i < TELAS.length; i++) if (TELAS[i].id === id) return TELAS[i]; return null; }
   var DE_MENU = TELAS.map(function(t){ return '[' + t.marca + ']'; }).join(', ');
+  // Item aberto = as MESMAS classes que o CRM usa no item ativo (azul do CRM, fundo leve). Com uma tela nossa aberta, o item que o CRM
+  // ainda marca (ex. «Todas as conversas») perde o destaque: antes ficavam DOIS selecionados (João, 15/11) — e o clique não deixa contorno.
+  // classes do item ativo no Chatwoot 4.19.1 (SidebarGroupHeader/Leaf: text-n-slate-12 bg-n-alpha-2 font-medium)
+  var ATIVO_CW = ['text-n-slate-12', 'bg-n-alpha-2', 'font-medium'];
+  function estiloDoMenu(){
+    if (document.querySelector('style[data-dd-menu-estilo]')) return;
+    var st = document.createElement('style'); st.setAttribute('data-dd-menu-estilo', '1');
+    // com tela nossa aberta: o item ativo do CRM e o cabeçalho do grupo dele («Conversas») voltam ao cinza; e o clique do mouse não deixa
+    // contorno nos nossos itens (o teclado continua com o contorno: :focus-visible)
+    st.textContent = 'html.dd-tela-aberta aside li a.bg-n-alpha-2:not([data-dd-ativo]),html.dd-tela-aberta aside li a.text-n-slate-12:not([data-dd-ativo]){background-color:transparent!important;color:rgb(var(--slate-11))!important}' +
+      TELAS.map(function(t){ return '[' + t.marca + '] a:focus:not(:focus-visible),a[' + t.marca + ']:focus:not(:focus-visible)'; }).join(',') + '{outline:none!important;box-shadow:none!important}';
+    (document.head || document.documentElement).appendChild(st);
+  }
   function marcar(ativo){
     // ativo: id da tela aberta, ou false (nenhuma)
+    estiloDoMenu();
+    document.documentElement.classList.toggle('dd-tela-aberta', !!ativo);
     TELAS.forEach(function(t){
       var item = document.querySelector('[' + t.marca + ']'), link = item && (item.tagName === 'A' ? item : item.querySelector('a'));
-      if (link) link.style.background = ativo === t.id ? 'rgba(31,147,255,.12)' : '';
+      if (!link) return;
+      var sim = ativo === t.id;
+      link.style.background = '';
+      ATIVO_CW.forEach(function(c){ link.classList.toggle(c, sim); });
+      link.classList.toggle('text-n-slate-11', !sim);
+      if (sim) link.setAttribute('data-dd-ativo', '1'); else link.removeAttribute('data-dd-ativo');
     });
   }
   // fechar REMOVE o quadro: nada fica consultando o Chatwoot escondido; reabrir pede o login de novo
@@ -1822,6 +1862,8 @@ const MENU_JS = String.raw`(function(){
     mkt: '<path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/>',
     gestor: '<path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>'
   };
+  // Robôs: o desenho de fluxo (dois blocos ligados), não a cabeça de robô (João, 15/11: «cara de IA»)
+  ICONES.robos = '<rect width="8" height="8" x="3" y="3" rx="2"/><path d="M7 11v4a2 2 0 0 0 2 2h4"/><rect width="8" height="8" x="13" y="13" rx="2"/>';
   ICONES.ia = '<path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>';
   var SEL_ICONE = 'svg, [class^="i-"], [class*=" i-"]';
   function trocarIcone(base, novo, qual){
@@ -1845,6 +1887,8 @@ const MENU_JS = String.raw`(function(){
     trocarIcone(base, novo, t.id);
     var link = novo.tagName === 'A' ? novo : novo.querySelector('a');
     if (link) { link.setAttribute('href', t.hash); link.classList.remove('router-link-active', 'router-link-exact-active'); link.removeAttribute('aria-current'); }
+    // o «Contatos» copiado pode estar ativo na hora da cópia: o item novo nasce sem destaque (quem marca é o marcar())
+    if (link) { ATIVO_CW.forEach(function(c){ link.classList.remove(c); }); link.removeAttribute('data-dd-ativo'); link.classList.add('text-n-slate-11'); }
     Array.prototype.forEach.call(novo.querySelectorAll('ul, [role="group"]'), function(u){ u.remove(); });
     trocarTexto(novo, t.nome);
     if (t.pai) {
@@ -1878,6 +1922,8 @@ const MENU_JS = String.raw`(function(){
     });
     var reserva = document.querySelector('[data-funil-botao]'); if (reserva) reserva.remove();
     aplicarGrupo();
+    // o CRM redesenhou o menu com uma tela nossa aberta: os itens recriados voltam a marcar a tela aberta
+    if (tela) marcar(tela);
     return true;
   }
   function botao(){

@@ -5,6 +5,8 @@
  *   npx tsx src/scripts/nova-unidade.ts <questionario.yaml> --offline           # seco sem consultar banco nem Chatwoot (assume conta vazia)
  *   npx tsx src/scripts/nova-unidade.ts <questionario.yaml> --aplicar           # executa, etapa por etapa, perguntando antes de cada uma
  *   npx tsx src/scripts/nova-unidade.ts <questionario.yaml> --aplicar --sim     # sem perguntar (só depois de ler o plano)
+ *   ... --sobrescrever                                                          # troca também o que a unidade JÁ tem preenchido e deixa tocar numa unidade ATIVA
+ *     (sem a flag: numa unidade que existe só se preenche campo VAZIO, e a ATIVA é recusada)
  *   npx tsx src/scripts/nova-unidade.ts --gerar-schema                          # regrava ops/kit-unidade/questionario.schema.json
  *
  * Fase 1: o seco está completo; o --aplicar executa os passos de BANCO e deixa como ESQUELETO os que dependem de API externa
@@ -97,6 +99,11 @@ async function lerEstado(q: Questionario): Promise<EstadoAtual> {
 async function bancoReal(): Promise<BancoPorta> {
   const { prisma } = await import('../lib/prisma.js');
   return {
+    async lerUnidade(slug) {
+      const u = await prisma.unit.findUnique({ where: { slug } });
+      return u ? { id: u.id, ativa: u.isActive === true, campos: u as unknown as Record<string, unknown> } : null;
+    },
+    // `campos` já vem filtrado por `protecao.ts` (só o que está vazio, ou tudo com --sobrescrever): aqui só se grava o que foi dado
     async gravarUnidade(slug, nome, campos, soNaCriacao = {}) {
       const ja = await prisma.unit.findUnique({ where: { slug }, select: { id: true } });
       if (ja) {
@@ -106,9 +113,14 @@ async function bancoReal(): Promise<BancoPorta> {
       const nova = await prisma.unit.create({ data: { slug, name: nome, isActive: false, ...soNaCriacao, ...campos } as never, select: { id: true } });
       return { id: nova.id, criada: true };
     },
-    async gravarConfigChatwoot(unitId, c) {
-      const dados = { prefixoModelos: c.prefixoModelos, metaAgendamentosDia: c.metaAgendamentosDia, kapsoPhoneNumberId: c.kapsoPhoneNumberId, wabaId: c.wabaId, envSufixo: c.envSufixo, dadosModelos: c.dadosModelos as never, atualizadoPor: 'nova-unidade' };
-      await prisma.unitChatwoot.upsert({ where: { unitId }, create: { unitId, ...dados }, update: dados });
+    async lerConfigChatwoot(unitId) {
+      const c = await prisma.unitChatwoot.findUnique({ where: { unitId } });
+      return c ? { prefixoModelos: c.prefixoModelos, metaAgendamentosDia: c.metaAgendamentosDia, kapsoPhoneNumberId: c.kapsoPhoneNumberId, wabaId: c.wabaId, envSufixo: c.envSufixo, dadosModelos: (c.dadosModelos ?? {}) as Record<string, unknown> } : null;
+    },
+    async gravarConfigChatwoot(unitId, c, criar) {
+      const dados = { ...c, ...(c.dadosModelos ? { dadosModelos: c.dadosModelos as never } : {}), atualizadoPor: 'nova-unidade' };
+      if (criar) await prisma.unitChatwoot.create({ data: { unitId, ...dados } as never });
+      else await prisma.unitChatwoot.update({ where: { unitId }, data: dados as never });
     },
     async automacoesDaUnidade(unitId) {
       return (await prisma.unitAutomacao.findMany({ where: { unitId }, select: { automacao: true } })).map((a) => a.automacao);
@@ -134,7 +146,7 @@ async function main(): Promise<void> {
     return;
   }
   if (!arquivo) {
-    console.error('uso: nova-unidade.ts <questionario.yaml> [--aplicar] [--sim] [--offline] [--sobrescrever-prompt]   |   --gerar-schema');
+    console.error('uso: nova-unidade.ts <questionario.yaml> [--aplicar] [--sim] [--offline] [--sobrescrever] [--sobrescrever-prompt]   |   --gerar-schema');
     process.exit(2);
   }
   const lido = lerQuestionario(readFileSync(resolve(arquivo), 'utf8'));
@@ -149,7 +161,7 @@ async function main(): Promise<void> {
   console.log('');
   const estado: EstadoAtual = flags.has('--offline') ? {} : await lerEstado(q);
   const molde = lerMolde();
-  const plano = montarPlano(q, estado, { molde });
+  const plano = montarPlano(q, estado, { molde, sobrescrever: flags.has('--sobrescrever') });
   console.log(textoDoPlano(plano));
   if (!flags.has('--aplicar')) {
     console.log('\n(SECO: nada foi gravado. Para executar: --aplicar)');
@@ -165,6 +177,7 @@ async function main(): Promise<void> {
     banco: await bancoReal(),
     molde,
     sobrescreverPrompt: flags.has('--sobrescrever-prompt'),
+    sobrescrever: flags.has('--sobrescrever'),
     dizer: (l) => console.log(l),
     confirmar: async (p) => (sim ? true : /^s(im)?$/i.test((await rl.question(`  Aplicar esta etapa (${p.id})? [s/N] `)).trim())),
   });

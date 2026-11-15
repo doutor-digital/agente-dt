@@ -74,15 +74,32 @@ test('CAPI: desfazer e marcar também levam a caixa', async () => {
   }
 });
 
-test('referrais do Kapso: com a caixa filtra por ela; sem a caixa (chamador antigo) a consulta é a de sempre', async () => {
+test('referrais do Kapso: a caixa é obrigatória e entra na consulta (a conversa 7 da caixa 3 não é a conversa 7 da caixa 12)', async () => {
   const { referraisGuardados } = await import('./kapso-referral.js');
   const f = falsoDoDisparo({ findMany: () => [] });
   try {
-    await referraisGuardados(7);
     await referraisGuardados(7, 3);
-    assert.deepEqual((f.chamadas[0]!.args as { where: unknown }).where, { conversationId: 7, regra: 'kapso-referral' });
-    assert.deepEqual((f.chamadas[1]!.args as { where: unknown }).where, { caixa: 3, conversationId: 7, regra: 'kapso-referral' });
+    await referraisGuardados(7, 12);
+    assert.deepEqual((f.chamadas[0]!.args as { where: unknown }).where, { caixa: 3, conversationId: 7, regra: 'kapso-referral' });
+    assert.deepEqual((f.chamadas[1]!.args as { where: unknown }).where, { caixa: 12, conversationId: 7, regra: 'kapso-referral' });
   } finally {
     f.restaurar();
   }
+});
+
+test('funil: o cache da campanha da conversa leva a CONTA (a conversa 5 da conta 1 não responde pela conversa 5 da conta 2)', async () => {
+  const { referralsDe, chaveDoReferral } = await import('../controllers/funil.controller.js');
+  const { criarContextoChatwoot } = await import('../mcp-remoto/chatwoot.js');
+  const mensagens = (anuncio: string) => ({ payload: [{ id: 1, message_type: 0, created_at: 1, content_attributes: { referral: { source_id: anuncio, source_type: 'ad', headline: `anúncio ${anuncio}` } } }] });
+  const acesso = (conta: number, anuncio: string) => ({ c: criarContextoChatwoot({ url: 'https://crm.exemplo.test', conta, token: 'tk' }, { fetch: (async () => ({ ok: true, status: 200, text: async () => JSON.stringify(mensagens(anuncio)) })) as unknown as typeof fetch }), logado: null, logadoId: null, sessao: null });
+  const a1 = acesso(1, '111111');
+  const a2 = acesso(2, '222222');
+  assert.notEqual(chaveDoReferral(a1, 5), chaveDoReferral(a2, 5));
+  const r1 = await referralsDe(a1, [{ id: 5, caixa: 3 }]);
+  const r2 = await referralsDe(a2, [{ id: 5, caixa: 20 }]);
+  assert.equal(r1.mapa.get(5)?.anuncioId, '111111');
+  assert.equal(r2.mapa.get(5)?.anuncioId, '222222', 'a conta 2 lê a conversa dela, não o cache da conta 1');
+  // e a segunda leitura da conta 1 vem do cache da conta 1
+  const outra = acesso(1, '999999');
+  assert.equal((await referralsDe(outra, [{ id: 5, caixa: 3 }])).mapa.get(5)?.anuncioId, '111111');
 });

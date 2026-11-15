@@ -17,8 +17,10 @@
  *
  * A sessão chega do menu do Chatwoot por postMessage (`funil:pede-sessao` → `funil-sessao`, com checagem de origem). Todo texto que
  * vem do servidor entra por textContent (nunca innerHTML). O JavaScript não usa crase nem `${`: o texto é um String.raw e só
- * `__ORIGEM_CW__` é trocado.
+ * `__ORIGEM_CW__` (a origem do Chatwoot) e `__GUIA_LIGADO__` (true/false: o «?» do cabeçalho só aparece com o guia da etapa ligado) são trocados
+ * por `paginaDoAgente`; página servida sem trocar os dois quebra o script.
  */
+import { guiaDaEtapaLigado } from './chatwoot-guia-etapas.js';
 
 const PAGINA = String.raw`<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -40,6 +42,7 @@ h3 .c{color:var(--mut);font-weight:500;font-variant-numeric:tabular-nums}
 .mut{color:var(--mut)}
 .cab{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 16px;margin-bottom:12px}
 .cab .eu{display:flex;align-items:center;gap:10px;color:var(--sec);font-size:13px}
+.cab .aj{width:30px;height:30px;border-radius:50%;border:1px solid var(--b);background:transparent;color:var(--sec);font-weight:700;font-size:14px;cursor:pointer}.cab .aj:hover{color:var(--azul-txt);border-color:var(--azul)}
 .topo{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:8px 16px;border-bottom:1px solid var(--b)}
 .abas{display:flex;gap:4px;flex-wrap:wrap}
 .abas button{position:relative;min-height:40px;padding:0 12px;border:0;background:transparent;color:var(--sec);font-weight:500;font-size:14px;cursor:pointer;border-radius:6px 6px 0 0}
@@ -209,7 +212,7 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
 <body><main>
 <div class="cab">
   <div><h1>Agente</h1><div class="meta" id="unidadeNome">Carregando…</div></div>
-  <div class="eu"><select class="sel" id="unidadeSel" aria-label="Unidade" hidden></select><span id="euNome"></span></div>
+  <div class="eu"><button class="aj" id="ajuda" type="button" hidden title="Ver a aula desta tela" aria-label="Ver a aula em vídeo desta tela">?</button><select class="sel" id="unidadeSel" aria-label="Unidade" hidden></select><span id="euNome"></span></div>
 </div>
 <div id="erroTopo" class="aviso erro" hidden></div>
 
@@ -249,7 +252,7 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
   </div>
   <details class="def"><summary>Como cada número é contado</summary><ul>
     <li><b>Pessoas respondidas</b>: conversas em que a Sofia mandou pelo menos uma resposta no período.</li>
-    <li><b>Consultas marcadas</b>: consultas que a Sofia marcou na agenda da franquia por uma conversa do Chatwoot.</li>
+    <li><b>Consultas marcadas</b>: consultas que a Sofia marcou na agenda da franquia por uma conversa do CRM.</li>
     <li><b>Marcaram</b>: consultas marcadas ÷ pessoas respondidas.</li>
     <li><b>Passou para a equipe</b>: conversas em que ela chamou alguém da equipe (paciente pediu uma pessoa, assunto que ela não resolve).</li>
     <li><b>Pix do sinal gerado</b>: conversas em que ela gerou o Pix do sinal.</li>
@@ -309,7 +312,7 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
       <div class="acoes"><span class="meta" id="restam"></span></div>
       <div class="acoes" style="justify-content:flex-start"><button class="bt" id="btRegraDaqui" type="button">Ela errou? Ensinar</button><button class="bt leve" id="btRecomecar" type="button">Recomeçar</button></div>
       <div id="avisoChat" class="aviso erro" hidden style="margin-top:10px"></div>
-      <p class="meta" style="margin-top:16px">Agenda e Pix aqui são de mentira: nada vai para a franquia, o Kommo ou o WhatsApp. A conversa fica só neste computador.</p>
+      <p class="meta" style="margin-top:16px">Agenda e Pix aqui são de mentira: nada vai para a franquia, o CRM ou o WhatsApp. A conversa fica só neste computador.</p>
     </section>
   </div>
 </section>
@@ -318,7 +321,7 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
 <section class="pane" id="pane-pausadas" role="tabpanel" aria-labelledby="aba-pausadas" hidden>
   <section>
     <h3>Conversas com a Sofia pausada <span class="c" id="cPausadas"></span></h3>
-    <div class="meta">A Sofia sai da frente quando alguém da equipe responde (pelo Chatwoot ou pelo celular) e volta quando a conversa é resolvida. Aqui dá para devolver antes.</div>
+    <div class="meta">A Sofia sai da frente quando alguém da equipe responde (pelo CRM ou pelo celular) e volta quando a conversa é resolvida. Aqui dá para devolver antes.</div>
     <div class="rolar" style="margin-top:8px"><table class="tab"><thead><tr><th>Paciente</th><th>Pausada por</th><th>Desde</th><th>Com</th><th></th></tr></thead><tbody id="listaPausadas"></tbody></table></div>
   </section>
 </section>
@@ -362,6 +365,7 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
 <div id="toast" class="toast" role="status" hidden></div>
 <script>
 (function(){
+  var GUIA_LIGADO = __GUIA_LIGADO__;
   var CW = __ORIGEM_CW__, S = null, U = null, EU = '', UNIDADES = [];
   var $ = function(id){ return document.getElementById(id); };
   function el(tag, cls, txt){ var e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; }
@@ -458,7 +462,7 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
       var p = await api('GET', '/api/public/agente/painel?slug=' + enc(U.slug) + '&periodo=' + enc(PERIODO));
       var k = $('kpis'); k.textContent = '';
       k.appendChild(kpi('Pessoas respondidas', 'Conversas em que a Sofia mandou pelo menos uma resposta no período', String(p.respondidas.agora), variacao(p.respondidas.agora, p.respondidas.antes)));
-      k.appendChild(kpi('Consultas marcadas', 'Consultas que a Sofia marcou na agenda da franquia por uma conversa do Chatwoot', String(p.marcadas.agora), variacao(p.marcadas.agora, p.marcadas.antes)));
+      k.appendChild(kpi('Consultas marcadas', 'Consultas que a Sofia marcou na agenda da franquia por uma conversa do CRM', String(p.marcadas.agora), variacao(p.marcadas.agora, p.marcadas.antes)));
       k.appendChild(kpi('Marcaram', 'Consultas marcadas ÷ pessoas respondidas', p.conversao.agora == null ? '—' : p.conversao.agora + '%', variacao(p.conversao.agora, p.conversao.antes, true)));
       k.appendChild(kpi('Pix do sinal gerado', 'Conversas em que ela gerou o Pix do sinal', String(p.pix.agora), variacao(p.pix.agora, p.pix.antes)));
       var eq = variacao(p.equipe.agora, p.equipe.antes); eq.c = '';
@@ -798,12 +802,17 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
     if (ev.key !== 'testar-ia-rascunho' || !ev.newValue || !U) return;
     guardar('testar-ia-rascunho', null); $('regra').value = ev.newValue.slice(0, 800); ir('ensinar'); contar(); $('regra').focus();
   });
+  // «?» do cabeçalho: abre a aula desta tela em vídeo por cima da conversa (o menu do CRM mostra o modal; aqui só se pede). Só dentro do CRM.
+  if (window.parent !== window && GUIA_LIGADO) {
+    $('ajuda').hidden = false;
+    $('ajuda').addEventListener('click', function(){ try { window.parent.postMessage({ event: 'guia:tela', tela: 'agente' }, CW); } catch (e) {} });
+  }
   pedirSessao(); setTimeout(function(){ if (!S) pedirSessao(); }, 1500);
-  setTimeout(function(){ if (!S) aviso('erroTopo', 'Abra esta tela pelo menu do Chatwoot (Agente), já logada.'); }, 6000);
+  setTimeout(function(){ if (!S) aviso('erroTopo', 'Abra esta tela pelo menu do CRM (Agente), já logada.'); }, 6000);
 })();
 </script></body></html>`;
 
 /** A página. `origemChatwoot` = a origem do Chatwoot (só ela fala com a página por postMessage). */
-export function paginaDoAgente(origemChatwoot: string): string {
-  return PAGINA.split('__ORIGEM_CW__').join(JSON.stringify(origemChatwoot));
+export function paginaDoAgente(origemChatwoot: string, env: NodeJS.ProcessEnv = process.env): string {
+  return PAGINA.split('__ORIGEM_CW__').join(JSON.stringify(origemChatwoot)).split('__GUIA_LIGADO__').join(String(guiaDaEtapaLigado(env)));
 }
