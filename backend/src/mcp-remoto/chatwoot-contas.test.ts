@@ -29,7 +29,7 @@ const DEMO = {
 const ENV = { CHATWOOT_API_TOKEN: 'tk-do-ambiente', CHATWOOT_CONTA_ID: '1', CHATWOOT_URL: 'https://crm.exemplo.test', CHATWOOT_API_TOKEN_DEMO: 'tk-so-da-demo' };
 const SALVO = { ...process.env };
 
-function montar(escolheConta: boolean, usuario = 'pessoa@example.com') {
+function montar(escolheConta: boolean | (() => boolean), usuario = 'pessoa@example.com') {
   Object.assign(process.env, ENV);
   U.aplicarConfigs([U.SEMENTE_PARAUAPEBAS, DEMO as never]);
   const chamadas: Array<{ metodo: string; url: string; token: string | undefined; corpo: unknown }> = [];
@@ -39,9 +39,9 @@ function montar(escolheConta: boolean, usuario = 'pessoa@example.com') {
     return new Response(JSON.stringify({ payload: [{ nome: conta === '2' ? 'SEGREDO-DA-CONTA-2' : 'dado-da-conta-1' }] }), { status: 200 });
   }) as unknown as typeof fetch;
   const ctx = C.criarContextoChatwoot(C.contaChatwootDoAmbiente(), { fetch: f });
-  const ferramentas = new Map<string, { schema: Record<string, unknown>; cb: (a: any) => Promise<{ isError?: boolean; content: Array<{ text: string }> }> }>();
+  const ferramentas = new Map<string, { schema: Record<string, unknown>; descricao: string; cb: (a: any) => Promise<{ isError?: boolean; content: Array<{ text: string }> }> }>();
   const auditoria: Array<{ ferramenta: string; argumentos: any; ok: boolean }> = [];
-  const server = { registerTool: (id: string, def: { inputSchema: Record<string, unknown> }, cb: never) => void ferramentas.set(id, { schema: def.inputSchema, cb }) } as unknown as McpServer;
+  const server = { registerTool: (id: string, def: { inputSchema: Record<string, unknown>; description: string }, cb: never) => void ferramentas.set(id, { schema: def.inputSchema, descricao: def.description, cb }) } as unknown as McpServer;
   C.registrarFerramentasChatwoot(server, ctx, usuario, (r) => auditoria.push(r as never), escolheConta);
   const chamar = (id: string, args: Record<string, unknown> = {}) => ferramentas.get(id)!.cb(args);
   return { chamadas, ferramentas, chamar, auditoria };
@@ -88,13 +88,43 @@ test('IDENTIDADE: a conta do ambiente pedida pelo número (conta=1) é a mesma c
   assert.match(t.chamadas[0]!.url, /accounts\/1\/inboxes$/);
 });
 
-test('só quem escolhe conta vê `chatwoot_contas`; as demais ferramentas são as mesmas (mais o `conta` opcional)', () => {
+test('QUEM NÃO ESCOLHE CONTA vê o conector EXATAMENTE como era: sem `conta` em schema nenhum, sem `chatwoot_contas`, textos de sempre', async () => {
   const sem = montar(false);
   const com = montar(true);
   assert.equal(sem.ferramentas.has('chatwoot_contas'), false);
   assert.equal(com.ferramentas.has('chatwoot_contas'), true);
   assert.deepEqual([...sem.ferramentas.keys()].sort(), [...com.ferramentas.keys()].filter((k) => k !== 'chatwoot_contas').sort());
-  for (const [id] of PEDIDOS) assert.ok('conta' in sem.ferramentas.get(id)!.schema, `${id} aceita conta`);
+  for (const [id] of PEDIDOS) {
+    assert.ok(!('conta' in sem.ferramentas.get(id)!.schema), `${id}: sem permissão não tem o parâmetro conta`);
+    assert.ok('conta' in com.ferramentas.get(id)!.schema, `${id}: com permissão tem`);
+  }
+  // os mesmos campos de antes, em cada ferramenta
+  assert.deepEqual(Object.keys(sem.ferramentas.get('chatwoot_api')!.schema).sort(), ['caminho', 'corpo', 'metodo', 'query']);
+  assert.deepEqual(Object.keys(sem.ferramentas.get('chatwoot_confirmar')!.schema), ['codigo']);
+  // nenhum texto fala em escolher conta
+  for (const [, f] of sem.ferramentas) assert.ok(!/mesma "conta"|passe a mesma|"conta"/i.test(f.descricao), f.descricao.slice(0, 60));
+  assert.ok(com.ferramentas.get('chatwoot_preparar')!.descricao.includes('MESMA "conta"'));
+  // o que a pessoa lê ao preparar e ao confirmar um código errado: igual ao de antes
+  const p = JSON.parse((await sem.chamar('chatwoot_preparar', { metodo: 'DELETE', caminho: 'labels/3' })).content[0]!.text) as { vaiFazer: string };
+  assert.equal(p.vaiFazer, 'DELETE labels/3 — apaga');
+  assert.equal((await sem.chamar('chatwoot_confirmar', { codigo: 'ABCDEF123456' })).content[0]!.text, 'Pedido inválido: código desconhecido ou já usado — prepare de novo');
+});
+
+test('PERMISSÃO CONFERIDA A CADA CHAMADA: tirar o e-mail da lista corta a escolha de conta NA HORA, mesmo com a sessão já aberta', async () => {
+  let pode = true;
+  const t = montar(() => pode, 'joao@example.com');
+  assert.equal((await t.chamar('chatwoot_caixas', { conta: 2 })).isError, undefined, 'com permissão: abre a conta 2');
+  assert.equal(t.chamadas.length, 1);
+  pode = false; // saiu da lista
+  const r = await t.chamar('chatwoot_caixas', { conta: 2 });
+  assert.equal(r.isError, true);
+  assert.match(r.content[0]!.text, /não está autorizada/);
+  assert.equal((await t.chamar('chatwoot_contas')).isError, true, 'nem a lista de contas');
+  assert.equal(t.chamadas.length, 1, 'nenhuma chamada nova ao Chatwoot');
+  // a conta padrão continua funcionando para quem perdeu a permissão
+  assert.equal((await t.chamar('chatwoot_caixas')).isError, undefined);
+  pode = true; // voltou
+  assert.equal((await t.chamar('chatwoot_caixas', { conta: 2 })).isError, undefined);
 });
 
 test('ATAQUE: quem NÃO foi autorizado pedindo conta=2 (ou 99) em QUALQUER ferramenta é recusado, sem falar com o Chatwoot e sem vazar dado', async () => {

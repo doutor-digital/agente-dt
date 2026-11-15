@@ -136,30 +136,185 @@ function corpoBalanceado(t: string, i: number): string {
   }
   return '';
 }
-/**
- * Consultas que o varredor encontrou com chave de conversa/lead no `where` e sem unidade — todas revisadas: apontam para o cuid de `Conversation`
- * (que já é da unidade) ou são do disparo do Kommo (sem relação com o Chatwoot).
- */
-const CONSULTAS_REVISADAS = [/conversation-judge\.service\.ts/, /webhook\.controller\.ts/, /prompts\.controller\.ts/, /agent\/follow-up\.ts/, /telefone-de-familiar\.ts/, /sem-resposta-worker\.ts/, /prometeu-sem-marcar-worker\.ts/, /disparo-worker\.ts/];
 
-test('o código não consulta tabela por chave de lead/conversa SEM unidade (varredura do `where` de cada prisma.<tabela>.<consulta>)', () => {
-  const raiz = fileURLToPath(new URL('..', import.meta.url));
-  const chave = /\b(leadId|kommoLeadId|conversa|conversaId|conversationId)\b/;
-  const escopo = /\b(unitId|unitSlug|clinica|caixa|conta|unit|id)\b\s*[:,}]|unitId_|\.\.\./;
-  const chamada = /prisma\.(\w+)\.(findMany|findFirst|findUnique|findFirstOrThrow|findUniqueOrThrow|update|updateMany|delete|deleteMany|count|upsert|groupBy)\(/g;
-  const soltas: string[] = [];
-  let achadas = 0;
-  for (const arq of arquivosDeCodigo(raiz)) {
-    const t = readFileSync(arq, 'utf8');
-    for (const m of t.matchAll(chamada)) {
-      const w = t.indexOf('where:', m.index! + m[0].length);
-      if (w < 0 || w > m.index! + m[0].length + 600) continue;
-      const corpo = corpoBalanceado(t, t.indexOf('{', w));
-      if (!chave.test(corpo)) continue;
-      achadas++;
-      if (!escopo.test(corpo) && !CONSULTAS_REVISADAS.some((r) => r.test(arq))) soltas.push(`${arq.slice(raiz.length)}:${t.slice(0, m.index).split('\n').length} ${m[1]}.${m[2]} ${corpo.slice(0, 80)}`);
+/** Os pedaços de PRIMEIRO nível de um objeto literal `{ a: 1, b, ...c, d: { x: 1 } }` (corta nas vírgulas fora de {}, [] e ()). */
+export function pedacosDoObjeto(corpo: string): string[] {
+  const miolo = corpo.trim().replace(/^\{/, '').replace(/\}$/, '');
+  const l: string[] = [];
+  let d = 0;
+  let atual = '';
+  for (const c of miolo) {
+    if ('{[('.includes(c)) d++;
+    else if ('}])'.includes(c)) d--;
+    if (c === ',' && d === 0) {
+      l.push(atual.trim());
+      atual = '';
+    } else atual += c;
+  }
+  if (atual.trim()) l.push(atual.trim());
+  return l.filter(Boolean);
+}
+
+const NOMES_DE_CHAVE = new Set(['leadId', 'kommoLeadId', 'conversa', 'conversaId', 'conversationId']);
+const ESCOPOS = new Set(['unitId', 'unitSlug', 'clinica', 'caixa', 'conta']);
+/** Único spread aceito como escopo: o helper conhecido, chamado direto (nunca dentro de condicional). */
+const SPREAD_CONHECIDO = /^\.\.\.filtroDeCaixas\(/;
+
+/** O nome da CHAVE de um pedaço (`caixa: x` → caixa; `caixa` → caixa); spread e o resto → null. O VALOR nunca é nome. */
+const nomeDaChave = (p: string): string | null => (p.startsWith('...') ? null : (/^([A-Za-z_]\w*)\s*(?::|$)/.exec(p)?.[1] ?? null));
+
+/**
+ * O objeto tem escopo? O escopo só vale como CHAVE de primeiro nível (`caixa: x`, `{ caixa, … }`, `unitId_kommoLeadId: {…}`) ou como o spread do helper
+ * `...filtroDeCaixas(…)`. A palavra `conta`/`caixa` num VALOR (`conversaId: x.conta`) não conta; spread condicional (`...(c ? { caixa: c } : {})`) não conta:
+ * a caixa opcional que some quando falta é exatamente o furo que o #351 fechou.
+ */
+export function temEscopo(corpo: string): boolean {
+  for (const p of pedacosDoObjeto(corpo)) {
+    if (p.startsWith('...')) {
+      if (SPREAD_CONHECIDO.test(p)) return true;
+      continue;
+    }
+    const chave = nomeDaChave(p);
+    if (chave && (ESCOPOS.has(chave) || chave.startsWith('unitId_'))) return true;
+  }
+  return false;
+}
+
+/** Os `{...}` de um valor (um objeto, ou os de uma lista `[{…}, {…}]`). */
+function objetosDoValor(valor: string): string[] {
+  const l: string[] = [];
+  for (let i = 0; i < valor.length; i++) {
+    if (valor[i] === '{') {
+      const o = corpoBalanceado(valor, i);
+      if (!o) break;
+      l.push(o);
+      i += o.length - 1;
     }
   }
-  assert.ok(achadas > 40, `a varredura achou só ${achadas} consultas: o regex quebrou?`);
-  assert.deepEqual(soltas, [], 'consulta por chave de lead/conversa sem unidade/clínica/caixa/conta: a conversa 5 de uma clínica colidiria com a da outra');
+  return l;
+}
+
+/**
+ * Algum objeto do `where` usa uma chave de lead/conversa SEM escopo nele nem em quem o contém? (`conversation: { unitId, leadId }` e
+ * `where: { unitId, OR: [{ leadId }] }` estão escopados; `{ id: conversationId }` não usa a chave: conversationId ali é VALOR.)
+ */
+export function usaChaveSemEscopo(corpo: string, herdado = false): boolean {
+  const tem = herdado || temEscopo(corpo);
+  for (const p of pedacosDoObjeto(corpo)) {
+    const chave = nomeDaChave(p);
+    if (chave && NOMES_DE_CHAVE.has(chave) && !tem) return true;
+    const dois = p.indexOf(':');
+    if (dois < 0 || p.startsWith('...')) continue;
+    for (const filho of objetosDoValor(p.slice(dois + 1))) if (usaChaveSemEscopo(filho, tem)) return true;
+  }
+  return false;
+}
+
+/**
+ * As consultas por chave de lead/conversa SEM escopo que o texto de um arquivo tem (`arquivo` só para a mensagem).
+ * Devolve `{ tabela, linha, corpo }` de cada uma.
+ */
+/** Tabelas cuja «chave de conversa» é o cuid de `Conversation` (que já é da unidade), não o id do Chatwoot: revisadas e liberadas POR TABELA. */
+export const TABELAS_COM_CUID = new Set(['message', 'conversationEvaluation', 'conversationOutcome']);
+
+export function consultasPorChave(codigo: string): Array<{ tabela: string; linha: number; corpo: string; semEscopo: boolean }> {
+  const chamada = /prisma\.(\w+)\.(findMany|findFirst|findUnique|findFirstOrThrow|findUniqueOrThrow|update|updateMany|delete|deleteMany|count|upsert|groupBy)\(/g;
+  const achadas: Array<{ tabela: string; linha: number; corpo: string; semEscopo: boolean }> = [];
+  for (const m of codigo.matchAll(chamada)) {
+    const fim = m.index! + m[0].length;
+    const w = codigo.indexOf('where:', fim);
+    if (w < 0 || w > fim + 600 || TABELAS_COM_CUID.has(m[1]!)) continue;
+    const corpo = corpoBalanceado(codigo, codigo.indexOf('{', w));
+    if (!pedacosComChave(corpo)) continue;
+    achadas.push({ tabela: m[1]!, linha: codigo.slice(0, m.index).split('\n').length, corpo: corpo.slice(0, 90), semEscopo: usaChaveSemEscopo(corpo) });
+  }
+  return achadas;
+}
+
+/** O `where` usa alguma chave de lead/conversa (em qualquer nível)? */
+function pedacosComChave(corpo: string): boolean {
+  return pedacosDoObjeto(corpo).some((p) => {
+    const chave = nomeDaChave(p);
+    if (chave && NOMES_DE_CHAVE.has(chave)) return true;
+    const dois = p.indexOf(':');
+    return dois >= 0 && !p.startsWith('...') && objetosDoValor(p.slice(dois + 1)).some(pedacosComChave);
+  });
+}
+
+/** Só as SEM escopo. */
+export const consultasSemEscopo = (codigo: string) => consultasPorChave(codigo).filter((c) => c.semEscopo);
+
+/**
+ * Consultas sem escopo REVISADAS, uma a uma: arquivo + tabela + motivo. Liberar o arquivo inteiro deixaria passar a consulta nova de OUTRA tabela
+ * escrita nele depois; liberar por tabela não. Cada entrada vale para as consultas daquela tabela naquele arquivo.
+ */
+const REVISADAS: Array<{ arquivo: RegExp; tabela: string; motivo: string }> = [
+  { arquivo: /lib\/prometeu-sem-marcar-worker\.ts$/, tabela: 'conversation', motivo: 'de propósito entre unidades da MESMA conta do Kommo (o resgate promete e passa para a comercial); a chave do agrupamento é conta|lead, não só o lead' },
+  { arquivo: /lib\/disparo-worker\.ts$/, tabela: 'disparoDestinatario', motivo: 'disparo do Kommo, sem relação com o Chatwoot' },
+];
+
+function soltasDoCodigo(): { achadas: number; soltas: string[] } {
+  const raiz = fileURLToPath(new URL('..', import.meta.url));
+  let achadas = 0;
+  const soltas: string[] = [];
+  for (const arq of arquivosDeCodigo(raiz)) {
+    const t = readFileSync(arq, 'utf8');
+    for (const c of consultasPorChave(t)) {
+      achadas++;
+      if (!c.semEscopo) continue;
+      if (!REVISADAS.some((r) => r.arquivo.test(arq) && r.tabela === c.tabela)) soltas.push(`${arq.slice(raiz.length)}:${c.linha} prisma.${c.tabela} ${c.corpo}`);
+    }
+  }
+  return { achadas, soltas };
+}
+
+test('o código não consulta tabela por chave de lead/conversa SEM escopo (unidade, clínica, caixa ou conta como CHAVE do where)', () => {
+  const { achadas, soltas } = soltasDoCodigo();
+  assert.ok(achadas > 30, `a varredura achou só ${achadas} consultas por chave de lead/conversa: o regex quebrou?`);
+  assert.deepEqual(soltas, [], 'consulta por chave de lead/conversa sem escopo: a conversa 5 de uma clínica colidiria com a da outra');
+  // cada exceção revisada ainda existe (não vira lixo)
+  const raiz = fileURLToPath(new URL('..', import.meta.url));
+  for (const r of REVISADAS) {
+    const existe = arquivosDeCodigo(raiz).some((a) => r.arquivo.test(a) && consultasSemEscopo(readFileSync(a, 'utf8')).some((c) => c.tabela === r.tabela));
+    assert.ok(existe, `exceção revisada que não existe mais: ${r.arquivo} / ${r.tabela}`);
+  }
+});
+
+test('SONDAS do revisor: spread condicional, «conta» como VALOR e consulta sem escopo — as três são pegas', () => {
+  const sondas = {
+    condicional: "prisma.chatwootReguaDisparo.findMany({ where: { ...(c !== undefined ? { caixa: c } : {}), conversationId: 5 } })",
+    contaComoValor: 'prisma.funilTarefa.findMany({ where: { conversaId: x.conta } })',
+    semEscopo: 'prisma.sofiaMensagem.findMany({ where: { conversa: 5 } })',
+  };
+  for (const [nome, codigo] of Object.entries(sondas)) assert.equal(consultasSemEscopo(codigo).length, 1, `sonda «${nome}» passou despercebida`);
+});
+
+test('a varredura ACEITA o que tem escopo de verdade (chave, atalho, helper conhecido, chave composta) e rejeita o resto', () => {
+  const ok = [
+    'prisma.t.findMany({ where: { caixa: 3, conversationId: 5 } })',
+    'prisma.t.findMany({ where: { caixa, conversationId: 5 } })',
+    'prisma.t.findMany({ where: { unitId: u.id, kommoLeadId: 5 } })',
+    'prisma.t.findUnique({ where: { unitId_kommoLeadId: { unitId: u.id, kommoLeadId: 5 } } })',
+    'prisma.t.findMany({ where: { ...filtroDeCaixas(a.c), conversationId: 5 } })',
+    "prisma.t.findMany({ where: { unitSlug: slug, conversa } })",
+    'prisma.t.findMany({ where: { clinica, leadId: String(l) } })',
+  ];
+  for (const c of ok) assert.equal(consultasSemEscopo(c).length, 0, c);
+  const ruim = [
+    'prisma.t.findMany({ where: { ...(x ? { caixa: 1 } : {}), conversationId: 5 } })',
+    'prisma.t.findMany({ where: { ...outraCoisa, conversationId: 5 } })',
+    'prisma.t.findMany({ where: { ...(filtroDeCaixas(a.c) ? {} : {}), conversationId: 5 } })',
+    'prisma.t.findMany({ where: { conversationId: caixa } })',
+    'prisma.t.findMany({ where: { OR: [{ caixa: 3 }], conversationId: 5 } })',
+    'prisma.t.findMany({ where: { id: 3, kommoLeadId: 5 } })',
+  ];
+  for (const c of ruim) assert.equal(consultasSemEscopo(c).length, 1, c);
+});
+
+test('exceção revisada vale para a TABELA, não para o arquivo: consulta nova de outra tabela num arquivo liberado é pega', () => {
+  const raiz = fileURLToPath(new URL('..', import.meta.url));
+  const arquivo = join(raiz, 'agent/follow-up.ts');
+  const novo = consultasSemEscopo('prisma.sofiaMensagem.findMany({ where: { conversa: 5 } })');
+  assert.equal(novo.length, 1);
+  assert.ok(!REVISADAS.some((r) => r.arquivo.test(arquivo) && r.tabela === novo[0]!.tabela));
 });
