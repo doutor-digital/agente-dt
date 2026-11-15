@@ -1952,6 +1952,8 @@ model UnitChatwoot {
   envSufixo String @map("env_sufixo")
   /// Conta do Chatwoot desta unidade (1 conta por clínica vendida). Null = a conta do ambiente (CHATWOOT_CONTA_ID): é o caso de Parauapebas.
   contaId Int? @map("conta_id")
+  /// Subdomínio do CRM da clínica (<subdominio>.doutordigitalconsultoria.com): a origem do Chatwoot dela, aceita pelas telas que entram por iframe. Null = só a origem principal.
+  subdominio String? @map("subdominio")
   /// Dados que entram NO TEXTO dos modelos: { nome, cidade, endereco, mapa, telefone?, valorConsulta?, valorComSinal? }.
   dadosModelos Json @map("dados_modelos")
   atualizadoPor String?  @map("atualizado_por")

@@ -3,7 +3,7 @@
  * conector da clínica). Formatos conforme developers.chatwoot.com — NÃO provados contra o Chatwoot real (o teste usa `chatwoot-falso.ts`).
  */
 import { chamar, criarContextoChatwoot } from '../../mcp-remoto/chatwoot.js';
-import { ErroDaPorta, type ContaPorta, type PlataformaPorta } from './portas.js';
+import { ErroDaPorta, type ContaPorta, type ContaSoLeitura, type PlataformaPorta } from './portas.js';
 
 type Buscar = typeof fetch;
 
@@ -53,6 +53,12 @@ export function plataformaHttp(url: string, token: string, buscar: Buscar = fetc
       if (r.status >= 400) throw falha(`vincular o usuário ${usuarioId} à conta ${contaId}`, r);
     },
   };
+}
+
+/** Uma conta só para LER (a de referência): o objeto devolvido NÃO tem `post`. */
+export function contaHttpSoLeitura(url: string, conta: number, token: string, buscar: Buscar = fetch): ContaSoLeitura {
+  const c = contaHttp(url, conta, token, buscar);
+  return { conta: c.conta, get: (caminho, query) => c.get(caminho, query) };
 }
 
 /** Uma conta: reaproveita `chamar` do conector (caminho preso à conta, token no cabeçalho, erro sem token). */

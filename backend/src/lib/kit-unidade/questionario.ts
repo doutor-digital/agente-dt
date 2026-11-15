@@ -234,6 +234,7 @@ export function configChatwootDoQuestionario(q: Questionario, extras: { gerenteI
   return {
     slug: q.unidade.slug,
     contaId: extras.contaId ?? null,
+    subdominio: q.chatwoot.subdominio,
     prefixoModelos: q.whatsapp.prefixo_modelos,
     usuarioCelularId: extras.usuarioCelularId ?? null,
     gerenteId: extras.gerenteId ?? null,

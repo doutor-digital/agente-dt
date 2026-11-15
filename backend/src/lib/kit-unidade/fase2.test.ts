@@ -5,7 +5,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, statSync, existsSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, statSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,7 +22,7 @@ type ConfigGravada = import('./executar.js').ConfigGravada;
 const { montarPlano } = await import('./plano.js');
 const { lerQuestionario } = await import('./questionario.js');
 const { chatwootFalso } = await import('./chatwoot-falso.js');
-const { contaHttp, plataformaHttp } = await import('./chatwoot-http.js');
+const { contaHttp, contaHttpSoLeitura, plataformaHttp } = await import('./chatwoot-http.js');
 const { kapsoHttp } = await import('./kapso-http.js');
 const { segredosEmArquivo } = await import('./segredos.js');
 const { chaveDoEvento } = await import('../chatwoot-ia.js');
@@ -105,7 +105,8 @@ function montar(opcoes: { semPlataforma?: boolean; senha?: string; semKapso?: bo
   const externas = {
     plataforma: opcoes.semPlataforma ? null : plataformaHttp(URL_CW, falso.tokenDaPlataforma, falso.fetch),
     abrirConta: (conta: number, token: string) => contaHttp(URL_CW, conta, token, falso.fetch),
-    referencia: contaHttp(URL_CW, 1, falso.tokenDeReferencia, falso.fetch),
+    referencia: contaHttpSoLeitura(URL_CW, 1, falso.tokenDeReferencia, falso.fetch),
+    contaDoAmbiente: 1,
     kapso: opcoes.semKapso ? null : kapsoHttp('kapso-chave-secreta', falso.fetch),
     segredos,
     urlDoAgente: URL_AGENTE,
@@ -185,6 +186,7 @@ test('CLÍNICA DEMONSTRAÇÃO: o --aplicar monta tudo na conta própria dela; Me
   assert.equal(conta.inboxes[0]!.agent_bot, null);
   // banco: caixa registrada (cloud), gerente e celular gravados
   assert.deepEqual(b.e.caixas, [conta.inboxes[0]!.id]);
+  assert.equal(b.e.config!.subdominio, 'demo', 'o subdomínio da clínica fica gravado (as telas por iframe aceitam essa origem)');
   assert.equal(b.e.config!.gerenteId, conta.agents.find((a) => a.email === 'gerente.demo@example.com')!.id);
   assert.equal(b.e.config!.usuarioCelularId, conta.agents.find((a) => a.email === 'celular.demo@example.com')!.id);
   // automações em seco, nenhuma ligada
@@ -394,4 +396,50 @@ test('--ligar-robo não TROCA um robô que a caixa já tem (outro); e rodar de n
   assert.equal(conta.inboxes[0]!.agent_bot, 7777, 'o robô que já estava na caixa continua');
   assert.notEqual(robo, 7777);
   assert.match(r3.resultados.find((r) => r.id === 'robo-sofia')!.notas.join(' '), /JÁ tem outro robô/);
+});
+
+test('PARAUAPEBAS PROTEGIDA: unidade que já tem caixa na conta do ambiente NÃO ganha conta nova — nem com --sobrescrever (a unidade inteira iria para uma conta vazia)', async () => {
+  const { falso, externas } = montar();
+  const b = bancoFalso();
+  // Parauapebas-like: já existe, ativa, com configuração sem conta própria (conta do ambiente) e caixas registradas
+  b.e.unidade = { id: 'u1', ativa: true, campos: { isActive: true } };
+  b.e.config = { prefixoModelos: 'demo_', metaAgendamentosDia: 5, kapsoPhoneNumberId: null, wabaId: null, envSufixo: 'DEMO', dadosModelos: {}, contaId: null };
+  b.e.caixas = [2, 3];
+  const plano = montarPlano(DEMO, { plataforma: true, banco: { unidade: { id: 'u1', campos: { isActive: true } }, configChatwoot: b.e.config, caixasRegistradas: [2, 3], automacoes: {}, sofia: {} } }, { molde: MOLDE, sobrescrever: true });
+  assert.equal(plano.passos.find((p) => p.id === 'conta')!.acao, 'bloqueado');
+  assert.match(plano.passos.find((p) => p.id === 'conta')!.avisos.join(' '), /JÁ tem caixa\(s\) na conta do ambiente/);
+  const resultados = await executarPlano(montarPlano(DEMO, {}, { molde: MOLDE, sobrescrever: true }), DEMO, { banco: b.banco, molde: MOLDE, externas, sobrescrever: true, dizer: () => undefined, confirmar: async () => true });
+  assert.equal(sit(resultados, 'conta'), 'falhou');
+  assert.match(resultados.find((r) => r.id === 'conta')!.notas.join(' '), /recusa, mesmo com --sobrescrever/);
+  assert.equal(posts(falso).length, 0, 'nenhuma conta, usuário ou qualquer POST');
+  assert.equal(falso.contas.size, 1);
+  assert.equal(b.e.config!.contaId, null, 'o conta_id não mudou');
+});
+
+test('o conta_id gravado ser o da CONTA DO AMBIENTE também é recusado (o kit não monta clínica na conta 1)', async () => {
+  const { falso, externas } = montar();
+  const b = bancoFalso();
+  b.e.config = { prefixoModelos: 'demo_', metaAgendamentosDia: 5, kapsoPhoneNumberId: null, wabaId: null, envSufixo: 'DEMO', dadosModelos: {}, contaId: 1 };
+  const resultados = await executarPlano(montarPlano(DEMO, {}, { molde: MOLDE }), DEMO, { banco: b.banco, molde: MOLDE, externas, dizer: () => undefined, confirmar: async () => true });
+  assert.equal(sit(resultados, 'conta'), 'falhou');
+  assert.match(resultados.find((r) => r.id === 'conta')!.notas.join(' '), /conta do ambiente/);
+  assert.equal(posts(falso).length, 0);
+});
+
+test('a conta de REFERÊNCIA é só leitura: o objeto não tem `post` (nem como escrever em Parauapebas por engano)', () => {
+  const { externas } = montar();
+  assert.ok(externas.referencia);
+  assert.equal('post' in externas.referencia!, false);
+  assert.deepEqual(Object.keys(externas.referencia!).sort(), ['conta', 'get']);
+});
+
+test('o cofre fecha a pasta em 700 mesmo quando ela já existia aberta (755)', async () => {
+  const { dir } = montar();
+  chmodSync(dir, 0o755);
+  const c = segredosEmArquivo(dir, {});
+  await c.pronto();
+  assert.equal(statSync(dir).mode & 0o777, 0o700);
+  chmodSync(dir, 0o755);
+  await c.guardar('CHATWOOT_API_TOKEN_Z', 'v');
+  assert.equal(statSync(dir).mode & 0o777, 0o700);
 });

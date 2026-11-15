@@ -39,8 +39,19 @@ case "$1 $2" in
 esac
 `,
   );
-  // curl de mentira: aceita o token certo (404 = conta 0 não existe, mas autenticou), recusa o resto (401)
-  writeFileSync(join(bin, 'curl'), `#!/usr/bin/env bash\nif printf '%s' "$*" | grep -q "api_access_token: ${TOKEN}"; then printf '404'; else printf '401'; fi\n`);
+  // curl de mentira: lê o cabeçalho de `-H @arquivo` (como o curl de verdade); aceita o token certo (404 = conta 0 não existe, mas autenticou), recusa o resto (401)
+  writeFileSync(
+    join(bin, 'curl'),
+    `#!/usr/bin/env bash
+echo "curl $*" >> "${dir}/log"
+cab=""
+while [ $# -gt 0 ]; do
+  if [ "$1" = "-H" ]; then shift; v="$1"; if [ "\${v:0:1}" = "@" ]; then cab="$(cat "\${v:1}")"; else cab="$v"; fi; fi
+  shift
+done
+if printf '%s' "$cab" | grep -q "api_access_token: ${TOKEN}"; then printf '404'; else printf '401'; fi
+`,
+  );
   chmodSync(join(bin, 'docker'), 0o755);
   chmodSync(join(bin, 'curl'), 0o755);
   const rodar = (script: string, args: string[], extra: Record<string, string> = {}) =>
@@ -90,7 +101,9 @@ test('Platform App: cria uma vez, o token vai para o arquivo (modo 600) e NÃO a
   assert.equal(readFileSync(arquivo, 'utf8').trim(), TOKEN);
   assert.equal(statSync(arquivo).mode & 0o777, 0o600);
   assert.ok(!(r1.stdout + r1.stderr).includes(TOKEN), 'o token não pode aparecer na saída');
-  assert.ok(!a.log().includes(TOKEN), 'nem no que se passou ao docker');
+  assert.ok(!a.log().includes(TOKEN), 'nem no que se passou ao docker nem ao curl (o token não fica no ps)');
+  assert.ok(/curl .*-H @/.test(a.log()), 'o cabeçalho foi por arquivo (-H @arquivo)');
+  assert.ok(!existsSync(arquivo + '.cab'), 'o arquivo do cabeçalho foi apagado');
   assert.match(a.log(), /docker exec abc123 /, 'usou o contêiner MAIS NOVO (abc123), não o velho');
   assert.ok(!/velho99/.test(a.log().replace(/ps --filter.*/g, '')));
 
@@ -110,4 +123,78 @@ test('Platform App: arquivo com token que o Chatwoot RECUSA → para e não cria
   assert.match(r.stdout, /RECUSA/);
   assert.equal(readFileSync(arquivo, 'utf8').trim(), 'token-velho-recusado');
   assert.ok(!/docker exec/.test(a.log()));
+});
+
+/** docker de mentira para o nova-unidade-joao: contêiner mais novo, `exec`, `cp` (a volta do cofre cria um arquivo de segredo no destino). */
+function ambienteDoKit(opcoes: { semKit?: boolean } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'kit-sh2-'));
+  const bin = join(dir, 'bin');
+  spawnSync('mkdir', ['-p', bin]);
+  writeFileSync(join(dir, 'log'), '');
+  writeFileSync(
+    join(bin, 'docker'),
+    `#!/usr/bin/env bash
+echo "docker $*" >> "${dir}/log"
+case "$1" in
+  ps) echo "2026-11-15 10:00:00|novo111aaaabbbb"; echo "2026-11-14 10:00:00|velho222";;
+  exec)
+    case "$*" in
+      *"test -f"*) ${opcoes.semKit ? 'exit 1' : 'exit 0'};;
+      *"node dist/scripts/nova-unidade.js"*) echo "PLANO simulado"; exit 0;;
+      *) exit 0;;
+    esac;;
+  cp)
+    # volta do cofre: o contêiner "gerou" um segredo
+    case "$2" in novo111aaaabbbb:/run/kit-segredos/.) printf 'segredo-gerado' > "$3/CHATWOOT_API_TOKEN_DEMO";; esac;;
+  *) exit 0;;
+esac
+`,
+  );
+  chmodSync(join(bin, 'docker'), 0o755);
+  const plataforma = join(dir, 'plataforma.token');
+  writeFileSync(plataforma, 'TOKEN-DA-PLATAFORMA-9z\n', { mode: 0o600 });
+  const cofre = join(dir, 'cofre');
+  const rodar = (args: string[]) =>
+    spawnSync('bash', [join(OPS, 'nova-unidade-joao.sh'), ...args], { env: { PATH: `${bin}:${process.env.PATH}`, HOME: dir, ARQUIVO_PLATAFORMA: plataforma, KIT_SEGREDOS_DIR: cofre }, encoding: 'utf8', input: '' });
+  return { dir, cofre, rodar, log: () => readFileSync(join(dir, 'log'), 'utf8') };
+}
+
+test('nova-unidade-joao: --so-conferir só confere (nada copiado, nada executado) e usa o contêiner MAIS NOVO', () => {
+  const a = ambienteDoKit();
+  const r = a.rodar(['clinica-demonstracao', '--so-conferir']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /SÓ CONFERIR/);
+  assert.ok(!/docker cp|node dist/.test(a.log()), 'nada copiado nem executado');
+  assert.ok(!/velho222/.test(a.log().replace(/docker ps.*\n/, '')));
+});
+
+test('nova-unidade-joao: roda o kit DENTRO do contêiner (node dist/scripts/nova-unidade.js), com o token da plataforma SEM valor na linha de comando; o cofre volta ao host (700/600) e é apagado do contêiner', () => {
+  const a = ambienteDoKit();
+  const r = a.rodar(['clinica-demonstracao']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const log = a.log();
+  assert.match(log, /docker exec .*-e CHATWOOT_PLATFORM_TOKEN -e KIT_SEGREDOS_DIR=\/run\/kit-segredos -w \/repo\/backend novo111aaaabbbb node dist\/scripts\/nova-unidade\.js \/repo\/ops\/kit-unidade\/unidades\/clinica-demonstracao\.yaml/);
+  assert.ok(!log.includes('TOKEN-DA-PLATAFORMA-9z'), 'o valor do token não aparece na linha de comando');
+  assert.ok(!(r.stdout + r.stderr).includes('TOKEN-DA-PLATAFORMA-9z'));
+  assert.match(log, /docker cp .*molde-sofia novo111aaaabbbb:\/repo\/ops\/kit-unidade\//);
+  assert.match(log, /docker cp .*clinica-demonstracao\.yaml novo111aaaabbbb:\/repo\/ops\/kit-unidade\/unidades\/clinica-demonstracao\.yaml/);
+  // o segredo gerado voltou ao host com os modos certos e foi apagado do contêiner
+  assert.equal(readFileSync(join(a.cofre, 'CHATWOOT_API_TOKEN_DEMO'), 'utf8'), 'segredo-gerado');
+  assert.equal(statSync(a.cofre).mode & 0o777, 0o700);
+  assert.equal(statSync(join(a.cofre, 'CHATWOOT_API_TOKEN_DEMO')).mode & 0o777, 0o600);
+  assert.match(log, /docker exec novo111aaaabbbb rm -rf \/run\/kit-segredos/);
+  assert.ok(!(r.stdout + r.stderr).includes('segredo-gerado'));
+});
+
+test('nova-unidade-joao: sem terminal, --aplicar exige --sim; e contêiner sem o kit publicado é recusado com a razão', () => {
+  const a = ambienteDoKit();
+  const sem = a.rodar(['clinica-demonstracao', '--aplicar']);
+  assert.equal(sem.status, 2);
+  assert.match(sem.stdout, /sem terminal só dá para aplicar com --sim/);
+  assert.ok(!/node dist/.test(a.log()));
+  const b = ambienteDoKit({ semKit: true });
+  const r = b.rodar(['clinica-demonstracao']);
+  assert.notEqual(r.status, 0);
+  assert.match(r.stdout, /ainda não tem o kit/);
+  assert.ok(!/docker cp/.test(b.log()));
 });

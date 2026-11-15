@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline/promises';
 import { AUTOMACOES } from '../lib/automacoes.js';
 import { executarPlano, relatorioFinal, type BancoPorta } from '../lib/kit-unidade/executar.js';
-import { contaHttp, plataformaHttp } from '../lib/kit-unidade/chatwoot-http.js';
+import { contaHttp, contaHttpSoLeitura, plataformaHttp } from '../lib/kit-unidade/chatwoot-http.js';
 import { kapsoHttp } from '../lib/kit-unidade/kapso-http.js';
 import type { PortasExternas } from '../lib/kit-unidade/portas.js';
 import { segredosEmArquivo } from '../lib/kit-unidade/segredos.js';
@@ -74,7 +74,7 @@ async function lerEstado(q: Questionario): Promise<EstadoAtual> {
       estado.banco = {
         unidade: u ? { id: u.id, campos: u as unknown as Record<string, unknown> } : null,
         configChatwoot: u?.chatwoot
-          ? { prefixoModelos: u.chatwoot.prefixoModelos, metaAgendamentosDia: u.chatwoot.metaAgendamentosDia, kapsoPhoneNumberId: u.chatwoot.kapsoPhoneNumberId, wabaId: u.chatwoot.wabaId, envSufixo: u.chatwoot.envSufixo, dadosModelos: (u.chatwoot.dadosModelos ?? {}) as Record<string, unknown>, contaId: u.chatwoot.contaId }
+          ? { subdominio: u.chatwoot.subdominio, prefixoModelos: u.chatwoot.prefixoModelos, metaAgendamentosDia: u.chatwoot.metaAgendamentosDia, kapsoPhoneNumberId: u.chatwoot.kapsoPhoneNumberId, wabaId: u.chatwoot.wabaId, envSufixo: u.chatwoot.envSufixo, dadosModelos: (u.chatwoot.dadosModelos ?? {}) as Record<string, unknown>, contaId: u.chatwoot.contaId }
           : null,
         caixasRegistradas: u?.chatwoot?.caixas.map((c) => c.caixaId) ?? [],
         automacoes: Object.fromEntries((u?.automacoes ?? []).map((a) => [a.automacao, a.estado])),
@@ -149,7 +149,7 @@ async function bancoReal(): Promise<BancoPorta> {
     },
     async lerConfigChatwoot(unitId) {
       const c = await prisma.unitChatwoot.findUnique({ where: { unitId } });
-      return c ? { prefixoModelos: c.prefixoModelos, metaAgendamentosDia: c.metaAgendamentosDia, kapsoPhoneNumberId: c.kapsoPhoneNumberId, wabaId: c.wabaId, envSufixo: c.envSufixo, dadosModelos: (c.dadosModelos ?? {}) as Record<string, unknown>, contaId: c.contaId, gerenteId: c.gerenteId, usuarioCelularId: c.usuarioCelularId } : null;
+      return c ? { subdominio: c.subdominio, prefixoModelos: c.prefixoModelos, metaAgendamentosDia: c.metaAgendamentosDia, kapsoPhoneNumberId: c.kapsoPhoneNumberId, wabaId: c.wabaId, envSufixo: c.envSufixo, dadosModelos: (c.dadosModelos ?? {}) as Record<string, unknown>, contaId: c.contaId, gerenteId: c.gerenteId, usuarioCelularId: c.usuarioCelularId } : null;
     },
     async gravarConfigChatwoot(unitId, c, criar) {
       const dados = { ...c, ...(c.dadosModelos ? { dadosModelos: c.dadosModelos as never } : {}), atualizadoPor: 'nova-unidade' };
@@ -190,7 +190,8 @@ async function portasExternas(): Promise<PortasExternas> {
   return {
     plataforma: platform ? plataformaHttp(url, platform) : null,
     abrirConta: (conta, token) => contaHttp(url, conta, token),
-    referencia: ambiente ? contaHttp(ambiente.url, ambiente.conta, ambiente.token) : null,
+    referencia: ambiente ? contaHttpSoLeitura(ambiente.url, ambiente.conta, ambiente.token) : null,
+    contaDoAmbiente: ambiente?.conta ?? null,
     kapso: kapso ? kapsoHttp(kapso) : null,
     segredos: segredosEmArquivo(PASTA_DO_COFRE),
     urlDoAgente: agente,

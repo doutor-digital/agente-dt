@@ -399,6 +399,6 @@ test('menu.js (menu + botão da assistente) e a página do painel PARSEIAM como 
   assert.ok(script, 'a página tem script');
   assert.doesNotThrow(() => new Function(script!));
   // o painel só fala com a página-mãe do Chatwoot e nunca manda nada ao paciente
-  assert.match(script!, /ev\.origin !== ORIGEM_CW \|\| ev\.source !== window\.parent/);
+  assert.match(script!, /!origemDoCrm\(ev\.origin\) \|\| ev\.source !== window\.parent/);
   assert.doesNotMatch(script!, /\/funil\/mensagem|\/funil\/nota/);
 });

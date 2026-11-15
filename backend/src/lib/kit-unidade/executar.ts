@@ -23,6 +23,8 @@ export interface ConfigGravada {
   dadosModelos: Record<string, unknown>;
   /** a conta do Chatwoot da clínica (null = ainda não criada, ou a do ambiente) */
   contaId?: number | null;
+  /** subdomínio do CRM da clínica: a origem que as telas por iframe aceitam */
+  subdominio?: string | null;
   gerenteId?: number | null;
   usuarioCelularId?: number | null;
 }
@@ -179,7 +181,7 @@ async function aplicarPasso(p: Passo, q: Questionario, o: OpcoesDeExecucao, unit
     case 'config-chatwoot': {
       const id = await garantirUnidade();
       const c = configChatwootDoQuestionario(q);
-      const novos: ConfigGravada = { prefixoModelos: c.prefixoModelos, metaAgendamentosDia: c.metaAgendamentosDia, kapsoPhoneNumberId: c.kapsoPhoneNumberId, wabaId: c.wabaId, envSufixo: c.envSufixo, dadosModelos: { ...c.dadosModelos } };
+      const novos: ConfigGravada = { subdominio: c.subdominio ?? null, prefixoModelos: c.prefixoModelos, metaAgendamentosDia: c.metaAgendamentosDia, kapsoPhoneNumberId: c.kapsoPhoneNumberId, wabaId: c.wabaId, envSufixo: c.envSufixo, dadosModelos: { ...c.dadosModelos } };
       const atual = await banco.lerConfigChatwoot(id);
       if (!atual) {
         await banco.gravarConfigChatwoot(id, novos, true);
@@ -224,7 +226,7 @@ async function aplicarPasso(p: Passo, q: Questionario, o: OpcoesDeExecucao, unit
     case 'conta': {
       const unitId = await garantirUnidade();
       const cfg = await banco.lerConfigChatwoot(unitId);
-      return passoConta(q, x, execucao, { contaId: cfg?.contaId ?? null, gravarContaId: (id) => banco.gravarConfigChatwoot(unitId, { contaId: id }, false) });
+      return passoConta(q, x, execucao, { contaId: cfg?.contaId ?? null, caixasRegistradas: await banco.caixasRegistradas(unitId), gravarContaId: (id) => banco.gravarConfigChatwoot(unitId, { contaId: id }, false) });
     }
     case 'etiquetas':
       return passoEtiquetas(x, execucao);

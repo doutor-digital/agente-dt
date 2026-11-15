@@ -508,7 +508,7 @@ export function assistenteJs(env: NodeJS.ProcessEnv = process.env): string {
 
 /** A página do painel (iframe). `__ORIGEM_CW__` = a origem do Chatwoot (JSON). */
 export function paginaDaAssistente(origemChatwoot: string): string {
-  return comContaNaPagina(PAGINA.split('__ORIGEM_CW__').join(JSON.stringify(origemChatwoot)));
+  return comContaNaPagina(PAGINA.split('__ORIGEM_CW__').join(`origemDoPai(${JSON.stringify(origemChatwoot)})`));
 }
 
 const PAGINA = String.raw`<!doctype html>
@@ -687,7 +687,7 @@ textarea{flex:1;resize:none;height:40px;max-height:96px;padding:8px 10px;border:
   sug.addEventListener('click', sugerir);
   $('min').addEventListener('click', function(){ pai({ event: 'assistente:minimizar' }); });
   window.addEventListener('message', function(ev){
-    if (ev.origin !== ORIGEM_CW || ev.source !== window.parent) return;
+    if (!origemDoCrm(ev.origin) || ev.source !== window.parent) return;
     var d = ev.data; if (!d || typeof d.event !== 'string') return;
     if (d.event === 'assistente-sessao') {
       S = d.sessao && d.sessao.token ? d.sessao : null; if (typeof d.conversa === 'number' || d.conversa === null) conversa = d.conversa;

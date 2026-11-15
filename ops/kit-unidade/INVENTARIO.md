@@ -60,7 +60,8 @@ Env do serviço `ddagent_agent` (`CHATWOOT_API_TOKEN`, `CHATWOOT_CONTA_ID`, `KAP
   **Chatwoot** (conta própria da clínica pela API de plataforma, etiquetas/atributos/automações copiados da conta de referência, mensagens prontas, caixa,
   time, atendentes, robô, webhook com a chave DA CONTA, aba «Funil» com `?conta=N`) e os **modelos da Meta via Kapso** (em seco na clínica de demonstração).
   Continua MANUAL: número no Kapso, subdomínio (`regra-traefik-joao.sh`), segredos gerados (cofre → env do serviço + reinício), pastas por atendente,
-  token e turnos da franquia, dataset da CAPI. Roteiro do João: `nova-unidade-joao.sh`, `criar-platform-app-joao.sh`, `unidades/<slug>-joao.sh`;
+  token e turnos da franquia, dataset da CAPI. Roteiro do João (roda no host da VPS como root; o kit roda DENTRO do contêiner `ddagent_agent`, onde estão o código publicado e o ambiente): `nova-unidade-joao.sh`, `criar-platform-app-joao.sh`, `unidades/<slug>-joao.sh`;
   entrevista: skill `/nova-unidade` (`.claude/skills/nova-unidade/SKILL.md`). A «Clínica Demonstração» (`unidades/clinica-demonstracao.yaml`) é a prova.
+* **Telas por iframe no subdomínio da clínica:** as telas só aceitam a sessão (postMessage) de uma lista de origens — a principal do Chatwoot e o `unit_chatwoot.subdominio` de cada clínica cadastrada (`origens-do-chatwoot.ts`); origem fora da lista é recusada.
 * **Webhook por conta (fase 2):** a chave `?k=` do webhook do Chatwoot e da lida do Evolution é derivada do token DA CONTA (`tokenParaChaveDaConta`): a chave de
   uma conta não forja evento de outra. Conta própria sem `CHATWOOT_API_TOKEN_<SUFIXO>` não tem chave que valha.

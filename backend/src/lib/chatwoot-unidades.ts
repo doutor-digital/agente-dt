@@ -52,6 +52,8 @@ export interface ConfigChatwootUnidade {
    * unidade que ainda mora na conta de sempre. A URL e o token são os mesmos para todas; só o id da conta muda.
    */
   contaId: number | null;
+  /** subdomínio do CRM da clínica (<sub>.doutordigitalconsultoria.com); null/ausente = só a origem principal do Chatwoot */
+  subdominio?: string | null;
   /** prefixo dos modelos na Meta, com o "_" no fim ("parau_") */
   prefixoModelos: string;
   usuarioCelularId: number | null;
@@ -96,6 +98,7 @@ export function problemasDaConfig(c: ConfigChatwootUnidade): string[] {
   const p: string[] = [];
   if (!/^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$/.test(c.slug)) p.push(`slug inválido (${c.slug})`);
   if (c.contaId !== null && c.contaId !== undefined && (!Number.isInteger(c.contaId) || c.contaId <= 0)) p.push(`conta do Chatwoot inválida (${String(c.contaId)})`);
+  if (c.subdominio !== null && c.subdominio !== undefined && !/^[a-z0-9]{3,40}$/.test(c.subdominio)) p.push(`subdomínio inválido (${String(c.subdominio)})`);
   if (!/^[a-z][a-z0-9]{1,15}_$/.test(c.prefixoModelos)) p.push(`prefixo dos modelos inválido (${c.prefixoModelos}): minúsculas/dígitos terminando em "_"`);
   if (!/^[A-Z][A-Z0-9_]*$/.test(c.envSufixo)) p.push(`sufixo das variáveis inválido (${c.envSufixo}): maiúsculas, dígitos e "_"`);
   if (!c.caixas.length) p.push('sem nenhuma caixa');
@@ -278,6 +281,14 @@ export function caixasDeContasProprias(): number[] {
   return l;
 }
 
+/** O domínio dos CRMs das clínicas: <subdominio>.doutordigitalconsultoria.com. */
+export const DOMINIO_DOS_CRMS = 'doutordigitalconsultoria.com';
+
+/** As origens https dos CRMs das clínicas CADASTRADAS (subdomínio gravado na configuração). Quem não tem subdomínio não entra. */
+export function origensDasClinicas(): string[] {
+  return [...configs.values()].filter((c) => !!c.subdominio).map((c) => `https://${c.subdominio}.${DOMINIO_DOS_CRMS}`).sort();
+}
+
 /** As unidades SEM conta própria (as da conta do ambiente), em ordem alfabética. */
 export function unidadesSemConta(): string[] {
   return [...configs.values()].filter((c) => c.contaId === null || c.contaId === undefined).map((c) => c.slug).sort();
@@ -332,6 +343,7 @@ export type LinhaDoBanco = {
   unitId: string;
   /** coluna nova (passo 1): linha lida antes dela existir vem sem o campo */
   contaId?: number | null;
+  subdominio?: string | null;
   prefixoModelos: string;
   usuarioCelularId: number | null;
   gerenteId: number | null;
@@ -349,6 +361,7 @@ export function configDaLinha(l: LinhaDoBanco): ConfigChatwootUnidade {
   return {
     slug: l.unit.slug,
     contaId: l.contaId ?? null,
+    subdominio: l.subdominio ?? null,
     prefixoModelos: l.prefixoModelos,
     usuarioCelularId: l.usuarioCelularId,
     gerenteId: l.gerenteId,

@@ -46,7 +46,7 @@ export interface EstadoAtual {
   banco?: {
     unidade: { id: string; campos: Record<string, unknown> } | null;
     /** a configuração do CRM gravada (sem as caixas), ou null */
-    configChatwoot: { prefixoModelos: string; metaAgendamentosDia: number | null; kapsoPhoneNumberId: string | null; wabaId: string | null; envSufixo: string; dadosModelos: Record<string, unknown>; contaId?: number | null } | null;
+    configChatwoot: { subdominio?: string | null; prefixoModelos: string; metaAgendamentosDia: number | null; kapsoPhoneNumberId: string | null; wabaId: string | null; envSufixo: string; dadosModelos: Record<string, unknown>; contaId?: number | null } | null;
     caixasRegistradas: number[];
     /** id da automação → estado gravado para esta unidade */
     automacoes: Record<string, string>;
@@ -88,7 +88,7 @@ export interface Plano {
 }
 
 /** O que `unit_chatwoot` guarda (sem as caixas, o gerente e o usuário do celular, que só existem depois do convite). */
-export const configGravavel = (c: ConfigChatwootUnidade) => ({ prefixoModelos: c.prefixoModelos, metaAgendamentosDia: c.metaAgendamentosDia, kapsoPhoneNumberId: c.kapsoPhoneNumberId, wabaId: c.wabaId, envSufixo: c.envSufixo, dadosModelos: { ...c.dadosModelos } });
+export const configGravavel = (c: ConfigChatwootUnidade) => ({ subdominio: c.subdominio ?? null, prefixoModelos: c.prefixoModelos, metaAgendamentosDia: c.metaAgendamentosDia, kapsoPhoneNumberId: c.kapsoPhoneNumberId, wabaId: c.wabaId, envSufixo: c.envSufixo, dadosModelos: { ...c.dadosModelos } });
 
 /** JSON com as chaves em ordem (o jsonb do Postgres devolve as chaves em outra ordem que a gravada). */
 export function canonico(v: unknown): string {
@@ -176,13 +176,14 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
     id: 'conta',
     sistema: 'chatwoot',
     titulo: `Conta própria da clínica no Chatwoot (API de plataforma) e o usuário conector dela`,
-    acao: !b ? 'criar' : contaId !== null && temToken ? 'nada' : contaId === null && !estado.plataforma ? 'bloqueado' : 'criar',
+    acao: !b ? 'criar' : contaId !== null && temToken ? 'nada' : contaId === null && (!estado.plataforma || b.caixasRegistradas.length > 0) ? 'bloqueado' : 'criar',
     itens: contaId !== null
       ? [`conta ${contaId} já gravada em unit_chatwoot.conta_id`, temToken ? `${nomeToken} já está no cofre/ambiente` : `${nomeToken} NÃO está no cofre/ambiente: cria outro usuário conector (precisa do Platform App)`]
       : [`criar a conta «${q.unidade.nome}»`, `usuário conector administrador (${`conector+${slug}@…`}); o token dele vai para o cofre como ${nomeToken} (nunca impresso)`, 'o id da conta é gravado em unit_chatwoot.conta_id NA HORA (uma queda não deixa conta órfã)'],
     execucao: 'sim',
     avisos: [
       ...(b ? [] : [NAO_CONSULTADO]),
+      ...(contaId === null && (b?.caixasRegistradas.length ?? 0) > 0 ? ['a unidade JÁ tem caixa(s) na conta do ambiente (em uso): o kit NÃO cria conta nova para ela, nem com --sobrescrever (levaria tudo para uma conta vazia)'] : []),
       ...(contaId === null && !estado.plataforma ? ['falta o token do Platform App (CHATWOOT_PLATFORM_TOKEN): o João roda ops/kit-unidade/criar-platform-app-joao.sh uma vez'] : []),
       'a clínica nova nasce em SECO em todas as automações do Chatwoot (conta com conta_id numérico)',
     ],

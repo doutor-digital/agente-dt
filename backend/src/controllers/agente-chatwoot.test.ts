@@ -26,8 +26,8 @@ test('a página do Agente parseia, tem as 5 abas (Painel primeiro) e só aceita 
   const html = paginaDoAgente(CW);
   assert.doesNotThrow(() => new Function(scriptDe(html)));
   for (const aba of ['painel', 'ensinar', 'testar', 'pausadas', 'pedir']) assert.ok(html.includes(`id="aba-${aba}"`) && html.includes(`id="pane-${aba}"`), aba);
-  assert.ok(html.includes(`var CW = "${CW}"`));
-  assert.ok(html.includes('ev.origin !== CW || ev.source !== window.parent'));
+  assert.ok(html.includes(`var CW = origemDoPai("${CW}")`));
+  assert.ok(html.includes('!origemDoCrm(ev.origin) || ev.source !== window.parent'));
   assert.ok(!html.includes('__ORIGEM_CW__'));
 });
 

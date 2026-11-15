@@ -25,8 +25,8 @@ function scriptDe(html: string): string {
 test('a página dos Robôs parseia, só aceita a origem do Chatwoot e tem o molde (lista, prancheta, Editor/Execuções, proteções)', () => {
   const html = paginaDosRobos(CW);
   assert.doesNotThrow(() => new Function(scriptDe(html)));
-  assert.ok(html.includes(`var CW = "${CW}"`));
-  assert.ok(html.includes('ev.origin !== CW || ev.source !== window.parent'));
+  assert.ok(html.includes(`var CW = origemDoPai("${CW}")`));
+  assert.ok(html.includes('!origemDoCrm(ev.origin) || ev.source !== window.parent'));
   assert.ok(!html.includes('__ORIGEM_CW__'));
   // a logo da Doutor Digital entra embutida (sem placeholder sobrando) e todo ícone usado existe como símbolo
   assert.ok(!html.includes('__LOGO_DD__'));

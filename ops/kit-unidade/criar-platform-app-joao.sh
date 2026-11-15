@@ -24,9 +24,13 @@ SO_CONFERIR=0
 container() { docker ps --filter "name=chatwoot_rails" --format '{{.CreatedAt}}|{{.ID}}' | sort -r | head -1 | cut -d'|' -f2; }
 
 # O Chatwoot aceita este token? (a plataforma responde 404 para conta que não existe e 401 para token ruim)
+# O cabeçalho vai por ARQUIVO (`-H @arquivo`): o token não fica na linha de comando, que qualquer usuário do host vê no `ps`. O arquivo do cabeçalho fica ao
+# lado do token (mesma pasta, modo 600) e é apagado em seguida — nunca em /tmp.
 aceita() {
-  local codigo
-  codigo="$(curl -s -o /dev/null -w '%{http_code}' -H "api_access_token: $(cat "$ARQUIVO")" "$URL/platform/api/v1/accounts/0" || true)"
+  local codigo cab="$ARQUIVO.cab"
+  { printf 'api_access_token: '; cat "$ARQUIVO"; } > "$cab"
+  codigo="$(curl -s -o /dev/null -w '%{http_code}' -H "@$cab" "$URL/platform/api/v1/accounts/0" || true)"
+  rm -f "$cab"
   [ "$codigo" = "404" ] || [ "$codigo" = "200" ]
 }
 

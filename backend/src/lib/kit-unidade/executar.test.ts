@@ -239,7 +239,7 @@ test('unidade existente INATIVA com valores diferentes: só preenche campo vazio
   if (cfg) {
     const parcial = (cfg[1] as { cfg: Record<string, unknown>; criar: boolean });
     assert.equal(parcial.criar, false);
-    assert.deepEqual(Object.keys(parcial.cfg), ['dadosModelos']);
+    assert.deepEqual(Object.keys(parcial.cfg), ['subdominio', 'dadosModelos']);
     assert.equal((parcial.cfg.dadosModelos as Record<string, unknown>).endereco, 'Endereço editado nos modelos', 'o endereço dos modelos fica');
   }
   const depois = JSON.parse(p.snapshot()) as typeof antes;
@@ -256,7 +256,7 @@ test('config existente com Kapso/WABA vazios: preenche só eles, sem apagar o pr
   await rodar(f.banco);
   const c = f.chamadas.find((x) => x[0] === 'gravarConfigChatwoot')![1] as { cfg: Record<string, unknown>; criar: boolean };
   assert.equal(c.criar, false);
-  assert.deepEqual(Object.keys(c.cfg).sort(), ['dadosModelos', 'kapsoPhoneNumberId', 'wabaId']);
+  assert.deepEqual(Object.keys(c.cfg).sort(), ['dadosModelos', 'kapsoPhoneNumberId', 'subdominio', 'wabaId']);
   assert.equal(f.estado.config!.prefixoModelos, 'parau_');
   assert.equal(f.estado.config!.metaAgendamentosDia, 8, 'a meta que já estava fica');
   assert.equal(f.estado.config!.dadosModelos.endereco, 'Endereço editado', 'o endereço já escrito nos modelos fica');

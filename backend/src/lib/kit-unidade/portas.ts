@@ -22,6 +22,9 @@ export interface ContaPorta {
   post(caminho: string, corpo?: Record<string, unknown>): Promise<unknown>;
 }
 
+/** A conta de REFERÊNCIA: só leitura. Não tem `post` — nem no tipo nem no objeto —, então nada do kit consegue escrever em Parauapebas. */
+export type ContaSoLeitura = Pick<ContaPorta, 'conta' | 'get'>;
+
 export interface KapsoPorta {
   /** nome do modelo → situação (APPROVED, PENDING…) dos modelos que a WABA já tem */
   modelos(waba: string): Promise<Record<string, string>>;
@@ -45,7 +48,9 @@ export interface PortasExternas {
   /** abre uma conta com o token dado */
   abrirConta(conta: number, token: string): ContaPorta;
   /** a conta de REFERÊNCIA (Parauapebas, a do ambiente), SÓ leitura: o molde de etiquetas, atributos e automações da conta */
-  referencia: ContaPorta | null;
+  referencia: ContaSoLeitura | null;
+  /** o id da conta do ambiente (CHATWOOT_CONTA_ID, a de Parauapebas): o kit nunca cria nem aponta uma clínica para ela */
+  contaDoAmbiente: number | null;
   kapso: KapsoPorta | null;
   segredos: SegredosPorta;
   /** onde o Chatwoot chama o agente: https://agente-vps… (sem barra no fim) */

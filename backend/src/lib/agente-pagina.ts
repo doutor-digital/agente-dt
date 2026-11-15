@@ -795,7 +795,7 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
     } catch (e) { aviso('erroTopo', e.message); }
   }
   window.addEventListener('message', function(ev){
-    if (ev.origin !== CW || ev.source !== window.parent) return;
+    if (!origemDoCrm(ev.origin) || ev.source !== window.parent) return;
     var d = ev.data; if (!d || d.event !== 'funil-sessao') return;
     var novo = d.sessao && d.sessao.token ? d.sessao : null, primeira = !S && novo && !U; S = novo;
     if (primeira) entrar();
@@ -816,5 +816,5 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
 
 /** A página. `origemChatwoot` = a origem do Chatwoot (só ela fala com a página por postMessage). */
 export function paginaDoAgente(origemChatwoot: string, env: NodeJS.ProcessEnv = process.env): string {
-  return comContaNaPagina(PAGINA.split('__ORIGEM_CW__').join(JSON.stringify(origemChatwoot)).split('__GUIA_LIGADO__').join(String(guiaDaEtapaLigado(env))));
+  return comContaNaPagina(PAGINA.split('__ORIGEM_CW__').join(`origemDoPai(${JSON.stringify(origemChatwoot)})`).split('__GUIA_LIGADO__').join(String(guiaDaEtapaLigado(env))));
 }

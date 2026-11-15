@@ -62,6 +62,8 @@ const daConta = (e: EstadoDaExecucao): ContaPorta => precisa(e.conta, 'a conta d
 export interface DoBancoParaAConta {
   /** `unit_chatwoot.conta_id` hoje */
   contaId: number | null;
+  /** caixas já registradas para a unidade (em qualquer conta): quem já atende pacientes numa conta não ganha uma conta nova vazia */
+  caixasRegistradas: number[];
   /** grava o id da conta NA HORA em que ela nasce (antes de qualquer outra coisa): sem isto uma queda deixaria uma conta órfã e a próxima rodada criaria outra */
   gravarContaId(id: number): Promise<void>;
 }
@@ -71,6 +73,14 @@ export async function passoConta(q: Questionario, x: PortasExternas, estado: Est
   const nomeUsuario = nomeDoSegredoDoUsuario(q);
   const notas: string[] = [];
   let contaId = banco.contaId;
+  // PROTEÇÃO DA CONTA DO AMBIENTE (Parauapebas): nunca criar conta nova para unidade que já está em uso lá, nem apontar uma clínica para a conta 1.
+  // Com --sobrescrever isto não muda: criar conta e trocar o conta_id levaria a unidade inteira (caixas, conversas, régua) para uma conta vazia.
+  if (contaId !== null && x.contaDoAmbiente !== null && contaId === x.contaDoAmbiente) {
+    throw new ErroDaPorta(`o conta_id gravado (${contaId}) é o da conta do ambiente (CHATWOOT_CONTA_ID): o kit não monta clínica nessa conta`);
+  }
+  if (contaId === null && banco.caixasRegistradas.length > 0) {
+    throw new ErroDaPorta(`a unidade já tem ${banco.caixasRegistradas.length} caixa(s) registrada(s) na conta do ambiente (já está em uso): criar uma conta nova e mudar o conta_id levaria tudo para uma conta vazia — o kit recusa, mesmo com --sobrescrever`);
+  }
   if (contaId !== null) {
     if (x.plataforma && !(await x.plataforma.contaExiste(contaId))) throw new ErroDaPorta(`a conta ${contaId} (gravada no banco) não existe mais no Chatwoot: confira antes de criar outra`);
     notas.push(`conta ${contaId} já existia`);

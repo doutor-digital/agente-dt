@@ -570,7 +570,7 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
     } catch (e) { aviso(e.message, true); }
   }
   window.addEventListener('message', function(ev){
-    if (ev.origin !== CW || ev.source !== window.parent) return;
+    if (!origemDoCrm(ev.origin) || ev.source !== window.parent) return;
     var d = ev.data; if (!d || d.event !== 'funil-sessao') return;
     var novo = d.sessao && d.sessao.token ? d.sessao : null, primeira = !S && novo && !U; S = novo;
     if (primeira) entrar();
@@ -582,5 +582,5 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
 
 /** A página. `origemChatwoot` = a origem do Chatwoot (só ela fala com a página por postMessage). */
 export function paginaDosRobos(origemChatwoot: string): string {
-  return comContaNaPagina(PAGINA.split('__ORIGEM_CW__').join(JSON.stringify(origemChatwoot)).split('__LOGO_DD__').join(LOGO_DD_PNG));
+  return comContaNaPagina(PAGINA.split('__ORIGEM_CW__').join(`origemDoPai(${JSON.stringify(origemChatwoot)})`).split('__LOGO_DD__').join(LOGO_DD_PNG));
 }

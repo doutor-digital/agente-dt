@@ -23,6 +23,7 @@ export function segredosEmArquivo(pasta: string | null, env: NodeJS.ProcessEnv =
     async pronto() {
       if (!pasta) throw new ErroDaPorta('KIT_SEGREDOS_DIR não está definida: sem o cofre o segredo gerado se perderia — defina a pasta (modo 700) e rode de novo');
       mkdirSync(pasta, { recursive: true, mode: 0o700 });
+      chmodSync(pasta, 0o700); // pasta que já existia com outro modo (755) também fecha
     },
     async tem(nome) {
       if (!NOME_OK.test(nome)) throw new ErroDaPorta(`nome de segredo inválido: ${nome}`);
@@ -38,6 +39,7 @@ export function segredosEmArquivo(pasta: string | null, env: NodeJS.ProcessEnv =
       if (antes !== null && antes !== valor) throw new ErroDaPorta(`o segredo ${nome} já existe no cofre com outro valor: não sobrescrevo`);
       if (antes === valor) return;
       mkdirSync(pasta!, { recursive: true, mode: 0o700 });
+      chmodSync(pasta!, 0o700);
       writeFileSync(f, `${valor}\n`, { mode: 0o600 });
       chmodSync(f, 0o600);
     },
