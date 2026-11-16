@@ -2387,6 +2387,12 @@ model DisparoOnda {
   retomadaPor  String?   @map("retomada_por")
   retomadaEm   DateTime? @map("retomada_em")
   criadaPor    String?   @map("criada_por")
+  /// de onde a lista veio: 'kommo' (etiqueta do Kommo, sempre foi assim) | 'chatwoot' (filtro da tela «Disparos» do CRM)
+  origem       String    @default("kommo")
+  /// só origem 'chatwoot': a conta do Chatwoot, a caixa (WhatsApp oficial) e o filtro que formou a lista (auditoria)
+  contaChatwoot Int?     @map("conta_chatwoot")
+  caixaChatwoot Int?     @map("caixa_chatwoot")
+  filtro       Json?
   criadoEm     DateTime  @default(now()) @map("criado_em")
   atualizadoEm DateTime  @updatedAt @map("atualizado_em")
 
@@ -2396,6 +2402,7 @@ model DisparoOnda {
 
   @@index([estado, unitId])
   @@index([campanhaId, unitId])
+  @@index([origem, estado])
   @@map("disparo_ondas")
 }
 
@@ -2425,6 +2432,9 @@ model DisparoDestinatario {
   /// nome inteiro do contato no Kommo: só para reconferir a franquia na hora do envio (o título do cartão não serve)
   nomeCompleto String?   @map("nome_completo")
   kommoLeadId  Int?      @map("kommo_lead_id")
+  /// origem 'chatwoot': a conversa e o contato no Chatwoot (o id da conversa é POR CONTA; a conta está na onda)
+  conversaChatwoot Int?  @map("conversa_chatwoot")
+  contatoChatwoot  Int?  @map("contato_chatwoot")
   /// pendente | enviando | enviado | falhou | saiu | descartado
   estado       String    @default("pendente")
   /// por que falhou / saiu / foi descartado na hora do envio
@@ -2444,6 +2454,20 @@ model DisparoDestinatario {
   @@index([unitId, estado, enviadoEm])
   @@index([wamid])
   @@map("disparo_destinatarios")
+}
+
+/// Ajuste da tela «Disparos» do CRM por unidade (origem 'chatwoot' do motor de disparo). Sem linha = tudo de fábrica:
+/// só administrador da Doutor Digital aprova, e o teto vem só dos freios do motor.
+model ChatwootDisparoAjuste {
+  unitId        String   @id @map("unit_id")
+  /// a administradora/gerente da clínica (papel «administrator» na conta dela) também pode aprovar. Desligado por padrão.
+  gerenteAprova Boolean  @default(false) @map("gerente_aprova")
+  /// o teto de envio do número na Meta ("TIER_250"), informado pela Doutor Digital: o teto por 24 h do motor nunca passa dele
+  tierDoNumero  String?  @map("tier_do_numero")
+  atualizadoPor String?  @map("atualizado_por")
+  atualizadoEm  DateTime @updatedAt @map("atualizado_em")
+
+  @@map("chatwoot_disparo_ajustes")
 }
 
 /// Chave de API de um serviço de terceiros por unidade (Asaas, ClickSign), CIFRADA (lib/integracoes/cofre.ts).

@@ -101,7 +101,7 @@ export function comoItemDaLista(c: DisparoCampanha, ondas: Record<string, number
 
 export async function listarCampanhas(): Promise<CampanhaNaLista[]> {
   const [campanhas, ondas] = await Promise.all([
-    prisma.disparoCampanha.findMany({ orderBy: { criadoEm: 'desc' }, take: 50 }),
+    prisma.disparoCampanha.findMany({ where: { NOT: { slug: { startsWith: 'cw-' } } }, orderBy: { criadoEm: 'desc' }, take: 50 }), // as `cw-*` são das ondas do CRM (tela «Disparos»)
     prisma.disparoOnda.groupBy({ by: ['campanhaId', 'estado'], _count: true }),
   ]);
   return campanhas.map((c) => comoItemDaLista(c, Object.fromEntries(ondas.filter((o) => o.campanhaId === c.id).map((o) => [o.estado, o._count]))));

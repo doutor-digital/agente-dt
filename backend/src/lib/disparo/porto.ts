@@ -52,8 +52,9 @@ export function avisosDaListaDeTeste(env: NodeJS.ProcessEnv = process.env): stri
     .map((e) => `DISPARO_LISTA_DE_TESTE: a entrada "${e.slice(0, 40)}" não vale (o formato é por unidade: slug=telefone,telefone ou slug=*); ninguém recebe por ela`);
 }
 
-const paraDestino = (d: { id: string; ondaId: string; campanhaId: string; unitId: string; telefone: string; chave: string; nome: string; kommoLeadId: number | null; nomeCompleto?: string | null }): Destino => ({
+const paraDestino = (d: { id: string; ondaId: string; campanhaId: string; unitId: string; telefone: string; chave: string; nome: string; kommoLeadId: number | null; nomeCompleto?: string | null; conversaChatwoot?: number | null; contatoChatwoot?: number | null }): Destino => ({
   id: d.id, ondaId: d.ondaId, campanhaId: d.campanhaId, unitId: d.unitId, telefone: d.telefone, chave: d.chave, nome: d.nome, nomeCompleto: d.nomeCompleto ?? d.nome, kommoLeadId: d.kommoLeadId,
+  conversaChatwoot: d.conversaChatwoot ?? null, contatoChatwoot: d.contatoChatwoot ?? null,
 });
 
 export function portoReal(unidades: ReadonlyMap<string, Unit>, avisarJoao: (texto: string) => Promise<unknown> = (t) => enviarTelegram(t)): Porto {
@@ -86,7 +87,7 @@ export function portoReal(unidades: ReadonlyMap<string, Unit>, avisarJoao: (text
     // O teto é do NÚMERO de WhatsApp (phone_number_id), que é o que a Meta limita: duas unidades que dividem o mesmo
     // número (Petrópolis e Caxias) somam no mesmo teto. Sem número cadastrado, só a própria unidade.
     contarNaJanela: async (unitId, desde, modo) =>
-      prisma.disparoDestinatario.count({ where: { unitId: { in: await unidadesDoMesmoNumero(unitId) }, ...(modo === 'ligado' ? { enviadoEm: { gte: desde } } : { simuladoEm: { gte: desde } }) } }),
+      prisma.disparoDestinatario.count({ where: { unitId: { in: await unidadesDoMesmoNumero(unitId) }, onda: { origem: 'kommo' }, ...(modo === 'ligado' ? { enviadoEm: { gte: desde } } : { simuladoEm: { gte: desde } }) } }),
 
     pendentes: async (ondaId, modo, limite, soTelefones) =>
       (
@@ -113,7 +114,7 @@ export function portoReal(unidades: ReadonlyMap<string, Unit>, avisarJoao: (text
       (
         await prisma.disparoDestinatario.findMany({
           // Sem teto de idade: credencial ruim aparece mesmo numa unidade que manda 3 por dia. `desde` (a última aprovação) é o reinício.
-          where: { unitId, estado: { in: ['enviado', 'falhou'] }, atualizadoEm: { gte: desde } },
+          where: { unitId, onda: { origem: 'kommo' }, estado: { in: ['enviado', 'falhou'] }, atualizadoEm: { gte: desde } },
           orderBy: { atualizadoEm: 'desc' },
           take: n,
           select: { estado: true },
@@ -140,7 +141,7 @@ export function portoReal(unidades: ReadonlyMap<string, Unit>, avisarJoao: (text
 
     pausarOndas: async (unitId, campanhaId, motivo, causa) => {
       await prisma.disparoOnda.updateMany({
-        where: { unitId, estado: 'aprovada', ...(campanhaId ? { campanhaId } : {}) },
+        where: { unitId, origem: 'kommo', estado: 'aprovada', ...(campanhaId ? { campanhaId } : {}) },
         data: { estado: 'pausada', pausaMotivo: motivo.slice(0, 300), pausaCausa: causa ?? null },
       });
     },
@@ -211,7 +212,7 @@ export function portoReal(unidades: ReadonlyMap<string, Unit>, avisarJoao: (text
 
     pausarNumero: async (unitId, motivo, causa) => {
       const ids = await unidadesDoMesmoNumero(unitId);
-      const ondas = await prisma.disparoOnda.findMany({ where: { unitId: { in: ids }, estado: 'aprovada' }, select: { id: true } });
+      const ondas = await prisma.disparoOnda.findMany({ where: { unitId: { in: ids }, origem: 'kommo', estado: 'aprovada' }, select: { id: true } });
       await prisma.disparoOnda.updateMany({ where: { id: { in: ondas.map((o) => o.id) }, estado: 'aprovada' }, data: { estado: 'pausada', pausaMotivo: motivo.slice(0, 300), pausaCausa: causa } });
       // Pausou: o contador recomeça do zero (a próxima aprovação não herda as rodadas de antes).
       await prisma.disparoLimite.deleteMany({ where: { unitId: chaveDoLimite(unidade(unitId)) } });

@@ -41,6 +41,7 @@ export const DO_CATALOGO: Readonly<Record<string, GrupoDaAutomacao>> = {
   'chatwoot-ia': 'sofia',
   'chatwoot-agenda': 'agenda',
   'chatwoot-regua': 'mensagens',
+  'chatwoot-disparo': 'mensagens',
   'chatwoot-capi': 'rastreio',
   'chatwoot-origem': 'rastreio',
   'chatwoot-duplicados': 'organizacao',
