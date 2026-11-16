@@ -5,6 +5,7 @@ import type { Conversation, Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { ferramentasChamadas } from '../lib/cadastro-na-franquia.js';
 import { cadastrarLeadDoTurno, estadoCadastroTodoLead, type DecisaoDoLead, type DepsDoCadastro, type SincronizarLead } from '../lib/cadastro-todo-lead.js';
+import { agendarCapturaSilenciosa } from '../lib/captura-silenciosa.js';
 import { deixaMarcaDeCalada, marcarCartaoCalado, type PedidoDeTurno } from '../lib/atendimento-adiado.js';
 import { logger } from '../lib/logger.js';
 import { buildAgentGraph, buildThreadId } from '../agent/graph.js';
@@ -1243,7 +1244,12 @@ export async function processAgent(args: ArgsDoTurno): Promise<void> {
     const r = await processarTurno(args);
     // Sem `await`: a decisão pode chamar a IA de triagem e a franquia, e o turno (coalescer, desligamento gracioso) não espera por isso.
     // `cadastrarQuandoIaPulada` nunca lança.
-    if (r === TURNO_PULADO) void cadastrarQuandoIaPulada(args);
+    if (r === TURNO_PULADO) {
+      void cadastrarQuandoIaPulada(args);
+      // Captura silenciosa (chave `captura-silenciosa`): espera a conversa esfriar e preenche os campos vazios da etapa lendo o Kommo.
+      // Só agenda (um timer); não lê, não espera e não lança. Chave desligada: nem agenda.
+      agendarCapturaSilenciosa(args);
+    }
   } finally {
     // Exame de imagem (lib/exame-de-imagem.ts): a pausa não fica na mão do modelo — vale também para o turno pulado (fora do
     // horário, etapa calada) e para o que falhou no meio.

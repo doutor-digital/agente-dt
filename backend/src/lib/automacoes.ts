@@ -658,6 +658,20 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/controllers/webhook.controller.ts',
   },
   {
+    id: 'captura-silenciosa',
+    chave: 'CAPTURA_SILENCIOSA_SLUGS',
+    nome: 'IA preenche os campos da etapa lendo a conversa (mesmo quando a Sofia não fala)',
+    oQueFaz:
+      'Quando a Sofia NÃO responde (fora do horário dela, pausa, equipe atendendo), a IA espera a conversa esfriar uns 10 minutos, lê a conversa inteira no Kommo (paciente, atendente e Sofia) e preenche só os campos que a etapa do cartão mostra e que estão VAZIOS: queixa, região da dor, qualificação (quente/morno/frio), origem, observações, cidade e estado, quando a etapa os pede. É o caso de Petrópolis: de dia quem atende é a SDR pelo celular e a Sofia só entra às 18h, então ninguém anotava o que o paciente contava.',
+    pegadinha:
+      'Nunca sobrescreve campo que já tem valor (da SDR ou da IA), nunca manda mensagem e nunca muda a etapa. Só mexe nos campos que a etapa mostra no cartão (o molde de cabeçalho por etapa): campo escondido na etapa não é preenchido, então em Petrópolis hoje só EM QUALIFICAÇÃO tem o que preencher. Cada valor precisa de uma frase do paciente que o prove (Qualificação e Observações não): sem a frase, não grava. Qualificação só depois de 2 falas do paciente. Origem não é preenchida se o cartão já tem rastro de anúncio. Campos que outro robô escreve (Tipo de lead, Motivo do não agendamento, Situação da consulta, Retomar em, Motivo da espera) ficam fora de propósito. Nunca roda em número interno (NUMEROS_INTERNOS), currículo, funil TRATAMENTO nem cartão fechado (GANHO/PERDIDO). Teto: 2 leituras por cartão por dia e 150 por unidade por dia; conversa que não mudou não é relida. Em "Só no papel" a leitura RODA (cerca de US$ 0,001 por cartão, modelo barato Haiku) e a tela mostra "gravaria campo X = Y" com a frase do paciente, e "pularia" com o motivo do que foi recusado — nada é escrito no Kommo. Ligada, deixa uma nota no cartão dizendo o que preencheu. A espera dos 10 minutos fica na memória do servidor: um deploy no meio zera quem estava esperando (o próximo turno pulado agenda de novo). A fala que a SDR digita pelo celular só entra na leitura quando o paciente escreve de novo ou na próxima leitura do mesmo cartão; ela não dispara a leitura. Não deixa a etiqueta de região (lombar/cervical) que a Sofia põe ao gravar a região da dor.',
+    risco: 'escreve-campo',
+    temSeco: true,
+    exigeSecoAntes: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/captura-silenciosa.ts',
+  },
+  {
     id: 'carimbo-etapa',
     chave: 'CARIMBO_ETAPA_SLUGS',
     nome: 'Carimbo de início e fim do tratamento',
