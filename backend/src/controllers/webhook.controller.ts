@@ -75,6 +75,7 @@ import { scheduleLeadMemoryUpdate, carimbarContato } from '../services/lead-memo
 import { carimbarHumanoAssumiu, scheduleLeadMetrics } from '../services/lead-metrics.service.js';
 import { aplicarCarimbosDeEtapa } from '../lib/carimbo-etapa.js';
 import { contaDoKommo, grupoDaUnidade, sofiaPodeAtenderOCartao, unidadeDonaPeloCartaoId } from '../lib/crm-compartilhado.js';
+import { automacaoLigada } from '../lib/automacoes-estado.js';
 import { esquemaDaUnidade as esquemaKommoDaUnidade } from '../lib/kommo-schema.js';
 import { etapaPermitida, precisaDoFunil, type FunisDaConta } from '../lib/etapa-permitida.js';
 import { etapaCalada, notaSofiaCalada, REGRA_NOTA_CALADA, sofiaCaladaLiberada } from '../lib/sofia-calada.js';
@@ -1268,11 +1269,12 @@ export async function cadastrarQuandoIaPulada(
   const { unit, leadId } = args;
   // Só mensagem de chat de verdade (o paciente escreveu): webhook de campo/etapa traz texto sintético e não é "entrou em contato".
   if (!args.isChatMessage || !unit.spineSyncLeads || leadId <= 0) return null;
-  // Escopo deste PR: só a conta dividida (Petrópolis × Caxias), onde o cartão nasce sem unidade e o lead vira cadastro depois. O
-  // cadastro geral com a IA pulada, para as demais unidades, é outro PR. Chave desligada: sai antes de qualquer leitura ou log.
+  // Conta dividida (Caxias): sempre. Kommo próprio: só com a chave `cadastro-ia-pulada` ligada na unidade (Petrópolis saiu da conta
+  // dividida em 12/11 e o cadastro do dia parou junto). Chave do cadastro desligada: sai antes de qualquer leitura ou log.
   if (estadoCadastroTodoLead(unit.slug) === 'desligado') return null;
   try {
-    if (!(await grupoDaUnidade(unit.id))) return null;
+    const ligadaSemGrupo = automacaoLigada(unit.slug, 'cadastro-ia-pulada', process.env.CADASTRO_IA_PULADA_SLUGS);
+    if (!ligadaSemGrupo && !(await grupoDaUnidade(unit.id))) return null;
     // `ferramentas: []`: a IA não rodou, então não há "agendou" — é só o caminho do lead que entrou em contato (decidirCadastroDoLead).
     const r = await cadastrarLeadDoTurno({ unit, leadId, ferramentas: [] }, sincronizar, deps);
     if (!r.decisao.criar && !r.decisao.silenciosa) {
