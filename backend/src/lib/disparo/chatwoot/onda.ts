@@ -63,6 +63,8 @@ export interface ModeloEscolhido {
   variaveis: string[];
   /** a categoria do modelo na Meta (MARKETING, UTILITY…): é por ela que se estima o custo */
   categoria?: string | null;
+  /** o CRM não informou a categoria: foi assumida como marketing */
+  categoriaAssumida?: boolean;
 }
 
 /** A caixa é desta unidade e é uma das de WhatsApp oficial (a configuração). A conferência do canal de verdade é no CRM. */
@@ -135,6 +137,7 @@ export async function abrirOndaChatwoot(args: {
         origem: ORIGEM_CRM,
         maximoPessoas: args.maximo,
         categoriaModelo: modelo.categoria ?? null,
+        categoriaAssumida: modelo.categoriaAssumida === true,
         contaChatwoot: args.conta,
         caixaChatwoot: filtro.caixa,
         filtro: filtro as unknown as Prisma.InputJsonValue,
@@ -211,7 +214,7 @@ export async function concluirMontagemChatwoot(ondaId: string, ler?: (unit: Unit
 export async function aprovarOndaChatwoot(
   ondaId: string,
   args: { email: string | null | undefined; papel: string | null | undefined; total: unknown; impressao: unknown; maximo?: unknown; confirmarCustoDesconhecido?: unknown },
-  deps: { conferir?: typeof conferirModeloDaOnda; ctx?: (slug: string) => ContextoChatwoot | null; ajuste?: (unitId: string) => Promise<AjusteDaUnidade>; estimar?: (o: { unitId: string; categoriaModelo: string | null; total: number }) => Promise<EstimativaDeCusto> } = {},
+  deps: { conferir?: typeof conferirModeloDaOnda; ctx?: (slug: string) => ContextoChatwoot | null; ajuste?: (unitId: string) => Promise<AjusteDaUnidade>; estimar?: (o: { unitId: string; categoriaModelo: string | null; total: number; categoriaAssumida: boolean }) => Promise<EstimativaDeCusto> } = {},
 ): Promise<ResultadoDeAcao<DisparoOnda>> {
   const onda = await prisma.disparoOnda.findUnique({ where: { id: ondaId }, include: { unit: true } });
   if (!onda || onda.origem !== ORIGEM_CRM) return falha(404, 'disparo não encontrado');
@@ -230,11 +233,11 @@ export async function aprovarOndaChatwoot(
   if (args.maximo !== onda.maximoPessoas) return falha(409, 'o máximo de pessoas deste disparo mudou ou não foi conferido; recarregue a tela e confira de novo');
   if (pessoas.length > onda.maximoPessoas) return falha(409, `a lista (${pessoas.length}) passa do máximo de ${onda.maximoPessoas} pessoas: monte o disparo de novo`);
   // O CUSTO: conhecido, a tela o mostrou; DESCONHECIDO, só aprova quem confirma explicitamente que aceita (a mensagem diz porquê).
-  const custo = await (deps.estimar ?? ((o) => estimativaDoDisparo(o.unitId, o.categoriaModelo, o.total)))({ unitId: onda.unitId, categoriaModelo: onda.categoriaModelo, total: onda.total });
+  const custo = await (deps.estimar ?? ((o) => estimativaDoDisparo(o.unitId, o.categoriaModelo, o.total, o.categoriaAssumida)))({ unitId: onda.unitId, categoriaModelo: onda.categoriaModelo, total: onda.total, categoriaAssumida: onda.categoriaAssumida });
   if (!custo.conhecido && args.confirmarCustoDesconhecido !== true) return falha(409, `${PREFIXO_CUSTO_DESCONHECIDO}: ${custo.nota}. Para aprovar mesmo assim, confirme explicitamente.`);
   const ctx = (deps.ctx ?? ctxDaUnidadeNoCrm)(onda.unit.slug);
   if (!ctx?.conta || ctx.conta.conta !== onda.contaChatwoot || onda.caixaChatwoot == null) return falha(422, 'a unidade não tem a conta do CRM deste disparo');
-  const conf = await (deps.conferir ?? conferirModeloDaOnda)(ctx, onda.caixaChatwoot, { template: onda.template, idioma: onda.idioma, textoModelo: onda.textoModelo, variaveis: (onda.variaveis as unknown[]).map(String), categoria: onda.categoriaModelo });
+  const conf = await (deps.conferir ?? conferirModeloDaOnda)(ctx, onda.caixaChatwoot, { template: onda.template, idioma: onda.idioma, textoModelo: onda.textoModelo, variaveis: (onda.variaveis as unknown[]).map(String), categoria: onda.categoriaModelo, categoriaAssumida: onda.categoriaAssumida });
   if (!conf.ok) return falha(conf.transitorio ? 502 : 422, conf.motivo);
 
   const r = await prisma.disparoOnda.updateMany({

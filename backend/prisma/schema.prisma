@@ -2393,6 +2393,8 @@ model DisparoOnda {
   /// origem 'chatwoot': o máximo de pessoas que o disparo pode ter (a lista é CORTADA nele na montagem; a aprovação o confere) e a categoria do modelo na Meta (marketing, utilidade…) para o custo estimado
   maximoPessoas Int?     @map("maximo_pessoas")
   categoriaModelo String? @map("categoria_modelo")
+  /// true = o CRM não informou a categoria do modelo e ela foi ASSUMIDA como marketing (a mais cara): a tela pede confirmação e a conferência não a compara com o CRM
+  categoriaAssumida Boolean @default(false) @map("categoria_assumida")
   contaChatwoot Int?     @map("conta_chatwoot")
   caixaChatwoot Int?     @map("caixa_chatwoot")
   filtro       Json?

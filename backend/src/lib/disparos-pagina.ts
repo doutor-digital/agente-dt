@@ -356,6 +356,7 @@ a{color:var(--brand)}
     var tb = el('tbody');
     r.campanhas.forEach(function(k){
       var n = k.numeros, x = el('tr'), nome = el('td'); var a = el('a', null, k.nome); a.href = '#'; a.addEventListener('click', function(ev){ ev.preventDefault(); abrirOnda(k.id); }); nome.appendChild(a);
+      if (k.categoriaAssumida) nome.appendChild(el('small', 'mudo', ' categoria não informada pelo CRM: preço de marketing'));
       nome.appendChild(el('small', 'mudo', ' · ' + (ESTADO[k.estado] || k.estado) + ' · ' + quando(k.criadoEm))); x.appendChild(nome);
       [n.selecionadas, numeroComPct(n.enviadas, n.selecionadas), numeroComPct(n.entregues, n.enviadas), numeroComPct(n.lidas, n.enviadas), numeroComPct(n.responderam, n.enviadas), numeroComPct(n.pediramSair, n.enviadas), n.falharam, n.incertas || 0, k.gastoEstimadoBrl == null ? '—' : brl(k.gastoEstimadoBrl) + (k.gastoComReserva ? ' (reserva)' : '')].forEach(function(v){ x.appendChild(el('td', null, String(v))); });
       tb.appendChild(x);
@@ -434,14 +435,14 @@ a{color:var(--brand)}
       var ba = el('button', 'bt pri', 'Aprovar este disparo (' + o.total + ' pessoas)'); ba.type = 'button';
       // A caixa da confirmação existe SEMPRE e aparece quando o custo é sem histórico — ou quando o SERVIDOR acha isso na hora de aprovar (o custo mudou desde que a tela abriu).
       var cf0 = el('label', 'confirma'); var confirmaCusto = el('input'); confirmaCusto.type = 'checkbox'; confirmaCusto.id = 'confirmaCusto'; cf0.appendChild(confirmaCusto);
-      cf0.appendChild(el('span', null, 'Entendo que não há histórico de custo da Meta para este modelo (o valor é uma estimativa com preço de reserva) e quero aprovar mesmo assim.')); ca.appendChild(cf0);
+      cf0.appendChild(el('span', null, o.custo && o.custo.categoriaAssumida ? 'Entendo que o CRM não informou a categoria deste modelo (o valor é uma estimativa pelo preço de marketing) e quero aprovar mesmo assim.' : 'Entendo que não há histórico de custo da Meta para este modelo (o valor é uma estimativa com preço de reserva) e quero aprovar mesmo assim.')); ca.appendChild(cf0);
       cf0.style.display = o.custo && !o.custo.conhecido ? '' : 'none';
       var liberar = function(){ ba.disabled = !(o.podeAprovar && o.conferencia && o.conferencia.ok) || (cf0.style.display !== 'none' && !confirmaCusto.checked); };
       confirmaCusto.addEventListener('change', liberar);
       liberar();
       ba.addEventListener('click', function(){
         var seco = o.modo !== 'ligado';
-        if (!confirm(seco ? 'Aprovar com a unidade em ' + (o.modo === 'seco' ? 'SECO' : 'modo DESLIGADO') + '? Nada será enviado: só fica registrado quem receberia.' : 'Aprovar o envio para ' + o.total + ' pessoas (máximo ' + o.maximo + ')' + (o.custo && o.custo.conhecido ? ', custo estimado ' + brl(o.custo.brl) : ', custo estimado com preço de reserva ' + brl(o.custo.brl)) + '? As mensagens saem sozinhas, em ondas.')) return;
+        if (!confirm(seco ? 'Aprovar com a unidade em ' + (o.modo === 'seco' ? 'SECO' : 'modo DESLIGADO') + '? Nada será enviado: só fica registrado quem receberia.' : 'Aprovar o envio para ' + o.total + ' pessoas (máximo ' + o.maximo + ')' + (o.custo && o.custo.conhecido ? ', custo estimado ' + brl(o.custo.brl) : ', ' + (o.custo.categoriaAssumida ? 'categoria não informada pelo CRM, custo estimado pelo preço de marketing ' : 'custo estimado com preço de reserva ') + brl(o.custo.brl)) + '? As mensagens saem sozinhas, em ondas.')) return;
         ba.disabled = true;
         api('POST', '/api/public/disparos/ondas/' + enc(o.id) + '/aprovar', { slug: U.slug, total: o.total, impressao: o.impressao, maximo: o.maximo, confirmarCustoDesconhecido: !!(confirmaCusto && confirmaCusto.checked) }).then(function(){ toast('Aprovado.'); return carregar().then(function(){ abrirOnda(o.id); }); }).catch(function(e){ toast(e.message, true); if (e.corpo && e.corpo.precisaConfirmarCusto) { cf0.style.display = ''; confirmaCusto.checked = false; } liberar(); });
       });
@@ -469,6 +470,9 @@ a{color:var(--brand)}
     if (k.conhecido) {
       caixa.appendChild(el('div', 'valor', 'cerca de ' + brl(k.brl)));
       caixa.appendChild(el('div', null, o.total + ' pessoas × ' + brl(k.porMensagemBrl) + ' por mensagem (modelo de categoria ' + k.categoria + ')'));
+    } else if (k.categoriaAssumida) {
+      caixa.appendChild(el('div', 'valor', 'até ' + brl(k.brl)));
+      caixa.appendChild(el('div', null, 'Categoria não informada pelo CRM: estimativa pelo preço de marketing (a mais cara): ' + o.total + ' pessoas × ' + brl(k.porMensagemBrl) + ' por mensagem. Se o modelo for de outra categoria o custo real é menor. Aprovar exige a sua confirmação explícita.'));
     } else {
       caixa.appendChild(el('div', 'valor', 'até ' + brl(k.brl)));
       caixa.appendChild(el('div', null, 'Custo estimado com preço de reserva (sem histórico da Meta): ' + o.total + ' pessoas × ' + brl(k.porMensagemBrl) + ' por mensagem. O preço de reserva é alto de propósito, então o gasto real tende a ser menor. Aprovar exige a sua confirmação explícita.'));

@@ -1321,3 +1321,59 @@ test('reclassificação para uma categoria MAIS BARATA: a onda pausa, mas a cate
   assert.equal(t.base.chamadas.pausas.length, 1);
   assert.equal(gravadas.length, 0);
 });
+
+test('reclassificação: a categoria nova só é gravada com a onda de fato PAUSADA (where estado=pausada) e UMA vez por rodada, não por pessoa', async () => {
+  const consultas: Array<{ where: Record<string, unknown>; data: Record<string, unknown> }> = [];
+  const t = portoDoCrm({ categoriaDaOnda: 'UTILITY', modeloOk: { ok: false, categoriaNova: 'MARKETING', motivo: 'a Meta mudou a categoria do modelo de UTILITY para MARKETING' } });
+  falso('disparoOnda', { updateMany: async (a: { where: Record<string, unknown>; data: Record<string, unknown> }) => (consultas.push(a), { count: 1 }) });
+  await t.porto.reconferir!(destino(1));
+  await t.porto.reconferir!(destino(2));
+  await t.porto.reconferir!(destino(3));
+  assert.equal(consultas.length, 1, 'três pessoas na mesma rodada: uma gravação');
+  assert.deepEqual(consultas[0]!.where, { id: 'o1', estado: 'pausada' }, 'se a pausa falhou, a onda segue aprovada e nada é regravado');
+  assert.deepEqual(consultas[0]!.data, { categoriaModelo: 'MARKETING' });
+});
+
+test('categoria ASSUMIDA (o CRM não informou na montagem): se o CRM depois disser UTILIDADE, a conferência NÃO pausa com «a Meta mudou a categoria» (a onda segue precificada como marketing, o mais caro)', async () => {
+  const { conferirModeloDaOnda } = await import('./disparo/chatwoot/canal.js');
+  const { criarContextoChatwoot: criar } = await import('../mcp-remoto/chatwoot.js');
+  const antes = globalThis.fetch;
+  const corpo = (category: string | undefined) => ({ payload: [{ name: 'parau_reativacao', language: 'pt_BR', status: 'APPROVED', ...(category ? { category } : {}), components: [{ type: 'BODY', text: 'Oi {{1}}, tudo bem?' }] }] });
+  let atual: { payload: unknown[] } = corpo('UTILITY');
+  globalThis.fetch = (async (url: string) => new Response(JSON.stringify(/inboxes$/.test(new URL(url).pathname) ? { payload: [{ id: 3, name: 'W', channel_type: 'Channel::Whatsapp', provider: 'whatsapp_cloud' }] } : atual), { status: 200, headers: { 'content-type': 'application/json' } })) as never;
+  try {
+    const ctx = criar({ url: 'https://x.test', conta: 1, token: 't' });
+    const def = { template: 'parau_reativacao', idioma: 'pt_BR', textoModelo: 'Oi {{1}}, tudo bem?', variaveis: ['primeiroNome'] };
+    const assumida = await conferirModeloDaOnda(ctx, 3, { ...def, categoria: 'MARKETING', categoriaAssumida: true });
+    assert.equal(assumida.ok, true, 'assumida: o CRM dizer UTILIDADE depois não é reclassificação');
+    const informada = await conferirModeloDaOnda(ctx, 3, { ...def, categoria: 'MARKETING', categoriaAssumida: false });
+    assert.equal(informada.ok, false, 'informada: aí sim a Meta mudou');
+    assert.match((informada as { motivo: string }).motivo, /a Meta mudou a categoria do modelo de MARKETING para UTILITY/);
+    atual = corpo(undefined);
+    assert.equal((await conferirModeloDaOnda(ctx, 3, { ...def, categoria: 'UTILITY', categoriaAssumida: false })).ok, true, 'o CRM omitiu o campo desta vez: não prova reclassificação');
+  } finally {
+    globalThis.fetch = antes;
+  }
+});
+
+test('lista de unidades do número FALHANDO com o cache vazio (1ª rodada após reinício): a rodada da unidade NÃO manda nada (falha fechada), em vez de somar só esta unidade', async () => {
+  ligar();
+  const { rodadaDoDisparoNoCrm, _zerarSemAndarDoCrm, _zerarVarreduraDoCrm } = await import('./disparo/chatwoot/rodada.js');
+  const { _esquecerPrecosDeGasto } = await import('./disparo/chatwoot/gasto.js');
+  const { _definirCambio } = await import('./disparo/chatwoot/custo.js');
+  _esquecerPrecosDeGasto();
+  _zerarSemAndarDoCrm();
+  _zerarVarreduraDoCrm();
+  _definirCambio(5.6);
+  const onda = { id: 'o1', campanhaId: 'c1', unitId: 'u1', estado: 'aprovada', origem: 'chatwoot', caixaChatwoot: 3, contaChatwoot: 1, template: INFO.template, idioma: INFO.idioma, textoModelo: INFO.textoModelo, variaveis: INFO.variaveis, cabecalho: null, oferta: null, categoriaModelo: 'MARKETING', aprovadaEm: ONDA.aprovadaEm, aprovadaModo: 'ligado', sairAceitos: 0, criadoEm: AGORA, unit: UNIDADE, campanha: { nome: 'Reativação' } };
+  falso('disparoOnda', { findMany: async () => [onda], updateMany: async () => ({ count: 0 }) });
+  falso('chatwootDisparoAjuste', { findUnique: async () => null });
+  falso('whatsappCostDaily', { findMany: async () => [] });
+  const base = baseFalso({ quantos: 5 });
+  const t = portoDoCrm({ base });
+  falso('unitChatwoot', { findUnique: async () => { throw new Error('banco fora'); }, findMany: async () => [] });
+  falso('disparoDestinatario', { findMany: async () => [], count: async () => 0, groupBy: async () => [] });
+  await rodadaDoDisparoNoCrm({ criarPorto: () => t.porto, avisar: async () => undefined, tetoReais: 50 });
+  assert.equal(t.enviados.length, 0, 'a leitura do gasto falhou: não manda');
+  assert.equal(t.base.estados.get('d1')!.estado, 'pendente');
+});

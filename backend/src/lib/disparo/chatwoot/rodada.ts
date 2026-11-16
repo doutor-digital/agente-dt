@@ -244,7 +244,7 @@ export async function rodadaDoDisparoNoCrm(deps: { precoEmReais?: PrecoEmReais; 
   if (boas.length === 0) return;
   const unidades = new Map<string, Unit>(boas.map((o) => [o.unitId, o.unit]));
   const info = new Map<string, OndaDaRodada>(
-    boas.map((o) => [o.id, { caixa: o.caixaChatwoot!, conta: o.contaChatwoot!, template: o.template, idioma: o.idioma, textoModelo: o.textoModelo, variaveis: (o.variaveis as unknown[]).map(String), categoria: o.categoriaModelo }]),
+    boas.map((o) => [o.id, { caixa: o.caixaChatwoot!, conta: o.contaChatwoot!, template: o.template, idioma: o.idioma, textoModelo: o.textoModelo, variaveis: (o.variaveis as unknown[]).map(String), categoria: o.categoriaModelo, categoriaAssumida: o.categoriaAssumida }]),
   );
   const porto = deps.criarPorto ? deps.criarPorto(unidades, info) : portoChatwoot({ base: portoReal(unidades), unidades, ondas: info });
   const f = freiosDoAmbiente();
