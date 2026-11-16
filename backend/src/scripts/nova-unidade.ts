@@ -233,7 +233,7 @@ async function main(): Promise<void> {
     return;
   }
   if (!arquivo) {
-    console.error('uso: nova-unidade.ts <questionario.yaml> [--aplicar] [--sim] [--offline] [--sobrescrever] [--sobrescrever-prompt] [--ligar-robo]   |   --gerar-schema');
+    console.error('uso: nova-unidade.ts <questionario.yaml> [--aplicar] [--sim] [--offline] [--sobrescrever] [--sobrescrever-prompt] [--reimportar-aprendizados] [--ligar-robo]   |   --gerar-schema');
     process.exit(2);
   }
   const lido = lerQuestionario(readFileSync(resolve(arquivo), 'utf8'));
@@ -248,7 +248,7 @@ async function main(): Promise<void> {
   console.log('');
   const estado: EstadoAtual = flags.has('--offline') ? {} : await lerEstado(q);
   const molde = lerMolde();
-  const plano = montarPlano(q, estado, { molde, sobrescrever: flags.has('--sobrescrever'), adminsDD: adminsDDEfetivos() });
+  const plano = montarPlano(q, estado, { molde, sobrescrever: flags.has('--sobrescrever'), reimportarAprendizados: flags.has('--reimportar-aprendizados'), adminsDD: adminsDDEfetivos() });
   console.log(textoDoPlano(plano));
   if (!flags.has('--aplicar')) {
     console.log('\n(SECO: nada foi gravado. Para executar: --aplicar)');
@@ -265,6 +265,7 @@ async function main(): Promise<void> {
     molde,
     sobrescreverPrompt: flags.has('--sobrescrever-prompt'),
     sobrescrever: flags.has('--sobrescrever'),
+    reimportarAprendizados: flags.has('--reimportar-aprendizados'),
     externas: await portasExternas(),
     ligarRobo: flags.has('--ligar-robo'),
     dizer: (l) => console.log(l),

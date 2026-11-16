@@ -279,11 +279,11 @@ remoto "bash ops/kit-unidade/nova-unidade-joao.sh '$SLUG' --aplicar"
 # ── 7. subdomínio e chaves ──────────────────────────────────────────────────────────────────────────────
 # clínica SEM assistente (assistente.quer: false): não há robô Sofia, então o cofre só leva a chave da conta
 SEM_IA=""; [ "$QUER_IA" = "false" ] && SEM_IA=" --sem-ia"
-passo "7a. as chaves da conta estão no cofre?" "se faltar chave, uma etapa do passo 6b ficou sem rodar (você respondeu «não» a ela?): rode o comando de novo e responda s. Se disser valor DIFERENTE no .env, confira à mão (não troco sozinho). O proxy ainda NÃO foi mexido."
+passo "7a. as chaves da conta estão no cofre?" "se faltar chave, uma etapa do passo 6b ficou sem rodar (você respondeu «não» a ela?): rode o comando de novo e responda s. Se disser valor DIFERENTE no .env, confira à mão (não troco sozinho). Clínica sem IA confere só a chave da conta (--sem-ia). O proxy ainda NÃO foi mexido."
 remoto "bash ops/kit-unidade/cofre-para-servico-joao.sh '$SUF' --so-conferir$SEM_IA"
 passo "7b. subdomínio no proxy" "na VPS: bash $DESTINO/ops/kit-unidade/regra-traefik-joao.sh $SUB --so-conferir"
 remoto "bash ops/kit-unidade/regra-traefik-joao.sh '$SUB'"
-passo "7c. chaves da conta: cofre → serviço (reinicia o ddagent_agent)" "na VPS: bash $DESTINO/ops/kit-unidade/cofre-para-servico-joao.sh $SUF --so-conferir"
+passo "7c. chaves da conta: cofre → serviço (reinicia o ddagent_agent)" "na VPS: bash $DESTINO/ops/kit-unidade/cofre-para-servico-joao.sh $SUF$SEM_IA   (clínica sem IA: o cofre leva só a chave da conta, --sem-ia, e o robô Sofia/chatwoot-ia não entram)"
 remoto "bash ops/kit-unidade/cofre-para-servico-joao.sh '$SUF'$SEM_IA"
 
 # ── 8. o que falta ──────────────────────────────────────────────────────────────────────────────────────

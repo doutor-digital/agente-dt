@@ -8,7 +8,7 @@
  * e o texto das fontes é escrito de modo que `precosDaConsulta` o leia de volta (teste).
  */
 import { normalizarRegra, recusaDaRegra } from '../aprendizados-unidade.js';
-import { LICAO_POUCO_EMOJI, LICAO_SEM_EMOJI, QUANDO_ATENDE, licaoDaObjecao, licaoDaSaudacao, licaoDeChamarPessoa, licaoDoNunca } from './assistente-padrao.js';
+import { LICAO_POUCO_EMOJI, LICAO_SEM_EMOJI, QUANDO_ATENDE, licaoDaObjecao, licaoDaSaudacao, licaoDeChamarPessoa, licoesDoNunca } from './assistente-padrao.js';
 import type { Questionario } from './questionario.js';
 
 const DIAS = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];
@@ -85,7 +85,11 @@ export function licoesDaAssistente(q: Questionario): { textos: string[]; recusad
   if (a.emoji === 'nao') candidatas.push(LICAO_SEM_EMOJI);
   if (a.emoji === 'pouco') candidatas.push(LICAO_POUCO_EMOJI);
   for (const o of a.objecoes ?? []) candidatas.push(licaoDaObjecao(o.gatilho, o.resposta));
-  if (a.nunca_extra?.trim()) candidatas.push(licaoDoNunca(a.nunca_extra));
+  if (a.nunca_extra?.trim()) {
+    const n = licoesDoNunca(a.nunca_extra);
+    if (n.ok) candidatas.push(n.licao);
+    else recusadas.push({ texto: a.nunca_extra.length > 90 ? `${a.nunca_extra.slice(0, 87)}…` : a.nunca_extra, motivo: n.motivo });
+  }
   if (a.passar_extra?.trim()) candidatas.push(licaoDeChamarPessoa(a.passar_extra));
   for (const c of candidatas) {
     const t = normalizarRegra(c);

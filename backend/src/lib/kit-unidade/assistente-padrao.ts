@@ -89,31 +89,47 @@ export function resolverMarcadores(texto: string): string {
 export const licaoDaSaudacao = (s: string) => `Ao se apresentar, use este jeito de falar da clínica: "${s.trim()}"`;
 export const licaoDaObjecao = (gatilho: string, resposta: string) => `Se o paciente disser "${gatilho.trim()}", responda neste estilo: "${resolverMarcadores(resposta.trim())}"`;
 /**
- * «O que a assistente nunca deve dizer»: cada PEDAÇO que o dono escreveu (separado por ponto final, ponto e vírgula, vírgula, quebra de linha ou « e ») vira uma proibição que começa com «Nunca»
- * (pedaço que já começa negando fica como está). Assim o texto SEMPRE se lê como proibição, e a negação fica colada ao termo: as travas de cura/desconto/diagnóstico valem em cada pedaço, sem isentar
- * nada. «1.500» e «Dra. Ana» não são separados (nem o ponto dentro de número, nem abreviação de até 3 letras).
+ * «O que a assistente nunca deve dizer»: UMA proibição por linha. Cada linha vira «Nunca …» SEM ser cortada nem reescrita: não se separa em vírgula nem em «e» (separar foi o que deixava
+ * «Não diga que somos franquia, diga que somos independente» virar «Nunca diga que somos independente», o contrário do que a dona quis). Linha que o kit NÃO consegue ler como UMA proibição
+ * simples é recusada, com o motivo, para a dona escrever de outro jeito:
+ *  - «exceto…», «a não ser que…», «mas…», «se o paciente…» (exceção: a rede é que decide, e uma proibição com exceção não é proibição);
+ *  - um pedaço depois da vírgula/«e» que começa com verbo («…, diga que…», «…e dar desconto») ou com negação: são duas ordens, uma por linha;
+ *  - «negar desconto», «deixar de prometer cura», «evitar…», «recusar…»: dupla negação, que «Nunca» viraria o contrário.
  */
-export function licaoDoNunca(texto: string): string {
-  const partes: string[] = [];
-  let atual = '';
-  const t = texto.trim();
-  for (let i = 0; i < t.length; i++) {
-    const c = t[i]!;
-    const proximo = t[i + 1] ?? '';
-    const ehPonto = c === '.' && (proximo === ' ' || proximo === '') && !/(?:^|\s)\p{L}{1,3}$/u.test(atual);
-    const ehE = c === ' ' && /^e\s/i.test(t.slice(i + 1, i + 4)) && atual.trim() !== '';
-    if (c === ';' || c === ',' || c === '!' || c === '?' || c === '\n' || ehPonto) {
-      if (atual.trim()) partes.push(atual.trim());
-      atual = '';
-    } else if (ehE) {
-      if (atual.trim()) partes.push(atual.trim());
-      atual = '';
-      i += 2; // pula «e »
-    } else atual += c;
+const EXCECAO_NA_PROIBICAO = /\b(?:exceto|a n[aã]o ser|salvo|a menos que|menos quando|s[oó] se|somente se|apenas se|desde que|caso contr[aá]rio|mas|por[eé]m|contudo|entretanto|todavia|se (?:o|a|ele|ela|voc[eê]|for|houver|perguntar|pedir)|quando|caso (?:o|a|ele|ela|voc[eê]|haja|seja|queira|pe[cç]a|pergunte|tenha|for)|em caso de|enquanto|at[eé] que|depois que)\b/i;
+const DUPLA_NEGACAO = /\b(?:nega(?:r|ndo|m)?|negue|neguem|recus\w+|evit\w+|omit\w+|abst\w+|deix\w+\s+de|par(?:ar|e)\s+de|esque[cç]\w+\s+de|dispens\w+)\b/i;
+const COMECA_COM_ORDEM = /^(?:n[aã]o|nunca|jamais|sempre|diga|dizer|fale|falar|responda|responder|seja|ser|fa[cç]a|fazer|ofere[cç]a|oferecer|prometa|prometer|garanta|garantir|use|usar|passe|passar|mande|mandar|envie|enviar|informe|informar|explique|explicar|sugira|sugerir|recomende|recomendar|indique|indicar|dar|aceite|aceitar|confirme|confirmar|marque|marcar|agende|agendar|chame|chamar|pe[cç]a|pedir|pergunte|perguntar|insista|insistir|aja|agir|atenda|atender|ignore|ignorar|esque[cç]a|trate|tratar|pode|podem|deve|devem|precisa|precisam|ent[aã]o)$/i;
+const PRIMEIRA_PALAVRA = /^[\s"'“(]*([\p{L}]+)/u;
+const semAcento = (t: string) => t.normalize('NFD').replace(/\p{M}/gu, '');
+
+export function licoesDoNunca(texto: string): { ok: true; licao: string } | { ok: false; motivo: string } {
+  const linhas = texto.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (!linhas.length) return { ok: false, motivo: 'Escreva o que a assistente nunca pode dizer.' };
+  const saida: string[] = [];
+  for (const linha of linhas) {
+    const lida = semAcento(linha);
+    if (EXCECAO_NA_PROIBICAO.test(lida)) {
+      return { ok: false, motivo: `Em «${resumo(linha)}» tem uma exceção (como «exceto», «a não ser que», «mas», «se o paciente…», «quando…»). Escreva só o que a assistente NUNCA faz, sem exceção: exceção é decisão da rede e do João.` };
+    }
+    if (DUPLA_NEGACAO.test(lida.replace(/^\s*evit\w+\s+/i, ''))) {
+      return { ok: false, motivo: `Em «${resumo(linha)}» tem uma negação dentro da proibição («negar», «recusar», «evitar», «deixar de»…), e isso viraria o contrário. Escreva direto o que a assistente não deve fazer, por exemplo «dar desconto».` };
+    }
+    // cada pedaço depois de vírgula, ponto, ponto e vírgula, «e» ou «ou» tem de ser mais do mesmo assunto, não uma nova ordem
+    const pedacos = linha.split(/\s*(?:[,;:!?]|\.(?=\s)|\s[-–—]\s|\se\s|\sou\s)\s*/i).filter(Boolean);
+    for (const pedaco of pedacos.slice(1)) {
+      const primeira = PRIMEIRA_PALAVRA.exec(semAcento(pedaco).replace(/^\s*(?:e|ou)\s+/i, ''))?.[1];
+      const deComAcento = /^\s*(?:(?:e|ou)\s+)?d[êÊ](?=\s|$)/.test(pedaco);
+      if (primeira && (COMECA_COM_ORDEM.test(primeira) || deComAcento)) {
+        return { ok: false, motivo: `Em «${resumo(linha)}» tem mais de uma ordem na mesma linha (depois de «${primeira}»). Escreva UMA proibição por linha, sem «diga…», «faça…», «dar…» no meio.` };
+      }
+    }
+    const ja = /^(?:nunca|n[aã]o|jamais|evit\w+)\b/i.test(lida);
+    const corpo = linha.replace(/[.;\s]+$/, '');
+    saida.push(ja ? `${corpo}.` : `Nunca ${/^\p{Lu}\p{Ll}/u.test(corpo) ? corpo.charAt(0).toLowerCase() + corpo.slice(1) : corpo}.`);
   }
-  if (atual.trim()) partes.push(atual.trim());
-  return partes.map((p) => (/^(?:nunca|n[aã]o|jamais|evite|nem)\b/i.test(p) ? p : `Nunca ${p}`)).join('. ');
+  return { ok: true, licao: saida.join(' ') };
 }
+const resumo = (t: string) => (t.length > 60 ? `${t.slice(0, 57)}…` : t);
 export const licaoDeChamarPessoa = (t: string) => `Chame também uma pessoa da equipe quando: ${t.trim()}`;
 export const LICAO_SEM_EMOJI = 'Não use emojis nas mensagens.';
 export const LICAO_POUCO_EMOJI = 'Use emojis com muita moderação: no máximo um a cada poucas mensagens.';

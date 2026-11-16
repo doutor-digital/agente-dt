@@ -122,6 +122,8 @@ export interface OpcoesDoPlano {
   adminsDD?: string[];
   /** `--sobrescrever`: troca também o que já está preenchido e deixa tocar numa unidade ATIVA */
   sobrescrever?: boolean;
+  /** `--reimportar-aprendizados`: repete a importação dos aprendizados da clínica (sem duplicar). Flag PRÓPRIA: `--sobrescrever` não mexe nos aprendizados que a clínica já administra. */
+  reimportarAprendizados?: boolean;
 }
 
 export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: OpcoesDoPlano): Plano {
@@ -398,7 +400,7 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
   const jaTemLicao = new Set((b?.licoes ?? []).map(normLicao));
   // o kit grava os aprendizados UMA vez (marca em units.kit_aprendizados_em): depois disso a clínica manda neles (/aprendizados) e o kit não regrava, nem o que ela apagou ou editou
   const importadoEm = (b?.unidade?.campos as { kitAprendizadosEm?: Date | string | null } | undefined)?.kitAprendizadosEm ?? null;
-  const jaImportados = !!importadoEm && !sobrescrever;
+  const jaImportados = !!importadoEm && !opcoes.reimportarAprendizados;
   const licoesNovas = jaImportados ? [] : licoes.textos.filter((t) => !jaTemLicao.has(normLicao(t)));
   const { gravar: sofiaAEscrever, preservados: sofiaPreservados } = aGravar(b?.sofia ?? null, sofia.campos, sobrescrever);
   const mudouSofia = Object.keys(sofiaAEscrever);
@@ -411,7 +413,7 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
       ? ['sem persona, sem fontes, sem prompt e sem aprendizados: a unidade fica SEM IA (para contratar depois: assistente.quer: true no questionário e rodar de novo)']
       : [
           ...Object.keys(sofia.campos).map((k) => (k === 'systemPrompt' ? `systemPrompt (${String(sofia.campos[k]).length} caracteres, do molde)` : k)),
-          ...(q.assistente ? [`aprendizados da clínica (fonte «unidade», editáveis em /aprendizados/${slug}): ${licoesNovas.length} a gravar (${jaImportados ? 'JÁ importados pelo kit: não regravo; a clínica os administra em /aprendizados' : `${licoes.textos.length - licoesNovas.length} já existem`}) — o que a clínica pediu sobre saudação, emoji, objeções, o que nunca dizer e quando chamar uma pessoa; ficam ABAIXO das regras da rede`] : []),
+          ...(q.assistente ? [`aprendizados da clínica (fonte «unidade», editáveis em /aprendizados/${slug}): ${licoesNovas.length} a gravar (${jaImportados ? 'JÁ importados pelo kit: não regravo; a clínica os administra em /aprendizados (--reimportar-aprendizados repete)' : `${licoes.textos.length - licoesNovas.length} já existem`}) — o que a clínica pediu sobre saudação, emoji, objeções, o que nunca dizer e quando chamar uma pessoa; ficam ABAIXO das regras da rede`] : []),
           'automação prompt-da-unidade: NÃO ligo — antes roda `testar-prompt.ts --slug` e o dono lê as respostas',
         ],
     execucao: semIA ? 'manual' : 'sim',

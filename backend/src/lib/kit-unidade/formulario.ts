@@ -11,8 +11,8 @@
  * assim a pessoa vê o erro na hora, e não só o João quando for rodar o kit.
  */
 import { z } from 'zod';
-import { INVISIVEIS_BENIGNOS, recusaDaRegra, recusaDeFato, textoSuspeito } from '../aprendizados-unidade.js';
-import { MAX_OBJECOES_EXTRAS, MAX_RESPOSTA_OBJECAO, OBJECOES_PADRAO, licaoDaObjecao, licaoDaSaudacao, licaoDeChamarPessoa, licaoDoNunca } from './assistente-padrao.js';
+import { INVISIVEIS_BENIGNOS, recusaDaRegra, recusaDeFato, recusaDePergunta, textoComDisfarce } from '../aprendizados-unidade.js';
+import { MAX_OBJECOES_EXTRAS, MAX_RESPOSTA_OBJECAO, OBJECOES_PADRAO, licaoDaObjecao, licaoDaSaudacao, licaoDeChamarPessoa, licoesDoNunca } from './assistente-padrao.js';
 
 const hora = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Use o formato 08:00 (hora:minuto).');
 /** Troca caractere de controle e quebra de linha por espaço (o texto vai para o terminal do João e para frases ditas ao paciente: nada de linha forjada nem ANSI). */
@@ -20,6 +20,16 @@ const umaLinha = (v: unknown) => (typeof v === 'string' ? v.replace(INVISIVEIS_B
 const texto = (min: number, max: number, nome: string) =>
   z.preprocess(
     umaLinha,
+    z
+      .string({ required_error: `Preencha: ${nome}.`, invalid_type_error: `Preencha: ${nome}.` })
+      .min(1, `Preencha: ${nome}.`)
+      .min(min, `${nome}: escreva um pouco mais (mínimo ${min} letras).`)
+      .max(max, `${nome}: muito longo (máximo ${max} letras).`),
+  );
+/** Texto de VÁRIAS linhas (uma ideia por linha, como «o que a assistente nunca diz»): cada linha limpa como `umaLinha`, linhas vazias somem e a quebra de linha fica. */
+const variasLinhas = (min: number, max: number, nome: string) =>
+  z.preprocess(
+    (v) => (typeof v === 'string' ? v.split(/\r?\n/).map((l) => umaLinha(l) as string).filter(Boolean).join('\n') : v),
     z
       .string({ required_error: `Preencha: ${nome}.`, invalid_type_error: `Preencha: ${nome}.` })
       .min(1, `Preencha: ${nome}.`)
@@ -107,11 +117,20 @@ const Assistente = z
       )
       .max(OBJECOES_PADRAO.length + MAX_OBJECOES_EXTRAS, 'Muitas objeções.')
       .optional(),
-    nunca_extra: opcional(texto(10, 300, 'O que a assistente nunca pode dizer')),
+    nunca_extra: opcional(variasLinhas(10, 300, 'O que a assistente nunca pode dizer')),
     passar_extra: opcional(regra(10, 300, 'Outras situações para chamar uma pessoa')),
     quem_recebe: z.object({ nome: opcional(texto(3, 80, 'Nome de quem recebe')), contato: opcional(contatoDaEquipe) }).strict().optional(),
     faq: z
-      .array(z.object({ pergunta: fato(5, 120, 'Pergunta'), resposta: fato(3, 300, 'Resposta') }).strict())
+      .array(
+        z
+          .object({ pergunta: fato(5, 120, 'Pergunta'), resposta: fato(3, 300, 'Resposta') })
+          .strict()
+          // pergunta e resposta valem JUNTAS: «A avaliação tem custo?» + «Não, é gratuita.» só diz de graça lendo as duas
+          .superRefine((f, ctx) => {
+            const m = recusaDePergunta(f.pergunta, f.resposta);
+            if (m) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['resposta'], message: m });
+          }),
+      )
       .max(10, 'No máximo 10 perguntas frequentes.')
       .optional(),
   })
@@ -146,7 +165,11 @@ const Assistente = z
       if (m) erro(path, m);
     };
     if (a.saudacao) confere(licaoDaSaudacao(a.saudacao), ['saudacao']);
-    if (a.nunca_extra) confere(licaoDoNunca(a.nunca_extra), ['nunca_extra']);
+    if (a.nunca_extra) {
+      const n = licoesDoNunca(a.nunca_extra);
+      if (n.ok) confere(n.licao, ['nunca_extra']);
+      else erro(['nunca_extra'], n.motivo);
+    }
     if (a.passar_extra) confere(licaoDeChamarPessoa(a.passar_extra), ['passar_extra']);
     // objeções: cada padrão no máximo uma vez; «outra» exige o que o paciente diz E a resposta
     const vistos = new Set<string>();
@@ -276,7 +299,7 @@ export type ResultadoDoFormulario = { ok: true; respostas: RespostasFormulario }
 export function camposComControle(valor: unknown, caminho: string[] = []): string[] {
   if (typeof valor === 'string') {
     const limpo = valor.replace(INVISIVEIS_BENIGNOS, ''); // marcas de direção de copiar/colar não travam o dono
-    return /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/.test(limpo) || textoSuspeito(limpo) ? [caminho.join('.') || '_'] : [];
+    return /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/.test(limpo) || textoComDisfarce(limpo) ? [caminho.join('.') || '_'] : [];
   }
   if (Array.isArray(valor)) return valor.flatMap((v, i) => camposComControle(v, [...caminho, String(i)]));
   if (valor && typeof valor === 'object') return Object.entries(valor).flatMap(([k, v]) => camposComControle(v, [...caminho, k]));

@@ -145,7 +145,7 @@ ${IMPORTANTE}
 
 <h3>O que a assistente NUNCA pode dizer</h3>
 <div class="fixo"><b>A rede já proíbe (você não precisa escrever):</b>${lista(NUNCA_DA_REDE)}</div>
-${campo('f-ia-nunca', 'Mais alguma coisa que a assistente nunca deve dizer ou prometer (opcional)', '', area('f-ia-nunca', 'assistente.nunca_extra', 300))}
+${campo('f-ia-nunca', 'Mais alguma coisa que a assistente nunca deve dizer ou prometer (opcional)', 'Uma coisa por linha, curta (por exemplo: falar de política). Sem «mas», «exceto» nem «se…»: a assistente lê cada linha como «nunca …».', area('f-ia-nunca', 'assistente.nunca_extra', 300))}
 
 <h3>Quando passar para uma pessoa</h3>
 <div class="fixo"><b>A rede já chama uma pessoa da equipe quando:</b>${lista(PASSA_PARA_PESSOA_DA_REDE)}</div>

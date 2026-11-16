@@ -68,6 +68,8 @@ export interface OpcoesDeExecucao {
   sobrescreverPrompt?: boolean;
   /** troca também os campos JÁ preenchidos de uma unidade que existe (e deixa tocar numa unidade ATIVA). Sem isto só se preenche campo vazio. */
   sobrescrever?: boolean;
+  /** repete a importação dos aprendizados da clínica (sem duplicar). Flag PRÓPRIA: `sobrescrever` NÃO mexe nos aprendizados que a clínica já administra em /aprendizados. */
+  reimportarAprendizados?: boolean;
   /** escreve uma linha para quem está acompanhando */
   dizer: (linha: string) => void;
   /** as portas do Chatwoot, do Kapso e do cofre; sem elas os passos de fora do banco ficam bloqueados */
@@ -239,9 +241,9 @@ async function aplicarPasso(p: Passo, q: Questionario, o: OpcoesDeExecucao, unit
       if (lic.textos.length) {
         const importadoEm = hoje.kitAprendizadosEm as Date | string | null | undefined;
         if (!banco.licoes) notas.push(`${lic.textos.length} aprendizado(s) da clínica NÃO gravados (este ambiente não tem a porta de aprendizados)`);
-        else if (importadoEm && !o.sobrescrever) {
+        else if (importadoEm && !o.reimportarAprendizados) {
           // UM escritor só: o kit grava os aprendizados uma vez; depois a clínica manda neles (edita, apaga, desliga em /aprendizados) e um --aplicar novo (ex.: --ligar-robo) não os desfaz
-          notas.push(`aprendizados da clínica: o kit JÁ os importou em ${new Date(importadoEm).toISOString().slice(0, 10)}; não regravo (a clínica os administra em /aprendizados; --sobrescrever repete a importação, sem duplicar)`);
+          notas.push(`aprendizados da clínica: o kit JÁ os importou em ${new Date(importadoEm).toISOString().slice(0, 10)}; não regravo (a clínica os administra em /aprendizados; --reimportar-aprendizados repete a importação, sem duplicar)`);
         } else {
           const norm = (t: string) => t.trim().replace(/\s+/g, ' ').toLowerCase();
           const jaTem = new Set((await banco.licoes.listar(id)).map(norm));
