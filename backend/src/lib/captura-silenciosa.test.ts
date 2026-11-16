@@ -14,6 +14,7 @@ import {
   CAMPOS_CAPTURAVEIS,
   DEBOUNCE_MS,
   MAX_LEITURAS_POR_CARTAO_DIA,
+  PRAZO_DA_LEITURA_MS,
   _limparCapturaParaTeste,
   agendadosDaCaptura,
   agendarCapturaSilenciosa,
@@ -95,6 +96,7 @@ interface Mundo {
   simulacoes: Array<{ acao: string; alvo: string; valor?: unknown; motivo?: string | null }>;
   perguntas: string[];
   leituras: { lead: number; conversa: number };
+  transcricoes: { n: number };
   cartao: { atual: KommoLead };
   resposta: { texto: string | null };
 }
@@ -109,13 +111,14 @@ function mundo(o: { lead?: KommoLead; falas?: Fala[]; estado?: Estado; resposta?
     simulacoes: [],
     perguntas: [],
     leituras: { lead: 0, conversa: 0 },
+    transcricoes: { n: 0 },
     cartao,
     resposta: { texto: o.resposta === undefined ? JSON.stringify({ campos: [{ campo: '✎ Queixa', valor: 'Dor forte na lombar há 3 meses, desce para a perna', trecho: 'dor forte na lombar há 3 meses e desce para a perna' }] }) : o.resposta },
     deps: null as never,
   };
   m.deps = {
     agora: () => AGORA,
-    unidade: async (u) => u,
+    unidade: async (u) => u as Unit,
     estado: () => estado.v,
     kommo: () => ({
       getLead: async () => {
@@ -132,8 +135,9 @@ function mundo(o: { lead?: KommoLead; falas?: Fala[]; estado?: Estado; resposta?
     grupo: async () => null,
     falas: async () => {
       m.leituras.conversa++;
-      return { falas: o.falas ?? CONVERSA, ultimaId: `m${(o.falas ?? CONVERSA).length}` };
+      return { falas: o.falas ?? CONVERSA, ultimaId: `m${(o.falas ?? CONVERSA).length}`, audios: new Map<string, string>() };
     },
+    transcrever: async () => void m.transcricoes.n++,
     perguntar: async (_u, user) => {
       m.perguntas.push(user);
       return m.resposta.texto === null ? null : { texto: m.resposta.texto, custoUsd: 0.0009 };
@@ -433,11 +437,11 @@ test('teto por cartão por dia: a leitura além do teto não chega à IA', async
   const m = mundo({ resposta: JSON.stringify({ campos: [] }) });
   for (let i = 0; i < MAX_LEITURAS_POR_CARTAO_DIA; i++) {
     // conversa nova a cada volta (senão a "mesma conversa" para antes do teto)
-    m.deps.falas = async () => ({ falas: CONVERSA, ultimaId: `m${i}` });
+    m.deps.falas = async () => ({ falas: CONVERSA, ultimaId: `m${i}`, audios: new Map<string, string>() });
     const r = await lerCartaoEmSilencio(UNIT, 777, m.deps);
     assert.equal(r.tipo, 'leu');
   }
-  m.deps.falas = async () => ({ falas: CONVERSA, ultimaId: 'nova' });
+  m.deps.falas = async () => ({ falas: CONVERSA, ultimaId: 'nova', audios: new Map<string, string>() });
   const r = await lerCartaoEmSilencio(UNIT, 777, m.deps);
   assert.equal(r.tipo, 'pulou');
   assert.match(r.tipo === 'pulou' ? r.motivo : '', /teto do cartão/);
@@ -447,7 +451,7 @@ test('teto por cartão por dia: a leitura além do teto não chega à IA', async
 test('o teto vale por cartão: outro cartão da mesma unidade ainda lê', async () => {
   const m = mundo({ resposta: JSON.stringify({ campos: [] }) });
   for (let i = 0; i < MAX_LEITURAS_POR_CARTAO_DIA; i++) {
-    m.deps.falas = async () => ({ falas: CONVERSA, ultimaId: `m${i}` });
+    m.deps.falas = async () => ({ falas: CONVERSA, ultimaId: `m${i}`, audios: new Map<string, string>() });
     await lerCartaoEmSilencio(UNIT, 777, m.deps);
   }
   const outro = await lerCartaoEmSilencio(UNIT, 888, m.deps);
@@ -457,11 +461,11 @@ test('o teto vale por cartão: outro cartão da mesma unidade ainda lê', async 
 test('o teto zera no dia seguinte', async () => {
   const m = mundo({ resposta: JSON.stringify({ campos: [] }) });
   for (let i = 0; i < MAX_LEITURAS_POR_CARTAO_DIA; i++) {
-    m.deps.falas = async () => ({ falas: CONVERSA, ultimaId: `m${i}` });
+    m.deps.falas = async () => ({ falas: CONVERSA, ultimaId: `m${i}`, audios: new Map<string, string>() });
     await lerCartaoEmSilencio(UNIT, 777, m.deps);
   }
   m.deps.agora = () => new Date(AGORA.getTime() + 24 * 3600_000);
-  m.deps.falas = async () => ({ falas: CONVERSA, ultimaId: 'amanha' });
+  m.deps.falas = async () => ({ falas: CONVERSA, ultimaId: 'amanha', audios: new Map<string, string>() });
   const r = await lerCartaoEmSilencio(UNIT, 777, m.deps);
   assert.equal(r.tipo, 'leu');
 });
@@ -530,6 +534,110 @@ test('em seco o agendador agenda e a leitura não escreve', async () => {
   assert.equal(m.perguntas.length, 1);
   assert.equal(m.escritas.length, 0);
   assert.equal(m.simulacoes[0].acao, 'gravaria');
+});
+
+test('o paciente só disse «oi»: nem chama a IA nem gasta a vaga do dia do cartão', async () => {
+  const m = mundo({ falas: [fala('paciente', 'Oi'), fala('equipe', 'Olá, tudo bem? Como posso ajudar?'), fala('paciente', 'bom dia')] });
+  const r = await lerCartaoEmSilencio(UNIT, 777, m.deps);
+  assert.equal(r.tipo, 'pulou');
+  assert.match(r.tipo === 'pulou' ? r.motivo : '', /cumprimento/);
+  assert.equal(m.perguntas.length, 0);
+  // a vaga continua inteira: depois da queixa, o cartão ainda lê MAX vezes
+  m.deps.falas = async () => ({ falas: CONVERSA, ultimaId: 'depois', audios: new Map<string, string>() });
+  m.resposta.texto = JSON.stringify({ campos: [] });
+  assert.equal((await lerCartaoEmSilencio(UNIT, 777, m.deps)).tipo, 'leu');
+});
+
+test('IA fora do ar não gasta a vaga do dia do cartão', async () => {
+  const m = mundo({ resposta: null });
+  for (let i = 0; i < MAX_LEITURAS_POR_CARTAO_DIA + 2; i++) {
+    m.deps.falas = async () => ({ falas: CONVERSA, ultimaId: `m${i}`, audios: new Map<string, string>() });
+    const r = await lerCartaoEmSilencio(UNIT, 777, m.deps);
+    assert.doesNotMatch(r.tipo === 'pulou' ? r.motivo : '', /teto/);
+  }
+  assert.equal(m.perguntas.length, MAX_LEITURAS_POR_CARTAO_DIA + 2);
+});
+
+test('o que o SECO leu não impede a primeira leitura de verdade quando a chave é ligada', async () => {
+  const m = mundo({ estado: 'seco' });
+  assert.equal((await lerCartaoEmSilencio(UNIT, 777, m.deps)).tipo, 'leu');
+  assert.equal(m.escritas.length, 0);
+  m.estado.v = 'ligado';
+  const r = await lerCartaoEmSilencio(UNIT, 777, m.deps);
+  assert.equal(r.tipo, 'leu');
+  assert.equal(m.escritas.length, 1);
+});
+
+test('falha ao gravar no Kommo não marca a conversa como lida: o próximo turno tenta de novo', async () => {
+  const m = mundo();
+  const original = m.deps.kommo(UNIT);
+  let falhar = true;
+  m.deps.kommo = () => ({ ...original, setLeadCustomFieldValue: async (...a: Parameters<typeof original.setLeadCustomFieldValue>) => (falhar ? Promise.reject(new Error('Kommo 500')) : original.setLeadCustomFieldValue(...a)) });
+  const r1 = await lerCartaoEmSilencio(UNIT, 777, m.deps);
+  assert.equal(r1.tipo === 'leu' ? r1.gravou.length : -1, 0);
+  falhar = false;
+  const r2 = await lerCartaoEmSilencio(UNIT, 777, m.deps);
+  assert.equal(r2.tipo === 'leu' ? r2.gravou.length : -1, 1);
+});
+
+test('áudio só é transcrito depois dos portões baratos: conversa adiada ou sem mudança não paga Whisper', async () => {
+  const quente = [...CONVERSA, fala('paciente', 'mandei um áudio agora', 2, 'voice')];
+  const m = mundo({ falas: quente });
+  assert.equal((await lerCartaoEmSilencio(UNIT, 777, m.deps, { esperarEsfriar: true })).tipo, 'adiada');
+  assert.equal(m.transcricoes.n, 0);
+  const frio = mundo({ falas: CONVERSA, resposta: JSON.stringify({ campos: [] }) });
+  await lerCartaoEmSilencio(UNIT, 777, frio.deps);
+  assert.equal(frio.transcricoes.n, 1);
+  const outra = await lerCartaoEmSilencio(UNIT, 777, frio.deps);
+  assert.equal(outra.tipo, 'pulou');
+  assert.equal(frio.transcricoes.n, 1, 'a mesma conversa não transcreve de novo');
+});
+
+test('validar: cidade/estado/profissão só valem se o valor está ESCRITO numa fala do paciente', () => {
+  const regras = [...REGRAS, regra('registra_cidade', 3, '⌂ Cidade', 'textarea')];
+  const defs = DEFS.map((d) => (d.id === 3 ? { ...d, hidden_statuses: [] } : d));
+  const cands = camposDaEtapaVazios({ regras, defs, lead: lead() });
+  const conversa = [...CONVERSA, fala('paciente', 'moro em Itaipava, aqui perto de Petrópolis')];
+  const inventada = validarSugestoes([{ campo: '⌂ Cidade', valor: 'Teresópolis', trecho: 'moro em Itaipava' }], cands, conversa);
+  assert.equal(inventada.aceitas.length, 0);
+  assert.match(inventada.recusadas[0].motivo, /não aparece escrito/);
+  const certa = validarSugestoes([{ campo: '⌂ Cidade', valor: 'Petrópolis', trecho: 'aqui perto de Petrópolis' }], cands, conversa);
+  assert.equal(certa.aceitas.length, 1);
+});
+
+test('validar: texto livre com frase que não tem relação com o valor é recusado ("bom dia" não prova uma queixa)', () => {
+  const cands = camposDaEtapaVazios({ regras: REGRAS, defs: DEFS, lead: lead() });
+  const conversa = [...CONVERSA, fala('paciente', 'bom dia, tudo bem?')];
+  const r = validarSugestoes([{ campo: '✎ Queixa', valor: 'Dor lombar crônica', trecho: 'bom dia, tudo bem?' }], cands, conversa);
+  assert.equal(r.aceitas.length, 0);
+  assert.match(r.recusadas[0].motivo, /nenhuma palavra em comum/);
+  const ok = validarSugestoes([{ campo: '✎ Queixa', valor: 'Lombalgia há 3 meses', trecho: 'dor forte na lombar há 3 meses' }], cands, conversa);
+  assert.equal(ok.aceitas.length, 1);
+});
+
+test('campo de endereço (streetaddress) ou data e hora não são candidatos: o gravador não sabe escrevê-los', () => {
+  const defs = DEFS.map((d) => (d.id === 1 ? { ...d, type: 'streetaddress' } : d));
+  assert.ok(!camposDaEtapaVazios({ regras: REGRAS, defs, lead: lead() }).some((c) => c.def.id === 1));
+});
+
+test('uma leitura travada não prende a fila: passado o prazo, a próxima do mesmo processo anda', async () => {
+  mock.timers.enable({ apis: ['setTimeout'] });
+  const travada = mundo();
+  travada.deps.perguntar = () => new Promise(() => undefined);
+  const normal = mundo();
+  agendarCapturaSilenciosa({ unit: UNIT, leadId: 1, isChatMessage: true }, travada.deps);
+  agendarCapturaSilenciosa({ unit: UNIT, leadId: 2, isChatMessage: true }, normal.deps);
+  mock.timers.tick(DEBOUNCE_MS);
+  for (let i = 0; i < 10; i++) await esperar();
+  assert.equal(normal.perguntas.length, 0, 'ainda presa atrás da primeira');
+  mock.timers.tick(PRAZO_DA_LEITURA_MS);
+  for (let i = 0; i < 10; i++) await esperar();
+  assert.equal(normal.perguntas.length, 1);
+});
+
+test('o agendador guarda só a identidade da unidade, não a linha inteira (tokens)', () => {
+  const src = readFileSync(new URL('./captura-silenciosa.ts', import.meta.url), 'utf8');
+  assert.match(src, /const unit: UnidadeDoAgendamento = \{ id: args\.unit\.id, slug: args\.unit\.slug \}/);
 });
 
 // ─── a fiação ─────────────────────────────────────────────────────────────────────────────────────
