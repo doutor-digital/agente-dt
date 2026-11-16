@@ -11,6 +11,7 @@ import { test, mock, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { prisma } from './prisma.js';
 import { FREIOS_PADRAO } from './disparo/freios.js';
+import * as custoMod from './disparo/chatwoot/custo.js';
 import { avisoDoTetoDeGasto, estimarCusto, freiosComTetoDeGasto, mensagensPorGasto, precoDaCategoria, ritmoDaOnda, tetoReaisPorDia, TETO_REAIS_DIA_PADRAO, cambioDoDia, _esquecerCambio, type LinhaDeCusto } from './disparo/chatwoot/custo.js';
 
 const originais = new Map<string, PropertyDescriptor | undefined>();
@@ -71,12 +72,14 @@ test('estimativa: conhecido (arredonda o total PARA CIMA ao centavo); sem catego
   assert.match(e.nota, /MARKETING/);
   const cima = estimarCusto({ pessoas: 3, categoria: 'MARKETING', preco: { usd: 0.0625, dias: 1 }, cambio: 5.5555 });
   assert.equal(cima.brl, 1.05, '3 × 0,347 = 1,0416 → 1,05 (nunca para baixo)');
-  const semPreco = estimarCusto({ pessoas: 50, categoria: 'AUTHENTICATION', preco: null, cambio: 5.6 });
-  assert.deepEqual([semPreco.conhecido, semPreco.brl], [false, null]);
-  assert.match(semPreco.nota, /não tem a categoria AUTHENTICATION/);
-  const semCambio = estimarCusto({ pessoas: 50, categoria: 'MARKETING', preco: { usd: 0.0625, dias: 1 }, cambio: null });
-  assert.deepEqual([semCambio.conhecido, semCambio.brl, semCambio.porMensagemUsd], [false, null, 0.0625]);
-  assert.equal(estimarCusto({ pessoas: 5, categoria: null, preco: null, cambio: 5 }).conhecido, false);
+  const semPreco = estimarCusto({ pessoas: 50, categoria: 'AUTHENTICATION', preco: null, cambio: 5.6, env: {} });
+  assert.deepEqual([semPreco.conhecido, semPreco.reserva, semPreco.brl, semPreco.porMensagemBrl], [false, true, 12.5, 0.25]);
+  assert.match(semPreco.nota, /preço de reserva \(sem histórico da Meta\).*não tem a categoria AUTHENTICATION/);
+  const semCambio = estimarCusto({ pessoas: 50, categoria: 'MARKETING', preco: { usd: 0.0625, dias: 1 }, cambio: null, env: {} });
+  assert.deepEqual([semCambio.conhecido, semCambio.reserva, semCambio.brl, semCambio.porMensagemUsd], [false, true, 100, 0.0625]);
+  const semCategoria = estimarCusto({ pessoas: 5, categoria: null, preco: null, cambio: 5, env: {} });
+  assert.deepEqual([semCategoria.conhecido, semCategoria.reserva, semCategoria.porMensagemBrl], [false, true, 2], 'categoria desconhecida usa a reserva MAIS CARA');
+  assert.equal(e.reserva, false);
 });
 
 test('ritmo: o teto por dia, o por hora × a janela e o de gasto — o menor vale; em quantos dias a onda termina; preço desconhecido: o gasto não limita', () => {
@@ -139,9 +142,33 @@ test('teto de gasto NÃO falha aberto: se o banco ou o câmbio falhar depois de 
   assert.equal(await precoEmReaisDoBanco('u1', 'MARKETING'), 0.35, 'o banco caiu: segue o último preço bom');
   _definirCambio(null);
   assert.equal(await precoEmReaisDoBanco('u1', 'MARKETING'), 0.35, 'o câmbio caiu: idem');
-  assert.equal(await precoEmReaisDoBanco('u2', 'MARKETING'), null, 'unidade que nunca teve preço: desconhecido');
-  const preco = async (_u: string, c: string | null) => (c === 'MARKETING' ? 0.35 : c === 'UTILITY' ? 0.03 : null);
+  assert.equal(await precoEmReaisDoBanco('u2', 'MARKETING'), 2, 'unidade que nunca teve preço: o preço de RESERVA, nunca «sem teto»');
+  const preco = async (_u: string, c: string | null) => (c === 'MARKETING' ? 0.35 : c === 'UTILITY' ? 0.03 : 0.25);
   assert.equal(await maiorPrecoDasOndas(preco, 'u1', ['UTILITY', 'MARKETING', 'MARKETING']), 0.35);
-  assert.equal(await maiorPrecoDasOndas(preco, 'u1', ['UTILITY', 'AUTHENTICATION']), 0.03, 'categoria sem preço não zera o teto das outras');
-  assert.equal(await maiorPrecoDasOndas(preco, 'u1', ['AUTHENTICATION']), null);
+  assert.equal(await maiorPrecoDasOndas(preco, 'u1', ['UTILITY', 'AUTHENTICATION']), 0.25);
+  assert.equal(await maiorPrecoDasOndas(async () => { throw new Error('x'); }, 'u1', ['UTILITY']), 0.25, 'a leitura quebrou: a reserva da categoria, nunca sem teto');
+});
+
+test('preço de RESERVA: padrões conservadores por categoria (marketing R$ 2, utilidade R$ 0,25, autenticação R$ 0,25), ajustáveis por env; ilegível, zero ou negativo volta ao padrão — nunca «sem preço»', () => {
+  const { precoDeReservaBrl, avisosDoPrecoDeReserva, PRECO_RESERVA_PADRAO_BRL } = custoMod;
+  assert.deepEqual({ ...PRECO_RESERVA_PADRAO_BRL }, { MARKETING: 2, UTILITY: 0.25, AUTHENTICATION: 0.25 });
+  assert.equal(precoDeReservaBrl('MARKETING_LITE', {}), 2);
+  assert.equal(precoDeReservaBrl('marketing', {}), 2);
+  assert.equal(precoDeReservaBrl('UTILITY', {}), 0.25);
+  assert.equal(precoDeReservaBrl('AUTHENTICATION', {}), 0.25);
+  assert.equal(precoDeReservaBrl('SERVICE', {}), 2, 'categoria fora das três: a mais cara');
+  assert.equal(precoDeReservaBrl(null, {}), 2);
+  const e = (marketing: string | undefined) => ({ CHATWOOT_DISPARO_PRECO_RESERVA_MARKETING: marketing }) as NodeJS.ProcessEnv;
+  assert.equal(precoDeReservaBrl('MARKETING', e('0,5')), 0.5);
+  assert.equal(precoDeReservaBrl('MARKETING', e('0.8')), 0.8);
+  for (const lixo of ['abc', '0', '-1', 'NaN', 'Infinity', '99999', '  ']) assert.equal(precoDeReservaBrl('MARKETING', e(lixo)), 2, lixo);
+  assert.deepEqual(avisosDoPrecoDeReserva({}), []);
+  assert.deepEqual(avisosDoPrecoDeReserva(e('0,5')), []);
+  assert.match(avisosDoPrecoDeReserva(e('abc'))[0] ?? '', /PRECO_RESERVA_MARKETING="abc" não vale: ficou R\$ 2 por mensagem/);
+});
+
+test('ritmo com preço de reserva: o teto de gasto limita mesmo sem histórico (R$ 50 ÷ R$ 2 = 25 por dia)', () => {
+  const e = estimarCusto({ pessoas: 100, categoria: 'MARKETING', preco: null, cambio: 5.6, env: {} });
+  const r = ritmoDaOnda({ pessoas: 100, freios: FREIOS_PADRAO, tetoReais: 50, porMensagemBrl: e.porMensagemBrl });
+  assert.deepEqual([r.porDia, r.dias, r.limitadoPor], [25, 4, 'gasto']);
 });

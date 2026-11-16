@@ -437,7 +437,7 @@ test('o disparo mostra o CUSTO estimado (pessoas × preço da categoria na tabel
   assert.equal(r.corpo.freios.tetoPorDia, 100);
 });
 
-test('categoria que a tabela de custo da unidade NÃO tem = «custo desconhecido» (nunca um preço inventado), com o motivo; sem categoria gravada também', async () => {
+test('categoria que a tabela de custo da unidade NÃO tem = custo estimado com preço de RESERVA (conservador, sem histórico da Meta), com o motivo; sem categoria gravada também', async () => {
   const { _definirCambio } = await import('../lib/disparo/chatwoot/custo.js');
   _definirCambio(5.6);
   preparar({ onda: ondaDeCusto({ categoriaModelo: 'AUTHENTICATION' }) });
@@ -445,14 +445,18 @@ test('categoria que a tabela de custo da unidade NÃO tem = «custo desconhecido
   falso('$queryRaw', (async () => []) as never);
   const r = await pedir('GET', `/public/disparos/ondas/ondaaaaaaa1?slug=${PARAU}`, 'tok-dd');
   assert.equal(r.corpo.custo.conhecido, false);
-  assert.equal(r.corpo.custo.brl, null);
-  assert.match(r.corpo.custo.nota, /não tem a categoria AUTHENTICATION/);
-  assert.equal(r.corpo.gastoEstimadoBrl, null);
+  assert.equal(r.corpo.custo.reserva, true);
+  assert.equal(r.corpo.custo.porMensagemBrl, 0.25, 'reserva de autenticação');
+  assert.equal(r.corpo.custo.brl, 10, '40 pessoas × R$ 0,25');
+  assert.match(r.corpo.custo.nota, /preço de reserva \(sem histórico da Meta\).*não tem a categoria AUTHENTICATION/);
+  assert.equal(r.corpo.ritmo.limitadoPor, 'dia', 'o teto de gasto (R$ 50 ÷ R$ 0,25 = 200) é maior que o por dia (100): o ritmo existe mesmo sem histórico');
   preparar({ onda: ondaDeCusto({ categoriaModelo: null }) });
   falso('whatsappCostDaily', { findMany: async () => LINHAS_DE_CUSTO });
   falso('$queryRaw', (async () => []) as never);
   const sem = await pedir('GET', `/public/disparos/ondas/ondaaaaaaa1?slug=${PARAU}`, 'tok-dd');
   assert.equal(sem.corpo.custo.conhecido, false);
+  assert.equal(sem.corpo.custo.reserva, true);
+  assert.equal(sem.corpo.custo.porMensagemBrl, 2, 'sem categoria: a reserva mais cara');
   assert.match(sem.corpo.custo.nota, /categoria do modelo/);
 });
 
@@ -479,7 +483,7 @@ test('aprovar pela rota: custo DESCONHECIDO sem confirmação = 409 com `precisa
   assert.match(semConfirma.corpo.error, /^custo desconhecido/);
 });
 
-test('relatório por campanha mostra o GASTO estimado (enviadas × preço da categoria); sem preço, null', async () => {
+test('relatório por campanha mostra o GASTO estimado (enviadas × preço da categoria; sem histórico, o preço de reserva)', async () => {
   const { _definirCambio } = await import('../lib/disparo/chatwoot/custo.js');
   _definirCambio(5.6);
   preparar();
@@ -493,14 +497,14 @@ test('relatório por campanha mostra o GASTO estimado (enviadas × preço da cat
   falso('$queryRaw', (async () => [linha('ondaaaaaaa1'), linha('ondaaaaaaa2')]) as never);
   const r = await pedir('GET', `/public/disparos/relatorio?slug=${PARAU}`, 'tok-agente');
   assert.equal(r.status, 200);
-  assert.deepEqual(r.corpo.campanhas.map((c: any) => c.gastoEstimadoBrl), [7, null], '20 enviadas × R$ 0,35 = R$ 7,00; categoria sem preço = null');
+  assert.deepEqual(r.corpo.campanhas.map((c: any) => c.gastoEstimadoBrl), [7, 5], '20 enviadas × R$ 0,35 = R$ 7,00; categoria sem histórico: 20 × R$ 0,25 de reserva = R$ 5,00');
 });
 
 test('a página tem o campo do máximo (padrão 50, obrigatório), o cartão de custo e ritmo, a confirmação do custo desconhecido e o gasto no relatório', () => {
   const js = scriptDaPagina();
   assert.ok(js.includes("mx.value = '50'") && js.includes('Máximo de pessoas neste disparo') && js.includes('maximo: maximo'));
-  assert.ok(js.includes('Custo e ritmo') && js.includes('custo desconhecido') && js.includes('Teto de gasto'));
-  assert.ok(js.includes('confirmarCustoDesconhecido') && js.includes('Entendo que o custo deste disparo é DESCONHECIDO'));
+  assert.ok(js.includes('Custo e ritmo') && js.includes('Teto de gasto'));
+  assert.ok(js.includes('confirmarCustoDesconhecido') && js.includes('Entendo que não há histórico de custo da Meta') && js.includes('preço de reserva (sem histórico da Meta)'));
   assert.ok(js.includes('Gasto (estimado)') && js.includes('gasto até agora'));
   assert.ok(!/innerHTML/.test(js));
 });

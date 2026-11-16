@@ -13,7 +13,7 @@ import { rodarUnidade, rodadasSemAndar, type OndaNoLote } from '../lote.js';
 import { portoReal } from '../porto.js';
 import { definicaoDaOnda } from '../onda.js';
 import { ajusteDaUnidade, freiosComOTier } from './ajuste.js';
-import { cambioDoDia, estimarCusto, freiosComTetoDeGasto, lerPrecoDaUnidade, mensagensPorGasto, tetoReaisPorDia } from './custo.js';
+import { cambioDoDia, estimarCusto, freiosComTetoDeGasto, lerPrecoDaUnidade, mensagensPorGasto, precoDeReservaBrl, tetoReaisPorDia } from './custo.js';
 import { lerMensagens, ultimoPedidoDeSaida } from './mensagens.js';
 import { ctxDaUnidadeNoCrm, ORIGEM_CRM } from './onda.js';
 import { chaveDoLimiteDoCrm, idDaMensagem, portoChatwoot, unidadesDoMesmoNumeroKapso, type OndaDaRodada } from './porto.js';
@@ -221,25 +221,25 @@ export async function avisarSeSemAndar(slug: string, unitId: string, r: Paramete
 
 /** Uma rodada das ondas aprovadas da origem CRM. Os freios, a janela e a parada por SAIR são os do motor (`rodarUnidade`). */
 /** O preço por mensagem (R$) da categoria na unidade; `null` = desconhecido. Injetável para o teste. */
-export type PrecoEmReais = (unitId: string, categoria: string | null) => Promise<number | null>;
+export type PrecoEmReais = (unitId: string, categoria: string | null) => Promise<number>;
 /** O último preço BOM por unidade+categoria: se o banco ou o câmbio falhar no meio do dia, o teto de gasto continua valendo com o último preço (falhar ABERTO seria soltar o gasto justo quando algo está estranho). */
 const ultimoPrecoBom = new Map<string, number>();
 export const _esquecerPrecosDeGasto = (): void => ultimoPrecoBom.clear();
 export const precoEmReaisDoBanco: PrecoEmReais = async (unitId, categoria) => {
   const [preco, cambio] = await Promise.all([lerPrecoDaUnidade(unitId, categoria).catch(() => null), cambioDoDia().catch(() => null)]);
-  const agora = estimarCusto({ pessoas: 1, categoria, preco, cambio }).porMensagemBrl;
+  const e = estimarCusto({ pessoas: 1, categoria, preco, cambio });
   const chave = `${unitId}|${(categoria ?? '').toUpperCase()}`;
-  if (agora !== null) {
-    ultimoPrecoBom.set(chave, agora);
-    return agora;
+  if (e.conhecido && e.porMensagemBrl !== null) {
+    ultimoPrecoBom.set(chave, e.porMensagemBrl);
+    return e.porMensagemBrl;
   }
-  return ultimoPrecoBom.get(chave) ?? null;
+  // sem preço agora: o último preço BOM (se a falha é de agora) ou, sem histórico, o preço de RESERVA — o teto de gasto SEMPRE vale
+  return ultimoPrecoBom.get(chave) ?? precoDeReservaBrl(categoria);
 };
 /** Ondas vivas da unidade com categorias diferentes: vale o MAIOR preço conhecido (o teto de gasto não pode subestimar). */
-export async function maiorPrecoDasOndas(preco: PrecoEmReais, unitId: string, categorias: ReadonlyArray<string | null>): Promise<number | null> {
-  const precos = await Promise.all([...new Set(categorias)].map((c) => preco(unitId, c).catch(() => null)));
-  const conhecidos = precos.filter((p): p is number => p !== null);
-  return conhecidos.length ? Math.max(...conhecidos) : null;
+export async function maiorPrecoDasOndas(preco: PrecoEmReais, unitId: string, categorias: ReadonlyArray<string | null>): Promise<number> {
+  const precos = await Promise.all([...new Set(categorias)].map((c) => preco(unitId, c).catch(() => precoDeReservaBrl(c))));
+  return Math.max(...precos);
 }
 /** Um aviso por unidade por dia quando o teto de gasto para a rodada. */
 const avisoDoGastoDeHoje = new Map<string, string>();
@@ -273,7 +273,7 @@ export async function rodadaDoDisparoNoCrm(deps: { precoEmReais?: PrecoEmReais; 
       const noLote: OndaNoLote[] = vivas.map((o) => ({ id: o.id, campanhaId: o.campanhaId, campanhaNome: o.campanha.nome, aprovadaEm: o.aprovadaEm, aprovadaModo: o.aprovadaModo, sairAceitos: o.sairAceitos, ...definicaoDaOnda(o) }));
       const ajuste = await ajusteDaUnidade(unit.id);
       // O TETO DE GASTO por dia (CHATWOOT_DISPARO_TETO_REAIS_DIA, padrão R$ 50): vira um teto de mensagens por 24 h = teto ÷ preço por mensagem da categoria do modelo.
-      // Preço desconhecido: o gasto não limita (a aprovação já exigiu a confirmação explícita); valem os outros tetos.
+      // Sem preço da Meta: vale o preço de RESERVA (conservador) — o teto de gasto SEMPRE limita; a aprovação já exigiu a confirmação explícita.
       const tetoReais = deps.tetoReais ?? tetoReaisPorDia();
       const porMensagemBrl = await maiorPrecoDasOndas(deps.precoEmReais ?? precoEmReaisDoBanco, unit.id, vivas.map((o) => o.categoriaModelo));
       const freiosDoTier = freiosComOTier(f, ajuste.tierDoNumero);

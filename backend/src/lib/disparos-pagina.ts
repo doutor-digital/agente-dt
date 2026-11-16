@@ -435,13 +435,13 @@ a{color:var(--brand)}
       var confirmaCusto = null;
       if (o.custo && !o.custo.conhecido) {
         var cf0 = el('label', 'confirma'); confirmaCusto = el('input'); confirmaCusto.type = 'checkbox'; confirmaCusto.id = 'confirmaCusto'; cf0.appendChild(confirmaCusto);
-        cf0.appendChild(el('span', null, 'Entendo que o custo deste disparo é DESCONHECIDO e quero aprovar mesmo assim.')); ca.appendChild(cf0);
+        cf0.appendChild(el('span', null, 'Entendo que não há histórico de custo da Meta para este modelo (o valor é uma estimativa com preço de reserva) e quero aprovar mesmo assim.')); ca.appendChild(cf0);
         confirmaCusto.addEventListener('change', function(){ ba.disabled = !(o.podeAprovar && o.conferencia && o.conferencia.ok && confirmaCusto.checked); });
       }
       ba.disabled = !(o.podeAprovar && o.conferencia && o.conferencia.ok) || (confirmaCusto !== null);
       ba.addEventListener('click', function(){
         var seco = o.modo !== 'ligado';
-        if (!confirm(seco ? 'Aprovar com a unidade em ' + (o.modo === 'seco' ? 'SECO' : 'modo DESLIGADO') + '? Nada será enviado: só fica registrado quem receberia.' : 'Aprovar o envio para ' + o.total + ' pessoas (máximo ' + o.maximo + ')' + (o.custo && o.custo.conhecido ? ', custo estimado ' + brl(o.custo.brl) : ', com custo DESCONHECIDO') + '? As mensagens saem sozinhas, em ondas.')) return;
+        if (!confirm(seco ? 'Aprovar com a unidade em ' + (o.modo === 'seco' ? 'SECO' : 'modo DESLIGADO') + '? Nada será enviado: só fica registrado quem receberia.' : 'Aprovar o envio para ' + o.total + ' pessoas (máximo ' + o.maximo + ')' + (o.custo && o.custo.conhecido ? ', custo estimado ' + brl(o.custo.brl) : ', custo estimado com preço de reserva ' + brl(o.custo.brl)) + '? As mensagens saem sozinhas, em ondas.')) return;
         ba.disabled = true;
         api('POST', '/api/public/disparos/ondas/' + enc(o.id) + '/aprovar', { slug: U.slug, total: o.total, impressao: o.impressao, maximo: o.maximo, confirmarCustoDesconhecido: !!(confirmaCusto && confirmaCusto.checked) }).then(function(){ toast('Aprovado.'); return carregar().then(function(){ abrirOnda(o.id); }); }).catch(function(e){ toast(e.message, true); ba.disabled = false; });
       });
@@ -470,8 +470,8 @@ a{color:var(--brand)}
       caixa.appendChild(el('div', 'valor', 'cerca de ' + brl(k.brl)));
       caixa.appendChild(el('div', null, o.total + ' pessoas × ' + brl(k.porMensagemBrl) + ' por mensagem (modelo de categoria ' + k.categoria + ')'));
     } else {
-      caixa.appendChild(el('div', 'valor', 'custo desconhecido'));
-      caixa.appendChild(el('div', null, 'Não dá para dizer quanto este disparo vai custar. Aprovar exige a sua confirmação explícita.'));
+      caixa.appendChild(el('div', 'valor', 'até ' + brl(k.brl)));
+      caixa.appendChild(el('div', null, 'Custo estimado com preço de reserva (sem histórico da Meta): ' + o.total + ' pessoas × ' + brl(k.porMensagemBrl) + ' por mensagem. O preço de reserva é alto de propósito, então o gasto real tende a ser menor. Aprovar exige a sua confirmação explícita.'));
     }
     caixa.appendChild(el('small', 'mudo', k.nota)); c.appendChild(caixa);
     var ul = el('ul', 'lis');

@@ -588,7 +588,7 @@ test('APROVAÇÃO: por padrão só administrador da Doutor Digital; a administra
   assert.equal(quemAprova({ email: 'gerente@clinica.com', papel: null }, ligado).ok, false);
 });
 
-const CUSTO_CONHECIDO: EstimativaDeCusto = { conhecido: true, categoria: 'MARKETING', pessoas: 1, brl: 0.35, porMensagemBrl: 0.35, porMensagemUsd: 0.0625, cambio: 5.6, nota: 'teste' };
+const CUSTO_CONHECIDO: EstimativaDeCusto = { conhecido: true, categoria: 'MARKETING', pessoas: 1, brl: 0.35, porMensagemBrl: 0.35, porMensagemUsd: 0.0625, cambio: 5.6, reserva: false, nota: 'teste' };
 function ondaDoCrm(extra: Record<string, unknown> = {}) {
   const pessoas = [{ chave: 'c1', nome: 'Ana' }];
   const base = { id: 'o1', campanhaId: 'c', unitId: 'u1', estado: 'montada', origem: 'chatwoot', maximoPessoas: 50, categoriaModelo: 'MARKETING', contaChatwoot: 1, caixaChatwoot: 3, template: 'parau_reativacao', idioma: 'pt_BR', textoModelo: 'Oi {{1}}', variaveis: ['primeiroNome'], cabecalho: null, oferta: null, total: 1, ...extra };
@@ -1215,7 +1215,7 @@ test('APROVAÇÃO confere o MÁXIMO junto com total e impressão; custo DESCONHE
   falso('disparoDestinatario', { findMany: async () => pessoas });
   falso('disparoLimite', { deleteMany: async () => ({ count: 0 }) });
   const { aprovarOndaChatwoot, PREFIXO_CUSTO_DESCONHECIDO } = await import('./disparo/chatwoot/onda.js');
-  const DESCONHECIDO: EstimativaDeCusto = { ...CUSTO_CONHECIDO, conhecido: false, brl: null, porMensagemBrl: null, nota: 'a tabela de custo da Meta desta unidade não tem a categoria MARKETING' };
+  const DESCONHECIDO: EstimativaDeCusto = { ...CUSTO_CONHECIDO, conhecido: false, reserva: true, brl: 100, porMensagemBrl: 2, nota: 'custo estimado com preço de reserva (sem histórico da Meta): a tabela de custo da Meta desta unidade não tem a categoria MARKETING' };
   const deps = (estimar = async () => CUSTO_CONHECIDO) => ({ conferir: async () => ({ ok: true as const }), ctx: () => criarContextoChatwoot({ url: 'https://x.test', conta: 1, token: 't' }), ajuste: async () => ({ gerenteAprova: false, tierDoNumero: null }), estimar });
   const quem = { email: 'suzanne.mychelly1@gmail.com', papel: 'administrator', total: 1, impressao };
   // máximo ausente ou diferente do gravado: recusa, nada gravado
@@ -1242,7 +1242,7 @@ test('APROVAÇÃO confere o MÁXIMO junto com total e impressão; custo DESCONHE
   assert.equal((await aprovarOndaChatwoot('o1', { ...quem, impressao: grande.impressao, maximo: 0 }, deps())).ok, false);
 });
 
-test('TETO DE GASTO pela rodada real: com R$ 1,00/dia e R$ 0,50 por mensagem saem 2 e a rodada PARA, avisa o João uma vez no dia e a onda continua aprovada; preço desconhecido não aplica o teto de gasto', async () => {
+test('TETO DE GASTO pela rodada real: com R$ 1,00/dia e R$ 0,50 por mensagem saem 2 e a rodada PARA, avisa o João uma vez no dia e a onda continua aprovada; unidade SEM histórico de preço (clínica nova) também PARA: vale o preço de reserva', async () => {
   ligar();
   const { rodadaDoDisparoNoCrm, _zerarSemAndarDoCrm, _zerarVarreduraDoCrm, _esquecerAvisosDeGasto } = await import('./disparo/chatwoot/rodada.js');
   _zerarSemAndarDoCrm();
@@ -1253,11 +1253,13 @@ test('TETO DE GASTO pela rodada real: com R$ 1,00/dia e R$ 0,50 por mensagem sae
   falso('chatwootDisparoAjuste', { findUnique: async () => null });
   falso('disparoDestinatario', { findMany: async () => [], count: async () => 0 });
   let jaSaiuHoje = 0; // o que já saiu nas últimas 24 h (o motor reconta pelo banco)
-  const rodar = async (preco: number | null, avisos: string[], comecaCom = jaSaiuHoje) => {
+  const { precoEmReaisDoBanco, _esquecerPrecosDeGasto } = await import('./disparo/chatwoot/rodada.js');
+  const { _definirCambio } = await import('./disparo/chatwoot/custo.js');
+  const rodar = async (preco: number | 'sem-historico', avisos: string[], comecaCom = jaSaiuHoje) => {
     const base = baseFalso({ quantos: 5 });
     const t = portoDoCrm({ base });
     base.porto.contarNaJanela = async () => comecaCom + t.enviados.length;
-    await rodadaDoDisparoNoCrm({ criarPorto: () => t.porto, avisar: async (x) => void avisos.push(x), precoEmReais: async () => preco, tetoReais: 1 });
+    await rodadaDoDisparoNoCrm({ criarPorto: () => t.porto, avisar: async (x) => void avisos.push(x), precoEmReais: preco === 'sem-historico' ? precoEmReaisDoBanco : async () => preco, tetoReais: 1 });
     jaSaiuHoje = comecaCom + t.enviados.length;
     return t;
   };
@@ -1271,6 +1273,15 @@ test('TETO DE GASTO pela rodada real: com R$ 1,00/dia e R$ 0,50 por mensagem sae
   assert.match(avisos[0]!, /teto de gasto de R\$ 1,00 por dia/);
   await rodar(0.5, avisos);
   assert.equal(avisos.length, 1, 'um aviso por unidade por dia, não um por rodada');
-  const sem = await rodar(null, avisos, 0);
-  assert.equal(sem.enviados.length, 5, 'preço desconhecido: o gasto não limita (a aprovação já exigiu a confirmação explícita); valem os outros tetos');
+  // unidade SEM nenhuma linha na tabela de custo da Meta + teto de R$ 1: vale o preço de reserva (marketing R$ 2,00) e a rodada PARA, sem enviar nada
+  _esquecerPrecosDeGasto();
+  _definirCambio(5.6);
+  _esquecerAvisosDeGasto();
+  falso('whatsappCostDaily', { findMany: async () => [] });
+  const avisosSem: string[] = [];
+  const sem = await rodar('sem-historico', avisosSem, 0);
+  assert.equal(sem.enviados.length, 0, 'sem histórico: o preço de reserva (R$ 2,00) estoura o teto de R$ 1,00 — nada sai');
+  assert.equal(avisosSem.length, 1);
+  assert.match(avisosSem[0]!, /teto de gasto de R\$ 1,00 por dia/);
+  assert.equal(sem.base.estados.get('d1')!.estado, 'pendente', 'a onda segue aprovada e a fila intacta');
 });

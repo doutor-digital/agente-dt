@@ -31,6 +31,41 @@ export function avisoDoTetoDeGasto(env: NodeJS.ProcessEnv = process.env): string
   return tetoReaisPorDia(env) === Number(bruto.trim().replace(',', '.')) ? null : `CHATWOOT_DISPARO_TETO_REAIS_DIA="${bruto.slice(0, 20)}" não vale: ficou R$ ${TETO_REAIS_DIA_PADRAO}/dia`;
 }
 
+// ── preço de RESERVA: o teto de gasto SEMPRE vale ───────────────────────────────────────────────────────────────
+
+/**
+ * Sem histórico da Meta para a categoria (clínica nova no CRM, categoria que a unidade nunca mandou, banco ou câmbio fora), o teto de gasto NÃO pode
+ * deixar de valer: usa-se um preço de reserva CONSERVADOR, em reais, por categoria. A ordem de grandeza vem da própria tabela `whatsapp_cost_daily` da
+ * rede (3.844 linhas, 14 unidades, 21/08 a 16/11/2026, cobrança regular no Brasil): marketing (MARKETING_LITE) tem mediana de US$ 0,0625 por mensagem
+ * (R$ 0,35) mas já chegou a US$ 0,3217 (R$ 1,80) em dias de pouco volume em Boituva, Rio Verde e Bebedouro — 46 de 534 linhas passam de R$ 0,50 —,
+ * então a reserva de marketing é R$ 2,00 (acima do pior dia visto); utilidade vai de US$ 0,0068 a US$ 0,035 (R$ 0,20): reserva R$ 0,25.
+ * Autenticação não tem NENHUMA linha na rede: R$ 0,25 é a tarifa publicada da Meta (de memória, não conferida na tabela) com folga. Categoria que não é
+ * nenhuma das três (ou não gravada) usa a de marketing, a mais cara. Dá para baixar/subir por `CHATWOOT_DISPARO_PRECO_RESERVA_<MARKETING|UTILITY|AUTHENTICATION>`
+ * (em reais); valor ilegível, zero ou negativo volta ao padrão — nunca vira «sem preço».
+ */
+export const PRECO_RESERVA_PADRAO_BRL = { MARKETING: 2, UTILITY: 0.25, AUTHENTICATION: 0.25 } as const;
+type FamiliaDeReserva = keyof typeof PRECO_RESERVA_PADRAO_BRL;
+const FAMILIAS_DE_RESERVA = Object.keys(PRECO_RESERVA_PADRAO_BRL) as FamiliaDeReserva[];
+
+const familiaDeReserva = (categoria: string | null | undefined): FamiliaDeReserva => {
+  const c = (categoria ?? '').trim().toUpperCase();
+  return FAMILIAS_DE_RESERVA.find((f) => c.startsWith(f)) ?? 'MARKETING';
+};
+const lerReserva = (env: NodeJS.ProcessEnv, f: FamiliaDeReserva): { valor: number; valido: boolean; bruto: string | undefined } => {
+  const bruto = env[`CHATWOOT_DISPARO_PRECO_RESERVA_${f}`];
+  if (bruto === undefined || bruto.trim() === '') return { valor: PRECO_RESERVA_PADRAO_BRL[f], valido: true, bruto };
+  const n = Number(bruto.trim().replace(',', '.'));
+  return Number.isFinite(n) && n > 0 && n <= 1000 ? { valor: n, valido: true, bruto } : { valor: PRECO_RESERVA_PADRAO_BRL[f], valido: false, bruto };
+};
+/** Reais por mensagem. Sempre um número positivo. */
+export const precoDeReservaBrl = (categoria: string | null | undefined, env: NodeJS.ProcessEnv = process.env): number => lerReserva(env, familiaDeReserva(categoria)).valor;
+/** O que as variáveis de reserva têm de errado, para o log de subida avisar. */
+export function avisosDoPrecoDeReserva(env: NodeJS.ProcessEnv = process.env): string[] {
+  return FAMILIAS_DE_RESERVA.map((f) => ({ f, r: lerReserva(env, f) }))
+    .filter((x) => !x.r.valido)
+    .map((x) => `CHATWOOT_DISPARO_PRECO_RESERVA_${x.f}="${(x.r.bruto ?? '').slice(0, 20)}" não vale: ficou R$ ${PRECO_RESERVA_PADRAO_BRL[x.f]} por mensagem`);
+}
+
 // ── preço por mensagem (a tabela de custo da Meta, da própria unidade) ──────────────────────────────────────────
 
 export const DIAS_DA_TABELA_DE_CUSTO = 90;
@@ -88,7 +123,7 @@ export const _definirCambio = (valor: number | null): void => void (cambioGuarda
 // ── a estimativa ────────────────────────────────────────────────────────────────────────────────────────────────
 
 export interface EstimativaDeCusto {
-  /** `false` = não dá para saber: a tela diz «custo desconhecido» e a aprovação exige confirmação explícita */
+  /** `false` = sem preço da Meta (ver `reserva`): a tela avisa e a aprovação exige confirmação explícita */
   conhecido: boolean;
   categoria: string | null;
   pessoas: number;
@@ -97,27 +132,38 @@ export interface EstimativaDeCusto {
   porMensagemBrl: number | null;
   porMensagemUsd: number | null;
   cambio: number | null;
-  /** por que é desconhecido, ou de onde veio o preço */
+  /** `true` = SEM histórico da Meta: o valor é uma estimativa com o preço de RESERVA (conservador); a aprovação exige confirmação explícita */
+  reserva: boolean;
+  /** de onde veio o preço, ou por que foi usada a reserva */
   nota: string;
 }
 
 const centavoParaCima = (v: number): number => Math.ceil(v * 100 - 1e-9) / 100;
 
-export function estimarCusto(a: { pessoas: number; categoria: string | null | undefined; preco: PrecoPorMensagem | null; cambio: number | null }): EstimativaDeCusto {
+export function estimarCusto(a: { pessoas: number; categoria: string | null | undefined; preco: PrecoPorMensagem | null; cambio: number | null; env?: NodeJS.ProcessEnv }): EstimativaDeCusto {
   const base = { categoria: a.categoria ?? null, pessoas: a.pessoas, cambio: a.cambio };
-  if (!a.categoria) return { ...base, conhecido: false, brl: null, porMensagemBrl: null, porMensagemUsd: null, nota: 'não sei a categoria do modelo (marketing, utilidade…) — custo desconhecido' };
-  if (!a.preco) return { ...base, conhecido: false, brl: null, porMensagemBrl: null, porMensagemUsd: null, nota: `a tabela de custo da Meta desta unidade não tem a categoria ${a.categoria} (nenhuma cobrança regular no Brasil nos últimos ${DIAS_DA_TABELA_DE_CUSTO} dias) — custo desconhecido` };
-  if (a.cambio === null || !(a.cambio > 0)) return { ...base, conhecido: false, brl: null, porMensagemBrl: null, porMensagemUsd: a.preco.usd, nota: 'não consegui o câmbio do dólar agora — custo em reais desconhecido' };
+  // Sem preço da Meta: custo estimado com o preço de RESERVA (conservador). Nunca «sem número»: o teto de gasto e o ritmo continuam valendo.
+  const comReserva = (porque: string, usd: number | null): EstimativaDeCusto => {
+    const porMensagemBrl = precoDeReservaBrl(a.categoria, a.env);
+    return { ...base, conhecido: false, reserva: true, brl: centavoParaCima(porMensagemBrl * a.pessoas), porMensagemBrl, porMensagemUsd: usd, nota: `custo estimado com preço de reserva (sem histórico da Meta): ${porque}; reserva de R$ ${porMensagemBrl.toFixed(2).replace('.', ',')} por mensagem, de propósito alta` };
+  };
+  if (!a.categoria) return comReserva('não sei a categoria do modelo (marketing, utilidade…); usei a mais cara', null);
+  if (!a.preco) return comReserva(`a tabela de custo da Meta desta unidade não tem a categoria ${a.categoria} (nenhuma cobrança regular no Brasil nos últimos ${DIAS_DA_TABELA_DE_CUSTO} dias)`, null);
+  if (a.cambio === null || !(a.cambio > 0)) return comReserva('não consegui o câmbio do dólar agora', a.preco.usd);
   const porMensagemBrl = a.preco.usd * a.cambio;
   return {
     ...base,
     conhecido: true,
+    reserva: false,
     brl: centavoParaCima(porMensagemBrl * a.pessoas),
     porMensagemBrl: centavoParaCima(porMensagemBrl * 1000) / 1000,
     porMensagemUsd: a.preco.usd,
     nota: `${a.categoria}: maior custo por mensagem da tabela da Meta desta unidade (${a.preco.dias} dia(s) nos últimos ${DIAS_DA_TABELA_DE_CUSTO}) × dólar de hoje`,
   };
 }
+
+/** A estimativa quando nem dá para ler a tabela (demorou, caiu): só com o preço de reserva. */
+export const estimativaDeReserva = (categoria: string | null | undefined, pessoas: number): EstimativaDeCusto => estimarCusto({ pessoas, categoria, preco: null, cambio: null });
 
 /** Preço + câmbio + conta, de uma vez (a leitura do banco e do câmbio ficam aqui). */
 export async function estimativaDoDisparo(unitId: string, categoria: string | null | undefined, pessoas: number): Promise<EstimativaDeCusto> {
