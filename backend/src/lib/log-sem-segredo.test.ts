@@ -11,7 +11,7 @@ import axios, { type AxiosError } from 'axios';
 import pino from 'pino';
 
 import { limparParaLog, mascararTexto, MASCARA } from './log-sem-segredo.js';
-import { extractLog, formatadores, redacao } from './logger.js';
+import { extractLog, formatadores, redacao, usarSaidaBonita } from './logger.js';
 
 const SEGREDO = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.SEGREDO-DE-OLIMPIA.assinatura';
 
@@ -146,4 +146,11 @@ test('URL com o segredo do webhook (?k=) e (?segredo=) é mascarada; parâmetro 
   assert.equal(mascararTexto('/x?kind=1&key2=3&unidade=timbo'), '/x?kind=1&key2=3&unidade=timbo');
   const linha = linhaDoLogger({ method: 'POST', url }, 'http');
   assert.ok(!linha.includes('0123456789ab'), 'a linha que o servidor escreve não carrega o segredo');
+});
+
+test('a saída bonita (transporte pino-pretty = worker thread) nunca sobe sob o runner de testes: era ela que deixava processos de teste pendurados sem a flag --test-force-exit', () => {
+  assert.equal(usarSaidaBonita({ NODE_TEST_CONTEXT: 'child-v8' } as NodeJS.ProcessEnv, 'development'), false, 'dentro do node:test, mesmo com NODE_ENV=development (o padrão do env.ts)');
+  assert.equal(usarSaidaBonita({} as NodeJS.ProcessEnv, 'development'), true, 'desenvolvimento normal segue com a saída bonita');
+  assert.equal(usarSaidaBonita({} as NodeJS.ProcessEnv, 'production'), false);
+  assert.equal(usarSaidaBonita({} as NodeJS.ProcessEnv, 'test'), false);
 });

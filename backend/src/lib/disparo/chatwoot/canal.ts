@@ -6,6 +6,7 @@
  */
 import { chamar, type ContextoChatwoot } from '../../../mcp-remoto/chatwoot.js';
 import { mesmoTexto, problemaNoModelo } from '../regras.js';
+import { logger } from '../../logger.js';
 
 export const CANAL_WHATSAPP = 'Channel::Whatsapp';
 
@@ -28,6 +29,8 @@ export interface ModeloDaCaixa {
   nome: string;
   idioma: string;
   categoria: string | null;
+  /** `true` = o CRM não informou a categoria e ela foi ASSUMIDA como marketing (a mais cara): vale para o preço, mas não prova reclassificação */
+  categoriaAssumida?: boolean;
   /** o corpo, com {{1}}, {{2}}… */
   texto: string;
   /** quantas variáveis o corpo pede (0 = nenhuma) */
@@ -72,7 +75,8 @@ export function modeloDaCaixa(cru: { name?: unknown; language?: unknown; status?
   return {
     nome,
     idioma: String(cru.language ?? ''),
-    categoria: typeof cru.category === 'string' ? cru.category : null,
+    categoria: categoriaDoCrm(nome, cru.category),
+    categoriaAssumida: !(typeof cru.category === 'string' && cru.category.trim()),
     texto: corpo,
     variaveis: numeros.length,
     cabecalho: cab && formato === 'TEXT' && typeof cab.text === 'string' ? cab.text : null,
@@ -80,6 +84,23 @@ export function modeloDaCaixa(cru: { name?: unknown; language?: unknown; status?
     botoes: botoes.map((b) => String(b.text ?? b.type ?? '').slice(0, 40)).filter(Boolean),
     problema,
   };
+}
+
+/** Modelos cuja categoria o CRM não informou, já logados (uma vez por nome): o aviso não se repete a cada leitura da caixa. */
+const SEM_CATEGORIA_LOGADOS = new Set<string>();
+export const CATEGORIA_QUANDO_O_CRM_NAO_DIZ = 'MARKETING';
+
+/**
+ * A categoria do modelo (marketing, utilidade, autenticação): o preço e o teto de gasto dependem dela. O CRM sem categoria NÃO vira «desconhecida» nem some da
+ * conferência: é tratado como MARKETING (a mais cara) de forma explícita, e logado.
+ */
+function categoriaDoCrm(nome: string, crua: unknown): string {
+  if (typeof crua === 'string' && crua.trim()) return crua.trim().toUpperCase();
+  if (!SEM_CATEGORIA_LOGADOS.has(nome)) {
+    SEM_CATEGORIA_LOGADOS.add(nome);
+    logger.warn({ modelo: nome }, `disparo-crm: o CRM não informou a categoria do modelo — tratado como ${CATEGORIA_QUANDO_O_CRM_NAO_DIZ} (a mais cara)`);
+  }
+  return CATEGORIA_QUANDO_O_CRM_NAO_DIZ;
 }
 
 /** Os modelos APROVADOS da caixa, como o Chatwoot os guarda (lança se não deu para ler). */
@@ -98,7 +119,7 @@ export async function modelosDaCaixa(ctx: ContextoChatwoot, caixa: number): Prom
 }
 
 /** `transitorio`: não deu para LER o CRM (não é um defeito do modelo): quem chama tenta de novo, não pausa nem cancela nada. */
-export type ConferenciaDoModelo = { ok: true } | { ok: false; motivo: string; transitorio?: true };
+export type ConferenciaDoModelo = { ok: true } | { ok: false; motivo: string; transitorio?: true; /** a categoria que o CRM tem agora, quando foi ela que mudou */ categoriaNova?: string };
 
 /**
  * O modelo que a onda vai mandar ainda está aprovado na caixa, com o MESMO texto que a pessoa viu e aprovou? Roda na montagem, na aprovação
@@ -123,8 +144,9 @@ export async function conferirModeloDaOnda(
   if (!mesmoTexto(m.texto, def.textoModelo)) return { ok: false, motivo: `o texto do modelo no CRM mudou desde que você o escolheu. No CRM agora: "${m.texto.slice(0, 200)}"` };
   // A CATEGORIA congelada na montagem (marketing, utilidade…): o custo e o teto de gasto foram calculados com ela. A Meta pode RECLASSIFICAR um modelo depois de aprovado
   // (utilidade → marketing custa ~8× mais): se mudou, a onda não segue precificada errada — pausa, como quando o texto muda.
-  if (def.categoria && m.categoria && def.categoria.trim().toUpperCase() !== m.categoria.trim().toUpperCase()) {
-    return { ok: false, motivo: `a Meta mudou a categoria do modelo de ${def.categoria.toUpperCase()} para ${m.categoria.toUpperCase()}: o custo do disparo mudou. Monte o disparo de novo para ver o custo certo` };
+  // (categoria ASSUMIDA — o CRM não a informou desta vez — não prova reclassificação: só compara quando o CRM DIZ a categoria)
+  if (def.categoria && m.categoria && !m.categoriaAssumida && def.categoria.trim().toUpperCase() !== m.categoria.trim().toUpperCase()) {
+    return { ok: false, categoriaNova: m.categoria.toUpperCase(), motivo: `a Meta mudou a categoria do modelo de ${def.categoria.toUpperCase()} para ${m.categoria.toUpperCase()}: o custo do disparo mudou. Monte o disparo de novo para ver o custo certo` };
   }
   const p = problemaNoModelo(def.textoModelo, def.variaveis);
   return p ? { ok: false, motivo: p } : { ok: true };

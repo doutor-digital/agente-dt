@@ -293,7 +293,7 @@ function baseFalso(opcoes: { quantos?: number; sairam?: number; naHora?: number;
   return { porto, estados, chamadas, todos };
 }
 
-function portoDoCrm(o: { base?: ReturnType<typeof baseFalso>; unidade?: Unit; caixaOk?: boolean; mandar?: (corpo: Record<string, unknown>, conversa: number) => unknown; saiu?: (conversa: number) => Date | null; conversa?: (id: number) => unknown; modeloOk?: { ok: boolean; motivo?: string; transitorio?: true }; recebeuDesde?: (unitId: string, chave: string, ondaId: string, desde: Date) => Promise<number> } = {}) {
+function portoDoCrm(o: { base?: ReturnType<typeof baseFalso>; unidade?: Unit; caixaOk?: boolean; mandar?: (corpo: Record<string, unknown>, conversa: number) => unknown; saiu?: (conversa: number) => Date | null; conversa?: (id: number) => unknown; modeloOk?: { ok: boolean; motivo?: string; transitorio?: true; categoriaNova?: string }; categoriaDaOnda?: string; recebeuDesde?: (unitId: string, chave: string, ondaId: string, desde: Date) => Promise<number> } = {}) {
   const base = o.base ?? baseFalso();
   // o Porto do CRM conta falhas e limite de taxa no banco (só as ondas dele): aqui, um banco sem histórico
   falso('disparoDestinatario', { findMany: async () => [], count: async () => 0 });
@@ -303,7 +303,7 @@ function portoDoCrm(o: { base?: ReturnType<typeof baseFalso>; unidade?: Unit; ca
   const porto = portoChatwoot({
     base: base.porto,
     unidades: new Map([['u1', unidade]]),
-    ondas: new Map([['o1', INFO]]),
+    ondas: new Map([['o1', o.categoriaDaOnda ? { ...INFO, categoria: o.categoriaDaOnda } : INFO]]),
     ctxDaUnidade: () => criarContextoChatwoot({ url: 'https://crm.exemplo.test', conta: 1, token: 'tk' }),
     caixaOficial: async (_c, caixa) => (o.caixaOk === false ? { ok: false, motivo: `a caixa ${caixa} é do canal Channel::Api` } : { ok: true, nome: 'WhatsApp', provedor: 'whatsapp_cloud' }),
     conferirModelo: async () => (o.modeloOk ?? { ok: true }) as never,
@@ -1297,4 +1297,27 @@ test('TETO DE GASTO em REAIS pela rodada real: gasto das 24 h somado POR CATEGOR
   assert.equal(e.t.enviados.length, 0, 'sem histórico: a reserva (R$ 2,00) estoura o teto de R$ 1,00');
   assert.equal(e.avisos.length, 1);
   assert.equal(e.t.base.estados.get('d1')!.estado, 'pendente', 'a onda segue aprovada e a fila intacta');
+});
+
+test('reclassificação pela Meta: ao pausar a onda, a categoria NOVA é gravada nela quando é MAIS CARA (os envios anteriores passam a contar pelo preço novo); mais barata, reprovação sem categoria ou falha de leitura não gravam', async () => {
+  const gravadas: Array<Record<string, unknown>> = [];
+  const t = portoDoCrm({ categoriaDaOnda: 'UTILITY', modeloOk: { ok: false, categoriaNova: 'MARKETING', motivo: 'a Meta mudou a categoria do modelo de UTILITY para MARKETING' } });
+  falso('disparoOnda', { updateMany: async (a: { where: { id: string }; data: Record<string, unknown> }) => (gravadas.push({ id: a.where.id, ...a.data }), { count: 1 }) });
+  assert.equal((await t.porto.reconferir!(destino(1)))?.tipo, 'adiar');
+  assert.equal(t.base.chamadas.pausas.length, 1);
+  assert.equal(JSON.stringify(gravadas), JSON.stringify([{ id: 'o1', categoriaModelo: 'MARKETING' }]));
+  gravadas.length = 0;
+  const semCategoria = portoDoCrm({ modeloOk: { ok: false, motivo: 'o modelo não está aprovado nesta caixa' } });
+  falso('disparoOnda', { updateMany: async (a: { where: { id: string }; data: Record<string, unknown> }) => (gravadas.push({ id: a.where.id, ...a.data }), { count: 1 }) });
+  await semCategoria.porto.reconferir!(destino(1));
+  assert.deepEqual(gravadas, [], 'reprovação por outro motivo não mexe na categoria');
+});
+
+test('reclassificação para uma categoria MAIS BARATA: a onda pausa, mas a categoria antiga fica (o que já saiu custou o preço antigo; o teto nunca subestima o gasto)', async () => {
+  const gravadas: Array<Record<string, unknown>> = [];
+  const t = portoDoCrm({ categoriaDaOnda: 'MARKETING', modeloOk: { ok: false, categoriaNova: 'UTILITY', motivo: 'a Meta mudou a categoria do modelo de MARKETING para UTILITY' } });
+  falso('disparoOnda', { updateMany: async (a: { data: Record<string, unknown> }) => (gravadas.push(a.data), { count: 1 }) });
+  assert.equal((await t.porto.reconferir!(destino(1)))?.tipo, 'adiar');
+  assert.equal(t.base.chamadas.pausas.length, 1);
+  assert.equal(gravadas.length, 0);
 });

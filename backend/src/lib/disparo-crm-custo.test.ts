@@ -267,3 +267,56 @@ test('o preço é lido no máximo uma vez a cada 5 minutos por unidade e categor
   await precoEmReaisDoBanco('u1', 'UTILITY');
   assert.equal(leituras, 2, 'uma por categoria');
 });
+
+test('unidades que dividem o MESMO número: o preço da categoria é o MAIOR entre elas (uma sem histórico não baixa o teto; um preço alto não é ignorado)', async () => {
+  const { precoEmReaisDoBanco, _esquecerPrecosDeGasto } = await import('./disparo/chatwoot/gasto.js');
+  const { _definirCambio } = await import('./disparo/chatwoot/custo.js');
+  _esquecerPrecosDeGasto();
+  _definirCambio(5.6);
+  falso('unitChatwoot', { findUnique: async () => ({ kapsoPhoneNumberId: 'n1' }), findMany: async () => [{ unitId: 'u1' }, { unitId: 'u2' }, { unitId: 'u3' }] });
+  // u1: US$ 0,0625 (R$ 0,35); u2: US$ 0,3217 (R$ 1,80); u3: sem histórico (reserva R$ 2,00)
+  falso('whatsappCostDaily', { findMany: async (a: { where: { unitId: string } }) => (a.where.unitId === 'u1' ? [{ pricingCategory: 'MARKETING_LITE', pricingType: 'REGULAR', country: 'BR', volume: 100, costUsd: '6.25' }] : a.where.unitId === 'u2' ? [{ pricingCategory: 'MARKETING_LITE', pricingType: 'REGULAR', country: 'BR', volume: 100, costUsd: '32.17' }] : []) });
+  assert.equal(await precoEmReaisDoBanco('u1', 'MARKETING'), 2, 'u3 sem histórico: a reserva é o maior');
+  _esquecerPrecosDeGasto();
+  falso('unitChatwoot', { findUnique: async () => ({ kapsoPhoneNumberId: 'n1' }), findMany: async () => [{ unitId: 'u1' }, { unitId: 'u2' }] });
+  assert.equal(await precoEmReaisDoBanco('u1', 'MARKETING'), 1.80152, 'u2 cobra R$ 1,80: u1 não usa o preço baixo só dela');
+  _esquecerPrecosDeGasto();
+  falso('unitChatwoot', { findUnique: async () => null });
+  assert.equal(await precoEmReaisDoBanco('u1', 'MARKETING'), 0.35, 'número só dela: o preço dela');
+  _esquecerPrecosDeGasto();
+  falso('unitChatwoot', { findUnique: async () => { throw new Error('banco fora'); } });
+  assert.equal(await precoEmReaisDoBanco('u1', 'MARKETING'), 0.35, 'não consegui ler o número: só a própria unidade');
+});
+
+test('CRM sem categoria no modelo: tratado como MARKETING de forma explícita (e logado uma vez), nunca «categoria desconhecida»', async () => {
+  const { modeloDaCaixa, CATEGORIA_QUANDO_O_CRM_NAO_DIZ } = await import('./disparo/chatwoot/canal.js');
+  const cru = (extra: Record<string, unknown>) => ({ name: 'parau_x', language: 'pt_BR', status: 'APPROVED', components: [{ type: 'BODY', text: 'Oi {{1}}' }], ...extra });
+  assert.equal(CATEGORIA_QUANDO_O_CRM_NAO_DIZ, 'MARKETING');
+  assert.equal(modeloDaCaixa(cru({}) as never)!.categoria, 'MARKETING', 'sem categoria: marketing');
+  assert.equal(modeloDaCaixa(cru({ category: '  ' }) as never)!.categoria, 'MARKETING', 'categoria em branco: marketing');
+  assert.equal(modeloDaCaixa(cru({ category: 'utility' }) as never)!.categoria, 'UTILITY', 'a categoria dita pelo CRM vale, em maiúsculas');
+});
+
+test('categoria ASSUMIDA (o CRM não a informou) vale como marketing para o preço, mas NÃO prova reclassificação: modelo congelado como UTILIDADE não pausa só porque o CRM omitiu o campo', async () => {
+  const { modeloDaCaixa } = await import('./disparo/chatwoot/canal.js');
+  const cru = { name: 'parau_x', language: 'pt_BR', status: 'APPROVED', components: [{ type: 'BODY', text: 'Oi {{1}}' }] };
+  assert.equal(modeloDaCaixa(cru as never)!.categoriaAssumida, true);
+  assert.equal(modeloDaCaixa({ ...cru, category: 'UTILITY' } as never)!.categoriaAssumida, false);
+});
+
+test('falha ao ler as unidades do número NÃO fica guardada 5 min como «número só dela» (baixaria o preço do teto): vale a última lista conhecida', async () => {
+  const { precoEmReaisDoBanco, _esquecerPrecosDeGasto } = await import('./disparo/chatwoot/gasto.js');
+  const { _definirCambio } = await import('./disparo/chatwoot/custo.js');
+  _esquecerPrecosDeGasto();
+  _definirCambio(5.6);
+  falso('whatsappCostDaily', { findMany: async (a: { where: { unitId: string } }) => [{ pricingCategory: 'MARKETING_LITE', pricingType: 'REGULAR', country: 'BR', volume: 100, costUsd: a.where.unitId === 'u2' ? '32.17' : '6.25' }] });
+  let falha = false;
+  falso('unitChatwoot', { findUnique: async () => { if (falha) throw new Error('banco fora'); return { kapsoPhoneNumberId: 'n1' }; }, findMany: async () => [{ unitId: 'u1' }, { unitId: 'u2' }] });
+  assert.equal(await precoEmReaisDoBanco('u1', 'MARKETING'), 1.80152);
+  // 5 min depois a lista envelheceu e a leitura falha: vale a lista conhecida (u1 + u2), não «só u1»
+  const t0 = Date.now();
+  const agora = mock.method(Date, 'now', () => t0 + 6 * 60_000);
+  falha = true;
+  assert.equal(await precoEmReaisDoBanco('u1', 'MARKETING'), 1.80152, 'a falha de leitura não vira «número só dela»');
+  agora.mock.restore();
+});
