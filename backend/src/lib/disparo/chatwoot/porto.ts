@@ -126,20 +126,22 @@ export function portoChatwoot(deps: DepsDoPortoChatwoot): Porto & { ocupouAUnida
     },
 
     // Tudo o que conta, pausa ou zera é DESTA origem: o limite de taxa, a restrição e as falhas do CRM não pausam o Kommo (outro número), nem o contrário.
-    // Ordena pelo MOMENTO DO ENVIO, não por `atualizadoEm`: a varredura (entregue/lida/respondeu) regrava `atualizadoEm` e uma falha recente
-    // sumiria atrás de envios velhos que acabaram de ser lidos. A recusa definitiva (sem `enviadoEm`) entra pela hora em que foi decidida.
-    ultimosResultados: async (unitId, n, desde) => {
-      const base = { unitId, onda: { origem: 'chatwoot' }, estado: { in: ['enviado', 'falhou'] } };
-      const [enviados, recusados] = await Promise.all([
-        prisma.disparoDestinatario.findMany({ where: { ...base, enviadoEm: { gte: desde } }, orderBy: { enviadoEm: 'desc' }, take: n, select: { estado: true, enviadoEm: true } }),
-        prisma.disparoDestinatario.findMany({ where: { ...base, estado: 'falhou', enviadoEm: null, atualizadoEm: { gte: desde } }, orderBy: { atualizadoEm: 'desc' }, take: n, select: { estado: true, atualizadoEm: true } }),
-      ]);
-      const quando = (x: { enviadoEm?: Date | null; atualizadoEm?: Date }): number => (x.enviadoEm ?? x.atualizadoEm)?.getTime() ?? 0;
-      return [...enviados, ...recusados]
-        .sort((a, b) => quando(b) - quando(a))
-        .slice(0, n)
-        .map((x) => (x.estado === 'enviado' ? 'enviado' : 'falhou'));
-    },
+    // O freio de falhas seguidas olha só envios com resultado DEFINITIVO (`decididoEm`): a falha da Meta chega pela varredura (de 5 em 5 min), então um
+    // envio ainda não conferido não é sucesso nem falha — contá-lo como sucesso esconderia os 5 mais novos que vão falhar. Ordena por quando ficou
+    // decidido (não por `atualizadoEm`, que a varredura regrava ao marcar lida/respondeu, nem por `enviadoEm`, que ignora a decisão tardia).
+    ultimosResultados: async (unitId, n, desde) =>
+      (
+        await prisma.disparoDestinatario.findMany({
+          where: { unitId, onda: { origem: 'chatwoot' }, estado: { in: ['enviado', 'falhou'] }, decididoEm: { gte: desde } },
+          orderBy: { decididoEm: 'desc' },
+          take: n,
+          select: { estado: true },
+        })
+      ).map((x) => (x.estado === 'enviado' ? 'enviado' : 'falhou')),
+
+    // Falha decidida na hora (o CRM recusou, envio incerto): marca o momento para o freio. (Sucesso só fica decidido quando a varredura vê entregue/lida.)
+    // (no MESMO update da gravação: não há janela em que a linha fica «falhou» sem a marca)
+    gravar: (id, dados) => base.gravar(id, dados.estado === 'falhou' ? { ...dados, decididoEm: new Date() } : dados),
 
     pausarOndas: async (unitId, campanhaId, motivo, causa) => {
       await prisma.disparoOnda.updateMany({

@@ -137,12 +137,13 @@ const NOTA_FIXA = 'Controlado pela Doutor Digital: não tem chave por unidade ne
  */
 export const DIAS_DO_HISTORICO = 14;
 export const TETO_DO_HISTORICO_MS = 3000;
-export function comTeto<T>(p: Promise<T>, ms: number, padrao: T): Promise<T> {
-  return new Promise((ok) => {
+export function comTeto<T>(p: Promise<T>, ms: number, padrao: T, o: { propagarErro?: boolean } = {}): Promise<T> {
+  return new Promise((ok, falha) => {
     const t = setTimeout(() => ok(padrao), ms);
     p.then(
       (v) => { clearTimeout(t); ok(v); },
-      () => { clearTimeout(t); ok(padrao); },
+      // padrão: erro vira o `padrao` (a tela abre sem a parte). Com `propagarErro`, só o TETO ESTOURADO vira `padrao`; erro de verdade (401, 5xx) passa adiante.
+      (e) => { clearTimeout(t); if (o.propagarErro) falha(e); else ok(padrao); },
     );
   });
 }

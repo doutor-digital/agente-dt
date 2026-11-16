@@ -772,7 +772,7 @@ test('abrir: caixa que não é da unidade, modelo que o CRM não confirma e vari
   let montando = 0;
   const tx = {
     $executeRaw: async () => 1,
-    disparoOnda: { findFirst: async () => viva, count: async () => montando, create: async (a: { data: Record<string, unknown> }) => (criados.push(a.data), { id: 'onda1', ...a.data }) },
+    disparoOnda: { findFirst: async () => viva, updateMany: async () => ({ count: 0 }), count: async () => montando, create: async (a: { data: Record<string, unknown> }) => (criados.push(a.data), { id: 'onda1', ...a.data }) },
     disparoCampanha: { create: async (a: { data: Record<string, unknown> }) => ({ id: 'camp1', ...a.data }) },
   };
   falso('$transaction', (async (fn: (t: unknown) => unknown) => fn(tx)) as never);
@@ -943,6 +943,7 @@ test('restrição da Meta (131048) pausa as ondas do CRM de TODAS as unidades do
     updateMany: async () => ({ count: 1 }),
   });
   falso('unitChatwoot', { findUnique: async () => ({ kapsoPhoneNumberId: '1212' }), findMany: async () => [{ unitId: 'u1' }, { unitId: 'u2' }] });
+  falso('unit', { findMany: async () => [{ slug: 'u-a' }, { slug: 'u-b' }] });
   falso('disparoOnda', { updateMany: async (a: { where: Record<string, unknown>; data: Record<string, unknown> }) => (pausas.push(a), { count: 2 }) });
   await varrerSeChegouAHora({
     ctx: () => criarContextoChatwoot({ url: 'https://x.test', conta: 1, token: 't' }),
@@ -954,38 +955,59 @@ test('restrição da Meta (131048) pausa as ondas do CRM de TODAS as unidades do
   assert.equal((pausa.where as { origem: string }).origem, 'chatwoot');
 });
 
-test('FREIO DE FALHAS: o histórico vem ordenado pelo MOMENTO DO ENVIO — a varredura regravando `atualizadoEm` não esconde uma falha recente atrás de envios velhos', async () => {
-  const consultas: Array<{ where: Record<string, unknown>; orderBy: Record<string, string> }> = [];
+test('FREIO DE FALHAS: só conta envio com resultado DECIDIDO — os 5 mais novos ainda não conferidos pela varredura não escondem as 5 falhas decididas', async () => {
   const h = (n: number) => new Date(AGORA.getTime() - n * 3_600_000);
+  // o banco de mentira: 5 falhas decididas (há 3–7 h) e 5 envios MAIS NOVOS (há 5–25 min) ainda «enviado» e sem decisão (a varredura não os viu)
+  const linhas = [
+    ...Array.from({ length: 5 }, (_, i) => ({ estado: 'falhou', decididoEm: h(3 + i), enviadoEm: h(10 + i) })),
+    ...Array.from({ length: 5 }, (_, i) => ({ estado: 'enviado', decididoEm: null as Date | null, enviadoEm: new Date(AGORA.getTime() - (5 + i * 5) * 60_000) })),
+  ];
+  const consultas: Array<{ where: any; orderBy: any }> = [];
   falso('disparoDestinatario', {
-    findMany: async (a: { where: Record<string, unknown>; orderBy: Record<string, string> }) => {
+    findMany: async (a: { where: any; orderBy: any; take: number }) => {
       consultas.push(a);
-      // envios (ordenados por enviadoEm): a falha de 1 h atrás está entre os recém-lidos (atualizadoEm novo), os velhos vêm depois
-      if ('enviadoEm' in a.where && (a.where.enviadoEm as { gte?: Date })?.gte) return [{ estado: 'falhou', enviadoEm: h(1) }, { estado: 'enviado', enviadoEm: h(5) }, { estado: 'enviado', enviadoEm: h(9) }];
-      return [{ estado: 'falhou', atualizadoEm: h(3) }]; // recusa definitiva (sem enviadoEm), decidida há 3 h
+      const gte: Date | undefined = a.where.decididoEm?.gte;
+      return linhas.filter((l) => l.decididoEm && gte && l.decididoEm >= gte).sort((x, y) => y.decididoEm!.getTime() - x.decididoEm!.getTime()).slice(0, a.take);
     },
   });
   const porto = portoChatwoot({ base: baseFalso().porto, unidades: new Map(), ondas: new Map() });
-  assert.deepEqual(await porto.ultimosResultados('u1', 3, h(48)), ['falhou', 'falhou', 'enviado'], 'a mais recente primeiro: a falha de 1 h, a recusa de 3 h, o envio de 5 h');
-  assert.deepEqual(consultas[0]!.orderBy, { enviadoEm: 'desc' });
-  assert.deepEqual(consultas[1]!.orderBy, { atualizadoEm: 'desc' }, 'só a recusa SEM enviadoEm usa a hora da decisão');
-  assert.equal(consultas[1]!.where.enviadoEm, null);
+  const ultimos = await porto.ultimosResultados('u1', 5, h(48));
+  assert.deepEqual(consultas[0]!.orderBy, { decididoEm: 'desc' });
+  assert.deepEqual(ultimos, ['falhou', 'falhou', 'falhou', 'falhou', 'falhou'], 'o envio ainda não decidido não é sucesso (nem falha): as 5 falhas decididas aparecem');
+  const { falhasSeguidasDemais } = await import('./disparo/freios.js');
+  assert.equal(falhasSeguidasDemais(ultimos, FREIOS_PADRAO), true, 'e o freio de falhas seguidas dispara');
 });
 
-test('429 do Chatwoot: o Porto avisa que ocupou a unidade (a rodada conta como «sem andar» para o alerta, mesmo sem adiado)', async () => {
+test('decidido em: falha (recusa do CRM, envio incerto) é marcada na hora; envio aceito NÃO é marcado (só a varredura, ao ver entregue/lida)', async () => {
+  const gravados: Array<{ id: string; dados: DadosDeGravacao }> = [];
+  const base = baseFalso();
+  base.porto.gravar = async (id, dados) => void gravados.push({ id, dados });
+  const porto = portoChatwoot({ base: base.porto, unidades: new Map(), ondas: new Map() });
+  await porto.gravar('d1', { estado: 'enviado', wamid: 'cw:1', enviadoEm: AGORA });
+  await porto.gravar('d2', { estado: 'falhou', motivo: 'x' });
+  assert.equal(gravados[0]!.dados.decididoEm, undefined, 'envio aceito não é decidido na hora');
+  assert.ok(gravados[1]!.dados.decididoEm instanceof Date, 'a falha leva o momento NO MESMO update da gravação (sem janela entre duas escritas)');
+  assert.equal(gravados[1]!.dados.estado, 'falhou');
+});
+
+test('429 do Chatwoot pela RODADA REAL: uma onda que só leva 429 dispara o alerta «sem andar» na 5ª rodada (apagar o +1 em rodada.ts quebra este teste)', async () => {
   ligar();
-  const t = portoDoCrm({ base: baseFalso({ quantos: 2 }), mandar: () => { throw Object.assign(new Error('Chatwoot 429'), { status: 429 }); } });
-  assert.equal(t.porto.ocupouAUnidade('u1'), false);
-  await rodarUnidade(t.porto, sem_pausa, U_LOTE, [ONDA]);
-  assert.equal(t.porto.ocupouAUnidade('u1'), true);
-  assert.equal(t.porto.ocupouAUnidade('outra'), false);
-  // 5 rodadas assim, com o +1 que a rodada soma, disparam o alerta uma vez
-  const { avisarSeSemAndar, _zerarSemAndarDoCrm } = await import('./disparo/chatwoot/rodada.js');
+  const { rodadaDoDisparoNoCrm, _zerarSemAndarDoCrm, _zerarVarreduraDoCrm } = await import('./disparo/chatwoot/rodada.js');
   _zerarSemAndarDoCrm();
+  _zerarVarreduraDoCrm();
+  const onda = { id: 'o1', campanhaId: 'c1', unitId: 'u1', estado: 'aprovada', origem: 'chatwoot', caixaChatwoot: 3, contaChatwoot: 1, template: INFO.template, idioma: INFO.idioma, textoModelo: INFO.textoModelo, variaveis: INFO.variaveis, cabecalho: null, oferta: null, aprovadaEm: ONDA.aprovadaEm, aprovadaModo: 'ligado', sairAceitos: 0, criadoEm: AGORA, unit: UNIDADE, campanha: { nome: 'Reativação' } };
+  falso('disparoOnda', { findMany: async () => [onda], updateMany: async () => ({ count: 0 }) });
+  falso('chatwootDisparoAjuste', { findUnique: async () => null });
+  falso('disparoDestinatario', { findMany: async () => [], count: async () => 0 });
   const avisos: string[] = [];
-  const r = { adiados: 0, mandou: 0, receberia: 0, falhou: 0, saiu: 0, descartados: 0 };
-  for (let i = 0; i < 5; i++) await avisarSeSemAndar('u', 'u1', { ...r, adiados: r.adiados + 1 }, async (x) => void avisos.push(x));
-  assert.equal(avisos.length, 1);
+  for (let rodada = 0; rodada < 5; rodada++) {
+    const t = portoDoCrm({ base: baseFalso({ quantos: 2 }), mandar: () => { throw Object.assign(new Error('Chatwoot 429'), { status: 429 }); } });
+    await rodadaDoDisparoNoCrm({ criarPorto: () => t.porto, avisar: async (x) => void avisos.push(x) });
+    assert.equal(avisos.length, rodada === 4 ? 1 : 0, `rodada ${rodada + 1}`);
+  }
+  await new Promise((ok) => setTimeout(ok, 30)); // as varreduras em segundo plano (sem dados) terminam
+  _zerarVarreduraDoCrm();
+  assert.match(avisos[0]!, /SEM ANDAR/);
 });
 
 test('LIGADO sem lista de teste: o log e o aviso de subida citam CHATWOOT_DISPARO_LISTA_DE_TESTE para o CRM (e DISPARO_LISTA_DE_TESTE para o Kommo)', async () => {
@@ -1015,14 +1037,17 @@ test('montagens: o CRM tem o limite PRÓPRIO (2 ao mesmo tempo, somando unidades
   const { abrirOndaChatwoot, MAX_MONTAGENS_DO_CRM } = await import('./disparo/chatwoot/onda.js');
   let travas = 0;
   const filtrosDeContagem: Array<Record<string, unknown>> = [];
-  const tx = { $executeRaw: async () => ++travas, disparoOnda: { findFirst: async () => null, count: async (a: { where: Record<string, unknown> }) => (filtrosDeContagem.push(a.where), MAX_MONTAGENS_DO_CRM), create: async () => { throw new Error('não podia criar'); } }, disparoCampanha: { create: async () => ({ id: 'c' }) } };
+  const orfasCanceladas: Array<Record<string, unknown>> = [];
+  const tx = { $executeRaw: async () => ++travas, disparoOnda: { findFirst: async () => null, updateMany: async (a: { where: Record<string, unknown> }) => (orfasCanceladas.push(a.where), { count: 0 }), count: async (a: { where: Record<string, unknown> }) => (filtrosDeContagem.push(a.where), MAX_MONTAGENS_DO_CRM), create: async () => { throw new Error('não podia criar'); } }, disparoCampanha: { create: async () => ({ id: 'c' }) } };
   falso('$transaction', (async (fn: (t: unknown) => unknown) => fn(tx)) as never);
   const r = await abrirOndaChatwoot({ unit: UNIDADE, conta: 1, filtro: filtroSchema.parse({ caixa: 3 }), modelo: { nome: 'parau_reativacao', idioma: 'pt_BR', texto: 'Oi {{1}}', variaveis: ['primeiroNome'] }, nome: 'Reativação', por: 'x@y.com', ctx: criarContextoChatwoot({ url: 'https://x.test', conta: 1, token: 't' }), conferirModelo: async () => ({ ok: true as const }) });
   assert.deepEqual([r.ok, (r as { status: number }).status], [false, 429]);
   assert.equal(travas, 2, 'duas travas: a GLOBAL do teto (duas unidades juntas não passam dele) e a da unidade');
-  const viva = filtrosDeContagem[0]!;
-  assert.equal(viva.origem, 'chatwoot');
-  assert.ok((viva.atualizadoEm as { gte: Date }).gte instanceof Date, 'só conta montagem VIVA: a órfã de um deploy não segura o teto até os 30 min do vigia');
+  // a montagem ÓRFÃ (sem batida há 3 min) é cancelada antes de contar: teto e trava da unidade enxergam o mesmo conjunto
+  assert.equal(orfasCanceladas.length, 1);
+  assert.equal(orfasCanceladas[0]!.origem, 'chatwoot');
+  assert.ok((orfasCanceladas[0]!.atualizadoEm as { lt: Date }).lt instanceof Date);
+  assert.deepEqual(filtrosDeContagem[0], { origem: 'chatwoot', estado: 'montando' });
   const filtros: Array<Record<string, unknown>> = [];
   falso('disparoOnda', { count: async (a: { where: Record<string, unknown> }) => (filtros.push(a.where), 1), findMany: async (a: { where: Record<string, unknown> }) => (filtros.push(a.where), []) });
   const { fonteDeDisparo } = await import('../mcp-remoto/disparo-producao.js');
@@ -1030,4 +1055,36 @@ test('montagens: o CRM tem o limite PRÓPRIO (2 ao mesmo tempo, somando unidades
   await fonteDeDisparo.ondasRecentes();
   assert.deepEqual(filtros[0], { estado: 'montando', origem: 'kommo' });
   assert.deepEqual(filtros[1], { origem: 'kommo' });
+});
+
+test('restrição da Meta em DOIS números diferentes: um grupo (e uma pausa) por número — não vira um alerta só de «este número»', async () => {
+  const { varrerSeChegouAHora, _zerarVarreduraDoCrm } = await import('./disparo/chatwoot/rodada.js');
+  _zerarVarreduraDoCrm();
+  const enviadoEm = new Date(AGORA.getTime() - 3_600_000);
+  const linha = (id: string, unitId: string, conversa: number) => ({ id, estado: 'enviado', wamid: `cw:${9000 + conversa}`, conversaChatwoot: conversa, enviadoEm, entregueEm: null, lidaEm: null, respondeuEm: null, decididoEm: null, onda: { unitId, contaChatwoot: 1, unit: { slug: `slug-${unitId}` } } });
+  const pausas: Array<{ where: Record<string, unknown>; data: Record<string, unknown> }> = [];
+  falso('disparoDestinatario', { findMany: async () => [linha('a', 'u1', 1), linha('b', 'u3', 2)], updateMany: async () => ({ count: 1 }) });
+  // u1 e u2 dividem o número 111; u3 tem o 222
+  falso('unitChatwoot', {
+    findUnique: async (a: { where: { unitId: string } }) => ({ kapsoPhoneNumberId: a.where.unitId === 'u3' ? '222' : '111' }),
+    findMany: async (a: { where: { kapsoPhoneNumberId: string } }) => (a.where.kapsoPhoneNumberId === '222' ? [{ unitId: 'u3' }] : [{ unitId: 'u1' }, { unitId: 'u2' }]),
+  });
+  falso('unit', { findMany: async (a: { where: { id: { in: string[] } } }) => a.where.id.in.map((id) => ({ slug: `slug-${id}` })) });
+  falso('disparoOnda', { updateMany: async (a: (typeof pausas)[number]) => (pausas.push(a), { count: 1 }) });
+  await varrerSeChegouAHora({
+    ctx: () => criarContextoChatwoot({ url: 'https://x.test', conta: 1, token: 't' }),
+    mensagens: (async () => [{ id: 9001, tipo: 1, privada: false, conteudo: '', criadaEm: enviadoEm, status: 'failed', erro: 'Meta 131048: spam' }, { id: 9002, tipo: 1, privada: false, conteudo: '', criadaEm: enviadoEm, status: 'failed', erro: 'Meta 131048: spam' }]) as never,
+    agora: () => AGORA.getTime(),
+  });
+  const grupos = pausas.filter((x) => (x.data as { estado?: string }).estado === 'pausada').map((x) => ((x.where as { unitId: { in: string[] } }).unitId.in).slice().sort().join(','));
+  assert.deepEqual(grupos.sort(), ['u1,u2', 'u3'], 'um grupo por número: {u1,u2} e {u3}, não um só');
+});
+
+test('comTeto: por padrão erro vira o padrão; com propagarErro só o TETO ESTOURADO vira o padrão e erro de verdade passa adiante', async () => {
+  const { comTeto } = await import('./robos-automacoes.js');
+  const erro = Object.assign(new Error('401'), { status: 401 });
+  assert.equal(await comTeto(Promise.reject(erro), 50, 'padrao'), 'padrao');
+  await assert.rejects(comTeto(Promise.reject(erro), 50, 'padrao', { propagarErro: true }), /401/);
+  assert.equal(await comTeto(new Promise<string>(() => undefined), 30, 'estourou', { propagarErro: true }), 'estourou');
+  assert.equal(await comTeto(Promise.resolve('ok'), 50, 'padrao', { propagarErro: true }), 'ok');
 });

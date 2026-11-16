@@ -54,14 +54,7 @@ export const _definirTetosDeTempo = (parteMs: number, conferenciaMs: number): vo
 };
 const PRAZO_DA_CONTAGEM_MS = 25_000;
 /** `null` = ESTOUROU o teto. Erro de verdade (401 de token caído, 404, 5xx) PROPAGA: «o CRM recusou» não pode aparecer como «demorou». */
-const lerComTeto = <T>(p: Promise<T>, ms = TETO_DA_PARTE_MS): Promise<T | null> =>
-  new Promise<T | null>((ok, falha) => {
-    const t = setTimeout(() => ok(null), ms);
-    p.then(
-      (v) => (clearTimeout(t), ok(v)),
-      (e) => (clearTimeout(t), falha(e)),
-    );
-  });
+const lerComTeto = <T>(p: Promise<T>, ms = TETO_DA_PARTE_MS): Promise<T | null> => comTeto<T | null>(p, ms, null, { propagarErro: true });
 /** Etiquetas e atributos são opcionais (a tela abre sem eles), MAS acesso recusado (401/403) não pode passar calado: propaga. */
 const soRecusaPropaga = (e: unknown): null => {
   const s = (e as { status?: number } | null)?.status;

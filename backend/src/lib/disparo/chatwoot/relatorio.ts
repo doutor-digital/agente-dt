@@ -30,7 +30,7 @@ export interface LinhaDoRelatorio {
 export interface NumerosDoRelatorio {
   selecionadas: number;
   enviadas: number;
-  /** quem o motor TENTOU: as enviadas + as que falharam sem o CRM aceitar (a base da taxa de falha; cada pessoa conta uma vez) */
+  /** a base da taxa de falha: as enviadas + as recusas DEFINITIVAS do CRM (cada pessoa uma vez; as incertas ficam de fora: não há prova de nada) */
   tentadas: number;
   entregues: number;
   lidas: number;
@@ -52,18 +52,22 @@ const foiAceita = (l: Pick<LinhaDoRelatorio, 'wamid'>): boolean => idDaMensagem(
 export function numerosDoRelatorio(linhas: readonly LinhaDoRelatorio[]): NumerosDoRelatorio {
   const n: NumerosDoRelatorio = { selecionadas: linhas.length, enviadas: 0, tentadas: 0, entregues: 0, lidas: 0, responderam: 0, pediramSair: 0, falharam: 0, incertas: 0, naFila: 0, descartadas: 0, receberiam: 0 };
   for (const l of linhas) {
+    // INCERTA: tentou falar com o CRM e não há o id da mensagem (falhou incerto, ou era incerta e depois pediu SAIR). Fica à parte: não é enviada
+    // (não há prova), não entra em «pediram SAIR» nem «responderam» (que dividem por enviadas) e não entra na base da taxa de falha.
+    const incerta = !foiAceita(l) && !!l.enviadoEm && (l.estado === 'falhou' || l.estado === 'saiu');
+    if (incerta) n.incertas++;
     if (foiAceita(l)) {
       n.enviadas++;
       n.tentadas++;
       if (l.entregueEm || l.lidaEm) n.entregues++;
       if (l.lidaEm) n.lidas++;
     }
-    if (l.estado === 'saiu' && l.enviadoEm) n.pediramSair++;
-    else if (foiAceita(l) && l.respondeuEm && l.enviadoEm && l.respondeuEm >= l.enviadoEm && l.respondeuEm.getTime() - l.enviadoEm.getTime() <= JANELA_DA_RESPOSTA_MS) n.responderam++;
+    if (l.estado === 'saiu' && l.enviadoEm) {
+      if (foiAceita(l)) n.pediramSair++;
+    } else if (foiAceita(l) && l.respondeuEm && l.enviadoEm && l.respondeuEm >= l.enviadoEm && l.respondeuEm.getTime() - l.enviadoEm.getTime() <= JANELA_DA_RESPOSTA_MS) n.responderam++;
     if (l.estado === 'falhou') {
-      if (!foiAceita(l)) n.tentadas++; // a que falhou DEPOIS de aceita já está em «enviadas»
-      if (!foiAceita(l) && l.enviadoEm) n.incertas++; // reivindicada (tentou falar com o CRM) e sem o id da mensagem: incerta
-      else n.falharam++;
+      if (!incerta) n.falharam++; // recusa definitiva, ou a entrega falhou DEPOIS de aceita
+      if (!foiAceita(l) && !l.enviadoEm) n.tentadas++; // a recusa definitiva soma na base (a que falhou depois de aceita já está em «enviadas»)
     } else if (l.estado === 'pendente' || l.estado === 'enviando') n.naFila++;
     else if (l.estado === 'descartado' || (l.estado === 'saiu' && !l.enviadoEm)) n.descartadas++;
     if (l.simuladoEm) n.receberiam++;

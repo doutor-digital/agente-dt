@@ -135,6 +135,7 @@ export function portoReal(unidades: ReadonlyMap<string, Unit>, avisarJoao: (text
           ...(dados.wamid !== undefined ? { wamid: dados.wamid } : {}),
           ...(dados.simuladoEm !== undefined ? { simuladoEm: dados.simuladoEm } : {}),
           ...(dados.enviadoEm !== undefined ? { enviadoEm: dados.enviadoEm } : {}),
+          ...(dados.decididoEm !== undefined ? { decididoEm: dados.decididoEm } : {}),
         },
       });
     },

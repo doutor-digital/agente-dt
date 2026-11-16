@@ -15,14 +15,14 @@ const HORAS = JANELA_DA_RESPOSTA_MS / 3_600_000;
 export const SQL_DOS_NUMEROS = `
   COUNT(*)::int AS selecionadas,
   COUNT(*) FILTER (WHERE ${ACEITA})::int AS enviadas,
-  (COUNT(*) FILTER (WHERE ${ACEITA}) + COUNT(*) FILTER (WHERE estado = 'falhou' AND NOT COALESCE(${ACEITA}, false)))::int AS tentadas,
+  (COUNT(*) FILTER (WHERE ${ACEITA}) + COUNT(*) FILTER (WHERE estado = 'falhou' AND enviado_em IS NULL AND NOT COALESCE(${ACEITA}, false)))::int AS tentadas,
   COUNT(*) FILTER (WHERE ${ACEITA} AND (entregue_em IS NOT NULL OR lida_em IS NOT NULL))::int AS entregues,
   COUNT(*) FILTER (WHERE ${ACEITA} AND lida_em IS NOT NULL)::int AS lidas,
   COUNT(*) FILTER (WHERE ${ACEITA} AND NOT (estado = 'saiu' AND enviado_em IS NOT NULL) AND respondeu_em IS NOT NULL AND enviado_em IS NOT NULL
                     AND respondeu_em >= enviado_em AND respondeu_em <= enviado_em + interval '${HORAS} hours')::int AS responderam,
-  COUNT(*) FILTER (WHERE estado = 'saiu' AND enviado_em IS NOT NULL)::int AS pediram_sair,
+  COUNT(*) FILTER (WHERE estado = 'saiu' AND enviado_em IS NOT NULL AND ${ACEITA})::int AS pediram_sair,
   COUNT(*) FILTER (WHERE estado = 'falhou' AND NOT (NOT COALESCE(${ACEITA}, false) AND enviado_em IS NOT NULL))::int AS falharam,
-  COUNT(*) FILTER (WHERE estado = 'falhou' AND NOT COALESCE(${ACEITA}, false) AND enviado_em IS NOT NULL)::int AS incertas,
+  COUNT(*) FILTER (WHERE estado IN ('falhou', 'saiu') AND NOT COALESCE(${ACEITA}, false) AND enviado_em IS NOT NULL)::int AS incertas,
   COUNT(*) FILTER (WHERE estado IN ('pendente', 'enviando'))::int AS na_fila,
   COUNT(*) FILTER (WHERE estado = 'descartado' OR (estado = 'saiu' AND enviado_em IS NULL))::int AS descartadas,
   COUNT(*) FILTER (WHERE simulado_em IS NOT NULL)::int AS receberiam`;
