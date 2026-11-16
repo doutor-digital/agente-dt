@@ -151,19 +151,31 @@ async function talvezRodar(): Promise<void> {
     await rodadaDoDisparo();
   } catch (err) {
     logger.error({ err: String(err) }, 'disparo: rodada falhou');
-  }
-  try {
-    await rodadaDoDisparoNoCrm();
-  } catch (err) {
-    logger.error({ err: String(err) }, 'disparo-crm: rodada falhou');
   } finally {
     rodando = false;
   }
 }
 
+/** A rodada do CRM tem a trava dela: o Chatwoot lento ou fora do ar não pode atrasar o disparo do Kommo (Canaã). */
+let rodandoCrm = false;
+async function talvezRodarCrm(): Promise<void> {
+  if (rodandoCrm) return;
+  rodandoCrm = true;
+  try {
+    await rodadaDoDisparoNoCrm();
+  } catch (err) {
+    logger.error({ err: String(err) }, 'disparo-crm: rodada falhou');
+  } finally {
+    rodandoCrm = false;
+  }
+}
+
 export function startDisparoWorker(): void {
   if (timer) return;
-  timer = setInterval(() => void talvezRodar(), PASSO_MS);
+  timer = setInterval(() => {
+    void talvezRodar();
+    void talvezRodarCrm();
+  }, PASSO_MS);
   logger.info({ passoMs: PASSO_MS, freios: freiosDoAmbiente() }, 'disparo de campanha: worker ligado (cada unidade nasce em modo seco)');
   for (const aviso of [...avisosDoAmbiente(), ...avisosDaListaDeTeste(), ...avisosDaRegraDeCliente()]) logger.warn(aviso);
 }

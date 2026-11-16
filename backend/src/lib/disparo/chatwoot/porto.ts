@@ -16,11 +16,12 @@ import { CAIXAS_REGUA } from '../../chatwoot-regua.js';
 import { paramsDoTemplate } from '../../chatwoot-regua-worker.js';
 import { conferenciaDaFranquia } from '../franquia.js';
 import { chaveDaPessoa, telefoneWhatsapp, textoFinal } from '../regras.js';
+import { listaDeTesteDoAmbiente } from '../porto.js';
 import type { Modo, Porto, VereditoExtra } from '../lote.js';
 import type { ResultadoDoTemplate } from '../../whatsapp-meta.js';
 import { caixaWhatsappOficial, conferirModeloDaOnda, type CaixaOficial, type ConferenciaDoModelo } from './canal.js';
 import { ultimoPedidoDeSaidaDoContato } from './mensagens.js';
-import { conversaDoPublico, situacaoPeloCrm } from './publico.js';
+import { conversaDoPublico, situacaoPeloCrm, DIAS_SEM_REPETIR_DISPARO } from './publico.js';
 import { ETIQUETA_SEM_FOLLOW_UP } from './filtro.js';
 import { prisma } from '../../prisma.js';
 
@@ -54,6 +55,8 @@ export interface DepsDoPortoChatwoot {
   mandar?: (ctx: ContextoChatwoot, conversaId: number, corpo: Record<string, unknown>) => Promise<unknown>;
   franquiaDaUnidade?: typeof conferenciaDaFranquia;
   contarEnvios?: (unitIds: string[], desde: Date, modo: 'ligado' | 'seco') => Promise<number>;
+  /** quantos envios (de OUTRA onda) a pessoa recebeu desde `desde` nesta unidade; `> 0` = recebeu disparo há pouco */
+  recebeuDesde?: (unitId: string, chave: string, ondaId: string, desde: Date) => Promise<number>;
   agora?: () => Date;
 }
 
@@ -63,6 +66,9 @@ const padraoCtx = (slug: string): ContextoChatwoot | null => {
 };
 
 const VALIDADE_MS = 5 * 60_000;
+
+const recebeuDesdeNoBanco = (unitId: string, chave: string, ondaId: string, desde: Date): Promise<number> =>
+  prisma.disparoDestinatario.count({ where: { unitId, chave, enviadoEm: { gte: desde }, estado: { in: ['enviando', 'enviado', 'falhou', 'saiu'] }, NOT: { ondaId } } });
 
 /** O contador de rodadas com limite de taxa do CRM: uma chave própria (o do Kommo é o número da Graph API, outro número). */
 export const chaveDoLimiteDoCrm = (unitId: string): string => `crm:${unitId}`;
@@ -82,6 +88,7 @@ export function portoChatwoot(deps: DepsDoPortoChatwoot): Porto {
   const mandar = deps.mandar ?? ((ctx, id, corpo) => chamar(ctx, 'POST', `conversations/${id}/messages`, { corpo }));
   const franquiaDe = deps.franquiaDaUnidade ?? conferenciaDaFranquia;
   const agora = deps.agora ?? (() => new Date());
+  let chatwootOcupado = false;
   const franquias = new Map<string, ReturnType<typeof conferenciaDaFranquia>>();
   const caixas = new Map<string, { ate: number; v: Promise<CaixaOficial> }>();
   const modelos = new Map<string, { ate: number; v: Promise<ConferenciaDoModelo> }>();
@@ -106,6 +113,9 @@ export function portoChatwoot(deps: DepsDoPortoChatwoot): Porto {
     ...base,
 
     modoDaUnidade: (slug): Modo => modoDoDisparoNoCrm(slug),
+
+    // A lista de teste do CRM é PRÓPRIA (`CHATWOOT_DISPARO_LISTA_DE_TESTE`): `slug=*` na do Kommo não solta o CRM, e a unidade que não está nela não recebe ninguém.
+    listaDeTeste: (slug) => listaDeTesteDoAmbiente(slug, { DISPARO_LISTA_DE_TESTE: process.env.CHATWOOT_DISPARO_LISTA_DE_TESTE } as NodeJS.ProcessEnv),
 
     // Teto do NÚMERO do CRM (o número do Kapso da unidade): só o que saiu por esta origem. O disparo do Kommo usa outro número (o da Graph API).
     contarNaJanela: async (unitId, desde, modo) => {
@@ -135,6 +145,11 @@ export function portoChatwoot(deps: DepsDoPortoChatwoot): Porto {
     },
 
     limiteDeTaxa: async (unitId, houve) => {
+      if (houve && chatwootOcupado) {
+        chatwootOcupado = false;
+        logger.warn({ unit: unidades.get(unitId)?.slug }, 'disparo-crm: o Chatwoot respondeu 429 (ocupado) — tento de novo na próxima rodada; não conta como limite da Meta');
+        return 0;
+      }
       const chave = chaveDoLimiteDoCrm(unitId);
       if (!houve) {
         await prisma.disparoLimite.deleteMany({ where: { unitId: chave } });
@@ -201,6 +216,9 @@ export function portoChatwoot(deps: DepsDoPortoChatwoot): Porto {
           const s = situacaoPeloCrm(conv.attrs);
           if (s !== 'livre') return { tipo: 'barrou', estado: 'descartado', motivo: `já é paciente pela etapa do CRM (${s})` };
         }
+        // recebeu OUTRO disparo desde a montagem (a lista foi montada há horas; a regra dos 7 dias vale na hora de mandar, não só na montagem)
+        const desde = new Date(agora().getTime() - DIAS_SEM_REPETIR_DISPARO * 86_400_000);
+        if ((await (deps.recebeuDesde ?? recebeuDesdeNoBanco)(u.id, d.chave, d.ondaId, desde)) > 0) return { tipo: 'barrou', estado: 'descartado', motivo: `recebeu outro disparo nos últimos ${DIAS_SEM_REPETIR_DISPARO} dias` };
         // SAIR nas mensagens do CRM: a conversa do disparo e as outras do contato. Falha ao ler = adiar, nunca «não pediu».
         if (await pedido(ctx, d.conversaChatwoot, d.contatoChatwoot ?? conv.contatoId, 3)) return { tipo: 'barrou', estado: 'saiu', motivo: 'pediu para sair (SAIR) antes do envio' };
         return null;
@@ -250,7 +268,12 @@ export function portoChatwoot(deps: DepsDoPortoChatwoot): Porto {
       } catch (err) {
         const status = (err as { status?: number })?.status;
         const texto = String(err instanceof Error ? err.message : err).slice(0, 300);
-        if (status === 429) return { ok: false, wamid: null, detalhe: texto, incerto: false, limiteDeTaxa: true };
+        // 429 do PRÓPRIO Chatwoot: a pessoa volta para a fila e a rodada acaba (o motor trata como «esperar»), mas NÃO é limite da Meta —
+        // `limiteDeTaxa` abaixo não soma rodadas para ele (senão pausaria o número e avisaria «a Meta pediu para esperar»)
+        if (status === 429) {
+          chatwootOcupado = true;
+          return { ok: false, wamid: null, detalhe: texto, incerto: false, limiteDeTaxa: true };
+        }
         // 4xx: o CRM RECUSOU (não entrou). Sem resposta ou 5xx: pode ter entrado — INCERTO, nunca reenvia sozinho.
         return { ok: false, wamid: null, detalhe: texto, incerto: !(status !== undefined && status >= 400 && status < 500) };
       }

@@ -39,6 +39,7 @@ afterEach(() => {
   }
   originais.clear();
   delete process.env.CHATWOOT_DISPARO_SLUGS;
+  delete process.env.CHATWOOT_DISPARO_LISTA_DE_TESTE;
   delete process.env.KIT_ADMINS_DD;
 });
 
@@ -291,7 +292,7 @@ function baseFalso(opcoes: { quantos?: number; sairam?: number; naHora?: number;
   return { porto, estados, chamadas, todos };
 }
 
-function portoDoCrm(o: { base?: ReturnType<typeof baseFalso>; unidade?: Unit; caixaOk?: boolean; mandar?: (corpo: Record<string, unknown>, conversa: number) => unknown; saiu?: (conversa: number) => Date | null; conversa?: (id: number) => unknown; modeloOk?: { ok: boolean; motivo?: string; transitorio?: true } } = {}) {
+function portoDoCrm(o: { base?: ReturnType<typeof baseFalso>; unidade?: Unit; caixaOk?: boolean; mandar?: (corpo: Record<string, unknown>, conversa: number) => unknown; saiu?: (conversa: number) => Date | null; conversa?: (id: number) => unknown; modeloOk?: { ok: boolean; motivo?: string; transitorio?: true }; recebeuDesde?: (unitId: string, chave: string, ondaId: string, desde: Date) => Promise<number> } = {}) {
   const base = o.base ?? baseFalso();
   // o Porto do CRM conta falhas e limite de taxa no banco (só as ondas dele): aqui, um banco sem histórico
   falso('disparoDestinatario', { findMany: async () => [], count: async () => 0 });
@@ -313,11 +314,17 @@ function portoDoCrm(o: { base?: ReturnType<typeof baseFalso>; unidade?: Unit; ca
     },
     franquiaDaUnidade: () => async () => 'livre',
     contarEnvios: (ids, desde, modo) => base.porto.contarNaJanela(ids[0]!, desde, modo),
+    recebeuDesde: o.recebeuDesde ?? (async () => 0),
     agora: () => AGORA,
   });
   return { porto, base, enviados };
 }
 
+/** Liga a unidade E põe a unidade na lista de teste PRÓPRIA do CRM (`slug=*`): o que um teste de envio real precisa. */
+function ligar(): void {
+  process.env.CHATWOOT_DISPARO_SLUGS = UNIDADE.slug;
+  process.env.CHATWOOT_DISPARO_LISTA_DE_TESTE = `${UNIDADE.slug}=*`;
+}
 const sem_pausa = { ...FREIOS_PADRAO, pausaMs: 0 };
 const U_LOTE = { id: 'u1', slug: UNIDADE.slug, nome: UNIDADE.name, fuso: 'America/Sao_Paulo' };
 
@@ -360,15 +367,15 @@ test('SECO vale para o caminho NOVO: mesmo com a caixa errada ou o modelo reprov
 });
 
 test('LIGADO sem a unidade na lista de teste (DISPARO_LISTA_DE_TESTE): ninguém recebe — a trava do motor vale para a origem nova', async () => {
-  process.env.CHATWOOT_DISPARO_SLUGS = UNIDADE.slug;
-  const t = portoDoCrm({ base: baseFalso({ teste: [] }) }); // o motor lê a lista de teste do Porto base; vazia = ninguém
+  process.env.CHATWOOT_DISPARO_SLUGS = UNIDADE.slug; // ligada, mas SEM entrada em CHATWOOT_DISPARO_LISTA_DE_TESTE
+  const t = portoDoCrm();
   const r = await rodarUnidade(t.porto, sem_pausa, U_LOTE, [ONDA]);
   assert.match(r.parou ?? '', /sem lista de teste/);
   assert.deepEqual(t.enviados, []);
 });
 
 test('LIGADO: manda PELA CONVERSA do CRM com template_params (modelo, idioma, variáveis), sem content_mode que reescreva, e guarda o id da mensagem', async () => {
-  process.env.CHATWOOT_DISPARO_SLUGS = UNIDADE.slug;
+  ligar();
   const t = portoDoCrm({ base: baseFalso({ quantos: 2 }) });
   const r = await rodarUnidade(t.porto, sem_pausa, U_LOTE, [ONDA]);
   assert.equal(r.modo, 'ligado');
@@ -387,7 +394,7 @@ test('LIGADO: manda PELA CONVERSA do CRM com template_params (modelo, idioma, va
 });
 
 test('LIGADO: a Clínica Demonstração (canal API registrado como «cloud») NUNCA recebe um envio — descartado com o motivo, e `enviar` direto também recusa', async () => {
-  process.env.CHATWOOT_DISPARO_SLUGS = UNIDADE.slug;
+  ligar();
   const t = portoDoCrm({ caixaOk: false, base: baseFalso({ quantos: 2 }) });
   const r = await rodarUnidade(t.porto, sem_pausa, U_LOTE, [ONDA]);
   assert.equal(r.mandou, 0);
@@ -402,7 +409,7 @@ test('LIGADO: a Clínica Demonstração (canal API registrado como «cloud») NU
 });
 
 test('LIGADO: quem escreveu SAIR no CRM (na conversa ou em outra do contato) é barrado como «saiu» e não recebe', async () => {
-  process.env.CHATWOOT_DISPARO_SLUGS = UNIDADE.slug;
+  ligar();
   const t = portoDoCrm({ base: baseFalso({ quantos: 3 }), saiu: (conversa) => (conversa === 102 ? dias(2) : null) });
   const r = await rodarUnidade(t.porto, sem_pausa, U_LOTE, [ONDA]);
   assert.equal(r.saiu, 1);
@@ -412,7 +419,7 @@ test('LIGADO: quem escreveu SAIR no CRM (na conversa ou em outra do contato) é 
 });
 
 test('LIGADO: parada por SAIR é a do motor — passou de 3 SAIR, a campanha para e ninguém mais recebe', async () => {
-  process.env.CHATWOOT_DISPARO_SLUGS = UNIDADE.slug;
+  ligar();
   const t = portoDoCrm({ base: baseFalso({ quantos: 3, sairam: 4 }) });
   const pausas: Array<{ where: Record<string, unknown>; data: Record<string, unknown> }> = [];
   falso('disparoOnda', { updateMany: async (a: (typeof pausas)[number]) => (pausas.push(a), { count: 1 }) });
@@ -426,7 +433,7 @@ test('LIGADO: parada por SAIR é a do motor — passou de 3 SAIR, a campanha par
 });
 
 test('LIGADO: leitura do CRM que falha (SAIR/conversa) ADIA a pessoa — não manda e não descarta', async () => {
-  process.env.CHATWOOT_DISPARO_SLUGS = UNIDADE.slug;
+  ligar();
   const t = portoDoCrm({
     base: baseFalso({ quantos: 1 }),
     conversa: () => {
@@ -551,7 +558,7 @@ test('teto: conta SÓ o que saiu pela origem do CRM, nas unidades que dividem o 
 });
 
 test('LIGADO: o teto por 24 h para a onda (o motor reconta antes de cada envio); fora da janela de horário não sai nada', async () => {
-  process.env.CHATWOOT_DISPARO_SLUGS = UNIDADE.slug;
+  ligar();
   const cheio = portoDoCrm({ base: baseFalso({ quantos: 3, noDia: 100 }) });
   const r = await rodarUnidade(cheio.porto, sem_pausa, U_LOTE, [ONDA]);
   assert.match(r.parou ?? '', /teto atingido/);
@@ -752,9 +759,10 @@ test('abrir: caixa que não é da unidade, modelo que o CRM não confirma e vari
   const { abrirOndaChatwoot } = await import('./disparo/chatwoot/onda.js');
   const criados: Array<Record<string, unknown>> = [];
   let viva: unknown = null;
+  let montando = 0;
   const tx = {
     $executeRaw: async () => 1,
-    disparoOnda: { findFirst: async () => viva, create: async (a: { data: Record<string, unknown> }) => (criados.push(a.data), { id: 'onda1', ...a.data }) },
+    disparoOnda: { findFirst: async () => viva, count: async () => montando, create: async (a: { data: Record<string, unknown> }) => (criados.push(a.data), { id: 'onda1', ...a.data }) },
     disparoCampanha: { create: async (a: { data: Record<string, unknown> }) => ({ id: 'camp1', ...a.data }) },
   };
   falso('$transaction', (async (fn: (t: unknown) => unknown) => fn(tx)) as never);
@@ -831,4 +839,111 @@ test('montar a lista: grava cada pessoa com a SUA conversa e contato, calcula to
   assert.deepEqual([gravacoes.length, criadas.length], [0, 0], 'onda cancelada durante a montagem nunca volta a ser aprovável');
   await montar(3, 'montando', 'kommo');
   assert.deepEqual([gravacoes.length, criadas.length], [0, 0], 'onda do Kommo não é montada por aqui');
+});
+
+// ── a clínica NÃO liga o disparo; lista de teste própria; os limites do CRM são do CRM ──────────────────────────
+
+test('a administradora da clínica NÃO liga o disparo pela tela Robôs: a automação não está na tela e mudarAutomacao recusa (404), sem gravar', async () => {
+  const A = await import('./robos-automacoes.js');
+  assert.ok(!('chatwoot-disparo' in A.DO_CATALOGO), 'fora da tela Robôs');
+  const gravacoes: unknown[] = [];
+  const banco = { unidade: async () => ({ id: 'u1', slug: UNIDADE.slug }), gravar: async (...a: unknown[]) => void gravacoes.push(a) } as never;
+  for (const estado of ['ligado', 'seco', 'desligado']) {
+    const r = await A.mudarAutomacao(banco, { slug: UNIDADE.slug, id: 'chatwoot-disparo', estado, confirmar: true, papel: 'administrator', por: 'Gabi Gerente', estadoAtual: () => 'seco' });
+    assert.deepEqual([r.ok, (r as { status?: number }).status], [false, 404], estado);
+  }
+  assert.deepEqual(gravacoes, []);
+  // e o estado de fábrica continua seco (a tela não tinha como mudar)
+  assert.equal(modoDoDisparoNoCrm(UNIDADE.slug), 'seco');
+});
+
+test('lista de teste do CRM é PRÓPRIA: `slug=*` na DISPARO_LISTA_DE_TESTE do Kommo NÃO solta o CRM; só CHATWOOT_DISPARO_LISTA_DE_TESTE vale, por unidade', () => {
+  const antes = { k: process.env.DISPARO_LISTA_DE_TESTE, c: process.env.CHATWOOT_DISPARO_LISTA_DE_TESTE };
+  try {
+    process.env.DISPARO_LISTA_DE_TESTE = `${UNIDADE.slug}=*`;
+    delete process.env.CHATWOOT_DISPARO_LISTA_DE_TESTE;
+    const { porto } = portoDoCrm();
+    assert.equal(porto.listaDeTeste(UNIDADE.slug)?.size, 0, 'Kommo solto, CRM continua sem ninguém');
+    process.env.CHATWOOT_DISPARO_LISTA_DE_TESTE = `${UNIDADE.slug}=5594991000001,5594991000002;outra-unidade=*`;
+    assert.deepEqual([...(porto.listaDeTeste(UNIDADE.slug) ?? [])].sort(), ['5594991000001', '5594991000002']);
+    assert.equal(porto.listaDeTeste('clinica-demonstracao')?.size, 0, 'unidade que não aparece na lista: ninguém (a entrada «outra-unidade=*» não vale para ela)');
+    process.env.CHATWOOT_DISPARO_LISTA_DE_TESTE = `${UNIDADE.slug}=*`;
+    assert.equal(porto.listaDeTeste(UNIDADE.slug), null, '`slug=*` do CRM solta só esta unidade, por decisão deliberada');
+    process.env.CHATWOOT_DISPARO_LISTA_DE_TESTE = '*';
+    assert.equal(porto.listaDeTeste(UNIDADE.slug)?.size, 0, 'um `*` global (formato antigo) não vale: ninguém');
+  } finally {
+    if (antes.k === undefined) delete process.env.DISPARO_LISTA_DE_TESTE; else process.env.DISPARO_LISTA_DE_TESTE = antes.k;
+    if (antes.c === undefined) delete process.env.CHATWOOT_DISPARO_LISTA_DE_TESTE; else process.env.CHATWOOT_DISPARO_LISTA_DE_TESTE = antes.c;
+  }
+});
+
+test('LIGADO: quem recebeu OUTRO disparo desde a montagem é barrado na hora do envio (a regra dos 7 dias vale ao mandar, não só ao montar)', async () => {
+  ligar();
+  const t = portoDoCrm({ base: baseFalso({ quantos: 2 }), recebeuDesde: async (_u, chave) => (chave === destino(2).chave ? 1 : 0) });
+  const r = await rodarUnidade(t.porto, sem_pausa, U_LOTE, [ONDA]);
+  assert.equal(r.mandou, 1);
+  assert.deepEqual(t.enviados.map((e) => e.conversa), [101]);
+  assert.equal(t.base.estados.get('d2')!.estado, 'descartado');
+  assert.match(t.base.estados.get('d2')!.motivo ?? '', /outro disparo nos últimos 7 dias/);
+});
+
+test('429 do PRÓPRIO Chatwoot: a pessoa volta para a fila e a rodada acaba, mas NÃO soma «limite da Meta» (nem pausa o número, nem avisa o João disso)', async () => {
+  ligar();
+  const t = portoDoCrm({ base: baseFalso({ quantos: 3 }), mandar: () => { throw Object.assign(new Error('Chatwoot 429'), { status: 429 }); } });
+  let somou = 0;
+  falso('disparoLimite', { deleteMany: async () => ({ count: 0 }), upsert: async () => (somou++, { seguidas: 99 }) });
+  const r = await rodarUnidade(t.porto, sem_pausa, U_LOTE, [ONDA]);
+  assert.match(r.parou ?? '', /esperar/);
+  assert.equal(somou, 0, 'o contador de rodadas com limite da Meta não anda');
+  assert.deepEqual(t.base.chamadas.avisos, [], 'nenhum alerta de «a Meta pediu para esperar»');
+  assert.equal(t.base.estados.get('d1')!.estado, 'pendente');
+});
+
+test('alerta de onda SEM ANDAR: 5 rodadas seguidas só com adiados avisam o João UMA vez; quem anda zera', async () => {
+  const { avisarSeSemAndar, _zerarSemAndarDoCrm } = await import('./disparo/chatwoot/rodada.js');
+  _zerarSemAndarDoCrm();
+  const avisos: string[] = [];
+  const parada = { adiados: 3, mandou: 0, receberia: 0, falhou: 0, saiu: 0, descartados: 0 };
+  for (let i = 0; i < 7; i++) await avisarSeSemAndar('u', 'u1', parada, async (t) => void avisos.push(t));
+  assert.equal(avisos.length, 1);
+  assert.match(avisos[0]!, /SEM ANDAR/);
+  await avisarSeSemAndar('u', 'u1', { ...parada, mandou: 1 }, async (t) => void avisos.push(t)); // andou: o episódio acaba
+  for (let i = 0; i < 5; i++) await avisarSeSemAndar('u', 'u1', parada, async (t) => void avisos.push(t));
+  assert.equal(avisos.length, 2, 'o episódio seguinte avisa de novo');
+});
+
+test('restrição da Meta (131048) pausa as ondas do CRM de TODAS as unidades do mesmo número do Kapso', async () => {
+  const { varrerSeChegouAHora, _zerarVarreduraDoCrm } = await import('./disparo/chatwoot/rodada.js');
+  _zerarVarreduraDoCrm();
+  const enviadoEm = new Date(AGORA.getTime() - 3_600_000);
+  const pausas: Array<Record<string, unknown>> = [];
+  falso('disparoDestinatario', {
+    findMany: async () => [{ id: 'a', estado: 'enviado', wamid: 'cw:9001', conversaChatwoot: 1, enviadoEm, entregueEm: null, lidaEm: null, respondeuEm: null, onda: { unitId: 'u1', contaChatwoot: 1, unit: { slug: 'u-a' } } }],
+    updateMany: async () => ({ count: 1 }),
+  });
+  falso('unitChatwoot', { findUnique: async () => ({ kapsoPhoneNumberId: '1212' }), findMany: async () => [{ unitId: 'u1' }, { unitId: 'u2' }] });
+  falso('disparoOnda', { updateMany: async (a: { where: Record<string, unknown>; data: Record<string, unknown> }) => (pausas.push(a), { count: 2 }) });
+  await varrerSeChegouAHora({
+    ctx: () => criarContextoChatwoot({ url: 'https://x.test', conta: 1, token: 't' }),
+    mensagens: (async () => [{ id: 9001, tipo: 1, privada: false, conteudo: '', criadaEm: enviadoEm, status: 'failed', erro: 'Meta 131048: spam' }]) as never,
+    agora: () => AGORA.getTime(),
+  });
+  const pausa = pausas.find((p) => (p.data as { estado?: string }).estado === 'pausada')!;
+  assert.deepEqual((pausa.where as { unitId: unknown }).unitId, { in: ['u1', 'u2'] }, 'as duas unidades do número, não só a da mensagem');
+  assert.equal((pausa.where as { origem: string }).origem, 'chatwoot');
+});
+
+test('montagens: o CRM tem o limite PRÓPRIO (2 ao mesmo tempo, somando unidades) e o conector do Kommo não conta as dele', async () => {
+  const { abrirOndaChatwoot, MAX_MONTAGENS_DO_CRM } = await import('./disparo/chatwoot/onda.js');
+  const tx = { $executeRaw: async () => 1, disparoOnda: { findFirst: async () => null, count: async () => MAX_MONTAGENS_DO_CRM, create: async () => { throw new Error('não podia criar'); } }, disparoCampanha: { create: async () => ({ id: 'c' }) } };
+  falso('$transaction', (async (fn: (t: unknown) => unknown) => fn(tx)) as never);
+  const r = await abrirOndaChatwoot({ unit: UNIDADE, conta: 1, filtro: filtroSchema.parse({ caixa: 3 }), modelo: { nome: 'parau_reativacao', idioma: 'pt_BR', texto: 'Oi {{1}}', variaveis: ['primeiroNome'] }, nome: 'Reativação', por: 'x@y.com', ctx: criarContextoChatwoot({ url: 'https://x.test', conta: 1, token: 't' }), conferirModelo: async () => ({ ok: true as const }) });
+  assert.deepEqual([r.ok, (r as { status: number }).status], [false, 429]);
+  const filtros: Array<Record<string, unknown>> = [];
+  falso('disparoOnda', { count: async (a: { where: Record<string, unknown> }) => (filtros.push(a.where), 1), findMany: async (a: { where: Record<string, unknown> }) => (filtros.push(a.where), []) });
+  const { fonteDeDisparo } = await import('../mcp-remoto/disparo-producao.js');
+  await fonteDeDisparo.montandoAgora();
+  await fonteDeDisparo.ondasRecentes();
+  assert.deepEqual(filtros[0], { estado: 'montando', origem: 'kommo' });
+  assert.deepEqual(filtros[1], { origem: 'kommo' });
 });

@@ -68,6 +68,8 @@ export function caixaDaUnidade(slug: string, caixa: number): string | null {
 }
 
 /** Os estados em que uma onda do CRM ainda está viva: só UMA por unidade (o teto do número é um só e a mesma pessoa não pode entrar em duas). */
+/** Quantas montagens de lista do CRM podem andar ao mesmo tempo, somando todas as unidades. */
+export const MAX_MONTAGENS_DO_CRM = 2;
 const VIVA = ['montando', 'montada', 'aprovada', 'pausada'];
 
 export async function abrirOndaChatwoot(args: {
@@ -96,6 +98,8 @@ export async function abrirOndaChatwoot(args: {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`disparo-onda-crm:${unit.id}`}))`;
     const viva = await tx.disparoOnda.findFirst({ where: { unitId: unit.id, origem: ORIGEM_CRM, estado: { in: VIVA } }, select: { id: true, estado: true } });
     if (viva) return { viva };
+    // o limite de montagens do CRM é PRÓPRIO (as do conector do Kommo têm o delas): cada montagem lê a caixa inteira do Chatwoot
+    if ((await tx.disparoOnda.count({ where: { origem: ORIGEM_CRM, estado: 'montando' } })) >= MAX_MONTAGENS_DO_CRM) return { cheio: true as const };
     const campanha = await tx.disparoCampanha.create({
       data: { slug, nome, template: modelo.nome, idioma: modelo.idioma, textoModelo: modelo.texto, variaveis: modelo.variaveis as Prisma.InputJsonValue, porUnidade: {} },
     });
@@ -119,6 +123,7 @@ export async function abrirOndaChatwoot(args: {
     });
     return { criada };
   });
+  if ('cheio' in r && r.cheio) return falha(429, `já há ${MAX_MONTAGENS_DO_CRM} listas do CRM sendo montadas agora (cada uma lê a caixa inteira): espere alguns minutos`);
   if ('viva' in r && r.viva) return falha(409, `já existe um disparo desta unidade em andamento (${r.viva.estado}); termine ou cancele antes de montar outro`);
   return { ok: true, dados: r.criada! };
 }

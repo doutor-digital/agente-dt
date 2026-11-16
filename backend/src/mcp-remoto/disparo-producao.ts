@@ -22,12 +22,14 @@ export const fonteDeDisparo: FonteDeDisparo = {
   ondasRecentes: async () =>
     (
       await prisma.disparoOnda.findMany({
+        where: { origem: 'kommo' }, // as ondas do CRM têm a tela Disparos; este conector é do Kommo
         orderBy: { criadoEm: 'desc' },
         take: 20,
         select: { id: true, estado: true, total: true, etiqueta: true, criadoEm: true, pausaMotivo: true, campanha: { select: { slug: true } }, unit: { select: { slug: true } } },
       })
     ).map((o) => ({ id: o.id, campanha: o.campanha.slug, unidade: o.unit.slug, etiqueta: o.etiqueta, estado: o.estado, total: o.total, criadoEm: o.criadoEm, motivo: o.pausaMotivo })),
-  montandoAgora: () => prisma.disparoOnda.count({ where: { estado: 'montando' } }),
+  // só as do Kommo: as montagens do CRM têm o limite próprio delas (`abrirOndaChatwoot`) e não ocupam as 2 vagas deste conector
+  montandoAgora: () => prisma.disparoOnda.count({ where: { estado: 'montando', origem: 'kommo' } }),
   salvarCampanha: (slug, entrada, opcoes) => salvarCampanha(slug, entrada, opcoes),
   montarOnda: async (a) => {
     const r = await abrirOnda({ campanha: a.campanha, unidade: a.unidade, etiqueta: a.etiqueta, por: a.por });

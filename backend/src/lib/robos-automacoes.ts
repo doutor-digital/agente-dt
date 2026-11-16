@@ -41,7 +41,7 @@ export const DO_CATALOGO: Readonly<Record<string, GrupoDaAutomacao>> = {
   'chatwoot-ia': 'sofia',
   'chatwoot-agenda': 'agenda',
   'chatwoot-regua': 'mensagens',
-  'chatwoot-disparo': 'mensagens',
+  // `chatwoot-disparo` NÃO está aqui de propósito: ligar o disparo em massa é decisão da Doutor Digital (console), nunca da administradora da clínica pela tela Robôs
   'chatwoot-capi': 'rastreio',
   'chatwoot-origem': 'rastreio',
   'chatwoot-duplicados': 'organizacao',
