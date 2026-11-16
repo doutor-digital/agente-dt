@@ -1703,54 +1703,7 @@ export class KommoClient {
     value: string | number | string[],
     enums: ReadonlyArray<{ id: number; value: string }> = [],
   ): Promise<void> {
-    let values: Array<Record<string, unknown>>;
-
-    if (fieldType === 'text' || fieldType === 'textarea') {
-      if (typeof value !== 'string') {
-        throw new Error(`field ${fieldId} (${fieldType}) requer string, recebeu ${typeof value}`);
-      }
-      values = [{ value: downgradeEmoji(value) }];
-    } else if (fieldType === 'numeric' || fieldType === 'monetary') {
-      // `monetary` aceita o mesmo formato do `numeric` no PATCH — só o número,
-      // sem "R$" e sem separador de milhar. Ficou de fora até 01/09/2026, e o
-      // efeito era a IA não conseguir gravar "Valor pago / entrada" quando o
-      // paciente mandava o comprovante: a tool estourava com "tipo não
-      // suportado" e o campo ficava vazio no cartão.
-      const num = paraNumero(value);
-      if (num == null) {
-        throw new Error(`field ${fieldId} (${fieldType}) recebeu valor não-numérico: ${value}`);
-      }
-      values = [{ value: num }];
-    } else if (fieldType === 'date' || fieldType === 'birthday') {
-      let unixSec: number;
-      if (typeof value === 'number') {
-        unixSec = value > 1e12 ? Math.floor(value / 1000) : Math.floor(value);
-      } else if (typeof value === 'string') {
-        const parsed = epochDeCampoData(value);
-        if (parsed == null) {
-          throw new Error(`field ${fieldId} (${fieldType}) ISO inválido: ${value}`);
-        }
-        unixSec = parsed;
-      } else {
-        throw new Error(`field ${fieldId} (${fieldType}) requer ISO string ou number`);
-      }
-      values = [{ value: unixSec }];
-    } else if (fieldType === 'select' || fieldType === 'radiobutton') {
-      if (typeof value !== 'string') {
-        throw new Error(`field ${fieldId} (${fieldType}) requer string (label da opção)`);
-      }
-      const enumId = resolveEnumId(value, enums);
-      values = enumId != null ? [{ enum_id: enumId }] : [{ value: downgradeEmoji(value) }];
-    } else if (fieldType === 'multiselect') {
-      const arr = Array.isArray(value) ? value : [value];
-      values = arr.map((v) => {
-        const label = String(v);
-        const enumId = resolveEnumId(label, enums);
-        return enumId != null ? { enum_id: enumId } : { value: downgradeEmoji(label) };
-      });
-    } else {
-      throw new Error(`field ${fieldId} tipo não suportado: ${fieldType}`);
-    }
+    const values = valoresDoCampo(fieldId, fieldType, value, enums);
 
     try {
       await this.http.patch(`/leads/${leadId}`, {
@@ -3562,3 +3515,65 @@ export const KommoService = {
 };
 
 export type KommoServiceType = typeof KommoService;
+
+
+/**
+ * O valor de um campo de cartão no formato do PATCH do Kommo (`[{ value }]`, `[{ enum_id }]`…), a partir do tipo do campo. Lança para valor que o tipo
+ * não aceita. É o que `setLeadCustomFieldValue` usa, separado para quem grava vários campos num PATCH só (`gravarCamposDoLead`).
+ */
+export function valoresDoCampo(
+  fieldId: number,
+  fieldType: KommoFieldType,
+  value: string | number | string[],
+  enums: ReadonlyArray<{ id: number; value: string }> = [],
+): Array<Record<string, unknown>> {
+    let values: Array<Record<string, unknown>>;
+    if (fieldType === 'text' || fieldType === 'textarea') {
+      if (typeof value !== 'string') {
+        throw new Error(`field ${fieldId} (${fieldType}) requer string, recebeu ${typeof value}`);
+      }
+      values = [{ value: downgradeEmoji(value) }];
+    } else if (fieldType === 'numeric' || fieldType === 'monetary') {
+      // `monetary` aceita o mesmo formato do `numeric` no PATCH — só o número,
+      // sem "R$" e sem separador de milhar. Ficou de fora até 01/09/2026, e o
+      // efeito era a IA não conseguir gravar "Valor pago / entrada" quando o
+      // paciente mandava o comprovante: a tool estourava com "tipo não
+      // suportado" e o campo ficava vazio no cartão.
+      const num = paraNumero(value);
+      if (num == null) {
+        throw new Error(`field ${fieldId} (${fieldType}) recebeu valor não-numérico: ${value}`);
+      }
+      values = [{ value: num }];
+    } else if (fieldType === 'date' || fieldType === 'birthday') {
+      let unixSec: number;
+      if (typeof value === 'number') {
+        unixSec = value > 1e12 ? Math.floor(value / 1000) : Math.floor(value);
+      } else if (typeof value === 'string') {
+        const parsed = epochDeCampoData(value);
+        if (parsed == null) {
+          throw new Error(`field ${fieldId} (${fieldType}) ISO inválido: ${value}`);
+        }
+        unixSec = parsed;
+      } else {
+        throw new Error(`field ${fieldId} (${fieldType}) requer ISO string ou number`);
+      }
+      values = [{ value: unixSec }];
+    } else if (fieldType === 'select' || fieldType === 'radiobutton') {
+      if (typeof value !== 'string') {
+        throw new Error(`field ${fieldId} (${fieldType}) requer string (label da opção)`);
+      }
+      const enumId = resolveEnumId(value, enums);
+      values = enumId != null ? [{ enum_id: enumId }] : [{ value: downgradeEmoji(value) }];
+    } else if (fieldType === 'multiselect') {
+      const arr = Array.isArray(value) ? value : [value];
+      values = arr.map((v) => {
+        const label = String(v);
+        const enumId = resolveEnumId(label, enums);
+        return enumId != null ? { enum_id: enumId } : { value: downgradeEmoji(label) };
+      });
+    } else {
+      throw new Error(`field ${fieldId} tipo não suportado: ${fieldType}`);
+    }
+
+    return values;
+}
