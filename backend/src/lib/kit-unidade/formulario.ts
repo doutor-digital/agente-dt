@@ -13,13 +13,17 @@
 import { z } from 'zod';
 
 const hora = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Use o formato 08:00 (hora:minuto).');
+/** Troca caractere de controle e quebra de linha por espaço (o texto vai para o terminal do João e para frases ditas ao paciente: nada de linha forjada nem ANSI). */
+const umaLinha = (v: unknown) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').replace(/\s+/g, ' ').trim() : v);
 const texto = (min: number, max: number, nome: string) =>
-  z
-    .string({ required_error: `Preencha: ${nome}.`, invalid_type_error: `Preencha: ${nome}.` })
-    .trim()
-    .min(1, `Preencha: ${nome}.`)
-    .min(min, `${nome}: escreva um pouco mais (mínimo ${min} letras).`)
-    .max(max, `${nome}: muito longo (máximo ${max} letras).`);
+  z.preprocess(
+    umaLinha,
+    z
+      .string({ required_error: `Preencha: ${nome}.`, invalid_type_error: `Preencha: ${nome}.` })
+      .min(1, `Preencha: ${nome}.`)
+      .min(min, `${nome}: escreva um pouco mais (mínimo ${min} letras).`)
+      .max(max, `${nome}: muito longo (máximo ${max} letras).`),
+  );
 /** Aceita 350, "350", "350,50" e "R$ 350": vira número. Valor inválido vira NaN e o `.positive()` recusa. */
 const dinheiro = (nome: string) =>
   z.preprocess(

@@ -20,7 +20,7 @@ set -euo pipefail
 umask 077
 
 REF="${1:-}"
-[[ "$REF" =~ ^[A-Za-z0-9_-]{3,60}$ ]] || { echo "uso: do-formulario-joao.sh <codigo|id|slug> [--so-conferir] [--set caminho=valor]... [--sobrescrever]"; exit 2; }
+[[ "$REF" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{2,59}$ ]] || { echo "uso: do-formulario-joao.sh <codigo|id|slug> [--so-conferir] [--set caminho=valor]... [--sobrescrever]"; exit 2; }
 shift
 SO_CONFERIR=0; SOBRESCREVER=0; SETS=()
 while [ $# -gt 0 ]; do
@@ -45,6 +45,11 @@ PASTA="/run/kit-formulario.$$"
 limpar() { docker exec "$AGENTE" rm -rf "$PASTA" </dev/null >/dev/null 2>&1 || true; [ -z "${TEMP:-}" ] || rm -f "$TEMP"; }
 trap limpar EXIT
 
+# só marca o formulário como importado quando o questionário COMPLETO já está em unidades/privado/ (pendência = ainda não foi aberta)
+marcar() {
+  case "$OUT" in *' valido=sim'*) docker exec -w "$RAIZ_NO_CONTEINER/backend" "$AGENTE" node dist/scripts/do-formulario.js "$REF" --marcar-importado </dev/null >/dev/null 2>&1 || echo "aviso: não consegui marcar o formulário como importado (sem efeito no kit)." ;; esac
+}
+
 rodar() { docker exec -w "$RAIZ_NO_CONTEINER/backend" "$AGENTE" node dist/scripts/do-formulario.js "$REF" "$@" </dev/null 2>&1; }
 
 RC=0
@@ -57,7 +62,7 @@ fi
 OUT="$(rodar --saida "$PASTA" ${SETS[@]+"${SETS[@]}"})" || RC=$?
 printf '%s\n' "$OUT"
 [ "$RC" -eq 0 ] || exit "$RC"
-SLUG="$(printf '%s\n' "$OUT" | sed -n 's/^KIT_RESUMO slug=\([a-z0-9-]*\) .*/\1/p' | head -1)"
+SLUG="$(printf '%s\n' "$OUT" | sed -n 's/^KIT_RESUMO slug=\([a-z0-9-]*\) .*/\1/p' | tail -1)"
 [[ "$SLUG" =~ ^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$ ]] || { echo "ERRO: o importador não devolveu o slug (KIT_RESUMO)."; exit 1; }
 
 if [ -f "$AQUI/unidades/$SLUG.yaml" ]; then
@@ -71,11 +76,12 @@ DESTINO="$PRIVADO/$SLUG.yaml"
 if [ -f "$DESTINO" ]; then
   if cmp -s "$TEMP" "$DESTINO"; then
     echo "OK: $DESTINO já está igual ao gerado do formulário. Nada a fazer."
+    marcar
     exit 0
   fi
   if [ "$SOBRESCREVER" != "1" ]; then
     echo "PARO: já existe um questionário DIFERENTE para $SLUG em $DESTINO (alguém completou ou editou). Nada foi trocado."
-    echo "Para refazer do formulário (com seus --set), rode de novo com --sobrescrever: o antigo fica guardado ao lado."
+    echo "Para refazer do formulário, rode de novo com --sobrescrever E REPITA TODOS os --set de antes (eles não ficam guardados): o antigo fica guardado ao lado."
     exit 1
   fi
   GUARDA="$DESTINO.anterior-$(date +%Y%m%d-%H%M%S)"
@@ -84,4 +90,5 @@ if [ -f "$DESTINO" ]; then
 fi
 mv "$TEMP" "$DESTINO"
 TEMP=""
+marcar
 echo "PRONTO: $DESTINO (modo 600; o conteúdo não é impresso)."

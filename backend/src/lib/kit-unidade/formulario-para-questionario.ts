@@ -9,7 +9,7 @@
  */
 import type { RespostasFormulario } from './formulario.js';
 import { kebab, sugestoesDoKit } from './formulario.js';
-import { validarQuestionario, type Questionario } from './questionario.js';
+import { validarQuestionario } from './questionario.js';
 
 /** Fuso por estado (o questionário assume America/Belem; clínica no ES ou no AC não pode herdar isso). */
 const FUSO_POR_UF: Record<string, string> = {
@@ -27,6 +27,19 @@ export const AJUSTES_PERMITIDOS = [
   'unidade.slug', 'chatwoot.subdominio', 'whatsapp.prefixo_modelos', 'whatsapp.numero_oficial', 'whatsapp.kapso_phone_number_id', 'whatsapp.waba_id',
   'franquia.id_company', 'meta.ad_account', 'meta.business_manager_id', 'sufixo',
 ] as const;
+const FORMATO_DO_AJUSTE: Record<(typeof AJUSTES_PERMITIDOS)[number], { re: RegExp; dica: string }> = {
+  'unidade.slug': { re: /^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$/, dica: 'minúsculas, dígitos e hífen (3 a 50), ex.: doutor-hernia-serra' },
+  'chatwoot.subdominio': { re: /^[a-z0-9]{3,40}$/, dica: 'minúsculas e dígitos, sem hífen (3 a 40)' },
+  'whatsapp.prefixo_modelos': { re: /^[a-z][a-z0-9]{1,15}_$/, dica: 'minúsculas/dígitos e «_» no fim, ex.: serra_' },
+  'whatsapp.numero_oficial': { re: /^\+\d{12,14}$/, dica: 'formato +5527999990000' },
+  'whatsapp.kapso_phone_number_id': { re: /^\d{5,25}$/, dica: 'só dígitos' },
+  'whatsapp.waba_id': { re: /^\d{5,25}$/, dica: 'só dígitos' },
+  'franquia.id_company': { re: /^[1-9]\d{0,8}$/, dica: 'só dígitos (número inteiro positivo)' },
+  'meta.ad_account': { re: /^act_\d{5,25}$/, dica: 'act_ e os dígitos' },
+  'meta.business_manager_id': { re: /^\d{5,25}$/, dica: 'só dígitos' },
+  sufixo: { re: /^[A-Z0-9]{2,30}$/, dica: 'MAIÚSCULAS e dígitos, sem _ (2 a 30), ex.: SERRA' },
+};
+
 export type Ajustes = Partial<Record<(typeof AJUSTES_PERMITIDOS)[number], string>>;
 
 export function lerAjustes(pares: string[]): { ok: true; ajustes: Ajustes } | { ok: false; erro: string } {
@@ -38,6 +51,8 @@ export function lerAjustes(pares: string[]): { ok: true; ajustes: Ajustes } | { 
     if (!(AJUSTES_PERMITIDOS as readonly string[]).includes(k)) return { ok: false, erro: `--set ${k}: não posso mudar isso por aqui. Campos aceitos: ${AJUSTES_PERMITIDOS.join(', ')}.` };
     if (!v) return { ok: false, erro: `--set ${k}: falta o valor (--set ${k}=valor).` };
     if (/\s|[\\'"`$;&|<>]/.test(v)) return { ok: false, erro: `--set ${k}: valor com espaço ou caractere estranho.` };
+    const formato = FORMATO_DO_AJUSTE[k as (typeof AJUSTES_PERMITIDOS)[number]];
+    if (!formato.re.test(v)) return { ok: false, erro: `--set ${k}: ${formato.dica}` };
     ajustes[k] = v;
   }
   return { ok: true, ajustes: ajustes as Ajustes };
@@ -163,4 +178,3 @@ export function paraYaml(obj: Record<string, unknown>, cabecalho = ''): string {
   return `${out.join('\n')}\n`;
 }
 
-export type { Questionario };

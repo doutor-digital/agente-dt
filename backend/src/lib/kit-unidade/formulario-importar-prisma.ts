@@ -11,13 +11,16 @@ export const bancoFormulariosPrisma: BancoFormularios = {
       select: { id: true, enviadoEm: true, importadoEm: true, slugSugerido: true, respostas: true },
     });
   },
-  async colisoes({ slug, subdominio, sufixo, prefixo }) {
-    // a unidade de MESMO slug é a própria clínica (rodar de novo é normal): só conta quem é de outro slug
+  async colisoes({ slug, nome, subdominio, sufixo, prefixo }) {
+    const m: string[] = [];
+    // unidade de MESMO slug: se tem o MESMO nome é a própria clínica (rodar de novo depois de criada é normal); com outro nome é OUTRA clínica da mesma cidade — o kit a «reconheceria» e mexeria nela
+    const mesma = await prisma.unit.findUnique({ where: { slug }, select: { name: true } });
+    const norm = (t: string) => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    if (mesma && norm(mesma.name) !== norm(nome)) m.push(`já existe a unidade «${mesma.name}» com o slug ${slug} (o formulário é de «${nome}»): é OUTRA clínica; escolha outro slug com --set unidade.slug=…`);
     const outras = await prisma.unitChatwoot.findMany({
       where: { OR: [{ subdominio }, { envSufixo: sufixo }, { prefixoModelos: prefixo }], unit: { slug: { not: slug } } },
       select: { subdominio: true, envSufixo: true, prefixoModelos: true, unit: { select: { slug: true } } },
     });
-    const m: string[] = [];
     for (const o of outras) {
       if (o.subdominio === subdominio) m.push(`o subdomínio «${subdominio}» já é da unidade ${o.unit.slug}`);
       if (o.envSufixo === sufixo) m.push(`o sufixo das chaves «${sufixo}» já é da unidade ${o.unit.slug}`);

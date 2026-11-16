@@ -84,6 +84,7 @@ test('executar --so-conferir: lê, mostra o que falta e a linha de máquina, NÃ
   assert.match(saida, /PENDENTE whatsapp\.waba_id/);
   assert.match(saida, /^KIT_RESUMO slug=doutor-hernia-serra subdominio=drherniaserra sufixo=SERRA modo=real valido=nao$/m);
   assert.match(saida, /SÓ CONFERIR/);
+  assert.match(saida, /CONFIRME \(o kit SUGERIU[^\n]*prefixo dos modelos «serra_» · subdomínio «drherniaserra» · sufixo «SERRA»/);
 });
 
 test('executar --saida: grava o arquivo 600 numa pasta 700, o arquivo é lido pelo kit, e NENHUM dado pessoal aparece na saída', async () => {
@@ -103,7 +104,11 @@ test('executar --saida: grava o arquivo 600 numa pasta 700, o arquivo é lido pe
   assert.ok(conteudo.includes('gerente@clinica.example'), 'o arquivo TEM os dados (é o questionário privado)');
   const lido = lerQuestionario(conteudo);
   assert.ok(lido.ok, JSON.stringify(lido));
+  assert.deepEqual(s.importados, [], 'gravar NÃO marca importado: quem marca é o host, depois de o arquivo chegar');
+  const m = await executar([s.id, '--marcar-importado'], s.banco, () => assert.fail('não grava'));
+  assert.equal(m.codigo, 0);
   assert.deepEqual(s.importados, [s.id]);
+  assert.equal((await executar(['naoexiste', '--marcar-importado'], s.banco, () => {})).codigo, 1);
 });
 
 test('executar: argumentos ruins e --set fora da lista são recusados antes de ler o banco', async () => {

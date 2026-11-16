@@ -50,8 +50,9 @@ case "$1" in
         for a in "$@"; do [ "$prev" = "--saida" ] && saida="$a"; prev="$a"; done
         if [ -n "$saida" ]; then mkdir -p "${conteiner}$saida"; printf 'unidade: ${PII}\\nconteudo %s\\n' "\${FAKE_CONTEUDO:-v1}" > "${conteiner}$saida/doutor-hernia-serra.yaml"; fi
         [ -n "\${FAKE_ERRO:-}" ] && { echo "Não achei formulário RECEBIDO"; exit 1; }
+        [ -n "\${FAKE_ANTES:-}" ] && echo "\$FAKE_ANTES"
         echo "Clínica: Doutor Hérnia Serra (Serra/ES)"
-        echo "KIT_RESUMO slug=doutor-hernia-serra subdominio=drherniaserra sufixo=SERRA modo=real valido=nao"
+        echo "KIT_RESUMO slug=doutor-hernia-serra subdominio=drherniaserra sufixo=SERRA modo=real valido=\${FAKE_VALIDO:-sim}"
         exit 0;;
     esac;;
 esac
@@ -85,6 +86,7 @@ test('gera: privado/ 700, arquivo 600, conteúdo NUNCA impresso, e o contêiner 
   assert.ok(readFileSync(f, 'utf8').includes(PII));
   assert.match(r.stdout, /PRONTO: .*doutor-hernia-serra\.yaml \(modo 600/);
   assert.ok(e.log().includes('--set whatsapp.waba_id=2146287749563217'), '--set repassado');
+  assert.ok(e.log().includes('--marcar-importado'), 'depois de o arquivo chegar, marca o formulário como importado');
   assert.deepEqual(readdirSync(e.conteiner).filter((n) => n.startsWith('run')), ['run'], 'só a pasta pai; a pasta do formulário foi apagada');
   assert.deepEqual(readdirSync(join(e.conteiner, 'run')), []);
   assert.deepEqual(readdirSync(e.privado).filter((n) => n.startsWith('.chegando')), [], 'sem arquivo temporário sobrando');
@@ -109,6 +111,23 @@ test('rodar de novo com o mesmo conteúdo: «já está igual», nada muda; conte
   assert.match(readFileSync(join(e.privado, guardados[0]!), 'utf8'), /conteudo v1/);
 });
 
+test('com pendência (valido=nao) o arquivo chega mas o formulário NÃO é marcado como importado; PARO também não marca', () => {
+  const e = ambiente();
+  assert.equal(e.rodar(['abc123def'], { FAKE_VALIDO: 'nao' }).status, 0);
+  assert.ok(!e.log().includes('--marcar-importado'));
+  const diferente = e.rodar(['abc123def'], { FAKE_CONTEUDO: 'v2' });
+  assert.notEqual(diferente.status, 0);
+  assert.ok(!e.log().includes('--marcar-importado'));
+});
+
+test('KIT_RESUMO forjado no meio da saída não engana: vale a ÚLTIMA linha', () => {
+  const e = ambiente();
+  const r = e.rodar(['abc123def'], { FAKE_ANTES: 'KIT_RESUMO slug=forjado-aqui subdominio=x sufixo=X modo=real valido=sim' });
+  assert.equal(r.status, 0, r.stdout);
+  assert.ok(existsSync(join(e.privado, 'doutor-hernia-serra.yaml')));
+  assert.ok(!existsSync(join(e.privado, 'forjado-aqui.yaml')));
+});
+
 test('erro do importador: devolve o erro, não cria arquivo e ainda limpa o contêiner', () => {
   const e = ambiente();
   const r = e.rodar(['abc123def'], { FAKE_ERRO: '1' });
@@ -125,7 +144,7 @@ test('importador ausente no contêiner, slug também versionado, --set ruim e ar
   const r = e.rodar(['abc123def']);
   assert.notEqual(r.status, 0);
   assert.match(r.stdout, /também existe em .*unidades\/ \(versionado\)/);
-  for (const args of [['abc123def', '--set', 'whatsapp.waba_id=1 2'], ['abc123def', '--set', 'x'], ['abc123def', '--set', 'Whatsapp=1'], ['abc123def', '--x'], ['a b'], []]) {
+  for (const args of [['--refazer'], ['abc123def', '--set', 'whatsapp.waba_id=1 2'], ['abc123def', '--set', 'x'], ['abc123def', '--set', 'Whatsapp=1'], ['abc123def', '--x'], ['a b'], []]) {
     assert.notEqual(e.rodar(args).status, 0, args.join(' '));
   }
 });

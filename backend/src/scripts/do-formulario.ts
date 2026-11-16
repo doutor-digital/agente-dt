@@ -3,7 +3,8 @@
  * (é lá que está o banco); o `ops/kit-unidade/do-formulario-joao.sh` chama e leva o arquivo para `unidades/privado/` da VPS (modo 600).
  *
  *   node dist/scripts/do-formulario.js <codigo|id|slug> --so-conferir                       # lê o banco, mostra o que falta; não grava nada
- *   node dist/scripts/do-formulario.js <codigo|id|slug> --saida <pasta> [--set k=v]...       # grava <pasta>/<slug>.yaml (modo 600) e marca o formulário como importado
+ *   node dist/scripts/do-formulario.js <codigo|id|slug> --saida <pasta> [--set k=v]...       # grava <pasta>/<slug>.yaml (modo 600); NÃO marca importado
+ *   node dist/scripts/do-formulario.js <codigo|id|slug> --marcar-importado                    # o script do host chama depois de o arquivo chegar em unidades/privado/
  *
  * Imprime só linhas sem dado pessoal (nome da clínica, da cidade, de quem preencheu; campos que faltam) e UMA linha de máquina para o script do host:
  *   KIT_RESUMO slug=<slug> subdominio=<sub> sufixo=<SUF> modo=real valido=<sim|nao>
@@ -12,7 +13,8 @@
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { importarFormulario, type BancoFormularios } from '../lib/kit-unidade/formulario-importar.js';
+import { hashDoCodigo } from '../lib/kit-unidade/convites.js';
+import { escolherFormulario, importarFormulario, type BancoFormularios } from '../lib/kit-unidade/formulario-importar.js';
 import { lerAjustes } from '../lib/kit-unidade/formulario-para-questionario.js';
 
 export interface SaidaDoScript {
@@ -26,15 +28,25 @@ export async function executar(args: string[], banco: BancoFormularios, gravar: 
   const sets: string[] = [];
   let saida: string | undefined;
   let soConferir = false;
+  let soMarcar = false;
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     if (a === '--so-conferir') soConferir = true;
+    else if (a === '--marcar-importado') soMarcar = true;
     else if (a === '--saida') saida = args[++i];
     else if (a === '--set') sets.push(args[++i] ?? '');
     else if (a.startsWith('--')) return { linhas: [`argumento desconhecido: ${a}`], codigo: 2 };
     else posicionais.push(a);
   }
   if (posicionais.length !== 1) return { linhas: ['uso: do-formulario <codigo|id|slug> [--so-conferir | --saida <pasta>] [--set caminho=valor]...'], codigo: 2 };
+  if (soMarcar) {
+    // chamado pelo script do host DEPOIS de o questionário chegar em unidades/privado/: só então o formulário conta como importado
+    const c = await banco.acharEnviados({ hash: /^[A-Za-z0-9_-]{24}$/.test(posicionais[0]!) ? hashDoCodigo(posicionais[0]!) : '', ref: posicionais[0]! });
+    const e = escolherFormulario(posicionais[0]!, c);
+    if (!e.ok) return { linhas: [e.erro], codigo: 1 };
+    await banco.marcarImportado(e.formulario.id, agora);
+    return { linhas: [`Formulário ${e.formulario.id} marcado como importado.`], codigo: 0 };
+  }
   if (!soConferir && !saida) return { linhas: ['falta --saida <pasta> (ou use --so-conferir)'], codigo: 2 };
   const aj = lerAjustes(sets);
   if (!aj.ok) return { linhas: [aj.erro], codigo: 2 };
@@ -47,7 +59,6 @@ export async function executar(args: string[], banco: BancoFormularios, gravar: 
     linhas.push('SÓ CONFERIR: nada foi gravado.');
   } else {
     gravar(saida!, g.slug, r.yaml);
-    await banco.marcarImportado(r.formularioId!, agora);
     linhas.push(`Questionário gerado: ${g.slug}.yaml (modo 600; o conteúdo não é impresso).`);
   }
   linhas.push(`KIT_RESUMO slug=${g.slug} subdominio=${g.subdominio} sufixo=${g.sufixo} modo=${g.modo} valido=${g.valido ? 'sim' : 'nao'}`);

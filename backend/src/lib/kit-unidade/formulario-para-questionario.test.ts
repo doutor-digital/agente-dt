@@ -78,8 +78,8 @@ test('sem desconto antecipado: aceita_antecipado=false e sem sinal; sem almoço:
 });
 
 test('--set: só a lista fechada, sem valor vazio e sem caractere de shell', () => {
-  assert.deepEqual(lerAjustes(['whatsapp.waba_id=123', 'sufixo=SERRA']), { ok: true, ajustes: { 'whatsapp.waba_id': '123', sufixo: 'SERRA' } });
-  for (const ruim of ['sofia.tom=casual', 'valores.chave_pix=x', 'franquia.token_env=X', 'whatsapp.waba_id', 'whatsapp.waba_id=', 'whatsapp.waba_id=1 2', 'whatsapp.waba_id=1;rm', 'whatsapp.waba_id=$(x)', '=1']) {
+  assert.deepEqual(lerAjustes(['whatsapp.waba_id=2146287749563217', 'sufixo=SERRA']), { ok: true, ajustes: { 'whatsapp.waba_id': '2146287749563217', sufixo: 'SERRA' } });
+  for (const ruim of ['franquia.id_company=abc', 'franquia.id_company=1e3', 'unidade.slug=Foo_Bar', 'sufixo=abc', 'whatsapp.waba_id=12', 'meta.ad_account=1234567', 'sofia.tom=casual', 'valores.chave_pix=x', 'franquia.token_env=X', 'whatsapp.waba_id', 'whatsapp.waba_id=', 'whatsapp.waba_id=1 2', 'whatsapp.waba_id=1;rm', 'whatsapp.waba_id=$(x)', '=1']) {
     assert.equal(lerAjustes([ruim]).ok, false, ruim);
   }
   assert.ok(AJUSTES_PERMITIDOS.every((k) => !/token|senha|secret|pix|email/i.test(k)), 'nenhum campo de segredo ou dado pessoal por --set');

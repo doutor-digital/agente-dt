@@ -47,7 +47,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --so-conferir) SO_CONFERIR=1 ;;
     --refazer) REFAZER=1 ;;
-    --do-formulario) shift; FORM_REF="${1:-}"; [[ "$FORM_REF" =~ ^[A-Za-z0-9_-]{3,60}$ ]] || { echo "--do-formulario precisa do id, do código ou do slug do formulário"; exit 2; } ;;
+    --do-formulario) shift; FORM_REF="${1:-}"; [[ "$FORM_REF" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{2,59}$ ]] || { echo "--do-formulario precisa do id, do código ou do slug do formulário"; exit 2; } ;;
     --set) shift; [[ "${1:-}" =~ ^[a-z_]+(\.[a-z_]+)?=[A-Za-z0-9_.+-]+$ ]] || { echo "--set precisa ser caminho=valor, sem espaço (ex.: --set whatsapp.waba_id=123)"; exit 2; }; SETS+=("$1") ;;
     -*) echo "argumento desconhecido: $1 (use <slug>, --so-conferir, --do-formulario <ref>, --set k=v, --refazer)"; exit 2 ;;
     *) if [ -z "$SLUG" ]; then SLUG="$1"; else echo "mais de um slug: $SLUG e $1"; exit 2; fi ;;

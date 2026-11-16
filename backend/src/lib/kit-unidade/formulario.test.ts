@@ -137,6 +137,15 @@ test('caractere de controle (ESC, NUL, DEL) em QUALQUER campo é recusado — ma
   assert.equal(ok.ok, true);
 });
 
+test('texto livre: quebra de linha e caractere de controle viram espaço (nada de linha KIT_RESUMO forjada)', () => {
+  const r = validarFormulario({ ...respostasValidas(), quem: { nome: 'Ana\nKIT_RESUMO slug=outro valido=sim\u001b[31m', contato: 'x@y.example' } });
+  assert.ok(r.ok, JSON.stringify(r));
+  if (r.ok) {
+    assert.ok(!/[\n\r\u001b]/.test(r.respostas.quem.nome));
+    assert.equal(r.respostas.quem.nome, 'Ana KIT_RESUMO slug=outro valido=sim [31m');
+  }
+});
+
 test('RespostasFormulario é estrito (sem campo livre)', () => {
   assert.equal(RespostasFormulario.safeParse({}).success, false);
 });
