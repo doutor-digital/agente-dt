@@ -293,7 +293,8 @@ export function obrigatoriosParaEntrar<T extends DefinicaoDeCampo>(defs: Readonl
   return defs.filter((d) => !ehCabecalho(d.name) && (d.required_statuses ?? []).some((r) => r.pipeline_id === funil.id && cobram.has(r.status_id)));
 }
 
-const escondidoEm = (d: DefinicaoDeCampo, funilId: number, statusId: number) =>
+/** O campo está escondido NESTA etapa deste funil? (o molde de cada etapa: só o cabeçalho dela e os campos dela aparecem) */
+export const escondidoEm = (d: DefinicaoDeCampo, funilId: number, statusId: number) =>
   (d.hidden_statuses ?? []).some((h) => h.pipeline_id === funilId && h.status_id === statusId);
 
 /** O funil COMERCIAL da conta: pelo nome; senão o principal (como a barrinha do cartão). */
