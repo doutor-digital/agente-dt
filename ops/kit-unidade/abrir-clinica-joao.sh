@@ -233,7 +233,7 @@ else
   falta "MODELOS NA META: conferir em Kapso → Modelos (ficam pendentes de minutos a 48 h até a Meta aprovar)."
 fi
 falta "ADMINISTRADORES DA DOUTOR DIGITAL: o kit os põe na conta nova se já existirem no CRM de referência; se ele AVISOU que alguém não estava, rode criar-usuario-dd-joao.sh (README) e confira na conta."
-falta "ATENDENTES: cada uma aceita o convite por e-mail e define a senha; só então cria as 10 pastas dela."
+falta "ATENDENTES: cada uma aceita o convite por e-mail e define a senha; só então cria as 10 pastas dela. (Se o e-mail do CRM ainda não foi ligado — uma vez só para todas as clínicas — o convite não sai: ligar-email-crm-joao.sh, no README.)"
 falta "FRANQUIA: gravar o token da API da franquia (units.spine_token), ligar spine_enabled e definir os turnos por profissional."
 falta "CONFERIR NO CRM: abrir https://$SUB.doutordigitalconsultoria.com/ (o certificado sai no primeiro acesso)."
 falta "TESTE DA SOFIA: rodar os testes de prompt da unidade e o dono ler as respostas ANTES de ligar."
