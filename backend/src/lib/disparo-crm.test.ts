@@ -745,3 +745,90 @@ test('rodada do CRM: onda aprovada sem caixa/conta é PAUSADA (não fica adiando
   assert.equal(pausadas.length, 1);
   assert.equal(pausadas[0]!.estado, 'pausada');
 });
+
+// ── abrir e montar o disparo ────────────────────────────────────────────────────────────────────────────────────
+
+test('abrir: caixa que não é da unidade, modelo que o CRM não confirma e variáveis em número errado são recusados sem gravar nada; só UM disparo vivo por unidade', async () => {
+  const { abrirOndaChatwoot } = await import('./disparo/chatwoot/onda.js');
+  const criados: Array<Record<string, unknown>> = [];
+  let viva: unknown = null;
+  const tx = {
+    $executeRaw: async () => 1,
+    disparoOnda: { findFirst: async () => viva, create: async (a: { data: Record<string, unknown> }) => (criados.push(a.data), { id: 'onda1', ...a.data }) },
+    disparoCampanha: { create: async (a: { data: Record<string, unknown> }) => ({ id: 'camp1', ...a.data }) },
+  };
+  falso('$transaction', (async (fn: (t: unknown) => unknown) => fn(tx)) as never);
+  const ctx = criarContextoChatwoot({ url: 'https://crm.exemplo.test', conta: 1, token: 'tk' });
+  const filtro = filtroSchema.parse({ caixa: 3, atributos: { etapa: ['Perdido'] } });
+  const modelo = { nome: 'parau_reativacao', idioma: 'pt_BR', texto: 'Oi {{1}}, tudo bem?', variaveis: ['primeiroNome'] };
+  const base = { unit: UNIDADE, conta: 1, filtro, modelo, nome: 'Reativação de perdidos', por: 'suzanne@x.com', ctx, conferirModelo: async () => ({ ok: true as const }) };
+
+  assert.equal((await abrirOndaChatwoot({ ...base, filtro: filtroSchema.parse({ caixa: 4 }) })).ok, false, 'a caixa 4 é o histórico (não é cloud)');
+  assert.equal((await abrirOndaChatwoot({ ...base, filtro: filtroSchema.parse({ caixa: 20 }) })).ok, false, 'caixa de outra unidade');
+  assert.equal((await abrirOndaChatwoot({ ...base, modelo: { ...modelo, variaveis: [] } })).ok, false, 'o texto pede 1 variável e a campanha define 0');
+  assert.equal((await abrirOndaChatwoot({ ...base, nome: 'x' })).ok, false, 'sem nome de campanha');
+  const reprovado = await abrirOndaChatwoot({ ...base, conferirModelo: async () => ({ ok: false as const, motivo: 'o modelo não está aprovado nesta caixa' }) });
+  assert.deepEqual([reprovado.ok, (reprovado as { status: number }).status], [false, 422]);
+  const semLeitura = await abrirOndaChatwoot({ ...base, conferirModelo: async () => ({ ok: false as const, motivo: 'CRM fora', transitorio: true as const }) });
+  assert.equal((semLeitura as { status: number }).status, 502, 'não conseguir ler o CRM não é culpa do modelo');
+  assert.equal(criados.length, 0, 'nenhuma recusa gravou onda');
+
+  const ok = await abrirOndaChatwoot(base);
+  assert.ok(ok.ok, JSON.stringify(ok));
+  assert.deepEqual(
+    { origem: criados[0]!.origem, conta: criados[0]!.contaChatwoot, caixa: criados[0]!.caixaChatwoot, estado: criados[0]!.estado, criadaPor: criados[0]!.criadaPor, template: criados[0]!.template },
+    { origem: 'chatwoot', conta: 1, caixa: 3, estado: 'montando', criadaPor: 'suzanne@x.com', template: 'parau_reativacao' },
+  );
+  assert.match(String(criados[0]!.etiqueta), /etapa = Perdido/, 'o filtro em palavras fica na onda');
+  assert.deepEqual(criados[0]!.filtro, filtro, 'e o filtro inteiro, para auditoria');
+
+  viva = { id: 'outra', estado: 'montada' };
+  const segunda = await abrirOndaChatwoot(base);
+  assert.deepEqual([segunda.ok, (segunda as { status: number }).status], [false, 409]);
+});
+
+test('montar a lista: grava cada pessoa com a SUA conversa e contato, calcula total e impressão como o painel do Kommo, e some a onda se ninguém é elegível ou se algo falha', async () => {
+  const { concluirMontagemChatwoot } = await import('./disparo/chatwoot/onda.js');
+  const onda = { id: 'o1', campanhaId: 'c1', unitId: 'u1', estado: 'montando', origem: 'chatwoot', etiqueta: 'CRM · etapa = Perdido', template: 'parau_reativacao', idioma: 'pt_BR', textoModelo: 'Oi {{1}}', variaveis: ['primeiroNome'], cabecalho: null, oferta: null, filtro: { caixa: 3 }, unit: UNIDADE };
+  const lido = (n: number) => ({
+    lidas: 10, truncada: false, noFiltro: 5, parcial: false, fora: { 'sem-follow-up': 2 },
+    elegiveis: Array.from({ length: n }, (_, i) => ({ leadId: null, nome: NOMES[i]!, nomeCompleto: `${NOMES[i]} Silva`, telefone: fone(i + 1).slice(1), chave: chaveDaPessoa(fone(i + 1).slice(1)), conversaId: 100 + i, contatoId: 1000 + i })),
+  });
+  let linhas: Array<{ chave: string; nome: string }> = [];
+  const gravacoes: Array<Record<string, unknown>> = [];
+  const criadas: Array<Record<string, unknown>> = [];
+  const montar = async (n: number | Error, estado = 'montando', origem = 'chatwoot') => {
+    gravacoes.length = 0;
+    criadas.length = 0;
+    falso('disparoOnda', { findUnique: async () => ({ ...onda, estado, origem }), updateMany: async (a: { data: Record<string, unknown> }) => (gravacoes.push(a.data), { count: 1 }) });
+    falso('disparoDestinatario', {
+      createMany: async (a: { data: Array<Record<string, unknown>> }) => (criadas.push(...a.data), (linhas = a.data.map((d) => ({ chave: String(d.chave), nome: String(d.nome) }))), { count: a.data.length }),
+      findMany: async () => linhas,
+    });
+    await concluirMontagemChatwoot('o1', async () => {
+      if (n instanceof Error) throw n;
+      return lido(n);
+    });
+  };
+
+  await montar(3);
+  assert.deepEqual(criadas.map((c) => [c.conversaChatwoot, c.contatoChatwoot, c.nome, c.kommoLeadId]), [[100, 1000, 'Ana', undefined], [101, 1001, 'Bia', undefined], [102, 1002, 'Cris', undefined]]);
+  assert.equal(gravacoes[0]!.estado, 'montada');
+  assert.equal(gravacoes[0]!.total, 3);
+  assert.equal(gravacoes[0]!.impressao, impressaoDaOnda(definicaoDaOnda(onda), linhas), 'a impressão é a mesma que a aprovação vai recalcular');
+  assert.deepEqual((gravacoes[0]!.resumo as { fora: unknown }).fora, { 'sem-follow-up': 2 });
+
+  await montar(0);
+  assert.equal(gravacoes[0]!.estado, 'cancelada');
+  assert.match(String(gravacoes[0]!.pausaMotivo), /nenhuma pessoa elegível/);
+  assert.deepEqual(criadas, []);
+
+  await montar(new Error('CRM caiu no meio'));
+  assert.equal(gravacoes[0]!.estado, 'cancelada');
+  assert.match(String(gravacoes[0]!.pausaMotivo), /montagem falhou.*CRM caiu/);
+
+  await montar(3, 'cancelada');
+  assert.deepEqual([gravacoes.length, criadas.length], [0, 0], 'onda cancelada durante a montagem nunca volta a ser aprovável');
+  await montar(3, 'montando', 'kommo');
+  assert.deepEqual([gravacoes.length, criadas.length], [0, 0], 'onda do Kommo não é montada por aqui');
+});
