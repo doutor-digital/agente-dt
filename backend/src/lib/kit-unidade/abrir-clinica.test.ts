@@ -71,6 +71,10 @@ echo "SSH $*" >> "${log}"
 # com -t (terminal) o ssh de verdade não lê o stdin do script; sem -t (tar / questionário) ele recebe o conteúdo
 case " $* " in *" -t "*) ;; *) cat > /dev/null;; esac
 case "$*" in *'echo "conectou'*) echo "conectou em vps-de-mentira";; esac
+case "$*" in *do-formulario-joao.sh*)
+  echo "Clínica: Doutor Hérnia Serra (Serra/ES)"
+  [ "\${FAKE_VALIDO:-sim}" = "nao" ] && echo "  PENDENTE whatsapp.waba_id: falta"
+  echo "KIT_RESUMO slug=\${FAKE_SLUG:-doutor-hernia-serra} subdominio=drherniaserra sufixo=SERRA modo=real valido=\${FAKE_VALIDO:-sim}";; esac
 if [ -n "\${FALHAR_EM:-}" ] && [[ "$*" == *"$FALHAR_EM"* ]]; then echo "erro de mentira" >&2; exit "\${FALHAR_CODIGO:-3}"; fi
 exit 0
 `,
@@ -362,4 +366,74 @@ test('nova-unidade --aplicar com etapa RECUSADA/BLOQUEADA (sai ≠ 0): PARA, nã
   const passos = scriptsDoKit(e.chamadas());
   assert.equal(passos[passos.length - 1], "nova-unidade 'clinica-demonstracao' --aplicar");
   assert.ok(!passos.some((p) => p.startsWith('regra-traefik \'demo\'') && !p.includes('--so-conferir') || p.startsWith('cofre-para-servico')));
+// ── --do-formulario: o questionário nasce na VPS, a partir do formulário do franqueado ──
+
+const CAMINHO_FORM = [
+  "do-formulario 'abc123def'",
+  'criar-platform-app --so-conferir',
+  "nova-unidade 'doutor-hernia-serra' --so-conferir",
+  "regra-traefik 'drherniaserra' --so-conferir",
+  "nova-unidade 'doutor-hernia-serra'",
+  'criar-platform-app',
+  "nova-unidade 'doutor-hernia-serra' --aplicar",
+  "cofre-para-servico 'SERRA' --so-conferir",
+  "regra-traefik 'drherniaserra'",
+  "cofre-para-servico 'SERRA'",
+];
+
+test('--do-formulario: gera o questionário na VPS (sem arquivo local, sem enviar questionário), pega subdomínio/sufixo do resumo e segue o caminho de sempre', () => {
+  const e = ambiente();
+  const r = e.rodar(['doutor-hernia-serra', '--do-formulario', 'abc123def'], { entrada: 'aplicar\n' });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const c = e.chamadas();
+  assert.deepEqual(scriptsDoKit(c), CAMINHO_FORM);
+  assert.ok(!c.some((l) => l.includes('.yaml.chegando')), 'nenhum questionário sai desta máquina');
+  const iTar = c.findIndex((l) => l.includes('tar -x'));
+  assert.ok(iTar >= 0 && iTar < c.findIndex((l) => l.includes('do-formulario-joao.sh')), 'o kit (com o importador) vai antes de gerar');
+  assert.match(r.stdout, /clínica: doutor-hernia-serra · clínica de verdade · subdomínio drherniaserra\.doutordigitalconsultoria\.com · sufixo das chaves SERRA/);
+  assert.match(r.stdout, /NÚMERO: conectar o número oficial/);
+});
+
+test('--do-formulario: se ainda FALTA dado (pendências), para antes de qualquer conferência do CRM e diz o comando para completar', () => {
+  const e = ambiente();
+  const r = e.rodar(['doutor-hernia-serra', '--do-formulario', 'abc123def'], { entrada: 'aplicar\n', env: { FAKE_VALIDO: 'nao' } });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stdout, /PENDENTE whatsapp\.waba_id/);
+  assert.match(r.stdout, /AINDA FALTA dado/);
+  assert.match(r.stdout, /--set whatsapp\.waba_id=<id> --set whatsapp\.kapso_phone_number_id=<id> --refazer/);
+  assert.deepEqual(scriptsDoKit(e.chamadas()), ["do-formulario 'abc123def'"]);
+});
+
+test('--do-formulario com --set e --refazer repassa à VPS (com --sobrescrever); sem --refazer não sobrescreve', () => {
+  const e = ambiente();
+  const r = e.rodar(['doutor-hernia-serra', '--do-formulario', 'abc123def', '--set', 'whatsapp.waba_id=123', '--set', 'sufixo=SERRA', '--refazer'], { entrada: 'aplicar\n' });
+  assert.equal(r.status, 0, r.stdout);
+  const l = e.chamadas().find((x) => x.includes('do-formulario-joao.sh') && !x.includes('--so-conferir'))!;
+  assert.match(l, /do-formulario-joao\.sh 'abc123def' --set whatsapp\.waba_id=123 --set sufixo=SERRA --sobrescrever/);
+  e.limparLog();
+  e.rodar(['doutor-hernia-serra', '--do-formulario', 'abc123def'], { entrada: 'n\n' });
+  assert.ok(!e.chamadas().some((x) => x.includes('--sobrescrever')));
+});
+
+test('--do-formulario: slug pedido diferente do gerado para; --set sem formulário e ref estranha são recusados antes de tudo', () => {
+  const e = ambiente();
+  const r = e.rodar(['outra-clinica', '--do-formulario', 'abc123def'], { entrada: 'aplicar\n', env: { FAKE_SLUG: 'doutor-hernia-serra' } });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stdout, /gerou o slug «doutor-hernia-serra», mas você pediu «outra-clinica»/);
+  assert.deepEqual(scriptsDoKit(e.chamadas()), ["do-formulario 'abc123def'"]);
+  e.limparLog();
+  for (const args of [['clinica-demonstracao', '--set', 'sufixo=X'], ['clinica-demonstracao', '--refazer'], ['x-y', '--do-formulario', 'a b'], ['x-y', '--do-formulario'], ['x-y', '--do-formulario', 'abc', '--set', 'sufixo=A;rm']]) {
+    assert.notEqual(e.rodar(args).status, 0, args.join(' '));
+  }
+  assert.deepEqual(e.chamadas(), []);
+});
+
+test('--do-formulario --so-conferir: só lê o formulário na VPS (importador em modo conferir) e não envia nem aplica nada', () => {
+  const e = ambiente();
+  const r = e.rodar(['doutor-hernia-serra', '--do-formulario', 'abc123def', '--so-conferir']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /SÓ CONFERIR: nada foi enviado nem mudado/);
+  const c = e.chamadas();
+  assert.ok(!c.some((l) => l.includes('tar -x') || l.includes('--aplicar')));
+  assert.deepEqual(scriptsDoKit(c), ["do-formulario 'abc123def' --so-conferir"]);
 });

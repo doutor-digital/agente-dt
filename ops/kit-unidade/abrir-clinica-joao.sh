@@ -5,10 +5,14 @@
 #
 #   bash ops/kit-unidade/abrir-clinica-joao.sh <slug> --so-conferir   # só olha: não envia nada nem muda nada na VPS (localmente só atualiza o `git fetch`)
 #   bash ops/kit-unidade/abrir-clinica-joao.sh <slug>                 # o caminho todo (pergunta UMA vez «aplicar?» depois de mostrar o plano)
+#   bash ops/kit-unidade/abrir-clinica-joao.sh <slug> --do-formulario <id|código|slug> [--set caminho=valor]... [--refazer]
+#        # o franqueado já preencheu o formulário (https://agente.../nova-clinica/<codigo>): o questionário é GERADO na VPS a partir dele (modo 600), sem arquivo
+#        # local. O que ele não soube dizer (ids do Kapso e do WhatsApp Business…) você completa com --set; --refazer regera o arquivo (o antigo fica guardado ao lado).
 #
 # O QUE FAZ, NESTA ORDEM (cada passo para o comando inteiro se falhar, dizendo o que fazer):
 #   1  confere esta máquina (chave ssh, repositório, questionário da clínica) e que a VPS responde
-#   2  leva o kit para /root/kit na VPS (levar-kit-para-vps.sh; clínica real: leva também o questionário privado, modo 600)
+#   2  leva o kit para /root/kit na VPS (levar-kit-para-vps.sh; clínica real: leva também o questionário privado, modo 600;
+#      com --do-formulario: gera o questionário na VPS a partir do formulário e PARA se ainda faltar dado — lista o que falta)
 #   3  conferências na VPS (criar-platform-app-joao.sh, nova-unidade-joao.sh e regra-traefik-joao.sh, cada um com --so-conferir)
 #   4  plano em SECO (nada é gravado)
 #   5  pergunta «aplicar?» — a ÚNICA pergunta deste comando
@@ -36,14 +40,22 @@ AQUI="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 SLUG=""
 SO_CONFERIR=0
-for a in "$@"; do
-  case "$a" in
+FORM_REF=""
+REFAZER=0
+SETS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
     --so-conferir) SO_CONFERIR=1 ;;
-    -*) echo "argumento desconhecido: $a (use só <slug> e --so-conferir)"; exit 2 ;;
-    *) if [ -z "$SLUG" ]; then SLUG="$a"; else echo "mais de um slug: $SLUG e $a"; exit 2; fi ;;
+    --refazer) REFAZER=1 ;;
+    --do-formulario) shift; FORM_REF="${1:-}"; [[ "$FORM_REF" =~ ^[A-Za-z0-9_-]{3,60}$ ]] || { echo "--do-formulario precisa do id, do código ou do slug do formulário"; exit 2; } ;;
+    --set) shift; [[ "${1:-}" =~ ^[a-z_]+(\.[a-z_]+)?=[A-Za-z0-9_.+-]+$ ]] || { echo "--set precisa ser caminho=valor, sem espaço (ex.: --set whatsapp.waba_id=123)"; exit 2; }; SETS+=("$1") ;;
+    -*) echo "argumento desconhecido: $1 (use <slug>, --so-conferir, --do-formulario <ref>, --set k=v, --refazer)"; exit 2 ;;
+    *) if [ -z "$SLUG" ]; then SLUG="$1"; else echo "mais de um slug: $SLUG e $1"; exit 2; fi ;;
   esac
+  shift
 done
-[ -n "$SLUG" ] || { echo "uso: bash ops/kit-unidade/abrir-clinica-joao.sh <slug> [--so-conferir]   (ex.: clinica-demonstracao)"; exit 2; }
+[ -z "$FORM_REF" ] && { [ "${#SETS[@]}" -gt 0 ] || [ "$REFAZER" = "1" ]; } && { echo "--set e --refazer só valem com --do-formulario"; exit 2; }
+[ -n "$SLUG" ] || { echo "uso: bash ops/kit-unidade/abrir-clinica-joao.sh <slug> [--so-conferir] [--do-formulario <ref> [--set k=v]... [--refazer]]   (ex.: clinica-demonstracao)"; exit 2; }
 [[ "$SLUG" =~ ^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$ ]] || { echo "slug inválido: $SLUG (minúsculas, dígitos e hífen)"; exit 2; }
 [[ "$DESTINO" =~ ^/[A-Za-z0-9._/-]+$ ]] || { echo "DESTINO inválido: $DESTINO"; exit 2; }
 [[ "$VPS" =~ ^[A-Za-z0-9._@-]+$ ]] || { echo "VPS inválida: $VPS"; exit 2; }
@@ -96,42 +108,51 @@ if ! git diff --quiet origin/main -- ops/kit-unidade; then
   echo "AVISO: ops/kit-unidade aqui difere de origin/main. A VPS recebe a versão de origin/main (é o que o levar-kit-para-vps.sh manda), não esta."
 fi
 
-PUBLICO="ops/kit-unidade/unidades/$SLUG.yaml"
-PRIVADO="$PRIVADO_DIR/$SLUG.yaml"
-if [ -f "$PUBLICO" ] && [ -f "$PRIVADO" ]; then
-  echo "o slug $SLUG existe nos DOIS lugares — não sei qual vale:"; echo "  $PUBLICO"; echo "  $PRIVADO"
-  AJUDA="apague um deles (a clínica real fica só no privado)."; false
-fi
-if [ -f "$PUBLICO" ]; then
-  REAL=0
-  # o que vale é o que a VPS RECEBE (origin/main), não o arquivo desta pasta: subdomínio e sufixo saem de lá
-  git cat-file -e "origin/main:$PUBLICO" 2>/dev/null || { echo "o questionário $PUBLICO não está em origin/main, então a VPS não o receberia."; AJUDA="mescle o PR que o traz (ou grave a clínica real no privado)."; false; }
-  TEXTO="$(git show "origin/main:$PUBLICO")"
-elif [ -f "$PRIVADO" ]; then
-  REAL=1
-  TEXTO="$(cat "$PRIVADO")"
-else
-  echo "não achei o questionário de $SLUG em $PUBLICO nem em $PRIVADO."
-  AJUDA="gere com a skill /nova-unidade (ou com o formulário do franqueado) e rode de novo."; false
-fi
-# só estas 3 coisas saem do questionário (nenhuma é dado pessoal); o resto nunca é lido nem impresso
-campo() { # secao chave -> valor sem comentário, aspas e espaços
-  awk -v sec="$1" -v key="$2" '
-    /^[A-Za-z0-9_-]+:/ { s=$1; sub(/:.*/, "", s); atual=s; next }
-    atual==sec { l=$0; sub(/^[ \t]+/, "", l); if (index(l, key ":")==1) { v=substr(l, length(key)+2); sub(/[ \t]+#.*$/, "", v); gsub(/^[ \t"]+|[ \t"]+$/, "", v); print v; exit } }' <<<"$TEXTO"
+SUB=""; SUF=""; MODO=""; TIPO="clínica de verdade"; REAL=1
+mostrar_clinica() {
+  echo "clínica: $SLUG · $TIPO · subdomínio $SUB.doutordigitalconsultoria.com · sufixo das chaves $SUF"
 }
-SUB="$(campo chatwoot subdominio)"
-TOKEN_META="$(campo meta token_env)"
-MODO="$(campo whatsapp modo)"
-SLUG_DO_ARQUIVO="$(campo unidade slug)"
-[ "$SLUG_DO_ARQUIVO" = "$SLUG" ] || { echo "o questionário diz que o slug é «$SLUG_DO_ARQUIVO», mas você pediu «$SLUG»."; AJUDA="use o slug do próprio arquivo, ou corrija unidade.slug."; false; }
-case "$MODO" in ""|real|demonstracao) ;; *) echo "whatsapp.modo inválido («$MODO»): é real ou demonstracao."; AJUDA="corrija whatsapp.modo no questionário."; false ;; esac
-[[ "$SUB" =~ ^[a-z0-9]{3,40}$ ]] || { echo "subdomínio do questionário inválido ou ausente («$SUB»): minúsculas e dígitos, 3 a 40."; AJUDA="corrija chatwoot.subdominio no questionário."; false; }
-[[ "$TOKEN_META" =~ ^META_ADS_TOKEN_[A-Z0-9_]+$ ]] || { echo "meta.token_env inválido ou ausente («$TOKEN_META»): precisa ser META_ADS_TOKEN_<SUFIXO>."; AJUDA="corrija meta.token_env no questionário."; false; }
-SUF="${TOKEN_META#META_ADS_TOKEN_}"
-[ "$MODO" = "demonstracao" ] && TIPO="demonstração" || TIPO="clínica de verdade"
-echo "clínica: $SLUG · $TIPO · subdomínio $SUB.doutordigitalconsultoria.com · sufixo das chaves $SUF"
-if [ "$REAL" = "1" ]; then echo "questionário: privado (modo 600, vai direto para a VPS; não passa pelo GitHub)"; else echo "questionário: ops/kit-unidade/unidades/$SLUG.yaml (versionado, sem dado de verdade)"; fi
+if [ -n "$FORM_REF" ]; then
+  echo "questionário: será GERADO na VPS a partir do formulário $FORM_REF (privado, modo 600; não passa pelo GitHub nem por esta máquina)"
+else
+  PUBLICO="ops/kit-unidade/unidades/$SLUG.yaml"
+  PRIVADO="$PRIVADO_DIR/$SLUG.yaml"
+  if [ -f "$PUBLICO" ] && [ -f "$PRIVADO" ]; then
+    echo "o slug $SLUG existe nos DOIS lugares — não sei qual vale:"; echo "  $PUBLICO"; echo "  $PRIVADO"
+    AJUDA="apague um deles (a clínica real fica só no privado)."; false
+  fi
+  if [ -f "$PUBLICO" ]; then
+    REAL=0
+    # o que vale é o que a VPS RECEBE (origin/main), não o arquivo desta pasta: subdomínio e sufixo saem de lá
+    git cat-file -e "origin/main:$PUBLICO" 2>/dev/null || { echo "o questionário $PUBLICO não está em origin/main, então a VPS não o receberia."; AJUDA="mescle o PR que o traz (ou grave a clínica real no privado)."; false; }
+    TEXTO="$(git show "origin/main:$PUBLICO")"
+  elif [ -f "$PRIVADO" ]; then
+    REAL=1
+    TEXTO="$(cat "$PRIVADO")"
+  else
+    echo "não achei o questionário de $SLUG em $PUBLICO nem em $PRIVADO."
+    AJUDA="gere com a skill /nova-unidade (ou com o formulário do franqueado) e rode de novo."; false
+  fi
+  # só estas 3 coisas saem do questionário (nenhuma é dado pessoal); o resto nunca é lido nem impresso
+  campo() { # secao chave -> valor sem comentário, aspas e espaços
+    awk -v sec="$1" -v key="$2" '
+      /^[A-Za-z0-9_-]+:/ { s=$1; sub(/:.*/, "", s); atual=s; next }
+      atual==sec { l=$0; sub(/^[ \t]+/, "", l); if (index(l, key ":")==1) { v=substr(l, length(key)+2); sub(/[ \t]+#.*$/, "", v); gsub(/^[ \t"]+|[ \t"]+$/, "", v); print v; exit } }' <<<"$TEXTO"
+  }
+  SUB="$(campo chatwoot subdominio)"
+  TOKEN_META="$(campo meta token_env)"
+  MODO="$(campo whatsapp modo)"
+  SLUG_DO_ARQUIVO="$(campo unidade slug)"
+  [ "$SLUG_DO_ARQUIVO" = "$SLUG" ] || { echo "o questionário diz que o slug é «$SLUG_DO_ARQUIVO», mas você pediu «$SLUG»."; AJUDA="use o slug do próprio arquivo, ou corrija unidade.slug."; false; }
+  case "$MODO" in ""|real|demonstracao) ;; *) echo "whatsapp.modo inválido («$MODO»): é real ou demonstracao."; AJUDA="corrija whatsapp.modo no questionário."; false ;; esac
+  [[ "$SUB" =~ ^[a-z0-9]{3,40}$ ]] || { echo "subdomínio do questionário inválido ou ausente («$SUB»): minúsculas e dígitos, 3 a 40."; AJUDA="corrija chatwoot.subdominio no questionário."; false; }
+  [[ "$TOKEN_META" =~ ^META_ADS_TOKEN_[A-Z0-9_]+$ ]] || { echo "meta.token_env inválido ou ausente («$TOKEN_META»): precisa ser META_ADS_TOKEN_<SUFIXO>."; AJUDA="corrija meta.token_env no questionário."; false; }
+  SUF="${TOKEN_META#META_ADS_TOKEN_}"
+  [ "$MODO" = "demonstracao" ] && TIPO="demonstração" || TIPO="clínica de verdade"
+  mostrar_clinica
+  if [ "$REAL" = "1" ]; then echo "questionário: privado (modo 600, vai direto para a VPS; não passa pelo GitHub)"; else echo "questionário: ops/kit-unidade/unidades/$SLUG.yaml (versionado, sem dado de verdade)"; fi
+
+fi
 
 # uma conexão ssh só para a rodada inteira (a pasta do soquete é 700 e some no fim)
 CM_DIR="$(mktemp -d)"; chmod 700 "$CM_DIR"
@@ -152,7 +173,21 @@ passo "1b. a VPS responde?" "confira a internet e a chave (ssh -i $CHAVE $VPS). 
 if [ "$SO_CONFERIR" = "1" ]; then
   passo "2. o que seria enviado" "rode git fetch origin e tente de novo."
   levar --so-conferir
-  [ "$REAL" = "1" ] && levar --questionario "$SLUG" --so-conferir
+  if [ -z "$FORM_REF" ] && [ "$REAL" = "1" ]; then levar --questionario "$SLUG" --so-conferir; fi
+  if [ -n "$FORM_REF" ]; then
+    passo "3. o formulário $FORM_REF (só leitura)" "o kit precisa estar na VPS com o importador do formulário: rode sem --so-conferir para levar o kit."
+    sets_remotos=""
+    for x in ${SETS[@]+"${SETS[@]}"}; do sets_remotos+=" --set $x"; done
+    if "${SSH[@]}" "$VPS" "test -s '$DESTINO/ops/kit-unidade/do-formulario-joao.sh'" </dev/null; then
+      remoto "bash ops/kit-unidade/do-formulario-joao.sh '$FORM_REF' --so-conferir$sets_remotos"
+    else
+      echo "  o importador ainda não está na VPS: rodando SEM --so-conferir o kit é levado e o formulário é lido."
+    fi
+    echo
+    echo "SÓ CONFERIR: nada foi enviado nem mudado. Para abrir a clínica:  bash ops/kit-unidade/abrir-clinica-joao.sh $SLUG --do-formulario $FORM_REF"
+    trap - ERR INT TERM
+    exit 0
+  fi
   passo "3. como a VPS está agora (só leitura)" "confira a conexão ssh."
   # só `test -s`: nenhum arquivo de segredo é lido, só se existe e não está vazio
   sondar() { # 0 = sim, 1 = não; qualquer outro código (255 = ssh caiu) PARA: não é «não», é «não sei»
@@ -173,7 +208,30 @@ fi
 # ── 2. leva o kit ───────────────────────────────────────────────────────────────────────────────────────
 passo "2. levar o kit para a VPS" "rode: bash ops/kit-unidade/levar-kit-para-vps.sh --so-conferir (e veja a mensagem de erro dele)."
 levar
-if [ "$REAL" = "1" ]; then
+if [ -n "$FORM_REF" ]; then
+  passo "2b. gerar o questionário a partir do formulário $FORM_REF" "leia a mensagem acima. Se o formulário não foi achado, confira o id (bash ops/kit-unidade/convite-clinica-joao.sh --listar)."
+  sets_remotos=""
+  for x in ${SETS[@]+"${SETS[@]}"}; do sets_remotos+=" --set $x"; done
+  [ "$REFAZER" = "1" ] && sets_remotos+=" --sobrescrever"
+  AJUDA="se disser que já existe um questionário DIFERENTE, é porque você completou com --set antes: rode de novo com --refazer (o antigo fica guardado ao lado)."
+  # a saída (sem dado pessoal) também vai para um arquivo da pasta 700, para eu achar a linha KIT_RESUMO
+  remoto "bash ops/kit-unidade/do-formulario-joao.sh '$FORM_REF'$sets_remotos" | tee "$CM_DIR/saida-formulario"
+  RESUMO="$(tr -d '\r' < "$CM_DIR/saida-formulario" | sed -n 's/^KIT_RESUMO //p' | tail -1)"
+  [ -n "$RESUMO" ] || { AJUDA="o importador não devolveu o resumo: leia a mensagem acima."; false; }
+  r_campo() { printf '%s\n' "$RESUMO" | tr ' ' '\n' | sed -n "s/^$1=//p" | head -1; }
+  SLUG_GERADO="$(r_campo slug)"; SUB="$(r_campo subdominio)"; SUF="$(r_campo sufixo)"; MODO="$(r_campo modo)"; VALIDO="$(r_campo valido)"
+  [ "$SLUG_GERADO" = "$SLUG" ] || { echo "o formulário gerou o slug «$SLUG_GERADO», mas você pediu «$SLUG»."; AJUDA="rode com o slug certo, ou force o nome com --set unidade.slug=$SLUG --refazer."; false; }
+  [[ "$SUB" =~ ^[a-z0-9]{3,40}$ ]] && [[ "$SUF" =~ ^[A-Z0-9_]{2,40}$ ]] && [[ "$MODO" =~ ^(real|demonstracao)$ ]] || { AJUDA="resumo do importador inválido: leia a mensagem acima."; false; }
+  if [ "$VALIDO" != "sim" ]; then
+    echo
+    echo "O questionário foi gerado, mas AINDA FALTA dado (lista acima, linhas PENDENTE). Nada foi aplicado."
+    AJUDA="complete com --set e rode de novo, por exemplo:  bash ops/kit-unidade/abrir-clinica-joao.sh $SLUG --do-formulario $FORM_REF --set whatsapp.waba_id=<id> --set whatsapp.kapso_phone_number_id=<id> --refazer"
+    false
+  fi
+  [ "$MODO" = "demonstracao" ] && TIPO="demonstração" || TIPO="clínica de verdade"
+  mostrar_clinica
+fi
+if [ -z "$FORM_REF" ] && [ "$REAL" = "1" ]; then
   passo "2b. levar o questionário privado (modo 600)" "o questionário precisa estar em $PRIVADO, pasta 700 e arquivo 600 (chmod 700 pasta; chmod 600 arquivo)."
   levar --questionario "$SLUG"
 fi

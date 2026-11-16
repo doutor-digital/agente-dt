@@ -15,7 +15,7 @@ import { logger } from '../lib/logger.js';
 import { criarLimitador, ipDoCliente, type Limitador } from '../lib/limite-taxa.js';
 import { conviteAberto, registrarEnvio, type BancoConvites } from '../lib/kit-unidade/convites.js';
 import { bancoConvitesPrisma } from '../lib/kit-unidade/convites-prisma.js';
-import { validarFormulario } from '../lib/kit-unidade/formulario.js';
+import { sugestoesDoKit, validarFormulario } from '../lib/kit-unidade/formulario.js';
 import { paginaDoFormulario, paginaLinkInvalido, paginaMuitasTentativas } from '../lib/kit-unidade/formulario-pagina.js';
 
 export const LIMITE_DO_CORPO = '64kb';
@@ -132,7 +132,7 @@ export function criarManipuladores(deps: DepsNovaClinica = padrao()) {
     logger.info({ convite: gravado.id }, 'nova-clinica: formulário recebido');
     const umaLinha = (t: string) => t.replace(/\s+/g, ' ').trim().slice(0, 80);
     void deps
-      .avisar(`📝 Formulário de nova clínica recebido: ${umaLinha(r.clinica.nome)} (${umaLinha(r.clinica.cidade)}/${r.clinica.uf}). Código do formulário: ${gravado.id}.`, `nova-clinica:${gravado.id}`)
+      .avisar(`📝 Formulário de nova clínica recebido: ${umaLinha(r.clinica.nome)} (${umaLinha(r.clinica.cidade)}/${r.clinica.uf}). Para abrir a clínica (do seu computador): bash ops/kit-unidade/abrir-clinica-joao.sh ${sugestoesDoKit(r.clinica.cidade).slug} --do-formulario ${gravado.id}`, `nova-clinica:${gravado.id}`)
       .catch((err) => logger.warn({ err: String(err) }, 'nova-clinica: aviso ao João falhou (o formulário está gravado)'));
     cabecalhos(res);
     res.json({ ok: true, referencia: gravado.id.slice(-6).toLowerCase() });

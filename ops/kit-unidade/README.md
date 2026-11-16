@@ -47,6 +47,17 @@ A página fala em linguagem de dono de clínica, nunca pede token nem senha, e m
 as respostas ficam na tabela `nova_clinica_convite` do banco do agente e você recebe um aviso no WhatsApp (só nome da clínica, cidade e quem preencheu — nunca e-mail, telefone ou Pix).
 Código errado, vencido, usado ou revogado dão a mesma resposta; há limite de tentativas por IP e o corpo é limitado a 64 KB.
 
+Quando o dono envia, você recebe o aviso no WhatsApp com o comando pronto. Para abrir a clínica **a partir do formulário** (do seu computador, sem arquivo de questionário):
+
+    bash ops/kit-unidade/abrir-clinica-joao.sh <slug> --do-formulario <id|código|slug> --so-conferir   # só lê o formulário na VPS e mostra o que falta
+    bash ops/kit-unidade/abrir-clinica-joao.sh <slug> --do-formulario <id>                           # leva o kit, GERA o questionário privado na VPS (modo 600) e segue o caminho de sempre
+
+O que o dono não soube dizer (ids do Kapso e do WhatsApp Business; às vezes o código da franquia e a conta de anúncios) aparece como `PENDENTE` e o comando PARA ali; complete sem editar YAML:
+`… --do-formulario <id> --set whatsapp.waba_id=<id> --set whatsapp.kapso_phone_number_id=<id> --refazer` (`--set` aceita só: unidade.slug, chatwoot.subdominio, whatsapp.prefixo_modelos, whatsapp.numero_oficial,
+whatsapp.kapso_phone_number_id, whatsapp.waba_id, franquia.id_company, meta.ad_account, meta.business_manager_id, sufixo — nunca segredo). Subdomínio, sufixo e nomes das variáveis o kit sugere pelo nome da cidade
+(`doutor-hernia-<cidade>` / `drhernia<cidade>` / `<CIDADE>`) e recusa se já forem de outra unidade. O questionário gerado fica em `unidades/privado/<slug>.yaml` na VPS e, se você refizer, o anterior fica guardado ao lado (nada é apagado).
+Conteúdo (e-mails, Pix, telefone) nunca é impresso. Direto na VPS: `bash ops/kit-unidade/do-formulario-joao.sh <ref> [--so-conferir] [--set k=v]... [--sobrescrever]`.
+
 ## Roteiro do João passo a passo (NA VPS, como root, de `/root/kit`, com `bash arquivo` no seu terminal)
 0. `cd /root/kit`
 1. Uma vez: `bash ops/kit-unidade/criar-platform-app-joao.sh --so-conferir`, depois sem a flag. Cria o Platform App (token em arquivo 600). **Não** dá ao app permissão sobre

@@ -83,7 +83,7 @@ test('envio válido: 200 «recebido», grava, avisa o João SEM dado pessoal, e 
   assert.ok(s.banco.linhas[0]!.id.endsWith(j.referencia), 'a referência é o fim do id do formulário (o que o João usa no kit)');
   assert.equal(s.banco.linhas[0]!.respostas?.clinica.nome, 'Doutor Hérnia Serra');
   assert.equal(s.avisos.length, 1);
-  assert.match(s.avisos[0]!, /Doutor Hérnia Serra \(Serra\/ES\)\. Código do formulário/);
+  assert.match(s.avisos[0]!, /Doutor Hérnia Serra \(Serra\/ES\)\. Para abrir a clínica \(do seu computador\): bash ops\/kit-unidade\/abrir-clinica-joao\.sh doutor-hernia-serra --do-formulario /);
   assert.ok(s.avisos[0]!.includes(s.banco.linhas[0]!.id));
   // nenhum dado pessoal no aviso
   for (const pii of ['clinica.example', 'celular@', '99999', '3333-4444', 'pix-teste', 'Clínica Teste Ltda', '350', '+55', 'Ana Teste', 'Gerente Teste']) assert.ok(!s.avisos[0]!.includes(pii), `vazou no aviso: ${pii}`);

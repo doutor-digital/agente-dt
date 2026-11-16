@@ -14,6 +14,12 @@ Você monta a **clínica nova no CRM** (uma conta própria no Chatwoot por clín
 - **Não invente dado de clínica.** Endereço, link do mapa, preços e horários viram frase dita ao paciente e texto de modelo aprovado na Meta. Pergunte; se a pessoa não sabe, anote como pendência (não preencha "de exemplo" numa clínica real).
 - Demonstração: `whatsapp.modo: demonstracao` (sem número, sem WABA; modelos da Meta em seco; caixa do tipo API) e e-mails `@example.com`. A «Clínica Demonstração» já existe em `ops/kit-unidade/unidades/clinica-demonstracao.yaml` (slug `clinica-demonstracao`, subdomínio `demo`).
 
+## Antes de perguntar: «já veio pelo formulário?»
+Pergunte ao João (AskUserQuestion) se o dono da clínica **já preencheu o formulário** (`/nova-clinica/<código>`; o João recebe um aviso no WhatsApp com o id). Se sim, **não faça as perguntas abaixo**: o questionário é gerado
+na VPS a partir do formulário. Entregue o comando do João: `bash ops/kit-unidade/abrir-clinica-joao.sh <slug> --do-formulario <id> --so-conferir` e depois sem a flag; o que faltar (`PENDENTE`) ele completa com `--set … --refazer`.
+Se ainda não preencheu, ofereça criar o link: `bash ops/kit-unidade/convite-clinica-joao.sh --rotulo "<nome>"` (o link aparece uma vez; ele manda direto no WhatsApp do dono — nunca cole o link no chat). Só então, se o João preferir
+responder ele mesmo, siga as perguntas abaixo.
+
 ## Perguntas, nesta ordem (use AskUserQuestion; uma rodada por bloco)
 1. **Clínica de verdade ou demonstração?** (define `whatsapp.modo`; em demonstração pule a pergunta 8.)
 2. **Nome, cidade e UF** da clínica; você deriva o **slug** (`doutor-hernia-<cidade>` para a rede; kebab-case, confirme).
