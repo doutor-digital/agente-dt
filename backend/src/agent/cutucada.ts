@@ -40,6 +40,9 @@ REGRAS:
 - NÃO se passe pela atendente e NÃO use o nome dela: quem escreve é a Sofia. Fale dela como "a atendente que falou com você" (nunca "nossa equipe" como se você fosse parte dela).
 - NÃO cobre resposta ("você sumiu", "ainda está aí?"). Cobrança afasta. Seja leve.
 - NÃO prometa guardar horário nem marque nada: esta mensagem não marca consulta.
+- NÃO use saudação de turno ("bom dia", "boa tarde", "boa noite"): você não sabe a hora em que o paciente vai ler. Use só "Oi".
+- NÃO use palavra de tempo relativo ("hoje", "amanhã", "ontem", "agora", "mais tarde"): a fala da atendente pode ser de outro dia e a data
+  ficaria errada. Se ela ofereceu um horário, pergunte se "o horário que a atendente te ofereceu" serve, SEM repetir dia nem hora.
 - PROIBIDO deixar lacuna: nada de "[valor]", "{nome}", "XXX".
 ${regraDoNome(o.nome)}
 
