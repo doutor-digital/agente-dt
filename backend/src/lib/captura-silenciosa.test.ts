@@ -311,8 +311,8 @@ test('validar: a 1ª sugestão inválida de um campo não derruba a 2ª válida;
     CONVERSA,
   );
   assert.deepEqual(r.aceitas.map((a) => a.texto), ['Indicação']);
-  assert.equal(r.recusadas.length, 2);
-  assert.match(r.recusadas[1].motivo, /repetiu/);
+  assert.equal(r.recusadas.length, 1, 'só a opção inválida; o eco do valor aceito não vira ruído');
+  assert.match(r.recusadas[0].motivo, /opção inválida/);
 });
 
 test('validar: cidade e UF só valem ditas por inteiro ("Magé", "RJ"); «mage» dentro de «imagem» não vale', () => {
@@ -340,7 +340,7 @@ test('validar: campo que não foi pedido (Tipo de lead, Cidade escondida) é rec
     CONVERSA,
   );
   assert.equal(r.aceitas.length, 1);
-  assert.equal(r.recusadas.length, 3, 'Tipo de lead e Cidade não pedidos + a repetição da Origem, registrada');
+  assert.equal(r.recusadas.length, 2, 'Tipo de lead e Cidade não pedidos; a repetição idêntica da Origem é só eco');
 });
 
 test('validar: Qualificação e Observações dispensam a frase, mas Qualificação pede 2 falas do paciente', () => {
@@ -683,15 +683,76 @@ test('onde o preenche-campos está ligado, a Qualificação NÃO é pedida nem g
   assert.equal(livre.lotes.n, 1, 'os dois campos num PATCH só');
 });
 
-test('transcrição que falhou: a IA leu a conversa pela metade, então ela NÃO é marcada como lida', async () => {
+test('transcrição que falhou: a conversa está incompleta — a IA nem é chamada e nada é marcado como lido', async () => {
   const m = mundo({ resposta: JSON.stringify({ campos: [] }) });
   m.transcricoes.completa = false;
-  await lerCartaoEmSilencio(UNIT, 777, m.deps);
+  const r1 = await lerCartaoEmSilencio(UNIT, 777, m.deps);
+  assert.equal(r1.tipo, 'pulou');
+  assert.match(r1.tipo === 'pulou' ? r1.motivo : '', /sem transcrição/);
+  assert.equal(m.perguntas.length, 0, 'não paga a IA para ler a conversa pela metade');
   m.transcricoes.completa = true;
+  const r2 = await lerCartaoEmSilencio(UNIT, 777, m.deps);
+  assert.equal(r2.tipo, 'leu', 'a mesma conversa é lida agora, completa');
+  assert.equal(m.perguntas.length, 1);
+  assert.equal((await lerCartaoEmSilencio(UNIT, 777, m.deps)).tipo, 'pulou', 'completa, aí sim marca como lida');
+});
+
+test('um valor que o Kommo recusa derruba o lote, mas não os outros campos: cai para campo a campo', async () => {
+  const resposta = JSON.stringify({
+    campos: [
+      { campo: '✎ Queixa', valor: 'Dor forte na lombar há 3 meses', trecho: 'dor forte na lombar há 3 meses' },
+      { campo: '⚑ Origem', valor: 'Indicação', trecho: 'indicação de uma amiga' },
+    ],
+  });
+  const m = mundo({ resposta });
+  const original = m.deps.kommo(UNIT);
+  m.deps.kommo = () => ({
+    ...original,
+    gravarCamposDoLead: async (l: number, campos: Array<{ field_id: number; values: unknown }>) => {
+      if (campos.length > 1 || campos.some((c) => c.field_id === 5)) throw new Error('Kommo 400'); // o lote inteiro e o campo ruim (Origem, id 5) são recusados
+      return original.gravarCamposDoLead(l, campos as never);
+    },
+  });
   const r = await lerCartaoEmSilencio(UNIT, 777, m.deps);
-  assert.equal(r.tipo, 'leu', 'a mesma conversa é lida de novo, agora completa');
-  assert.equal(m.perguntas.length, 2);
-  assert.equal((await lerCartaoEmSilencio(UNIT, 777, m.deps)).tipo, 'pulou', 'completa, aí sim marca');
+  assert.equal(r.tipo === 'leu' ? r.gravou.map((g) => g.campo).join() : '', '✎ Queixa', 'a Queixa gravou sozinha');
+  assert.equal(r.tipo === 'leu' ? r.recusadas.some((x) => x.campo === '⚑ Origem' && /Kommo recusou/.test(x.motivo)) : false, true);
+  assert.deepEqual(m.escritas.map((e) => e.campo), [1]);
+});
+
+test('chamada à IA que LANÇA conta como IA fora do ar: arma o recuo da unidade', async () => {
+  const m = mundo();
+  m.deps.perguntar = async () => {
+    throw new Error('ECONNRESET');
+  };
+  const r1 = await lerCartaoEmSilencio(UNIT, 777, m.deps);
+  assert.match(r1.tipo === 'pulou' ? r1.motivo : '', /IA não respondeu/);
+  m.deps.falas = async () => ({ falas: CONVERSA, ultimaId: 'outra', audios: new Map<string, string>() });
+  const r2 = await lerCartaoEmSilencio(UNIT, 888, m.deps);
+  assert.match(r2.tipo === 'pulou' ? r2.motivo : '', /recuo/);
+});
+
+test('validar: o mesmo valor repetido pela IA é eco (não vira «pularia»); um valor DIFERENTE fica registrado', () => {
+  const cands = camposDaEtapaVazios({ regras: REGRAS, defs: DEFS, lead: lead() });
+  const igual = validarSugestoes(
+    [
+      { campo: '⚑ Origem', valor: 'Indicação', trecho: 'indicação de uma amiga' },
+      { campo: '⚑ Origem', valor: 'indicação', trecho: 'indicação de uma amiga' },
+    ],
+    cands,
+    CONVERSA,
+  );
+  assert.equal(igual.aceitas.length, 1);
+  assert.equal(igual.recusadas.length, 0);
+  const diferente = validarSugestoes(
+    [
+      { campo: '⚑ Origem', valor: 'Indicação', trecho: 'indicação de uma amiga' },
+      { campo: '⚑ Origem', valor: 'Instagram', trecho: 'indicação de uma amiga' },
+    ],
+    cands,
+    CONVERSA,
+  );
+  assert.equal(diferente.aceitas.length, 1);
+  assert.match(diferente.recusadas[0].motivo, /dois valores diferentes/);
 });
 
 test('o que o SECO leu não impede a primeira leitura de verdade quando a chave é ligada', async () => {

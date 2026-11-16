@@ -267,6 +267,10 @@ export function lerResposta(texto: string): SugestaoDaIa[] | null {
   }
 }
 
+const radical = (w: string) => w.slice(0, MIN_LETRAS_DA_PALAVRA_EM_COMUM);
+/** As palavras de 5+ letras do texto, sem acento e em minúsculas — a unidade de comparação de toda a prova por palavra. */
+const palavrasDaFala = (t: string) => normalizar(t).split(' ').filter((w) => w.length >= MIN_LETRAS_DA_PALAVRA_EM_COMUM);
+
 /**
  * Palavras que não carregam fato nenhum num resumo escrito pela IA: ligação ("sobre", "quando"), verbos de quem relata ("pediu", "enviou") e
  * quem fala ("paciente", "equipe"). Comparadas pelo radical de 5 letras, como todo o resto. Fora delas, toda palavra de 5+ letras de um
@@ -274,19 +278,16 @@ export function lerResposta(texto: string): SugestaoDaIa[] | null {
  */
 const SEM_CONTEUDO = new Set(
   [
-    'antes', 'depois', 'ainda', 'desde', 'entre', 'sobre', 'quando', 'porque', 'também', 'mesmo', 'mesma', 'muito', 'muita', 'muitas', 'muitos', 'cerca', 'apenas',
-    'assim', 'minha', 'minhas', 'nossa', 'nosso', 'outra', 'outro', 'outras', 'outros', 'todos', 'todas', 'sempre', 'nunca', 'agora', 'bastante', 'pouco', 'pouca',
-    'onde', 'qual', 'quais', 'seja', 'estar', 'estava', 'estou', 'estão', 'tenho', 'tinha', 'havia', 'fazer', 'feito', 'fazendo', 'podem', 'poder', 'podia',
-    'precisa', 'preciso', 'gostaria', 'queria', 'quero', 'querendo', 'quer', 'falar', 'falou', 'disse', 'dizer', 'conta', 'contou', 'relata', 'relatou', 'informa',
-    'informou', 'pediu', 'pedindo', 'pedido', 'pergunta', 'perguntou', 'perguntando', 'enviou', 'enviar', 'envia', 'mandou', 'mandar', 'busca', 'buscando',
-    'procura', 'procurando', 'solicita', 'solicitou', 'aguarda', 'aguardando', 'paciente', 'pessoa', 'cliente', 'equipe', 'atendente', 'clínica', 'atendimento',
-    'conversa', 'mensagem', 'contato', 'informação', 'informações', 'sendo', 'estão', 'diz', 'confirmou', 'confirma', 'menciona', 'mencionou', 'citou', 'cita',
-    'possui', 'possível', 'ficou', 'ficar', 'deseja', 'desejando', 'interesse', 'interessado', 'interessada', 'ainda',
-  ].map((w) => normalizar(w).slice(0, 5)),
+    'antes', 'depois', 'ainda', 'desde', 'entre', 'sobre', 'quando', 'porque', 'também', 'mesmo', 'mesma', 'muito', 'muita', 'muitas', 'muitos', 'cerca',
+    'apenas', 'assim', 'minha', 'minhas', 'nossa', 'nosso', 'outra', 'outro', 'outras', 'outros', 'todos', 'todas', 'sempre', 'nunca', 'agora', 'bastante',
+    'pouco', 'pouca', 'quais', 'estar', 'estava', 'estou', 'estão', 'tenho', 'tinha', 'havia', 'fazer', 'feito', 'fazendo', 'podem', 'poder', 'podia', 'precisa',
+    'preciso', 'gostaria', 'queria', 'quero', 'querendo', 'falar', 'falou', 'disse', 'dizer', 'contou', 'relata', 'relatou', 'informa', 'informou', 'pediu',
+    'pedindo', 'pedido', 'pergunta', 'perguntou', 'perguntando', 'enviou', 'enviar', 'envia', 'mandou', 'mandar', 'buscando', 'procura', 'procurando', 'solicita',
+    'solicitou', 'aguarda', 'aguardando', 'paciente', 'pessoa', 'cliente', 'equipe', 'atendente', 'clínica', 'atendimento', 'conversa', 'mensagem', 'contato',
+    'informação', 'informações', 'sendo', 'confirmou', 'confirma', 'menciona', 'mencionou', 'possui', 'possível', 'ficou', 'ficar', 'deseja', 'desejando',
+    'interesse', 'interessado', 'interessada',
+  ].map((w) => radical(normalizar(w))),
 );
-const radical = (w: string) => w.slice(0, MIN_LETRAS_DA_PALAVRA_EM_COMUM);
-const palavrasDaFala = (t: string) => normalizar(t).split(' ').filter((w) => w.length >= MIN_LETRAS_DA_PALAVRA_EM_COMUM);
-
 /** As palavras de conteúdo do valor que o paciente NÃO escreveu (vazio = tudo veio da fala dele). */
 export function palavrasForaDaFala(valor: string, textoDoPaciente: string): string[] {
   const ditas = new Set(palavrasDaFala(textoDoPaciente).map(radical));
@@ -299,7 +300,7 @@ export function aparecePorInteiro(valor: string, textoDoPaciente: string): boole
   return v.length > 0 && ` ${normalizar(textoDoPaciente)} `.includes(` ${v} `);
 }
 
-const palavrasDe = (t: string) => normalizar(t).split(' ').filter((w) => w.length >= MIN_LETRAS_DA_PALAVRA_EM_COMUM).map((w) => w.slice(0, MIN_LETRAS_DA_PALAVRA_EM_COMUM));
+const palavrasDe = (t: string) => palavrasDaFala(t).map(radical);
 function palavraEmComum(valor: string, trecho: string): boolean {
   const doTrecho = new Set(palavrasDe(trecho));
   return palavrasDe(valor).some((w) => doTrecho.has(w));
@@ -329,7 +330,7 @@ export function validarSugestoes(sugestoes: readonly SugestaoDaIa[], candidatos:
   const recusadas: Recusada[] = [];
   const doPaciente = falas.filter((f) => f.autor === 'paciente');
   const textoDoPaciente = normalizar(doPaciente.map((f) => f.texto).join(' \n '));
-  const vistos = new Set<number>();
+  const vistos = new Map<number, string>();
   for (const s of sugestoes) {
     const alvo = normalizar(s.campo);
     const c = candidatos.find((x) => normalizar(x.def.name) === alvo);
@@ -338,8 +339,10 @@ export function validarSugestoes(sugestoes: readonly SugestaoDaIa[], candidatos:
       continue;
     }
     const nome = c.def.name.trim();
-    if (vistos.has(c.def.id)) {
-      recusadas.push({ campo: nome, motivo: 'a IA repetiu o campo; valeu a primeira sugestão válida' });
+    const jaAceito = vistos.get(c.def.id);
+    if (jaAceito !== undefined) {
+      // o mesmo valor de novo é só eco; um valor DIFERENTE para um campo já aceito fica registrado (não some em silêncio)
+      if (normalizar(Array.isArray(s.valor) ? s.valor.join(' ') : String(s.valor)) !== jaAceito) recusadas.push({ campo: nome, motivo: 'a IA deu dois valores diferentes para o campo; valeu a primeira sugestão válida' });
       continue;
     }
     // lista sem nenhuma opção permitida: `coergirValor` aceitaria texto livre, e campo de lista não aceita
@@ -381,7 +384,7 @@ export function validarSugestoes(sugestoes: readonly SugestaoDaIa[], candidatos:
         continue;
       }
     }
-    vistos.add(c.def.id);
+    vistos.set(c.def.id, normalizar(Array.isArray(s.valor) ? s.valor.join(' ') : String(s.valor)));
     aceitas.push({ candidato: c, valor: co.valor, texto, trecho: trecho.slice(0, 140) });
   }
   return { aceitas, recusadas };
@@ -551,7 +554,13 @@ export async function lerCartaoEmSilencio(unit: Unit, leadId: number, deps: Deps
 
   // 6) a IA — agora sim os áudios viram texto
   conversaCompleta = await deps.transcrever(unit, falas, audios);
-  const r = await deps.perguntar(unit, montarPedido(candidatos, falas));
+  // áudio que não deu para transcrever é justamente o relato que a IA precisava: ler o resto e gravar com base nele seria palpite. Não chama a IA
+  // (nada gasto), não marca a conversa como lida: o próximo turno pulado tenta de novo.
+  if (!conversaCompleta) return { tipo: 'pulou', motivo: 'áudio do paciente sem transcrição: conversa incompleta, não li' };
+  const r = await deps.perguntar(unit, montarPedido(candidatos, falas)).catch((err) => {
+    logger.warn({ err: String(err), unit: unit.slug, leadId }, `${ID_CAPTURA_SILENCIOSA}: a chamada à IA lançou erro (conta como IA fora do ar)`);
+    return null;
+  });
   if (!r) {
     const falhas = (recuo?.falhas ?? 0) + 1;
     iaEmRecuo.set(unit.id, { falhas, ate: agora.getTime() + Math.min(RECUO_BASE_MS * 2 ** (falhas - 1), RECUO_MAX_MS) });
@@ -620,9 +629,19 @@ export async function lerCartaoEmSilencio(unit: Unit, leadId: number, deps: Deps
         logger.info({ unit: unit.slug, leadId, campo: nome }, `${ID_CAPTURA_SILENCIOSA}: campo gravado`);
       }
     } catch (err) {
-      falhouAoGravar = true;
-      for (const { a } of lote) recusadas.push({ campo: a.candidato.def.name.trim(), motivo: `o Kommo recusou a gravação: ${String(err).slice(0, 120)}` });
-      logger.warn({ err: String(err), unit: unit.slug, leadId, campos: lote.length }, `${ID_CAPTURA_SILENCIOSA}: falha ao gravar os campos`);
+      logger.warn({ err: String(err), unit: unit.slug, leadId, campos: lote.length }, `${ID_CAPTURA_SILENCIOSA}: o lote foi recusado — tento campo a campo`);
+      // um valor ruim derruba o PATCH inteiro (400): cada campo vai sozinho, para o ruim não bloquear os bons
+      for (const { a, field_id, values } of lote) {
+        const nome = a.candidato.def.name.trim();
+        try {
+          await kommo.gravarCamposDoLead(leadId, [{ field_id, values }]);
+          gravou.push({ campo: nome, valor: a.texto });
+          logger.info({ unit: unit.slug, leadId, campo: nome }, `${ID_CAPTURA_SILENCIOSA}: campo gravado`);
+        } catch (err2) {
+          falhouAoGravar = true;
+          recusadas.push({ campo: nome, motivo: `o Kommo recusou a gravação: ${String(err2).slice(0, 120)}` });
+        }
+      }
     }
   }
   // falha de gravação (Kommo fora do ar) não marca a conversa como lida: o próximo turno pulado tenta de novo
