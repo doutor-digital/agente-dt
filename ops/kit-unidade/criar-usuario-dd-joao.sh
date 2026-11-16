@@ -13,6 +13,7 @@
 set -euo pipefail
 umask 077
 EMAIL_NOVO="${EMAIL_NOVO:-doutordigitalconsultoria@gmail.com}"
+EMAIL_NOVO="${EMAIL_NOVO,,}"   # o Chatwoot guarda o e-mail em minúsculas
 NOME_NOVO="${NOME_NOVO:-João · Doutor Digital}"
 SO_CONFERIR=0
 for arg in "$@"; do
@@ -22,7 +23,7 @@ for arg in "$@"; do
   esac
 done
 [[ "$EMAIL_NOVO" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] || { echo "e-mail inválido: $EMAIL_NOVO"; exit 2; }
-SENHA_ARQ="/root/segredos/crm-${EMAIL_NOVO//[^A-Za-z0-9._-]/_}.senha"
+SENHA_ARQ="${SEGREDOS_DIR:-/root/segredos}/crm-${EMAIL_NOVO//[^A-Za-z0-9._-]/_}.senha"
 
 # O contêiner MAIS NOVO do chatwoot_rails (no rolling update `head -1` pegaria o antigo)
 C="$(docker ps --filter "name=chatwoot_rails" --format '{{.CreatedAt}}|{{.ID}}' | sort -r | head -1 | cut -d'|' -f2)"
@@ -75,7 +76,7 @@ if [ "$SO_CONFERIR" = 1 ]; then
   exit 0
 fi
 
-mkdir -p /root/segredos && chmod 700 /root/segredos
+mkdir -p "$(dirname "$SENHA_ARQ")" && chmod 700 "$(dirname "$SENHA_ARQ")"
 NOVA=0
 if [ ! -s "$SENHA_ARQ" ]; then
   # forte e dentro da regra do Chatwoot (maiúscula, minúscula, número e símbolo)
@@ -85,7 +86,9 @@ if [ ! -s "$SENHA_ARQ" ]; then
 fi
 SAIDA="$(EMAIL_NOVO="$EMAIL_NOVO" NOME_NOVO="$NOME_NOVO" SENHA_NOVA="$(head -1 "$SENHA_ARQ")" docker exec -e EMAIL_NOVO -e NOME_NOVO -e SENHA_NOVA "$C" bundle exec rails runner "$RUBY" 2>&1)" || {
   echo "ERRO no rails (nada impresso da senha):"; printf '%s\n' "$SAIDA" | grep -v "Dd9!" | tail -5
-  [ "$NOVA" = 1 ] && rm -f "$SENHA_ARQ"
+  printf '%s\n' "$SAIDA" | sed -n 's/^LINHA: /  /p'
+  # o arquivo da senha FICA: se o usuário chegou a ser criado, é a única cópia da senha dele; a próxima rodada reaproveita o arquivo
+  echo "O arquivo da senha foi mantido em $SENHA_ARQ (a próxima rodada usa o mesmo). Rode de novo depois de ver o erro acima."
   exit 1
 }
 printf '%s\n' "$SAIDA" | sed -n 's/^LINHA: /  /p'

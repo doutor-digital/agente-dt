@@ -42,6 +42,11 @@ Usuário da Doutor Digital no CRM (uma vez por pessoa, fora do roteiro da clíni
 forte em `/root/segredos/crm-<e-mail>.senha` (600, nunca impressa), e dá administrador em TODAS as contas. Usuário que já existe não tem a senha mexida.
 Rodar de novo depois de criar uma clínica nova também serve (dá administrador na conta nova).
 
+E-mail do CRM (uma vez para a instalação; sem ele convite e «esqueci a senha» não chegam): crie a senha de app no Google da Doutor Digital
+(https://myaccount.google.com/apppasswords) e, do SEU computador: `ssh -t -i ~/.ssh/doutordigital_vps root@89.116.214.130 'bash /root/kit/ops/kit-unidade/ligar-email-crm-joao.sh'`
+(primeiro com `--so-conferir`). A senha vai no prompt (não aparece), é testada no Gmail antes de gravar, vai para `/root/chatwoot.env` (cópia antes)
+e só o `chatwoot_sidekiq` reinicia (o CRM não sai do ar). Arquivo já com e-mail configurado → o script PARA.
+
 ## Atenção
 - **NÃO PUBLIQUE DEPLOY ENQUANTO O KIT RODA.** O kit roda dentro do contêiner `ddagent_agent`; os segredos gerados ficam em `/run/kit-segredos.<pid>` (uma pasta por rodada: duas rodadas ao mesmo tempo não se apagam) até o fim, e o token do
   usuário conector da clínica o Chatwoot entrega UMA vez só. Trocar o contêiner no meio perde o token (apague o usuário no Super Admin e rode de novo).
