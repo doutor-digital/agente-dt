@@ -13,7 +13,7 @@
 # DEPOIS, na VPS (como root):   cd /root/kit && bash ops/kit-unidade/criar-platform-app-joao.sh --so-conferir   (e os demais scripts, de /root/kit)
 # Os scripts descobrem as pastas pelo próprio endereço (dirname), então funcionam de /root/kit/ops/kit-unidade.
 #
-# Variáveis: VPS (padrão root@89.116.214.130), CHAVE_SSH (padrão ~/.ssh/doutordigital_vps), DESTINO (padrão /root/kit), REF (padrão origin/main).
+# Variáveis: VPS (padrão root@89.116.214.130), CHAVE_SSH (padrão ~/.ssh/doutordigital_vps), DESTINO (padrão /root/kit), REF (padrão origin/main), KIT_SSH_OPCOES (opções extras do ssh).
 # Nada de segredo passa por aqui: o kit são scripts, molde da Sofia e questionários.
 #
 # QUESTIONÁRIO DE CLÍNICA REAL (e-mail das atendentes, chave Pix, telefone = dado pessoal) NÃO passa pelo git: fica num caminho FIXO FORA do repositório, na SUA máquina:
@@ -28,6 +28,8 @@ CHAVE="${CHAVE_SSH:-$HOME/.ssh/doutordigital_vps}"
 DESTINO="${DESTINO:-/root/kit}"
 REF="${REF:-origin/main}"
 PRIVADO_DIR="${KIT_PRIVADO_DIR:-$HOME/Kommo-Integracao/_replicacao/kit-unidade/privado}"
+# opções extras do ssh (o abrir-clinica-joao.sh passa aqui a conexão compartilhada); sem espaço dentro de cada opção
+OPC=(); [ -z "${KIT_SSH_OPCOES:-}" ] || read -r -a OPC <<<"$KIT_SSH_OPCOES"
 SO_CONFERIR=0
 QUESTIONARIO=""
 # argumento desconhecido é RECUSADO (nada de enviar o que não era para enviar por causa de um erro de digitação)
@@ -76,7 +78,7 @@ if [ -n "$QUESTIONARIO" ]; then
   if [ "$SO_CONFERIR" = "1" ]; then echo "SÓ CONFERIR: nada foi enviado."; exit 0; fi
   [ -r "$CHAVE" ] || { echo "ERRO: não achei a chave ssh $CHAVE (CHAVE_SSH)."; exit 1; }
   P="$DESTINO/ops/kit-unidade/unidades/privado"
-  ssh -i "$CHAVE" "$VPS" "D='$DESTINO'; $RECUPERA
+  ssh -i "$CHAVE" ${OPC[@]+"${OPC[@]}"} "$VPS" "D='$DESTINO'; $RECUPERA
 set -e; umask 077; mkdir -p '$P'; chmod 700 '$P'; cat > '$P/$QUESTIONARIO.yaml.chegando'; chmod 600 '$P/$QUESTIONARIO.yaml.chegando'; mv '$P/$QUESTIONARIO.yaml.chegando' '$P/$QUESTIONARIO.yaml'" < "$ORIGEM"
   echo "PRONTO: $P/$QUESTIONARIO.yaml na VPS (modo 600)."
   echo "PRÓXIMO (na VPS, como root):  cd $DESTINO && bash ops/kit-unidade/nova-unidade-joao.sh $QUESTIONARIO --so-conferir"
@@ -107,8 +109,8 @@ rm -rf "$D/ops/kit-unidade"
 mv "$T/ops/kit-unidade" "$D/ops/kit-unidade"
 rm -rf "$T"
 EOS
-git archive "$REF" ops/kit-unidade | ssh -i "$CHAVE" "$VPS" "D='$DESTINO'; $RECUPERA
+git archive "$REF" ops/kit-unidade | ssh -i "$CHAVE" ${OPC[@]+"${OPC[@]}"} "$VPS" "D='$DESTINO'; $RECUPERA
 $REMOTO"
-ssh -i "$CHAVE" "$VPS" "ls '$DESTINO/ops/kit-unidade' | head -20" </dev/null
+ssh -i "$CHAVE" ${OPC[@]+"${OPC[@]}"} "$VPS" "ls '$DESTINO/ops/kit-unidade' | head -20" </dev/null
 echo "PRONTO: o kit está em $DESTINO/ops/kit-unidade na VPS."
 echo "PRÓXIMO (na VPS, como root):  cd $DESTINO && bash ops/kit-unidade/criar-platform-app-joao.sh --so-conferir"

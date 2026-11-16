@@ -71,7 +71,7 @@ echo "SSH $*" >> "${log}"
 # com -t (terminal) o ssh de verdade não lê o stdin do script; sem -t (tar / questionário) ele recebe o conteúdo
 case " $* " in *" -t "*) ;; *) cat > /dev/null;; esac
 case "$*" in *'echo "conectou'*) echo "conectou em vps-de-mentira";; esac
-if [ -n "\${FALHAR_EM:-}" ] && [[ "$*" == *"$FALHAR_EM"* ]]; then echo "erro de mentira" >&2; exit 3; fi
+if [ -n "\${FALHAR_EM:-}" ] && [[ "$*" == *"$FALHAR_EM"* ]]; then echo "erro de mentira" >&2; exit "\${FALHAR_CODIGO:-3}"; fi
 exit 0
 `,
   );
@@ -96,13 +96,16 @@ exit 0
   mkdirSync(privado, { mode: 0o700 });
   chmodSync(privado, 0o700);
 
-  const rodar = (args: string[], opts: { entrada?: string; env?: Record<string, string> } = {}) =>
-    spawnSync('bash', [join(repo, 'ops/kit-unidade/abrir-clinica-joao.sh'), ...args], {
-      cwd: repo,
-      input: opts.entrada ?? '',
-      encoding: 'utf8',
-      env: { PATH: `${bin}:${process.env.PATH}`, HOME: home, KIT_PRIVADO_DIR: privado, ABRIR_SEM_TERMINAL: '1', ...GIT_ENV, ...(opts.env ?? {}) },
-    });
+  /** Com um terminal de verdade (`script` cria um pty): o comando recusa rodar sem terminal, então o teste não pode usar pipe. `semPty` roda sem terminal (para provar a recusa). */
+  const rodar = (args: string[], opts: { entrada?: string; env?: Record<string, string>; semPty?: boolean } = {}) => {
+    const env = { PATH: `${bin}:${process.env.PATH}`, HOME: home, KIT_PRIVADO_DIR: privado, ...GIT_ENV, ...(opts.env ?? {}) };
+    const alvo = join(repo, 'ops/kit-unidade/abrir-clinica-joao.sh');
+    const comPty = !opts.semPty && !args.includes('--so-conferir');
+    const r = comPty
+      ? spawnSync('script', ['-qefc', ['bash', alvo, ...args].map((x) => `'${x}'`).join(' '), '/dev/null'], { cwd: repo, input: opts.entrada ?? '', encoding: 'utf8', env })
+      : spawnSync('bash', [alvo, ...args], { cwd: repo, input: opts.entrada ?? '', encoding: 'utf8', env });
+    return { ...r, stdout: r.stdout.replace(/\r/g, ''), stderr: r.stderr.replace(/\r/g, '') };
+  };
   const chamadas = () => readFileSync(log, 'utf8').split('\n').filter(Boolean);
   const limparLog = () => writeFileSync(log, '');
   const gravarPrivado = (slug: string, conteudo: string) => {
@@ -126,8 +129,8 @@ const CAMINHO_DEMO = [
   "nova-unidade 'clinica-demonstracao'",
   'criar-platform-app',
   "nova-unidade 'clinica-demonstracao' --aplicar",
-  "regra-traefik 'demo'",
   "cofre-para-servico 'DEMO' --so-conferir",
+  "regra-traefik 'demo'",
   "cofre-para-servico 'DEMO'",
 ];
 
@@ -185,7 +188,7 @@ test('falha ao levar o kit: para ali, antes de qualquer conferência', () => {
   assert.deepEqual(scriptsDoKit(e.chamadas()), []);
 });
 
-test('idempotente: rodar duas vezes repete a mesma sequência, sem erro e sem passo extra', () => {
+test('repetível: a segunda rodada repete exatamente a mesma sequência, sem erro e sem passo extra (a idempotência em si é dos scripts da VPS)', () => {
   const e = ambiente();
   const a = e.rodar(['clinica-demonstracao'], { entrada: 'aplicar\n' });
   const primeira = scriptsDoKit(e.chamadas());
@@ -220,9 +223,9 @@ test('sem a chave ssh: recusa antes de abrir qualquer conexão', () => {
   assert.deepEqual(e.chamadas(), []);
 });
 
-test('sem terminal (e sem o desvio do teste) não aplica', () => {
+test('sem terminal não aplica (e não envia nada antes de recusar)', () => {
   const e = ambiente();
-  const r = e.rodar(['clinica-demonstracao'], { entrada: 'aplicar\n', env: { ABRIR_SEM_TERMINAL: '' } });
+  const r = e.rodar(['clinica-demonstracao'], { entrada: 'aplicar\n', semPty: true });
   assert.notEqual(r.status, 0);
   assert.match(r.stdout, /sem terminal não dá para aplicar/);
   assert.deepEqual(e.chamadas(), []);
@@ -244,8 +247,8 @@ test('clínica REAL: questionário privado vai para a VPS (só pelo stdin do ssh
     "nova-unidade 'doutor-hernia-teste'",
     'criar-platform-app',
     "nova-unidade 'doutor-hernia-teste' --aplicar",
-    "regra-traefik 'drherniateste'",
     "cofre-para-servico 'TESTE' --so-conferir",
+    "regra-traefik 'drherniateste'",
     "cofre-para-servico 'TESTE'",
   ]);
   assert.match(r.stdout, /clínica de verdade/);
@@ -276,13 +279,74 @@ test('argumentos ruins são recusados antes de tudo', () => {
 
 test('questionário com subdomínio ou sufixo inválido: para antes de ligar no ssh', () => {
   const e = ambiente();
-  e.gravarPrivado('clinica-ruim', QUESTIONARIO_REAL.replace('drherniateste', 'Dr_Hernia;rm'));
+  e.gravarPrivado('clinica-ruim', QUESTIONARIO_REAL.replace('slug: doutor-hernia-teste', 'slug: clinica-ruim').replace('drherniateste', 'Dr_Hernia;rm'));
   const r = e.rodar(['clinica-ruim']);
   assert.notEqual(r.status, 0);
   assert.match(r.stdout, /subdomínio do questionário inválido/);
-  e.gravarPrivado('clinica-ruim2', QUESTIONARIO_REAL.replace('META_ADS_TOKEN_TESTE', 'TOKEN_SOLTO'));
+  e.gravarPrivado('clinica-ruim2', QUESTIONARIO_REAL.replace('slug: doutor-hernia-teste', 'slug: clinica-ruim2').replace('META_ADS_TOKEN_TESTE', 'TOKEN_SOLTO'));
   const r2 = e.rodar(['clinica-ruim2']);
   assert.notEqual(r2.status, 0);
   assert.match(r2.stdout, /meta\.token_env inválido/);
   assert.deepEqual(e.chamadas(), []);
+});
+
+test('o que vale é o que a VPS RECEBE: o subdomínio vem de origin/main, não do arquivo editado e não commitado', () => {
+  const e = ambiente();
+  const arquivo = join(e.repo, 'ops/kit-unidade/unidades/clinica-demonstracao.yaml');
+  writeFileSync(arquivo, readFileSync(arquivo, 'utf8').replace('subdominio: demo ', 'subdominio: demo2 '));
+  const r = e.rodar(['clinica-demonstracao'], { entrada: 'aplicar\n' });
+  assert.equal(r.status, 0, r.stdout);
+  assert.match(r.stdout, /AVISO: ops\/kit-unidade aqui difere de origin\/main/);
+  assert.ok(scriptsDoKit(e.chamadas()).includes("regra-traefik 'demo'"));
+  assert.ok(!e.chamadas().some((l) => l.includes('demo2')));
+});
+
+test('etapa recusada (chaves ausentes do cofre): PARA ANTES de mexer no proxy e não diz «PRONTO»', () => {
+  const e = ambiente();
+  const r = e.rodar(['clinica-demonstracao'], { entrada: 'aplicar\n', env: { FALHAR_EM: "cofre-para-servico-joao.sh 'DEMO' --so-conferir" } });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stdout, /PAREI no passo «7a\. as chaves da conta estão no cofre/);
+  assert.match(r.stdout, /O proxy ainda NÃO foi mexido/);
+  assert.ok(!scriptsDoKit(e.chamadas()).includes("regra-traefik 'demo'"));
+  assert.doesNotMatch(r.stdout, /PRONTO: «/);
+});
+
+test('--so-conferir de clínica REAL confere o envio do questionário privado sem enviar', () => {
+  const e = ambiente();
+  e.gravarPrivado('doutor-hernia-teste', QUESTIONARIO_REAL);
+  const r = e.rodar(['doutor-hernia-teste', '--so-conferir']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /enviando SÓ o questionário doutor-hernia-teste/);
+  assert.ok(!e.chamadas().some((l) => l.includes('.yaml.chegando')));
+  for (const d of DADOS_PESSOAIS) assert.ok(!(r.stdout + r.stderr).includes(d), `vazou: ${d}`);
+});
+
+test('ssh que cai (255) na sonda NÃO vira «não»: para dizendo que não conseguiu ver', () => {
+  const e = ambiente();
+  const r = e.rodar(['clinica-demonstracao', '--so-conferir'], { env: { FALHAR_EM: 'test -s', FALHAR_CODIGO: '255' } });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stdout, /NÃO CONSEGUI VER \(ssh devolveu 255\)/);
+  assert.doesNotMatch(r.stdout, /: não\n/);
+});
+
+test('o slug pedido precisa ser o do arquivo; modo desconhecido é recusado', () => {
+  const e = ambiente();
+  e.gravarPrivado('outra-clinica', QUESTIONARIO_REAL);
+  const r = e.rodar(['outra-clinica']);
+  assert.notEqual(r.status, 0);
+  assert.match(r.stdout, /o questionário diz que o slug é «doutor-hernia-teste»/);
+  e.gravarPrivado('doutor-hernia-teste', QUESTIONARIO_REAL.replace('modo: real', 'modo: demonstração'));
+  const r2 = e.rodar(['doutor-hernia-teste']);
+  assert.notEqual(r2.status, 0);
+  assert.match(r2.stdout, /whatsapp\.modo inválido/);
+  assert.deepEqual(e.chamadas(), []);
+});
+
+test('a conexão ssh é compartilhada (ControlMaster) e fechada no fim', () => {
+  const e = ambiente();
+  const r = e.rodar(['clinica-demonstracao'], { entrada: 'aplicar\n' });
+  assert.equal(r.status, 0, r.stdout);
+  const c = e.chamadas().filter((l) => l.startsWith('SSH ') && l.includes('-t root@'));
+  assert.ok(c.length > 0 && c.every((l) => /-o ControlMaster=auto -o ControlPath=\S+\/%C -o ControlPersist=10m/.test(l)));
+  assert.ok(e.chamadas().some((l) => l.includes('-O exit')), 'fecha a conexão compartilhada');
 });
