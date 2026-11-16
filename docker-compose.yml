@@ -84,6 +84,13 @@ services:
         - traefik.http.routers.ddagent.tls.certresolver=letsencryptresolver
         - traefik.http.routers.ddagent.service=ddagent
         - traefik.http.services.ddagent.loadbalancer.server.port=8080
+        # Endereço bonito do formulário do franqueado: cadastro.doutordigitalconsultoria.com serve SÓ /nova-clinica/ e /api/public/nova-clinica/ (Host + PathPrefix); o resto devolve 404 no
+        # próprio Traefik (o servidor também recusa, em backend/src/controllers/nova-clinica.controller.ts). Roteador NOVO, ao lado do `ddagent`, para não mexer na regra que serve a API.
+        # O DNS curinga *.doutordigitalconsultoria.com já aponta para a VPS e o Traefik emite o certificado sozinho no primeiro acesso. Domínio LITERAL, como os de cima.
+        - traefik.http.routers.ddagentcadastro.rule=Host(`cadastro.doutordigitalconsultoria.com`) && (PathPrefix(`/nova-clinica/`) || PathPrefix(`/api/public/nova-clinica/`))
+        - traefik.http.routers.ddagentcadastro.entrypoints=websecure
+        - traefik.http.routers.ddagentcadastro.tls.certresolver=letsencryptresolver
+        - traefik.http.routers.ddagentcadastro.service=ddagent
 
     logging:
       driver: json-file

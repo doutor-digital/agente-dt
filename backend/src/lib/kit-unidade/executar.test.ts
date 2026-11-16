@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { executarPlano, relatorioFinal, type BancoPorta } from './executar.js';
+import { codigoDeSaida, executarPlano, relatorioFinal, type BancoPorta } from './executar.js';
 import { montarPlano } from './plano.js';
 import { lerQuestionario, type Questionario } from './questionario.js';
 import { AUTOMACOES } from '../automacoes.js';
@@ -284,4 +284,14 @@ test('unidade NOVA: roda 2 vezes e a segunda não grava mais nada (idempotente)'
   assert.deepEqual(f.chamadas.filter((c) => c[0] !== 'gravarUnidade'), [], 'só a atualização da unidade (sem campo novo) pode aparecer');
   const u = f.chamadas.find((c) => c[0] === 'gravarUnidade');
   if (u) assert.deepEqual((u[1] as { campos: Record<string, unknown> }).campos, {}, 'e sem nenhum campo');
+});
+
+test('código de saída do --aplicar: 0 só quando nada foi recusado, bloqueado, falhou ou deixou de rodar (a clínica pela metade NÃO sai 0)', () => {
+  const plano = { unidade: 'x', config: {} as never, relatorio: [], passos: ['unidade', 'webhook', 'time'].map((id) => ({ id, sistema: 'banco', titulo: id, acao: 'criar', itens: [], execucao: 'sim', avisos: [], depende: [] })) } as never;
+  const r = (id: string, situacao: string) => ({ id, situacao, notas: [] }) as never;
+  assert.equal(codigoDeSaida(plano, [r('unidade', 'feito'), r('webhook', 'nada-a-fazer'), r('time', 'manual')]), 0);
+  assert.equal(codigoDeSaida(plano, [r('unidade', 'feito'), r('webhook', 'recusado'), r('time', 'feito')]), 3, 'respondeu «não» a uma etapa');
+  assert.equal(codigoDeSaida(plano, [r('unidade', 'feito'), r('webhook', 'bloqueado'), r('time', 'feito')]), 3, 'etapa bloqueada');
+  assert.equal(codigoDeSaida(plano, [r('unidade', 'feito'), r('webhook', 'feito')]), 3, 'a execução parou antes (etapa que não rodou)');
+  assert.equal(codigoDeSaida(plano, [r('unidade', 'falhou'), r('webhook', 'recusado'), r('time', 'feito')]), 1, 'falha vence');
 });

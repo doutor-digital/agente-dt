@@ -22,7 +22,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline/promises';
 import { AUTOMACOES } from '../lib/automacoes.js';
-import { executarPlano, relatorioFinal, type BancoPorta } from '../lib/kit-unidade/executar.js';
+import { executarPlano, relatorioFinal, type BancoPorta, codigoDeSaida } from '../lib/kit-unidade/executar.js';
 import { contaHttp, contaHttpSoLeitura, plataformaHttp } from '../lib/kit-unidade/chatwoot-http.js';
 import { kapsoHttp } from '../lib/kit-unidade/kapso-http.js';
 import type { PortasExternas } from '../lib/kit-unidade/portas.js';
@@ -87,6 +87,7 @@ async function lerEstado(q: Questionario): Promise<EstadoAtual> {
         caixasRegistradas: u?.chatwoot?.caixas.map((c) => c.caixaId) ?? [],
         automacoes: Object.fromEntries((u?.automacoes ?? []).map((a) => [a.automacao, a.estado])),
         sofia: (u ?? {}) as unknown as Record<string, unknown>,
+        licoes: u ? (await prisma.unitLesson.findMany({ where: { unitId: u.id }, select: { content: true } })).map((l) => l.content) : [],
       };
     } catch (err) {
       console.error(`(não consegui ler o banco: ${(err as Error).message} — o plano assume que nada existe)`);
@@ -177,6 +178,21 @@ async function bancoReal(): Promise<BancoPorta> {
     async gravarSofia(unitId, campos) {
       await prisma.unit.update({ where: { id: unitId }, data: campos as never });
     },
+    licoes: {
+      async listar(unitId) {
+        return (await prisma.unitLesson.findMany({ where: { unitId }, select: { content: true } })).map((l) => l.content);
+      },
+      async criar(unitId, textos) {
+        // fonte «unidade» = a mesma da página /aprendizados: a clínica vê, edita e desliga lá
+        await prisma.unitLesson.createMany({ data: textos.map((content) => ({ unitId, content, source: 'unidade', enabled: true })) });
+      },
+      async contarDaUnidade(unitId) {
+        return prisma.unitLesson.count({ where: { unitId, source: 'unidade', enabled: true } });
+      },
+      async marcarImportado(unitId) {
+        await prisma.unit.update({ where: { id: unitId }, data: { kitAprendizadosEm: new Date() } });
+      },
+    },
     async caixasRegistradas(unitId) {
       return (await prisma.unitChatwootCaixa.findMany({ where: { unitId }, select: { caixaId: true } })).map((c) => c.caixaId);
     },
@@ -217,7 +233,7 @@ async function main(): Promise<void> {
     return;
   }
   if (!arquivo) {
-    console.error('uso: nova-unidade.ts <questionario.yaml> [--aplicar] [--sim] [--offline] [--sobrescrever] [--sobrescrever-prompt] [--ligar-robo]   |   --gerar-schema');
+    console.error('uso: nova-unidade.ts <questionario.yaml> [--aplicar] [--sim] [--offline] [--sobrescrever] [--sobrescrever-prompt] [--reimportar-aprendizados] [--ligar-robo]   |   --gerar-schema');
     process.exit(2);
   }
   const lido = lerQuestionario(readFileSync(resolve(arquivo), 'utf8'));
@@ -232,7 +248,7 @@ async function main(): Promise<void> {
   console.log('');
   const estado: EstadoAtual = flags.has('--offline') ? {} : await lerEstado(q);
   const molde = lerMolde();
-  const plano = montarPlano(q, estado, { molde, sobrescrever: flags.has('--sobrescrever'), adminsDD: adminsDDEfetivos() });
+  const plano = montarPlano(q, estado, { molde, sobrescrever: flags.has('--sobrescrever'), reimportarAprendizados: flags.has('--reimportar-aprendizados'), adminsDD: adminsDDEfetivos() });
   console.log(textoDoPlano(plano));
   if (!flags.has('--aplicar')) {
     console.log('\n(SECO: nada foi gravado. Para executar: --aplicar)');
@@ -249,6 +265,7 @@ async function main(): Promise<void> {
     molde,
     sobrescreverPrompt: flags.has('--sobrescrever-prompt'),
     sobrescrever: flags.has('--sobrescrever'),
+    reimportarAprendizados: flags.has('--reimportar-aprendizados'),
     externas: await portasExternas(),
     ligarRobo: flags.has('--ligar-robo'),
     dizer: (l) => console.log(l),
@@ -256,7 +273,9 @@ async function main(): Promise<void> {
   });
   rl.close();
   console.log(relatorioFinal(plano, resultados));
-  process.exit(resultados.some((r) => r.situacao === 'falhou') ? 1 : 0);
+  const codigo = codigoDeSaida(plano, resultados);
+  if (codigo === 3) console.log('\nATENÇÃO: alguma etapa foi RECUSADA, ficou BLOQUEADA ou NÃO RODOU — a clínica NÃO está pronta. Rode de novo e responda «s» às etapas que faltam (o que já existe é reconhecido).');
+  process.exit(codigo);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

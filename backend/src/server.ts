@@ -11,6 +11,8 @@ import { apiRouter } from './routes/api.routes.js';
 import { apagarCofreDeArquivos, ligarConectorRemoto } from './mcp-remoto/producao.js';
 import { paginaPausaHandler } from './controllers/pausa.controller.js';
 import { paginaAprendizadosHandler } from './controllers/aprendizados.controller.js';
+import { ligarNovaClinica, somenteCadastroNoHostDeCadastro } from './controllers/nova-clinica.controller.js';
+import { mascararUrlDoLog } from './lib/mascara-url-log.js';
 import { paginaAgenteHandler } from './controllers/agente-chatwoot.controller.js';
 import { paginaRobosHandler } from './controllers/robos.controller.js';
 import { paginaDisparosHandler } from './controllers/disparos.controller.js';
@@ -94,6 +96,9 @@ interface RawBodyRequest extends express.Request {
 async function main(): Promise<void> {
   const app = express();
 
+  // cadastro.doutordigitalconsultoria.com serve SÓ o formulário «nova clínica»: tudo o mais do agente dá 404 nesse host (primeira de todas, antes de CORS e rotas)
+  app.use(somenteCadastroNoHostDeCadastro());
+
   // Widgets privados do Kommo rodam em https://<conta>.kommo.com e chamam SÓ as rotas /api/public/*
   // (agenda da franquia com chave por unidade, pausa com código). Pra elas o CORS libera o Kommo
   // SEM credenciais — o cookie de sessão do painel é SameSite=None e não pode viajar pra lá.
@@ -141,6 +146,15 @@ async function main(): Promise<void> {
 
   app.use(cookieParser());
 
+  app.use((req, _res, next) => {
+    // o token do cofre de arquivos e o código do formulário «nova clínica» viajam no caminho: nunca vão para o log
+    logger.debug({ method: req.method, url: mascararUrlDoLog(req.url) }, 'http');
+    next();
+  });
+
+  // Formulário público «nova clínica» (código de uso único). ANTES dos parsers gerais: a rota lê o corpo com teto de 64 KB e conta o limite de taxa antes de ler.
+  ligarNovaClinica(app);
+
   // Webhook do Kommo antes do parser geral: cartões em lote passam de 1000 parâmetros e o geral devolvia 413
   // antes do handler (ver parser-webhook-kommo.ts).
   app.use(ROTA_WEBHOOK_KOMMO, parserDoWebhookKommo());
@@ -157,12 +171,6 @@ async function main(): Promise<void> {
       },
     }),
   );
-
-  app.use((req, _res, next) => {
-    // o token do cofre de arquivos viaja no caminho: nunca vai para o log
-    logger.debug({ method: req.method, url: req.url.replace(/^(\/arquivos\/(?:enviar|baixar)\/)[^/?]+/, '$1[token]').replace(/([?&]k=)[^&]+/, '$1[chave]').replace(/([?&]access_token=)[^&]+/, '$1[chave]') }, 'http');
-    next();
-  });
 
   // Conector remoto do claude.ai (/mcp + OAuth). Desligado sem MCP_URL_PUBLICA no .env.
   await ligarConectorRemoto(app);

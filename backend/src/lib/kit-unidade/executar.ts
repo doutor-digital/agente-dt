@@ -5,12 +5,13 @@
  *
  * Idempotente: rodar de novo recalcula o plano com o estado atual e só mexe no que falta. Portas injetáveis (teste não toca em banco).
  */
+import { MAX_REGRAS_DA_UNIDADE } from '../aprendizados-unidade.js';
 import { AUTOMACOES } from '../automacoes.js';
 import { gerenteDaConta, novoEstado, passoAtendentes, passoAutomacoesDaConta, passoAtributos, passoCaixa, passoConta, passoDashboardApp, passoEtiquetas, passoMensagensProntas, passoModelos, passoRobo, passoTime, passoUsuarioCelular, passoWebhook, type EstadoDaExecucao } from './fase2.js';
 import { ErroSoLeitura, type PortasExternas } from './portas.js';
-import { CAMPOS_SO_NA_CRIACAO, camposDaSofia, camposDaUnidade } from './molde-sofia.js';
+import { CAMPOS_SO_NA_CRIACAO, camposDaSofia, camposDaUnidade, licoesDaAssistente } from './molde-sofia.js';
 import { aGravar, dadosDosModelosAGravar } from './protecao.js';
-import type { Passo, Plano } from './plano.js';
+import { automacoesEmSeco, type Passo, type Plano } from './plano.js';
 import { configChatwootDoQuestionario, type Questionario } from './questionario.js';
 
 /** O banco, como o executor o enxerga. A implementação real (prisma) está em `scripts/nova-unidade.ts`. */
@@ -43,6 +44,15 @@ export interface BancoPorta {
   /** persona/fontes/prompt hoje */
   sofiaDaUnidade(unitId: string): Promise<Record<string, unknown>>;
   gravarSofia(unitId: string, campos: Record<string, unknown>): Promise<void>;
+  /** aprendizados (regras) da unidade: `listar` devolve os textos que já existem; `criar` grava novos com fonte «unidade». Opcional: sem isto o passo avisa e não grava aprendizados */
+  licoes?: {
+    listar(unitId: string): Promise<string[]>;
+    criar(unitId: string, textos: string[]): Promise<void>;
+    /** quantas regras da clínica (fonte «unidade») estão LIGADAS: a página /aprendizados aceita no máximo 25 */
+    contarDaUnidade(unitId: string): Promise<number>;
+    /** marca em units.kit_aprendizados_em que o kit já importou: depois disso nunca regrava */
+    marcarImportado(unitId: string): Promise<void>;
+  };
   /** ids das caixas já registradas para a unidade */
   caixasRegistradas(unitId: string): Promise<number[]>;
   /** registra a caixa (idempotente: a mesma caixa não duplica) */
@@ -58,6 +68,8 @@ export interface OpcoesDeExecucao {
   sobrescreverPrompt?: boolean;
   /** troca também os campos JÁ preenchidos de uma unidade que existe (e deixa tocar numa unidade ATIVA). Sem isto só se preenche campo vazio. */
   sobrescrever?: boolean;
+  /** repete a importação dos aprendizados da clínica (sem duplicar). Flag PRÓPRIA: `sobrescrever` NÃO mexe nos aprendizados que a clínica já administra em /aprendizados. */
+  reimportarAprendizados?: boolean;
   /** escreve uma linha para quem está acompanhando */
   dizer: (linha: string) => void;
   /** as portas do Chatwoot, do Kapso e do cofre; sem elas os passos de fora do banco ficam bloqueados */
@@ -141,6 +153,8 @@ export async function executarPlano(plano: Plano, q: Questionario, o: OpcoesDeEx
       }
     }
     if (leu) continue;
+    // o texto EXATO que vai para a Sofia (fonte «negócio» e aprendizados) aparece ANTES de a etapa ser confirmada: o João lê, não confia
+    if (p.id === 'sofia') for (const it of p.itens) o.dizer(`      · ${it}`);
     if (!(await o.confirmar(p))) {
       registrar('recusado');
       continue;
@@ -202,11 +216,12 @@ async function aplicarPasso(p: Passo, q: Questionario, o: OpcoesDeExecucao, unit
     case 'automacoes-seco': {
       const id = await garantirUnidade();
       const ja = new Set(await banco.automacoesDaUnidade(id));
-      const novas = AUTOMACOES.filter((a) => a.id.startsWith('chatwoot-') && a.temSeco && !ja.has(a.id)).map((a) => a.id);
+      const novas = automacoesEmSeco(q).filter((a) => !ja.has(a.id)).map((a) => a.id);
       if (novas.length) await banco.criarAutomacoesEmSeco(id, novas);
       return [novas.length ? `em seco: ${novas.join(', ')}` : 'nenhuma a criar'];
     }
     case 'sofia': {
+      if (q.assistente?.quer === false) return ['a clínica NÃO quer a assistente: Sofia não configurada (nada gravado)'];
       const id = await garantirUnidade();
       const { campos, avisos } = camposDaSofia(q, o.molde);
       const hoje = await banco.sofiaDaUnidade(id);
@@ -222,6 +237,27 @@ async function aplicarPasso(p: Passo, q: Questionario, o: OpcoesDeExecucao, unit
       notas.push(Object.keys(gravar).length ? `gravados: ${Object.keys(gravar).join(', ')}` : 'nada a gravar (tudo já preenchido)');
       const ficaram = preservados.filter((k) => k !== 'systemPrompt');
       if (ficaram.length) notas.push(`ficaram como estão (já preenchidos, diferem do questionário; --sobrescrever troca): ${ficaram.join(', ')}`);
+      // aprendizados da clínica (idempotente: texto igual a um que já existe não duplica)
+      const lic = licoesDaAssistente(q);
+      for (const r of lic.recusadas) notas.push(`aprendizado RECUSADO pelas travas da rede (não gravei): «${r.texto}» — ${r.motivo}`);
+      if (lic.textos.length) {
+        const importadoEm = hoje.kitAprendizadosEm as Date | string | null | undefined;
+        if (!banco.licoes) notas.push(`${lic.textos.length} aprendizado(s) da clínica NÃO gravados (este ambiente não tem a porta de aprendizados)`);
+        else if (importadoEm && !o.reimportarAprendizados) {
+          // UM escritor só: o kit grava os aprendizados uma vez; depois a clínica manda neles (edita, apaga, desliga em /aprendizados) e um --aplicar novo (ex.: --ligar-robo) não os desfaz
+          notas.push(`aprendizados da clínica: o kit JÁ os importou em ${new Date(importadoEm).toISOString().slice(0, 10)}; não regravo (a clínica os administra em /aprendizados; --reimportar-aprendizados repete a importação, sem duplicar)`);
+        } else {
+          const norm = (t: string) => t.trim().replace(/\s+/g, ' ').toLowerCase();
+          const jaTem = new Set((await banco.licoes.listar(id)).map(norm));
+          const novos = lic.textos.filter((t) => !jaTem.has(norm(t)));
+          // teto de 25 NA GRAVAÇÃO (não só no aviso do plano): a página /aprendizados só aceita 25 regras da clínica ligadas
+          const cabem = Math.max(0, MAX_REGRAS_DA_UNIDADE - (await banco.licoes.contarDaUnidade(id)));
+          const gravar = novos.slice(0, cabem);
+          if (gravar.length) await banco.licoes.criar(id, gravar);
+          await banco.licoes.marcarImportado(id);
+          notas.push(`aprendizados da clínica: ${gravar.length} gravado(s), ${lic.textos.length - novos.length} já existiam${novos.length > gravar.length ? `, ${novos.length - gravar.length} NÃO gravado(s) por causa do teto de ${MAX_REGRAS_DA_UNIDADE} da página /aprendizados (a clínica desliga uma regra e os adiciona lá)` : ''}`);
+        }
+      }
       return notas;
     }
     case 'conta': {
@@ -271,6 +307,17 @@ async function aplicarPasso(p: Passo, q: Questionario, o: OpcoesDeExecucao, unit
     default:
       throw new Error(`passo sem executor: ${p.id}`);
   }
+}
+
+/**
+ * O código de saída do `--aplicar`: 0 = nada de errado (feito, já estava ou manual); 1 = alguma etapa FALHOU; 3 = alguma etapa foi RECUSADA («não» na pergunta), ficou BLOQUEADA ou NÃO RODOU
+ * (a execução parou antes): a clínica NÃO está pronta e quem encadeia o kit (abrir-clinica-joao.sh) não pode seguir para o proxy nem dizer «pronto».
+ */
+export function codigoDeSaida(plano: Plano, resultados: Resultado[]): number {
+  if (resultados.some((r) => r.situacao === 'falhou')) return 1;
+  const naoRodou = plano.passos.some((p) => !resultados.some((r) => r.id === p.id));
+  if (naoRodou || resultados.some((r) => r.situacao === 'recusado' || r.situacao === 'bloqueado')) return 3;
+  return 0;
 }
 
 /** O relatório do que a execução fez e do que ainda falta. */

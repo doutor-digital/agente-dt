@@ -21,6 +21,15 @@ const obj = <T extends z.ZodRawShape>(shape: T) => z.object(shape).strict();
 const email = z.string().email().max(120);
 const dinheiro = z.number().positive().max(100000);
 
+/**
+ * Subdomínios que NENHUMA clínica pode pegar: são do nosso próprio sistema (o formulário, o agente, o Chatwoot, os painéis…) ou nomes que enganam. «demo» é só da Clínica Demonstração
+ * (`whatsapp.modo: demonstracao`). O DNS curinga já aponta tudo para a VPS: uma clínica com «cadastro» ou «atendimento» tomaria o lugar do serviço de verdade.
+ */
+export const SUBDOMINIOS_RESERVADOS: readonly string[] = [
+  'cadastro', 'atendimento', 'agente', 'evolution', 'treinamento', 'automacao', 'franquia', 'suporte', 'api', 'app', 'www', 'mail', 'smtp', 'admin', 'painel', 'dashboard', 'chatwoot', 'kommo', 'crm',
+  'vps', 'ddagent', 'doutordigital', 'portal', 'status', 'docs', 'mcp', 'login', 'oauth', 'auth', 'webhook', 'webhooks', 'ftp', 'ns1', 'ns2', 'aulas', 'n8n', 'chamados', 'demo',
+];
+
 export const Questionario = z
   .object({
     versao: z.literal(1),
@@ -116,6 +125,29 @@ export const Questionario = z
         tom: z.enum(['casual', 'formal', 'friendly']).default('friendly'),
       })
       .default({}),
+    /**
+     * A assistente virtual (a Sofia) como a clínica quer. AUSENTE = como sempre foi (Sofia configurada com o padrão da rede). `quer: false` = a clínica NÃO quer a IA: a Sofia não é
+     * configurada e o plano diz isso. O texto da clínica é DADO: vira informação nas fontes ou «aprendizado» (abaixo das regras da rede, que sempre vencem); nunca muda preço nem destrava regra.
+     */
+    assistente: obj({
+      quer: z.boolean().default(true),
+      emoji: z.enum(['sim', 'pouco', 'nao']).default('pouco'),
+      quando_atende: z.enum(['sempre', 'fora-expediente', 'noite-fim-semana', 'personalizado']).default('sempre'),
+      quando_atende_detalhe: z.string().max(200).optional(),
+      /** como a clínica quer ser apresentada (vira aprendizado) */
+      saudacao: z.string().max(300).optional(),
+      diferenciais: z.string().max(500).optional(),
+      primeira_consulta: obj({ como_funciona: z.string().max(500).optional(), duracao: z.string().max(100).optional(), o_que_levar: z.string().max(300).optional(), chegada: z.string().max(100).optional() }).optional(),
+      pagamento: obj({ formas: z.string().max(300).optional(), parcelamento: z.string().max(300).optional(), convenio: z.enum(['nao', 'sim', 'reembolso']).optional(), convenio_quais: z.string().max(200).optional(), remarcacao: z.string().max(400).optional() }).optional(),
+      nao_atende: z.string().max(400).optional(),
+      /** só as objeções que a clínica MUDOU ou criou (as que ficaram iguais já estão no roteiro da rede); cada uma vira um aprendizado */
+      objecoes: z.array(obj({ gatilho: z.string().min(3).max(80), resposta: z.string().min(10).max(230) })).max(14).optional(),
+      nunca_extra: z.string().max(300).optional(),
+      passar_extra: z.string().max(300).optional(),
+      /** quem recebe o atendimento quando a Sofia chama uma pessoa; contato só da equipe (e-mail ou telefone), nunca senha */
+      quem_recebe: obj({ nome: z.string().max(80).optional(), contato: z.string().max(80).optional() }).optional(),
+      faq: z.array(obj({ pergunta: z.string().min(5).max(120), resposta: z.string().min(3).max(300) })).max(10).optional(),
+    }).optional(),
   })
   .strict()
   .superRefine((q, ctx) => {
@@ -143,6 +175,7 @@ export const Questionario = z
       if (suf(q.meta.dataset_id_env, 'META_DATASET_ID_') !== sufixo) aviso(['meta', 'dataset_id_env'], `precisa ser META_DATASET_ID_${sufixo}`);
     }
     if (q.unidade.slug.includes('--')) aviso(['unidade', 'slug'], 'slug com "--"');
+    if (SUBDOMINIOS_RESERVADOS.includes(q.chatwoot.subdominio) && !(q.chatwoot.subdominio === 'demo' && q.whatsapp.modo === 'demonstracao')) aviso(['chatwoot', 'subdominio'], `«${q.chatwoot.subdominio}» é um subdomínio reservado do nosso sistema: escolha outro`);
     if (q.whatsapp.modo === 'real') {
       for (const campo of ['numero_oficial', 'kapso_phone_number_id', 'waba_id'] as const) if (!q.whatsapp[campo]) aviso(['whatsapp', campo], 'obrigatório quando a clínica tem número de verdade (modo: real); a demonstração não precisa');
     } else if (q.whatsapp.numero_oficial || q.whatsapp.kapso_phone_number_id || q.whatsapp.waba_id) {
@@ -162,6 +195,7 @@ export const CAMPOS_SENSIVEIS: Readonly<Record<string, string>> = {
   'whatsapp.waba_id': 'identificador da conta do WhatsApp Business',
   'chatwoot.atendentes[].email': 'e-mail pessoal da atendente (LGPD)',
   'chatwoot.usuario_celular_email': 'e-mail de acesso',
+  'assistente.quem_recebe.contato': 'contato de quem recebe o atendimento (e-mail ou telefone da equipe)',
   'chatwoot.admins_dd': 'e-mails de administradores da Doutor Digital',
   'franquia.id_company': 'identificador da unidade na franquia',
   'meta.ad_account': 'conta de anúncios',

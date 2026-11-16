@@ -276,6 +276,8 @@ model Unit {
    * Nasceu do sábado: todas as unidades atendem, com horário menor que o da semana.
    */
   spineDayHours    Json?   @map("spine_day_hours")
+  /// O kit de unidade gravou UMA vez os aprendizados que o dono pediu no formulário (assistente). Depois disso o kit nunca regrava: a clínica os administra em /aprendizados (edita, apaga, desliga).
+  kitAprendizadosEm DateTime? @map("kit_aprendizados_em")
   /// Profissional da franquia por turno: [{ "inicio": "08:00", "fim": "13:30", "idStaff": 536, "nome": "Dra. Juliana Santos" }, …].
   /// Sem isto o createSchedule vai sem idStaff e a franquia põe a primeira profissional da lista (em Taubaté, a
   /// dona — que não atende). Horário fora de qualquer turno também vai sem idStaff.
@@ -2968,4 +2970,24 @@ model SofiaEvento {
 
   @@index([unitSlug, criadoEm])
   @@map("sofia_evento")
+}
+
+/// Formulário «nova clínica» (kit de unidade): um convite de USO ÚNICO que o franqueado recebe num link (`/nova-clinica/<codigo>`) e as respostas dele.
+/// O código NUNCA é guardado (só o hash SHA-256): quem lê o banco não abre o formulário de ninguém. As respostas têm dado pessoal (e-mail da equipe, Pix, telefone):
+/// não vão para log nem para o GitHub. `importadoEm` = o kit já gerou o questionário privado a partir delas.
+model NovaClinicaConvite {
+  id           String    @id @default(cuid())
+  codigoHash   String    @unique @map("codigo_hash")
+  /// para quem é o convite (só para o João reconhecer na lista)
+  rotulo       String?
+  criadoPor    String    @map("criado_por")
+  criadoEm     DateTime  @default(now()) @map("criado_em")
+  expiraEm     DateTime  @map("expira_em")
+  enviadoEm    DateTime? @map("enviado_em")
+  slugSugerido String?   @map("slug_sugerido")
+  respostas    Json?
+  importadoEm  DateTime? @map("importado_em")
+
+  @@index([slugSugerido])
+  @@map("nova_clinica_convite")
 }
