@@ -2449,6 +2449,9 @@ model DisparoDestinatario {
   entregueEm   DateTime? @map("entregue_em")
   lidaEm       DateTime? @map("lida_em")
   respondeuEm  DateTime? @map("respondeu_em")
+  /// origem 'chatwoot': quando o resultado do envio ficou DEFINITIVO (falhou — na hora ou pela varredura — ou o CRM marcou entregue/lida). É por ela que o freio de falhas
+  /// seguidas ordena: envio ainda não conferido pela varredura não conta nem como sucesso nem como falha.
+  decididoEm   DateTime? @map("decidido_em")
   criadoEm     DateTime  @default(now()) @map("criado_em")
   atualizadoEm DateTime  @updatedAt @map("atualizado_em")
 
@@ -2457,6 +2460,7 @@ model DisparoDestinatario {
   @@unique([campanhaId, unitId, chave], map: "disparo_destinatarios_pessoa_key")
   @@index([ondaId, estado])
   @@index([unitId, estado, enviadoEm])
+  @@index([unitId, decididoEm])
   @@index([wamid])
   @@map("disparo_destinatarios")
 }

@@ -49,7 +49,7 @@ test('números: cada marca é contada pela sua definição, e SAIR não conta co
     linha({ wamid: null, estado: 'saiu', enviadoEm: null }), // pediu SAIR ANTES do envio: barrada, não conta como «pediu SAIR depois de receber»
     linha({ wamid: null, estado: 'pendente', enviadoEm: null, simuladoEm: h(1) }), // seco
   ]);
-  assert.deepEqual(n, { selecionadas: 13, enviadas: 7, tentadas: 9, entregues: 5, lidas: 3, responderam: 1, pediramSair: 1, falharam: 2, incertas: 1, naFila: 2, descartadas: 2, receberiam: 1 });
+  assert.deepEqual(n, { selecionadas: 13, enviadas: 7, tentadas: 8, entregues: 5, lidas: 3, responderam: 1, pediramSair: 1, falharam: 2, incertas: 1, naFila: 2, descartadas: 2, receberiam: 1 });
 });
 
 test('resposta só vale até 72 h depois do envio (e nunca antes dele)', () => {
@@ -108,7 +108,7 @@ test('varredura: grava entregue/lida/respondeu uma vez (a hora é a da varredura
     findMany: async () => [
       dest('a', 1), // lida + respondeu
       dest('b', 2), // só entregue
-      dest('c', 3, { entregueEm: h(9), lidaEm: h(9), respondeuEm: h(8) }), // já tem tudo: nada a gravar
+      dest('c', 3, { entregueEm: h(9), lidaEm: h(9), respondeuEm: h(8), decididoEm: h(9) }), // já tem tudo: nada a gravar
       dest('d', 4, { enviadoEm: h(200) }), // resposta 100 h depois: fora da janela
       dest('e', 5, { estado: 'saiu' }), // pediu SAIR: as marcas ainda são gravadas
     ],
@@ -123,13 +123,13 @@ test('varredura: grava entregue/lida/respondeu uma vez (a hora é a da varredura
   };
   const r = await varrerRespostasDoCrm({ ctx: () => criarContextoChatwoot({ url: 'https://x.test', conta: 1, token: 't' }), mensagens: (async (_c: unknown, conversa: number) => porConversa[conversa] ?? []) as never, agora: () => AGORA.getTime() });
   const por = Object.fromEntries(atualizacoes.map((a) => [a.id, a.data]));
-  assert.deepEqual(Object.keys(por['a']!).sort(), ['entregueEm', 'lidaEm', 'respondeuEm']);
+  assert.deepEqual(Object.keys(por['a']!).sort(), ['decididoEm', 'entregueEm', 'lidaEm', 'respondeuEm']);
   assert.deepEqual(por['a']!.respondeuEm, h(5), 'a primeira resposta, com a hora da MENSAGEM');
   assert.deepEqual(por['a']!.lidaEm, AGORA, 'a hora da varredura');
-  assert.deepEqual(Object.keys(por['b']!), ['entregueEm']);
+  assert.deepEqual(Object.keys(por['b']!).sort(), ['decididoEm', 'entregueEm']);
   assert.equal(por['c'], undefined, 'quem já tem as marcas não é regravado');
   assert.equal(por['d'], undefined, 'resposta 100 h depois do envio não vale');
-  assert.deepEqual(Object.keys(por['e']!), ['entregueEm', 'respondeuEm'], 'quem já saiu ainda ganha as marcas');
+  assert.deepEqual(Object.keys(por['e']!).sort(), ['decididoEm', 'entregueEm', 'respondeuEm'], 'quem já saiu ainda ganha as marcas');
   assert.equal(r.saiu, 0, 'e não é contado de novo como SAIR');
 });
 
@@ -177,7 +177,7 @@ test('varredura: pediu SAIR depois do envio continua virando «saiu» no mesmo p
 
 // ── o mesmo cálculo, no banco ───────────────────────────────────────────────────────────────────────────────────
 
-test('SQL × função pura: as MESMAS 17 linhas dão os mesmos números (o SQL de `relatorio-banco.ts` foi rodado no Postgres de produção, só leitura, sobre VALUES com estas linhas; 17 selecionadas|enviadas|tentadas|entregues|lidas|responderam|pediram_sair|falharam|incertas|na_fila|descartadas|receberiam = 17|10|12|5|3|2|2|2|1|2|2|1)', async () => {
+test('SQL × função pura: as MESMAS 17 linhas dão os mesmos números (o SQL de `relatorio-banco.ts` foi rodado no Postgres de produção, só leitura, sobre VALUES com estas linhas; 17 selecionadas|enviadas|tentadas|entregues|lidas|responderam|pediram_sair|falharam|incertas|na_fila|descartadas|receberiam = 17|10|11|5|3|2|1|2|2|2|2|1)', async () => {
   const { numerosDaLinha, SQL_DOS_NUMEROS } = await import('./disparo/chatwoot/relatorio-banco.js');
   const agoraSql = new Date(); // o SQL usou now(): as horas são relativas, como aqui
   const hh = (n: number) => new Date(agoraSql.getTime() - n * 3_600_000);
@@ -192,10 +192,10 @@ test('SQL × função pura: as MESMAS 17 linhas dão os mesmos números (o SQL d
     l('enviado', 'cw:9', 100, null, null, null, 27), // 73 h: não
     l('enviado', 'cw:10', 100, null, null, null, 101), // antes do envio: não
     l('falhou', null, 10, null, null, null, 7), // incerta que respondeu: nem «falharam» nem «responderam»
-    l('saiu', null, 10, null, null, null, 6), // era incerta e pediu SAIR: recebeu
+    l('saiu', null, 10, null, null, null, 6), // era incerta e pediu SAIR: INCERTA (não divide por «enviadas»)
   ];
   // o que o Postgres devolveu para estas linhas
-  const doPostgres = numerosDaLinha({ onda_id: 'o', selecionadas: 17, enviadas: 10, tentadas: 12, entregues: 5, lidas: 3, responderam: 2, pediram_sair: 2, falharam: 2, incertas: 1, na_fila: 2, descartadas: 2, receberiam: 1 });
+  const doPostgres = numerosDaLinha({ onda_id: 'o', selecionadas: 17, enviadas: 10, tentadas: 11, entregues: 5, lidas: 3, responderam: 2, pediram_sair: 1, falharam: 2, incertas: 2, na_fila: 2, descartadas: 2, receberiam: 1 });
   assert.deepEqual(numerosDoRelatorio(linhas), doPostgres);
   assert.match(SQL_DOS_NUMEROS, /FILTER/);
 });
@@ -210,4 +210,28 @@ test('relatório no banco: uma consulta agrupada por onda; onda sem destinatári
   assert.equal(consultas.length, 1);
   assert.equal(m.get('a')!.enviadas, 2);
   assert.equal(m.get('b')!.selecionadas, 0, 'sem linha: zerada');
+});
+
+test('varredura: entregue/lida e falha DECIDEM o envio (`decididoEm`) para o freio de falhas; envio ainda «sent» não decide', async () => {
+  const dest = (id: string, conversa: number) => ({ id, estado: 'enviado', wamid: `cw:${9000 + conversa}`, conversaChatwoot: conversa, enviadoEm: h(10), entregueEm: null, lidaEm: null, respondeuEm: null, decididoEm: null, onda: { unitId: 'u1', contaChatwoot: 1, unit: { slug: 'u' } } });
+  const atualizacoes: Array<{ id: string; data: Record<string, unknown> }> = [];
+  falso('disparoDestinatario', {
+    findMany: async () => [dest('ok', 1), dest('falha', 2), dest('pendente', 3)],
+    updateMany: async (a: { where: { id: string }; data: Record<string, unknown> }) => (atualizacoes.push({ id: a.where.id, data: a.data }), { count: 1 }),
+  });
+  const porConversa: Record<number, unknown[]> = { 1: [msg(9001, 1, { status: 'delivered' })], 2: [msg(9002, 1, { status: 'failed', erro: 'x' })], 3: [msg(9003, 1, { status: 'sent' })] };
+  await varrerRespostasDoCrm({ ctx: () => criarContextoChatwoot({ url: 'https://x.test', conta: 1, token: 't' }), mensagens: (async (_c: unknown, c: number) => porConversa[c]) as never, agora: () => AGORA.getTime() });
+  const por = (id: string) => atualizacoes.filter((a) => a.id === id).map((a) => a.data);
+  assert.ok(por('ok').some((d) => d.decididoEm instanceof Date), 'entregue = sucesso decidido');
+  assert.ok(por('falha').some((d) => d.estado === 'falhou' && d.decididoEm instanceof Date), 'falha da Meta = decidida');
+  assert.deepEqual(por('pendente'), [], '«sent» ainda não decide nada');
+});
+
+test('SAIR de quem estava INCERTO não entra em «pediram SAIR» (dividiria por enviadas e passaria de 100%); a base da taxa de falha não leva incertas', () => {
+  const n = numerosDoRelatorio([linha({ wamid: 'cw:1' }), linha({ wamid: null, estado: 'saiu' }), linha({ wamid: null, estado: 'saiu' }), linha({ wamid: null, estado: 'falhou' })]);
+  assert.deepEqual([n.enviadas, n.pediramSair, n.incertas, n.falharam, n.tentadas], [1, 0, 3, 0, 1]);
+  const t = taxasDoRelatorio(n);
+  assert.equal(t.pediramSair, 0);
+  assert.ok((t.pediramSair ?? 0) <= 100);
+  assert.equal(t.falharam, 0, 'incertas fora do denominador');
 });

@@ -73,7 +73,7 @@ const ENVIO_PRESO_MS = 15 * 60_000;
 export async function fecharEnviosPresos(agora = Date.now()): Promise<number> {
   const r = await prisma.disparoDestinatario.updateMany({
     where: { estado: 'enviando', enviadoEm: { lt: new Date(agora - ENVIO_PRESO_MS) } },
-    data: { estado: 'falhou', motivo: 'INCERTO: o processo caiu durante o envio. Confira no WhatsApp antes de mandar de novo (nunca reenviado sozinho)' },
+    data: { estado: 'falhou', decididoEm: new Date(agora), motivo: 'INCERTO: o processo caiu durante o envio. Confira no WhatsApp antes de mandar de novo (nunca reenviado sozinho)' },
   });
   return r.count;
 }

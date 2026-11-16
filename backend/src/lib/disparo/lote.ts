@@ -60,6 +60,8 @@ export interface DadosDeGravacao {
   simuladoEm?: Date | null;
   /** `null` = desfaz a marca de tentativa que `reivindicar` pôs (não enviou, então não conta no teto) */
   enviadoEm?: Date | null;
+  /** origem 'chatwoot': o momento em que o resultado ficou definitivo (o freio de falhas ordena por ele) */
+  decididoEm?: Date | null;
 }
 
 export interface Porto {

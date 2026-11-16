@@ -15,7 +15,7 @@ import { definicaoDaOnda } from '../onda.js';
 import { ajusteDaUnidade, freiosComOTier } from './ajuste.js';
 import { lerMensagens, ultimoPedidoDeSaida } from './mensagens.js';
 import { ctxDaUnidadeNoCrm, ORIGEM_CRM } from './onda.js';
-import { idDaMensagem, portoChatwoot, unidadesDoMesmoNumeroKapso, type OndaDaRodada } from './porto.js';
+import { chaveDoLimiteDoCrm, idDaMensagem, portoChatwoot, unidadesDoMesmoNumeroKapso, type OndaDaRodada } from './porto.js';
 import { JANELA_DA_RESPOSTA_MS } from './relatorio.js';
 import type { ContextoChatwoot } from '../../../mcp-remoto/chatwoot.js';
 
@@ -23,6 +23,8 @@ const HORAS_OLHANDO = 72;
 /** A varredura confere TODOS os envios das últimas 72 h (sem corte: o freio por SAIR não pode contar menos que a realidade), até este tempo. */
 const ORCAMENTO_DA_VARREDURA_MS = 4 * 60_000;
 const SIMULTANEAS = 4;
+/** Envio ainda «sent» (sem entregue/lida/falha) depois disto é «preso»: vai para o fim da fila da varredura. */
+const PRESO_EM_SENT_MS = 6 * 3_600_000;
 const VARRER_A_CADA_MS = Number(process.env.DISPARO_CRM_VARRER_A_CADA_MS) > 0 ? Number(process.env.DISPARO_CRM_VARRER_A_CADA_MS) : 300_000;
 
 let ultimaVarredura = 0;
@@ -46,7 +48,7 @@ const RESTRICAO = /\b131048\b|\b131056\b/;
  * (a entrega pela Meta falhou depois de o CRM aceitar) vira `falhou`, o que alimenta o freio por falhas seguidas. Lê só a conversa do
  * disparo (a resposta do paciente à mensagem chega nela); o SAIR dito em OUTRA conversa dele é pego na reconferência do próximo envio.
  */
-export async function varrerRespostasDoCrm(deps: VarredorDeps = {}): Promise<{ saiu: number; falhou: number; restritos: string[]; restritosUnitIds: string[]; conferidos: number; faltaram: number }> {
+export async function varrerRespostasDoCrm(deps: VarredorDeps = {}): Promise<{ saiu: number; falhou: number; restritos: string[]; restritosUnitIds: string[]; slugDaUnidade: Record<string, string>; conferidos: number; faltaram: number }> {
   const relogio = deps.agora ?? Date.now;
   const inicio = relogio();
   const ler = deps.mensagens ?? lerMensagens;
@@ -54,10 +56,19 @@ export async function varrerRespostasDoCrm(deps: VarredorDeps = {}): Promise<{ s
   const enviados = await prisma.disparoDestinatario.findMany({
     where: { onda: { origem: ORIGEM_CRM }, estado: { in: ['enviado', 'falhou', 'saiu'] }, conversaChatwoot: { not: null }, enviadoEm: { gte: new Date(inicio - HORAS_OLHANDO * 3_600_000) } },
     orderBy: { enviadoEm: 'asc' },
-    select: { id: true, estado: true, wamid: true, conversaChatwoot: true, enviadoEm: true, entregueEm: true, lidaEm: true, respondeuEm: true, onda: { select: { unitId: true, contaChatwoot: true, unit: { select: { slug: true } } } } },
+    select: { id: true, estado: true, wamid: true, conversaChatwoot: true, enviadoEm: true, entregueEm: true, lidaEm: true, respondeuEm: true, decididoEm: true, onda: { select: { unitId: true, contaChatwoot: true, unit: { select: { slug: true } } } } },
   });
   // quem pode MUDAR de estado (SAIR, falha) vem primeiro; quem já saiu só renova marcas, por último, e some quando já tem tudo
-  const fila = enviados.filter((e) => !(e.estado === 'saiu' && e.entregueEm && e.respondeuEm)).sort((a, b) => Number(a.estado === 'saiu') - Number(b.estado === 'saiu'));
+  // ordem: o que o freio ainda precisa decidir primeiro (e o mais NOVO primeiro: uma restrição/token vencido aparece nos envios mais recentes), depois o resto;
+  // quem já saiu e já tem as marcas nem entra. Se o orçamento de tempo acabar, o que fica para a próxima é o mais velho e já decidido.
+  // 0 = ainda por decidir e recente (o que o freio precisa) · 1 = já decidido (SAIR/marcas) · 2 = PRESO em «sent» há mais de PRESO_EM_SENT_MS (telefone desligado: não
+  // decide nunca; não pode gastar o orçamento de toda varredura na frente dos outros) · 3 = quem já saiu (só renova marcas)
+  const idade = relogio();
+  const classe = (e: (typeof enviados)[number]): number =>
+    e.estado === 'saiu' ? 3 : e.decididoEm ? 1 : idade - e.enviadoEm!.getTime() > PRESO_EM_SENT_MS ? 2 : 0;
+  const fila = enviados
+    .filter((e) => !(e.estado === 'saiu' && e.entregueEm && e.respondeuEm))
+    .sort((a, b) => classe(a) - classe(b) || b.enviadoEm!.getTime() - a.enviadoEm!.getTime());
   // a resposta é da ÚLTIMA mensagem nossa antes dela: na mesma conversa, um disparo mais novo "rouba" a resposta do mais velho
   const enviosDaConversa = new Map<string, number[]>();
   for (const e of enviados) {
@@ -69,6 +80,7 @@ export async function varrerRespostasDoCrm(deps: VarredorDeps = {}): Promise<{ s
   let conferidos = 0;
   const restritos = new Set<string>();
   const restritosUnitIds = new Set<string>();
+  const slugDaUnidade: Record<string, string> = {};
   let i = 0;
   await Promise.all(
     Array.from({ length: Math.min(SIMULTANEAS, fila.length) }, async () => {
@@ -84,7 +96,10 @@ export async function varrerRespostasDoCrm(deps: VarredorDeps = {}): Promise<{ s
           // As marcas do relatório (entregue, lida, respondeu): gravadas uma vez, na primeira varredura que as vê. A hora é a da varredura.
           const marcas: Record<string, Date> = {};
           const visto = new Date(relogio());
-          if (nossa && (nossa.status === 'delivered' || nossa.status === 'read') && !e.entregueEm) marcas.entregueEm = visto;
+          if (nossa && (nossa.status === 'delivered' || nossa.status === 'read')) {
+            if (!e.entregueEm) marcas.entregueEm = visto;
+            if (!e.decididoEm) marcas.decididoEm = visto; // sucesso DEFINITIVO: entra no freio de falhas
+          }
           if (nossa?.status === 'read') {
             if (!e.lidaEm) marcas.lidaEm = visto;
             if (!e.entregueEm) marcas.entregueEm = visto;
@@ -105,11 +120,14 @@ export async function varrerRespostasDoCrm(deps: VarredorDeps = {}): Promise<{ s
           }
           if (e.estado === 'enviado' && nossa?.status === 'failed') {
             const motivo = `o CRM marcou a entrega como falha${nossa.erro ? `: ${nossa.erro}` : ''}`.slice(0, 300);
-            const r = await prisma.disparoDestinatario.updateMany({ where: { id: e.id, estado: 'enviado' }, data: { estado: 'falhou', motivo } });
+            const r = await prisma.disparoDestinatario.updateMany({ where: { id: e.id, estado: 'enviado' }, data: { estado: 'falhou', motivo, decididoEm: visto } });
             falhou += r.count;
             if (RESTRICAO.test(nossa.erro ?? '')) {
               restritos.add(e.onda.unit.slug);
-              if (e.onda.unitId) restritosUnitIds.add(e.onda.unitId);
+              if (e.onda.unitId) {
+                restritosUnitIds.add(e.onda.unitId);
+                slugDaUnidade[e.onda.unitId] = e.onda.unit.slug;
+              }
             }
           }
         } catch (err) {
@@ -118,7 +136,7 @@ export async function varrerRespostasDoCrm(deps: VarredorDeps = {}): Promise<{ s
       }
     }),
   );
-  return { saiu, falhou, restritos: [...restritos], restritosUnitIds: [...restritosUnitIds], conferidos, faltaram: Math.max(0, fila.length - i) };
+  return { saiu, falhou, restritos: [...restritos], restritosUnitIds: [...restritosUnitIds], slugDaUnidade, conferidos, faltaram: Math.max(0, fila.length - i) };
 }
 
 /** O aviso da restrição do número: cita TODAS as unidades pausadas (o número é delas todas). */
@@ -135,18 +153,37 @@ export async function varrerSeChegouAHora(deps: VarredorDeps = {}): Promise<void
     ultimaVarredura = agora;
     if (r.saiu || r.falhou || r.faltaram) logger.warn(r, 'disparo-crm: varredura depois do envio');
     if (r.restritos.length) {
-      const slug = r.restritos.join(', ');
-      // a restrição é do NÚMERO: pausa as ondas do CRM de TODAS as unidades que usam o mesmo número do Kapso, não só a da mensagem
-      const ids = new Set<string>();
-      for (const id of r.restritosUnitIds) for (const x of await unidadesDoMesmoNumeroKapso(id).catch(() => [id])) ids.add(x);
-      logger.error({ unit: slug, unidadesDoNumero: ids.size }, 'disparo-crm: o número foi RESTRINGIDO pela Meta (131048/131056) — pauso as ondas do CRM das unidades do número');
-      await prisma.disparoOnda.updateMany({
-        where: ids.size ? { unitId: { in: [...ids] }, origem: ORIGEM_CRM, estado: 'aprovada' } : { unit: { slug: { in: r.restritos } }, origem: ORIGEM_CRM, estado: 'aprovada' },
-        data: { estado: 'pausada', pausaMotivo: 'a Meta restringiu o número (spam/qualidade): resolva com a Meta e monte o disparo de novo', pausaCausa: 'meta' },
-      });
-      const slugsDoNumero = ids.size ? (await prisma.unit.findMany({ where: { id: { in: [...ids] } }, select: { slug: true } }).catch(() => [])).map((u) => u.slug).sort() : [];
-      const todas = [...new Set([...r.restritos, ...slugsDoNumero])];
-      await enviarTelegram(alertaDeRestricao(todas)).catch(() => undefined);
+      // a restrição é do NÚMERO: um grupo (e um alerta) por número do Kapso; cada um pausa as ondas do CRM de TODAS as unidades que o usam
+      const grupos = new Map<string, Set<string>>();
+      for (const id of r.restritosUnitIds) {
+        const g = new Set<string>([id, ...(await unidadesDoMesmoNumeroKapso(id).catch(() => [id]))]);
+        // grupos que se sobrepõem são o MESMO número visto por duas unidades: uma pausa e um alerta só
+        for (const [k, outro] of [...grupos]) {
+          if ([...outro].some((x) => g.has(x))) {
+            for (const x of outro) g.add(x);
+            grupos.delete(k);
+          }
+        }
+        grupos.set([...g].sort().join(','), g);
+      }
+      const pausar = async (where: Record<string, unknown>, slugs: string[]) => {
+        logger.error({ unidades: slugs }, 'disparo-crm: o número foi RESTRINGIDO pela Meta (131048/131056) — pauso as ondas do CRM das unidades do número');
+        await prisma.disparoOnda.updateMany({
+          where: { ...where, origem: ORIGEM_CRM, estado: 'aprovada' },
+          data: { estado: 'pausada', pausaMotivo: 'a Meta restringiu o número (spam/qualidade): resolva com a Meta e monte o disparo de novo', pausaCausa: 'meta' },
+        });
+        await enviarTelegram(alertaDeRestricao(slugs)).catch(() => undefined);
+      };
+      // (o contador de rodadas com limite de taxa recomeça do zero na próxima aprovação, como no `pausarNumero` do Porto)
+      const zerarContador = (unidades: Iterable<string>) => prisma.disparoLimite.deleteMany({ where: { unitId: { in: [...unidades].map(chaveDoLimiteDoCrm) } } }).catch(() => undefined);
+      if (!grupos.size) await pausar({ unit: { slug: { in: r.restritos } } }, [...r.restritos].sort());
+      for (const ids of grupos.values()) {
+        const doNumero = (await prisma.unit.findMany({ where: { id: { in: [...ids] } }, select: { slug: true } }).catch(() => [])).map((u) => u.slug);
+        // os nomes do alerta são os das unidades DESTE número (se a leitura das unidades falhar, os que a varredura já conhecia dele, nunca os de outro número)
+        const conhecidos = [...ids].map((id) => r.slugDaUnidade[id]).filter((x): x is string => !!x);
+        await pausar({ unitId: { in: [...ids] } }, [...new Set(doNumero.length ? doNumero : conhecidos.length ? conhecidos : [...ids])].sort());
+        await zerarContador(ids);
+      }
     }
   } catch (err) {
     logger.warn({ err: String(err) }, 'disparo-crm: a varredura falhou');
@@ -171,7 +208,7 @@ export async function avisarSeSemAndar(slug: string, unitId: string, r: Paramete
 }
 
 /** Uma rodada das ondas aprovadas da origem CRM. Os freios, a janela e a parada por SAIR são os do motor (`rodarUnidade`). */
-export async function rodadaDoDisparoNoCrm(): Promise<void> {
+export async function rodadaDoDisparoNoCrm(deps: { criarPorto?: (unidades: ReadonlyMap<string, Unit>, ondas: ReadonlyMap<string, OndaDaRodada>) => ReturnType<typeof portoChatwoot>; avisar?: (t: string) => Promise<unknown> } = {}): Promise<void> {
   void varrerSeChegouAHora(); // à parte: a varredura é lenta e não pode atrasar o envio nem a rodada do Kommo
   const ondas = await prisma.disparoOnda.findMany({ where: { estado: 'aprovada', origem: ORIGEM_CRM }, orderBy: { criadoEm: 'asc' }, include: { unit: true } });
   if (ondas.length === 0) return;
@@ -187,7 +224,7 @@ export async function rodadaDoDisparoNoCrm(): Promise<void> {
   const info = new Map<string, OndaDaRodada>(
     boas.map((o) => [o.id, { caixa: o.caixaChatwoot!, conta: o.contaChatwoot!, template: o.template, idioma: o.idioma, textoModelo: o.textoModelo, variaveis: (o.variaveis as unknown[]).map(String) }]),
   );
-  const porto = portoChatwoot({ base: portoReal(unidades), unidades, ondas: info });
+  const porto = deps.criarPorto ? deps.criarPorto(unidades, info) : portoChatwoot({ base: portoReal(unidades), unidades, ondas: info });
   const f = freiosDoAmbiente();
 
   for (const unitId of new Set(boas.map((o) => o.unitId))) {
@@ -200,7 +237,7 @@ export async function rodadaDoDisparoNoCrm(): Promise<void> {
       const ajuste = await ajusteDaUnidade(unit.id);
       const r = await rodarUnidade(porto, freiosComOTier(f, ajuste.tierDoNumero), { id: unit.id, slug: unit.slug, nome: unit.name, fuso: fusoDaUnidade(unit) }, noLote);
       // 429 do Chatwoot: a pessoa volta para a fila (não é «adiado» para o motor), mas para o alerta de «sem andar» é uma rodada sem andar
-      await avisarSeSemAndar(unit.slug, unit.id, porto.ocupouAUnidade(unit.id) ? { ...r, adiados: r.adiados + 1 } : r);
+      await avisarSeSemAndar(unit.slug, unit.id, porto.ocupouAUnidade(unit.id) ? { ...r, adiados: r.adiados + 1 } : r, deps.avisar);
       if (r.processados > 0 || (r.parou && r.parou !== 'automação desligada nesta unidade')) logger.info({ unit: unit.slug, origem: ORIGEM_CRM, ...r }, 'disparo-crm: rodada');
     } catch (err) {
       logger.error({ err: String(err), unit: unit.slug }, 'disparo-crm: a rodada da unidade falhou');
