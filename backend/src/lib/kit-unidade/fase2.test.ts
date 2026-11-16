@@ -199,7 +199,10 @@ test('CLÍNICA DEMONSTRAÇÃO: o --aplicar monta tudo na conta própria dela; Me
   assert.equal(b.e.config!.gerenteId, conta.agents.find((a) => a.email === 'gerente.demo@example.com')!.id);
   assert.equal(b.e.config!.usuarioCelularId, conta.agents.find((a) => a.email === 'celular.demo@example.com')!.id);
   // automações em seco, nenhuma ligada
-  assert.equal(b.e.automacoes.length, 6);
+  // as seis do CRM de antes + `chatwoot-disparo` (a tela «Disparos»): toda `chatwoot-*` com modo seco nasce em seco na clínica nova
+  const { AUTOMACOES } = await import('../automacoes.js');
+  assert.equal(b.e.automacoes.length, AUTOMACOES.filter((a) => a.id.startsWith('chatwoot-') && a.temSeco).length);
+  assert.ok(b.e.automacoes.includes('chatwoot-disparo'));
   // Meta/Kapso: NENHUMA chamada (seco)
   assert.equal(falso.chamadas.filter((c) => c.conta === 'kapso').length, 0);
   assert.ok(resultados.find((r) => r.id === 'modelos')!.notas.some((n) => /SECO.*33 modelo/.test(n)));

@@ -28,6 +28,9 @@ export interface Destino {
   /** nome inteiro do contato (só para reconferir a franquia); cai no primeiro nome se não foi guardado */
   nomeCompleto: string;
   kommoLeadId: number | null;
+  /** origem 'chatwoot': a conversa (e o contato) do CRM para onde a mensagem vai; ausente/null nas ondas do Kommo */
+  conversaChatwoot?: number | null;
+  contatoChatwoot?: number | null;
 }
 
 export interface OndaNoLote extends Definicao {
@@ -88,6 +91,11 @@ export interface Porto {
   devolverParaAprovacao(ondaId: string, motivo: string): Promise<void>;
   concluirOnda(ondaId: string): Promise<void>;
   pediuSair(d: Destino): Promise<boolean>;
+  /**
+   * OPCIONAL — conferências do lado de quem origina a lista, na hora do envio, ANTES da franquia (a origem Chatwoot: a conversa ainda existe e
+   * é desta pessoa, a caixa é WhatsApp oficial, SAIR nas mensagens, contato interno…). `null` = segue. A origem Kommo não define: nada muda.
+   */
+  reconferir?(d: Destino): Promise<VereditoExtra | null>;
   franquia(d: Destino): Promise<SituacaoNaFranquia>;
   enviar(onda: OndaNoLote, d: Destino, valores: string[]): Promise<ResultadoDoTemplate>;
   espelhar(d: Destino, texto: string): Promise<void>;
@@ -160,6 +168,12 @@ export function textoDoEspelho(onda: OndaNoLote, texto: string, quando: Date, fu
   return moldura(`${texto.slice(0, corte).trimEnd()}…`);
 }
 
+/** O que `Porto.reconferir` pode decidir (os mesmos vereditos de baixo, menos «pode»). */
+export type VereditoExtra =
+  | { tipo: 'barrou'; estado: 'saiu' | 'descartado'; motivo: string }
+  /** não deu para conferir: tenta de novo na próxima rodada, NÃO descarta a pessoa para sempre */
+  | { tipo: 'adiar'; motivo: string };
+
 type Veredito =
   | { tipo: 'pode' }
   | { tipo: 'barrou'; estado: 'saiu' | 'descartado'; motivo: string }
@@ -169,6 +183,8 @@ type Veredito =
 /** Decide, sem mandar nada, se a pessoa ainda pode receber. */
 async function aindaPode(porto: Porto, d: Destino): Promise<Veredito> {
   if (await porto.pediuSair(d)) return { tipo: 'barrou', estado: 'saiu', motivo: 'pediu para sair (SAIR) antes do envio' };
+  const extra = await porto.reconferir?.(d);
+  if (extra) return extra;
   const f = await porto.franquia(d);
   if (f === 'livre') return { tipo: 'pode' };
   if (f === 'indisponivel') return { tipo: 'adiar', motivo: 'a franquia não respondeu (ou, em unidade sem franquia, o Kommo)' };

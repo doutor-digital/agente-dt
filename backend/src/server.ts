@@ -13,6 +13,7 @@ import { paginaPausaHandler } from './controllers/pausa.controller.js';
 import { paginaAprendizadosHandler } from './controllers/aprendizados.controller.js';
 import { paginaAgenteHandler } from './controllers/agente-chatwoot.controller.js';
 import { paginaRobosHandler } from './controllers/robos.controller.js';
+import { paginaDisparosHandler } from './controllers/disparos.controller.js';
 import { menuFunilHandler, paginaFunilHandler } from './controllers/funil.controller.js';
 import { corsDoAssistente, paginaAssistenteHandler } from './controllers/assistente.controller.js';
 import { origensDoChatwoot } from './lib/origens-do-chatwoot.js';
@@ -183,6 +184,8 @@ async function main(): Promise<void> {
   app.get('/funil/testar-ia', paginaAgenteHandler);
   // «Robôs» (14/11): os robôs da régua por unidade (ver, ligar/desligar, tempo, modelo, enviados). Mesmo caminho do Agente: o menu entrega a sessão.
   app.get('/funil/robos', paginaRobosHandler);
+  // «Disparos» (16/11): o «Broadcast» do CRM (filtro, modelo aprovado, prévia, aprovação, envio em ondas). Mesmo caminho das outras telas.
+  app.get('/funil/disparos', paginaDisparosHandler);
   // Assistente da atendente: a página do painel (iframe do botão que entra pelo menu.js).
   app.get('/assistente', paginaAssistenteHandler);
 

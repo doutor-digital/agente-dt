@@ -287,6 +287,20 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/disparo/lote.ts',
   },
   {
+    id: 'chatwoot-disparo',
+    chave: 'CHATWOOT_DISPARO_SLUGS',
+    nome: 'Disparos pelo CRM (tela «Disparos»)',
+    oQueFaz:
+      'A tela «Disparos» do menu do CRM: a equipe filtra as conversas da caixa de WhatsApp oficial (etiqueta, etapa, quanto tempo sem interação), escolhe um MODELO APROVADO na Meta, vê a prévia por pessoa e a administração aprova; o envio sai em ondas, pela própria conversa do CRM (a mensagem aparece lá). É o mesmo motor do «Disparo de campanha» (a lista aqui vem do CRM, não da etiqueta do Kommo): mesma janela de horário, mesmos tetos, mesma parada por SAIR.',
+    pegadinha:
+      'NASCE EM «SÓ NO PAPEL» EM TODAS AS UNIDADES: em seco, monta a lista, confere tudo e grava quem RECEBERIA, mas não manda nada. Mesmo ligado, só recebe de verdade quem estiver em CHATWOOT_DISPARO_LISTA_DE_TESTE da unidade (`slug=telefone,telefone` ou `slug=*`; lista PRÓPRIA do CRM, separada da DISPARO_LISTA_DE_TESTE do Kommo; sem a unidade lá ninguém recebe). Só a Doutor Digital liga (console): a tela Robôs da clínica NÃO mostra nem muda esta automação. Só aprova administrador da Doutor Digital (KIT_ADMINS_DD); a administradora da clínica só aprova se o ajuste «gerente aprova» da unidade for ligado (desligado de fábrica). Nunca manda para: quem respondeu SAIR, etiqueta «sem-follow-up», contato «interno», telefone repetido, quem recebeu outro disparo nos últimos 7 dias nem — em unidade com agenda da franquia — quem tem consulta marcada ou tratamento aberto (reconferido na hora do envio). A caixa precisa ser WhatsApp oficial de verdade (Channel::Whatsapp): caixa de API registrada como «cloud» é recusada. Não usa a campanha nativa do CRM (ela não tem freio, manda para quem pediu SAIR).',
+    risco: 'manda-mensagem',
+    temSeco: true,
+    exigeSecoAntes: true,
+    quandoVazio: 'seco',
+    arquivo: 'src/lib/disparo/chatwoot/porto.ts',
+  },
+  {
     id: 'aviso-agendamento',
     chave: 'AVISO_AGENDAMENTO_SLUGS',
     nome: 'Aviso no WhatsApp quando a IA marca',
