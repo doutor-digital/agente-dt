@@ -193,7 +193,8 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
     ],
     depende: ['config-chatwoot'],
   });
-  const chatwootAutomacoes = AUTOMACOES.filter((a) => a.id.startsWith('chatwoot-') && a.temSeco);
+  // clínica SEM assistente: a automação de IA (chatwoot-ia) NÃO nasce, nem em seco (senão gastaria modelo lendo conversa de uma clínica que não contratou IA)
+  const chatwootAutomacoes = AUTOMACOES.filter((a) => a.id.startsWith('chatwoot-') && a.temSeco && !(q.assistente?.quer === false && a.id === 'chatwoot-ia'));
   const semLinha = chatwootAutomacoes.filter((a) => !b?.automacoes[a.id]);
   add({
     id: 'automacoes-seco',
@@ -391,7 +392,10 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
   const licoes = licoesDaAssistente(q);
   const normLicao = (t: string) => t.trim().replace(/\s+/g, ' ').toLowerCase();
   const jaTemLicao = new Set((b?.licoes ?? []).map(normLicao));
-  const licoesNovas = licoes.textos.filter((t) => !jaTemLicao.has(normLicao(t)));
+  // o kit grava os aprendizados UMA vez (marca em units.kit_aprendizados_em): depois disso a clínica manda neles (/aprendizados) e o kit não regrava, nem o que ela apagou ou editou
+  const importadoEm = (b?.unidade?.campos as { kitAprendizadosEm?: Date | string | null } | undefined)?.kitAprendizadosEm ?? null;
+  const jaImportados = !!importadoEm && !sobrescrever;
+  const licoesNovas = jaImportados ? [] : licoes.textos.filter((t) => !jaTemLicao.has(normLicao(t)));
   const { gravar: sofiaAEscrever, preservados: sofiaPreservados } = aGravar(b?.sofia ?? null, sofia.campos, sobrescrever);
   const mudouSofia = Object.keys(sofiaAEscrever);
   add({
@@ -403,7 +407,7 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
       ? ['sem persona, sem fontes, sem prompt e sem aprendizados: a unidade fica SEM IA (para contratar depois: assistente.quer: true no questionário e rodar de novo)']
       : [
           ...Object.keys(sofia.campos).map((k) => (k === 'systemPrompt' ? `systemPrompt (${String(sofia.campos[k]).length} caracteres, do molde)` : k)),
-          ...(q.assistente ? [`aprendizados da clínica (fonte «unidade», editáveis em /aprendizados/${slug}): ${licoesNovas.length} a gravar (${licoes.textos.length - licoesNovas.length} já existem) — o que a clínica pediu sobre saudação, emoji, objeções, o que nunca dizer e quando chamar uma pessoa; ficam ABAIXO das regras da rede`] : []),
+          ...(q.assistente ? [`aprendizados da clínica (fonte «unidade», editáveis em /aprendizados/${slug}): ${licoesNovas.length} a gravar (${jaImportados ? 'JÁ importados pelo kit: não regravo; a clínica os administra em /aprendizados' : `${licoes.textos.length - licoesNovas.length} já existem`}) — o que a clínica pediu sobre saudação, emoji, objeções, o que nunca dizer e quando chamar uma pessoa; ficam ABAIXO das regras da rede`] : []),
           'automação prompt-da-unidade: NÃO ligo — antes roda `testar-prompt.ts --slug` e o dono lê as respostas',
         ],
     execucao: semIA ? 'manual' : 'sim',
@@ -465,7 +469,7 @@ function montarRelatorio(q: Questionario, passos: Passo[], x: { aEnviar: number;
   const tem = (id: string) => passos.find((p) => p.id === id)?.acao !== 'nada';
   if (tem('numero')) r.push(`NÚMERO: conectar ${mascararCampo(q.whatsapp.numero_oficial)} ao Kapso (${q.whatsapp.conexao}) — quem tem o celular da unidade`);
   if (q.whatsapp.modo === 'demonstracao') r.push('DEMONSTRAÇÃO: os modelos ficaram em SECO e a caixa é API. Para virar clínica de verdade: modo: real, número e WABA no questionário, e rodar de novo');
-  r.push(`COFRE: o token do usuário conector (CHATWOOT_API_TOKEN_${sufixoDoQuestionario(q)}) e o do robô (CHATWOOT_SOFIA_BOT_TOKEN_${sufixoDoQuestionario(q)}) ficam na pasta KIT_SEGREDOS_DIR: o João os coloca no arquivo de segredos da VPS e no env do serviço ddagent_agent e REINICIA o serviço (é quando o servidor passa a conhecer a conta)`);
+  r.push(q.assistente?.quer === false ? `COFRE: o token do usuário conector (CHATWOOT_API_TOKEN_${sufixoDoQuestionario(q)}) fica na pasta KIT_SEGREDOS_DIR (clínica SEM assistente: não há robô, então não há CHATWOOT_SOFIA_BOT_TOKEN; use cofre-para-servico-joao.sh ${sufixoDoQuestionario(q)} --sem-ia):` : `COFRE: o token do usuário conector (CHATWOOT_API_TOKEN_${sufixoDoQuestionario(q)}) e o do robô (CHATWOOT_SOFIA_BOT_TOKEN_${sufixoDoQuestionario(q)}) ficam na pasta KIT_SEGREDOS_DIR: o João os coloca no arquivo de segredos da VPS e no env do serviço ddagent_agent e REINICIA o serviço (é quando o servidor passa a conhecer a conta)`);
   r.push('PASTAS: cada atendente cria as 10 pastas dela depois do primeiro login (a pasta é da pessoa; o script não consegue)');
   if (x.aEnviar && q.whatsapp.modo !== 'demonstracao') r.push(`MODELOS: ${x.aEnviar} modelo(s) vão à Meta e ficam PENDENTES (minutos a 48 h). Conferir a aprovação em Kapso → Modelos${x.inferidos ? `; revisar categoria/botões de ${x.inferidos} deles` : ''}`);
   if (x.ausentes.length) r.push(`SEGREDOS: colocar no ambiente do serviço e no arquivo de segredos da VPS: ${x.ausentes.join(', ')}`);
@@ -480,7 +484,7 @@ function montarRelatorio(q: Questionario, passos: Passo[], x: { aEnviar: number;
       if (q.assistente.quem_recebe?.nome) r.push(`QUEM RECEBE O ATENDIMENTO QUANDO A IA CHAMA UMA PESSOA: ${q.assistente.quem_recebe.nome}${q.assistente.quem_recebe.contato ? ` (contato ${mascararCampo(q.assistente.quem_recebe.contato)})` : ''} — conferir se está como gerente/SDR no CRM`);
     }
   }
-  r.push('AUTOMAÇÕES: ficam em SECO; observar 24 h de notas na conversa e só então ligar pela tela Automações (uma por vez, começando por agenda)');
+  r.push(q.assistente?.quer === false ? 'AUTOMAÇÕES: ficam em SECO (a de IA, chatwoot-ia, NÃO existe nesta clínica: ela não quer assistente); observar 24 h de notas na conversa e só então ligar pela tela Automações as que forem de agenda e régua, uma por vez' : 'AUTOMAÇÕES: ficam em SECO; observar 24 h de notas na conversa e só então ligar pela tela Automações (uma por vez, começando por agenda)');
   r.push('UNIDADE: nasce inativa (isActive=false); ativar na tela da unidade quando tudo acima estiver de pé');
   r.push(`SUBDOMÍNIO: ${q.chatwoot.subdominio}.${DOMINIO_DOS_CRMS} só funciona depois do passo da VPS (proxy chatwoot_franquias)`);
   r.push('CONFERIR PELO DONO: endereço, link do mapa, preços, horários e nomes dos profissionais — viram frase dita ao paciente e texto dos modelos aprovados na Meta');

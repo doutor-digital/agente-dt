@@ -74,7 +74,7 @@ case "$*" in *'echo "conectou'*) echo "conectou em vps-de-mentira";; esac
 case "$*" in *do-formulario-joao.sh*)
   echo "Clínica: Doutor Hérnia Serra (Serra/ES)"
   [ "\${FAKE_VALIDO:-sim}" = "nao" ] && echo "  PENDENTE whatsapp.waba_id: falta"
-  echo "KIT_RESUMO slug=\${FAKE_SLUG:-doutor-hernia-serra} subdominio=drherniaserra sufixo=SERRA modo=real valido=\${FAKE_VALIDO:-sim}";; esac
+  echo "KIT_RESUMO slug=\${FAKE_SLUG:-doutor-hernia-serra} subdominio=drherniaserra sufixo=SERRA modo=real valido=\${FAKE_VALIDO:-sim} ia=\${FAKE_IA:-sim}";; esac
 if [ -n "\${FALHAR_EM:-}" ] && [[ "$*" == *"$FALHAR_EM"* ]]; then echo "erro de mentira" >&2; exit "\${FALHAR_CODIGO:-3}"; fi
 exit 0
 `,
@@ -457,4 +457,22 @@ test('--do-formulario aceita o código do link que começa com «-» ou «_»', 
   const r = e.rodar(['doutor-hernia-serra', '--do-formulario', '_bcdefghijklmnopqrstuvwx'], { entrada: 'aplicar\n' });
   assert.equal(r.status, 0, r.stdout);
   assert.ok(e.chamadas().some((l) => l.includes("do-formulario-joao.sh '_bcdefghijklmnopqrstuvwx'")));
+});
+
+test('clínica SEM assistente: o cofre vai com --sem-ia (do resumo do importador e do questionário local); COM assistente, sem a flag', () => {
+  const a = ambiente();
+  const r = a.rodar(['doutor-hernia-serra', '--do-formulario', 'abc123def'], { entrada: 'aplicar\n', env: { FAKE_IA: 'nao' } });
+  assert.equal(r.status, 0, r.stdout);
+  const cofres = a.chamadas().filter((l) => l.includes('cofre-para-servico-joao.sh'));
+  assert.equal(cofres.length, 2);
+  assert.ok(cofres.every((l) => l.includes(" --sem-ia")), cofres.join('\n'));
+  const b = ambiente();
+  b.rodar(['doutor-hernia-serra', '--do-formulario', 'abc123def'], { entrada: 'aplicar\n' });
+  assert.ok(b.chamadas().filter((l) => l.includes('cofre-para-servico-joao.sh')).every((l) => !l.includes('--sem-ia')));
+  // questionário local (privado) com assistente.quer: false
+  const c = ambiente();
+  c.gravarPrivado('doutor-hernia-teste', QUESTIONARIO_REAL + 'assistente:\n  quer: false\n');
+  const rc = c.rodar(['doutor-hernia-teste'], { entrada: 'aplicar\n' });
+  assert.equal(rc.status, 0, rc.stdout);
+  assert.ok(c.chamadas().filter((l) => l.includes('cofre-para-servico-joao.sh')).every((l) => l.includes("'TESTE' --sem-ia") || l.includes("'TESTE' --so-conferir --sem-ia")), c.chamadas().join('\n'));
 });

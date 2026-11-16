@@ -125,7 +125,7 @@ test('executar --so-conferir: lê, mostra o que falta e a linha de máquina, NÃ
   const saida = r.linhas.join('\n');
   assert.match(saida, /FALTA COMPLETAR/);
   assert.match(saida, /PENDENTE whatsapp\.waba_id/);
-  assert.match(saida, /^KIT_RESUMO slug=doutor-hernia-serra subdominio=drherniaserra sufixo=SERRA modo=real valido=nao$/m);
+  assert.match(saida, /^KIT_RESUMO slug=doutor-hernia-serra subdominio=drherniaserra sufixo=SERRA modo=real valido=nao ia=nao$/m);
   assert.match(saida, /SÓ CONFERIR/);
   assert.match(saida, /CONFIRME \(o kit SUGERIU[^\n]*prefixo dos modelos «serra_» · subdomínio «drherniaserra» · sufixo «SERRA»/);
 });

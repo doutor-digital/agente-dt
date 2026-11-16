@@ -27,14 +27,14 @@ after(() => {
 });
 
 /** docker de mentira para o cofre: o env do serviço mora em `svc_env`; `service update --env-add NOME` lê o valor do AMBIENTE (como o docker real). */
-function ambienteCofre(opcoes: { envInicial?: string; kitRodando?: boolean; updatePerde?: boolean } = {}) {
+function ambienteCofre(opcoes: { envInicial?: string; kitRodando?: boolean; updatePerde?: boolean; semRobo?: boolean } = {}) {
   const dir = tmp('cofre-sh-');
   const bin = join(dir, 'bin');
   const cofre = join(dir, 'cofre');
   mkdirSync(bin, { recursive: true });
   mkdirSync(cofre, { recursive: true });
   writeFileSync(join(cofre, 'CHATWOOT_API_TOKEN_DEMO'), TOKEN_API);
-  writeFileSync(join(cofre, 'CHATWOOT_SOFIA_BOT_TOKEN_DEMO'), TOKEN_BOT);
+  if (!opcoes.semRobo) writeFileSync(join(cofre, 'CHATWOOT_SOFIA_BOT_TOKEN_DEMO'), TOKEN_BOT);
   writeFileSync(join(dir, 'agente.env'), opcoes.envInicial ?? 'CHATWOOT_API_TOKEN=global\nOUTRA=1');
   writeFileSync(join(dir, 'svc_env'), 'CHATWOOT_API_TOKEN=global\nOUTRA=1\n');
   writeFileSync(join(dir, 'log'), '');
@@ -100,6 +100,31 @@ test('cofre: --so-conferir não muda nada; aplicar grava .env (com cópia) e ser
   const de_novo = a.rodar('DEMO');
   assert.equal(de_novo.status, 0);
   assert.match(de_novo.stdout, /NADA A FAZER/);
+});
+
+test('cofre: clínica SEM assistente (sem robô) → --sem-ia leva só a chave da conta; sem a flag exige o robô (e PARA, sem laço silencioso)', () => {
+  const a = ambienteCofre({ semRobo: true });
+  const exigindo = a.rodar('DEMO', '--so-conferir');
+  assert.equal(exigindo.status, 1);
+  assert.match(exigindo.stdout, /FALTA no cofre: .*CHATWOOT_SOFIA_BOT_TOKEN_DEMO/);
+  for (const args of [['DEMO', '--sem-ia', '--so-conferir'], ['DEMO', '--so-conferir', '--sem-ia']]) {
+    const conf = a.rodar(...args);
+    assert.equal(conf.status, 0, conf.stdout + conf.stderr);
+    assert.match(conf.stdout, /SÓ CONFERIR/);
+  }
+  assert.ok(!a.log().includes('service update'));
+  const r = a.rodar('DEMO', '--sem-ia');
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /PRONTO/);
+  assert.match(a.env(), new RegExp(`CHATWOOT_API_TOKEN_DEMO=${TOKEN_API}\\n$`), 'só a chave da conta no .env');
+  assert.doesNotMatch(a.env(), /SOFIA_BOT/);
+  assert.match(a.log(), /service update --detach=false --quiet --env-add CHATWOOT_API_TOKEN_DEMO ddagent_agent/);
+  assert.doesNotMatch(a.log(), /SOFIA_BOT/);
+  semSegredo(r.stdout + r.stderr + a.log(), 'saída e linha de comando');
+  assert.match(a.rodar('DEMO', '--sem-ia').stdout, /NADA A FAZER/);
+  const ruim = a.rodar('DEMO', '--tudo');
+  assert.equal(ruim.status, 2);
+  assert.match(ruim.stdout, /argumento desconhecido: --tudo/);
 });
 
 test('cofre: valor DIFERENTE no .env → PARA sem tocar em nada', () => {

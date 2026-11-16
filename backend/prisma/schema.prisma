@@ -276,6 +276,8 @@ model Unit {
    * Nasceu do sábado: todas as unidades atendem, com horário menor que o da semana.
    */
   spineDayHours    Json?   @map("spine_day_hours")
+  /// O kit de unidade gravou UMA vez os aprendizados que o dono pediu no formulário (assistente). Depois disso o kit nunca regrava: a clínica os administra em /aprendizados (edita, apaga, desliga).
+  kitAprendizadosEm DateTime? @map("kit_aprendizados_em")
   /// Profissional da franquia por turno: [{ "inicio": "08:00", "fim": "13:30", "idStaff": 536, "nome": "Dra. Juliana Santos" }, …].
   /// Sem isto o createSchedule vai sem idStaff e a franquia põe a primeira profissional da lista (em Taubaté, a
   /// dona — que não atende). Horário fora de qualquer turno também vai sem idStaff.

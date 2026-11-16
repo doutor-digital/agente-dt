@@ -7,7 +7,7 @@
  *   node dist/scripts/do-formulario.js <codigo|id|slug> --marcar-importado                    # o script do host chama depois de o arquivo chegar em unidades/privado/
  *
  * Imprime só linhas sem dado pessoal (nome da clínica, da cidade, de quem preencheu; campos que faltam) e UMA linha de máquina para o script do host:
- *   KIT_RESUMO slug=<slug> subdominio=<sub> sufixo=<SUF> modo=real valido=<sim|nao>
+ *   KIT_RESUMO slug=<slug> subdominio=<sub> sufixo=<SUF> modo=real valido=<sim|nao> ia=<sim|nao>
  * O conteúdo do questionário (e-mails, Pix, telefone) NUNCA é impresso.
  */
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -65,7 +65,7 @@ export async function executar(args: string[], banco: BancoFormularios, gravar: 
     gravar(saida!, g.slug, r.yaml);
     linhas.push(`Questionário gerado: ${g.slug}.yaml (modo 600; o conteúdo não é impresso).`);
   }
-  linhas.push(`KIT_RESUMO slug=${g.slug} subdominio=${g.subdominio} sufixo=${g.sufixo} modo=${g.modo} valido=${g.valido ? 'sim' : 'nao'}`);
+  linhas.push(`KIT_RESUMO slug=${g.slug} subdominio=${g.subdominio} sufixo=${g.sufixo} modo=${g.modo} valido=${g.valido ? 'sim' : 'nao'} ia=${(g.objeto.assistente as { quer?: boolean } | undefined)?.quer === false ? 'nao' : 'sim'}`);
   return { linhas, codigo: 0 };
 }
 

@@ -21,6 +21,15 @@ const obj = <T extends z.ZodRawShape>(shape: T) => z.object(shape).strict();
 const email = z.string().email().max(120);
 const dinheiro = z.number().positive().max(100000);
 
+/**
+ * Subdomínios que NENHUMA clínica pode pegar: são do nosso próprio sistema (o formulário, o agente, o Chatwoot, os painéis…) ou nomes que enganam. «demo» é só da Clínica Demonstração
+ * (`whatsapp.modo: demonstracao`). O DNS curinga já aponta tudo para a VPS: uma clínica com «cadastro» ou «atendimento» tomaria o lugar do serviço de verdade.
+ */
+export const SUBDOMINIOS_RESERVADOS: readonly string[] = [
+  'cadastro', 'atendimento', 'agente', 'agentevps', 'automacao', 'franquia', 'suporte', 'api', 'app', 'www', 'mail', 'smtp', 'admin', 'painel', 'dashboard', 'chatwoot', 'kommo', 'crm',
+  'vps', 'ddagent', 'doutordigital', 'portal', 'status', 'docs', 'mcp', 'login', 'oauth', 'auth', 'webhook', 'webhooks', 'ftp', 'ns1', 'ns2', 'aulas', 'demo',
+];
+
 export const Questionario = z
   .object({
     versao: z.literal(1),
@@ -166,6 +175,7 @@ export const Questionario = z
       if (suf(q.meta.dataset_id_env, 'META_DATASET_ID_') !== sufixo) aviso(['meta', 'dataset_id_env'], `precisa ser META_DATASET_ID_${sufixo}`);
     }
     if (q.unidade.slug.includes('--')) aviso(['unidade', 'slug'], 'slug com "--"');
+    if (SUBDOMINIOS_RESERVADOS.includes(q.chatwoot.subdominio) && !(q.chatwoot.subdominio === 'demo' && q.whatsapp.modo === 'demonstracao')) aviso(['chatwoot', 'subdominio'], `«${q.chatwoot.subdominio}» é um subdomínio reservado do nosso sistema: escolha outro`);
     if (q.whatsapp.modo === 'real') {
       for (const campo of ['numero_oficial', 'kapso_phone_number_id', 'waba_id'] as const) if (!q.whatsapp[campo]) aviso(['whatsapp', campo], 'obrigatório quando a clínica tem número de verdade (modo: real); a demonstração não precisa');
     } else if (q.whatsapp.numero_oficial || q.whatsapp.kapso_phone_number_id || q.whatsapp.waba_id) {

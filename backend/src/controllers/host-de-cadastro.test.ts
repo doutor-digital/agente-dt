@@ -100,3 +100,11 @@ test('docker-compose: roteador PRÓPRIO do Traefik com Host + PathPrefix (só /n
   assert.ok(!novo.some((l) => l.includes('${')));
   assert.equal(HOST_DE_CADASTRO, 'cadastro.doutordigitalconsultoria.com');
 });
+
+test('req.hostname indefinido (Express 5, Host ausente/inválido) não derruba o servidor: segue como outro host', () => {
+  const mw = somenteCadastroNoHostDeCadastro();
+  let seguiu = 0;
+  mw({ hostname: undefined, method: 'GET', path: '/api/health' } as never, {} as never, () => { seguiu++; });
+  mw({ method: 'GET', path: '/api/health' } as never, {} as never, () => { seguiu++; });
+  assert.equal(seguiu, 2);
+});

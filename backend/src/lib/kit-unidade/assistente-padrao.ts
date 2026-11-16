@@ -88,7 +88,9 @@ export function resolverMarcadores(texto: string): string {
 /** Os textos dos aprendizados, UM lugar só (o formulário confere o texto composto com as travas da página; o kit grava o mesmo). Aspas retas: a trava recusa « » < >. */
 export const licaoDaSaudacao = (s: string) => `Ao se apresentar, use este jeito de falar da clínica: "${s.trim()}"`;
 export const licaoDaObjecao = (gatilho: string, resposta: string) => `Se o paciente disser "${gatilho.trim()}", responda neste estilo: "${resolverMarcadores(resposta.trim())}"`;
-export const licaoDoNunca = (t: string) => `Nunca diga nem prometa: ${t.trim()}`;
+export const PREFIXO_DO_NUNCA = 'Nunca diga nem prometa:';
+/** Uma frase só (pontuação final vira vírgula): tudo depois dos dois-pontos é PROIBIDO, e a trava de «prometer cura / desconto» entende assim (`prefixoNegativo`). */
+export const licaoDoNunca = (t: string) => `${PREFIXO_DO_NUNCA} ${t.trim().replace(/[.;!?]+\s*/g, ', ').replace(/[,\s]+$/, '')}`;
 export const licaoDeChamarPessoa = (t: string) => `Chame também uma pessoa da equipe quando: ${t.trim()}`;
 export const LICAO_SEM_EMOJI = 'Não use emojis nas mensagens.';
 export const LICAO_POUCO_EMOJI = 'Use emojis com muita moderação: no máximo um a cada poucas mensagens.';

@@ -186,6 +186,12 @@ async function bancoReal(): Promise<BancoPorta> {
         // fonte «unidade» = a mesma da página /aprendizados: a clínica vê, edita e desliga lá
         await prisma.unitLesson.createMany({ data: textos.map((content) => ({ unitId, content, source: 'unidade', enabled: true })) });
       },
+      async contarDaUnidade(unitId) {
+        return prisma.unitLesson.count({ where: { unitId, source: 'unidade', enabled: true } });
+      },
+      async marcarImportado(unitId) {
+        await prisma.unit.update({ where: { id: unitId }, data: { kitAprendizadosEm: new Date() } });
+      },
     },
     async caixasRegistradas(unitId) {
       return (await prisma.unitChatwootCaixa.findMany({ where: { unitId }, select: { caixaId: true } })).map((c) => c.caixaId);

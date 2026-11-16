@@ -10,7 +10,7 @@
 import type { RespostasFormulario } from './formulario.js';
 import { kebab, objecaoMudou, sugestoesDoKit } from './formulario.js';
 import { OBJECOES_PADRAO } from './assistente-padrao.js';
-import { validarQuestionario } from './questionario.js';
+import { SUBDOMINIOS_RESERVADOS, validarQuestionario } from './questionario.js';
 
 /** Fuso por estado (o questionário assume America/Belem; clínica no ES ou no AC não pode herdar isso). */
 const FUSO_POR_UF: Record<string, string> = {
@@ -52,6 +52,7 @@ export function lerAjustes(pares: string[]): { ok: true; ajustes: Ajustes } | { 
     if (!(AJUSTES_PERMITIDOS as readonly string[]).includes(k)) return { ok: false, erro: `--set ${k}: não posso mudar isso por aqui. Campos aceitos: ${AJUSTES_PERMITIDOS.join(', ')}.` };
     if (!v) return { ok: false, erro: `--set ${k}: falta o valor (--set ${k}=valor).` };
     if (/\s|[\\'"`$;&|<>]/.test(v)) return { ok: false, erro: `--set ${k}: valor com espaço ou caractere estranho.` };
+    if (k === 'chatwoot.subdominio' && SUBDOMINIOS_RESERVADOS.includes(v)) return { ok: false, erro: `--set ${k}: «${v}» é um subdomínio reservado do nosso sistema; escolha outro.` };
     const formato = FORMATO_DO_AJUSTE[k as (typeof AJUSTES_PERMITIDOS)[number]];
     if (!formato.re.test(v)) return { ok: false, erro: `--set ${k}: ${formato.dica}` };
     ajustes[k] = v;

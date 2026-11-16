@@ -8,7 +8,7 @@
  * e o texto das fontes é escrito de modo que `precosDaConsulta` o leia de volta (teste).
  */
 import { normalizarRegra, recusaDaRegra } from '../aprendizados-unidade.js';
-import { LICAO_POUCO_EMOJI, LICAO_SEM_EMOJI, QUANDO_ATENDE, licaoDaObjecao, licaoDaSaudacao, licaoDeChamarPessoa, licaoDoNunca } from './assistente-padrao.js';
+import { LICAO_POUCO_EMOJI, LICAO_SEM_EMOJI, PREFIXO_DO_NUNCA, QUANDO_ATENDE, licaoDaObjecao, licaoDaSaudacao, licaoDeChamarPessoa, licaoDoNunca } from './assistente-padrao.js';
 import type { Questionario } from './questionario.js';
 
 const DIAS = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];
@@ -81,15 +81,20 @@ export function licoesDaAssistente(q: Questionario): { textos: string[]; recusad
   const recusadas: Array<{ texto: string; motivo: string }> = [];
   if (!a || a.quer === false) return { textos, recusadas };
   const candidatas: string[] = [];
+  const proibicoes = new Set<string>();
   if (a.saudacao?.trim()) candidatas.push(licaoDaSaudacao(a.saudacao));
   if (a.emoji === 'nao') candidatas.push(LICAO_SEM_EMOJI);
   if (a.emoji === 'pouco') candidatas.push(LICAO_POUCO_EMOJI);
   for (const o of a.objecoes ?? []) candidatas.push(licaoDaObjecao(o.gatilho, o.resposta));
-  if (a.nunca_extra?.trim()) candidatas.push(licaoDoNunca(a.nunca_extra));
+  if (a.nunca_extra?.trim()) {
+    const t = licaoDoNunca(a.nunca_extra);
+    candidatas.push(t);
+    proibicoes.add(normalizarRegra(t));
+  }
   if (a.passar_extra?.trim()) candidatas.push(licaoDeChamarPessoa(a.passar_extra));
   for (const c of candidatas) {
     const t = normalizarRegra(c);
-    const motivo = recusaDaRegra(t);
+    const motivo = recusaDaRegra(t, proibicoes.has(t) ? { prefixoNegativo: PREFIXO_DO_NUNCA } : {});
     if (motivo) recusadas.push({ texto: t.length > 90 ? `${t.slice(0, 87)}…` : t, motivo });
     else textos.push(t);
   }

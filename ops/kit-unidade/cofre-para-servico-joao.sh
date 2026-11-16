@@ -4,6 +4,7 @@
 #   (na VPS, como root, de /root/kit)
 #   bash ops/kit-unidade/cofre-para-servico-joao.sh DEMO --so-conferir     # só mostra o que falta; não muda nada
 #   bash ops/kit-unidade/cofre-para-servico-joao.sh DEMO                   # grava no .env (com cópia) e atualiza o serviço ddagent_agent
+#   bash ops/kit-unidade/cofre-para-servico-joao.sh SERRA --sem-ia         # clínica SEM assistente (assistente.quer: false): não há robô Sofia, então só a chave da conta
 #
 # O que faz: lê CHATWOOT_API_TOKEN_<SUFIXO> e CHATWOOT_SOFIA_BOT_TOKEN_<SUFIXO> do cofre do kit (/root/segredos/kit), acrescenta no
 # /opt/doutordigital/agente-dt/.env (o próximo deploy continua com elas) e põe as duas no serviço que está no ar (mesma imagem, só o env).
@@ -15,15 +16,22 @@ set -euo pipefail
 umask 077
 SUF="${1:-}"
 SO_CONFERIR=0
-[ "${2:-}" = "--so-conferir" ] && SO_CONFERIR=1
-if [ -n "${2:-}" ] && [ "$SO_CONFERIR" = 0 ]; then echo "argumento desconhecido: $2"; exit 2; fi
-[ -z "${3:-}" ] || { echo "argumento demais: $3"; exit 2; }
-[[ "$SUF" =~ ^[A-Z0-9_]+$ ]] || { echo "uso: bash cofre-para-servico-joao.sh <SUFIXO> [--so-conferir]   (ex.: DEMO)"; exit 2; }
+SEM_IA=0
+for a in "${@:2}"; do
+  case "$a" in
+    --so-conferir) SO_CONFERIR=1 ;;
+    --sem-ia) SEM_IA=1 ;;
+    *) echo "argumento desconhecido: $a (use --so-conferir e/ou --sem-ia)"; exit 2 ;;
+  esac
+done
+[[ "$SUF" =~ ^[A-Z0-9_]+$ ]] || { echo "uso: bash cofre-para-servico-joao.sh <SUFIXO> [--so-conferir] [--sem-ia]   (ex.: DEMO)"; exit 2; }
 
 COFRE="${KIT_SEGREDOS_DIR:-/root/segredos/kit}"
 ENVF="${AGENTE_ENV_ARQUIVO:-/opt/doutordigital/agente-dt/.env}"
 SVC="${AGENTE_SERVICO:-ddagent_agent}"
-NOMES=("CHATWOOT_API_TOKEN_$SUF" "CHATWOOT_SOFIA_BOT_TOKEN_$SUF")
+NOMES=("CHATWOOT_API_TOKEN_$SUF")
+# clínica COM assistente também leva a chave do robô Sofia; SEM assistente (--sem-ia) o robô nem existe, e exigir a chave dele travaria a abertura num laço
+[ "$SEM_IA" = 1 ] || NOMES+=("CHATWOOT_SOFIA_BOT_TOKEN_$SUF")
 # o contêiner MAIS NOVO do serviço (no rolling update `head -1` pegaria o antigo)
 conteiner() { docker ps --filter "name=$SVC" --format '{{.CreatedAt}}|{{.ID}}' | sort -r | head -1 | cut -d'|' -f2; }
 

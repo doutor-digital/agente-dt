@@ -108,7 +108,7 @@ if ! git diff --quiet origin/main -- ops/kit-unidade; then
   echo "AVISO: ops/kit-unidade aqui difere de origin/main. A VPS recebe a versão de origin/main (é o que o levar-kit-para-vps.sh manda), não esta."
 fi
 
-SUB=""; SUF=""; MODO=""; TIPO="clínica de verdade"; REAL=1
+SUB=""; SUF=""; MODO=""; QUER_IA=""; TIPO="clínica de verdade"; REAL=1
 mostrar_clinica() {
   echo "clínica: $SLUG · $TIPO · subdomínio $SUB.doutordigitalconsultoria.com · sufixo das chaves $SUF"
 }
@@ -142,6 +142,7 @@ else
   SUB="$(campo chatwoot subdominio)"
   TOKEN_META="$(campo meta token_env)"
   MODO="$(campo whatsapp modo)"
+  QUER_IA="$(campo assistente quer)"
   SLUG_DO_ARQUIVO="$(campo unidade slug)"
   [ "$SLUG_DO_ARQUIVO" = "$SLUG" ] || { echo "o questionário diz que o slug é «$SLUG_DO_ARQUIVO», mas você pediu «$SLUG»."; AJUDA="use o slug do próprio arquivo, ou corrija unidade.slug."; false; }
   case "$MODO" in ""|real|demonstracao) ;; *) echo "whatsapp.modo inválido («$MODO»): é real ou demonstracao."; AJUDA="corrija whatsapp.modo no questionário."; false ;; esac
@@ -224,7 +225,7 @@ if [ -n "$FORM_REF" ]; then
   rm -f "$SAIDA_FORM"; SAIDA_FORM=""
   [ -n "$RESUMO" ] || { AJUDA="o importador não devolveu o resumo: leia a mensagem acima."; false; }
   r_campo() { printf '%s\n' "$RESUMO" | tr ' ' '\n' | sed -n "s/^$1=//p" | head -1; }
-  SLUG_GERADO="$(r_campo slug)"; SUB="$(r_campo subdominio)"; SUF="$(r_campo sufixo)"; MODO="$(r_campo modo)"; VALIDO="$(r_campo valido)"
+  SLUG_GERADO="$(r_campo slug)"; SUB="$(r_campo subdominio)"; SUF="$(r_campo sufixo)"; MODO="$(r_campo modo)"; VALIDO="$(r_campo valido)"; [ "$(r_campo ia)" = "nao" ] && QUER_IA="false"
   [ "$SLUG_GERADO" = "$SLUG" ] || { echo "o formulário gerou o slug «$SLUG_GERADO», mas você pediu «$SLUG»."; AJUDA="rode com o slug certo, ou force o nome com --set unidade.slug=$SLUG --refazer."; false; }
   [[ "$SUB" =~ ^[a-z0-9]{3,40}$ ]] && [[ "$SUF" =~ ^[A-Z0-9_]{2,40}$ ]] && [[ "$MODO" =~ ^(real|demonstracao)$ ]] || { AJUDA="resumo do importador inválido: leia a mensagem acima."; false; }
   if [ "$VALIDO" != "sim" ]; then
@@ -276,12 +277,14 @@ passo "6b. criar a clínica no CRM (perguntas por etapa)" "veja o RELATÓRIO FIN
 remoto "bash ops/kit-unidade/nova-unidade-joao.sh '$SLUG' --aplicar"
 
 # ── 7. subdomínio e chaves ──────────────────────────────────────────────────────────────────────────────
+# clínica SEM assistente (assistente.quer: false): não há robô Sofia, então o cofre só leva a chave da conta
+SEM_IA=""; [ "$QUER_IA" = "false" ] && SEM_IA=" --sem-ia"
 passo "7a. as chaves da conta estão no cofre?" "se faltar chave, uma etapa do passo 6b ficou sem rodar (você respondeu «não» a ela?): rode o comando de novo e responda s. Se disser valor DIFERENTE no .env, confira à mão (não troco sozinho). O proxy ainda NÃO foi mexido."
-remoto "bash ops/kit-unidade/cofre-para-servico-joao.sh '$SUF' --so-conferir"
+remoto "bash ops/kit-unidade/cofre-para-servico-joao.sh '$SUF' --so-conferir$SEM_IA"
 passo "7b. subdomínio no proxy" "na VPS: bash $DESTINO/ops/kit-unidade/regra-traefik-joao.sh $SUB --so-conferir"
 remoto "bash ops/kit-unidade/regra-traefik-joao.sh '$SUB'"
 passo "7c. chaves da conta: cofre → serviço (reinicia o ddagent_agent)" "na VPS: bash $DESTINO/ops/kit-unidade/cofre-para-servico-joao.sh $SUF --so-conferir"
-remoto "bash ops/kit-unidade/cofre-para-servico-joao.sh '$SUF'"
+remoto "bash ops/kit-unidade/cofre-para-servico-joao.sh '$SUF'$SEM_IA"
 
 # ── 8. o que falta ──────────────────────────────────────────────────────────────────────────────────────
 PASSO="resumo"; AJUDA=""

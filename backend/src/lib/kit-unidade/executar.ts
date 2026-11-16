@@ -44,7 +44,14 @@ export interface BancoPorta {
   sofiaDaUnidade(unitId: string): Promise<Record<string, unknown>>;
   gravarSofia(unitId: string, campos: Record<string, unknown>): Promise<void>;
   /** aprendizados (regras) da unidade: `listar` devolve os textos que já existem; `criar` grava novos com fonte «unidade». Opcional: sem isto o passo avisa e não grava aprendizados */
-  licoes?: { listar(unitId: string): Promise<string[]>; criar(unitId: string, textos: string[]): Promise<void> };
+  licoes?: {
+    listar(unitId: string): Promise<string[]>;
+    criar(unitId: string, textos: string[]): Promise<void>;
+    /** quantas regras da clínica (fonte «unidade») estão LIGADAS: a página /aprendizados aceita no máximo 25 */
+    contarDaUnidade(unitId: string): Promise<number>;
+    /** marca em units.kit_aprendizados_em que o kit já importou: depois disso nunca regrava */
+    marcarImportado(unitId: string): Promise<void>;
+  };
   /** ids das caixas já registradas para a unidade */
   caixasRegistradas(unitId: string): Promise<number[]>;
   /** registra a caixa (idempotente: a mesma caixa não duplica) */
@@ -204,7 +211,7 @@ async function aplicarPasso(p: Passo, q: Questionario, o: OpcoesDeExecucao, unit
     case 'automacoes-seco': {
       const id = await garantirUnidade();
       const ja = new Set(await banco.automacoesDaUnidade(id));
-      const novas = AUTOMACOES.filter((a) => a.id.startsWith('chatwoot-') && a.temSeco && !ja.has(a.id)).map((a) => a.id);
+      const novas = AUTOMACOES.filter((a) => a.id.startsWith('chatwoot-') && a.temSeco && !ja.has(a.id) && !(q.assistente?.quer === false && a.id === 'chatwoot-ia')).map((a) => a.id);
       if (novas.length) await banco.criarAutomacoesEmSeco(id, novas);
       return [novas.length ? `em seco: ${novas.join(', ')}` : 'nenhuma a criar'];
     }
@@ -229,13 +236,21 @@ async function aplicarPasso(p: Passo, q: Questionario, o: OpcoesDeExecucao, unit
       const lic = licoesDaAssistente(q);
       for (const r of lic.recusadas) notas.push(`aprendizado RECUSADO pelas travas da rede (não gravei): «${r.texto}» — ${r.motivo}`);
       if (lic.textos.length) {
+        const importadoEm = hoje.kitAprendizadosEm as Date | string | null | undefined;
         if (!banco.licoes) notas.push(`${lic.textos.length} aprendizado(s) da clínica NÃO gravados (este ambiente não tem a porta de aprendizados)`);
-        else {
+        else if (importadoEm && !o.sobrescrever) {
+          // UM escritor só: o kit grava os aprendizados uma vez; depois a clínica manda neles (edita, apaga, desliga em /aprendizados) e um --aplicar novo (ex.: --ligar-robo) não os desfaz
+          notas.push(`aprendizados da clínica: o kit JÁ os importou em ${new Date(importadoEm).toISOString().slice(0, 10)}; não regravo (a clínica os administra em /aprendizados; --sobrescrever repete a importação, sem duplicar)`);
+        } else {
           const norm = (t: string) => t.trim().replace(/\s+/g, ' ').toLowerCase();
           const jaTem = new Set((await banco.licoes.listar(id)).map(norm));
           const novos = lic.textos.filter((t) => !jaTem.has(norm(t)));
-          if (novos.length) await banco.licoes.criar(id, novos);
-          notas.push(`aprendizados da clínica: ${novos.length} gravado(s), ${lic.textos.length - novos.length} já existiam`);
+          // teto de 25 NA GRAVAÇÃO (não só no aviso do plano): a página /aprendizados só aceita 25 regras da clínica ligadas
+          const cabem = Math.max(0, 25 - (await banco.licoes.contarDaUnidade(id)));
+          const gravar = novos.slice(0, cabem);
+          if (gravar.length) await banco.licoes.criar(id, gravar);
+          await banco.licoes.marcarImportado(id);
+          notas.push(`aprendizados da clínica: ${gravar.length} gravado(s), ${lic.textos.length - novos.length} já existiam${novos.length > gravar.length ? `, ${novos.length - gravar.length} NÃO gravado(s) por causa do teto de 25 da página /aprendizados (a clínica desliga uma regra e os adiciona lá)` : ''}`);
         }
       }
       return notas;
