@@ -77,8 +77,14 @@ test('envio válido: 200 «recebido», grava, avisa o João SEM dado pessoal, e 
   const c = await s.convite();
   const r = await s.post(c.codigo, respostasValidas());
   assert.equal(r.status, 200);
-  const j = (await r.json()) as { ok: boolean; referencia: string };
+  const j = (await r.json()) as { ok: boolean; referencia: string; chamado: { url: string; titulo: string; texto: string } };
   assert.equal(j.ok, true);
+  // o chamado para a franqueadora vem pronto na resposta (e SÓ nela: não é gravado), sem o código nem nada sensível
+  assert.equal(j.chamado.url, 'https://app.doutorhernia.com.br/login');
+  assert.equal(j.chamado.titulo, 'Solicitação de Token de Integração – Doutor Hérnia Serra');
+  assert.match(j.chamado.texto, /Responsável: Dra\. Ana Teste\nE-mail: ana\.teste@clinica\.example/);
+  for (const pii of ['gerente@clinica.example', 'pix-teste', '99999', c.codigo]) assert.ok(!j.chamado.texto.includes(pii), `vazou no chamado: ${pii}`);
+  assert.ok(!JSON.stringify(s.banco.linhas).includes('Solicitação de Token'), 'o chamado não é gravado');
   assert.match(j.referencia, /^[a-z0-9]{6}$/);
   assert.ok(s.banco.linhas[0]!.id.endsWith(j.referencia), 'a referência é o fim do id do formulário (o que o João usa no kit)');
   assert.equal(s.banco.linhas[0]!.respostas?.clinica.nome, 'Doutor Hérnia Serra');

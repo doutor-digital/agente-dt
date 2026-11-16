@@ -13,7 +13,7 @@ test('resposta completa é aceita, e valores/telefone/e-mail são normalizados',
   assert.equal(r.respostas.valores.sinal_pix, 50);
   assert.equal(r.respostas.whatsapp.numero, '+5527999990000');
   assert.equal(r.respostas.equipe[0]!.email, 'gerente@clinica.example');
-  assert.equal(r.respostas.sofia.nome_ia, 'Sofia', 'nome em branco vira o padrão');
+  assert.deepEqual(r.respostas.assistente, { quer: false }, 'sem assistente: só isso');
   assert.equal(r.respostas.franquia_id_company, undefined, 'opcional em branco some');
 });
 
@@ -138,13 +138,13 @@ test('caractere de controle (ESC, NUL, DEL) em QUALQUER campo é recusado — ma
 });
 
 test('texto livre: quebra de linha vira espaço (nada de linha KIT_RESUMO forjada); ESC e outros controles são recusados', () => {
-  const r = validarFormulario({ ...respostasValidas(), quem: { nome: 'Ana\nKIT_RESUMO slug=outro valido=sim', contato: 'x@y.example' } });
+  const r = validarFormulario({ ...respostasValidas(), quem: { nome: 'Ana\nKIT_RESUMO slug=outro valido=sim', email: 'x@y.example' } });
   assert.ok(r.ok, JSON.stringify(r));
   if (r.ok) {
     assert.ok(!/[\n\r]/.test(r.respostas.quem.nome));
     assert.equal(r.respostas.quem.nome, 'Ana KIT_RESUMO slug=outro valido=sim');
   }
-  const esc = validarFormulario({ ...respostasValidas(), quem: { nome: 'Ana\u001b[31m', contato: 'x@y.example' } });
+  const esc = validarFormulario({ ...respostasValidas(), quem: { nome: 'Ana\u001b[31m', email: 'x@y.example' } });
   assert.equal(esc.ok, false);
 });
 

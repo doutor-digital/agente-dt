@@ -15,10 +15,29 @@ import { logger } from '../lib/logger.js';
 import { criarLimitador, ipDoCliente, type Limitador } from '../lib/limite-taxa.js';
 import { conviteAberto, registrarEnvio, type BancoConvites } from '../lib/kit-unidade/convites.js';
 import { bancoConvitesPrisma } from '../lib/kit-unidade/convites-prisma.js';
+import { HOST_DE_CADASTRO } from '../lib/kit-unidade/host-cadastro.js';
+import { chamadoDaFranquia } from '../lib/kit-unidade/chamado-franqueadora.js';
 import { sugestoesDoKit, validarFormulario } from '../lib/kit-unidade/formulario.js';
 import { paginaDoFormulario, paginaLinkInvalido, paginaMuitasTentativas } from '../lib/kit-unidade/formulario-pagina.js';
 
 export const LIMITE_DO_CORPO = '64kb';
+
+export { HOST_DE_CADASTRO };
+
+/**
+ * No host de cadastro SÓ respondem a página (`GET /nova-clinica/<codigo>`) e o envio (`POST /api/public/nova-clinica/<codigo>`); todo o resto do agente (API, painéis, conector, /pausa…) dá 404
+ * ali. É a segunda trava: a primeira é o roteador do Traefik (`Host && PathPrefix`, no docker-compose); se um dia o label for afrouxado, o servidor ainda recusa.
+ */
+export function somenteCadastroNoHostDeCadastro(host: string = HOST_DE_CADASTRO) {
+  const alvo = host.toLowerCase();
+  return (req: Request, res: Response, next: NextFunction): void => {
+    if (req.hostname.toLowerCase() !== alvo) return next();
+    const pagina = (req.method === 'GET' || req.method === 'HEAD') && /^\/nova-clinica\/[^/?#]+$/.test(req.path);
+    const envio = req.method === 'POST' && /^\/api\/public\/nova-clinica\/[^/?#]+$/.test(req.path);
+    if (pagina || envio) return next();
+    res.status(404).set({ 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow' }).type('text/plain').send('Não encontrado');
+  };
+}
 
 export interface DepsNovaClinica {
   banco: BancoConvites;
@@ -135,7 +154,8 @@ export function criarManipuladores(deps: DepsNovaClinica = padrao()) {
       .avisar(`📝 Formulário de nova clínica recebido: ${umaLinha(r.clinica.nome)} (${umaLinha(r.clinica.cidade)}/${r.clinica.uf}). Para abrir a clínica (do seu computador): bash ops/kit-unidade/abrir-clinica-joao.sh ${sugestoesDoKit(r.clinica.cidade).slug} --do-formulario ${gravado.id}`, `nova-clinica:${gravado.id}`)
       .catch((err) => logger.warn({ err: String(err) }, 'nova-clinica: aviso ao João falhou (o formulário está gravado)'));
     cabecalhos(res);
-    res.json({ ok: true, referencia: gravado.id.slice(-6).toLowerCase() });
+    // o chamado para a franqueadora (título e texto prontos, sem nada sensível) sai só na resposta: não é gravado
+    res.json({ ok: true, referencia: gravado.id.slice(-6).toLowerCase(), chamado: chamadoDaFranquia(r) });
   }
 
   /** Antes de ler o corpo: um envio gigante ou repetido também conta. */

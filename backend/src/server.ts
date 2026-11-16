@@ -11,7 +11,7 @@ import { apiRouter } from './routes/api.routes.js';
 import { apagarCofreDeArquivos, ligarConectorRemoto } from './mcp-remoto/producao.js';
 import { paginaPausaHandler } from './controllers/pausa.controller.js';
 import { paginaAprendizadosHandler } from './controllers/aprendizados.controller.js';
-import { ligarNovaClinica } from './controllers/nova-clinica.controller.js';
+import { ligarNovaClinica, somenteCadastroNoHostDeCadastro } from './controllers/nova-clinica.controller.js';
 import { mascararUrlDoLog } from './lib/mascara-url-log.js';
 import { paginaAgenteHandler } from './controllers/agente-chatwoot.controller.js';
 import { paginaRobosHandler } from './controllers/robos.controller.js';
@@ -95,6 +95,9 @@ interface RawBodyRequest extends express.Request {
 
 async function main(): Promise<void> {
   const app = express();
+
+  // cadastro.doutordigitalconsultoria.com serve SÓ o formulário «nova clínica»: tudo o mais do agente dá 404 nesse host (primeira de todas, antes de CORS e rotas)
+  app.use(somenteCadastroNoHostDeCadastro());
 
   // Widgets privados do Kommo rodam em https://<conta>.kommo.com e chamam SÓ as rotas /api/public/*
   // (agenda da franquia com chave por unidade, pausa com código). Pra elas o CORS libera o Kommo

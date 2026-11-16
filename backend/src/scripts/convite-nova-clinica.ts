@@ -14,15 +14,19 @@ import { resolve } from 'node:path';
 import { criarConvite, DIAS_DE_VALIDADE, type BancoConvites } from '../lib/kit-unidade/convites.js';
 import { ADMINS_DD_PADRAO, lerAdminsDD } from '../lib/kit-unidade/fase2.js';
 
-const ORIGEM_PADRAO = 'https://agente.doutordigitalconsultoria.com';
+import { HOST_DE_CADASTRO } from '../lib/kit-unidade/host-cadastro.js';
 
+/** O link do formulário sai no endereço bonito (cadastro.doutordigitalconsultoria.com), que serve SÓ o formulário. `NOVA_CLINICA_URL_BASE` troca (só para teste/outra instalação). */
 export function origemPublica(env: NodeJS.ProcessEnv = process.env): string {
-  try {
-    if (env.MCP_URL_PUBLICA) return new URL(env.MCP_URL_PUBLICA).origin;
-  } catch {
-    /* cai no padrão */
+  const base = env.NOVA_CLINICA_URL_BASE?.trim();
+  if (base) {
+    try {
+      return new URL(base).origin;
+    } catch {
+      /* cai no padrão */
+    }
   }
-  return ORIGEM_PADRAO;
+  return `https://${HOST_DE_CADASTRO}`;
 }
 
 const quando = (d: Date) => new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(d);

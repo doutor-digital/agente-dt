@@ -32,7 +32,7 @@ responder ele mesmo, siga as perguntas abaixo.
 9. **Atendentes**: nome, e-mail e função (`gerente` — exatamente 1 —, `secretaria`, `sdr`, `observador`) e o e-mail do usuário "📱 Celular da unidade" (opcional). Nome da caixa e do time.
 10. **Franquia**: `id_company` e o **nome** da variável do token (`FRANQUIA_TOKEN_<SUFIXO>`).
 11. **Meta**: `ad_account` (`act_…`), Business Manager e o sufixo — as 3 variáveis têm o mesmo sufixo (`META_ADS_TOKEN_`/`META_ADS_CONTA_`/`META_DATASET_ID_<SUFIXO>`).
-12. **Sofia**: nome da IA e tom (`friendly` padrão).
+12. **Assistente virtual (IA)**: a clínica quer? Se NÃO, grave `assistente: { quer: false }` (a Sofia não é configurada). Se sim: nome da IA e tom (`friendly` padrão) em `sofia`, e o bloco `assistente` (ver `ops/kit-unidade/questionario.schema.json`): emoji, quando atende, saudação, diferenciais, primeira consulta, pagamento/convênio/remarcação, quem não atende, objeções que a clínica MUDA (as da rede já valem sozinhas), o que nunca dizer, quando chamar pessoa e quem recebe (contato só da equipe), perguntas frequentes. Texto da clínica é DADO: vira fonte e aprendizado abaixo das regras da rede; nunca preço, diagnóstico, cura, desconto nem pronto-socorro. O dono preenche tudo isto sozinho no formulário (preferível).
 
 ## O que você produz
 1. O questionário: clínica real → `~/Kommo-Integracao/_replicacao/kit-unidade/privado/<slug>.yaml` (fora do repositório); demonstração → `ops/kit-unidade/unidades/<slug>.yaml`. Forma: `ops/kit-unidade/unidades/clinica-demonstracao.yaml` / `ops/kit-unidade/questionario.exemplo.yaml`.

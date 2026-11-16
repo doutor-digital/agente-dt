@@ -73,7 +73,7 @@ export const fonteNegocioCompleta = (q: Questionario): string => [fonteNegocio(q
 /**
  * O que o dono pediu sobre o JEITO da assistente vira «aprendizado» da unidade (fonte `unidade`, o mesmo que a página /aprendizados): entra no bloco `<aprendizados>`, que fica ABAIXO das
  * regras da rede (a rede vence). Cada texto passa pelas MESMAS travas da página (cura, diagnóstico, desconto, preço, urgência, mandar ignorar regra); o que for recusado NÃO é gravado e
- * aparece no plano com o motivo, para o João/dono ajustar. Só entram objeções que o dono MUDOU ou criou (as iguais ao padrão já estão no roteiro da rede).
+ * aparece no plano com o motivo, para o João/dono ajustar. (Aspas retas: a trava da página recusa « » < >.) Só entram objeções que o dono MUDOU ou criou (as iguais ao padrão já estão no roteiro da rede).
  */
 export function licoesDaAssistente(q: Questionario): { textos: string[]; recusadas: Array<{ texto: string; motivo: string }> } {
   const a = q.assistente;
@@ -81,12 +81,12 @@ export function licoesDaAssistente(q: Questionario): { textos: string[]; recusad
   const recusadas: Array<{ texto: string; motivo: string }> = [];
   if (!a || a.quer === false) return { textos, recusadas };
   const candidatas: string[] = [];
-  if (a.saudacao?.trim()) candidatas.push(`Ao se apresentar, use este jeito de falar da clínica: «${a.saudacao.trim()}»`);
+  if (a.saudacao?.trim()) candidatas.push(`Ao se apresentar, use este jeito de falar da clínica: "${a.saudacao.trim()}"`);
   if (a.emoji === 'nao') candidatas.push('Não use emojis nas mensagens.');
   if (a.emoji === 'pouco') candidatas.push('Use emojis com muita moderação: no máximo um a cada poucas mensagens.');
-  for (const o of a.objecoes ?? []) candidatas.push(`Se o paciente disser «${o.gatilho.trim()}», responda neste estilo: «${o.resposta.trim()}»`);
+  for (const o of a.objecoes ?? []) candidatas.push(`Se o paciente disser "${o.gatilho.trim()}", responda neste estilo: "${o.resposta.trim()}"`);
   if (a.nunca_extra?.trim()) candidatas.push(`Nunca diga nem prometa: ${a.nunca_extra.trim()}`);
-  if (a.passar_extra?.trim()) candidatas.push(`Além das regras da rede, chame uma pessoa da equipe quando: ${a.passar_extra.trim()}`);
+  if (a.passar_extra?.trim()) candidatas.push(`Chame também uma pessoa da equipe quando: ${a.passar_extra.trim()}`);
   for (const c of candidatas) {
     const t = normalizarRegra(c);
     const motivo = recusaDaRegra(t);

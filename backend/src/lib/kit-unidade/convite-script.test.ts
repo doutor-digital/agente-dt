@@ -4,14 +4,14 @@ import { bancoConvitesFalso } from './convites-falso.js';
 import { conviteAberto, FORMATO_DO_CODIGO } from './convites.js';
 import { executar, origemPublica } from '../../scripts/convite-nova-clinica.js';
 
-const ENV = { MCP_URL_PUBLICA: 'https://agente.exemplo.test/mcp' } as NodeJS.ProcessEnv;
+const ENV = {} as NodeJS.ProcessEnv;
 
 test('cria o convite, imprime o link UMA vez com o código que abre o formulário, e só o hash fica no banco', async () => {
   const banco = bancoConvitesFalso();
   const r = await executar(['--rotulo', 'Dra. Fulana (Serra)'], banco, ENV, new Date('2026-11-16T12:00:00Z'));
   assert.equal(r.codigo, 0);
   const saida = r.saida.join('\n');
-  const m = /https:\/\/agente\.exemplo\.test\/nova-clinica\/([A-Za-z0-9_-]{24})/.exec(saida);
+  const m = /https:\/\/cadastro\.doutordigitalconsultoria\.com\/nova-clinica\/([A-Za-z0-9_-]{24})/.exec(saida);
   assert.ok(m, saida);
   assert.match(m![1]!, FORMATO_DO_CODIGO);
   assert.ok(await conviteAberto(banco, m![1], new Date('2026-11-17T00:00:00Z')));
@@ -21,10 +21,11 @@ test('cria o convite, imprime o link UMA vez com o código que abre o formulári
   assert.equal(banco.linhas[0]!.criadoPor, 'script da VPS (root)');
 });
 
-test('origem pública: MCP_URL_PUBLICA ou o padrão', () => {
-  assert.equal(origemPublica(ENV), 'https://agente.exemplo.test');
-  assert.equal(origemPublica({} as NodeJS.ProcessEnv), 'https://agente.doutordigitalconsultoria.com');
-  assert.equal(origemPublica({ MCP_URL_PUBLICA: 'lixo' } as NodeJS.ProcessEnv), 'https://agente.doutordigitalconsultoria.com');
+test('o link sai no endereço bonito (cadastro.doutordigitalconsultoria.com), não no do agente/MCP; NOVA_CLINICA_URL_BASE só troca a origem', () => {
+  assert.equal(origemPublica({} as NodeJS.ProcessEnv), 'https://cadastro.doutordigitalconsultoria.com');
+  assert.equal(origemPublica({ MCP_URL_PUBLICA: 'https://agente-vps.exemplo.test/mcp' } as NodeJS.ProcessEnv), 'https://cadastro.doutordigitalconsultoria.com', 'o MCP não manda mais no endereço');
+  assert.equal(origemPublica({ NOVA_CLINICA_URL_BASE: 'https://outro.exemplo.test/qualquer' } as NodeJS.ProcessEnv), 'https://outro.exemplo.test');
+  assert.equal(origemPublica({ NOVA_CLINICA_URL_BASE: 'lixo' } as NodeJS.ProcessEnv), 'https://cadastro.doutordigitalconsultoria.com');
 });
 
 test('--por precisa ser administrador da Doutor Digital; --dias de 1 a 60; sem --rotulo não cria; argumento desconhecido recusado', async () => {

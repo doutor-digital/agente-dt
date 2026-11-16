@@ -16,7 +16,7 @@ import { MAX_OBJECOES_EXTRAS, MAX_RESPOSTA_OBJECAO, OBJECOES_PADRAO } from './as
 
 const hora = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Use o formato 08:00 (hora:minuto).');
 /** Troca caractere de controle e quebra de linha por espaço (o texto vai para o terminal do João e para frases ditas ao paciente: nada de linha forjada nem ANSI). */
-const umaLinha = (v: unknown) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').replace(/\s+/g, ' ').trim() : v);
+const umaLinha = (v: unknown) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').replace(/[«»]/g, '"').replace(/[‹›]/g, "'").replace(/\s+/g, ' ').trim() : v);
 const texto = (min: number, max: number, nome: string) =>
   z.preprocess(
     umaLinha,

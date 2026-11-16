@@ -399,6 +399,172 @@
         }
       },
       "additionalProperties": false
+    },
+    "assistente": {
+      "type": "object",
+      "properties": {
+        "quer": {
+          "type": "boolean"
+        },
+        "emoji": {
+          "type": "string",
+          "enum": [
+            "sim",
+            "pouco",
+            "nao"
+          ]
+        },
+        "quando_atende": {
+          "type": "string",
+          "enum": [
+            "sempre",
+            "fora-expediente",
+            "noite-fim-semana",
+            "personalizado"
+          ]
+        },
+        "quando_atende_detalhe": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "saudacao": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "diferenciais": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "primeira_consulta": {
+          "type": "object",
+          "properties": {
+            "como_funciona": {
+              "type": "string",
+              "maxLength": 500
+            },
+            "duracao": {
+              "type": "string",
+              "maxLength": 100
+            },
+            "o_que_levar": {
+              "type": "string",
+              "maxLength": 300
+            },
+            "chegada": {
+              "type": "string",
+              "maxLength": 100
+            }
+          },
+          "additionalProperties": false
+        },
+        "pagamento": {
+          "type": "object",
+          "properties": {
+            "formas": {
+              "type": "string",
+              "maxLength": 300
+            },
+            "parcelamento": {
+              "type": "string",
+              "maxLength": 300
+            },
+            "convenio": {
+              "type": "string",
+              "enum": [
+                "nao",
+                "sim",
+                "reembolso"
+              ]
+            },
+            "convenio_quais": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "remarcacao": {
+              "type": "string",
+              "maxLength": 400
+            }
+          },
+          "additionalProperties": false
+        },
+        "nao_atende": {
+          "type": "string",
+          "maxLength": 400
+        },
+        "objecoes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "gatilho": {
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 80
+              },
+              "resposta": {
+                "type": "string",
+                "minLength": 10,
+                "maxLength": 230
+              }
+            },
+            "required": [
+              "gatilho",
+              "resposta"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 14
+        },
+        "nunca_extra": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "passar_extra": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "quem_recebe": {
+          "type": "object",
+          "properties": {
+            "nome": {
+              "type": "string",
+              "maxLength": 80
+            },
+            "contato": {
+              "type": "string",
+              "maxLength": 80,
+              "x-sensivel": true,
+              "x-motivo": "contato de quem recebe o atendimento (e-mail ou telefone da equipe)"
+            }
+          },
+          "additionalProperties": false
+        },
+        "faq": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "pergunta": {
+                "type": "string",
+                "minLength": 5,
+                "maxLength": 120
+              },
+              "resposta": {
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 300
+              }
+            },
+            "required": [
+              "pergunta",
+              "resposta"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 10
+        }
+      },
+      "additionalProperties": false
     }
   },
   "required": [
