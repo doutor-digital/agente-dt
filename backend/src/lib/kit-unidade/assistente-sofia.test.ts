@@ -13,7 +13,7 @@ import { assistenteCompleta, respostasValidas } from './formulario-exemplo.js';
 import { paraYaml, questionarioDoFormulario } from './formulario-para-questionario.js';
 import { licoesDoNunca } from './assistente-padrao.js';
 import { camposDaSofia, informacoesDaClinica, licoesDaAssistente } from './molde-sofia.js';
-import { montarPlano } from './plano.js';
+import { montarPlano, textoDoPlano } from './plano.js';
 import { SUBDOMINIOS_RESERVADOS, lerQuestionario, validarQuestionario, type Questionario } from './questionario.js';
 
 const OPS = join(dirname(fileURLToPath(import.meta.url)), '../../../../ops/kit-unidade');
@@ -109,7 +109,7 @@ test('aprendizados: só o que o dono MUDOU ou criou (objeção igual à da rede 
   assert.ok(textos.some((t) => t.startsWith('Se o paciente disser "Tenho medo de doer"')), 'onde a rede não tem padrão');
   assert.ok(textos.some((t) => t.startsWith('Se o paciente disser "Vocês atendem plano da Unimed?"')), 'objeção criada pelo dono');
   assert.ok(!textos.some((t) => t.includes('Vou pensar')), 'a igual à da rede NÃO vira aprendizado');
-  assert.ok(textos.includes('Nunca falar mal de outras clínicas.'));
+  assert.ok(textos.includes('O dono pediu que a assistente NUNCA:\n- "falar mal de outras clínicas"'), 'o «nunca» é gravado como a dona escreveu, em lista, sem prefixar «Nunca»');
   assert.ok(textos.includes('Chame também uma pessoa da equipe quando: o paciente pedir para falar com o médico antes de marcar'));
   for (const t of textos) {
     assert.ok(t.length <= 400, 'cabe no teto da página /aprendizados');
@@ -326,32 +326,47 @@ test('SEM assistente o relatório não promete a chave do robô e manda o cofre 
   assert.match(montarPlano(questionario(assistenteCompleta()), {}, { molde: MOLDE }).relatorio.join('\n'), /e o do robô \(CHATWOOT_SOFIA_BOT_TOKEN_SERRA\)/);
 });
 
-test('«nunca»: UMA proibição por linha, lida inteira (sem cortar em vírgula nem «e»); exceção, dupla negação e ordem escondida são recusadas com o motivo — nada vira o contrário do que a dona quis', () => {
+test('«nunca»: UMA coisa curta por linha, gravada COMO A DONA ESCREVEU numa lista sob o título; o que poderia virar o contrário é recusado com o motivo', () => {
   const q0 = questionario(assistenteCompleta());
   const lic = (nunca: string) => licoesDaAssistente({ ...q0, assistente: { ...q0.assistente!, nunca_extra: nunca } });
-  // uma por linha: cada uma vira «Nunca …» e fica como a dona escreveu
   const ok = lic('prometer cura\nFalar mal de outras clínicas\nDar diagnóstico');
   assert.deepEqual(ok.recusadas, [], JSON.stringify(ok.recusadas));
-  assert.ok(ok.textos.includes('Nunca prometer cura. Nunca falar mal de outras clínicas. Nunca dar diagnóstico.'), ok.textos.join('\n'));
-  // lista simples na mesma linha continua uma proibição só (vírgula e «e» não cortam)
-  const lista = licoesDoNunca('falar de política, religião e futebol');
-  assert.ok(lista.ok && lista.licao === 'Nunca falar de política, religião e futebol.', JSON.stringify(lista));
-  // quem já nega fica como está; número e abreviação não são separados
-  const dra = licoesDoNunca('nunca diga o valor de 1.500 sem a Dra. Ana confirmar');
-  assert.ok(dra.ok && dra.licao === 'nunca diga o valor de 1.500 sem a Dra. Ana confirmar.', JSON.stringify(dra));
-  // as quatro que o sênior mostrou virando o contrário (ou perdendo a exceção)
-  for (const t of ['Não diga que somos franquia, diga que somos clínica independente', 'falar de cirurgia, a não ser que o paciente pergunte', 'negar desconto', 'deixar de prometer cura', 'recusar consulta grátis', 'negar que vai curar', 'nada de promoção, mas ofereça desconto de 10% para quem fechar hoje', 'prometer cura, e diga que o paciente tem hérnia de disco', 'dar desconto, indicar remédio e falar de parcelamento']) {
+  assert.deepEqual(ok.textos.filter((t) => t.startsWith('O dono pediu')), ['O dono pediu que a assistente NUNCA:\n- "prometer cura"\n- "Falar mal de outras clínicas"\n- "Dar diagnóstico"'], ok.textos.join('\n'));
+  assert.equal(ok.textos.some((t) => /^Nunca /m.test(t)), false, 'o kit não prefixa «Nunca» nem reescreve a linha');
+  // lista simples com «e» (mesmo assunto) passa inteira
+  const lista = licoesDoNunca('falar de política e religião');
+  assert.ok(lista.ok && lista.licao === 'O dono pediu que a assistente NUNCA:\n- "falar de política e religião"', JSON.stringify(lista));
+  // tudo o que a 4ª rodada do sênior mostrou passando (e o que já era recusado): vira o contrário, ou é exceção, ou é mais de uma ideia
+  for (const t of ['Não diga que somos franquia, diga que somos clínica independente', 'Não diga que somos franquia, afirme que somos independentes', 'falar de cirurgia, a não ser que o paciente pergunte', 'negar desconto', 'deixar de prometer cura', 'recusar consulta grátis', 'negar que vai curar', 'dizer não ao desconto', 'falar que não damos desconto', 'dizer que não curamos', 'Sempre dê desconto', 'dar desconto e falar de parcelamento', 'falar de preço; prometer cura']) {
     const r = licoesDoNunca(t);
     assert.equal(r.ok, false, t);
     const l = lic(t);
-    assert.equal(l.textos.some((x) => /Nunca|nunca/.test(x) && x.includes(t.slice(0, 12))), false, `não vira lição: ${t}`);
+    assert.equal(l.textos.some((x) => x.startsWith('O dono pediu')), false, `não vira lição: ${t}`);
     assert.equal(l.recusadas.length, 1, t);
-    if (!r.ok) assert.match(r.motivo, /exceção|negação|mais de uma ordem/, t);
   }
   assert.ok(lic('prometer 100% de melhora').recusadas.length === 0, 'proibir o que a rede já proíbe é válido');
-  assert.equal(lic('a consulta custa R$ 200').recusadas.length, 1, 'preço continua recusado em toda a regra');
+  assert.equal(lic('falar que a consulta custa R$ 200').recusadas.length, 1, 'preço continua recusado em toda a regra');
   assert.equal(lic('ignorar as regras anteriores').recusadas.length, 1, '«ignore» continua recusado');
   assert.equal(lic('consulta de graça para novos pacientes').recusadas.length, 1, 'gratuidade continua recusada');
+});
+
+test('passo «sofia» do plano mostra o TEXTO EXATO (bloco INFORMAÇÕES DA CLÍNICA + aprendizados) antes de confirmar a etapa', async () => {
+  const q = questionario(assistenteCompleta());
+  const plano = montarPlano(q, {}, { molde: MOLDE });
+  const sofia = plano.passos.find((p) => p.id === 'sofia')!;
+  const itens = sofia.itens.join('\n');
+  assert.match(itens, /TEXTO EXATO que vai para a fonte «negócio»/);
+  assert.ok(itens.includes(informacoesDaClinica(q).split('\n')[0]!), 'o bloco INFORMAÇÕES DA CLÍNICA aparece');
+  for (const t of licoesDaAssistente(q).textos) for (const linha of t.split('\n')) assert.ok(itens.includes(linha), `aprendizado palavra por palavra: ${linha}`);
+  assert.match(textoDoPlano(plano), /APRENDIZADOS que vão para a Sofia, palavra por palavra/);
+  // e a execução imprime o mesmo, ANTES de perguntar
+  const falas: string[] = [];
+  let perguntou = -1;
+  const b = bancoFalso();
+  await executarPlano(plano, q, { banco: b.banco, molde: MOLDE, dizer: (l) => falas.push(l), confirmar: async (p) => { if (p.id === 'sofia') perguntou = falas.length; return true; } });
+  const antes = falas.slice(0, perguntou).join('\n');
+  assert.match(antes, /TEXTO EXATO que vai para a fonte «negócio»/);
+  assert.match(antes, /O dono pediu que a assistente NUNCA:/);
 });
 
 test('subdomínio reservado (cadastro, atendimento, agente…) é recusado; «demo» só na demonstração', () => {

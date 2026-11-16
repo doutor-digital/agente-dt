@@ -19,6 +19,18 @@ import { CONDICAO_SINAL_DE_ALERTA, citaProntoSocorro } from '../agent/sinal-de-a
 
 export const CHAVE_APRENDIZADOS = 'aprendizados-pela-unidade';
 export const SOURCE_DA_UNIDADE = 'unidade';
+/**
+ * A lista «O que a assistente nunca deve dizer» do formulário é gravada COMO A DONA ESCREVEU, sob este título, uma linha entre aspas por item. A trava lê cada item como «Nunca <item>»
+ * (é o que ele é: uma proibição), na ida (formulário/kit) e na volta (a página /aprendizados, quando a clínica desliga e liga de novo a regra): a mesma conferência nos dois lugares.
+ */
+export const TITULO_DO_NUNCA = 'O dono pediu que a assistente NUNCA:';
+const LISTA_DO_NUNCA = new RegExp(`^${TITULO_DO_NUNCA}\\n((?:- "[^"\\n]+"\\n?)+)$`);
+function comoProibicoes(texto: string): string {
+  const m = LISTA_DO_NUNCA.exec(texto);
+  if (!m) return texto;
+  const itens = [...m[1]!.matchAll(/- "([^"\n]+)"/g)].map((x) => x[1]!.trim().replace(/[.\s]+$/, ''));
+  return `${itens.map((i) => `Nunca ${/^\p{Lu}\p{Ll}/u.test(i) ? i.charAt(0).toLowerCase() + i.slice(1) : i}`).join('. ')}.`;
+}
 export const MIN_CARACTERES = 10;
 export const MAX_CARACTERES = 400;
 /** Regras ligadas escritas pela unidade: acima disso, ela desliga uma antes de criar outra (o prompt não incha). */
@@ -211,7 +223,7 @@ export function recusaDaRegra(textoBruto: string): string | null {
   if (texto.length > MAX_CARACTERES) return `Regra longa demais: até ${MAX_CARACTERES} letras. Divida em duas.`;
   // qualquer < ou > (a regra entra crua no prompt, entre marcações): "</ aprendizados>" e '<x a="1">' também
   if (/[<>‹›«»〈〉]/.test(texto)) return 'Escreva só o texto da regra, sem os sinais < e >.';
-  for (const variante of variantes(texto)) {
+  for (const variante of variantes(comoProibicoes(texto))) {
     const sempre = recusaSempre(variante);
     if (sempre) return sempre;
     for (const frase of frases(variante)) {
@@ -228,44 +240,28 @@ export function recusaDaRegra(textoBruto: string): string | null {
  * travas da página /aprendizados: sem marcação (`<`/`>`), sem mandar ignorar regra, sem pronto-socorro, sem valor em reais NEM número de preço (inclusive por extenso e sem a palavra «preço»),
  * sem consulta de graça (em qualquer jeito de dizer, na pergunta ou na resposta), sem promessa de cura, sem diagnóstico ou autocuidado, sem sinal de alerta nem mexer na urgência. `null` = pode.
  */
-const PALAVRA_DE_CONSULTA = /consulta|avalia[cç][aã]o|atendimento|sess[aã]o|sess[oõ]es|exame|retorno|tratamento|primeira vez|1[aª] vez|diagn[oó]stico/i;
+const PALAVRA_DE_CONSULTA = /consulta|avalia[cç][aã]o|atendimento|sess[aã]o|sess[oõ]es|exame|retorno|primeira vez|1[aª] vez/i;
 const DE_GRACA_NA_FRASE =
-  /gr[aá]tis|gratuit\w*|gratuidade|\bfree\b|de gra[cç]a|sem custo|custo (?:zero|nenhum)|(?:sem|nenhum|zero)\s+(?:nenhum\s+)?(?:custo|cobran[cç]a|[oô]nus|valor|taxa)|n[aã]o\s+(?:tem|h[aá]|existe|ter[aá]|vai ter)\s+(?:nenhum[ao]?\s+)?(?:custo|cobran[cç]a|[oô]nus|valor|taxa)|sem\s+(?:pagar|ter que pagar)|nada\s+(?:a|para|pra)\s+pagar|n[aã]o\s+(?:\w+\s+)?(?:paga|pagam|pague|pagar[aá]?|precisa\s+pagar)\b|cortesia|isent\w*|brinde|cupom|bonifica\w*|(?:sai|fica) na faixa|n[aã]o cobr\w*|por nossa conta|por conta d[aeo]s?\s+(?:casa|cl[ií]nica|gente|nossa)|metade do (?:pre[cç]o|valor)|pela metade|liberad[oa]\s+sem/gi;
-/** Gratuidade que o dono diz de algo que NÃO é a consulta («estacionamento gratuito», «não cobramos taxa para remarcar»): adjetivo olha as 3 palavras de ANTES; «não cobramos…» olha a PRIMEIRA palavra depois dos artigos. */
-const GRATUIDADE_ADJETIVO = /^(?:gr[aá]tis|gratuit\w*|free|de gra[cç]a|cortesia|brinde|cupom)/i;
-const COISA_NAO_CONSULTA = /^(?:estacion\w*|wi-?fi|caf[eé]\w*|[aá]gua|revistas?|taxas?|multas?|remarca\w*|reagenda\w*|cancel\w*|segunda|vias?|valet|ar-?condicionado|brinquedos?|pipoca|doce\w*)$/i;
-const ARTIGOS = new Set(['a', 'o', 'as', 'os', 'uma', 'um', 'de', 'da', 'do', 'das', 'dos', 'nenhuma', 'nenhum', 'qualquer', 'pela', 'pelo', 'por', 'para', 'pra', 'com', 'na', 'no']);
-const palavrasDe = (t: string) => t.split(/[^\p{L}\p{N}-]+/u).filter(Boolean);
-
-/** A frase promete a consulta/avaliação/atendimento de graça? (`anterior` = a frase de antes, para «A avaliação tem custo? Não, é gratuita.») */
-function prometeGratuidade(frase: string, anterior: string): boolean {
-  // a frase de antes só entra se era uma PERGUNTA («A avaliação tem custo? Não, é gratuita.») ou se esta é curta e não tem sujeito próprio («A primeira consulta. É grátis.»)
-  const contexto = anterior.endsWith('?') || palavrasDe(frase).length <= 4 ? anterior : '';
-  if (!(PALAVRA_DE_CONSULTA.test(frase) || PALAVRA_DE_CONSULTA.test(contexto))) return false;
-  for (const m of frase.matchAll(DE_GRACA_NA_FRASE)) {
-    const idx = m.index ?? 0;
-    const adjetivo = GRATUIDADE_ADJETIVO.test(m[0]);
-    const antes = palavrasDe(frase.slice(0, idx)).slice(-3);
-    // a primeira palavra depois dos artigos («não cobramos A TAXA…» → taxa)
-    const depois = palavrasDe(frase.slice(idx + m[0].length)).find((w) => !ARTIGOS.has(w.toLowerCase()));
-    const benigno = adjetivo ? antes.some((w) => COISA_NAO_CONSULTA.test(w)) : !!depois && COISA_NAO_CONSULTA.test(depois);
-    if (!benigno) return true;
-  }
-  return false;
-}
+  /gr[aá]tis|gratuit\w*|gratuidade|\bfree\b|de gra[cç]a|sem custo|custo (?:zero|nenhum)|(?:sem|nenhum|zero)\s+(?:nenhum\s+)?(?:custo|cobran[cç]a|[oô]nus|valor|taxa)|n[aã]o\s+(?:tem|h[aá]|existe|ter[aá]|vai ter)\s+(?:nenhum[ao]?\s+)?(?:custo|cobran[cç]a|[oô]nus|valor|taxa)|sem\s+(?:pagar|ter que pagar)|nada\s+(?:a|para|pra)\s+pagar|n[aã]o\s+(?:\w+\s+)?(?:paga|pagam|pague|pagar[aá]?|precisa\s+pagar)\b|cortesia|isent\w*|brinde|cupom|bonifica\w*|(?:sai|fica) na faixa|n[aã]o cobr\w*|por nossa conta|por conta d[aeo]s?\s+(?:casa|cl[ií]nica|gente|nossa)|metade do (?:pre[cç]o|valor)|pela metade|liberad[oa]\s+sem/i;
+/**
+ * Dinheiro ou gratuidade dito de QUALQUER jeito (valor, preço, custa, cobramos, paga/pagar, taxa, sinal, desconto, reais…). Vale pelo CAMPO INTEIRO: se o campo fala da consulta/avaliação/atendimento,
+ * não pode ter nenhuma destas palavras, nem na pergunta nem na resposta («A consulta é paga? Não.» é gratuidade dita sem a palavra «grátis»). O estacionamento e a taxa de remarcar só passam
+ * quando a consulta NÃO aparece no campo.
+ */
+const PALAVRA_DE_DINHEIRO = /(?<![\p{L}])(?:valor(?:es)?|pre[cç]os?|cust(?:a|am|ar|o|os|ou)|cobr\w*|cobran[cç]a|pag(?:a|o|os|as|am|ar|ue|aram|ando|amento)|reais|mensalidade|taxas?|sinal|desconto\w*|promo[cç]\w*|or[cç]amento|investimento|tarifa)(?![\p{L}])/iu;
 
 const PRECO_PALAVRA = /^(?:valor(?:es)?|pre[cç]os?|custa\w*|custos?|cobr\w*|cobran[cç]a|reais|mensalidade|taxas?|parcel\w*|entrada|investimento|sinal|pix|cart[aã]o|cart[oõ]es|dinheiro|d[eé]bito|cr[eé]dito|boleto|vista|cheque|pag\w*|r\$|total|desconto|tabela|pacote|mensal|semanal)$/i;
 /** Palavra que, logo antes do número, o transforma em preço: «por 200», «só 150», «consulta: 150». */
 const ANTES_DO_NUMERO = /^(?:por|apenas|somente|so|s[oó]|consulta|avalia[cç][aã]o|atendimento|sess[aã]o|tratamento|pacote|plano|exame|retorno|ficam?|sai|saem|custa\w*)$/i;
 const NUMERO_POR_EXTENSO = /^(?:cem|cento|duzent[oa]s|trezent[oa]s|quatrocent[oa]s|quinhent[oa]s|seiscent[oa]s|setecent[oa]s|oitocent[oa]s|novecent[oa]s|mil|vinte|trinta|quarenta|cinquenta|sessenta|setenta|oitenta|noventa)$/i;
 const NUMERO_PEQUENO_EXTENSO = /^(?:um|uma|dois|duas|tr[eê]s|quatro|cinco|seis|sete|oito|nove|dez|onze|doze|treze|quatorze|catorze|quinze|dezesseis|dezessete|dezoito|dezenove)$/i;
-const UNIDADE_NAO_PRECO = /^(?:min|minutos?|h|hs|horas?|dias?|semanas?|meses|m[eê]s|anos?|km|metros?|m|cm|sess[aã]o|sess[oõ]es|vezes|x|pacientes?|andar|pessoas?|%)$/i;
-const NAO_E_PRECO_ANTES = /^(?:[aà]s|at[eé]|das|dos|entre|dia|dias|andar|sala|salas|n|n[ºo°]|n[uú]mero|cep|ramal|bloco|km|lote|quadra|apto|apartamento|conjunto|loja|ed|edif[ií]cio|galeria|br|crm|crefito|crf|cnpj|cpf|rg|tel|telefone|whatsapp|zap|celular|fone|ligue|ligar|contato|protocolo|c[oó]digo|matr[ií]cula)$/i;
+const UNIDADE_NAO_PRECO = /^(?:min|minutos?|h|hs|horas?|dias?|semanas?|meses|m[eê]s|anos?|km|metros?|m|cm|sess[aã]o|sess[oõ]es|vezes|x|parcelas?|pacientes?|andar|pessoas?|%)$/i;
+const NAO_E_PRECO_ANTES = /^(?:[aà]s|das|dos|entre|dia|dias|andar|sala|salas|n|n[ºo°]|n[uú]mero|cep|ramal|bloco|km|lote|quadra|apto|apartamento|conjunto|loja|ed|edif[ií]cio|galeria|br|crm|crefito|crf|cnpj|cpf|rg|tel|telefone|whatsapp|zap|celular|fone|ligue|ligar|contato|protocolo|c[oó]digo|matr[ií]cula)$/i;
 const grupoDeNumero = (t?: string) => !!t && /^\d[\d.,]*$/.test(t) && t.replace(/\D/g, '').length >= 3;
 const RUA = /^(?:rua|av|avenida|alameda|travessa|pra[cç]a|rodovia|estrada|largo|beco)$/i;
 
 /** Preço NA FRASE: número de verdade (dígitos de 2 ou mais, ou por extenso) perto de uma palavra de preço ou de forma de pagamento (valor, custa, sai por, Pix, cartão, «por 200», «consulta: 150»); hora, telefone, CEP, data, ano, endereço e duração não contam. */
-export function temNumeroDePreco(frase: string): boolean {
+export function temNumeroDePreco(frase: string, qualquerNumero = false): boolean {
   const cruas = frase.split(/\s+/).filter(Boolean);
   const palavras = cruas.map((p) => p.replace(/^[("'“]+|[)"'”,;:!?]+$/g, '').replace(/\.$/, ''));
   const minusc = palavras.map((p) => p.toLowerCase());
@@ -286,10 +282,12 @@ export function temNumeroDePreco(frase: string): boolean {
     if (UNIDADE_NAO_PRECO.test(minusc[i + 1] ?? '')) continue;
     if (/^(?:a|[aà]|at[eé]|e|ou)$/i.test(minusc[i + 1] ?? '') && UNIDADE_NAO_PRECO.test(minusc[i + 3] ?? '')) continue;
     if (NAO_E_PRECO_ANTES.test(minusc[i - 1] ?? '')) continue;
+    // «até as 18» / «até 12»: hora; «até 300»: preço
+    if (/^at[eé]$/i.test(minusc[i - 1] ?? '') && !extenso && Number(p.replace(/\D/g, '')) <= 24) continue;
     // 0800 123 4567: zero na frente, ou vários grupos de número em fila, é telefone/registro, não preço
     if (/^0\d/.test(p) || grupoDeNumero(palavras[i - 1]) || grupoDeNumero(palavras[i + 1])) continue;
     const valor = Number(p.replace(/\D/g, ''));
-    if (!extenso && valor >= 1950 && valor <= 2100 && /^(?:desde|em|ano|de|do)$/i.test(minusc[i - 1] ?? '')) continue;
+    if (!extenso && valor >= 1950 && valor <= 2100 && /^(?:desde|em|ano|de|do)$/i.test(minusc[i - 1] ?? '') && ![...precos].some((j) => Math.abs(j - i) <= 3)) continue;
     // telefone com DDD solto: «94 99999-0000»
     if (/^\d{4,5}-?\d{4}$/.test(palavras[i + 1] ?? '')) continue;
     // número de endereço: depois de «Rua…» e sem palavra de preço no meio nem logo depois
@@ -298,6 +296,8 @@ export function temNumeroDePreco(frase: string): boolean {
       const desdeRua = Math.max(0, i - 7) + ruaAntes;
       if (![...precos].some((j) => (j > desdeRua && j < i) || (j > i && j <= i + 2))) continue;
     }
+    // número sem unidade num campo que fala da consulta é preço, com ou sem palavra de preço por perto
+    if (qualquerNumero) return true;
     if ([...precos].some((j) => Math.abs(j - i) <= 6)) return true;
     if (ANTES_DO_NUMERO.test(minusc[i - 1] ?? '') || ANTES_DO_NUMERO.test(minusc[i - 2] ?? '')) return true;
   }
@@ -317,13 +317,16 @@ export function recusaDeFato(textoBruto: string, opcoes: { permiteParcelamento?:
     if (CONDICAO_SINAL_DE_ALERTA.test(variante) || ALERTA_DITO_DE_OUTRO_JEITO.test(variante)) return 'Sinal de alerta (força, sensação ou formigamento nas pernas, controle do xixi ou das fezes, região íntima, febre) é regra da rede e protege o paciente: não escreva sobre isso aqui.';
     if (MEXE_NA_SEGURANCA.test(variante)) return 'O texto não pode mexer em urgência, em pausar a assistente nem em passar o paciente para a equipe: isso é regra da rede.';
     const fs = frases(variante);
+    // o CAMPO inteiro (pergunta + resposta juntas): se ele fala da consulta/avaliação/atendimento, qualquer palavra de dinheiro ou de gratuidade, ou número sem unidade, recusa
+    if (PALAVRA_DE_CONSULTA.test(variante)) {
+      if (DE_GRACA_NA_FRASE.test(variante) || PALAVRA_DE_DINHEIRO.test(variante)) return 'Este campo fala da consulta: valor, gratuidade, desconto ou cobrança não entram aqui (nem na pergunta nem na resposta). Valor e gratuidade são do cadastro da clínica (seção «Valores da consulta»). Escreva só a informação, sem essas palavras.';
+      if (fs.some((f) => temNumeroDePreco(f, true))) return 'Este campo fala da consulta e tem um número que parece valor. Valor da consulta não muda por aqui: o preço fica no cadastro da clínica (seção «Valores da consulta»). Escreva sem número de preço.';
+    }
     for (const [i, frase] of fs.entries()) {
       const anterior = fs[i - 1] ?? '';
-      // pergunta + resposta valem juntas: «Quanto custa a consulta? A partir de 150.» / «A avaliação tem custo? Não, é gratuita.»
+      // pergunta + resposta valem juntas: «Quanto custa? A partir de 150.»
       const comPergunta = anterior.endsWith('?') ? `${anterior} ${frase}` : frase;
       if (temNumeroDePreco(comPergunta)) return 'Valor da consulta não muda por aqui: o preço fica no cadastro da clínica (seção «Valores da consulta»). Escreva sem número de preço.';
-      // de graça: só quando se fala da consulta/atendimento («estacionamento gratuito» e «não cobramos taxa para remarcar» passam)
-      if (prometeGratuidade(frase, anterior)) return 'Consulta, avaliação ou atendimento de graça, brinde ou cortesia não pode ser prometido por aqui: valor e gratuidade são do cadastro da clínica.';
       if (semNegacaoColada(frase, RECUSA_SEM_NEGACAO[0]!.re)) return RECUSA_SEM_NEGACAO[0]!.motivo;
       if (semNegacaoColada(frase, parcela)) return RECUSA_SEM_NEGACAO[1]!.motivo;
       if (semNegacaoColada(frase, RECUSA_SEM_NEGACAO[2]!.re)) return RECUSA_SEM_NEGACAO[2]!.motivo;

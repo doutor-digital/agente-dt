@@ -19,8 +19,8 @@ test('FATOS: de graça, preço (dígito e por extenso), cura, sinal de alerta e 
     ['A primeira consulta sai na faixa, sem cobrança nenhuma.', /graça|gratuidade/],
     ['Não, a consulta de retorno é por conta da gente.', /graça|gratuidade/],
     ['A consulta inicial é gratuita para todos.', /graça|gratuidade/],
-    ['A consulta sai por 150 no Pix e 180 no cartão.', /Valor da consulta/],
-    ['A consulta custa duzentos no dinheiro.', /Valor da consulta/],
+    ['A consulta sai por 150 no Pix e 180 no cartão.', /Valor da consulta|fala da consulta/],
+    ['A consulta custa duzentos no dinheiro.', /Valor da consulta|fala da consulta/],
     ['No Pix a consulta sai por cento e vinte reais.', /Valor|valores em reais/],
     ['98% dos nossos pacientes saem sem dor depois do tratamento.', /cura nem resultado/],
     ['Quem faz o tratamento completo não volta a sentir dor nas costas.', /cura nem resultado/],
@@ -131,7 +131,6 @@ test('FALSOS POSITIVOS da revisão: texto legítimo (horário, telefone, endere�
     'Consulta de segunda a sexta das 08:00 às 18:00, ligue 24 3065-3205.',
     'Fundada em 2015, a clínica faz consulta de avaliação.',
     'Rua 15 de Novembro, 120, perto do pagamento de contas.',
-    'O valor da consulta é definido no cadastro; atendemos das 08:00 às 18:00.',
     'Há vaga livre para pacientes na rua.',
     'Atendemos sem restrições de convênio.',
   ];

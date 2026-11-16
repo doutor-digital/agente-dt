@@ -153,6 +153,8 @@ export async function executarPlano(plano: Plano, q: Questionario, o: OpcoesDeEx
       }
     }
     if (leu) continue;
+    // o texto EXATO que vai para a Sofia (fonte «negócio» e aprendizados) aparece ANTES de a etapa ser confirmada: o João lê, não confia
+    if (p.id === 'sofia') for (const it of p.itens) o.dizer(`      · ${it}`);
     if (!(await o.confirmar(p))) {
       registrar('recusado');
       continue;

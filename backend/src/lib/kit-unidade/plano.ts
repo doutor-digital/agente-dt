@@ -20,7 +20,7 @@ import {
   PASTAS_PADRAO,
   SERVICO_DO_PROXY,
 } from './catalogo.js';
-import { camposDaSofia, camposDaUnidade, horarioDaAssistente, licoesDaAssistente } from './molde-sofia.js';
+import { camposDaSofia, camposDaUnidade, horarioDaAssistente, informacoesDaClinica, licoesDaAssistente } from './molde-sofia.js';
 import { aGravar, dadosDosModelosAGravar } from './protecao.js';
 import { configChatwootDoQuestionario, mascararCampo, mascararEmails, sufixoDoQuestionario, type Questionario } from './questionario.js';
 
@@ -415,6 +415,7 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
           ...Object.keys(sofia.campos).map((k) => (k === 'systemPrompt' ? `systemPrompt (${String(sofia.campos[k]).length} caracteres, do molde)` : k)),
           ...(q.assistente ? [`aprendizados da clínica (fonte «unidade», editáveis em /aprendizados/${slug}): ${licoesNovas.length} a gravar (${jaImportados ? 'JÁ importados pelo kit: não regravo; a clínica os administra em /aprendizados (--reimportar-aprendizados repete)' : `${licoes.textos.length - licoesNovas.length} já existem`}) — o que a clínica pediu sobre saudação, emoji, objeções, o que nunca dizer e quando chamar uma pessoa; ficam ABAIXO das regras da rede`] : []),
           'automação prompt-da-unidade: NÃO ligo — antes roda `testar-prompt.ts --slug` e o dono lê as respostas',
+          ...textoExatoDaSofia(q, sofia.campos, licoesNovas),
         ],
     execucao: semIA ? 'manual' : 'sim',
     avisos: [...(b ? [] : semIA ? [] : [NAO_CONSULTADO]), ...sofia.avisos, ...(q.assistente?.quer && q.assistente.quando_atende !== 'sempre' ? [`QUANDO A IA ATENDE («${horarioDaAssistente(q)}») NÃO é aplicado pelo kit: a janela se configura na automação/robô ao ligar; até lá a Sofia, ligada, responderia 24 h`] : []), ...licoes.recusadas.map((r) => `aprendizado RECUSADO pelas travas da rede (não será gravado): «${r.texto}» — ${r.motivo}`), ...((b?.licoes?.length ?? 0) + licoesNovas.length > MAX_REGRAS_DA_UNIDADE ? [`com os ${licoesNovas.length} novos a unidade passa de ${MAX_REGRAS_DA_UNIDADE} aprendizados: a página /aprendizados só aceita ${MAX_REGRAS_DA_UNIDADE} regras da clínica ligadas`] : []), ...(sofiaPreservados.length ? [`já preenchidos e diferentes do questionário (ficam como estão; --sobrescrever troca): ${sofiaPreservados.filter((k) => k !== 'systemPrompt').join(', ')}${sofiaPreservados.includes('systemPrompt') ? ' (o systemPrompt só troca com --sobrescrever-prompt)' : ''}`] : []), 'a Sofia só atende com agenda: falta o token da franquia (passo «franquia») e os turnos por profissional (spine_staff_por_turno)'],
@@ -501,6 +502,23 @@ function montarRelatorio(q: Questionario, passos: Passo[], x: { aEnviar: number;
 
 const ROTULO: Record<Acao, string> = { criar: 'CRIAR', alterar: 'ALTERAR', nada: 'JÁ ESTÁ', manual: 'MANUAL', bloqueado: 'BLOQUEADO' };
 const SISTEMA: Record<Sistema, string> = { banco: 'Banco', chatwoot: 'Chatwoot', meta: 'Meta/Kapso', vps: 'VPS', sofia: 'Sofia' };
+
+/**
+ * O texto EXATO que o passo «sofia» grava, para o João LER antes de confirmar a etapa: o bloco «INFORMAÇÕES DA CLÍNICA» (acrescentado à fonte «negócio») e cada aprendizado, palavra por palavra.
+ * O que o dono escreveu vira dado da Sofia; quem confere o texto final é a pessoa, não só as travas.
+ */
+function textoExatoDaSofia(q: Questionario, campos: Record<string, unknown>, licoesNovas: string[]): string[] {
+  if (!q.assistente || q.assistente.quer === false) return [];
+  const bloco = informacoesDaClinica(q);
+  const l: string[] = [];
+  l.push('── TEXTO EXATO que vai para a fonte «negócio» da Sofia (bloco INFORMAÇÕES DA CLÍNICA; leia antes de confirmar) ──');
+  l.push(...(bloco ? bloco.split('\n') : ['(nenhuma informação da clínica)']));
+  l.push(`── APRENDIZADOS que vão para a Sofia, palavra por palavra (${licoesNovas.length}) ──`);
+  if (licoesNovas.length) licoesNovas.forEach((t, i) => l.push(...t.split('\n').map((linha, k) => (k === 0 ? `[${i + 1}] ${linha}` : `    ${linha}`))));
+  else l.push('(nenhum a gravar agora)');
+  if (typeof campos.sourceNegocio === 'string' && bloco && !campos.sourceNegocio.includes(bloco)) l.push('! o bloco acima NÃO está na fonte «negócio» que será gravada: confira antes de aplicar');
+  return l;
+}
 
 export function textoDoPlano(p: Plano): string {
   const l: string[] = [`PLANO DA UNIDADE ${p.unidade}  (SECO: nada foi gravado em lugar nenhum)`, ''];

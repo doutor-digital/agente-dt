@@ -167,7 +167,9 @@ const Assistente = z
     if (a.saudacao) confere(licaoDaSaudacao(a.saudacao), ['saudacao']);
     if (a.nunca_extra) {
       const n = licoesDoNunca(a.nunca_extra);
-      if (n.ok) confere(n.licao, ['nunca_extra']);
+      if (n.ok) {
+        confere(n.licao, ['nunca_extra']);
+      }
       else erro(['nunca_extra'], n.motivo);
     }
     if (a.passar_extra) confere(licaoDeChamarPessoa(a.passar_extra), ['passar_extra']);

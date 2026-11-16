@@ -10,6 +10,8 @@
  * informação nas fontes; nunca muda preço, nunca autoriza diagnóstico, promessa de cura, desconto, nem tira a urgência.
  */
 
+import { TITULO_DO_NUNCA } from '../aprendizados-unidade.js';
+
 export interface ObjecaoPadrao {
   id: string;
   /** como o paciente fala, em linguagem do dono */
@@ -89,47 +91,46 @@ export function resolverMarcadores(texto: string): string {
 export const licaoDaSaudacao = (s: string) => `Ao se apresentar, use este jeito de falar da clínica: "${s.trim()}"`;
 export const licaoDaObjecao = (gatilho: string, resposta: string) => `Se o paciente disser "${gatilho.trim()}", responda neste estilo: "${resolverMarcadores(resposta.trim())}"`;
 /**
- * «O que a assistente nunca deve dizer»: UMA proibição por linha. Cada linha vira «Nunca …» SEM ser cortada nem reescrita: não se separa em vírgula nem em «e» (separar foi o que deixava
- * «Não diga que somos franquia, diga que somos independente» virar «Nunca diga que somos independente», o contrário do que a dona quis). Linha que o kit NÃO consegue ler como UMA proibição
- * simples é recusada, com o motivo, para a dona escrever de outro jeito:
- *  - «exceto…», «a não ser que…», «mas…», «se o paciente…» (exceção: a rede é que decide, e uma proibição com exceção não é proibição);
- *  - um pedaço depois da vírgula/«e» que começa com verbo («…, diga que…», «…e dar desconto») ou com negação: são duas ordens, uma por linha;
- *  - «negar desconto», «deixar de prometer cura», «evitar…», «recusar…»: dupla negação, que «Nunca» viraria o contrário.
+ * «O que a assistente nunca deve dizer»: UMA COISA CURTA POR LINHA, gravada COMO A DONA ESCREVEU — o kit não corta, não junta e não reescreve (cortar em vírgula/«e» e prefixar «Nunca»
+ * foi o que fazia «Não diga que somos franquia, diga que somos independentes» virar o contrário). O aprendizado é uma lista sob o título «O dono pediu que a assistente NUNCA:», com a linha original
+ * entre aspas. A linha que o kit NÃO consegue ler como UMA proibição simples é recusada, com o motivo, para a dona reescrever:
+ *  - com vírgula, ponto, ponto e vírgula ou dois-pontos (são duas ideias: uma por linha), ou com «e»/«ou» seguido de verbo («…e dar desconto»);
+ *  - com «não», «nunca» ou «jamais» depois do começo («dizer não ao desconto», «falar que não damos desconto»: o título já nega, e a segunda negação vira o contrário), ou que começa com «sempre»;
+ *  - com exceção («exceto», «a menos que», «mas», «se o paciente…», «quando…»);
+ *  - dupla negação («negar desconto», «deixar de prometer cura», «recusar…»);
+ *  - mais de 100 letras.
+ * A trava da rede lê cada item da lista como «Nunca <item>» (`recusaDaRegra` reconhece o título): é isso que deixa a dona proibir o que a rede já proíbe, e vale igual na página /aprendizados.
  */
-const EXCECAO_NA_PROIBICAO = /\b(?:exceto|a n[aã]o ser|salvo|a menos que|menos quando|s[oó] se|somente se|apenas se|desde que|caso contr[aá]rio|mas|por[eé]m|contudo|entretanto|todavia|se (?:o|a|ele|ela|voc[eê]|for|houver|perguntar|pedir)|quando|caso (?:o|a|ele|ela|voc[eê]|haja|seja|queira|pe[cç]a|pergunte|tenha|for)|em caso de|enquanto|at[eé] que|depois que)\b/i;
+export const MAX_LINHA_DO_NUNCA = 100;
+const EXCECAO_NA_PROIBICAO = /\b(?:exceto|salvo|a menos que|menos quando|s[oó] se|somente se|apenas se|desde que|caso contr[aá]rio|mas|por[eé]m|contudo|entretanto|todavia|se (?:o|a|ele|ela|voc[eê]|for|houver|perguntar|pedir)|quando|caso (?:o|a|ele|ela|voc[eê]|haja|seja|queira|pe[cç]a|pergunte|tenha|for)|em caso de|enquanto|at[eé] que|depois que)\b/i;
 const DUPLA_NEGACAO = /\b(?:nega(?:r|ndo|m)?|negue|neguem|recus\w+|evit\w+|omit\w+|abst\w+|deix\w+\s+de|par(?:ar|e)\s+de|esque[cç]\w+\s+de|dispens\w+)\b/i;
-const COMECA_COM_ORDEM = /^(?:n[aã]o|nunca|jamais|sempre|diga|dizer|fale|falar|responda|responder|seja|ser|fa[cç]a|fazer|ofere[cç]a|oferecer|prometa|prometer|garanta|garantir|use|usar|passe|passar|mande|mandar|envie|enviar|informe|informar|explique|explicar|sugira|sugerir|recomende|recomendar|indique|indicar|dar|aceite|aceitar|confirme|confirmar|marque|marcar|agende|agendar|chame|chamar|pe[cç]a|pedir|pergunte|perguntar|insista|insistir|aja|agir|atenda|atender|ignore|ignorar|esque[cç]a|trate|tratar|pode|podem|deve|devem|precisa|precisam|ent[aã]o)$/i;
+const VERBO_OU_ORDEM = /^(?:diga|dizer|fale|falar|responda|responder|seja|ser|fa[cç]a|fazer|ofere[cç]a|oferecer|prometa|prometer|garanta|garantir|use|usar|passe|passar|mande|mandar|envie|enviar|informe|informar|explique|explicar|sugira|sugerir|recomende|recomendar|indique|indicar|dar|aceite|aceitar|confirme|confirmar|marque|marcar|agende|agendar|chame|chamar|pe[cç]a|pedir|pergunte|perguntar|insista|insistir|aja|agir|atenda|atender|ignore|ignorar|esque[cç]a|trate|tratar|pode|podem|deve|devem|precisa|precisam|afirme|afirmar|assuma|conte|contar|comente|comentar|cite|citar|ent[aã]o)$/i;
 const PRIMEIRA_PALAVRA = /^[\s"'“(]*([\p{L}]+)/u;
 const semAcento = (t: string) => t.normalize('NFD').replace(/\p{M}/gu, '');
+const resumo = (t: string) => (t.length > 60 ? `${t.slice(0, 57)}…` : t);
 
 export function licoesDoNunca(texto: string): { ok: true; licao: string } | { ok: false; motivo: string } {
   const linhas = texto.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   if (!linhas.length) return { ok: false, motivo: 'Escreva o que a assistente nunca pode dizer.' };
-  const saida: string[] = [];
+  const recusa = (linha: string, porque: string) => ({ ok: false as const, motivo: `Em «${resumo(linha)}» ${porque}` });
   for (const linha of linhas) {
-    const lida = semAcento(linha);
-    if (EXCECAO_NA_PROIBICAO.test(lida)) {
-      return { ok: false, motivo: `Em «${resumo(linha)}» tem uma exceção (como «exceto», «a não ser que», «mas», «se o paciente…», «quando…»). Escreva só o que a assistente NUNCA faz, sem exceção: exceção é decisão da rede e do João.` };
+    const lida = semAcento(linha).replace(/[.\s]+$/, '');
+    if (linha.length > MAX_LINHA_DO_NUNCA) return recusa(linha, `a linha tem mais de ${MAX_LINHA_DO_NUNCA} letras. Escreva UMA coisa curta por linha.`);
+    // vírgula, ponto, ponto e vírgula, dois-pontos, travessão: ponto dentro de número («1.500») não conta
+    if (/[,;:!?]|\.(?!\d)|\s[-–—]\s/.test(lida)) return recusa(linha, 'tem vírgula, ponto ou outro corte: são duas ideias. Escreva UMA coisa curta por linha, sem vírgula nem ponto.');
+    if (/^\s*sempre\b/i.test(lida)) return recusa(linha, 'começa com «sempre», que é o contrário de uma proibição. Escreva só o que a assistente NUNCA faz.');
+    if (/\b(?:nao|nunca|jamais)\b/i.test(lida)) return recusa(linha, 'tem «não», «nunca» ou «jamais». O título já diz «NUNCA»: uma segunda negação viraria o contrário. Escreva direto o que não deve ser feito, por exemplo «dar desconto».');
+    if (EXCECAO_NA_PROIBICAO.test(lida)) return recusa(linha, 'tem uma exceção (como «exceto», «mas», «se o paciente…», «quando…»). Escreva só o que a assistente NUNCA faz, sem exceção: exceção é decisão da rede e do João.');
+    if (DUPLA_NEGACAO.test(lida.replace(/^\s*evit\w+\s+/i, ''))) return recusa(linha, 'tem uma negação dentro da proibição («negar», «recusar», «evitar», «deixar de»…), e isso viraria o contrário. Escreva direto o que não deve ser feito, por exemplo «dar desconto».');
+    // «e»/«ou» só liga coisas do mesmo assunto («política e religião»), nunca uma nova ordem («…e dar desconto»)
+    for (const m of linha.matchAll(/\s(?:e|ou)\s+(\p{L}+)/gu)) {
+      if (VERBO_OU_ORDEM.test(m[1]!)) return recusa(linha, `tem uma segunda ordem depois de «e»/«ou» (${m[1]}). Escreva UMA coisa por linha.`);
     }
-    if (DUPLA_NEGACAO.test(lida.replace(/^\s*evit\w+\s+/i, ''))) {
-      return { ok: false, motivo: `Em «${resumo(linha)}» tem uma negação dentro da proibição («negar», «recusar», «evitar», «deixar de»…), e isso viraria o contrário. Escreva direto o que a assistente não deve fazer, por exemplo «dar desconto».` };
-    }
-    // cada pedaço depois de vírgula, ponto, ponto e vírgula, «e» ou «ou» tem de ser mais do mesmo assunto, não uma nova ordem
-    const pedacos = linha.split(/\s*(?:[,;:!?]|\.(?=\s)|\s[-–—]\s|\se\s|\sou\s)\s*/i).filter(Boolean);
-    for (const pedaco of pedacos.slice(1)) {
-      const primeira = PRIMEIRA_PALAVRA.exec(semAcento(pedaco).replace(/^\s*(?:e|ou)\s+/i, ''))?.[1];
-      const deComAcento = /^\s*(?:(?:e|ou)\s+)?d[êÊ](?=\s|$)/.test(pedaco);
-      if (primeira && (COMECA_COM_ORDEM.test(primeira) || deComAcento)) {
-        return { ok: false, motivo: `Em «${resumo(linha)}» tem mais de uma ordem na mesma linha (depois de «${primeira}»). Escreva UMA proibição por linha, sem «diga…», «faça…», «dar…» no meio.` };
-      }
-    }
-    const ja = /^(?:nunca|n[aã]o|jamais|evit\w+)\b/i.test(lida);
-    const corpo = linha.replace(/[.;\s]+$/, '');
-    saida.push(ja ? `${corpo}.` : `Nunca ${/^\p{Lu}\p{Ll}/u.test(corpo) ? corpo.charAt(0).toLowerCase() + corpo.slice(1) : corpo}.`);
+    if (/(?:^|\s)d[êÊ](?:\s|$)/.test(linha)) return recusa(linha, 'tem uma ordem («dê…»). Escreva só o que a assistente NUNCA faz.');
   }
-  return { ok: true, licao: saida.join(' ') };
+  const licao = `${TITULO_DO_NUNCA}\n${linhas.map((l) => `- "${l.replace(/"/g, "'")}"`).join('\n')}`;
+  return { ok: true, licao };
 }
-const resumo = (t: string) => (t.length > 60 ? `${t.slice(0, 57)}…` : t);
 export const licaoDeChamarPessoa = (t: string) => `Chame também uma pessoa da equipe quando: ${t.trim()}`;
 export const LICAO_SEM_EMOJI = 'Não use emojis nas mensagens.';
 export const LICAO_POUCO_EMOJI = 'Use emojis com muita moderação: no máximo um a cada poucas mensagens.';

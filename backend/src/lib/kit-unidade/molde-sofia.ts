@@ -80,19 +80,19 @@ export function licoesDaAssistente(q: Questionario): { textos: string[]; recusad
   const textos: string[] = [];
   const recusadas: Array<{ texto: string; motivo: string }> = [];
   if (!a || a.quer === false) return { textos, recusadas };
-  const candidatas: string[] = [];
-  if (a.saudacao?.trim()) candidatas.push(licaoDaSaudacao(a.saudacao));
-  if (a.emoji === 'nao') candidatas.push(LICAO_SEM_EMOJI);
-  if (a.emoji === 'pouco') candidatas.push(LICAO_POUCO_EMOJI);
-  for (const o of a.objecoes ?? []) candidatas.push(licaoDaObjecao(o.gatilho, o.resposta));
+  const candidatas: Array<{ texto: string }> = [];
+  if (a.saudacao?.trim()) candidatas.push({ texto: licaoDaSaudacao(a.saudacao) });
+  if (a.emoji === 'nao') candidatas.push({ texto: LICAO_SEM_EMOJI });
+  if (a.emoji === 'pouco') candidatas.push({ texto: LICAO_POUCO_EMOJI });
+  for (const o of a.objecoes ?? []) candidatas.push({ texto: licaoDaObjecao(o.gatilho, o.resposta) });
   if (a.nunca_extra?.trim()) {
     const n = licoesDoNunca(a.nunca_extra);
-    if (n.ok) candidatas.push(n.licao);
+    if (n.ok) candidatas.push({ texto: n.licao });
     else recusadas.push({ texto: a.nunca_extra.length > 90 ? `${a.nunca_extra.slice(0, 87)}…` : a.nunca_extra, motivo: n.motivo });
   }
-  if (a.passar_extra?.trim()) candidatas.push(licaoDeChamarPessoa(a.passar_extra));
+  if (a.passar_extra?.trim()) candidatas.push({ texto: licaoDeChamarPessoa(a.passar_extra) });
   for (const c of candidatas) {
-    const t = normalizarRegra(c);
+    const t = normalizarRegra(c.texto);
     const motivo = recusaDaRegra(t);
     if (motivo) recusadas.push({ texto: t.length > 90 ? `${t.slice(0, 87)}…` : t, motivo });
     else textos.push(t);
