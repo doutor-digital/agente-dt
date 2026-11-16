@@ -29,9 +29,13 @@ export async function executar(args: string[], banco: BancoFormularios, gravar: 
   let saida: string | undefined;
   let soConferir = false;
   let soMarcar = false;
+  let soPosicionais = false;
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
-    if (a === '--so-conferir') soConferir = true;
+    // `--` encerra as opções: o que vem depois é o formulário, mesmo que comece com «-» (um código do link pode)
+    if (soPosicionais) posicionais.push(a);
+    else if (a === '--') soPosicionais = true;
+    else if (a === '--so-conferir') soConferir = true;
     else if (a === '--marcar-importado') soMarcar = true;
     else if (a === '--saida') saida = args[++i];
     else if (a === '--set') sets.push(args[++i] ?? '');

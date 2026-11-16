@@ -7,7 +7,7 @@
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -366,6 +366,8 @@ test('nova-unidade --aplicar com etapa RECUSADA/BLOQUEADA (sai ≠ 0): PARA, nã
   const passos = scriptsDoKit(e.chamadas());
   assert.equal(passos[passos.length - 1], "nova-unidade 'clinica-demonstracao' --aplicar");
   assert.ok(!passos.some((p) => p.startsWith('regra-traefik \'demo\'') && !p.includes('--so-conferir') || p.startsWith('cofre-para-servico')));
+});
+
 // ── --do-formulario: o questionário nasce na VPS, a partir do formulário do franqueado ──
 
 const CAMINHO_FORM = [
@@ -436,4 +438,23 @@ test('--do-formulario --so-conferir: só lê o formulário na VPS (importador em
   const c = e.chamadas();
   assert.ok(!c.some((l) => l.includes('tar -x') || l.includes('--aplicar')));
   assert.deepEqual(scriptsDoKit(c), ["do-formulario 'abc123def' --so-conferir"]);
+});
+
+test('--do-formulario: o arquivo com a saída do importador fica na pasta 700 do kit (não em /tmp) e some no fim, mesmo quando para por pendência', () => {
+  const e = ambiente();
+  const ok = e.rodar(['doutor-hernia-serra', '--do-formulario', 'abc123def'], { entrada: 'aplicar\n' });
+  assert.equal(ok.status, 0, ok.stdout);
+  assert.deepEqual(readdirSync(e.privado).filter((n) => n.startsWith('.abrir-saida')), []);
+  const pendente = e.rodar(['doutor-hernia-serra', '--do-formulario', 'abc123def'], { entrada: 'aplicar\n', env: { FAKE_VALIDO: 'nao' } });
+  assert.notEqual(pendente.status, 0);
+  assert.deepEqual(readdirSync(e.privado).filter((n) => n.startsWith('.abrir-saida')), []);
+  const lista = readFileSync(join(e.dir, 'log'), 'utf8');
+  assert.ok(!lista.includes('.abrir-saida'), 'o nome do arquivo nunca vai para o ssh');
+});
+
+test('--do-formulario aceita o código do link que começa com «-» ou «_»', () => {
+  const e = ambiente();
+  const r = e.rodar(['doutor-hernia-serra', '--do-formulario', '_bcdefghijklmnopqrstuvwx'], { entrada: 'aplicar\n' });
+  assert.equal(r.status, 0, r.stdout);
+  assert.ok(e.chamadas().some((l) => l.includes("do-formulario-joao.sh '_bcdefghijklmnopqrstuvwx'")));
 });

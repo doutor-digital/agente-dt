@@ -20,7 +20,7 @@ set -euo pipefail
 umask 077
 
 REF="${1:-}"
-[[ "$REF" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{2,59}$ ]] || { echo "uso: do-formulario-joao.sh <codigo|id|slug> [--so-conferir] [--set caminho=valor]... [--sobrescrever]"; exit 2; }
+[[ "$REF" =~ ^([A-Za-z0-9][A-Za-z0-9_-]{2,59}|[A-Za-z0-9_-]{24})$ ]] || { echo "uso: do-formulario-joao.sh <codigo|id|slug> [--so-conferir] [--set caminho=valor]... [--sobrescrever]"; exit 2; }
 shift
 SO_CONFERIR=0; SOBRESCREVER=0; SETS=()
 while [ $# -gt 0 ]; do
@@ -47,10 +47,10 @@ trap limpar EXIT
 
 # só marca o formulário como importado quando o questionário COMPLETO já está em unidades/privado/ (pendência = ainda não foi aberta)
 marcar() {
-  case "$OUT" in *' valido=sim'*) docker exec -w "$RAIZ_NO_CONTEINER/backend" "$AGENTE" node dist/scripts/do-formulario.js "$REF" --marcar-importado </dev/null >/dev/null 2>&1 || echo "aviso: não consegui marcar o formulário como importado (sem efeito no kit)." ;; esac
+  case "$OUT" in *' valido=sim'*) docker exec -w "$RAIZ_NO_CONTEINER/backend" "$AGENTE" node dist/scripts/do-formulario.js --marcar-importado -- "$REF" </dev/null >/dev/null 2>&1 || echo "aviso: não consegui marcar o formulário como importado (sem efeito no kit)." ;; esac
 }
 
-rodar() { docker exec -w "$RAIZ_NO_CONTEINER/backend" "$AGENTE" node dist/scripts/do-formulario.js "$REF" "$@" </dev/null 2>&1; }
+rodar() { docker exec -w "$RAIZ_NO_CONTEINER/backend" "$AGENTE" node dist/scripts/do-formulario.js "$@" -- "$REF" </dev/null 2>&1; }
 
 RC=0
 if [ "$SO_CONFERIR" = "1" ]; then

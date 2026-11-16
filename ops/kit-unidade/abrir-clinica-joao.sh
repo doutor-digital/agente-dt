@@ -47,7 +47,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --so-conferir) SO_CONFERIR=1 ;;
     --refazer) REFAZER=1 ;;
-    --do-formulario) shift; FORM_REF="${1:-}"; [[ "$FORM_REF" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{2,59}$ ]] || { echo "--do-formulario precisa do id, do código ou do slug do formulário"; exit 2; } ;;
+    --do-formulario) shift; FORM_REF="${1:-}"; [[ "$FORM_REF" =~ ^([A-Za-z0-9][A-Za-z0-9_-]{2,59}|[A-Za-z0-9_-]{24})$ ]] || { echo "--do-formulario precisa do id, do código ou do slug do formulário"; exit 2; } ;;
     --set) shift; [[ "${1:-}" =~ ^[a-z_]+(\.[a-z_]+)?=[A-Za-z0-9_.+-]+$ ]] || { echo "--set precisa ser caminho=valor, sem espaço (ex.: --set whatsapp.waba_id=123)"; exit 2; }; SETS+=("$1") ;;
     -*) echo "argumento desconhecido: $1 (use <slug>, --so-conferir, --do-formulario <ref>, --set k=v, --refazer)"; exit 2 ;;
     *) if [ -z "$SLUG" ]; then SLUG="$1"; else echo "mais de um slug: $SLUG e $1"; exit 2; fi ;;
@@ -157,7 +157,8 @@ fi
 # uma conexão ssh só para a rodada inteira (a pasta do soquete é 700 e some no fim)
 CM_DIR="$(mktemp -d)"; chmod 700 "$CM_DIR"
 SSH_OPCOES="-o ConnectTimeout=15 -o ServerAliveInterval=30 -o ControlMaster=auto -o ControlPath=$CM_DIR/%C -o ControlPersist=10m"
-fechar_ssh() { ssh -i "$CHAVE" -o ControlPath="$CM_DIR/%C" -O exit "$VPS" </dev/null >/dev/null 2>&1 || true; rm -rf "$CM_DIR"; }
+SAIDA_FORM=""
+fechar_ssh() { [ -z "$SAIDA_FORM" ] || rm -f "$SAIDA_FORM"; ssh -i "$CHAVE" -o ControlPath="$CM_DIR/%C" -O exit "$VPS" </dev/null >/dev/null 2>&1 || true; rm -rf "$CM_DIR"; }
 trap fechar_ssh EXIT
 # shellcheck disable=SC2206  # as opções não têm espaço dentro: a divisão é de propósito
 SSH=(ssh -i "$CHAVE" $SSH_OPCOES)
@@ -214,9 +215,13 @@ if [ -n "$FORM_REF" ]; then
   for x in ${SETS[@]+"${SETS[@]}"}; do sets_remotos+=" --set $x"; done
   [ "$REFAZER" = "1" ] && sets_remotos+=" --sobrescrever"
   AJUDA="se disser que já existe um questionário DIFERENTE, é porque você completou com --set antes: rode de novo com --refazer (o antigo fica guardado ao lado)."
-  # a saída (sem dado pessoal) também vai para um arquivo da pasta 700, para eu achar a linha KIT_RESUMO
-  remoto "bash ops/kit-unidade/do-formulario-joao.sh '$FORM_REF'$sets_remotos" | tee "$CM_DIR/saida-formulario"
-  RESUMO="$(tr -d '\r' < "$CM_DIR/saida-formulario" | sed -n 's/^KIT_RESUMO //p' | tail -1)"
+  # a saída (sem dado pessoal) vai também para um arquivo numa pasta 700 do próprio kit (não /tmp), só para achar a linha KIT_RESUMO; some no fim
+  mkdir -p "$PRIVADO_DIR"; chmod 700 "$PRIVADO_DIR"
+  SAIDA_FORM="$PRIVADO_DIR/.abrir-saida-formulario.$$"
+  : > "$SAIDA_FORM"; chmod 600 "$SAIDA_FORM"
+  remoto "bash ops/kit-unidade/do-formulario-joao.sh '$FORM_REF'$sets_remotos" | tee "$SAIDA_FORM"
+  RESUMO="$(tr -d '\r' < "$SAIDA_FORM" | sed -n 's/^KIT_RESUMO //p' | tail -1)"
+  rm -f "$SAIDA_FORM"; SAIDA_FORM=""
   [ -n "$RESUMO" ] || { AJUDA="o importador não devolveu o resumo: leia a mensagem acima."; false; }
   r_campo() { printf '%s\n' "$RESUMO" | tr ' ' '\n' | sed -n "s/^$1=//p" | head -1; }
   SLUG_GERADO="$(r_campo slug)"; SUB="$(r_campo subdominio)"; SUF="$(r_campo sufixo)"; MODO="$(r_campo modo)"; VALIDO="$(r_campo valido)"

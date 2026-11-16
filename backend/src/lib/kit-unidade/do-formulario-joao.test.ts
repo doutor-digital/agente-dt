@@ -137,6 +137,15 @@ test('erro do importador: devolve o erro, não cria arquivo e ainda limpa o cont
   assert.deepEqual(readdirSync(join(e.conteiner, 'run')), []);
 });
 
+test('código do link que começa com «-» ou «_» (base64url) é aceito e chega ao importador depois de «--»', () => {
+  const e = ambiente();
+  for (const codigo of ['-bcdefghijklmnopqrstuvwx', '_bcdefghijklmnopqrstuvwx']) {
+    assert.equal(e.rodar([codigo, '--so-conferir']).status, 0, codigo);
+    assert.ok(e.log().includes(`-- ${codigo}`), 'o código vai depois de «--»');
+  }
+  assert.notEqual(e.rodar(['-curto', '--so-conferir']).status, 0, 'curto demais para ser código e começa com «-»');
+});
+
 test('importador ausente no contêiner, slug também versionado, --set ruim e argumento desconhecido: recusados', () => {
   const e = ambiente();
   assert.match(e.rodar(['abc123def'], { FAKE_SEM_IMPORTADOR: '1' }).stdout, /ainda não tem o importador do formulário/);
