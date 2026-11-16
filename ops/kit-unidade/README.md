@@ -24,7 +24,18 @@ caminho FIXO fora do repositório — a sessão do agente usa um worktree descar
 
 Na VPS o `nova-unidade-joao.sh <slug>` procura em `unidades/` e em `unidades/privado/` — se o slug existir nos DOIS, recusa e mostra os dois caminhos —, e o questionário é apagado do contêiner ao fim (mesmo se o script falhar no meio).
 
-## Roteiro do João (NA VPS, como root, de `/root/kit`, com `bash arquivo` no seu terminal)
+## O jeito curto: UM comando, DO SEU COMPUTADOR (ele faz o ssh — não tem como errar o lugar)
+Dentro do repositório agente-dt, na sua máquina (a que tem `~/.ssh/doutordigital_vps`; sem a chave o comando recusa):
+
+    bash ops/kit-unidade/abrir-clinica-joao.sh <slug> --so-conferir   # só olha: não envia nem muda nada
+    bash ops/kit-unidade/abrir-clinica-joao.sh <slug>                 # o caminho todo
+
+Faz, parando no primeiro erro (e dizendo o que fazer): leva o kit → conferências → plano em seco → pergunta UMA vez «aplicar?» (digite `aplicar`) → Platform App → `--aplicar`
+(as perguntas de cada etapa continuam) → regra do Traefik do subdomínio do questionário → cofre→serviço do sufixo → resumo do que falta. Pode rodar de novo à vontade: nada duplica.
+Clínica real: o questionário privado (`KIT_PRIVADO_DIR`) segue sozinho para a VPS, modo 600. Não cole token nem senha em lugar nenhum: o comando não pede nenhum.
+O roteiro passo a passo abaixo continua valendo (é o que o comando encadeia).
+
+## Roteiro do João passo a passo (NA VPS, como root, de `/root/kit`, com `bash arquivo` no seu terminal)
 0. `cd /root/kit`
 1. Uma vez: `bash ops/kit-unidade/criar-platform-app-joao.sh --so-conferir`, depois sem a flag. Cria o Platform App (token em arquivo 600). **Não** dá ao app permissão sobre
    usuários existentes (daria ao token do app o poder de entrar como a pessoa).
