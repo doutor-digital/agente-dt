@@ -32,8 +32,8 @@ import { caixaWhatsappOficial, conferirModeloDaOnda, modelosDaCaixa } from '../l
 import { ajusteDaUnidade, ehAdministradorDD, freiosComOTier, gravarAjuste, quemAprova, tetoDoTier, tierValido } from '../lib/disparo/chatwoot/ajuste.js';
 import { ATRIBUTOS_USUAIS, filtroSchema } from '../lib/disparo/chatwoot/filtro.js';
 import { abrirOndaChatwoot, aprovarOndaChatwoot, concluirMontagemChatwoot, ctxDaUnidadeNoCrm, depsDoPublico, MAXIMO_POR_DISPARO, ORIGEM_CRM, PREFIXO_CUSTO_DESCONHECIDO } from '../lib/disparo/chatwoot/onda.js';
-import { maiorPrecoDasOndas, orcamentoDeGasto, precoEmReaisDoBanco } from '../lib/disparo/chatwoot/gasto.js';
-import { estimativaDeReserva, estimativaDoDisparo, precoDeReservaBrl, ritmoDaOnda, tetoReaisPorDia, type EstimativaDeCusto } from '../lib/disparo/chatwoot/custo.js';
+import { maiorPrecoDasOndas, orcamentoDeGasto, precoDoNumero, precoEmReaisDoBanco } from '../lib/disparo/chatwoot/gasto.js';
+import { comPrecoDoNumero, estimativaDeReserva, estimativaDoDisparo, precoDeReservaBrl, ritmoDaOnda, tetoReaisPorDia, type EstimativaDeCusto } from '../lib/disparo/chatwoot/custo.js';
 import { modoDoDisparoNoCrm } from '../lib/disparo/chatwoot/porto.js';
 import { taxasDoRelatorio } from '../lib/disparo/chatwoot/relatorio.js';
 import { lerEnviosPorHora, lerNumerosDosDisparos, NUMEROS_VAZIOS } from '../lib/disparo/chatwoot/relatorio-banco.js';
@@ -124,6 +124,15 @@ function resumoDosFreios(unit: Unit, tier: string | null) {
   };
 }
 
+/** A categoria que vale para o PREÇO: a assumida (ou ausente) é MARKETING, a mais cara — a mesma regra na tela da onda, no relatório e na rodada. */
+const categoriaDoPreco = (categoria: string | null, assumida: boolean): string => (assumida || !categoria ? 'MARKETING' : categoria);
+
+/** Preço do número com o fallback SEGURO (reserva de marketing) se a leitura falhar ou demorar. */
+const precoDoNumeroSeguro = async (unitId: string, categoria: string): Promise<{ valor: number; reserva: boolean }> => {
+  const maisCaro = { valor: precoDeReservaBrl('MARKETING'), reserva: true };
+  return (await comTeto(precoDoNumero(unitId, categoria).catch(() => maisCaro), TETO_DA_PARTE_MS, maisCaro)) ?? maisCaro;
+};
+
 /** O custo estimado do disparo e o ritmo (quantas saem por dia, em quantos dias acaba) — o que a tela mostra ANTES de aprovar. Nunca lança: falha vira estimativa com o preço de reserva. */
 async function custoERitmo(unit: Unit, onda: { categoriaModelo: string | null; categoriaAssumida: boolean; total: number }, tier: string | null) {
   const tetoReais = tetoReaisPorDia();
@@ -131,14 +140,18 @@ async function custoERitmo(unit: Unit, onda: { categoriaModelo: string | null; c
   // vivas da unidade (e desta), com a lista de unidades do número guardada, e o gasto das últimas 24 h do número por categoria.
   const categorias = async (): Promise<Array<string | null>> => {
     const vivas = await prisma.disparoOnda.findMany({ where: { unitId: unit.id, origem: ORIGEM_CRM, estado: 'aprovada' }, select: { categoriaModelo: true } });
-    return [onda.categoriaModelo, ...vivas.map((v) => v.categoriaModelo)];
+    return [categoriaDoPreco(onda.categoriaModelo, onda.categoriaAssumida), ...vivas.map((v) => v.categoriaModelo)];
   };
   // Falhou ler (ou demorou)? Fica do lado SEGURO: o preço de reserva do MARKETING (o mais caro) — nunca o da categoria desta onda sozinha.
   const MAIS_CARO = precoDeReservaBrl('MARKETING');
-  const [custo, precoDoTeto] = await Promise.all([
+  const categoriaEfetiva = categoriaDoPreco(onda.categoriaModelo, onda.categoriaAssumida);
+  const [custoDaUnidade, doNumero, precoDoTeto] = await Promise.all([
     comTeto(estimativaDoDisparo(unit.id, onda.categoriaModelo, onda.total, onda.categoriaAssumida), TETO_DA_PARTE_MS, null).then((c) => c ?? estimativaDeReserva(onda.categoriaModelo, onda.total, onda.categoriaAssumida)),
+    precoDoNumeroSeguro(unit.id, categoriaEfetiva),
     comTeto(categorias().then((cs) => maiorPrecoDasOndas(precoEmReaisDoBanco, unit.id, cs)).catch(() => MAIS_CARO), TETO_DA_PARTE_MS, MAIS_CARO).then((p) => p ?? MAIS_CARO),
   ]);
+  // o custo mostrado usa o preço do NÚMERO (o do teto), como o relatório
+  const custo = comPrecoDoNumero(custoDaUnidade, doNumero);
   const orcamento = await comTeto(orcamentoDeGasto({ unitId: unit.id, agora: new Date(), tetoReais, precoAtual: precoDoTeto, preco: precoEmReaisDoBanco }).catch(() => null), TETO_DA_PARTE_MS, null);
   const teto = { precoDoTeto, orcamento };
   const ritmo = ritmoDaOnda({ pessoas: onda.total, freios: freiosComOTier(freiosDoAmbiente(), tier), tetoReais, porMensagemBrl: precoDoTeto });
@@ -535,25 +548,22 @@ export async function disparosRelatorioHandler(req: Request, res: Response): Pro
       where: { unitId: r.unit.id, origem: ORIGEM_CRM, contaChatwoot: r.conta },
       orderBy: { criadoEm: 'desc' },
       take: 30,
-      select: { id: true, estado: true, total: true, template: true, categoriaModelo: true, criadoEm: true, aprovadaEm: true, campanha: { select: { nome: true } } },
+      select: { id: true, estado: true, total: true, template: true, categoriaModelo: true, categoriaAssumida: true, criadoEm: true, aprovadaEm: true, campanha: { select: { nome: true } } },
     });
     const numerosPorOnda = await lerNumerosDosDisparos(ondas.map((o) => o.id)); // agrupado no banco: não lê linha nenhuma
     // o preço por mensagem de cada categoria (uma leitura por categoria): gasto estimado = enviadas × preço. Sem histórico da Meta o preço é o de RESERVA (alto de propósito):
     // `gastoComReserva` rotula o valor como teto do gasto, não como o gasto
-    const categorias = [...new Set(ondas.map((o) => o.categoriaModelo).filter((c): c is string => !!c))];
-    const precos = await Promise.all(categorias.map(async (cat) => {
-      const e = await comTeto(estimativaDoDisparo(r.unit.id, cat, 1), TETO_DA_PARTE_MS, null);
-      // o preço do NÚMERO (o maior entre as unidades que o dividem) — o mesmo do teto de gasto —, nunca menos que o da própria unidade
-      const doNumero = await comTeto(precoEmReaisDoBanco(r.unit.id, cat).catch(() => null), TETO_DA_PARTE_MS, null);
-      return e ? { ...e, porMensagemBrl: Math.max(e.porMensagemBrl ?? 0, doNumero ?? 0) || null } : null;
-    }));
-    const precoPorCategoria = new Map<string, { preco: number | null; reserva: boolean }>(categorias.map((cat, i) => [cat, { preco: precos[i]?.porMensagemBrl ?? null, reserva: precos[i]?.reserva ?? false }]));
+    const efetiva = (o: { categoriaModelo: string | null; categoriaAssumida: boolean }): string => categoriaDoPreco(o.categoriaModelo, o.categoriaAssumida);
+    const categorias = [...new Set(ondas.map(efetiva))];
+    // o preço do NÚMERO (o maior entre as unidades que o dividem) — o mesmo do teto de gasto — e se ele é de RESERVA; categoria assumida/ausente = marketing, como na tela da onda
+    const precos = await Promise.all(categorias.map((cat) => precoDoNumeroSeguro(r.unit.id, cat)));
+    const precoPorCategoria = new Map<string, { preco: number | null; reserva: boolean }>(categorias.map((cat, i) => [cat, { preco: precos[i]!.valor, reserva: precos[i]!.reserva }]));
     res.set('Cache-Control', 'no-store').json({
       modo: modoDoDisparoNoCrm(r.unit.slug),
       campanhas: ondas.map((o) => {
         const numeros = numerosPorOnda.get(o.id) ?? NUMEROS_VAZIOS;
-        const { preco, reserva } = (o.categoriaModelo ? precoPorCategoria.get(o.categoriaModelo) : null) ?? { preco: null, reserva: false };
-        return { id: o.id, nome: o.campanha.nome, estado: o.estado, modelo: o.template, categoria: o.categoriaModelo, criadoEm: o.criadoEm, aprovadaEm: o.aprovadaEm, numeros, taxas: taxasDoRelatorio(numeros), gastoEstimadoBrl: preco !== null ? Math.ceil(preco * numeros.enviadas * 100 - 1e-9) / 100 : null, gastoComReserva: reserva };
+        const { preco, reserva } = precoPorCategoria.get(efetiva(o)) ?? { preco: null, reserva: false };
+        return { id: o.id, nome: o.campanha.nome, estado: o.estado, modelo: o.template, categoria: o.categoriaModelo, categoriaAssumida: o.categoriaAssumida, criadoEm: o.criadoEm, aprovadaEm: o.aprovadaEm, numeros, taxas: taxasDoRelatorio(numeros), gastoEstimadoBrl: preco !== null ? Math.ceil(preco * numeros.enviadas * 100 - 1e-9) / 100 : null, gastoComReserva: reserva };
       }),
     });
   } catch (e) {

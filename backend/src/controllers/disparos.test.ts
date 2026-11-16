@@ -158,6 +158,7 @@ let ajusteGravado: Record<string, unknown> | null = null;
 const consultasDeOnda: Array<Record<string, unknown>> = [];
 function preparar(opcoes: { gerenteAprova?: boolean; onda?: Record<string, unknown> | null } = {}) {
   Object.assign(process.env, AMBIENTE);
+  falso('unitChatwoot', { findUnique: async () => null, findMany: async () => [] }); // o número é só da unidade (o preço do número lê as unidades dele)
   U.aplicarConfigs([U.SEMENTE_PARAUAPEBAS, DEMO as never]);
   R.esquecerContextoDoAmbiente();
   chamadas = [];
@@ -582,4 +583,36 @@ test('o ritmo e o «cabe por dia» da tela usam o MESMO preço da rodada: o maio
   assert.equal(r.status, 200);
   assert.deepEqual([r.corpo.ritmo.porDia, r.corpo.ritmo.limitadoPor], [25, 'gasto']);
   assert.equal(r.corpo.cabemPeloGasto, 25);
+});
+
+test('número DIVIDIDO com outra unidade sem histórico: a tela da onda e o relatório usam o preço do NÚMERO (reserva de marketing, rotulada), não o da própria unidade; o relatório mostra «categoria não informada»', async () => {
+  const { _definirCambio } = await import('../lib/disparo/chatwoot/custo.js');
+  const { _esquecerPrecosDeGasto } = await import('../lib/disparo/chatwoot/gasto.js');
+  _esquecerPrecosDeGasto();
+  _definirCambio(5.6);
+  const compartilhado = () => falso('unitChatwoot', { findUnique: async () => ({ kapsoPhoneNumberId: 'n1' }), findMany: async () => [{ unitId: 'outra-unidade' }] });
+  // a unidade tem histórico (R$ 0,35); a outra do número, não: vale a reserva (R$ 2,00), e o valor é rotulado como reserva
+  const tabela = async (a: { where: { unitId: string } }) => (a.where.unitId === 'outra-unidade' ? [] : LINHAS_DE_CUSTO);
+  preparar({ onda: ondaDeCusto({ categoriaModelo: 'MARKETING', total: 40 }) });
+  compartilhado();
+  falso('whatsappCostDaily', { findMany: tabela });
+  falso('$queryRaw', (async () => []) as never);
+  const r = await pedir('GET', `/public/disparos/ondas/ondaaaaaaa1?slug=${PARAU}`, 'tok-dd');
+  assert.equal(r.status, 200);
+  assert.equal(r.corpo.custo.porMensagemBrl, 2, 'a tela mostra o preço do número');
+  assert.equal(r.corpo.custo.brl, 80);
+  assert.equal(r.corpo.custo.reserva, true);
+  assert.equal(r.corpo.custo.conhecido, false, 'com reserva no número a aprovação pede a confirmação');
+  assert.match(r.corpo.custo.nota, /preço do NÚMERO/);
+
+  preparar();
+  compartilhado();
+  const h = (n: number) => new Date(Date.now() - n * 3_600_000);
+  falso('disparoOnda', { findMany: async () => [{ id: 'ondaaaaaaa1', estado: 'aprovada', total: 40, template: 't', categoriaModelo: 'MARKETING', categoriaAssumida: true, criadoEm: h(5), aprovadaEm: h(4), campanha: { nome: 'A' } }] });
+  falso('whatsappCostDaily', { findMany: tabela });
+  falso('$queryRaw', (async () => [{ onda_id: 'ondaaaaaaa1', selecionadas: 40, enviadas: 20, tentadas: 20, entregues: 0, lidas: 0, responderam: 0, pediram_sair: 0, falharam: 0, incertas: 0, na_fila: 20, descartadas: 0, receberiam: 0 }]) as never);
+  const rel = await pedir('GET', `/public/disparos/relatorio?slug=${PARAU}`, 'tok-agente');
+  assert.equal(rel.status, 200);
+  const c = rel.corpo.campanhas[0];
+  assert.deepEqual([c.gastoEstimadoBrl, c.gastoComReserva, c.categoriaAssumida], [40, true, true], '20 enviadas × R$ 2,00 do número; rotulado reserva; categoria não informada pelo CRM');
 });

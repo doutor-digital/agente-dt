@@ -7,7 +7,7 @@ process.env.OPENAI_API_KEY ??= 'sk-teste-1234567890';
 process.env.DATABASE_URL ??= 'postgresql://x:y@127.0.0.1:1/z';
 process.env.SESSION_JWT_SECRET ??= 'segredo-de-teste-com-mais-de-32-caracteres-ok';
 
-import { test, mock, afterEach } from 'node:test';
+import { test, mock, afterEach, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { prisma } from './prisma.js';
 import { FREIOS_PADRAO } from './disparo/freios.js';
@@ -19,6 +19,8 @@ function falso(modelo: string, metodos: Record<string, unknown>): void {
   if (!originais.has(modelo)) originais.set(modelo, Object.getOwnPropertyDescriptor(prisma, modelo));
   Object.defineProperty(prisma, modelo, { value: metodos, configurable: true, writable: true });
 }
+// por padrão a unidade tem o número só para ela (o preço do número LÊ as unidades do número; sem leitura vale a reserva de marketing)
+beforeEach(() => falso('unitChatwoot', { findUnique: async () => null, findMany: async () => [] }));
 afterEach(() => {
   mock.restoreAll();
   for (const [modelo, d] of originais) {
@@ -285,7 +287,7 @@ test('unidades que dividem o MESMO número: o preço da categoria é o MAIOR ent
   assert.equal(await precoEmReaisDoBanco('u1', 'MARKETING'), 0.35, 'número só dela: o preço dela');
   _esquecerPrecosDeGasto();
   falso('unitChatwoot', { findUnique: async () => { throw new Error('banco fora'); } });
-  assert.equal(await precoEmReaisDoBanco('u1', 'MARKETING'), 0.35, 'não consegui ler o número: só a própria unidade');
+  assert.equal(await precoEmReaisDoBanco('u1', 'MARKETING'), 2, 'não consegui ler o número: a reserva de marketing, não «só a própria unidade»');
 });
 
 test('CRM sem categoria no modelo: tratado como MARKETING de forma explícita (e logado uma vez), nunca «categoria desconhecida»', async () => {
@@ -304,20 +306,23 @@ test('categoria ASSUMIDA (o CRM não a informou) vale como marketing para o pre�
   assert.equal(modeloDaCaixa({ ...cru, category: 'UTILITY' } as never)!.categoriaAssumida, false);
 });
 
-test('falha ao ler as unidades do número NÃO fica guardada 5 min como «número só dela» (baixaria o preço do teto): vale a última lista conhecida', async () => {
-  const { precoEmReaisDoBanco, _esquecerPrecosDeGasto } = await import('./disparo/chatwoot/gasto.js');
+test('lista de unidades do número que NÃO lê = preço de RESERVA de marketing (nunca «só esta unidade», que baixaria o teto), com ou sem cache velho', async () => {
+  const { precoDoNumero, precoEmReaisDoBanco, _esquecerPrecosDeGasto } = await import('./disparo/chatwoot/gasto.js');
   const { _definirCambio } = await import('./disparo/chatwoot/custo.js');
   _esquecerPrecosDeGasto();
   _definirCambio(5.6);
-  falso('whatsappCostDaily', { findMany: async (a: { where: { unitId: string } }) => [{ pricingCategory: 'MARKETING_LITE', pricingType: 'REGULAR', country: 'BR', volume: 100, costUsd: a.where.unitId === 'u2' ? '32.17' : '6.25' }] });
-  let falha = false;
-  falso('unitChatwoot', { findUnique: async () => { if (falha) throw new Error('banco fora'); return { kapsoPhoneNumberId: 'n1' }; }, findMany: async () => [{ unitId: 'u1' }, { unitId: 'u2' }] });
-  assert.equal(await precoEmReaisDoBanco('u1', 'MARKETING'), 1.80152);
-  // 5 min depois a lista envelheceu e a leitura falha: vale a lista conhecida (u1 + u2), não «só u1»
+  falso('whatsappCostDaily', { findMany: async () => [{ pricingCategory: 'UTILITY', pricingType: 'REGULAR', country: 'BR', volume: 100, costUsd: '0.68' }] }); // utilidade: R$ 0,038
+  let falha = true;
+  falso('unitChatwoot', { findUnique: async () => { if (falha) throw new Error('banco fora'); return null; }, findMany: async () => [] });
+  const semCache = await precoDoNumero('u1', 'UTILITY');
+  assert.deepEqual(semCache, { valor: 2, reserva: true }, 'cache vazio + leitura falhando: a reserva de MARKETING, não o preço baixo só desta unidade');
+  falha = false;
+  assert.ok(Math.abs((await precoEmReaisDoBanco('u1', 'UTILITY')) - 0.03808) < 1e-6, 'lendo de novo: o preço de verdade');
+  // cache velho (6 min) + leitura falhando de novo: também a reserva
   const t0 = Date.now();
   const agora = mock.method(Date, 'now', () => t0 + 6 * 60_000);
   falha = true;
-  assert.equal(await precoEmReaisDoBanco('u1', 'MARKETING'), 1.80152, 'a falha de leitura não vira «número só dela»');
+  assert.deepEqual(await precoDoNumero('u1', 'UTILITY'), { valor: 2, reserva: true });
   agora.mock.restore();
 });
 
@@ -332,16 +337,22 @@ test('categoria assumida: a estimativa segue pelo preço de marketing, mas deixa
   assert.equal(custoMod.comCategoriaAssumida(normal, false), normal, 'categoria informada: nada muda');
 });
 
-test('a lista de unidades do número guardada serve também à contagem do gasto: uma leitura só para preço e envios', async () => {
+test('a CONTAGEM do gasto lê as unidades do número SEM cache (o mesmo conjunto que contarNaJanela conta) e, se a leitura falhar, LANÇA — falha fechada, nunca «só esta unidade»', async () => {
   const { precoEmReaisDoBanco, enviosPorCategoriaNoBanco, _esquecerPrecosDeGasto } = await import('./disparo/chatwoot/gasto.js');
   const { _definirCambio } = await import('./disparo/chatwoot/custo.js');
   _esquecerPrecosDeGasto();
   _definirCambio(5.6);
   let leituras = 0;
-  falso('unitChatwoot', { findUnique: async () => (leituras++, { kapsoPhoneNumberId: 'n1' }), findMany: async () => [{ unitId: 'u1' }, { unitId: 'u2' }] });
+  let falha = false;
+  falso('unitChatwoot', { findUnique: async () => { leituras++; if (falha) throw new Error('banco fora'); return { kapsoPhoneNumberId: 'n1' }; }, findMany: async () => [{ unitId: 'u1' }, { unitId: 'u2' }] });
   falso('whatsappCostDaily', { findMany: async () => [] });
-  falso('disparoDestinatario', { groupBy: async () => [] });
-  await precoEmReaisDoBanco('u1', 'MARKETING');
-  await enviosPorCategoriaNoBanco('u1', new Date(0));
-  assert.equal(leituras, 1);
+  const consultas: Array<Record<string, any>> = [];
+  falso('disparoDestinatario', { groupBy: async (a: Record<string, any>) => (consultas.push(a), []) });
+  await precoEmReaisDoBanco('u1', 'MARKETING'); // 1 leitura (guardada por 5 min, só para o preço)
+  await enviosPorCategoriaNoBanco('u1', new Date(0)); // +1: sem cache
+  await enviosPorCategoriaNoBanco('u1', new Date(0)); // +1
+  assert.equal(leituras, 3);
+  assert.deepEqual(consultas[0]!.where.unitId.in.sort(), ['u1', 'u2'], 'uma unidade recém-ligada ao número já entra na soma');
+  falha = true;
+  await assert.rejects(enviosPorCategoriaNoBanco('u1', new Date(0)), /banco fora/);
 });

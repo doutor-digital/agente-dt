@@ -19,47 +19,54 @@ const FRESCO_MS = 5 * 60_000;
 const ultimoPrecoBom = new Map<string, { valor: number; ate: number; fresco: number }>();
 export const _esquecerPrecosDeGasto = (): void => (ultimoPrecoBom.clear(), unidadesDoNumero.clear());
 
-/** O preço de UMA unidade. O que vale para o teto é o do NÚMERO (`precoEmReaisDoBanco`). O último preço BOM (até 24 h) se a leitura falha — falhar ABERTO soltaria o gasto justo quando algo está estranho; depois de 24 h, a reserva (conservadora). */
-export const precoEmReaisDaUnidade: PrecoEmReais = async (unitId, categoria) => {
+/** O preço (R$ por mensagem) e se ele é de RESERVA (sem histórico da Meta: um teto, não o preço real). */
+export interface PrecoDetalhado {
+  valor: number;
+  reserva: boolean;
+}
+
+/** O preço de UMA unidade. O que vale para o teto é o do NÚMERO (`precoDoNumero`). O último preço BOM (até 24 h) se a leitura falha — falhar ABERTO soltaria o gasto justo quando algo está estranho; depois de 24 h, a reserva (conservadora). */
+async function precoDetalhadoDaUnidade(unitId: string, categoria: string | null): Promise<PrecoDetalhado> {
   const chave = `${unitId}|${(categoria ?? '').toUpperCase()}`;
   const agora = Date.now();
   const recente = ultimoPrecoBom.get(chave);
-  if (recente && recente.fresco > agora) return recente.valor;
+  if (recente && recente.fresco > agora) return { valor: recente.valor, reserva: false };
   const [preco, cambio] = await Promise.all([lerPrecoDaUnidade(unitId, categoria).catch(() => null), cambioDoDia().catch(() => null)]);
   const e = estimarCusto({ pessoas: 1, categoria, preco, cambio });
   if (e.conhecido && e.porMensagemBrl !== null) {
     ultimoPrecoBom.set(chave, { valor: e.porMensagemBrl, ate: agora + VALIDADE_DO_ULTIMO_PRECO_MS, fresco: agora + FRESCO_MS });
-    return e.porMensagemBrl;
+    return { valor: e.porMensagemBrl, reserva: false };
   }
-  const guardado = recente;
-  return guardado && guardado.ate > agora ? guardado.valor : precoDeReservaBrl(categoria);
-};
+  return recente && recente.ate > agora ? { valor: recente.valor, reserva: false } : { valor: precoDeReservaBrl(categoria), reserva: true };
+}
+export const precoEmReaisDaUnidade: PrecoEmReais = async (unitId, categoria) => (await precoDetalhadoDaUnidade(unitId, categoria)).valor;
 
-/** As unidades que dividem o número do Kapso da unidade, guardadas 5 min (a conta do teto roda toda hora). Sem leitura, só ela. */
+/** As unidades que dividem o número do Kapso da unidade, guardadas 5 min — SÓ para o PREÇO (a contagem do gasto lê sem cache). Falha de leitura: `null`, nunca «só a própria». */
 const unidadesDoNumero = new Map<string, { ate: number; ids: string[] }>();
-async function unidadesDoNumeroGuardadas(unitId: string): Promise<string[]> {
+async function unidadesDoNumeroParaPreco(unitId: string): Promise<string[] | null> {
   const feito = unidadesDoNumero.get(unitId);
   if (feito && feito.ate > Date.now()) return feito.ids;
   try {
-    const lidas = await unidadesDoMesmoNumeroKapso(unitId);
-    const ids = lidas.length ? lidas : [unitId];
+    const ids = await unidadesDoMesmoNumeroKapso(unitId);
     unidadesDoNumero.set(unitId, { ate: Date.now() + FRESCO_MS, ids });
     return ids;
   } catch {
-    // falha de leitura NÃO é guardada (não vira «número só dela» por 5 min): vale a última lista conhecida, ou só a própria unidade desta vez
-    return feito?.ids ?? [unitId];
+    return null;
   }
 }
 
 /**
  * O teto de gasto é do NÚMERO, que pode ser dividido por várias unidades — cada uma com a sua tabela de custo da Meta. O preço de uma categoria é o MAIOR entre as
- * unidades do número (uma unidade sem histórico não baixa o teto das outras, e um preço alto de uma não é ignorado pela outra).
+ * unidades do número (uma unidade sem histórico não baixa o teto das outras, e um preço alto de uma não é ignorado pela outra). Se a lista de unidades do número
+ * NÃO pôde ser lida, não vale «só esta unidade»: vale a reserva de MARKETING (a mais cara), como a tela.
  */
-export const precoEmReaisDoBanco: PrecoEmReais = async (unitId, categoria) => {
-  const ids = await unidadesDoNumeroGuardadas(unitId);
-  const precos = await Promise.all(ids.map((id) => precoEmReaisDaUnidade(id, categoria)));
-  return Math.max(...precos);
-};
+export async function precoDoNumero(unitId: string, categoria: string | null): Promise<PrecoDetalhado> {
+  const ids = await unidadesDoNumeroParaPreco(unitId);
+  if (!ids || ids.length === 0) return { valor: precoDeReservaBrl('MARKETING'), reserva: true };
+  const precos = await Promise.all(ids.map((id) => precoDetalhadoDaUnidade(id, categoria)));
+  return precos.reduce((maior, p) => (p.valor > maior.valor || (p.valor === maior.valor && p.reserva) ? p : maior));
+}
+export const precoEmReaisDoBanco: PrecoEmReais = async (unitId, categoria) => (await precoDoNumero(unitId, categoria)).valor;
 
 /** Ondas vivas da unidade com categorias diferentes: vale o MAIOR preço (o teto de gasto não pode subestimar). */
 export async function maiorPrecoDasOndas(preco: PrecoEmReais, unitId: string, categorias: ReadonlyArray<string | null>): Promise<number> {
@@ -72,7 +79,8 @@ export type EnviosPorCategoria = Array<{ categoria: string | null; envios: numbe
 export type LerEnvios = (unitId: string, desde: Date) => Promise<EnviosPorCategoria>;
 
 export const enviosPorCategoriaNoBanco: LerEnvios = async (unitId, desde) => {
-  const ids = await unidadesDoNumeroGuardadas(unitId);
+  // SEM cache e SEM «só a própria»: é o MESMO conjunto que `contarNaJanela` conta; se a leitura falhar, lança e a rodada da unidade não manda (falha fechada)
+  const ids = await unidadesDoMesmoNumeroKapso(unitId);
   const grupos = await prisma.disparoDestinatario.groupBy({
     by: ['ondaId'],
     where: { unitId: { in: ids }, onda: { origem: 'chatwoot' }, enviadoEm: { gte: desde } },

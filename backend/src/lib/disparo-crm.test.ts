@@ -1355,3 +1355,25 @@ test('categoria ASSUMIDA (o CRM não informou na montagem): se o CRM depois diss
     globalThis.fetch = antes;
   }
 });
+
+test('lista de unidades do número FALHANDO com o cache vazio (1ª rodada após reinício): a rodada da unidade NÃO manda nada (falha fechada), em vez de somar só esta unidade', async () => {
+  ligar();
+  const { rodadaDoDisparoNoCrm, _zerarSemAndarDoCrm, _zerarVarreduraDoCrm } = await import('./disparo/chatwoot/rodada.js');
+  const { _esquecerPrecosDeGasto } = await import('./disparo/chatwoot/gasto.js');
+  const { _definirCambio } = await import('./disparo/chatwoot/custo.js');
+  _esquecerPrecosDeGasto();
+  _zerarSemAndarDoCrm();
+  _zerarVarreduraDoCrm();
+  _definirCambio(5.6);
+  const onda = { id: 'o1', campanhaId: 'c1', unitId: 'u1', estado: 'aprovada', origem: 'chatwoot', caixaChatwoot: 3, contaChatwoot: 1, template: INFO.template, idioma: INFO.idioma, textoModelo: INFO.textoModelo, variaveis: INFO.variaveis, cabecalho: null, oferta: null, categoriaModelo: 'MARKETING', aprovadaEm: ONDA.aprovadaEm, aprovadaModo: 'ligado', sairAceitos: 0, criadoEm: AGORA, unit: UNIDADE, campanha: { nome: 'Reativação' } };
+  falso('disparoOnda', { findMany: async () => [onda], updateMany: async () => ({ count: 0 }) });
+  falso('chatwootDisparoAjuste', { findUnique: async () => null });
+  falso('whatsappCostDaily', { findMany: async () => [] });
+  const base = baseFalso({ quantos: 5 });
+  const t = portoDoCrm({ base });
+  falso('unitChatwoot', { findUnique: async () => { throw new Error('banco fora'); }, findMany: async () => [] });
+  falso('disparoDestinatario', { findMany: async () => [], count: async () => 0, groupBy: async () => [] });
+  await rodadaDoDisparoNoCrm({ criarPorto: () => t.porto, avisar: async () => undefined, tetoReais: 50 });
+  assert.equal(t.enviados.length, 0, 'a leitura do gasto falhou: não manda');
+  assert.equal(t.base.estados.get('d1')!.estado, 'pendente');
+});

@@ -186,6 +186,20 @@ export async function estimativaDoDisparo(unitId: string, categoria: string | nu
 }
 
 const CATEGORIA_ASSUMIDA = 'MARKETING';
+/** A estimativa mostrada com o preço do NÚMERO (o do teto de gasto): nunca menor que o da própria unidade. Se o preço do número é de RESERVA, a estimativa também vira «reserva» (pede confirmação). */
+export function comPrecoDoNumero(e: EstimativaDeCusto, doNumero: { valor: number; reserva: boolean }): EstimativaDeCusto {
+  if (e.porMensagemBrl !== null && doNumero.valor <= e.porMensagemBrl && !doNumero.reserva) return e;
+  const valor = Math.max(doNumero.valor, e.porMensagemBrl ?? 0);
+  return {
+    ...e,
+    porMensagemBrl: valor,
+    brl: centavoParaCima(valor * e.pessoas),
+    reserva: e.reserva || doNumero.reserva,
+    conhecido: e.conhecido && !doNumero.reserva,
+    nota: `${e.nota}; o teto de gasto usa o preço do NÚMERO (o maior entre as unidades que o dividem${doNumero.reserva ? ', sem histórico da Meta numa delas: preço de reserva' : ''})`,
+  };
+}
+
 export const NOTA_CATEGORIA_ASSUMIDA = 'categoria não informada pelo CRM: estimativa pelo preço de marketing';
 
 /** Categoria assumida: o valor segue (preço de marketing), mas deixa de ser «conhecido» — a tela avisa e a aprovação exige a confirmação explícita. */
