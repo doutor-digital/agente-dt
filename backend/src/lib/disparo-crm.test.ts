@@ -1008,6 +1008,7 @@ test('alerta da restrição cita TODAS as unidades pausadas', async () => {
   const dois = alertaDeRestricao(['a', 'b']);
   assert.match(dois, /a \+ b/);
   assert.match(dois, /2 unidades/);
+  assert.match(dois, /pausadas/);
 });
 
 test('montagens: o CRM tem o limite PRÓPRIO (2 ao mesmo tempo, somando unidades) e o conector do Kommo não conta as dele', async () => {

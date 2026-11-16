@@ -123,7 +123,7 @@ export async function varrerRespostasDoCrm(deps: VarredorDeps = {}): Promise<{ s
 
 /** O aviso da restrição do número: cita TODAS as unidades pausadas (o número é delas todas). */
 export const alertaDeRestricao = (slugs: readonly string[]): string =>
-  `🚨 Disparo do CRM PAUSADO — ${slugs.join(' + ')}\nMotivo: a Meta restringiu o número (131048/131056) numa mensagem do disparo${slugs.length > 1 ? `; as ${slugs.length} unidades que usam este número foram pausadas juntas` : ''}. Continuar mandando agrava a restrição. Resolva com a Meta e monte o disparo de novo.`;
+  `🚨 Disparo do CRM PAUSADO — ${slugs.join(' + ')}\nMotivo: a Meta restringiu o número (131048/131056) numa mensagem do disparo${slugs.length > 1 ? `; as ondas aprovadas das ${slugs.length} unidades que usam este número foram pausadas` : ''}. Continuar mandando agrava a restrição. Resolva com a Meta e monte o disparo de novo.`;
 
 /** Roda a varredura se já passou o intervalo e não há outra andando. Nunca lança. O relógio só anda quando ela TERMINOU. */
 export async function varrerSeChegouAHora(deps: VarredorDeps = {}): Promise<void> {
@@ -141,12 +141,12 @@ export async function varrerSeChegouAHora(deps: VarredorDeps = {}): Promise<void
       for (const id of r.restritosUnitIds) for (const x of await unidadesDoMesmoNumeroKapso(id).catch(() => [id])) ids.add(x);
       logger.error({ unit: slug, unidadesDoNumero: ids.size }, 'disparo-crm: o número foi RESTRINGIDO pela Meta (131048/131056) — pauso as ondas do CRM das unidades do número');
       await prisma.disparoOnda.updateMany({
-        where: ids.size ? { unitId: { in: [...ids] }, origem: ORIGEM_CRM, estado: 'aprovada' } : { unit: { slug }, origem: ORIGEM_CRM, estado: 'aprovada' },
+        where: ids.size ? { unitId: { in: [...ids] }, origem: ORIGEM_CRM, estado: 'aprovada' } : { unit: { slug: { in: r.restritos } }, origem: ORIGEM_CRM, estado: 'aprovada' },
         data: { estado: 'pausada', pausaMotivo: 'a Meta restringiu o número (spam/qualidade): resolva com a Meta e monte o disparo de novo', pausaCausa: 'meta' },
       });
       const slugsDoNumero = ids.size ? (await prisma.unit.findMany({ where: { id: { in: [...ids] } }, select: { slug: true } }).catch(() => [])).map((u) => u.slug).sort() : [];
-      const todas = [...new Set([...r.restritos, ...slugsDoNumero])].join(' + ');
-      await enviarTelegram(alertaDeRestricao(todas.split(' + '))).catch(() => undefined);
+      const todas = [...new Set([...r.restritos, ...slugsDoNumero])];
+      await enviarTelegram(alertaDeRestricao(todas)).catch(() => undefined);
     }
   } catch (err) {
     logger.warn({ err: String(err) }, 'disparo-crm: a varredura falhou');

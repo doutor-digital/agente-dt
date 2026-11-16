@@ -62,6 +62,12 @@ const lerComTeto = <T>(p: Promise<T>, ms = TETO_DA_PARTE_MS): Promise<T | null> 
       (e) => (clearTimeout(t), falha(e)),
     );
   });
+/** Etiquetas e atributos são opcionais (a tela abre sem eles), MAS acesso recusado (401/403) não pode passar calado: propaga. */
+const soRecusaPropaga = (e: unknown): null => {
+  const s = (e as { status?: number } | null)?.status;
+  if (s === 401 || s === 403) throw e;
+  return null;
+};
 /** O que dizer de um erro de leitura do CRM: acesso recusado (token caído) é outra coisa que «não consegui ler». */
 export function recusaDoErro(e: unknown, oQue: string): { status: number; erro: string } {
   const status = (e as { status?: number } | null)?.status;
@@ -200,8 +206,8 @@ export async function disparosOpcoesHandler(req: Request, res: Response): Promis
       return;
     }
     const [etiquetas, defs, modelos] = await Promise.all([
-      lerComTeto(chamar(ctx, 'GET', 'labels').catch(() => null)),
-      lerComTeto(chamar(ctx, 'GET', 'custom_attribute_definitions', { query: { attribute_model: '0' } }).catch(() => null)),
+      lerComTeto(chamar(ctx, 'GET', 'labels').catch(soRecusaPropaga)),
+      lerComTeto(chamar(ctx, 'GET', 'custom_attribute_definitions', { query: { attribute_model: '0' } }).catch(soRecusaPropaga)),
       lerComTeto(modelosDaCaixa(ctx, caixa)),
     ]);
     if (!modelos) {

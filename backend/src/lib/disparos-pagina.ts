@@ -346,7 +346,7 @@ a{color:var(--brand)}
     r.campanhas.forEach(function(k){
       var n = k.numeros, x = el('tr'), nome = el('td'); var a = el('a', null, k.nome); a.href = '#'; a.addEventListener('click', function(ev){ ev.preventDefault(); abrirOnda(k.id); }); nome.appendChild(a);
       nome.appendChild(el('small', 'mudo', ' · ' + (ESTADO[k.estado] || k.estado) + ' · ' + quando(k.criadoEm))); x.appendChild(nome);
-      [n.selecionadas, numeroComPct(n.enviadas, n.selecionadas), numeroComPct(n.entregues, n.enviadas), numeroComPct(n.lidas, n.enviadas), numeroComPct(n.responderam, n.enviadas), numeroComPct(n.pediramSair, n.enviadas), n.falharam, n.incertas].forEach(function(v){ x.appendChild(el('td', null, String(v))); });
+      [n.selecionadas, numeroComPct(n.enviadas, n.selecionadas), numeroComPct(n.entregues, n.enviadas), numeroComPct(n.lidas, n.enviadas), numeroComPct(n.responderam, n.enviadas), numeroComPct(n.pediramSair, n.enviadas), n.falharam, n.incertas || 0].forEach(function(v){ x.appendChild(el('td', null, String(v))); });
       tb.appendChild(x);
     });
     t.appendChild(tb); var w = el('div', 'rolar'); w.appendChild(t); c.appendChild(w);
