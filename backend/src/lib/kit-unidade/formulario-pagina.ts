@@ -30,7 +30,7 @@ section>h2 .n{flex:none;width:24px;height:24px;border-radius:50%;background:var(
 .dica-sec{color:var(--muted);font-size:14px;margin:2px 0 6px}
 .campo{margin-top:14px}
 .linha .campo{margin:0}
-.linha textarea{min-height:112px}
+.linha textarea{min-height:150px}
 label,.rotulo{display:block;font-weight:600;font-size:15px;margin:0 0 4px}
 .ajuda{display:block;color:var(--muted);font-size:13.5px;margin:0 0 6px}
 .tag{display:inline-block;background:var(--warnbg);color:var(--warn);border-radius:8px;padding:2px 8px;font-size:12.5px;font-weight:600;margin:0 0 6px}

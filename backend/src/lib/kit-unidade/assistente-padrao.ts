@@ -3,8 +3,8 @@
  * seção D), as coisas que ela nunca faz (seção F + regras da rede) e quando ela passa para uma pessoa (seção E).
  *
  * Nada aqui é invenção: cada resposta padrão é o texto do molde com os marcadores trocados por colchetes que o dono entende
- * ([valor com sinal], [horário 1]…) — um teste confere que cada uma continua dentro do molde (se a rede mudar o roteiro, este arquivo avisa). Onde a rede NÃO tem resposta
- * («tenho medo de doer», «funciona mesmo?») o campo vem VAZIO: não inventamos promessa; o dono escreve a dele (sem prometer resultado) ou deixa em branco.
+ * ([valor com sinal], [horário 1]…) — um teste confere que cada uma continua dentro do molde (se a rede mudar o roteiro, este arquivo avisa). «Tenho medo de doer» e «funciona mesmo?»
+ * (16/11, decisão do João) entraram no molde e aqui com o MESMO texto, sem promessa de cura nem de resultado.
  *
  * A regra da rede SEMPRE vence o texto da clínica: o que o dono escreve vira «aprendizado» da unidade (bloco `<aprendizados>`, abaixo das regras da rede no prompt) ou
  * informação nas fontes; nunca muda preço, nunca autoriza diagnóstico, promessa de cura, desconto, nem tira a urgência.
@@ -28,11 +28,11 @@ export const OBJECOES_PADRAO: readonly ObjecaoPadrao[] = [
   { id: 'pensar', gatilho: 'Vou pensar', resposta: 'Claro! O que pesa mais para você decidir: o valor, o horário ou saber se o tratamento serve pra você?', dica: '' },
   { id: 'convenio', gatilho: 'Aceita convênio?', resposta: 'Nosso atendimento é particular, individual e sem cirurgia. Muitos pacientes com plano tratam aqui por isso.', dica: 'Se a clínica aceita convênio, escreva aqui como é (e preencha também a parte «Pagamento» acima).' },
   { id: 'longe', gatilho: 'É longe', resposta: 'A unidade mais perto de você é [cidade]. Tenho [horário 1] ou [horário 2], dá certo?', dica: '' },
-  { id: 'medo', gatilho: 'Tenho medo de doer', resposta: '', dica: 'A rede ainda não tem uma resposta padrão. Escreva a sua (sem prometer resultado) ou deixe em branco.' },
+  { id: 'medo', gatilho: 'Tenho medo de doer', resposta: 'É normal ter esse receio. Na consulta o especialista conversa com você, avalia e explica tudo antes; nada é feito sem você entender e concordar. E o tratamento não envolve cirurgia.', dica: '' },
   { id: 'fisio', gatilho: 'Já fiz fisioterapia e não resolveu', resposta: 'Faz sentido desconfiar. A consulta é para achar a causa da dor, não só aliviar.', dica: '' },
   { id: 'familia', gatilho: 'Preciso falar com meu marido / minha família', resposta: 'Ótimo! Posso deixar um horário para vocês dois virem juntos: [horário 1] ou [horário 2]?', dica: '' },
   { id: 'tempo', gatilho: 'Não tenho tempo', resposta: 'Prefere o primeiro horário da manhã ou o último do dia? Tenho [horário 1] ou [horário 2].', dica: 'A assistente só oferece horários que existem de verdade na agenda.' },
-  { id: 'funciona', gatilho: 'Funciona mesmo?', resposta: '', dica: 'A rede ainda não tem uma resposta padrão. Escreva a sua (sem prometer cura nem resultado) ou deixe em branco.' },
+  { id: 'funciona', gatilho: 'Funciona mesmo?', resposta: 'Cada caso é um caso, e é para isso que serve a consulta: o especialista acha a causa da sua dor e diz com clareza se o tratamento serve pra você, sem cirurgia.', dica: '' },
 ];
 
 /** O que a assistente NUNCA faz (regra da rede: o dono não desliga). Só para mostrar na página. */

@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { objecaoMudou, validarFormulario } from './formulario.js';
 import { assistenteCompleta, respostasValidas } from './formulario-exemplo.js';
-import { MAX_OBJECOES_EXTRAS, OBJECOES_PADRAO, paraMarcadoresDoMolde } from './assistente-padrao.js';
+import { MAX_OBJECOES_EXTRAS, OBJECOES_PADRAO, licaoDaObjecao, paraMarcadoresDoMolde } from './assistente-padrao.js';
+import { recusaDaRegra } from '../aprendizados-unidade.js';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -89,14 +90,20 @@ test('só a objeção que o dono MUDOU (ou criou) vira aprendizado; a igual ao p
   assert.equal(objecaoMudou('outra', 'Qualquer resposta criada pelo dono.'), true);
 });
 
-test('o padrão da página É o que a rede usa: cada resposta preenchida existe no roteiro (molde da Sofia 2.0); onde a rede não tem, o campo vem VAZIO (nada inventado)', () => {
+test('o padrão da página É o que a rede usa: cada resposta existe no roteiro (molde da Sofia 2.0), passa pelas travas da rede (sem cura, diagnóstico nem preço) e, sendo o padrão, NÃO vira aprendizado', () => {
   const molde = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../../../ops/kit-unidade/molde-sofia/bloco-conversa.md'), 'utf8');
-  const vazias = OBJECOES_PADRAO.filter((o) => !o.resposta).map((o) => o.id);
-  assert.deepEqual(vazias.sort(), ['funciona', 'medo'], 'só estas duas não têm padrão na rede');
-  for (const o of OBJECOES_PADRAO.filter((x) => x.resposta)) {
+  assert.deepEqual(OBJECOES_PADRAO.filter((o) => !o.resposta).map((o) => o.id), [], 'as 9 têm resposta padrão da rede');
+  assert.equal(OBJECOES_PADRAO.length, 9);
+  for (const o of OBJECOES_PADRAO) {
     assert.ok(molde.includes(paraMarcadoresDoMolde(o.resposta)), `«${o.id}» não está mais no roteiro da rede: ${o.resposta}`);
     assert.ok(o.resposta.length <= 230, 'cabe no teto do roteiro (230)');
+    assert.equal(recusaDaRegra(o.resposta), null, `a trava da rede recusaria o padrão «${o.id}»`);
+    assert.equal(recusaDaRegra(licaoDaObjecao(o.gatilho, o.resposta)), null, `composto: ${o.id}`);
+    assert.equal(objecaoMudou(o.id, o.resposta), false, `${o.id}: o padrão não vira aprendizado`);
+    assert.doesNotMatch(o.resposta, /R\$|\d+ reais|diagn[oó]stic|\bcura\b|garant/i, `${o.id}: sem preço, diagnóstico nem promessa`);
   }
+  // «+ 2 horários» como as outras linhas da tabela D
+  for (const gatilho of ['Tenho medo de doer', 'Funciona mesmo?']) assert.match(molde, new RegExp(`\\| "${gatilho.replace('?', '\\?')}" \\| "[^|]+" \\+ 2 horários \\|`));
   // as promessas que o molde proíbe não aparecem em nenhum padrão
   for (const o of OBJECOES_PADRAO) assert.doesNotMatch(o.resposta, /cura|garant|desconto|gr[aá]tis|promo/i, o.id);
 });
