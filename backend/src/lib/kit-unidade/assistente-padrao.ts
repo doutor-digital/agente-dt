@@ -70,3 +70,25 @@ export function paraMarcadoresDoMolde(texto: string): string {
     .replace(/\[horário 1\]/g, '{horário 1}')
     .replace(/\[horário 2\]/g, '{horário 2}');
 }
+
+/**
+ * Os [colchetes] das respostas da rede são lacunas que o roteiro da rede preenche. Dentro de um APRENDIZADO (texto corrido, sem substituição) eles viram uma instrução clara, para a
+ * Sofia nunca mandar «[valor com sinal]» ao paciente nem chutar um número.
+ */
+export function resolverMarcadores(texto: string): string {
+  return texto
+    .replace(/\[valor com sinal\]/gi, 'o valor com sinal do cadastro')
+    .replace(/\[valor da consulta\]/gi, 'o valor da consulta do cadastro')
+    .replace(/\[valor do sinal\]/gi, 'o valor do sinal do cadastro')
+    .replace(/\[cidade\]/gi, 'a cidade da unidade')
+    .replace(/\[hor[aá]rio 1\]/gi, 'o primeiro horário real da agenda')
+    .replace(/\[hor[aá]rio 2\]/gi, 'o segundo horário real da agenda');
+}
+
+/** Os textos dos aprendizados, UM lugar só (o formulário confere o texto composto com as travas da página; o kit grava o mesmo). Aspas retas: a trava recusa « » < >. */
+export const licaoDaSaudacao = (s: string) => `Ao se apresentar, use este jeito de falar da clínica: "${s.trim()}"`;
+export const licaoDaObjecao = (gatilho: string, resposta: string) => `Se o paciente disser "${gatilho.trim()}", responda neste estilo: "${resolverMarcadores(resposta.trim())}"`;
+export const licaoDoNunca = (t: string) => `Nunca diga nem prometa: ${t.trim()}`;
+export const licaoDeChamarPessoa = (t: string) => `Chame também uma pessoa da equipe quando: ${t.trim()}`;
+export const LICAO_SEM_EMOJI = 'Não use emojis nas mensagens.';
+export const LICAO_POUCO_EMOJI = 'Use emojis com muita moderação: no máximo um a cada poucas mensagens.';

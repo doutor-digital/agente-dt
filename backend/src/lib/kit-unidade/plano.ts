@@ -52,6 +52,8 @@ export interface EstadoAtual {
     automacoes: Record<string, string>;
     /** campos de persona/fontes/prompt da unidade hoje */
     sofia: Record<string, unknown>;
+    /** textos dos aprendizados (regras) que a unidade já tem; ausente = não consultado */
+    licoes?: string[];
   };
   chatwoot?: {
     etiquetas: string[];
@@ -387,22 +389,25 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
   const sofia = camposDaSofia(q, opcoes.molde);
   const semIA = q.assistente?.quer === false;
   const licoes = licoesDaAssistente(q);
+  const normLicao = (t: string) => t.trim().replace(/\s+/g, ' ').toLowerCase();
+  const jaTemLicao = new Set((b?.licoes ?? []).map(normLicao));
+  const licoesNovas = licoes.textos.filter((t) => !jaTemLicao.has(normLicao(t)));
   const { gravar: sofiaAEscrever, preservados: sofiaPreservados } = aGravar(b?.sofia ?? null, sofia.campos, sobrescrever);
   const mudouSofia = Object.keys(sofiaAEscrever);
   add({
     id: 'sofia',
     sistema: 'sofia',
     titulo: semIA ? 'Sofia da unidade: a clínica NÃO quer a assistente virtual, nada é configurado' : 'Sofia da unidade: persona, fontes (negócio e produtos com os preços), aprendizados da clínica e, com sinal, o roteiro da Sofia 2.0 a partir do molde',
-    acao: semIA ? 'nada' : !b ? 'criar' : mudouSofia.length || licoes.textos.length ? 'alterar' : 'nada',
+    acao: semIA ? 'nada' : !b ? 'criar' : mudouSofia.length || licoesNovas.length ? 'alterar' : 'nada',
     itens: semIA
       ? ['sem persona, sem fontes, sem prompt e sem aprendizados: a unidade fica SEM IA (para contratar depois: assistente.quer: true no questionário e rodar de novo)']
       : [
           ...Object.keys(sofia.campos).map((k) => (k === 'systemPrompt' ? `systemPrompt (${String(sofia.campos[k]).length} caracteres, do molde)` : k)),
-          ...(q.assistente ? [`aprendizados da clínica (fonte «unidade», editáveis em /aprendizados/${slug}): ${licoes.textos.length} a gravar — o que a clínica pediu sobre saudação, emoji, objeções, o que nunca dizer e quando chamar uma pessoa; ficam ABAIXO das regras da rede`] : []),
+          ...(q.assistente ? [`aprendizados da clínica (fonte «unidade», editáveis em /aprendizados/${slug}): ${licoesNovas.length} a gravar (${licoes.textos.length - licoesNovas.length} já existem) — o que a clínica pediu sobre saudação, emoji, objeções, o que nunca dizer e quando chamar uma pessoa; ficam ABAIXO das regras da rede`] : []),
           'automação prompt-da-unidade: NÃO ligo — antes roda `testar-prompt.ts --slug` e o dono lê as respostas',
         ],
     execucao: semIA ? 'manual' : 'sim',
-    avisos: [...(b ? [] : semIA ? [] : [NAO_CONSULTADO]), ...sofia.avisos, ...licoes.recusadas.map((r) => `aprendizado RECUSADO pelas travas da rede (não será gravado): «${r.texto}» — ${r.motivo}`), ...(licoes.textos.length > 20 ? [`${licoes.textos.length} aprendizados: a página /aprendizados aceita até 25 regras da clínica ligadas`] : []), ...(sofiaPreservados.length ? [`já preenchidos e diferentes do questionário (ficam como estão; --sobrescrever troca): ${sofiaPreservados.filter((k) => k !== 'systemPrompt').join(', ')}${sofiaPreservados.includes('systemPrompt') ? ' (o systemPrompt só troca com --sobrescrever-prompt)' : ''}`] : []), 'a Sofia só atende com agenda: falta o token da franquia (passo «franquia») e os turnos por profissional (spine_staff_por_turno)'],
+    avisos: [...(b ? [] : semIA ? [] : [NAO_CONSULTADO]), ...sofia.avisos, ...(q.assistente?.quer && q.assistente.quando_atende !== 'sempre' ? [`QUANDO A IA ATENDE («${horarioDaAssistente(q)}») NÃO é aplicado pelo kit: a janela se configura na automação/robô ao ligar; até lá a Sofia, ligada, responderia 24 h`] : []), ...licoes.recusadas.map((r) => `aprendizado RECUSADO pelas travas da rede (não será gravado): «${r.texto}» — ${r.motivo}`), ...((b?.licoes?.length ?? 0) + licoesNovas.length > 25 ? [`com os ${licoesNovas.length} novos a unidade passa de 25 aprendizados: a página /aprendizados só aceita 25 regras da clínica ligadas`] : []), ...(sofiaPreservados.length ? [`já preenchidos e diferentes do questionário (ficam como estão; --sobrescrever troca): ${sofiaPreservados.filter((k) => k !== 'systemPrompt').join(', ')}${sofiaPreservados.includes('systemPrompt') ? ' (o systemPrompt só troca com --sobrescrever-prompt)' : ''}`] : []), 'a Sofia só atende com agenda: falta o token da franquia (passo «franquia») e os turnos por profissional (spine_staff_por_turno)'],
     depende: ['unidade'],
   });
 

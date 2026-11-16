@@ -140,12 +140,24 @@ export function recusaDaRegra(textoBruto: string): string | null {
  * Texto de FATO que o dono escreve (primeira consulta, formas de pagamento, perguntas frequentes…) e que entra nas FONTES da Sofia, não como regra. Mesmo assim é só DADO: não pode
  * carregar marcação (`<`/`>`), mandar a Sofia ignorar as regras, citar pronto-socorro (regra da rede) nem trazer valor em reais (preço é só o do cadastro). `null` = pode.
  */
-export function recusaDeFato(textoBruto: string): string | null {
+const GRATUIDADE_DA_CONSULTA = /(?:consulta|avalia[cç][aã]o|atendimento|sess[aã]o|exame|retorno)\W+(?:\S+\W+){0,3}(?:gr[aá]tis|gratuit|sem custo|cortesia|isent|brinde)|(?:gr[aá]tis|gratuit|sem custo|cortesia|isent|brinde)\W+(?:\S+\W+){0,3}(?:consulta|avalia[cç][aã]o|atendimento|sess[aã]o|exame|retorno)/i;
+
+export function recusaDeFato(textoBruto: string, opcoes: { permiteParcelamento?: boolean } = {}): string | null {
   const texto = textoBruto.normalize('NFKC').trim();
   if (/[<>‹›«»〈〉]/.test(texto)) return 'Escreva só o texto, sem os sinais < e >.';
   if (MANDA_IGNORAR.test(texto)) return 'O texto não pode mandar a assistente ignorar ou esquecer as regras. Escreva só a informação.';
   if (citaProntoSocorro(texto) || MANDA_AO_HOSPITAL.test(texto) || OUTRO_PRONTO_ATENDIMENTO.test(texto)) return 'Pronto-socorro e hospital são regra da rede: a assistente nunca orienta isso, e a rede já trata a urgência. Tire essa parte.';
   if (/r\$\s*\d|\b\d[\d.,]*\s*(?:reais|real)\b/i.test(texto)) return 'Não escreva valores em reais aqui: o preço da consulta fica no cadastro (seção «Valores da consulta»), e a assistente só fala o que está lá.';
+  // as mesmas travas de conteúdo da página /aprendizados: o texto da clínica é informação, não pode abrir uma brecha que a regra da rede fecha
+  if (CONDICAO_SINAL_DE_ALERTA.test(texto) || ALERTA_DITO_DE_OUTRO_JEITO.test(texto)) return 'Sinal de alerta (força ou formigamento nas pernas, xixi, fezes, bexiga, virilha, febre) é regra da rede e protege o paciente: não escreva sobre isso aqui.';
+  if (MEXE_NA_SEGURANCA.test(texto)) return 'O texto não pode mexer em urgência, em pausar a assistente nem em passar o paciente para a equipe: isso é regra da rede.';
+  if (GRATUIDADE_DA_CONSULTA.test(texto) || /por nossa conta|por conta da (?:casa|cl[ií]nica)|metade do (?:pre[cç]o|valor)|cupom|n[aã]o cobr/i.test(texto)) return 'Consulta de graça, brinde ou cortesia não pode ser prometida por aqui: valor e gratuidade são do cadastro da clínica.';
+  const parcela = opcoes.permiteParcelamento ? new RegExp(RECUSA_SEM_NEGACAO[1]!.re.source.replace('|parcel', ''), 'i') : RECUSA_SEM_NEGACAO[1]!.re;
+  for (const frase of frases(texto)) {
+    if (semNegacaoColada(frase, RECUSA_SEM_NEGACAO[0]!.re)) return RECUSA_SEM_NEGACAO[0]!.motivo;
+    if (semNegacaoColada(frase, parcela)) return RECUSA_SEM_NEGACAO[1]!.motivo;
+    if (semNegacaoColada(frase, RECUSA_SEM_NEGACAO[2]!.re)) return RECUSA_SEM_NEGACAO[2]!.motivo;
+  }
   return null;
 }
 

@@ -87,6 +87,7 @@ async function lerEstado(q: Questionario): Promise<EstadoAtual> {
         caixasRegistradas: u?.chatwoot?.caixas.map((c) => c.caixaId) ?? [],
         automacoes: Object.fromEntries((u?.automacoes ?? []).map((a) => [a.automacao, a.estado])),
         sofia: (u ?? {}) as unknown as Record<string, unknown>,
+        licoes: u ? (await prisma.unitLesson.findMany({ where: { unitId: u.id }, select: { content: true } })).map((l) => l.content) : [],
       };
     } catch (err) {
       console.error(`(não consegui ler o banco: ${(err as Error).message} — o plano assume que nada existe)`);

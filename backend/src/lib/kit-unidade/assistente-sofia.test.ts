@@ -229,3 +229,35 @@ test('o questionário gerado com a assistente sobrevive ao YAML (o que o kit lê
   assert.ok(sem.ok);
   if (sem.ok) assert.deepEqual(questionarioDoFormulario(sem.respostas, COMPLETOS).objeto.assistente, { quer: false });
 });
+
+test('[colchetes] de uma resposta mudada viram instrução no aprendizado (a Sofia nunca manda «[valor com sinal]» ao paciente)', () => {
+  const q = questionario(assistenteCompleta());
+  const comColchetes: Questionario = { ...q, assistente: { ...q.assistente!, objecoes: [{ gatilho: 'Tá caro', resposta: 'Com o sinal fica [valor com sinal]. Tenho [horário 1] ou [horário 2]; moro em [cidade] também.' }] } };
+  const { textos, recusadas } = licoesDaAssistente(comColchetes);
+  assert.deepEqual(recusadas, []);
+  const l = textos.find((t) => t.includes('Tá caro'))!;
+  assert.doesNotMatch(l, /\[|\]/);
+  assert.match(l, /o valor com sinal do cadastro.*o primeiro horário real da agenda.*o segundo horário real da agenda.*a cidade da unidade/);
+});
+
+test('o plano sabe o que a unidade JÁ tem de aprendizado: de novo, «nada» a gravar; e avisa quando passaria de 25', () => {
+  const q = questionario(assistenteCompleta());
+  const { textos } = licoesDaAssistente(q);
+  const base = montarPlano(q, {}, { molde: MOLDE });
+  assert.equal(base.passos.find((p) => p.id === 'sofia')!.acao, 'criar');
+  const estadoPronto = { banco: { unidade: { id: 'u1', campos: {} }, configChatwoot: null, caixasRegistradas: [], automacoes: {}, sofia: { ...camposDaSofia(q, MOLDE).campos }, licoes: [...textos] } };
+  const pronto = montarPlano(q, estadoPronto, { molde: MOLDE });
+  const sofia = pronto.passos.find((p) => p.id === 'sofia')!;
+  assert.equal(sofia.acao, 'nada');
+  assert.ok(sofia.itens.some((i) => /0 a gravar \(7 já existem\)/.test(i)), sofia.itens.join('|'));
+  const cheio = montarPlano(q, { banco: { ...estadoPronto.banco, licoes: Array.from({ length: 24 }, (_, i) => `regra da clínica número ${i} para encher a página`) } }, { molde: MOLDE });
+  assert.match(cheio.passos.find((p) => p.id === 'sofia')!.avisos.join('\n'), /passa de 25 aprendizados/);
+});
+
+test('«quando a IA atende» fora de «sempre» NÃO é aplicado pelo kit: o plano diz isso no passo da Sofia', () => {
+  const q = questionario(assistenteCompleta());
+  const aviso = montarPlano(q, {}, { molde: MOLDE }).passos.find((p) => p.id === 'sofia')!.avisos.join('\n');
+  assert.match(aviso, /QUANDO A IA ATENDE \(«Só fora do horário da clínica[^»]*»\) NÃO é aplicado pelo kit/);
+  const sempre = questionario({ ...assistenteCompleta(), quando_atende: 'sempre' });
+  assert.doesNotMatch(montarPlano(sempre, {}, { molde: MOLDE }).passos.find((p) => p.id === 'sofia')!.avisos.join('\n'), /QUANDO A IA ATENDE/);
+});

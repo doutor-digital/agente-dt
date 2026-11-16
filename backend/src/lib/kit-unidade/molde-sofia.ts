@@ -8,7 +8,7 @@
  * e o texto das fontes é escrito de modo que `precosDaConsulta` o leia de volta (teste).
  */
 import { normalizarRegra, recusaDaRegra } from '../aprendizados-unidade.js';
-import { QUANDO_ATENDE } from './assistente-padrao.js';
+import { LICAO_POUCO_EMOJI, LICAO_SEM_EMOJI, QUANDO_ATENDE, licaoDaObjecao, licaoDaSaudacao, licaoDeChamarPessoa, licaoDoNunca } from './assistente-padrao.js';
 import type { Questionario } from './questionario.js';
 
 const DIAS = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];
@@ -81,12 +81,12 @@ export function licoesDaAssistente(q: Questionario): { textos: string[]; recusad
   const recusadas: Array<{ texto: string; motivo: string }> = [];
   if (!a || a.quer === false) return { textos, recusadas };
   const candidatas: string[] = [];
-  if (a.saudacao?.trim()) candidatas.push(`Ao se apresentar, use este jeito de falar da clínica: "${a.saudacao.trim()}"`);
-  if (a.emoji === 'nao') candidatas.push('Não use emojis nas mensagens.');
-  if (a.emoji === 'pouco') candidatas.push('Use emojis com muita moderação: no máximo um a cada poucas mensagens.');
-  for (const o of a.objecoes ?? []) candidatas.push(`Se o paciente disser "${o.gatilho.trim()}", responda neste estilo: "${o.resposta.trim()}"`);
-  if (a.nunca_extra?.trim()) candidatas.push(`Nunca diga nem prometa: ${a.nunca_extra.trim()}`);
-  if (a.passar_extra?.trim()) candidatas.push(`Chame também uma pessoa da equipe quando: ${a.passar_extra.trim()}`);
+  if (a.saudacao?.trim()) candidatas.push(licaoDaSaudacao(a.saudacao));
+  if (a.emoji === 'nao') candidatas.push(LICAO_SEM_EMOJI);
+  if (a.emoji === 'pouco') candidatas.push(LICAO_POUCO_EMOJI);
+  for (const o of a.objecoes ?? []) candidatas.push(licaoDaObjecao(o.gatilho, o.resposta));
+  if (a.nunca_extra?.trim()) candidatas.push(licaoDoNunca(a.nunca_extra));
+  if (a.passar_extra?.trim()) candidatas.push(licaoDeChamarPessoa(a.passar_extra));
   for (const c of candidatas) {
     const t = normalizarRegra(c);
     const motivo = recusaDaRegra(t);

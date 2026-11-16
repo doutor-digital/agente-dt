@@ -31,7 +31,9 @@ export { HOST_DE_CADASTRO };
 export function somenteCadastroNoHostDeCadastro(host: string = HOST_DE_CADASTRO) {
   const alvo = host.toLowerCase();
   return (req: Request, res: Response, next: NextFunction): void => {
-    if (req.hostname.toLowerCase() !== alvo) return next();
+    // «cadastro.…com.» (FQDN com ponto no fim) e maiúsculas são o MESMO host; qualquer cadastro.*.doutordigitalconsultoria.com cai na mesma regra
+    const h = req.hostname.toLowerCase().replace(/\.+$/, '');
+    if (h !== alvo && !(h.startsWith('cadastro.') && h.endsWith('.doutordigitalconsultoria.com'))) return next();
     const pagina = (req.method === 'GET' || req.method === 'HEAD') && /^\/nova-clinica\/[^/?#]+$/.test(req.path);
     const envio = req.method === 'POST' && /^\/api\/public\/nova-clinica\/[^/?#]+$/.test(req.path);
     if (pagina || envio) return next();

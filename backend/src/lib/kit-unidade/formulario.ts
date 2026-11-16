@@ -12,7 +12,7 @@
  */
 import { z } from 'zod';
 import { recusaDaRegra, recusaDeFato } from '../aprendizados-unidade.js';
-import { MAX_OBJECOES_EXTRAS, MAX_RESPOSTA_OBJECAO, OBJECOES_PADRAO } from './assistente-padrao.js';
+import { MAX_OBJECOES_EXTRAS, MAX_RESPOSTA_OBJECAO, OBJECOES_PADRAO, licaoDaObjecao, licaoDaSaudacao, licaoDeChamarPessoa, licaoDoNunca } from './assistente-padrao.js';
 
 const hora = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Use o formato 08:00 (hora:minuto).');
 /** Troca caractere de controle e quebra de linha por espaço (o texto vai para o terminal do João e para frases ditas ao paciente: nada de linha forjada nem ANSI). */
@@ -47,8 +47,8 @@ const email = z.string({ required_error: 'Preencha o e-mail.' }).trim().toLowerC
 const telefone = z.string().trim().regex(/^[\d\s()+-]{8,20}$/, 'Digite o telefone com DDD, só números, espaço, parênteses ou traço.');
 
 /** Texto de FATO (vai para as fontes da Sofia): sem marcação, sem mandar ignorar regra, sem pronto-socorro, sem valor em reais. */
-const fato = (min: number, max: number, nome: string) => texto(min, max, nome).superRefine((v, ctx) => {
-  const m = recusaDeFato(v);
+const fato = (min: number, max: number, nome: string, opcoes: { permiteParcelamento?: boolean } = {}) => texto(min, max, nome).superRefine((v, ctx) => {
+  const m = recusaDeFato(v, opcoes);
   if (m) ctx.addIssue({ code: z.ZodIssueCode.custom, message: m });
 });
 /** Texto que vira REGRA da unidade (aprendizado): passa pelas mesmas travas da página /aprendizados (cura, desconto, diagnóstico, urgência…). */
@@ -68,7 +68,7 @@ const IDS_DE_OBJECAO = [...OBJECOES_PADRAO.map((o) => o.id), 'outra'] as unknown
 const Assistente = z
   .object({
     quer: z.boolean({ required_error: 'Diga se a clínica quer a assistente virtual.', invalid_type_error: 'Diga se a clínica quer a assistente virtual.' }),
-    nome_ia: z.preprocess((v) => (v === '' || v === null ? undefined : v), texto(2, 30, 'Nome da assistente').optional()),
+    nome_ia: z.preprocess((v) => (v === '' || v === null ? undefined : v), texto(2, 30, 'Nome da assistente').refine((v) => /^[\p{L}\p{N} .'-]+$/u.test(v), 'O nome só pode ter letras, números, espaço, ponto, apóstrofo e hífen.').superRefine((v, ctx) => { const m = recusaDeFato(v); if (m) ctx.addIssue({ code: z.ZodIssueCode.custom, message: m }); }).optional()),
     tom: z.enum(['proximo', 'formal'], { errorMap: () => ({ message: 'Escolha o jeito de falar.' }) }).optional(),
     emoji: z.enum(['sim', 'pouco', 'nao'], { errorMap: () => ({ message: 'Escolha como usar emojis.' }) }).optional(),
     quando_atende: z.enum(['sempre', 'fora-expediente', 'noite-fim-semana', 'personalizado'], { errorMap: () => ({ message: 'Escolha quando a assistente atende.' }) }).optional(),
@@ -87,7 +87,7 @@ const Assistente = z
     pagamento: z
       .object({
         formas: opcional(fato(3, 300, 'Formas de pagamento')),
-        parcelamento: opcional(fato(3, 300, 'Parcelamento')),
+        parcelamento: opcional(fato(3, 300, 'Parcelamento', { permiteParcelamento: true })),
         convenio: z.enum(['nao', 'sim', 'reembolso'], { errorMap: () => ({ message: 'Diga se a clínica aceita convênio.' }) }).optional(),
         convenio_quais: opcional(fato(2, 200, 'Quais convênios')),
         remarcacao: opcional(fato(10, 400, 'Remarcação, falta e cancelamento')),
@@ -100,7 +100,7 @@ const Assistente = z
         z
           .object({
             id: z.enum(IDS_DE_OBJECAO, { errorMap: () => ({ message: 'Objeção desconhecida.' }) }),
-            gatilho: opcional(texto(3, 80, 'O que o paciente diz')),
+            gatilho: opcional(fato(3, 80, 'O que o paciente diz')),
             resposta: opcional(regra(10, MAX_RESPOSTA_OBJECAO, 'Resposta')),
           })
           .strict(),
@@ -139,16 +139,28 @@ const Assistente = z
     if (a.pagamento?.convenio && a.pagamento.convenio !== 'nao') obrigatorio(a.pagamento.convenio_quais, ['pagamento', 'convenio_quais'], 'Diga quais convênios (ou como funciona o reembolso).');
     obrigatorio(a.pagamento?.remarcacao, ['pagamento', 'remarcacao'], 'Explique a política de remarcação, falta e cancelamento.');
     obrigatorio(a.quem_recebe?.nome, ['quem_recebe', 'nome'], 'Diga quem da equipe recebe o atendimento quando a assistente chama uma pessoa.');
+    // o texto que vira aprendizado é conferido JÁ COMPOSTO, do jeito que o kit o grava: se a página /aprendizados o recusaria, o dono fica sabendo AQUI (e não só o João, no plano)
+    const confere = (composto: string | undefined, path: (string | number)[]) => {
+      if (!composto) return;
+      const m = recusaDaRegra(composto);
+      if (m) erro(path, m);
+    };
+    if (a.saudacao) confere(licaoDaSaudacao(a.saudacao), ['saudacao']);
+    if (a.nunca_extra) confere(licaoDoNunca(a.nunca_extra), ['nunca_extra']);
+    if (a.passar_extra) confere(licaoDeChamarPessoa(a.passar_extra), ['passar_extra']);
     // objeções: cada padrão no máximo uma vez; «outra» exige o que o paciente diz E a resposta
     const vistos = new Set<string>();
     let extras = 0;
     (a.objecoes ?? []).forEach((o, i) => {
+      const padrao = OBJECOES_PADRAO.find((p) => p.id === o.id);
       if (o.id === 'outra') {
         extras += 1;
         if (!o.gatilho) erro(['objecoes', i, 'gatilho'], 'Escreva o que o paciente diz.');
         if (!o.resposta) erro(['objecoes', i, 'resposta'], 'Escreva a resposta.');
       } else if (vistos.has(o.id)) erro(['objecoes', i, 'id'], 'Essa objeção aparece duas vezes.');
       vistos.add(o.id);
+      // só a que o dono MUDOU (ou criou) vira aprendizado: é essa que é conferida inteira
+      if (o.resposta && (o.id === 'outra' || objecaoMudou(o.id, o.resposta))) confere(licaoDaObjecao(o.id === 'outra' ? (o.gatilho ?? '') : padrao!.gatilho, o.resposta), ['objecoes', i, 'resposta']);
     });
     if (extras > MAX_OBJECOES_EXTRAS) erro(['objecoes'], `No máximo ${MAX_OBJECOES_EXTRAS} objeções suas além das da lista.`);
   });

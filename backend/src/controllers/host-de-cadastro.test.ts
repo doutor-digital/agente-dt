@@ -70,7 +70,7 @@ test('no host de cadastro o formulário FUNCIONA (página e envio); maiúscula e
   assert.match(pagina.texto, /Cadastro da sua clínica/);
   const envio = await s.chamar(HOST_DE_CADASTRO, 'POST', `/api/public/nova-clinica/${c.codigo}`, respostasValidas());
   assert.equal(envio.status, 200, envio.texto);
-  for (const host of ['CADASTRO.DoutorDigitalConsultoria.com', `${HOST_DE_CADASTRO}:443`]) assert.equal((await s.chamar(host, 'GET', '/api/health')).status, 404, host);
+  for (const host of ['CADASTRO.DoutorDigitalConsultoria.com', `${HOST_DE_CADASTRO}:443`, `${HOST_DE_CADASTRO}.`, `${HOST_DE_CADASTRO}..`, 'cadastro.outro.doutordigitalconsultoria.com']) assert.equal((await s.chamar(host, 'GET', '/api/health')).status, 404, host);
   assert.deepEqual(s.tocou, []);
 });
 

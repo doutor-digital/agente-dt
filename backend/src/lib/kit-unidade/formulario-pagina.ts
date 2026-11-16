@@ -113,7 +113,7 @@ ${campo('f-ia-tom', 'Jeito de falar', '', '<select id="f-ia-tom" data-p="assiste
 
 <h3>Quando ela atende</h3>
 <div class="campo" data-c="f-ia-quando"><span class="rotulo">Em quais horários a assistente responde?</span>${radios('quando', 'assistente.quando_atende', QUANDO_ATENDE as unknown as Array<readonly [string, string]>, 'sempre')}<div class="erro-campo" role="alert" hidden></div></div>
-<div id="bloco-quando-detalhe" hidden>${campo('f-ia-quando-detalhe', 'Quais horários?', 'Por exemplo: de segunda a sexta das 18h às 8h, e sábado o dia todo.', '<input type="text" id="f-ia-quando-detalhe" data-p="assistente.quando_atende_detalhe" maxlength="200">')}</div>
+<div id="bloco-quando-detalhe" hidden>${campo('f-ia-quando-detalhe', 'Quais horários?', 'Por exemplo: de segunda a sexta das 18h às 8h, e sábado o dia todo. A gente configura isso com você na hora de ligar a assistente.', '<input type="text" id="f-ia-quando-detalhe" data-p="assistente.quando_atende_detalhe" maxlength="200">')}</div>
 
 <h3>Como a clínica quer ser apresentada</h3>
 ${campo('f-ia-saudacao', 'Saudação', 'Como a assistente se apresenta e fala da clínica. Por exemplo: «Oi! Aqui é a Sofia, da Doutor Hérnia Serra, especialista em coluna sem cirurgia.»', area('f-ia-saudacao', 'assistente.saudacao', 300), true)}
@@ -378,10 +378,10 @@ export function scriptDoFormulario(): string {
     if(q===undefined) return {};
     if(q==='nao') return {quer:false};
     return {
-      quer:true, nome_ia:gv('assistente.nome_ia'), tom:gv('assistente.tom'), emoji:rb('emoji'), quando_atende:rb('quando'), quando_atende_detalhe:gv('assistente.quando_atende_detalhe'),
+      quer:true, nome_ia:gv('assistente.nome_ia'), tom:gv('assistente.tom'), emoji:rb('emoji'), quando_atende:rb('quando'), quando_atende_detalhe:rb('quando')==='personalizado'?gv('assistente.quando_atende_detalhe'):'',
       saudacao:gv('assistente.saudacao'), diferenciais:gv('assistente.diferenciais'),
       primeira_consulta:{como_funciona:gv('assistente.primeira_consulta.como_funciona'),duracao:gv('assistente.primeira_consulta.duracao'),o_que_levar:gv('assistente.primeira_consulta.o_que_levar'),chegada:gv('assistente.primeira_consulta.chegada')},
-      pagamento:{formas:gv('assistente.pagamento.formas'),parcelamento:gv('assistente.pagamento.parcelamento'),convenio:rb('convenio'),convenio_quais:gv('assistente.pagamento.convenio_quais'),remarcacao:gv('assistente.pagamento.remarcacao')},
+      pagamento:{formas:gv('assistente.pagamento.formas'),parcelamento:gv('assistente.pagamento.parcelamento'),convenio:rb('convenio'),convenio_quais:(rb('convenio')==='sim'||rb('convenio')==='reembolso')?gv('assistente.pagamento.convenio_quais'):'',remarcacao:gv('assistente.pagamento.remarcacao')},
       nao_atende:gv('assistente.nao_atende'),
       objecoes:$$('#lista-obj .linha').map(function(l){ var o={id:l.dataset.id,resposta:$('[data-k=resposta]',l).value.trim()}; if(o.id==='outra') o.gatilho=$('[data-k=gatilho]',l).value.trim(); return o; }),
       nunca_extra:gv('assistente.nunca_extra'), passar_extra:gv('assistente.passar_extra'),
