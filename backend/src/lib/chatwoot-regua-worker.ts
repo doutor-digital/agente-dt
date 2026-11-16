@@ -90,7 +90,7 @@ export interface Armazem {
   vistos(caixa: number): Promise<LinhaVista[]>;
   salvar(caixa: number, mudancas: Array<Mudanca & { conversationId: number }>): Promise<void>;
   /** `modo`: «ligado» = saiu de verdade; «seco» = só a nota (o robô manual não se cala por um automático que só estava no papel) */
-  feitos(caixa: number, desde: Date): Promise<Array<{ conversationId: number; regra: string; chave: string; modo?: string }>>;
+  feitos(caixa: number, desde: Date): Promise<Array<{ conversationId: number; regra: string; chave: string; modo?: string; criadoEm?: Date; texto?: string }>>;
   /** false = já existia (outra cópia do servidor ou ciclo anterior) */
   registrar(l: { caixa: number; conversationId: number; regra: string; chave: string; modo: string; texto: string }): Promise<boolean>;
   desfazer(conversationId: number, regra: string, chave: string): Promise<void>;
@@ -123,7 +123,8 @@ export interface Chat {
   /** atribui a conversa a um agente (o app do Chatwoot avisa a pessoa) */
   atribuir(conversationId: number, agente: number): Promise<void>;
   /** a última mensagem pública (não nota) da conversa; null = nenhuma */
-  ultimaPublica(conversationId: number): Promise<MensagemResumo | null>;
+  /** `DESCONHECIDA` = não achou nas páginas lidas e a conversa tem mais mensagens antes */
+  ultimaPublica(conversationId: number): Promise<MensagemResumo | null | typeof DESCONHECIDA>;
 }
 
 /** Cartão ativo no Kommo da unidade para este telefone (null = nenhum). Lança se não deu para consultar. */
@@ -139,7 +140,7 @@ export interface DepsDoCiclo {
    * Memória (de um ciclo para o outro) da última mensagem PÚBLICA já buscada de cada conversa cuja última mensagem na listagem é uma nota: enquanto a
    * nota for a mesma (mesmo instante), nenhuma mensagem pública nova chegou — a busca não se repete e não gasta o teto do ciclo. Sem ela, busca sempre.
    */
-  cacheUltimaPublica?: Map<string, { notaEm: number; publica: MensagemResumo | null }>;
+  cacheUltimaPublica?: Map<string, { notaEm: number; publica: MensagemResumo | null | typeof DESCONHECIDA }>;
   /** aviso no WhatsApp da gerente (lead quente parado); sem ela, só a atribuição no Chatwoot */
   avisarGerente?: (texto: string, chave: string) => Promise<unknown>;
   /**
@@ -226,7 +227,7 @@ export function armazemDoBanco(): Armazem {
       }
     },
     async feitos(caixa, desde) {
-      return prisma.chatwootReguaDisparo.findMany({ where: { caixa, criadoEm: { gte: desde } }, select: { conversationId: true, regra: true, chave: true, modo: true } });
+      return prisma.chatwootReguaDisparo.findMany({ where: { caixa, criadoEm: { gte: desde } }, select: { conversationId: true, regra: true, chave: true, modo: true, criadoEm: true, texto: true } });
     },
     async registrar(l) {
       try {
@@ -245,6 +246,10 @@ export function armazemDoBanco(): Armazem {
 
 /** Quantas páginas (20 mensagens) de histórico a busca da última mensagem do paciente percorre antes de dizer «nunca escreveu». */
 const PAGINAS_PARA_ACHAR_O_PACIENTE = 5;
+/** Quantas páginas (20 mensagens) a busca da última mensagem PÚBLICA percorre antes de dizer «não sei». */
+const PAGINAS_PARA_ACHAR_A_PUBLICA = 5;
+/** A busca da última pública não chegou ao começo da conversa e não achou: o dado é DESCONHECIDO (não «ninguém falou»). */
+export const DESCONHECIDA = 'desconhecida' as const;
 
 /**
  * O `template_params` que o Chatwoot 4.19.1 aceita em POST conversations/:id/messages (Whatsapp::TemplateProcessorService):
@@ -312,13 +317,23 @@ export function chatDoChatwoot(ctx: ContextoChatwoot): Chat {
       await chamar(ctx, 'POST', `conversations/${conversationId}/toggle_priority`, { corpo: { priority: prioridade } });
     },
     async ultimaPublica(conversationId) {
-      const r = (await chamar(ctx, 'GET', `conversations/${conversationId}/messages`)) as { payload?: unknown[] } | null;
-      const lista = Array.isArray(r?.payload) ? r.payload : [];
-      for (let i = lista.length - 1; i >= 0; i--) {
-        const m = resumoDaMensagem(lista[i]);
-        if (m && !m.privada) return m;
+      // as 20 mais novas em ordem crescente; `before=<id>` traz as 20 anteriores. Uma conversa cheia de notas (as do seco, as das rotinas) pode não ter
+      // nenhuma mensagem pública nas primeiras páginas: depois de PAGINAS_PARA_ACHAR_A_PUBLICA sem achar e sem chegar ao começo, o honesto é «não sei»
+      // — NUNCA «ninguém falou» (isso faria a retomada e a reativação mandarem por cima de uma conversa viva).
+      let antes: number | undefined;
+      for (let i = 0; i < PAGINAS_PARA_ACHAR_A_PUBLICA; i++) {
+        const r = (await chamar(ctx, 'GET', `conversations/${conversationId}/messages`, { query: antes ? { before: String(antes) } : {} })) as { payload?: unknown[] } | null;
+        const lista = Array.isArray(r?.payload) ? r.payload : [];
+        if (lista.length === 0) return null; // chegou ao começo da conversa: de fato não há mensagem pública
+        for (let j = lista.length - 1; j >= 0; j--) {
+          const m = resumoDaMensagem(lista[j]);
+          if (m && !m.privada) return m;
+        }
+        const primeiro = Number((lista[0] as { id?: number } | undefined)?.id);
+        if (!Number.isInteger(primeiro) || primeiro <= 0) return DESCONHECIDA;
+        antes = primeiro;
       }
-      return null;
+      return DESCONHECIDA;
     },
   };
 }
@@ -427,6 +442,14 @@ export async function executarInterna(
 const statusDoErro = (e: unknown): number | undefined => (e as { status?: number })?.status;
 
 /**
+ * Esta linha do registro é uma mensagem que SAIU para o paciente? Só no modo ligado e sem ser nota: a nota «🛑 NÃO enviei» do cartão ativo no Kommo,
+ * as notas internas («🤖 Régua…») e as do seco («🧪») ficam no registro (para não repetir), mas não contam como «já falou com ele».
+ */
+export function foiEnviado(f: { modo?: string; texto?: string }): boolean {
+  return f.modo === 'ligado' && !/^(🛑|🤖|🧪)/u.test(String(f.texto ?? ''));
+}
+
+/**
  * Um ciclo de uma caixa. `modo` nunca é «desligado» aqui. Não lança por causa de UMA conversa: a falha dela vira log e conta em `falhas`.
  * Falha ao LISTAR as conversas aborta o ciclo (a memória não é tocada).
  */
@@ -451,14 +474,14 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
   }
   const feitosLinhas = await armazem.feitos(caixa, new Date(agora.getTime() - DIAS_DE_FEITOS * 86_400_000));
   const feitosPorConversa = new Map<number, Set<string>>();
-  const enviadosPorConversa = new Map<number, Set<string>>();
+  const enviadosPorConversa = new Map<number, Map<string, number>>();
   for (const f of feitosLinhas) {
     const s = feitosPorConversa.get(f.conversationId) ?? new Set<string>();
     s.add(`${f.regra}|${f.chave}`);
     feitosPorConversa.set(f.conversationId, s);
-    if (f.modo === 'ligado') {
-      const e = enviadosPorConversa.get(f.conversationId) ?? new Set<string>();
-      e.add(`${f.regra}|${f.chave}`);
+    if (foiEnviado(f)) {
+      const e = enviadosPorConversa.get(f.conversationId) ?? new Map<string, number>();
+      e.set(`${f.regra}|${f.chave}`, (f.criadoEm ?? new Date(0)).getTime());
       enviadosPorConversa.set(f.conversationId, e);
     }
   }
@@ -518,22 +541,23 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
         const chaveDoCache = `${caixa}:${c.id}`;
         const noCache = deps.cacheUltimaPublica?.get(chaveDoCache);
         if (noCache && noCache.notaEm === c.ultima!.criadaEm.getTime()) {
-          c.ultima = noCache.publica;
+          if (noCache.publica !== DESCONHECIDA) c.ultima = noCache.publica; // desconhecida: segue a nota, e as rotina-* esperam
         } else if (busca === 'qualificacao' || resumo.buscasDaUltimaPublica < MAX_BUSCAS_DA_ULTIMA_PUBLICA_POR_CICLO) {
           if (busca === 'nova') resumo.buscasDaUltimaPublica++;
           const notaEm = c.ultima!.criadaEm.getTime();
-          c.ultima = await chat.ultimaPublica(c.id);
+          const achada = await chat.ultimaPublica(c.id);
+          if (achada !== DESCONHECIDA) c.ultima = achada;
           if (deps.cacheUltimaPublica) {
             if (deps.cacheUltimaPublica.size > 20_000) deps.cacheUltimaPublica.clear();
-            deps.cacheUltimaPublica.set(chaveDoCache, { notaEm, publica: c.ultima });
+            deps.cacheUltimaPublica.set(chaveDoCache, { notaEm, publica: achada });
           }
         }
       }
       // a que fala junta o que TODAS as conversas do mesmo telefone já mandaram (mesma regra|chave): conversa nova não repete a véspera
       const feitosDaConversa = new Set<string>(feitosPorConversa.get(c.id) ?? []);
       for (const id of irmas) for (const f of feitosPorConversa.get(id) ?? []) feitosDaConversa.add(f);
-      const enviadosDaConversa = new Set<string>(enviadosPorConversa.get(c.id) ?? []);
-      for (const id of irmas) for (const f of enviadosPorConversa.get(id) ?? []) enviadosDaConversa.add(f);
+      const enviadosDaConversa = new Map<string, number>(enviadosPorConversa.get(c.id) ?? []);
+      for (const id of irmas) for (const [k, quando] of enviadosPorConversa.get(id) ?? []) enviadosDaConversa.set(k, Math.max(quando, enviadosDaConversa.get(k) ?? 0));
       const { disparos, perdidas } = decidirRegua(c, { vistos, feitos: feitosDaConversa, enviados: enviadosDaConversa }, agora, unidade, ajustes.regua);
       for (const r of perdidas) resumo.perdidas[r] = (resumo.perdidas[r] ?? 0) + 1;
       for (const d of disparos) {
@@ -690,7 +714,7 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
 export const estadoDaRegua = (slug: string): Estado => estadoDaAutomacao(slug, ID_REGUA, process.env.CHATWOOT_REGUA_SLUGS);
 
 /** A memória das últimas públicas já buscadas (ver `DepsDoCiclo.cacheUltimaPublica`); some quando o servidor reinicia. */
-const CACHE_ULTIMA_PUBLICA = new Map<string, { notaEm: number; publica: MensagemResumo | null }>();
+const CACHE_ULTIMA_PUBLICA = new Map<string, { notaEm: number; publica: MensagemResumo | null | typeof DESCONHECIDA }>();
 let timer: NodeJS.Timeout | null = null;
 let primeira: NodeJS.Timeout | null = null;
 let rodando = false;

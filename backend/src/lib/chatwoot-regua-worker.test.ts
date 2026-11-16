@@ -6,9 +6,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { automacaoPorId, verificarCatalogo } from './automacoes.js';
+import { criarContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 import { CAIXAS_REGUA } from './chatwoot-regua.js';
 import { chaveDoTelefone, mesmoTelefone } from './chatwoot-lida.js';
-import { cicloDaCaixa, finalDoTelefone, paramsDoTemplate, SUFIXO_SEM_TEMPLATE, type EnvioTemplate, numeroDaGerente, MAX_BUSCAS_DA_ULTIMA_PUBLICA_POR_CICLO, MAX_ETIQUETAS_POR_CICLO, MAX_MENSAGENS_POR_CICLO, MAX_NOTAS_SECO_DAS_ROTINAS_POR_CICLO, REGRAS_COM_NOTA_DE_FALTA_NO_LIGADO, quemFalaPorTelefone, type Armazem, type Chat, type DepsDoCiclo, type LinhaVista } from './chatwoot-regua-worker.js';
+import { cicloDaCaixa, finalDoTelefone, paramsDoTemplate, SUFIXO_SEM_TEMPLATE, type EnvioTemplate, numeroDaGerente, MAX_BUSCAS_DA_ULTIMA_PUBLICA_POR_CICLO, MAX_ETIQUETAS_POR_CICLO, MAX_MENSAGENS_POR_CICLO, MAX_NOTAS_SECO_DAS_ROTINAS_POR_CICLO, DESCONHECIDA, foiEnviado, chatDoChatwoot, REGRAS_COM_NOTA_DE_FALTA_NO_LIGADO, quemFalaPorTelefone, type Armazem, type Chat, type DepsDoCiclo, type LinhaVista } from './chatwoot-regua-worker.js';
 import type { DadosDaUnidade, MensagemResumo, Mudanca } from './chatwoot-regua.js';
 
 const U: DadosDaUnidade = { nome: 'Doutor Hérnia Parauapebas', pixKey: 'pix@parau.com', valorAntecipado: 250 };
@@ -27,7 +28,7 @@ function bruta(id: number, o: { attrs?: Record<string, unknown>; labels?: string
 
 function armazemFalso() {
   const vistos: LinhaVista[] = [];
-  const disparos: Array<{ caixa: number; conversationId: number; regra: string; chave: string; modo: string; texto: string }> = [];
+  const disparos: Array<{ caixa: number; conversationId: number; regra: string; chave: string; modo: string; texto: string; criadoEm?: Date }> = [];
   const armazem: Armazem = {
     async vistos() {
       return vistos.map((v) => ({ ...v }));
@@ -45,7 +46,7 @@ function armazemFalso() {
       }
     },
     async feitos() {
-      return disparos.map((d) => ({ conversationId: d.conversationId, regra: d.regra, chave: d.chave, modo: d.modo }));
+      return disparos.map((d) => ({ conversationId: d.conversationId, regra: d.regra, chave: d.chave, modo: d.modo, texto: d.texto, criadoEm: d.criadoEm ?? new Date('2026-11-14T12:00:00Z') }));
     },
     async registrar(l) {
       if (disparos.some((d) => d.conversationId === l.conversationId && d.regra === l.regra && d.chave === l.chave)) return false;
@@ -1083,4 +1084,70 @@ test('etiqueta manual «boas-vindas»: não repete o recado se o automático JÁ
   assert.equal(await rodar(null), true, 'sem automático: o manual sai');
   assert.equal(await rodar('ligado'), false, 'o automático já mandou: o manual não repete');
   assert.equal(await rodar('seco'), true, 'o automático só estava no papel: o manual sai');
+});
+
+test('foiEnviado: só o que saiu de verdade ao paciente (ligado e não nota): a nota do cartão ativo no Kommo, a interna e a do seco NÃO contam', () => {
+  assert.equal(foiEnviado({ modo: 'ligado', texto: 'Oi, Maria! Sua vaga está confirmada.' }), true);
+  assert.equal(foiEnviado({ modo: 'ligado', texto: '[template parau_rotina_boas_vindas] Oi, Maria!' }), true);
+  assert.equal(foiEnviado({ modo: 'ligado', texto: '🛑 Régua «rotina-boas-vindas» — NÃO enviei: o paciente tem cartão ativo no Kommo da unidade (lead 55); os robôs de lá cuidam.' }), false);
+  assert.equal(foiEnviado({ modo: 'ligado', texto: '🤖 Régua «alerta-sem-resposta»: …' }), false);
+  assert.equal(foiEnviado({ modo: 'seco', texto: '🧪 [SECO] Régua «rotina-boas-vindas» — enviaria agora: …' }), false);
+  assert.equal(foiEnviado({ modo: 'seco', texto: 'Oi' }), false);
+  assert.equal(foiEnviado({ modo: 'ligado' }), true);
+});
+
+test('manual «boas-vindas»: a nota do cartão ativo no Kommo (registrada como ligado) NÃO conta como «o automático já falou»; mensagem de verdade dos últimos 7 dias conta; a de 20 dias atrás não', async () => {
+  const attrs = { etapa: 'Fechou', programa: 'Coluna Forte', proxima_sessao: '2026-11-20', hora_sessao: '10:00', fechou_tratamento: 'sim' };
+  const rodar = async (registro: { texto: string; criadoEm?: Date } | null) => {
+    const f = armazemFalso();
+    if (registro) f.disparos.push({ caixa: 2, conversationId: 7, regra: 'rotina-boas-vindas', chave: 'boasvindas@2026-11-10T12:00:00.000Z', modo: 'ligado', ...registro });
+    let comEtiqueta = false;
+    const c = chatFalso(() => [bruta(7, { attrs, labels: comEtiqueta ? ['boas-vindas'] : [] })]);
+    const d = comEstado(f.armazem, c.chat, 'ligado');
+    await cicloDaCaixa(d, 2, 'x', 'ligado', U, new Date('2026-11-16T11:00:00Z'));
+    comEtiqueta = true;
+    await cicloDaCaixa(d, 2, 'x', 'ligado', U, SEG_9H);
+    return f.disparos.some((x) => x.regra === 'sdr-boas-vindas');
+  };
+  assert.equal(await rodar({ texto: 'Oi, Maria! Sua vaga está confirmada.' }), false, 'falou de verdade há 2 dias');
+  assert.equal(await rodar({ texto: '🛑 Régua «rotina-boas-vindas» — NÃO enviei: o paciente tem cartão ativo no Kommo da unidade (lead 9)' }), true, 'só a nota do Kommo: o manual sai');
+  assert.equal(await rodar({ texto: 'Oi, Maria! Sua vaga está confirmada.', criadoEm: new Date('2026-10-27T12:00:00Z') }), true, 'há 20 dias: de outro programa');
+});
+
+test('última pública DESCONHECIDA (não achou nas páginas e a conversa tem mais atrás): a retomada e a reativação NÃO rodam, e a busca não se repete enquanto a nota for a mesma', async () => {
+  const f = armazemFalso();
+  const c = chatFalso(() => [bruta(9, { attrs: { etapa: 'Novo lead' }, ultima: { tipo: 1, autor: 7, privada: true, quando: '2026-11-14T12:00:00Z' } })], { ultimaPublica: DESCONHECIDA as never });
+  const d = { ...comEstado(f.armazem, c.chat, 'ligado'), cacheUltimaPublica: new Map() };
+  await cicloDaCaixa(d, 2, 'x', 'ligado', U, SEG_9H);
+  await cicloDaCaixa(d, 2, 'x', 'ligado', U, new Date(SEG_9H.getTime() + 600_000));
+  assert.equal(f.disparos.some((x) => x.regra === 'rotina-retomada'), false, 'não sabe se alguém falou: espera');
+  assert.equal(c.buscasDaUltima.length, 1, 'a 2ª vez vem do cache');
+});
+
+test('chatDoChatwoot.ultimaPublica pagina com before=<id>: acha a pública atrás de várias notas; chegou ao começo = null; 5 páginas sem achar e ainda com mais = DESCONHECIDA', async () => {
+  const msg = (id: number, privada: boolean) => ({ id, message_type: privada ? 1 : 0, private: privada, created_at: 1_700_000_000 + id, content: `m${id}`, sender: { id: 1, type: 'user' } });
+  const pagina = (de: number, ate: number, privadas: (id: number) => boolean) => Array.from({ length: ate - de + 1 }, (_, i) => msg(de + i, privadas(de + i)));
+  const montar = (corpoDe: (before: number | null) => unknown[]) => {
+    const pedidos: Array<string | null> = [];
+    const fetchFalso = (async (url: string) => {
+      const u = new URL(url);
+      const before = u.searchParams.get('before');
+      pedidos.push(before);
+      return { ok: true, status: 200, text: async () => JSON.stringify({ payload: corpoDe(before ? Number(before) : null) }) } as Response;
+    }) as unknown as typeof fetch;
+    return { chat: chatDoChatwoot(criarContextoChatwoot({ url: 'https://cw.exemplo.test', conta: 1, token: 'tk' }, { fetch: fetchFalso })), pedidos };
+  };
+  // pública no id 30; as 20 mais novas (81..100) e as 20 antes (61..80) e (41..60) são notas
+  const achar = montar((before) => (before === null ? pagina(81, 100, () => true) : before === 81 ? pagina(61, 80, () => true) : before === 61 ? pagina(41, 60, () => true) : before === 41 ? pagina(21, 40, (id) => id !== 30) : []));
+  const r = await achar.chat.ultimaPublica(1);
+  assert.notEqual(r, DESCONHECIDA);
+  assert.equal((r as { saida: boolean; criadaEm: Date }).criadaEm.getTime(), (1_700_000_000 + 30) * 1000);
+  assert.deepEqual(achar.pedidos, [null, '81', '61', '41'], 'uma página por vez, do mais novo para o mais antigo');
+  // a conversa acaba antes: só notas até o começo → de fato não há pública
+  const comeco = montar((before) => (before === null ? pagina(21, 40, () => true) : before === 21 ? pagina(1, 20, () => true) : []));
+  assert.equal(await comeco.chat.ultimaPublica(1), null);
+  // 5 páginas só de notas e ainda há mais atrás: desconhecida (nunca «ninguém falou»)
+  const fundo = montar((before) => pagina(((before ?? 101) - 20), (before ?? 101) - 1, () => true));
+  assert.equal(await fundo.chat.ultimaPublica(1), DESCONHECIDA);
+  assert.equal(fundo.pedidos.length, 5);
 });

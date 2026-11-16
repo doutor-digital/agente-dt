@@ -138,8 +138,8 @@ export interface Memoria {
   vistos: Vistos;
   /** `regra|chave` já registrados (mensagem ou nota de campo faltando) */
   feitos: ReadonlySet<string>;
-  /** o subconjunto de `feitos` que saiu de verdade (modo ligado): o robô manual só se cala por um par automático que de fato falou */
-  enviados?: ReadonlySet<string>;
+  /** o subconjunto de `feitos` que saiu de verdade (ligado, e não a nota «NÃO enviei» do cartão ativo no Kommo): `regra|chave` → quando (ms). O robô manual só se cala por um par automático que de fato falou */
+  enviados?: ReadonlyMap<string, number>;
 }
 
 export interface DadosDaUnidade {
@@ -455,7 +455,7 @@ export interface Candidato {
   teto?: Date;
   interna?: AcaoInterna;
   /** regra automática par deste robô manual: se ela já foi feita nesta conversa (qualquer chave), este não sai */
-  pularSeFeito?: string;
+  pularSeFeito?: ParDoManual;
   /** o último instante em que pode SAIR (conferido com o `agora` do envio, não com o horário previsto) */
   saiAte?: Date;
   /** só sai em um dia (Belém) ANTERIOR a este (AAAA-MM-DD) */
@@ -498,13 +498,21 @@ export const ETIQUETA_MANUAL_DA_ROTINA: Readonly<Record<string, string>> = {
   'rotina-confirmar-retorno': 'confirmar-retorno',
   'rotina-boas-vindas': 'boas-vindas',
 };
-/** O robô manual (etiqueta) e o seu par automático: se o automático já falou com esta conversa, o manual não repete o mesmo recado. */
-const PAR_AUTOMATICO_DA_MANUAL: Readonly<Record<string, string>> = {
-  'sdr-retomada': 'rotina-retomada',
-  'sdr-reativacao': 'rotina-reativacao',
-  'sdr-confirmar-retorno': 'rotina-confirmar-retorno',
-  'sdr-boas-vindas': 'rotina-boas-vindas',
-};
+/**
+ * O robô manual (etiqueta) e o seu par automático: quando o automático JÁ FALOU de verdade com esta conversa, o manual não repete o mesmo recado.
+ * - `sdr-retomada` NÃO tem par: a manual é «tentei te ligar e não consegui» (depois de uma ligação), outra mensagem que a «retomada» de 2 dias parada.
+ * - `sdr-confirmar-retorno`: só o MESMO retorno (a chave da consulta); outro retorno marcado depois recebe a confirmação.
+ * - `sdr-boas-vindas` e `sdr-reativacao`: só se o automático falou nos últimos 7 dias (uma boas-vindas de meses atrás não cala a de um programa novo).
+ * Nota do cartão ativo no Kommo e nota do seco NÃO contam como «falou» (ver `enviados`).
+ */
+export interface ParDoManual {
+  regra: string;
+  /** só vale um envio com ESTA chave */
+  chave?: string;
+  /** só vale um envio dos últimos N dias */
+  dias?: number;
+}
+const DIAS_DA_JANELA_DO_PAR = 7;
 /** Dias parada até a retomada (2) e até a reativação do lead frio (30). */
 const DIAS_DA_RETOMADA_AUTOMATICA = 2;
 const DIAS_DA_REATIVACAO_AUTOMATICA = 30;
@@ -743,11 +751,18 @@ export function candidatos(c: ConversaRegua, vistos: Vistos, ajustes?: AjustesDa
     }
   }
 
+  // o par automático de cada robô manual (ver `ParDoManual`)
+  const parDoManual = (regra: string): ParDoManual | undefined => {
+    if (regra === 'sdr-reativacao') return { regra: 'rotina-reativacao', dias: DIAS_DA_JANELA_DO_PAR };
+    if (regra === 'sdr-boas-vindas') return { regra: 'rotina-boas-vindas', dias: DIAS_DA_JANELA_DO_PAR };
+    if (regra === 'sdr-confirmar-retorno') return consulta ? { regra: 'rotina-confirmar-retorno', chave: consulta.chave } : undefined;
+    return undefined;
+  };
   // etiquetas da SDR (ao ver a etiqueta nova), cada uma nas etapas do gatilho do Kommo
   for (const [etiqueta, r] of Object.entries(MODELO_DA_ETIQUETA)) {
     const v = c.etiquetas.includes(etiqueta) ? novo(`etiqueta:${etiqueta}`) : null;
     if (v && r.vale(etapa, situ, a, tratamento) && !(r.respeitaSemFollowUp && semFollowUp)) {
-      saida.push({ regra: r.regra, modelo: r.modelo, chave: `${etiqueta}@${v.desde.toISOString()}`, kind: 'depois', alvo: v.desde, pularSeFeito: PAR_AUTOMATICO_DA_MANUAL[r.regra] });
+      saida.push({ regra: r.regra, modelo: r.modelo, chave: `${etiqueta}@${v.desde.toISOString()}`, kind: 'depois', alvo: v.desde, pularSeFeito: parDoManual(r.regra) });
     }
   }
 
@@ -872,12 +887,14 @@ function paraRenderizar(regra: string, c: ConversaRegua, agora: Date): ConversaR
     // o «próximo compromisso» é o compromisso FUTURO MAIS PRÓXIMO entre a próxima sessão, o retorno e a consulta (de hoje em diante); o que já
     // passou não entra. Sem nenhuma data futura o texto fica sem o campo e a régua deixa a nota de falta.
     const hoje = diaEmBelem(agora);
+    // futuro de verdade: com hora, o INSTANTE tem de ser de agora em diante (uma sessão de hoje às 09:00 já passou às 10:00); sem hora, vale o dia de hoje
+    const futuro = (m: Momento) => (m.hora ? instante(m, 0).getTime() >= agora.getTime() : m.data.iso >= hoje);
     const opcoes = [
       { qual: 'sessao', m: momento(c.attrs.proxima_sessao, c.attrs.hora_sessao) },
       { qual: 'retorno', m: momento(c.attrs.data_retorno, null) },
       { qual: 'consulta', m: momento(c.attrs.data_consulta, c.attrs.hora_consulta) },
     ]
-      .filter((o): o is { qual: string; m: Momento } => !!o.m && o.m.data.iso >= hoje)
+      .filter((o): o is { qual: string; m: Momento } => !!o.m && futuro(o.m))
       .sort((x, y) => instante(x.m, 12).getTime() - instante(y.m, 12).getTime());
     const quem = opcoes[0]?.qual;
     const attrs = { ...c.attrs };
@@ -904,6 +921,19 @@ function limiteDe(k: Candidato): Date {
   return new Date(k.teto ? Math.min(ate, k.teto.getTime() - 1) : ate);
 }
 
+/** O par automático já FALOU de verdade (e dentro da chave e da janela pedidas)? */
+function jaFalou(par: ParDoManual, enviados: ReadonlyMap<string, number> | undefined, agora: Date): boolean {
+  if (!enviados) return false;
+  for (const [k, quando] of enviados) {
+    const i = k.indexOf('|');
+    if (k.slice(0, i) !== par.regra) continue;
+    if (par.chave !== undefined && k.slice(i + 1) !== par.chave) continue;
+    if (par.dias !== undefined && agora.getTime() - quando > par.dias * DIA) continue;
+    return true;
+  }
+  return false;
+}
+
 /**
  * Função PURA: o que está na hora de mandar para esta conversa. `memoria.vistos` já deve conter a observação de agora
  * (`atualizarVistos`). Remarcar muda a chave; repetir não acontece (`memoria.feitos`).
@@ -917,7 +947,7 @@ export function decidirRegua(c: ConversaRegua, memoria: Memoria, agora: Date, un
     // a mensagem da própria retomada vira a «última mensagem pública»: sem isto ela se repetiria a cada 2 dias (ver `ecoDaPropriaRetomada`)
     if (k.regra === 'rotina-retomada' && ecoDaPropriaRetomada(k.chave, memoria.feitos)) continue;
     if (memoria.feitos.has(`${k.regra}|${k.chave}`)) continue;
-    if (k.pularSeFeito && [...(memoria.enviados ?? memoria.feitos)].some((f) => f.startsWith(`${k.pularSeFeito}|`))) continue;
+    if (k.pularSeFeito && jaFalou(k.pularSeFeito, memoria.enviados, agora)) continue;
     // a hora em que SAI (agora), não a prevista: depois do último instante ou no dia da consulta, esta mensagem perdeu o sentido
     if (k.saiAte && agora.getTime() > k.saiAte.getTime()) continue;
     if (k.saiAntesDoDia && diaEmBelem(agora) >= k.saiAntesDoDia) continue;
