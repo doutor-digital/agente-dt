@@ -880,6 +880,9 @@ test('outra pessoa: «ele/ela» sem parente na frase, mas com parente numa das 3
   // o parente está a 4 falas de distância: não conta
   const longe = ['meu marido está mal', 'a', 'b', 'c', 'Ela sente dor na lombar'].map((t) => fala('paciente', t));
   assert.equal(falaDeOutraPessoaNoContexto('Ela sente dor na lombar', longe), false);
+  // parente e «ela» na MESMA mensagem (o jeito mais comum; sênior, 16/11): a IA cita só «Ela tem dor na lombar»
+  const mesma = ['Boa tarde', 'É pra minha mãe. Ela tem dor na lombar há meses'].map((t) => fala('paciente', t));
+  assert.equal(falaDeOutraPessoaNoContexto('Ela tem dor na lombar', mesma), true);
   // sem pronome de terceiro, a dor é de quem escreve
   const propria = ['meu pai está com dor', 'Eu tenho dor na lombar'].map((t) => fala('paciente', t));
   assert.equal(falaDeOutraPessoaNoContexto('Eu tenho dor na lombar', propria), false);

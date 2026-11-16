@@ -337,7 +337,8 @@ export function falaDeOutraPessoaNoContexto(trecho: string, doPaciente: Readonly
     if (normalizar(f.texto).includes(t)) i = j; // a última fala que contém a frase
   });
   if (i < 0) return false;
-  return doPaciente.slice(Math.max(0, i - FALAS_DE_CONTEXTO), i).some((f) => falaDeOutraPessoa(f.texto));
+  // `i + 1`: a PRÓPRIA mensagem entra — «É pra minha mãe. Ela tem dor na lombar» é o jeito mais comum de escrever (sênior, 16/11).
+  return doPaciente.slice(Math.max(0, i - FALAS_DE_CONTEXTO), i + 1).some((f) => falaDeOutraPessoa(f.texto));
 }
 
 const NUMEROS_POR_EXTENSO = new Map<string, number>([
