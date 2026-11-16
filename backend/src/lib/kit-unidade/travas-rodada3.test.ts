@@ -271,3 +271,26 @@ test('as travas rodam nos disfarces: acento, ø, leet, letra picada e dígito so
   assert.notEqual(recusaDeFato('A consulta é grátis.'), null);
   assert.equal(recusaDeFato('Aceitamos Pix e cartão de crédito e débito em até 12x.'), null);
 });
+
+test('sinônimos de atendimento valem como «consulta» na gratuidade (visita, sessão, avaliação, primeira vez, primeiro atendimento, encaixe, retorno)', () => {
+  const sinonimos = ['Primeira visita', 'A primeira visita', 'A sessão', 'A avaliação', 'Na primeira vez', 'O primeiro atendimento', 'O primeiro encontro', 'O encaixe', 'O retorno'];
+  const jeitos = ['é gratuita', 'é grátis', 'é gratuito', 'é sem custo', 'não tem custo', 'é cortesia da casa'];
+  for (const a of sinonimos) for (const j of jeitos) assert.notEqual(recusaDeFato(`${a} ${j} para quem chega pelo anúncio.`), null, `${a} ${j}`);
+  assert.notEqual(recusaDeFato('Primeira visita gratuita para quem chega pelo anúncio.'), null);
+  assert.notEqual(recusaDeFato('Não cobramos nada na primeira visita.'), null);
+  const a = assistenteCompleta();
+  a.faq[0] = { pergunta: 'Vocês cobram a primeira visita?', resposta: 'Não.' };
+  assert.equal(valida(a).ok, false);
+  // sem nenhum sinônimo de atendimento, a gratuidade de outra coisa segue livre
+  assert.equal(recusaDeFato('Estacionamento gratuito e Wi-Fi grátis.'), null);
+});
+
+test('«sem cirurgia» / «não cirúrgico» é a frase de autoridade da rede e passa; promessa de resultado junto continua recusada', () => {
+  for (const t of ['Tratamento sem cirurgia e sem remédios.', 'Tratamos hérnia de disco sem cirurgia.', 'O atendimento é particular, individual e sem cirurgia.', 'Tratamento conservador, não cirúrgico.', 'A clínica trata coluna e nervo ciático sem cirurgia.']) {
+    assert.equal(recusaDeFato(t), null, t);
+    assert.equal(recusaDaRegra(`Se perguntarem como é, diga: ${t}`), null, t);
+  }
+  for (const t of ['Resolve sem cirurgia, garantido.', 'Cura sem cirurgia.', 'Você vai ficar bom sem cirurgia com certeza.', 'Evita a cirurgia com certeza.', '95% dos casos resolvem sem cirurgia.', 'Eficácia comprovada, sem cirurgia.']) {
+    assert.notEqual(recusaDeFato(t), null, t);
+  }
+});
