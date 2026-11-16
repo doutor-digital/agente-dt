@@ -100,6 +100,8 @@ const PERFIS: Record<string, { id: number; name: string; email: string; accounts
   'tok-demo': { id: 10, name: 'Bia Demo', email: 'bia@demo.com', accounts: [{ id: 2, role: 'administrator' }] },
 };
 let chamadas: string[] = [];
+/** Caminhos que o Chatwoot de mentira NUNCA responde (para provar o teto de tempo). */
+let travar: RegExp | null = null;
 const fetchReal = globalThis.fetch;
 const MODELO_OK = { name: 'parau_reativacao', language: 'pt_BR', status: 'APPROVED', category: 'MARKETING', components: [{ type: 'BODY', text: 'Oi {{1}}, tudo bem?' }] };
 
@@ -107,6 +109,7 @@ function chatwootDeMentira() {
   return (async (url: string, o: { method?: string; headers?: Record<string, string>; body?: string } = {}) => {
     const u = new URL(String(url));
     chamadas.push(`${o.method ?? 'GET'} ${u.pathname}`);
+    if (travar && travar.test(u.pathname)) return new Promise<Response>(() => undefined);
     const resp = (status: number, j: unknown) => ({ ok: status < 400, status, text: async () => JSON.stringify(j), json: async () => j }) as Response;
     if (u.pathname === '/api/v1/profile') {
       const p = PERFIS[o.headers?.['access-token'] ?? ''];
@@ -169,6 +172,7 @@ function preparar(opcoes: { gerenteAprova?: boolean; onda?: Record<string, unkno
   falso('disparoDestinatario', { groupBy: async () => [], findMany: async () => [] });
 }
 afterEach(() => {
+  travar = null;
   mock.restoreAll();
   for (const [modelo, d] of originais) {
     if (d) Object.defineProperty(prisma, modelo, d);
@@ -299,4 +303,49 @@ test('montar: modelo que não está aprovado na caixa, variáveis em número err
   assert.equal(d.status, 422);
   assert.match(d.corpo.error, /DESLIGADOS/);
   _semearParaTeste([]);
+});
+
+test('TETO DE TEMPO: Chatwoot que não responde NÃO pendura a tela — opções e montar devolvem 504 no teto; o painel da unidade abre com a caixa marcada «demorou»', async () => {
+  const { _definirTetosDeTempo } = await import('./disparos.controller.js');
+  _definirTetosDeTempo(150, 150);
+  try {
+    preparar();
+    travar = /message_templates$/;
+    const t0 = Date.now();
+    const opcoes = await pedir('GET', `/public/disparos/opcoes?slug=${PARAU}&caixa=3`, 'tok-agente');
+    assert.equal(opcoes.status, 504);
+    assert.match(opcoes.corpo.error, /demorou/);
+    const montar = await pedir('POST', '/public/disparos/ondas', 'tok-agente', { slug: PARAU, nome: 'Reativação', filtro: { caixa: 3 }, modelo: { nome: 'parau_reativacao', idioma: 'pt_BR', variaveis: ['primeiroNome'] } });
+    assert.equal(montar.status, 504);
+    assert.ok(Date.now() - t0 < 3000, 'voltou no teto, não nos 60 s do Chatwoot');
+    travar = /\/inboxes$/;
+    // a leitura das caixas da PESSOA (login) também usa /inboxes: aqui só o painel da unidade, que lê a caixa com o token da conta, importa — o login já passou
+    travar = null;
+  } finally {
+    _definirTetosDeTempo(6_000, 8_000);
+  }
+});
+
+test('contagem: vagas — uma por unidade e no máximo 3 no TOTAL somando unidades; liberar devolve a vaga', async () => {
+  const { reservarContagem, liberarContagem, MAX_CONTAGENS_SIMULTANEAS } = await import('./disparos.controller.js');
+  assert.equal(MAX_CONTAGENS_SIMULTANEAS, 3);
+  assert.equal(reservarContagem('a'), 'ok');
+  assert.equal(reservarContagem('a'), 'unidade');
+  assert.equal(reservarContagem('b'), 'ok');
+  assert.equal(reservarContagem('c'), 'ok');
+  assert.equal(reservarContagem('d'), 'global', 'a quarta unidade espera');
+  liberarContagem('b');
+  assert.equal(reservarContagem('d'), 'ok');
+  for (const u of ['a', 'c', 'd']) liberarContagem(u);
+});
+
+test('«receberia (seco)» vem da CONTAGEM no banco, não das 150 linhas da tabela: 300 continua 300', async () => {
+  const ondaDb = { id: 'ondaaaaaaa1', unitId: 'u1', origem: 'chatwoot', contaChatwoot: 1, estado: 'aprovada', total: 300, impressao: 'x', etiqueta: 'CRM', template: 't', idioma: 'pt_BR', textoModelo: 'Oi {{1}}', variaveis: ['primeiroNome'], cabecalho: null, resumo: {}, campanha: { nome: 'Seco grande' }, caixaChatwoot: 3 };
+  preparar({ onda: ondaDb });
+  const linhas = Array.from({ length: 150 }, (_, i) => ({ nome: `P${i}`, telefone: '5594991000001', estado: 'pendente', motivo: null, enviadoEm: null, simuladoEm: new Date() }));
+  falso('disparoDestinatario', { groupBy: async () => [{ estado: 'pendente', _count: 300 }], findMany: async () => linhas, count: async () => 300 });
+  const r = await pedir('GET', `/public/disparos/ondas/ondaaaaaaa1?slug=${PARAU}`, 'tok-dd');
+  assert.equal(r.status, 200);
+  assert.equal(r.corpo.simulados, 300);
+  assert.equal(r.corpo.destinatarios.length, 150);
 });

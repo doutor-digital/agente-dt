@@ -849,6 +849,17 @@ test('montar a lista: grava cada pessoa com a SUA conversa e contato, calcula to
   assert.deepEqual([gravacoes.length, criadas.length], [0, 0], 'onda do Kommo não é montada por aqui');
 });
 
+test('contagem com PRAZO: página que nunca responde não pendura — a leitura para no prazo e vem marcada como cortada (contagem parcial)', async () => {
+  const d = depsDoPublico([], { pagina: async (_c, p) => (p === 1 ? Array.from({ length: 25 }, (_, i) => cru(i + 1)) : new Promise<unknown[]>(() => undefined)) });
+  const t0 = Date.now();
+  const r = await calcularPublico(FILTRO, d, { completo: false, prazo: Date.now() + 80 });
+  assert.ok(Date.now() - t0 < 2000);
+  assert.equal(r.truncada, true);
+  assert.equal(r.elegiveis.length, 25, 'o que deu para ler vale');
+  const sem = await calcularPublico(FILTRO, depsDoPublico([cru(1)]), { completo: false });
+  assert.equal(sem.truncada, false, 'sem prazo e lida inteira: não é parcial');
+});
+
 // ── a clínica NÃO liga o disparo; lista de teste própria; os limites do CRM são do CRM ──────────────────────────
 
 test('a administradora da clínica NÃO liga o disparo pela tela Robôs: a automação não está na tela e mudarAutomacao recusa (404), sem gravar', async () => {

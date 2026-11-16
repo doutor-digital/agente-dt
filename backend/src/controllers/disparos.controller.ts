@@ -34,7 +34,25 @@ import { abrirOndaChatwoot, aprovarOndaChatwoot, concluirMontagemChatwoot, ctxDa
 import { modoDoDisparoNoCrm } from '../lib/disparo/chatwoot/porto.js';
 import { calcularPublico, rotuloDaExclusaoNoCrm } from '../lib/disparo/chatwoot/publico.js';
 import { paginaDosDisparos } from '../lib/disparos-pagina.js';
+import { comTeto } from '../lib/robos-automacoes.js';
 import { atendenteDaUnidade } from './aprendizados.controller.js';
+
+/**
+ * TETO DE TEMPO em toda leitura do CRM (o Chatwoot lento não pode pendurar a tela nem o servidor: o incidente do #350). Cada parte tem o seu;
+ * estourou, a parte vem vazia (`null`) e a tela diz que está parcial — o resto abre. A chamada abandonada ainda termina sozinha (limite de 60 s do `chamar`).
+ */
+let TETO_DA_PARTE_MS = 6_000;
+let TETO_DA_CONFERENCIA_MS = 8_000;
+/** Só para o teste: tetos curtos. */
+export const _definirTetosDeTempo = (parteMs: number, conferenciaMs: number): void => {
+  TETO_DA_PARTE_MS = parteMs;
+  TETO_DA_CONFERENCIA_MS = conferenciaMs;
+};
+const PRAZO_DA_CONTAGEM_MS = 25_000;
+const lerComTeto = <T>(p: Promise<T>, ms = TETO_DA_PARTE_MS): Promise<T | null> => comTeto<T | null>(p, ms, null);
+const DEMOROU = 'o CRM demorou demais para responder — tente de novo em instantes';
+/** A conferência do modelo com teto: estourar é «não consegui ler» (transitório), nunca «modelo reprovado». */
+const conferirComTeto: typeof conferirModeloDaOnda = (ctx, caixa, def) => comTeto(conferirModeloDaOnda(ctx, caixa, def), TETO_DA_CONFERENCIA_MS, { ok: false as const, transitorio: true as const, motivo: DEMOROU });
 
 const slugDe = (v: unknown): string => (typeof v === 'string' ? v.trim().slice(0, 80) : '');
 const idDe = (v: unknown): string => (typeof v === 'string' && /^[A-Za-z0-9_-]{8,40}$/.test(v) ? v : '');
@@ -98,7 +116,8 @@ export async function disparosHandler(req: Request, res: Response): Promise<void
         .filter((c) => CAIXAS_CLOUD.has(c))
         .map(async (id) => {
           try {
-            const c = await caixaWhatsappOficial(ctx, id);
+            const c = await lerComTeto(caixaWhatsappOficial(ctx, id));
+            if (!c) return { id, nome: `caixa ${id}`, oficial: false, motivo: DEMOROU };
             return c.ok ? { id, nome: c.nome, oficial: true, motivo: null } : { id, nome: `caixa ${id}`, oficial: false, motivo: c.motivo };
           } catch {
             return { id, nome: `caixa ${id}`, oficial: false, motivo: 'não consegui ler a caixa no CRM agora' };
@@ -153,16 +172,24 @@ export async function disparosOpcoesHandler(req: Request, res: Response): Promis
   }
   const ctx = r.ctx;
   try {
-    const oficial = await caixaWhatsappOficial(ctx, caixa);
+    const oficial = await lerComTeto(caixaWhatsappOficial(ctx, caixa));
+    if (!oficial) {
+      res.status(504).json({ error: DEMOROU });
+      return;
+    }
     if (!oficial.ok) {
       res.status(422).json({ error: oficial.motivo });
       return;
     }
     const [etiquetas, defs, modelos] = await Promise.all([
-      chamar(ctx, 'GET', 'labels').catch(() => null),
-      chamar(ctx, 'GET', 'custom_attribute_definitions', { query: { attribute_model: '0' } }).catch(() => null),
-      modelosDaCaixa(ctx, caixa),
+      lerComTeto(chamar(ctx, 'GET', 'labels')),
+      lerComTeto(chamar(ctx, 'GET', 'custom_attribute_definitions', { query: { attribute_model: '0' } })),
+      lerComTeto(modelosDaCaixa(ctx, caixa)),
     ]);
+    if (!modelos) {
+      res.status(504).json({ error: DEMOROU });
+      return;
+    }
     const titulos = Array.isArray((etiquetas as { payload?: unknown[] } | null)?.payload) ? ((etiquetas as { payload: Array<{ title?: unknown }> }).payload.map((l) => String(l?.title ?? '')).filter(Boolean)) : [];
     const lista = Array.isArray(defs) ? (defs as Array<{ attribute_key?: unknown; attribute_display_name?: unknown; attribute_values?: unknown }>) : [];
     const atributos = new Map<string, { chave: string; nome: string; valores: string[] | null }>();
@@ -183,6 +210,16 @@ export async function disparosOpcoesHandler(req: Request, res: Response): Promis
 // ── contar (rápido, só leitura) ─────────────────────────────────────────────────────────────────────────────────
 
 const emContagem = new Set<string>();
+/** Contagens ao mesmo tempo, SOMANDO as unidades: cada uma lê a caixa inteira do Chatwoot (a parte por unidade não protege o servidor de muitas unidades). */
+export const MAX_CONTAGENS_SIMULTANEAS = 3;
+/** Reserva uma vaga de contagem: uma por unidade e `MAX_CONTAGENS_SIMULTANEAS` no total. */
+export function reservarContagem(unitId: string): 'ok' | 'unidade' | 'global' {
+  if (emContagem.has(unitId)) return 'unidade';
+  if (emContagem.size >= MAX_CONTAGENS_SIMULTANEAS) return 'global';
+  emContagem.add(unitId);
+  return 'ok';
+}
+export const liberarContagem = (unitId: string): void => void emContagem.delete(unitId);
 const AMOSTRA = 8;
 
 export async function disparosContarHandler(req: Request, res: Response): Promise<void> {
@@ -195,19 +232,23 @@ export async function disparosContarHandler(req: Request, res: Response): Promis
     return;
   }
   const ctx = r.ctx;
-  // a contagem lê a caixa inteira: uma por unidade por vez
-  if (emContagem.has(r.unit.id)) {
-    res.status(429).json({ error: 'já estou contando para esta unidade — espere alguns segundos' });
+  // a contagem lê a caixa inteira: uma por unidade e poucas no total
+  const vaga = reservarContagem(r.unit.id);
+  if (vaga !== 'ok') {
+    res.status(429).json({ error: vaga === 'unidade' ? 'já estou contando para esta unidade — espere alguns segundos' : 'há contagens demais acontecendo agora — tente de novo em instantes' });
     return;
   }
-  emContagem.add(r.unit.id);
   try {
-    const oficial = await caixaWhatsappOficial(ctx, filtro.data.caixa);
+    const oficial = await lerComTeto(caixaWhatsappOficial(ctx, filtro.data.caixa));
+    if (!oficial) {
+      res.status(504).json({ error: DEMOROU });
+      return;
+    }
     if (!oficial.ok) {
       res.status(422).json({ error: oficial.motivo });
       return;
     }
-    const p = await calcularPublico(filtro.data, depsDoPublico(r.unit, ctx), { completo: false });
+    const p = await calcularPublico(filtro.data, depsDoPublico(r.unit, ctx), { completo: false, prazo: Date.now() + PRAZO_DA_CONTAGEM_MS });
     res.set('Cache-Control', 'no-store').json({
       lidas: p.lidas,
       truncada: p.truncada,
@@ -221,7 +262,7 @@ export async function disparosContarHandler(req: Request, res: Response): Promis
     logger.warn({ err: String(e), unit: r.unit.slug }, 'disparos: contagem falhou');
     res.status(502).json({ error: 'não consegui ler as conversas no CRM agora' });
   } finally {
-    emContagem.delete(r.unit.id);
+    liberarContagem(r.unit.id);
   }
 }
 
@@ -252,7 +293,12 @@ export async function disparosMontarHandler(req: Request, res: Response): Promis
   const ctx = r.ctx;
   try {
     // o texto do modelo vem do CRM agora, nunca do navegador
-    const naCaixa = (await modelosDaCaixa(ctx, filtro.data.caixa)).find((m) => m.nome === modelo.data.nome && m.idioma === modelo.data.idioma);
+    const doCrm = await lerComTeto(modelosDaCaixa(ctx, filtro.data.caixa), TETO_DA_CONFERENCIA_MS);
+    if (!doCrm) {
+      res.status(504).json({ error: DEMOROU });
+      return;
+    }
+    const naCaixa = doCrm.find((m) => m.nome === modelo.data.nome && m.idioma === modelo.data.idioma);
     if (!naCaixa) {
       res.status(422).json({ error: 'esse modelo não está aprovado nesta caixa' });
       return;
@@ -269,6 +315,7 @@ export async function disparosMontarHandler(req: Request, res: Response): Promis
       nome,
       por: r.email ?? r.nome,
       ctx,
+      conferirModelo: conferirComTeto,
     });
     if (!aberta.ok) {
       res.status(aberta.status).json({ error: aberta.erro });
@@ -307,7 +354,7 @@ export async function disparosOndaHandler(req: Request, res: Response): Promise<
   if (!onda) return;
   try {
     const ajuste = await ajusteDaUnidade(r.unit.id);
-    const [linhas, grupos] = await Promise.all([
+    const [linhas, grupos, simulados] = await Promise.all([
       prisma.disparoDestinatario.findMany({
         where: { ondaId: onda.id },
         orderBy: [{ atualizadoEm: 'asc' }, { id: 'asc' }],
@@ -315,6 +362,8 @@ export async function disparosOndaHandler(req: Request, res: Response): Promise<
         select: { nome: true, telefone: true, estado: true, motivo: true, enviadoEm: true, simuladoEm: true },
       }),
       prisma.disparoDestinatario.groupBy({ by: ['estado'], where: { ondaId: onda.id }, _count: true }),
+      // no BANCO, não nas linhas da tabela (que são só as primeiras 150): senão o número trava em 150
+      prisma.disparoDestinatario.count({ where: { ondaId: onda.id, simuladoEm: { not: null } } }),
     ]);
     const def = definicaoDaOnda(onda);
     const fontes = def.variaveis;
@@ -323,7 +372,7 @@ export async function disparosOndaHandler(req: Request, res: Response): Promise<
     // o CRM confirma o modelo só enquanto dá para aprovar (uma leitura por abertura da tela, nunca em disparo que já saiu)
     let conferencia: { ok: boolean; motivo?: string } | null = null;
     if (onda.estado === 'montada') {
-      conferencia = onda.caixaChatwoot != null ? await conferirModeloDaOnda(r.ctx, onda.caixaChatwoot, { template: onda.template, idioma: onda.idioma, textoModelo: onda.textoModelo, variaveis: fontes }) : { ok: false, motivo: 'o disparo não tem caixa gravada' };
+      conferencia = onda.caixaChatwoot != null ? await conferirComTeto(r.ctx, onda.caixaChatwoot, { template: onda.template, idioma: onda.idioma, textoModelo: onda.textoModelo, variaveis: fontes }) : { ok: false, motivo: 'o disparo não tem caixa gravada' };
     }
     const quem = quemAprova({ email: r.email, papel: r.papel }, ajuste);
     res.set('Cache-Control', 'no-store').json({
@@ -347,7 +396,7 @@ export async function disparosOndaHandler(req: Request, res: Response): Promise<
       truncada: resumo.truncada === true,
       fora: Object.entries(resumo.fora ?? {}).filter(([, n]) => n).map(([motivo, n]) => ({ motivo, rotulo: rotuloDaExclusaoNoCrm(motivo), n })),
       contagem: Object.fromEntries(grupos.map((g) => [g.estado, g._count])),
-      simulados: linhas.filter((l) => l.simuladoEm).length,
+      simulados,
       destinatarios: linhas.map((p) => ({
         nome: p.nome,
         telefone: telefoneMascarado(p.telefone),
@@ -374,7 +423,7 @@ export async function disparosAprovarHandler(req: Request, res: Response): Promi
   if (!r) return;
   const onda = await ondaDaUnidade(res, r, idDe(req.params.id));
   if (!onda) return;
-  const a = await aprovarOndaChatwoot(onda.id, { email: r.email, papel: r.papel, total: corpo.total, impressao: corpo.impressao });
+  const a = await aprovarOndaChatwoot(onda.id, { email: r.email, papel: r.papel, total: corpo.total, impressao: corpo.impressao }, { conferir: conferirComTeto });
   if (!a.ok) {
     res.status(a.status).json({ error: a.erro });
     return;

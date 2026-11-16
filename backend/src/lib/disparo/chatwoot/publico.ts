@@ -97,13 +97,22 @@ export function conversaDoPublico(raw: any): ConversaDoPublico | null {
 }
 
 /** Lê as conversas da caixa (até 5.000). Lança se a LISTAGEM falhar. */
-export async function lerConversasDaCaixa(pagina: DepsDoPublico['pagina'], caixa: number): Promise<{ conversas: ConversaDoPublico[]; naoPaciente: number; truncada: boolean }> {
+export async function lerConversasDaCaixa(pagina: DepsDoPublico['pagina'], caixa: number, prazo?: number): Promise<{ conversas: ConversaDoPublico[]; naoPaciente: number; truncada: boolean }> {
   const vistas = new Set<number>();
   const conversas: ConversaDoPublico[] = [];
   let naoPaciente = 0;
   let truncada = true;
   for (let p = 1; p <= MAX_PAGINAS; p++) {
-    const lista = await pagina(caixa, p);
+    // com prazo (a contagem da tela): sem tempo, para e devolve o que leu, marcado como CORTADO; uma página lenta também é abandonada no prazo
+    let lista: unknown[] | null;
+    if (prazo === undefined) lista = await pagina(caixa, p);
+    else {
+      const resta = prazo - Date.now();
+      if (resta <= 0) break;
+      let t: NodeJS.Timeout | undefined;
+      lista = await Promise.race([pagina(caixa, p), new Promise<null>((ok) => void (t = setTimeout(() => ok(null), resta)))]).finally(() => clearTimeout(t));
+      if (lista === null) break;
+    }
     if (lista.length === 0) {
       truncada = false;
       break;
@@ -125,9 +134,9 @@ export async function lerConversasDaCaixa(pagina: DepsDoPublico['pagina'], caixa
  * Calcula o público. `completo: false` é a contagem rápida da tela (sem SAIR e sem franquia, que custam uma chamada por pessoa);
  * `completo: true` é a montagem da onda. Em nenhum dos dois ESCREVE nada.
  */
-export async function calcularPublico(filtro: Filtro, deps: DepsDoPublico, opcoes: { completo: boolean }): Promise<PublicoCalculado> {
+export async function calcularPublico(filtro: Filtro, deps: DepsDoPublico, opcoes: { completo: boolean; /** epoch ms: depois dele a leitura PARA e o resultado vem `truncada` (a contagem rápida da tela) */ prazo?: number }): Promise<PublicoCalculado> {
   const agora = deps.agora();
-  const { conversas, naoPaciente, truncada } = await lerConversasDaCaixa(deps.pagina, filtro.caixa);
+  const { conversas, naoPaciente, truncada } = await lerConversasDaCaixa(deps.pagina, filtro.caixa, opcoes.prazo);
   const fora: Record<string, number> = {};
   const nega = (m: string, n = 1) => void (fora[m] = (fora[m] ?? 0) + n);
   if (naoPaciente) nega('nao-e-paciente', naoPaciente);
@@ -139,9 +148,14 @@ export async function calcularPublico(filtro: Filtro, deps: DepsDoPublico, opcoe
   const semTempo: Filtro = { ...filtro, semInteracaoDias: 0 };
   const aposAtributos = conversas.filter((c) => passaNoFiltro(c, semTempo, agora.getTime()));
   const resolvidas = new Map<number, Date | null>();
+  let acabouOTempo = false;
   if (filtro.semInteracaoDias > 0) {
     const precisam = aposAtributos.filter((c) => precisaResolverInteracao(c, filtro)).slice(0, MAX_RESOLVER);
     await emLotes(precisam, SIMULTANEAS, async (c) => {
+      if (opcoes.prazo !== undefined && Date.now() > opcoes.prazo) {
+        acabouOTempo = true;
+        return;
+      } // sem tempo: vale a atividade da conversa (lado seguro: não entra)
       try {
         resolvidas.set(c.id, await deps.ultimaPublica(c.id));
       } catch {
@@ -208,7 +222,7 @@ export async function calcularPublico(filtro: Filtro, deps: DepsDoPublico, opcoe
     const c = convDaChave.get(e.chave)!;
     return { ...e, conversaId: c.id, contatoId: c.contatoId };
   });
-  return { lidas: conversas.length + naoPaciente, truncada, noFiltro: noFiltro.length, elegiveis, fora, parcial: !opcoes.completo };
+  return { lidas: conversas.length + naoPaciente, truncada: truncada || acabouOTempo, noFiltro: noFiltro.length, elegiveis, fora, parcial: !opcoes.completo };
 }
 
 /** O que a etapa do CRM diz da pessoa, para a unidade SEM agenda da franquia (o substituto honesto, e só dele). */

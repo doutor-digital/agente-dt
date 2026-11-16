@@ -251,7 +251,7 @@ ul.lis{margin:0;padding-left:1.2em;display:grid;gap:3px}
     var f = el('div', 'fatos');
     [[r.lidas, 'conversas na caixa'], [r.noFiltro, 'passaram no filtro'], [r.total, 'devem receber (estimativa)']].forEach(function(x){ var d = el('div'); d.appendChild(el('b', null, String(x[0]))); d.appendChild(el('span', null, x[1])); f.appendChild(d); });
     res.appendChild(f);
-    if (r.truncada) res.appendChild(el('p', 'ruim', 'A caixa é grande: a leitura parou no limite e a lista pode estar incompleta.'));
+    if (r.truncada) res.appendChild(el('p', 'ruim', 'Contagem PARCIAL: a leitura parou no limite de tempo ou de tamanho e a lista pode estar incompleta.'));
     if (r.fora.length) { res.appendChild(el('div', 'rot mudo', 'Ficam de fora (automático)')); var ul = el('ul', 'lis'); r.fora.forEach(function(x){ ul.appendChild(el('li', null, x.n + ' — ' + x.rotulo)); }); res.appendChild(ul); }
     res.appendChild(el('p', 'mudo', 'Contagem rápida: quem pediu para sair e a agenda da franquia só são conferidos ao montar. O número final pode ser menor.'));
     if (r.amostra.length) {
@@ -358,7 +358,7 @@ ul.lis{margin:0;padding-left:1.2em;display:grid;gap:3px}
     // exclusões
     var ce = el('div', 'card'); ce.appendChild(el('h2', null, 'Quem ficou de fora, e por quê'));
     if (o.fora.length) { var ul = el('ul', 'lis'); o.fora.forEach(function(x){ ul.appendChild(el('li', null, x.n + ' — ' + x.rotulo)); }); ce.appendChild(ul); } else ce.appendChild(el('p', null, 'Ninguém ficou de fora pelas regras.'));
-    if (o.truncada) ce.appendChild(el('p', 'ruim', 'A leitura da caixa parou no limite: a lista pode estar incompleta.'));
+    if (o.truncada) ce.appendChild(el('p', 'ruim', 'A leitura da caixa parou no limite (de tempo ou de tamanho): a lista pode estar incompleta.'));
     col.appendChild(ce);
     // pessoa por pessoa
     var cp = el('div', 'card'); cp.appendChild(el('h2', null, 'Pessoa por pessoa'));
