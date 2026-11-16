@@ -126,18 +126,22 @@ export function portoChatwoot(deps: DepsDoPortoChatwoot): Porto & { ocupouAUnida
     },
 
     // Tudo o que conta, pausa ou zera é DESTA origem: o limite de taxa, a restrição e as falhas do CRM não pausam o Kommo (outro número), nem o contrário.
-    // O freio de falhas seguidas olha só envios com resultado DEFINITIVO (`decididoEm`): a falha da Meta chega pela varredura (de 5 em 5 min), então um
-    // envio ainda não conferido não é sucesso nem falha — contá-lo como sucesso esconderia os 5 mais novos que vão falhar. Ordena por quando ficou
-    // decidido (não por `atualizadoEm`, que a varredura regrava ao marcar lida/respondeu, nem por `enviadoEm`, que ignora a decisão tardia).
-    ultimosResultados: async (unitId, n, desde) =>
-      (
-        await prisma.disparoDestinatario.findMany({
-          where: { unitId, onda: { origem: 'chatwoot' }, estado: { in: ['enviado', 'falhou'] }, decididoEm: { gte: desde } },
-          orderBy: { decididoEm: 'desc' },
-          take: n,
-          select: { estado: true },
-        })
-      ).map((x) => (x.estado === 'enviado' ? 'enviado' : 'falhou')),
+    // O freio de falhas seguidas CONTA só envio com resultado definitivo (`decididoEm` preenchido): a falha da Meta chega pela varredura (de 5 em 5 min), então
+    // um envio ainda não conferido não é sucesso nem falha. Mas ORDENA e corta a janela pelo momento do ENVIO — COALESCE(enviadoEm, decididoEm) —, não pela hora em que a
+    // varredura decidiu: dentro de uma varredura o que ela processa primeiro ganha o `decididoEm` mais antigo, e um envio anterior à nova aprovação decidido depois
+    // contaria contra a aprovação nova. A recusa definitiva (sem `enviadoEm`) entra pela hora em que foi decidida. (O Prisma não ordena por COALESCE: duas consultas e a fusão aqui.)
+    ultimosResultados: async (unitId, n, desde) => {
+      const base = { unitId, onda: { origem: 'chatwoot' }, estado: { in: ['enviado', 'falhou'] } };
+      const [enviados, recusados] = await Promise.all([
+        prisma.disparoDestinatario.findMany({ where: { ...base, decididoEm: { not: null }, enviadoEm: { gte: desde } }, orderBy: { enviadoEm: 'desc' }, take: n, select: { estado: true, enviadoEm: true, decididoEm: true } }),
+        prisma.disparoDestinatario.findMany({ where: { ...base, estado: 'falhou', enviadoEm: null, decididoEm: { gte: desde } }, orderBy: { decididoEm: 'desc' }, take: n, select: { estado: true, enviadoEm: true, decididoEm: true } }),
+      ]);
+      const quando = (x: { enviadoEm: Date | null; decididoEm: Date | null }): number => (x.enviadoEm ?? x.decididoEm)?.getTime() ?? 0;
+      return [...enviados, ...recusados]
+        .sort((a, b) => quando(b) - quando(a))
+        .slice(0, n)
+        .map((x) => (x.estado === 'enviado' ? 'enviado' : 'falhou'));
+    },
 
     // Falha decidida na hora (o CRM recusou, envio incerto): marca o momento para o freio. (Sucesso só fica decidido quando a varredura vê entregue/lida.)
     // (no MESMO update da gravação: não há janela em que a linha fica «falhou» sem a marca)

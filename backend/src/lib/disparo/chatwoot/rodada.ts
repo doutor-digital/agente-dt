@@ -15,7 +15,7 @@ import { definicaoDaOnda } from '../onda.js';
 import { ajusteDaUnidade, freiosComOTier } from './ajuste.js';
 import { lerMensagens, ultimoPedidoDeSaida } from './mensagens.js';
 import { ctxDaUnidadeNoCrm, ORIGEM_CRM } from './onda.js';
-import { idDaMensagem, portoChatwoot, unidadesDoMesmoNumeroKapso, type OndaDaRodada } from './porto.js';
+import { chaveDoLimiteDoCrm, idDaMensagem, portoChatwoot, unidadesDoMesmoNumeroKapso, type OndaDaRodada } from './porto.js';
 import { JANELA_DA_RESPOSTA_MS } from './relatorio.js';
 import type { ContextoChatwoot } from '../../../mcp-remoto/chatwoot.js';
 
@@ -23,6 +23,8 @@ const HORAS_OLHANDO = 72;
 /** A varredura confere TODOS os envios das últimas 72 h (sem corte: o freio por SAIR não pode contar menos que a realidade), até este tempo. */
 const ORCAMENTO_DA_VARREDURA_MS = 4 * 60_000;
 const SIMULTANEAS = 4;
+/** Envio ainda «sent» (sem entregue/lida/falha) depois disto é «preso»: vai para o fim da fila da varredura. */
+const PRESO_EM_SENT_MS = 6 * 3_600_000;
 const VARRER_A_CADA_MS = Number(process.env.DISPARO_CRM_VARRER_A_CADA_MS) > 0 ? Number(process.env.DISPARO_CRM_VARRER_A_CADA_MS) : 300_000;
 
 let ultimaVarredura = 0;
@@ -59,9 +61,14 @@ export async function varrerRespostasDoCrm(deps: VarredorDeps = {}): Promise<{ s
   // quem pode MUDAR de estado (SAIR, falha) vem primeiro; quem já saiu só renova marcas, por último, e some quando já tem tudo
   // ordem: o que o freio ainda precisa decidir primeiro (e o mais NOVO primeiro: uma restrição/token vencido aparece nos envios mais recentes), depois o resto;
   // quem já saiu e já tem as marcas nem entra. Se o orçamento de tempo acabar, o que fica para a próxima é o mais velho e já decidido.
+  // 0 = ainda por decidir e recente (o que o freio precisa) · 1 = já decidido (SAIR/marcas) · 2 = PRESO em «sent» há mais de PRESO_EM_SENT_MS (telefone desligado: não
+  // decide nunca; não pode gastar o orçamento de toda varredura na frente dos outros) · 3 = quem já saiu (só renova marcas)
+  const idade = relogio();
+  const classe = (e: (typeof enviados)[number]): number =>
+    e.estado === 'saiu' ? 3 : e.decididoEm ? 1 : idade - e.enviadoEm!.getTime() > PRESO_EM_SENT_MS ? 2 : 0;
   const fila = enviados
     .filter((e) => !(e.estado === 'saiu' && e.entregueEm && e.respondeuEm))
-    .sort((a, b) => Number(a.estado === 'saiu') - Number(b.estado === 'saiu') || Number(!!a.decididoEm) - Number(!!b.decididoEm) || b.enviadoEm!.getTime() - a.enviadoEm!.getTime());
+    .sort((a, b) => classe(a) - classe(b) || b.enviadoEm!.getTime() - a.enviadoEm!.getTime());
   // a resposta é da ÚLTIMA mensagem nossa antes dela: na mesma conversa, um disparo mais novo "rouba" a resposta do mais velho
   const enviosDaConversa = new Map<string, number[]>();
   for (const e of enviados) {
@@ -150,6 +157,13 @@ export async function varrerSeChegouAHora(deps: VarredorDeps = {}): Promise<void
       const grupos = new Map<string, Set<string>>();
       for (const id of r.restritosUnitIds) {
         const g = new Set<string>([id, ...(await unidadesDoMesmoNumeroKapso(id).catch(() => [id]))]);
+        // grupos que se sobrepõem são o MESMO número visto por duas unidades: uma pausa e um alerta só
+        for (const [k, outro] of [...grupos]) {
+          if ([...outro].some((x) => g.has(x))) {
+            for (const x of outro) g.add(x);
+            grupos.delete(k);
+          }
+        }
         grupos.set([...g].sort().join(','), g);
       }
       const pausar = async (where: Record<string, unknown>, slugs: string[]) => {
@@ -160,12 +174,15 @@ export async function varrerSeChegouAHora(deps: VarredorDeps = {}): Promise<void
         });
         await enviarTelegram(alertaDeRestricao(slugs)).catch(() => undefined);
       };
+      // (o contador de rodadas com limite de taxa recomeça do zero na próxima aprovação, como no `pausarNumero` do Porto)
+      const zerarContador = (unidades: Iterable<string>) => prisma.disparoLimite.deleteMany({ where: { unitId: { in: [...unidades].map(chaveDoLimiteDoCrm) } } }).catch(() => undefined);
       if (!grupos.size) await pausar({ unit: { slug: { in: r.restritos } } }, [...r.restritos].sort());
       for (const ids of grupos.values()) {
         const doNumero = (await prisma.unit.findMany({ where: { id: { in: [...ids] } }, select: { slug: true } }).catch(() => [])).map((u) => u.slug);
         // os nomes do alerta são os das unidades DESTE número (se a leitura das unidades falhar, os que a varredura já conhecia dele, nunca os de outro número)
         const conhecidos = [...ids].map((id) => r.slugDaUnidade[id]).filter((x): x is string => !!x);
         await pausar({ unitId: { in: [...ids] } }, [...new Set(doNumero.length ? doNumero : conhecidos.length ? conhecidos : [...ids])].sort());
+        await zerarContador(ids);
       }
     }
   } catch (err) {

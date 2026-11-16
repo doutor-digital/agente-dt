@@ -70,8 +70,8 @@ export function caixaDaUnidade(slug: string, caixa: number): string | null {
 /** Os estados em que uma onda do CRM ainda está viva: só UMA por unidade (o teto do número é um só e a mesma pessoa não pode entrar em duas). */
 /** Quantas montagens de lista do CRM podem andar ao mesmo tempo, somando todas as unidades. */
 export const MAX_MONTAGENS_DO_CRM = 2;
-/** Uma montagem que não bate há mais que isto (5 batidas) está órfã: é cancelada ao abrir outra, e não ocupa vaga. */
-export const MONTAGEM_VIVA_MS = 5 * BATIDA_DA_MONTAGEM_MS;
+/** Uma montagem que não bate há mais que isto (10 batidas) está órfã: é cancelada ao abrir outra, e não ocupa vaga. */
+export const MONTAGEM_VIVA_MS = 10 * BATIDA_DA_MONTAGEM_MS;
 const VIVA = ['montando', 'montada', 'aprovada', 'pausada'];
 
 export async function abrirOndaChatwoot(args: {
@@ -100,7 +100,7 @@ export async function abrirOndaChatwoot(args: {
     // DUAS travas: a global do teto de montagens (senão duas unidades juntas passam do teto, cada uma sob a trava só dela) e a da unidade
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('disparo-onda-crm:montagens'))`;
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`disparo-onda-crm:${unit.id}`}))`;
-    // a montagem ÓRFÃ (sem batida há 5 min: o processo caiu num deploy) é cancelada AQUI, já: senão ela deixaria de contar no teto mas continuaria
+    // a montagem ÓRFÃ (sem batida há 10 min: o processo caiu num deploy; uma batida atrasada não a mata) é cancelada AQUI, já: senão ela deixaria de contar no teto mas continuaria
     // «viva» para a trava da unidade (409) até os 30 min do vigia. Teto e trava da unidade enxergam o mesmo conjunto.
     await tx.disparoOnda.updateMany({ where: { origem: ORIGEM_CRM, estado: 'montando', atualizadoEm: { lt: new Date(Date.now() - MONTAGEM_VIVA_MS) } }, data: { estado: 'cancelada', pausaMotivo: 'a montagem foi interrompida (reinício do servidor?): monte o disparo de novo' } });
     const viva = await tx.disparoOnda.findFirst({ where: { unitId: unit.id, origem: ORIGEM_CRM, estado: { in: VIVA } }, select: { id: true, estado: true } });

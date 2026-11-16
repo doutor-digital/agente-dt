@@ -944,6 +944,7 @@ test('restrição da Meta (131048) pausa as ondas do CRM de TODAS as unidades do
   });
   falso('unitChatwoot', { findUnique: async () => ({ kapsoPhoneNumberId: '1212' }), findMany: async () => [{ unitId: 'u1' }, { unitId: 'u2' }] });
   falso('unit', { findMany: async () => [{ slug: 'u-a' }, { slug: 'u-b' }] });
+  falso('disparoLimite', { deleteMany: async () => ({ count: 0 }) });
   falso('disparoOnda', { updateMany: async (a: { where: Record<string, unknown>; data: Record<string, unknown> }) => (pausas.push(a), { count: 2 }) });
   await varrerSeChegouAHora({
     ctx: () => criarContextoChatwoot({ url: 'https://x.test', conta: 1, token: 't' }),
@@ -955,27 +956,115 @@ test('restrição da Meta (131048) pausa as ondas do CRM de TODAS as unidades do
   assert.equal((pausa.where as { origem: string }).origem, 'chatwoot');
 });
 
-test('FREIO DE FALHAS: só conta envio com resultado DECIDIDO — os 5 mais novos ainda não conferidos pela varredura não escondem as 5 falhas decididas', async () => {
-  const h = (n: number) => new Date(AGORA.getTime() - n * 3_600_000);
-  // o banco de mentira: 5 falhas decididas (há 3–7 h) e 5 envios MAIS NOVOS (há 5–25 min) ainda «enviado» e sem decisão (a varredura não os viu)
-  const linhas = [
-    ...Array.from({ length: 5 }, (_, i) => ({ estado: 'falhou', decididoEm: h(3 + i), enviadoEm: h(10 + i) })),
-    ...Array.from({ length: 5 }, (_, i) => ({ estado: 'enviado', decididoEm: null as Date | null, enviadoEm: new Date(AGORA.getTime() - (5 + i * 5) * 60_000) })),
-  ];
-  const consultas: Array<{ where: any; orderBy: any }> = [];
+const mensagemFalsa = (id: number, tipo: number, o: Record<string, unknown> = {}) => ({ id, tipo, privada: false, conteudo: '', criadaEm: new Date(AGORA.getTime() - 3_600_000), status: null, erro: null, ...o });
+
+/** Um «banco» de destinatários em memória, só com o que a varredura e o freio perguntam (filtros por estado, decididoEm, enviadoEm; updateMany por id). */
+function bancoDeDestinatarios(linhas: Array<Record<string, any>>) {
+  const quando = (v: unknown): number | null => (v instanceof Date ? v.getTime() : null);
+  const casa = (l: Record<string, any>, w: Record<string, any>): boolean =>
+    Object.entries(w).every(([k, c]) => {
+      if (k === 'onda' || k === 'conversaChatwoot') return true; // todas são do CRM e têm conversa
+      if (k === 'estado') return typeof c === 'string' ? l.estado === c : c.in.includes(l.estado);
+      if (k === 'unitId') return l.unitId === c;
+      if (k === 'id') return l.id === c;
+      const v = quando(l[k]);
+      if (c === null) return v === null;
+      if ('not' in c) return v !== null;
+      if ('gte' in c) return v !== null && v >= c.gte.getTime();
+      return true;
+    });
   falso('disparoDestinatario', {
-    findMany: async (a: { where: any; orderBy: any; take: number }) => {
-      consultas.push(a);
-      const gte: Date | undefined = a.where.decididoEm?.gte;
-      return linhas.filter((l) => l.decididoEm && gte && l.decididoEm >= gte).sort((x, y) => y.decididoEm!.getTime() - x.decididoEm!.getTime()).slice(0, a.take);
+    findMany: async (a: { where: any; orderBy?: any; take?: number; select?: any }) => {
+      if (a.select?.onda) return linhas.filter((l) => casa(l, a.where)).map((l) => ({ ...l, onda: { unitId: l.unitId, contaChatwoot: 1, unit: { slug: 'u' } } }));
+      const [campo, sentido] = Object.entries(a.orderBy ?? { id: 'asc' })[0] as [string, string];
+      return linhas.filter((l) => casa(l, a.where)).sort((x, y) => ((quando(y[campo]) ?? 0) - (quando(x[campo]) ?? 0)) * (sentido === 'desc' ? 1 : -1)).slice(0, a.take ?? 1e9);
+    },
+    updateMany: async (a: { where: any; data: any }) => {
+      const l = linhas.find((x) => casa(x, a.where));
+      if (l) Object.assign(l, a.data);
+      return { count: l ? 1 : 0 };
     },
   });
+}
+
+test('FREIO DE FALHAS pela VARREDURA de verdade (relógio andando): 5 falhas NOVAS + 20 entregues ANTIGOS decididos na mesma varredura — o freio dispara (a ordem é a do ENVIO, não a do processamento)', async () => {
+  const h = (n: number) => new Date(AGORA.getTime() - n * 3_600_000);
+  const min = (n: number) => new Date(AGORA.getTime() - n * 60_000);
+  const linhas: Array<Record<string, any>> = [
+    ...Array.from({ length: 20 }, (_, i) => ({ id: `ok${i}`, unitId: 'u1', estado: 'enviado', wamid: `cw:${100 + i}`, conversaChatwoot: 100 + i, enviadoEm: h(30 + i), entregueEm: null, lidaEm: null, respondeuEm: null, decididoEm: null })),
+    ...Array.from({ length: 5 }, (_, i) => ({ id: `mau${i}`, unitId: 'u1', estado: 'enviado', wamid: `cw:${200 + i}`, conversaChatwoot: 200 + i, enviadoEm: min(10 + i * 5), entregueEm: null, lidaEm: null, respondeuEm: null, decididoEm: null })),
+  ];
+  bancoDeDestinatarios(linhas);
+  const mensagens = (async (_c: unknown, conversa: number) => [mensagemFalsa(9000 + conversa, 1, { status: conversa >= 200 ? 'failed' : 'delivered' })]) as never;
+  // as mensagens de cada conversa têm o id certo: o wamid da linha é `cw:<conversa>` → ajusta
+  for (const l of linhas) l.wamid = `cw:${9000 + l.conversaChatwoot}`;
+  let passo = 0;
+  const { varrerRespostasDoCrm } = await import('./disparo/chatwoot/rodada.js');
+  await varrerRespostasDoCrm({ ctx: () => criarContextoChatwoot({ url: 'https://x.test', conta: 1, token: 't' }), mensagens, agora: () => AGORA.getTime() + passo++ * 1000 });
+  assert.ok(linhas.every((l) => l.decididoEm instanceof Date), 'todos ficaram decididos na mesma varredura');
+  // quem foi processado primeiro (as falhas novas) ganhou o decididoEm MAIS ANTIGO — a armadilha da ordem por decididoEm
+  const maisAntigoDosMaus = Math.min(...linhas.filter((l) => l.id.startsWith('mau')).map((l) => l.decididoEm.getTime()));
+  const maisAntigoDosBons = Math.min(...linhas.filter((l) => l.id.startsWith('ok')).map((l) => l.decididoEm.getTime()));
+  assert.ok(maisAntigoDosMaus < maisAntigoDosBons, 'pré-condição do teste: a varredura processou as falhas novas ANTES dos entregues antigos');
   const porto = portoChatwoot({ base: baseFalso().porto, unidades: new Map(), ondas: new Map() });
-  const ultimos = await porto.ultimosResultados('u1', 5, h(48));
-  assert.deepEqual(consultas[0]!.orderBy, { decididoEm: 'desc' });
-  assert.deepEqual(ultimos, ['falhou', 'falhou', 'falhou', 'falhou', 'falhou'], 'o envio ainda não decidido não é sucesso (nem falha): as 5 falhas decididas aparecem');
+  const ultimos = await porto.ultimosResultados('u1', 5, h(100));
+  assert.deepEqual(ultimos, ['falhou', 'falhou', 'falhou', 'falhou', 'falhou'], 'os 5 mais recentes pelo ENVIO são as 5 falhas');
   const { falhasSeguidasDemais } = await import('./disparo/freios.js');
-  assert.equal(falhasSeguidasDemais(ultimos, FREIOS_PADRAO), true, 'e o freio de falhas seguidas dispara');
+  assert.equal(falhasSeguidasDemais(ultimos, FREIOS_PADRAO), true);
+});
+
+test('FREIO: envio ANTERIOR à nova aprovação, decidido depois dela, NÃO conta contra a aprovação nova; sem decisão (ainda «sent») também não conta', async () => {
+  const h = (n: number) => new Date(AGORA.getTime() - n * 3_600_000);
+  const aprovacao = h(5);
+  const linhas: Array<Record<string, any>> = [
+    // enviadas ANTES da aprovação (6–8 h atrás), falharam e foram decididas DEPOIS dela (há 2 h): pertencem à aprovação velha
+    ...Array.from({ length: 5 }, (_, i) => ({ id: `v${i}`, unitId: 'u1', estado: 'falhou', wamid: `cw:${i + 1}`, enviadoEm: h(6 + i), decididoEm: h(2), entregueEm: null, lidaEm: null, respondeuEm: null, conversaChatwoot: 1 })),
+    // desta aprovação: 2 entregues decididos
+    { id: 'n1', unitId: 'u1', estado: 'enviado', wamid: 'cw:11', enviadoEm: h(3), decididoEm: h(2), entregueEm: h(2), lidaEm: null, respondeuEm: null, conversaChatwoot: 2 },
+    { id: 'n2', unitId: 'u1', estado: 'enviado', wamid: 'cw:12', enviadoEm: h(1), decididoEm: h(0.5), entregueEm: h(0.5), lidaEm: null, respondeuEm: null, conversaChatwoot: 3 },
+    // desta aprovação mas ainda sem decisão: fora
+    { id: 'n3', unitId: 'u1', estado: 'enviado', wamid: 'cw:13', enviadoEm: h(0.1), decididoEm: null, entregueEm: null, lidaEm: null, respondeuEm: null, conversaChatwoot: 4 },
+  ];
+  bancoDeDestinatarios(linhas);
+  const porto = portoChatwoot({ base: baseFalso().porto, unidades: new Map(), ondas: new Map() });
+  assert.deepEqual(await porto.ultimosResultados('u1', 5, aprovacao), ['enviado', 'enviado'], 'só os 2 desta aprovação e já decididos');
+  const { falhasSeguidasDemais } = await import('./disparo/freios.js');
+  assert.equal(falhasSeguidasDemais(await porto.ultimosResultados('u1', 5, aprovacao), FREIOS_PADRAO), false);
+});
+
+test('varredura: envio PRESO em «sent» há mais de 6 h vai para o fim da fila (não gasta o orçamento na frente dos recentes), e dois grupos de números que se sobrepõem viram UM', async () => {
+  const h = (n: number) => new Date(AGORA.getTime() - n * 3_600_000);
+  const linhas: Array<Record<string, any>> = [
+    { id: 'preso', unitId: 'u1', estado: 'enviado', wamid: 'cw:9001', conversaChatwoot: 1, enviadoEm: h(20), decididoEm: null, entregueEm: null, lidaEm: null, respondeuEm: null },
+    { id: 'novo', unitId: 'u1', estado: 'enviado', wamid: 'cw:9002', conversaChatwoot: 2, enviadoEm: h(1), decididoEm: null, entregueEm: null, lidaEm: null, respondeuEm: null },
+    { id: 'decidido', unitId: 'u1', estado: 'enviado', wamid: 'cw:9003', conversaChatwoot: 3, enviadoEm: h(8), decididoEm: h(7), entregueEm: h(7), lidaEm: null, respondeuEm: null },
+  ];
+  bancoDeDestinatarios(linhas);
+  const lidas: number[] = [];
+  const { varrerRespostasDoCrm } = await import('./disparo/chatwoot/rodada.js');
+  await varrerRespostasDoCrm({ ctx: () => criarContextoChatwoot({ url: 'https://x.test', conta: 1, token: 't' }), mensagens: (async (_c: unknown, c: number) => (lidas.push(c), [])) as never, agora: () => AGORA.getTime() });
+  assert.deepEqual(lidas, [2, 3, 1], 'o novo ainda por decidir, depois o decidido, por último o preso em «sent»');
+
+  // restrição: u1 vê {u1,u2}, u2 vê {u2,u3}: é o MESMO número → uma pausa e um zeramento do contador
+  const { varrerSeChegouAHora, _zerarVarreduraDoCrm } = await import('./disparo/chatwoot/rodada.js');
+  _zerarVarreduraDoCrm();
+  const pausas: Array<Record<string, any>> = [];
+  const zerados: string[] = [];
+  const enviadoEm = h(1);
+  const lin = (id: string, unitId: string, conversa: number) => ({ id, estado: 'enviado', wamid: `cw:${9000 + conversa}`, conversaChatwoot: conversa, enviadoEm, entregueEm: null, lidaEm: null, respondeuEm: null, decididoEm: null, unitId });
+  bancoDeDestinatarios([lin('a', 'u1', 11), lin('b', 'u2', 12)]);
+  falso('unitChatwoot', { findUnique: async (a: { where: { unitId: string } }) => ({ kapsoPhoneNumberId: a.where.unitId === 'u1' ? '111' : '222' }), findMany: async (a: { where: { kapsoPhoneNumberId: string } }) => (a.where.kapsoPhoneNumberId === '111' ? [{ unitId: 'u1' }, { unitId: 'u2' }] : [{ unitId: 'u2' }, { unitId: 'u3' }]) });
+  falso('unit', { findMany: async (a: { where: { id: { in: string[] } } }) => a.where.id.in.map((id) => ({ slug: `slug-${id}` })) });
+  falso('disparoOnda', { updateMany: async (a: Record<string, any>) => (pausas.push(a), { count: 1 }) });
+  falso('disparoLimite', { deleteMany: async (a: { where: { unitId: { in: string[] } } }) => (zerados.push(...a.where.unitId.in), { count: 1 }) });
+  await varrerSeChegouAHora({
+    ctx: () => criarContextoChatwoot({ url: 'https://x.test', conta: 1, token: 't' }),
+    mensagens: (async (_c: unknown, c: number) => [mensagemFalsa(9000 + c, 1, { status: 'failed', erro: 'Meta 131048: spam' })]) as never,
+    agora: () => AGORA.getTime(),
+  });
+  const grupos = pausas.filter((x) => x.data?.estado === 'pausada').map((x) => x.where.unitId.in.slice().sort().join(','));
+  assert.deepEqual(grupos, ['u1,u2,u3'], 'um grupo só, com as três (não dois alertas para o mesmo número)');
+  assert.deepEqual([...new Set(zerados)].sort(), ['crm:u1', 'crm:u2', 'crm:u3'], 'e o contador de limite de taxa das unidades recomeça do zero, como no pausarNumero do Porto');
 });
 
 test('decidido em: falha (recusa do CRM, envio incerto) é marcada na hora; envio aceito NÃO é marcado (só a varredura, ao ver entregue/lida)', async () => {
@@ -1071,6 +1160,7 @@ test('restrição da Meta em DOIS números diferentes: um grupo (e uma pausa) po
   });
   falso('unit', { findMany: async (a: { where: { id: { in: string[] } } }) => a.where.id.in.map((id) => ({ slug: `slug-${id}` })) });
   falso('disparoOnda', { updateMany: async (a: (typeof pausas)[number]) => (pausas.push(a), { count: 1 }) });
+  falso('disparoLimite', { deleteMany: async () => ({ count: 0 }) });
   await varrerSeChegouAHora({
     ctx: () => criarContextoChatwoot({ url: 'https://x.test', conta: 1, token: 't' }),
     mensagens: (async () => [{ id: 9001, tipo: 1, privada: false, conteudo: '', criadaEm: enviadoEm, status: 'failed', erro: 'Meta 131048: spam' }, { id: 9002, tipo: 1, privada: false, conteudo: '', criadaEm: enviadoEm, status: 'failed', erro: 'Meta 131048: spam' }]) as never,
