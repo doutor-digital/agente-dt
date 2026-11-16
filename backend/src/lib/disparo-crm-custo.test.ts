@@ -127,3 +127,21 @@ test('o preço vem da tabela de custo da PRÓPRIA unidade (whatsapp_cost_daily) 
   assert.equal((consultas[0]!.where.date.gte as Date).toISOString().slice(0, 10), '2026-08-19', '90 dias para trás');
   assert.equal(await lerPrecoDaUnidade('u1', null), null);
 });
+
+test('teto de gasto NÃO falha aberto: se o banco ou o câmbio falhar depois de um preço bom, vale o último preço; várias categorias na unidade valem pelo MAIOR preço', async () => {
+  const { precoEmReaisDoBanco, maiorPrecoDasOndas, _esquecerPrecosDeGasto } = await import('./disparo/chatwoot/rodada.js');
+  const { _definirCambio } = await import('./disparo/chatwoot/custo.js');
+  _esquecerPrecosDeGasto();
+  _definirCambio(5.6);
+  falso('whatsappCostDaily', { findMany: async () => [{ pricingCategory: 'MARKETING_LITE', pricingType: 'REGULAR', country: 'BR', volume: 100, costUsd: '6.25' }] });
+  assert.equal(await precoEmReaisDoBanco('u1', 'MARKETING'), 0.35);
+  falso('whatsappCostDaily', { findMany: async () => { throw new Error('banco fora'); } });
+  assert.equal(await precoEmReaisDoBanco('u1', 'MARKETING'), 0.35, 'o banco caiu: segue o último preço bom');
+  _definirCambio(null);
+  assert.equal(await precoEmReaisDoBanco('u1', 'MARKETING'), 0.35, 'o câmbio caiu: idem');
+  assert.equal(await precoEmReaisDoBanco('u2', 'MARKETING'), null, 'unidade que nunca teve preço: desconhecido');
+  const preco = async (_u: string, c: string | null) => (c === 'MARKETING' ? 0.35 : c === 'UTILITY' ? 0.03 : null);
+  assert.equal(await maiorPrecoDasOndas(preco, 'u1', ['UTILITY', 'MARKETING', 'MARKETING']), 0.35);
+  assert.equal(await maiorPrecoDasOndas(preco, 'u1', ['UTILITY', 'AUTHENTICATION']), 0.03, 'categoria sem preço não zera o teto das outras');
+  assert.equal(await maiorPrecoDasOndas(preco, 'u1', ['AUTHENTICATION']), null);
+});

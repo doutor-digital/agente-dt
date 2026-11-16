@@ -226,7 +226,8 @@ export async function aprovarOndaChatwoot(
     return falha(409, 'a lista ou o texto mudou desde que você abriu a tela; recarregue e confira de novo');
   }
   // O MÁXIMO de pessoas: a aprovação o confere junto com total e impressão (a tela mostrou este número) e a lista nunca o passa.
-  if (onda.maximoPessoas == null || args.maximo !== onda.maximoPessoas) return falha(409, 'o máximo de pessoas deste disparo mudou ou não foi conferido; recarregue a tela e confira de novo');
+  if (onda.maximoPessoas == null) return falha(409, 'este disparo foi montado antes de existir o máximo de pessoas; monte-o de novo, dizendo o máximo');
+  if (args.maximo !== onda.maximoPessoas) return falha(409, 'o máximo de pessoas deste disparo mudou ou não foi conferido; recarregue a tela e confira de novo');
   if (pessoas.length > onda.maximoPessoas) return falha(409, `a lista (${pessoas.length}) passa do máximo de ${onda.maximoPessoas} pessoas: monte o disparo de novo`);
   // O CUSTO: conhecido, a tela o mostrou; DESCONHECIDO, só aprova quem confirma explicitamente que aceita (a mensagem diz porquê).
   const custo = await (deps.estimar ?? ((o) => estimativaDoDisparo(o.unitId, o.categoriaModelo, o.total)))({ unitId: onda.unitId, categoriaModelo: onda.categoriaModelo, total: onda.total });

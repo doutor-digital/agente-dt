@@ -32,7 +32,7 @@ import { caixaWhatsappOficial, conferirModeloDaOnda, modelosDaCaixa } from '../l
 import { ajusteDaUnidade, ehAdministradorDD, freiosComOTier, gravarAjuste, quemAprova, tetoDoTier, tierValido } from '../lib/disparo/chatwoot/ajuste.js';
 import { ATRIBUTOS_USUAIS, filtroSchema } from '../lib/disparo/chatwoot/filtro.js';
 import { abrirOndaChatwoot, aprovarOndaChatwoot, concluirMontagemChatwoot, ctxDaUnidadeNoCrm, depsDoPublico, MAXIMO_POR_DISPARO, ORIGEM_CRM, PREFIXO_CUSTO_DESCONHECIDO } from '../lib/disparo/chatwoot/onda.js';
-import { estimativaDoDisparo, freiosComTetoDeGasto, mensagensPorGasto, ritmoDaOnda, tetoReaisPorDia, type EstimativaDeCusto } from '../lib/disparo/chatwoot/custo.js';
+import { estimativaDoDisparo, ritmoDaOnda, tetoReaisPorDia, type EstimativaDeCusto } from '../lib/disparo/chatwoot/custo.js';
 import { modoDoDisparoNoCrm } from '../lib/disparo/chatwoot/porto.js';
 import { taxasDoRelatorio } from '../lib/disparo/chatwoot/relatorio.js';
 import { lerEnviosPorHora, lerNumerosDosDisparos, NUMEROS_VAZIOS } from '../lib/disparo/chatwoot/relatorio-banco.js';
@@ -519,11 +519,9 @@ export async function disparosRelatorioHandler(req: Request, res: Response): Pro
     });
     const numerosPorOnda = await lerNumerosDosDisparos(ondas.map((o) => o.id)); // agrupado no banco: não lê linha nenhuma
     // o preço por mensagem de cada categoria (uma leitura por categoria): gasto estimado = enviadas × preço; sem preço, `null` (nunca um palpite)
-    const precoPorCategoria = new Map<string, number | null>();
-    for (const cat of new Set(ondas.map((o) => o.categoriaModelo).filter((c): c is string => !!c))) {
-      const e = await comTeto(estimativaDoDisparo(r.unit.id, cat, 1), TETO_DA_PARTE_MS, null);
-      precoPorCategoria.set(cat, e?.porMensagemBrl ?? null);
-    }
+    const categorias = [...new Set(ondas.map((o) => o.categoriaModelo).filter((c): c is string => !!c))];
+    const precos = await Promise.all(categorias.map((cat) => comTeto(estimativaDoDisparo(r.unit.id, cat, 1), TETO_DA_PARTE_MS, null)));
+    const precoPorCategoria = new Map<string, number | null>(categorias.map((cat, i) => [cat, precos[i]?.porMensagemBrl ?? null]));
     res.set('Cache-Control', 'no-store').json({
       modo: modoDoDisparoNoCrm(r.unit.slug),
       campanhas: ondas.map((o) => {

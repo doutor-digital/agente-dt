@@ -389,7 +389,7 @@ a{color:var(--brand)}
     if (o.aprovadaPor) c.appendChild(el('p', 'mudo', 'Aprovada por ' + o.aprovadaPor + ' em ' + quando(o.aprovadaEm) + (o.aprovadaModo && o.aprovadaModo !== 'ligado' ? ' (com a unidade em ' + (o.aprovadaModo === 'seco' ? 'seco' : 'modo desligado') + ': não vale como aprovação de envio)' : '') + '.'));
     var f = el('div', 'fatos'); fato(f, o.total, 'pessoas'); fato(f, o.candidatos == null ? '—' : o.candidatos, 'passaram no filtro'); fato(f, o.contagem.enviado || 0, 'enviadas'); fato(f, o.simulados, 'com «receberia» (seco)'); fato(f, (o.contagem.falhou || 0) + (o.contagem.saiu || 0) + (o.contagem.descartado || 0), 'falharam, pediram SAIR ou saíram da lista'); c.appendChild(f);
     col.appendChild(c);
-    if (o.custo) col.appendChild(cartaoDeCusto(o));
+    if (o.custo && o.estado !== 'montando' && o.total > 0) col.appendChild(cartaoDeCusto(o));
     if (o.relatorio && o.relatorio.numeros.enviadas + o.relatorio.numeros.falharam + o.relatorio.numeros.incertas > 0) {
       var cr = el('div', 'card'); cr.appendChild(el('h2', null, 'Relatório')); var n = o.relatorio.numeros, fr2 = el('div', 'fatos');
       if (o.gastoEstimadoBrl != null) fato(fr2, brl(o.gastoEstimadoBrl), 'gasto até agora (estimado pelas enviadas)');
