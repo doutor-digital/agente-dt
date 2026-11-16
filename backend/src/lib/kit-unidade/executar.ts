@@ -273,6 +273,17 @@ async function aplicarPasso(p: Passo, q: Questionario, o: OpcoesDeExecucao, unit
   }
 }
 
+/**
+ * O código de saída do `--aplicar`: 0 = nada de errado (feito, já estava ou manual); 1 = alguma etapa FALHOU; 3 = alguma etapa foi RECUSADA («não» na pergunta), ficou BLOQUEADA ou NÃO RODOU
+ * (a execução parou antes): a clínica NÃO está pronta e quem encadeia o kit (abrir-clinica-joao.sh) não pode seguir para o proxy nem dizer «pronto».
+ */
+export function codigoDeSaida(plano: Plano, resultados: Resultado[]): number {
+  if (resultados.some((r) => r.situacao === 'falhou')) return 1;
+  const naoRodou = plano.passos.some((p) => !resultados.some((r) => r.id === p.id));
+  if (naoRodou || resultados.some((r) => r.situacao === 'recusado' || r.situacao === 'bloqueado')) return 3;
+  return 0;
+}
+
 /** O relatório do que a execução fez e do que ainda falta. */
 export function relatorioFinal(plano: Plano, resultados: Resultado[]): string {
   const l: string[] = ['', 'RELATÓRIO FINAL', ''];

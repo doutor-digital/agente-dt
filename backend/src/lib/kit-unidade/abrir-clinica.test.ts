@@ -350,3 +350,16 @@ test('a conexão ssh é compartilhada (ControlMaster) e fechada no fim', () => {
   assert.ok(c.length > 0 && c.every((l) => /-o ControlMaster=auto -o ControlPath=\S+\/%C -o ControlPersist=10m/.test(l)));
   assert.ok(e.chamadas().some((l) => l.includes('-O exit')), 'fecha a conexão compartilhada');
 });
+
+test('nova-unidade --aplicar com etapa RECUSADA/BLOQUEADA (sai ≠ 0): PARA, não mexe no proxy, não reinicia o serviço e não diz «PRONTO»', () => {
+  const e = ambiente();
+  const r = e.rodar(['clinica-demonstracao'], { entrada: 'aplicar\n', env: { FALHAR_EM: "nova-unidade-joao.sh 'clinica-demonstracao' --aplicar", FALHAR_CODIGO: '3' } });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stdout, /PAREI no passo «6b\./);
+  assert.match(r.stdout, /RELATÓRIO FINAL acima/);
+  assert.match(r.stdout, /NÃO mexi no proxy/);
+  assert.doesNotMatch(r.stdout, /PRONTO: «/);
+  const passos = scriptsDoKit(e.chamadas());
+  assert.equal(passos[passos.length - 1], "nova-unidade 'clinica-demonstracao' --aplicar");
+  assert.ok(!passos.some((p) => p.startsWith('regra-traefik \'demo\'') && !p.includes('--so-conferir') || p.startsWith('cofre-para-servico')));
+});

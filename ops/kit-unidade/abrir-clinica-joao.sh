@@ -12,7 +12,8 @@
 #   3  conferências na VPS (criar-platform-app-joao.sh, nova-unidade-joao.sh e regra-traefik-joao.sh, cada um com --so-conferir)
 #   4  plano em SECO (nada é gravado)
 #   5  pergunta «aplicar?» — a ÚNICA pergunta deste comando
-#   6  criar-platform-app-joao.sh (idempotente) → nova-unidade-joao.sh --aplicar (as perguntas de cada etapa continuam)
+#   6  criar-platform-app-joao.sh (idempotente) → nova-unidade-joao.sh --aplicar (as perguntas de cada etapa continuam; etapa RECUSADA, BLOQUEADA ou que NÃO RODOU = o kit sai com código ≠ 0 e este
+#      comando PARA ali: nunca segue para o proxy nem diz «PRONTO» com a clínica pela metade)
 #   7  cofre-para-servico-joao.sh <SUFIXO> --so-conferir (as chaves da conta estão no cofre? senão PARA antes de mexer no proxy) → regra-traefik-joao.sh <subdomínio>
 #      → cofre-para-servico-joao.sh <SUFIXO> (reinicia o serviço ddagent_agent, ~1 min)
 #   8  resumo do que falta (número, modelos na Meta, franquia, teste da Sofia…)
@@ -208,7 +209,7 @@ fi
 # ── 6. aplica ───────────────────────────────────────────────────────────────────────────────────────────
 passo "6a. Platform App (cria só se ainda não existir)" "na VPS: bash $DESTINO/ops/kit-unidade/criar-platform-app-joao.sh --so-conferir  (ele diz o que está errado)."
 remoto "bash ops/kit-unidade/criar-platform-app-joao.sh"
-passo "6b. criar a clínica no CRM (perguntas por etapa)" "leia o erro acima. Se você respondeu «não» a uma etapa, rode o comando de novo e responda s: o que já existe é reconhecido."
+passo "6b. criar a clínica no CRM (perguntas por etapa)" "veja o RELATÓRIO FINAL acima. Se alguma etapa saiu RECUSADA (você respondeu «não»), BLOQUEADA ou NÃO RODOU, a clínica NÃO está pronta e eu NÃO mexi no proxy: rode o MESMO comando de novo e responda s às etapas que faltam (o que já existe é reconhecido). Código 1 = uma etapa FALHOU."
 remoto "bash ops/kit-unidade/nova-unidade-joao.sh '$SLUG' --aplicar"
 
 # ── 7. subdomínio e chaves ──────────────────────────────────────────────────────────────────────────────

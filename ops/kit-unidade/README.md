@@ -65,4 +65,5 @@ e só o `chatwoot_sidekiq` reinicia (o CRM não sai do ar). Arquivo já com e-ma
 - Nunca `ssh … 'bash -s' < script`: o `docker exec -i` engole o resto do script. Rode o arquivo.
 - Clínica de demonstração: a caixa API fica registrada como `cloud`; não ligue as automações do Chatwoot nela.
 - A lista dos administradores da Doutor Digital que entram em toda conta nova vem de `KIT_ADMINS_DD` (exportada na VPS antes de rodar o `nova-unidade-joao.sh`, que a repassa ao contêiner sem imprimir) ou de `chatwoot.admins_dd` no questionário.
+- `nova-unidade-joao.sh --aplicar` sai com código 0 só se nada foi recusado/bloqueado/falhou/deixou de rodar; código 1 = uma etapa FALHOU, código 3 = etapa RECUSADA («n»), BLOQUEADA ou que NÃO RODOU (a clínica não está pronta; rode de novo respondendo «s»). O `abrir-clinica-joao.sh` para nesses casos, antes do proxy.
 - Quem aplica em produção é o João. Nada aqui foi rodado na VPS por quem escreveu; a primeira vez é sempre `--so-conferir`.

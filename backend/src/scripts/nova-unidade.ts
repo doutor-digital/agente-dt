@@ -22,7 +22,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline/promises';
 import { AUTOMACOES } from '../lib/automacoes.js';
-import { executarPlano, relatorioFinal, type BancoPorta } from '../lib/kit-unidade/executar.js';
+import { executarPlano, relatorioFinal, type BancoPorta, codigoDeSaida } from '../lib/kit-unidade/executar.js';
 import { contaHttp, contaHttpSoLeitura, plataformaHttp } from '../lib/kit-unidade/chatwoot-http.js';
 import { kapsoHttp } from '../lib/kit-unidade/kapso-http.js';
 import type { PortasExternas } from '../lib/kit-unidade/portas.js';
@@ -256,7 +256,9 @@ async function main(): Promise<void> {
   });
   rl.close();
   console.log(relatorioFinal(plano, resultados));
-  process.exit(resultados.some((r) => r.situacao === 'falhou') ? 1 : 0);
+  const codigo = codigoDeSaida(plano, resultados);
+  if (codigo === 3) console.log('\nATENÇÃO: alguma etapa foi RECUSADA, ficou BLOQUEADA ou NÃO RODOU — a clínica NÃO está pronta. Rode de novo e responda «s» às etapas que faltam (o que já existe é reconhecido).');
+  process.exit(codigo);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
