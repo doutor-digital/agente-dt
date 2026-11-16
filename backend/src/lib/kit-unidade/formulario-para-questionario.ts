@@ -8,7 +8,8 @@
  * equipe, Pix, telefone): vai para `unidades/privado/` da VPS, modo 600 — nunca para o GitHub nem para log.
  */
 import type { RespostasFormulario } from './formulario.js';
-import { kebab, sugestoesDoKit } from './formulario.js';
+import { kebab, objecaoMudou, sugestoesDoKit } from './formulario.js';
+import { OBJECOES_PADRAO } from './assistente-padrao.js';
 import { validarQuestionario } from './questionario.js';
 
 /** Fuso por estado (o questionário assume America/Belem; clínica no ES ou no AC não pode herdar isso). */
@@ -76,6 +77,39 @@ export function prefixoDeModelos(cidade: string): string {
   return /^[a-z]/.test(letras) && letras.length >= 2 ? `${letras}_` : 'clin_';
 }
 
+/** Só campo preenchido entra (o questionário não carrega vazio). */
+const sem = <T extends Record<string, unknown>>(o: T): Partial<T> => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined && v !== '')) as Partial<T>;
+
+/**
+ * A seção «Assistente virtual» do formulário → bloco `assistente` do questionário. `quer: false` → só isso (a Sofia não é configurada). Das objeções só vão as que o dono MUDOU ou criou:
+ * as que ficaram iguais ao padrão da rede já estão no roteiro da rede e não viram aprendizado. O tom «próximo» do formulário é o `friendly` do kit.
+ */
+export function assistenteDoFormulario(a: RespostasFormulario['assistente']): Record<string, unknown> {
+  if (!a.quer) return { quer: false };
+  const objecoes = (a.objecoes ?? [])
+    .filter((o) => objecaoMudou(o.id, o.resposta))
+    .map((o) => ({ gatilho: o.id === 'outra' ? o.gatilho! : OBJECOES_PADRAO.find((p) => p.id === o.id)!.gatilho, resposta: o.resposta! }));
+  const pc = a.primeira_consulta ? sem(a.primeira_consulta) : undefined;
+  const pg = a.pagamento ? sem(a.pagamento) : undefined;
+  const qr = a.quem_recebe ? sem(a.quem_recebe) : undefined;
+  return sem({
+    quer: true,
+    emoji: a.emoji,
+    quando_atende: a.quando_atende,
+    quando_atende_detalhe: a.quando_atende === 'personalizado' ? a.quando_atende_detalhe : undefined,
+    saudacao: a.saudacao,
+    diferenciais: a.diferenciais,
+    primeira_consulta: pc && Object.keys(pc).length ? pc : undefined,
+    pagamento: pg && Object.keys(pg).length ? pg : undefined,
+    nao_atende: a.nao_atende,
+    objecoes: objecoes.length ? objecoes : undefined,
+    nunca_extra: a.nunca_extra,
+    passar_extra: a.passar_extra,
+    quem_recebe: qr && Object.keys(qr).length ? qr : undefined,
+    faq: a.faq?.length ? a.faq.map((f) => ({ pergunta: f.pergunta, resposta: f.resposta })) : undefined,
+  });
+}
+
 export function questionarioDoFormulario(r: RespostasFormulario, ajustes: Ajustes = {}): QuestionarioGerado {
   const sug = sugestoesDoKit(r.clinica.cidade);
   const slug = ajustes['unidade.slug'] ?? sug.slug;
@@ -126,7 +160,8 @@ export function questionarioDoFormulario(r: RespostasFormulario, ajustes: Ajuste
       ...(adAccount ? { ad_account: adAccount } : {}), ...(bm ? { business_manager_id: bm } : {}),
       token_env: `META_ADS_TOKEN_${sufixo}`, conta_env: `META_ADS_CONTA_${sufixo}`, dataset_id_env: `META_DATASET_ID_${sufixo}`,
     },
-    sofia: { nome_ia: r.sofia.nome_ia, tom: r.sofia.tom },
+    sofia: { nome_ia: r.assistente.quer ? (r.assistente.nome_ia ?? 'Sofia') : 'Sofia', tom: r.assistente.quer && r.assistente.tom === 'formal' ? 'formal' : 'friendly' },
+    assistente: assistenteDoFormulario(r.assistente),
   };
   // o que o dono NÃO tem como saber vira pendência com nome claro (o zod só diria «Required»); o resto vem da validação do próprio kit
   const faltando: [string, string][] = [];

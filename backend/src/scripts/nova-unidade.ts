@@ -177,6 +177,15 @@ async function bancoReal(): Promise<BancoPorta> {
     async gravarSofia(unitId, campos) {
       await prisma.unit.update({ where: { id: unitId }, data: campos as never });
     },
+    licoes: {
+      async listar(unitId) {
+        return (await prisma.unitLesson.findMany({ where: { unitId }, select: { content: true } })).map((l) => l.content);
+      },
+      async criar(unitId, textos) {
+        // fonte «unidade» = a mesma da página /aprendizados: a clínica vê, edita e desliga lá
+        await prisma.unitLesson.createMany({ data: textos.map((content) => ({ unitId, content, source: 'unidade', enabled: true })) });
+      },
+    },
     async caixasRegistradas(unitId) {
       return (await prisma.unitChatwootCaixa.findMany({ where: { unitId }, select: { caixaId: true } })).map((c) => c.caixaId);
     },

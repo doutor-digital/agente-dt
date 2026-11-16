@@ -8,7 +8,7 @@
 import { AUTOMACOES } from '../automacoes.js';
 import { gerenteDaConta, novoEstado, passoAtendentes, passoAutomacoesDaConta, passoAtributos, passoCaixa, passoConta, passoDashboardApp, passoEtiquetas, passoMensagensProntas, passoModelos, passoRobo, passoTime, passoUsuarioCelular, passoWebhook, type EstadoDaExecucao } from './fase2.js';
 import { ErroSoLeitura, type PortasExternas } from './portas.js';
-import { CAMPOS_SO_NA_CRIACAO, camposDaSofia, camposDaUnidade } from './molde-sofia.js';
+import { CAMPOS_SO_NA_CRIACAO, camposDaSofia, camposDaUnidade, licoesDaAssistente } from './molde-sofia.js';
 import { aGravar, dadosDosModelosAGravar } from './protecao.js';
 import type { Passo, Plano } from './plano.js';
 import { configChatwootDoQuestionario, type Questionario } from './questionario.js';
@@ -43,6 +43,8 @@ export interface BancoPorta {
   /** persona/fontes/prompt hoje */
   sofiaDaUnidade(unitId: string): Promise<Record<string, unknown>>;
   gravarSofia(unitId: string, campos: Record<string, unknown>): Promise<void>;
+  /** aprendizados (regras) da unidade: `listar` devolve os textos que já existem; `criar` grava novos com fonte «unidade». Opcional: sem isto o passo avisa e não grava aprendizados */
+  licoes?: { listar(unitId: string): Promise<string[]>; criar(unitId: string, textos: string[]): Promise<void> };
   /** ids das caixas já registradas para a unidade */
   caixasRegistradas(unitId: string): Promise<number[]>;
   /** registra a caixa (idempotente: a mesma caixa não duplica) */
@@ -207,6 +209,7 @@ async function aplicarPasso(p: Passo, q: Questionario, o: OpcoesDeExecucao, unit
       return [novas.length ? `em seco: ${novas.join(', ')}` : 'nenhuma a criar'];
     }
     case 'sofia': {
+      if (q.assistente?.quer === false) return ['a clínica NÃO quer a assistente: Sofia não configurada (nada gravado)'];
       const id = await garantirUnidade();
       const { campos, avisos } = camposDaSofia(q, o.molde);
       const hoje = await banco.sofiaDaUnidade(id);
@@ -222,6 +225,19 @@ async function aplicarPasso(p: Passo, q: Questionario, o: OpcoesDeExecucao, unit
       notas.push(Object.keys(gravar).length ? `gravados: ${Object.keys(gravar).join(', ')}` : 'nada a gravar (tudo já preenchido)');
       const ficaram = preservados.filter((k) => k !== 'systemPrompt');
       if (ficaram.length) notas.push(`ficaram como estão (já preenchidos, diferem do questionário; --sobrescrever troca): ${ficaram.join(', ')}`);
+      // aprendizados da clínica (idempotente: texto igual a um que já existe não duplica)
+      const lic = licoesDaAssistente(q);
+      for (const r of lic.recusadas) notas.push(`aprendizado RECUSADO pelas travas da rede (não gravei): «${r.texto}» — ${r.motivo}`);
+      if (lic.textos.length) {
+        if (!banco.licoes) notas.push(`${lic.textos.length} aprendizado(s) da clínica NÃO gravados (este ambiente não tem a porta de aprendizados)`);
+        else {
+          const norm = (t: string) => t.trim().replace(/\s+/g, ' ').toLowerCase();
+          const jaTem = new Set((await banco.licoes.listar(id)).map(norm));
+          const novos = lic.textos.filter((t) => !jaTem.has(norm(t)));
+          if (novos.length) await banco.licoes.criar(id, novos);
+          notas.push(`aprendizados da clínica: ${novos.length} gravado(s), ${lic.textos.length - novos.length} já existiam`);
+        }
+      }
       return notas;
     }
     case 'conta': {

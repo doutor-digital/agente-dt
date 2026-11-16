@@ -11,6 +11,8 @@
  * assim a pessoa vê o erro na hora, e não só o João quando for rodar o kit.
  */
 import { z } from 'zod';
+import { recusaDaRegra, recusaDeFato } from '../aprendizados-unidade.js';
+import { MAX_OBJECOES_EXTRAS, MAX_RESPOSTA_OBJECAO, OBJECOES_PADRAO } from './assistente-padrao.js';
 
 const hora = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Use o formato 08:00 (hora:minuto).');
 /** Troca caractere de controle e quebra de linha por espaço (o texto vai para o terminal do João e para frases ditas ao paciente: nada de linha forjada nem ANSI). */
@@ -44,11 +46,118 @@ const opcional = <T extends z.ZodTypeAny>(s: T) => z.preprocess((v) => (v === ''
 const email = z.string({ required_error: 'Preencha o e-mail.' }).trim().toLowerCase().email('Esse e-mail não parece certo.').max(120);
 const telefone = z.string().trim().regex(/^[\d\s()+-]{8,20}$/, 'Digite o telefone com DDD, só números, espaço, parênteses ou traço.');
 
+/** Texto de FATO (vai para as fontes da Sofia): sem marcação, sem mandar ignorar regra, sem pronto-socorro, sem valor em reais. */
+const fato = (min: number, max: number, nome: string) => texto(min, max, nome).superRefine((v, ctx) => {
+  const m = recusaDeFato(v);
+  if (m) ctx.addIssue({ code: z.ZodIssueCode.custom, message: m });
+});
+/** Texto que vira REGRA da unidade (aprendizado): passa pelas mesmas travas da página /aprendizados (cura, desconto, diagnóstico, urgência…). */
+const regra = (min: number, max: number, nome: string) => texto(min, max, nome).superRefine((v, ctx) => {
+  const m = recusaDaRegra(v);
+  if (m) ctx.addIssue({ code: z.ZodIssueCode.custom, message: m });
+});
+const contatoDaEquipe = z.string().trim().max(80).refine((v) => /^[\w.+-]+@[\w-]+(\.[\w-]+)+$/.test(v) || /^[\d\s()+-]{8,20}$/.test(v), 'Escreva um e-mail ou um telefone da equipe. Nunca senha nem código de acesso.');
+const normaliza = (t: string) => t.normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
+
+const IDS_DE_OBJECAO = [...OBJECOES_PADRAO.map((o) => o.id), 'outra'] as unknown as [string, ...string[]];
+
+/**
+ * A seção «Assistente virtual (IA)»: opcional. `quer: false` = nada mais é aceito (a Sofia não é configurada). Com `quer: true` os campos marcados são obrigatórios.
+ * O que o dono escreve é DADO: vira fonte de informação ou «aprendizado» abaixo das regras da rede (que sempre vencem), nunca instrução do sistema.
+ */
+const Assistente = z
+  .object({
+    quer: z.boolean({ required_error: 'Diga se a clínica quer a assistente virtual.', invalid_type_error: 'Diga se a clínica quer a assistente virtual.' }),
+    nome_ia: z.preprocess((v) => (v === '' || v === null ? undefined : v), texto(2, 30, 'Nome da assistente').optional()),
+    tom: z.enum(['proximo', 'formal'], { errorMap: () => ({ message: 'Escolha o jeito de falar.' }) }).optional(),
+    emoji: z.enum(['sim', 'pouco', 'nao'], { errorMap: () => ({ message: 'Escolha como usar emojis.' }) }).optional(),
+    quando_atende: z.enum(['sempre', 'fora-expediente', 'noite-fim-semana', 'personalizado'], { errorMap: () => ({ message: 'Escolha quando a assistente atende.' }) }).optional(),
+    quando_atende_detalhe: opcional(fato(3, 200, 'Horário da assistente')),
+    saudacao: opcional(regra(10, 300, 'Como a clínica quer ser apresentada')),
+    diferenciais: opcional(fato(5, 500, 'Diferenciais')),
+    primeira_consulta: z
+      .object({
+        como_funciona: opcional(fato(10, 500, 'Como funciona a primeira consulta')),
+        duracao: opcional(fato(2, 100, 'Duração')),
+        o_que_levar: opcional(fato(3, 300, 'O que levar')),
+        chegada: opcional(fato(3, 100, 'Antecedência de chegada')),
+      })
+      .strict()
+      .optional(),
+    pagamento: z
+      .object({
+        formas: opcional(fato(3, 300, 'Formas de pagamento')),
+        parcelamento: opcional(fato(3, 300, 'Parcelamento')),
+        convenio: z.enum(['nao', 'sim', 'reembolso'], { errorMap: () => ({ message: 'Diga se a clínica aceita convênio.' }) }).optional(),
+        convenio_quais: opcional(fato(2, 200, 'Quais convênios')),
+        remarcacao: opcional(fato(10, 400, 'Remarcação, falta e cancelamento')),
+      })
+      .strict()
+      .optional(),
+    nao_atende: opcional(fato(3, 400, 'Quem a clínica não atende')),
+    objecoes: z
+      .array(
+        z
+          .object({
+            id: z.enum(IDS_DE_OBJECAO, { errorMap: () => ({ message: 'Objeção desconhecida.' }) }),
+            gatilho: opcional(texto(3, 80, 'O que o paciente diz')),
+            resposta: opcional(regra(10, MAX_RESPOSTA_OBJECAO, 'Resposta')),
+          })
+          .strict(),
+      )
+      .max(OBJECOES_PADRAO.length + MAX_OBJECOES_EXTRAS, 'Muitas objeções.')
+      .optional(),
+    nunca_extra: opcional(regra(10, 300, 'O que a assistente nunca pode dizer')),
+    passar_extra: opcional(regra(10, 300, 'Outras situações para chamar uma pessoa')),
+    quem_recebe: z.object({ nome: opcional(texto(3, 80, 'Nome de quem recebe')), contato: opcional(contatoDaEquipe) }).strict().optional(),
+    faq: z
+      .array(z.object({ pergunta: fato(5, 120, 'Pergunta'), resposta: fato(3, 300, 'Resposta') }).strict())
+      .max(10, 'No máximo 10 perguntas frequentes.')
+      .optional(),
+  })
+  .strict()
+  .superRefine((a, ctx) => {
+    const erro = (path: (string | number)[], message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, path, message });
+    if (!a.quer) {
+      const { quer: _q, ...resto } = a;
+      if (Object.values(resto).some((v) => v !== undefined && !(Array.isArray(v) && v.length === 0))) erro(['quer'], 'A clínica disse que NÃO quer a assistente: não envie os outros campos dela.');
+      return;
+    }
+    const obrigatorio = (ok: unknown, path: (string | number)[], msg: string) => {
+      if (!ok) erro(path, msg);
+    };
+    obrigatorio(a.tom, ['tom'], 'Escolha o jeito de falar.');
+    obrigatorio(a.emoji, ['emoji'], 'Escolha como usar emojis.');
+    obrigatorio(a.quando_atende, ['quando_atende'], 'Escolha quando a assistente atende.');
+    if (a.quando_atende === 'personalizado') obrigatorio(a.quando_atende_detalhe, ['quando_atende_detalhe'], 'Escreva em que horários a assistente atende.');
+    obrigatorio(a.saudacao, ['saudacao'], 'Escreva como a clínica quer ser apresentada.');
+    obrigatorio(a.primeira_consulta?.como_funciona, ['primeira_consulta', 'como_funciona'], 'Explique como funciona a primeira consulta.');
+    obrigatorio(a.primeira_consulta?.o_que_levar, ['primeira_consulta', 'o_que_levar'], 'Diga o que levar (se não precisa de nada, escreva «nada»).');
+    obrigatorio(a.primeira_consulta?.chegada, ['primeira_consulta', 'chegada'], 'Diga com quanta antecedência chegar.');
+    obrigatorio(a.pagamento?.formas, ['pagamento', 'formas'], 'Diga as formas de pagamento.');
+    obrigatorio(a.pagamento?.convenio, ['pagamento', 'convenio'], 'Diga se a clínica aceita convênio.');
+    if (a.pagamento?.convenio && a.pagamento.convenio !== 'nao') obrigatorio(a.pagamento.convenio_quais, ['pagamento', 'convenio_quais'], 'Diga quais convênios (ou como funciona o reembolso).');
+    obrigatorio(a.pagamento?.remarcacao, ['pagamento', 'remarcacao'], 'Explique a política de remarcação, falta e cancelamento.');
+    obrigatorio(a.quem_recebe?.nome, ['quem_recebe', 'nome'], 'Diga quem da equipe recebe o atendimento quando a assistente chama uma pessoa.');
+    // objeções: cada padrão no máximo uma vez; «outra» exige o que o paciente diz E a resposta
+    const vistos = new Set<string>();
+    let extras = 0;
+    (a.objecoes ?? []).forEach((o, i) => {
+      if (o.id === 'outra') {
+        extras += 1;
+        if (!o.gatilho) erro(['objecoes', i, 'gatilho'], 'Escreva o que o paciente diz.');
+        if (!o.resposta) erro(['objecoes', i, 'resposta'], 'Escreva a resposta.');
+      } else if (vistos.has(o.id)) erro(['objecoes', i, 'id'], 'Essa objeção aparece duas vezes.');
+      vistos.add(o.id);
+    });
+    if (extras > MAX_OBJECOES_EXTRAS) erro(['objecoes'], `No máximo ${MAX_OBJECOES_EXTRAS} objeções suas além das da lista.`);
+  });
+
 export const FUNCOES_DA_EQUIPE = ['gerente', 'secretaria', 'sdr', 'observador'] as const;
 
 export const RespostasFormulario = z
   .object({
-    quem: z.object({ nome: texto(3, 80, 'Seu nome'), contato: texto(5, 120, 'Seu WhatsApp ou e-mail') }).strict(),
+    quem: z.object({ nome: texto(3, 80, 'Seu nome'), email, whatsapp: opcional(telefone) }).strict(),
     clinica: z
       .object({
         nome: texto(5, 80, 'Nome da clínica'),
@@ -104,13 +213,7 @@ export const RespostasFormulario = z
       })
       .strict()
       .default({}),
-    sofia: z
-      .object({
-        nome_ia: z.preprocess((v) => (v === '' || v === null ? undefined : v), texto(2, 30, 'Nome da assistente').default('Sofia')),
-        tom: z.enum(['casual', 'formal', 'friendly']).default('friendly'),
-      })
-      .strict()
-      .default({}),
+    assistente: Assistente,
     /** "conferi endereço, preços, horários e nomes" */
     confirmou: z.literal(true, { errorMap: () => ({ message: 'Marque que você conferiu endereço, preços, horários e nomes.' }) }),
   })
@@ -136,6 +239,14 @@ export const RespostasFormulario = z
   });
 
 export type RespostasFormulario = z.infer<typeof RespostasFormulario>;
+
+/** A objeção foi MUDADA pelo dono (difere do padrão da rede)? Só ela vira aprendizado; a que ficou igual já está no roteiro da rede. */
+export function objecaoMudou(id: string, resposta: string | undefined): boolean {
+  if (!resposta) return false;
+  if (id === 'outra') return true;
+  const padrao = OBJECOES_PADRAO.find((o) => o.id === id);
+  return !!padrao && normaliza(padrao.resposta) !== normaliza(resposta);
+}
 
 /** Mapa «caminho do campo → mensagem em português» para a página pintar o erro no campo certo. Só a PRIMEIRA mensagem de cada campo. */
 export function errosPorCampo(erro: z.ZodError): Record<string, string> {

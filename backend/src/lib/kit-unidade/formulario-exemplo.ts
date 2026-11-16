@@ -1,6 +1,6 @@
 /** Resposta de formulário completa e válida, TUDO fictício — só para teste e para a prévia visual. */
 export const respostasValidas = () => ({
-  quem: { nome: 'Dra. Ana Teste', contato: '(94) 99999-0000' },
+  quem: { nome: 'Dra. Ana Teste', email: 'ana.teste@clinica.example', whatsapp: '(94) 99999-0000' },
   clinica: { nome: 'Doutor Hérnia Serra', cidade: 'Serra', uf: 'ES', endereco: 'Rua Exemplo, 100, Sala 2, Centro, Serra/ES, 29160-000', mapa_url: 'https://maps.example/serra', telefone: '(27) 3333-4444' },
   horarios: { dias: [1, 2, 3, 4, 5], inicio: '08:00', fim: '18:00', almoco_inicio: '12:00', almoco_fim: '13:00', duracao_min: 30 },
   profissionais: [{ nome: 'Dra. Ana Teste', funcao: 'fisioterapeuta' }],
@@ -13,7 +13,7 @@ export const respostasValidas = () => ({
   celular_email: 'celular@clinica.example',
   franquia_id_company: '',
   meta: { ad_account: '', business_manager_id: '' },
-  sofia: { nome_ia: '', tom: 'friendly' },
+  assistente: { quer: false },
   confirmou: true,
 });
 

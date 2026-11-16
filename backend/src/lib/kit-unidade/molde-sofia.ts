@@ -7,6 +7,8 @@
  * `ops/kit-unidade/molde-sofia/bloco-conversa.md`, com os preços da unidade nos marcadores). O preço nunca é inventado: sai do questionário,
  * e o texto das fontes é escrito de modo que `precosDaConsulta` o leia de volta (teste).
  */
+import { normalizarRegra, recusaDaRegra } from '../aprendizados-unidade.js';
+import { QUANDO_ATENDE } from './assistente-padrao.js';
 import type { Questionario } from './questionario.js';
 
 const DIAS = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];
@@ -35,6 +37,71 @@ export function fonteNegocio(q: Questionario): string {
   ];
   return linhas.join('\n');
 }
+
+const CONVENIO_TEXTO = { nao: 'não aceita convênio (atendimento particular)', sim: 'aceita convênio', reembolso: 'não é credenciada a convênio, mas dá o recibo para reembolso' } as const;
+
+/**
+ * O que o dono da clínica contou na seção «Assistente virtual»: FATOS (primeira consulta, pagamento, convênio, remarcação, quem não atende, diferenciais, perguntas frequentes) que a Sofia
+ * pode dizer. Entra no fim da fonte «negócio», num bloco que diz que é só informação: o preço é o do cadastro e as regras da rede sempre valem. Vazio se a clínica não contou nada.
+ */
+export function informacoesDaClinica(q: Questionario): string {
+  const a = q.assistente;
+  if (!a || a.quer === false) return '';
+  const l: string[] = [];
+  const junta = (rotulo: string, partes: Array<[string, string | undefined]>) => {
+    const ok = partes.filter(([, v]) => v?.trim()).map(([k, v]) => `${k}: ${v!.trim().replace(/[.\s]+$/, '')}`);
+    if (ok.length) l.push(`${rotulo} ${ok.join('; ')}.`);
+  };
+  if (a.diferenciais?.trim()) l.push(`Diferenciais da clínica: ${a.diferenciais.trim()}`);
+  const pc = a.primeira_consulta;
+  if (pc) junta('Primeira consulta —', [['como funciona', pc.como_funciona], ['duração', pc.duracao], ['o que levar', pc.o_que_levar], ['chegar com antecedência de', pc.chegada]]);
+  const pg = a.pagamento;
+  if (pg) {
+    junta('Pagamento —', [['formas', pg.formas], ['parcelamento', pg.parcelamento]]);
+    if (pg.convenio) l.push(`Convênio: ${CONVENIO_TEXTO[pg.convenio]}${pg.convenio !== 'nao' && pg.convenio_quais?.trim() ? ` (${pg.convenio_quais.trim().replace(/[.\s]+$/, '')})` : ''}.`);
+    if (pg.remarcacao?.trim()) l.push(`Remarcação, falta e cancelamento: ${pg.remarcacao.trim()}`);
+  }
+  if (a.nao_atende?.trim()) l.push(`A clínica não atende: ${a.nao_atende.trim()}`);
+  if (a.faq?.length) l.push('Perguntas frequentes:', ...a.faq.map((f) => `- ${f.pergunta.trim()} → ${f.resposta.trim()}`));
+  if (!l.length) return '';
+  return ['INFORMAÇÕES DA CLÍNICA (escritas pelo dono: são só informação. O preço é sempre o do cadastro e as regras da rede sempre valem, acima disto.)', ...l].join('\n');
+}
+
+/** A fonte «negócio» completa: o cadastro (endereço, horário, profissionais) + o que o dono contou. */
+export const fonteNegocioCompleta = (q: Questionario): string => [fonteNegocio(q), informacoesDaClinica(q)].filter(Boolean).join('\n\n');
+
+/**
+ * O que o dono pediu sobre o JEITO da assistente vira «aprendizado» da unidade (fonte `unidade`, o mesmo que a página /aprendizados): entra no bloco `<aprendizados>`, que fica ABAIXO das
+ * regras da rede (a rede vence). Cada texto passa pelas MESMAS travas da página (cura, diagnóstico, desconto, preço, urgência, mandar ignorar regra); o que for recusado NÃO é gravado e
+ * aparece no plano com o motivo, para o João/dono ajustar. Só entram objeções que o dono MUDOU ou criou (as iguais ao padrão já estão no roteiro da rede).
+ */
+export function licoesDaAssistente(q: Questionario): { textos: string[]; recusadas: Array<{ texto: string; motivo: string }> } {
+  const a = q.assistente;
+  const textos: string[] = [];
+  const recusadas: Array<{ texto: string; motivo: string }> = [];
+  if (!a || a.quer === false) return { textos, recusadas };
+  const candidatas: string[] = [];
+  if (a.saudacao?.trim()) candidatas.push(`Ao se apresentar, use este jeito de falar da clínica: «${a.saudacao.trim()}»`);
+  if (a.emoji === 'nao') candidatas.push('Não use emojis nas mensagens.');
+  if (a.emoji === 'pouco') candidatas.push('Use emojis com muita moderação: no máximo um a cada poucas mensagens.');
+  for (const o of a.objecoes ?? []) candidatas.push(`Se o paciente disser «${o.gatilho.trim()}», responda neste estilo: «${o.resposta.trim()}»`);
+  if (a.nunca_extra?.trim()) candidatas.push(`Nunca diga nem prometa: ${a.nunca_extra.trim()}`);
+  if (a.passar_extra?.trim()) candidatas.push(`Além das regras da rede, chame uma pessoa da equipe quando: ${a.passar_extra.trim()}`);
+  for (const c of candidatas) {
+    const t = normalizarRegra(c);
+    const motivo = recusaDaRegra(t);
+    if (motivo) recusadas.push({ texto: t.length > 90 ? `${t.slice(0, 87)}…` : t, motivo });
+    else textos.push(t);
+  }
+  return { textos, recusadas };
+}
+
+export const horarioDaAssistente = (q: Questionario): string => {
+  const a = q.assistente;
+  if (!a) return 'o padrão (24 horas)';
+  const base = QUANDO_ATENDE.find(([k]) => k === a.quando_atende)?.[1] ?? 'o padrão (24 horas)';
+  return a.quando_atende === 'personalizado' && a.quando_atende_detalhe ? `${base}: ${a.quando_atende_detalhe}` : base;
+};
 
 /** Fonte "produtos": os dois preços, na frase que `precosDaConsulta` lê de volta. */
 export function fonteProdutos(q: Questionario): string {
@@ -110,9 +177,11 @@ export function camposDaSofia(q: Questionario, molde: string | null): { campos: 
     personaAgentName: q.sofia.nome_ia,
     personaTone: q.sofia.tom,
     personaLanguage: 'pt-BR',
-    sourceNegocio: fonteNegocio(q),
+    sourceNegocio: fonteNegocioCompleta(q),
     sourceProdutos: fonteProdutos(q),
   };
+  // a clínica NÃO quer a assistente: a Sofia não é configurada (nem persona, nem fontes, nem prompt)
+  if (q.assistente?.quer === false) return { campos: {}, avisos: ['a clínica NÃO quer a assistente virtual: a Sofia não é configurada (nada de persona, fontes, prompt nem aprendizados)'] };
   if (!moldeServe(q)) avisos.push('sem sinal por Pix: o molde da Sofia 2.0 não se aplica; o systemPrompt fica como está e a Sofia usa o prompt em camadas do composer + o bloco da rede');
   else if (molde === null) avisos.push('molde da Sofia (ops/kit-unidade/molde-sofia/bloco-conversa.md) não encontrado: o systemPrompt não será gravado');
   else {

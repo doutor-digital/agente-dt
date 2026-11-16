@@ -136,6 +136,19 @@ export function recusaDaRegra(textoBruto: string): string | null {
   return null;
 }
 
+/**
+ * Texto de FATO que o dono escreve (primeira consulta, formas de pagamento, perguntas frequentes…) e que entra nas FONTES da Sofia, não como regra. Mesmo assim é só DADO: não pode
+ * carregar marcação (`<`/`>`), mandar a Sofia ignorar as regras, citar pronto-socorro (regra da rede) nem trazer valor em reais (preço é só o do cadastro). `null` = pode.
+ */
+export function recusaDeFato(textoBruto: string): string | null {
+  const texto = textoBruto.normalize('NFKC').trim();
+  if (/[<>‹›«»〈〉]/.test(texto)) return 'Escreva só o texto, sem os sinais < e >.';
+  if (MANDA_IGNORAR.test(texto)) return 'O texto não pode mandar a assistente ignorar ou esquecer as regras. Escreva só a informação.';
+  if (citaProntoSocorro(texto) || MANDA_AO_HOSPITAL.test(texto) || OUTRO_PRONTO_ATENDIMENTO.test(texto)) return 'Pronto-socorro e hospital são regra da rede: a assistente nunca orienta isso, e a rede já trata a urgência. Tire essa parte.';
+  if (/r\$\s*\d|\b\d[\d.,]*\s*(?:reais|real)\b/i.test(texto)) return 'Não escreva valores em reais aqui: o preço da consulta fica no cadastro (seção «Valores da consulta»), e a assistente só fala o que está lá.';
+  return null;
+}
+
 /** Limpa o que a pessoa colou: espaços repetidos e linhas vazias. A palavra dela fica como está. */
 export function normalizarRegra(texto: string): string {
   return texto
