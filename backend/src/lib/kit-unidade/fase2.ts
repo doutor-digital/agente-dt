@@ -144,8 +144,11 @@ export function lerAdminsDD(valor: string | undefined): { lista: string[]; aviso
   return { lista: bons.length ? bons : ADMINS_DD_PADRAO, avisos };
 }
 
-/** O padrão: a Suzanne. Troca por KIT_ADMINS_DD (csv) ou por `chatwoot.admins_dd` do questionário. */
-export const ADMINS_DD_PADRAO = ['suzanne.mychelly1@gmail.com'];
+/**
+ * O padrão: a Suzanne e o João (o usuário dele no CRM nasceu em 16/11 com `ops/kit-unidade/criar-usuario-dd-joao.sh`, administrador em todas as contas). Troca por
+ * KIT_ADMINS_DD (csv) ou por `chatwoot.admins_dd` do questionário. Quem não está na conta de referência só gera aviso.
+ */
+export const ADMINS_DD_PADRAO = ['suzanne.mychelly1@gmail.com', 'doutordigitalconsultoria@gmail.com'];
 
 /**
  * Põe os administradores da Doutor Digital na conta nova. O id deles vem da conta de REFERÊNCIA (`GET agents` da conta 1, só leitura) filtrado pela lista; a

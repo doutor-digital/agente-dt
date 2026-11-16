@@ -30,10 +30,22 @@ Na VPS o `nova-unidade-joao.sh <slug>` procura em `unidades/` e em `unidades/pri
    usuários existentes (daria ao token do app o poder de entrar como a pessoa).
 2. `bash ops/kit-unidade/nova-unidade-joao.sh <slug> --so-conferir`, depois sem a flag (SECO: mostra o plano) e com `--aplicar` (pergunta antes de cada etapa). O passo
    «conta» põe os administradores da Doutor Digital na conta nova: acha o id deles pela conta de referência (só leitura) e usa `account_users`. Lista: `KIT_ADMINS_DD`
-   (e-mails, csv; padrão `suzanne.mychelly1@gmail.com`) ou `chatwoot.admins_dd` no questionário; e-mail que não está na conta 1 só gera aviso.
+   (e-mails, csv; padrão `suzanne.mychelly1@gmail.com` e `doutordigitalconsultoria@gmail.com`) ou `chatwoot.admins_dd` no questionário; e-mail que não está na conta 1 só gera aviso.
 3. `bash ops/kit-unidade/regra-traefik-joao.sh <subdominio> --so-conferir`, depois sem a flag.
-4. Copiar os tokens do cofre (`/root/segredos/kit`) para o env do serviço `ddagent_agent` e reiniciar (o servidor só conhece a conta nova depois).
+4. `bash ops/kit-unidade/cofre-para-servico-joao.sh <SUFIXO> --so-conferir`, depois sem a flag (ex.: `DEMO`). Leva `CHATWOOT_API_TOKEN_<SUFIXO>` e
+   `CHATWOOT_SOFIA_BOT_TOKEN_<SUFIXO>` do cofre (`/root/segredos/kit`) para o `.env` do serviço (com cópia antes) e para o `ddagent_agent` no ar
+   (`docker service update --env-add`, mesma imagem; reinicia ~1 min). Nada é impresso; valor diferente no `.env` faz o script PARAR.
 5. Teste da Sofia, e só então `nova-unidade-joao.sh <slug> --aplicar --ligar-robo`.
+
+Usuário da Doutor Digital no CRM (uma vez por pessoa, fora do roteiro da clínica): `bash ops/kit-unidade/criar-usuario-dd-joao.sh --so-conferir`, depois sem a flag
+(padrão `doutordigitalconsultoria@gmail.com`; outra pessoa: `EMAIL_NOVO=… NOME_NOVO=… bash …`). Cria o usuário já confirmado (sem SMTP o convite não chega), com senha
+forte em `/root/segredos/crm-<e-mail>.senha` (600, nunca impressa), e dá administrador em TODAS as contas. Usuário que já existe não tem a senha mexida.
+Rodar de novo depois de criar uma clínica nova também serve (dá administrador na conta nova).
+
+E-mail do CRM (uma vez para a instalação; sem ele convite e «esqueci a senha» não chegam): crie a senha de app no Google da Doutor Digital
+(https://myaccount.google.com/apppasswords) e, do SEU computador: `ssh -t -i ~/.ssh/doutordigital_vps root@89.116.214.130 'bash /root/kit/ops/kit-unidade/ligar-email-crm-joao.sh'`
+(primeiro com `--so-conferir`). A senha vai no prompt (não aparece), é testada no Gmail antes de gravar, vai para `/root/chatwoot.env` (cópia antes)
+e só o `chatwoot_sidekiq` reinicia (o CRM não sai do ar). Arquivo já com e-mail configurado → o script PARA.
 
 ## Atenção
 - **NÃO PUBLIQUE DEPLOY ENQUANTO O KIT RODA.** O kit roda dentro do contêiner `ddagent_agent`; os segredos gerados ficam em `/run/kit-segredos.<pid>` (uma pasta por rodada: duas rodadas ao mesmo tempo não se apagam) até o fim, e o token do

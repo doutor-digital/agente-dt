@@ -253,7 +253,7 @@ test('o plano seco mostra a lista EFETIVA dos administradores da Doutor Digital 
   const doQuestionario = montarPlano(q((o) => (o.chatwoot.admins_dd = ['so-esta@dd.test'])), {}, { molde: MOLDE, adminsDD: ['suzanne.mychelly1@gmail.com'] });
   assert.ok(passo(doQuestionario, 'conta').itens.some((i) => i.includes('s***@dd.test') && !i.includes('suzanne') && !i.includes('so-esta')));
   const semInfo = montarPlano(qq, {}, { molde: MOLDE });
-  assert.ok(passo(semInfo, 'conta').itens.some((i) => /KIT_ADMINS_DD \(padrão: a Suzanne\)/.test(i)));
+  assert.ok(passo(semInfo, 'conta').itens.some((i) => /KIT_ADMINS_DD \(padrão: a Suzanne e o João\)/.test(i)));
 });
 
 test('PRIVACIDADE: o texto REAL do plano (seco, com tudo já existente e sem nada) NÃO tem nenhum valor sensível em claro — número, phone_number_id, WABA, id_company, e-mails', () => {
