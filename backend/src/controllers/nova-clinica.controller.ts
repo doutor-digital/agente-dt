@@ -63,17 +63,21 @@ function muitasTentativas(res: Response, esperarSeg: number): void {
 }
 
 export function criarManipuladores(deps: DepsNovaClinica = padrao()) {
-  /** Conta um chute de código; devolve true se o IP já passou do limite (aí nem a resposta 404 sai: vira 429). */
-  const chuteBloqueado = (ip: string) => !deps.limites.codigoErrado.tentar(ip).ok;
+  /** O IP já passou do limite de chutes? Confere ANTES de olhar o código (bloqueado é bloqueado, com código certo ou errado: não há oráculo). */
+  const bloqueadoPorChutes = (ip: string) => deps.limites.codigoErrado.espiar(ip);
+  /** Conta um chute errado. */
+  const contarChute = (ip: string) => void deps.limites.codigoErrado.tentar(ip);
 
   async function pagina(req: Request, res: Response): Promise<void> {
     const ip = ipDoCliente(req);
     const lim = deps.limites.pagina.tentar(ip);
     if (!lim.ok) return muitasTentativas(res, lim.esperarSeg);
+    const bloqueio = bloqueadoPorChutes(ip);
+    if (!bloqueio.ok) return muitasTentativas(res, bloqueio.esperarSeg);
     const nonce = randomBytes(16).toString('base64');
     const aberto = await conviteAberto(deps.banco, req.params.codigo, deps.agora());
     if (!aberto) {
-      if (chuteBloqueado(ip)) return muitasTentativas(res, 600);
+      contarChute(ip);
       cabecalhos(res, nonce);
       res.status(404).type('html').send(paginaLinkInvalido(nonce));
       return;
@@ -85,13 +89,18 @@ export function criarManipuladores(deps: DepsNovaClinica = padrao()) {
   async function enviar(req: Request, res: Response): Promise<void> {
     const ip = ipDoCliente(req);
     const codigo = req.params.codigo;
+    const bloqueio = bloqueadoPorChutes(ip);
+    if (!bloqueio.ok) return muitasTentativas(res, bloqueio.esperarSeg);
     const aberto = await conviteAberto(deps.banco, codigo, deps.agora());
     if (!aberto) {
-      if (chuteBloqueado(ip)) return muitasTentativas(res, 600);
+      contarChute(ip);
       cabecalhos(res);
       res.status(404).json({ erro: 'link_invalido' });
       return;
     }
+    // o teto GLOBAL só conta quem tem um código VÁLIDO: quem chuta não gasta a vez dos franqueados de verdade
+    const global = deps.limites.envioGlobal.tentar('global');
+    if (!global.ok) return muitasTentativas(res, global.esperarSeg);
     const v = validarFormulario(req.body);
     if (!v.ok) {
       cabecalhos(res);
@@ -106,10 +115,11 @@ export function criarManipuladores(deps: DepsNovaClinica = padrao()) {
       return;
     }
     const r = v.respostas;
-    // só o id vai para o log; nome, e-mail, telefone e Pix nunca
+    // só o id vai para o log; nome de pessoa, e-mail, telefone e Pix nunca (o aviso leva só o nome da clínica e a cidade, que são públicos, sem quebra de linha)
     logger.info({ convite: gravado.id }, 'nova-clinica: formulário recebido');
+    const umaLinha = (t: string) => t.replace(/\s+/g, ' ').trim().slice(0, 80);
     void deps
-      .avisar(`📝 Formulário de nova clínica recebido: ${r.clinica.nome} (${r.clinica.cidade}/${r.clinica.uf}), preenchido por ${r.quem.nome}. Código do formulário: ${gravado.id}.`, `nova-clinica:${gravado.id}`)
+      .avisar(`📝 Formulário de nova clínica recebido: ${umaLinha(r.clinica.nome)} (${umaLinha(r.clinica.cidade)}/${r.clinica.uf}). Código do formulário: ${gravado.id}.`, `nova-clinica:${gravado.id}`)
       .catch((err) => logger.warn({ err: String(err) }, 'nova-clinica: aviso ao João falhou (o formulário está gravado)'));
     cabecalhos(res);
     res.json({ ok: true, referencia: gravado.id.slice(-6).toUpperCase() });
@@ -119,8 +129,6 @@ export function criarManipuladores(deps: DepsNovaClinica = padrao()) {
   function limitarEnvio(req: Request, res: Response, next: NextFunction): void {
     const porIp = deps.limites.envio.tentar(ipDoCliente(req));
     if (!porIp.ok) return muitasTentativas(res, porIp.esperarSeg);
-    const global = deps.limites.envioGlobal.tentar('global');
-    if (!global.ok) return muitasTentativas(res, global.esperarSeg);
     next();
   }
 

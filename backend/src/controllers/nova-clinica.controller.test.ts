@@ -82,10 +82,10 @@ test('envio válido: 200 «recebido», grava, avisa o João SEM dado pessoal, e 
   assert.match(j.referencia, /^[A-Z0-9]{6}$/);
   assert.equal(s.banco.linhas[0]!.respostas?.clinica.nome, 'Doutor Hérnia Serra');
   assert.equal(s.avisos.length, 1);
-  assert.match(s.avisos[0]!, /Doutor Hérnia Serra \(Serra\/ES\), preenchido por Dra\. Ana Teste/);
+  assert.match(s.avisos[0]!, /Doutor Hérnia Serra \(Serra\/ES\)\. Código do formulário/);
   assert.ok(s.avisos[0]!.includes(s.banco.linhas[0]!.id));
   // nenhum dado pessoal no aviso
-  for (const pii of ['clinica.example', 'celular@', '99999', '3333-4444', 'pix-teste', 'Clínica Teste Ltda', '350', '+55']) assert.ok(!s.avisos[0]!.includes(pii), `vazou no aviso: ${pii}`);
+  for (const pii of ['clinica.example', 'celular@', '99999', '3333-4444', 'pix-teste', 'Clínica Teste Ltda', '350', '+55', 'Ana Teste', 'Gerente Teste']) assert.ok(!s.avisos[0]!.includes(pii), `vazou no aviso: ${pii}`);
   // uso único
   const de_novo = await s.post(c.codigo, respostasValidas());
   assert.equal(de_novo.status, 404);
@@ -138,13 +138,15 @@ test('código errado, mal formado, vencido, usado e revogado: a MESMA resposta (
   assert.equal(envios.size, 1, 'o corpo do envio recusado é idêntico para todos os motivos');
 });
 
-test('chutar códigos: depois de 10 erros o IP leva 429, outro IP não é afetado', async () => {
+test('chutar códigos: depois de 10 erros o IP leva 429 — com código errado OU certo (sem oráculo) —, outro IP não é afetado', async () => {
   const s = await subir();
   const bom = await s.convite();
   for (let i = 0; i < 10; i++) assert.equal((await s.pagina('B'.repeat(24), '203.0.113.50')).status, 404);
   const r = await s.pagina('B'.repeat(24), '203.0.113.50');
   assert.equal(r.status, 429);
   assert.ok(Number(r.headers.get('retry-after')) >= 1);
+  assert.equal((await s.pagina(bom.codigo, '203.0.113.50')).status, 429, 'bloqueado é bloqueado: o código certo também leva 429');
+  assert.equal((await s.post(bom.codigo, respostasValidas(), '203.0.113.50')).status, 429);
   assert.equal((await s.pagina(bom.codigo, '203.0.113.51')).status, 200, 'outro IP segue normal');
 });
 
@@ -156,8 +158,10 @@ test('limite de envios: por IP e um teto global', async () => {
   assert.equal((await s.post(c.codigo, {}, '203.0.113.60')).status, 429, '11º envio do mesmo IP na hora');
   const g = await subir();
   const c2 = await g.convite();
+  // quem chuta código errado NÃO gasta o teto global (senão 10 IPs travariam todos os franqueados)
+  for (let i = 0; i < 150; i++) assert.equal((await g.post('Z'.repeat(24), {}, `198.51.100.${i % 250}`)).status, 404);
   for (let i = 0; i < 100; i++) assert.notEqual((await g.post(c2.codigo, {}, `192.0.2.${i % 250}`)).status, 429, `envio ${i}`);
-  assert.equal((await g.post(c2.codigo, {}, '192.0.2.250')).status, 429, 'teto global: o 101º, de qualquer IP');
+  assert.equal((await g.post(c2.codigo, {}, '192.0.2.250')).status, 429, 'teto global: o 101º envio com código VÁLIDO, de qualquer IP');
 });
 
 test('corpo: mais de 64 KB é 413 (o teto do servidor é 1 MB, a rota tem o dela); JSON quebrado é 400; nada do corpo é devolvido', async () => {

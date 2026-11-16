@@ -10,6 +10,8 @@ import type { Request } from 'express';
 export interface Limitador {
   /** conta uma tentativa. `ok: false` = passou do limite; `esperarSeg` diz quanto falta para a janela abrir */
   tentar(chave: string): { ok: boolean; esperarSeg: number };
+  /** olha SEM contar: a PRÓXIMA tentativa desta chave seria recusada? (para recusar antes de gastar trabalho) */
+  espiar(chave: string): { ok: boolean; esperarSeg: number };
 }
 
 export function criarLimitador(opcoes: { max: number; janelaMs: number; agora?: () => number; maxChaves?: number }): Limitador {
@@ -17,13 +19,23 @@ export function criarLimitador(opcoes: { max: number; janelaMs: number; agora?: 
   const maxChaves = opcoes.maxChaves ?? 5000;
   const tabela = new Map<string, { n: number; desde: number }>();
   return {
+    espiar(chave) {
+      const e = tabela.get(chave);
+      if (!e || agora() - e.desde >= opcoes.janelaMs || e.n < opcoes.max) return { ok: true, esperarSeg: 0 };
+      return { ok: false, esperarSeg: Math.max(1, Math.ceil((e.desde + opcoes.janelaMs - agora()) / 1000)) };
+    },
     tentar(chave) {
       const t = agora();
       const e = tabela.get(chave);
       if (!e || t - e.desde >= opcoes.janelaMs) {
         if (!e && tabela.size >= maxChaves) {
           for (const [k, v] of tabela) if (t - v.desde >= opcoes.janelaMs) tabela.delete(k);
-          // ainda cheia (todas as janelas vivas): descarta as mais antigas (a Map guarda a ordem de inserção)
+          // ainda cheia (todas as janelas vivas): descarta primeiro as mais antigas QUE NÃO ESTÃO BLOQUEADAS (um atacante com muitos IPs não apaga o próprio bloqueio
+          // enchendo a tabela); só se não houver outra saída, as mais antigas de todas. (a Map guarda a ordem de inserção)
+          for (const [k, v] of tabela) {
+            if (tabela.size < maxChaves) break;
+            if (v.n < opcoes.max) tabela.delete(k);
+          }
           for (const k of tabela.keys()) {
             if (tabela.size < maxChaves) break;
             tabela.delete(k);
@@ -41,7 +53,8 @@ export function criarLimitador(opcoes: { max: number; janelaMs: number; agora?: 
 }
 
 /**
- * O IP de quem chamou, atrás do proxy (Traefik). O proxy ACRESCENTA o IP que viu no FIM de `X-Forwarded-For`; o que vem antes foi escrito pelo cliente e
+ * O IP de quem chamou, atrás do proxy (Traefik). Isto assume UM proxy confiável na frente (o Traefik da VPS); com outro intermediário (CDN, balanceador) todo
+ * mundo cairia no IP dele — por isso o limite é só um freio, e quem decide é o código de 144 bits. O proxy ACRESCENTA o IP que viu no FIM de `X-Forwarded-For`; o que vem antes foi escrito pelo cliente e
  * pode ser mentira — por isso vale o ÚLTIMO. Sem o cabeçalho, o endereço da conexão. (Não usamos `req.ip`: sem `trust proxy` ele devolve o IP do proxy,
  * o mesmo para todo mundo.)
  */

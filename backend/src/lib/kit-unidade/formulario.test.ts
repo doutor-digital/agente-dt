@@ -23,6 +23,9 @@ test('valores aceitam vírgula, ponto de milhar e R$', () => {
     return r.ok ? r.respostas.valores.consulta_no_dia : r.campos['valores.consulta_no_dia'];
   };
   assert.equal(v('1.250,50'), 1250.5);
+  assert.equal(v('350.50'), 350.5);
+  assert.equal(v('1.250'), 1250);
+  for (const estranho of ['0x10', '1e3', '-5', '350abc', '1,2,3', '12.34.567']) assert.match(String(v(estranho)), /digite só o valor/, estranho);
   assert.equal(v(' R$ 350 '), 350);
   assert.match(String(v('')), /Preencha/);
   assert.match(String(v('abc')), /digite só o valor/);

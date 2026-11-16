@@ -26,8 +26,12 @@ const dinheiro = (nome: string) =>
     (v) => {
       if (typeof v === 'number') return v;
       if (typeof v !== 'string') return v;
-      const limpo = v.replace(/[R$\s]/g, '').replace(/\.(?=\d{3}(\D|$))/g, '').replace(',', '.');
-      return limpo === '' ? undefined : Number(limpo);
+      const limpo = v.replace(/^\s*R\$\s*/i, '').trim();
+      if (limpo === '') return undefined;
+      // só o que um brasileiro digita: 350 | 350,50 | 350.50 | 1.250 | 1.250,50 (nada de 0x10, 1e3, sinais ou letras)
+      const ok = /^\d{1,3}(\.\d{3})+(,\d{1,2})?$/.test(limpo) || /^\d+([.,]\d{1,2})?$/.test(limpo);
+      if (!ok) return Number.NaN;
+      return Number(/^\d{1,3}(\.\d{3})+(,\d{1,2})?$/.test(limpo) ? limpo.replace(/\./g, '').replace(',', '.') : limpo.replace(',', '.'));
     },
     z.number({ invalid_type_error: `${nome}: digite só o valor, por exemplo 350.`, required_error: `Preencha: ${nome}.` }).positive(`${nome}: digite um valor maior que zero.`).max(100000, `${nome}: valor alto demais.`),
   );

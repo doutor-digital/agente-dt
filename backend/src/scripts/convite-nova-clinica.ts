@@ -29,7 +29,8 @@ const quando = (d: Date) => new Intl.DateTimeFormat('pt-BR', { timeZone: 'Americ
 
 function valorDe(args: string[], nome: string): string | undefined {
   const i = args.indexOf(nome);
-  return i >= 0 ? args[i + 1] : undefined;
+  const v = i >= 0 ? args[i + 1] : undefined;
+  return v === undefined || v.startsWith('--') ? undefined : v; // «--rotulo --dias 7» não vira rótulo «--dias»
 }
 
 /** Roda um comando. Devolve o texto para imprimir e o código de saída (testável sem processo nem banco). */
@@ -61,6 +62,8 @@ export async function executar(args: string[], banco: BancoConvites, env: NodeJS
     const admins = lerAdminsDD(env.KIT_ADMINS_DD).lista.map((e) => e.toLowerCase());
     if (!admins.includes(por.toLowerCase())) return { saida: [`--por precisa ser um administrador da Doutor Digital (${ADMINS_DD_PADRAO.length ? 'a lista do kit: KIT_ADMINS_DD ou o padrão' : 'KIT_ADMINS_DD'}).`], codigo: 2 };
   }
+  if (args.includes('--por') && !por) return { saida: ['--por precisa do e-mail do administrador'], codigo: 2 };
+  if (args.includes('--dias') && valorDe(args, '--dias') === undefined) return { saida: ['--dias precisa de um número (1 a 60)'], codigo: 2 };
   const diasTexto = valorDe(args, '--dias');
   const dias = diasTexto === undefined ? DIAS_DE_VALIDADE : Number(diasTexto);
   if (!Number.isInteger(dias) || dias < 1 || dias > 60) return { saida: ['--dias precisa ser um número inteiro de 1 a 60'], codigo: 2 };

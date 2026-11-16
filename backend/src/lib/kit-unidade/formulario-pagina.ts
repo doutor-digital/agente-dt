@@ -24,6 +24,7 @@ section>h2{font-size:17px;margin:0 0 2px;display:flex;gap:8px;align-items:center
 section>h2 .n{flex:none;width:24px;height:24px;border-radius:50%;background:var(--acc);color:var(--acc-ink);font-size:13px;display:grid;place-items:center}
 .dica-sec{color:var(--muted);font-size:14px;margin:2px 0 6px}
 .campo{margin-top:14px}
+.linha .campo{margin:0}
 label,.rotulo{display:block;font-weight:600;font-size:15px;margin:0 0 4px}
 .ajuda{display:block;color:var(--muted);font-size:13.5px;margin:0 0 6px}
 .tag{display:inline-block;background:var(--warnbg);color:var(--warn);border-radius:8px;padding:2px 8px;font-size:12.5px;font-weight:600;margin:0 0 6px}
@@ -196,13 +197,13 @@ const SCRIPT = `
     d=d||{};
     var el=document.createElement('div'); el.className='linha'; el.dataset.i=i;
     if(tipo==='prof'){
-      el.innerHTML='<div class="campo" style="margin:0"><label>Nome</label><input type="text" data-k="nome" maxlength="80" autocomplete="off"><div class="erro-campo" data-e="nome" role="alert" hidden></div></div>'
-        +'<div class="campo" style="margin:0"><label>É…</label><select data-k="funcao">'+opts(FUNCOES_PROF,d.funcao||'fisioterapeuta')+'</select><div class="erro-campo" data-e="funcao" role="alert" hidden></div></div>'
+      el.innerHTML='<div class="campo"><label>Nome</label><input type="text" data-k="nome" maxlength="80" autocomplete="off"><div class="erro-campo" data-e="nome" role="alert" hidden></div></div>'
+        +'<div class="campo"><label>É…</label><select data-k="funcao">'+opts(FUNCOES_PROF,d.funcao||'fisioterapeuta')+'</select><div class="erro-campo" data-e="funcao" role="alert" hidden></div></div>'
         +'<button type="button" class="tirar">Tirar esta pessoa</button>';
     } else {
-      el.innerHTML='<div class="campo" style="margin:0"><label>Nome</label><input type="text" data-k="nome" maxlength="80" autocomplete="off"><div class="erro-campo" data-e="nome" role="alert" hidden></div></div>'
-        +'<div class="campo" style="margin:0"><label>E-mail</label><input type="email" data-k="email" maxlength="120" autocomplete="off" inputmode="email"><div class="erro-campo" data-e="email" role="alert" hidden></div></div>'
-        +'<div class="campo" style="margin:0"><label>Papel no sistema</label><select data-k="funcao">'+opts(PAPEIS,d.funcao||'secretaria')+'</select><div class="erro-campo" data-e="funcao" role="alert" hidden></div></div>'
+      el.innerHTML='<div class="campo"><label>Nome</label><input type="text" data-k="nome" maxlength="80" autocomplete="off"><div class="erro-campo" data-e="nome" role="alert" hidden></div></div>'
+        +'<div class="campo"><label>E-mail</label><input type="email" data-k="email" maxlength="120" autocomplete="off" inputmode="email"><div class="erro-campo" data-e="email" role="alert" hidden></div></div>'
+        +'<div class="campo"><label>Papel no sistema</label><select data-k="funcao">'+opts(PAPEIS,d.funcao||'secretaria')+'</select><div class="erro-campo" data-e="funcao" role="alert" hidden></div></div>'
         +'<button type="button" class="tirar">Tirar esta pessoa</button>';
     }
     $('[data-k=nome]',el).value=d.nome||''; var em=$('[data-k=email]',el); if(em) em.value=d.email||'';
@@ -287,10 +288,10 @@ const SCRIPT = `
     fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(dados)})
       .then(function(r){return r.json().catch(function(){return {}}).then(function(j){return {s:r.status,j:j}})})
       .then(function(x){
-        if(x.s===200&&x.j.ok){ limpaRascunho(); $('#form').hidden=true; $('#intro').hidden=true; $('#resumo-erro').hidden=true; $('#pronto-nome').textContent=dados.quem.nome; $('#pronto-ref').textContent=x.j.referencia||''; $('#pronto').hidden=false; window.scrollTo({top:0}); return; }
+        if(x.s===200&&x.j.ok){ clearTimeout(salvaRascunho.t); limpaRascunho(); $('#form').hidden=true; $('#intro').hidden=true; $('#resumo-erro').hidden=true; $('#pronto-nome').textContent=dados.quem.nome; $('#pronto-ref').textContent=x.j.referencia||''; $('#pronto').hidden=false; window.scrollTo({top:0}); return; }
         if(x.s===422&&x.j.campos){ mostraErros(x.j.campos); return; }
         var r=$('#resumo-erro');
-        r.textContent=x.s===429?'Muitas tentativas. Espere alguns minutos e tente de novo.':x.s===404?'Este link não vale mais (ele serve para um envio só e dura 14 dias). Se você ainda não enviou, peça um novo link à Doutor Digital.':'Não consegui enviar agora. Seus dados continuam aqui; tente de novo em instantes.';
+        r.textContent=x.s===429?'Muitas tentativas. Espere alguns minutos e tente de novo.':x.s===404?'Este link não está mais disponível (serve para um envio só e dura 14 dias). Se você já enviou o cadastro, está tudo certo: a Doutor Digital já recebeu. Se ainda não enviou, peça um link novo.':'Não consegui enviar agora. Seus dados continuam aqui; tente de novo em instantes.';
         r.hidden=false; r.scrollIntoView({behavior:'smooth',block:'center'});
       })
       .catch(function(){ var r=$('#resumo-erro'); r.textContent='Sem conexão. Seus dados continuam aqui; tente de novo quando a internet voltar.'; r.hidden=false; r.scrollIntoView({behavior:'smooth',block:'center'}); })

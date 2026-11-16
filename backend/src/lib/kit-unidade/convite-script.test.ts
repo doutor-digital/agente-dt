@@ -36,6 +36,9 @@ test('--por precisa ser administrador da Doutor Digital; --dias de 1 a 60; sem -
   assert.equal((await executar([], banco, ENV)).codigo, 2);
   assert.equal((await executar(['--rotulo', '  '], banco, ENV)).codigo, 2);
   assert.equal((await executar(['--rotulo', 'x', '--tudo'], banco, ENV)).codigo, 2);
+  assert.equal((await executar(['--rotulo', '--dias', '7'], banco, ENV)).codigo, 2, '«--rotulo --dias» não vira rótulo');
+  assert.equal((await executar(['--rotulo', 'x', '--dias'], banco, ENV)).codigo, 2);
+  assert.equal((await executar(['--rotulo', 'x', '--por'], banco, ENV)).codigo, 2);
   assert.equal(banco.linhas.length, 1);
 });
 

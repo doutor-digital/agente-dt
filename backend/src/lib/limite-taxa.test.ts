@@ -16,6 +16,28 @@ test('deixa passar até o máximo, recusa o resto dizendo quanto esperar, e reab
   assert.equal(l.tentar('a').ok, true, 'janela nova');
 });
 
+test('espiar não conta, e mostra se a chave já está bloqueada', () => {
+  const l = criarLimitador({ max: 2, janelaMs: 60_000 });
+  assert.equal(l.espiar('a').ok, true);
+  l.tentar('a');
+  l.tentar('a');
+  assert.equal(l.espiar('a').ok, false, 'no limite: a PRÓXIMA tentativa seria recusada');
+  assert.equal(l.espiar('a').ok, false);
+  assert.equal(l.espiar('b').ok, true);
+});
+
+test('encher a tabela com muitos IPs não apaga o bloqueio de quem já estourou', () => {
+  let t = 0;
+  const l = criarLimitador({ max: 2, janelaMs: 1_000_000, agora: () => t, maxChaves: 20 });
+  for (let i = 0; i < 2; i++) l.tentar('mau');
+  assert.equal(l.espiar('mau').ok, false);
+  for (let i = 0; i < 500; i++) {
+    t += 1;
+    l.tentar(`ip${i}`);
+  }
+  assert.equal(l.espiar('mau').ok, false, 'o bloqueio sobrevive');
+});
+
 test('a tabela não cresce sem fim sob muitos IPs', () => {
   let t = 0;
   const l = criarLimitador({ max: 1, janelaMs: 1_000_000, agora: () => t, maxChaves: 50 });
