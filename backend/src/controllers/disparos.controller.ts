@@ -13,6 +13,7 @@
  *   GET  /api/public/disparos/ondas/:id?slug=              o disparo: números, exclusões, prévia por pessoa, tabela, o que falta para aprovar
  *   POST /api/public/disparos/ondas/:id/aprovar            { slug, total, impressao } — só quem pode (ver `lib/disparo/chatwoot/ajuste.ts`)
  *   POST /api/public/disparos/ondas/:id/cancelar           { slug, motivo? }
+ *   GET  /api/public/disparos/relatorio?slug=              o relatório de cada campanha: enviadas, entregues, lidas, responderam (72 h), pediram para sair, falharam
  *   POST /api/public/disparos/ajuste                       { slug, gerenteAprova?, tierDoNumero? } — só administrador da Doutor Digital
  */
 import type { Request, Response } from 'express';
@@ -32,6 +33,9 @@ import { ajusteDaUnidade, ehAdministradorDD, freiosComOTier, gravarAjuste, quemA
 import { ATRIBUTOS_USUAIS, filtroSchema } from '../lib/disparo/chatwoot/filtro.js';
 import { abrirOndaChatwoot, aprovarOndaChatwoot, concluirMontagemChatwoot, ctxDaUnidadeNoCrm, depsDoPublico, ORIGEM_CRM } from '../lib/disparo/chatwoot/onda.js';
 import { modoDoDisparoNoCrm } from '../lib/disparo/chatwoot/porto.js';
+import { taxasDoRelatorio } from '../lib/disparo/chatwoot/relatorio.js';
+import { lerEnviosPorHora, lerNumerosDosDisparos, NUMEROS_VAZIOS } from '../lib/disparo/chatwoot/relatorio-banco.js';
+import { fusoDaUnidade } from '../lib/fuso.js';
 import { calcularPublico, rotuloDaExclusaoNoCrm } from '../lib/disparo/chatwoot/publico.js';
 import { paginaDosDisparos } from '../lib/disparos-pagina.js';
 import { comTeto } from '../lib/robos-automacoes.js';
@@ -354,7 +358,7 @@ export async function disparosOndaHandler(req: Request, res: Response): Promise<
   if (!onda) return;
   try {
     const ajuste = await ajusteDaUnidade(r.unit.id);
-    const [linhas, grupos, simulados] = await Promise.all([
+    const [linhas, grupos, numerosPorOnda, porHora] = await Promise.all([
       prisma.disparoDestinatario.findMany({
         where: { ondaId: onda.id },
         orderBy: [{ atualizadoEm: 'asc' }, { id: 'asc' }],
@@ -362,8 +366,9 @@ export async function disparosOndaHandler(req: Request, res: Response): Promise<
         select: { nome: true, telefone: true, estado: true, motivo: true, enviadoEm: true, simuladoEm: true },
       }),
       prisma.disparoDestinatario.groupBy({ by: ['estado'], where: { ondaId: onda.id }, _count: true }),
-      // no BANCO, não nas linhas da tabela (que são só as primeiras 150): senão o número trava em 150
-      prisma.disparoDestinatario.count({ where: { ondaId: onda.id, simuladoEm: { not: null } } }),
+      // os números vêm AGRUPADOS no banco (nada de ler linhas só para somar; e «receberia» não trava nas 150 da tabela)
+      lerNumerosDosDisparos([onda.id]),
+      lerEnviosPorHora(onda.id, fusoDaUnidade(r.unit)),
     ]);
     const def = definicaoDaOnda(onda);
     const fontes = def.variaveis;
@@ -375,8 +380,10 @@ export async function disparosOndaHandler(req: Request, res: Response): Promise<
       conferencia = onda.caixaChatwoot != null ? await conferirComTeto(r.ctx, onda.caixaChatwoot, { template: onda.template, idioma: onda.idioma, textoModelo: onda.textoModelo, variaveis: fontes }) : { ok: false, motivo: 'o disparo não tem caixa gravada' };
     }
     const quem = quemAprova({ email: r.email, papel: r.papel }, ajuste);
+    const numeros = numerosPorOnda.get(onda.id) ?? NUMEROS_VAZIOS;
     res.set('Cache-Control', 'no-store').json({
       id: onda.id,
+      relatorio: { numeros, taxas: taxasDoRelatorio(numeros), porHora, fuso: fusoDaUnidade(r.unit) },
       nome: onda.campanha.nome,
       estado: onda.estado,
       modo: modoDoDisparoNoCrm(r.unit.slug),
@@ -396,7 +403,7 @@ export async function disparosOndaHandler(req: Request, res: Response): Promise<
       truncada: resumo.truncada === true,
       fora: Object.entries(resumo.fora ?? {}).filter(([, n]) => n).map(([motivo, n]) => ({ motivo, rotulo: rotuloDaExclusaoNoCrm(motivo), n })),
       contagem: Object.fromEntries(grupos.map((g) => [g.estado, g._count])),
-      simulados,
+      simulados: numeros.receberiam,
       destinatarios: linhas.map((p) => ({
         nome: p.nome,
         telefone: telefoneMascarado(p.telefone),
@@ -451,6 +458,32 @@ export async function disparosCancelarHandler(req: Request, res: Response): Prom
     return;
   }
   res.json({ ok: true, estado: c.dados.estado });
+}
+
+// ── relatório por campanha ──────────────────────────────────────────────────────────────────────────────────────
+
+export async function disparosRelatorioHandler(req: Request, res: Response): Promise<void> {
+  const r = await resolver(req, res, slugDe(req.query.slug));
+  if (!r) return;
+  try {
+    const ondas = await prisma.disparoOnda.findMany({
+      where: { unitId: r.unit.id, origem: ORIGEM_CRM, contaChatwoot: r.conta },
+      orderBy: { criadoEm: 'desc' },
+      take: 30,
+      select: { id: true, estado: true, total: true, template: true, criadoEm: true, aprovadaEm: true, campanha: { select: { nome: true } } },
+    });
+    const numerosPorOnda = await lerNumerosDosDisparos(ondas.map((o) => o.id)); // agrupado no banco: não lê linha nenhuma
+    res.set('Cache-Control', 'no-store').json({
+      modo: modoDoDisparoNoCrm(r.unit.slug),
+      campanhas: ondas.map((o) => {
+        const numeros = numerosPorOnda.get(o.id) ?? NUMEROS_VAZIOS;
+        return { id: o.id, nome: o.campanha.nome, estado: o.estado, modelo: o.template, criadoEm: o.criadoEm, aprovadaEm: o.aprovadaEm, numeros, taxas: taxasDoRelatorio(numeros) };
+      }),
+    });
+  } catch (e) {
+    logger.warn({ err: String(e), unit: r.unit.slug }, 'disparos: relatório falhou');
+    res.status(502).json({ error: 'não consegui montar o relatório agora' });
+  }
 }
 
 // ── ajuste da unidade ───────────────────────────────────────────────────────────────────────────────────────────

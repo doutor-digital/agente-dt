@@ -16,6 +16,7 @@ import { ajusteDaUnidade, freiosComOTier } from './ajuste.js';
 import { lerMensagens, ultimoPedidoDeSaida } from './mensagens.js';
 import { ctxDaUnidadeNoCrm, ORIGEM_CRM } from './onda.js';
 import { idDaMensagem, portoChatwoot, unidadesDoMesmoNumeroKapso, type OndaDaRodada } from './porto.js';
+import { JANELA_DA_RESPOSTA_MS } from './relatorio.js';
 import type { ContextoChatwoot } from '../../../mcp-remoto/chatwoot.js';
 
 const HORAS_OLHANDO = 72;
@@ -51,10 +52,18 @@ export async function varrerRespostasDoCrm(deps: VarredorDeps = {}): Promise<{ s
   const ler = deps.mensagens ?? lerMensagens;
   const ctxDe = deps.ctx ?? ctxDaUnidadeNoCrm;
   const enviados = await prisma.disparoDestinatario.findMany({
-    where: { onda: { origem: ORIGEM_CRM }, estado: { in: ['enviado', 'falhou'] }, conversaChatwoot: { not: null }, enviadoEm: { gte: new Date(inicio - HORAS_OLHANDO * 3_600_000) } },
+    where: { onda: { origem: ORIGEM_CRM }, estado: { in: ['enviado', 'falhou', 'saiu'] }, conversaChatwoot: { not: null }, enviadoEm: { gte: new Date(inicio - HORAS_OLHANDO * 3_600_000) } },
     orderBy: { enviadoEm: 'asc' },
-    select: { id: true, estado: true, wamid: true, conversaChatwoot: true, enviadoEm: true, onda: { select: { unitId: true, contaChatwoot: true, unit: { select: { slug: true } } } } },
+    select: { id: true, estado: true, wamid: true, conversaChatwoot: true, enviadoEm: true, entregueEm: true, lidaEm: true, respondeuEm: true, onda: { select: { unitId: true, contaChatwoot: true, unit: { select: { slug: true } } } } },
   });
+  // quem pode MUDAR de estado (SAIR, falha) vem primeiro; quem já saiu só renova marcas, por último, e some quando já tem tudo
+  const fila = enviados.filter((e) => !(e.estado === 'saiu' && e.entregueEm && e.respondeuEm)).sort((a, b) => Number(a.estado === 'saiu') - Number(b.estado === 'saiu'));
+  // a resposta é da ÚLTIMA mensagem nossa antes dela: na mesma conversa, um disparo mais novo "rouba" a resposta do mais velho
+  const enviosDaConversa = new Map<string, number[]>();
+  for (const e of enviados) {
+    const k = `${e.onda.contaChatwoot}:${e.conversaChatwoot}`;
+    enviosDaConversa.set(k, [...(enviosDaConversa.get(k) ?? []), e.enviadoEm!.getTime()]);
+  }
   let saiu = 0;
   let falhou = 0;
   let conferidos = 0;
@@ -62,22 +71,38 @@ export async function varrerRespostasDoCrm(deps: VarredorDeps = {}): Promise<{ s
   const restritosUnitIds = new Set<string>();
   let i = 0;
   await Promise.all(
-    Array.from({ length: Math.min(SIMULTANEAS, enviados.length) }, async () => {
-      while (i < enviados.length && relogio() - inicio < ORCAMENTO_DA_VARREDURA_MS) {
-        const e = enviados[i++]!;
+    Array.from({ length: Math.min(SIMULTANEAS, fila.length) }, async () => {
+      while (i < fila.length && relogio() - inicio < ORCAMENTO_DA_VARREDURA_MS) {
+        const e = fila[i++]!;
         const ctx = ctxDe(e.onda.unit.slug);
         if (!ctx?.conta || ctx.conta.conta !== e.onda.contaChatwoot) continue;
         try {
           const msgs = await ler(ctx, e.conversaChatwoot!, 3);
           conferidos++;
+          const mid = idDaMensagem(e.wamid);
+          const nossa = mid ? msgs.find((m) => m.id === mid) : undefined;
+          // As marcas do relatório (entregue, lida, respondeu): gravadas uma vez, na primeira varredura que as vê. A hora é a da varredura.
+          const marcas: Record<string, Date> = {};
+          const visto = new Date(relogio());
+          if (nossa && (nossa.status === 'delivered' || nossa.status === 'read') && !e.entregueEm) marcas.entregueEm = visto;
+          if (nossa?.status === 'read') {
+            if (!e.lidaEm) marcas.lidaEm = visto;
+            if (!e.entregueEm) marcas.entregueEm = visto;
+          }
+          const outrosEnvios = (enviosDaConversa.get(`${e.onda.contaChatwoot}:${e.conversaChatwoot}`) ?? []).filter((t) => t > e.enviadoEm!.getTime());
+          const primeiraResposta = msgs
+            .filter((m) => m.tipo === 0 && !m.privada && m.criadaEm >= e.enviadoEm! && m.criadaEm.getTime() - e.enviadoEm!.getTime() <= JANELA_DA_RESPOSTA_MS)
+            .filter((m) => !outrosEnvios.some((t) => t <= m.criadaEm.getTime()))
+            .sort((a, b) => a.criadaEm.getTime() - b.criadaEm.getTime())[0];
+          if (primeiraResposta && !e.respondeuEm) marcas.respondeuEm = primeiraResposta.criadaEm;
+          if (Object.keys(marcas).length) await prisma.disparoDestinatario.updateMany({ where: { id: e.id }, data: marcas });
+          if (e.estado === 'saiu') continue; // já contado; só as marcas acima ainda importavam
           const pediu = ultimoPedidoDeSaida(msgs);
           if (pediu && pediu.getTime() >= e.enviadoEm!.getTime()) {
             const r = await prisma.disparoDestinatario.updateMany({ where: { id: e.id, estado: { in: ['enviado', 'falhou'] } }, data: { estado: 'saiu', motivo: 'respondeu SAIR depois do envio' } });
             saiu += r.count;
             continue;
           }
-          const mid = idDaMensagem(e.wamid);
-          const nossa = mid ? msgs.find((m) => m.id === mid) : undefined;
           if (e.estado === 'enviado' && nossa?.status === 'failed') {
             const motivo = `o CRM marcou a entrega como falha${nossa.erro ? `: ${nossa.erro}` : ''}`.slice(0, 300);
             const r = await prisma.disparoDestinatario.updateMany({ where: { id: e.id, estado: 'enviado' }, data: { estado: 'falhou', motivo } });
@@ -93,7 +118,7 @@ export async function varrerRespostasDoCrm(deps: VarredorDeps = {}): Promise<{ s
       }
     }),
   );
-  return { saiu, falhou, restritos: [...restritos], restritosUnitIds: [...restritosUnitIds], conferidos, faltaram: Math.max(0, enviados.length - i) };
+  return { saiu, falhou, restritos: [...restritos], restritosUnitIds: [...restritosUnitIds], conferidos, faltaram: Math.max(0, fila.length - i) };
 }
 
 /** Roda a varredura se já passou o intervalo e não há outra andando. Nunca lança. O relógio só anda quando ela TERMINOU. */

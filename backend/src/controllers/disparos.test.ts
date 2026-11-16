@@ -343,9 +343,45 @@ test('«receberia (seco)» vem da CONTAGEM no banco, não das 150 linhas da tabe
   const ondaDb = { id: 'ondaaaaaaa1', unitId: 'u1', origem: 'chatwoot', contaChatwoot: 1, estado: 'aprovada', total: 300, impressao: 'x', etiqueta: 'CRM', template: 't', idioma: 'pt_BR', textoModelo: 'Oi {{1}}', variaveis: ['primeiroNome'], cabecalho: null, resumo: {}, campanha: { nome: 'Seco grande' }, caixaChatwoot: 3 };
   preparar({ onda: ondaDb });
   const linhas = Array.from({ length: 150 }, (_, i) => ({ nome: `P${i}`, telefone: '5594991000001', estado: 'pendente', motivo: null, enviadoEm: null, simuladoEm: new Date() }));
-  falso('disparoDestinatario', { groupBy: async () => [{ estado: 'pendente', _count: 300 }], findMany: async () => linhas, count: async () => 300 });
+  falso('disparoDestinatario', { groupBy: async () => [{ estado: 'pendente', _count: 300 }], findMany: async () => linhas });
+  // os números vêm agrupados do BANCO (uma consulta); a tabela tem só as primeiras 150 linhas
+  falso('$queryRaw', (async (q: { sql?: string }) => (/GROUP BY onda_id/.test(q.sql ?? '') ? [{ onda_id: 'ondaaaaaaa1', selecionadas: 300, enviadas: 0, tentadas: 0, entregues: 0, lidas: 0, responderam: 0, pediram_sair: 0, falharam: 0, na_fila: 300, descartadas: 0, receberiam: 300 }] : [])) as never);
   const r = await pedir('GET', `/public/disparos/ondas/ondaaaaaaa1?slug=${PARAU}`, 'tok-dd');
   assert.equal(r.status, 200);
   assert.equal(r.corpo.simulados, 300);
   assert.equal(r.corpo.destinatarios.length, 150);
+});
+
+test('relatório por campanha: só as campanhas DESTA unidade e conta; os seis números e as taxas; sem telefone nem nome', async () => {
+  preparar();
+  const h = (n: number) => new Date(Date.now() - n * 3_600_000);
+  const consultas: Array<Record<string, unknown>> = [];
+  falso('disparoOnda', {
+    findMany: async (a: { where: Record<string, unknown> }) => (consultas.push(a.where), [{ id: 'ondaaaaaaa1', estado: 'aprovada', total: 4, template: 'parau_reativacao', criadoEm: h(20), aprovadaEm: h(19), campanha: { nome: 'Reativação' } }]),
+  });
+  const consultasSql: string[] = [];
+  falso('$queryRaw', (async (q: { sql?: string }) => (consultasSql.push(q.sql ?? ''), [{ onda_id: 'ondaaaaaaa1', selecionadas: 4, enviadas: 3, tentadas: 4, entregues: 3, lidas: 1, responderam: 1, pediram_sair: 1, falharam: 1, na_fila: 0, descartadas: 0, receberiam: 0 }])) as never);
+  falso('disparoDestinatario', {
+    findMany: async () => {
+      throw new Error('o relatório NÃO lê linhas de destinatário: os números vêm agrupados do banco');
+    },
+  });
+  const r = await pedir('GET', `/public/disparos/relatorio?slug=${PARAU}`, 'tok-agente');
+  assert.equal(r.status, 200);
+  assert.deepEqual(consultas[0], { unitId: 'u1', origem: 'chatwoot', contaChatwoot: 1 }, 'a busca leva a unidade E a conta da sessão');
+  assert.equal(consultasSql.length, 1, 'uma consulta agrupada para todas as campanhas');
+  assert.match(consultasSql[0]!, /GROUP BY onda_id/);
+  const c = r.corpo.campanhas[0];
+  assert.equal(c.nome, 'Reativação');
+  assert.deepEqual(c.numeros, { selecionadas: 4, enviadas: 3, tentadas: 4, entregues: 3, lidas: 1, responderam: 1, pediramSair: 1, falharam: 1, naFila: 0, descartadas: 0, receberiam: 0 });
+  assert.deepEqual(c.taxas, { entregues: 100, lidas: 33, responderam: 33, pediramSair: 33, falharam: 25 });
+  assert.ok(!/\d{10,}/.test(JSON.stringify(r.corpo).replace(/"criadoEm":"[^"]+"|"aprovadaEm":"[^"]+"/g, '')), 'o relatório não carrega telefone (só contagens)');
+  assert.equal((await pedir('GET', `/public/disparos/relatorio?slug=${DEMO.slug}`, 'tok-agente')).status, 403, 'unidade de outra conta: não atende');
+});
+
+test('a página tem o relatório por campanha e o relatório dentro do disparo', () => {
+  const js = scriptDaPagina();
+  assert.ok(js.includes("'/api/public/disparos/relatorio?slug='"));
+  for (const t of ['Relatório por campanha', 'Responderam (72 h)', 'Pediram SAIR', 'Falharam', 'Entregues', 'Lidas']) assert.ok(js.includes(t), t);
+  assert.ok(paginaDosDisparos(CW).includes('id="btRel"'));
 });

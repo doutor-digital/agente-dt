@@ -20,7 +20,7 @@ import { listaDeTesteDoAmbiente } from '../porto.js';
 import type { Modo, Porto, VereditoExtra } from '../lote.js';
 import type { ResultadoDoTemplate } from '../../whatsapp-meta.js';
 import { caixaWhatsappOficial, conferirModeloDaOnda, type CaixaOficial, type ConferenciaDoModelo } from './canal.js';
-import { ultimoPedidoDeSaidaDoContato } from './mensagens.js';
+import { idDaMensagem, ultimoPedidoDeSaidaDoContato } from './mensagens.js';
 import { conversaDoPublico, situacaoPeloCrm, DIAS_SEM_REPETIR_DISPARO } from './publico.js';
 import { ETIQUETA_SEM_FOLLOW_UP } from './filtro.js';
 import { prisma } from '../../prisma.js';
@@ -73,10 +73,7 @@ const recebeuDesdeNoBanco = (unitId: string, chave: string, ondaId: string, desd
 /** O contador de rodadas com limite de taxa do CRM: uma chave própria (o do Kommo é o número da Graph API, outro número). */
 export const chaveDoLimiteDoCrm = (unitId: string): string => `crm:${unitId}`;
 
-export const idDaMensagem =(wamid: string | null | undefined): number | null => {
-  const m = /^cw:(\d{1,12})$/.exec(wamid ?? '');
-  return m ? Number(m[1]) : null;
-};
+export { idDaMensagem };
 
 export function portoChatwoot(deps: DepsDoPortoChatwoot): Porto {
   const { base, unidades, ondas } = deps;

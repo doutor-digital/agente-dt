@@ -2444,6 +2444,11 @@ model DisparoDestinatario {
   /// modo seco: quando a decisão "receberia" foi gravada. Não é envio.
   simuladoEm   DateTime? @map("simulado_em")
   enviadoEm    DateTime? @map("enviado_em")
+  /// origem 'chatwoot' (gravados pela varredura depois do envio; a hora é a em que a varredura VIU, não a da Meta): entregue, lida,
+  /// e a 1ª mensagem do paciente em até 72 h depois do envio
+  entregueEm   DateTime? @map("entregue_em")
+  lidaEm       DateTime? @map("lida_em")
+  respondeuEm  DateTime? @map("respondeu_em")
   criadoEm     DateTime  @default(now()) @map("criado_em")
   atualizadoEm DateTime  @updatedAt @map("atualizado_em")
 

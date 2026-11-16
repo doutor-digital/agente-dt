@@ -729,8 +729,10 @@ test('varredura: quem escreveu SAIR depois do envio vira «saiu»; mensagem que 
   assert.equal(r.falhou, 1);
   assert.deepEqual(r.restritos, [UNIDADE.slug]);
   assert.equal(r.faltaram, 0);
-  assert.deepEqual(atualizacoes.map((a) => [a.id, a.data.estado]).sort(), [['a', 'saiu'], ['b', 'falhou']]);
-  assert.match(String(atualizacoes.find((a) => a.id === 'b')!.data.motivo), /131048/);
+  // (as marcas do relatório — entregue/lida/respondeu — também passam por aqui; o que interessa a este teste são as mudanças de ESTADO)
+  const deEstado = atualizacoes.filter((a) => a.data.estado);
+  assert.deepEqual(deEstado.map((a) => [a.id, a.data.estado]).sort(), [['a', 'saiu'], ['b', 'falhou']]);
+  assert.match(String(deEstado.find((a) => a.id === 'b')!.data.motivo), /131048/);
 });
 
 test('varredura: conta diferente da gravada na onda não lê nada; e NÃO há corte dos 150 mais novos (lê todos até o orçamento de tempo)', async () => {

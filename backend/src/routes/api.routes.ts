@@ -162,7 +162,7 @@ import {
 } from '../controllers/funil.controller.js';
 import { assistenteAvaliarHandler, assistenteRespostasHandler, assistenteEstadoHandler, assistentePausaAcaoHandler, assistentePausaEstadoHandler, assistentePerguntarHandler, assistenteSugerirHandler } from '../controllers/assistente.controller.js';
 import { robosAutomacaoMudarHandler, robosAutomacoesHandler, robosEnviadosHandler, robosHandler, robosMudarHandler } from '../controllers/robos.controller.js';
-import { disparosAjusteHandler, disparosAprovarHandler, disparosCancelarHandler, disparosContarHandler, disparosHandler, disparosMontarHandler, disparosOndaHandler, disparosOpcoesHandler } from '../controllers/disparos.controller.js';
+import { disparosAjusteHandler, disparosAprovarHandler, disparosCancelarHandler, disparosContarHandler, disparosHandler, disparosMontarHandler, disparosOndaHandler, disparosOpcoesHandler, disparosRelatorioHandler } from '../controllers/disparos.controller.js';
 import { agenteNovoPedidoHandler, agentePainelHandler, agentePedidosHandler, agenteRegistroHandler, agenteRevisarHandler } from '../controllers/agente-chatwoot.controller.js';
 import { centralChamadoFeitoHandler, centralChamadosHandler, centralEstadoHandler, centralGeralHandler, centralPessoaHandler } from '../controllers/central.controller.js';
 import { lidaEvolutionHandler } from '../lib/chatwoot-lida.js';
@@ -409,6 +409,7 @@ apiRouter.post('/public/robos/:regra', robosMudarHandler);
 // tela Disparos do Chatwoot (16/11): filtrar, escolher o modelo aprovado, prévia, aprovar e acompanhar — login do Chatwoot; aprovar só quem a unidade ou a administração autoriza
 apiRouter.get('/public/disparos', disparosHandler);
 apiRouter.get('/public/disparos/opcoes', disparosOpcoesHandler);
+apiRouter.get('/public/disparos/relatorio', disparosRelatorioHandler);
 apiRouter.post('/public/disparos/contar', disparosContarHandler);
 apiRouter.post('/public/disparos/ondas', disparosMontarHandler);
 apiRouter.get('/public/disparos/ondas/:id', disparosOndaHandler);

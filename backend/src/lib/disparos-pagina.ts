@@ -77,7 +77,7 @@ ul.lis{margin:0;padding-left:1.2em;display:grid;gap:3px}
 <div id="avisos"></div>
 <div class="app" id="corpo" hidden>
   <aside class="lado" aria-label="Seus disparos">
-    <div class="lado-cab"><h1>Disparos</h1><button class="bt pri" type="button" id="btNovo">+ Novo</button></div>
+    <div class="lado-cab"><h1>Disparos</h1><button class="bt sec" type="button" id="btRel">Relatório</button><button class="bt pri" type="button" id="btNovo">+ Novo</button></div>
     <nav class="lista" id="lista"></nav>
   </aside>
   <main class="palco" id="palco"></main>
@@ -324,6 +324,31 @@ ul.lis{margin:0;padding-left:1.2em;display:grid;gap:3px}
     } catch (e) { toast(e.message, true); bt.disabled = false; bt.textContent = 'Montar disparo'; }
   }
 
+  // ── RELATÓRIO ──
+  function pct(n, t){ return t ? Math.round((n / t) * 100) + '%' : '—'; }
+  function numeroComPct(n, base){ return base == null ? String(n) : n + ' (' + pct(n, base) + ')'; }
+  async function mostrarRelatorio(){
+    pararPoll(); atualId = null; ONDA = null; desenharLista();
+    var p = limpar($('palco')), col = el('div', 'col'); p.appendChild(col);
+    var c = el('div', 'card'); c.appendChild(el('h2', null, 'Relatório por campanha')); col.appendChild(c);
+    var corpo = el('p', 'mudo', 'Carregando…'); c.appendChild(corpo);
+    var r;
+    try { r = await api('GET', '/api/public/disparos/relatorio?slug=' + enc(U.slug)); } catch (e) { corpo.textContent = e.message; corpo.className = 'ruim'; return; }
+    if (!r.campanhas.length) { corpo.textContent = 'Nenhum disparo ainda.'; return; }
+    c.removeChild(corpo);
+    var t = el('table'), th = el('thead'), tr = el('tr');
+    ['Campanha', 'Selecionadas', 'Enviadas', 'Entregues', 'Lidas', 'Responderam (72 h)', 'Pediram SAIR', 'Falharam'].forEach(function(h){ tr.appendChild(el('th', null, h)); }); th.appendChild(tr); t.appendChild(th);
+    var tb = el('tbody');
+    r.campanhas.forEach(function(k){
+      var n = k.numeros, x = el('tr'), nome = el('td'); var a = el('a', null, k.nome); a.href = '#'; a.addEventListener('click', function(ev){ ev.preventDefault(); abrirOnda(k.id); }); nome.appendChild(a);
+      nome.appendChild(el('small', 'mudo', ' · ' + (ESTADO[k.estado] || k.estado) + ' · ' + quando(k.criadoEm))); x.appendChild(nome);
+      [n.selecionadas, numeroComPct(n.enviadas, n.selecionadas), numeroComPct(n.entregues, n.enviadas), numeroComPct(n.lidas, n.enviadas), numeroComPct(n.responderam, n.enviadas), numeroComPct(n.pediramSair, n.enviadas), n.falharam].forEach(function(v){ x.appendChild(el('td', null, String(v))); });
+      tb.appendChild(x);
+    });
+    t.appendChild(tb); var w = el('div', 'rolar'); w.appendChild(t); c.appendChild(w);
+    c.appendChild(el('p', 'mudo', 'Entregue, lida e respondeu são o que o CRM mostrava na última conferência (a cada 5 minutos, por 72 h depois do envio). «Responderam» não inclui quem pediu para sair. Em modo seco as colunas ficam em zero: nada foi enviado.'));
+  }
+
   // ── UM DISPARO ──
   async function abrirOnda(id){
     pararPoll(); atualId = id; desenharLista();
@@ -349,6 +374,14 @@ ul.lis{margin:0;padding-left:1.2em;display:grid;gap:3px}
     if (o.aprovadaPor) c.appendChild(el('p', 'mudo', 'Aprovada por ' + o.aprovadaPor + ' em ' + quando(o.aprovadaEm) + (o.aprovadaModo && o.aprovadaModo !== 'ligado' ? ' (com a unidade em ' + (o.aprovadaModo === 'seco' ? 'seco' : 'modo desligado') + ': não vale como aprovação de envio)' : '') + '.'));
     var f = el('div', 'fatos'); fato(f, o.total, 'pessoas'); fato(f, o.candidatos == null ? '—' : o.candidatos, 'passaram no filtro'); fato(f, o.contagem.enviado || 0, 'enviadas'); fato(f, o.simulados, 'com «receberia» (seco)'); fato(f, (o.contagem.falhou || 0) + (o.contagem.saiu || 0) + (o.contagem.descartado || 0), 'falharam, pediram SAIR ou saíram da lista'); c.appendChild(f);
     col.appendChild(c);
+    if (o.relatorio && o.relatorio.numeros.enviadas + o.relatorio.numeros.falharam > 0) {
+      var cr = el('div', 'card'); cr.appendChild(el('h2', null, 'Relatório')); var n = o.relatorio.numeros, fr2 = el('div', 'fatos');
+      fato(fr2, n.enviadas, 'enviadas'); fato(fr2, numeroComPct(n.entregues, n.enviadas), 'entregues'); fato(fr2, numeroComPct(n.lidas, n.enviadas), 'lidas'); fato(fr2, numeroComPct(n.responderam, n.enviadas), 'responderam (até 72 h)'); fato(fr2, numeroComPct(n.pediramSair, n.enviadas), 'pediram para sair'); fato(fr2, n.falharam, 'falharam');
+      cr.appendChild(fr2);
+      if (o.relatorio.porHora.length) { var ul2 = el('ul', 'lis'); o.relatorio.porHora.forEach(function(h){ ul2.appendChild(el('li', null, h.hora.replace(' ', ' às ') + 'h — ' + h.enviadas + ' enviadas')); }); cr.appendChild(el('div', 'rot mudo', 'Envios por hora (' + (o.relatorio.fuso || 'America/Sao_Paulo') + ')')); cr.appendChild(ul2); }
+      cr.appendChild(el('p', 'mudo', 'Entregue, lida e respondeu são o que o CRM mostrava na última conferência (a cada 5 minutos, por 72 h depois do envio).'));
+      col.appendChild(cr);
+    }
     // a mensagem
     var cz = el('div', 'card'); cz.appendChild(el('h2', null, 'O que cada pessoa vai ler')); var zap = el('div', 'zap');
     if (o.exemplos.length) o.exemplos.forEach(function(t){ zap.appendChild(el('div', 'bal', t)); }); else zap.appendChild(el('div', 'bal', o.modelo.texto));
@@ -444,6 +477,7 @@ ul.lis{margin:0;padding-left:1.2em;display:grid;gap:3px}
     } catch (e) { aviso(e.message, true); }
   }
   $('btNovo').addEventListener('click', function(){ if (U && D) mostrarNovo(); });
+  $('btRel').addEventListener('click', function(){ if (U && D) mostrarRelatorio(); });
   window.addEventListener('message', function(ev){
     if (!origemDoCrm(ev.origin) || ev.source !== window.parent) return;
     var d = ev.data; if (!d || d.event !== 'funil-sessao') return;

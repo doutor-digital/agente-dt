@@ -7,6 +7,12 @@
 import { chamar, type ContextoChatwoot } from '../../../mcp-remoto/chatwoot.js';
 import { pediuParaSair } from '../regras.js';
 
+/** O id da mensagem do CRM guardado em `wamid` (`cw:<id>`); `null` se o wamid não é de uma mensagem do CRM. */
+export const idDaMensagem = (wamid: string | null | undefined): number | null => {
+  const m = /^cw:(\d{1,12})$/.exec(wamid ?? '');
+  return m ? Number(m[1]) : null;
+};
+
 export interface MensagemLida {
   id: number;
   /** 0 = recebida do paciente · 1 = enviada · 2 = atividade · 3 = modelo */
