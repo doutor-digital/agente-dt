@@ -55,14 +55,14 @@ export const JANELA_DA_EQUIPE_MS = 24 * 3600_000;
  * para o eco chegar ao Kommo; para trás, tolerância de relógio entre a entrada e o eco.
  */
 export const RESPOSTA_AUTOMATICA_MS = 20_000;
-const RESPOSTA_AUTOMATICA_ANTES_MS = 5_000;
+export const RESPOSTA_AUTOMATICA_ANTES_MS = 5_000;
 /** Resposta automática é texto pronto e longo; "Tenho sim." em 6 s é gente. */
 export const RESPOSTA_AUTOMATICA_MIN_CARACTERES = 40;
 const MENSAGENS_LIDAS = 40;
 
 const APP_DO_CELULAR = 'whatsapp business';
 /** Aviso do Kommo/WhatsApp que sai como mensagem de saída ("Unable to open this message…"). */
-const AVISO_DO_SISTEMA = /^(unable to (open|display) this message|n[aã]o foi poss[ií]vel (abrir|exibir) (esta|essa) mensagem)/i;
+export const AVISO_DO_SISTEMA = /^(unable to (open|display) this message|n[aã]o foi poss[ií]vel (abrir|exibir) (esta|essa) mensagem)/i;
 
 type Recorder = { step(args: { kind: 'THINKING' | 'KOMMO_ACTION' | 'COMPLETED' | 'ERROR'; title: string; payload?: unknown }): Promise<void> };
 

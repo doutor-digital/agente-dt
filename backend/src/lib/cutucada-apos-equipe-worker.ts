@@ -357,9 +357,10 @@ export async function varrerCutucada(unit: Unit, estado: Exclude<Estado, 'deslig
 
   // Ligado precisa de ROTA DE ENVIO pelo Salesbot (o mesmo caminho da Sofia): sem ela o `sendChatReply` cairia numa NOTA no cartão e o
   // paciente não receberia nada. No papel segue — o João precisa ver os textos mesmo antes de a rota existir.
-  if (!seco && !(unit.kommoReplyFieldId && (unit.kommoSalesbotId || unit.kommoBypassSalesbot))) {
+  // E sem o modo «bypass»: ali o texto vai em pedaços de 240 caracteres e, se o 2º falha, o cliente tenta OUTRAS rotas e o paciente pode receber duas vezes.
+  if (!seco && !(unit.kommoReplyFieldId && unit.kommoSalesbotId && !unit.kommoBypassSalesbot)) {
     conta(r.barrados, 'sem-rota-de-envio-pelo-salesbot');
-    logger.warn({ unit: unit.slug }, 'cutucada: a unidade não tem Salesbot/campo de resposta — ligada não enviaria nada ao paciente, pulei');
+    logger.warn({ unit: unit.slug }, 'cutucada: a unidade não tem Salesbot + campo de resposta (ou usa o modo bypass, que envia em pedaços) — ligada não enviaria com segurança, pulei');
     return r;
   }
 
@@ -387,7 +388,7 @@ export async function varrerCutucada(unit: Unit, estado: Exclude<Estado, 'deslig
   const abertos: KommoLead[] = [];
   for (const lead of noFunil) {
     if (pularCartao(deps.grupo, unit.id, lead, r)) continue; // Kommo dividido: só os cartões desta unidade
-    const visto = vistoAte.get(`${unit.id}:${lead.id}`);
+    const visto = vistoAte.get(`${unit.id}:${seco ? 'seco' : 'ligado'}:${lead.id}`);
     if (visto && visto.atualizadoEm === (lead.updated_at ?? 0) && (visto.ateMs === null || agora.getTime() < visto.ateMs)) {
       conta(r.barrados, 'conversa-ja-lida-sem-novidade');
       continue;
@@ -400,16 +401,12 @@ export async function varrerCutucada(unit: Unit, estado: Exclude<Estado, 'deslig
     abertos.push(lead);
   }
 
-  // 3) o banco: já cutucado (a marca) e pausa com data. Em lote, uma leitura só.
+  // 3) o banco: já cutucado (a marca). Em lote, uma leitura só.
   const cutucados = await deps.jaCutucados(unit.id, abertos.map((l) => l.id));
   const fila: KommoLead[] = [];
   for (const lead of abertos) {
     if (cutucados.has(lead.id)) {
       conta(r.barrados, 'ja-cutucado');
-      continue;
-    }
-    if (await deps.leadPausadoPorJanela(unit.id, lead.id).catch(() => true)) {
-      conta(r.barrados, 'pausa-com-data');
       continue;
     }
     fila.push(lead);
@@ -421,7 +418,8 @@ export async function varrerCutucada(unit: Unit, estado: Exclude<Estado, 'deslig
   let errosPermanentes = 0;
   for (const lead of fila) {
     if (r.lidas >= MAX_LEITURAS || textos >= MAX_TEXTOS || r.enviadas >= MAX_ENVIOS) break;
-    const chaveVisto = `${unit.id}:${lead.id}`;
+    // a memória é POR ESTADO: o que o «só no papel» já viu não pode esconder o lead quando a chave passa a ligada (o João liga sem reiniciar o processo)
+    const chaveVisto = `${unit.id}:${seco ? 'seco' : 'ligado'}:${lead.id}`;
     try {
       r.lidas++;
       const falas = await lerFalas(unit, deps, lead);
@@ -435,6 +433,12 @@ export async function varrerCutucada(unit: Unit, estado: Exclude<Estado, 'deslig
         continue;
       }
       const ultima = d.ultimaDaEquipe;
+      // pausa com data do widget: uma consulta por candidato REAL (não uma por cartão da janela)
+      if (await deps.leadPausadoPorJanela(unit.id, lead.id).catch(() => true)) {
+        conta(r.barrados, 'pausa-com-data');
+        vistoAte.set(chaveVisto, { atualizadoEm: lead.updated_at ?? 0, ateMs: agora.getTime() + SEGURADA_MS });
+        continue;
+      }
       const chaveFala = `${unit.id}:${lead.id}:${ultima.id}`;
       // texto já reprovado duas vezes para esta fala da equipe: nem pergunta à franquia nem gasta o modelo (só uma fala nova muda isso)
       if ((tentativas.get(chaveFala) ?? 0) >= TENTATIVAS_DE_TEXTO) {

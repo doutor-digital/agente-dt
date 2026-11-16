@@ -23,7 +23,7 @@ import type { MensagemOficial } from '../services/kommo-talks-normalizar.js';
 import { JANELA_DO_ENVIO_MS } from '../services/kommo-talks-normalizar.js';
 import { porQueNaoTocar, intentsDe, inteiro, temEtiqueta, type Cartao, type OpcoesDeCartao, type RazaoDeFicar } from './rotina-nucleo.js';
 import { ETIQUETAS_RETOMADA } from './rotina-etapas-worker.js';
-import { RESPOSTA_AUTOMATICA_MS, RESPOSTA_AUTOMATICA_MIN_CARACTERES } from './pausa-equipe.js';
+import { AVISO_DO_SISTEMA as AVISO_BASE, RESPOSTA_AUTOMATICA_ANTES_MS, RESPOSTA_AUTOMATICA_MS, RESPOSTA_AUTOMATICA_MIN_CARACTERES } from './pausa-equipe.js';
 import { normalizarNome } from './kommo-schema.js';
 import { retornoDaEquipe } from './retorno-da-equipe.js';
 import { fusoDaUnidade } from './fuso.js';
@@ -69,8 +69,8 @@ const APPS_DO_CELULAR = ['whatsapp lite', 'whatsapp business'];
 
 /** Saudação/ausência que o app manda sozinho (Lite: "Agradecemos o seu contato! Nosso atendimento é de segunda a sexta…"). */
 const RESPOSTA_AUTOMATICA = /agradecemos o seu contato|nosso atendimento (é|e) de |fora do (nosso )?hor[aá]rio|hor[aá]rio de atendimento (é|e) /i;
-/** Aviso do Kommo/WhatsApp que sai como mensagem de saída ("Unable to open this message…"). */
-const AVISO_DO_SISTEMA = /^(unable to (open|display) this message|n[aã]o foi poss[ií]vel (abrir|exibir) (esta|essa) mensagem|'?messagecontextinfo'? is not yet supported)/i;
+/** Aviso do Kommo/WhatsApp que sai como mensagem de saída: o da `pausa-equipe` + o «messageContextInfo» que o Lite mostra. */
+const AVISO_DO_SISTEMA = new RegExp(`${AVISO_BASE.source}|^'?messagecontextinfo'? is not yet supported`, 'i');
 
 /**
  * Textos de robô do Kommo que saem como o USUÁRIO `internal` — o mesmo login com que a SDR escreve dentro do Kommo, então o autor
@@ -96,7 +96,7 @@ export function ehRespostaAutomaticaDoApp(m: Pick<MensagemOficial, 'direcao' | '
   return todas.some((p) => {
     if (p.direcao !== 'entrada') return false;
     const d = t - p.em.getTime();
-    return d >= -5_000 && d <= RESPOSTA_AUTOMATICA_MS;
+    return d >= -RESPOSTA_AUTOMATICA_ANTES_MS && d <= RESPOSTA_AUTOMATICA_MS;
   });
 }
 

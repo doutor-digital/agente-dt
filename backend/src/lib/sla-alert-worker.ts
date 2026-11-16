@@ -18,14 +18,14 @@ function limiarMin(unit: Unit): number | null {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-function agoraLocal(tz: string, agora: Date = new Date()): { minutos: number; diaSemana: number } {
+function agoraLocal(tz: string): { minutos: number; diaSemana: number } {
   const p = new Intl.DateTimeFormat('en-GB', {
     timeZone: tz || 'America/Sao_Paulo',
     hour: '2-digit',
     minute: '2-digit',
     weekday: 'short',
     hour12: false,
-  }).formatToParts(agora);
+  }).formatToParts(new Date());
   const h = Number(p.find((x) => x.type === 'hour')?.value ?? 0);
   const m = Number(p.find((x) => x.type === 'minute')?.value ?? 0);
   const dias: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
@@ -42,9 +42,9 @@ function paraMinutos(hhmm: string | null | undefined): number | null {
 }
 
 /** Horário de atendimento da unidade agora (dias da agenda, 8h–20h no máximo, sem feriado nacional). O alerta do Telegram também usa. */
-export function dentroDoHorario(unit: Pick<Unit, 'spineTimezone' | 'spineAgendaDays' | 'spineAgendaStart' | 'spineAgendaEnd'>, agora: Date = new Date()): boolean {
-  if (ehFeriadoNacionalAgora(agora, unit.spineTimezone ?? 'America/Sao_Paulo')) return false;
-  const { minutos, diaSemana } = agoraLocal(unit.spineTimezone ?? 'America/Sao_Paulo', agora);
+export function dentroDoHorario(unit: Unit): boolean {
+  if (ehFeriadoNacionalAgora(new Date(), unit.spineTimezone ?? 'America/Sao_Paulo')) return false;
+  const { minutos, diaSemana } = agoraLocal(unit.spineTimezone ?? 'America/Sao_Paulo');
   const dias = unit.spineAgendaDays?.length ? unit.spineAgendaDays : [1, 2, 3, 4, 5];
   if (!dias.includes(diaSemana)) return false;
   const abre = Math.max(paraMinutos(unit.spineAgendaStart) ?? 8 * 60, 8 * 60);

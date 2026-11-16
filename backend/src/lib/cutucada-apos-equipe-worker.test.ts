@@ -681,3 +681,30 @@ test('403: «três SEGUIDOS» — uma leitura boa no meio zera a conta e a varre
   assert.equal(n, 6, 'leu os seis: nunca chegou a 3 seguidos');
   assert.equal(r.erros, 4);
 });
+
+test('SECO → LIGADO sem reiniciar: o que o papel já viu NÃO esconde o lead quando a chave passa a ligada (o João liga e confere)', async () => {
+  cartoes = [{ lead: lead(), msgs: equipeFalou(3) }];
+  await varrerCutucada(unit(), 'seco', montar());
+  assert.deepEqual(efeitos.enviados, []);
+  const r = await varrerCutucada(unit(), 'ligado', montar());
+  assert.equal(r.enviadas, 1);
+  assert.equal(efeitos.enviados.length, 1);
+});
+
+test('LIGADO no modo bypass (texto em pedaços, com fallback para outras rotas) não envia: o paciente poderia receber duas vezes', async () => {
+  cartoes = [{ lead: lead(), msgs: equipeFalou(3) }];
+  const r = await varrerCutucada(unit({ kommoBypassSalesbot: true } as Partial<Unit>), 'ligado', montar());
+  assert.equal(r.barrados['sem-rota-de-envio-pelo-salesbot'], 1);
+  assert.deepEqual(efeitos.enviados, []);
+});
+
+test('a pausa com data é consultada só para quem seria cutucado (não uma consulta por cartão da janela)', async () => {
+  cartoes = [
+    { lead: lead(), msgs: [...equipeFalou(5), msg('in', S - 3 * H, 'Na lombar')] }, // paciente por último
+    { lead: lead(), msgs: equipeFalou(1) }, // dentro do prazo
+    { lead: lead(), msgs: equipeFalou(3) }, // este sim
+  ];
+  const consultados: number[] = [];
+  await varrerCutucada(unit(), 'seco', montar({ leadPausadoPorJanela: async (_u, id) => { consultados.push(id); return false; } }));
+  assert.deepEqual(consultados, [cartoes[2].lead.id]);
+});
