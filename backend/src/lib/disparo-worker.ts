@@ -20,6 +20,7 @@ import { enviarTelegram } from './telegram.js';
 import { definicaoDaOnda } from './disparo/onda.js';
 import { leadsQuePediramSair } from './disparo/publico.js';
 import { rodadaDoDisparoNoCrm } from './disparo/chatwoot/rodada.js';
+import { avisoDoTetoDeGasto, avisosDoPrecoDeReserva } from './disparo/chatwoot/custo.js';
 
 const PASSO_MS = Number(process.env.DISPARO_PASSO_MS) > 0 ? Number(process.env.DISPARO_PASSO_MS) : 60_000;
 /** Por quanto tempo depois do envio ainda procuramos um SAIR. */
@@ -177,7 +178,7 @@ export function startDisparoWorker(): void {
     void talvezRodarCrm();
   }, PASSO_MS);
   logger.info({ passoMs: PASSO_MS, freios: freiosDoAmbiente() }, 'disparo de campanha: worker ligado (cada unidade nasce em modo seco)');
-  for (const aviso of [...avisosDoAmbiente(), ...avisosDaListaDeTeste(), ...avisosDaListaDeTeste(process.env, 'CHATWOOT_DISPARO_LISTA_DE_TESTE'), ...avisosDaRegraDeCliente()]) logger.warn(aviso);
+  for (const aviso of [...avisosDoAmbiente(), ...avisosDaListaDeTeste(), ...avisosDaListaDeTeste(process.env, 'CHATWOOT_DISPARO_LISTA_DE_TESTE'), ...[avisoDoTetoDeGasto()].filter((x): x is string => !!x), ...avisosDoPrecoDeReserva(), ...avisosDaRegraDeCliente()]) logger.warn(aviso);
 }
 
 export function stopDisparoWorker(): void {

@@ -13,6 +13,9 @@ import { rodarUnidade, rodadasSemAndar, type OndaNoLote } from '../lote.js';
 import { portoReal } from '../porto.js';
 import { definicaoDaOnda } from '../onda.js';
 import { ajusteDaUnidade, freiosComOTier } from './ajuste.js';
+import { freiosComTetoDeGasto, tetoReaisPorDia } from './custo.js';
+import { maiorPrecoDasOndas, orcamentoDeGasto, precoEmReaisDoBanco, type LerEnvios, type PrecoEmReais } from './gasto.js';
+import { dataLocalISO } from '../../feriados.js';
 import { lerMensagens, ultimoPedidoDeSaida } from './mensagens.js';
 import { ctxDaUnidadeNoCrm, ORIGEM_CRM } from './onda.js';
 import { chaveDoLimiteDoCrm, idDaMensagem, portoChatwoot, unidadesDoMesmoNumeroKapso, type OndaDaRodada } from './porto.js';
@@ -192,6 +195,21 @@ export async function varrerSeChegouAHora(deps: VarredorDeps = {}): Promise<void
   }
 }
 
+/**
+ * O aviso quando o teto de GASTO (e não o de mensagens) é o que para a rodada: uma vez por unidade por DIA DA UNIDADE (data no fuso dela), pelo mesmo avisador.
+ * Não lê texto de `parou`: compara o que já saiu nas 24 h (recontado depois da rodada) com o teto que a rodada aplicou e com o do tier.
+ */
+export async function avisarSeParouPeloGasto(a: { slug: string; unitId: string; parou: string | undefined; noDiaDepois: number; tetoEfetivoDia: number; tetoDoTierDia: number; tetoReais: number; gastoBrl: number }, avisar: (t: string) => Promise<unknown> = (t) => enviarTelegram(t), hoje: string = new Date().toISOString().slice(0, 10)): Promise<void> {
+  if (!a.parou || !/^teto atingido/.test(a.parou)) return;
+  if (a.tetoEfetivoDia >= a.tetoDoTierDia || a.noDiaDepois < a.tetoEfetivoDia) return; // o teto que parou é o de mensagens (ou a hora), não o de gasto
+  if (avisoDoGastoDeHoje.get(a.unitId) === hoje) return;
+  let saiu = true;
+  await avisar(`💸 Disparo do CRM PARADO — ${a.slug}\nMotivo: o teto de gasto de R$ ${a.tetoReais.toFixed(2).replace('.', ',')} por dia (POR NÚMERO) foi atingido: gasto estimado nas últimas 24 h, cerca de R$ ${a.gastoBrl.toFixed(2).replace('.', ',')} (${a.noDiaDepois} mensagens). A onda continua aprovada e retoma sozinha quando o dia correr.\nPara mudar o teto: CHATWOOT_DISPARO_TETO_REAIS_DIA no servidor.`).catch(() => {
+    saiu = false; // o avisador falhou: não conta como avisado hoje, a rodada seguinte tenta de novo
+  });
+  if (saiu) avisoDoGastoDeHoje.set(a.unitId, hoje);
+}
+
 /** Rodadas seguidas, por unidade, em que só houve gente adiada (CRM fora do ar, token caído, franquia fora) e ninguém andou. */
 const SEM_ANDAR_PARA_ALERTAR = 5;
 const semAndar = new Map<string, number>();
@@ -208,7 +226,11 @@ export async function avisarSeSemAndar(slug: string, unitId: string, r: Paramete
 }
 
 /** Uma rodada das ondas aprovadas da origem CRM. Os freios, a janela e a parada por SAIR são os do motor (`rodarUnidade`). */
-export async function rodadaDoDisparoNoCrm(deps: { criarPorto?: (unidades: ReadonlyMap<string, Unit>, ondas: ReadonlyMap<string, OndaDaRodada>) => ReturnType<typeof portoChatwoot>; avisar?: (t: string) => Promise<unknown> } = {}): Promise<void> {
+/** Um aviso por unidade por dia quando o teto de gasto para a rodada. */
+const avisoDoGastoDeHoje = new Map<string, string>();
+export const _esquecerAvisosDeGasto = (): void => avisoDoGastoDeHoje.clear();
+
+export async function rodadaDoDisparoNoCrm(deps: { precoEmReais?: PrecoEmReais; lerEnvios?: LerEnvios; tetoReais?: number; criarPorto?: (unidades: ReadonlyMap<string, Unit>, ondas: ReadonlyMap<string, OndaDaRodada>) => ReturnType<typeof portoChatwoot>; avisar?: (t: string) => Promise<unknown> } = {}): Promise<void> {
   void varrerSeChegouAHora(); // à parte: a varredura é lenta e não pode atrasar o envio nem a rodada do Kommo
   const ondas = await prisma.disparoOnda.findMany({ where: { estado: 'aprovada', origem: ORIGEM_CRM }, orderBy: { criadoEm: 'asc' }, include: { unit: true } });
   if (ondas.length === 0) return;
@@ -222,7 +244,7 @@ export async function rodadaDoDisparoNoCrm(deps: { criarPorto?: (unidades: Reado
   if (boas.length === 0) return;
   const unidades = new Map<string, Unit>(boas.map((o) => [o.unitId, o.unit]));
   const info = new Map<string, OndaDaRodada>(
-    boas.map((o) => [o.id, { caixa: o.caixaChatwoot!, conta: o.contaChatwoot!, template: o.template, idioma: o.idioma, textoModelo: o.textoModelo, variaveis: (o.variaveis as unknown[]).map(String) }]),
+    boas.map((o) => [o.id, { caixa: o.caixaChatwoot!, conta: o.contaChatwoot!, template: o.template, idioma: o.idioma, textoModelo: o.textoModelo, variaveis: (o.variaveis as unknown[]).map(String), categoria: o.categoriaModelo }]),
   );
   const porto = deps.criarPorto ? deps.criarPorto(unidades, info) : portoChatwoot({ base: portoReal(unidades), unidades, ondas: info });
   const f = freiosDoAmbiente();
@@ -235,7 +257,32 @@ export async function rodadaDoDisparoNoCrm(deps: { criarPorto?: (unidades: Reado
     try {
       const noLote: OndaNoLote[] = vivas.map((o) => ({ id: o.id, campanhaId: o.campanhaId, campanhaNome: o.campanha.nome, aprovadaEm: o.aprovadaEm, aprovadaModo: o.aprovadaModo, sairAceitos: o.sairAceitos, ...definicaoDaOnda(o) }));
       const ajuste = await ajusteDaUnidade(unit.id);
-      const r = await rodarUnidade(porto, freiosComOTier(f, ajuste.tierDoNumero), { id: unit.id, slug: unit.slug, nome: unit.name, fuso: fusoDaUnidade(unit) }, noLote);
+      // O TETO DE GASTO por dia (CHATWOOT_DISPARO_TETO_REAIS_DIA, padrão R$ 50), em REAIS e POR NÚMERO: o gasto das últimas 24 h é somado por CATEGORIA de cada envio
+      // (envios da onda × preço da categoria dela) e o que cabe é (teto − gasto) ÷ preço da onda que vai sair (a mais cara das vivas). Vira um teto de 24 h dos freios.
+      // Sem preço da Meta vale o de RESERVA (conservador): o teto SEMPRE limita. Em seco nada é gasto: o teto de gasto não se aplica.
+      const tetoReais = deps.tetoReais ?? tetoReaisPorDia();
+      const preco = deps.precoEmReais ?? precoEmReaisDoBanco;
+      const freiosDoTier = freiosComOTier(f, ajuste.tierDoNumero);
+      let freiosDaRodada = freiosDoTier;
+      let gasto: { gastoBrl: number; precoAtual: number; jaMandadas: number } | null = null;
+      if (porto.modoDaUnidade(unit.slug) === 'ligado') {
+        const precoAtual = await maiorPrecoDasOndas(preco, unit.id, vivas.map((o) => o.categoriaModelo));
+        const [orc, jaMandadas] = await Promise.all([
+          orcamentoDeGasto({ unitId: unit.id, agora: new Date(), tetoReais, precoAtual, preco, ler: deps.lerEnvios }),
+          porto.contarNaJanela(unit.id, new Date(Date.now() - 86_400_000), 'ligado'),
+        ]);
+        gasto = { gastoBrl: orc.gastoBrl, precoAtual, jaMandadas };
+        freiosDaRodada = freiosComTetoDeGasto(freiosDoTier, jaMandadas, orc.cabem);
+      }
+      const r = await rodarUnidade(porto, freiosDaRodada, { id: unit.id, slug: unit.slug, nome: unit.name, fuso: fusoDaUnidade(unit) }, noLote);
+      if (gasto) {
+        const noDiaDepois = await porto.contarNaJanela(unit.id, new Date(Date.now() - 86_400_000), 'ligado');
+        await avisarSeParouPeloGasto(
+          { slug: unit.slug, unitId: unit.id, parou: r.parou, noDiaDepois, tetoEfetivoDia: freiosDaRodada.tetoPorDia, tetoDoTierDia: freiosDoTier.tetoPorDia, tetoReais, gastoBrl: gasto.gastoBrl + Math.max(0, noDiaDepois - gasto.jaMandadas) * gasto.precoAtual },
+          deps.avisar,
+          dataLocalISO(new Date(), fusoDaUnidade(unit)),
+        );
+      }
       // 429 do Chatwoot: a pessoa volta para a fila (não é «adiado» para o motor), mas para o alerta de «sem andar» é uma rodada sem andar
       await avisarSeSemAndar(unit.slug, unit.id, porto.ocupouAUnidade(unit.id) ? { ...r, adiados: r.adiados + 1 } : r, deps.avisar);
       if (r.processados > 0 || (r.parou && r.parou !== 'automação desligada nesta unidade')) logger.info({ unit: unit.slug, origem: ORIGEM_CRM, ...r }, 'disparo-crm: rodada');

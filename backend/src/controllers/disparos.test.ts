@@ -71,6 +71,7 @@ test('a página mostra o modo seco, o que o aprovar faz em seco e a prévia por 
   assert.ok(js.includes('MODO SECO') && js.includes('NÃO manda mensagem nenhuma'));
   assert.ok(js.includes('Prévia para') && js.includes('Primeiro nome do contato'));
   assert.ok(js.includes('ba.disabled = !(o.podeAprovar && o.conferencia && o.conferencia.ok)'));
+  assert.ok(js.includes('liberar()'), 'o botão de aprovar volta a depender da confirmação do custo');
   assert.ok(js.includes('Sem caixa de WhatsApp oficial'), 'unidade sem caixa oficial vê o porquê, não um formulário que não funciona');
 });
 
@@ -286,14 +287,14 @@ test('a Clínica Demonstração (caixa de API registrada como «cloud»): a tela
   assert.match(contar.corpo.error, /Channel::Api/);
   const opcoes = await pedir('GET', `/public/disparos/opcoes?slug=${DEMO.slug}&caixa=6`, 'tok-demo', undefined, '2');
   assert.equal(opcoes.status, 422);
-  const montar = await pedir('POST', '/public/disparos/ondas', 'tok-demo', { slug: DEMO.slug, nome: 'Teste', filtro, modelo: { nome: 'demo_x', idioma: 'pt_BR', variaveis: [] } }, '2');
+  const montar = await pedir('POST', '/public/disparos/ondas', 'tok-demo', { slug: DEMO.slug, nome: 'Teste', maximo: 50, filtro, modelo: { nome: 'demo_x', idioma: 'pt_BR', variaveis: [] } }, '2');
   assert.ok([422, 502].includes(montar.status), `montar na caixa de API não pode passar (veio ${montar.status})`);
   assert.ok(!chamadas.some((c) => c.startsWith('POST') && /conversations\/\d+\/messages/.test(c)), 'nenhuma mensagem foi mandada');
 });
 
 test('montar: modelo que não está aprovado na caixa, variáveis em número errado e unidade com disparos DESLIGADOS são recusados sem criar nada', async () => {
   preparar();
-  const corpo = (modelo: unknown) => ({ slug: PARAU, nome: 'Reativação', filtro: { caixa: 3 }, modelo });
+  const corpo = (modelo: unknown) => ({ slug: PARAU, nome: 'Reativação', maximo: 50, filtro: { caixa: 3 }, modelo });
   const a = await pedir('POST', '/public/disparos/ondas', 'tok-agente', corpo({ nome: 'parau_inexistente', idioma: 'pt_BR', variaveis: [] }));
   assert.equal(a.status, 422);
   const b = await pedir('POST', '/public/disparos/ondas', 'tok-agente', corpo({ nome: 'parau_imagem', idioma: 'pt_BR', variaveis: [] }));
@@ -319,7 +320,7 @@ test('TETO DE TEMPO: Chatwoot que não responde NÃO pendura a tela — opções
     const opcoes = await pedir('GET', `/public/disparos/opcoes?slug=${PARAU}&caixa=3`, 'tok-agente');
     assert.equal(opcoes.status, 504);
     assert.match(opcoes.corpo.error, /demorou/);
-    const montar = await pedir('POST', '/public/disparos/ondas', 'tok-agente', { slug: PARAU, nome: 'Reativação', filtro: { caixa: 3 }, modelo: { nome: 'parau_reativacao', idioma: 'pt_BR', variaveis: ['primeiroNome'] } });
+    const montar = await pedir('POST', '/public/disparos/ondas', 'tok-agente', { slug: PARAU, nome: 'Reativação', maximo: 50, filtro: { caixa: 3 }, modelo: { nome: 'parau_reativacao', idioma: 'pt_BR', variaveis: ['primeiroNome'] } });
     assert.equal(montar.status, 504);
     assert.ok(Date.now() - t0 < 3000, 'voltou no teto, não nos 60 s do Chatwoot');
     travar = /\/inboxes$/;
@@ -337,7 +338,7 @@ test('401 do CRM (token caído) NÃO aparece como «demorou»: opções devolvem
   assert.equal(opcoes.status, 502);
   assert.match(opcoes.corpo.error, /recusou o acesso/);
   assert.doesNotMatch(opcoes.corpo.error, /demorou/);
-  const demais = await pedir('POST', '/public/disparos/ondas', 'tok-agente', { slug: PARAU, nome: 'Reativação', filtro: { caixa: 3 }, modelo: { nome: 'parau_reativacao', idioma: 'pt_BR', variaveis: ['primeiroNome'] } });
+  const demais = await pedir('POST', '/public/disparos/ondas', 'tok-agente', { slug: PARAU, nome: 'Reativação', maximo: 50, filtro: { caixa: 3 }, modelo: { nome: 'parau_reativacao', idioma: 'pt_BR', variaveis: ['primeiroNome'] } });
   assert.equal(demais.status, 502);
   assert.match(demais.corpo.error, /recusou o acesso/);
 });
@@ -400,4 +401,147 @@ test('a página tem o relatório por campanha e o relatório dentro do disparo',
   assert.ok(js.includes("'/api/public/disparos/relatorio?slug='"));
   for (const t of ['Relatório por campanha', 'Responderam (72 h)', 'Pediram SAIR', 'Falharam', 'Entregues', 'Lidas']) assert.ok(js.includes(t), t);
   assert.ok(paginaDosDisparos(CW).includes('id="btRel"'));
+});
+
+// ── máximo, custo e ritmo na tela ───────────────────────────────────────────────────────────────────────────────
+
+const LINHAS_DE_CUSTO = [{ pricingCategory: 'MARKETING_LITE', pricingType: 'REGULAR', country: 'BR', volume: 329, costUsd: '20.5625' }]; // US$ 0,0625 por mensagem
+const ondaDeCusto = (extra: Record<string, unknown> = {}) => ({ id: 'ondaaaaaaa1', unitId: 'u1', origem: 'chatwoot', contaChatwoot: 1, estado: 'aprovada', total: 40, impressao: 'x', etiqueta: 'CRM', template: 't', idioma: 'pt_BR', textoModelo: 'Oi {{1}}', variaveis: ['primeiroNome'], cabecalho: null, resumo: {}, campanha: { nome: 'Custo' }, caixaChatwoot: 3, maximoPessoas: 50, categoriaModelo: 'MARKETING', criadaPor: 'x', ...extra });
+
+test('MÁXIMO obrigatório: montar sem o máximo (ou fora de 1 a 500) é recusado com 400, sem criar nada', async () => {
+  preparar();
+  const corpo = (maximo: unknown) => ({ slug: PARAU, nome: 'Reativação', maximo, filtro: { caixa: 3 }, modelo: { nome: 'parau_reativacao', idioma: 'pt_BR', variaveis: ['primeiroNome'] } });
+  for (const ruim of [undefined, 0, -3, 501, 'cinquenta', 2.5, null]) {
+    const r = await pedir('POST', '/public/disparos/ondas', 'tok-agente', corpo(ruim));
+    assert.equal(r.status, 400, String(ruim));
+    assert.match(r.corpo.error, /máximo de pessoas/);
+  }
+});
+
+test('o disparo mostra o CUSTO estimado (pessoas × preço da categoria na tabela da Meta × dólar), o máximo, o ritmo e o teto de gasto; o gasto até agora usa as enviadas', async () => {
+  const { _definirCambio } = await import('../lib/disparo/chatwoot/custo.js');
+  _definirCambio(5.6);
+  preparar({ onda: ondaDeCusto() });
+  falso('whatsappCostDaily', { findMany: async () => LINHAS_DE_CUSTO });
+  falso('$queryRaw', (async (q: { sql?: string }) => (/GROUP BY onda_id/.test(q.sql ?? '') ? [{ onda_id: 'ondaaaaaaa1', selecionadas: 40, enviadas: 10, tentadas: 10, entregues: 8, lidas: 3, responderam: 1, pediram_sair: 0, falharam: 0, incertas: 0, na_fila: 30, descartadas: 0, receberiam: 0 }] : [])) as never);
+  const r = await pedir('GET', `/public/disparos/ondas/ondaaaaaaa1?slug=${PARAU}`, 'tok-dd');
+  assert.equal(r.status, 200);
+  assert.equal(r.corpo.maximo, 50);
+  assert.equal(r.corpo.custo.conhecido, true);
+  assert.equal(r.corpo.custo.porMensagemBrl, 0.35);
+  assert.equal(r.corpo.custo.brl, 14, '40 pessoas × R$ 0,35');
+  assert.equal(r.corpo.custo.categoria, 'MARKETING');
+  assert.equal(r.corpo.gastoEstimadoBrl, 3.5, '10 enviadas × R$ 0,35');
+  assert.deepEqual([r.corpo.ritmo.porDia, r.corpo.ritmo.dias, r.corpo.ritmo.limitadoPor, r.corpo.ritmo.soDiasUteis], [100, 1, 'dia', true]);
+  assert.equal(r.corpo.freios.tetoReaisDia, 50);
+  assert.equal(r.corpo.freios.tetoPorHora, 30);
+  assert.equal(r.corpo.freios.tetoPorDia, 100);
+});
+
+test('categoria que a tabela de custo da unidade NÃO tem = custo estimado com preço de RESERVA (conservador, sem histórico da Meta), com o motivo; sem categoria gravada também', async () => {
+  const { _definirCambio } = await import('../lib/disparo/chatwoot/custo.js');
+  _definirCambio(5.6);
+  preparar({ onda: ondaDeCusto({ categoriaModelo: 'AUTHENTICATION' }) });
+  falso('whatsappCostDaily', { findMany: async () => [] });
+  falso('$queryRaw', (async () => []) as never);
+  const r = await pedir('GET', `/public/disparos/ondas/ondaaaaaaa1?slug=${PARAU}`, 'tok-dd');
+  assert.equal(r.corpo.custo.conhecido, false);
+  assert.equal(r.corpo.custo.reserva, true);
+  assert.equal(r.corpo.custo.porMensagemBrl, 0.25, 'reserva de autenticação');
+  assert.equal(r.corpo.custo.brl, 10, '40 pessoas × R$ 0,25');
+  assert.match(r.corpo.custo.nota, /preço de reserva \(sem histórico da Meta\).*não tem a categoria AUTHENTICATION/);
+  assert.equal(r.corpo.ritmo.limitadoPor, 'dia', 'o teto de gasto (R$ 50 ÷ R$ 0,25 = 200) é maior que o por dia (100): o ritmo existe mesmo sem histórico');
+  preparar({ onda: ondaDeCusto({ categoriaModelo: null }) });
+  falso('whatsappCostDaily', { findMany: async () => LINHAS_DE_CUSTO });
+  falso('$queryRaw', (async () => []) as never);
+  const sem = await pedir('GET', `/public/disparos/ondas/ondaaaaaaa1?slug=${PARAU}`, 'tok-dd');
+  assert.equal(sem.corpo.custo.conhecido, false);
+  assert.equal(sem.corpo.custo.reserva, true);
+  assert.equal(sem.corpo.custo.porMensagemBrl, 2, 'sem categoria: a reserva mais cara');
+  assert.match(sem.corpo.custo.nota, /categoria do modelo/);
+});
+
+test('aprovar pela rota: custo DESCONHECIDO sem confirmação = 409 com `precisaConfirmarCusto` (a tela pede o ok explícito); o máximo é conferido', async () => {
+  const { _definirCambio } = await import('../lib/disparo/chatwoot/custo.js');
+  const { impressaoDaOnda } = await import('../lib/disparo/modelo.js');
+  const { definicaoDaOnda } = await import('../lib/disparo/onda.js');
+  _definirCambio(5.6);
+  const pessoas = [{ chave: 'c1', nome: 'Ana' }];
+  const base = ondaDeCusto({ estado: 'montada', total: 1, categoriaModelo: 'AUTHENTICATION' });
+  const impressao = impressaoDaOnda(definicaoDaOnda(base as never), pessoas);
+  const onda = { ...base, impressao, unit: { id: 'u1', slug: PARAU, metaPhoneNumberId: null } };
+  preparar({ onda });
+  falso('disparoOnda', { findFirst: async () => onda, findUnique: async () => onda, updateMany: async () => { throw new Error('NÃO podia aprovar'); } });
+  falso('disparoDestinatario', { findMany: async () => pessoas });
+  falso('whatsappCostDaily', { findMany: async () => [] });
+  const aprova = (extra: Record<string, unknown>) => pedir('POST', '/public/disparos/ondas/ondaaaaaaa1/aprovar', 'tok-dd', { slug: PARAU, total: 1, impressao, ...extra });
+  const semMax = await aprova({});
+  assert.equal(semMax.status, 409);
+  assert.match(semMax.corpo.error, /máximo/);
+  const semConfirma = await aprova({ maximo: 50 });
+  assert.equal(semConfirma.status, 409);
+  assert.equal(semConfirma.corpo.precisaConfirmarCusto, true);
+  assert.match(semConfirma.corpo.error, /^custo desconhecido/);
+});
+
+test('relatório por campanha mostra o GASTO estimado (enviadas × preço da categoria; sem histórico, o preço de reserva)', async () => {
+  const { _definirCambio } = await import('../lib/disparo/chatwoot/custo.js');
+  _definirCambio(5.6);
+  preparar();
+  const h = (n: number) => new Date(Date.now() - n * 3_600_000);
+  falso('disparoOnda', { findMany: async () => [
+    { id: 'ondaaaaaaa1', estado: 'aprovada', total: 40, template: 't', categoriaModelo: 'MARKETING', criadoEm: h(5), aprovadaEm: h(4), campanha: { nome: 'A' } },
+    { id: 'ondaaaaaaa2', estado: 'aprovada', total: 40, template: 't', categoriaModelo: 'AUTHENTICATION', criadoEm: h(5), aprovadaEm: h(4), campanha: { nome: 'B' } },
+  ] });
+  falso('whatsappCostDaily', { findMany: async (a: { where: { pricingCategory: { startsWith: string } } }) => (a.where.pricingCategory.startsWith === 'MARKETING' ? LINHAS_DE_CUSTO : []) });
+  const linha = (id: string) => ({ onda_id: id, selecionadas: 40, enviadas: 20, tentadas: 20, entregues: 0, lidas: 0, responderam: 0, pediram_sair: 0, falharam: 0, incertas: 0, na_fila: 20, descartadas: 0, receberiam: 0 });
+  falso('$queryRaw', (async () => [linha('ondaaaaaaa1'), linha('ondaaaaaaa2')]) as never);
+  const r = await pedir('GET', `/public/disparos/relatorio?slug=${PARAU}`, 'tok-agente');
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.corpo.campanhas.map((c: any) => c.gastoEstimadoBrl), [7, 5], '20 enviadas × R$ 0,35 = R$ 7,00; categoria sem histórico: 20 × R$ 0,25 de reserva = R$ 5,00');
+  assert.deepEqual(r.corpo.campanhas.map((c: any) => c.gastoComReserva), [false, true], 'o valor com preço de reserva é rotulado: é um teto do gasto');
+});
+
+test('a página tem o campo do máximo (padrão 50, obrigatório), o cartão de custo e ritmo, a confirmação do custo desconhecido e o gasto no relatório', () => {
+  const js = scriptDaPagina();
+  assert.ok(js.includes("mx.value = '50'") && js.includes('Máximo de pessoas neste disparo') && js.includes('maximo: maximo'));
+  assert.ok(js.includes('Custo e ritmo') && js.includes('Teto de gasto'));
+  assert.ok(js.includes('confirmarCustoDesconhecido') && js.includes('Entendo que não há histórico de custo da Meta') && js.includes('preço de reserva (sem histórico da Meta)'));
+  assert.ok(js.includes('Gasto (estimado)') && js.includes('gasto até agora'));
+  assert.ok(!/innerHTML/.test(js));
+});
+
+test('a Meta RECLASSIFICOU o modelo (a onda foi montada como UTILIDADE e o CRM agora diz MARKETING): a conferência do modelo reprova com o motivo — o custo congelado não vale mais', async () => {
+  preparar({ onda: ondaDeCusto({ estado: 'montada', template: 'parau_reativacao', textoModelo: 'Oi {{1}}, tudo bem?', categoriaModelo: 'UTILITY' }) });
+  falso('whatsappCostDaily', { findMany: async () => LINHAS_DE_CUSTO });
+  falso('$queryRaw', (async () => []) as never);
+  const r = await pedir('GET', `/public/disparos/ondas/ondaaaaaaa1?slug=${PARAU}`, 'tok-dd');
+  assert.equal(r.status, 200);
+  assert.equal(r.corpo.conferencia.ok, false);
+  assert.match(r.corpo.conferencia.motivo, /a Meta mudou a categoria do modelo de UTILITY para MARKETING/);
+  preparar({ onda: ondaDeCusto({ estado: 'montada', template: 'parau_reativacao', textoModelo: 'Oi {{1}}, tudo bem?', categoriaModelo: 'MARKETING' }) });
+  falso('whatsappCostDaily', { findMany: async () => LINHAS_DE_CUSTO });
+  falso('$queryRaw', (async () => []) as never);
+  const igual = await pedir('GET', `/public/disparos/ondas/ondaaaaaaa1?slug=${PARAU}`, 'tok-dd');
+  assert.equal(igual.corpo.conferencia.ok, true, 'mesma categoria: confere');
+});
+
+test('o disparo mostra o gasto do NÚMERO nas últimas 24 h (por categoria) e quanto ainda cabe; o gasto estimado vem rotulado quando é preço de reserva', async () => {
+  const { _definirCambio } = await import('../lib/disparo/chatwoot/custo.js');
+  const { _esquecerPrecosDeGasto } = await import('../lib/disparo/chatwoot/gasto.js');
+  _esquecerPrecosDeGasto();
+  _definirCambio(5.6);
+  preparar({ onda: ondaDeCusto({ categoriaModelo: 'AUTHENTICATION' }) });
+  // o número já mandou 10 de MARKETING (preço 0,35 pela tabela) em outra onda; este modelo é AUTENTICAÇÃO sem histórico (reserva R$ 0,25)
+  falso('whatsappCostDaily', { findMany: async (a: { where: { pricingCategory: { startsWith: string } } }) => (a.where.pricingCategory.startsWith === 'MARKETING' ? LINHAS_DE_CUSTO : []) });
+  falso('unitChatwoot', { findUnique: async () => null });
+  falso('disparoDestinatario', { findMany: async () => [], groupBy: async (a: { by: string[] }) => (a.by[0] === 'ondaId' ? [{ ondaId: 'outra', _count: { _all: 10 } }] : []) });
+  const base = ondaDeCusto({ categoriaModelo: 'AUTHENTICATION' });
+  falso('disparoOnda', { findFirst: async () => base, findUnique: async () => base, findMany: async () => [{ id: 'outra', categoriaModelo: 'MARKETING' }] });
+  falso('$queryRaw', (async () => []) as never);
+  const r = await pedir('GET', `/public/disparos/ondas/ondaaaaaaa1?slug=${PARAU}`, 'tok-dd');
+  assert.equal(r.status, 200);
+  assert.equal(r.corpo.gastoComReserva, true);
+  assert.equal(r.corpo.gastoDoNumero24hBrl, 3.5, '10 × R$ 0,35');
+  assert.equal(r.corpo.cabemPeloGasto, 186, '(R$ 50 − R$ 3,50) ÷ R$ 0,25');
 });
