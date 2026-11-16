@@ -72,6 +72,10 @@ const META: Readonly<Record<string, Meta>> = {
   'cancelamento-acolhimento': { grupo: 'tratamento', etapa: 'Tratamento cancelado', nome: 'Acolhimento do cancelamento', quando: 'Quando o tratamento é marcado como cancelado', marca: 'na hora do cancelamento' },
   'cancelamento-retorno': { grupo: 'tratamento', etapa: 'Tratamento cancelado', nome: 'Retorno marcado depois de cancelar', quando: 'Na véspera (09:00) do retorno marcado', marca: 'véspera do retorno, 09:00' },
   // SDR por etiqueta
+  'rotina-retomada': { grupo: 'sdr', etapa: 'Automático: parado', nome: 'Retomada automática', quando: 'Novo lead, qualificação ou esperando humano sem mensagem de ninguém há 2 dias (sem consulta de pé, sem «Retomar em», sem sem-follow-up, sem IA pausada)', marca: '2 dias parado' },
+  'rotina-reativacao': { grupo: 'sdr', etapa: 'Automático: lead frio', nome: 'Reativação automática do lead frio', quando: '30 dias depois de virar Perdido (ou do dia de «Retomar em»), sem resposta e sem ninguém falar nos 7 dias antes; quem foi atendido fica com a decisão de 30 dias', marca: '30 dias depois' },
+  'rotina-confirmar-retorno': { grupo: 'sdr', etapa: 'Automático: retorno', nome: 'Confirmar retorno automático', quando: 'Consulta de «Retorno após tratamento» de pé: 2 dias antes, às 09:00 (se cair no domingo, no sábado)', marca: '2 dias antes, 09:00' },
+  'rotina-boas-vindas': { grupo: 'sdr', etapa: 'Automático: Fechou', nome: 'Boas-vindas automáticas ao programa', quando: 'Quando a conversa entra em Fechou: precisa do «Programa» do cartão e de um compromisso futuro (senão deixa uma nota)', marca: 'ao virar Fechou' },
   'sdr-confirmar-retorno': { grupo: 'sdr', etapa: 'Etiqueta confirmar-retorno', nome: 'Confirmar retorno', quando: 'Quando a etiqueta «confirmar-retorno» chega, para retorno pós-tratamento ou funil Tratamento', marca: 'ao entrar a etiqueta' },
   'sdr-retomada': { grupo: 'sdr', etapa: 'Etiqueta retomada', nome: 'Retomada depois da ligação', quando: 'Quando a etiqueta «retomada» chega, em Novo lead, qualificação ou Agendado', marca: 'ao entrar a etiqueta' },
   'sdr-reativacao': { grupo: 'sdr', etapa: 'Etiqueta reativacao', nome: 'Reativação de lead frio', quando: 'Quando a etiqueta «reativacao» chega, em qualificação, Perdido ou Não compareceu', marca: 'ao entrar a etiqueta' },
@@ -185,6 +189,11 @@ function exemplos(): Array<{ c: ConversaRegua; v: Vistos }> {
       ),
       v: vistos({ 'etiqueta:aderencia-meio': 'sim', compareceu_ultima_sessao: 'Não' }),
     },
+    // SDR automática
+    { c: { ...conversa({ etapa: 'Novo lead' }), ultima: { saida: false, privada: false, autorId: null, autorTipo: 'contact', criadaEm: T('2026-11-14T12:00:00Z') } }, v: new Map() },
+    { c: conversa({ etapa: 'Perdido' }), v: vistos({ etapa: 'Perdido' }) },
+    { c: conversa({ categoria_consulta: 'Retorno após tratamento', situacao_consulta: 'Agendado', ...CONSULTA }), v: new Map() },
+    { c: conversa({ etapa: 'Fechou', programa: 'Coluna Forte', ...CONSULTA }), v: vistos({ etapa: 'Fechou' }) },
     // sessão vinda da agenda
     { c: conversa({ categoria_consulta: 'Sessão', situacao_consulta: 'Agendado', ...CONSULTA }), v: new Map() },
     { c: conversa({ categoria_consulta: 'Sessão', situacao_consulta: 'Não compareceu', data_consulta: '2026-11-16', hora_consulta: '09:00' }), v: vistos({ situacao_consulta: 'Não compareceu' }) },

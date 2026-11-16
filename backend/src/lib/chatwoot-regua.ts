@@ -136,6 +136,8 @@ export interface Memoria {
   vistos: Vistos;
   /** `regra|chave` já registrados (mensagem ou nota de campo faltando) */
   feitos: ReadonlySet<string>;
+  /** o subconjunto de `feitos` que saiu de verdade (ligado, e não a nota «NÃO enviei» do cartão ativo no Kommo): `regra|chave` → quando (ms). O robô manual só se cala por um par automático que de fato falou */
+  enviados?: ReadonlyMap<string, number>;
 }
 
 export interface DadosDaUnidade {
@@ -431,7 +433,7 @@ export function renderizar(modelo: string, c: ConversaRegua, u: DadosDaUnidade, 
       case 'lead.cf.2450732':
         return c.atendente?.trim() || falta('atendente atribuído à conversa');
       case 'lead.cf.2450750':
-        return str(a.programa) || falta('nome do programa (o Chatwoot não tem esse campo)');
+        return str(a.programa) || falta('nome do programa (campo «Programa» do cartão)');
       default:
         return falta(`campo {{${nome}}} sem correspondente no Chatwoot`);
     }
@@ -454,6 +456,8 @@ export interface Candidato {
   /** regra "antes" nunca vale depois deste instante (a própria consulta) */
   teto?: Date;
   interna?: AcaoInterna;
+  /** regra automática par deste robô manual: se ela já foi feita nesta conversa (qualquer chave), este não sai */
+  pularSeFeito?: ParDoManual;
   /** o último instante em que pode SAIR (conferido com o `agora` do envio, não com o horário previsto) */
   saiAte?: Date;
   /** só sai em um dia (Belém) ANTERIOR a este (AAAA-MM-DD) */
@@ -473,6 +477,49 @@ const ETAPAS_DA_CONSULTA = new Set(['Agendado', 'Confirmado', 'Fechou']);
 const ETAPAS_DE_QUALIFICACAO = new Set(['Sofia qualifica', 'Esperando humano']);
 /** situação em que a consulta ainda está de pé */
 const SITUACOES_DE_PE = new Set(['', 'Agendado', 'Confirmado', 'Remarcado']);
+/** A etiqueta que a equipe põe ao assumir a conversa (`ETIQUETA_PAUSA` de chatwoot-pausa.ts, que importa este arquivo: o teste confere que são iguais). */
+export const ETIQUETA_DA_PAUSA_DA_EQUIPE = 'ia-pausada';
+/** Etapas em que a SDR automática retoma a conversa parada (Novo lead, qualificação, esperando humano). */
+const ETAPAS_DA_RETOMADA_AUTOMATICA = new Set(['Novo lead', 'Sofia qualifica', 'Esperando humano']);
+/** Etapas em que o paciente já está marcado, atendido ou fechado: a reativação de «Em espera» não vale. */
+const ETAPAS_COM_PACIENTE_ANDANDO = new Set(['Agendado', 'Confirmado', 'Compareceu', 'Pós-consulta', 'Fechou']);
+/**
+ * O estado PRÓPRIO da SDR automática: a chave `chatwoot-sdr-auto` do catálogo (nasce «só no papel»). Vale só para as regras `rotina-*`: desligada = não
+ * rodam; no papel = só a nota «enviaria…»; ligada = mandam (a régua também precisa estar ligada). As etiquetas manuais seguem na régua.
+ */
+export const AUTOMACAO_DA_REGRA: Readonly<Record<string, string>> = {
+  'rotina-retomada': 'chatwoot-sdr-auto',
+  'rotina-reativacao': 'chatwoot-sdr-auto',
+  'rotina-confirmar-retorno': 'chatwoot-sdr-auto',
+  'rotina-boas-vindas': 'chatwoot-sdr-auto',
+};
+/** A etiqueta manual de cada robô automático: com ela na conversa o automático não roda (a equipe já decidiu; não manda os dois). */
+export const ETIQUETA_MANUAL_DA_ROTINA: Readonly<Record<string, string>> = {
+  'rotina-retomada': 'retomada',
+  'rotina-reativacao': 'reativacao',
+  'rotina-confirmar-retorno': 'confirmar-retorno',
+  'rotina-boas-vindas': 'boas-vindas',
+};
+/**
+ * O robô manual (etiqueta) e o seu par automático: quando o automático JÁ FALOU de verdade com esta conversa, o manual não repete o mesmo recado.
+ * - `sdr-retomada` NÃO tem par: a manual é «tentei te ligar e não consegui» (depois de uma ligação), outra mensagem que a «retomada» de 2 dias parada.
+ * - `sdr-confirmar-retorno`: só o MESMO retorno (a chave da consulta); outro retorno marcado depois recebe a confirmação.
+ * - `sdr-boas-vindas` e `sdr-reativacao`: só se o automático falou nos últimos 7 dias (uma boas-vindas de meses atrás não cala a de um programa novo).
+ * Nota do cartão ativo no Kommo e nota do seco NÃO contam como «falou» (ver `enviados`).
+ */
+export interface ParDoManual {
+  regra: string;
+  /** só vale um envio com ESTA chave */
+  chave?: string;
+  /** só vale um envio dos últimos N dias */
+  dias?: number;
+}
+const DIAS_DA_JANELA_DO_PAR = 7;
+/** Dias parada até a retomada (2) e até a reativação do lead frio (30). */
+const DIAS_DA_RETOMADA_AUTOMATICA = 2;
+const DIAS_DA_REATIVACAO_AUTOMATICA = 30;
+/** A reativação só sai se NINGUÉM falou na conversa (de nenhum lado) nesta janela antes do envio. */
+const DIAS_DE_SILENCIO_DA_REATIVACAO = 7;
 const MODELO_DA_ESPERA: Record<string, string> = {
   Exames: 'parau_espera_exames',
   Viajando: 'parau_espera_viagem',
@@ -655,6 +702,50 @@ export function candidatos(c: ConversaRegua, vistos: Vistos, ajustes?: AjustesDa
         saida.push({ regra: 'sem-resposta-24h', modelo: 'interna:sem-resposta', interna: 'sem-resposta', chave: `semresp@${u.criadaEm.toISOString()}`, kind: 'depois', alvo: new Date(u.criadaEm.getTime() + tempo('sem-resposta-24h')) });
       }
     }
+    // ── SDR AUTOMÁTICA (14/11/2026): o que a SDR fazia por etiqueta agora também sai sozinho (a etiqueta manual continua valendo) ──
+    const aindaRespondeu = (desde: Date) => !!c.ultima && !c.ultima.saida && !c.ultima.privada && c.ultima.criadaEm.getTime() > desde.getTime();
+    // 1) Retomada: Novo lead / qualificação / esperando humano, 2 dias sem NENHUMA mensagem pública (de qualquer lado), sem consulta de pé,
+    //    sem «Retomar em» futuro, sem sem-follow-up e sem a equipe ter assumido (etiqueta ia-pausada). Uma vez por período parado.
+    const publica = c.ultima && !c.ultima.privada ? c.ultima : null;
+    const manual = (regra: string) => c.etiquetas.includes(ETIQUETA_MANUAL_DA_ROTINA[regra]!);
+    // a última mensagem ainda é uma NOTA que o worker não buscou (teto de buscas do ciclo): não dá para saber se alguém falou — as duas que olham
+    // a última mensagem esperam o próximo ciclo em vez de tratar o silêncio como certo
+    const ultimaNaoBuscada = !!c.ultima?.privada;
+    if (!ultimaNaoBuscada && ETAPAS_DA_RETOMADA_AUTOMATICA.has(etapa) && publica && !semFollowUp && !c.etiquetas.includes(ETIQUETA_DA_PAUSA_DA_EQUIPE) && !manual('rotina-retomada')) {
+      const alvoDaRetomada = new Date(publica.criadaEm.getTime() + DIAS_DA_RETOMADA_AUTOMATICA * DIA);
+      const diaDoAlvo = diaEmBelem(alvoDaRetomada);
+      const consultaDePe = !!consulta && SITUACOES_DE_PE.has(situ) && consulta.data.iso >= diaDoAlvo;
+      // «Retomar em» preenchido (qualquer data, passada ou futura) = a equipe já decidiu quando voltar: a retomada automática não entra
+      const comRetomarEm = lerData(a.retomar_em) !== null;
+      if (!consultaDePe && !comRetomarEm) {
+        saida.push({ regra: 'rotina-retomada', modelo: 'parau_rotina_retomada', chave: `retomada@${publica.criadaEm.toISOString()}`, kind: 'depois', alvo: alvoDaRetomada });
+      }
+    }
+    // 2) Reativação do lead frio: 30 dias depois de virar Perdido (memória `desde` da etapa) OU 30 dias depois do dia de «Retomar em» (Em espera),
+    //    se o paciente não respondeu desde então. Quem foi atendido na consulta fica com a decisão de 30 dias (não dobra).
+    if (!ultimaNaoBuscada && !semFollowUp && !c.etiquetas.includes(ETIQUETA_DA_PAUSA_DA_EQUIPE) && !manual('rotina-reativacao') && !(consulta && situ === 'Atendido')) {
+      // NINGUÉM falou (de nenhum lado) nos 7 dias antes do envio: conversa viva não é lead frio
+      const falouPerto = (alvo: Date) => !!publica && alvo.getTime() - publica.criadaEm.getTime() < DIAS_DE_SILENCIO_DA_REATIVACAO * DIA;
+      const perdidoAuto = etapa === 'Perdido' ? novo('etapa', 'Perdido') : null;
+      const alvoPerdido = perdidoAuto ? new Date(perdidoAuto.desde.getTime() + DIAS_DA_REATIVACAO_AUTOMATICA * DIA) : null;
+      if (perdidoAuto && alvoPerdido && !aindaRespondeu(perdidoAuto.desde) && !falouPerto(alvoPerdido)) {
+        saida.push({ regra: 'rotina-reativacao', modelo: 'parau_sdr_reativacao_lead_frio', chave: `reativacao@perdido@${perdidoAuto.desde.toISOString()}`, kind: 'depois', alvo: alvoPerdido });
+      }
+      const diaDaEspera = lerData(a.retomar_em);
+      if (diaDaEspera && etapa !== 'Perdido' && !ETAPAS_COM_PACIENTE_ANDANDO.has(etapa)) {
+        const base = emBelem(diaDaEspera, 9);
+        const alvoDaReativacao = new Date(base.getTime() + DIAS_DA_REATIVACAO_AUTOMATICA * DIA);
+        const consultaDePe = !!consulta && SITUACOES_DE_PE.has(situ) && consulta.data.iso >= diaEmBelem(alvoDaReativacao);
+        if (!aindaRespondeu(base) && !consultaDePe && !falouPerto(alvoDaReativacao)) {
+          saida.push({ regra: 'rotina-reativacao', modelo: 'parau_sdr_reativacao_lead_frio', chave: `reativacao@espera@${diaDaEspera.iso}`, kind: 'depois', alvo: alvoDaReativacao });
+        }
+      }
+    }
+    // 4) Boas-vindas: a conversa ENTROU em «Fechou» agora (não o que já estava assim); {{2}} = o programa do cartão, {{3}} = o próximo compromisso
+    const entrouEmFechou = etapa === 'Fechou' ? novo('etapa', 'Fechou') : null;
+    if (entrouEmFechou && !manual('rotina-boas-vindas')) {
+      saida.push({ regra: 'rotina-boas-vindas', modelo: 'parau_rotina_boas_vindas', chave: `boasvindas@${entrouEmFechou.desde.toISOString()}`, kind: 'depois', alvo: entrouEmFechou.desde });
+    }
     // interna: entrou em «Fechou» sem «Fechou tratamento» marcado
     const fechou = etapa === 'Fechou' ? novo('etapa', 'Fechou') : null;
     if (fechou && !ehSim(a.fechou_tratamento)) {
@@ -662,11 +753,18 @@ export function candidatos(c: ConversaRegua, vistos: Vistos, ajustes?: AjustesDa
     }
   }
 
+  // o par automático de cada robô manual (ver `ParDoManual`)
+  const parDoManual = (regra: string): ParDoManual | undefined => {
+    if (regra === 'sdr-reativacao') return { regra: 'rotina-reativacao', dias: DIAS_DA_JANELA_DO_PAR };
+    if (regra === 'sdr-boas-vindas') return { regra: 'rotina-boas-vindas', dias: DIAS_DA_JANELA_DO_PAR };
+    if (regra === 'sdr-confirmar-retorno') return consulta ? { regra: 'rotina-confirmar-retorno', chave: consulta.chave } : undefined;
+    return undefined;
+  };
   // etiquetas da SDR (ao ver a etiqueta nova), cada uma nas etapas do gatilho do Kommo
   for (const [etiqueta, r] of Object.entries(MODELO_DA_ETIQUETA)) {
     const v = c.etiquetas.includes(etiqueta) ? novo(`etiqueta:${etiqueta}`) : null;
     if (v && r.vale(etapa, situ, a, tratamento) && !(r.respeitaSemFollowUp && semFollowUp)) {
-      saida.push({ regra: r.regra, modelo: r.modelo, chave: `${etiqueta}@${v.desde.toISOString()}`, kind: 'depois', alvo: v.desde });
+      saida.push({ regra: r.regra, modelo: r.modelo, chave: `${etiqueta}@${v.desde.toISOString()}`, kind: 'depois', alvo: v.desde, pularSeFeito: parDoManual(r.regra) });
     }
   }
 
@@ -688,6 +786,22 @@ export function candidatos(c: ConversaRegua, vistos: Vistos, ajustes?: AjustesDa
     if (faltou && consulta.data.iso === diaEmBelem(faltou.desde)) {
       saida.push({ regra: 'sessao-falta', modelo: 'parau_sessao_falta', chave: `faltou-sessao@${diaEmBelem(faltou.desde)}`, kind: 'depois', alvo: faltou.desde });
     }
+  }
+
+  // 3) Confirmar retorno automático: consulta de «Retorno após tratamento» de pé → 2 dias antes, às 09:00 (as outras categorias de retorno já têm
+  //    véspera/dia/preparo). Não vale para tratamento cancelado.
+  if (consulta && str(a.categoria_consulta) === 'Retorno após tratamento' && SITUACOES_DE_PE.has(situ) && etapaTratamento !== 'Tratamento cancelado' && !c.etiquetas.includes(ETIQUETA_MANUAL_DA_ROTINA['rotina-confirmar-retorno']!)) {
+    // 2 dias antes, 09:00; se esse dia cai no DOMINGO (a régua não fala aos domingos), vale o sábado
+    let diaDoAviso = somarDias(consulta.data, -2);
+    if (new Date(Date.UTC(diaDoAviso.y, diaDoAviso.m - 1, diaDoAviso.d)).getUTCDay() === 0) diaDoAviso = somarDias(diaDoAviso, -1);
+    saida.push({
+      regra: 'rotina-confirmar-retorno',
+      modelo: 'parau_sdr_confirmacao_retorno',
+      chave: consulta.chave,
+      kind: 'antes',
+      teto: consulta.hora ? instante(consulta, 0) : emBelem(consulta.data, 8),
+      alvo: emBelem(diaDoAviso, 9),
+    });
   }
 
   // retorno de 60 dias depois da alta (no Kommo fica no funil Comercial, etapa RETORNO PÓS-TRATAMENTO)
@@ -747,12 +861,79 @@ export function candidatos(c: ConversaRegua, vistos: Vistos, ajustes?: AjustesDa
     });
 }
 
+/**
+ * A retomada automática manda UMA vez por período parado. Depois que ela sai, a mensagem dela é a «última pública» e, 2 dias depois, pareceria
+ * um período parado novo (chave nova) — a cada 2 dias, para sempre. Reconhece o eco: a chave da retomada de agora é a hora da mensagem anterior
+ * da régua (entre 2 dias e 2 dias + 13 h depois da chave de uma retomada já feita = a janela em que ela saiu). Uma resposta da equipe caindo
+ * exatamente nessa janela também é pulada (custo aceito: a equipe acabou de falar com o paciente).
+ */
+export function ecoDaPropriaRetomada(chave: string, feitos: ReadonlySet<string>): boolean {
+  const t = Date.parse(chave.slice('retomada@'.length));
+  if (!Number.isFinite(t)) return false;
+  for (const f of feitos) {
+    if (!f.startsWith('rotina-retomada|retomada@')) continue;
+    const anterior = Date.parse(f.slice('rotina-retomada|retomada@'.length));
+    const depois = t - anterior;
+    if (Number.isFinite(anterior) && depois >= DIAS_DA_RETOMADA_AUTOMATICA * DIA - HORA && depois <= DIAS_DA_RETOMADA_AUTOMATICA * DIA + 13 * HORA) return true;
+  }
+  return false;
+}
+
+/**
+ * O que a SDR automática mostra no texto: a reativação diz «Aqui é {{2}}» com o primeiro nome de quem atende ou «a equipe» (a por etiqueta
+ * continua exigindo atendente); a confirmação de retorno mostra a data da CONSULTA (não uma sessão ou retorno antigos do cartão).
+ */
+function paraRenderizar(regra: string, c: ConversaRegua, agora: Date): ConversaRegua {
+  if (regra === 'rotina-reativacao') return { ...c, atendente: primeiroNome(c.atendente ?? '') ?? 'a equipe' };
+  if (regra === 'rotina-boas-vindas') {
+    // o «próximo compromisso» é o compromisso FUTURO MAIS PRÓXIMO entre a próxima sessão, o retorno e a consulta (de hoje em diante); o que já
+    // passou não entra. Sem nenhuma data futura o texto fica sem o campo e a régua deixa a nota de falta.
+    const hoje = diaEmBelem(agora);
+    // futuro de verdade: com hora, o INSTANTE tem de ser de agora em diante (uma sessão de hoje às 09:00 já passou às 10:00); sem hora, vale o dia de hoje
+    const futuro = (m: Momento) => (m.hora ? instante(m, 0).getTime() >= agora.getTime() : m.data.iso >= hoje);
+    const opcoes = [
+      { qual: 'sessao', m: momento(c.attrs.proxima_sessao, c.attrs.hora_sessao) },
+      { qual: 'retorno', m: momento(c.attrs.data_retorno, null) },
+      { qual: 'consulta', m: momento(c.attrs.data_consulta, c.attrs.hora_consulta) },
+    ]
+      .filter((o): o is { qual: string; m: Momento } => !!o.m && futuro(o.m))
+      .sort((x, y) => instante(x.m, 12).getTime() - instante(y.m, 12).getTime());
+    const quem = opcoes[0]?.qual;
+    const attrs = { ...c.attrs };
+    if (quem !== 'sessao') {
+      attrs.proxima_sessao = '';
+      attrs.hora_sessao = '';
+    }
+    if (quem !== 'retorno') attrs.data_retorno = '';
+    if (quem !== 'consulta') {
+      attrs.data_consulta = '';
+      attrs.hora_consulta = '';
+    }
+    return { ...c, attrs };
+  }
+  if (regra === 'rotina-confirmar-retorno') return { ...c, attrs: { ...c.attrs, proxima_sessao: '', hora_sessao: '', data_retorno: '' } };
+  return c;
+}
+
 /** Até quando a regra ainda vale. */
 function limiteDe(k: Candidato): Date {
   if (k.kind === 'depois') return new Date(k.alvo.getTime() + ATRASO_MAX_DEPOIS_MS);
   const ate = k.alvo.getTime() + ATRASO_MAX_ANTES_MS;
   // exclusivo: na hora da própria consulta o lembrete já não faz sentido
   return new Date(k.teto ? Math.min(ate, k.teto.getTime() - 1) : ate);
+}
+
+/** O par automático já FALOU de verdade (e dentro da chave e da janela pedidas)? */
+function jaFalou(par: ParDoManual, enviados: ReadonlyMap<string, number> | undefined, agora: Date): boolean {
+  if (!enviados) return false;
+  for (const [k, quando] of enviados) {
+    const i = k.indexOf('|');
+    if (k.slice(0, i) !== par.regra) continue;
+    if (par.chave !== undefined && k.slice(i + 1) !== par.chave) continue;
+    if (par.dias !== undefined && agora.getTime() - quando > par.dias * DIA) continue;
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -765,7 +946,10 @@ export function decidirRegua(c: ConversaRegua, memoria: Memoria, agora: Date, un
   const aberta = janelaAberta(agora);
   for (const k of candidatos(c, memoria.vistos, ajustes)) {
     if (agora.getTime() < k.alvo.getTime()) continue;
+    // a mensagem da própria retomada vira a «última mensagem pública»: sem isto ela se repetiria a cada 2 dias (ver `ecoDaPropriaRetomada`)
+    if (k.regra === 'rotina-retomada' && ecoDaPropriaRetomada(k.chave, memoria.feitos)) continue;
     if (memoria.feitos.has(`${k.regra}|${k.chave}`)) continue;
+    if (k.pularSeFeito && jaFalou(k.pularSeFeito, memoria.enviados, agora)) continue;
     // a hora em que SAI (agora), não a prevista: depois do último instante ou no dia da consulta, esta mensagem perdeu o sentido
     if (k.saiAte && agora.getTime() > k.saiAte.getTime()) continue;
     if (k.saiAntesDoDia && diaEmBelem(agora) >= k.saiAntesDoDia) continue;
@@ -779,7 +963,7 @@ export function decidirRegua(c: ConversaRegua, memoria: Memoria, agora: Date, un
       disparos.push({ regra: k.regra, chave: k.chave, modelo: k.modelo, texto: DESCRICAO_INTERNA[k.interna], variaveis: null, faltando: [], alvo: k.alvo, interna: k.interna });
       continue;
     }
-    const r = renderizar(k.modelo, c, unidade, k.momento);
+    const r = renderizar(k.modelo, paraRenderizar(k.regra, c, agora), unidade, k.momento);
     if (r.faltando.length && memoria.feitos.has(`${k.regra}${SUFIXO_FALTA}|${k.chave}`)) continue;
     disparos.push({ regra: k.regra, chave: k.chave, modelo: k.modelo, texto: r.texto, variaveis: r.variaveis, faltando: r.faltando, alvo: k.alvo });
   }
@@ -820,7 +1004,19 @@ export function notaDoSeco(d: Disparo, via?: ViaDoEnvio): string {
  * atividade — que pode ser uma NOTA (inclusive as do seco). Nesse caso o worker busca a última pública desta conversa.
  */
 export function precisaUltimaPublica(c: ConversaRegua): boolean {
-  return ETAPAS_DE_QUALIFICACAO.has(str(c.attrs.etapa)) && !!c.ultima?.privada;
+  return tipoDaBuscaDaUltimaPublica(c) !== null;
+}
+
+/**
+ * Por que buscar a última pública: 'qualificacao' (quente parado e sem resposta 24 h — como sempre, SEM teto) ou 'nova' (as etapas que só a SDR
+ * automática olha: Novo lead, Perdido, Em espera — COM teto por ciclo, para não gastar o ciclo todo em buscas).
+ */
+export function tipoDaBuscaDaUltimaPublica(c: ConversaRegua): 'qualificacao' | 'nova' | null {
+  if (!c.ultima?.privada) return null;
+  const etapa = str(c.attrs.etapa);
+  if (ETAPAS_DE_QUALIFICACAO.has(etapa)) return 'qualificacao';
+  if (ETAPAS_DA_RETOMADA_AUTOMATICA.has(etapa) || etapa === 'Perdido' || lerData(c.attrs.retomar_em) !== null) return 'nova';
+  return null;
 }
 
 /** Converte uma mensagem crua do Chatwoot (listagem ou /messages). null = atividade/modelo ou inválida. */
