@@ -72,7 +72,7 @@ export type EnviosPorCategoria = Array<{ categoria: string | null; envios: numbe
 export type LerEnvios = (unitId: string, desde: Date) => Promise<EnviosPorCategoria>;
 
 export const enviosPorCategoriaNoBanco: LerEnvios = async (unitId, desde) => {
-  const ids = await unidadesDoMesmoNumeroKapso(unitId);
+  const ids = await unidadesDoNumeroGuardadas(unitId);
   const grupos = await prisma.disparoDestinatario.groupBy({
     by: ['ondaId'],
     where: { unitId: { in: ids }, onda: { origem: 'chatwoot' }, enviadoEm: { gte: desde } },

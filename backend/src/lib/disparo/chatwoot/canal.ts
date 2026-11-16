@@ -128,7 +128,7 @@ export type ConferenciaDoModelo = { ok: true } | { ok: false; motivo: string; tr
 export async function conferirModeloDaOnda(
   ctx: ContextoChatwoot,
   caixa: number,
-  def: { template: string; idioma: string; textoModelo: string; variaveis: string[]; categoria?: string | null },
+  def: { template: string; idioma: string; textoModelo: string; variaveis: string[]; categoria?: string | null; categoriaAssumida?: boolean },
 ): Promise<ConferenciaDoModelo> {
   let modelos: ModeloDaCaixa[];
   try {
@@ -144,8 +144,8 @@ export async function conferirModeloDaOnda(
   if (!mesmoTexto(m.texto, def.textoModelo)) return { ok: false, motivo: `o texto do modelo no CRM mudou desde que você o escolheu. No CRM agora: "${m.texto.slice(0, 200)}"` };
   // A CATEGORIA congelada na montagem (marketing, utilidade…): o custo e o teto de gasto foram calculados com ela. A Meta pode RECLASSIFICAR um modelo depois de aprovado
   // (utilidade → marketing custa ~8× mais): se mudou, a onda não segue precificada errada — pausa, como quando o texto muda.
-  // (categoria ASSUMIDA — o CRM não a informou desta vez — não prova reclassificação: só compara quando o CRM DIZ a categoria)
-  if (def.categoria && m.categoria && !m.categoriaAssumida && def.categoria.trim().toUpperCase() !== m.categoria.trim().toUpperCase()) {
+  // (a categoria da ONDA assumida como marketing, ou a do CRM assumida desta vez, não prova reclassificação: só compara quando as DUAS são informadas)
+  if (def.categoria && !def.categoriaAssumida && m.categoria && !m.categoriaAssumida && def.categoria.trim().toUpperCase() !== m.categoria.trim().toUpperCase()) {
     return { ok: false, categoriaNova: m.categoria.toUpperCase(), motivo: `a Meta mudou a categoria do modelo de ${def.categoria.toUpperCase()} para ${m.categoria.toUpperCase()}: o custo do disparo mudou. Monte o disparo de novo para ver o custo certo` };
   }
   const p = problemaNoModelo(def.textoModelo, def.variaveis);

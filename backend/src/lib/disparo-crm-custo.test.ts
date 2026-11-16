@@ -320,3 +320,28 @@ test('falha ao ler as unidades do número NÃO fica guardada 5 min como «númer
   assert.equal(await precoEmReaisDoBanco('u1', 'MARKETING'), 1.80152, 'a falha de leitura não vira «número só dela»');
   agora.mock.restore();
 });
+
+test('categoria assumida: a estimativa segue pelo preço de marketing, mas deixa de ser «conhecida» — a tela avisa e a aprovação exige confirmação', () => {
+  const e = custoMod.comCategoriaAssumida(estimarCusto({ pessoas: 50, categoria: 'MARKETING', preco: { usd: 0.0625, dias: 30 }, cambio: 5.6, env: {} }), true);
+  assert.deepEqual([e.conhecido, e.categoriaAssumida, e.brl, e.porMensagemBrl], [false, true, 17.5, 0.35]);
+  assert.equal(e.nota, custoMod.NOTA_CATEGORIA_ASSUMIDA);
+  assert.equal(e.nota, 'categoria não informada pelo CRM: estimativa pelo preço de marketing');
+  const semHistorico = custoMod.comCategoriaAssumida(estimarCusto({ pessoas: 10, categoria: 'MARKETING', preco: null, cambio: 5.6, env: {} }), true);
+  assert.match(semHistorico.nota, /^categoria não informada pelo CRM: estimativa pelo preço de marketing \(e sem histórico da Meta: preço de reserva\)$/);
+  const normal = estimarCusto({ pessoas: 50, categoria: 'MARKETING', preco: { usd: 0.0625, dias: 30 }, cambio: 5.6, env: {} });
+  assert.equal(custoMod.comCategoriaAssumida(normal, false), normal, 'categoria informada: nada muda');
+});
+
+test('a lista de unidades do número guardada serve também à contagem do gasto: uma leitura só para preço e envios', async () => {
+  const { precoEmReaisDoBanco, enviosPorCategoriaNoBanco, _esquecerPrecosDeGasto } = await import('./disparo/chatwoot/gasto.js');
+  const { _definirCambio } = await import('./disparo/chatwoot/custo.js');
+  _esquecerPrecosDeGasto();
+  _definirCambio(5.6);
+  let leituras = 0;
+  falso('unitChatwoot', { findUnique: async () => (leituras++, { kapsoPhoneNumberId: 'n1' }), findMany: async () => [{ unitId: 'u1' }, { unitId: 'u2' }] });
+  falso('whatsappCostDaily', { findMany: async () => [] });
+  falso('disparoDestinatario', { groupBy: async () => [] });
+  await precoEmReaisDoBanco('u1', 'MARKETING');
+  await enviosPorCategoriaNoBanco('u1', new Date(0));
+  assert.equal(leituras, 1);
+});

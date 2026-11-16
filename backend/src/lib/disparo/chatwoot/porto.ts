@@ -42,6 +42,8 @@ export interface OndaDaRodada {
   variaveis: string[];
   /** a categoria do modelo congelada na montagem (o custo e o teto de gasto foram calculados com ela); se a Meta reclassificar o modelo, a onda pausa */
   categoria?: string | null;
+  /** a categoria foi ASSUMIDA como marketing (o CRM não a informou quando a onda foi montada): a conferência não a compara com o CRM */
+  categoriaAssumida?: boolean;
 }
 
 export interface DepsDoPortoChatwoot {
@@ -93,6 +95,7 @@ export function portoChatwoot(deps: DepsDoPortoChatwoot): Porto & { ocupouAUnida
   const franquias = new Map<string, ReturnType<typeof conferenciaDaFranquia>>();
   const caixas = new Map<string, { ate: number; v: Promise<CaixaOficial> }>();
   const modelos = new Map<string, { ate: number; v: Promise<ConferenciaDoModelo> }>();
+  const categoriaJaGravada = new Set<string>();
 
   const unidade = (id: string): Unit => {
     const u = unidades.get(id);
@@ -213,7 +216,15 @@ export function portoChatwoot(deps: DepsDoPortoChatwoot): Porto & { ocupouAUnida
           await base.pausarOnda(d.ondaId, `o modelo não confere mais com o CRM: ${conf.motivo}`.slice(0, 300), 'meta').catch(() => undefined);
           // A Meta reclassificou o modelo: a categoria nova passa a ser a da onda, e os envios que ela já fez passam a contar no teto de gasto pelo preço NOVO (o gasto é por categoria da onda).
           // Só quando a nova é MAIS CARA: se ficou mais barata, os envios que a onda já fez custaram a categoria antiga e continuam contando por ela (nunca subestima o gasto).
-          if (conf.categoriaNova && precoDeReservaBrl(conf.categoriaNova) > precoDeReservaBrl(onda.categoria)) await prisma.disparoOnda.updateMany({ where: { id: d.ondaId }, data: { categoriaModelo: conf.categoriaNova } }).catch((err) => logger.warn({ err: String(err), onda: d.ondaId }, 'disparo-crm: não consegui gravar a categoria nova da onda'));
+          // Só com a onda de fato PAUSADA (se a pausa falhou, não regrava) e UMA vez por rodada (a reconferência roda por pessoa).
+          if (conf.categoriaNova && !categoriaJaGravada.has(d.ondaId) && precoDeReservaBrl(conf.categoriaNova) > precoDeReservaBrl(onda.categoria)) {
+            const gravou = await prisma.disparoOnda.updateMany({ where: { id: d.ondaId, estado: 'pausada' }, data: { categoriaModelo: conf.categoriaNova } }).catch((err) => {
+              logger.warn({ err: String(err), onda: d.ondaId }, 'disparo-crm: não consegui gravar a categoria nova da onda');
+              return { count: 0 };
+            });
+            // só vale como «gravada» se gravou (a onda estava mesmo pausada); senão a próxima pessoa/rodada tenta de novo
+            if (gravou.count > 0) categoriaJaGravada.add(d.ondaId);
+          }
           return { tipo: 'adiar', motivo: conf.motivo.slice(0, 200) };
         }
         let raw: any;

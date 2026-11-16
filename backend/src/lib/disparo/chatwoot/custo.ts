@@ -142,6 +142,8 @@ export interface EstimativaDeCusto {
   porMensagemBrl: number | null;
   porMensagemUsd: number | null;
   cambio: number | null;
+  /** `true` = o CRM não informou a categoria do modelo: a estimativa é pelo preço de MARKETING (a mais cara) e a aprovação exige confirmação */
+  categoriaAssumida?: boolean;
   /** `true` = SEM histórico da Meta: o valor é uma estimativa com o preço de RESERVA (conservador); a aprovação exige confirmação explícita */
   reserva: boolean;
   /** de onde veio o preço, ou por que foi usada a reserva */
@@ -173,12 +175,22 @@ export function estimarCusto(a: { pessoas: number; categoria: string | null | un
 }
 
 /** A estimativa quando nem dá para ler a tabela (demorou, caiu): só com o preço de reserva. */
-export const estimativaDeReserva = (categoria: string | null | undefined, pessoas: number): EstimativaDeCusto => estimarCusto({ pessoas, categoria, preco: null, cambio: null });
+export const estimativaDeReserva = (categoria: string | null | undefined, pessoas: number, categoriaAssumida = false): EstimativaDeCusto => comCategoriaAssumida(estimarCusto({ pessoas, categoria: categoriaAssumida ? CATEGORIA_ASSUMIDA : categoria, preco: null, cambio: null }), categoriaAssumida);
 
 /** Preço + câmbio + conta, de uma vez (a leitura do banco e do câmbio ficam aqui). */
-export async function estimativaDoDisparo(unitId: string, categoria: string | null | undefined, pessoas: number): Promise<EstimativaDeCusto> {
-  const [preco, cambio] = await Promise.all([lerPrecoDaUnidade(unitId, categoria).catch(() => null), cambioDoDia().catch(() => null)]);
-  return estimarCusto({ pessoas, categoria, preco, cambio });
+export async function estimativaDoDisparo(unitId: string, categoria: string | null | undefined, pessoas: number, categoriaAssumida = false): Promise<EstimativaDeCusto> {
+  // categoria assumida = preço de MARKETING (o que a nota promete), seja qual for a que estiver gravada
+  const cat = categoriaAssumida ? CATEGORIA_ASSUMIDA : categoria;
+  const [preco, cambio] = await Promise.all([lerPrecoDaUnidade(unitId, cat).catch(() => null), cambioDoDia().catch(() => null)]);
+  return comCategoriaAssumida(estimarCusto({ pessoas, categoria: cat, preco, cambio }), categoriaAssumida);
+}
+
+const CATEGORIA_ASSUMIDA = 'MARKETING';
+export const NOTA_CATEGORIA_ASSUMIDA = 'categoria não informada pelo CRM: estimativa pelo preço de marketing';
+
+/** Categoria assumida: o valor segue (preço de marketing), mas deixa de ser «conhecido» — a tela avisa e a aprovação exige a confirmação explícita. */
+export function comCategoriaAssumida(e: EstimativaDeCusto, assumida: boolean): EstimativaDeCusto {
+  return assumida ? { ...e, conhecido: false, categoriaAssumida: true, nota: `${NOTA_CATEGORIA_ASSUMIDA}${e.reserva ? ' (e sem histórico da Meta: preço de reserva)' : ''}` } : e;
 }
 
 // ── ritmo: em quantos dias termina ──────────────────────────────────────────────────────────────────────────────
