@@ -16,7 +16,7 @@ import { criarLimitador, ipDoCliente, type Limitador } from '../lib/limite-taxa.
 import { conviteAberto, registrarEnvio, type BancoConvites } from '../lib/kit-unidade/convites.js';
 import { bancoConvitesPrisma } from '../lib/kit-unidade/convites-prisma.js';
 import { validarFormulario } from '../lib/kit-unidade/formulario.js';
-import { paginaDoFormulario, paginaLinkInvalido } from '../lib/kit-unidade/formulario-pagina.js';
+import { paginaDoFormulario, paginaLinkInvalido, paginaMuitasTentativas } from '../lib/kit-unidade/formulario-pagina.js';
 
 export const LIMITE_DO_CORPO = '64kb';
 
@@ -24,14 +24,15 @@ export interface DepsNovaClinica {
   banco: BancoConvites;
   avisar: (texto: string, chave: string) => Promise<unknown>;
   agora: () => Date;
-  limites: { pagina: Limitador; codigoErrado: Limitador; envio: Limitador; envioGlobal: Limitador };
+  limites: { pagina: Limitador; codigoErrado: Limitador; envio: Limitador; tentativas: Limitador; envioGlobal: Limitador };
 }
 
 export function limitesPadrao(agora: () => number = Date.now): DepsNovaClinica['limites'] {
   return {
     pagina: criarLimitador({ max: 60, janelaMs: 10 * 60_000, agora }), // abrir a página
     codigoErrado: criarLimitador({ max: 10, janelaMs: 10 * 60_000, agora }), // chutes de código por IP
-    envio: criarLimitador({ max: 10, janelaMs: 60 * 60_000, agora }), // envios por IP
+    envio: criarLimitador({ max: 10, janelaMs: 60 * 60_000, agora }), // envios ACEITOS por IP (quem erra o formulário e corrige não fica preso)
+    tentativas: criarLimitador({ max: 60, janelaMs: 60 * 60_000, agora }), // QUALQUER POST por IP, aceito ou não (inclusive os 422): folga larga para corrigir erros
     envioGlobal: criarLimitador({ max: 100, janelaMs: 60 * 60_000, agora }), // envios no total: cobre IP mal detectado
   };
 }
@@ -62,6 +63,13 @@ function muitasTentativas(res: Response, esperarSeg: number): void {
   res.set('Retry-After', String(esperarSeg)).status(429).json({ erro: 'muitas_tentativas', esperarSeg });
 }
 
+/** O 429 da PÁGINA (quem abre o link no navegador) é uma tela amigável, não JSON cru. */
+function muitasTentativasNaPagina(res: Response, esperarSeg: number): void {
+  const nonce = randomBytes(16).toString('base64');
+  cabecalhos(res, nonce);
+  res.set('Retry-After', String(esperarSeg)).status(429).type('html').send(paginaMuitasTentativas(nonce, esperarSeg));
+}
+
 export function criarManipuladores(deps: DepsNovaClinica = padrao()) {
   /** O IP já passou do limite de chutes? Confere ANTES de olhar o código (bloqueado é bloqueado, com código certo ou errado: não há oráculo). */
   const bloqueadoPorChutes = (ip: string) => deps.limites.codigoErrado.espiar(ip);
@@ -71,9 +79,9 @@ export function criarManipuladores(deps: DepsNovaClinica = padrao()) {
   async function pagina(req: Request, res: Response): Promise<void> {
     const ip = ipDoCliente(req);
     const lim = deps.limites.pagina.tentar(ip);
-    if (!lim.ok) return muitasTentativas(res, lim.esperarSeg);
+    if (!lim.ok) return muitasTentativasNaPagina(res, lim.esperarSeg);
     const bloqueio = bloqueadoPorChutes(ip);
-    if (!bloqueio.ok) return muitasTentativas(res, bloqueio.esperarSeg);
+    if (!bloqueio.ok) return muitasTentativasNaPagina(res, bloqueio.esperarSeg);
     const nonce = randomBytes(16).toString('base64');
     const aberto = await conviteAberto(deps.banco, req.params.codigo, deps.agora());
     if (!aberto) {
@@ -98,8 +106,8 @@ export function criarManipuladores(deps: DepsNovaClinica = padrao()) {
       res.status(404).json({ erro: 'link_invalido' });
       return;
     }
-    // o teto GLOBAL só conta quem tem um código VÁLIDO: quem chuta não gasta a vez dos franqueados de verdade
-    const global = deps.limites.envioGlobal.tentar('global');
+    // o teto GLOBAL só conta envio ACEITO (código válido E dados certos): quem chuta, ou erra o formulário, não gasta a vez dos franqueados de verdade
+    const global = deps.limites.envioGlobal.espiar('global');
     if (!global.ok) return muitasTentativas(res, global.esperarSeg);
     const v = validarFormulario(req.body);
     if (!v.ok) {
@@ -108,6 +116,11 @@ export function criarManipuladores(deps: DepsNovaClinica = padrao()) {
       return;
     }
     const gravado = await registrarEnvio(deps.banco, codigo, v.respostas, deps.agora());
+    if (gravado) {
+      // só o envio ACEITO conta (para o limite de 10 por hora por IP e para o teto global)
+      deps.limites.envio.tentar(ip);
+      deps.limites.envioGlobal.tentar('global');
+    }
     if (!gravado) {
       // perdeu a corrida (outro envio ou vencimento entre a conferência e a gravação): mesma resposta de link inválido
       cabecalhos(res);
@@ -122,13 +135,16 @@ export function criarManipuladores(deps: DepsNovaClinica = padrao()) {
       .avisar(`📝 Formulário de nova clínica recebido: ${umaLinha(r.clinica.nome)} (${umaLinha(r.clinica.cidade)}/${r.clinica.uf}). Código do formulário: ${gravado.id}.`, `nova-clinica:${gravado.id}`)
       .catch((err) => logger.warn({ err: String(err) }, 'nova-clinica: aviso ao João falhou (o formulário está gravado)'));
     cabecalhos(res);
-    res.json({ ok: true, referencia: gravado.id.slice(-6).toUpperCase() });
+    res.json({ ok: true, referencia: gravado.id.slice(-6).toLowerCase() });
   }
 
   /** Antes de ler o corpo: um envio gigante ou repetido também conta. */
   function limitarEnvio(req: Request, res: Response, next: NextFunction): void {
-    const porIp = deps.limites.envio.tentar(ipDoCliente(req));
-    if (!porIp.ok) return muitasTentativas(res, porIp.esperarSeg);
+    const ip = ipDoCliente(req);
+    const todas = deps.limites.tentativas.tentar(ip);
+    if (!todas.ok) return muitasTentativas(res, todas.esperarSeg);
+    const aceitos = deps.limites.envio.espiar(ip);
+    if (!aceitos.ok) return muitasTentativas(res, aceitos.esperarSeg);
     next();
   }
 

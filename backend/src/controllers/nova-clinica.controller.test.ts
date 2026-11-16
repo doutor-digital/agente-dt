@@ -79,7 +79,8 @@ test('envio válido: 200 «recebido», grava, avisa o João SEM dado pessoal, e 
   assert.equal(r.status, 200);
   const j = (await r.json()) as { ok: boolean; referencia: string };
   assert.equal(j.ok, true);
-  assert.match(j.referencia, /^[A-Z0-9]{6}$/);
+  assert.match(j.referencia, /^[a-z0-9]{6}$/);
+  assert.ok(s.banco.linhas[0]!.id.endsWith(j.referencia), 'a referência é o fim do id do formulário (o que o João usa no kit)');
   assert.equal(s.banco.linhas[0]!.respostas?.clinica.nome, 'Doutor Hérnia Serra');
   assert.equal(s.avisos.length, 1);
   assert.match(s.avisos[0]!, /Doutor Hérnia Serra \(Serra\/ES\)\. Código do formulário/);
@@ -150,18 +151,67 @@ test('chutar códigos: depois de 10 erros o IP leva 429 — com código errado O
   assert.equal((await s.pagina(bom.codigo, '203.0.113.51')).status, 200, 'outro IP segue normal');
 });
 
-test('limite de envios: por IP e um teto global', async () => {
-  const lim = limitesPadrao();
-  const s = await subir({ limites: lim });
+test('limite de envios: conta só o envio ACEITO (quem erra o formulário e corrige não fica preso), tem folga larga para os 422 e um teto global', async () => {
+  const s = await subir();
   const c = await s.convite();
-  for (let i = 0; i < 10; i++) assert.notEqual((await s.post(c.codigo, {}, '203.0.113.60')).status, 429);
-  assert.equal((await s.post(c.codigo, {}, '203.0.113.60')).status, 429, '11º envio do mesmo IP na hora');
+  // 30 tentativas com erro (422) do mesmo IP NÃO travam: o franqueado corrige e envia
+  for (let i = 0; i < 30; i++) assert.equal((await s.post(c.codigo, {}, '203.0.113.60')).status, 422, `tentativa ${i}`);
+  assert.equal((await s.post(c.codigo, respostasValidas(), '203.0.113.60')).status, 200, 'depois de 30 erros, o envio certo passa');
+  // 10 envios ACEITOS por hora por IP; o 11º leva 429
+  for (let i = 0; i < 9; i++) {
+    const outro = await s.convite();
+    assert.equal((await s.post(outro.codigo, respostasValidas(), '203.0.113.61')).status, 200, `aceito ${i}`);
+  }
+  const dez = await s.convite();
+  assert.equal((await s.post(dez.codigo, respostasValidas(), '203.0.113.61')).status, 200, '10º aceito');
+  const onze = await s.convite();
+  assert.equal((await s.post(onze.codigo, respostasValidas(), '203.0.113.61')).status, 429, '11º envio aceito do mesmo IP na hora');
+  // QUALQUER POST (aceito ou não) tem teto de 60/h por IP: spam de 422 não passa
+  const x = await s.convite();
+  for (let i = 0; i < 60; i++) assert.notEqual((await s.post(x.codigo, {}, '203.0.113.62')).status, 429, `tentativa ${i}`);
+  assert.equal((await s.post(x.codigo, {}, '203.0.113.62')).status, 429, '61ª tentativa');
+
   const g = await subir();
+  // quem chuta código errado, ou erra o formulário, NÃO gasta o teto global (senão 10 IPs travariam todos os franqueados)
   const c2 = await g.convite();
-  // quem chuta código errado NÃO gasta o teto global (senão 10 IPs travariam todos os franqueados)
   for (let i = 0; i < 150; i++) assert.equal((await g.post('Z'.repeat(24), {}, `198.51.100.${i % 250}`)).status, 404);
-  for (let i = 0; i < 100; i++) assert.notEqual((await g.post(c2.codigo, {}, `192.0.2.${i % 250}`)).status, 429, `envio ${i}`);
-  assert.equal((await g.post(c2.codigo, {}, '192.0.2.250')).status, 429, 'teto global: o 101º envio com código VÁLIDO, de qualquer IP');
+  for (let i = 0; i < 150; i++) assert.equal((await g.post(c2.codigo, {}, `198.51.101.${i % 250}`)).status, 422);
+  // o teto é de 100 envios ACEITOS por hora, de qualquer IP
+  for (let i = 0; i < 100; i++) {
+    const novo = await g.convite();
+    assert.equal((await g.post(novo.codigo, respostasValidas(), `192.0.2.${i % 250}`)).status, 200, `envio ${i}`);
+  }
+  const ultimo = await g.convite();
+  assert.equal((await g.post(ultimo.codigo, respostasValidas(), '192.0.2.251')).status, 429, 'teto global: o 101º envio aceito, de qualquer IP');
+});
+
+test('429 na PÁGINA é uma tela amigável em HTML (não JSON cru), com Retry-After', async () => {
+  const s = await subir();
+  const bom = await s.convite();
+  for (let i = 0; i < 10; i++) await s.pagina('B'.repeat(24), '203.0.113.80');
+  const r = await s.pagina(bom.codigo, '203.0.113.80');
+  assert.equal(r.status, 429);
+  assert.match(r.headers.get('content-type')!, /text\/html/);
+  assert.ok(Number(r.headers.get('retry-after')) >= 1);
+  const html = await r.text();
+  assert.match(html, /Muitas tentativas/);
+  assert.match(html, /minuto/);
+  assert.doesNotMatch(html, /muitas_tentativas|\{"erro"/);
+  // o envio (API) continua respondendo JSON
+  const api = await s.post(bom.codigo, respostasValidas(), '203.0.113.80');
+  assert.equal(api.status, 429);
+  assert.equal(((await api.json()) as { erro: string }).erro, 'muitas_tentativas');
+});
+
+test('caractere de controle em qualquer campo (ESC no link do mapa, por exemplo) é recusado com 422 e não vai para o banco', async () => {
+  const s = await subir();
+  const c = await s.convite();
+  const ruim = respostasValidas();
+  ruim.clinica.mapa_url = 'https://maps.example/x\u001b[31m';
+  const r = await s.post(c.codigo, ruim);
+  assert.equal(r.status, 422);
+  assert.match(((await r.json()) as { campos: Record<string, string> }).campos['clinica.mapa_url']!, /caractere invisível/);
+  assert.equal(s.banco.linhas[0]!.enviadoEm, null);
 });
 
 test('corpo: mais de 64 KB é 413 (o teto do servidor é 1 MB, a rota tem o dela); JSON quebrado é 400; nada do corpo é devolvido', async () => {

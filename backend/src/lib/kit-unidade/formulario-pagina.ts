@@ -307,6 +307,16 @@ export function paginaDoFormulario(nonce: string): string {
   return `${CABECA('Cadastro da sua clínica · Doutor Digital')}<style nonce="${nonce}">${ESTILO}</style></head><body><main>${corpo()}</main><script nonce="${nonce}">${SCRIPT}</script></body></html>`;
 }
 
+/** O 429 de quem abriu o link: uma tela amigável (o JSON cru assustaria o dono da clínica). */
+export function paginaMuitasTentativas(nonce: string, esperarSeg: number): string {
+  const min = Math.max(1, Math.ceil(esperarSeg / 60));
+  return `${CABECA('Tente de novo em alguns minutos · Doutor Digital')}<style nonce="${nonce}">${ESTILO}</style></head><body><main>
+<p class="marca">Doutor Digital</p><h1>Muitas tentativas</h1>
+<section><p>Esta página recebeu muitos acessos seguidos. Espere cerca de <b>${min} minuto${min > 1 ? 's' : ''}</b> e abra o link de novo.</p>
+<p>Se o problema continuar, fale com a Doutor Digital.</p></section>
+</main></body></html>`;
+}
+
 /** A MESMA página para código errado, vencido, já usado ou revogado: quem chuta não descobre qual deles existe. */
 export function paginaLinkInvalido(nonce: string): string {
   return `${CABECA('Link indisponível · Doutor Digital')}<style nonce="${nonce}">${ESTILO}</style></head><body><main>

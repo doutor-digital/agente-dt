@@ -127,6 +127,16 @@ test('link inválido: a MESMA página, sem dizer o motivo', () => {
   assert.doesNotMatch(html, /venceu|expirou|não existe|inexistente|revogado/i);
 });
 
+test('caractere de controle (ESC, NUL, DEL) em QUALQUER campo é recusado — mapa_url inclusive; tabulação e quebra de linha do texto livre ficam', () => {
+  for (const [campo, valor] of [['mapa_url', 'https://maps.example/x\u001b[0m'], ['endereco', 'Rua A\u0000, 100, Centro, Serra'], ['nome', 'Clínica\u007f Serra']] as const) {
+    const r = validarFormulario({ ...respostasValidas(), clinica: { ...respostasValidas().clinica, [campo]: valor } });
+    assert.equal(r.ok, false, campo);
+    if (!r.ok) assert.match(r.campos[`clinica.${campo}`]!, /caractere invisível/);
+  }
+  const ok = validarFormulario({ ...respostasValidas(), clinica: { ...respostasValidas().clinica, endereco: 'Rua A, 100\nSala 2, Centro, Serra/ES' } });
+  assert.equal(ok.ok, true);
+});
+
 test('RespostasFormulario é estrito (sem campo livre)', () => {
   assert.equal(RespostasFormulario.safeParse({}).success, false);
 });

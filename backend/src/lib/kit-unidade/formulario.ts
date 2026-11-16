@@ -145,7 +145,17 @@ export function errosPorCampo(erro: z.ZodError): Record<string, string> {
 
 export type ResultadoDoFormulario = { ok: true; respostas: RespostasFormulario } | { ok: false; campos: Record<string, string> };
 
+/** Caracteres de controle (ESC, NUL, DEL…; \t \n \r ficam: o texto livre os troca por espaço) em qualquer texto do corpo: caminhos dos campos que os têm. */
+export function camposComControle(valor: unknown, caminho: string[] = []): string[] {
+  if (typeof valor === 'string') return /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/.test(valor) ? [caminho.join('.') || '_'] : [];
+  if (Array.isArray(valor)) return valor.flatMap((v, i) => camposComControle(v, [...caminho, String(i)]));
+  if (valor && typeof valor === 'object') return Object.entries(valor).flatMap(([k, v]) => camposComControle(v, [...caminho, k]));
+  return [];
+}
+
 export function validarFormulario(bruto: unknown): ResultadoDoFormulario {
+  const controle = camposComControle(bruto);
+  if (controle.length) return { ok: false, campos: Object.fromEntries(controle.map((c) => [c, 'Tem um caractere invisível ou inválido. Apague este campo e digite de novo.'])) };
   const r = RespostasFormulario.safeParse(bruto);
   return r.success ? { ok: true, respostas: r.data } : { ok: false, campos: errosPorCampo(r.error) };
 }
