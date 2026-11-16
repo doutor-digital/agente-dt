@@ -233,6 +233,8 @@ export interface Atendente {
   id: number | null;
   /** papel nesta conta (`administrator` | `agent`): a tela «Robôs» só deixa o administrador configurar */
   papel?: string | null;
+  /** o e-mail do perfil que o PRÓPRIO Chatwoot devolveu para o login (nunca o que o navegador diz): quem aprova disparo é decidido por ele */
+  email?: string | null;
 }
 
 export async function sessaoDaAtendente(req: Request, res: Response): Promise<Atendente | null> {
@@ -252,7 +254,7 @@ export async function sessaoDaAtendente(req: Request, res: Response): Promise<At
   }
   const r = await conferirSessao(req, res, sessao, 401);
   if (!r) return null;
-  return { c: r.ctx, sessao, nome: r.quem.nome, id: r.quem.id, papel: r.quem.papel };
+  return { c: r.ctx, sessao, nome: r.quem.nome, id: r.quem.id, papel: r.quem.papel, email: r.quem.email };
 }
 
 async function definicoes(a: Acesso): Promise<unknown[]> {
@@ -1784,7 +1786,9 @@ const MENU_JS = String.raw`(function(){
     // «Agente»: a equipe cuida da própria Sofia (avaliações, regras, teste, pausadas) e pede à Doutor Digital o que é de código (13/11)
     { id: 'ia', marca: 'data-ia-menu', nome: 'Agente', hash: '#agente', param: '', url: '/funil/agente' },
     // «Robôs» (14/11): os robôs da régua por unidade — ver, ligar/desligar, mudar tempo e modelo (só administrador) e o que foi enviado
-    { id: 'robos', marca: 'data-robos-menu', nome: 'Robôs', hash: '#robos', param: '', url: '/funil/robos' }
+    { id: 'robos', marca: 'data-robos-menu', nome: 'Robôs', hash: '#robos', param: '', url: '/funil/robos' },
+    // «Disparos» (16/11): filtrar a lista, escolher um modelo aprovado do WhatsApp, prévia, envio em ondas e relatório — o «Broadcast» do CRM
+    { id: 'disparos', marca: 'data-disparos-menu', nome: 'Disparos', hash: '#disparos', param: '', url: '/funil/disparos' }
   ];
   // o grupo Hoje aberto/fechado fica lembrado neste navegador (padrão: aberto)
   var GRUPO_HOJE = 'menu:hoje-fechado';
@@ -1911,6 +1915,8 @@ const MENU_JS = String.raw`(function(){
   };
   // Robôs: o desenho de fluxo (dois blocos ligados), não a cabeça de robô (João, 15/11: «cara de IA»)
   ICONES.robos = '<rect width="8" height="8" x="3" y="3" rx="2"/><path d="M7 11v4a2 2 0 0 0 2 2h4"/><rect width="8" height="8" x="13" y="13" rx="2"/>';
+  // Disparos: o avião de papel (envio em ondas)
+  ICONES.disparos = '<path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4Z"/>';
   ICONES.ia = '<path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>';
   var SEL_ICONE = 'svg, [class^="i-"], [class*=" i-"]';
   function trocarIcone(base, novo, qual){

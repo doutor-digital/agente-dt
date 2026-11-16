@@ -619,6 +619,14 @@ test('aprovarOndaChatwoot: confere total + impressão e o modelo no CRM; grava q
   const outraConta = await aprovarOndaChatwoot('o1', { email: 'suzanne.mychelly1@gmail.com', papel: 'administrator', total: 1, impressao }, { ...deps, ctx: () => criarContextoChatwoot({ url: 'https://x.test', conta: 2, token: 't' }) });
   assert.deepEqual([outraConta.ok, (outraConta as { status: number }).status], [false, 422], 'a conta do CRM da unidade tem de ser a do disparo');
   assert.equal(gravado.length, 0, 'recusa nenhuma gravou aprovação');
+  // unidade DESLIGADA não aprova (a aprovação ficaria registrada sem valer nada): ligue, ou deixe em seco, antes
+  const { _semearParaTeste } = await import('./automacoes-estado.js');
+  _semearParaTeste([{ slug: UNIDADE.slug, automacao: 'chatwoot-disparo', estado: 'desligado' }]);
+  const desligada = await aprovarOndaChatwoot('o1', { email: 'suzanne.mychelly1@gmail.com', papel: 'administrator', total: 1, impressao }, deps);
+  _semearParaTeste([]);
+  assert.deepEqual([desligada.ok, (desligada as { status: number }).status], [false, 422]);
+  assert.match((desligada as { erro: string }).erro, /DESLIGADOS/);
+  assert.equal(gravado.length, 0);
 });
 
 test('aprovarOndaChatwoot: onda do Kommo não se aprova por aqui; e a rota do console (aprovarOnda) não aprova onda do CRM', async () => {

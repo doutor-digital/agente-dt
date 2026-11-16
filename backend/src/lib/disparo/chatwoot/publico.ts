@@ -8,7 +8,7 @@
 import { conversaDoChatwoot, type ConversaRegua } from '../../chatwoot-regua.js';
 import { conversaLidaDoChatwoot } from '../../chatwoot-porta.js';
 import { quemFalaPorTelefone } from '../../chatwoot-regua-worker.js';
-import { chaveDaPessoa, telefoneWhatsapp, triar, type Candidato, type Elegivel, type MotivoDeExclusao, type SituacaoNaFranquia } from '../regras.js';
+import { chaveDaPessoa, rotuloDaExclusao, telefoneWhatsapp, triar, type Candidato, type Elegivel, type MotivoDeExclusao, type SituacaoNaFranquia } from '../regras.js';
 import { ETIQUETA_SEM_FOLLOW_UP, passaNoFiltro, precisaResolverInteracao, type ConversaDoPublico, type Filtro } from './filtro.js';
 
 /** Motivos que são do CRM (os outros são os de `MotivoDeExclusao`, os mesmos do Kommo). */
@@ -30,8 +30,9 @@ const ROTULO_ADAPTADO: Partial<Record<MotivoDeExclusao, string>> = {
   'ja-na-campanha': 'já está nesta campanha (não manda duas vezes)',
 };
 
-export function rotuloDaExclusaoNoCrm(m: string, base: (m: string) => string): string {
-  return ROTULO_DO_CRM[m as MotivoDoCrm] ?? ROTULO_ADAPTADO[m as MotivoDeExclusao] ?? base(m);
+/** O rótulo de uma exclusão para a tela: os do CRM, os do Kommo adaptados ao CRM e, no resto, os do motor (`regras.ts`). */
+export function rotuloDaExclusaoNoCrm(m: string): string {
+  return ROTULO_DO_CRM[m as MotivoDoCrm] ?? ROTULO_ADAPTADO[m as MotivoDeExclusao] ?? rotuloDaExclusao(m);
 }
 
 /** Dias em que quem já recebeu um disparo não entra em outro (qualquer campanha da unidade). */

@@ -194,6 +194,7 @@ export async function aprovarOndaChatwoot(
   const quem = quemAprova({ email: args.email, papel: args.papel }, await (deps.ajuste ?? ajusteDaUnidade)(onda.unitId));
   if (!quem.ok) return falha(403, quem.motivo);
   if (onda.estado !== 'montada') return falha(409, `o disparo está "${onda.estado}"; só se aprova um disparo montado`);
+  if (modoDoDisparoNoCrm(onda.unit.slug) === 'desligado') return falha(422, 'os disparos estão DESLIGADOS nesta unidade: ligue (ou deixe em seco) antes de aprovar');
 
   const pessoas = await prisma.disparoDestinatario.findMany({ where: { ondaId, estado: 'pendente' }, select: { chave: true, nome: true } });
   const agora = impressaoDaOnda(definicaoDaOnda(onda), pessoas);
