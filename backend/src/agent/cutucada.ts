@@ -20,22 +20,24 @@ import { conversaParaOModelo, porQueOTextoNaoSai, sofiaJaFalou, type Fala } from
 export type ResultadoDoTexto = { texto: string; conversa: string } | { texto: null; porque: string; transitorio?: boolean };
 
 /** A instrução inteira, pura (testável): o que a mensagem precisa fazer e o que ela nunca faz. */
-export function instrucaoDaCutucada(o: { conversa: string; sofiaJaFalou: boolean; ultimaDaEquipeSemTexto: boolean; nome: string | null }): string {
+export function instrucaoDaCutucada(o: { conversa: string; sofiaJaFalou: boolean; ultimaDaEquipeSemTexto: boolean; nome: string | null; clinica: string }): string {
   return `
-A EQUIPE da clínica (uma atendente humana) escreveu por último nesta conversa e o paciente ainda não respondeu. Você é a Sofia, a
-assistente da clínica, e vai dar um empurrãozinho gentil NA MESMA CONVERSA, como parte da equipe.
+Uma ATENDENTE HUMANA da clínica escreveu por último nesta conversa e o paciente ainda não respondeu. Você é a Sofia e vai dar um
+empurrãozinho gentil NA MESMA CONVERSA. Use a MESMA identidade que o seu prompt de sistema define para você: nome Sofia, da ${o.clinica}.
+Você NÃO é a atendente e NÃO é "da equipe": depois de uma atendente se apresentar com o nome dela, dizer "da equipe da clínica" ou "faço parte
+da equipe" parece uma segunda atendente humana. Não finja ser humana; se algum dia perguntarem, siga o que o seu prompt manda.
 
 O QUE ESTA MENSAGEM PRECISA FAZER:
-- UMA mensagem só, de 1 ou 2 frases curtas (no máximo 250 caracteres).
+- UMA mensagem só, de 1 ou 2 frases curtas (no máximo 220 caracteres).
 - Retome o assunto da última fala da ATENDENTE (a pergunta que ela fez, o que ela ofereceu), sem repetir o texto dela.
 - Termine com UMA pergunta simples, fácil de responder em uma palavra.
-${o.sofiaJaFalou ? '- Você já falou nesta conversa: NÃO se reapresente.' : '- Você ainda não falou nesta conversa: apresente-se em poucas palavras ("Aqui é a Sofia, da equipe da clínica") e siga.'}
+${o.sofiaJaFalou ? '- Você já falou nesta conversa: NÃO se reapresente.' : `- Você ainda não falou nesta conversa: apresente-se em poucas palavras, do jeito do seu prompt ("Aqui é a Sofia, da ${o.clinica}") e siga.`}
 ${o.ultimaDaEquipeSemTexto ? '- A última fala da atendente foi um áudio ou uma imagem e você NÃO sabe o que havia nele: não invente o conteúdo. Pergunte só se o paciente conseguiu ver/ouvir o que a equipe mandou.\n' : ''}
 REGRAS:
 - NÃO fale de preço, valor, desconto, Pix, chave, sinal nem pagamento. Nada de "R$".
 - NÃO invente fato, horário, dia, vaga, exame, profissional nem ligação. Use só o que está na conversa abaixo.
 - NÃO diga que ligou, que vai ligar nem que a atendente tentou ligar, a menos que a conversa já diga isso.
-- NÃO se passe pela atendente e NÃO use o nome dela: quem escreve é a Sofia.
+- NÃO se passe pela atendente e NÃO use o nome dela: quem escreve é a Sofia. Fale dela como "a atendente que falou com você" (nunca "nossa equipe" como se você fosse parte dela).
 - NÃO cobre resposta ("você sumiu", "ainda está aí?"). Cobrança afasta. Seja leve.
 - NÃO prometa guardar horário nem marque nada: esta mensagem não marca consulta.
 - PROIBIDO deixar lacuna: nada de "[valor]", "{nome}", "XXX".
@@ -77,6 +79,7 @@ export async function escreverCutucada(args: {
       sofiaJaFalou: sofiaJaFalou(falas),
       ultimaDaEquipeSemTexto: !ultima.texto.trim(),
       nome: nomeApresentavel(args.tituloDoCartao, args.contato),
+      clinica: unit.name,
     });
 
     const model = createChatModel(unit, { maxTokens: 300 });

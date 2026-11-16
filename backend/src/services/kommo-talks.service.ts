@@ -35,7 +35,11 @@ export function filtroDeEnvios(soRespostaDeTurno: boolean | undefined): { traceI
 }
 
 /** Esta mensagem `assistant` conta como envio da Sofia? Sempre fora a cópia da conversa oficial; no modo estrito, só a IA conversando. */
-export function contaComoEnvioDaSofia(meta: unknown, soRespostaDeTurno: boolean | undefined): boolean {
+export function contaComoEnvioDaSofia(meta: unknown, soRespostaDeTurno: boolean | undefined, comCutucada = false): boolean {
+  // A CUTUCADA depois da equipe NÃO é a Sofia assumindo a conversa: quem responde ao paciente depois dela continua sendo a equipe. Por padrão
+  // nenhuma decisão de «quem tem a palavra» (pausa pela equipe, reativação…) a vê; só quem precisa casar a saída «Salesbot» do Kommo com um
+  // envio nosso (a própria cutucada) pede `comCutucada`.
+  if ((meta as { cutucada?: unknown } | null)?.cutucada != null && !comCutucada) return false;
   return soRespostaDeTurno ? mensagemDaSofiaConversando(meta) : (meta as { origem?: string } | null)?.origem !== 'kommo_talks';
 }
 
@@ -50,7 +54,7 @@ export async function enviosDaSofia(
   unit: Pick<Unit, 'id' | 'kommoSubdomain'>,
   leadId: number,
   desde: Date,
-  opcoes: { soRespostaDeTurno?: boolean } = {},
+  opcoes: { soRespostaDeTurno?: boolean; comCutucada?: boolean } = {},
 ): Promise<Date[]> {
   const unidades = unit.kommoSubdomain
     ? (await prisma.unit.findMany({ where: { kommoSubdomain: unit.kommoSubdomain }, select: { id: true } })).map((u) => u.id)
@@ -68,7 +72,25 @@ export async function enviosDaSofia(
     orderBy: { createdAt: 'desc' },
     take: 300,
   });
-  return ms.filter((m) => contaComoEnvioDaSofia(m.meta, opcoes.soRespostaDeTurno)).map((m) => m.createdAt);
+  return ms.filter((m) => contaComoEnvioDaSofia(m.meta, opcoes.soRespostaDeTurno, opcoes.comCutucada)).map((m) => m.createdAt);
+}
+
+/**
+ * Quando a cutucada depois da equipe falou com este lead (a mais recente desde `desde`), ou null. A pausa pela equipe a usa para
+ * saber que o paciente que responde agora está respondendo à cutucada — e isso continua sendo conversa da equipe.
+ */
+export async function ultimaCutucadaDoLead(unit: Pick<Unit, 'id' | 'kommoSubdomain'>, leadId: number, desde: Date): Promise<Date | null> {
+  const unidades = unit.kommoSubdomain
+    ? (await prisma.unit.findMany({ where: { kommoSubdomain: unit.kommoSubdomain }, select: { id: true } })).map((u) => u.id)
+    : [unit.id];
+  const convs = await prisma.conversation.findMany({ where: { unitId: { in: unidades }, leadId: String(leadId) }, select: { id: true } });
+  if (!convs.length) return null;
+  const m = await prisma.message.findFirst({
+    where: { conversationId: { in: convs.map((c) => c.id) }, role: 'assistant', createdAt: { gte: desde }, meta: { path: ['cutucada'], gte: 1 } },
+    select: { createdAt: true },
+    orderBy: { createdAt: 'desc' },
+  });
+  return m?.createdAt ?? null;
 }
 
 /** `mensagensOficiais` com a sessão "Doutor Digital" separada: só é Sofia o que bate com um envio do agente. */

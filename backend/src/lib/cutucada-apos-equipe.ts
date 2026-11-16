@@ -25,6 +25,9 @@ import { porQueNaoTocar, intentsDe, inteiro, temEtiqueta, type Cartao, type Opco
 import { ETIQUETAS_RETOMADA } from './rotina-etapas-worker.js';
 import { RESPOSTA_AUTOMATICA_MS, RESPOSTA_AUTOMATICA_MIN_CARACTERES } from './pausa-equipe.js';
 import { normalizarNome } from './kommo-schema.js';
+import { retornoDaEquipe } from './retorno-da-equipe.js';
+import { fusoDaUnidade } from './fuso.js';
+import type { Unit } from '@prisma/client';
 
 export const ID_CUTUCADA = 'cutucada-apos-equipe';
 /** Quanto a equipe fica sem resposta até a Sofia cutucar (padrão do João: 2 h). Por unidade: `pipelineIntents.cutucada_espera_min`. */
@@ -135,6 +138,36 @@ export function cartaoComEtiquetaDeRobo(lead: Cartao): boolean {
 
 // ─── a decisão pela conversa ──────────────────────────────────────────────────────────────────────
 
+// ─── horário de verdade ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * A clínica está ATENDENDO agora? Usa o horário real da unidade (`retornoDaEquipe`): dias da agenda, o horário PRÓPRIO de cada dia
+ * (`spine_day_hours` — Petrópolis atende o sábado das 7h30 às 13h, não até 19h), fuso e feriado nacional. Sem agenda cadastrada,
+ * "não sei" = fechada (mensagem que ninguém vai acompanhar não sai). E nunca fora de 8h–20h locais, mesmo que o cadastro diga mais.
+ */
+export function clinicaAtendendoAgora(unit: Pick<Unit, 'spineEnabled' | 'spineAgendaDays' | 'spineAgendaStart' | 'spineAgendaEnd' | 'spineDayHours' | 'spineTimezone' | 'businessHoursTimezone'>, agora: Date): boolean {
+  if (retornoDaEquipe(unit as Unit, agora).tipo !== 'aberta') return false;
+  const p = new Intl.DateTimeFormat('en-GB', { timeZone: fusoDaUnidade(unit), hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(agora);
+  const min = (Number(p.find((x) => x.type === 'hour')?.value ?? 0) % 24) * 60 + Number(p.find((x) => x.type === 'minute')?.value ?? 0);
+  return min >= 8 * 60 && min < 20 * 60;
+}
+
+// ─── a clínica deve o retorno ─────────────────────────────────────────────────────────────────────
+
+const PROMESSA_A = /\b(te|lhe|vos)\s+(retorno|retornamos|retornarei|retornaremos|aviso|avisamos|respondo|respondemos|chamo|chamamos|falo|ligo|ligamos|dou\s+(um\s+)?retorno|damos\s+(um\s+)?retorno)\b/i;
+const PROMESSA_B = /\b(vou|vamos|irei|iremos|assim que|logo que|em breve)\b[^.?!\n]{0,140}\b(retorn\w*|avis\w*|respond\w*|entr\w+\s+em\s+contato|dar\s+(um\s+)?retorno|volt\w+|lig\w+)\b/i;
+
+/** A fala da equipe PROMETE um retorno («vou verificar e te retorno», «vou pedir para a equipe analisar e retorno»)? Então quem deve é a clínica. */
+export function prometeRetorno(texto: string): boolean {
+  return PROMESSA_A.test(texto) || PROMESSA_B.test(texto);
+}
+
+/** O pedaço curto da fala, sem telefone, para o motivo que o João lê na tela. */
+export function trechoSemTelefone(texto: string, max = 90): string {
+  const t = texto.replace(/\s+/g, ' ').trim().replace(/\+?\(?\d[\d\s().-]{6,}\d/g, '…');
+  return t.length > max ? `${t.slice(0, max - 1)}…` : t;
+}
+
 export type PorQuePular =
   | 'sem_conversa'
   | 'paciente_falou_por_ultimo'
@@ -142,7 +175,8 @@ export type PorQuePular =
   | 'robo_falou_por_ultimo'
   | 'dentro_do_prazo'
   | 'fala_muito_antiga'
-  | 'fala_de_encerramento';
+  | 'fala_de_encerramento'
+  | 'clinica_deve_retorno';
 
 /**
  * «Beleza», «Obrigada, bom fim de semana», «Ok!»: a equipe FECHOU a conversa, não deixou pergunta no ar. Cutucar aí é cutucar quem
@@ -184,6 +218,11 @@ export function decidirPelaConversa(falas: readonly Fala[], agora: Date, cfg: Co
   if (idadeMs < cfg.esperaMin * 60_000) return { tipo: 'pular', porque: 'dentro_do_prazo', depoisDe: ultima.em.getTime() + cfg.esperaMin * 60_000 };
   if (idadeMs > cfg.idadeMaxH * 3_600_000) return { tipo: 'pular', porque: 'fala_muito_antiga' };
   if (ehEncerramento(ultima)) return { tipo: 'pular', porque: 'fala_de_encerramento' };
+  // quem deve a resposta é a clínica: qualquer fala da equipe depois da última do paciente que prometa retorno
+  // (um «ok, obrigado» do paciente só acusa o recebimento: a promessa de antes continua devida)
+  let ultimoDoPaciente = -1;
+  for (let i = falas.length - 1; i >= 0; i--) if (falas[i].autor === 'paciente' && !ehEncerramento(falas[i])) { ultimoDoPaciente = i; break; }
+  if (falas.slice(ultimoDoPaciente + 1).some((f) => f.autor === 'equipe' && prometeRetorno(f.texto))) return { tipo: 'pular', porque: 'clinica_deve_retorno' };
   return { tipo: 'cutucar', ultimaDaEquipe: ultima };
 }
 
@@ -209,7 +248,7 @@ export function porQueOCartaoFicaQuieto(lead: Cartao, o: Pick<OpcoesDeCartao, 'a
 
 // ─── o texto ──────────────────────────────────────────────────────────────────────────────────────
 
-export const MAX_CARACTERES = 300;
+export const MAX_CARACTERES = 240;
 const MIN_CARACTERES = 15;
 const FALA_DE_VALOR = /R\$|\bpix\b|\bpagamento\b|\bpagar\b|\bsinal\b|\bvalor(es)?\b|\bdesconto\b|\bpre[cç]o\b|\bboleto\b|\bcart[aã]o de cr[eé]dito\b/i;
 const FALA_DE_LIGACAO = /\bliga(r|rei|mos|ndo|[cç][aã]o|[cç][oõ]es)?\b|\bliguei\b|\bligou\b|\btelefon(ei|ar|ou|ema)\b/i;
@@ -217,7 +256,7 @@ const FALA_DE_LIGACAO = /\bliga(r|rei|mos|ndo|[cç][aã]o|[cç][oõ]es)?\b|\blig
 /**
  * O texto que o modelo escreveu pode sair? Aqui só as regras DESTE pedido; o resto (vazamento, lacuna, preço fora do catálogo,
  * horário e reserva inventados, tom) é do `tratarTextoDaRegua`, o mesmo da régua. `null` = pode; senão o motivo.
- *  - curto (até 300 caracteres) e termina em pergunta;
+ *  - curto (até 240 caracteres) e termina em pergunta;
  *  - nada de preço, Pix, sinal, pagamento;
  *  - nada de ligação, a não ser que a própria conversa já fale em ligação (a Sofia não liga e não sabe se a equipe ligou).
  */
@@ -228,6 +267,7 @@ export function porQueOTextoNaoSai(texto: string, conversa: string): string | nu
   if (!/\?\s*[\p{Emoji_Presentation}\p{Extended_Pictographic}\s]*$/u.test(t)) return 'não termina com uma pergunta';
   if ((t.match(/\n/g) ?? []).length > 2) return 'texto em muitos parágrafos';
   if (FALA_DE_VALOR.test(t)) return 'fala de valor, Pix ou pagamento';
+  if (/\b(da|na|nossa|sou da|faço parte da)\s+equipe\s+(d[ao]\s+)?(cl[ií]nica|atendimento)\b|\bfa[cç]o parte da equipe\b|\bsou (da|a) equipe\b/i.test(t)) return 'se apresenta como «da equipe» (parece uma 2ª atendente humana)';
   if (FALA_DE_LIGACAO.test(t) && !FALA_DE_LIGACAO.test(conversa)) return 'fala de ligação que a conversa não menciona';
   return null;
 }

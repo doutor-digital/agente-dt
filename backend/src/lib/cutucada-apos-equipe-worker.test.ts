@@ -11,7 +11,7 @@ import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import type { Funis } from './franquia-sync-worker.js';
 import type { KommoLead, KommoTalkMessage } from '../services/kommo.service.js';
-import { MAX_ENVIOS, _limparMemoriaDaCutucada, cartoesDaJanela, varrerCutucada, type DepsDaCutucada } from './cutucada-apos-equipe-worker.js';
+import { MAX_ENVIOS, _limparMemoriaDaCutucada, cartoesDaJanela, porQueAFranquiaSeguraComDeps, varrerCutucada, type DepsDaCutucada, type DepsDaFranquia } from './cutucada-apos-equipe-worker.js';
 import { LIMITE_COBRANCAS_POR_DIA } from './cobrancas-do-dia.js';
 import { CAMPO_UNIDADE } from './unidade-por-canal.js';
 
@@ -57,6 +57,9 @@ const unit = (extra: Partial<Unit> = {}): Unit =>
     spineAgendaDays: [1, 2, 3, 4, 5, 6],
     spineAgendaStart: '09:00',
     spineAgendaEnd: '19:00',
+    spineEnabled: true,
+    spineDayHours: { '6': { start: '07:30', end: '13:00', lunchStart: null, lunchEnd: null } },
+    businessHoursTimezone: null,
     pipelineIntents: null,
     kommoPausedFieldId: 246730,
     kommoReplyFieldId: 244632,
@@ -133,12 +136,13 @@ function montar(over: Partial<DepsDaCutucada> & { enviar?: () => Promise<{ via: 
     leadPausadoPorJanela: async () => false,
     caixinhaMarcada: async () => false,
     unidadeEmPausaAgora: async () => false,
+    chaveLigadaAgora: async () => true,
     porQueAFranquiaSegura: async () => null,
     tetoDoDiaAtingido: async () => false,
     escrever: async (a) => {
       efeitos.textosPedidos++;
       efeitos.contatos.push(a.contato);
-      return { texto: 'Oi! Aqui é a Sofia, da equipe da clínica. Conseguiu ver a pergunta da nossa atendente sobre a sua dor?', conversa: '' };
+      return { texto: 'Oi! Aqui é a Sofia, da Doutor Hérnia Petrópolis. Conseguiu ver a pergunta da nossa atendente sobre a sua dor?', conversa: '' };
     },
     gravarMensagem: async (_u, _l, texto, contato, meta) => void efeitos.mensagens.push({ texto, contato, meta }),
     esperar: async () => undefined,
@@ -400,7 +404,7 @@ test('LIGADO: o paciente respondeu enquanto o texto era escrito → não envia e
   const r = await varrerCutucada(unit(), 'ligado', montar({
     escrever: async () => {
       c.msgs = [...c.msgs, msg('in', S - 60, 'Tenho dor na lombar')];
-      return { texto: 'Oi! Aqui é a Sofia, da equipe da clínica. Conseguiu ver a pergunta da nossa atendente sobre a sua dor?', conversa: '' };
+      return { texto: 'Oi! Aqui é a Sofia, da Doutor Hérnia Petrópolis. Conseguiu ver a pergunta da nossa atendente sobre a sua dor?', conversa: '' };
     },
   }));
   assert.deepEqual(efeitos.enviados, []);
@@ -420,7 +424,7 @@ test('LIGADO: «Pausar IA» marcado, ou a unidade pausada, enquanto o texto era 
   await varrerCutucada(unit(), 'ligado', montar({
     escrever: async () => {
       c.lead = { ...c.lead, _embedded: { ...c.lead._embedded, tags: [{ id: 1, name: 'NO_FOLLOW_UP' }] } };
-      return { texto: 'Oi! Aqui é a Sofia, da equipe da clínica. Conseguiu ver a pergunta da nossa atendente sobre a sua dor?', conversa: '' };
+      return { texto: 'Oi! Aqui é a Sofia, da Doutor Hérnia Petrópolis. Conseguiu ver a pergunta da nossa atendente sobre a sua dor?', conversa: '' };
     },
   }));
   assert.deepEqual(efeitos.enviados, []);
@@ -433,7 +437,7 @@ test('LIGADO: a equipe falou DE NOVO enquanto o texto era escrito → a fala já
   await varrerCutucada(unit(), 'ligado', montar({
     escrever: async () => {
       c.msgs = [...c.msgs, msg('lite', S - 30, 'Só confirmando: qual a sua dor?')];
-      return { texto: 'Oi! Aqui é a Sofia, da equipe da clínica. Conseguiu ver a pergunta da nossa atendente sobre a sua dor?', conversa: '' };
+      return { texto: 'Oi! Aqui é a Sofia, da Doutor Hérnia Petrópolis. Conseguiu ver a pergunta da nossa atendente sobre a sua dor?', conversa: '' };
     },
   }));
   assert.deepEqual(efeitos.enviados, []);
@@ -548,4 +552,132 @@ test('conta sem o escopo de conversas (403): não derruba a varredura, não repe
   const depois = await varrerCutucada(unit(), 'ligado', deps);
   assert.equal(chamadas, 5, 'os 3 que falharam esperam; só os 2 restantes são tentados');
   assert.equal(depois.barrados['conversa-ja-lida-sem-novidade'], 3);
+});
+
+// ─── horário REAL da unidade (spine_day_hours) ───────────────────────────────────────────────────
+
+test('HORÁRIO: sábado Petrópolis atende 7h30–13h (spine_day_hours), não até 19h — 15h e 18h30 NÃO mandam; 10h manda; segunda 12h40 manda', async () => {
+  const sabado = (horaBrasilia: string) => new Date(`2026-11-21T${horaBrasilia}:00-03:00`); // 21/11/2026 é sábado
+  for (const [hora, manda] of [['15:00', false], ['18:30', false], ['13:30', false], ['10:00', true], ['08:15', true], ['07:45', false]] as const) {
+    _limparMemoriaDaCutucada();
+    efeitos.enviados = [];
+    efeitos.marcas = new Set();
+    const base = sabado(hora);
+    // a equipe falou 3 h antes do horário testado
+    const falou = Math.floor(base.getTime() / 1000) - 3 * H;
+    cartoes = [{ lead: lead({ atualizado: falou }), msgs: [msg('in', falou - H, 'Quero saber'), msg('lite', falou, 'Qual é a sua dor? Me conte um pouco.')] }];
+    const r = await varrerCutucada(unit(), 'ligado', montar({ agora: () => base }));
+    assert.equal(r.enviadas, manda ? 1 : 0, `sábado ${hora}`);
+    if (!manda) assert.equal(r.barrados['fora-do-horario'], 1, `sábado ${hora}`);
+  }
+});
+
+test('HORÁRIO: sem agenda cadastrada ("não sei") = fechada; e o fechamento ENQUANTO o texto é escrito derruba o envio', async () => {
+  cartoes = [{ lead: lead(), msgs: equipeFalou(3) }];
+  const r = await varrerCutucada(unit({ spineEnabled: false } as Partial<Unit>), 'seco', montar());
+  assert.equal(r.barrados['fora-do-horario'], 1);
+  let chamadas = 0;
+  const deps = montar({ agora: () => (chamadas++ < 1 ? AGORA : new Date('2026-11-16T22:30:00Z')) }); // 19h30: já fechou quando o texto ficou pronto
+  _limparMemoriaDaCutucada();
+  const r2 = await varrerCutucada(unit(), 'ligado', deps);
+  assert.deepEqual(efeitos.enviados, []);
+  assert.equal(r2.enviadas, 0);
+});
+
+// ─── desligar vale na hora ───────────────────────────────────────────────────────────────────────
+
+test('DESLIGAR: a chave é relida antes da marca — desligou no meio da varredura, nenhum dos envios que faltam sai', async () => {
+  cartoes = Array.from({ length: 4 }, () => ({ lead: lead(), msgs: equipeFalou(3) }));
+  let leituras = 0;
+  const r = await varrerCutucada(unit(), 'ligado', montar({ chaveLigadaAgora: async () => ++leituras <= 1 }));
+  assert.equal(efeitos.enviados.length, 1, 'só o primeiro, que foi antes de desligar');
+  assert.equal(efeitos.marcas.size, 1);
+  assert.equal(r.enviadas, 1);
+  assert.equal(leituras, 2, 'parou na 1ª leitura «desligada»: os outros dois nem perguntam');
+});
+
+// ─── franquia: na dúvida, não manda ──────────────────────────────────────────────────────────────
+
+test('FRANQUIA: índice de telefones velho, vazio ou com erro = «sem índice fresco», e NÃO cutuca (a classe do incidente de 14/11)', async () => {
+  const kommo = { getContactPhone: async () => '5524999990000' } as unknown as DepsDaCutucada['kommo'];
+  const l = { ...lead(), _embedded: { contacts: [{ id: 1, is_main: true }] } } as KommoLead;
+  const u = unit({ spineEnabled: true, spineToken: 'x' } as Partial<Unit>);
+  const nada = { conhecido: false, consultaFutura: false, emAndamento: false, finalizado: false };
+  const deps = (indice: DepsDaFranquia['indice'], sinal: Awaited<ReturnType<DepsDaFranquia['consultarFranquia']>> = { tipo: 'nao_achou' }): DepsDaFranquia => ({
+    indice,
+    franquiaDoPaciente: async () => nada,
+    consultarFranquia: async () => sinal,
+    agendarIndice: () => undefined,
+  });
+  assert.match((await porQueAFranquiaSeguraComDeps(u, kommo, l, deps(async () => ({ fresco: false, idadeHoras: 50 })))) ?? '', /sem índice fresco \(50 h\)/);
+  assert.match((await porQueAFranquiaSeguraComDeps(u, kommo, l, deps(async () => ({ fresco: false, idadeHoras: null })))) ?? '', /nunca carregado/);
+  assert.match((await porQueAFranquiaSeguraComDeps(u, kommo, l, deps(async () => { throw new Error('banco'); }))) ?? '', /sem índice fresco/);
+  // índice fresco e telefone que NÃO está lá: aí sim segue
+  assert.equal(await porQueAFranquiaSeguraComDeps(u, kommo, l, deps(async () => ({ fresco: true, idadeHoras: 2 }))), null);
+  // fresco e paciente em tratamento: segura
+  assert.match((await porQueAFranquiaSeguraComDeps(u, kommo, l, deps(async () => ({ fresco: true, idadeHoras: 2 }), { tipo: 'paciente', idClient: 9, tratamentoAtivo: true, sessaoFutura: false }))) ?? '', /paciente em tratamento/);
+  // fresco, mas a ficha não veio: indisponível = segura
+  assert.match((await porQueAFranquiaSeguraComDeps(u, kommo, l, deps(async () => ({ fresco: true, idadeHoras: 2 }), { tipo: 'indisponivel', motivo: 'timeout' }))) ?? '', /não respondeu/);
+});
+
+test('FRANQUIA: no worker, o índice velho vira «pularia» com o motivo e nada sai', async () => {
+  const l = lead();
+  cartoes = [{ lead: l, msgs: equipeFalou(3) }];
+  const r = await varrerCutucada(unit(), 'ligado', montar({ porQueAFranquiaSegura: async () => 'franquia sem índice fresco (50 h): não dá para afirmar que o telefone não é de paciente' }));
+  await aguardar();
+  assert.equal(efeitos.textosPedidos, 0);
+  assert.deepEqual(efeitos.enviados, []);
+  assert.match(simulacoes.find((x) => x.acao === 'pularia' && x.kommoLeadId === l.id)?.motivo ?? '', /sem índice fresco/);
+  assert.ok(r.seguradas['franquia sem índice fresco (50 h)']);
+});
+
+// ─── a clínica deve o retorno ────────────────────────────────────────────────────────────────────
+
+test('CLÍNICA DEVE O RETORNO: «vou pedir para a equipe analisar e já retorno» → não cutuca e vira «pularia» (lead 5806575, 13/11)', async () => {
+  const l = lead();
+  cartoes = [{
+    lead: l,
+    msgs: [
+      msg('in', S - 6 * H, 'Segue meus exames'),
+      msg('lite', S - 4 * H, 'Vou pedir para a nossa equipe especializada em patologias da coluna para analisar os exames e já retorno o contato com o senhor'),
+      msg('in', S - 3.5 * H, 'Ok, obrigado'),
+    ],
+  }];
+  // o paciente só acusou o recebimento: a promessa continua devida (e a última fala é dele, então nada sai por isso também)
+  const r = await varrerCutucada(unit(), 'ligado', montar());
+  assert.deepEqual(efeitos.enviados, []);
+  _limparMemoriaDaCutucada();
+  cartoes = [{ lead: l, msgs: [msg('in', S - 6 * H, 'Segue meus exames'), msg('lite', S - 4 * H, 'Vou pedir para a nossa equipe especializada em patologias da coluna para analisar os exames e já retorno o contato com o senhor')] }];
+  const r2 = await varrerCutucada(unit(), 'ligado', montar());
+  await aguardar();
+  assert.equal(r2.naoEhCaso.clinica_deve_retorno, 1);
+  assert.equal(efeitos.textosPedidos, 0);
+  assert.match(simulacoes.find((x) => x.acao === 'pularia')?.motivo ?? '', /clínica deve retorno/);
+  assert.ok(r);
+});
+
+// ─── o motivo do «mandaria» mostra o que a equipe disse ──────────────────────────────────────────
+
+test('MANDARIA: o motivo traz o trecho da última fala da equipe (sem telefone) — para conferir se um robô de texto novo foi lido como equipe', async () => {
+  const l = lead();
+  cartoes = [{ lead: l, msgs: equipeFalou(3, 'Olá, bom dia! Me chamo Natalia. Pode me chamar no (24) 99999-0000 ou 24999990000, qual é a sua dor?') }];
+  await varrerCutucada(unit(), 'seco', montar());
+  await aguardar();
+  const m = simulacoes.find((x) => x.acao === 'mandaria')?.motivo ?? '';
+  assert.match(m, /«Olá, bom dia! Me chamo Natalia/);
+  assert.doesNotMatch(m, /9999/);
+});
+
+// ─── 403 seguidos ────────────────────────────────────────────────────────────────────────────────
+
+test('403: «três SEGUIDOS» — uma leitura boa no meio zera a conta e a varredura não encerra', async () => {
+  cartoes = Array.from({ length: 6 }, () => ({ lead: lead(), msgs: equipeFalou(1) }));
+  const deps = montar();
+  let n = 0;
+  const falha = new Set([1, 2, 4, 5]); // 403, 403, ok, 403, 403, ok
+  const original = deps.kommo.listTalks;
+  deps.kommo = { ...deps.kommo, listTalks: async (id: number) => { n++; if (falha.has(n)) throw new Error('403 Invalid scope'); return original(id); } } as DepsDaCutucada['kommo'];
+  const r = await varrerCutucada(unit(), 'ligado', deps);
+  assert.equal(n, 6, 'leu os seis: nunca chegou a 3 seguidos');
+  assert.equal(r.erros, 4);
 });

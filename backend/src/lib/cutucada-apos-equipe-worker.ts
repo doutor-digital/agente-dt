@@ -15,7 +15,7 @@
  * SECO NÃO ESCREVE NADA no Kommo nem no paciente: decide, gera o texto e registra («mandaria» com o TEXTO, «pularia» com o motivo)
  * na tela de Automações. O modelo RODA (centavos): o João precisa ver o texto antes de ligar.
  *
- * UMA VEZ POR LEAD: a marca é uma linha em `execution_traces` com o id `cutucada-<unidade>-<lead>`, gravada ANTES do envio. O id é
+ * UMA VEZ POR LEAD: a marca é uma linha em `execution_traces` com o id `cutucada-apos-equipe-<unit_id>-<lead_id>`, gravada ANTES do envio. O id é
  * chave primária: a segunda gravação falha, então duas réplicas, dois deploys ou duas varreduras seguidas não mandam duas.
  *
  * NÃO MEXE na régua: o `follow-up-24h` continua cobrando só quando a ÚLTIMA mensagem do nosso banco é da Sofia e para quando a
@@ -27,10 +27,9 @@ import { logger } from './logger.js';
 import { createKommoClient, isLeadPaused, type KommoClient, type KommoLead } from '../services/kommo.service.js';
 import { historicoOficial } from '../services/kommo-talks-normalizar.js';
 import { enviosDaSofia } from '../services/kommo-talks.service.js';
-import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
+import { estadoDaAutomacao, recarregarAutomacoes, type Estado } from './automacoes-estado.js';
 import { registrarSimulacao } from './so-no-papel.js';
 import { emPausa } from './pausa-unidade.js';
-import { dentroDoHorario } from './sla-alert-worker.js';
 import { leadPausadoPorJanela } from './pausa-lead.js';
 import { pularCartao, grupoDaUnidade, type GrupoDoCrm } from './crm-compartilhado.js';
 import { funisDaConta, conta } from './rotina-nucleo.js';
@@ -38,7 +37,7 @@ import type { Funis } from './franquia-sync-worker.js';
 import { franquiaDoPaciente } from './parados-worker.js';
 import { ehNumeroInterno } from './numeros-internos.js';
 import { consultarFranquia, decidir } from './paciente-em-tratamento.js';
-import { agendarIndice } from './franquia-indice-telefones.js';
+import { agendarIndice, chaveDoTelefone, consultarIndice } from './franquia-indice-telefones.js';
 import { contatoPrincipal } from './kommo-lead-util.js';
 import { enviosDeRetomadaRecentes, limiteDoDiaAtingido } from './cobrancas-do-dia.js';
 import { fusoDaUnidade } from './fuso.js';
@@ -46,9 +45,11 @@ import {
   ID_CUTUCADA,
   META_DA_CUTUCADA,
   cartaoComEtiquetaDeRobo,
+  clinicaAtendendoAgora,
   configDaCutucada,
   decidirPelaConversa,
   etapaDaCutucada,
+  trechoSemTelefone,
   idDaMarcaDaCutucada,
   porQueOCartaoFicaQuieto,
   reclassificarFalas,
@@ -128,6 +129,8 @@ export interface DepsDaCutucada {
   leadPausadoPorJanela: (unitId: string, leadId: number) => Promise<boolean>;
   caixinhaMarcada: (unit: Unit, leadId: number) => Promise<boolean>;
   unidadeEmPausaAgora: (unit: Unit) => Promise<boolean>;
+  /** A chave desta unidade está LIGADA agora? Relê do banco (desligar na tela tem de valer na hora, não em 30 s). */
+  chaveLigadaAgora: (unit: Unit) => Promise<boolean>;
   /** devolve o motivo para NÃO cutucar (franquia, número interno), ou null */
   porQueAFranquiaSegura: (unit: Unit, kommo: KommoDaCutucada, lead: KommoLead) => Promise<string | null>;
   tetoDoDiaAtingido: (unit: Unit, leadId: number, agora: Date) => Promise<boolean>;
@@ -170,13 +173,25 @@ async function gravarMarcaNoBanco(unit: Unit, leadId: number, dados: Record<stri
   }
 }
 
+/** O que a conferência da franquia precisa do mundo (trocável no teste). */
+export interface DepsDaFranquia {
+  indice: (unitId: string, chave: string) => Promise<{ fresco: boolean; idadeHoras: number | null }>;
+  franquiaDoPaciente: typeof franquiaDoPaciente;
+  consultarFranquia: typeof consultarFranquia;
+  agendarIndice: (unit: Unit) => void;
+}
+const depsDaFranquia: DepsDaFranquia = { indice: consultarIndice, franquiaDoPaciente, consultarFranquia, agendarIndice };
+
 /**
  * Número interno e franquia — a mesma pergunta da porta `calar-paciente-em-tratamento`, feita ANTES de falar (e não depois de a
  * mensagem chegar): número interno, consulta futura ou tratamento em andamento na franquia (pelo vínculo ou pelo nome do cartão),
  * e paciente da franquia com tratamento ativo ou sessão futura pelo TELEFONE (o cartão novo e vazio do Lite: «Lead 23 14/11/2026»).
- * Franquia que não responde = NÃO cutuca agora (para quem fala sozinho, na dúvida, calar). Unidade sem franquia conectada não tem o que perguntar.
+ *
+ * NA DÚVIDA, NÃO MANDA — e dúvida inclui o índice de telefones: `consultarFranquia` devolve «não achou» com o índice velho ou vazio, e
+ * «não achou» ali NÃO autoriza afirmar que o telefone não é de paciente (a classe do incidente de 14/11). Só com o índice fresco
+ * (carga inteira com menos de 36 h) o «não achou» vale. Unidade sem franquia conectada não tem o que perguntar.
  */
-async function porQueAFranquiaSeguraReal(unit: Unit, kommo: KommoDaCutucada, lead: KommoLead): Promise<string | null> {
+export async function porQueAFranquiaSeguraComDeps(unit: Unit, kommo: KommoDaCutucada, lead: KommoLead, deps: DepsDaFranquia = depsDaFranquia): Promise<string | null> {
   const idContato = contatoPrincipal(lead);
   const telefone = idContato ? await kommo.getContactPhone(idContato).catch(() => null) : null;
   if (!telefone) return 'não consegui o telefone do contato (cartão sem telefone, ou o Kommo não respondeu)';
@@ -184,14 +199,19 @@ async function porQueAFranquiaSeguraReal(unit: Unit, kommo: KommoDaCutucada, lea
   if (!unit.spineEnabled || !unit.spineToken) return null;
 
   try {
-    const f = await franquiaDoPaciente(unit, lead.id, lead.name ?? null, Math.floor(Date.now() / 1000));
+    const f = await deps.franquiaDoPaciente(unit, lead.id, lead.name ?? null, Math.floor(Date.now() / 1000));
     if (f.emAndamento) return 'tratamento em andamento na franquia';
     if (f.consultaFutura) return 'consulta futura na franquia';
   } catch (err) {
     return `a franquia não respondeu (${String(err).slice(0, 80)}): na dúvida, não cutuca`;
   }
-  agendarIndice(unit);
-  const sinal = await consultarFranquia(unit, telefone);
+  deps.agendarIndice(unit); // pede a carga se for hora (em segundo plano); o índice que vale é o que já está pronto
+  const chave = chaveDoTelefone(telefone);
+  if (!chave) return 'franquia sem índice fresco: telefone ilegível para conferir';
+  const ind = await deps.indice(unit.id, chave).catch(() => null);
+  if (!ind) return 'franquia sem índice fresco: não consegui ler o índice de telefones';
+  if (!ind.fresco) return `franquia sem índice fresco (${ind.idadeHoras === null ? 'nunca carregado' : `${ind.idadeHoras} h`}): não dá para afirmar que o telefone não é de paciente`;
+  const sinal = await deps.consultarFranquia(unit, telefone);
   if (sinal.tipo === 'indisponivel') return `a franquia não respondeu pelo telefone (${sinal.motivo.slice(0, 80)}): na dúvida, não cutuca`;
   const d = decidir({ interno: false, temIdClient: false, funil: 'COMERCIAL', sinal });
   return d.calar ? `paciente em tratamento na franquia: ${d.detalhe}` : null;
@@ -226,14 +246,19 @@ export async function depsReais(unit: Unit): Promise<DepsDaCutucada | null> {
     grupo: await grupoDaUnidade(unit.id),
     jaCutucados: jaCutucadosNoBanco,
     gravarMarca: gravarMarcaNoBanco,
-    enviosDaSofia,
+    // a saída «Salesbot» do Kommo precisa casar com os envios nossos, a cutucada inclusive (a pausa pela equipe, ao contrário, NÃO a vê)
+    enviosDaSofia: (u, leadId, desde) => enviosDaSofia(u, leadId, desde, { comCutucada: true }),
     leadPausadoPorJanela,
     caixinhaMarcada: (u, leadId) => isLeadPaused(u, leadId),
     unidadeEmPausaAgora: async (u) => {
       const fresca = await prisma.unit.findUnique({ where: { id: u.id }, select: { pausaDesde: true, pausaAte: true } });
       return !!fresca && emPausa(fresca);
     },
-    porQueAFranquiaSegura: porQueAFranquiaSeguraReal,
+    chaveLigadaAgora: async (u) => {
+      await recarregarAutomacoes();
+      return estadoDaCutucada(u.slug) === 'ligado';
+    },
+    porQueAFranquiaSegura: (u, k, l) => porQueAFranquiaSeguraComDeps(u, k, l),
     tetoDoDiaAtingido: async (u, leadId, agora) => limiteDoDiaAtingido(await enviosDeRetomadaRecentes(u, String(leadId), agora), agora, fusoDaUnidade(u)),
     escrever: escreverCutucada,
     gravarMensagem: gravarMensagemNoBanco,
@@ -302,6 +327,7 @@ const MOTIVO_DA_CONVERSA: Record<PorQuePular, string> = {
   dentro_do_prazo: 'a equipe falou há menos que o prazo',
   fala_muito_antiga: 'a fala da equipe é mais velha que o limite',
   fala_de_encerramento: 'a equipe se despediu/confirmou (não deixou pergunta no ar)',
+  clinica_deve_retorno: 'a equipe prometeu retorno: quem deve a resposta é a clínica',
 };
 
 /** Só vira «pularia» na tela o que era para cutucar e foi SEGURADO por uma trava — o resto (paciente falou, prazo) é ruído. */
@@ -319,12 +345,12 @@ export async function varrerCutucada(unit: Unit, estado: Exclude<Estado, 'deslig
   const tz = fusoDaUnidade(unit);
   const cfg: ConfigDaCutucada = configDaCutucada(unit.pipelineIntents);
 
-  // 1) a unidade inteira: pausa da recepção e horário comercial (dias da agenda, feriado, 8h–20h no máximo)
+  // 1) a unidade inteira: pausa da recepção e o horário REAL de atendimento (cada dia com o seu horário — `spine_day_hours` —, fuso, feriado, 8h–20h no máximo)
   if (emPausa(unit, agora)) {
     conta(r.barrados, 'unidade-em-pausa');
     return r;
   }
-  if (!dentroDoHorario(unit, agora)) {
+  if (!clinicaAtendendoAgora(unit, agora)) {
     conta(r.barrados, 'fora-do-horario');
     return r;
   }
@@ -399,9 +425,11 @@ export async function varrerCutucada(unit: Unit, estado: Exclude<Estado, 'deslig
     try {
       r.lidas++;
       const falas = await lerFalas(unit, deps, lead);
+      errosPermanentes = 0; // «três SEGUIDOS»: uma leitura boa zera a conta
       const d = decidirPelaConversa(falas, agora, cfg);
       if (d.tipo === 'pular') {
         conta(r.naoEhCaso, d.porque);
+        if (d.porque === 'clinica_deve_retorno') pularia(unit, lead.id, 'clínica deve retorno: a equipe prometeu voltar com a resposta, quem deve é a clínica');
         podaMapa(vistoAte);
         vistoAte.set(chaveVisto, { atualizadoEm: lead.updated_at ?? 0, ateMs: d.porque === 'dentro_do_prazo' ? (d.depoisDe ?? null) : null });
         continue;
@@ -460,7 +488,7 @@ export async function varrerCutucada(unit: Unit, estado: Exclude<Estado, 'deslig
           alvo: 'mensagem',
           valor: t.texto,
           deEtapa: deps.funis.nomeDe(lead.pipeline_id, lead.status_id)?.status ?? null,
-          motivo: `a equipe falou por último em ${ultima.em.toISOString()} (${ultima.autorNome || 'equipe'}) e o paciente não respondeu`,
+          motivo: `a equipe falou por último em ${ultima.em.toISOString()} (${ultima.autorNome || 'equipe'}): «${trechoSemTelefone(ultima.texto || (ultima.anexo ? `[${ultima.anexo}]` : ''))}» — o paciente não respondeu`,
         });
         logger.info({ unit: unit.slug, leadId: lead.id, texto: t.texto }, 'cutucada [seco]: mandaria');
         continue;
@@ -472,6 +500,7 @@ export async function varrerCutucada(unit: Unit, estado: Exclude<Estado, 'deslig
         conta(r.seguradas, resultado.motivo);
         pularia(unit, lead.id, resultado.motivo);
         vistoAte.set(chaveVisto, { atualizadoEm: lead.updated_at ?? 0, ateMs: agora.getTime() + SEGURADA_MS });
+        if (/chave foi desligada|clínica fechou/.test(resultado.motivo)) break; // nenhum dos envios que faltam pode sair
         continue;
       }
       if (resultado.tipo === 'erro') {
@@ -528,6 +557,10 @@ async function enviar(unit: Unit, deps: DepsDaCutucada, lead: KommoLead, ultima:
     return { tipo: 'segurou', motivo: `a conversa mudou enquanto o texto era escrito (${d.tipo === 'pular' ? MOTIVO_DA_CONVERSA[d.porque] : 'outra fala da equipe'})` };
   }
 
+  // o horário e a chave de AGORA (o modelo levou segundos; desligar na tela tem de valer na hora, inclusive para os envios que faltam nesta varredura)
+  if (!clinicaAtendendoAgora(unit, agoraNovo)) return { tipo: 'segurou', motivo: 'a clínica fechou enquanto o texto era escrito' };
+  if (!(await deps.chaveLigadaAgora(unit).catch(() => false))) return { tipo: 'segurou', motivo: 'a chave foi desligada (ou voltou para «só no papel») durante a varredura' };
+
   // UMA vez por lead: a marca vai ANTES do envio. Quem perde a corrida não envia.
   const marca = await deps.gravarMarca(unit, lead.id, { leadId: lead.id, texto, ultimaDaEquipe: { id: ultima.id, em: ultima.em.toISOString(), autor: ultima.autorNome }, decididaEm: agora.toISOString() });
   if (marca === 'ja_existia') return { tipo: 'segurou', motivo: 'já cutucado (outra varredura chegou primeiro)' };
@@ -569,7 +602,7 @@ async function varrer(): Promise<void> {
       const estado = estadoDaCutucada(unit.slug);
       if (estado === 'desligado') continue;
       // o barato primeiro: noite, domingo, feriado e unidade em pausa não gastam uma chamada ao Kommo (a varredura repete essas duas conferências)
-      if (emPausa(unit) || !dentroDoHorario(unit)) continue;
+      if (emPausa(unit) || !clinicaAtendendoAgora(unit, new Date())) continue;
       try {
         const deps = await depsReais(unit);
         if (!deps) continue;

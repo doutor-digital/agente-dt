@@ -16,6 +16,9 @@ import {
   ehEncerramento,
   ehRespostaAutomaticaDoApp,
   etapaDaCutucada,
+  clinicaAtendendoAgora,
+  prometeRetorno,
+  trechoSemTelefone,
   idDaMarcaDaCutucada,
   porQueOCartaoFicaQuieto,
   porQueOTextoNaoSai,
@@ -207,7 +210,7 @@ test('o cartão que fica quieto: NO_FOLLOW_UP, NAO_PERTURBAR, CURRÍCULO, opt-ou
 
 test('o texto que sai: curto, termina em pergunta, sem preço/Pix/sinal, sem ligação que a conversa não citou', () => {
   const conv = 'ATENDENTE DA CLÍNICA (humana): Para que eu possa te ajudar, qual é a sua dor?';
-  assert.equal(porQueOTextoNaoSai('Oi! Aqui é a Sofia, da equipe da clínica. Conseguiu ver a pergunta da nossa atendente sobre a sua dor?', conv), null);
+  assert.equal(porQueOTextoNaoSai('Oi! Aqui é a Sofia, da Doutor Hérnia Petrópolis. Conseguiu ver a pergunta da nossa atendente sobre a sua dor?', conv), null);
   assert.equal(porQueOTextoNaoSai('Oi, tudo bem? Conseguiu pensar no que a nossa atendente perguntou? 😊', conv), null);
   assert.match(porQueOTextoNaoSai('Oi! Podemos conversar sobre a sua dor.', conv) ?? '', /pergunta/);
   assert.match(porQueOTextoNaoSai('Oi! A consulta custa R$ 200, podemos marcar?', conv) ?? '', /valor/);
@@ -216,7 +219,7 @@ test('o texto que sai: curto, termina em pergunta, sem preço/Pix/sinal, sem lig
   assert.match(porQueOTextoNaoSai('Oi! Tentamos ligar para você, conseguimos falar agora?', conv) ?? '', /ligação/);
   assert.equal(porQueOTextoNaoSai('Oi! Como combinado na ligação, ainda quer conversar com a nossa atendente?', 'PACIENTE: Bom dia, vou te ligar.'), null);
   assert.match(porQueOTextoNaoSai('Oi?', conv) ?? '', /curto/);
-  assert.match(porQueOTextoNaoSai(`${'Oi, tudo bem com você? '.repeat(20)}`, conv) ?? '', /300/);
+  assert.match(porQueOTextoNaoSai(`${'Oi, tudo bem com você? '.repeat(20)}`, conv) ?? '', /240/);
 });
 
 test('a conversa para o modelo: quem é quem, o áudio da equipe aparece como marca e o limite de falas vale', () => {
@@ -228,4 +231,92 @@ test('a conversa para o modelo: quem é quem, o áudio da equipe aparece como ma
 test('a marca de «uma vez por lead» é um id estável por unidade e lead (chave primária = idempotência)', () => {
   assert.equal(idDaMarcaDaCutucada('u1', 5806575), 'cutucada-apos-equipe-u1-5806575');
   assert.notEqual(idDaMarcaDaCutucada('u1', 1), idDaMarcaDaCutucada('u2', 1));
+});
+
+// ─── horário real ────────────────────────────────────────────────────────────────────────────────
+
+const petropolis = {
+  spineEnabled: true,
+  spineAgendaDays: [1, 2, 3, 4, 5, 6],
+  spineAgendaStart: '09:00',
+  spineAgendaEnd: '19:00',
+  spineDayHours: { '6': { start: '07:30', end: '13:00', lunchStart: null, lunchEnd: null } },
+  spineTimezone: 'America/Sao_Paulo',
+  businessHoursTimezone: 'America/Sao_Paulo',
+};
+const br = (iso: string) => new Date(`${iso}-03:00`);
+
+test('clinicaAtendendoAgora: sábado 21/11 só 7h30–13h; 15h e 18h30 fechado; semana 9h–19h; feriado e domingo fechados; sem agenda = fechada', () => {
+  assert.equal(clinicaAtendendoAgora(petropolis, br('2026-11-21T07:45:00')), false, '7h45: o cadastro abre 7h30, mas nada automático sai antes das 8h (silêncio noturno da casa)');
+  assert.equal(clinicaAtendendoAgora(petropolis, br('2026-11-21T08:15:00')), true);
+  assert.equal(clinicaAtendendoAgora(petropolis, br('2026-11-21T12:59:00')), true);
+  assert.equal(clinicaAtendendoAgora(petropolis, br('2026-11-21T13:00:00')), false);
+  assert.equal(clinicaAtendendoAgora(petropolis, br('2026-11-21T15:00:00')), false);
+  assert.equal(clinicaAtendendoAgora(petropolis, br('2026-11-21T18:30:00')), false);
+  assert.equal(clinicaAtendendoAgora(petropolis, br('2026-11-16T09:00:00')), true);
+  assert.equal(clinicaAtendendoAgora(petropolis, br('2026-11-16T18:59:00')), true);
+  assert.equal(clinicaAtendendoAgora(petropolis, br('2026-11-16T19:00:00')), false);
+  assert.equal(clinicaAtendendoAgora(petropolis, br('2026-11-16T08:30:00')), false, 'antes de abrir');
+  assert.equal(clinicaAtendendoAgora(petropolis, br('2026-11-15T10:00:00')), false, 'domingo');
+  assert.equal(clinicaAtendendoAgora(petropolis, br('2026-11-20T10:00:00')), false, 'feriado nacional (Consciência Negra)');
+  assert.equal(clinicaAtendendoAgora({ ...petropolis, spineEnabled: false }, br('2026-11-16T10:00:00')), false);
+  assert.equal(clinicaAtendendoAgora({ ...petropolis, spineAgendaDays: [] }, br('2026-11-16T10:00:00')), false);
+  // nunca fora de 8h–20h, mesmo que o cadastro diga mais
+  assert.equal(clinicaAtendendoAgora({ ...petropolis, spineAgendaStart: '06:00', spineAgendaEnd: '23:00' }, br('2026-11-16T07:00:00')), false);
+  assert.equal(clinicaAtendendoAgora({ ...petropolis, spineAgendaStart: '06:00', spineAgendaEnd: '23:00' }, br('2026-11-16T21:00:00')), false);
+});
+
+// ─── a clínica deve o retorno ────────────────────────────────────────────────────────────────────
+
+test('prometeRetorno: as promessas reais de Petrópolis e as variações; pergunta, convite e «aguardo o senhor» não são promessa', () => {
+  for (const t of [
+    'Vou pedir para a nossa equipe especializada em patologias da coluna para analisar os exames e já retorno o contato com o senhor',
+    'vou verificar e te retorno',
+    'Vou verificar com a doutora e te aviso ainda hoje',
+    'Já te retorno!',
+    'Assim que tiver a resposta eu te falo',
+    'Vou te ligar mais tarde',
+    'Em breve entramos em contato com o senhor',
+  ]) assert.equal(prometeRetorno(t), true, t);
+  for (const t of ['Conforme a ligação, aguardo o senhor conversar com ele', 'Qual é a sua dor?', 'Bom dia! Estou entrando em contato para confirmar sua sessão', 'Pode me mandar o exame por aqui?', 'Consigo um horário para senhora amanhã, a senhora consegue']) {
+    assert.equal(prometeRetorno(t), false, t);
+  }
+});
+
+test('decidirPelaConversa: a equipe prometeu retorno → «clínica deve retorno» (também se o paciente só disse «ok, obrigado»); promessa respondida pelo paciente com pergunta nova não vale', () => {
+  const promessa = 'Vou pedir para a nossa equipe analisar os exames e já retorno o contato com o senhor';
+  const so = falas([m('in', T0, 'Segue meu exame'), m('lite', T0 + 5 * MIN, promessa)]);
+  assert.deepEqual(decidirPelaConversa(so, agora(T0 + 4 * H), cfg), { tipo: 'pular', porque: 'clinica_deve_retorno' });
+  const comOk = falas([m('in', T0, 'Segue meu exame'), m('lite', T0 + 5 * MIN, promessa), m('in', T0 + 10 * MIN, 'Ok, obrigado'), m('lite', T0 + 20 * MIN, 'Disponha, qualquer coisa me avise por aqui?')]);
+  assert.deepEqual(decidirPelaConversa(comOk, agora(T0 + 4 * H), cfg), { tipo: 'pular', porque: 'clinica_deve_retorno' });
+  // o paciente fez outra pergunta depois (não é cortesia) e a equipe respondeu sem prometer nada: a dívida foi paga
+  const paga = falas([m('lite', T0, promessa), m('in', T0 + H, 'E quanto tempo dura o tratamento?'), m('lite', T0 + H + 5 * MIN, 'Em média três meses. Faz sentido para você?')]);
+  assert.equal(decidirPelaConversa(paga, agora(T0 + 5 * H), cfg).tipo, 'cutucar');
+});
+
+test('trechoSemTelefone: corta, junta espaços e esconde telefone em qualquer formato', () => {
+  assert.equal(trechoSemTelefone('Pode me chamar no (24) 99999-0000 ou 24999990000?'), 'Pode me chamar no … ou …?');
+  assert.equal(trechoSemTelefone('Fale  \n comigo +55 24 99999 0000 hoje'), 'Fale comigo … hoje');
+  assert.equal(trechoSemTelefone('a'.repeat(200), 20).length, 20);
+});
+
+// ─── identidade e tamanho ────────────────────────────────────────────────────────────────────────
+
+test('identidade: «da equipe da clínica», «faço parte da equipe» e «sou da equipe» parecem uma 2ª atendente humana e NÃO saem; a identidade do prompt sai', () => {
+  const conv = 'ATENDENTE DA CLÍNICA (humana): Qual é a sua dor?';
+  for (const t of [
+    'Oi! Aqui é a Sofia, da equipe da clínica. Conseguiu ver a pergunta da atendente?',
+    'Oi! Sou da equipe de atendimento, conseguiu ver a pergunta anterior?',
+    'Oi! Faço parte da equipe e queria saber, conseguiu ver a pergunta?',
+  ]) assert.match(porQueOTextoNaoSai(t, conv) ?? '', /equipe/, t);
+  assert.equal(porQueOTextoNaoSai('Oi! Aqui é a Sofia, da Doutor Hérnia Petrópolis. Conseguiu ver a pergunta da atendente sobre a sua dor?', conv), null);
+});
+
+test('o limite do texto é de 240 caracteres', () => {
+  const conv = 'x';
+  const base = 'Oi! Aqui é a Sofia, da Doutor Hérnia Petrópolis. ';
+  const ok = `${base}${'a'.repeat(240 - base.length - 1)}?`;
+  assert.equal(ok.length, 240);
+  assert.equal(porQueOTextoNaoSai(ok, conv), null);
+  assert.match(porQueOTextoNaoSai(`${ok.slice(0, -1)}a?`, conv) ?? '', /240/);
 });

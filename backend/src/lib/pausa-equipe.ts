@@ -44,7 +44,7 @@ import { leadPausadoPorJanela } from './pausa-lead.js';
 import { pausouSozinhaDesde } from './pausa-propria.js';
 import { registrarPausaDaEquipe } from './pausa-equipe-registro.js';
 import { createKommoClient, isLeadPaused } from '../services/kommo.service.js';
-import { enviosDaSofia, mensagensOficiaisDaUnidade, type MensagemOficial } from '../services/kommo-talks.service.js';
+import { enviosDaSofia, mensagensOficiaisDaUnidade, ultimaCutucadaDoLead, type MensagemOficial } from '../services/kommo-talks.service.js';
 import { carimbarHumanoAssumiu } from '../services/lead-metrics.service.js';
 
 export const AUTOMACAO_PAUSA_EQUIPE = 'pausa-equipe';
@@ -115,11 +115,14 @@ export function equipeComAPalavra(
   msgs: readonly MensagemOficial[],
   ultimaFalaDaIa: Date | null,
   agora: Date,
+  /** A cutucada depois da equipe (não é fala da IA): se veio DEPOIS da fala da equipe, a janela de 24 h conta a partir dela. */
+  ultimaCutucada: Date | null = null,
 ): DecisaoDaEquipe {
   const falas = falasHumanasDaEquipe(msgs);
   const fala = falas[falas.length - 1];
   if (!fala) return { fala: null, motivo: 'sem_equipe' };
-  if (agora.getTime() - fala.em.getTime() > JANELA_DA_EQUIPE_MS) return { fala: null, motivo: 'antiga' };
+  const retomadaEm = ultimaCutucada && ultimaCutucada.getTime() >= fala.em.getTime() ? ultimaCutucada.getTime() : fala.em.getTime();
+  if (agora.getTime() - retomadaEm > JANELA_DA_EQUIPE_MS) return { fala: null, motivo: 'antiga' };
   if (ultimaFalaDaIa && ultimaFalaDaIa.getTime() >= fala.em.getTime()) return { fala: null, motivo: 'ia_falou_depois' };
   return { fala, motivo: null };
 }
@@ -152,6 +155,8 @@ export interface DepsPausaEquipe {
   mensagens: (unit: Unit, leadId: number) => Promise<MensagemOficial[]>;
   /** Última mensagem que o agente mandou para o lead (qualquer unidade da mesma conta), ou null. */
   ultimaFalaDaIa: (unit: Unit, leadId: number, desde: Date) => Promise<Date | null>;
+  /** Última cutucada depois da equipe (a Sofia retomando o assunto da SDR). NÃO é fala da IA para esta decisão; opcional. */
+  ultimaCutucada?: (unit: Unit, leadId: number, desde: Date) => Promise<Date | null>;
   /** Alguém mexeu na caixinha "Pausar IA" desde `desde`? Lança se não deu para perguntar. */
   pausaMexidaDesde: (unit: Unit, leadId: number, desde: Date) => Promise<boolean>;
   /** A caixinha "Pausar IA" está marcada AGORA? Lança se não deu para ler. */
@@ -200,6 +205,7 @@ export const DEPS_PAUSA_EQUIPE_PADRAO: DepsPausaEquipe = {
   agora: () => new Date(),
   mensagens: (unit, leadId) => mensagensOficiaisDaUnidade(unit, createKommoClient(unit), leadId, MENSAGENS_LIDAS),
   ultimaFalaDaIa: async (unit, leadId, desde) => (await enviosDaSofia(unit, leadId, desde))[0] ?? null,
+  ultimaCutucada: ultimaCutucadaDoLead,
   pausaMexidaDesde: async (unit, leadId, desde) =>
     unit.kommoPausedFieldId
       ? createKommoClient(unit).campoMudouDesde(leadId, unit.kommoPausedFieldId, Math.floor(desde.getTime() / 1000))
@@ -229,7 +235,8 @@ export async function conferirEquipe(
   const msgs = msgsJaLidas ?? (await deps.mensagens(unit, leadId));
   const agora = deps.agora();
   const ultimaIa = await deps.ultimaFalaDaIa(unit, leadId, new Date(agora.getTime() - JANELA_DA_EQUIPE_MS - 3600_000));
-  const d = equipeComAPalavra(msgs, ultimaIa, agora);
+  const ultimaCutucada = deps.ultimaCutucada ? await deps.ultimaCutucada(unit, leadId, new Date(agora.getTime() - JANELA_DA_EQUIPE_MS - 3600_000)).catch(() => null) : null;
+  const d = equipeComAPalavra(msgs, ultimaIa, agora, ultimaCutucada);
   if (!d.fala) return { msgs, fala: null, motivo: d.motivo };
   // DEVOLVIDA À SOFIA: "Pausar IA" mudou depois da fala E está desmarcada agora — então houve um desmarcar
   // depois dela (a SDR, a reativação, o fim da pausa com data). Mudou mas está marcada (a própria pausa da
