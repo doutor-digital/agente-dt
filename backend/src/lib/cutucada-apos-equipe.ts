@@ -53,10 +53,10 @@ export interface ConfigDaCutucada {
 
 export function configDaCutucada(pipelineIntents: unknown): ConfigDaCutucada {
   const i = intentsDe(pipelineIntents);
-  return {
-    esperaMin: Math.min(inteiro(i.cutucada_espera_min) ?? ESPERA_PADRAO_MIN, 24 * 60),
-    idadeMaxH: Math.min(inteiro(i.cutucada_idade_max_h) ?? IDADE_MAX_PADRAO_H, 24 * 14),
-  };
+  // pisos: prazo de 1 min cutucaria quem a SDR acabou de escrever; idade máxima menor que o prazo + 1 h nunca cutucaria ninguém
+  const esperaMin = Math.min(Math.max(inteiro(i.cutucada_espera_min) ?? ESPERA_PADRAO_MIN, 15), 24 * 60);
+  const idadeMaxH = Math.min(Math.max(inteiro(i.cutucada_idade_max_h) ?? IDADE_MAX_PADRAO_H, Math.ceil(esperaMin / 60) + 1), 24 * 14);
+  return { esperaMin, idadeMaxH };
 }
 
 // ─── quem falou ───────────────────────────────────────────────────────────────────────────────────
@@ -149,10 +149,19 @@ export type PorQuePular =
  * já combinou tudo (visto em Petrópolis, 16/11: a equipe respondeu «beleza» ao paciente e a conversa acabou). Curto, sem «?» e com
  * cara de despedida/confirmação.
  */
-const ENCERRAMENTO = /^\W*(ok|okay|beleza|blz|certo|combinado|perfeito|t[aá] bom|tudo bem|obrigad|de nada|por nada|disponha|imagina|valeu|at[eé] (mais|logo|amanh)|abra[cç]o|bom (fim|final) de semana|boa (semana|noite))/i;
+const PALAVRAS_DE_ENCERRAMENTO = new Set(
+  (
+    'ok okay beleza blz certo combinado perfeito tá ta bom boa tudo bem obrigado obrigada obrigadão de nada por disponha imagina valeu ' +
+    'até ate mais logo amanhã amanha abraço abraco abraços fim final semana noite tarde dia igualmente também tambem se e a o um uma ' +
+    'senhor senhora sr sra dona você voce vc fica com deus tchau flw'
+  ).split(' '),
+);
+/** Despedida/confirmação = curta, sem «?» e SÓ com palavras de fechamento: «Certo! Me manda a foto do exame» tem pedido em aberto e não entra. */
 export function ehEncerramento(f: Pick<Fala, 'texto' | 'anexo'>): boolean {
   const t = f.texto.trim();
-  return !f.anexo && t.length > 0 && t.length <= 60 && !t.includes('?') && ENCERRAMENTO.test(t);
+  if (f.anexo || !t || t.length > 60 || t.includes('?')) return false;
+  const palavras = t.toLowerCase().match(/\p{L}+/gu) ?? [];
+  return palavras.length > 0 && palavras.length <= 8 && palavras.every((p) => PALAVRAS_DE_ENCERRAMENTO.has(p));
 }
 
 export type DecisaoDaConversa =

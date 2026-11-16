@@ -100,6 +100,8 @@ export interface ResumoDaCutucada {
   /** ligado: mensagens enviadas */
   enviadas: number;
   erros: number;
+  /** a janela de cartões bateu no teto de páginas */
+  truncado?: boolean;
   deOutraUnidade?: number;
   semUnidade?: number;
 }
@@ -110,7 +112,7 @@ const resumoNovo = (unit: Unit, seco: boolean): ResumoDaCutucada => ({
 
 // ─── o que o worker precisa do mundo (trocável no teste) ──────────────────────────────────────────
 
-export type KommoDaCutucada = Pick<KommoClient, 'listLeadsPagina' | 'getLead' | 'listTalks' | 'listTalkMessages' | 'getContactPhone' | 'sendChatReply'>;
+export type KommoDaCutucada = Pick<KommoClient, 'listLeadsDasEtapasDesde' | 'getLead' | 'listTalks' | 'listTalkMessages' | 'getContactPhone' | 'sendChatReply'>;
 
 export interface DepsDaCutucada {
   agora: () => Date;
@@ -121,7 +123,6 @@ export interface DepsDaCutucada {
   jaCutucados: (unitId: string, leadIds: number[]) => Promise<Set<number>>;
   /** grava a marca ANTES do envio. `ja_existia` = outra varredura/réplica chegou primeiro */
   gravarMarca: (unit: Unit, leadId: number, dados: Record<string, unknown>) => Promise<'criada' | 'ja_existia' | 'erro'>;
-  soltarMarca: (unit: Unit, leadId: number) => Promise<void>;
   enviosDaSofia: (unit: Unit, leadId: number, desde: Date) => Promise<Date[]>;
   leadPausadoPorJanela: (unitId: string, leadId: number) => Promise<boolean>;
   caixinhaMarcada: (unit: Unit, leadId: number) => Promise<boolean>;
@@ -168,10 +169,6 @@ async function gravarMarcaNoBanco(unit: Unit, leadId: number, dados: Record<stri
   }
 }
 
-async function soltarMarcaNoBanco(unit: Unit, leadId: number): Promise<void> {
-  await prisma.executionTrace.delete({ where: { id: idDaMarcaDaCutucada(unit.id, leadId) } }).catch(() => undefined);
-}
-
 /**
  * Número interno e franquia — a mesma pergunta da porta `calar-paciente-em-tratamento`, feita ANTES de falar (e não depois de a
  * mensagem chegar): número interno, consulta futura ou tratamento em andamento na franquia (pelo vínculo ou pelo nome do cartão),
@@ -205,6 +202,8 @@ async function gravarMensagemNoBanco(unit: Unit, leadId: number, texto: string, 
     conversa = await prisma.conversation.create({ data: { unitId: unit.id, leadId: String(leadId), channel: 'kommo', contactName: contato }, select: { id: true } });
   }
   await prisma.message.create({ data: { conversationId: conversa.id, role: 'assistant', content: texto, meta: meta as object } });
+  // a régua (onde estiver ligada) espaça o próximo toque a partir daqui, em vez de mandar o seu logo em seguida
+  await prisma.conversation.update({ where: { id: conversa.id }, data: { followUpLastAt: new Date() } }).catch(() => undefined);
 }
 
 export async function depsReais(unit: Unit): Promise<DepsDaCutucada | null> {
@@ -227,7 +226,6 @@ export async function depsReais(unit: Unit): Promise<DepsDaCutucada | null> {
     grupo: await grupoDaUnidade(unit.id),
     jaCutucados: jaCutucadosNoBanco,
     gravarMarca: gravarMarcaNoBanco,
-    soltarMarca: soltarMarcaNoBanco,
     enviosDaSofia,
     leadPausadoPorJanela,
     caixinhaMarcada: (u, leadId) => isLeadPaused(u, leadId),
@@ -263,19 +261,30 @@ function podaMapa(m: Map<string, unknown> | Set<string>): void {
   for (const k of chaves.slice(0, 10_000)) m.delete(k);
 }
 
-/**
- * Os cartões que mexeram desde `desde` (epoch s), do mais novo ao mais velho. Mensagem da equipe no Kommo mexe no cartão (medido em
- * Petrópolis: 66 de 68 cartões com fala da equipe tinham `updated_at` igual ou depois dela); o que escapar fica sem cutucada, nunca com uma a mais.
- * Erro do Kommo lança: página vazia quer dizer «acabou», nunca «deu erro».
- */
-async function cartoesDaJanela(kommo: KommoDaCutucada, desde: number): Promise<KommoLead[]> {
-  const out: KommoLead[] = [];
-  for (let page = 1; page <= MAX_PAGINAS; page++) {
-    const lote = await kommo.listLeadsPagina(page, { atualizadosDesde: desde });
-    out.push(...lote);
-    if (lote.length < 250) break;
+/** As etapas do COMERCIAL onde a SDR faz a 1ª abordagem: a entrada (qualquer nome) e EM QUALIFICAÇÃO, pelos ids da conta. */
+export function etapasDaCutucada(funis: Funis): Array<{ pipelineId: number; statusId: number }> {
+  const out: Array<{ pipelineId: number; statusId: number }> = [];
+  for (const [chave, s] of funis.status) {
+    if (chave.startsWith('COMERCIAL:') && etapaDaCutucada(s.nome)) out.push({ pipelineId: funis.comercialId, statusId: s.id });
   }
   return out;
+}
+
+/**
+ * Os cartões DESSAS etapas que mexeram desde `desde` (epoch s) — o filtro vai na consulta, então a janela não se enche de cartão de
+ * outro funil. Mensagem da equipe no Kommo mexe no cartão (medido em Petrópolis: 66 de 68 cartões com fala da equipe tinham `updated_at`
+ * igual ou depois dela); o que escapar fica sem cutucada, nunca com uma a mais. Erro do Kommo lança: página vazia quer dizer «acabou».
+ * `truncado` = bateu no teto de páginas (o resto fica para a varredura seguinte, que começa de novo: vai no log, nunca em silêncio).
+ */
+async function cartoesDaJanela(kommo: KommoDaCutucada, etapas: Array<{ pipelineId: number; statusId: number }>, desde: number): Promise<{ cartoes: KommoLead[]; truncado: boolean }> {
+  const cartoes: KommoLead[] = [];
+  if (!etapas.length) return { cartoes, truncado: false };
+  for (let page = 1; page <= MAX_PAGINAS; page++) {
+    const lote = await kommo.listLeadsDasEtapasDesde(etapas, desde, page);
+    cartoes.push(...lote);
+    if (lote.length < 250) return { cartoes, truncado: false };
+  }
+  return { cartoes, truncado: true };
 }
 
 const MOTIVO_DA_CONVERSA: Record<PorQuePular, string> = {
@@ -300,7 +309,7 @@ export async function varrerCutucada(unit: Unit, estado: Exclude<Estado, 'deslig
   const r = resumoNovo(unit, seco);
   const agora = deps.agora();
   const agoraS = Math.floor(agora.getTime() / 1000);
-  const tz = unit.spineTimezone ?? 'America/Sao_Paulo';
+  const tz = fusoDaUnidade(unit);
   const cfg: ConfigDaCutucada = configDaCutucada(unit.pipelineIntents);
 
   // 1) a unidade inteira: pausa da recepção e horário comercial (dias da agenda, feriado, 8h–20h no máximo)
@@ -322,7 +331,11 @@ export async function varrerCutucada(unit: Unit, estado: Exclude<Estado, 'deslig
   }
 
   // 2) o cartão (de graça): etapa, etiquetas, Pausar IA, ◷ Retomar em, consulta futura no cartão
-  const cartoes = await cartoesDaJanela(deps.kommo, agoraS - (cfg.idadeMaxH + 4) * 3600);
+  const { cartoes, truncado } = await cartoesDaJanela(deps.kommo, etapasDaCutucada(deps.funis), agoraS - (cfg.idadeMaxH + 4) * 3600);
+  if (truncado) {
+    r.truncado = true;
+    logger.warn({ unit: unit.slug, lidos: cartoes.length }, 'cutucada: a janela tem mais cartões que o teto de páginas — os mais novos entram agora, o resto fica sem cutucada');
+  }
   const noFunil: KommoLead[] = [];
   for (const lead of cartoes) {
     const etapa = deps.funis.nomeDe(lead.pipeline_id, lead.status_id);
@@ -379,6 +392,13 @@ export async function varrerCutucada(unit: Unit, estado: Exclude<Estado, 'deslig
         continue;
       }
       const ultima = d.ultimaDaEquipe;
+      const chaveFala = `${unit.id}:${lead.id}:${ultima.id}`;
+      // texto já reprovado duas vezes para esta fala da equipe: nem pergunta à franquia nem gasta o modelo (só uma fala nova muda isso)
+      if ((tentativas.get(chaveFala) ?? 0) >= TENTATIVAS_DE_TEXTO) {
+        conta(r.barrados, 'texto-reprovado-duas-vezes');
+        vistoAte.set(chaveVisto, { atualizadoEm: lead.updated_at ?? 0, ateMs: null });
+        continue;
+      }
 
       // 5) as travas que olham fora do cartão (franquia, número interno, teto do dia): se seguram, é «pularia»
       const fresco = await deps.kommo.getLead(lead.id);
@@ -391,18 +411,14 @@ export async function varrerCutucada(unit: Unit, estado: Exclude<Estado, 'deslig
         continue;
       }
 
-      // 6) o texto
-      const chaveFala = `${unit.id}:${lead.id}:${ultima.id}`;
+      // 6) o texto. O «nome de perfil» do WhatsApp (o que o paciente escolheu para si) vem da última fala dele: a trava da régua
+      // que tira «Oi, Tricolor!» precisa dele.
       if (seco && simulados.has(chaveFala)) {
         conta(r.barrados, 'ja-simulada');
         continue;
       }
-      if ((tentativas.get(chaveFala) ?? 0) >= TENTATIVAS_DE_TEXTO) {
-        conta(r.barrados, 'texto-reprovado-duas-vezes');
-        continue;
-      }
       textos++;
-      const contato = null;
+      const contato = [...falas].reverse().find((f) => f.autor === 'paciente' && f.autorNome.trim())?.autorNome.trim() ?? null;
       const t = await deps.escrever({ unit, leadId: lead.id, falas, tituloDoCartao: fresco.name ?? null, contato });
       if (t.texto === null) {
         r.textosReprovados++;
@@ -410,6 +426,7 @@ export async function varrerCutucada(unit: Unit, estado: Exclude<Estado, 'deslig
         tentativas.set(chaveFala, (tentativas.get(chaveFala) ?? 0) + 1);
         conta(r.seguradas, 'texto-nao-saiu');
         pularia(unit, lead.id, `o texto não saiu: ${t.porque}`);
+        vistoAte.set(chaveVisto, { atualizadoEm: lead.updated_at ?? 0, ateMs: agora.getTime() + SEGURADA_MS }); // uma 2ª tentativa só daqui a 30 min
         continue;
       }
       r.textosGerados++;
@@ -432,14 +449,16 @@ export async function varrerCutucada(unit: Unit, estado: Exclude<Estado, 'deslig
       }
 
       // 7) ligado: relê tudo (a conversa levou segundos), marca, envia, grava
-      const resultado = await enviar(unit, deps, lead, ultima, t.texto, cfg, agora, tz);
+      const resultado = await enviar(unit, deps, lead, ultima, t.texto, contato, cfg, agora, tz);
       if (resultado.tipo === 'segurou') {
         conta(r.seguradas, resultado.motivo);
         pularia(unit, lead.id, resultado.motivo);
+        vistoAte.set(chaveVisto, { atualizadoEm: lead.updated_at ?? 0, ateMs: agora.getTime() + SEGURADA_MS });
         continue;
       }
       if (resultado.tipo === 'erro') {
         r.erros++;
+        vistoAte.set(chaveVisto, { atualizadoEm: lead.updated_at ?? 0, ateMs: agora.getTime() + SEGURADA_MS });
         continue;
       }
       r.enviadas++;
@@ -470,8 +489,9 @@ async function lerFalas(unit: Unit, deps: DepsDaCutucada, lead: KommoLead): Prom
 
 type ResultadoDoEnvio = { tipo: 'enviou' } | { tipo: 'segurou'; motivo: string } | { tipo: 'erro' };
 
-async function enviar(unit: Unit, deps: DepsDaCutucada, lead: KommoLead, ultima: Fala, texto: string, cfg: ConfigDaCutucada, agora: Date, tz: string): Promise<ResultadoDoEnvio> {
-  const agoraS = Math.floor(Date.now() / 1000);
+async function enviar(unit: Unit, deps: DepsDaCutucada, lead: KommoLead, ultima: Fala, texto: string, contato: string | null, cfg: ConfigDaCutucada, agora: Date, tz: string): Promise<ResultadoDoEnvio> {
+  const agoraNovo = deps.agora();
+  const agoraS = Math.floor(agoraNovo.getTime() / 1000);
   // o cartão mudou enquanto o modelo escrevia? (etapa, Pausar IA, ◷ Retomar em, etiqueta)
   const fresco = await deps.kommo.getLead(lead.id);
   const etapa = deps.funis.nomeDe(fresco.pipeline_id, fresco.status_id);
@@ -484,7 +504,7 @@ async function enviar(unit: Unit, deps: DepsDaCutucada, lead: KommoLead, ultima:
   if (await deps.caixinhaMarcada(unit, lead.id).catch(() => false)) return { tipo: 'segurou', motivo: '«Pausar IA» foi marcado enquanto o texto era escrito' };
   // a conversa: o paciente respondeu, ou a equipe/outro falou de novo, nesse meio tempo?
   const falas = await lerFalas(unit, deps, fresco);
-  const d = decidirPelaConversa(falas, new Date(), cfg);
+  const d = decidirPelaConversa(falas, agoraNovo, cfg);
   if (d.tipo !== 'cutucar' || d.ultimaDaEquipe.id !== ultima.id) {
     return { tipo: 'segurou', motivo: `a conversa mudou enquanto o texto era escrito (${d.tipo === 'pular' ? MOTIVO_DA_CONVERSA[d.porque] : 'outra fala da equipe'})` };
   }
@@ -502,12 +522,13 @@ async function enviar(unit: Unit, deps: DepsDaCutucada, lead: KommoLead, ultima:
       return { tipo: 'erro' };
     }
   } catch (err) {
-    // falhou ANTES de sair: solta a marca para a próxima varredura tentar de novo
-    await deps.soltarMarca(unit, lead.id);
-    logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id }, 'cutucada: o envio falhou — soltei a marca, tento na próxima varredura');
+    // NÃO solta a marca: exceção depois de o pedido partir não prova que nada saiu (timeout depois do Kommo aceitar; no modo bypass o
+    // texto vai em pedaços e o 1º pode ter chegado). Duas mensagens ao paciente é pior que uma cutucada perdida. Se o João souber que
+    // não saiu, libera o lead apagando a marca (consulta no corpo do PR).
+    logger.error({ err: String(err), unit: unit.slug, leadId: lead.id, marca: idDaMarcaDaCutucada(unit.id, lead.id) }, 'cutucada: o envio deu erro — a marca FICA (não repete); confira no Kommo se a mensagem saiu');
     return { tipo: 'erro' };
   }
-  await deps.gravarMensagem(unit, lead.id, texto, null, { via: 'salesbot', ...META_DA_CUTUCADA }).catch((err) =>
+  await deps.gravarMensagem(unit, lead.id, texto, contato, { via: 'salesbot', ...META_DA_CUTUCADA }).catch((err) =>
     logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id }, 'cutucada: enviei, mas não gravei a mensagem no banco'),
   );
   logger.info({ unit: unit.slug, leadId: lead.id, equipeFalouEm: ultima.em.toISOString(), texto }, 'cutucada: enviada');

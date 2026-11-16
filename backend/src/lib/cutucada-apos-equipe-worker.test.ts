@@ -37,7 +37,14 @@ const NOMES: Record<string, string> = { [`${PIPE}:${ENTRADA}`]: 'Incoming leads'
 const funis = {
   comercialId: PIPE,
   tratamentoId: 14488799,
-  status: new Map(),
+  status: new Map([
+    ['COMERCIAL:incoming leads', { id: ENTRADA, nome: 'Incoming leads' }],
+    ['COMERCIAL:em qualificacao', { id: QUALIF, nome: 'EM QUALIFICAÇÃO' }],
+    ['COMERCIAL:em espera', { id: ESPERA, nome: 'EM ESPERA' }],
+    ['COMERCIAL:agendado', { id: 111915779, nome: 'AGENDADO' }],
+    ['COMERCIAL:perdido', { id: 143, nome: 'PERDIDO' }],
+    ['TRATAMENTO:em tratamento', { id: 111915803, nome: 'EM TRATAMENTO' }],
+  ]),
   nomeDe: (p: number, s: number) => (NOMES[`${p}:${s}`] ? { funil: p === 14488799 ? 'TRATAMENTO' : 'COMERCIAL', status: NOMES[`${p}:${s}`] } : null),
   idDe: () => null,
 } as unknown as Funis;
@@ -92,11 +99,13 @@ const equipeFalou = (haHoras = 3, texto = 'Olá, bom dia! Me chamo Natalia, da C
   [msg('in', S - (haHoras + 1) * H, 'Quero saber sobre o tratamento'), msg('lite', S - haHoras * H, texto)];
 
 // ── os efeitos, para conferir o que NÃO aconteceu ──
-const efeitos = { enviados: [] as string[], marcas: new Set<number>(), mensagens: [] as Array<{ texto: string; meta: Record<string, unknown> }>, textosPedidos: 0, solta: 0, leituras: 0 };
+const efeitos = { enviados: [] as string[], marcas: new Set<number>(), mensagens: [] as Array<{ texto: string; contato: string | null; meta: Record<string, unknown> }>, textosPedidos: 0, contatos: [] as Array<string | null>, leituras: 0 };
 
 function montar(over: Partial<DepsDaCutucada> & { enviar?: () => Promise<{ via: string }> } = {}): DepsDaCutucada {
   const kommo = {
-    listLeadsPagina: async () => cartoes.map((c) => c.lead),
+    // o filtro de etapa vai na consulta, como no Kommo: cartão de outra etapa/funil nem chega ao worker
+    listLeadsDasEtapasDesde: async (etapas: Array<{ pipelineId: number; statusId: number }>) =>
+      cartoes.filter((c) => etapas.some((e) => e.pipelineId === c.lead.pipeline_id && e.statusId === c.lead.status_id)).map((c) => c.lead),
     getLead: async (id: number) => cartoes.find((c) => c.lead.id === id)!.lead,
     listTalks: async (id: number) => (cartoes.find((c) => c.lead.id === id) ? [{ talk_id: id }] : []),
     listTalkMessages: async (talkId: number) => {
@@ -120,21 +129,18 @@ function montar(over: Partial<DepsDaCutucada> & { enviar?: () => Promise<{ via: 
       efeitos.marcas.add(leadId);
       return 'criada';
     },
-    soltarMarca: async (_u, leadId) => {
-      efeitos.solta++;
-      efeitos.marcas.delete(leadId);
-    },
     enviosDaSofia: async () => [],
     leadPausadoPorJanela: async () => false,
     caixinhaMarcada: async () => false,
     unidadeEmPausaAgora: async () => false,
     porQueAFranquiaSegura: async () => null,
     tetoDoDiaAtingido: async () => false,
-    escrever: async () => {
+    escrever: async (a) => {
       efeitos.textosPedidos++;
+      efeitos.contatos.push(a.contato);
       return { texto: 'Oi! Aqui é a Sofia, da equipe da clínica. Conseguiu ver a pergunta da nossa atendente sobre a sua dor?', conversa: '' };
     },
-    gravarMensagem: async (_u, _l, texto, _c, meta) => void efeitos.mensagens.push({ texto, meta }),
+    gravarMensagem: async (_u, _l, texto, contato, meta) => void efeitos.mensagens.push({ texto, contato, meta }),
     esperar: async () => undefined,
     ...over,
   };
@@ -147,7 +153,7 @@ beforeEach(() => {
   efeitos.marcas = new Set();
   efeitos.mensagens = [];
   efeitos.textosPedidos = 0;
-  efeitos.solta = 0;
+  efeitos.contatos = [];
   efeitos.leituras = 0;
   _limparMemoriaDaCutucada();
 });
@@ -202,6 +208,14 @@ test('LIGADO: manda UMA mensagem, grava a marca ANTES, grava a fala como assista
   assert.deepEqual(efeitos.mensagens[0].meta, { via: 'salesbot', cutucada: 1 });
 });
 
+test('o NOME DE PERFIL do WhatsApp (autor das falas do paciente) chega ao modelo e ao banco — é ele que a trava «Oi, Tricolor!» da régua precisa', async () => {
+  const l = lead();
+  cartoes = [{ lead: l, msgs: equipeFalou(3) }];
+  await varrerCutucada(unit(), 'ligado', montar());
+  assert.deepEqual(efeitos.contatos, ['Alex']);
+  assert.equal(efeitos.mensagens[0].contato, 'Alex');
+});
+
 test('LIGADO: a varredura roda 2× e sai UMA mensagem (a marca persiste; idempotente)', async () => {
   cartoes = [{ lead: lead(), msgs: equipeFalou(3) }];
   await varrerCutucada(unit(), 'ligado', montar());
@@ -219,14 +233,16 @@ test('LIGADO: duas réplicas varrendo ao mesmo tempo — quem perde a corrida da
   assert.equal(a.enviadas + b.enviadas, 1);
 });
 
-test('LIGADO: se o envio FALHA antes de sair, solta a marca (a próxima varredura tenta de novo); a mensagem não é gravada', async () => {
+test('LIGADO: se o envio dá ERRO, a marca FICA (exceção depois de o pedido partir não prova que nada saiu: não repete) e a mensagem não é gravada', async () => {
   const l = lead();
   cartoes = [{ lead: l, msgs: equipeFalou(3) }];
   const r = await varrerCutucada(unit(), 'ligado', montar({ enviar: async () => { throw new Error('Kommo 500'); } }));
   assert.equal(r.erros, 1);
-  assert.equal(efeitos.solta, 1);
-  assert.equal(efeitos.marcas.has(l.id), false);
+  assert.equal(efeitos.marcas.has(l.id), true);
   assert.deepEqual(efeitos.mensagens, []);
+  _limparMemoriaDaCutucada();
+  const depois = await varrerCutucada(unit(), 'ligado', montar({ enviar: async () => { throw new Error('não podia nem ser chamado'); } }));
+  assert.equal(depois.barrados['ja-cutucado'], 1);
 });
 
 test('LIGADO: se a mensagem virou NOTA (sem rota de chat), não conta como enviada e a marca FICA (repetir empilharia nota)', async () => {
@@ -362,8 +378,12 @@ test('o texto reprovado pelas travas não sai; tenta no máximo 2× por fala da 
   cartoes = [{ lead: l, msgs: equipeFalou(3) }];
   const deps = montar({ escrever: async () => { efeitos.textosPedidos++; return { texto: null, porque: 'texto reprovado: fala de valor, Pix ou pagamento' }; } });
   await varrerCutucada(unit(), 'ligado', deps);
-  await varrerCutucada(unit(), 'ligado', deps);
-  const terceira = await varrerCutucada(unit(), 'ligado', deps);
+  const logo = await varrerCutucada(unit(), 'ligado', deps);
+  assert.equal(logo.barrados['conversa-ja-lida-sem-novidade'], 1, 'depois de reprovar, a 2ª tentativa só vem daqui a 30 min');
+  assert.equal(efeitos.textosPedidos, 1);
+  const depois = (): DepsDaCutucada => ({ ...deps, agora: () => new Date(AGORA.getTime() + 31 * 60_000) });
+  await varrerCutucada(unit(), 'ligado', depois());
+  const terceira = await varrerCutucada(unit(), 'ligado', { ...depois(), agora: () => new Date(AGORA.getTime() + 70 * 60_000) });
   await aguardar();
   assert.equal(efeitos.textosPedidos, 2);
   assert.equal(terceira.barrados['texto-reprovado-duas-vezes'], 1);

@@ -116,6 +116,10 @@ test('o prazo é configurável por unidade (pipelineIntents.cutucada_espera_min)
   assert.deepEqual(configDaCutucada(null), { esperaMin: ESPERA_PADRAO_MIN, idadeMaxH: IDADE_MAX_PADRAO_H });
   assert.deepEqual(configDaCutucada({ cutucada_espera_min: 90, cutucada_idade_max_h: 30 }), { esperaMin: 90, idadeMaxH: 30 });
   assert.deepEqual(configDaCutucada({ cutucada_espera_min: 'abc', cutucada_idade_max_h: -3 }), { esperaMin: ESPERA_PADRAO_MIN, idadeMaxH: IDADE_MAX_PADRAO_H });
+  // zero/negativo cai no padrão; valor minúsculo sobe ao piso (1 min cutucaria quem a SDR acabou de escrever); idade nunca menor que prazo + 1 h
+  assert.deepEqual(configDaCutucada({ cutucada_espera_min: 0 }), { esperaMin: ESPERA_PADRAO_MIN, idadeMaxH: IDADE_MAX_PADRAO_H });
+  assert.deepEqual(configDaCutucada({ cutucada_espera_min: 1 }), { esperaMin: 15, idadeMaxH: IDADE_MAX_PADRAO_H });
+  assert.deepEqual(configDaCutucada({ cutucada_espera_min: 600, cutucada_idade_max_h: 2 }), { esperaMin: 600, idadeMaxH: 11 });
   const fs = falas([m('lite', T0, 'Posso te ajudar com algo mais?')]);
   assert.equal(decidirPelaConversa(fs, agora(T0 + 95 * MIN), configDaCutucada({ cutucada_espera_min: 90 })).tipo, 'cutucar');
 });
@@ -146,6 +150,10 @@ test('equipe se despediu («beleza», «obrigada, bom fim de semana»): não é 
   }
   assert.equal(ehEncerramento({ texto: 'Consigo um horário para senhora amanhã às 17 horas, a senhora consegue', anexo: null }), false);
   assert.equal(ehEncerramento({ texto: 'Ok, e como estão as dores?', anexo: null }), false);
+  // pedido em aberto NÃO é despedida, mesmo curto e sem «?» (achado da revisão): a SDR pediu algo e o lead não respondeu
+  for (const t of ['Certo! Me manda a foto do seu exame por aqui.', 'Tudo bem, vou separar um horário', 'Ok, e como estão as dores', 'Perfeito, me envie o exame', 'Oklahoma']) {
+    assert.equal(ehEncerramento({ texto: t, anexo: null }), false, t);
+  }
   assert.equal(ehEncerramento({ texto: '', anexo: 'voice' }), false);
   assert.equal(decidirPelaConversa(falas([m('lite', T0, '', { attachment: { type: 'voice' } })]), agora(T0 + 3 * H), cfg).tipo, 'cutucar');
 });
