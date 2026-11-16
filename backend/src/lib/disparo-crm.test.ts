@@ -672,7 +672,7 @@ test('ISOLAMENTO: limite de taxa, falhas, pausa por número e teto do CRM só to
   falso('unit', { findMany: registra('unit', 'findMany', [{ slug: 'b' }, { slug: 'a' }]) });
   const porto = portoChatwoot({ base: baseFalso().porto, unidades: new Map(), ondas: new Map() });
 
-  assert.deepEqual(await porto.ultimosResultados('u1', 5, AGORA), ['enviado', 'falhou']);
+  assert.deepEqual(await porto.ultimosResultados('u1', 2, AGORA), ['enviado', 'falhou']);
   assert.deepEqual(consultas.pop()!.arg.where.onda, { origem: 'chatwoot' });
 
   await porto.pausarOndas('u1', null, 'falhas', 'falhas');
@@ -954,12 +954,74 @@ test('restrição da Meta (131048) pausa as ondas do CRM de TODAS as unidades do
   assert.equal((pausa.where as { origem: string }).origem, 'chatwoot');
 });
 
+test('FREIO DE FALHAS: o histórico vem ordenado pelo MOMENTO DO ENVIO — a varredura regravando `atualizadoEm` não esconde uma falha recente atrás de envios velhos', async () => {
+  const consultas: Array<{ where: Record<string, unknown>; orderBy: Record<string, string> }> = [];
+  const h = (n: number) => new Date(AGORA.getTime() - n * 3_600_000);
+  falso('disparoDestinatario', {
+    findMany: async (a: { where: Record<string, unknown>; orderBy: Record<string, string> }) => {
+      consultas.push(a);
+      // envios (ordenados por enviadoEm): a falha de 1 h atrás está entre os recém-lidos (atualizadoEm novo), os velhos vêm depois
+      if ('enviadoEm' in a.where && (a.where.enviadoEm as { gte?: Date })?.gte) return [{ estado: 'falhou', enviadoEm: h(1) }, { estado: 'enviado', enviadoEm: h(5) }, { estado: 'enviado', enviadoEm: h(9) }];
+      return [{ estado: 'falhou', atualizadoEm: h(3) }]; // recusa definitiva (sem enviadoEm), decidida há 3 h
+    },
+  });
+  const porto = portoChatwoot({ base: baseFalso().porto, unidades: new Map(), ondas: new Map() });
+  assert.deepEqual(await porto.ultimosResultados('u1', 3, h(48)), ['falhou', 'falhou', 'enviado'], 'a mais recente primeiro: a falha de 1 h, a recusa de 3 h, o envio de 5 h');
+  assert.deepEqual(consultas[0]!.orderBy, { enviadoEm: 'desc' });
+  assert.deepEqual(consultas[1]!.orderBy, { atualizadoEm: 'desc' }, 'só a recusa SEM enviadoEm usa a hora da decisão');
+  assert.equal(consultas[1]!.where.enviadoEm, null);
+});
+
+test('429 do Chatwoot: o Porto avisa que ocupou a unidade (a rodada conta como «sem andar» para o alerta, mesmo sem adiado)', async () => {
+  ligar();
+  const t = portoDoCrm({ base: baseFalso({ quantos: 2 }), mandar: () => { throw Object.assign(new Error('Chatwoot 429'), { status: 429 }); } });
+  assert.equal(t.porto.ocupouAUnidade('u1'), false);
+  await rodarUnidade(t.porto, sem_pausa, U_LOTE, [ONDA]);
+  assert.equal(t.porto.ocupouAUnidade('u1'), true);
+  assert.equal(t.porto.ocupouAUnidade('outra'), false);
+  // 5 rodadas assim, com o +1 que a rodada soma, disparam o alerta uma vez
+  const { avisarSeSemAndar, _zerarSemAndarDoCrm } = await import('./disparo/chatwoot/rodada.js');
+  _zerarSemAndarDoCrm();
+  const avisos: string[] = [];
+  const r = { adiados: 0, mandou: 0, receberia: 0, falhou: 0, saiu: 0, descartados: 0 };
+  for (let i = 0; i < 5; i++) await avisarSeSemAndar('u', 'u1', { ...r, adiados: r.adiados + 1 }, async (x) => void avisos.push(x));
+  assert.equal(avisos.length, 1);
+});
+
+test('LIGADO sem lista de teste: o log e o aviso de subida citam CHATWOOT_DISPARO_LISTA_DE_TESTE para o CRM (e DISPARO_LISTA_DE_TESTE para o Kommo)', async () => {
+  process.env.CHATWOOT_DISPARO_SLUGS = UNIDADE.slug;
+  const logs: string[] = [];
+  const b = baseFalso();
+  b.porto.log = (_n, _d, msg) => void logs.push(msg);
+  const t = portoDoCrm({ base: b });
+  await rodarUnidade(t.porto, sem_pausa, U_LOTE, [ONDA]);
+  assert.ok(logs.some((l) => /CHATWOOT_DISPARO_LISTA_DE_TESTE/.test(l) && !/\(DISPARO_LISTA/.test(l)), logs.join('|'));
+  const { avisosDaListaDeTeste } = await import('./disparo/porto.js');
+  assert.match(avisosDaListaDeTeste({ CHATWOOT_DISPARO_LISTA_DE_TESTE: '*' } as never, 'CHATWOOT_DISPARO_LISTA_DE_TESTE')[0]!, /^CHATWOOT_DISPARO_LISTA_DE_TESTE: /);
+  assert.match(avisosDaListaDeTeste({ DISPARO_LISTA_DE_TESTE: '*' } as never)[0]!, /^DISPARO_LISTA_DE_TESTE: /);
+});
+
+test('alerta da restrição cita TODAS as unidades pausadas', async () => {
+  const { alertaDeRestricao } = await import('./disparo/chatwoot/rodada.js');
+  const um = alertaDeRestricao(['a']);
+  assert.match(um, /— a\n/);
+  const dois = alertaDeRestricao(['a', 'b']);
+  assert.match(dois, /a \+ b/);
+  assert.match(dois, /2 unidades/);
+});
+
 test('montagens: o CRM tem o limite PRÓPRIO (2 ao mesmo tempo, somando unidades) e o conector do Kommo não conta as dele', async () => {
   const { abrirOndaChatwoot, MAX_MONTAGENS_DO_CRM } = await import('./disparo/chatwoot/onda.js');
-  const tx = { $executeRaw: async () => 1, disparoOnda: { findFirst: async () => null, count: async () => MAX_MONTAGENS_DO_CRM, create: async () => { throw new Error('não podia criar'); } }, disparoCampanha: { create: async () => ({ id: 'c' }) } };
+  let travas = 0;
+  const filtrosDeContagem: Array<Record<string, unknown>> = [];
+  const tx = { $executeRaw: async () => ++travas, disparoOnda: { findFirst: async () => null, count: async (a: { where: Record<string, unknown> }) => (filtrosDeContagem.push(a.where), MAX_MONTAGENS_DO_CRM), create: async () => { throw new Error('não podia criar'); } }, disparoCampanha: { create: async () => ({ id: 'c' }) } };
   falso('$transaction', (async (fn: (t: unknown) => unknown) => fn(tx)) as never);
   const r = await abrirOndaChatwoot({ unit: UNIDADE, conta: 1, filtro: filtroSchema.parse({ caixa: 3 }), modelo: { nome: 'parau_reativacao', idioma: 'pt_BR', texto: 'Oi {{1}}', variaveis: ['primeiroNome'] }, nome: 'Reativação', por: 'x@y.com', ctx: criarContextoChatwoot({ url: 'https://x.test', conta: 1, token: 't' }), conferirModelo: async () => ({ ok: true as const }) });
   assert.deepEqual([r.ok, (r as { status: number }).status], [false, 429]);
+  assert.equal(travas, 2, 'duas travas: a GLOBAL do teto (duas unidades juntas não passam dele) e a da unidade');
+  const viva = filtrosDeContagem[0]!;
+  assert.equal(viva.origem, 'chatwoot');
+  assert.ok((viva.atualizadoEm as { gte: Date }).gte instanceof Date, 'só conta montagem VIVA: a órfã de um deploy não segura o teto até os 30 min do vigia');
   const filtros: Array<Record<string, unknown>> = [];
   falso('disparoOnda', { count: async (a: { where: Record<string, unknown> }) => (filtros.push(a.where), 1), findMany: async (a: { where: Record<string, unknown> }) => (filtros.push(a.where), []) });
   const { fonteDeDisparo } = await import('../mcp-remoto/disparo-producao.js');

@@ -9,7 +9,9 @@
  *  - entregues / lidas: o CRM marcou a mensagem como entregue / lida (lida implica entregue);
  *  - responderam: escreveram depois do envio, em até 72 h, SEM pedir para sair (quem pediu SAIR conta só em «pediram para sair»);
  *  - pediram para sair: receberam e responderam SAIR;
- *  - falharam: o CRM recusou o envio, o envio ficou incerto, ou a entrega falhou depois de aceita.
+ *  - falharam: o CRM recusou o envio, ou a entrega falhou depois de aceita;
+ *  - incertas: o envio ficou INCERTO (timeout, processo que caiu): a mensagem PODE ter saído e nunca é reenviada sozinha. Contam à parte —
+ *    não são «enviadas» (não há prova), não entram em «falharam» e não inflam «responderam» (que só conta mensagem aceita).
  */
 import { idDaMensagem } from './mensagens.js';
 
@@ -35,6 +37,8 @@ export interface NumerosDoRelatorio {
   responderam: number;
   pediramSair: number;
   falharam: number;
+  /** envio incerto (a mensagem pode ter saído); fora de «falharam» e de «responderam» */
+  incertas: number;
   /** ainda na fila (inclui quem está sendo enviado agora) */
   naFila: number;
   /** barradas na hora do envio (conversa mudou, franquia, interno…) */
@@ -46,7 +50,7 @@ export interface NumerosDoRelatorio {
 const foiAceita = (l: Pick<LinhaDoRelatorio, 'wamid'>): boolean => idDaMensagem(l.wamid) !== null;
 
 export function numerosDoRelatorio(linhas: readonly LinhaDoRelatorio[]): NumerosDoRelatorio {
-  const n: NumerosDoRelatorio = { selecionadas: linhas.length, enviadas: 0, tentadas: 0, entregues: 0, lidas: 0, responderam: 0, pediramSair: 0, falharam: 0, naFila: 0, descartadas: 0, receberiam: 0 };
+  const n: NumerosDoRelatorio = { selecionadas: linhas.length, enviadas: 0, tentadas: 0, entregues: 0, lidas: 0, responderam: 0, pediramSair: 0, falharam: 0, incertas: 0, naFila: 0, descartadas: 0, receberiam: 0 };
   for (const l of linhas) {
     if (foiAceita(l)) {
       n.enviadas++;
@@ -55,10 +59,11 @@ export function numerosDoRelatorio(linhas: readonly LinhaDoRelatorio[]): Numeros
       if (l.lidaEm) n.lidas++;
     }
     if (l.estado === 'saiu' && l.enviadoEm) n.pediramSair++;
-    else if (l.respondeuEm && l.enviadoEm && l.respondeuEm >= l.enviadoEm && l.respondeuEm.getTime() - l.enviadoEm.getTime() <= JANELA_DA_RESPOSTA_MS) n.responderam++;
+    else if (foiAceita(l) && l.respondeuEm && l.enviadoEm && l.respondeuEm >= l.enviadoEm && l.respondeuEm.getTime() - l.enviadoEm.getTime() <= JANELA_DA_RESPOSTA_MS) n.responderam++;
     if (l.estado === 'falhou') {
-      n.falharam++;
       if (!foiAceita(l)) n.tentadas++; // a que falhou DEPOIS de aceita já está em «enviadas»
+      if (!foiAceita(l) && l.enviadoEm) n.incertas++; // reivindicada (tentou falar com o CRM) e sem o id da mensagem: incerta
+      else n.falharam++;
     } else if (l.estado === 'pendente' || l.estado === 'enviando') n.naFila++;
     else if (l.estado === 'descartado' || (l.estado === 'saiu' && !l.enviadoEm)) n.descartadas++;
     if (l.simuladoEm) n.receberiam++;

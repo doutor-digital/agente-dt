@@ -43,12 +43,13 @@ test('números: cada marca é contada pela sua definição, e SAIR não conta co
     linha({ wamid: 'cw:6', estado: 'saiu', entregueEm: h(9), respondeuEm: h(7) }), // pediu SAIR: não é «responderam»
     linha({ wamid: 'cw:7', estado: 'falhou' }), // o CRM aceitou, a entrega falhou
     linha({ wamid: null, estado: 'falhou', enviadoEm: null }), // o CRM recusou
+    linha({ wamid: null, estado: 'falhou', respondeuEm: h(7) }), // INCERTA (tentou, sem id): à parte; a resposta dela não infla «responderam»
     linha({ wamid: null, estado: 'pendente', enviadoEm: null }),
     linha({ wamid: null, estado: 'descartado', enviadoEm: null }),
     linha({ wamid: null, estado: 'saiu', enviadoEm: null }), // pediu SAIR ANTES do envio: barrada, não conta como «pediu SAIR depois de receber»
     linha({ wamid: null, estado: 'pendente', enviadoEm: null, simuladoEm: h(1) }), // seco
   ]);
-  assert.deepEqual(n, { selecionadas: 12, enviadas: 7, tentadas: 8, entregues: 5, lidas: 3, responderam: 1, pediramSair: 1, falharam: 2, naFila: 2, descartadas: 2, receberiam: 1 });
+  assert.deepEqual(n, { selecionadas: 13, enviadas: 7, tentadas: 9, entregues: 5, lidas: 3, responderam: 1, pediramSair: 1, falharam: 2, incertas: 1, naFila: 2, descartadas: 2, receberiam: 1 });
 });
 
 test('resposta só vale até 72 h depois do envio (e nunca antes dele)', () => {
@@ -64,7 +65,7 @@ test('resposta só vale até 72 h depois do envio (e nunca antes dele)', () => {
 test('taxas: sobre as ENVIADAS; sem enviadas não há percentual (null, não 0); a falha é sobre enviadas + falhas', () => {
   assert.equal(percentual(1, 3), 33);
   assert.equal(percentual(0, 0), null);
-  const t = taxasDoRelatorio({ selecionadas: 10, enviadas: 8, tentadas: 10, entregues: 6, lidas: 4, responderam: 2, pediramSair: 1, falharam: 2, naFila: 0, descartadas: 0, receberiam: 0 });
+  const t = taxasDoRelatorio({ selecionadas: 10, enviadas: 8, tentadas: 10, entregues: 6, lidas: 4, responderam: 2, pediramSair: 1, falharam: 2, incertas: 0, naFila: 0, descartadas: 0, receberiam: 0 });
   assert.deepEqual(t, { entregues: 75, lidas: 50, responderam: 25, pediramSair: 13, falharam: 20 });
   assert.deepEqual(taxasDoRelatorio(numerosDoRelatorio([])), { entregues: null, lidas: null, responderam: null, pediramSair: null, falharam: null });
 });
@@ -176,7 +177,7 @@ test('varredura: pediu SAIR depois do envio continua virando «saiu» no mesmo p
 
 // ── o mesmo cálculo, no banco ───────────────────────────────────────────────────────────────────────────────────
 
-test('SQL × função pura: as MESMAS 15 linhas dão os mesmos números (o SQL de `relatorio-banco.ts` foi rodado no Postgres de produção, só leitura, sobre VALUES com estas linhas)', async () => {
+test('SQL × função pura: as MESMAS 17 linhas dão os mesmos números (o SQL de `relatorio-banco.ts` foi rodado no Postgres de produção, só leitura, sobre VALUES com estas linhas; 17 selecionadas|enviadas|tentadas|entregues|lidas|responderam|pediram_sair|falharam|incertas|na_fila|descartadas|receberiam = 17|10|12|5|3|2|2|2|1|2|2|1)', async () => {
   const { numerosDaLinha, SQL_DOS_NUMEROS } = await import('./disparo/chatwoot/relatorio-banco.js');
   const agoraSql = new Date(); // o SQL usou now(): as horas são relativas, como aqui
   const hh = (n: number) => new Date(agoraSql.getTime() - n * 3_600_000);
@@ -190,9 +191,11 @@ test('SQL × função pura: as MESMAS 15 linhas dão os mesmos números (o SQL d
     l('enviado', 'cw:8', 100, null, null, null, 28), // 72 h exatas: vale
     l('enviado', 'cw:9', 100, null, null, null, 27), // 73 h: não
     l('enviado', 'cw:10', 100, null, null, null, 101), // antes do envio: não
+    l('falhou', null, 10, null, null, null, 7), // incerta que respondeu: nem «falharam» nem «responderam»
+    l('saiu', null, 10, null, null, null, 6), // era incerta e pediu SAIR: recebeu
   ];
   // o que o Postgres devolveu para estas linhas
-  const doPostgres = numerosDaLinha({ onda_id: 'o', selecionadas: 15, enviadas: 10, tentadas: 11, entregues: 5, lidas: 3, responderam: 2, pediram_sair: 1, falharam: 2, na_fila: 2, descartadas: 2, receberiam: 1 });
+  const doPostgres = numerosDaLinha({ onda_id: 'o', selecionadas: 17, enviadas: 10, tentadas: 12, entregues: 5, lidas: 3, responderam: 2, pediram_sair: 2, falharam: 2, incertas: 1, na_fila: 2, descartadas: 2, receberiam: 1 });
   assert.deepEqual(numerosDoRelatorio(linhas), doPostgres);
   assert.match(SQL_DOS_NUMEROS, /FILTER/);
 });
@@ -200,7 +203,7 @@ test('SQL × função pura: as MESMAS 15 linhas dão os mesmos números (o SQL d
 test('relatório no banco: uma consulta agrupada por onda; onda sem destinatários vem zerada; sem ondas nem consulta', async () => {
   const { lerNumerosDosDisparos } = await import('./disparo/chatwoot/relatorio-banco.js');
   const consultas: string[] = [];
-  falso('$queryRaw', (async (q: { sql?: string }) => (consultas.push(q.sql ?? ''), [{ onda_id: 'a', selecionadas: 2, enviadas: 2, tentadas: 2, entregues: 1, lidas: 0, responderam: 0, pediram_sair: 0, falharam: 0, na_fila: 0, descartadas: 0, receberiam: 0 }])) as never);
+  falso('$queryRaw', (async (q: { sql?: string }) => (consultas.push(q.sql ?? ''), [{ onda_id: 'a', selecionadas: 2, enviadas: 2, tentadas: 2, entregues: 1, lidas: 0, responderam: 0, pediram_sair: 0, falharam: 0, incertas: 0, na_fila: 0, descartadas: 0, receberiam: 0 }])) as never);
   assert.equal((await lerNumerosDosDisparos([])).size, 0);
   assert.equal(consultas.length, 0);
   const m = await lerNumerosDosDisparos(['a', 'b']);

@@ -75,7 +75,7 @@ export const chaveDoLimiteDoCrm = (unitId: string): string => `crm:${unitId}`;
 
 export { idDaMensagem };
 
-export function portoChatwoot(deps: DepsDoPortoChatwoot): Porto {
+export function portoChatwoot(deps: DepsDoPortoChatwoot): Porto & { ocupouAUnidade(unitId: string): boolean } {
   const { base, unidades, ondas } = deps;
   const ctxDe = deps.ctxDaUnidade ?? padraoCtx;
   const oficial = deps.caixaOficial ?? caixaWhatsappOficial;
@@ -86,6 +86,7 @@ export function portoChatwoot(deps: DepsDoPortoChatwoot): Porto {
   const franquiaDe = deps.franquiaDaUnidade ?? conferenciaDaFranquia;
   const agora = deps.agora ?? (() => new Date());
   let chatwootOcupado = false;
+  const unidadesOcupadas = new Set<string>();
   const franquias = new Map<string, ReturnType<typeof conferenciaDaFranquia>>();
   const caixas = new Map<string, { ate: number; v: Promise<CaixaOficial> }>();
   const modelos = new Map<string, { ate: number; v: Promise<ConferenciaDoModelo> }>();
@@ -110,6 +111,7 @@ export function portoChatwoot(deps: DepsDoPortoChatwoot): Porto {
     ...base,
 
     modoDaUnidade: (slug): Modo => modoDoDisparoNoCrm(slug),
+    nomeDaListaDeTeste: 'CHATWOOT_DISPARO_LISTA_DE_TESTE',
 
     // A lista de teste do CRM é PRÓPRIA (`CHATWOOT_DISPARO_LISTA_DE_TESTE`): `slug=*` na do Kommo não solta o CRM, e a unidade que não está nela não recebe ninguém.
     listaDeTeste: (slug) => listaDeTesteDoAmbiente(slug, { DISPARO_LISTA_DE_TESTE: process.env.CHATWOOT_DISPARO_LISTA_DE_TESTE } as NodeJS.ProcessEnv),
@@ -124,15 +126,20 @@ export function portoChatwoot(deps: DepsDoPortoChatwoot): Porto {
     },
 
     // Tudo o que conta, pausa ou zera é DESTA origem: o limite de taxa, a restrição e as falhas do CRM não pausam o Kommo (outro número), nem o contrário.
-    ultimosResultados: async (unitId, n, desde) =>
-      (
-        await prisma.disparoDestinatario.findMany({
-          where: { unitId, onda: { origem: 'chatwoot' }, estado: { in: ['enviado', 'falhou'] }, atualizadoEm: { gte: desde } },
-          orderBy: { atualizadoEm: 'desc' },
-          take: n,
-          select: { estado: true },
-        })
-      ).map((x) => (x.estado === 'enviado' ? 'enviado' : 'falhou')),
+    // Ordena pelo MOMENTO DO ENVIO, não por `atualizadoEm`: a varredura (entregue/lida/respondeu) regrava `atualizadoEm` e uma falha recente
+    // sumiria atrás de envios velhos que acabaram de ser lidos. A recusa definitiva (sem `enviadoEm`) entra pela hora em que foi decidida.
+    ultimosResultados: async (unitId, n, desde) => {
+      const base = { unitId, onda: { origem: 'chatwoot' }, estado: { in: ['enviado', 'falhou'] } };
+      const [enviados, recusados] = await Promise.all([
+        prisma.disparoDestinatario.findMany({ where: { ...base, enviadoEm: { gte: desde } }, orderBy: { enviadoEm: 'desc' }, take: n, select: { estado: true, enviadoEm: true } }),
+        prisma.disparoDestinatario.findMany({ where: { ...base, estado: 'falhou', enviadoEm: null, atualizadoEm: { gte: desde } }, orderBy: { atualizadoEm: 'desc' }, take: n, select: { estado: true, atualizadoEm: true } }),
+      ]);
+      const quando = (x: { enviadoEm?: Date | null; atualizadoEm?: Date }): number => (x.enviadoEm ?? x.atualizadoEm)?.getTime() ?? 0;
+      return [...enviados, ...recusados]
+        .sort((a, b) => quando(b) - quando(a))
+        .slice(0, n)
+        .map((x) => (x.estado === 'enviado' ? 'enviado' : 'falhou'));
+    },
 
     pausarOndas: async (unitId, campanhaId, motivo, causa) => {
       await prisma.disparoOnda.updateMany({
@@ -144,6 +151,7 @@ export function portoChatwoot(deps: DepsDoPortoChatwoot): Porto {
     limiteDeTaxa: async (unitId, houve) => {
       if (houve && chatwootOcupado) {
         chatwootOcupado = false;
+        unidadesOcupadas.add(unitId);
         logger.warn({ unit: unidades.get(unitId)?.slug }, 'disparo-crm: o Chatwoot respondeu 429 (ocupado) — tento de novo na próxima rodada; não conta como limite da Meta');
         return 0;
       }
@@ -280,7 +288,9 @@ export function portoChatwoot(deps: DepsDoPortoChatwoot): Porto {
     espelhar: async () => undefined,
     linkDoPainel: () => null,
   };
-  return porto;
+  // O 429 do Chatwoot não conta como «adiado» no resumo do motor (ele acaba a rodada como «esperar»); quem chama usa isto para contá-lo: sem isso um 429 repetido
+  // deixava a onda parada sem o alerta de «sem andar».
+  return Object.assign(porto, { ocupouAUnidade: (unitId: string): boolean => unidadesOcupadas.has(unitId) });
 }
 
 /** As unidades que usam o MESMO número do Kapso (o teto é do número). Sem número cadastrado, só a própria. */

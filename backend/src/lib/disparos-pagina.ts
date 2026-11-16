@@ -341,12 +341,12 @@ a{color:var(--brand)}
     if (!r.campanhas.length) { corpo.textContent = 'Nenhum disparo ainda.'; return; }
     c.removeChild(corpo);
     var t = el('table'), th = el('thead'), tr = el('tr');
-    ['Campanha', 'Selecionadas', 'Enviadas', 'Entregues', 'Lidas', 'Responderam (72 h)', 'Pediram SAIR', 'Falharam'].forEach(function(h){ tr.appendChild(el('th', null, h)); }); th.appendChild(tr); t.appendChild(th);
+    ['Campanha', 'Selecionadas', 'Enviadas', 'Entregues', 'Lidas', 'Responderam (72 h)', 'Pediram SAIR', 'Falharam', 'Incertas'].forEach(function(h){ tr.appendChild(el('th', null, h)); }); th.appendChild(tr); t.appendChild(th);
     var tb = el('tbody');
     r.campanhas.forEach(function(k){
       var n = k.numeros, x = el('tr'), nome = el('td'); var a = el('a', null, k.nome); a.href = '#'; a.addEventListener('click', function(ev){ ev.preventDefault(); abrirOnda(k.id); }); nome.appendChild(a);
       nome.appendChild(el('small', 'mudo', ' · ' + (ESTADO[k.estado] || k.estado) + ' · ' + quando(k.criadoEm))); x.appendChild(nome);
-      [n.selecionadas, numeroComPct(n.enviadas, n.selecionadas), numeroComPct(n.entregues, n.enviadas), numeroComPct(n.lidas, n.enviadas), numeroComPct(n.responderam, n.enviadas), numeroComPct(n.pediramSair, n.enviadas), n.falharam].forEach(function(v){ x.appendChild(el('td', null, String(v))); });
+      [n.selecionadas, numeroComPct(n.enviadas, n.selecionadas), numeroComPct(n.entregues, n.enviadas), numeroComPct(n.lidas, n.enviadas), numeroComPct(n.responderam, n.enviadas), numeroComPct(n.pediramSair, n.enviadas), n.falharam, n.incertas].forEach(function(v){ x.appendChild(el('td', null, String(v))); });
       tb.appendChild(x);
     });
     t.appendChild(tb); var w = el('div', 'rolar'); w.appendChild(t); c.appendChild(w);
@@ -378,9 +378,9 @@ a{color:var(--brand)}
     if (o.aprovadaPor) c.appendChild(el('p', 'mudo', 'Aprovada por ' + o.aprovadaPor + ' em ' + quando(o.aprovadaEm) + (o.aprovadaModo && o.aprovadaModo !== 'ligado' ? ' (com a unidade em ' + (o.aprovadaModo === 'seco' ? 'seco' : 'modo desligado') + ': não vale como aprovação de envio)' : '') + '.'));
     var f = el('div', 'fatos'); fato(f, o.total, 'pessoas'); fato(f, o.candidatos == null ? '—' : o.candidatos, 'passaram no filtro'); fato(f, o.contagem.enviado || 0, 'enviadas'); fato(f, o.simulados, 'com «receberia» (seco)'); fato(f, (o.contagem.falhou || 0) + (o.contagem.saiu || 0) + (o.contagem.descartado || 0), 'falharam, pediram SAIR ou saíram da lista'); c.appendChild(f);
     col.appendChild(c);
-    if (o.relatorio && o.relatorio.numeros.enviadas + o.relatorio.numeros.falharam > 0) {
+    if (o.relatorio && o.relatorio.numeros.enviadas + o.relatorio.numeros.falharam + o.relatorio.numeros.incertas > 0) {
       var cr = el('div', 'card'); cr.appendChild(el('h2', null, 'Relatório')); var n = o.relatorio.numeros, fr2 = el('div', 'fatos');
-      fato(fr2, n.enviadas, 'enviadas'); fato(fr2, numeroComPct(n.entregues, n.enviadas), 'entregues'); fato(fr2, numeroComPct(n.lidas, n.enviadas), 'lidas'); fato(fr2, numeroComPct(n.responderam, n.enviadas), 'responderam (até 72 h)'); fato(fr2, numeroComPct(n.pediramSair, n.enviadas), 'pediram para sair'); fato(fr2, n.falharam, 'falharam');
+      fato(fr2, n.enviadas, 'enviadas'); fato(fr2, numeroComPct(n.entregues, n.enviadas), 'entregues'); fato(fr2, numeroComPct(n.lidas, n.enviadas), 'lidas'); fato(fr2, numeroComPct(n.responderam, n.enviadas), 'responderam (até 72 h)'); fato(fr2, numeroComPct(n.pediramSair, n.enviadas), 'pediram para sair'); fato(fr2, n.falharam, 'falharam'); if (n.incertas) fato(fr2, n.incertas, 'incertas (podem ter saído; não reenvia)');
       cr.appendChild(fr2);
       if (o.relatorio.porHora.length) { var ul2 = el('ul', 'lis'); o.relatorio.porHora.forEach(function(h){ ul2.appendChild(el('li', null, h.hora.replace(' ', ' às ') + 'h — ' + h.enviadas + ' enviadas')); }); cr.appendChild(el('div', 'rot mudo', 'Envios por hora (' + (o.relatorio.fuso || 'America/Sao_Paulo') + ')')); cr.appendChild(ul2); }
       cr.appendChild(el('p', 'mudo', 'Entregue, lida e respondeu são o que o CRM mostrava na última conferência (a cada 5 minutos, por 72 h depois do envio).'));

@@ -53,7 +53,21 @@ export const _definirTetosDeTempo = (parteMs: number, conferenciaMs: number): vo
   TETO_DA_CONFERENCIA_MS = conferenciaMs;
 };
 const PRAZO_DA_CONTAGEM_MS = 25_000;
-const lerComTeto = <T>(p: Promise<T>, ms = TETO_DA_PARTE_MS): Promise<T | null> => comTeto<T | null>(p, ms, null);
+/** `null` = ESTOUROU o teto. Erro de verdade (401 de token caído, 404, 5xx) PROPAGA: «o CRM recusou» não pode aparecer como «demorou». */
+const lerComTeto = <T>(p: Promise<T>, ms = TETO_DA_PARTE_MS): Promise<T | null> =>
+  new Promise<T | null>((ok, falha) => {
+    const t = setTimeout(() => ok(null), ms);
+    p.then(
+      (v) => (clearTimeout(t), ok(v)),
+      (e) => (clearTimeout(t), falha(e)),
+    );
+  });
+/** O que dizer de um erro de leitura do CRM: acesso recusado (token caído) é outra coisa que «não consegui ler». */
+export function recusaDoErro(e: unknown, oQue: string): { status: number; erro: string } {
+  const status = (e as { status?: number } | null)?.status;
+  if (status === 401 || status === 403) return { status: 502, erro: 'o CRM recusou o acesso desta unidade (token caído ou sem permissão): avise a Doutor Digital' };
+  return { status: 502, erro: `não consegui ${oQue} no CRM agora` };
+}
 const DEMOROU = 'o CRM demorou demais para responder — tente de novo em instantes';
 /** A conferência do modelo com teto: estourar é «não consegui ler» (transitório), nunca «modelo reprovado». */
 const conferirComTeto: typeof conferirModeloDaOnda = (ctx, caixa, def) => comTeto(conferirModeloDaOnda(ctx, caixa, def), TETO_DA_CONFERENCIA_MS, { ok: false as const, transitorio: true as const, motivo: DEMOROU });
@@ -123,8 +137,8 @@ export async function disparosHandler(req: Request, res: Response): Promise<void
             const c = await lerComTeto(caixaWhatsappOficial(ctx, id));
             if (!c) return { id, nome: `caixa ${id}`, oficial: false, motivo: DEMOROU };
             return c.ok ? { id, nome: c.nome, oficial: true, motivo: null } : { id, nome: `caixa ${id}`, oficial: false, motivo: c.motivo };
-          } catch {
-            return { id, nome: `caixa ${id}`, oficial: false, motivo: 'não consegui ler a caixa no CRM agora' };
+          } catch (e) {
+            return { id, nome: `caixa ${id}`, oficial: false, motivo: recusaDoErro(e, 'ler a caixa').erro };
           }
         }),
     );
@@ -186,8 +200,8 @@ export async function disparosOpcoesHandler(req: Request, res: Response): Promis
       return;
     }
     const [etiquetas, defs, modelos] = await Promise.all([
-      lerComTeto(chamar(ctx, 'GET', 'labels')),
-      lerComTeto(chamar(ctx, 'GET', 'custom_attribute_definitions', { query: { attribute_model: '0' } })),
+      lerComTeto(chamar(ctx, 'GET', 'labels').catch(() => null)),
+      lerComTeto(chamar(ctx, 'GET', 'custom_attribute_definitions', { query: { attribute_model: '0' } }).catch(() => null)),
       lerComTeto(modelosDaCaixa(ctx, caixa)),
     ]);
     if (!modelos) {
@@ -207,7 +221,10 @@ export async function disparosOpcoesHandler(req: Request, res: Response): Promis
     res.set('Cache-Control', 'no-store').json({ etiquetas: titulos.sort((a, b) => a.localeCompare(b)).slice(0, 200), atributos: [...atributos.values()].slice(0, 60), modelos });
   } catch (e) {
     logger.warn({ err: String(e), unit: r.unit.slug }, 'disparos: opções falharam');
-    res.status(502).json({ error: 'não consegui ler as etiquetas e os modelos no CRM agora' });
+    {
+      const m = recusaDoErro(e, 'ler as etiquetas e os modelos');
+      res.status(m.status).json({ error: m.erro });
+    }
   }
 }
 
@@ -264,7 +281,10 @@ export async function disparosContarHandler(req: Request, res: Response): Promis
     });
   } catch (e) {
     logger.warn({ err: String(e), unit: r.unit.slug }, 'disparos: contagem falhou');
-    res.status(502).json({ error: 'não consegui ler as conversas no CRM agora' });
+    {
+      const m = recusaDoErro(e, 'ler as conversas');
+      res.status(m.status).json({ error: m.erro });
+    }
   } finally {
     liberarContagem(r.unit.id);
   }
@@ -331,7 +351,10 @@ export async function disparosMontarHandler(req: Request, res: Response): Promis
     res.status(202).json({ ok: true, id: aberta.dados.id });
   } catch (e) {
     logger.warn({ err: String(e), unit: r.unit.slug }, 'disparos: montar falhou');
-    res.status(502).json({ error: 'não consegui ler os modelos no CRM agora' });
+    {
+      const m = recusaDoErro(e, 'ler os modelos');
+      res.status(m.status).json({ error: m.erro });
+    }
   }
 }
 
