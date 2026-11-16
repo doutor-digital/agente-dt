@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { dataCurta, estadoDoCartao, estadoMaisFraco, nomeDeGente, planejarRenomeacao } from './renomear-lead.js';
-import { renomearConta, type KommoDoRenomear } from './renomear-lead-worker.js';
+import { dataCurta, desdeDaUnidade, ehTituloGenerico, estadoDoCartao, estadoMaisFraco, nomeDaFranquia, nomeDeGente, nomesCompativeis, planejarRenomeacao, type NomesNaFranquia } from './renomear-lead.js';
+import { _limparParaTeste, renomearConta, type KommoDoRenomear } from './renomear-lead-worker.js';
 import type { KommoLead } from '../services/kommo.service.js';
 import type { MembroDoCrm } from './crm-compartilhado.js';
 
@@ -107,13 +107,129 @@ test('planejarRenomeacao: numeração "Lead 2 …" pelo MAIOR número já usado 
 });
 
 test('planejarRenomeacao: nome que a SDR já deu NUNCA é tocado', () => {
-  for (const nome of ['Simone Katia 26/10/26', 'Mauriza', 'Carla Ruth', 'Lead 26/10/26', 'Lead 2 26/10/2026', 'Sem Nome 24/10/26']) {
+  for (const nome of ['Simone Katia 26/10/26', 'Mauriza', 'Carla Ruth', 'Sem Nome 24/10/26', 'Leandro 16/11/2026', 'Lead Silva', 'Lead 26/10']) {
     assert.equal(planejarRenomeacao({ nomeDoLead: nome, nomeDoContato: 'Outra Pessoa', data: '26/10/26', nomesDoDia: [] }), null, nome);
   }
-  // os do Kommo ainda são "sem nome"
-  for (const nome of ['Lead #22647811', 'Lead 22647811', 'Lead', '', null]) {
+  // os do Kommo e os títulos genéricos ("Lead dd/mm/aaaa" do titulo-padrao, "Lead dd/mm/aa" nosso) são "sem nome"
+  for (const nome of ['Lead #22647811', 'Lead 22647811', 'Lead', '', null, 'Lead 16/11/2026', 'Lead 6 13/11/2026', 'lead 2 26/10/26', 'Lead 26/10/26']) {
     assert.ok(planejarRenomeacao({ nomeDoLead: nome, nomeDoContato: 'Ana Paula', data: '26/10/26', nomesDoDia: [] }), String(nome));
   }
+});
+
+test('ehTituloGenerico: reconhece o título do titulo-padrao e o nosso, e só esses', () => {
+  for (const g of ['Lead 16/11/2026', 'Lead 6 13/11/2026', 'LEAD 2 13/11/2026', 'Lead 16/11/26', 'Lead #123', '', null, undefined]) assert.equal(ehTituloGenerico(g), true, String(g));
+  for (const n of ['Alex Sandre 13/11/26', 'Alex Sandre 13/11/2026', 'Lead Silva 13/11/2026', 'Maria', 'Lead 13/11']) assert.equal(ehTituloGenerico(n), false, n);
+});
+
+// ── de onde vem o nome: franquia → contato → (nada) ──────────────────────────────────────────────────────────
+
+test('planejarRenomeacao: título do titulo-padrao vira o nome do contato (o caso de Petrópolis, 13/11)', () => {
+  const p = planejarRenomeacao({ nomeDoLead: 'Lead 6 13/11/2026', nomeDoContato: 'alex sandre', data: '13/11/26', nomesDoDia: [] });
+  assert.deepEqual(p, { tipo: 'nome', para: 'Alex Sandre 13/11/26', fonte: 'contato', motivo: 'nome do contato' });
+});
+
+test('planejarRenomeacao: a franquia vence o contato quando é UM paciente e o nome confere (traz o nome inteiro)', () => {
+  const p = planejarRenomeacao({
+    nomeDoLead: 'Lead 16/11/2026',
+    nomeDoContato: 'Alex',
+    franquia: { tipo: 'pacientes', nomes: ['ALEX SANDRE DA SILVA'] },
+    data: '16/11/26',
+    nomesDoDia: [],
+  });
+  assert.equal(p?.para, 'Alex Sandre da Silva 16/11/26');
+  assert.equal(p?.tipo === 'nome' && p.fonte, 'franquia');
+});
+
+test('planejarRenomeacao: nome comprido da franquia vira "Primeiro Último"', () => {
+  const p = planejarRenomeacao({ nomeDoLead: 'Lead 1 16/11/2026', nomeDoContato: 'Maria', franquia: { tipo: 'pacientes', nomes: ['maria aparecida da silva santos'] }, data: '16/11/26', nomesDoDia: [] });
+  assert.equal(p?.para, 'Maria Santos 16/11/26');
+});
+
+test('planejarRenomeacao: DOIS pacientes no mesmo telefone (mãe e filha) → não usa a franquia, fica o nome do contato', () => {
+  const p = planejarRenomeacao({
+    nomeDoLead: 'Lead 3 16/11/2026',
+    nomeDoContato: 'Maria Souza',
+    franquia: { tipo: 'pacientes', nomes: ['Maria Souza', 'Júlia Souza'] },
+    data: '16/11/26',
+    nomesDoDia: [],
+  });
+  assert.equal(p?.para, 'Maria Souza 16/11/26');
+  assert.equal(p?.tipo === 'nome' && p.fonte, 'contato');
+  assert.match(p?.motivo ?? '', /2 pacientes no mesmo telefone/);
+  // e sem nome de contato aproveitável, dois pacientes não dão nome algum: o genérico fica
+  const q = planejarRenomeacao({ nomeDoLead: 'Lead 3 16/11/2026', nomeDoContato: '🙏', franquia: { tipo: 'pacientes', nomes: ['Maria Souza', 'Júlia Souza'] }, data: '16/11/26', nomesDoDia: [] });
+  assert.equal(q?.tipo, 'deixa');
+});
+
+test('planejarRenomeacao: o contato tem outro nome que o paciente da franquia (familiar escrevendo) → não usa a franquia', () => {
+  const p = planejarRenomeacao({ nomeDoLead: 'Lead 16/11/2026', nomeDoContato: 'Carla', franquia: { tipo: 'pacientes', nomes: ['Júlia Souza'] }, data: '16/11/26', nomesDoDia: [] });
+  assert.equal(p?.para, 'Carla 16/11/26');
+  assert.match(p?.motivo ?? '', /outro nome que o contato/);
+});
+
+test('planejarRenomeacao: sobrenome em comum NÃO confere (Maria Silva × Ana Silva = mãe e filha) → nome do contato', () => {
+  const p = planejarRenomeacao({ nomeDoLead: 'Lead 16/11/2026', nomeDoContato: 'Maria Silva', franquia: { tipo: 'pacientes', nomes: ['Ana Silva'] }, data: '16/11/26', nomesDoDia: [] });
+  assert.equal(p?.para, 'Maria Silva 16/11/26');
+  assert.equal(p?.tipo === 'nome' && p.fonte, 'contato');
+  assert.ok(nomesCompativeis('Alex', 'Alex Sandre'));
+  assert.ok(nomesCompativeis('Lucilene coelho', 'LUCILENE COELHO SENDRA'));
+  assert.ok(nomesCompativeis('João', 'JOAO DA SILVA'), 'sem acento, caixa ou "da"');
+  assert.ok(!nomesCompativeis('Maria Silva', 'Ana Silva'));
+  assert.ok(!nomesCompativeis('Maria Eduarda', 'Maria Clara Souza'), 'primeiro nome composto: outra pessoa');
+  assert.ok(!nomesCompativeis('Alex Sandre Silva', 'Alex'), 'contato mais completo que o cadastro: fica o do contato');
+  const p2 = planejarRenomeacao({ nomeDoLead: 'Lead 16/11/2026', nomeDoContato: 'Alex Sandre Silva', franquia: { tipo: 'pacientes', nomes: ['Alex'] }, data: '16/11/26', nomesDoDia: [] });
+  assert.equal(p2?.para, 'Alex Sandre Silva 16/11/26');
+});
+
+test('planejarRenomeacao: "Lead #123" do Kommo sem nome é numerado junto com os "Lead N dd/mm/aaaa" do titulo-padrao do mesmo dia', () => {
+  const p = planejarRenomeacao({ nomeDoLead: 'Lead #9', nomeDoContato: '-', data: '16/11/26', nomesDoDia: ['Lead 16/11/2026', 'Lead 2 16/11/2026', 'Lead 5 15/11/2026'] });
+  assert.equal(p?.para, 'Lead 3 16/11/26');
+});
+
+test('planejarRenomeacao: contato sem nome de pessoa NÃO usa a franquia (não dá para conferir se é a mãe ou a filha) — o genérico fica, com o motivo', () => {
+  const p = planejarRenomeacao({ nomeDoLead: 'Lead 16/11/2026', nomeDoContato: '🙏🏼', franquia: { tipo: 'pacientes', nomes: ['Júlia Souza'] }, data: '16/11/26', nomesDoDia: [] });
+  assert.equal(p?.tipo, 'deixa');
+  assert.match(p?.motivo ?? '', /há paciente da franquia neste telefone, mas o contato não tem nome de pessoa/);
+  assert.doesNotMatch(p?.motivo ?? '', /Júlia|Souza/, 'o motivo não carrega o nome do paciente');
+});
+
+test('planejarRenomeacao: franquia sem o telefone (ou só lead lá) → nome do contato', () => {
+  for (const franquia of [{ tipo: 'nenhum' as const }, null, undefined]) {
+    const p = planejarRenomeacao({ nomeDoLead: 'Lead 16/11/2026', nomeDoContato: 'Bia Souza', franquia, data: '16/11/26', nomesDoDia: [] });
+    assert.equal(p?.para, 'Bia Souza 16/11/26');
+  }
+});
+
+test('planejarRenomeacao: contato sem nome de pessoa NÃO troca genérico por genérico — o título fica como está', () => {
+  for (const contato of ['-', '', null, 'Deus é Deus', '🙏🏼', '+55 24 99999-9999']) {
+    for (const titulo of ['Lead 16/11/2026', 'Lead 6 13/11/2026', 'Lead 16/11/26']) {
+      const p = planejarRenomeacao({ nomeDoLead: titulo, nomeDoContato: contato, data: '16/11/26', nomesDoDia: [] });
+      assert.equal(p?.tipo, 'deixa', `${titulo} / ${contato}`);
+      assert.equal(p?.para, null);
+    }
+  }
+  // já o "Lead #123" do Kommo, sem nome nenhum, continua virando "Lead dd/mm/aa" (como sempre)
+  assert.equal(planejarRenomeacao({ nomeDoLead: 'Lead #123', nomeDoContato: '-', data: '16/11/26', nomesDoDia: [] })?.para, 'Lead 16/11/26');
+});
+
+test('nomeDaFranquia: só letras, capitalizado; lixo vira null', () => {
+  assert.equal(nomeDaFranquia('ALEX SANDRE'), 'Alex Sandre');
+  assert.equal(nomeDaFranquia('  maria   da  silva '), 'Maria da Silva');
+  assert.equal(nomeDaFranquia('Ana Paula Souza'), 'Ana Paula Souza');
+  for (const lixo of ['', null, undefined, '12345', 'Maria 2', 'J', 'Maria 🌹', 'da de']) assert.equal(nomeDaFranquia(lixo), null, String(lixo));
+});
+
+test('desdeDaUnidade: começo do dia no fuso da unidade; fora da lista, inválido, futuro ou velho demais = null (vale 24 h)', () => {
+  const raw = 'doutor-hernia-petropolis=2026-11-13, outra=2026-01-01';
+  const agora = Date.UTC(2026, 10, 16, 15, 0, 0) / 1000;
+  assert.equal(desdeDaUnidade('doutor-hernia-petropolis', raw, TZ, agora), Date.UTC(2026, 10, 13, 3, 0, 0) / 1000, '13/11 00:00 em Brasília = 03:00 UTC');
+  assert.equal(desdeDaUnidade('doutor-hernia-petropolis', raw, 'America/Boa_Vista', agora), Date.UTC(2026, 10, 13, 4, 0, 0) / 1000);
+  assert.equal(desdeDaUnidade('doutor-hernia-caxias', raw, TZ, agora), null, 'unidade fora da lista');
+  assert.equal(desdeDaUnidade('outra', raw, TZ, agora), null, 'mais de 30 dias');
+  assert.equal(desdeDaUnidade('x', 'x=2026-12-01', TZ, agora), null, 'no futuro');
+  assert.equal(desdeDaUnidade('x', 'x=ontem', TZ, agora), null);
+  assert.equal(desdeDaUnidade('x', 'x=2026-11-31', TZ, agora), null, 'dia que não existe');
+  assert.equal(desdeDaUnidade('x', undefined, TZ, agora), null);
 });
 
 // ── qual chave vale para o cartão ────────────────────────────────────────────────────────────────────────────
@@ -146,15 +262,15 @@ test('estadoDoCartao: Kommo de uma unidade só vale a chave dela; dividido, a da
 
 // ── a rodada inteira, com um Kommo falso ─────────────────────────────────────────────────────────────────────
 
-interface Cartao { id: number; nome: string; contato: number | null; unidade?: string; minutosDeVida?: number }
+interface Cartao { id: number; nome: string; contato: number | null; unidade?: string; minutosDeVida?: number; status?: number }
 
-function cenario(cartoes: Cartao[], contatos: Record<number, string | null>, opcoes: { aoRelero?: (id: number) => string } = {}) {
+function cenario(cartoes: Cartao[], contatos: Record<number, string | null>, opcoes: { aoRelero?: (id: number) => string; telefones?: Record<number, string> } = {}) {
   const gravados: Array<{ id: number; nome: string }> = [];
   const lidos: number[] = [];
   const leads: KommoLead[] = cartoes.map((c) => ({
     id: c.id,
     name: c.nome,
-    status_id: 1,
+    status_id: c.status ?? 1,
     pipeline_id: 1,
     created_at: AGORA - (c.minutosDeVida ?? 30) * 60,
     custom_fields_values: c.unidade ? [{ field_id: 479786, field_name: '⌂ Unidade de atendimento', values: [{ value: c.unidade }] }] : [],
@@ -162,7 +278,7 @@ function cenario(cartoes: Cartao[], contatos: Record<number, string | null>, opc
   })) as KommoLead[];
   const kommo: KommoDoRenomear = {
     listLeadsNaJanela: async () => ({ leads, truncado: false }),
-    contatosBasicos: async (ids: number[]) => new Map(ids.filter((i) => i in contatos).map((i) => [i, { nome: contatos[i], telefone: null }])),
+    contatosBasicos: async (ids: number[]) => new Map(ids.filter((i) => i in contatos).map((i) => [i, { nome: contatos[i], telefone: opcoes.telefones?.[i] ?? null }])),
     getLead: async (id: number) => {
       lidos.push(id);
       const l = leads.find((x) => x.id === id)!;
@@ -246,7 +362,8 @@ test('numeração só conta o MESMO dia local: "Lead" de ontem não vira "Lead 2
     { 11: 'Ana Paula', 12: '-' },
   );
   await renomearConta({ unit, membros: null, kommo: c.kommo, estadoDe: estados({ [unit.slug]: 'ligado' }), agora: AGORA, registrar: c.registrar });
-  assert.deepEqual(c.gravados, [{ id: 2, nome: 'Lead 26/10/26' }]);
+  // o de ontem também é título genérico e ganha o nome (com a data DELE); o de hoje não herda a numeração de ontem
+  assert.deepEqual(c.gravados, [{ id: 1, nome: 'Ana Paula 25/10/26' }, { id: 2, nome: 'Lead 26/10/26' }]);
 });
 
 test('conta dividida: cada cartão vale a chave da SUA unidade; sem unidade vale a mais fraca; desligada não grava', async () => {
@@ -327,4 +444,231 @@ test('falha ao gravar: segue para os outros e para depois de 3 falhas seguidas',
   const r = await renomearConta({ unit, membros: null, kommo: c.kommo, estadoDe: estados({ [unit.slug]: 'ligado' }), agora: AGORA, registrar: c.registrar });
   assert.equal(r?.erros, 3);
   assert.equal(r?.gravados, 0);
+});
+
+// ── título genérico do titulo-padrao, franquia e estoque (16/11/2026) ────────────────────────────────────────
+
+const DIA = 24 * 60; // minutos
+const franquiaFalsa = (resp: Record<string, NomesNaFranquia>, chamadas: string[] = []) => async (_q: { id: string; slug: string }, tel: string | null): Promise<NomesNaFranquia> => {
+  chamadas.push(String(tel));
+  return resp[String(tel)] ?? { tipo: 'nenhum' };
+};
+
+test('rodada LIGADA: o "Lead N dd/mm/aaaa" do titulo-padrao vira o nome; franquia vence contato; dois pacientes não usa franquia; sem nome fica', async () => {
+  _limparParaTeste();
+  const c = cenario(
+    [
+      { id: 1, nome: 'Lead 26/10/2026', contato: 11 }, // contato com nome de pessoa
+      { id: 2, nome: 'Lead 2 26/10/2026', contato: 12 }, // franquia confere com o contato → nome inteiro
+      { id: 3, nome: 'Lead 3 26/10/2026', contato: 13 }, // mãe e filha no mesmo número
+      { id: 4, nome: 'Lead 4 26/10/2026', contato: 14 }, // contato não é nome de pessoa e franquia não conhece
+      { id: 5, nome: 'Simone Katia 26/10/26', contato: 15 }, // a SDR já nomeou: intocado
+    ],
+    { 11: 'Bia Souza', 12: 'Alex', 13: 'Maria Souza', 14: 'Deus é Deus', 15: 'Outra Pessoa' },
+    { telefones: { 11: '5524990000011', 12: '5524990000012', 13: '5524990000013', 14: '5524990000014', 15: '5524990000015' } },
+  );
+  const franquia = franquiaFalsa({
+    '5524990000012': { tipo: 'pacientes', nomes: ['ALEX SANDRE'] },
+    '5524990000013': { tipo: 'pacientes', nomes: ['Maria Souza', 'Júlia Souza'] },
+  });
+  const r = await renomearConta({ unit, membros: null, kommo: c.kommo, estadoDe: estados({ [unit.slug]: 'ligado' }), agora: AGORA, registrar: c.registrar, franquia });
+  assert.deepEqual(c.gravados, [
+    { id: 1, nome: 'Bia Souza 26/10/26' },
+    { id: 2, nome: 'Alex Sandre 26/10/26' },
+    { id: 3, nome: 'Maria Souza 26/10/26' },
+  ]);
+  assert.equal(r?.gravados, 3);
+  assert.equal(r?.semNomeParaDar, 1, 'o 4 fica "Lead 4 26/10/2026": nunca genérico por genérico');
+});
+
+test('rodada em SECO: mostra "gravaria" com a fonte, "pularia" para o que fica genérico, e não escreve nada', async () => {
+  _limparParaTeste();
+  const c = cenario(
+    [
+      { id: 1, nome: 'Lead 26/10/2026', contato: 11 },
+      { id: 2, nome: 'Lead 2 26/10/2026', contato: 12 },
+    ],
+    { 11: 'Alex', 12: '-' },
+    { telefones: { 11: '5524990000011' } },
+  );
+  const sim: Array<{ leadId: number; acao: string; valor: unknown; noCartao: unknown; motivo: unknown }> = [];
+  const registrar = ((_u: unknown, _a: string, s: { leadId: number; acao: string; valor: unknown; noCartao: unknown; motivo: unknown }) => { sim.push(s); }) as never;
+  const franquia = franquiaFalsa({ '5524990000011': { tipo: 'pacientes', nomes: ['Alex Sandre'] } });
+  const r = await renomearConta({ unit, membros: null, kommo: c.kommo, estadoDe: estados({ [unit.slug]: 'seco' }), agora: AGORA, registrar, franquia });
+  assert.deepEqual(c.gravados, []);
+  assert.deepEqual(c.lidos, []);
+  assert.equal(r?.simulados, 1);
+  assert.equal(r?.semNomeParaDar, 1);
+  assert.deepEqual(sim.map((s) => [s.leadId, s.acao, s.valor, s.noCartao]), [
+    [1, 'gravaria', 'Alex Sandre 26/10/26', 'Lead 26/10/2026'],
+    [2, 'pularia', 'Lead 2 26/10/2026', 'Lead 2 26/10/2026'],
+  ]);
+  assert.match(String(sim[0].motivo), /fonte: franquia\]/);
+});
+
+test('franquia sem resposta: espera algumas rodadas (a franquia completa o sobrenome) e depois segue com o nome do contato — nunca trava para sempre', async () => {
+  _limparParaTeste();
+  const fora = async (): Promise<NomesNaFranquia> => { throw new Error('franquia fora do ar'); };
+  const c = cenario([{ id: 1, nome: 'Lead 26/10/2026', contato: 11 }], { 11: 'Bia Souza' }, { telefones: { 11: '5524990000011' } });
+  const rodar = (franquia: typeof fora) => renomearConta({ unit, membros: null, kommo: c.kommo, estadoDe: estados({ [unit.slug]: 'ligado' }), agora: AGORA, registrar: c.registrar, franquia });
+  const r = await rodar(fora);
+  assert.deepEqual(c.gravados, []);
+  assert.equal(r?.adiados, 1);
+  for (let i = 0; i < 5; i++) await rodar(fora); // 6 esperas no total
+  assert.deepEqual(c.gravados, []);
+  const r7 = await rodar(fora); // a sétima segue sem a franquia
+  assert.deepEqual(c.gravados, [{ id: 1, nome: 'Bia Souza 26/10/26' }]);
+  assert.equal(r7?.gravados, 1);
+
+  // e se a franquia volta antes do limite, o nome vem dela
+  _limparParaTeste();
+  const d = cenario([{ id: 2, nome: 'Lead 26/10/2026', contato: 12 }], { 12: 'Alex' }, { telefones: { 12: '5524990000012' } });
+  await renomearConta({ unit, membros: null, kommo: d.kommo, estadoDe: estados({ [unit.slug]: 'ligado' }), agora: AGORA, registrar: d.registrar, franquia: fora });
+  // (a falha fica guardada 10 min: uma ficha que falha sempre não repete a mesma chamada a cada rodada)
+  await renomearConta({ unit, membros: null, kommo: d.kommo, estadoDe: estados({ [unit.slug]: 'ligado' }), agora: AGORA + 11 * 60, registrar: d.registrar, franquia: franquiaFalsa({ '5524990000012': { tipo: 'pacientes', nomes: ['Alex Sandre'] } }) });
+  assert.deepEqual(d.gravados, [{ id: 2, nome: 'Alex Sandre 26/10/26' }]);
+});
+
+test('contato sem nome de pessoa não gasta consulta à franquia (ela seria posta de lado de qualquer jeito)', async () => {
+  _limparParaTeste();
+  const chamadas: string[] = [];
+  const c = cenario([{ id: 1, nome: 'Lead 26/10/2026', contato: 11 }, { id: 2, nome: 'Lead 2 26/10/2026', contato: 12 }], { 11: '🙏', 12: 'Bia Souza' }, { telefones: { 11: '5524990000011', 12: '5524990000012' } });
+  await renomearConta({ unit, membros: null, kommo: c.kommo, estadoDe: estados({ [unit.slug]: 'ligado' }), agora: AGORA, registrar: c.registrar, franquia: franquiaFalsa({}, chamadas) });
+  assert.deepEqual(chamadas, ['5524990000012']);
+  assert.deepEqual(c.gravados, [{ id: 2, nome: 'Bia Souza 26/10/26' }]);
+});
+
+test('o título provisório do titulo-padrao espera 30 min (a Sofia tem a vez); o "Lead #123" do Kommo só 3', async () => {
+  _limparParaTeste();
+  const c = cenario(
+    [
+      { id: 1, nome: 'Lead 26/10/2026', contato: 11, minutosDeVida: 10 },
+      { id: 2, nome: 'Lead #2', contato: 12, minutosDeVida: 10 },
+      { id: 3, nome: 'Lead 2 26/10/2026', contato: 13, minutosDeVida: 31 },
+    ],
+    { 11: 'Ana Paula', 12: 'Bia Souza', 13: 'Célia Dias' },
+  );
+  await renomearConta({ unit, membros: null, kommo: c.kommo, estadoDe: estados({ [unit.slug]: 'ligado' }), agora: AGORA, registrar: c.registrar });
+  assert.deepEqual(c.gravados.map((g) => g.id).sort(), [2, 3]);
+});
+
+test('garantirIndice: pede o índice da franquia só das unidades com a chave em seco ou ligada', async () => {
+  _limparParaTeste();
+  const pedidos: string[] = [];
+  const c = cenario([], {});
+  await renomearConta({
+    unit, membros: [PETRO, CAXIAS], kommo: c.kommo, agora: AGORA, registrar: c.registrar, garantirIndice: (q) => { pedidos.push(q.slug); },
+    estadoDe: estados({ 'doutor-hernia-petropolis': 'seco' }),
+  });
+  assert.deepEqual(pedidos, ['doutor-hernia-petropolis']);
+});
+
+test('a resposta da franquia fica guardada: o mesmo telefone não consulta de novo na rodada seguinte', async () => {
+  _limparParaTeste();
+  const chamadas: string[] = [];
+  const mk = () => cenario([{ id: 1, nome: 'Lead 26/10/2026', contato: 11 }], { 11: 'Bia Souza' }, { telefones: { 11: '5524990000011' } });
+  const franquia = franquiaFalsa({}, chamadas);
+  await renomearConta({ unit, membros: null, kommo: mk().kommo, estadoDe: estados({ [unit.slug]: 'seco' }), agora: AGORA, registrar: (() => undefined) as never, franquia });
+  await renomearConta({ unit, membros: null, kommo: mk().kommo, estadoDe: estados({ [unit.slug]: 'seco' }), agora: AGORA, registrar: (() => undefined) as never, franquia });
+  assert.equal(chamadas.length, 1);
+});
+
+test('conta dividida: cartão SEM unidade não consulta a franquia (não se sabe qual olhar)', async () => {
+  _limparParaTeste();
+  const chamadas: string[] = [];
+  const c = cenario(
+    [
+      { id: 1, nome: 'Lead 26/10/2026', contato: 11, unidade: 'Petrópolis' },
+      { id: 2, nome: 'Lead 2 26/10/2026', contato: 12 },
+    ],
+    { 11: 'Ana Paula', 12: 'Bia Souza' },
+    { telefones: { 11: '5524990000011', 12: '5524990000012' } },
+  );
+  await renomearConta({
+    unit, membros: [PETRO, CAXIAS], kommo: c.kommo, agora: AGORA, registrar: c.registrar, franquia: franquiaFalsa({}, chamadas),
+    estadoDe: estados({ 'doutor-hernia-petropolis': 'ligado', 'doutor-hernia-caxias': 'ligado' }),
+  });
+  assert.deepEqual(chamadas, ['5524990000011']);
+  assert.deepEqual(c.gravados, [{ id: 1, nome: 'Ana Paula 26/10/26' }, { id: 2, nome: 'Bia Souza 26/10/26' }]);
+});
+
+test('estoque: sem RENOMEAR_LEAD_DESDE só vale 24 h; com a data, alcança os abertos desde aquele dia e nunca os fechados', async () => {
+  _limparParaTeste();
+  const cartoes: Cartao[] = [
+    { id: 1, nome: 'Lead 24/10/2026', contato: 11, minutosDeVida: 2 * DIA + 60 }, // 24/10 13h em Brasília: dentro de "desde 24/10"
+    { id: 2, nome: 'Lead 2 23/10/2026', contato: 12, minutosDeVida: 3 * DIA + 60 }, // 23/10: antes do dia pedido
+    { id: 3, nome: 'Lead 3 24/10/2026', contato: 13, minutosDeVida: 2 * DIA + 120, status: 143 }, // fechado
+    { id: 4, nome: 'Lead 26/10/2026', contato: 14, minutosDeVida: 30 }, // recente
+  ];
+  const nomes = { 11: 'Ana Paula', 12: 'Bia Souza', 13: 'Célia Dias', 14: 'Dora Lima' };
+  const padrao = cenario(cartoes, nomes);
+  await renomearConta({ unit, membros: null, kommo: padrao.kommo, estadoDe: estados({ [unit.slug]: 'ligado' }), agora: AGORA, registrar: padrao.registrar, pausaMs: 0 });
+  assert.deepEqual(padrao.gravados, [{ id: 4, nome: 'Dora Lima 26/10/26' }], 'padrão: só as últimas 24 h');
+
+  const c = cenario(cartoes, nomes);
+  const r = await renomearConta({ unit, membros: null, kommo: c.kommo, estadoDe: estados({ [unit.slug]: 'ligado' }), agora: AGORA, registrar: c.registrar, pausaMs: 0, desde: `${unit.slug}=2026-10-24` });
+  assert.deepEqual(c.gravados.map((g) => g.id).sort(), [1, 4]);
+  assert.equal(c.gravados.find((g) => g.id === 1)?.nome, 'Ana Paula 24/10/26', 'a data do nome é a da criação do cartão, não a de hoje');
+  assert.equal(r?.foraDaJanela, 1, 'o fechado; o de 23/10 nem entra na leitura');
+
+  // outra unidade na lista: a janela é por unidade
+  const o = cenario(cartoes, nomes);
+  await renomearConta({ unit, membros: null, kommo: o.kommo, estadoDe: estados({ [unit.slug]: 'ligado' }), agora: AGORA, registrar: o.registrar, pausaMs: 0, desde: 'doutor-hernia-caxias=2026-10-24' });
+  assert.deepEqual(o.gravados.map((g) => g.id), [4]);
+});
+
+test('estoque: no máximo 15 gravações por rodada (sem fazer o recente esperar) e o resto fica para a rodada seguinte', async () => {
+  _limparParaTeste();
+  const cartoes: Cartao[] = [];
+  const nomes: Record<number, string> = {};
+  for (let i = 1; i <= 40; i++) { cartoes.push({ id: i, nome: `Lead ${i} 24/10/2026`, contato: 100 + i, minutosDeVida: 2 * DIA }); nomes[100 + i] = 'Ana Paula'; }
+  cartoes.push({ id: 999, nome: 'Lead 26/10/2026', contato: 999, minutosDeVida: 40 });
+  nomes[999] = 'Zélia Souza';
+  const c = cenario(cartoes, nomes);
+  const r = await renomearConta({ unit, membros: null, kommo: c.kommo, estadoDe: estados({ [unit.slug]: 'ligado' }), agora: AGORA, registrar: c.registrar, pausaMs: 0, desde: `${unit.slug}=2026-10-20` });
+  assert.equal(c.gravados.filter((g) => g.id !== 999).length, 15);
+  assert.ok(c.gravados.some((g) => g.id === 999), 'o cartão novo não fica atrás do estoque');
+  assert.equal(r?.adiados, 25);
+});
+
+test('a janela do estoque estoura o teto de leitura: volta às 24 h em vez de derrubar o caminho normal', async () => {
+  _limparParaTeste();
+  const c = cenario(
+    [
+      { id: 1, nome: 'Lead 24/10/2026', contato: 11, minutosDeVida: 2 * DIA },
+      { id: 2, nome: 'Lead 26/10/2026', contato: 12, minutosDeVida: 30 },
+    ],
+    { 11: 'Ana Paula', 12: 'Bia Souza' },
+  );
+  const leituras: number[] = [];
+  const lista = c.kommo.listLeadsNaJanela;
+  c.kommo.listLeadsNaJanela = (async (campo: 'created_at', de: number, ate: number, ...resto: unknown[]) => {
+    leituras.push(de);
+    return leituras.length === 1 ? { leads: [], truncado: true } : (lista as unknown as (...a: unknown[]) => Promise<unknown>)(campo, de, ate, ...resto);
+  }) as never;
+  const r = await renomearConta({ unit, membros: null, kommo: c.kommo, estadoDe: estados({ [unit.slug]: 'ligado' }), agora: AGORA, registrar: c.registrar, pausaMs: 0, desde: `${unit.slug}=2026-10-20` });
+  assert.equal(leituras.length, 2);
+  assert.ok(leituras[1] > leituras[0], 'a segunda leitura começa mais tarde (24 h + folga)');
+  assert.deepEqual(c.gravados, [{ id: 2, nome: 'Bia Souza 26/10/26' }], 'só o recente; o estoque espera a janela caber');
+  assert.equal(r?.gravados, 1);
+  // e lembra por uma hora: a rodada seguinte já lê só as 24 h (não relê 8 páginas à toa)
+  await renomearConta({ unit, membros: null, kommo: c.kommo, estadoDe: estados({ [unit.slug]: 'ligado' }), agora: AGORA + 300, registrar: c.registrar, pausaMs: 0, desde: `${unit.slug}=2026-10-20` });
+  assert.equal(leituras.length, 3);
+  assert.equal(leituras[2], leituras[1] + 300);
+});
+
+test('genérico sem nome em nenhuma fonte: não gasta contato nem franquia de novo na hora seguinte', async () => {
+  _limparParaTeste();
+  let contatosLidos = 0;
+  const c = cenario([{ id: 1, nome: 'Lead 26/10/2026', contato: 11 }], { 11: '-' });
+  const original = c.kommo.contatosBasicos;
+  c.kommo.contatosBasicos = (async (ids: number[]) => { contatosLidos++; return original(ids); }) as never;
+  const rodar = (agora: number) => renomearConta({ unit, membros: null, kommo: c.kommo, estadoDe: estados({ [unit.slug]: 'ligado' }), agora, registrar: c.registrar });
+  const r1 = await rodar(AGORA);
+  assert.equal(r1?.semNomeParaDar, 1);
+  await rodar(AGORA + 5 * 60);
+  assert.equal(contatosLidos, 1, 'a segunda rodada nem leu o contato');
+  await rodar(AGORA + 61 * 60);
+  assert.equal(contatosLidos, 2, 'passada uma hora olha de novo (o contato pode ter ganhado nome)');
+  assert.deepEqual(c.gravados, []);
 });
