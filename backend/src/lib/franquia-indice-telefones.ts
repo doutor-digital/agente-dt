@@ -23,7 +23,8 @@
  *  - incremental depois da primeira carga inteira: só os pacientes novos (a partir da página onde parou, desde que a ordem
  *    "do mais antigo ao mais novo" se confirme) e os leads dos últimos dias; carga completa de novo a cada 7 dias;
  *  - pausa entre chamadas e teto de chamadas por carga: a franquia não pode sentir. Uma carga por vez no processo;
- *  - nunca roda para unidade que não tem a automação ligada ou em seco (`agendarIndice` só é chamado por quem está ativo).
+ *  - nunca roda para unidade que não tem alguma automação que usa o índice ligada ou em seco (`agendarIndice` só é chamado por quem
+ *    está ativo): `tipo-lead-chegada`, `calar-paciente-em-tratamento` e, SÓ nas unidades listadas em `RENOMEAR_LEAD_DESDE`, `renomear-lead`.
  */
 import { randomUUID } from 'node:crypto';
 import { Prisma, type Unit } from '@prisma/client';

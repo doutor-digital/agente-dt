@@ -26,6 +26,7 @@ import { chaveDoTelefone, consultarIndice, type Entrada } from './franquia-indic
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import { normalizarNome } from './kommo-schema.js';
 import { logger } from './logger.js';
+import { comTimeout } from './com-timeout.js';
 
 export const ID_CALAR_PACIENTE = 'calar-paciente-em-tratamento';
 /** Também é a `rule_key` do dedupe de 1 nota por dia por lead (`card_alert`). */
@@ -121,16 +122,6 @@ export interface DepsDaConsulta {
   indice?: typeof consultarIndice;
   ficha?: (idClient: number) => Promise<Pick<SpineClientDetail, 'schedules' | 'treatments'> | null>;
   agora?: () => Date;
-}
-
-function comTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error(`timeout de ${ms} ms`)), ms);
-    p.then(
-      (v) => { clearTimeout(t); resolve(v); },
-      (e) => { clearTimeout(t); reject(e); },
-    );
-  });
 }
 
 /**

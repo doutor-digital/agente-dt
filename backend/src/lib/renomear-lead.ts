@@ -7,11 +7,12 @@
  * mensagem — nunca acorda. Este módulo só decide; quem varre os leads recentes é o `renomear-lead-worker`.
  *
  * Regras:
- *  1. Só mexe em lead com título GENÉRICO (`ehTituloGenerico`): o do Kommo ("Lead #123", vazio), o provisório do
- *     `titulo-padrao` ("Lead dd/mm/aaaa", "Lead N dd/mm/aaaa") e o nosso ("Lead dd/mm/aa"). Nome que a SDR deu nunca é tocado.
+ *  1. Só mexe em lead com título GENÉRICO (`ehTituloGenerico`): o do Kommo ("Lead #123", vazio) e, SÓ em unidade listada em
+ *     `RENOMEAR_LEAD_DESDE`, também o provisório do `titulo-padrao` ("Lead dd/mm/aaaa", "Lead N dd/mm/aaaa") e o nosso
+ *     ("Lead dd/mm/aa"). Nome que a SDR deu nunca é tocado.
  *     (16/11/2026, pedido da clínica de Petrópolis: "a IA dá o nome do paciente ao cartão, nada de Lead 1, Lead 2". O
  *     `titulo-padrao` chega primeiro e o título dele não contava como "sem nome": o renomear nunca agia.)
- *  2. De onde vem o nome, nesta ordem: (a) o paciente da franquia achado pelo telefone, quando é UM só e bate com o contato;
+ *  2. De onde vem o nome (franquia só em unidade listada), nesta ordem: (a) o paciente da franquia achado pelo telefone, quando é UM só e o contato (2+ palavras) está contido no cadastro;
  *     (b) o nome do contato do WhatsApp, se tiver cara de nome de gente. → "Nome dd/mm/aa".
  *  3. Nada serviu: se o título é "Lead #123"/vazio do Kommo vira "Lead dd/mm/aa" ("Lead 2 dd/mm/aa" pro segundo do dia, a
  *     numeração do `titulo-padrao`); se já era genérico FICA COMO ESTÁ — nunca troca um genérico por outro.
@@ -30,11 +31,13 @@ export { ehSemNome };
 const LEAD_DATA_CURTA = /^lead(?: \d+)? \d{2}\/\d{2}\/\d{2}$/i;
 
 /**
- * O título não diz quem é o paciente: o do Kommo ("Lead #123", vazio), o provisório do `titulo-padrao` ("Lead 16/11/2026",
- * "Lead 6 13/11/2026") ou o nosso de 2 dígitos. Só estes podem ser reescritos; qualquer outro texto foi alguém que escreveu.
+ * O título não diz quem é o paciente. Sem `ampliado`: só o do Kommo ("Lead #123", vazio) — exatamente o que sempre foi. Com
+ * `ampliado` (só em unidade listada em `RENOMEAR_LEAD_DESDE`): também o provisório do `titulo-padrao` ("Lead 16/11/2026",
+ * "Lead 6 13/11/2026") e o nosso de 2 dígitos. Só estes podem ser reescritos; qualquer outro texto foi alguém que escreveu.
  */
-export function ehTituloGenerico(nome: string | null | undefined): boolean {
-  return ehSemNome(nome) || ehTituloPadrao(nome) || LEAD_DATA_CURTA.test(String(nome ?? '').trim());
+export function ehTituloGenerico(nome: string | null | undefined, ampliado = false): boolean {
+  if (ehSemNome(nome)) return true;
+  return ampliado && (ehTituloPadrao(nome) || LEAD_DATA_CURTA.test(String(nome ?? '').trim()));
 }
 
 const formatadores = new Map<string, Intl.DateTimeFormat>();
@@ -127,9 +130,11 @@ export type NomesNaFranquia =
 
 /**
  * O nome do paciente como a franquia cadastrou, arrumado para título de cartão: só letras (sem número/emoji/pontuação), com
- * a capitalização normal e, se for comprido (mais de 3 palavras de verdade), "Primeiro Último". `null` se não parece nome.
+ * a capitalização normal. Comprido (mais de 4 palavras ou mais de 3 de verdade) vira "Primeiro Último"; as palavras que o
+ * contato (`preservar`) já escreveu ficam ("Maria Aparecida" × "Maria Aparecida da Silva Santos" → "Maria Aparecida Santos").
+ * `null` se não parece nome. A conferência com o contato é feita contra o nome CRU; o encurtamento é só para exibir.
  */
-export function nomeDaFranquia(bruto: string | null | undefined): string | null {
+export function nomeDaFranquia(bruto: string | null | undefined, preservar?: string | null): string | null {
   const s = String(bruto ?? '').replace(/\s+/g, ' ').trim();
   if (!s || s.length > 80) return null;
   const palavras = s.split(' ');
@@ -138,28 +143,32 @@ export function nomeDaFranquia(bruto: string | null | undefined): string | null 
   }
   const significativas = palavras.filter((p) => !PARTICULAS.has(p.toLocaleLowerCase('pt-BR')));
   if (significativas.length === 0) return null;
-  // cabe no cartão: até 4 palavras com no máximo 3 de verdade ("Alex Sandre da Silva"); mais que isso, "Primeiro Último"
-  const escolhidas = palavras.length > 4 || significativas.length > 3 ? [significativas[0], significativas[significativas.length - 1]] : palavras;
+  let escolhidas = palavras;
+  if (palavras.length > 4 || significativas.length > 3) {
+    const doContato = new Set(palavrasDoNome(preservar ?? ''));
+    escolhidas = significativas.filter((p, i) => i === 0 || i === significativas.length - 1 || doContato.has(normalizar(p)));
+  }
   if (escolhidas.length === 1 && escolhidas[0].replace(/[^\p{L}]/gu, '').length < 2) return null;
   return escolhidas.map((p, i) => capitalizar(p, i === 0)).join(' ');
 }
 
 /** Pedaços de nome que servem para comparar (sem acento, 3+ letras, sem "da/de/do"). */
-function palavrasDoNome(nome: string): string[] {
+export function palavrasDoNome(nome: string): string[] {
   return normalizar(nome).split(' ').filter((p) => p.length >= 2 && !PARTICULAS.has(p));
 }
 
 /**
- * O nome do contato está CONTIDO no do paciente ("Alex" ⊂ "Alex Sandre"; "Lucilene Coelho" ⊂ "Lucilene Coelho Sendra")? Todas as
- * palavras do contato têm de estar no cadastro, sem acento/caixa e sem "da/de/do". Sobrenome em comum NÃO basta (a mãe "Maria
- * Silva" escrevendo pela filha "Ana Silva"), nem o primeiro nome composto ("Maria Eduarda" × "Maria Clara Souza"), e o contato
- * mais completo que o cadastro ("Alex Sandre Silva" × "Alex") fica com o do contato. Contato com um nome só ("Maria") não
- * distingue "Maria Clara" da mãe — esse é o limite do que dá para conferir sem a pessoa.
+ * O nome do contato está CONTIDO no cadastro do paciente (o nome CRU, não o encurtado)? Precisa de DUAS ou mais palavras de nome,
+ * todas no cadastro (sem acento/caixa e sem "da/de/do"): "Lucilene Coelho" ⊂ "Lucilene Coelho Sendra", "Ana Maria" ⊂ "Ana Maria
+ * Oliveira Souza". NÃO confere: sobrenome em comum (a mãe "Maria Silva" × a filha "Ana Silva"), primeiro nome composto ("Maria
+ * Eduarda" × "Maria Clara Souza"), contato mais completo que o cadastro ("Alex Sandre Silva" × "Alex") e contato de UMA palavra só
+ * ("Maria" casaria com a mãe e com a filha). Padrão seguro: o título alimenta o franquia-sync, que busca o paciente pelos termos
+ * do título, grava o idClient e move a etapa pela jornada dele — o paciente errado leva o cartão da mãe junto.
  */
-export function nomesCompativeis(doContato: string, doPaciente: string): boolean {
+export function nomesCompativeis(doContato: string, cadastro: string): boolean {
   const a = palavrasDoNome(doContato);
-  const b = new Set(palavrasDoNome(doPaciente));
-  return a.length > 0 && a.every((p) => b.has(p));
+  const b = new Set(palavrasDoNome(cadastro));
+  return a.length >= 2 && a.every((p) => b.has(p));
 }
 
 export type FonteDoNome = 'franquia' | 'contato';
@@ -173,10 +182,10 @@ export interface EscolhaDeNome {
 
 /**
  * Qual nome o cartão leva e, quando a franquia foi posta de lado, por quê. Ordem pedida pela clínica:
- *  (a) o paciente da franquia — só quando é UM paciente no telefone E o contato tem nome de pessoa contido no cadastro
- *      (traz o nome inteiro: "Alex" → "Alex Sandre"). O índice guarda um cadastro por telefone, então "mãe e filha no mesmo
- *      número" não aparece lá; o nome diferente é o único sinal, e SEM nome de pessoa no contato não há como
- *      conferir — nesse caso a franquia NÃO é usada (o palpite viraria o nome de outra pessoa no cartão);
+ *  (a) o paciente da franquia — só quando é UM paciente no telefone E o contato tem nome de pessoa de DUAS ou mais palavras, todas
+ *      no cadastro (traz o nome inteiro). O índice guarda um cadastro por telefone, então "mãe e filha no mesmo número" não
+ *      aparece lá; o nome diferente é o único sinal. Sem nome de pessoa no contato, ou com uma palavra só, não há como
+ *      conferir — a franquia NÃO é usada (o palpite viraria o nome de outra pessoa no cartão, e o franquia-sync casaria o paciente errado);
  *  (b) o nome do contato do WhatsApp, se tiver cara de nome de gente.
  * `escolha` null = nenhum serve; `nota` explica o que foi deixado de lado.
  */
@@ -194,10 +203,11 @@ export function resolverNome(nomeDoContato: string | null | undefined, franquia:
     if (nomes.length > 1) {
       nota = `${nomes.length} pacientes no mesmo telefone na franquia, não usei a franquia`;
     } else if (nomes.length === 1) {
-      const doPaciente = nomeDaFranquia(nomes[0]);
-      if (!doPaciente) nota = 'o cadastro da franquia não tem nome utilizável';
+      const exibir = nomeDaFranquia(nomes[0], doContato);
+      if (!exibir) nota = 'o cadastro da franquia não tem nome utilizável';
       else if (!doContato) nota = 'há paciente da franquia neste telefone, mas o contato não tem nome de pessoa para conferir — não usei a franquia';
-      else if (nomesCompativeis(doContato, doPaciente)) return { escolha: { nome: doPaciente, fonte: 'franquia', motivo: 'paciente da franquia achado pelo telefone, confere com o contato' }, nota: '' };
+      else if (palavrasDoNome(doContato).length < 2) nota = 'há paciente da franquia neste telefone, mas o contato tem uma palavra só — não dá para conferir, não usei a franquia';
+      else if (nomesCompativeis(doContato, nomes[0])) return { escolha: { nome: exibir, fonte: 'franquia', motivo: 'paciente da franquia achado pelo telefone, confere com o contato' }, nota: '' };
       else nota = 'o paciente da franquia tem outro nome que o contato, não usei a franquia';
     }
   }
@@ -216,6 +226,8 @@ export interface EntradaRenomeacao {
   data: string;
   /** nomes de OUTROS leads da unidade (para a numeração do "Lead N dd/mm/aa" do dia) */
   nomesDoDia: readonly string[];
+  /** unidade listada em RENOMEAR_LEAD_DESDE: reconhece também o título do titulo-padrao (omitido = comportamento de sempre) */
+  ampliado?: boolean;
 }
 
 export type PlanoDeRenomeacao =
@@ -228,39 +240,65 @@ export type PlanoDeRenomeacao =
 
 /** O que o lead deve passar a se chamar, ou `null` se não é para mexer (a SDR já deu nome). */
 export function planejarRenomeacao(e: EntradaRenomeacao): PlanoDeRenomeacao | null {
-  if (!ehTituloGenerico(e.nomeDoLead)) return null;
+  if (!ehTituloGenerico(e.nomeDoLead, e.ampliado)) return null;
   const { escolha, nota } = resolverNome(e.nomeDoContato, e.franquia);
   if (escolha) return { tipo: 'nome', para: `${escolha.nome} ${e.data}`, fonte: escolha.fonte, motivo: escolha.motivo };
   const bruto = String(e.nomeDoContato ?? '').trim();
   const motivo = [!bruto || bruto === '-' ? 'contato sem nome' : 'nome do contato não parece nome de pessoa', nota].filter(Boolean).join('; ');
   // "Lead N dd/mm/aaaa" do titulo-padrao e "Lead N dd/mm/aa" nosso são do mesmo dia e da mesma numeração
-  if (ehSemNome(e.nomeDoLead)) return { tipo: 'lead', para: montarTituloPadrao(e.data, e.nomesDoDia.map(aDataCurta)), motivo };
+  if (ehSemNome(e.nomeDoLead)) return { tipo: 'lead', para: montarTituloPadrao(e.data, e.ampliado ? e.nomesDoDia.map(aDataCurta) : [...e.nomesDoDia]), motivo };
   return { tipo: 'deixa', para: null, motivo: `${motivo}; o título genérico fica como está` };
 }
 
 /**
- * Janela por unidade para alcançar o estoque (cartões com mais de 24 h): `RENOMEAR_LEAD_DESDE` = `slug=AAAA-MM-DD,outro=AAAA-MM-DD`.
- * Devolve o instante (epoch s) em que começa esse dia no fuso da unidade, ou `null` (unidade fora da lista, data inválida,
- * no futuro ou mais velha que `MAX_DIAS_DE_ESTOQUE`: o padrão de 24 h vale).
+ * `RENOMEAR_LEAD_DESDE` = `slug=AAAA-MM-DD,outro=AAAA-MM-DD`: UM parser para tudo. É a lista das unidades em que o renomear faz o
+ * trabalho novo (reconhece o título do titulo-padrao, consulta a franquia, alcança o estoque). Unidade fora da lista: o
+ * comportamento de sempre, intacto.
+ */
+export function entradasDeDesde(raw: string | undefined): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const par of (raw ?? '').replace(/^['"]|['"]$/g, '').split(',')) {
+    const [s, d] = par.split('=').map((x) => x.trim());
+    // a primeira entrada de data válida do slug vale; uma inválida só fica se não houver outra (para o aviso do log)
+    if (s && d && (!m.has(s) || (!DATA_ISO.test(m.get(s) ?? '') && DATA_ISO.test(d)))) m.set(s, d);
+  }
+  return m;
+}
+
+const DATA_ISO = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Dia que existe no calendário (o V8 aceita 31/02 e devolve março: isso é erro de digitação, não "outro dia"). */
+function diaValido(d: string): boolean {
+  const ms = Date.parse(`${d}T12:00:00Z`);
+  return DATA_ISO.test(d) && Number.isFinite(ms) && new Date(ms).toISOString().slice(0, 10) === d;
+}
+
+/**
+ * A unidade está LISTADA em `RENOMEAR_LEAD_DESDE` (data que existe)? É o interruptor do trabalho novo e NÃO expira: só a janela do
+ * estoque (`desdeDaUnidade`) vale até 30 dias — depois disso a unidade segue listada, só deixa de alcançar cartões antigos.
+ */
+export function unidadeListada(slug: string, raw: string | undefined): boolean {
+  const d = entradasDeDesde(raw).get(slug);
+  return !!d && diaValido(d);
+}
+
+/**
+ * O instante (epoch s) em que começa o dia pedido para a unidade, no fuso dela, ou `null` (unidade fora da lista, data inválida,
+ * inexistente, no futuro ou mais velha que `MAX_DIAS_DE_ESTOQUE`). É só a JANELA DO ESTOQUE; quem diz se a unidade faz o trabalho
+ * novo é `unidadeListada`.
  */
 export const MAX_DIAS_DE_ESTOQUE = 30;
 export function desdeDaUnidade(slug: string, raw: string | undefined, tz: string, agora: number): number | null {
-  for (const par of (raw ?? '').replace(/^['"]|['"]$/g, '').split(',')) {
-    const [s, d] = par.split('=').map((x) => x.trim());
-    if (s !== slug || !d || !/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;
-    const fuso = fusoValido(tz) ? tz : FUSO_PADRAO;
-    // meia-noite local do dia pedido: parte de 12:00 UTC (o dia local é o mesmo em qualquer fuso do Brasil) e volta ao início do dia
-    const ms = Date.parse(`${d}T12:00:00Z`);
-    // o V8 aceita 31/02 e devolve março: dia que não existe é erro de digitação, não "outro dia"
-    if (!Number.isFinite(ms) || new Date(ms).toISOString().slice(0, 10) !== d) continue;
-    const meioDia = ms / 1000;
-    const hhmm = new Intl.DateTimeFormat('en-GB', { timeZone: fuso, hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(meioDia * 1000));
-    const [h, m] = hhmm.split(':').map(Number);
-    const epoch = meioDia - (h * 3600 + m * 60);
-    if (epoch > agora || agora - epoch > MAX_DIAS_DE_ESTOQUE * 86_400) return null;
-    return epoch;
-  }
-  return null;
+  const d = entradasDeDesde(raw).get(slug);
+  if (!d || !diaValido(d)) return null;
+  const fuso = fusoValido(tz) ? tz : FUSO_PADRAO;
+  // meia-noite local do dia pedido: parte de 12:00 UTC (o dia local é o mesmo em qualquer fuso do Brasil) e volta ao início do dia
+  const meioDia = Date.parse(`${d}T12:00:00Z`) / 1000;
+  const hhmm = new Intl.DateTimeFormat('en-GB', { timeZone: fuso, hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(meioDia * 1000));
+  const [h, m] = hhmm.split(':').map(Number);
+  const epoch = meioDia - (h * 3600 + m * 60);
+  if (epoch > agora || agora - epoch > MAX_DIAS_DE_ESTOQUE * 86_400) return null;
+  return epoch;
 }
 
 /** Estados da automação, do mais fraco ao mais forte — para decidir por cartão sem dono. */
