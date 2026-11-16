@@ -101,9 +101,19 @@ export function precoDaCategoria(linhas: readonly LinhaDeCusto[], categoria: str
 export async function lerPrecoDaUnidade(unitId: string, categoria: string | null | undefined, agora: Date = new Date()): Promise<PrecoPorMensagem | null> {
   if (!categoria) return null;
   const linhas = await prisma.whatsappCostDaily.findMany({
-    where: { unitId, date: { gte: new Date(agora.getTime() - DIAS_DA_TABELA_DE_CUSTO * 86_400_000) }, pricingCategory: { startsWith: familia(categoria), mode: 'insensitive' } },
+    // O filtro inteiro vai para o SQL (cobrança regular, Brasil, amostra mínima, custo > 0): sobram poucas linhas (≤ 2 por dia) e o dia mais caro nunca fica de fora de um corte sem ordem.
+    where: {
+      unitId,
+      date: { gte: new Date(agora.getTime() - DIAS_DA_TABELA_DE_CUSTO * 86_400_000) },
+      pricingCategory: { startsWith: familia(categoria), mode: 'insensitive' },
+      pricingType: { equals: 'REGULAR', mode: 'insensitive' },
+      OR: [{ country: { equals: 'BR', mode: 'insensitive' } }, { country: '' }],
+      volume: { gte: 5 },
+      costUsd: { gt: 0 },
+    },
     select: { pricingCategory: true, pricingType: true, country: true, volume: true, costUsd: true },
-    take: 2_000,
+    orderBy: { date: 'desc' },
+    take: 5_000,
   });
   return precoDaCategoria(linhas.map((l) => ({ ...l, costUsd: Number(l.costUsd) })), categoria);
 }
@@ -185,10 +195,14 @@ export interface Ritmo {
   limitadoPor: 'dia' | 'hora' | 'gasto';
 }
 
-/** Quantas mensagens por dia cabem no teto de gasto (null = preço desconhecido: o gasto não limita, as outras travas valem). */
-export const mensagensPorGasto = (tetoReais: number, porMensagemBrl: number | null): number | null => (porMensagemBrl && porMensagemBrl > 0 ? Math.floor(tetoReais / porMensagemBrl) : null);
+/** A conta ÚNICA do teto de gasto (a rodada e a tela usam esta): quantas mensagens ainda cabem em `tetoReais − gastoBrl` ao preço dado. */
+export const mensagensQueCabem = (tetoReais: number, gastoBrl: number, porMensagemBrl: number): number => Math.max(0, Math.floor(Math.max(0, tetoReais - gastoBrl) / porMensagemBrl + 1e-9));
+
+/** Quantas mensagens por dia cabem no teto de gasto num dia SEM gasto (null = sem preço: nunca acontece na rodada, que usa a reserva). */
+export const mensagensPorGasto = (tetoReais: number, porMensagemBrl: number | null): number | null => (porMensagemBrl && porMensagemBrl > 0 ? mensagensQueCabem(tetoReais, 0, porMensagemBrl) : null);
 
 export function ritmoDaOnda(a: { pessoas: number; freios: Freios; tetoReais: number; porMensagemBrl: number | null }): Ritmo {
+  // o ritmo de um dia CHEIO: usa a mesma conta da rodada (`mensagensQueCabem`), com gasto zero
   const horas = Math.max(1, a.freios.janelaFim - a.freios.janelaInicio);
   const porHoraNaJanela = a.freios.tetoPorHora * horas;
   const gasto = mensagensPorGasto(a.tetoReais, a.porMensagemBrl);
@@ -198,8 +212,10 @@ export function ritmoDaOnda(a: { pessoas: number; freios: Freios; tetoReais: num
   return { porHora: a.freios.tetoPorHora, porDia, horasDaJanela: horas, dias: porDia > 0 ? Math.ceil(a.pessoas / porDia) : Infinity, soDiasUteis: a.freios.soDiasUteis, limitadoPor };
 }
 
-/** Os freios do motor com o teto de gasto: o teto por 24 h nunca passa de `tetoReais / preço por mensagem` (preço desconhecido: só as outras travas). */
-export function freiosComTetoDeGasto(f: Freios, tetoReais: number, porMensagemBrl: number | null): Freios {
-  const cabem = mensagensPorGasto(tetoReais, porMensagemBrl);
-  return cabem === null ? f : { ...f, tetoPorDia: Math.min(f.tetoPorDia, Math.max(0, cabem)) };
+/**
+ * Os freios do motor com o teto de gasto: o teto por 24 h nunca passa de `já mandadas nas 24 h + as que ainda cabem em reais`. O que cabe vem de `orcamentoDeGasto`
+ * (gasto por categoria das 24 h, não «teto ÷ preço» comparado com a contagem de mensagens de qualquer categoria).
+ */
+export function freiosComTetoDeGasto(f: Freios, jaMandadasNas24h: number, cabemPeloGasto: number | null): Freios {
+  return cabemPeloGasto === null ? f : { ...f, tetoPorDia: Math.min(f.tetoPorDia, jaMandadasNas24h + Math.max(0, cabemPeloGasto)) };
 }

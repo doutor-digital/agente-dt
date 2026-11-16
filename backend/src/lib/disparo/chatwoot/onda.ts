@@ -234,7 +234,7 @@ export async function aprovarOndaChatwoot(
   if (!custo.conhecido && args.confirmarCustoDesconhecido !== true) return falha(409, `${PREFIXO_CUSTO_DESCONHECIDO}: ${custo.nota}. Para aprovar mesmo assim, confirme explicitamente.`);
   const ctx = (deps.ctx ?? ctxDaUnidadeNoCrm)(onda.unit.slug);
   if (!ctx?.conta || ctx.conta.conta !== onda.contaChatwoot || onda.caixaChatwoot == null) return falha(422, 'a unidade não tem a conta do CRM deste disparo');
-  const conf = await (deps.conferir ?? conferirModeloDaOnda)(ctx, onda.caixaChatwoot, { template: onda.template, idioma: onda.idioma, textoModelo: onda.textoModelo, variaveis: (onda.variaveis as unknown[]).map(String) });
+  const conf = await (deps.conferir ?? conferirModeloDaOnda)(ctx, onda.caixaChatwoot, { template: onda.template, idioma: onda.idioma, textoModelo: onda.textoModelo, variaveis: (onda.variaveis as unknown[]).map(String), categoria: onda.categoriaModelo });
   if (!conf.ok) return falha(conf.transitorio ? 502 : 422, conf.motivo);
 
   const r = await prisma.disparoOnda.updateMany({

@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { prisma } from './prisma.js';
 import { FREIOS_PADRAO } from './disparo/freios.js';
 import * as custoMod from './disparo/chatwoot/custo.js';
-import { avisoDoTetoDeGasto, estimarCusto, freiosComTetoDeGasto, mensagensPorGasto, precoDaCategoria, ritmoDaOnda, tetoReaisPorDia, TETO_REAIS_DIA_PADRAO, cambioDoDia, _esquecerCambio, type LinhaDeCusto } from './disparo/chatwoot/custo.js';
+import { avisoDoTetoDeGasto, estimarCusto, mensagensQueCabem, freiosComTetoDeGasto, mensagensPorGasto, precoDaCategoria, ritmoDaOnda, tetoReaisPorDia, TETO_REAIS_DIA_PADRAO, cambioDoDia, _esquecerCambio, type LinhaDeCusto } from './disparo/chatwoot/custo.js';
 
 const originais = new Map<string, PropertyDescriptor | undefined>();
 function falso(modelo: string, metodos: Record<string, unknown>): void {
@@ -98,10 +98,15 @@ test('ritmo: o teto por dia, o por hora × a janela e o de gasto — o menor val
 test('freios com teto de gasto: o teto por 24 h nunca passa de teto ÷ preço; sem preço, só os outros tetos', () => {
   assert.equal(mensagensPorGasto(50, 0.35), 142);
   assert.equal(mensagensPorGasto(50, null), null);
-  assert.equal(freiosComTetoDeGasto(FREIOS_PADRAO, 50, 0.35).tetoPorDia, 100, 'o teto de mensagens (100) é menor: vale');
-  assert.equal(freiosComTetoDeGasto(FREIOS_PADRAO, 20, 0.35).tetoPorDia, 57);
-  assert.equal(freiosComTetoDeGasto(FREIOS_PADRAO, 0.1, 0.35).tetoPorDia, 0);
-  assert.equal(freiosComTetoDeGasto(FREIOS_PADRAO, 20, null), FREIOS_PADRAO);
+  // (freios, já mandadas nas 24 h, ainda cabem em reais): o teto de 24 h é «já mandadas + cabem», nunca passa do teto de mensagens
+  assert.equal(freiosComTetoDeGasto(FREIOS_PADRAO, 0, 142).tetoPorDia, 100, 'o teto de mensagens (100) é menor: vale');
+  assert.equal(freiosComTetoDeGasto(FREIOS_PADRAO, 0, 57).tetoPorDia, 57);
+  assert.equal(freiosComTetoDeGasto(FREIOS_PADRAO, 30, 20).tetoPorDia, 50, 'já mandou 30; cabem mais 20: teto de 50 nas 24 h');
+  assert.equal(freiosComTetoDeGasto(FREIOS_PADRAO, 25, 0).tetoPorDia, 25, 'cabem 0: o teto é o que já saiu — nada mais sai');
+  assert.equal(freiosComTetoDeGasto(FREIOS_PADRAO, 0, null), FREIOS_PADRAO);
+  assert.equal(mensagensQueCabem(50, 50, 0.25), 0);
+  assert.equal(mensagensQueCabem(50, 60, 0.25), 0, 'gasto acima do teto: zero, nunca negativo');
+  assert.equal(mensagensQueCabem(50, 45, 2), 2);
 });
 
 test('câmbio: o do Kommo (cotacaoDoDolar), guardado; falha não fica presa por muito tempo', async () => {
@@ -132,7 +137,7 @@ test('o preço vem da tabela de custo da PRÓPRIA unidade (whatsapp_cost_daily) 
 });
 
 test('teto de gasto NÃO falha aberto: se o banco ou o câmbio falhar depois de um preço bom, vale o último preço; várias categorias na unidade valem pelo MAIOR preço', async () => {
-  const { precoEmReaisDoBanco, maiorPrecoDasOndas, _esquecerPrecosDeGasto } = await import('./disparo/chatwoot/rodada.js');
+  const { precoEmReaisDoBanco, maiorPrecoDasOndas, _esquecerPrecosDeGasto } = await import('./disparo/chatwoot/gasto.js');
   const { _definirCambio } = await import('./disparo/chatwoot/custo.js');
   _esquecerPrecosDeGasto();
   _definirCambio(5.6);
@@ -171,4 +176,94 @@ test('ritmo com preço de reserva: o teto de gasto limita mesmo sem histórico (
   const e = estimarCusto({ pessoas: 100, categoria: 'MARKETING', preco: null, cambio: 5.6, env: {} });
   const r = ritmoDaOnda({ pessoas: 100, freios: FREIOS_PADRAO, tetoReais: 50, porMensagemBrl: e.porMensagemBrl });
   assert.deepEqual([r.porDia, r.dias, r.limitadoPor], [25, 4, 'gasto']);
+});
+
+test('o último preço bom EXPIRA em 24 h: depois disso, com a leitura falhando, vale a RESERVA (nunca um preço velho para sempre)', async () => {
+  const { precoEmReaisDoBanco, _esquecerPrecosDeGasto, VALIDADE_DO_ULTIMO_PRECO_MS } = await import('./disparo/chatwoot/gasto.js');
+  const { _definirCambio } = await import('./disparo/chatwoot/custo.js');
+  _esquecerPrecosDeGasto();
+  _definirCambio(5.6);
+  const t0 = Date.now();
+  falso('whatsappCostDaily', { findMany: async () => [{ pricingCategory: 'MARKETING_LITE', pricingType: 'REGULAR', country: 'BR', volume: 100, costUsd: '6.25' }] });
+  assert.equal(await precoEmReaisDoBanco('u1', 'MARKETING'), 0.35);
+  falso('whatsappCostDaily', { findMany: async () => { throw new Error('banco fora'); } });
+  const agora = mock.method(Date, 'now', () => t0 + VALIDADE_DO_ULTIMO_PRECO_MS - 60_000);
+  assert.equal(await precoEmReaisDoBanco('u1', 'MARKETING'), 0.35, 'falha com 23 h: o último preço bom');
+  agora.mock.mockImplementation(() => t0 + VALIDADE_DO_ULTIMO_PRECO_MS + 60_000);
+  assert.equal(await precoEmReaisDoBanco('u1', 'MARKETING'), 2, 'falha depois de 24 h: a reserva');
+});
+
+test('o gasto das 24 h é a soma POR CATEGORIA (envios × preço da categoria) e a conta que sobra usa o preço da onda atual; a leitura é agrupada no banco, no número todo', async () => {
+  const { orcamentoDeGasto, enviosPorCategoriaNoBanco } = await import('./disparo/chatwoot/gasto.js');
+  const preco = async (_u: string, c: string | null) => (c === 'MARKETING' ? 2 : 0.25);
+  const o = await orcamentoDeGasto({ unitId: 'u1', agora: new Date(), tetoReais: 50, precoAtual: 0.25, preco, ler: async () => [{ categoria: 'MARKETING', envios: 20 }, { categoria: 'UTILITY', envios: 40 }] });
+  assert.equal(o.gastoBrl, 50, '20 × 2,00 + 40 × 0,25');
+  assert.equal(o.cabem, 0);
+  const o2 = await orcamentoDeGasto({ unitId: 'u1', agora: new Date(), tetoReais: 50, precoAtual: 0.25, preco, ler: async () => [{ categoria: 'MARKETING', envios: 10 }] });
+  assert.equal(o2.cabem, 120);
+  // a leitura real: agrupa por onda no banco (do número: todas as unidades que o dividem) e junta a categoria de cada onda
+  const consultas: Array<Record<string, any>> = [];
+  falso('unitChatwoot', { findUnique: async () => ({ kapsoPhoneNumberId: 'n1' }), findMany: async () => [{ unitId: 'u1' }, { unitId: 'u2' }] });
+  falso('disparoDestinatario', { groupBy: async (a: Record<string, any>) => (consultas.push(a), [{ ondaId: 'a', _count: { _all: 20 } }, { ondaId: 'b', _count: { _all: 5 } }, { ondaId: 'c', _count: { _all: 3 } }]) });
+  falso('disparoOnda', { findMany: async () => [{ id: 'a', categoriaModelo: 'MARKETING' }, { id: 'b', categoriaModelo: 'MARKETING' }, { id: 'c', categoriaModelo: null }] });
+  const lido = await enviosPorCategoriaNoBanco('u1', new Date(0));
+  assert.deepEqual(lido, [{ categoria: 'MARKETING', envios: 25 }, { categoria: null, envios: 3 }]);
+  assert.deepEqual(consultas[0]!.where.unitId.in.sort(), ['u1', 'u2']);
+  assert.equal(consultas[0]!.where.onda.origem, 'chatwoot');
+});
+
+test('a leitura do preço filtra no banco (regular, Brasil, amostra mínima, custo > 0), então o dia mais caro nunca fica de fora de um corte sem ordem', async () => {
+  const { lerPrecoDaUnidade } = await import('./disparo/chatwoot/custo.js');
+  const consultas: Array<Record<string, any>> = [];
+  falso('whatsappCostDaily', { findMany: async (a: Record<string, any>) => (consultas.push(a), []) });
+  await lerPrecoDaUnidade('u1', 'MARKETING');
+  const w = consultas[0]!.where;
+  assert.deepEqual(w.pricingType, { equals: 'REGULAR', mode: 'insensitive' }, 'sem diferenciar caixa, como o cálculo em JS');
+  assert.deepEqual(w.OR, [{ country: { equals: 'BR', mode: 'insensitive' } }, { country: '' }]);
+  assert.deepEqual(w.volume, { gte: 5 });
+  assert.deepEqual(w.costUsd, { gt: 0 });
+  assert.deepEqual(consultas[0]!.orderBy, { date: 'desc' });
+});
+
+test('o aviso do teto de gasto sai UMA vez por dia DA UNIDADE (a data no fuso dela, não em UTC) e só quando o que parou foi o teto de gasto, sem ler texto de `parou`', async () => {
+  const { avisarSeParouPeloGasto, _esquecerAvisosDeGasto } = await import('./disparo/chatwoot/rodada.js');
+  _esquecerAvisosDeGasto();
+  const avisos: string[] = [];
+  const avisar = async (t: string) => void avisos.push(t);
+  const parou = { slug: 'x', unitId: 'u1', parou: 'teto atingido (3/h, 25/24h)', noDiaDepois: 25, tetoEfetivoDia: 25, tetoDoTierDia: 100, tetoReais: 50, gastoBrl: 50 };
+  await avisarSeParouPeloGasto(parou, avisar, '2026-11-17');
+  await avisarSeParouPeloGasto(parou, avisar, '2026-11-17');
+  assert.equal(avisos.length, 1);
+  await avisarSeParouPeloGasto(parou, avisar, '2026-11-18');
+  assert.equal(avisos.length, 2, 'dia seguinte da unidade: avisa de novo');
+  // parou pelo teto de MENSAGENS (o teto efetivo é o do tier) ou pela hora (ainda não chegou no teto de 24 h): não é o gasto
+  await avisarSeParouPeloGasto({ ...parou, unitId: 'u2', tetoEfetivoDia: 100, noDiaDepois: 100 }, avisar, '2026-11-17');
+  await avisarSeParouPeloGasto({ ...parou, unitId: 'u3', noDiaDepois: 10 }, avisar, '2026-11-17');
+  await avisarSeParouPeloGasto({ ...parou, unitId: 'u4', parou: 'fora da janela de horário' }, avisar, '2026-11-17');
+  assert.equal(avisos.length, 2);
+  assert.match(avisos[0]!, /POR NÚMERO/);
+});
+
+test('se o avisador FALHA, o aviso do teto de gasto não conta como dado: a rodada seguinte tenta de novo', async () => {
+  const { avisarSeParouPeloGasto, _esquecerAvisosDeGasto } = await import('./disparo/chatwoot/rodada.js');
+  _esquecerAvisosDeGasto();
+  const parou = { slug: 'x', unitId: 'u1', parou: 'teto atingido (0/h, 25/24h)', noDiaDepois: 25, tetoEfetivoDia: 25, tetoDoTierDia: 100, tetoReais: 50, gastoBrl: 50 };
+  let tentativas = 0;
+  await avisarSeParouPeloGasto(parou, async () => { tentativas++; throw new Error('telegram fora'); }, '2026-11-17');
+  await avisarSeParouPeloGasto(parou, async () => { tentativas++; }, '2026-11-17');
+  await avisarSeParouPeloGasto(parou, async () => { tentativas++; }, '2026-11-17');
+  assert.equal(tentativas, 2, 'falhou, tentou de novo, saiu; depois disso, nada mais no dia');
+});
+
+test('o preço é lido no máximo uma vez a cada 5 minutos por unidade e categoria (a rodada roda toda hora)', async () => {
+  const { precoEmReaisDoBanco, _esquecerPrecosDeGasto } = await import('./disparo/chatwoot/gasto.js');
+  const { _definirCambio } = await import('./disparo/chatwoot/custo.js');
+  _esquecerPrecosDeGasto();
+  _definirCambio(5.6);
+  let leituras = 0;
+  falso('whatsappCostDaily', { findMany: async () => (leituras++, [{ pricingCategory: 'MARKETING_LITE', pricingType: 'REGULAR', country: 'BR', volume: 100, costUsd: '6.25' }]) });
+  await precoEmReaisDoBanco('u1', 'MARKETING');
+  await precoEmReaisDoBanco('u1', 'MARKETING');
+  await precoEmReaisDoBanco('u1', 'UTILITY');
+  assert.equal(leituras, 2, 'uma por categoria');
 });

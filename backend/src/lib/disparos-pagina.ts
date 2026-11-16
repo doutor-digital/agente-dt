@@ -112,7 +112,7 @@ a{color:var(--brand)}
   async function api(method, path, body){
     var r = await fetch(comConta(path), { method: method, headers: cab(), body: method === 'GET' ? undefined : JSON.stringify(body || {}) });
     var j = await r.json().catch(function(){ return {}; });
-    if (!r.ok) { var er = new Error(j.error || ('erro ' + r.status)); if (r.status === 401) { S = null; pedirSessao(); } throw er; }
+    if (!r.ok) { var er = new Error(j.error || ('erro ' + r.status)); er.corpo = j; if (r.status === 401) { S = null; pedirSessao(); } throw er; }
     return j;
   }
   function enc(x){ return encodeURIComponent(x); }
@@ -357,7 +357,7 @@ a{color:var(--brand)}
     r.campanhas.forEach(function(k){
       var n = k.numeros, x = el('tr'), nome = el('td'); var a = el('a', null, k.nome); a.href = '#'; a.addEventListener('click', function(ev){ ev.preventDefault(); abrirOnda(k.id); }); nome.appendChild(a);
       nome.appendChild(el('small', 'mudo', ' · ' + (ESTADO[k.estado] || k.estado) + ' · ' + quando(k.criadoEm))); x.appendChild(nome);
-      [n.selecionadas, numeroComPct(n.enviadas, n.selecionadas), numeroComPct(n.entregues, n.enviadas), numeroComPct(n.lidas, n.enviadas), numeroComPct(n.responderam, n.enviadas), numeroComPct(n.pediramSair, n.enviadas), n.falharam, n.incertas || 0, k.gastoEstimadoBrl == null ? '—' : brl(k.gastoEstimadoBrl)].forEach(function(v){ x.appendChild(el('td', null, String(v))); });
+      [n.selecionadas, numeroComPct(n.enviadas, n.selecionadas), numeroComPct(n.entregues, n.enviadas), numeroComPct(n.lidas, n.enviadas), numeroComPct(n.responderam, n.enviadas), numeroComPct(n.pediramSair, n.enviadas), n.falharam, n.incertas || 0, k.gastoEstimadoBrl == null ? '—' : brl(k.gastoEstimadoBrl) + (k.gastoComReserva ? ' (reserva)' : '')].forEach(function(v){ x.appendChild(el('td', null, String(v))); });
       tb.appendChild(x);
     });
     t.appendChild(tb); var w = el('div', 'rolar'); w.appendChild(t); c.appendChild(w);
@@ -392,7 +392,7 @@ a{color:var(--brand)}
     if (o.custo && o.estado !== 'montando' && o.total > 0) col.appendChild(cartaoDeCusto(o));
     if (o.relatorio && o.relatorio.numeros.enviadas + o.relatorio.numeros.falharam + o.relatorio.numeros.incertas > 0) {
       var cr = el('div', 'card'); cr.appendChild(el('h2', null, 'Relatório')); var n = o.relatorio.numeros, fr2 = el('div', 'fatos');
-      if (o.gastoEstimadoBrl != null) fato(fr2, brl(o.gastoEstimadoBrl), 'gasto até agora (estimado pelas enviadas)');
+      if (o.gastoEstimadoBrl != null) fato(fr2, brl(o.gastoEstimadoBrl), o.gastoComReserva ? 'gasto até agora (estimado com preço de reserva: um teto)' : 'gasto até agora (estimado pelas enviadas)');
       fato(fr2, n.enviadas, 'enviadas'); fato(fr2, numeroComPct(n.entregues, n.enviadas), 'entregues'); fato(fr2, numeroComPct(n.lidas, n.enviadas), 'lidas'); fato(fr2, numeroComPct(n.responderam, n.enviadas), 'responderam (até 72 h)'); fato(fr2, numeroComPct(n.pediramSair, n.enviadas), 'pediram para sair'); fato(fr2, n.falharam, 'falharam'); if (n.incertas) fato(fr2, n.incertas, 'incertas (podem ter saído; não reenvia)');
       cr.appendChild(fr2);
       if (o.relatorio.porHora.length) { var ul2 = el('ul', 'lis'); o.relatorio.porHora.forEach(function(h){ ul2.appendChild(el('li', null, h.hora.replace(' ', ' às ') + 'h — ' + h.enviadas + ' enviadas')); }); cr.appendChild(el('div', 'rot mudo', 'Envios por hora (' + (o.relatorio.fuso || 'America/Sao_Paulo') + ')')); cr.appendChild(ul2); }
@@ -432,18 +432,18 @@ a{color:var(--brand)}
     var ca = el('div', 'card'); var la = el('div', 'linha');
     if (o.estado === 'montada') {
       var ba = el('button', 'bt pri', 'Aprovar este disparo (' + o.total + ' pessoas)'); ba.type = 'button';
-      var confirmaCusto = null;
-      if (o.custo && !o.custo.conhecido) {
-        var cf0 = el('label', 'confirma'); confirmaCusto = el('input'); confirmaCusto.type = 'checkbox'; confirmaCusto.id = 'confirmaCusto'; cf0.appendChild(confirmaCusto);
-        cf0.appendChild(el('span', null, 'Entendo que não há histórico de custo da Meta para este modelo (o valor é uma estimativa com preço de reserva) e quero aprovar mesmo assim.')); ca.appendChild(cf0);
-        confirmaCusto.addEventListener('change', function(){ ba.disabled = !(o.podeAprovar && o.conferencia && o.conferencia.ok && confirmaCusto.checked); });
-      }
-      ba.disabled = !(o.podeAprovar && o.conferencia && o.conferencia.ok) || (confirmaCusto !== null);
+      // A caixa da confirmação existe SEMPRE e aparece quando o custo é sem histórico — ou quando o SERVIDOR acha isso na hora de aprovar (o custo mudou desde que a tela abriu).
+      var cf0 = el('label', 'confirma'); var confirmaCusto = el('input'); confirmaCusto.type = 'checkbox'; confirmaCusto.id = 'confirmaCusto'; cf0.appendChild(confirmaCusto);
+      cf0.appendChild(el('span', null, 'Entendo que não há histórico de custo da Meta para este modelo (o valor é uma estimativa com preço de reserva) e quero aprovar mesmo assim.')); ca.appendChild(cf0);
+      cf0.style.display = o.custo && !o.custo.conhecido ? '' : 'none';
+      var liberar = function(){ ba.disabled = !(o.podeAprovar && o.conferencia && o.conferencia.ok) || (cf0.style.display !== 'none' && !confirmaCusto.checked); };
+      confirmaCusto.addEventListener('change', liberar);
+      liberar();
       ba.addEventListener('click', function(){
         var seco = o.modo !== 'ligado';
         if (!confirm(seco ? 'Aprovar com a unidade em ' + (o.modo === 'seco' ? 'SECO' : 'modo DESLIGADO') + '? Nada será enviado: só fica registrado quem receberia.' : 'Aprovar o envio para ' + o.total + ' pessoas (máximo ' + o.maximo + ')' + (o.custo && o.custo.conhecido ? ', custo estimado ' + brl(o.custo.brl) : ', custo estimado com preço de reserva ' + brl(o.custo.brl)) + '? As mensagens saem sozinhas, em ondas.')) return;
         ba.disabled = true;
-        api('POST', '/api/public/disparos/ondas/' + enc(o.id) + '/aprovar', { slug: U.slug, total: o.total, impressao: o.impressao, maximo: o.maximo, confirmarCustoDesconhecido: !!(confirmaCusto && confirmaCusto.checked) }).then(function(){ toast('Aprovado.'); return carregar().then(function(){ abrirOnda(o.id); }); }).catch(function(e){ toast(e.message, true); ba.disabled = false; });
+        api('POST', '/api/public/disparos/ondas/' + enc(o.id) + '/aprovar', { slug: U.slug, total: o.total, impressao: o.impressao, maximo: o.maximo, confirmarCustoDesconhecido: !!(confirmaCusto && confirmaCusto.checked) }).then(function(){ toast('Aprovado.'); return carregar().then(function(){ abrirOnda(o.id); }); }).catch(function(e){ toast(e.message, true); if (e.corpo && e.corpo.precisaConfirmarCusto) { cf0.style.display = ''; confirmaCusto.checked = false; } liberar(); });
       });
       la.appendChild(ba);
       if (!o.podeAprovar) ca.appendChild(el('p', 'mudo', o.motivoSemAprovar || 'Você não pode aprovar.'));
@@ -478,11 +478,12 @@ a{color:var(--brand)}
     ul.appendChild(el('li', null, 'Máximo de pessoas neste disparo: ' + (o.maximo == null ? '—' : o.maximo) + ' (a lista foi cortada nele e o envio nunca o passa).'));
     if (r) {
       var porque = r.limitadoPor === 'gasto' ? 'o teto de gasto' : r.limitadoPor === 'hora' ? 'o teto por hora' : 'o teto por dia';
-      ul.appendChild(el('li', null, 'Ritmo: até ' + r.porDia + ' por dia (' + r.porHora + ' por hora, ' + r.horasDaJanela + ' h de janela; limita ' + porque + ').'));
+      ul.appendChild(el('li', null, 'Ritmo em um dia cheio (sem contar o que já foi gasto hoje): até ' + r.porDia + ' por dia (' + r.porHora + ' por hora, ' + r.horasDaJanela + ' h de janela; limita ' + porque + ').'));
       ul.appendChild(el('li', null, r.dias == null ? 'Com estes tetos o disparo não anda.' : 'Termina em cerca de ' + r.dias + (r.soDiasUteis ? ' dia(s) útil(eis)' : ' dia(s)') + ' depois de aprovado.'));
     }
-    ul.appendChild(el('li', null, 'Teto de gasto: ' + brl(o.freios.tetoReaisDia) + ' por dia nesta unidade: ao atingir, o envio para e a Doutor Digital é avisada.'));
-    if (o.gastoEstimadoBrl != null && o.relatorio && o.relatorio.numeros.enviadas > 0) ul.appendChild(el('li', null, 'Gasto até agora (estimado pelas enviadas): ' + brl(o.gastoEstimadoBrl) + '.'));
+    ul.appendChild(el('li', null, 'Teto de gasto: ' + brl(o.freios.tetoReaisDia) + ' por dia, POR NÚMERO (as unidades e os disparos que dividem o mesmo número somam): ao atingir, o envio para e a Doutor Digital é avisada.'));
+    if (o.gastoDoNumero24hBrl != null) ul.appendChild(el('li', null, 'Já gasto nas últimas 24 h neste número (todos os disparos, por categoria): ' + brl(o.gastoDoNumero24hBrl) + (o.cabemPeloGasto != null ? ' — ainda cabem cerca de ' + o.cabemPeloGasto + ' mensagens deste modelo no teto.' : '.')));
+    if (o.gastoEstimadoBrl != null && o.relatorio && o.relatorio.numeros.enviadas > 0) ul.appendChild(el('li', null, 'Gasto deste disparo até agora (' + (o.gastoComReserva ? 'estimado com preço de reserva: é um teto, o real tende a ser menor' : 'estimado pelas enviadas') + '): ' + brl(o.gastoEstimadoBrl) + '.'));
     c.appendChild(ul); return c;
   }
   function cartaoDeAjuste(){

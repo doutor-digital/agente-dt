@@ -39,6 +39,8 @@ export interface OndaDaRodada {
   idioma: string;
   textoModelo: string;
   variaveis: string[];
+  /** a categoria do modelo congelada na montagem (o custo e o teto de gasto foram calculados com ela); se a Meta reclassificar o modelo, a onda pausa */
+  categoria?: string | null;
 }
 
 export interface DepsDoPortoChatwoot {
