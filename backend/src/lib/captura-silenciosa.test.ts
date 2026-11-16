@@ -645,7 +645,7 @@ test('o agendador guarda só a identidade da unidade, não a linha inteira (toke
 test('o webhook agenda a captura no mesmo ponto do cadastro com a IA pulada (turno PULADO), e só ali', () => {
   const src = readFileSync(new URL('../controllers/webhook.controller.ts', import.meta.url), 'utf8');
   const bloco = src.slice(src.indexOf('export async function processAgent'), src.indexOf('export async function cadastrarQuandoIaPulada'));
-  assert.match(bloco, /if \(r === TURNO_PULADO\) \{[\s\S]*cadastrarQuandoIaPulada\(args\)[\s\S]*agendarCapturaSilenciosa\(args\)/);
+  assert.match(bloco, /if \(r === TURNO_PULADO\) void cadastrarQuandoIaPulada\(args\);[\s\S]*?if \(r === TURNO_PULADO\) agendarCapturaSilenciosa\(args\);/);
   assert.equal(src.match(/agendarCapturaSilenciosa\(/g)?.length, 1);
 });
 
