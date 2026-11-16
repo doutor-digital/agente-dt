@@ -5,12 +5,13 @@
  *
  * Idempotente: rodar de novo recalcula o plano com o estado atual e só mexe no que falta. Portas injetáveis (teste não toca em banco).
  */
+import { MAX_REGRAS_DA_UNIDADE } from '../aprendizados-unidade.js';
 import { AUTOMACOES } from '../automacoes.js';
 import { gerenteDaConta, novoEstado, passoAtendentes, passoAutomacoesDaConta, passoAtributos, passoCaixa, passoConta, passoDashboardApp, passoEtiquetas, passoMensagensProntas, passoModelos, passoRobo, passoTime, passoUsuarioCelular, passoWebhook, type EstadoDaExecucao } from './fase2.js';
 import { ErroSoLeitura, type PortasExternas } from './portas.js';
 import { CAMPOS_SO_NA_CRIACAO, camposDaSofia, camposDaUnidade, licoesDaAssistente } from './molde-sofia.js';
 import { aGravar, dadosDosModelosAGravar } from './protecao.js';
-import type { Passo, Plano } from './plano.js';
+import { automacoesEmSeco, type Passo, type Plano } from './plano.js';
 import { configChatwootDoQuestionario, type Questionario } from './questionario.js';
 
 /** O banco, como o executor o enxerga. A implementação real (prisma) está em `scripts/nova-unidade.ts`. */
@@ -211,7 +212,7 @@ async function aplicarPasso(p: Passo, q: Questionario, o: OpcoesDeExecucao, unit
     case 'automacoes-seco': {
       const id = await garantirUnidade();
       const ja = new Set(await banco.automacoesDaUnidade(id));
-      const novas = AUTOMACOES.filter((a) => a.id.startsWith('chatwoot-') && a.temSeco && !ja.has(a.id) && !(q.assistente?.quer === false && a.id === 'chatwoot-ia')).map((a) => a.id);
+      const novas = automacoesEmSeco(q).filter((a) => !ja.has(a.id)).map((a) => a.id);
       if (novas.length) await banco.criarAutomacoesEmSeco(id, novas);
       return [novas.length ? `em seco: ${novas.join(', ')}` : 'nenhuma a criar'];
     }
@@ -246,11 +247,11 @@ async function aplicarPasso(p: Passo, q: Questionario, o: OpcoesDeExecucao, unit
           const jaTem = new Set((await banco.licoes.listar(id)).map(norm));
           const novos = lic.textos.filter((t) => !jaTem.has(norm(t)));
           // teto de 25 NA GRAVAÇÃO (não só no aviso do plano): a página /aprendizados só aceita 25 regras da clínica ligadas
-          const cabem = Math.max(0, 25 - (await banco.licoes.contarDaUnidade(id)));
+          const cabem = Math.max(0, MAX_REGRAS_DA_UNIDADE - (await banco.licoes.contarDaUnidade(id)));
           const gravar = novos.slice(0, cabem);
           if (gravar.length) await banco.licoes.criar(id, gravar);
           await banco.licoes.marcarImportado(id);
-          notas.push(`aprendizados da clínica: ${gravar.length} gravado(s), ${lic.textos.length - novos.length} já existiam${novos.length > gravar.length ? `, ${novos.length - gravar.length} NÃO gravado(s) por causa do teto de 25 da página /aprendizados (a clínica desliga uma regra e os adiciona lá)` : ''}`);
+          notas.push(`aprendizados da clínica: ${gravar.length} gravado(s), ${lic.textos.length - novos.length} já existiam${novos.length > gravar.length ? `, ${novos.length - gravar.length} NÃO gravado(s) por causa do teto de ${MAX_REGRAS_DA_UNIDADE} da página /aprendizados (a clínica desliga uma regra e os adiciona lá)` : ''}`);
         }
       }
       return notas;

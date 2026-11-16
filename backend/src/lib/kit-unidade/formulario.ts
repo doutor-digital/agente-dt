@@ -11,12 +11,12 @@
  * assim a pessoa vê o erro na hora, e não só o João quando for rodar o kit.
  */
 import { z } from 'zod';
-import { recusaDaRegra, recusaDeFato, textoSuspeito } from '../aprendizados-unidade.js';
-import { MAX_OBJECOES_EXTRAS, MAX_RESPOSTA_OBJECAO, OBJECOES_PADRAO, PREFIXO_DO_NUNCA, licaoDaObjecao, licaoDaSaudacao, licaoDeChamarPessoa, licaoDoNunca } from './assistente-padrao.js';
+import { INVISIVEIS_BENIGNOS, recusaDaRegra, recusaDeFato, textoSuspeito } from '../aprendizados-unidade.js';
+import { MAX_OBJECOES_EXTRAS, MAX_RESPOSTA_OBJECAO, OBJECOES_PADRAO, licaoDaObjecao, licaoDaSaudacao, licaoDeChamarPessoa, licaoDoNunca } from './assistente-padrao.js';
 
 const hora = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Use o formato 08:00 (hora:minuto).');
 /** Troca caractere de controle e quebra de linha por espaço (o texto vai para o terminal do João e para frases ditas ao paciente: nada de linha forjada nem ANSI). */
-const umaLinha = (v: unknown) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').replace(/[«»]/g, '"').replace(/[‹›]/g, "'").replace(/\s+/g, ' ').trim() : v);
+const umaLinha = (v: unknown) => (typeof v === 'string' ? v.replace(INVISIVEIS_BENIGNOS, '').replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').replace(/[«»]/g, '"').replace(/[‹›]/g, "'").replace(/\s+/g, ' ').trim() : v);
 const texto = (min: number, max: number, nome: string) =>
   z.preprocess(
     umaLinha,
@@ -140,13 +140,13 @@ const Assistente = z
     obrigatorio(a.pagamento?.remarcacao, ['pagamento', 'remarcacao'], 'Explique a política de remarcação, falta e cancelamento.');
     obrigatorio(a.quem_recebe?.nome, ['quem_recebe', 'nome'], 'Diga quem da equipe recebe o atendimento quando a assistente chama uma pessoa.');
     // o texto que vira aprendizado é conferido JÁ COMPOSTO, do jeito que o kit o grava: se a página /aprendizados o recusaria, o dono fica sabendo AQUI (e não só o João, no plano)
-    const confere = (composto: string | undefined, path: (string | number)[], opcoes: { prefixoNegativo?: string } = {}) => {
+    const confere = (composto: string | undefined, path: (string | number)[]) => {
       if (!composto) return;
-      const m = recusaDaRegra(composto, opcoes);
+      const m = recusaDaRegra(composto);
       if (m) erro(path, m);
     };
     if (a.saudacao) confere(licaoDaSaudacao(a.saudacao), ['saudacao']);
-    if (a.nunca_extra) confere(licaoDoNunca(a.nunca_extra), ['nunca_extra'], { prefixoNegativo: PREFIXO_DO_NUNCA });
+    if (a.nunca_extra) confere(licaoDoNunca(a.nunca_extra), ['nunca_extra']);
     if (a.passar_extra) confere(licaoDeChamarPessoa(a.passar_extra), ['passar_extra']);
     // objeções: cada padrão no máximo uma vez; «outra» exige o que o paciente diz E a resposta
     const vistos = new Set<string>();
@@ -274,13 +274,25 @@ export type ResultadoDoFormulario = { ok: true; respostas: RespostasFormulario }
 
 /** Caracteres de controle (ESC, NUL, DEL…; \t \n \r ficam: o texto livre os troca por espaço) em qualquer texto do corpo: caminhos dos campos que os têm. */
 export function camposComControle(valor: unknown, caminho: string[] = []): string[] {
-  if (typeof valor === 'string') return /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/.test(valor) || textoSuspeito(valor) ? [caminho.join('.') || '_'] : [];
+  if (typeof valor === 'string') {
+    const limpo = valor.replace(INVISIVEIS_BENIGNOS, ''); // marcas de direção de copiar/colar não travam o dono
+    return /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/.test(limpo) || textoSuspeito(limpo) ? [caminho.join('.') || '_'] : [];
+  }
   if (Array.isArray(valor)) return valor.flatMap((v, i) => camposComControle(v, [...caminho, String(i)]));
   if (valor && typeof valor === 'object') return Object.entries(valor).flatMap(([k, v]) => camposComControle(v, [...caminho, k]));
   return [];
 }
 
-export function validarFormulario(bruto: unknown): ResultadoDoFormulario {
+/** Tira, em TODOS os textos do corpo, as marcas de direção que vêm de copiar/colar (WhatsApp, Maps): não mudam nada e não devem travar o dono. */
+function semMarcasDeCopia(valor: unknown): unknown {
+  if (typeof valor === 'string') return valor.replace(INVISIVEIS_BENIGNOS, '');
+  if (Array.isArray(valor)) return valor.map(semMarcasDeCopia);
+  if (valor && typeof valor === 'object') return Object.fromEntries(Object.entries(valor).map(([k, v]) => [k, semMarcasDeCopia(v)]));
+  return valor;
+}
+
+export function validarFormulario(corpo: unknown): ResultadoDoFormulario {
+  const bruto = semMarcasDeCopia(corpo);
   const controle = camposComControle(bruto);
   if (controle.length) return { ok: false, campos: Object.fromEntries(controle.map((c) => [c, 'Tem um caractere invisível ou inválido. Apague este campo e digite de novo.'])) };
   const r = RespostasFormulario.safeParse(bruto);

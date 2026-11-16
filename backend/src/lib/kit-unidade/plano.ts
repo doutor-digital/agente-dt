@@ -6,6 +6,7 @@
  * Estado desconhecido (`undefined` na parte do estado) NUNCA vira "já existe": o passo aparece como `criar` com a ressalva
  * "estado atual não consultado". Seco sem consultar nada é um plano do que faria numa conta vazia.
  */
+import { MAX_REGRAS_DA_UNIDADE } from '../aprendizados-unidade.js';
 import { AUTOMACOES } from '../automacoes.js';
 import { comDadosDaUnidade, modelosDaUnidade } from '../chatwoot-modelos.js';
 import { problemasDaConfig, type ConfigChatwootUnidade } from '../chatwoot-unidades.js';
@@ -111,6 +112,9 @@ function configAEscrever(hoje: NonNullable<EstadoAtual['banco']>['configChatwoot
   return { escrever: Object.keys(a.gravar).length > 0 || Object.keys(d.gravar).length > 0, preservados: [...a.preservados, ...d.preservados.map((k) => `dadosModelos.${k}`)] };
 }
 
+/** As automações do Chatwoot que nascem em SECO. Clínica SEM assistente não ganha a de IA (chatwoot-ia). UM lugar só: o plano e o executor usam esta lista. */
+export const automacoesEmSeco = (q: Questionario) => AUTOMACOES.filter((a) => a.id.startsWith('chatwoot-') && a.temSeco && !(q.assistente?.quer === false && a.id === 'chatwoot-ia'));
+
 export interface OpcoesDoPlano {
   /** texto do molde da Sofia (ops/kit-unidade/molde-sofia/bloco-conversa.md); null = não achei o arquivo */
   molde: string | null;
@@ -194,7 +198,7 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
     depende: ['config-chatwoot'],
   });
   // clínica SEM assistente: a automação de IA (chatwoot-ia) NÃO nasce, nem em seco (senão gastaria modelo lendo conversa de uma clínica que não contratou IA)
-  const chatwootAutomacoes = AUTOMACOES.filter((a) => a.id.startsWith('chatwoot-') && a.temSeco && !(q.assistente?.quer === false && a.id === 'chatwoot-ia'));
+  const chatwootAutomacoes = automacoesEmSeco(q);
   const semLinha = chatwootAutomacoes.filter((a) => !b?.automacoes[a.id]);
   add({
     id: 'automacoes-seco',
@@ -411,7 +415,7 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
           'automação prompt-da-unidade: NÃO ligo — antes roda `testar-prompt.ts --slug` e o dono lê as respostas',
         ],
     execucao: semIA ? 'manual' : 'sim',
-    avisos: [...(b ? [] : semIA ? [] : [NAO_CONSULTADO]), ...sofia.avisos, ...(q.assistente?.quer && q.assistente.quando_atende !== 'sempre' ? [`QUANDO A IA ATENDE («${horarioDaAssistente(q)}») NÃO é aplicado pelo kit: a janela se configura na automação/robô ao ligar; até lá a Sofia, ligada, responderia 24 h`] : []), ...licoes.recusadas.map((r) => `aprendizado RECUSADO pelas travas da rede (não será gravado): «${r.texto}» — ${r.motivo}`), ...((b?.licoes?.length ?? 0) + licoesNovas.length > 25 ? [`com os ${licoesNovas.length} novos a unidade passa de 25 aprendizados: a página /aprendizados só aceita 25 regras da clínica ligadas`] : []), ...(sofiaPreservados.length ? [`já preenchidos e diferentes do questionário (ficam como estão; --sobrescrever troca): ${sofiaPreservados.filter((k) => k !== 'systemPrompt').join(', ')}${sofiaPreservados.includes('systemPrompt') ? ' (o systemPrompt só troca com --sobrescrever-prompt)' : ''}`] : []), 'a Sofia só atende com agenda: falta o token da franquia (passo «franquia») e os turnos por profissional (spine_staff_por_turno)'],
+    avisos: [...(b ? [] : semIA ? [] : [NAO_CONSULTADO]), ...sofia.avisos, ...(q.assistente?.quer && q.assistente.quando_atende !== 'sempre' ? [`QUANDO A IA ATENDE («${horarioDaAssistente(q)}») NÃO é aplicado pelo kit: a janela se configura na automação/robô ao ligar; até lá a Sofia, ligada, responderia 24 h`] : []), ...licoes.recusadas.map((r) => `aprendizado RECUSADO pelas travas da rede (não será gravado): «${r.texto}» — ${r.motivo}`), ...((b?.licoes?.length ?? 0) + licoesNovas.length > MAX_REGRAS_DA_UNIDADE ? [`com os ${licoesNovas.length} novos a unidade passa de ${MAX_REGRAS_DA_UNIDADE} aprendizados: a página /aprendizados só aceita ${MAX_REGRAS_DA_UNIDADE} regras da clínica ligadas`] : []), ...(sofiaPreservados.length ? [`já preenchidos e diferentes do questionário (ficam como estão; --sobrescrever troca): ${sofiaPreservados.filter((k) => k !== 'systemPrompt').join(', ')}${sofiaPreservados.includes('systemPrompt') ? ' (o systemPrompt só troca com --sobrescrever-prompt)' : ''}`] : []), 'a Sofia só atende com agenda: falta o token da franquia (passo «franquia») e os turnos por profissional (spine_staff_por_turno)'],
     depende: ['unidade'],
   });
 

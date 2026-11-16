@@ -26,7 +26,7 @@ const dinheiro = z.number().positive().max(100000);
  * (`whatsapp.modo: demonstracao`). O DNS curinga já aponta tudo para a VPS: uma clínica com «cadastro» ou «atendimento» tomaria o lugar do serviço de verdade.
  */
 export const SUBDOMINIOS_RESERVADOS: readonly string[] = [
-  'cadastro', 'atendimento', 'agente', 'agentevps', 'automacao', 'franquia', 'suporte', 'api', 'app', 'www', 'mail', 'smtp', 'admin', 'painel', 'dashboard', 'chatwoot', 'kommo', 'crm',
+  'cadastro', 'atendimento', 'agente', 'evolution', 'treinamento', 'automacao', 'franquia', 'suporte', 'api', 'app', 'www', 'mail', 'smtp', 'admin', 'painel', 'dashboard', 'chatwoot', 'kommo', 'crm',
   'vps', 'ddagent', 'doutordigital', 'portal', 'status', 'docs', 'mcp', 'login', 'oauth', 'auth', 'webhook', 'webhooks', 'ftp', 'ns1', 'ns2', 'aulas', 'demo',
 ];
 
