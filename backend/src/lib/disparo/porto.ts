@@ -44,12 +44,12 @@ export function listaDeTesteDoAmbiente(slug: string, env: NodeJS.ProcessEnv = pr
 }
 
 /** O que a variável tem de errado (formato antigo, global), para o log de subida avisar: nada disso vale. */
-export function avisosDaListaDeTeste(env: NodeJS.ProcessEnv = process.env): string[] {
-  return (env.DISPARO_LISTA_DE_TESTE ?? '')
+export function avisosDaListaDeTeste(env: NodeJS.ProcessEnv = process.env, variavel = 'DISPARO_LISTA_DE_TESTE'): string[] {
+  return (env[variavel] ?? '')
     .split(/[;\n]/)
     .map((e) => e.trim())
     .filter((e) => e && !/^[a-z0-9][a-z0-9-]*=./i.test(e))
-    .map((e) => `DISPARO_LISTA_DE_TESTE: a entrada "${e.slice(0, 40)}" não vale (o formato é por unidade: slug=telefone,telefone ou slug=*); ninguém recebe por ela`);
+    .map((e) => `${variavel}: a entrada "${e.slice(0, 40)}" não vale (o formato é por unidade: slug=telefone,telefone ou slug=*); ninguém recebe por ela`);
 }
 
 const paraDestino = (d: { id: string; ondaId: string; campanhaId: string; unitId: string; telefone: string; chave: string; nome: string; kommoLeadId: number | null; nomeCompleto?: string | null; conversaChatwoot?: number | null; contatoChatwoot?: number | null }): Destino => ({

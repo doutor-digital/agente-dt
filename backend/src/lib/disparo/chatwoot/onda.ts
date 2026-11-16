@@ -70,6 +70,8 @@ export function caixaDaUnidade(slug: string, caixa: number): string | null {
 /** Os estados em que uma onda do CRM ainda está viva: só UMA por unidade (o teto do número é um só e a mesma pessoa não pode entrar em duas). */
 /** Quantas montagens de lista do CRM podem andar ao mesmo tempo, somando todas as unidades. */
 export const MAX_MONTAGENS_DO_CRM = 2;
+/** Uma montagem que não bate há mais que isto (3 batidas) está órfã: não ocupa vaga. */
+export const MONTAGEM_VIVA_MS = 3 * BATIDA_DA_MONTAGEM_MS;
 const VIVA = ['montando', 'montada', 'aprovada', 'pausada'];
 
 export async function abrirOndaChatwoot(args: {
@@ -95,11 +97,15 @@ export async function abrirOndaChatwoot(args: {
 
   const slug = `cw-${unit.slug.replace(/^doutor-hernia-/, '').slice(0, 24)}-${Date.now().toString(36)}`;
   const r = await prisma.$transaction(async (tx) => {
+    // DUAS travas: a global do teto de montagens (senão duas unidades juntas passam do teto, cada uma sob a trava só dela) e a da unidade
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('disparo-onda-crm:montagens'))`;
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`disparo-onda-crm:${unit.id}`}))`;
     const viva = await tx.disparoOnda.findFirst({ where: { unitId: unit.id, origem: ORIGEM_CRM, estado: { in: VIVA } }, select: { id: true, estado: true } });
     if (viva) return { viva };
     // o limite de montagens do CRM é PRÓPRIO (as do conector do Kommo têm o delas): cada montagem lê a caixa inteira do Chatwoot
-    if ((await tx.disparoOnda.count({ where: { origem: ORIGEM_CRM, estado: 'montando' } })) >= MAX_MONTAGENS_DO_CRM) return { cheio: true as const };
+    // só conta montagem VIVA (a batida de 1 min a mantém nova): a que ficou órfã num deploy não segura o teto até os 30 min do vigia
+    const viva_ = { origem: ORIGEM_CRM, estado: 'montando', atualizadoEm: { gte: new Date(Date.now() - MONTAGEM_VIVA_MS) } };
+    if ((await tx.disparoOnda.count({ where: viva_ })) >= MAX_MONTAGENS_DO_CRM) return { cheio: true as const };
     const campanha = await tx.disparoCampanha.create({
       data: { slug, nome, template: modelo.nome, idioma: modelo.idioma, textoModelo: modelo.texto, variaveis: modelo.variaveis as Prisma.InputJsonValue, porUnidade: {} },
     });

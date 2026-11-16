@@ -121,6 +121,10 @@ export async function varrerRespostasDoCrm(deps: VarredorDeps = {}): Promise<{ s
   return { saiu, falhou, restritos: [...restritos], restritosUnitIds: [...restritosUnitIds], conferidos, faltaram: Math.max(0, fila.length - i) };
 }
 
+/** O aviso da restrição do número: cita TODAS as unidades pausadas (o número é delas todas). */
+export const alertaDeRestricao = (slugs: readonly string[]): string =>
+  `🚨 Disparo do CRM PAUSADO — ${slugs.join(' + ')}\nMotivo: a Meta restringiu o número (131048/131056) numa mensagem do disparo${slugs.length > 1 ? `; as ondas aprovadas das ${slugs.length} unidades que usam este número foram pausadas` : ''}. Continuar mandando agrava a restrição. Resolva com a Meta e monte o disparo de novo.`;
+
 /** Roda a varredura se já passou o intervalo e não há outra andando. Nunca lança. O relógio só anda quando ela TERMINOU. */
 export async function varrerSeChegouAHora(deps: VarredorDeps = {}): Promise<void> {
   const agora = deps.agora?.() ?? Date.now();
@@ -130,16 +134,19 @@ export async function varrerSeChegouAHora(deps: VarredorDeps = {}): Promise<void
     const r = await varrerRespostasDoCrm(deps);
     ultimaVarredura = agora;
     if (r.saiu || r.falhou || r.faltaram) logger.warn(r, 'disparo-crm: varredura depois do envio');
-    for (const slug of r.restritos) {
+    if (r.restritos.length) {
+      const slug = r.restritos.join(', ');
       // a restrição é do NÚMERO: pausa as ondas do CRM de TODAS as unidades que usam o mesmo número do Kapso, não só a da mensagem
       const ids = new Set<string>();
       for (const id of r.restritosUnitIds) for (const x of await unidadesDoMesmoNumeroKapso(id).catch(() => [id])) ids.add(x);
       logger.error({ unit: slug, unidadesDoNumero: ids.size }, 'disparo-crm: o número foi RESTRINGIDO pela Meta (131048/131056) — pauso as ondas do CRM das unidades do número');
       await prisma.disparoOnda.updateMany({
-        where: ids.size ? { unitId: { in: [...ids] }, origem: ORIGEM_CRM, estado: 'aprovada' } : { unit: { slug }, origem: ORIGEM_CRM, estado: 'aprovada' },
+        where: ids.size ? { unitId: { in: [...ids] }, origem: ORIGEM_CRM, estado: 'aprovada' } : { unit: { slug: { in: r.restritos } }, origem: ORIGEM_CRM, estado: 'aprovada' },
         data: { estado: 'pausada', pausaMotivo: 'a Meta restringiu o número (spam/qualidade): resolva com a Meta e monte o disparo de novo', pausaCausa: 'meta' },
       });
-      await enviarTelegram(`🚨 Disparo do CRM PAUSADO — ${slug}\nMotivo: a Meta restringiu o número (131048/131056) numa mensagem do disparo. Continuar mandando agrava a restrição. Resolva com a Meta e monte o disparo de novo.`).catch(() => undefined);
+      const slugsDoNumero = ids.size ? (await prisma.unit.findMany({ where: { id: { in: [...ids] } }, select: { slug: true } }).catch(() => [])).map((u) => u.slug).sort() : [];
+      const todas = [...new Set([...r.restritos, ...slugsDoNumero])];
+      await enviarTelegram(alertaDeRestricao(todas)).catch(() => undefined);
     }
   } catch (err) {
     logger.warn({ err: String(err) }, 'disparo-crm: a varredura falhou');
@@ -192,7 +199,8 @@ export async function rodadaDoDisparoNoCrm(): Promise<void> {
       const noLote: OndaNoLote[] = vivas.map((o) => ({ id: o.id, campanhaId: o.campanhaId, campanhaNome: o.campanha.nome, aprovadaEm: o.aprovadaEm, aprovadaModo: o.aprovadaModo, sairAceitos: o.sairAceitos, ...definicaoDaOnda(o) }));
       const ajuste = await ajusteDaUnidade(unit.id);
       const r = await rodarUnidade(porto, freiosComOTier(f, ajuste.tierDoNumero), { id: unit.id, slug: unit.slug, nome: unit.name, fuso: fusoDaUnidade(unit) }, noLote);
-      await avisarSeSemAndar(unit.slug, unit.id, r);
+      // 429 do Chatwoot: a pessoa volta para a fila (não é «adiado» para o motor), mas para o alerta de «sem andar» é uma rodada sem andar
+      await avisarSeSemAndar(unit.slug, unit.id, porto.ocupouAUnidade(unit.id) ? { ...r, adiados: r.adiados + 1 } : r);
       if (r.processados > 0 || (r.parou && r.parou !== 'automação desligada nesta unidade')) logger.info({ unit: unit.slug, origem: ORIGEM_CRM, ...r }, 'disparo-crm: rodada');
     } catch (err) {
       logger.error({ err: String(err), unit: unit.slug }, 'disparo-crm: a rodada da unidade falhou');

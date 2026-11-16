@@ -67,6 +67,8 @@ export interface Porto {
   modoDaUnidade(slug: string): Modo;
   /** Telefones (só dígitos) que podem receber de verdade NESTA unidade; `null` = todos dela (decisão explícita, `slug=*`); conjunto vazio = ninguém. Existe para provar em produção só no número do João. */
   listaDeTeste(slug: string): ReadonlySet<string> | null;
+  /** O nome da variável de ambiente da lista de teste, para o log dizer a CERTA (o CRM tem a sua; padrão: `DISPARO_LISTA_DE_TESTE`, a do Kommo). */
+  nomeDaListaDeTeste?: string;
   /** Mensagens da unidade desde `desde`: enviadas (ligado) ou "receberia" gravadas (seco). */
   contarNaJanela(unitId: string, desde: Date, modo: 'ligado' | 'seco'): Promise<number>;
   pendentes(ondaId: string, modo: 'ligado' | 'seco', limite: number, soTelefones: ReadonlySet<string> | null): Promise<Destino[]>;
@@ -372,7 +374,7 @@ export async function rodarUnidade(porto: Porto, f: Freios, u: UnidadeNoLote, on
 
   const teste = real ? porto.listaDeTeste(u.slug) : null;
   if (teste && teste.size === 0) {
-    porto.log('warn', { unit: u.slug }, 'disparo: unidade LIGADA mas sem lista de teste (DISPARO_LISTA_DE_TESTE) — ninguém recebe; use slug=telefone ou slug=* para esta unidade');
+    porto.log('warn', { unit: u.slug }, 'disparo: unidade LIGADA mas sem lista de teste (' + (porto.nomeDaListaDeTeste ?? 'DISPARO_LISTA_DE_TESTE') + ') — ninguém recebe; use slug=telefone ou slug=* para esta unidade');
     return { ...r, parou: 'ligada sem lista de teste desta unidade: ninguém recebe' };
   }
   let seguidas = 0;

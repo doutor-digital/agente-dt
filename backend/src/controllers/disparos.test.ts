@@ -102,6 +102,8 @@ const PERFIS: Record<string, { id: number; name: string; email: string; accounts
 let chamadas: string[] = [];
 /** Caminhos que o Chatwoot de mentira NUNCA responde (para provar o teto de tempo). */
 let travar: RegExp | null = null;
+/** Caminhos a que o Chatwoot de mentira responde 401 (token caído). */
+let recusar: RegExp | null = null;
 const fetchReal = globalThis.fetch;
 const MODELO_OK = { name: 'parau_reativacao', language: 'pt_BR', status: 'APPROVED', category: 'MARKETING', components: [{ type: 'BODY', text: 'Oi {{1}}, tudo bem?' }] };
 
@@ -111,6 +113,7 @@ function chatwootDeMentira() {
     chamadas.push(`${o.method ?? 'GET'} ${u.pathname}`);
     if (travar && travar.test(u.pathname)) return new Promise<Response>(() => undefined);
     const resp = (status: number, j: unknown) => ({ ok: status < 400, status, text: async () => JSON.stringify(j), json: async () => j }) as Response;
+    if (recusar && recusar.test(u.pathname)) return resp(401, { error: 'token' });
     if (u.pathname === '/api/v1/profile') {
       const p = PERFIS[o.headers?.['access-token'] ?? ''];
       return p ? resp(200, p) : resp(401, { error: 'x' });
@@ -173,6 +176,7 @@ function preparar(opcoes: { gerenteAprova?: boolean; onda?: Record<string, unkno
 }
 afterEach(() => {
   travar = null;
+  recusar = null;
   mock.restoreAll();
   for (const [modelo, d] of originais) {
     if (d) Object.defineProperty(prisma, modelo, d);
@@ -326,6 +330,18 @@ test('TETO DE TEMPO: Chatwoot que não responde NÃO pendura a tela — opções
   }
 });
 
+test('401 do CRM (token caído) NÃO aparece como «demorou»: opções devolvem 502 «o CRM recusou o acesso», e o painel marca a caixa assim', async () => {
+  preparar();
+  recusar = /message_templates$/;
+  const opcoes = await pedir('GET', `/public/disparos/opcoes?slug=${PARAU}&caixa=3`, 'tok-agente');
+  assert.equal(opcoes.status, 502);
+  assert.match(opcoes.corpo.error, /recusou o acesso/);
+  assert.doesNotMatch(opcoes.corpo.error, /demorou/);
+  const demais = await pedir('POST', '/public/disparos/ondas', 'tok-agente', { slug: PARAU, nome: 'Reativação', filtro: { caixa: 3 }, modelo: { nome: 'parau_reativacao', idioma: 'pt_BR', variaveis: ['primeiroNome'] } });
+  assert.equal(demais.status, 502);
+  assert.match(demais.corpo.error, /recusou o acesso/);
+});
+
 test('contagem: vagas — uma por unidade e no máximo 3 no TOTAL somando unidades; liberar devolve a vaga', async () => {
   const { reservarContagem, liberarContagem, MAX_CONTAGENS_SIMULTANEAS } = await import('./disparos.controller.js');
   assert.equal(MAX_CONTAGENS_SIMULTANEAS, 3);
@@ -345,7 +361,7 @@ test('«receberia (seco)» vem da CONTAGEM no banco, não das 150 linhas da tabe
   const linhas = Array.from({ length: 150 }, (_, i) => ({ nome: `P${i}`, telefone: '5594991000001', estado: 'pendente', motivo: null, enviadoEm: null, simuladoEm: new Date() }));
   falso('disparoDestinatario', { groupBy: async () => [{ estado: 'pendente', _count: 300 }], findMany: async () => linhas });
   // os números vêm agrupados do BANCO (uma consulta); a tabela tem só as primeiras 150 linhas
-  falso('$queryRaw', (async (q: { sql?: string }) => (/GROUP BY onda_id/.test(q.sql ?? '') ? [{ onda_id: 'ondaaaaaaa1', selecionadas: 300, enviadas: 0, tentadas: 0, entregues: 0, lidas: 0, responderam: 0, pediram_sair: 0, falharam: 0, na_fila: 300, descartadas: 0, receberiam: 300 }] : [])) as never);
+  falso('$queryRaw', (async (q: { sql?: string }) => (/GROUP BY onda_id/.test(q.sql ?? '') ? [{ onda_id: 'ondaaaaaaa1', selecionadas: 300, enviadas: 0, tentadas: 0, entregues: 0, lidas: 0, responderam: 0, pediram_sair: 0, falharam: 0, incertas: 0, na_fila: 300, descartadas: 0, receberiam: 300 }] : [])) as never);
   const r = await pedir('GET', `/public/disparos/ondas/ondaaaaaaa1?slug=${PARAU}`, 'tok-dd');
   assert.equal(r.status, 200);
   assert.equal(r.corpo.simulados, 300);
@@ -360,7 +376,7 @@ test('relatório por campanha: só as campanhas DESTA unidade e conta; os seis n
     findMany: async (a: { where: Record<string, unknown> }) => (consultas.push(a.where), [{ id: 'ondaaaaaaa1', estado: 'aprovada', total: 4, template: 'parau_reativacao', criadoEm: h(20), aprovadaEm: h(19), campanha: { nome: 'Reativação' } }]),
   });
   const consultasSql: string[] = [];
-  falso('$queryRaw', (async (q: { sql?: string }) => (consultasSql.push(q.sql ?? ''), [{ onda_id: 'ondaaaaaaa1', selecionadas: 4, enviadas: 3, tentadas: 4, entregues: 3, lidas: 1, responderam: 1, pediram_sair: 1, falharam: 1, na_fila: 0, descartadas: 0, receberiam: 0 }])) as never);
+  falso('$queryRaw', (async (q: { sql?: string }) => (consultasSql.push(q.sql ?? ''), [{ onda_id: 'ondaaaaaaa1', selecionadas: 4, enviadas: 3, tentadas: 4, entregues: 3, lidas: 1, responderam: 1, pediram_sair: 1, falharam: 1, incertas: 0, na_fila: 0, descartadas: 0, receberiam: 0 }])) as never);
   falso('disparoDestinatario', {
     findMany: async () => {
       throw new Error('o relatório NÃO lê linhas de destinatário: os números vêm agrupados do banco');
@@ -373,7 +389,7 @@ test('relatório por campanha: só as campanhas DESTA unidade e conta; os seis n
   assert.match(consultasSql[0]!, /GROUP BY onda_id/);
   const c = r.corpo.campanhas[0];
   assert.equal(c.nome, 'Reativação');
-  assert.deepEqual(c.numeros, { selecionadas: 4, enviadas: 3, tentadas: 4, entregues: 3, lidas: 1, responderam: 1, pediramSair: 1, falharam: 1, naFila: 0, descartadas: 0, receberiam: 0 });
+  assert.deepEqual(c.numeros, { selecionadas: 4, enviadas: 3, tentadas: 4, entregues: 3, lidas: 1, responderam: 1, pediramSair: 1, falharam: 1, incertas: 0, naFila: 0, descartadas: 0, receberiam: 0 });
   assert.deepEqual(c.taxas, { entregues: 100, lidas: 33, responderam: 33, pediramSair: 33, falharam: 25 });
   assert.ok(!/\d{10,}/.test(JSON.stringify(r.corpo).replace(/"criadoEm":"[^"]+"|"aprovadaEm":"[^"]+"/g, '')), 'o relatório não carrega telefone (só contagens)');
   assert.equal((await pedir('GET', `/public/disparos/relatorio?slug=${DEMO.slug}`, 'tok-agente')).status, 403, 'unidade de outra conta: não atende');

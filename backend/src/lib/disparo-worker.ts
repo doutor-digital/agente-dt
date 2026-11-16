@@ -115,7 +115,7 @@ export async function rodadaDoDisparo(): Promise<void> {
   // Os SAIR são varridos SEMPRE, com ou sem onda aprovada: onda parada por SAIR espera o João retomar, e ele decide vendo os SAIR de
   // agora; depois que a onda conclui, quem pede SAIR não pode seguir com a oferta no prompt da Sofia. Sem unidades da rodada,
   // `varrerSaidas` busca a unidade de cada envio no banco.
-  // Só as ondas do Kommo: as do CRM (origem 'chatwoot') têm o Porto delas (`disparo/chatwoot/rodada.ts`), chamado logo depois, na mesma trava.
+  // Só as ondas do Kommo: as do CRM (origem 'chatwoot') têm o Porto delas e a TRAVA delas (`disparo/chatwoot/rodada.ts`, chamada por `talvezRodarCrm`): o Chatwoot lento não atrasa o Kommo.
   const ondas = await prisma.disparoOnda.findMany({ where: { estado: 'aprovada', origem: 'kommo' }, orderBy: { criadoEm: 'asc' }, include: { unit: true } });
   const unidades = new Map<string, Unit>(ondas.map((o) => [o.unitId, o.unit]));
   const marcados = await varrerSaidas(unidades).catch((err) => {
@@ -177,7 +177,7 @@ export function startDisparoWorker(): void {
     void talvezRodarCrm();
   }, PASSO_MS);
   logger.info({ passoMs: PASSO_MS, freios: freiosDoAmbiente() }, 'disparo de campanha: worker ligado (cada unidade nasce em modo seco)');
-  for (const aviso of [...avisosDoAmbiente(), ...avisosDaListaDeTeste(), ...avisosDaRegraDeCliente()]) logger.warn(aviso);
+  for (const aviso of [...avisosDoAmbiente(), ...avisosDaListaDeTeste(), ...avisosDaListaDeTeste(process.env, 'CHATWOOT_DISPARO_LISTA_DE_TESTE'), ...avisosDaRegraDeCliente()]) logger.warn(aviso);
 }
 
 export function stopDisparoWorker(): void {
