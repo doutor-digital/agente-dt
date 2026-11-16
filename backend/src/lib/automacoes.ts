@@ -209,6 +209,20 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/follow-up-worker.ts',
   },
   {
+    id: 'cutucada-apos-equipe',
+    chave: 'CUTUCADA_APOS_EQUIPE_SLUGS',
+    nome: 'Cutucada da Sofia depois da equipe',
+    oQueFaz:
+      'Quando a SDR (a Mariana, a Giovana…) fala com um lead da entrada ou de EM QUALIFICAÇÃO e o lead não responde em 2 horas, a Sofia lê a conversa e manda UMA mensagem curta (1 ou 2 frases, terminando em pergunta) retomando o assunto da SDR. Só quando a clínica está atendendo (o horário de cada dia, ex.: sábado 7h30–13h; fuso e feriado; nunca antes das 8h nem depois das 20h), e uma única vez por lead.',
+    pegadinha:
+      'Quem falou por último vem da conversa oficial do Kommo, porque a fala da SDR pelo celular (WhatsApp Lite) nunca passa pelo nosso banco: o celular aparece lá como «WhatsApp Lite», a Sofia como «Salesbot» (e só vale se bate com um envio que o nosso agente registrou), e a saudação automática do app e os robôs de ▶ Retomada contam como robô, não como equipe. Fala da SDR com mais de 48 h não cutuca. Nunca cutuca: paciente em tratamento ou com consulta futura (cartão ou franquia; com o índice de telefones da franquia velho ou vazio, não manda), quem a equipe prometeu retornar («vou verificar e te retorno»: a dívida é da clínica), número interno, NO_FOLLOW_UP / NAO_PERTURBAR / CURRÍCULO / opt-out, «Pausar IA» ou pausa com data, ◷ Retomar em de hoje em diante, unidade em pausa, quem já recebeu as 2 cobranças do dia. A mensagem nunca fala de preço, Pix, sinal, horário nem ligação que a conversa não tenha citado. Em «Só no papel» a Sofia escreve de verdade (centavos) mas NÃO envia: a tela mostra o texto que mandaria e, em «pularia», o motivo. O prazo muda por unidade em «pipelineIntents.cutucada_espera_min» (padrão 120). Não mexe no follow-up-24h, e por isso ligada ela NÃO roda onde o follow-up-24h está ligado (as duas mandariam toque ao mesmo lead; no papel roda em qualquer unidade). Ligue só depois de conferir os textos do papel.',
+    risco: 'manda-mensagem',
+    temSeco: true,
+    exigeSecoAntes: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/cutucada-apos-equipe-worker.ts',
+  },
+  {
     id: 'confirmacao-d2',
     chave: 'CONFIRMACAO_D2_SLUGS',
     nome: 'Reforço de confirmação (D-2)',

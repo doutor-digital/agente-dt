@@ -14,13 +14,13 @@
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 
-export type AcaoSimulada = 'moveria' | 'gravaria' | 'confere' | 'diverge' | 'etiquetaria' | 'pularia' | 'alertaria';
-export const ACOES_SIMULADAS: readonly AcaoSimulada[] = ['moveria', 'gravaria', 'confere', 'diverge', 'etiquetaria', 'pularia', 'alertaria'];
+export type AcaoSimulada = 'moveria' | 'gravaria' | 'confere' | 'diverge' | 'etiquetaria' | 'pularia' | 'alertaria' | 'mandaria';
+export const ACOES_SIMULADAS: readonly AcaoSimulada[] = ['moveria', 'gravaria', 'confere', 'diverge', 'etiquetaria', 'pularia', 'alertaria', 'mandaria'];
 
 export interface Simulacao {
   leadId: number;
   acao: AcaoSimulada;
-  /** campo que gravaria, a etapa para onde moveria, a etiqueta que poria, ou a promessa que alertaria */
+  /** campo que gravaria, a etapa para onde moveria, a etiqueta que poria, a promessa que alertaria, ou «mensagem» (mandaria) */
   alvo: string;
   valor?: unknown;
   noCartao?: unknown;
@@ -84,13 +84,15 @@ export interface ResumoSimulacoes {
   pularia: number;
   /** abriria a tarefa ALERTA pra SDR (ex.: a IA prometeu consulta que não existe) */
   alertaria: number;
+  /** mandaria esta mensagem ao paciente (o texto está em «valor»; ex.: a cutucada depois da equipe) */
+  mandaria: number;
   /** cartões distintos com alguma decisão */
   cartoes: number;
 }
 
 /** Placar do topo da lista. Puro, para testar sem banco. */
 export function resumirSimulacoes(itens: ReadonlyArray<{ acao: string; kommoLeadId: number }>): ResumoSimulacoes {
-  const r: ResumoSimulacoes = { moveria: 0, gravaria: 0, confere: 0, diverge: 0, etiquetaria: 0, pularia: 0, alertaria: 0, cartoes: 0 };
+  const r: ResumoSimulacoes = { moveria: 0, gravaria: 0, confere: 0, diverge: 0, etiquetaria: 0, pularia: 0, alertaria: 0, mandaria: 0, cartoes: 0 };
   const cartoes = new Set<number>();
   for (const i of itens) {
     if ((ACOES_SIMULADAS as readonly string[]).includes(i.acao)) r[i.acao as AcaoSimulada]++;

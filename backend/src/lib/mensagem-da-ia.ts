@@ -23,8 +23,8 @@ export const AUTOR_DA_EQUIPE = 'equipe';
 
 /** Mensagens que são da IA, mas são envio automático (lembrete), não ela conversando. */
 export const ORIGENS_AUTOMATICAS = ['lembrete_kommo'] as const;
-/** Chaves de `meta` que marcam envio automático de retomada: degrau da régua e reativação. */
-export const CHAVES_DE_RETOMADA = ['followUp', 'reactivation'] as const;
+/** Chaves de `meta` que marcam envio automático de retomada: degrau da régua, reativação e a cutucada depois da equipe. */
+export const CHAVES_DE_RETOMADA = ['followUp', 'reactivation', 'cutucada'] as const;
 
 function lerMeta(meta: unknown): { origem: string; via: string; autor: unknown; bruto: Record<string, unknown> } {
   const m = (meta && typeof meta === 'object' ? meta : {}) as Record<string, unknown>;

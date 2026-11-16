@@ -60,6 +60,7 @@ import { startEntradaAutomaticaWorker, stopEntradaAutomaticaWorker } from './lib
 import { startRotinaEtapasWorker, stopRotinaEtapasWorker } from './lib/rotina-etapas-worker.js';
 import { startNaoLidasWorker, stopNaoLidasWorker } from './lib/nao-lidas-worker.js';
 import { startRotinaAniversarioWorker, stopRotinaAniversarioWorker } from './lib/rotina-aniversario-worker.js';
+import { startCutucadaAposEquipeWorker, stopCutucadaAposEquipeWorker } from './lib/cutucada-apos-equipe-worker.js';
 import { startCampanhaWorker, stopCampanhaWorker } from './lib/campanha-worker.js';
 import { startResumoDiarioIaWorker, stopResumoDiarioIaWorker } from './lib/resumo-diario-ia-worker.js';
 import { startSuporteLembreteWorker, stopSuporteLembreteWorker } from './lib/suporte-lembrete-worker.js';
@@ -285,6 +286,7 @@ async function main(): Promise<void> {
       startLigacaoWhatsappWorker();
       startNaoLidasWorker();
       startRotinaAniversarioWorker();
+      startCutucadaAposEquipeWorker();
       startCampanhaWorker();
       startResumoDiarioIaWorker();
       startSuporteLembreteWorker();
@@ -313,6 +315,7 @@ async function main(): Promise<void> {
       stopLigacaoWhatsappWorker();
       stopNaoLidasWorker();
       stopRotinaAniversarioWorker();
+      stopCutucadaAposEquipeWorker();
       stopCampanhaWorker();
       stopResumoDiarioIaWorker();
       stopSuporteLembreteWorker();
