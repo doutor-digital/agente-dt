@@ -35,6 +35,18 @@ Faz, parando no primeiro erro (e dizendo o que fazer): leva o kit → conferênc
 Clínica real: o questionário privado (`KIT_PRIVADO_DIR`) segue sozinho para a VPS, modo 600. Não cole token nem senha em lugar nenhum: o comando não pede nenhum.
 O roteiro passo a passo abaixo continua valendo (é o que o comando encadeia).
 
+## O franqueado preenche sozinho: o formulário (link com código)
+Em vez de você perguntar tudo ao dono da clínica, mande um link. Do seu computador (o script faz o ssh; precisa de terminal):
+
+    bash ops/kit-unidade/convite-clinica-joao.sh --rotulo "Dra. Fulana (Serra)"     # cria e mostra o link UMA vez (uso único, vale 14 dias)
+    bash ops/kit-unidade/convite-clinica-joao.sh --listar                           # convites e quais já foram preenchidos (sem os códigos)
+    bash ops/kit-unidade/convite-clinica-joao.sh --revogar <id>                     # encerra um convite ainda não usado (não apaga)
+
+O link (`https://agente…/nova-clinica/<codigo>`) é o segredo: mande só para a pessoa, direto no WhatsApp; não cole em grupo nem no chat do Claude. O banco guarda só o hash, então um link perdido não se reimprime (revogue e crie outro).
+A página fala em linguagem de dono de clínica, nunca pede token nem senha, e marca «vira frase dita ao paciente — confira» nos campos de endereço, preços, horários e nomes. Ao enviar, o dono vê «Recebemos»,
+as respostas ficam na tabela `nova_clinica_convite` do banco do agente e você recebe um aviso no WhatsApp (só nome da clínica, cidade e quem preencheu — nunca e-mail, telefone ou Pix).
+Código errado, vencido, usado ou revogado dão a mesma resposta; há limite de tentativas por IP e o corpo é limitado a 64 KB.
+
 ## Roteiro do João passo a passo (NA VPS, como root, de `/root/kit`, com `bash arquivo` no seu terminal)
 0. `cd /root/kit`
 1. Uma vez: `bash ops/kit-unidade/criar-platform-app-joao.sh --so-conferir`, depois sem a flag. Cria o Platform App (token em arquivo 600). **Não** dá ao app permissão sobre

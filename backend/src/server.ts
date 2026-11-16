@@ -11,6 +11,7 @@ import { apiRouter } from './routes/api.routes.js';
 import { apagarCofreDeArquivos, ligarConectorRemoto } from './mcp-remoto/producao.js';
 import { paginaPausaHandler } from './controllers/pausa.controller.js';
 import { paginaAprendizadosHandler } from './controllers/aprendizados.controller.js';
+import { ligarNovaClinica } from './controllers/nova-clinica.controller.js';
 import { paginaAgenteHandler } from './controllers/agente-chatwoot.controller.js';
 import { paginaRobosHandler } from './controllers/robos.controller.js';
 import { paginaDisparosHandler } from './controllers/disparos.controller.js';
@@ -141,6 +142,9 @@ async function main(): Promise<void> {
 
   app.use(cookieParser());
 
+  // Formulário público «nova clínica» (código de uso único). ANTES dos parsers gerais: a rota lê o corpo com teto de 64 KB e conta o limite de taxa antes de ler.
+  ligarNovaClinica(app);
+
   // Webhook do Kommo antes do parser geral: cartões em lote passam de 1000 parâmetros e o geral devolvia 413
   // antes do handler (ver parser-webhook-kommo.ts).
   app.use(ROTA_WEBHOOK_KOMMO, parserDoWebhookKommo());
@@ -160,7 +164,7 @@ async function main(): Promise<void> {
 
   app.use((req, _res, next) => {
     // o token do cofre de arquivos viaja no caminho: nunca vai para o log
-    logger.debug({ method: req.method, url: req.url.replace(/^(\/arquivos\/(?:enviar|baixar)\/)[^/?]+/, '$1[token]').replace(/([?&]k=)[^&]+/, '$1[chave]').replace(/([?&]access_token=)[^&]+/, '$1[chave]') }, 'http');
+    logger.debug({ method: req.method, url: req.url.replace(/^(\/arquivos\/(?:enviar|baixar)\/)[^/?]+/, '$1[token]').replace(/(\/nova-clinica\/)[^/?#\s]+/, '$1[codigo]').replace(/([?&]k=)[^&]+/, '$1[chave]').replace(/([?&]access_token=)[^&]+/, '$1[chave]') }, 'http');
     next();
   });
 
