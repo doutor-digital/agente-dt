@@ -7,7 +7,7 @@
  * então quatro saíam no mesmo dia por desenho.
  *
  * A REGRA: por conversa (o lead, em todas as unidades da mesma conta do Kommo — comercial e resgate dividem o
- * cartão), contam os envios automáticos de retomada (degrau da régua e reativação) feitos no DIA DE CALENDÁRIO da
+ * cartão), contam os envios automáticos de retomada (degrau da régua, reativação e a cutucada depois da equipe) feitos no DIA DE CALENDÁRIO da
  * unidade, no fuso dela. Chegou a 2, nada mais sai até a meia-noite local. O degrau não é pulado: no dia seguinte a
  * régua retoma de onde der (ou para, se a janela de 24 h do WhatsApp fechou).
  *
@@ -71,7 +71,7 @@ export async function enviosDeRetomadaRecentes(
       role: 'assistant',
       createdAt: { gte: new Date(agora.getTime() - 24 * 3600_000) },
       conversation: { leadId, unitId: { in: unidades.length ? unidades : [unit.id] } },
-      OR: [{ meta: { path: ['followUp'], gte: 1 } }, { meta: { path: ['reactivation'], gte: 1 } }],
+      OR: [{ meta: { path: ['followUp'], gte: 1 } }, { meta: { path: ['reactivation'], gte: 1 } }, { meta: { path: ['cutucada'], gte: 1 } }],
     },
     select: { createdAt: true, meta: true },
     orderBy: { createdAt: 'desc' },

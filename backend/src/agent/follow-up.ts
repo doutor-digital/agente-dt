@@ -137,6 +137,82 @@ export function regraDePagamento(unit: Pick<Unit, 'acceptsAdvancePayment' | 'spi
   return '';
 }
 
+/**
+ * O que acontece com o texto que o modelo escreveu antes de ele poder sair numa mensagem AUTOMÁTICA (régua e cutucada): limpeza,
+ * travas de tom, vazamento, reserva e horário inventados, guardrail de preço/lacuna. `null` = nada sai (o motivo vai para o log).
+ * Extraída de `runAgentFollowUp` sem mudar uma linha do comportamento: a cutucada depois da equipe passa pelas MESMAS travas.
+ */
+export async function tratarTextoDaRegua(
+  texto: string,
+  args: { unit: Unit; base: string; contato: string | null; rede: UnidadeDaRede[]; leadId: number; rotulo: string },
+): Promise<string | null> {
+  const { unit, base, contato, rede } = args;
+  // A régua sai pelo Salesbot, sem botões: a linha [[botoes: …]] da regra global
+  // vazou como texto em Taubaté (12/09/2026). Aqui ela só é removida.
+  // "Dra. Sofia" → "Sofia" nas clínicas Doutor Hérnia (decisão do João, 21/10) — ver rede-doutor-hernia.ts.
+  const limpo = semDraSofiaNaDH(extrairBotoes(texto).texto.replace(/^["']|["']$/g, ''), unit, rede);
+  if (!limpo || limpo.length > 600) return null;
+
+  // A régua não passava pelo guardrail: ia do modelo direto pro Kommo, sem
+  // checagem de preço nem de lacuna. Aqui ela passa — e com uma diferença do
+  // caminho da conversa: quando o guardrail precisa RECUSAR (preço fora do
+  // catálogo, lacuna que não deu pra preencher, regra clínica), a régua
+  // simplesmente não sai. Mensagem de reengajamento que diz "deixa eu
+  // confirmar" não reengaja ninguém — é melhor o silêncio e o próximo degrau.
+  // As travas de tom (diminutivo, intimidade) valem aqui igual à conversa: a régua é
+  // justamente onde mora a despedida, que é onde o tom escorrega. `tratado` tem de ser
+  // o que retorna no fim — devolver `limpo` traria o texto cru de volta e anularia tudo.
+  // A régua não tem agenda: nome de profissional aqui só pode ter vindo do histórico, de uma
+  // consulta que talvez já tenha passado (08/10/2026, cartão 28088906). Sai — a não ser que a
+  // própria ficha da unidade o cite.
+  // Nome de perfil que não é nome ("Oi, Tricolor!") sai mesmo que o modelo o copie do histórico.
+  const tratado = semNomeDoPerfil(
+    semNomeDeProfissional(semIntimidade(semDiminutivo(limpo)), nomeEstaNaFonte(base)).texto,
+    contato,
+  );
+  // Bastidor (anotação para a equipe, raciocínio, "o paciente…") nunca sai na régua — ver services/vazamento.ts.
+  const vazou = detectarVazamento(tratado);
+  if (vazou) {
+    logger.warn(
+      { unit: unit.slug, leadId: args.leadId, tipo: vazou.tipo, trecho: vazou.trecho },
+      `${args.rotulo}: ${explicarVazamento(vazou)} — nada enviado`,
+    );
+    return null;
+  }
+  // "Deixo um horário guardado pra você" sem consulta: silêncio e o próximo degrau, como no vazamento.
+  const reservaFalsa = await reservaFalsaNoDegrau(tratado, { unitId: unit.id, leadId: args.leadId, fuso: fusoDaUnidade(unit) });
+  if (reservaFalsa) {
+    logger.warn(
+      { unit: unit.slug, leadId: args.leadId, trecho: reservaFalsa },
+      `${args.rotulo}: disse que deixou horário reservado e não há consulta — nada enviado`,
+    );
+    return null;
+  }
+  // Dia e hora oferecidos sem consulta: a régua não vê a agenda, então é inventado — silêncio e o próximo degrau.
+  const inventado = await horarioInventadoNoDegrau(tratado, { unitId: unit.id, leadId: args.leadId, fuso: fusoDaUnidade(unit) });
+  if (inventado) {
+    logger.warn(
+      { unit: unit.slug, leadId: args.leadId, horarios: inventado, texto: tratado },
+      `${args.rotulo}: ofereceu horário sem consultar a agenda — nada enviado`,
+    );
+    return null;
+  }
+  // A régua também fala com quem recebeu o disparo de campanha: o R$ da oferta dele não pode virar o da ficha (o bug do R$ 150).
+  const oferta = await ofertaDoLead(unit.id, args.leadId).catch((err) => {
+    logger.warn({ err: String(err), unit: unit.slug, leadId: args.leadId }, `${args.rotulo}: ofertaDoLead falhou — guardrail segue só com a ficha`);
+    return null;
+  });
+  const { guard, recusou } = guardrailDaRegua(tratado, unit, oferta?.oferta ?? null);
+  if (recusou) {
+    logger.warn(
+      { unit: unit.slug, leadId: args.leadId, motivos: guard.triggered, texto: tratado },
+      `${args.rotulo}: guardrail barrou o degrau — nada enviado`,
+    );
+    return null;
+  }
+  return guard.rewritten ? guard.text : tratado;
+}
+
 export async function runAgentFollowUp(args: FollowUpArgs): Promise<string | null> {
   const unit = await prisma.unit.findUnique({ where: { id: args.unitId } });
   if (!unit) return null;
@@ -217,70 +293,7 @@ ${conversa}`.trim();
       ? bruto.map((p) => (typeof p === 'string' ? p : ((p as { text?: string }).text ?? ''))).join('')
       : '';
 
-    // A régua sai pelo Salesbot, sem botões: a linha [[botoes: …]] da regra global
-    // vazou como texto em Taubaté (12/09/2026). Aqui ela só é removida.
-    // "Dra. Sofia" → "Sofia" nas clínicas Doutor Hérnia (decisão do João, 21/10) — ver rede-doutor-hernia.ts.
-    const limpo = semDraSofiaNaDH(extrairBotoes(texto).texto.replace(/^["']|["']$/g, ''), unit, rede);
-    if (!limpo || limpo.length > 600) return null;
-
-    // A régua não passava pelo guardrail: ia do modelo direto pro Kommo, sem
-    // checagem de preço nem de lacuna. Aqui ela passa — e com uma diferença do
-    // caminho da conversa: quando o guardrail precisa RECUSAR (preço fora do
-    // catálogo, lacuna que não deu pra preencher, regra clínica), a régua
-    // simplesmente não sai. Mensagem de reengajamento que diz "deixa eu
-    // confirmar" não reengaja ninguém — é melhor o silêncio e o próximo degrau.
-    // As travas de tom (diminutivo, intimidade) valem aqui igual à conversa: a régua é
-    // justamente onde mora a despedida, que é onde o tom escorrega. `tratado` tem de ser
-    // o que retorna no fim — devolver `limpo` traria o texto cru de volta e anularia tudo.
-    // A régua não tem agenda: nome de profissional aqui só pode ter vindo do histórico, de uma
-    // consulta que talvez já tenha passado (08/10/2026, cartão 28088906). Sai — a não ser que a
-    // própria ficha da unidade o cite.
-    // Nome de perfil que não é nome ("Oi, Tricolor!") sai mesmo que o modelo o copie do histórico.
-    const tratado = semNomeDoPerfil(
-      semNomeDeProfissional(semIntimidade(semDiminutivo(limpo)), nomeEstaNaFonte(base)).texto,
-      contato,
-    );
-    // Bastidor (anotação para a equipe, raciocínio, "o paciente…") nunca sai na régua — ver services/vazamento.ts.
-    const vazou = detectarVazamento(tratado);
-    if (vazou) {
-      logger.warn(
-        { unit: unit.slug, leadId: args.leadId, tipo: vazou.tipo, trecho: vazou.trecho },
-        `follow-up: ${explicarVazamento(vazou)} — nada enviado`,
-      );
-      return null;
-    }
-    // "Deixo um horário guardado pra você" sem consulta: silêncio e o próximo degrau, como no vazamento.
-    const reservaFalsa = await reservaFalsaNoDegrau(tratado, { unitId: unit.id, leadId: args.leadId, fuso: fusoDaUnidade(unit) });
-    if (reservaFalsa) {
-      logger.warn(
-        { unit: unit.slug, leadId: args.leadId, trecho: reservaFalsa },
-        'follow-up: disse que deixou horário reservado e não há consulta — nada enviado',
-      );
-      return null;
-    }
-    // Dia e hora oferecidos sem consulta: a régua não vê a agenda, então é inventado — silêncio e o próximo degrau.
-    const inventado = await horarioInventadoNoDegrau(tratado, { unitId: unit.id, leadId: args.leadId, fuso: fusoDaUnidade(unit) });
-    if (inventado) {
-      logger.warn(
-        { unit: unit.slug, leadId: args.leadId, horarios: inventado, texto: tratado },
-        'follow-up: ofereceu horário sem consultar a agenda — nada enviado',
-      );
-      return null;
-    }
-    // A régua também fala com quem recebeu o disparo de campanha: o R$ da oferta dele não pode virar o da ficha (o bug do R$ 150).
-    const oferta = await ofertaDoLead(unit.id, args.leadId).catch((err) => {
-      logger.warn({ err: String(err), unit: unit.slug, leadId: args.leadId }, 'follow-up: ofertaDoLead falhou — guardrail segue só com a ficha');
-      return null;
-    });
-    const { guard, recusou } = guardrailDaRegua(tratado, unit, oferta?.oferta ?? null);
-    if (recusou) {
-      logger.warn(
-        { unit: unit.slug, leadId: args.leadId, motivos: guard.triggered, texto: tratado },
-        'follow-up: guardrail barrou o degrau — nada enviado',
-      );
-      return null;
-    }
-    return guard.rewritten ? guard.text : tratado;
+    return await tratarTextoDaRegua(texto, { unit, base, contato, rede, leadId: args.leadId, rotulo: 'follow-up' });
   } catch (err) {
     logger.warn({ err: String(err), unit: unit.slug, leadId: args.leadId }, 'follow-up: modelo falhou');
     return null;

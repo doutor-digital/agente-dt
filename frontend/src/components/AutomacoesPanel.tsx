@@ -94,6 +94,7 @@ const ACAO: Record<AcaoSimulada, { rotulo: string; cor: string; explica: string 
   etiquetaria: { rotulo: 'etiquetaria', cor: 'text-amber-300 bg-amber-500/10 ring-amber-500/30', explica: 'poria a etiqueta ▶ (e o bot dela mandaria a mensagem)' },
   pularia: { rotulo: 'pularia', cor: 'text-zinc-300 bg-zinc-500/10 ring-zinc-500/30', explica: 'não poria a etiqueta — o motivo diz por quê' },
   alertaria: { rotulo: 'alertaria', cor: 'text-orange-300 bg-orange-500/10 ring-orange-500/30', explica: 'abriria a tarefa ALERTA pra SDR (ex.: a IA prometeu uma consulta que não existe)' },
+  mandaria: { rotulo: 'mandaria', cor: 'text-teal-300 bg-teal-500/10 ring-teal-500/30', explica: 'mandaria esta mensagem ao paciente (o texto está ao lado)' },
 };
 
 const quando = (iso: string) =>

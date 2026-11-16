@@ -1,0 +1,250 @@
+/**
+ * CUTUCADA DEPOIS DA EQUIPE (pedido da clínica de Petrópolis, 16/11/2026, decisão do João).
+ *
+ * "A IA passa a mandar uma mensagem aos leads que não responderem à primeira abordagem feita pela Mariana (SDR do dia).
+ * Teste de 3 dias para decidir se fica." A Sofia lê a conversa e manda UMA mensagem curta, 2 h depois da fala da equipe, em
+ * horário comercial, uma vez por lead.
+ *
+ * ESTE ARQUIVO É A PARTE PURA (sem banco, sem Kommo): quem falou por último, o prazo, as travas do cartão e o texto aprovado.
+ * O worker (`cutucada-apos-equipe-worker.ts`) lê o mundo e chama isto.
+ *
+ * QUEM É QUEM NO WHATSAPP LITE (medido em Petrópolis, 16/11/2026, 85 conversas, 413 mensagens enviadas):
+ *   - a SOFIA sai pelo Salesbot: autor `bot` "Salesbot" — 48 de 48 falas dela no nosso banco casaram com uma saída "Salesbot" em
+ *     menos de 1 s;
+ *   - a SDR pelo CELULAR sai como autor `bot` "WhatsApp Lite" (202 mensagens) — o Kommo a chama de robô, mas é gente;
+ *   - a SDR escrevendo DENTRO do Kommo sai como `internal` "Doutor Hérnia Petrópolis" (157) — o mesmo login do robô de ▶ Retomada;
+ *   - "Agradecemos o seu contato! Nosso atendimento é de segunda a…" é a resposta automática do app (23), no máximo ~16 s depois
+ *     da mensagem do paciente.
+ * O classificador compartilhado (`classificarAutor`) lê `bot` como Sofia, então em Lite a equipe do celular vira "Sofia" lá (a
+ * régua e a pausa pela equipe não a enxergam). Aqui NÃO se mexe nele — o comportamento das outras unidades fica como está —, e a
+ * cutucada reclassifica as saídas pelo que prova de quem é cada uma (`reclassificarFalas`).
+ */
+import type { MensagemOficial } from '../services/kommo-talks-normalizar.js';
+import { JANELA_DO_ENVIO_MS } from '../services/kommo-talks-normalizar.js';
+import { porQueNaoTocar, intentsDe, inteiro, temEtiqueta, type Cartao, type OpcoesDeCartao, type RazaoDeFicar } from './rotina-nucleo.js';
+import { ETIQUETAS_RETOMADA } from './rotina-etapas-worker.js';
+import { RESPOSTA_AUTOMATICA_MS, RESPOSTA_AUTOMATICA_MIN_CARACTERES } from './pausa-equipe.js';
+import { normalizarNome } from './kommo-schema.js';
+
+export const ID_CUTUCADA = 'cutucada-apos-equipe';
+/** Quanto a equipe fica sem resposta até a Sofia cutucar (padrão do João: 2 h). Por unidade: `pipelineIntents.cutucada_espera_min`. */
+export const ESPERA_PADRAO_MIN = 120;
+/**
+ * Fala da equipe mais velha que isto não vira cutucada. Cobre a noite e o domingo (SDR fala sábado 18h50, a unidade fecha 19h e só
+ * volta segunda 9h = 38 h) e não acorda conversa de semana atrás. Por unidade: `pipelineIntents.cutucada_idade_max_h`.
+ */
+export const IDADE_MAX_PADRAO_H = 48;
+
+export type AutorDaFala = 'paciente' | 'sofia' | 'equipe' | 'robo';
+
+export interface Fala {
+  id: string;
+  em: Date;
+  autor: AutorDaFala;
+  autorNome: string;
+  texto: string;
+  anexo: string | null;
+}
+
+export interface ConfigDaCutucada {
+  esperaMin: number;
+  idadeMaxH: number;
+}
+
+export function configDaCutucada(pipelineIntents: unknown): ConfigDaCutucada {
+  const i = intentsDe(pipelineIntents);
+  return {
+    esperaMin: Math.min(inteiro(i.cutucada_espera_min) ?? ESPERA_PADRAO_MIN, 24 * 60),
+    idadeMaxH: Math.min(inteiro(i.cutucada_idade_max_h) ?? IDADE_MAX_PADRAO_H, 24 * 14),
+  };
+}
+
+// ─── quem falou ───────────────────────────────────────────────────────────────────────────────────
+
+/** O app do celular da clínica: WhatsApp Business (coexistência) e WhatsApp Lite (QR code). O Kommo os marca como robô; quem escreve ali é gente. */
+const APPS_DO_CELULAR = ['whatsapp lite', 'whatsapp business'];
+
+/** Saudação/ausência que o app manda sozinho (Lite: "Agradecemos o seu contato! Nosso atendimento é de segunda a sexta…"). */
+const RESPOSTA_AUTOMATICA = /agradecemos o seu contato|nosso atendimento (é|e) de |fora do (nosso )?hor[aá]rio|hor[aá]rio de atendimento (é|e) /i;
+/** Aviso do Kommo/WhatsApp que sai como mensagem de saída ("Unable to open this message…"). */
+const AVISO_DO_SISTEMA = /^(unable to (open|display) this message|n[aã]o foi poss[ií]vel (abrir|exibir) (esta|essa) mensagem|'?messagecontextinfo'? is not yet supported)/i;
+
+/**
+ * Textos de robô do Kommo que saem como o USUÁRIO `internal` — o mesmo login com que a SDR escreve dentro do Kommo, então o autor
+ * não os separa da gente. A etiqueta ▶ Retomada no cartão é a marca geral (abaixo); estes cobrem o robô de gatilho de etapa que
+ * não põe etiqueta (Petrópolis, 13/11/2026: 6 de 22 saídas de robô estavam em cartão sem a etiqueta). Na dúvida é robô: o erro
+ * custa uma cutucada a menos, nunca uma a mais.
+ */
+export const TEXTOS_DE_ROBO: readonly RegExp[] = [
+  /passando novamente porque vi que voc[eê] procurou ajuda/i,
+  /vi que voc[eê] demonstrou interesse no nosso tratamento, tentei contato/i,
+];
+
+/** A mensagem é a resposta automática do app (saudação, ausência) ou aviso do sistema? Mesma ideia da `pausa-equipe`, estendida ao Lite. */
+export function ehRespostaAutomaticaDoApp(m: Pick<MensagemOficial, 'direcao' | 'texto' | 'autorNome' | 'anexo' | 'em'>, todas: ReadonlyArray<Pick<MensagemOficial, 'direcao' | 'em'>>): boolean {
+  if (m.direcao !== 'saida') return false;
+  const texto = m.texto.trim();
+  if (AVISO_DO_SISTEMA.test(texto)) return true;
+  if (!APPS_DO_CELULAR.includes(m.autorNome.trim().toLowerCase())) return false;
+  if (m.anexo) return false;
+  if (RESPOSTA_AUTOMATICA.test(texto)) return true;
+  if (texto.length < RESPOSTA_AUTOMATICA_MIN_CARACTERES) return false;
+  const t = m.em.getTime();
+  return todas.some((p) => {
+    if (p.direcao !== 'entrada') return false;
+    const d = t - p.em.getTime();
+    return d >= -5_000 && d <= RESPOSTA_AUTOMATICA_MS;
+  });
+}
+
+/**
+ * Quem escreveu cada mensagem, pelo que se PROVA:
+ *  - entrada = paciente;
+ *  - saída do app do celular (Lite/Business) = equipe, salvo resposta automática do app (= robô);
+ *  - saída de bot/sessão com nome da Sofia = Sofia SÓ se casa com um envio que o nosso agente registrou (±3 min); sem casar, o
+ *    bot é outro robô (régua, Salesbot da conta) e a sessão com nome da Sofia é a equipe usando o mesmo login;
+ *  - saída de usuário do Kommo (`internal`) = equipe, salvo texto de robô conhecido ou cartão com a etiqueta ▶ Retomada (robô).
+ */
+export function reclassificarFalas(
+  msgs: readonly MensagemOficial[],
+  enviosDaSofia: readonly Date[],
+  o: { cartaoComEtiquetaDeRobo: boolean; janelaMs?: number },
+): Fala[] {
+  const janela = o.janelaMs ?? JANELA_DO_ENVIO_MS;
+  const casaComEnvio = (m: MensagemOficial) => enviosDaSofia.some((e) => Math.abs(e.getTime() - m.em.getTime()) <= janela);
+  return msgs.map((m): Fala => {
+    const base = { id: m.id, em: m.em, autorNome: m.autorNome, texto: m.texto, anexo: m.anexo?.tipo ?? null };
+    if (m.direcao === 'entrada') return { ...base, autor: 'paciente' };
+    if (APPS_DO_CELULAR.includes(m.autorNome.trim().toLowerCase()) || AVISO_DO_SISTEMA.test(m.texto.trim())) {
+      return { ...base, autor: ehRespostaAutomaticaDoApp(m, msgs) ? 'robo' : 'equipe' };
+    }
+    if (m.autor === 'sofia') {
+      if (m.pelaSessao) return { ...base, autor: casaComEnvio(m) ? 'sofia' : 'equipe' };
+      return { ...base, autor: casaComEnvio(m) ? 'sofia' : 'robo' };
+    }
+    if (m.autor === 'paciente') return { ...base, autor: 'paciente' };
+    const robo = o.cartaoComEtiquetaDeRobo || TEXTOS_DE_ROBO.some((r) => r.test(m.texto));
+    return { ...base, autor: robo ? 'robo' : 'equipe' };
+  });
+}
+
+/** O cartão carrega a marca de que um robô de retomada falou com ele (▶ Retomada, ▶ Retomada 2, ▶ Retomada 3). */
+export function cartaoComEtiquetaDeRobo(lead: Cartao): boolean {
+  return ETIQUETAS_RETOMADA.some((t) => temEtiqueta(lead, t));
+}
+
+// ─── a decisão pela conversa ──────────────────────────────────────────────────────────────────────
+
+export type PorQuePular =
+  | 'sem_conversa'
+  | 'paciente_falou_por_ultimo'
+  | 'sofia_falou_por_ultimo'
+  | 'robo_falou_por_ultimo'
+  | 'dentro_do_prazo'
+  | 'fala_muito_antiga'
+  | 'fala_de_encerramento';
+
+/**
+ * «Beleza», «Obrigada, bom fim de semana», «Ok!»: a equipe FECHOU a conversa, não deixou pergunta no ar. Cutucar aí é cutucar quem
+ * já combinou tudo (visto em Petrópolis, 16/11: a equipe respondeu «beleza» ao paciente e a conversa acabou). Curto, sem «?» e com
+ * cara de despedida/confirmação.
+ */
+const ENCERRAMENTO = /^\W*(ok|okay|beleza|blz|certo|combinado|perfeito|t[aá] bom|tudo bem|obrigad|de nada|por nada|disponha|imagina|valeu|at[eé] (mais|logo|amanh)|abra[cç]o|bom (fim|final) de semana|boa (semana|noite))/i;
+export function ehEncerramento(f: Pick<Fala, 'texto' | 'anexo'>): boolean {
+  const t = f.texto.trim();
+  return !f.anexo && t.length > 0 && t.length <= 60 && !t.includes('?') && ENCERRAMENTO.test(t);
+}
+
+export type DecisaoDaConversa =
+  | { tipo: 'cutucar'; ultimaDaEquipe: Fala }
+  | { tipo: 'pular'; porque: PorQuePular; /** quando deixa de ser "dentro do prazo" (epoch ms) */ depoisDe?: number };
+
+/**
+ * A conversa pede a cutucada? Só quando a ÚLTIMA fala é da equipe, o paciente não escreveu depois dela, e já passou o prazo
+ * (padrão 2 h) sem passar da idade máxima. Paciente, Sofia ou robô por último: não é caso de cutucar.
+ */
+export function decidirPelaConversa(falas: readonly Fala[], agora: Date, cfg: ConfigDaCutucada): DecisaoDaConversa {
+  const ultima = falas[falas.length - 1];
+  if (!ultima) return { tipo: 'pular', porque: 'sem_conversa' };
+  if (ultima.autor === 'paciente') return { tipo: 'pular', porque: 'paciente_falou_por_ultimo' };
+  if (ultima.autor === 'sofia') return { tipo: 'pular', porque: 'sofia_falou_por_ultimo' };
+  if (ultima.autor === 'robo') return { tipo: 'pular', porque: 'robo_falou_por_ultimo' };
+  const idadeMs = agora.getTime() - ultima.em.getTime();
+  if (idadeMs < cfg.esperaMin * 60_000) return { tipo: 'pular', porque: 'dentro_do_prazo', depoisDe: ultima.em.getTime() + cfg.esperaMin * 60_000 };
+  if (idadeMs > cfg.idadeMaxH * 3_600_000) return { tipo: 'pular', porque: 'fala_muito_antiga' };
+  if (ehEncerramento(ultima)) return { tipo: 'pular', porque: 'fala_de_encerramento' };
+  return { tipo: 'cutucar', ultimaDaEquipe: ultima };
+}
+
+// ─── o que o CARTÃO diz ───────────────────────────────────────────────────────────────────────────
+
+const n = normalizarNome;
+
+/** Entrada ("Incoming leads", "Etapa de leads de entrada") ou EM QUALIFICAÇÃO — as duas etapas onde a SDR faz a 1ª abordagem. */
+export function etapaDaCutucada(nomeDaEtapa: string | null | undefined): boolean {
+  if (!nomeDaEtapa) return false;
+  const s = n(nomeDaEtapa);
+  return s.includes('entrada') || s.includes('incoming') || s === n('EM QUALIFICAÇÃO');
+}
+
+/**
+ * Por que este cartão NÃO recebe cutucada, só pelo que o cartão mostra (de graça): etiqueta NO_FOLLOW_UP / NAO_PERTURBAR / CURRÍCULO /
+ * opt-out, «Pausar IA», ◷ Retomar em de hoje em diante, consulta futura no cartão. É a MESMA conferência das réguas da rotina
+ * diária (`porQueNaoTocar`): uma lista só, para a cutucada nunca ser mais permissiva que a régua. `null` = segue.
+ */
+export function porQueOCartaoFicaQuieto(lead: Cartao, o: Pick<OpcoesDeCartao, 'agora' | 'tz' | 'pausarIaFieldId'>): RazaoDeFicar | null {
+  return porQueNaoTocar(lead, { agora: o.agora, tz: o.tz, pausarIaFieldId: o.pausarIaFieldId });
+}
+
+// ─── o texto ──────────────────────────────────────────────────────────────────────────────────────
+
+export const MAX_CARACTERES = 300;
+const MIN_CARACTERES = 15;
+const FALA_DE_VALOR = /R\$|\bpix\b|\bpagamento\b|\bpagar\b|\bsinal\b|\bvalor(es)?\b|\bdesconto\b|\bpre[cç]o\b|\bboleto\b|\bcart[aã]o de cr[eé]dito\b/i;
+const FALA_DE_LIGACAO = /\bliga(r|rei|mos|ndo|[cç][aã]o|[cç][oõ]es)?\b|\bliguei\b|\bligou\b|\btelefon(ei|ar|ou|ema)\b/i;
+
+/**
+ * O texto que o modelo escreveu pode sair? Aqui só as regras DESTE pedido; o resto (vazamento, lacuna, preço fora do catálogo,
+ * horário e reserva inventados, tom) é do `tratarTextoDaRegua`, o mesmo da régua. `null` = pode; senão o motivo.
+ *  - curto (até 300 caracteres) e termina em pergunta;
+ *  - nada de preço, Pix, sinal, pagamento;
+ *  - nada de ligação, a não ser que a própria conversa já fale em ligação (a Sofia não liga e não sabe se a equipe ligou).
+ */
+export function porQueOTextoNaoSai(texto: string, conversa: string): string | null {
+  const t = texto.trim();
+  if (t.length < MIN_CARACTERES) return 'texto curto demais';
+  if (t.length > MAX_CARACTERES) return `texto com mais de ${MAX_CARACTERES} caracteres`;
+  if (!/\?\s*[\p{Emoji_Presentation}\p{Extended_Pictographic}\s]*$/u.test(t)) return 'não termina com uma pergunta';
+  if ((t.match(/\n/g) ?? []).length > 2) return 'texto em muitos parágrafos';
+  if (FALA_DE_VALOR.test(t)) return 'fala de valor, Pix ou pagamento';
+  if (FALA_DE_LIGACAO.test(t) && !FALA_DE_LIGACAO.test(conversa)) return 'fala de ligação que a conversa não menciona';
+  return null;
+}
+
+/** A conversa como o modelo a lê (as últimas `max` falas). Áudio e imagem da equipe aparecem como marca: o conteúdo não é conhecido. */
+export function conversaParaOModelo(falas: readonly Fala[], max = 14): string {
+  const rotulo: Record<AutorDaFala, string> = { paciente: 'PACIENTE', sofia: 'VOCÊ (Sofia)', equipe: 'ATENDENTE DA CLÍNICA (humana)', robo: 'MENSAGEM AUTOMÁTICA' };
+  return falas
+    .slice(-max)
+    .map((f) => {
+      const marca = f.anexo ? (f.anexo === 'voice' ? '[áudio]' : f.anexo === 'picture' ? '[imagem]' : `[${f.anexo}]`) : '';
+      const corpo = [f.texto.replace(/\s+/g, ' ').trim().slice(0, 500), marca].filter(Boolean).join(' ') || '[mensagem vazia]';
+      return `${rotulo[f.autor]}: ${corpo}`;
+    })
+    .join('\n');
+}
+
+/** A Sofia já falou nesta conversa? (para ela se apresentar em poucas palavras só quando é a primeira vez) */
+export function sofiaJaFalou(falas: readonly Fala[]): boolean {
+  return falas.some((f) => f.autor === 'sofia');
+}
+
+// ─── a marca de «uma vez por lead» ────────────────────────────────────────────────────────────────
+
+/** O id da marca persistente: um por lead, para sempre. Gravar de novo falha na chave primária — é isso que torna a cutucada idempotente. */
+export function idDaMarcaDaCutucada(unitId: string, leadId: number): string {
+  return `${ID_CUTUCADA}-${unitId}-${leadId}`;
+}
+
+/** A marca que a mensagem gravada leva em `meta` (a conta do teto do dia a conhece: `CHAVES_DE_RETOMADA`). */
+export const META_DA_CUTUCADA = { cutucada: 1 } as const;
