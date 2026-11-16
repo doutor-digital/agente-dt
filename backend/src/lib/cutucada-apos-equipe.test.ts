@@ -222,6 +222,19 @@ test('o texto que sai: curto, termina em pergunta, sem preço/Pix/sinal, sem lig
   assert.match(porQueOTextoNaoSai(`${'Oi, tudo bem com você? '.repeat(20)}`, conv) ?? '', /240/);
 });
 
+test('o texto que NÃO sai (16/11, 1ª hora em Petrópolis): saudação de turno e tempo relativo', () => {
+  const conv = 'ATENDENTE DA CLÍNICA (humana): Dona Katia, fica bom amanha as 10:30hrs ?';
+  assert.match(porQueOTextoNaoSai('Bom dia, Monique! Aqui é a Sofia, da Doutor Hérnia Petrópolis. Onde é a dor que você vem sentindo?', conv) ?? '', /saudação/);
+  assert.match(porQueOTextoNaoSai('Oi! Boa tarde, conseguiu ver a mensagem da atendente?', conv) ?? '', /saudação/);
+  assert.match(porQueOTextoNaoSai('Oi, Katia! Então, fica bom pra senhora amanhã às 10h30 em Teresópolis?', conv) ?? '', /tempo relativo/);
+  assert.match(porQueOTextoNaoSai('Oi, Jorge! Conseguiu ouvir o áudio que te mandaram agora?', conv) ?? '', /tempo relativo/);
+  assert.match(porQueOTextoNaoSai('Oi! Como está a sua dor hoje?', conv) ?? '', /tempo relativo/);
+  // o jeito certo: sem dia nem hora repetidos
+  assert.equal(porQueOTextoNaoSai('Oi, Katia! Aqui é a Sofia, da Doutor Hérnia Petrópolis. O horário que a atendente te ofereceu serve pra senhora?', conv), null);
+  // palavra que só CONTÉM as letras não conta ("Hojeda", "agorafobia" não são tempo)
+  assert.equal(porQueOTextoNaoSai('Oi, Hojeda! A dor de agorafobia passou? Como você está?', conv), null);
+});
+
 test('a conversa para o modelo: quem é quem, o áudio da equipe aparece como marca e o limite de falas vale', () => {
   const fs = falas([m('in', T0, 'Quero saber'), m('sofia', T0 + 10, 'Oi!'), m('lite', T0 + H, '', { attachment: { type: 'voice' } })], [T0 + 10]);
   assert.equal(conversaParaOModelo(fs), 'PACIENTE: Quero saber\nVOCÊ (Sofia): Oi!\nATENDENTE DA CLÍNICA (humana): [áudio]');

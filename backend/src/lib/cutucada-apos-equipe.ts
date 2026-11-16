@@ -252,6 +252,10 @@ export const MAX_CARACTERES = 240;
 const MIN_CARACTERES = 15;
 const FALA_DE_VALOR = /R\$|\bpix\b|\bpagamento\b|\bpagar\b|\bsinal\b|\bvalor(es)?\b|\bdesconto\b|\bpre[cç]o\b|\bboleto\b|\bcart[aã]o de cr[eé]dito\b/i;
 const FALA_DE_LIGACAO = /\bliga(r|rei|mos|ndo|[cç][aã]o|[cç][oõ]es)?\b|\bliguei\b|\bligou\b|\btelefon(ei|ar|ou|ema)\b/i;
+/** A cutucada sai a qualquer hora do expediente e pode ser lida depois: saudação de turno erra ("Bom dia" às 15h). */
+const SAUDACAO_DE_TURNO = /\b(bom\s+dia|boa\s+tarde|boa\s+noite)\b/i;
+/** A fala da atendente pode ser de outro dia: "amanhã às 10h30" repetido na manhã seguinte vira a data errada. */
+const TEMPO_RELATIVO = /(?<![\p{L}])(hoje|amanh[ãa]|ontem|agora|mais\s+tarde|daqui\s+a\s+pouco)(?![\p{L}])/iu;
 
 /**
  * O texto que o modelo escreveu pode sair? Aqui só as regras DESTE pedido; o resto (vazamento, lacuna, preço fora do catálogo,
@@ -269,6 +273,9 @@ export function porQueOTextoNaoSai(texto: string, conversa: string): string | nu
   if (FALA_DE_VALOR.test(t)) return 'fala de valor, Pix ou pagamento';
   if (/\b(da|na|nossa|sou da|faço parte da)\s+equipe\s+(d[ao]\s+)?(cl[ií]nica|atendimento)\b|\bfa[cç]o parte da equipe\b|\bsou (da|a) equipe\b/i.test(t)) return 'se apresenta como «da equipe» (parece uma 2ª atendente humana)';
   if (FALA_DE_LIGACAO.test(t) && !FALA_DE_LIGACAO.test(conversa)) return 'fala de ligação que a conversa não menciona';
+  // 16/11 (1ª hora ligada em Petrópolis): "Bom dia, Monique!" às 15h e "amanhã às 10h30" repetido de uma fala que pode ser de outro dia.
+  if (SAUDACAO_DE_TURNO.test(t)) return 'usa saudação de turno (bom dia/boa tarde/boa noite)';
+  if (TEMPO_RELATIVO.test(t)) return 'usa tempo relativo (hoje/amanhã/ontem/agora): a data pode ficar errada';
   return null;
 }
 
