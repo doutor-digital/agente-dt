@@ -71,6 +71,9 @@ table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}th,t
 .toast{position:fixed;left:50%;bottom:calc(18px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--app);padding:9px 16px;border-radius:10px;font-size:13px;z-index:50;max-width:92vw}
 .toast.erro{background:#ca244d;color:#fff}
 ul.lis{margin:0;padding-left:1.2em;display:grid;gap:3px}
+a{color:var(--brand)}
+#areaFiltro,#areaModelo,#resContagem,#detModelo{display:grid;gap:12px}
+#resContagem:empty{display:none}
 </style></head><body>
 <div class="topo"><img class="logo" src="__LOGO_DD__" alt="Doutor Digital" width="28" height="28"><span class="mig">Doutor Digital Atende ›</span><b>Disparos</b>
   <span class="un"><span id="modo" class="pill off" hidden></span><span id="papel" class="pill mudo" hidden></span><select id="unidadeSel" hidden aria-label="Unidade"></select><span id="unidadeNome"></span></span></div>
@@ -123,10 +126,11 @@ ul.lis{margin:0;padding-left:1.2em;display:grid;gap:3px}
     var p = $('papel'); p.hidden = false;
     p.textContent = D.podeAprovar ? 'Você aprova disparos' : 'Você monta; a aprovação é da administração';
   }
-  function faixaDoModo(){
+  function faixaDoModo(modo){
     var f = D.freios, t = f.tetoDoTier ? ' O número está no ' + f.tier + ' da Meta.' : '';
-    if (D.modo === 'seco') return 'MODO SECO. Montar e aprovar NÃO manda mensagem nenhuma: o sistema confere a lista, aplica todas as regras e anota quem receberia. Nada sai até a Doutor Digital ligar os disparos desta unidade.';
-    if (D.modo === 'desligado') return 'Os disparos estão DESLIGADOS nesta unidade.';
+    modo = modo || D.modo;
+    if (modo === 'seco') return 'MODO SECO. Montar e aprovar NÃO manda mensagem nenhuma: o sistema confere a lista, aplica todas as regras e anota quem receberia. Nada sai até a Doutor Digital ligar os disparos desta unidade.';
+    if (modo === 'desligado') return 'Os disparos estão DESLIGADOS nesta unidade.';
     return 'LIGADO. Depois de aprovado, o envio sai em ondas, dentro da janela de ' + f.janela + ', no máximo ' + f.tetoPorHora + ' por hora e ' + f.tetoPorDia + ' por 24 horas.' + t;
   }
 
@@ -367,7 +371,7 @@ ul.lis{margin:0;padding-left:1.2em;display:grid;gap:3px}
   function fato(f, valor, rotulo){ var d = el('div'); d.appendChild(el('b', null, String(valor))); d.appendChild(el('span', null, rotulo)); f.appendChild(d); }
   function desenharOnda(){
     var o = ONDA, p = limpar($('palco')), col = el('div', 'col'); p.appendChild(col);
-    col.appendChild(el('div', 'faixa ' + (o.modo === 'ligado' ? 'vivo' : o.modo === 'seco' ? 'seco' : ''), faixaDoModo()));
+    col.appendChild(el('div', 'faixa ' + (o.modo === 'ligado' ? 'vivo' : o.modo === 'seco' ? 'seco' : ''), faixaDoModo(o.modo)));
     var c = el('div', 'card'); var h = el('h2', null, o.nome); h.appendChild(el('span', 'pill ' + (CLASSE[o.estado] || 'mudo'), ESTADO[o.estado] || o.estado)); c.appendChild(h);
     c.appendChild(el('p', null, 'Público: ' + o.filtro + ' · modelo ' + o.modelo.nome + ' (' + o.modelo.idioma + ')'));
     if (o.pausaMotivo) c.appendChild(el('p', 'ruim', (o.estado === 'cancelada' ? 'Motivo: ' : 'Parada: ') + o.pausaMotivo));
