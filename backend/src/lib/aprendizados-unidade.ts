@@ -56,7 +56,8 @@ const NEGACAO_COLADA = /(?:^|[\s(])(?:n[aã]o|nunca|jamais|nem|evite|evitar|proi
 function semNegacaoColada(texto: string, re: RegExp): boolean {
   const g = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`);
   for (const m of texto.matchAll(g)) {
-    const antes = texto.slice(Math.max(0, (m.index ?? 0) - 50), m.index);
+    // «sem cirurgia»/«sem remédios» descreve o tratamento; não é a negação que isenta a promessa depois dele («sem cirurgia que resolve garantido»)
+    const antes = texto.slice(Math.max(0, (m.index ?? 0) - 50), m.index).replace(/\bsem\s+(?:cirurgia|operar|rem[eé]dios?|dor)\b/gi, 'com');
     if (!NEGACAO_COLADA.test(antes)) return true;
   }
   return false;
@@ -123,7 +124,7 @@ function recusaSempre(texto: string): string | null {
 /** Temas que passam só com negação COLADA ("nunca prometa cura", "não dê desconto"). */
 const RECUSA_SEM_NEGACAO: Array<{ re: RegExp; motivo: string }> = [
   {
-    re: /\bcura\b|\bcurar\b|\bcuramos\b|\bcurado|garant\w* (?:de |a |o )?(?:cura|resultado|melhora)|resultado (?:garantido|certo)|100\s?%|nunca mais (?:vai )?(?:sentir|doer|ter dor)|(?:vai |v[aã]o |fica |ficar[aá]? )(?:ficar )?(?:bom|boa|curad|sem dor|novo em folha)|melhora (?:garantida|certa)|(?:com certeza|garantid\w*|sempre|nunca)\s+(?:[^\s.,;:!?]+\s+){0,3}(?:precis\w*|vai|v[aã]o) (?:de )?(?:operar|cirurgia)|(?:resolv|cura)\w*\s+(?:[^\s.,;:!?]+\s+){0,2}sem (?:operar|cirurgia)|n[aã]o (?:vai|v[aã]o) precisar (?:de )?(?:operar|cirurgia)|(?:[ií]ndice|taxa) de sucesso|quase todos melhoram|prometa|promet\w* (?:que|resultado)|tiro e queda|passa de vez|regrid|volta (?:a trabalhar|ao normal) em|\d+ em cada \d+|\d+\s*%\s*(?:de )?(?:sucesso|melhora|cura|acerto|resultado)|(?:com certeza|garantid\w*|sempre)\s+(?:[^\s.,;:!?]+\s+){0,3}(?:evit\w*|sem) (?:a )?cirurgia|evit\w* (?:a )?cirurgia (?:com certeza|sempre|garantid)|elimin\w* (?:a |sua |de vez a )?dor|(?:a dor|a h[eé]rnia|o problema|a doen[cç]a) (?:some|vai sumir|desaparece|acaba|vai acabar)|(?:resolve|trata|elimina|acaba com)\w*\s+(?:[^\s.,;:!?]+\s+){0,3}(?:definitiv|para sempre|de vez)|\d+\s*%\s*(?:dos|das|de)\s+(?:nossos |nossas |meus |minhas )?(?:pacientes|casos|clientes)|(?:saem|sai|ficam|fica|voltam|volta)\s+(?:[^\s.,;:!?]+\s+){0,2}sem dor|n[aã]o\s+volta\w*\s+a\s+(?:sentir|ter)\s+dor|livres?\s+d[ae]\s+(?:dor|h[eé]rnia|sofrimento)|al[ií]vio\s+(?:garantid|certo|imediato|total|definitiv)|(?:al[ií]vio|melhora|resultado|sucesso|efic[aá]cia|redu[cç][aã]o)s?\s+(?:\S+\s+){0,2}garant\w*|garant\w*\s+(?:\S+\s+){0,3}(?:al[ií]vio|melhora|resultado|sucesso|efic[aá]cia|sem dor|fim da dor)|acab\w+\s+com\s+(?:a\s+|sua\s+|essa\s+)?(?:dor|h[eé]rnia)|adeus\s+(?:[aà]\s+)?dor|fim\s+da\s+dor|dor\s+(?:nunca mais|n[aã]o volta)|efic[aá]cia\s+(?:comprovada|garantida|total)|100\s*por\s*cento/i,
+    re: /\bcura\b|\bcurar\b|\bcuramos\b|\bcurado|garant\w* (?:de |a |o )?(?:cura|resultado|melhora)|resultado (?:garantido|certo)|100\s?%|nunca mais (?:vai )?(?:sentir|doer|ter dor)|(?:vai |v[aã]o |fica |ficar[aá]? )(?:ficar )?(?:bom|boa|curad|sem dor|novo em folha)|melhora (?:garantida|certa)|(?:com certeza|garantid\w*|sempre|nunca)\s+(?:[^\s.,;:!?]+\s+){0,3}(?:precis\w*|vai|v[aã]o) (?:de )?(?:operar|cirurgia)|(?:resolv|cura)\w*\s+(?:[^\s.,;:!?]+\s+){0,2}sem (?:operar|cirurgia)|n[aã]o (?:vai|v[aã]o) precisar (?:de )?(?:operar|cirurgia)|(?:[ií]ndice|taxa) de sucesso|quase todos melhoram|prometa|promet\w* (?:que|resultado)|tiro e queda|passa de vez|regrid|volta (?:a trabalhar|ao normal) em|\d+ em cada \d+|\d+\s*%\s*(?:de )?(?:sucesso|melhora|cura|acerto|resultado)|(?:com certeza|garantid\w*|sempre)\s+(?:[^\s.,;:!?]+\s+){0,3}(?:evit\w*|sem) (?:a )?cirurgia|evit\w* (?:a )?cirurgia (?:com certeza|sempre|garantid)|elimin\w* (?:a |sua |de vez a )?dor|(?:a dor|a h[eé]rnia|o problema|a doen[cç]a) (?:some|vai sumir|desaparece|acaba|vai acabar)|(?:resolve|trata|elimina|acaba com)\w*\s+(?:[^\s.,;:!?]+\s+){0,3}(?:definitiv|para sempre|de vez)|\d+\s*%\s*(?:dos|das|de)\s+(?:nossos |nossas |meus |minhas )?(?:pacientes|casos|clientes)|(?:saem|sai|ficam|fica|voltam|volta)\s+(?:[^\s.,;:!?]+\s+){0,2}sem dor|n[aã]o\s+volta\w*\s+a\s+(?:sentir|ter)\s+dor|livres?\s+d[ae]\s+(?:dor|h[eé]rnia|sofrimento)|resolv\w*\W+(?:\S+\W+){0,3}garant\w*|garant\w*\W+(?:\S+\W+){0,3}resolv\w*|al[ií]vio\s+(?:garantid|certo|imediato|total|definitiv)|(?:al[ií]vio|melhora|resultado|sucesso|efic[aá]cia|redu[cç][aã]o)s?\s+(?:\S+\s+){0,2}garant\w*|garant\w*\s+(?:\S+\s+){0,3}(?:al[ií]vio|melhora|resultado|sucesso|efic[aá]cia|sem dor|fim da dor)|acab\w+\s+com\s+(?:a\s+|sua\s+|essa\s+)?(?:dor|h[eé]rnia)|adeus\s+(?:[aà]\s+)?dor|fim\s+da\s+dor|dor\s+(?:nunca mais|n[aã]o volta)|efic[aá]cia\s+(?:comprovada|garantida|total)|100\s*por\s*cento/i,
     motivo: 'A Sofia não promete cura nem resultado. Escreva a regra sem prometer resultado.',
   },
   {
@@ -241,6 +242,8 @@ export function recusaDaRegra(textoBruto: string): string | null {
  * sem consulta de graça (em qualquer jeito de dizer, na pergunta ou na resposta), sem promessa de cura, sem diagnóstico ou autocuidado, sem sinal de alerta nem mexer na urgência. `null` = pode.
  */
 const PALAVRA_DE_CONSULTA = /consulta|avalia[cç][aã]o|atendimento|visitas?|sess[aã]o|sess[oõ]es|exame|retorno|primeir[oa]s? (?:vez|visita|encontro|atendimento|avalia)|1[aoªº] (?:vez|visita)|encaixe/i;
+/** Além da consulta, o que mais se pode prometer de graça ou cobrar: tratamento, diagnóstico, pacote, mês, sessões. Entra na regra de gratuidade e de palavra de dinheiro (não na de número: «10 sessões», «3 meses» são unidade). */
+const ASSUNTO_DE_GRATUIDADE = /(?<![\p{L}])(?:tratament\w*|diagn[oó]stic\w*|pacotes?|m[eê]s|meses)(?![\p{L}])/iu;
 const DE_GRACA_NA_FRASE =
   /gr[aá]tis|gratuit\w*|gratuidade|\bfree\b|de gra[cç]a|sem custo|custo (?:zero|nenhum)|(?:sem|nenhum|zero)\s+(?:nenhum\s+)?(?:custo|cobran[cç]a|[oô]nus|valor|taxa)|n[aã]o\s+(?:tem|h[aá]|existe|ter[aá]|vai ter)\s+(?:nenhum[ao]?\s+)?(?:custo|cobran[cç]a|[oô]nus|valor|taxa)|sem\s+(?:pagar|ter que pagar)|nada\s+(?:a|para|pra)\s+pagar|n[aã]o\s+(?:\w+\s+)?(?:paga|pagam|pague|pagar[aá]?|precisa\s+pagar)\b|cortesia|isent\w*|brinde|cupom|bonifica\w*|(?:sai|fica) na faixa|n[aã]o cobr\w*|por nossa conta|por conta d[aeo]s?\s+(?:casa|cl[ií]nica|gente|nossa)|metade do (?:pre[cç]o|valor)|pela metade|liberad[oa]\s+sem/i;
 /**
@@ -318,9 +321,10 @@ export function recusaDeFato(textoBruto: string, opcoes: { permiteParcelamento?:
     if (MEXE_NA_SEGURANCA.test(variante)) return 'O texto não pode mexer em urgência, em pausar a assistente nem em passar o paciente para a equipe: isso é regra da rede.';
     const fs = frases(variante);
     // o CAMPO inteiro (pergunta + resposta juntas): se ele fala da consulta/avaliação/atendimento, qualquer palavra de dinheiro ou de gratuidade, ou número sem unidade, recusa
-    if (PALAVRA_DE_CONSULTA.test(variante)) {
+    const falaDaConsulta = PALAVRA_DE_CONSULTA.test(variante);
+    if (falaDaConsulta || ASSUNTO_DE_GRATUIDADE.test(variante)) {
       if (DE_GRACA_NA_FRASE.test(variante) || PALAVRA_DE_DINHEIRO.test(variante)) return 'Este campo fala da consulta: valor, gratuidade, desconto ou cobrança não entram aqui (nem na pergunta nem na resposta). Valor e gratuidade são do cadastro da clínica (seção «Valores da consulta»). Escreva só a informação, sem essas palavras.';
-      if (fs.some((f) => temNumeroDePreco(f, true))) return 'Este campo fala da consulta e tem um número que parece valor. Valor da consulta não muda por aqui: o preço fica no cadastro da clínica (seção «Valores da consulta»). Escreva sem número de preço.';
+      if (falaDaConsulta && fs.some((f) => temNumeroDePreco(f, true))) return 'Este campo fala da consulta e tem um número que parece valor. Valor da consulta não muda por aqui: o preço fica no cadastro da clínica (seção «Valores da consulta»). Escreva sem número de preço.';
     }
     for (const [i, frase] of fs.entries()) {
       const anterior = fs[i - 1] ?? '';

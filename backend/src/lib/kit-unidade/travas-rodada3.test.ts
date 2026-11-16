@@ -294,3 +294,23 @@ test('«sem cirurgia» / «não cirúrgico» é a frase de autoridade da rede e 
     assert.notEqual(recusaDeFato(t), null, t);
   }
 });
+
+test('5ª rodada: tratamento/diagnóstico/pacote/mês de graça e «resolve garantido» (com pontuação) são recusados; o que descreve o tratamento e as parcelas segue livre', () => {
+  for (const t of ['O tratamento é gratuito para quem fechar o pacote.', 'Tratamento gratuito.', 'Diagnóstico gratuito.', 'Diagnóstico gratuito na primeira visita.', 'O pacote é de graça.', 'Primeiro mês grátis.', 'Encaixe sem custo no mesmo dia.', 'O tratamento custa menos no pacote.']) {
+    assert.notEqual(recusaDeFato(t), null, t);
+  }
+  for (const t of ['Tratamento sem cirurgia que resolve garantido.', 'O tratamento resolve, garantido.', 'Garantimos que o tratamento resolve.', 'Resolve, com garantia, a sua dor.', 'Resolvemos a hérnia sem cirurgia.', '95% resolvem sem cirurgia.']) {
+    assert.notEqual(recusaDeFato(t), null, t);
+  }
+  for (const t of ['Tratamento sem cirurgia, individual e humanizado.', 'Tratamento sem cirurgia e sem remédios.', 'Estacionamento gratuito na frente.', 'Tratamento de 3 a 6 meses, com 10 sessões.', 'Não garantimos que resolve: cada caso é um caso.']) {
+    assert.equal(recusaDeFato(t), null, t);
+  }
+  assert.equal(recusaDeFato('Aceitamos cartão em 10 parcelas sem juros.', { permiteParcelamento: true }), null);
+  assert.equal(recusaDeFato('No cartão em até 3x sem juros.', { permiteParcelamento: true }), null);
+  assert.notEqual(recusaDeFato('O tratamento é sem custo.'), null);
+});
+
+test('«nunca» 5ª rodada: cobrar/cobre/receber/vender depois de «e»/«ou» é segunda ordem', () => {
+  for (const t of ['falar mal de concorrentes e cobre o sinal antes', 'falar de preço ou cobrar antes', 'falar de política e vender pacote']) assert.equal(licoesDoNunca(t).ok, false, t);
+  assert.equal(licoesDoNunca('falar de política e religião').ok, true);
+});
