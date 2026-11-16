@@ -17,10 +17,10 @@ export const VALIDADE_DO_ULTIMO_PRECO_MS = 24 * 3_600_000;
 /** `ate`: até quando o preço guardado vale se a leitura falhar; `fresco`: até quando nem precisa ler de novo (a rodada roda toda hora: uma leitura a cada 5 min por unidade e categoria). */
 const FRESCO_MS = 5 * 60_000;
 const ultimoPrecoBom = new Map<string, { valor: number; ate: number; fresco: number }>();
-export const _esquecerPrecosDeGasto = (): void => ultimoPrecoBom.clear();
+export const _esquecerPrecosDeGasto = (): void => (ultimoPrecoBom.clear(), unidadesDoNumero.clear());
 
-/** O último preço BOM (até 24 h) se a leitura falha — falhar ABERTO soltaria o gasto justo quando algo está estranho; depois de 24 h, a reserva (conservadora). */
-export const precoEmReaisDoBanco: PrecoEmReais = async (unitId, categoria) => {
+/** O preço de UMA unidade. O que vale para o teto é o do NÚMERO (`precoEmReaisDoBanco`). O último preço BOM (até 24 h) se a leitura falha — falhar ABERTO soltaria o gasto justo quando algo está estranho; depois de 24 h, a reserva (conservadora). */
+export const precoEmReaisDaUnidade: PrecoEmReais = async (unitId, categoria) => {
   const chave = `${unitId}|${(categoria ?? '').toUpperCase()}`;
   const agora = Date.now();
   const recente = ultimoPrecoBom.get(chave);
@@ -33,6 +33,32 @@ export const precoEmReaisDoBanco: PrecoEmReais = async (unitId, categoria) => {
   }
   const guardado = recente;
   return guardado && guardado.ate > agora ? guardado.valor : precoDeReservaBrl(categoria);
+};
+
+/** As unidades que dividem o número do Kapso da unidade, guardadas 5 min (a conta do teto roda toda hora). Sem leitura, só ela. */
+const unidadesDoNumero = new Map<string, { ate: number; ids: string[] }>();
+async function unidadesDoNumeroGuardadas(unitId: string): Promise<string[]> {
+  const feito = unidadesDoNumero.get(unitId);
+  if (feito && feito.ate > Date.now()) return feito.ids;
+  try {
+    const lidas = await unidadesDoMesmoNumeroKapso(unitId);
+    const ids = lidas.length ? lidas : [unitId];
+    unidadesDoNumero.set(unitId, { ate: Date.now() + FRESCO_MS, ids });
+    return ids;
+  } catch {
+    // falha de leitura NÃO é guardada (não vira «número só dela» por 5 min): vale a última lista conhecida, ou só a própria unidade desta vez
+    return feito?.ids ?? [unitId];
+  }
+}
+
+/**
+ * O teto de gasto é do NÚMERO, que pode ser dividido por várias unidades — cada uma com a sua tabela de custo da Meta. O preço de uma categoria é o MAIOR entre as
+ * unidades do número (uma unidade sem histórico não baixa o teto das outras, e um preço alto de uma não é ignorado pela outra).
+ */
+export const precoEmReaisDoBanco: PrecoEmReais = async (unitId, categoria) => {
+  const ids = await unidadesDoNumeroGuardadas(unitId);
+  const precos = await Promise.all(ids.map((id) => precoEmReaisDaUnidade(id, categoria)));
+  return Math.max(...precos);
 };
 
 /** Ondas vivas da unidade com categorias diferentes: vale o MAIOR preço (o teto de gasto não pode subestimar). */

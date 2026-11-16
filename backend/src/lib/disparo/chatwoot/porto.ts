@@ -24,6 +24,7 @@ import { idDaMensagem, ultimoPedidoDeSaidaDoContato } from './mensagens.js';
 import { conversaDoPublico, situacaoPeloCrm, DIAS_SEM_REPETIR_DISPARO } from './publico.js';
 import { ETIQUETA_SEM_FOLLOW_UP } from './filtro.js';
 import { prisma } from '../../prisma.js';
+import { precoDeReservaBrl } from './custo.js';
 
 /** O id desta automação no catálogo (`lib/automacoes.ts`). */
 export const AUTOMACAO_DISPARO_CRM = 'chatwoot-disparo';
@@ -210,6 +211,9 @@ export function portoChatwoot(deps: DepsDoPortoChatwoot): Porto & { ocupouAUnida
         if (!conf.ok) {
           // não é a pessoa: é a onda. Pausa (sem retomada: o modelo mudou, monte de novo) e adia esta.
           await base.pausarOnda(d.ondaId, `o modelo não confere mais com o CRM: ${conf.motivo}`.slice(0, 300), 'meta').catch(() => undefined);
+          // A Meta reclassificou o modelo: a categoria nova passa a ser a da onda, e os envios que ela já fez passam a contar no teto de gasto pelo preço NOVO (o gasto é por categoria da onda).
+          // Só quando a nova é MAIS CARA: se ficou mais barata, os envios que a onda já fez custaram a categoria antiga e continuam contando por ela (nunca subestima o gasto).
+          if (conf.categoriaNova && precoDeReservaBrl(conf.categoriaNova) > precoDeReservaBrl(onda.categoria)) await prisma.disparoOnda.updateMany({ where: { id: d.ondaId }, data: { categoriaModelo: conf.categoriaNova } }).catch((err) => logger.warn({ err: String(err), onda: d.ondaId }, 'disparo-crm: não consegui gravar a categoria nova da onda'));
           return { tipo: 'adiar', motivo: conf.motivo.slice(0, 200) };
         }
         let raw: any;

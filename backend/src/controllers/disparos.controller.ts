@@ -128,10 +128,12 @@ function resumoDosFreios(unit: Unit, tier: string | null) {
 async function custoERitmo(unit: Unit, onda: { categoriaModelo: string | null; total: number }, tier: string | null) {
   const custo: EstimativaDeCusto = await comTeto(estimativaDoDisparo(unit.id, onda.categoriaModelo, onda.total), TETO_DA_PARTE_MS, null).then((c) => c ?? estimativaDeReserva(onda.categoriaModelo, onda.total));
   const tetoReais = tetoReaisPorDia();
-  const ritmo = ritmoDaOnda({ pessoas: onda.total, freios: freiosComOTier(freiosDoAmbiente(), tier), tetoReais, porMensagemBrl: custo.porMensagemBrl });
+  // O preço do teto é o do NÚMERO (o maior entre as unidades que o dividem), o mesmo que a rodada usa; sem leitura, a reserva da categoria. O ritmo e o orçamento usam ele.
+  const precoDoTeto = (await comTeto(precoEmReaisDoBanco(unit.id, onda.categoriaModelo).catch(() => null), TETO_DA_PARTE_MS, null)) ?? precoDeReservaBrl(onda.categoriaModelo);
+  const ritmo = ritmoDaOnda({ pessoas: onda.total, freios: freiosComOTier(freiosDoAmbiente(), tier), tetoReais, porMensagemBrl: Math.max(precoDoTeto, custo.porMensagemBrl ?? 0) });
   // O que já foi gasto nas últimas 24 h NESTE NÚMERO (todas as ondas, por categoria) e quantas ainda cabem: a MESMA conta que a rodada usa para parar (`orcamentoDeGasto`).
   const orcamento = await comTeto(
-    orcamentoDeGasto({ unitId: unit.id, agora: new Date(), tetoReais, precoAtual: custo.porMensagemBrl ?? precoDeReservaBrl(onda.categoriaModelo), preco: precoEmReaisDoBanco }).catch(() => null),
+    orcamentoDeGasto({ unitId: unit.id, agora: new Date(), tetoReais, precoAtual: precoDoTeto, preco: precoEmReaisDoBanco }).catch(() => null),
     TETO_DA_PARTE_MS,
     null,
   );
