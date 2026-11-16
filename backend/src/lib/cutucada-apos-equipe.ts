@@ -156,12 +156,14 @@ const PALAVRAS_DE_ENCERRAMENTO = new Set(
     'senhor senhora sr sra dona você voce vc fica com deus tchau flw'
   ).split(' '),
 );
-/** Despedida/confirmação = curta, sem «?» e SÓ com palavras de fechamento: «Certo! Me manda a foto do exame» tem pedido em aberto e não entra. */
+/** Palavras que FECHAM («Boa tarde!» e «Tudo bem» sozinhos são abertura, não despedida — pedem resposta). */
+const PALAVRAS_QUE_FECHAM = new Set('ok okay beleza blz certo combinado perfeito obrigado obrigada obrigadão nada disponha imagina valeu até ate abraço abraco abraços fim final igualmente tchau flw'.split(' '));
+/** Despedida/confirmação = curta, sem «?», SÓ com palavras de fechamento e com ao menos uma que fecha: «Certo! Me manda a foto do exame» tem pedido em aberto e não entra. */
 export function ehEncerramento(f: Pick<Fala, 'texto' | 'anexo'>): boolean {
   const t = f.texto.trim();
   if (f.anexo || !t || t.length > 60 || t.includes('?')) return false;
   const palavras = t.toLowerCase().match(/\p{L}+/gu) ?? [];
-  return palavras.length > 0 && palavras.length <= 8 && palavras.every((p) => PALAVRAS_DE_ENCERRAMENTO.has(p));
+  return palavras.length > 0 && palavras.length <= 8 && palavras.every((p) => PALAVRAS_DE_ENCERRAMENTO.has(p)) && palavras.some((p) => PALAVRAS_QUE_FECHAM.has(p));
 }
 
 export type DecisaoDaConversa =

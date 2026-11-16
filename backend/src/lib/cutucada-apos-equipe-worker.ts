@@ -60,7 +60,7 @@ import type { ResultadoDoTexto } from '../agent/cutucada.js';
 
 const SWEEP_MS = Number(process.env.CUTUCADA_SWEEP_MS) || 5 * 60_000;
 const PRIMEIRA_VARREDURA_MS = 3 * 60_000;
-const MAX_PAGINAS = 4;
+const MAX_PAGINAS = 8;
 /** Cartões cuja conversa é LIDA no Kommo por unidade por varredura (1 + N chamadas cada): o limitador do Kommo é da rede inteira. */
 export const MAX_LEITURAS = Number(process.env.CUTUCADA_MAX_LEITURAS) || 30;
 /** Textos gerados (modelo) por unidade por varredura. */
@@ -75,6 +75,7 @@ const SEGURADA_MS = 30 * 60_000;
 const ERRO_PERMANENTE = /\b403\b|Invalid scope/i;
 const ESPERA_DO_ERRO_PERMANENTE_MS = 6 * 3_600_000;
 const ERROS_PERMANENTES_QUE_ENCERRAM = 3;
+const ESPERA_DO_ERRO_MS = 10 * 60_000;
 
 export const estadoDaCutucada = (slug: string, raw: string | undefined = process.env.CUTUCADA_APOS_EQUIPE_SLUGS): Estado => estadoDaAutomacao(slug, ID_CUTUCADA, raw);
 
@@ -178,7 +179,7 @@ async function gravarMarcaNoBanco(unit: Unit, leadId: number, dados: Record<stri
 async function porQueAFranquiaSeguraReal(unit: Unit, kommo: KommoDaCutucada, lead: KommoLead): Promise<string | null> {
   const idContato = contatoPrincipal(lead);
   const telefone = idContato ? await kommo.getContactPhone(idContato).catch(() => null) : null;
-  if (!telefone) return 'cartão sem telefone legível';
+  if (!telefone) return 'não consegui o telefone do contato (cartão sem telefone, ou o Kommo não respondeu)';
   if (ehNumeroInterno(telefone)) return 'número interno da rede (NUMEROS_INTERNOS)';
   if (!unit.spineEnabled || !unit.spineToken) return null;
 
@@ -202,8 +203,7 @@ async function gravarMensagemNoBanco(unit: Unit, leadId: number, texto: string, 
     conversa = await prisma.conversation.create({ data: { unitId: unit.id, leadId: String(leadId), channel: 'kommo', contactName: contato }, select: { id: true } });
   }
   await prisma.message.create({ data: { conversationId: conversa.id, role: 'assistant', content: texto, meta: meta as object } });
-  // a régua (onde estiver ligada) espaça o próximo toque a partir daqui, em vez de mandar o seu logo em seguida
-  await prisma.conversation.update({ where: { id: conversa.id }, data: { followUpLastAt: new Date() } }).catch(() => undefined);
+
 }
 
 export async function depsReais(unit: Unit): Promise<DepsDaCutucada | null> {
@@ -274,17 +274,24 @@ export function etapasDaCutucada(funis: Funis): Array<{ pipelineId: number; stat
  * Os cartões DESSAS etapas que mexeram desde `desde` (epoch s) — o filtro vai na consulta, então a janela não se enche de cartão de
  * outro funil. Mensagem da equipe no Kommo mexe no cartão (medido em Petrópolis: 66 de 68 cartões com fala da equipe tinham `updated_at`
  * igual ou depois dela); o que escapar fica sem cutucada, nunca com uma a mais. Erro do Kommo lança: página vazia quer dizer «acabou».
- * `truncado` = bateu no teto de páginas (o resto fica para a varredura seguinte, que começa de novo: vai no log, nunca em silêncio).
+ *
+ * O Kommo devolve do MAIS ANTIGO ao mais novo (250 por vez): anda-se pela data do último cartão lido, sem repetir. `truncado` = bateu no teto
+ * de leituras e o que ficou de fora são os MAIS NOVOS — o contrário do que se quer, por isso vai no log e no resumo, nunca em silêncio.
  */
-async function cartoesDaJanela(kommo: KommoDaCutucada, etapas: Array<{ pipelineId: number; statusId: number }>, desde: number): Promise<{ cartoes: KommoLead[]; truncado: boolean }> {
-  const cartoes: KommoLead[] = [];
-  if (!etapas.length) return { cartoes, truncado: false };
-  for (let page = 1; page <= MAX_PAGINAS; page++) {
-    const lote = await kommo.listLeadsDasEtapasDesde(etapas, desde, page);
-    cartoes.push(...lote);
-    if (lote.length < 250) return { cartoes, truncado: false };
+export async function cartoesDaJanela(kommo: KommoDaCutucada, etapas: Array<{ pipelineId: number; statusId: number }>, desde: number): Promise<{ cartoes: KommoLead[]; truncado: boolean }> {
+  const vistos = new Map<number, KommoLead>();
+  if (!etapas.length) return { cartoes: [], truncado: false };
+  let de = desde;
+  for (let leitura = 1; leitura <= MAX_PAGINAS; leitura++) {
+    const lote = await kommo.listLeadsDasEtapasDesde(etapas, de, 1);
+    const antes = vistos.size;
+    for (const l of lote) vistos.set(l.id, l);
+    if (lote.length < 250) return { cartoes: [...vistos.values()], truncado: false };
+    const ultimo = Math.max(...lote.map((l) => l.updated_at ?? 0));
+    if (vistos.size === antes || ultimo <= de) break; // 250 cartões no mesmo segundo: não anda; para em vez de repetir para sempre
+    de = ultimo;
   }
-  return { cartoes, truncado: true };
+  return { cartoes: [...vistos.values()], truncado: true };
 }
 
 const MOTIVO_DA_CONVERSA: Record<PorQuePular, string> = {
@@ -299,7 +306,7 @@ const MOTIVO_DA_CONVERSA: Record<PorQuePular, string> = {
 
 /** Só vira «pularia» na tela o que era para cutucar e foi SEGURADO por uma trava — o resto (paciente falou, prazo) é ruído. */
 function pularia(unit: Unit, leadId: number, motivo: string): void {
-  registrarSimulacao(unit, ID_CUTUCADA, { leadId, acao: 'pularia', alvo: 'mensagem', motivo });
+  registrarSimulacao(unit, ID_CUTUCADA, { leadId, acao: 'pularia', alvo: 'mensagem-segurada', motivo }); // alvo próprio: um «pularia» não apaga o texto do «mandaria»
 }
 
 // ─── a varredura de uma unidade ───────────────────────────────────────────────────────────────────
@@ -330,11 +337,19 @@ export async function varrerCutucada(unit: Unit, estado: Exclude<Estado, 'deslig
     return r;
   }
 
+  // O `follow-up-24h` (a régua) decide pela última mensagem do NOSSO banco: a cutucada gravada como da Sofia reabriria a escada numa conversa que
+  // ela ignorava, e as duas mandariam toque ao mesmo lead. Por isso, ligada, a cutucada só roda onde a régua está desligada (Petrópolis). No papel segue.
+  if (!seco && unit.followUpEnabled) {
+    conta(r.barrados, 'follow-up-ligado-na-unidade');
+    logger.warn({ unit: unit.slug }, 'cutucada: a régua (follow-up) está ligada nesta unidade — as duas mexeriam na mesma conversa; desligue uma das duas. Pulei');
+    return r;
+  }
+
   // 2) o cartão (de graça): etapa, etiquetas, Pausar IA, ◷ Retomar em, consulta futura no cartão
   const { cartoes, truncado } = await cartoesDaJanela(deps.kommo, etapasDaCutucada(deps.funis), agoraS - (cfg.idadeMaxH + 4) * 3600);
   if (truncado) {
     r.truncado = true;
-    logger.warn({ unit: unit.slug, lidos: cartoes.length }, 'cutucada: a janela tem mais cartões que o teto de páginas — os mais novos entram agora, o resto fica sem cutucada');
+    logger.warn({ unit: unit.slug, lidos: cartoes.length }, 'cutucada: a janela tem mais cartões que o teto de leituras — os MAIS NOVOS ficaram de fora desta varredura (aumente a frequência ou encurte cutucada_idade_max_h)');
   }
   const noFunil: KommoLead[] = [];
   for (const lead of cartoes) {
@@ -422,8 +437,11 @@ export async function varrerCutucada(unit: Unit, estado: Exclude<Estado, 'deslig
       const t = await deps.escrever({ unit, leadId: lead.id, falas, tituloDoCartao: fresco.name ?? null, contato });
       if (t.texto === null) {
         r.textosReprovados++;
-        podaMapa(tentativas);
-        tentativas.set(chaveFala, (tentativas.get(chaveFala) ?? 0) + 1);
+        // modelo fora do ar / conta no teto do mês não é «texto reprovado»: não gasta uma das duas tentativas
+        if (!t.transitorio) {
+          podaMapa(tentativas);
+          tentativas.set(chaveFala, (tentativas.get(chaveFala) ?? 0) + 1);
+        }
         conta(r.seguradas, 'texto-nao-saiu');
         pularia(unit, lead.id, `o texto não saiu: ${t.porque}`);
         vistoAte.set(chaveVisto, { atualizadoEm: lead.updated_at ?? 0, ateMs: agora.getTime() + SEGURADA_MS }); // uma 2ª tentativa só daqui a 30 min
@@ -473,6 +491,7 @@ export async function varrerCutucada(unit: Unit, estado: Exclude<Estado, 'deslig
           break;
         }
       } else {
+        vistoAte.set(chaveVisto, { atualizadoEm: lead.updated_at ?? 0, ateMs: agora.getTime() + ESPERA_DO_ERRO_MS }); // sem recuo, o mesmo cartão com defeito comeria vaga de leitura a cada 5 min
         logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id }, 'cutucada: erro num cartão — pulei');
       }
     }
@@ -549,6 +568,8 @@ async function varrer(): Promise<void> {
     for (const unit of unidades) {
       const estado = estadoDaCutucada(unit.slug);
       if (estado === 'desligado') continue;
+      // o barato primeiro: noite, domingo, feriado e unidade em pausa não gastam uma chamada ao Kommo (a varredura repete essas duas conferências)
+      if (emPausa(unit) || !dentroDoHorario(unit)) continue;
       try {
         const deps = await depsReais(unit);
         if (!deps) continue;

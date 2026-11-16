@@ -150,6 +150,8 @@ test('equipe se despediu («beleza», «obrigada, bom fim de semana»): não é 
   }
   assert.equal(ehEncerramento({ texto: 'Consigo um horário para senhora amanhã às 17 horas, a senhora consegue', anexo: null }), false);
   assert.equal(ehEncerramento({ texto: 'Ok, e como estão as dores?', anexo: null }), false);
+  // abertura não é despedida: «Boa tarde!» / «Bom dia, tudo bem» sozinhos pedem resposta
+  for (const t of ['Boa tarde!', 'Bom dia!', 'Olá, bom dia', 'Tudo bem']) assert.equal(ehEncerramento({ texto: t, anexo: null }), false, t);
   // pedido em aberto NÃO é despedida, mesmo curto e sem «?» (achado da revisão): a SDR pediu algo e o lead não respondeu
   for (const t of ['Certo! Me manda a foto do seu exame por aqui.', 'Tudo bem, vou separar um horário', 'Ok, e como estão as dores', 'Perfeito, me envie o exame', 'Oklahoma']) {
     assert.equal(ehEncerramento({ texto: t, anexo: null }), false, t);

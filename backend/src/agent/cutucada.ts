@@ -16,7 +16,8 @@ import { regraDoNome, tratarTextoDaRegua } from './follow-up.js';
 import { nomeApresentavel } from '../lib/nome-apresentavel.js';
 import { conversaParaOModelo, porQueOTextoNaoSai, sofiaJaFalou, type Fala } from '../lib/cutucada-apos-equipe.js';
 
-export type ResultadoDoTexto = { texto: string; conversa: string } | { texto: null; porque: string };
+/** `transitorio`: falha de infraestrutura (modelo fora do ar, conta no teto) — não é texto reprovado e não gasta a tentativa. */
+export type ResultadoDoTexto = { texto: string; conversa: string } | { texto: null; porque: string; transitorio?: boolean };
 
 /** A instrução inteira, pura (testável): o que a mensagem precisa fazer e o que ela nunca faz. */
 export function instrucaoDaCutucada(o: { conversa: string; sofiaJaFalou: boolean; ultimaDaEquipeSemTexto: boolean; nome: string | null }): string {
@@ -59,7 +60,7 @@ export async function escreverCutucada(args: {
 }): Promise<ResultadoDoTexto> {
   const { unit, leadId, falas } = args;
   try {
-    if (await cortarSeEstourou(unit)) return { texto: null, porque: 'conta no teto do mês' };
+    if (await cortarSeEstourou(unit)) return { texto: null, porque: 'conta no teto do mês', transitorio: true };
     const ultima = falas[falas.length - 1];
     const conversa = conversaParaOModelo(falas);
     if (!conversa.trim() || !ultima) return { texto: null, porque: 'conversa vazia' };
@@ -102,6 +103,6 @@ export async function escreverCutucada(args: {
     return { texto: tratado, conversa };
   } catch (err) {
     logger.warn({ err: String(err), unit: unit.slug, leadId }, 'cutucada: o modelo falhou');
-    return { texto: null, porque: 'o modelo falhou' };
+    return { texto: null, porque: 'o modelo falhou', transitorio: true };
   }
 }

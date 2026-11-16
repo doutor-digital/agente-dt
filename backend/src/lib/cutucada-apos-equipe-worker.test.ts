@@ -11,7 +11,7 @@ import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import type { Funis } from './franquia-sync-worker.js';
 import type { KommoLead, KommoTalkMessage } from '../services/kommo.service.js';
-import { MAX_ENVIOS, _limparMemoriaDaCutucada, varrerCutucada, type DepsDaCutucada } from './cutucada-apos-equipe-worker.js';
+import { MAX_ENVIOS, _limparMemoriaDaCutucada, cartoesDaJanela, varrerCutucada, type DepsDaCutucada } from './cutucada-apos-equipe-worker.js';
 import { LIMITE_COBRANCAS_POR_DIA } from './cobrancas-do-dia.js';
 import { CAMPO_UNIDADE } from './unidade-por-canal.js';
 
@@ -471,6 +471,69 @@ test('SECO: depois de simulada, a conversa só é relida se o cartão mexer (nã
   c.lead = { ...c.lead, updated_at: (c.lead.updated_at ?? 0) + 60 }; // o cartão mexeu: relê
   await varrerCutucada(unit(), 'seco', montar());
   assert.ok(efeitos.leituras > lidas);
+});
+
+test('a janela de cartões anda pela data do ÚLTIMO lido (o Kommo vem do mais antigo ao mais novo), sem repetir, e avisa quando bate no teto', async () => {
+  const chamadas: number[] = [];
+  let id = 1;
+  const pagina = (n: number, de: number) => Array.from({ length: n }, (_, i) => ({ id: id++, updated_at: de + i + 1 }) as KommoLead);
+  const kommo = (cheia: boolean) => ({
+    listLeadsDasEtapasDesde: async (_e: unknown, desde: number) => {
+      chamadas.push(desde);
+      return cheia || desde < 250 ? pagina(250, desde) : pagina(100, desde);
+    },
+  }) as unknown as DepsDaCutucada['kommo'];
+  const etapas = [{ pipelineId: PIPE, statusId: QUALIF }];
+
+  const curta = await cartoesDaJanela(kommo(false), etapas, 0);
+  assert.deepEqual(chamadas, [0, 250]);
+  assert.equal(curta.cartoes.length, 350);
+  assert.equal(curta.truncado, false);
+
+  chamadas.length = 0;
+  const cheia = await cartoesDaJanela(kommo(true), etapas, 0);
+  assert.equal(chamadas.length, 8, 'para no teto de leituras');
+  assert.equal(cheia.truncado, true, 'o que ficou de fora são os mais novos: tem de ser dito');
+
+  const parada = await cartoesDaJanela({ listLeadsDasEtapasDesde: async () => Array.from({ length: 250 }, () => ({ id: 1, updated_at: 5 }) as KommoLead) } as unknown as DepsDaCutucada['kommo'], etapas, 5);
+  assert.equal(parada.truncado, true, '250 no mesmo segundo: não anda, não repete para sempre');
+});
+
+test('LIGADO não roda onde a régua (follow-up) está ligada — as duas mexeriam na mesma conversa; o papel segue', async () => {
+  cartoes = [{ lead: lead(), msgs: equipeFalou(3) }];
+  const comRegua = unit({ followUpEnabled: true } as Partial<Unit>);
+  const r = await varrerCutucada(comRegua, 'ligado', montar());
+  assert.equal(r.barrados['follow-up-ligado-na-unidade'], 1);
+  assert.deepEqual(efeitos.enviados, []);
+  assert.equal((await varrerCutucada(comRegua, 'seco', montar())).mandaria, 1);
+});
+
+test('falha do MODELO (ou conta no teto) não é texto reprovado: não gasta as 2 tentativas daquela fala da equipe', async () => {
+  cartoes = [{ lead: lead(), msgs: equipeFalou(3) }];
+  const deps = montar({ escrever: async () => { efeitos.textosPedidos++; return { texto: null, porque: 'o modelo falhou', transitorio: true }; } });
+  for (const min of [0, 31, 62, 93]) await varrerCutucada(unit(), 'ligado', { ...deps, agora: () => new Date(AGORA.getTime() + min * 60_000) });
+  assert.equal(efeitos.textosPedidos, 4, 'quatro tentativas, nenhuma bloqueada por «reprovado duas vezes»');
+});
+
+test('um «pularia» posterior NÃO apaga o texto do «mandaria» na tela (alvos diferentes)', async () => {
+  const c: Cenario = { lead: lead(), msgs: equipeFalou(3) };
+  cartoes = [c];
+  await varrerCutucada(unit(), 'seco', montar());
+  c.lead = { ...c.lead, updated_at: (c.lead.updated_at ?? 0) + 60 };
+  await varrerCutucada(unit(), 'seco', montar({ porQueAFranquiaSegura: async () => 'consulta futura na franquia' }));
+  await aguardar();
+  assert.ok(simulacoes.some((x) => x.acao === 'mandaria' && x.alvo === 'mensagem' && /Conseguiu ver/.test(x.valor ?? '')));
+  assert.ok(simulacoes.some((x) => x.acao === 'pularia' && x.alvo === 'mensagem-segurada'));
+});
+
+test('cartão que dá erro de leitura (não 403) recua 10 min em vez de comer uma vaga de leitura a cada varredura', async () => {
+  cartoes = [{ lead: lead(), msgs: equipeFalou(3) }];
+  let chamadas = 0;
+  const deps = montar();
+  deps.kommo = { ...deps.kommo, listTalks: async () => { chamadas++; throw new Error('listTalks: 500'); } } as DepsDaCutucada['kommo'];
+  await varrerCutucada(unit(), 'ligado', deps);
+  await varrerCutucada(unit(), 'ligado', deps);
+  assert.equal(chamadas, 1);
 });
 
 test('conta sem o escopo de conversas (403): não derruba a varredura, não repete a leitura, e três seguidos encerram a unidade', async () => {
