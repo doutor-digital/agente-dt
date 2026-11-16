@@ -13,6 +13,7 @@ import { rodarUnidade, rodadasSemAndar, type OndaNoLote } from '../lote.js';
 import { portoReal } from '../porto.js';
 import { definicaoDaOnda } from '../onda.js';
 import { ajusteDaUnidade, freiosComOTier } from './ajuste.js';
+import { cambioDoDia, estimarCusto, freiosComTetoDeGasto, lerPrecoDaUnidade, mensagensPorGasto, tetoReaisPorDia } from './custo.js';
 import { lerMensagens, ultimoPedidoDeSaida } from './mensagens.js';
 import { ctxDaUnidadeNoCrm, ORIGEM_CRM } from './onda.js';
 import { chaveDoLimiteDoCrm, idDaMensagem, portoChatwoot, unidadesDoMesmoNumeroKapso, type OndaDaRodada } from './porto.js';
@@ -192,6 +193,17 @@ export async function varrerSeChegouAHora(deps: VarredorDeps = {}): Promise<void
   }
 }
 
+/** O aviso quando o teto de GASTO (e não o de mensagens) é o que para a rodada: uma vez por unidade por dia, pelo mesmo avisador. */
+export async function avisarSeParouPeloGasto(slug: string, unitId: string, parou: string | undefined, tetoPorDia: number, tetoPorHora: number, cabemPeloGasto: number | null, tetoReais: number, avisar: (t: string) => Promise<unknown> = (t) => enviarTelegram(t), hoje = new Date().toISOString().slice(0, 10)): Promise<void> {
+  if (!parou || !/^teto atingido/.test(parou) || cabemPeloGasto === null || cabemPeloGasto >= tetoPorDia) return; // o teto de mensagens vem antes do de gasto: não é o gasto
+  const m = /\((\d+)\/h, (\d+)\/24h\)/.exec(parou);
+  // «(N/h, M/24h)»: parou pelo dia só se já mandou o que o gasto permite; «durante a rodada» (sem números): o gasto é o que vem primeiro se cabe menos que o teto por hora
+  if (m ? Number(m[2]) < cabemPeloGasto : cabemPeloGasto >= tetoPorHora) return;
+  if (avisoDoGastoDeHoje.get(unitId) === hoje) return;
+  avisoDoGastoDeHoje.set(unitId, hoje);
+  await avisar(`💸 Disparo do CRM PARADO — ${slug}\nMotivo: o teto de gasto de R$ ${tetoReais.toFixed(2).replace('.', ',')} por dia foi atingido (cerca de ${cabemPeloGasto} mensagens nas últimas 24 h). A onda continua aprovada e retoma sozinha quando o dia correr.\nPara mudar o teto: CHATWOOT_DISPARO_TETO_REAIS_DIA no servidor.`).catch(() => undefined);
+}
+
 /** Rodadas seguidas, por unidade, em que só houve gente adiada (CRM fora do ar, token caído, franquia fora) e ninguém andou. */
 const SEM_ANDAR_PARA_ALERTAR = 5;
 const semAndar = new Map<string, number>();
@@ -208,7 +220,17 @@ export async function avisarSeSemAndar(slug: string, unitId: string, r: Paramete
 }
 
 /** Uma rodada das ondas aprovadas da origem CRM. Os freios, a janela e a parada por SAIR são os do motor (`rodarUnidade`). */
-export async function rodadaDoDisparoNoCrm(deps: { criarPorto?: (unidades: ReadonlyMap<string, Unit>, ondas: ReadonlyMap<string, OndaDaRodada>) => ReturnType<typeof portoChatwoot>; avisar?: (t: string) => Promise<unknown> } = {}): Promise<void> {
+/** O preço por mensagem (R$) da categoria na unidade; `null` = desconhecido. Injetável para o teste. */
+export type PrecoEmReais = (unitId: string, categoria: string | null) => Promise<number | null>;
+const precoEmReaisDoBanco: PrecoEmReais = async (unitId, categoria) => {
+  const [preco, cambio] = await Promise.all([lerPrecoDaUnidade(unitId, categoria).catch(() => null), cambioDoDia().catch(() => null)]);
+  return estimarCusto({ pessoas: 1, categoria, preco, cambio }).porMensagemBrl;
+};
+/** Um aviso por unidade por dia quando o teto de gasto para a rodada. */
+const avisoDoGastoDeHoje = new Map<string, string>();
+export const _esquecerAvisosDeGasto = (): void => avisoDoGastoDeHoje.clear();
+
+export async function rodadaDoDisparoNoCrm(deps: { precoEmReais?: PrecoEmReais; tetoReais?: number; criarPorto?: (unidades: ReadonlyMap<string, Unit>, ondas: ReadonlyMap<string, OndaDaRodada>) => ReturnType<typeof portoChatwoot>; avisar?: (t: string) => Promise<unknown> } = {}): Promise<void> {
   void varrerSeChegouAHora(); // à parte: a varredura é lenta e não pode atrasar o envio nem a rodada do Kommo
   const ondas = await prisma.disparoOnda.findMany({ where: { estado: 'aprovada', origem: ORIGEM_CRM }, orderBy: { criadoEm: 'asc' }, include: { unit: true } });
   if (ondas.length === 0) return;
@@ -235,8 +257,15 @@ export async function rodadaDoDisparoNoCrm(deps: { criarPorto?: (unidades: Reado
     try {
       const noLote: OndaNoLote[] = vivas.map((o) => ({ id: o.id, campanhaId: o.campanhaId, campanhaNome: o.campanha.nome, aprovadaEm: o.aprovadaEm, aprovadaModo: o.aprovadaModo, sairAceitos: o.sairAceitos, ...definicaoDaOnda(o) }));
       const ajuste = await ajusteDaUnidade(unit.id);
-      const r = await rodarUnidade(porto, freiosComOTier(f, ajuste.tierDoNumero), { id: unit.id, slug: unit.slug, nome: unit.name, fuso: fusoDaUnidade(unit) }, noLote);
+      // O TETO DE GASTO por dia (CHATWOOT_DISPARO_TETO_REAIS_DIA, padrão R$ 50): vira um teto de mensagens por 24 h = teto ÷ preço por mensagem da categoria do modelo.
+      // Preço desconhecido: o gasto não limita (a aprovação já exigiu a confirmação explícita); valem os outros tetos.
+      const tetoReais = deps.tetoReais ?? tetoReaisPorDia();
+      const porMensagemBrl = await (deps.precoEmReais ?? precoEmReaisDoBanco)(unit.id, vivas[0]!.categoriaModelo).catch(() => null);
+      const freiosDoTier = freiosComOTier(f, ajuste.tierDoNumero);
+      const freiosDaRodada = freiosComTetoDeGasto(freiosDoTier, tetoReais, porMensagemBrl);
+      const r = await rodarUnidade(porto, freiosDaRodada, { id: unit.id, slug: unit.slug, nome: unit.name, fuso: fusoDaUnidade(unit) }, noLote);
       // 429 do Chatwoot: a pessoa volta para a fila (não é «adiado» para o motor), mas para o alerta de «sem andar» é uma rodada sem andar
+      await avisarSeParouPeloGasto(unit.slug, unit.id, r.parou, freiosDoTier.tetoPorDia, freiosDoTier.tetoPorHora, mensagensPorGasto(tetoReais, porMensagemBrl), tetoReais, deps.avisar);
       await avisarSeSemAndar(unit.slug, unit.id, porto.ocupouAUnidade(unit.id) ? { ...r, adiados: r.adiados + 1 } : r, deps.avisar);
       if (r.processados > 0 || (r.parou && r.parou !== 'automação desligada nesta unidade')) logger.info({ unit: unit.slug, origem: ORIGEM_CRM, ...r }, 'disparo-crm: rodada');
     } catch (err) {

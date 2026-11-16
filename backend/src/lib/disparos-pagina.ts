@@ -70,6 +70,12 @@ table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}th,t
 .vazio{padding:24px;color:var(--ink-2)}
 .toast{position:fixed;left:50%;bottom:calc(18px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--app);padding:9px 16px;border-radius:10px;font-size:13px;z-index:50;max-width:92vw}
 .toast.erro{background:#ca244d;color:#fff}
+.custo{display:grid;gap:8px;border-radius:12px;padding:14px;background:var(--app);border:1px solid var(--line)}
+.custo .valor{font:700 28px var(--f-head);font-variant-numeric:tabular-nums}
+.custo.desconhecido{border-color:var(--aviso-forte);background:color-mix(in srgb,var(--aviso-forte) 14%,var(--node))}
+.custo.desconhecido .valor{color:var(--aviso)}
+.confirma{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid var(--aviso-forte);border-radius:10px}
+.confirma input{margin-top:3px}
 ul.lis{margin:0;padding-left:1.2em;display:grid;gap:3px}
 a{color:var(--brand)}
 #areaFiltro,#areaModelo,#resContagem,#detModelo{display:grid;gap:12px}
@@ -191,9 +197,11 @@ a{color:var(--brand)}
     var c3 = el('div', 'card'); var h3 = el('h2'); h3.appendChild(el('span', 'n', '3')); h3.appendChild(document.createTextNode('Montar o disparo')); c3.appendChild(h3);
     c3.appendChild(el('p', null, 'Montar lê cada conversa do público, confere quem pediu para sair e, se a unidade tem agenda da franquia, quem tem consulta marcada ou tratamento aberto. NADA é enviado ao montar: depois vem a aprovação.'));
     var cn = el('div', 'campo'); cn.appendChild(el('label', null, 'Nome da campanha')); var nome = el('input'); nome.type = 'text'; nome.maxLength = 80; nome.placeholder = 'Ex.: Reativação de perdidos — novembro'; nome.id = 'nomeCamp'; cn.appendChild(nome); c3.appendChild(cn);
+    var cmx = el('div', 'campo'); cmx.appendChild(el('label', null, 'Máximo de pessoas neste disparo')); var mx = el('input'); mx.type = 'number'; mx.min = '1'; mx.max = '500'; mx.value = '50'; mx.id = 'maxPessoas'; mx.style.width = '120px'; cmx.appendChild(mx);
+    cmx.appendChild(el('small', 'mudo', 'Obrigatório. A lista é CORTADA neste número na montagem (ficam as conversas mais recentes) e o envio nunca passa dele. Quem ficar de fora entra num próximo disparo.')); c3.appendChild(cmx);
     var btM = el('button', 'bt pri', 'Montar disparo'); btM.type = 'button'; btM.id = 'btMontar'; var l3 = el('div', 'linha'); l3.appendChild(btM); c3.appendChild(l3);
     col.appendChild(c3);
-    btM.addEventListener('click', function(){ montar(btM, nome); });
+    btM.addEventListener('click', function(){ montar(btM, nome, mx); });
     carregarOpcoes(c1, c2);
   }
   async function carregarOpcoes(c1, c2){
@@ -316,19 +324,22 @@ a{color:var(--brand)}
     }
     sel.addEventListener('change', desenhar); desenhar();
   }
-  async function montar(bt, nome){
+  async function montar(bt, nome, mx){
     if (!ESCOLHA || !ESCOLHA.modelo) { toast('Escolha um modelo.', true); return; }
     var fontes = fontesParaOServidor();
     for (var i = 0; i < fontes.length; i++) if (fontes[i] === 'texto:') { toast('Preencha o texto fixo da variável {{' + (i + 1) + '}}.', true); return; }
+    var maximo = Math.floor(Number(mx.value));
+    if (!(maximo >= 1 && maximo <= 500)) { toast('Diga o máximo de pessoas (de 1 a 500).', true); mx.focus(); return; }
     if (!nome.value.trim() || nome.value.trim().length < 3) { toast('Dê um nome à campanha.', true); nome.focus(); return; }
     bt.disabled = true; bt.textContent = 'Montando…';
     try {
-      var r = await api('POST', '/api/public/disparos/ondas', { slug: U.slug, nome: nome.value.trim(), filtro: filtroParaOServidor(), modelo: { nome: ESCOLHA.modelo.nome, idioma: ESCOLHA.modelo.idioma, variaveis: fontes } });
+      var r = await api('POST', '/api/public/disparos/ondas', { slug: U.slug, nome: nome.value.trim(), maximo: maximo, filtro: filtroParaOServidor(), modelo: { nome: ESCOLHA.modelo.nome, idioma: ESCOLHA.modelo.idioma, variaveis: fontes } });
       toast('Disparo criado: montando a lista…'); await carregar(); abrirOnda(r.id);
     } catch (e) { toast(e.message, true); bt.disabled = false; bt.textContent = 'Montar disparo'; }
   }
 
   // ── RELATÓRIO ──
+  function brl(v){ try { return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v); } catch (e) { return 'R$ ' + Number(v).toFixed(2).replace('.', ','); } }
   function pct(n, t){ return t ? Math.round((n / t) * 100) + '%' : '—'; }
   function numeroComPct(n, base){ return base == null ? String(n) : n + ' (' + pct(n, base) + ')'; }
   async function mostrarRelatorio(){
@@ -341,12 +352,12 @@ a{color:var(--brand)}
     if (!r.campanhas.length) { corpo.textContent = 'Nenhum disparo ainda.'; return; }
     c.removeChild(corpo);
     var t = el('table'), th = el('thead'), tr = el('tr');
-    ['Campanha', 'Selecionadas', 'Enviadas', 'Entregues', 'Lidas', 'Responderam (72 h)', 'Pediram SAIR', 'Falharam', 'Incertas'].forEach(function(h){ tr.appendChild(el('th', null, h)); }); th.appendChild(tr); t.appendChild(th);
+    ['Campanha', 'Selecionadas', 'Enviadas', 'Entregues', 'Lidas', 'Responderam (72 h)', 'Pediram SAIR', 'Falharam', 'Incertas', 'Gasto (estimado)'].forEach(function(h){ tr.appendChild(el('th', null, h)); }); th.appendChild(tr); t.appendChild(th);
     var tb = el('tbody');
     r.campanhas.forEach(function(k){
       var n = k.numeros, x = el('tr'), nome = el('td'); var a = el('a', null, k.nome); a.href = '#'; a.addEventListener('click', function(ev){ ev.preventDefault(); abrirOnda(k.id); }); nome.appendChild(a);
       nome.appendChild(el('small', 'mudo', ' · ' + (ESTADO[k.estado] || k.estado) + ' · ' + quando(k.criadoEm))); x.appendChild(nome);
-      [n.selecionadas, numeroComPct(n.enviadas, n.selecionadas), numeroComPct(n.entregues, n.enviadas), numeroComPct(n.lidas, n.enviadas), numeroComPct(n.responderam, n.enviadas), numeroComPct(n.pediramSair, n.enviadas), n.falharam, n.incertas || 0].forEach(function(v){ x.appendChild(el('td', null, String(v))); });
+      [n.selecionadas, numeroComPct(n.enviadas, n.selecionadas), numeroComPct(n.entregues, n.enviadas), numeroComPct(n.lidas, n.enviadas), numeroComPct(n.responderam, n.enviadas), numeroComPct(n.pediramSair, n.enviadas), n.falharam, n.incertas || 0, k.gastoEstimadoBrl == null ? '—' : brl(k.gastoEstimadoBrl)].forEach(function(v){ x.appendChild(el('td', null, String(v))); });
       tb.appendChild(x);
     });
     t.appendChild(tb); var w = el('div', 'rolar'); w.appendChild(t); c.appendChild(w);
@@ -378,8 +389,10 @@ a{color:var(--brand)}
     if (o.aprovadaPor) c.appendChild(el('p', 'mudo', 'Aprovada por ' + o.aprovadaPor + ' em ' + quando(o.aprovadaEm) + (o.aprovadaModo && o.aprovadaModo !== 'ligado' ? ' (com a unidade em ' + (o.aprovadaModo === 'seco' ? 'seco' : 'modo desligado') + ': não vale como aprovação de envio)' : '') + '.'));
     var f = el('div', 'fatos'); fato(f, o.total, 'pessoas'); fato(f, o.candidatos == null ? '—' : o.candidatos, 'passaram no filtro'); fato(f, o.contagem.enviado || 0, 'enviadas'); fato(f, o.simulados, 'com «receberia» (seco)'); fato(f, (o.contagem.falhou || 0) + (o.contagem.saiu || 0) + (o.contagem.descartado || 0), 'falharam, pediram SAIR ou saíram da lista'); c.appendChild(f);
     col.appendChild(c);
+    if (o.custo) col.appendChild(cartaoDeCusto(o));
     if (o.relatorio && o.relatorio.numeros.enviadas + o.relatorio.numeros.falharam + o.relatorio.numeros.incertas > 0) {
       var cr = el('div', 'card'); cr.appendChild(el('h2', null, 'Relatório')); var n = o.relatorio.numeros, fr2 = el('div', 'fatos');
+      if (o.gastoEstimadoBrl != null) fato(fr2, brl(o.gastoEstimadoBrl), 'gasto até agora (estimado pelas enviadas)');
       fato(fr2, n.enviadas, 'enviadas'); fato(fr2, numeroComPct(n.entregues, n.enviadas), 'entregues'); fato(fr2, numeroComPct(n.lidas, n.enviadas), 'lidas'); fato(fr2, numeroComPct(n.responderam, n.enviadas), 'responderam (até 72 h)'); fato(fr2, numeroComPct(n.pediramSair, n.enviadas), 'pediram para sair'); fato(fr2, n.falharam, 'falharam'); if (n.incertas) fato(fr2, n.incertas, 'incertas (podem ter saído; não reenvia)');
       cr.appendChild(fr2);
       if (o.relatorio.porHora.length) { var ul2 = el('ul', 'lis'); o.relatorio.porHora.forEach(function(h){ ul2.appendChild(el('li', null, h.hora.replace(' ', ' às ') + 'h — ' + h.enviadas + ' enviadas')); }); cr.appendChild(el('div', 'rot mudo', 'Envios por hora (' + (o.relatorio.fuso || 'America/Sao_Paulo') + ')')); cr.appendChild(ul2); }
@@ -419,12 +432,18 @@ a{color:var(--brand)}
     var ca = el('div', 'card'); var la = el('div', 'linha');
     if (o.estado === 'montada') {
       var ba = el('button', 'bt pri', 'Aprovar este disparo (' + o.total + ' pessoas)'); ba.type = 'button';
-      ba.disabled = !(o.podeAprovar && o.conferencia && o.conferencia.ok);
+      var confirmaCusto = null;
+      if (o.custo && !o.custo.conhecido) {
+        var cf0 = el('label', 'confirma'); confirmaCusto = el('input'); confirmaCusto.type = 'checkbox'; confirmaCusto.id = 'confirmaCusto'; cf0.appendChild(confirmaCusto);
+        cf0.appendChild(el('span', null, 'Entendo que o custo deste disparo é DESCONHECIDO e quero aprovar mesmo assim.')); ca.appendChild(cf0);
+        confirmaCusto.addEventListener('change', function(){ ba.disabled = !(o.podeAprovar && o.conferencia && o.conferencia.ok && confirmaCusto.checked); });
+      }
+      ba.disabled = !(o.podeAprovar && o.conferencia && o.conferencia.ok) || (confirmaCusto !== null);
       ba.addEventListener('click', function(){
         var seco = o.modo !== 'ligado';
-        if (!confirm(seco ? 'Aprovar com a unidade em ' + (o.modo === 'seco' ? 'SECO' : 'modo DESLIGADO') + '? Nada será enviado: só fica registrado quem receberia.' : 'Aprovar o envio para ' + o.total + ' pessoas? As mensagens saem sozinhas, em ondas.')) return;
+        if (!confirm(seco ? 'Aprovar com a unidade em ' + (o.modo === 'seco' ? 'SECO' : 'modo DESLIGADO') + '? Nada será enviado: só fica registrado quem receberia.' : 'Aprovar o envio para ' + o.total + ' pessoas (máximo ' + o.maximo + ')' + (o.custo && o.custo.conhecido ? ', custo estimado ' + brl(o.custo.brl) : ', com custo DESCONHECIDO') + '? As mensagens saem sozinhas, em ondas.')) return;
         ba.disabled = true;
-        api('POST', '/api/public/disparos/ondas/' + enc(o.id) + '/aprovar', { slug: U.slug, total: o.total, impressao: o.impressao }).then(function(){ toast('Aprovado.'); return carregar().then(function(){ abrirOnda(o.id); }); }).catch(function(e){ toast(e.message, true); ba.disabled = false; });
+        api('POST', '/api/public/disparos/ondas/' + enc(o.id) + '/aprovar', { slug: U.slug, total: o.total, impressao: o.impressao, maximo: o.maximo, confirmarCustoDesconhecido: !!(confirmaCusto && confirmaCusto.checked) }).then(function(){ toast('Aprovado.'); return carregar().then(function(){ abrirOnda(o.id); }); }).catch(function(e){ toast(e.message, true); ba.disabled = false; });
       });
       la.appendChild(ba);
       if (!o.podeAprovar) ca.appendChild(el('p', 'mudo', o.motivoSemAprovar || 'Você não pode aprovar.'));
@@ -442,6 +461,29 @@ a{color:var(--brand)}
     if (la.childNodes.length) { ca.appendChild(la); col.appendChild(ca); }
     // ajuste (só a Doutor Digital)
     if (D.podeAjustar) col.appendChild(cartaoDeAjuste());
+  }
+  // O CUSTO e o RITMO: o que a pessoa lê ANTES de aprovar (e depois, como o gasto até agora)
+  function cartaoDeCusto(o){
+    var c = el('div', 'card'); c.appendChild(el('h2', null, 'Custo e ritmo')); var k = o.custo, r = o.ritmo;
+    var caixa = el('div', 'custo' + (k.conhecido ? '' : ' desconhecido'));
+    if (k.conhecido) {
+      caixa.appendChild(el('div', 'valor', 'cerca de ' + brl(k.brl)));
+      caixa.appendChild(el('div', null, o.total + ' pessoas × ' + brl(k.porMensagemBrl) + ' por mensagem (modelo de categoria ' + k.categoria + ')'));
+    } else {
+      caixa.appendChild(el('div', 'valor', 'custo desconhecido'));
+      caixa.appendChild(el('div', null, 'Não dá para dizer quanto este disparo vai custar. Aprovar exige a sua confirmação explícita.'));
+    }
+    caixa.appendChild(el('small', 'mudo', k.nota)); c.appendChild(caixa);
+    var ul = el('ul', 'lis');
+    ul.appendChild(el('li', null, 'Máximo de pessoas neste disparo: ' + (o.maximo == null ? '—' : o.maximo) + ' (a lista foi cortada nele e o envio nunca o passa).'));
+    if (r) {
+      var porque = r.limitadoPor === 'gasto' ? 'o teto de gasto' : r.limitadoPor === 'hora' ? 'o teto por hora' : 'o teto por dia';
+      ul.appendChild(el('li', null, 'Ritmo: até ' + r.porDia + ' por dia (' + r.porHora + ' por hora, ' + r.horasDaJanela + ' h de janela; limita ' + porque + ').'));
+      ul.appendChild(el('li', null, r.dias == null ? 'Com estes tetos o disparo não anda.' : 'Termina em cerca de ' + r.dias + (r.soDiasUteis ? ' dia(s) útil(eis)' : ' dia(s)') + ' depois de aprovado.'));
+    }
+    ul.appendChild(el('li', null, 'Teto de gasto: ' + brl(o.freios.tetoReaisDia) + ' por dia nesta unidade: ao atingir, o envio para e a Doutor Digital é avisada.'));
+    if (o.gastoEstimadoBrl != null && o.relatorio && o.relatorio.numeros.enviadas > 0) ul.appendChild(el('li', null, 'Gasto até agora (estimado pelas enviadas): ' + brl(o.gastoEstimadoBrl) + '.'));
+    c.appendChild(ul); return c;
   }
   function cartaoDeAjuste(){
     var c = el('div', 'card'); c.appendChild(el('h2', null, 'Ajustes da unidade (só a Doutor Digital vê)'));

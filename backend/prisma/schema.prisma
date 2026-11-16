@@ -2390,6 +2390,9 @@ model DisparoOnda {
   /// de onde a lista veio: 'kommo' (etiqueta do Kommo, sempre foi assim) | 'chatwoot' (filtro da tela «Disparos» do CRM)
   origem       String    @default("kommo")
   /// só origem 'chatwoot': a conta do Chatwoot, a caixa (WhatsApp oficial) e o filtro que formou a lista (auditoria)
+  /// origem 'chatwoot': o máximo de pessoas que o disparo pode ter (a lista é CORTADA nele na montagem; a aprovação o confere) e a categoria do modelo na Meta (marketing, utilidade…) para o custo estimado
+  maximoPessoas Int?     @map("maximo_pessoas")
+  categoriaModelo String? @map("categoria_modelo")
   contaChatwoot Int?     @map("conta_chatwoot")
   caixaChatwoot Int?     @map("caixa_chatwoot")
   filtro       Json?

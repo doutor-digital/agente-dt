@@ -25,6 +25,7 @@ import { aprovarOndaChatwoot } from './disparo/chatwoot/onda.js';
 import { impressaoDaOnda } from './disparo/modelo.js';
 import { definicaoDaOnda, aprovarOnda } from './disparo/onda.js';
 import { chaveDaPessoa, textoFinal } from './disparo/regras.js';
+import type { EstimativaDeCusto } from './disparo/chatwoot/custo.js';
 
 const originais = new Map<string, PropertyDescriptor | undefined>();
 function falso(modelo: string, metodos: Record<string, unknown>): void {
@@ -587,9 +588,10 @@ test('APROVAÇÃO: por padrão só administrador da Doutor Digital; a administra
   assert.equal(quemAprova({ email: 'gerente@clinica.com', papel: null }, ligado).ok, false);
 });
 
+const CUSTO_CONHECIDO: EstimativaDeCusto = { conhecido: true, categoria: 'MARKETING', pessoas: 1, brl: 0.35, porMensagemBrl: 0.35, porMensagemUsd: 0.0625, cambio: 5.6, nota: 'teste' };
 function ondaDoCrm(extra: Record<string, unknown> = {}) {
   const pessoas = [{ chave: 'c1', nome: 'Ana' }];
-  const base = { id: 'o1', campanhaId: 'c', unitId: 'u1', estado: 'montada', origem: 'chatwoot', contaChatwoot: 1, caixaChatwoot: 3, template: 'parau_reativacao', idioma: 'pt_BR', textoModelo: 'Oi {{1}}', variaveis: ['primeiroNome'], cabecalho: null, oferta: null, total: 1, ...extra };
+  const base = { id: 'o1', campanhaId: 'c', unitId: 'u1', estado: 'montada', origem: 'chatwoot', maximoPessoas: 50, categoriaModelo: 'MARKETING', contaChatwoot: 1, caixaChatwoot: 3, template: 'parau_reativacao', idioma: 'pt_BR', textoModelo: 'Oi {{1}}', variaveis: ['primeiroNome'], cabecalho: null, oferta: null, total: 1, ...extra };
   const impressao = impressaoDaOnda(definicaoDaOnda(base), pessoas);
   return { pessoas, onda: { ...base, impressao, unit: { id: 'u1', slug: UNIDADE.slug, metaPhoneNumberId: null } }, impressao };
 }
@@ -601,28 +603,28 @@ test('aprovarOndaChatwoot: confere total + impressão e o modelo no CRM; grava q
   falso('disparoOnda', { findUnique: async () => onda, updateMany: async (a: { data: Record<string, unknown> }) => (gravado.push(a.data), { count: 1 }) });
   falso('disparoDestinatario', { findMany: async () => pessoas });
   falso('disparoLimite', { deleteMany: async () => ({ count: 0 }) });
-  const deps = { conferir: async () => ({ ok: true as const }), ctx: () => criarContextoChatwoot({ url: 'https://x.test', conta: 1, token: 't' }), ajuste: async () => ({ gerenteAprova: false, tierDoNumero: null }) };
-  const ok = await aprovarOndaChatwoot('o1', { email: 'suzanne.mychelly1@gmail.com', papel: 'administrator', total: 1, impressao }, deps);
+  const deps = { conferir: async () => ({ ok: true as const }), ctx: () => criarContextoChatwoot({ url: 'https://x.test', conta: 1, token: 't' }), ajuste: async () => ({ gerenteAprova: false, tierDoNumero: null }), estimar: async () => CUSTO_CONHECIDO };
+  const ok = await aprovarOndaChatwoot('o1', { email: 'suzanne.mychelly1@gmail.com', papel: 'administrator', total: 1, impressao, maximo: 50 }, deps);
   assert.ok(ok.ok, JSON.stringify(ok));
   assert.equal(gravado[0]!.estado, 'aprovada');
   assert.equal(gravado[0]!.aprovadaPor, 'suzanne.mychelly1@gmail.com');
   assert.equal(gravado[0]!.aprovadaModo, 'seco', 'aprovada com a unidade em seco: o motor devolve para nova aprovação ao ligar');
   gravado.length = 0;
-  const gerente = await aprovarOndaChatwoot('o1', { email: 'gerente@clinica.com', papel: 'administrator', total: 1, impressao }, deps);
+  const gerente = await aprovarOndaChatwoot('o1', { email: 'gerente@clinica.com', papel: 'administrator', total: 1, impressao, maximo: 50 }, deps);
   assert.deepEqual([gerente.ok, (gerente as { status: number }).status], [false, 403]);
-  const total = await aprovarOndaChatwoot('o1', { email: 'suzanne.mychelly1@gmail.com', papel: 'administrator', total: 2, impressao }, deps);
+  const total = await aprovarOndaChatwoot('o1', { email: 'suzanne.mychelly1@gmail.com', papel: 'administrator', total: 2, impressao, maximo: 50 }, deps);
   assert.deepEqual([total.ok, (total as { status: number }).status], [false, 409], 'total diferente do que a tela mostrou');
-  const texto = await aprovarOndaChatwoot('o1', { email: 'suzanne.mychelly1@gmail.com', papel: 'administrator', total: 1, impressao: 'outra' }, deps);
+  const texto = await aprovarOndaChatwoot('o1', { email: 'suzanne.mychelly1@gmail.com', papel: 'administrator', total: 1, impressao: 'outra', maximo: 50 }, deps);
   assert.deepEqual([texto.ok, (texto as { status: number }).status], [false, 409], 'impressão diferente');
-  const modelo = await aprovarOndaChatwoot('o1', { email: 'suzanne.mychelly1@gmail.com', papel: 'administrator', total: 1, impressao }, { ...deps, conferir: async () => ({ ok: false as const, motivo: 'reprovado' }) });
+  const modelo = await aprovarOndaChatwoot('o1', { email: 'suzanne.mychelly1@gmail.com', papel: 'administrator', total: 1, impressao, maximo: 50 }, { ...deps, conferir: async () => ({ ok: false as const, motivo: 'reprovado' }) });
   assert.deepEqual([modelo.ok, (modelo as { status: number }).status], [false, 422]);
-  const outraConta = await aprovarOndaChatwoot('o1', { email: 'suzanne.mychelly1@gmail.com', papel: 'administrator', total: 1, impressao }, { ...deps, ctx: () => criarContextoChatwoot({ url: 'https://x.test', conta: 2, token: 't' }) });
+  const outraConta = await aprovarOndaChatwoot('o1', { email: 'suzanne.mychelly1@gmail.com', papel: 'administrator', total: 1, impressao, maximo: 50 }, { ...deps, ctx: () => criarContextoChatwoot({ url: 'https://x.test', conta: 2, token: 't' }) });
   assert.deepEqual([outraConta.ok, (outraConta as { status: number }).status], [false, 422], 'a conta do CRM da unidade tem de ser a do disparo');
   assert.equal(gravado.length, 0, 'recusa nenhuma gravou aprovação');
   // unidade DESLIGADA não aprova (a aprovação ficaria registrada sem valer nada): ligue, ou deixe em seco, antes
   const { _semearParaTeste } = await import('./automacoes-estado.js');
   _semearParaTeste([{ slug: UNIDADE.slug, automacao: 'chatwoot-disparo', estado: 'desligado' }]);
-  const desligada = await aprovarOndaChatwoot('o1', { email: 'suzanne.mychelly1@gmail.com', papel: 'administrator', total: 1, impressao }, deps);
+  const desligada = await aprovarOndaChatwoot('o1', { email: 'suzanne.mychelly1@gmail.com', papel: 'administrator', total: 1, impressao, maximo: 50 }, deps);
   _semearParaTeste([]);
   assert.deepEqual([desligada.ok, (desligada as { status: number }).status], [false, 422]);
   assert.match((desligada as { erro: string }).erro, /DESLIGADOS/);
@@ -779,7 +781,7 @@ test('abrir: caixa que não é da unidade, modelo que o CRM não confirma e vari
   const ctx = criarContextoChatwoot({ url: 'https://crm.exemplo.test', conta: 1, token: 'tk' });
   const filtro = filtroSchema.parse({ caixa: 3, atributos: { etapa: ['Perdido'] } });
   const modelo = { nome: 'parau_reativacao', idioma: 'pt_BR', texto: 'Oi {{1}}, tudo bem?', variaveis: ['primeiroNome'] };
-  const base = { unit: UNIDADE, conta: 1, filtro, modelo, nome: 'Reativação de perdidos', por: 'suzanne@x.com', ctx, conferirModelo: async () => ({ ok: true as const }) };
+  const base = { unit: UNIDADE, conta: 1, filtro, modelo, maximo: 50, nome: 'Reativação de perdidos', por: 'suzanne@x.com', ctx, conferirModelo: async () => ({ ok: true as const }) };
 
   assert.equal((await abrirOndaChatwoot({ ...base, filtro: filtroSchema.parse({ caixa: 4 }) })).ok, false, 'a caixa 4 é o histórico (não é cloud)');
   assert.equal((await abrirOndaChatwoot({ ...base, filtro: filtroSchema.parse({ caixa: 20 }) })).ok, false, 'caixa de outra unidade');
@@ -1129,7 +1131,7 @@ test('montagens: o CRM tem o limite PRÓPRIO (2 ao mesmo tempo, somando unidades
   const orfasCanceladas: Array<Record<string, unknown>> = [];
   const tx = { $executeRaw: async () => ++travas, disparoOnda: { findFirst: async () => null, updateMany: async (a: { where: Record<string, unknown> }) => (orfasCanceladas.push(a.where), { count: 0 }), count: async (a: { where: Record<string, unknown> }) => (filtrosDeContagem.push(a.where), MAX_MONTAGENS_DO_CRM), create: async () => { throw new Error('não podia criar'); } }, disparoCampanha: { create: async () => ({ id: 'c' }) } };
   falso('$transaction', (async (fn: (t: unknown) => unknown) => fn(tx)) as never);
-  const r = await abrirOndaChatwoot({ unit: UNIDADE, conta: 1, filtro: filtroSchema.parse({ caixa: 3 }), modelo: { nome: 'parau_reativacao', idioma: 'pt_BR', texto: 'Oi {{1}}', variaveis: ['primeiroNome'] }, nome: 'Reativação', por: 'x@y.com', ctx: criarContextoChatwoot({ url: 'https://x.test', conta: 1, token: 't' }), conferirModelo: async () => ({ ok: true as const }) });
+  const r = await abrirOndaChatwoot({ unit: UNIDADE, conta: 1, filtro: filtroSchema.parse({ caixa: 3 }), modelo: { nome: 'parau_reativacao', idioma: 'pt_BR', texto: 'Oi {{1}}', variaveis: ['primeiroNome'] }, maximo: 50, nome: 'Reativação', por: 'x@y.com', ctx: criarContextoChatwoot({ url: 'https://x.test', conta: 1, token: 't' }), conferirModelo: async () => ({ ok: true as const }) });
   assert.deepEqual([r.ok, (r as { status: number }).status], [false, 429]);
   assert.equal(travas, 2, 'duas travas: a GLOBAL do teto (duas unidades juntas não passam dele) e a da unidade');
   // a montagem ÓRFÃ (sem batida há 3 min) é cancelada antes de contar: teto e trava da unidade enxergam o mesmo conjunto
@@ -1177,4 +1179,98 @@ test('comTeto: por padrão erro vira o padrão; com propagarErro só o TETO ESTO
   await assert.rejects(comTeto(Promise.reject(erro), 50, 'padrao', { propagarErro: true }), /401/);
   assert.equal(await comTeto(new Promise<string>(() => undefined), 30, 'estourou', { propagarErro: true }), 'estourou');
   assert.equal(await comTeto(Promise.resolve('ok'), 50, 'padrao', { propagarErro: true }), 'ok');
+});
+
+// ── máximo de pessoas, custo desconhecido e teto de gasto ───────────────────────────────────────────────────────
+
+test('MÁXIMO: obrigatório (1 a 500) ao abrir; a montagem CORTA a lista nele (ficam as primeiras) e o excedente vira «acima do máximo»', async () => {
+  const { abrirOndaChatwoot, concluirMontagemChatwoot } = await import('./disparo/chatwoot/onda.js');
+  const criados: Array<Record<string, unknown>> = [];
+  const tx = { $executeRaw: async () => 1, disparoOnda: { findFirst: async () => null, updateMany: async () => ({ count: 0 }), count: async () => 0, create: async (a: { data: Record<string, unknown> }) => (criados.push(a.data), { id: 'o1', ...a.data }) }, disparoCampanha: { create: async () => ({ id: 'c' }) } };
+  falso('$transaction', (async (fn: (t: unknown) => unknown) => fn(tx)) as never);
+  const base = { unit: UNIDADE, conta: 1, filtro: filtroSchema.parse({ caixa: 3 }), modelo: { nome: 'parau_reativacao', idioma: 'pt_BR', texto: 'Oi {{1}}', variaveis: ['primeiroNome'], categoria: 'MARKETING' }, nome: 'Reativação', por: 'x@y.com', ctx: criarContextoChatwoot({ url: 'https://x.test', conta: 1, token: 't' }), conferirModelo: async () => ({ ok: true as const }) };
+  for (const ruim of [0, -1, 501, 2.5, NaN, undefined as unknown as number]) assert.equal((await abrirOndaChatwoot({ ...base, maximo: ruim })).ok, false, String(ruim));
+  assert.equal(criados.length, 0);
+  assert.ok((await abrirOndaChatwoot({ ...base, maximo: 50 })).ok);
+  assert.deepEqual([criados[0]!.maximoPessoas, criados[0]!.categoriaModelo], [50, 'MARKETING']);
+
+  const onda = { id: 'o1', campanhaId: 'c1', unitId: 'u1', estado: 'montando', origem: 'chatwoot', etiqueta: 'CRM', template: 't', idioma: 'pt_BR', textoModelo: 'Oi {{1}}', variaveis: ['primeiroNome'], cabecalho: null, oferta: null, filtro: { caixa: 3 }, maximoPessoas: 5, unit: UNIDADE };
+  const lido = { lidas: 20, truncada: false, noFiltro: 8, parcial: false, fora: { 'sem-follow-up': 1 }, elegiveis: Array.from({ length: 8 }, (_, i) => ({ leadId: null, nome: NOMES[i]!, nomeCompleto: `${NOMES[i]} Silva`, telefone: fone(i + 1).slice(1), chave: chaveDaPessoa(fone(i + 1).slice(1)), conversaId: 100 + i, contatoId: 1000 + i })) };
+  const gravacoes: Array<Record<string, unknown>> = [];
+  const gravadas: Array<Record<string, unknown>> = [];
+  let linhas: Array<{ chave: string; nome: string }> = [];
+  falso('disparoOnda', { findUnique: async () => onda, updateMany: async (a: { data: Record<string, unknown> }) => (gravacoes.push(a.data), { count: 1 }) });
+  falso('disparoDestinatario', { createMany: async (a: { data: Array<Record<string, unknown>> }) => (gravadas.push(...a.data), (linhas = a.data.map((d) => ({ chave: String(d.chave), nome: String(d.nome) }))), { count: a.data.length }), findMany: async () => linhas });
+  await concluirMontagemChatwoot('o1', async () => lido);
+  assert.deepEqual(gravadas.map((g) => g.nome), ['Ana', 'Bia', 'Cris', 'Duda', 'Edu'], 'ficam as 5 primeiras, na ordem da caixa');
+  assert.equal(gravacoes[0]!.total, 5, 'o total da onda é o máximo, não 8');
+  assert.deepEqual((gravacoes[0]!.resumo as { fora: unknown }).fora, { 'sem-follow-up': 1, 'acima-do-maximo': 3 });
+});
+
+test('APROVAÇÃO confere o MÁXIMO junto com total e impressão; custo DESCONHECIDO só aprova com confirmação explícita; custo conhecido aprova sem ela', async () => {
+  process.env.KIT_ADMINS_DD = 'suzanne.mychelly1@gmail.com';
+  const { pessoas, onda, impressao } = ondaDoCrm();
+  const gravado: Array<Record<string, unknown>> = [];
+  falso('disparoOnda', { findUnique: async () => onda, updateMany: async (a: { data: Record<string, unknown> }) => (gravado.push(a.data), { count: 1 }) });
+  falso('disparoDestinatario', { findMany: async () => pessoas });
+  falso('disparoLimite', { deleteMany: async () => ({ count: 0 }) });
+  const { aprovarOndaChatwoot, PREFIXO_CUSTO_DESCONHECIDO } = await import('./disparo/chatwoot/onda.js');
+  const DESCONHECIDO: EstimativaDeCusto = { ...CUSTO_CONHECIDO, conhecido: false, brl: null, porMensagemBrl: null, nota: 'a tabela de custo da Meta desta unidade não tem a categoria MARKETING' };
+  const deps = (estimar = async () => CUSTO_CONHECIDO) => ({ conferir: async () => ({ ok: true as const }), ctx: () => criarContextoChatwoot({ url: 'https://x.test', conta: 1, token: 't' }), ajuste: async () => ({ gerenteAprova: false, tierDoNumero: null }), estimar });
+  const quem = { email: 'suzanne.mychelly1@gmail.com', papel: 'administrator', total: 1, impressao };
+  // máximo ausente ou diferente do gravado: recusa, nada gravado
+  for (const maximo of [undefined, 49, 51, '50', null]) {
+    const r = await aprovarOndaChatwoot('o1', { ...quem, maximo }, deps());
+    assert.deepEqual([r.ok, (r as { status: number }).status], [false, 409], String(maximo));
+  }
+  assert.equal(gravado.length, 0);
+  // custo conhecido: aprova sem confirmação
+  assert.ok((await aprovarOndaChatwoot('o1', { ...quem, maximo: 50 }, deps())).ok);
+  gravado.length = 0;
+  // custo desconhecido sem confirmação (ou com confirmação que não é `true`): recusa com o prefixo que a tela reconhece
+  for (const confirmar of [undefined, false, 'sim', 1]) {
+    const r = await aprovarOndaChatwoot('o1', { ...quem, maximo: 50, confirmarCustoDesconhecido: confirmar }, deps(async () => DESCONHECIDO));
+    assert.deepEqual([r.ok, (r as { status: number }).status], [false, 409], String(confirmar));
+    assert.ok((r as { erro: string }).erro.startsWith(PREFIXO_CUSTO_DESCONHECIDO));
+  }
+  assert.equal(gravado.length, 0);
+  assert.ok((await aprovarOndaChatwoot('o1', { ...quem, maximo: 50, confirmarCustoDesconhecido: true }, deps(async () => DESCONHECIDO))).ok, 'confirmação explícita aprova');
+  // lista que passa do máximo (não deveria existir): recusa
+  const grande = ondaDoCrm({ total: 1, maximoPessoas: 0 });
+  falso('disparoOnda', { findUnique: async () => grande.onda, updateMany: async () => ({ count: 1 }) });
+  falso('disparoDestinatario', { findMany: async () => grande.pessoas });
+  assert.equal((await aprovarOndaChatwoot('o1', { ...quem, impressao: grande.impressao, maximo: 0 }, deps())).ok, false);
+});
+
+test('TETO DE GASTO pela rodada real: com R$ 1,00/dia e R$ 0,50 por mensagem saem 2 e a rodada PARA, avisa o João uma vez no dia e a onda continua aprovada; preço desconhecido não aplica o teto de gasto', async () => {
+  ligar();
+  const { rodadaDoDisparoNoCrm, _zerarSemAndarDoCrm, _zerarVarreduraDoCrm, _esquecerAvisosDeGasto } = await import('./disparo/chatwoot/rodada.js');
+  _zerarSemAndarDoCrm();
+  _zerarVarreduraDoCrm();
+  _esquecerAvisosDeGasto();
+  const onda = { id: 'o1', campanhaId: 'c1', unitId: 'u1', estado: 'aprovada', origem: 'chatwoot', caixaChatwoot: 3, contaChatwoot: 1, template: INFO.template, idioma: INFO.idioma, textoModelo: INFO.textoModelo, variaveis: INFO.variaveis, cabecalho: null, oferta: null, categoriaModelo: 'MARKETING', aprovadaEm: ONDA.aprovadaEm, aprovadaModo: 'ligado', sairAceitos: 0, criadoEm: AGORA, unit: UNIDADE, campanha: { nome: 'Reativação' } };
+  falso('disparoOnda', { findMany: async () => [onda], updateMany: async () => ({ count: 0 }) });
+  falso('chatwootDisparoAjuste', { findUnique: async () => null });
+  falso('disparoDestinatario', { findMany: async () => [], count: async () => 0 });
+  let jaSaiuHoje = 0; // o que já saiu nas últimas 24 h (o motor reconta pelo banco)
+  const rodar = async (preco: number | null, avisos: string[], comecaCom = jaSaiuHoje) => {
+    const base = baseFalso({ quantos: 5 });
+    const t = portoDoCrm({ base });
+    base.porto.contarNaJanela = async () => comecaCom + t.enviados.length;
+    await rodadaDoDisparoNoCrm({ criarPorto: () => t.porto, avisar: async (x) => void avisos.push(x), precoEmReais: async () => preco, tetoReais: 1 });
+    jaSaiuHoje = comecaCom + t.enviados.length;
+    return t;
+  };
+  const avisos: string[] = [];
+  const t = await rodar(0.5, avisos);
+  assert.equal(t.enviados.length, 2, 'R$ 1,00 ÷ R$ 0,50 = 2 mensagens');
+  assert.equal(t.base.estados.get('d3')!.estado, 'pendente', 'o resto fica na fila (a onda continua aprovada)');
+  const seguinte = await rodar(0.5, avisos); // a rodada seguinte já nasce no teto: PARA e avisa
+  assert.equal(seguinte.enviados.length, 0);
+  assert.equal(avisos.length, 1);
+  assert.match(avisos[0]!, /teto de gasto de R\$ 1,00 por dia/);
+  await rodar(0.5, avisos);
+  assert.equal(avisos.length, 1, 'um aviso por unidade por dia, não um por rodada');
+  const sem = await rodar(null, avisos, 0);
+  assert.equal(sem.enviados.length, 5, 'preço desconhecido: o gasto não limita (a aprovação já exigiu a confirmação explícita); valem os outros tetos');
 });

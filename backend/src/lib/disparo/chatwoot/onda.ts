@@ -19,9 +19,12 @@ import { quemAprova, ajusteDaUnidade, type AjusteDaUnidade } from './ajuste.js';
 import { DIAS_SEM_REPETIR_DISPARO, calcularPublico, situacaoPeloCrm, type DepsDoPublico, type PublicoCalculado } from './publico.js';
 import { filtroSchema, resumoDoFiltro, type Filtro } from './filtro.js';
 import { ultimoPedidoDeSaidaDoContato } from './mensagens.js';
+import { estimativaDoDisparo, type EstimativaDeCusto } from './custo.js';
 import { chaveDoLimiteDoCrm, modoDoDisparoNoCrm } from './porto.js';
 
 export const ORIGEM_CRM = 'chatwoot';
+/** Prefixo da recusa «custo desconhecido»: a tela reconhece e pede a confirmação explícita. */
+export const PREFIXO_CUSTO_DESCONHECIDO = 'custo desconhecido';
 
 /** O contexto (conta + token) da unidade no CRM, ou null. */
 export function ctxDaUnidadeNoCrm(slug: string): ContextoChatwoot | null {
@@ -58,6 +61,8 @@ export interface ModeloEscolhido {
   texto: string;
   /** o que preenche cada {{n}}: "primeiroNome" | "unidade" | "texto:<literal>" */
   variaveis: string[];
+  /** a categoria do modelo na Meta (MARKETING, UTILITY…): é por ela que se estima o custo */
+  categoria?: string | null;
 }
 
 /** A caixa é desta unidade e é uma das de WhatsApp oficial (a configuração). A conferência do canal de verdade é no CRM. */
@@ -70,6 +75,8 @@ export function caixaDaUnidade(slug: string, caixa: number): string | null {
 /** Os estados em que uma onda do CRM ainda está viva: só UMA por unidade (o teto do número é um só e a mesma pessoa não pode entrar em duas). */
 /** Quantas montagens de lista do CRM podem andar ao mesmo tempo, somando todas as unidades. */
 export const MAX_MONTAGENS_DO_CRM = 2;
+/** O teto do «máximo de pessoas» que a tela aceita (o padrão da tela é 50). */
+export const MAXIMO_POR_DISPARO = 500;
 /** Uma montagem que não bate há mais que isto (10 batidas) está órfã: é cancelada ao abrir outra, e não ocupa vaga. */
 export const MONTAGEM_VIVA_MS = 10 * BATIDA_DA_MONTAGEM_MS;
 const VIVA = ['montando', 'montada', 'aprovada', 'pausada'];
@@ -79,6 +86,8 @@ export async function abrirOndaChatwoot(args: {
   conta: number;
   filtro: Filtro;
   modelo: ModeloEscolhido;
+  /** o máximo de pessoas deste disparo (obrigatório): a lista é cortada nele na montagem */
+  maximo: number;
   nome: string;
   por: string;
   ctx: ContextoChatwoot;
@@ -86,6 +95,7 @@ export async function abrirOndaChatwoot(args: {
 }): Promise<ResultadoDeAcao<DisparoOnda>> {
   const { unit, filtro, modelo } = args;
   if (!unit.isActive) return falha(404, 'unidade não encontrada');
+  if (!Number.isInteger(args.maximo) || args.maximo < 1 || args.maximo > MAXIMO_POR_DISPARO) return falha(400, `o máximo de pessoas do disparo é obrigatório: de 1 a ${MAXIMO_POR_DISPARO}`);
   const nome = args.nome.trim().replace(/\s+/g, ' ');
   if (nome.length < 3 || nome.length > 80) return falha(400, 'dê um nome à campanha (3 a 80 letras)');
   const naoEDaUnidade = caixaDaUnidade(unit.slug, filtro.caixa);
@@ -123,6 +133,8 @@ export async function abrirOndaChatwoot(args: {
         impressao: '',
         criadaPor: args.por.slice(0, 120),
         origem: ORIGEM_CRM,
+        maximoPessoas: args.maximo,
+        categoriaModelo: modelo.categoria ?? null,
         contaChatwoot: args.conta,
         caixaChatwoot: filtro.caixa,
         filtro: filtro as unknown as Prisma.InputJsonValue,
@@ -154,13 +166,18 @@ export async function concluirMontagemChatwoot(ondaId: string, ler?: (unit: Unit
           if (!ctx?.conta) throw new Error('a unidade não tem conta do CRM válida');
           return calcularPublico(filtro, depsDoPublico(unit, ctx), { completo: true });
         })();
-    const resumo = { candidatos: lido.noFiltro, lidas: lido.lidas, truncada: lido.truncada, fora: lido.fora, montadaEm: new Date().toISOString() };
-    if (lido.elegiveis.length === 0) {
+    // O MÁXIMO: a lista é CORTADA aqui (ficam as primeiras, na ordem da caixa — a atividade mais recente primeiro); as que passam do máximo viram «acima do máximo». O motor só manda a quem está na lista.
+    const maximo = onda.maximoPessoas ?? MAXIMO_POR_DISPARO;
+    const acima = Math.max(0, lido.elegiveis.length - maximo);
+    const elegiveis = acima ? lido.elegiveis.slice(0, maximo) : lido.elegiveis;
+    const fora = acima ? { ...lido.fora, 'acima-do-maximo': acima } : lido.fora;
+    const resumo = { candidatos: lido.noFiltro, lidas: lido.lidas, truncada: lido.truncada, fora, montadaEm: new Date().toISOString() };
+    if (elegiveis.length === 0) {
       await prisma.disparoOnda.updateMany({ where: { id: ondaId, estado: 'montando' }, data: { estado: 'cancelada', pausaMotivo: 'nenhuma pessoa elegível com este filtro', resumo } });
       return;
     }
     await prisma.disparoDestinatario.createMany({
-      data: lido.elegiveis.map((e) => ({
+      data: elegiveis.map((e) => ({
         ondaId, campanhaId: onda.campanhaId, unitId: unit.id, telefone: e.telefone, chave: e.chave, nome: e.nome, nomeCompleto: e.nomeCompleto || null,
         conversaChatwoot: e.conversaId, contatoChatwoot: e.contatoId,
       })),
@@ -176,7 +193,7 @@ export async function concluirMontagemChatwoot(ondaId: string, ler?: (unit: Unit
       logger.warn({ onda: ondaId }, 'disparo-crm: a onda foi cancelada durante a montagem — fica cancelada');
       return;
     }
-    logger.info({ onda: ondaId, unit: unit.slug, total: pessoas.length, fora: lido.fora }, 'disparo-crm: onda montada, esperando aprovação');
+    logger.info({ onda: ondaId, unit: unit.slug, total: pessoas.length, fora }, 'disparo-crm: onda montada, esperando aprovação');
   } catch (err) {
     logger.error({ err: String(err), onda: ondaId }, 'disparo-crm: montagem da onda falhou');
     await prisma.disparoOnda
@@ -193,8 +210,8 @@ export async function concluirMontagemChatwoot(ondaId: string, ler?: (unit: Unit
  */
 export async function aprovarOndaChatwoot(
   ondaId: string,
-  args: { email: string | null | undefined; papel: string | null | undefined; total: unknown; impressao: unknown },
-  deps: { conferir?: typeof conferirModeloDaOnda; ctx?: (slug: string) => ContextoChatwoot | null; ajuste?: (unitId: string) => Promise<AjusteDaUnidade> } = {},
+  args: { email: string | null | undefined; papel: string | null | undefined; total: unknown; impressao: unknown; maximo?: unknown; confirmarCustoDesconhecido?: unknown },
+  deps: { conferir?: typeof conferirModeloDaOnda; ctx?: (slug: string) => ContextoChatwoot | null; ajuste?: (unitId: string) => Promise<AjusteDaUnidade>; estimar?: (o: { unitId: string; categoriaModelo: string | null; total: number }) => Promise<EstimativaDeCusto> } = {},
 ): Promise<ResultadoDeAcao<DisparoOnda>> {
   const onda = await prisma.disparoOnda.findUnique({ where: { id: ondaId }, include: { unit: true } });
   if (!onda || onda.origem !== ORIGEM_CRM) return falha(404, 'disparo não encontrado');
@@ -208,6 +225,12 @@ export async function aprovarOndaChatwoot(
   if (pessoas.length !== onda.total || agora !== onda.impressao || args.total !== onda.total || args.impressao !== onda.impressao) {
     return falha(409, 'a lista ou o texto mudou desde que você abriu a tela; recarregue e confira de novo');
   }
+  // O MÁXIMO de pessoas: a aprovação o confere junto com total e impressão (a tela mostrou este número) e a lista nunca o passa.
+  if (onda.maximoPessoas == null || args.maximo !== onda.maximoPessoas) return falha(409, 'o máximo de pessoas deste disparo mudou ou não foi conferido; recarregue a tela e confira de novo');
+  if (pessoas.length > onda.maximoPessoas) return falha(409, `a lista (${pessoas.length}) passa do máximo de ${onda.maximoPessoas} pessoas: monte o disparo de novo`);
+  // O CUSTO: conhecido, a tela o mostrou; DESCONHECIDO, só aprova quem confirma explicitamente que aceita (a mensagem diz porquê).
+  const custo = await (deps.estimar ?? ((o) => estimativaDoDisparo(o.unitId, o.categoriaModelo, o.total)))({ unitId: onda.unitId, categoriaModelo: onda.categoriaModelo, total: onda.total });
+  if (!custo.conhecido && args.confirmarCustoDesconhecido !== true) return falha(409, `${PREFIXO_CUSTO_DESCONHECIDO}: ${custo.nota}. Para aprovar mesmo assim, confirme explicitamente.`);
   const ctx = (deps.ctx ?? ctxDaUnidadeNoCrm)(onda.unit.slug);
   if (!ctx?.conta || ctx.conta.conta !== onda.contaChatwoot || onda.caixaChatwoot == null) return falha(422, 'a unidade não tem a conta do CRM deste disparo');
   const conf = await (deps.conferir ?? conferirModeloDaOnda)(ctx, onda.caixaChatwoot, { template: onda.template, idioma: onda.idioma, textoModelo: onda.textoModelo, variaveis: (onda.variaveis as unknown[]).map(String) });
@@ -219,6 +242,6 @@ export async function aprovarOndaChatwoot(
   });
   if (r.count !== 1) return falha(409, 'o disparo mudou de estado enquanto aprovava');
   await prisma.disparoLimite.deleteMany({ where: { unitId: chaveDoLimiteDoCrm(onda.unitId) } }).catch((err) => logger.warn({ err: String(err), onda: ondaId }, 'disparo-crm: aprovei, mas não consegui zerar o contador de limite de taxa'));
-  logger.warn({ onda: ondaId, unit: onda.unit.slug, total: onda.total, por: args.email, como: quem.como }, 'disparo-crm: onda APROVADA');
+  logger.warn({ onda: ondaId, unit: onda.unit.slug, total: onda.total, maximo: onda.maximoPessoas, custoBrl: custo.brl, custoConhecido: custo.conhecido, por: args.email, como: quem.como }, 'disparo-crm: onda APROVADA');
   return { ok: true, dados: (await prisma.disparoOnda.findUnique({ where: { id: ondaId } }))! };
 }

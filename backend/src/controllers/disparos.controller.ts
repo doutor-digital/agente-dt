@@ -31,7 +31,8 @@ import { textoFinal, valoresDasVariaveis } from '../lib/disparo/regras.js';
 import { caixaWhatsappOficial, conferirModeloDaOnda, modelosDaCaixa } from '../lib/disparo/chatwoot/canal.js';
 import { ajusteDaUnidade, ehAdministradorDD, freiosComOTier, gravarAjuste, quemAprova, tetoDoTier, tierValido } from '../lib/disparo/chatwoot/ajuste.js';
 import { ATRIBUTOS_USUAIS, filtroSchema } from '../lib/disparo/chatwoot/filtro.js';
-import { abrirOndaChatwoot, aprovarOndaChatwoot, concluirMontagemChatwoot, ctxDaUnidadeNoCrm, depsDoPublico, ORIGEM_CRM } from '../lib/disparo/chatwoot/onda.js';
+import { abrirOndaChatwoot, aprovarOndaChatwoot, concluirMontagemChatwoot, ctxDaUnidadeNoCrm, depsDoPublico, MAXIMO_POR_DISPARO, ORIGEM_CRM, PREFIXO_CUSTO_DESCONHECIDO } from '../lib/disparo/chatwoot/onda.js';
+import { estimativaDoDisparo, freiosComTetoDeGasto, mensagensPorGasto, ritmoDaOnda, tetoReaisPorDia, type EstimativaDeCusto } from '../lib/disparo/chatwoot/custo.js';
 import { modoDoDisparoNoCrm } from '../lib/disparo/chatwoot/porto.js';
 import { taxasDoRelatorio } from '../lib/disparo/chatwoot/relatorio.js';
 import { lerEnviosPorHora, lerNumerosDosDisparos, NUMEROS_VAZIOS } from '../lib/disparo/chatwoot/relatorio-banco.js';
@@ -117,7 +118,16 @@ function resumoDosFreios(unit: Unit, tier: string | null) {
     tier,
     tetoDoTier: tetoDoTier(tier),
     comAgenda: !!unit.spineToken,
+    tetoReaisDia: tetoReaisPorDia(),
+    diasUteis: f.soDiasUteis,
   };
+}
+
+/** O custo estimado do disparo e o ritmo (quantas saem por dia, em quantos dias acaba) — o que a tela mostra ANTES de aprovar. Nunca lança: falha vira «desconhecido». */
+async function custoERitmo(unit: Unit, onda: { categoriaModelo: string | null; total: number }, tier: string | null) {
+  const custo: EstimativaDeCusto = await comTeto(estimativaDoDisparo(unit.id, onda.categoriaModelo, onda.total), TETO_DA_PARTE_MS, null).then((c) => c ?? { conhecido: false, categoria: onda.categoriaModelo, pessoas: onda.total, brl: null, porMensagemBrl: null, porMensagemUsd: null, cambio: null, nota: 'a tabela de custo demorou para responder — custo desconhecido' });
+  const ritmo = ritmoDaOnda({ pessoas: onda.total, freios: freiosComOTier(freiosDoAmbiente(), tier), tetoReais: tetoReaisPorDia(), porMensagemBrl: custo.porMensagemBrl });
+  return { custo, ritmo: { ...ritmo, dias: Number.isFinite(ritmo.dias) ? ritmo.dias : null } };
 }
 
 // ── a unidade ───────────────────────────────────────────────────────────────────────────────────────────────────
@@ -299,11 +309,17 @@ const modeloSchema = z.object({
 });
 
 export async function disparosMontarHandler(req: Request, res: Response): Promise<void> {
-  const corpo = (req.body ?? {}) as { slug?: unknown; nome?: unknown; filtro?: unknown; modelo?: unknown };
+  const corpo = (req.body ?? {}) as { slug?: unknown; nome?: unknown; filtro?: unknown; modelo?: unknown; maximo?: unknown };
   const r = await resolver(req, res, slugDe(corpo.slug));
   if (!r) return;
   const filtro = filtroSchema.safeParse(corpo.filtro);
   const modelo = modeloSchema.safeParse(corpo.modelo);
+  // o MÁXIMO de pessoas é obrigatório (a tela vem com 50): sem ele não monta
+  const maximo = z.number().int().min(1).max(MAXIMO_POR_DISPARO).safeParse(corpo.maximo);
+  if (!maximo.success) {
+    res.status(400).json({ error: `diga o máximo de pessoas deste disparo (de 1 a ${MAXIMO_POR_DISPARO})` });
+    return;
+  }
   const nome = typeof corpo.nome === 'string' ? corpo.nome : '';
   if (!filtro.success || !modelo.success) {
     res.status(400).json({ error: 'pedido inválido (confira o filtro e o modelo)' });
@@ -334,7 +350,8 @@ export async function disparosMontarHandler(req: Request, res: Response): Promis
       unit: r.unit,
       conta: r.conta,
       filtro: filtro.data,
-      modelo: { nome: naCaixa.nome, idioma: naCaixa.idioma, texto: naCaixa.texto, variaveis: modelo.data.variaveis },
+      modelo: { nome: naCaixa.nome, idioma: naCaixa.idioma, texto: naCaixa.texto, variaveis: modelo.data.variaveis, categoria: naCaixa.categoria },
+      maximo: maximo.data,
       nome,
       por: r.email ?? r.nome,
       ctx,
@@ -403,8 +420,14 @@ export async function disparosOndaHandler(req: Request, res: Response): Promise<
     }
     const quem = quemAprova({ email: r.email, papel: r.papel }, ajuste);
     const numeros = numerosPorOnda.get(onda.id) ?? NUMEROS_VAZIOS;
+    const { custo, ritmo } = await custoERitmo(r.unit, onda, ajuste.tierDoNumero);
     res.set('Cache-Control', 'no-store').json({
       id: onda.id,
+      maximo: onda.maximoPessoas,
+      custo,
+      ritmo,
+      // o gasto até agora (estimado: enviadas × preço por mensagem); só com preço conhecido
+      gastoEstimadoBrl: custo.porMensagemBrl !== null ? Math.ceil(custo.porMensagemBrl * numeros.enviadas * 100 - 1e-9) / 100 : null,
       relatorio: { numeros, taxas: taxasDoRelatorio(numeros), porHora, fuso: fusoDaUnidade(r.unit) },
       nome: onda.campanha.nome,
       estado: onda.estado,
@@ -447,14 +470,14 @@ export async function disparosOndaHandler(req: Request, res: Response): Promise<
 }
 
 export async function disparosAprovarHandler(req: Request, res: Response): Promise<void> {
-  const corpo = (req.body ?? {}) as { slug?: unknown; total?: unknown; impressao?: unknown };
+  const corpo = (req.body ?? {}) as { slug?: unknown; total?: unknown; impressao?: unknown; maximo?: unknown; confirmarCustoDesconhecido?: unknown };
   const r = await resolver(req, res, slugDe(corpo.slug));
   if (!r) return;
   const onda = await ondaDaUnidade(res, r, idDe(req.params.id));
   if (!onda) return;
-  const a = await aprovarOndaChatwoot(onda.id, { email: r.email, papel: r.papel, total: corpo.total, impressao: corpo.impressao }, { conferir: conferirComTeto });
+  const a = await aprovarOndaChatwoot(onda.id, { email: r.email, papel: r.papel, total: corpo.total, impressao: corpo.impressao, maximo: corpo.maximo, confirmarCustoDesconhecido: corpo.confirmarCustoDesconhecido }, { conferir: conferirComTeto });
   if (!a.ok) {
-    res.status(a.status).json({ error: a.erro });
+    res.status(a.status).json({ error: a.erro, ...(a.erro.startsWith(PREFIXO_CUSTO_DESCONHECIDO) ? { precisaConfirmarCusto: true } : {}) });
     return;
   }
   res.json({ ok: true, estado: a.dados.estado, aprovadaPor: a.dados.aprovadaPor, modo: modoDoDisparoNoCrm(r.unit.slug) });
@@ -492,14 +515,21 @@ export async function disparosRelatorioHandler(req: Request, res: Response): Pro
       where: { unitId: r.unit.id, origem: ORIGEM_CRM, contaChatwoot: r.conta },
       orderBy: { criadoEm: 'desc' },
       take: 30,
-      select: { id: true, estado: true, total: true, template: true, criadoEm: true, aprovadaEm: true, campanha: { select: { nome: true } } },
+      select: { id: true, estado: true, total: true, template: true, categoriaModelo: true, criadoEm: true, aprovadaEm: true, campanha: { select: { nome: true } } },
     });
     const numerosPorOnda = await lerNumerosDosDisparos(ondas.map((o) => o.id)); // agrupado no banco: não lê linha nenhuma
+    // o preço por mensagem de cada categoria (uma leitura por categoria): gasto estimado = enviadas × preço; sem preço, `null` (nunca um palpite)
+    const precoPorCategoria = new Map<string, number | null>();
+    for (const cat of new Set(ondas.map((o) => o.categoriaModelo).filter((c): c is string => !!c))) {
+      const e = await comTeto(estimativaDoDisparo(r.unit.id, cat, 1), TETO_DA_PARTE_MS, null);
+      precoPorCategoria.set(cat, e?.porMensagemBrl ?? null);
+    }
     res.set('Cache-Control', 'no-store').json({
       modo: modoDoDisparoNoCrm(r.unit.slug),
       campanhas: ondas.map((o) => {
         const numeros = numerosPorOnda.get(o.id) ?? NUMEROS_VAZIOS;
-        return { id: o.id, nome: o.campanha.nome, estado: o.estado, modelo: o.template, criadoEm: o.criadoEm, aprovadaEm: o.aprovadaEm, numeros, taxas: taxasDoRelatorio(numeros) };
+        const preco = o.categoriaModelo ? (precoPorCategoria.get(o.categoriaModelo) ?? null) : null;
+        return { id: o.id, nome: o.campanha.nome, estado: o.estado, modelo: o.template, categoria: o.categoriaModelo, criadoEm: o.criadoEm, aprovadaEm: o.aprovadaEm, numeros, taxas: taxasDoRelatorio(numeros), gastoEstimadoBrl: preco !== null ? Math.ceil(preco * numeros.enviadas * 100 - 1e-9) / 100 : null };
       }),
     });
   } catch (e) {

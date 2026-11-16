@@ -12,9 +12,10 @@ import { chaveDaPessoa, rotuloDaExclusao, telefoneWhatsapp, triar, type Candidat
 import { ETIQUETA_SEM_FOLLOW_UP, passaNoFiltro, precisaResolverInteracao, type ConversaDoPublico, type Filtro } from './filtro.js';
 
 /** Motivos que são do CRM (os outros são os de `MotivoDeExclusao`, os mesmos do Kommo). */
-export type MotivoDoCrm = 'nao-e-paciente' | 'sem-follow-up' | 'interno' | 'outra-conversa' | 'recebeu-disparo-recente' | 'sair-indisponivel';
+export type MotivoDoCrm = 'acima-do-maximo' | 'nao-e-paciente' | 'sem-follow-up' | 'interno' | 'outra-conversa' | 'recebeu-disparo-recente' | 'sair-indisponivel';
 
 export const ROTULO_DO_CRM: Record<MotivoDoCrm, string> = {
+  'acima-do-maximo': 'ficou acima do máximo de pessoas deste disparo (não recebe; entra num próximo)',
   'nao-e-paciente': 'grupo ou número da própria unidade',
   'sem-follow-up': 'etiqueta «sem-follow-up» (a equipe pediu para não chamar)',
   interno: 'contato interno (a equipe falando com o número da unidade)',
