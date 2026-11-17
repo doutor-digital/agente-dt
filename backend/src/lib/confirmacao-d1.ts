@@ -459,6 +459,12 @@ export async function tratarRespostaD1(args: {
   if (!resposta) return null;
 
   const consulta = await consultaDoLead(unit, leadId).catch(() => null);
+  // Janela longa do dia útil anterior (6 dias) FECHA no horário da consulta: depois dela, "ok" ou "não, obrigada" é conversa
+  // solta, não resposta à pergunta (revisão do sênior, PR #394). Na rede (48 h) nada muda.
+  if (janelaDaResposta(unit.slug) > JANELA_RESPOSTA_D1_MS && consulta?.quando) {
+    const agoraLocal = SpineService.instanteNoFuso(new Date(), unit.spineTimezone || 'America/Sao_Paulo').slice(0, 16);
+    if (consulta.quando.slice(0, 16) <= agoraLocal) return null;
+  }
   const hora = consulta?.quando ? consulta.quando.slice(11, 16) : null;
   const quandoCurto = consulta?.quando ? diaCurto(consulta.quando) : null;
   // O nome sai do título do cartão (o que a Sofia gravou); sem ele, do perfil do WhatsApp só se parecer nome

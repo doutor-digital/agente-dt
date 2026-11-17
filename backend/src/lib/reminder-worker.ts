@@ -130,7 +130,7 @@ interface Envio {
   titulo: string | null;
   /** Conversa oficial já lida pelo laço (undefined = ler aqui). */
   oficiais?: MensagemOficial[] | null;
-  /** O jeito da unidade (`pipeline_intents.confirmacao_unidade`); null = padrão da rede. */
+  /** O jeito da unidade (automação `confirmacao-dia-util` + `POR_UNIDADE` em confirmacao-unidade.ts); null = padrão da rede. */
   daUnidade?: ConfirmacaoDaUnidade | null;
   /** Hora local do envio, para o {saudacao} do texto da unidade. */
   horaLocal?: number;
@@ -219,7 +219,8 @@ async function pedirConfirmacao(e: Envio): Promise<'chat_botoes' | 'texto' | 'te
         quando: consulta.quando,
         especialista: consulta.especialista,
         endereco: unit.clinicAddress,
-        antecedencia: toque,
+        // no dia útil anterior a consulta pode ser segunda (pergunta na sexta): 'd2' tira o "de amanhã" do texto da rede
+        antecedencia: e.daUnidade?.diaUtil && consulta.quando.slice(0, 10) !== somarDias(agoraLocal(unit.spineTimezone || 'America/Sao_Paulo').dia, 1) ? 'd2' : toque,
       });
 
   // Com os ids do chat, vai com botões (Confirmo · Preciso remarcar); sem eles, texto "responda 1 ou 2".
@@ -374,14 +375,6 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
         continue;
       }
       const oficiais = await mensagensOficiais(kommo, link.kommoLeadId, 40).catch(() => null);
-      // Pendência 3 de Petrópolis (17/11): quem já confirmou não recebe a pergunta. Ver `confirmacao-unidade.ts`.
-      const confirmado = daUnidade?.pularConfirmada ? jaConfirmou({ idStatus: consulta.idStatus, oficiais }) : null;
-      if (confirmado) {
-        conta.ja_confirmou++;
-        await marcarAviso(unit.id, link.kommoLeadId, chave);
-        logger.info({ unit: unit.slug, kommoLeadId: link.kommoLeadId, quando: consulta.quando, motivo: confirmado }, 'confirmação: já confirmou, não sai');
-        continue;
-      }
       // Desde quando vale a desistência: o momento em que o horário atual foi gravado. `link` foi lido antes da
       // reconciliação acima — se ela acabou de trocar o horário, o que o paciente escreveu antes é da consulta velha.
       // Limite conhecido: `updatedAt` também anda quando o sincronizador grava paciente/tentativas no vínculo (perto
@@ -413,6 +406,16 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
           { unit: unit.slug, kommoLeadId: link.kommoLeadId, toque, quando: consulta.quando, em: desistiu.em },
           'confirmação: paciente escreveu que não vem, não sai',
         );
+        continue;
+      }
+
+      // Pendência 3 de Petrópolis (17/11): quem já confirmou não recebe a pergunta. Depois da desistência: quem
+      // confirmou e depois escreveu "não vou poder" precisa da tarefa (caso Milena/Leomar). Ver `confirmacao-unidade.ts`.
+      const confirmado = daUnidade?.pularConfirmada ? jaConfirmou({ idStatus: consulta.idStatus, oficiais }) : null;
+      if (confirmado) {
+        conta.ja_confirmou++;
+        await marcarAviso(unit.id, link.kommoLeadId, chave);
+        logger.info({ unit: unit.slug, kommoLeadId: link.kommoLeadId, quando: consulta.quando, motivo: confirmado }, 'confirmação: já confirmou, não sai');
         continue;
       }
 
