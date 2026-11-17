@@ -260,6 +260,23 @@ test('a própria Sofia pausou neste turno (pausar_ia, teto) → o aviso do hando
   assert.equal(chamadas.notas.length, 0);
 });
 
+test('handoff calado (Salto): a própria Sofia passou para a equipe → o aviso NÃO sai e vira nota', async () => {
+  registrarPausaPropria(unidade, LEAD, INICIO + 5_000);
+  const { deps, chamadas } = depsFalsas({ ...semEquipe, pausouSozinha: pausouSozinhaDesde, handoffCalado: () => true });
+  const motivo = await travaAntesDeEnviar({ unit: unidade, leadId: LEAD, inicioDoTurno: INICIO, resposta: 'Já passei seu caso pra nossa equipe 🙏' }, deps);
+  assert.match(motivo ?? '', /não seja avisado/);
+  assert.equal(chamadas.notas.length, 1);
+  assert.match(chamadas.notas[0], /Já passei seu caso/);
+});
+
+test('handoff calado ligado, mas a Sofia NÃO pausou neste turno → a resposta normal sai', async () => {
+  _limparPausasProprias();
+  const { deps, chamadas } = depsFalsas({ ...semEquipe, pausouSozinha: pausouSozinhaDesde, handoffCalado: () => true });
+  const motivo = await travaAntesDeEnviar({ unit: unidade, leadId: LEAD, inicioDoTurno: INICIO, resposta: 'Prefere manhã ou tarde?' }, deps);
+  assert.equal(motivo, null);
+  assert.equal(chamadas.notas.length, 0);
+});
+
 test('pausa da própria Sofia de um turno ANTERIOR não libera: a marca vale só do início deste turno em diante', () => {
   registrarPausaPropria(unidade, LEAD, INICIO - 60_000);
   assert.equal(pausouSozinhaDesde(unidade, LEAD, INICIO), false);

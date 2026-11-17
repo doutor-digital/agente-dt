@@ -180,6 +180,16 @@ test('27849922: dor que vai para virilha/testículos pede a pergunta de sinais, 
   assert.ok(b.indexOf('CONFIRMADO O SINAL') < b.indexOf('DOR QUE VAI PARA A VIRILHA'));
 });
 
+test('4015148 (Salto, 17/11): AVC que já passou não é sinal de alerta — o (g) é só o AVC de agora', () => {
+  const b = renderSinalDeAlerta(clinica);
+  const trecho = b.slice(b.indexOf('AVC OU DERRAME QUE JÁ PASSOU'), b.indexOf('PRONTO-SOCORRO:'));
+  assert.ok(trecho.includes('NÃO é sinal de alerta'));
+  assert.ok(trecho.includes('Não pause e não passe para a equipe'));
+  assert.ok(trecho.includes('AGORA'));
+  // continua no bloco de "NÃO é sinal", depois da ordem de parar
+  assert.ok(b.indexOf('CONFIRMADO O SINAL') < b.indexOf('AVC OU DERRAME QUE JÁ PASSOU'));
+});
+
 test('28220160: acidente antigo não é sinal de alerta — no bloco e na regra trauma/febre do cadastro', () => {
   const b = renderSinalDeAlerta(clinica);
   assert.ok(b.includes('ACIDENTE, FRATURA OU CIRURGIA ANTIGA'));

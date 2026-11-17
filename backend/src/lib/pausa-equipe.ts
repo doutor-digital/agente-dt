@@ -37,7 +37,7 @@
 import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
-import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
+import { automacaoLigada, estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import { registrarSimulacao, type Simulacao } from './so-no-papel.js';
 import { emPausa } from './pausa-unidade.js';
 import { leadPausadoPorJanela } from './pausa-lead.js';
@@ -313,6 +313,17 @@ export interface DepsAntesDeEnviar extends DepsPausaEquipe {
   caixinhaMarcada: (unit: Unit, leadId: number) => Promise<boolean>;
   pausouSozinha: (unit: Unit, leadId: number, desde: number) => boolean;
   anotar: (unit: Unit, leadId: number, texto: string) => Promise<void>;
+  /**
+   * A unidade pede que o handoff seja CALADO: quando a própria Sofia passa o atendimento para a equipe, o
+   * paciente não recebe aviso nenhum (Salto, 17/11: "o paciente deve achar que fala direto com a secretária").
+   * Opcional: sem ela, vale a chave `handoff-calado` da unidade.
+   */
+  handoffCalado?: (unit: Unit) => boolean;
+}
+
+/** A chave `handoff-calado` da unidade (desligada quando vazia). */
+export function handoffCaladoNaUnidade(unit: Pick<Unit, 'slug'>): boolean {
+  return automacaoLigada(unit.slug, 'handoff-calado', process.env.HANDOFF_CALADO_SLUGS);
 }
 
 export const DEPS_ANTES_DE_ENVIAR_PADRAO: DepsAntesDeEnviar = {
@@ -349,7 +360,10 @@ export async function travaAntesDeEnviar(
   const propria = deps.pausouSozinha(unit, leadId, inicioDoTurno);
   let motivo: string | null = null;
 
-  if (!propria && (await deps.unidadeEmPausa(unit))) {
+  if (propria && (deps.handoffCalado ?? handoffCaladoNaUnidade)(unit)) {
+    // A Sofia passou para a equipe neste turno e a unidade quer o handoff SEM aviso ao paciente.
+    motivo = 'a Sofia passou o atendimento para a equipe e esta unidade pede que o paciente não seja avisado';
+  } else if (!propria && (await deps.unidadeEmPausa(unit))) {
     motivo = 'a IA da unidade foi pausada enquanto a Sofia respondia';
   } else if (await deps.pausaComData(unit, leadId).catch(() => false)) {
     motivo = 'a Sofia foi pausada neste cartão (pausa com data) enquanto respondia';
