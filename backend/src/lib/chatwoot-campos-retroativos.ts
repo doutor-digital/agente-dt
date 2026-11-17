@@ -124,6 +124,12 @@ export function mesmoFone(a: string | null | undefined, b: string | null | undef
   return x.length >= 12 && y.length >= 12 && x.slice(0, 4) === y.slice(0, 4) && x.slice(-8) === y.slice(-8);
 }
 
+/** Chave de agrupamento do mesmo número (DDI+DDD e 8 últimos dígitos), com o MESMO tratamento do 55 de `mesmoFone`. null = sem DDD/curto demais. */
+export function chaveDoFone(t: string | null | undefined): string | null {
+  const d = foneComDdi(t);
+  return d.length < 12 ? null : `${d.slice(0, 4)}|${d.slice(-8)}`;
+}
+
 // ── de/para ─────────────────────────────────────────────────────────────────────────────────────────
 
 /** Etapa do cartão COMERCIAL do Kommo → etapa do Chatwoot (de/para de 12/11/2026, só as que o João mandou preencher). */

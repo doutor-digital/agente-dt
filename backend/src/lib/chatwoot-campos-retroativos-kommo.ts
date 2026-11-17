@@ -20,7 +20,7 @@ export interface DadosDoKommo {
 export async function leadsDoTelefone(k: DadosDoKommo, telefone: string): Promise<LeadDoKommo[]> {
   const d = telefone.replace(/\D/g, '');
   if (d.length < 8) return [];
-  const contatos = await k.kommo.buscarContatosPorTelefone(d.slice(-8), 10);
+  const contatos = await k.kommo.buscarContatosPorTelefone(d.slice(-8), 50);
   const ids = [...new Set(contatos.filter((c) => c.telefones.some((t) => mesmoFone(t, telefone))).flatMap((c) => c.leadIds))];
   if (!ids.length) return [];
   await k.pausa(300);

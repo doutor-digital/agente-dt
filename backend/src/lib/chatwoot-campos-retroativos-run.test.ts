@@ -491,7 +491,42 @@ test('«campo não ficou» (outro processo regravou o objeto): a marca da régua
   assert.equal(r.marcasReafirmadas, 0, 'não reafirma marca de campo que não ficou');
 });
 
+test('sonda 4b do sênior — órfã POR CAMPO: o Perdido ficou, a Sofia trocou a qualificação 2 s depois e um ciclo com listagem velha apagou a marca: a guarda recria a marca do Perdido', async () => {
+  const m = mundo([raw(70, { status: 'open' })], () => [lead('PERDIDO', { statusId: 143, motivoPerda: 'Sem interesse' })]);
+  m.p.qualificacoes = async () => [{ leadId: 1, valor: 'Morno', observadoEm: new Date(AGORA.getTime() - 86_400_000) }];
+  const pausa = m.p.pausa;
+  m.p.pausa = async (ms) => {
+    await pausa(ms);
+    if (ms === 2500) m.lojas.get(70)!.custom_attributes = { ...m.lojas.get(70)!.custom_attributes, qualificacao: 'Quente' }; // a Sofia classifica por cima
+    if (ms === 400) m.vistos.delete('70|etapa'); // um ciclo da régua com a listagem velha apaga a marca da etapa
+  };
+  const linhas: string[] = [];
+  const r = await rodarCampos(opcoes({ guardaMin: 12 }), m.p, (l) => linhas.push(l), agora);
+  const t = m.lojas.get(70)!.custom_attributes;
+  assert.equal(t.etapa, 'Perdido');
+  assert.equal(t.qualificacao, 'Quente', 'a da Sofia fica; a nossa (Morno) é a que não ficou');
+  assert.match(linhas.join('\n'), /qualificacao não ficou/);
+  assert.equal(m.vistos.get('70|etapa')?.inicial, true, 'a marca do Perdido que ficou SEGUE guardada e foi recriada');
+  assert.equal(r.marcasReafirmadas, 1);
+});
+
+test('órfã por campo: se foi a ETAPA que não ficou, só a marca dela sai da guarda (a régua) e a do CAPI sai depois, com a etapa vazia; o campo que ficou segue guardado', async () => {
+  const m = mundo([raw(5)], () => [lead('AGENDADO')]);
+  m.p.qualificacoes = async () => [{ leadId: 1, valor: 'Frio', observadoEm: new Date(AGORA.getTime() - 86_400_000) }];
+  const original = m.p.gravarAtributos;
+  m.p.gravarAtributos = async (id, attrs) => {
+    await original(id, attrs);
+    m.lojas.get(id)!.custom_attributes = { qualificacao: 'Frio' }; // regravaram o objeto: a etapa sumiu, a qualificação ficou
+  };
+  const r = await rodarCampos(opcoes({ guardaMin: 12 }), m.p, () => {}, agora);
+  assert.equal(m.capi.has('5|AddToCart'), false);
+  assert.equal(r.marcasReafirmadas, 0, 'a marca da etapa que não ficou não é reafirmada');
+});
+
 test('opções estritas: erro de digitação não cai num padrão calado', () => {
+  for (const ruim of [['--guarda=0'], ['--guarda=5'], ['--desfazer', '--guarda=10']]) assert.throws(() => lerArgumentos(ruim), /11 a 60/, ruim.join(' '));
+  assert.equal(lerArgumentos(['--guarda=11']).guardaMin, 11);
+  assert.equal(lerArgumentos(['--so-conferir', '--guarda=0']).guardaMin, 0, 'o seco não grava nem guarda');
   assert.deepEqual(lerArgumentos(['--so-conferir', '--caixa=3', '--max=20', '--conversas=1,2', '--guarda=5']), { soConferir: true, caixa: 3, max: 20, so: [1, 2], guardaMin: 5, desfazer: false });
   assert.equal(lerArgumentos([]).max, 150);
   assert.equal(lerArgumentos([]).guardaMin, 12, 'a guarda padrão passa de um ciclo inteiro da régua (10 min)');

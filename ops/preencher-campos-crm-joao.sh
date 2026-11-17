@@ -43,6 +43,7 @@ for a in "$@"; do
     ARGS+=" $(printf '%q' "$a")"
   elif [[ "$a" == --desfazer=* ]]; then
     DESFAZER="${a#--desfazer=}"
+    DESFAZER="${DESFAZER/#\~/$HOME}" # depois de `=` o shell não expande o ~
     [ -r "$DESFAZER" ] || { echo "RECUSO: não consigo ler o arquivo do registro: $DESFAZER"; exit 2; }
     ARGS+=" --desfazer"
   elif [[ "$a" =~ ^--acompanhar=[A-Za-z0-9._-]+$ ]]; then

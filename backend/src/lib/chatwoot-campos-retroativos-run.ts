@@ -15,9 +15,9 @@
  * conferido vazio de novo.
  */
 import { conversaDoChatwoot, ehArquivo, type AjustesDaRegua, type MensagemResumo, type Vistos } from './chatwoot-regua.js';
-import { chaveDoTelefone } from './chatwoot-lida.js';
 import type { EventoCapi } from './chatwoot-capi.js';
 import {
+  chaveDoFone,
   decidirCampos,
   ETIQUETA_CONFERIR_ETAPA,
   type EntradaDaConversa,
@@ -92,7 +92,9 @@ export function lerArgumentos(argv: string[]): OpcoesDosCampos & { desfazer: boo
   }
   if (!Number.isInteger(o.caixa) || o.caixa <= 0) throw new Error(`caixa inválida: ${o.caixa}`);
   if (!Number.isInteger(o.max) || o.max <= 0) throw new Error(`--max inválido: ${o.max}`);
-  if (o.guardaMin > 60) throw new Error(`--guarda inválido: ${o.guardaMin} (0 a 60 minutos)`);
+  if (o.guardaMin > 60) throw new Error(`--guarda inválido: ${o.guardaMin} (máximo 60 minutos)`);
+  // um ciclo da régua leva até 10 min: guarda menor deixa a janela da marca apagada aberta (e a do CAPI no desfazer). Só o seco dispensa.
+  if (!o.soConferir && o.guardaMin < 11) throw new Error(`--guarda inválido: ${o.guardaMin} (para gravar ou desfazer precisa ser de 11 a 60 minutos: um ciclo da régua leva até 10)`);
   return o;
 }
 
@@ -170,7 +172,7 @@ export async function rodarCampos(o: OpcoesDosCampos, p: PortasDosCampos, log: (
 
   const porTelefone = new Map<string, typeof todas>();
   for (const x of todas) {
-    const k = chaveDoTelefone(x.c.telefone);
+    const k = chaveDoFone(x.c.telefone);
     if (k) porTelefone.set(k, [...(porTelefone.get(k) ?? []), x]);
   }
   const jaTemEtapa = (a: Record<string, unknown>) => !vazio(a.etapa) || !vazio(a.funil) || !vazio(a.etapa_tratamento);
@@ -186,7 +188,7 @@ export async function rodarCampos(o: OpcoesDosCampos, p: PortasDosCampos, log: (
       r.jaMarcadasParaConferir++;
       continue;
     }
-    const chave = chaveDoTelefone(c.telefone);
+    const chave = chaveDoFone(c.telefone);
     // a irmã (mesmo telefone) que já tem etapa/funil: a pessoa já está no funil; esta não a duplica
     if ((chave ? porTelefone.get(chave) ?? [] : []).some((x) => x.c.id !== c.id && jaTemEtapa(x.c.attrs))) {
       r.irmas++; // (só conta: a maioria nem tem cartão no Kommo, listar uma a uma seria ruído)
@@ -247,7 +249,7 @@ export async function rodarCampos(o: OpcoesDosCampos, p: PortasDosCampos, log: (
   // (empate: id maior); as outras ficam como estão. Decidido DEPOIS dos planos: a irmã que a trava segurou não pode tirar a vez da que pode gravar.
   const grupos = new Map<string, typeof planos>();
   for (const x of planos) {
-    const k = chaveDoTelefone(x.ent.conv.telefone);
+    const k = chaveDoFone(x.ent.conv.telefone);
     if (k && (x.plano.alteracoes.length || x.plano.etiquetaNova)) grupos.set(k, [...(grupos.get(k) ?? []), x]);
   }
   for (const g of grupos.values()) {
@@ -300,8 +302,13 @@ export async function rodarCampos(o: OpcoesDosCampos, p: PortasDosCampos, log: (
   // gravar
   let feitas = 0;
   const regs: Registro[] = [];
-  /** conversas em que um campo gravado não ficou (outro processo gravou junto): as marcas do CAPI dela só saem depois da guarda, com o campo conferido vazio */
-  const orfas: Registro[] = [];
+  /**
+   * ÓRFÃ POR CAMPO: o campo gravado que «não ficou» (outro processo regravou o objeto) sai da guarda; os que ficaram CONTINUAM nela (a Sofia troca a
+   * qualificação 2 s depois e a marca do Perdido que ficou tem de seguir guardada). Só a marca do campo que não ficou é solta; as do CAPI dele saem
+   * depois da guarda, com a etapa conferida vazia.
+   */
+  const orfas = new Map<number, { reg: Registro; campos: Set<string> }>();
+  const semGuarda = new Map<number, Set<string>>();
   let ultimaGuarda = Date.now();
   for (const { plano, ent } of planos) {
     if (!plano.alteracoes.length && !plano.etiquetaNova) continue;
@@ -312,7 +319,7 @@ export async function rodarCampos(o: OpcoesDosCampos, p: PortasDosCampos, log: (
     }
     // a guarda DURANTE a gravação: o lote inteiro leva um ciclo da régua; as já gravadas não podem esperar o fim para serem protegidas
     if (regs.length && (feitas % CONVERSAS_ENTRE_GUARDAS === 0 || Date.now() - ultimaGuarda >= PAUSA_DA_GUARDA_MS)) {
-      r.marcasReafirmadas += await passeDaGuarda(regs, p, log, agora);
+      r.marcasReafirmadas += await passeDaGuarda(regs, semGuarda, p, log, agora);
       ultimaGuarda = Date.now();
     }
     feitas++;
@@ -321,9 +328,9 @@ export async function rodarCampos(o: OpcoesDosCampos, p: PortasDosCampos, log: (
       regs.push(out.reg);
       log(`REG ${JSON.stringify(out.reg)}`);
     }
-    if (out.orfa && out.reg) {
-      orfas.push(out.reg);
-      regs.splice(regs.indexOf(out.reg), 1); // não reafirma marca de campo que não ficou
+    if (out.orfos?.length && out.reg) {
+      orfas.set(out.reg.conversa, { reg: out.reg, campos: new Set(out.orfos) });
+      semGuarda.set(out.reg.conversa, new Set(out.orfos)); // não reafirma marca de campo que não ficou — só dele
     }
     if (out.erro) {
       r.falhas++;
@@ -332,8 +339,9 @@ export async function rodarCampos(o: OpcoesDosCampos, p: PortasDosCampos, log: (
     if (out.mexeu) r.atividadeMexeu++;
     await p.pausa(PAUSA_ENTRE_ESCRITAS_MS);
   }
-  if (regs.length && o.guardaMin > 0) r.marcasReafirmadas += await guardarMarcas(regs, p, o.guardaMin, log, agora);
-  if (orfas.length) await limparOrfas(orfas, p, o.guardaMin, log);
+  if (regs.length && o.guardaMin > 0) r.marcasReafirmadas += await guardarMarcas(regs, semGuarda, p, o.guardaMin, log, agora);
+  // a guarda final já esperou mais que um ciclo da régua depois de cada gravação; só espera de novo se não houve guarda
+  if (orfas.size) await limparOrfas([...orfas.values()], p, regs.length ? 0 : o.guardaMin, log);
   return r;
 }
 
@@ -361,7 +369,7 @@ async function lerParaGravar(p: PortasDosCampos, id: number): Promise<{ attrs: R
   return { attrs: { ...c.attrs }, etiquetas: [...c.etiquetas] };
 }
 
-async function gravarUma(planoPrevisto: Plano, ent: Omit<EntradaDaConversa, 'vistos'>, p: PortasDosCampos, agora: () => Date, log: (l: string) => void): Promise<{ reg: Registro | null; erro?: string; mexeu?: boolean; orfa?: boolean }> {
+async function gravarUma(planoPrevisto: Plano, ent: Omit<EntradaDaConversa, 'vistos'>, p: PortasDosCampos, agora: () => Date, log: (l: string) => void): Promise<{ reg: Registro | null; erro?: string; mexeu?: boolean; orfos?: string[] }> {
   const id = planoPrevisto.conversa;
   const reg: Registro = { conversa: id, depois: {}, etiqueta: null, visto: [], capi: [], em: agora().toISOString() };
   let escreveu = false;
@@ -410,16 +418,16 @@ async function gravarUma(planoPrevisto: Plano, ent: Omit<EntradaDaConversa, 'vis
     for (const m of plano.marcasVisto) await p.reafirmarVisto(id, m.campo, m.valor, agora());
     const depois = await p.fresca(id);
     const attrsDepois = (depois?.custom_attributes ?? {}) as Record<string, unknown>;
-    let orfa = false;
+    const orfos: string[] = [];
     for (const [campo, valor] of Object.entries(reg.depois)) {
       if (attrsDepois[campo] !== valor) {
-        orfa = true;
-        log(`AVISO  conversa ${id}: ${campo} não ficou (outro processo gravou junto) — as marcas do CAPI dela saem depois da guarda; rode de novo`);
+        orfos.push(campo);
+        log(`AVISO  conversa ${id}: ${campo} não ficou (outro processo gravou junto) — só a marca dele sai da guarda; rode de novo`);
       }
     }
     const mexeu = Number(depois?.last_activity_at) > Number(fresca.last_activity_at);
     if (mexeu) log(`AVISO  conversa ${id}: a última atividade andou depois de gravar (se era arquivo, entra nos fluxos normais)`);
-    return { reg, mexeu, orfa };
+    return { reg, mexeu, orfos };
   } catch (err) {
     const erro = err instanceof Error ? err.message.slice(0, 120) : 'erro';
     if (!escreveu && tentouCampos) {
@@ -444,12 +452,12 @@ async function gravarUma(planoPrevisto: Plano, ent: Omit<EntradaDaConversa, 'vis
 }
 
 /** Uma volta da guarda: recria a marca da régua que algum ciclo (listagem velha) apagou. Só recria; nunca passa por cima de etapa que mudou de verdade. */
-async function passeDaGuarda(regs: Registro[], p: PortasDosCampos, log: (l: string) => void, agora: () => Date): Promise<number> {
+async function passeDaGuarda(regs: Registro[], semGuarda: ReadonlyMap<number, ReadonlySet<string>>, p: PortasDosCampos, log: (l: string) => void, agora: () => Date): Promise<number> {
   let reafirmadas = 0;
   for (const reg of regs) {
     for (const v of reg.visto) {
       const valor = reg.depois[v.campo];
-      if (valor === undefined) continue;
+      if (valor === undefined || semGuarda.get(reg.conversa)?.has(v.campo)) continue;
       try {
         if ((await p.reafirmarVisto(reg.conversa, v.campo, valor, agora())) === 'recriou') {
           reafirmadas++;
@@ -468,22 +476,23 @@ async function passeDaGuarda(regs: Registro[], p: PortasDosCampos, log: (l: stri
  * DEPOIS da marca enxerga «etapa ausente» e apaga a marca ao salvar, bem depois da gravação. Reafirmar de 30 em 30 s por mais que um ciclo inteiro
  * fecha a janela: quando o ciclo seguinte lê a memória, a marca está lá.
  */
-async function guardarMarcas(regs: Registro[], p: PortasDosCampos, minutos: number, log: (l: string) => void, agora: () => Date): Promise<number> {
+async function guardarMarcas(regs: Registro[], semGuarda: ReadonlyMap<number, ReadonlySet<string>>, p: PortasDosCampos, minutos: number, log: (l: string) => void, agora: () => Date): Promise<number> {
   const voltas = Math.ceil((minutos * 60_000) / PAUSA_DA_GUARDA_MS);
   log(`guarda das marcas da régua: ${regs.length} conversas, ${minutos} min (de 30 em 30 s) — o processo roda na VPS, pode fechar o terminal`);
   let reafirmadas = 0;
   for (let i = 0; i < voltas; i++) {
     await p.pausa(PAUSA_DA_GUARDA_MS);
-    reafirmadas += await passeDaGuarda(regs, p, log, agora);
+    reafirmadas += await passeDaGuarda(regs, semGuarda, p, log, agora);
   }
   log(`guarda terminada: ${reafirmadas} reafirmação(ões)`);
   return reafirmadas;
 }
 
 /** Marcas do CAPI de conversa em que o campo não ficou: só saem se, depois da guarda, a etapa continua vazia (a listagem velha de um ciclo já não existe). */
-async function limparOrfas(orfas: Registro[], p: PortasDosCampos, guardaMin: number, log: (l: string) => void): Promise<void> {
+async function limparOrfas(orfas: Array<{ reg: Registro; campos: Set<string> }>, p: PortasDosCampos, guardaMin: number, log: (l: string) => void): Promise<void> {
   await esperar(p, guardaMin);
-  for (const reg of orfas) {
+  for (const { reg, campos } of orfas) {
+    if (!campos.has('etapa')) continue; // o evento de conversão nasce da etapa: se ela ficou, as marcas do CAPI ficam
     try {
       const { attrs } = await lerParaGravar(p, reg.conversa);
       if (vazio(attrs.etapa)) await desfazerMarcas(reg, p, { soCampos: new Set(['etapa']), visto: false });
