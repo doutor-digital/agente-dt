@@ -472,6 +472,15 @@ export function idClientDoCartao(
  * `⚙ idClient` só aceita esse paciente. Sem `⚙` no cartão, ou sem saber quem o paciente é, não há como
  * provar o conflito e vale o casamento de sempre.
  */
+/**
+ * Cartão apagado no Kommo: o GET /leads/{id} responde 204 sem corpo e `getLead` devolve '' (o tipo diz KommoLead, mas
+ * não é). Sem esta checagem a varredura seguia gravando campo por campo e cada escrita voltava 400 "Lead not found":
+ * 17/11/2026, Timbó, cartão 4843998 — 228 erros em 12 h, ~15 min por volta, e o painel lia como "sessões não chegam".
+ */
+export function cartaoApagado(lead: unknown): boolean {
+  return !lead || typeof lead !== 'object' || !(lead as { id?: unknown }).id;
+}
+
 export function cartaoDeOutroPaciente(idDoCartao: number | null, idsDoPaciente: number[]): boolean {
   return idDoCartao !== null && idsDoPaciente.length > 0 && !idsDoPaciente.includes(idDoCartao);
 }
@@ -2400,6 +2409,10 @@ async function sincronizarUnidade(unit: Unit, deps: { kommo?: KommoClient } = {}
         continue;
       }
       const lead = await kommo.getLead(leadId);
+      if (cartaoApagado(lead)) {
+        logger.info({ unit: unit.slug, leadId, paciente: p.nome }, 'franquia-sync: cartão apagado no Kommo — pulei');
+        continue;
+      }
       // Kommo dividido: só o cartão desta unidade; campo vazio vai para a lista da SDR, sem atribuir. Vem ANTES do
       // conflito de paciente: cartão de outra unidade não é desta varredura nem para ganhar CONFLITO_FRANQUIA.
       const idsDoPaciente = p.idClient ? [p.idClient] : casado.idsClient;

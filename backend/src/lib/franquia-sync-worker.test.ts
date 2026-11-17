@@ -1,7 +1,7 @@
 import { mock, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { _interno, aplicarMovimento, camposDaConta, candidatoARevisao, type ResumoSync, escolherPaciente, termosDeBuscaDoNome, type ClienteFranquia } from './franquia-sync-worker.js';
+import { _interno, aplicarMovimento, camposDaConta, candidatoARevisao, cartaoApagado, type ResumoSync, escolherPaciente, termosDeBuscaDoNome, type ClienteFranquia } from './franquia-sync-worker.js';
 import { SPINE_STATUS, SpineService } from '../services/spine.service.js';
 import { CAMPOS_SYNC, chaveTelefone, nomeDaFranquia } from './franquia-sync.js';
 import { ETAPA } from './franquia-move.js';
@@ -382,4 +382,12 @@ test('fecharSessoesDoTratamento: tratamento em andamento é da varredura normal,
   }
   assert.deepEqual(escritas, []);
   assert.equal(ficha.mock.callCount(), 0);
+});
+
+test('cartão apagado no Kommo (GET 204 → corpo vazio) é pulado; cartão de verdade segue', () => {
+  assert.equal(cartaoApagado(''), true);
+  assert.equal(cartaoApagado(undefined), true);
+  assert.equal(cartaoApagado(null), true);
+  assert.equal(cartaoApagado({}), true);
+  assert.equal(cartaoApagado({ id: 4843998, name: 'Paciente' }), false);
 });
