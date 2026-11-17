@@ -49,6 +49,14 @@ import { PAUSA_POR } from '../agent/teto-mensal.js';
 import type { Unit } from '@prisma/client';
 import { automacaoLigada } from './automacoes-estado.js';
 import { estadoDoLembrete } from './lembrete-chaves.js';
+import {
+  confirmacaoDaUnidade,
+  diaUtilAnterior,
+  diasQueConfirmamHoje,
+  jaConfirmou,
+  textoDaUnidade,
+  type ConfirmacaoDaUnidade,
+} from './confirmacao-unidade.js';
 
 /**
  * Janelas da chave ANTIGA, que não carregava o horário da consulta. Só servem à transição de
@@ -121,6 +129,10 @@ interface Envio {
   titulo: string | null;
   /** Conversa oficial já lida pelo laço (undefined = ler aqui). */
   oficiais?: MensagemOficial[] | null;
+  /** O jeito da unidade (`pipeline_intents.confirmacao_unidade`); null = padrão da rede. */
+  daUnidade?: ConfirmacaoDaUnidade | null;
+  /** Hora local do envio, para o {saudacao} do texto da unidade. */
+  horaLocal?: number;
 }
 
 /** Manda a pergunta de confirmação pelo melhor canal disponível. Devolve por onde saiu. */
@@ -147,7 +159,9 @@ async function pedirConfirmacao(e: Envio): Promise<'chat_botoes' | 'texto' | 'te
   // Janela de 24 h: texto livre só chega se o paciente escreveu nesse período. Fora dela, o Kommo
   // aceita o envio e marca "Erro" depois — falha em silêncio.
   const oficiais = e.oficiais !== undefined ? e.oficiais : await mensagensOficiais(kommo, leadId, 15).catch(() => null);
-  const aberta = oficiais ? janelaAberta(oficiais) : true;
+  // WhatsApp Lite (QR code, ex.: Petrópolis): não existe a janela de 24 h — o texto chega sempre. Sem esta chave, o
+  // paciente que marcou há 3 dias e não escreveu desde então virava TAREFA de ligação em vez de receber a mensagem.
+  const aberta = e.daUnidade?.semJanela ? true : oficiais ? janelaAberta(oficiais) : true;
 
   // Arma o tratador da resposta: sem isto, o "1" ou o toque no botão do paciente chega como texto
   // solto no agente, que não sabe que perguntou nada.
@@ -190,17 +204,27 @@ async function pedirConfirmacao(e: Envio): Promise<'chat_botoes' | 'texto' | 'te
 
   // O nome vem do título do cartão, que a Sofia grava com o nome que o paciente disse. O do contato é o perfil
   // do WhatsApp ("Space Conv. Hookah", "Leily Espaço Diva" — Canaã, 19/10/2026): sem nome no título, vai "Oi!".
-  const texto = textoConfirmacaoD1({
-    nome: primeiroNomeDoPaciente(e.titulo, null),
-    quando: consulta.quando,
-    especialista: consulta.especialista,
-    endereco: unit.clinicAddress,
-    antecedencia: toque,
-  });
+  const modeloDaUnidade = e.daUnidade?.texto ?? null;
+  const texto = modeloDaUnidade
+    ? textoDaUnidade(modeloDaUnidade, {
+        quando: consulta.quando,
+        nome: primeiroNomeDoPaciente(e.titulo, null),
+        especialista: consulta.especialista,
+        endereco: unit.clinicAddress,
+        horaDoEnvio: e.horaLocal ?? 9,
+      })
+    : textoConfirmacaoD1({
+        nome: primeiroNomeDoPaciente(e.titulo, null),
+        quando: consulta.quando,
+        especialista: consulta.especialista,
+        endereco: unit.clinicAddress,
+        antecedencia: toque,
+      });
 
   // Com os ids do chat, vai com botões (Confirmo · Preciso remarcar); sem eles, texto "responda 1 ou 2".
+  // O texto da UNIDADE vai como ela escreveu, sem botão: é a mensagem que a equipe já mandava à mão.
   let via: 'chat_botoes' | 'texto' = 'texto';
-  const ctx = await contextoDeChatDoLead(unit.id, leadId).catch(() => null);
+  const ctx = modeloDaUnidade ? null : await contextoDeChatDoLead(unit.id, leadId).catch(() => null);
   if (ctx) {
     try {
       await enviarMensagemDeChat(unit, {
@@ -257,7 +281,15 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
   // importados faz 10 mil chamadas à franquia antes de descartar quase todas.
   const amanha = somarDias(dia, 1);
   const depois = somarDias(dia, 2);
-  const diasAlvo = reforcoLiberado(unit.slug) ? [amanha, depois] : [amanha];
+  // Unidade no "dia útil anterior" (Petrópolis, 17/11/2026): um toque só, no último dia útil antes da consulta.
+  // Sexta confirma sábado, domingo e segunda; fim de semana e feriado não confirmam nada. Sem D-2.
+  const daUnidade = confirmacaoDaUnidade(unit.pipelineIntents);
+  const diaUtil = daUnidade?.diaUtil === true;
+  const diasAlvo = diaUtil ? diasQueConfirmamHoje(dia) : reforcoLiberado(unit.slug) ? [amanha, depois] : [amanha];
+  if (!diasAlvo.length) {
+    ultimoEnvioPorUnidade.set(unit.id, dia);
+    return;
+  }
   const links = await prisma.spineLeadLink.findMany({
     where: {
       unitId: unit.id,
@@ -290,7 +322,8 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
       conta.pulados++;
       continue;
     }
-    const toque = toqueDoDia(consulta.quando.slice(0, 10), dia);
+    const diaDaConsulta = consulta.quando.slice(0, 10);
+    const toque: Toque | null = diaUtil ? (diaUtilAnterior(diaDaConsulta) === dia ? 'd1' : null) : toqueDoDia(diaDaConsulta, dia);
     if (!toque) continue;
     if (toque === 'd2' && !reforcoLiberado(unit.slug)) continue;
     if (toque === 'd1' && vesperaDoKommo !== 'desligado') {
@@ -325,6 +358,14 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
         continue;
       }
       const oficiais = await mensagensOficiais(kommo, link.kommoLeadId, 40).catch(() => null);
+      // Pendência 3 de Petrópolis (17/11): quem já confirmou não recebe a pergunta. Ver `confirmacao-unidade.ts`.
+      const confirmado = daUnidade?.pularConfirmada ? jaConfirmou({ idStatus: consulta.idStatus, oficiais }) : null;
+      if (confirmado) {
+        conta.ja_confirmou++;
+        await marcarAviso(unit.id, link.kommoLeadId, chave);
+        logger.info({ unit: unit.slug, kommoLeadId: link.kommoLeadId, quando: consulta.quando, motivo: confirmado }, 'confirmação: já confirmou, não sai');
+        continue;
+      }
       // Desde quando vale a desistência: o momento em que o horário atual foi gravado. `link` foi lido antes da
       // reconciliação acima — se ela acabou de trocar o horário, o que o paciente escreveu antes é da consulta velha.
       // Limite conhecido: `updatedAt` também anda quando o sincronizador grava paciente/tentativas no vínculo (perto
@@ -421,6 +462,8 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
         chave,
         titulo: lead?.name ?? null,
         oficiais,
+        daUnidade,
+        horaLocal: hora,
       });
       conta[via]++;
       if (toque === 'd2') conta.d2++;
