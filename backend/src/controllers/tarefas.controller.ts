@@ -52,6 +52,10 @@ import {
 import { atendenteDaUnidade } from './aprendizados.controller.js';
 
 const TETO_MS = 6_000;
+/** Quantas tarefas abertas a tela traz de cada tipo (o resto é dito em `escondidas`). */
+export const LIMITE_ATRASADAS = 150;
+export const LIMITE_FUTURAS = 200;
+export const LIMITE_AGUARDANDO = 100;
 const DEMOROU = 'o CRM demorou demais para responder — tente de novo em instantes';
 const lerComTeto = <T>(p: Promise<T>, ms = TETO_MS): Promise<T | null> => comTeto<T | null>(p, ms, null, { propagarErro: true });
 
@@ -192,12 +196,25 @@ export async function tarefasHandler(req: Request, res: Response): Promise<void>
   if (!r) return;
   try {
     const agora = new Date();
-    const [abertas, recentes, zaps, atendentes] = await Promise.all([
-      prisma.crmTarefa.findMany({ where: { unitId: r.unit.id, conta: r.conta, estado: { in: [...ESTADOS_ABERTOS] } }, orderBy: { quando: 'asc' }, take: 300 }),
+    // As abertas vêm em TRÊS partes com limite próprio, nunca «as 300 mais antigas»: em modo seco as atrasadas se acumulam e empurrariam as de hoje e as próximas para
+    // fora da lista — a menina recriaria a tarefa e, com o robô ligado, o paciente receberia duas. Esperando confirmação vem inteira; atrasadas, as mais recentes;
+    // hoje e próximas, as mais cedo primeiro. O que não coube é dito na tela (`escondidas`).
+    const abertasDe = { unitId: r.unit.id, conta: r.conta, estado: { in: [...ESTADOS_ABERTOS] } };
+    const [aguardando, passadas, futuras, totalPassadas, totalFuturas, recentes, zaps, atendentes] = await Promise.all([
+      prisma.crmTarefa.findMany({ where: { unitId: r.unit.id, conta: r.conta, estado: 'aguardando' }, orderBy: { quando: 'desc' }, take: LIMITE_AGUARDANDO }),
+      prisma.crmTarefa.findMany({ where: { ...abertasDe, quando: { lte: agora } }, orderBy: { quando: 'desc' }, take: LIMITE_ATRASADAS }),
+      prisma.crmTarefa.findMany({ where: { ...abertasDe, quando: { gt: agora } }, orderBy: { quando: 'asc' }, take: LIMITE_FUTURAS }),
+      prisma.crmTarefa.count({ where: { ...abertasDe, quando: { lte: agora } } }),
+      prisma.crmTarefa.count({ where: { ...abertasDe, quando: { gt: agora } } }),
       prisma.crmTarefa.findMany({ where: { unitId: r.unit.id, conta: r.conta, estado: { notIn: [...ESTADOS_ABERTOS] }, atualizadoEm: { gte: new Date(agora.getTime() - 14 * 86_400_000) } }, orderBy: { atualizadoEm: 'desc' }, take: 100 }),
       prisma.crmTarefaZap.findMany({ where: { conta: r.conta }, select: { agenteId: true, telefone: true } }),
       atendentesDaUnidade(r).catch(() => [] as Atendente[]),
     ]);
+    const vistas = new Map<string, CrmTarefa>();
+    for (const t of [...aguardando, ...passadas, ...futuras]) vistas.set(t.id, t);
+    const abertas = [...vistas.values()].sort((a, b) => a.quando.getTime() - b.quando.getTime());
+    const mostradasAntes = abertas.filter((t) => t.quando.getTime() <= agora.getTime()).length; // inclui as que esperam confirmação e já passaram
+    const escondidas = { atrasadas: Math.max(0, totalPassadas - mostradasAntes), proximas: Math.max(0, totalFuturas - futuras.length) };
     const comZap = new Set(zaps.map((z) => z.agenteId));
     const j = janelaDeEnvio();
     res.set('Cache-Control', 'no-store').json({
@@ -211,6 +228,7 @@ export async function tarefasHandler(req: Request, res: Response): Promise<void>
       papel: r.a.papel ?? null,
       podeCadastrarZap: ehAdministradorDD(r.email),
       atendentes: atendentes.map((a) => ({ ...a, temZap: comZap.has(a.id), zap: ehAdministradorDD(r.email) ? telefoneMascarado(zaps.find((z) => z.agenteId === a.id)?.telefone ?? '') || null : null })),
+      escondidas,
       tarefas: [...abertas, ...recentes].map((t) => paraATela(t, agora, r.fuso, comZap, j)),
     });
   } catch (e) {

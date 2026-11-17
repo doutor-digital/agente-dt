@@ -177,6 +177,8 @@ const bate = (l: Linha, where: Linha): boolean =>
       if ('in' in v) return v.in.includes(l[k]);
       if ('notIn' in v) return !v.notIn.includes(l[k]);
       if ('gte' in v) return l[k] >= v.gte;
+      if ('lte' in v) return l[k] <= v.lte;
+      if ('gt' in v) return l[k] > v.gt;
       return true;
     }
     return v instanceof Date ? l[k]?.getTime() === v.getTime() : l[k] === v;
@@ -197,7 +199,13 @@ function preparar() {
   if (!originais.has('$transaction')) originais.set('$transaction', Object.getOwnPropertyDescriptor(prisma, '$transaction'));
   Object.defineProperty(prisma, '$transaction', { value: async (fn: (tx: unknown) => unknown) => fn(prisma), configurable: true, writable: true });
   falso('crmTarefa', {
-    findMany: async (a: { where: Linha }) => (consultas.push(a.where), tarefas.filter((t) => bate(t, a.where))),
+    findMany: async (a: { where: Linha; orderBy?: Linha; take?: number }) => {
+      consultas.push(a.where);
+      let l = tarefas.filter((t) => bate(t, a.where));
+      const campo = a.orderBy ? Object.keys(a.orderBy)[0] : null;
+      if (campo) l = [...l].sort((x, y) => (a.orderBy![campo] === 'desc' ? -1 : 1) * (x[campo] - y[campo]));
+      return a.take ? l.slice(0, a.take) : l;
+    },
     findFirst: async (a: { where: Linha }) => (consultas.push(a.where), tarefas.find((t) => bate(t, a.where)) ?? null),
     count: async (a: { where: Linha }) => tarefas.filter((t) => bate(t, a.where)).length,
     create: async (a: { data: Linha }) => {
@@ -446,4 +454,23 @@ test('WhatsApp das meninas: só a administração da Doutor Digital cadastra; n�
   assert.equal(rem.status, 200);
   assert.equal(zaps.length, 0);
   nada_de_post();
+});
+
+test('com MAIS de 300 tarefas abertas (normal em seco) as de hoje e as próximas continuam na tela, e a tela diz quanto não coube', async () => {
+  preparar();
+  const agora = Date.now();
+  // 300 atrasadas acumuladas em seco + 1 de hoje + 1 de amanhã + 1 esperando confirmação, a mais antiga de todas
+  for (let i = 0; i < 300; i++) tarefas.push({ id: `velha${i}-abcdefgh`, unitId: 'u1', conta: 1, caixa: 3, conversaId: 40, contatoNome: 'Maria', tipo: 'ligacao', quando: new Date(agora - (i + 3) * 3_600_000), responsavelId: 7, responsavelNome: 'Ana Souza', texto: '', modeloNome: null, modeloVariaveis: [], estado: 'pendente' });
+  tarefas.push({ id: 'hoje-1-abcdefgh', unitId: 'u1', conta: 1, caixa: 3, conversaId: 40, contatoNome: 'Maria', tipo: 'mensagem', quando: new Date(agora + 2 * 3_600_000), responsavelId: 7, responsavelNome: 'Ana Souza', texto: 'Oi', modeloNome: null, modeloVariaveis: [], estado: 'pendente' });
+  tarefas.push({ id: 'amanha-1-abcdefgh', unitId: 'u1', conta: 1, caixa: 3, conversaId: 40, contatoNome: 'Maria', tipo: 'mensagem', quando: new Date(agora + 30 * 3_600_000), responsavelId: 7, responsavelNome: 'Ana Souza', texto: 'Oi', modeloNome: null, modeloVariaveis: [], estado: 'pendente' });
+  tarefas.push({ id: 'espera-1-abcdefgh', unitId: 'u1', conta: 1, caixa: 3, conversaId: 40, contatoNome: 'Maria', tipo: 'mensagem', quando: new Date(agora - 900 * 3_600_000), responsavelId: 7, responsavelNome: 'Ana Souza', texto: 'Oi', modeloNome: null, modeloVariaveis: [], estado: 'aguardando' });
+  assert.equal(tarefas.length, 303);
+  const r = await pedir('GET', `/public/tarefas?slug=${PARAU}`, 'tok-agente');
+  assert.equal(r.status, 200);
+  const ids = r.corpo.tarefas.map((t: any) => t.id);
+  assert.ok(ids.includes('hoje-1-abcdefgh') && ids.includes('amanha-1-abcdefgh'), 'hoje e amanhã NÃO somem por causa das atrasadas');
+  assert.ok(ids.includes('espera-1-abcdefgh'), 'quem espera confirmação vem sempre, por mais antiga que seja');
+  assert.equal(r.corpo.tarefas.filter((t: any) => t.id.startsWith('velha')).length, 150, 'das atrasadas, as 150 mais recentes');
+  assert.ok(ids.includes('velha0-abcdefgh') && !ids.includes('velha299-abcdefgh'));
+  assert.deepEqual(r.corpo.escondidas, { atrasadas: 150, proximas: 0 }, 'a tela diz quantas não couberam (301 atrasadas ou esperando − 151 mostradas)');
 });

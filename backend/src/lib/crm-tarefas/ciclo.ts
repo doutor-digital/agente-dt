@@ -65,8 +65,8 @@ export interface Armazem {
   desfazerLembrete(id: string): Promise<void>;
   /** grava o que o seco decidiu, uma vez; false = já estava anotado */
   anotarSimulado(id: string, texto: string, agora: Date): Promise<boolean>;
-  /** só mexe se a tarefa ainda está no estado esperado (a menina pode ter cancelado no meio) */
-  atualizar(id: string, daqui: string[], dados: Partial<Pick<CrmTarefa, 'estado' | 'motivo' | 'enviadaEm' | 'mensagemId' | 'lembreteEm' | 'lembreteResumo' | 'tentativas' | 'tentativaEm'>>): Promise<boolean>;
+  /** só mexe se a tarefa ainda está no estado esperado (a menina pode ter cancelado no meio) e, com `versao`, só se ela continua COMO FOI LIDA (uma edição no meio do ciclo não é atropelada) */
+  atualizar(id: string, daqui: string[], dados: Partial<Pick<CrmTarefa, 'estado' | 'motivo' | 'enviadaEm' | 'mensagemId' | 'lembreteEm' | 'lembreteResumo' | 'tentativas' | 'tentativaEm'>>, versao?: Date): Promise<boolean>;
   numeroDaMenina(conta: number, agenteId: number): Promise<string | null>;
 }
 
@@ -92,6 +92,8 @@ export interface ResumoDoCiclo {
   presas: number;
   vistas: number;
   desligadas: number;
+  /** decididas em seco que, com o robô ligado, viram «Aguardando» EM SILÊNCIO (sem nota nem WhatsApp) */
+  silenciadas: number;
   mandadas: number;
   lembretes: number;
   simuladas: number;
@@ -100,7 +102,7 @@ export interface ResumoDoCiclo {
   adiadas: number;
   falhas: number;
 }
-const resumoVazio = (): ResumoDoCiclo => ({ presas: 0, vistas: 0, desligadas: 0, mandadas: 0, lembretes: 0, simuladas: 0, barradas: 0, aguardando: 0, adiadas: 0, falhas: 0 });
+const resumoVazio = (): ResumoDoCiclo => ({ presas: 0, vistas: 0, desligadas: 0, silenciadas: 0, mandadas: 0, lembretes: 0, simuladas: 0, barradas: 0, aguardando: 0, adiadas: 0, falhas: 0 });
 
 const statusDoErro = (e: unknown): number | undefined => {
   const s = (e as { status?: number } | null)?.status;
@@ -163,6 +165,14 @@ async function tratarLembrete(c: Ctx, t: CrmTarefa): Promise<void> {
     }
     return;
   }
+  // decidida em SECO: com o robô ligado não avisa ninguém por ela (ver `tratarMensagem`); fica na tela, em silêncio
+  if (t.simuladoEm) {
+    if (await armazem.pegarLembrete(t.id, agora)) {
+      await armazem.atualizar(t.id, ['pendente'], { lembreteResumo: 'não avisei: agendada quando o robô estava só no papel (a tarefa segue na tela)' });
+      c.resumo.silenciadas++;
+    }
+    return;
+  }
   // atrasada demais (o servidor ficou fora do ar): não acorda ninguém por um lembrete velho; a tarefa continua na tela como atrasada
   if (agora.getTime() - t.quando.getTime() > ATRASO_MAXIMO_DO_LEMBRETE_MS) {
     if (await armazem.pegarLembrete(t.id, agora)) await armazem.atualizar(t.id, ['pendente'], { lembreteResumo: 'não avisei: passou de 3 h do horário (a tarefa segue na tela, em Atrasadas)' });
@@ -197,7 +207,8 @@ async function barrar(c: Ctx, t: CrmTarefa, b: Barrado): Promise<void> {
     }
     return;
   }
-  if (!(await armazem.atualizar(t.id, ['pendente', 'enviando'], { estado: b.estado, motivo: b.motivo }))) return;
+  // com a versão lida: se a menina editou no meio do ciclo, o robô não barra a versão nova com o motivo da velha
+  if (!(await armazem.atualizar(t.id, ['pendente', 'enviando'], { estado: b.estado, motivo: b.motivo }, t.atualizadoEm))) return;
   c.resumo.barradas++;
   const resumo = await avisarMenina(c, t, `A mensagem agendada para ${nomeCurto(t.contatoNome)} NÃO saiu: ${b.motivo}.`, { nota: true, zap: true });
   logger.warn({ unit: c.u.slug, tarefa: t.id, motivo: b.motivo, resumo }, `${ID_CICLO}: mensagem barrada`);
@@ -227,6 +238,16 @@ async function tratarMensagem(c: Ctx, t: CrmTarefa): Promise<void> {
   const agora = mundo.agora();
   const seco = c.u.modo === 'seco';
 
+  // 0. decidida em SECO (a tela disse «nada foi enviado»; a menina pode ter mandado à mão): com o robô ligado NÃO sai sozinha e NÃO gera aviso por tarefa — vira
+  // «Aguardando» em silêncio, e a menina confirma uma a uma. Sem isto, ligar depois de semanas em seco soltaria o que estava anotado e uma rajada de avisos.
+  if (!seco && t.simuladoEm) {
+    if (await armazem.atualizar(t.id, ['pendente'], { estado: 'aguardando', motivo: 'agendada quando o robô estava só no papel: confirme' }, t.atualizadoEm)) {
+      c.resumo.silenciadas++;
+      logger.info({ unit: c.u.slug, tarefa: t.id }, `${ID_CICLO}: decidida em seco — ficou «Aguardando» em silêncio (sem envio e sem aviso)`);
+    }
+    return;
+  }
+
   // 1. horário e atraso — sem ler nada do CRM
   const ref = referenciaDoAtraso({ quando: t.quando, confirmadaEm: t.confirmadaEm }, c.u.fuso, c.janela);
   if (ref.getTime() > agora.getTime() || !dentroDaJanela(agora, c.u.fuso, c.janela)) {
@@ -243,7 +264,7 @@ async function tratarMensagem(c: Ctx, t: CrmTarefa): Promise<void> {
       }
       return;
     }
-    if (!(await armazem.atualizar(t.id, ['pendente'], { estado: 'aguardando', motivo }))) return;
+    if (!(await armazem.atualizar(t.id, ['pendente'], { estado: 'aguardando', motivo }, t.atualizadoEm))) return;
     c.resumo.aguardando++;
     await avisarMenina(c, t, `A mensagem para ${nomeCurto(t.contatoNome)} NÃO saiu sozinha: ${motivo}.`, { nota: true, zap: true });
     return;
@@ -303,7 +324,7 @@ async function tratarMensagem(c: Ctx, t: CrmTarefa): Promise<void> {
   }
 
   // 4. LIGADO: pega a tarefa ANTES de mandar
-  if (!(await armazem.pegar(t.id, agora, t.atualizadoEm))) return;
+  if (!(await armazem.pegar(t.id, mundo.agora(), t.atualizadoEm))) return;
   try {
     const r = await mundo.mandar(c.ctx, t.conversaId, { content, modelo });
     // sem o id da mensagem não há prova de que entrou: INCERTO (nunca reenvia sozinha)
@@ -386,6 +407,6 @@ export async function rodarCiclo(deps: { armazem: Armazem; mundo: MundoDoCiclo }
     }
   }
   // só fala quando algo aconteceu (tarefa esperando a janela de horário abrir seria uma linha por minuto a noite inteira)
-  if (resumo.presas || resumo.mandadas || resumo.lembretes || resumo.simuladas || resumo.barradas || resumo.aguardando || resumo.falhas) logger.info(resumo, `${ID_CICLO}: ciclo`);
+  if (resumo.presas || resumo.silenciadas || resumo.mandadas || resumo.lembretes || resumo.simuladas || resumo.barradas || resumo.aguardando || resumo.falhas) logger.info(resumo, `${ID_CICLO}: ciclo`);
   return resumo;
 }

@@ -64,8 +64,8 @@ export function armazemDoBanco(): Armazem {
     async anotarSimulado(id, texto, agora) {
       return (await prisma.crmTarefa.updateMany({ where: { id, estado: 'pendente', simuladoEm: null }, data: { simuladoEm: agora, simulado: texto.slice(0, 300) } })).count === 1;
     },
-    async atualizar(id, daqui, dados) {
-      return (await prisma.crmTarefa.updateMany({ where: { id, estado: { in: daqui } }, data: dados })).count === 1;
+    async atualizar(id, daqui, dados, versao) {
+      return (await prisma.crmTarefa.updateMany({ where: { id, estado: { in: daqui }, ...(versao ? { atualizadoEm: versao } : {}) }, data: dados })).count === 1;
     },
     async numeroDaMenina(conta, agenteId) {
       const z = await prisma.crmTarefaZap.findUnique({ where: { conta_agenteId: { conta, agenteId } } });

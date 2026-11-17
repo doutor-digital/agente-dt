@@ -358,6 +358,7 @@ test('SEM CREDENCIAL VÁLIDA, conta que existe (2) e conta que não existe (99) 
   // O servidor limita as conferências de login NOVAS a 120 por minuto (global). Cada rota nova com login gasta 4 delas neste teste: a cada 20 rotas o relógio
   // dele avança 61 s (só a leitura de `Date.now`), para o teste não depender de quantas rotas existem nem de quanto ele demora.
   const relogioReal = Date.now.bind(Date);
+  try {
   let avanco = 0;
   mock.method(Date, 'now', () => relogioReal() + avanco);
   let rotasVistas = 0;
@@ -374,7 +375,9 @@ test('SEM CREDENCIAL VÁLIDA, conta que existe (2) e conta que não existe (99) 
       if (lido[0]![0] !== lido[1]![0] || lido[0]![1] !== lido[1]![1]) diferentes.push(`${nome}: ${r.metodo} ${r.caminho}: ${lido[0]![0]} ${lido[0]![1].slice(0, 60)} × ${lido[1]![0]} ${lido[1]![1].slice(0, 60)}`);
     }
   }
-  mock.restoreAll();
+  } finally {
+    mock.restoreAll(); // o relógio volta ao normal mesmo se uma chamada acima falhar
+  }
   assert.deepEqual(diferentes, []);
 });
 

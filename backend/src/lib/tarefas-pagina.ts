@@ -136,6 +136,7 @@ details[open]>summary{margin-bottom:8px}
   <div id="faixaModo"></div>
   <div id="faixaConversa"></div>
   <div id="faixaZap"></div>
+  <div id="faixaLimite"></div>
   <div class="barra">
     <div class="abas" id="abas" role="group" aria-label="Quais tarefas"></div>
     <div class="dir"><select id="quemSel" aria-label="De quem"></select><button class="bt pri" type="button" id="btNova">Nova tarefa</button></div>
@@ -250,6 +251,17 @@ details[open]>summary{margin-bottom:8px}
       var cx = el('div', 'faixa seco'); cx.appendChild(el('b', null, 'Falta o seu WhatsApp:')); cx.appendChild(el('span', null, 'o lembrete chega só aqui no CRM (no sininho). Peça à Doutor Digital para cadastrar o seu número.')); f.appendChild(cx);
     }
   }
+  // a lista tem limite: o que não coube é dito, para ninguém recriar uma tarefa que só está fora da tela
+  function faixaDoLimite(){
+    var f = limpar($('faixaLimite')), e = D.escondidas || { atrasadas: 0, proximas: 0 };
+    if (!e.atrasadas && !e.proximas) return;
+    var cx = el('div', 'faixa seco'); cx.appendChild(el('b', null, 'Nem tudo cabe na lista:'));
+    var partes2 = [];
+    if (e.atrasadas) partes2.push(e.atrasadas + ' atrasada(s) mais antiga(s)');
+    if (e.proximas) partes2.push(e.proximas + ' tarefa(s) mais para frente');
+    cx.appendChild(el('span', null, 'faltam ' + partes2.join(' e ') + '. Antes de criar uma tarefa de novo, confira com a Doutor Digital se ela já existe.'));
+    f.appendChild(cx);
+  }
   function faixaDaConversa(){
     var f = limpar($('faixaConversa'));
     if (!CONV) return;
@@ -288,6 +300,12 @@ details[open]>summary{margin-bottom:8px}
       a.appendChild(b);
     });
   }
+  // «sai no próximo minuto» só vale dentro do horário de falar com o paciente; D.modo diz se o robô está ligado
+  function avisoDoConfirmar(){
+    var h = partes(agoraDoServidor()).hora, dentro = h >= D.janela.inicio && h < D.janela.fim;
+    if (D.modo !== 'ligado') return 'Confirmado. O robô não está ligado: a mensagem só sai quando ele for ligado.';
+    return dentro ? 'Confirmado: a mensagem sai no próximo minuto.' : 'Confirmado: a mensagem sai quando o horário de falar com o paciente abrir (' + D.janela.inicio + 'h).';
+  }
   var ESTADO_ROTULO = { pendente: 'Marcada', enviando: 'Enviando…', aguardando: 'Confirme', feita: 'Feita', falhou: 'Falhou', barrada: 'Não saiu', cancelada: 'Cancelada' };
   var ESTADO_CLASSE = { pendente: 'mudo', enviando: 'mudo', aguardando: 'seco', feita: 'vivo', falhou: 'ruim', barrada: 'ruim', cancelada: 'off' };
   var RESULTADO_ROTULO = { atendeu: 'Atendeu', nao_atendeu: 'Não atendeu', remarcar: 'Remarcar' };
@@ -321,7 +339,7 @@ details[open]>summary{margin-bottom:8px}
     var ac = el('div', 'tar-acoes');
     function botao(txt, cls, fn){ var b = el('button', 'bt peq ' + cls, txt); b.type = 'button'; b.addEventListener('click', function(){ fn(b); }); ac.appendChild(b); return b; }
     if (t.tipo === 'ligacao' && aberto) botao('Registrar resultado', 'pri', function(){ PAINEL = PAINEL === t.id ? null : t.id; desenhar(); });
-    if (t.estado === 'aguardando') botao('Enviar mesmo assim', 'pri', function(b){ acao(b, '/api/public/tarefas/' + enc(t.id) + '/confirmar', {}, 'Confirmado: a mensagem sai no próximo minuto.'); });
+    if (t.estado === 'aguardando') botao('Enviar mesmo assim', 'pri', function(b){ acao(b, '/api/public/tarefas/' + enc(t.id) + '/confirmar', {}, avisoDoConfirmar()); });
     if (aberto && t.tipo !== 'ligacao') botao(t.tipo === 'mensagem' ? 'Já mandei' : 'Feito', 'sec', function(b){ acao(b, '/api/public/tarefas/' + enc(t.id) + '/feita', {}, 'Marcada como feita.'); });
     if (aberto) botao('Editar', 'sec', function(){ abrirForm('editar', t); });
     if (aberto) botao('Cancelar', 'perigo', function(b){ if (window.confirm('Cancelar esta tarefa?')) acao(b, '/api/public/tarefas/' + enc(t.id) + '/cancelar', {}, 'Tarefa cancelada.'); });
@@ -676,7 +694,7 @@ details[open]>summary{margin-bottom:8px}
     try {
       var d = await api('GET', '/api/public/tarefas?slug=' + enc(U.slug));
       d.lidoEm = Date.now(); D = d;
-      cabecalho(); faixaDoModo(); faixaDoZap(); faixaDaConversa(); desenharFiltro(); desenhar(); desenharZap();
+      cabecalho(); faixaDoModo(); faixaDoZap(); faixaDoLimite(); faixaDaConversa(); desenharFiltro(); desenhar(); desenharZap();
       return D;
     } finally { CARREGANDO = false; }
   }

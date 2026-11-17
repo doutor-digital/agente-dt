@@ -89,9 +89,9 @@ function armazemFalso(zaps: Record<number, string> = { 7: '5594999990000' }): Ar
       l.simulado = texto;
       return true;
     },
-    async atualizar(id, daqui, dados) {
+    async atualizar(id, daqui, dados, versao) {
       const l = acha(id);
-      if (!l || !daqui.includes(l.estado)) return false;
+      if (!l || !daqui.includes(l.estado) || (versao && l.atualizadoEm.getTime() !== versao.getTime())) return false;
       Object.assign(l, dados);
       return true;
     },
@@ -550,4 +550,57 @@ test('o teto por ciclo vale também para os AVISOS de «não saiu»: um defeito 
   await ciclo();
   assert.equal(reg.zaps.length, C.MAX_ENVIOS_POR_CICLO);
   assert.equal(reg.notas.length, C.MAX_ENVIOS_POR_CICLO);
+});
+
+test('TRANSIÇÃO seco → ligado: o que o seco decidiu NÃO sai sozinho e NÃO gera aviso por tarefa — vira «Aguardando» em silêncio (0 envio, 0 nota, 0 WhatsApp)', async () => {
+  modo = 'seco';
+  tarefa({ conversaId: 40 }); // dentro da janela
+  for (let i = 0; i < 5; i++) tarefa({ conversaId: 41 + i, quando: new Date(AGORA.getTime() - (i + 1) * 86_400_000) });
+  tarefa({ tipo: 'ligacao', conversaId: 60 });
+  tarefa({ tipo: 'lembrete', conversaId: 61 });
+  await ciclo();
+  nada();
+  assert.equal(linhas.filter((l) => l.simuladoEm).length, 8, 'o seco decidiu todas');
+  // o João liga 1 h depois
+  modo = 'ligado';
+  agoraDoTeste = new Date(AGORA.getTime() + 3_600_000);
+  crm.ultima = new Date(agoraDoTeste.getTime() - 3_600_000);
+  const r = await ciclo();
+  nada();
+  assert.equal(r.mandadas, 0);
+  assert.equal(r.silenciadas, 8);
+  const mensagens = linhas.filter((l) => l.tipo === 'mensagem');
+  assert.ok(mensagens.every((l) => l.estado === 'aguardando' && /agendada quando o robô estava só no papel: confirme/.test(l.motivo!)));
+  assert.ok(linhas.filter((l) => l.tipo !== 'mensagem').every((l) => l.estado === 'pendente' && l.lembreteEm && /só no papel/.test(l.lembreteResumo!)), 'ligação/lembrete: nem lembrete nem aviso; seguem na tela');
+  // ciclos seguintes: continua tudo quieto
+  await ciclo();
+  nada();
+  // a menina confirma UMA (o que `POST /confirmar` faz): só essa sai
+  const uma = mensagens[0]!;
+  Object.assign(uma, { estado: 'pendente', motivo: null, confirmadaEm: agoraDoTeste, simuladoEm: null, simulado: null, atualizadoEm: new Date(agoraDoTeste.getTime() + 1) });
+  await ciclo();
+  assert.equal(reg.mandou.length, 1);
+  assert.equal(uma.estado, 'feita');
+  assert.equal(mensagens.filter((l) => l.estado === 'aguardando').length, 5);
+});
+
+test('barrar e «Aguardando» respeitam a versão lida: edição da menina no meio do ciclo não é atropelada nem avisada com o motivo velho', async () => {
+  crm.sair = new Date(AGORA.getTime() - 86_400_000);
+  const t = tarefa();
+  aoLerConversa = () => {
+    t.texto = 'editada';
+    t.atualizadoEm = new Date(AGORA.getTime() + 1000);
+    aoLerConversa = null;
+  };
+  await ciclo();
+  assert.equal(t.estado, 'pendente', 'não barrou a versão nova com o motivo da velha');
+  nada();
+  const atrasada = tarefa({ quando: new Date(AGORA.getTime() - 3 * 3_600_000), conversaId: 77 });
+  crm.sair = null;
+  const original = atrasada.atualizadoEm;
+  const arm = armazemFalso();
+  atrasada.atualizadoEm = new Date(original.getTime() + 5);
+  const lido = { ...atrasada, atualizadoEm: original };
+  assert.equal(await arm.atualizar(atrasada.id, ['pendente'], { estado: 'aguardando' }, lido.atualizadoEm), false);
+  assert.equal(atrasada.estado, 'pendente');
 });
