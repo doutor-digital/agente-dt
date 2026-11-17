@@ -6,7 +6,7 @@ import { test, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import type { LeadFieldRule, Unit } from '@prisma/client';
-import type { KommoLead } from '../services/kommo.service.js';
+import { KommoApiError, type KommoLead } from '../services/kommo.service.js';
 import type { DefinicaoDeCampo } from './ponte-ligacao.js';
 import type { Fala } from './cutucada-apos-equipe.js';
 import type { Estado } from './automacoes-estado.js';
@@ -14,7 +14,11 @@ import {
   CAMPOS_CAPTURAVEIS,
   DEBOUNCE_MS,
   MAX_LEITURAS_POR_CARTAO_DIA,
+  MAX_TENTATIVAS_DE_AUDIO,
   PRAZO_DA_LEITURA_MS,
+  falaDeOutraPessoa,
+  numerosDoTexto,
+  palavrasForaDaFala,
   _limparCapturaParaTeste,
   agendadosDaCaptura,
   agendarCapturaSilenciosa,
@@ -92,11 +96,15 @@ interface Mundo {
   deps: DepsDaCaptura;
   estado: { v: Estado };
   escritas: Array<{ campo: number; valor: unknown }>;
+  /** quantos PATCH de campos saíram (a gravação é em lote: um por cartão) */
+  lotes: { n: number };
+  /** `preenche-campos` ligado na unidade? (ele é o escritor da Qualificação) */
+  robo: { v: boolean };
   notas: string[];
   simulacoes: Array<{ acao: string; alvo: string; valor?: unknown; motivo?: string | null }>;
   perguntas: string[];
   leituras: { lead: number; conversa: number };
-  transcricoes: { n: number };
+  transcricoes: { n: number; faltam: number };
   cartao: { atual: KommoLead };
   resposta: { texto: string | null };
 }
@@ -107,11 +115,13 @@ function mundo(o: { lead?: KommoLead; falas?: Fala[]; estado?: Estado; resposta?
   const m: Mundo = {
     estado,
     escritas: [],
+    lotes: { n: 0 },
+    robo: { v: false },
     notas: [],
     simulacoes: [],
     perguntas: [],
     leituras: { lead: 0, conversa: 0 },
-    transcricoes: { n: 0 },
+    transcricoes: { n: 0, faltam: 0 },
     cartao,
     resposta: { texto: o.resposta === undefined ? JSON.stringify({ campos: [{ campo: '✎ Queixa', valor: 'Dor forte na lombar há 3 meses, desce para a perna', trecho: 'dor forte na lombar há 3 meses e desce para a perna' }] }) : o.resposta },
     deps: null as never,
@@ -120,13 +130,17 @@ function mundo(o: { lead?: KommoLead; falas?: Fala[]; estado?: Estado; resposta?
     agora: () => AGORA,
     unidade: async (u) => u as Unit,
     estado: () => estado.v,
+    qualificacaoEhDoRobo: () => m.robo.v,
     kommo: () => ({
       getLead: async () => {
         m.leituras.lead++;
         return o.relido && m.leituras.lead > 1 ? o.relido() : cartao.atual;
       },
       getContactPhone: async () => '5524988887777',
-      setLeadCustomFieldValue: async (_l: number, campo: number, _t: unknown, valor: unknown) => void m.escritas.push({ campo, valor }),
+      gravarCamposDoLead: async (_l: number, campos: Array<{ field_id: number; values: unknown }>) => {
+        m.lotes.n++;
+        for (const c of campos) m.escritas.push({ campo: c.field_id, valor: c.values });
+      },
       addLeadNote: async (_l: number, t: string) => (m.notas.push(t), { id: 1 }),
     }),
     regras: async () => REGRAS,
@@ -137,7 +151,7 @@ function mundo(o: { lead?: KommoLead; falas?: Fala[]; estado?: Estado; resposta?
       m.leituras.conversa++;
       return { falas: o.falas ?? CONVERSA, ultimaId: `m${(o.falas ?? CONVERSA).length}`, audios: new Map<string, string>() };
     },
-    transcrever: async () => void m.transcricoes.n++,
+    transcrever: async () => (m.transcricoes.n++, m.transcricoes.faltam),
     perguntar: async (_u, user) => {
       m.perguntas.push(user);
       return m.resposta.texto === null ? null : { texto: m.resposta.texto, custoUsd: 0.0009 };
@@ -267,6 +281,56 @@ test('validar: campo de lista cujas opções todas são vetadas não aceita text
   assert.match(r.recusadas[0].motivo, /não tem opção/);
 });
 
+test('validar: PARÁFRASE — o caso real do "formigamento" (o paciente escreveu «nada pernas») é recusado', () => {
+  const cands = camposDaEtapaVazios({ regras: REGRAS, defs: DEFS, lead: lead() });
+  const conversa = [fala('paciente', 'dor na lombar ,colicas dor no quadril e nada pernas'), fala('paciente', 'tem uns 5 meses já, queria saber o valor')];
+  const inventado = 'Dor na lombar com cólicas, dor no quadril e formigamento nas pernas, há cerca de 5 meses.';
+  const r = validarSugestoes([{ campo: '✎ Queixa', valor: inventado, trecho: 'dor na lombar ,colicas dor no quadril e nada pernas' }], cands, conversa);
+  assert.equal(r.aceitas.length, 0);
+  assert.match(r.recusadas[0].motivo, /valor com detalhe que o paciente não disse \(formigamento\)/);
+  // sem o detalhe, o mesmo valor passa (as palavras de conteúdo são todas dele; «cerca», «sobre» e afins não contam)
+  const fiel = validarSugestoes([{ campo: '✎ Queixa', valor: 'Dor na lombar com cólicas, dor no quadril e nas pernas, há cerca de 5 meses.', trecho: 'dor na lombar ,colicas dor no quadril e nada pernas' }], cands, conversa);
+  assert.equal(fiel.aceitas.length, 1);
+});
+
+test('validar: Observações também — resumo com detalhe que o paciente não escreveu é recusado; o fiel passa', () => {
+  const cands = camposDaEtapaVazios({ regras: REGRAS, defs: DEFS, lead: lead() });
+  const conversa = [fala('paciente', 'Tenho exames de imagem com protrusão na cervical'), fala('equipe', 'Pode mandar as fotos do exame')];
+  const r1 = validarSugestoes([{ campo: '✎ Observações', valor: 'Paciente tem exames com protrusão na cervical e já fez cirurgia.', trecho: '' }], cands, conversa);
+  assert.equal(r1.aceitas.length, 0);
+  assert.match(r1.recusadas[0].motivo, /cirurgia/);
+  const r2 = validarSugestoes([{ campo: '✎ Observações', valor: 'Paciente informou exames de imagem com protrusão na cervical.', trecho: '' }], cands, conversa);
+  assert.equal(r2.aceitas.length, 1);
+});
+
+test('validar: a 1ª sugestão inválida de um campo não derruba a 2ª válida; a repetição depois de aceita é registrada, não engolida', () => {
+  const cands = camposDaEtapaVazios({ regras: REGRAS, defs: DEFS, lead: lead() });
+  const r = validarSugestoes(
+    [
+      { campo: '⚑ Origem', valor: 'Rádio', trecho: 'indicação de uma amiga' },
+      { campo: '⚑ Origem', valor: 'Indicação', trecho: 'indicação de uma amiga' },
+      { campo: '⚑ Origem', valor: 'Indicação', trecho: 'indicação de uma amiga' },
+    ],
+    cands,
+    CONVERSA,
+  );
+  assert.deepEqual(r.aceitas.map((a) => a.texto), ['Indicação']);
+  assert.equal(r.recusadas.length, 1, 'só a opção inválida; o eco do valor aceito não vira ruído');
+  assert.match(r.recusadas[0].motivo, /opção inválida/);
+});
+
+test('validar: cidade e UF só valem ditas por inteiro ("Magé", "RJ"); «mage» dentro de «imagem» não vale', () => {
+  const regras = [...REGRAS, regra('registra_cidade', 3, '⌂ Cidade', 'textarea')];
+  const defs = DEFS.map((d) => (d.id === 3 ? { ...d, hidden_statuses: [] } : d.id === 9 ? { ...d, is_api_only: false } : d));
+  const cands = camposDaEtapaVazios({ regras, defs, lead: lead() });
+  const diz = (t: string) => [...CONVERSA, fala('paciente', t)];
+  assert.equal(validarSugestoes([{ campo: '⌂ Cidade', valor: 'Magé', trecho: 'sou de Magé' }], cands, diz('sou de Magé, perto do centro')).aceitas.length, 1);
+  assert.equal(validarSugestoes([{ campo: '⌂ Estado', valor: 'RJ', trecho: 'moro em Magé RJ' }], cands, diz('moro em Magé RJ')).aceitas.length, 1);
+  const imagem = validarSugestoes([{ campo: '⌂ Cidade', valor: 'Magé', trecho: 'mandei a imagem do exame' }], cands, diz('mandei a imagem do exame'));
+  assert.equal(imagem.aceitas.length, 0);
+  assert.match(imagem.recusadas[0].motivo, /não aparece escrito/);
+});
+
 test('validar: campo que não foi pedido (Tipo de lead, Cidade escondida) é recusado, e o repetido conta uma vez', () => {
   const cands = camposDaEtapaVazios({ regras: REGRAS, defs: DEFS, lead: lead() });
   const r = validarSugestoes(
@@ -280,7 +344,7 @@ test('validar: campo que não foi pedido (Tipo de lead, Cidade escondida) é rec
     CONVERSA,
   );
   assert.equal(r.aceitas.length, 1);
-  assert.equal(r.recusadas.length, 2);
+  assert.equal(r.recusadas.length, 2, 'Tipo de lead e Cidade não pedidos; a repetição idêntica da Origem é só eco');
 });
 
 test('validar: Qualificação e Observações dispensam a frase, mas Qualificação pede 2 falas do paciente', () => {
@@ -314,7 +378,7 @@ test('LIGADA: grava o campo vazio com a frase do paciente, deixa uma nota e não
   const m = mundo();
   const r = await lerCartaoEmSilencio(UNIT, 777, m.deps);
   assert.equal(r.tipo, 'leu');
-  assert.deepEqual(m.escritas, [{ campo: 1, valor: 'Dor forte na lombar há 3 meses, desce para a perna' }]);
+  assert.deepEqual(m.escritas, [{ campo: 1, valor: [{ value: 'Dor forte na lombar há 3 meses, desce para a perna' }] }]);
   assert.equal(m.notas.length, 1);
   assert.match(m.notas[0], /Nada foi sobrescrito/);
   assert.equal(m.simulacoes.length, 0);
@@ -393,7 +457,7 @@ for (const [nome, cartao, motivo] of [
 
 test('nunca para número interno (NUMEROS_INTERNOS): não lê a conversa nem chama a IA', async () => {
   const m = mundo();
-  m.deps.kommo = () => ({ getLead: async () => lead(), getContactPhone: async () => '5524999990001', setLeadCustomFieldValue: async () => undefined, addLeadNote: async () => null });
+  m.deps.kommo = () => ({ getLead: async () => lead(), getContactPhone: async () => '5524999990001', gravarCamposDoLead: async () => undefined, addLeadNote: async () => null });
   const r = await lerCartaoEmSilencio(UNIT, 777, m.deps);
   assert.equal(r.tipo, 'pulou');
   assert.match(r.tipo === 'pulou' ? r.motivo : '', /número interno/);
@@ -402,7 +466,7 @@ test('nunca para número interno (NUMEROS_INTERNOS): não lê a conversa nem cha
 
 test('sem o telefone do contato e com a lista de internos preenchida: na dúvida, não lê', async () => {
   const m = mundo();
-  m.deps.kommo = () => ({ getLead: async () => lead(), getContactPhone: async () => null, setLeadCustomFieldValue: async () => undefined, addLeadNote: async () => null });
+  m.deps.kommo = () => ({ getLead: async () => lead(), getContactPhone: async () => null, gravarCamposDoLead: async () => undefined, addLeadNote: async () => null });
   const r = await lerCartaoEmSilencio(UNIT, 777, m.deps);
   assert.equal(r.tipo, 'pulou');
   assert.equal(m.perguntas.length, 0);
@@ -548,14 +612,272 @@ test('o paciente só disse «oi»: nem chama a IA nem gasta a vaga do dia do car
   assert.equal((await lerCartaoEmSilencio(UNIT, 777, m.deps)).tipo, 'leu');
 });
 
-test('IA fora do ar não gasta a vaga do dia do cartão', async () => {
+test('IA fora do ar: a falha de UM cartão não põe a unidade em recuo; 2 cartões diferentes seguidos, sim', async () => {
   const m = mundo({ resposta: null });
-  for (let i = 0; i < MAX_LEITURAS_POR_CARTAO_DIA + 2; i++) {
-    m.deps.falas = async () => ({ falas: CONVERSA, ultimaId: `m${i}`, audios: new Map<string, string>() });
-    const r = await lerCartaoEmSilencio(UNIT, 777, m.deps);
-    assert.doesNotMatch(r.tipo === 'pulou' ? r.motivo : '', /teto/);
+  const conversa = (id: string) => (m.deps.falas = async () => ({ falas: CONVERSA, ultimaId: id, audios: new Map<string, string>() }));
+  conversa('a');
+  const r1 = await lerCartaoEmSilencio(UNIT, 777, m.deps);
+  assert.match(r1.tipo === 'pulou' ? r1.motivo : '', /IA não respondeu.*sem recuo ainda/);
+  conversa('a2');
+  await lerCartaoEmSilencio(UNIT, 777, m.deps); // o MESMO cartão de novo: continua sem recuo
+  assert.equal(m.perguntas.length, 2);
+  conversa('b');
+  await lerCartaoEmSilencio(UNIT, 888, m.deps); // um 2º cartão diferente falha: agora a unidade recua
+  assert.equal(m.perguntas.length, 3);
+  conversa('c');
+  const r4 = await lerCartaoEmSilencio(UNIT, 999, m.deps);
+  assert.match(r4.tipo === 'pulou' ? r4.motivo : '', /recuo/);
+  assert.equal(m.perguntas.length, 3);
+  // passado o recuo (5 min), tenta de novo
+  m.deps.agora = () => new Date(AGORA.getTime() + 6 * 60_000);
+  await lerCartaoEmSilencio(UNIT, 999, m.deps);
+  assert.equal(m.perguntas.length, 4);
+  // e nenhuma dessas vezes gastou a vaga do dia: com a IA de volta, o cartão ainda lê
+  m.resposta.texto = JSON.stringify({ campos: [] });
+  m.deps.agora = () => new Date(AGORA.getTime() + 90 * 60_000);
+  assert.equal((await lerCartaoEmSilencio(UNIT, 777, m.deps)).tipo, 'leu');
+});
+
+test('o teto usa o dia LOCAL de cada unidade: a virada de uma não zera o placar da outra', async () => {
+  // 15:00Z de 16/11: em Brasília ainda é dia 16 (12:00); em Tóquio já é 17 (00:00)
+  const TOQUIO = { id: 'u-toq', slug: 'toquio', spineTimezone: 'Asia/Tokyo' } as unknown as Unit;
+  const m = mundo({ resposta: JSON.stringify({ campos: [] }) });
+  const conversa = (id: string) => (m.deps.falas = async () => ({ falas: CONVERSA, ultimaId: id, audios: new Map<string, string>() }));
+  for (let i = 0; i < MAX_LEITURAS_POR_CARTAO_DIA; i++) {
+    conversa(`p${i}`);
+    assert.equal((await lerCartaoEmSilencio(UNIT, 777, m.deps)).tipo, 'leu');
+    conversa(`t${i}`); // a cada leitura de Petrópolis, uma de Tóquio no meio (o «dia» de Tóquio é outro)
+    await lerCartaoEmSilencio(TOQUIO, 5, m.deps);
   }
-  assert.equal(m.perguntas.length, MAX_LEITURAS_POR_CARTAO_DIA + 2);
+  conversa('p-extra');
+  const r = await lerCartaoEmSilencio(UNIT, 777, m.deps);
+  assert.equal(r.tipo, 'pulou', 'o placar de Petrópolis sobreviveu às leituras de Tóquio');
+  assert.match(r.tipo === 'pulou' ? r.motivo : '', /teto do cartão/);
+  assert.equal(m.perguntas.length, MAX_LEITURAS_POR_CARTAO_DIA * 2);
+});
+
+test('Kommo dividido: se o cartão trocou de unidade enquanto a IA lia, nada é gravado', async () => {
+  const campoUnidade = (v: string) => ({ field_id: 99, field_name: '⌂ Unidade de atendimento', values: [{ value: v }] });
+  const grupo = { contaUnitId: 'u-pet', membros: [{ unitId: 'u-pet', contaUnitId: 'u-pet', rotulo: 'Petrópolis' }, { unitId: 'u-cax', contaUnitId: 'u-pet', rotulo: 'Caxias' }] };
+  const m = mundo({ lead: lead({ custom_fields_values: [campoUnidade('Petrópolis')] as never }), relido: () => lead({ custom_fields_values: [campoUnidade('Caxias')] as never }) });
+  m.deps.grupo = async () => grupo;
+  const r = await lerCartaoEmSilencio(UNIT, 777, m.deps);
+  assert.equal(r.tipo, 'pulou');
+  assert.match(r.tipo === 'pulou' ? r.motivo : '', /Kommo dividido.*ao reler/);
+  assert.equal(m.escritas.length, 0);
+  // e o cartão que continua sendo desta unidade grava normalmente
+  _limparCapturaParaTeste();
+  const ok = mundo({ lead: lead({ custom_fields_values: [campoUnidade('Petrópolis')] as never }) });
+  ok.deps.grupo = async () => grupo;
+  assert.equal((await lerCartaoEmSilencio(UNIT, 777, ok.deps)).tipo, 'leu');
+  assert.equal(ok.escritas.length, 1);
+});
+
+test('onde o preenche-campos está ligado, a Qualificação NÃO é pedida nem gravada (ele espera 6 h de propósito)', async () => {
+  const resposta = JSON.stringify({ campos: [{ campo: '★ Qualificação (Quente/Morno/Frio)', valor: 'Quente', trecho: '' }, { campo: '✎ Observações', valor: 'Paciente quer marcar logo, veio por indicação', trecho: '' }] });
+  const m = mundo({ resposta });
+  m.robo.v = true;
+  const r = await lerCartaoEmSilencio(UNIT, 777, m.deps);
+  assert.equal(r.tipo, 'leu');
+  assert.ok(!m.perguntas[0].includes('Qualificação'), 'a IA nem recebe o campo');
+  assert.deepEqual(m.escritas.map((e) => e.campo), [8], 'só as Observações (id 8); nada da Qualificação (id 2)');
+  assert.equal(m.lotes.n, 1);
+  // sem o robô, a Qualificação volta a ser candidata
+  _limparCapturaParaTeste();
+  const livre = mundo({ resposta });
+  await lerCartaoEmSilencio(UNIT, 777, livre.deps);
+  assert.deepEqual(livre.escritas.map((e) => e.campo).sort(), [2, 8]);
+  assert.equal(livre.lotes.n, 1, 'os dois campos num PATCH só');
+});
+
+test('áudio sem transcrição: tenta nos turnos seguintes sem pagar a IA; na tentativa MAX do dia lê SEM o áudio, com a lacuna dita à IA e marcada', async () => {
+  const m = mundo({ resposta: JSON.stringify({ campos: [] }) });
+  m.transcricoes.faltam = 1;
+  for (let i = 1; i < MAX_TENTATIVAS_DE_AUDIO; i++) {
+    const r = await lerCartaoEmSilencio(UNIT, 777, m.deps);
+    assert.equal(r.tipo, 'pulou');
+    assert.match(r.tipo === 'pulou' ? r.motivo : '', new RegExp(`tentativa ${i} de ${MAX_TENTATIVAS_DE_AUDIO}`));
+  }
+  assert.equal(m.perguntas.length, 0, 'enquanto há tentativa, não paga a IA para ler a conversa pela metade');
+  const ultima = await lerCartaoEmSilencio(UNIT, 777, m.deps);
+  assert.equal(ultima.tipo, 'leu', 'o cartão não fica sem leitura para sempre');
+  assert.equal(ultima.tipo === 'leu' ? ultima.audiosSemTexto : -1, 1);
+  assert.match(m.perguntas[0], /1 áudio\(s\) do paciente .* não puderam ser ouvidos/);
+  assert.equal((await lerCartaoEmSilencio(UNIT, 777, m.deps)).tipo, 'pulou', 'lida (com a lacuna): não relê a mesma conversa');
+});
+
+test('áudio sem transcrição lido sem ele: a lacuna aparece no «gravaria» da tela e na nota do cartão', async () => {
+  for (const estado of ['seco', 'ligado'] as const) {
+    _limparCapturaParaTeste();
+    const m = mundo({ estado });
+    m.transcricoes.faltam = 1;
+    for (let i = 0; i < MAX_TENTATIVAS_DE_AUDIO; i++) await lerCartaoEmSilencio(UNIT, 777, m.deps);
+    if (estado === 'seco') assert.match(String(m.simulacoes[0].motivo), /1 áudio\(s\) do paciente sem transcrição/);
+    else assert.match(m.notas[0], /1 áudio\(s\) do paciente não foram ouvidos/);
+  }
+});
+
+const RESPOSTA_QUEIXA_E_ORIGEM = JSON.stringify({
+  campos: [
+    { campo: '✎ Queixa', valor: 'Dor forte na lombar há 3 meses', trecho: 'dor forte na lombar há 3 meses' },
+    { campo: '⚑ Origem', valor: 'Indicação', trecho: 'indicação de uma amiga' },
+  ],
+});
+const kommoQueRecusa = (m: Mundo, erro: () => Error, chamadas: Array<number[]>) => {
+  const original = m.deps.kommo(UNIT);
+  m.deps.kommo = () => ({
+    ...original,
+    gravarCamposDoLead: async (l: number, campos: Array<{ field_id: number; values: unknown }>) => {
+      chamadas.push(campos.map((c) => c.field_id));
+      if (campos.length > 1 || campos.some((c) => c.field_id === 5)) throw erro(); // o lote inteiro e o campo ruim (Origem, id 5)
+      return original.gravarCamposDoLead(l, campos as never);
+    },
+  });
+};
+
+test('HTTP 400 no lote (valor ruim): relê o cartão e cai para campo a campo — o campo ruim não bloqueia o bom', async () => {
+  const m = mundo({ resposta: RESPOSTA_QUEIXA_E_ORIGEM });
+  const chamadas: number[][] = [];
+  kommoQueRecusa(m, () => new KommoApiError('x', 400, {}), chamadas);
+  const r = await lerCartaoEmSilencio(UNIT, 777, m.deps);
+  assert.deepEqual(chamadas, [[1, 5], [1], [5]]);
+  assert.equal(r.tipo === 'leu' ? r.gravou.map((g) => g.campo).join() : '', '✎ Queixa');
+  assert.equal(r.tipo === 'leu' ? r.recusadas.some((x) => x.campo === '⚑ Origem' && /Kommo recusou/.test(x.motivo)) : false, true);
+  assert.equal(m.leituras.lead, 3, 'cartão lido 1x + reconferido antes do lote + reconferido antes da volta campo a campo');
+});
+
+test('a SDR preenche a Queixa enquanto o lote cai: a volta campo a campo NÃO cobre o que ela escreveu', async () => {
+  let m!: Mundo;
+  // 1ª leitura: vazio; 2ª (antes do lote): vazio; 3ª (antes da volta campo a campo): a SDR já escreveu a Queixa
+  m = mundo({ resposta: RESPOSTA_QUEIXA_E_ORIGEM, relido: () => (m.leituras.lead >= 3 ? lead({ preenchidos: [[1, 'a SDR escreveu isto']] }) : lead()) });
+  const chamadas: number[][] = [];
+  kommoQueRecusa(m, () => new KommoApiError('x', 400, {}), chamadas);
+  const r = await lerCartaoEmSilencio(UNIT, 777, m.deps);
+  assert.deepEqual(chamadas, [[1, 5], [5]], 'a Queixa não vai sozinha: o cartão relido já a tinha');
+  assert.equal(m.escritas.length, 0, 'nada foi escrito por cima');
+  assert.equal(r.tipo === 'leu' ? r.recusadas.some((x) => x.campo === '✎ Queixa' && /não sobrescrevi/.test(x.motivo)) : false, true);
+});
+
+test('lote recusado por 429, 403, timeout ou rede: só registra e sai — sem reler, sem campo a campo, sem marcar como lido', async () => {
+  for (const erro of [() => new KommoApiError('x', 429, {}), () => new KommoApiError('x', 403, {}), () => new KommoApiError('x', undefined, {}), () => new Error('ETIMEDOUT')]) {
+    _limparCapturaParaTeste();
+    const m = mundo({ resposta: RESPOSTA_QUEIXA_E_ORIGEM });
+    const chamadas: number[][] = [];
+    kommoQueRecusa(m, erro, chamadas);
+    const r = await lerCartaoEmSilencio(UNIT, 777, m.deps);
+    assert.deepEqual(chamadas, [[1, 5]], 'um PATCH só: nada de insistir campo a campo');
+    assert.equal(m.leituras.lead, 2, 'sem a releitura da volta campo a campo');
+    assert.equal(r.tipo === 'leu' ? r.gravou.length : -1, 0);
+    // não marcou como lida: o próximo turno tenta de novo
+    const de_novo = await lerCartaoEmSilencio(UNIT, 777, m.deps);
+    assert.equal(de_novo.tipo, 'leu');
+  }
+});
+
+test('campo a campo: se um campo falha com 429, os que faltam não são tentados', async () => {
+  const resposta = JSON.stringify({
+    campos: [
+      { campo: '⚑ Origem', valor: 'Indicação', trecho: 'indicação de uma amiga' },
+      { campo: '✎ Queixa', valor: 'Dor forte na lombar há 3 meses', trecho: 'dor forte na lombar há 3 meses' },
+      { campo: '★ Qualificação (Quente/Morno/Frio)', valor: 'Quente', trecho: '' },
+    ],
+  });
+  const m = mundo({ resposta });
+  const original = m.deps.kommo(UNIT);
+  const chamadas: number[][] = [];
+  m.deps.kommo = () => ({
+    ...original,
+    gravarCamposDoLead: async (_l: number, campos: Array<{ field_id: number; values: unknown }>) => {
+      chamadas.push(campos.map((c) => c.field_id));
+      if (campos.length > 1) throw new KommoApiError('x', 400, {});
+      if (campos[0].field_id === 5) throw new KommoApiError('x', 429, {}); // o 1º campo da volta leva 429
+    },
+  });
+  await lerCartaoEmSilencio(UNIT, 777, m.deps);
+  assert.equal(chamadas.length, 2, 'o lote + um único campo; os outros dois não foram tentados');
+});
+
+test('chamada à IA que LANÇA conta como IA fora do ar: 2 cartões diferentes armam o recuo da unidade', async () => {
+  const m = mundo();
+  m.deps.perguntar = async () => {
+    throw new Error('ECONNRESET');
+  };
+  const r1 = await lerCartaoEmSilencio(UNIT, 777, m.deps);
+  assert.match(r1.tipo === 'pulou' ? r1.motivo : '', /IA não respondeu/);
+  m.deps.falas = async () => ({ falas: CONVERSA, ultimaId: 'outra', audios: new Map<string, string>() });
+  await lerCartaoEmSilencio(UNIT, 888, m.deps);
+  const r3 = await lerCartaoEmSilencio(UNIT, 999, m.deps);
+  assert.match(r3.tipo === 'pulou' ? r3.motivo : '', /recuo/);
+});
+
+test('validar: a lista sem conteúdo vale pela palavra INTEIRA — "interesse" não libera "intermitente"/"internação", "conversa" não libera "convênio"', () => {
+  const cands = camposDaEtapaVazios({ regras: REGRAS, defs: DEFS, lead: lead() });
+  for (const palavra of ['intermitente', 'internação', 'convênio']) {
+    const r = validarSugestoes([{ campo: '✎ Queixa', valor: `Dor na lombar ${palavra}`, trecho: 'dor forte na lombar há 3 meses' }], cands, CONVERSA);
+    assert.equal(r.aceitas.length, 0, palavra);
+    assert.match(r.recusadas[0].motivo, new RegExp(`detalhe que o paciente não disse \\(.*${palavra.normalize('NFD').replace(/[\u0300-\u036f]/g, '')}`), palavra);
+  }
+  // as palavras da própria lista continuam isentas, inteiras
+  assert.deepEqual(palavrasForaDaFala('Paciente com interesse na conversa sobre dor na lombar', 'dor forte na lombar'), []);
+  assert.deepEqual(palavrasForaDaFala('interesse intermitente internacao conversa convenio', 'nada disso'), ['intermitente', 'internacao', 'convenio']);
+});
+
+test('validar: frase de prova sobre OUTRA pessoa não prova Região da dor nem Queixa (caso real 5806575)', () => {
+  const cands = camposDaEtapaVazios({ regras: REGRAS, defs: DEFS, lead: lead() });
+  const conversa = [fala('paciente', 'Bom dia, o pessoal ainda não respondeu se o tratamento para o meu pai será eficaz'), fala('paciente', 'Meu pai tem dor na lombar irradiando para a perna')];
+  const r = validarSugestoes(
+    [
+      { campo: '⚕ Região da dor', valor: 'Lombar', trecho: 'Meu pai tem dor na lombar irradiando para a perna' },
+      { campo: '✎ Queixa', valor: 'Dor na lombar irradiando para a perna', trecho: 'Meu pai tem dor na lombar irradiando para a perna' },
+    ],
+    cands,
+    conversa,
+  );
+  assert.equal(r.aceitas.length, 0);
+  assert.ok(r.recusadas.every((x) => /fala de outra pessoa/.test(x.motivo)));
+  assert.equal(r.recusadas.length, 2);
+  // a mesma dor dita por quem escreve passa
+  const propria = validarSugestoes([{ campo: '⚕ Região da dor', valor: 'Lombar', trecho: 'sinto dor na lombar há tempos' }], cands, [...CONVERSA, fala('paciente', 'sinto dor na lombar há tempos')]);
+  assert.equal(propria.aceitas.length, 1);
+  assert.ok(falaDeOutraPessoa('minha mãe também sente') && falaDeOutraPessoa('o marido dela') && !falaDeOutraPessoa('sinto dor na lombar'));
+});
+
+test('validar: tempo e número no valor têm de aparecer IGUAIS numa fala do paciente («há 2 anos», 3 → 8 meses)', () => {
+  const cands = camposDaEtapaVazios({ regras: REGRAS, defs: DEFS, lead: lead() });
+  const conversa = [fala('paciente', 'tenho dor na lombar há 3 meses')];
+  const tenta = (valor: string) => validarSugestoes([{ campo: '✎ Queixa', valor, trecho: 'dor na lombar há 3 meses' }], cands, conversa);
+  const oito = tenta('Dor na lombar há 8 meses');
+  assert.equal(oito.aceitas.length, 0);
+  assert.match(oito.recusadas[0].motivo, /número ou tempo.*\(8\)/);
+  assert.match(tenta('Dor na lombar há 2 anos').recusadas[0].motivo, /número ou tempo.*\(2\)/);
+  assert.equal(tenta('Dor na lombar há 3 meses').aceitas.length, 1);
+  assert.equal(tenta('Dor na lombar há três meses').aceitas.length, 1, 'por extenso conta como o mesmo número');
+  // «um ano» (por extenso) e «1 ano» são o mesmo; o artigo «um» sozinho não vira o número 1
+  assert.deepEqual([...numerosDoTexto('faz um ano e dois meses, tenho um problema')].sort(), [1, 2]);
+});
+
+test('validar: o mesmo valor repetido pela IA é eco (não vira «pularia»); um valor DIFERENTE fica registrado', () => {
+  const cands = camposDaEtapaVazios({ regras: REGRAS, defs: DEFS, lead: lead() });
+  const igual = validarSugestoes(
+    [
+      { campo: '⚑ Origem', valor: 'Indicação', trecho: 'indicação de uma amiga' },
+      { campo: '⚑ Origem', valor: 'indicação', trecho: 'indicação de uma amiga' },
+    ],
+    cands,
+    CONVERSA,
+  );
+  assert.equal(igual.aceitas.length, 1);
+  assert.equal(igual.recusadas.length, 0);
+  const diferente = validarSugestoes(
+    [
+      { campo: '⚑ Origem', valor: 'Indicação', trecho: 'indicação de uma amiga' },
+      { campo: '⚑ Origem', valor: 'Instagram', trecho: 'indicação de uma amiga' },
+    ],
+    cands,
+    CONVERSA,
+  );
+  assert.equal(diferente.aceitas.length, 1);
+  assert.match(diferente.recusadas[0].motivo, /dois valores diferentes/);
 });
 
 test('o que o SECO leu não impede a primeira leitura de verdade quando a chave é ligada', async () => {
@@ -572,7 +894,7 @@ test('falha ao gravar no Kommo não marca a conversa como lida: o próximo turno
   const m = mundo();
   const original = m.deps.kommo(UNIT);
   let falhar = true;
-  m.deps.kommo = () => ({ ...original, setLeadCustomFieldValue: async (...a: Parameters<typeof original.setLeadCustomFieldValue>) => (falhar ? Promise.reject(new Error('Kommo 500')) : original.setLeadCustomFieldValue(...a)) });
+  m.deps.kommo = () => ({ ...original, gravarCamposDoLead: async (...a: Parameters<typeof original.gravarCamposDoLead>) => (falhar ? Promise.reject(new Error('Kommo 500')) : original.gravarCamposDoLead(...a)) });
   const r1 = await lerCartaoEmSilencio(UNIT, 777, m.deps);
   assert.equal(r1.tipo === 'leu' ? r1.gravou.length : -1, 0);
   falhar = false;

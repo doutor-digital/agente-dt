@@ -22,7 +22,7 @@ import type { Unit, LeadFieldRule } from '@prisma/client';
 import { z } from 'zod';
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
-import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
+import { automacaoLigada, estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import { registrarSimulacao } from './so-no-papel.js';
 import { ehNumeroInterno, lerNumerosInternos } from './numeros-internos.js';
 import { dataLocalISO } from './feriados.js';
@@ -37,7 +37,7 @@ import { cartaoComEtiquetaDeRobo, reclassificarFalas, type Fala } from './cutuca
 import { temEtiqueta } from './rotina-nucleo.js';
 import { chamarAnthropic, type Chamar } from './cadastro-triagem-ia.js';
 import { coergirValor } from '../agent/captura-unificada.js';
-import { createKommoClient, type KommoClient, type KommoLead } from '../services/kommo.service.js';
+import { createKommoClient, valoresDoCampo, KommoApiError, type KommoClient, type KommoFieldType, type KommoLead } from '../services/kommo.service.js';
 import { historicoOficial } from '../services/kommo-talks-normalizar.js';
 import { enviosDaSofia } from '../services/kommo-talks.service.js';
 import { transcribeAudio } from '../services/transcription.service.js';
@@ -124,6 +124,11 @@ export interface CampoCandidato {
 }
 
 export interface EntradaDosCampos {
+  /**
+   * `preenche-campos` está LIGADO nesta unidade: ele é o escritor da ★ Qualificação e espera 6 h de propósito, para a temperatura assentar
+   * (qualificar na 2ª mensagem dá "Quente" a quem ainda vai esfriar). A leitura silenciosa não grava Qualificação onde ele roda.
+   */
+  qualificacaoEhDoRobo?: boolean;
   regras: readonly LeadFieldRule[];
   defs: readonly DefinicaoDeCampo[];
   lead: Pick<KommoLead, 'id' | 'pipeline_id' | 'status_id' | 'custom_fields_values'>;
@@ -150,6 +155,7 @@ export function camposDaEtapaVazios(e: EntradaDosCampos): CampoCandidato[] {
     if (escondidoEm(def, e.lead.pipeline_id, e.lead.status_id)) continue;
     if (!vazioNoCartao(e.lead, def.id)) continue;
     if (regra.toolName === 'registra_origem' && temRastroDeAnuncio) continue;
+    if (regra.toolName === 'registra_qualificacao' && e.qualificacaoEhDoRobo) continue;
     out.push({ regra, def });
   }
   return out.sort((a, b) => ((a.def as { sort?: number }).sort ?? 0) - ((b.def as { sort?: number }).sort ?? 0) || a.def.id - b.def.id);
@@ -200,7 +206,7 @@ export const INSTRUCAO = [
   '- Campo de lista: devolva EXATAMENTE uma das opções mostradas (lista múltipla: opções separadas por ";"). Texto livre: curto, em português, sem inventar.',
   '- "trecho" é a frase do PACIENTE, copiada LITERALMENTE da conversa (até 140 caracteres), que prova o valor. Só ★ Qualificação e ✎ Observações podem ir sem trecho.',
   '- ✎ Queixa só vale se o PACIENTE descreveu o que sente (onde dói, há quanto tempo, o que limita). Pergunta sobre preço, horário, exame ou tratamento NÃO é queixa: nesse caso não preencha. Use as palavras dele; não acrescente sintoma, tempo ou causa que ele não citou.',
-  '- ✎ Observações: no máximo 2 frases curtas, com o que quem for atender precisa saber antes de abrir a conversa (quem é o paciente, o que pediu, se mandou exame). Não repita a queixa inteira.',
+  '- ✎ Observações: no máximo 2 frases curtas, com o que quem for atender precisa saber antes de abrir a conversa (quem é o paciente e o que pediu). Não repita a queixa inteira.',
   '- Nunca invente telefone, nome, data nem valor. Não repita no JSON campos que não foram pedidos.',
   'Formato: {"campos":[{"campo":"<nome exato do campo>","valor":"<valor>","trecho":"<frase do paciente>"}]}. Nada a preencher: {"campos":[]}.',
 ].join('\n');
@@ -225,10 +231,11 @@ function linhaDoCampo(c: CampoCandidato): string {
   return `• «${c.def.name.trim()}» — ${quando}${formato}`;
 }
 
-export function montarPedido(candidatos: readonly CampoCandidato[], falas: readonly Fala[]): string {
+export function montarPedido(candidatos: readonly CampoCandidato[], falas: readonly Fala[], audiosSemTexto = 0): string {
   return [
     'Campos que o cartão pede agora (todos estão vazios):',
     ...candidatos.map(linhaDoCampo),
+    ...(audiosSemTexto ? ['', `ATENÇÃO: ${audiosSemTexto} áudio(s) do paciente (marcados «[áudio]») não puderam ser ouvidos. Não conclua nada sobre o que ele possa ter dito neles.`] : []),
     '',
     'Conversa (da mais antiga à mais nova):',
     conversaInteira(falas),
@@ -261,7 +268,75 @@ export function lerResposta(texto: string): SugestaoDaIa[] | null {
   }
 }
 
-const palavrasDe = (t: string) => normalizar(t).split(' ').filter((w) => w.length >= MIN_LETRAS_DA_PALAVRA_EM_COMUM).map((w) => w.slice(0, MIN_LETRAS_DA_PALAVRA_EM_COMUM));
+const radical = (w: string) => w.slice(0, MIN_LETRAS_DA_PALAVRA_EM_COMUM);
+/** As palavras de 5+ letras do texto, sem acento e em minúsculas — a unidade de comparação de toda a prova por palavra. */
+const palavrasDaFala = (t: string) => normalizar(t).split(' ').filter((w) => w.length >= MIN_LETRAS_DA_PALAVRA_EM_COMUM);
+
+/**
+ * Palavras que não carregam fato nenhum num resumo escrito pela IA: ligação ("sobre", "quando"), verbos de quem relata ("pediu", "enviou") e
+ * quem fala ("paciente", "equipe"). Comparadas pela PALAVRA INTEIRA (sem acento): pelo radical, "interesse" deixaria passar "intermitente" e
+ * "internação", e "conversa" deixaria passar "convênio". Por isso as flexões que importam estão listadas uma a uma. Fora da lista, toda
+ * palavra de 5+ letras de um texto livre gravado tem de ter sido dita pelo paciente — o "formigamento" que ele nunca escreveu não passa.
+ */
+const SEM_CONTEUDO = new Set(
+  [
+    'antes', 'depois', 'ainda', 'desde', 'entre', 'sobre', 'quando', 'porque', 'também', 'mesmo', 'mesma', 'muito', 'muita', 'muitas', 'muitos', 'cerca',
+    'apenas', 'assim', 'minha', 'minhas', 'nossa', 'nosso', 'outra', 'outro', 'outras', 'outros', 'todos', 'todas', 'sempre', 'nunca', 'agora', 'bastante',
+    'pouco', 'pouca', 'quais', 'estar', 'estava', 'estou', 'estão', 'tenho', 'tinha', 'havia', 'fazer', 'feito', 'fazendo', 'podem', 'poder', 'podia', 'precisa',
+    'preciso', 'gostaria', 'queria', 'quero', 'querendo', 'falar', 'falou', 'disse', 'dizer', 'contou', 'relata', 'relatou', 'informa', 'informou', 'pediu',
+    'pedindo', 'pedido', 'pergunta', 'perguntou', 'perguntando', 'enviou', 'enviar', 'envia', 'mandou', 'mandar', 'buscando', 'procura', 'procurando', 'solicita',
+    'solicitou', 'aguarda', 'aguardando', 'paciente', 'pessoa', 'cliente', 'equipe', 'atendente', 'clínica', 'atendimento', 'conversa', 'mensagem', 'contato',
+    'informação', 'informações', 'sendo', 'confirmou', 'confirma', 'menciona', 'mencionou', 'possui', 'possível', 'ficou', 'ficar', 'deseja', 'desejando',
+    'interesse', 'interessado', 'interessada', 'pediram', 'pedindo', 'queremos', 'querem', 'enviando', 'enviaram', 'mandando', 'informaram', 'perguntaram',
+    'pacientes', 'pessoas', 'clientes', 'atendentes', 'mensagens', 'conversas', 'contatos',
+  ].map((w) => normalizar(w)),
+);
+/** As palavras de conteúdo do valor que o paciente NÃO escreveu (vazio = tudo veio da fala dele). */
+export function palavrasForaDaFala(valor: string, textoDoPaciente: string): string[] {
+  const ditas = new Set(palavrasDaFala(textoDoPaciente).map(radical));
+  return palavrasDaFala(valor).filter((w) => !SEM_CONTEUDO.has(w) && !ditas.has(radical(w)));
+}
+
+/** Parentes e conhecidos: a frase de prova que fala deles não prova a queixa de QUEM ESCREVE (nem a região da dor). */
+const OUTRA_PESSOA = new Set([
+  'pai', 'mae', 'filho', 'filha', 'marido', 'esposa', 'avo', 'avos', 'irmao', 'irma', 'tio', 'tia', 'sogro', 'sogra', 'namorado', 'namorada', 'neto', 'neta',
+  'genro', 'nora', 'primo', 'prima', 'cunhado', 'cunhada', 'padrasto', 'madrasta', 'companheiro', 'companheira', 'amigo', 'amiga', 'vizinho', 'vizinha', 'colega',
+]);
+/** Campos que descrevem o que o PACIENTE sente: a frase que os prova não pode ser sobre outra pessoa. */
+const SO_DE_QUEM_ESCREVE: ReadonlySet<string> = new Set(['registra_queixa', 'registra_regiao_dor']);
+export function falaDeOutraPessoa(trecho: string): boolean {
+  return normalizar(trecho).split(' ').some((w) => OUTRA_PESSOA.has(w));
+}
+
+const NUMEROS_POR_EXTENSO = new Map<string, number>([
+  ['dois', 2], ['duas', 2], ['tres', 3], ['quatro', 4], ['cinco', 5], ['seis', 6], ['sete', 7], ['oito', 8], ['nove', 9], ['dez', 10], ['onze', 11],
+  ['doze', 12], ['treze', 13], ['quinze', 15], ['vinte', 20], ['trinta', 30],
+]);
+const UNIDADE_DE_TEMPO = /^(ano|anos|mes|meses|semana|semanas|dia|dias)$/;
+/** Os números do texto, em dígitos ou por extenso ("um" só conta antes de ano/mês/semana/dia: "um" também é artigo). */
+export function numerosDoTexto(texto: string): Set<number> {
+  const out = new Set<number>();
+  const palavras = normalizar(texto).split(' ');
+  palavras.forEach((w, i) => {
+    if (/^\d+$/.test(w)) out.add(Number(w));
+    else if (NUMEROS_POR_EXTENSO.has(w)) out.add(NUMEROS_POR_EXTENSO.get(w) as number);
+    else if ((w === 'um' || w === 'uma') && UNIDADE_DE_TEMPO.test(palavras[i + 1] ?? '')) out.add(1);
+  });
+  return out;
+}
+/** Os números do VALOR que o paciente não escreveu (tempo e quantidade não se inventam: «há 2 anos», «3 → 8 meses»). */
+export function numerosForaDaFala(valor: string, textoDoPaciente: string): number[] {
+  const ditos = numerosDoTexto(textoDoPaciente);
+  return [...numerosDoTexto(valor)].filter((n) => !ditos.has(n));
+}
+
+/** O valor aparece na fala como palavra inteira ("Magé" ou "RJ" ditos; «mage» dentro de «imagem» não vale). Os dois já normalizados ou não. */
+export function aparecePorInteiro(valor: string, textoDoPaciente: string): boolean {
+  const v = normalizar(valor);
+  return v.length > 0 && ` ${normalizar(textoDoPaciente)} `.includes(` ${v} `);
+}
+
+const palavrasDe = (t: string) => palavrasDaFala(t).map(radical);
 function palavraEmComum(valor: string, trecho: string): boolean {
   const doTrecho = new Set(palavrasDe(trecho));
   return palavrasDe(valor).some((w) => doTrecho.has(w));
@@ -291,7 +366,7 @@ export function validarSugestoes(sugestoes: readonly SugestaoDaIa[], candidatos:
   const recusadas: Recusada[] = [];
   const doPaciente = falas.filter((f) => f.autor === 'paciente');
   const textoDoPaciente = normalizar(doPaciente.map((f) => f.texto).join(' \n '));
-  const vistos = new Set<number>();
+  const vistos = new Map<number, string>();
   for (const s of sugestoes) {
     const alvo = normalizar(s.campo);
     const c = candidatos.find((x) => normalizar(x.def.name) === alvo);
@@ -299,9 +374,13 @@ export function validarSugestoes(sugestoes: readonly SugestaoDaIa[], candidatos:
       recusadas.push({ campo: s.campo, motivo: 'a IA citou um campo que não foi pedido' });
       continue;
     }
-    if (vistos.has(c.def.id)) continue;
-    vistos.add(c.def.id);
     const nome = c.def.name.trim();
+    const jaAceito = vistos.get(c.def.id);
+    if (jaAceito !== undefined) {
+      // o mesmo valor de novo é só eco; um valor DIFERENTE para um campo já aceito fica registrado (não some em silêncio)
+      if (normalizar(Array.isArray(s.valor) ? s.valor.join(' ') : String(s.valor)) !== jaAceito) recusadas.push({ campo: nome, motivo: 'a IA deu dois valores diferentes para o campo; valeu a primeira sugestão válida' });
+      continue;
+    }
     // lista sem nenhuma opção permitida: `coergirValor` aceitaria texto livre, e campo de lista não aceita
     if (['select', 'radiobutton', 'multiselect'].includes(c.def.type) && !opcoesPermitidas(c).length) {
       recusadas.push({ campo: nome, motivo: 'o campo não tem opção que a leitura possa escolher' });
@@ -324,15 +403,33 @@ export function validarSugestoes(sugestoes: readonly SugestaoDaIa[], candidatos:
         continue;
       }
     }
+    if (SO_DE_QUEM_ESCREVE.has(c.regra.toolName) && falaDeOutraPessoa(trecho)) {
+      recusadas.push({ campo: nome, motivo: 'fala de outra pessoa: a frase de prova é sobre um parente ou conhecido, não sobre quem escreve' });
+      continue;
+    }
     const texto = Array.isArray(co.valor) ? co.valor.join('; ') : String(co.valor);
-    if (VALOR_LITERAL_NA_FALA.has(c.regra.toolName) && !textoDoPaciente.includes(normalizar(texto))) {
+    if (VALOR_LITERAL_NA_FALA.has(c.regra.toolName) && !aparecePorInteiro(texto, textoDoPaciente)) {
       recusadas.push({ campo: nome, motivo: `«${texto.slice(0, 60)}» não aparece escrito numa fala do paciente` });
       continue;
     }
-    if (!SEM_FRASE_DE_PROVA.has(c.regra.toolName) && (c.def.type === 'text' || c.def.type === 'textarea') && !palavraEmComum(texto, trecho)) {
+    // (cidade, UF, bairro… já provaram pelo valor escrito por inteiro; "Magé" e "RJ" têm menos de 5 letras e não cabem na regra das palavras)
+    if (!SEM_FRASE_DE_PROVA.has(c.regra.toolName) && !VALOR_LITERAL_NA_FALA.has(c.regra.toolName) && (c.def.type === 'text' || c.def.type === 'textarea') && !palavraEmComum(texto, trecho)) {
       recusadas.push({ campo: nome, motivo: 'a frase que a IA citou não tem relação com o valor (nenhuma palavra em comum)' });
       continue;
     }
+    if ((c.def.type === 'text' || c.def.type === 'textarea') && !VALOR_LITERAL_NA_FALA.has(c.regra.toolName)) {
+      const fora = palavrasForaDaFala(texto, textoDoPaciente);
+      if (fora.length) {
+        recusadas.push({ campo: nome, motivo: `valor com detalhe que o paciente não disse (${fora.slice(0, 3).join(', ')})` });
+        continue;
+      }
+      const numeros = numerosForaDaFala(texto, textoDoPaciente);
+      if (numeros.length) {
+        recusadas.push({ campo: nome, motivo: `número ou tempo no valor que o paciente não escreveu (${numeros.slice(0, 3).join(', ')})` });
+        continue;
+      }
+    }
+    vistos.set(c.def.id, normalizar(Array.isArray(s.valor) ? s.valor.join(' ') : String(s.valor)));
     aceitas.push({ candidato: c, valor: co.valor, texto, trecho: trecho.slice(0, 140) });
   }
   return { aceitas, recusadas };
@@ -340,36 +437,51 @@ export function validarSugestoes(sugestoes: readonly SugestaoDaIa[], candidatos:
 
 // ─── tetos ────────────────────────────────────────────────────────────────────────────────────────
 
-const leiturasDoDia = new Map<string, number>();
-let diaDasLeituras = '';
+/** O placar do dia de CADA unidade: o dia é o local dela (Petrópolis vira à meia-noite de Brasília, outra unidade vira em outro fuso). */
+const placarDasUnidades = new Map<string, { dia: string; unidade: number; cartoes: Map<number, number> }>();
 
-function zerarSeVirouODia(dia: string): void {
-  if (dia !== diaDasLeituras) {
-    leiturasDoDia.clear();
-    diaDasLeituras = dia;
+function placarDe(unitId: string, dia: string) {
+  let p = placarDasUnidades.get(unitId);
+  if (!p || p.dia !== dia) {
+    p = { dia, unidade: 0, cartoes: new Map() };
+    placarDasUnidades.set(unitId, p);
   }
+  return p;
 }
 
-const chaveDoCartao = (unitId: string, leadId: number, dia: string) => `c:${unitId}:${leadId}:${dia}`;
-const chaveDaUnidade = (unitId: string, dia: string) => `u:${unitId}:${dia}`;
-
-/** Por que não dá para gastar mais uma leitura hoje (null = dá). */
+/** Por que não dá para gastar mais uma leitura hoje (null = dá). `dia` é o dia local DA UNIDADE (`dataLocalISO` no fuso dela). */
 export function porQueOTetoSegura(unitId: string, leadId: number, dia: string): string | null {
-  zerarSeVirouODia(dia);
-  if ((leiturasDoDia.get(chaveDoCartao(unitId, leadId, dia)) ?? 0) >= MAX_LEITURAS_POR_CARTAO_DIA) return `teto do cartão no dia (${MAX_LEITURAS_POR_CARTAO_DIA} leituras)`;
-  if ((leiturasDoDia.get(chaveDaUnidade(unitId, dia)) ?? 0) >= MAX_LEITURAS_POR_UNIDADE_DIA) return `teto da unidade no dia (${MAX_LEITURAS_POR_UNIDADE_DIA} leituras)`;
+  const p = placarDe(unitId, dia);
+  if ((p.cartoes.get(leadId) ?? 0) >= MAX_LEITURAS_POR_CARTAO_DIA) return `teto do cartão no dia (${MAX_LEITURAS_POR_CARTAO_DIA} leituras)`;
+  if (p.unidade >= MAX_LEITURAS_POR_UNIDADE_DIA) return `teto da unidade no dia (${MAX_LEITURAS_POR_UNIDADE_DIA} leituras)`;
   return null;
 }
 
 function gastarLeitura(unitId: string, leadId: number, dia: string): void {
-  zerarSeVirouODia(dia);
-  for (const k of [chaveDoCartao(unitId, leadId, dia), chaveDaUnidade(unitId, dia)]) leiturasDoDia.set(k, (leiturasDoDia.get(k) ?? 0) + 1);
+  const p = placarDe(unitId, dia);
+  p.unidade++;
+  p.cartoes.set(leadId, (p.cartoes.get(leadId) ?? 0) + 1);
 }
+
+/**
+ * IA fora do ar (sem chave, Anthropic caída): não gasta a vaga do cartão, mas a unidade ESPERA antes de tentar de novo — 5 min, dobrando a cada
+ * falha seguida até 1 h. Sem isso cada turno pulado de cada cartão bateria numa IA caída.
+ */
+const RECUO_BASE_MS = 5 * 60_000;
+const RECUO_MAX_MS = 60 * 60_000;
+const iaEmRecuo = new Map<string, { ate: number; cartoes: Set<number> }>();
+/** A falha de UM cartão (um pedido que a IA recusa) não põe a unidade inteira em recuo: só quando 2 cartões DIFERENTES falham em seguida. */
+const CARTOES_QUE_ARMAM_O_RECUO = 2;
+
+/** Quantas vezes, no dia, um cartão pode ter o áudio sem transcrição antes de a leitura seguir sem ele (com a lacuna marcada). */
+export const MAX_TENTATIVAS_DE_AUDIO = 3;
+const tentativasDeAudio = new Map<string, { dia: string; n: number }>();
 
 /** Só para teste. */
 export function _limparCapturaParaTeste(): void {
-  leiturasDoDia.clear();
-  diaDasLeituras = '';
+  placarDasUnidades.clear();
+  iaEmRecuo.clear();
+  tentativasDeAudio.clear();
   ultimaLeitura.clear();
   for (const t of agendados.values()) clearTimeout(t.timer);
   agendados.clear();
@@ -384,7 +496,7 @@ const ultimaLeitura = new Map<string, string>();
 
 // ─── a leitura de um cartão ───────────────────────────────────────────────────────────────────────
 
-export type KommoDaCaptura = Pick<KommoClient, 'getLead' | 'getContactPhone' | 'setLeadCustomFieldValue' | 'addLeadNote'>;
+export type KommoDaCaptura = Pick<KommoClient, 'getLead' | 'getContactPhone' | 'gravarCamposDoLead' | 'addLeadNote'>;
 
 /** O que o agendador guarda da unidade durante a espera: só a identidade (a linha inteira tem tokens e não precisa ficar na memória 10 min). */
 export type UnidadeDoAgendamento = Pick<Unit, 'id' | 'slug'>;
@@ -394,6 +506,8 @@ export interface DepsDaCaptura {
   /** A unidade como está AGORA no banco (token e chave podem ter mudado nos minutos de espera). `null` = a unidade sumiu. */
   unidade: (ref: UnidadeDoAgendamento) => Promise<Unit | null>;
   estado: (slug: string) => Estado;
+  /** `preenche-campos` está ligado na unidade (ele é o escritor da Qualificação, com 6 h de espera). */
+  qualificacaoEhDoRobo: (slug: string) => boolean;
   kommo: (unit: Unit) => KommoDaCaptura;
   regras: (unit: Unit) => Promise<LeadFieldRule[]>;
   funis: (unit: Unit, kommo: KommoDaCaptura) => Promise<Pick<Funis, 'comercialId' | 'tratamentoId' | 'nomeDe'> | null>;
@@ -401,8 +515,11 @@ export interface DepsDaCaptura {
   grupo: (unit: Unit) => Promise<GrupoDoCrm | null>;
   /** A conversa inteira, já separada em paciente / equipe / Sofia / robô. Não transcreve nada (isso custa): `audios` diz de onde. */
   falas: (unit: Unit, kommo: KommoDaCaptura, lead: KommoLead) => Promise<{ falas: Fala[]; ultimaId: string; audios: ReadonlyMap<string, string> }>;
-  /** Troca o «[áudio]» das últimas falas do paciente pelo que ele disse (até 3, com cache por mensagem). Só roda depois de todos os portões baratos. */
-  transcrever: (unit: Unit, falas: Fala[], audios: ReadonlyMap<string, string>) => Promise<void>;
+  /**
+   * Troca o «[áudio]» das últimas falas do paciente pelo que ele disse (até 3, com cache por mensagem). Só roda depois de todos os portões baratos.
+   * Devolve quantos áudios ficaram SEM texto (0 = conversa completa). Com algum sem texto a conversa está incompleta.
+   */
+  transcrever: (unit: Unit, falas: Fala[], audios: ReadonlyMap<string, string>) => Promise<number>;
   /** `null` = a IA não respondeu (sem chave, fora do ar): nada é gravado. */
   perguntar: (unit: Unit, user: string) => Promise<{ texto: string; custoUsd: number } | null>;
   simular: typeof registrarSimulacao;
@@ -420,6 +537,8 @@ export type ResultadoDaCaptura =
       gravou: Array<{ campo: string; valor: string }>;
       recusadas: Recusada[];
       custoUsd: number;
+      /** áudios do paciente lidos sem texto (a leitura seguiu depois de MAX_TENTATIVAS_DE_AUDIO): a lacuna fica marcada na tela e na nota */
+      audiosSemTexto: number;
     };
 
 function contatoPrincipal(lead: Pick<KommoLead, '_embedded'>): number | null {
@@ -441,6 +560,8 @@ export async function lerCartaoEmSilencio(unit: Unit, leadId: number, deps: Deps
   // 1) o barato: tetos, que não custam chamada nenhuma
   const teto = porQueOTetoSegura(unit.id, leadId, dia);
   if (teto) return { tipo: 'pulou', motivo: teto };
+  const recuo = iaEmRecuo.get(unit.id);
+  if (recuo && recuo.ate > agora.getTime()) return { tipo: 'pulou', motivo: `a IA falhou há pouco em ${recuo.cartoes.size} cartões seguidos: recuo até ${new Date(recuo.ate).toISOString().slice(11, 16)}Z` };
 
   // 2) o cartão, o funil e as exclusões
   const kommo = deps.kommo(unit);
@@ -459,7 +580,8 @@ export async function lerCartaoEmSilencio(unit: Unit, leadId: number, deps: Deps
 
   // 3) os campos que a etapa pede e estão vazios — sem nenhum, nem lê a conversa
   const [regras, defs] = await Promise.all([deps.regras(unit), deps.campos(unit, kommo)]);
-  const candidatos = camposDaEtapaVazios({ regras, defs, lead });
+  const qualificacaoEhDoRobo = deps.qualificacaoEhDoRobo(unit.slug);
+  const candidatos = camposDaEtapaVazios({ regras, defs, lead, qualificacaoEhDoRobo });
   if (!candidatos.length) return { tipo: 'pulou', motivo: 'a etapa não pede nenhum campo vazio que a conversa possa preencher' };
 
   // 4) a conversa inteira (ainda sem transcrever áudio: o que for descartado abaixo não paga Whisper)
@@ -483,10 +605,30 @@ export async function lerCartaoEmSilencio(unit: Unit, leadId: number, deps: Deps
   };
 
   // 6) a IA — agora sim os áudios viram texto
-  await deps.transcrever(unit, falas, audios);
-  const r = await deps.perguntar(unit, montarPedido(candidatos, falas));
-  if (!r) return { tipo: 'pulou', motivo: 'a IA não respondeu (sem chave ou fora do ar): nada foi gravado' };
-  gastarLeitura(unit.id, leadId, dia); // o teto conta leitura em que a IA RESPONDEU; IA fora do ar não gasta a vaga do cartão
+  let audiosSemTexto = await deps.transcrever(unit, falas, audios);
+  if (audiosSemTexto > 0) {
+    // áudio que não deu para transcrever é justamente o relato que a IA precisava: ler o resto seria palpite. Tenta de novo nos próximos turnos
+    // (sem pagar a IA nem marcar como lida) e, depois de MAX_TENTATIVAS_DE_AUDIO no dia, lê SEM o áudio, com a lacuna dita à IA e marcada na tela:
+    // senão um áudio que nunca transcreve deixaria o cartão sem leitura para sempre.
+    const t = tentativasDeAudio.get(chaveDaUltimaLeitura.slice(2));
+    const n = (t && t.dia === dia ? t.n : 0) + 1;
+    tentativasDeAudio.set(chaveDaUltimaLeitura.slice(2), { dia, n });
+    if (n < MAX_TENTATIVAS_DE_AUDIO) return { tipo: 'pulou', motivo: `áudio do paciente sem transcrição (tentativa ${n} de ${MAX_TENTATIVAS_DE_AUDIO}): conversa incompleta, não li` };
+    logger.info({ unit: unit.slug, leadId, audiosSemTexto }, `${ID_CAPTURA_SILENCIOSA}: áudio sem transcrição após ${n} tentativas — leio sem ele (lacuna marcada)`);
+  }
+  const r = await deps.perguntar(unit, montarPedido(candidatos, falas, audiosSemTexto)).catch((err) => {
+    logger.warn({ err: String(err), unit: unit.slug, leadId }, `${ID_CAPTURA_SILENCIOSA}: a chamada à IA lançou erro (conta como IA fora do ar)`);
+    return null;
+  });
+  if (!r) {
+    const rec = recuo ?? { ate: 0, cartoes: new Set<number>() };
+    rec.cartoes.add(leadId);
+    if (rec.cartoes.size >= CARTOES_QUE_ARMAM_O_RECUO) rec.ate = agora.getTime() + Math.min(RECUO_BASE_MS * 2 ** (rec.cartoes.size - CARTOES_QUE_ARMAM_O_RECUO), RECUO_MAX_MS);
+    iaEmRecuo.set(unit.id, rec);
+    return { tipo: 'pulou', motivo: `a IA não respondeu (sem chave ou fora do ar): nada foi gravado${rec.cartoes.size < CARTOES_QUE_ARMAM_O_RECUO ? ' (1 cartão só: sem recuo ainda)' : ''}` };
+  }
+  iaEmRecuo.delete(unit.id);
+  gastarLeitura(unit.id, leadId, dia); // o teto conta leitura em que a IA RESPONDEU; IA fora do ar tem recuo da unidade, não gasta a vaga do cartão
   const sugestoes = lerResposta(r.texto);
   if (!sugestoes) return { tipo: 'pulou', motivo: 'não consegui ler a resposta da IA: nada foi gravado' };
   const { aceitas, recusadas } = validarSugestoes(sugestoes, candidatos, falas);
@@ -501,12 +643,12 @@ export async function lerCartaoEmSilencio(unit: Unit, leadId: number, deps: Deps
         alvo: a.candidato.def.name.trim(),
         valor: a.texto,
         deEtapa: etapa,
-        motivo: a.trecho ? `paciente: «${a.trecho}»` : 'leitura da conversa inteira (sem frase única que prove)',
+        motivo: `${a.trecho ? `paciente: «${a.trecho}»` : 'leitura da conversa inteira (sem frase única que prove)'}${audiosSemTexto ? ` · ATENÇÃO: ${audiosSemTexto} áudio(s) do paciente sem transcrição` : ''}`,
       });
     }
     for (const x of recusadas) deps.simular(unit, ID_CAPTURA_SILENCIOSA, { leadId, acao: 'pularia', alvo: x.campo, deEtapa: etapa, motivo: x.motivo });
     marcarComoLida();
-    return { tipo: 'leu', seco, pedidos, gravaria: aceitas.map((a) => ({ campo: a.candidato.def.name.trim(), valor: a.texto, trecho: a.trecho })), gravou: [], recusadas, custoUsd: r.custoUsd };
+    return { tipo: 'leu', seco, pedidos, gravaria: aceitas.map((a) => ({ campo: a.candidato.def.name.trim(), valor: a.texto, trecho: a.trecho })), gravou: [], recusadas, custoUsd: r.custoUsd, audiosSemTexto };
   }
 
   // 7) ligado: a conversa levou segundos. Relê o cartão e confere TUDO de novo antes de escrever (a SDR pode ter preenchido, o cartão
@@ -514,29 +656,85 @@ export async function lerCartaoEmSilencio(unit: Unit, leadId: number, deps: Deps
   const gravou: Array<{ campo: string; valor: string }> = [];
   if (!aceitas.length) {
     marcarComoLida();
-    return { tipo: 'leu', seco, pedidos, gravaria: [], gravou, recusadas, custoUsd: r.custoUsd };
+    return { tipo: 'leu', seco, pedidos, gravaria: [], gravou, recusadas, custoUsd: r.custoUsd, audiosSemTexto };
   }
   if (deps.estado(unit.slug) !== 'ligado') return { tipo: 'pulou', motivo: 'a chave foi desligada enquanto a IA lia' };
-  const fresco = await kommo.getLead(leadId);
-  const foraAgora = porQueNaoCapturar({ lead: fresco, funis });
-  if (foraAgora) return { tipo: 'pulou', motivo: `${foraAgora} (ao reler o cartão)` };
-  const aindaVazios = new Map(camposDaEtapaVazios({ regras, defs, lead: fresco }).map((c) => [c.def.id, c] as const));
+  /**
+   * Relê o cartão e confere TUDO de novo (funil, fechado, currículo, Kommo dividido, campos ainda vazios). Chamada antes do 1º PATCH e de novo
+   * antes da volta campo a campo: o lote que cai leva segundos, e a SDR pode ter preenchido um dos campos nesse meio tempo.
+   */
+  const reconferir = async (): Promise<{ parar: string } | { vazios: Map<number, CampoCandidato> }> => {
+    const fresco = await kommo.getLead(leadId);
+    const foraAgora = porQueNaoCapturar({ lead: fresco, funis });
+    if (foraAgora) return { parar: `${foraAgora} (ao reler o cartão)` };
+    // Kommo dividido: o cartão pode ter trocado de unidade (⌂ Unidade de atendimento) enquanto a IA lia
+    if (pularCartao(grupo, unit.id, fresco, {})) return { parar: 'Kommo dividido: o cartão é de outra unidade (ou ficou sem unidade) ao reler' };
+    return { vazios: new Map(camposDaEtapaVazios({ regras, defs, lead: fresco, qualificacaoEhDoRobo: deps.qualificacaoEhDoRobo(unit.slug) }).map((c) => [c.def.id, c] as const)) };
+  };
+  const nomeDe = (a: Aceita) => a.candidato.def.name.trim();
+  const conf = await reconferir();
+  if ('parar' in conf) return { tipo: 'pulou', motivo: conf.parar };
   let falhouAoGravar = false;
-  for (const a of aceitas) {
-    const c = aindaVazios.get(a.candidato.def.id);
-    const nome = a.candidato.def.name.trim();
-    if (!c) {
-      recusadas.push({ campo: nome, motivo: 'o cartão já tinha valor (ou o campo saiu da etapa) ao reler: não sobrescrevi' });
-      continue;
+  type ItemDoLote = { a: Aceita; field_id: number; values: Array<Record<string, unknown>> };
+  const montarLote = (vazios: Map<number, CampoCandidato>, de: readonly Aceita[]): ItemDoLote[] => {
+    const itens: ItemDoLote[] = [];
+    for (const a of de) {
+      const c = vazios.get(a.candidato.def.id);
+      if (!c) {
+        recusadas.push({ campo: nomeDe(a), motivo: 'o cartão já tinha valor (ou o campo saiu da etapa) ao reler: não sobrescrevi' });
+        continue;
+      }
+      try {
+        itens.push({ a, field_id: c.def.id, values: valoresDoCampo(c.def.id, c.def.type as KommoFieldType, a.valor, c.def.enums ?? []) });
+      } catch (err) {
+        recusadas.push({ campo: nomeDe(a), motivo: `valor que o tipo do campo não aceita: ${String(err).slice(0, 120)}` });
+      }
     }
+    return itens;
+  };
+  const gravado = (a: Aceita) => {
+    gravou.push({ campo: nomeDe(a), valor: a.texto });
+    logger.info({ unit: unit.slug, leadId, campo: nomeDe(a) }, `${ID_CAPTURA_SILENCIOSA}: campo gravado`);
+  };
+  const lote = montarLote(conf.vazios, aceitas);
+  if (lote.length) {
     try {
-      await kommo.setLeadCustomFieldValue(leadId, c.def.id, c.def.type as never, a.valor, (c.def.enums ?? []) as never);
-      gravou.push({ campo: nome, valor: a.texto });
-      logger.info({ unit: unit.slug, leadId, campo: nome }, `${ID_CAPTURA_SILENCIOSA}: campo gravado`);
+      // UM PATCH para todos os campos do cartão (em vez de um por campo)
+      await kommo.gravarCamposDoLead(leadId, lote.map(({ field_id, values }) => ({ field_id, values })));
+      for (const { a } of lote) gravado(a);
     } catch (err) {
       falhouAoGravar = true;
-      recusadas.push({ campo: nome, motivo: `o Kommo recusou a gravação: ${String(err).slice(0, 120)}` });
-      logger.warn({ err: String(err), unit: unit.slug, leadId, campo: nome }, `${ID_CAPTURA_SILENCIOSA}: falha ao gravar o campo`);
+      const status = err instanceof KommoApiError ? err.status : undefined;
+      if (status !== 400) {
+        // 429, 403, timeout, rede: só registra e sai. Repetir campo a campo empurraria o freio do Kommo da rede inteira.
+        for (const { a } of lote) recusadas.push({ campo: nomeDe(a), motivo: `o Kommo não aceitou a gravação (${status ?? 'sem resposta'}): não tentei de novo` });
+        logger.warn({ err: String(err), status, unit: unit.slug, leadId, campos: lote.length }, `${ID_CAPTURA_SILENCIOSA}: o lote falhou por motivo que não é valor ruim — registrei e saí`);
+      } else {
+        // 400 = algum valor foi recusado e derrubou o PATCH inteiro. ANTES de tentar campo a campo, relê o cartão: a SDR pode ter preenchido um dos
+        // campos enquanto o lote caía, e o que ela escreveu não pode ser coberto.
+        logger.warn({ err: String(err), unit: unit.slug, leadId, campos: lote.length }, `${ID_CAPTURA_SILENCIOSA}: o lote foi recusado (400) — releio o cartão e tento campo a campo`);
+        const conf2 = await reconferir();
+        if ('parar' in conf2) {
+          for (const { a } of lote) recusadas.push({ campo: nomeDe(a), motivo: conf2.parar });
+        } else {
+          const itens = montarLote(conf2.vazios, lote.map((l) => l.a));
+          let parou = false;
+          for (const { a, field_id, values } of itens) {
+            if (parou) {
+              recusadas.push({ campo: nomeDe(a), motivo: 'interrompi a volta campo a campo (o Kommo falhou por motivo que não é valor ruim)' });
+              continue;
+            }
+            try {
+              await kommo.gravarCamposDoLead(leadId, [{ field_id, values }]);
+              gravado(a);
+            } catch (err2) {
+              const st2 = err2 instanceof KommoApiError ? err2.status : undefined;
+              recusadas.push({ campo: nomeDe(a), motivo: `o Kommo recusou a gravação (${st2 ?? 'sem resposta'}): ${String(err2).slice(0, 100)}` });
+              if (st2 !== 400) parou = true; // 429/403/rede: não insiste nos campos que faltam
+            }
+          }
+        }
+      }
     }
   }
   // falha de gravação (Kommo fora do ar) não marca a conversa como lida: o próximo turno pulado tenta de novo
@@ -544,10 +742,10 @@ export async function lerCartaoEmSilencio(unit: Unit, leadId: number, deps: Deps
   if (gravou.length) {
     const linhas = gravou.map((g) => `${g.campo}: ${g.valor.slice(0, 120)}`).join(' · ');
     await kommo
-      .addLeadNote(leadId, `A IA leu a conversa e preencheu o que estava vazio — ${linhas}. Nada foi sobrescrito. Troque se estiver errado.`)
+      .addLeadNote(leadId, `A IA leu a conversa e preencheu o que estava vazio — ${linhas}. Nada foi sobrescrito.${audiosSemTexto ? ` ATENÇÃO: ${audiosSemTexto} áudio(s) do paciente não foram ouvidos.` : ''} Troque se estiver errado.`)
       .catch((err) => logger.warn({ err: String(err), unit: unit.slug, leadId }, `${ID_CAPTURA_SILENCIOSA}: a nota não entrou (os campos gravaram)`));
   }
-  return { tipo: 'leu', seco, pedidos, gravaria: [], gravou, recusadas, custoUsd: r.custoUsd };
+  return { tipo: 'leu', seco, pedidos, gravaria: [], gravou, recusadas, custoUsd: r.custoUsd, audiosSemTexto };
 }
 
 // ─── o agendador: espera a conversa esfriar, uma leitura de cada vez ──────────────────────────────
@@ -632,7 +830,7 @@ async function executarAgendada(unitDoTurno: UnidadeDoAgendamento, leadId: numbe
         `${ID_CAPTURA_SILENCIOSA}: leitura`,
       );
     } else if (r.tipo === 'pulou') {
-      logger.debug({ unit: unit.slug, leadId, motivo: r.motivo }, `${ID_CAPTURA_SILENCIOSA}: pulei`);
+      logger.info({ unit: unit.slug, leadId, motivo: r.motivo }, `${ID_CAPTURA_SILENCIOSA}: pulei`);
     }
   } catch (err) {
     logger.warn({ err: String(err), unit: unitDoTurno.slug, leadId }, `${ID_CAPTURA_SILENCIOSA}: erro na leitura — pulei`);
@@ -673,19 +871,24 @@ async function falasDoCartao(unit: Unit, kommo: KommoDaCaptura, lead: KommoLead)
 const transcricoes = new Map<string, string>();
 
 /** Os áudios MAIS RECENTES do paciente viram texto (a queixa quase sempre vem em áudio); falha de transcrição deixa o «[áudio]». */
-async function transcreverOsAudios(unit: Unit, falas: Fala[], audios: ReadonlyMap<string, string>): Promise<void> {
+async function transcreverOsAudios(unit: Unit, falas: Fala[], audios: ReadonlyMap<string, string>): Promise<number> {
+  let semTexto = 0;
   const pendentes = falas.filter((f) => f.autor === 'paciente' && audios.has(f.id)).slice(-MAX_AUDIOS);
   for (const f of pendentes) {
     let texto = transcricoes.get(f.id);
     if (texto === undefined) {
       const t = await transcribeAudio(unit, audios.get(f.id) as string).catch(() => null);
-      if (!t?.text) continue;
+      if (!t?.text) {
+        semTexto++;
+        continue;
+      }
       texto = t.text;
       if (transcricoes.size > 5_000) transcricoes.clear();
       transcricoes.set(f.id, texto);
     }
     f.texto = `${f.texto} (áudio) ${texto}`.trim();
   }
+  return semTexto;
 }
 
 async function perguntarAoModelo(unit: Unit, user: string, chamar?: Chamar): Promise<{ texto: string; custoUsd: number } | null> {
@@ -699,6 +902,7 @@ export const depsReais: DepsDaCaptura = {
   agora: () => new Date(),
   unidade: (ref) => prisma.unit.findUnique({ where: { id: ref.id } }),
   estado: (slug) => estadoDaCapturaSilenciosa(slug),
+  qualificacaoEhDoRobo: (slug) => automacaoLigada(slug, 'preenche-campos', process.env.PREENCHE_CAMPOS_SLUGS),
   kommo: (unit) => createKommoClient(unit),
   regras: (unit) => prisma.leadFieldRule.findMany({ where: { unitId: unit.id, enabled: true } }),
   funis: (unit, kommo) => funisDaConta(unit, kommo),
