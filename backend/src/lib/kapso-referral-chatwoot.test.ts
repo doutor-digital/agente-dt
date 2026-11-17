@@ -54,7 +54,13 @@ test('referralDoChatwoot: normaliza como o do Kapso; hora do created_at; camelCa
   });
   assert.equal(referralDoChatwoot(REF_CW, 1794557921)!.quando, 1794557921000, 'epoch em segundos (API do Chatwoot)');
   assert.equal(referralDoChatwoot(REF_CW, 1794557921000)!.quando, 1794557921000, 'epoch em ms');
-  assert.equal(referralDoChatwoot({ sourceType: 'ad', sourceId: 120253955239410514, ctwaClid: 'C' })!.ctwaClid, 'C');
+  const camel = referralDoChatwoot({ sourceType: 'ad', sourceId: 1202539552394, ctwaClid: 'C' })!;
+  assert.equal(camel.ctwaClid, 'C');
+  assert.equal(camel.anuncio, '1202539552394', 'id numérico seguro vira texto');
+  // id numérico acima de MAX_SAFE_INTEGER já perdeu dígitos no JSON: descarta (sem id é melhor que id errado); o resto do referral fica
+  const grande = referralDoChatwoot({ source_type: 'ad', source_id: 120253955239410514, ctwa_clid: 'C' })!;
+  assert.equal(grande.anuncio, null);
+  assert.equal(grande.ctwaClid, 'C');
   assert.equal(referralDoChatwoot({ headline: 'só um título' }), null, 'sem tipo, id nem clid: não identifica anúncio');
   for (const v of [null, undefined, 'x', 7, [], {}]) assert.equal(referralDoChatwoot(v), null);
 });

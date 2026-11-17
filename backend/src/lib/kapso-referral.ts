@@ -90,8 +90,9 @@ export function referralDoChatwoot(ref: unknown, criadoEm?: unknown): ReferralDo
     media_type: r.media_type ?? r.mediaType,
     video_url: r.video_url ?? r.videoUrl,
   };
-  // source_id pode vir como número no JSON do Chatwoot
-  if (typeof norm.source_id === 'number') norm.source_id = String(norm.source_id);
+  // source_id pode vir como número no JSON do Chatwoot — mas acima de Number.MAX_SAFE_INTEGER o número JÁ perdeu dígitos (id de anúncio tem 18):
+  // melhor sem id do que com um id errado, que seria gravado no contato e na nota para sempre
+  if (typeof norm.source_id === 'number') norm.source_id = Number.isSafeInteger(norm.source_id) ? String(norm.source_id) : undefined;
   const achado = referralDaMensagemDoKapso({ timestamp: segundosDe(criadoEm) ?? undefined, referral: norm });
   return achado && (achado.tipo || achado.anuncio || achado.ctwaClid) ? achado : null;
 }

@@ -28,7 +28,7 @@ import { CAIXAS_REGUA } from './chatwoot-regua.js';
 import { aplicarEtiqueta, eventoDeEtiqueta, portasDaPonte, type PortasDaPonte } from './chatwoot-etiquetas.js';
 import { eventoDePausa, eventoDeReativacao, pausar, portaDaPausaDoChatwoot, reativar, type PortaDaPausa } from './chatwoot-pausa.js';
 import { aplicarResolucao, eventoDeResolucao, portasDoResolver, type PortasDoResolver } from './chatwoot-resolver.js';
-import { aplicarReferralDoKapso, mensagemParaConsultar } from './kapso-referral.js';
+import { aplicarReferralDoKapso, mensagemParaConsultar, type ReferralDoKapso } from './kapso-referral.js';
 import { etiquetarAnuncio, portasDaOrigem, preencherOrigem, type PortasDaOrigem } from './chatwoot-origem.js';
 import { notaDoAnuncio, portasDaNota, type PortasDaNota } from './chatwoot-anuncio.js';
 import { transcribeAudio } from '../services/transcription.service.js';
@@ -642,21 +642,33 @@ function avisarIgnorado(motivo: string, corpo: any): void {
   logger.warn({ motivo, evento: String(corpo?.event ?? '') }, `${ID_IA}: evento do Chatwoot IGNORADO — ${motivo}`);
 }
 
+/** O que cada parte do `aoAcharReferral` fez (o retroativo conta isso por conversa; o webhook ignora). */
+export interface DetalheDoAoAchar {
+  /** `sim` = ficou etiquetada; `nao-ad` = publicação/etiqueta desligada (nada a fazer); `falhou`; `sem-estado` = conta sem estado da IA */
+  etiqueta: 'sim' | 'nao-ad' | 'falhou' | 'sem-estado';
+  /** `notaDoAnuncio`: com-imagem | so-texto | desligado | nada | falhou; `ja-existia` = a linha já estava guardada (nota só na 1ª vez) */
+  nota: string;
+  /** `preencherOrigem`: gravado | seco | desligado | nada (nada a preencher, ou erro — o motivo fica no log) */
+  origem: string;
+}
+
 /**
  * O que se faz quando o referral de anúncio de uma mensagem foi achado (webhook e retroativo usam ESTE caminho): etiqueta `anuncio`, nota
  * «Veio do anúncio» (só na 1ª vez) e Origem/Campanha/Conjunto no contato. `r` null = conta sem estado: não faz nada.
  */
-export function aoAcharReferral(r: EstadoDaConta | null): NonNullable<Parameters<typeof aplicarReferralDoKapso>[1]>['aoAchar'] {
+export function aoAcharReferral(r: EstadoDaConta | null): (m: { conversa: number; caixa: number; contato: number | null }, ref: ReferralDoKapso, novo: boolean) => Promise<DetalheDoAoAchar> {
   return async (m, ref, novo) => {
+    if (!r) return { etiqueta: 'sem-estado', nota: 'sem-estado', origem: 'sem-estado' };
     // etiqueta «anuncio» na conversa (informação: vale com a origem desligada) — chatwoot-origem.ts
-    if (r) await etiquetarAnuncio(m.conversa, ref, (c, e) => r.chat.adicionarEtiquetas(c, e));
+    const etiquetou = await etiquetarAnuncio(m.conversa, ref, (c, e) => r.chat.adicionarEtiquetas(c, e));
     const slug = CAIXAS_REGUA[m.caixa];
     // juntas (nenhuma das duas lança): a origem é dado e não espera o download/envio da imagem da nota
-    await Promise.all([
+    const [nota, origem] = await Promise.all([
       // o «cartão» do anúncio (título, texto, imagem, link) numa nota interna, só na 1ª vez — chatwoot-anuncio.ts
-      r && novo ? notaDoAnuncio({ conversa: m.conversa, slug, ref }, r.nota) : null,
-      r && slug && m.contato ? preencherOrigem({ slug, contato: m.contato, conversa: m.conversa, ref }, r.origem) : null,
+      novo ? notaDoAnuncio({ conversa: m.conversa, slug, ref }, r.nota) : Promise.resolve('ja-existia'),
+      slug && m.contato ? preencherOrigem({ slug, contato: m.contato, conversa: m.conversa, ref }, r.origem) : Promise.resolve('sem-contato-ou-unidade'),
     ]);
+    return { etiqueta: etiquetou ? 'sim' : ref.tipo === 'ad' && process.env.CHATWOOT_ETIQUETA_ANUNCIO !== '0' ? 'falhou' : 'nao-ad', nota, origem };
   };
 }
 

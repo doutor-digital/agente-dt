@@ -4,10 +4,10 @@
 #
 #   bash ops/referral-do-crm-joao.sh --so-conferir     # 1º: só lista (conversa, data, id do anúncio, o que falta) — não grava nada
 #   bash ops/referral-do-crm-joao.sh                   # depois: guarda + etiqueta + nota + origem das que faltam
-#   opções: --dias=10  --caixa=3
+#   opções: --desde=AAAA-MM-DD (padrão 2026-11-13, a véspera do bug)  --caixa=3
 #
 # Pré-requisito: o deploy do PR que corrige o referral já ter subido (o script recusa, dizendo o motivo, se o contêiner não tiver o arquivo).
-# Repetir é seguro: o que já foi guardado é pulado (não duplica nota). Variáveis: VPS (padrão root@89.116.214.130), CHAVE_SSH (padrão ~/.ssh/doutordigital_vps).
+# Repetir é seguro: conversa já guardada é reaplicada (etiqueta + origem, que só preenchem o que falta), sem nota nova — rodar de novo conserta o que falhou. Variáveis: VPS (padrão root@89.116.214.130), CHAVE_SSH (padrão ~/.ssh/doutordigital_vps).
 set -euo pipefail
 
 VPS="${VPS:-root@89.116.214.130}"
@@ -15,13 +15,14 @@ CHAVE="${CHAVE_SSH:-$HOME/.ssh/doutordigital_vps}"
 [[ "$VPS" =~ ^[A-Za-z0-9._@-]+$ ]] || { echo "VPS inválida: $VPS"; exit 2; }
 [ -r "$CHAVE" ] || { echo "RECUSO: não achei a chave ssh em $CHAVE. Este comando roda no computador do João (que tem a chave da VPS), não aqui."; exit 1; }
 
-# só as opções conhecidas passam (nada é interpretado na VPS)
+# só as opções conhecidas, no formato certo (nada é interpretado na VPS)
 ARGS=""
 for a in "$@"; do
-  case "$a" in
-    --so-conferir|--dias=[0-9]*|--caixa=[0-9]*) ARGS+=" $(printf '%q' "$a")" ;;
-    *) echo "opção desconhecida: $a (use --so-conferir, --dias=N, --caixa=N)"; exit 2 ;;
-  esac
+  if [[ "$a" == "--so-conferir" || "$a" =~ ^--caixa=[0-9]+$ || "$a" =~ ^--desde=[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+    ARGS+=" $(printf '%q' "$a")"
+  else
+    echo "opção inválida: $a (use --so-conferir, --caixa=N, --desde=AAAA-MM-DD)"; exit 2
+  fi
 done
 
 # o contêiner MAIS NOVO do agente (no rolling update `head -1` pegaria o antigo); tudo vai como COMANDO do ssh, nunca como script no stdin
