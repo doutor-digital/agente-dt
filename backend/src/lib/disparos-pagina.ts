@@ -222,9 +222,10 @@ a{color:var(--brand)}
     var ent = el('div', 'cel-entrada'); ent.appendChild(el('span', null, 'Mensagem')); ent.appendChild(el('i')); tela.appendChild(ent);
     return { raiz: raiz, conversa: conversa };
   }
-  // *negrito* e _itálico_ como o WhatsApp mostra (sempre por textContent)
+  // *negrito* e _itálico_ como o WhatsApp mostra (sempre por textContent). SEM lookbehind na regex: Safari/iOS < 16.4 não conhece e a regex literal
+  // derruba o <script> inteiro (tela em branco).
   function formatar(no, texto){
-    var t = String(texto), re = /(^|[^\p{L}\p{N}_*])([*_])(?=\S)((?:(?!\2)[^\n])+?)(?<!\s)\2(?![\p{L}\p{N}_*])/gu, ult = 0, m;
+    var t = String(texto), re = /(^|[^\p{L}\p{N}_*])([*_])(?=\S)((?:(?!\2)[^\n])*?(?!\2)\S)\2(?![\p{L}\p{N}_*])/gu, ult = 0, m;
     while ((m = re.exec(t))) {
       var ini = m.index + m[1].length;
       if (ini > ult) no.appendChild(document.createTextNode(t.slice(ult, ini)));
