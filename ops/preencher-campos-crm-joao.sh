@@ -49,11 +49,18 @@ FLAG_I=""; [ -n "$DESFAZER" ] && FLAG_I="-i"
 REMOTO="A=\$(docker ps --filter 'name=ddagent_agent' --format '{{.CreatedAt}}|{{.ID}}' | sort -r | head -1 | cut -d'|' -f2); [ -n \"\$A\" ] || { echo 'ERRO: não achei o contêiner ddagent_agent'; exit 1; }; docker exec \$A test -f /repo/backend/dist/scripts/preencher-campos-crm.js || { echo 'ERRO: o contêiner ainda não tem o script (backend/dist/scripts/preencher-campos-crm.js): publique o deploy do PR antes.'; exit 1; }; docker exec $FLAG_I -w /repo/backend \$A node dist/scripts/preencher-campos-crm.js$ARGS"
 
 echo "guardando a saída em $LOG"
+# o script de dentro sai com 1 quando há falha: o resumo abaixo tem de sair mesmo assim (é quando mais se precisa dele)
+set +e
 if [ -n "$DESFAZER" ]; then
   ssh -i "$CHAVE" -o ConnectTimeout=15 -o ServerAliveInterval=30 "$VPS" "$REMOTO" < "$DESFAZER" 2>&1 | tee "$LOG"
+  RC=${PIPESTATUS[0]}
 else
   ssh -i "$CHAVE" -o ConnectTimeout=15 -o ServerAliveInterval=30 "$VPS" "$REMOTO" 2>&1 < /dev/null | tee "$LOG"
+  RC=${PIPESTATUS[0]}
 fi
+set -e
 echo
 echo "conversas por regra (linhas do relatório):"
 grep -oE '\[(etapa-kommo|motivo-kommo|tratamento-kommo|compareceu-agenda|qualificacao-sofia|espera-kommo)' "$LOG" | sort | uniq -c || true
+[ "$RC" = 0 ] || echo "ATENÇÃO: terminou com código $RC (veja as linhas ERRO/FALHOU/AVISO em $LOG)"
+exit "$RC"

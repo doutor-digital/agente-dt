@@ -34,7 +34,7 @@ function mundo(convs: any[], kommoPorTelefone: (t: string) => LeadDoKommo[] | Er
   const vistos = new Map<string, Linha>();
   const capi = new Map<string, string>(); // `${id}|${evento}` → modo
   const kommoConsultado: string[] = [];
-  const falhas = { atributos: false, etiquetas: false };
+  const falhas = { atributos: false, etiquetas: false, aplicaMasErra: false };
   const p: PortasDosCampos = {
     async conversas() {
       return { lista: [...lojas.values()].map((c) => structuredClone(c)), truncado: !!o.truncado };
@@ -83,6 +83,19 @@ function mundo(convs: any[], kommoPorTelefone: (t: string) => LeadDoKommo[] | Er
       capi.set(k, 'inicial');
       return (modo ? 'atualizou' : 'criou') as ComoMarcou;
     },
+    async reafirmarVisto(id, campo, valor, agora) {
+      const k = `${id}|${campo}`;
+      const atual = vistos.get(k);
+      if (!atual) {
+        chamadas.push(`reafirmar:${id}:${campo}`);
+        vistos.set(k, { valor, inicial: true, desde: agora.toISOString() });
+        return 'recriou';
+      }
+      if (atual.valor !== valor) return 'divergente';
+      if (atual.inicial) return 'igual';
+      vistos.set(k, { ...atual, inicial: true });
+      return 'recriou';
+    },
     async apagarVisto(id, campo) {
       chamadas.push(`apagar-visto:${id}:${campo}`);
       vistos.delete(`${id}|${campo}`);
@@ -100,6 +113,10 @@ function mundo(convs: any[], kommoPorTelefone: (t: string) => LeadDoKommo[] | Er
       capi.set(`${id}|${evento}`, 'novo');
     },
     async gravarAtributos(id, attrs) {
+      if (falhas.aplicaMasErra) {
+        lojas.get(id)!.custom_attributes = structuredClone(attrs); // o Chatwoot gravou e a resposta se perdeu
+        throw new Error('tempo esgotado');
+      }
       if (falhas.atributos) throw new Error('Chatwoot 500');
       chamadas.push(`attrs:${id}`);
       lojas.get(id)!.custom_attributes = structuredClone(attrs);
@@ -144,7 +161,7 @@ test('gravar: as marcas da régua e da Meta vão ANTES do campo e são reafirmad
   assert.equal(m.vistos.get('7|etapa')?.inicial, true);
   assert.equal(r.atividadeMexeu, 0, 'gravar só atributo não mexe na última atividade');
   const reg = linhas.find((l) => l.startsWith('REG '))!;
-  assert.deepEqual(JSON.parse(reg.slice(4)), { conversa: 7, antes: { etapa: null }, depois: { etapa: 'Agendado' }, etiqueta: null, visto: [{ campo: 'etapa', como: 'criou' }], capi: [{ evento: 'AddToCart', como: 'criou' }], em: AGORA.toISOString() });
+  assert.deepEqual(JSON.parse(reg.slice(4)), { conversa: 7, depois: { etapa: 'Agendado' }, etiqueta: null, visto: [{ campo: 'etapa', como: 'criou' }], capi: [{ evento: 'AddToCart', como: 'criou' }], em: AGORA.toISOString() });
 });
 
 test('a GUARDA: uma marca que o ciclo da régua apagou (listagem velha) é reafirmada em seguida, e a execução conta quantas vezes foi', async () => {
@@ -161,8 +178,55 @@ test('a GUARDA: uma marca que o ciclo da régua apagou (listagem velha) é reafi
   assert.equal(voltas, 4, '2 minutos = 4 voltas de 30 s');
   assert.equal(r.marcasReafirmadas, 1);
   assert.equal(m.vistos.get('7|etapa')?.inicial, true, 'a marca voltou antes do próximo ciclo');
-  assert.match(linhas.join('\n'), /conversa 7: a marca da régua de etapa tinha sumido ou mudado — reafirmei/);
+  assert.match(linhas.join('\n'), /conversa 7: a marca da régua de etapa tinha sumido — reafirmei/);
   assert.match(linhas.join('\n'), /guarda terminada: 1 reafirmação/);
+});
+
+test('a GUARDA não passa por cima de mudança legítima: se a equipe moveu a etapa e a régua registrou, a linha nova é dela', async () => {
+  const m = mundo([raw(7)], () => [lead('AGENDADO')]);
+  let voltas = 0;
+  const pausa = m.p.pausa;
+  m.p.pausa = async (ms) => {
+    await pausa(ms);
+    if (ms === 30_000 && ++voltas === 2) m.vistos.set('7|etapa', { valor: 'Compareceu', inicial: false, desde: AGORA.toISOString() }); // a régua registrou a mudança da equipe
+  };
+  const r = await rodarCampos(opcoes({ guardaMin: 2 }), m.p, () => {}, agora);
+  assert.equal(r.marcasReafirmadas, 0);
+  assert.deepEqual(m.vistos.get('7|etapa'), { valor: 'Compareceu', inicial: false, desde: AGORA.toISOString() });
+});
+
+test('o Chatwoot gravou mas a resposta se perdeu (tempo esgotado): confere, vê que o campo entrou e MANTÉM as marcas e o registro', async () => {
+  const m = mundo([raw(7)], () => [lead('PERDIDO', { statusId: 143, motivoPerda: 'Sem interesse' })]);
+  m.falhas.aplicaMasErra = true;
+  const linhas: string[] = [];
+  const r = await rodarCampos(opcoes(), m.p, (l) => linhas.push(l), agora);
+  assert.equal(m.lojas.get(7)!.custom_attributes.etapa, 'Perdido');
+  assert.equal(m.vistos.get('7|etapa')?.inicial, true, 'sem a marca, a régua mandaria o reengajamento');
+  assert.match(linhas.join('\n'), /o Chatwoot respondeu erro, mas o campo entrou/);
+  assert.ok(linhas.some((l) => l.startsWith('REG ')), 'o registro sai: o --desfazer enxerga a gravação');
+  assert.equal(r.falhas, 1);
+});
+
+test('a classificação da Sofia que não deu para ler vira ERRO no resumo (não some em silêncio)', async () => {
+  const m = mundo([raw(7)], () => [lead('AGENDADO')]);
+  m.p.qualificacoes = async () => {
+    throw new Error('banco caiu');
+  };
+  const linhas: string[] = [];
+  const r = await rodarCampos(opcoes({ soConferir: true }), m.p, (l) => linhas.push(l), agora);
+  assert.equal(r.erros, 1);
+  assert.match(linhas.join('\n'), /ERRO   conversa 7: não consegui ler a classificação da Sofia/);
+  assert.doesNotMatch(linhas.join('\n'), /banco caiu/);
+});
+
+test('uma conversa por telefone: a irmã que a trava segurou não tira a vez da que pode gravar', async () => {
+  const fone = '+5594988887777';
+  const m = mundo([raw(1, { fone, atividade: 100 }), raw(2, { fone, atividade: 200, labels: ['ia-pausada'], status: 'resolved' })], () => [lead('AGENDADO')]);
+  const r = await rodarCampos(opcoes(), m.p, () => {}, agora);
+  assert.equal(r.bloqueios['ia-pausada-resolvida'], 1);
+  assert.equal(m.lojas.get(1)!.custom_attributes.etapa, 'Agendado', 'a mais recente (2) está segurada: a 1 grava');
+  assert.equal(m.lojas.get(2)!.custom_attributes.etapa, undefined);
+  assert.equal(r.irmas, 0);
 });
 
 test('falha ao gravar o campo: as marcas que ESTA execução pôs são desfeitas (nada de marca órfã que cale a Meta para sempre) e não sai REG', async () => {
@@ -297,10 +361,12 @@ test('--desfazer: devolve ao que era, só o que ainda é o que a gente gravou; a
   m.lojas.get(2)!.custom_attributes.etapa = 'Compareceu';
   m.chamadas.length = 0;
   const r = await desfazerCampos([...linhas, 'REG {"conversa": 9}', 'lixo'], m.p, () => {});
-  assert.deepEqual(r, { desfeitas: 3, puladas: 1 });
+  assert.deepEqual(r, { desfeitas: 2, puladas: 2 }, 'a 2 não tem o que desfazer (a equipe mudou) e a linha REG estragada é pulada');
   assert.deepEqual(m.lojas.get(1)!.labels, ['x']);
   assert.equal(m.lojas.get(2)!.custom_attributes.etapa, 'Compareceu', 'decisão da equipe não é desfeita');
-  assert.ok(m.chamadas.includes('apagar-visto:2:etapa') && m.chamadas.includes('apagar-capi:2:AddToCart'));
+  // a equipe mudou a etapa da conversa 2: o campo não é revertido, então as marcas dele FICAM (a régua já registrou o valor de hoje)
+  assert.ok(!m.chamadas.includes('apagar-visto:2:etapa') && !m.chamadas.includes('apagar-capi:2:AddToCart'));
+  assert.equal(m.vistos.get('2|etapa')?.inicial, true);
   assert.deepEqual(m.vistos.get('3|etapa'), { valor: 'Novo lead', inicial: false, desde: '2026-11-14T12:00:00.000Z' }, 'a linha antiga da régua volta como era');
   assert.equal(m.capi.get('3|AddToCart'), 'novo');
 });

@@ -31,15 +31,20 @@ async function portasReais(caixa: number, slug: string): Promise<PortasDosCampos
   const base = contextoDoAmbiente();
   const ctx = base ? contextoDaCaixa(base, caixa) : null;
   if (!ctx?.conta) throw new Error(`o Chatwoot não está configurado para a caixa ${caixa} neste servidor`);
-  const unit = await prisma.unit.findUnique({ where: { slug } });
-  if (!unit) throw new Error(`unidade ${slug} não encontrada`);
-  if (!unit.kommoSubdomain || !unit.kommoAccessToken) throw new Error(`a unidade ${slug} não tem Kommo configurado`);
-  const kommo = createKommoClientSemFreio(unit);
   const chat = portaDoChatwoot(ctx);
   const paginar = chatDoChatwoot(ctx).pagina;
-  const [pipelines, motivos] = await Promise.all([kommo.listPipelines(), kommo.listLossReasons()]);
-  const funilDe = new Map(pipelines.map((p) => [p.id, p] as const));
-  const motivoDe = new Map(motivos.map((m) => [m.id, m.name] as const));
+  // A unidade e o Kommo só são montados quando alguém os usa: o `--desfazer` não depende do Kommo (token vencido não pode impedir o desfazer)
+  let unidadeGuardada: Promise<Awaited<ReturnType<typeof prisma.unit.findUniqueOrThrow>>> | null = null;
+  const unidade = () => (unidadeGuardada ??= prisma.unit.findUniqueOrThrow({ where: { slug } }));
+  let kommoGuardado: Promise<{ kommo: ReturnType<typeof createKommoClientSemFreio>; funilDe: Map<number, Awaited<ReturnType<ReturnType<typeof createKommoClientSemFreio>['listPipelines']>>[number]>; motivoDe: Map<number, string> }> | null = null;
+  const comKommo = () =>
+    (kommoGuardado ??= (async () => {
+      const unit = await unidade();
+      if (!unit.kommoSubdomain || !unit.kommoAccessToken) throw new Error(`a unidade ${slug} não tem Kommo configurado`);
+      const kommo = createKommoClientSemFreio(unit);
+      const [pipelines, motivos] = await Promise.all([kommo.listPipelines(), kommo.listLossReasons()]);
+      return { kommo, funilDe: new Map(pipelines.map((p) => [p.id, p] as const)), motivoDe: new Map(motivos.map((m) => [m.id, m.name] as const)) };
+    })());
 
   return {
     async conversas() {
@@ -57,12 +62,18 @@ async function portasReais(caixa: number, slug: string): Promise<PortasDosCampos
     async leadsDoKommo(telefone) {
       const fim = finalDoTelefone(telefone);
       if (!fim) return [];
+      const { kommo, funilDe, motivoDe } = await comKommo();
       const contatos = await kommo.buscarContatosPorTelefone(fim, 10);
       // o mesmo número (DDI+DDD e os 8 últimos dígitos): os 8 dígitos sozinhos juntariam gente de DDD diferente
       const ids = [...new Set(contatos.filter((c) => c.telefones.some((t) => mesmoTelefone(t, telefone))).flatMap((c) => c.leadIds))].slice(0, 8);
       const saida: LeadDoKommo[] = [];
       for (const id of ids) {
-        const l = await kommo.getLead(id);
+        // um cartão apagado (404) não derruba a consulta do telefone inteiro
+        const l = await kommo.getLead(id).catch((err: unknown) => {
+          if ((err as { status?: number })?.status === 404) return null;
+          throw err;
+        });
+        if (!l) continue;
         const funil = funilDe.get(l.pipeline_id);
         const status = funil?.statuses.find((s) => s.id === l.status_id);
         if (!funil || !status) continue;
@@ -72,7 +83,7 @@ async function portasReais(caixa: number, slug: string): Promise<PortasDosCampos
     },
     async qualificacoes(leadIds) {
       const linhas = await prisma.leadFactEvent.findMany({
-        where: { unitId: unit.id, leadId: { in: leadIds.map(String) }, chave: 'qualificacao', observadoEm: { gte: new Date(Date.now() - 31 * 86_400_000) } },
+        where: { unitId: (await unidade()).id, leadId: { in: leadIds.map(String) }, chave: 'qualificacao', observadoEm: { gte: new Date(Date.now() - 31 * 86_400_000) } },
         select: { leadId: true, valor: true, observadoEm: true },
         orderBy: { observadoEm: 'desc' },
         take: 50,
@@ -107,6 +118,20 @@ async function portasReais(caixa: number, slug: string): Promise<PortasDosCampos
       if (antes && antes.valor === valor && antes.inicial) return { como: 'igual' as const };
       await prisma.chatwootReguaVisto.upsert({ where: onde, create: { caixa, conversationId: id, campo, valor, desde: agora, inicial: true }, update: { valor, desde: agora, inicial: true } });
       return antes ? { como: 'atualizou' as const, antes: { valor: antes.valor, inicial: antes.inicial, desde: antes.desde.toISOString() } } : { como: 'criou' as const };
+    },
+    async reafirmarVisto(id, campo, valor, agora) {
+      const onde = { caixa_conversationId_campo: { caixa, conversationId: id, campo } };
+      const atual = await prisma.chatwootReguaVisto.findUnique({ where: onde, select: { valor: true, inicial: true } });
+      if (!atual) {
+        await prisma.chatwootReguaVisto.create({ data: { caixa, conversationId: id, campo, valor, desde: agora, inicial: true } }).catch((err: unknown) => {
+          if ((err as { code?: string })?.code !== 'P2002') throw err; // outro processo criou agora: tudo bem
+        });
+        return 'recriou';
+      }
+      if (atual.valor !== valor) return 'divergente'; // a etapa mudou de verdade depois: a linha é da régua
+      if (atual.inicial) return 'igual';
+      await prisma.chatwootReguaVisto.update({ where: onde, data: { inicial: true } });
+      return 'recriou';
     },
     async restaurarVisto(id, campo, antes) {
       await prisma.chatwootReguaVisto.updateMany({ where: { caixa, conversationId: id, campo }, data: { valor: antes.valor, inicial: antes.inicial, desde: new Date(antes.desde) } });

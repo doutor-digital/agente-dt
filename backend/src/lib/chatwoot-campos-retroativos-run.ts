@@ -49,6 +49,11 @@ export interface PortasDosCampos {
   marcarVisto(id: number, campo: string, valor: string, agora: Date): Promise<{ como: ComoMarcou; antes?: VistoAnterior }>;
   /** `atualizou` = a linha existia como «novo» (o worker mandaria o evento): passa a `inicial` */
   marcarCapi(id: number, evento: EventoCapi, agora: Date): Promise<ComoMarcou>;
+  /**
+   * A reafirmação (depois de gravar e na guarda): só CRIA a linha que sumiu (ou volta `inicial` se o valor é o mesmo). Linha com OUTRO valor é
+   * mudança legítima de etapa (a equipe moveu, a régua registrou): `divergente`, não se mexe.
+   */
+  reafirmarVisto(id: number, campo: string, valor: string, agora: Date): Promise<'igual' | 'recriou' | 'divergente'>;
   apagarVisto(id: number, campo: string): Promise<void>;
   restaurarVisto(id: number, campo: string, antes: VistoAnterior): Promise<void>;
   apagarCapi(id: number, evento: EventoCapi): Promise<void>;
@@ -133,7 +138,7 @@ const PAUSA_DA_GUARDA_MS = 30_000;
 
 export interface Registro {
   conversa: number;
-  antes: Record<string, null>;
+  /** campo → valor gravado (os campos estavam vazios: o desfazer só tira o campo, e só se ainda for este valor) */
   depois: Record<string, string>;
   etiqueta: string | null;
   visto: Array<{ campo: string; como: ComoMarcou; antes?: VistoAnterior }>;
@@ -173,9 +178,9 @@ export async function rodarCampos(o: OpcoesDosCampos, p: PortasDosCampos, log: (
       continue;
     }
     const chave = chaveDoTelefone(c.telefone);
-    const irmas = (chave ? porTelefone.get(chave) ?? [] : []).filter((x) => x.c.id !== c.id);
-    if (irmas.some((x) => jaTemEtapa(x.c.attrs)) || irmas.some((x) => algumCampoVazio(x.c.attrs) && !x.c.etiquetas.includes(ETIQUETA_CONFERIR_ETAPA) && (atividadeDe(x.raw) > atividadeDe(raw) || (atividadeDe(x.raw) === atividadeDe(raw) && x.c.id > c.id)))) {
-      r.irmas++;
+    // a irmã (mesmo telefone) que já tem etapa/funil: a pessoa já está no funil; esta não a duplica
+    if ((chave ? porTelefone.get(chave) ?? [] : []).some((x) => x.c.id !== c.id && jaTemEtapa(x.c.attrs))) {
+      r.irmas++; // (só conta: a maioria nem tem cartão no Kommo, listar uma a uma seria ruído)
       continue;
     }
     let leads: LeadDoKommo[] = [];
@@ -203,11 +208,36 @@ export async function rodarCampos(o: OpcoesDosCampos, p: PortasDosCampos, log: (
       }
     }
     let qualificacoes: FatoDeQualificacao[] = [];
-    if (leads.length && vazio(c.attrs.qualificacao)) qualificacoes = await p.qualificacoes(leads.map((l) => l.id)).catch(() => []);
+    if (leads.length && vazio(c.attrs.qualificacao)) {
+      try {
+        qualificacoes = await p.qualificacoes(leads.map((l) => l.id));
+      } catch {
+        r.erros++;
+        log(`ERRO   conversa ${c.id}: não consegui ler a classificação da Sofia — a qualificação desta fica de fora`);
+      }
+    }
     if (!leads.length) r.semCartao++;
     const ent = { conv: c, status: String(raw?.status ?? ''), leads, qualificacoes, motivosValidos, ajustes };
     const plano = decidirCampos({ ...ent, vistos: vistosDaCaixa.get(c.id) ?? new Map() }, agora());
     planos.push({ plano, ent, raw });
+  }
+
+  // uma conversa por telefone: duas conversas da mesma pessoa duplicariam o funil. Entre as que de fato receberiam algo, vale a de atividade mais recente
+  // (empate: id maior); as outras ficam como estão. Decidido DEPOIS dos planos: a irmã que a trava segurou não pode tirar a vez da que pode gravar.
+  const grupos = new Map<string, typeof planos>();
+  for (const x of planos) {
+    const k = chaveDoTelefone(x.ent.conv.telefone);
+    if (k && (x.plano.alteracoes.length || x.plano.etiquetaNova)) grupos.set(k, [...(grupos.get(k) ?? []), x]);
+  }
+  for (const g of grupos.values()) {
+    if (g.length < 2) continue;
+    const vencedora = [...g].sort((a, b) => atividadeDe(b.raw) - atividadeDe(a.raw) || b.plano.conversa - a.plano.conversa)[0]!;
+    for (const x of g) {
+      if (x === vencedora) continue;
+      r.irmas++;
+      log(`PULA   conversa ${x.plano.conversa}  irma: a conversa ${vencedora.plano.conversa}, do mesmo telefone, é a mais recente e recebe o preenchimento`);
+      x.plano = { ...x.plano, alteracoes: [], etiquetaNova: null, marcasVisto: [], marcasCapi: [] };
+    }
   }
 
   // o relatório do que cada conversa teria
@@ -269,12 +299,14 @@ export async function rodarCampos(o: OpcoesDosCampos, p: PortasDosCampos, log: (
 }
 
 /** Desfaz as marcas que ESTA execução pôs (e só elas): a linha nova some; a que já existia volta como era. */
-async function desfazerMarcas(reg: Pick<Registro, 'conversa' | 'visto' | 'capi'>, p: PortasDosCampos): Promise<void> {
+async function desfazerMarcas(reg: Pick<Registro, 'conversa' | 'visto' | 'capi'>, p: PortasDosCampos, soCampos?: ReadonlySet<string>): Promise<void> {
   for (const v of reg.visto) {
+    if (soCampos && !soCampos.has(v.campo)) continue; // o campo não foi revertido: a marca dele fica (a régua já registrou o valor de hoje)
     if (v.como === 'criou') await p.apagarVisto(reg.conversa, v.campo);
     else if (v.como === 'atualizou' && v.antes) await p.restaurarVisto(reg.conversa, v.campo, v.antes);
   }
   for (const x of reg.capi) {
+    if (soCampos && !soCampos.has('etapa')) continue; // o evento de conversão nasce da etapa
     if (x.como === 'criou') await p.apagarCapi(reg.conversa, x.evento);
     else if (x.como === 'atualizou') await p.restaurarCapi(reg.conversa, x.evento);
   }
@@ -282,8 +314,9 @@ async function desfazerMarcas(reg: Pick<Registro, 'conversa' | 'visto' | 'capi'>
 
 async function gravarUma(planoPrevisto: Plano, ent: Omit<EntradaDaConversa, 'vistos'>, p: PortasDosCampos, agora: () => Date, log: (l: string) => void): Promise<{ reg: Registro | null; erro?: string; mexeu?: boolean }> {
   const id = planoPrevisto.conversa;
-  const reg: Registro = { conversa: id, antes: {}, depois: {}, etiqueta: null, visto: [], capi: [], em: agora().toISOString() };
+  const reg: Registro = { conversa: id, depois: {}, etiqueta: null, visto: [], capi: [], em: agora().toISOString() };
   let escreveu = false;
+  let tentouCampos = false;
   try {
     const fresca = await p.fresca(id);
     const lida = fresca ? conversaDoChatwoot(fresca) : null;
@@ -304,12 +337,10 @@ async function gravarUma(planoPrevisto: Plano, ent: Omit<EntradaDaConversa, 'vis
     if (plano.alteracoes.length) {
       const attrs: Record<string, unknown> = { ...c.attrs };
       for (const x of plano.alteracoes) attrs[x.campo] = x.depois;
+      for (const x of plano.alteracoes) reg.depois[x.campo] = x.depois;
+      tentouCampos = true;
       await p.gravarAtributos(id, attrs);
       escreveu = true;
-      for (const x of plano.alteracoes) {
-        reg.antes[x.campo] = null;
-        reg.depois[x.campo] = x.depois;
-      }
     }
     if (plano.etiquetaNova && !c.etiquetas.includes(plano.etiquetaNova)) {
       await p.gravarEtiquetas(id, [...c.etiquetas, plano.etiquetaNova]);
@@ -318,7 +349,7 @@ async function gravarUma(planoPrevisto: Plano, ent: Omit<EntradaDaConversa, 'vis
     }
     // 4. reafirma já e confere (a guarda de minutos vem no fim de tudo)
     await p.pausa(PAUSA_ANTES_DE_REAFIRMAR_MS);
-    for (const m of plano.marcasVisto) await p.marcarVisto(id, m.campo, m.valor, agora());
+    for (const m of plano.marcasVisto) await p.reafirmarVisto(id, m.campo, m.valor, agora());
     const depois = await p.fresca(id);
     const attrsDepois = (depois?.custom_attributes ?? {}) as Record<string, unknown>;
     for (const [campo, valor] of Object.entries(reg.depois)) if (attrsDepois[campo] !== valor) log(`AVISO  conversa ${id}: ${campo} não ficou (outro processo gravou junto) — rode de novo`);
@@ -327,6 +358,17 @@ async function gravarUma(planoPrevisto: Plano, ent: Omit<EntradaDaConversa, 'vis
     return { reg, mexeu };
   } catch (err) {
     const erro = err instanceof Error ? err.message.slice(0, 120) : 'erro';
+    if (!escreveu && tentouCampos) {
+      // o Chatwoot pode ter aplicado e a resposta se perdido (tempo esgotado, 5xx): antes de tirar as marcas, olha se o campo entrou
+      const entrou = await p.fresca(id).then(
+        (f) => Object.entries(reg.depois).every(([campo, valor]) => (f?.custom_attributes ?? {})[campo] === valor),
+        () => null,
+      );
+      if (entrou !== false) {
+        log(`AVISO  conversa ${id}: o Chatwoot respondeu erro, mas ${entrou ? 'o campo entrou' : 'não deu para conferir se o campo entrou'} — mantenho as marcas e o registro`);
+        escreveu = true;
+      }
+    }
     // o campo não chegou a ser gravado: as marcas que esta execução pôs não podem ficar (calariam a Meta e a régua de uma etapa que nunca foi gravada)
     if (!escreveu) {
       await desfazerMarcas(reg, p).catch(() => log(`AVISO  conversa ${id}: não consegui desfazer as marcas — confira com --desfazer`));
@@ -353,10 +395,11 @@ async function guardarMarcas(regs: Registro[], p: PortasDosCampos, minutos: numb
         const valor = reg.depois[v.campo];
         if (valor === undefined) continue;
         try {
-          const m = await p.marcarVisto(reg.conversa, v.campo, valor, agora());
-          if (m.como !== 'igual') {
+          // só recria o que sumiu: se a etapa mudou de verdade (a equipe moveu e a régua registrou), a linha nova não é nossa para mexer
+          const m = await p.reafirmarVisto(reg.conversa, v.campo, valor, agora());
+          if (m === 'recriou') {
             reafirmadas++;
-            log(`AVISO  conversa ${reg.conversa}: a marca da régua de ${v.campo} tinha sumido ou mudado — reafirmei`);
+            log(`AVISO  conversa ${reg.conversa}: a marca da régua de ${v.campo} tinha sumido — reafirmei`);
           }
         } catch {
           log(`AVISO  conversa ${reg.conversa}: não consegui conferir a marca de ${v.campo} nesta volta`);
@@ -389,19 +432,30 @@ export async function desfazerCampos(linhas: string[], p: PortasDosCampos, log: 
       const c = fresca ? conversaDoChatwoot(fresca) : null;
       if (!fresca || !c) throw new Error('não consegui reler');
       const attrs: Record<string, unknown> = { ...c.attrs };
+      const revertidos = new Set<string>();
       let mudou = false;
       for (const [campo, valor] of Object.entries(reg.depois)) {
-        // só desfaz o que ainda é o que a gente gravou: se alguém mudou depois, é decisão dela
+        // só desfaz o que ainda é o que a gente gravou: se alguém mudou depois, é decisão dela (e a marca desse campo fica: a régua já registrou o valor de hoje)
         if (attrs[campo] === valor) {
           delete attrs[campo];
           mudou = true;
-        }
+          revertidos.add(campo);
+        } else if (vazio(attrs[campo])) revertidos.add(campo);
       }
       if (mudou) await p.gravarAtributos(reg.conversa, attrs);
-      if (reg.etiqueta && c.etiquetas.includes(reg.etiqueta)) await p.gravarEtiquetas(reg.conversa, c.etiquetas.filter((e) => e !== reg.etiqueta));
-      await desfazerMarcas(reg, p);
+      let tirouEtiqueta = false;
+      if (reg.etiqueta && c.etiquetas.includes(reg.etiqueta)) {
+        await p.gravarEtiquetas(reg.conversa, c.etiquetas.filter((e) => e !== reg.etiqueta));
+        tirouEtiqueta = true;
+      }
+      await desfazerMarcas(reg, p, revertidos);
+      if (!revertidos.size && !tirouEtiqueta) {
+        puladas++;
+        log(`PULA   conversa ${reg.conversa}: nada a desfazer (a equipe já mudou o que a gente gravou)`);
+        continue;
+      }
       desfeitas++;
-      log(`desfez conversa ${reg.conversa}: ${Object.keys(reg.depois).join(', ') || '-'}${reg.etiqueta ? ` + etiqueta ${reg.etiqueta}` : ''}`);
+      log(`desfez conversa ${reg.conversa}: ${[...revertidos].join(', ') || '-'}${tirouEtiqueta ? ` + etiqueta ${reg.etiqueta}` : ''}`);
     } catch (err) {
       puladas++;
       log(`PULA   conversa ${reg.conversa}: ${err instanceof Error ? err.message.slice(0, 100) : 'erro'}`);
