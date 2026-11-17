@@ -119,7 +119,9 @@ export async function modelosDaCaixa(ctx: ContextoChatwoot, caixa: number): Prom
 }
 
 /** `transitorio`: não deu para LER o CRM (não é um defeito do modelo): quem chama tenta de novo, não pausa nem cancela nada. */
-export type ConferenciaDoModelo = { ok: true } | { ok: false; motivo: string; transitorio?: true; /** a categoria que o CRM tem agora, quando foi ela que mudou */ categoriaNova?: string };
+/** Como o modelo aparece no WhatsApp além do corpo: só para a tela mostrar (não entra no envio nem no que é gravado). */
+export type ApresentacaoDoModelo = { cabecalho: string | null; rodape: string | null; botoes: string[] };
+export type ConferenciaDoModelo = { ok: true; /** do MESMO modelo já lido na conferência (sem nova chamada ao CRM) */ modelo?: ApresentacaoDoModelo } | { ok: false; motivo: string; transitorio?: true; /** a categoria que o CRM tem agora, quando foi ela que mudou */ categoriaNova?: string };
 
 /**
  * O modelo que a onda vai mandar ainda está aprovado na caixa, com o MESMO texto que a pessoa viu e aprovou? Roda na montagem, na aprovação
@@ -149,5 +151,5 @@ export async function conferirModeloDaOnda(
     return { ok: false, categoriaNova: m.categoria.toUpperCase(), motivo: `a Meta mudou a categoria do modelo de ${def.categoria.toUpperCase()} para ${m.categoria.toUpperCase()}: o custo do disparo mudou. Monte o disparo de novo para ver o custo certo` };
   }
   const p = problemaNoModelo(def.textoModelo, def.variaveis);
-  return p ? { ok: false, motivo: p } : { ok: true };
+  return p ? { ok: false, motivo: p } : { ok: true, modelo: { cabecalho: m.cabecalho, rodape: m.rodape, botoes: m.botoes } };
 }

@@ -34,6 +34,7 @@ select,input[type=text],input[type=number]{font:500 14px var(--f-ui);color:var(-
 .pill.est::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
 .faixa{margin:0 0 14px;padding:11px 14px;border:1px solid var(--line);border-left-width:5px;border-radius:10px;background:var(--node);font-size:13.5px;display:flex;gap:4px 10px;flex-wrap:wrap;align-items:baseline}
 .faixa b{font:700 14px var(--f-head)}
+.faixa .como{flex-basis:100%}.faixa .como p{margin:2px 0 4px}.faixa .como summary{font-weight:500;color:var(--ink-2);display:inline-block}
 .faixa.seco{border-color:var(--aviso-forte);background:color-mix(in srgb,var(--aviso-forte) 12%,var(--node))}
 .faixa.vivo{border-color:var(--send)}
 .faixa.erro{border-color:var(--ruim);color:var(--ruim)}
@@ -189,18 +190,21 @@ a{color:var(--brand)}
   }
   // A faixa do modo: sempre no topo, em cada tela. Retorna o elemento pronto.
   function faixaDoModo(modo){
-    var f = D.freios, t = f.tetoDoTier ? ' O número está no ' + f.tier + ' da Meta.' : '';
+    var f = D.freios;
     modo = modo || D.modo;
     var cx = el('div', 'faixa ' + (modo === 'ligado' ? 'vivo' : modo === 'seco' ? 'seco' : ''));
+    function mais(txt){ var dt = el('details', 'como'); dt.appendChild(el('summary', null, 'Como funciona')); dt.appendChild(el('p', 'dica', txt)); cx.appendChild(dt); }
     if (modo === 'seco') {
-      cx.appendChild(el('b', null, 'Modo seco'));
-      cx.appendChild(el('span', null, 'Montar e aprovar NÃO manda mensagem nenhuma. O sistema confere a lista, aplica as regras e anota quem receberia. Nada sai até a Doutor Digital ligar os disparos desta unidade.'));
+      cx.appendChild(el('b', null, 'Modo seco:'));
+      cx.appendChild(el('span', null, 'nada é enviado. O sistema só anota quem receberia.'));
+      mais('Montar e aprovar conferem a lista e aplicam todas as regras, mas nenhuma mensagem sai até a Doutor Digital ligar os disparos desta unidade.');
     } else if (modo === 'desligado') {
-      cx.appendChild(el('b', null, 'Desligado'));
-      cx.appendChild(el('span', null, 'Os disparos estão desligados nesta unidade.'));
+      cx.appendChild(el('b', null, 'Desligado:'));
+      cx.appendChild(el('span', null, 'os disparos estão desligados nesta unidade.'));
     } else {
-      cx.appendChild(el('b', null, 'Ligado'));
-      cx.appendChild(el('span', null, 'Depois de aprovado, o envio sai em ondas, na janela de ' + f.janela + ', com no máximo ' + f.tetoPorHora + ' por hora e ' + f.tetoPorDia + ' por 24 horas.' + t));
+      cx.appendChild(el('b', null, 'Ligado:'));
+      cx.appendChild(el('span', null, 'depois de aprovado, sai em ondas das ' + f.janela + '.'));
+      mais('No máximo ' + f.tetoPorHora + ' por hora e ' + f.tetoPorDia + ' por 24 horas.' + (f.tetoDoTier ? ' O número está no ' + f.tier + ' da Meta.' : ''));
     }
     return cx;
   }
@@ -514,7 +518,7 @@ a{color:var(--brand)}
     var cz = el('div', 'card'); cz.appendChild(el('h2', null, 'Como a pessoa recebe'));
     var fone = celular(); cz.appendChild(fone.raiz);
     var exs = o.exemplos.length ? o.exemplos : [o.modelo.texto];
-    function mostrarEx(i){ mensagemNoCelular(fone.conversa, { texto: exs[i] }); }
+    function mostrarEx(i){ mensagemNoCelular(fone.conversa, { cabecalho: o.modelo.cabecalho || null, texto: exs[i], rodape: o.modelo.rodape || null, botoes: o.modelo.botoes || [] }); }
     mostrarEx(0);
     if (exs.length > 1) {
       var troca = el('div', 'cel-troca');
