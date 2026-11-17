@@ -11,15 +11,18 @@ import { contatoPrincipal } from './kommo-lead-util.js';
 import { avisoRecente, marcarAviso } from './aviso-dedupe.js';
 import { agendarIndice } from './franquia-indice-telefones.js';
 import { ehNumeroInterno, lerNumerosInternos } from './numeros-internos.js';
+import { naoPacienteManualLigada, telefoneMarcadoNaoPaciente } from './nao-paciente-manual.js';
 import {
   calarPacienteEstado,
   consultarFranquia,
   decidir,
+  notaNaoPaciente,
   notaNumeroInterno,
   notaPacienteEmTratamento,
   ehFunilComercial,
   precisaConsultarFranquia,
   REGRA_NOTA_INTERNO,
+  REGRA_NOTA_NAO_PACIENTE,
   REGRA_NOTA_PACIENTE,
   type Decisao,
   type SinalDaFranquia,
@@ -49,29 +52,38 @@ export async function portaPacienteEmTratamento(args: { unit: Unit; leadId: numb
       logger.warn({ err: String(err), unit: unit.slug, leadId }, 'paciente-em-tratamento: não li o esquema da conta (segue sem calar)');
     }
     // fora do COMERCIAL e sem lista de internos não há o que decidir: nem telefone, nem banco, nem franquia
-    if (!ehFunilComercial(funil) && lerNumerosInternos().chaves.size === 0) return null;
+    if (!ehFunilComercial(funil) && lerNumerosInternos().chaves.size === 0 && !naoPacienteManualLigada(unit.slug)) return null;
 
     const idContato = contactId && Number.isFinite(Number(contactId)) ? Number(contactId) : contatoPrincipal(lead);
     const telefone = idContato ? await kommo.getContactPhone(idContato).catch(() => null) : null;
 
     const interno = !!telefone && ehNumeroInterno(telefone);
+    // telefone que a equipe já marcou como não-paciente nesta unidade (automação nao-paciente-manual): motivo e nota próprios
+    const naoPaciente = !interno && !!telefone && (await telefoneMarcadoNaoPaciente(unit, telefone));
     const temIdClient = interno
       ? false
       : !!(await prisma.spineLeadLink.findFirst({ where: { unitId: unit.id, kommoLeadId: leadId, spineIdClient: { not: null } }, select: { id: true } }));
     const base = { interno, temIdClient, funil };
     let sinal: SinalDaFranquia | null = null;
-    if (precisaConsultarFranquia(base)) {
+    if (!naoPaciente && precisaConsultarFranquia(base)) {
       // o índice de telefones da franquia precisa existir para a pergunta ter resposta; é idempotente (1 carga por dia)
       agendarIndice(unit);
       sinal = await consultarFranquia(unit, telefone);
     }
-    const decisao = decidir({ ...base, sinal });
+    const decisao: Decisao = naoPaciente
+      ? { calar: true, motivo: 'nao_paciente', detalhe: 'telefone marcado como não-paciente (funcionário/currículo) nesta unidade' }
+      : decidir({ ...base, sinal });
 
     let anotou = false;
     if (decisao.calar && estado === 'ligado') {
-      const regra = decisao.motivo === 'numero_interno' ? REGRA_NOTA_INTERNO : REGRA_NOTA_PACIENTE;
+      const regra = decisao.motivo === 'numero_interno' ? REGRA_NOTA_INTERNO : decisao.motivo === 'nao_paciente' ? REGRA_NOTA_NAO_PACIENTE : REGRA_NOTA_PACIENTE;
       if (!(await avisoRecente(unit.id, leadId, regra))) {
-        const texto = decisao.motivo === 'numero_interno' ? notaNumeroInterno(humanMessage) : notaPacienteEmTratamento(humanMessage);
+        const texto =
+          decisao.motivo === 'numero_interno'
+            ? notaNumeroInterno(humanMessage)
+            : decisao.motivo === 'nao_paciente'
+              ? notaNaoPaciente(humanMessage)
+              : notaPacienteEmTratamento(humanMessage);
         try {
           const nota = await kommo.addLeadNote(leadId, texto);
           if (nota?.id) {

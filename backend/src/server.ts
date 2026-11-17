@@ -75,6 +75,7 @@ import { startFranquiaSyncWorker, stopFranquiaSyncWorker } from './lib/franquia-
 import { startFranquiaCalendarioWorker, stopFranquiaCalendarioWorker } from './lib/franquia-calendario-worker.js';
 import { startUnidadePorCanalWorker, stopUnidadePorCanalWorker } from './lib/unidade-por-canal-worker.js';
 import { startUnidadeNoCartaoWorker, stopUnidadeNoCartaoWorker } from './lib/unidade-no-cartao-worker.js';
+import { startNaoPacienteManualWorker, stopNaoPacienteManualWorker } from './lib/nao-paciente-manual-worker.js';
 import { startRenomearLeadWorker, stopRenomearLeadWorker } from './lib/renomear-lead-worker.js';
 import { startTipoLeadChegadaWorker, stopTipoLeadChegadaWorker } from './lib/tipo-lead-chegada-worker.js';
 import { startLigacaoWhatsappWorker, stopLigacaoWhatsappWorker } from './controllers/ligacao-whatsapp.controller.js';
@@ -296,6 +297,7 @@ async function main(): Promise<void> {
       startRotinaEtapasWorker();
       startUnidadePorCanalWorker();
       startUnidadeNoCartaoWorker();
+      startNaoPacienteManualWorker();
       startRenomearLeadWorker();
       startTipoLeadChegadaWorker();
       startLigacaoWhatsappWorker();
@@ -326,6 +328,7 @@ async function main(): Promise<void> {
       stopRotinaEtapasWorker();
       stopUnidadePorCanalWorker();
       stopUnidadeNoCartaoWorker();
+      stopNaoPacienteManualWorker();
       stopRenomearLeadWorker();
       stopTipoLeadChegadaWorker();
       stopLigacaoWhatsappWorker();
