@@ -235,6 +235,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/reminder-worker.ts',
   },
   {
+    id: 'confirmacao-dia-util',
+    chave: 'CONFIRMACAO_DIA_UTIL_SLUGS',
+    nome: 'Confirmação no dia útil anterior',
+    oQueFaz:
+      'A confirmação de presença da CONSULTA sai uma vez só, no último dia útil antes dela (segunda a sexta, sem feriado nacional): a de segunda é confirmada na sexta, a do dia seguinte a um feriado, antes do feriado. Substitui o reforço de 2 dias (D-2) e a véspera de calendário. Não pergunta a quem já confirmou: consulta CONFIRMADO na franquia, ou "✅ Agendamento confirmado" da Sofia nas últimas 12 h. O texto pode ser o da própria clínica (Petrópolis usa o que a equipe mandava à mão).',
+    pegadinha:
+      'O texto e o canal de cada unidade moram no código (confirmacao-unidade.ts, POR_UNIDADE); unidade fora da lista usa o texto da rede. Petrópolis está no WhatsApp Lite: lá a mensagem sai mesmo sem a janela de 24 h. Se a unidade for para a API oficial, tire isso do código antes. A resposta do paciente vale por 6 dias (na rede, 48 h). Se o envio cair em nota interna, vira tarefa de ligação: no dia seguinte a consulta já saiu da lista e não há 2ª chance. Sessão NÃO entra aqui.',
+    risco: 'manda-mensagem',
+    temSeco: false,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/reminder-worker.ts',
+  },
+  {
     id: 'confirmacao-d1',
     chave: 'CONFIRMACAO_D1_SLUGS',
     nome: 'Véspera pelo robô do Kommo',

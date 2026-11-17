@@ -7,10 +7,37 @@ import { consultaDoLead, esqueceConsulta, type ConsultaReconciliada } from '../s
 import { SpineService, SPINE_STATUS } from '../services/spine.service.js';
 import { avisoRecente } from './aviso-dedupe.js';
 import { nomeApresentavel, saudacao, vocativo } from './nome-apresentavel.js';
+import { automacaoLigada } from './automacoes-estado.js';
+import { ID_CONFIRMACAO_DIA_UTIL } from './confirmacao-unidade.js';
 
 export type RespostaD1 = 'confirmou' | 'remarcar';
 
 export const JANELA_RESPOSTA_D1_MS = 48 * 3600_000;
+
+/**
+ * Na unidade com a confirmação no DIA ÚTIL ANTERIOR (automação `confirmacao-dia-util`), a pergunta sai até 5 dias antes da
+ * consulta (sexta antes do Carnaval → quarta). Com as 48 h da rede, o "confirmado" de segunda à pergunta de quinta ia para a
+ * IA sem contexto, e a franquia não recebia o CONFIRMADO (revisão do sênior, PR #394). Só ali a janela vai a 6 dias: na rede,
+ * um "sim" solto dias depois da véspera não pode virar confirmação.
+ */
+export const JANELA_RESPOSTA_DIA_UTIL_MS = 6 * 24 * 3600_000;
+
+/**
+ * Com a janela longa (dia útil anterior), só é resposta se a consulta AINDA está de pé e no futuro. O texto de Petrópolis diz
+ * "confirme em até 12 horas… caso contrário, ele será liberado": se a equipe liberou o horário (desmarcado → `cancelada`, sem
+ * `quando`) e o paciente responde "Confirmado" dias depois, responder "Te esperamos" mandaria a pessoa para um horário que já é de
+ * outro (revisão do sênior, PR #394). Sem consulta, franquia fora, desmarcada ou já passada = conversa solta, segue com a Sofia.
+ */
+export function respostaDentroDaJanelaLonga(
+  consulta: Pick<ConsultaReconciliada, 'estado' | 'quando'> | null | undefined,
+  agoraLocal: string,
+): boolean {
+  if (!consulta || consulta.estado !== 'confirmada' || !consulta.quando) return false;
+  return consulta.quando.slice(0, 16) > agoraLocal.slice(0, 16);
+}
+export function janelaDaResposta(slug: string): number {
+  return automacaoLigada(slug, ID_CONFIRMACAO_DIA_UTIL, process.env.CONFIRMACAO_DIA_UTIL_SLUGS) ? JANELA_RESPOSTA_DIA_UTIL_MS : JANELA_RESPOSTA_D1_MS;
+}
 
 export function classificarRespostaD1(texto: string): RespostaD1 | null {
   const s = texto.trim().toLowerCase().replace(/[!.…]+$/g, '');
@@ -241,7 +268,8 @@ export interface DepsConfirmarNaFranquia {
 async function perguntouSobre(unitId: string, leadId: number, quando: string): Promise<boolean> {
   const marcas = await Promise.all(
     (['d1', 'd2'] as const).map((t) =>
-      avisoRecente(unitId, leadId, chaveDaConfirmacao(t, quando), JANELA_RESPOSTA_D1_MS + 48 * 3600_000),
+      // a chave carrega o horário da consulta: janela longa não confunde consultas, e cobre a pergunta do dia útil anterior
+      avisoRecente(unitId, leadId, chaveDaConfirmacao(t, quando), JANELA_RESPOSTA_DIA_UTIL_MS + 48 * 3600_000),
     ),
   );
   return marcas.some(Boolean);
@@ -398,13 +426,14 @@ export function podeSerRespostaD1(
   conv: Pick<Conversation, 'confirmacaoD1EnviadaEm' | 'confirmacaoD1Resposta'>,
   texto: string,
   agora: Date = new Date(),
+  janelaMs: number = JANELA_RESPOSTA_D1_MS,
 ): boolean {
   if (!conv.confirmacaoD1EnviadaEm) return false;
   const idade = agora.getTime() - conv.confirmacaoD1EnviadaEm.getTime();
-  if (idade > JANELA_RESPOSTA_D1_MS + JANELA_REPETICAO_D1_MS) return false;
+  if (idade > janelaMs + JANELA_REPETICAO_D1_MS) return false;
   const resposta = classificarRespostaD1(texto);
   if (!resposta) return false;
-  if (!conv.confirmacaoD1Resposta) return idade <= JANELA_RESPOSTA_D1_MS;
+  if (!conv.confirmacaoD1Resposta) return idade <= janelaMs;
   return conv.confirmacaoD1Resposta === resposta;
 }
 
@@ -439,11 +468,17 @@ export async function tratarRespostaD1(args: {
     return null;
   }
   if (!conv.confirmacaoD1EnviadaEm || conv.confirmacaoD1Resposta) return null;
-  if (Date.now() - conv.confirmacaoD1EnviadaEm.getTime() > JANELA_RESPOSTA_D1_MS) return null;
+  if (Date.now() - conv.confirmacaoD1EnviadaEm.getTime() > janelaDaResposta(unit.slug)) return null;
   const resposta = classificarRespostaD1(texto);
   if (!resposta) return null;
 
   const consulta = await consultaDoLead(unit, leadId).catch(() => null);
+  // Janela longa do dia útil anterior (6 dias) FECHA no horário da consulta: depois dela, "ok" ou "não, obrigada" é conversa
+  // solta, não resposta à pergunta (revisão do sênior, PR #394). Na rede (48 h) nada muda.
+  if (janelaDaResposta(unit.slug) > JANELA_RESPOSTA_D1_MS) {
+    const agoraLocal = SpineService.instanteNoFuso(new Date(), unit.spineTimezone || 'America/Sao_Paulo').slice(0, 16);
+    if (!respostaDentroDaJanelaLonga(consulta, agoraLocal)) return null;
+  }
   const hora = consulta?.quando ? consulta.quando.slice(11, 16) : null;
   const quandoCurto = consulta?.quando ? diaCurto(consulta.quando) : null;
   // O nome sai do título do cartão (o que a Sofia gravou); sem ele, do perfil do WhatsApp só se parecer nome
@@ -476,7 +511,7 @@ export async function tratarRespostaD1(args: {
       .createTask({
         leadId,
         text:
-          `ALERTA · ${unit.slug} · [Contato: ${conv.contactName ?? 'paciente'}] 🔁 Pediu para remarcar a consulta de amanhã` +
+          `ALERTA · ${unit.slug} · [Contato: ${conv.contactName ?? 'paciente'}] 🔁 Pediu para remarcar a consulta de ${quandoCurto ?? 'amanhã'}` +
           `${hora ? ` (${hora})` : ''}: "${texto.slice(0, 120)}". Combinar novo horário com o paciente.`,
         completeAt: Math.floor(Date.now() / 1000) + 30 * 60,
       })

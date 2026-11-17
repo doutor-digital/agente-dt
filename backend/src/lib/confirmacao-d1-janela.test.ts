@@ -23,3 +23,25 @@ test('textoAlertaSemJanela: vai para o grupo com nome, hora e o motivo', () => {
   assert.match(t, /^ALERTA · doutor-hernia-maraba · \[Contato: Maria\] 📅 Consulta amanhã às 14:30 SEM confirmação/);
   assert.match(t, /24 h/);
 });
+
+test('podeSerRespostaD1: a janela da unidade no dia útil anterior (6 dias) aceita o "confirmado" de segunda à pergunta de quinta', async () => {
+  const { podeSerRespostaD1, JANELA_RESPOSTA_DIA_UTIL_MS } = await import('./confirmacao-d1.js');
+  const enviada = new Date('2026-11-19T12:00:00Z'); // quinta, 9h
+  const segunda = new Date('2026-11-23T10:00:00Z'); // segunda, 7h — 94 h depois
+  const conv = { confirmacaoD1EnviadaEm: enviada, confirmacaoD1Resposta: null };
+  assert.equal(podeSerRespostaD1(conv, 'Confirmado', segunda), false, 'na rede (48 h) não vale mais');
+  assert.equal(podeSerRespostaD1(conv, 'Confirmado', segunda, JANELA_RESPOSTA_DIA_UTIL_MS), true);
+  const depois = new Date(enviada.getTime() + JANELA_RESPOSTA_DIA_UTIL_MS + 3600_000);
+  assert.equal(podeSerRespostaD1(conv, 'Confirmado', depois, JANELA_RESPOSTA_DIA_UTIL_MS), false, 'passou de 6 dias');
+});
+
+test('respostaDentroDaJanelaLonga: só com a consulta de pé e no futuro (horário liberado pela equipe não recebe "Te esperamos")', async () => {
+  const { respostaDentroDaJanelaLonga } = await import('./confirmacao-d1.js');
+  const agora = '2026-11-23T07:00';
+  assert.equal(respostaDentroDaJanelaLonga({ estado: 'confirmada', quando: '2026-11-23T17:30' }, agora), true);
+  assert.equal(respostaDentroDaJanelaLonga({ estado: 'confirmada', quando: '2026-11-21T09:00' }, agora), false, 'já passou');
+  assert.equal(respostaDentroDaJanelaLonga({ estado: 'cancelada', quando: null }, agora), false, 'desmarcada: a equipe liberou');
+  assert.equal(respostaDentroDaJanelaLonga({ estado: 'cancelada', quando: '2026-11-23T17:30' }, agora), false);
+  assert.equal(respostaDentroDaJanelaLonga({ estado: 'nao_confirmada', quando: '2026-11-23T17:30' }, agora), false, 'franquia não confirmou o horário agora');
+  assert.equal(respostaDentroDaJanelaLonga(null, agora), false);
+});

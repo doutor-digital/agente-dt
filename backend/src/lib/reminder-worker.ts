@@ -49,6 +49,15 @@ import { PAUSA_POR } from '../agent/teto-mensal.js';
 import type { Unit } from '@prisma/client';
 import { automacaoLigada } from './automacoes-estado.js';
 import { estadoDoLembrete } from './lembrete-chaves.js';
+import {
+  confirmacaoDaUnidade,
+  ID_CONFIRMACAO_DIA_UTIL,
+  diaUtilAnterior,
+  diasQueConfirmamHoje,
+  jaConfirmou,
+  textoDaUnidade,
+  type ConfirmacaoDaUnidade,
+} from './confirmacao-unidade.js';
 
 /**
  * Janelas da chave ANTIGA, que não carregava o horário da consulta. Só servem à transição de
@@ -121,6 +130,10 @@ interface Envio {
   titulo: string | null;
   /** Conversa oficial já lida pelo laço (undefined = ler aqui). */
   oficiais?: MensagemOficial[] | null;
+  /** O jeito da unidade (automação `confirmacao-dia-util` + `POR_UNIDADE` em confirmacao-unidade.ts); null = padrão da rede. */
+  daUnidade?: ConfirmacaoDaUnidade | null;
+  /** Hora local do envio, para o {saudacao} do texto da unidade. */
+  horaLocal?: number;
 }
 
 /** Manda a pergunta de confirmação pelo melhor canal disponível. Devolve por onde saiu. */
@@ -147,7 +160,9 @@ async function pedirConfirmacao(e: Envio): Promise<'chat_botoes' | 'texto' | 'te
   // Janela de 24 h: texto livre só chega se o paciente escreveu nesse período. Fora dela, o Kommo
   // aceita o envio e marca "Erro" depois — falha em silêncio.
   const oficiais = e.oficiais !== undefined ? e.oficiais : await mensagensOficiais(kommo, leadId, 15).catch(() => null);
-  const aberta = oficiais ? janelaAberta(oficiais) : true;
+  // WhatsApp Lite (QR code, ex.: Petrópolis): não existe a janela de 24 h — o texto chega sempre. Sem esta chave, o
+  // paciente que marcou há 3 dias e não escreveu desde então virava TAREFA de ligação em vez de receber a mensagem.
+  const aberta = e.daUnidade?.semJanela ? true : oficiais ? janelaAberta(oficiais) : true;
 
   // Arma o tratador da resposta: sem isto, o "1" ou o toque no botão do paciente chega como texto
   // solto no agente, que não sabe que perguntou nada.
@@ -190,16 +205,29 @@ async function pedirConfirmacao(e: Envio): Promise<'chat_botoes' | 'texto' | 'te
 
   // O nome vem do título do cartão, que a Sofia grava com o nome que o paciente disse. O do contato é o perfil
   // do WhatsApp ("Space Conv. Hookah", "Leily Espaço Diva" — Canaã, 19/10/2026): sem nome no título, vai "Oi!".
-  const texto = textoConfirmacaoD1({
-    nome: primeiroNomeDoPaciente(e.titulo, null),
-    quando: consulta.quando,
-    especialista: consulta.especialista,
-    endereco: unit.clinicAddress,
-    antecedencia: toque,
-  });
+  const modeloDaUnidade = e.daUnidade?.texto ?? null;
+  const texto = modeloDaUnidade
+    ? textoDaUnidade(modeloDaUnidade, {
+        quando: consulta.quando,
+        nome: primeiroNomeDoPaciente(e.titulo, null),
+        especialista: consulta.especialista,
+        endereco: unit.clinicAddress,
+        horaDoEnvio: e.horaLocal ?? 9,
+      })
+    : textoConfirmacaoD1({
+        nome: primeiroNomeDoPaciente(e.titulo, null),
+        quando: consulta.quando,
+        especialista: consulta.especialista,
+        endereco: unit.clinicAddress,
+        // no dia útil anterior a consulta pode ser segunda (pergunta na sexta): 'd2' tira o "de amanhã" do texto da rede
+        antecedencia: e.daUnidade?.diaUtil && consulta.quando.slice(0, 10) !== somarDias(agoraLocal(unit.spineTimezone || 'America/Sao_Paulo').dia, 1) ? 'd2' : toque,
+      });
 
   // Com os ids do chat, vai com botões (Confirmo · Preciso remarcar); sem eles, texto "responda 1 ou 2".
+  // O texto da UNIDADE vai como ela escreveu, sem botão, numa mensagem só: é a mensagem que a equipe já mandava à mão.
+  // Pelo chat direto ele não é cortado; o `sendChatReply` em modo bypass corta em 240 caracteres (3 bolhas no texto de Petrópolis).
   let via: 'chat_botoes' | 'texto' = 'texto';
+  let foiPeloChat = false;
   const ctx = await contextoDeChatDoLead(unit.id, leadId).catch(() => null);
   if (ctx) {
     try {
@@ -209,23 +237,33 @@ async function pedirConfirmacao(e: Envio): Promise<'chat_botoes' | 'texto' | 'te
         talkId: ctx.talkId,
         contactId: ctx.contactId,
         accountId: ctx.accountId,
-        texto: texto.replace(
-          /Responda \*1\* para confirmar ou \*2\* se precisar remarcar\. 😊/,
-          'Toca no botão aqui embaixo pra me avisar 😊',
-        ),
-        botoes: BOTOES_D1,
+        texto: modeloDaUnidade
+          ? texto
+          : texto.replace(/Responda \*1\* para confirmar ou \*2\* se precisar remarcar\. 😊/, 'Toca no botão aqui embaixo pra me avisar 😊'),
+        ...(modeloDaUnidade ? {} : { botoes: BOTOES_D1 }),
       });
-      via = 'chat_botoes';
+      foiPeloChat = true;
+      if (!modeloDaUnidade) via = 'chat_botoes';
     } catch (err) {
-      logger.warn({ unit: unit.slug, leadId, err: String(err) }, 'confirmação: botões falharam, indo em texto');
+      logger.warn({ unit: unit.slug, leadId, err: String(err) }, 'confirmação: chat direto falhou, indo pelo caminho de texto');
     }
   }
-  if (via !== 'chat_botoes') {
+  if (!foiPeloChat) {
     // `sendChatReply` cai para NOTA no cartão quando o chat recusa — e nota o paciente não lê.
     // Tratar isso como enviado faria o dedupe calar a próxima tentativa até depois da consulta.
     const r = await kommo.sendChatReply({ leadId, text: texto, chatId: null, talkId: null, contactId: null });
     if (r.via === 'lead_note') {
       logger.warn({ unit: unit.slug, leadId, toque }, 'confirmação: virou nota interna, o paciente NÃO recebeu');
+      // No dia útil anterior não há segunda chance: no dia seguinte a consulta já saiu dos dias-alvo. Vira tarefa de ligação.
+      if (e.daUnidade?.diaUtil) {
+        await kommo.createTask({
+          leadId,
+          text: textoAlertaSemJanela({ slug: unit.slug, nome: conv?.contactName, quando: consulta.quando }),
+          completeAt: Math.floor(Date.now() / 1000) + 60 * 60,
+        });
+        await marcar();
+        return 'tarefa';
+      }
       return 'nada';
     }
   }
@@ -257,7 +295,18 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
   // importados faz 10 mil chamadas à franquia antes de descartar quase todas.
   const amanha = somarDias(dia, 1);
   const depois = somarDias(dia, 2);
-  const diasAlvo = reforcoLiberado(unit.slug) ? [amanha, depois] : [amanha];
+  // Unidade no "dia útil anterior" (Petrópolis, 17/11/2026): um toque só, no último dia útil antes da consulta.
+  // Sexta confirma sábado, domingo e segunda; fim de semana e feriado não confirmam nada. Sem D-2.
+  const daUnidade = confirmacaoDaUnidade(
+    unit.slug,
+    automacaoLigada(unit.slug, ID_CONFIRMACAO_DIA_UTIL, process.env.CONFIRMACAO_DIA_UTIL_SLUGS),
+  );
+  const diaUtil = daUnidade?.diaUtil === true;
+  const diasAlvo = diaUtil ? diasQueConfirmamHoje(dia) : reforcoLiberado(unit.slug) ? [amanha, depois] : [amanha];
+  if (!diasAlvo.length) {
+    ultimoEnvioPorUnidade.set(unit.id, dia);
+    return;
+  }
   const links = await prisma.spineLeadLink.findMany({
     where: {
       unitId: unit.id,
@@ -290,7 +339,8 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
       conta.pulados++;
       continue;
     }
-    const toque = toqueDoDia(consulta.quando.slice(0, 10), dia);
+    const diaDaConsulta = consulta.quando.slice(0, 10);
+    const toque: Toque | null = diaUtil ? (diaUtilAnterior(diaDaConsulta) === dia ? 'd1' : null) : toqueDoDia(diaDaConsulta, dia);
     if (!toque) continue;
     if (toque === 'd2' && !reforcoLiberado(unit.slug)) continue;
     if (toque === 'd1' && vesperaDoKommo !== 'desligado') {
@@ -359,6 +409,16 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
         continue;
       }
 
+      // Pendência 3 de Petrópolis (17/11): quem já confirmou não recebe a pergunta. Depois da desistência: quem
+      // confirmou e depois escreveu "não vou poder" precisa da tarefa (caso Milena/Leomar). Ver `confirmacao-unidade.ts`.
+      const confirmado = daUnidade?.pularConfirmada ? jaConfirmou({ idStatus: consulta.idStatus, oficiais }) : null;
+      if (confirmado) {
+        conta.ja_confirmou++;
+        await marcarAviso(unit.id, link.kommoLeadId, chave);
+        logger.info({ unit: unit.slug, kommoLeadId: link.kommoLeadId, quando: consulta.quando, motivo: confirmado }, 'confirmação: já confirmou, não sai');
+        continue;
+      }
+
       // O Salesbot de lembrete da unidade diz "sua consulta está garantida" — só serve para quem
       // JÁ respondeu confirmando. Quem não respondeu precisa da pergunta.
       const conv = await prisma.conversation.findFirst({
@@ -421,6 +481,8 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
         chave,
         titulo: lead?.name ?? null,
         oficiais,
+        daUnidade,
+        horaLocal: hora,
       });
       conta[via]++;
       if (toque === 'd2') conta.d2++;
