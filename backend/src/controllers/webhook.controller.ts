@@ -1762,7 +1762,7 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
     const calar = await portaPacienteEmTratamento({ unit, leadId, contactId, humanMessage: semAReferencia(humanMessage) });
     if (calar?.decisao.calar) {
       const d = calar.decisao;
-      const rotulo = d.motivo === 'numero_interno' ? 'número interno' : 'paciente em tratamento na franquia';
+      const rotulo = d.motivo === 'numero_interno' ? 'número interno' : d.motivo === 'nao_paciente' ? 'não-paciente marcado pela equipe' : 'paciente em tratamento na franquia';
       if (calar.estado === 'seco') {
         await recorder.step({
           kind: 'THINKING',

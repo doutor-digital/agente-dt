@@ -53,7 +53,7 @@ export type SinalDaFranquia =
 
 export type Decisao =
   | { calar: false; motivo: 'segue' | 'ja_tem_idclient' | 'fora_do_comercial' | 'franquia_sem_resposta' }
-  | { calar: true; motivo: 'numero_interno' | 'paciente_em_tratamento'; detalhe: string };
+  | { calar: true; motivo: 'numero_interno' | 'paciente_em_tratamento' | 'nao_paciente'; detalhe: string };
 
 export interface EntradaDaDecisao {
   interno: boolean;
@@ -159,6 +159,16 @@ export async function consultarFranquia(
 export function notaPacienteEmTratamento(mensagem: string): string {
   const t = mensagem.replace(/\s+/g, ' ').trim();
   return `🤫 Paciente em tratamento na franquia — a equipe responde.${t ? ` Disse: "${t.slice(0, 140)}${t.length > 140 ? '…' : ''}"` : ''}`;
+}
+
+/** Telefone marcado como NÃO-PACIENTE pela equipe (automação nao-paciente-manual): motivo e caminho de desfazer próprios. */
+export const REGRA_NOTA_NAO_PACIENTE = 'nao-paciente-telefone';
+export function notaNaoPaciente(mensagem: string): string {
+  const t = mensagem.replace(/\s+/g, ' ').trim();
+  return (
+    `🤫 Este telefone foi marcado como NÃO-PACIENTE (funcionário/currículo) em outro cartão — a Sofia não responde.` +
+    `${t ? ` Disse: "${t.slice(0, 140)}${t.length > 140 ? '…' : ''}"` : ''} Se for paciente, avise a Doutor Digital para desmarcar.`
+  );
 }
 
 export function notaNumeroInterno(mensagem: string): string {
