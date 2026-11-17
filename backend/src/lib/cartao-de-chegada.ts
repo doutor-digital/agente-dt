@@ -27,6 +27,22 @@ export function consultaMarcadaNoTurno(traceId: string): boolean {
   return marcados.delete(traceId);
 }
 
+/**
+ * O turno mexeu na agenda (remarcar ou cancelar)? Marca separada da de cima — não manda cartão de chegada —, só para a
+ * trava de antes de enviar NÃO calar a confirmação da remarcação/cancelamento (chave `handoff-calado`, #393).
+ * Não consome: a trava lê, e a marca expira sozinha.
+ */
+const agendaMexida = new Map<string, number>();
+export function marcarAgendaMexidaNoTurno(traceId: string): void {
+  const agora = Date.now();
+  for (const [k, em] of agendaMexida) if (agora - em > TTL_MS) agendaMexida.delete(k);
+  agendaMexida.set(traceId, agora);
+}
+export function agendaMexidaNoTurno(traceId: string): boolean {
+  const em = agendaMexida.get(traceId);
+  return em !== undefined && Date.now() - em <= TTL_MS;
+}
+
 export function legendaDoCartao(unit: Pick<Unit, 'clinicAddress' | 'clinicMapUrl'>): string | null {
   const endereco = (unit.clinicAddress ?? '').trim();
   const mapa = (unit.clinicMapUrl ?? '').trim();

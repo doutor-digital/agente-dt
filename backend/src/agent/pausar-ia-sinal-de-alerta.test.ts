@@ -180,6 +180,17 @@ test('handoff-calado (#393): pausar_ia grava a origem — sinal de alerta = "ale
   assert.equal(handoffDaSofiaDesde(u, 51, inicio), false, 'o alerta não é handoff comum');
   await ferramenta('pausar_ia', u).invoke({ leadId: 52, motivo: 'paciente pediu para falar com um atendente' });
   assert.equal(handoffDaSofiaDesde(u, 52, inicio), true);
+  // o modelo esqueceu a flag, mas o motivo tem cara de sinal: origem 'alerta' (nunca calado)
+  for (const [lead, motivo] of [
+    [53, 'paciente confirmou que a perna falha às vezes'],
+    [54, 'paciente perguntou se deve ir ao pronto-socorro'],
+    [55, 'paciente disse que vai para a UPA'],
+    [56, 'paciente quer ir ao hospital agora'],
+  ] as const) {
+    await ferramenta('pausar_ia', u).invoke({ leadId: lead, motivo });
+    assert.equal(handoffDaSofiaDesde(u, lead, inicio), false, motivo);
+    assert.equal(pausouSozinhaDesde(u, lead, inicio), true, motivo);
+  }
 });
 
 test('a regra da unidade já criou a tarefa urgente no turno: não duplica', async () => {

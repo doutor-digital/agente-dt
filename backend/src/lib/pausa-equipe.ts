@@ -42,6 +42,7 @@ import { registrarSimulacao, type Simulacao } from './so-no-papel.js';
 import { emPausa } from './pausa-unidade.js';
 import { leadPausadoPorJanela } from './pausa-lead.js';
 import { handoffDaSofiaDesde, pausouSozinhaDesde } from './pausa-propria.js';
+import { citaProntoSocorro } from '../agent/sinal-de-alerta.js';
 import { registrarPausaDaEquipe } from './pausa-equipe-registro.js';
 import { createKommoClient, isLeadPaused } from '../services/kommo.service.js';
 import { enviosDaSofia, mensagensOficiaisDaUnidade, ultimaCutucadaDoLead, type MensagemOficial } from '../services/kommo-talks.service.js';
@@ -327,6 +328,9 @@ export function handoffCaladoNaUnidade(unit: Pick<Unit, 'slug'>): boolean {
   return automacaoLigada(unit.slug, 'handoff-calado', process.env.HANDOFF_CALADO_SLUGS);
 }
 
+/** Resposta que fala de urgência (pronto-socorro, UPA, hospital, SAMU, 192, emergência): o handoff calado nunca a cala. */
+const RESPOSTA_DE_URGENCIA = /pronto[\s-]?socorro|\bupa\b|\bhospital\b|\bsamu\b|\b192\b|\bemerg[eê]ncia\b/i;
+
 /** O motivo do descarte pelo handoff calado — o webhook o reconhece para mover a etapa do handoff mesmo assim. */
 export const MOTIVO_HANDOFF_CALADO = 'a Sofia passou o atendimento para a equipe e esta unidade pede que o paciente não seja avisado';
 
@@ -359,7 +363,16 @@ export const DEPS_ANTES_DE_ENVIAR_PADRAO: DepsAntesDeEnviar = {
  * tem de sair. Falha em qualquer leitura = não trava (o comportamento de antes).
  */
 export async function travaAntesDeEnviar(
-  args: { unit: Unit; leadId: number; inicioDoTurno: number; resposta: string; marcouConsulta?: boolean; recorder?: Recorder },
+  args: {
+    unit: Unit;
+    leadId: number;
+    inicioDoTurno: number;
+    resposta: string;
+    marcouConsulta?: boolean;
+    /** O turno remarcou ou cancelou a consulta (só para o handoff calado não calar a confirmação). */
+    mexeuNaAgenda?: boolean;
+    recorder?: Recorder;
+  },
   deps: DepsAntesDeEnviar = DEPS_ANTES_DE_ENVIAR_PADRAO,
 ): Promise<string | null> {
   const { unit, leadId, inicioDoTurno, resposta, recorder } = args;
@@ -408,7 +421,17 @@ export async function travaAntesDeEnviar(
   // Por último, para não esconder a pausa da equipe/recepção: a Sofia passou para a equipe neste turno (handoff
   // COMUM) e a unidade quer o handoff SEM aviso ao paciente. Nunca cala: sinal de alerta (regra de 26/10 vale mais
   // que a unidade), teto de gasto, candidato a vaga e turno em que ela MARCOU consulta.
-  if (!motivo && !args.marcouConsulta && deps.handoffDaSofia(unit, leadId, inicioDoTurno) && deps.handoffCalado(unit)) {
+  // Também nunca cala: turno que remarcou/cancelou (mexeuNaAgenda) e resposta que fala de pronto-socorro/UPA/hospital/
+  // SAMU/emergência (alerta que o modelo esqueceu de marcar — "pode ir, a equipe já foi avisada" tem de sair).
+  if (
+    !motivo &&
+    !args.marcouConsulta &&
+    !args.mexeuNaAgenda &&
+    !citaProntoSocorro(resposta) &&
+    !RESPOSTA_DE_URGENCIA.test(resposta) &&
+    deps.handoffDaSofia(unit, leadId, inicioDoTurno) &&
+    deps.handoffCalado(unit)
+  ) {
     motivo = MOTIVO_HANDOFF_CALADO;
   }
 

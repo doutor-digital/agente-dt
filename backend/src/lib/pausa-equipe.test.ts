@@ -311,6 +311,24 @@ test('handoff calado: 2º pausar_ia sem sinal no mesmo turno NÃO rebaixa o aler
   assert.equal(await travaAntesDeEnviar({ unit: unidade, leadId: LEAD, inicioDoTurno: INICIO, resposta: 'aviso do alerta' }, deps), null);
 });
 
+test('handoff calado NUNCA cala: remarcou/cancelou no turno, ou a resposta fala de pronto-socorro/UPA/hospital (alerta não marcado)', async () => {
+  const casos: Array<{ resposta: string; mexeuNaAgenda?: boolean }> = [
+    { resposta: 'Pronto, troquei sua consulta para quinta às 9h!', mexeuNaAgenda: true },
+    { resposta: 'Cancelei sua consulta, tudo certo.', mexeuNaAgenda: true },
+    { resposta: 'Pode ir ao pronto-socorro sim, a equipe já foi avisada.' }, // "paciente perguntou se deve ir ao PS"
+    { resposta: 'Pode ir à UPA, nossa equipe já foi avisada.' }, // "paciente disse que vai para a UPA"
+    { resposta: 'Pode ir ao hospital agora, a equipe já está sabendo.' }, // "paciente quer ir ao hospital agora"
+  ];
+  for (const c of casos) {
+    _limparPausasProprias();
+    registrarPausaPropria(unidade, LEAD, INICIO + 5_000, 'handoff'); // o modelo não marcou o sinal: origem comum
+    const { deps, chamadas } = depsFalsas(calado);
+    const motivo = await travaAntesDeEnviar({ unit: unidade, leadId: LEAD, inicioDoTurno: INICIO, resposta: c.resposta, mexeuNaAgenda: c.mexeuNaAgenda }, deps);
+    assert.equal(motivo, null, c.resposta);
+    assert.equal(chamadas.notas.length, 0, c.resposta);
+  }
+});
+
 test('handoff calado ligado, mas a Sofia NÃO pausou neste turno → a resposta normal sai', async () => {
   _limparPausasProprias();
   const { deps, chamadas } = depsFalsas(calado);

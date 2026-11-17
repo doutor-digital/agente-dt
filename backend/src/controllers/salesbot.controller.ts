@@ -12,7 +12,7 @@ import { addMessage, upsertConversation } from '../services/conversations.servic
 import { createKommoClient, isLeadPaused } from '../services/kommo.service.js';
 import { leadPausadoPorJanela } from '../lib/pausa-lead.js';
 import { portaDaEquipe, travaAntesDeEnviar } from '../lib/pausa-equipe.js';
-import { consultaMarcadaNoTurno } from '../lib/cartao-de-chegada.js';
+import { agendaMexidaNoTurno, consultaMarcadaNoTurno } from '../lib/cartao-de-chegada.js';
 import { garantirTituloPadrao } from '../lib/titulo-padrao.js';
 import { telefoneDeFamiliarNoCartao } from '../lib/telefone-de-familiar.js';
 import { blocoDaConversaOficial } from '../lib/conversa-oficial.js';
@@ -279,6 +279,7 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
           resposta: pronta,
           // a confirmação de consulta marcada neste turno nunca é calada (handoff-calado); aqui não há cartão de chegada
           marcouConsulta: consultaMarcadaNoTurno(trace.id),
+          mexeuNaAgenda: agendaMexidaNoTurno(trace.id),
           recorder,
         }).catch(() => null)
       : null;

@@ -65,7 +65,7 @@ import { eventoDeConversao } from '../lib/conversao-por-etapa.js';
 import { blocoDaConversaOficial } from '../lib/conversa-oficial.js';
 import { extrairBotoes } from '../lib/botoes.js';
 import { tentarBotoes } from '../lib/resposta-com-botoes.js';
-import { consultaMarcadaNoTurno, enviarCartaoDeChegada } from '../lib/cartao-de-chegada.js';
+import { agendaMexidaNoTurno, consultaMarcadaNoTurno, enviarCartaoDeChegada } from '../lib/cartao-de-chegada.js';
 import { descreverPausa, emPausa } from '../lib/pausa-unidade.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
 import { voltarDaEsperaSeRespondeu } from '../lib/parados-worker.js';
@@ -1950,6 +1950,7 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
           inicioDoTurno,
           resposta: reply,
           marcouConsulta: marcouConsultaNoTurno,
+          mexeuNaAgenda: agendaMexidaNoTurno(traceId),
           recorder,
         }).catch((err) => {
           logger.warn({ err: String(err), leadId, unit: unit.slug }, 'trava antes de enviar falhou (segue enviando)');

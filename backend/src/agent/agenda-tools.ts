@@ -14,7 +14,7 @@ import { AgendaReconcileService } from '../services/agenda-reconcile.service.js'
 import { registrarTempoAteAgendamento } from '../services/lead-metrics.service.js';
 import { avisoDeConsultaExistente, consultasFuturas } from './consulta-existente.js';
 import { dataDaConfirmacao, dataPorExtenso, feriadoNacional } from '../lib/feriados.js';
-import { marcarConsultaNoTurno } from '../lib/cartao-de-chegada.js';
+import { marcarAgendaMexidaNoTurno, marcarConsultaNoTurno } from '../lib/cartao-de-chegada.js';
 import { CAMPO_FEITO_POR, CAMPO_SITUACAO_CONSULTA, comMarcacaoEmCurso, registrarMarcacaoDaIa } from '../lib/marcacao-da-ia-no-turno.js';
 import { conferirConsultaDePe, type PossivelDuplicado } from '../lib/consulta-em-outro-cadastro.js';
 import { abrirTarefaParaEquipe } from './confirmacao-so-com-crm.js';
@@ -959,6 +959,8 @@ export function buildCancelarConsulta({ unit, recorder }: Contexto) {
         .describe('true SOMENTE depois de o paciente confirmar que quer cancelar.'),
     }),
     func: async (args: { leadId: number; confirmado?: boolean }) => {
+      // handoff-calado (#393): turno que mexe na agenda nunca tem o aviso calado (do lado seguro: marca já na tentativa)
+      if (args.confirmado) marcarAgendaMexidaNoTurno(recorder.traceId);
       const fresca = (await unidadeFresca(unit.id)) ?? unit;
       // Kommo dividido (Petrópolis + Caxias): a agenda pela IA ainda não separa as unidades — não lê nem escreve.
       const contaDividida = await travaDaAgendaDaIa(fresca);
@@ -1122,6 +1124,8 @@ export function buildRemarcarConsulta(ctx: Contexto) {
       hora: z.string().regex(/^\d{2}:\d{2}$/).describe('Novo horário HH:mm.'),
     }),
     func: async (args: { leadId: number; idClient: number; data: string; hora: string }) => comMarcacaoEmCurso(recorder.traceId, async () => {
+      // handoff-calado (#393): turno que mexe na agenda nunca tem o aviso calado (do lado seguro: marca já na tentativa)
+      marcarAgendaMexidaNoTurno(recorder.traceId);
       const fresca = (await unidadeFresca(unit.id)) ?? unit;
       // Kommo dividido (Petrópolis + Caxias): a agenda pela IA ainda não separa as unidades — não lê nem escreve.
       const contaDividida = await travaDaAgendaDaIa(fresca);
