@@ -38,7 +38,7 @@ export function listaDoPiloto(slug: string, env: NodeJS.ProcessEnv = process.env
 
 /** A unidade tem entrada em `IA_NUMEROS_DE_TESTE` (mesmo `*` ou vazia)? É o que a faz "protegida" quando o banco está fora. */
 export function temEntradaNoPiloto(slug: string, env: NodeJS.ProcessEnv = process.env): boolean {
-  return (env.IA_NUMEROS_DE_TESTE ?? '').split(/[;\n]/).some((e) => {
+  return (env.IA_NUMEROS_DE_TESTE ?? '').split(/[;\n/]/).some((e) => {
     const i = e.indexOf('=');
     return i > 0 && e.slice(0, i).trim() === slug;
   });

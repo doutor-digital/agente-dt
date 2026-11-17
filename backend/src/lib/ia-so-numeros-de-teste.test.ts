@@ -16,6 +16,8 @@ test('a lista é PRÓPRIA (IA_NUMEROS_DE_TESTE): slug=telefones; sem entrada nin
   assert.equal(listaDoPiloto('magalhaes-advocacia', {} as NodeJS.ProcessEnv).size, 0);
   assert.equal(temEntradaNoPiloto('magalhaes-advocacia', env(`magalhaes-advocacia=${JOAO}`)), true);
   assert.equal(temEntradaNoPiloto('magalhaes-advocacia', env('outra=1')), false);
+  assert.equal(temEntradaNoPiloto('magalhaes-advocacia', env(`doutor-hernia-canaa=${JOAO}/magalhaes-advocacia=${JOAO}`)), true, '"/" separa como ";" (formato do .env): a unidade depois da barra fica protegida');
+  assert.deepEqual([...listaDoPiloto('magalhaes-advocacia', env(`doutor-hernia-canaa=5563992021043/magalhaes-advocacia=${JOAO}`))], [JOAO]);
 });
 
 test('`*` NÃO ABRE a IA: nem em IA_NUMEROS_DE_TESTE (vira lista vazia) nem pela lista do disparo (DISPARO_LISTA_DE_TESTE é ignorada)', async () => {
