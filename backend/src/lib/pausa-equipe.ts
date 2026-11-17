@@ -366,12 +366,7 @@ export async function travaAntesDeEnviar(
   const propria = deps.pausouSozinha(unit, leadId, inicioDoTurno);
   let motivo: string | null = null;
 
-  if (!args.marcouConsulta && deps.handoffDaSofia(unit, leadId, inicioDoTurno) && deps.handoffCalado(unit)) {
-    // A Sofia passou para a equipe neste turno (handoff comum) e a unidade quer o handoff SEM aviso ao paciente.
-    // Nunca cala: sinal de alerta (regra de 26/10 vale mais que a unidade), teto de gasto, candidato a vaga
-    // e turno em que ela MARCOU consulta (a confirmação é a única coisa que o paciente recebe).
-    motivo = MOTIVO_HANDOFF_CALADO;
-  } else if (!propria && (await deps.unidadeEmPausa(unit))) {
+  if (!propria && (await deps.unidadeEmPausa(unit))) {
     motivo = 'a IA da unidade foi pausada enquanto a Sofia respondia';
   } else if (await deps.pausaComData(unit, leadId).catch(() => false)) {
     motivo = 'a Sofia foi pausada neste cartão (pausa com data) enquanto respondia';
@@ -408,6 +403,13 @@ export async function travaAntesDeEnviar(
         }
       }
     }
+  }
+
+  // Por último, para não esconder a pausa da equipe/recepção: a Sofia passou para a equipe neste turno (handoff
+  // COMUM) e a unidade quer o handoff SEM aviso ao paciente. Nunca cala: sinal de alerta (regra de 26/10 vale mais
+  // que a unidade), teto de gasto, candidato a vaga e turno em que ela MARCOU consulta.
+  if (!motivo && !args.marcouConsulta && deps.handoffDaSofia(unit, leadId, inicioDoTurno) && deps.handoffCalado(unit)) {
+    motivo = MOTIVO_HANDOFF_CALADO;
   }
 
   if (!motivo) return null;

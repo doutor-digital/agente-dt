@@ -33,7 +33,11 @@ export function registrarPausaPropria(
   origem: OrigemPausaPropria = 'outra',
 ): void {
   if (leadId === null || leadId === undefined || leadId === '') return;
-  marcas.set(chave(conta, leadId), { t: agora, origem });
+  // Uma vez 'alerta', não rebaixa: um 2º pausar_ia sem sinal no mesmo turno não pode calar o aviso do alerta.
+  const k = chave(conta, leadId);
+  const antes = marcas.get(k);
+  const manterAlerta = antes?.origem === 'alerta' && agora - antes.t < VALIDADE_MS;
+  marcas.set(k, { t: agora, origem: manterAlerta ? 'alerta' : origem });
   if (marcas.size > 5_000) {
     for (const [k, m] of marcas) if (agora - m.t > VALIDADE_MS) marcas.delete(k);
   }

@@ -32,6 +32,7 @@ import {
   ETIQUETA_PRIORIDADE,
   renderSinalDeAlerta,
   sinalNaFala,
+  sequelaDeAvcNaFrase,
   soFalaDoPaciente,
   TAREFA_URGENTE,
   textoDoAvisoUrgente,
@@ -592,4 +593,21 @@ test('4015148: o sinal de AGORA continua parando, com ou sem AVC antigo na conve
   ]) {
     assert.notEqual(sinalNaFala([f]), null, f);
   }
+});
+
+test('4015148 (revisão do sênior): AVC antigo NÃO desliga o sinal fora da mesma frase, de terceiro, derrame articular, ano corrente', () => {
+  const casos: string[][] = [
+    ['Minha mãe teve AVC ano passado.', 'Estou com a perna fraca'],
+    ['meu pai teve derrame em 2019, ele está bem', 'minha perna está perdendo força'],
+    ['tive AVC ano passado.', 'minha perna está perdendo força'],
+    ['dor nas costas há 2 anos e tive um AVC há 3 dias, a perna ficou fraca'],
+    ['tive AVC há 2 anos. A boca entortou essa manhã'],
+    ['derrame no joelho há 2 anos. minha perna está perdendo força'],
+    ['tive um derrame no joelho há 2 anos e a perna ficou fraca'],
+    ['minha mãe teve AVC há 2 anos e minha perna ficou fraca'],
+  ];
+  for (const falas of casos) assert.notEqual(sinalNaFala(falas), null, falas.join(' | '));
+  // "em <ano corrente>" não é passado
+  assert.equal(sequelaDeAvcNaFrase('tive AVC em 2026 e a perna ficou fraca', 2026), false);
+  assert.equal(sequelaDeAvcNaFrase('tive AVC em 2019 e a perna ficou fraca', 2026), true);
 });

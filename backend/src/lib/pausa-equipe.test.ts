@@ -294,6 +294,15 @@ test('handoff calado NUNCA cala: sinal de alerta, teto/candidato (origem "outra"
   assert.equal(motivo, null, 'a confirmação da consulta marcada no turno sai');
 });
 
+test('handoff calado: 2º pausar_ia sem sinal no mesmo turno NÃO rebaixa o alerta (o aviso do alerta sai)', async () => {
+  _limparPausasProprias();
+  registrarPausaPropria(unidade, LEAD, INICIO + 5_000, 'alerta');
+  registrarPausaPropria(unidade, LEAD, INICIO + 6_000, 'handoff');
+  assert.equal(handoffDaSofiaDesde(unidade, LEAD, INICIO), false);
+  const { deps } = depsFalsas(calado);
+  assert.equal(await travaAntesDeEnviar({ unit: unidade, leadId: LEAD, inicioDoTurno: INICIO, resposta: 'aviso do alerta' }, deps), null);
+});
+
 test('handoff calado ligado, mas a Sofia NÃO pausou neste turno → a resposta normal sai', async () => {
   _limparPausasProprias();
   const { deps, chamadas } = depsFalsas(calado);
