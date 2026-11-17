@@ -65,20 +65,43 @@ test('referenciaDoAtraso: tarefa da madrugada conta o atraso a partir das 8h; a 
   assert.equal(R.referenciaDoAtraso({ quando, confirmadaEm: null }, SP, J).toISOString(), oito.toISOString());
   const conf = new Date(oito.getTime() + 5 * 3_600_000);
   assert.equal(R.referenciaDoAtraso({ quando, confirmadaEm: conf }, SP, J).toISOString(), conf.toISOString());
+  // confirmada às 20h30 (fora do horário): conta das 8h do dia seguinte, não das 20h30
+  const noite = R.localParaUtc('2026-11-19T20:30', SP)!;
+  assert.equal(R.referenciaDoAtraso({ quando, confirmadaEm: noite }, SP, J).toISOString(), R.localParaUtc('2026-11-20T08:00', SP)!.toISOString());
   assert.equal(R.referenciaDoAtraso({ quando, confirmadaEm: new Date(oito.getTime() - 1000) }, SP, J).toISOString(), oito.toISOString(), 'confirmação antiga não adianta nada');
 });
 
 test('janela de 24 h: o texto livre só é garantido se o paciente escreveu há pouco; caixa que não é oficial não tem janela', () => {
   const quando = new Date('2026-11-18T15:00:00Z');
   const ha = (h: number) => new Date(quando.getTime() - h * 3_600_000);
-  assert.equal(R.janelaGarantida(ha(2), quando, true), true);
-  assert.equal(R.janelaGarantida(ha(21), quando, true), true, '21 h + 2 h de margem ainda cabe em 23h45');
-  assert.equal(R.janelaGarantida(ha(22), quando, true), false, '22 h + 2 h de margem passa de 23h45: exige modelo');
-  assert.equal(R.janelaGarantida(null, quando, true), false, 'nunca escreveu: só por modelo');
-  assert.equal(R.janelaGarantida(null, quando, false), true, 'caixa do celular/API: sem janela');
-  const desde = R.modeloAPartirDe(ha(2))!;
-  assert.equal(desde.getTime(), ha(2).getTime() + 24 * 3_600_000 - 15 * 60_000 - 2 * 3_600_000);
-  assert.equal(R.modeloAPartirDe(null), null);
+  assert.equal(R.janelaGarantida(ha(2), quando, true, SP, J), true);
+  assert.equal(R.janelaGarantida(ha(21), quando, true, SP, J), true, '21 h + 2 h de margem ainda cabe em 23h45');
+  assert.equal(R.janelaGarantida(ha(22), quando, true, SP, J), false, '22 h + 2 h de margem passa de 23h45: exige modelo');
+  assert.equal(R.janelaGarantida(null, quando, true, SP, J), false, 'nunca escreveu: só por modelo');
+  assert.equal(R.janelaGarantida(null, quando, false, SP, J), true, 'caixa do celular/API: sem janela');
+  // o limite coincide com o horário da janela quando ele cai dentro do horário de falar com o paciente (15h de SP aqui)
+  const desde = R.modeloAPartirDe(quando, SP, J)!; // paciente escreveu às 12h de SP: o limite é 09h45 do dia seguinte
+  assert.equal(desde.getTime(), quando.getTime() + 24 * 3_600_000 - 15 * 60_000 - 2 * 3_600_000);
+  assert.equal(R.modeloAPartirDe(null, SP, J), null);
+});
+
+test('janela de 24 h e horário juntos: marcada para as 20h30, a mensagem só sai às 8h do dia seguinte — é nessa hora que a janela precisa estar aberta', () => {
+  // o paciente escreveu às 07h00 do dia 18; a menina marca TEXTO LIVRE para as 20h30 do mesmo dia (15,5 h depois: parece caber)
+  const ultima = R.localParaUtc('2026-11-18T07:00', SP)!;
+  const marcada = R.localParaUtc('2026-11-18T20:30', SP)!;
+  assert.equal(R.janelaGarantida(ultima, marcada, true, SP, J), false, 'sairia às 8h do dia 19, 25 h depois: exige modelo');
+  assert.equal(R.janelaGarantida(ultima, R.localParaUtc('2026-11-18T19:00', SP)!, true, SP, J), true, 'às 19h ainda sai no mesmo dia (12 h + margem)');
+  // o limite que a tela usa: a janela vence às 04h45 do dia 19 (fora do horário) → vale o fechamento das 20h do dia 18
+  assert.equal(R.modeloAPartirDe(ultima, SP, J)!.toISOString(), R.localParaUtc('2026-11-18T20:00', SP)!.toISOString());
+  // limite DEPOIS das 20h (22h45): o último fechamento é as 20h do mesmo dia
+  const tarde = R.localParaUtc('2026-11-18T01:00', SP)!;
+  assert.equal(R.modeloAPartirDe(tarde, SP, J)!.toISOString(), R.localParaUtc('2026-11-18T20:00', SP)!.toISOString(), 'limite às 22h45 → fecha às 20h do mesmo dia');
+  // a conta da tela e a do servidor concordam em todo o dia: marcado antes do limite = garantido; no limite ou depois = exige modelo
+  const limite = R.modeloAPartirDe(ultima, SP, J)!;
+  for (let min = -600; min <= 1500; min += 15) {
+    const q = new Date(limite.getTime() + min * 60_000);
+    assert.equal(R.janelaGarantida(ultima, q, true, SP, J), q < limite, q.toISOString());
+  }
 });
 
 test('escolherVia: texto se a janela está aberta; senão o modelo; sem nenhum dos dois, não sai', () => {
@@ -125,9 +148,10 @@ test('problemaNoPedido: mensagem precisa de texto ou modelo; modelo confere vari
 
 test('telefoneDaMenina: DDD + número viram 55…; o que não é telefone é recusado', () => {
   assert.equal(R.telefoneDaMenina('(94) 99999-0000'), '5594999990000');
-  assert.equal(R.telefoneDaMenina('+55 94 3333-0000'), '559433330000');
   assert.equal(R.telefoneDaMenina('5594999990000'), '5594999990000');
-  for (const v of ['', 'abc', '99999-0000', '123', '+1 415 555 0100', null, undefined]) assert.equal(R.telefoneDaMenina(v), null, String(v));
+  assert.equal(R.telefoneDaMenina('+55 94 99999-0000'), '5594999990000');
+  // a mesma regra do disparo: fixo não tem WhatsApp, DDD inventado não vale, número de outro país não entra
+  for (const v of ['', 'abc', '99999-0000', '123', '+1 415 555 0100', '+55 94 3333-0000', '(00) 99999-0000', null, undefined]) assert.equal(R.telefoneDaMenina(v), null, String(v));
   assert.equal(R.telefoneMascarado('5594999990000'), '…0000');
 });
 

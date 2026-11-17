@@ -40,8 +40,9 @@ test('as travas do armazém: pegar só pendente, lembrar só quem nunca foi lemb
   const pedidos: Array<{ op: string; a: any }> = [];
   falso('crmTarefa', { updateMany: async (a: unknown) => (pedidos.push({ op: 'updateMany', a }), { count: 1 }), findMany: async (a: unknown) => (pedidos.push({ op: 'findMany', a }), []) });
   const arm = W.armazemDoBanco();
-  assert.equal(await arm.pegar('t1', AGORA), true);
-  assert.deepEqual(pedidos[0]!.a, { where: { id: 't1', estado: 'pendente' }, data: { estado: 'enviando', tentativaEm: AGORA } });
+  const lida = new Date('2026-11-18T17:59:00Z');
+  assert.equal(await arm.pegar('t1', AGORA, lida), true);
+  assert.deepEqual(pedidos[0]!.a, { where: { id: 't1', estado: 'pendente', atualizadoEm: lida }, data: { estado: 'enviando', tentativaEm: AGORA } }, 'só pega se a tarefa continua como foi lida (edição no meio do ciclo = larga)');
   assert.equal(await arm.pegarLembrete('t1', AGORA), true);
   assert.deepEqual(pedidos[1]!.a, { where: { id: 't1', estado: 'pendente', lembreteEm: null }, data: { lembreteEm: AGORA } });
   assert.equal(await arm.anotarSimulado('t1', 'x'.repeat(500), AGORA), true);
@@ -51,7 +52,7 @@ test('as travas do armazém: pegar só pendente, lembrar só quem nunca foi lemb
   assert.deepEqual(pedidos[3]!.a.where, { id: 't1', estado: { in: ['enviando'] } });
   // «count: 0» = outra réplica já mexeu: quem chamou NÃO segue
   falso('crmTarefa', { updateMany: async () => ({ count: 0 }) });
-  assert.equal(await W.armazemDoBanco().pegar('t1', AGORA), false);
+  assert.equal(await W.armazemDoBanco().pegar('t1', AGORA, AGORA), false);
   assert.equal(await W.armazemDoBanco().pegarLembrete('t1', AGORA), false);
 });
 
@@ -63,7 +64,7 @@ test('o que o robô busca: só pendente que já passou da hora; no seco pula as 
   });
   const arm = W.armazemDoBanco();
   await arm.unidadesComVencidas(AGORA);
-  assert.deepEqual(pedidos[0].where, { estado: 'pendente', quando: { lte: AGORA } });
+  assert.deepEqual(pedidos[0].where, { estado: 'pendente', quando: { lte: AGORA }, OR: [{ tipo: 'mensagem' }, { lembreteEm: null }] });
   await arm.vencidas('u1', AGORA, true, 100);
   assert.deepEqual(pedidos[1].where, { unitId: 'u1', estado: 'pendente', quando: { lte: AGORA }, OR: [{ tipo: 'mensagem' }, { lembreteEm: null }], simuladoEm: null });
   await arm.vencidas('u1', AGORA, false, 100);

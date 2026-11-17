@@ -194,6 +194,8 @@ function preparar() {
   mock.method(globalThis, 'fetch', (async (url: string, o: never) => (String(url).startsWith(base) ? fetchReal(url, o) : chatwootDeMentira()(url, o))) as never);
   falso('unit', { findUnique: async (a: { where: { slug: string } }) => (a.where.slug === PARAU ? { id: 'u1', slug: PARAU, name: 'Doutor Hérnia Parauapebas', isActive: true, spineTimezone: 'America/Belem' } : null) });
   falso('unitAutomacao', { findMany: async () => [] });
+  if (!originais.has('$transaction')) originais.set('$transaction', Object.getOwnPropertyDescriptor(prisma, '$transaction'));
+  Object.defineProperty(prisma, '$transaction', { value: async (fn: (tx: unknown) => unknown) => fn(prisma), configurable: true, writable: true });
   falso('crmTarefa', {
     findMany: async (a: { where: Linha }) => (consultas.push(a.where), tarefas.filter((t) => bate(t, a.where))),
     findFirst: async (a: { where: Linha }) => (consultas.push(a.where), tarefas.find((t) => bate(t, a.where)) ?? null),

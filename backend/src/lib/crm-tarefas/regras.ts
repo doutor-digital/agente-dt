@@ -5,7 +5,7 @@
  */
 import { FOLGA_DA_JANELA_MS, JANELA_24H_MS, janelaDe24hAberta } from '../chatwoot-regua.js';
 import { fusoValido, offsetMinutosNoFuso, partesNoFuso, FUSO_PADRAO } from '../fuso.js';
-import { primeiroNomeSeguro, problemaNoModelo } from '../disparo/regras.js';
+import { primeiroNomeSeguro, problemaNoModelo, telefoneWhatsapp } from '../disparo/regras.js';
 
 /** O id desta automação no catálogo (`lib/automacoes.ts`) e a lista do `.env` (quem está LIGADO). */
 export const AUTOMACAO_TAREFAS = 'chatwoot-tarefas';
@@ -100,7 +100,10 @@ export function proximaAbertura(d: Date, tz: string, j: JanelaDeEnvio): Date {
 /** O instante de referência do atraso: o horário que vale (ajustado à janela) ou a confirmação da menina, o que for mais tarde. */
 export function referenciaDoAtraso(t: { quando: Date; confirmadaEm: Date | null }, tz: string, j: JanelaDeEnvio): Date {
   const efetivo = proximaAbertura(t.quando, tz, j);
-  return t.confirmadaEm && t.confirmadaEm > efetivo ? t.confirmadaEm : efetivo;
+  if (!t.confirmadaEm) return efetivo;
+  // confirmar às 20h30 vale a partir das 8h do dia seguinte (a mensagem só sai dentro do horário): senão o atraso nasceria já estourado
+  const confirmada = proximaAbertura(t.confirmadaEm, tz, j);
+  return confirmada > efetivo ? confirmada : efetivo;
 }
 
 // ── a janela de 24 h do WhatsApp (caixa oficial) ─────────────────────────────────────────────────────────────
@@ -108,16 +111,33 @@ export function referenciaDoAtraso(t: { quando: Date; confirmadaEm: Date | null 
 /** Margem ao agendar: a janela precisa estar aberta ATÉ 2 h depois do horário combinado, senão a tela exige um modelo. */
 export const MARGEM_DA_JANELA_MS = 2 * HORA;
 
-/** Dá para GARANTIR que o texto livre sai no horário combinado? (o paciente escreveu há pouco o bastante). Caixa que não é a oficial não tem janela. */
-export function janelaGarantida(ultimaDoPaciente: Date | null, quando: Date, caixaOficial: boolean): boolean {
+/** Dá para GARANTIR que o texto livre sai? Conta a hora em que a mensagem de fato pode sair (dentro do horário), não a combinada. Caixa que não é a oficial não tem janela. */
+export function janelaGarantida(ultimaDoPaciente: Date | null, quando: Date, caixaOficial: boolean, tz: string, j: JanelaDeEnvio): boolean {
   if (!caixaOficial) return true;
-  return janelaDe24hAberta(ultimaDoPaciente, new Date(quando.getTime() + MARGEM_DA_JANELA_MS));
+  return janelaDe24hAberta(ultimaDoPaciente, new Date(proximaAbertura(quando, tz, j).getTime() + MARGEM_DA_JANELA_MS));
 }
 
-/** A partir de quando a tela EXIGE um modelo (mensagem marcada para depois disto não tem a janela garantida). `null` = nunca houve mensagem do paciente: sempre exige. */
-export function modeloAPartirDe(ultimaDoPaciente: Date | null): Date | null {
+/** Até quando a janela de 24 h (com a margem) deixa o texto livre sair. `null` = o paciente nunca escreveu: só por modelo. */
+function limiteDaJanela(ultimaDoPaciente: Date | null): Date | null {
   if (!ultimaDoPaciente || !Number.isFinite(ultimaDoPaciente.getTime())) return null;
   return new Date(ultimaDoPaciente.getTime() + JANELA_24H_MS - FOLGA_DA_JANELA_MS - MARGEM_DA_JANELA_MS);
+}
+
+/**
+ * A partir de que horário MARCADO a tela EXIGE um modelo. A mensagem só sai dentro do horário de falar com o paciente (8h–20h): marcada para as 20h30, ela sai às 8h do
+ * dia seguinte, e é a essa hora que a janela precisa estar aberta. Então o limite é o da janela de 24 h; se ele cai fora do horário, vale o último fechamento antes dele.
+ * `null` = nunca houve mensagem do paciente: sempre exige.
+ */
+export function modeloAPartirDe(ultimaDoPaciente: Date | null, tz: string, j: JanelaDeEnvio): Date | null {
+  const limite = limiteDaJanela(ultimaDoPaciente);
+  if (!limite) return null;
+  if (dentroDaJanela(limite, tz, j)) return limite;
+  const fuso = fusoOuPadrao(tz);
+  const p = partesNoFuso(limite, fuso);
+  // depois do fechamento: o fechamento é hoje; antes da abertura: foi ontem (−12 h cai sempre no dia anterior)
+  const dia = partesNoFuso(p.hora >= j.fim ? limite : new Date(limite.getTime() - 12 * HORA), fuso);
+  const z = (n: number) => String(n).padStart(2, '0');
+  return localParaUtc(`${dia.ano}-${z(dia.mes)}-${z(dia.dia)}T${z(j.fim)}:00`, fuso) ?? limite;
 }
 
 export type ViaDoEnvio = { tipo: 'texto' } | { tipo: 'modelo' } | { tipo: 'nenhuma'; motivo: string };
@@ -194,7 +214,7 @@ export const horaCurta = (d: Date, tz: string): string => {
 };
 
 /** Só o nome da pessoa, sem o que o CRM costuma pôr depois (data, origem): primeiras palavras. */
-const nomeCurto = (nome: string): string => nome.trim().split(/\s+/).slice(0, 3).join(' ') || 'o contato';
+export const nomeCurto = (nome: string): string => nome.trim().split(/\s+/).slice(0, 3).join(' ') || 'o contato';
 
 /** O texto que aparece na nota privada (menção ao responsável) e no WhatsApp da menina. */
 export function textoDoLembrete(t: { tipo: Tipo; contatoNome: string; quando: Date; texto: string }, tz: string): string {
@@ -212,14 +232,12 @@ export function notaComMencao(responsavel: { id: number; nome: string }, texto: 
   return `🔔 [@${limpo}](mention://user/${responsavel.id}/${encodeURIComponent(limpo)}) ${texto}`;
 }
 
-/** O número só com dígitos e 55 na frente (10 ou 11 dígitos depois do 55), ou `null`. */
+/** O celular só com dígitos, 55 e o nono dígito (5594999990000), ou `null` (fixo, DDD que não existe e número de outro país não servem). */
 export function telefoneDaMenina(bruto: unknown): string | null {
   const txt = String(bruto ?? '').trim();
-  const d = txt.replace(/\D/g, '');
-  // «+1 415…» é número de outro país: só entra quem diz +55 (ou escreve só DDD + número)
-  if (txt.startsWith('+') && !d.startsWith('55')) return null;
-  const com55 = d.length === 10 || d.length === 11 ? `55${d}` : d;
-  return /^55\d{10,11}$/.test(com55) ? com55 : null;
+  // «+1 415…» é número de outro país: só entra quem diz +55 (ou escreve só DDD + número). O resto é a MESMA regra do disparo (DDD que existe, celular com o 9)
+  if (txt.startsWith('+') && !txt.replace(/\D/g, '').startsWith('55')) return null;
+  return telefoneWhatsapp(txt);
 }
 
 export const telefoneMascarado = (t: string): string => (t.length > 4 ? `…${t.slice(-4)}` : t);

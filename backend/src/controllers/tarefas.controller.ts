@@ -117,6 +117,7 @@ async function atendentesDaUnidade(r: Resolvida): Promise<Atendente[]> {
     if (Number.isInteger(id) && id > 0 && nome && !ehCelularDaUnidade(nome)) lista.set(id, { id, nome: nome.slice(0, 80) });
   };
   let leu = false;
+  let confiavel = true;
   for (const caixa of caixasDaUnidade(r.unit.slug)) {
     try {
       const m = (await lerComTeto(chamar(r.ctx, 'GET', `inbox_members/${caixa}`))) as { payload?: unknown[] } | null;
@@ -124,17 +125,27 @@ async function atendentesDaUnidade(r: Resolvida): Promise<Atendente[]> {
         leu = true;
         m.payload.forEach(pegar);
       }
+      else confiavel = false; // demorou (ou veio torto): a lista pode estar incompleta
     } catch {
-      /* tenta a lista da conta abaixo */
+      confiavel = false; // tenta a lista da conta abaixo
     }
   }
   if (!leu || lista.size === 0) {
-    const todas = (await lerComTeto(chamar(r.ctx, 'GET', 'agents'))) as unknown[] | null;
-    if (Array.isArray(todas)) todas.forEach(pegar);
+    let todas: unknown[] | null = null;
+    try {
+      todas = (await lerComTeto(chamar(r.ctx, 'GET', 'agents'))) as unknown[] | null;
+    } catch {
+      todas = null;
+    }
+    if (Array.isArray(todas)) {
+      todas.forEach(pegar);
+      confiavel = true;
+    }
   }
   pegar({ id: r.id, name: r.nome });
   const v = [...lista.values()].sort((a, b) => a.nome.localeCompare(b.nome));
-  cacheDeAtendentes.set(k, { ate: Date.now() + 60_000, v });
+  // lista degradada (CRM lento) NUNCA fica guardada: senão a unidade inteira veria uma atendente só por 1 minuto
+  if (confiavel && leu) cacheDeAtendentes.set(k, { ate: Date.now() + 60_000, v });
   return v;
 }
 
@@ -281,7 +292,7 @@ export async function tarefasContextoHandler(req: Request, res: Response): Promi
     }
     // sem a leitura (demorou) a última mensagem fica «desconhecida»: o lado SEGURO, que exige modelo
     const ultima = oficial.ok ? await lerComTeto(chatDoChatwoot(r.ctx).ultimaDoPaciente(alvo.conversaId)).catch(() => null) : null;
-    const desde = oficial.ok ? modeloAPartirDe(ultima) : null;
+    const desde = oficial.ok ? modeloAPartirDe(ultima, r.fuso, janelaDeEnvio()) : null;
     res.set('Cache-Control', 'no-store').json({
       conversaId: alvo.conversaId,
       caixa: alvo.caixa,
@@ -438,7 +449,7 @@ async function prepararDados(r: Resolvida, c: Campos, alvo: Alvo, agora: Date): 
       } catch {
         ultima = null;
       }
-      if (!janelaGarantida(ultima, quando, true)) {
+      if (!janelaGarantida(ultima, quando, true, r.fuso, janelaDeEnvio())) {
         return { status: 422, erro: 'Nesse horário a janela de 24 h do WhatsApp pode estar fechada e o texto livre não chegaria. Escolha um modelo aprovado: ele é o que sai se a janela fechar.', extra: { exigeModelo: true } };
       }
     }
@@ -672,17 +683,27 @@ export async function tarefasResultadoHandler(req: Request, res: Response): Prom
     }
   }
   const agora = new Date();
-  if (!(await mudar(res, r, t, ['pendente', 'aguardando'], { estado: 'feita', resultado: p.data.resultado, resultadoEm: agora, resultadoPor: por(r), motivo: null }, 'esta ligação já tem resultado'))) return;
-  let proximaId: string | null = null;
-  if (proxima) {
-    const n = await prisma.crmTarefa.create({
+  // o resultado e a próxima tentativa são UMA coisa só: se criar a próxima falhar, o resultado também volta (senão a ligação ficaria «com resultado» sem a próxima)
+  const feito = await prisma.$transaction(async (tx) => {
+    const x = await tx.crmTarefa.updateMany({
+      where: { id: t.id, unitId: r.unit.id, conta: r.conta, estado: { in: ['pendente', 'aguardando'] } },
+      data: { estado: 'feita', resultado: p.data.resultado, resultadoEm: agora, resultadoPor: por(r), motivo: null },
+    });
+    if (x.count !== 1) return null;
+    if (!proxima) return { proximaId: null as string | null };
+    const n = await tx.crmTarefa.create({
       data: {
         unitId: t.unitId, conta: t.conta, caixa: t.caixa, conversaId: t.conversaId, contatoId: t.contatoId, contatoNome: t.contatoNome, tipo: 'ligacao', quando: proxima,
         responsavelId: t.responsavelId, responsavelNome: t.responsavelNome, texto: t.texto, criadoPor: por(r),
       },
     });
-    proximaId = n.id;
+    return { proximaId: n.id as string | null };
+  });
+  if (!feito) {
+    res.status(409).json({ error: 'esta ligação já tem resultado' });
+    return;
   }
+  const proximaId = feito.proximaId;
   logger.info({ unit: r.unit.slug, tarefa: t.id, resultado: p.data.resultado, proxima: proximaId }, 'tarefas: resultado da ligação');
   res.json({ ok: true, proximaId });
 }

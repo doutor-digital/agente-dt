@@ -34,7 +34,8 @@ export function armazemDoBanco(): Armazem {
       return r.count;
     },
     async unidadesComVencidas(agora) {
-      const l = await prisma.crmTarefa.findMany({ where: { estado: 'pendente', quando: { lte: agora } }, distinct: ['unitId'], select: { unitId: true } });
+      // ligação/lembrete já lembrados esperam o resultado na tela: não põem a unidade na fila do robô a cada minuto
+      const l = await prisma.crmTarefa.findMany({ where: { estado: 'pendente', quando: { lte: agora }, OR: [{ tipo: 'mensagem' }, { lembreteEm: null }] }, distinct: ['unitId'], select: { unitId: true } });
       return l.map((x) => x.unitId);
     },
     vencidas(unitId, agora, soNaoSimuladas, limite) {
@@ -51,8 +52,8 @@ export function armazemDoBanco(): Armazem {
         take: limite,
       });
     },
-    async pegar(id, agora) {
-      return (await prisma.crmTarefa.updateMany({ where: { id, estado: 'pendente' }, data: { estado: 'enviando', tentativaEm: agora } })).count === 1;
+    async pegar(id, agora, versao) {
+      return (await prisma.crmTarefa.updateMany({ where: { id, estado: 'pendente', atualizadoEm: versao }, data: { estado: 'enviando', tentativaEm: agora } })).count === 1;
     },
     async pegarLembrete(id, agora) {
       return (await prisma.crmTarefa.updateMany({ where: { id, estado: 'pendente', lembreteEm: null }, data: { lembreteEm: agora } })).count === 1;

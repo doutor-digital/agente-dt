@@ -62,11 +62,12 @@ function armazemFalso(zaps: Record<number, string> = { 7: '5594999990000' }): Ar
       return linhas
         .filter((l) => l.unitId === unitId && l.estado === 'pendente' && l.quando <= agora && (l.tipo === 'mensagem' || l.lembreteEm === null) && (!soNaoSimuladas || l.simuladoEm === null))
         .sort((a, b) => a.quando.getTime() - b.quando.getTime())
-        .slice(0, limite);
+        .slice(0, limite)
+        .map((l) => ({ ...l })); // o banco devolve CÓPIAS: uma edição depois da leitura não muda o que o robô leu
     },
-    async pegar(id, agora) {
+    async pegar(id, agora, versao) {
       const l = acha(id);
-      if (!l || l.estado !== 'pendente') return false;
+      if (!l || l.estado !== 'pendente' || l.atualizadoEm.getTime() !== versao.getTime()) return false;
       l.estado = 'enviando';
       l.tentativaEm = agora;
       return true;
@@ -110,6 +111,8 @@ let reg: Registro;
 let agoraDoTeste = AGORA;
 let modo: 'seco' | 'ligado' | 'desligado' = 'ligado';
 /** o que o CRM de mentira responde */
+/** o que acontece DURANTE a leitura da conversa (a menina edita a tarefa no meio do ciclo) */
+let aoLerConversa: (() => void) | null = null;
 let crm: {
   conversa: unknown;
   ultima: Date | null;
@@ -127,6 +130,7 @@ const erroHttp = (status: number, msg = 'erro'): Error & { status: number } => O
 beforeEach(() => {
   linhas = [];
   agoraDoTeste = AGORA;
+  aoLerConversa = null;
   modo = 'ligado';
   U.aplicarConfigs([U.SEMENTE_PARAUAPEBAS]);
   reg = { mandou: [], notas: [], zaps: [], leituras: [] };
@@ -141,6 +145,7 @@ function mundo(): MundoDoCiclo {
     },
     async conversa() {
       reg.leituras.push('conversa');
+      aoLerConversa?.();
       if (crm.erroNaConversa) throw crm.erroNaConversa;
       return crm.conversa;
     },
@@ -512,4 +517,37 @@ test('caixa que NÃO é WhatsApp oficial (celular/API): só texto livre, sem jan
   assert.equal(reg.mandou.length, 1);
   assert.equal(reg.mandou[0]!.modelo, undefined);
   assert.equal(t.estado, 'feita');
+});
+
+test('a menina EDITA a tarefa no meio do ciclo (entre a leitura e o envio): o robô larga e manda a versão nova no ciclo seguinte, nunca a velha', async () => {
+  const t = tarefa({ texto: 'texto velho' });
+  aoLerConversa = () => {
+    t.texto = 'texto NOVO';
+    t.atualizadoEm = new Date(AGORA.getTime() + 1000);
+    aoLerConversa = null;
+  };
+  await ciclo();
+  assert.equal(reg.mandou.length, 0, 'a versão lida já não vale: não manda');
+  assert.equal(t.estado, 'pendente');
+  await ciclo();
+  assert.deepEqual(reg.mandou.map((m) => m.content), ['texto NOVO']);
+});
+
+test('confirmar o atraso FORA do horário (20h30) vale a partir das 8h do dia seguinte: sai às 8h, não volta a «Aguardando»', async () => {
+  const quando = R.localParaUtc('2026-11-18T17:00', FUSO)!;
+  const t = tarefa({ quando, estado: 'aguardando', confirmadaEm: R.localParaUtc('2026-11-18T20:30', FUSO)! });
+  Object.assign(t, { estado: 'pendente' }); // o que o «Enviar mesmo assim» faz
+  agoraDoTeste = R.localParaUtc('2026-11-19T08:01', FUSO)!;
+  crm.ultima = new Date(agoraDoTeste.getTime() - 3_600_000);
+  await ciclo();
+  assert.equal(reg.mandou.length, 1);
+  assert.equal(t.estado, 'feita');
+});
+
+test('o teto por ciclo vale também para os AVISOS de «não saiu»: um defeito que barra tudo não vira dezenas de WhatsApps', async () => {
+  crm.sair = new Date(AGORA.getTime() - 86_400_000);
+  for (let i = 0; i < C.MAX_ENVIOS_POR_CICLO + 10; i++) tarefa({ conversaId: 200 + i });
+  await ciclo();
+  assert.equal(reg.zaps.length, C.MAX_ENVIOS_POR_CICLO);
+  assert.equal(reg.notas.length, C.MAX_ENVIOS_POR_CICLO);
 });

@@ -28,6 +28,7 @@ import {
   escolherVia,
   horaCurta,
   janelaDeEnvio,
+  nomeCurto,
   notaComMencao,
   referenciaDoAtraso,
   textoDoLembrete,
@@ -57,8 +58,8 @@ export interface Armazem {
   unidadesComVencidas(agora: Date): Promise<string[]>;
   /** pendentes que já passaram da hora; ligação/lembrete só os que ainda não foram lembrados; `soNaoSimuladas` (modo seco) pula as já anotadas */
   vencidas(unitId: string, agora: Date, soNaoSimuladas: boolean, limite: number): Promise<CrmTarefa[]>;
-  /** `pendente → enviando`; false = outra réplica (ou outra aba da tela) já mexeu */
-  pegar(id: string, agora: Date): Promise<boolean>;
+  /** `pendente → enviando`, só se a tarefa continua COMO FOI LIDA (`versao` = o `atualizadoEm` lido): uma edição no meio do ciclo faz o robô largar e ler de novo. false = outra réplica ou a tela já mexeu */
+  pegar(id: string, agora: Date, versao: Date): Promise<boolean>;
   /** `pendente → pendente` com `lembreteEm` ainda nulo → agora; false = já lembrada */
   pegarLembrete(id: string, agora: Date): Promise<boolean>;
   desfazerLembrete(id: string): Promise<void>;
@@ -198,7 +199,7 @@ async function barrar(c: Ctx, t: CrmTarefa, b: Barrado): Promise<void> {
   }
   if (!(await armazem.atualizar(t.id, ['pendente', 'enviando'], { estado: b.estado, motivo: b.motivo }))) return;
   c.resumo.barradas++;
-  const resumo = await avisarMenina(c, t, `A mensagem agendada para ${t.contatoNome.trim().split(/\s+/).slice(0, 3).join(' ')} NÃO saiu: ${b.motivo}.`, { nota: true, zap: true });
+  const resumo = await avisarMenina(c, t, `A mensagem agendada para ${nomeCurto(t.contatoNome)} NÃO saiu: ${b.motivo}.`, { nota: true, zap: true });
   logger.warn({ unit: c.u.slug, tarefa: t.id, motivo: b.motivo, resumo }, `${ID_CICLO}: mensagem barrada`);
 }
 
@@ -244,7 +245,7 @@ async function tratarMensagem(c: Ctx, t: CrmTarefa): Promise<void> {
     }
     if (!(await armazem.atualizar(t.id, ['pendente'], { estado: 'aguardando', motivo }))) return;
     c.resumo.aguardando++;
-    await avisarMenina(c, t, `A mensagem para ${t.contatoNome.trim().split(/\s+/).slice(0, 3).join(' ')} NÃO saiu sozinha: ${motivo}.`, { nota: true, zap: true });
+    await avisarMenina(c, t, `A mensagem para ${nomeCurto(t.contatoNome)} NÃO saiu sozinha: ${motivo}.`, { nota: true, zap: true });
     return;
   }
 
@@ -262,7 +263,6 @@ async function tratarMensagem(c: Ctx, t: CrmTarefa): Promise<void> {
     via = escolherVia({ caixaOficial: oficial.ok, ultimaDoPaciente: ultima, agora, temTexto: !!t.texto.trim(), temModelo: !!t.modeloNome });
     if (via.tipo === 'nenhuma') return barrar(c, t, { estado: 'barrada', motivo: via.motivo });
     if (via.tipo === 'modelo') {
-      if (!oficial.ok) return barrar(c, t, { estado: 'barrada', motivo: oficial.motivo });
       const conferido = await mundo.conferirModelo(c.ctx, t.caixa, { template: t.modeloNome!, idioma: t.modeloIdioma ?? 'pt_BR', textoModelo: t.modeloTexto ?? '', variaveis: t.modeloVariaveis });
       if (!conferido.ok && conferido.transitorio) throw new Error(conferido.motivo);
       if (!conferido.ok) return barrar(c, t, { estado: 'barrada', motivo: `o modelo não vale mais: ${conferido.motivo}`.slice(0, 200) });
@@ -303,20 +303,20 @@ async function tratarMensagem(c: Ctx, t: CrmTarefa): Promise<void> {
   }
 
   // 4. LIGADO: pega a tarefa ANTES de mandar
-  if (!(await armazem.pegar(t.id, agora))) return;
+  if (!(await armazem.pegar(t.id, agora, t.atualizadoEm))) return;
   try {
     const r = await mundo.mandar(c.ctx, t.conversaId, { content, modelo });
     // sem o id da mensagem não há prova de que entrou: INCERTO (nunca reenvia sozinha)
     if (r.id == null) {
       await armazem.atualizar(t.id, ['enviando'], { estado: 'falhou', motivo: 'o CRM não devolveu o id da mensagem: não sei se saiu — confira a conversa' });
       c.resumo.falhas++;
-      await avisarMenina(c, t, `Não sei se a mensagem para ${t.contatoNome.trim().split(/\s+/).slice(0, 3).join(' ')} saiu (o CRM não confirmou). Confira a conversa antes de mandar de novo.`, { nota: true, zap: true });
+      await avisarMenina(c, t, `Não sei se a mensagem para ${nomeCurto(t.contatoNome)} saiu (o CRM não confirmou). Confira a conversa antes de mandar de novo.`, { nota: true, zap: true });
       return;
     }
     await armazem.atualizar(t.id, ['enviando'], { estado: 'feita', enviadaEm: mundo.agora(), mensagemId: r.id, motivo: `saiu como ${descricao}` });
     c.resumo.mandadas++;
     logger.info({ unit: c.u.slug, tarefa: t.id, via: via.tipo, mensagem: r.id }, `${ID_CICLO}: mensagem enviada`);
-    await avisarMenina(c, t, `Saiu a mensagem para ${t.contatoNome.trim().split(/\s+/).slice(0, 3).join(' ')} (${horaCurta(mundo.agora(), c.u.fuso)}).`, { nota: false, zap: true });
+    await avisarMenina(c, t, `Saiu a mensagem para ${nomeCurto(t.contatoNome)} (${horaCurta(mundo.agora(), c.u.fuso)}).`, { nota: false, zap: true });
   } catch (e) {
     const status = statusDoErro(e);
     if (status === 429) {
@@ -331,7 +331,7 @@ async function tratarMensagem(c: Ctx, t: CrmTarefa): Promise<void> {
     await armazem.atualizar(t.id, ['enviando'], { estado: 'falhou', motivo });
     c.resumo.falhas++;
     logger.warn({ unit: c.u.slug, tarefa: t.id, status, err: msgDoErro(e) }, `${ID_CICLO}: a mensagem falhou`);
-    await avisarMenina(c, t, `A mensagem para ${t.contatoNome.trim().split(/\s+/).slice(0, 3).join(' ')} FALHOU: ${motivo}.`, { nota: true, zap: true });
+    await avisarMenina(c, t, `A mensagem para ${nomeCurto(t.contatoNome)} FALHOU: ${motivo}.`, { nota: true, zap: true });
   }
 }
 
@@ -370,10 +370,12 @@ export async function rodarCiclo(deps: { armazem: Armazem; mundo: MundoDoCiclo }
       }
       resumo.vistas++;
       try {
-        const antes = resumo.mandadas + resumo.lembretes;
+        // o teto vale para tudo o que SAI do servidor (mensagem, lembrete e os avisos de «não saiu»/«falhou»/«aguardando»): um defeito não pode virar dezenas de WhatsApps
+        const saiu = () => resumo.mandadas + resumo.lembretes + resumo.barradas + resumo.aguardando + resumo.falhas;
+        const antes = saiu();
         if (t.tipo === 'mensagem') await tratarMensagem(c, t);
         else await tratarLembrete(c, t);
-        if (resumo.mandadas + resumo.lembretes > antes) {
+        if (saiu() > antes) {
           envios++;
           await mundo.pausa(150);
         }
