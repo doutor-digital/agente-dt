@@ -364,6 +364,27 @@ export function numerosForaDaFala(valor: string, textoDoPaciente: string): numbe
 }
 
 /** O valor aparece na fala como palavra inteira ("Magé" ou "RJ" ditos; «mage» dentro de «imagem» não vale). Os dois já normalizados ou não. */
+/**
+ * A região da dor é uma LISTA: a trava de paráfrase (só texto livre) não a alcança. Medido no seco de 16/11: "Lombar" saiu de
+ * «tenho sete hérnias de disco, bico de papagaio» — o paciente não disse onde. Cada região escolhida precisa de uma palavra dela
+ * escrita pelo paciente. Região fora deste mapa: o próprio nome da opção (radical de 6 letras) tem de aparecer.
+ */
+const PALAVRAS_DA_REGIAO: ReadonlyArray<[RegExp, RegExp]> = [
+  [/^cervical/, /\b(cervica\w*|pescoco|nuca|c[1-7])\b/],
+  [/^lombar/, /\b(lombar\w*|lombo|lombalgia|l[1-5]|s1|ciatic\w*)\b/],
+  [/^torac/, /\b(torac\w*|dorsal|dorsais|escapula\w*|omoplata\w*|meio das costas|t[1-9]|t1[0-2])\b/],
+  [/^(sacr|cocc|coxis)/, /\b(sacr\w*|coccix|coxis|coxix|coccige)\b/],
+];
+
+export function regiaoDitaPeloPaciente(regiao: string, textoDoPaciente: string): boolean {
+  const r = normalizar(regiao);
+  const t = normalizar(textoDoPaciente);
+  const par = PALAVRAS_DA_REGIAO.find(([opcao]) => opcao.test(r));
+  if (par) return par[1].test(t);
+  const raiz = r.split(' ')[0]?.slice(0, 6) ?? '';
+  return raiz.length >= 4 && new RegExp(`\\b${raiz}`).test(t);
+}
+
 export function aparecePorInteiro(valor: string, textoDoPaciente: string): boolean {
   const v = normalizar(valor);
   return v.length > 0 && ` ${normalizar(textoDoPaciente)} `.includes(` ${v} `);
@@ -440,6 +461,14 @@ export function validarSugestoes(sugestoes: readonly SugestaoDaIa[], candidatos:
       continue;
     }
     const texto = Array.isArray(co.valor) ? co.valor.join('; ') : String(co.valor);
+    if (c.regra.toolName === 'registra_regiao_dor') {
+      const regioes = Array.isArray(co.valor) ? co.valor.map(String) : [String(co.valor)];
+      const naoDita = regioes.filter((r) => !regiaoDitaPeloPaciente(r, textoDoPaciente));
+      if (naoDita.length) {
+        recusadas.push({ campo: nome, motivo: `região que o paciente não disse (${naoDita.slice(0, 3).join(', ')}): palpite não grava` });
+        continue;
+      }
+    }
     if (VALOR_LITERAL_NA_FALA.has(c.regra.toolName) && !aparecePorInteiro(texto, textoDoPaciente)) {
       recusadas.push({ campo: nome, motivo: `«${texto.slice(0, 60)}» não aparece escrito numa fala do paciente` });
       continue;
