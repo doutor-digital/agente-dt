@@ -202,6 +202,41 @@ test('escritório: campo de telefone com DOIS números — cada um é conferido,
   assert.equal(await confere(ESCRITORIO, env(REGRA), com('11 99102-1043 / 63 97777-1111')), 'livre', 'mesmos 8 dígitos em OUTRO DDD continua não casando');
 });
 
+test('escritório: dígito a MAIS grudado no número (recado, ramal sem separador) não deixa o cliente passar; outro DDD continua não casando', async () => {
+  const mundo = { 10: { pipeline_id: COMERCIAL, status_id: PERDIDO, contatos: [1] }, 20: { pipeline_id: JURIDICO, status_id: 3 } };
+  const com = (valor: string) => kommoFalso(mundo, { 1: [10] }, {}, [{ id: 2, telefones: [valor], leadIds: [20] }]);
+  // a pessoa de 63 99102-1043: o trecho parece OUTRO celular válido (11 ou 13 dígitos), mas os 8 dígitos dela estão dentro
+  for (const valor of ['63 9102-1043 1', '63910210431', '55 63 9102-1043 5', '+55 63 99102-1043']) {
+    assert.equal(await confere(ESCRITORIO, env(REGRA), com(valor)), 'ja-cliente', valor);
+    assert.equal(mesmoNumero(valor, '6391021043'), true, valor);
+  }
+  // a pessoa de DDD 55 (55 55 99999-1043) e a pessoa cujo número vem sem DDD no campo
+  const ddd55 = { leadId: 10, nomeCompleto: 'Maria da Silva', telefone: '5555999991043' };
+  assert.equal(await confere(ESCRITORIO, env(REGRA), com('55 99999-1043 12'), ddd55), 'ja-cliente', 'DDD 55 com dígito a mais');
+  assert.equal(mesmoNumero('55 99999-1043 12', '5599991043'), true);
+  const semDdd = { leadId: 10, nomeCompleto: 'Maria da Silva', telefone: '5563989881234' };
+  assert.equal(await confere(ESCRITORIO, env(REGRA), com('98988-1234 12'), semDdd), 'ja-cliente', 'sem DDD com dígito a mais');
+  assert.equal(mesmoNumero('98988-1234 12', '6389881234'), true);
+  // os 8 dígitos NO FIM do trecho, com outro DDD, são outra pessoa (mesmo com o 55 na frente)
+  for (const valor of ['11 99102-1043', '+55 11 99102-1043', '5511991021043']) {
+    assert.equal(await confere(ESCRITORIO, env(REGRA), com(valor)), 'livre', valor);
+    assert.equal(mesmoNumero(valor, '6391021043'), false, valor);
+  }
+  // não é a pessoa: os 8 dígitos dela não aparecem
+  assert.equal(mesmoNumero('63 9102-2043 1', '6391021043'), false);
+  assert.equal(mesmoNumero('63910220431', '6391021043'), false);
+});
+
+test('escritório: hífen invisível (U+00AD, "soft hyphen") dentro do número não esconde o cliente', async () => {
+  const mundo = { 10: { pipeline_id: COMERCIAL, status_id: PERDIDO, contatos: [1] }, 20: { pipeline_id: JURIDICO, status_id: 3 } };
+  const com = (valor: string) => kommoFalso(mundo, { 1: [10] }, {}, [{ id: 2, telefones: [valor], leadIds: [20] }]);
+  for (const valor of ['63 99102\u00AD1043', '(63) 99102\u00AD-1043', '63 9\u00AD9102-1043']) {
+    assert.equal(await confere(ESCRITORIO, env(REGRA), com(valor)), 'ja-cliente', JSON.stringify(valor));
+    assert.equal(mesmoNumero(valor, '6391021043'), true, JSON.stringify(valor));
+  }
+  assert.equal(mesmoNumero('(11) 99102\u00AD1043', '6391021043'), false, 'invisível não muda o DDD');
+});
+
 test('escritório: a busca por telefone TEM de devolver o contato do próprio cartão; se não devolver, indisponivel (nunca livre em silêncio)', async () => {
   const mundo = { 10: { pipeline_id: COMERCIAL, status_id: PERDIDO, contatos: [1] }, 20: { pipeline_id: JURIDICO, status_id: 3 } };
   // a busca não enxerga o número: nem o contato do cartão volta (o duplicado do Jurídico também não) — não pode passar como livre
@@ -346,11 +381,19 @@ test('triagem: 1º cartão sumiu (lead-inexistente) e o 2º, do mesmo telefone, 
 });
 
 test('triagem: sem a regra de cartão (franquia) o repetido continua só repetido, sem conferência extra', async () => {
-  const k = kommoFalso({ 1: { pipeline_id: COMERCIAL, status_id: PERDIDO, contatos: [1] }, 2: { pipeline_id: JURIDICO, status_id: 3, contatos: [2] } }, { 1: [1], 2: [2] });
+  // O cartão 2 (Jurídico) existe, mas a busca por telefone não enxerga o contato dele (índice atrasado: é o cenário do teste acima).
+  // Com a regra de cartão desligada (é como a FRANQUIA roda: `conferirCartoesRepetidos` só liga na unidade sem franquia), o repetido é só contado:
+  // nenhuma leitura a mais do Kommo. Se este teste passar a ver 2 leituras, a franquia ganhou conferência que não tinha.
+  const k = kommoFalso({ 1: { pipeline_id: COMERCIAL, status_id: PERDIDO, contatos: [1] }, 2: { pipeline_id: JURIDICO, status_id: 3 } }, { 1: [1] });
   const r = await triarComKommo([cand(1, 'Maria Souza', '5563991021043'), cand(2, 'Maria Souza', '5563991021043')], k, false);
   assert.deepEqual(r.elegiveis.map((e) => e.leadId), [1]);
   assert.deepEqual(r.fora, { 'repetido-na-lista': 1 });
   assert.equal(k.chamadas.getLead, 1);
+  // contraste: com a regra de cartão ligada o mesmo cenário lê o 2º cartão e a pessoa sai
+  const k2 = kommoFalso({ 1: { pipeline_id: COMERCIAL, status_id: PERDIDO, contatos: [1] }, 2: { pipeline_id: JURIDICO, status_id: 3 } }, { 1: [1] });
+  const r2 = await triarComKommo([cand(1, 'Maria Souza', '5563991021043'), cand(2, 'Maria Souza', '5563991021043')], k2, true);
+  assert.deepEqual(r2.elegiveis, []);
+  assert.equal(k2.chamadas.getLead, 2);
 });
 
 test('nome: só a unidade que confere no Kommo dispensa o nome; unidade COM franquia exige sempre, mesmo sem primeiroNome', () => {

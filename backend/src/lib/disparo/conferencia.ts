@@ -131,21 +131,27 @@ const TETO_DA_BUSCA_POR_TELEFONE = 50;
  * TRECHOS que parecem telefone (dígitos com espaço, parêntese, ponto ou hífen; qualquer outra coisa — "/", ";", ",", letras —
  * separa) e cada trecho é conferido, nunca os 8 últimos do texto inteiro. Antes de separar, travessões, hífens "bonitos"
  * (U+2010 a U+2015, U+2212, U+FE58/FE63/FF0D) viram "-" e espaços estranhos (NBSP etc.) já contam como espaço; caracteres
- * invisíveis (U+200B a U+200F, U+2060) somem.
- *  - trecho que dá para ler como celular com DDD (`telefoneWhatsapp`): compara DDD + 8 últimos (atravessa DDI e nono dígito;
- *    mesmos 8 dígitos em OUTRO DDD não casa);
- *  - trecho que NÃO dá para ler como celular (ramal grudado, fixo, 10 dígitos, sem DDD, colados): casa se os 8 dígitos da pessoa
+ * invisíveis somem.
+ *  - trecho que dá para ler como celular com DDD (`telefoneWhatsapp`): DDD + 8 últimos iguais = casa (atravessa DDI e nono dígito);
+ *    os 8 dígitos da pessoa no FIM do trecho com OUTRO DDD = outra pessoa, não casa;
+ *  - qualquer outro caso (dígito a mais grudado, ramal, fixo, 10 dígitos, sem DDD, colados): casa se os 8 dígitos da pessoa
  *    aparecem EM QUALQUER LUGAR do trecho. Pode casar a mais (DDD não conferível), e isso é o lado seguro: um cartão a mais
  *    conferido, ninguém recebe a mais.
+ * Também somem os invisíveis U+00AD (hífen "mole"), U+200B a U+200F e U+2060.
  */
 export function mesmoNumero(valorDoContato: string, chaveDaPessoaConferida: string): boolean {
   const final8 = chaveDaPessoaConferida.slice(2);
-  const limpo = valorDoContato.replace(/[\u200B-\u200F\u2060]/g, '').replace(/[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]/g, '-');
+  const limpo = valorDoContato.replace(/[\u00AD\u200B-\u200F\u2060]/g, '').replace(/[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]/g, '-');
   const trechos = limpo.match(/\+?\d[\d\s().-]{6,}\d/g) ?? [];
   return trechos.some((t) => {
     const digitos = t.replace(/\D/g, '');
     const completo = digitos.length <= 13 ? telefoneWhatsapp(t) : null;
-    if (completo) return chaveDaPessoa(completo) === chaveDaPessoaConferida;
+    if (completo) {
+      if (chaveDaPessoa(completo) === chaveDaPessoaConferida) return true;
+      // Os 8 dígitos da pessoa NO FIM de um celular legível, com outro DDD: é outra pessoa.
+      if (digitos.endsWith(final8)) return false;
+    }
+    // Não bateu como celular inteiro: dígito a mais grudado ("63 9102-1043 1", "63910210431"), sem DDD, ramal. Os 8 dígitos dela dentro do trecho (lado seguro).
     return digitos.includes(final8);
   });
 }
