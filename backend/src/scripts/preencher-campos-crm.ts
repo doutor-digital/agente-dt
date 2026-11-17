@@ -18,11 +18,10 @@ import { ajustesDaUnidade, bancoDosRobos } from '../lib/robos-estado.js';
 import { recarregarAutomacoes } from '../lib/automacoes-estado.js';
 import { portaDoChatwoot } from '../lib/chatwoot-porta.js';
 import { createKommoClientSemFreio } from '../services/kommo.service.js';
-import { finalDoTelefone } from '../lib/chatwoot-regua-worker.js';
-import { mesmoTelefone } from '../lib/chatwoot-lida.js';
+import { leadsDoTelefone } from '../lib/chatwoot-campos-retroativos-kommo.js';
 import { chamar, contextoDaCaixa, contextoDoAmbiente } from '../mcp-remoto/chatwoot.js';
 import { desfazerCampos, lerArgumentos, rodarCampos, type PortasDosCampos } from '../lib/chatwoot-campos-retroativos-run.js';
-import type { FatoDeQualificacao, LeadDoKommo } from '../lib/chatwoot-campos-retroativos.js';
+import type { FatoDeQualificacao } from '../lib/chatwoot-campos-retroativos.js';
 
 /** o mesmo teto do worker da régua (25 por página) */
 const MAX_PAGINAS = 200;
@@ -32,7 +31,9 @@ async function portasReais(caixa: number, slug: string): Promise<PortasDosCampos
   const ctx = base ? contextoDaCaixa(base, caixa) : null;
   if (!ctx?.conta) throw new Error(`o Chatwoot não está configurado para a caixa ${caixa} neste servidor`);
   const chat = portaDoChatwoot(ctx);
-  const paginar = chatDoChatwoot(ctx).pagina;
+  const chatRegua = chatDoChatwoot(ctx);
+  const paginar = chatRegua.pagina;
+  const dorme = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
   // A unidade e o Kommo só são montados quando alguém os usa: o `--desfazer` não depende do Kommo (token vencido não pode impedir o desfazer)
   let unidadeGuardada: Promise<Awaited<ReturnType<typeof prisma.unit.findUniqueOrThrow>>> | null = null;
   const unidade = () => (unidadeGuardada ??= prisma.unit.findUniqueOrThrow({ where: { slug } }));
@@ -56,30 +57,15 @@ async function portasReais(caixa: number, slug: string): Promise<PortasDosCampos
       }
       return { lista, truncado: true };
     },
+    async ultimaPublica(id) {
+      return chatRegua.ultimaPublica(id);
+    },
     async fresca(id) {
       return (await chamar(ctx, 'GET', `conversations/${id}`)) as any;
     },
     async leadsDoKommo(telefone) {
-      const fim = finalDoTelefone(telefone);
-      if (!fim) return [];
       const { kommo, funilDe, motivoDe } = await comKommo();
-      const contatos = await kommo.buscarContatosPorTelefone(fim, 10);
-      // o mesmo número (DDI+DDD e os 8 últimos dígitos): os 8 dígitos sozinhos juntariam gente de DDD diferente
-      const ids = [...new Set(contatos.filter((c) => c.telefones.some((t) => mesmoTelefone(t, telefone))).flatMap((c) => c.leadIds))].slice(0, 8);
-      const saida: LeadDoKommo[] = [];
-      for (const id of ids) {
-        // um cartão apagado (404) não derruba a consulta do telefone inteiro
-        const l = await kommo.getLead(id).catch((err: unknown) => {
-          if ((err as { status?: number })?.status === 404) return null;
-          throw err;
-        });
-        if (!l) continue;
-        const funil = funilDe.get(l.pipeline_id);
-        const status = funil?.statuses.find((s) => s.id === l.status_id);
-        if (!funil || !status) continue;
-        saida.push({ id: l.id, funil: funil.name, etapa: status.name, statusId: l.status_id, atualizadoEm: Number(l.updated_at) || 0, motivoPerda: l.loss_reason_id ? motivoDe.get(l.loss_reason_id) ?? null : null });
-      }
-      return saida;
+      return leadsDoTelefone({ kommo, funilDe, motivoDe, pausa: dorme }, telefone);
     },
     async qualificacoes(leadIds) {
       const linhas = await prisma.leadFactEvent.findMany({
@@ -179,7 +165,7 @@ async function main() {
   if (o.desfazer) {
     const linhas: string[] = [];
     for await (const l of createInterface({ input: process.stdin })) linhas.push(l);
-    const r = await desfazerCampos(linhas, portas, log);
+    const r = await desfazerCampos(linhas, portas, log, o.guardaMin);
     console.log('\nresumo do desfazer:', r);
     return;
   }

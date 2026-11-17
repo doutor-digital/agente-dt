@@ -5,7 +5,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import type { Vistos } from './chatwoot-regua.js';
+import type { MensagemResumo, Vistos } from './chatwoot-regua.js';
 import type { LeadDoKommo } from './chatwoot-campos-retroativos.js';
 import { desfazerCampos, lerArgumentos, rodarCampos, type ComoMarcou, type OpcoesDosCampos, type PortasDosCampos, type VistoAnterior } from './chatwoot-campos-retroativos-run.js';
 
@@ -34,6 +34,7 @@ function mundo(convs: any[], kommoPorTelefone: (t: string) => LeadDoKommo[] | Er
   const vistos = new Map<string, Linha>();
   const capi = new Map<string, string>(); // `${id}|${evento}` → modo
   const kommoConsultado: string[] = [];
+  const publicas = new Map<number, MensagemResumo | null>();
   const falhas = { atributos: false, etiquetas: false, aplicaMasErra: false };
   const p: PortasDosCampos = {
     async conversas() {
@@ -45,6 +46,10 @@ function mundo(convs: any[], kommoPorTelefone: (t: string) => LeadDoKommo[] | Er
       const copia = structuredClone(c);
       delete copia.last_non_activity_message; // a leitura de UMA conversa não traz o campo da listagem
       return copia;
+    },
+    async ultimaPublica(id) {
+      chamadas.push(`ultima-publica:${id}`);
+      return publicas.get(id) ?? null;
     },
     async leadsDoKommo(t) {
       kommoConsultado.push(t);
@@ -129,7 +134,7 @@ function mundo(convs: any[], kommoPorTelefone: (t: string) => LeadDoKommo[] | Er
     },
     async pausa() {},
   };
-  return { p, lojas, chamadas, vistos, capi, kommoConsultado, falhas };
+  return { p, lojas, chamadas, vistos, capi, kommoConsultado, falhas, publicas };
 }
 const opcoes = (o: Partial<OpcoesDosCampos> = {}): OpcoesDosCampos => ({ soConferir: false, caixa: 3, max: 150, so: null, guardaMin: 0, ...o });
 const agora = () => AGORA;
@@ -247,7 +252,7 @@ test('falha DEPOIS de gravar o campo (etiqueta): o registro sai mesmo assim, par
   const original = m.p.fresca;
   let n = 0;
   m.p.fresca = async (id) => {
-    if (++n === 2) throw new Error('Chatwoot caiu'); // a 1ª releitura é a do passo de gravar; a 2ª é a conferência final
+    if (++n === 3) throw new Error('Chatwoot caiu'); // 1ª releitura: decidir; 2ª: junto antes de gravar; 3ª: a conferência final
     return original(id);
   };
   const linhas: string[] = [];
@@ -347,28 +352,143 @@ test('--conversas: só as pedidas', async () => {
   assert.deepEqual([...m.lojas.keys()].filter((id) => m.lojas.get(id)!.custom_attributes.etapa), [2]);
 });
 
-test('--desfazer: devolve ao que era, só o que ainda é o que a gente gravou; apaga as marcas que criou e RESTAURA a que já existia', async () => {
+async function gravarETentarDesfazer(aposGravar?: (m: ReturnType<typeof mundo>) => void, duranteAGuarda?: (m: ReturnType<typeof mundo>) => void) {
   const m = mundo([raw(1, { labels: ['x'] }), raw(2), raw(3)], (t) => (t.endsWith('1001') ? [lead('EM ESPERA')] : [lead('AGENDADO')]));
   // a conversa 3 tinha uma linha antiga da régua (etapa «Novo lead») e um capi-visto «novo» pendente
   m.vistos.set('3|etapa', { valor: 'Novo lead', inicial: false, desde: '2026-11-14T12:00:00.000Z' });
   m.capi.set('3|AddToCart', 'novo');
   const linhas: string[] = [];
   await rodarCampos(opcoes(), m.p, (l) => linhas.push(l), agora);
-  assert.equal(m.lojas.get(2)!.custom_attributes.etapa, 'Agendado');
-  assert.deepEqual(m.lojas.get(1)!.labels, ['x', 'conferir-etapa']);
-  assert.equal(m.capi.get('3|AddToCart'), 'inicial', 'o evento pendente não vai mais para a Meta');
-  // depois do preenchimento, a equipe mudou a etapa da conversa 2: o desfazer respeita
-  m.lojas.get(2)!.custom_attributes.etapa = 'Compareceu';
+  aposGravar?.(m);
   m.chamadas.length = 0;
-  const r = await desfazerCampos([...linhas, 'REG {"conversa": 9}', 'lixo'], m.p, () => {});
-  assert.deepEqual(r, { desfeitas: 2, puladas: 2 }, 'a 2 não tem o que desfazer (a equipe mudou) e a linha REG estragada é pulada');
+  if (duranteAGuarda) {
+    const pausa = m.p.pausa;
+    m.p.pausa = async (ms) => {
+      await pausa(ms);
+      if (ms === 30_000) duranteAGuarda(m);
+    };
+  }
+  const logs: string[] = [];
+  const r = await desfazerCampos([...linhas, 'REG {"conversa": 9}', 'lixo'], m.p, (l) => logs.push(l), 1);
+  return { m, r, logs };
+}
+
+test('--desfazer: tira só o campo que ainda é o que a gente gravou e NÃO apaga a marca da régua (a régua a tira quando o campo some); o CAPI volta ao que era DEPOIS da guarda', async () => {
+  // a equipe mudou a etapa da conversa 2 depois do preenchimento: o desfazer respeita
+  const { m, r } = await gravarETentarDesfazer((mm) => (mm.lojas.get(2)!.custom_attributes.etapa = 'Compareceu'));
+  assert.deepEqual(r, { desfeitas: 2, puladas: 2, capiLimpas: 1 }, 'a 2 não tem o que desfazer (a equipe mudou) e a linha REG estragada é pulada');
   assert.deepEqual(m.lojas.get(1)!.labels, ['x']);
+  assert.equal(m.lojas.get(3)!.custom_attributes.etapa, undefined);
   assert.equal(m.lojas.get(2)!.custom_attributes.etapa, 'Compareceu', 'decisão da equipe não é desfeita');
-  // a equipe mudou a etapa da conversa 2: o campo não é revertido, então as marcas dele FICAM (a régua já registrou o valor de hoje)
-  assert.ok(!m.chamadas.includes('apagar-visto:2:etapa') && !m.chamadas.includes('apagar-capi:2:AddToCart'));
-  assert.equal(m.vistos.get('2|etapa')?.inicial, true);
-  assert.deepEqual(m.vistos.get('3|etapa'), { valor: 'Novo lead', inicial: false, desde: '2026-11-14T12:00:00.000Z' }, 'a linha antiga da régua volta como era');
+  // a marca da régua NÃO é tocada: apagá-la antes faria um ciclo com a listagem velha (etapa ainda lá) ler «etapa nova» e mandar a mensagem
+  assert.ok(!m.chamadas.some((c) => c.startsWith('apagar-visto') || c.startsWith('restaurar-visto')), `chamadas: ${m.chamadas}`);
+  assert.equal(m.vistos.get('3|etapa')?.valor, 'Agendado');
+  assert.equal(m.vistos.get('3|etapa')?.inicial, true);
+  // o CAPI: a conversa 3 (etapa conferida vazia depois da guarda) volta ao modo antigo; a 2 (campo não revertido) fica como está
   assert.equal(m.capi.get('3|AddToCart'), 'novo');
+  assert.equal(m.capi.get('2|AddToCart'), 'inicial');
+});
+
+test('--desfazer: as marcas do CAPI NÃO saem se a etapa voltou a ter valor durante a guarda (listagem velha / alguém preencheu)', async () => {
+  const { m, r, logs } = await gravarETentarDesfazer(undefined, (mm) => (mm.lojas.get(3)!.custom_attributes.etapa = 'Agendado'));
+  assert.equal(r.capiLimpas, 1, 'só a conversa 2 (etapa continuou vazia); a 3 fica');
+  assert.equal(m.capi.has('2|AddToCart'), false);
+  assert.equal(m.capi.get('3|AddToCart'), 'inicial');
+  assert.match(logs.join('\n'), /conversa 3: a etapa voltou a ter valor — as marcas do CAPI ficam/);
+});
+
+test('--desfazer relê JUNTO antes de gravar: o que outro processo pôs na conversa no meio não é apagado', async () => {
+  const m = mundo([raw(1)], () => [lead('AGENDADO')]);
+  const linhas: string[] = [];
+  await rodarCampos(opcoes(), m.p, (l) => linhas.push(l), agora);
+  m.lojas.get(1)!.custom_attributes.ia_pausada_por = 'alguém';
+  await desfazerCampos(linhas, m.p, () => {}, 0);
+  assert.deepEqual(m.lojas.get(1)!.custom_attributes, { ia_pausada_por: 'alguém' });
+});
+
+test('a ÚLTIMA PÚBLICA: a listagem traz uma nota privada, o worker da régua olha a última pública — a trava e a regravação olham a mesma (sonda do sênior)', async () => {
+  const t = Math.floor(AGORA.getTime() / 1000);
+  const nota = { message_type: 1, private: true, created_at: t - 30 * 60, sender: { id: 2, type: 'user' } };
+  const viva = { ...raw(9, { status: 'open' }), last_non_activity_message: nota };
+  const m = mundo([viva], () => [lead('EM QUALIFICAÇÃO', { id: 1 })]);
+  // a última PÚBLICA é nossa, de 2 h atrás: em «Sofia qualifica» a régua poria Perdido/Não interagiu 24 h depois (sem-resposta-24h) e os follow-ups 48/96/120 h
+  m.publicas.set(9, { saida: true, privada: false, autorId: 2, autorTipo: 'user', criadaEm: new Date(AGORA.getTime() - 2 * 3600_000) });
+  const seco = await rodarCampos(opcoes({ soConferir: true }), m.p, () => {}, agora);
+  assert.equal(seco.bloqueios['regua-acordaria'], 1);
+  assert.deepEqual(seco.porRegra, {});
+  assert.ok(m.chamadas.includes('ultima-publica:9'));
+  const r = await rodarCampos(opcoes(), m.p, () => {}, agora);
+  assert.equal(r.gravadas, 0);
+  assert.equal(m.lojas.get(9)!.custom_attributes.etapa, undefined);
+});
+
+test('a ÚLTIMA PÚBLICA é lida de novo na regravação (a conversa pode ter recebido mensagem entre a leitura e a gravação)', async () => {
+  const t = Math.floor(AGORA.getTime() / 1000);
+  const nota = { message_type: 1, private: true, created_at: t - 30 * 60, sender: { id: 2, type: 'user' } };
+  const viva = { ...raw(9, { status: 'open' }), last_non_activity_message: nota };
+  const m = mundo([viva], () => [lead('EM QUALIFICAÇÃO', { id: 1 })]);
+  m.publicas.set(9, null); // na hora da decisão não há pública: libera
+  const antes = m.p.ultimaPublica;
+  let n = 0;
+  m.p.ultimaPublica = async (id) => {
+    if (++n === 2) return { saida: true, privada: false, autorId: 2, autorTipo: 'user', criadaEm: new Date(AGORA.getTime() - 2 * 3600_000) }; // chegou uma nossa
+    return antes(id);
+  };
+  const r = await rodarCampos(opcoes(), m.p, () => {}, agora);
+  assert.equal(r.gravadas, 0, 'a releitura viu a pública nossa e segurou');
+  assert.equal(m.lojas.get(9)!.custom_attributes.etapa, undefined);
+});
+
+test('a GUARDA corre DURANTE a gravação (o lote leva um ciclo da régua): marca apagada na 2ª conversa é recriada antes da 7ª, não só no fim', async () => {
+  const convs = Array.from({ length: 10 }, (_, i) => raw(i + 1));
+  const m = mundo(convs, () => [lead('AGENDADO')]);
+  const original = m.p.gravarAtributos;
+  m.p.gravarAtributos = async (id, attrs) => {
+    await original(id, attrs);
+    if (id === 2) m.vistos.delete('1|etapa'); // o ciclo da régua (listagem velha) apaga a marca da conversa 1
+  };
+  const r = await rodarCampos(opcoes({ guardaMin: 0 }), m.p, () => {}, agora);
+  assert.equal(r.gravadas, 10);
+  assert.equal(r.marcasReafirmadas, 1, 'recriada na guarda do meio do lote (guardaMin=0: não há guarda final)');
+  const i = m.chamadas.indexOf('reafirmar:1:etapa');
+  assert.ok(i > 0 && i < m.chamadas.indexOf('attrs:7'), `reafirmada antes da 7ª gravação: ${m.chamadas.join(' ')}`);
+});
+
+test('relê JUNTO antes de gravar: o que outro processo pôs entre a decisão e a gravação não é apagado, e campo que alguém preencheu agora não é gravado (as marcas saem)', async () => {
+  const m = mundo([raw(5), raw(6)], () => [lead('AGENDADO')]);
+  const original = m.p.fresca;
+  const chamadasPorConversa = new Map<number, number>();
+  m.p.fresca = async (id) => {
+    const c = await original(id);
+    const n = (chamadasPorConversa.get(id) ?? 0) + 1;
+    chamadasPorConversa.set(id, n);
+    if (c && n === 2 && id === 5) c.custom_attributes = { ia_pausada_em: 'agora' }; // a 2ª leitura da conversa 5 (a de antes de gravar) vê um campo novo que outro processo pôs
+    if (c && n === 2 && id === 6) c.custom_attributes = { etapa: 'Perdido' }; // na 6, alguém preencheu a etapa agora há pouco
+    return c;
+  };
+  const linhas: string[] = [];
+  const r = await rodarCampos(opcoes(), m.p, (l) => linhas.push(l), agora);
+  assert.deepEqual(m.lojas.get(5)!.custom_attributes, { ia_pausada_em: 'agora', etapa: 'Agendado' }, 'juntou o que existia agora com o que grava');
+  assert.equal(m.lojas.get(6)!.custom_attributes.etapa, undefined, 'não gravou por cima');
+  assert.equal(m.vistos.has('6|etapa'), false, 'as marcas dela saíram: nunca houve campo');
+  assert.equal(m.capi.has('6|AddToCart'), false);
+  assert.equal(r.gravadas, 1);
+  assert.match(linhas.join('\n'), /conversa 6: alguém preencheu um destes campos agora há pouco/);
+});
+
+test('«campo não ficou» (outro processo regravou o objeto): a marca da régua fica, a do CAPI só sai depois da guarda e com a etapa conferida vazia', async () => {
+  const m = mundo([raw(5)], () => [lead('AGENDADO')]);
+  const original = m.p.gravarAtributos;
+  m.p.gravarAtributos = async (id, attrs) => {
+    await original(id, attrs);
+    m.lojas.get(id)!.custom_attributes = {}; // o outro processo regravou o objeto inteiro por cima
+  };
+  const linhas: string[] = [];
+  const r = await rodarCampos(opcoes(), m.p, (l) => linhas.push(l), agora);
+  assert.match(linhas.join('\n'), /etapa não ficou/);
+  assert.equal(m.capi.has('5|AddToCart'), false, 'depois da guarda, com a etapa vazia, a marca do CAPI saiu');
+  assert.equal(m.vistos.get('5|etapa')?.inicial, true, 'a da régua fica: a própria régua a tira');
+  assert.equal(r.marcasReafirmadas, 0, 'não reafirma marca de campo que não ficou');
 });
 
 test('opções estritas: erro de digitação não cai num padrão calado', () => {

@@ -20,6 +20,8 @@ import { eventoDeResolucao } from './chatwoot-resolver.js';
 import { eventoDeEtiqueta } from './chatwoot-etiquetas.js';
 import {
   decidirCampos,
+  foneComDdi,
+  mesmoFone,
   ETIQUETA_CONFERIR_ETAPA,
   motivoDoChatwoot,
   vistosComMarcas,
@@ -379,4 +381,81 @@ test('as marcas vão para a memória da régua como «inicial» e a memória ant
   assert.deepEqual(depois.get('etapa'), { valor: 'Agendado', desde: AGORA, inicial: true });
   assert.equal(depois.get('_visto')?.inicial, false);
   assert.equal(antes.get('etapa')?.valor, 'Novo lead', 'não mexe na memória original');
+});
+
+// ── sondas do sênior ────────────────────────────────────────────────────────────────────────────────
+
+test('sonda 1: «Sofia qualifica» com a última da LISTAGEM = nota privada — com a última PÚBLICA nossa de 2 h, gravar acordaria sem-resposta-24h (Perdido + follow-ups): não grava', () => {
+  const AG = new Date('2026-11-17T14:00:00Z');
+  const nota: MensagemResumo = { saida: true, privada: true, autorId: 2, autorTipo: 'user', criadaEm: new Date(AG.getTime() - 30 * 60_000) };
+  const publicaNossa: MensagemResumo = { saida: true, privada: false, autorId: 2, autorTipo: 'user', criadaEm: new Date(AG.getTime() - 2 * 3600_000) };
+  const c = conv({ ultima: nota });
+  const so = entrada(c, [lead('EM QUALIFICAÇÃO')], { status: 'open', vistos: conhecida });
+  assert.deepEqual(campos(decidirCampos(so, AG)), { etapa: 'Sofia qualifica' }, 'só com a listagem (o defeito): liberaria');
+  const plano = decidirCampos({ ...so, ultimaPublica: publicaNossa }, AG);
+  assert.deepEqual(plano.alteracoes, []);
+  assert.equal(plano.bloqueios[0]?.codigo, 'regua-acordaria');
+  assert.match(plano.bloqueios[0]!.detalhe, /sem-resposta-24h/);
+});
+
+test('sonda 1b: qualificação Quente sobre «Sofia qualifica» — a nota privada velha da listagem esconde a fala do paciente de 1 h: lead-quente-parado (WhatsApp à gerente) → não grava a qualificação', () => {
+  const AG = new Date('2026-11-17T14:00:00Z');
+  const notaVelha: MensagemResumo = { saida: true, privada: true, autorId: 2, autorTipo: 'user', criadaEm: new Date(AG.getTime() - 30 * 3600_000) };
+  const doPaciente: MensagemResumo = { saida: false, privada: false, autorId: null, autorTipo: 'contact', criadaEm: new Date(AG.getTime() - 3600_000) };
+  const c = conv({ attrs: { etapa: 'Sofia qualifica' }, ultima: notaVelha });
+  const q: FatoDeQualificacao[] = [{ leadId: 1, valor: 'Quente', observadoEm: new Date(AG.getTime() - 86_400_000) }];
+  const so = entrada(c, [], { qualificacoes: q, status: 'open', vistos: conhecida });
+  assert.deepEqual(campos(decidirCampos(so, AG)), { qualificacao: 'Quente' }, 'só com a listagem (o defeito): liberaria');
+  const plano = decidirCampos({ ...so, ultimaPublica: doPaciente }, AG);
+  assert.deepEqual(plano.alteracoes, []);
+  assert.match(plano.bloqueios[0]!.detalhe, /lead-quente-parado/);
+  // sem nenhuma pública (null), vale a conversa «parada desde que nasceu»: já passou do prazo, grava
+  assert.deepEqual(campos(decidirCampos({ ...so, ultimaPublica: null }, AG)), { qualificacao: 'Quente' });
+});
+
+test('sonda 4: cartão ALTA antigo + COMERCIAL aberto mais novo (Agendado, consulta amanhã) é ambíguo: não grava Tratamento (sumiriam véspera/dia/preparo e a Sofia calaria)', () => {
+  const AG = new Date('2026-11-17T14:00:00Z');
+  const c = conv({ attrs: { etapa: 'Agendado', data_consulta: '2026-11-18', hora_consulta: '15:00', situacao_consulta: 'Agendado', categoria_consulta: 'Avaliação' }, id: 61 });
+  const antigaAlta = lead('ALTA', { id: 1, funil: 'TRATAMENTO', statusId: 142, atualizadoEm: 1_700_000_000 });
+  const novaComercial = lead('AGENDADO', { id: 2, atualizadoEm: 1_790_000_000 });
+  const plano = decidirCampos(entrada(c, [antigaAlta, novaComercial], { status: 'open', vistos: conhecida }), AG);
+  assert.deepEqual(plano.alteracoes, []);
+  assert.equal(plano.bloqueios[0]?.codigo, 'kommo-ambiguo');
+  assert.match(plano.bloqueios[0]!.detalhe, /TRATAMENTO e um cartão COMERCIAL aberto mais novo/);
+  // o tratamento MAIS NOVO que o comercial aberto continua valendo
+  const tratNovo = lead('EM TRATAMENTO', { id: 3, funil: 'TRATAMENTO', atualizadoEm: 1_795_000_000 });
+  assert.deepEqual(campos(decidirCampos(entrada(conv({ id: 62 }), [tratNovo, novaComercial], { status: 'open', vistos: conhecida }), AG)), { funil: 'Tratamento', etapa_tratamento: 'Em tratamento' });
+});
+
+test('sonda 4b: a trava também vê a regra que SOME — gravar Tratamento tiraria a véspera de uma consulta amanhã', () => {
+  const AG = new Date('2026-11-17T14:00:00Z');
+  const c = conv({ attrs: { etapa: 'Agendado', data_consulta: '2026-11-18', hora_consulta: '15:00', situacao_consulta: 'Agendado', categoria_consulta: 'Avaliação' }, id: 63 });
+  const plano = decidirCampos(entrada(c, [lead('EM TRATAMENTO', { funil: 'TRATAMENTO' })], { status: 'open', vistos: conhecida }), AG);
+  assert.deepEqual(plano.alteracoes, []);
+  assert.equal(plano.bloqueios.at(-1)?.codigo, 'regua-sumiria');
+  assert.match(plano.bloqueios.at(-1)!.detalhe, /consulta-vespera/);
+  // consulta já passada: nada no prazo some, grava
+  const velha = conv({ attrs: { etapa: 'Agendado', data_consulta: '2026-09-18', hora_consulta: '15:00', situacao_consulta: 'Agendado' }, id: 64 });
+  assert.deepEqual(campos(decidirCampos(entrada(velha, [lead('EM TRATAMENTO', { funil: 'TRATAMENTO' })], { status: 'open', vistos: conhecida }), AG)), { funil: 'Tratamento', etapa_tratamento: 'Em tratamento' });
+});
+
+test('sonda 2 (desfazer): sem apagar a marca, o ciclo com a listagem VELHA (Alta ainda lá) não manda a conclusão; apagada, mandaria', () => {
+  const AG = new Date('2026-11-18T14:00:00Z');
+  const velha = { ...conv({ id: 60, attrs: { funil: 'Tratamento', etapa_tratamento: 'Alta' } }) };
+  const sem = new Map([['_visto', { valor: '1', desde: Z('2026-11-14T12:00:00Z'), inicial: false }]]) as Vistos;
+  const marca = new Map([...sem, ['etapa_tratamento', { valor: 'Alta', desde: Z('2026-11-17T20:00:00Z'), inicial: true }]]) as Vistos;
+  const ciclo = (v: Vistos) => {
+    const r = atualizarVistos(velha, v, AG, { primeiraVez: false, desde: Z('2026-11-13T13:00:00Z') });
+    return decidirRegua(velha, { vistos: r.vistos, feitos: new Set() }, AG, U).disparos.map((d) => d.regra);
+  };
+  assert.deepEqual(ciclo(sem), ['alta-conclusao'], 'marca apagada: sairia o parabéns/NPS no mesmo ciclo');
+  assert.deepEqual(ciclo(marca), [], 'marca mantida (o desfazer não a apaga): nada');
+});
+
+test('(d) telefone do Kommo sem o 55 casa com o do Chatwoot; outro DDD ou número sem DDD não casa', () => {
+  assert.equal(foneComDdi('(94) 98888-7777'), '5594988887777');
+  assert.equal(mesmoFone('94988887777', '+5594988887777'), true);
+  assert.equal(mesmoFone('+55 94 8888-7777', '+5594988887777'), true, 'com e sem o 9');
+  assert.equal(mesmoFone('+5511988887777', '+5594988887777'), false, 'DDD diferente');
+  assert.equal(mesmoFone('988887777', '+5594988887777'), false, 'sem DDD não dá para saber');
 });

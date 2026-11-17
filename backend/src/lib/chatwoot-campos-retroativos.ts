@@ -23,7 +23,7 @@
  *  - CAPI: etapa Agendado/Compareceu viraria evento de conversão para a Meta. O plano devolve `marcasCapi`: as linhas `capi-visto:<Evento>` como
  *    `inicial` (o worker nunca manda o que já estava assim).
  */
-import { candidatos, diaEmBelem, lerData, limiteDe, type AjustesDaRegua, type Candidato, type ConversaRegua, type Vistos } from './chatwoot-regua.js';
+import { candidatos, diaEmBelem, lerData, limiteDe, precisaUltimaPublica, type AjustesDaRegua, type Candidato, type ConversaRegua, type MensagemResumo, type Vistos } from './chatwoot-regua.js';
 import { eventosAlcancados, type EventoCapi } from './chatwoot-capi.js';
 import { ETIQUETA_PAUSA } from './chatwoot-pausa.js';
 
@@ -64,6 +64,12 @@ export interface EntradaDaConversa {
   motivosValidos: readonly string[];
   /** o que a Gestora configurou na tela «Robôs» (tempos e modelos): a régua de verdade usa estes, não os de fábrica */
   ajustes?: AjustesDaRegua;
+  /**
+   * A última mensagem PÚBLICA da conversa (null = nenhuma). A listagem traz a última mensagem que não é atividade, que muitas vezes é uma NOTA
+   * privada; em etapa de qualificação o worker da régua troca por esta (`precisaUltimaPublica`) antes de decidir, e a trava tem de olhar o que ele olha.
+   * `undefined` = não buscada (vale a da listagem).
+   */
+  ultimaPublica?: MensagemResumo | null;
 }
 
 export type RegraDoCampo = 'etapa-kommo' | 'motivo-kommo' | 'tratamento-kommo' | 'compareceu-agenda' | 'qualificacao-sofia' | 'espera-kommo';
@@ -76,7 +82,7 @@ export interface Alteracao {
   porque: string;
 }
 
-export type CodigoDoBloqueio = 'tem-conferir-etapa' | 'ia-pausada-resolvida' | 'kommo-ambiguo' | 'perdido-sem-motivo' | 'perdido-com-consulta' | 'regua-acordaria';
+export type CodigoDoBloqueio = 'tem-conferir-etapa' | 'ia-pausada-resolvida' | 'kommo-ambiguo' | 'perdido-sem-motivo' | 'perdido-com-consulta' | 'regua-acordaria' | 'regua-sumiria';
 
 export interface Plano {
   conversa: number;
@@ -102,6 +108,21 @@ const semAcento = (s: string): string =>
     .toUpperCase();
 const vazio = (v: unknown): boolean => (typeof v === 'string' ? v.trim() === '' : v === undefined || v === null);
 const texto = (v: unknown): string => (typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : '');
+
+// ── telefone ────────────────────────────────────────────────────────────────────────────────────────
+
+/** Dígitos com DDI: o Kommo guarda muita gente sem o 55 (DDD + número); sem isto `mesmoTelefone` (que compara DDI+DDD) nunca casaria. */
+export function foneComDdi(t: string | null | undefined): string {
+  const d = String(t ?? '').replace(/\D/g, '');
+  return d.length === 10 || d.length === 11 ? `55${d}` : d;
+}
+
+/** Mesmo número: DDI+DDD e os 8 últimos dígitos (com e sem o 9). Número sem DDD não casa (os 8 dígitos sozinhos juntariam gente de outro DDD). */
+export function mesmoFone(a: string | null | undefined, b: string | null | undefined): boolean {
+  const x = foneComDdi(a);
+  const y = foneComDdi(b);
+  return x.length >= 12 && y.length >= 12 && x.slice(0, 4) === y.slice(0, 4) && x.slice(-8) === y.slice(-8);
+}
 
 // ── de/para ─────────────────────────────────────────────────────────────────────────────────────────
 
@@ -218,12 +239,23 @@ export function vistosComMarcas(vistos: Vistos, marcas: ReadonlyArray<{ campo: s
 
 const chaveDe = (k: Candidato): string => `${k.regra}|${k.chave}`;
 
-/** Regras da régua que passariam a existir (e ainda estão no prazo) só por causa do que se vai gravar. */
-export function reguaAcordaria(antes: ConversaRegua, depois: ConversaRegua, vistosAntes: Vistos, vistosDepois: Vistos, agora: Date, ajustes?: AjustesDaRegua): string[] {
-  const jaTinha = new Set(candidatos(antes, vistosAntes, ajustes).map(chaveDe));
-  return candidatos(depois, vistosDepois, ajustes)
-    .filter((k) => !jaTinha.has(chaveDe(k)) && agora.getTime() <= limiteDe(k).getTime())
-    .map((k) => k.regra);
+/** A conversa como o worker da régua a decide: em etapa de qualificação ele troca a última mensagem pela última PÚBLICA. */
+function comoOWorker(c: ConversaRegua, ultimaPublica: MensagemResumo | null | undefined): ConversaRegua {
+  return ultimaPublica !== undefined && precisaUltimaPublica(c) ? { ...c, ultima: ultimaPublica } : c;
+}
+
+/**
+ * O que gravar muda na régua, comparando os dois estados com a mesma conta do worker:
+ *  - `acorda`: regras NOVAS ainda no prazo (a régua passaria a falar/agir);
+ *  - `some`: regras que existiam, ainda no prazo, e deixam de existir (o paciente perderia véspera/dia/preparo, por exemplo).
+ */
+export function mudancaNaRegua(antes: ConversaRegua, depois: ConversaRegua, vistosAntes: Vistos, vistosDepois: Vistos, agora: Date, ajustes?: AjustesDaRegua, ultimaPublica?: MensagemResumo | null): { acorda: string[]; some: string[] } {
+  const A = candidatos(comoOWorker(antes, ultimaPublica), vistosAntes, ajustes);
+  const D = candidatos(comoOWorker(depois, ultimaPublica), vistosDepois, ajustes);
+  const chavesA = new Set(A.map(chaveDe));
+  const chavesD = new Set(D.map(chaveDe));
+  const noPrazo = (k: Candidato) => agora.getTime() <= limiteDe(k).getTime();
+  return { acorda: D.filter((k) => !chavesA.has(chaveDe(k)) && noPrazo(k)).map((k) => k.regra), some: A.filter((k) => !chavesD.has(chaveDe(k)) && noPrazo(k)).map((k) => k.regra) };
 }
 
 // ── a decisão ───────────────────────────────────────────────────────────────────────────────────────
@@ -245,10 +277,15 @@ export function decidirCampos(e: EntradaDaConversa, agora: Date): Plano {
 
   // 4. tratamento (funil + etapa_tratamento)
   const trat = escolherTratamento(e.leads);
+  // cartão de TRATAMENTO (alta antiga, por exemplo) e um cartão COMERCIAL aberto MAIS NOVO: não se sabe se a pessoa voltou a ser lead (consulta
+  // marcada de novo). Gravar Tratamento tiraria véspera/dia/preparo e calaria a Sofia; gravar a etapa comercial contradiria o tratamento.
+  const comerciaisAbertos = e.leads.filter((l) => semAcento(l.funil) === 'COMERCIAL' && l.statusId !== STATUS_GANHO && l.statusId !== STATUS_PERDIDO);
+  const tratamentoAmbiguo = !!trat && comerciaisAbertos.some((l) => l.atualizadoEm > trat.lead.atualizadoEm);
+  if (tratamentoAmbiguo) plano.bloqueios.push({ codigo: 'kommo-ambiguo', detalhe: 'cartão de TRATAMENTO e um cartão COMERCIAL aberto mais novo: a equipe decide' });
   const funilVazio = vazio(a.funil);
   const tratVazio = vazio(a.etapa_tratamento);
   const emTratamento = !!trat;
-  if (trat && funilVazio && tratVazio) {
+  if (trat && !tratamentoAmbiguo && funilVazio && tratVazio) {
     grupos.push({
       nome: 'tratamento',
       alteracoes: [
@@ -312,24 +349,25 @@ export function decidirCampos(e: EntradaDaConversa, agora: Date): Plano {
   // a régua: tira do plano o que a faria falar (qualificação primeiro: ela sozinha pode acordar o aviso de lead quente; depois etapa; depois tratamento)
   let ativos = [...grupos];
   const acordadas = new Set<string>();
+  const sumiriam = new Set<string>();
   for (const tirar of [null, 'qualificacao', 'etapa', 'tratamento'] as const) {
     if (tirar) ativos = ativos.filter((g) => g.nome !== tirar);
     const alteracoes = ativos.flatMap((g) => g.alteracoes);
     const depois = aplicar(conv, alteracoes, plano.etiquetaNova);
     const marcas = alteracoes.filter((x) => (CAMPOS_OBSERVADOS_ESCRITOS as readonly string[]).includes(x.campo)).map((x) => ({ campo: x.campo, valor: x.depois }));
-    const acorda = reguaAcordaria(conv, depois, e.vistos, vistosComMarcas(e.vistos, marcas, agora), agora, e.ajustes);
-    if (!acorda.length) {
+    const m = mudancaNaRegua(conv, depois, e.vistos, vistosComMarcas(e.vistos, marcas, agora), agora, e.ajustes, e.ultimaPublica);
+    if (!m.acorda.length && !m.some.length) {
       plano.alteracoes = alteracoes;
       plano.marcasVisto = marcas;
       plano.marcasCapi = eventosAlcancados(depois.attrs).filter((ev) => !eventosAlcancados(a).includes(ev));
       break;
     }
-    for (const regra of acorda) acordadas.add(regra);
+    for (const regra of m.acorda) acordadas.add(regra);
+    for (const regra of m.some) sumiriam.add(regra);
   }
-  if (acordadas.size) {
-    const deixou = grupos.filter((g) => !ativos.includes(g)).map((g) => g.nome);
-    plano.bloqueios.push({ codigo: 'regua-acordaria', detalhe: `a régua passaria a ter: ${[...acordadas].join(', ')} — não gravei: ${deixou.join(', ')}` });
-  }
+  const deixou = grupos.filter((g) => !ativos.includes(g)).map((g) => g.nome);
+  if (acordadas.size) plano.bloqueios.push({ codigo: 'regua-acordaria', detalhe: `a régua passaria a ter: ${[...acordadas].join(', ')} — não gravei: ${deixou.join(', ')}` });
+  if (sumiriam.size) plano.bloqueios.push({ codigo: 'regua-sumiria', detalhe: `a régua deixaria de ter: ${[...sumiriam].join(', ')} — não gravei: ${deixou.join(', ')}` });
   return plano;
 }
 
