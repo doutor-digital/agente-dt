@@ -283,3 +283,34 @@ test('resolverPaciente com cache PRÓPRIO (o do calendário): lembra lá e não 
   const b = await _interno.resolverPaciente(unit, k2, 'MARIA CACHE', null, []);
   assert.equal(b.leadId, 4002);
 });
+
+test('cartão APAGADO: o vínculo do banco deixa de apontar para ele (filtro notIn), sem perder o filtro do Chatwoot', async () => {
+  const { soCartaoVivo, marcarCartaoApagado, ehCartaoApagado } = await import('./franquia-sync-worker.js');
+  const { SO_CARTAO_DO_KOMMO } = await import('./chatwoot-lead.js');
+  const unit = unidade();
+  assert.deepEqual(soCartaoVivo(unit.id), SO_CARTAO_DO_KOMMO, 'sem cartão apagado, o filtro é o de sempre');
+  assert.equal(marcarCartaoApagado(unit.id, 4843998), true, 'a primeira vez avisa');
+  assert.equal(marcarCartaoApagado(unit.id, 4843998), false, 'a segunda não repete o aviso');
+  assert.deepEqual(soCartaoVivo(unit.id), { kommoLeadId: { ...SO_CARTAO_DO_KOMMO.kommoLeadId, notIn: [4843998] } });
+  assert.equal(ehCartaoApagado(unit.id, 4843998), true);
+  assert.equal(ehCartaoApagado(unidade().id, 4843998), false, 'o apagado de uma unidade não vale para outra');
+});
+
+test('cartão APAGADO: o cache que aponta para ele não vale — o paciente é procurado de novo e acha o cartão vivo', async () => {
+  const { marcarCartaoApagado } = await import('./franquia-sync-worker.js');
+  clientesNaBusca.splice(0, clientesNaBusca.length, { idClient: 888, name: 'JOANA APAGADA', whatsapp: '+5547988880000' });
+  const unit = unidade();
+  const meu = new Map<string, import('./franquia-sync-worker.js').EntradaDoCacheDeLead>();
+  const { kommo: antes } = kommoFalso({ listLeadsPorTelefone: async () => [{ id: 4843998, updated_at: 1 }] });
+  assert.equal((await _interno.resolverPaciente(unit, antes, 'JOANA APAGADA', null, [], meu)).leadId, 4843998);
+  const { kommo: depois } = kommoFalso({ listLeadsPorTelefone: async () => [{ id: 5001, updated_at: 1 }] });
+  // sem marcar, o cache segura o cartão antigo (é o comportamento normal por 6 h)
+  assert.equal((await _interno.resolverPaciente(unit, depois, 'JOANA APAGADA', null, [], meu)).leadId, 4843998);
+  marcarCartaoApagado(unit.id, 4843998);
+  assert.equal((await _interno.resolverPaciente(unit, depois, 'JOANA APAGADA', null, [], meu)).leadId, 5001);
+  // e o telefone que ainda devolvesse o apagado não o traz de volta
+  const { kommo: teimoso } = kommoFalso({ listLeadsPorTelefone: async () => [{ id: 4843998, updated_at: 1 }] });
+  assert.equal((await _interno.resolverPaciente(unidadeCom(unit.id), teimoso, 'JOANA APAGADA', null, [], new Map())).leadId, null);
+});
+
+const unidadeCom = (id: string) => ({ ...(unidade() as unknown as Record<string, unknown>), id }) as unknown as Unit;
