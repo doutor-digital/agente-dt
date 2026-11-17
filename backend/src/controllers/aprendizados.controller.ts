@@ -10,6 +10,7 @@
  * A regra entra no bloco `<aprendizados>` do prompt (`renderLessons`), com a trava de pronto-socorro de sempre.
  * As travas que a unidade não desliga moram em `lib/aprendizados-unidade.ts`. Cada regra salva ou desligada avisa o João.
  */
+import { unidadeEDaConta } from '../lib/conta-da-requisicao.js';
 import { sessaoDaAtendente } from './funil.controller.js';
 import { leituraComLogin } from './assistente.controller.js';
 import { CAIXAS_REGUA } from '../lib/chatwoot-regua.js';
@@ -86,11 +87,16 @@ export async function atendenteDaUnidade(
 ): Promise<{ a: NonNullable<Awaited<ReturnType<typeof sessaoDaAtendente>>>; unit: Unit } | null> {
   const a = await sessaoDaAtendente(req, res);
   if (!a) return null;
+  // a unidade tem que morar na conta da sessão: antes de qualquer leitura no Chatwoot
+  if (!unidadeEDaConta(slug, a.c)) {
+    res.status(403).json({ error: 'você não atende esta unidade' });
+    return null;
+  }
   let caixas: number[];
   try {
     caixas = await leituraComLogin(a.c, a.sessao).caixas();
   } catch {
-    res.status(502).json({ error: 'não consegui ler as suas caixas no Chatwoot' });
+    res.status(502).json({ error: 'não consegui ler as suas caixas no CRM' });
     return null;
   }
   if (!caixas.some((cx) => CAIXAS_REGUA[cx] === slug)) {
@@ -435,12 +441,12 @@ export async function testarIaUnidadesHandler(req: Request, res: Response): Prom
   const a = await sessaoDaAtendente(req, res);
   if (!a) return;
   try {
-    const slugs = [...new Set((await leituraComLogin(a.c, a.sessao).caixas()).map((cx) => CAIXAS_REGUA[cx]).filter((x): x is string => !!x))];
+    const slugs = [...new Set((await leituraComLogin(a.c, a.sessao).caixas()).map((cx) => CAIXAS_REGUA[cx]).filter((x): x is string => !!x && unidadeEDaConta(x, a.c)))];
     const units = slugs.length ? await prisma.unit.findMany({ where: { slug: { in: slugs }, isActive: true }, select: { slug: true, name: true } }) : [];
     res.json({ eu: a.nome, unidades: units.map((u) => ({ slug: u.slug, nome: u.name })) });
   } catch (e) {
     logger.warn({ err: String(e) }, 'testar-ia: unidades falhou');
-    res.status(502).json({ error: 'não consegui ler as suas caixas no Chatwoot' });
+    res.status(502).json({ error: 'não consegui ler as suas caixas no CRM' });
   }
 }
 
@@ -449,7 +455,7 @@ export async function testarIaPausadasHandler(req: Request, res: Response): Prom
   const a = await sessaoDaAtendente(req, res);
   if (!a) return;
   try {
-    const caixas = (await leituraComLogin(a.c, a.sessao).caixas()).filter((cx) => CAIXAS_REGUA[cx]);
+    const caixas = (await leituraComLogin(a.c, a.sessao).caixas()).filter((cx) => CAIXAS_REGUA[cx] && unidadeEDaConta(CAIXAS_REGUA[cx]!, a.c));
     const lista: Array<{ id: number; nome: string; por: string | null; em: string | null; atendente: string | null }> = [];
     for (const cx of caixas) {
       for (let pagina = 1; pagina <= 8; pagina++) {
@@ -587,7 +593,7 @@ body.cw .sw.on{color:#0b5e3b}
 <div id="panePausadas" hidden>
 <div class="card">
   <h2>Conversas com a IA pausada</h2>
-  <p class="sub" style="margin:0 0 6px">A IA pausa sozinha quando alguém da equipe responde (pelo Chatwoot ou pelo celular) e volta quando a conversa é resolvida. Aqui você reativa antes, se quiser.</p>
+  <p class="sub" style="margin:0 0 6px">A IA pausa sozinha quando alguém da equipe responde (pelo CRM ou pelo celular) e volta quando a conversa é resolvida. Aqui você reativa antes, se quiser.</p>
   <div id="listaPausadas"></div>
   <div id="msgPausadas" class="msg" hidden></div>
 </div>
@@ -596,7 +602,7 @@ body.cw .sw.on{color:#0b5e3b}
 <div id="paneConversa" hidden>
 <div class="card">
   <h2>Conversar com a Sofia (teste)</h2>
-  <div class="aviso"><b>Teste: nada é enviado a paciente.</b> Escreva como o paciente; a Sofia responde com as regras de hoje desta unidade. Agenda e Pix são de mentira e nada vai para o Kommo, a franquia ou o WhatsApp.</div>
+  <div class="aviso"><b>Teste: nada é enviado a paciente.</b> Escreva como o paciente; a Sofia responde com as regras de hoje desta unidade. Agenda e Pix são de mentira e nada vai para o CRM antigo, a franquia ou o WhatsApp.</div>
   <div id="chat" class="chat" aria-live="polite"></div>
   <div id="msgChat" class="msg" hidden></div>
   <textarea id="fala" rows="2" maxlength="600" aria-label="Fala do paciente" placeholder="Escreva como se fosse o paciente…"></textarea>

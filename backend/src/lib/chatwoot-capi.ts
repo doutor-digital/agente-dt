@@ -30,15 +30,15 @@ import { createHash } from 'node:crypto';
 import { logger } from './logger.js';
 import { prisma } from './prisma.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
-import { chamar, contaChatwootDoAmbiente, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
-import { conversaDoChatwoot, ehSim, type ConversaRegua } from './chatwoot-regua.js';
+import { chamar, contaChatwootDoAmbiente, contextoDaCaixa, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
+import { conversaDoChatwoot, ehArquivo, ehSim, type ConversaRegua } from './chatwoot-regua.js';
+import { referraisGuardados } from './kapso-referral.js';
+import { CAIXAS_CAPI, sufixoEnvDaUnidade } from './chatwoot-unidades.js';
 
 export const ID_CAPI = 'chatwoot-capi';
 
 /** caixa → unidade e a WABA da caixa. Só caixa de WhatsApp OFICIAL (a do Evolution não tem anúncio nem WABA). */
-export const CAIXAS_CAPI: Readonly<Record<number, { slug: string; waba: string }>> = {
-  3: { slug: 'doutor-hernia-parauapebas', waba: '2146287749563217' },
-};
+export { CAIXAS_CAPI } from './chatwoot-unidades.js';
 
 const SWEEP_MS = Number(process.env.CHATWOOT_CAPI_SWEEP_MS) || 10 * 60_000;
 const PRIMEIRA_VARREDURA_MS = 240_000;
@@ -156,7 +156,7 @@ export interface ConfigDaUnidade {
 
 /** `doutor-hernia-parauapebas` → `PARAUAPEBAS` (o sufixo das variáveis do n8n). */
 export function sufixoDaUnidade(slug: string): string {
-  return slug.replace(/^doutor-hernia-/, '').toUpperCase().replace(/[^A-Z0-9]+/g, '_');
+  return sufixoEnvDaUnidade(slug); // a configuração da unidade manda; sem ela, a regra de sempre
 }
 
 export function configDaUnidade(slug: string, env: NodeJS.ProcessEnv = process.env, tokenDaUnidade: string | null = null): ConfigDaUnidade {
@@ -186,15 +186,15 @@ export interface ArmazemCapi {
   linhas(caixa: number): Promise<LinhaCapi[]>;
   /** false = já existia */
   registrar(l: LinhaCapi & { caixa: number }): Promise<boolean>;
-  desfazer(conversationId: number, regra: string, chave: string): Promise<void>;
-  marcar(conversationId: number, regra: string, chave: string, modo: string): Promise<void>;
+  desfazer(conversationId: number, regra: string, chave: string, caixa: number): Promise<void>;
+  marcar(conversationId: number, regra: string, chave: string, modo: string, caixa: number): Promise<void>;
 }
 
 export interface ChatDoCapi {
   /** uma página (25) da listagem da caixa; vazia = acabou */
   pagina(caixa: number, pagina: number): Promise<unknown[]>;
   /** o clique de anúncio da conversa (lê as mensagens até a primeira); null = não veio de anúncio */
-  clique(conversationId: number): Promise<CliqueDoAnuncio | null>;
+  clique(conversationId: number, caixa: number): Promise<CliqueDoAnuncio | null>;
 }
 
 /** ok · config (token/permissão: não adianta tentar de novo) · transitorio (Meta fora, limite, rede) · recusou (este evento) · incerto (sem resposta: pode ter ido) */
@@ -233,11 +233,11 @@ export function armazemDoBanco(): ArmazemCapi {
         throw err;
       }
     },
-    async desfazer(conversationId, regra, chave) {
-      await prisma.chatwootReguaDisparo.deleteMany({ where: { conversationId, regra, chave } });
+    async desfazer(conversationId, regra, chave, caixa) {
+      await prisma.chatwootReguaDisparo.deleteMany({ where: { caixa, conversationId, regra, chave } });
     },
-    async marcar(conversationId, regra, chave, modo) {
-      await prisma.chatwootReguaDisparo.updateMany({ where: { conversationId, regra, chave }, data: { modo } });
+    async marcar(conversationId, regra, chave, modo, caixa) {
+      await prisma.chatwootReguaDisparo.updateMany({ where: { caixa, conversationId, regra, chave }, data: { modo } });
     },
   };
 }
@@ -251,7 +251,7 @@ export function chatDoCapi(ctx: ContextoChatwoot): ChatDoCapi {
       const lista = r?.data?.payload ?? r?.payload ?? [];
       return Array.isArray(lista) ? lista : [];
     },
-    async clique(conversationId) {
+    async clique(conversationId, caixa) {
       const todas: unknown[] = [];
       let antes: number | null = null;
       let chegouAoInicio = false;
@@ -270,7 +270,12 @@ export function chatDoCapi(ctx: ContextoChatwoot): ChatDoCapi {
         }
         antes = menor;
       }
-      const clique = cliqueDasMensagens(todas);
+      let clique = cliqueDasMensagens(todas);
+      // o Chatwoot perde o referral no caminho do Kapso: usa o que o servidor guardou do Kapso (o 1º clique com ctwa_clid)
+      if (!clique) {
+        const doKapso = (await referraisGuardados(conversationId, caixa)).find((r) => r.ctwaClid);
+        if (doKapso) clique = { ctwaClid: doKapso.ctwaClid!, anuncio: doKapso.anuncio };
+      }
       // não chegou na 1ª mensagem e não achou o clique: o «sem clique» que vai ficar gravado pode estar errado
       if (!clique && !chegouAoInicio) logger.warn({ conversa: conversationId, lidas: todas.length }, `${ID_CAPI}: conversa ${conversationId} tem mais de ${todas.length} mensagens — não achei o clique de anúncio e não cheguei à primeira; fica como «sem clique»`);
       return clique;
@@ -386,7 +391,8 @@ async function lerConversas(chat: ChatDoCapi, caixa: number): Promise<ConversaRe
     if (pagina.length === 0) break;
     for (const raw of pagina) {
       const c = conversaDoChatwoot(raw);
-      if (!c || vistas.has(c.id)) continue;
+      // arquivo do histórico não vira evento de conversão para a Meta
+      if (!c || vistas.has(c.id) || ehArquivo(raw)) continue;
       vistas.add(c.id);
       conversas.push(c);
     }
@@ -435,7 +441,7 @@ export async function cicloDoCapi(deps: DepsDoCapi, caixa: number, slug: string,
         // 1) a ENTRADA: a 1ª vez que o worker viu a conversa neste estado
         let visto = minhas.get(chaveDe(`capi-visto:${evento}`, 'v1'));
         if (!visto) {
-          const linha: LinhaCapi = { conversationId: c.id, regra: `capi-visto:${evento}`, chave: 'v1', modo: primeiraVez ? 'inicial' : 'novo', texto: '', criadoEm: agora };
+          const linha: LinhaCapi = { conversationId: c.id, regra: `capi-visto:${evento}`, chave: 'v1', modo: primeiraVez || c.etiquetas.includes('historico') ? 'inicial' : 'novo', texto: '', criadoEm: agora };
           if (!(await armazem.registrar({ caixa, ...linha }))) continue; // outra cópia do servidor acabou de ver
           minhas.set(chaveDe(linha.regra, linha.chave), linha);
           visto = linha;
@@ -447,10 +453,15 @@ export async function cicloDoCapi(deps: DepsDoCapi, caixa: number, slug: string,
           const guardado = minhas.get(chaveDe(REGRA_CLIQUE, 'v1'));
           if (guardado) {
             clique = cliqueGuardado(guardado.texto);
+            // «sem clique» gravado antes de o servidor guardar o referral do Kapso (o Chatwoot o perde): confere a linha do Kapso
+            if (!clique) {
+              const doKapso = (await referraisGuardados(c.id, caixa)).find((r) => r.ctwaClid);
+              if (doKapso) clique = { ctwaClid: doKapso.ctwaClid!, anuncio: doKapso.anuncio };
+            }
           } else {
             if (buscas >= MAX_BUSCAS_DE_CLIQUE_POR_CICLO) break; // o resto fica para o próximo ciclo
             buscas++;
-            clique = await deps.chat.clique(c.id);
+            clique = await deps.chat.clique(c.id, caixa);
             const texto = clique ? JSON.stringify(clique) : '';
             if (await gravar(c.id, REGRA_CLIQUE, 'v1', clique ? 'com-clique' : 'sem-clique', texto)) minhas.set(chaveDe(REGRA_CLIQUE, 'v1'), { conversationId: c.id, regra: REGRA_CLIQUE, chave: 'v1', modo: '', texto, criadoEm: agora });
             await deps.pausa(PAUSA_ENTRE_CHAMADAS_MS);
@@ -525,13 +536,13 @@ export async function cicloDoCapi(deps: DepsDoCapi, caixa: number, slug: string,
           continue;
         }
         if (r.tipo === 'incerto') {
-          await armazem.marcar(c.id, `capi:${evento}`, 'v1', 'incerto');
+          await armazem.marcar(c.id, `capi:${evento}`, 'v1', 'incerto', caixa);
           resumo.incertos++;
           logger.error({ slug, caixa, conversa: c.id, evento, detalhe: r.detalhe }, `${ID_CAPI}: sem confirmação da Meta para ${evento} da conversa ${c.id} — NÃO repito (pode ter ido); conferir no Gerenciador de Eventos`);
           continue;
         }
         // a Meta não ficou com o evento: desfaz a trava para tentar de novo
-        await armazem.desfazer(c.id, `capi:${evento}`, 'v1');
+        await armazem.desfazer(c.id, `capi:${evento}`, 'v1', caixa);
         if (r.tipo === 'config' || r.tipo === 'transitorio') {
           avisarUmaVez(`${slug}|${r.tipo}`, { slug, caixa, conversa: c.id, evento, tipo: r.tipo, detalhe: r.detalhe }, `${ID_CAPI}: ${r.tipo === 'config' ? 'a Meta recusou o token/permissão' : 'a Meta não está respondendo direito'} — paro o ciclo desta unidade e tento no próximo (este aviso não se repete até a Meta voltar a aceitar)`);
           resumo.falhas++;
@@ -572,30 +583,47 @@ let rodando = false;
 /** uma só porta da Meta para o worker todo (guarda o dataset entre ciclos) */
 let metaDoWorker: PortaDaMeta | null = null;
 
+/**
+ * Um ciclo por caixa oficial, no Chatwoot da CONTA da caixa e com a configuração da Meta da unidade dela. Caixa sem conta válida é pulada.
+ * As portas (`armazem`, `meta`, tokens, `ciclo`) são injetáveis para o teste de identidade: com só Parauapebas, mesmas caixas, mesma ordem,
+ * o MESMO contexto do Chatwoot.
+ */
+export async function varrerCapi(
+  ctx: ContextoChatwoot,
+  o: { armazem?: ArmazemCapi; meta?: PortaDaMeta; tokens?: ReadonlyMap<string, string | null>; ciclo?: typeof cicloDoCapi; e?: NodeJS.ProcessEnv } = {},
+): Promise<void> {
+  const e = o.e ?? process.env;
+  const slugs = [...new Set(Object.values(CAIXAS_CAPI).map((c) => c.slug))];
+  const tokens =
+    o.tokens ??
+    new Map((await prisma.unit.findMany({ where: { slug: { in: slugs } }, select: { slug: true, metaAccessToken: true } })).map((u) => [u.slug, u.metaAccessToken ?? null] as const));
+  const base = {
+    armazem: o.armazem ?? armazemDoBanco(),
+    meta: o.meta ?? (metaDoWorker ??= metaDaGraph()),
+    config: (slug: string) => configDaUnidade(slug, e, tokens.get(slug) ?? null),
+    pausa: (ms: number) => new Promise<void>((r) => setTimeout(r, ms)),
+  };
+  for (const [caixaTxt, { slug, waba }] of Object.entries(CAIXAS_CAPI)) {
+    const modo = estadoDoCapi(slug);
+    if (modo === 'desligado') continue;
+    const c = contextoDaCaixa(ctx, Number(caixaTxt), e);
+    if (!c) {
+      logger.warn({ slug, caixa: caixaTxt }, `${ID_CAPI}: a caixa ${caixaTxt} não tem conta do Chatwoot válida — pulo, sem chamar o Chatwoot`);
+      continue;
+    }
+    try {
+      await (o.ciclo ?? cicloDoCapi)({ ...base, chat: chatDoCapi(c) } as DepsDoCapi, Number(caixaTxt), slug, waba, modo, new Date());
+    } catch (err) {
+      logger.warn({ err: String(err), slug }, `${ID_CAPI}: ciclo falhou — tento no próximo`);
+    }
+  }
+}
+
 async function varrer(ctx: ContextoChatwoot): Promise<void> {
   if (rodando) return;
   rodando = true;
   try {
-    const slugs = [...new Set(Object.values(CAIXAS_CAPI).map((c) => c.slug))];
-    const tokens = new Map(
-      (await prisma.unit.findMany({ where: { slug: { in: slugs } }, select: { slug: true, metaAccessToken: true } })).map((u) => [u.slug, u.metaAccessToken ?? null] as const),
-    );
-    const deps: DepsDoCapi = {
-      armazem: armazemDoBanco(),
-      chat: chatDoCapi(ctx),
-      meta: (metaDoWorker ??= metaDaGraph()),
-      config: (slug) => configDaUnidade(slug, process.env, tokens.get(slug) ?? null),
-      pausa: (ms) => new Promise((r) => setTimeout(r, ms)),
-    };
-    for (const [caixaTxt, { slug, waba }] of Object.entries(CAIXAS_CAPI)) {
-      const modo = estadoDoCapi(slug);
-      if (modo === 'desligado') continue;
-      try {
-        await cicloDoCapi(deps, Number(caixaTxt), slug, waba, modo, new Date());
-      } catch (err) {
-        logger.warn({ err: String(err), slug }, `${ID_CAPI}: ciclo falhou — tento no próximo`);
-      }
-    }
+    await varrerCapi(ctx);
   } finally {
     rodando = false;
   }

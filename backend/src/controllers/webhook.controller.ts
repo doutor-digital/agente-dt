@@ -5,6 +5,7 @@ import type { Conversation, Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { ferramentasChamadas } from '../lib/cadastro-na-franquia.js';
 import { cadastrarLeadDoTurno, estadoCadastroTodoLead, type DecisaoDoLead, type DepsDoCadastro, type SincronizarLead } from '../lib/cadastro-todo-lead.js';
+import { agendarCapturaSilenciosa } from '../lib/captura-silenciosa.js';
 import { deixaMarcaDeCalada, marcarCartaoCalado, type PedidoDeTurno } from '../lib/atendimento-adiado.js';
 import { logger } from '../lib/logger.js';
 import { buildAgentGraph, buildThreadId } from '../agent/graph.js';
@@ -75,9 +76,12 @@ import { scheduleLeadMemoryUpdate, carimbarContato } from '../services/lead-memo
 import { carimbarHumanoAssumiu, scheduleLeadMetrics } from '../services/lead-metrics.service.js';
 import { aplicarCarimbosDeEtapa } from '../lib/carimbo-etapa.js';
 import { contaDoKommo, grupoDaUnidade, sofiaPodeAtenderOCartao, unidadeDonaPeloCartaoId } from '../lib/crm-compartilhado.js';
+import { automacaoLigada } from '../lib/automacoes-estado.js';
 import { esquemaDaUnidade as esquemaKommoDaUnidade } from '../lib/kommo-schema.js';
 import { etapaPermitida, precisaDoFunil, type FunisDaConta } from '../lib/etapa-permitida.js';
 import { etapaCalada, notaSofiaCalada, REGRA_NOTA_CALADA, sofiaCaladaLiberada } from '../lib/sofia-calada.js';
+import { portaPacienteEmTratamento } from '../lib/paciente-em-tratamento-porta.js';
+import { portaRodaNoTurno } from '../lib/paciente-em-tratamento.js';
 import { garantirTituloPadrao } from '../lib/titulo-padrao.js';
 import { telefoneDeFamiliarNoCartao } from '../lib/telefone-de-familiar.js';
 import { SpineSyncService } from '../services/spine-sync.service.js';
@@ -1241,6 +1245,9 @@ export async function processAgent(args: ArgsDoTurno): Promise<void> {
     // Sem `await`: a decisão pode chamar a IA de triagem e a franquia, e o turno (coalescer, desligamento gracioso) não espera por isso.
     // `cadastrarQuandoIaPulada` nunca lança.
     if (r === TURNO_PULADO) void cadastrarQuandoIaPulada(args);
+    // Captura silenciosa (chave `captura-silenciosa`): no mesmo ponto, espera a conversa esfriar e preenche os campos vazios da etapa
+    // lendo o Kommo. Só agenda (um timer); não lê, não espera e não lança. Chave desligada: nem agenda.
+    if (r === TURNO_PULADO) agendarCapturaSilenciosa(args);
   } finally {
     // Exame de imagem (lib/exame-de-imagem.ts): a pausa não fica na mão do modelo — vale também para o turno pulado (fora do
     // horário, etapa calada) e para o que falhou no meio.
@@ -1266,11 +1273,12 @@ export async function cadastrarQuandoIaPulada(
   const { unit, leadId } = args;
   // Só mensagem de chat de verdade (o paciente escreveu): webhook de campo/etapa traz texto sintético e não é "entrou em contato".
   if (!args.isChatMessage || !unit.spineSyncLeads || leadId <= 0) return null;
-  // Escopo deste PR: só a conta dividida (Petrópolis × Caxias), onde o cartão nasce sem unidade e o lead vira cadastro depois. O
-  // cadastro geral com a IA pulada, para as demais unidades, é outro PR. Chave desligada: sai antes de qualquer leitura ou log.
+  // Conta dividida (Caxias): sempre. Kommo próprio: só com a chave `cadastro-ia-pulada` ligada na unidade (Petrópolis saiu da conta
+  // dividida em 12/11 e o cadastro do dia parou junto). Chave do cadastro desligada: sai antes de qualquer leitura ou log.
   if (estadoCadastroTodoLead(unit.slug) === 'desligado') return null;
   try {
-    if (!(await grupoDaUnidade(unit.id))) return null;
+    const ligadaSemGrupo = automacaoLigada(unit.slug, 'cadastro-ia-pulada', process.env.CADASTRO_IA_PULADA_SLUGS);
+    if (!ligadaSemGrupo && !(await grupoDaUnidade(unit.id))) return null;
     // `ferramentas: []`: a IA não rodou, então não há "agendou" — é só o caminho do lead que entrou em contato (decidirCadastroDoLead).
     const r = await cadastrarLeadDoTurno({ unit, leadId, ferramentas: [] }, sincronizar, deps);
     if (!r.decisao.criar && !r.decisao.silenciosa) {
@@ -1682,6 +1690,38 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
     }
   } catch (err) {
     logger.warn({ err, leadId, unit: unit.slug }, 'falha no guard de etapa (allowlist/pause_in_stages) — seguindo');
+  }
+
+  // PACIENTE EM TRATAMENTO num cartão novo e vazio (14/11/2026) e NÚMERO INTERNO: a Sofia não responde. Chave
+  // `calar-paciente-em-tratamento`; em "só no papel" só registra. Desligada, não lê nem o cartão. Nunca derruba o atendimento.
+  // Turno aberto pela Ponte ("Passar para a Sofia"): a equipe mandou a Sofia falar — a porta não vale neste turno.
+  if (portaRodaNoTurno({ isChatMessage, humanMessage, passadoPelaPonte: passadoPelaPonteAgora(unit.id, leadId) })) {
+    const calar = await portaPacienteEmTratamento({ unit, leadId, contactId, humanMessage: semAReferencia(humanMessage) });
+    if (calar?.decisao.calar) {
+      const d = calar.decisao;
+      const rotulo = d.motivo === 'numero_interno' ? 'número interno' : 'paciente em tratamento na franquia';
+      if (calar.estado === 'seco') {
+        await recorder.step({
+          kind: 'THINKING',
+          title: `🧪 (só no papel) a Sofia ficaria calada — ${rotulo}`,
+          payload: { leadId, motivo: d.motivo, detalhe: d.detalhe, reason: 'calar_paciente_em_tratamento_seco' },
+        });
+        logger.info({ traceId, leadId, unit: unit.slug, motivo: d.motivo, detalhe: d.detalhe }, 'calar-paciente-em-tratamento (seco): calaria — segue respondendo');
+      } else {
+        await finishWidgetSilently();
+        const totalLatency = Math.round(performance.now() - requestStart);
+        await recorder.step({
+          kind: 'COMPLETED',
+          title: `Sofia calada — ${rotulo}${calar.anotou ? ' (nota deixada no cartão)' : ''}`,
+          payload: { leadId, motivo: d.motivo, detalhe: d.detalhe, anotou: calar.anotou, reason: 'calar_paciente_em_tratamento' },
+          latencyMs: totalLatency,
+        });
+        await recorder.finalize({ status: 'SUCCESS', latencyMs: totalLatency, iaDecision: '__paciente_em_tratamento__' });
+        logger.info({ traceId, leadId, unit: unit.slug, motivo: d.motivo, detalhe: d.detalhe, anotou: calar.anotou }, 'agente pulado (paciente em tratamento / número interno)');
+        // Como na etapa calada: cartão de paciente, não lead novo — sem cadastro de lead na franquia por aqui.
+        return;
+      }
+    }
   }
 
   // A EQUIPE FALOU, A SOFIA PARA (prioridade 3, 21/10/2026): pela conversa oficial, que enxerga também o

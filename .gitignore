@@ -13,3 +13,6 @@ skills-lock.json
 widget
 # Build artifact do tsc (--build) — não é código
 *.tsbuildinfo
+
+# questionário de clínica REAL (dado pessoal: e-mail das atendentes, chave Pix, telefone): nunca vai para o GitHub (kit de unidade)
+ops/kit-unidade/unidades/privado/

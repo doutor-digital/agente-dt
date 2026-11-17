@@ -19,6 +19,8 @@ import { alertaSemAndar } from './disparo/alerta.js';
 import { enviarTelegram } from './telegram.js';
 import { definicaoDaOnda } from './disparo/onda.js';
 import { leadsQuePediramSair } from './disparo/publico.js';
+import { rodadaDoDisparoNoCrm } from './disparo/chatwoot/rodada.js';
+import { avisoDoTetoDeGasto, avisosDoPrecoDeReserva } from './disparo/chatwoot/custo.js';
 
 const PASSO_MS = Number(process.env.DISPARO_PASSO_MS) > 0 ? Number(process.env.DISPARO_PASSO_MS) : 60_000;
 /** Por quanto tempo depois do envio ainda procuramos um SAIR. */
@@ -72,7 +74,7 @@ const ENVIO_PRESO_MS = 15 * 60_000;
 export async function fecharEnviosPresos(agora = Date.now()): Promise<number> {
   const r = await prisma.disparoDestinatario.updateMany({
     where: { estado: 'enviando', enviadoEm: { lt: new Date(agora - ENVIO_PRESO_MS) } },
-    data: { estado: 'falhou', motivo: 'INCERTO: o processo caiu durante o envio. Confira no WhatsApp antes de mandar de novo (nunca reenviado sozinho)' },
+    data: { estado: 'falhou', decididoEm: new Date(agora), motivo: 'INCERTO: o processo caiu durante o envio. Confira no WhatsApp antes de mandar de novo (nunca reenviado sozinho)' },
   });
   return r.count;
 }
@@ -114,7 +116,8 @@ export async function rodadaDoDisparo(): Promise<void> {
   // Os SAIR são varridos SEMPRE, com ou sem onda aprovada: onda parada por SAIR espera o João retomar, e ele decide vendo os SAIR de
   // agora; depois que a onda conclui, quem pede SAIR não pode seguir com a oferta no prompt da Sofia. Sem unidades da rodada,
   // `varrerSaidas` busca a unidade de cada envio no banco.
-  const ondas = await prisma.disparoOnda.findMany({ where: { estado: 'aprovada' }, orderBy: { criadoEm: 'asc' }, include: { unit: true } });
+  // Só as ondas do Kommo: as do CRM (origem 'chatwoot') têm o Porto delas e a TRAVA delas (`disparo/chatwoot/rodada.ts`, chamada por `talvezRodarCrm`): o Chatwoot lento não atrasa o Kommo.
+  const ondas = await prisma.disparoOnda.findMany({ where: { estado: 'aprovada', origem: 'kommo' }, orderBy: { criadoEm: 'asc' }, include: { unit: true } });
   const unidades = new Map<string, Unit>(ondas.map((o) => [o.unitId, o.unit]));
   const marcados = await varrerSaidas(unidades).catch((err) => {
     logger.warn({ err: String(err) }, 'disparo: varredura de SAIR falhou');
@@ -154,11 +157,28 @@ async function talvezRodar(): Promise<void> {
   }
 }
 
+/** A rodada do CRM tem a trava dela: o Chatwoot lento ou fora do ar não pode atrasar o disparo do Kommo (Canaã). */
+let rodandoCrm = false;
+async function talvezRodarCrm(): Promise<void> {
+  if (rodandoCrm) return;
+  rodandoCrm = true;
+  try {
+    await rodadaDoDisparoNoCrm();
+  } catch (err) {
+    logger.error({ err: String(err) }, 'disparo-crm: rodada falhou');
+  } finally {
+    rodandoCrm = false;
+  }
+}
+
 export function startDisparoWorker(): void {
   if (timer) return;
-  timer = setInterval(() => void talvezRodar(), PASSO_MS);
+  timer = setInterval(() => {
+    void talvezRodar();
+    void talvezRodarCrm();
+  }, PASSO_MS);
   logger.info({ passoMs: PASSO_MS, freios: freiosDoAmbiente() }, 'disparo de campanha: worker ligado (cada unidade nasce em modo seco)');
-  for (const aviso of [...avisosDoAmbiente(), ...avisosDaListaDeTeste(), ...avisosDaRegraDeCliente()]) logger.warn(aviso);
+  for (const aviso of [...avisosDoAmbiente(), ...avisosDaListaDeTeste(), ...avisosDaListaDeTeste(process.env, 'CHATWOOT_DISPARO_LISTA_DE_TESTE'), ...[avisoDoTetoDeGasto()].filter((x): x is string => !!x), ...avisosDoPrecoDeReserva(), ...avisosDaRegraDeCliente()]) logger.warn(aviso);
 }
 
 export function stopDisparoWorker(): void {

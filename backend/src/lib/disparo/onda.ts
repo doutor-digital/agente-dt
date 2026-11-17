@@ -90,7 +90,7 @@ export async function abrirOnda(args: { campanha: string; unidade: string; etiqu
  */
 export async function concluirMontagem(ondaId: string, ler: (unit: Unit, etiqueta: string, campanhaId: string) => Promise<PublicoLido> = lerPublico): Promise<void> {
   const onda = await prisma.disparoOnda.findUnique({ where: { id: ondaId }, include: { unit: true } });
-  if (!onda || onda.estado !== 'montando') return;
+  if (!onda || onda.estado !== 'montando' || onda.origem === 'chatwoot') return; // a lista de uma onda do CRM é montada por `chatwoot/onda.ts`
   const unit: Unit = onda.unit;
   // Enquanto este processo está montando, dá uma batida por minuto: o vigia só dá a montagem como morta quando as batidas param.
   const batida = setInterval(() => void prisma.disparoOnda.updateMany({ where: { id: ondaId, estado: 'montando' }, data: { atualizadoEm: new Date() } }).catch(() => undefined), BATIDA_DA_MONTAGEM_MS);
@@ -145,6 +145,7 @@ export async function aprovarOnda(
   if (!podeAprovar(args.por)) return falha(403, 'este usuário não está em DISPARO_APROVADORES');
   const onda = await prisma.disparoOnda.findUnique({ where: { id: ondaId }, include: { unit: true } });
   if (!onda) return falha(404, 'onda não encontrada');
+  if (onda.origem === 'chatwoot') return falha(409, 'esta onda é do CRM (tela «Disparos»): ela se aprova por lá, com as regras de lá');
   if (onda.estado !== 'montada') return falha(409, `a onda está "${onda.estado}"; só se aprova uma onda montada`);
 
   const pessoas = await prisma.disparoDestinatario.findMany({ where: { ondaId, estado: 'pendente' }, select: { chave: true, nome: true } });
@@ -193,6 +194,7 @@ export async function retomarOnda(
   if (!podeAprovar(args.por)) return falha(403, 'este usuário não está em DISPARO_APROVADORES');
   const onda = await prisma.disparoOnda.findUnique({ where: { id: ondaId }, include: { unit: true } });
   if (!onda) return falha(404, 'onda não encontrada');
+  if (onda.origem === 'chatwoot') return falha(409, 'esta onda é do CRM (tela «Disparos»): o console não a retoma');
   const sairam = await contar(onda.campanhaId, onda.unitId);
   const recusa = recusaDaRetomada({ aprovador: true, estado: onda.estado, pausaCausa: onda.pausaCausa, aprovadaEm: onda.aprovadaEm, validadeDias: freiosDoAmbiente().validadeDias, agora: agora(), sairamAgora: sairam, sairamVisto: args.sairam });
   if (recusa) return falha(recusa.status, recusa.erro);

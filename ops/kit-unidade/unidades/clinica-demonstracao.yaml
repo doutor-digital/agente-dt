@@ -1,0 +1,74 @@
+# QUESTIONÁRIO DA CLÍNICA DEMONSTRAÇÃO — a clínica de vitrine (16/11/2026). NÃO é uma clínica de verdade: serve para provar o kit de ponta a ponta
+# e, depois, como conta de demonstração para vender. Não tem número de WhatsApp nem WABA: a caixa é do tipo API, os modelos da Meta ficam em SECO
+# (nada vai à Meta) e os convites de atendente usam e-mail @example.com (domínio reservado: nenhum e-mail chega a ninguém).
+#
+#   npx tsx backend/src/scripts/nova-unidade.ts ops/kit-unidade/unidades/clinica-demonstracao.yaml            # plano, em SECO
+#   bash ops/kit-unidade/unidades/clinica-demonstracao-joao.sh                                                 # o roteiro do João (passo a passo)
+#
+# SEGREDO NUNCA ENTRA AQUI: onde há token, a resposta é o NOME da variável. Os valores abaixo são todos FICTÍCIOS.
+
+versao: 1
+
+unidade:
+  nome: Clínica Demonstração
+  slug: clinica-demonstracao
+  cidade: Demonstração
+  uf: PA
+  endereco: Rua Exemplo, 100 — Centro, Demonstração/PA, 68000-000
+  mapa_url: https://maps.example/demo
+  fuso: America/Belem
+
+horarios:
+  dias: [1, 2, 3, 4, 5]
+  inicio: "08:00"
+  fim: "18:00"
+  almoco_inicio: "12:00"
+  almoco_fim: "13:00"
+  duracao_min: 30
+
+profissionais:
+  - nome: Dra. Demonstração Silva
+    funcao: fisioterapeuta
+
+valores:                        # ilustrativos
+  consulta_no_dia: 350
+  consulta_antecipada: 250
+  sinal_pix: 50
+  aceita_antecipado: true
+
+whatsapp:
+  modo: demonstracao            # sem número, sem WABA, sem Kapso: caixa API e modelos em seco
+  prefixo_modelos: demo_
+  conexao: numero-novo
+
+chatwoot:
+  subdominio: demo              # demo.doutordigitalconsultoria.com
+  caixa_nome: Demonstração · WhatsApp
+  time_nome: Demonstração
+  meta_agendamentos_dia: 5
+  atendentes:
+    - nome: Gerente Demonstração
+      email: gerente.demo@example.com
+      funcao: gerente
+    - nome: Secretária Demonstração
+      email: secretaria.demo@example.com
+      funcao: secretaria
+    - nome: SDR Demonstração
+      email: sdr.demo@example.com
+      funcao: sdr
+  usuario_celular_email: celular.demo@example.com
+
+franquia:
+  id_company: 999999            # fictício: a demonstração não tem franquia de verdade
+  token_env: FRANQUIA_TOKEN_DEMO
+
+meta:
+  ad_account: act_1000000000
+  business_manager_id: "1000000000000000"
+  token_env: META_ADS_TOKEN_DEMO
+  conta_env: META_ADS_CONTA_DEMO
+  dataset_id_env: META_DATASET_ID_DEMO
+
+sofia:
+  nome_ia: Sofia
+  tom: friendly

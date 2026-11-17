@@ -26,8 +26,8 @@ test('a página do Agente parseia, tem as 5 abas (Painel primeiro) e só aceita 
   const html = paginaDoAgente(CW);
   assert.doesNotThrow(() => new Function(scriptDe(html)));
   for (const aba of ['painel', 'ensinar', 'testar', 'pausadas', 'pedir']) assert.ok(html.includes(`id="aba-${aba}"`) && html.includes(`id="pane-${aba}"`), aba);
-  assert.ok(html.includes(`var CW = "${CW}"`));
-  assert.ok(html.includes('ev.origin !== CW || ev.source !== window.parent'));
+  assert.ok(html.includes(`var CW = origemDoPai("${CW}")`));
+  assert.ok(html.includes('!origemDoCrm(ev.origin) || ev.source !== window.parent'));
   assert.ok(!html.includes('__ORIGEM_CW__'));
 });
 
@@ -62,4 +62,25 @@ test('o botão do Chatwoot (menu.js) parseia e põe o 👍/👎 só nos balões 
   assert.ok(js.includes("'/api/public/assistente/respostas?conversa='"));
   assert.ok(js.includes('[class*="grid-area:bubble"]'));
   assert.ok(js.includes("mensagem: Number(id)"));
+});
+
+test('atalhos na caixa de resposta: só acionam o nativo, nunca empurram o «Enviar», somem na nota privada, «📋» com a janela fechada, limpam a "/" e desligam pelo servidor', () => {
+  const js = assistenteJs({}).split('__AGENTE__').join(JSON.stringify('https://agente.exemplo.test'));
+  assert.doesNotThrow(() => new Function(js));
+  assert.ok(js.includes('var ATALHOS = true;'));
+  assert.ok(assistenteJs({ CHATWOOT_ATALHOS: '0' }).includes('var ATALHOS = false;'), 'CHATWOOT_ATALHOS=0 desliga');
+  const ini = js.indexOf('var ATALHOS');
+  const fim = js.indexOf("window.addEventListener('message'", ini);
+  const bloco = js.slice(ini, fim);
+  assert.ok(bloco.includes("document.execCommand('insertText', false, token)") && bloco.includes("? ' /' : '/'"), 'o "/" abre a lista nativa');
+  assert.ok(bloco.includes("b.querySelector('.i-ph-whatsapp-logo')") && bloco.includes('n.click()'), 'modelos = botão nativo');
+  assert.ok(bloco.includes("hidden = emNotaPrivada() || !editorLivre(wrap)"), '«⚡» some na nota privada e sem editor');
+  assert.ok(bloco.includes("hidden = !botaoNativoDeModelos(wrap)"), '«📋» só com o nativo');
+  assert.ok(bloco.includes('.i-ph-whatsapp-logo') && bloco.includes('ICONES_NATIVOS'), 'janela fechada (sem emoji/clipe) ainda acha a barra');
+  assert.ok(bloco.includes('enviar.scrollWidth') && bloco.includes("classList.add('compacto')") && bloco.includes('box.hidden = true'), 'mede a sobra: nome → ícone → some');
+  assert.ok(bloco.includes("document.querySelector('[data-popover-content]')") && bloco.includes("execCommand('delete')"), 'tira a "/" solta');
+  assert.ok(bloco.includes('conversaDaUrl() !== w.conversa') && bloco.includes('!w.ed.contains(ativo)'), 'desiste se trocou de conversa ou foi para outro campo');
+  assert.ok(!bloco.includes('font:500') && !js.includes('/1.2 inherit'), 'sem atalho font com inherit (CSS inválido)');
+  assert.equal((bloco.match(/innerHTML/g) ?? []).length, 0);
+  assert.ok(js.includes('try { marcarCaixaDeResposta(); } catch (e) {}'));
 });

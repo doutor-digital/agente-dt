@@ -59,6 +59,28 @@ export interface EntradaDoKommo {
   contatoId: number | null;
 }
 
+/**
+ * Uma conversa da caixa "Leads de entrada" como o conector a LÊ: com nome, telefone e canal (o `metadata` do Kommo).
+ * Nada de texto da mensagem: isso é dado de saúde e só sai pela leitura de UM cartão.
+ */
+export interface ConversaNaEntrada {
+  uid: string;
+  /** o cartão provisório da conversa */
+  leadId: number | null;
+  contatoId: number | null;
+  pipelineId: number;
+  /** chats, forms, sip, mail */
+  categoria: string;
+  /** epoch em segundos */
+  criadoEm: number;
+  nome: string | null;
+  telefone: string | null;
+  /** `metadata.source_name` (ou o `source_name` da raiz) */
+  origem: string | null;
+  /** `metadata.service`: o canal (whatsapp, waba…) */
+  canal: string | null;
+}
+
 /** Transmissão do WhatsApp (tela "Transmissões"). `filter.tag` traz os ids das etiquetas do segmento. */
 export interface KommoTransmissao {
   id: number;
@@ -1231,6 +1253,59 @@ export class KommoClient {
     return { itens, completa };
   }
 
+  /**
+   * A caixa "Leads de entrada" para LEITURA do conector: do mais novo ao mais velho, só o que cai em [`deUnix`, `ateUnix`]
+   * (o Kommo não filtra a caixa por data, então a leitura pára assim que uma página passa do início da janela).
+   * `truncado` = bateu no teto de páginas sem chegar ao início da janela: o que ficou de fora é o mais ANTIGO, e o total é um mínimo.
+   * Erro do Kommo LANÇA. Não escreve nada.
+   */
+  async lerEntrada(deUnix: number, ateUnix: number, maxPaginas = 4): Promise<{ itens: ConversaNaEntrada[]; truncado: boolean }> {
+    type Bruto = {
+      uid?: string;
+      pipeline_id?: number;
+      category?: string;
+      created_at?: number;
+      source_name?: unknown;
+      metadata?: { from?: unknown; service?: unknown; source_name?: unknown; client?: { name?: unknown } | null } | null;
+      _embedded?: { leads?: Array<{ id?: number }>; contacts?: Array<{ id?: number }> };
+    };
+    const texto = (v: unknown): string | null => (typeof v === 'string' ? v.trim() || null : typeof v === 'number' ? String(v) : null);
+    const itens: ConversaNaEntrada[] = [];
+    for (let page = 1; page <= maxPaginas; page++) {
+      try {
+        const { data, status } = await this.http.get<{ _embedded?: { unsorted?: Bruto[] }; _links?: { next?: unknown } } | ''>('/leads/unsorted', {
+          params: { limit: 250, page, 'order[created_at]': 'desc' },
+        });
+        const lote = status === 204 || !data ? [] : (data._embedded?.unsorted ?? []);
+        let maisAntigo = Infinity;
+        for (const u of lote) {
+          if (typeof u.uid !== 'string' || !u.uid || typeof u.created_at !== 'number') continue;
+          maisAntigo = Math.min(maisAntigo, u.created_at);
+          if (u.created_at < deUnix || u.created_at > ateUnix) continue;
+          itens.push({
+            uid: u.uid,
+            leadId: u._embedded?.leads?.[0]?.id ?? null,
+            contatoId: u._embedded?.contacts?.[0]?.id ?? null,
+            pipelineId: typeof u.pipeline_id === 'number' ? u.pipeline_id : 0,
+            categoria: typeof u.category === 'string' ? u.category : '',
+            criadoEm: u.created_at,
+            nome: texto(u.metadata?.client?.name),
+            telefone: texto(u.metadata?.from),
+            origem: texto(u.metadata?.source_name) ?? texto(u.source_name),
+            canal: texto(u.metadata?.service),
+          });
+        }
+        // fim da lista: página vazia, ou curta e sem `_links.next` (se o Kommo limitar a página abaixo de 250, o `next` segue a leitura)
+        const temProxima = !!(data && data._links?.next);
+        if (lote.length === 0 || (lote.length < 250 && !temProxima)) return { itens, truncado: false };
+        if (maisAntigo < deUnix) return { itens, truncado: false };
+      } catch (err) {
+        wrapAxiosError(err, `lerEntrada(p${page})`);
+      }
+    }
+    return { itens, truncado: true };
+  }
+
   /** Os telefones do contato (campo PHONE), na forma como estão gravados. Erro do Kommo LANÇA (contato sem telefone = `[]`). */
   async telefonesDoContato(contactId: number): Promise<string[]> {
     try {
@@ -1628,54 +1703,7 @@ export class KommoClient {
     value: string | number | string[],
     enums: ReadonlyArray<{ id: number; value: string }> = [],
   ): Promise<void> {
-    let values: Array<Record<string, unknown>>;
-
-    if (fieldType === 'text' || fieldType === 'textarea') {
-      if (typeof value !== 'string') {
-        throw new Error(`field ${fieldId} (${fieldType}) requer string, recebeu ${typeof value}`);
-      }
-      values = [{ value: downgradeEmoji(value) }];
-    } else if (fieldType === 'numeric' || fieldType === 'monetary') {
-      // `monetary` aceita o mesmo formato do `numeric` no PATCH — só o número,
-      // sem "R$" e sem separador de milhar. Ficou de fora até 01/09/2026, e o
-      // efeito era a IA não conseguir gravar "Valor pago / entrada" quando o
-      // paciente mandava o comprovante: a tool estourava com "tipo não
-      // suportado" e o campo ficava vazio no cartão.
-      const num = paraNumero(value);
-      if (num == null) {
-        throw new Error(`field ${fieldId} (${fieldType}) recebeu valor não-numérico: ${value}`);
-      }
-      values = [{ value: num }];
-    } else if (fieldType === 'date' || fieldType === 'birthday') {
-      let unixSec: number;
-      if (typeof value === 'number') {
-        unixSec = value > 1e12 ? Math.floor(value / 1000) : Math.floor(value);
-      } else if (typeof value === 'string') {
-        const parsed = epochDeCampoData(value);
-        if (parsed == null) {
-          throw new Error(`field ${fieldId} (${fieldType}) ISO inválido: ${value}`);
-        }
-        unixSec = parsed;
-      } else {
-        throw new Error(`field ${fieldId} (${fieldType}) requer ISO string ou number`);
-      }
-      values = [{ value: unixSec }];
-    } else if (fieldType === 'select' || fieldType === 'radiobutton') {
-      if (typeof value !== 'string') {
-        throw new Error(`field ${fieldId} (${fieldType}) requer string (label da opção)`);
-      }
-      const enumId = resolveEnumId(value, enums);
-      values = enumId != null ? [{ enum_id: enumId }] : [{ value: downgradeEmoji(value) }];
-    } else if (fieldType === 'multiselect') {
-      const arr = Array.isArray(value) ? value : [value];
-      values = arr.map((v) => {
-        const label = String(v);
-        const enumId = resolveEnumId(label, enums);
-        return enumId != null ? { enum_id: enumId } : { value: downgradeEmoji(label) };
-      });
-    } else {
-      throw new Error(`field ${fieldId} tipo não suportado: ${fieldType}`);
-    }
+    const values = valoresDoCampo(fieldId, fieldType, value, enums);
 
     try {
       await this.http.patch(`/leads/${leadId}`, {
@@ -3487,3 +3515,64 @@ export const KommoService = {
 };
 
 export type KommoServiceType = typeof KommoService;
+
+/**
+ * O valor de um campo de cartão no formato do PATCH do Kommo (`[{ value }]`, `[{ enum_id }]`…), a partir do tipo do campo. Lança para valor que o tipo
+ * não aceita. É o que `setLeadCustomFieldValue` usa, separado para quem grava vários campos num PATCH só (`gravarCamposDoLead`).
+ */
+export function valoresDoCampo(
+  fieldId: number,
+  fieldType: KommoFieldType,
+  value: string | number | string[],
+  enums: ReadonlyArray<{ id: number; value: string }> = [],
+): Array<Record<string, unknown>> {
+  let values: Array<Record<string, unknown>>;
+  if (fieldType === 'text' || fieldType === 'textarea') {
+    if (typeof value !== 'string') {
+      throw new Error(`field ${fieldId} (${fieldType}) requer string, recebeu ${typeof value}`);
+    }
+    values = [{ value: downgradeEmoji(value) }];
+  } else if (fieldType === 'numeric' || fieldType === 'monetary') {
+    // `monetary` aceita o mesmo formato do `numeric` no PATCH — só o número,
+    // sem "R$" e sem separador de milhar. Ficou de fora até 01/09/2026, e o
+    // efeito era a IA não conseguir gravar "Valor pago / entrada" quando o
+    // paciente mandava o comprovante: a tool estourava com "tipo não
+    // suportado" e o campo ficava vazio no cartão.
+    const num = paraNumero(value);
+    if (num == null) {
+      throw new Error(`field ${fieldId} (${fieldType}) recebeu valor não-numérico: ${value}`);
+    }
+    values = [{ value: num }];
+  } else if (fieldType === 'date' || fieldType === 'birthday') {
+    let unixSec: number;
+    if (typeof value === 'number') {
+      unixSec = value > 1e12 ? Math.floor(value / 1000) : Math.floor(value);
+    } else if (typeof value === 'string') {
+      const parsed = epochDeCampoData(value);
+      if (parsed == null) {
+        throw new Error(`field ${fieldId} (${fieldType}) ISO inválido: ${value}`);
+      }
+      unixSec = parsed;
+    } else {
+      throw new Error(`field ${fieldId} (${fieldType}) requer ISO string ou number`);
+    }
+    values = [{ value: unixSec }];
+  } else if (fieldType === 'select' || fieldType === 'radiobutton') {
+    if (typeof value !== 'string') {
+      throw new Error(`field ${fieldId} (${fieldType}) requer string (label da opção)`);
+    }
+    const enumId = resolveEnumId(value, enums);
+    values = enumId != null ? [{ enum_id: enumId }] : [{ value: downgradeEmoji(value) }];
+  } else if (fieldType === 'multiselect') {
+    const arr = Array.isArray(value) ? value : [value];
+    values = arr.map((v) => {
+      const label = String(v);
+      const enumId = resolveEnumId(label, enums);
+      return enumId != null ? { enum_id: enumId } : { value: downgradeEmoji(label) };
+    });
+  } else {
+    throw new Error(`field ${fieldId} tipo não suportado: ${fieldType}`);
+  }
+
+  return values;
+}

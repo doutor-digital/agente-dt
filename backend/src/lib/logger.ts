@@ -134,6 +134,14 @@ export const formatadores = {
   },
 };
 
+/**
+ * A saída bonita (`pino-pretty`) é um TRANSPORTE: uma worker thread à parte. Sem NODE_ENV (o caso dos testes, que o env.ts lê como `development`) cada processo de teste
+ * subia essa thread, e quando ela não encerrava a tempo o processo ficava pendurado para sempre — o que a flag `--test-force-exit` escondia derrubando o processo
+ * (e os testes que ainda não tinham reportado, em silêncio). Sob o runner de testes (`NODE_TEST_CONTEXT`, que o node:test põe em todo processo filho) não há transporte:
+ * o log vai direto para o stdout, sem thread.
+ */
+export const usarSaidaBonita = (ambiente: NodeJS.ProcessEnv = process.env, nodeEnv: string = env.NODE_ENV): boolean => nodeEnv === 'development' && !ambiente.NODE_TEST_CONTEXT;
+
 export const logger = pino({
   level: env.LOG_LEVEL,
   base: { service: 'agente-dt-backend' },
@@ -150,7 +158,7 @@ export const logger = pino({
       }
     },
   },
-  ...(env.NODE_ENV === 'development'
+  ...(usarSaidaBonita()
     ? {
         transport: {
           target: 'pino-pretty',

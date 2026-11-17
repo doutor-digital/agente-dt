@@ -63,6 +63,38 @@ const PAUSA_ENTRE_LEITURAS_TELA_MS = 1500;
 /** Cada cartão com sessão a atualizar custa até ~10 PATCH; o teto espalha a 1ª varredura de uma unidade grande por várias. */
 const MAX_SESSOES_POR_VARREDURA = Number(process.env.FRANQUIA_SESSOES_MAX) || 60;
 const CACHE_LEAD_MS = 6 * 60 * 60_000;
+
+/**
+ * Cartões que o Kommo devolveu VAZIOS (204 = apagado, ver `cartaoApagado`), por unidade, nesta vida do processo.
+ *
+ * Pular o apagado (#383) acabou com os 400, mas não bastava: o `spine_lead_links` continuava apontando o paciente
+ * para ele, e o cartão VIVO nunca recebia nada. Timbó, 17/11/2026: a INGRIDE (idClient 370754, em tratamento) tem o
+ * vínculo no 4843998, apagado; o cartão dela que existe, 4248414 em EM TRATAMENTO, parou em "1 sessão, última 03/11"
+ * com a franquia em 4 sessões. Nada aqui apaga o vínculo do banco: o apagado só deixa de ser candidato (cache,
+ * vínculo e telefone), e o paciente volta a ser procurado pelo telefone. Depois de um deploy a lista recomeça vazia:
+ * custa um GET por cartão apagado, nenhuma gravação.
+ */
+const cartoesApagados = new Map<string, Set<number>>();
+
+/** Guarda o cartão como apagado. `true` só na primeira vez (é quando vale avisar no log). */
+export function marcarCartaoApagado(unitId: string, leadId: number): boolean {
+  const ids = cartoesApagados.get(unitId) ?? new Set<number>();
+  if (ids.has(leadId)) return false;
+  ids.add(leadId);
+  cartoesApagados.set(unitId, ids);
+  return true;
+}
+
+export function ehCartaoApagado(unitId: string, leadId: number): boolean {
+  return cartoesApagados.get(unitId)?.has(leadId) ?? false;
+}
+
+/** O filtro do vínculo: só cartão do Kommo (não a chave sintética do Chatwoot) e nenhum que já se sabe apagado. */
+export function soCartaoVivo(unitId: string) {
+  const ids = [...(cartoesApagados.get(unitId) ?? [])];
+  return ids.length ? { kommoLeadId: { ...SO_CARTAO_DO_KOMMO.kommoLeadId, notIn: ids } } : SO_CARTAO_DO_KOMMO;
+}
+
 /** Cada atendimento lido da tela da franquia é 1 página (~300 KB): o teto espalha a 1ª varredura por várias e o cache evita reler o mesmo. */
 const MAX_TELA_POR_VARREDURA = Number(process.env.FRANQUIA_TELA_MAX) || 80;
 const CACHE_TELA_MS = 3 * 60 * 60_000;
@@ -170,6 +202,8 @@ export interface ResumoSync {
   movimentos: number;
   /** fase 1c: cartões cujas sessões/tratamento foram atualizados nesta varredura (teto `MAX_SESSOES_POR_VARREDURA`) */
   sessoes?: number;
+  /** cartões que o Kommo devolveu apagados (204) nesta varredura: pulados, sem gravação nenhuma */
+  cartoesApagados?: number;
   /** fase 1: escritas de lista puladas porque a opção que a franquia/código pede NÃO existe nesta conta (cada uma seria um 400 por varredura) */
   opcoesAusentes?: number;
   /** fase 1d: atendimentos lidos da TELA da franquia (forma de pagamento, retorno, motivo) nesta varredura */
@@ -412,7 +446,8 @@ export async function resolverPaciente(
 ): Promise<{ leadId: number | null; idsClient: number[]; leadConfirmado: boolean; /** o telefone que a busca achou (a tarefa solta do calendário o escreve no texto) */ fone?: string | null }> {
   const chaveCache = `${unit.id}:${normalizar(nome)}`;
   const hit = cache.get(chaveCache);
-  if (hit && hit.expiraEm > Date.now()) return hit;
+  // cache que aponta para cartão apagado não vale: procura de novo (vínculo vivo ou telefone)
+  if (hit && hit.expiraEm > Date.now() && !(hit.leadId !== null && ehCartaoApagado(unit.id, hit.leadId))) return hit;
 
   let leadId: number | null = null;
   // vínculo da Sofia e id do agendamento são prova; só o telefone com vários cartões é palpite
@@ -422,7 +457,7 @@ export async function resolverPaciente(
   if (idsSchedule.length > 0) {
     const link = await prisma.spineLeadLink.findFirst({
       // vínculo de conversa do Chatwoot (chave sintética) não é cartão do Kommo
-      where: { unitId: unit.id, spineIdSchedule: { in: idsSchedule }, ...SO_CARTAO_DO_KOMMO },
+      where: { unitId: unit.id, spineIdSchedule: { in: idsSchedule }, ...soCartaoVivo(unit.id) },
       orderBy: { updatedAt: 'desc' },
     });
     if (link) {
@@ -431,14 +466,14 @@ export async function resolverPaciente(
     }
   }
   if (leadId === null && idClient) {
-    const link = await prisma.spineLeadLink.findFirst({ where: { unitId: unit.id, spineIdClient: idClient, ...SO_CARTAO_DO_KOMMO }, orderBy: { updatedAt: 'desc' } });
+    const link = await prisma.spineLeadLink.findFirst({ where: { unitId: unit.id, spineIdClient: idClient, ...soCartaoVivo(unit.id) }, orderBy: { updatedAt: 'desc' } });
     if (link) leadId = link.kommoLeadId;
   }
   if (leadId === null) {
     const achado = await telefoneDoPaciente(unit, nome, idClient);
     if (achado) {
       const porFone = await leadPorTelefone(kommo, achado.fone);
-      leadId = porFone?.id ?? null;
+      leadId = porFone?.id != null && !ehCartaoApagado(unit.id, porFone.id) ? porFone.id : null;
       leadConfirmado = porFone?.confirmado ?? true;
       idsClient = achado.idsClient;
       fone = achado.fone;
@@ -472,6 +507,15 @@ export function idClientDoCartao(
  * `⚙ idClient` só aceita esse paciente. Sem `⚙` no cartão, ou sem saber quem o paciente é, não há como
  * provar o conflito e vale o casamento de sempre.
  */
+/**
+ * Cartão apagado no Kommo: o GET /leads/{id} responde 204 sem corpo e `getLead` devolve '' (o tipo diz KommoLead, mas
+ * não é). Sem esta checagem a varredura seguia gravando campo por campo e cada escrita voltava 400 "Lead not found":
+ * 17/11/2026, Timbó, cartão 4843998 — 228 erros em 12 h, ~15 min por volta, e o painel lia como "sessões não chegam".
+ */
+export function cartaoApagado(lead: unknown): boolean {
+  return !lead || typeof lead !== 'object' || !(lead as { id?: unknown }).id;
+}
+
 export function cartaoDeOutroPaciente(idDoCartao: number | null, idsDoPaciente: number[]): boolean {
   return idDoCartao !== null && idsDoPaciente.length > 0 && !idsDoPaciente.includes(idDoCartao);
 }
@@ -2400,6 +2444,14 @@ async function sincronizarUnidade(unit: Unit, deps: { kommo?: KommoClient } = {}
         continue;
       }
       const lead = await kommo.getLead(leadId);
+      if (cartaoApagado(lead)) {
+        // Guarda o apagado: na próxima varredura o `resolverPaciente` não volta a ele e procura o cartão vivo.
+        resumo.cartoesApagados = (resumo.cartoesApagados ?? 0) + 1;
+        if (marcarCartaoApagado(unit.id, leadId)) {
+          logger.info({ unit: unit.slug, leadId, paciente: p.nome }, 'franquia-sync: cartão apagado no Kommo — pulei; o paciente volta a ser procurado pelo telefone');
+        }
+        continue;
+      }
       // Kommo dividido: só o cartão desta unidade; campo vazio vai para a lista da SDR, sem atribuir. Vem ANTES do
       // conflito de paciente: cartão de outra unidade não é desta varredura nem para ganhar CONFLITO_FRANQUIA.
       const idsDoPaciente = p.idClient ? [p.idClient] : casado.idsClient;

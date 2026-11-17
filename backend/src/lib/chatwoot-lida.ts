@@ -14,10 +14,11 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { Request, Response } from 'express';
 import { logger } from './logger.js';
-import { chamar, contaChatwootDoAmbiente, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
+import { INSTANCIA_CAIXA, contaDaCaixa } from './chatwoot-unidades.js';
+import { chamar, contextoDaCaixa, contextoDoAmbiente, tokenParaChaveDaConta, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 
 /** instância do Evolution → caixa do Chatwoot */
-export const INSTANCIA_CAIXA: Readonly<Record<string, number>> = { 'parauapebas-unidade': 2 };
+export { INSTANCIA_CAIXA };
 export const INTERVALO_MESMO_TELEFONE_MS = 20_000;
 const VALIDADE_DO_ALVO_MS = 30 * 60_000;
 
@@ -66,6 +67,12 @@ export function mesmoTelefone(a: string, b: string): boolean {
   const y = b.replace(/\D/g, '');
   if (x.length < 10 || y.length < 10) return false;
   return x.slice(0, 4) === y.slice(0, 4) && x.slice(-8) === y.slice(-8);
+}
+
+/** A mesma regra de `mesmoTelefone` como chave de agrupamento (DDI+DDD e 8 últimos dígitos): telefones «iguais» dão a mesma chave. null = curto demais. */
+export function chaveDoTelefone(t: string | undefined | null): string | null {
+  const d = String(t ?? '').replace(/\D/g, '');
+  return d.length < 10 ? null : `${d.slice(0, 4)}|${d.slice(-8)}`;
 }
 
 export interface Alvo {
@@ -157,25 +164,55 @@ export async function processarLeitura(aviso: AvisoDeLeitura, porta: PortaDaLida
 
 // ── a rota ─────────────────────────────────────────────────────────────────────────────────────────
 
-let estado: { porta: PortaDaLida; mem: MemoriaDaLida } | null = null;
+/** A memória é uma só (as chaves já levam a caixa, que é única na instalação); a PORTA é uma por conta do Chatwoot. */
+const memoriaDaLida = novaMemoriaDaLida();
+const portasDaLida = new Map<number, { assinatura: string; porta: PortaDaLida }>();
+
+/** Só para os testes. */
+export const esquecerPortasDaLida = (): void => portasDaLida.clear();
+
+/**
+ * A porta do Chatwoot da CONTA da caixa. null = caixa de unidade sem conta válida (ou Chatwoot não configurado): RECUSA, nunca a conta 1.
+ * Parauapebas: o contexto do ambiente, como sempre. A porta guardada vale enquanto a conta, o endereço e o token forem os mesmos: se a
+ * configuração recarregou e algum mudou, a porta é refeita (a memória não tem nada da conta, então não se perde).
+ */
+export function portaDaLidaDaCaixa(caixa: number, e: NodeJS.ProcessEnv = process.env): PortaDaLida | null {
+  const base = contextoDoAmbiente(e);
+  if (!base) return null;
+  const ctx = contextoDaCaixa(base, caixa, e);
+  if (!ctx?.conta) return null;
+  const assinatura = [ctx.conta.url, ctx.conta.conta, ctx.conta.token].join('\u0000');
+  const guardada = portasDaLida.get(ctx.conta.conta);
+  if (guardada && guardada.assinatura === assinatura) return guardada.porta;
+  const porta = portaDoChatwoot(ctx);
+  portasDaLida.set(ctx.conta.conta, { assinatura, porta });
+  return porta;
+}
 
 /** POST /api/public/evolution/lida?k=<chave> — webhook `messages.update` do Evolution. Responde na hora; o trabalho segue depois. */
 export function lidaEvolutionHandler(req: Request, res: Response): void {
-  const token = process.env.CHATWOOT_API_TOKEN?.trim();
+  // A chave é da CONTA da caixa que a instância alimenta (derivada do token dela): a de Parauapebas não vale para a caixa de outra clínica.
+  // a instância vem do corpo (qualquer evento dela, não só o de leitura): o Evolution manda outros e eles também precisam passar com a chave certa
+  const instancia = String((req.body as { instance?: unknown } | undefined)?.instance ?? '').trim();
+  const caixa = instancia ? INSTANCIA_CAIXA[instancia] : undefined;
+  const aviso = avisoDaLeitura(req.body);
+  let token: string | undefined = process.env.CHATWOOT_API_TOKEN?.trim(); // instância desconhecida ou aviso torto: só a chave do ambiente
+  if (caixa) {
+    const conta = contaDaCaixa(caixa); // número = conta própria; null = a do ambiente; undefined = clínica sem conta válida (nenhuma chave vale)
+    token = typeof conta === 'number' ? tokenParaChaveDaConta(conta) : conta === null ? token : undefined;
+  }
   if (!chaveDaLidaConfere(token, req.query.k)) {
     res.status(401).json({ error: 'chave inválida' });
     return;
   }
   res.json({ ok: true });
-  const aviso = avisoDaLeitura(req.body);
-  if (!aviso) return;
-  if (!estado) {
-    const conta = contaChatwootDoAmbiente();
-    if (!conta) return;
-    estado = { porta: portaDoChatwoot(criarContextoChatwoot(conta)), mem: novaMemoriaDaLida() };
+  if (!aviso || !caixa) return; // instância que nenhuma unidade tem: ignorada, como sempre
+  const porta = portaDaLidaDaCaixa(caixa);
+  if (!porta) {
+    logger.warn({ instancia: aviso.instancia, caixa }, 'evolution-lida: a caixa não tem conta do Chatwoot válida — ignorado, sem chamar o Chatwoot');
+    return;
   }
-  const { porta, mem } = estado;
-  processarLeitura(aviso, porta, mem, Date.now())
+  processarLeitura(aviso, porta, memoriaDaLida, Date.now())
     .then((r) => {
       if (r === 'marcada' || r === 'sem-conversa') logger.debug({ instancia: aviso.instancia, final: aviso.telefone.slice(-4), r }, 'evolution-lida');
     })

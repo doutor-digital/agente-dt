@@ -358,6 +358,11 @@ async function varrer(): Promise<void> {
                       threadId: idRastro,
                       input: { origem: 'vigia-agendamento-perdido' },
                       channel: 'manual',
+                      // O rastro é só a marca de "já avisei", não um turno da IA. Sem status explícito o
+                      // banco grava RUNNING (o padrão) e ele nunca fecha: em 17/11/2026 eram 69 dos 71
+                      // "turnos presos há mais de 15 min" da rede em 72 h, e o painel lia isso como
+                      // paciente sem resposta. As outras marcas (etiqueta, rotina, cutucada) já nascem SUCCESS.
+                      status: 'SUCCESS',
                     },
                   },
                 },

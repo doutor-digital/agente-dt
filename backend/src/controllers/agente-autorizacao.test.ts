@@ -90,7 +90,7 @@ test('revisar e pedir para OUTRA unidade (ela atende Parauapebas): 403', async (
 test('avaliar: mensagem que não é resposta da Sofia nesta conversa = 404; conversa de caixa sem IA = 422', async () => {
   const orig = { ...bancoDeAvaliacoes };
   let gravou = 0;
-  bancoDeAvaliacoes.respostaDaSofia = async (mensagem, conversa) => (mensagem === 500 && conversa === 31 ? { unitSlug: PARAU } : null);
+  bancoDeAvaliacoes.respostaDaSofia = async (mensagem, conversa, slug) => (mensagem === 500 && conversa === 31 && slug === PARAU ? { unitSlug: PARAU } : null);
   bancoDeAvaliacoes.gravarAvaliacao = async () => {
     gravou++;
   };

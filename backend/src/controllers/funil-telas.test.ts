@@ -3,7 +3,7 @@
  * (mesmo chamando a URL direto); os dados saem sempre com o login da própria pessoa; fonte não ligada vira estado, não número inventado;
  * e o `menu.js` e a página PARSEIAM como JavaScript.
  */
-import { test } from 'node:test';
+import { mock, test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Request, Response } from 'express';
 
@@ -11,6 +11,11 @@ process.env.CHATWOOT_API_TOKEN = 'token-da-conta';
 process.env.CHATWOOT_CONTA_ID = '1';
 process.env.CHATWOOT_URL = 'https://chatwoot.exemplo.test';
 process.env.CHATWOOT_GESTORES = 'ana@dd.com';
+
+// O RELÓGIO É FIXO: as telas contam «hoje», «manhã» e «semana» em Belém a partir de Date.now(), e as conversas do teste nascem «1 hora atrás». Com o
+// relógio de verdade o resultado dependia da hora do dia em que a suíte rodava (de madrugada, «1 hora atrás» caía em ontem e o período «manhã» ficava
+// vazio). Quarta 18/11/2026, 11:00 em Belém; só o Date é simulado (timers e rede seguem reais).
+mock.timers.enable({ apis: ['Date'], now: new Date('2026-11-18T14:00:00Z') });
 
 const AGORA_S = Math.floor(Date.now() / 1000);
 const conversa = (id: number, o: Record<string, any> = {}) => ({
@@ -64,7 +69,7 @@ const falsoPrisma = {
 };
 for (const [k, v] of Object.entries(falsoPrisma)) Object.defineProperty(prisma, k, { value: v, configurable: true });
 
-const { funilOportunidadesHandler, funilMarketingHandler, funilGestorHandler, funilGestaoHandler, paginaFunilHandler, montarMenuJs } = await import('./funil.controller.js');
+const { semArquivo, funilOportunidadesHandler, funilMarketingHandler, funilGestorHandler, funilGestaoHandler, paginaFunilHandler, montarMenuJs } = await import('./funil.controller.js');
 const { corsDoAssistente } = await import('./assistente.controller.js');
 
 function resp() {
@@ -270,9 +275,33 @@ test('página (todas as telas) PARSEIA, sem marcador sobrando; as novas só fala
   assert.match(script!, /oportunidades/);
   assert.match(script!, /tel:/);
   assert.match(script!, /window\.print\(\)/);
+  // o «?» do cabeçalho pede a aula da tela ao menu do CRM (só dentro do CRM): funil, hoje e oportunidades; marketing e gestor não têm aula
+  assert.match(html, /id="ajuda"/);
+  assert.match(script!, /event:'guia:tela',tela:aula/);
+  assert.match(script!, /TELA===''\?'funil':TELA==='hoje'\?'hoje':TELA==='oport'\?'oportunidades':''/);
   assert.match(html, /@media print/);
   // «Mensagem» / «Agendar retorno» / «Confirmar» só abrem a conversa (função existente), nunca chamam a rota de mensagem
   const novo = script!.slice(script!.indexOf('Oportunidades · Marketing · Gestor'));
   assert.doesNotMatch(novo.slice(0, novo.indexOf('function iniciar')), /api\('POST'/);
   assert.match(novo, /abrirConversa\(i\.id\)/);
+});
+
+test('UNIFICAÇÃO: o filtro do funil tira o arquivo do histórico (Hoje/gestão) e deixa só o com etapa no quadro e em Oportunidades', () => {
+  const antes = Math.floor(Date.parse('2026-11-12T12:00:00Z') / 1000);
+  const depois = Math.floor(Date.parse('2026-11-14T12:00:00Z') / 1000);
+  const pg = {
+    data: {
+      meta: { all_count: 4 },
+      payload: [
+        { id: 1, labels: [], last_activity_at: depois },
+        { id: 2, labels: ['historico'], last_activity_at: antes },
+        { id: 3, labels: ['historico'], last_activity_at: antes, custom_attributes: { etapa: 'Perdido' } },
+        { id: 4, labels: ['historico'], last_activity_at: depois },
+      ],
+    },
+  };
+  assert.deepEqual(semArquivo(pg, 'fora').data.payload.map((c: any) => c.id), [1, 4]);
+  assert.deepEqual(semArquivo(pg, 'com-etapa').data.payload.map((c: any) => c.id), [1, 3, 4]);
+  assert.equal(semArquivo(pg, 'fora').data.meta.all_count, 4, 'não mexe no resto da página');
+  assert.equal(semArquivo({ data: { payload: [{ id: 9, labels: [] }] } }, 'fora').data.payload.length, 1);
 });

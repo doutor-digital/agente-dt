@@ -209,6 +209,20 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/follow-up-worker.ts',
   },
   {
+    id: 'cutucada-apos-equipe',
+    chave: 'CUTUCADA_APOS_EQUIPE_SLUGS',
+    nome: 'Cutucada da Sofia depois da equipe',
+    oQueFaz:
+      'Quando a SDR (a Mariana, a Giovana…) fala com um lead da entrada ou de EM QUALIFICAÇÃO e o lead não responde em 2 horas, a Sofia lê a conversa e manda UMA mensagem curta (1 ou 2 frases, terminando em pergunta) retomando o assunto da SDR. Só quando a clínica está atendendo (o horário de cada dia, ex.: sábado 7h30–13h; fuso e feriado; nunca antes das 8h nem depois das 20h), e uma única vez por lead.',
+    pegadinha:
+      'Quem falou por último vem da conversa oficial do Kommo, porque a fala da SDR pelo celular (WhatsApp Lite) nunca passa pelo nosso banco: o celular aparece lá como «WhatsApp Lite», a Sofia como «Salesbot» (e só vale se bate com um envio que o nosso agente registrou), e a saudação automática do app e os robôs de ▶ Retomada contam como robô, não como equipe. Fala da SDR com mais de 48 h não cutuca. Nunca cutuca: paciente em tratamento ou com consulta futura (cartão ou franquia; com o índice de telefones da franquia velho ou vazio, não manda), quem a equipe prometeu retornar («vou verificar e te retorno»: a dívida é da clínica), número interno, NO_FOLLOW_UP / NAO_PERTURBAR / CURRÍCULO / opt-out, «Pausar IA» ou pausa com data, ◷ Retomar em de hoje em diante, unidade em pausa, quem já recebeu as 2 cobranças do dia. A mensagem nunca fala de preço, Pix, sinal, horário nem ligação que a conversa não tenha citado. Em «Só no papel» a Sofia escreve de verdade (centavos) mas NÃO envia: a tela mostra o texto que mandaria e, em «pularia», o motivo. O prazo muda por unidade em «pipelineIntents.cutucada_espera_min» (padrão 120). Não mexe no follow-up-24h, e por isso ligada ela NÃO roda onde o follow-up-24h está ligado (as duas mandariam toque ao mesmo lead; no papel roda em qualquer unidade). Ligue só depois de conferir os textos do papel.',
+    risco: 'manda-mensagem',
+    temSeco: true,
+    exigeSecoAntes: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/cutucada-apos-equipe-worker.ts',
+  },
+  {
     id: 'confirmacao-d2',
     chave: 'CONFIRMACAO_D2_SLUGS',
     nome: 'Reforço de confirmação (D-2)',
@@ -271,6 +285,20 @@ export const AUTOMACOES: readonly Automacao[] = [
     temSeco: true,
     quandoVazio: 'seco',
     arquivo: 'src/lib/disparo/lote.ts',
+  },
+  {
+    id: 'chatwoot-disparo',
+    chave: 'CHATWOOT_DISPARO_SLUGS',
+    nome: 'Disparos pelo CRM (tela «Disparos»)',
+    oQueFaz:
+      'A tela «Disparos» do menu do CRM: a equipe filtra as conversas da caixa de WhatsApp oficial (etiqueta, etapa, quanto tempo sem interação), escolhe um MODELO APROVADO na Meta, vê a prévia por pessoa e a administração aprova; o envio sai em ondas, pela própria conversa do CRM (a mensagem aparece lá). É o mesmo motor do «Disparo de campanha» (a lista aqui vem do CRM, não da etiqueta do Kommo): mesma janela de horário, mesmos tetos, mesma parada por SAIR.',
+    pegadinha:
+      'NASCE EM «SÓ NO PAPEL» EM TODAS AS UNIDADES: em seco, monta a lista, confere tudo e grava quem RECEBERIA, mas não manda nada. Mesmo ligado, só recebe de verdade quem estiver em CHATWOOT_DISPARO_LISTA_DE_TESTE da unidade (`slug=telefone,telefone` ou `slug=*`; lista PRÓPRIA do CRM, separada da DISPARO_LISTA_DE_TESTE do Kommo; sem a unidade lá ninguém recebe). Só a Doutor Digital liga (console): a tela Robôs da clínica NÃO mostra nem muda esta automação. Só aprova administrador da Doutor Digital (KIT_ADMINS_DD); a administradora da clínica só aprova se o ajuste «gerente aprova» da unidade for ligado (desligado de fábrica). Nunca manda para: quem respondeu SAIR, etiqueta «sem-follow-up», contato «interno», telefone repetido, quem recebeu outro disparo nos últimos 7 dias nem — em unidade com agenda da franquia — quem tem consulta marcada ou tratamento aberto (reconferido na hora do envio). A caixa precisa ser WhatsApp oficial de verdade (Channel::Whatsapp): caixa de API registrada como «cloud» é recusada. Não usa a campanha nativa do CRM (ela não tem freio, manda para quem pediu SAIR).',
+    risco: 'manda-mensagem',
+    temSeco: true,
+    exigeSecoAntes: true,
+    quandoVazio: 'seco',
+    arquivo: 'src/lib/disparo/chatwoot/porto.ts',
   },
   {
     id: 'aviso-agendamento',
@@ -610,11 +638,38 @@ export const AUTOMACOES: readonly Automacao[] = [
     oQueFaz:
       'A IA cadastra na franquia, como LEAD e já na primeira mensagem, toda pessoa que entra em contato — não só quem agenda (a regra de 26/09 deixa de valer para o lead). Paciente continua sendo criado só ao agendar. Número interno da rede e telefone que fala com 3 ou mais unidades em 30 dias nunca são cadastrados — nem quando veio de anúncio. Quem veio de anúncio pago (rastreio no cartão: origem Meta-* ou campanha) é lead, sempre. Quem NÃO veio de anúncio (orgânico: um "oi", engano, secretária que não está na lista, fornecedor) tem a conversa lida por uma IA barata, que decide: lead (cadastra), não é lead (barra e guarda o motivo) ou dúvida (não cadastra agora e lê de novo numa mensagem futura — no máximo 3 leituras por lead, 1 a cada 10 minutos).',
     pegadinha:
-      'Nasce DESLIGADA: a regra de 26/09 segue intacta (só a trava de um cadastro por vez por lead vale a mais). Em "Só no papel" a regra de 26/09 continua decidindo e a nova só registra no log e nesta lista: "gravaria" (cadastraria), "pularia" com o motivo (barrou interno, barrou 3+ unidades, sem telefone, barraria pela IA, dúvida). Em "Só no papel" a leitura da IA RODA (custa centavos: ~US$ 0,0001 por leitura, estimado) — só não cria nada. Falha da IA (sem chave Anthropic na unidade, fora do ar) conta como dúvida e nunca cadastra. Lead de anúncio que o rastreio ainda não gravou no cartão no 1º turno é tratado como orgânico até a próxima mensagem. Só vale onde "espelhar leads" está ligado na unidade e a franquia está conectada. Número interno: variável NUMEROS_INTERNOS (csv com o telefone COMPLETO, comparado pelos últimos 8 dígitos; item com menos de 8 dígitos é ignorado) — trocar no .env e recriar o contêiner basta, sem deploy; com a variável vazia ou ausente a regra NÃO cadastra ninguém além de quem agendou. A franquia exige "Nome Completo": quem só tem o primeiro nome fica de fora e é tentado de novo a cada 10 minutos de conversa até dar o sobrenome. Conversa sem telefone não é cadastrada. Dúvida na conferência (banco fora do ar) também não cadastra. Só cria lead onde o casamento cartão × paciente ("Casamento cartão × paciente e jornada") está LIGADO — sem ele, lead novo duplicaria quem já é paciente; quem já está na franquia (lead ou paciente) nunca é recriado. O cadastro roda no fim do turno da IA e, SÓ na conta dividida (Petrópolis × Caxias), TAMBÉM quando a IA é pulada (fora do horário, pausa da unidade ou do cartão, etapa fora da allowlist ou pausada por regra, equipe falou): lead atendido só pela SDR é cadastrado do mesmo jeito, com as mesmas travas. Nas demais unidades, com a IA pulada o lead segue sem cadastro por esta regra (limitação conhecida; outro PR). Etapa calada pelo nome (GANHO/ALTA/cancelado) não cadastra. Em conta dividida (Petrópolis × Caxias) o cartão que ainda não tinha unidade é cadastrado depois que o robô unidade-por-canal (ou a SDR) marca a unidade — e só se for desta. Para medir a cobertura em "Só no papel": leads novos por dia (conversas criadas) × leads distintos com decisão no log (cadastro-todo-lead).',
+      'Nasce DESLIGADA: a regra de 26/09 segue intacta (só a trava de um cadastro por vez por lead vale a mais). Em "Só no papel" a regra de 26/09 continua decidindo e a nova só registra no log e nesta lista: "gravaria" (cadastraria), "pularia" com o motivo (barrou interno, barrou 3+ unidades, sem telefone, barraria pela IA, dúvida). Em "Só no papel" a leitura da IA RODA (custa centavos: ~US$ 0,0001 por leitura, estimado) — só não cria nada. Falha da IA (sem chave Anthropic na unidade, fora do ar) conta como dúvida e nunca cadastra. Lead de anúncio que o rastreio ainda não gravou no cartão no 1º turno é tratado como orgânico até a próxima mensagem. Só vale onde "espelhar leads" está ligado na unidade e a franquia está conectada. Número interno: variável NUMEROS_INTERNOS (csv com o telefone COMPLETO, comparado pelos últimos 8 dígitos; item com menos de 8 dígitos é ignorado) — trocar no .env e recriar o contêiner basta, sem deploy; com a variável vazia ou ausente a regra NÃO cadastra ninguém além de quem agendou. A franquia exige "Nome Completo": quem só tem o primeiro nome fica de fora e é tentado de novo a cada 10 minutos de conversa até dar o sobrenome. Conversa sem telefone não é cadastrada. Dúvida na conferência (banco fora do ar) também não cadastra. Só cria lead onde o casamento cartão × paciente ("Casamento cartão × paciente e jornada") está LIGADO — sem ele, lead novo duplicaria quem já é paciente; quem já está na franquia (lead ou paciente) nunca é recriado. O cadastro roda no fim do turno da IA e, SÓ na conta dividida (Petrópolis × Caxias), TAMBÉM quando a IA é pulada (fora do horário, pausa da unidade ou do cartão, etapa fora da allowlist ou pausada por regra, equipe falou): lead atendido só pela SDR é cadastrado do mesmo jeito, com as mesmas travas. Nas demais unidades, com a IA pulada o lead só é cadastrado se a chave "Cadastro na franquia também quando a IA não fala" (cadastro-ia-pulada) estiver ligada nela. Etapa calada pelo nome (GANHO/ALTA/cancelado) não cadastra. Em conta dividida (Petrópolis × Caxias) o cartão que ainda não tinha unidade é cadastrado depois que o robô unidade-por-canal (ou a SDR) marca a unidade — e só se for desta. Para medir a cobertura em "Só no papel": leads novos por dia (conversas criadas) × leads distintos com decisão no log (cadastro-todo-lead).',
     risco: 'escreve-campo',
     temSeco: true,
     quandoVazio: 'desligado',
     arquivo: 'src/lib/cadastro-todo-lead.ts',
+  },
+  {
+    id: 'cadastro-ia-pulada',
+    chave: 'CADASTRO_IA_PULADA_SLUGS',
+    nome: 'Cadastro na franquia também quando a IA não fala',
+    oQueFaz:
+      'Leva o cadastro de lead na franquia ("Cadastrar TODO lead na franquia") também ao turno em que a IA NÃO responde — fora do horário dela, pausa, equipe falando. É o caso de Petrópolis: de dia quem atende é a SDR pelo celular e a Sofia só entra às 18h, então o lead do dia nunca chegava ao cadastro.',
+    pegadinha:
+      'Só serve para unidade de Kommo próprio: na conta dividida isto já acontece sem a chave. Usa exatamente as travas do "Cadastrar TODO lead" (número interno, 3+ unidades, triagem do orgânico pela IA, nome completo, casamento ligado) e o estado dela: se ela estiver em "Só no papel", aqui também só registra; se estiver desligada, nada roda. Etapa calada pelo nome (GANHO/ALTA/cancelado) não cadastra. Nasceu em 16/11/2026, quando Petrópolis saiu da conta dividida com Caxias (12/11) e o cadastro do dia parou sem ninguém ver.',
+    risco: 'escreve-campo',
+    temSeco: false,
+    quandoVazio: 'desligado',
+    arquivo: 'src/controllers/webhook.controller.ts',
+  },
+  {
+    id: 'captura-silenciosa',
+    chave: 'CAPTURA_SILENCIOSA_SLUGS',
+    nome: 'IA preenche os campos da etapa lendo a conversa (mesmo quando a Sofia não fala)',
+    oQueFaz:
+      'Quando a Sofia NÃO responde (fora do horário dela, pausa, equipe atendendo), a IA espera a conversa esfriar uns 10 minutos, lê a conversa inteira no Kommo (paciente, atendente e Sofia) e preenche só os campos que a etapa do cartão mostra e que estão VAZIOS: queixa, região da dor, qualificação (quente/morno/frio), origem, observações, cidade e estado, quando a etapa os pede. É o caso de Petrópolis: de dia quem atende é a SDR pelo celular e a Sofia só entra às 18h, então ninguém anotava o que o paciente contava.',
+    pegadinha:
+      'Nunca sobrescreve campo que já tem valor (da SDR ou da IA), nunca manda mensagem e nunca muda a etapa. Só mexe nos campos que a etapa mostra no cartão (o molde de cabeçalho por etapa): campo escondido na etapa não é preenchido, então em Petrópolis hoje só EM QUALIFICAÇÃO tem o que preencher. Cada valor precisa de uma frase do paciente que o prove (Qualificação e Observações não): sem a frase, não grava. Em campo de texto livre (Queixa, Observações…) toda palavra de conteúdo do valor tem de ter sido escrita pelo paciente: o resumo com detalhe que ele não disse é recusado (na tela: «pularia — valor com detalhe que o paciente não disse»), a lista de palavras sem conteúdo vale pela palavra inteira, e tempo ou número no valor («há 2 anos», 3 → 8 meses) tem de estar igual numa fala dele. Frase de prova sobre OUTRA pessoa (pai, mãe, filho, marido, esposa…) não prova Queixa nem Região da dor («pularia — fala de outra pessoa»). Qualificação só depois de 2 falas do paciente, e NÃO é gravada onde o «Preenche o que a IA deixou vazio» (preenche-campos) está ligado: ele espera 6 h de propósito, para a temperatura assentar. Origem não é preenchida se o cartão já tem rastro de anúncio. Campos que outro robô escreve (Tipo de lead, Motivo do não agendamento, Situação da consulta, Retomar em, Motivo da espera) ficam fora de propósito. Nunca roda em número interno (NUMEROS_INTERNOS), currículo, funil TRATAMENTO nem cartão fechado (GANHO/PERDIDO). Teto: 3 leituras por cartão por dia e 150 por unidade por dia (o dia é o local de cada unidade); IA fora do ar faz a unidade esperar 5 min, dobrando até 1 h, mas só quando 2 cartões diferentes falham em seguida (a falha de um cartão só não pára a unidade); conversa que não mudou não é relida (e áudio que não deu para transcrever não conta como lida: tenta nos turnos seguintes e, na 3ª tentativa do dia, lê SEM o áudio, com a lacuna avisada à IA e marcada na tela e na nota). Em "Só no papel" a leitura RODA (cerca de US$ 0,001 por cartão, modelo barato Haiku) e a tela mostra "gravaria campo X = Y" com a frase do paciente, e "pularia" com o motivo do que foi recusado — nada é escrito no Kommo. Ligada, grava os campos num PATCH só (se o Kommo recusar o lote com erro 400, relê o cartão e tenta campo a campo só no que continua vazio; com 429, 403, timeout ou rede, registra e sai sem insistir) e deixa uma nota no cartão dizendo o que preencheu. ATENÇÃO: Queixa, Origem, Cidade e Estado do cartão SEGUEM PARA A FRANQUIA (o espelho de leads lê esses quatro campos, spine-sync.service.ts): o que esta chave grava vira dado do lead lá — por isso o seco primeiro. A espera dos 10 minutos fica na memória do servidor: um deploy no meio zera quem estava esperando (o próximo turno pulado agenda de novo). A fala que a SDR digita pelo celular só entra na leitura quando o paciente escreve de novo ou na próxima leitura do mesmo cartão; ela não dispara a leitura. Não deixa a etiqueta de região (lombar/cervical) que a Sofia põe ao gravar a região da dor.',
+    risco: 'escreve-campo',
+    temSeco: true,
+    exigeSecoAntes: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/captura-silenciosa.ts',
   },
   {
     id: 'carimbo-etapa',
@@ -644,9 +699,9 @@ export const AUTOMACOES: readonly Automacao[] = [
     chave: 'RENOMEAR_LEAD_SLUGS',
     nome: 'Renomear o lead novo (sem IA)',
     oQueFaz:
-      'A cada 5 minutos lê os leads criados nas últimas 24 h que ainda têm o nome do Kommo ("Lead #123") e dá o nome que as SDRs dão à mão: "Nome dd/mm/aa", com o nome do contato do WhatsApp e a data de criação. Se o contato não tem nome, ou o nome não parece de pessoa (frase, emoji, número), vira "Lead dd/mm/aa" ("Lead 2 dd/mm/aa" para o segundo do dia).',
+      'A cada 5 minutos lê os leads criados nas últimas 24 h que ainda têm o nome do Kommo ("Lead #123") e dá o nome que as SDRs dão à mão: "Nome dd/mm/aa", com o nome do contato do WhatsApp e a data de criação. Se o contato não tem nome, ou o nome não parece de pessoa (frase, emoji, número), vira "Lead dd/mm/aa" ("Lead 2 dd/mm/aa" para o segundo do dia). Nas unidades listadas na variável RENOMEAR_LEAD_DESDE do servidor (slug=AAAA-MM-DD) ele faz mais: também troca o título genérico do título padrão ("Lead dd/mm/aaaa", "Lead N dd/mm/aaaa") pelo nome do paciente — primeiro o da franquia, achado pelo telefone, depois o do contato — e alcança os cartões abertos criados desde aquele dia. Se nada serve, o título genérico que já estava lá fica como está (nunca troca "Lead" por outro "Lead").',
     pegadinha:
-      'Regra fixa, sem IA — nasceu para Petrópolis e Caxias, onde o Kommo não manda mensagem para o agente e o título padrão nunca acorda. Nome que a SDR já deu NUNCA é tocado (relê o lead antes de gravar) e só age em lead com 3 minutos de vida. Na conta dividida vale a chave da unidade do cartão (⌂ Unidade de atendimento); cartão sem unidade só é renomeado se as duas chaves estiverem ligadas (em "só no papel" numa e ligada na outra, ele fica só no papel). Na dúvida escreve "Lead dd/mm/aa" em vez de arriscar um nome errado.',
+      'Regra fixa, sem IA — nasceu para Petrópolis e Caxias, onde o Kommo não manda mensagem para o agente. Fora da lista RENOMEAR_LEAD_DESDE nada mudou: só "Lead #123", só o nome do contato, só as últimas 24 h, sem consultar a franquia. Na lista, ligado JUNTO com o "título padrão", o renomear corrige depois o título genérico que o título padrão pôs ("Lead 6 13/11/2026" vira "Nome 13/11/26"), só aos 30 minutos de vida, para dar a vez à Sofia onde ela atende; "Lead #123" segue em 3 minutos. Nome que a SDR já deu NUNCA é tocado (relê o lead antes de gravar). O nome da franquia só vale quando o contato tem nome de pessoa de 2 ou mais palavras, todas no cadastro do paciente ("Lucilene Coelho" em "Lucilene Coelho Sendra"): o título alimenta o franquia-sync, que busca o paciente pelo título, grava o idClient e move a etapa, e o paciente errado (a mãe escrevendo pela filha no mesmo telefone) levaria a jornada dele. Contato de uma palavra só, sobrenome igual ou outro nome: a franquia não é usada e fica o nome do contato (ou o genérico). Franquia com erro: espera até 6 rodadas e segue com o contato; paciente apagado ou índice velho: segue na hora. Na conta dividida vale a chave da unidade do cartão (⌂ Unidade de atendimento); cartão sem unidade só é renomeado se as duas chaves estiverem ligadas (em "só no papel" numa e ligada na outra, ele fica só no papel) e não consulta a franquia. O estoque (cartões com mais de 24 h, só abertos, até 30 dias) anda no máximo 15 por rodada, com pausa, para não disputar o Kommo com a Sofia. Ligue primeiro em "só no papel" e confira a lista.',
     risco: 'escreve-campo',
     temSeco: true,
     quandoVazio: 'desligado',
@@ -715,6 +770,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     temSeco: false,
     quandoVazio: 'desligado',
     arquivo: 'src/lib/sofia-calada.ts',
+  },
+  {
+    id: 'calar-paciente-em-tratamento',
+    chave: 'CALAR_PACIENTE_EM_TRATAMENTO_SLUGS',
+    nome: 'Sofia calada para paciente em tratamento e número interno',
+    oQueFaz:
+      'Cartão novo e vazio no funil COMERCIAL cujo telefone é de PACIENTE da franquia com tratamento ativo ou sessão futura (ex.: "Confirmado" em resposta ao lembrete de sessão): a Sofia não responde e deixa uma nota no cartão, 1 vez por dia. Telefone da lista de números internos também fica sem resposta.',
+    pegadinha:
+      'Só pergunta à franquia quando o cartão está no COMERCIAL e ainda sem vínculo com a franquia; franquia fora do ar ou lenta (mais de 3 s) = a Sofia responde como sempre. Paciente que só fez avaliação, ou já terminou, continua sendo atendido. O índice de telefones da franquia guarda 1 cadastro por telefone: mãe e filha no mesmo WhatsApp não aparecem como ambíguo. Atenção: os números de teste da equipe em NUMEROS_INTERNOS ficam MUDOS nas unidades onde isto estiver ligado. Em "só no papel" decide e registra no histórico da execução e no log, sem calar e sem nota.',
+    risco: 'comportamento',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/paciente-em-tratamento.ts',
   },
   {
     id: 'pausa-equipe',
@@ -930,9 +998,9 @@ export const AUTOMACOES: readonly Automacao[] = [
   {
     id: 'chatwoot-regua',
     chave: 'CHATWOOT_REGUA_SLUGS',
-    nome: 'Régua no Chatwoot',
+    nome: 'Régua no CRM',
     oQueFaz:
-      'A régua de mensagens do Kommo da unidade (os mesmos gatilhos ligados lá: follow-up do perdido, pré-pagamento, véspera/dia/preparo da consulta, falta, pós-consulta e decisão, em espera, etiquetas da SDR, sessão, alta, cancelamento) rodando no Chatwoot. «Só no papel» não manda nada ao paciente: deixa uma NOTA PRIVADA na conversa com o que faria. Ligada, manda a mensagem de verdade. Os robôs internos do Kommo (lead quente parado 3 h, 24 h sem responder, «Fechou» sem «Fechou tratamento») viram nota privada para a equipe + ação (prioridade, etiqueta, etapa Perdido) — nunca mensagem ao paciente. Em qualquer modo ligado ou no papel, também põe/tira a etiqueta «respondeu pelo celular».',
+      'A régua de mensagens do Kommo da unidade (os mesmos gatilhos ligados lá: follow-up do perdido, pré-pagamento, véspera/dia/preparo da consulta, falta, pós-consulta e decisão, em espera, etiquetas da SDR, sessão, alta, cancelamento) rodando no CRM. «Só no papel» não manda nada ao paciente: deixa uma NOTA PRIVADA na conversa com o que faria. Ligada, manda a mensagem de verdade. Os robôs internos do Kommo (lead quente parado 3 h, 24 h sem responder, «Fechou» sem «Fechou tratamento») viram nota privada para a equipe + ação (prioridade, etiqueta, etapa Perdido) — nunca mensagem ao paciente. Em qualquer modo ligado ou no papel, também põe/tira a etiqueta «respondeu pelo celular».',
     pegadinha:
       'Hoje só a caixa da Parauapebas. Só dispara entre 8h e 20h (Belém), de segunda a sábado; regra «antes» vale até 2 h depois do horário e as «depois» até 12 h, passou disso não manda (não dispara atrasado em massa). O que a conversa já tinha antes do worker começar a olhar não conta como «entrou agora». Nunca repete a mesma ocorrência; consulta remarcada avisa de novo. Campo faltando no texto (data, valor da parcela, chave Pix, atendente) = não manda, e no papel a nota diz o que falta. Ligar depois do papel NÃO reenvia o que o papel já «enviou». Os modelos não têm botões (WhatsApp não oficial): vai só o texto.',
     risco: 'manda-mensagem',
@@ -944,11 +1012,11 @@ export const AUTOMACOES: readonly Automacao[] = [
   {
     id: 'chatwoot-ia',
     chave: 'CHATWOOT_IA_SLUGS',
-    nome: 'Sofia e transcrição no Chatwoot',
+    nome: 'Sofia e transcrição no CRM',
     oQueFaz:
-      'Para cada mensagem nova do paciente na caixa da unidade no Chatwoot: áudio vira NOTA PRIVADA com a transcrição; e, depois de 60 s sem o paciente escrever, a Sofia lê a conversa e responde com as ferramentas REAIS (horários da agenda da franquia, cadastro, agendamento, sinal Pix, e campos/etiquetas/etapa na própria conversa). «Só no papel»: lê os horários de verdade, mas o que escreve (cadastrar, agendar, sinal, etiqueta, etapa) é simulado, e ela deixa uma NOTA PRIVADA com o que responderia e as ações que tomaria — nada vai ao paciente. Ligada: manda a resposta como mensagem pública (o Pix do sinal numa mensagem só dele, o endereço depois de marcar) e grava de verdade; depois de agendar, grava data, hora, situação «Agendado» e a etapa.',
+      'Para cada mensagem nova do paciente na caixa da unidade no CRM: áudio vira NOTA PRIVADA com a transcrição; e, depois de 60 s sem o paciente escrever, a Sofia lê a conversa e responde com as ferramentas REAIS (horários da agenda da franquia, cadastro, agendamento, sinal Pix, e campos/etiquetas/etapa na própria conversa). «Só no papel»: lê os horários de verdade, mas o que escreve (cadastrar, agendar, sinal, etiqueta, etapa) é simulado, e ela deixa uma NOTA PRIVADA com o que responderia e as ações que tomaria — nada vai ao paciente. Ligada: manda a resposta como mensagem pública (o Pix do sinal numa mensagem só dele, o endereço depois de marcar) e grava de verdade; depois de agendar, grava data, hora, situação «Agendado» e a etapa.',
     pegadinha:
-      'Hoje só a caixa da Parauapebas. NÃO responde contato INTERNO: o número da unidade também recebe recado da própria equipe («libera», «acabando»), e a equipe marca esses contatos com a etiqueta «interno» na conversa (a etiqueta precisa existir em Configurações > Etiquetas) ou com o atributo «interno» = sim no contato — sem marca, a Sofia responde. Se a EQUIPE já combinou horário na conversa («às 08:00») e a agenda da franquia diz outro (ou não há consulta, ou a franquia não respondeu), a Sofia NÃO confirma horário nenhum: passa a conversa para a equipe (etiqueta «esperando-humano» + nota; no papel, só a nota). NÃO responde paciente com cartão ativo no Kommo da unidade (só deixa nota), nem se não conseguir conferir o Kommo, nem conversa já passada à equipe («Esperando humano»), paciente em tratamento, grupo ou sem telefone. Não roda se alguém da equipe respondeu depois da última mensagem do paciente (conferido de novo na hora de mandar). Teto de chamadas da Sofia por dia por unidade; passou, para até o dia seguinte. A conversa do Chatwoot usa uma chave de lead própria (2 bilhões + id da conversa) nas tabelas de vínculo e de sinal: não é cartão do Kommo e o lembrete do Kommo a ignora. Ligar sem ter visto o papel: a primeira marcação real é de paciente de verdade. O Pix do sinal só sai se a automação «sinal-pix» (baixa) estiver ligada na unidade; senão a Sofia passa para a equipe.',
+      'Hoje só a caixa da Parauapebas. NÃO responde contato INTERNO: o número da unidade também recebe recado da própria equipe («libera», «acabando»), e a equipe marca esses contatos com a etiqueta «interno» na conversa (a etiqueta precisa existir em Configurações > Etiquetas) ou com o atributo «interno» = sim no contato — sem marca, a Sofia responde. Se a EQUIPE já combinou horário na conversa («às 08:00») e a agenda da franquia diz outro (ou não há consulta, ou a franquia não respondeu), a Sofia NÃO confirma horário nenhum: passa a conversa para a equipe (etiqueta «esperando-humano» + nota; no papel, só a nota). NÃO responde paciente com cartão ativo no Kommo da unidade (só deixa nota), nem se não conseguir conferir o Kommo, nem conversa já passada à equipe («Esperando humano»), paciente em tratamento, grupo ou sem telefone. Não roda se alguém da equipe respondeu depois da última mensagem do paciente (conferido de novo na hora de mandar). Teto de chamadas da Sofia por dia por unidade; passou, para até o dia seguinte. A conversa do CRM usa uma chave de lead própria (2 bilhões + id da conversa) nas tabelas de vínculo e de sinal: não é cartão do Kommo e o lembrete do Kommo a ignora. Ligar sem ter visto o papel: a primeira marcação real é de paciente de verdade. O Pix do sinal só sai se a automação «sinal-pix» (baixa) estiver ligada na unidade; senão a Sofia passa para a equipe.',
     risco: 'manda-mensagem',
     temSeco: true,
     exigeSecoAntes: true,
@@ -958,9 +1026,9 @@ export const AUTOMACOES: readonly Automacao[] = [
   {
     id: 'chatwoot-agenda',
     chave: 'CHATWOOT_AGENDA_SLUGS',
-    nome: 'Agenda da franquia no Chatwoot',
+    nome: 'Agenda da franquia no CRM',
     oQueFaz:
-      'Lê a agenda da franquia da unidade (de ontem até 14 dias à frente, a cada 15 min) e preenche na conversa do Chatwoot a data, a hora, a situação (Agendado, Confirmado, Atendido, Não compareceu, Remarcado, Desmarcado) e a categoria da consulta — o que a régua usa para véspera, dia, preparo, falta e pós-consulta. «Só no papel» deixa NOTA PRIVADA com o que gravaria; ligado grava (mantendo os outros campos) e deixa nota curta.',
+      'Lê a agenda da franquia da unidade (de ontem até 14 dias à frente, a cada 15 min) e preenche na conversa do CRM a data, a hora, a situação (Agendado, Confirmado, Atendido, Não compareceu, Remarcado, Desmarcado) e a categoria da consulta — o que a régua usa para véspera, dia, preparo, falta e pós-consulta. «Só no papel» deixa NOTA PRIVADA com o que gravaria; ligado grava (mantendo os outros campos) e deixa nota curta.',
     pegadinha:
       'A agenda da franquia não traz telefone: casa pelo NOME do paciente no cadastro da franquia e pelo WhatsApp desse cadastro. Nome repetido com telefones diferentes, ou cadastro sem WhatsApp, não casa (fica como está). Por pessoa vale o próximo agendamento de pé; sem ele, o mais recente que passou. Hoje só a caixa da Parauapebas.',
     risco: 'escreve-campo',
@@ -972,11 +1040,11 @@ export const AUTOMACOES: readonly Automacao[] = [
   {
     id: 'chatwoot-duplicados',
     chave: 'CHATWOOT_DUPLICADOS_SLUGS',
-    nome: 'Juntar contatos duplicados no Chatwoot',
+    nome: 'Juntar contatos duplicados no CRM',
     oQueFaz:
-      'A cada 30 min procura no Chatwoot o mesmo paciente cadastrado duas vezes (com e sem o 9: mesmo DDD e mesmos 8 últimos dígitos). «Só no papel» deixa uma nota no contato mais antigo dizendo qual juntaria. Ligada, junta: as conversas do contato novo passam para o antigo, o novo some, e fica uma nota contando.',
+      'A cada 30 min procura no CRM o mesmo paciente cadastrado duas vezes (com e sem o 9: mesmo DDD e mesmos 8 últimos dígitos). «Só no papel» deixa uma nota no contato mais antigo dizendo qual juntaria. Ligada, junta: as conversas do contato novo passam para o antigo, o novo some, e fica uma nota contando.',
     pegadinha:
-      'Juntar NÃO TEM VOLTA (o contato que entra é apagado). Só número do Brasil completo (55 + DDD + 8 ou 9 dígitos). No máximo 5 junções por ciclo. Fica sempre o contato mais antigo. O liga/desliga vale pela unidade da caixa do Chatwoot (hoje Parauapebas), mas os contatos são da conta inteira.',
+      'Juntar NÃO TEM VOLTA (o contato que entra é apagado). Só número do Brasil completo (55 + DDD + 8 ou 9 dígitos). No máximo 5 junções por ciclo. Fica sempre o contato mais antigo. O liga/desliga vale pela unidade da caixa do CRM (hoje Parauapebas), mas os contatos são da conta inteira.',
     risco: 'escreve-campo',
     temSeco: true,
     exigeSecoAntes: true,
@@ -986,9 +1054,9 @@ export const AUTOMACOES: readonly Automacao[] = [
   {
     id: 'chatwoot-capi',
     chave: 'CHATWOOT_CAPI_SLUGS',
-    nome: 'Conversões do Chatwoot para a Meta (CAPI)',
+    nome: 'Conversões do CRM para a Meta (CAPI)',
     oQueFaz:
-      'A cada 10 min olha as conversas da caixa de WhatsApp oficial da unidade no Chatwoot e, quando uma conversa que veio de anúncio «Clique para o WhatsApp» ENTRA em Agendado/Confirmado, Compareceu (ou consulta Atendida) ou Fechou (ou «Fechou tratamento»), manda UM evento para a Meta (AddToCart, InitiateCheckout, Purchase — os mesmos nomes do rastreio do Kommo), para o algoritmo buscar paciente que agenda, comparece e fecha. «Só no papel» não chama a Meta: registra e loga «enviaria evento X para a conversa Y (anúncio Z)».',
+      'A cada 10 min olha as conversas da caixa de WhatsApp oficial da unidade no CRM e, quando uma conversa que veio de anúncio «Clique para o WhatsApp» ENTRA em Agendado/Confirmado, Compareceu (ou consulta Atendida) ou Fechou (ou «Fechou tratamento»), manda UM evento para a Meta (AddToCart, InitiateCheckout, Purchase — os mesmos nomes do rastreio do Kommo), para o algoritmo buscar paciente que agenda, comparece e fecha. «Só no papel» não chama a Meta: registra e loga «enviaria evento X para a conversa Y (anúncio Z)».',
     pegadinha:
       'Hoje só a caixa 3 da Parauapebas (WhatsApp oficial via Kapso). Sem clique de anúncio (lead orgânico, ou anúncio em Status, que não traz ctwa_clid) não manda nada. Só conta a ENTRADA no estado: o que já estava assim na 1ª varredura é ignorado, e evento com mais de 7 dias não vai (a Meta recusa). NUNCA repete a mesma conversa + evento, e a Meta não deduplica este caminho: erro de tempo esgotado sem resposta fica «incerto» e não repete. Precisa de META_ADS_TOKEN_PARAUAPEBAS no servidor do agente (o mesmo token do rastreio no n8n) e do dataset da WABA (descobre sozinho, ou META_DATASET_ID_PARAUAPEBAS); sem eles não chama a Meta e avisa no log uma vez. Se o paciente também tem cartão no Kommo da unidade, o n8n pode mandar o mesmo evento: a Meta soma os dois.',
     risco: 'manda-dado-externo',
@@ -996,6 +1064,20 @@ export const AUTOMACOES: readonly Automacao[] = [
     exigeSecoAntes: true,
     quandoVazio: 'desligado',
     arquivo: 'src/lib/chatwoot-capi.ts',
+  },
+  {
+    id: 'chatwoot-origem',
+    chave: 'CHATWOOT_ORIGEM_SLUGS',
+    nome: 'Origem e campanha no contato do CRM',
+    oQueFaz:
+      'Quando uma mensagem de paciente comprovadamente veio de anúncio «Clique para o WhatsApp» (o servidor acha o código do anúncio no Kapso, porque o CRM o perde), preenche no CONTATO Origem = «Meta Ads» e os nomes da Campanha e do Conjunto de anúncios (lidos na Meta pelo id do anúncio). Igual ao rastreio do Kommo, que preenche o cartão. Não marca «Orgânico» por dedução. «Só no papel» não grava: loga «preencheria no contato N: …».',
+    pegadinha:
+      'Só grava campo VAZIO e relê o contato antes de gravar: o que a equipe preencheu à mão nunca é trocado. Precisa do token de anúncios da unidade (o mesmo do Marketing) para os nomes; sem ele, ou se a Meta não responder, grava só a Origem. Anúncio em Status não traz o id do anúncio: fica só a Origem. Não manda nada ao paciente nem escreve na conversa.',
+    risco: 'escreve-campo',
+    temSeco: true,
+    exigeSecoAntes: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/chatwoot-origem.ts',
   },
 ] as const;
 

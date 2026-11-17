@@ -1,0 +1,582 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://doutordigitalconsultoria.com/kit-unidade/questionario.schema.json",
+  "title": "Questionário de unidade nova (CRM da Doutor Digital)",
+  "description": "GERADO de backend/src/lib/kit-unidade/questionario.ts (npx tsx src/scripts/nova-unidade.ts --gerar-schema). Não edite à mão. Regras entre campos (1 gerente, valor antecipado < valor do dia, sufixo único da Meta…) só o script confere.",
+  "type": "object",
+  "properties": {
+    "versao": {
+      "const": 1
+    },
+    "unidade": {
+      "type": "object",
+      "properties": {
+        "nome": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 80
+        },
+        "slug": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$"
+        },
+        "cidade": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 60
+        },
+        "uf": {
+          "type": "string",
+          "pattern": "^[A-Z]{2}$"
+        },
+        "endereco": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 200,
+          "x-importante": true,
+          "x-motivo-importante": "vai no texto dos modelos aprovados na Meta (trocar depois exige novo modelo)"
+        },
+        "mapa_url": {
+          "type": "string",
+          "pattern": "^https:\\/\\/\\S+$",
+          "x-importante": true,
+          "x-motivo-importante": "vai no texto dos modelos aprovados na Meta"
+        },
+        "telefone": {
+          "type": "string",
+          "pattern": "^[\\d\\s()+-]{8,20}$",
+          "x-sensivel": true,
+          "x-motivo": "telefone da clínica"
+        },
+        "fuso": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "nome",
+        "slug",
+        "cidade",
+        "uf",
+        "endereco",
+        "mapa_url"
+      ],
+      "additionalProperties": false
+    },
+    "horarios": {
+      "type": "object",
+      "properties": {
+        "dias": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 6
+          },
+          "minItems": 1,
+          "maxItems": 7,
+          "x-importante": true,
+          "x-motivo-importante": "a Sofia só oferece horário dentro disto"
+        },
+        "inicio": {
+          "type": "string",
+          "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+          "x-importante": true,
+          "x-motivo-importante": "a Sofia só oferece horário dentro disto"
+        },
+        "fim": {
+          "type": "string",
+          "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+          "x-importante": true,
+          "x-motivo-importante": "a Sofia só oferece horário dentro disto"
+        },
+        "almoco_inicio": {
+          "type": "string",
+          "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+        },
+        "almoco_fim": {
+          "type": "string",
+          "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+        },
+        "duracao_min": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 120
+        }
+      },
+      "required": [
+        "dias",
+        "inicio",
+        "fim"
+      ],
+      "additionalProperties": false
+    },
+    "profissionais": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "nome": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 80,
+            "x-importante": true,
+            "x-motivo-importante": "a Sofia cita o nome"
+          },
+          "funcao": {
+            "type": "string",
+            "enum": [
+              "medico",
+              "fisioterapeuta"
+            ]
+          },
+          "franquia_staff_id": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          }
+        },
+        "required": [
+          "nome",
+          "funcao"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 1
+    },
+    "valores": {
+      "type": "object",
+      "properties": {
+        "consulta_no_dia": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 100000,
+          "x-importante": true,
+          "x-motivo-importante": "a Sofia fala este preço ao paciente"
+        },
+        "consulta_antecipada": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 100000,
+          "x-importante": true,
+          "x-motivo-importante": "a Sofia fala este preço ao paciente"
+        },
+        "sinal_pix": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 100000,
+          "x-importante": true,
+          "x-motivo-importante": "a Sofia gera um Pix deste valor"
+        },
+        "aceita_antecipado": {
+          "type": "boolean"
+        },
+        "chave_pix": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 120,
+          "x-sensivel": true,
+          "x-motivo": "chave Pix (financeiro)"
+        },
+        "favorecido": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 120,
+          "x-sensivel": true,
+          "x-motivo": "favorecido do Pix (financeiro)"
+        }
+      },
+      "required": [
+        "consulta_no_dia"
+      ],
+      "additionalProperties": false
+    },
+    "whatsapp": {
+      "type": "object",
+      "properties": {
+        "modo": {
+          "type": "string",
+          "enum": [
+            "real",
+            "demonstracao"
+          ]
+        },
+        "numero_oficial": {
+          "type": "string",
+          "pattern": "^\\+\\d{12,14}$",
+          "x-sensivel": true,
+          "x-motivo": "número do WhatsApp oficial"
+        },
+        "kapso_phone_number_id": {
+          "type": "string",
+          "pattern": "^\\d{5,25}$",
+          "x-sensivel": true,
+          "x-motivo": "identificador do número no Kapso"
+        },
+        "waba_id": {
+          "type": "string",
+          "pattern": "^\\d{5,25}$",
+          "x-sensivel": true,
+          "x-motivo": "identificador da conta do WhatsApp Business"
+        },
+        "prefixo_modelos": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]{1,15}_$"
+        },
+        "conexao": {
+          "type": "string",
+          "enum": [
+            "coexistencia",
+            "numero-novo"
+          ]
+        }
+      },
+      "required": [
+        "prefixo_modelos",
+        "conexao"
+      ],
+      "additionalProperties": false
+    },
+    "chatwoot": {
+      "type": "object",
+      "properties": {
+        "subdominio": {
+          "type": "string",
+          "pattern": "^[a-z0-9]{3,40}$"
+        },
+        "caixa_nome": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 80
+        },
+        "time_nome": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 60
+        },
+        "meta_agendamentos_dia": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "atendentes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "nome": {
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 80
+              },
+              "email": {
+                "type": "string",
+                "format": "email",
+                "maxLength": 120,
+                "x-sensivel": true,
+                "x-motivo": "e-mail pessoal da atendente (LGPD)"
+              },
+              "funcao": {
+                "type": "string",
+                "enum": [
+                  "gerente",
+                  "secretaria",
+                  "sdr",
+                  "observador"
+                ]
+              }
+            },
+            "required": [
+              "nome",
+              "email",
+              "funcao"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1
+        },
+        "admins_dd": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "email",
+            "maxLength": 120
+          },
+          "maxItems": 10,
+          "x-sensivel": true,
+          "x-motivo": "e-mails de administradores da Doutor Digital"
+        },
+        "usuario_celular_email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 120,
+          "x-sensivel": true,
+          "x-motivo": "e-mail de acesso"
+        }
+      },
+      "required": [
+        "subdominio",
+        "caixa_nome",
+        "time_nome",
+        "atendentes"
+      ],
+      "additionalProperties": false
+    },
+    "franquia": {
+      "type": "object",
+      "properties": {
+        "id_company": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "x-sensivel": true,
+          "x-motivo": "identificador da unidade na franquia"
+        },
+        "token_env": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]{2,60}$",
+          "x-nome-de-variavel": true
+        }
+      },
+      "required": [
+        "id_company",
+        "token_env"
+      ],
+      "additionalProperties": false
+    },
+    "meta": {
+      "type": "object",
+      "properties": {
+        "ad_account": {
+          "type": "string",
+          "pattern": "^act_\\d{5,25}$",
+          "x-sensivel": true,
+          "x-motivo": "conta de anúncios"
+        },
+        "business_manager_id": {
+          "type": "string",
+          "pattern": "^\\d{5,25}$",
+          "x-sensivel": true,
+          "x-motivo": "Business Manager"
+        },
+        "token_env": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]{2,60}$",
+          "x-nome-de-variavel": true
+        },
+        "conta_env": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]{2,60}$",
+          "x-nome-de-variavel": true
+        },
+        "dataset_id_env": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]{2,60}$",
+          "x-nome-de-variavel": true
+        }
+      },
+      "required": [
+        "ad_account",
+        "business_manager_id",
+        "token_env",
+        "conta_env",
+        "dataset_id_env"
+      ],
+      "additionalProperties": false
+    },
+    "sofia": {
+      "type": "object",
+      "properties": {
+        "nome_ia": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 30
+        },
+        "tom": {
+          "type": "string",
+          "enum": [
+            "casual",
+            "formal",
+            "friendly"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "assistente": {
+      "type": "object",
+      "properties": {
+        "quer": {
+          "type": "boolean"
+        },
+        "emoji": {
+          "type": "string",
+          "enum": [
+            "sim",
+            "pouco",
+            "nao"
+          ]
+        },
+        "quando_atende": {
+          "type": "string",
+          "enum": [
+            "sempre",
+            "fora-expediente",
+            "noite-fim-semana",
+            "personalizado"
+          ]
+        },
+        "quando_atende_detalhe": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "saudacao": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "diferenciais": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "primeira_consulta": {
+          "type": "object",
+          "properties": {
+            "como_funciona": {
+              "type": "string",
+              "maxLength": 500
+            },
+            "duracao": {
+              "type": "string",
+              "maxLength": 100
+            },
+            "o_que_levar": {
+              "type": "string",
+              "maxLength": 300
+            },
+            "chegada": {
+              "type": "string",
+              "maxLength": 100
+            }
+          },
+          "additionalProperties": false
+        },
+        "pagamento": {
+          "type": "object",
+          "properties": {
+            "formas": {
+              "type": "string",
+              "maxLength": 300
+            },
+            "parcelamento": {
+              "type": "string",
+              "maxLength": 300
+            },
+            "convenio": {
+              "type": "string",
+              "enum": [
+                "nao",
+                "sim",
+                "reembolso"
+              ]
+            },
+            "convenio_quais": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "remarcacao": {
+              "type": "string",
+              "maxLength": 400
+            }
+          },
+          "additionalProperties": false
+        },
+        "nao_atende": {
+          "type": "string",
+          "maxLength": 400
+        },
+        "objecoes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "gatilho": {
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 80
+              },
+              "resposta": {
+                "type": "string",
+                "minLength": 10,
+                "maxLength": 230
+              }
+            },
+            "required": [
+              "gatilho",
+              "resposta"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 14
+        },
+        "nunca_extra": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "passar_extra": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "quem_recebe": {
+          "type": "object",
+          "properties": {
+            "nome": {
+              "type": "string",
+              "maxLength": 80
+            },
+            "contato": {
+              "type": "string",
+              "maxLength": 80,
+              "x-sensivel": true,
+              "x-motivo": "contato de quem recebe o atendimento (e-mail ou telefone da equipe)"
+            }
+          },
+          "additionalProperties": false
+        },
+        "faq": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "pergunta": {
+                "type": "string",
+                "minLength": 5,
+                "maxLength": 120
+              },
+              "resposta": {
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 300
+              }
+            },
+            "required": [
+              "pergunta",
+              "resposta"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 10
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "versao",
+    "unidade",
+    "horarios",
+    "profissionais",
+    "valores",
+    "whatsapp",
+    "chatwoot",
+    "franquia",
+    "meta"
+  ],
+  "additionalProperties": false
+}

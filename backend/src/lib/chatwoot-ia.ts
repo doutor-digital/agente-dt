@@ -22,12 +22,18 @@ import type { Unit } from '@prisma/client';
 import { logger } from './logger.js';
 import { prisma } from './prisma.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
-import { chamar, contaChatwootDoAmbiente, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
+import { chamar, contaChatwootDoAmbiente, contasDoChatwoot, contextoDoAmbiente, donaDaConta, ehContaDoAmbiente, tokenParaChaveDaConta, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
+import { configDaUnidade, contaDaCaixa, unidadeDaCaixa } from './chatwoot-unidades.js';
 import { CAIXAS_REGUA } from './chatwoot-regua.js';
 import { aplicarEtiqueta, eventoDeEtiqueta, portasDaPonte, type PortasDaPonte } from './chatwoot-etiquetas.js';
 import { eventoDePausa, eventoDeReativacao, pausar, portaDaPausaDoChatwoot, reativar, type PortaDaPausa } from './chatwoot-pausa.js';
+import { aplicarResolucao, eventoDeResolucao, portasDoResolver, type PortasDoResolver } from './chatwoot-resolver.js';
+import { aplicarReferralDoKapso, mensagemParaConsultar } from './kapso-referral.js';
+import { etiquetarAnuncio, portasDaOrigem, preencherOrigem, type PortasDaOrigem } from './chatwoot-origem.js';
+import { notaDoAnuncio, portasDaNota, type PortasDaNota } from './chatwoot-anuncio.js';
 import { transcribeAudio } from '../services/transcription.service.js';
 import { registrarEventoDaSofia, registrarRespostaDaSofia, ultimaFalaDoPaciente, type EventoDaSofia } from './sofia-avaliacoes.js';
+import { portaDoRobo, tokenDoRobo } from './chatwoot-sofia-bot.js';
 import { rodarTesteDaSofia } from '../controllers/playground.controller.js';
 import { cartaoNoKommoDaUnidade } from './chatwoot-cartao-kommo.js';
 import { portaDoChatwoot, type ConversaLida, type PortaDoChatwoot } from './chatwoot-porta.js';
@@ -179,10 +185,17 @@ export interface PortasDaIa {
   agendar(fn: () => void, ms: number): unknown;
   cancelar(t: unknown): void;
   hoje(): string;
+  /** só com o robô ligado: tira a conversa de «Pendentes» (a Sofia não respondeu; a equipe precisa ver) */
+  abrirParaEquipe?(conversa: number): Promise<void>;
 }
 
-export function portasReais(ctx: ContextoChatwoot): PortasDaIa {
+/** `tokenRobo`: o token do robô DESTA conta (undefined = o de Parauapebas, `CHATWOOT_SOFIA_BOT_TOKEN`; null = sem robô; texto = o da clínica de conta própria). */
+export function portasReais(ctx: ContextoChatwoot, opcoes: { tokenRobo?: string | null } = {}): PortasDaIa {
   const chat: PortaDoChatwoot = portaDoChatwoot(ctx);
+  // Sofia como ROBÔ do Chatwoot (chatwoot-sofia-bot.ts): só com CHATWOOT_SOFIA_COMO_BOT=1 + CHATWOOT_SOFIA_BOT_TOKEN; senão, null
+  const tokenRobo = opcoes.tokenRobo === undefined ? tokenDoRobo() : opcoes.tokenRobo;
+  const robo = tokenRobo ? portaDoRobo(ctx, tokenRobo) : null;
+  if (robo) logger.info(`${ID_IA}: a Sofia responde como ROBÔ do Chatwoot`);
   return {
     estado: (slug) => estadoDaAutomacao(slug, ID_IA, process.env.CHATWOOT_IA_SLUGS),
     unidade: (slug) => prisma.unit.findUnique({ where: { slug } }),
@@ -191,7 +204,7 @@ export function portasReais(ctx: ContextoChatwoot): PortasDaIa {
       return Array.isArray(r?.payload) ? r.payload : [];
     },
     nota: (conversa, texto) => chat.nota(conversa, texto),
-    publica: (conversa, texto) => chat.publica(conversa, texto),
+    publica: (conversa, texto) => (robo ? robo.publica(conversa, texto) : chat.publica(conversa, texto)),
     registrarResposta: (r) => registrarRespostaDaSofia(r),
     registrarEvento: (e) => registrarEventoDaSofia(e),
     async agendaReal(unit, lida) {
@@ -217,8 +230,12 @@ export function portasReais(ctx: ContextoChatwoot): PortasDaIa {
       // a franquia, quando respondeu, é a verdade (inclusive "nenhuma"); o que o Chatwoot guardou só vale se a franquia não deu para conferir
       return franquia ?? (doAtributo ? [doAtributo] : null);
     },
+    // robô ligado: conversa em que a Sofia NÃO respondeu vai para «Abertas» (senão ficaria escondida em «Pendentes»)
+    abrirParaEquipe: robo ? (conversa) => robo.abrirParaEquipe(conversa) : undefined,
     async passarParaEquipe(conversa, lida, motivo) {
       await passarParaEquipeNoChatwoot(chat, { conversa, etapa: String(lida.attrs.etapa ?? '').trim(), motivo });
+      // robô → equipe: tira de «Pendentes» (a etiqueta e a nota já avisaram; falhar aqui não desfaz a passagem)
+      if (robo) await robo.abrirParaEquipe(conversa).catch((err: unknown) => logger.warn({ err: String(err), conversa }, `${ID_IA}: não consegui abrir a conversa para a equipe (robô)`));
     },
     async transcrever(unit, url) {
       return (await transcribeAudio(unit, url)).text;
@@ -246,6 +263,8 @@ export interface MemoriaDaIa {
   avisosDeHorario: Set<string>;
   /** o(s) usuário(s) do Chatwoot que mandam as nossas mensagens (para não tomar a fala da Sofia por fala da equipe) */
   usuariosDaIntegracao: Set<number>;
+  /** conversa → quando o Registro anotou «Sofia desligada nesta unidade» (uma vez por hora por conversa) */
+  registrosDeDesligada: Map<number, number>;
 }
 export const novaMemoriaDaIa = (): MemoriaDaIa => ({
   esperas: new Map(),
@@ -254,13 +273,24 @@ export const novaMemoriaDaIa = (): MemoriaDaIa => ({
   emAndamento: new Set(),
   avisosDeHorario: new Set(),
   usuariosDaIntegracao: new Set(),
+  registrosDeDesligada: new Map(),
 });
 /** Se a rodada anterior da mesma conversa ainda não acabou, tenta de novo depois disto. */
 export const REPETE_SE_OCUPADA_MS = 15_000;
 
 /** Uma mensagem do paciente chegou: transcreve o áudio agora; a Sofia, só depois de 60 s quieto (reagenda a cada fala). */
 export async function aoChegar(m: MensagemDoPaciente, p: PortasDaIa, mem: MemoriaDaIa): Promise<void> {
-  if (p.estado(m.slug) === 'desligado') return;
+  if (p.estado(m.slug) === 'desligado') {
+    // aba Registro: «por que ela não respondeu?» — uma linha por conversa por hora, sem tocar em mais nada
+    const antes = mem.registrosDeDesligada.get(m.conversa) ?? 0;
+    if (Date.now() - antes >= 3_600_000 && p.registrarEvento) {
+      mem.registrosDeDesligada.set(m.conversa, Date.now());
+      if (mem.registrosDeDesligada.size > 5000) mem.registrosDeDesligada.clear();
+      await p.registrarEvento({ slug: m.slug, conversa: m.conversa, tipo: 'decisao', nome: 'unidade-pausada' }).catch(() => undefined);
+    }
+    if (p.abrirParaEquipe) await p.abrirParaEquipe(m.conversa).catch(() => undefined);
+    return;
+  }
   if (m.audios.length) {
     const unit = await p.unidade(m.slug);
     if (unit) {
@@ -322,14 +352,47 @@ export async function rodarSofia(m: MensagemDoPaciente, p: PortasDaIa, mem: Memo
   if (modo === 'desligado') return 'desligado';
   if (mem.emAndamento.has(m.conversa)) return 'ocupada';
   mem.emAndamento.add(m.conversa);
+  const info: InfoDaRodada = {};
+  let desfecho: Desfecho = 'falhou';
   try {
-    return await rodarSofiaDessaConversa(m, p, mem, modo);
+    desfecho = await rodarSofiaDessaConversa(m, p, mem, modo, info);
+    return desfecho;
   } finally {
     mem.emAndamento.delete(m.conversa);
+    // robô ligado: a Sofia não respondeu o paciente nesta rodada → a equipe precisa ver a conversa em «Abertas»
+    if (p.abrirParaEquipe && desfecho !== 'enviada' && desfecho !== 'ocupada') {
+      await p.abrirParaEquipe(m.conversa).catch((err: unknown) => logger.warn({ err: String(err), conversa: m.conversa }, `${ID_IA}: não consegui abrir a conversa para a equipe`));
+    }
+    // aba Registro: a rodada em que ela NÃO respondeu ao paciente, e por quê (a resposta enviada já fica em sofia_mensagem)
+    if (DESFECHOS_DO_REGISTRO.has(desfecho) && p.registrarEvento) {
+      await p
+        .registrarEvento({ slug: m.slug, conversa: m.conversa, tipo: 'decisao', nome: desfecho, detalhe: info.motivo ?? null })
+        .catch((err) => logger.warn({ err: String(err), conversa: m.conversa }, `${ID_IA}: não consegui gravar a decisão no Registro`));
+    }
   }
 }
 
-async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem: MemoriaDaIa, modo: ModoDaSofia): Promise<Desfecho> {
+/** O que a rodada conta para o Registro além do desfecho (ex.: por que ficou calada). */
+interface InfoDaRodada {
+  motivo?: string;
+}
+/** Desfechos que viram linha «não respondeu» no Registro (enviada já está em sofia_mensagem; ocupada é só uma nova tentativa). */
+export const DESFECHOS_DO_REGISTRO: ReadonlySet<Desfecho> = new Set<Desfecho>([
+  'nota',
+  'sem-texto',
+  'equipe-respondeu',
+  'mudou',
+  'teto',
+  'sem-unidade',
+  'falhou',
+  'calada',
+  'sem-telefone',
+  'horario-divergente',
+  'cartao-no-kommo',
+  'kommo-indisponivel',
+]);
+
+async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem: MemoriaDaIa, modo: ModoDaSofia, info: InfoDaRodada = {}): Promise<Desfecho> {
   const chaveDia = `${m.slug}|${p.hoje()}`;
   // o painel do Agente conta daqui; falhar ao gravar não atrapalha o paciente
   const evento = async (tipo: EventoDaSofia['tipo'], extra: { nome?: string | null; detalhe?: string | null } = {}) => {
@@ -348,6 +411,7 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
   const calar = motivoDeNaoResponder(lida);
   if (calar) {
     logger.info({ conversa: m.conversa, motivo: calar }, `${ID_IA}: a Sofia fica calada`);
+    info.motivo = calar;
     return 'calada';
   }
   if (!lida.telefone) {
@@ -364,6 +428,7 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
     return 'kommo-indisponivel';
   }
   if (cartao) {
+    info.motivo = `lead ${cartao.leadId} no Kommo`;
     const aviso = `${m.conversa}|${cartao.leadId}`;
     if (!mem.avisosDoKommo.has(aviso)) {
       mem.avisosDoKommo.add(aviso);
@@ -441,6 +506,7 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
   const agoraLida = await p.conversa(m.conversa).catch(() => null);
   const calou = agoraLida ? motivoDeNaoResponder(agoraLida) : null;
   if (calou) {
+    info.motivo = calou;
     logger.info({ conversa: m.conversa, motivo: calou, gravou }, `${ID_IA}: a conversa passou para a equipe enquanto a Sofia pensava — resposta descartada`);
     const nota = gravou ? alerta(`a conversa passou para a equipe (${calou}) enquanto ela pensava`) : null;
     if (nota) await p.nota(m.conversa, nota).catch(() => undefined);
@@ -483,47 +549,165 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
 
 // ── a rota ─────────────────────────────────────────────────────────────────────────────────────────
 
-let estado: { portas: PortasDaIa; mem: MemoriaDaIa; ponte: PortasDaPonte; pausa: PortaDaPausa } | null = null;
+/** Tudo o que a IA precisa DE UMA CONTA do Chatwoot: as portas, a memória (debounce, rodadas, avisos) e a trava das etiquetas. Uma por conta. */
+export interface EstadoDaConta {
+  portas: PortasDaIa;
+  mem: MemoriaDaIa;
+  ponte: PortasDaPonte;
+  pausa: PortaDaPausa;
+  resolver: PortasDoResolver;
+  origem: PortasDaOrigem;
+  chat: PortaDoChatwoot;
+  nota: PortasDaNota;
+  /** a trava de «Perdido: motivo» por conversa — o id da conversa é POR CONTA, então a trava também */
+  trava: Set<number>;
+}
 
-function estadoDoReceptor() {
-  if (!estado) {
-    const conta = contaChatwootDoAmbiente();
-    if (!conta) return null;
-    const ctx = criarContextoChatwoot(conta);
-    estado = { portas: portasReais(ctx), mem: novaMemoriaDaIa(), ponte: portasDaPonte(ctx), pausa: portaDaPausaDoChatwoot(ctx) };
+const estados = new Map<number, { assinatura: string; estado: EstadoDaConta }>();
+
+/** Só para os testes: esquece os estados guardados. */
+export const esquecerEstadosDaIa = (): void => estados.clear();
+
+/**
+ * O estado da IA da CONTA `conta` (id no Chatwoot). A conta do ambiente (Parauapebas) monta exatamente o que sempre montou: o mesmo contexto,
+ * o robô do `CHATWOOT_SOFIA_BOT_TOKEN` e uma memória nova. Uma conta própria usa o contexto/token dela e o robô DELA (ou nenhum): a memória
+ * nunca é compartilhada, porque a conversa 5 de uma conta não é a conversa 5 de outra. `null` = conta sem unidade/token: não responde.
+ */
+export function estadoDoReceptor(conta: number, e: NodeJS.ProcessEnv = process.env): EstadoDaConta | null {
+  const base = contextoDoAmbiente(e);
+  if (!base) return null;
+  const ehAmbiente = ehContaDoAmbiente(conta, e);
+  const dona = ehAmbiente ? { slug: null, ctx: base } : donaDaConta(base, conta, e);
+  const contaDoCtx = dona?.ctx.conta;
+  if (!dona || !contaDoCtx) {
+    estados.delete(conta); // a configuração recarregou e nenhuma unidade usa mais essa conta
+    return null;
   }
-  return estado;
+  const ctx = dona.ctx;
+  const sufixo = dona.slug ? configDaUnidade(dona.slug)?.envSufixo : undefined;
+  const tokenRobo = ehAmbiente ? tokenDoRobo(e) : tokenDoRobo(e, sufixo);
+  // o que alimenta as portas: se a configuração recarregou e algo disso mudou (conta, token, robô), as portas são refeitas — a MEMÓRIA e a trava
+  // ficam (uma rodada em andamento não pode ser esquecida, senão a Sofia responderia duas vezes)
+  const assinatura = [contaDoCtx.url, contaDoCtx.conta, contaDoCtx.token, tokenRobo ?? ''].join('\u0000');
+  const guardado = estados.get(conta);
+  if (guardado && guardado.assinatura === assinatura) return guardado.estado;
+  const origem = portasDaOrigem(ctx);
+  const novo: EstadoDaConta = {
+    portas: portasReais(ctx, ehAmbiente ? {} : { tokenRobo }),
+    mem: guardado?.estado.mem ?? novaMemoriaDaIa(),
+    ponte: portasDaPonte(ctx),
+    pausa: portaDaPausaDoChatwoot(ctx),
+    resolver: portasDoResolver(ctx),
+    origem,
+    chat: portaDoChatwoot(ctx),
+    nota: portasDaNota(ctx, origem),
+    trava: guardado?.estado.trava ?? new Set(),
+  };
+  estados.set(conta, { assinatura, estado: novo });
+  return novo;
+}
+
+/**
+ * De que conta é este evento? Do `account.id` do payload, conferido com a caixa; sem `account` no payload, pela caixa; sem nenhum dos dois, a
+ * conta do ambiente (como sempre foi). Conta que o servidor não conhece, caixa de OUTRA conta que a do payload, ou clínica sem conta válida:
+ * IGNORA (o chamador avisa no log) — nunca cai na conta 1.
+ */
+export function contaDoEvento(corpo: any, e: NodeJS.ProcessEnv = process.env): { conta: number } | { ignorar: string } {
+  const amb = contaChatwootDoAmbiente(e);
+  if (!amb) return { ignorar: 'o Chatwoot não está configurado neste servidor' };
+  const idDoPayload = Number(corpo?.account?.id);
+  const noPayload = Number.isInteger(idDoPayload) && idDoPayload > 0 ? idDoPayload : null;
+  const caixa = Number(corpo?.conversation?.inbox_id ?? corpo?.inbox?.id ?? corpo?.inbox_id);
+  let daCaixa: number | null = null;
+  if (Number.isInteger(caixa) && caixa > 0 && unidadeDaCaixa(caixa)) {
+    const c = contaDaCaixa(caixa);
+    if (c === undefined) return { ignorar: `a caixa ${caixa} é de uma unidade sem conta válida` };
+    daCaixa = c ?? amb.conta;
+  }
+  if (noPayload !== null) {
+    if (!contasDoChatwoot(e).includes(noPayload)) return { ignorar: `conta ${noPayload} desconhecida` };
+    if (daCaixa !== null && daCaixa !== noPayload) return { ignorar: `a caixa ${caixa} é da conta ${daCaixa}, mas o evento veio da conta ${noPayload}` };
+    return { conta: noPayload };
+  }
+  return { conta: daCaixa ?? amb.conta };
+}
+
+const ignoradosAvisados = new Map<string, number>();
+/** Um aviso por motivo a cada 10 min (conta errada pode mandar milhares de eventos). */
+function avisarIgnorado(motivo: string, corpo: any): void {
+  const agora = Date.now();
+  if ((ignoradosAvisados.get(motivo) ?? 0) > agora - 600_000) return;
+  if (ignoradosAvisados.size > 200) ignoradosAvisados.clear();
+  ignoradosAvisados.set(motivo, agora);
+  logger.warn({ motivo, evento: String(corpo?.event ?? '') }, `${ID_IA}: evento do Chatwoot IGNORADO — ${motivo}`);
 }
 
 export function eventoChatwootHandler(req: Request, res: Response): void {
-  const token = process.env.CHATWOOT_API_TOKEN?.trim();
+  // A chave é DA CONTA a que o evento diz pertencer (derivada do token dela): a chave de Parauapebas não forja evento de outra clínica e vice-versa.
+  // Evento que não é de conta nenhuma que o servidor conheça só passa com a chave do ambiente (e é ignorado com aviso logo abaixo).
+  const alvo = contaDoEvento(req.body);
+  const token = 'conta' in alvo ? tokenParaChaveDaConta(alvo.conta) : process.env.CHATWOOT_API_TOKEN?.trim();
   if (!chaveDoEventoConfere(token, req.query.k)) {
     res.status(401).json({ error: 'chave inválida' });
     return;
   }
   res.json({ ok: true });
+  if ('ignorar' in alvo) {
+    avisarIgnorado(alvo.ignorar, req.body);
+    return;
+  }
+  const conta = alvo.conta;
   // pessoa respondeu (pelo Chatwoot ou pelo celular) → pausa a IA nesta conversa; conversa resolvida → reativa (chatwoot-pausa.ts)
   const pausa = eventoDePausa(req.body);
   if (pausa) {
-    const e = estadoDoReceptor();
-    if (e) void pausar(pausa.conversa, pausa.autor, e.pausa).catch((err) => logger.warn({ err: String(err), conversa: pausa.conversa }, 'chatwoot-pausa: não consegui pausar'));
+    const e = estadoDoReceptor(conta);
+    if (e) {
+      void pausar(pausa.conversa, pausa.autor, e.pausa)
+        // robô ligado: quem respondeu (inclusive pelo celular) está atendendo — a conversa sai de «Pendentes»
+        .then(() => e.portas.abrirParaEquipe?.(pausa.conversa))
+        .catch((err) => logger.warn({ err: String(err), conversa: pausa.conversa }, 'chatwoot-pausa: não consegui pausar'));
+    }
     return;
   }
   const reativa = eventoDeReativacao(req.body);
   if (reativa) {
-    const e = estadoDoReceptor();
+    const e = estadoDoReceptor(conta);
     if (e) void reativar(reativa.conversa, null, e.pausa).catch((err) => logger.warn({ err: String(err), conversa: reativa.conversa }, 'chatwoot-pausa: não consegui reativar'));
+  }
+  // resolvida sem os campos obrigatórios → etiqueta falta-etapa; completou depois → tira (chatwoot-resolver.ts)
+  const resol = eventoDeResolucao(req.body);
+  if (resol?.acao) {
+    const e = estadoDoReceptor(conta);
+    if (e) void aplicarResolucao(resol, e.resolver).catch((err) => logger.warn({ err: String(err), conversa: resol.conversa }, 'chatwoot-resolver: falhou'));
   }
   // botão "Perdido: <motivo>" → etiqueta → etapa + motivo no cartão (chatwoot-etiquetas.ts)
   const etq = eventoDeEtiqueta(req.body);
   if (etq) {
-    const e = estadoDoReceptor();
-    if (e) void aplicarEtiqueta(etq, e.ponte).catch((err) => logger.warn({ err: String(err), conversa: etq.conversa }, 'chatwoot-etiquetas: falhou'));
+    const e = estadoDoReceptor(conta);
+    if (e) void aplicarEtiqueta(etq, e.ponte, e.trava).catch((err) => logger.warn({ err: String(err), conversa: etq.conversa }, 'chatwoot-etiquetas: falhou'));
     return;
+  }
+  // o código do anúncio que o Chatwoot perde no caminho do Kapso: pergunta ao Kapso e guarda (kapso-referral.ts)
+  const consultar = mensagemParaConsultar(req.body);
+  if (consultar) {
+    const r = estadoDoReceptor(conta);
+    void aplicarReferralDoKapso(consultar, {
+      aoAchar: async (m, ref, novo) => {
+        // etiqueta «anuncio» na conversa (informação: vale com a origem desligada) — chatwoot-origem.ts
+        if (r) await etiquetarAnuncio(m.conversa, ref, (c, e) => r.chat.adicionarEtiquetas(c, e));
+        const slug = CAIXAS_REGUA[m.caixa];
+        // juntas (nenhuma das duas lança): a origem é dado e não espera o download/envio da imagem da nota
+        await Promise.all([
+          // o «cartão» do anúncio (título, texto, imagem, link) numa nota interna, só na 1ª vez — chatwoot-anuncio.ts
+          r && novo ? notaDoAnuncio({ conversa: m.conversa, slug, ref }, r.nota) : null,
+          r && slug && m.contato ? preencherOrigem({ slug, contato: m.contato, conversa: m.conversa, ref }, r.origem) : null,
+        ]);
+      },
+    }).catch(() => undefined);
   }
   const m = mensagemDoPaciente(req.body);
   if (!m) return;
-  const e = estadoDoReceptor();
+  const e = estadoDoReceptor(conta);
   if (!e) return;
   void aoChegar(m, e.portas, e.mem).catch((err) => logger.warn({ err: String(err), conversa: m.conversa }, `${ID_IA}: evento falhou`));
 }

@@ -59,8 +59,10 @@ Object.defineProperty(prisma, 'conversation', {
   value: { findMany: async (a: { where: { leadId: { in: string[] } } }) => a.where.leadId.in.filter((id) => conversas.has(id)).map((leadId) => ({ leadId, lastMessageAt: new Date((conversas.get(leadId) as number) * 1000) })) },
   configurable: true,
 });
+// A pausa vence pelo relógio REAL (`pausaDoLeadAtiva` compara com `new Date()`), não pelo `AGORA` fixo dos testes:
+// com `AGORA + DIA` ela venceu em 07/11/2026 e o teste "travas que custam chamada" ficou vermelho no main.
 Object.defineProperty(prisma, 'leadPausa', {
-  value: { findUnique: async (a: { where: { unitId_kommoLeadId: { kommoLeadId: number } } }) => (pausados.has(a.where.unitId_kommoLeadId.kommoLeadId) ? { ate: new Date((AGORA + DIA) * 1000) } : null) },
+  value: { findUnique: async (a: { where: { unitId_kommoLeadId: { kommoLeadId: number } } }) => (pausados.has(a.where.unitId_kommoLeadId.kommoLeadId) ? { ate: new Date(Date.now() + DIA * 1000) } : null) },
   configurable: true,
 });
 Object.defineProperty(prisma, 'automacaoSimulacao', {

@@ -26,7 +26,7 @@ import { chaveDaClinica, diaCurto, diaNoFuso, ID_SINAL_PIX, somarDias, type Linh
 import { pagouOAntecipado } from './follow-up-worker.js';
 import { normalizar } from './franquia-sync.js';
 import { conversaDoLeadChatwoot } from './chatwoot-lead.js';
-import { contaChatwootDoAmbiente, criarContextoChatwoot } from '../mcp-remoto/chatwoot.js';
+import { contextoDaUnidade, contextoDoAmbiente } from '../mcp-remoto/chatwoot.js';
 import { portaDoChatwoot } from './chatwoot-porta.js';
 
 const SWEEP_MS = Number(process.env.SINAL_PIX_SWEEP_MS) || 5 * 60_000;
@@ -166,10 +166,13 @@ export async function baixarNoChatwoot(deps: BaixaNoChatwoot, conversa: number, 
   await deps.nota(conversa, nota);
 }
 
-function baixaDoChatwootDoAmbiente(): BaixaNoChatwoot | null {
-  const conta = contaChatwootDoAmbiente();
-  if (!conta) return null;
-  const chat = portaDoChatwoot(criarContextoChatwoot(conta));
+/** A baixa no Chatwoot da CONTA da unidade (cada clínica tem a sua). null = unidade desconhecida/sem conta válida/sem token: RECUSA (nunca cai na conta 1). */
+export function baixaDoChatwootDaUnidade(slug: string, e: NodeJS.ProcessEnv = process.env): BaixaNoChatwoot | null {
+  const base = contextoDoAmbiente(e);
+  if (!base) return null;
+  const ctx = contextoDaUnidade(base, slug, e);
+  if (!ctx) return null;
+  const chat = portaDoChatwoot(ctx);
   return { etiqueta: (conversa, etiqueta) => chat.adicionarEtiquetas(conversa, [etiqueta]), nota: (conversa, texto) => chat.nota(conversa, texto) };
 }
 
@@ -183,7 +186,7 @@ let rodando = false;
 
 const estado = (slug: string) => estadoDaAutomacao(slug, ID_SINAL_PIX, process.env.SINAL_PIX_SLUGS);
 
-export async function varrerUnidade(unit: Unit, seco: boolean, chatwoot: BaixaNoChatwoot | null = baixaDoChatwootDoAmbiente()): Promise<void> {
+export async function varrerUnidade(unit: Unit, seco: boolean, chatwoot: BaixaNoChatwoot | null = baixaDoChatwootDaUnidade(unit.slug)): Promise<void> {
   // Pendentes + os que já mudaram de status mas ainda não deixaram a nota no cartão (o Kommo falhou na vez anterior).
   const linhas = (await prisma.sinalPix.findMany({
     where: { unitId: unit.id, OR: [{ status: 'pendente' }, { status: { in: ['pago', 'expirado'] }, avisadoEm: null }] },

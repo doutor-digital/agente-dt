@@ -15,7 +15,8 @@
  */
 import { logger } from './logger.js';
 import { chamar, type ContextoChatwoot, type SessaoDoChatwoot } from '../mcp-remoto/chatwoot.js';
-import { CAIXAS_REGUA, USUARIO_CELULAR } from './chatwoot-regua.js';
+import { CAIXAS_REGUA } from './chatwoot-regua.js';
+import { ehUsuarioCelular } from './chatwoot-unidades.js';
 
 export const ETIQUETA_PAUSA = 'ia-pausada';
 /** O usuário "Conector Claude": por ele saem a Sofia e a régua. Mensagem dele NÃO pausa. */
@@ -52,7 +53,7 @@ export function eventoDePausa(corpo: any, caixas: Readonly<Record<number, string
   const id = numero(sender.id);
   const ehUsuario = String(sender.type ?? '').toLowerCase() === 'user';
   if (!ehUsuario || !id || id === USUARIO_ROBO) return null;
-  if (id === USUARIO_CELULAR) return { conversa, slug, autor: { tipo: 'celular' } };
+  if (ehUsuarioCelular(id, slug)) return { conversa, slug, autor: { tipo: 'celular' } };
   return { conversa, slug, autor: { tipo: 'pessoa', id, nome: String(sender.name ?? '').trim() || `usuário ${id}` } };
 }
 

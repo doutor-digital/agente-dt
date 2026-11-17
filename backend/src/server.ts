@@ -1,4 +1,5 @@
 import express from 'express';
+import { PAGINA_PRIVACIDADE, PAGINA_TERMOS } from './lib/paginas-legais.js';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import path from 'node:path';
@@ -10,10 +11,14 @@ import { apiRouter } from './routes/api.routes.js';
 import { apagarCofreDeArquivos, ligarConectorRemoto } from './mcp-remoto/producao.js';
 import { paginaPausaHandler } from './controllers/pausa.controller.js';
 import { paginaAprendizadosHandler } from './controllers/aprendizados.controller.js';
+import { ligarNovaClinica, somenteCadastroNoHostDeCadastro } from './controllers/nova-clinica.controller.js';
+import { mascararUrlDoLog } from './lib/mascara-url-log.js';
 import { paginaAgenteHandler } from './controllers/agente-chatwoot.controller.js';
+import { paginaRobosHandler } from './controllers/robos.controller.js';
+import { paginaDisparosHandler } from './controllers/disparos.controller.js';
 import { menuFunilHandler, paginaFunilHandler } from './controllers/funil.controller.js';
 import { corsDoAssistente, paginaAssistenteHandler } from './controllers/assistente.controller.js';
-import { contaChatwootDoAmbiente } from './mcp-remoto/chatwoot.js';
+import { origensDoChatwoot } from './lib/origens-do-chatwoot.js';
 import { paginaAltaHandler } from './controllers/alta.controller.js';
 import { paginaIaHandler } from './controllers/ia-unidade.controller.js';
 import { getCheckpointer } from './agent/graph.js';
@@ -38,6 +43,7 @@ import { startStaleReplyMonitor } from './lib/stale-reply-monitor.js';
 import { startJudgeWorker, stopJudgeWorker } from './lib/judge-worker.js';
 import { startResultadosWorker, stopResultadosWorker } from './lib/resultados-worker.js';
 import { iniciarAutomacoes } from './lib/automacoes-estado.js';
+import { iniciarConfigChatwoot } from './lib/chatwoot-unidades-banco.js';
 import { iniciarCrmCompartilhado } from './lib/crm-compartilhado.js';
 import { iniciarSupervisorDosWorkers, encerrarSupervisorDosWorkers, estadoDosWorkers } from './lib/worker-lease.js';
 import { agendarRecuperacao, posseDaLideranca } from './lib/recuperar-turnos.js';
@@ -57,6 +63,7 @@ import { startEntradaAutomaticaWorker, stopEntradaAutomaticaWorker } from './lib
 import { startRotinaEtapasWorker, stopRotinaEtapasWorker } from './lib/rotina-etapas-worker.js';
 import { startNaoLidasWorker, stopNaoLidasWorker } from './lib/nao-lidas-worker.js';
 import { startRotinaAniversarioWorker, stopRotinaAniversarioWorker } from './lib/rotina-aniversario-worker.js';
+import { startCutucadaAposEquipeWorker, stopCutucadaAposEquipeWorker } from './lib/cutucada-apos-equipe-worker.js';
 import { startCampanhaWorker, stopCampanhaWorker } from './lib/campanha-worker.js';
 import { startResumoDiarioIaWorker, stopResumoDiarioIaWorker } from './lib/resumo-diario-ia-worker.js';
 import { startSuporteLembreteWorker, stopSuporteLembreteWorker } from './lib/suporte-lembrete-worker.js';
@@ -89,6 +96,9 @@ interface RawBodyRequest extends express.Request {
 async function main(): Promise<void> {
   const app = express();
 
+  // cadastro.doutordigitalconsultoria.com serve SÓ o formulário «nova clínica»: tudo o mais do agente dá 404 nesse host (primeira de todas, antes de CORS e rotas)
+  app.use(somenteCadastroNoHostDeCadastro());
+
   // Widgets privados do Kommo rodam em https://<conta>.kommo.com e chamam SÓ as rotas /api/public/*
   // (agenda da franquia com chave por unidade, pausa com código). Pra elas o CORS libera o Kommo
   // SEM credenciais — o cookie de sessão do painel é SameSite=None e não pode viajar pra lá.
@@ -109,7 +119,7 @@ async function main(): Promise<void> {
       const origin = req.header('Origin');
       if (!origin) return cb(null, { origin: true, credentials: true });
       // o botão da assistente (na página do Chatwoot) pergunta se está ligada; antes da regra geral do dashboard, que não libera X-CW-*
-      const doAssistente = corsDoAssistente(req.path, origin, contaChatwootDoAmbiente()?.url);
+      const doAssistente = corsDoAssistente(req.path, origin, origensDoChatwoot());
       if (doAssistente) return cb(null, doAssistente);
       if (req.path.startsWith('/api/public/') && (ORIGEM_KOMMO.test(origin) || ORIGEM_DASHBOARD.test(origin))) {
         return cb(null, { origin: true, credentials: false, allowedHeaders: ['Content-Type', 'X-Widget-Key', 'X-Requested-With'], methods: ['GET', 'POST', 'DELETE', 'OPTIONS'] });
@@ -136,6 +146,15 @@ async function main(): Promise<void> {
 
   app.use(cookieParser());
 
+  app.use((req, _res, next) => {
+    // o token do cofre de arquivos e o código do formulário «nova clínica» viajam no caminho: nunca vão para o log
+    logger.debug({ method: req.method, url: mascararUrlDoLog(req.url) }, 'http');
+    next();
+  });
+
+  // Formulário público «nova clínica» (código de uso único). ANTES dos parsers gerais: a rota lê o corpo com teto de 64 KB e conta o limite de taxa antes de ler.
+  ligarNovaClinica(app);
+
   // Webhook do Kommo antes do parser geral: cartões em lote passam de 1000 parâmetros e o geral devolvia 413
   // antes do handler (ver parser-webhook-kommo.ts).
   app.use(ROTA_WEBHOOK_KOMMO, parserDoWebhookKommo());
@@ -153,15 +172,12 @@ async function main(): Promise<void> {
     }),
   );
 
-  app.use((req, _res, next) => {
-    // o token do cofre de arquivos viaja no caminho: nunca vai para o log
-    logger.debug({ method: req.method, url: req.url.replace(/^(\/arquivos\/(?:enviar|baixar)\/)[^/?]+/, '$1[token]').replace(/([?&]k=)[^&]+/, '$1[chave]').replace(/([?&]access_token=)[^&]+/, '$1[chave]') }, 'http');
-    next();
-  });
-
   // Conector remoto do claude.ai (/mcp + OAuth). Desligado sem MCP_URL_PUBLICA no .env.
   await ligarConectorRemoto(app);
 
+  // Termos de Uso e Política de Privacidade do «Doutor Digital Atende» (o Chatwoot aponta TERMS_URL/PRIVACY_URL para cá), 14/11/2026.
+  app.get('/termos', (_req, res) => { res.set('Cache-Control', 'public, max-age=3600').type('html').send(PAGINA_TERMOS); });
+  app.get('/privacidade', (_req, res) => { res.set('Cache-Control', 'public, max-age=3600').type('html').send(PAGINA_PRIVACIDADE); });
   // Página da recepção para pausar a Sofia por um tempo (protegida por código da unidade).
   app.get('/pausa/:slug', paginaPausaHandler);
 
@@ -174,6 +190,10 @@ async function main(): Promise<void> {
   // Digital. Sob /funil para o menu entregar a sessão. /funil/testar-ia é o endereço antigo (menu.js em cache no navegador).
   app.get('/funil/agente', paginaAgenteHandler);
   app.get('/funil/testar-ia', paginaAgenteHandler);
+  // «Robôs» (14/11): os robôs da régua por unidade (ver, ligar/desligar, tempo, modelo, enviados). Mesmo caminho do Agente: o menu entrega a sessão.
+  app.get('/funil/robos', paginaRobosHandler);
+  // «Disparos» (16/11): o «Broadcast» do CRM (filtro, modelo aprovado, prévia, aprovação, envio em ondas). Mesmo caminho das outras telas.
+  app.get('/funil/disparos', paginaDisparosHandler);
   // Assistente da atendente: a página do painel (iframe do botão que entra pelo menu.js).
   app.get('/assistente', paginaAssistenteHandler);
 
@@ -228,6 +248,9 @@ async function main(): Promise<void> {
   } catch (err) {
     logger.warn({ err }, 'falha ao carregar as automações — vale o .env até a próxima releitura');
   }
+  // Configuração do CRM por unidade (caixas, gerente, prefixo dos modelos…): antes dos workers do Chatwoot. Nunca lança; sem banco vale a
+  // semente de Parauapebas (o que estava escrito no código).
+  await iniciarConfigChatwoot();
   // Kommo dividido entre duas unidades (Petrópolis + Caxias): carrega antes de qualquer escrita na franquia e
   // registra o carregador da trava de escrita. Não lança: se o banco falhar, a trava tenta de novo na 1ª escrita.
   await iniciarCrmCompartilhado();
@@ -274,6 +297,7 @@ async function main(): Promise<void> {
       startLigacaoWhatsappWorker();
       startNaoLidasWorker();
       startRotinaAniversarioWorker();
+      startCutucadaAposEquipeWorker();
       startCampanhaWorker();
       startResumoDiarioIaWorker();
       startSuporteLembreteWorker();
@@ -302,6 +326,7 @@ async function main(): Promise<void> {
       stopLigacaoWhatsappWorker();
       stopNaoLidasWorker();
       stopRotinaAniversarioWorker();
+      stopCutucadaAposEquipeWorker();
       stopCampanhaWorker();
       stopResumoDiarioIaWorker();
       stopSuporteLembreteWorker();

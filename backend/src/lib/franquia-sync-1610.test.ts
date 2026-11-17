@@ -801,3 +801,26 @@ test('achado 8 — o paciente que a varredura da agenda já casou com o cartão 
   assert.deepEqual(await casarPacienteDoCartao(unit, 578, 'Lead 01/10/2026', { kommo, contatoId: 578, campos: CAMPOS }), { tipo: 'achou', idClient: 300, por: 'telefone' });
   assert.equal(chamadasFranquia.length, 0, 'nenhuma chamada à franquia');
 });
+
+test('cartão APAGADO no Kommo (Timbó 17/11/2026, 4843998): a varredura pula sem gravar nada e, na seguinte, nem relê o cartão', async () => {
+  chaves('desligado');
+  const unit = unidade();
+  clientesFalsos = [{ idClient: 101, name: 'MARIA TESTE', whatsapp: FONE }];
+  agendaFalsa = [{ idSchedule: 9101, idStatus: 37, statusName: 'Agendado', clientName: 'MARIA TESTE', categoryName: 'AVALIAÇÃO', dateAttendance: diaLocal(2) }];
+  const { kommo, reg } = kommoFalso([{ id: 555, name: 'MARIA TESTE', pipeline_id: 10, status_id: 105, campos: {}, tags: [], contato: 77, fone: FONE }]);
+  // o 204 do Kommo: o axios devolve o corpo vazio, não erro
+  let leituras = 0;
+  (kommo as unknown as { getLead: (id: number) => Promise<unknown> }).getLead = async () => { leituras++; return ''; };
+
+  const r = (await _interno.sincronizarUnidade(unit, { kommo })) as ResumoSync;
+  assert.deepEqual(reg.gravacoes, [], 'nenhum PATCH em cartão apagado (antes: ~24 campos, todos 400, a cada passada)');
+  assert.equal(r.cartoesApagados, 1);
+  assert.equal(r.erros, 0);
+
+  // a busca pelo telefone ainda acharia o 555 (o Kommo falso não sabe que apagou): o apagado não volta
+  const r2 = (await _interno.sincronizarUnidade(unit, { kommo })) as ResumoSync;
+  assert.equal(leituras, 1, 'na varredura seguinte o cartão apagado nem é lido de novo');
+  assert.deepEqual(reg.gravacoes, []);
+  assert.equal(r2.semLead, 1, 'o paciente fica sem cartão até aparecer um vivo');
+  assert.equal(r2.erros, 0);
+});

@@ -276,6 +276,8 @@ model Unit {
    * Nasceu do sábado: todas as unidades atendem, com horário menor que o da semana.
    */
   spineDayHours    Json?   @map("spine_day_hours")
+  /// O kit de unidade gravou UMA vez os aprendizados que o dono pediu no formulário (assistente). Depois disso o kit nunca regrava: a clínica os administra em /aprendizados (edita, apaga, desliga).
+  kitAprendizadosEm DateTime? @map("kit_aprendizados_em")
   /// Profissional da franquia por turno: [{ "inicio": "08:00", "fim": "13:30", "idStaff": 536, "nome": "Dra. Juliana Santos" }, …].
   /// Sem isto o createSchedule vai sem idStaff e a franquia põe a primeira profissional da lista (em Taubaté, a
   /// dona — que não atende). Horário fora de qualquer turno também vai sem idStaff.
@@ -366,6 +368,8 @@ model Unit {
   changeLog         UnitChangeLog[]
   lessons           UnitLesson[]
   automacoes        UnitAutomacao[]
+  /// Configuração do CRM (Chatwoot) desta unidade — ver `UnitChatwoot`.
+  chatwoot          UnitChatwoot?
   franquiaTelefones FranquiaTelefone[]
   franquiaIndiceStatus FranquiaIndiceStatus?
   passosWidget      WidgetPasso[]
@@ -1925,6 +1929,61 @@ model UnitCrmCompartilhado {
   @@map("unit_crm_compartilhado")
 }
 
+/// CONFIGURAÇÃO DO CRM (CHATWOOT) POR UNIDADE (kit de unidade nova, 14/11/2026). Antes, caixa→unidade, gerente, usuário do
+/// celular, prefixo dos modelos e os textos com endereço/mapa estavam escritos no código só para Parauapebas. Agora cada
+/// unidade tem a sua linha aqui, lida no boot e revalidada (`lib/chatwoot-unidades.ts`); o código de Parauapebas continua
+/// como semente de segurança (sem linha aqui, a unidade se comporta como sempre se comportou).
+/// SEGREDO NUNCA MORA AQUI: o token da Meta e o dataset ficam no ambiente (`META_ADS_TOKEN_<SUFIXO>`,
+/// `META_DATASET_ID_<SUFIXO>`); aqui só o SUFIXO (o nome da variável).
+model UnitChatwoot {
+  unitId String @id @map("unit_id")
+  /// Prefixo dos modelos do WhatsApp desta unidade na Meta ("parau_"). Os modelos têm o nome base da régua
+  /// (`<prefixo>consulta_lembrete_vespera`).
+  prefixoModelos String @map("prefixo_modelos")
+  /// Usuário do Chatwoot "📱 Celular da unidade" (autor das mensagens que a equipe manda pelo aparelho).
+  usuarioCelularId Int? @map("usuario_celular_id")
+  /// Agente gerente (lead quente parado vai para ela).
+  gerenteId Int? @map("gerente_id")
+  /// Meta de agendamentos por dia (tela Hoje).
+  metaAgendamentosDia Int? @map("meta_agendamentos_dia")
+  /// phone_number_id do número oficial no Kapso (tradutor de mídia e resgate de referral).
+  kapsoPhoneNumberId String? @map("kapso_phone_number_id")
+  /// WABA da caixa oficial (conversões CAPI).
+  wabaId String? @map("waba_id")
+  /// Sufixo das variáveis de ambiente da Meta desta unidade ("PARAUAPEBAS" → META_ADS_TOKEN_PARAUAPEBAS).
+  envSufixo String @map("env_sufixo")
+  /// Conta do Chatwoot desta unidade (1 conta por clínica vendida). Null = a conta do ambiente (CHATWOOT_CONTA_ID): é o caso de Parauapebas.
+  contaId Int? @map("conta_id")
+  /// Subdomínio do CRM da clínica (<subdominio>.doutordigitalconsultoria.com): a origem do Chatwoot dela, aceita pelas telas que entram por iframe. Null = só a origem principal.
+  subdominio String? @map("subdominio")
+  /// Dados que entram NO TEXTO dos modelos: { nome, cidade, endereco, mapa, telefone?, valorConsulta?, valorComSinal? }.
+  dadosModelos Json @map("dados_modelos")
+  atualizadoPor String?  @map("atualizado_por")
+  criadoEm      DateTime @default(now()) @map("criado_em")
+  atualizadoEm  DateTime @updatedAt @map("atualizado_em")
+
+  unit   Unit                @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  caixas UnitChatwootCaixa[]
+
+  @@map("unit_chatwoot")
+}
+
+/// Uma caixa (inbox) do Chatwoot de uma unidade. O id da caixa é único na conta do Chatwoot: duas unidades nunca dividem caixa.
+/// tipo: "cloud" (WhatsApp oficial via Kapso: fora da janela de 24 h só vai modelo aprovado) | "evolution" (API não oficial,
+/// sem janela) | "historico" (só arquivo: fora da régua, do funil e do Hoje).
+model UnitChatwootCaixa {
+  caixaId            Int     @id @map("caixa_id")
+  unitId             String  @map("unit_id")
+  tipo               String
+  /// Instância do Evolution que alimenta esta caixa (só tipo "evolution").
+  instanciaEvolution String? @map("instancia_evolution")
+
+  config UnitChatwoot @relation(fields: [unitId], references: [unitId], onDelete: Cascade)
+
+  @@index([unitId])
+  @@map("unit_chatwoot_caixa")
+}
+
 model UnitAutomacao {
   id     String @id @default(cuid())
   unitId String @map("unit_id")
@@ -2330,6 +2389,17 @@ model DisparoOnda {
   retomadaPor  String?   @map("retomada_por")
   retomadaEm   DateTime? @map("retomada_em")
   criadaPor    String?   @map("criada_por")
+  /// de onde a lista veio: 'kommo' (etiqueta do Kommo, sempre foi assim) | 'chatwoot' (filtro da tela «Disparos» do CRM)
+  origem       String    @default("kommo")
+  /// só origem 'chatwoot': a conta do Chatwoot, a caixa (WhatsApp oficial) e o filtro que formou a lista (auditoria)
+  /// origem 'chatwoot': o máximo de pessoas que o disparo pode ter (a lista é CORTADA nele na montagem; a aprovação o confere) e a categoria do modelo na Meta (marketing, utilidade…) para o custo estimado
+  maximoPessoas Int?     @map("maximo_pessoas")
+  categoriaModelo String? @map("categoria_modelo")
+  /// true = o CRM não informou a categoria do modelo e ela foi ASSUMIDA como marketing (a mais cara): a tela pede confirmação e a conferência não a compara com o CRM
+  categoriaAssumida Boolean @default(false) @map("categoria_assumida")
+  contaChatwoot Int?     @map("conta_chatwoot")
+  caixaChatwoot Int?     @map("caixa_chatwoot")
+  filtro       Json?
   criadoEm     DateTime  @default(now()) @map("criado_em")
   atualizadoEm DateTime  @updatedAt @map("atualizado_em")
 
@@ -2339,6 +2409,7 @@ model DisparoOnda {
 
   @@index([estado, unitId])
   @@index([campanhaId, unitId])
+  @@index([origem, estado])
   @@map("disparo_ondas")
 }
 
@@ -2368,6 +2439,9 @@ model DisparoDestinatario {
   /// nome inteiro do contato no Kommo: só para reconferir a franquia na hora do envio (o título do cartão não serve)
   nomeCompleto String?   @map("nome_completo")
   kommoLeadId  Int?      @map("kommo_lead_id")
+  /// origem 'chatwoot': a conversa e o contato no Chatwoot (o id da conversa é POR CONTA; a conta está na onda)
+  conversaChatwoot Int?  @map("conversa_chatwoot")
+  contatoChatwoot  Int?  @map("contato_chatwoot")
   /// pendente | enviando | enviado | falhou | saiu | descartado
   estado       String    @default("pendente")
   /// por que falhou / saiu / foi descartado na hora do envio
@@ -2377,6 +2451,14 @@ model DisparoDestinatario {
   /// modo seco: quando a decisão "receberia" foi gravada. Não é envio.
   simuladoEm   DateTime? @map("simulado_em")
   enviadoEm    DateTime? @map("enviado_em")
+  /// origem 'chatwoot' (gravados pela varredura depois do envio; a hora é a em que a varredura VIU, não a da Meta): entregue, lida,
+  /// e a 1ª mensagem do paciente em até 72 h depois do envio
+  entregueEm   DateTime? @map("entregue_em")
+  lidaEm       DateTime? @map("lida_em")
+  respondeuEm  DateTime? @map("respondeu_em")
+  /// origem 'chatwoot': quando o resultado do envio ficou DEFINITIVO (falhou — na hora ou pela varredura — ou o CRM marcou entregue/lida). É por ela que o freio de falhas
+  /// seguidas ordena: envio ainda não conferido pela varredura não conta nem como sucesso nem como falha.
+  decididoEm   DateTime? @map("decidido_em")
   criadoEm     DateTime  @default(now()) @map("criado_em")
   atualizadoEm DateTime  @updatedAt @map("atualizado_em")
 
@@ -2385,8 +2467,23 @@ model DisparoDestinatario {
   @@unique([campanhaId, unitId, chave], map: "disparo_destinatarios_pessoa_key")
   @@index([ondaId, estado])
   @@index([unitId, estado, enviadoEm])
+  @@index([unitId, decididoEm])
   @@index([wamid])
   @@map("disparo_destinatarios")
+}
+
+/// Ajuste da tela «Disparos» do CRM por unidade (origem 'chatwoot' do motor de disparo). Sem linha = tudo de fábrica:
+/// só administrador da Doutor Digital aprova, e o teto vem só dos freios do motor.
+model ChatwootDisparoAjuste {
+  unitId        String   @id @map("unit_id")
+  /// a administradora/gerente da clínica (papel «administrator» na conta dela) também pode aprovar. Desligado por padrão.
+  gerenteAprova Boolean  @default(false) @map("gerente_aprova")
+  /// o teto de envio do número na Meta ("TIER_250"), informado pela Doutor Digital: o teto por 24 h do motor nunca passa dele
+  tierDoNumero  String?  @map("tier_do_numero")
+  atualizadoPor String?  @map("atualizado_por")
+  atualizadoEm  DateTime @updatedAt @map("atualizado_em")
+
+  @@map("chatwoot_disparo_ajustes")
 }
 
 /// Chave de API de um serviço de terceiros por unidade (Asaas, ClickSign), CIFRADA (lib/integracoes/cofre.ts).
@@ -2761,7 +2858,9 @@ model ChatwootReguaDisparo {
   texto          String
   criadoEm       DateTime @default(now()) @map("criado_em")
 
-  @@unique([conversationId, regra, chave])
+  /// A caixa (inbox) é única na INSTALAÇÃO do Chatwoot; o `conversation_id` da API é por CONTA (display_id). Com uma conta por clínica,
+  /// a conversa 5 da conta 1 e a conversa 5 da conta 2 têm o mesmo id: a chave precisa incluir a caixa.
+  @@unique([caixa, conversationId, regra, chave])
   @@index([caixa, criadoEm])
   @@map("chatwoot_regua_disparo")
 }
@@ -2812,6 +2911,26 @@ model SofiaMensagem {
   @@map("sofia_mensagem")
 }
 
+/// Tela «Robôs» do Chatwoot (14/11/2026): o que a Gestora configurou em cada robô da régua (`chatwoot-regua.ts`) POR UNIDADE. Sem linha =
+/// o padrão do código (ligado, tempo e modelo de sempre). `regra` = o nome da regra (`consulta-vespera`, `followup-48h`…).
+/// `tempoMin`: o deslocamento em MINUTOS (a âncora e a direção «antes/depois» são as do robô e não mudam); null = o do código.
+/// `modelos`: { "<modelo do código>": "<modelo aprovado que passa a mandar>" } (só modelos aprovados e com as mesmas variáveis).
+/// Quem mexeu por último e quando ficam aqui (`atualizadoPor`/`atualizadoEm`). O worker relê a cada ciclo.
+model ChatwootReguaRobo {
+  id            String   @id @default(cuid())
+  unitSlug      String   @map("unit_slug")
+  regra         String
+  ligado        Boolean  @default(true)
+  tempoMin      Int?     @map("tempo_min")
+  modelos       Json     @default("{}")
+  atualizadoPor String?  @map("atualizado_por")
+  criadoEm      DateTime @default(now()) @map("criado_em")
+  atualizadoEm  DateTime @updatedAt @map("atualizado_em")
+
+  @@unique([unitSlug, regra])
+  @@map("chatwoot_regua_robo")
+}
+
 /// Avaliação de uma resposta da Sofia pela equipe (👍 boa / 👎 ruim + o que estava errado). Uma por pessoa e mensagem (mudar
 /// de ideia troca a nota, não a data). As 👎 ficam "para revisar" no Agente até alguém ensinar a Sofia, pedir à Doutor Digital ou dar ok.
 model SofiaAvaliacao {
@@ -2851,4 +2970,24 @@ model SofiaEvento {
 
   @@index([unitSlug, criadoEm])
   @@map("sofia_evento")
+}
+
+/// Formulário «nova clínica» (kit de unidade): um convite de USO ÚNICO que o franqueado recebe num link (`/nova-clinica/<codigo>`) e as respostas dele.
+/// O código NUNCA é guardado (só o hash SHA-256): quem lê o banco não abre o formulário de ninguém. As respostas têm dado pessoal (e-mail da equipe, Pix, telefone):
+/// não vão para log nem para o GitHub. `importadoEm` = o kit já gerou o questionário privado a partir delas.
+model NovaClinicaConvite {
+  id           String    @id @default(cuid())
+  codigoHash   String    @unique @map("codigo_hash")
+  /// para quem é o convite (só para o João reconhecer na lista)
+  rotulo       String?
+  criadoPor    String    @map("criado_por")
+  criadoEm     DateTime  @default(now()) @map("criado_em")
+  expiraEm     DateTime  @map("expira_em")
+  enviadoEm    DateTime? @map("enviado_em")
+  slugSugerido String?   @map("slug_sugerido")
+  respostas    Json?
+  importadoEm  DateTime? @map("importado_em")
+
+  @@index([slugSugerido])
+  @@map("nova_clinica_convite")
 }

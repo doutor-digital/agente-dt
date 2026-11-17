@@ -28,6 +28,9 @@ export interface Destino {
   /** nome inteiro do contato (só para reconferir a franquia); cai no primeiro nome se não foi guardado */
   nomeCompleto: string;
   kommoLeadId: number | null;
+  /** origem 'chatwoot': a conversa (e o contato) do CRM para onde a mensagem vai; ausente/null nas ondas do Kommo */
+  conversaChatwoot?: number | null;
+  contatoChatwoot?: number | null;
 }
 
 export interface OndaNoLote extends Definicao {
@@ -57,6 +60,8 @@ export interface DadosDeGravacao {
   simuladoEm?: Date | null;
   /** `null` = desfaz a marca de tentativa que `reivindicar` pôs (não enviou, então não conta no teto) */
   enviadoEm?: Date | null;
+  /** origem 'chatwoot': o momento em que o resultado ficou definitivo (o freio de falhas ordena por ele) */
+  decididoEm?: Date | null;
 }
 
 export interface Porto {
@@ -64,6 +69,8 @@ export interface Porto {
   modoDaUnidade(slug: string): Modo;
   /** Telefones (só dígitos) que podem receber de verdade NESTA unidade; `null` = todos dela (decisão explícita, `slug=*`); conjunto vazio = ninguém. Existe para provar em produção só no número do João. */
   listaDeTeste(slug: string): ReadonlySet<string> | null;
+  /** O nome da variável de ambiente da lista de teste, para o log dizer a CERTA (o CRM tem a sua; padrão: `DISPARO_LISTA_DE_TESTE`, a do Kommo). */
+  nomeDaListaDeTeste?: string;
   /** Mensagens da unidade desde `desde`: enviadas (ligado) ou "receberia" gravadas (seco). */
   contarNaJanela(unitId: string, desde: Date, modo: 'ligado' | 'seco'): Promise<number>;
   pendentes(ondaId: string, modo: 'ligado' | 'seco', limite: number, soTelefones: ReadonlySet<string> | null): Promise<Destino[]>;
@@ -88,6 +95,11 @@ export interface Porto {
   devolverParaAprovacao(ondaId: string, motivo: string): Promise<void>;
   concluirOnda(ondaId: string): Promise<void>;
   pediuSair(d: Destino): Promise<boolean>;
+  /**
+   * OPCIONAL — conferências do lado de quem origina a lista, na hora do envio, ANTES da franquia (a origem Chatwoot: a conversa ainda existe e
+   * é desta pessoa, a caixa é WhatsApp oficial, SAIR nas mensagens, contato interno…). `null` = segue. A origem Kommo não define: nada muda.
+   */
+  reconferir?(d: Destino): Promise<VereditoExtra | null>;
   franquia(d: Destino): Promise<SituacaoNaFranquia>;
   enviar(onda: OndaNoLote, d: Destino, valores: string[]): Promise<ResultadoDoTemplate>;
   espelhar(d: Destino, texto: string): Promise<void>;
@@ -160,6 +172,12 @@ export function textoDoEspelho(onda: OndaNoLote, texto: string, quando: Date, fu
   return moldura(`${texto.slice(0, corte).trimEnd()}…`);
 }
 
+/** O que `Porto.reconferir` pode decidir (os mesmos vereditos de baixo, menos «pode»). */
+export type VereditoExtra =
+  | { tipo: 'barrou'; estado: 'saiu' | 'descartado'; motivo: string }
+  /** não deu para conferir: tenta de novo na próxima rodada, NÃO descarta a pessoa para sempre */
+  | { tipo: 'adiar'; motivo: string };
+
 type Veredito =
   | { tipo: 'pode' }
   | { tipo: 'barrou'; estado: 'saiu' | 'descartado'; motivo: string }
@@ -169,6 +187,8 @@ type Veredito =
 /** Decide, sem mandar nada, se a pessoa ainda pode receber. */
 async function aindaPode(porto: Porto, d: Destino): Promise<Veredito> {
   if (await porto.pediuSair(d)) return { tipo: 'barrou', estado: 'saiu', motivo: 'pediu para sair (SAIR) antes do envio' };
+  const extra = await porto.reconferir?.(d);
+  if (extra) return extra;
   const f = await porto.franquia(d);
   if (f === 'livre') return { tipo: 'pode' };
   if (f === 'indisponivel') return { tipo: 'adiar', motivo: 'a franquia não respondeu (ou, em unidade sem franquia, o Kommo)' };
@@ -356,7 +376,7 @@ export async function rodarUnidade(porto: Porto, f: Freios, u: UnidadeNoLote, on
 
   const teste = real ? porto.listaDeTeste(u.slug) : null;
   if (teste && teste.size === 0) {
-    porto.log('warn', { unit: u.slug }, 'disparo: unidade LIGADA mas sem lista de teste (DISPARO_LISTA_DE_TESTE) — ninguém recebe; use slug=telefone ou slug=* para esta unidade');
+    porto.log('warn', { unit: u.slug }, 'disparo: unidade LIGADA mas sem lista de teste (' + (porto.nomeDaListaDeTeste ?? 'DISPARO_LISTA_DE_TESTE') + ') — ninguém recebe; use slug=telefone ou slug=* para esta unidade');
     return { ...r, parou: 'ligada sem lista de teste desta unidade: ninguém recebe' };
   }
   let seguidas = 0;

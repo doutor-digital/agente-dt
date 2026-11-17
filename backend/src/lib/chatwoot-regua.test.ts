@@ -6,6 +6,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  arquivoComEtapa,
+  ehArquivo,
   atualizarVistos,
   brl,
   camposDoModelo,
@@ -141,6 +143,24 @@ test('prepagamento: ao entrar em Agendado com pagamento antecipado; pendente 3 h
   assert.match(r.disparos[0]!.texto!, /pagamento antecipado é R\$ 250\./);
   assert.deepEqual(regras(rodar(conv({ attrs: AGENDADO }), '2026-11-16T15:00:00Z', v, ['prepagamento|agendado@2026-11-16T12:00:00.000Z'])), ['prepagamento-pendente']);
   assert.deepEqual(regras(rodar(conv({ attrs: AGENDADO }), '2026-11-16T14:59:00Z', v, ['prepagamento|agendado@2026-11-16T12:00:00.000Z'])), []);
+});
+
+test('prepagamento pendente: «até amanhã» só para consulta de OUTRO dia, e confere a hora em que SAI; consulta no mesmo dia não recebe; o recado inicial não é afetado', () => {
+  const v = { etapa: visto('Agendado', T0) };
+  const feitos = ['prepagamento|agendado@2026-11-16T12:00:00.000Z'];
+  const consultaEm = (dia: string, hora: string) => ({ ...AGENDADO, data_consulta: dia, hora_consulta: hora });
+  const pend = (attrs: Record<string, unknown>, agora = '2026-11-16T15:00:00Z') => regras(rodar(conv({ attrs }), agora, v, feitos)).includes('prepagamento-pendente');
+  // consulta amanhã: sai (o texto «até amanhã» é verdade)
+  assert.equal(pend(consultaEm('2026-11-17', '14:30')), true);
+  assert.equal(pend(consultaEm('2026-11-17', '08:00')), true);
+  // consulta HOJE, não importa a hora: «até amanhã» seria mentira — não sai
+  for (const hora of ['18:00', '13:30', '12:30', '11:00']) assert.equal(pend(consultaEm('2026-11-16', hora)), false, `hoje às ${hora}`);
+  // sem hora e hoje: idem
+  assert.equal(pend({ ...AGENDADO, data_consulta: '2026-11-16', hora_consulta: '' }), false);
+  // o primeiro recado do pré-pagamento sai igual
+  assert.ok(regras(rodar(conv({ attrs: consultaEm('2026-11-16', '12:30') }), T0, v)).includes('prepagamento'));
+  // enviado mais tarde (ainda dentro dos 12 h de tolerância) para consulta de hoje: também não
+  assert.equal(pend(consultaEm('2026-11-16', '23:00'), '2026-11-16T22:00:00Z'), false);
 });
 
 test('prepagamento: já pagou, sem antecipado, outra situação ou valor desconhecido', () => {
@@ -499,15 +519,15 @@ test('integração: o ciclo de uma conversa que entra em Perdido depois da parti
 const msg = (o: Partial<MensagemResumo>): MensagemResumo => ({ saida: true, privada: false, autorId: 7, autorTipo: 'user', criadaEm: Z('2026-11-16T12:00:00Z'), ...o });
 
 test('respondeu-pelo-celular: põe quando a última saída é do usuário 7, tira quando é de outro agente', () => {
-  assert.equal(decidirEtiquetaCelular(conv({ ultima: msg({}) })), 'por');
-  assert.equal(decidirEtiquetaCelular(conv({ ultima: msg({}), etiquetas: ['respondeu-pelo-celular'] })), null);
-  assert.equal(decidirEtiquetaCelular(conv({ ultima: msg({ autorId: 2 }), etiquetas: ['respondeu-pelo-celular'] })), 'tirar');
-  assert.equal(decidirEtiquetaCelular(conv({ ultima: msg({ autorId: 2 }) })), null);
+  assert.equal(decidirEtiquetaCelular(conv({ ultima: msg({}) }), 'doutor-hernia-parauapebas'), 'por');
+  assert.equal(decidirEtiquetaCelular(conv({ ultima: msg({}), etiquetas: ['respondeu-pelo-celular'] }), 'doutor-hernia-parauapebas'), null);
+  assert.equal(decidirEtiquetaCelular(conv({ ultima: msg({ autorId: 2 }), etiquetas: ['respondeu-pelo-celular'] }), 'doutor-hernia-parauapebas'), 'tirar');
+  assert.equal(decidirEtiquetaCelular(conv({ ultima: msg({ autorId: 2 }) }), 'doutor-hernia-parauapebas'), null);
   // paciente escreveu por último, nota privada (as do seco) ou bot: não muda nada
-  assert.equal(decidirEtiquetaCelular(conv({ ultima: msg({ saida: false, autorId: 3, autorTipo: 'contact' }), etiquetas: ['respondeu-pelo-celular'] })), null);
-  assert.equal(decidirEtiquetaCelular(conv({ ultima: msg({ privada: true, autorId: 2 }), etiquetas: ['respondeu-pelo-celular'] })), null);
-  assert.equal(decidirEtiquetaCelular(conv({ ultima: msg({ autorTipo: 'agent_bot' }) })), null);
-  assert.equal(decidirEtiquetaCelular(conv({ ultima: null })), null);
+  assert.equal(decidirEtiquetaCelular(conv({ ultima: msg({ saida: false, autorId: 3, autorTipo: 'contact' }), etiquetas: ['respondeu-pelo-celular'] }), 'doutor-hernia-parauapebas'), null);
+  assert.equal(decidirEtiquetaCelular(conv({ ultima: msg({ privada: true, autorId: 2 }), etiquetas: ['respondeu-pelo-celular'] }), 'doutor-hernia-parauapebas'), null);
+  assert.equal(decidirEtiquetaCelular(conv({ ultima: msg({ autorTipo: 'agent_bot' }) }), 'doutor-hernia-parauapebas'), null);
+  assert.equal(decidirEtiquetaCelular(conv({ ultima: null }), 'doutor-hernia-parauapebas'), null);
 });
 
 // ── a conversa do Chatwoot ─────────────────────────────────────────────────────────────────────────
@@ -592,4 +612,303 @@ test('notaDoSeco com via: diz se iria como texto ou como template, com {{1}}=…
   assert.ok(notaDoSeco(d, { tipo: 'template', nome: d.modelo, variaveis: d.variaveis!, aprovado: false }).includes('ainda não está aprovado na Meta'));
   // sem via (caixa sem janela): a nota de sempre
   assert.ok(notaDoSeco(d).startsWith('🧪 [SECO] Régua «consulta-vespera» — enviaria agora:\n\nOlá, Maria.'));
+});
+
+test('ehArquivo / arquivoComEtapa: só etiqueta historico + atividade antes do corte; etapa faz entrar no funil', () => {
+  const antes = Math.floor(Date.parse('2026-11-12T12:00:00Z') / 1000);
+  const depois = Math.floor(Date.parse('2026-11-14T12:00:00Z') / 1000);
+  assert.equal(ehArquivo({ labels: ['historico'], last_activity_at: antes }), true);
+  assert.equal(ehArquivo({ labels: ['historico'], last_activity_at: depois }), false, 'paciente escreveu de novo: viva');
+  assert.equal(ehArquivo({ labels: ['outra'], last_activity_at: antes }), false, 'sem a etiqueta não é arquivo');
+  assert.equal(ehArquivo({ labels: ['historico'] }), true, 'sem data conta como arquivo');
+  assert.equal(ehArquivo(null), false);
+  assert.equal(arquivoComEtapa({ labels: ['historico'], last_activity_at: antes, custom_attributes: { etapa: 'Perdido' } }), true);
+  assert.equal(arquivoComEtapa({ labels: ['historico'], last_activity_at: antes, custom_attributes: { etapa: ' ' } }), false);
+  assert.equal(arquivoComEtapa({ labels: ['historico'], last_activity_at: depois, custom_attributes: { etapa: 'Perdido' } }), false, 'viva não é arquivo');
+});
+
+// ── arquivo com consulta de pé é paciente vivo ──
+
+test('ehArquivo: historico parado com consulta de hoje em diante OU dos últimos 35 dias (situação viva) não é arquivo; Desmarcado, vazio e consulta mais velha são', () => {
+  const antes = Math.floor(Date.parse('2026-11-12T12:00:00Z') / 1000);
+  const agora = Z('2026-11-15T02:30:00Z'); // sábado 14/11 23:30 em Belém (domingo em UTC)
+  const h = (attrs: Record<string, unknown>) => ({ labels: ['historico'], last_activity_at: antes, custom_attributes: attrs });
+  assert.equal(ehArquivo(h({}), agora), true);
+  for (const s of ['Agendado', 'Confirmado', 'Remarcado']) assert.equal(ehArquivo(h({ data_consulta: '2026-11-16', situacao_consulta: s }), agora), false, s);
+  assert.equal(ehArquivo(h({ data_consulta: '2026-11-16T03:00:00.000Z', situacao_consulta: 'Agendado' }), agora), false);
+  assert.equal(ehArquivo(h({ data_consulta: '2026-11-14', situacao_consulta: 'Agendado' }), agora), false, 'hoje em Belém (14/11) conta, embora em UTC já seja dia 15');
+  // recém-encerrada: a régua ainda tem falta, pós-atendimento e decisão, e a agenda ainda grava o desfecho
+  for (const s of ['Atendido', 'Não compareceu', 'Agendado']) assert.equal(ehArquivo(h({ data_consulta: '2026-11-13', situacao_consulta: s }), agora), false, `ontem ${s}`);
+  assert.equal(ehArquivo(h({ data_consulta: '2026-10-10', situacao_consulta: 'Atendido' }), agora), false, '35 dias atrás ainda vale (14/11 - 35 = 10/10)');
+  assert.equal(ehArquivo(h({ data_consulta: '2026-10-09', situacao_consulta: 'Atendido' }), agora), true, '36 dias: arquivo');
+  // Desmarcado e sem situação continuam arquivo; lixo também
+  assert.equal(ehArquivo(h({ data_consulta: '2026-11-16', situacao_consulta: 'Desmarcado' }), agora), true);
+  assert.equal(ehArquivo(h({ data_consulta: '2026-11-16' }), agora), true);
+  assert.equal(ehArquivo(h({ data_consulta: '2026-11-13', situacao_consulta: '' }), agora), true);
+  assert.equal(ehArquivo(h({ data_consulta: 'lixo', situacao_consulta: 'Agendado' }), agora), true);
+  // sem a etiqueta não era arquivo; com atividade nova continua não sendo
+  assert.equal(ehArquivo({ labels: [], last_activity_at: antes, custom_attributes: {} }, agora), false);
+  assert.equal(arquivoComEtapa({ ...h({ data_consulta: '2026-11-16', situacao_consulta: 'Agendado', etapa: 'Agendado' }) }), false, 'vivo não é arquivo (nem «com etapa»)');
+});
+
+test('historico com consulta de pé: lembretes de horário saem; o que a conversa já mostra é inicial e NÃO dispara regra de «entrou em etapa»', () => {
+  const partida = Z('2026-11-14T23:00:00Z');
+  const hist = {
+    ...conv({ attrs: { etapa: 'Agendado', situacao_consulta: 'Agendado', data_consulta: '2026-11-16', hora_consulta: '13:30', pagamento_antecipado: 'sim' }, etiquetas: ['historico', 'retomada'] }),
+    criadaEm: Z('2026-10-01T12:00:00Z'),
+  };
+  const primeira = Z('2026-11-15T12:00:00Z');
+  const k = atualizarVistos(hist, new Map(), primeira, { primeiraVez: false, desde: partida });
+  assert.equal(k.vistos.get('etapa')!.inicial, true);
+  assert.equal(k.vistos.get('etiqueta:retomada')!.inicial, true);
+  // segunda 16/11, consulta 13:30 Belém: dia = 10:30 (13:30Z), preparo = 12:30 (15:30Z); véspera de domingo já passou
+  const d1 = decidirRegua(hist, { vistos: k.vistos, feitos: new Set() }, Z('2026-11-16T13:35:00Z'), U);
+  assert.deepEqual(regras(d1), ['consulta-dia']);
+  const d2 = decidirRegua(hist, { vistos: k.vistos, feitos: new Set() }, Z('2026-11-16T15:35:00Z'), U);
+  assert.deepEqual(regras(d2), ['consulta-preparo']);
+  // nada de prepagamento (entrou em Agendado), SDR por etiqueta nem outras regras «ao entrar»
+  assert.equal(d1.disparos.some((x) => ['prepagamento', 'prepagamento-pendente', 'sdr-retomada'].includes(x.regra)), false);
+  // o mesmo paciente com consulta amanhã: a véspera (24 h antes) sai
+  const amanha = { ...hist, attrs: { ...hist.attrs, data_consulta: '2026-11-17' } };
+  const ka = atualizarVistos(amanha, new Map(), primeira, { primeiraVez: false, desde: partida });
+  assert.deepEqual(regras(decidirRegua(amanha, { vistos: ka.vistos, feitos: new Set() }, Z('2026-11-16T16:35:00Z'), U)), ['consulta-vespera']);
+});
+
+test('historico com consulta JÁ PASSADA vista pela 1ª vez: nada de falta, pós-atendimento nem decisão por estado antigo; consulta do dia da 1ª vista em diante vale', () => {
+  const partida = Z('2026-11-14T22:00:00Z');
+  const vista = Z('2026-11-15T02:30:00Z'); // sábado 14/11 23:30 em Belém
+  const doHistorico = (attrs: Record<string, unknown>) => ({ ...conv({ attrs, etiquetas: ['historico'] }), criadaEm: Z('2026-10-01T12:00:00Z') });
+  const varrer = (c: ConversaRegua, de: Date, ate: Date) => {
+    const k = atualizarVistos(c, new Map(), de, { primeiraVez: false, desde: partida });
+    assert.equal(k.vistos.get('_visto')!.inicial, true);
+    const feitos = new Set<string>();
+    const disparos: string[] = [];
+    for (let t = de.getTime(); t <= ate.getTime(); t += 10 * 60_000) {
+      for (const x of decidirRegua(c, { vistos: k.vistos, feitos }, new Date(t), U).disparos) {
+        feitos.add(`${x.regra}|${x.chave}`);
+        disparos.push(x.regra);
+      }
+    }
+    return disparos;
+  };
+  const ate = Z('2026-12-20T00:00:00Z');
+  // 13/11 Atendido (etapas em que a Kommo manda pós-atendimento e decisão): nada
+  for (const etapa of ['Compareceu', 'Pós-consulta', 'Novo lead', '']) {
+    assert.deepEqual(varrer(doHistorico({ etapa, situacao_consulta: 'Atendido', data_consulta: '2026-11-13', hora_consulta: '14:30' }), vista, ate), [], `Atendido 13/11 ${etapa}`);
+  }
+  // 13/11 Não compareceu: nada de «falta» (nem 48 h)
+  assert.deepEqual(varrer(doHistorico({ etapa: 'Agendado', situacao_consulta: 'Não compareceu', data_consulta: '2026-11-13', hora_consulta: '14:30' }), vista, ate), []);
+  assert.deepEqual(varrer(doHistorico({ etapa: 'Agendado', situacao_consulta: 'Não compareceu', data_consulta: '2026-11-13' }), vista, ate), []);
+  // 16/11 (depois do dia da 1ª vista) Atendido: pós-atendimento (D+1) e decisão 4d/7d valem; a consulta é posterior à 1ª vista
+  const futura = varrer(doHistorico({ etapa: 'Compareceu', situacao_consulta: 'Atendido', data_consulta: '2026-11-16', hora_consulta: '14:30' }), vista, ate);
+  assert.deepEqual(futura, ['pos-atendimento', 'decisao-4d', 'decisao-7d']);
+  // o dia da 1ª vista também conta (consulta de hoje, marcada Atendido à noite)
+  assert.deepEqual(varrer(doHistorico({ etapa: 'Compareceu', situacao_consulta: 'Atendido', data_consulta: '2026-11-14', hora_consulta: '09:00' }), vista, ate), ['decisao-4d', 'decisao-7d']);
+  // controle: a MESMA conversa de 13/11 Atendido, mas nascida depois da partida (não inicial), manda o pós-atendimento — é a trava que segura
+  const nova = { ...conv({ attrs: { etapa: 'Compareceu', situacao_consulta: 'Atendido', data_consulta: '2026-11-13', hora_consulta: '14:30' } }), criadaEm: Z('2026-11-14T19:00:00Z') };
+  const kn = atualizarVistos(nova, new Map(), Z('2026-11-14T20:00:00Z'), { primeiraVez: false, desde: Z('2026-11-14T10:00:00Z') });
+  assert.equal(kn.vistos.get('_visto')!.inicial, false);
+  assert.ok(decidirRegua(nova, { vistos: kn.vistos, feitos: new Set() }, Z('2026-11-14T20:30:00Z'), U).disparos.some((x) => x.regra === 'pos-atendimento'));
+});
+
+test('falta no mesmo dia: a chave é a da consulta — marcar «Não compareceu», desfazer e marcar de novo não manda duas vezes', () => {
+  const attrs = { etapa: 'Agendado', situacao_consulta: 'Não compareceu', data_consulta: '2026-11-16', hora_consulta: '13:30' };
+  const a = rodar(conv({ attrs }), '2026-11-16T20:00:00Z', { situacao_consulta: visto('Não compareceu', '2026-11-16T19:00:00Z') });
+  assert.deepEqual(regras(a), ['falta-mesmo-dia']);
+  // marcou de novo meia hora depois (desde novo): a mesma chave, já feita
+  const b = rodar(conv({ attrs }), '2026-11-16T20:00:00Z', { situacao_consulta: visto('Não compareceu', '2026-11-16T19:30:00Z') }, [`falta-mesmo-dia|${a.disparos[0]!.chave}`]);
+  assert.deepEqual(regras(b), []);
+  assert.match(a.disparos[0]!.chave, /^faltou@2026-11-16/);
+});
+
+// ── SESSÃO vinda da agenda (categoria Sessão): véspera + «hoje», sem preparo, sem os textos de consulta ──
+
+const SESSAO = { categoria_consulta: 'Sessão', data_consulta: '2026-11-19', hora_consulta: '09:30', situacao_consulta: 'Agendado' };
+const CHAVE_SESSAO = '2026-11-19T09:30';
+
+/** varre de `de` a `ate` de 10 em 10 min, acumulando o «feitos»; devolve regra → quantas vezes saiu */
+function varrerSessao(c: ConversaRegua, de: string, ate: string, v: Record<string, Visto> = {}, feitos: string[] = []) {
+  const f = new Set(feitos);
+  const saiu: Array<{ regra: string; modelo: string; texto: string | null; quando: string }> = [];
+  for (let t = Z(de).getTime(); t <= Z(ate).getTime(); t += 10 * 60_000) {
+    for (const x of decidirRegua(c, { vistos: vistos(v), feitos: f }, new Date(t), U).disparos) {
+      f.add(`${x.regra}|${x.chave}`);
+      saiu.push({ regra: x.regra, modelo: x.modelo, texto: x.texto, quando: new Date(t).toISOString() });
+    }
+  }
+  return saiu;
+}
+
+test('sessão da agenda: véspera (texto de sessão) e «hoje» 3 h antes, sem preparo — em qualquer etapa comercial', () => {
+  for (const etapa of [undefined, 'Novo lead', 'Sofia qualifica', 'Esperando humano', 'Agendado', 'Confirmado', 'Fechou', 'Compareceu']) {
+    const c = conv({ attrs: { ...SESSAO, ...(etapa ? { etapa } : {}) } });
+    const r = varrerSessao(c, '2026-11-17T00:00:00Z', '2026-11-19T23:00:00Z');
+    assert.deepEqual(r.map((x) => `${x.regra}:${x.modelo}`), ['consulta-vespera:parau_sessao_lembrete_vespera', 'sessao-dia:parau_sessao_confirmacao_dia'], String(etapa));
+  }
+  const r = varrerSessao(conv({ attrs: SESSAO }), '2026-11-17T00:00:00Z', '2026-11-19T23:00:00Z');
+  assert.equal(r[0]!.quando, '2026-11-18T12:30:00.000Z'); // véspera: 24 h antes (09:30 de 18/11 em Belém)
+  assert.match(r[0]!.texto!, /^Olá, Maria\. A sua sessão é amanhã\.\nData e horário: 19\/11 às 09:30\nEstá tudo certo\?$/);
+  assert.equal(r[1]!.quando, '2026-11-19T11:00:00.000Z'); // 3 h antes seria 06:30; a janela abre às 08:00 e o atraso máximo ainda cobre
+  assert.match(r[1]!.texto!, /^Bom dia, Maria\. A sua sessão de hoje está marcada para 19\/11 às 09:30\.\nEstá tudo certo\?$/);
+  assert.equal(r.some((x) => x.regra === 'consulta-preparo' || /consulta/.test(x.modelo)), false);
+});
+
+test('sessão da agenda: Atendido/Desmarcado não lembram (Remarcado é igual ao main: de pé); Perdido, Frio, Alta e cancelado não recebem; consulta que não é Sessão segue a régua de consulta', () => {
+  const sem = (attrs: Record<string, unknown>) => varrerSessao(conv({ attrs: { ...SESSAO, ...attrs } }), '2026-11-17T00:00:00Z', '2026-11-19T23:00:00Z').map((x) => x.regra);
+  assert.deepEqual(sem({ situacao_consulta: 'Desmarcado' }), []);
+  assert.deepEqual(sem({ situacao_consulta: 'Atendido' }), []);
+  assert.deepEqual(sem({ etapa: 'Perdido' }), []);
+  assert.deepEqual(sem({ etapa: 'Frio' }), []);
+  assert.deepEqual(sem({ etapa_tratamento: 'Alta' }), []);
+  assert.deepEqual(sem({ etapa_tratamento: 'Tratamento cancelado' }), []);
+  // controle: a MESMA agenda como Avaliação, em Agendado, monta consulta-vespera/dia/preparo (textos de consulta)
+  const av = varrerSessao(conv({ attrs: { ...SESSAO, categoria_consulta: 'Avaliação', etapa: 'Agendado' } }), '2026-11-17T00:00:00Z', '2026-11-19T23:00:00Z');
+  assert.deepEqual(av.map((x) => x.regra), ['consulta-vespera', 'consulta-dia', 'consulta-preparo']);
+  assert.ok(av.every((x) => /consulta/.test(x.modelo)));
+});
+
+test('sessão da agenda: sem hora só a véspera (09:00 do dia anterior), com a data no texto', () => {
+  const r = varrerSessao(conv({ attrs: { ...SESSAO, hora_consulta: undefined } }), '2026-11-17T00:00:00Z', '2026-11-19T23:00:00Z');
+  assert.deepEqual(r.map((x) => x.regra), ['consulta-vespera']);
+  assert.equal(r[0]!.quando, '2026-11-18T12:00:00.000Z');
+  assert.match(r[0]!.texto!, /Data e horário: 19\/11\n/);
+});
+
+test('sessão da agenda NÃO monta falta/pós/decisão de consulta', () => {
+  const todas = (attrs: Record<string, unknown>, v: Record<string, Visto> = {}) => varrerSessao(conv({ attrs }), '2026-11-19T00:00:00Z', '2026-12-30T00:00:00Z', v).map((x) => x.regra);
+  assert.deepEqual(todas({ ...SESSAO, situacao_consulta: 'Atendido', etapa: 'Pós-consulta' }, {}), []);
+  assert.deepEqual(todas({ ...SESSAO, situacao_consulta: 'Atendido', etapa: 'Compareceu' }, {}), []);
+  // Não compareceu com a etapa Agendado, visto no dia: só a falta DE SESSÃO (nada de falta-mesmo-dia nem falta-48h)
+  const v = { situacao_consulta: visto('Não compareceu', '2026-11-19T20:00:00Z') };
+  assert.deepEqual(todas({ ...SESSAO, situacao_consulta: 'Não compareceu', etapa: 'Agendado' }, v), ['sessao-falta']);
+});
+
+test('sessão da agenda: falta marcada no dia → parau_sessao_falta (chave = o dia da falta); outro dia, inicial, sem-follow-up não muda a regra', () => {
+  const attrs = { ...SESSAO, situacao_consulta: 'Não compareceu' };
+  const hoje = rodar(conv({ attrs }), '2026-11-19T20:05:00Z', { situacao_consulta: visto('Não compareceu', '2026-11-19T20:00:00Z') });
+  assert.deepEqual(regras(hoje), ['sessao-falta']);
+  assert.equal(hoje.disparos[0]!.modelo, 'parau_sessao_falta');
+  assert.equal(hoje.disparos[0]!.chave, 'faltou-sessao@2026-11-19'); // o dia da falta em Belém
+  assert.match(hoje.disparos[0]!.texto!, /^Olá, Maria\. Você não compareceu à sessão de hoje\./);
+  // marcada no dia seguinte: o texto diz «hoje», não vale
+  assert.deepEqual(regras(rodar(conv({ attrs }), '2026-11-20T15:00:00Z', { situacao_consulta: visto('Não compareceu', '2026-11-20T14:55:00Z') })), []);
+  // já era assim na partida (inicial): nada
+  assert.deepEqual(regras(rodar(conv({ attrs }), '2026-11-19T20:05:00Z', { situacao_consulta: visto('Não compareceu', '2026-11-19T20:00:00Z', true) })), []);
+  // desmarcar e marcar de novo: a mesma chave, já feita
+  assert.deepEqual(regras(rodar(conv({ attrs }), '2026-11-19T20:35:00Z', { situacao_consulta: visto('Não compareceu', '2026-11-19T20:30:00Z') }, [`sessao-falta|${hoje.disparos[0]!.chave}`])), []);
+  // em Perdido não manda
+  assert.deepEqual(regras(rodar(conv({ attrs: { ...attrs, etapa: 'Perdido' } }), '2026-11-19T20:05:00Z', { situacao_consulta: visto('Não compareceu', '2026-11-19T20:00:00Z') })), []);
+});
+
+test('sessão da agenda × caminhos que já existem: mesmo nome de regra e mesma chave → a mesma sessão não sai duas vezes', () => {
+  const chave = CHAVE_SESSAO;
+  // (a) etapa «Fechou» (véspera de sessão do caminho antigo): a véspera nova tem a mesma regra e chave
+  const fechou = conv({ attrs: { ...SESSAO, etapa: 'Fechou' } });
+  assert.deepEqual(varrerSessao(fechou, '2026-11-18T00:00:00Z', '2026-11-19T00:00:00Z').map((x) => x.regra), ['consulta-vespera']);
+  assert.deepEqual(varrerSessao(fechou, '2026-11-18T00:00:00Z', '2026-11-19T00:00:00Z', {}, [`consulta-vespera|${chave}`]), [], 'a véspera do caminho antigo já saiu');
+  // (b) «Em tratamento» com proxima_sessao igual à consulta da agenda: um só sessao-dia (no mesmo ciclo e entre ciclos)
+  const emTrat = conv({ attrs: { ...SESSAO, etapa_tratamento: 'Em tratamento', proxima_sessao: '2026-11-19', hora_sessao: '09:30' } });
+  const d = decidirRegua(emTrat, { vistos: new Map(), feitos: new Set() }, Z('2026-11-19T11:05:00Z'), U);
+  assert.deepEqual(regras(d), ['sessao-dia']);
+  assert.equal(d.disparos[0]!.chave, chave);
+  assert.deepEqual(regras(decidirRegua(emTrat, { vistos: new Map(), feitos: new Set([`sessao-dia|${chave}`]) }, Z('2026-11-19T11:05:00Z'), U)), []);
+  // (c) «Em tratamento» com a próxima sessão DIFERENTE da consulta da agenda: vale só o campo que a equipe mantém
+  const outra = conv({ attrs: { ...SESSAO, etapa_tratamento: 'Em tratamento', proxima_sessao: '2026-11-26', hora_sessao: '10:00' } });
+  const o = varrerSessao(outra, '2026-11-18T00:00:00Z', '2026-11-26T23:00:00Z');
+  assert.deepEqual(o.map((x) => x.regra), ['sessao-dia']);
+  assert.match(o[0]!.texto!, /26\/11 às 10:00/);
+});
+
+test('sessão da agenda: {{1}} nome e {{2}} «data às hora» saem de data_consulta/hora_consulta quando proxima_sessao está vazia; campo faltando segue o caminho de falta', () => {
+  const c = conv({ attrs: SESSAO });
+  for (const m of ['parau_sessao_lembrete_vespera', 'parau_sessao_confirmacao_dia']) {
+    const r = renderizar(m, c, U);
+    assert.deepEqual(r.variaveis, ['Maria', '19/11 às 09:30'], m);
+    assert.deepEqual(r.faltando, []);
+  }
+  // contato sem nome (só telefone): falta, não inventa
+  const semNome = renderizar('parau_sessao_lembrete_vespera', conv({ attrs: SESSAO, nome: '+5594999990000' }), U);
+  assert.equal(semNome.texto, null);
+  assert.deepEqual(semNome.faltando, ['nome do contato']);
+  // e o disparo vem com texto nulo + o que falta (o worker deixa a nota no seco / não manda no ligado)
+  const d = decidirRegua(conv({ attrs: SESSAO, nome: '+5594999990000' }), { vistos: new Map(), feitos: new Set() }, Z('2026-11-18T12:40:00Z'), U);
+  assert.deepEqual(regras(d), ['consulta-vespera']);
+  assert.equal(d.disparos[0]!.texto, null);
+  // em tratamento, a proxima_sessao da equipe continua mandando no texto
+  assert.deepEqual(renderizar('parau_sessao_lembrete_vespera', conv({ attrs: { ...SESSAO, etapa_tratamento: 'Em tratamento', proxima_sessao: '2026-11-26', hora_sessao: '10:00' } }), U).variaveis, ['Maria', '26/11 às 10:00']);
+});
+
+test('texto de sessão: o {{2}} é a data+hora que DECIDIU o envio; os outros modelos que usam o mesmo campo seguem como no main', () => {
+  // Em tratamento SEM proxima_sessao, com data_retorno velho: o lembrete da agenda mostra a data da agenda
+  const emTrat = conv({ attrs: { ...SESSAO, etapa_tratamento: 'Em tratamento', data_retorno: '2026-10-01' } });
+  const v = decidirRegua(emTrat, { vistos: new Map(), feitos: new Set() }, Z('2026-11-18T12:40:00Z'), U);
+  assert.deepEqual(regras(v), ['consulta-vespera']);
+  assert.match(v.disparos[0]!.texto!, /Data e horário: 19\/11 às 09:30/);
+  assert.doesNotMatch(v.disparos[0]!.texto!, /01\/10/);
+  assert.deepEqual(v.disparos[0]!.variaveis, ['Maria', '19/11 às 09:30']);
+  // cancelado com categoria Sessão: o retorno do cancelamento mostra data_retorno, não a data da sessão
+  const canc = { ...SESSAO, etapa_tratamento: 'Tratamento cancelado', data_retorno: '2026-11-25' };
+  const r = renderizar('parau_cancelamento_retorno_confirmado', conv({ attrs: canc }), U);
+  assert.match(r.texto!, /Data e horário: 25\/11\n/);
+  assert.deepEqual(r.variaveis, ['Maria', '25/11']);
+  // confirmação de retorno da SDR (categoria Sessão, sem proxima_sessao): data_retorno, depois consulta — como no main
+  assert.match(renderizar('parau_sdr_confirmacao_retorno', conv({ attrs: { ...SESSAO, data_retorno: '2026-11-25' } }), U).texto!, /agendado para 25\/11,/);
+  assert.match(renderizar('parau_sdr_confirmacao_retorno', conv({ attrs: SESSAO }), U).texto!, /agendado para 19\/11 às 09:30,/);
+  // «Em tratamento» com proxima_sessao igual à consulta da agenda: o texto do sessao-dia é a sessão da equipe
+  const igual = conv({ attrs: { ...SESSAO, etapa_tratamento: 'Em tratamento', proxima_sessao: '2026-11-19', hora_sessao: '09:30' } });
+  const d = decidirRegua(igual, { vistos: new Map(), feitos: new Set() }, Z('2026-11-19T11:05:00Z'), U);
+  assert.match(d.disparos[0]!.texto!, /19\/11 às 09:30/);
+  // renderizar sem o momento do envio (chamada direta) = comportamento do main
+  assert.deepEqual(renderizar('parau_sessao_lembrete_vespera', conv({ attrs: { ...SESSAO, data_retorno: '2026-11-25' } }), U).variaveis, ['Maria', '25/11']);
+});
+
+test('falta de sessão: agenda e «compareceu_ultima_sessao» são o MESMO envio (regra e chave do dia da falta); falta de outro dia não cala a de hoje; Alta/cancelado não', () => {
+  const base = { ...SESSAO, situacao_consulta: 'Não compareceu', etapa_tratamento: 'Em tratamento', proxima_sessao: '2026-11-19', hora_sessao: '09:30' };
+  // 10:00 a agenda marca Não compareceu → manda
+  const v1 = { situacao_consulta: visto('Não compareceu', '2026-11-19T13:00:00Z') };
+  const a = decidirRegua(conv({ attrs: base }), { vistos: vistos(v1), feitos: new Set() }, Z('2026-11-19T13:05:00Z'), U);
+  assert.deepEqual(regras(a), ['sessao-falta']);
+  const feitos = new Set([`sessao-falta|${a.disparos[0]!.chave}`]);
+  // 15:00 a equipe marca compareceu_ultima_sessao = Não no mesmo dia → não manda de novo
+  const v2 = { ...v1, compareceu_ultima_sessao: visto('Não', '2026-11-19T18:00:00Z') };
+  const b = decidirRegua(conv({ attrs: { ...base, compareceu_ultima_sessao: 'Não' } }), { vistos: vistos(v2), feitos }, Z('2026-11-19T18:05:00Z'), U);
+  assert.deepEqual(regras(b), []);
+  // a ordem inversa (equipe primeiro, agenda depois): idem
+  const c1 = decidirRegua(conv({ attrs: { ...base, compareceu_ultima_sessao: 'Não' } }), { vistos: vistos({ compareceu_ultima_sessao: visto('Não', '2026-11-19T13:00:00Z') }), feitos: new Set() }, Z('2026-11-19T13:05:00Z'), U);
+  assert.deepEqual(regras(c1), ['sessao-falta']);
+  assert.equal(c1.disparos[0]!.chave, a.disparos[0]!.chave);
+  assert.deepEqual(regras(decidirRegua(conv({ attrs: { ...base, compareceu_ultima_sessao: 'Não' } }), { vistos: vistos(v2), feitos: new Set([`sessao-falta|${c1.disparos[0]!.chave}`]) }, Z('2026-11-19T18:05:00Z'), U)), []);
+  // dois caminhos no MESMO ciclo: um só disparo
+  assert.equal(decidirRegua(conv({ attrs: { ...base, compareceu_ultima_sessao: 'Não' } }), { vistos: vistos({ ...v1, compareceu_ultima_sessao: visto('Não', '2026-11-19T13:00:00Z') }), feitos: new Set() }, Z('2026-11-19T13:05:00Z'), U).disparos.length, 1);
+  // uma falta ANTERIOR (outro dia) com compareceu_ultima_sessao «Não» não cala a falta de hoje
+  const ontem = `sessao-falta|faltou-sessao@2026-11-12`;
+  assert.deepEqual(regras(decidirRegua(conv({ attrs: base }), { vistos: vistos(v1), feitos: new Set([ontem]) }, Z('2026-11-19T13:05:00Z'), U)), ['sessao-falta']);
+  assert.deepEqual(regras(decidirRegua(conv({ attrs: { ...base, compareceu_ultima_sessao: 'Não' } }), { vistos: vistos({ ...v1, compareceu_ultima_sessao: visto('Não', '2026-11-12T13:00:00Z') }), feitos: new Set([ontem]) }, Z('2026-11-19T13:05:00Z'), U)), ['sessao-falta']);
+  // Alta e tratamento cancelado: a falta da agenda também não vale
+  for (const etapa_tratamento of ['Alta', 'Tratamento cancelado']) {
+    assert.deepEqual(regras(decidirRegua(conv({ attrs: { ...base, etapa_tratamento } }), { vistos: vistos(v1), feitos: new Set() }, Z('2026-11-19T13:05:00Z'), U)), [], etapa_tratamento);
+  }
+});
+
+test('trocar o modelo na tela Robôs não faz o texto perder a data do envio (vale para QUALQUER modelo do robô, não só os de sessão pelo nome)', () => {
+  // consulta de 18/11 14:30, com uma «próxima sessão» velha no cartão; a véspera sai 24 h antes (17/11 14:30 Belém = 17:30Z)
+  const attrs = { etapa: 'Agendado', situacao_consulta: 'Agendado', data_consulta: '2026-11-18', hora_consulta: '14:30', proxima_sessao: '2026-10-01', hora_sessao: '08:00' };
+  const trocas = [
+    ['parau_consulta_lembrete_vespera', 'parau_sessao_lembrete_vespera'], // consulta → texto de sessão (usa o campo da sessão)
+    ['parau_consulta_lembrete_vespera', 'parau_consulta_lembrete_vespera'], // sem troca
+  ] as const;
+  for (const [de, para] of trocas) {
+    const ajustes = { modelos: new Map([[`consulta-vespera|${de}`, para]]) };
+    const d = decidirRegua(conv({ attrs }), { vistos: new Map(), feitos: new Set() }, Z('2026-11-17T17:35:00Z'), U, ajustes).disparos.find((x) => x.regra === 'consulta-vespera')!;
+    assert.equal(d.modelo, para);
+    assert.match(d.texto!, /18\/11 às 14:30/, para);
+    assert.doesNotMatch(d.texto!, /01\/10/, para);
+  }
+  // o inverso: o robô de sessão (Em tratamento, a próxima sessão da equipe) com um modelo de consulta mostra a data da SESSÃO
+  const sessao = { funil: 'Tratamento', etapa_tratamento: 'Em tratamento', proxima_sessao: '2026-11-18', hora_sessao: '10:00', data_consulta: '2026-09-01', hora_consulta: '08:00' };
+  const aj = { modelos: new Map([['sessao-dia|parau_sessao_confirmacao_dia', 'parau_consulta_confirmacao_dia']]) };
+  const s2 = decidirRegua(conv({ attrs: sessao }), { vistos: new Map(), feitos: new Set() }, Z('2026-11-18T11:05:00Z'), U, aj).disparos.find((x) => x.regra === 'sessao-dia')!;
+  assert.equal(s2.modelo, 'parau_consulta_confirmacao_dia');
+  assert.match(s2.texto!, /18\/11 às 10:00/);
+  assert.doesNotMatch(s2.texto!, /01\/09/);
 });

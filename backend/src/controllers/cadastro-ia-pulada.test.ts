@@ -94,7 +94,7 @@ test('o sincronizador que explode não derruba o turno', async () => {
   assert.ok(r);
 });
 
-test('unidade que NÃO divide Kommo: o cadastro com a IA pulada não roda (fica para outro PR), mesmo com a chave ligada', async () => {
+test('unidade que NÃO divide Kommo e SEM a chave cadastro-ia-pulada: o cadastro com a IA pulada não roda, mesmo com cadastro-todo-lead ligado', async () => {
   const solo = { id: 'u-solo', slug: 'solo', spineSyncLeads: true } as unknown as Unit;
   _semearParaTeste([{ slug: 'solo', automacao: 'cadastro-todo-lead', estado: 'ligado' }]);
   let n = 0;
@@ -105,6 +105,42 @@ test('unidade que NÃO divide Kommo: o cadastro com a IA pulada não roda (fica 
   assert.equal(r, null);
   assert.equal(n, 0);
   assert.equal(decidiu, 0, 'nem chega a decidir');
+});
+
+test('Kommo próprio + chave cadastro-ia-pulada LIGADA: cadastra como lead (Petrópolis depois de 12/11)', async () => {
+  const solo = { id: 'u-solo', slug: 'solo', spineSyncLeads: true } as unknown as Unit;
+  _semearParaTeste([
+    { slug: 'solo', automacao: 'cadastro-todo-lead', estado: 'ligado' },
+    { slug: 'solo', automacao: 'cadastro-ia-pulada', estado: 'ligado' },
+  ]);
+  const chamadas: Array<{ leadId: number; soLead?: boolean }> = [];
+  const r = await cadastrarQuandoIaPulada({ unit: solo, leadId: 22, isChatMessage: true }, async (_u, leadId, o) => void chamadas.push({ leadId, soLead: o.soLead }), deps());
+  await r?.execucao;
+  assert.deepEqual(chamadas, [{ leadId: 22, soLead: true }]);
+});
+
+test('Kommo próprio + cadastro-ia-pulada ligada, mas cadastro-todo-lead em SECO: só registra, não cadastra', async () => {
+  const solo = { id: 'u-solo', slug: 'solo', spineSyncLeads: true } as unknown as Unit;
+  _semearParaTeste([
+    { slug: 'solo', automacao: 'cadastro-todo-lead', estado: 'seco' },
+    { slug: 'solo', automacao: 'cadastro-ia-pulada', estado: 'ligado' },
+  ]);
+  let n = 0;
+  const r = await cadastrarQuandoIaPulada({ unit: solo, leadId: 23, isChatMessage: true }, async () => void n++, deps());
+  await r?.execucao;
+  assert.ok(r, 'decide');
+  assert.equal(n, 0);
+});
+
+test('Kommo próprio + cadastro-ia-pulada ligada, mas cadastro-todo-lead DESLIGADA: nem decide', async () => {
+  const solo = { id: 'u-solo', slug: 'solo', spineSyncLeads: true } as unknown as Unit;
+  _semearParaTeste([{ slug: 'solo', automacao: 'cadastro-ia-pulada', estado: 'ligado' }]);
+  let decidiu = 0;
+  const d = deps();
+  d.situacaoNaFranquia = async () => (decidiu++, 'nova');
+  const r = await cadastrarQuandoIaPulada({ unit: solo, leadId: 24, isChatMessage: true }, async () => undefined, d);
+  assert.equal(r, null);
+  assert.equal(decidiu, 0);
 });
 
 test('chave cadastro-todo-lead DESLIGADA: sai antes de ler qualquer coisa', async () => {

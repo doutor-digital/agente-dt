@@ -10,6 +10,8 @@
  * Os dois textos usam `String.raw`: o que está aqui é o JavaScript que o navegador recebe, sem crase nem interpolação.
  */
 
+import { comContaNaPagina } from './conta-no-navegador.js';
+
 const BOTAO_JS = String.raw`(function(){
   if (window.top !== window || window.__assistenteDD) return; window.__assistenteDD = 1;
   var AGENTE = __AGENTE__, LEMBRAR = 'assistente:aberto';
@@ -19,6 +21,9 @@ const BOTAO_JS = String.raw`(function(){
     try { var j = JSON.parse(decodeURIComponent(m[1])); return j['access-token'] && j.client && j.uid ? { token: j['access-token'], client: j.client, uid: j.uid } : null; } catch (e) { return null; }
   }
   function emConta(){ return /\/app\/accounts\//.test(location.pathname); }
+  // a conta em que a pessoa está (…/app/accounts/<N>/…): o servidor trata como PEDIDO e confere se ela é membro dela
+  function pConta(sep){ var m = location.pathname.match(/\/accounts\/(\d+)/); return m ? sep + 'conta=' + m[1] : ''; }
+  function contaAtual(){ var m = location.pathname.match(/\/accounts\/(\d+)/); return m ? m[1] : null; }
   function conversaDaUrl(){ var m = location.pathname.match(/\/conversations\/(\d+)/); return m ? Number(m[1]) : null; }
 
   // O campo de resposta do Chatwoot: o editor (ProseMirror) ou, no modo simples, uma caixa de texto.
@@ -86,7 +91,7 @@ const BOTAO_JS = String.raw`(function(){
       painel.setAttribute('data-assistente-painel', '1');
       painel.style.cssText = 'position:fixed;right:16px;width:380px;max-width:calc(100vw - 32px);z-index:2147482000;background:#fff;border:1px solid #e3e8ef;border-radius:14px;box-shadow:0 8px 32px rgba(16,24,40,.22);overflow:hidden;display:none';
       fr = document.createElement('iframe');
-      fr.src = AGENTE + '/assistente'; fr.title = 'Assistente'; fr.setAttribute('allow', 'clipboard-write');
+      fr.src = AGENTE + '/assistente' + pConta('?'); fr.title = 'Assistente'; fr.setAttribute('allow', 'clipboard-write');
       fr.style.cssText = 'border:0;width:100%;height:100%;display:block';
       painel.appendChild(fr); document.body.appendChild(painel);
     }
@@ -110,7 +115,7 @@ const BOTAO_JS = String.raw`(function(){
   // Só aparece se a assistente estiver ligada para a unidade desta pessoa (o servidor responde por ela). Só uma resposta DEFINITIVA
   // vale como "desligada" (5 min até perguntar de novo); erro de rede, 429 ou 502 tenta de novo em 1 min. Com o botão na tela,
   // continua perguntando a cada 5 min: desligada no servidor, ou outra pessoa na mesma aba, tira o botão.
-  var uidVisto = null;
+  var uidVisto = null, contaVista = null;
   function tirar(){
     if (botao) botao.remove(); if (painel) painel.remove();
     botao = painel = fr = null;
@@ -119,17 +124,22 @@ const BOTAO_JS = String.raw`(function(){
     var s = sessao();
     if (!s || !emConta()) return;
     if (uidVisto !== null && uidVisto !== s.uid) { tirar(); proxima = 0; }
+    // trocou de clínica (outra conta) na mesma aba: o painel é refeito com a conta nova (a conversa 5 de uma conta não é a da outra)
+    if (contaVista !== null && contaVista !== contaAtual()) { tirar(); proxima = 0; ligada = false; consultando = false; AV.conversa = null; AV.mapa = {}; AV.qtd = -1; AV.proxima = 0; AV.buscando = false; }
+    contaVista = contaAtual();
     uidVisto = s.uid;
     if (consultando || Date.now() < proxima) return;
     consultando = true;
-    fetch(AGENTE + '/api/public/assistente/estado', { headers: { 'X-CW-Token': s.token, 'X-CW-Client': s.client, 'X-CW-Uid': s.uid } })
+    var contaDaConsulta = contaAtual();
+    fetch(AGENTE + '/api/public/assistente/estado' + pConta('?'), { headers: { 'X-CW-Token': s.token, 'X-CW-Client': s.client, 'X-CW-Uid': s.uid } })
       .then(function(r){ if (!r.ok) throw new Error('estado ' + r.status); return r.json(); })
       .then(function(j){
+        if (contaDaConsulta !== contaAtual()) return; // a resposta é da conta de antes da troca: não vale para esta
         ligada = !!(j && j.ligada); proxima = Date.now() + 5 * 60000;
         if (ligada && !botao) criarBotao(); else if (!ligada && botao) tirar();
       })
-      .catch(function(){ proxima = Date.now() + 60000; })
-      .then(function(){ consultando = false; });
+      .catch(function(){ if (contaDaConsulta === contaAtual()) proxima = Date.now() + 60000; })
+      .then(function(){ if (contaDaConsulta === contaAtual()) consultando = false; });
   }
 
   // ── 👍/👎 no balão das respostas da Sofia (13/11) ─────────────────────────────────────────────────────────────
@@ -157,7 +167,7 @@ const BOTAO_JS = String.raw`(function(){
       + '[data-dd-aval-pop] textarea{width:100%;box-sizing:border-box;min-height:74px;resize:vertical;border:1px solid #cfd7e3;border-radius:8px;padding:8px;font:inherit;color:inherit;background:#fff}'
       + '[data-dd-aval-pop] textarea:focus{outline:none;border-color:#1f93ff;box-shadow:0 0 0 3px rgba(31,147,255,.15)}'
       + '[data-dd-aval-pop] .linha{display:flex;justify-content:flex-end;gap:6px;margin-top:8px}'
-      + '[data-dd-aval-pop] button{border:1px solid #cfd7e3;background:#fff;color:#1f2d3d;border-radius:8px;padding:6px 11px;font:600 12.5px/1.2 inherit;cursor:pointer}'
+      + '[data-dd-aval-pop] button{border:1px solid #cfd7e3;background:#fff;color:#1f2d3d;border-radius:8px;padding:6px 11px;font-family:inherit;font-size:12.5px;font-weight:600;line-height:1.2;cursor:pointer}'
       + '[data-dd-aval-pop] button.pri{background:#1f93ff;border-color:#1f93ff;color:#fff}[data-dd-aval-pop] button:disabled{opacity:.55;cursor:default}'
       + '[data-dd-aval-pop] small{display:block;margin-top:8px;color:#6b7a90;font-size:11.5px}'
       + '[data-dd-aval-pop] .erro{color:#c53030;font-size:12px;margin-top:6px}';
@@ -166,10 +176,11 @@ const BOTAO_JS = String.raw`(function(){
   function lerAvaliacoes(c){
     var s = sessao(); if (!s || AV.buscando) return;
     AV.buscando = true;
-    fetch(AGENTE + '/api/public/assistente/respostas?conversa=' + c, { headers: { 'X-CW-Token': s.token, 'X-CW-Client': s.client, 'X-CW-Uid': s.uid } })
+    var contaDaBusca = contaAtual();
+    fetch(AGENTE + '/api/public/assistente/respostas?conversa=' + c + pConta('&'), { headers: { 'X-CW-Token': s.token, 'X-CW-Client': s.client, 'X-CW-Uid': s.uid } })
       .then(function(r){ if (!r.ok) throw new Error('respostas ' + r.status); return r.json(); })
       .then(function(j){
-        if (AV.conversa !== c) return;
+        if (AV.conversa !== c || contaDaBusca !== contaAtual()) return;
         var m = {}; (j.respostas || []).forEach(function(x){ m[String(x.id)] = x; }); AV.mapa = m;
         Array.prototype.forEach.call(document.querySelectorAll('[data-dd-aval]'), function(b){ var x = m[b.getAttribute('data-dd-aval')]; if (x) pintarAval(b, x); });
       })
@@ -188,8 +199,8 @@ const BOTAO_JS = String.raw`(function(){
     ruim.title = x.ruimPor && !x.minha ? ('Marcada como ruim por ' + x.ruimPor + '. Clique para dar a sua opinião.') : 'Resposta ruim: conte o que estava errado';
   }
   function enviarAval(id, nota, texto){
-    var s = sessao(); if (!s) return Promise.reject(new Error('Entre de novo no Chatwoot.'));
-    return fetch(AGENTE + '/api/public/assistente/avaliar', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CW-Token': s.token, 'X-CW-Client': s.client, 'X-CW-Uid': s.uid }, body: JSON.stringify({ conversa: AV.conversa, mensagem: Number(id), nota: nota, texto: texto || '' }) })
+    var s = sessao(); if (!s) return Promise.reject(new Error('Entre de novo no CRM.'));
+    return fetch(AGENTE + '/api/public/assistente/avaliar' + pConta('?'), { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CW-Token': s.token, 'X-CW-Client': s.client, 'X-CW-Uid': s.uid }, body: JSON.stringify({ conversa: AV.conversa, mensagem: Number(id), nota: nota, texto: texto || '' }) })
       .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(j){ if (!r.ok) throw new Error(j.error || 'não consegui registrar agora'); return j; }); })
       .then(function(){ var x = AV.mapa[id] || { id: Number(id), minha: null, ruimPor: null }; x.minha = nota; AV.mapa[id] = x; var b = document.querySelector('[data-dd-aval="' + id + '"]'); if (b) pintarAval(b, x); });
   }
@@ -248,6 +259,218 @@ const BOTAO_JS = String.raw`(function(){
     });
   }
 
+  // ── atalhos com NOME na caixa de resposta (João, 13/11/2026: "pras meninas saberem e clicarem, sem quebrar o front") ──
+  // Só acionam o que o Chatwoot já tem: «⚡ Mensagens prontas» digita "/" no editor (abre a lista nativa de respostas prontas, com
+  // busca e troca de {{contact.first_name}}); «📋 Modelos do WhatsApp» clica no botão nativo de modelos. Regras (revisão do sênior):
+  //  - nunca empurra o «Enviar»: mede a sobra da linha a cada segundo — com nome se couber, só o ícone se não, e some se nem isso;
+  //  - «⚡» só em «Responder» com o editor livre (nota privada não tem resposta pronta; janela de 24 h fechada não tem editor);
+  //  - «📋» só quando o botão nativo existe (inclusive com a janela fechada, quando o Chatwoot tira o emoji e o clipe);
+  //  - a "/" que o «⚡» digitou some sozinha se a lista fechar sem escolha (nunca vai "Bom dia /" para o paciente);
+  //  - desliga pelo servidor: CHATWOOT_ATALHOS=0 (vale no próximo carregamento da página).
+  var ATALHOS = __ATALHOS__;
+  var AT = { esperaBarra: null };
+  var ICONES_NATIVOS = '.i-ph-smiley-sticker, .i-ph-paperclip, .i-ph-microphone, .i-ph-signature, .i-ph-whatsapp-logo';
+  function estiloAtalhos(){
+    if (document.querySelector('style[data-dd-atalhos-estilo]')) return;
+    var st = document.createElement('style'); st.setAttribute('data-dd-atalhos-estilo', '1');
+    st.textContent = '[data-dd-atalhos]{display:inline-flex;align-items:center;gap:6px;margin-left:4px;flex:0 0 auto}'
+      + '[data-dd-atalhos][hidden],[data-dd-atalhos] button[hidden]{display:none!important}'
+      + '[data-dd-atalhos] button{display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 10px;border-radius:8px;border:1px solid rgba(127,127,127,.35);background:transparent;color:inherit;font-family:inherit;font-size:12.5px;font-weight:500;line-height:1;cursor:pointer;white-space:nowrap}'
+      + '[data-dd-atalhos] button:hover{background:rgba(127,127,127,.12)}'
+      + '[data-dd-atalhos].compacto .r{display:none}[data-dd-atalhos].compacto button{padding:0 7px}';
+    document.head.appendChild(st);
+  }
+  function editorLivre(wrap){
+    var caixa = wrap.closest('.reply-box');
+    var ed = caixa && caixa.querySelector('.ProseMirror[contenteditable="true"]');
+    return ed || null;
+  }
+  function botaoNativoDeModelos(wrap){
+    var n = null;
+    Array.prototype.forEach.call(wrap.querySelectorAll('button'), function(b){ if (!n && b.querySelector('.i-ph-whatsapp-logo')) n = b; });
+    return n;
+  }
+  function abrirProntas(wrap){
+    var ed = editorLivre(wrap); if (!ed || emNotaPrivada()) return;
+    ed.focus();
+    var sel = window.getSelection(), r = document.createRange();
+    r.selectNodeContents(ed); r.collapse(false); sel.removeAllRanges(); sel.addRange(r);
+    var token = (ed.innerText || '').trim() ? ' /' : '/';
+    document.execCommand('insertText', false, token);
+    AT.esperaBarra = { ed: ed, token: token, ate: Date.now() + 120000, viuLista: false, conversa: conversaDaUrl() };
+  }
+  // a lista nativa abre numa camada solta com data-popover-content; se fechou e o texto ainda termina na "/" que nós
+  // digitamos (a pessoa não escolheu nem digitou nada depois), tira a "/" — e só ela
+  function limparBarraSolta(){
+    var w = AT.esperaBarra; if (!w) return;
+    if (!document.body.contains(w.ed) || Date.now() > w.ate) { AT.esperaBarra = null; return; }
+    // trocou de conversa (a caixa de resposta é a mesma, o rascunho é outro) ou foi digitar noutro campo: desiste, sem mexer
+    if (conversaDaUrl() !== w.conversa) { AT.esperaBarra = null; return; }
+    var ativo = document.activeElement;
+    if (ativo && ativo !== document.body && ativo !== w.ed && !w.ed.contains(ativo)) { AT.esperaBarra = null; return; }
+    var aberta = !!document.querySelector('[data-popover-content]');
+    if (aberta) { w.viuLista = true; return; }
+    if (!w.viuLista && Date.now() < w.ate - 118000) return; // a lista ainda vai abrir
+    var t = w.ed.innerText || '';
+    if (/(^|\s)\/\s*$/.test(t)) {
+      w.ed.focus();
+      var sel = window.getSelection(), r = document.createRange();
+      r.selectNodeContents(w.ed); r.collapse(false); sel.removeAllRanges(); sel.addRange(r);
+      for (var i = 0; i < w.token.length && /[\s/]$/.test(w.ed.innerText || ''); i++) document.execCommand('delete');
+    }
+    AT.esperaBarra = null;
+  }
+  function botaoAtalho(icone, rotulo, titulo){
+    var b = document.createElement('button'); b.type = 'button'; b.title = titulo; b.setAttribute('aria-label', rotulo);
+    var i = document.createElement('span'); i.textContent = icone; i.setAttribute('aria-hidden', 'true');
+    var t = document.createElement('span'); t.className = 'r'; t.textContent = rotulo;
+    b.appendChild(i); b.appendChild(t); return b;
+  }
+  function caberNaLinha(box, wrap){
+    // cabe = ícones (com os atalhos) + o «Enviar» inteiro + folga ≤ largura da linha; mede com nome, depois só o ícone, e esconde
+    // se nem assim couber. Mede o «Enviar» pela largura natural (scrollWidth), para pegar até quando o flex o esprime.
+    var linha = wrap.parentElement; if (!linha) return;
+    var enviar = linha.lastElementChild !== wrap ? linha.lastElementChild : null;
+    var cabe = function(){ return wrap.scrollWidth + (enviar ? enviar.scrollWidth : 0) + 24 <= linha.clientWidth; };
+    box.hidden = false; box.classList.remove('compacto');
+    if (cabe()) return;
+    box.classList.add('compacto');
+    if (cabe()) return;
+    box.hidden = true;
+  }
+  function marcarCaixaDeResposta(){
+    if (!ATALHOS) return;
+    limparBarraSolta();
+    Array.prototype.forEach.call(document.querySelectorAll('.left-wrap'), function(wrap){
+      var box = wrap.querySelector('[data-dd-atalhos]');
+      if (!wrap.querySelector(ICONES_NATIVOS)) { if (box) box.hidden = true; return; }
+      if (!box) {
+        estiloAtalhos();
+        box = document.createElement('span'); box.setAttribute('data-dd-atalhos', '1');
+        var pr = botaoAtalho('⚡', 'Mensagens prontas', 'Abre as respostas prontas da clínica (o mesmo que digitar /)');
+        var mo = botaoAtalho('📋', 'Modelos do WhatsApp', 'Modelos aprovados pela Meta — para quando o paciente não fala há mais de 24 h');
+        pr.setAttribute('data-dd-prontas', '1'); mo.setAttribute('data-dd-modelos', '1');
+        pr.onclick = function(){ abrirProntas(wrap); };
+        mo.onclick = function(){ var n = botaoNativoDeModelos(wrap); if (n) n.click(); };
+        box.appendChild(pr); box.appendChild(mo); wrap.appendChild(box);
+      }
+      // a caixa de resposta não é recriada ao trocar de conversa: decide de novo a cada segundo
+      box.querySelector('[data-dd-prontas]').hidden = emNotaPrivada() || !editorLivre(wrap);
+      box.querySelector('[data-dd-modelos]').hidden = !botaoNativoDeModelos(wrap);
+      var nenhum = box.querySelector('[data-dd-prontas]').hidden && box.querySelector('[data-dd-modelos]').hidden;
+      if (nenhum) { box.hidden = true; return; }
+      caberNaLinha(box, wrap);
+    });
+  }
+  // ── campos obrigatórios ao «Resolver» (João, 14/11/2026: "a gente consegue fazer um trem desse? faça do melhor jeito pra evitar erros")
+  // O «Fluxos de Conversa» do Chatwoot que faz isso é do plano pago; este é o nosso, no mesmo lugar. Antes de resolver: Etapa sempre;
+  // Perdido → Motivo do não agendamento; Fechou → Valor fechado. As opções vêm das definições do próprio Chatwoot. Qualquer falha
+  // (sem sessão, rede, Chatwoot fora) DEIXA resolver — nunca trava o trabalho; o servidor marca «falta-etapa» no que escapar.
+  // Desliga pelo servidor: CHATWOOT_RESOLVER_OBRIGATORIO=0.
+  var OBRIGATORIOS = __OBRIGATORIOS__;
+  var RS = { liberar: false, aberto: null, defs: null };
+  var ROTULO_RESOLVER = /^(Resolver|Resolve)$/i;
+  function contaDaUrl(){ var m = location.pathname.match(/\/accounts\/(\d+)/); return m ? m[1] : null; }
+  function cwApi(metodo, caminho, corpo){
+    var s = sessao(), conta = contaDaUrl();
+    if (!s || !conta) return Promise.reject(new Error('sem sessão'));
+    return fetch('/api/v1/accounts/' + conta + '/' + caminho, {
+      method: metodo,
+      headers: { 'Content-Type': 'application/json', 'access-token': s.token, client: s.client, uid: s.uid },
+      body: corpo ? JSON.stringify(corpo) : undefined
+    }).then(function(r){ if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+  }
+  function faltandoAoResolver(a){
+    var f = [], etapa = String((a && a.etapa) || '').trim();
+    if (!etapa) f.push('etapa');
+    if (etapa === 'Perdido' && !String(a.motivo_nao_agendamento || '').trim()) f.push('motivo_nao_agendamento');
+    if (etapa === 'Fechou' && !(Number(a.valor_fechado) > 0)) f.push('valor_fechado');
+    return f;
+  }
+  function botaoResolver(){
+    var achado = null;
+    Array.prototype.forEach.call(document.querySelectorAll('.resolve-actions button'), function(b){ if (!achado && ROTULO_RESOLVER.test((b.innerText || '').trim())) achado = b; });
+    return achado;
+  }
+  function liberarResolver(){
+    var b = botaoResolver(); if (!b) return;
+    RS.liberar = true;
+    try { b.click(); } finally { setTimeout(function(){ RS.liberar = false; }, 0); }
+  }
+  function definicoesDaConversa(){
+    if (RS.defs) return Promise.resolve(RS.defs);
+    return cwApi('GET', 'custom_attribute_definitions?attribute_model=0').then(function(l){
+      var m = {}; (Array.isArray(l) ? l : (l && l.payload) || []).forEach(function(d){ if (d && d.attribute_key) m[d.attribute_key] = d; });
+      RS.defs = m; return m;
+    });
+  }
+  function fecharJanelaResolver(){ if (RS.aberto) { RS.aberto.remove(); RS.aberto = null; } }
+  function abrirJanelaResolver(conversa, atual, defs){
+    fecharJanelaResolver();
+    var fundo = document.createElement('div'); fundo.setAttribute('data-dd-resolver', '1');
+    fundo.style.cssText = 'position:fixed;inset:0;z-index:2147482600;background:rgba(15,23,42,.35);display:flex;align-items:center;justify-content:center;padding:16px';
+    var cx = document.createElement('div'); cx.setAttribute('role', 'dialog'); cx.setAttribute('aria-modal', 'true'); cx.setAttribute('aria-label', 'Antes de resolver');
+    cx.style.cssText = 'width:380px;max-width:100%;background:#fff;color:#1c2024;border-radius:12px;box-shadow:0 16px 40px rgba(16,24,40,.25);padding:18px;font-family:inherit;font-size:13.5px;line-height:1.45';
+    var t = document.createElement('b'); t.textContent = 'Antes de resolver'; t.style.cssText = 'display:block;font-size:15px;margin-bottom:4px';
+    var sub = document.createElement('div'); sub.textContent = 'Preencha para o funil e os relatórios ficarem certos.'; sub.style.cssText = 'color:#60646c;margin-bottom:12px';
+    cx.appendChild(t); cx.appendChild(sub);
+    function linha(rotulo, el){ var w = document.createElement('label'); w.style.cssText = 'display:block;margin:0 0 10px'; var r = document.createElement('span'); r.textContent = rotulo; r.style.cssText = 'display:block;font-weight:600;margin-bottom:4px'; el.style.cssText = 'width:100%;box-sizing:border-box;height:34px;border:1px solid #d9d9e0;border-radius:8px;padding:0 8px;font:inherit;color:inherit;background:#fff'; w.appendChild(r); w.appendChild(el); return w; }
+    function lista(chave, valor){
+      var sel = document.createElement('select'), o0 = document.createElement('option'); o0.value = ''; o0.textContent = 'Escolha…'; sel.appendChild(o0);
+      var vs = (defs[chave] && Array.isArray(defs[chave].attribute_values)) ? defs[chave].attribute_values : [];
+      vs.forEach(function(v){ var o = document.createElement('option'); o.value = String(v); o.textContent = String(v); sel.appendChild(o); });
+      sel.value = valor || ''; return sel;
+    }
+    var etapa = lista('etapa', String(atual.etapa || ''));
+    var motivo = lista('motivo_nao_agendamento', String(atual.motivo_nao_agendamento || ''));
+    var valor = document.createElement('input'); valor.type = 'number'; valor.min = '0'; valor.step = '0.01'; valor.placeholder = 'R$'; if (Number(atual.valor_fechado) > 0) valor.value = String(atual.valor_fechado);
+    var lEtapa = linha('Etapa', etapa), lMotivo = linha('Motivo do não agendamento', motivo), lValor = linha('Valor fechado (R$)', valor);
+    cx.appendChild(lEtapa); cx.appendChild(lMotivo); cx.appendChild(lValor);
+    var erro = document.createElement('div'); erro.setAttribute('role', 'alert'); erro.style.cssText = 'color:#c53030;font-size:12.5px;min-height:16px;margin-bottom:6px'; cx.appendChild(erro);
+    function mostrar(){ lMotivo.style.display = etapa.value === 'Perdido' ? 'block' : 'none'; lValor.style.display = etapa.value === 'Fechou' ? 'block' : 'none'; }
+    etapa.onchange = mostrar; mostrar();
+    var bs = document.createElement('div'); bs.style.cssText = 'display:flex;justify-content:flex-end;gap:8px;margin-top:4px';
+    var cancelar = document.createElement('button'); cancelar.type = 'button'; cancelar.textContent = 'Cancelar';
+    var ok = document.createElement('button'); ok.type = 'button'; ok.textContent = 'Salvar e resolver';
+    cancelar.style.cssText = 'height:32px;padding:0 12px;border-radius:8px;border:1px solid #d9d9e0;background:#fff;color:#1c2024;font:inherit;cursor:pointer';
+    ok.style.cssText = 'height:32px;padding:0 12px;border-radius:8px;border:0;background:#2781f6;color:#fff;font:inherit;font-weight:600;cursor:pointer';
+    bs.appendChild(cancelar); bs.appendChild(ok); cx.appendChild(bs);
+    cancelar.onclick = fecharJanelaResolver;
+    fundo.addEventListener('mousedown', function(ev){ if (ev.target === fundo) fecharJanelaResolver(); });
+    cx.addEventListener('keydown', function(ev){ if (ev.key === 'Escape') fecharJanelaResolver(); });
+    ok.onclick = function(){
+      var novos = { etapa: etapa.value };
+      if (etapa.value === 'Perdido') novos.motivo_nao_agendamento = motivo.value;
+      if (etapa.value === 'Fechou') novos.valor_fechado = Number(valor.value);
+      var falta = faltandoAoResolver(Object.assign({}, atual, novos));
+      if (falta.length) { erro.textContent = falta[0] === 'etapa' ? 'Escolha a etapa.' : falta[0] === 'valor_fechado' ? 'Informe o valor fechado.' : 'Escolha o motivo.'; return; }
+      ok.disabled = true; ok.textContent = 'Salvando…'; erro.textContent = '';
+      // o Chatwoot TROCA o conjunto inteiro de atributos: relê a conversa agora e manda tudo junto
+      cwApi('GET', 'conversations/' + conversa).then(function(j){
+        var base = (j && j.custom_attributes) || {};
+        return cwApi('POST', 'conversations/' + conversa + '/custom_attributes', { custom_attributes: Object.assign({}, base, novos) });
+      }).then(function(){ fecharJanelaResolver(); liberarResolver(); })
+        .catch(function(){ ok.disabled = false; ok.textContent = 'Salvar e resolver'; erro.textContent = 'Não consegui salvar agora. Tente de novo.'; });
+    };
+    fundo.appendChild(cx); document.body.appendChild(fundo); RS.aberto = fundo;
+    setTimeout(function(){ try { etapa.focus(); } catch (e) {} }, 0);
+  }
+  function conferirAntesDeResolver(conversa){
+    Promise.all([cwApi('GET', 'conversations/' + conversa), definicoesDaConversa()]).then(function(r){
+      var atual = (r[0] && r[0].custom_attributes) || {};
+      if (!faltandoAoResolver(atual).length) { liberarResolver(); return; }
+      abrirJanelaResolver(conversa, atual, r[1]);
+    }).catch(function(){ liberarResolver(); }); // falhou ler: deixa resolver (o servidor marca «falta-etapa»)
+  }
+  document.addEventListener('click', function(ev){
+    if (!OBRIGATORIOS || RS.liberar) return;
+    var b = ev.target && ev.target.closest ? ev.target.closest('.resolve-actions button') : null;
+    if (!b || !ROTULO_RESOLVER.test((b.innerText || '').trim())) return; // só o botão «Resolver» (não o menu ao lado, nem «Reabrir»)
+    var c = conversaDaUrl(); if (!c) return;
+    ev.preventDefault(); ev.stopImmediatePropagation();
+    if (!RS.aberto) conferirAntesDeResolver(c);
+  }, true);
+
   window.addEventListener('message', function(ev){
     if (ev.origin !== AGENTE || !fr || ev.source !== fr.contentWindow) return;
     var d = ev.data; if (!d || typeof d.event !== 'string') return;
@@ -271,17 +494,21 @@ const BOTAO_JS = String.raw`(function(){
     if (c !== conversa) { conversa = c; falar({ event: 'assistente-conversa', conversa: c }); }
     posicao();
     try { marcarBaloes(); } catch (e) {}
+    try { marcarCaixaDeResposta(); } catch (e) {}
   }, 1000);
 })();`;
 
 /** O JavaScript do botão. Tem `__AGENTE__` no lugar do endereço do servidor (quem monta troca por um texto JSON). */
-export function assistenteJs(): string {
-  return BOTAO_JS;
+export function assistenteJs(env: NodeJS.ProcessEnv = process.env): string {
+  // CHATWOOT_ATALHOS=0 desliga os atalhos «⚡ Mensagens prontas» / «📋 Modelos do WhatsApp» sem novo deploy de código
+  return BOTAO_JS.split('__ATALHOS__').join(String(env.CHATWOOT_ATALHOS !== '0'))
+    // CHATWOOT_RESOLVER_OBRIGATORIO=0 desliga a janela de campos obrigatórios ao «Resolver»
+    .split('__OBRIGATORIOS__').join(String(env.CHATWOOT_RESOLVER_OBRIGATORIO !== '0'));
 }
 
 /** A página do painel (iframe). `__ORIGEM_CW__` = a origem do Chatwoot (JSON). */
 export function paginaDaAssistente(origemChatwoot: string): string {
-  return PAGINA.split('__ORIGEM_CW__').join(JSON.stringify(origemChatwoot));
+  return comContaNaPagina(PAGINA.split('__ORIGEM_CW__').join(`origemDoPai(${JSON.stringify(origemChatwoot)})`));
 }
 
 const PAGINA = String.raw`<!doctype html>
@@ -352,8 +579,9 @@ textarea{flex:1;resize:none;height:40px;max-height:96px;padding:8px 10px;border:
     dica.textContent = !S ? 'Entrando…' : conversa ? 'Leio a conversa aberta e escrevo uma proposta para você revisar.' : 'Abra uma conversa para eu sugerir uma resposta.';
   }
   function cab(){ return { 'Content-Type': 'application/json', 'X-CW-Token': S.token, 'X-CW-Client': S.client, 'X-CW-Uid': S.uid }; }
+  /*__CONTA_JS__*/
   function chamar(caminho, corpo){
-    return fetch(caminho, { method: 'POST', headers: cab(), body: JSON.stringify(corpo) }).then(function(r){
+    return fetch(comConta(caminho), { method: 'POST', headers: cab(), body: JSON.stringify(corpo) }).then(function(r){
       return r.json().catch(function(){ return {}; }).then(function(j){
         if (r.status === 401) { S = null; atualizar(); pedirSessao(); }
         return { ok: r.ok, status: r.status, j: j };
@@ -396,7 +624,7 @@ textarea{flex:1;resize:none;height:40px;max-height:96px;padding:8px 10px;border:
   function lerPausa(){
     if (!S || !conversa) { pausaEl.hidden = true; return; }
     var meu = ++lendoPausa, c = conversa;
-    fetch('/api/public/assistente/pausa?conversa=' + encodeURIComponent(c), { headers: cab() }).then(function(r){ return r.ok ? r.json() : null; })
+    fetch(comConta('/api/public/assistente/pausa?conversa=' + encodeURIComponent(c)), { headers: cab() }).then(function(r){ return r.ok ? r.json() : null; })
       .then(function(j){ if (meu === lendoPausa && c === conversa) mostrarPausa(j); }).catch(function(){ if (meu === lendoPausa) pausaEl.hidden = true; });
   }
   // ── avaliar a última resposta da Sofia (👍/👎); 👎 vira nota para a equipe e pode virar lição (com prévia, na tela Agente) ──
@@ -459,7 +687,7 @@ textarea{flex:1;resize:none;height:40px;max-height:96px;padding:8px 10px;border:
   sug.addEventListener('click', sugerir);
   $('min').addEventListener('click', function(){ pai({ event: 'assistente:minimizar' }); });
   window.addEventListener('message', function(ev){
-    if (ev.origin !== ORIGEM_CW || ev.source !== window.parent) return;
+    if (!origemDoCrm(ev.origin) || ev.source !== window.parent) return;
     var d = ev.data; if (!d || typeof d.event !== 'string') return;
     if (d.event === 'assistente-sessao') {
       S = d.sessao && d.sessao.token ? d.sessao : null; if (typeof d.conversa === 'number' || d.conversa === null) conversa = d.conversa;
