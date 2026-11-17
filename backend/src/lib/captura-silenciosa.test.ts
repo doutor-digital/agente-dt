@@ -18,6 +18,7 @@ import {
   PRAZO_DA_LEITURA_MS,
   falaDeOutraPessoa,
   falaDeOutraPessoaNoContexto,
+  regiaoDitaPeloPaciente,
   chaveDaPalavra,
   numerosDoTexto,
   palavrasForaDaFala,
@@ -842,6 +843,37 @@ test('validar: frase de prova sobre OUTRA pessoa não prova Região da dor nem Q
   const propria = validarSugestoes([{ campo: '⚕ Região da dor', valor: 'Lombar', trecho: 'sinto dor na lombar há tempos' }], cands, [...CONVERSA, fala('paciente', 'sinto dor na lombar há tempos')]);
   assert.equal(propria.aceitas.length, 1);
   assert.ok(falaDeOutraPessoa('minha mãe também sente') && falaDeOutraPessoa('o marido dela') && !falaDeOutraPessoa('sinto dor na lombar'));
+});
+
+test('validar: Região da dor só com a região ESCRITA pelo paciente (seco de 16/11: «sete hérnias de disco» virou Lombar)', () => {
+  const cands = camposDaEtapaVazios({ regras: REGRAS, defs: DEFS, lead: lead() });
+  const palpite = validarSugestoes(
+    [{ campo: '⚕ Região da dor', valor: 'Lombar', trecho: 'Eu tenho sete hérnias de disco, bico de papagaio' }],
+    cands,
+    [fala('paciente', 'Eu tenho sete hérnias de disco, bico de papagaio')],
+  );
+  assert.equal(palpite.aceitas.length, 0);
+  assert.match(palpite.recusadas[0]?.motivo ?? '', /região que o paciente não disse \(Lombar\)/);
+  // duas regiões: uma dita, outra não → recusa (não grava meia verdade)
+  const meia = validarSugestoes(
+    [{ campo: '⚕ Região da dor', valor: ['Lombar', 'Cervical'], trecho: 'dor forte na lombar' }],
+    cands,
+    [fala('paciente', 'dor forte na lombar')],
+  );
+  assert.equal(meia.aceitas.length, 0);
+  assert.match(meia.recusadas[0]?.motivo ?? '', /Cervical/);
+  // sinônimos do paciente valem: pescoço → Cervical, ciático → Lombar
+  const ditas = validarSugestoes(
+    [{ campo: '⚕ Região da dor', valor: ['Lombar', 'Cervical'], trecho: 'dor no pescoço e no ciático' }],
+    cands,
+    [fala('paciente', 'dor no pescoço e no ciático')],
+  );
+  assert.equal(ditas.aceitas.length, 1);
+  // funções puras
+  assert.ok(regiaoDitaPeloPaciente('Torácica', 'dor no meio das costas'));
+  assert.ok(regiaoDitaPeloPaciente('Lombar', 'hérnia na L5'));
+  assert.ok(!regiaoDitaPeloPaciente('Cervical', 'dor na coluna toda'));
+  assert.ok(!regiaoDitaPeloPaciente('Lombar', 'dor nas costas'));
 });
 
 test('o que o PACIENTE escreveu vale por radical de 6 letras: «interesse» não libera «intermitente»/«internação», «conversar» não libera «convênio»', () => {
