@@ -748,7 +748,7 @@ export function candidatos(c: ConversaRegua, vistos: Vistos, ajustes?: AjustesDa
 }
 
 /** Até quando a regra ainda vale. */
-function limiteDe(k: Candidato): Date {
+export function limiteDe(k: Candidato): Date {
   if (k.kind === 'depois') return new Date(k.alvo.getTime() + ATRASO_MAX_DEPOIS_MS);
   const ate = k.alvo.getTime() + ATRASO_MAX_ANTES_MS;
   // exclusivo: na hora da própria consulta o lembrete já não faz sentido
