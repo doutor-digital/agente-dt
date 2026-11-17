@@ -5,14 +5,14 @@ import { pathToFileURL } from 'node:url';
 import { KOMMO_SUBDOMAIN_MAGALHAES, SLUG_MAGALHAES } from '../lib/magalhaes.js';
 
 /**
- * Prepara o CONTEÚDO da Ana na unidade que JÁ existe (`magalhaes-advocacia`): prompt, triagem, handoff, regras de captura,
+ * Prepara o CONTEÚDO da Sophia na unidade que JÁ existe (`magalhaes-advocacia`): prompt, triagem, handoff, regras de captura,
  * ações, respostas prontas, base de conhecimento. NÃO liga nada: chave de LLM, provider, bot de entrega, campos do Kommo,
  * etapas permitidas, janela e webhook são do `ligar-ia-magalhaes.sh` (quem decide é o João).
  *
  * - Sem segredo no código (o repositório é público): o token do Kommo da unidade fica no banco. Só se a unidade NÃO existir
  *   (banco novo) o token entra, e vem do ambiente (`MAGALHAES_KOMMO_ACCESS_TOKEN`).
  * - A atualização grava SÓ campos de conteúdo. Provider, modelo, chaves, etapas, bot e janela já configurados não são tocados.
- * - Responsável do handoff: `MAGALHAES_TRANSFER_USER_ID` (id de usuário do Kommo). Sem ele, a Ana pausa e passa para a equipe
+ * - Responsável do handoff: `MAGALHAES_TRANSFER_USER_ID` (id de usuário do Kommo). Sem ele, a Sophia pausa e passa para a equipe
  *   sem atribuir ninguém — atribuir a um id que não existe na conta faria a ação falhar.
  */
 const SLUG = SLUG_MAGALHAES;
@@ -27,9 +27,9 @@ const ST_ANALISE_AGENDADA = 108260511;
 const ST_GANHO = 142;
 const ST_PERDIDO = 143;
 
-const personaGreeting = 'Oii! Aqui é a Ana, do escritório Magalhães 💛';
+const personaGreeting = 'Oii! Aqui é a Sophia, do escritório Magalhães 💛';
 
-const sourcePapel = `Você é a Ana, assistente virtual do escritório de advocacia Magalhães no WhatsApp. Você é a primeira pessoa que o cliente "encontra" do escritório.
+const sourcePapel = `Você é a Sophia, assistente virtual do escritório de advocacia Magalhães no WhatsApp. Você é a primeira pessoa que o cliente "encontra" do escritório.
 
 QUEM VOCÊ É
 - Acolhedora antes de tudo: o cliente chega assustado (perdeu benefício, foi demitido). Primeiro acalme, depois conduza.
@@ -116,7 +116,7 @@ ATENDIMENTO (quem agenda é a equipe humana, NÃO você)
 - VOCÊ NÃO MARCA horário nem oferece horário. Quando entender o caso, encaminhe pra equipe do escritório — um atendente humano assume a conversa e combina o dia/horário com a pessoa.
 - Antes de encaminhar, tenha o nome da pessoa e um resumo do caso; o resto o humano coleta.`;
 
-const triageInstructions = `Antes de encaminhar o lead pra equipe, colete (no jeito da Ana, uma pergunta por vez):
+const triageInstructions = `Antes de encaminhar o lead pra equipe, colete (no jeito da Sophia, uma pergunta por vez):
 1. O que aconteceu — relato breve em 1-2 frases.
 2. Em qual área se encaixa: Previdenciário (INSS/benefício), Tributário ou Trabalhista (demissão/empresa).
 3. Nome completo da pessoa.
@@ -284,7 +284,7 @@ export function montarAcoes(responsavelId: number | null) {
         ...atribuir,
         { kind: 'transfer_without_permission', params: { includeSummary: true } },
       ],
-      notes: `${ACTION_MARKER} Handoff: qualifica, atribui ao responsável do handoff (MAGALHAES_TRANSFER_USER_ID, se definido) e PAUSA a IA (interruptor "IA Pausada") — sem pedir permissão. A IA não agenda; a Ana repassa pro Dr. e o humano marca.`,
+      notes: `${ACTION_MARKER} Handoff: qualifica, atribui ao responsável do handoff (MAGALHAES_TRANSFER_USER_ID, se definido) e PAUSA a IA (interruptor "IA Pausada") — sem pedir permissão. A IA não agenda; a Sophia repassa pro Dr. e o humano marca.`,
     },
     {
       conditionDescription:

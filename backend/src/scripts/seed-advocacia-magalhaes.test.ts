@@ -60,7 +60,15 @@ test('handoff: sempre pausa e passa para a equipe; só atribui se houver um usu�
   assert.equal(JSON.stringify(montarAcoes(null)).includes('15490579'), false, 'o id 15490579 não existe na conta do Kommo da Magalhães');
 });
 
-test('a Ana não agenda e não fala de honorário (regra dura do prompt)', () => {
+test('persona: Sophia (assistente virtual do escritório); o nome antigo não sobra no que o modelo lê, e ela continua se assumindo virtual', () => {
+  const lido = [unitConteudo.personaGreeting, unitConteudo.sourcePapel, unitConteudo.triageInstructions].join('\n');
+  assert.match(unitConteudo.personaGreeting, /Sophia/);
+  assert.match(unitConteudo.sourcePapel, /Você é a Sophia, assistente virtual/);
+  assert.equal(/\bAna\b/.test(lido), false);
+  assert.match(unitConteudo.sourcePapel, /Você é um robô\?/);
+});
+
+test('a Sophia não agenda e não fala de honorário (regra dura do prompt)', () => {
   assert.match(unitConteudo.sourcePapel, /VOCÊ NÃO AGENDA/);
   assert.match(unitConteudo.sourcePapel, /Valor de honorário/);
   assert.equal(unitConteudo.handoffEnabled, true);
