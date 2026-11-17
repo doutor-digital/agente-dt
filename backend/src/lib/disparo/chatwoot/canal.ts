@@ -118,9 +118,9 @@ export async function modelosDaCaixa(ctx: ContextoChatwoot, caixa: number): Prom
   return modelos.sort((a, b) => a.nome.localeCompare(b.nome));
 }
 
-/** `transitorio`: não deu para LER o CRM (não é um defeito do modelo): quem chama tenta de novo, não pausa nem cancela nada. */
 /** Como o modelo aparece no WhatsApp além do corpo: só para a tela mostrar (não entra no envio nem no que é gravado). */
 export type ApresentacaoDoModelo = { cabecalho: string | null; rodape: string | null; botoes: string[] };
+/** `transitorio`: não deu para LER o CRM (não é um defeito do modelo): quem chama tenta de novo, não pausa nem cancela nada. */
 export type ConferenciaDoModelo = { ok: true; /** do MESMO modelo já lido na conferência (sem nova chamada ao CRM) */ modelo?: ApresentacaoDoModelo } | { ok: false; motivo: string; transitorio?: true; /** a categoria que o CRM tem agora, quando foi ela que mudou */ categoriaNova?: string };
 
 /**

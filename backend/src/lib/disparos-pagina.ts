@@ -52,7 +52,7 @@ select,input[type=text],input[type=number]{font:500 14px var(--f-ui);color:var(-
 .item:hover{background:var(--app)}.item[aria-current=true]{background:var(--brand-soft)}
 .item b{font:600 13.5px var(--f-ui);max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .item small{color:var(--ink-2);font-size:12px;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.palco{background:var(--canvas);padding:18px;min-width:0}
+.palco{background:var(--canvas);padding:18px;min-width:0;container-type:inline-size}
 .col{display:grid;gap:14px;max-width:960px}
 .card{background:var(--node);border:1px solid var(--line);border-radius:14px;padding:16px;display:grid;gap:12px;box-shadow:var(--shadow);min-width:0}
 .card h2{margin:0;font:700 16px var(--f-head);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
@@ -99,10 +99,11 @@ a{color:var(--brand)}
 /* o celular: a mensagem como a pessoa recebe no WhatsApp */
 .msg-grid{display:flex;flex-wrap:wrap;gap:20px;align-items:flex-start}
 .msg-form{flex:1 1 280px;min-width:0;display:grid;grid-template-columns:minmax(0,1fr);align-content:start;gap:12px}
-.msg-fone{flex:0 0 auto;margin-inline:auto;position:sticky;top:12px}
-.duas{display:flex;flex-direction:row-reverse;flex-wrap:wrap;gap:14px;align-items:flex-start}
-.principal{flex:1 1 380px;min-width:0;display:grid;gap:14px}
-.lateral{flex:0 0 auto;margin-inline:auto;position:sticky;top:12px;justify-items:center;width:min(100%,312px)}
+.msg-fone{flex:0 0 auto;margin-inline:auto}
+.duas{display:grid;grid-template-columns:minmax(0,1fr);gap:14px;align-items:start}
+.duas>.topo-onda,.duas>.resto-onda{min-width:0;display:grid;gap:14px;align-content:start}
+.lateral{margin-inline:auto;width:min(100%,312px)}
+@container (min-width:660px){.duas{grid-template-columns:minmax(0,1fr) 312px;grid-template-areas:"topo lateral" "resto lateral"}.duas>.topo-onda{grid-area:topo}.duas>.resto-onda{grid-area:resto}.duas>.lateral{grid-area:lateral;margin-inline:0}}
 .lateral .card{justify-items:center;width:100%}
 .cel{width:272px;max-width:100%;background:var(--bisel);border-radius:40px;padding:9px;box-shadow:0 0 0 1px color-mix(in srgb,var(--ink) 14%,transparent),0 14px 30px rgba(0,0,0,.22);position:relative}
 .cel-tela{border-radius:31px;overflow:hidden;background:var(--chat);display:flex;flex-direction:column;min-height:520px;max-height:680px}
@@ -223,12 +224,14 @@ a{color:var(--brand)}
   }
   // *negrito* e _itálico_ como o WhatsApp mostra (sempre por textContent)
   function formatar(no, texto){
-    String(texto).split(/(\*[^*\n]+\*|_[^_\n]+_)/g).forEach(function(s){
-      if (!s) return;
-      var c = s.charAt(0);
-      if (s.length > 2 && (c === '*' || c === '_') && s.charAt(s.length - 1) === c) no.appendChild(el(c === '*' ? 'strong' : 'em', null, s.slice(1, -1)));
-      else no.appendChild(document.createTextNode(s));
-    });
+    var t = String(texto), re = /(^|[^\p{L}\p{N}_*])([*_])(?=\S)((?:(?!\2)[^\n])+?)(?<!\s)\2(?![\p{L}\p{N}_*])/gu, ult = 0, m;
+    while ((m = re.exec(t))) {
+      var ini = m.index + m[1].length;
+      if (ini > ult) no.appendChild(document.createTextNode(t.slice(ult, ini)));
+      no.appendChild(el(m[2] === '*' ? 'strong' : 'em', null, m[3]));
+      ult = re.lastIndex;
+    }
+    if (ult < t.length) no.appendChild(document.createTextNode(t.slice(ult)));
   }
   // m = { cabecalho, texto, rodape, botoes } (só o que o modelo tem) ou null = ainda sem mensagem
   function mensagemNoCelular(conversa, m){
@@ -430,7 +433,7 @@ a{color:var(--brand)}
     var q = limpar(qEl);
     var sel = el('select'); var nomes = amostra.length ? amostra.map(function(a){ return a.nome; }) : ['Maria'];
     nomes.forEach(function(n){ var o = el('option', null, n); o.value = n; sel.appendChild(o); });
-    q.appendChild(el('label', 'rot', 'Prévia para')); sel.id = 'quemSel'; q.appendChild(sel);
+    var rotQ = el('label', 'rot', 'Prévia para'); rotQ.htmlFor = 'quemSel'; sel.id = 'quemSel'; q.appendChild(rotQ); q.appendChild(sel);
     if (!amostra.length) q.appendChild(el('small', 'dica', 'Conte quem recebe para ver com nomes de verdade.'));
     function desenhar(){
       var t = ESCOLHA.modelo.texto.replace(/\{\{\s*(\d+)\s*\}\}/g, function(_m, n){
@@ -511,8 +514,8 @@ a{color:var(--brand)}
     var f = el('div', 'fatos'); fato(f, o.total, 'pessoas', true); fato(f, o.candidatos == null ? '—' : o.candidatos, 'passaram no filtro'); fato(f, o.contagem.enviado || 0, 'enviadas'); fato(f, o.simulados, 'receberiam (seco)'); fato(f, (o.contagem.falhou || 0) + (o.contagem.saiu || 0) + (o.contagem.descartado || 0), 'falhas, SAIR e saídas'); c.appendChild(f);
     col.appendChild(c);
 
-    var duas = el('div', 'duas'), lateral = el('div', 'lateral'), principal = el('div', 'principal');
-    duas.appendChild(lateral); duas.appendChild(principal); col.appendChild(duas);
+    var duas = el('div', 'duas'), topo = el('div', 'topo-onda'), lateral = el('div', 'lateral'), resto = el('div', 'resto-onda');
+    duas.appendChild(topo); duas.appendChild(lateral); duas.appendChild(resto); col.appendChild(duas);
 
     // a mensagem, no celular
     var cz = el('div', 'card'); cz.appendChild(el('h2', null, 'Como a pessoa recebe'));
@@ -533,7 +536,7 @@ a{color:var(--brand)}
     lateral.appendChild(cz);
 
     // custo e ritmo
-    if (o.custo && o.estado !== 'montando' && o.total > 0) principal.appendChild(cartaoDeCusto(o));
+    if (o.custo && o.estado !== 'montando' && o.total > 0) topo.appendChild(cartaoDeCusto(o));
 
     // ações (aprovar / cancelar)
     var ca = el('div', 'card'); var la = el('div', 'linha');
@@ -565,7 +568,7 @@ a{color:var(--brand)}
       la.appendChild(bc);
     }
     if (o.estado === 'pausada') ca.appendChild(el('p', 'dica', 'Os freios pausaram este disparo e não dá para retomar por aqui. Cancele e monte de novo depois de resolver o motivo.'));
-    if (la.childNodes.length) { ca.appendChild(la); principal.appendChild(ca); }
+    if (la.childNodes.length) { ca.appendChild(la); topo.appendChild(ca); }
 
     // relatório do envio
     if (o.relatorio && o.relatorio.numeros.enviadas + o.relatorio.numeros.falharam + o.relatorio.numeros.incertas > 0) {
@@ -575,14 +578,14 @@ a{color:var(--brand)}
       cr.appendChild(fr2);
       if (o.relatorio.porHora.length) { var ul2 = el('ul', 'horas'); o.relatorio.porHora.forEach(function(h){ ul2.appendChild(el('li', null, quandoHora(h.hora) + ': ' + h.enviadas + ' enviadas')); }); cr.appendChild(el('div', 'rot', 'Envios por hora (' + (o.relatorio.fuso || 'America/Sao_Paulo') + ')')); cr.appendChild(ul2); }
       cr.appendChild(el('small', 'dica', 'Entregue, lida e respondeu vêm da última conferência do CRM (a cada 5 minutos, por 72 h depois do envio).'));
-      principal.appendChild(cr);
+      resto.appendChild(cr);
     }
 
     // exclusões
     var ce = el('div', 'card'); ce.appendChild(el('h2', null, 'Quem ficou de fora, e por quê'));
     if (o.fora.length) ce.appendChild(listaDeFora(o.fora)); else ce.appendChild(el('p', null, 'Ninguém ficou de fora pelas regras.'));
     if (o.truncada) ce.appendChild(el('p', 'ruim', 'A leitura da caixa parou no limite (de tempo ou de tamanho) e a lista pode estar incompleta.'));
-    principal.appendChild(ce);
+    resto.appendChild(ce);
 
     // freios (recolhido, com o resumo na linha)
     var cf = el('div', 'card'); var dtf = el('details'), fr = o.freios;
@@ -590,7 +593,7 @@ a{color:var(--brand)}
     var fl = el('ul', 'lis');
     [['Janela de envio: ' + fr.janela + '.'], ['Teto: ' + fr.tetoPorHora + ' por hora e ' + fr.tetoPorDia + ' por 24 horas' + (fr.tetoDoTier ? ' (o número está no ' + fr.tier + ', ' + fr.tetoDoTier + ' por dia na Meta)' : '') + '.'], ['Para tudo se mais de ' + fr.maxSair + ' pessoas responderem SAIR, e pausa se ' + fr.falhasSeguidas + ' envios seguidos falharem.'],
       [fr.comAgenda ? 'Reconfere a agenda da franquia (consulta marcada, tratamento aberto) e o SAIR na hora de cada envio.' : 'Esta unidade não tem a agenda da franquia ligada. A conferência de paciente é pela etapa do CRM (agendado, em tratamento, fechou) e o SAIR é conferido na hora de cada envio.'], ['Nunca duas vezes para a mesma pessoa, nem para quem recebeu outro disparo nos últimos 7 dias.']].forEach(function(x){ fl.appendChild(el('li', null, x[0])); });
-    dtf.appendChild(fl); cf.appendChild(dtf); principal.appendChild(cf);
+    dtf.appendChild(fl); cf.appendChild(dtf); resto.appendChild(cf);
 
     // pessoa por pessoa
     var cp = el('div', 'card'); cp.appendChild(el('h2', null, 'Pessoa por pessoa'));
@@ -605,10 +608,10 @@ a{color:var(--brand)}
       t.appendChild(tb); var w = el('div', 'rolar'); w.appendChild(t); cp.appendChild(w);
       if (o.total > o.destinatariosMostrados) cp.appendChild(el('small', 'dica', 'Mostrando ' + o.destinatariosMostrados + ' de ' + o.total + ' pessoas.'));
     } else cp.appendChild(el('p', 'mudo', o.estado === 'montando' ? 'Montando a lista… esta tela atualiza sozinha.' : 'Sem destinatários.'));
-    principal.appendChild(cp);
+    resto.appendChild(cp);
 
     // ajuste (só a Doutor Digital)
-    if (D.podeAjustar) principal.appendChild(cartaoDeAjuste());
+    if (D.podeAjustar) resto.appendChild(cartaoDeAjuste());
   }
   // O CUSTO e o RITMO: o que a pessoa lê ANTES de aprovar (e depois, como o gasto até agora)
   function cartaoDeCusto(o){
