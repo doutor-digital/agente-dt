@@ -13,6 +13,7 @@ import { searchClients, searchSchedules, searchTreatments } from '../../services
 import { credenciaisDaUnidade } from '../whatsapp-meta.js';
 import { normalizarQualidade, type Qualidade } from '../qualidade-do-numero.js';
 import type { Campanha } from './campanhas.js';
+import { cotacaoDoDolar as cotacaoComFontes } from '../cotacao-dolar.js';
 import {
   compararNomes,
   envioPorRajada,
@@ -282,17 +283,8 @@ export async function coletarUnidade(campanha: Campanha, slug: string, agora = n
   return { unidade: slug, nome: unit.name, qualidade, limiteDeEnvio: limite, linhas, conversas, avisos, coletadoEm };
 }
 
-/** Cotação do dólar para mostrar o custo em reais. Falhou, fica null e a página mostra só US$. */
-export async function cotacaoDoDolar(): Promise<number | null> {
-  try {
-    const r = await fetch('https://economia.awesomeapi.com.br/json/last/USD-BRL', { signal: AbortSignal.timeout(10_000) });
-    const d = (await r.json()) as { USDBRL?: { bid?: string } };
-    const v = Number(d.USDBRL?.bid);
-    return Number.isFinite(v) && v > 0 ? v : null;
-  } catch {
-    return null;
-  }
-}
+/** Cotação do dólar para mostrar o custo em reais (três fontes, ver `lib/cotacao-dolar.ts`). Falhou, fica null e a página mostra só US$. */
+export const cotacaoDoDolar = (): Promise<number | null> => cotacaoComFontes();
 
 /** Coleta todas as unidades e grava a foto do dia (refazer no mesmo dia sobrescreve). */
 export async function coletarEGravar(campanha: Campanha, agora = new Date()): Promise<{ dia: string; unidades: number; comAviso: number }> {
