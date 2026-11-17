@@ -82,6 +82,8 @@ import { etapaPermitida, precisaDoFunil, type FunisDaConta } from '../lib/etapa-
 import { etapaCalada, notaSofiaCalada, REGRA_NOTA_CALADA, sofiaCaladaLiberada } from '../lib/sofia-calada.js';
 import { portaPacienteEmTratamento } from '../lib/paciente-em-tratamento-porta.js';
 import { portaRodaNoTurno } from '../lib/paciente-em-tratamento.js';
+import { portaClienteDoEscritorio } from '../lib/cliente-do-escritorio.js';
+import { portaPilotoDeNumeros } from '../lib/ia-so-numeros-de-teste.js';
 import { garantirTituloPadrao } from '../lib/titulo-padrao.js';
 import { telefoneDeFamiliarNoCartao } from '../lib/telefone-de-familiar.js';
 import { SpineSyncService } from '../services/spine-sync.service.js';
@@ -1719,6 +1721,64 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
         await recorder.finalize({ status: 'SUCCESS', latencyMs: totalLatency, iaDecision: '__paciente_em_tratamento__' });
         logger.info({ traceId, leadId, unit: unit.slug, motivo: d.motivo, detalhe: d.detalhe, anotou: calar.anotou }, 'agente pulado (paciente em tratamento / número interno)');
         // Como na etapa calada: cartão de paciente, não lead novo — sem cadastro de lead na franquia por aqui.
+        return;
+      }
+    }
+  }
+
+  // PILOTO POR NÚMERO (IA nova): com a chave `ia-so-numeros-de-teste` ligada, a IA só fala com os telefones de DISPARO_LISTA_DE_TESTE da
+  // unidade — o webhook pode estar ligado sem a IA ir ao ar para todo mundo. Em "só no papel" só registra. Desligada, não lê nem o cartão.
+  // Turno aberto pela Ponte: a equipe mandou a IA falar, o piloto não vale neste turno.
+  if (isChatMessage && !passadoPelaPonteAgora(unit.id, leadId)) {
+    const piloto = await portaPilotoDeNumeros({ unit, leadId, contactId });
+    if (piloto && !piloto.naLista) {
+      if (piloto.estado === 'seco') {
+        await recorder.step({
+          kind: 'THINKING',
+          title: '🧪 (só no papel) a IA não responderia — número fora da lista de teste',
+          payload: { leadId, semTelefone: piloto.semTelefone, reason: 'ia_so_numeros_de_teste_seco' },
+        });
+      } else {
+        await finishWidgetSilently();
+        const totalLatency = Math.round(performance.now() - requestStart);
+        await recorder.step({
+          kind: 'COMPLETED',
+          title: `IA em piloto — número fora da lista de teste, não respondeu${piloto.semTelefone ? ' (telefone não lido)' : ''}`,
+          payload: { leadId, semTelefone: piloto.semTelefone, reason: 'ia_so_numeros_de_teste' },
+          latencyMs: totalLatency,
+        });
+        await recorder.finalize({ status: 'SUCCESS', latencyMs: totalLatency, iaDecision: '__piloto_fora_da_lista__' });
+        logger.info({ traceId, leadId, unit: unit.slug, semTelefone: piloto.semTelefone }, 'agente pulado (piloto: número fora da lista de teste)');
+        return;
+      }
+    }
+  }
+
+  // CLIENTE DO ESCRITÓRIO (advocacia): quem já é cliente não é lead — a IA não responde. A MESMA regra do disparo (DISPARO_REGRA_CLIENTE),
+  // perguntada pela PESSOA (todos os cartões dos contatos). Chave `calar-cliente-do-escritorio`; em "só no papel" só registra.
+  // Desligada, não lê nem o cartão. Nunca derruba o atendimento. Turno aberto pela Ponte: a equipe mandou a IA falar, a porta não vale.
+  // Sem exigir texto: quem é cliente continua sendo cliente quando manda áudio que não foi transcrito ou uma imagem.
+  if (isChatMessage && !passadoPelaPonteAgora(unit.id, leadId)) {
+    const cliente = await portaClienteDoEscritorio({ unit, leadId, humanMessage: semAReferencia(humanMessage) });
+    if (cliente?.calar) {
+      if (cliente.estado === 'seco') {
+        await recorder.step({
+          kind: 'THINKING',
+          title: '🧪 (só no papel) a IA ficaria calada — quem escreveu já é cliente do escritório',
+          payload: { leadId, situacao: cliente.situacao, reason: 'calar_cliente_do_escritorio_seco' },
+        });
+        logger.info({ traceId, leadId, unit: unit.slug }, 'calar-cliente-do-escritorio (seco): calaria — segue respondendo');
+      } else {
+        await finishWidgetSilently();
+        const totalLatency = Math.round(performance.now() - requestStart);
+        await recorder.step({
+          kind: 'COMPLETED',
+          title: `IA calada — quem escreveu já é cliente do escritório${cliente.anotou ? ' (nota deixada no cartão)' : ''}`,
+          payload: { leadId, situacao: cliente.situacao, anotou: cliente.anotou, reason: 'calar_cliente_do_escritorio' },
+          latencyMs: totalLatency,
+        });
+        await recorder.finalize({ status: 'SUCCESS', latencyMs: totalLatency, iaDecision: '__cliente_do_escritorio__' });
+        logger.info({ traceId, leadId, unit: unit.slug, anotou: cliente.anotou }, 'agente pulado (cliente do escritório)');
         return;
       }
     }

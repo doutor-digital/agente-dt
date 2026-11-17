@@ -1,11 +1,22 @@
 import { prisma } from '../lib/prisma.js';
 import { createKnowledge, listKnowledge } from '../services/knowledge.service.js';
 
-const SLUG = 'advocacia-magalhaes';
-const KOMMO_SUBDOMAIN = 'magalhaesadv2025';
+import { pathToFileURL } from 'node:url';
+import { KOMMO_SUBDOMAIN_MAGALHAES, SLUG_MAGALHAES } from '../lib/magalhaes.js';
 
-const KOMMO_ACCESS_TOKEN =
-  'eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsImp0aSI6ImIxY2M2MGMwNDBmYmUxZTZkZjMxYThiYTcwZjdkN2FlMTdiNWY0NmUyNjY2NzhmMDUyOWM3M2U1ZGFiYzk4YjJkODMwZjE5ZDg4MzI3Njg2In0.eyJhdWQiOiJmNTNkMDA0ZC1iMDNmLTQ0ZGMtOGU0NS1lOTJmMjRjNjU1NDkiLCJqdGkiOiJiMWNjNjBjMDQwZmJlMWU2ZGYzMWE4YmE3MGY3ZDdhZTE3YjVmNDZlMjY2Njc4ZjA1MjljNzNlNWRhYmM5OGIyZDgzMGYxOWQ4ODMyNzY4NiIsImlhdCI6MTc4Mjg1NTM1OCwibmJmIjoxNzgyODU1MzU4LCJleHAiOjE5Mjc1ODQwMDAsInN1YiI6IjEyNTg2MzYzIiwiZ3JhbnRfdHlwZSI6IiIsImFjY291bnRfaWQiOjM2NjMzMDQ3LCJiYXNlX2RvbWFpbiI6ImtvbW1vLmNvbSIsInZlcnNpb24iOjIsInNjb3BlcyI6WyJwdXNoX25vdGlmaWNhdGlvbnMiLCJmaWxlcyIsImNybSIsImZpbGVzX2RlbGV0ZSIsIm5vdGlmaWNhdGlvbnMiXSwiaGFzaF91dWlkIjoiZmYzNmY0ZGUtMDkzNy00ODYzLWE0MjQtNTZmYzc5ZWMxYTc3IiwiYXBpX2RvbWFpbiI6ImFwaS1jLmtvbW1vLmNvbSJ9.jj0zZLA2DsMeiE1dxmu4Pgw9VX6W0dQdmUU3fO5HXCr3tWXRq14jp2o9SsimjKBeZlTGoIQQfuJRPVcUmlxO-PW7GE5Yqh4WnAoVgYHKj2_8SfBY-uHXsOyB4WuicPfWrIWlvyuOSjY_JkdjmX1Qa7Mt0wpODEQ4WxVQqyLSEgBPiq7YAcQqI-mrMH5d36OH1RWsWKTm2wGYDANHOmWNsSEL4-u2arJSejrWrbUUO__BeZvRnsg7McOLgu1PLXjOwi6T2EmskFuRKjQPWifjP900VWwy82GXZoMUVQxiFX4cmR4lDj5WjmSA_K40ILnT_fWKzZZ6ED9mp_MBVJhJ5w';
+/**
+ * Prepara o CONTEÚDO da Ana na unidade que JÁ existe (`magalhaes-advocacia`): prompt, triagem, handoff, regras de captura,
+ * ações, respostas prontas, base de conhecimento. NÃO liga nada: chave de LLM, provider, bot de entrega, campos do Kommo,
+ * etapas permitidas, janela e webhook são do `ligar-ia-magalhaes.sh` (quem decide é o João).
+ *
+ * - Sem segredo no código (o repositório é público): o token do Kommo da unidade fica no banco. Só se a unidade NÃO existir
+ *   (banco novo) o token entra, e vem do ambiente (`MAGALHAES_KOMMO_ACCESS_TOKEN`).
+ * - A atualização grava SÓ campos de conteúdo. Provider, modelo, chaves, etapas, bot e janela já configurados não são tocados.
+ * - Responsável do handoff: `MAGALHAES_TRANSFER_USER_ID` (id de usuário do Kommo). Sem ele, a Ana pausa e passa para a equipe
+ *   sem atribuir ninguém — atribuir a um id que não existe na conta faria a ação falhar.
+ */
+const SLUG = SLUG_MAGALHAES;
+const KOMMO_SUBDOMAIN = KOMMO_SUBDOMAIN_MAGALHAES;
 
 const PIPELINE_COMERCIAL = 13964971;
 const ST_ENTRADA = 107774379;
@@ -15,8 +26,6 @@ const ST_QUALIFICADO = 108260507;
 const ST_ANALISE_AGENDADA = 108260511;
 const ST_GANHO = 142;
 const ST_PERDIDO = 143;
-
-const ANA_ESTHER_USER_ID = 15490579;
 
 const personaGreeting = 'Oii! Aqui é a Ana, do escritório Magalhães 💛';
 
@@ -114,17 +123,10 @@ const triageInstructions = `Antes de encaminhar o lead pra equipe, colete (no je
 Conforme a pessoa for contando, preencha em silêncio os campos do Kommo (área do caso, resumo do relato, cidade, origem etc).
 Você NÃO pergunta horário e NÃO agenda. Assim que tiver o relato + a área do caso clara e dentro do escopo do escritório, ENCAMINHE pra equipe: a conversa passa pra um atendente humano (você é pausada) e ele combina o atendimento com o Dr.`;
 
-const unitContent = {
-  name: 'Advocacia Magalhães',
-  category: 'advocacia',
-  isActive: true,
-  llmProvider: 'anthropic',
-  anthropicModel: 'claude-opus-4-8',
-  kommoSubdomain: KOMMO_SUBDOMAIN,
-  kommoAccessToken: KOMMO_ACCESS_TOKEN,
-  kommoAllowedStatusIds: [ST_ENTRADA, ST_LEAD_NOVO, ST_EM_QUALIFICACAO, ST_QUALIFICADO, ST_ANALISE_AGENDADA],
-  kommoWonStatusIds: [ST_GANHO],
+/** Só conteúdo: é tudo que a atualização grava. */
+export const unitConteudo = {
   personaCompanyName: 'Advocacia Magalhães',
+  category: 'advocacia',
   personaTone: 'friendly',
   personaGreeting,
   personaResponseLength: 'normal',
@@ -142,6 +144,22 @@ const unitContent = {
   handoffEnabled: true,
   handoffKeywords: ['falar com advogado agora', 'falar com humano', 'quero falar com uma pessoa', 'atendente'],
 };
+
+/**
+ * Só para banco NOVO (a unidade de produção já existe). Nasce INATIVA, sem bot e sem chave: lista de etapas vazia no webhook significa
+ * "responde em qualquer etapa", então quem ativa (`ligar-ia-magalhaes.sh --ligar`) define as etapas na mesma transação que liga.
+ */
+export function unitCriacao(env: NodeJS.ProcessEnv = process.env) {
+  return {
+    slug: SLUG,
+    name: 'Magalhães Advocacia',
+    isActive: false,
+    kommoSubdomain: KOMMO_SUBDOMAIN,
+    kommoAccessToken: env.MAGALHAES_KOMMO_ACCESS_TOKEN?.trim() || null,
+    kommoWonStatusIds: [ST_GANHO],
+    ...unitConteudo,
+  };
+}
 
 const captures = [
   {
@@ -247,58 +265,61 @@ const OLD_ACTION_CONDITIONS = [
   'Você já entendeu o caso e classificou a área (previdenciário ou trabalhista), mas a pessoa ainda NÃO marcou um horário.',
   'A pessoa aceitou um horário pra primeira conversa com o advogado e confirmou o agendamento.',
 ];
-const actions = [
-  {
-    conditionDescription:
-      'A pessoa respondeu e começou a contar a situação/o problema dela (já há contexto do caso, saiu do "oi" inicial).',
-    actions: [
-      { kind: 'move_stage', params: { statusId: ST_EM_QUALIFICACAO, pipelineId: PIPELINE_COMERCIAL, statusLabel: '2 - Em qualificação' } },
-    ],
-    notes: `${ACTION_MARKER} Funil: card vai pra Em qualificação quando a conversa engata.`,
-  },
-  {
-    conditionDescription:
-      'Você já entendeu o caso e classificou a área DENTRO do escopo do escritório (previdenciário/INSS, tributário ou trabalhista). É o momento de ENCAMINHAR pra equipe humana (você NÃO agenda).',
-    actions: [
-      { kind: 'move_stage', params: { statusId: ST_QUALIFICADO, pipelineId: PIPELINE_COMERCIAL, statusLabel: '3 - Qualificado' } },
-      { kind: 'assign_responsible', params: { userId: ANA_ESTHER_USER_ID, userName: 'Ana Esther' } },
-      { kind: 'transfer_without_permission', params: { includeSummary: true } },
-    ],
-    notes: `${ACTION_MARKER} Handoff: qualifica, atribui à Ana Esther e PAUSA a IA (interruptor "IA Pausada") — sem pedir permissão. A IA não agenda; a Ana repassa pro Dr. e o humano marca.`,
-  },
-  {
-    conditionDescription:
-      'A pessoa diz CLARAMENTE que não quer continuar / desiste / não tem interesse / pede pra não receber mais mensagens. (NÃO vale pra "vou pensar", "depois", "tô ocupado".)',
-    actions: [
-      { kind: 'summarize_to_note', params: { focusHint: 'motivo da desistência ou recusa, em 1 frase' } },
-      { kind: 'move_stage', params: { statusId: ST_PERDIDO, pipelineId: PIPELINE_COMERCIAL, statusLabel: 'Fechado - perdido' } },
-    ],
-    notes: `${ACTION_MARKER} Respeita LGPD ("não quero mais"): resume o motivo e fecha como perdido.`,
-  },
-  {
-    conditionDescription:
-      'A pessoa insiste em falar com o advogado AGORA, faz uma pergunta que exige opinião/parecer jurídico (que você não pode dar), ou o caso é urgente/grave (prazo correndo, perícia ou audiência já marcada).',
-    actions: [
-      { kind: 'assign_responsible', params: { userId: ANA_ESTHER_USER_ID, userName: 'Ana Esther' } },
-      { kind: 'transfer_without_permission', params: { includeSummary: true } },
-    ],
-    notes: `${ACTION_MARKER} Handoff urgente: atribui à Ana Esther, resume e PAUSA a IA — sem pedir permissão.`,
-  },
-  {
-    conditionDescription:
-      'O assunto está claramente FORA do foco do escritório (não é previdenciário/INSS, tributário nem trabalhista — ex.: criminal, divórcio/família, consumidor, trânsito).',
-    actions: [
-      {
-        kind: 'respond_with_intent',
-        params: {
-          instruction:
-            'Diga com gentileza que o foco do escritório é Direito Previdenciário (INSS) e Tributário (e alguns casos trabalhistas), então talvez não seja a área ideal pra esse caso. NÃO prometa nada. Pergunte se, mesmo assim, a pessoa quer que a equipe dê uma olhada — se sim, peça um resumo curto do que aconteceu.',
+export function montarAcoes(responsavelId: number | null) {
+  const atribuir = responsavelId ? [{ kind: 'assign_responsible', params: { userId: responsavelId } }] : [];
+  return [
+    {
+      conditionDescription:
+        'A pessoa respondeu e começou a contar a situação/o problema dela (já há contexto do caso, saiu do "oi" inicial).',
+      actions: [
+        { kind: 'move_stage', params: { statusId: ST_EM_QUALIFICACAO, pipelineId: PIPELINE_COMERCIAL, statusLabel: '2 - Em qualificação' } },
+      ],
+      notes: `${ACTION_MARKER} Funil: card vai pra Em qualificação quando a conversa engata.`,
+    },
+    {
+      conditionDescription:
+        'Você já entendeu o caso e classificou a área DENTRO do escopo do escritório (previdenciário/INSS, tributário ou trabalhista). É o momento de ENCAMINHAR pra equipe humana (você NÃO agenda).',
+      actions: [
+        { kind: 'move_stage', params: { statusId: ST_QUALIFICADO, pipelineId: PIPELINE_COMERCIAL, statusLabel: '3 - Qualificado' } },
+        ...atribuir,
+        { kind: 'transfer_without_permission', params: { includeSummary: true } },
+      ],
+      notes: `${ACTION_MARKER} Handoff: qualifica, atribui ao responsável do handoff (MAGALHAES_TRANSFER_USER_ID, se definido) e PAUSA a IA (interruptor "IA Pausada") — sem pedir permissão. A IA não agenda; a Ana repassa pro Dr. e o humano marca.`,
+    },
+    {
+      conditionDescription:
+        'A pessoa diz CLARAMENTE que não quer continuar / desiste / não tem interesse / pede pra não receber mais mensagens. (NÃO vale pra "vou pensar", "depois", "tô ocupado".)',
+      actions: [
+        { kind: 'summarize_to_note', params: { focusHint: 'motivo da desistência ou recusa, em 1 frase' } },
+        { kind: 'move_stage', params: { statusId: ST_PERDIDO, pipelineId: PIPELINE_COMERCIAL, statusLabel: 'Fechado - perdido' } },
+      ],
+      notes: `${ACTION_MARKER} Respeita LGPD ("não quero mais"): resume o motivo e fecha como perdido.`,
+    },
+    {
+      conditionDescription:
+        'A pessoa insiste em falar com o advogado AGORA, faz uma pergunta que exige opinião/parecer jurídico (que você não pode dar), ou o caso é urgente/grave (prazo correndo, perícia ou audiência já marcada).',
+      actions: [
+        ...atribuir,
+        { kind: 'transfer_without_permission', params: { includeSummary: true } },
+      ],
+      notes: `${ACTION_MARKER} Handoff urgente: atribui ao responsável do handoff (se definido), resume e PAUSA a IA — sem pedir permissão.`,
+    },
+    {
+      conditionDescription:
+        'O assunto está claramente FORA do foco do escritório (não é previdenciário/INSS, tributário nem trabalhista — ex.: criminal, divórcio/família, consumidor, trânsito).',
+      actions: [
+        {
+          kind: 'respond_with_intent',
+          params: {
+            instruction:
+              'Diga com gentileza que o foco do escritório é Direito Previdenciário (INSS) e Tributário (e alguns casos trabalhistas), então talvez não seja a área ideal pra esse caso. NÃO prometa nada. Pergunte se, mesmo assim, a pessoa quer que a equipe dê uma olhada — se sim, peça um resumo curto do que aconteceu.',
+          },
         },
-      },
-    ],
-    notes: `${ACTION_MARKER} Fora de escopo: declina com gentileza, sem mover etapa (humano decide).`,
-  },
-] as const;
+      ],
+      notes: `${ACTION_MARKER} Fora de escopo: declina com gentileza, sem mover etapa (humano decide).`,
+    },
+  ] as const;
+}
 
 const templates = [
   {
@@ -440,14 +461,22 @@ const corrections = [
   'Últimas vagas! Só hoje pra garantir seu agendamento.',
 ];
 
+function responsavelDoEnv(env: NodeJS.ProcessEnv = process.env): number | null {
+  const n = Number(env.MAGALHAES_TRANSFER_USER_ID);
+  return Number.isSafeInteger(n) && n > 0 ? n : null;
+}
+
 async function main() {
-  const unit = await prisma.unit.upsert({
-    where: { slug: SLUG },
-    create: { slug: SLUG, ...unitContent },
-    update: unitContent,
-  });
-  console.log(`✅ Unidade: id=${unit.id} slug=${unit.slug} name="${unit.name}" category=${unit.category}`);
+  // Atualiza a unidade que existe, SÓ no conteúdo. Não cria uma segunda (o slug antigo era outro) e não mexe em chave/bot/etapas/janela.
+  const existente = await prisma.unit.findUnique({ where: { slug: SLUG }, select: { id: true } });
+  const unit = existente
+    ? await prisma.unit.update({ where: { slug: SLUG }, data: unitConteudo })
+    : await prisma.unit.create({ data: unitCriacao() });
+  console.log(`${existente ? '✅ Unidade atualizada (só conteúdo)' : '🆕 Unidade criada (banco novo)'}: id=${unit.id} slug=${unit.slug} name="${unit.name}" category=${unit.category}`);
   console.log(`   subdomain=${unit.kommoSubdomain} token=${!!unit.kommoAccessToken}`);
+  const responsavelId = responsavelDoEnv();
+  const actions = montarAcoes(responsavelId);
+  console.log(responsavelId ? `   handoff atribui ao usuário Kommo ${responsavelId}` : '   handoff SEM responsável (MAGALHAES_TRANSFER_USER_ID não definido): pausa e passa, não atribui');
 
   for (const c of captures) {
     await prisma.leadFieldRule.upsert({
@@ -478,23 +507,27 @@ async function main() {
   }
   console.log(`✅ Capturas: ${captures.length} regras (a IA preenche os campos do Kommo).`);
 
-  const removed = await prisma.unitAction.deleteMany({
-    where: {
-      unitId: unit.id,
-      OR: [
-        { notes: { startsWith: ACTION_MARKER } },
-        { conditionDescription: { in: OLD_ACTION_CONDITIONS } },
-      ],
-    },
-  });
-  await prisma.unitAction.createMany({
-    data: actions.map((a) => ({
-      unitId: unit.id,
-      conditionDescription: a.conditionDescription,
-      actions: a.actions as object,
-      notes: a.notes,
-      enabled: true,
-    })),
+  // Trocar as ações gerenciadas é uma operação só: se a criação falhar, as antigas voltam (a unidade nunca fica sem handoff).
+  const removed = await prisma.$transaction(async (tx) => {
+    const apagadas = await tx.unitAction.deleteMany({
+      where: {
+        unitId: unit.id,
+        OR: [
+          { notes: { startsWith: ACTION_MARKER } },
+          { conditionDescription: { in: OLD_ACTION_CONDITIONS } },
+        ],
+      },
+    });
+    await tx.unitAction.createMany({
+      data: actions.map((a) => ({
+        unitId: unit.id,
+        conditionDescription: a.conditionDescription,
+        actions: a.actions as object,
+        notes: a.notes,
+        enabled: true,
+      })),
+    });
+    return apagadas;
   });
   console.log(`✅ Ações: ${actions.length} criadas (removidas ${removed.count} gerenciadas anteriores).`);
 
@@ -539,9 +572,8 @@ async function main() {
   console.log(`✅ Correções: ${corrections.length} exemplos a evitar (conversa de treino "${TRAINING_CONTACT}").`);
 
   console.log('');
-  console.log('⏭️  AINDA FALTA (fora do nosso banco — painel do Kommo):');
-  console.log('   • DELIVERY: não existe Salesbot nem campo "Resposta IA" / "IA Pausada" nessa conta.');
-  console.log('     Pra IA enviar no WhatsApp é preciso criar isso no Kommo e ligar o canal de WhatsApp.');
+  console.log('⏭️  AINDA FALTA (quem faz é o ligar-ia-magalhaes.sh --ligar): chave de LLM, bot de entrega, campos Resposta IA / Pausar IA,');
+  console.log('   etapas permitidas, janela e webhook do Kommo. Este seed NÃO liga nada.');
   if (!unit.openaiApiKey) {
     console.log('   • OpenAI: a unidade está sem openaiApiKey — defina a chave pra ativar o Conhecimento/RAG.');
   }
@@ -549,4 +581,5 @@ async function main() {
   await prisma.$disconnect();
 }
 
-void main();
+// Só roda como script (o teste importa os pedaços sem tocar no banco).
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) void main();

@@ -785,6 +785,32 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/paciente-em-tratamento.ts',
   },
   {
+    id: 'ia-so-numeros-de-teste',
+    chave: 'IA_SO_NUMEROS_DE_TESTE_SLUGS',
+    nome: 'IA em piloto: só responde os números de teste',
+    oQueFaz:
+      'Com a chave ligada, a IA da unidade só responde telefone que esteja em DISPARO_LISTA_DE_TESTE (a mesma lista do disparo): o webhook do Kommo pode estar ligado sem a IA ir ao ar para todo mundo. Quem está fora da lista não recebe resposta nem nota. Para ir ao ar para todos: desligue esta chave (vale em ~30 s, sem reiniciar) ou ponha slug=* na lista.',
+    pegadinha:
+      'Unidade sem entrada em DISPARO_LISTA_DE_TESTE = NINGUÉM é respondido (mesma regra do disparo) — e a lista é variável do servidor, mudar exige reiniciar. Telefone que não dá para ler no cartão também fica sem resposta. Vale só para mensagem de chat (turno aberto pela Ponte passa). Em "só no papel" registra no histórico da execução quem ficaria sem resposta, mas responde.',
+    risco: 'comportamento',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/ia-so-numeros-de-teste.ts',
+  },
+  {
+    id: 'calar-cliente-do-escritorio',
+    chave: 'CALAR_CLIENTE_ESCRITORIO_SLUGS',
+    nome: 'IA calada para quem já é cliente do escritório',
+    oQueFaz:
+      'Antes de responder, confere se a PESSOA (todos os cartões dos contatos do lead) já é cliente: tem cartão num funil ou etapa de cliente, pela mesma regra do disparo (DISPARO_REGRA_CLIENTE). Se for, a IA não responde e deixa uma nota no cartão, 1 vez por dia.',
+    pegadinha:
+      'Precisa da regra DISPARO_REGRA_CLIENTE da unidade no servidor; sem ela a porta não decide e a IA segue (o ligar-ia-magalhaes.sh só liga com a regra). Leitura do Kommo que falha = a IA responde como sempre. Complementa, não substitui, a lista de etapas permitidas. Em "só no papel" decide e registra no histórico da execução, sem calar e sem nota.',
+    risco: 'comportamento',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/cliente-do-escritorio.ts',
+  },
+  {
     id: 'pausa-equipe',
     chave: 'PAUSA_EQUIPE_SLUGS',
     nome: 'A equipe falou, a Sofia para',

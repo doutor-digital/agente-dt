@@ -22,6 +22,7 @@ import type { OfertaVigente } from './oferta-da-campanha.js';
 import { falasDoTurno, fraseDoPasse } from './sinal-de-alerta.js';
 import { confirmouConsultaNoTurno } from './venda-em-alerta.js';
 import { pacienteFalouDePs } from './sem-pronto-socorro.js';
+import { SLUG_MAGALHAES } from '../lib/magalhaes.js';
 import { passarPorSinalNoTurno } from './passe-por-sinal.js';
 import { retornoDaEquipe } from '../lib/retorno-da-equipe.js';
 import { semDiminutivo } from '../lib/sem-diminutivo.js';
@@ -1776,7 +1777,7 @@ async function maybeAutoUpdateLeadTitle({
   }
 }
 
-const ENTRY_DATE_TAG_SLUGS = new Set(['advocacia-magalhaes']);
+const ENTRY_DATE_TAG_SLUGS = new Set([SLUG_MAGALHAES]);
 
 async function maybeAddEntryDateTag({
   recorder,

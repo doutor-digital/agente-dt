@@ -111,7 +111,7 @@ test('item 5: unidade Doutor Hérnia recebe a frase fixa do "é médico?", exata
 
 test('item 5: a frase do método Doutor Hérnia NÃO vai para quem não é Doutor Hérnia', () => {
   const trauma = unidade({ id: 'u-trauma', slug: 'default', name: 'Instituto Trauma', personaCompanyName: 'TraumaFIT', kommoSubdomain: 'institutotraumakommon' });
-  const advocacia = unidade({ id: 'u-adv', slug: 'advocacia-magalhaes', name: 'Magalhães Advocacia', personaCompanyName: 'Magalhães', category: 'advocacia', kommoSubdomain: 'magalhaesadv2025' });
+  const advocacia = unidade({ id: 'u-adv', slug: 'magalhaes-advocacia', name: 'Magalhães Advocacia', personaCompanyName: 'Magalhães', category: 'advocacia', kommoSubdomain: 'magalhaesadv2025' });
   for (const u of [trauma, advocacia]) {
     const p = composeSystemPrompt({ unit: u, redeDeUnidades: REDE });
     assert.doesNotMatch(p, /método Doutor Hérnia/, u.slug);
