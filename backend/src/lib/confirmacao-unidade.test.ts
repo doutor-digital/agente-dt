@@ -86,15 +86,19 @@ test('jaConfirmou: CONFIRMADO na franquia ou "Agendamento confirmado" há menos 
   assert.equal(jaConfirmou({ idStatus: null, oficiais: null, agora }), null);
 });
 
-test('confirmacaoDaUnidade: sem a chave = padrão da rede; com a chave, só true liga', () => {
-  assert.equal(confirmacaoDaUnidade(null), null);
-  assert.equal(confirmacaoDaUnidade({ outra: 1 }), null);
-  assert.equal(confirmacaoDaUnidade({ confirmacao_unidade: [] }), null);
-  assert.deepEqual(confirmacaoDaUnidade({ confirmacao_unidade: { dia_util: true, texto: 'oi', sem_janela: 'sim', pular_confirmada: true } }), {
-    diaUtil: true,
-    texto: 'oi',
-    semJanela: false,
-    pularConfirmada: true,
-  });
-  assert.equal(confirmacaoDaUnidade({ confirmacao_unidade: { texto: '   ' } })?.texto, null);
+test('confirmacaoDaUnidade: desligada = padrão da rede; ligada fora da lista = texto da rede, sem tirar a janela', () => {
+  assert.equal(confirmacaoDaUnidade('doutor-hernia-petropolis', false), null);
+  assert.deepEqual(confirmacaoDaUnidade('doutor-hernia-serra', true), { diaUtil: true, texto: null, semJanela: false, pularConfirmada: true });
+  const p = confirmacaoDaUnidade('doutor-hernia-petropolis', true);
+  assert.equal(p?.semJanela, true);
+  assert.equal(p?.pularConfirmada, true);
+  // o texto que a equipe de Petrópolis mandava à mão, com "consulta" no lugar de "sessão"
+  assert.equal(
+    textoDaUnidade(p?.texto ?? '', { quando: '2026-11-23T17:30', horaDoEnvio: 9 }),
+    'Bom dia!\nEstou entrando em contato para confirmar sua consulta agendada para *23/11 (SEGUNDA) às 17:30hrs*, na Doutor Hérnia.\n' +
+      'Endereço: Rua Coronel Veiga, 543. \n\n' +
+      'Favor vir com roupa confortável\n *não podemos tolerar atrasos superiores a 5 minutos*. Isso evita impactos na agenda e garante que todos sejam atendidos no horário previsto.\n\n' +
+      '*Por favor, confirme sua presença em até 12 horas para garantir o horário. Caso contrário, ele será liberado para a lista de espera.*\n\n' +
+      'Equipe Doutor Hérnia',
+  );
 });

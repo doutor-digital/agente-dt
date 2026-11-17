@@ -23,3 +23,14 @@ test('textoAlertaSemJanela: vai para o grupo com nome, hora e o motivo', () => {
   assert.match(t, /^ALERTA · doutor-hernia-maraba · \[Contato: Maria\] 📅 Consulta amanhã às 14:30 SEM confirmação/);
   assert.match(t, /24 h/);
 });
+
+test('podeSerRespostaD1: a janela da unidade no dia útil anterior (6 dias) aceita o "confirmado" de segunda à pergunta de quinta', async () => {
+  const { podeSerRespostaD1, JANELA_RESPOSTA_DIA_UTIL_MS } = await import('./confirmacao-d1.js');
+  const enviada = new Date('2026-11-19T12:00:00Z'); // quinta, 9h
+  const segunda = new Date('2026-11-23T10:00:00Z'); // segunda, 7h — 94 h depois
+  const conv = { confirmacaoD1EnviadaEm: enviada, confirmacaoD1Resposta: null };
+  assert.equal(podeSerRespostaD1(conv, 'Confirmado', segunda), false, 'na rede (48 h) não vale mais');
+  assert.equal(podeSerRespostaD1(conv, 'Confirmado', segunda, JANELA_RESPOSTA_DIA_UTIL_MS), true);
+  const depois = new Date(enviada.getTime() + JANELA_RESPOSTA_DIA_UTIL_MS + 3600_000);
+  assert.equal(podeSerRespostaD1(conv, 'Confirmado', depois, JANELA_RESPOSTA_DIA_UTIL_MS), false, 'passou de 6 dias');
+});

@@ -12,15 +12,32 @@
  *       perguntou "Responda 1 para confirmar" às 09:07. Quem acabou de receber a confirmação do agendamento
  *       (nas últimas 12 h) não recebe a pergunta.
  *
- * Tudo é OPCIONAL e por unidade, em `pipeline_intents.confirmacao_unidade`. Sem a chave, nada muda:
- *   {
- *     "dia_util": true,          // 1 toque no dia útil anterior (sem D-2 e sem a véspera de calendário)
- *     "texto": "…",              // modelo com {saudacao} {nome} {data} {DIA} {dia} {hora} {fisioterapeuta} {endereco}
- *     "sem_janela": true,        // WhatsApp Lite (QR): não existe a janela de 24 h — manda o texto sempre
- *     "pular_confirmada": true   // franquia em CONFIRMADO ou "✅ Agendamento confirmado" nas últimas 12 h = não manda
- *   }
+ * LIGA E DESLIGA pela automação `confirmacao-dia-util` (tela Automações, sem deploy). Desligada, nada muda na unidade.
+ * Ligada: 1 toque no dia útil anterior (sem D-2 e sem a véspera de calendário) e não pergunta a quem já confirmou.
+ * O TEXTO e o canal de cada unidade moram em `POR_UNIDADE`, abaixo, no código. Não ficam em `pipeline_intents`, porque a
+ * tela da unidade só aceita número inteiro ali (units.controller.ts) e salvar a unidade daria 400. Também não ficam na
+ * unidade, porque clonar a unidade copiaria o endereço e o canal de Petrópolis. Unidade fora do mapa usa o texto da rede.
  */
 import { ehFeriadoNacional } from './feriados.js';
+
+/** Id no catálogo de automações (`automacoes.ts`). */
+export const ID_CONFIRMACAO_DIA_UTIL = 'confirmacao-dia-util';
+
+/**
+ * Petrópolis (17/11/2026): o texto que a equipe mandava à mão, colado pelo João. A única troca foi "sessão" por "consulta",
+ * porque este worker confirma consulta. Petrópolis está no WhatsApp Lite (QR), que não tem janela de 24 h: `semJanela`.
+ * ATENÇÃO: se a unidade passar para a API oficial, tire o `semJanela`. Fora da janela, o Kommo aceita e marca "Erro" em silêncio.
+ */
+const TEXTO_PETROPOLIS =
+  '{saudacao}\nEstou entrando em contato para confirmar sua consulta agendada para *{data} ({DIA}) às {hora}hrs*, na Doutor Hérnia.\n' +
+  'Endereço: Rua Coronel Veiga, 543. \n\n' +
+  'Favor vir com roupa confortável\n *não podemos tolerar atrasos superiores a 5 minutos*. Isso evita impactos na agenda e garante que todos sejam atendidos no horário previsto.\n\n' +
+  '*Por favor, confirme sua presença em até 12 horas para garantir o horário. Caso contrário, ele será liberado para a lista de espera.*\n\n' +
+  'Equipe Doutor Hérnia';
+
+const POR_UNIDADE: Readonly<Record<string, { texto?: string; semJanela?: boolean }>> = {
+  'doutor-hernia-petropolis': { texto: TEXTO_PETROPOLIS, semJanela: true },
+};
 
 /**
  * `SPINE_STATUS.CONFIRMADO` (services/spine.service.ts). Copiado e não importado: aquele módulo valida as variáveis
@@ -35,19 +52,11 @@ export interface ConfirmacaoDaUnidade {
   pularConfirmada: boolean;
 }
 
-/** Lê `pipeline_intents.confirmacao_unidade`. `null` = a unidade segue o padrão da rede. */
-export function confirmacaoDaUnidade(pipelineIntents: unknown): ConfirmacaoDaUnidade | null {
-  const i = (pipelineIntents ?? {}) as Record<string, unknown>;
-  const c = i.confirmacao_unidade;
-  if (!c || typeof c !== 'object' || Array.isArray(c)) return null;
-  const o = c as Record<string, unknown>;
-  const texto = typeof o.texto === 'string' && o.texto.trim() ? o.texto : null;
-  return {
-    diaUtil: o.dia_util === true,
-    texto,
-    semJanela: o.sem_janela === true,
-    pularConfirmada: o.pular_confirmada === true,
-  };
+/** O jeito da unidade quando a automação está ligada. `null` (desligada) = a unidade segue o padrão da rede. */
+export function confirmacaoDaUnidade(slug: string, ligada: boolean): ConfirmacaoDaUnidade | null {
+  if (!ligada) return null;
+  const c = POR_UNIDADE[slug] ?? {};
+  return { diaUtil: true, texto: c.texto ?? null, semJanela: c.semJanela === true, pularConfirmada: true };
 }
 
 function somarDias(dia: string, n: number): string {

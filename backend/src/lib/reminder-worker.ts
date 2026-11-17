@@ -51,6 +51,7 @@ import { automacaoLigada } from './automacoes-estado.js';
 import { estadoDoLembrete } from './lembrete-chaves.js';
 import {
   confirmacaoDaUnidade,
+  ID_CONFIRMACAO_DIA_UTIL,
   diaUtilAnterior,
   diasQueConfirmamHoje,
   jaConfirmou,
@@ -222,9 +223,11 @@ async function pedirConfirmacao(e: Envio): Promise<'chat_botoes' | 'texto' | 'te
       });
 
   // Com os ids do chat, vai com botões (Confirmo · Preciso remarcar); sem eles, texto "responda 1 ou 2".
-  // O texto da UNIDADE vai como ela escreveu, sem botão: é a mensagem que a equipe já mandava à mão.
+  // O texto da UNIDADE vai como ela escreveu, sem botão, numa mensagem só: é a mensagem que a equipe já mandava à mão.
+  // Pelo chat direto ele não é cortado; o `sendChatReply` em modo bypass corta em 240 caracteres (3 bolhas no texto de Petrópolis).
   let via: 'chat_botoes' | 'texto' = 'texto';
-  const ctx = modeloDaUnidade ? null : await contextoDeChatDoLead(unit.id, leadId).catch(() => null);
+  let foiPeloChat = false;
+  const ctx = await contextoDeChatDoLead(unit.id, leadId).catch(() => null);
   if (ctx) {
     try {
       await enviarMensagemDeChat(unit, {
@@ -233,23 +236,33 @@ async function pedirConfirmacao(e: Envio): Promise<'chat_botoes' | 'texto' | 'te
         talkId: ctx.talkId,
         contactId: ctx.contactId,
         accountId: ctx.accountId,
-        texto: texto.replace(
-          /Responda \*1\* para confirmar ou \*2\* se precisar remarcar\. 😊/,
-          'Toca no botão aqui embaixo pra me avisar 😊',
-        ),
-        botoes: BOTOES_D1,
+        texto: modeloDaUnidade
+          ? texto
+          : texto.replace(/Responda \*1\* para confirmar ou \*2\* se precisar remarcar\. 😊/, 'Toca no botão aqui embaixo pra me avisar 😊'),
+        ...(modeloDaUnidade ? {} : { botoes: BOTOES_D1 }),
       });
-      via = 'chat_botoes';
+      foiPeloChat = true;
+      if (!modeloDaUnidade) via = 'chat_botoes';
     } catch (err) {
-      logger.warn({ unit: unit.slug, leadId, err: String(err) }, 'confirmação: botões falharam, indo em texto');
+      logger.warn({ unit: unit.slug, leadId, err: String(err) }, 'confirmação: chat direto falhou, indo pelo caminho de texto');
     }
   }
-  if (via !== 'chat_botoes') {
+  if (!foiPeloChat) {
     // `sendChatReply` cai para NOTA no cartão quando o chat recusa — e nota o paciente não lê.
     // Tratar isso como enviado faria o dedupe calar a próxima tentativa até depois da consulta.
     const r = await kommo.sendChatReply({ leadId, text: texto, chatId: null, talkId: null, contactId: null });
     if (r.via === 'lead_note') {
       logger.warn({ unit: unit.slug, leadId, toque }, 'confirmação: virou nota interna, o paciente NÃO recebeu');
+      // No dia útil anterior não há segunda chance: no dia seguinte a consulta já saiu dos dias-alvo. Vira tarefa de ligação.
+      if (e.daUnidade?.diaUtil) {
+        await kommo.createTask({
+          leadId,
+          text: textoAlertaSemJanela({ slug: unit.slug, nome: conv?.contactName, quando: consulta.quando }),
+          completeAt: Math.floor(Date.now() / 1000) + 60 * 60,
+        });
+        await marcar();
+        return 'tarefa';
+      }
       return 'nada';
     }
   }
@@ -283,7 +296,10 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
   const depois = somarDias(dia, 2);
   // Unidade no "dia útil anterior" (Petrópolis, 17/11/2026): um toque só, no último dia útil antes da consulta.
   // Sexta confirma sábado, domingo e segunda; fim de semana e feriado não confirmam nada. Sem D-2.
-  const daUnidade = confirmacaoDaUnidade(unit.pipelineIntents);
+  const daUnidade = confirmacaoDaUnidade(
+    unit.slug,
+    automacaoLigada(unit.slug, ID_CONFIRMACAO_DIA_UTIL, process.env.CONFIRMACAO_DIA_UTIL_SLUGS),
+  );
   const diaUtil = daUnidade?.diaUtil === true;
   const diasAlvo = diaUtil ? diasQueConfirmamHoje(dia) : reforcoLiberado(unit.slug) ? [amanha, depois] : [amanha];
   if (!diasAlvo.length) {
