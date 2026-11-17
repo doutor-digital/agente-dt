@@ -79,6 +79,8 @@ import { startRenomearLeadWorker, stopRenomearLeadWorker } from './lib/renomear-
 import { startTipoLeadChegadaWorker, stopTipoLeadChegadaWorker } from './lib/tipo-lead-chegada-worker.js';
 import { startLigacaoWhatsappWorker, stopLigacaoWhatsappWorker } from './controllers/ligacao-whatsapp.controller.js';
 import { startChatwootReguaWorker, stopChatwootReguaWorker } from './lib/chatwoot-regua-worker.js';
+import { startCrmTarefasWorker, stopCrmTarefasWorker } from './lib/crm-tarefas-worker.js';
+import { paginaTarefasHandler } from './controllers/tarefas.controller.js';
 import { startChatwootAgendaWorker } from './lib/chatwoot-agenda.js';
 import { startChatwootDuplicadosWorker, stopChatwootDuplicadosWorker } from './lib/chatwoot-duplicados.js';
 import { startChatwootCapiWorker, stopChatwootCapiWorker } from './lib/chatwoot-capi.js';
@@ -194,6 +196,8 @@ async function main(): Promise<void> {
   app.get('/funil/robos', paginaRobosHandler);
   // «Disparos» (16/11): o «Broadcast» do CRM (filtro, modelo aprovado, prévia, aprovação, envio em ondas). Mesmo caminho das outras telas.
   app.get('/funil/disparos', paginaDisparosHandler);
+  // «Tarefas» (18/11): mensagem agendada, ligação e lembrete para as meninas. Menu do CRM e aba dentro da conversa (Dashboard App); a página é a mesma.
+  app.get('/funil/tarefas', paginaTarefasHandler);
   // Assistente da atendente: a página do painel (iframe do botão que entra pelo menu.js).
   app.get('/assistente', paginaAssistenteHandler);
 
@@ -306,6 +310,7 @@ async function main(): Promise<void> {
       startPreencheCamposWorker();
       startBlingRenovacaoWorker();
       startChatwootReguaWorker();
+      startCrmTarefasWorker();
       startChatwootAgendaWorker();
       startChatwootDuplicadosWorker();
       startChatwootCapiWorker();
@@ -335,6 +340,7 @@ async function main(): Promise<void> {
       stopPreencheCamposWorker();
       stopBlingRenovacaoWorker();
       stopChatwootReguaWorker();
+      stopCrmTarefasWorker();
       stopChatwootDuplicadosWorker();
       stopChatwootCapiWorker();
       stopFranquiaSyncWorker();

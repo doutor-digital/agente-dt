@@ -2991,3 +2991,75 @@ model NovaClinicaConvite {
   @@index([slugSugerido])
   @@map("nova_clinica_convite")
 }
+
+/// Tarefas do CRM (Chatwoot não tem): mensagem AGENDADA ao paciente, ligação com lembrete e lembrete simples. A conversa é por CONTA (display_id): guarda
+/// conta + caixa + conversa (veja o comentário do model `ChatwootReguaDisparo`). Quem manda e lembra é o worker `crm-tarefas` (modo seco/ligado por unidade).
+model CrmTarefa {
+  id                String    @id @default(cuid())
+  unitId            String    @map("unit_id")
+  conta             Int
+  caixa             Int
+  conversaId        Int       @map("conversa_id")
+  contatoId         Int?      @map("contato_id")
+  contatoNome       String    @map("contato_nome")
+  /// "mensagem" | "ligacao" | "lembrete"
+  tipo              String
+  /// o instante combinado (UTC)
+  quando            DateTime
+  /// o usuário do Chatwoot (por conta) que cuida da tarefa
+  responsavelId     Int       @map("responsavel_id")
+  responsavelNome   String    @map("responsavel_nome")
+  /// mensagem: o texto livre (sai se a janela de 24 h estiver aberta) · ligação/lembrete: a anotação
+  texto             String    @default("")
+  /// mensagem: o modelo APROVADO que sai se a janela estiver fechada (e as fontes de cada {{n}}: primeiroNome | unidade | texto:<literal>)
+  modeloNome        String?   @map("modelo_nome")
+  modeloIdioma      String?   @map("modelo_idioma")
+  modeloTexto       String?   @map("modelo_texto")
+  modeloVariaveis   String[]  @default([]) @map("modelo_variaveis")
+  /// pendente | enviando | aguardando | feita | falhou | barrada | cancelada
+  estado            String    @default("pendente")
+  /// por que está parada/falhou/barrada (texto para a tela)
+  motivo            String?
+  /// a menina confirmou uma tarefa atrasada: o atraso passa a contar daqui
+  confirmadaEm      DateTime? @map("confirmada_em")
+  /// o robô pegou a tarefa para enviar (a trava entre réplicas); `enviando` há muito tempo = não sei se saiu
+  tentativaEm       DateTime? @map("tentativa_em")
+  enviadaEm         DateTime? @map("enviada_em")
+  mensagemId        Int?      @map("mensagem_id")
+  /// ligação/lembrete: o lembrete já saiu (uma vez só, mesmo com réplicas e reinícios) e como
+  lembreteEm        DateTime? @map("lembrete_em")
+  lembreteResumo    String?   @map("lembrete_resumo")
+  /// MODO SECO: o que o worker decidiu e quando — nada saiu (e a decisão não se repete a cada minuto)
+  simuladoEm        DateTime? @map("simulado_em")
+  simulado          String?
+  /// ligação: atendeu | nao_atendeu | remarcar
+  resultado         String?
+  resultadoEm       DateTime? @map("resultado_em")
+  resultadoPor      String?   @map("resultado_por")
+  /// leituras do CRM que falharam ao tentar mandar (adia; passa de 3 vira falha)
+  tentativas        Int       @default(0)
+  criadoPor         String    @map("criado_por")
+  criadoEm          DateTime  @default(now()) @map("criado_em")
+  atualizadoEm      DateTime  @updatedAt @map("atualizado_em")
+
+  @@index([unitId, conta, estado, quando])
+  @@index([estado, quando])
+  @@index([conta, conversaId])
+  @@map("crm_tarefa")
+}
+
+/// O WhatsApp PESSOAL de cada atendente (usuário do Chatwoot, por conta), para o lembrete das tarefas. Só administrador da Doutor Digital edita.
+/// Sem linha = só o lembrete dentro do CRM, e a tela mostra que falta.
+model CrmTarefaZap {
+  id            Int      @id @default(autoincrement())
+  conta         Int
+  agenteId      Int      @map("agente_id")
+  agenteNome    String   @map("agente_nome")
+  /// só dígitos com 55: 5594999990000
+  telefone      String
+  atualizadoPor String   @map("atualizado_por")
+  atualizadoEm  DateTime @updatedAt @map("atualizado_em")
+
+  @@unique([conta, agenteId])
+  @@map("crm_tarefa_zap")
+}

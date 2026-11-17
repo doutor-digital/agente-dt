@@ -301,6 +301,20 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/disparo/chatwoot/porto.ts',
   },
   {
+    id: 'chatwoot-tarefas',
+    chave: 'CHATWOOT_TAREFAS_SLUGS',
+    nome: 'Tarefas do CRM (mensagem agendada, ligação, lembrete)',
+    oQueFaz:
+      'A tela «Tarefas» do CRM: a menina agenda uma MENSAGEM ao paciente (sai sozinha na hora, pela própria conversa), uma LIGAÇÃO ou um lembrete, e o robô lembra: uma nota privada com menção a ela na conversa (o sininho do CRM) e uma mensagem no WhatsApp PESSOAL dela, se a Doutor Digital cadastrou o número. Na ligação a menina registra o resultado (atendeu, não atendeu, remarcar). Quando uma mensagem sai (ou não sai), ela é avisada.',
+    pegadinha:
+      'NASCE EM «SÓ NO PAPEL» EM TODAS AS CONTAS: em seco a tela funciona (criar, listar, marcar feita), mas o robô só decide e anota «mandaria…» — nada vai ao paciente, nada vai ao WhatsApp da menina e nada é escrito na conversa. Ligado: a mensagem sai por texto livre se a janela de 24 h do WhatsApp está aberta; senão só por um MODELO APROVADO escolhido ao agendar (sem modelo, não sai e a menina é avisada). Nunca manda para quem pediu SAIR, conversa com a etiqueta sem-follow-up ou contato interno, nem fora de 8h–20h (fuso da unidade; CRM_TAREFAS_JANELA muda). Tarefa atrasada em mais de 2 h (servidor fora do ar; CRM_TAREFAS_ATRASO_MAX_MIN muda) não sai sozinha: fica «Aguardando» até a menina confirmar na tela. Uma vez só: o robô pega a tarefa no banco antes de mandar; se travar no meio vira «não sei se saiu» e NUNCA é reenviada sozinha. O número do WhatsApp de cada menina só a administração da Doutor Digital cadastra (tela Tarefas). Até 20 mensagens por ciclo de 1 minuto.',
+    risco: 'manda-mensagem',
+    temSeco: true,
+    exigeSecoAntes: true,
+    quandoVazio: 'seco',
+    arquivo: 'src/lib/crm-tarefas/ciclo.ts',
+  },
+  {
     id: 'aviso-agendamento',
     chave: 'AVISO_AGENDAMENTO_SLUGS',
     nome: 'Aviso no WhatsApp quando a IA marca',

@@ -108,7 +108,7 @@ function rotasPublicas(): Rota[] {
   }
   return l.filter((r) => r.caminho.startsWith('/public/'));
 }
-const COM_LOGIN = /^\/public\/(funil|robos|disparos|agente|assistente|aprendizados|testar-ia)(\/|$)/;
+const COM_LOGIN = /^\/public\/(funil|robos|disparos|tarefas|agente|assistente|aprendizados|testar-ia)(\/|$)/;
 /** O resto das rotas públicas: autorizadas por código/segredo da unidade, token do widget ou HMAC — nenhuma usa o login do Chatwoot nem aceita `conta`. */
 const SEM_LOGIN = /^\/public\/(pausa|central|evolution|chatwoot\/evento|widget|alta|ia|whatsapp)(\/|$)/;
 
@@ -355,8 +355,16 @@ test('SEM CREDENCIAL VÁLIDA, conta que existe (2) e conta que não existe (99) 
     ['login que o Chatwoot recusa', (i) => { (i.headers as Record<string, string>)['X-CW-Token'] = 'tok-ruim'; }],
   ];
   const diferentes: string[] = [];
+  // O servidor limita as conferências de login NOVAS a 120 por minuto (global). Cada rota nova com login gasta 4 delas neste teste: a cada 20 rotas o relógio
+  // dele avança 61 s (só a leitura de `Date.now`), para o teste não depender de quantas rotas existem nem de quanto ele demora.
+  const relogioReal = Date.now.bind(Date);
+  try {
+  let avanco = 0;
+  mock.method(Date, 'now', () => relogioReal() + avanco);
+  let rotasVistas = 0;
   for (const [nome, ajusta] of casos) {
     for (const r of comLogin()) {
+      if (++rotasVistas % 20 === 0) avanco += 61_000;
       const lido: Array<[number, string]> = [];
       for (const conta of ['conta=2', 'conta=99']) {
         const { url, init } = montar(r, conta);
@@ -366,6 +374,9 @@ test('SEM CREDENCIAL VÁLIDA, conta que existe (2) e conta que não existe (99) 
       }
       if (lido[0]![0] !== lido[1]![0] || lido[0]![1] !== lido[1]![1]) diferentes.push(`${nome}: ${r.metodo} ${r.caminho}: ${lido[0]![0]} ${lido[0]![1].slice(0, 60)} × ${lido[1]![0]} ${lido[1]![1].slice(0, 60)}`);
     }
+  }
+  } finally {
+    mock.restoreAll(); // o relógio volta ao normal mesmo se uma chamada acima falhar
   }
   assert.deepEqual(diferentes, []);
 });

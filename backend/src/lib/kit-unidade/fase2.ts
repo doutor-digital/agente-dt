@@ -381,14 +381,30 @@ export async function passoWebhook(x: PortasExternas, e: EstadoDaExecucao): Prom
   return ['webhook da conta criado (a chave é derivada do token DESTA conta; endereço não impresso)', ...(antigos.length ? [`há ${antigos.length} webhook(s) antigo(s) para o agente com outra chave: apague pela tela do Chatwoot`] : [])];
 }
 
+/**
+ * As abas (Dashboard Apps) de uma conta: «Funil» e «Tarefas» (a tela de tarefas, que dentro da conversa recebe a conversa aberta). A aba usa o LOGIN da
+ * pessoa (o menu do Chatwoot entrega a sessão): a chave do token da conta NÃO vai na URL, que qualquer agente vê no iframe. UMA definição só: o kit e o
+ * script `registrar-tarefas` (contas que já existem) usam esta.
+ */
+export const abasDaConta = (urlDoAgente: string, contaId: number): Array<{ title: string; content: Array<{ type: 'frame'; url: string }> }> => [
+  { title: 'Funil', content: [{ type: 'frame', url: `${urlDoAgente}/funil?conta=${contaId}` }] },
+  { title: 'Tarefas', content: [{ type: 'frame', url: `${urlDoAgente}/funil/tarefas?conta=${contaId}` }] },
+];
+
 export async function passoDashboardApp(x: PortasExternas, e: EstadoDaExecucao): Promise<string[]> {
   const conta = daConta(e);
   const contaId = precisa(e.contaId, 'sem o id da conta');
   const existentes = listaDaResposta(await conta.get('dashboard_apps'));
-  if (existentes.some((a) => String(a.title) === 'Funil')) return ['aba «Funil» já existia'];
-  // a aba usa o LOGIN da pessoa (o menu do Chatwoot entrega a sessão): a chave do token da conta NÃO vai na URL, que qualquer agente vê no iframe
-  await postar(e, conta, 'dashboard_apps', { title: 'Funil', content: [{ type: 'frame', url: `${x.urlDoAgente}/funil?conta=${contaId}` }] });
-  return [`aba «Funil» criada nesta conta, apontando para ${x.urlDoAgente}/funil?conta=${contaId}`];
+  const notas: string[] = [];
+  for (const aba of abasDaConta(x.urlDoAgente, contaId)) {
+    if (existentes.some((a) => String(a.title) === aba.title)) {
+      notas.push(`aba «${aba.title}» já existia`);
+      continue;
+    }
+    await postar(e, conta, 'dashboard_apps', aba);
+    notas.push(`aba «${aba.title}» criada nesta conta, apontando para ${aba.content[0]!.url}`);
+  }
+  return notas;
 }
 
 export async function passoRobo(q: Questionario, x: PortasExternas, e: EstadoDaExecucao, ligar: boolean): Promise<string[]> {
