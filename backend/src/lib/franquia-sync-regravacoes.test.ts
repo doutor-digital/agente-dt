@@ -314,3 +314,40 @@ test('cartão APAGADO: o cache que aponta para ele não vale — o paciente é p
 });
 
 const unidadeCom = (id: string) => ({ ...(unidade() as unknown as Record<string, unknown>), id }) as unknown as Unit;
+
+test('cartão APAGADO no VÍNCULO do banco (Timbó: idClient 370754 → 4843998 apagado, vivo 4248414): por idClient e pela agenda', async () => {
+  const { marcarCartaoApagado } = await import('./franquia-sync-worker.js');
+  const { prisma } = await import('./prisma.js');
+  type Vinculo = { unitId: string; kommoLeadId: number; spineIdClient: number | null; spineIdSchedule: number | null };
+  type Filtro = { unitId: string; kommoLeadId?: { lt?: number; notIn?: number[] }; spineIdClient?: number; spineIdSchedule?: { in: number[] } };
+  const vinculos: Vinculo[] = [];
+  // o falso respeita o filtro como o Postgres: `lt` (corte do Chatwoot) e `notIn` (os apagados)
+  const casa = (v: Vinculo, w: Filtro) =>
+    v.unitId === w.unitId &&
+    (w.kommoLeadId?.lt === undefined || v.kommoLeadId < w.kommoLeadId.lt) &&
+    !(w.kommoLeadId?.notIn ?? []).includes(v.kommoLeadId) &&
+    (w.spineIdClient === undefined || v.spineIdClient === w.spineIdClient) &&
+    (w.spineIdSchedule === undefined || (v.spineIdSchedule !== null && w.spineIdSchedule.in.includes(v.spineIdSchedule)));
+  const antes = Object.getOwnPropertyDescriptor(prisma, 'spineLeadLink');
+  Object.defineProperty(prisma, 'spineLeadLink', {
+    value: { findFirst: async ({ where }: { where: Filtro }) => vinculos.find((v) => casa(v, where)) ?? null },
+    configurable: true,
+  });
+  try {
+    fichas.set(370754, { ...FICHA, idClient: 370754, name: 'INGRIDE TESTE', whatsapp: '+5547999990000' });
+    clientesNaBusca.splice(0, clientesNaBusca.length, { idClient: 370754, name: 'INGRIDE TESTE', whatsapp: '+5547999990000' });
+    const { kommo } = kommoFalso({ listLeadsPorTelefone: async () => [{ id: 4248414, updated_at: 1 }] });
+    for (const caminho of ['idClient', 'agenda'] as const) {
+      const unit = unidade();
+      vinculos.splice(0, vinculos.length, { unitId: unit.id, kommoLeadId: 4843998, spineIdClient: 370754, spineIdSchedule: 3870774 });
+      const pedir = () =>
+        _interno.resolverPaciente(unit, kommo, 'INGRIDE TESTE', caminho === 'idClient' ? 370754 : null, caminho === 'agenda' ? [3870774] : [], new Map());
+      assert.equal((await pedir()).leadId, 4843998, `${caminho}: antes de saber que foi apagado, o vínculo manda`);
+      marcarCartaoApagado(unit.id, 4843998);
+      assert.equal((await pedir()).leadId, 4248414, `${caminho}: o vínculo do apagado deixa de valer e o telefone acha o cartão vivo`);
+    }
+  } finally {
+    if (antes) Object.defineProperty(prisma, 'spineLeadLink', antes);
+    else delete (prisma as unknown as Record<string, unknown>).spineLeadLink;
+  }
+});
