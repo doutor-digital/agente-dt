@@ -416,7 +416,7 @@ test('resultado: câmbio fora do ar → custo só em US$, com a nota, e `fontes`
   assert.match(r.fontes.notas.custo!, /câmbio indisponível agora; custo em US\$ apenas/);
   _limparCache();
   const comCambio = (await lerResultado('o1', leituras({ cambio: async () => 5 })))!;
-  assert.equal(comCambio.fontes.cambio, 'awesomeapi');
+  assert.equal(comCambio.fontes.cambio, 'cotacao-do-dia', 'não nomeia uma fonte só: são três, em ordem (lib/cotacao-dolar.ts)');
   assert.doesNotMatch(comCambio.fontes.notas.custo ?? '', /câmbio/);
 });
 
