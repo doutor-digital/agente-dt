@@ -68,7 +68,7 @@ test('a página usa as rotas dos Disparos e as rotas existem no roteador e no se
 
 test('a página mostra o modo seco, o que o aprovar faz em seco e a prévia por pessoa; aprovar sem poder fica desligado', () => {
   const js = scriptDaPagina();
-  assert.ok(js.includes('MODO SECO') && js.includes('NÃO manda mensagem nenhuma'));
+  assert.ok(js.includes('Modo seco:') && js.includes('nada é enviado. O sistema só anota quem receberia.'));
   assert.ok(js.includes('Prévia para') && js.includes('Primeiro nome do contato'));
   assert.ok(js.includes('ba.disabled = !(o.podeAprovar && o.conferencia && o.conferencia.ok)'));
   assert.ok(js.includes('liberar()'), 'o botão de aprovar volta a depender da confirmação do custo');
@@ -108,6 +108,7 @@ let recusar: RegExp | null = null;
 const fetchReal = globalThis.fetch;
 const MODELO_OK = { name: 'parau_reativacao', language: 'pt_BR', status: 'APPROVED', category: 'MARKETING', components: [{ type: 'BODY', text: 'Oi {{1}}, tudo bem?' }] };
 
+let modelosExtra: unknown[] = [];
 function chatwootDeMentira() {
   return (async (url: string, o: { method?: string; headers?: Record<string, string>; body?: string } = {}) => {
     const u = new URL(String(url));
@@ -123,7 +124,7 @@ function chatwootDeMentira() {
     if (/\/inboxes$/.test(u.pathname)) {
       return resp(200, { payload: conta === '2' ? [{ id: 6, name: 'API da demonstração', channel_type: 'Channel::Api' }] : [{ id: 3, name: 'WhatsApp Parauapebas', channel_type: 'Channel::Whatsapp', provider: 'whatsapp_cloud' }, { id: 2, name: 'Celular', channel_type: 'Channel::Api' }] });
     }
-    if (/\/inboxes\/3\/message_templates$/.test(u.pathname)) return resp(200, { payload: [MODELO_OK, { ...MODELO_OK, name: 'parau_pausado', status: 'PAUSED' }, { ...MODELO_OK, name: 'parau_imagem', components: [{ type: 'HEADER', format: 'IMAGE' }, { type: 'BODY', text: 'Oi' }] }] });
+    if (/\/inboxes\/3\/message_templates$/.test(u.pathname)) return resp(200, { payload: [MODELO_OK, { ...MODELO_OK, name: 'parau_pausado', status: 'PAUSED' }, { ...MODELO_OK, name: 'parau_imagem', components: [{ type: 'HEADER', format: 'IMAGE' }, { type: 'BODY', text: 'Oi' }] }, ...modelosExtra] });
     if (/\/labels$/.test(u.pathname)) return resp(200, { payload: [{ title: 'lead-frio' }, { title: 'sem-follow-up' }] });
     if (/\/custom_attribute_definitions$/.test(u.pathname)) return resp(200, [{ attribute_key: 'etapa', attribute_display_name: 'Etapa', attribute_values: ['Perdido', 'Frio'] }]);
     if (/\/conversations$/.test(u.pathname)) return resp(200, { data: { payload: [], meta: {} } });
@@ -177,6 +178,7 @@ function preparar(opcoes: { gerenteAprova?: boolean; onda?: Record<string, unkno
   falso('disparoDestinatario', { groupBy: async () => [], findMany: async () => [] });
 }
 afterEach(() => {
+  modelosExtra = [];
   travar = null;
   recusar = null;
   mock.restoreAll();
@@ -505,11 +507,11 @@ test('relatório por campanha mostra o GASTO estimado (enviadas × preço da cat
 
 test('a página tem o campo do máximo (padrão 50, obrigatório), o cartão de custo e ritmo, a confirmação do custo desconhecido e o gasto no relatório', () => {
   const js = scriptDaPagina();
-  assert.ok(js.includes("mx.value = '50'") && js.includes('Máximo de pessoas neste disparo') && js.includes('maximo: maximo'));
+  assert.ok(js.includes("mx.value = '50'") && js.includes('Máximo de pessoas') && js.includes('maximo: maximo'));
   assert.ok(js.includes('Custo e ritmo') && js.includes('Teto de gasto'));
-  assert.ok(js.includes('confirmarCustoDesconhecido') && js.includes('Entendo que não há histórico de custo da Meta') && js.includes('preço de reserva (sem histórico da Meta)'));
+  assert.ok(js.includes('confirmarCustoDesconhecido') && js.includes('Estou ciente: não há histórico de custo da Meta') && js.includes('Sem histórico da Meta para este modelo'));
   assert.ok(js.includes('Gasto (estimado)') && js.includes('gasto até agora'));
-  assert.ok(js.includes('Categoria não informada pelo CRM: estimativa pelo preço de marketing') && js.includes('Entendo que o CRM não informou a categoria deste modelo'), 'categoria assumida: aviso e confirmação própria');
+  assert.ok(js.includes('O CRM não informou a categoria do modelo') && js.includes('Estou ciente: o CRM não informou a categoria deste modelo'), 'categoria assumida: aviso e confirmação própria');
   assert.ok(!/innerHTML/.test(js));
 });
 
@@ -615,4 +617,51 @@ test('número DIVIDIDO com outra unidade sem histórico: a tela da onda e o rela
   assert.equal(rel.status, 200);
   const c = rel.corpo.campanhas[0];
   assert.deepEqual([c.gastoEstimadoBrl, c.gastoComReserva, c.categoriaAssumida], [40, true, true], '20 enviadas × R$ 2,00 do número; rotulado reserva; categoria não informada pelo CRM');
+});
+
+// ── o celular do disparo montado: cabeçalho, rodapé e botões do modelo ──────────────────────────────────────────────
+
+const MODELO_COMPLETO = { ...MODELO_OK, name: 'parau_completo', components: [{ type: 'HEADER', format: 'TEXT', text: 'Vamos cuidar da sua coluna?' }, { type: 'BODY', text: 'Oi {{1}}, tudo bem?' }, { type: 'FOOTER', text: 'Responda SAIR para não receber mais' }, { type: 'BUTTONS', buttons: [{ type: 'QUICK_REPLY', text: 'Quero agendar' }, { type: 'QUICK_REPLY', text: 'Agora não' }] }] };
+
+async function lerOnda(modelo: string) {
+  preparar({ onda: ondaDeCusto({ estado: 'montada', template: modelo, textoModelo: 'Oi {{1}}, tudo bem?' }) });
+  falso('whatsappCostDaily', { findMany: async () => LINHAS_DE_CUSTO });
+  falso('$queryRaw', (async () => []) as never);
+  return pedir('GET', `/public/disparos/ondas/ondaaaaaaa1?slug=${PARAU}`, 'tok-dd');
+}
+
+test('o disparo montado devolve cabeçalho, rodapé e botões do modelo (os mesmos da conferência, sem chamada nova ao CRM)', async () => {
+  modelosExtra = [MODELO_COMPLETO];
+  const r = await lerOnda('parau_completo');
+  assert.equal(r.status, 200);
+  assert.equal(r.corpo.conferencia.ok, true);
+  assert.deepEqual(r.corpo.conferencia, { ok: true }, 'a conferência não carrega o modelo');
+  assert.equal(r.corpo.modelo.cabecalho, 'Vamos cuidar da sua coluna?');
+  assert.equal(r.corpo.modelo.rodape, 'Responda SAIR para não receber mais');
+  assert.deepEqual(r.corpo.modelo.botoes, ['Quero agendar', 'Agora não']);
+  assert.equal(chamadas.filter((c) => /message_templates$/.test(c)).length, 1, 'os modelos são lidos uma vez só');
+});
+
+test('modelo sem cabeçalho, rodapé nem botões: os campos vêm vazios e o texto continua', async () => {
+  const r = await lerOnda('parau_reativacao');
+  assert.equal(r.status, 200);
+  assert.equal(r.corpo.modelo.texto, 'Oi {{1}}, tudo bem?');
+  assert.equal(r.corpo.modelo.cabecalho, null);
+  assert.equal(r.corpo.modelo.rodape, null);
+  assert.deepEqual(r.corpo.modelo.botoes, []);
+});
+
+test('conferência que falhou (CRM fora): a resposta traz só o texto do modelo, sem cabeçalho, rodapé nem botões', async () => {
+  modelosExtra = [MODELO_COMPLETO];
+  recusar = /message_templates$/;
+  const r = await lerOnda('parau_completo');
+  assert.equal(r.status, 200);
+  assert.equal(r.corpo.conferencia.ok, false);
+  assert.equal(r.corpo.modelo.texto, 'Oi {{1}}, tudo bem?');
+  for (const k of ['cabecalho', 'rodape', 'botoes']) assert.equal(k in r.corpo.modelo, false, k);
+});
+
+test('a página desenha o cabeçalho, o rodapé e os botões do disparo montado só quando o servidor manda', () => {
+  const js = scriptDaPagina();
+  assert.ok(js.includes("cabecalho: o.modelo.cabecalho || null") && js.includes("rodape: o.modelo.rodape || null") && js.includes("botoes: o.modelo.botoes || []"));
 });

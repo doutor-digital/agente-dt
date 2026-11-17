@@ -442,7 +442,7 @@ export async function disparosOndaHandler(req: Request, res: Response): Promise<
     const exemplos = linhas.slice(0, 3).map((p) => textoFinal(def.textoModelo, valoresDasVariaveis(fontes, { primeiroNome: p.nome, unidade: r.unit.name })));
     const resumo = (onda.resumo ?? {}) as { candidatos?: number; lidas?: number; truncada?: boolean; fora?: Record<string, number> };
     // o CRM confirma o modelo só enquanto dá para aprovar (uma leitura por abertura da tela, nunca em disparo que já saiu)
-    let conferencia: { ok: boolean; motivo?: string } | null = null;
+    let conferencia: Awaited<ReturnType<typeof conferirModeloDaOnda>> | { ok: false; motivo: string } | null = null;
     if (onda.estado === 'montada') {
       conferencia = onda.caixaChatwoot != null ? await conferirComTeto(r.ctx, onda.caixaChatwoot, { template: onda.template, idioma: onda.idioma, textoModelo: onda.textoModelo, variaveis: fontes, categoria: onda.categoriaModelo, categoriaAssumida: onda.categoriaAssumida }) : { ok: false, motivo: 'o disparo não tem caixa gravada' };
     }
@@ -468,7 +468,8 @@ export async function disparosOndaHandler(req: Request, res: Response): Promise<
       total: onda.total,
       impressao: onda.impressao,
       filtro: onda.etiqueta,
-      modelo: { nome: onda.template, idioma: onda.idioma, texto: onda.textoModelo, variaveis: fontes },
+      // cabeçalho, rodapé e botões vêm do mesmo modelo que a conferência acabou de ler; se ela falhou ou demorou, a tela mostra só o texto
+      modelo: { nome: onda.template, idioma: onda.idioma, texto: onda.textoModelo, variaveis: fontes, ...(conferencia?.ok && conferencia.modelo ? conferencia.modelo : {}) },
       exemplos,
       pausaMotivo: onda.pausaMotivo ? motivoSemNumero(onda.pausaMotivo) : null,
       pausaCausa: onda.pausaCausa,
@@ -491,7 +492,7 @@ export async function disparosOndaHandler(req: Request, res: Response): Promise<
         simuladoEm: p.simuladoEm,
       })),
       destinatariosMostrados: linhas.length,
-      conferencia,
+      conferencia: conferencia?.ok ? { ok: true } : conferencia,
       podeAprovar: quem.ok,
       motivoSemAprovar: quem.ok ? null : quem.motivo,
       freios: resumoDosFreios(r.unit, ajuste.tierDoNumero),
