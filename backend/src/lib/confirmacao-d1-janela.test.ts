@@ -34,3 +34,14 @@ test('podeSerRespostaD1: a janela da unidade no dia útil anterior (6 dias) acei
   const depois = new Date(enviada.getTime() + JANELA_RESPOSTA_DIA_UTIL_MS + 3600_000);
   assert.equal(podeSerRespostaD1(conv, 'Confirmado', depois, JANELA_RESPOSTA_DIA_UTIL_MS), false, 'passou de 6 dias');
 });
+
+test('respostaDentroDaJanelaLonga: só com a consulta de pé e no futuro (horário liberado pela equipe não recebe "Te esperamos")', async () => {
+  const { respostaDentroDaJanelaLonga } = await import('./confirmacao-d1.js');
+  const agora = '2026-11-23T07:00';
+  assert.equal(respostaDentroDaJanelaLonga({ estado: 'confirmada', quando: '2026-11-23T17:30' }, agora), true);
+  assert.equal(respostaDentroDaJanelaLonga({ estado: 'confirmada', quando: '2026-11-21T09:00' }, agora), false, 'já passou');
+  assert.equal(respostaDentroDaJanelaLonga({ estado: 'cancelada', quando: null }, agora), false, 'desmarcada: a equipe liberou');
+  assert.equal(respostaDentroDaJanelaLonga({ estado: 'cancelada', quando: '2026-11-23T17:30' }, agora), false);
+  assert.equal(respostaDentroDaJanelaLonga({ estado: 'nao_confirmada', quando: '2026-11-23T17:30' }, agora), false, 'franquia não confirmou o horário agora');
+  assert.equal(respostaDentroDaJanelaLonga(null, agora), false);
+});
