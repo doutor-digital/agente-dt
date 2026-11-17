@@ -35,6 +35,8 @@ const VALIDADE_MS = 30_000;
 /** `slug\u0000idDaAutomacao` -> estado gravado na tela. */
 let mapa = new Map<string, Estado>();
 let carregadoEm = 0;
+/** O banco já respondeu ao menos uma vez neste processo? Sem isso, "sem linha no mapa" não quer dizer "a tela nunca falou": pode ser o banco fora. */
+let leuOBanco = false;
 let carregando: Promise<void> | null = null;
 
 const chaveDoMapa = (slug: string, id: string) => `${slug}\u0000${id}`;
@@ -57,6 +59,7 @@ export async function recarregarAutomacoes(): Promise<void> {
       }
       mapa = novo;
       carregadoEm = Date.now();
+      leuOBanco = true;
     } catch (err) {
       logger.warn({ err: String(err) }, 'automações: falhei ao reler o banco — segue valendo o que já estava carregado');
     } finally {
@@ -90,6 +93,19 @@ export function estadoGravado(slug: string, id: string): Estado | null {
   // id no catálogo. Tratar como desligado é o lado seguro do erro.
   if (gravado === 'seco' && !automacaoPorId(id)?.temSeco) return 'desligado';
   return gravado;
+}
+
+/**
+ * Estado de um portão de SEGURANÇA (calar quem não pode receber a IA), que falha FECHADO quando o banco nunca respondeu: sem a linha
+ * da tela o estado cairia na variável de ambiente, e variável vazia = desligado = a IA responde todo mundo. `protegida` diz que a unidade
+ * PRECISA do portão (ex.: tem regra de cliente no servidor, ou está em piloto por número): nesse caso, com o banco ainda mudo, vale `ligado`.
+ * Depois que o banco respondeu uma vez, vale o que ele disse (o mapa velho segue valendo se uma releitura falhar) e, sem linha, o `.env`.
+ */
+export function estadoDoPortaoDeSeguranca(slug: string, id: string, raw: string | undefined, protegida: boolean): Estado {
+  const gravado = estadoGravado(slug, id);
+  if (gravado) return gravado;
+  if (protegida && !leuOBanco) return 'ligado';
+  return estadoDoAmbiente(slug, raw, id);
 }
 
 /**
@@ -193,4 +209,12 @@ export async function iniciarAutomacoes(): Promise<void> {
 export function _semearParaTeste(linhas: Array<{ slug: string; automacao: string; estado: Estado }>): void {
   mapa = new Map(linhas.map((l) => [chaveDoMapa(l.slug, l.automacao), l.estado]));
   carregadoEm = Date.now();
+  leuOBanco = true;
+}
+
+/** Só para teste: volta a "o banco nunca respondeu" (processo recém-subido com o banco fora). */
+export function _esquecerOBancoParaTeste(): void {
+  mapa = new Map();
+  carregadoEm = 0;
+  leuOBanco = false;
 }

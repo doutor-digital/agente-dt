@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { portaClienteDoEscritorio, notaClienteDoEscritorio, calarClienteEstado, type PortaDeps } from './cliente-do-escritorio.js';
-import { regraDeClienteDoAmbiente } from './disparo/conferencia.js';
+import { conferenciaPorRegraDeCliente, regraDeClienteDoAmbiente, type PortaDoKommo } from './disparo/conferencia.js';
+import { _esquecerOBancoParaTeste, _semearParaTeste } from './automacoes-estado.js';
 import type { SituacaoNaFranquia } from './disparo/regras.js';
 
 const unit = { id: 'u1', slug: 'magalhaes-advocacia' };
+const FONE = '(63) 99102-1043';
 const REGRA = regraDeClienteDoAmbiente('magalhaes-advocacia', {
   DISPARO_REGRA_CLIENTE: 'magalhaes-advocacia=14026239,13964971/108260519,13964971/142',
 } as NodeJS.ProcessEnv);
@@ -14,6 +16,7 @@ function deps(situacao: SituacaoNaFranquia | Error, estado: 'ligado' | 'seco' | 
   const d: PortaDeps = {
     estado,
     regra: REGRA,
+    telefone: async () => FONE,
     conferir: async () => {
       calls.conferiu += 1;
       if (situacao instanceof Error) throw situacao;
@@ -85,30 +88,136 @@ test('só no papel: decide que calaria, mas não escreve nada (o webhook só reg
   assert.equal(calls.marcou, 0);
 });
 
-test('lead de verdade (livre) e cartão sumido: a IA segue', async () => {
-  for (const s of ['livre', 'lead-inexistente'] as const) {
-    const { d } = deps(s);
-    const r = await portaClienteDoEscritorio({ unit, leadId: 1, humanMessage: 'oi' }, d);
-    assert.equal(r?.calar, false, s);
+test('só `livre` deixa a IA seguir', async () => {
+  const { d } = deps('livre');
+  const r = await portaClienteDoEscritorio({ unit, leadId: 1, humanMessage: 'oi' }, d);
+  assert.equal(r?.calar, false);
+});
+
+test('FALHA FECHADA: Kommo indisponível (429), erro na leitura e cartão sumido CALAM, sem nota', async () => {
+  for (const s of ['indisponivel', 'lead-inexistente'] as const) {
+    const a = deps(s);
+    const r = await portaClienteDoEscritorio({ unit, leadId: 1, humanMessage: 'oi' }, a.d);
+    assert.equal(r?.calar, true, s);
+    assert.equal(r?.anotou, false, s);
+    assert.equal(a.calls.notas.length, 0, s);
+  }
+  const b = deps(new Error('429'));
+  const r = await portaClienteDoEscritorio({ unit, leadId: 1, humanMessage: 'oi' }, b.d);
+  assert.equal(r?.calar, true);
+  assert.equal(r?.situacao, 'falhou');
+  assert.equal(b.calls.notas.length, 0);
+});
+
+test('FALHA FECHADA: chave ligada sem regra da unidade CALA (e diz que faltou a regra); nem lê o Kommo', async () => {
+  const { d, calls } = deps('livre');
+  d.regra = null;
+  const r = await portaClienteDoEscritorio({ unit, leadId: 1, humanMessage: 'oi' }, d);
+  assert.equal(r?.calar, true);
+  assert.equal(r?.situacao, 'sem-regra');
+  assert.equal(calls.conferiu, 0);
+});
+
+test('FALHA FECHADA: telefone do cartão ilegível ou erro ao lê-lo CALA (a conferência recebe telefone vazio e não prova nada)', async () => {
+  const recebido: string[] = [];
+  const { d } = deps('livre');
+  d.telefone = async () => 'abc';
+  d.conferir = async (p) => (recebido.push(p.telefone), p.telefone ? 'livre' : 'indisponivel');
+  assert.equal((await portaClienteDoEscritorio({ unit, leadId: 1, humanMessage: 'oi' }, d))?.calar, true);
+  assert.deepEqual(recebido, ['']);
+  d.telefone = async () => {
+    throw new Error('429');
+  };
+  assert.equal((await portaClienteDoEscritorio({ unit, leadId: 1, humanMessage: 'oi' }, d))?.calar, true);
+});
+
+test('a conferência recebe o telefone do cartão normalizado (13 dígitos), não o texto do Kommo', async () => {
+  const recebido: string[] = [];
+  const { d } = deps('livre');
+  d.conferir = async (p) => (recebido.push(p.telefone), 'livre');
+  await portaClienteDoEscritorio({ unit, leadId: 1, humanMessage: 'oi' }, d);
+  assert.deepEqual(recebido, ['5563991021043']);
+});
+
+// ─── a conferência de verdade (a do disparo, com #322) contra um Kommo falso ──────────────────────────────────────────────────
+const JURIDICO = 14026239;
+const COMERCIAL = 13964971;
+const LEAD_NOVO = 108260499;
+
+function kommoFalso(opcoes: { contatosDoMundo: Array<{ id: number; telefones: string[]; leadIds: number[] }>; falha?: 'getLead' | 'lista' | 'busca' }): PortaDoKommo {
+  const cartoes: Record<number, { pipeline_id: number; status_id: number }> = {
+    10: { pipeline_id: COMERCIAL, status_id: LEAD_NOVO }, // o cartão novo, criado pelo WhatsApp
+    5: { pipeline_id: JURIDICO, status_id: 108260623 }, // o cartão antigo do cliente, em outro contato
+  };
+  return {
+    getLead: async (id) => {
+      if (opcoes.falha === 'getLead') throw new Error('kommo 429');
+      return { id, ...cartoes[id], _embedded: { contacts: [{ id: 2 }] } };
+    },
+    leadsDoContato: async (c) => (c === 2 ? [10] : []),
+    contatosPorTelefone: async () => {
+      if (opcoes.falha === 'busca') throw new Error('kommo 429');
+      return opcoes.contatosDoMundo;
+    },
+    listLeadsPorIds: async (ids) => {
+      if (opcoes.falha === 'lista') throw new Error('kommo 429');
+      return ids.filter((i) => cartoes[i]).map((i) => ({ id: i, ...cartoes[i] }));
+    },
+  };
+}
+
+const COM_O_NOVO = { id: 2, telefones: ['+55 63 99102-1043'], leadIds: [10] };
+const comKommo = (k: PortaDoKommo) => ({ ...deps('livre').d, conferir: conferenciaPorRegraDeCliente(unit, REGRA!, k) });
+
+test('CONTATO DUPLICADO com o mesmo telefone: o antigo tem cartão no Jurídico, o novo (do WhatsApp) não — a Ana CALA e deixa a nota', async () => {
+  const d = comKommo(kommoFalso({ contatosDoMundo: [COM_O_NOVO, { id: 1, telefones: ['63 99102-1043'], leadIds: [5] }] }));
+  const notas: string[] = [];
+  d.anotar = async (_i, t) => (notas.push(t), { id: 1 });
+  const r = await portaClienteDoEscritorio({ unit, leadId: 10, humanMessage: 'e o meu processo?' }, d);
+  assert.equal(r?.situacao, 'ja-cliente');
+  assert.equal(r?.calar, true);
+  assert.equal(notas.length, 1);
+});
+
+test('contato duplicado com telefone escrito diferente (dígito a mais, hífen invisível U+00AD): também CALA', async () => {
+  for (const tel of ['63 99102-1043 1', '63 99102\u00AD-1043', '(63) 9 9102-1043']) {
+    const d = comKommo(kommoFalso({ contatosDoMundo: [COM_O_NOVO, { id: 1, telefones: [tel], leadIds: [5] }] }));
+    const r = await portaClienteDoEscritorio({ unit, leadId: 10, humanMessage: 'oi' }, d);
+    assert.equal(r?.calar, true, tel);
   }
 });
 
-test('Kommo indisponível ou erro na leitura: a IA segue (uma falha não cala o atendimento) e a porta nunca lança', async () => {
-  const a = deps('indisponivel');
-  assert.equal((await portaClienteDoEscritorio({ unit, leadId: 1, humanMessage: 'oi' }, a.d))?.calar, false);
-  const b = deps(new Error('boom'));
-  const r = await portaClienteDoEscritorio({ unit, leadId: 1, humanMessage: 'oi' }, b.d);
+test('lead de verdade: sem outro contato com o telefone, a conferência prova `livre` e a Ana SEGUE', async () => {
+  const r = await portaClienteDoEscritorio({ unit, leadId: 10, humanMessage: 'oi' }, comKommo(kommoFalso({ contatosDoMundo: [COM_O_NOVO] })));
+  assert.equal(r?.situacao, 'livre');
   assert.equal(r?.calar, false);
-  assert.equal(r?.situacao, 'falhou');
 });
 
-test('chave ligada sem regra da unidade: não decide, a IA segue, e diz que faltou a regra', async () => {
-  const { d, calls } = deps('ja-cliente');
-  d.regra = null;
-  const r = await portaClienteDoEscritorio({ unit, leadId: 1, humanMessage: 'oi' }, d);
-  assert.equal(r?.calar, false);
-  assert.equal(r?.situacao, 'sem-regra');
-  assert.equal(calls.conferiu, 0);
+test('429 do Kommo em QUALQUER ponto da conferência (cartão, busca por telefone, leitura dos outros cartões): CALA', async () => {
+  for (const falha of ['getLead', 'busca', 'lista'] as const) {
+    const contatosDoMundo = [COM_O_NOVO, { id: 1, telefones: ['63 99102-1043'], leadIds: [5] }];
+    const r = await portaClienteDoEscritorio({ unit, leadId: 10, humanMessage: 'oi' }, comKommo(kommoFalso({ contatosDoMundo, falha })));
+    assert.equal(r?.calar, true, falha);
+    assert.equal(r?.anotou, false, falha);
+  }
+});
+
+test('BANCO FORA: a chave não nasce desligada para quem tem regra de cliente no servidor (falha fechada); depois que o banco responde, vale o que ele disse', () => {
+  const antes = process.env.DISPARO_REGRA_CLIENTE;
+  process.env.DISPARO_REGRA_CLIENTE = 'magalhaes-advocacia=14026239';
+  try {
+    _esquecerOBancoParaTeste();
+    assert.equal(calarClienteEstado('magalhaes-advocacia', undefined), 'ligado'); // banco mudo + regra no servidor
+    assert.equal(calarClienteEstado('doutor-hernia-salto', undefined), 'desligado'); // sem regra: nada muda nas outras
+    _semearParaTeste([]); // o banco respondeu e a tela nunca falou
+    assert.equal(calarClienteEstado('magalhaes-advocacia', undefined), 'desligado');
+    _semearParaTeste([{ slug: 'magalhaes-advocacia', automacao: 'calar-cliente-do-escritorio', estado: 'seco' }]);
+    assert.equal(calarClienteEstado('magalhaes-advocacia', undefined), 'seco');
+  } finally {
+    if (antes === undefined) delete process.env.DISPARO_REGRA_CLIENTE;
+    else process.env.DISPARO_REGRA_CLIENTE = antes;
+    _esquecerOBancoParaTeste();
+  }
 });
 
 test('falha ao deixar a nota não destrava a IA: segue calada', async () => {

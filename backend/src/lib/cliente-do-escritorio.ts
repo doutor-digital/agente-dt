@@ -3,18 +3,22 @@
  *
  * A trava por etapa (`kommo_allowed_status_ids`) olha só o CARTÃO que recebeu a mensagem. Cliente que escreve e cai num cartão
  * novo em "Incoming leads"/"1 - Lead novo" do Comercial passaria por ela — e levaria a conversa de captação de quem já assinou.
- * Esta porta faz a MESMA pergunta do disparo (`DISPARO_REGRA_CLIENTE`, #318): a PESSOA — todos os cartões dos contatos do lead —
- * está num funil ou numa etapa de cliente? Um cartão basta.
+ * Esta porta faz a MESMA pergunta do disparo (`DISPARO_REGRA_CLIENTE`, #318/#322): a PESSOA — todos os cartões dos contatos do lead
+ * E os cartões de outros contatos com o MESMO TELEFONE (contato duplicado criado pelo WhatsApp) — está num funil ou numa etapa de
+ * cliente? Um cartão basta. O telefone é comparado pela `mesmoNumero` do disparo (dígito a mais, U+00AD e invisíveis), não por outra função.
  *
- * Chave `calar-cliente-do-escritorio` (por unidade; `seco` = decide e registra, não cala). Desligada, nem lê o cartão.
- * Lado do erro: leitura que falha, regra ausente ou cartão que sumiu = a IA segue como sempre (o mesmo critério das outras portas
- * do webhook: uma falha do Kommo não pode calar o atendimento inteiro). O `ligar-ia-magalhaes.sh` só liga a chave se a regra existe.
- * Quando cala, deixa UMA nota por dia no cartão e a equipe decide.
+ * FALHA FECHADA: a IA só segue quando a conferência PROVA `livre`. Tudo o mais cala, sem nota: cliente (`ja-cliente`, com UMA nota por
+ * dia no cartão), Kommo que falha (429, rede), busca incompleta, telefone ilegível (`indisponivel`), cartão que sumiu e regra
+ * ausente na unidade. Atender cliente como se fosse lead é o erro caro; deixar de responder um lead numa falha do Kommo é barato (a
+ * equipe vê no histórico da execução e o lead escreve de novo).
+ *
+ * Chave `calar-cliente-do-escritorio` (por unidade; `seco` = decide e registra, não cala). Desligada, nem lê o cartão. Com a regra de
+ * cliente da unidade no servidor, a chave também falha fechada quando o BANCO está fora (ver `estadoDoPortaoDeSeguranca`).
  */
 import type { Unit } from '@prisma/client';
 import { logger } from './logger.js';
 import { avisoRecente, marcarAviso } from './aviso-dedupe.js';
-import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
+import { estadoDoPortaoDeSeguranca, type Estado } from './automacoes-estado.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import {
   conferenciaPorRegraDeCliente,
@@ -23,14 +27,15 @@ import {
   type RegraDeCliente,
 } from './disparo/conferencia.js';
 import type { PessoaParaConferir } from './disparo/franquia.js';
-import type { SituacaoNaFranquia } from './disparo/regras.js';
+import { telefoneWhatsapp, type SituacaoNaFranquia } from './disparo/regras.js';
+import { telefoneDoCartao } from './ia-so-numeros-de-teste.js';
 
 export const ID_CALAR_CLIENTE = 'calar-cliente-do-escritorio';
 /** Também é a `rule_key` do dedupe de 1 nota por dia por lead. */
 export const REGRA_NOTA_CLIENTE = 'cliente-do-escritorio';
 
 export function calarClienteEstado(slug: string, raw: string | undefined = process.env.CALAR_CLIENTE_ESCRITORIO_SLUGS): Estado {
-  return estadoDaAutomacao(slug, ID_CALAR_CLIENTE, raw);
+  return estadoDoPortaoDeSeguranca(slug, ID_CALAR_CLIENTE, raw, regraDeClienteDoAmbiente(slug) !== null);
 }
 
 export function notaClienteDoEscritorio(mensagem: string): string {
@@ -38,17 +43,21 @@ export function notaClienteDoEscritorio(mensagem: string): string {
   return `🤫 Quem escreveu já é CLIENTE do escritório (tem cartão em funil/etapa de cliente) — a Ana não respondeu; a equipe decide.${trecho ? ` Disse: "${trecho}${mensagem.trim().length > 140 ? '…' : ''}"` : ''}`;
 }
 
+export type SituacaoDaPorta = SituacaoNaFranquia | 'sem-regra' | 'falhou';
+
 export interface ResultadoClienteDoEscritorio {
   estado: Exclude<Estado, 'desligado'>;
+  /** true = a IA NÃO responde (qualquer coisa que não seja `livre`) */
   calar: boolean;
-  situacao: SituacaoNaFranquia | 'sem-regra' | 'falhou';
-  /** a nota foi deixada agora (só no estado ligado, 1x/dia por lead) */
+  situacao: SituacaoDaPorta;
+  /** a nota foi deixada agora (só para `ja-cliente`, no estado ligado, 1x/dia por lead) */
   anotou: boolean;
 }
 
 export interface PortaDeps {
   estado?: Estado;
   regra?: RegraDeCliente | null;
+  telefone?: (args: { unit: Unit; leadId: number; contactId: string | null }) => Promise<string | null>;
   conferir?: (p: PessoaParaConferir) => Promise<SituacaoNaFranquia>;
   jaAvisou?: (leadId: number) => Promise<boolean>;
   marcou?: (leadId: number) => Promise<void>;
@@ -57,7 +66,7 @@ export interface PortaDeps {
 
 /** `null` = chave desligada: a IA segue como sempre. Nunca lança. */
 export async function portaClienteDoEscritorio(
-  args: { unit: Pick<Unit, 'id' | 'slug'> & Partial<Unit>; leadId: number; humanMessage: string },
+  args: { unit: Pick<Unit, 'id' | 'slug'> & Partial<Unit>; leadId: number; contactId?: string | null; humanMessage: string },
   deps: PortaDeps = {},
 ): Promise<ResultadoClienteDoEscritorio | null> {
   const { unit, leadId, humanMessage } = args;
@@ -66,14 +75,16 @@ export async function portaClienteDoEscritorio(
   try {
     const regra = deps.regra !== undefined ? deps.regra : regraDeClienteDoAmbiente(unit.slug);
     if (!regra) {
-      logger.warn({ unit: unit.slug, leadId }, 'cliente-do-escritorio: chave ligada mas DISPARO_REGRA_CLIENTE não tem regra desta unidade — a IA segue');
-      return { estado, calar: false, situacao: 'sem-regra', anotou: false };
+      logger.warn({ unit: unit.slug, leadId }, 'cliente-do-escritorio: chave ligada mas DISPARO_REGRA_CLIENTE não tem regra desta unidade — a IA fica CALADA (falha fechada)');
+      return { estado, calar: true, situacao: 'sem-regra', anotou: false };
     }
+    const lerTelefone = deps.telefone ?? telefoneDoCartao;
+    const telefone = telefoneWhatsapp(await lerTelefone({ unit: unit as Unit, leadId, contactId: args.contactId ?? null })) ?? '';
     const conferir = deps.conferir ?? conferenciaPorRegraDeCliente(unit, regra, portaDoKommo(unit as Unit));
-    const situacao = await conferir({ leadId, nomeCompleto: '', telefone: '' });
-    const calar = situacao === 'ja-cliente';
+    const situacao = await conferir({ leadId, nomeCompleto: '', telefone });
+    const calar = situacao !== 'livre';
     let anotou = false;
-    if (calar && estado === 'ligado') {
+    if (situacao === 'ja-cliente' && estado === 'ligado') {
       const jaAvisou = deps.jaAvisou ?? ((id: number) => avisoRecente(unit.id, id, REGRA_NOTA_CLIENTE));
       if (!(await jaAvisou(leadId))) {
         const anotar = deps.anotar ?? ((id: number, texto: string) => createKommoClient(unit as Unit).addLeadNote(id, texto));
@@ -89,7 +100,7 @@ export async function portaClienteDoEscritorio(
     }
     return { estado, calar, situacao, anotou };
   } catch (err) {
-    logger.warn({ err: String(err), unit: unit.slug, leadId }, 'cliente-do-escritorio: porta falhou — a IA responde como sempre');
-    return { estado, calar: false, situacao: 'falhou', anotou: false };
+    logger.warn({ err: String(err), unit: unit.slug, leadId }, 'cliente-do-escritorio: porta falhou — a IA fica CALADA (falha fechada)');
+    return { estado, calar: true, situacao: 'falhou', anotou: false };
   }
 }

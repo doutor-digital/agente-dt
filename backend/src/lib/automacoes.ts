@@ -789,9 +789,9 @@ export const AUTOMACOES: readonly Automacao[] = [
     chave: 'IA_SO_NUMEROS_DE_TESTE_SLUGS',
     nome: 'IA em piloto: só responde os números de teste',
     oQueFaz:
-      'Com a chave ligada, a IA da unidade só responde telefone que esteja em DISPARO_LISTA_DE_TESTE (a mesma lista do disparo): o webhook do Kommo pode estar ligado sem a IA ir ao ar para todo mundo. Quem está fora da lista não recebe resposta nem nota. Para ir ao ar para todos: desligue esta chave (vale em ~30 s, sem reiniciar) ou ponha slug=* na lista.',
+      'Com a chave ligada, a IA da unidade só responde telefone que esteja em IA_NUMEROS_DE_TESTE (lista PRÓPRIA, slug=telefone,telefone): o webhook do Kommo pode estar ligado sem a IA ir ao ar para todo mundo. Quem está fora da lista não recebe resposta nem nota, e a conferência vem antes de Whisper, visão e mensagem de fora do horário. Para ir ao ar para todos: desligue esta chave (vale em ~30 s, sem reiniciar). Abrir o disparo (slug=* em DISPARO_LISTA_DE_TESTE) NÃO abre a IA, e slug=* na lista do piloto também não.',
     pegadinha:
-      'Unidade sem entrada em DISPARO_LISTA_DE_TESTE = NINGUÉM é respondido (mesma regra do disparo) — e a lista é variável do servidor, mudar exige reiniciar. Telefone que não dá para ler no cartão também fica sem resposta. Vale só para mensagem de chat (turno aberto pela Ponte passa). Em "só no papel" registra no histórico da execução quem ficaria sem resposta, mas responde.',
+      'Unidade sem entrada em IA_NUMEROS_DE_TESTE = NINGUÉM é respondido — e a lista é variável do servidor, mudar exige reiniciar. Falha fechada: se o banco nunca respondeu neste processo, a chave vale ligada para a unidade que tem entrada na lista. Telefone que não dá para ler no cartão também fica sem resposta. Vale só para mensagem de chat (turno aberto pela Ponte passa). Em "só no papel" registra no histórico da execução quem ficaria sem resposta, mas responde.',
     risco: 'comportamento',
     temSeco: true,
     quandoVazio: 'desligado',
@@ -802,9 +802,9 @@ export const AUTOMACOES: readonly Automacao[] = [
     chave: 'CALAR_CLIENTE_ESCRITORIO_SLUGS',
     nome: 'IA calada para quem já é cliente do escritório',
     oQueFaz:
-      'Antes de responder, confere se a PESSOA (todos os cartões dos contatos do lead) já é cliente: tem cartão num funil ou etapa de cliente, pela mesma regra do disparo (DISPARO_REGRA_CLIENTE). Se for, a IA não responde e deixa uma nota no cartão, 1 vez por dia.',
+      'Antes de responder, confere se a PESSOA (todos os cartões dos contatos do lead) já é cliente: tem cartão num funil ou etapa de cliente, pela mesma regra do disparo (DISPARO_REGRA_CLIENTE). Também confere os cartões de OUTROS contatos com o mesmo telefone (contato duplicado criado pelo WhatsApp). Se for cliente, a IA não responde e deixa uma nota no cartão, 1 vez por dia.',
     pegadinha:
-      'Precisa da regra DISPARO_REGRA_CLIENTE da unidade no servidor; sem ela a porta não decide e a IA segue (o ligar-ia-magalhaes.sh só liga com a regra). Leitura do Kommo que falha = a IA responde como sempre. Complementa, não substitui, a lista de etapas permitidas. Em "só no papel" decide e registra no histórico da execução, sem calar e sem nota.',
+      'Precisa da regra DISPARO_REGRA_CLIENTE da unidade no servidor. FALHA FECHADA: só segue quem a conferência prova que NÃO é cliente; Kommo que falha (429, rede), telefone ilegível, busca incompleta, banco fora (com a regra no servidor) e regra ausente deixam a IA CALADA, sem nota (só cliente de verdade ganha nota). Complementa, não substitui, a lista de etapas permitidas. Em "só no papel" decide e registra no histórico da execução, sem calar e sem nota.',
     risco: 'comportamento',
     temSeco: true,
     quandoVazio: 'desligado',
