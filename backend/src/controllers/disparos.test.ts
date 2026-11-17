@@ -68,7 +68,7 @@ test('a página usa as rotas dos Disparos e as rotas existem no roteador e no se
 
 test('a página mostra o modo seco, o que o aprovar faz em seco e a prévia por pessoa; aprovar sem poder fica desligado', () => {
   const js = scriptDaPagina();
-  assert.ok(js.includes('MODO SECO') && js.includes('NÃO manda mensagem nenhuma'));
+  assert.ok(js.includes('Modo seco') && js.includes('NÃO manda mensagem nenhuma'));
   assert.ok(js.includes('Prévia para') && js.includes('Primeiro nome do contato'));
   assert.ok(js.includes('ba.disabled = !(o.podeAprovar && o.conferencia && o.conferencia.ok)'));
   assert.ok(js.includes('liberar()'), 'o botão de aprovar volta a depender da confirmação do custo');
@@ -505,11 +505,11 @@ test('relatório por campanha mostra o GASTO estimado (enviadas × preço da cat
 
 test('a página tem o campo do máximo (padrão 50, obrigatório), o cartão de custo e ritmo, a confirmação do custo desconhecido e o gasto no relatório', () => {
   const js = scriptDaPagina();
-  assert.ok(js.includes("mx.value = '50'") && js.includes('Máximo de pessoas neste disparo') && js.includes('maximo: maximo'));
+  assert.ok(js.includes("mx.value = '50'") && js.includes('Máximo de pessoas') && js.includes('maximo: maximo'));
   assert.ok(js.includes('Custo e ritmo') && js.includes('Teto de gasto'));
-  assert.ok(js.includes('confirmarCustoDesconhecido') && js.includes('Entendo que não há histórico de custo da Meta') && js.includes('preço de reserva (sem histórico da Meta)'));
+  assert.ok(js.includes('confirmarCustoDesconhecido') && js.includes('Estou ciente: não há histórico de custo da Meta') && js.includes('Sem histórico da Meta para este modelo'));
   assert.ok(js.includes('Gasto (estimado)') && js.includes('gasto até agora'));
-  assert.ok(js.includes('Categoria não informada pelo CRM: estimativa pelo preço de marketing') && js.includes('Entendo que o CRM não informou a categoria deste modelo'), 'categoria assumida: aviso e confirmação própria');
+  assert.ok(js.includes('O CRM não informou a categoria do modelo') && js.includes('Estou ciente: o CRM não informou a categoria deste modelo'), 'categoria assumida: aviso e confirmação própria');
   assert.ok(!/innerHTML/.test(js));
 });
 
