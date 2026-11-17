@@ -286,8 +286,11 @@ async function gravarUma(planoPrevisto: Plano, ent: Omit<EntradaDaConversa, 'vis
   let escreveu = false;
   try {
     const fresca = await p.fresca(id);
-    const c = fresca ? conversaDoChatwoot(fresca) : null;
-    if (!fresca || !c) throw new Error('não consegui reler a conversa');
+    const lida = fresca ? conversaDoChatwoot(fresca) : null;
+    if (!fresca || !lida) throw new Error('não consegui reler a conversa');
+    // a leitura de UMA conversa não traz `last_non_activity_message` (só a listagem traz): sem ela as regras internas da qualificação (lead quente
+    // parado, sem resposta) olhariam para uma conversa «sem mensagens» e liberariam o que a listagem tinha segurado
+    const c = { ...lida, ultima: lida.ultima ?? ent.conv.ultima };
     // 1. decide de novo com a conversa e a memória de AGORA
     const plano = decidirCampos({ ...ent, conv: c, status: String(fresca.status ?? ''), vistos: await p.vistosDe(id) }, agora());
     if (!plano.alteracoes.length && !plano.etiquetaNova) {

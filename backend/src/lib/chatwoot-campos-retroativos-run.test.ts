@@ -41,7 +41,10 @@ function mundo(convs: any[], kommoPorTelefone: (t: string) => LeadDoKommo[] | Er
     },
     async fresca(id) {
       const c = lojas.get(id);
-      return c ? structuredClone(c) : null;
+      if (!c) return null;
+      const copia = structuredClone(c);
+      delete copia.last_non_activity_message; // a leitura de UMA conversa não traz o campo da listagem
+      return copia;
     },
     async leadsDoKommo(t) {
       kommoConsultado.push(t);
@@ -191,6 +194,20 @@ test('falha DEPOIS de gravar o campo (etiqueta): o registro sai mesmo assim, par
   assert.deepEqual(JSON.parse(reg!.slice(4)).depois, { etapa: 'Perdido', motivo_nao_agendamento: 'Sem interesse' });
   assert.equal(m.lojas.get(7)!.custom_attributes.etapa, 'Perdido');
   assert.equal(m.vistos.get('7|etapa')?.inicial, true, 'as marcas ficam: o campo existe');
+});
+
+test('a releitura de uma conversa não traz a última mensagem: a decisão usa a da listagem (senão o aviso de lead quente escaparia da trava)', async () => {
+  // o paciente escreveu há 4 h: se a qualificação virar Quente em «Sofia qualifica», a régua avisaria a gerente («lead quente parado há 3 h»)
+  const ultima = { message_type: 0, private: false, created_at: Math.floor(AGORA.getTime() / 1000) - 4 * 3600, sender: { id: 24, type: 'contact' } };
+  const viva = { ...raw(9, { status: 'open' }), last_non_activity_message: ultima };
+  const m = mundo([viva], () => [lead('EM QUALIFICAÇÃO', { id: 1 })]);
+  m.p.qualificacoes = async () => [{ leadId: 1, valor: 'Quente', observadoEm: new Date(AGORA.getTime() - 86_400_000) }];
+  const seco = await rodarCampos(opcoes({ soConferir: true }), m.p, () => {}, agora);
+  assert.deepEqual(seco.porRegra, { 'etapa-kommo': 1 }, 'na listagem: só a etapa; a qualificação Quente fica de fora');
+  const r = await rodarCampos(opcoes(), m.p, () => {}, agora);
+  assert.equal(r.gravadas, 1);
+  assert.equal(m.lojas.get(9)!.custom_attributes.etapa, 'Sofia qualifica');
+  assert.equal(m.lojas.get(9)!.custom_attributes.qualificacao, undefined, 'a releitura (sem a última mensagem) não pode liberar o que a listagem segurou');
 });
 
 test('listagem cortada: confere, mas NÃO grava (sem ver as irmãs do telefone o funil duplicaria)', async () => {

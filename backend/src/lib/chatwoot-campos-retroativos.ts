@@ -8,7 +8,8 @@
  *     qualifica, PERDIDO→Perdido. EM ESPERA não tem etapa: ganha a etiqueta `conferir-etapa` (a equipe decide). Resto (entrada, não compareceu,
  *     ganho, retorno pós-tratamento): sem regra, fica vazio.
  *  3. motivo_nao_agendamento ← motivo de perda do cartão (de/para abaixo), só em quem fica Perdido. Perdido sem motivo mapeável NÃO é gravado
- *     («Perdido exige motivo», a mesma regra da Sofia e da janela de resolver): vai para a equipe.
+ *     («Perdido exige motivo», a mesma regra da Sofia e da janela de resolver) e Perdido com consulta de pé na agenda também não (quem desistiu e
+ *     marcou de novo é decisão da equipe): vão para a equipe, listados com o código do motivo.
  *  4. funil = Tratamento + etapa_tratamento ← cartão no funil TRATAMENTO (EM TRATAMENTO→Em tratamento, ALTA→Alta). Quem está em tratamento não
  *     leva etapa comercial.
  *  5. etapa Compareceu ← agenda da franquia: o que o `chatwoot-agenda` já gravou na conversa (situação Atendido + categoria Avaliação).
