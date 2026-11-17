@@ -34,7 +34,7 @@ const JANELA_DAS_MARCAS_MS = 30 * 24 * 3600_000;
 let timer: NodeJS.Timeout | null = null;
 let primeira: NodeJS.Timeout | null = null;
 let rodando = false;
-const dorme = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const dorme = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /** Todas as páginas (até 10 × 250): o filtro é por updated_at crescente, e o cartão recém-marcado fica no FIM da lista. */
 async function cartoesDaJanela(kommo: KommoClient, etapas: Array<{ pipelineId: number; statusId: number }>, desde: number): Promise<KommoLead[]> {
@@ -44,27 +44,132 @@ async function cartoesDaJanela(kommo: KommoClient, etapas: Array<{ pipelineId: n
     todos.push(...lote);
     if (lote.length < POR_PAGINA) return todos;
   }
-  logger.warn({ etapas, paginas: MAX_PAGINAS }, `${ID}: janela com mais de ${MAX_PAGINAS * POR_PAGINA} cartões — o resto fica para a próxima rodada`);
+  logger.warn({ etapas, paginas: MAX_PAGINAS }, `${ID}: janela com mais de ${MAX_PAGINAS * POR_PAGINA} cartões — os mais novos ficam de fora até os antigos saírem das 72 h`);
   return todos;
 }
 
+/** O que a varredura precisa de fora — injetável para o teste (Kommo e banco falsos). */
+export interface DepsDoNaoPaciente {
+  kommo: Pick<KommoClient, 'addTag' | 'setLeadPipeline' | 'addLeadNote'>;
+  avisoRecente: (unitId: string, leadId: number, chave: string, janelaMs: number) => Promise<boolean>;
+  marcarAviso: (unitId: string, leadId: number, chave: string) => Promise<void>;
+  /** grava a parada de não-paciente nas conversas do cartão; devolve quantas */
+  marcarConversas: (unitId: string, leadId: number) => Promise<number>;
+  simular: (unit: { id: string; slug: string }, leadId: number, valor: string) => void;
+  dorme: (ms: number) => Promise<void>;
+}
+
+export interface ContextoDoNaoPaciente {
+  unit: { id: string; slug: string };
+  seco: boolean;
+  comercialId: number;
+  perdido: number;
+  reentrada: number | null;
+  naoContatar: string;
+}
+
+export interface ResumoDoNaoPaciente {
+  feitos: number;
+  simulados: number;
+  falhas: number;
+}
+
 /** Volta para PERDIDO com 3 tentativas: o cliente do Kommo não repete 429, e cartão preso na etapa de passagem é o pior caso. */
-async function voltarParaPerdido(kommo: KommoClient, leadId: number, pipelineId: number, perdido: number): Promise<void> {
+async function voltarParaPerdido(ctx: ContextoDoNaoPaciente, deps: DepsDoNaoPaciente, leadId: number): Promise<void> {
   for (let i = 0; ; i++) {
     try {
-      await kommo.setLeadPipeline(leadId, pipelineId, perdido);
+      await deps.kommo.setLeadPipeline(leadId, ctx.comercialId, ctx.perdido);
       return;
     } catch (err) {
       if (i >= ESPERAS_DA_VOLTA_MS.length) throw err;
-      await dorme(ESPERAS_DA_VOLTA_MS[i]);
+      await deps.dorme(ESPERAS_DA_VOLTA_MS[i]);
     }
   }
+}
+
+/**
+ * O coração da varredura, sem Kommo nem banco de verdade (testável).
+ *
+ * COM a etapa de passagem, TODO cartão com o motivo e sem a FEITO sai e volta de PERDIDO — tenha ou não a etiqueta. O código não
+ * sabe se a etiqueta entrou antes ou depois do PERDIDO, e a régua só é cancelada se ela já estava lá no evento (revisão do sênior,
+ * PR #395: a equipe põe a etiqueta à mão minutos depois de perder). Com a etiqueta já posta, sair e voltar não dispara nada.
+ * SEM a etapa, quem já tem a etiqueta só ganha a memória do telefone.
+ */
+export async function tratarCartoes(ctx: ContextoDoNaoPaciente, leads: ReadonlyArray<KommoLead>, deps: DepsDoNaoPaciente): Promise<ResumoDoNaoPaciente> {
+  const r: ResumoDoNaoPaciente = { feitos: 0, simulados: 0, falhas: 0 };
+  const { unit } = ctx;
+  for (const lead of leads) {
+    if (r.feitos >= TETO_POR_RODADA) break;
+    const tags = (lead._embedded?.tags ?? []).map((t) => t.name ?? '');
+    const plano = planoNaoPaciente({ motivo: motivoDaSdrNoCartao(lead.custom_fields_values), tags, naoContatar: ctx.naoContatar });
+    if (plano === 'nada') continue;
+    const noPerdido = lead.status_id === ctx.perdido;
+
+    try {
+      if (await deps.avisoRecente(unit.id, lead.id, MARCA_FEITO, JANELA_DAS_MARCAS_MS)) continue;
+      const pendente = await deps.avisoRecente(unit.id, lead.id, MARCA_PENDENTE, JANELA_DAS_MARCAS_MS);
+      // na etapa de passagem, só o cartão que ESTA automação deixou lá (pendente); o resto é da equipe
+      if (!noPerdido && !pendente) continue;
+
+      if (plano === 'so_conversa' && !pendente && !ctx.reentrada) {
+        // sem etapa de passagem não há como cancelar a régua: só falta a memória do telefone
+        if (!ctx.seco) {
+          await deps.marcarConversas(unit.id, lead.id);
+          await deps.marcarAviso(unit.id, lead.id, MARCA_FEITO);
+        }
+        continue;
+      }
+
+      if (ctx.seco) {
+        r.simulados++;
+        deps.simular(unit, lead.id, `${ctx.naoContatar} + ${ETIQUETA_CURRICULO}${ctx.reentrada ? ` e sai/volta de PERDIDO (etapa ${ctx.reentrada})` : ''}`);
+        continue;
+      }
+
+      r.feitos++;
+      await deps.marcarAviso(unit.id, lead.id, MARCA_PENDENTE);
+      // a memória do telefone primeiro: se o Kommo falhar depois, a Sofia e a cutucada já respeitam
+      const conversas = await deps.marcarConversas(unit.id, lead.id);
+      const jaTinha = plano === 'so_conversa';
+      if (!jaTinha) await deps.kommo.addTag({ leadId: lead.id, tags: [ctx.naoContatar, ETIQUETA_CURRICULO] });
+      let reentrou = false;
+      if (ctx.reentrada) {
+        // o gatilho de PERDIDO lê a etiqueta no evento: sair e voltar faz ele ler de novo, agora com a etiqueta
+        if (noPerdido) {
+          await deps.kommo.setLeadPipeline(lead.id, ctx.comercialId, ctx.reentrada);
+          await deps.dorme(PAUSA_REENTRADA_MS);
+        }
+        await voltarParaPerdido(ctx, deps, lead.id);
+        reentrou = true;
+      }
+      await deps.marcarAviso(unit.id, lead.id, MARCA_FEITO);
+
+      // a nota diz só o que aconteceu de fato
+      const partes = [
+        jaTinha
+          ? `🤫 Não é paciente (marcado pela equipe): o cartão já tinha ${ctx.naoContatar}.`
+          : `🤫 Não é paciente (marcado pela equipe): pus ${ctx.naoContatar} e ${ETIQUETA_CURRICULO}.`,
+        reentrou
+          ? 'O cartão saiu e voltou de PERDIDO para a régua de PERDIDO ler a etiqueta (a mensagem de 48 h não deve sair).'
+          : 'ATENÇÃO: esta unidade não tem a etapa de passagem configurada; a régua de PERDIDO já agendada pode mandar mensagem.',
+        conversas > 0
+          ? 'Este telefone fica marcado: a Sofia e a cutucada não falam com ele, nem em cartão novo.'
+          : 'Não achei a conversa deste cartão no nosso banco: o TELEFONE não ficou marcado (um cartão novo dele ainda recebe a Sofia).',
+      ];
+      await deps.kommo.addLeadNote(lead.id, partes.join(' ')).catch((err) => logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id }, `${ID}: nota não gravada`));
+      logger.info({ unit: unit.slug, leadId: lead.id, reentrou, conversas }, `${ID}: não-paciente marcado pela equipe — etiquetado`);
+    } catch (err) {
+      r.falhas++;
+      // a PENDENTE fica: a próxima rodada refaz (inclusive tira da etapa de passagem)
+      logger.error({ err: String(err), unit: unit.slug, leadId: lead.id }, `${ID}: falhou no cartão — refaço na próxima rodada`);
+    }
+  }
+  return r;
 }
 
 async function varrerUnidade(unit: Unit): Promise<void> {
   const estado = estadoDaAutomacao(unit.slug, ID, process.env.NAO_PACIENTE_MANUAL_SLUGS);
   if (estado === 'desligado') return;
-  const seco = estado !== 'ligado';
   const kommo = createKommoClient(unit);
   const comercial = funilComercial(await kommo.listPipelines());
   const perdido = comercial ? statusPerdidoDoFunil(comercial.statuses ?? []) : null;
@@ -75,79 +180,18 @@ async function varrerUnidade(unit: Unit): Promise<void> {
   const leads = await cartoesDaJanela(kommo, etapas, Math.floor(Date.now() / 1000) - JANELA_S);
   if (!leads.length) return;
 
-  const naoContatar = await etiquetaDeNaoContatar(unit, kommo);
-  let feitos = 0;
-  for (const lead of leads) {
-    if (feitos >= TETO_POR_RODADA) break;
-    const tags = (lead._embedded?.tags ?? []).map((t) => t.name ?? '');
-    const plano = planoNaoPaciente({ motivo: motivoDaSdrNoCartao(lead.custom_fields_values), tags, naoContatar });
-    if (plano === 'nada') continue;
-    const noPerdido = lead.status_id === perdido;
-
-    try {
-      if (await avisoRecente(unit.id, lead.id, MARCA_FEITO, JANELA_DAS_MARCAS_MS)) continue;
-      const pendente = await avisoRecente(unit.id, lead.id, MARCA_PENDENTE, JANELA_DAS_MARCAS_MS);
-      // na etapa de passagem, só o cartão que ESTA automação deixou lá (pendente); o resto é da equipe
-      if (!noPerdido && !pendente) continue;
-
-      if (plano === 'so_conversa' && !pendente) {
-        // já tinha a etiqueta ANTES do PERDIDO (a Sofia marca assim) ou a equipe pôs à mão: só falta a memória do telefone
-        if (!seco) {
-          await prisma.conversation.updateMany({ where: { unitId: unit.id, leadId: String(lead.id) }, data: { followUpStoppedReason: MOTIVO_PARADA_NAO_PACIENTE } });
-          await marcarAviso(unit.id, lead.id, MARCA_FEITO);
-        }
-        continue;
-      }
-
-      if (seco) {
-        registrarSimulacao(unit, ID, {
-          leadId: lead.id,
-          acao: 'etiquetaria',
-          alvo: 'etiqueta',
-          valor: `${naoContatar} + ${ETIQUETA_CURRICULO}${reentrada ? ` e sai/volta de PERDIDO (etapa ${reentrada})` : ''}`,
-          motivo: 'PERDIDO "Não é paciente (currículo)" marcado sem a etiqueta: a régua de PERDIDO mandaria mensagem',
-        });
-        continue;
-      }
-
-      feitos++;
-      await marcarAviso(unit.id, lead.id, MARCA_PENDENTE);
-      await kommo.addTag({ leadId: lead.id, tags: [naoContatar, ETIQUETA_CURRICULO] });
-      let reentrou = false;
-      if (reentrada) {
-        // o gatilho de PERDIDO lê a etiqueta no evento: sair e voltar faz ele ler de novo, agora com a etiqueta
-        if (noPerdido) {
-          await kommo.setLeadPipeline(lead.id, comercial.id, reentrada);
-          await dorme(PAUSA_REENTRADA_MS);
-        }
-        await voltarParaPerdido(kommo, lead.id, comercial.id, perdido);
-        reentrou = true;
-      }
-      const conversas = await prisma.conversation.updateMany({
-        where: { unitId: unit.id, leadId: String(lead.id) },
-        data: { followUpStoppedReason: MOTIVO_PARADA_NAO_PACIENTE },
-      });
-      await marcarAviso(unit.id, lead.id, MARCA_FEITO);
-
-      // a nota diz só o que aconteceu de fato
-      const partes = [`🤫 Não é paciente (marcado pela equipe): pus ${naoContatar} e ${ETIQUETA_CURRICULO}.`];
-      partes.push(
-        reentrou
-          ? 'O cartão saiu e voltou de PERDIDO para a régua de PERDIDO ler a etiqueta (a mensagem de 48 h não deve sair).'
-          : 'ATENÇÃO: esta unidade não tem a etapa de passagem configurada; a régua de PERDIDO já agendada pode mandar mensagem.',
-      );
-      partes.push(
-        conversas.count > 0
-          ? 'Este telefone fica marcado: a Sofia e a cutucada não falam com ele, nem em cartão novo.'
-          : 'Não achei a conversa deste cartão no nosso banco: o TELEFONE não ficou marcado (um cartão novo dele ainda recebe a Sofia).',
-      );
-      await kommo.addLeadNote(lead.id, partes.join(' ')).catch((err) => logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id }, `${ID}: nota não gravada`));
-      logger.info({ unit: unit.slug, leadId: lead.id, reentrou, conversas: conversas.count }, `${ID}: não-paciente marcado pela equipe — etiquetado`);
-    } catch (err) {
-      // a PENDENTE fica: a próxima rodada refaz (inclusive tira da etapa de passagem)
-      logger.error({ err: String(err), unit: unit.slug, leadId: lead.id }, `${ID}: falhou no cartão — refaço na próxima rodada`);
-    }
-  }
+  const ctx: ContextoDoNaoPaciente = { unit, seco: estado !== 'ligado', comercialId: comercial.id, perdido, reentrada, naoContatar: await etiquetaDeNaoContatar(unit, kommo) };
+  const r = await tratarCartoes(ctx, leads, {
+    kommo,
+    avisoRecente: (u, l, c, j) => avisoRecente(u, l, c, j),
+    marcarAviso: (u, l, c) => marcarAviso(u, l, c),
+    marcarConversas: async (u, l) =>
+      (await prisma.conversation.updateMany({ where: { unitId: u, leadId: String(l) }, data: { followUpStoppedReason: MOTIVO_PARADA_NAO_PACIENTE } })).count,
+    simular: (un, leadId, valor) =>
+      registrarSimulacao(un, ID, { leadId, acao: 'etiquetaria', alvo: 'etiqueta', valor, motivo: 'PERDIDO "Não é paciente (currículo)": a régua de PERDIDO mandaria mensagem' }),
+    dorme,
+  });
+  if (r.feitos || r.simulados || r.falhas) logger.info({ unit: unit.slug, ...r }, `${ID}: varredura`);
 }
 
 async function varrer(): Promise<void> {

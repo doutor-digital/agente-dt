@@ -166,7 +166,7 @@ export const REGRA_NOTA_NAO_PACIENTE = 'nao-paciente-telefone';
 export function notaNaoPaciente(mensagem: string): string {
   const t = mensagem.replace(/\s+/g, ' ').trim();
   return (
-    `🤫 Este telefone foi marcado como NÃO-PACIENTE (funcionário/currículo) em outro cartão — a Sofia não responde.` +
+    `🤫 Este telefone foi marcado como NÃO-PACIENTE (funcionário/currículo) num cartão desta unidade — a Sofia não responde.` +
     `${t ? ` Disse: "${t.slice(0, 140)}${t.length > 140 ? '…' : ''}"` : ''} Se for paciente, avise a Doutor Digital para desmarcar.`
   );
 }
