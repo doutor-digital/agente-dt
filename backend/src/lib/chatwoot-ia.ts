@@ -642,6 +642,24 @@ function avisarIgnorado(motivo: string, corpo: any): void {
   logger.warn({ motivo, evento: String(corpo?.event ?? '') }, `${ID_IA}: evento do Chatwoot IGNORADO — ${motivo}`);
 }
 
+/**
+ * O que se faz quando o referral de anúncio de uma mensagem foi achado (webhook e retroativo usam ESTE caminho): etiqueta `anuncio`, nota
+ * «Veio do anúncio» (só na 1ª vez) e Origem/Campanha/Conjunto no contato. `r` null = conta sem estado: não faz nada.
+ */
+export function aoAcharReferral(r: EstadoDaConta | null): NonNullable<Parameters<typeof aplicarReferralDoKapso>[1]>['aoAchar'] {
+  return async (m, ref, novo) => {
+    // etiqueta «anuncio» na conversa (informação: vale com a origem desligada) — chatwoot-origem.ts
+    if (r) await etiquetarAnuncio(m.conversa, ref, (c, e) => r.chat.adicionarEtiquetas(c, e));
+    const slug = CAIXAS_REGUA[m.caixa];
+    // juntas (nenhuma das duas lança): a origem é dado e não espera o download/envio da imagem da nota
+    await Promise.all([
+      // o «cartão» do anúncio (título, texto, imagem, link) numa nota interna, só na 1ª vez — chatwoot-anuncio.ts
+      r && novo ? notaDoAnuncio({ conversa: m.conversa, slug, ref }, r.nota) : null,
+      r && slug && m.contato ? preencherOrigem({ slug, contato: m.contato, conversa: m.conversa, ref }, r.origem) : null,
+    ]);
+  };
+}
+
 export function eventoChatwootHandler(req: Request, res: Response): void {
   // A chave é DA CONTA a que o evento diz pertencer (derivada do token dela): a chave de Parauapebas não forja evento de outra clínica e vice-versa.
   // Evento que não é de conta nenhuma que o servidor conheça só passa com a chave do ambiente (e é ignorado com aviso logo abaixo).
@@ -687,22 +705,12 @@ export function eventoChatwootHandler(req: Request, res: Response): void {
     if (e) void aplicarEtiqueta(etq, e.ponte, e.trava).catch((err) => logger.warn({ err: String(err), conversa: etq.conversa }, 'chatwoot-etiquetas: falhou'));
     return;
   }
-  // o código do anúncio que o Chatwoot perde no caminho do Kapso: pergunta ao Kapso e guarda (kapso-referral.ts)
+  // o código do anúncio: o referral que o Chatwoot já traz na mensagem, ou (sem ele) o que o Kapso diz — guarda e aplica (kapso-referral.ts)
   const consultar = mensagemParaConsultar(req.body);
   if (consultar) {
     const r = estadoDoReceptor(conta);
     void aplicarReferralDoKapso(consultar, {
-      aoAchar: async (m, ref, novo) => {
-        // etiqueta «anuncio» na conversa (informação: vale com a origem desligada) — chatwoot-origem.ts
-        if (r) await etiquetarAnuncio(m.conversa, ref, (c, e) => r.chat.adicionarEtiquetas(c, e));
-        const slug = CAIXAS_REGUA[m.caixa];
-        // juntas (nenhuma das duas lança): a origem é dado e não espera o download/envio da imagem da nota
-        await Promise.all([
-          // o «cartão» do anúncio (título, texto, imagem, link) numa nota interna, só na 1ª vez — chatwoot-anuncio.ts
-          r && novo ? notaDoAnuncio({ conversa: m.conversa, slug, ref }, r.nota) : null,
-          r && slug && m.contato ? preencherOrigem({ slug, contato: m.contato, conversa: m.conversa, ref }, r.origem) : null,
-        ]);
-      },
+      aoAchar: aoAcharReferral(r),
     }).catch(() => undefined);
   }
   const m = mensagemDoPaciente(req.body);

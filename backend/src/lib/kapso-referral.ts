@@ -56,8 +56,52 @@ export function numerosDoKapso(env: NodeJS.ProcessEnv = process.env): string[] {
   return numerosDoKapsoConfigurados();
 }
 
-/** Webhook do Chatwoot → mensagem de paciente na caixa oficial, SEM referral, com o wamid; ou null. */
-export function mensagemParaConsultar(corpo: any, caixas: ReadonlySet<number> = CAIXAS_CLOUD): { conversa: number; caixa: number; wamid: string; contato: number | null } | null {
+/** Quando a mensagem chegou, em segundos desde 1970: o `created_at` do webhook (ISO ou epoch em s/ms) ou da API do Chatwoot (epoch em s). null = não deu para ler. */
+function segundosDe(v: unknown): number | null {
+  if (typeof v === 'number' && Number.isFinite(v) && v > 0) return Math.floor(v > 1e11 ? v / 1000 : v);
+  if (typeof v === 'string' && v.trim()) {
+    const n = Number(v);
+    if (Number.isFinite(n) && n > 0) return segundosDe(n);
+    const t = Date.parse(v);
+    if (Number.isFinite(t) && t > 0) return Math.floor(t / 1000);
+  }
+  return null;
+}
+
+/**
+ * O referral que o PRÓPRIO Chatwoot trouxe (`content_attributes.referral`, desde 14/11/2026), no mesmo formato do Kapso — o da Cloud API
+ * (source_type, source_id, ctwa_clid, headline, source_url, body, image_url/thumbnail_url, media_type, video_url; aceita também camelCase).
+ * `criadoEm` = o `created_at` da mensagem. null = o Chatwoot não trouxe nada que identifique um anúncio/publicação (aí vale perguntar ao Kapso).
+ */
+export function referralDoChatwoot(ref: unknown, criadoEm?: unknown): ReferralDoKapso | null {
+  if (!ref || typeof ref !== 'object' || Array.isArray(ref)) return null;
+  const r = ref as Record<string, unknown>;
+  const norm = {
+    source_type: r.source_type ?? r.sourceType,
+    source_id: r.source_id ?? r.sourceId,
+    ctwa_clid: r.ctwa_clid ?? r.ctwaClid,
+    headline: r.headline,
+    source_url: r.source_url ?? r.sourceUrl,
+    body: r.body,
+    image_url: r.image_url ?? r.imageUrl,
+    thumbnail_url: r.thumbnail_url ?? r.thumbnailUrl,
+    media_type: r.media_type ?? r.mediaType,
+    video_url: r.video_url ?? r.videoUrl,
+  };
+  // source_id pode vir como número no JSON do Chatwoot
+  if (typeof norm.source_id === 'number') norm.source_id = String(norm.source_id);
+  const achado = referralDaMensagemDoKapso({ timestamp: segundosDe(criadoEm) ?? undefined, referral: norm });
+  return achado && (achado.tipo || achado.anuncio || achado.ctwaClid) ? achado : null;
+}
+
+/**
+ * Webhook do Chatwoot → mensagem de paciente na caixa oficial, com o wamid; ou null. Se o Chatwoot JÁ trouxe o referral (`referral` preenchido),
+ * é esse que vale (não há o que buscar no Kapso); sem ele, `referral` é null e o chamador pergunta ao Kapso.
+ */
+export function mensagemParaConsultar(
+  corpo: any,
+  caixas: ReadonlySet<number> = CAIXAS_CLOUD,
+): { conversa: number; caixa: number; wamid: string; contato: number | null; referral: ReferralDoKapso | null } | null {
   if (corpo?.event !== 'message_created') return null;
   const tipo = corpo?.message_type;
   if (!(tipo === 'incoming' || tipo === 0) || corpo?.private === true) return null;
@@ -65,10 +109,14 @@ export function mensagemParaConsultar(corpo: any, caixas: ReadonlySet<number> = 
   const conversa = Number(corpo?.conversation?.id);
   const wamid = String(corpo?.source_id ?? '');
   if (!caixas.has(caixa) || !Number.isInteger(conversa) || conversa <= 0 || !/^wamid\.[A-Za-z0-9_=+/-]{10,400}$/.test(wamid)) return null;
-  const ref = corpo?.content_attributes?.referral;
-  if (ref && typeof ref === 'object' && Object.keys(ref).length) return null; // o Chatwoot já tem: nada a buscar
   const contato = Number(corpo?.sender?.id);
-  return { conversa, caixa, wamid, contato: Number.isInteger(contato) && contato > 0 ? contato : null };
+  return {
+    conversa,
+    caixa,
+    wamid,
+    contato: Number.isInteger(contato) && contato > 0 ? contato : null,
+    referral: referralDoChatwoot(corpo?.content_attributes?.referral, corpo?.created_at),
+  };
 }
 
 /** O referral normalizado de uma mensagem do Kapso, ou null (não veio de anúncio). */
@@ -155,9 +203,9 @@ export async function referraisGuardados(conversa: number, caixa: number): Promi
   return saida.sort((a, b) => (a.quando || 0) - (b.quando || 0));
 }
 
-/** Roda para uma mensagem de paciente da caixa oficial. Não lança. */
+/** Roda para uma mensagem de paciente da caixa oficial (referral do Chatwoot, se veio; senão o do Kapso). Não lança. */
 export async function aplicarReferralDoKapso(
-  m: { conversa: number; caixa: number; wamid: string; contato?: number | null },
+  m: { conversa: number; caixa: number; wamid: string; contato?: number | null; /** o referral que o Chatwoot já trouxe: vale ele e o Kapso não é consultado */ referral?: ReferralDoKapso | null },
   deps: {
     consultar?: typeof consultarKapso;
     guardar?: (caixa: number, conversa: number, wamid: string, ref: ReferralDoKapso) => Promise<boolean | void>;
@@ -166,7 +214,7 @@ export async function aplicarReferralDoKapso(
   } = {},
 ): Promise<'sem-chave' | 'sem-anuncio' | 'guardado' | 'falhou'> {
   try {
-    const r = await (deps.consultar ?? consultarKapso)(m.wamid, m.caixa);
+    const r = m.referral ? { achou: true, ref: m.referral } : await (deps.consultar ?? consultarKapso)(m.wamid, m.caixa);
     if (!r) return 'sem-chave';
     if (!r.ref) return 'sem-anuncio';
     const novo = (await (deps.guardar ?? guardarReferral)(m.caixa, m.conversa, m.wamid, r.ref)) !== false;

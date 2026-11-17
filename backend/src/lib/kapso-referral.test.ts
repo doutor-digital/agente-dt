@@ -23,12 +23,13 @@ const msg = (o: { tipo?: unknown; caixa?: number; ref?: unknown; source?: string
 const CAIXAS = new Set([3]);
 
 test('qual mensagem consultar: paciente, caixa oficial, com wamid e SEM referral', () => {
-  assert.deepEqual(mensagemParaConsultar(msg(), CAIXAS), { conversa: 900, caixa: 3, wamid: WAMID, contato: null });
+  assert.deepEqual(mensagemParaConsultar(msg(), CAIXAS), { conversa: 900, caixa: 3, wamid: WAMID, contato: null, referral: null });
   assert.equal(mensagemParaConsultar(msg({ tipo: 'outgoing' }), CAIXAS), null);
   assert.equal(mensagemParaConsultar(msg({ privada: true }), CAIXAS), null);
   assert.equal(mensagemParaConsultar(msg({ caixa: 2 }), CAIXAS), null, 'caixa sem Kapso');
   assert.equal(mensagemParaConsultar(msg({ source: 'abc' }), CAIXAS), null, 'sem wamid');
-  assert.equal(mensagemParaConsultar(msg({ ref: { ctwa_clid: 'x' } }), CAIXAS), null, 'o Chatwoot já tem o referral');
+  // o Chatwoot já tem o referral: a mensagem segue (com o referral dele); o Kapso não é consultado (ver kapso-referral-chatwoot.test.ts)
+  assert.equal(mensagemParaConsultar(msg({ ref: { ctwa_clid: 'x' } }), CAIXAS)?.referral?.ctwaClid, 'x');
   assert.equal(mensagemParaConsultar({ ...msg(), event: 'conversation_updated' }, CAIXAS), null);
 });
 
