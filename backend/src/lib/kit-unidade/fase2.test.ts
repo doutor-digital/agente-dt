@@ -189,7 +189,9 @@ test('CLÍNICA DEMONSTRAÇÃO: o --aplicar monta tudo na conta própria dela; Me
   assert.equal(conta.webhooks[0]!.url, `${URL_AGENTE}/api/public/chatwoot/evento?k=${chaveDoEvento(tokenDaConta)}`);
   assert.notEqual(chaveDoEvento(tokenDaConta), chaveDoEvento(falso.tokenDeReferencia));
   assert.deepEqual(conta.apps[0], { id: conta.apps[0]!.id, title: 'Funil', content: [{ type: 'frame', url: `${URL_AGENTE}/funil?conta=${contaId}` }] });
-  assert.ok(!conta.apps[0]!.content.some((c) => JSON.stringify(c).includes('k=')), 'a chave não vai na URL da aba');
+  assert.deepEqual(conta.apps[1], { id: conta.apps[1]!.id, title: 'Tarefas', content: [{ type: 'frame', url: `${URL_AGENTE}/funil/tarefas?conta=${contaId}` }] });
+  assert.equal(conta.apps.length, 2);
+  assert.ok(!conta.apps.some((a) => a.content.some((c) => JSON.stringify(c).includes('k='))), 'a chave não vai na URL da aba');
   // robô: criado, NÃO ligado na caixa sem --ligar-robo
   assert.equal(conta.bots.length, 1);
   assert.equal(conta.inboxes[0]!.agent_bot, null);

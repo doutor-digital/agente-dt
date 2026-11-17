@@ -108,7 +108,7 @@ function rotasPublicas(): Rota[] {
   }
   return l.filter((r) => r.caminho.startsWith('/public/'));
 }
-const COM_LOGIN = /^\/public\/(funil|robos|disparos|agente|assistente|aprendizados|testar-ia)(\/|$)/;
+const COM_LOGIN = /^\/public\/(funil|robos|disparos|tarefas|agente|assistente|aprendizados|testar-ia)(\/|$)/;
 /** O resto das rotas públicas: autorizadas por código/segredo da unidade, token do widget ou HMAC — nenhuma usa o login do Chatwoot nem aceita `conta`. */
 const SEM_LOGIN = /^\/public\/(pausa|central|evolution|chatwoot\/evento|widget|alta|ia|whatsapp)(\/|$)/;
 

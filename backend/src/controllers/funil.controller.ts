@@ -1783,6 +1783,8 @@ const MENU_JS = String.raw`(function(){
     { id: 'mkt', marca: 'data-mkt-menu', nome: 'Marketing', hash: '#marketing', param: 'mkt', gestao: true, pai: 'hoje' },
     { id: 'gestor', marca: 'data-gestor-menu', nome: 'Gestor', hash: '#gestor', param: 'gestor', gestao: true, pai: 'hoje' },
     { id: 'funil', marca: 'data-funil-menu', nome: 'Funil', hash: '#funil', param: '' },
+    // «Tarefas» (18/11): mensagem agendada, ligação com lembrete e lembrete simples para as meninas (a mesma tela abre como aba dentro da conversa)
+    { id: 'tarefas', marca: 'data-tarefas-menu', nome: 'Tarefas', hash: '#tarefas', param: '', url: '/funil/tarefas' },
     // «Agente»: a equipe cuida da própria Sofia (avaliações, regras, teste, pausadas) e pede à Doutor Digital o que é de código (13/11)
     { id: 'ia', marca: 'data-ia-menu', nome: 'Agente', hash: '#agente', param: '', url: '/funil/agente' },
     // «Robôs» (14/11): os robôs da régua por unidade — ver, ligar/desligar, mudar tempo e modelo (só administrador) e o que foi enviado
@@ -1917,6 +1919,8 @@ const MENU_JS = String.raw`(function(){
   ICONES.robos = '<rect width="8" height="8" x="3" y="3" rx="2"/><path d="M7 11v4a2 2 0 0 0 2 2h4"/><rect width="8" height="8" x="13" y="13" rx="2"/>';
   // Disparos: o avião de papel (envio em ondas)
   ICONES.disparos = '<path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4Z"/>';
+  // Tarefas: o quadrado com o visto (a lista do que fazer hoje)
+  ICONES.tarefas = '<path d="m9 11 3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>';
   ICONES.ia = '<path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>';
   var SEL_ICONE = 'svg, [class^="i-"], [class*=" i-"]';
   function trocarIcone(base, novo, qual){

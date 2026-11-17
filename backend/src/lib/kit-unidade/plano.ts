@@ -319,11 +319,11 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
   add({
     id: 'dashboard-app',
     sistema: 'chatwoot',
-    titulo: 'Aba «Funil» (Dashboard App) CRIADA nesta conta, apontando para o funil desta conta (nunca copiada de Parauapebas)',
-    acao: cw?.abas?.includes('Funil') ? 'nada' : 'criar',
-    itens: ['/funil?conta=<id da conta> no endereço do agente', 'a chave do token da conta NÃO vai na URL (qualquer agente vê a URL no iframe): a aba usa o login da pessoa'],
+    titulo: 'Abas «Funil» e «Tarefas» (Dashboard Apps) CRIADAS nesta conta, apontando para as telas desta conta (nunca copiadas de Parauapebas)',
+    acao: cw?.abas?.includes('Funil') && cw?.abas?.includes('Tarefas') ? 'nada' : 'criar',
+    itens: ['/funil?conta=<id da conta> e /funil/tarefas?conta=<id da conta> no endereço do agente', 'a chave do token da conta NÃO vai na URL (qualquer agente vê a URL no iframe): a aba usa o login da pessoa'],
     execucao: 'sim',
-    avisos: [cw ? 'se a aba já existe, nada é criado' : NAO_CONSULTADO],
+    avisos: [cw ? 'se a aba já existe, nada é criado (a que falta é criada)' : NAO_CONSULTADO],
     depende: ['conta'],
   });
   const faltaPasta = q.chatwoot.atendentes.flatMap((a) => faltantes(PASTAS_PADRAO, cw?.pastas[lc(a.email)] ?? []).map((p) => `${a.nome}: ${p}`));

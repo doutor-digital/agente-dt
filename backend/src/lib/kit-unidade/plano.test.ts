@@ -48,7 +48,7 @@ function estadoCompleto(qq: Questionario): EstadoAtual {
       mensagensProntas: MENSAGENS_PRONTAS.map((m) => `parau-${m.codigo}`),
       automacoesDaConta: 8,
       webhookDaConta: true,
-      abas: ['Funil'],
+      abas: ['Funil', 'Tarefas'],
     },
     kapso: { modelos: Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`x${i}`, 'APPROVED'])) },
     meta: { datasetCapi: true },

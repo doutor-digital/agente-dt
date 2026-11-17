@@ -162,6 +162,7 @@ import {
 } from '../controllers/funil.controller.js';
 import { assistenteAvaliarHandler, assistenteRespostasHandler, assistenteEstadoHandler, assistentePausaAcaoHandler, assistentePausaEstadoHandler, assistentePerguntarHandler, assistenteSugerirHandler } from '../controllers/assistente.controller.js';
 import { robosAutomacaoMudarHandler, robosAutomacoesHandler, robosEnviadosHandler, robosHandler, robosMudarHandler } from '../controllers/robos.controller.js';
+import { tarefasBuscarHandler, tarefasCancelarHandler, tarefasConfirmarHandler, tarefasContextoHandler, tarefasCriarHandler, tarefasEditarHandler, tarefasFeitaHandler, tarefasHandler, tarefasModelosHandler, tarefasResultadoHandler, tarefasZapHandler } from '../controllers/tarefas.controller.js';
 import { disparosAjusteHandler, disparosAprovarHandler, disparosCancelarHandler, disparosContarHandler, disparosHandler, disparosMontarHandler, disparosOndaHandler, disparosOpcoesHandler, disparosRelatorioHandler } from '../controllers/disparos.controller.js';
 import { agenteNovoPedidoHandler, agentePainelHandler, agentePedidosHandler, agenteRegistroHandler, agenteRevisarHandler } from '../controllers/agente-chatwoot.controller.js';
 import { centralChamadoFeitoHandler, centralChamadosHandler, centralEstadoHandler, centralGeralHandler, centralPessoaHandler } from '../controllers/central.controller.js';
@@ -416,6 +417,18 @@ apiRouter.get('/public/disparos/ondas/:id', disparosOndaHandler);
 apiRouter.post('/public/disparos/ondas/:id/aprovar', disparosAprovarHandler);
 apiRouter.post('/public/disparos/ondas/:id/cancelar', disparosCancelarHandler);
 apiRouter.post('/public/disparos/ajuste', disparosAjusteHandler);
+// tela Tarefas do Chatwoot (18/11): mensagem agendada, ligação e lembrete. Login do Chatwoot; o WhatsApp das meninas só a administração da Doutor Digital cadastra
+apiRouter.get('/public/tarefas', tarefasHandler);
+apiRouter.get('/public/tarefas/buscar', tarefasBuscarHandler);
+apiRouter.get('/public/tarefas/contexto', tarefasContextoHandler);
+apiRouter.get('/public/tarefas/modelos', tarefasModelosHandler);
+apiRouter.post('/public/tarefas', tarefasCriarHandler);
+apiRouter.post('/public/tarefas/zap', tarefasZapHandler);
+apiRouter.post('/public/tarefas/:id/editar', tarefasEditarHandler);
+apiRouter.post('/public/tarefas/:id/cancelar', tarefasCancelarHandler);
+apiRouter.post('/public/tarefas/:id/confirmar', tarefasConfirmarHandler);
+apiRouter.post('/public/tarefas/:id/feita', tarefasFeitaHandler);
+apiRouter.post('/public/tarefas/:id/resultado', tarefasResultadoHandler);
 // Funil de etapas do Chatwoot (Dashboard App): chave X-Funil-Chave derivada do token do Chatwoot (sem sessão).
 apiRouter.post('/public/central/estado', centralEstadoHandler);
 apiRouter.post('/public/central/geral', centralGeralHandler);
