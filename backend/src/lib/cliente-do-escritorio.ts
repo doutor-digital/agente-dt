@@ -1,5 +1,5 @@
 /**
- * CLIENTE DO ESCRITÓRIO não é lead: a IA do escritório (Ana, da Magalhães) não responde quem já é cliente.
+ * CLIENTE DO ESCRITÓRIO não é lead: a IA do escritório (Sophia, da Magalhães) não responde quem já é cliente.
  *
  * A trava por etapa (`kommo_allowed_status_ids`) olha só o CARTÃO que recebeu a mensagem. Cliente que escreve e cai num cartão
  * novo em "Incoming leads"/"1 - Lead novo" do Comercial passaria por ela — e levaria a conversa de captação de quem já assinou.
@@ -40,7 +40,7 @@ export function calarClienteEstado(slug: string, raw: string | undefined = proce
 
 export function notaClienteDoEscritorio(mensagem: string): string {
   const trecho = mensagem.replace(/\s+/g, ' ').trim().slice(0, 140);
-  return `🤫 Quem escreveu já é CLIENTE do escritório (tem cartão em funil/etapa de cliente) — a Ana não respondeu; a equipe decide.${trecho ? ` Disse: "${trecho}${mensagem.trim().length > 140 ? '…' : ''}"` : ''}`;
+  return `🤫 Quem escreveu já é CLIENTE do escritório (tem cartão em funil/etapa de cliente) — a Sophia não respondeu; a equipe decide.${trecho ? ` Disse: "${trecho}${mensagem.trim().length > 140 ? '…' : ''}"` : ''}`;
 }
 
 export type SituacaoDaPorta = SituacaoNaFranquia | 'sem-regra' | 'falhou';

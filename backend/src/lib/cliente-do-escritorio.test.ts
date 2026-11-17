@@ -169,7 +169,7 @@ function kommoFalso(opcoes: { contatosDoMundo: Array<{ id: number; telefones: st
 const COM_O_NOVO = { id: 2, telefones: ['+55 63 99102-1043'], leadIds: [10] };
 const comKommo = (k: PortaDoKommo) => ({ ...deps('livre').d, conferir: conferenciaPorRegraDeCliente(unit, REGRA!, k) });
 
-test('CONTATO DUPLICADO com o mesmo telefone: o antigo tem cartão no Jurídico, o novo (do WhatsApp) não — a Ana CALA e deixa a nota', async () => {
+test('CONTATO DUPLICADO com o mesmo telefone: o antigo tem cartão no Jurídico, o novo (do WhatsApp) não — a Sophia CALA e deixa a nota', async () => {
   const d = comKommo(kommoFalso({ contatosDoMundo: [COM_O_NOVO, { id: 1, telefones: ['63 99102-1043'], leadIds: [5] }] }));
   const notas: string[] = [];
   d.anotar = async (_i, t) => (notas.push(t), { id: 1 });
@@ -187,7 +187,7 @@ test('contato duplicado com telefone escrito diferente (dígito a mais, hífen i
   }
 });
 
-test('lead de verdade: sem outro contato com o telefone, a conferência prova `livre` e a Ana SEGUE', async () => {
+test('lead de verdade: sem outro contato com o telefone, a conferência prova `livre` e a Sophia SEGUE', async () => {
   const r = await portaClienteDoEscritorio({ unit, leadId: 10, humanMessage: 'oi' }, comKommo(kommoFalso({ contatosDoMundo: [COM_O_NOVO] })));
   assert.equal(r?.situacao, 'livre');
   assert.equal(r?.calar, false);

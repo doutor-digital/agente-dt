@@ -137,19 +137,20 @@ const TETO_DA_BUSCA_POR_TELEFONE = 50;
  *  - qualquer outro caso (dígito a mais grudado, ramal, fixo, 10 dígitos, sem DDD, colados): casa se os 8 dígitos da pessoa
  *    aparecem EM QUALQUER LUGAR do trecho. Pode casar a mais (DDD não conferível), e isso é o lado seguro: um cartão a mais
  *    conferido, ninguém recebe a mais.
- * Também somem os invisíveis: U+00AD (hífen "mole"), U+180E, U+200B a U+200F, U+202A a U+202E e U+2066 a U+2069 (marcas de direção do copiar e colar), U+2060 e U+FEFF.
+ * Também somem os invisíveis: U+00AD (hífen "mole"), U+180E, U+200B a U+200F, U+202A a U+202E e U+2066 a U+2069 (marcas de direção do copiar e colar), U+2060 a U+2064, U+034F, U+061C e U+FEFF.
  */
 export function mesmoNumero(valorDoContato: string, chaveDaPessoaConferida: string): boolean {
   const final8 = chaveDaPessoaConferida.slice(2);
-  const limpo = valorDoContato.replace(/[\u00AD\u180E\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/g, '').replace(/[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]/g, '-');
+  const limpo = valorDoContato.replace(/[\u00AD\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF\u034F\u061C]/g, '').replace(/[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]/g, '-');
   const trechos = limpo.match(/\+?\d[\d\s().-]{6,}\d/g) ?? [];
   return trechos.some((t) => {
     const digitos = t.replace(/\D/g, '');
     const completo = digitos.length <= 13 ? telefoneWhatsapp(t) : null;
     if (completo) {
       if (chaveDaPessoa(completo) === chaveDaPessoaConferida) return true;
-      // Os 8 dígitos da pessoa NO FIM de um celular legível, com outro DDD: é outra pessoa.
-      if (digitos.endsWith(final8)) return false;
+      // Os 8 dígitos da pessoa NO FIM de um celular legível, com outro DDD: é outra pessoa. Exceção: 11 dígitos começando com 55 é ambíguo
+      // (o 55 do país sem DDD, "+55 99102-1043", ou o DDD 55): não dá para afirmar que é outro DDD, então cai no lado seguro (includes).
+      if (digitos.endsWith(final8) && !(digitos.length === 11 && digitos.startsWith('55'))) return false;
     }
     // Não bateu como celular inteiro: dígito a mais grudado ("63 9102-1043 1", "63910210431"), sem DDD, ramal. Os 8 dígitos dela dentro do trecho (lado seguro).
     return digitos.includes(final8);

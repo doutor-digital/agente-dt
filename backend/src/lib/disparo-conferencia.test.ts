@@ -222,6 +222,16 @@ test('escritório: dígito a MAIS grudado no número (recado, ramal sem separado
     assert.equal(await confere(ESCRITORIO, env(REGRA), com(valor)), 'livre', valor);
     assert.equal(mesmoNumero(valor, '6391021043'), false, valor);
   }
+  // 11 dígitos começando com 55 é ambíguo (o 55 do país sem DDD, ou DDD 55): lado seguro, a pessoa é conferida
+  for (const valor of ['+55 99102-1043', '+5599102-1043', '+55991021043', '55 9 9102-1043', '55 99102-1043']) {
+    assert.equal(await confere(ESCRITORIO, env(REGRA), com(valor)), 'ja-cliente', valor);
+    assert.equal(mesmoNumero(valor, '6391021043'), true, valor);
+  }
+  // outro DDD legível continua sendo outra pessoa
+  for (const valor of ['(11) 9 9102-1043', '55 11 9102-1043']) {
+    assert.equal(await confere(ESCRITORIO, env(REGRA), com(valor)), 'livre', valor);
+    assert.equal(mesmoNumero(valor, '6391021043'), false, valor);
+  }
   // não é a pessoa: os 8 dígitos dela não aparecem
   assert.equal(mesmoNumero('63 9102-2043 1', '6391021043'), false);
   assert.equal(mesmoNumero('63910220431', '6391021043'), false);
@@ -236,7 +246,7 @@ test('escritório: hífen invisível (U+00AD, "soft hyphen") dentro do número n
   }
   assert.equal(mesmoNumero('(11) 99102\u00AD1043', '6391021043'), false, 'invisível não muda o DDD');
   // outros invisíveis do copiar e colar (BOM, marcas de direção) também não partem o número
-  for (const valor of ['63 99102\uFEFF-1043', '\u202A(63) 99102-1043\u202C', '63 99102\u2066-1043\u2069', '63 99102\u180E1043']) {
+  for (const valor of ['63 99102\uFEFF-1043', '\u202A(63) 99102-1043\u202C', '63 99102\u2066-1043\u2069', '63 99102\u180E1043', '63 99102\u2061-1043', '63 99102\u2064-1043', '63 99102\u034F-1043', '63 99102\u061C-1043']) {
     assert.equal(mesmoNumero(valor, '6391021043'), true, JSON.stringify(valor));
   }
 });
