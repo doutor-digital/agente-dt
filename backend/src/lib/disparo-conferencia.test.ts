@@ -345,6 +345,14 @@ test('triagem: 1º cartão sumiu (lead-inexistente) e o 2º, do mesmo telefone, 
   assert.deepEqual(r.fora, { 'lead-inexistente': 1 });
 });
 
+test('triagem: sem a regra de cartão (franquia) o repetido continua só repetido, sem conferência extra', async () => {
+  const k = kommoFalso({ 1: { pipeline_id: COMERCIAL, status_id: PERDIDO, contatos: [1] }, 2: { pipeline_id: JURIDICO, status_id: 3, contatos: [2] } }, { 1: [1], 2: [2] });
+  const r = await triarComKommo([cand(1, 'Maria Souza', '5563991021043'), cand(2, 'Maria Souza', '5563991021043')], k, false);
+  assert.deepEqual(r.elegiveis.map((e) => e.leadId), [1]);
+  assert.deepEqual(r.fora, { 'repetido-na-lista': 1 });
+  assert.equal(k.chamadas.getLead, 1);
+});
+
 test('nome: só a unidade que confere no Kommo dispensa o nome; unidade COM franquia exige sempre, mesmo sem primeiroNome', () => {
   assert.equal(exigeNomeNaTriagem(CLINICA, [], env(`doutor-hernia-canaa=${JURIDICO}`)), true, 'franquia + campanha sem primeiroNome: triagem idêntica à de antes');
   assert.equal(exigeNomeNaTriagem(CLINICA, [], {} as NodeJS.ProcessEnv), true);
