@@ -268,9 +268,21 @@ export function lerResposta(texto: string): SugestaoDaIa[] | null {
   }
 }
 
-const radical = (w: string) => w.slice(0, MIN_LETRAS_DA_PALAVRA_EM_COMUM);
-/** As palavras de 5+ letras do texto, sem acento e em minúsculas — a unidade de comparação de toda a prova por palavra. */
+/** O radical de 6 letras: "interesse" (intere) não libera "intermitente" (interm) nem "internação" (intern); "conversar" (conver) não libera "convênio" (conven). */
+const LETRAS_DO_RADICAL = 6;
+/**
+ * A palavra sem o plural simples e cortada no radical: «dores»→«dor», «lombares»→«lombar», «pernas»→«perna», «internações»→«internacao».
+ * É a chave de comparação do que o paciente escreveu com o que a IA escreveu (a flexão não pode fazer o valor parecer "detalhe novo").
+ */
+export function chaveDaPalavra(w: string): string {
+  let k = w.replace(/(oes|aes)$/, 'ao').replace(/([rz])es$/, '$1');
+  if (k.length > 3) k = k.replace(/s$/, '');
+  return k.slice(0, LETRAS_DO_RADICAL);
+}
+/** As palavras de 5+ letras do texto, sem acento e em minúsculas — as que o VALOR precisa ter provado. */
 const palavrasDaFala = (t: string) => normalizar(t).split(' ').filter((w) => w.length >= MIN_LETRAS_DA_PALAVRA_EM_COMUM);
+/** TODAS as palavras que o paciente escreveu (inclusive as curtas: «dor» prova «dores»), em chave. */
+const chavesDoQueFoiDito = (t: string) => new Set(normalizar(t).split(' ').filter((w) => w.length >= 3).map(chaveDaPalavra));
 
 /**
  * Palavras que não carregam fato nenhum num resumo escrito pela IA: ligação ("sobre", "quando"), verbos de quem relata ("pediu", "enviou") e
@@ -293,19 +305,40 @@ const SEM_CONTEUDO = new Set(
 );
 /** As palavras de conteúdo do valor que o paciente NÃO escreveu (vazio = tudo veio da fala dele). */
 export function palavrasForaDaFala(valor: string, textoDoPaciente: string): string[] {
-  const ditas = new Set(palavrasDaFala(textoDoPaciente).map(radical));
-  return palavrasDaFala(valor).filter((w) => !SEM_CONTEUDO.has(w) && !ditas.has(radical(w)));
+  const ditas = chavesDoQueFoiDito(textoDoPaciente);
+  return palavrasDaFala(valor).filter((w) => !SEM_CONTEUDO.has(w) && !ditas.has(chaveDaPalavra(w)));
 }
 
 /** Parentes e conhecidos: a frase de prova que fala deles não prova a queixa de QUEM ESCREVE (nem a região da dor). */
 const OUTRA_PESSOA = new Set([
-  'pai', 'mae', 'filho', 'filha', 'marido', 'esposa', 'avo', 'avos', 'irmao', 'irma', 'tio', 'tia', 'sogro', 'sogra', 'namorado', 'namorada', 'neto', 'neta',
-  'genro', 'nora', 'primo', 'prima', 'cunhado', 'cunhada', 'padrasto', 'madrasta', 'companheiro', 'companheira', 'amigo', 'amiga', 'vizinho', 'vizinha', 'colega',
+  'pai', 'mae', 'papai', 'mamae', 'filho', 'filha', 'filhos', 'filhas', 'marido', 'esposa', 'esposo', 'noivo', 'noiva', 'avo', 'avos', 'vovo', 'bisavo', 'bisavos',
+  'irmao', 'irma', 'irmaos', 'irmas', 'tio', 'tia', 'tios', 'tias', 'sogro', 'sogra', 'namorado', 'namorada', 'neto', 'neta', 'netos', 'netas', 'enteado', 'enteada',
+  'sobrinho', 'sobrinha', 'sobrinhos', 'sobrinhas', 'genro', 'nora', 'primo', 'prima', 'cunhado', 'cunhada', 'padrasto', 'madrasta', 'companheiro', 'companheira',
+  'amigo', 'amiga', 'vizinho', 'vizinha', 'colega',
 ]);
+const PRONOME_DE_TERCEIRO = new Set(['ele', 'ela', 'eles', 'elas', 'dele', 'dela', 'deles', 'delas']);
+/** Quantas falas anteriores do paciente contam para saber de quem o «ele/ela» está falando. */
+const FALAS_DE_CONTEXTO = 3;
 /** Campos que descrevem o que o PACIENTE sente: a frase que os prova não pode ser sobre outra pessoa. */
 const SO_DE_QUEM_ESCREVE: ReadonlySet<string> = new Set(['registra_queixa', 'registra_regiao_dor']);
 export function falaDeOutraPessoa(trecho: string): boolean {
   return normalizar(trecho).split(' ').some((w) => OUTRA_PESSOA.has(w));
+}
+/**
+ * A frase de prova é sobre outra pessoa? Cita o parente ali mesmo, OU diz «ele/ela» e um parente foi citado numa das 3 falas anteriores do
+ * paciente («Meu pai está com dor.» … «Ele tem dor na lombar.»). `doPaciente` em ordem de hora.
+ */
+export function falaDeOutraPessoaNoContexto(trecho: string, doPaciente: ReadonlyArray<Pick<Fala, 'texto'>>): boolean {
+  if (falaDeOutraPessoa(trecho)) return true;
+  const t = normalizar(trecho);
+  if (!t.split(' ').some((w) => PRONOME_DE_TERCEIRO.has(w))) return false;
+  let i = -1;
+  doPaciente.forEach((f, j) => {
+    if (normalizar(f.texto).includes(t)) i = j; // a última fala que contém a frase
+  });
+  if (i < 0) return false;
+  // `i + 1`: a PRÓPRIA mensagem entra — «É pra minha mãe. Ela tem dor na lombar» é o jeito mais comum de escrever (sênior, 16/11).
+  return doPaciente.slice(Math.max(0, i - FALAS_DE_CONTEXTO), i + 1).some((f) => falaDeOutraPessoa(f.texto));
 }
 
 const NUMEROS_POR_EXTENSO = new Map<string, number>([
@@ -336,10 +369,9 @@ export function aparecePorInteiro(valor: string, textoDoPaciente: string): boole
   return v.length > 0 && ` ${normalizar(textoDoPaciente)} `.includes(` ${v} `);
 }
 
-const palavrasDe = (t: string) => palavrasDaFala(t).map(radical);
 function palavraEmComum(valor: string, trecho: string): boolean {
-  const doTrecho = new Set(palavrasDe(trecho));
-  return palavrasDe(valor).some((w) => doTrecho.has(w));
+  const doTrecho = chavesDoQueFoiDito(trecho);
+  return palavrasDaFala(valor).some((w) => doTrecho.has(chaveDaPalavra(w)));
 }
 
 export interface Aceita {
@@ -403,7 +435,7 @@ export function validarSugestoes(sugestoes: readonly SugestaoDaIa[], candidatos:
         continue;
       }
     }
-    if (SO_DE_QUEM_ESCREVE.has(c.regra.toolName) && falaDeOutraPessoa(trecho)) {
+    if (SO_DE_QUEM_ESCREVE.has(c.regra.toolName) && falaDeOutraPessoaNoContexto(trecho, doPaciente)) {
       recusadas.push({ campo: nome, motivo: 'fala de outra pessoa: a frase de prova é sobre um parente ou conhecido, não sobre quem escreve' });
       continue;
     }
@@ -615,6 +647,9 @@ export async function lerCartaoEmSilencio(unit: Unit, leadId: number, deps: Deps
     tentativasDeAudio.set(chaveDaUltimaLeitura.slice(2), { dia, n });
     if (n < MAX_TENTATIVAS_DE_AUDIO) return { tipo: 'pulou', motivo: `áudio do paciente sem transcrição (tentativa ${n} de ${MAX_TENTATIVAS_DE_AUDIO}): conversa incompleta, não li` };
     logger.info({ unit: unit.slug, leadId, audiosSemTexto }, `${ID_CAPTURA_SILENCIOSA}: áudio sem transcrição após ${n} tentativas — leio sem ele (lacuna marcada)`);
+  } else {
+    // a transcrição deu certo: as falhas de antes eram passageiras (Whisper fora do ar) e não contam para a próxima vez
+    tentativasDeAudio.delete(chaveDaUltimaLeitura.slice(2));
   }
   const r = await deps.perguntar(unit, montarPedido(candidatos, falas, audiosSemTexto)).catch((err) => {
     logger.warn({ err: String(err), unit: unit.slug, leadId }, `${ID_CAPTURA_SILENCIOSA}: a chamada à IA lançou erro (conta como IA fora do ar)`);
@@ -703,9 +738,9 @@ export async function lerCartaoEmSilencio(unit: Unit, leadId: number, deps: Deps
       await kommo.gravarCamposDoLead(leadId, lote.map(({ field_id, values }) => ({ field_id, values })));
       for (const { a } of lote) gravado(a);
     } catch (err) {
-      falhouAoGravar = true;
       const status = err instanceof KommoApiError ? err.status : undefined;
       if (status !== 400) {
+        falhouAoGravar = true;
         // 429, 403, timeout, rede: só registra e sai. Repetir campo a campo empurraria o freio do Kommo da rede inteira.
         for (const { a } of lote) recusadas.push({ campo: nomeDe(a), motivo: `o Kommo não aceitou a gravação (${status ?? 'sem resposta'}): não tentei de novo` });
         logger.warn({ err: String(err), status, unit: unit.slug, leadId, campos: lote.length }, `${ID_CAPTURA_SILENCIOSA}: o lote falhou por motivo que não é valor ruim — registrei e saí`);
@@ -730,14 +765,18 @@ export async function lerCartaoEmSilencio(unit: Unit, leadId: number, deps: Deps
             } catch (err2) {
               const st2 = err2 instanceof KommoApiError ? err2.status : undefined;
               recusadas.push({ campo: nomeDe(a), motivo: `o Kommo recusou a gravação (${st2 ?? 'sem resposta'}): ${String(err2).slice(0, 100)}` });
-              if (st2 !== 400) parou = true; // 429/403/rede: não insiste nos campos que faltam
+              if (st2 !== 400) {
+                parou = true; // 429/403/rede: não insiste nos campos que faltam
+                falhouAoGravar = true;
+              }
             }
           }
         }
       }
     }
   }
-  // falha de gravação (Kommo fora do ar) não marca a conversa como lida: o próximo turno pulado tenta de novo
+  // falha de gravação por motivo passageiro (429, 403, rede, Kommo fora do ar) não marca a conversa como lida: o próximo turno pulado tenta de novo.
+  // Valor que o Kommo recusa com 400 É marcado: a IA daria o mesmo valor, e pagar de novo não conserta.
   if (!falhouAoGravar) marcarComoLida();
   if (gravou.length) {
     const linhas = gravou.map((g) => `${g.campo}: ${g.valor.slice(0, 120)}`).join(' · ');
