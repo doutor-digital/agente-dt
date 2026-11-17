@@ -17,6 +17,8 @@ import {
   MAX_TENTATIVAS_DE_AUDIO,
   PRAZO_DA_LEITURA_MS,
   falaDeOutraPessoa,
+  falaDeOutraPessoaNoContexto,
+  chaveDaPalavra,
   numerosDoTexto,
   palavrasForaDaFala,
   _limparCapturaParaTeste,
@@ -842,6 +844,89 @@ test('validar: frase de prova sobre OUTRA pessoa não prova Região da dor nem Q
   assert.ok(falaDeOutraPessoa('minha mãe também sente') && falaDeOutraPessoa('o marido dela') && !falaDeOutraPessoa('sinto dor na lombar'));
 });
 
+test('o que o PACIENTE escreveu vale por radical de 6 letras: «interesse» não libera «intermitente»/«internação», «conversar» não libera «convênio»', () => {
+  const dito = 'Tenho interesse e quero conversar, sinto dores lombares e dor na perna';
+  assert.deepEqual(palavrasForaDaFala('Dor intermitente', dito), ['intermitente']);
+  assert.deepEqual(palavrasForaDaFala('Dor com internação', dito), ['internacao']);
+  assert.deepEqual(palavrasForaDaFala('Dor sem convênio', dito), ['convenio']);
+  // pelo radical de 5 letras (a regra anterior) as três passariam
+  assert.equal(chaveDaPalavra('interesse'), 'intere');
+  assert.notEqual(chaveDaPalavra('interesse'), chaveDaPalavra('intermitente'));
+  assert.notEqual(chaveDaPalavra('interesse'), chaveDaPalavra('internacao'));
+  assert.notEqual(chaveDaPalavra('conversar'), chaveDaPalavra('convenio'));
+});
+
+test('plural e flexão simples seguem passando: «dores»/«dor», «lombar»/«lombares», «pernas»/«perna», «internações»/«internação»', () => {
+  assert.deepEqual(palavrasForaDaFala('Dores lombares', 'dor lombar'), []);
+  assert.deepEqual(palavrasForaDaFala('Dor lombar', 'dores lombares'), []);
+  assert.deepEqual(palavrasForaDaFala('Dor nas pernas', 'sinto dor na perna'), []);
+  assert.deepEqual(palavrasForaDaFala('Dor na perna', 'dói nas pernas'), []);
+  assert.deepEqual(palavrasForaDaFala('Duas internações', 'fui internado, tive uma internação'), []);
+  const cands = camposDaEtapaVazios({ regras: REGRAS, defs: DEFS, lead: lead() });
+  const r = validarSugestoes([{ campo: '✎ Queixa', valor: 'Dores lombares', trecho: 'sinto dor na lombar' }], cands, [...CONVERSA, fala('paciente', 'sinto dor na lombar')]);
+  assert.equal(r.aceitas.length, 1);
+});
+
+test('outra pessoa: esposo, noivo(a), namorado(a), enteado(a), neto(a), sobrinho(a), bisavô/bisavó também contam', () => {
+  for (const f of ['meu esposo sente dor', 'minha noiva está mal', 'meu noivo tem dor', 'minha namorada reclama', 'meu enteado sente dor', 'minha enteada', 'minha neta tem dor', 'meu neto', 'meu sobrinho', 'minha sobrinha sente', 'meu bisavô tem dor', 'minha bisavó caiu']) {
+    assert.equal(falaDeOutraPessoa(f), true, f);
+  }
+  assert.equal(falaDeOutraPessoa('sinto dor na lombar'), false);
+});
+
+test('outra pessoa: «ele/ela» sem parente na frase, mas com parente numa das 3 falas anteriores do paciente, também é outra pessoa', () => {
+  const falas = ['Boa tarde, meu pai está com dor há tempos', 'Ele já fez exame', 'Quero saber o valor', 'Ele tem dor na lombar irradiando'].map((t) => fala('paciente', t));
+  assert.equal(falaDeOutraPessoaNoContexto('Ele tem dor na lombar irradiando', falas), true);
+  // o parente está a 4 falas de distância: não conta
+  const longe = ['meu marido está mal', 'a', 'b', 'c', 'Ela sente dor na lombar'].map((t) => fala('paciente', t));
+  assert.equal(falaDeOutraPessoaNoContexto('Ela sente dor na lombar', longe), false);
+  // parente e «ela» na MESMA mensagem (o jeito mais comum; sênior, 16/11): a IA cita só «Ela tem dor na lombar»
+  const mesma = ['Boa tarde', 'É pra minha mãe. Ela tem dor na lombar há meses'].map((t) => fala('paciente', t));
+  assert.equal(falaDeOutraPessoaNoContexto('Ela tem dor na lombar', mesma), true);
+  // sem pronome de terceiro, a dor é de quem escreve
+  const propria = ['meu pai está com dor', 'Eu tenho dor na lombar'].map((t) => fala('paciente', t));
+  assert.equal(falaDeOutraPessoaNoContexto('Eu tenho dor na lombar', propria), false);
+  // e no validador: a Região da dor e a Queixa com essa frase de prova são recusadas
+  const cands = camposDaEtapaVazios({ regras: REGRAS, defs: DEFS, lead: lead() });
+  const r = validarSugestoes(
+    [
+      { campo: '⚕ Região da dor', valor: 'Lombar', trecho: 'Ele tem dor na lombar irradiando' },
+      { campo: '✎ Queixa', valor: 'Dor na lombar irradiando', trecho: 'Ele tem dor na lombar irradiando' },
+    ],
+    cands,
+    [...CONVERSA.slice(0, 1), ...falas],
+  );
+  assert.equal(r.aceitas.length, 0);
+  assert.equal(r.recusadas.filter((x) => /fala de outra pessoa/.test(x.motivo)).length, 2);
+});
+
+test('valor que o Kommo recusa com 400 marca a conversa como lida: o próximo turno não paga a IA de novo', async () => {
+  const resposta = JSON.stringify({ campos: [{ campo: '⚑ Origem', valor: 'Indicação', trecho: 'indicação de uma amiga' }] });
+  const m = mundo({ resposta });
+  kommoQueRecusa(m, () => new KommoApiError('x', 400, {}), []);
+  const r1 = await lerCartaoEmSilencio(UNIT, 777, m.deps);
+  assert.equal(r1.tipo === 'leu' ? r1.gravou.length : -1, 0);
+  const r2 = await lerCartaoEmSilencio(UNIT, 777, m.deps);
+  assert.equal(r2.tipo, 'pulou');
+  assert.match(r2.tipo === 'pulou' ? r2.motivo : '', /não mudou/);
+  assert.equal(m.perguntas.length, 1);
+});
+
+test('a contagem de tentativas de áudio zera quando a transcrição dá certo', async () => {
+  const m = mundo({ resposta: JSON.stringify({ campos: [] }) });
+  m.transcricoes.faltam = 1;
+  await lerCartaoEmSilencio(UNIT, 777, m.deps); // tentativa 1
+  await lerCartaoEmSilencio(UNIT, 777, m.deps); // tentativa 2
+  m.transcricoes.faltam = 0; // o Whisper voltou
+  assert.equal((await lerCartaoEmSilencio(UNIT, 777, m.deps)).tipo, 'leu');
+  // conversa nova, o áudio falha de novo: recomeça em 1 (sem a zerada seria a 3ª e leria sem o áudio)
+  m.deps.falas = async () => ({ falas: CONVERSA, ultimaId: 'nova', audios: new Map<string, string>() });
+  m.transcricoes.faltam = 1;
+  const r = await lerCartaoEmSilencio(UNIT, 777, m.deps);
+  assert.equal(r.tipo, 'pulou');
+  assert.match(r.tipo === 'pulou' ? r.motivo : '', /tentativa 1 de/);
+});
+
 test('validar: tempo e número no valor têm de aparecer IGUAIS numa fala do paciente («há 2 anos», 3 → 8 meses)', () => {
   const cands = camposDaEtapaVazios({ regras: REGRAS, defs: DEFS, lead: lead() });
   const conversa = [fala('paciente', 'tenho dor na lombar há 3 meses')];
@@ -933,7 +1018,7 @@ test('validar: texto livre com frase que não tem relação com o valor é recus
   const r = validarSugestoes([{ campo: '✎ Queixa', valor: 'Dor lombar crônica', trecho: 'bom dia, tudo bem?' }], cands, conversa);
   assert.equal(r.aceitas.length, 0);
   assert.match(r.recusadas[0].motivo, /nenhuma palavra em comum/);
-  const ok = validarSugestoes([{ campo: '✎ Queixa', valor: 'Lombalgia há 3 meses', trecho: 'dor forte na lombar há 3 meses' }], cands, conversa);
+  const ok = validarSugestoes([{ campo: '✎ Queixa', valor: 'Dor lombar há 3 meses', trecho: 'dor forte na lombar há 3 meses' }], cands, conversa);
   assert.equal(ok.aceitas.length, 1);
 });
 
