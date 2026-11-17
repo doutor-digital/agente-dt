@@ -137,11 +137,11 @@ const TETO_DA_BUSCA_POR_TELEFONE = 50;
  *  - qualquer outro caso (dígito a mais grudado, ramal, fixo, 10 dígitos, sem DDD, colados): casa se os 8 dígitos da pessoa
  *    aparecem EM QUALQUER LUGAR do trecho. Pode casar a mais (DDD não conferível), e isso é o lado seguro: um cartão a mais
  *    conferido, ninguém recebe a mais.
- * Também somem os invisíveis U+00AD (hífen "mole"), U+200B a U+200F e U+2060.
+ * Também somem os invisíveis: U+00AD (hífen "mole"), U+180E, U+200B a U+200F, U+202A a U+202E e U+2066 a U+2069 (marcas de direção do copiar e colar), U+2060 e U+FEFF.
  */
 export function mesmoNumero(valorDoContato: string, chaveDaPessoaConferida: string): boolean {
   const final8 = chaveDaPessoaConferida.slice(2);
-  const limpo = valorDoContato.replace(/[\u00AD\u200B-\u200F\u2060]/g, '').replace(/[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]/g, '-');
+  const limpo = valorDoContato.replace(/[\u00AD\u180E\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/g, '').replace(/[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]/g, '-');
   const trechos = limpo.match(/\+?\d[\d\s().-]{6,}\d/g) ?? [];
   return trechos.some((t) => {
     const digitos = t.replace(/\D/g, '');

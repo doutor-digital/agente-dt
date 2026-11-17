@@ -235,6 +235,10 @@ test('escritório: hífen invisível (U+00AD, "soft hyphen") dentro do número n
     assert.equal(mesmoNumero(valor, '6391021043'), true, JSON.stringify(valor));
   }
   assert.equal(mesmoNumero('(11) 99102\u00AD1043', '6391021043'), false, 'invisível não muda o DDD');
+  // outros invisíveis do copiar e colar (BOM, marcas de direção) também não partem o número
+  for (const valor of ['63 99102\uFEFF-1043', '\u202A(63) 99102-1043\u202C', '63 99102\u2066-1043\u2069', '63 99102\u180E1043']) {
+    assert.equal(mesmoNumero(valor, '6391021043'), true, JSON.stringify(valor));
+  }
 });
 
 test('escritório: a busca por telefone TEM de devolver o contato do próprio cartão; se não devolver, indisponivel (nunca livre em silêncio)', async () => {
