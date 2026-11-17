@@ -25,6 +25,9 @@ export { AUTOMACAO_DISPARO } from './modo.js';
  * `DISPARO_LISTA_DE_TESTE`: quem pode receber de verdade com a unidade LIGADA — POR UNIDADE, nunca global.
  *
  *   `doutor-hernia-canaa=5563991021043,5563...;doutor-hernia-balsas=*`
+ *   `magalhaes-advocacia=5563991021043/doutor-hernia-balsas=5563...`  ← a barra `/` também separa unidades (é o que vai no
+ *   `.env`: lá o `;` quebra o deploy, porque o `set -a; . ./.env` do deploy.yml lê `;` como fim de comando, e aspas chegam
+ *   LITERAIS no contêiner, porque o env_file do Docker não as tira). `slug=*` funciona igual antes ou depois da barra.
  *
  *  - `<slug>=<telefones>` → só esses números recebem naquela unidade;
  *  - `<slug>=*` → todos os aprovados DAQUELA unidade (a decisão deliberada de soltar a onda, depois da prova);
@@ -33,7 +36,7 @@ export { AUTOMACAO_DISPARO } from './modo.js';
  * Devolve `null` para "todos" e um conjunto (possivelmente vazio) para "só estes".
  */
 export function listaDeTesteDoAmbiente(slug: string, env: NodeJS.ProcessEnv = process.env): ReadonlySet<string> | null {
-  for (const entrada of (env.DISPARO_LISTA_DE_TESTE ?? '').split(/[;\n]/)) {
+  for (const entrada of (env.DISPARO_LISTA_DE_TESTE ?? '').split(/[;\n/]/)) {
     const i = entrada.indexOf('=');
     if (i < 0 || entrada.slice(0, i).trim() !== slug) continue;
     const valores = entrada.slice(i + 1).split(/[,+]/).map((v) => v.trim());
@@ -46,7 +49,7 @@ export function listaDeTesteDoAmbiente(slug: string, env: NodeJS.ProcessEnv = pr
 /** O que a variável tem de errado (formato antigo, global), para o log de subida avisar: nada disso vale. */
 export function avisosDaListaDeTeste(env: NodeJS.ProcessEnv = process.env, variavel = 'DISPARO_LISTA_DE_TESTE'): string[] {
   return (env[variavel] ?? '')
-    .split(/[;\n]/)
+    .split(/[;\n/]/)
     .map((e) => e.trim())
     .filter((e) => e && !/^[a-z0-9][a-z0-9-]*=./i.test(e))
     .map((e) => `${variavel}: a entrada "${e.slice(0, 40)}" não vale (o formato é por unidade: slug=telefone,telefone ou slug=*); ninguém recebe por ela`);

@@ -52,6 +52,16 @@ test('"*" solta só a unidade que o tem; nunca é global', () => {
   assert.equal(listaDeTesteDoAmbiente(CANAA, env('5563991021043'))!.size, 0, 'telefone sem unidade (formato antigo) não vale');
 });
 
+test('"/" também separa unidades (o ";" quebra o source do .env no deploy): formato do .env de produção', () => {
+  const v = env(`${CANAA}=*/magalhaes-advocacia=*`);
+  assert.equal(listaDeTesteDoAmbiente(CANAA, v), null, 'Canaã continua soltando todos');
+  assert.equal(listaDeTesteDoAmbiente('magalhaes-advocacia', v), null, 'Magalhães solta todos');
+  assert.equal(listaDeTesteDoAmbiente('doutor-hernia-balsas', v)!.size, 0, 'quem não aparece: ninguém');
+  assert.deepEqual([...listaDeTesteDoAmbiente('doutor-hernia-balsas', env(`${CANAA}=*/doutor-hernia-balsas=+55 63 99102-1043`))!], ['5563991021043'], 'telefone com + e espaço segue valendo');
+  assert.deepEqual(avisosDaListaDeTeste(v), [], 'formato com / não gera aviso');
+  assert.equal(listaDeTesteDoAmbiente(CANAA, env('*/*'))!.size, 0, '"*" sem unidade continua sem valer');
+});
+
 test('o log de subida avisa a entrada no formato antigo, que não vale', () => {
   assert.deepEqual(avisosDaListaDeTeste(env(`${CANAA}=5563991021043;doutor-hernia-balsas=*`)), []);
   assert.equal(avisosDaListaDeTeste(env('*')).length, 1);
