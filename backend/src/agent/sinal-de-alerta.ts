@@ -358,51 +358,6 @@ const SINAIS_NA_FALA: Array<{ sinal: string; re: RegExp; negavel: boolean }> = [
   },
 ];
 
-/**
- * SEQUELA de AVC/derrame do próprio paciente, NA MESMA FRASE do sinal ("tive um AVC há 2 meses e fiquei com a fala
- * enrolada", "depois do AVC meu braço ficou mole", "derrame ano passado, a perna ficou fraca"): a fala, o braço e a
- * perna são sequela, não o sinal de agora — quem decide é o modelo, com a regra "AVC que já passou não é sinal de
- * alerta". Salto, lead 4015148 (17/11).
- *
- * Estreito de propósito (revisão do sênior, #393): "perna fraca" é o sinal (a) da coluna e só deixa de parar quando a
- * MESMA frase liga a fraqueza a um AVC antigo do PRÓPRIO paciente. Não vale: AVC em outra frase ou mensagem, AVC de
- * terceiro ("minha mãe teve AVC"), derrame no joelho/ombro, AVC de menos de um mês, ano corrente, nem frase com
- * "agora/hoje/de repente/desde ontem". Passado = a duração MAIS PRÓXIMA do AVC ≥ 30 dias/4 semanas/meses/anos,
- * "ano/mês passado", "em <ano anterior>", ou "sequela" / "depois/após/desde o AVC".
- */
-const NUMERO_POR_EXTENSO: Record<string, number> = { um: 1, uma: 1, dois: 2, duas: 2, tres: 3, 'três': 3, quatro: 4, cinco: 5, seis: 6 };
-const MENCAO_AVC =
-  /\b(?:avc[hi]?|acidente\s+vascular|derrame(?!\s+(?:articular|pleural|ocular)|\s+(?:n[oa]s?|d[oa]s?|de)\s+(?:joelho|ombro|cotovelo|tornozelo|quadril|punho|m[aã]o|p[eé]|olho|pulm[aã]o|articula\w*)))\b/giu;
-const LIGADO_AO_AVC = /\bsequela\w*|\b(?:depois|ap[oó]s|desde)\s+(?:d[oa]\s+|o\s+|a\s+)?(?:meu\s+|um\s+|uma\s+)?(?:avc[hi]?|derrame)\b/iu;
-const QUANDO =
-  /\b(?:h[aá]|faz)\s+(?:uns?\s+|umas?\s+|mais\s+de\s+|quase\s+)?(\d+|um|uma|dois|duas|tr[eê]s|quatro|cinco|seis)\s*(dias?|semanas?|m[eê]s(?:es)?|anos?)\b|\b(ano|m[eê]s)\s+passado\b|\bem\s+((?:19|20)\d{2})\b/giu;
-const TERCEIRO = /\b(?:meu|minha|da\s+minha|do\s+meu)\s+(?:m[ãa]e|pai|filh\w*|av[óô]|neto|neta|marido|espos\w*|irm[ãa]o?|tia?|sogr\w*|cunhad\w*|amig\w*|vizinh\w*)\b/iu;
-/** O paciente diz que é AGORA: aí o sinal vale, com ou sem AVC antigo. */
-const SINAL_DE_AGORA = /\b(?:agora|agorinha|hoje|de\s+repente|neste\s+momento|desde\s+ontem|ontem|essa\s+manh[ãa]|esta\s+manh[ãa])\b/iu;
-
-function quandoEhPassado(q: RegExpMatchArray, anoAtual: number): boolean {
-  if (q[3]) return true; // "ano/mês passado"
-  if (q[4]) return Number(q[4]) < anoAtual; // "em 2019" (o ano corrente não é passado)
-  const n = /^\d+$/.test(q[1]) ? Number(q[1]) : (NUMERO_POR_EXTENSO[q[1].toLowerCase()] ?? 0);
-  const u = q[2].toLowerCase();
-  return /^ano/.test(u) || /^m[eê]s/.test(u) || (/^semana/.test(u) && n >= 4) || (/^dia/.test(u) && n >= 30);
-}
-
-export function sequelaDeAvcNaFrase(frase: string, anoAtual: number = new Date().getFullYear()): boolean {
-  if (SINAL_DE_AGORA.test(frase)) return false;
-  const quandos = [...frase.matchAll(QUANDO)];
-  for (const m of frase.matchAll(MENCAO_AVC)) {
-    const i = m.index ?? 0;
-    if (TERCEIRO.test(frase.slice(Math.max(0, i - 40), i))) continue; // o AVC é de outra pessoa
-    if (LIGADO_AO_AVC.test(frase)) return true;
-    // a duração MAIS PRÓXIMA do AVC ("dor há 2 anos e tive AVC há 3 dias" → 3 dias)
-    let perto: RegExpMatchArray | null = null;
-    for (const q of quandos) if (!perto || Math.abs((q.index ?? 0) - i) < Math.abs((perto.index ?? 0) - i)) perto = q;
-    if (perto && quandoEhPassado(perto, anoAtual)) return true;
-  }
-  return false;
-}
-
 /** Brincadeira ("kkk", "haha", "rsrs"): "a boca torta de raiva kkk" não é sinal neurológico. */
 const HUMOR = /k{3,}|\bha(?:ha)+|\brs(?:rs)+/i;
 
@@ -427,8 +382,6 @@ export function sinalNaFala(falas: string[]): string | null {
       // Brincadeira só na MESMA frase do sinal: um "kkkk to com medo" depois não desliga "a fala enrolada e a boca torta".
       if (sinal.startsWith('sinal neurológico') && HUMOR.test(fraseEm(texto, i))) continue;
       if (negavel && negadoAntes(texto, i)) continue;
-      // Sequela de AVC/derrame antigo DO PACIENTE, na MESMA frase do sinal (fala, braço, perna): fica com o modelo.
-      if ((sinal.startsWith('sinal neurológico') || sinal === 'perda de força na perna') && sequelaDeAvcNaFrase(fraseEm(texto, i))) continue;
       // Queixa de anos ("não consigo segurar o xixi desde a gravidez faz 10 anos") não é o sinal de agora — só na MESMA
       // oração: "não estou segurando o xixi desde ontem, tenho hérnia há 3 anos" é o sinal.
       const resto = texto.slice(i, i + 120).split(/[.!?\n,;]|\se\s/)[0] ?? '';

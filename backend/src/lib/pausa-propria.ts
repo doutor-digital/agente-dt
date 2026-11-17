@@ -19,6 +19,7 @@ const VALIDADE_MS = 30 * 60_000;
  * cadastro da unidade (decisão do João, 26/10). Quem não diz é `outra` — nunca calado.
  */
 export type OrigemPausaPropria = 'handoff' | 'alerta' | 'outra';
+const PESO: Record<OrigemPausaPropria, number> = { handoff: 0, outra: 1, alerta: 2 };
 const marcas = new Map<string, { t: number; origem: OrigemPausaPropria }>();
 
 /** A conta do Kommo da unidade (comercial e resgate da mesma clínica dividem o cartão). */
@@ -33,11 +34,12 @@ export function registrarPausaPropria(
   origem: OrigemPausaPropria = 'outra',
 ): void {
   if (leadId === null || leadId === undefined || leadId === '') return;
-  // Uma vez 'alerta', não rebaixa: um 2º pausar_ia sem sinal no mesmo turno não pode calar o aviso do alerta.
+  // Nunca rebaixa dentro da validade (alerta > outra > handoff): um 2º pausar_ia comum no mesmo turno não pode calar
+  // o aviso do alerta, do teto ou da resposta ao candidato a vaga.
   const k = chave(conta, leadId);
   const antes = marcas.get(k);
-  const manterAlerta = antes?.origem === 'alerta' && agora - antes.t < VALIDADE_MS;
-  marcas.set(k, { t: agora, origem: manterAlerta ? 'alerta' : origem });
+  const manter = antes && agora - antes.t < VALIDADE_MS && PESO[antes.origem] > PESO[origem];
+  marcas.set(k, { t: agora, origem: manter ? antes.origem : origem });
   if (marcas.size > 5_000) {
     for (const [k, m] of marcas) if (agora - m.t > VALIDADE_MS) marcas.delete(k);
   }
