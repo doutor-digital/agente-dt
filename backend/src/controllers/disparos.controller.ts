@@ -24,7 +24,7 @@ import { logger } from '../lib/logger.js';
 import { chamar, contaChatwootDoAmbiente, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 import { CAIXAS_CLOUD } from '../lib/chatwoot-regua.js';
 import { caixasDaUnidade } from '../lib/robos-estado.js';
-import { freiosDoAmbiente } from '../lib/disparo/freios.js';
+import { freiosDaUnidade } from '../lib/disparo/freios.js';
 import { cancelarOnda, definicaoDaOnda } from '../lib/disparo/onda.js';
 import { motivoSemNumero, telefoneMascarado } from '../lib/disparo/painel.js';
 import { textoFinal, valoresDasVariaveis } from '../lib/disparo/regras.js';
@@ -109,7 +109,7 @@ function contagemPorEstado(linhas: Array<{ ondaId: string; estado: string; _coun
 }
 
 function resumoDosFreios(unit: Unit, tier: string | null) {
-  const f = freiosComOTier(freiosDoAmbiente(), tier);
+  const f = freiosComOTier(freiosDaUnidade(unit.slug), tier);
   return {
     janela: `${f.janelaInicio}h às ${f.janelaFim}h${f.soDiasUteis ? ', segunda a sexta, sem feriado nacional' : ''}`,
     tetoPorHora: f.tetoPorHora,
@@ -154,7 +154,7 @@ async function custoERitmo(unit: Unit, onda: { categoriaModelo: string | null; c
   const custo = comPrecoDoNumero(custoDaUnidade, doNumero);
   const orcamento = await comTeto(orcamentoDeGasto({ unitId: unit.id, agora: new Date(), tetoReais, precoAtual: precoDoTeto, preco: precoEmReaisDoBanco }).catch(() => null), TETO_DA_PARTE_MS, null);
   const teto = { precoDoTeto, orcamento };
-  const ritmo = ritmoDaOnda({ pessoas: onda.total, freios: freiosComOTier(freiosDoAmbiente(), tier), tetoReais, porMensagemBrl: precoDoTeto });
+  const ritmo = ritmoDaOnda({ pessoas: onda.total, freios: freiosComOTier(freiosDaUnidade(unit.slug), tier), tetoReais, porMensagemBrl: precoDoTeto });
   return { custo, ritmo: { ...ritmo, dias: Number.isFinite(ritmo.dias) ? ritmo.dias : null }, orcamento: teto.orcamento };
 }
 

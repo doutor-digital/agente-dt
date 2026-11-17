@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { FREIOS_PADRAO, type Freios } from './disparo/freios.js';
+import { FREIOS_PADRAO, freiosDaUnidade, type Freios } from './disparo/freios.js';
 import { rodarUnidade, rodadasSemAndar, motivoDaMeta, textoDoEspelho, quandoEmTexto, NOTA_MAX, type DadosDeGravacao, type Destino, type Modo, type OndaNoLote, type Porto, type UnidadeNoLote } from './disparo/lote.js';
 import type { ResultadoDoTemplate } from './whatsapp-meta.js';
 import type { SituacaoNaFranquia } from './disparo/regras.js';
@@ -169,6 +169,33 @@ test('LIGADO: respeita o teto por hora da unidade e não conclui enquanto sobra 
   const r2 = await rodarUnidade(cheio.porto, sem_pausa, UNIDADE, [ONDA]);
   assert.equal(r2.mandou, 0);
   assert.match(r2.parou ?? '', /teto atingido/);
+});
+
+test('LIGADO: o teto de 24 h é POR UNIDADE — a Magalhães para em 200 e quem não está na lista para em 100 (mesma fila, mesmo histórico)', async () => {
+  const env = { DISPARO_TETO_DIA_POR_UNIDADE: 'magalhaes-advocacia=200' } as NodeJS.ProcessEnv;
+  const comPausa0 = (slug: string): Freios => ({ ...freiosDaUnidade(slug, env), pausaMs: 0 });
+  const MAGALHAES: UnidadeNoLote = { ...UNIDADE, slug: 'magalhaes-advocacia', nome: 'Magalhães Advocacia' };
+
+  // 195 nas últimas 24 h: a Magalhães ainda tem 5 vagas (200), Canaã já passou do seu teto (100)
+  const mag = montar({ modo: 'ligado', quantos: 10, noDia: 195 });
+  const rMag = await rodarUnidade(mag.porto, comPausa0(MAGALHAES.slug), MAGALHAES, [ONDA]);
+  assert.equal(rMag.mandou, 5, '195 de 200 já foram: cabem 5');
+  assert.equal(mag.chamadas.enviar.length, 5);
+  assert.deepEqual(mag.chamadas.concluidas, [], 'sobra gente: a onda não conclui');
+
+  const canaa = montar({ modo: 'ligado', quantos: 10, noDia: 195 });
+  const rCanaa = await rodarUnidade(canaa.porto, comPausa0(UNIDADE.slug), UNIDADE, [ONDA]);
+  assert.equal(rCanaa.mandou, 0, 'Canaã continua em 100: 195 já passa do teto');
+  assert.equal(canaa.chamadas.enviar.length, 0);
+  assert.match(rCanaa.parou ?? '', /teto atingido/);
+
+  // no limite exato: 200 para a Magalhães; 100 para a outra
+  const magCheia = montar({ modo: 'ligado', quantos: 3, noDia: 200 });
+  const rCheia = await rodarUnidade(magCheia.porto, comPausa0(MAGALHAES.slug), MAGALHAES, [ONDA]);
+  assert.equal(rCheia.mandou, 0);
+  assert.match(rCheia.parou ?? '', /teto atingido/);
+  const canaaNoLimite = montar({ modo: 'ligado', quantos: 3, noDia: 99 });
+  assert.equal((await rodarUnidade(canaaNoLimite.porto, comPausa0(UNIDADE.slug), UNIDADE, [ONDA])).mandou, 1, '99 de 100: cabe 1');
 });
 
 test('LIGADO: o teto é reconferido a cada envio — se outro processo gastou as vagas no meio, para', async () => {

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { FREIOS_PADRAO, dentroDaJanela, falhasSeguidasDemais, freiosDoAmbiente, passouDoLimiteDeSair, vagas } from './disparo/freios.js';
+import { FREIOS_PADRAO, avisosDoAmbiente, dentroDaJanela, falhasSeguidasDemais, freiosDaUnidade, freiosDoAmbiente, passouDoLimiteDeSair, tetoPorDiaDaUnidade, vagas } from './disparo/freios.js';
 
 const SP = 'America/Sao_Paulo';
 // 2026-10-21 é uma quarta-feira; 12:00Z = 09:00 em São Paulo.
@@ -73,4 +73,74 @@ test('rodadas seguidas com limite de taxa: padrão 10, muda por DISPARO_LIMITE_D
   assert.equal(FREIOS_PADRAO.limiteDeTaxaSeguidos, 10);
   assert.equal(freiosDoAmbiente({ DISPARO_LIMITE_DE_TAXA_SEGUIDOS: '4' } as NodeJS.ProcessEnv).limiteDeTaxaSeguidos, 4);
   for (const ruim of ['0', 'abc', '-1', '1000']) assert.equal(freiosDoAmbiente({ DISPARO_LIMITE_DE_TAXA_SEGUIDOS: ruim } as NodeJS.ProcessEnv).limiteDeTaxaSeguidos, 10, ruim);
+});
+
+// ── teto de 24 h POR UNIDADE (DISPARO_TETO_DIA_POR_UNIDADE) ─────────────────────────────────────────────────────
+
+const amb = (v: Record<string, string>) => v as NodeJS.ProcessEnv;
+const MAG = 'magalhaes-advocacia';
+
+test('teto por unidade: a unidade listada pega o SEU teto; as outras ficam no global; o teto por hora e o resto não mudam', () => {
+  const env = amb({ DISPARO_TETO_DIA_POR_UNIDADE: `${MAG}=200` });
+  assert.equal(freiosDaUnidade(MAG, env).tetoPorDia, 200);
+  assert.equal(freiosDaUnidade('doutor-hernia-canaa', env).tetoPorDia, 100, 'Canaã continua no padrão');
+  assert.equal(freiosDaUnidade('doutor-hernia-parauapebas', env).tetoPorDia, 100, 'Parauapebas continua no padrão');
+  assert.deepEqual({ ...freiosDaUnidade(MAG, env), tetoPorDia: 0 }, { ...freiosDoAmbiente(env), tetoPorDia: 0 }, 'só o teto de 24 h muda');
+  assert.equal(freiosDaUnidade(MAG, env).tetoPorHora, 30);
+  assert.equal(freiosDoAmbiente(env).tetoPorDia, 100, 'freiosDoAmbiente (o global) não é tocado');
+});
+
+test('teto por unidade: sem a variável, é o global de sempre — inclusive o DISPARO_TETO_DIA do ambiente', () => {
+  assert.equal(freiosDaUnidade(MAG, amb({})).tetoPorDia, 100);
+  assert.equal(freiosDaUnidade(MAG, amb({ DISPARO_TETO_DIA: '60' })).tetoPorDia, 60);
+  assert.equal(freiosDaUnidade(MAG, amb({ DISPARO_TETO_DIA: '60', DISPARO_TETO_DIA_POR_UNIDADE: `${MAG}=200` })).tetoPorDia, 200, 'o da unidade vence o global');
+  assert.equal(freiosDaUnidade('outra', amb({ DISPARO_TETO_DIA: '60', DISPARO_TETO_DIA_POR_UNIDADE: `${MAG}=200` })).tetoPorDia, 60);
+});
+
+test('teto por unidade: "/" separa as unidades (o ";" quebraria o .env), e ";" e quebra de linha também valem; espaços e separador sobrando não atrapalham', () => {
+  for (const lista of ['a=150/b=250', 'a=150;b=250', 'a=150\nb=250', ' a = 150 / b = 250 /', 'a=150//b=250', 'A=150/B=250']) {
+    const env = amb({ DISPARO_TETO_DIA_POR_UNIDADE: lista });
+    assert.equal(tetoPorDiaDaUnidade('a', env), 150, lista);
+    assert.equal(tetoPorDiaDaUnidade('b', env), 250, lista);
+    assert.equal(tetoPorDiaDaUnidade('c', env), 100, lista);
+    assert.deepEqual(avisosDoAmbiente(env), [], `${lista}: lista boa não gera aviso`);
+  }
+});
+
+test('teto por unidade: valor ilegível ou fora de 1..10000 é IGNORADO (cai no global, nunca vira "sem teto") e é avisado', () => {
+  for (const ruim of ['0', '-5', '10001', 'abc', '', '1e3', '12.5', '200abc', '0x10', ' ']) {
+    const env = amb({ DISPARO_TETO_DIA_POR_UNIDADE: `${MAG}=${ruim}` });
+    assert.equal(freiosDaUnidade(MAG, env).tetoPorDia, 100, `"${ruim}" cai no global`);
+    const a = avisosDoAmbiente(env);
+    assert.equal(a.length, 1, `"${ruim}" é avisado`);
+    assert.match(a[0]!, /DISPARO_TETO_DIA_POR_UNIDADE.*não vale/);
+  }
+  // sem "=", slug vazio ou estranho
+  for (const ruim of [MAG, '=200', 'mag adv=200', '200']) {
+    const env = amb({ DISPARO_TETO_DIA_POR_UNIDADE: ruim });
+    assert.equal(freiosDaUnidade(MAG, env).tetoPorDia, 100, ruim);
+    assert.equal(avisosDoAmbiente(env).length, 1, ruim);
+  }
+  // slug com ponto ou sublinhado também vale
+  assert.equal(tetoPorDiaDaUnidade('clinica_x.y', amb({ DISPARO_TETO_DIA_POR_UNIDADE: 'clinica_x.y=150' })), 150);
+  // as bordas valem
+  assert.equal(tetoPorDiaDaUnidade('a', amb({ DISPARO_TETO_DIA_POR_UNIDADE: 'a=1' })), 1);
+  assert.equal(tetoPorDiaDaUnidade('a', amb({ DISPARO_TETO_DIA_POR_UNIDADE: 'a=10000' })), 10_000);
+});
+
+test('teto por unidade: uma entrada ruim não derruba as boas; slug repetido vale o primeiro e avisa', () => {
+  const env = amb({ DISPARO_TETO_DIA_POR_UNIDADE: `${MAG}=200/b=xx/c=300/c=400` });
+  assert.equal(tetoPorDiaDaUnidade(MAG, env), 200);
+  assert.equal(tetoPorDiaDaUnidade('b', env), 100);
+  assert.equal(tetoPorDiaDaUnidade('c', env), 300);
+  const a = avisosDoAmbiente(env);
+  assert.equal(a.length, 2);
+  assert.match(a[0]!, /"b=xx" não vale/);
+  assert.match(a[1]!, /"c" aparece mais de uma vez/);
+});
+
+test('teto por unidade: o teto da unidade entra em vagas() — 195 nas 24 h deixam 5 para a Magalhães e 0 para quem está no global', () => {
+  const env = amb({ DISPARO_TETO_DIA_POR_UNIDADE: `${MAG}=200` });
+  assert.equal(vagas(freiosDaUnidade(MAG, env), 0, 195), 5);
+  assert.equal(vagas(freiosDaUnidade('doutor-hernia-canaa', env), 0, 195), 0);
 });

@@ -14,7 +14,7 @@ import { cotacaoDoDolar } from '../campanha/coleta.js';
 import { dataLocalISO } from '../feriados.js';
 import { fusoDaUnidade } from '../fuso.js';
 import { credenciaisDaUnidade, urlDaGraph } from '../whatsapp-meta.js';
-import { freiosDoAmbiente } from './freios.js';
+import { freiosDaUnidade } from './freios.js';
 import { modoDaUnidade } from './modo.js';
 import { motivoSemNumero } from './painel.js';
 import {
@@ -199,7 +199,7 @@ export async function lerResultado(ondaId: string, l: Leituras = LEITURAS_DE_VER
   if (!onda) return null;
   const agora = l.agora();
   const unit = onda.unit;
-  const freios = freiosDoAmbiente();
+  const freios = freiosDaUnidade(unit.slug);
 
   const [porEstado, saiuQueRecebeu, recebidos, incertos, horas] = await Promise.all([
     prisma.disparoDestinatario.groupBy({ by: ['estado'], where: { ondaId }, _count: true }),

@@ -441,6 +441,27 @@ test('o disparo mostra o CUSTO estimado (pessoas × preço da categoria na tabel
   assert.equal(r.corpo.freios.tetoPorDia, 100);
 });
 
+test('o teto de 24 h na tela e no ritmo é o da UNIDADE (DISPARO_TETO_DIA_POR_UNIDADE); quem não está na lista continua no global', async () => {
+  const { _definirCambio } = await import('../lib/disparo/chatwoot/custo.js');
+  _definirCambio(5.6);
+  const ler = async () => {
+    preparar({ onda: ondaDeCusto() });
+    falso('whatsappCostDaily', { findMany: async () => LINHAS_DE_CUSTO });
+    falso('$queryRaw', (async () => []) as never);
+    return pedir('GET', `/public/disparos/ondas/ondaaaaaaa1?slug=${PARAU}`, 'tok-dd');
+  };
+  process.env.DISPARO_TETO_DIA_POR_UNIDADE = `${PARAU}=120`; // abaixo do que o teto de gasto deixaria (R$ 50 ÷ R$ 0,35 = 142), para o ritmo mostrar o teto
+  const a = await ler();
+  assert.equal(a.status, 200);
+  assert.equal(a.corpo.freios.tetoPorDia, 120, 'a tela mostra o teto da unidade');
+  assert.equal(a.corpo.freios.tetoPorHora, 30, 'o teto por hora não muda');
+  assert.equal(a.corpo.ritmo.porDia, 120, 'o ritmo (quantas saem por dia) usa o mesmo teto');
+  process.env.DISPARO_TETO_DIA_POR_UNIDADE = 'outra-unidade=200';
+  const b = await ler();
+  assert.equal(b.corpo.freios.tetoPorDia, 100, 'unidade fora da lista: o global');
+  assert.equal(b.corpo.ritmo.porDia, 100);
+});
+
 test('categoria que a tabela de custo da unidade NÃO tem = custo estimado com preço de RESERVA (conservador, sem histórico da Meta), com o motivo; sem categoria gravada também', async () => {
   const { _definirCambio } = await import('../lib/disparo/chatwoot/custo.js');
   _definirCambio(5.6);
