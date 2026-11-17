@@ -42,8 +42,8 @@ export interface Resultado {
     custo: 'meta-pricing-analytics' | 'indisponivel';
     responderam: 'kommo' | 'indisponivel';
     agendaram: 'franquia' | 'indisponivel';
-    /** de onde veio o dólar do `brl`; 'indisponivel' = o custo vem só em US$ */
-    cambio: 'awesomeapi' | 'indisponivel';
+    /** de onde veio o dólar do `brl`: a cotação do dia (primeira que respondeu entre BCB, awesomeapi e er-api, ver `lib/cotacao-dolar.ts`); 'indisponivel' = o custo vem só em US$ */
+    cambio: 'cotacao-do-dia' | 'indisponivel';
     /** quando a Meta atualizou pela última vez as linhas de entregues/lidas (a mais antiga delas); null se indisponível */
     entreguesAtualizadoEm: string | null;
     /** quando o que é caro (Kommo, franquia, câmbio, Meta) foi lido; fica em cache por alguns minutos */
@@ -289,7 +289,7 @@ export async function lerResultado(ondaId: string, l: Leituras = LEITURAS_DE_VER
       custo: meta.custoUsd === null ? 'indisponivel' : 'meta-pricing-analytics',
       responderam: externos.responderam === null ? 'indisponivel' : 'kommo',
       agendaram: externos.agendaram === null ? 'indisponivel' : 'franquia',
-      cambio: custo.brl === null ? 'indisponivel' : 'awesomeapi',
+      cambio: custo.brl === null ? 'indisponivel' : 'cotacao-do-dia',
       entreguesAtualizadoEm: iso(meta.entreguesAtualizadoEm),
       atualizadoEm: externos.lidoEm.toISOString(),
       notas: { entregues: meta.notaEntregues, custo: notaDoCusto, responderam: externos.notaResponderam, agendaram: externos.notaAgendaram },
