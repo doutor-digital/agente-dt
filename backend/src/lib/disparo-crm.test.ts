@@ -42,6 +42,7 @@ afterEach(() => {
   delete process.env.CHATWOOT_DISPARO_SLUGS;
   delete process.env.CHATWOOT_DISPARO_LISTA_DE_TESTE;
   delete process.env.KIT_ADMINS_DD;
+  delete process.env.DISPARO_TETO_DIA_POR_UNIDADE;
 });
 
 // Quarta 21/10/2026, 09h30 em São Paulo (dentro da janela do motor).
@@ -1297,6 +1298,30 @@ test('TETO DE GASTO em REAIS pela rodada real: gasto das 24 h somado POR CATEGOR
   assert.equal(e.t.enviados.length, 0, 'sem histórico: a reserva (R$ 2,00) estoura o teto de R$ 1,00');
   assert.equal(e.avisos.length, 1);
   assert.equal(e.t.base.estados.get('d1')!.estado, 'pendente', 'a onda segue aprovada e a fila intacta');
+});
+
+test('TETO DE 24 h POR UNIDADE pela rodada real do CRM: a unidade listada manda até o SEU teto (200); sem a lista, o global (100) já travou em 195', async () => {
+  ligar();
+  const { rodadaDoDisparoNoCrm, _zerarSemAndarDoCrm, _zerarVarreduraDoCrm, _esquecerAvisosDeGasto } = await import('./disparo/chatwoot/rodada.js');
+  const ondaCrm = { id: 'o1', campanhaId: 'c1', unitId: 'u1', estado: 'aprovada', origem: 'chatwoot', caixaChatwoot: 3, contaChatwoot: 1, template: INFO.template, idioma: INFO.idioma, textoModelo: INFO.textoModelo, variaveis: INFO.variaveis, cabecalho: null, oferta: null, categoriaModelo: 'UTILITY', aprovadaEm: ONDA.aprovadaEm, aprovadaModo: 'ligado', sairAceitos: 0, criadoEm: AGORA, unit: UNIDADE, campanha: { nome: 'Reativação' } };
+  const rodar = async (lista: string | undefined) => {
+    if (lista === undefined) delete process.env.DISPARO_TETO_DIA_POR_UNIDADE; else process.env.DISPARO_TETO_DIA_POR_UNIDADE = lista;
+    _esquecerAvisosDeGasto();
+    _zerarSemAndarDoCrm();
+    _zerarVarreduraDoCrm();
+    falso('disparoOnda', { findMany: async () => [ondaCrm], updateMany: async () => ({ count: 0 }) });
+    falso('chatwootDisparoAjuste', { findUnique: async () => null });
+    falso('disparoDestinatario', { findMany: async () => [], count: async () => 0 });
+    const base = baseFalso({ quantos: 10, noDia: 195 }); // 195 nas 24 h, 0 na última hora
+    const t = portoDoCrm({ base });
+    // teto de gasto folgado (R$ 1000 ÷ R$ 0,25): só o teto de mensagens das 24 h decide
+    await rodadaDoDisparoNoCrm({ criarPorto: () => t.porto, avisar: async () => undefined, precoEmReais: async () => 0.25, lerEnvios: async () => [{ categoria: 'UTILITY', envios: 195 }], tetoReais: 1000 });
+    return t.enviados.length;
+  };
+  assert.equal(await rodar(`${UNIDADE.slug}=200`), 5, '195 de 200 já foram: cabem 5');
+  assert.equal(await rodar(`${UNIDADE.slug}=200/outra=50`), 5, 'lista com várias unidades');
+  assert.equal(await rodar(undefined), 0, 'sem a lista, 195 já passa do global (100)');
+  assert.equal(await rodar('outra-unidade=200'), 0, 'unidade fora da lista: o global');
 });
 
 test('reclassificação pela Meta: ao pausar a onda, a categoria NOVA é gravada nela quando é MAIS CARA (os envios anteriores passam a contar pelo preço novo); mais barata, reprovação sem categoria ou falha de leitura não gravam', async () => {

@@ -5,7 +5,7 @@
 import { prisma } from '../prisma.js';
 import { conferirModeloNaMeta, podeAprovar } from './modelo.js';
 import { definicaoDaOnda } from './onda.js';
-import { freiosDoAmbiente } from './freios.js';
+import { freiosDaUnidade } from './freios.js';
 import { quemPediuSair } from './saidas.js';
 import { diasDaOferta } from './oferta.js';
 import { listaDeTesteDoAmbiente } from './porto.js';
@@ -56,7 +56,7 @@ export async function dadosDaTela(ondaId: string, email: string | null | undefin
     ofertaDias: diasDaOferta(),
     unidade: { slug: onda.unit.slug, nome: onda.unit.name, confereNoKommo: usaRegraDeCliente(onda.unit) },
     modo: modoDaUnidade(onda.unit.slug),
-    freios: freiosDoAmbiente(),
+    freios: freiosDaUnidade(onda.unit.slug),
     resumo: (onda.resumo ?? {}) as DadosDoPainel['resumo'],
     contagem: Object.fromEntries(porEstado.map((g) => [g.estado, g._count])),
     simulados,

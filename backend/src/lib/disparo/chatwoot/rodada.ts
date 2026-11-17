@@ -8,7 +8,7 @@ import { prisma } from '../../prisma.js';
 import { logger } from '../../logger.js';
 import { fusoDaUnidade } from '../../fuso.js';
 import { enviarTelegram } from '../../telegram.js';
-import { freiosDoAmbiente } from '../freios.js';
+import { freiosDaUnidade } from '../freios.js';
 import { rodarUnidade, rodadasSemAndar, type OndaNoLote } from '../lote.js';
 import { portoReal } from '../porto.js';
 import { definicaoDaOnda } from '../onda.js';
@@ -247,7 +247,6 @@ export async function rodadaDoDisparoNoCrm(deps: { precoEmReais?: PrecoEmReais; 
     boas.map((o) => [o.id, { caixa: o.caixaChatwoot!, conta: o.contaChatwoot!, template: o.template, idioma: o.idioma, textoModelo: o.textoModelo, variaveis: (o.variaveis as unknown[]).map(String), categoria: o.categoriaModelo, categoriaAssumida: o.categoriaAssumida }]),
   );
   const porto = deps.criarPorto ? deps.criarPorto(unidades, info) : portoChatwoot({ base: portoReal(unidades), unidades, ondas: info });
-  const f = freiosDoAmbiente();
 
   for (const unitId of new Set(boas.map((o) => o.unitId))) {
     const deste = boas.filter((o) => o.unitId === unitId);
@@ -262,7 +261,7 @@ export async function rodadaDoDisparoNoCrm(deps: { precoEmReais?: PrecoEmReais; 
       // Sem preço da Meta vale o de RESERVA (conservador): o teto SEMPRE limita. Em seco nada é gasto: o teto de gasto não se aplica.
       const tetoReais = deps.tetoReais ?? tetoReaisPorDia();
       const preco = deps.precoEmReais ?? precoEmReaisDoBanco;
-      const freiosDoTier = freiosComOTier(f, ajuste.tierDoNumero);
+      const freiosDoTier = freiosComOTier(freiosDaUnidade(unit.slug), ajuste.tierDoNumero);
       let freiosDaRodada = freiosDoTier;
       let gasto: { gastoBrl: number; precoAtual: number; jaMandadas: number } | null = null;
       if (porto.modoDaUnidade(unit.slug) === 'ligado') {

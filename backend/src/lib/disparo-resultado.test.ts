@@ -380,6 +380,23 @@ test('resultado: formato do contrato, números do banco/Kommo/Meta e NENHUM tele
   assert.equal(dosModelo.where.unitId, 'u1');
 });
 
+
+test('resultado: o teto de 24 h do relatório é o da UNIDADE da onda (DISPARO_TETO_DIA_POR_UNIDADE); outra unidade fica no global', async () => {
+  const antes = process.env.DISPARO_TETO_DIA_POR_UNIDADE;
+  try {
+    process.env.DISPARO_TETO_DIA_POR_UNIDADE = 'doutor-hernia-canaa=200';
+    bancoDeMentira();
+    assert.equal((await lerResultado('o1', leituras()))!.freios.tetoPorDia, 200);
+    process.env.DISPARO_TETO_DIA_POR_UNIDADE = 'magalhaes-advocacia=200';
+    bancoDeMentira();
+    const r = (await lerResultado('o1', leituras()))!;
+    assert.equal(r.freios.tetoPorDia, 100, 'a onda é de Canaã: o teto da Magalhães não vale para ela');
+    assert.equal(r.freios.tetoPorHora, 30);
+  } finally {
+    if (antes === undefined) delete process.env.DISPARO_TETO_DIA_POR_UNIDADE;
+    else process.env.DISPARO_TETO_DIA_POR_UNIDADE = antes;
+  }
+});
 test('resultado: tabelas da Meta vazias → entregues/lidas/custo null, fonte "indisponivel" e o motivo escrito; o resto continua', async () => {
   bancoDeMentira({ template: [], custo: [] });
   const r = (await lerResultado('o1', leituras()))!;

@@ -3,7 +3,8 @@
  *
  * Por que cada um existe:
  *  - janela de horário: nada de madrugada nem domingo/feriado — mensagem de marketing às 3h é bloqueio e denúncia;
- *  - teto por hora e por dia, POR UNIDADE: cada unidade tem o seu número e o seu tier na Meta (limite de 24 h).
+ *  - teto por hora e por dia, POR UNIDADE: cada unidade tem o seu número e o seu tier na Meta (limite de 24 h). O teto de 24 h tem o global
+ *    (`DISPARO_TETO_DIA`) e pode ter o seu por unidade (`DISPARO_TETO_DIA_POR_UNIDADE`, ver `freiosDaUnidade`).
  *    O teto NÃO é compartilhado entre unidades: um número que estoura não pode calar as outras oito;
  *  - parada por SAIR: a regra que o João já usava no Outubro Rosa — "mais de 3 SAIR? parar a unidade";
  *  - parada por falhas seguidas: token vencido ou número bloqueado faria o robô queimar a lista inteira como "falhou";
@@ -74,6 +75,47 @@ export function freiosDoAmbiente(env: NodeJS.ProcessEnv = process.env): Freios {
   };
 }
 
+/**
+ * Teto de 24 h POR UNIDADE, a partir de `DISPARO_TETO_DIA_POR_UNIDADE` (formato `slug=N`, unidades separadas por `/`; `;` e quebra de linha também valem).
+ * A `/` existe porque o deploy faz `set -a; . ./.env` e o `;` quebraria o .env (mesmo padrão de `DISPARO_LISTA_DE_TESTE`).
+ * Entrada ilegível (sem `=`, slug estranho, N não inteiro ou fora de 1..10000) é IGNORADA e a unidade cai no teto global — nunca vira "sem teto".
+ * Slug repetido: vale o primeiro valor legível.
+ */
+export const VARIAVEL_TETO_POR_UNIDADE = 'DISPARO_TETO_DIA_POR_UNIDADE';
+
+function lerTetosPorUnidade(env: NodeJS.ProcessEnv): { tetos: Map<string, number>; avisos: string[] } {
+  const tetos = new Map<string, number>();
+  const avisos: string[] = [];
+  for (const bruta of (env[VARIAVEL_TETO_POR_UNIDADE] ?? '').split(/[;\n/]/)) {
+    const entrada = bruta.trim();
+    if (!entrada) continue;
+    const i = entrada.indexOf('=');
+    const slug = (i < 0 ? '' : entrada.slice(0, i)).trim().toLowerCase();
+    const valor = (i < 0 ? '' : entrada.slice(i + 1)).trim();
+    const n = /^\d+$/.test(valor) ? Number(valor) : NaN;
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(slug) || !Number.isInteger(n) || n < 1 || n > 10_000) {
+      avisos.push(`${VARIAVEL_TETO_POR_UNIDADE}: a entrada "${entrada.slice(0, 40)}" não vale (o formato é slug=N, com N de 1 a 10000, unidades separadas por /): a unidade fica no teto global`);
+      continue;
+    }
+    if (tetos.has(slug)) {
+      avisos.push(`${VARIAVEL_TETO_POR_UNIDADE}: "${slug}" aparece mais de uma vez: vale o primeiro (${tetos.get(slug)})`);
+      continue;
+    }
+    tetos.set(slug, n);
+  }
+  return { tetos, avisos };
+}
+
+/** O teto de 24 h que vale para ESTA unidade: o dela em `DISPARO_TETO_DIA_POR_UNIDADE`, ou o global (`DISPARO_TETO_DIA`, padrão 100). */
+export function tetoPorDiaDaUnidade(slug: string, env: NodeJS.ProcessEnv = process.env): number {
+  return lerTetosPorUnidade(env).tetos.get(slug.trim().toLowerCase()) ?? freiosDoAmbiente(env).tetoPorDia;
+}
+
+/** Os freios de UMA unidade: os do ambiente com o teto de 24 h da unidade. Toda decisão ou tela de uma unidade passa por aqui, não por `freiosDoAmbiente()`. O teto por hora não muda. */
+export function freiosDaUnidade(slug: string, env: NodeJS.ProcessEnv = process.env): Freios {
+  return { ...freiosDoAmbiente(env), tetoPorDia: tetoPorDiaDaUnidade(slug, env) };
+}
+
 function horaLocal(agora: Date, tz: string): number {
   const min = (agora.getUTCHours() * 60 + agora.getUTCMinutes() + offsetMinutosNoFuso(agora, tz) + 1440) % 1440;
   return Math.floor(min / 60);
@@ -119,5 +161,6 @@ export function avisosDoAmbiente(env: NodeJS.ProcessEnv = process.env): string[]
     const bruto = env[chave];
     if (bruto !== undefined && bruto.trim() !== '' && Number(bruto) !== valor) avisos.push(`${chave}="${bruto}" não vale: ficou ${valor}`);
   }
+  avisos.push(...lerTetosPorUnidade(env).avisos);
   return avisos;
 }

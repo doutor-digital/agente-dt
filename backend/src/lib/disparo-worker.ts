@@ -10,7 +10,7 @@ import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { fusoDaUnidade } from './fuso.js';
-import { avisosDoAmbiente, freiosDoAmbiente } from './disparo/freios.js';
+import { avisosDoAmbiente, freiosDaUnidade, freiosDoAmbiente } from './disparo/freios.js';
 import { rodarUnidade, rodadasSemAndar, type OndaNoLote } from './disparo/lote.js';
 import { filtroDeMontagemMorta } from './disparo/montagem.js';
 import { avisosDaListaDeTeste, portoReal } from './disparo/porto.js';
@@ -125,7 +125,6 @@ export async function rodadaDoDisparo(): Promise<void> {
   });
   if (marcados > 0) logger.warn({ marcados }, 'disparo: pessoas responderam SAIR depois do envio');
   if (ondas.length === 0) return;
-  const f = freiosDoAmbiente();
   const porto = portoReal(unidades);
 
   for (const unitId of new Set(ondas.map((o) => o.unitId))) {
@@ -136,7 +135,7 @@ export async function rodadaDoDisparo(): Promise<void> {
     if (vivas.length === 0) continue;
     try {
       const noLote: OndaNoLote[] = vivas.map((o) => ({ id: o.id, campanhaId: o.campanhaId, campanhaNome: o.campanha.nome, aprovadaEm: o.aprovadaEm, aprovadaModo: o.aprovadaModo, sairAceitos: o.sairAceitos, ...definicaoDaOnda(o) }));
-      const r = await rodarUnidade(porto, f, { id: unit.id, slug: unit.slug, nome: unit.name, fuso: fusoDaUnidade(unit) }, noLote);
+      const r = await rodarUnidade(porto, freiosDaUnidade(unit.slug), { id: unit.id, slug: unit.slug, nome: unit.name, fuso: fusoDaUnidade(unit) }, noLote);
       await depoisDaRodada({ id: unit.id, slug: unit.slug, confereNoKommo: usaRegraDeCliente(unit) }, r, { avisar: avisarJoao, contagem: semAndar });
       if (r.processados > 0 || (r.parou && r.parou !== 'automação desligada nesta unidade')) logger.info({ unit: unit.slug, ...r }, 'disparo: rodada');
     } catch (err) {
@@ -177,7 +176,7 @@ export function startDisparoWorker(): void {
     void talvezRodar();
     void talvezRodarCrm();
   }, PASSO_MS);
-  logger.info({ passoMs: PASSO_MS, freios: freiosDoAmbiente() }, 'disparo de campanha: worker ligado (cada unidade nasce em modo seco)');
+  logger.info({ passoMs: PASSO_MS, freios: freiosDoAmbiente(), tetoDiaPorUnidade: process.env.DISPARO_TETO_DIA_POR_UNIDADE ?? null }, 'disparo de campanha: worker ligado (cada unidade nasce em modo seco)');
   for (const aviso of [...avisosDoAmbiente(), ...avisosDaListaDeTeste(), ...avisosDaListaDeTeste(process.env, 'CHATWOOT_DISPARO_LISTA_DE_TESTE'), ...[avisoDoTetoDeGasto()].filter((x): x is string => !!x), ...avisosDoPrecoDeReserva(), ...avisosDaRegraDeCliente()]) logger.warn(aviso);
 }
 
