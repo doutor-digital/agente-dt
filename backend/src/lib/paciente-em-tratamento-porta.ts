@@ -11,6 +11,7 @@ import { contatoPrincipal } from './kommo-lead-util.js';
 import { avisoRecente, marcarAviso } from './aviso-dedupe.js';
 import { agendarIndice } from './franquia-indice-telefones.js';
 import { ehNumeroInterno, lerNumerosInternos } from './numeros-internos.js';
+import { naoPacienteManualLigada, telefoneMarcadoNaoPaciente } from './nao-paciente-manual.js';
 import {
   calarPacienteEstado,
   consultarFranquia,
@@ -49,12 +50,13 @@ export async function portaPacienteEmTratamento(args: { unit: Unit; leadId: numb
       logger.warn({ err: String(err), unit: unit.slug, leadId }, 'paciente-em-tratamento: não li o esquema da conta (segue sem calar)');
     }
     // fora do COMERCIAL e sem lista de internos não há o que decidir: nem telefone, nem banco, nem franquia
-    if (!ehFunilComercial(funil) && lerNumerosInternos().chaves.size === 0) return null;
+    if (!ehFunilComercial(funil) && lerNumerosInternos().chaves.size === 0 && !naoPacienteManualLigada(unit.slug)) return null;
 
     const idContato = contactId && Number.isFinite(Number(contactId)) ? Number(contactId) : contatoPrincipal(lead);
     const telefone = idContato ? await kommo.getContactPhone(idContato).catch(() => null) : null;
 
-    const interno = !!telefone && ehNumeroInterno(telefone);
+    // número interno da rede OU telefone que a equipe já marcou como não-paciente nesta unidade (automação nao-paciente-manual)
+    const interno = !!telefone && (ehNumeroInterno(telefone) || (await telefoneMarcadoNaoPaciente(unit, telefone)));
     const temIdClient = interno
       ? false
       : !!(await prisma.spineLeadLink.findFirst({ where: { unitId: unit.id, kommoLeadId: leadId, spineIdClient: { not: null } }, select: { id: true } }));

@@ -36,6 +36,7 @@ import { funisDaConta, conta } from './rotina-nucleo.js';
 import type { Funis } from './franquia-sync-worker.js';
 import { franquiaDoPaciente } from './parados-worker.js';
 import { ehNumeroInterno } from './numeros-internos.js';
+import { telefoneMarcadoNaoPaciente } from './nao-paciente-manual.js';
 import { consultarFranquia, decidir } from './paciente-em-tratamento.js';
 import { agendarIndice, chaveDoTelefone, consultarIndice } from './franquia-indice-telefones.js';
 import { contatoPrincipal } from './kommo-lead-util.js';
@@ -196,6 +197,8 @@ export async function porQueAFranquiaSeguraComDeps(unit: Unit, kommo: KommoDaCut
   const telefone = idContato ? await kommo.getContactPhone(idContato).catch(() => null) : null;
   if (!telefone) return 'não consegui o telefone do contato (cartão sem telefone, ou o Kommo não respondeu)';
   if (ehNumeroInterno(telefone)) return 'número interno da rede (NUMEROS_INTERNOS)';
+  // funcionário/candidato que a equipe já marcou PERDIDO "Não é paciente" em outro cartão (Heitor, Petrópolis, 17/11/2026)
+  if (await telefoneMarcadoNaoPaciente(unit, telefone)) return 'telefone já marcado como não-paciente nesta unidade (funcionário/currículo)';
   if (!unit.spineEnabled || !unit.spineToken) return null;
 
   try {

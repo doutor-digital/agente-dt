@@ -223,6 +223,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/cutucada-apos-equipe-worker.ts',
   },
   {
+    id: 'nao-paciente-manual',
+    chave: 'NAO_PACIENTE_MANUAL_SLUGS',
+    nome: 'Não-paciente marcado pela equipe (funcionário, currículo)',
+    oQueFaz:
+      'Quando a equipe marca um cartão como PERDIDO "Não é paciente (currículo)" — funcionário da clínica, candidato a vaga —, põe NO_FOLLOW_UP e CURRÍCULO, cancela a régua de PERDIDO do Kommo (o cartão sai e volta de PERDIDO, se a unidade tiver a etapa de passagem) e lembra do TELEFONE: nos próximos cartões dessa pessoa, a Sofia não responde e a cutucada não fala.',
+    pegadinha:
+      'Os robôs de PERDIDO do Kommo leem a etiqueta no evento: sem sair e voltar, a régua que já ficou agendada sai mesmo com a etiqueta. A etapa de passagem é pipeline_intents.nao_paciente_reentrada_status_id e precisa ser uma etapa do COMERCIAL SEM robô de entrada (Petrópolis: EM QUALIFICAÇÃO, 111915771); sem ela, só etiqueta. A memória do telefone é a parada de follow-up da conversa e vale só onde a chave está LIGADA. Marcado por engano: limpar follow_up_stopped_reason das conversas daquele telefone. Varre os PERDIDO das últimas 72 h, a cada 10 min, até 20 por rodada. "Só no papel" mostra o que faria.',
+    risco: 'move-cartao',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/nao-paciente-manual-worker.ts',
+  },
+  {
     id: 'confirmacao-d2',
     chave: 'CONFIRMACAO_D2_SLUGS',
     nome: 'Reforço de confirmação (D-2)',
