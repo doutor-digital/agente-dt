@@ -6,13 +6,15 @@
  *   node dist/scripts/preencher-campos-crm.js --so-conferir        # só mostra, por conversa, campo: antes → depois + regra. NÃO grava nada
  *   node dist/scripts/preencher-campos-crm.js                      # grava (as linhas «REG {…}» da saída são o registro para desfazer)
  *   node dist/scripts/preencher-campos-crm.js --desfazer < saida   # devolve ao que era (lê as linhas REG pelo stdin)
- *   opções: --caixa=3  --max=150 (teto de conversas gravadas)  --conversas=12,34 (só estas)
+ *   opções: --caixa=3  --max=150 (teto de conversas gravadas)  --guarda=12 (minutos de guarda das marcas depois de gravar)  --conversas=12,34 (só estas)
  *
  * Kommo e franquia: SÓ LEITURA, num ritmo baixo (uma consulta por telefone, 250 ms entre elas). A saída não tem nome nem telefone.
  */
 import { createInterface } from 'node:readline';
 import { prisma } from '../lib/prisma.js';
 import { CAIXAS_REGUA, CAMPO_VISTO_CONVERSA, type Vistos, type Visto } from '../lib/chatwoot-regua.js';
+import { chatDoChatwoot } from '../lib/chatwoot-regua-worker.js';
+import { ajustesDaUnidade, bancoDosRobos } from '../lib/robos-estado.js';
 import { recarregarAutomacoes } from '../lib/automacoes-estado.js';
 import { portaDoChatwoot } from '../lib/chatwoot-porta.js';
 import { createKommoClientSemFreio } from '../services/kommo.service.js';
@@ -22,7 +24,8 @@ import { chamar, contextoDaCaixa, contextoDoAmbiente } from '../mcp-remoto/chatw
 import { desfazerCampos, lerArgumentos, rodarCampos, type PortasDosCampos } from '../lib/chatwoot-campos-retroativos-run.js';
 import type { FatoDeQualificacao, LeadDoKommo } from '../lib/chatwoot-campos-retroativos.js';
 
-const MAX_PAGINAS = 60;
+/** o mesmo teto do worker da régua (25 por página) */
+const MAX_PAGINAS = 200;
 
 async function portasReais(caixa: number, slug: string): Promise<PortasDosCampos> {
   const base = contextoDoAmbiente();
@@ -33,6 +36,7 @@ async function portasReais(caixa: number, slug: string): Promise<PortasDosCampos
   if (!unit.kommoSubdomain || !unit.kommoAccessToken) throw new Error(`a unidade ${slug} não tem Kommo configurado`);
   const kommo = createKommoClientSemFreio(unit);
   const chat = portaDoChatwoot(ctx);
+  const paginar = chatDoChatwoot(ctx).pagina;
   const [pipelines, motivos] = await Promise.all([kommo.listPipelines(), kommo.listLossReasons()]);
   const funilDe = new Map(pipelines.map((p) => [p.id, p] as const));
   const motivoDe = new Map(motivos.map((m) => [m.id, m.name] as const));
@@ -41,9 +45,8 @@ async function portasReais(caixa: number, slug: string): Promise<PortasDosCampos
     async conversas() {
       const lista: any[] = [];
       for (let pagina = 1; pagina <= MAX_PAGINAS; pagina++) {
-        const r = (await chamar(ctx, 'GET', 'conversations', { query: { inbox_id: String(caixa), status: 'all', assignee_type: 'all', page: String(pagina) } })) as { data?: { payload?: any[] }; payload?: any[] } | null;
-        const pag = r?.data?.payload ?? r?.payload ?? [];
-        if (!Array.isArray(pag) || pag.length === 0) return { lista, truncado: false };
+        const pag = await paginar(caixa, pagina);
+        if (pag.length === 0) return { lista, truncado: false };
         lista.push(...pag);
       }
       return { lista, truncado: true };
@@ -94,27 +97,40 @@ async function portasReais(caixa: number, slug: string): Promise<PortasDosCampos
     async motivosValidos() {
       return chat.valoresDoAtributo('motivo_nao_agendamento');
     },
+    async ajustesDaRegua() {
+      return (await ajustesDaUnidade(bancoDosRobos(), slug)).regua;
+    },
     async marcarVisto(id, campo, valor, agora) {
       if (campo === CAMPO_VISTO_CONVERSA) throw new Error('marca da conversa inteira não é desta ferramenta');
       const onde = { caixa_conversationId_campo: { caixa, conversationId: id, campo } };
-      const antes = await prisma.chatwootReguaVisto.findUnique({ where: onde, select: { valor: true, inicial: true } });
+      const antes = await prisma.chatwootReguaVisto.findUnique({ where: onde, select: { valor: true, inicial: true, desde: true } });
+      if (antes && antes.valor === valor && antes.inicial) return { como: 'igual' as const };
       await prisma.chatwootReguaVisto.upsert({ where: onde, create: { caixa, conversationId: id, campo, valor, desde: agora, inicial: true }, update: { valor, desde: agora, inicial: true } });
-      return !antes ? 'criou' : antes.valor === valor && antes.inicial ? 'igual' : 'atualizou';
+      return antes ? { como: 'atualizou' as const, antes: { valor: antes.valor, inicial: antes.inicial, desde: antes.desde.toISOString() } } : { como: 'criou' as const };
+    },
+    async restaurarVisto(id, campo, antes) {
+      await prisma.chatwootReguaVisto.updateMany({ where: { caixa, conversationId: id, campo }, data: { valor: antes.valor, inicial: antes.inicial, desde: new Date(antes.desde) } });
     },
     async marcarCapi(id, evento, agora) {
+      const onde = { caixa, conversationId: id, regra: `capi-visto:${evento}`, chave: 'v1' };
       try {
-        await prisma.chatwootReguaDisparo.create({ data: { caixa, conversationId: id, regra: `capi-visto:${evento}`, chave: 'v1', modo: 'inicial', texto: '', criadoEm: agora } });
+        await prisma.chatwootReguaDisparo.create({ data: { ...onde, modo: 'inicial', texto: '', criadoEm: agora } });
         return 'criou';
       } catch (err) {
-        if ((err as { code?: string })?.code === 'P2002') return 'ja-existia';
-        throw err;
+        if ((err as { code?: string })?.code !== 'P2002') throw err;
       }
+      // já existia: se era «novo», o worker mandaria o evento à Meta assim que a etapa existisse — passa a «inicial»
+      const r = await prisma.chatwootReguaDisparo.updateMany({ where: { ...onde, modo: { not: 'inicial' } }, data: { modo: 'inicial' } });
+      return r.count > 0 ? 'atualizou' : 'igual';
     },
     async apagarVisto(id, campo) {
       await prisma.chatwootReguaVisto.deleteMany({ where: { caixa, conversationId: id, campo } });
     },
     async apagarCapi(id, evento) {
       await prisma.chatwootReguaDisparo.deleteMany({ where: { caixa, conversationId: id, regra: `capi-visto:${evento}`, chave: 'v1', modo: 'inicial' } });
+    },
+    async restaurarCapi(id, evento) {
+      await prisma.chatwootReguaDisparo.updateMany({ where: { caixa, conversationId: id, regra: `capi-visto:${evento}`, chave: 'v1' }, data: { modo: 'novo' } });
     },
     async gravarAtributos(id, attrs) {
       await chamar(ctx, 'POST', `conversations/${id}/custom_attributes`, { corpo: { custom_attributes: attrs } });

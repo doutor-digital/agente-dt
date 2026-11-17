@@ -22,7 +22,7 @@
  *  - CAPI: etapa Agendado/Compareceu viraria evento de conversão para a Meta. O plano devolve `marcasCapi`: as linhas `capi-visto:<Evento>` como
  *    `inicial` (o worker nunca manda o que já estava assim).
  */
-import { candidatos, diaEmBelem, lerData, limiteDe, type Candidato, type ConversaRegua, type Vistos } from './chatwoot-regua.js';
+import { candidatos, diaEmBelem, lerData, limiteDe, type AjustesDaRegua, type Candidato, type ConversaRegua, type Vistos } from './chatwoot-regua.js';
 import { eventosAlcancados, type EventoCapi } from './chatwoot-capi.js';
 import { ETIQUETA_PAUSA } from './chatwoot-pausa.js';
 
@@ -61,6 +61,8 @@ export interface EntradaDaConversa {
   vistos: Vistos;
   /** a lista de `motivo_nao_agendamento` da conta */
   motivosValidos: readonly string[];
+  /** o que a Gestora configurou na tela «Robôs» (tempos e modelos): a régua de verdade usa estes, não os de fábrica */
+  ajustes?: AjustesDaRegua;
 }
 
 export type RegraDoCampo = 'etapa-kommo' | 'motivo-kommo' | 'tratamento-kommo' | 'compareceu-agenda' | 'qualificacao-sofia' | 'espera-kommo';
@@ -216,9 +218,9 @@ export function vistosComMarcas(vistos: Vistos, marcas: ReadonlyArray<{ campo: s
 const chaveDe = (k: Candidato): string => `${k.regra}|${k.chave}`;
 
 /** Regras da régua que passariam a existir (e ainda estão no prazo) só por causa do que se vai gravar. */
-export function reguaAcordaria(antes: ConversaRegua, depois: ConversaRegua, vistosAntes: Vistos, vistosDepois: Vistos, agora: Date): string[] {
-  const jaTinha = new Set(candidatos(antes, vistosAntes).map(chaveDe));
-  return candidatos(depois, vistosDepois)
+export function reguaAcordaria(antes: ConversaRegua, depois: ConversaRegua, vistosAntes: Vistos, vistosDepois: Vistos, agora: Date, ajustes?: AjustesDaRegua): string[] {
+  const jaTinha = new Set(candidatos(antes, vistosAntes, ajustes).map(chaveDe));
+  return candidatos(depois, vistosDepois, ajustes)
     .filter((k) => !jaTinha.has(chaveDe(k)) && agora.getTime() <= limiteDe(k).getTime())
     .map((k) => k.regra);
 }
@@ -314,7 +316,7 @@ export function decidirCampos(e: EntradaDaConversa, agora: Date): Plano {
     const alteracoes = ativos.flatMap((g) => g.alteracoes);
     const depois = aplicar(conv, alteracoes, plano.etiquetaNova);
     const marcas = alteracoes.filter((x) => (CAMPOS_OBSERVADOS_ESCRITOS as readonly string[]).includes(x.campo)).map((x) => ({ campo: x.campo, valor: x.depois }));
-    const acorda = reguaAcordaria(conv, depois, e.vistos, vistosComMarcas(e.vistos, marcas, agora), agora);
+    const acorda = reguaAcordaria(conv, depois, e.vistos, vistosComMarcas(e.vistos, marcas, agora), agora, e.ajustes);
     if (!acorda.length) {
       plano.alteracoes = alteracoes;
       plano.marcasVisto = marcas;
