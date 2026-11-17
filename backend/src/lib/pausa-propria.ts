@@ -13,18 +13,29 @@
  */
 
 const VALIDADE_MS = 30 * 60_000;
-const marcas = new Map<string, number>();
+/**
+ * De onde veio a pausa da própria Sofia. Só `handoff` (o `pausar_ia` comum) pode ser calado pela chave
+ * `handoff-calado`: o teto de gasto e o candidato a vaga TÊM de avisar, e o sinal de alerta vale mais que o
+ * cadastro da unidade (decisão do João, 26/10). Quem não diz é `outra` — nunca calado.
+ */
+export type OrigemPausaPropria = 'handoff' | 'alerta' | 'outra';
+const marcas = new Map<string, { t: number; origem: OrigemPausaPropria }>();
 
 /** A conta do Kommo da unidade (comercial e resgate da mesma clínica dividem o cartão). */
 type Conta = { kommoSubdomain?: string | null; id?: string } | null | undefined;
 const chave = (conta: Conta, leadId: number | string) => `${conta?.kommoSubdomain || conta?.id || '?'}:${leadId}`;
 
 /** Chamar ANTES de a ferramenta/rotina marcar a pausa (assim nenhuma checagem vê a pausa sem a marca). */
-export function registrarPausaPropria(conta: Conta, leadId: number | string | null | undefined, agora: number = Date.now()): void {
+export function registrarPausaPropria(
+  conta: Conta,
+  leadId: number | string | null | undefined,
+  agora: number = Date.now(),
+  origem: OrigemPausaPropria = 'outra',
+): void {
   if (leadId === null || leadId === undefined || leadId === '') return;
-  marcas.set(chave(conta, leadId), agora);
+  marcas.set(chave(conta, leadId), { t: agora, origem });
   if (marcas.size > 5_000) {
-    for (const [k, t] of marcas) if (agora - t > VALIDADE_MS) marcas.delete(k);
+    for (const [k, m] of marcas) if (agora - m.t > VALIDADE_MS) marcas.delete(k);
   }
 }
 
@@ -36,8 +47,14 @@ export function esquecerPausaPropria(conta: Conta, leadId: number | string | nul
 
 /** A própria Sofia pausou este cartão desde `desde` (início do turno)? */
 export function pausouSozinhaDesde(conta: Conta, leadId: number | string, desde: number): boolean {
-  const t = marcas.get(chave(conta, leadId));
-  return t !== undefined && t >= desde;
+  const m = marcas.get(chave(conta, leadId));
+  return m !== undefined && m.t >= desde;
+}
+
+/** A pausa da própria Sofia neste turno foi um handoff comum (`pausar_ia` sem sinal de alerta)? */
+export function handoffDaSofiaDesde(conta: Conta, leadId: number | string, desde: number): boolean {
+  const m = marcas.get(chave(conta, leadId));
+  return m !== undefined && m.t >= desde && m.origem === 'handoff';
 }
 
 /** Só para teste. */

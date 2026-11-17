@@ -14,10 +14,11 @@ import {
   falasHumanasDaEquipe,
   portaDaEquipe,
   travaAntesDeEnviar,
+  MOTIVO_HANDOFF_CALADO,
   type DepsAntesDeEnviar,
   type DepsPausaEquipe,
 } from './pausa-equipe.js';
-import { _limparPausasProprias, pausouSozinhaDesde, registrarPausaPropria } from './pausa-propria.js';
+import { _limparPausasProprias, handoffDaSofiaDesde, pausouSozinhaDesde, registrarPausaPropria } from './pausa-propria.js';
 import { _semearParaTeste } from './automacoes-estado.js';
 import { automacaoPorId } from './automacoes.js';
 import type { MensagemOficial } from '../services/kommo-talks.service.js';
@@ -163,6 +164,8 @@ function depsFalsas(over: Partial<DepsAntesDeEnviar> = {}) {
     anotar: async (_u, _l, texto) => {
       chamadas.notas.push(texto);
     },
+    handoffCalado: () => false,
+    handoffDaSofia: () => false,
     ...over,
   };
   return { deps, chamadas };
@@ -260,18 +263,40 @@ test('a própria Sofia pausou neste turno (pausar_ia, teto) → o aviso do hando
   assert.equal(chamadas.notas.length, 0);
 });
 
-test('handoff calado (Salto): a própria Sofia passou para a equipe → o aviso NÃO sai e vira nota', async () => {
-  registrarPausaPropria(unidade, LEAD, INICIO + 5_000);
-  const { deps, chamadas } = depsFalsas({ ...semEquipe, pausouSozinha: pausouSozinhaDesde, handoffCalado: () => true });
+const calado = { ...semEquipe, pausouSozinha: pausouSozinhaDesde, handoffDaSofia: handoffDaSofiaDesde, handoffCalado: () => true };
+
+test('handoff calado (Salto): handoff comum da Sofia → o aviso NÃO sai e vira nota', async () => {
+  _limparPausasProprias();
+  registrarPausaPropria(unidade, LEAD, INICIO + 5_000, 'handoff');
+  const { deps, chamadas } = depsFalsas(calado);
   const motivo = await travaAntesDeEnviar({ unit: unidade, leadId: LEAD, inicioDoTurno: INICIO, resposta: 'Já passei seu caso pra nossa equipe 🙏' }, deps);
-  assert.match(motivo ?? '', /não seja avisado/);
+  assert.equal(motivo, MOTIVO_HANDOFF_CALADO);
   assert.equal(chamadas.notas.length, 1);
   assert.match(chamadas.notas[0], /Já passei seu caso/);
 });
 
+test('handoff calado NUNCA cala: sinal de alerta, teto/candidato (origem "outra") e turno que marcou consulta', async () => {
+  for (const origem of ['alerta', 'outra'] as const) {
+    _limparPausasProprias();
+    registrarPausaPropria(unidade, LEAD, INICIO + 5_000, origem);
+    const { deps, chamadas } = depsFalsas(calado);
+    const motivo = await travaAntesDeEnviar({ unit: unidade, leadId: LEAD, inicioDoTurno: INICIO, resposta: 'aviso' }, deps);
+    assert.equal(motivo, null, origem);
+    assert.equal(chamadas.notas.length, 0, origem);
+  }
+  _limparPausasProprias();
+  registrarPausaPropria(unidade, LEAD, INICIO + 5_000, 'handoff');
+  const { deps } = depsFalsas(calado);
+  const motivo = await travaAntesDeEnviar(
+    { unit: unidade, leadId: LEAD, inicioDoTurno: INICIO, resposta: 'Consulta marcada para quinta às 9h!', marcouConsulta: true },
+    deps,
+  );
+  assert.equal(motivo, null, 'a confirmação da consulta marcada no turno sai');
+});
+
 test('handoff calado ligado, mas a Sofia NÃO pausou neste turno → a resposta normal sai', async () => {
   _limparPausasProprias();
-  const { deps, chamadas } = depsFalsas({ ...semEquipe, pausouSozinha: pausouSozinhaDesde, handoffCalado: () => true });
+  const { deps, chamadas } = depsFalsas(calado);
   const motivo = await travaAntesDeEnviar({ unit: unidade, leadId: LEAD, inicioDoTurno: INICIO, resposta: 'Prefere manhã ou tarde?' }, deps);
   assert.equal(motivo, null);
   assert.equal(chamadas.notas.length, 0);

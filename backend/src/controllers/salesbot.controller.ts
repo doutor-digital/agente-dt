@@ -12,6 +12,7 @@ import { addMessage, upsertConversation } from '../services/conversations.servic
 import { createKommoClient, isLeadPaused } from '../services/kommo.service.js';
 import { leadPausadoPorJanela } from '../lib/pausa-lead.js';
 import { portaDaEquipe, travaAntesDeEnviar } from '../lib/pausa-equipe.js';
+import { consultaMarcadaNoTurno } from '../lib/cartao-de-chegada.js';
 import { garantirTituloPadrao } from '../lib/titulo-padrao.js';
 import { telefoneDeFamiliarNoCartao } from '../lib/telefone-de-familiar.js';
 import { blocoDaConversaOficial } from '../lib/conversa-oficial.js';
@@ -271,7 +272,15 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
       : decisao || 'Recebi sua mensagem, tô só verificando com a equipe um instante 🙏';
     // Pausaram o cartão (ou a equipe escreveu) enquanto o modelo pensava: a resposta não sai.
     const travou = pronta
-      ? await travaAntesDeEnviar({ unit, leadId: Number(leadId), inicioDoTurno, resposta: pronta, recorder }).catch(() => null)
+      ? await travaAntesDeEnviar({
+          unit,
+          leadId: Number(leadId),
+          inicioDoTurno,
+          resposta: pronta,
+          // a confirmação de consulta marcada neste turno nunca é calada (handoff-calado); aqui não há cartão de chegada
+          marcouConsulta: consultaMarcadaNoTurno(trace.id),
+          recorder,
+        }).catch(() => null)
       : null;
     const reply = travou ? '' : pronta;
     const totalLatency = Math.round(performance.now() - requestStart);

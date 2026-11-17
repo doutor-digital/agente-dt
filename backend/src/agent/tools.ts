@@ -653,7 +653,8 @@ export function buildTools({
 
       try {
         // A trava de antes de enviar não pode jogar fora o aviso deste handoff ("Responda em UMA frase").
-        registrarPausaPropria(unit, leadId);
+        // A origem decide se a chave `handoff-calado` pode calar o aviso: sinal de alerta nunca é calado.
+        registrarPausaPropria(unit, leadId, Date.now(), urgente ? 'alerta' : 'handoff');
         await kommo.setLeadFieldFlag(leadId, pausedFieldId, true);
         const latency = Math.round(performance.now() - t0);
         await recorder.step({

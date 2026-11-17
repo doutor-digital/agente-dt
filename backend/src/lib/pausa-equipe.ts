@@ -41,7 +41,7 @@ import { automacaoLigada, estadoDaAutomacao, type Estado } from './automacoes-es
 import { registrarSimulacao, type Simulacao } from './so-no-papel.js';
 import { emPausa } from './pausa-unidade.js';
 import { leadPausadoPorJanela } from './pausa-lead.js';
-import { pausouSozinhaDesde } from './pausa-propria.js';
+import { handoffDaSofiaDesde, pausouSozinhaDesde } from './pausa-propria.js';
 import { registrarPausaDaEquipe } from './pausa-equipe-registro.js';
 import { createKommoClient, isLeadPaused } from '../services/kommo.service.js';
 import { enviosDaSofia, mensagensOficiaisDaUnidade, ultimaCutucadaDoLead, type MensagemOficial } from '../services/kommo-talks.service.js';
@@ -316,15 +316,19 @@ export interface DepsAntesDeEnviar extends DepsPausaEquipe {
   /**
    * A unidade pede que o handoff seja CALADO: quando a própria Sofia passa o atendimento para a equipe, o
    * paciente não recebe aviso nenhum (Salto, 17/11: "o paciente deve achar que fala direto com a secretária").
-   * Opcional: sem ela, vale a chave `handoff-calado` da unidade.
    */
-  handoffCalado?: (unit: Unit) => boolean;
+  handoffCalado: (unit: Unit) => boolean;
+  /** A pausa da própria Sofia neste turno foi um handoff COMUM (não sinal de alerta, não teto, não candidato)? */
+  handoffDaSofia: (unit: Unit, leadId: number, desde: number) => boolean;
 }
 
 /** A chave `handoff-calado` da unidade (desligada quando vazia). */
 export function handoffCaladoNaUnidade(unit: Pick<Unit, 'slug'>): boolean {
   return automacaoLigada(unit.slug, 'handoff-calado', process.env.HANDOFF_CALADO_SLUGS);
 }
+
+/** O motivo do descarte pelo handoff calado — o webhook o reconhece para mover a etapa do handoff mesmo assim. */
+export const MOTIVO_HANDOFF_CALADO = 'a Sofia passou o atendimento para a equipe e esta unidade pede que o paciente não seja avisado';
 
 export const DEPS_ANTES_DE_ENVIAR_PADRAO: DepsAntesDeEnviar = {
   ...DEPS_PAUSA_EQUIPE_PADRAO,
@@ -342,6 +346,8 @@ export const DEPS_ANTES_DE_ENVIAR_PADRAO: DepsAntesDeEnviar = {
   anotar: async (unit, leadId, texto) => {
     await createKommoClient(unit).addLeadNote(leadId, texto);
   },
+  handoffCalado: handoffCaladoNaUnidade,
+  handoffDaSofia: handoffDaSofiaDesde,
 };
 
 /**
@@ -360,9 +366,11 @@ export async function travaAntesDeEnviar(
   const propria = deps.pausouSozinha(unit, leadId, inicioDoTurno);
   let motivo: string | null = null;
 
-  if (propria && (deps.handoffCalado ?? handoffCaladoNaUnidade)(unit)) {
-    // A Sofia passou para a equipe neste turno e a unidade quer o handoff SEM aviso ao paciente.
-    motivo = 'a Sofia passou o atendimento para a equipe e esta unidade pede que o paciente não seja avisado';
+  if (!args.marcouConsulta && deps.handoffDaSofia(unit, leadId, inicioDoTurno) && deps.handoffCalado(unit)) {
+    // A Sofia passou para a equipe neste turno (handoff comum) e a unidade quer o handoff SEM aviso ao paciente.
+    // Nunca cala: sinal de alerta (regra de 26/10 vale mais que a unidade), teto de gasto, candidato a vaga
+    // e turno em que ela MARCOU consulta (a confirmação é a única coisa que o paciente recebe).
+    motivo = MOTIVO_HANDOFF_CALADO;
   } else if (!propria && (await deps.unidadeEmPausa(unit))) {
     motivo = 'a IA da unidade foi pausada enquanto a Sofia respondia';
   } else if (await deps.pausaComData(unit, leadId).catch(() => false)) {

@@ -566,3 +566,30 @@ test('4. motivo: "sem controle da urina", "não tem controle do xixi", "sem for�
     assert.equal(ehHandoffPorSinalDeAlerta(m), false, m);
   }
 });
+
+// ── Salto, lead 4015148 (17/11): AVC que já passou + sequela não é o sinal de agora ──────────────────────────
+
+test('4015148: sequela de AVC/derrame antigo (fala, braço, perna) NÃO dispara a rede de segurança do código', () => {
+  for (const f of [
+    'tive um AVC há 2 meses e fiquei com a fala enrolada',
+    'AVC há 65 dias, fiquei com a perna fraca',
+    'depois do AVC meu braço ficou mole',
+    'derrame ano passado, a perna ficou fraca',
+    'AVC hemorrágico há 65 dias com sequela',
+    'tenho 4 hérnias, tive um AVCH há 65 dias e fiquei com a perna fraca',
+  ]) {
+    assert.equal(sinalNaFala([f]), null, f);
+  }
+});
+
+test('4015148: o sinal de AGORA continua parando, com ou sem AVC antigo na conversa', () => {
+  for (const f of [
+    'minha boca ficou torta agora',
+    'tive AVC há 2 meses e agora minha boca ficou torta de repente',
+    'a fala está enrolada desde ontem',
+    'tive um AVC há 3 dias e a perna ficou fraca', // menos de um mês: não é histórico
+    'minha perna está perdendo força',
+  ]) {
+    assert.notEqual(sinalNaFala([f]), null, f);
+  }
+});
