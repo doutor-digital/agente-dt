@@ -7,6 +7,8 @@
  * pela própria mensagem (`GET /meta/whatsapp/<versão>/<número>/messages/<wamid>` — o filtro por telefone do Kapso é ignorado) e,
  * se veio de anúncio, guarda numa linha `kapso-referral` de `chatwoot_regua_disparo` (UNIQUE conversa+regra+wamid: não duplica).
  * O rastreio de conversões (chatwoot-capi) e o Marketing usam essa linha quando o Chatwoot não tem o referral.
+ * Desde 14/11/2026 o Chatwoot passou a trazer o referral na própria mensagem (`content_attributes.referral`): então vale esse (sem consultar
+ * o Kapso) e segue o mesmo caminho — guardar, etiqueta, nota, origem. Só sem referral no Chatwoot é que o Kapso é perguntado.
  * Chave do Kapso: KAPSO_API_KEY no ambiente do agente; o número: KAPSO_PHONE_NUMBER_IDS (padrão Parauapebas).
  */
 import { logger } from './logger.js';
