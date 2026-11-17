@@ -121,6 +121,8 @@ test('teto por unidade: valor ilegível ou fora de 1..10000 é IGNORADO (cai no 
     assert.equal(freiosDaUnidade(MAG, env).tetoPorDia, 100, ruim);
     assert.equal(avisosDoAmbiente(env).length, 1, ruim);
   }
+  // slug com ponto ou sublinhado também vale
+  assert.equal(tetoPorDiaDaUnidade('clinica_x.y', amb({ DISPARO_TETO_DIA_POR_UNIDADE: 'clinica_x.y=150' })), 150);
   // as bordas valem
   assert.equal(tetoPorDiaDaUnidade('a', amb({ DISPARO_TETO_DIA_POR_UNIDADE: 'a=1' })), 1);
   assert.equal(tetoPorDiaDaUnidade('a', amb({ DISPARO_TETO_DIA_POR_UNIDADE: 'a=10000' })), 10_000);

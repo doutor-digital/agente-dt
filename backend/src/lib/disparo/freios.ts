@@ -93,7 +93,7 @@ function lerTetosPorUnidade(env: NodeJS.ProcessEnv): { tetos: Map<string, number
     const slug = (i < 0 ? '' : entrada.slice(0, i)).trim().toLowerCase();
     const valor = (i < 0 ? '' : entrada.slice(i + 1)).trim();
     const n = /^\d+$/.test(valor) ? Number(valor) : NaN;
-    if (!/^[a-z0-9][a-z0-9-]*$/.test(slug) || !Number.isInteger(n) || n < 1 || n > 10_000) {
+    if (!/^[a-z0-9][a-z0-9._-]*$/.test(slug) || !Number.isInteger(n) || n < 1 || n > 10_000) {
       avisos.push(`${VARIAVEL_TETO_POR_UNIDADE}: a entrada "${entrada.slice(0, 40)}" não vale (o formato é slug=N, com N de 1 a 10000, unidades separadas por /): a unidade fica no teto global`);
       continue;
     }
