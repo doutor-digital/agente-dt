@@ -25,10 +25,12 @@ import {
   dadosDaRevisao,
   decidirPeloEstado,
   escolherRevisora,
+  categoriaRevisavel,
   falasParaARevisora,
   ferramentasDoTurnoComResultado,
   horaLocalDaUnidade,
   lerVeredito,
+  LINHAS_A_LER,
   MAX_FALAS,
   MAX_TOKENS_DA_REVISORA,
   PRAZO_DA_REVISORA_MS,
@@ -270,9 +272,10 @@ export async function montarEntrada(pedido: PedidoDeRevisao, deps: DependenciasD
   const agora = deps.agora();
   let falas: ReturnType<typeof falasParaARevisora> = { falas: [], inicioVisivel: false };
   try {
-    // uma a mais que o necessário: a resposta que acabou de ser gravada ocupa uma vaga e sai
-    const rows = await deps.carregarMensagens(pedido.conversationId, MAX_FALAS + 2);
-    falas = falasParaARevisora(rows, pedido.textoEnviado, agora, MAX_FALAS);
+    // bem mais linhas que as falas usadas: mídia sem texto e a resposta recém-gravada ocupam linhas, e "o começo da conversa está visível?"
+    // só se responde sabendo se o banco ACABOU (veio menos que o pedido) — ver `falasParaARevisora`
+    const rows = await deps.carregarMensagens(pedido.conversationId, LINHAS_A_LER);
+    falas = falasParaARevisora(rows, pedido.textoEnviado, agora, { linhasPedidas: LINHAS_A_LER, max: MAX_FALAS });
   } catch (err) {
     logger.warn({ err: String(err), traceId: pedido.traceId }, 'revisora de saída: não consegui ler as falas — segue sem elas');
   }
@@ -354,9 +357,10 @@ export async function revisarSaida(pedido: PedidoDeRevisao, deps: DependenciasDa
   if (chamou) {
     deps.registrarChamada({
       unitId: unit.id,
-      // SEM traceId, como o juiz: o gasto da revisora entra na soma da unidade/mês (é dinheiro de verdade), mas não no custo do turno
-      // da Sofia nem no teto por conversa — um auxiliar de medição não pode fazer a IA parar. O elo com o turno está em
-      // `revisoes_de_saida.trace_id`.
+      // SEM traceId, como o juiz: fora do custo do turno da Sofia e do teto POR CONVERSA (esses somam por trace). Mas ENTRA no teto MENSAL da
+      // conta (`teto-mensal.ts` soma `llm_calls` por unidade, sem olhar trace): é dinheiro de verdade, e excluí-lo exigiria mexer na consulta
+      // do teto de todas as unidades por ~US$ 11/mês na rede inteira — a conta de uma clínica gasta dezenas de vezes isso com a Sofia.
+      // Se um dia pesar, filtre `request_body->>'revisora'` lá. O elo com o turno está em `revisoes_de_saida.trace_id`.
       traceId: null,
       provider: escolha.provedor,
       model: escolha.modelo,
@@ -384,6 +388,7 @@ export async function revisarSaida(pedido: PedidoDeRevisao, deps: DependenciasDa
       regras: final.violacoes.map((v) => v.regra),
       violacoes: final.violacoes.length ? (final.violacoes as unknown as Prisma.InputJsonValue) : undefined,
       textoEnviado: pedido.textoEnviado.slice(0, 4000),
+      inicioVisivel: entrada ? entrada.inicioVisivel : null,
       provedor: escolha.provedor,
       modelo: escolha.modelo,
       promptTokens,
@@ -426,28 +431,43 @@ export interface ArgsDaPorta {
  * Chamada UMA vez por resposta entregue. Síncrona e barata: confere o estado da automação, pega uma vaga e solta a revisão para rodar em
  * segundo plano — o `processAgent` não espera e não recebe nada de volta. Qualquer coisa que dê errado aqui morre aqui.
  */
-export function agendarRevisaoDeSaida(args: ArgsDaPorta, deps: DependenciasDaRevisora = dependenciasPadrao): void {
+export function agendarRevisaoDeSaida(args: ArgsDaPorta, deps: DependenciasDaRevisora = dependenciasPadrao, limiteUsado: LimiteDaRevisora = limite): void {
   try {
     // consome mesmo quando não vai revisar: a marca não pode ficar esperando o TTL
     const status = pegarStatusDoTurno(args.traceId);
+    // a lista de erros é de clínica: advocacia/energia solar não entram (categoria vazia passa — Caxias e Tatuí)
+    if (!categoriaRevisavel(args.unit.category)) return;
     const decisao = decidirPeloEstado(estadoDaRevisora(args.unit.slug));
     if (!decisao.revisar || !args.textoEnviado.trim()) return;
     if (decisao.aviso) logger.warn({ unit: args.unit.slug }, decisao.aviso);
 
-    const vaga = limite.pedir(args.unit.id);
+    const vaga = limiteUsado.pedir(args.unit.id);
     if (!vaga.ok) {
-      const puladas = limite.puladasTotal;
-      if (puladas % 50 === 1) logger.warn({ motivo: vaga.motivo, emVoo: limite.emVooAgora }, 'revisora de saída: revisão pulada (o auxiliar não pode atrapalhar o principal)');
+      const puladas = limiteUsado.puladasTotal;
+      if (puladas % 50 === 1) logger.warn({ motivo: vaga.motivo, emVoo: limiteUsado.emVooAgora }, 'revisora de saída: revisão pulada (o auxiliar não pode atrapalhar o principal)');
       return;
     }
+    // A vaga é devolvida UMA vez, no `finally`: se o log lançasse dentro do `then`, o `catch` devolveria de novo e `emVoo` ficaria abaixo do real.
+    let falhouOProvedor = false;
     void revisarSaida({ ...args, status }, deps)
       .then((d) => {
-        const { abriu } = limite.terminou(args.unit.id, d.falhouOProvedor);
-        if (abriu) logger.error({ unit: args.unit.slug, pausaMs: PAUSA_DO_DISJUNTOR_MS }, 'revisora de saída: disjuntor ABERTO — erros seguidos do provedor, sem chamar por um tempo');
+        falhouOProvedor = d.falhouOProvedor;
       })
       .catch((err) => {
-        limite.terminou(args.unit.id, false);
-        logger.warn({ err: String(err) }, 'revisora de saída: falhou fora do previsto');
+        try {
+          logger.warn({ err: String(err) }, 'revisora de saída: falhou fora do previsto');
+        } catch {
+          /* o log não pode derrubar a devolução da vaga */
+        }
+      })
+      .finally(() => {
+        const { abriu } = limiteUsado.terminou(args.unit.id, falhouOProvedor);
+        if (!abriu) return;
+        try {
+          logger.error({ unit: args.unit.slug, pausaMs: PAUSA_DO_DISJUNTOR_MS }, 'revisora de saída: disjuntor ABERTO — erros seguidos do provedor, sem chamar por um tempo');
+        } catch {
+          /* idem */
+        }
       });
   } catch (err) {
     logger.warn({ err: String(err), traceId: args.traceId }, 'revisora de saída: não consegui agendar');

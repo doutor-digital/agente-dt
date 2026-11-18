@@ -232,10 +232,31 @@ test('falha ao carregar as falas: segue sem elas e marca o início como não vis
 
 test('chave Anthropic da unidade → o pedido vai ao Haiku 5.5 e a linha diz isso', async () => {
   const { d, r } = deps(APROVA);
-  await revisarSaida(pedido({ unit: unidade({ anthropicApiKey: 'sk-ant-xyz' } as Partial<Unit>) }), d);
+  await revisarSaida(pedido({ unit: unidade({ anthropicApiKey: 'sk-ant-xyz', llmProvider: 'anthropic' } as Partial<Unit>) }), d);
   assert.deepEqual([r.gravadas[0].provedor, r.gravadas[0].modelo], ['anthropic', 'claude-haiku-5-5']);
   assert.equal(r.chamadas[0].provider, 'anthropic');
   assert.equal(r.chamadas[0].requestBody.revisora, true);
+});
+
+test('gravar guarda inicio_visivel: banco acabou = true; banco cheio de mídia vazia = false; entrada que nem montou = null', async () => {
+  const agora = new Date('2026-11-18T17:30:00Z');
+  const curta = deps(APROVA, { carregarMensagens: async () => [{ role: 'user', content: 'oi', createdAt: agora }] });
+  await revisarSaida(pedido(), curta.d);
+  assert.equal(curta.r.gravadas[0].inicioVisivel, true);
+
+  // 30 de 30 linhas devolvidas, quase todas mídia sem texto: sobram poucas falas, mas pode haver mais antigas
+  const cheio = deps(APROVA, {
+    carregarMensagens: async (_c, quantas) => Array.from({ length: quantas }, (_, i) => ({ role: 'user', content: i % 10 === 0 ? `f${i}` : '', createdAt: agora })),
+  });
+  await revisarSaida(pedido(), cheio.d);
+  assert.equal(cheio.r.gravadas[0].inicioVisivel, false);
+  assert.match(cheio.r.modelo[0]!.user, /NÃO aparecem aqui/);
+
+  const ruim = unidade();
+  Object.defineProperty(ruim, 'sourceProdutos', { get: () => { throw new Error('x'); } });
+  const semEntrada = deps(APROVA);
+  await revisarSaida(pedido({ unit: ruim }), semEntrada.d);
+  assert.equal(semEntrada.r.gravadas[0].inicioVisivel, null);
 });
 
 test('o status do paciente e as ferramentas do turno chegam à revisora', async () => {
@@ -378,6 +399,38 @@ test('porta: o status guardado pelo grafo chega à revisora', async () => {
   agendarRevisaoDeSaida({ unit: unidade(), leadId: 1, traceId: 'tp4', conversationId: 'c', textoEnviado: 'Oi', mensagensDoGrafo: [] }, d);
   await esperar();
   assert.match(r.modelo[0]!.user, /JÁ TEM TRATAMENTO/);
+});
+
+test('porta: advocacia/energia solar não são revisadas (a lista é de clínica); categoria vazia (Caxias, Tatuí) e saúde são', async () => {
+  _semearParaTeste([]);
+  const { d, r } = deps(APROVA);
+  const base = { leadId: 1, conversationId: 'c', textoEnviado: 'Oi', mensagensDoGrafo: [] };
+  agendarRevisaoDeSaida({ ...base, unit: unidade({ category: 'advocacia' } as Partial<Unit>), traceId: 'tc1' }, d);
+  agendarRevisaoDeSaida({ ...base, unit: unidade({ category: 'saude' } as Partial<Unit>), traceId: 'tc2' }, d);
+  agendarRevisaoDeSaida({ ...base, unit: unidade({ category: null } as Partial<Unit>), traceId: 'tc3' }, d);
+  await esperar();
+  assert.equal(r.modelo.length, 2);
+});
+
+test('porta: a vaga é devolvida UMA vez, tanto no caminho normal quanto quando a revisão rejeita', async () => {
+  _semearParaTeste([]);
+  const lim = new LimiteDaRevisora(1, 5, 60_000);
+  const base = { unit: unidade(), leadId: 1, conversationId: 'c', textoEnviado: 'Oi', mensagensDoGrafo: [] };
+  const ok = deps(APROVA);
+  agendarRevisaoDeSaida({ ...base, traceId: 'tv1' }, ok.d, lim);
+  await esperar();
+  assert.equal(lim.emVooAgora, 0);
+  // `agora()` lança fora do try interno de revisarSaida → a promessa rejeita → cai no catch
+  const quebra = deps(APROVA, { agora: () => { throw new Error('relógio'); } });
+  agendarRevisaoDeSaida({ ...base, traceId: 'tv2' }, quebra.d, lim);
+  await esperar();
+  assert.equal(lim.emVooAgora, 0, 'devolvida uma vez só (nem presa, nem devolvida em dobro)');
+  // com teto 1, uma vaga presa ou perdida em dobro apareceria aqui: duas seguidas têm de rodar
+  agendarRevisaoDeSaida({ ...base, traceId: 'tv3' }, ok.d, lim);
+  await esperar();
+  agendarRevisaoDeSaida({ ...base, traceId: 'tv4' }, ok.d, lim);
+  await esperar();
+  assert.equal(ok.r.gravadas.length, 3);
 });
 
 test('porta: texto vazio não revisa; dependência que explode na hora não lança para quem chamou', async () => {

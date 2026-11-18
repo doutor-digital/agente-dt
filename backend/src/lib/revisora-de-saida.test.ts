@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  categoriaRevisavel,
   consolidar,
   cumprimentoForaDeHora,
   dadosDaRevisao,
@@ -228,10 +229,27 @@ test('estado: desligado não revisa; seco revisa; ligado AINDA só registra (e a
 // ── quem revisa ───────────────────────────────────────────────────────────────────────────────────
 
 test('escolherRevisora: chave Anthropic da unidade → Haiku 5.5; sem chave → gpt-4o-mini', () => {
-  const a = escolherRevisora({}, { anthropicApiKey: ' sk-ant-x ' });
+  const a = escolherRevisora({}, { anthropicApiKey: ' sk-ant-x ', llmProvider: 'anthropic' });
   assert.deepEqual([a.provedor, a.modelo, a.apiKeyAnthropic], ['anthropic', 'claude-haiku-5-5', 'sk-ant-x']);
   const o = escolherRevisora({}, { anthropicApiKey: null });
   assert.deepEqual([o.provedor, o.modelo, o.apiKeyAnthropic], ['openai', 'gpt-4o-mini', null]);
+});
+
+test('escolherRevisora: unidade que opera em OpenAI NÃO usa a chave Anthropic que por acaso tem (Imperatriz resgate); provedor vazio = openai', () => {
+  const o = escolherRevisora({}, { anthropicApiKey: 'sk-ant-velha', llmProvider: 'openai' });
+  assert.deepEqual([o.provedor, o.apiKeyAnthropic], ['openai', null]);
+  assert.equal(escolherRevisora({}, { anthropicApiKey: 'k' }).provedor, 'openai');
+  assert.equal(escolherRevisora({}, { anthropicApiKey: 'k', llmProvider: 'google' }).provedor, 'openai');
+  assert.equal(escolherRevisora({ REVISORA_ANTHROPIC_API_KEY: 'k' }, { anthropicApiKey: null, llmProvider: 'openai' }).provedor, 'anthropic', 'opt-in explícito vale');
+});
+
+test('categoriaRevisavel: saúde e categoria vazia (Caxias, Tatuí) sim; advocacia e outras não', () => {
+  assert.equal(categoriaRevisavel('saude'), true);
+  assert.equal(categoriaRevisavel(' saude '), true);
+  assert.equal(categoriaRevisavel(null), true);
+  assert.equal(categoriaRevisavel(''), true);
+  assert.equal(categoriaRevisavel('advocacia'), false);
+  assert.equal(categoriaRevisavel('energia_solar'), false);
 });
 
 test('escolherRevisora: ANTHROPIC_API_KEY solta e JUDGE_PROVIDER NÃO a ligam (só a chave da unidade ou REVISORA_ANTHROPIC_API_KEY)', () => {
@@ -241,9 +259,9 @@ test('escolherRevisora: ANTHROPIC_API_KEY solta e JUDGE_PROVIDER NÃO a ligam (s
 
 test('escolherRevisora: REVISORA_MODEL só vale no provedor certo', () => {
   assert.equal(escolherRevisora({ REVISORA_MODEL: 'gpt-4.1-mini' }, null).modelo, 'gpt-4.1-mini');
-  assert.equal(escolherRevisora({ REVISORA_MODEL: 'gpt-4.1-mini' }, { anthropicApiKey: 'k' }).modelo, 'claude-haiku-5-5');
+  assert.equal(escolherRevisora({ REVISORA_MODEL: 'gpt-4.1-mini' }, { anthropicApiKey: 'k', llmProvider: 'anthropic' }).modelo, 'claude-haiku-5-5');
   assert.equal(escolherRevisora({ REVISORA_MODEL: 'claude-sonnet-5-5' }, null).modelo, 'gpt-4o-mini');
-  assert.equal(escolherRevisora({ REVISORA_MODEL: 'claude-sonnet-5-5' }, { anthropicApiKey: 'k' }).modelo, 'claude-sonnet-5-5');
+  assert.equal(escolherRevisora({ REVISORA_MODEL: 'claude-sonnet-5-5' }, { anthropicApiKey: 'k', llmProvider: 'anthropic' }).modelo, 'claude-sonnet-5-5');
 });
 
 test('montarPedidoAnthropic: com schema/maxTokens da revisora; sem eles, o do juiz como sempre', () => {
@@ -352,6 +370,7 @@ test('falasParaARevisora: tira a resposta que acabou de ser gravada, ordena do m
     ],
     'Resposta nova',
     agora,
+    { linhasPedidas: 30 },
   );
   assert.deepEqual(
     r.falas.map((f) => [f.autor, f.texto, f.haMin]),
@@ -375,25 +394,45 @@ test('falasParaARevisora: a resposta recém-gravada sai mesmo com Pix/cartão (o
     ],
     'Resposta nova',
     agora,
+    { linhasPedidas: 30 },
   );
   assert.deepEqual(r.falas.map((f) => f.texto), ['quero marcar', 'ok, vou pagar', '00020126...copia-e-cola']);
 });
 
 test('falasParaARevisora: só UMA ocorrência sai; texto igual mais antigo é fala de outro turno', () => {
-  const r = falasParaARevisora([msg('assistant', 'Tudo bem?', 0), msg('user', 'oi', 1), msg('assistant', 'Tudo bem?', 5)], 'Tudo bem?', agora);
+  const r = falasParaARevisora([msg('assistant', 'Tudo bem?', 0), msg('user', 'oi', 1), msg('assistant', 'Tudo bem?', 5)], 'Tudo bem?', agora, { linhasPedidas: 30 });
   assert.deepEqual(r.falas.map((f) => f.texto), ['Tudo bem?', 'oi']);
 });
 
 test('falasParaARevisora: limita a 6 e avisa que o começo não está visível', () => {
   const muitas = Array.from({ length: 10 }, (_, i) => msg(i % 2 ? 'user' : 'assistant', `f${i}`, i + 1));
-  const r = falasParaARevisora(muitas, 'outra coisa', agora);
+  const r = falasParaARevisora(muitas, 'outra coisa', agora, { linhasPedidas: 30 });
   assert.equal(r.falas.length, 6);
   assert.equal(r.falas[5]!.texto, 'f0'); // a mais nova por último
   assert.equal(r.inicioVisivel, false);
 });
 
+test('inicioVisivel decide pelo que o BANCO devolveu, não pelo recorte filtrado: mídia vazia no meio não esconde nem finge o começo', () => {
+  // conversa curta (5 linhas < 30 pedidas) cheia de mídia sem texto: o banco acabou → o começo ESTÁ visível
+  const comMidia = [msg('user', '', 1), msg('user', '', 2), msg('assistant', 'Resposta nova', 0), msg('user', '  ', 3), msg('user', 'oi', 4), msg('user', '', 5)];
+  assert.equal(falasParaARevisora(comMidia, 'Resposta nova', agora, { linhasPedidas: 30 }).inicioVisivel, true);
+
+  // o banco devolveu o pedido CHEIO (30 de 30) e quase tudo é mídia vazia: sobram 3 falas (< 6), mas há mais antigas → NÃO visível
+  const cheio = Array.from({ length: 30 }, (_, i) => (i % 10 === 0 ? msg('user', `fala${i}`, i + 1) : msg('user', '', i + 1)));
+  const r = falasParaARevisora(cheio, 'x', agora, { linhasPedidas: 30 });
+  assert.equal(r.falas.length, 3);
+  assert.equal(r.inicioVisivel, false);
+
+  // banco acabou (31 < 40) mas há mais de 6 falas com texto: o corte de 6 deixou as antigas de fora → NÃO visível
+  const longa = Array.from({ length: 12 }, (_, i) => msg('user', `f${i}`, i + 1));
+  assert.equal(falasParaARevisora(longa, 'x', agora, { linhasPedidas: 40 }).inicioVisivel, false);
+
+  // exatamente 6 falas e o banco acabou: visível
+  assert.equal(falasParaARevisora(longa.slice(0, 6), 'x', agora, { linhasPedidas: 40 }).inicioVisivel, true);
+});
+
 test('falasParaARevisora: ignora system e mensagem vazia', () => {
-  const r = falasParaARevisora([msg('system', 'segredo', 1), msg('user', '   ', 2), msg('user', 'oi', 3)], 'x', agora);
+  const r = falasParaARevisora([msg('system', 'segredo', 1), msg('user', '   ', 2), msg('user', 'oi', 3)], 'x', agora, { linhasPedidas: 30 });
   assert.deepEqual(r.falas.map((f) => f.texto), ['oi']);
 });
 

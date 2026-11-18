@@ -3083,6 +3083,9 @@ model RevisaoDeSaida {
   /// [{ regra, motivo, trecho, origem: "modelo" | "codigo" }]
   violacoes        Json?
   textoEnviado     String   @map("texto_enviado")
+  /// O começo da conversa estava nas falas que a revisora leu? `false` = ela só viu o fim (e foi mandada aprovar na dúvida de `horario_antes_da_dor`);
+  /// `null` = a entrada nem chegou a ser montada. Para filtrar o alarme falso dessa regra: `where inicio_visivel is true`.
+  inicioVisivel    Boolean? @map("inicio_visivel")
   provedor         String?
   modelo           String?
   promptTokens     Int      @default(0) @map("prompt_tokens")

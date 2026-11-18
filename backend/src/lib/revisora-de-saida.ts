@@ -161,6 +161,11 @@ const LIMITE_RESULTADO_FERRAMENTA = 320;
 const LIMITE_FICHA = 1400;
 const LIMITE_CONSULTA = 500;
 export const MAX_FALAS = 6;
+/**
+ * Quantas linhas pedir ao banco: bem mais que `MAX_FALAS`, porque mídia sem texto (que não vira fala) e a própria resposta recém-gravada
+ * ocupam linhas. Se o banco devolver isto cheio, não dá para afirmar que o começo da conversa está nas falas.
+ */
+export const LINHAS_A_LER = 30;
 /** Quantas das mensagens mais novas podem estar na frente da resposta recém-gravada. */
 const ONDE_PROCURAR_A_ENVIADA = 4;
 
@@ -461,12 +466,25 @@ export interface EscolhaDaRevisora {
 }
 
 /**
- * Haiku 5.5 com a chave Anthropic DA UNIDADE quando houver (ou `REVISORA_ANTHROPIC_API_KEY`, opt-in explícito); senão o modelo barato da
- * OpenAI (`gpt-4o-mini`, ou `REVISORA_MODEL` se não for `claude-*`). Independe de `JUDGE_PROVIDER`: é outra peça.
+ * A lista de erros é de CLÍNICA (consulta, sinal, dor, pronto-socorro). Unidade com categoria preenchida e que não é `saude` (advocacia,
+ * energia solar…) não é revisada: as regras acusariam à toa. Categoria VAZIA passa — Caxias e Tatuí são clínicas sem categoria gravada.
+ * (`hm-tecnologia` também tem categoria vazia e não dá para separar por este campo: desliga-se pela tela.)
  */
-export function escolherRevisora(env: EnvLike, unit: { anthropicApiKey?: string | null } | null): EscolhaDaRevisora {
+export function categoriaRevisavel(category: string | null | undefined): boolean {
+  const c = (category ?? '').trim();
+  return c === '' || c === 'saude';
+}
+
+/**
+ * Haiku 5.5 com a chave Anthropic DA UNIDADE, mas só quando o provedor DA UNIDADE é a Anthropic (`llmProvider`): quem opera em OpenAI
+ * pode ter uma chave Anthropic velha/sem uso, e a revisora não deve ser a primeira a descobrir isso. `REVISORA_ANTHROPIC_API_KEY` é
+ * opt-in explícito e vale para qualquer unidade. Senão, o modelo barato da OpenAI (`gpt-4o-mini`, ou `REVISORA_MODEL` se não for
+ * `claude-*`). Independe de `JUDGE_PROVIDER`: é outra peça.
+ */
+export function escolherRevisora(env: EnvLike, unit: { anthropicApiKey?: string | null; llmProvider?: string | null } | null): EscolhaDaRevisora {
   const sobrescrito = env.REVISORA_MODEL?.trim();
-  const chave = unit?.anthropicApiKey?.trim() || env.REVISORA_ANTHROPIC_API_KEY?.trim() || null;
+  const usaAnthropic = (unit?.llmProvider ?? 'openai') === 'anthropic';
+  const chave = (usaAnthropic ? unit?.anthropicApiKey?.trim() : '') || env.REVISORA_ANTHROPIC_API_KEY?.trim() || null;
   if (chave) {
     return {
       provedor: 'anthropic',
@@ -491,16 +509,23 @@ export interface MensagemDoBanco {
 }
 
 /**
- * As últimas falas ANTES do texto enviado, da mais antiga para a mais nova. `maisNovasPrimeiro` é o resultado de `orderBy createdAt desc`.
- * A resposta que acabou de ser gravada (mesmo texto, `assistant`, a mais nova) sai — a revisora a recebe à parte. Quem falou vem do
- * `meta` que o sistema gravou (`autorDaFala`, o mesmo do juiz): `equipe` é pessoa da clínica, `automacao` é lembrete/confirmação.
+ * As últimas falas ANTES do texto enviado, da mais antiga para a mais nova. `maisNovasPrimeiro` é o resultado de `orderBy createdAt desc`
+ * com `take: linhasPedidas`. A resposta que acabou de ser gravada (mesmo texto, `assistant`, a mais nova) sai — a revisora a recebe à parte.
+ * Quem falou vem do `meta` que o sistema gravou (`autorDaFala`, o mesmo do juiz): `equipe` é pessoa da clínica, `automacao` é lembrete.
+ *
+ * `inicioVisivel` (o começo da conversa está nas falas?) decide-se pelo que o BANCO devolveu contra o que foi pedido — NUNCA pelo recorte
+ * já filtrado: mídia sem texto (mensagem vazia) é descartada do recorte e fazia uma conversa longa parecer curta (~10 % das respostas em
+ * 48 h). Veio menos linhas do que as pedidas = o banco acabou = a conversa inteira foi lida; veio o pedido cheio = pode haver mais
+ * antigas. Mesmo lida inteira, só é "visível" se nenhuma fala com texto ficou de fora do corte de `max`.
  */
 export function falasParaARevisora(
   maisNovasPrimeiro: readonly MensagemDoBanco[],
   textoEnviado: string,
   agora: Date,
-  max: number = MAX_FALAS,
+  opcoes: { linhasPedidas: number; max?: number },
 ): { falas: FalaRevisada[]; inicioVisivel: boolean } {
+  const max = opcoes.max ?? MAX_FALAS;
+  const bancoAcabou = maisNovasPrimeiro.length < opcoes.linhasPedidas;
   const lista = [...maisNovasPrimeiro];
   // A resposta recém-gravada é a mais nova... salvo o que o `processAgent` grava logo depois dela (Pix do sinal, cartão de chegada) ou
   // uma fala do paciente que chegou no meio: por isso a procura vai até as primeiras `ONDE_PROCURAR_A_ENVIADA` linhas, e tira só UMA
@@ -514,7 +539,7 @@ export function falasParaARevisora(
     const autor: AutorDaFalaRevisada = quem === 'ia' ? 'sofia' : quem;
     return { autor, texto: m.content, haMin: Math.max(0, Math.round((agora.getTime() - m.createdAt.getTime()) / 60_000)) };
   });
-  return { falas, inicioVisivel: recorte.length <= max };
+  return { falas, inicioVisivel: bancoAcabou && recorte.length <= max };
 }
 
 interface MensagemDoGrafo {

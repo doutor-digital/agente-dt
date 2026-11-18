@@ -10,6 +10,7 @@ CREATE TABLE "revisoes_de_saida" (
     "regras" TEXT[] DEFAULT ARRAY[]::TEXT[],
     "violacoes" JSONB,
     "texto_enviado" TEXT NOT NULL,
+    "inicio_visivel" BOOLEAN,
     "provedor" TEXT,
     "modelo" TEXT,
     "prompt_tokens" INTEGER NOT NULL DEFAULT 0,
