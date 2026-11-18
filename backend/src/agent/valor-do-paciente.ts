@@ -52,7 +52,8 @@ const ANTES_DO_PACIENTE: RegExp[] = [
   // "O comprovante é da nossa clínica, mas o valor de R$ 50 não bate" / "…, mas o valor de R$ 200 ficou abaixo"
   /comprovante\b[^]{0,60}?\bmas\b[^,;—–-]{0,20}?\bvalor\s+(?:de\s+)?$/i,
   // "você pagou", "você já enviou o Pix de"
-  new RegExp(String.raw`\b(?:voc[eê]|vc)\s+(?:j[aá]\s+)?${FEZ}\b[^]{0,25}$`, 'i'),
+  // (sem vírgula/dois-pontos/travessão e sem valor/preço/fica/é no meio: "Você enviou tudo, o valor fica R$ 250" é o preço; "o Pix de R$" passa)
+  new RegExp(String.raw`\b(?:voc[eê]|vc)\s+(?:j[aá]\s+)?${FEZ}\b(?:(?!\bvalor\b|\bpre[çc]o\b|\bfica\w*|\bé\b|\bs[aã]o\b)[^,;:—–-]){0,25}$`, 'i'),
   // "o valor que veio/caiu/chegou/consta/aparece/mostrado …", "o valor mostrado foi de"
   // (só o verbo e, no máximo, "foi/é/era [de]": "o valor mostrado no site é R$ 250" não relata o que o paciente mandou)
   /\bvalor\s+(?:que\s+)?(?:veio|caiu|chegou|consta|aparece|mostrad[oa]|identificad[oa]|leu)\s+(?:(?:foi|é|era)\s+)?(?:de\s+)?$/i,
@@ -81,8 +82,17 @@ const PEDE_ENVIO = /\b(?:enviar|envie|envia|mandar|mande|manda|reenviar|reenvie|
  * paciente mandou, é o que a Sofia está dizendo que custa — e segue conferido. Até duas palavras no meio; vírgula, travessão ou ponto cortam
  * ("R$ 50,00, mas o valor antecipado…" continua sendo o valor do comprovante).
  */
-const PRECO_COLADO_DEPOIS =
-  /^\s*(?:(?:a|o|de|da|do|no|na|pelo|via|por)\s+)?(?:(?:consulta|pix)\s+)?(?:antecipad\w*|no\s+dia|na\s+cl[ií]nica|na\s+hora|[àa]\s+vista|no\s+ato|sinal)/iu;
+const PRECO_COLADO_DEPOIS = new RegExp(
+  String.raw`^\s*(?:` +
+    // "R$ 250 antecipado", "R$ 300 a consulta antecipada", "R$ 300 no dia", "R$ 300 no Pix antecipado"
+    String.raw`(?:(?:a|o|de|da|do|no|na|pelo|via|por|pra|para)\s+)?(?:(?:consulta|pix)\s+)?(?:antecipad\w*|no\s+dia|na\s+cl[ií]nica|na\s+hora|[àa]\s+vista|no\s+ato|sinal)` +
+    // "R$ 300 a consulta", "R$ 300 pra consulta presencial"
+    String.raw`|(?:(?:pra|para|por)\s+)?(?:a\s+|essa\s+)?consulta\b` +
+    // "o valor de R$ 250 é o antecipado", "R$ 250 é o valor da consulta"
+    String.raw`|(?:é|são)\s+(?:o|a)\s+(?:valor\s+)?(?:antecipad\w*|d[ao]\s+(?:consulta|sinal|dia))` +
+    `)`,
+  'iu',
+);
 
 /** Condicional ("se você já pagou os R$ 250", "caso tenha mandado") e espera ("fico no aguardo do comprovante de R$ 250"): não relata nada, o R$ é preço ou pedido. */
 const CONDICIONAL_OU_ESPERA =

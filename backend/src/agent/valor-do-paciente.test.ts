@@ -18,6 +18,8 @@ test('valor do paciente: o que o comprovante / o paciente pagou, mandou ou fez',
   assert.deepEqual(doPaciente('O comprovante é da nossa clínica, mas o valor de R$ 50 não bate com o antecipado (que é R$ 200).'), ['R$ 50']);
   assert.deepEqual(doPaciente('O comprovante tem R$ 100,00 e o valor ficou abaixo do antecipado de R$ 250,00.'), ['R$ 100,00']);
   assert.deepEqual(doPaciente('O comprovante mostra R$ 50 e o antecipado é R$ 200.'), ['R$ 50']);
+  assert.deepEqual(doPaciente('O pagamento foi de R$ 250 e está confirmado.'), ['R$ 250']);
+  assert.deepEqual(doPaciente('Você já enviou o Pix de R$ 50, obrigada!'), ['R$ 50']);
   assert.deepEqual(doPaciente('Esse valor de R$ 50 ainda não bate com o antecipado, que é R$ 200.'), ['R$ 50']);
   assert.deepEqual(doPaciente('O valor que caiu foi R$ 200, e o nosso Pix antecipado é de R$ 250.'), ['R$ 200']);
 });

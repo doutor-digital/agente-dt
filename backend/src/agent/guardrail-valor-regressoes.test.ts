@@ -157,6 +157,61 @@ const CASOS: { n: string; unit: Unit; entra: string; sai: string }[] = [
     entra: 'O valor que aparece na tabela é R$ 300 no dia.',
     sai: 'O valor que aparece na tabela é R$ 350 no dia.',
   },
+  // ── 5. rodada 2 do sênior: verbo do paciente longe do valor, "é o antecipado", "a consulta" ──
+  {
+    n: '20 Canaã: "Você enviou tudo, o valor fica R$ 250 garantindo o horário" → R$ 200',
+    unit: BALSAS,
+    entra: 'Obrigada! Você enviou tudo, o valor fica R$ 250 garantindo o horário.',
+    sai: 'Obrigada! Você enviou tudo, o valor fica R$ 200 garantindo o horário.',
+  },
+  {
+    n: '21 Balsas: "Você enviou certinho, o valor é R$ 300 no Pix" → R$ 350',
+    unit: BALSAS,
+    entra: 'Você enviou certinho, o valor é R$ 300 no Pix.',
+    sai: 'Você enviou certinho, o valor é R$ 350 no Pix.',
+  },
+  {
+    n: '22 Balsas: "Você mandou o áudio, fica R$ 300 a consulta" → R$ 350',
+    unit: BALSAS,
+    entra: 'Você mandou o áudio, fica R$ 300 a consulta.',
+    sai: 'Você mandou o áudio, fica R$ 350 a consulta.',
+  },
+  {
+    n: '23 Serra: "Você enviou a foto do exame, a consulta fica R$ 300" → R$ 280',
+    unit: SERRA,
+    entra: 'Você enviou a foto do exame, a consulta fica R$ 300.',
+    sai: 'Você enviou a foto do exame, a consulta fica R$ 280.',
+  },
+  {
+    n: '24 Canaã: "Recebi o comprovante, mas o valor de R$ 250 é o antecipado" → R$ 200',
+    unit: SEM_SINAL,
+    entra: 'Recebi o comprovante, mas o valor de R$ 250 é o antecipado.',
+    sai: 'Recebi o comprovante, mas o valor de R$ 200 é o antecipado.',
+  },
+  {
+    n: '25 Serra: "Recebi o comprovante, mas o valor de R$ 300 é o antecipado" → R$ 280',
+    unit: SERRA,
+    entra: 'Recebi o comprovante, mas o valor de R$ 300 é o antecipado.',
+    sai: 'Recebi o comprovante, mas o valor de R$ 280 é o antecipado.',
+  },
+  {
+    n: '26 Serra: "O valor foi de R$ 300 pra consulta presencial" → R$ 280',
+    unit: SERRA,
+    entra: 'O valor foi de R$ 300 pra consulta presencial.',
+    sai: 'O valor foi de R$ 280 pra consulta presencial.',
+  },
+  {
+    n: '27 Serra: "O valor foi de R$ 300 a consulta" → R$ 280',
+    unit: SERRA,
+    entra: 'O valor foi de R$ 300 a consulta.',
+    sai: 'O valor foi de R$ 280 a consulta.',
+  },
+  {
+    n: '28 Serra: "Você já mandou a localização? A consulta é R$ 300 antecipado" → R$ 280',
+    unit: SERRA,
+    entra: 'Você já mandou a localização? A consulta é R$ 300 antecipado.',
+    sai: 'Você já mandou a localização? A consulta é R$ 280 antecipado.',
+  },
 ];
 
 for (const c of CASOS) {
