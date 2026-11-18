@@ -31,24 +31,20 @@ import { registrarSimulacao, type Simulacao } from './so-no-papel.js';
 import { etapaPermitida, precisaDoFunil, type FunisDaConta } from './etapa-permitida.js';
 import { etapaCalada, sofiaCaladaLiberada } from './sofia-calada.js';
 import { esquemaDaUnidade } from './kommo-schema.js';
-import { AUTOMACAO_PAUSA_EQUIPE, DEPS_PAUSA_EQUIPE_PADRAO, estadoDaPausaPelaEquipe, falasHumanasDaEquipe, nomeDoAutor } from './pausa-equipe.js';
+import { AUTOMACAO_PAUSA_EQUIPE, DEPS_PAUSA_EQUIPE_PADRAO, VOLTA_PADRAO_MIN, estadoDaPausaPelaEquipe, falasHumanasDaEquipe, minutosDaVolta, nomeDoAutor } from './pausa-equipe.js';
 import { encerrarPausaDaEquipe, pausasAbertas, type DesfechoDaPausa, type PausaAberta } from './pausa-equipe-registro.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { getPausedStagesGlobalSet } from '../services/actions.service.js';
 import type { MensagemOficial } from '../services/kommo-talks.service.js';
 
-export const VOLTA_PADRAO_MIN = 60;
 /** Pausa aberta há mais que isto sem poder voltar (etapa fechada, chave desligada…) deixa de ser candidata. */
 export const VALIDADE_DA_PAUSA_MS = 14 * 24 * 3600_000;
 /** O Kommo carimba o evento da nossa própria marcação com o relógio dele: folga antes de contar "alguém mexeu". */
 export const FOLGA_DA_MARCACAO_MS = 120_000;
 const SWEEP_MS = 5 * 60_000;
 
-/** `PAUSA_EQUIPE_VOLTA_MIN`: minutos sem fala da equipe para a Sofia voltar. Inválido ou ≤ 0 = 60. */
-export function minutosDaVolta(env: NodeJS.ProcessEnv = process.env): number {
-  const n = Number(env.PAUSA_EQUIPE_VOLTA_MIN);
-  return Number.isFinite(n) && n > 0 ? n : VOLTA_PADRAO_MIN;
-}
+// `VOLTA_PADRAO_MIN` e `minutosDaVolta` moram em pausa-equipe.ts: a porta usa a MESMA janela para decidir se a fala da equipe ainda pausa.
+export { VOLTA_PADRAO_MIN, minutosDaVolta };
 
 // ── parte pura ──────────────────────────────────────────────────────────────────────────────────
 

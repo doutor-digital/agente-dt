@@ -47,11 +47,21 @@ import { registrarPausaDaEquipe } from './pausa-equipe-registro.js';
 import { createKommoClient, isLeadPaused } from '../services/kommo.service.js';
 import { enviosDaSofia, mensagensOficiaisDaUnidade, ultimaCutucadaDoLead, type MensagemOficial } from '../services/kommo-talks.service.js';
 import { carimbarHumanoAssumiu } from '../services/lead-metrics.service.js';
-import { appDoCelular, ehFalaAutomaticaPeloTexto } from './fala-automatica.js';
+import { AVISO_DO_SISTEMA_BASE, appDoCelular, ehFalaAutomaticaDoLite } from './fala-automatica.js';
 
 export const AUTOMACAO_PAUSA_EQUIPE = 'pausa-equipe';
-/** Fala da equipe mais velha que isto não pausa (e não faz a ligação da chave varrer conversas antigas). */
+/**
+ * Janela de LEITURA da fala da equipe (a última mensagem do agente e a cutucada são buscadas até aqui). Quem decide se a fala ainda PAUSA
+ * é `janelaDaFalaMs` (a mesma da volta, abaixo); esta só vale quando a fala foi seguida de uma cutucada.
+ */
 export const JANELA_DA_EQUIPE_MS = 24 * 3600_000;
+/** Padrão de `PAUSA_EQUIPE_VOLTA_MIN`: minutos sem fala da equipe para a Sofia voltar (ver pausa-equipe-volta.ts). */
+export const VOLTA_PADRAO_MIN = 60;
+/** `PAUSA_EQUIPE_VOLTA_MIN`: minutos sem fala da equipe para a Sofia voltar. Inválido ou ≤ 0 = 60. A porta usa o mesmo número. */
+export function minutosDaVolta(env: NodeJS.ProcessEnv = process.env): number {
+  const n = Number(env.PAUSA_EQUIPE_VOLTA_MIN);
+  return Number.isFinite(n) && n > 0 ? n : VOLTA_PADRAO_MIN;
+}
 /**
  * Saudação e ausência do WhatsApp Business saem sozinhas, no mesmo instante da mensagem do paciente. Folga
  * para o eco chegar ao Kommo; para trás, tolerância de relógio entre a entrada e o eco.
@@ -71,23 +81,23 @@ export function estadoDaPausaPelaEquipe(slug: string, env: NodeJS.ProcessEnv = p
 // ── parte pura ──────────────────────────────────────────────────────────────────────────────────
 
 /**
- * PURA: a mensagem é a resposta automática do app do celular (saudação, ausência), aviso do sistema ou robô conhecido?
+ * PURA: a mensagem é a resposta automática do app do celular (saudação, ausência) ou aviso do sistema?
  * Visto em produção: Rio Verde, "⏰Nosso horário de atendimento é de segundas à sexta…" às 23:59, no mesmo
- * minuto da mensagem do paciente; Balsas, "Olá, tudo bem? 😄 Clínica Doutor Hérnia é especializada…"; Petrópolis (Lite),
- * "Agradecemos o seu contato! Nosso atendimento é de segunda a sexta…" (35 em 72 h, 18/11/2026).
+ * minuto da mensagem do paciente; Balsas, "Olá, tudo bem? 😄 Clínica Doutor Hérnia é especializada…".
  * Áudio e texto curto pelo celular são gente.
  *
- * Para os DOIS apps (Business e Lite), sem depender de hora: aviso do sistema, texto de ausência/saudação e texto de robô conhecido.
- * A regra de TEMPO (texto longo até 20 s depois de uma entrada) vale SÓ para o Business: no Lite ela escondia fala humana rápida
- * ("Há quanto tempo ela vem sentindo essas dores ?", "Obrigada pela confirmação…" — 27 em 72 h nas duas contas) e a Sofia seguia
- * falando por cima da secretária (Caxias, lead 3526512, 18/11/2026).
+ * WhatsApp BUSINESS: a regra de sempre — aviso do sistema, ou texto longo até 20 s depois de uma entrada.
+ * WhatsApp LITE (Caxias 3526512 e Petrópolis, 18/11/2026): só pelo TEXTO, sem hora — aviso do sistema (inclui «messageContextInfo») e
+ * ausência/saudação ("Agradecemos o seu contato! Nosso atendimento é de segunda a sexta…", 35 em 72 h em Petrópolis). A regra de tempo
+ * NÃO vale no Lite: escondia fala humana rápida ("Há quanto tempo ela vem sentindo essas dores ?", "Obrigada pela confirmação…" — 27 em 72 h
+ * nas duas contas) e a Sofia seguia falando por cima da secretária.
  */
 export function ehRespostaAutomatica(m: MensagemOficial, msgs: readonly MensagemOficial[]): boolean {
   if (m.direcao !== 'saida') return false;
   const texto = m.texto.trim();
-  if (ehFalaAutomaticaPeloTexto(m)) return true;
-  const app = appDoCelular(m.autorNome);
-  if (app !== 'business' || m.anexo || texto.length < RESPOSTA_AUTOMATICA_MIN_CARACTERES) return false;
+  if (AVISO_DO_SISTEMA_BASE.test(texto)) return true;
+  if (ehFalaAutomaticaDoLite(m)) return true;
+  if (appDoCelular(m.autorNome) !== 'business' || m.anexo || texto.length < RESPOSTA_AUTOMATICA_MIN_CARACTERES) return false;
   const t = m.em.getTime();
   return msgs.some((p) => {
     if (p.direcao !== 'entrada') return false;
@@ -113,7 +123,11 @@ export type DecisaoDaEquipe = { fala: MensagemOficial; motivo: null } | { fala: 
 
 /**
  * PURA: a equipe tem a palavra? A última fala humana dela, se veio depois da última mensagem do agente e
- * nas últimas 24 h. (A checagem "desmarcaram a caixinha depois" pede o Kommo e fica em `conferirEquipe`.)
+ * há menos que a janela da volta (`PAUSA_EQUIPE_VOLTA_MIN`, 60 min). Fala mais velha que isso não pausa: a volta já teria soltado a
+ * conversa 1 h depois e NÃO responde a mensagem que ficou, então pausar por fala de 2–14 h atrás deixava o paciente sem ninguém
+ * (Petrópolis, 18/11/2026: 8 respostas reais da Sofia à noite em 72 h, com o Lite contando como equipe).
+ * Exceção, igual a antes: se a cutucada falou DEPOIS da equipe, o paciente que responde a ela continua na conversa da equipe e a janela
+ * de 24 h conta a partir da cutucada. (A checagem "desmarcaram a caixinha depois" pede o Kommo e fica em `conferirEquipe`.)
  */
 export function equipeComAPalavra(
   msgs: readonly MensagemOficial[],
@@ -121,12 +135,15 @@ export function equipeComAPalavra(
   agora: Date,
   /** A cutucada depois da equipe (não é fala da IA): se veio DEPOIS da fala da equipe, a janela de 24 h conta a partir dela. */
   ultimaCutucada: Date | null = null,
+  /** Quanto tempo a fala da equipe ainda pausa (sem cutucada). Padrão: a janela da volta. */
+  janelaDaFalaMs: number = minutosDaVolta() * 60_000,
 ): DecisaoDaEquipe {
   const falas = falasHumanasDaEquipe(msgs);
   const fala = falas[falas.length - 1];
   if (!fala) return { fala: null, motivo: 'sem_equipe' };
-  const retomadaEm = ultimaCutucada && ultimaCutucada.getTime() >= fala.em.getTime() ? ultimaCutucada.getTime() : fala.em.getTime();
-  if (agora.getTime() - retomadaEm > JANELA_DA_EQUIPE_MS) return { fala: null, motivo: 'antiga' };
+  const cutucadaDepois = !!ultimaCutucada && ultimaCutucada.getTime() >= fala.em.getTime();
+  const retomadaEm = cutucadaDepois ? ultimaCutucada!.getTime() : fala.em.getTime();
+  if (agora.getTime() - retomadaEm > (cutucadaDepois ? JANELA_DA_EQUIPE_MS : janelaDaFalaMs)) return { fala: null, motivo: 'antiga' };
   if (ultimaFalaDaIa && ultimaFalaDaIa.getTime() >= fala.em.getTime()) return { fala: null, motivo: 'ia_falou_depois' };
   return { fala, motivo: null };
 }

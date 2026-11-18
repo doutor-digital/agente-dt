@@ -14,7 +14,7 @@
 import type { Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { mensagemDaSofiaConversando } from '../lib/mensagem-da-ia.js';
-import { ehFalaAutomaticaPeloTexto } from '../lib/fala-automatica.js';
+import { ehFalaAutomaticaDoLite } from '../lib/fala-automatica.js';
 import { createKommoClient, type KommoClient } from './kommo.service.js';
 import { historicoOficial, separarSessaoDaEquipe, type AutorOficial, type MensagemOficial } from './kommo-talks-normalizar.js';
 
@@ -160,7 +160,7 @@ export function estadoDeLeitura(msgs: MensagemOficial[]): EstadoDeLeitura {
   let ultimoAutor: AutorOficial | null = null;
   for (const m of msgs) {
     // ausência/saudação do app do celular e aviso do sistema não são fala de ninguém: a régua não a conta como «equipe falou por último»
-    if (m.direcao === 'saida' && m.autor === 'equipe' && ehFalaAutomaticaPeloTexto(m)) continue;
+    if (m.direcao === 'saida' && m.autor === 'equipe' && ehFalaAutomaticaDoLite(m)) continue;
     if (m.direcao === 'saida') ultimaSaida = { em: m.em, status: m.status, autor: m.autor };
     else ultimaEntradaEm = m.em;
     ultimoAutor = m.autor;

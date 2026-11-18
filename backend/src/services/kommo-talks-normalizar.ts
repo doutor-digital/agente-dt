@@ -4,7 +4,7 @@
  * conector do claude.ai e os testes usarem. O serviço `kommo-talks.service.ts` reexporta tudo daqui.
  */
 import type { KommoClient, KommoTalkMessage } from './kommo.service.js';
-import { NOMES_DOS_APPS_DO_CELULAR, ehRoboConhecidoDoApp } from '../lib/fala-automatica.js';
+import { NOMES_DOS_APPS_DO_CELULAR, ehRoboConhecidoDoLite } from '../lib/fala-automatica.js';
 
 export type AutorOficial = 'paciente' | 'sofia' | 'equipe';
 
@@ -68,7 +68,7 @@ export function normalizar(raw: KommoTalkMessage[]): MensagemOficial[] {
   return raw
     .map((m) => {
       // robô de Retomada do Kommo que sai assinado pelo celular (Caxias, "WhatsApp Lite"): é robô, tratado como Salesbot/Sofia — não é equipe
-      const autor = m.type !== 'incoming' && ehRoboConhecidoDoApp({ texto: m.text ?? '', autorNome: m.author?.name ?? '', anexo: m.attachment?.type }) ? 'sofia' : classificarAutor(m);
+      const autor = m.type !== 'incoming' && ehRoboConhecidoDoLite({ texto: m.text ?? '', autorNome: m.author?.name ?? '', anexo: m.attachment?.type }) ? 'sofia' : classificarAutor(m);
       return {
         id: String(m.id),
         em: new Date((m.created_at ?? 0) * 1000),
