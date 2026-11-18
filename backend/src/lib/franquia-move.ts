@@ -299,20 +299,21 @@ export function planejarMovimento(e: EntradaMovimento): Movimento | null {
   const temPendente = e.tratamentos.some(pendente);
   const passou = (s: SpineSchedule) => (epoch(s) ?? Infinity) <= e.agoraEpoch;
   // última atividade conhecida na franquia (qualquer agendamento/sessão) e há quantos dias: a idade do fato, para as saídas por ALTA
-  const ultimaAtividade = Math.max(0, ...e.agendamentos.map((s) => epoch(s) ?? 0));
+  // só o que JÁ aconteceu: um agendamento futuro não faz um fim velho parecer recente (Codex, 18/11)
+  const ultimaAtividade = Math.max(0, ...e.agendamentos.filter(passou).map((s) => epoch(s) ?? 0));
   const diasParado = ultimaAtividade > 0 ? (e.agoraEpoch - ultimaAtividade) / 86_400 : Infinity;
   const fimVelho = ultimaAtividade > 0 && diasParado > JORNADA.EX_PACIENTE_DIAS;
   /** O mesmo movimento, mas sem mover: o fato vai para a fila da /alta (ver `Movimento.filaDeAlta`). */
   const paraAFilaDeAlta = (mov: Movimento): Movimento => {
     const dias = Math.floor(diasParado);
+    // a data da fila é a da última SESSÃO atendida (a recepção e a assinatura da fila leem como sessão); sem sessão, a da última atividade
+    const atendidas = sessoes.filter((s) => s.idStatus === SPINE_STATUS.ATENDIDO && passou(s));
+    const ultimaSessao = Math.max(0, ...atendidas.map((s) => epoch(s) ?? 0)) || ultimaAtividade;
     return {
       ...mov,
       motivo: `${mov.motivo} (sem atividade há ${dias} d: fim velho — vai para a fila da /alta, o cartão não é movido)`,
       dias,
-      filaDeAlta: {
-        realizadas: sessoes.filter((s) => s.idStatus === SPINE_STATUS.ATENDIDO && passou(s)).length,
-        ultimaSessao: new Date(ultimaAtividade * 1000).toISOString(),
-      },
+      filaDeAlta: { realizadas: atendidas.length, ultimaSessao: new Date(ultimaSessao * 1000).toISOString() },
     };
   };
   const futura = (s: SpineSchedule) => (epoch(s) ?? 0) > e.agoraEpoch && (s.idStatus === SPINE_STATUS.AGENDADO || s.idStatus === SPINE_STATUS.CONFIRMADO);

@@ -336,3 +336,20 @@ test('ex-paciente do COMERCIAL parado há 180 d → NÃO vai para ALTA, vai para
   // lista vazia: não move
   assert.equal(planejarMovimento({ ...entrada(ETAPA.COMPARECEU, [], [{ idStatus: 46 }]), regras1610: true }), null);
 });
+
+test('Codex: agendamento FUTURO não faz o fim velho parecer recente (EM TRATAMENTO continua indo para a fila, não para ALTA)', () => {
+  const velho = [ag({ h: -180 * 24, idStatus: 42, categoria: 'SESSÃO' }), ag({ h: 7 * 24, idStatus: 37, categoria: 'SESSÃO' })];
+  const m = planejarMovimento(entrada(ETAPA.EM_TRATAMENTO, velho, [{ idStatus: 46 }], 'TRATAMENTO'));
+  assert.ok(m?.filaDeAlta);
+  assert.equal(m?.dias, 180);
+});
+
+test('Codex: a data da fila é a da última SESSÃO atendida, não a de uma consulta/retorno mais novo', () => {
+  const m = planejarMovimento(entrada(ETAPA.EM_TRATAMENTO, [
+    ag({ h: -200 * 24, idStatus: 42, categoria: 'SESSÃO' }),
+    ag({ h: -150 * 24, idStatus: 42, categoria: 'SESSÃO' }),
+    ag({ h: -100 * 24, idStatus: 57, categoria: 'AVALIAÇÃO' }),
+  ], [{ idStatus: 46 }], 'TRATAMENTO'));
+  assert.equal(m?.filaDeAlta?.ultimaSessao, iso(-150 * 24));
+  assert.equal(m?.filaDeAlta?.realizadas, 2);
+});
