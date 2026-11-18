@@ -8,7 +8,7 @@ import type { Unit } from '@prisma/client';
 import { unidadeComSinal, intencaoDoDegrauParaAUnidade } from './pagamento-da-unidade.js';
 import { fraseDePrecoComSinal, renderFatosDaUnidade, renderRulesGlobal, sinalDaUnidade } from './prompt-composer.js';
 import { orientacaoDePagamento, porQueNaoReservar, buildAgendarConsulta, buildAgendaTools } from './agenda-tools.js';
-import { aplicarGuardrail } from './guardrail.js';
+import { aplicarGuardrail, sinalDeclaradoNaFicha } from './guardrail.js';
 import { corrigirValorAntecipado } from './valor-antecipado.js';
 import { decidirPagamentoAntecipado } from './carimbos-do-agendamento.js';
 import { regraDePagamento } from './follow-up.js';
@@ -174,6 +174,65 @@ test('guardrail: "sinal antecipado de R$ 50" NÃO vira R$ 250 com a flag; sem a 
   assert.equal(aplicarGuardrail(texto, unidade()).text, 'Para garantir o horário é só o sinal de R$ 250 antecipado pelo Pix.');
   assert.deepEqual(corrigirValorAntecipado('R$ 50 antecipado', { antecipado: 250, valoresLegitimos: [50, 200] }), { texto: 'R$ 50 antecipado', corrigiu: [] });
   assert.deepEqual(corrigirValorAntecipado('R$ 50 antecipado', { antecipado: 250 }).corrigiu, [50]);
+});
+
+// ── flag vazia, mas a FICHA vende o sinal (Sofia 2.0 em produção, 18/11/2026) ─────────────────────────────────────────────────
+
+/** A ficha real das unidades da Sofia 2.0 (Araguaína, Imperatriz, Marabá, Balsas…): sinal no texto, `sinalPixCentavos` vazio. */
+const FONTES_SOFIA_2 = `${FONTES} A consulta é R$ 350, ou R$ 250 com sinal de R$ 50. Com sinal para garantir a vaga: R$ 250 (R$ 50 de sinal agora + R$ 200 no dia).`;
+const fichaComSinal = (over: Record<string, unknown> = {}) => unidade({ sourceProdutos: FONTES_SOFIA_2, ...over });
+
+test('sinalDeclaradoNaFicha: só o valor exato que a ficha declara, menor que o antecipado; dois sinais diferentes = nenhum', () => {
+  assert.deepEqual(sinalDeclaradoNaFicha({ sourceProdutos: FONTES_SOFIA_2 }, 250), { sinal: 50, restoNoDia: 200 });
+  // Petrópolis/Caxias escrevem com centavos e "antecipados (sinal"
+  assert.deepEqual(
+    sinalDeclaradoNaFicha({ systemPrompt: 'em duas partes — R$ 50,00 antecipados (sinal, por Pix) e R$ 150,00 no dia' }, 200),
+    { sinal: 50, restoNoDia: 150 },
+  );
+  assert.equal(sinalDeclaradoNaFicha({ sourceProdutos: FONTES }, 250), null); // ficha sem sinal
+  assert.equal(sinalDeclaradoNaFicha({ sourceProdutos: 'Se relatar QUALQUER sinal: perda de força' }, 250), null); // "sinal" clínico
+  assert.equal(sinalDeclaradoNaFicha({ sourceProdutos: 'sinal de R$ 50 … ou sinal de R$ 100' }, 250), null); // ambíguo
+  assert.equal(sinalDeclaradoNaFicha({ sourceProdutos: 'sinal de R$ 300' }, 250), null); // não é menor que o antecipado
+  assert.equal(sinalDeclaradoNaFicha({ sourceProdutos: FONTES_SOFIA_2 }, null), null); // sem antecipado legível
+});
+
+test('guardrail, flag VAZIA e ficha com sinal: "sinal de R$ 50 antecipado" passa inteiro (as frases que foram ao paciente com R$ 250)', () => {
+  const u = fichaComSinal();
+  for (const frase of [
+    'A consulta com o nosso especialista é R$ 350 no dia, ou R$ 250 garantindo com sinal de R$ 50 antecipado (R$ 50 agora + R$ 200 no dia) 😊',
+    'A consulta com o nosso especialista é R$ 350 no dia, ou R$ 250 garantindo com sinal de R$ 50 antecipado no Pix 😊',
+    'A consulta com o nosso especialista é R$ 350, pago no dia, ou R$ 250 garantindo com sinal de R$ 50 antecipado no Pix (R$ 200 no dia).',
+    'Para garantir o horário é só o sinal de R$ 50 antecipado pelo Pix.',
+    'Fica R$ 250 com R$ 50 de sinal antecipado no Pix e R$ 200 no dia.',
+    'O sinal é de R$ 50 antecipado pelo Pix, e o restante, R$ 200, no dia.',
+  ]) {
+    const r = aplicarGuardrail(frase, u);
+    assert.equal(r.text, frase, frase);
+    assert.ok(!r.triggered.some((t) => t.startsWith('antecipado_corrigido')), `${frase} → ${r.triggered.join(',')}`);
+  }
+});
+
+test('guardrail, flag VAZIA e ficha com sinal: valor que NÃO é o sinal declarado continua corrigido no slot do antecipado', () => {
+  const u = fichaComSinal();
+  for (const v of [350, 200, 100]) {
+    const frase = `Para garantir o horário é só o sinal de R$ ${v} antecipado pelo Pix.`;
+    const r = aplicarGuardrail(frase, u);
+    assert.equal(r.rewritten, true, frase);
+    assert.doesNotMatch(r.text, new RegExp(`sinal de R\\$ ${v} antecipado`), frase);
+  }
+});
+
+test('guardrail, ficha SEM sinal (Serra, antecipado R$ 280): "sinal de R$ 250 antecipado" continua virando R$ 280', () => {
+  const serra = unidade({ sourceProdutos: 'Consulta: R$ 350 no dia, ou R$ 280 com pagamento antecipado.' });
+  const r = aplicarGuardrail('Ou você garante com um sinal de R$ 250 antecipado no Pix.', serra);
+  assert.match(r.text, /sinal de R\$ 280 antecipado/);
+  assert.doesNotMatch(r.text, /R\$ 250/);
+});
+
+test('guardrail com a flag: "sinal de R$ 200 antecipado" agora é corrigido (o resto se paga no dia, não é antecipado)', () => {
+  const r = aplicarGuardrail('Para garantir o horário é só o sinal de R$ 200 antecipado pelo Pix.', comSinal());
+  assert.equal(r.rewritten, true);
+  assert.doesNotMatch(r.text, /sinal de R\$ 200 antecipado/);
 });
 
 test('guardrail: R$ 50/200 valem como EXATOS — sem a tolerância de parcela do catálogo (R$ 100 e R$ 67 de "metade/terço de R$ 200" continuam inventados)', () => {
