@@ -1,5 +1,6 @@
 import type { BaseMessage } from '@langchain/core/messages';
 
+import { recarregarAutomacoes } from '../lib/automacoes-estado.js';
 import { prisma } from '../lib/prisma.js';
 import { createChatModel } from '../services/openai.service.js';
 import { BANCO } from './banco.js';
@@ -17,6 +18,7 @@ import { marcadoresPorUnidade, modeloDaUnidade, rodarCaso, textoDaResposta } fro
  */
 
 let marcadores: Promise<OutraUnidade[]> | null = null;
+let automacoes: Promise<void> | null = null;
 
 /** Os marcadores de "dado de outra unidade" saem de todas as unidades — uma leitura por rodada. */
 function outrasUnidades(): Promise<OutraUnidade[]> {
@@ -44,6 +46,11 @@ export async function respostaDaSofia(
   const caso = BANCO.find((c) => c.id === idDoCaso);
   if (!caso) return { error: `caso "${idDoCaso}" não existe em eval/banco.ts` };
 
+  // As automações por unidade (ex.: `prompt-da-unidade`, ligada em Porto e Imperatriz) vêm da tabela `unit_automacoes`, que só
+  // é lida na 1ª consulta — e essa 1ª consulta responde com o mapa ainda vazio. Sem esperar a leitura aqui, o 1º caso da rodada
+  // rodava com o prompt do config e não com o da unidade, diferente da Sofia no ar (achado do sênior no #411).
+  automacoes ??= recarregarAutomacoes();
+  await automacoes;
   const r = await rodarCaso(caso, { outrasUnidades: await outrasUnidades(), promptDaUnidade: opts.promptDaUnidade });
   const metadata: MetadadosDaSofia = {
     caso: r.caso,
