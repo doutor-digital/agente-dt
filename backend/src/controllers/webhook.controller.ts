@@ -62,6 +62,7 @@ import { comTurnoAvulso, scheduleAgentRun, temPendentes } from '../lib/agent-coa
 import { ehEncerramentoRepetido } from '../lib/encerramento.js';
 import { janelaDaResposta, podeSerRespostaD1, tratarRespostaD1 } from '../lib/confirmacao-d1.js';
 import { podeSerBotaoDoLembrete, tratarBotaoDoLembrete } from '../lib/resposta-ao-lembrete.js';
+import { podeSerDuvidaDoLembrete, tratarDuvidaDoLembrete } from '../lib/duvida-no-lembrete.js';
 import { listaDoKommo } from '../lib/kommo-webhook-lista.js';
 import { eventoDeConversao } from '../lib/conversao-por-etapa.js';
 import { blocoDaConversaOficial } from '../lib/conversa-oficial.js';
@@ -844,7 +845,7 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
     // então o 200 sai ANTES dele — o mesmo padrão do caminho da IA, que responde e segue
     // processando. Foi a reentrega do "1" que fez a Sofia mandar "Não entendi…" 23 min depois
     // (Açailândia, 06/10/2026).
-    if (podeSerRespostaD1(conv, ctx.humanMessage, undefined, janelaDaResposta(unit.slug)) || podeSerBotaoDoLembrete(unit.slug, ctx.humanMessage)) {
+    if (podeSerRespostaD1(conv, ctx.humanMessage, undefined, janelaDaResposta(unit.slug)) || podeSerBotaoDoLembrete(unit.slug, ctx.humanMessage) || podeSerDuvidaDoLembrete(unit.slug, ctx.humanMessage)) {
       res.status(200).json({ ok: true, traceId: trace.id, unit: unit.slug });
     }
     const respostaD1 = await tratarRespostaD1({
@@ -914,6 +915,34 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
       });
       logger.info({ unit: unit.slug, leadId, traceId: trace.id, respostaD1 }, 'agente pulado (confirmação D-1)');
       if (!res.headersSent) res.status(200).json({ ok: true, traceId: trace.id, unit: unit.slug, skipped: 'confirmacao_d1' });
+      return;
+    }
+
+    // Toque em "Tenho uma dúvida" no lembrete do ROBÔ DO KOMMO: a conversa vai para a secretária na hora, calado — a Sofia não gera
+    // resposta (chave duvida-no-lembrete; em "só no papel" decide e registra, e a mensagem segue para ela). null = segue para a Sofia.
+    const duvida = await tratarDuvidaDoLembrete({
+      unit,
+      leadId,
+      texto: ctx.humanMessage,
+      conv,
+      kommo: createKommoClient(unit),
+    }).catch((err) => {
+      logger.warn({ err: String(err), unit: unit.slug, leadId }, 'dúvida no lembrete: falha ao tratar o toque (segue para a Sofia)');
+      return null;
+    });
+    if (duvida) {
+      await recorder.step({
+        kind: 'COMPLETED',
+        title: `Paciente tocou "Tenho uma dúvida" no lembrete — a Sofia não respondeu: "Pausar IA" marcado${duvida.tarefa ? ' e tarefa para a equipe' : ' (a tarefa falhou)'}, o paciente não foi avisado`,
+        payload: { mensagem: ctx.humanMessage.slice(0, 80), pausa: duvida.pausa, tarefa: duvida.tarefa },
+      });
+      await recorder.finalize({
+        status: 'SUCCESS',
+        latencyMs: Date.now() - trace.createdAt.getTime(),
+        iaDecision: '__duvida_lembrete_equipe__',
+      });
+      logger.info({ unit: unit.slug, leadId, traceId: trace.id, duvida }, 'agente pulado (dúvida no lembrete do Kommo → equipe)');
+      if (!res.headersSent) res.status(200).json({ ok: true, traceId: trace.id, unit: unit.slug, skipped: 'duvida_lembrete_kommo' });
       return;
     }
 

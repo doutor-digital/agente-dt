@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import type { Unit } from '@prisma/client';
 
 import {
+  CORRIDA_DA_IA_MS,
   JANELA_DA_EQUIPE_MS,
   conferirEquipe,
   descreverFala,
@@ -198,6 +199,58 @@ test('conferirEquipe (porta, trava e recuperar-turnos): fala do Lite de 2 h atr�
     assert.equal(!!r.fala, pausa, quem.name);
     assert.equal(r.motivo, pausa ? null : 'antiga', quem.name);
   }
+});
+
+// ── a corrida: a Sofia respondeu logo DEPOIS da fala da equipe, que ainda não estava na conversa oficial ──────────
+// Salto, lead 3185496 (17/11): áudio da secretária (WhatsApp Business) 16:17:20; Sofia 16:17:50, 16:18:31 e 16:19:39; nenhuma pausa registrada.
+
+const SALTO_DIA = '2026-11-17';
+const noSalto = (hhmmss: string) => new Date(`${SALTO_DIA}T${hhmmss}-03:00`);
+const conversaDoJailton = (): MensagemOficial[] => [
+  msg('saida', noSalto('16:16:00'), '❗️ IMPORTANTE Para a sua consulta de hoje, traga seus exames. Ficou alguma dúvida?', 'sofia', 'Salesbot'),
+  msg('entrada', noSalto('16:16:51'), 'Tenho uma dúvida'),
+  msg('entrada', noSalto('16:17:16'), 'Era 150'),
+  msg('saida', noSalto('16:17:20'), '', 'equipe', 'WhatsApp Business', { tipo: 'voice', link: null }),
+  msg('entrada', noSalto('16:17:52'), 'Vcs tem acesso a ressonância da Unimed ?'),
+];
+
+test('Salto 3185496: a Sofia que saiu 30 s, 71 s ou 3 min depois do áudio da equipe é corrida — a equipe segue com a palavra', () => {
+  for (const ia of ['16:17:50', '16:18:31', '16:20:20']) {
+    const d = equipeComAPalavra(conversaDoJailton(), noSalto(ia), noSalto('16:20:30'));
+    assert.equal(d.motivo, null, ia);
+    assert.equal(d.fala?.autorNome, 'WhatsApp Business', ia);
+  }
+  assert.equal(CORRIDA_DA_IA_MS, 3 * 60_000);
+});
+
+test('a Sofia 3 min e 1 s depois da fala (ou mais) é devolução de verdade; a de antes da fala nunca foi problema', () => {
+  const d = equipeComAPalavra(conversaDoJailton(), noSalto('16:20:21'), noSalto('16:21:00'));
+  assert.deepEqual([d.fala, d.motivo], [null, 'ia_falou_depois']);
+  assert.equal(equipeComAPalavra(conversaDoJailton(), noSalto('16:30:00'), noSalto('16:31:00')).motivo, 'ia_falou_depois');
+  assert.equal(equipeComAPalavra(conversaDoJailton(), noSalto('16:16:30'), noSalto('16:17:55')).motivo, null);
+});
+
+test('conferirEquipe no Salto 3185496: a 2ª tentativa (16:18:31) vê a Sofia das 16:17:50 e ainda pausa pela fala da equipe', async () => {
+  const { deps } = depsFalsas({
+    agora: () => noSalto('16:18:31'),
+    mensagens: async () => conversaDoJailton(),
+    ultimaFalaDaIa: async () => noSalto('16:17:50'),
+  });
+  const r = await conferirEquipe(unidade, LEAD, deps);
+  assert.equal(r.motivo, null);
+  assert.ok(r.fala);
+});
+
+test('a corrida não vence a devolução explícita: caixinha desmarcada depois da fala devolve mesmo com a Sofia dentro dos 3 min', async () => {
+  const { deps } = depsFalsas({
+    agora: () => noSalto('16:18:31'),
+    mensagens: async () => conversaDoJailton(),
+    ultimaFalaDaIa: async () => noSalto('16:17:50'),
+    pausaMexidaDesde: async () => true,
+    pausaMarcadaAgora: async () => false,
+  });
+  const r = await conferirEquipe(unidade, LEAD, deps);
+  assert.deepEqual([r.fala, r.motivo], [null, 'devolvida']);
 });
 
 test('só robô (Salesbot, régua, transmissão) e resposta automática do app não dão a palavra à equipe', () => {
