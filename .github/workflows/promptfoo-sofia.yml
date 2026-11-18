@@ -56,8 +56,10 @@ jobs:
           OUT="$RUNNER_TEMP/promptfoo"
           mkdir -p "$OUT"
           echo "out=$OUT" >> "$GITHUB_OUTPUT"
-          # o arquivo de ambiente tem segredo: sai do disco aconteça o que acontecer
-          trap 'rm -f "$OUT/env"' EXIT
+          # os arquivos de ambiente têm segredo e o contêiner fala com produção: os três somem em QUALQUER saída
+          # (erro, cancelamento, tempo esgotado). Matar o `docker run` não para o contêiner — por isso o rm -f.
+          trap 'rm -f "$OUT/env" "$OUT/env.bruto"; docker rm -f "$NOME" >/dev/null 2>&1 || true' EXIT
+          trap 'exit 143' INT TERM
           case "$REPETICOES" in ''|*[!0-9]*|0) echo "repeticoes inválido (inteiro ≥ 1)"; exit 1 ;; esac
 
           AG=$(docker ps -qf name=ddagent_agent | head -1)
@@ -99,7 +101,7 @@ jobs:
           docker run --rm --name "$NOME" --memory 1g --network host \
             -v "$OUT":/out -v promptfoo-npm:/root/.npm -v promptfoo-historico:/root/.promptfoo \
             -w /repo/backend --env-file "$OUT/env" -e PF_CASO -e PF_UNIDADE -e REPETICOES -e PF_VERSAO \
-            "$IMG" sh -c 'npx -y "$PF_VERSAO" eval -c promptfoo/promptfooconfig.yaml --no-cache --repeat "$REPETICOES" -o /out/resultado.json /out/relatorio.html' \
+            "$IMG" sh -c 'timeout 2400 npx -y "$PF_VERSAO" eval -c promptfoo/promptfooconfig.yaml --no-cache --repeat "$REPETICOES" -o /out/resultado.json /out/relatorio.html' \
             </dev/null > "$OUT/log.txt" 2>&1
           CODIGO=$?
           set -e
@@ -143,9 +145,10 @@ jobs:
           if-no-files-found: ignore
 
       - name: Limpar e sair com o resultado
-        if: always() && steps.eval.outputs.out != ''
+        if: always()
         run: |
+          # caminho e nome fixos (não dependem das saídas do 1º passo, que podem não existir se ele foi cancelado)
           docker rm -f "$NOME" >/dev/null 2>&1 || true
-          rm -rf "${{ steps.eval.outputs.out }}" || true
+          rm -rf "$RUNNER_TEMP/promptfoo" || true
           # 0 = todos passaram; 100 = algum caso reprovou (rodou): vermelho e o GitHub avisa por e-mail
           [ "${{ steps.eval.outputs.codigo }}" = "0" ]
