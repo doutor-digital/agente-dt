@@ -250,6 +250,18 @@ test('janela normal 9→18 em 7 dias também fecha no feriado (20/11 10h)', () =
   assert.equal(checkBusinessHours(u, em('20', 10)).isOpen, false);
 });
 
+test('18→6 em feriado que cai fora de businessHoursDays: a lista de dias continua mandando', () => {
+  // 20/11 é sexta; sem 'fri' na lista, às 19h fica fechado (e 03h, sobra de quinta, aberto).
+  const u = unidade({ ...INVERTIDA, businessHoursDays: ['mon', 'tue', 'wed', 'thu'] });
+  assert.equal(checkBusinessHours(u, em('20', 19)).isOpen, false);
+  assert.equal(checkBusinessHours(u, em('20', 3)).isOpen, true);
+});
+
+test('janela do dia 8→20 (businessHoursByDay) é normal: feriado fecha mesmo com a geral 18→6', () => {
+  const u = unidade({ ...INVERTIDA, businessHoursByDay: { fri: { start: 8, end: 20 } } as never });
+  assert.equal(checkBusinessHours(u, em('20', 10)).isOpen, false);
+});
+
 test('início igual ao fim (não é janela invertida): feriado continua fechando', () => {
   const u = unidade({
     businessHoursDays: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'],
